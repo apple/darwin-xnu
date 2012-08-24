@@ -32,7 +32,6 @@
 #include <IOKit/IOHibernatePrivate.h>
 #include <IOKit/IOLib.h>
 #include <pexpert/boot.h>
-#include <crypto/aes.h>
 #include <libkern/libkern.h>
 
 #include <libkern/WKdm.h>

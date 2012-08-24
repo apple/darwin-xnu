@@ -1,0 +1,17 @@
+# Import python macros
+script import lldbmacros
+
+# Basic types
+type summary add --regex --summary-string "${var%s}" "char \[[0-9]*\]"
+type summary add --summary-string "${var[0]%y}${var[1]%y}${var[2]%y}${var[3]%y}-${var[4]%y}${var[5]%y}-${var[6]%y}${var[7]%y}-${var[8]%y}${var[9]%y}-${var[10]%y}${var[11]%y}${var[12]%y}${var[13]%y}${var[14]%y}${var[15]%y}" uuid_t
+
+# Kexts
+type summary add --summary-string "${var->loadTag%u} ${var->address%x} ${var->size%x} ${var->version%u} ${var->name%s}" OSKextLoadedKextSummary
+type summary add -v --python-function lldbmacros.showallkexts_summary OSKextLoadedKextSummaryHeader
+command script add -f lldbmacros.showallkexts_command showallkexts
+
+#KGMacros
+command script add -f lldbmacros.zprint_command zprint
+command script add -f lldbmacros.memstats_command memstats
+command script add -f lldbmacros.showioalloc_command showioalloc
+

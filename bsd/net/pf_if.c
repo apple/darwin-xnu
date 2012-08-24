@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2007-2010 Apple Inc. All rights reserved.
+ * Copyright (c) 2007-2011 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -148,7 +148,8 @@ pfi_kif_get(const char *kif_name)
 
 	bzero(&s, sizeof (s));
 	strlcpy(s.pfik_name, kif_name, sizeof (s.pfik_name));
-	if ((kif = RB_FIND(pfi_ifhead, &pfi_ifs, (struct pfi_kif *)&s)) != NULL)
+	if ((kif = RB_FIND(pfi_ifhead, &pfi_ifs,
+	    (struct pfi_kif *)(void *)&s)) != NULL)
 		return (kif);
 
 	/* create new one */
@@ -461,8 +462,8 @@ pfi_instance_add(struct ifnet *ifp, int net, int flags)
 			continue;
 		}
 		if ((flags & PFI_AFLAG_NETWORK) && af == AF_INET6 &&
-		    IN6_IS_ADDR_LINKLOCAL(
-		    &((struct sockaddr_in6 *)ia->ifa_addr)->sin6_addr)) {
+		    IN6_IS_ADDR_LINKLOCAL(&((struct sockaddr_in6 *)
+		    (void *)ia->ifa_addr)->sin6_addr)) {
 			IFA_UNLOCK(ia);
 			continue;
 		}
@@ -484,10 +485,10 @@ pfi_instance_add(struct ifnet *ifp, int net, int flags)
 		if (net2 == 128 && (flags & PFI_AFLAG_NETWORK)) {
 			if (af == AF_INET)
 				net2 = pfi_unmask(&((struct sockaddr_in *)
-				    ia->ifa_netmask)->sin_addr);
+				    (void *)ia->ifa_netmask)->sin_addr);
 			else if (af == AF_INET6)
 				net2 = pfi_unmask(&((struct sockaddr_in6 *)
-				    ia->ifa_netmask)->sin6_addr);
+				    (void *)ia->ifa_netmask)->sin6_addr);
 		}
 		if (af == AF_INET && net2 > 32)
 			net2 = 32;
@@ -536,9 +537,10 @@ pfi_address_add(struct sockaddr *sa, int af, int net)
 	p->pfra_af = af;
 	p->pfra_net = net;
 	if (af == AF_INET)
-		p->pfra_ip4addr = ((struct sockaddr_in *)sa)->sin_addr;
+		p->pfra_ip4addr = ((struct sockaddr_in *)(void *)sa)->sin_addr;
 	else if (af == AF_INET6) {
-		p->pfra_ip6addr = ((struct sockaddr_in6 *)sa)->sin6_addr;
+		p->pfra_ip6addr =
+		    ((struct sockaddr_in6 *)(void *)sa)->sin6_addr;
 		if (IN6_IS_SCOPE_EMBED(&p->pfra_ip6addr))
 			p->pfra_ip6addr.s6_addr16[1] = 0;
 	}
@@ -601,7 +603,7 @@ pfi_update_status(const char *name, struct pf_status *pfs)
 	lck_mtx_assert(pf_lock, LCK_MTX_ASSERT_OWNED);
 
 	strlcpy(key.pfik_name, name, sizeof (key.pfik_name));
-	p = RB_FIND(pfi_ifhead, &pfi_ifs, (struct pfi_kif *)&key);
+	p = RB_FIND(pfi_ifhead, &pfi_ifs, (struct pfi_kif *)(void *)&key);
 	if (p == NULL)
 		return;
 

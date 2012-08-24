@@ -408,8 +408,6 @@ struct bstp_state {
 	bstp_rtage_cb_t		bs_rtage_cb;
 };
 
-extern const uint8_t bstp_etheraddr[];
-
 void	bstp_attach(struct bstp_state *, struct bstp_cb_ops *);
 void	bstp_detach(struct bstp_state *);
 void	bstp_init(struct bstp_state *);

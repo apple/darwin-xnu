@@ -297,6 +297,7 @@ typedef struct backing_store 	*backing_store_t;
 
 #ifdef MACH_KERNEL
 #define BS_LOCK_INIT(bs)	lck_mtx_init(&(bs)->bs_lock, &default_pager_lck_grp, &default_pager_lck_attr)
+#define BS_LOCK_DESTROY(bs)	lck_mtx_destroy(&(bs)->bs_lock, &default_pager_lck_grp)
 #define BS_LOCK(bs)			lck_mtx_lock(&(bs)->bs_lock)
 #define BS_UNLOCK(bs)		lck_mtx_unlock(&(bs)->bs_lock)
 
@@ -309,6 +310,7 @@ extern struct backing_store_list_head	backing_store_list;
 extern int	backing_store_release_trigger_disable;
 
 #define	BSL_LOCK_INIT()		lck_mtx_init(&backing_store_list.bsl_lock, &default_pager_lck_grp, &default_pager_lck_attr)
+#define	BSL_LOCK_DESTROY()	lck_mtx_destroy(&backing_store_list.bsl_lock, &default_pager_lck_grp)
 #define BSL_LOCK()			lck_mtx_lock(&backing_store_list.bsl_lock)
 #define BSL_UNLOCK()		lck_mtx_unlock(&backing_store_list.bsl_lock)
 
@@ -365,6 +367,7 @@ typedef struct paging_segment *paging_segment_t;
 #define PAGING_SEGMENT_NULL	((paging_segment_t) 0)
 
 #define PS_LOCK_INIT(ps)	lck_mtx_init(&(ps)->ps_lock, &default_pager_lck_grp, &default_pager_lck_attr)
+#define PS_LOCK_DESTROY(ps)	lck_mtx_destroy(&(ps)->ps_lock, &default_pager_lck_grp)
 #define PS_LOCK(ps)			lck_mtx_lock(&(ps)->ps_lock)
 #define PS_UNLOCK(ps)		lck_mtx_unlock(&(ps)->ps_lock)
 
@@ -386,7 +389,8 @@ extern int	paging_segment_count;	/* number of active paging segments */
 extern int	paging_segment_max;	/* highest used paging segment index */
 extern int ps_select_array[DEFAULT_PAGER_BACKING_STORE_MAXPRI+1];
 
-#define	PSL_LOCK_INIT()	lck_mtx_init(&paging_segments_lock, &default_pager_lck_grp, &default_pager_lck_attr)
+#define	PSL_LOCK_INIT()		lck_mtx_init(&paging_segments_lock, &default_pager_lck_grp, &default_pager_lck_attr)
+#define	PSL_LOCK_DESTROY()	lck_mtx_destroy(&paging_segments_lock, &default_pager_lck_grp)
 #define PSL_LOCK()		lck_mtx_lock(&paging_segments_lock)
 #define PSL_UNLOCK()	lck_mtx_unlock(&paging_segments_lock)
 
@@ -523,6 +527,7 @@ typedef struct vstruct_alias {
 } vstruct_alias_t;
 
 #define DPT_LOCK_INIT(lock)		lck_mtx_init(&(lock), &default_pager_lck_grp, &default_pager_lck_attr)
+#define DPT_LOCK_DESTROY(lock)		lck_mtx_destroy(&(lock), &default_pager_lck_grp)
 #define DPT_LOCK(lock)			lck_mtx_lock(&(lock))
 #define DPT_UNLOCK(lock)		lck_mtx_unlock(&(lock))
 #define DPT_SLEEP(lock, e, i)	lck_mtx_sleep(&(lock), LCK_SLEEP_DEFAULT, (event_t)(e), i)
@@ -533,6 +538,7 @@ typedef struct vstruct_alias {
 #define VS_UNLOCK(vs)			hw_lock_unlock(&(vs)->vs_lock)
 #define VS_MAP_LOCK_TYPE		lck_mtx_t
 #define VS_MAP_LOCK_INIT(vs)	lck_mtx_init(&(vs)->vs_map_lock, &default_pager_lck_grp, &default_pager_lck_attr)
+#define VS_MAP_LOCK_DESTROY(vs)	lck_mtx_destroy(&(vs)->vs_map_lock, &default_pager_lck_grp)
 #define VS_MAP_LOCK(vs)			lck_mtx_lock(&(vs)->vs_map_lock)
 #define VS_MAP_TRY_LOCK(vs)		lck_mtx_try_lock(&(vs)->vs_map_lock)
 #define VS_MAP_UNLOCK(vs)		lck_mtx_unlock(&(vs)->vs_map_lock)
@@ -660,6 +666,7 @@ extern lck_grp_t		default_pager_lck_grp;
 extern lck_attr_t		default_pager_lck_attr;
 
 #define VSL_LOCK_INIT()		lck_mtx_init(&vstruct_list.vsl_lock, &default_pager_lck_grp, &default_pager_lck_attr)
+#define VSL_LOCK_DESTROY()	lck_mtx_destroy(&vstruct_list.vsl_lock, &default_pager_lck_grp)
 #define VSL_LOCK()			lck_mtx_lock(&vstruct_list.vsl_lock)
 #define VSL_LOCK_TRY()		lck_mtx_try_lock(&vstruct_list.vsl_lock)
 #define VSL_UNLOCK()		lck_mtx_unlock(&vstruct_list.vsl_lock)

@@ -68,6 +68,8 @@ bool OSDictionary::initWithCapacity(unsigned int inCapacity)
 
     int size = inCapacity * sizeof(dictEntry);
 
+//fOptions |= kSort;
+
     dictionary = (dictEntry *) kalloc(size);
     if (!dictionary)
         return false;
@@ -169,6 +171,15 @@ bool OSDictionary::initWithDictionary(const OSDictionary *dict,
 
     if (!initWithCapacity(newCapacity))
         return false;
+
+    if ((kSort & fOptions) && !(kSort & dict->fOptions)) {
+	for (unsigned int i = 0; i < dict->count; i++) {
+	    if (!setObject(dict->dictionary[i].key, dict->dictionary[i].value)) {
+		return false;
+	    }
+	}
+	return true;
+    }
 
     count = dict->count;
     bcopy(dict->dictionary, dictionary, count * sizeof(dictEntry));
@@ -306,34 +317,45 @@ void OSDictionary::flushCollection()
 bool OSDictionary::
 setObject(const OSSymbol *aKey, const OSMetaClassBase *anObject)
 {
+    unsigned int i;
+    bool exists;
+
     if (!anObject || !aKey)
         return false;
 
     // if the key exists, replace the object
-    for (unsigned int i = 0; i < count; i++) {
-        if (aKey == dictionary[i].key) {
-            const OSMetaClassBase *oldObject = dictionary[i].value;
 
-            haveUpdated();
+    if (fOptions & kSort) {
+    	i = OSSymbol::bsearch(aKey, &dictionary[0], count, sizeof(dictionary[0]));
+	exists = (i < count) && (aKey == dictionary[i].key);
+    } else for (exists = false, i = 0; i < count; i++) {
+        if ((exists = (aKey == dictionary[i].key))) break;
+    }
 
-            anObject->taggedRetain(OSTypeID(OSCollection));
-            dictionary[i].value = anObject;
-
-            oldObject->taggedRelease(OSTypeID(OSCollection));
-            return true;
-        }
+    if (exists) {
+	const OSMetaClassBase *oldObject = dictionary[i].value;
+    
+	haveUpdated();
+    
+	anObject->taggedRetain(OSTypeID(OSCollection));
+	dictionary[i].value = anObject;
+    
+	oldObject->taggedRelease(OSTypeID(OSCollection));
+	return true;
     }
 
     // add new key, possibly extending our capacity
     if (count >= capacity && count >= ensureCapacity(count+1))
-        return 0;
+        return false;
 
     haveUpdated();
 
+    bcopy(&dictionary[i], &dictionary[i+1], (count - i) * sizeof(dictionary[0]));
+
     aKey->taggedRetain(OSTypeID(OSCollection));
     anObject->taggedRetain(OSTypeID(OSCollection));
-    dictionary[count].key = aKey;
-    dictionary[count].value = anObject;
+    dictionary[i].key = aKey;
+    dictionary[i].value = anObject;
     count++;
 
     return true;
@@ -341,24 +363,33 @@ setObject(const OSSymbol *aKey, const OSMetaClassBase *anObject)
 
 void OSDictionary::removeObject(const OSSymbol *aKey)
 {
+    unsigned int i;
+    bool exists;
+
     if (!aKey)
         return;
 
     // if the key exists, remove the object
-    for (unsigned int i = 0; i < count; i++)
-        if (aKey == dictionary[i].key) {
-            dictEntry oldEntry = dictionary[i];
 
-            haveUpdated();
+    if (fOptions & kSort) {
+    	i = OSSymbol::bsearch(aKey, &dictionary[0], count, sizeof(dictionary[0]));
+	exists = (i < count) && (aKey == dictionary[i].key);
+    } else for (exists = false, i = 0; i < count; i++) {
+        if ((exists = (aKey == dictionary[i].key))) break;
+    }
 
-            count--;
-            for (; i < count; i++)
-                dictionary[i] = dictionary[i+1];
+    if (exists) {
+	dictEntry oldEntry = dictionary[i];
 
-            oldEntry.key->taggedRelease(OSTypeID(OSCollection));
-            oldEntry.value->taggedRelease(OSTypeID(OSCollection));
-            return;
-        }
+	haveUpdated();
+
+	count--;
+	bcopy(&dictionary[i+1], &dictionary[i], (count - i) * sizeof(dictionary[0]));
+
+	oldEntry.key->taggedRelease(OSTypeID(OSCollection));
+	oldEntry.value->taggedRelease(OSTypeID(OSCollection));
+	return;
+    }
 }
 
 
@@ -391,13 +422,24 @@ bool OSDictionary::merge(const OSDictionary *srcDict)
 
 OSObject *OSDictionary::getObject(const OSSymbol *aKey) const
 {
+    unsigned int i;
+    bool exists;
+
     if (!aKey)
         return 0;
 
-    // if the key exists, remove the object
-    for (unsigned int i = 0; i < count; i++)
-        if (aKey == dictionary[i].key)
-            return (const_cast<OSObject *> ((const OSObject *)dictionary[i].value));
+    // if the key exists, return the object
+
+    if (fOptions & kSort) {
+    	i = OSSymbol::bsearch(aKey, &dictionary[0], count, sizeof(dictionary[0]));
+	exists = (i < count) && (aKey == dictionary[i].key);
+    } else for (exists = false, i = 0; i < count; i++) {
+        if ((exists = (aKey == dictionary[i].key))) break;
+    }
+
+    if (exists) {
+	return (const_cast<OSObject *> ((const OSObject *)dictionary[i].value));
+    }
 
     return 0;
 }

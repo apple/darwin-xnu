@@ -810,7 +810,7 @@ hfs_addhotfile_internal(struct vnode *vp)
 	    (ffp->ff_size == 0) ||
 	    (ffp->ff_blocks > hotdata->maxblocks) ||
 	    (cp->c_flag & (C_DELETED | C_NOEXISTS)) ||
-	    (cp->c_flags & UF_NODUMP) ||
+	    (cp->c_bsdflags & UF_NODUMP) ||
 	    (cp->c_atime < hfsmp->hfc_timebase)) {
 		return (0);
 	}

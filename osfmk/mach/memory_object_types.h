@@ -370,6 +370,7 @@ typedef struct memory_object_attr_info	memory_object_attr_info_data_t;
 #define MAP_MEM_WTHRU		3
 #define MAP_MEM_WCOMB		4	/* Write combining mode */
 					/* aka store gather     */
+#define MAP_MEM_INNERWBACK	5
 
 #define GET_MAP_MEM(flags)	\
 	((((unsigned int)(flags)) >> 24) & 0xFF)
@@ -410,6 +411,7 @@ struct upl_page_info {
 		speculative:1,  /* page is valid, but not yet accessed */
 		cs_validated:1,	/* CODE SIGNING: page was validated */
 		cs_tainted:1,	/* CODE SIGNING: page is tainted */
+		needed:1,	/* page should be left in cache on abort */
 		:0;		/* force to long boundary */
 #else
 		opaque;		/* use upl_page_xxx() accessor funcs */
@@ -685,6 +687,7 @@ extern boolean_t	upl_device_page(upl_page_info_t *upl);
 extern boolean_t	upl_speculative_page(upl_page_info_t *upl, int index);
 extern void	upl_clear_dirty(upl_t upl, boolean_t value);
 extern void	upl_set_referenced(upl_t upl, boolean_t value);
+extern void	upl_range_needed(upl_t upl, int index, int count);
 
 __END_DECLS
 

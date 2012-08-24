@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2009 Apple Inc. All rights reserved.
+ * Copyright (c) 2009, 2012 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -28,7 +28,6 @@
 #ifndef _KXLD_OBJECT_H_
 #define _KXLD_OBJECT_H_
 
-#include <mach/machine.h>
 #include <sys/types.h>
 #if KERNEL
     #include <libkern/kxld_types.h>
@@ -56,7 +55,7 @@ size_t kxld_object_sizeof(void)
 kern_return_t kxld_object_init_from_macho(KXLDObject *object, 
     u_char *file, u_long size, const char *name,
     struct kxld_array *section_order,
-    cpu_type_t cputype, cpu_subtype_t cpusubtype)
+    cpu_type_t cputype, cpu_subtype_t cpusubtype, KXLDFlags flags)
     __attribute__((nonnull(1,2,4) visibility("hidden")));
 
 void kxld_object_clear(KXLDObject *object)
@@ -119,6 +118,9 @@ const struct kxld_symtab * kxld_object_get_symtab(const KXLDObject *object)
 
 void kxld_object_get_vmsize(const KXLDObject *object, u_long *header_size, 
     u_long *vmsize)
+    __attribute__((nonnull, visibility("hidden")));
+
+void kxld_object_set_linked_object_size(KXLDObject *object, u_long vmsize)
     __attribute__((nonnull, visibility("hidden")));
 
 /* This will be the same size as kxld_kext_get_vmsize */

@@ -59,9 +59,28 @@
 #ifndef	_KERN_TIMER_H_
 #define _KERN_TIMER_H_
 
-#include <stat_time.h>
-
 #include <kern/kern_types.h>
+
+/*
+ * Some platforms have very expensive timebase routines. An optimization
+ * is to avoid switching timers on kernel exit/entry, which results in all
+ * time billed to the system timer. However, when exposed to userspace,
+ * we report as user time to indicate that work was done on behalf of
+ * userspace.
+ *
+ * Although this policy is implemented as a global variable, we snapshot it
+ * at key points in the thread structure (when the thread is locked and
+ * executing in the kernel) to avoid imbalances.
+ */
+extern int precise_user_kernel_time;
+
+/*
+ * thread must be locked, or be the current executing thread, so that
+ * it doesn't transition from user to kernel while updating the
+ * thread-local value (or in kernel debugger context). In the future,
+ * we make take into account task-level or thread-level policy.
+ */
+#define use_precise_user_kernel_time(thread) ( precise_user_kernel_time ) 
 
 /*
  *	Definitions for high resolution timers.  A check
@@ -69,9 +88,7 @@
  */
 
 struct timer {
-#if	!STAT_TIME
 	uint64_t	tstamp;
-#endif	/* STAT_TIME */
 #if	defined(__LP64__)
 	uint64_t	all_bits;
 #else
@@ -86,32 +103,6 @@ typedef struct timer	timer_data_t, *timer_t;
 /*
  *	Exported kernel interface to timers
  */
-
-#if	STAT_TIME
-
-#include <kern/macro_help.h>
-
-/* Advance a timer by a 32 bit value */
-#define TIMER_BUMP(timer, ticks)								\
-MACRO_BEGIN														\
-	uint32_t	old_low, low;									\
-																\
-	old_low = (timer)->low_bits;								\
-	low = old_low + (ticks);									\
-	if (low < old_low)											\
-		timer_update((timer), (timer)->high_bits + 1, low);		\
-	else														\
-		(timer)->low_bits = low;								\
-MACRO_END
-
-#define timer_start(timer, tstamp)
-#define timer_stop(timer, tstamp)
-#define timer_switch(timer, tstamp, new_timer)
-#define thread_timer_event(tstamp, new_timer)
-
-#else	/* STAT_TIME */
-
-#define	TIMER_BUMP(timer, ticks)
 
 /* Start a timer by setting the timestamp */
 extern void		timer_start(
@@ -133,8 +124,6 @@ extern void		timer_switch(
 extern void		thread_timer_event(
 					uint64_t	tstamp,
 					timer_t		new_timer);
-
-#endif	/* STAT_TIME */
 
 /* Initialize a timer */
 extern void		timer_init(

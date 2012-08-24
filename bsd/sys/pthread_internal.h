@@ -49,8 +49,6 @@ typedef struct ksyn_waitq_element * ksyn_waitq_element_t;
 #define KWE_THREAD_BROADCAST    4
 
 
-#define WORKITEM_SIZE 64
-
 #define WORKQUEUE_HIGH_PRIOQUEUE    0       /* high priority queue */
 #define WORKQUEUE_DEFAULT_PRIOQUEUE 1       /* default priority queue */
 #define WORKQUEUE_LOW_PRIOQUEUE     2       /* low priority queue */
@@ -82,26 +80,13 @@ struct threadlist {
 #define TH_LIST_CONSTRAINED	0x40
 
 
-struct workitem {
-	TAILQ_ENTRY(workitem) wi_entry;
-	user_addr_t wi_item;
-	uint32_t wi_affinity;
-};
-
-struct workitemlist {
-	TAILQ_HEAD(, workitem) wl_itemlist;
-	TAILQ_HEAD(, workitem) wl_freelist;
-};
-
 struct workqueue {
-	struct workitem wq_array[WORKITEM_SIZE * WORKQUEUE_NUMPRIOS];
         proc_t		wq_proc;
         vm_map_t	wq_map;
         task_t		wq_task;
         thread_call_t	wq_atimer_call;
 	int 		wq_flags;
 	int		wq_lflags;
-        int		wq_itemcount;
 	uint64_t 	wq_thread_yielded_timestamp;
 	uint32_t	wq_thread_yielded_count;
 	uint32_t	wq_timer_interval;
@@ -110,13 +95,14 @@ struct workqueue {
 	uint32_t	wq_constrained_threads_scheduled;
 	uint32_t	wq_nthreads;
         uint32_t      	wq_thidlecount;
-	uint32_t	wq_reqconc[WORKQUEUE_NUMPRIOS];	  /* requested concurrency for each priority level */
-	struct workitemlist  wq_list[WORKQUEUE_NUMPRIOS]; /* priority based item list */
-	uint32_t	wq_list_bitmap;
+	uint32_t	wq_reqcount;
 	TAILQ_HEAD(, threadlist) wq_thrunlist;
 	TAILQ_HEAD(, threadlist) wq_thidlelist;
-        uint32_t	*wq_thactive_count[WORKQUEUE_NUMPRIOS];
-        uint32_t	*wq_thscheduled_count[WORKQUEUE_NUMPRIOS];
+	uint16_t	wq_requests[WORKQUEUE_NUMPRIOS];
+	uint16_t	wq_ocrequests[WORKQUEUE_NUMPRIOS];
+	uint16_t	wq_reqconc[WORKQUEUE_NUMPRIOS];	  		/* requested concurrency for each priority level */
+        uint16_t	*wq_thscheduled_count[WORKQUEUE_NUMPRIOS];
+        uint32_t	*wq_thactive_count[WORKQUEUE_NUMPRIOS];		/* must be uint32_t since we OSAddAtomic on these */
         uint64_t	*wq_lastblocked_ts[WORKQUEUE_NUMPRIOS];
 };
 #define WQ_LIST_INITED		0x01
@@ -151,6 +137,8 @@ struct workqueue {
 #define WQOPS_QUEUE_REMOVE_OBSOLETE 2 
 #define WQOPS_THREAD_RETURN 4
 #define WQOPS_THREAD_SETCONC  8
+#define WQOPS_QUEUE_NEWSPISUPP  0x10	/* this is to check for newer SPI support */
+#define WQOPS_QUEUE_REQTHREADS  0x20	/* request number of threads of a prio */
 
 #define PTH_DEFAULT_STACKSIZE 512*1024
 #define PTH_DEFAULT_GUARDSIZE 4*1024

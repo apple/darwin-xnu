@@ -261,7 +261,7 @@ mach_msg_receive_results(void)
 {
 	thread_t          self = current_thread();
 	ipc_space_t       space = current_space();
-	vm_map_t	  map = current_map();
+	vm_map_t          map = current_map();
 
 	ipc_object_t      object = self->ith_object;
 	mach_msg_return_t mr = self->ith_state;
@@ -269,10 +269,9 @@ mach_msg_receive_results(void)
 	mach_msg_option_t option = self->ith_option;
 	ipc_kmsg_t        kmsg = self->ith_kmsg;
 	mach_port_seqno_t seqno = self->ith_seqno;
+	mach_msg_trailer_size_t trailer_size;
 
-	mach_msg_max_trailer_t *trailer;
-
-	ipc_object_release(object);
+	io_release(object);
 
 	if (mr != MACH_MSG_SUCCESS) {
 
@@ -298,67 +297,8 @@ mach_msg_receive_results(void)
 	  goto out;
 	}
 
-	trailer = (mach_msg_max_trailer_t *)
-			((vm_offset_t)kmsg->ikm_header +
-			round_msg(kmsg->ikm_header->msgh_size));
-	if (option & MACH_RCV_TRAILER_MASK) {
-		trailer->msgh_seqno = seqno;
-		trailer->msgh_context = 
-			kmsg->ikm_header->msgh_remote_port->ip_context;
-		trailer->msgh_trailer_size = REQUESTED_TRAILER_SIZE(option);
-
-		if (MACH_RCV_TRAILER_ELEMENTS(option) >= 
-				MACH_RCV_TRAILER_ELEMENTS(MACH_RCV_TRAILER_AV)){
-#if CONFIG_MACF_MACH
-		  if (kmsg->ikm_sender != NULL &&
-		    IP_VALID(kmsg->ikm_header->msgh_remote_port) &&
-		    mac_port_check_method(kmsg->ikm_sender,
-		    &kmsg->ikm_sender->maclabel,
-		    &kmsg->ikm_header->msgh_remote_port->ip_label,
-		    kmsg->ikm_header->msgh_id) == 0)
-		      trailer->msgh_ad = 1;
-		  else
-#endif
-		      trailer->msgh_ad = 0;
-		}
-
-		/*
-		 * The ipc_kmsg_t holds a reference to the label of a label
-		 * handle, not the port. We must get a reference to the port
-		 * and a send right to copyout to the receiver.
-		 */
-
-		if (option & MACH_RCV_TRAILER_ELEMENTS (MACH_RCV_TRAILER_LABELS)) {
-#if CONFIG_MACF_MACH
-		  if (kmsg->ikm_sender != NULL) {
-		    ipc_labelh_t  lh = kmsg->ikm_sender->label;
-		    kern_return_t kr;
-
-		    ip_lock(lh->lh_port);
-		    lh->lh_port->ip_mscount++;
-		    lh->lh_port->ip_srights++;
-		    ip_reference(lh->lh_port);
-		    ip_unlock(lh->lh_port);
-
-		    kr = ipc_object_copyout(space, (ipc_object_t)lh->lh_port,
-					    MACH_MSG_TYPE_PORT_SEND, 0,
-					    &trailer->msgh_labels.sender);
-		    if (kr != KERN_SUCCESS) {
-		      ip_lock(lh->lh_port);
-		      ip_release(lh->lh_port);
-		      ip_check_unlock(lh->lh_port);
-
-		      trailer->msgh_labels.sender = 0;
-		    }
-		  } else {
-		    trailer->msgh_labels.sender = 0;
-		  }
-#else
-		    trailer->msgh_labels.sender = 0;
-#endif
-		}
-	}
-
+	trailer_size = ipc_kmsg_add_trailer(kmsg, space, option, self, seqno, FALSE, 
+			kmsg->ikm_header->msgh_remote_port->ip_context);
 	/*
 	 * If MACH_RCV_OVERWRITE was specified, try to get the scatter
 	 * list and verify it against the contents of the message.  If
@@ -379,7 +319,7 @@ mach_msg_receive_results(void)
 	if (mr != MACH_MSG_SUCCESS) {
 		if ((mr &~ MACH_MSG_MASK) == MACH_RCV_BODY_ERROR) {
 			if (ipc_kmsg_put(msg_addr, kmsg, kmsg->ikm_header->msgh_size +
-			   trailer->msgh_trailer_size) == MACH_RCV_INVALID_DATA)
+			   trailer_size) == MACH_RCV_INVALID_DATA)
 				mr = MACH_RCV_INVALID_DATA;
 		} 
 		else {
@@ -392,7 +332,7 @@ mach_msg_receive_results(void)
 	mr = ipc_kmsg_put(msg_addr,
 			  kmsg,
 			  kmsg->ikm_header->msgh_size + 
-			  trailer->msgh_trailer_size);
+			  trailer_size);
  out:
 	return mr;
 }
@@ -577,8 +517,9 @@ msg_receive_error(
 	mach_port_seqno_t	seqno,
 	ipc_space_t		space)
 {
-	mach_msg_max_trailer_t *trailer;
 	mach_vm_address_t	context;
+	mach_msg_trailer_size_t trailer_size;
+	mach_msg_max_trailer_t	*trailer;
 
 	context = kmsg->ikm_header->msgh_remote_port->ip_context;
 
@@ -598,17 +539,16 @@ msg_receive_error(
 	bcopy(  (char *)&trailer_template, 
 		(char *)trailer, 
 		sizeof(trailer_template));
-	if (option & MACH_RCV_TRAILER_MASK) {
-		trailer->msgh_context = context; 
-		trailer->msgh_seqno = seqno;
-		trailer->msgh_trailer_size = REQUESTED_TRAILER_SIZE(option);
-	}
+
+	trailer_size = ipc_kmsg_add_trailer(kmsg, space, 
+			option, current_thread(), seqno,
+			TRUE, context);
 
 	/*
 	 * Copy the message to user space
 	 */
 	if (ipc_kmsg_put(msg_addr, kmsg, kmsg->ikm_header->msgh_size +
-			trailer->msgh_trailer_size) == MACH_RCV_INVALID_DATA)
+			trailer_size) == MACH_RCV_INVALID_DATA)
 		return(MACH_RCV_INVALID_DATA);
 	else 
 		return(MACH_MSG_SUCCESS);

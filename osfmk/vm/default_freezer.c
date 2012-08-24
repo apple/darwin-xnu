@@ -28,12 +28,29 @@
 
 #if CONFIG_FREEZE
 
-#include "default_freezer.h"
+#ifndef CONFIG_MEMORYSTATUS
+#error "CONFIG_FREEZE defined without matching CONFIG_MEMORYSTATUS"
+#endif
+
+#include <vm/default_freezer.h>
 
 /*
  * Indicates that a page has been faulted back in.
  */
 #define FREEZER_OFFSET_ABSENT ((vm_object_offset_t)(-1))
+
+lck_grp_attr_t	default_freezer_handle_lck_grp_attr;	
+lck_grp_t	default_freezer_handle_lck_grp;
+
+void
+default_freezer_init(void)
+{
+	lck_grp_attr_setdefault(&default_freezer_handle_lck_grp_attr);
+	lck_grp_init(&default_freezer_handle_lck_grp, "default_freezer_handle",
+		     &default_freezer_handle_lck_grp_attr);
+
+}
+
 
 /*
  * Create the mapping table that will
@@ -42,7 +59,7 @@
  * out or being brought back in.
  */
 
-void*
+default_freezer_mapping_table_t
 default_freezer_mapping_create(vm_object_t object, vm_offset_t offset)
 {
 	default_freezer_mapping_table_t table;
@@ -57,13 +74,18 @@ default_freezer_mapping_create(vm_object_t object, vm_offset_t offset)
 	table->object = object;
 	table->offset = offset;
 	
-	return (void*)table;
+	return table;
 }
 
+/*
+ * Table modifications/lookup are done behind
+ * the compact_object lock.
+ */
+
 void
-default_freezer_mapping_free(void **table, boolean_t all)
+default_freezer_mapping_free(default_freezer_mapping_table_t *table_p, boolean_t all)
 {	
-	default_freezer_mapping_table_t freezer_table = *((default_freezer_mapping_table_t *)table);
+	default_freezer_mapping_table_t freezer_table = *table_p;
 	assert(freezer_table);
 	
 	if (all) {
@@ -79,31 +101,33 @@ default_freezer_mapping_free(void **table, boolean_t all)
  
 kern_return_t
 default_freezer_mapping_store(
-		default_freezer_mapping_table_t *table,
+		default_freezer_mapping_table_t table,
 		memory_object_offset_t table_offset,
 		memory_object_t memory_object,
 		memory_object_offset_t offset)
 {
 	default_freezer_mapping_table_entry_t entry;
 	uint32_t index;
-	
-	assert(*table);
-	
-	if ((*table)->index >= MAX_FREEZE_TABLE_ENTRIES) {
-		vm_object_t compact_object = (*table)->object;
+
+	assert(table);
+
+	while (table->next) {
+		table = table->next;
+	}
+
+	if (table->index >= MAX_FREEZE_TABLE_ENTRIES) {
+		vm_object_t compact_object = table->object;
 		default_freezer_mapping_table_t next;
 		
 		next = default_freezer_mapping_create(compact_object, table_offset);
 		if (!next) {
 			return KERN_FAILURE;
 		}
-		
-		(*table)->next = next;
-		*table = next;
+		table->next = next;
 	}
 
-	index = (*table)->index++;
-	entry = &(*table)->entry[index];
+	index = (table)->index++;
+	entry = &(table)->entry[index];
 
 	entry->memory_object = memory_object;
 	entry->offset = offset;
@@ -165,15 +189,17 @@ default_freezer_mapping_update(
 	return kr;
 }
 
+
+
 /*
  * Create a freezer memory object for this
- * vm object.
+ * vm object. This will be one of the vm
+ * objects that will pack the compact object.
  */
 void
 default_freezer_memory_object_create(
-			vm_object_t object,
-			vm_object_t compact_object,
-			default_freezer_mapping_table_t table)
+			vm_object_t	object,
+			default_freezer_handle_t df_handle)
 {
 
 	default_freezer_memory_object_t fo = NULL;
@@ -189,9 +215,10 @@ default_freezer_memory_object_create(
 		assert (control != MEMORY_OBJECT_CONTROL_NULL);
 
 		df_memory_object_init((memory_object_t)fo, control, 0);		
-		fo->fo_compact_object = compact_object;
-		fo->fo_table = table;
-		
+		fo->fo_df_handle = df_handle;
+
+		default_freezer_handle_reference_locked(fo->fo_df_handle);
+	
 		object->pager = (memory_object_t)fo;
 		object->pager_created = TRUE;
 		object->pager_initialized = TRUE;
@@ -203,53 +230,110 @@ default_freezer_memory_object_create(
 	}
 }
 
+kern_return_t
+default_freezer_pack(
+	unsigned int	*purgeable_count,
+	unsigned int	*wired_count,
+	unsigned int	*clean_count,
+	unsigned int	*dirty_count,
+	unsigned int	dirty_budget,
+	boolean_t	*shared,
+	vm_object_t	src_object,
+	default_freezer_handle_t df_handle)
+{
+	kern_return_t			kr = KERN_SUCCESS;
+
+	if (df_handle) {
+		default_freezer_handle_lock(df_handle);
+	}
+
+	kr = vm_object_pack(purgeable_count, wired_count, clean_count, dirty_count, dirty_budget, shared, src_object, df_handle);
+	
+	if (df_handle) {
+		default_freezer_handle_unlock(df_handle);
+	}
+
+	return kr;
+}
+
+/* 
+ * Called with freezer_handle locked.
+ * default_freezer_pack locks the handle, calls
+ * vm_object_pack which, in turn, will call
+ * default_freezer_pack_page().
+ */
 void
 default_freezer_pack_page(
 		vm_page_t p, 
-		vm_object_t compact_object, 
-		vm_object_offset_t offset, 
-		void **table)
+		default_freezer_handle_t df_handle)
 {
 
-	default_freezer_mapping_table_t *freeze_table = (default_freezer_mapping_table_t *)table;
-	memory_object_t memory_object = p->object->pager;
-	
+	default_freezer_mapping_table_t freeze_table = NULL;
+	memory_object_t 		memory_object = NULL;
+	vm_object_t			compact_object =  VM_OBJECT_NULL;
+
+	assert(df_handle);
+
+	compact_object = df_handle->dfh_compact_object;
+
+	assert(compact_object);
+
+	freeze_table =  df_handle->dfh_table;
+	memory_object = p->object->pager;
+
 	if (memory_object == NULL) {
-		default_freezer_memory_object_create(p->object, compact_object, *freeze_table);
+		default_freezer_memory_object_create(p->object, df_handle);
 		memory_object = p->object->pager;
 	} else {
-		default_freezer_memory_object_t fo = (default_freezer_memory_object_t)memory_object;
-		if (fo->fo_compact_object == VM_OBJECT_NULL) {
-			fo->fo_compact_object = compact_object;
-			fo->fo_table = *freeze_table;
-		}
+		assert(df_handle == ((default_freezer_memory_object_t)memory_object)->fo_df_handle);
 	}
-	
-	default_freezer_mapping_store(freeze_table, offset, memory_object, p->offset + p->object->paging_offset);
 
-	/* Remove from the original and insert into the compact destination object */
-	vm_page_rename(p, compact_object, offset, FALSE);
+	vm_object_lock(compact_object);
+	default_freezer_mapping_store(freeze_table, df_handle->dfh_compact_offset, memory_object, p->offset + p->object->paging_offset);
+	vm_page_rename(p, compact_object, df_handle->dfh_compact_offset, FALSE);
+	vm_object_unlock(compact_object);
+	
+	df_handle->dfh_compact_offset += PAGE_SIZE;
 }
 
 void
 default_freezer_unpack(
-		vm_object_t object, 
-		void **table)
+		 default_freezer_handle_t df_handle)
 {
 	
-	vm_page_t p = VM_PAGE_NULL;
-	uint32_t index = 0;
-	vm_object_t src_object = VM_OBJECT_NULL;
-	memory_object_t	src_mem_object = MEMORY_OBJECT_NULL;
-	memory_object_offset_t	src_offset = 0;
-	vm_object_offset_t	compact_offset = 0;
-	default_freezer_memory_object_t	fo = NULL;
-	default_freezer_memory_object_t last_memory_object_thawed = NULL;
-	default_freezer_mapping_table_t freeze_table = *(default_freezer_mapping_table_t *)table;
+	vm_page_t 				compact_page = VM_PAGE_NULL, src_page = VM_PAGE_NULL;
+	uint32_t 				index = 0;
+	vm_object_t 				src_object = VM_OBJECT_NULL;
+	vm_object_t				compact_object = VM_OBJECT_NULL;
+	memory_object_t				src_mem_object = MEMORY_OBJECT_NULL;
+	memory_object_offset_t			src_offset = 0;
+	vm_object_offset_t			compact_offset = 0;
+	default_freezer_memory_object_t		fo = NULL;
+	default_freezer_mapping_table_t 	freeze_table = NULL;
+	boolean_t				should_unlock_handle = FALSE;
 
-	assert(freeze_table);
+	assert(df_handle);
+
+	default_freezer_handle_lock(df_handle);
+	should_unlock_handle = TRUE;
+
+	freeze_table = df_handle->dfh_table;	
+	compact_object = df_handle->dfh_compact_object;
+
+	assert(compact_object);
+	assert(compact_object->alive);
+	assert(!compact_object->terminating);
+	assert(compact_object->pager_ready);
 	
-	vm_object_lock(object);
+	/* Bring the pages back in */
+	if (vm_object_pagein(compact_object) != KERN_SUCCESS) {
+		if (should_unlock_handle) {
+			default_freezer_handle_unlock(df_handle);
+		}
+        	return;
+	}
+
+	vm_object_lock(compact_object);
 	
 	for (index = 0, compact_offset = 0; ; index++, compact_offset += PAGE_SIZE){
 		if (index >= freeze_table->index) {
@@ -258,8 +342,8 @@ default_freezer_unpack(
 			table_next = freeze_table->next; 
 			
 			/* Free the tables as we go along */
-			default_freezer_mapping_free((void**)&freeze_table, FALSE);
-			
+			default_freezer_mapping_free(&freeze_table, FALSE);
+		
 			if (table_next == NULL){
 				break;
 			}
@@ -281,8 +365,8 @@ default_freezer_unpack(
 		src_offset = freeze_table->entry[index].offset;
 		if (src_offset != FREEZER_OFFSET_ABSENT) {
 			
-			p = vm_page_lookup(object, compact_offset);
-			assert(p);
+			compact_page = vm_page_lookup(compact_object, compact_offset);
+			assert(compact_page);
 
 			fo = (default_freezer_memory_object_t)src_mem_object;
 		
@@ -290,39 +374,37 @@ default_freezer_unpack(
 	
 			/* Move back over from the freeze object to the original */
 			vm_object_lock(src_object);
-			vm_page_rename(p, src_object, src_offset - src_object->paging_offset, FALSE);
+			src_page = vm_page_lookup(src_object, src_offset - src_object->paging_offset);
+			if (src_page != VM_PAGE_NULL){
+				/*
+				 * We might be racing with a VM fault. 
+				 * So handle that gracefully.
+				 */
+				assert(src_page->absent == TRUE);
+				VM_PAGE_FREE(src_page);
+			}
+			vm_page_rename(compact_page, src_object, src_offset - src_object->paging_offset, FALSE);
 			vm_object_unlock(src_object);
 		}
 		
-		if (src_mem_object != ((memory_object_t)last_memory_object_thawed)){
-			if (last_memory_object_thawed != NULL){
-				last_memory_object_thawed->fo_compact_object = VM_OBJECT_NULL;
-				last_memory_object_thawed->fo_table = NULL;
-			}
-			last_memory_object_thawed = (default_freezer_memory_object_t)src_mem_object;
-		}
 	}
 	
-	if (last_memory_object_thawed != NULL){
-		last_memory_object_thawed->fo_compact_object = VM_OBJECT_NULL;
-		last_memory_object_thawed->fo_table = NULL;
-	}
+	vm_object_unlock(compact_object);
 	
-	vm_object_unlock(object);
-}
-
-vm_object_t
-default_freezer_get_compact_vm_object(void** table)
-{
-	default_freezer_mapping_table_t freeze_table = *((default_freezer_mapping_table_t *)table);
-	assert(freeze_table);
-	return ((vm_object_t)(freeze_table->object));
+	vm_object_deallocate(compact_object);
+	
+	if (should_unlock_handle) {
+		df_handle->dfh_table = NULL;
+		df_handle->dfh_compact_object = VM_OBJECT_NULL;
+		df_handle->dfh_compact_offset = 0;
+		default_freezer_handle_unlock(df_handle);
+	}
 }
 
 void
 df_memory_object_reference(__unused memory_object_t mem_obj)
 {
-	
+
 	/* No-op */
 }
 
@@ -331,52 +413,65 @@ df_memory_object_deallocate(memory_object_t mem_obj)
 {
 
 	default_freezer_memory_object_t	fo = (default_freezer_memory_object_t)mem_obj;
-	vm_object_t compact_object = fo->fo_compact_object;
-	
+
 	assert(fo);
 	
-	if (compact_object != VM_OBJECT_NULL) {
+	if (fo->fo_df_handle != NULL) {
 		
-		default_freezer_mapping_table_t fo_table = fo->fo_table;
+		default_freezer_mapping_table_t table = NULL;
 		default_freezer_mapping_table_entry_t entry;
 		boolean_t found = FALSE;
 		uint32_t index = 0;
+		vm_object_t compact_object = VM_OBJECT_NULL;
 		
-		vm_object_lock(compact_object);
-	
-		/* Remove from table */
-		while (1) {	
-			if (index >= fo_table->index) {
-				if (fo_table->next) {
-					fo_table = fo_table->next;
-					index = 0;
-				} else {
-					/* End of tables */
-					break;
-				}
-			}
+		default_freezer_handle_lock(fo->fo_df_handle);
 
-			entry = &fo_table->entry[index];
-			if (mem_obj == entry->memory_object) {
-				/* It matches, so clear the entry */
-				if (!found) {
-					found = TRUE;
-				} 
-				entry->memory_object = MEMORY_OBJECT_NULL;
-				entry->offset = 0;
-			} else if (MEMORY_OBJECT_NULL != entry->memory_object) {
-				/* We have a different valid object; we're done */
-				if (found) {
-					break;
+		compact_object =  fo->fo_df_handle->dfh_compact_object;
+		table = fo->fo_df_handle->dfh_table;
+
+		if (compact_object == VM_OBJECT_NULL || table == NULL) {
+			/*Nothing to do. A thaw must have cleared it all out.*/
+		} else {
+			vm_object_lock(compact_object);
+		
+			/* Remove from table */
+			while (1) {	
+				if (index >= table->index) {
+					if (table->next) {
+						table = table->next;
+						index = 0;
+					} else {
+						/* End of tables */
+						break;
+					}
 				}
+
+				entry = &table->entry[index];
+				if (mem_obj == entry->memory_object) {
+					/* It matches, so clear the entry */
+					if (!found) {
+						found = TRUE;
+					} 
+					entry->memory_object = MEMORY_OBJECT_NULL;
+					entry->offset = 0;
+				} else if (MEMORY_OBJECT_NULL != entry->memory_object) {
+					/* We have a different valid object; we're done */
+					if (found) {
+						break;
+					}
+				}
+			
+				index++;
 			}
 		
-			index++;
+			vm_object_unlock(compact_object);
 		}
-	
-		vm_object_unlock(compact_object);
+
+		if (default_freezer_handle_deallocate_locked(fo->fo_df_handle)) {
+			default_freezer_handle_unlock(fo->fo_df_handle);
+		}	
 	}
-	
+
 	kfree(fo, sizeof(*fo));
 }
 
@@ -407,6 +502,7 @@ df_memory_object_terminate(memory_object_t mem_obj)
 	return KERN_SUCCESS;
 }
 
+
 kern_return_t
 df_memory_object_data_request(
 		memory_object_t mem_obj, 
@@ -420,29 +516,44 @@ df_memory_object_data_request(
 	memory_object_offset_t	compact_offset = 0;
 	memory_object_t pager = NULL;
 	kern_return_t kr = KERN_SUCCESS;
+	boolean_t	drop_object_ref = FALSE;
 
 	default_freezer_memory_object_t fo = (default_freezer_memory_object_t)mem_obj;
+	default_freezer_handle_t	df_handle = NULL;
 
-	src_object = memory_object_control_to_vm_object(fo->fo_pager_control);
-	compact_object = fo->fo_compact_object;
-	
-	if (compact_object != VM_OBJECT_NULL) {
-		
-		vm_object_lock(compact_object);
-	
-		kr = default_freezer_mapping_update(fo->fo_table,
-							mem_obj,
-							offset,
-							&compact_offset,
-							FALSE);
-						
-		vm_object_unlock(compact_object);
-	} else {
+	df_handle = fo->fo_df_handle;
+
+	if (df_handle == NULL) {
 		kr = KERN_FAILURE;
+	} else {
+		default_freezer_handle_lock(df_handle);
+		
+		src_object = memory_object_control_to_vm_object(fo->fo_pager_control);
+		compact_object = fo->fo_df_handle->dfh_compact_object;
+	
+		if (compact_object == NULL) {
+			kr = KERN_FAILURE;
+		} else {	
+			vm_object_lock(compact_object);
+			vm_object_reference_locked(compact_object);
+			drop_object_ref = TRUE;
+
+			kr = default_freezer_mapping_update(fo->fo_df_handle->dfh_table,
+								mem_obj,
+								offset,
+								&compact_offset,
+								FALSE);
+			vm_object_unlock(compact_object);
+		}
+		default_freezer_handle_unlock(df_handle);
 	}
 	
+
 	if (length == 0){
 		/*Caller is just querying to see if we have the page*/
+		if (drop_object_ref) {
+			vm_object_deallocate(compact_object);
+		}
 		return kr;
 	}
 
@@ -466,30 +577,38 @@ df_memory_object_data_request(
 						PAGE_SIZE, PAGE_SIZE, 
 						&upl, NULL, &page_list_count,
 						request_flags);
+		upl_range_needed(upl, 0, 1);
 
 		upl_abort(upl, UPL_ABORT_UNAVAILABLE);
 		upl_deallocate(upl);
 		
+		if (drop_object_ref) {
+			vm_object_deallocate(compact_object);
+		}
+
 		return KERN_SUCCESS;
 	}
 
+	assert(compact_object->alive);
+	assert(!compact_object->terminating);
+	assert(compact_object->pager_ready);
+
 	vm_object_lock(compact_object);
 
-	pager = (memory_object_t)compact_object->pager;
-
-	if (!compact_object->pager_ready || pager == MEMORY_OBJECT_NULL){
-		vm_object_unlock(compact_object);
-		return KERN_FAILURE;
-	}
-	
 	vm_object_paging_wait(compact_object, THREAD_UNINT);
 	vm_object_paging_begin(compact_object);
 
 	compact_object->blocked_access = TRUE;
+	pager = (memory_object_t)compact_object->pager;
+
 	vm_object_unlock(compact_object);
 
 	((vm_object_fault_info_t) fault_info)->io_sync = TRUE;
 
+	/*
+	 * We have a reference on both the default_freezer
+	 * memory object handle and the compact object.
+	 */
 	kr = dp_memory_object_data_request(pager,
 					compact_offset,
 					length,
@@ -497,7 +616,7 @@ df_memory_object_data_request(
 					fault_info);
 	if (kr == KERN_SUCCESS){
 
-		vm_page_t src_page = VM_PAGE_NULL, dst_page = VM_PAGE_NULL;
+		vm_page_t compact_page = VM_PAGE_NULL, dst_page = VM_PAGE_NULL;
 
 		vm_object_lock(compact_object);
 
@@ -506,31 +625,42 @@ df_memory_object_data_request(
 
 		vm_object_lock(src_object);
 
-		if ((src_page = vm_page_lookup(compact_object, compact_offset)) != VM_PAGE_NULL){
+		if ((compact_page = vm_page_lookup(compact_object, compact_offset)) != VM_PAGE_NULL){
 			
 			dst_page = vm_page_lookup(src_object, offset - src_object->paging_offset);
 			
-			VM_PAGE_FREE(dst_page);
-			vm_page_rename(src_page, src_object, offset - src_object->paging_offset, FALSE);
-			
-			if (default_freezer_mapping_update(fo->fo_table,
-							mem_obj,
-							offset,
-							NULL,
-							TRUE) != KERN_SUCCESS) {
-				printf("Page for object: 0x%lx at offset: 0x%lx not found in table\n", (uintptr_t)src_object, (uintptr_t)offset);
+			if (!dst_page->absent){
+				/*
+				 * Someone raced us here and unpacked
+				 * the object behind us.
+				 * So cleanup before we return.
+				 */
+				VM_PAGE_FREE(compact_page);
+			} else {
+				VM_PAGE_FREE(dst_page);
+				vm_page_rename(compact_page, src_object, offset - src_object->paging_offset, FALSE);
+				
+				if (default_freezer_mapping_update(fo->fo_df_handle->dfh_table,
+								mem_obj,
+								offset,
+								NULL,
+								TRUE) != KERN_SUCCESS) {
+					printf("Page for object: 0x%lx at offset: 0x%lx not found in table\n", (uintptr_t)src_object, (uintptr_t)offset);
+				}
+				
+				PAGE_WAKEUP_DONE(compact_page);
 			}
-			
-			PAGE_WAKEUP_DONE(src_page);
 		} else {
 			printf("%d: default_freezer: compact_object doesn't have the page for object 0x%lx at offset 0x%lx \n", kr, (uintptr_t)compact_object, (uintptr_t)compact_offset);
-			kr = KERN_FAILURE;
+			kr = KERN_SUCCESS;
 		}
 		vm_object_unlock(src_object);
 		vm_object_unlock(compact_object);
+		vm_object_deallocate(compact_object);
 	} else {
 		panic("%d: default_freezer TOC pointed us to default_pager incorrectly\n", kr);
 	}
+	
 	return kr;
 }
 
@@ -613,4 +743,111 @@ df_memory_object_data_reclaim(
 	panic("df_memory_object_data_reclaim\n");
 	return KERN_SUCCESS;
 }
+
+
+/*
+ * The freezer handle is used to make sure that
+ * we don't race against the lookup and termination
+ * of the compact object.
+ */
+
+void
+default_freezer_handle_lock(default_freezer_handle_t df_handle) {
+	lck_rw_lock_exclusive(&df_handle->dfh_lck);
+}
+
+void
+default_freezer_handle_unlock(default_freezer_handle_t df_handle) {
+	lck_rw_done(&df_handle->dfh_lck);
+}
+
+default_freezer_handle_t
+default_freezer_handle_allocate(void)
+{
+
+	default_freezer_handle_t		df_handle = NULL;
+	df_handle = kalloc(sizeof(struct default_freezer_handle));
+
+	if (df_handle) {
+		memset(df_handle, 0, sizeof(struct default_freezer_handle));
+		lck_rw_init(&df_handle->dfh_lck, &default_freezer_handle_lck_grp, NULL);
+		/* No one knows of this handle yet so no need to lock it. */
+		default_freezer_handle_reference_locked(df_handle);
+	} else {
+		panic("Failed to allocated default_freezer_handle structure\n");
+	}
+	return df_handle;
+}
+
+kern_return_t
+default_freezer_handle_init(
+	default_freezer_handle_t df_handle) 
+{
+	kern_return_t				kr = KERN_SUCCESS;
+	vm_object_t				compact_object = VM_OBJECT_NULL;
+
+	if (df_handle == NULL || df_handle->dfh_table != NULL) {
+		kr = KERN_FAILURE;
+	} else {
+		/* Create our compact object */
+		compact_object = vm_object_allocate((vm_map_offset_t)(VM_MAX_ADDRESS) - (vm_map_offset_t)(VM_MIN_ADDRESS));
+		if (!compact_object) {
+			kr = KERN_FAILURE;
+		} else {
+			df_handle->dfh_compact_object = compact_object;
+			df_handle->dfh_compact_offset = 0;
+			df_handle->dfh_table = default_freezer_mapping_create(df_handle->dfh_compact_object, df_handle->dfh_compact_offset);
+			if (!df_handle->dfh_table) {
+				kr = KERN_FAILURE;
+			}	
+		}
+	}
+
+	return kr;
+}
+
+void
+default_freezer_handle_reference_locked(
+	default_freezer_handle_t df_handle)
+{
+	assert(df_handle);
+	df_handle->dfh_ref_count++;
+}
+
+void
+default_freezer_handle_deallocate(
+	default_freezer_handle_t df_handle)
+{
+	assert(df_handle);
+	default_freezer_handle_lock(df_handle);
+	if (default_freezer_handle_deallocate_locked(df_handle)) {
+		default_freezer_handle_unlock(df_handle);
+	}
+}
+
+boolean_t
+default_freezer_handle_deallocate_locked(
+	default_freezer_handle_t df_handle)
+{
+	boolean_t	should_unlock = TRUE;
+
+	assert(df_handle);
+	df_handle->dfh_ref_count--;
+	if (df_handle->dfh_ref_count == 0) {
+		lck_rw_destroy(&df_handle->dfh_lck, &default_freezer_handle_lck_grp);
+		kfree(df_handle, sizeof(struct default_freezer_handle));
+		should_unlock = FALSE;
+	}
+	return should_unlock;
+}
+
+void
+default_freezer_pageout(
+	default_freezer_handle_t df_handle)
+{
+	assert(df_handle);
+
+	vm_object_pageout(df_handle->dfh_compact_object);
+}
+
 #endif /* CONFIG_FREEZE */

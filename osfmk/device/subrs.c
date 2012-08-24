@@ -187,6 +187,7 @@ strcmp(
  *      comparison runs for at most "n" characters.
  */
 
+// ARM implementation in ../arm/strncmp.s
 int
 strncmp(
         const char *s1,
@@ -285,6 +286,7 @@ strcpy(
  *      to the "to" string.
  */
 
+// ARM implementation in ../arm/strncpy.s
 char *
 strncpy(
 	char *s1, 
@@ -378,6 +380,8 @@ atoi_term(
  * outputs:
  *	length of s or max; whichever is smaller
  */
+
+// ARM implementation in ../arm/strnlen.s
 size_t 
 strnlen(const char *s, size_t max) {
 	const char *es = s + max, *p = s;
@@ -484,6 +488,8 @@ strlcat(char *dst, const char *src, size_t siz)
  * will be copied.  Always NUL terminates (unless siz == 0).
  * Returns strlen(src); if retval >= siz, truncation occurred.
  */
+
+// ARM implementation in ../arm/strlcpy.s
 size_t
 strlcpy(char *dst, const char *src, size_t siz)
 {
@@ -565,4 +571,3 @@ strprefix(register const char *s1, register const char *s2)
         }       
         return (1);
 }
-

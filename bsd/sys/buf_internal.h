@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2008 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2012 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -79,13 +79,16 @@
 #include <sys/buf.h>
 #include <sys/lock.h>
 
-
 #define NOLIST ((struct buf *)0x87654321)
 
 /*
  * Attributes of an I/O to be used by lower layers
  */
 struct bufattr {
+#if CONFIG_PROTECT
+	struct cprotect *ba_cpentry;	/* address of cp_entry */
+	uint64_t ba_cp_file_off;	/* rounded file offset. See buf_setcpoff() for more comments */
+#endif
 	uint64_t ba_flags;	/* flags. Some are only in-use on embedded devices */
 };
 
@@ -132,9 +135,6 @@ struct buf {
 #ifdef BUF_MAKE_PRIVATE
 	buf_t   b_data_store;
 #endif
-#if CONFIG_PROTECT
-	struct cprotect *b_cpentry; 	/* address of cp_entry, to be passed further down  */
-#endif /* CONFIG_PROTECT */
 	struct bufattr b_attr;
 #ifdef JOE_DEBUG
         void *	b_owner;
@@ -160,7 +160,7 @@ struct buf {
 #define b_cliodone   b_wcred
 
 /*
- * These flags are kept in b_lflags... 
+ * These flags are kept in b_lflags...
  * buf_mtxp must be held before examining/updating
  */
 #define	BL_BUSY		0x00000001	/* I/O in progress. */
@@ -171,20 +171,20 @@ struct buf {
 #define BL_EXTERNAL	0x00000040
 #define BL_WAITSHADOW	0x00000080
 #define BL_IOBUF_ALLOC	0x00000100
+#define BL_WANTED_REF	0x00000200
 
 /*
  * Parameters for buffer cache garbage collection 
  */
 #define BUF_STALE_THRESHHOLD 	30	/* Collect if untouched in the last 30 seconds */
-#define BUF_MAX_GC_COUNT	1024	/* Generally 6-8 MB */
-#define BUF_MAX_GC_BATCH_SIZE	128	/* Under a single grab of the lock */
+#define BUF_MAX_GC_BATCH_SIZE	64	/* Under a single grab of the lock */
 
 /*
  * mask used by buf_flags... these are the readable external flags
  */
 #define BUF_X_RDFLAGS (B_PHYS | B_RAW | B_LOCKED | B_ASYNC | B_READ | B_WRITE | B_PAGEIO |\
 		       B_META | B_CLUSTER | B_DELWRI | B_FUA | B_PASSIVE | B_IOSTREAMING | B_THROTTLED_IO |\
-		       B_ENCRYPTED_IO)
+		       B_ENCRYPTED_IO | B_STATICCONTENT)
 /*
  * mask used by buf_clearflags/buf_setflags... these are the writable external flags
  */
@@ -230,7 +230,11 @@ struct buf {
  * ba_flags (Buffer Attribute flags)
  * Some of these may be in-use only on embedded devices.
  */
-#define BA_THROTTLED_IO         0x000000002
+#define BA_RAW_ENCRYPTED_IO     0x00000001
+#define BA_THROTTLED_IO         0x00000002
+#define BA_DELAYIDLESLEEP       0x00000004	/* Process is marked to delay idle sleep on disk IO */
+#define BA_NOCACHE		0x00000008
+#define BA_META			0x00000010
 
 
 extern int niobuf_headers;		/* The number of IO buffer headers for cluster IO */
@@ -281,8 +285,16 @@ errno_t	buf_acquire(buf_t, int, int, int);
 int	count_busy_buffers(void);
 int	count_lock_queue(void);
 
+int buf_flushdirtyblks_skipinfo (vnode_t, int, int, const char *);
+void buf_wait_for_shadow_io (vnode_t, daddr64_t);
+
 #ifdef BUF_MAKE_PRIVATE
 errno_t	buf_make_private(buf_t bp);
+#endif
+
+#ifdef CONFIG_PROTECT
+void buf_setcpaddr(buf_t, struct cprotect *);
+void buf_setcpoff (buf_t, uint64_t);
 #endif
 
 __END_DECLS

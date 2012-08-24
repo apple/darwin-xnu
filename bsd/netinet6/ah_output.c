@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008 Apple Inc. All rights reserved.
+ * Copyright (c) 2008-2011 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -277,7 +277,7 @@ ah4_output(m, sav)
 	if (sav->flags & SADB_X_EXT_OLD) {
 		struct ah *ahdr;
 
-		ahdr = (struct ah *)ahdrpos;
+		ahdr = (struct ah *)(void *)ahdrpos;
 		ahsumpos = (u_char *)(ahdr + 1);
 		ahdr->ah_len = plen >> 2;
 		ahdr->ah_nxt = ip->ip_p;
@@ -287,7 +287,7 @@ ah4_output(m, sav)
 	} else {
 		struct newah *ahdr;
 
-		ahdr = (struct newah *)ahdrpos;
+		ahdr = (struct newah *)(void *)ahdrpos;
 		ahsumpos = (u_char *)(ahdr + 1);
 		ahdr->ah_len = (plen >> 2) + 1;	/* plus one for seq# */
 		ahdr->ah_nxt = ip->ip_p;
@@ -617,7 +617,7 @@ ah4_finaldst(m)
 				return NULL;
 			}
 			i += q[i + IPOPT_OLEN] - sizeof(struct in_addr);
-			return (struct in_addr *)(q + i);
+			return (struct in_addr *)(void *)(q + i);
 		default:
 			if (q[i + IPOPT_OLEN] < 2 ||
 			    optlen - i < q[i + IPOPT_OLEN]) {

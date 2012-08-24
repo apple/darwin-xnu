@@ -35,7 +35,6 @@
 /*
  *	Here are the Diagnostic interface interfaces
  *	Lovingly crafted by Bill Angell using traditional methods
- *	Keep selectors in sync with the PPC version where possible.	
  */
 #ifdef	KERNEL_PRIVATE
 
@@ -46,7 +45,6 @@
 #error This file is not useful on non-Intel
 #endif
 
-int diagCall(x86_saved_state_t *regs);
 int diagCall64(x86_saved_state_t *regs);
 
 #define diagSCnum 0x00006000
@@ -68,7 +66,7 @@ int diagCall64(x86_saved_state_t *regs);
 #define dgCPNull 14
 #define dgPerfMon 15
 #define dgMapPage 16
-#define dgScom 17
+#define dgGzallocTest 17
 #define dgBind 18
 #define dgPproc 19
 #define dgAcntg 20
@@ -77,28 +75,20 @@ int diagCall64(x86_saved_state_t *regs);
 #define	dgWar 23
 #define dgNapStat 24
 #define dgRuptStat 25
-
+#define	dgPermCheck 26
 
 typedef struct diagWork {			/* Diagnostic work area */
 
 	unsigned int dgLock;			/* Lock if needed */
 	unsigned int dgFlags;			/* Flags */
 #define enaExpTrace 0x00000001
-#define enaExpTraceb 31
 #define enaUsrFCall 0x00000002
-#define enaUsrFCallb 30
 #define enaUsrPhyMp 0x00000004
-#define enaUsrPhyMpb 29
 #define enaDiagSCs  0x00000008
-#define enaDiagSCsb  28
 #define enaDiagDM  0x00000010
-#define enaDiagSDMb  27
 #define enaDiagEM  0x00000020
-#define enaDiagEMb  26
 #define enaDiagTrap  0x00000040
-#define enaDiagTrapb  25
 #define enaNotifyEM  0x00000080
-#define enaNotifyEMb  24
 	
 	unsigned int dgMisc0;
 	unsigned int dgMisc1;

@@ -8,10 +8,12 @@ include $(MakeInc_cmd)
 include $(MakeInc_def)
 
 INSTINC_SUBDIRS = \
+	altq classq pktsched
 
 INSTINC_SUBDIRS_I386 = \
 
 EXPINC_SUBDIRS = \
+	altq classq pktsched
 
 EXPINC_SUBDIRS_I386 = \
 
@@ -19,7 +21,8 @@ DATAFILES= \
 	bpf.h dlil.h \
 	ethernet.h if.h if_arp.h \
 	if_dl.h if_llc.h if_media.h if_mib.h \
-	if_types.h if_utun.h if_var.h \
+	if_types.h if_var.h \
+	if_utun.h if_utun_crypto.h if_utun_crypto_ipsec.h \
 	kext_net.h ndrv.h pfkeyv2.h \
 	route.h
 
@@ -29,14 +32,14 @@ KERNELFILES= \
 
 PRIVATE_DATAFILES = \
 	if_vlan_var.h if_ppp.h firewire.h \
-	ppp_defs.h radix.h if_bond_var.h lacp.h ndrv_var.h \
+	ppp_defs.h radix.h if_bond_var.h if_bond_internal.h lacp.h ndrv_var.h \
 	netsrc.h raw_cb.h etherdefs.h iso88025.h if_pflog.h pfvar.h \
-	if_bridgevar.h ntstat.h if_llreach.h
+	if_bridgevar.h ntstat.h iptap.h if_llreach.h
 
 PRIVATE_KERNELFILES = ${KERNELFILES} \
-	bpfdesc.h dlil_pvt.h ppp_comp.h \
+	bpfdesc.h ppp_comp.h \
 	zlib.h bpf_compat.h net_osdep.h \
-	ntstat.h if_llreach.h
+	ntstat.h iptap.h if_llreach.h flowadv.h
 
 INSTALL_MI_LIST	= ${DATAFILES}
 

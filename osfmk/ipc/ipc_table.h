@@ -112,56 +112,30 @@ extern ipc_table_size_t ipc_table_requests;
 extern void ipc_table_init(void) __attribute__((section("__TEXT, initcode")));
 
 /*
- *	Note that ipc_table_alloc, ipc_table_realloc, and ipc_table_free
- *	all potentially use the VM system.  Hence simple locks can't
+ *	Note that ipc_table_alloc and ipc_table_free
+ *	potentially use the VM system.  Hence simple locks can't
  *	be held across them.
- *
- *	We can't use a copying realloc, because the realloc happens
- *	with the data unlocked.  ipc_table_realloc remaps the data,
- *	so it is OK.
  */
 
 /* Allocate a table */
 extern void * ipc_table_alloc(
 	vm_size_t	size);
 
-/* Reallocate a big table */
-extern void * ipc_table_realloc(
-	vm_size_t	old_size,
-	void *		old_table,
-	vm_size_t	new_size);
-
 /* Free a table */
 extern void ipc_table_free(
 	vm_size_t	size,
 	void *		table);
 
-#define it_entries_reallocable(its)					\
-	((its)->its_size * sizeof(struct ipc_entry) >= PAGE_SIZE)
-
 #define	it_entries_alloc(its)						\
 	((ipc_entry_t)							\
-	ipc_table_alloc(it_entries_reallocable(its) ?			\
-	    round_page((its)->its_size * sizeof(struct ipc_entry)) :	\
-	    (its)->its_size * sizeof(struct ipc_entry)			\
-	))
-
-#define	it_entries_realloc(its, table, nits)				\
-	((ipc_entry_t)							\
-	ipc_table_realloc(						\
-	    round_page((its)->its_size * sizeof(struct ipc_entry)),	\
-	    (void *)(table),					\
-	    round_page((nits)->its_size * sizeof(struct ipc_entry))	\
-	))
+	 ipc_table_alloc((its)->its_size * sizeof(struct ipc_entry)))
 
 #define	it_entries_free(its, table)					\
-	ipc_table_free(it_entries_reallocable(its) ?			\
-	    round_page((its)->its_size * sizeof(struct ipc_entry)) :	\
-	    (its)->its_size * sizeof(struct ipc_entry),			\
-	    (void *)(table)					\
-	)
+	ipc_table_free((its)->its_size * sizeof(struct ipc_entry),	\
+		       (void *)(table))
 
-#define	it_requests_alloc(its)					\
+
+#define	it_requests_alloc(its)						\
 	((ipc_port_request_t)						\
 	 ipc_table_alloc((its)->its_size *				\
 			 sizeof(struct ipc_port_request)))

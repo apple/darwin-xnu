@@ -366,13 +366,21 @@ public:
     virtual bool isEqualTo(const OSMetaClassBase * anObject) const;
 
 
+#ifdef XNU_KERNEL_PRIVATE
    /* OSRuntime only INTERNAL API - DO NOT USE */
    /* Not to be included in headerdoc. */
     // xx-review: this should be removed from the symbol set.
+
     static void checkForPageUnload(
         void * startAddr,
         void * endAddr);
 
+    static unsigned int bsearch(
+	const void *  key,
+	const void *  array,
+	unsigned int  arrayCount,
+	size_t        memberSize);
+#endif /* XNU_KERNEL_PRIVATE */
 
     OSMetaClassDeclareReservedUnused(OSSymbol, 0);
     OSMetaClassDeclareReservedUnused(OSSymbol, 1);

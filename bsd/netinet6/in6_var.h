@@ -168,6 +168,8 @@ struct	in6_ifaddr {
 	/* multicast addresses joined from the kernel */
 	LIST_HEAD(, in6_multi_mship) ia6_memberships;
 };
+
+#define	ifatoia6(ifa)	((struct in6_ifaddr *)(void *)(ifa))
 #endif /* XNU_KERNEL_PRIVATE */
 
 /* control structure to manage address selection policy */
@@ -306,6 +308,7 @@ struct	in6_ifreq {
 		int	ifru_flags;
 		int	ifru_flags6;
 		int	ifru_metric;
+		int	ifru_intval;
 		caddr_t	ifru_data;
 		struct in6_addrlifetime ifru_lifetime;
 		struct in6_ifstat ifru_stat;
@@ -435,10 +438,12 @@ struct	in6_rrenumreq {
 #define IA6_MASKIN6(ia)	(&((ia)->ia_prefixmask.sin6_addr))
 #define IA6_SIN6(ia)	(&((ia)->ia_addr))
 #define IA6_DSTSIN6(ia)	(&((ia)->ia_dstaddr))
-#define IFA_IN6(x)	(&((struct sockaddr_in6 *)((x)->ifa_addr))->sin6_addr)
-#define IFA_DSTIN6(x)	(&((struct sockaddr_in6 *)((x)->ifa_dstaddr))->sin6_addr)
-
-#define IFPR_IN6(x)	(&((struct sockaddr_in6 *)((x)->ifpr_prefix))->sin6_addr)
+#define IFA_IN6(x)	\
+	(&((struct sockaddr_in6 *)(void *)((x)->ifa_addr))->sin6_addr)
+#define IFA_DSTIN6(x)	\
+	(&((struct sockaddr_in6 *)(void *)((x)->ifa_dstaddr))->sin6_addr)
+#define IFPR_IN6(x)	\
+	(&((struct sockaddr_in6 *)(void *)((x)->ifpr_prefix))->sin6_addr)
 #endif /* XNU_KERNEL_PRIVATE */
 
 /*
@@ -607,6 +612,7 @@ void in6_post_msg(struct ifnet *, u_int32_t, struct in6_ifaddr *);
 #define SIOCDRDEL_IN6_32 _IOWR('u', 135, struct in6_defrouter_32)
 #define SIOCDRDEL_IN6_64 _IOWR('u', 135, struct in6_defrouter_64)
 #endif /* XNU_KERNEL_PRIVATE */
+#define	SIOCSETROUTERMODE_IN6	_IOWR('i', 136, struct in6_ifreq) /* enable/disable IPv6 router mode on interface */
 #endif /* PRIVATE */
 
 #define IN6_IFF_ANYCAST		0x01	/* anycast address */
@@ -619,9 +625,14 @@ void in6_post_msg(struct ifnet *, u_int32_t, struct in6_ifaddr *);
 					 */
 #define IN6_IFF_AUTOCONF	0x40	/* autoconfigurable address. */
 #define IN6_IFF_TEMPORARY	0x80	/* temporary (anonymous) address. */
+#define IN6_IFF_DYNAMIC		0x100	/* assigned by DHCPv6 service */
+#define IN6_IFF_OPTIMISTIC	0x200	/* optimistic DAD, i.e. RFC 4429 */
 #define IN6_IFF_NOPFX		0x8000	/* skip kernel prefix management.
 					 * XXX: this should be temporary.
 					 */
+
+/* Duplicate Address Detection [DAD] in progress. */
+#define IN6_IFF_DADPROGRESS	(IN6_IFF_TENTATIVE|IN6_IFF_OPTIMISTIC)
 
 /* do not input/output */
 #define IN6_IFF_NOTREADY (IN6_IFF_TENTATIVE|IN6_IFF_DUPLICATED)
@@ -653,6 +664,7 @@ do {								\
 } while (0)
 
 __private_extern__ lck_rw_t in6_ifaddr_rwlock;
+__private_extern__ lck_mtx_t proxy6_lock;
 
 extern struct ifqueue ip6intrq;		/* IP6 packet input queue */
 extern struct in6_addr zeroin6_addr;
@@ -931,6 +943,7 @@ extern void in6_restoremkludge(struct in6_ifaddr *, struct ifnet *);
 extern void in6_purgemkludge(struct ifnet *);
 extern struct in6_ifaddr *in6ifa_ifpforlinklocal(struct ifnet *, int);
 extern struct in6_ifaddr *in6ifa_ifpwithaddr(struct ifnet *, struct in6_addr *);
+extern struct in6_ifaddr *in6ifa_prproxyaddr(struct in6_addr *);
 extern char *ip6_sprintf(const struct in6_addr *);
 extern int in6_addr2scopeid(struct ifnet *, struct in6_addr *);
 extern int in6_matchlen(struct in6_addr *, struct in6_addr *);

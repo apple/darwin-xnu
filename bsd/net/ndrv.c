@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1997-2008 Apple Inc. All rights reserved.
+ * Copyright (c) 1997-2008, 2012 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -57,6 +57,7 @@
 #include <sys/socket.h>
 #include <sys/socketvar.h>
 #include <sys/ioctl.h>
+#include <sys/sysctl.h>
 #include <sys/errno.h>
 #include <sys/syslog.h>
 #include <sys/proc.h>
@@ -79,6 +80,10 @@
 
 #include <machine/spl.h>
 
+static unsigned int ndrv_multi_max_count = NDRV_DMUX_MAX_DESCR;
+SYSCTL_UINT(_net, OID_AUTO, ndrv_multi_max_count, CTLFLAG_RW | CTLFLAG_LOCKED,
+        &ndrv_multi_max_count, 0, "Number of allowed multicast addresses per NRDV socket");
+
 static int ndrv_do_detach(struct ndrv_cb *);
 static int ndrv_do_disconnect(struct ndrv_cb *);
 static struct ndrv_cb *ndrv_find_inbound(struct ifnet *ifp, u_int32_t protocol_family);
@@ -98,7 +103,6 @@ TAILQ_HEAD(, ndrv_cb)	ndrvl = TAILQ_HEAD_INITIALIZER(ndrvl);
 
 extern struct domain ndrvdomain;
 extern struct protosw ndrvsw;
-extern lck_mtx_t *domain_proto_mtx;
 
 #define NDRV_PROTODEMUX_COUNT	10
 
@@ -594,7 +598,7 @@ ndrv_do_disconnect(struct ndrv_cb *np)
 }
 
 /* Hackery - return a string version of a decimal number */
-static char *
+static void
 sprint_d(u_int n, char *buf, int buflen)
 {	char dbuf[IFNAMSIZ];
 	char *cp = dbuf+IFNAMSIZ-1;
@@ -606,7 +610,7 @@ sprint_d(u_int n, char *buf, int buflen)
                 n /= 10;
         } while (n != 0 && buflen > 0);
 	strncpy(buf, cp, IFNAMSIZ-buflen);
-        return (cp);
+        return;
 }
 
 /*
@@ -622,7 +626,7 @@ static int name_cmp(struct ifnet *ifp, char *q)
 	len = strlen(ifnet_name(ifp));
 	strncpy(r, ifnet_name(ifp), IFNAMSIZ);
 	r += len;
-	(void)sprint_d(ifnet_unit(ifp), r, IFNAMSIZ-(r-buf));
+	sprint_d(ifnet_unit(ifp), r, IFNAMSIZ-(r-buf));
 #if NDRV_DEBUG
 	kprintf("Comparing %s, %s\n", buf, q);
 #endif
@@ -885,10 +889,12 @@ ndrv_do_add_multicast(struct ndrv_cb *np, struct sockopt *sopt)
     int						result;
     
     if (sopt->sopt_val == 0 || sopt->sopt_valsize < 2 ||
-        sopt->sopt_level != SOL_NDRVPROTO)
+        sopt->sopt_level != SOL_NDRVPROTO || sopt->sopt_valsize > SOCK_MAXADDRLEN)
         return EINVAL;
     if (np->nd_if == NULL)
         return ENXIO;
+	if (!(np->nd_dlist_cnt < ndrv_multi_max_count))
+		return EPERM;
     
     // Allocate storage
     MALLOC(ndrv_multi, struct ndrv_multiaddr*, sizeof(struct ndrv_multiaddr) -
@@ -918,6 +924,7 @@ ndrv_do_add_multicast(struct ndrv_cb *np, struct sockopt *sopt)
         // Add to our linked list
         ndrv_multi->next = np->nd_multiaddrs;
         np->nd_multiaddrs = ndrv_multi;
+		np->nd_dlist_cnt++;
     }
     else
     {
@@ -938,7 +945,7 @@ ndrv_do_remove_multicast(struct ndrv_cb *np, struct sockopt *sopt)
     if (sopt->sopt_val == 0 || sopt->sopt_valsize < 2 ||
         sopt->sopt_level != SOL_NDRVPROTO)
         return EINVAL;
-    if (np->nd_if == NULL)
+    if (np->nd_if == NULL || np->nd_dlist_cnt == 0)
         return ENXIO;
     
     // Allocate storage
@@ -992,6 +999,8 @@ ndrv_do_remove_multicast(struct ndrv_cb *np, struct sockopt *sopt)
             }
         }
         
+		np->nd_dlist_cnt--;
+		
         // Free the memory
         FREE(ndrv_entry, M_IFADDR);
     }

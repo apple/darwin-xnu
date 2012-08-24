@@ -151,6 +151,7 @@ void vs_free_async(struct vs_async *vsa);	/* forward */
 #define VS_ASYNC_LOCK()		lck_mtx_lock(&default_pager_async_lock)
 #define VS_ASYNC_UNLOCK()	lck_mtx_unlock(&default_pager_async_lock)
 #define VS_ASYNC_LOCK_INIT()	lck_mtx_init(&default_pager_async_lock, &default_pager_lck_grp, &default_pager_lck_attr)
+#define VS_ASYNC_LOCK_DESTROY()	lck_mtx_destroy(&default_pager_async_lock, &default_pager_lck_grp)
 #define VS_ASYNC_LOCK_ADDR()	(&default_pager_async_lock)
 /*
  *  Paging Space Hysteresis triggers and the target notification port
@@ -603,7 +604,10 @@ default_pager_backing_store_create(
 	}
 	else {
 		ipc_port_dealloc_kernel((MACH_PORT_FACE)(port));
+
+		BS_LOCK_DESTROY(bs);
 		kfree(bs, sizeof (struct backing_store));
+
 		return KERN_RESOURCE_SHORTAGE;
 	}
 
@@ -1001,6 +1005,7 @@ restart:
 	/*
 	 * Free the backing store structure.
 	 */
+	BS_LOCK_DESTROY(bs);
 	kfree(bs, sizeof *bs);
 
 	return KERN_SUCCESS;
@@ -1110,6 +1115,7 @@ default_pager_add_segment(
 	PS_LOCK_INIT(ps);
 	ps->ps_bmap = (unsigned char *) kalloc(RMAPSIZE(ps->ps_ncls));
 	if (!ps->ps_bmap) {
+		PS_LOCK_DESTROY(ps);
 		kfree(ps, sizeof *ps);
 		BS_UNLOCK(bs);
 		return KERN_RESOURCE_SHORTAGE;
@@ -1131,6 +1137,8 @@ default_pager_add_segment(
 
 	if ((error = ps_enter(ps)) != 0) {
 		kfree(ps->ps_bmap, RMAPSIZE(ps->ps_ncls));
+
+		PS_LOCK_DESTROY(ps);
 		kfree(ps, sizeof *ps);
 		BS_UNLOCK(bs);
 		return KERN_RESOURCE_SHORTAGE;
@@ -1876,6 +1884,8 @@ ps_vstruct_dealloc(
 
 	bs_commit(- vs->vs_size);
 
+	VS_MAP_LOCK_DESTROY(vs);
+
 	zfree(vstruct_zone, vs);
 }
 
@@ -1886,23 +1896,12 @@ ps_vstruct_reclaim(
 	boolean_t reclaim_backing_store)
 {
 	unsigned int	i, j;
-//	spl_t	s;
-	unsigned int	request_flags;
 	struct vs_map	*vsmap;
 	boolean_t	vsmap_all_clear, vsimap_all_clear;
 	struct vm_object_fault_info fault_info;
 	int		clmap_off;
 	unsigned int	vsmap_size;
 	kern_return_t	kr;
-
-	request_flags = UPL_NO_SYNC | UPL_RET_ONLY_ABSENT | UPL_SET_LITE;
-	if (reclaim_backing_store) {
-#if USE_PRECIOUS
-		request_flags |= UPL_PRECIOUS | UPL_CLEAN_IN_PLACE;
-#else	/* USE_PRECIOUS */
-		request_flags |= UPL_REQUEST_SET_DIRTY;
-#endif	/* USE_PRECIOUS */
-	}
 
 	VS_MAP_LOCK(vs);
 
@@ -1912,6 +1911,7 @@ ps_vstruct_reclaim(
 	fault_info.lo_offset = 0;
 	fault_info.hi_offset = ptoa_32(vs->vs_size << vs->vs_clshift);
 	fault_info.io_sync = reclaim_backing_store;
+	fault_info.batch_pmap_op = FALSE;
 
 	/*
 	 * If this is an indirect structure, then we walk through the valid
@@ -2937,7 +2937,17 @@ pvs_cluster_read(
 		i = pages_in_cl;
 	} else {
 		i = 1;
-		request_flags |= UPL_NOBLOCK;
+
+		/*
+		 * if the I/O cluster size == PAGE_SIZE, we don't want to set
+		 * the UPL_NOBLOCK since we may be trying to recover from a
+		 * previous partial pagein I/O that occurred because we were low
+		 * on memory and bailed early in order to honor the UPL_NOBLOCK...
+		 * since we're only asking for a single page, we can block w/o fear
+		 * of tying up pages while waiting for more to become available
+		 */
+		if (fault_info == NULL || ((vm_object_fault_info_t)fault_info)->cluster_size > PAGE_SIZE)
+			request_flags |= UPL_NOBLOCK;
 	}
 
 again:
@@ -2975,7 +2985,8 @@ again:
 		memory_object_super_upl_request(vs->vs_control,	(memory_object_offset_t)vs_offset,
 						PAGE_SIZE, PAGE_SIZE, 
 						&upl, NULL, &page_list_count,
-						request_flags);
+						request_flags  | UPL_SET_INTERNAL);
+		upl_range_needed(upl, 0, 1);
 
 		if (clmap.cl_error)
 		        upl_abort(upl, UPL_ABORT_ERROR);
@@ -3480,10 +3491,23 @@ vs_cluster_write(
 		 * Ignore any non-present pages at the end of the
 		 * UPL.
 		 */
-		for (page_index = upl->size / vm_page_size; page_index > 0;) 
-			if (UPL_PAGE_PRESENT(pl, --page_index))
+		for (page_index = upl->size / vm_page_size; page_index > 0;)  {
+			if (UPL_PAGE_PRESENT(pl, --page_index)) {
+				page_index++;
 				break;
-		num_of_pages = page_index + 1;
+			}
+		}
+		if (page_index == 0) {
+			/*
+			 * no pages in the UPL
+			 * abort and return
+			 */
+			upl_abort(upl, 0);
+			upl_deallocate(upl);
+
+			return KERN_SUCCESS;
+		}
+		num_of_pages = page_index;
 
 		base_index = (upl_offset_in_object % cl_size) / PAGE_SIZE;
 
@@ -3601,17 +3625,6 @@ vs_cluster_write(
 						ps_offset[seg_index] 
 								+ seg_offset, 
 						transfer_size, flags);
-			} else {
-				boolean_t empty = FALSE;
-			        upl_abort_range(upl,
-						first_dirty * vm_page_size, 
-						num_dirty   * vm_page_size,
-						UPL_ABORT_NOTIFY_EMPTY,
-						&empty);
-				if (empty) {
-					assert(page_index == num_of_pages);
-					upl_deallocate(upl);
-				}
 			}
 		}
 
@@ -4251,6 +4264,7 @@ default_pager_add_file(
 	PS_LOCK_INIT(ps);
 	ps->ps_bmap = (unsigned char *) kalloc(RMAPSIZE(ps->ps_ncls));
 	if (!ps->ps_bmap) {
+		PS_LOCK_DESTROY(ps);
 		kfree(ps, sizeof *ps);
 		BS_UNLOCK(bs);
 		return KERN_RESOURCE_SHORTAGE;
@@ -4273,6 +4287,7 @@ default_pager_add_file(
 
 	if ((error = ps_enter(ps)) != 0) {
 		kfree(ps->ps_bmap, RMAPSIZE(ps->ps_ncls));
+		PS_LOCK_DESTROY(ps);
 		kfree(ps, sizeof *ps);
 		BS_UNLOCK(bs);
 		return KERN_RESOURCE_SHORTAGE;
@@ -4300,7 +4315,7 @@ default_pager_add_file(
 	 * online but not activated (till it's needed the next time).
 	 */
 #if CONFIG_FREEZE
-	if (!vm_freeze_enabled)
+	if (!memorystatus_freeze_enabled)
 #endif
 	{
 		ps = paging_segments[EMERGENCY_PSEG_INDEX];
@@ -4482,7 +4497,7 @@ default_pager_triggers( __unused MACH_PORT_FACE default_pager,
 		/* High and low water signals aren't applicable when freeze is */
 		/* enabled, so release the trigger ports here and return       */
 		/* KERN_FAILURE.                                               */
-		if (vm_freeze_enabled) {
+		if (memorystatus_freeze_enabled) {
 			if (IP_VALID( trigger_port )){
 				ipc_port_release_send( trigger_port );
 			}
@@ -4500,7 +4515,7 @@ default_pager_triggers( __unused MACH_PORT_FACE default_pager,
 	} else if (flags ==  LO_WAT_ALERT) {
 		release = max_pages_trigger_port;
 #if CONFIG_FREEZE
-		if (vm_freeze_enabled) {
+		if (memorystatus_freeze_enabled) {
 			if (IP_VALID( trigger_port )){
 				ipc_port_release_send( trigger_port );
 			}

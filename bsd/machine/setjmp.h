@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2007 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2011 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -31,10 +31,6 @@
 #ifndef	_MACHINE_SETJMP_H_
 #define	_MACHINE_SETJMP_H_
 
-#if defined (__i386__) || defined(__x86_64__)
-#include "i386/setjmp.h"
-#else
-#error architecture not supported
-#endif
+#include <setjmp.h>
 
 #endif	/* _MACHINE_SETJMP_H_ */

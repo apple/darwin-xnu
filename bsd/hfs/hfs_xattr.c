@@ -232,6 +232,7 @@ out:
 }
 #endif
 
+
 /* Zero out the date added field for the specified cnode */
 static int hfs_zero_dateadded (struct cnode *cp, u_int8_t *finderinfo) {
 	u_int8_t *finfo = finderinfo;
@@ -254,7 +255,6 @@ static int hfs_zero_dateadded (struct cnode *cp, u_int8_t *finderinfo) {
 	return 0;
     
 }
-
 
 /*
  * Retrieve the data of an extended attribute.
@@ -785,9 +785,9 @@ hfs_vnop_setxattr(struct vnop_setxattr_args *ap)
 		 */
 		fdFlags = *((u_int16_t *) &cp->c_finderinfo[8]);
 		if (fdFlags & OSSwapHostToBigConstInt16(kFinderInvisibleMask))
-			cp->c_flags |= UF_HIDDEN;
+			cp->c_bsdflags |= UF_HIDDEN;
 		else
-			cp->c_flags &= ~UF_HIDDEN;
+			cp->c_bsdflags &= ~UF_HIDDEN;
 
 		result = hfs_update(vp, FALSE);
 
@@ -953,12 +953,22 @@ int hfs_setxattr_internal (struct cnode *cp, caddr_t data_ptr, size_t attrsize,
 	int exists = 0;
 	int allocatedblks = 0;
 	u_int32_t target_id;
+	int takelock = 1;
 
 	if (cp) {
 		target_id = cp->c_fileid;
 	}
 	else {
 		target_id = fileid;
+		if (target_id != 1) {
+			/* 
+			 * If we are manipulating something other than 
+			 * the root folder (id 1), and do not have a cnode-in-hand, 
+			 * then we must already hold the requisite b-tree locks from 
+			 * earlier up the call stack. (See hfs_makenode)
+			 */
+			takelock = 0;
+		}
 	}
 	
 	/* Start a transaction for our changes. */
@@ -990,10 +1000,12 @@ int hfs_setxattr_internal (struct cnode *cp, caddr_t data_ptr, size_t attrsize,
 	if (hfsmp->hfs_max_inline_attrsize == 0) {
 		hfsmp->hfs_max_inline_attrsize = getmaxinlineattrsize(hfsmp->hfs_attribute_vp);
 	}
-	
-	/* Take exclusive access to the attributes b-tree. */
-	lockflags = hfs_systemfile_lock(hfsmp, SFL_ATTRIBUTE, HFS_EXCLUSIVE_LOCK);
-	
+
+	if (takelock) {
+		/* Take exclusive access to the attributes b-tree. */
+		lockflags = hfs_systemfile_lock(hfsmp, SFL_ATTRIBUTE, HFS_EXCLUSIVE_LOCK);
+	}
+
 	/* Build the b-tree key. */
 	MALLOC(iterator, BTreeIterator *, sizeof(*iterator), M_TEMP, M_WAITOK);
 	if (iterator == NULL) {
@@ -1349,7 +1361,7 @@ hfs_vnop_removexattr(struct vnop_removexattr_args *ap)
 		
 		/* Do the byte compare against the local copy */
 		if (bcmp(finderinfo, emptyfinfo, sizeof(emptyfinfo)) == 0) {
-			hfs_unlock (cp);
+            hfs_unlock(cp);
 			return (ENOATTR);
 		}
 		
@@ -1640,6 +1652,7 @@ hfs_vnop_listxattr(struct vnop_listxattr_args *ap)
 	int result;
     u_int8_t finderinfo[32];
 
+
 	if (VNODE_IS_RSRC(vp)) {
 		return (EPERM);
 	}
@@ -1671,9 +1684,9 @@ hfs_vnop_listxattr(struct vnop_listxattr_args *ap)
 		fip->fdType = 0;
 		fip->fdCreator = 0;
 	}	
+
 	
-    
-	/* If Finder Info is non-empty then export it's name. */
+    /* If Finder Info is non-empty then export it's name. */
 	if (bcmp(finderinfo, emptyfinfo, sizeof(emptyfinfo)) != 0) {
 		if (uio == NULL) {
 			*ap->a_size += sizeof(XATTR_FINDERINFO_NAME);

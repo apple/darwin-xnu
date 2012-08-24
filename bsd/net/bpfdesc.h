@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2007 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2011 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -132,6 +132,8 @@ struct bpf_d {
 #if CONFIG_MACF_NET
 	struct label *	bd_label;	/* MAC label for descriptor */
 #endif
+	int		bd_traffic_class; /* traffic service class */
+	int		bd_extendedhdr;	/* process req. the extended header */
 };
 
 /* Values for bd_state */
@@ -154,6 +156,7 @@ struct bpf_if {
 	struct bpf_d *bif_dlist;	/* descriptor list */
 	u_int bif_dlt;			/* link layer type */
 	u_int bif_hdrlen;		/* length of header (with padding) */
+	u_int bif_exthdrlen;		/* length of ext header */
 	struct ifnet *bif_ifp;		/* corresponding interface */
 	bpf_send_func	bif_send;
 	bpf_tap_func	bif_tap;

@@ -2881,6 +2881,7 @@ typedef int mpo_posixshm_check_mmap_t(
   @param cred Subject credential
   @param ps Pointer to shared memory information structure
   @param shmlabel Label associated with the shared memory region
+  @param fflags shm_open(2) open flags ('fflags' encoded)
 
   Determine whether the subject identified by the credential can open
   the POSIX shared memory region.
@@ -2891,7 +2892,8 @@ typedef int mpo_posixshm_check_mmap_t(
 typedef int mpo_posixshm_check_open_t(
 	kauth_cred_t cred,
 	struct pshminfo *ps,
-	struct label *shmlabel
+	struct label *shmlabel,
+	int fflags
 );
 /**
   @brief Access control check for POSIX shared memory stat
@@ -3122,6 +3124,25 @@ typedef int mpo_proc_check_getlcid_t(
 	struct proc *p0,
 	struct proc *p,
 	pid_t pid
+);
+/**
+  @brief Access control check for retrieving ledger information
+  @param cred Subject credential
+  @param target Object process
+  @param op ledger operation
+
+  Determine if ledger(2) system call is permitted.
+
+  Information returned by this system call is similar to that returned via
+  process listings etc.
+
+  @return Return 0 if access is granted, otherwise an appropriate value for
+  errno should be returned.
+*/
+typedef int mpo_proc_check_ledger_t(
+	kauth_cred_t cred,
+	struct proc *target,
+	int op
 );
 /**
   @brief Access control check for mmap MAP_ANON
@@ -4083,6 +4104,22 @@ typedef int mpo_system_check_sysctl_t(
 	size_t newlen
 );
 /**
+  @brief Access control check for kas_info
+  @param cred Subject credential
+  @param selector Category of information to return. See kas_info.h
+
+  Determine whether the subject identified by the credential can perform
+  introspection of the kernel address space layout for
+  debugging/performance analysis.
+
+  @return Return 0 if access is granted, otherwise an appropriate value for
+  errno should be returned.
+*/
+typedef int mpo_system_check_kas_info_t(
+	kauth_cred_t cred,
+	int selector
+);
+/**
   @brief Create a System V message label
   @param cred Subject credential
   @param msqkptr The message queue the message will be placed in
@@ -4722,6 +4759,38 @@ typedef int mpo_task_label_internalize_t(
 typedef void mpo_task_label_update_t(
 	struct label *cred,
 	struct label *task
+);
+/**
+  @brief Perform MAC-related events when a thread returns to user space
+  @param thread Mach (not BSD) thread that is returning
+
+  This entry point permits policy modules to perform MAC-related
+  events when a thread returns to user space, via a system call
+  return or trap return.
+*/
+typedef void mpo_thread_userret_t(
+	struct thread *thread
+);
+/**
+  @brief Initialize per thread label
+  @param label New label to initialize
+
+  Initialize the label for a newly instantiated thread.
+  Sleeping is permitted.
+*/
+typedef void mpo_thread_label_init_t(
+	struct label *label
+);
+/**
+  @brief Destroy thread label
+  @param label The label to be destroyed
+
+  Destroy a user thread label.  Since the user thread
+  is going out of scope, policy modules should free any internal
+  storage associated with the label so that it may be destroyed.
+*/
+typedef void mpo_thread_label_destroy_t(
+	struct label *label
 );
 /**
   @brief Check vnode access
@@ -5967,7 +6036,7 @@ typedef void mpo_reserved_hook_t(void);
 /*!
   \struct mac_policy_ops
 */
-#define MAC_POLICY_OPS_VERSION 11 /* inc when new reserved slots are taken */
+#define MAC_POLICY_OPS_VERSION 13 /* inc when new reserved slots are taken */
 struct mac_policy_ops {
 	mpo_audit_check_postselect_t		*mpo_audit_check_postselect;
 	mpo_audit_check_preselect_t		*mpo_audit_check_preselect;
@@ -6278,7 +6347,7 @@ struct mac_policy_ops {
 	mpo_vnode_check_uipc_connect_t		*mpo_vnode_check_uipc_connect;
 	mac_proc_check_run_cs_invalid_t		*mpo_proc_check_run_cs_invalid;
 	mpo_proc_check_suspend_resume_t		*mpo_proc_check_suspend_resume;
-	mpo_reserved_hook_t			*mpo_reserved12;
+	mpo_thread_userret_t			*mpo_thread_userret;
 	mpo_iokit_check_set_properties_t	*mpo_iokit_check_set_properties;
 	mpo_system_check_chud_t			*mpo_system_check_chud;
 	mpo_vnode_check_searchfs_t		*mpo_vnode_check_searchfs;
@@ -6287,11 +6356,11 @@ struct mac_policy_ops {
 	mpo_proc_check_map_anon_t		*mpo_proc_check_map_anon;
 	mpo_vnode_check_fsgetpath_t		*mpo_vnode_check_fsgetpath;
 	mpo_iokit_check_open_t			*mpo_iokit_check_open;
+ 	mpo_proc_check_ledger_t			*mpo_proc_check_ledger;
 	mpo_vnode_notify_rename_t		*mpo_vnode_notify_rename;
-	mpo_reserved_hook_t			*mpo_reserved14;
-	mpo_reserved_hook_t			*mpo_reserved15;
-	mpo_reserved_hook_t			*mpo_reserved16;
-	mpo_reserved_hook_t			*mpo_reserved17;
+	mpo_thread_label_init_t			*mpo_thread_label_init;
+	mpo_thread_label_destroy_t		*mpo_thread_label_destroy;
+	mpo_system_check_kas_info_t	*mpo_system_check_kas_info;
 	mpo_reserved_hook_t			*mpo_reserved18;
 	mpo_reserved_hook_t			*mpo_reserved19;
 	mpo_reserved_hook_t			*mpo_reserved20;

@@ -343,30 +343,6 @@ overflow:
 #define PROFILE_UNLOCK(x)
 
 
-int
-profil(struct proc *p, struct profil_args *uap, int32_t *retval)
-{
-	void *tmp;
-
-	tmp = p;
-	tmp = uap;
-	tmp = retval;
-
-	return EINVAL;
-}
-
-int
-add_profil(struct proc *p, struct add_profil_args *uap, int32_t *retval)
-{
-	void *tmp;
-
-	tmp = p;
-	tmp = uap;
-	tmp = retval;
-
-	return EINVAL;
-}
-
 /*
  * Scale is a fixed-point number with the binary point 16 bits
  * into the value, and is <= 1.0.  pc is at most 32 bits, so the

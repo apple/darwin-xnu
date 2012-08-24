@@ -66,7 +66,6 @@ static boolean_t	earlyTopology		= FALSE;
 static uint64_t		earlyMaxBusDelay	= DELAY_UNSET;
 static uint64_t		earlyMaxIntDelay	= DELAY_UNSET;
 
-
 /*
  * Initialize the Cstate change code.
  */
@@ -97,8 +96,8 @@ machine_idle(void)
 	/*
 	 * Handle case where ml_set_maxbusdelay() or ml_set_maxintdelay()
 	 * were called prior to the CPU PM kext being registered.  We do
-	 * this here since we know at this point since it'll be at idle
-	 * where the decision using these values will be used.
+	 * this here since we know at this point the values will be first
+	 * used since idle is where the decisions using these values is made.
 	 */
 	if (earlyMaxBusDelay != DELAY_UNSET)
 	    ml_set_maxbusdelay((uint32_t)(earlyMaxBusDelay & 0xFFFFFFFF));

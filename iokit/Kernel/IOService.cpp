@@ -35,6 +35,7 @@
 #include <libkern/c++/OSUnserialize.h>
 #include <IOKit/IOCatalogue.h>
 #include <IOKit/IOCommand.h>
+#include <IOKit/IODeviceTreeSupport.h>
 #include <IOKit/IODeviceMemory.h>
 #include <IOKit/IOInterrupts.h>
 #include <IOKit/IOInterruptController.h>
@@ -46,6 +47,7 @@
 #include <IOKit/IOUserClient.h>
 #include <IOKit/IOWorkLoop.h>
 #include <IOKit/IOTimeStamp.h>
+#include <IOKit/IOHibernatePrivate.h>
 #include <mach/sync_policy.h>
 #include <IOKit/assert.h>
 #include <sys/errno.h>
@@ -54,6 +56,7 @@
 
 #define LOG kprintf
 //#define LOG IOLog
+#define MATCH_DEBUG	0
 
 #include "IOServicePrivate.h"
 #include "IOKitKernelInternal.h"
@@ -119,7 +122,10 @@ const OSSymbol *		gIOConsoleSessionLoginDoneKey;
 const OSSymbol *		gIOConsoleSessionSecureInputPIDKey;
 const OSSymbol *		gIOConsoleSessionScreenLockedTimeKey;
 
-static clock_sec_t		gIOConsoleLockTime;
+clock_sec_t			gIOConsoleLockTime;
+static bool			gIOConsoleLoggedIn;
+static uint32_t			gIOScreenLockState;
+static IORegistryEntry *        gIOChosenEntry;
 
 static int			gIOResourceGenerationCount;
 
@@ -224,7 +230,6 @@ static IOLock *     gArbitrationLockQueueLock;
 
 bool IOService::isInactive( void ) const
     { return( 0 != (kIOServiceInactiveState & getState())); }
-
 
 /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
 
@@ -490,6 +495,10 @@ void IOService::detach( IOService * provider )
             _adjustBusy( -busy );
     }
 
+    if (kIOServiceInactiveState & __state[0]) {
+	getMetaClass()->removeInstance(this);
+    }
+
     unlockForArbitration();
 
     if( newProvider) {
@@ -628,7 +637,9 @@ void IOService::startMatching( IOOptionBits options )
             lockForArbitration();
             IOLockLock( gIOServiceBusyLock );
 
-            waitAgain = (prevBusy < (__state[1] & kIOServiceBusyStateMask));
+            waitAgain = ((prevBusy < (__state[1] & kIOServiceBusyStateMask))
+				       && (0 == (__state[0] & kIOServiceInactiveState)));
+
             if( waitAgain)
                 __state[1] |= kIOServiceSyncPubState | kIOServiceBusyWaiterState;
             else
@@ -661,37 +672,37 @@ IOReturn IOService::catalogNewDrivers( OSOrderedSet * newTables )
     
     while( (table = (OSDictionary *) newTables->getFirstObject())) {
 
-	LOCKWRITENOTIFY();
+        LOCKWRITENOTIFY();
         set = (OSSet *) copyExistingServices( table, 
 						kIOServiceRegisteredState,
 						kIOServiceExistingSet);
-	UNLOCKNOTIFY();
-	if( set) {
+        UNLOCKNOTIFY();
+        if( set) {
 
 #if IOMATCHDEBUG
-	    count += set->getCount();
+            count += set->getCount();
 #endif
-	    if (allSet) {
-		allSet->merge((const OSSet *) set);
-		set->release();
-	    }
-	    else
-		allSet = set;
-	}
+            if (allSet) {
+                allSet->merge((const OSSet *) set);
+                set->release();
+            }
+            else
+                allSet = set;
+        }
 
 #if IOMATCHDEBUG
-	if( getDebugFlags( table ) & kIOLogMatch)
-	    LOG("Matching service count = %ld\n", (long)count);
+        if( getDebugFlags( table ) & kIOLogMatch)
+            LOG("Matching service count = %ld\n", (long)count);
 #endif
-	newTables->removeObject(table);
+        newTables->removeObject(table);
     }
 
     if (allSet) {
-	while( (service = (IOService *) allSet->getAnyObject())) {
-	    service->startMatching(kIOServiceAsynchronous);
-	    allSet->removeObject(service);
-	}
-	allSet->release();
+        while( (service = (IOService *) allSet->getAnyObject())) {
+            service->startMatching(kIOServiceAsynchronous);
+            allSet->removeObject(service);
+        }
+        allSet->release();
     }
 
     newTables->release();
@@ -2475,13 +2486,13 @@ static SInt32 IOServiceObjectOrder( const OSObject * entry, void * ref)
     OSSymbol *		key = (OSSymbol *) ref;
     OSNumber *		offset;
 
-    if( (notify = OSDynamicCast( _IOServiceNotifier, entry)))
+    if( (dict = OSDynamicCast( OSDictionary, entry)))
+        offset = OSDynamicCast(OSNumber, dict->getObject( key ));
+    else if( (notify = OSDynamicCast( _IOServiceNotifier, entry)))
 	return( notify->priority );
 
     else if( (service = OSDynamicCast( IOService, entry)))
         offset = OSDynamicCast(OSNumber, service->getProperty( key ));
-    else if( (dict = OSDynamicCast( OSDictionary, entry)))
-        offset = OSDynamicCast(OSNumber, dict->getObject( key ));
     else {
 	assert( false );
 	offset = 0;
@@ -2602,10 +2613,6 @@ void IOService::probeCandidates( OSOrderedSet * matches )
     OSObject 		*	nextMatch = 0;
     bool			started;
     bool			needReloc = false;
-#if CONFIG_MACF_KEXT
-    OSBoolean		*	isSandbox = 0;
-    bool			useSandbox = false;
-#endif
 #if IOMATCHDEBUG
     SInt64			debugFlags;
 #endif
@@ -2667,7 +2674,7 @@ void IOService::probeCandidates( OSOrderedSet * matches )
 	    props->setCapacityIncrement(1);		
 
 	    // check the nub matches
-	    if( false == passiveMatch( props, true ))
+	    if( false == matchPassive(props, kIOServiceChangesOK | kIOServiceClassDone))
 		continue;
 
             // Check to see if driver reloc has been loaded.
@@ -2748,10 +2755,6 @@ void IOService::probeCandidates( OSOrderedSet * matches )
                 if( 0 == category)
                     category = gIODefaultMatchCategoryKey;
                 inst->setProperty( gIOMatchCategoryKey, (OSObject *) category );
-#if CONFIG_MACF_KEXT
-		isSandbox = OSDynamicCast(OSBoolean,
-                            props->getObject("IOKitForceMatch"));
-#endif
                 // attach driver instance
                 if( !(inst->attach( this )))
                         continue;
@@ -2768,21 +2771,6 @@ void IOService::probeCandidates( OSOrderedSet * matches )
     
                 newInst = inst->probe( this, &score );
                 inst->detach( this );
-#if CONFIG_MACF_KEXT
-		/*
-		 * If this is the Sandbox driver and it matched, this is a
-		 * disallowed device; toss any drivers that were already
-		 * matched.
-		 */
-		if (isSandbox && isSandbox->isTrue() && newInst != 0) {
-		    if (startDict != 0) {
-			startDict->flushCollection();
-			startDict->release();
-			startDict = 0;
-		    }
-		    useSandbox = true;
-		}
-#endif
                 if( 0 == newInst) {
 #if IOMATCHDEBUG
                     if( debugFlags & kIOLogProbe)
@@ -2821,13 +2809,6 @@ void IOService::probeCandidates( OSOrderedSet * matches )
             props->release();
             if( inst)
                 inst->release();
-#if CONFIG_MACF_KEXT
-	    /*
-	     * If we're forcing the sandbox, drop out of the loop.
-	     */
-	    if (isSandbox && isSandbox->isTrue() && useSandbox)
-		    break;
-#endif
         }
         familyMatches->release();
         familyMatches = 0;
@@ -3113,6 +3094,7 @@ void IOService::doServiceMatch( IOOptionBits options )
     SInt32		catalogGeneration;
     bool		keepGuessing = true;
     bool		reRegistered = true;
+    bool		didRegister;
 
 //    job->nub->deliverNotification( gIOPublishNotification,
 //  				kIOServiceRegisteredState, 0xffffffff );
@@ -3130,6 +3112,7 @@ void IOService::doServiceMatch( IOOptionBits options )
 	    LOCKREADNOTIFY();
             __state[1] &= ~kIOServiceNeedConfigState;
             __state[1] |= kIOServiceConfigState;
+            didRegister = (0 == (kIOServiceRegisteredState & __state[0]));
             __state[0] |= kIOServiceRegisteredState;
 
 	    keepGuessing &= (0 == (__state[0] & kIOServiceInactiveState));
@@ -3140,7 +3123,7 @@ void IOService::doServiceMatch( IOOptionBits options )
                     while((notify = (_IOServiceNotifier *)
                            iter->getNextObject())) {
 
-                        if( passiveMatch( notify->matching )
+                        if( matchPassive(notify->matching, 0)
                          && (kIOServiceNotifyEnable & notify->state))
                             matches->setObject( notify );
                     }
@@ -3149,6 +3132,9 @@ void IOService::doServiceMatch( IOOptionBits options )
             }
 
 	    UNLOCKNOTIFY();
+	    if (didRegister) {
+		getMetaClass()->addInstance(this);
+	    }
             unlockForArbitration();
 
             if (keepGuessing && matches->getCount() && (kIOReturnSuccess == getResources()))
@@ -3518,27 +3504,83 @@ void _IOServiceJob::pingConfig( _IOServiceJob * job )
     semaphore_signal( gJobsSemaphore );
 }
 
+struct IOServiceMatchContext
+{
+    OSDictionary * table;
+    OSObject *     result;
+    uint32_t	   options;
+    uint32_t	   state;
+    uint32_t	   count;
+    uint32_t       done;
+};
+
+bool IOService::instanceMatch(const OSObject * entry, void * context)
+{
+    IOServiceMatchContext * ctx = (typeof(ctx)) context;
+    IOService *    service = (typeof(service)) entry;
+    OSDictionary * table   = ctx->table;
+    uint32_t	   options = ctx->options;
+    uint32_t	   state   = ctx->state;
+    uint32_t       done;
+    bool           match;
+
+    done = 0;
+    do
+    {
+	match = ((state == (state & service->__state[0]))
+		&& (0 == (service->__state[0] & kIOServiceInactiveState)));
+	if (!match) break;
+	ctx->count += table->getCount();
+        match = service->matchInternal(table, options, &done);
+	ctx->done += done;
+    }
+    while (false);
+    if (!match)
+    	return (false);
+
+    if ((kIONotifyOnce & options) && (ctx->done == ctx->count))
+    {
+	service->retain();
+	ctx->result = service;
+	return (true);
+    }
+    else if (!ctx->result)
+    {
+	ctx->result = OSSet::withObjects((const OSObject **) &service, 1, 1);
+    }
+    else
+    {
+    	((OSSet *)ctx->result)->setObject(service);
+    }
+    return (false);
+}
+
 // internal - call with gNotificationLock
 OSObject * IOService::copyExistingServices( OSDictionary * matching,
 		 IOOptionBits inState, IOOptionBits options )
 {
-    OSObject *		current = 0;
-    OSIterator *	iter;
-    IOService *		service;
-    OSObject *		obj;
+    OSObject *	 current = 0;
+    OSIterator * iter;
+    IOService *	 service;
+    OSObject *	 obj;
+    OSString *   str;
 
     if( !matching)
 	return( 0 );
 
-    if(true 
-      && (obj = matching->getObject(gIOProviderClassKey))
+#if MATCH_DEBUG
+    OSSerialize * s = OSSerialize::withCapacity(128);
+    matching->serialize(s);
+#endif
+
+    if((obj = matching->getObject(gIOProviderClassKey))
       && gIOResourcesKey
       && gIOResourcesKey->isEqualTo(obj)
       && (service = gIOResources))
     {
 	if( (inState == (service->__state[0] & inState))
 	  && (0 == (service->__state[0] & kIOServiceInactiveState))
-	  &&  service->passiveMatch( matching ))
+	  &&  service->matchPassive(matching, options))
 	{
 	    if( options & kIONotifyOnce)
 	    {
@@ -3546,12 +3588,69 @@ OSObject * IOService::copyExistingServices( OSDictionary * matching,
 		current = service;
 	    }
 	    else
-		current = OSSet::withObjects(
-				(const OSObject **) &service, 1, 1 );
+		current = OSSet::withObjects((const OSObject **) &service, 1, 1 );
 	}
     }
     else
     {
+    	IOServiceMatchContext ctx;
+	ctx.table   = matching;
+	ctx.state   = inState;
+	ctx.count   = 0;
+	ctx.done    = 0;
+	ctx.options = options;
+	ctx.result  = 0;
+
+	if ((str = OSDynamicCast(OSString, obj)))
+	{
+	    const OSSymbol * sym = OSSymbol::withString(str);
+	    OSMetaClass::applyToInstancesOfClassName(sym, instanceMatch, &ctx);
+	    sym->release();
+	}
+	else
+	{
+	    IOService::gMetaClass.applyToInstances(instanceMatch, &ctx);
+	}
+
+
+	current = ctx.result;
+
+	options |= kIOServiceInternalDone | kIOServiceClassDone;
+	if (current && (ctx.done != ctx.count))
+	{
+	    OSSet *
+	    source = OSDynamicCast(OSSet, current);
+	    current = 0;
+	    while ((service = (IOService *) source->getAnyObject()))
+	    {
+		if (service->matchPassive(matching, options))
+		{
+		    if( options & kIONotifyOnce)
+		    {
+			service->retain();
+			current = service;
+			break;
+		    }
+		    if( current)
+		    {
+			((OSSet *)current)->setObject( service );
+		    }
+		    else
+		    {
+			current = OSSet::withObjects(
+					(const OSObject **) &service, 1, 1 );
+		    }
+		}
+		source->removeObject(service);	    
+	    }
+	    source->release();
+	}
+    }
+
+#if MATCH_DEBUG
+    {
+	OSObject * _current = 0;
+    
 	iter = IORegistryIterator::iterateOver( gIOServicePlane,
 					    kIORegistryIterateRecursively );
 	if( iter) {
@@ -3560,24 +3659,42 @@ OSObject * IOService::copyExistingServices( OSDictionary * matching,
 		while( (service = (IOService *) iter->getNextObject())) {
 		    if( (inState == (service->__state[0] & inState))
 		    && (0 == (service->__state[0] & kIOServiceInactiveState))
-		    &&  service->passiveMatch( matching )) {
+		    &&  service->matchPassive(matching, 0)) {
     
 			if( options & kIONotifyOnce) {
 			    service->retain();
-			    current = service;
+			    _current = service;
 			    break;
 			}
-			if( current)
-			    ((OSSet *)current)->setObject( service );
+			if( _current)
+			    ((OSSet *)_current)->setObject( service );
 			else
-			    current = OSSet::withObjects(
+			    _current = OSSet::withObjects(
 					    (const OSObject **) &service, 1, 1 );
 		    }
 		}
 	    } while( !service && !iter->isValid());
 	    iter->release();
 	}
-    }
+
+
+	if ( ((current != 0) != (_current != 0)) 
+	|| (current && _current && !current->isEqualTo(_current)))
+	{
+	    OSSerialize * s1 = OSSerialize::withCapacity(128);
+	    OSSerialize * s2 = OSSerialize::withCapacity(128);
+	    current->serialize(s1);
+	    _current->serialize(s2);
+	    kprintf("**mismatch** %p %p\n%s\n%s\n%s\n", current, _current, s->text(), s1->text(), s2->text());
+	    s1->release();
+	    s2->release();
+	}
+
+	if (_current) _current->release();
+    }    
+
+    s->release();
+#endif
 
     if( current && (0 == (options & (kIONotifyOnce | kIOServiceExistingSet)))) {
 	iter = OSCollectionIterator::withCollection( (OSSet *)current );
@@ -3602,6 +3719,21 @@ OSIterator * IOService::getMatchingServices( OSDictionary * matching )
     UNLOCKNOTIFY();
 
     return( iter );
+}
+
+IOService * IOService::copyMatchingService( OSDictionary * matching )
+{
+    IOService *	service;
+
+    // is a lock even needed?
+    LOCKWRITENOTIFY();
+
+    service = (IOService *) copyExistingServices( matching,
+						kIOServiceMatchedState, kIONotifyOnce );
+    
+    UNLOCKNOTIFY();
+
+    return( service );
 }
 
 struct _IOServiceMatchingNotificationHandlerRef
@@ -3911,7 +4043,7 @@ void IOService::deliverNotification( const OSSymbol * type,
         if( iter) {
             while( (notify = (_IOServiceNotifier *) iter->getNextObject())) {
 
-                if( passiveMatch( notify->matching)
+                if( matchPassive(notify->matching, 0)
                   && (kIOServiceNotifyEnable & notify->state)) {
                     if( 0 == willSend)
                         willSend = OSArray::withCapacity(8);
@@ -3950,10 +4082,18 @@ IOOptionBits IOService::getState( void ) const
 OSDictionary * IOService::serviceMatching( const OSString * name,
 			OSDictionary * table )
 {
+
+    const OSString *	str;
+
+    str = OSSymbol::withString(name);
+    if( !str)
+	return( 0 );
+
     if( !table)
 	table = OSDictionary::withCapacity( 2 );
     if( table)
-        table->setObject(gIOProviderClassKey, (OSObject *)name );
+        table->setObject(gIOProviderClassKey, (OSObject *)str );
+    str->release();
 
     return( table );
 }
@@ -4238,28 +4378,37 @@ void IOService::updateConsoleUsers(OSArray * consoleUsers, IOMessage systemMessa
     IORegistryEntry * regEntry;
     OSObject *        locked = kOSBooleanFalse;
     uint32_t          idx;
-    bool              loggedIn;
     bool              publish;
     OSDictionary *    user;
     static IOMessage  sSystemPower;
 
     regEntry = IORegistryEntry::getRegistryRoot();
 
+    if (!gIOChosenEntry)
+	gIOChosenEntry = IORegistryEntry::fromPath("/chosen", gIODTPlane);
+
     IOLockLock(gIOConsoleUsersLock);
 
     if (systemMessage)
     {
         sSystemPower = systemMessage;
+#if HIBERNATION
+	if ((kIOMessageSystemHasPoweredOn == systemMessage) && IOHibernateWasScreenLocked())
+	{
+	    locked = kOSBooleanTrue;
+	}
+#endif /* HIBERNATION */
     }
-    loggedIn = false;
+
     if (consoleUsers)
     {
         OSNumber * num = 0;
+	gIOConsoleLoggedIn = false;
 	for (idx = 0; 
 	      (user = OSDynamicCast(OSDictionary, consoleUsers->getObject(idx))); 
 	      idx++)
 	{
-	    loggedIn |= ((kOSBooleanTrue == user->getObject(gIOConsoleSessionOnConsoleKey))
+	    gIOConsoleLoggedIn |= ((kOSBooleanTrue == user->getObject(gIOConsoleSessionOnConsoleKey))
 	      		&& (kOSBooleanTrue == user->getObject(gIOConsoleSessionLoginDoneKey)));
 	    if (!num)
 	    {
@@ -4269,7 +4418,7 @@ void IOService::updateConsoleUsers(OSArray * consoleUsers, IOMessage systemMessa
         gIOConsoleLockTime = num ? num->unsigned32BitValue() : 0;
     }
 
-    if (!loggedIn 
+    if (!gIOConsoleLoggedIn 
      || (kIOMessageSystemWillSleep == sSystemPower)
      || (kIOMessageSystemPagingOff == sSystemPower))
     {
@@ -4303,6 +4452,20 @@ void IOService::updateConsoleUsers(OSArray * consoleUsers, IOMessage systemMessa
 	}
 	OSIncrementAtomic( &gIOConsoleUsersSeed );
     }
+
+#if HIBERNATION
+    if (gIOChosenEntry)
+    {
+	uint32_t screenLockState;
+
+	if (locked == kOSBooleanTrue) screenLockState = kIOScreenLockLocked;
+	else if (gIOConsoleLockTime)  screenLockState = kIOScreenLockUnlocked;
+	else                          screenLockState = kIOScreenLockNoLock;
+
+	if (screenLockState != gIOScreenLockState) gIOChosenEntry->setProperty(kIOScreenLockStateKey, &screenLockState, sizeof(screenLockState));
+	gIOScreenLockState = screenLockState;
+    }
+#endif /* HIBERNATION */
 
     IOLockUnlock(gIOConsoleUsersLock);
 
@@ -4455,144 +4618,188 @@ IOService * IOService::matchLocation( IOService * /* client */ )
     return( parent );
 }
 
-bool IOService::passiveMatch( OSDictionary * table, bool changesOK )
+bool IOService::matchInternal(OSDictionary * table, uint32_t options, uint32_t * did)
 {
-    IOService *		where;
     OSString *		matched;
     OSObject *		obj;
     OSString *		str;
     IORegistryEntry *	entry;
     OSNumber *		num;
+    bool		match = true;
+    bool                changesOK = (0 != (kIOServiceChangesOK & options));
+    uint32_t            count;
+    uint32_t            done;
+
+    do
+    {
+	count = table->getCount();
+	done = 0;
+	str = OSDynamicCast(OSString, table->getObject(gIOProviderClassKey));
+	if (str) {
+	    done++;
+	    match = ((kIOServiceClassDone & options) || (0 != metaCast(str)));
+#if MATCH_DEBUG
+	    match = (0 != metaCast( str ));
+	    if ((kIOServiceClassDone & options) && !match) panic("classDone");
+#endif
+	    if ((!match) || (done == count)) break;
+	}
+
+	obj = table->getObject( gIONameMatchKey );
+	if( obj) {
+	    done++;
+	    match = compareNames( obj, changesOK ? &matched : 0 );
+	    if (!match)	break;
+	    if( changesOK && matched) {
+		// leave a hint as to which name matched
+		table->setObject( gIONameMatchedKey, matched );
+		matched->release();
+	    }
+	    if (done == count) break;
+	}
+
+	str = OSDynamicCast( OSString, table->getObject( gIOLocationMatchKey ));
+	if (str)
+	{
+    	    const OSSymbol * sym;
+	    done++;
+	    match = false;
+	    sym = copyLocation();
+	    if (sym) {
+		match = sym->isEqualTo( str );
+		sym->release();
+	    }
+	    if ((!match) || (done == count)) break;
+	}
+
+	obj = table->getObject( gIOPropertyMatchKey );
+	if( obj)
+	{
+	    OSDictionary * dict;
+	    OSDictionary * nextDict;
+	    OSIterator *   iter;
+	    done++;
+	    match = false;
+	    dict = dictionaryWithProperties();
+	    if( dict) {
+		nextDict = OSDynamicCast( OSDictionary, obj);
+		if( nextDict)
+		    iter = 0;
+		else
+		    iter = OSCollectionIterator::withCollection(
+				OSDynamicCast(OSCollection, obj));
+
+		while( nextDict
+		    || (iter && (0 != (nextDict = OSDynamicCast(OSDictionary,
+					    iter->getNextObject()))))) {
+		    match = dict->isEqualTo( nextDict, nextDict);
+		    if( match)
+			break;
+		    nextDict = 0;
+		}
+		dict->release();
+		if( iter)
+		    iter->release();
+	    }
+	    if ((!match) || (done == count)) break;
+	}
+
+	str = OSDynamicCast( OSString, table->getObject( gIOPathMatchKey ));
+	if( str) {
+	    done++;
+	    entry = IORegistryEntry::fromPath( str->getCStringNoCopy() );
+	    match = (this == entry);
+	    if( entry)
+		entry->release();
+	    if ((!match) || (done == count)) break;
+	}
+
+	num = OSDynamicCast( OSNumber, table->getObject( gIORegistryEntryIDKey ));
+	if (num) {
+	    done++;
+	    match = (getRegistryEntryID() == num->unsigned64BitValue());
+	    if ((!match) || (done == count)) break;
+	}
+
+	num = OSDynamicCast( OSNumber, table->getObject( gIOMatchedServiceCountKey ));
+	if( num)
+	{
+	    OSIterator *	iter;
+	    IOService *		service = 0;
+	    UInt32		serviceCount = 0;
+
+	    done++;
+	    iter = getClientIterator();
+	    if( iter) {
+		while( (service = (IOService *) iter->getNextObject())) {
+		    if( kIOServiceInactiveState & service->__state[0])
+			continue;
+		    if( 0 == service->getProperty( gIOMatchCategoryKey ))
+			continue;
+		    ++serviceCount;
+		}
+		iter->release();
+	    }
+	    match = (serviceCount == num->unsigned32BitValue());
+	    if ((!match) || (done == count)) break;
+	}
+
+#define propMatch(key)					\
+	obj = table->getObject(key);			\
+	if (obj)					\
+	{						\
+	    OSObject * prop;				\
+	    done++;					\
+	    prop = copyProperty(key);			\
+	    match = obj->isEqualTo(prop);		\
+            if (prop) prop->release();			\
+	    if ((!match) || (done == count)) break;	\
+	}
+	propMatch(kIOBSDNameKey)
+	propMatch(kIOBSDMajorKey)
+	propMatch(kIOBSDMinorKey)
+	propMatch(kIOBSDUnitKey)
+#undef propMatch
+    }
+    while (false);
+
+    if (did) *did = done;
+    return (match);
+}
+
+bool IOService::passiveMatch( OSDictionary * table, bool changesOK )
+{
+    return (matchPassive(table, changesOK ? kIOServiceChangesOK : 0));
+}
+
+bool IOService::matchPassive(OSDictionary * table, uint32_t options)
+{
+    IOService *		where;
+    OSDictionary *      nextTable;
     SInt32		score;
     OSNumber *		newPri;
     bool		match = true;
     bool		matchParent = false;
-    UInt32		done;
+    uint32_t		count;
+    uint32_t		done;
 
     assert( table );
 
+#if MATCH_DEBUG 
+    OSDictionary * root = table;
+#endif
+
     where = this;
-
-    do {
-        do {
-            done = 0;
-
-            str = OSDynamicCast( OSString, table->getObject( gIOProviderClassKey));
-            if( str) {
-                done++;
-                match = (0 != where->metaCast( str ));
-                if( !match)
-                    break;
-            }
-
-            obj = table->getObject( gIONameMatchKey );
-            if( obj) {
-                done++;
-                match = where->compareNames( obj, changesOK ? &matched : 0 );
-                if( !match)
-                    break;
-                if( changesOK && matched) {
-                    // leave a hint as to which name matched
-                    table->setObject( gIONameMatchedKey, matched );
-                    matched->release();
-                }
-            }
-
-            str = OSDynamicCast( OSString, table->getObject( gIOLocationMatchKey ));
-            if( str) {
-
-                const OSSymbol * sym;
-
-                done++;
-                match = false;
-                sym = where->copyLocation();
-                if( sym) {
-                    match = sym->isEqualTo( str );
-                    sym->release();
-                }
-                if( !match)
-                    break;
-            }
-
-            obj = table->getObject( gIOPropertyMatchKey );
-            if( obj) {
-
-                OSDictionary * dict;
-                OSDictionary * nextDict;
-                OSIterator *   iter;
-
-                done++;
-                match = false;
-                dict = where->dictionaryWithProperties();
-                if( dict) {
-                    nextDict = OSDynamicCast( OSDictionary, obj);
-                    if( nextDict)
-                        iter = 0;
-                    else
-                        iter = OSCollectionIterator::withCollection(
-                                    OSDynamicCast(OSCollection, obj));
-
-                    while( nextDict
-                        || (iter && (0 != (nextDict = OSDynamicCast(OSDictionary,
-                                                iter->getNextObject()))))) {
-                        match = dict->isEqualTo( nextDict, nextDict);
-                        if( match)
-                            break;
-                        nextDict = 0;
-                    }
-                    dict->release();
-                    if( iter)
-                        iter->release();
-                }
-                if( !match)
-                    break;
-            }
-
-            str = OSDynamicCast( OSString, table->getObject( gIOPathMatchKey ));
-            if( str) {
-                done++;
-                entry = IORegistryEntry::fromPath( str->getCStringNoCopy() );
-                match = (where == entry);
-                if( entry)
-                    entry->release();
-                if( !match)
-                    break;
-            }
-
-            num = OSDynamicCast( OSNumber, table->getObject( gIORegistryEntryIDKey ));
-            if( num) {
-		done++;
-                match = (getRegistryEntryID() == num->unsigned64BitValue());
-	    }
-
-            num = OSDynamicCast( OSNumber, table->getObject( gIOMatchedServiceCountKey ));
-            if( num) {
-
-                OSIterator *	iter;
-                IOService *		service = 0;
-                UInt32		serviceCount = 0;
-
-                done++;
-                iter = where->getClientIterator();
-                if( iter) {
-                    while( (service = (IOService *) iter->getNextObject())) {
-                        if( kIOServiceInactiveState & service->__state[0])
-                            continue;
-                        if( 0 == service->getProperty( gIOMatchCategoryKey ))
-                            continue;
-                        ++serviceCount;
-                    }
-                    iter->release();
-                }
-                match = (serviceCount == num->unsigned32BitValue());
-                if( !match)
-                    break;
-            }
-
-            if( done == table->getCount()) {
-                // don't call family if we've done all the entries in the table
-                matchParent = false;
-                break;
+    do
+    {
+        do
+        {
+	    count = table->getCount();
+	    if (!(kIOServiceInternalDone & options))
+	    {
+		match = where->matchInternal(table, options, &done);
+		// don't call family if we've done all the entries in the table
+		if ((!match) || (done == count)) break;
             }
 
             // pass in score from property table
@@ -4609,7 +4816,7 @@ bool IOService::passiveMatch( OSDictionary * table, bool changesOK )
                 break;
             }
 
-            if( changesOK) {
+            if (kIOServiceChangesOK & options) {
                 // save the score
                 newPri = OSNumber::withNumber( score, 32 );
                 if( newPri) {
@@ -4618,43 +4825,42 @@ bool IOService::passiveMatch( OSDictionary * table, bool changesOK )
                 }
             }
 
-            if( !(match = where->compareProperty( table, kIOBSDNameKey )))
-                break;
-            if( !(match = where->compareProperty( table, kIOBSDMajorKey )))
-                break;
-            if( !(match = where->compareProperty( table, kIOBSDMinorKey )))
-                break;
-            if( !(match = where->compareProperty( table, kIOBSDUnitKey )))
-                break;
-
+	    options = 0;
             matchParent = false;
 
-            obj = OSDynamicCast( OSDictionary,
+            nextTable = OSDynamicCast(OSDictionary,
                   table->getObject( gIOParentMatchKey ));
-            if( obj) {
+            if( nextTable) {
+		// look for a matching entry anywhere up to root
                 match = false;
                 matchParent = true;
-                table = (OSDictionary *) obj;
+		table = nextTable;
                 break;
             }
 
-            table = OSDynamicCast( OSDictionary,
+            table = OSDynamicCast(OSDictionary,
                     table->getObject( gIOLocationMatchKey ));
-            if( table) {
+            if (table) {
+		// look for a matching entry at matchLocation()
                 match = false;
                 where = where->getProvider();
-                if( where)
-                    where = where->matchLocation( where );
+                if (where && (where = where->matchLocation(where))) continue;
             }
+            break;
+        }
+        while (true);
+    }
+    while( matchParent && (!match) && (where = where->getProvider()) );
 
-        } while( table && where );
-
-    } while( matchParent && (where = where->getProvider()) );
-
-    if( kIOLogMatch & gIOKitDebug)
-        if( where && (where != this) )
-            LOG("match parent @ %s = %d\n",
-                        where->getName(), match );
+#if MATCH_DEBUG
+    if (where != this) 
+    {
+	OSSerialize * s = OSSerialize::withCapacity(128);
+	root->serialize(s);
+	kprintf("parent match 0x%llx, %d,\n%s\n", getRegistryEntryID(), match, s->text());
+	s->release();
+    }
+#endif
 
     return( match );
 }

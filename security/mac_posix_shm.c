@@ -136,14 +136,14 @@ mac_posixshm_check_create(kauth_cred_t cred, const char *name)
 }
 
 int
-mac_posixshm_check_open(kauth_cred_t cred, struct pshminfo *shm)
+mac_posixshm_check_open(kauth_cred_t cred, struct pshminfo *shm, int fflags)
 {
 	int error = 0;
 
 	if (!mac_posixshm_enforce)
 		return 0;
 
-	MAC_CHECK(posixshm_check_open, cred, shm, shm->pshm_label);
+	MAC_CHECK(posixshm_check_open, cred, shm, shm->pshm_label, fflags);
 
 	return (error);
 }

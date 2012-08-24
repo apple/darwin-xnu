@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008 Apple Inc. All rights reserved.
+ * Copyright (c) 2008-2011 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -457,7 +457,7 @@ esp_output(m, nexthdrp, md, af, sav)
 		m->m_pkthdr.len += esphlen;
 		if (udp_encapsulate) {
 			udp = mtod(n, struct udphdr *);
-			esp = (struct esp *)((caddr_t)udp + sizeof(struct udphdr));
+			esp = (struct esp *)(void *)((caddr_t)udp + sizeof(struct udphdr));
 		} else {
 			esp = mtod(n, struct esp *);
 		}
@@ -468,7 +468,7 @@ esp_output(m, nexthdrp, md, af, sav)
 		esp = mtod(md, struct esp *);
 		if (udp_encapsulate) {
 			udp = mtod(md, struct udphdr *);
-			esp = (struct esp *)((caddr_t)udp + sizeof(struct udphdr));
+			esp = (struct esp *)(void *)((caddr_t)udp + sizeof(struct udphdr));
 		} else {
 			esp = mtod(md, struct esp *);
 		}
@@ -726,7 +726,7 @@ esp_output(m, nexthdrp, md, af, sav)
 
     {
 		const struct ah_algorithm *aalgo;
-		u_char authbuf[AH_MAXSUMSIZE];
+		u_char authbuf[AH_MAXSUMSIZE] __attribute__((aligned(4)));
 		u_char *p;
 		size_t siz;
 	#if INET

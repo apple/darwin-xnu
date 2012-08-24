@@ -36,9 +36,8 @@
  *	Author: Bill Angell, Apple
  *	Date:	10/auht-five
  *
- *	Random diagnostics
+ *	Random diagnostics, augmented Derek Kumar 2011
  *
- *	Try to keep the x86 selectors in-sync with the ppc selectors.
  *
  */
 
@@ -70,13 +69,10 @@
 #include <i386/pmCPU.h>
 #include <i386/tsc.h>
 #include <mach/i386/syscall_sw.h>
-
-extern uint64_t lastNapClear;
+#include <kern/kalloc.h>
 
 diagWork        dgWork;
-uint64_t        lastNapClear = 0ULL;
 uint64_t        lastRuptClear = 0ULL;
-
 
 int 
 diagCall64(x86_saved_state_t * state)
@@ -96,6 +92,7 @@ diagCall64(x86_saved_state_t * state)
 
 	switch (selector) {	/* Select the routine */
 	case dgRuptStat:	/* Suck Interruption statistics */
+		(void) ml_set_interrupts_enabled(TRUE);
 		data = regs->rsi; /* Get the number of processors */
 
 		if (data == 0) { /* If no location is specified for data, clear all
@@ -133,82 +130,30 @@ diagCall64(x86_saved_state_t * state)
 			curpos = curpos + (256 * sizeof(uint32_t) + 8);	/* Point to next out put
 									 * slot */
 		}
+		return 1;
 		break;
+#if	DEBUG
+	case dgGzallocTest:
+	{
+		(void) ml_set_interrupts_enabled(TRUE);
+		unsigned *ptr = (unsigned *)kalloc(1024);
+		kfree(ptr, 1024);
+		*ptr = 0x42;
+	}
+		break;
+#endif
+
+#if	defined(__x86_64__)		
+	case	dgPermCheck:
+	{
+		(void) ml_set_interrupts_enabled(TRUE);
+		return pmap_permissions_verify(kernel_pmap, kernel_map, 0, ~0ULL);
+	}
+ 		break;
+#endif /* __x86_64__*/
 
 	default:		/* Handle invalid ones */
 		return 0;	/* Return an exception */
-
-	}
-
-	return 1;		/* Normal non-ast check return */
-}
-
-
-int 
-diagCall(x86_saved_state_t * state)
-{
-	uint32_t        stk, curpos, i, j;
-	uint32_t        selector, data;
-	int             err;
-	uint64_t        currNap, durNap;
-	x86_saved_state32_t	*regs;
-
-	assert(is_saved_state32(state));
-	regs = saved_state32(state);
-
-	if (!(dgWork.dgFlags & enaDiagSCs))
-		return 0;	/* If not enabled, cause an exception */
-
-	stk = regs->uesp;	/* Point to the stack */
-	err = copyin((user_addr_t) (stk + 4), (char *) &selector, sizeof(uint32_t));	/* Get the selector */
-	if (err) {
-		return 0;	/* Failed to fetch stack */
-	}
-	switch (selector) {	/* Select the routine */
-	case dgRuptStat:	/* Suck Interruption statistics */
-
-		err = copyin((user_addr_t) (stk + 8), (char *) &data, sizeof(uint32_t));	/* Get the selector */
-
-		if (data == 0) {/* If number of processors is 0, clear all
-				 * counts */
-			for (i = 0; i < real_ncpus; i++) {	/* Cycle through
-								 * processors */
-				for (j = 0; j < 256; j++)
-					cpu_data_ptr[i]->cpu_hwIntCnt[j] = 0;
-			}
-
-			lastRuptClear = mach_absolute_time();	/* Get the time of clear */
-			return 1;	/* Normal return */
-		}
-
-		(void) copyout((char *) &real_ncpus, data, sizeof(real_ncpus));	/* Copy out number of
-										 * processors */
-
-		currNap = mach_absolute_time();	/* Get the time now */
-		durNap = currNap - lastRuptClear;	/* Get the last interval
-							 * duration */
-		if (durNap == 0)
-			durNap = 1;	/* This is a very short time, make it
-					 * bigger */
-
-		curpos = (uint32_t)(data + sizeof(real_ncpus));	/* Point to the next
-							 * available spot */
-
-		for (i = 0; i < real_ncpus; i++) {	/* Move 'em all out */
-			(void) copyout((char *) &durNap, curpos, 8);	/* Copy out the time
-									 * since last clear */
-			(void) copyout((char *) &cpu_data_ptr[i]->cpu_hwIntCnt, curpos + 8, 256 * sizeof(uint32_t));	/* Copy out interrupt
-															 * data for this
-															 * processor */
-			curpos = (uint32_t)(curpos + (256 * sizeof(uint32_t) + 8));	/* Point to next out put
-									 * slot */
-		}
-
-		break;
-
-	default:		/* Handle invalid ones */
-		return 0;	/* Return an exception */
-
 	}
 
 	return 1;		/* Normal non-ast check return */

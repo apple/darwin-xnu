@@ -234,6 +234,7 @@ labelh_destroy(ipc_port_t port)
 	ipc_labelh_t lh = (ipc_labelh_t) port->ip_kobject;
 
 	mac_task_label_destroy(&lh->lh_label);
+	lh_lock_destroy(lh);
 	zfree(ipc_labelh_zone, (vm_offset_t)lh);
 }
 #else

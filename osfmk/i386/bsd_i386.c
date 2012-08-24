@@ -146,6 +146,24 @@ thread_userstack(
 	return (KERN_SUCCESS);
 }
 
+/*
+ * thread_userstackdefault:
+ *
+ * Return the default stack location for the
+ * thread, if otherwise unknown.
+ */
+kern_return_t
+thread_userstackdefault(
+	thread_t thread,
+	mach_vm_offset_t *default_user_stack)
+{
+	if (thread_is_64bit(thread)) {
+		*default_user_stack = VM_USRSTACK64;
+	} else {
+		*default_user_stack = VM_USRSTACK32;
+	}
+	return (KERN_SUCCESS);
+}
 
 kern_return_t
 thread_entrypoint(
@@ -229,7 +247,7 @@ machdep_syscall(x86_saved_state_t *state)
 	int			args[machdep_call_count];
 	int			trapno;
 	int			nargs;
-	machdep_call_t		*entry;
+	const machdep_call_t	*entry;
 	x86_saved_state32_t	*regs;
 
 	assert(is_saved_state32(state));
@@ -311,7 +329,7 @@ void
 machdep_syscall64(x86_saved_state_t *state)
 {
 	int			trapno;
-	machdep_call_t		*entry;
+	const machdep_call_t	*entry;
 	x86_saved_state64_t	*regs;
 
 	assert(is_saved_state64(state));
@@ -391,11 +409,24 @@ mach_call_arg_munger32(uint32_t sp, int nargs, int call_number, struct mach_call
 	case 2: args->arg2 = args32[1];
 	case 1: args->arg1 = args32[0];
 	}
-	if (call_number == 90) {
+	if (call_number == 10) {
+		/* munge the mach_vm_size_t for  mach_vm_allocate() */
+		args->arg3 = (((uint64_t)(args32[2])) | ((((uint64_t)(args32[3]))<<32)));
+		args->arg4 = args32[4];
+	} else if (call_number == 12) {
+		/* munge the mach_vm_address_t and mach_vm_size_t for mach_vm_deallocate() */
+		args->arg2 = (((uint64_t)(args32[1])) | ((((uint64_t)(args32[2]))<<32)));
+		args->arg3 = (((uint64_t)(args32[3])) | ((((uint64_t)(args32[4]))<<32)));
+	} else if (call_number == 14) {
+		/* munge the mach_vm_address_t and mach_vm_size_t for  mach_vm_protect() */
+		args->arg2 = (((uint64_t)(args32[1])) | ((((uint64_t)(args32[2]))<<32)));
+		args->arg3 = (((uint64_t)(args32[3])) | ((((uint64_t)(args32[4]))<<32)));
+		args->arg4 = args32[5];
+		args->arg5 = args32[6];
+	} else if (call_number == 90) {
 		/* munge_l for mach_wait_until_trap() */
 		args->arg1 = (((uint64_t)(args32[0])) | ((((uint64_t)(args32[1]))<<32)));
-	}
-	if (call_number == 93) {
+	} else if (call_number == 93) {
 		/* munge_wl for mk_timer_arm_trap() */
 		args->arg2 = (((uint64_t)(args32[1])) | ((((uint64_t)(args32[2]))<<32)));
 	}
@@ -460,15 +491,19 @@ mach_call_munger(x86_saved_state_t *state)
 #ifdef MACH_BSD
 	mach_kauth_cred_uthread_update();
 #endif
-	KERNEL_DEBUG_CONSTANT(MACHDBG_CODE(DBG_MACH_EXCP_SC, (call_number)) | DBG_FUNC_START,
-			args.arg1, args.arg2, args.arg3, args.arg4, 0);
+
+	KERNEL_DEBUG_CONSTANT_IST(KDEBUG_TRACE,
+		MACHDBG_CODE(DBG_MACH_EXCP_SC, (call_number)) | DBG_FUNC_START,
+		args.arg1, args.arg2, args.arg3, args.arg4, 0);
 
 	retval = mach_call(&args);
 
 	DEBUG_KPRINT_SYSCALL_MACH("mach_call_munger: retval=0x%x\n", retval);
 
-	KERNEL_DEBUG_CONSTANT(MACHDBG_CODE(DBG_MACH_EXCP_SC,(call_number)) | DBG_FUNC_END,
-			retval, 0, 0, 0, 0);
+	KERNEL_DEBUG_CONSTANT_IST(KDEBUG_TRACE,
+		MACHDBG_CODE(DBG_MACH_EXCP_SC,(call_number)) | DBG_FUNC_END,
+		retval, 0, 0, 0, 0);
+
 	regs->eax = retval;
 
 	throttle_lowpri_io(TRUE);
@@ -497,10 +532,9 @@ mach_call_munger64(x86_saved_state_t *state)
 		"mach_call_munger64: code=%d(%s)\n",
 		call_number, mach_syscall_name_table[call_number]);
 
-	KERNEL_DEBUG_CONSTANT(MACHDBG_CODE(DBG_MACH_EXCP_SC,
-					   (call_number)) | DBG_FUNC_START,
-			      regs->rdi, regs->rsi,
-			      regs->rdx, regs->r10, 0);
+	KERNEL_DEBUG_CONSTANT_IST(KDEBUG_TRACE, 
+		MACHDBG_CODE(DBG_MACH_EXCP_SC,(call_number)) | DBG_FUNC_START,
+		regs->rdi, regs->rsi, regs->rdx, regs->r10, 0);
 	
 	if (call_number < 0 || call_number >= mach_trap_count) {
 	        i386_exception(EXC_SYSCALL, regs->rax, 1);
@@ -535,9 +569,9 @@ mach_call_munger64(x86_saved_state_t *state)
 	
 	DEBUG_KPRINT_SYSCALL_MACH( "mach_call_munger64: retval=0x%llx\n", regs->rax);
 
-	KERNEL_DEBUG_CONSTANT(MACHDBG_CODE(DBG_MACH_EXCP_SC,
-					   (call_number)) | DBG_FUNC_END,
-			      regs->rax, 0, 0, 0, 0);
+	KERNEL_DEBUG_CONSTANT_IST(KDEBUG_TRACE, 
+		MACHDBG_CODE(DBG_MACH_EXCP_SC,(call_number)) | DBG_FUNC_END, 
+		regs->rax, 0, 0, 0, 0);
 
 	throttle_lowpri_io(TRUE);
 

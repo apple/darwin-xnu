@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008 Apple Inc. All rights reserved.
+ * Copyright (c) 2008-2011 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -415,6 +415,40 @@ struct ipfw_flow_id {
  */
 typedef struct _ipfw_dyn_rule ipfw_dyn_rule;
 
+#ifdef XNU_KERNEL_PRIVATE
+
+#include <netinet/ip_flowid.h>
+
+/*
+ * Note: 
+ * The internal version of "struct _ipfw_dyn_rule" differs from 
+ * its external version because the field "id" is of type
+ * "struct ip_flow_id" in the internal version. The type of the
+ * field "id" for the external version is "ipfw_dyn_rule for
+ * backwards compatibility reasons.
+ */
+
+struct _ipfw_dyn_rule {
+	ipfw_dyn_rule	*next;		/* linked list of rules.	*/
+	struct ip_fw *rule;		/* pointer to rule		*/
+	/* 'rule' is used to pass up the rule number (from the parent)	*/
+
+	ipfw_dyn_rule *parent;		/* pointer to parent rule	*/
+	u_int64_t	pcnt;		/* packet match counter		*/
+	u_int64_t	bcnt;		/* byte match counter		*/
+	struct ip_flow_id id;		/* (masked) flow id		*/
+	u_int32_t	expire;		/* expire time			*/
+	u_int32_t	bucket;		/* which bucket in hash table	*/
+	u_int32_t	state;		/* state of this rule (typically a
+					 * combination of TCP flags)
+					 */
+	u_int32_t	ack_fwd;	/* most recent ACKs in forward	*/
+	u_int32_t	ack_rev;	/* and reverse directions (used	*/
+					/* to generate keepalives)	*/
+	u_int16_t	dyn_type;	/* rule type			*/
+	u_int16_t	count;		/* refcount			*/
+};
+#else /* XNU_KERNEL_PRIVATE */
 struct _ipfw_dyn_rule {
 	ipfw_dyn_rule	*next;		/* linked list of rules.	*/
 	struct ip_fw *rule;		/* pointer to rule		*/
@@ -435,6 +469,7 @@ struct _ipfw_dyn_rule {
 	u_int16_t	dyn_type;	/* rule type			*/
 	u_int16_t	count;		/* refcount			*/
 };
+#endif /* XNU_KERNEL_PRIVATE */
 
 /*
  * Definitions for IP option names.
@@ -585,35 +620,20 @@ typedef struct  _ipfw_insn_pipe_32{
 #endif	/* KERNEL */
 
 #ifdef KERNEL
+
+#define IPFW_DEFAULT_RULE       65535
+
 #if IPFIREWALL
 
 #define	IP_FW_PORT_DYNT_FLAG	0x10000
 #define	IP_FW_PORT_TEE_FLAG	0x20000
 #define	IP_FW_PORT_DENY_FLAG	0x40000
 
-/*
- * Arguments for calling ipfw_chk() and dummynet_io(). We put them
- * all into a structure because this way it is easier and more
- * efficient to pass variables around and extend the interface.
- */
-struct ip_fw_args {
-	struct mbuf	*m;		/* the mbuf chain		*/
-	struct ifnet	*oif;		/* output interface		*/
-	struct sockaddr_in *next_hop;	/* forward address		*/
-	struct ip_fw	*rule;		/* matching rule		*/
-	struct ether_header *eh;	/* for bridged packets		*/
-
-	struct route	*ro;		/* for dummynet			*/
-	struct sockaddr_in *dst;	/* for dummynet			*/
-	int flags;			/* for dummynet			*/
-	struct ip_out_args *ipoa;       /* for dummynet                 */
-
-	struct ipfw_flow_id f_id;	/* grabbed from IP header	*/
-	u_int16_t	divert_rule;	/* divert cookie		*/
-	u_int32_t	retval;
-};
-//struct ip_fw_args;
-
+#ifdef PRIVATE
+#include <netinet/ip_flowid.h>
+#else
+struct ip_fw_args;
+#endif
 /*
  * Function definitions.
  */

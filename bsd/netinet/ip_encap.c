@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000,2007 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2011 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -88,6 +88,7 @@
 #include <sys/socket.h>
 #include <sys/sockio.h>
 #include <sys/mbuf.h>
+#include <sys/mcache.h>
 #include <sys/errno.h>
 #include <sys/protosw.h>
 #include <sys/queue.h>
@@ -170,6 +171,9 @@ encap4_input(m, off)
 	proto = va_arg(ap, int);
 	va_end(ap);
 #endif
+
+	/* Expect 32-bit aligned data pointer on strict-align platforms */
+	MBUF_STRICT_DATA_ALIGNMENT_CHECK_32(m);
 
 	ip = mtod(m, struct ip *);
 #ifdef __APPLE__
@@ -268,8 +272,10 @@ encap6_input(struct mbuf **mp, int *offp, int proto)
 	struct encaptab *ep, *match;
 	int prio, matchprio;
 
-	ip6 = mtod(m, struct ip6_hdr *);
+	/* Expect 32-bit aligned data pointer on strict-align platforms */
+	MBUF_STRICT_DATA_ALIGNMENT_CHECK_32(m);
 
+	ip6 = mtod(m, struct ip6_hdr *);
 	bzero(&s, sizeof(s));
 	s.sin6_family = AF_INET6;
 	s.sin6_len = sizeof(struct sockaddr_in6);

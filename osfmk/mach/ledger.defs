@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2010 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -44,36 +44,5 @@ userprefix r_;
 
 #include <mach/std_types.defs>
 #include <mach/mach_types.defs>
-
-/*
- *	Create a subordinate ledger
- */
-routine ledger_create(
-		parent_ledger		: ledger_t;
-		ledger_ledger		: ledger_t;
-	out	new_ledger		: ledger_t;
-		transfer		: ledger_item_t);
-
-/*
- *	Destroy a ledger
- */
-routine ledger_terminate(
-		ledger			: ledger_t);
-
-/*
- *	Transfer resources from a parent ledger to a child
- */
-routine ledger_transfer(
-		parent_ledger		: ledger_t;
-		child_ledger		: ledger_t;
-		transfer		: ledger_item_t);
-
-/*
- *	Return the ledger limit and balance
- */
-routine ledger_read(
-		ledger			: ledger_t;
-	out	balance			: ledger_item_t;
-	out	limit			: ledger_item_t);
 
 /* vim: set ft=c : */

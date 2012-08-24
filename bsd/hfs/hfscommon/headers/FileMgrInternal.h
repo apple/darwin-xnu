@@ -250,7 +250,10 @@ MetaZoneFreeBlocks(ExtendedVCB *vcb);
 	
 EXTERN_API_C( u_int32_t )
 UpdateAllocLimit (struct hfsmount *hfsmp, u_int32_t new_end_block);
-	
+
+EXTERN_API_C( u_int32_t )
+UnmapBlocks(struct hfsmount *hfsmp);
+
 #if CONFIG_HFS_ALLOC_RBTREE
 EXTERN_API_C( u_int32_t )
 GenerateTree( struct hfsmount *hfsmp, u_int32_t end_block, int *flags, int initialscan);

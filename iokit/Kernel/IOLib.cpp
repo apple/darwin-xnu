@@ -237,7 +237,10 @@ void * IOMallocAligned(vm_size_t size, vm_size_t alignment)
     alignMask = alignment - 1;
     adjustedSize = size + sizeof(vm_size_t) + sizeof(vm_address_t);
 
-    if (adjustedSize >= page_size) {
+    if (size > adjustedSize) {
+	    address = 0;    /* overflow detected */
+    }
+    else if (adjustedSize >= page_size) {
 
         kr = kernel_memory_allocate(kernel_map, &address,
 					size, alignMask, 0);

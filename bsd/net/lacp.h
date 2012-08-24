@@ -43,6 +43,7 @@
 #define	_NET_LACP_H_
 
 #include <sys/types.h>
+#include <string.h>
 
 /**
  ** Link Aggregation Control Protocol (LACP) definitions
@@ -248,6 +249,61 @@ lacp_actor_partner_state_expired(lacp_actor_partner_state state)
     return ((state & LACP_ACTOR_PARTNER_STATE_EXPIRED) != 0);
 }
 
+/*
+ * Function: lacp_uint16_set
+ * Purpose:
+ *   Set a field in a structure that's at least 16 bits to the given
+ *   value, putting it into network byte order
+ */
+static __inline__ void
+lacp_uint16_set(uint8_t * field, uint16_t value)
+{
+    uint16_t tmp_value = htons(value);
+    memcpy((void *)field, (void *)&tmp_value, sizeof(uint16_t));
+    return;
+}
+
+/*
+ * Function: lacp_uint16_get
+ * Purpose:
+ *   Get a field in a structure that's at least 16 bits, converting
+ *   to host byte order.
+ */
+static __inline__ uint16_t
+lacp_uint16_get(const uint8_t * field)
+{
+    uint16_t tmp_field;
+    memcpy((void *)&tmp_field, (void *)field, sizeof(uint16_t));
+    return (ntohs(tmp_field));
+}
+
+/*
+ * Function: lacp_uint32_set
+ * Purpose:
+ *   Set a field in a structure that's at least 32 bits to the given
+ *   value, putting it into network byte order
+ */
+static __inline__ void
+lacp_uint32_set(uint8_t * field, uint32_t value)
+{
+    uint32_t tmp_value = htonl(value);
+    memcpy((void *)field, (void *)&tmp_value, sizeof(uint32_t));
+    return;
+}
+
+/*
+ * Function: lacp_uint32_get
+ * Purpose:
+ *   Get a field in a structure that's at least 32 bits, converting
+ *   to host byte order.
+ */
+static __inline__ uint32_t
+lacp_uint32_get(const uint8_t * field)
+{
+    uint32_t tmp_field;
+    memcpy((void *)&tmp_field, (void *)field, sizeof(uint32_t));
+    return (ntohl(tmp_field));
+}
 
 /*
  * LACP Actor/Partner TLV access functions
@@ -256,57 +312,54 @@ static __inline__ void
 lacp_actor_partner_tlv_set_system_priority(lacp_actor_partner_tlv_ref tlv, 
 					   lacp_system_priority system_priority)
 {
-    *((lacp_system_priority *)tlv->lap_system_priority) 
-	= (lacp_system_priority)htons(system_priority);
+    lacp_uint16_set(tlv->lap_system_priority, system_priority);
     return;
 }
 
 static __inline__ lacp_system_priority
 lacp_actor_partner_tlv_get_system_priority(const lacp_actor_partner_tlv_ref tlv)
 {
-    return ((lacp_system_priority)
-	    ntohs(*((u_short *)tlv->lap_system_priority)));
+    return (lacp_system_priority)lacp_uint16_get(tlv->lap_system_priority);
 }
 
 static __inline__ void
 lacp_actor_partner_tlv_set_key(lacp_actor_partner_tlv_ref tlv, lacp_key key)
 {
-    *((lacp_key *)tlv->lap_key) = (lacp_key)htons(key);
+    lacp_uint16_set(tlv->lap_key, key);
     return;
 }
 
 static __inline__ lacp_key
 lacp_actor_partner_tlv_get_key(const lacp_actor_partner_tlv_ref tlv)
 {
-    return ((lacp_key)ntohs(*((u_short *)tlv->lap_key)));
+    return (lacp_key)lacp_uint16_get(tlv->lap_key);
 }
 
 static __inline__ void
 lacp_actor_partner_tlv_set_port_priority(lacp_actor_partner_tlv_ref tlv, 
 					 lacp_port_priority port_priority)
 {
-    *((lacp_port_priority *)tlv->lap_port_priority) 
-	= (lacp_port_priority)htons(port_priority);
+    lacp_uint16_set(tlv->lap_port_priority, port_priority);
     return;
 }
 
 static __inline__ lacp_port_priority
 lacp_actor_partner_tlv_get_port_priority(const lacp_actor_partner_tlv_ref tlv)
 {
-    return ((lacp_port_priority)ntohs(*((u_short *)tlv->lap_port_priority)));
+    return (lacp_port_priority)lacp_uint16_get(tlv->lap_port_priority);
 }
 
 static __inline__ void
 lacp_actor_partner_tlv_set_port(lacp_actor_partner_tlv_ref tlv, lacp_port port)
 {
-    *((lacp_port *)tlv->lap_port) = (lacp_port)htons(port);
+    lacp_uint16_set(tlv->lap_port, port);
     return;
 }
 
 static __inline__ lacp_port
 lacp_actor_partner_tlv_get_port(const lacp_actor_partner_tlv_ref tlv)
 {
-    return ((lacp_port)ntohs(*((u_short *)tlv->lap_port)));
+    return (lacp_port)lacp_uint16_get(tlv->lap_port);
 }
 
 /*
@@ -316,15 +369,14 @@ static __inline__ void
 lacp_collector_tlv_set_max_delay(lacp_collector_tlv_ref tlv, 
 				 lacp_collector_max_delay delay)
 {
-    *((lacp_collector_max_delay *)tlv->lac_max_delay) 
-	= (lacp_collector_max_delay)htons(delay);
+    lacp_uint16_set(tlv->lac_max_delay, delay);
     return;
 }
 
 static __inline__ lacp_collector_max_delay
 lacp_collector_tlv_get_max_delay(const lacp_collector_tlv_ref tlv)
 {
-    return ((lacp_collector_max_delay)ntohs(*((u_short *)tlv->lac_max_delay)));
+    return (lacp_collector_max_delay)lacp_uint16_get(tlv->lac_max_delay);
 }
 
 typedef struct lacpdu_s {
@@ -380,32 +432,28 @@ typedef struct la_marker_pdu_s {
 static __inline__ void
 la_marker_pdu_set_requestor_port(la_marker_pdu_ref lmpdu, lacp_port port)
 {
-    *((lacp_port *)lmpdu->lm_requestor_port) = (lacp_port)htons(port);
+    lacp_uint16_set(lmpdu->lm_requestor_port, port);
     return;
 }
 
 static __inline__ lacp_port
 la_marker_pdu_get_requestor_port(la_marker_pdu_ref lmpdu)
 {
-    return ((lacp_port)ntohs(*((lacp_port *)lmpdu->lm_requestor_port)));
+    return (lacp_port)lacp_uint16_get(lmpdu->lm_requestor_port);
 }
 
 static __inline__ void
 la_marker_pdu_set_requestor_transaction_id(la_marker_pdu_ref lmpdu, 
 					   la_marker_transaction_id xid)
 {
-    *((la_marker_transaction_id *)lmpdu->lm_requestor_transaction_id) 
-	= (la_marker_transaction_id)htonl(xid);
+    lacp_uint32_set(lmpdu->lm_requestor_transaction_id, xid);
     return;
 }
 
 static __inline__ la_marker_transaction_id
 la_marker_pdu_get_requestor_transaction_id(la_marker_pdu_ref lmpdu)
 {
-    la_marker_transaction_id *	xid_p;
-
-    xid_p = (la_marker_transaction_id *)lmpdu->lm_requestor_transaction_id;
-    return ((la_marker_transaction_id)ntohl(*xid_p));
+    return (la_marker_transaction_id)lacp_uint32_get(lmpdu->lm_requestor_transaction_id);
 }
 
 static __inline__ void

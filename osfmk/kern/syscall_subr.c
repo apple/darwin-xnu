@@ -254,7 +254,7 @@ thread_switch(
 			ip_unlock(port);
 
 			thread = convert_port_to_thread(port);
-			ipc_port_release(port);
+			ip_release(port);
 
 			if (thread == self) {
 				(void)thread_deallocate_internal(thread);

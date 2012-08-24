@@ -159,13 +159,14 @@ ipc_mqueue_member(
 
 kern_return_t
 ipc_mqueue_remove(
-	ipc_mqueue_t	 mqueue,
-	ipc_mqueue_t	 set_mqueue)
+	ipc_mqueue_t	  mqueue,
+	ipc_mqueue_t	  set_mqueue,
+	wait_queue_link_t *wqlp)
 {
 	wait_queue_t	 mq_waitq = &mqueue->imq_wait_queue;
 	wait_queue_set_t set_waitq = &set_mqueue->imq_set_queue;
 
-	return wait_queue_unlink(mq_waitq, set_waitq);
+	return wait_queue_unlink_nofree(mq_waitq, set_waitq, wqlp);
 }
 
 /*
@@ -177,11 +178,12 @@ ipc_mqueue_remove(
  */
 void
 ipc_mqueue_remove_from_all(
-	ipc_mqueue_t	mqueue)
+	ipc_mqueue_t	mqueue,
+	queue_t 	links)
 {
 	wait_queue_t	mq_waitq = &mqueue->imq_wait_queue;
 
-	wait_queue_unlink_all(mq_waitq);
+	wait_queue_unlink_all_nofree(mq_waitq, links);
 	return;
 }
 
@@ -194,11 +196,12 @@ ipc_mqueue_remove_from_all(
  */
 void
 ipc_mqueue_remove_all(
-	ipc_mqueue_t	mqueue)
+	ipc_mqueue_t	mqueue,
+	queue_t		links)
 {
 	wait_queue_set_t	mq_setq = &mqueue->imq_set_queue;
 
-	wait_queue_set_unlink_all(mq_setq);
+	wait_queue_set_unlink_all_nofree(mq_setq, links);
 	return;
 }
 
@@ -217,7 +220,8 @@ ipc_mqueue_remove_all(
 kern_return_t
 ipc_mqueue_add(
 	ipc_mqueue_t	 port_mqueue,
-	ipc_mqueue_t	 set_mqueue)
+	ipc_mqueue_t	 set_mqueue,
+	wait_queue_link_t wql)
 {
 	wait_queue_t	 port_waitq = &port_mqueue->imq_wait_queue;
 	wait_queue_set_t set_waitq = &set_mqueue->imq_set_queue;
@@ -226,7 +230,7 @@ ipc_mqueue_add(
 	kern_return_t	 kr;
 	spl_t		 s;
 
-	kr = wait_queue_link(port_waitq, set_waitq);
+	kr = wait_queue_link_noalloc(port_waitq, set_waitq, wql);
 	if (kr != KERN_SUCCESS)
 		return kr;
 
@@ -278,7 +282,7 @@ ipc_mqueue_add(
 			 */
 			msize = ipc_kmsg_copyout_size(kmsg, th->map);
 			if (th->ith_msize <
-					(msize + REQUESTED_TRAILER_SIZE(th->ith_option))) {
+					(msize + REQUESTED_TRAILER_SIZE(thread_is_64bit(th), th->ith_option))) {
 				th->ith_state = MACH_RCV_TOO_LARGE;
 				th->ith_msize = msize;
 				if (th->ith_option & MACH_RCV_LARGE) {
@@ -539,7 +543,7 @@ ipc_mqueue_post(
 		 */
 		msize =	ipc_kmsg_copyout_size(kmsg, receiver->map);
 		if (receiver->ith_msize <
-				(msize + REQUESTED_TRAILER_SIZE(receiver->ith_option))) {
+				(msize + REQUESTED_TRAILER_SIZE(thread_is_64bit(receiver), receiver->ith_option))) {
 			receiver->ith_msize = msize;
 			receiver->ith_state = MACH_RCV_TOO_LARGE;
 		} else {
@@ -917,7 +921,7 @@ ipc_mqueue_select_on_thread(
 	 * (and size needed).
 	 */
 	rcv_size = ipc_kmsg_copyout_size(kmsg, thread->map);
-	if (rcv_size + REQUESTED_TRAILER_SIZE(option) > max_size) {
+	if (rcv_size + REQUESTED_TRAILER_SIZE(thread_is_64bit(thread), option) > max_size) {
 		mr = MACH_RCV_TOO_LARGE;
 		if (option & MACH_RCV_LARGE) {
 			thread->ith_receiver_name = mqueue->imq_receiver_name;
@@ -1136,7 +1140,7 @@ ipc_mqueue_copyin(
 	ipc_mqueue_t mqueue;
 
 	is_read_lock(space);
-	if (!space->is_active) {
+	if (!is_active(space)) {
 		is_read_unlock(space);
 		return MACH_RCV_INVALID_NAME;
 	}

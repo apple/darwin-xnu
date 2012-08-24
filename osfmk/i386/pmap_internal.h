@@ -26,10 +26,14 @@
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 
+
+#ifndef	_I386_PMAP_INTERNAL_
+#define _I386_PMAP_INTERNAL_
+#ifdef MACH_KERNEL_PRIVATE
+
 #include <vm/pmap.h>
 #include <sys/kdebug.h>
-
-#ifdef MACH_KERNEL_PRIVATE
+#include <kern/ledger.h>
 
 /*
  * pmap locking
@@ -61,13 +65,15 @@ extern	boolean_t	pmap_trace;
 #define PMAP_TRACE_CONSTANT(x,a,b,c,d,e)				\
 	KERNEL_DEBUG_CONSTANT(x,a,b,c,d,e);				\
 
-void		pmap_expand_pml4(
+kern_return_t	pmap_expand_pml4(
 			pmap_t		map,
-			vm_map_offset_t	v);
+			vm_map_offset_t	v,
+			unsigned int options);
 
-void		pmap_expand_pdpt(
+kern_return_t	pmap_expand_pdpt(
 			pmap_t		map,
-			vm_map_offset_t	v);
+			vm_map_offset_t	v,
+			unsigned int options);
 
 void		phys_attribute_set(
 			ppnum_t		phys,
@@ -273,20 +279,19 @@ extern pv_rooted_entry_t pv_head_table;	/* array of entries, one per page */
 extern event_t mapping_replenish_event;
 
 static inline void	PV_HASHED_ALLOC(pv_hashed_entry_t *pvh_ep) {
-
+	pmap_assert(*pvh_ep == PV_HASHED_ENTRY_NULL);
 	simple_lock(&pv_hashed_free_list_lock);
 	/* If the kernel reserved pool is low, let non-kernel mappings allocate
 	 * synchronously, possibly subject to a throttle.
 	 */
-	if ((pv_hashed_kern_free_count >= pv_hashed_kern_low_water_mark) &&
-	    (*pvh_ep = pv_hashed_free_list) != 0) {
+	if ((pv_hashed_kern_free_count > pv_hashed_kern_low_water_mark) && ((*pvh_ep = pv_hashed_free_list) != 0)) {
 		pv_hashed_free_list = (pv_hashed_entry_t)(*pvh_ep)->qlink.next;
 		pv_hashed_free_count--;
 	}
 
 	simple_unlock(&pv_hashed_free_list_lock);
 
-	if (pv_hashed_free_count < pv_hashed_low_water_mark) {
+	if (pv_hashed_free_count <= pv_hashed_low_water_mark) {
 		if (!mappingrecurse && hw_compare_and_store(0,1, &mappingrecurse))
 			thread_wakeup(&mapping_replenish_event);
 	}
@@ -303,6 +308,7 @@ static inline void	PV_HASHED_FREE_LIST(pv_hashed_entry_t pvh_eh, pv_hashed_entry
 extern unsigned pmap_kern_reserve_alloc_stat;
 
 static inline void	PV_HASHED_KERN_ALLOC(pv_hashed_entry_t *pvh_e) {
+	pmap_assert(*pvh_e == PV_HASHED_ENTRY_NULL);
 	simple_lock(&pv_hashed_kern_free_list_lock);
 
 	if ((*pvh_e = pv_hashed_kern_free_list) != 0) {
@@ -373,6 +379,13 @@ static inline void pmap_pv_throttle(__unused pmap_t p) {
 #define	PHYS_PTA	INTEL_PTE_PTA
 #define	PHYS_CACHEABILITY_MASK (INTEL_PTE_PTA | INTEL_PTE_NCACHE)
 
+extern const boolean_t	pmap_disable_kheap_nx;
+extern const boolean_t	pmap_disable_kstack_nx;
+
+#define PMAP_EXPAND_OPTIONS_NONE (0x0)
+#define PMAP_EXPAND_OPTIONS_NOWAIT (PMAP_OPTIONS_NOWAIT)
+#define PMAP_EXPAND_OPTIONS_NOENTER (PMAP_OPTIONS_NOENTER)
+
 /*
  *	Amount of virtual memory mapped by one
  *	page-directory entry.
@@ -422,7 +435,7 @@ static inline void pmap_pv_throttle(__unused pmap_t p) {
 extern uint64_t pde_mapped_size;
 
 extern char		*pmap_phys_attributes;
-extern unsigned int	last_managed_page;
+extern ppnum_t		last_managed_page;
 
 extern ppnum_t	lowest_lo;
 extern ppnum_t	lowest_hi;
@@ -613,7 +626,7 @@ pmap_pagetable_corruption_log(pmap_pv_assertion_t incident, pmap_pagetable_corru
 
 static inline pmap_pagetable_corruption_action_t
 pmap_classify_pagetable_corruption(pmap_t pmap, vm_map_offset_t vaddr, ppnum_t *ppnp, pt_entry_t *ptep, pmap_pv_assertion_t incident) {
-	pmap_pv_assertion_t	action = PMAP_ACTION_ASSERT;
+	pmap_pagetable_corruption_action_t	action = PMAP_ACTION_ASSERT;
 	pmap_pagetable_corruption_t	suppress_reason = PTE_VALID;
 	ppnum_t			suppress_ppn = 0;
 	pt_entry_t cpte = *ptep;
@@ -650,7 +663,7 @@ pmap_classify_pagetable_corruption(pmap_t pmap, vm_map_offset_t vaddr, ppnum_t *
 			action = PMAP_ACTION_RETRY;
 			goto pmap_cpc_exit;
 		}
-	} while((pv_e = (pv_rooted_entry_t) queue_next(&pv_e->qlink)) != pv_h);
+	} while (((pv_e = (pv_rooted_entry_t) queue_next(&pv_e->qlink))) && (pv_e != pv_h));
 
 	/* Discover root entries with a Hamming
 	 * distance of 1 from the supplied
@@ -732,12 +745,12 @@ pmap_pv_remove_retry:
 	pvh_e = PV_HASHED_ENTRY_NULL;
 	pv_h = pai_to_pvh(ppn_to_pai(ppn));
 
-	if (pv_h->pmap == PMAP_NULL) {
+	if (__improbable(pv_h->pmap == PMAP_NULL)) {
 		pmap_pagetable_corruption_action_t pac = pmap_classify_pagetable_corruption(pmap, vaddr, ppnp, pte, ROOT_ABSENT);
 		if (pac == PMAP_ACTION_IGNORE)
 			goto pmap_pv_remove_exit;
 		else if (pac == PMAP_ACTION_ASSERT)
-			panic("pmap_pv_remove(%p,0x%llx,0x%x, 0x%llx): null pv_list!", pmap, vaddr, ppn, *pte);
+			panic("pmap_pv_remove(%p,0x%llx,0x%x, 0x%llx, %p, %p): null pv_list!", pmap, vaddr, ppn, *pte, ppnp, pte);
 		else if (pac == PMAP_ACTION_RETRY_RELOCK) {
 			LOCK_PVH(ppn_to_pai(*ppnp));
 			pmap_phys_attributes[ppn_to_pai(*ppnp)] |= (PHYS_MODIFIED | PHYS_REFERENCED);
@@ -790,8 +803,8 @@ pmap_pv_remove_retry:
 		LOCK_PV_HASH(pvhash_idx);
 		pprevh = pvhash(pvhash_idx);
 		if (PV_HASHED_ENTRY_NULL == *pprevh) {
-			panic("pmap_pv_remove(%p,0x%llx,0x%x): empty hash",
-			      pmap, vaddr, ppn);
+			panic("pmap_pv_remove(%p,0x%llx,0x%x, 0x%llx, %p): empty hash",
+			    pmap, vaddr, ppn, *pte, pte);
 		}
 		pvh_e = *pprevh;
 		pmap_pv_hashlist_walks++;
@@ -810,7 +823,7 @@ pmap_pv_remove_retry:
 			pmap_pagetable_corruption_action_t pac = pmap_classify_pagetable_corruption(pmap, vaddr, ppnp, pte, ROOT_PRESENT);
 
 			if (pac == PMAP_ACTION_ASSERT)
-				panic("pmap_pv_remove(%p,0x%llx,0x%x, 0x%llx): pv not on hash, head: %p, 0x%llx", pmap, vaddr, ppn, *pte, pv_h->pmap, pv_h->va);
+				panic("pmap_pv_remove(%p, 0x%llx, 0x%x, 0x%llx, %p, %p): pv not on hash, head: %p, 0x%llx", pmap, vaddr, ppn, *pte, ppnp, pte, pv_h->pmap, pv_h->va);
 			else {
 				UNLOCK_PV_HASH(pvhash_idx);
 				if (pac == PMAP_ACTION_RETRY_RELOCK) {
@@ -841,29 +854,43 @@ pmap_pv_remove_exit:
 
 extern int 	pt_fake_zone_index;
 static inline void
-PMAP_ZINFO_PALLOC(vm_size_t bytes)
+PMAP_ZINFO_PALLOC(pmap_t pmap, vm_size_t bytes)
 {
 	thread_t thr = current_thread();
 	task_t task;
 	zinfo_usage_t zinfo;
 
-	thr->tkm_private.alloc += bytes;
+	pmap_ledger_credit(pmap, task_ledgers.tkm_private, bytes);
+
 	if (pt_fake_zone_index != -1 && 
 	    (task = thr->task) != NULL && (zinfo = task->tkm_zinfo) != NULL)
 		OSAddAtomic64(bytes, (int64_t *)&zinfo[pt_fake_zone_index].alloc);
 }
 
 static inline void
-PMAP_ZINFO_PFREE(vm_size_t bytes)
+PMAP_ZINFO_PFREE(pmap_t pmap, vm_size_t bytes)
 {
 	thread_t thr = current_thread();
 	task_t task;
 	zinfo_usage_t zinfo;
 
-	thr->tkm_private.free += bytes;
+	pmap_ledger_debit(pmap, task_ledgers.tkm_private, bytes);
+
 	if (pt_fake_zone_index != -1 && 
 	    (task = thr->task) != NULL && (zinfo = task->tkm_zinfo) != NULL)
 		OSAddAtomic64(bytes, (int64_t *)&zinfo[pt_fake_zone_index].free);
+}
+
+static inline void
+PMAP_ZINFO_SALLOC(pmap_t pmap, vm_size_t bytes)
+{
+	pmap_ledger_credit(pmap, task_ledgers.tkm_shared, bytes);
+}
+
+static inline void
+PMAP_ZINFO_SFREE(pmap_t pmap, vm_size_t bytes)
+{
+	pmap_ledger_debit(pmap, task_ledgers.tkm_shared, bytes);
 }
 
 extern boolean_t	pmap_initialized;/* Has pmap_init completed? */
@@ -893,6 +920,70 @@ void		phys_attribute_clear(
 #endif
 void	pmap_pcid_configure(void);
 
+
+/*
+ * Atomic 64-bit compare and exchange of a page table entry.
+ */
+static inline boolean_t
+pmap_cmpx_pte(pt_entry_t *entryp, pt_entry_t old, pt_entry_t new)
+{
+	boolean_t		ret;
+
+#ifdef __i386__
+	/*
+	 * Load the old value into %edx:%eax
+	 * Load the new value into %ecx:%ebx
+	 * Compare-exchange-8bytes at address entryp (loaded in %edi)
+	 * If the compare succeeds, the new value is stored, return TRUE.
+	 * Otherwise, no swap is made, return FALSE.
+	 */
+	asm volatile(
+		"	lock; cmpxchg8b (%1)	\n\t"
+		"	setz	%%al		\n\t"
+		"	movzbl	%%al,%0"
+		: "=a" (ret)
+		: "D" (entryp),
+		  "a" ((uint32_t)old),
+		  "d" ((uint32_t)(old >> 32)),
+		  "b" ((uint32_t)new),
+		  "c" ((uint32_t)(new >> 32))
+		: "memory");
+#else
+	/*
+	 * Load the old value into %rax
+	 * Load the new value into another register
+	 * Compare-exchange-quad at address entryp
+	 * If the compare succeeds, the new value is stored, return TRUE.
+	 * Otherwise, no swap is made, return FALSE.
+	 */
+	asm volatile(
+		"	lock; cmpxchgq %2,(%3)	\n\t"
+		"	setz	%%al		\n\t"
+		"	movzbl	%%al,%0"
+		: "=a" (ret)
+		: "a" (old),
+		  "r" (new),
+		  "r" (entryp)
+		: "memory");
+#endif
+	return ret;
+}
+
+extern uint32_t pmap_update_clear_pte_count;
+
+static inline void pmap_update_pte(pt_entry_t *mptep, uint64_t pclear_bits, uint64_t pset_bits) {
+	pt_entry_t npte, opte;
+	do {
+		opte = *mptep;
+		if (__improbable(opte == 0)) {
+			pmap_update_clear_pte_count++;
+			break;
+		}
+		npte = opte & ~(pclear_bits);
+		npte |= pset_bits;
+	}	while (!pmap_cmpx_pte(mptep, opte, npte));
+}
+
 #if	defined(__x86_64__)
 /*
  * The single pml4 page per pmap is allocated at pmap create time and exists
@@ -903,6 +994,11 @@ static inline
 pml4_entry_t *
 pmap64_pml4(pmap_t pmap, vm_map_offset_t vaddr)
 {
+	if (__improbable((vaddr > 0x00007FFFFFFFFFFFULL) &&
+		(vaddr < 0xFFFF800000000000ULL))) {
+		return (NULL);
+	}
+
 #if	PMAP_ASSERT
 	return PHYSMAP_PTOV(&((pml4_entry_t *)pmap->pm_cr3)[(vaddr >> PML4SHIFT) & (NPML4PG-1)]);
 #else
@@ -918,12 +1014,6 @@ pmap64_pdpt(pmap_t pmap, vm_map_offset_t vaddr)
 {
 	pml4_entry_t	newpf;
 	pml4_entry_t	*pml4;
-
-	assert(pmap);
-	if ((vaddr > 0x00007FFFFFFFFFFFULL) &&
-	    (vaddr < 0xFFFF800000000000ULL)) {
-		return (0);
-	}
 
 	pml4 = pmap64_pml4(pmap, vaddr);
 	if (pml4 && ((*pml4 & INTEL_PTE_VALID))) {
@@ -942,12 +1032,6 @@ pmap64_pde(pmap_t pmap, vm_map_offset_t vaddr)
 	pdpt_entry_t	newpf;
 	pdpt_entry_t	*pdpt;
 
-	assert(pmap);
-	if ((vaddr > 0x00007FFFFFFFFFFFULL) &&
-	    (vaddr < 0xFFFF800000000000ULL)) {
-		return (0);
-	}
-
 	pdpt = pmap64_pdpt(pmap, vaddr);
 
 	if (pdpt && ((*pdpt & INTEL_PTE_VALID))) {
@@ -963,7 +1047,6 @@ pmap_pde(pmap_t m, vm_map_offset_t v)
 {
 	pd_entry_t     *pde;
 
-	assert(m);
 	pde = pmap64_pde(m, v);
 
 	return pde;
@@ -983,7 +1066,7 @@ pmap_pte(pmap_t pmap, vm_map_offset_t vaddr)
 	pd_entry_t	newpf;
 
 	assert(pmap);
-	pde = pmap_pde(pmap, vaddr);
+	pde = pmap64_pde(pmap, vaddr);
 
 	if (pde && ((*pde & INTEL_PTE_VALID))) {
 		if (*pde & INTEL_PTE_PS) 
@@ -995,4 +1078,11 @@ pmap_pte(pmap_t pmap, vm_map_offset_t vaddr)
 	return (NULL);
 }
 #endif
+#if	DEBUG
+#define DPRINTF(x...)	kprintf(x)
+#else
+#define DPRINTF(x...)
+#endif
+
 #endif /* MACH_KERNEL_PRIVATE */
+#endif /* _I386_PMAP_INTERNAL_ */

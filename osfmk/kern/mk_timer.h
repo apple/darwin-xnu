@@ -40,11 +40,11 @@
 #ifdef MACH_KERNEL_PRIVATE
 #include <mach/mach_types.h>
 
-#include <kern/call_entry.h>
+#include <kern/thread_call.h>
 
 struct mk_timer {
-	decl_simple_lock_data(,lock)
-	call_entry_data_t	call_entry;
+	decl_simple_lock_data(,lock);
+	thread_call_data_t 		call_entry;
 	uint32_t			is_dead:1,
 						is_armed:1;
 	int					active;

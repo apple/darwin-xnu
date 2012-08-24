@@ -30,13 +30,13 @@
 
 #include <IOKit/IOService.h>
 #include <IOKit/pwr_mgt/IOPM.h>
-#include "IOKit/pwr_mgt/IOPMPrivate.h"
 #include <IOKit/IOBufferMemoryDescriptor.h> 
 
 #ifdef XNU_KERNEL_PRIVATE
 struct AggressivesRecord;
 struct IOPMMessageFilterContext;
 struct IOPMActions;
+struct IOPMSystemSleepParameters;
 class PMSettingObject;
 class IOPMTimeline;
 class PMEventDetails;
@@ -311,7 +311,7 @@ public:
     @result On success, returns a new assertion of type IOPMDriverAssertionID *
 */
     IOReturn releasePMAssertion(IOPMDriverAssertionID releaseAssertion);
-
+        
 private:
     virtual IOReturn    changePowerStateTo( unsigned long ordinal );
     virtual IOReturn    changePowerStateToPriv( unsigned long ordinal );
@@ -381,7 +381,11 @@ public:
     void        handleQueueSleepWakeUUID(
                     OSObject *obj);
 
-    IOReturn    setMaintenanceWakeCalendar(const IOPMCalendarStruct * calendar );
+    void        handleSuspendPMNotificationClient(
+                    uint32_t pid, bool doSuspend);
+
+    IOReturn    setMaintenanceWakeCalendar(
+                    const IOPMCalendarStruct * calendar );
 
     // Handle callbacks from IOService::systemWillShutdown()
 	void        acknowledgeSystemWillShutdown( IOService * from );
@@ -406,6 +410,11 @@ public:
     bool        systemMessageFilter(
                     void * object, void * arg1, void * arg2, void * arg3 );
 
+    void        updatePreventIdleSleepList(
+                    IOService * service, bool addNotRemove );
+    void        updatePreventSystemSleepList(
+                    IOService * service, bool addNotRemove );
+
     void        publishPMSetting(
                     const OSSymbol * feature, uint32_t where, uint32_t * featureID );
 
@@ -429,6 +438,23 @@ public:
                                 int                 messageType,
                                 uint32_t			delay_ms,
                                 int     			app_pid);
+
+
+/*! @function   suspendPMNotificationsForPID
+    @abstract   kernel process management calls this to disable sleep/wake notifications
+                when a process is suspended.
+    @param      pid the process ID
+    @param      doSuspend true suspends the notifications; false enables them
+*/
+    void        suspendPMNotificationsForPID( uint32_t pid, bool doSuspend);
+
+/*! @function   pmNotificationIsSuspended
+    @abstract   returns true if PM notifications have been suspended
+    @param      pid the process ID
+    @result     true if the process has been suspended
+*/
+    bool        pmNotificationIsSuspended( uint32_t pid );
+
 
 #if HIBERNATION
     bool        getHibernateSettings(
@@ -463,7 +489,6 @@ private:
                                     IONotifier * notifier);
 
     IOService *             wrangler;
-    IOService *             wranglerConnection;
 
     IOLock                  *featuresDictLock;  // guards supportedFeatures
     IOPMPowerStateQueue     *pmPowerStateQueue;
@@ -492,7 +517,6 @@ private:
     OSArray                 *pmStatsAppResponses;
 
     bool                    uuidPublished;
-    PMStatsStruct           pmStats;
 
     // Pref: idle time before idle sleep
     unsigned long           sleepSlider;		
@@ -554,12 +578,12 @@ private:
 
     unsigned int            idleSleepTimerPending   :1;
     unsigned int            userDisabledAllSleep    :1;
-    unsigned int            childPreventSystemSleep :1;
     unsigned int            ignoreTellChangeDown    :1;
     unsigned int            wranglerAsleep          :1;
     unsigned int            wranglerTickled         :1;
     unsigned int            wranglerSleepIgnored    :1;
     unsigned int            graphicsSuppressed      :1;
+    unsigned int            darkWakeThermalAlarm    :1;
 
     unsigned int            capabilityLoss          :1;
     unsigned int            pciCantSleepFlag        :1;
@@ -573,6 +597,7 @@ private:
     unsigned int            darkWakePostTickle      :1;
     unsigned int            sleepTimerMaintenance   :1;
     unsigned int            lowBatteryCondition     :1;
+    unsigned int            darkWakeThermalEmergency:1;
     unsigned int            hibernateDisabled       :1;
     unsigned int            hibernateNoDefeat       :1;
     unsigned int            rejectWranglerTickle    :1;
@@ -606,10 +631,24 @@ private:
     IONotifier *            systemCapabilityNotifier;
 
     IOPMTimeline            *timeline;
+    
+    typedef struct {
+        uint32_t            pid;
+        uint32_t            refcount;
+    } PMNotifySuspendedStruct;
+    
+    uint32_t                pmSuspendedCapacity;    
+    uint32_t                pmSuspendedSize;
+    PMNotifySuspendedStruct *pmSuspendedPIDS;
 
-    IOPMSystemSleepPolicyHandler    _sleepPolicyHandler;
-    void *                          _sleepPolicyTarget;
-    IOPMSystemSleepPolicyVariables *_sleepPolicyVars;
+    OSSet *                 preventIdleSleepList;
+    OSSet *                 preventSystemSleepList;
+
+#if HIBERNATION
+    clock_sec_t             _standbyTimerResetSeconds;
+#endif
+
+    int         findSuspendedPID(uint32_t pid, uint32_t *outRefCount);
 
 	// IOPMrootDomain internal sleep call
     IOReturn    privateSleepSystem( uint32_t sleepReason );
@@ -665,7 +704,7 @@ private:
 
 #if HIBERNATION
     bool        getSleepOption( const char * key, uint32_t * option );
-    bool        evaluateSystemSleepPolicy( IOPMSystemSleepParameters * p, int phase );
+    bool        evaluateSystemSleepPolicy( IOPMSystemSleepParameters * p, int sleepPhase );
     void        evaluateSystemSleepPolicyEarly( void );
     void        evaluateSystemSleepPolicyFinal( void );
 #endif /* HIBERNATION */

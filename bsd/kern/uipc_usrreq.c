@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2010 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2012 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -95,6 +95,8 @@
 #if CONFIG_MACF
 #include <security/mac_framework.h>
 #endif /* CONFIG_MACF */
+
+#include <mach/vm_param.h>
 
 #define	f_msgcount f_fglob->fg_msgcount
 #define	f_cred f_fglob->fg_cred
@@ -699,6 +701,18 @@ uipc_ctloutput(struct socket *so, struct sockopt *sopt)
 					error = EINVAL;
 			}
 			break;
+		case LOCAL_PEERPID:
+			if (unp->unp_conn != NULL) {
+				if (unp->unp_conn->unp_socket != NULL) {
+					pid_t peerpid = unp->unp_conn->unp_socket->last_pid;
+					error = sooptcopyout(sopt, &peerpid, sizeof (peerpid));
+				} else {
+					panic("peer is connected but has no socket?");
+				}
+			} else {
+				error = ENOTCONN;
+			}
+			break;
 		default:
 			error = EOPNOTSUPP;
 			break;
@@ -821,6 +835,8 @@ unp_detach(struct unpcb *unp)
 
 	lck_rw_lock_exclusive(unp_list_mtx);
 	LIST_REMOVE(unp, unp_link);
+	--unp_count; 
+	++unp_gencnt;
 	lck_rw_done(unp_list_mtx);
 	if (unp->unp_vnode) {
 		struct vnode *tvp = NULL;
@@ -1122,8 +1138,16 @@ unp_connect(struct socket *so, struct sockaddr *nam, __unused proc_t p)
 		if ((so2->so_options & SO_ACCEPTCONN) == 0 ||
 		    (so3 = sonewconn(so2, 0, nam)) == 0) {
 			error = ECONNREFUSED;
-			socket_unlock(so2, 1);
-			socket_lock(so, 0);
+			if (so != so2) {
+				socket_unlock(so2, 1);
+				socket_lock(so, 0);
+			} else {
+				socket_lock(so, 0);
+				/* Release the reference held for
+				 * listen socket.
+				 */
+				so2->so_usecount--;
+			}
 			goto out;
 		}
 		unp2 = sotounpcb(so2);
@@ -1455,31 +1479,37 @@ static void
 unpcb_to_compat(struct unpcb *up, struct unpcb_compat *cp)
 {
 #if defined(__LP64__)
-	cp->unp_link.le_next = (u_int32_t)(uintptr_t)up->unp_link.le_next;
-	cp->unp_link.le_prev = (u_int32_t)(uintptr_t)up->unp_link.le_prev;
+	cp->unp_link.le_next = (u_int32_t)
+	    VM_KERNEL_ADDRPERM(up->unp_link.le_next);
+	cp->unp_link.le_prev = (u_int32_t)
+	    VM_KERNEL_ADDRPERM(up->unp_link.le_prev);
 #else
-	cp->unp_link.le_next = (struct unpcb_compat *)up->unp_link.le_next;
-	cp->unp_link.le_prev = (struct unpcb_compat **)up->unp_link.le_prev;
+	cp->unp_link.le_next = (struct unpcb_compat *)
+	    VM_KERNEL_ADDRPERM(up->unp_link.le_next);
+	cp->unp_link.le_prev = (struct unpcb_compat **)
+	    VM_KERNEL_ADDRPERM(up->unp_link.le_prev);
 #endif
-	cp->unp_socket = (_UNPCB_PTR(struct socket *))(uintptr_t)up->unp_socket;
-	cp->unp_vnode = (_UNPCB_PTR(struct vnode *))(uintptr_t)up->unp_vnode;
+	cp->unp_socket = (_UNPCB_PTR(struct socket *))
+	    VM_KERNEL_ADDRPERM(up->unp_socket);
+	cp->unp_vnode = (_UNPCB_PTR(struct vnode *))
+	    VM_KERNEL_ADDRPERM(up->unp_vnode);
 	cp->unp_ino = up->unp_ino;
 	cp->unp_conn = (_UNPCB_PTR(struct unpcb_compat *))
-	    (uintptr_t)up->unp_conn;
-	cp->unp_refs = (u_int32_t)(uintptr_t)up->unp_refs.lh_first;
+	    VM_KERNEL_ADDRPERM(up->unp_conn);
+	cp->unp_refs = (u_int32_t)VM_KERNEL_ADDRPERM(up->unp_refs.lh_first);
 #if defined(__LP64__)
 	cp->unp_reflink.le_next =
-	    (u_int32_t)(uintptr_t)up->unp_reflink.le_next;
+	    (u_int32_t)VM_KERNEL_ADDRPERM(up->unp_reflink.le_next);
 	cp->unp_reflink.le_prev =
-	    (u_int32_t)(uintptr_t)up->unp_reflink.le_prev;
+	    (u_int32_t)VM_KERNEL_ADDRPERM(up->unp_reflink.le_prev);
 #else
 	cp->unp_reflink.le_next =
-	    (struct unpcb_compat *)up->unp_reflink.le_next;
+	    (struct unpcb_compat *)VM_KERNEL_ADDRPERM(up->unp_reflink.le_next);
 	cp->unp_reflink.le_prev =
-	    (struct unpcb_compat **)up->unp_reflink.le_prev;
+	    (struct unpcb_compat **)VM_KERNEL_ADDRPERM(up->unp_reflink.le_prev);
 #endif
 	cp->unp_addr = (_UNPCB_PTR(struct sockaddr_un *))
-	    (uintptr_t)up->unp_addr;
+	    VM_KERNEL_ADDRPERM(up->unp_addr);
 	cp->unp_cc = up->unp_cc;
 	cp->unp_mbcnt = up->unp_mbcnt;
 	cp->unp_gencnt = up->unp_gencnt;
@@ -1563,7 +1593,7 @@ unp_pcblist SYSCTL_HANDLER_ARGS
 			bzero(&xu, sizeof (xu));
 			xu.xu_len = sizeof (xu);
 			xu.xu_unpp = (_UNPCB_PTR(struct unpcb_compat *))
-			    (uintptr_t)unp;
+			    VM_KERNEL_ADDRPERM(unp);
 			/*
 			 * XXX - need more locking here to protect against
 			 * connect/disconnect races for SMP.
@@ -1687,20 +1717,24 @@ unp_pcblist64 SYSCTL_HANDLER_ARGS
 
 			bzero(&xu, xu_len);
 			xu.xu_len = xu_len;
-			xu.xu_unpp = (u_int64_t)(uintptr_t)unp;
-                        xu.xunp_link.le_next =
-                                (u_int64_t)(uintptr_t)unp->unp_link.le_next;
-                        xu.xunp_link.le_prev =
-                                (u_int64_t)(uintptr_t)unp->unp_link.le_prev;
-			xu.xunp_socket = (u_int64_t)(uintptr_t)unp->unp_socket;
-			xu.xunp_vnode = (u_int64_t)(uintptr_t)unp->unp_vnode;
+			xu.xu_unpp = (u_int64_t)VM_KERNEL_ADDRPERM(unp);
+			xu.xunp_link.le_next = (u_int64_t)
+			    VM_KERNEL_ADDRPERM(unp->unp_link.le_next);
+			xu.xunp_link.le_prev = (u_int64_t)
+			    VM_KERNEL_ADDRPERM(unp->unp_link.le_prev);
+			xu.xunp_socket = (u_int64_t)
+			    VM_KERNEL_ADDRPERM(unp->unp_socket);
+			xu.xunp_vnode = (u_int64_t)
+			    VM_KERNEL_ADDRPERM(unp->unp_vnode);
 			xu.xunp_ino = unp->unp_ino;
-			xu.xunp_conn = (u_int64_t)(uintptr_t)unp->unp_conn;
-		        xu.xunp_refs = (u_int64_t)(uintptr_t)unp->unp_refs.lh_first;
-			xu.xunp_reflink.le_next = 
-				(u_int64_t)(uintptr_t)unp->unp_reflink.le_next;
-                        xu.xunp_reflink.le_prev = 
-                                (u_int64_t)(uintptr_t)unp->unp_reflink.le_prev;
+			xu.xunp_conn = (u_int64_t)
+			    VM_KERNEL_ADDRPERM(unp->unp_conn);
+			xu.xunp_refs = (u_int64_t)
+			    VM_KERNEL_ADDRPERM(unp->unp_refs.lh_first);
+			xu.xunp_reflink.le_next = (u_int64_t)
+			    VM_KERNEL_ADDRPERM(unp->unp_reflink.le_next);
+			xu.xunp_reflink.le_prev = (u_int64_t)
+			    VM_KERNEL_ADDRPERM(unp->unp_reflink.le_prev);
 			xu.xunp_cc = unp->unp_cc;
 			xu.xunp_mbcnt = unp->unp_mbcnt;
 			xu.xunp_gencnt = unp->unp_gencnt;
@@ -2327,9 +2361,8 @@ unp_unlock(struct socket *so, int refcount, void * lr)
 		
 		lck_mtx_unlock(mutex_held);
 
-		unp->unp_gencnt = ++unp_gencnt;
+		lck_mtx_destroy(&unp->unp_mtx, unp_mtx_grp);
 		zfree(unp_zone, unp);
-		--unp_count;
 
 		unp_gc();
 	} else {

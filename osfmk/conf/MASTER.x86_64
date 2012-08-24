@@ -9,12 +9,12 @@
 #  Standard Apple MacOS X Configurations:
 #  -------- ---- -------- ---------------
 #
-#  RELEASE = [ medium intel pc iokit mach_pe mach mach_kdp config_serial_kdp event vol hd pst gdb fixpri simple_clock mkernserv uxpr kernstack ipc_compat ipc_debug fb mk30 mk30_i386 hibernation config_sleep crypto config_dtrace config_mca config_vmx config_mtrr config_lapic config_counters zleaks config_sched_traditional config_sched_proto config_sched_grrr config_sched_fixedpriority mach_pagemap config_sched_idle_in_place ]
-#  DEBUG = [ RELEASE osf_debug debug mach_assert ]
+#  RELEASE = [ medium intel pc iokit mach_pe mach mach_kdp config_serial_kdp event vol hd pst gdb fixpri simple_clock mkernserv uxpr kernstack ipc_compat ipc_debug fb mk30 mk30_i386 hibernation config_sleep crypto config_dtrace config_mca config_vmx config_mtrr config_lapic config_counters zleaks config_gzalloc config_sched_traditional config_sched_proto config_sched_grrr config_sched_fixedpriority mach_pagemap vm_pressure_events config_sched_idle_in_place kperf memorystatus config_kext_basement ]
+#  DEBUG = [ RELEASE osf_debug debug mach_assert task_zone_info ]
 #
 #  EMBEDDED_BASE = [ bsmall intel pc iokit mach_pe mach mach_kdp config_serial_kdp event vol hd pst gdb fixpri simple_clock mkernserv uxpr kernstack ipc_compat ipc_debug fb mk30 mk30_i386 hibernation config_sleep crypto ]
 #  EMBEDDED = [ EMBEDDED_BASE no_printf_str no_kprintf_str no_kdebug ]
-#  DEVELOPMENT = [ EMBEDDED_BASE mach_assert config_counters ]
+#  DEVELOPMENT = [ EMBEDDED_BASE mach_assert config_counters task_zone_info ]
 #
 ######################################################################
 #
@@ -51,6 +51,7 @@ options         MACH_PE		#				# <mach_pe>
 
 options		MACH_KDP	# KDP				# <mach_kdp>
 options		CONFIG_SERIAL_KDP	# KDP over serial				# <config_serial_kdp>
+# options         KPERF		#				# <kperf>
 options		PAE
 options		X86_64
 options		DISPATCH_COUNTS

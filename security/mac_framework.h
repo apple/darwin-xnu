@@ -116,6 +116,7 @@ struct thread;
 struct timespec;
 struct ucred;
 struct uio;
+struct uthread;
 struct vfs_attr;
 struct vfs_context;
 struct vnode;
@@ -168,6 +169,7 @@ void	mac_cred_label_destroy(kauth_cred_t cred);
 int	mac_cred_label_externalize_audit(proc_t p, struct mac *mac);
 void	mac_cred_label_free(struct label *label);
 void	mac_cred_label_init(kauth_cred_t cred);
+int	mac_cred_label_compare(struct label *a, struct label *b);
 void	mac_cred_label_update(kauth_cred_t cred, struct label *newlabel);
 int	mac_cred_label_update_execve(vfs_context_t ctx, kauth_cred_t newcred,
 	    struct vnode *vp, struct label *scriptvnodelabel,
@@ -310,7 +312,8 @@ void	mac_posixsem_label_init(struct pseminfo *psem);
 int	mac_posixshm_check_create(kauth_cred_t cred, const char *name);
 int	mac_posixshm_check_mmap(kauth_cred_t cred, struct pshminfo *pshm,
 	    int prot, int flags);
-int	mac_posixshm_check_open(kauth_cred_t cred, struct pshminfo *pshm);
+int	mac_posixshm_check_open(kauth_cred_t cred, struct pshminfo *pshm,
+	    int fflags);
 int	mac_posixshm_check_stat(kauth_cred_t cred, struct pshminfo *pshm);
 int	mac_posixshm_check_truncate(kauth_cred_t cred, struct pshminfo *pshm,
 	    off_t s);
@@ -334,6 +337,7 @@ int	mac_proc_check_getaudit(proc_t proc);
 int	mac_proc_check_getauid(proc_t proc);
 int     mac_proc_check_getlcid(proc_t proc1, proc_t proc2,
 	    pid_t pid);
+int     mac_proc_check_ledger(proc_t curp, proc_t target, int op);
 int	mac_proc_check_map_anon(proc_t proc, user_addr_t u_addr,
 	    user_size_t u_size, int prot, int flags, int *maxprot);
 int	mac_proc_check_mprotect(proc_t proc,
@@ -401,6 +405,7 @@ int	mac_system_check_swapon(kauth_cred_t cred, struct vnode *vp);
 int	mac_system_check_sysctl(kauth_cred_t cred, int *name,
 	    u_int namelen, user_addr_t oldctl, user_addr_t oldlenp, int inkernel,
 	    user_addr_t newctl, size_t newlen);
+int	mac_system_check_kas_info(kauth_cred_t cred, int selector);
 void	mac_sysvmsg_label_associate(kauth_cred_t cred,
 	    struct msqid_kernel *msqptr, struct msg *msgptr);
 void	mac_sysvmsg_label_init(struct msg *msgptr);
@@ -445,6 +450,10 @@ void	mac_sysvshm_label_associate(kauth_cred_t cred,
 void	mac_sysvshm_label_destroy(struct shmid_kernel *shmsegptr);
 void	mac_sysvshm_label_init(struct shmid_kernel* shmsegptr);
 void	mac_sysvshm_label_recycle(struct shmid_kernel *shmsegptr);
+struct label * mac_thread_label_alloc(void);
+void	mac_thread_label_destroy(struct uthread *uthread);
+void	mac_thread_label_free(struct label *label);
+void	mac_thread_label_init(struct uthread *uthread);
 int	mac_vnode_check_access(vfs_context_t ctx, struct vnode *vp,
 	    int acc_mode);
 int	mac_vnode_check_chdir(vfs_context_t ctx, struct vnode *dvp);

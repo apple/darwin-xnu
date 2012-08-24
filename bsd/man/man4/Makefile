@@ -14,7 +14,6 @@ DATAFILES = \
 	bpf.4	\
 	divert.4	\
         dummynet.4 \
-	faith.4	\
 	fd.4	\
 	gif.4	\
 	icmp.4	\

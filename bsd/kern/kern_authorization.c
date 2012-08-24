@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2004-2007 Apple Inc. All rights reserved.
+ * Copyright (c) 2004-2011 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -154,11 +154,14 @@ kauth_init(void)
 
 	/* bring up kauth subsystem components */
 	kauth_cred_init();
+#if CONFIG_EXT_RESOLVER
 	kauth_identity_init();
 	kauth_groups_init();
+#endif
 	kauth_scope_init();
+#if CONFIG_EXT_RESOLVER
 	kauth_resolver_init();
-
+#endif
 	/* can't alloc locks after this */
 	lck_grp_free(kauth_lck_grp);
 	kauth_lck_grp = NULL;

@@ -1533,7 +1533,13 @@ __user_syms_provide_module(void *arg, struct modctl *ctl)
 	dtrace_module_symbols_t* module_symbols = ctl->mod_user_symbols;
 	if (module_symbols) {
 		for (i=0; i<module_symbols->dtmodsyms_count; i++) {
+
+		        /* 
+			 * symbol->dtsym_addr (the symbol address) passed in from
+			 * user space, is already slid for both kexts and kernel.
+			 */
 			dtrace_symbol_t* symbol = &module_symbols->dtmodsyms_symbols[i];
+
 			char* name = symbol->dtsym_name;
 			
 			/* Lop off omnipresent leading underscore. */			
@@ -1543,8 +1549,8 @@ __user_syms_provide_module(void *arg, struct modctl *ctl)
 			/*
 			 * We're only blacklisting functions in the kernel for now.
 			 */
-			if (MOD_IS_MACH_KERNEL(ctl) && !is_symbol_valid(name))
-				continue;
+                        if (MOD_IS_MACH_KERNEL(ctl) && !is_symbol_valid(name))
+			        continue;
 			
 			__provide_probe_64(ctl, (uintptr_t)symbol->dtsym_addr, (uintptr_t)(symbol->dtsym_addr + symbol->dtsym_size), modname, name, (machine_inst_t*)(uintptr_t)symbol->dtsym_addr);
 		}

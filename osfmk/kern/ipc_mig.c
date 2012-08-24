@@ -277,7 +277,7 @@ mach_msg_rpc_from_kernel_body(
 	kmsg->ikm_header->msgh_bits |=
 		MACH_MSGH_BITS(0, MACH_MSG_TYPE_MAKE_SEND_ONCE);
 
-	ipc_port_reference(reply);
+	ip_reference(reply);
 
 #if IKM_SUPPORT_LEGACY
     if(legacy)
@@ -303,12 +303,12 @@ mach_msg_rpc_from_kernel_body(
 		ip_lock(reply);
 		if ( !ip_active(reply)) {
 			ip_unlock(reply);
-			ipc_port_release(reply);
+			ip_release(reply);
 			return MACH_RCV_PORT_DIED;
 		}
 		if (!self->active) {
 			ip_unlock(reply);
-			ipc_port_release(reply);
+			ip_release(reply);
 			return MACH_RCV_INTERRUPTED;
 		}
 
@@ -336,11 +336,11 @@ mach_msg_rpc_from_kernel_body(
 		assert(mr == MACH_RCV_INTERRUPTED);
 
 		if (self->handlers) {
-			ipc_port_release(reply);
+			ip_release(reply);
 			return(mr);
 		}
 	}
-	ipc_port_release(reply);
+	ip_release(reply);
 
 	/* 
 	 * Check to see how much of the message/trailer can be received.
@@ -419,7 +419,7 @@ mach_msg_overwrite(
 	ipc_kmsg_t kmsg;
 	mach_port_seqno_t seqno;
 	mach_msg_return_t mr;
-	mach_msg_max_trailer_t *trailer;
+	mach_msg_trailer_size_t trailer_size;
 
 	if (option & MACH_SEND_MSG) {
 		mach_msg_size_t	msg_and_trailer_size;
@@ -489,22 +489,17 @@ mach_msg_overwrite(
 			kmsg = self->ith_kmsg;
 			seqno = self->ith_seqno;
 
-			ipc_object_release(object);
+			io_release(object);
 
 		} while (mr == MACH_RCV_INTERRUPTED);
 		if (mr != MACH_MSG_SUCCESS)
 			return mr;
 
-		trailer = (mach_msg_max_trailer_t *) 
-		    ((vm_offset_t)kmsg->ikm_header + kmsg->ikm_header->msgh_size);
-		if (option & MACH_RCV_TRAILER_MASK) {
-			trailer->msgh_seqno = seqno;
-			trailer->msgh_context = 
-				kmsg->ikm_header->msgh_remote_port->ip_context;
-			trailer->msgh_trailer_size = REQUESTED_TRAILER_SIZE(option);
-		}
 
-		if (rcv_size < (kmsg->ikm_header->msgh_size + trailer->msgh_trailer_size)) {
+		trailer_size = ipc_kmsg_add_trailer(kmsg, space, option, current_thread(), seqno, TRUE,
+				kmsg->ikm_header->msgh_remote_port->ip_context);
+
+		if (rcv_size < (kmsg->ikm_header->msgh_size + trailer_size)) {
 			ipc_kmsg_copyout_dest(kmsg, space);
 			(void) memcpy((void *) msg, (const void *) kmsg->ikm_header, sizeof *msg);
 			ipc_kmsg_free(kmsg);
@@ -515,7 +510,7 @@ mach_msg_overwrite(
 		if (mr != MACH_MSG_SUCCESS) {
 			if ((mr &~ MACH_MSG_MASK) == MACH_RCV_BODY_ERROR) {
 				ipc_kmsg_put_to_kernel(msg, kmsg,
-						kmsg->ikm_header->msgh_size + trailer->msgh_trailer_size);
+						kmsg->ikm_header->msgh_size + trailer_size);
 			} else {
 				ipc_kmsg_copyout_dest(kmsg, space);
 				(void) memcpy((void *) msg, (const void *) kmsg->ikm_header, sizeof *msg);
@@ -526,7 +521,7 @@ mach_msg_overwrite(
 		}
 
 		(void) memcpy((void *) msg, (const void *) kmsg->ikm_header,
-			      kmsg->ikm_header->msgh_size + trailer->msgh_trailer_size);
+			      kmsg->ikm_header->msgh_size + trailer_size);
 		ipc_kmsg_free(kmsg);
 	}
 

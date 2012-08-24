@@ -1,5 +1,5 @@
 /*-
- * Copyright (c) 2008 Apple Inc.
+ * Copyright (c) 2008-2011 Apple Inc.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -163,6 +163,7 @@
 #define	BSM_ERRNO_EALREADY		149
 #define	BSM_ERRNO_EINPROGRESS		150
 #define	BSM_ERRNO_ESTALE		151
+#define	BSM_ERRNO_EQFULL		152
 
 /*
  * OpenBSM constants for error numbers not defined in Solaris.  In the event

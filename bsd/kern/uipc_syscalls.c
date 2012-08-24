@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2010 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2011 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -199,12 +199,7 @@ socket(struct proc *p, struct socket_args *uap, int32_t *retval)
 		ut = get_bsdthread_info(thread);
 			
 		/* if this is a backgrounded thread then throttle all new sockets */
-#if !CONFIG_EMBEDDED
-		if (proc_get_selfthread_isbackground() != 0)
-#else /* !CONFIG_EMBEDDED */
-		if ( (ut->uu_flag & UT_BACKGROUND) != 0 ) 
-#endif /* !CONFIG_EMBEDDED */
-		{
+		if (proc_get_selfthread_isbackground() != 0) {
 			so->so_traffic_mgt_flags |= TRAFFIC_MGT_SO_BACKGROUND;
 			so->so_background_thread = thread;
 		}
@@ -475,17 +470,17 @@ accept_nocancel(struct proc *p, struct accept_nocancel_args *uap,
 	fflag = fp->f_flag;
 	error = falloc(p, &fp, &newfd, vfs_context_current());
 	if (error) {
-		/*
-		 * Probably ran out of file descriptors. Put the
-		 * unaccepted connection back onto the queue and
-		 * do another wakeup so some other process might
-		 * have a chance at it.
+		/* 
+		 * Probably ran out of file descriptors.
+		 *
+		 * <rdar://problem/8554930>
+		 * Don't put this back on the socket like we used to, that
+		 * just causes the client to spin. Drop the socket.
 		 */
-		socket_lock(head, 0);
-		TAILQ_INSERT_HEAD(&head->so_comp, so, so_list);
-		head->so_qlen++;
-		wakeup_one((caddr_t)&head->so_timeo);
-		socket_unlock(head, 1);
+		so->so_state &= ~(SS_NOFDREF | SS_COMP);
+		so->so_head = NULL;
+		soclose(so);
+		sodereference(head);
 		goto out;
 	}
 	*retval = newfd;
@@ -864,9 +859,10 @@ sendit(struct proc *p, int s, struct user_msghdr *mp, uio_t uiop,
 	/*
 	 * We check the state without holding the socket lock;
 	 * if a race condition occurs, it would simply result
-	 * in an extra call to the MAC check function.
+	 * in an extra call to the MAC check function. 
 	 */
-	if (!(so->so_state & SS_ISCONNECTED) &&
+	if ( to != NULL &&
+	    !(so->so_state & SS_DEFUNCT) &&
 	    (error = mac_socket_check_send(kauth_cred_get(), so, to)) != 0)
 		goto bad;
 #endif /* MAC_SOCKET_SUBSET */
@@ -1149,7 +1145,8 @@ recvit(struct proc *p, int s, struct user_msghdr *mp, uio_t uiop,
 	 * if a race condition occurs, it would simply result
 	 * in an extra call to the MAC check function.
 	 */
-	if (!(so->so_state & SS_ISCONNECTED) &&
+	if (!(so->so_state & SS_DEFUNCT) &&
+	    !(so->so_state & SS_ISCONNECTED) &&
 	    (error = mac_socket_check_receive(kauth_cred_get(), so)) != 0)
 		goto out1;
 #endif /* MAC_SOCKET_SUBSET */
@@ -1220,15 +1217,15 @@ recvit(struct proc *p, int s, struct user_msghdr *mp, uio_t uiop,
 				 */
 				if (cp->cmsg_level == SOL_SOCKET &&  cp->cmsg_type == SCM_TIMESTAMP) {
 					unsigned char tmp_buffer[CMSG_SPACE(sizeof(struct user64_timeval))];
-					struct cmsghdr *tmp_cp = (struct cmsghdr *)tmp_buffer;
+					struct cmsghdr *tmp_cp = (struct cmsghdr *)(void *)tmp_buffer;
 					int tmp_space;
-					struct timeval *tv = (struct timeval *)CMSG_DATA(cp);
+					struct timeval *tv = (struct timeval *)(void *)CMSG_DATA(cp);
 					
 					tmp_cp->cmsg_level = SOL_SOCKET;
 					tmp_cp->cmsg_type = SCM_TIMESTAMP;
 					
 					if (proc_is64bit(p)) {
-						struct user64_timeval *tv64 = (struct user64_timeval *)CMSG_DATA(tmp_cp);
+						struct user64_timeval *tv64 = (struct user64_timeval *)(void *)CMSG_DATA(tmp_cp);
 						
 						tv64->tv_sec = tv->tv_sec;
 						tv64->tv_usec = tv->tv_usec;
@@ -1236,7 +1233,7 @@ recvit(struct proc *p, int s, struct user_msghdr *mp, uio_t uiop,
 						tmp_cp->cmsg_len = CMSG_LEN(sizeof(struct user64_timeval));
 						tmp_space = CMSG_SPACE(sizeof(struct user64_timeval));
 					} else {
-						struct user32_timeval *tv32 = (struct user32_timeval *)CMSG_DATA(tmp_cp);
+						struct user32_timeval *tv32 = (struct user32_timeval *)(void *)CMSG_DATA(tmp_cp);
 						
 						tv32->tv_sec = tv->tv_sec;
 						tv32->tv_usec = tv->tv_usec;
@@ -1278,7 +1275,7 @@ recvit(struct proc *p, int s, struct user_msghdr *mp, uio_t uiop,
 				len -= tocopy;
 				
 				buflen -= cp_size;
-				cp = (struct cmsghdr *) ((unsigned char *) cp + cp_size);
+				cp = (struct cmsghdr *)(void *)((unsigned char *) cp + cp_size);
 				cp_size = CMSG_ALIGN(cp->cmsg_len);
 			}
 			
@@ -2073,7 +2070,13 @@ sendfile(struct proc *p, struct sendfile_args *uap, __unused int *retval)
 	size_t sizeof_hdtr;
 	off_t file_size;
 	struct vfs_context context = *vfs_context_current();
-
+#define ENXIO_10146739_DBG(err_str) {	\
+	if (error == ENXIO) {		\
+		printf(err_str,		\
+		__func__,		\
+		"File a radar related to rdar://10146739 \n");	\
+	}				\
+}
 	KERNEL_DEBUG_CONSTANT((DBG_FNC_SENDFILE | DBG_FUNC_START), uap->s,
 	    0, 0, 0, 0);
 
@@ -2085,6 +2088,7 @@ sendfile(struct proc *p, struct sendfile_args *uap, __unused int *retval)
 	 * type and connected socket out, positive offset.
 	 */
 	if ((error = fp_getfvp(p, uap->fd, &fp, &vp))) {
+		ENXIO_10146739_DBG("%s: fp_getfvp error. %s"); 
 		goto done;
 	}
 	if ((fp->f_flag & FREAD) == 0) {
@@ -2097,6 +2101,7 @@ sendfile(struct proc *p, struct sendfile_args *uap, __unused int *retval)
 	}
 	error = file_socket(uap->s, &so);
 	if (error) {
+		ENXIO_10146739_DBG("%s: file_socket error. %s");
 		goto done1;
 	}
 	if (so == NULL) {
@@ -2179,8 +2184,10 @@ sendfile(struct proc *p, struct sendfile_args *uap, __unused int *retval)
 			nuap.iovp = user_hdtr.headers;
 			nuap.iovcnt = user_hdtr.hdr_cnt;
 			error = writev_nocancel(p, &nuap, &writev_retval);
-			if (error)
+			if (error) {
+				ENXIO_10146739_DBG("%s: writev_nocancel error. %s");
 				goto done2;
+			}
 			sbytes += writev_retval;
 		}
 	}
@@ -2190,8 +2197,10 @@ sendfile(struct proc *p, struct sendfile_args *uap, __unused int *retval)
 	 *  1. We don't want to allocate more mbufs than necessary
 	 *  2. We don't want to read past the end of file
 	 */
-	if ((error = vnode_size(vp, &file_size, vfs_context_current())) != 0)
+	if ((error = vnode_size(vp, &file_size, vfs_context_current())) != 0) {
+		ENXIO_10146739_DBG("%s: vnode_size error. %s");
 		goto done2;
+	}
 
 	/*
 	 * Simply read file data into a chain of mbufs that used with scatter
@@ -2264,11 +2273,12 @@ sendfile(struct proc *p, struct sendfile_args *uap, __unused int *retval)
 		pktlen = mbuf_pkt_maxlen(m0);
 		if (pktlen < (size_t)xfsize)
 			xfsize = pktlen;
-
+		
 		auio = uio_createwithbuffer(nbufs, off, UIO_SYSSPACE,
 		    UIO_READ, &uio_buf[0], sizeof (uio_buf));
 		if (auio == NULL) {
-			//printf("sendfile: uio_createwithbuffer failed\n");
+			printf("sendfile failed. nbufs = %d. %s", nbufs,
+				"File a radar related to rdar://10146739.\n");
 			mbuf_freem(m0);
 			error = ENXIO;
 			socket_lock(so, 0);
@@ -2302,6 +2312,7 @@ sendfile(struct proc *p, struct sendfile_args *uap, __unused int *retval)
 			    error == EINTR || error == EWOULDBLOCK)) {
 				error = 0;
 			} else {
+				ENXIO_10146739_DBG("%s: fo_read error. %s");
 				mbuf_freem(m0);
 				goto done3;
 			}
@@ -2351,6 +2362,7 @@ retry_space:
 				so->so_error = 0;
 			}
 			m_freem(m0);
+			ENXIO_10146739_DBG("%s: Unexpected socket error. %s");
 			goto done3;
 		}
 		/*
@@ -2393,6 +2405,7 @@ retry_space:
 					error = 0;
 					continue;
 				}
+				ENXIO_10146739_DBG("%s: sflt_data_out error. %s");
 				goto done3;
 			}
 			/*
@@ -2406,6 +2419,7 @@ retry_space:
 		KERNEL_DEBUG_CONSTANT((DBG_FNC_SENDFILE_SEND | DBG_FUNC_START),
 		    uap->s, 0, 0, 0, 0);
 		if (error) {
+			ENXIO_10146739_DBG("%s: pru_send error. %s");
 			goto done3;
 		}
 	}
@@ -2420,8 +2434,10 @@ retry_space:
 		nuap.iovp = user_hdtr.trailers;
 		nuap.iovcnt = user_hdtr.trl_cnt;
 		error = writev_nocancel(p, &nuap, &writev_retval);
-		if (error)
+		if (error) {
+			ENXIO_10146739_DBG("%s: writev_nocancel error. %s");
 			goto done2;
+		}
 		sbytes += writev_retval;
 	}
 done2:

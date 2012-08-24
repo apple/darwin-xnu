@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2010 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2011 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -127,10 +127,10 @@
 #define COMPAT_ONLY
 
 
-#ifndef __LP64__
+#if CONFIG_VFS_FUNNEL
 #define THREAD_SAFE_FS(VP)  \
 	((VP)->v_unsafefs ? 0 : 1)
-#endif /* __LP64__ */
+#endif /* CONFIG_VFS_FUNNEL */
 
 #define NATIVE_XATTR(VP)  \
 	((VP)->v_mount ? (VP)->v_mount->mnt_kern_flag & MNTK_EXTENDED_ATTRS : 0)
@@ -166,7 +166,7 @@ vnode_setneedinactive(vnode_t vp)
 }
 
 
-#ifndef __LP64__
+#if CONFIG_VFS_FUNNEL
 int
 lock_fsnode(vnode_t vp, int *funnel_state)
 {
@@ -206,7 +206,7 @@ unlock_fsnode(vnode_t vp, int *funnel_state)
 	if (funnel_state)
 	        (void) thread_funnel_set(kernel_flock, *funnel_state);
 }
-#endif /* __LP64__ */
+#endif /* CONFIG_VFS_FUNNEL */
 
 
 
@@ -221,21 +221,21 @@ int
 VFS_MOUNT(mount_t mp, vnode_t devvp, user_addr_t data, vfs_context_t ctx)
 {
 	int error;
-#ifndef __LP64__
+#if CONFIG_VFS_FUNNEL
 	int thread_safe;
 	int funnel_state = 0;
-#endif /* __LP64__ */
+#endif /* CONFIG_VFS_FUNNEL */
 
 	if ((mp == dead_mountp) || (mp->mnt_op->vfs_mount == 0))
 		return(ENOTSUP);
 
-#ifndef __LP64__
+#if CONFIG_VFS_FUNNEL
 	thread_safe = (mp->mnt_vtable->vfc_vfsflags & VFC_VFSTHREADSAFE);
 	if (!thread_safe) {
 		funnel_state = thread_funnel_set(kernel_flock, TRUE);
 	}
-#endif /* __LP64__ */
-	
+#endif /* CONFIG_VFS_FUNNEL */
+        
 	if (vfs_context_is64bit(ctx)) {
 		if (vfs_64bitready(mp)) {
 			error = (*mp->mnt_op->vfs_mount)(mp, devvp, data, ctx);
@@ -248,11 +248,11 @@ VFS_MOUNT(mount_t mp, vnode_t devvp, user_addr_t data, vfs_context_t ctx)
 		error = (*mp->mnt_op->vfs_mount)(mp, devvp, data, ctx);
 	}
 	
-#ifndef __LP64__
+#if CONFIG_VFS_FUNNEL
 	if (!thread_safe) {
 		(void) thread_funnel_set(kernel_flock, funnel_state);
 	}
-#endif /* __LP64__ */
+#endif /* CONFIG_VFS_FUNNEL */
 
 	return (error);
 }
@@ -261,29 +261,28 @@ int
 VFS_START(mount_t mp, int flags, vfs_context_t ctx)
 {
 	int error;
-#ifndef __LP64__
+#if CONFIG_VFS_FUNNEL
 	int thread_safe;
 	int funnel_state = 0;
-#endif /* __LP64__ */
+#endif /* CONFIG_VFS_FUNNEL */
 
 	if ((mp == dead_mountp) || (mp->mnt_op->vfs_start == 0))
 		return(ENOTSUP);
 
-#ifndef __LP64__
+#if CONFIG_VFS_FUNNEL
 	thread_safe = (mp->mnt_vtable->vfc_vfsflags & VFC_VFSTHREADSAFE);
-
 	if (!thread_safe) {
 		funnel_state = thread_funnel_set(kernel_flock, TRUE);
 	}
-#endif /* __LP64__ */
+#endif /* CONFIG_VFS_FUNNEL */
 
 	error = (*mp->mnt_op->vfs_start)(mp, flags, ctx);
 
-#ifndef __LP64__
+#if CONFIG_VFS_FUNNEL
 	if (!thread_safe) {
 		(void) thread_funnel_set(kernel_flock, funnel_state);
 	}
-#endif /* __LP64__ */
+#endif /* CONFIG_VFS_FUNNEL */
 
 	return (error);
 }
@@ -292,29 +291,28 @@ int
 VFS_UNMOUNT(mount_t mp, int flags, vfs_context_t ctx)
 {
 	int error;
-#ifndef __LP64__
+#if CONFIG_VFS_FUNNEL
 	int thread_safe;
 	int funnel_state = 0;
-#endif /* __LP64__ */
+#endif /* CONFIG_VFS_FUNNEL */
 
 	if ((mp == dead_mountp) || (mp->mnt_op->vfs_unmount == 0))
 		return(ENOTSUP);
 
-#ifndef __LP64__
+#if CONFIG_VFS_FUNNEL
 	thread_safe = (mp->mnt_vtable->vfc_vfsflags & VFC_VFSTHREADSAFE);
-
 	if (!thread_safe) {
 		funnel_state = thread_funnel_set(kernel_flock, TRUE);
 	}
-#endif /* __LP64__ */
+#endif /* CONFIG_VFS_FUNNEL */
 
 	error = (*mp->mnt_op->vfs_unmount)(mp, flags, ctx);
 
-#ifndef __LP64__
+#if CONFIG_VFS_FUNNEL
 	if (!thread_safe) {
 		(void) thread_funnel_set(kernel_flock, funnel_state);
 	}
-#endif /* __LP64__ */
+#endif /* CONFIG_VFS_FUNNEL */
 
 	return (error);
 }
@@ -340,10 +338,10 @@ int
 VFS_ROOT(mount_t mp, struct vnode  ** vpp, vfs_context_t ctx)
 {
 	int error;
-#ifndef __LP64__
+#if CONFIG_VFS_FUNNEL
 	int thread_safe;
 	int funnel_state = 0;
-#endif /* __LP64__ */
+#endif /* CONFIG_VFS_FUNNEL */
 
 	if ((mp == dead_mountp) || (mp->mnt_op->vfs_root == 0))
 		return(ENOTSUP);
@@ -352,20 +350,20 @@ VFS_ROOT(mount_t mp, struct vnode  ** vpp, vfs_context_t ctx)
 		ctx = vfs_context_current();
 	}
 
-#ifndef __LP64__
+#if CONFIG_VFS_FUNNEL
 	thread_safe = (mp->mnt_vtable->vfc_vfsflags & VFC_VFSTHREADSAFE);
 	if (!thread_safe) {
 		funnel_state = thread_funnel_set(kernel_flock, TRUE);
 	}
-#endif /* __LP64__ */
+#endif /* CONFIG_VFS_FUNNEL */
 
 	error = (*mp->mnt_op->vfs_root)(mp, vpp, ctx);
 
-#ifndef __LP64__
+#if CONFIG_VFS_FUNNEL
 	if (!thread_safe) {
 		(void) thread_funnel_set(kernel_flock, funnel_state);
 	}
-#endif /* __LP64__ */
+#endif /* CONFIG_VFS_FUNNEL */
 
 	return (error);
 }
@@ -374,28 +372,28 @@ int
 VFS_QUOTACTL(mount_t mp, int cmd, uid_t uid, caddr_t datap, vfs_context_t ctx)
 {
 	int error;
-#ifndef __LP64__
+#if CONFIG_VFS_FUNNEL
 	int thread_safe;
 	int funnel_state = 0;
-#endif /* __LP64__ */
+#endif /* CONFIG_VFS_FUNNEL */
 
 	if ((mp == dead_mountp) || (mp->mnt_op->vfs_quotactl == 0))
 		return(ENOTSUP);
 
-#ifndef __LP64__
+#if CONFIG_VFS_FUNNEL
 	thread_safe = (mp->mnt_vtable->vfc_vfsflags & VFC_VFSTHREADSAFE);
 	if (!thread_safe) {
 		funnel_state = thread_funnel_set(kernel_flock, TRUE);
 	}
-#endif /* __LP64__ */
+#endif /* CONFIG_VFS_FUNNEL */
 
 	error = (*mp->mnt_op->vfs_quotactl)(mp, cmd, uid, datap, ctx);
 
-#ifndef __LP64__
+#if CONFIG_VFS_FUNNEL
 	if (!thread_safe) {
 		(void) thread_funnel_set(kernel_flock, funnel_state);
 	}
-#endif /* __LP64__ */
+#endif /* CONFIG_VFS_FUNNEL */
 
 	return (error);
 }
@@ -404,10 +402,10 @@ int
 VFS_GETATTR(mount_t mp, struct vfs_attr *vfa, vfs_context_t ctx)
 {
 	int error;
-#ifndef __LP64__
+#if CONFIG_VFS_FUNNEL
 	int thread_safe;
 	int funnel_state = 0;
-#endif /* __LP64__ */
+#endif /* CONFIG_VFS_FUNNEL */
 
 	if ((mp == dead_mountp) || (mp->mnt_op->vfs_getattr == 0))
 		return(ENOTSUP);
@@ -416,20 +414,20 @@ VFS_GETATTR(mount_t mp, struct vfs_attr *vfa, vfs_context_t ctx)
 		ctx = vfs_context_current();
 	}
 
-#ifndef __LP64__
+#if CONFIG_VFS_FUNNEL
 	thread_safe = (mp->mnt_vtable->vfc_vfsflags & VFC_VFSTHREADSAFE);
 	if (!thread_safe) {
 		funnel_state = thread_funnel_set(kernel_flock, TRUE);
 	}
-#endif /* __LP64__ */
+#endif /* CONFIG_VFS_FUNNEL */
 
 	error = (*mp->mnt_op->vfs_getattr)(mp, vfa, ctx);
 	
-#ifndef __LP64__
+#if CONFIG_VFS_FUNNEL
 	if (!thread_safe) {
 		(void) thread_funnel_set(kernel_flock, funnel_state);
 	}
-#endif /* __LP64__ */
+#endif /* CONFIG_VFS_FUNNEL */
 
 	return(error);
 }
@@ -438,10 +436,10 @@ int
 VFS_SETATTR(mount_t mp, struct vfs_attr *vfa, vfs_context_t ctx)
 {
 	int error;
-#ifndef __LP64__
+#if CONFIG_VFS_FUNNEL
 	int thread_safe;
 	int funnel_state = 0;
-#endif /* __LP64__ */
+#endif /* CONFIG_VFS_FUNNEL */
 
 	if ((mp == dead_mountp) || (mp->mnt_op->vfs_setattr == 0))
 		return(ENOTSUP);
@@ -450,20 +448,20 @@ VFS_SETATTR(mount_t mp, struct vfs_attr *vfa, vfs_context_t ctx)
 		ctx = vfs_context_current();
 	}
 
-#ifndef __LP64__
+#if CONFIG_VFS_FUNNEL
 	thread_safe = (mp->mnt_vtable->vfc_vfsflags & VFC_VFSTHREADSAFE);
 	if (!thread_safe) {
 		funnel_state = thread_funnel_set(kernel_flock, TRUE);
 	}
-#endif /* __LP64__ */
+#endif /* CONFIG_VFS_FUNNEL */
 
 	error = (*mp->mnt_op->vfs_setattr)(mp, vfa, ctx);
 
-#ifndef __LP64__
+#if CONFIG_VFS_FUNNEL
 	if (!thread_safe) {
 		(void) thread_funnel_set(kernel_flock, funnel_state);
 	}
-#endif /* __LP64__ */
+#endif /* CONFIG_VFS_FUNNEL */
 
 	return(error);
 }
@@ -472,10 +470,10 @@ int
 VFS_SYNC(mount_t mp, int flags, vfs_context_t ctx)
 {
 	int error;
-#ifndef __LP64__
+#if CONFIG_VFS_FUNNEL
 	int thread_safe;
 	int funnel_state = 0;
-#endif /* __LP64__ */
+#endif /* CONFIG_VFS_FUNNEL */
 
 	if ((mp == dead_mountp) || (mp->mnt_op->vfs_sync == 0))
 		return(ENOTSUP);
@@ -484,20 +482,20 @@ VFS_SYNC(mount_t mp, int flags, vfs_context_t ctx)
 		ctx = vfs_context_current();
 	}
 
-#ifndef __LP64__
+#if CONFIG_VFS_FUNNEL
 	thread_safe = (mp->mnt_vtable->vfc_vfsflags & VFC_VFSTHREADSAFE);
 	if (!thread_safe) {
 		funnel_state = thread_funnel_set(kernel_flock, TRUE);
 	}
-#endif /* __LP64__ */
+#endif /* CONFIG_VFS_FUNNEL */
 
 	error = (*mp->mnt_op->vfs_sync)(mp, flags, ctx);
 
-#ifndef __LP64__
+#if CONFIG_VFS_FUNNEL
 	if (!thread_safe) {
 		(void) thread_funnel_set(kernel_flock, funnel_state);
 	}
-#endif /* __LP64__ */
+#endif /* CONFIG_VFS_FUNNEL */
 
 	return(error);
 }
@@ -506,10 +504,10 @@ int
 VFS_VGET(mount_t mp, ino64_t ino, struct vnode **vpp, vfs_context_t ctx)
 {
 	int error;
-#ifndef __LP64__
+#if CONFIG_VFS_FUNNEL
 	int thread_safe;
 	int funnel_state = 0;
-#endif /* __LP64__ */
+#endif /* CONFIG_VFS_FUNNEL */
 
 	if ((mp == dead_mountp) || (mp->mnt_op->vfs_vget == 0))
 		return(ENOTSUP);
@@ -518,20 +516,20 @@ VFS_VGET(mount_t mp, ino64_t ino, struct vnode **vpp, vfs_context_t ctx)
 		ctx = vfs_context_current();
 	}
 
-#ifndef __LP64__
+#if CONFIG_VFS_FUNNEL
 	thread_safe = (mp->mnt_vtable->vfc_vfsflags & VFC_VFSTHREADSAFE);
 	if (!thread_safe) {
 		funnel_state = thread_funnel_set(kernel_flock, TRUE);
 	}
-#endif /* __LP64__ */
+#endif /* CONFIG_VFS_FUNNEL */
 
 	error = (*mp->mnt_op->vfs_vget)(mp, ino, vpp, ctx);
 
-#ifndef __LP64__
+#if CONFIG_VFS_FUNNEL
 	if (!thread_safe) {
 		(void) thread_funnel_set(kernel_flock, funnel_state);
 	}
-#endif /* __LP64__ */
+#endif /* CONFIG_VFS_FUNNEL */
 
 	return(error);
 }
@@ -540,10 +538,10 @@ int
 VFS_FHTOVP(mount_t mp, int fhlen, unsigned char * fhp, vnode_t * vpp, vfs_context_t ctx) 
 {
 	int error;
-#ifndef __LP64__
+#if CONFIG_VFS_FUNNEL
 	int thread_safe;
 	int funnel_state = 0;
-#endif /* __LP64__ */
+#endif /* CONFIG_VFS_FUNNEL */
 
 	if ((mp == dead_mountp) || (mp->mnt_op->vfs_fhtovp == 0))
 		return(ENOTSUP);
@@ -552,20 +550,20 @@ VFS_FHTOVP(mount_t mp, int fhlen, unsigned char * fhp, vnode_t * vpp, vfs_contex
 		ctx = vfs_context_current();
 	}
 
-#ifndef __LP64__
+#if CONFIG_VFS_FUNNEL
 	thread_safe = (mp->mnt_vtable->vfc_vfsflags & VFC_VFSTHREADSAFE);
 	if (!thread_safe) {
 		funnel_state = thread_funnel_set(kernel_flock, TRUE);
 	}
-#endif /* __LP64__ */
+#endif /* CONFIG_VFS_FUNNEL */
 
 	error = (*mp->mnt_op->vfs_fhtovp)(mp, fhlen, fhp, vpp, ctx);
 
-#ifndef __LP64__
+#if CONFIG_VFS_FUNNEL
 	if (!thread_safe) {
 		(void) thread_funnel_set(kernel_flock, funnel_state);
 	}
-#endif /* __LP64__ */
+#endif /* CONFIG_VFS_FUNNEL */
 
 	return(error);
 }
@@ -574,10 +572,10 @@ int
 VFS_VPTOFH(struct vnode * vp, int *fhlenp, unsigned char * fhp, vfs_context_t ctx)
 {
 	int error;
-#ifndef __LP64__
+#if CONFIG_VFS_FUNNEL
 	int thread_safe;
 	int funnel_state = 0;
-#endif /* __LP64__ */
+#endif /* CONFIG_VFS_FUNNEL */
 
 	if ((vp->v_mount == dead_mountp) || (vp->v_mount->mnt_op->vfs_vptofh == 0))
 		return(ENOTSUP);
@@ -586,20 +584,20 @@ VFS_VPTOFH(struct vnode * vp, int *fhlenp, unsigned char * fhp, vfs_context_t ct
 		ctx = vfs_context_current();
 	}
 
-#ifndef __LP64__
+#if CONFIG_VFS_FUNNEL
 	thread_safe = THREAD_SAFE_FS(vp);
 	if (!thread_safe) {
 		funnel_state = thread_funnel_set(kernel_flock, TRUE);
 	}
-#endif /* __LP64__ */
+#endif /* CONFIG_VFS_FUNNEL */
 
 	error = (*vp->v_mount->mnt_op->vfs_vptofh)(vp, fhlenp, fhp, ctx);
 
-#ifndef __LP64__
+#if CONFIG_VFS_FUNNEL
 	if (!thread_safe) {
 		(void) thread_funnel_set(kernel_flock, funnel_state);
 	}
-#endif /* __LP64__ */
+#endif /* CONFIG_VFS_FUNNEL */
 
 	return(error);
 }
@@ -1052,12 +1050,12 @@ vfs_fsadd(struct vfs_fsentry *vfe, vfstable_t * handle)
 		|| (vfe->vfe_opvdescs == (struct vnodeopv_desc **)NULL))
 		return(EINVAL);
 
-#ifdef __LP64__
-	/* Non-threadsafe filesystems are not supported for K64 */
+#if !CONFIG_VFS_FUNNEL
+	/* Non-threadsafe filesystems are not supported e.g. on K64 & iOS */
 	if ((vfe->vfe_flags &  (VFS_TBLTHREADSAFE | VFS_TBLFSNODELOCK)) == 0) {
 		return (EINVAL);
 	}
-#endif /* __LP64__ */
+#endif /* !CONFIG_VFS_FUNNEL */
 
 	MALLOC(newvfstbl, void *, sizeof(struct vfstable), M_TEMP,
 	       M_WAITOK);
@@ -1080,12 +1078,12 @@ vfs_fsadd(struct vfs_fsentry *vfe, vfstable_t * handle)
 		newvfstbl->vfc_vfsflags |= VFC_VFSVNOP_PAGEINV2;
 	if (vfe->vfe_flags &  VFS_TBLVNOP_PAGEOUTV2)
 		newvfstbl->vfc_vfsflags |= VFC_VFSVNOP_PAGEOUTV2;
-#ifndef __LP64__
+#if CONFIG_VFS_FUNNEL
 	if (vfe->vfe_flags &  VFS_TBLTHREADSAFE)
 		newvfstbl->vfc_vfsflags |= VFC_VFSTHREADSAFE;
 	if (vfe->vfe_flags &  VFS_TBLFSNODELOCK)
 		newvfstbl->vfc_vfsflags |= VFC_VFSTHREADSAFE;
-#endif /* __LP64__ */
+#endif /* CONFIG_VFS_FUNNEL */
 	if ((vfe->vfe_flags & VFS_TBLLOCALVOL) == VFS_TBLLOCALVOL)
 		newvfstbl->vfc_flags |= MNT_LOCAL;
 	if ((vfe->vfe_flags & VFS_TBLLOCALVOL) && (vfe->vfe_flags & VFS_TBLGENERICMNTARGS) == 0)
@@ -3016,10 +3014,10 @@ VNOP_LOOKUP(vnode_t dvp, vnode_t *vpp, struct componentname *cnp, vfs_context_t 
 	int _err;
 	struct vnop_lookup_args a;
 	vnode_t vp;
-#ifndef __LP64__
+#if CONFIG_VFS_FUNNEL
 	int thread_safe;
 	int funnel_state = 0;
-#endif /* __LP64__ */
+#endif /* CONFIG_VFS_FUNNEL */
 
 	a.a_desc = &vnop_lookup_desc;
 	a.a_dvp = dvp;
@@ -3027,20 +3025,20 @@ VNOP_LOOKUP(vnode_t dvp, vnode_t *vpp, struct componentname *cnp, vfs_context_t 
 	a.a_cnp = cnp;
 	a.a_context = ctx;
 
-#ifndef __LP64__
+#if CONFIG_VFS_FUNNEL
 	thread_safe = THREAD_SAFE_FS(dvp);
 	if (!thread_safe) {
 		if ( (_err = lock_fsnode(dvp, &funnel_state)) ) {
 			return (_err);
 		}
 	}
-#endif /* __LP64__ */
+#endif /* CONFIG_VFS_FUNNEL */
 
 	_err = (*dvp->v_op[vnop_lookup_desc.vdesc_offset])(&a);
 
 	vp = *vpp;
 
-#ifndef __LP64__
+#if CONFIG_VFS_FUNNEL
 	if (!thread_safe) {
 	        if ( (cnp->cn_flags & ISLASTCN) ) {
 		        if ( (cnp->cn_flags & LOCKPARENT) ) {
@@ -3061,7 +3059,7 @@ VNOP_LOOKUP(vnode_t dvp, vnode_t *vpp, struct componentname *cnp, vfs_context_t 
 		}
 		unlock_fsnode(dvp, &funnel_state);
 	}
-#endif /* __LP64__ */
+#endif /* CONFIG_VFS_FUNNEL */
 
 	return (_err);
 }
@@ -3162,10 +3160,10 @@ VNOP_CREATE(vnode_t dvp, vnode_t * vpp, struct componentname * cnp, struct vnode
 {
 	int _err;
 	struct vnop_create_args a;
-#ifndef __LP64__
+#if CONFIG_VFS_FUNNEL
 	int thread_safe;
 	int funnel_state = 0;
-#endif /* __LP64__ */
+#endif /* CONFIG_VFS_FUNNEL */
 
 	a.a_desc = &vnop_create_desc;
 	a.a_dvp = dvp;
@@ -3174,14 +3172,14 @@ VNOP_CREATE(vnode_t dvp, vnode_t * vpp, struct componentname * cnp, struct vnode
 	a.a_vap = vap;
 	a.a_context = ctx;
 
-#ifndef __LP64__
+#if CONFIG_VFS_FUNNEL
 	thread_safe = THREAD_SAFE_FS(dvp);
 	if (!thread_safe) {
 		if ( (_err = lock_fsnode(dvp, &funnel_state)) ) {
 			return (_err);
 		}
 	}
-#endif /* __LP64__ */
+#endif /* CONFIG_VFS_FUNNEL */
 
 	_err = (*dvp->v_op[vnop_create_desc.vdesc_offset])(&a);
 	if (_err == 0 && !NATIVE_XATTR(dvp)) {
@@ -3191,11 +3189,11 @@ VNOP_CREATE(vnode_t dvp, vnode_t * vpp, struct componentname * cnp, struct vnode
 		xattrfile_remove(dvp, cnp->cn_nameptr, ctx, 0);
 	}
 
-#ifndef __LP64__
+#if CONFIG_VFS_FUNNEL
 	if (!thread_safe) {
 		unlock_fsnode(dvp, &funnel_state);
 	}
-#endif /* __LP64__ */
+#endif /* CONFIG_VFS_FUNNEL */
 
 	post_event_if_success(dvp, _err, NOTE_WRITE);
 
@@ -3223,10 +3221,10 @@ VNOP_WHITEOUT(vnode_t dvp, struct componentname * cnp, int flags, vfs_context_t 
 {
 	int _err;
 	struct vnop_whiteout_args a;
-#ifndef __LP64__
+#if CONFIG_VFS_FUNNEL
 	int thread_safe;
 	int funnel_state = 0;
-#endif /* __LP64__ */
+#endif /* CONFIG_VFS_FUNNEL */
 
 	a.a_desc = &vnop_whiteout_desc;
 	a.a_dvp = dvp;
@@ -3234,22 +3232,22 @@ VNOP_WHITEOUT(vnode_t dvp, struct componentname * cnp, int flags, vfs_context_t 
 	a.a_flags = flags;
 	a.a_context = ctx;
 
-#ifndef __LP64__
+#if CONFIG_VFS_FUNNEL
 	thread_safe = THREAD_SAFE_FS(dvp);
 	if (!thread_safe) {
 		if ( (_err = lock_fsnode(dvp, &funnel_state)) ) {
 			return (_err);
 		}
 	}
-#endif /* __LP64__ */
+#endif /* CONFIG_VFS_FUNNEL */
 
 	_err = (*dvp->v_op[vnop_whiteout_desc.vdesc_offset])(&a);
 
-#ifndef __LP64__
+#if CONFIG_VFS_FUNNEL
 	if (!thread_safe) {
 		unlock_fsnode(dvp, &funnel_state);
 	}
-#endif /* __LP64__ */
+#endif /* CONFIG_VFS_FUNNEL */
 
 	post_event_if_success(dvp, _err, NOTE_WRITE);
 
@@ -3278,10 +3276,10 @@ VNOP_MKNOD(vnode_t dvp, vnode_t * vpp, struct componentname * cnp, struct vnode_
 
        int _err;
        struct vnop_mknod_args a;
-#ifndef __LP64__
+#if CONFIG_VFS_FUNNEL
 	int thread_safe;
 	int funnel_state = 0;
-#endif /* __LP64__ */
+#endif /* CONFIG_VFS_FUNNEL */
 
        a.a_desc = &vnop_mknod_desc;
        a.a_dvp = dvp;
@@ -3290,22 +3288,22 @@ VNOP_MKNOD(vnode_t dvp, vnode_t * vpp, struct componentname * cnp, struct vnode_
        a.a_vap = vap;
        a.a_context = ctx;
 
-#ifndef __LP64__
+#if CONFIG_VFS_FUNNEL
        thread_safe = THREAD_SAFE_FS(dvp);
        if (!thread_safe) {
                if ( (_err = lock_fsnode(dvp, &funnel_state)) ) {
                        return (_err);
                }
        }
-#endif /* __LP64__ */
+#endif /* CONFIG_VFS_FUNNEL */
 
        _err = (*dvp->v_op[vnop_mknod_desc.vdesc_offset])(&a);
 
-#ifndef __LP64__
+#if CONFIG_VFS_FUNNEL
        if (!thread_safe) {
                unlock_fsnode(dvp, &funnel_state);
        }
-#endif /* __LP64__ */
+#endif /* CONFIG_VFS_FUNNEL */
 
        post_event_if_success(dvp, _err, NOTE_WRITE);
 
@@ -3330,10 +3328,10 @@ VNOP_OPEN(vnode_t vp, int mode, vfs_context_t ctx)
 {
 	int _err;
 	struct vnop_open_args a;
-#ifndef __LP64__
+#if CONFIG_VFS_FUNNEL
 	int thread_safe;
 	int funnel_state = 0; 
-#endif /* __LP64__ */
+#endif /* CONFIG_VFS_FUNNEL */
 
 	if (ctx == NULL) {
 		ctx = vfs_context_current();
@@ -3343,7 +3341,7 @@ VNOP_OPEN(vnode_t vp, int mode, vfs_context_t ctx)
 	a.a_mode = mode;
 	a.a_context = ctx; 
 
-#ifndef __LP64__
+#if CONFIG_VFS_FUNNEL
 	thread_safe = THREAD_SAFE_FS(vp);
 	if (!thread_safe) {
 		funnel_state = thread_funnel_set(kernel_flock, TRUE);
@@ -3354,18 +3352,18 @@ VNOP_OPEN(vnode_t vp, int mode, vfs_context_t ctx)
 			}    
 		}    
 	}    
-#endif /* __LP64__ */
+#endif /* CONFIG_VFS_FUNNEL */
 
 	_err = (*vp->v_op[vnop_open_desc.vdesc_offset])(&a);
 
-#ifndef __LP64__
+#if CONFIG_VFS_FUNNEL
 	if (!thread_safe) {
 		if (vp->v_type != VCHR && vp->v_type != VFIFO && vp->v_type != VSOCK) {
 			unlock_fsnode(vp, NULL);
 		}    
 		(void) thread_funnel_set(kernel_flock, funnel_state);
 	}    
-#endif /* __LP64__ */
+#endif /* CONFIG_VFS_FUNNEL */
 
 	return (_err);
 }
@@ -3388,10 +3386,10 @@ VNOP_CLOSE(vnode_t vp, int fflag, vfs_context_t ctx)
 {
 	int _err;
 	struct vnop_close_args a;
-#ifndef __LP64__
+#if CONFIG_VFS_FUNNEL
 	int thread_safe;
 	int funnel_state = 0;
-#endif /* __LP64__ */
+#endif /* CONFIG_VFS_FUNNEL */
 
 	if (ctx == NULL) {
 		ctx = vfs_context_current();
@@ -3401,7 +3399,7 @@ VNOP_CLOSE(vnode_t vp, int fflag, vfs_context_t ctx)
 	a.a_fflag = fflag;
 	a.a_context = ctx;
 
-#ifndef __LP64__
+#if CONFIG_VFS_FUNNEL
 	thread_safe = THREAD_SAFE_FS(vp);
 	if (!thread_safe) {
 		funnel_state = thread_funnel_set(kernel_flock, TRUE);
@@ -3412,18 +3410,18 @@ VNOP_CLOSE(vnode_t vp, int fflag, vfs_context_t ctx)
 			}
 		}
 	}
-#endif /* __LP64__ */
+#endif /* CONFIG_VFS_FUNNEL */
 
 	_err = (*vp->v_op[vnop_close_desc.vdesc_offset])(&a);
 
-#ifndef __LP64__
+#if CONFIG_VFS_FUNNEL
 	if (!thread_safe) {
 		if (vp->v_type != VCHR && vp->v_type != VFIFO && vp->v_type != VSOCK) {
 			unlock_fsnode(vp, NULL);
 		}
 		(void) thread_funnel_set(kernel_flock, funnel_state);
 	}
-#endif /* __LP64__ */
+#endif /* CONFIG_VFS_FUNNEL */
 
 	return (_err);
 }
@@ -3446,10 +3444,10 @@ VNOP_ACCESS(vnode_t vp, int action, vfs_context_t ctx)
 {
 	int _err;
 	struct vnop_access_args a;
-#ifndef __LP64__
+#if CONFIG_VFS_FUNNEL
 	int thread_safe;
 	int funnel_state = 0;
-#endif /* __LP64__ */
+#endif /* CONFIG_VFS_FUNNEL */
 
 	if (ctx == NULL) {
 		ctx = vfs_context_current();
@@ -3459,22 +3457,22 @@ VNOP_ACCESS(vnode_t vp, int action, vfs_context_t ctx)
 	a.a_action = action;
 	a.a_context = ctx;
 
-#ifndef __LP64__
+#if CONFIG_VFS_FUNNEL
 	thread_safe = THREAD_SAFE_FS(vp);
 	if (!thread_safe) {
 		if ( (_err = lock_fsnode(vp, &funnel_state)) ) {
 			return (_err);
 		}
 	}
-#endif /* __LP64__ */
+#endif /* CONFIG_VFS_FUNNEL */
 
 	_err = (*vp->v_op[vnop_access_desc.vdesc_offset])(&a);
 
-#ifndef __LP64__
+#if CONFIG_VFS_FUNNEL
 	if (!thread_safe) {
 		unlock_fsnode(vp, &funnel_state);
 	}
-#endif /* __LP64__ */
+#endif /* CONFIG_VFS_FUNNEL */
 
 	return (_err);
 }
@@ -3497,32 +3495,32 @@ VNOP_GETATTR(vnode_t vp, struct vnode_attr * vap, vfs_context_t ctx)
 {
 	int _err;
 	struct vnop_getattr_args a;
-#ifndef __LP64__
+#if CONFIG_VFS_FUNNEL
 	int thread_safe;
 	int funnel_state = 0;
-#endif /* __LP64__ */
+#endif /* CONFIG_VFS_FUNNEL */
 
 	a.a_desc = &vnop_getattr_desc;
 	a.a_vp = vp;
 	a.a_vap = vap;
 	a.a_context = ctx;
 
-#ifndef __LP64__
+#if CONFIG_VFS_FUNNEL
 	thread_safe = THREAD_SAFE_FS(vp);
 	if (!thread_safe) {
 		if ( (_err = lock_fsnode(vp, &funnel_state)) ) {
 			return (_err);
 		}
 	}
-#endif /* __LP64__ */
+#endif /* CONFIG_VFS_FUNNEL */
 
 	_err = (*vp->v_op[vnop_getattr_desc.vdesc_offset])(&a);
 
-#ifndef __LP64__
+#if CONFIG_VFS_FUNNEL
 	if (!thread_safe) {
 		unlock_fsnode(vp, &funnel_state);
 	}
-#endif /* __LP64__ */
+#endif /* CONFIG_VFS_FUNNEL */
 
 	return (_err);
 }
@@ -3545,24 +3543,24 @@ VNOP_SETATTR(vnode_t vp, struct vnode_attr * vap, vfs_context_t ctx)
 {
 	int _err;
 	struct vnop_setattr_args a;
-#ifndef __LP64__
+#if CONFIG_VFS_FUNNEL
 	int thread_safe;
 	int funnel_state = 0;
-#endif /* __LP64__ */
+#endif /* CONFIG_VFS_FUNNEL */
 
 	a.a_desc = &vnop_setattr_desc;
 	a.a_vp = vp;
 	a.a_vap = vap;
 	a.a_context = ctx;
 
-#ifndef __LP64__
+#if CONFIG_VFS_FUNNEL
 	thread_safe = THREAD_SAFE_FS(vp);
 	if (!thread_safe) {
 		if ( (_err = lock_fsnode(vp, &funnel_state)) ) {
 			return (_err);
 		}
 	}
-#endif /* __LP64__ */
+#endif /* CONFIG_VFS_FUNNEL */
 
 	_err = (*vp->v_op[vnop_setattr_desc.vdesc_offset])(&a);
 
@@ -3601,11 +3599,11 @@ VNOP_SETATTR(vnode_t vp, struct vnode_attr * vap, vfs_context_t ctx)
 		}
 	}
 
-#ifndef __LP64__
+#if CONFIG_VFS_FUNNEL
 	if (!thread_safe) {
 		unlock_fsnode(vp, &funnel_state);
 	}
-#endif /* __LP64__ */
+#endif /* CONFIG_VFS_FUNNEL */
 
 	/*
 	 * If we have changed any of the things about the file that are likely
@@ -3659,10 +3657,10 @@ VNOP_READ(vnode_t vp, struct uio * uio, int ioflag, vfs_context_t ctx)
 {
 	int _err;
 	struct vnop_read_args a;
-#ifndef __LP64__
+#if CONFIG_VFS_FUNNEL
 	int thread_safe;
 	int funnel_state = 0;
-#endif /* __LP64__ */
+#endif /* CONFIG_VFS_FUNNEL */
 
 	if (ctx == NULL) {
 		ctx = vfs_context_current();
@@ -3674,7 +3672,7 @@ VNOP_READ(vnode_t vp, struct uio * uio, int ioflag, vfs_context_t ctx)
 	a.a_ioflag = ioflag;
 	a.a_context = ctx;
 
-#ifndef __LP64__
+#if CONFIG_VFS_FUNNEL
 	thread_safe = THREAD_SAFE_FS(vp);
 	if (!thread_safe) {
 		funnel_state = thread_funnel_set(kernel_flock, TRUE);
@@ -3685,18 +3683,18 @@ VNOP_READ(vnode_t vp, struct uio * uio, int ioflag, vfs_context_t ctx)
 			}
 		}
 	}
-#endif /* __LP64__ */
+#endif /* CONFIG_VFS_FUNNEL */
 
 	_err = (*vp->v_op[vnop_read_desc.vdesc_offset])(&a);
 
-#ifndef __LP64__
+#if CONFIG_VFS_FUNNEL
 	if (!thread_safe) {
 		if (vp->v_type != VCHR && vp->v_type != VFIFO && vp->v_type != VSOCK) {
 			unlock_fsnode(vp, NULL);
 		}
 		(void) thread_funnel_set(kernel_flock, funnel_state);
 	}
-#endif /* __LP64__ */
+#endif /* CONFIG_VFS_FUNNEL */
 
 	return (_err);
 }
@@ -3721,10 +3719,10 @@ VNOP_WRITE(vnode_t vp, struct uio * uio, int ioflag, vfs_context_t ctx)
 {
 	struct vnop_write_args a;
 	int _err;
-#ifndef __LP64__
+#if CONFIG_VFS_FUNNEL
 	int thread_safe;
 	int funnel_state = 0;
-#endif /* __LP64__ */
+#endif /* CONFIG_VFS_FUNNEL */
 
 	if (ctx == NULL) {
 		ctx = vfs_context_current();
@@ -3736,7 +3734,7 @@ VNOP_WRITE(vnode_t vp, struct uio * uio, int ioflag, vfs_context_t ctx)
 	a.a_ioflag = ioflag;
 	a.a_context = ctx;
 
-#ifndef __LP64__
+#if CONFIG_VFS_FUNNEL
 	thread_safe = THREAD_SAFE_FS(vp);
 	if (!thread_safe) {
 		funnel_state = thread_funnel_set(kernel_flock, TRUE);
@@ -3747,18 +3745,18 @@ VNOP_WRITE(vnode_t vp, struct uio * uio, int ioflag, vfs_context_t ctx)
 			}
 		}
 	}
-#endif /* __LP64__ */
+#endif /* CONFIG_VFS_FUNNEL */
 
 	_err = (*vp->v_op[vnop_write_desc.vdesc_offset])(&a);
 
-#ifndef __LP64__
+#if CONFIG_VFS_FUNNEL
 	if (!thread_safe) {
 		if (vp->v_type != VCHR && vp->v_type != VFIFO && vp->v_type != VSOCK) {
 			unlock_fsnode(vp, NULL);
 		}
 		(void) thread_funnel_set(kernel_flock, funnel_state);
 	}
-#endif /* __LP64__ */
+#endif /* CONFIG_VFS_FUNNEL */
 
 	post_event_if_success(vp, _err, NOTE_WRITE);
 
@@ -3786,10 +3784,10 @@ VNOP_IOCTL(vnode_t vp, u_long command, caddr_t data, int fflag, vfs_context_t ct
 {
 	int _err;
 	struct vnop_ioctl_args a;
-#ifndef __LP64__
+#if CONFIG_VFS_FUNNEL
 	int thread_safe;
 	int funnel_state = 0;
-#endif /* __LP64__ */
+#endif /* CONFIG_VFS_FUNNEL */
 
 	if (ctx == NULL) {
 		ctx = vfs_context_current();
@@ -3822,7 +3820,7 @@ VNOP_IOCTL(vnode_t vp, u_long command, caddr_t data, int fflag, vfs_context_t ct
 	a.a_fflag = fflag;
 	a.a_context= ctx;
 
-#ifndef __LP64__
+#if CONFIG_VFS_FUNNEL
 	thread_safe = THREAD_SAFE_FS(vp);
 	if (!thread_safe) {
 		funnel_state = thread_funnel_set(kernel_flock, TRUE);
@@ -3833,18 +3831,18 @@ VNOP_IOCTL(vnode_t vp, u_long command, caddr_t data, int fflag, vfs_context_t ct
 			}
 		}
 	}
-#endif /* __LP64__ */
+#endif /* CONFIG_VFS_FUNNEL */
 
 	_err = (*vp->v_op[vnop_ioctl_desc.vdesc_offset])(&a);
 
-#ifndef __LP64__
+#if CONFIG_VFS_FUNNEL
 	if (!thread_safe) {
 		if (vp->v_type != VCHR && vp->v_type != VFIFO && vp->v_type != VSOCK) {
 			unlock_fsnode(vp, NULL);
 		}
 		(void) thread_funnel_set(kernel_flock, funnel_state);
 	}
-#endif /* __LP64__ */
+#endif /* CONFIG_VFS_FUNNEL */
 
 	return (_err);
 }
@@ -3870,10 +3868,10 @@ VNOP_SELECT(vnode_t vp, int which , int fflags, void * wql, vfs_context_t ctx)
 {
 	int _err;
 	struct vnop_select_args a;
-#ifndef __LP64__
+#if CONFIG_VFS_FUNNEL
 	int thread_safe;
 	int funnel_state = 0;
-#endif /* __LP64__ */
+#endif /* CONFIG_VFS_FUNNEL */
 
 	if (ctx == NULL) {
 		ctx = vfs_context_current();
@@ -3885,7 +3883,7 @@ VNOP_SELECT(vnode_t vp, int which , int fflags, void * wql, vfs_context_t ctx)
 	a.a_context = ctx;
 	a.a_wql = wql;
 
-#ifndef __LP64__
+#if CONFIG_VFS_FUNNEL
 	thread_safe = THREAD_SAFE_FS(vp);
 	if (!thread_safe) {
 		funnel_state = thread_funnel_set(kernel_flock, TRUE);
@@ -3896,18 +3894,18 @@ VNOP_SELECT(vnode_t vp, int which , int fflags, void * wql, vfs_context_t ctx)
 			}
 		}
 	}
-#endif /* __LP64__ */
+#endif /* CONFIG_VFS_FUNNEL */
 
 	_err = (*vp->v_op[vnop_select_desc.vdesc_offset])(&a);
 
-#ifndef __LP64__
+#if CONFIG_VFS_FUNNEL
 	if (!thread_safe) {
 		if (vp->v_type != VCHR && vp->v_type != VFIFO && vp->v_type != VSOCK) {
 			unlock_fsnode(vp, NULL);
 		}
 		(void) thread_funnel_set(kernel_flock, funnel_state);
 	}
-#endif /* __LP64__ */
+#endif /* CONFIG_VFS_FUNNEL */
 
 	return (_err);
 }
@@ -3933,11 +3931,11 @@ VNOP_EXCHANGE(vnode_t fvp, vnode_t tvp, int options, vfs_context_t ctx)
 {
 	int _err;
 	struct vnop_exchange_args a;
-#ifndef __LP64__
+#if CONFIG_VFS_FUNNEL
 	int thread_safe;
 	int funnel_state = 0;
 	vnode_t	lock_first = NULL, lock_second = NULL;
-#endif /* __LP64__ */
+#endif /* CONFIG_VFS_FUNNEL */
 
 	a.a_desc = &vnop_exchange_desc;
 	a.a_fvp = fvp;
@@ -3945,7 +3943,7 @@ VNOP_EXCHANGE(vnode_t fvp, vnode_t tvp, int options, vfs_context_t ctx)
 	a.a_options = options;
 	a.a_context = ctx;
 
-#ifndef __LP64__
+#if CONFIG_VFS_FUNNEL
 	thread_safe = THREAD_SAFE_FS(fvp);
 	if (!thread_safe) {
 		/*
@@ -3966,16 +3964,16 @@ VNOP_EXCHANGE(vnode_t fvp, vnode_t tvp, int options, vfs_context_t ctx)
 			return (_err);
 		}
 	}
-#endif /* __LP64__ */
+#endif /* CONFIG_VFS_FUNNEL */
 
 	_err = (*fvp->v_op[vnop_exchange_desc.vdesc_offset])(&a);
 
-#ifndef __LP64__
+#if CONFIG_VFS_FUNNEL
 	if (!thread_safe) {
 		unlock_fsnode(lock_second, NULL);
 		unlock_fsnode(lock_first, &funnel_state);
 	}
-#endif /* __LP64__ */
+#endif /* CONFIG_VFS_FUNNEL */
 
 	/* Don't post NOTE_WRITE because file descriptors follow the data ... */
 	post_event_if_success(fvp, _err, NOTE_ATTRIB);
@@ -4003,30 +4001,30 @@ VNOP_REVOKE(vnode_t vp, int flags, vfs_context_t ctx)
 {
 	struct vnop_revoke_args a;
 	int _err;
-#ifndef __LP64__
+#if CONFIG_VFS_FUNNEL
 	int thread_safe;
 	int funnel_state = 0;
-#endif /* __LP64__ */
+#endif /* CONFIG_VFS_FUNNEL */
 
 	a.a_desc = &vnop_revoke_desc;
 	a.a_vp = vp;
 	a.a_flags = flags;
 	a.a_context = ctx;
 
-#ifndef __LP64__
+#if CONFIG_VFS_FUNNEL
 	thread_safe = THREAD_SAFE_FS(vp);
 	if (!thread_safe) {
 		funnel_state = thread_funnel_set(kernel_flock, TRUE);
 	}
-#endif /* __LP64__ */
+#endif /* CONFIG_VFS_FUNNEL */
 
 	_err = (*vp->v_op[vnop_revoke_desc.vdesc_offset])(&a);
 
-#ifndef __LP64__
+#if CONFIG_VFS_FUNNEL
 	if (!thread_safe) {
 		(void) thread_funnel_set(kernel_flock, funnel_state);
 	}
-#endif /* __LP64__ */
+#endif /* CONFIG_VFS_FUNNEL */
 
 	return (_err);
 }
@@ -4050,32 +4048,32 @@ VNOP_MMAP(vnode_t vp, int fflags, vfs_context_t ctx)
 {
 	int _err;
 	struct vnop_mmap_args a;
-#ifndef __LP64__
+#if CONFIG_VFS_FUNNEL
 	int thread_safe;
 	int funnel_state = 0;
-#endif /* __LP64__ */
+#endif /* CONFIG_VFS_FUNNEL */
 
 	a.a_desc = &vnop_mmap_desc;
 	a.a_vp = vp;
 	a.a_fflags = fflags;
 	a.a_context = ctx;
 
-#ifndef __LP64__
+#if CONFIG_VFS_FUNNEL
 	thread_safe = THREAD_SAFE_FS(vp);
 	if (!thread_safe) {
 		if ( (_err = lock_fsnode(vp, &funnel_state)) ) {
 			return (_err);
 		}
 	}
-#endif /* __LP64__ */
+#endif /* CONFIG_VFS_FUNNEL */
 
 	_err = (*vp->v_op[vnop_mmap_desc.vdesc_offset])(&a);
 
-#ifndef __LP64__
+#if CONFIG_VFS_FUNNEL
 	if (!thread_safe) {
 		unlock_fsnode(vp, &funnel_state);
 	}
-#endif /* __LP64__ */
+#endif /* CONFIG_VFS_FUNNEL */
 
 	return (_err);
 }
@@ -4098,31 +4096,31 @@ VNOP_MNOMAP(vnode_t vp, vfs_context_t ctx)
 {
 	int _err;
 	struct vnop_mnomap_args a;
-#ifndef __LP64__
+#if CONFIG_VFS_FUNNEL
 	int thread_safe;
 	int funnel_state = 0;
-#endif /* __LP64__ */
+#endif /* CONFIG_VFS_FUNNEL */
 
 	a.a_desc = &vnop_mnomap_desc;
 	a.a_vp = vp;
 	a.a_context = ctx;
 
-#ifndef __LP64__
+#if CONFIG_VFS_FUNNEL
 	thread_safe = THREAD_SAFE_FS(vp);
 	if (!thread_safe) {
 		if ( (_err = lock_fsnode(vp, &funnel_state)) ) {
 			return (_err);
 		}
 	}
-#endif /* __LP64__ */
+#endif /* CONFIG_VFS_FUNNEL */
 
 	_err = (*vp->v_op[vnop_mnomap_desc.vdesc_offset])(&a);
 
-#ifndef __LP64__
+#if CONFIG_VFS_FUNNEL
 	if (!thread_safe) {
 		unlock_fsnode(vp, &funnel_state);
 	}
-#endif /* __LP64__ */
+#endif /* CONFIG_VFS_FUNNEL */
 
 	return (_err);
 }
@@ -4146,32 +4144,32 @@ VNOP_FSYNC(vnode_t vp, int waitfor, vfs_context_t ctx)
 {
 	struct vnop_fsync_args a;
 	int _err;
-#ifndef __LP64__
+#if CONFIG_VFS_FUNNEL
 	int thread_safe;
 	int funnel_state = 0;
-#endif /* __LP64__ */
+#endif /* CONFIG_VFS_FUNNEL */
 
 	a.a_desc = &vnop_fsync_desc;
 	a.a_vp = vp;
 	a.a_waitfor = waitfor;
 	a.a_context = ctx;
 
-#ifndef __LP64__
+#if CONFIG_VFS_FUNNEL
 	thread_safe = THREAD_SAFE_FS(vp);
 	if (!thread_safe) {
 		if ( (_err = lock_fsnode(vp, &funnel_state)) ) {
 			return (_err);
 		}
 	}
-#endif /* __LP64__ */
+#endif /* CONFIG_VFS_FUNNEL */
 
 	_err = (*vp->v_op[vnop_fsync_desc.vdesc_offset])(&a);
 
-#ifndef __LP64__
+#if CONFIG_VFS_FUNNEL
 	if (!thread_safe) {
 		unlock_fsnode(vp, &funnel_state);
 	}
-#endif /* __LP64__ */
+#endif /* CONFIG_VFS_FUNNEL */
 
 	return (_err);
 }
@@ -4198,10 +4196,10 @@ VNOP_REMOVE(vnode_t dvp, vnode_t vp, struct componentname * cnp, int flags, vfs_
 {
 	int _err;
 	struct vnop_remove_args a;
-#ifndef __LP64__
+#if CONFIG_VFS_FUNNEL
 	int thread_safe;
 	int funnel_state = 0;
-#endif /* __LP64__ */
+#endif /* CONFIG_VFS_FUNNEL */
 
 	a.a_desc = &vnop_remove_desc;
 	a.a_dvp = dvp;
@@ -4210,14 +4208,14 @@ VNOP_REMOVE(vnode_t dvp, vnode_t vp, struct componentname * cnp, int flags, vfs_
 	a.a_flags = flags;
 	a.a_context = ctx;
 
-#ifndef __LP64__
+#if CONFIG_VFS_FUNNEL
 	thread_safe = THREAD_SAFE_FS(dvp);
 	if (!thread_safe) {
 		if ( (_err = lock_fsnode(vp, &funnel_state)) ) {
 			return (_err);
 		}
 	}
-#endif /* __LP64__ */
+#endif /* CONFIG_VFS_FUNNEL */
 
 	_err = (*dvp->v_op[vnop_remove_desc.vdesc_offset])(&a);
 
@@ -4232,11 +4230,11 @@ VNOP_REMOVE(vnode_t dvp, vnode_t vp, struct componentname * cnp, int flags, vfs_
 		}
 	}
 
-#ifndef __LP64__
+#if CONFIG_VFS_FUNNEL
 	if (!thread_safe) {
 		unlock_fsnode(vp, &funnel_state);
 	}
-#endif /* __LP64__ */
+#endif /* CONFIG_VFS_FUNNEL */
 
 	post_event_if_success(vp, _err, NOTE_DELETE | NOTE_LINK);
 	post_event_if_success(dvp, _err, NOTE_WRITE);
@@ -4308,10 +4306,10 @@ VNOP_LINK(vnode_t vp, vnode_t tdvp, struct componentname * cnp, vfs_context_t ct
 {
 	int _err;
 	struct vnop_link_args a;
-#ifndef __LP64__
+#if CONFIG_VFS_FUNNEL
 	int thread_safe;
 	int funnel_state = 0;
-#endif /* __LP64__ */
+#endif /* CONFIG_VFS_FUNNEL */
 
 	/*
 	 * For file systems with non-native extended attributes,
@@ -4337,22 +4335,22 @@ VNOP_LINK(vnode_t vp, vnode_t tdvp, struct componentname * cnp, vfs_context_t ct
 	a.a_cnp = cnp;
 	a.a_context = ctx;
 
-#ifndef __LP64__
+#if CONFIG_VFS_FUNNEL
 	thread_safe = THREAD_SAFE_FS(vp);
 	if (!thread_safe) {
 		if ( (_err = lock_fsnode(vp, &funnel_state)) ) {
 			return (_err);
 		}
 	}
-#endif /* __LP64__ */
+#endif /* CONFIG_VFS_FUNNEL */
 
 	_err = (*tdvp->v_op[vnop_link_desc.vdesc_offset])(&a);
 
-#ifndef __LP64__
+#if CONFIG_VFS_FUNNEL
 	if (!thread_safe) {
 		unlock_fsnode(vp, &funnel_state);
 	}
-#endif /* __LP64__ */
+#endif /* CONFIG_VFS_FUNNEL */
 
 	post_event_if_success(vp, _err, NOTE_LINK);
 	post_event_if_success(tdvp, _err, NOTE_WRITE);
@@ -4368,8 +4366,8 @@ vn_rename(struct vnode *fdvp, struct vnode **fvpp, struct componentname *fcnp, s
 	int _err;
 	vnode_t src_attr_vp = NULLVP;
 	vnode_t dst_attr_vp = NULLVP;
-	struct nameidata fromnd;
-	struct nameidata tond;
+	struct nameidata *fromnd = NULL;
+	struct nameidata *tond = NULL;
 	char smallname1[48];
 	char smallname2[48];
 	char *xfromname = NULL;
@@ -4378,9 +4376,9 @@ vn_rename(struct vnode *fdvp, struct vnode **fvpp, struct componentname *fcnp, s
 
 	batched = vnode_compound_rename_available(fdvp);
 
-#ifndef __LP64__
+#if CONFIG_VFS_FUNNEL
 	vnode_t fdvp_unsafe = (THREAD_SAFE_FS(fdvp) ? NULLVP : fdvp);
-#endif /* __LP64__ */
+#endif /* CONFIG_VFS_FUNNEL */
 
 	if (!batched) {
 		if (*fvpp == NULLVP) 
@@ -4429,10 +4427,11 @@ vn_rename(struct vnode *fdvp, struct vnode **fvpp, struct componentname *fcnp, s
 		 * is only for AppleDouble files.
 		 */
 		if (xfromname != NULL) {
-			NDINIT(&fromnd, RENAME, OP_RENAME, NOFOLLOW | USEDVP | CN_NBMOUNTLOOK,
+			MALLOC(fromnd, struct nameidata *, sizeof (struct nameidata), M_TEMP, M_WAITOK);
+			NDINIT(fromnd, RENAME, OP_RENAME, NOFOLLOW | USEDVP | CN_NBMOUNTLOOK,
 			       UIO_SYSSPACE, CAST_USER_ADDR_T(xfromname), ctx);
-			fromnd.ni_dvp = fdvp;
-			error = namei(&fromnd);
+			fromnd->ni_dvp = fdvp;
+			error = namei(fromnd);
 		
 			/* 
 			 * If there was an error looking up source attribute file, 
@@ -4440,13 +4439,13 @@ vn_rename(struct vnode *fdvp, struct vnode **fvpp, struct componentname *fcnp, s
 			 */
 
 			if (error == 0) {
-				if (fromnd.ni_vp) {
+				if (fromnd->ni_vp) {
 					/* src_attr_vp indicates need to call vnode_put / nameidone later */
-					src_attr_vp = fromnd.ni_vp;
-					
-					if (fromnd.ni_vp->v_type != VREG) {
+					src_attr_vp = fromnd->ni_vp;
+										
+					if (fromnd->ni_vp->v_type != VREG) {
 						src_attr_vp = NULLVP;
-						vnode_put(fromnd.ni_vp);
+						vnode_put(fromnd->ni_vp);
 					}
 				} 
 				/*
@@ -4455,7 +4454,7 @@ vn_rename(struct vnode *fdvp, struct vnode **fvpp, struct componentname *fcnp, s
 				 * have a vnode here, so we drop our namei buffer for the source attribute file
 				 */
 				if (src_attr_vp == NULLVP) {
-					nameidone(&fromnd);
+					nameidone(fromnd);
 				}
 			}
 		}
@@ -4486,29 +4485,47 @@ vn_rename(struct vnode *fdvp, struct vnode **fvpp, struct componentname *fcnp, s
 		 * Note that tdvp already has an iocount reference. Make sure to check that we
 		 * get a valid vnode from namei.
 		 */
-		NDINIT(&tond, RENAME, OP_RENAME,
+		MALLOC(tond, struct nameidata *, sizeof(struct nameidata), M_TEMP, M_WAITOK);
+		NDINIT(tond, RENAME, OP_RENAME,
 		       NOCACHE | NOFOLLOW | USEDVP | CN_NBMOUNTLOOK, UIO_SYSSPACE,
 		       CAST_USER_ADDR_T(xtoname), ctx);
-		tond.ni_dvp = tdvp;
-		error = namei(&tond);
+		tond->ni_dvp = tdvp;
+		error = namei(tond);
 
 		if (error) 
 			goto out;
 		
-		if (tond.ni_vp) {
-			dst_attr_vp = tond.ni_vp;
+		if (tond->ni_vp) {
+			dst_attr_vp = tond->ni_vp;
 		}
 		
 		if (src_attr_vp) {
+			const char *old_name = src_attr_vp->v_name;
+			vnode_t old_parent = src_attr_vp->v_parent;
+	
 			if (batched) {
-				error = VNOP_COMPOUND_RENAME(fdvp, &src_attr_vp, &fromnd.ni_cnd, NULL,
-						tdvp, &dst_attr_vp, &tond.ni_cnd, NULL,
+				error = VNOP_COMPOUND_RENAME(fdvp, &src_attr_vp, &fromnd->ni_cnd, NULL,
+						tdvp, &dst_attr_vp, &tond->ni_cnd, NULL,
 						0, ctx);
 			} else {
-				error = VNOP_RENAME(fdvp, src_attr_vp, &fromnd.ni_cnd, 
-						tdvp, dst_attr_vp, &tond.ni_cnd, ctx);
+				error = VNOP_RENAME(fdvp, src_attr_vp, &fromnd->ni_cnd, 
+						tdvp, dst_attr_vp, &tond->ni_cnd, ctx);
 			}
 
+			if (error == 0 && old_name == src_attr_vp->v_name &&
+					old_parent == src_attr_vp->v_parent) {
+				int update_flags = VNODE_UPDATE_NAME;
+				
+				if (fdvp != tdvp)
+					update_flags |= VNODE_UPDATE_PARENT;
+				
+				vnode_update_identity(src_attr_vp, tdvp,
+						tond->ni_cnd.cn_nameptr,
+						tond->ni_cnd.cn_namelen,
+						tond->ni_cnd.cn_hash,
+						update_flags);
+			}
+			
 			/* kevent notifications for moving resource files 
 			 * _err is zero if we're here, so no need to notify directories, code
 			 * below will do that.  only need to post the rename on the source and
@@ -4531,20 +4548,20 @@ vn_rename(struct vnode *fdvp, struct vnode **fvpp, struct componentname *fcnp, s
 			args.a_desc    = &vnop_remove_desc;
 			args.a_dvp     = tdvp;
 			args.a_vp      = dst_attr_vp;
-			args.a_cnp     = &tond.ni_cnd;
+			args.a_cnp     = &tond->ni_cnd;
 			args.a_context = ctx;
 
-#ifndef __LP64__
+#if CONFIG_VFS_FUNNEL
 			if (fdvp_unsafe != NULLVP)
 				error = lock_fsnode(dst_attr_vp, NULL);
-#endif /* __LP64__ */
+#endif /* CONFIG_VFS_FUNNEL */
 			if (error == 0) {
 				error = (*tdvp->v_op[vnop_remove_desc.vdesc_offset])(&args);
 
-#ifndef __LP64__
+#if CONFIG_VFS_FUNNEL
 				if (fdvp_unsafe != NULLVP)
 					unlock_fsnode(dst_attr_vp, NULL);
-#endif /* __LP64__ */
+#endif /* CONFIG_VFS_FUNNEL */
 
 				if (error == 0)
 					vnode_setneedinactive(dst_attr_vp);
@@ -4560,13 +4577,18 @@ vn_rename(struct vnode *fdvp, struct vnode **fvpp, struct componentname *fcnp, s
 out:
 	if (src_attr_vp) {
 		vnode_put(src_attr_vp);
-		nameidone(&fromnd);
+		nameidone(fromnd);
 	}
 	if (dst_attr_vp) {
 		vnode_put(dst_attr_vp);
-		nameidone(&tond);
+		nameidone(tond);
 	}
-
+	if (fromnd) {
+		FREE(fromnd, M_TEMP);
+	}
+	if (tond) {
+		FREE(tond, M_TEMP);
+	}
 	if (xfromname && xfromname != &smallname1[0]) {
 		FREE(xfromname, M_TEMP);
 	}
@@ -4606,12 +4628,12 @@ VNOP_RENAME(struct vnode *fdvp, struct vnode *fvp, struct componentname *fcnp,
 	int _err = 0;
 	int events;
 	struct vnop_rename_args a;
-#ifndef __LP64__
+#if CONFIG_VFS_FUNNEL
 	int funnel_state = 0;
 	vnode_t	lock_first = NULL, lock_second = NULL;
 	vnode_t fdvp_unsafe = NULLVP;
 	vnode_t tdvp_unsafe = NULLVP;
-#endif /* __LP64__ */
+#endif /* CONFIG_VFS_FUNNEL */
 
 	a.a_desc = &vnop_rename_desc;
 	a.a_fdvp = fdvp;
@@ -4622,7 +4644,7 @@ VNOP_RENAME(struct vnode *fdvp, struct vnode *fvp, struct componentname *fcnp,
 	a.a_tcnp = tcnp;
 	a.a_context = ctx;
 
-#ifndef __LP64__
+#if CONFIG_VFS_FUNNEL
 	if (!THREAD_SAFE_FS(fdvp))
 	        fdvp_unsafe = fdvp;
 	if (!THREAD_SAFE_FS(tdvp))
@@ -4675,32 +4697,32 @@ VNOP_RENAME(struct vnode *fdvp, struct vnode *fvp, struct componentname *fcnp,
 			goto out1;
 		}
 	}
-#endif /* __LP64__ */
+#endif /* CONFIG_VFS_FUNNEL */
 
 	/* do the rename of the main file. */
 	_err = (*fdvp->v_op[vnop_rename_desc.vdesc_offset])(&a);
 
-#ifndef  __LP64__
+#if CONFIG_VFS_FUNNEL
 	if (fdvp_unsafe != NULLVP) {
 	        if (lock_second != NULL)
 		        unlock_fsnode(lock_second, NULL);
 		unlock_fsnode(lock_first, NULL);
 	}
-#endif /* __LP64__ */
+#endif /* CONFIG_VFS_FUNNEL */
 
 	if (_err == 0) {
 		if (tvp && tvp != fvp)
 		        vnode_setneedinactive(tvp);
 	}
 
-#ifndef __LP64__
+#if CONFIG_VFS_FUNNEL
 out1:
 	if (fdvp_unsafe != NULLVP) {
 	        if (tdvp_unsafe != NULLVP)
 		        unlock_fsnode(tdvp_unsafe, NULL);
 		unlock_fsnode(fdvp_unsafe, &funnel_state);
 	}
-#endif /* __LP64__ */
+#endif /* CONFIG_VFS_FUNNEL */
 
 	/* Wrote at least one directory.  If transplanted a dir, also changed link counts */
 	if (0 == _err) {
@@ -4860,10 +4882,10 @@ VNOP_MKDIR(struct vnode *dvp, struct vnode **vpp, struct componentname *cnp,
 {
        int _err;
        struct vnop_mkdir_args a;
-#ifndef __LP64__
+#if CONFIG_VFS_FUNNEL
        int thread_safe;
        int funnel_state = 0;
-#endif /* __LP64__ */
+#endif /* CONFIG_VFS_FUNNEL */
 
        a.a_desc = &vnop_mkdir_desc;
        a.a_dvp = dvp;
@@ -4872,14 +4894,14 @@ VNOP_MKDIR(struct vnode *dvp, struct vnode **vpp, struct componentname *cnp,
        a.a_vap = vap;
        a.a_context = ctx;
 
-#ifndef __LP64__
+#if CONFIG_VFS_FUNNEL
        thread_safe = THREAD_SAFE_FS(dvp);
        if (!thread_safe) {
                if ( (_err = lock_fsnode(dvp, &funnel_state)) ) {
                        return (_err);
                }
        }
-#endif /* __LP64__ */
+#endif /* CONFIG_VFS_FUNNEL */
 
        _err = (*dvp->v_op[vnop_mkdir_desc.vdesc_offset])(&a);
 	if (_err == 0 && !NATIVE_XATTR(dvp)) {
@@ -4889,11 +4911,11 @@ VNOP_MKDIR(struct vnode *dvp, struct vnode **vpp, struct componentname *cnp,
 		xattrfile_remove(dvp, cnp->cn_nameptr, ctx, 0);
 	}
 
-#ifndef __LP64__
+#if CONFIG_VFS_FUNNEL
        if (!thread_safe) {
                unlock_fsnode(dvp, &funnel_state);
        }
-#endif /* __LP64__ */
+#endif /* CONFIG_VFS_FUNNEL */
 
        post_event_if_success(dvp, _err, NOTE_LINK | NOTE_WRITE);
 
@@ -4975,10 +4997,10 @@ VNOP_RMDIR(struct vnode *dvp, struct vnode *vp, struct componentname *cnp, vfs_c
 {
 	int _err;
 	struct vnop_rmdir_args a;
-#ifndef __LP64__
+#if CONFIG_VFS_FUNNEL
 	int thread_safe;
 	int funnel_state = 0;
-#endif /* __LP64__ */
+#endif /* CONFIG_VFS_FUNNEL */
 
 	a.a_desc = &vnop_rmdir_desc;
 	a.a_dvp = dvp;
@@ -4986,14 +5008,14 @@ VNOP_RMDIR(struct vnode *dvp, struct vnode *vp, struct componentname *cnp, vfs_c
 	a.a_cnp = cnp;
 	a.a_context = ctx;
 
-#ifndef __LP64__
+#if CONFIG_VFS_FUNNEL
 	thread_safe = THREAD_SAFE_FS(dvp);
 	if (!thread_safe) {
 		if ( (_err = lock_fsnode(vp, &funnel_state)) ) {
 			return (_err);
 		}
 	}
-#endif /* __LP64__ */
+#endif /* CONFIG_VFS_FUNNEL */
 
 	_err = (*vp->v_op[vnop_rmdir_desc.vdesc_offset])(&a);
 
@@ -5008,11 +5030,11 @@ VNOP_RMDIR(struct vnode *dvp, struct vnode *vp, struct componentname *cnp, vfs_c
 		}
 	}
 
-#ifndef __LP64__
+#if CONFIG_VFS_FUNNEL
 	if (!thread_safe) {
 		unlock_fsnode(vp, &funnel_state);
 	}
-#endif /* __LP64__ */
+#endif /* CONFIG_VFS_FUNNEL */
 
 	/* If you delete a dir, it loses its "." reference --> NOTE_LINK */
 	post_event_if_success(vp, _err, NOTE_DELETE | NOTE_LINK);
@@ -5182,9 +5204,9 @@ xattrfile_setattr(vnode_t dvp, const char * basename, struct vnode_attr * vap,
 	nameidone(&nd);
 
 	if (xvp->v_type == VREG) {
-#ifndef __LP64__
+#if CONFIG_VFS_FUNNEL
 		int thread_safe = THREAD_SAFE_FS(dvp);
-#endif /* __LP64__ */
+#endif /* CONFIG_VFS_FUNNEL */
 		struct vnop_setattr_args a;
 
 		a.a_desc = &vnop_setattr_desc;
@@ -5192,26 +5214,26 @@ xattrfile_setattr(vnode_t dvp, const char * basename, struct vnode_attr * vap,
 		a.a_vap = vap;
 		a.a_context = ctx;
 
-#ifndef __LP64__
+#if CONFIG_VFS_FUNNEL
 		if (!thread_safe) {
 			if ( (lock_fsnode(xvp, NULL)) )
 				goto out1;
 		}
-#endif /* __LP64__ */
+#endif /* CONFIG_VFS_FUNNEL */
 
 		(void) (*xvp->v_op[vnop_setattr_desc.vdesc_offset])(&a);
 
-#ifndef __LP64__
+#if CONFIG_VFS_FUNNEL
 		if (!thread_safe) {
 			unlock_fsnode(xvp, NULL);
 		}
-#endif /* __LP64__ */
+#endif /* CONFIG_VFS_FUNNEL */
 	}
 
 
-#ifndef __LP64__
+#if CONFIG_VFS_FUNNEL
 out1:		
-#endif /* __LP64__ */
+#endif /* CONFIG_VFS_FUNNEL */
 	vnode_put(xvp);
 
 out2:
@@ -5244,10 +5266,10 @@ VNOP_SYMLINK(struct vnode *dvp, struct vnode **vpp, struct componentname *cnp,
 {
        int _err;
        struct vnop_symlink_args a;
-#ifndef __LP64__
+#if CONFIG_VFS_FUNNEL
        int thread_safe;
        int funnel_state = 0;
-#endif /* __LP64__ */
+#endif /* CONFIG_VFS_FUNNEL */
 
        a.a_desc = &vnop_symlink_desc;
        a.a_dvp = dvp;
@@ -5257,14 +5279,14 @@ VNOP_SYMLINK(struct vnode *dvp, struct vnode **vpp, struct componentname *cnp,
        a.a_target = target;
        a.a_context = ctx;
 
-#ifndef __LP64__
+#if CONFIG_VFS_FUNNEL
        thread_safe = THREAD_SAFE_FS(dvp);
        if (!thread_safe) {
                if ( (_err = lock_fsnode(dvp, &funnel_state)) ) {
                        return (_err);
                }
        }
-#endif /* __LP64__ */
+#endif /* CONFIG_VFS_FUNNEL */
 
        _err = (*dvp->v_op[vnop_symlink_desc.vdesc_offset])(&a);   
 	if (_err == 0 && !NATIVE_XATTR(dvp)) {
@@ -5274,11 +5296,11 @@ VNOP_SYMLINK(struct vnode *dvp, struct vnode **vpp, struct componentname *cnp,
 		xattrfile_remove(dvp, cnp->cn_nameptr, ctx, 0);
 	}
 
-#ifndef __LP64__
+#if CONFIG_VFS_FUNNEL
 	if (!thread_safe) {
 		unlock_fsnode(dvp, &funnel_state);
 	}
-#endif /* __LP64__ */
+#endif /* CONFIG_VFS_FUNNEL */
 	
 	post_event_if_success(dvp, _err, NOTE_WRITE);
 
@@ -5308,10 +5330,10 @@ VNOP_READDIR(struct vnode *vp, struct uio *uio, int flags, int *eofflag,
 {
 	int _err;
 	struct vnop_readdir_args a;
-#ifndef __LP64__
+#if CONFIG_VFS_FUNNEL
 	int thread_safe;
 	int funnel_state = 0;
-#endif /* __LP64__ */
+#endif /* CONFIG_VFS_FUNNEL */
 
 	a.a_desc = &vnop_readdir_desc;
 	a.a_vp = vp;
@@ -5320,7 +5342,7 @@ VNOP_READDIR(struct vnode *vp, struct uio *uio, int flags, int *eofflag,
 	a.a_eofflag = eofflag;
 	a.a_numdirent = numdirent;
 	a.a_context = ctx;
-#ifndef __LP64__
+#if CONFIG_VFS_FUNNEL
 	thread_safe = THREAD_SAFE_FS(vp);
 
 	if (!thread_safe) {
@@ -5328,15 +5350,15 @@ VNOP_READDIR(struct vnode *vp, struct uio *uio, int flags, int *eofflag,
 			return (_err);
 		}
 	}
-#endif /* __LP64__ */
+#endif /* CONFIG_VFS_FUNNEL */
 
 	_err = (*vp->v_op[vnop_readdir_desc.vdesc_offset])(&a);
 
-#ifndef __LP64__
+#if CONFIG_VFS_FUNNEL
 	if (!thread_safe) {
 		unlock_fsnode(vp, &funnel_state);
 	}
-#endif /* __LP64__ */
+#endif /* CONFIG_VFS_FUNNEL */
 	return (_err);
 }
 
@@ -5366,10 +5388,10 @@ VNOP_READDIRATTR(struct vnode *vp, struct attrlist *alist, struct uio *uio, uint
 {
 	int _err;
 	struct vnop_readdirattr_args a;
-#ifndef __LP64__
+#if CONFIG_VFS_FUNNEL
 	int thread_safe;
 	int funnel_state = 0;
-#endif /* __LP64__ */
+#endif /* CONFIG_VFS_FUNNEL */
 
 	a.a_desc = &vnop_readdirattr_desc;
 	a.a_vp = vp;
@@ -5382,22 +5404,22 @@ VNOP_READDIRATTR(struct vnode *vp, struct attrlist *alist, struct uio *uio, uint
 	a.a_actualcount = actualcount;
 	a.a_context = ctx;
 
-#ifndef __LP64__
+#if CONFIG_VFS_FUNNEL
 	thread_safe = THREAD_SAFE_FS(vp);
 	if (!thread_safe) {
 		if ( (_err = lock_fsnode(vp, &funnel_state)) ) {
 			return (_err);
 		}
 	}
-#endif /* __LP64__ */
+#endif /* CONFIG_VFS_FUNNEL */
 
 	_err = (*vp->v_op[vnop_readdirattr_desc.vdesc_offset])(&a);
 
-#ifndef __LP64__
+#if CONFIG_VFS_FUNNEL
 	if (!thread_safe) {
 		unlock_fsnode(vp, &funnel_state);
 	}
-#endif /* __LP64__ */
+#endif /* CONFIG_VFS_FUNNEL */
 
 	return (_err);
 }
@@ -5440,32 +5462,32 @@ VNOP_READLINK(struct vnode *vp, struct uio *uio, vfs_context_t ctx)
 {
 	int _err;
 	struct vnop_readlink_args a;
-#ifndef __LP64__
+#if CONFIG_VFS_FUNNEL
 	int thread_safe;
 	int funnel_state = 0;
-#endif /* __LP64__ */
+#endif /* CONFIG_VFS_FUNNEL */
 
 	a.a_desc = &vnop_readlink_desc;
 	a.a_vp = vp;
 	a.a_uio = uio;
 	a.a_context = ctx;
 
-#ifndef __LP64__
+#if CONFIG_VFS_FUNNEL
 	thread_safe = THREAD_SAFE_FS(vp);
 	if (!thread_safe) {
 		if ( (_err = lock_fsnode(vp, &funnel_state)) ) {
 			return (_err);
 		}
 	}
-#endif /* __LP64__ */
+#endif /* CONFIG_VFS_FUNNEL */
 
 	_err = (*vp->v_op[vnop_readlink_desc.vdesc_offset])(&a);
 
-#ifndef __LP64__
+#if CONFIG_VFS_FUNNEL
 	if (!thread_safe) {
 		unlock_fsnode(vp, &funnel_state);
 	}
-#endif /* __LP64__ */
+#endif /* CONFIG_VFS_FUNNEL */
 
 	return (_err);
 }
@@ -5487,31 +5509,31 @@ VNOP_INACTIVE(struct vnode *vp, vfs_context_t ctx)
 {
 	int _err;
 	struct vnop_inactive_args a;
-#ifndef __LP64__
+#if CONFIG_VFS_FUNNEL
 	int thread_safe;
 	int funnel_state = 0;
-#endif /* __LP64__ */
+#endif /* CONFIG_VFS_FUNNEL */
 
 	a.a_desc = &vnop_inactive_desc;
 	a.a_vp = vp;
 	a.a_context = ctx;
 	
-#ifndef __LP64__
+#if CONFIG_VFS_FUNNEL
 	thread_safe = THREAD_SAFE_FS(vp);
 	if (!thread_safe) {
 		if ( (_err = lock_fsnode(vp, &funnel_state)) ) {
 			return (_err);
 		}
 	}
-#endif /* __LP64__ */
+#endif /* CONFIG_VFS_FUNNEL */
 
 	_err = (*vp->v_op[vnop_inactive_desc.vdesc_offset])(&a);
 
-#ifndef __LP64__
+#if CONFIG_VFS_FUNNEL
 	if (!thread_safe) {
 		unlock_fsnode(vp, &funnel_state);
 	}
-#endif /* __LP64__ */
+#endif /* CONFIG_VFS_FUNNEL */
 
 #if NAMEDSTREAMS
 	/* For file systems that do not support namedstream natively, mark 
@@ -5548,29 +5570,29 @@ VNOP_RECLAIM(struct vnode *vp, vfs_context_t ctx)
 {
 	int _err;
 	struct vnop_reclaim_args a;
-#ifndef __LP64__
+#if CONFIG_VFS_FUNNEL
 	int thread_safe;
 	int funnel_state = 0;
-#endif /* __LP64__ */
+#endif /* CONFIG_VFS_FUNNEL */
 
 	a.a_desc = &vnop_reclaim_desc;
 	a.a_vp = vp;
 	a.a_context = ctx;
 
-#ifndef __LP64__
+#if CONFIG_VFS_FUNNEL
 	thread_safe = THREAD_SAFE_FS(vp);
 	if (!thread_safe) {
 		funnel_state = thread_funnel_set(kernel_flock, TRUE);
 	}
-#endif /* __LP64__ */
+#endif /* CONFIG_VFS_FUNNEL */
 
 	_err = (*vp->v_op[vnop_reclaim_desc.vdesc_offset])(&a);
 
-#ifndef __LP64__
+#if CONFIG_VFS_FUNNEL
 	if (!thread_safe) {
 		(void) thread_funnel_set(kernel_flock, funnel_state);
 	}
-#endif /* __LP64__ */
+#endif /* CONFIG_VFS_FUNNEL */
 
 	return (_err);
 }
@@ -5602,10 +5624,10 @@ VNOP_PATHCONF(struct vnode *vp, int name, int32_t *retval, vfs_context_t ctx)
 {
 	int _err;
 	struct vnop_pathconf_args a;
-#ifndef __LP64__
+#if CONFIG_VFS_FUNNEL
 	int thread_safe;
 	int funnel_state = 0;
-#endif /* __LP64__ */
+#endif /* CONFIG_VFS_FUNNEL */
 
 	a.a_desc = &vnop_pathconf_desc;
 	a.a_vp = vp;
@@ -5613,22 +5635,22 @@ VNOP_PATHCONF(struct vnode *vp, int name, int32_t *retval, vfs_context_t ctx)
 	a.a_retval = retval;
 	a.a_context = ctx;
 
-#ifndef __LP64__
+#if CONFIG_VFS_FUNNEL
 	thread_safe = THREAD_SAFE_FS(vp);
 	if (!thread_safe) {
 		if ( (_err = lock_fsnode(vp, &funnel_state)) ) {
 			return (_err);
 		}
 	}
-#endif /* __LP64__ */
+#endif /* CONFIG_VFS_FUNNEL */
 
 	_err = (*vp->v_op[vnop_pathconf_desc.vdesc_offset])(&a);
 
-#ifndef __LP64__
+#if CONFIG_VFS_FUNNEL
 	if (!thread_safe) {
 		unlock_fsnode(vp, &funnel_state);
 	}
-#endif /* __LP64__ */
+#endif /* CONFIG_VFS_FUNNEL */
 
 	return (_err);
 }
@@ -5665,10 +5687,10 @@ VNOP_ADVLOCK(struct vnode *vp, caddr_t id, int op, struct flock *fl, int flags, 
 {
 	int _err;
 	struct vnop_advlock_args a;
-#ifndef __LP64__
+#if CONFIG_VFS_FUNNEL
 	int thread_safe;
 	int funnel_state = 0;
-#endif /* __LP64__ */
+#endif /* CONFIG_VFS_FUNNEL */
 
 	a.a_desc = &vnop_advlock_desc;
 	a.a_vp = vp;
@@ -5678,12 +5700,12 @@ VNOP_ADVLOCK(struct vnode *vp, caddr_t id, int op, struct flock *fl, int flags, 
 	a.a_flags = flags;
 	a.a_context = ctx;
 
-#ifndef __LP64__
+#if CONFIG_VFS_FUNNEL
 	thread_safe = THREAD_SAFE_FS(vp);
 	if (!thread_safe) {
 		funnel_state = thread_funnel_set(kernel_flock, TRUE);
 	}
-#endif /* __LP64__ */
+#endif /* CONFIG_VFS_FUNNEL */
 
 	/* Disallow advisory locking on non-seekable vnodes */
 	if (vnode_isfifo(vp)) {
@@ -5698,11 +5720,11 @@ VNOP_ADVLOCK(struct vnode *vp, caddr_t id, int op, struct flock *fl, int flags, 
 		}
 	}
 
-#ifndef __LP64__
+#if CONFIG_VFS_FUNNEL
 	if (!thread_safe) {
 		(void) thread_funnel_set(kernel_flock, funnel_state);
 	}
-#endif /* __LP64__ */
+#endif /* CONFIG_VFS_FUNNEL */
 
 	return (_err);
 }
@@ -5731,10 +5753,10 @@ VNOP_ALLOCATE(struct vnode *vp, off_t length, u_int32_t flags, off_t *bytesalloc
 {
 	int _err;
 	struct vnop_allocate_args a;
-#ifndef __LP64__
+#if CONFIG_VFS_FUNNEL
 	int thread_safe;
 	int funnel_state = 0;
-#endif /* __LP64__ */
+#endif /* CONFIG_VFS_FUNNEL */
 
 	a.a_desc = &vnop_allocate_desc;
 	a.a_vp = vp;
@@ -5744,14 +5766,14 @@ VNOP_ALLOCATE(struct vnode *vp, off_t length, u_int32_t flags, off_t *bytesalloc
 	a.a_offset = offset;
 	a.a_context = ctx;
 
-#ifndef __LP64__
+#if CONFIG_VFS_FUNNEL
 	thread_safe = THREAD_SAFE_FS(vp);
 	if (!thread_safe) {
 		if ( (_err = lock_fsnode(vp, &funnel_state)) ) {
 			return (_err);
 		}
 	}
-#endif /* __LP64__ */
+#endif /* CONFIG_VFS_FUNNEL */
 
 	_err = (*vp->v_op[vnop_allocate_desc.vdesc_offset])(&a);
 #if CONFIG_FSE
@@ -5760,11 +5782,11 @@ VNOP_ALLOCATE(struct vnode *vp, off_t length, u_int32_t flags, off_t *bytesalloc
 	}
 #endif
 
-#ifndef __LP64__
+#if CONFIG_VFS_FUNNEL
 	if (!thread_safe) {
 		unlock_fsnode(vp, &funnel_state);
 	}
-#endif /* __LP64__ */
+#endif /* CONFIG_VFS_FUNNEL */
 
 	return (_err);
 }
@@ -5791,10 +5813,10 @@ VNOP_PAGEIN(struct vnode *vp, upl_t pl, upl_offset_t pl_offset, off_t f_offset, 
 {
 	int _err;
 	struct vnop_pagein_args a;
-#ifndef __LP64__
+#if CONFIG_VFS_FUNNEL
 	int thread_safe;
 	int funnel_state = 0;
-#endif /* __LP64__ */
+#endif /* CONFIG_VFS_FUNNEL */
 
 	a.a_desc = &vnop_pagein_desc;
 	a.a_vp = vp;
@@ -5805,20 +5827,20 @@ VNOP_PAGEIN(struct vnode *vp, upl_t pl, upl_offset_t pl_offset, off_t f_offset, 
 	a.a_flags = flags;
 	a.a_context = ctx;
 
-#ifndef __LP64__
+#if CONFIG_VFS_FUNNEL
 	thread_safe = THREAD_SAFE_FS(vp);
 	if (!thread_safe) {
 		funnel_state = thread_funnel_set(kernel_flock, TRUE);
 	}
-#endif /* __LP64__ */
+#endif /* CONFIG_VFS_FUNNEL */
 
 	_err = (*vp->v_op[vnop_pagein_desc.vdesc_offset])(&a);
 
-#ifndef __LP64__
+#if CONFIG_VFS_FUNNEL
 	if (!thread_safe) {
 		(void) thread_funnel_set(kernel_flock, funnel_state);
 	}
-#endif /* __LP64__ */
+#endif /* CONFIG_VFS_FUNNEL */
 	
 	return (_err);
 }
@@ -5846,10 +5868,10 @@ VNOP_PAGEOUT(struct vnode *vp, upl_t pl, upl_offset_t pl_offset, off_t f_offset,
 {
 	int _err;
 	struct vnop_pageout_args a;
-#ifndef __LP64__
+#if CONFIG_VFS_FUNNEL
 	int thread_safe;
 	int funnel_state = 0;
-#endif /* __LP64__ */
+#endif /* CONFIG_VFS_FUNNEL */
 
 	a.a_desc = &vnop_pageout_desc;
 	a.a_vp = vp;
@@ -5860,20 +5882,20 @@ VNOP_PAGEOUT(struct vnode *vp, upl_t pl, upl_offset_t pl_offset, off_t f_offset,
 	a.a_flags = flags;
 	a.a_context = ctx;
 
-#ifndef __LP64__
+#if CONFIG_VFS_FUNNEL
 	thread_safe = THREAD_SAFE_FS(vp);
 	if (!thread_safe) {
 		funnel_state = thread_funnel_set(kernel_flock, TRUE);
 	}
-#endif /* __LP64__ */
+#endif /* CONFIG_VFS_FUNNEL */
 
 	_err = (*vp->v_op[vnop_pageout_desc.vdesc_offset])(&a);
 
-#ifndef __LP64__
+#if CONFIG_VFS_FUNNEL
 	if (!thread_safe) {
 		(void) thread_funnel_set(kernel_flock, funnel_state);
 	}
-#endif /* __LP64__ */
+#endif /* CONFIG_VFS_FUNNEL */
 
 	post_event_if_success(vp, _err, NOTE_WRITE);
 
@@ -5890,6 +5912,7 @@ vn_remove(vnode_t dvp, vnode_t *vpp, struct nameidata *ndp, int32_t flags, struc
 	}
 }
 
+#if CONFIG_SEARCHFS
 
 #if 0
 /*
@@ -5920,10 +5943,10 @@ VNOP_SEARCHFS(struct vnode *vp, void *searchparams1, void *searchparams2, struct
 {
 	int _err;
 	struct vnop_searchfs_args a;
-#ifndef __LP64__
+#if CONFIG_VFS_FUNNEL
 	int thread_safe;
 	int funnel_state = 0;
-#endif /* __LP64__ */
+#endif /* CONFIG_VFS_FUNNEL */
 
 	a.a_desc = &vnop_searchfs_desc;
 	a.a_vp = vp;
@@ -5940,25 +5963,26 @@ VNOP_SEARCHFS(struct vnode *vp, void *searchparams1, void *searchparams2, struct
 	a.a_searchstate = searchstate;
 	a.a_context = ctx;
 
-#ifndef __LP64__
+#if CONFIG_VFS_FUNNEL
 	thread_safe = THREAD_SAFE_FS(vp);
 	if (!thread_safe) {
 		if ( (_err = lock_fsnode(vp, &funnel_state)) ) {
 			return (_err);
 		}
 	}
-#endif /* __LP64__ */
+#endif /* CONFIG_VFS_FUNNEL */
 
 	_err = (*vp->v_op[vnop_searchfs_desc.vdesc_offset])(&a);
 
-#ifndef __LP64__
+#if CONFIG_VFS_FUNNEL
 	if (!thread_safe) {
 		unlock_fsnode(vp, &funnel_state);
 	}
-#endif /* __LP64__ */
+#endif /* CONFIG_VFS_FUNNEL */
 
 	return (_err);
 }
+#endif /* CONFIG_SEARCHFS */
 
 #if 0
 /*
@@ -6002,10 +6026,10 @@ VNOP_GETXATTR(vnode_t vp, const char *name, uio_t uio, size_t *size, int options
 {
 	struct vnop_getxattr_args a;
 	int error;
-#ifndef __LP64__
+#if CONFIG_VFS_FUNNEL
 	int thread_safe;
 	int funnel_state = 0;
-#endif /* __LP64__ */
+#endif /* CONFIG_VFS_FUNNEL */
 
 	a.a_desc = &vnop_getxattr_desc;
 	a.a_vp = vp;
@@ -6015,22 +6039,22 @@ VNOP_GETXATTR(vnode_t vp, const char *name, uio_t uio, size_t *size, int options
 	a.a_options = options;
 	a.a_context = ctx;
 
-#ifndef __LP64__
+#if CONFIG_VFS_FUNNEL
 	thread_safe = THREAD_SAFE_FS(vp);
 	if (!thread_safe) {
 		if ( (error = lock_fsnode(vp, &funnel_state)) ) {
 			return (error);
 		}
 	}
-#endif /* __LP64__ */
+#endif /* CONFIG_VFS_FUNNEL */
 
 	error = (*vp->v_op[vnop_getxattr_desc.vdesc_offset])(&a);
 
-#ifndef __LP64__
+#if CONFIG_VFS_FUNNEL
 	if (!thread_safe) {
 		unlock_fsnode(vp, &funnel_state);
 	}
-#endif /* __LP64__ */
+#endif /* CONFIG_VFS_FUNNEL */
 
 	return (error);
 }
@@ -6040,10 +6064,10 @@ VNOP_SETXATTR(vnode_t vp, const char *name, uio_t uio, int options, vfs_context_
 {
 	struct vnop_setxattr_args a;
 	int error;
-#ifndef __LP64__
+#if CONFIG_VFS_FUNNEL
 	int thread_safe;
 	int funnel_state = 0;
-#endif /* __LP64__ */
+#endif /* CONFIG_VFS_FUNNEL */
 
 	a.a_desc = &vnop_setxattr_desc;
 	a.a_vp = vp;
@@ -6052,22 +6076,22 @@ VNOP_SETXATTR(vnode_t vp, const char *name, uio_t uio, int options, vfs_context_
 	a.a_options = options;
 	a.a_context = ctx;
 
-#ifndef __LP64__
+#if CONFIG_VFS_FUNNEL
 	thread_safe = THREAD_SAFE_FS(vp);
 	if (!thread_safe) {
 		if ( (error = lock_fsnode(vp, &funnel_state)) ) {
 			return (error);
 		}
 	}
-#endif /* __LP64__ */
+#endif /* CONFIG_VFS_FUNNEL */
 
 	error = (*vp->v_op[vnop_setxattr_desc.vdesc_offset])(&a);
 
-#ifndef __LP64__
+#if CONFIG_VFS_FUNNEL
 	if (!thread_safe) {
 		unlock_fsnode(vp, &funnel_state);
 	}
-#endif /* __LP64__ */
+#endif /* CONFIG_VFS_FUNNEL */
 
 	if (error == 0)
 	        vnode_uncache_authorized_action(vp, KAUTH_INVALIDATE_CACHED_RIGHTS);
@@ -6082,10 +6106,10 @@ VNOP_REMOVEXATTR(vnode_t vp, const char *name, int options, vfs_context_t ctx)
 {
 	struct vnop_removexattr_args a;
 	int error;
-#ifndef __LP64__
+#if CONFIG_VFS_FUNNEL
 	int thread_safe;
 	int funnel_state = 0;
-#endif /* __LP64__ */
+#endif /* CONFIG_VFS_FUNNEL */
 
 	a.a_desc = &vnop_removexattr_desc;
 	a.a_vp = vp;
@@ -6093,22 +6117,22 @@ VNOP_REMOVEXATTR(vnode_t vp, const char *name, int options, vfs_context_t ctx)
 	a.a_options = options;
 	a.a_context = ctx;
 
-#ifndef __LP64__
+#if CONFIG_VFS_FUNNEL
 	thread_safe = THREAD_SAFE_FS(vp);
 	if (!thread_safe) {
 		if ( (error = lock_fsnode(vp, &funnel_state)) ) {
 			return (error);
 		}
 	}
-#endif /* __LP64__ */
+#endif /* CONFIG_VFS_FUNNEL */
 
 	error = (*vp->v_op[vnop_removexattr_desc.vdesc_offset])(&a);
 
-#ifndef __LP64__
+#if CONFIG_VFS_FUNNEL
 	if (!thread_safe) {
 		unlock_fsnode(vp, &funnel_state);
 	}
-#endif /* __LP64__ */
+#endif /* CONFIG_VFS_FUNNEL */
 
 	post_event_if_success(vp, error, NOTE_ATTRIB);
 	
@@ -6120,10 +6144,10 @@ VNOP_LISTXATTR(vnode_t vp, uio_t uio, size_t *size, int options, vfs_context_t c
 {
 	struct vnop_listxattr_args a;
 	int error;
-#ifndef __LP64__
+#if CONFIG_VFS_FUNNEL
 	int thread_safe;
 	int funnel_state = 0;
-#endif /* __LP64__ */
+#endif /* CONFIG_VFS_FUNNEL */
 
 	a.a_desc = &vnop_listxattr_desc;
 	a.a_vp = vp;
@@ -6132,22 +6156,22 @@ VNOP_LISTXATTR(vnode_t vp, uio_t uio, size_t *size, int options, vfs_context_t c
 	a.a_options = options;
 	a.a_context = ctx;
 
-#ifndef __LP64__
+#if CONFIG_VFS_FUNNEL
 	thread_safe = THREAD_SAFE_FS(vp);
 	if (!thread_safe) {
 		if ( (error = lock_fsnode(vp, &funnel_state)) ) {
 			return (error);
 		}
 	}
-#endif /* __LP64__ */
+#endif /* CONFIG_VFS_FUNNEL */
 
 	error = (*vp->v_op[vnop_listxattr_desc.vdesc_offset])(&a);
 
-#ifndef __LP64__
+#if CONFIG_VFS_FUNNEL
 	if (!thread_safe) {
 		unlock_fsnode(vp, &funnel_state);
 	}
-#endif /* __LP64__ */
+#endif /* CONFIG_VFS_FUNNEL */
 
 	return (error);
 }
@@ -6171,30 +6195,30 @@ VNOP_BLKTOOFF(struct vnode *vp, daddr64_t lblkno, off_t *offset)
 {
 	int _err;
 	struct vnop_blktooff_args a;
-#ifndef __LP64__
+#if CONFIG_VFS_FUNNEL
 	int thread_safe;
 	int funnel_state = 0;
-#endif /* __LP64__ */
+#endif /* CONFIG_VFS_FUNNEL */
 
 	a.a_desc = &vnop_blktooff_desc;
 	a.a_vp = vp;
 	a.a_lblkno = lblkno;
 	a.a_offset = offset;
 
-#ifndef __LP64__
+#if CONFIG_VFS_FUNNEL
 	thread_safe = THREAD_SAFE_FS(vp);
 	if (!thread_safe) {
 		funnel_state = thread_funnel_set(kernel_flock, TRUE);
 	}
-#endif /* __LP64__ */
+#endif /* CONFIG_VFS_FUNNEL */
 
 	_err = (*vp->v_op[vnop_blktooff_desc.vdesc_offset])(&a);
 
-#ifndef __LP64__
+#if CONFIG_VFS_FUNNEL
 	if (!thread_safe) {
 		(void) thread_funnel_set(kernel_flock, funnel_state);
 	}
-#endif /* __LP64__ */
+#endif /* CONFIG_VFS_FUNNEL */
 
 	return (_err);
 }
@@ -6217,30 +6241,30 @@ VNOP_OFFTOBLK(struct vnode *vp, off_t offset, daddr64_t *lblkno)
 {
 	int _err;
 	struct vnop_offtoblk_args a;
-#ifndef __LP64__
+#if CONFIG_VFS_FUNNEL
 	int thread_safe;
 	int funnel_state = 0;
-#endif /* __LP64__ */
+#endif /* CONFIG_VFS_FUNNEL */
 
 	a.a_desc = &vnop_offtoblk_desc;
 	a.a_vp = vp;
 	a.a_offset = offset;
 	a.a_lblkno = lblkno;
 
-#ifndef __LP64__
+#if CONFIG_VFS_FUNNEL
 	thread_safe = THREAD_SAFE_FS(vp);
 	if (!thread_safe) {
 		funnel_state = thread_funnel_set(kernel_flock, TRUE);
 	}
-#endif /* __LP64__ */
+#endif /* CONFIG_VFS_FUNNEL */
 
 	_err = (*vp->v_op[vnop_offtoblk_desc.vdesc_offset])(&a);
 
-#ifndef __LP64__
+#if CONFIG_VFS_FUNNEL
 	if (!thread_safe) {
 		(void) thread_funnel_set(kernel_flock, funnel_state);
 	}
-#endif /* __LP64__ */
+#endif /* CONFIG_VFS_FUNNEL */
 
 	return (_err);
 }
@@ -6268,10 +6292,11 @@ VNOP_BLOCKMAP(struct vnode *vp, off_t foffset, size_t size, daddr64_t *bpn, size
 {
 	int _err;
 	struct vnop_blockmap_args a;
-#ifndef __LP64__
+	size_t localrun = 0;
+#if CONFIG_VFS_FUNNEL
 	int thread_safe;
 	int funnel_state = 0;
-#endif /* __LP64__ */
+#endif /* CONFIG_VFS_FUNNEL */
 
 	if (ctx == NULL) {
 		ctx = vfs_context_current();
@@ -6281,25 +6306,41 @@ VNOP_BLOCKMAP(struct vnode *vp, off_t foffset, size_t size, daddr64_t *bpn, size
 	a.a_foffset = foffset;
 	a.a_size = size;
 	a.a_bpn = bpn;
-	a.a_run = run;
+	a.a_run = &localrun;
 	a.a_poff = poff;
 	a.a_flags = flags;
 	a.a_context = ctx;
 
-#ifndef __LP64__
+#if CONFIG_VFS_FUNNEL
 	thread_safe = THREAD_SAFE_FS(vp);
 	if (!thread_safe) {
 		funnel_state = thread_funnel_set(kernel_flock, TRUE);
 	}
-#endif /* __LP64__ */
+#endif /* CONFIG_VFS_FUNNEL */
 
 	_err = (*vp->v_op[vnop_blockmap_desc.vdesc_offset])(&a);
 
-#ifndef __LP64__
+#if CONFIG_VFS_FUNNEL
 	if (!thread_safe) {
 		(void) thread_funnel_set(kernel_flock, funnel_state);
 	}
-#endif /* __LP64__ */
+#endif /* CONFIG_VFS_FUNNEL */
+
+	/*
+	 * We used a local variable to request information from the underlying
+	 * filesystem about the length of the I/O run in question.  If
+	 * we get malformed output from the filesystem, we cap it to the length
+	 * requested, at most.  Update 'run' on the way out.
+	 */
+	if (_err == 0) {
+		if (localrun > size) {
+			localrun = size;
+		}
+
+		if (run) {
+			*run = localrun;
+		}
+	}
 
 	return (_err);
 }
@@ -6352,32 +6393,32 @@ VNOP_KQFILT_ADD(struct vnode *vp, struct knote *kn, vfs_context_t ctx)
 {
 	int _err;
 	struct vnop_kqfilt_add_args a;
-#ifndef __LP64__
+#if CONFIG_VFS_FUNNEL
 	int thread_safe;
 	int funnel_state = 0;
-#endif /* __LP64__ */
+#endif /* CONFIG_VFS_FUNNEL */
 
 	a.a_desc = VDESC(vnop_kqfilt_add);
 	a.a_vp = vp;
 	a.a_kn = kn;
 	a.a_context = ctx;
 
-#ifndef __LP64__
+#if CONFIG_VFS_FUNNEL
 	thread_safe = THREAD_SAFE_FS(vp);
 	if (!thread_safe) {
 		if ( (_err = lock_fsnode(vp, &funnel_state)) ) {
 			return (_err);
 		}
 	}
-#endif /* __LP64__ */
+#endif /* CONFIG_VFS_FUNNEL */
 
 	_err = (*vp->v_op[vnop_kqfilt_add_desc.vdesc_offset])(&a);
 	
-#ifndef __LP64__
+#if CONFIG_VFS_FUNNEL
 	if (!thread_safe) {
 		unlock_fsnode(vp, &funnel_state);
 	}
-#endif /* __LP64__ */
+#endif /* CONFIG_VFS_FUNNEL */
 
 	return(_err);
 }
@@ -6395,32 +6436,32 @@ VNOP_KQFILT_REMOVE(struct vnode *vp, uintptr_t ident, vfs_context_t ctx)
 {
 	int _err;
 	struct vnop_kqfilt_remove_args a;
-#ifndef __LP64__
+#if CONFIG_VFS_FUNNEL
 	int thread_safe;
 	int funnel_state = 0;
-#endif /* __LP64__ */
+#endif /* CONFIG_VFS_FUNNEL */
 
 	a.a_desc = VDESC(vnop_kqfilt_remove);
 	a.a_vp = vp;
 	a.a_ident = ident;
 	a.a_context = ctx;
 
-#ifndef __LP64__
+#if CONFIG_VFS_FUNNEL
 	thread_safe = THREAD_SAFE_FS(vp);
 	if (!thread_safe) {
 		if ( (_err = lock_fsnode(vp, &funnel_state)) ) {
 			return (_err);
 		}
 	}
-#endif /* __LP64__ */
+#endif /* CONFIG_VFS_FUNNEL */
 
 	_err = (*vp->v_op[vnop_kqfilt_remove_desc.vdesc_offset])(&a);
 
-#ifndef __LP64__
+#if CONFIG_VFS_FUNNEL
 	if (!thread_safe) {
 		unlock_fsnode(vp, &funnel_state);
 	}
-#endif /* __LP64__ */
+#endif /* CONFIG_VFS_FUNNEL */
 
 	return(_err);
 }
@@ -6430,10 +6471,10 @@ VNOP_MONITOR(vnode_t vp, uint32_t events, uint32_t flags, void *handle, vfs_cont
 {
 	int _err;
 	struct vnop_monitor_args a;
-#ifndef __LP64__
+#if CONFIG_VFS_FUNNEL
 	int thread_safe;
 	int funnel_state = 0;
-#endif /* __LP64__ */
+#endif /* CONFIG_VFS_FUNNEL */
 
 	a.a_desc = VDESC(vnop_monitor);
 	a.a_vp = vp;
@@ -6442,22 +6483,22 @@ VNOP_MONITOR(vnode_t vp, uint32_t events, uint32_t flags, void *handle, vfs_cont
 	a.a_handle = handle;
 	a.a_context = ctx;
 
-#ifndef __LP64__
+#if CONFIG_VFS_FUNNEL
 	thread_safe = THREAD_SAFE_FS(vp);
 	if (!thread_safe) {
 		if ( (_err = lock_fsnode(vp, &funnel_state)) ) {
 			return (_err);
 		}
 	}
-#endif /* __LP64__ */
+#endif /* CONFIG_VFS_FUNNEL */
 	
 	_err = (*vp->v_op[vnop_monitor_desc.vdesc_offset])(&a);
 
-#ifndef __LP64__
+#if CONFIG_VFS_FUNNEL
 	if (!thread_safe) {
 		unlock_fsnode(vp, &funnel_state);
 	}
-#endif /* __LP64__ */
+#endif /* CONFIG_VFS_FUNNEL */
 
 	return(_err);
 }
@@ -6475,32 +6516,32 @@ VNOP_SETLABEL(struct vnode *vp, struct label *label, vfs_context_t ctx)
 {
 	int _err;
 	struct vnop_setlabel_args a;
-#ifndef __LP64__
+#if CONFIG_VFS_FUNNEL
 	int thread_safe;
 	int funnel_state = 0;
-#endif /* __LP64__ */
+#endif /* CONFIG_VFS_FUNNEL */
 
 	a.a_desc = VDESC(vnop_setlabel);
 	a.a_vp = vp;
 	a.a_vl = label;
 	a.a_context = ctx;
 
-#ifndef __LP64__
+#if CONFIG_VFS_FUNNEL
 	thread_safe = THREAD_SAFE_FS(vp);
 	if (!thread_safe) {
 		if ( (_err = lock_fsnode(vp, &funnel_state)) ) {
 			return (_err);
 		}
 	}
-#endif /* __LP64__ */
+#endif /* CONFIG_VFS_FUNNEL */
 
 	_err = (*vp->v_op[vnop_setlabel_desc.vdesc_offset])(&a);
 
-#ifndef __LP64__
+#if CONFIG_VFS_FUNNEL
 	if (!thread_safe) {
 		unlock_fsnode(vp, &funnel_state);
 	}
-#endif /* __LP64__ */
+#endif /* CONFIG_VFS_FUNNEL */
 
 	return(_err);
 }
@@ -6515,10 +6556,10 @@ VNOP_GETNAMEDSTREAM(vnode_t vp, vnode_t *svpp, const char *name, enum nsoperatio
 {
 	struct vnop_getnamedstream_args a;
 
-#ifndef __LP64__
+#if CONFIG_VFS_FUNNEL
 	if (!THREAD_SAFE_FS(vp))
 		return (ENOTSUP);
-#endif /* __LP64__ */
+#endif /* CONFIG_VFS_FUNNEL */
 
 	a.a_desc = &vnop_getnamedstream_desc;
 	a.a_vp = vp;
@@ -6539,10 +6580,10 @@ VNOP_MAKENAMEDSTREAM(vnode_t vp, vnode_t *svpp, const char *name, int flags, vfs
 {
 	struct vnop_makenamedstream_args a;
 
-#ifndef __LP64__
+#if CONFIG_VFS_FUNNEL
 	if (!THREAD_SAFE_FS(vp))
 		return (ENOTSUP);
-#endif /* __LP64__ */
+#endif /* CONFIG_VFS_FUNNEL */
 
 	a.a_desc = &vnop_makenamedstream_desc;
 	a.a_vp = vp;
@@ -6563,10 +6604,10 @@ VNOP_REMOVENAMEDSTREAM(vnode_t vp, vnode_t svp, const char *name, int flags, vfs
 {
 	struct vnop_removenamedstream_args a;
 
-#ifndef __LP64__
+#if CONFIG_VFS_FUNNEL
 	if (!THREAD_SAFE_FS(vp))
 		return (ENOTSUP);
-#endif /* __LP64__ */
+#endif /* CONFIG_VFS_FUNNEL */
 
 	a.a_desc = &vnop_removenamedstream_desc;
 	a.a_vp = vp;

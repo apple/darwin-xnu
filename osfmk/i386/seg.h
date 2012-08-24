@@ -55,11 +55,6 @@
  */
 #ifndef	_I386_SEG_H_
 #define	_I386_SEG_H_
-#ifdef MACH_KERNEL
-#include <mach_kdb.h>
-#else
-#define	MACH_KDB 0
-#endif	/* MACH_KERNEL */
 #ifndef __ASSEMBLER__
 #include <stdint.h>
 #include <mach/vm_types.h>
@@ -99,15 +94,7 @@ selector_to_sel(uint16_t selector)
 #define	LDTSZ_MIN	SEL_TO_INDEX(USER_SETTABLE)
 					/* kernel ldt entries */
 
-#if	MACH_KDB
-#define	GDTSZ		20
-#else
 #define	GDTSZ		19
-#endif
-
-#ifdef __x86_64__
-#define PROT_MODE_GDT_SIZE 48 /* size of prot_mode_gdt in bytes */
-#endif
 
 /*
  * Interrupt table is always 256 entries long.
@@ -218,12 +205,6 @@ extern char			mc_task_stack[];
 extern char			mc_task_stack_end[];
 extern struct i386_tss		master_mctss;
 extern void			mc_task_start(void);
-
-#if	MACH_KDB
-extern char			db_task_stack_store[];
-extern struct i386_tss		master_dbtss;
-extern void			db_task_start(void);
-#endif	/* MACH_KDB */
 
 __END_DECLS
 
@@ -353,10 +334,6 @@ __END_DECLS
 #else // __x86_64__
 #define SYSENTER_TF_CS	(USER_CS|0x10000)
 #define	SYSENTER_DS	KERNEL64_SS	/* sysenter kernel data segment */
-#endif
-
-#if	MACH_KDB
-#define	DEBUG_TSS	0x90		/* 18:  debug TSS (uniprocessor) */
 #endif
 
 #ifdef __x86_64__

@@ -50,7 +50,8 @@
 #ifdef _MIG_TRACE_PARAMETERS_
 
 #define __BeforeRcvCallTrace(msgid,arg1,arg2,arg3,arg4)				      \
-	KERNEL_DEBUG_CONSTANT(KDBG_MIGCODE(msgid) | DBG_FUNC_START,		      \
+	KERNEL_DEBUG_CONSTANT_IST(KDEBUG_TRACE,          \
+			      KDBG_MIGCODE(msgid) | DBG_FUNC_START,   \
 			      (unsigned int)(arg1),				      \
 			      (unsigned int)(arg2),				      \
 			      (unsigned int)(arg3),				      \
@@ -58,7 +59,8 @@
 			      (unsigned int)(0));
 
 #define __AfterRcvCallTrace(msgid,arg1,arg2,arg3,arg4)				      \
-	KERNEL_DEBUG_CONSTANT(KDBG_MIGCODE(msgid) | DBG_FUNC_END,		      \
+	KERNEL_DEBUG_CONSTANT_IST(KDEBUG_TRACE,          \
+			      KDBG_MIGCODE(msgid) | DBG_FUNC_END,     \
 			      (unsigned int)(arg1),				      \
 			      (unsigned int)(arg2),				      \
 			      (unsigned int)(arg3),				      \
@@ -66,7 +68,8 @@
 			      (unsigned int)(0));
 
 #define __BeforeSimpleCallTrace(msgid,arg1,arg2,arg3,arg4)			      \
-	KERNEL_DEBUG_CONSTANT(KDBG_MIGCODE(msgid) | DBG_FUNC_START,		      \
+	KERNEL_DEBUG_CONSTANT_IST(KDEBUG_TRACE,          \
+			      KDBG_MIGCODE(msgid) | DBG_FUNC_START,   \
 			      (unsigned int)(arg1),				      \
 			      (unsigned int)(arg2),				      \
 			      (unsigned int)(arg3),				      \
@@ -74,7 +77,8 @@
 			      (unsigned int)(0));
 
 #define __AfterSimpleCallTrace(msgid,arg1,arg2,arg3,arg4)			      \
-	KERNEL_DEBUG_CONSTANT(KDBG_MIGCODE(msgid) | DBG_FUNC_END,		      \
+	KERNEL_DEBUG_CONSTANT_IST(KDEBUG_TRACE,          \
+	              KDBG_MIGCODE(msgid) | DBG_FUNC_END,     \
 			      (unsigned int)(arg1),				      \
 			      (unsigned int)(arg2),				      \
 			      (unsigned int)(arg3),				      \
@@ -84,7 +88,8 @@
 #else /* !_MIG_TRACE_PARAMETERS_ */
 
 #define	__BeforeRcvRpc(msgid, _NAME_)						      \
-	KERNEL_DEBUG_CONSTANT(KDBG_MIGCODE(msgid) | DBG_FUNC_START,		      \
+	KERNEL_DEBUG_CONSTANT_IST(KDEBUG_TRACE,          \
+			      KDBG_MIGCODE(msgid) | DBG_FUNC_START,   \
 			      (unsigned int)(0),				      \
 			      (unsigned int)(0),				      \
 			      (unsigned int)(0),				      \
@@ -92,7 +97,8 @@
 			      (unsigned int)(0));
 
 #define	__AfterRcvRpc(msgid, _NAME_)						      \
-	KERNEL_DEBUG_CONSTANT(KDBG_MIGCODE(msgid) | DBG_FUNC_END,		      \
+	KERNEL_DEBUG_CONSTANT_IST(KDEBUG_TRACE,          \
+	              KDBG_MIGCODE(msgid) | DBG_FUNC_END,     \
 			      (unsigned int)(0),				      \
 			      (unsigned int)(0),				      \
 			      (unsigned int)(0),				      \
@@ -101,7 +107,8 @@
 
 
 #define	__BeforeRcvSimple(msgid, _NAME_)					      \
-	KERNEL_DEBUG_CONSTANT(KDBG_MIGCODE(msgid) | DBG_FUNC_START,		      \
+	KERNEL_DEBUG_CONSTANT_IST(KDEBUG_TRACE,          \
+			      KDBG_MIGCODE(msgid) | DBG_FUNC_START,   \
 			      (unsigned int)(0),				      \
 			      (unsigned int)(0),				      \
 			      (unsigned int)(0),				      \
@@ -109,7 +116,8 @@
 			      (unsigned int)(0));
 
 #define	__AfterRcvSimple(msgid, _NAME_)						      \
-	KERNEL_DEBUG_CONSTANT(KDBG_MIGCODE(msgid) | DBG_FUNC_END,		      \
+	KERNEL_DEBUG_CONSTANT_IST(KDEBUG_TRACE,          \
+			      KDBG_MIGCODE(msgid) | DBG_FUNC_END,     \
 			      (unsigned int)(0),				      \
 			      (unsigned int)(0),				      \
 			      (unsigned int)(0),				      \
@@ -119,7 +127,8 @@
 #endif /* !_MIG_TRACE_PARAMETERS_ */
 
 #define _MIG_MSGID_INVALID(msgid)						      \
-	KERNEL_DEBUG_CONSTANT(MACHDBG_CODE(DBG_MACH_MSGID_INVALID, (msgid)),          \
+	KERNEL_DEBUG_CONSTANT_IST(KDEBUG_TRACE,          \
+			      MACHDBG_CODE(DBG_MACH_MSGID_INVALID, (msgid)),  \
 			      (unsigned int)(0),				      \
 			      (unsigned int)(0),				      \
 			      (unsigned int)(0),				      \

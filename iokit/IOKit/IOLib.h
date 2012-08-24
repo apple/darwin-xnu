@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1998-2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 1998-2011 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -85,8 +85,10 @@ void * IOMalloc(vm_size_t size);
 /*! @function IOFree
     @abstract Frees memory allocated with IOMalloc.
     @discussion This function frees memory allocated with IOMalloc, it may block and so should not be called from interrupt level or while a simple lock is held.
-    @param address Pointer to the allocated memory.
-    @param size Size of the memory allocated. */
+    @param address Pointer to the allocated memory. Must be identical to result
+    @of a prior IOMalloc.
+    @param size Size of the memory allocated. Must be identical to size of
+    @the corresponding IOMalloc */
 
 void   IOFree(void * address, vm_size_t size);
 
@@ -348,7 +350,7 @@ OSDictionary *
 #else
 struct OSDictionary *
 #endif
-IOOFPathMatching( const char * path, char * buf, int maxLen );
+IOOFPathMatching( const char * path, char * buf, int maxLen ) __attribute__((deprecated));
 
 /*
  * Convert between size and a power-of-two alignment.

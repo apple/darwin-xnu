@@ -68,11 +68,11 @@ typedef unsigned int WK_word;
 
 /* the next few are used during compression to write the header */
 #define SET_QPOS_AREA_START(compr_dest_buf,qpos_start_addr)  \
-        (compr_dest_buf[1] = (unsigned int)(qpos_start_addr - compr_dest_buf))
+        (compr_dest_buf[1] = (WK_word)(qpos_start_addr - compr_dest_buf))
 #define SET_LOW_BITS_AREA_START(compr_dest_buf,lb_start_addr) \
-        (compr_dest_buf[2] = (unsigned int)(lb_start_addr - compr_dest_buf))
+        (compr_dest_buf[2] = (WK_word)(lb_start_addr - compr_dest_buf))
 #define SET_LOW_BITS_AREA_END(compr_dest_buf,lb_end_addr) \
-        (compr_dest_buf[3] = (unsigned int)(lb_end_addr - compr_dest_buf))
+        (compr_dest_buf[3] = (WK_word)(lb_end_addr - compr_dest_buf))
 
 /* the next few are only use during decompression to read the header */
 #define TAGS_AREA_START(decomp_src_buf)       \

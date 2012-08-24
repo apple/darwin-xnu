@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2009-2011 Apple Inc. All rights reserved.
+ * Copyright (c) 2009-2012 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -115,8 +115,8 @@ in6_gif_output(
 {
 	struct gif_softc *sc = ifnet_softc(ifp);
 	struct sockaddr_in6 *dst = (struct sockaddr_in6 *)&sc->gif_ro6.ro_dst;
-	struct sockaddr_in6 *sin6_src = (struct sockaddr_in6 *)sc->gif_psrc;
-	struct sockaddr_in6 *sin6_dst = (struct sockaddr_in6 *)sc->gif_pdst;
+	struct sockaddr_in6 *sin6_src = (struct sockaddr_in6 *)(void *)sc->gif_psrc;
+	struct sockaddr_in6 *sin6_dst = (struct sockaddr_in6 *)(void *)sc->gif_pdst;
 	struct ip6_hdr *ip6;
 	int proto;
 	u_int8_t itos, otos;
@@ -331,8 +331,8 @@ gif_validate6(
 {
 	struct sockaddr_in6 *src, *dst;
 
-	src = (struct sockaddr_in6 *)sc->gif_psrc;
-	dst = (struct sockaddr_in6 *)sc->gif_pdst;
+	src = (struct sockaddr_in6 *)(void *)sc->gif_psrc;
+	dst = (struct sockaddr_in6 *)(void *)sc->gif_pdst;
 
 	/*
 	 * Check for address match.  Note that the check is for an incoming

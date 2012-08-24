@@ -27,188 +27,216 @@
  *
  */
 
-#include <sys/kern_event.h>
-#include <sys/kern_memorystatus.h>
-
 #include <kern/sched_prim.h>
 #include <kern/kalloc.h>
+#include <kern/assert.h>
 #include <kern/debug.h>
 #include <kern/lock.h>
 #include <kern/task.h>
 #include <kern/thread.h>
+#include <kern/host.h>
 #include <libkern/libkern.h>
+#include <mach/mach_time.h>
 #include <mach/task.h>
 #include <mach/task_info.h>
+#include <mach/host_priv.h>
+#include <sys/kern_event.h>
 #include <sys/proc.h>
 #include <sys/signal.h>
 #include <sys/signalvar.h>
 #include <sys/sysctl.h>
+#include <sys/sysproto.h>
 #include <sys/wait.h>
 #include <sys/tree.h>
+#include <sys/priv.h>
 #include <pexpert/pexpert.h>
 
 #if CONFIG_FREEZE
 #include <vm/vm_protos.h>
 #include <vm/vm_map.h>
+#endif
 
-enum {
-	kProcessSuspended =        (1 << 0), 
-	kProcessHibernated =       (1 << 1),
-	kProcessNoReclaimWorth =   (1 << 2),
-	kProcessIgnored =          (1 << 3),
-	kProcessBusy =             (1 << 4)
-};
+#include <sys/kern_memorystatus.h> 
 
-static lck_mtx_t * hibernation_mlock;
-static lck_attr_t * hibernation_lck_attr;
-static lck_grp_t * hibernation_lck_grp;
-static lck_grp_attr_t * hibernation_lck_grp_attr;
+/* These are very verbose printfs(), enable with
+ * MEMORYSTATUS_DEBUG_LOG
+ */
+#if MEMORYSTATUS_DEBUG_LOG
+#define MEMORYSTATUS_DEBUG(cond, format, ...)      \
+do {                                              \
+	if (cond) { printf(format, ##__VA_ARGS__); } \
+} while(0)
+#else
+#define MEMORYSTATUS_DEBUG(cond, format, ...)
+#endif
 
-typedef struct hibernation_node {
-	RB_ENTRY(hibernation_node) link;
-	pid_t pid;
-	uint32_t state;
-	mach_timespec_t hibernation_ts;
-} hibernation_node;
+/* General memorystatus stuff */
 
-static int hibernation_tree_compare(hibernation_node *n1, hibernation_node *n2) {
-	if (n1->pid < n2->pid)
-		return -1;
-	else if (n1->pid > n2->pid)
-		return 1;
-	else
-		return 0;
-}
+static void memorystatus_add_node(memorystatus_node *node);
+static void memorystatus_remove_node(memorystatus_node *node);
+static memorystatus_node *memorystatus_get_node(pid_t pid);
+static void memorystatus_release_node(memorystatus_node *node);
 
-static RB_HEAD(hibernation_tree, hibernation_node) hibernation_tree_head;
-RB_PROTOTYPE_SC(static, hibernation_tree, hibernation_node, link, hibernation_tree_compare);
+int memorystatus_wakeup = 0;
 
-RB_GENERATE(hibernation_tree, hibernation_node, link, hibernation_tree_compare);
+static void memorystatus_thread(void *param __unused, wait_result_t wr __unused);
 
-static inline boolean_t kern_hibernation_can_hibernate_processes(void);
-static boolean_t kern_hibernation_can_hibernate(void);
+static memorystatus_node *next_memorystatus_node = NULL;
 
-static void kern_hibernation_add_node(hibernation_node *node);
-static hibernation_node *kern_hibernation_get_node(pid_t pid);
-static void kern_hibernation_release_node(hibernation_node *node);
-static void kern_hibernation_free_node(hibernation_node *node, boolean_t unlock);
+static int memorystatus_list_count = 0;
 
-static void kern_hibernation_register_pid(pid_t pid);
-static void kern_hibernation_unregister_pid(pid_t pid);
+static lck_mtx_t * memorystatus_list_mlock;
+static lck_attr_t * memorystatus_lck_attr;
+static lck_grp_t * memorystatus_lck_grp;
+static lck_grp_attr_t * memorystatus_lck_grp_attr;
 
-static int kern_hibernation_get_process_state(pid_t pid, uint32_t *state, mach_timespec_t *ts);
-static int kern_hibernation_set_process_state(pid_t pid, uint32_t state);
+static TAILQ_HEAD(memorystatus_list_head, memorystatus_node) memorystatus_list;
 
-static void kern_hibernation_cull(void);
+static uint64_t memorystatus_idle_delay_time = 0;
 
-static void kern_hibernation_thread(void);
+static unsigned int memorystatus_dirty_count = 0;
 
-extern boolean_t vm_freeze_enabled;
+extern void proc_dirty_start(struct proc *p);
+extern void proc_dirty_end(struct proc *p);
 
-int kern_hibernation_wakeup = 0;
+/* Jetsam */
 
-static int jetsam_priority_list_hibernation_index = 0;
-
-/* Thresholds */
-static int kern_memorystatus_level_hibernate = 50;
-
-#define HIBERNATION_PAGES_MIN   ( 1 * 1024 * 1024 / PAGE_SIZE)
-#define HIBERNATION_PAGES_MAX   (16 * 1024 * 1024 / PAGE_SIZE)
-
-static unsigned int kern_memorystatus_hibernation_pages_min   = HIBERNATION_PAGES_MIN;
-static unsigned int kern_memorystatus_hibernation_pages_max   = HIBERNATION_PAGES_MAX;
-
-static unsigned int kern_memorystatus_suspended_count = 0;
-static unsigned int kern_memorystatus_hibernated_count = 0;
-
-static unsigned int kern_memorystatus_hibernation_suspended_minimum = 4;
-
-static unsigned int kern_memorystatus_low_swap_pages = 0;
-
-/* Throttling */
-#define HIBERNATION_DAILY_MB_MAX 	  1024
-#define HIBERNATION_DAILY_PAGEOUTS_MAX (HIBERNATION_DAILY_MB_MAX * (1024 * 1024 / PAGE_SIZE))
-
-static struct throttle_interval_t {
-	uint32_t mins;
-	uint32_t burst_multiple;
-	uint32_t pageouts;
-	uint32_t max_pageouts;
-	mach_timespec_t ts;
-	boolean_t throttle;
-} throttle_intervals[] = {
-	{ 	   60,  8, 0, 0, { 0, 0 }, FALSE }, /* 1 hour intermediate interval, 8x burst */
-	{ 24 * 60,  1, 0, 0, { 0, 0 }, FALSE }, /* 24 hour long interval, no burst */
-};
-
-/* Stats */
-static uint64_t kern_memorystatus_hibernation_count = 0;
-SYSCTL_QUAD(_kern, OID_AUTO, memorystatus_hibernation_count, CTLFLAG_RD, &kern_memorystatus_hibernation_count, "");
-
-static uint64_t kern_memorystatus_hibernation_pageouts = 0;
-SYSCTL_QUAD(_kern, OID_AUTO, memorystatus_hibernation_pageouts, CTLFLAG_RD, &kern_memorystatus_hibernation_pageouts, "");
-
-static uint64_t kern_memorystatus_hibernation_throttle_count = 0;
-SYSCTL_QUAD(_kern, OID_AUTO, memorystatus_hibernation_throttle_count, CTLFLAG_RD, &kern_memorystatus_hibernation_throttle_count, "");
-
-SYSCTL_UINT(_kern, OID_AUTO, memorystatus_hibernation_min_processes, CTLFLAG_RW, &kern_memorystatus_hibernation_suspended_minimum, 0, "");
-
-#if DEVELOPMENT || DEBUG
-/* Allow parameter tweaking in these builds */
-SYSCTL_UINT(_kern, OID_AUTO, memorystatus_level_hibernate, CTLFLAG_RW, &kern_memorystatus_level_hibernate, 0, "");
-
-SYSCTL_UINT(_kern, OID_AUTO, memorystatus_hibernation_pages_min, CTLFLAG_RW, &kern_memorystatus_hibernation_pages_min, 0, "");
-SYSCTL_UINT(_kern, OID_AUTO, memorystatus_hibernation_pages_max, CTLFLAG_RW, &kern_memorystatus_hibernation_pages_max, 0, "");
-
-boolean_t kern_memorystatus_hibernation_throttle_enabled = TRUE;
-SYSCTL_UINT(_kern, OID_AUTO, memorystatus_hibernation_throttle_enabled, CTLFLAG_RW, &kern_memorystatus_hibernation_throttle_enabled, 0, "");
-#endif /* DEVELOPMENT || DEBUG */
-#endif /* CONFIG_FREEZE */
+#if CONFIG_JETSAM
 
 extern unsigned int    vm_page_free_count;
 extern unsigned int    vm_page_active_count;
 extern unsigned int    vm_page_inactive_count;
+extern unsigned int    vm_page_throttled_count;
 extern unsigned int    vm_page_purgeable_count;
 extern unsigned int    vm_page_wire_count;
 
-static void kern_memorystatus_thread(void);
+static lck_mtx_t * exit_list_mlock;
 
-int kern_memorystatus_wakeup = 0;
-int kern_memorystatus_level = 0;
-int kern_memorystatus_last_level = 0;
-unsigned int kern_memorystatus_delta;
+static TAILQ_HEAD(exit_list_head, memorystatus_node) exit_list;
 
-unsigned int kern_memorystatus_kev_failure_count = 0;
-int kern_memorystatus_level_critical = 5;
-#define kern_memorystatus_level_highwater (kern_memorystatus_level_critical + 5)
+static unsigned int memorystatus_kev_failure_count = 0;
 
-static struct {
-	jetsam_kernel_stats_t stats;
-	size_t entry_count;
-	jetsam_snapshot_entry_t entries[kMaxSnapshotEntries];
-} jetsam_snapshot;
+/* Counted in pages... */
+unsigned int memorystatus_delta = 0;
 
-static jetsam_priority_entry_t jetsam_priority_list[kMaxPriorityEntries];
-#define jetsam_snapshot_list jetsam_snapshot.entries
+unsigned int memorystatus_available_pages = (unsigned int)-1;
+unsigned int memorystatus_available_pages_critical = 0;
+unsigned int memorystatus_available_pages_highwater = 0;
 
-static int jetsam_priority_list_index = 0;
-static int jetsam_priority_list_count = 0;
-static int jetsam_snapshot_list_count = 0;
+/* ...with the exception of the legacy level in percent. */
+unsigned int memorystatus_level = 0;
 
-static lck_mtx_t * jetsam_list_mlock;
-static lck_attr_t * jetsam_lck_attr;
-static lck_grp_t * jetsam_lck_grp;
-static lck_grp_attr_t * jetsam_lck_grp_attr;
+SYSCTL_UINT(_kern, OID_AUTO, memorystatus_kev_failure_count, CTLFLAG_RD, &memorystatus_kev_failure_count, 0, "");
+SYSCTL_INT(_kern, OID_AUTO, memorystatus_level, CTLFLAG_RD, &memorystatus_level, 0, "");
 
-SYSCTL_INT(_kern, OID_AUTO, memorystatus_level, CTLFLAG_RD | CTLFLAG_LOCKED, &kern_memorystatus_level, 0, "");
-SYSCTL_UINT(_kern, OID_AUTO, memorystatus_kev_failure_count, CTLFLAG_RD | CTLFLAG_LOCKED, &kern_memorystatus_kev_failure_count, 0, "");
+unsigned int memorystatus_jetsam_policy = kPolicyDefault;
+
+unsigned int memorystatus_jetsam_policy_offset_pages_more_free = 0;
+#if DEVELOPMENT || DEBUG
+unsigned int memorystatus_jetsam_policy_offset_pages_diagnostic = 0;
+#endif
+
+static memorystatus_jetsam_snapshot_t memorystatus_jetsam_snapshot;
+#define memorystatus_jetsam_snapshot_list memorystatus_jetsam_snapshot.entries
+
+static int memorystatus_jetsam_snapshot_list_count = 0;
+
+int memorystatus_jetsam_wakeup = 0;
+unsigned int memorystatus_jetsam_running = 1;
+
+static uint32_t memorystatus_task_page_count(task_t task);
+
+static void memorystatus_move_node_to_exit_list(memorystatus_node *node);
+
+static void memorystatus_update_levels_locked(void);
+
+static void memorystatus_jetsam_thread_block(void);
+static void memorystatus_jetsam_thread(void *param __unused, wait_result_t wr __unused);
+
+static int memorystatus_send_note(int event_code, void *data, size_t data_length);
+
+static uint32_t memorystatus_build_flags_from_state(uint32_t state);
+
+/* VM pressure */
+
+#if VM_PRESSURE_EVENTS
+
+typedef enum vm_pressure_level {
+        kVMPressureNormal   = 0,
+        kVMPressureWarning  = 1,
+        kVMPressureUrgent   = 2,
+        kVMPressureCritical = 3,
+} vm_pressure_level_t;
+
+static vm_pressure_level_t memorystatus_vm_pressure_level = kVMPressureNormal;
+
+unsigned int memorystatus_available_pages_pressure = 0;
+
+static inline boolean_t memorystatus_get_pressure_locked(void);
+static void memorystatus_check_pressure_reset(void);
+
+#endif /* VM_PRESSURE_EVENTS */
+
+#endif /* CONFIG_JETSAM */
+
+/* Freeze */
+
+#if CONFIG_FREEZE
+
+static unsigned int memorystatus_suspended_resident_count = 0;
+static unsigned int memorystatus_suspended_count = 0;
+
+boolean_t memorystatus_freeze_enabled = FALSE;
+int memorystatus_freeze_wakeup = 0;
+
+static inline boolean_t memorystatus_can_freeze_processes(void);
+static boolean_t memorystatus_can_freeze(boolean_t *memorystatus_freeze_swap_low);
+
+static void memorystatus_freeze_thread(void *param __unused, wait_result_t wr __unused);
+
+/* Thresholds */
+static unsigned int memorystatus_freeze_threshold = 0;
+
+static unsigned int memorystatus_freeze_pages_min = FREEZE_PAGES_MIN;
+static unsigned int memorystatus_freeze_pages_max = FREEZE_PAGES_MAX;
+
+static unsigned int memorystatus_frozen_count = 0;
+
+static unsigned int memorystatus_freeze_suspended_threshold = FREEZE_SUSPENDED_THRESHOLD_DEFAULT;
+
+/* Stats */
+static uint64_t memorystatus_freeze_count = 0;
+static uint64_t memorystatus_freeze_pageouts = 0;
+
+/* Throttling */
+static throttle_interval_t throttle_intervals[] = {
+	{      60,  8, 0, 0, { 0, 0 }, FALSE }, /* 1 hour intermediate interval, 8x burst */
+	{ 24 * 60,  1, 0, 0, { 0, 0 }, FALSE }, /* 24 hour long interval, no burst */
+};
+
+static uint64_t memorystatus_freeze_throttle_count = 0;
+
+#endif /* CONFIG_FREEZE */
+
+#if CONFIG_JETSAM
+
+/* Debug */
 
 #if DEVELOPMENT || DEBUG
 
+SYSCTL_UINT(_kern, OID_AUTO, memorystatus_available_pages, CTLFLAG_RD, &memorystatus_available_pages, 0, "");
+SYSCTL_UINT(_kern, OID_AUTO, memorystatus_available_pages_critical, CTLFLAG_RW, &memorystatus_available_pages_critical, 0, "");
+SYSCTL_UINT(_kern, OID_AUTO, memorystatus_available_pages_highwater, CTLFLAG_RW, &memorystatus_available_pages_highwater, 0, "");
+#if VM_PRESSURE_EVENTS
+SYSCTL_UINT(_kern, OID_AUTO, memorystatus_available_pages_pressure, CTLFLAG_RW, &memorystatus_available_pages_pressure, 0, "");
+#endif /* VM_PRESSURE_EVENTS */
+
+/* Diagnostic code */
 enum {
 	kJetsamDiagnosticModeNone =              0, 
 	kJetsamDiagnosticModeAll  =              1,
-	kJetsamDiagnosticModeStopAtFirstActive = 2
+	kJetsamDiagnosticModeStopAtFirstActive = 2,
+	kJetsamDiagnosticModeCount
 } jetsam_diagnostic_mode = kJetsamDiagnosticModeNone;
 
 static int jetsam_diagnostic_suspended_one_active_proc = 0;
@@ -217,32 +245,54 @@ static int
 sysctl_jetsam_diagnostic_mode SYSCTL_HANDLER_ARGS
 {
 #pragma unused(arg1, arg2)
+
+	const char *diagnosticStrings[] = {
+		"jetsam: diagnostic mode: resetting critical level.",
+		"jetsam: diagnostic mode: will examine all processes",
+		"jetsam: diagnostic mode: will stop at first active process"                
+	};
+        
 	int error, val = jetsam_diagnostic_mode;
-	boolean_t disabled;
+	boolean_t changed = FALSE;
 
 	error = sysctl_handle_int(oidp, &val, 0, req);
 	if (error || !req->newptr)
  		return (error);
-	if ((val < 0) || (val > 2)) {
+	if ((val < 0) || (val >= kJetsamDiagnosticModeCount)) {
 		printf("jetsam: diagnostic mode: invalid value - %d\n", val);
-		return (0);
+		return EINVAL;
 	}
 	
-	/* 
-	 * If jetsam_diagnostic_mode is set, we need to lower memory threshold for jetsam
-	 */
-	disabled = (val == 0) && (jetsam_diagnostic_mode != kJetsamDiagnosticModeNone);
+	lck_mtx_lock(memorystatus_list_mlock);
 	
-	jetsam_diagnostic_mode = val;
+	if ((unsigned int) val != jetsam_diagnostic_mode) {
+		jetsam_diagnostic_mode = val;
+
+		memorystatus_jetsam_policy &= ~kPolicyDiagnoseActive;
+                
+		switch (jetsam_diagnostic_mode) {
+		case kJetsamDiagnosticModeNone:
+			/* Already cleared */
+			break;
+		case kJetsamDiagnosticModeAll:
+			memorystatus_jetsam_policy |= kPolicyDiagnoseAll;
+			break;
+		case kJetsamDiagnosticModeStopAtFirstActive:
+			memorystatus_jetsam_policy |= kPolicyDiagnoseFirst;
+			break;
+		default:
+			/* Already validated */
+			break;
+		}
+        	
+       	memorystatus_update_levels_locked();
+		changed = TRUE;
+	}
+        
+	lck_mtx_unlock(memorystatus_list_mlock);
 	
-	if (disabled) {
-		kern_memorystatus_level_critical = 5;
-		printf("jetsam: diagnostic mode: resetting critical level to %d\n", kern_memorystatus_level_critical);
-	} else {
-		kern_memorystatus_level_critical = 10;
-		printf("jetsam: diagnostic mode: %d: increasing critical level to %d\n", (int) jetsam_diagnostic_mode, kern_memorystatus_level_critical);
-		if (jetsam_diagnostic_mode == kJetsamDiagnosticModeStopAtFirstActive)
-			printf("jetsam: diagnostic mode: will stop at first active app\n");
+	if (changed) {
+		printf("%s\n", diagnosticStrings[val]);
 	}
 	
 	return (0);
@@ -250,22 +300,622 @@ sysctl_jetsam_diagnostic_mode SYSCTL_HANDLER_ARGS
 
 SYSCTL_PROC(_debug, OID_AUTO, jetsam_diagnostic_mode, CTLTYPE_INT|CTLFLAG_RW|CTLFLAG_ANYBODY,
   		&jetsam_diagnostic_mode, 0, sysctl_jetsam_diagnostic_mode, "I", "Jetsam Diagnostic Mode");
+
+SYSCTL_UINT(_kern, OID_AUTO, memorystatus_jetsam_policy_offset_pages_more_free, CTLFLAG_RW, &memorystatus_jetsam_policy_offset_pages_more_free, 0, "");
+SYSCTL_UINT(_kern, OID_AUTO, memorystatus_jetsam_policy_offset_pages_diagnostic, CTLFLAG_RW, &memorystatus_jetsam_policy_offset_pages_diagnostic, 0, "");
+
+#if VM_PRESSURE_EVENTS
+
+#include "vm_pressure.h"
+
+static int
+sysctl_memorystatus_vm_pressure_level SYSCTL_HANDLER_ARGS
+{
+#pragma unused(arg1, arg2, oidp)
+	int error = 0;
+
+	error = priv_check_cred(kauth_cred_get(), PRIV_VM_PRESSURE, 0);
+	if (error)
+		return (error);
+
+	return SYSCTL_OUT(req, &memorystatus_vm_pressure_level, sizeof(memorystatus_vm_pressure_level));
+}
+
+SYSCTL_PROC(_kern, OID_AUTO, memorystatus_vm_pressure_level, CTLTYPE_INT|CTLFLAG_RD|CTLFLAG_LOCKED|CTLFLAG_MASKED,
+    0, 0, &sysctl_memorystatus_vm_pressure_level, "I", "");
+
+static int
+sysctl_memorystatus_vm_pressure_send SYSCTL_HANDLER_ARGS
+{
+#pragma unused(arg1, arg2)
+
+	int error, pid = 0;
+
+	error = sysctl_handle_int(oidp, &pid, 0, req);
+	if (error || !req->newptr)
+		return (error);
+
+	if (vm_dispatch_pressure_note_to_pid(pid)) {
+		return 0;
+	}
+
+	return EINVAL;
+}
+
+SYSCTL_PROC(_kern, OID_AUTO, memorystatus_vm_pressure_send, CTLTYPE_INT|CTLFLAG_WR|CTLFLAG_LOCKED|CTLFLAG_MASKED,
+    0, 0, &sysctl_memorystatus_vm_pressure_send, "I", "");
+
+#endif /* VM_PRESSURE_EVENTS */
+
+#endif /* CONFIG_JETSAM */
+
+#if CONFIG_FREEZE
+
+SYSCTL_UINT(_kern, OID_AUTO, memorystatus_freeze_threshold, CTLFLAG_RW, &memorystatus_freeze_threshold, 0, "");
+
+SYSCTL_UINT(_kern, OID_AUTO, memorystatus_freeze_pages_min, CTLFLAG_RW, &memorystatus_freeze_pages_min, 0, "");
+SYSCTL_UINT(_kern, OID_AUTO, memorystatus_freeze_pages_max, CTLFLAG_RW, &memorystatus_freeze_pages_max, 0, "");
+
+SYSCTL_QUAD(_kern, OID_AUTO, memorystatus_freeze_count, CTLFLAG_RD, &memorystatus_freeze_count, "");
+SYSCTL_QUAD(_kern, OID_AUTO, memorystatus_freeze_pageouts, CTLFLAG_RD, &memorystatus_freeze_pageouts, "");
+SYSCTL_QUAD(_kern, OID_AUTO, memorystatus_freeze_throttle_count, CTLFLAG_RD, &memorystatus_freeze_throttle_count, "");
+SYSCTL_UINT(_kern, OID_AUTO, memorystatus_freeze_min_processes, CTLFLAG_RW, &memorystatus_freeze_suspended_threshold, 0, "");
+
+boolean_t memorystatus_freeze_throttle_enabled = TRUE;
+SYSCTL_UINT(_kern, OID_AUTO, memorystatus_freeze_throttle_enabled, CTLFLAG_RW, &memorystatus_freeze_throttle_enabled, 0, "");
+
+/* 
+ * Manual trigger of freeze and thaw for dev / debug kernels only.
+ */
+static int
+sysctl_memorystatus_freeze SYSCTL_HANDLER_ARGS
+{
+#pragma unused(arg1, arg2)
+
+	int error, pid = 0;
+	proc_t p;
+
+	error = sysctl_handle_int(oidp, &pid, 0, req);
+	if (error || !req->newptr)
+		return (error);
+
+	p = proc_find(pid);
+	if (p != NULL) {
+		uint32_t purgeable, wired, clean, dirty;
+		boolean_t shared;
+		uint32_t max_pages = MIN(default_pager_swap_pages_free(), memorystatus_freeze_pages_max);
+		task_freeze(p->task, &purgeable, &wired, &clean, &dirty, max_pages, &shared, FALSE);
+		proc_rele(p);
+        return 0;
+	}
+
+	return EINVAL;
+}
+
+SYSCTL_PROC(_kern, OID_AUTO, memorystatus_freeze, CTLTYPE_INT|CTLFLAG_WR|CTLFLAG_LOCKED|CTLFLAG_MASKED,
+    0, 0, &sysctl_memorystatus_freeze, "I", "");
+
+static int
+sysctl_memorystatus_available_pages_thaw SYSCTL_HANDLER_ARGS
+{
+#pragma unused(arg1, arg2)
+
+	int error, pid = 0;
+	proc_t p;
+
+	error = sysctl_handle_int(oidp, &pid, 0, req);
+	if (error || !req->newptr)
+		return (error);
+
+	p = proc_find(pid);
+	if (p != NULL) {
+		task_thaw(p->task);
+		proc_rele(p);
+		return 0;
+	}
+
+	return EINVAL;
+}
+
+SYSCTL_PROC(_kern, OID_AUTO, memorystatus_thaw, CTLTYPE_INT|CTLFLAG_WR|CTLFLAG_LOCKED|CTLFLAG_MASKED,
+    0, 0, &sysctl_memorystatus_available_pages_thaw, "I", "");
+
+#endif /* CONFIG_FREEZE */
+
 #endif /* DEVELOPMENT || DEBUG */
 
 __private_extern__ void
-kern_memorystatus_init(void)
+memorystatus_init(void)
 {
-	jetsam_lck_attr = lck_attr_alloc_init();
-	jetsam_lck_grp_attr= lck_grp_attr_alloc_init();
-	jetsam_lck_grp = lck_grp_alloc_init("jetsam",  jetsam_lck_grp_attr);
-	jetsam_list_mlock = lck_mtx_alloc_init(jetsam_lck_grp, jetsam_lck_attr);
-	kern_memorystatus_delta = 5 * atop_64(max_mem) / 100;
+	thread_t thread = THREAD_NULL;
+	kern_return_t result;
+	
+	memorystatus_lck_attr = lck_attr_alloc_init();
+	memorystatus_lck_grp_attr = lck_grp_attr_alloc_init();
+	memorystatus_lck_grp = lck_grp_alloc_init("memorystatus",  memorystatus_lck_grp_attr);
+	memorystatus_list_mlock = lck_mtx_alloc_init(memorystatus_lck_grp, memorystatus_lck_attr);
+	TAILQ_INIT(&memorystatus_list);
 
-	(void)kernel_thread(kernel_task, kern_memorystatus_thread);
+#if CONFIG_JETSAM
+	exit_list_mlock = lck_mtx_alloc_init(memorystatus_lck_grp, memorystatus_lck_attr);
+	TAILQ_INIT(&exit_list);
+	
+	memorystatus_delta = DELTA_PERCENT * atop_64(max_mem) / 100;
+#endif
+
+#if CONFIG_FREEZE
+	memorystatus_freeze_threshold = (FREEZE_PERCENT / DELTA_PERCENT) * memorystatus_delta;
+#endif
+
+	nanoseconds_to_absolutetime((uint64_t)IDLE_EXIT_TIME_SECS * NSEC_PER_SEC, &memorystatus_idle_delay_time);
+
+	result = kernel_thread_start(memorystatus_thread, NULL, &thread);
+	if (result == KERN_SUCCESS) {
+		thread_deallocate(thread);
+	} else {
+		panic("Could not create memorystatus_thread");
+	}
+
+#if CONFIG_JETSAM
+	memorystatus_jetsam_policy_offset_pages_more_free = (POLICY_MORE_FREE_OFFSET_PERCENT / DELTA_PERCENT) * memorystatus_delta;
+#if DEVELOPMENT || DEBUG
+	memorystatus_jetsam_policy_offset_pages_diagnostic = (POLICY_DIAGNOSTIC_OFFSET_PERCENT / DELTA_PERCENT) * memorystatus_delta;
+#endif
+
+	/* No contention at this point */
+	memorystatus_update_levels_locked();
+	
+	result = kernel_thread_start(memorystatus_jetsam_thread, NULL, &thread);
+	if (result == KERN_SUCCESS) {
+		thread_deallocate(thread);
+	} else {
+		panic("Could not create memorystatus_jetsam_thread");
+	}
+#endif
 }
 
+/*
+ * Node manipulation
+ */
+
+static void
+memorystatus_add_node(memorystatus_node *new_node)
+{
+	memorystatus_node *node;
+
+ 	/* Make sure we're called with the list lock held */
+	lck_mtx_assert(memorystatus_list_mlock, LCK_MTX_ASSERT_OWNED);
+
+	TAILQ_FOREACH(node, &memorystatus_list, link) {
+		if (node->priority <= new_node->priority) {
+			break;
+		}
+	}
+
+	if (node) {
+		TAILQ_INSERT_BEFORE(node, new_node, link);
+	} else {
+		TAILQ_INSERT_TAIL(&memorystatus_list, new_node, link);
+	}
+
+	next_memorystatus_node = TAILQ_FIRST(&memorystatus_list);
+
+	memorystatus_list_count++;
+}
+
+static void
+memorystatus_remove_node(memorystatus_node *node) 
+{
+	/* Make sure we're called with the list lock held */
+	lck_mtx_assert(memorystatus_list_mlock, LCK_MTX_ASSERT_OWNED);
+
+	TAILQ_REMOVE(&memorystatus_list, node, link);
+ 	next_memorystatus_node = TAILQ_FIRST(&memorystatus_list);
+
+#if CONFIG_FREEZE    
+	if (node->state & (kProcessFrozen)) {
+		memorystatus_frozen_count--;
+	}
+
+	if (node->state & kProcessSuspended) {
+		memorystatus_suspended_resident_count -= node->resident_pages;
+		memorystatus_suspended_count--;
+	}
+#endif
+
+	memorystatus_list_count--;
+}
+
+/* Returns with the lock taken if found */
+static memorystatus_node *
+memorystatus_get_node(pid_t pid) 
+{
+	memorystatus_node *node;
+
+	lck_mtx_lock(memorystatus_list_mlock);
+
+	TAILQ_FOREACH(node, &memorystatus_list, link) {
+		if (node->pid == pid) {
+			break;
+		}
+	}
+
+	if (!node) {
+		lck_mtx_unlock(memorystatus_list_mlock);		
+	}
+
+	return node;
+}
+
+static void
+memorystatus_release_node(memorystatus_node *node) 
+{
+#pragma unused(node)
+	lck_mtx_unlock(memorystatus_list_mlock);	
+}
+
+/* 
+ * List manipulation
+ */
+ 
+kern_return_t 
+memorystatus_list_add(pid_t pid, int priority, int high_water_mark)
+{
+
+#if !CONFIG_JETSAM
+#pragma unused(high_water_mark)
+#endif
+
+	memorystatus_node *new_node;
+
+	new_node = (memorystatus_node*)kalloc(sizeof(memorystatus_node));
+	if (!new_node) {
+		assert(FALSE);
+	}
+	memset(new_node, 0, sizeof(memorystatus_node));
+    
+	MEMORYSTATUS_DEBUG(1, "memorystatus_list_add: adding process %d with priority %d, high water mark %d.\n", pid, priority, high_water_mark);
+    
+	new_node->pid = pid;
+	new_node->priority = priority;
+#if CONFIG_JETSAM
+	new_node->hiwat_pages = high_water_mark;
+#endif    
+
+	lck_mtx_lock(memorystatus_list_mlock);
+    
+	memorystatus_add_node(new_node);
+        
+	lck_mtx_unlock(memorystatus_list_mlock);
+	
+	return KERN_SUCCESS;
+}
+
+kern_return_t
+memorystatus_list_change(boolean_t effective, pid_t pid, int priority, int state_flags, int high_water_mark)
+{
+
+#if !CONFIG_JETSAM
+#pragma unused(high_water_mark)
+#endif
+	
+	kern_return_t ret;
+	memorystatus_node *node, *search;
+
+	MEMORYSTATUS_DEBUG(1, "memorystatus_list_change: changing process %d to priority %d with flags %d\n", pid, priority, state_flags);
+
+	lck_mtx_lock(memorystatus_list_mlock);
+
+	TAILQ_FOREACH(node, &memorystatus_list, link) {
+		if (node->pid == pid) {
+			break;
+		}
+	}
+    
+	if (!node) {
+		ret = KERN_FAILURE;
+		goto out;             
+	}
+
+	if (effective && (node->state & kProcessPriorityUpdated)) {
+		MEMORYSTATUS_DEBUG(1, "memorystatus_list_change: effective change specified for pid %d, but change already occurred.\n", pid);
+		ret = KERN_FAILURE;
+		goto out;             
+	}
+
+	node->state |= kProcessPriorityUpdated;
+ 
+	if (state_flags != -1) {
+		node->state &= ~(kProcessActive|kProcessForeground);
+		if (state_flags & kMemorystatusFlagsFrontmost) {
+			node->state |= kProcessForeground;
+		}
+		if (state_flags & kMemorystatusFlagsActive) {
+			node->state |= kProcessActive;
+		}
+	}
+
+#if CONFIG_JETSAM        
+	if (high_water_mark != -1) {
+		node->hiwat_pages = high_water_mark;
+	}
+#endif
+
+	if (node->priority == priority) {
+		/* Priority unchanged */
+		MEMORYSTATUS_DEBUG(1, "memorystatus_list_change: same priority set for pid %d\n", pid);
+		ret = KERN_SUCCESS;
+		goto out;
+	}
+
+	if (node->priority < priority) {
+		/* Higher priority value (ie less important) - search backwards */
+		search = TAILQ_PREV(node, memorystatus_list_head, link);
+		TAILQ_REMOVE(&memorystatus_list, node, link);
+
+		node->priority = priority;
+		while (search && (search->priority <= node->priority)) {
+			search = TAILQ_PREV(search, memorystatus_list_head, link);
+		}
+		if (search) {
+			TAILQ_INSERT_AFTER(&memorystatus_list, search, node, link);
+		} else {
+			TAILQ_INSERT_HEAD(&memorystatus_list, node, link);
+		}
+	} else {
+		/* Lower priority value (ie more important) - search forwards */
+		search = TAILQ_NEXT(node, link);
+		TAILQ_REMOVE(&memorystatus_list, node, link);
+
+		node->priority = priority;
+		while (search && (search->priority >= node->priority)) {
+			search = TAILQ_NEXT(search, link);
+		}
+		if (search) {
+			TAILQ_INSERT_BEFORE(search, node, link);
+		} else {
+			TAILQ_INSERT_TAIL(&memorystatus_list, node, link);
+		}
+	}
+
+	next_memorystatus_node = TAILQ_FIRST(&memorystatus_list);
+	ret = KERN_SUCCESS;
+
+out:
+	lck_mtx_unlock(memorystatus_list_mlock);
+	return ret;
+}
+
+kern_return_t memorystatus_list_remove(pid_t pid)
+{
+	kern_return_t ret;
+	memorystatus_node *node = NULL;
+
+	MEMORYSTATUS_DEBUG(1, "memorystatus_list_remove: removing process %d\n", pid);
+
+#if CONFIG_JETSAM
+	/* Did we mark this as a exited process? */
+	lck_mtx_lock(exit_list_mlock);
+
+	TAILQ_FOREACH(node, &exit_list, link) {
+		if (node->pid == pid) {
+			/* We did, so remove it from the list. The stats were updated when the queues were shifted. */
+			TAILQ_REMOVE(&exit_list, node, link);
+			break;
+		}
+	}
+
+	lck_mtx_unlock(exit_list_mlock);
+#endif
+
+	/* If not, search the main list */
+	if (!node) {
+		lck_mtx_lock(memorystatus_list_mlock);
+
+		TAILQ_FOREACH(node, &memorystatus_list, link) {
+			if (node->pid == pid) {
+				/* Remove from the list, and update accounting accordingly */
+				memorystatus_remove_node(node);
+				break;
+			}
+		}
+
+		lck_mtx_unlock(memorystatus_list_mlock);
+	}
+
+	if (node) {
+		kfree(node, sizeof(memorystatus_node));
+		ret = KERN_SUCCESS; 
+	} else {
+		ret = KERN_FAILURE;
+	}
+
+	return ret;
+}
+
+kern_return_t 
+memorystatus_on_track_dirty(int pid, boolean_t track)
+{
+	kern_return_t ret = KERN_FAILURE;
+	memorystatus_node *node;
+	
+	node = memorystatus_get_node((pid_t)pid);
+	if (!node) {
+		return KERN_FAILURE;
+	}
+	
+	if (track & !(node->state & kProcessSupportsIdleExit)) {
+		node->state |= kProcessSupportsIdleExit;
+		node->clean_time = mach_absolute_time() + memorystatus_idle_delay_time;
+		ret = KERN_SUCCESS;
+	} else	if (!track & (node->state & kProcessSupportsIdleExit)) {
+		node->state &= ~kProcessSupportsIdleExit;
+		node->clean_time = 0;
+		ret = KERN_SUCCESS;		
+	}
+	
+	memorystatus_release_node(node);
+		
+	return ret;	
+}
+
+kern_return_t 
+memorystatus_on_dirty(int pid, boolean_t dirty)
+{
+	kern_return_t ret = KERN_FAILURE;
+	memorystatus_node *node;
+	
+	node = memorystatus_get_node((pid_t)pid);
+	if (!node) {
+		return KERN_FAILURE;
+	}
+	
+	if (dirty) {
+		if (!(node->state & kProcessDirty)) {
+			node->state |= kProcessDirty;
+			node->clean_time = 0;
+			memorystatus_dirty_count++;
+			ret = KERN_SUCCESS;
+		}
+	} else {
+		if (node->state & kProcessDirty) {
+			node->state &= ~kProcessDirty;
+			node->clean_time = mach_absolute_time() + memorystatus_idle_delay_time;
+			memorystatus_dirty_count--;
+			ret = KERN_SUCCESS;
+		}
+	}
+	
+	memorystatus_release_node(node);
+	
+	return ret;
+}
+
+void 
+memorystatus_on_suspend(int pid)
+{	
+	memorystatus_node *node = memorystatus_get_node((pid_t)pid);
+
+	if (node) {
+#if CONFIG_FREEZE
+		proc_t p;
+
+		p = proc_find(pid);
+		if (p != NULL) {
+			uint32_t pages = memorystatus_task_page_count(p->task);
+			proc_rele(p);
+			node->resident_pages = pages;
+			memorystatus_suspended_resident_count += pages;
+		}
+		memorystatus_suspended_count++;
+#endif
+
+		node->state |= kProcessSuspended;
+
+		memorystatus_release_node(node);
+	}
+}
+
+void
+memorystatus_on_resume(int pid)
+{	
+	memorystatus_node *node = memorystatus_get_node((pid_t)pid);
+
+	if (node) {
+#if CONFIG_FREEZE
+		boolean_t frozen = (node->state & kProcessFrozen);
+		if (node->state & (kProcessFrozen)) {
+			memorystatus_frozen_count--;
+		}
+		memorystatus_suspended_resident_count -= node->resident_pages;
+		memorystatus_suspended_count--;
+#endif
+
+		node->state &= ~(kProcessSuspended | kProcessFrozen | kProcessIgnored);
+
+		memorystatus_release_node(node);
+
+#if CONFIG_FREEZE
+		if (frozen) {
+			memorystatus_freeze_entry_t data = { pid, kMemorystatusFlagsThawed, 0 };
+			memorystatus_send_note(kMemorystatusFreezeNote, &data, sizeof(data));
+		}
+#endif
+	}
+}
+
+void
+memorystatus_on_inactivity(int pid)
+{
+#pragma unused(pid)
+#if CONFIG_FREEZE
+	/* Wake the freeze thread */
+	thread_wakeup((event_t)&memorystatus_freeze_wakeup);
+#endif	
+}
+
+static void
+memorystatus_thread(void *param __unused, wait_result_t wr __unused)
+{
+	static boolean_t initialized = FALSE;
+	memorystatus_node *node;
+	uint64_t current_time;
+	pid_t victim_pid = -1;
+
+	if (initialized == FALSE) {
+		initialized = TRUE;
+	 	assert_wait(&memorystatus_wakeup, THREAD_UNINT);
+		(void)thread_block((thread_continue_t)memorystatus_thread);
+	}
+
+	/*  Pick next idle exit victim. For now, just iterate through; ideally, this would be be more intelligent. */
+	current_time = mach_absolute_time();
+	
+	/* Set a cutoff so that we don't idle exit processes that went recently clean */
+	
+	lck_mtx_lock(memorystatus_list_mlock);
+	
+	if (memorystatus_dirty_count) {
+		TAILQ_FOREACH(node, &memorystatus_list, link) {
+			if ((node->state & kProcessSupportsIdleExit) && !(node->state & (kProcessDirty|kProcessIgnoreIdleExit))) {				
+				if (current_time >= node->clean_time) {
+					victim_pid = node->pid;
+					break;
+				}
+			}
+		}
+	}
+
+	lck_mtx_unlock(memorystatus_list_mlock);
+	
+	if (-1 != victim_pid) {		
+		proc_t p = proc_find(victim_pid);
+		if (p != NULL) {
+			boolean_t kill = FALSE;
+			proc_dirty_start(p);
+			/* Ensure process is still marked for idle exit and is clean */
+			if ((p->p_dirty & (P_DIRTY_ALLOW_IDLE_EXIT|P_DIRTY_IS_DIRTY|P_DIRTY_TERMINATED)) == (P_DIRTY_ALLOW_IDLE_EXIT)) {
+				/* Clean; issue SIGKILL */
+				p->p_dirty |= P_DIRTY_TERMINATED;
+				kill = TRUE;
+			}
+			proc_dirty_end(p);
+			if (TRUE == kill) {
+				printf("memorystatus_thread: idle exiting pid %d [%s]\n", victim_pid, (p->p_comm ? p->p_comm : "(unknown)"));
+				psignal(p, SIGKILL);
+			}
+			proc_rele(p);
+		}
+	}
+
+ 	assert_wait(&memorystatus_wakeup, THREAD_UNINT);
+	(void)thread_block((thread_continue_t)memorystatus_thread);
+}
+
+#if CONFIG_JETSAM
+
 static uint32_t
-jetsam_task_page_count(task_t task)
+memorystatus_task_page_count(task_t task)
 {
 	kern_return_t ret;
 	static task_info_data_t data;
@@ -279,232 +929,350 @@ jetsam_task_page_count(task_t task)
 	return 0;
 }
 
-static uint32_t
-jetsam_flags_for_pid(pid_t pid)
-{
-	int i;
+static int
+memorystatus_send_note(int event_code, void *data, size_t data_length) {
+	int ret;
+	struct kev_msg ev_msg;
+	
+	ev_msg.vendor_code    = KEV_VENDOR_APPLE;
+	ev_msg.kev_class      = KEV_SYSTEM_CLASS;
+	ev_msg.kev_subclass   = KEV_MEMORYSTATUS_SUBCLASS;
 
-	for (i = 0; i < jetsam_priority_list_count; i++) {
-		if (pid == jetsam_priority_list[i].pid) {
-			return jetsam_priority_list[i].flags;
+	ev_msg.event_code     = event_code;
+
+	ev_msg.dv[0].data_length = data_length;
+	ev_msg.dv[0].data_ptr = data;
+	ev_msg.dv[1].data_length = 0;
+
+	ret = kev_post_msg(&ev_msg);
+	if (ret) {
+		memorystatus_kev_failure_count++;
+		printf("%s: kev_post_msg() failed, err %d\n", __func__, ret);
+	}
+	
+    return ret;
+}
+
+static uint32_t
+memorystatus_build_flags_from_state(uint32_t state) {
+    uint32_t flags = 0;
+    
+    if (state & kProcessForeground) {
+        flags |= kMemorystatusFlagsFrontmost;
+    }
+    if (state & kProcessActive) {
+        flags |= kMemorystatusFlagsActive;
+    }
+    if (state & kProcessSupportsIdleExit) {
+        flags |= kMemorystatusFlagsSupportsIdleExit;
+    }
+    if (state & kProcessDirty) {
+        flags |= kMemorystatusFlagsDirty;
+    }
+    
+    return flags;
+}
+
+static void 
+memorystatus_move_node_to_exit_list(memorystatus_node *node) 
+{
+	/* Make sure we're called with the list lock held */
+	lck_mtx_assert(memorystatus_list_mlock, LCK_MTX_ASSERT_OWNED);
+    
+	/* Now, acquire the exit list lock... */
+	lck_mtx_lock(exit_list_mlock);
+	
+	/* Remove from list + update accounting... */
+	memorystatus_remove_node(node);
+	
+	/* ...then insert at the end of the exit queue */
+	TAILQ_INSERT_TAIL(&exit_list, node, link);
+	
+	/* And relax */
+	lck_mtx_unlock(exit_list_mlock);
+}
+
+void memorystatus_update(unsigned int pages_avail)
+{        
+	if (!memorystatus_delta) {
+	    return;
+	}
+	    	      
+	if ((pages_avail < memorystatus_available_pages_critical) ||
+	     (pages_avail >= (memorystatus_available_pages + memorystatus_delta)) ||
+	     (memorystatus_available_pages >= (pages_avail + memorystatus_delta))) {
+		memorystatus_available_pages = pages_avail;
+		memorystatus_level = memorystatus_available_pages * 100 / atop_64(max_mem);
+		/* Only wake the thread if currently blocked */
+		if (OSCompareAndSwap(0, 1, &memorystatus_jetsam_running)) {
+			thread_wakeup((event_t)&memorystatus_jetsam_wakeup);
 		}
 	}
-	return 0;
+}
+
+static boolean_t
+memorystatus_get_snapshot_properties_for_proc_locked(proc_t p, memorystatus_jetsam_snapshot_entry_t *entry)
+{	
+	memorystatus_node *node;
+    
+	TAILQ_FOREACH(node, &memorystatus_list, link) {
+		if (node->pid == p->p_pid) {
+			break;
+		}
+	}
+	
+	if (!node) {
+		return FALSE;
+	}
+	
+	entry->pid = p->p_pid;
+	strlcpy(&entry->name[0], p->p_comm, MAXCOMLEN+1);
+	entry->priority = node->priority;
+	entry->pages = memorystatus_task_page_count(p->task);
+	entry->flags = memorystatus_build_flags_from_state(node->state);
+	memcpy(&entry->uuid[0], &p->p_uuid[0], sizeof(p->p_uuid));
+
+	return TRUE;	
 }
 
 static void
-jetsam_snapshot_procs(void)
+memorystatus_jetsam_snapshot_procs_locked(void)
 {
 	proc_t p;
 	int i = 0;
 
-	jetsam_snapshot.stats.free_pages = vm_page_free_count;
-	jetsam_snapshot.stats.active_pages = vm_page_active_count;
-	jetsam_snapshot.stats.inactive_pages = vm_page_inactive_count;
-	jetsam_snapshot.stats.purgeable_pages = vm_page_purgeable_count;
-	jetsam_snapshot.stats.wired_pages = vm_page_wire_count;
+	memorystatus_jetsam_snapshot.stats.free_pages = vm_page_free_count;
+	memorystatus_jetsam_snapshot.stats.active_pages = vm_page_active_count;
+	memorystatus_jetsam_snapshot.stats.inactive_pages = vm_page_inactive_count;
+	memorystatus_jetsam_snapshot.stats.throttled_pages = vm_page_throttled_count;
+	memorystatus_jetsam_snapshot.stats.purgeable_pages = vm_page_purgeable_count;
+	memorystatus_jetsam_snapshot.stats.wired_pages = vm_page_wire_count;
 	proc_list_lock();
 	LIST_FOREACH(p, &allproc, p_list) {
-		task_t task = p->task;
-		jetsam_snapshot_list[i].pid = p->p_pid;
-		jetsam_snapshot_list[i].pages = jetsam_task_page_count(task);
-		jetsam_snapshot_list[i].flags = jetsam_flags_for_pid(p->p_pid);
-		strlcpy(&jetsam_snapshot_list[i].name[0], p->p_comm, MAXCOMLEN+1);
-#ifdef DEBUG
-		printf("jetsam snapshot pid = %d, uuid = %02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x\n",
+		if (FALSE == memorystatus_get_snapshot_properties_for_proc_locked(p, &memorystatus_jetsam_snapshot_list[i])) {
+			continue;
+		}
+		
+		MEMORYSTATUS_DEBUG(0, "jetsam snapshot pid = %d, uuid = %02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x\n",
 			p->p_pid, 
 			p->p_uuid[0], p->p_uuid[1], p->p_uuid[2], p->p_uuid[3], p->p_uuid[4], p->p_uuid[5], p->p_uuid[6], p->p_uuid[7],
 			p->p_uuid[8], p->p_uuid[9], p->p_uuid[10], p->p_uuid[11], p->p_uuid[12], p->p_uuid[13], p->p_uuid[14], p->p_uuid[15]);
-#endif
-		memcpy(&jetsam_snapshot_list[i].uuid[0], &p->p_uuid[0], sizeof(p->p_uuid));
-		i++;
-		if (i == kMaxSnapshotEntries) {
+
+		if (++i == kMaxSnapshotEntries) {
 			break;
 		} 	
 	}
 	proc_list_unlock();	
-	jetsam_snapshot.entry_count = jetsam_snapshot_list_count = i - 1;
+	memorystatus_jetsam_snapshot.snapshot_time = mach_absolute_time();
+	memorystatus_jetsam_snapshot.entry_count = memorystatus_jetsam_snapshot_list_count = i - 1;
 }
 
 static void
-jetsam_mark_pid_in_snapshot(pid_t pid, int flags)
+memorystatus_mark_pid_in_snapshot(pid_t pid, int flags)
 {
-
 	int i = 0;
 
-	for (i = 0; i < jetsam_snapshot_list_count; i++) {
-		if (jetsam_snapshot_list[i].pid == pid) {
-			jetsam_snapshot_list[i].flags |= flags;
+	for (i = 0; i < memorystatus_jetsam_snapshot_list_count; i++) {
+		if (memorystatus_jetsam_snapshot_list[i].pid == pid) {
+			memorystatus_jetsam_snapshot_list[i].flags |= flags;
 			return;
 		}
 	}
 }
 
 int
-jetsam_kill_top_proc(boolean_t any, uint32_t cause)
+memorystatus_kill_top_proc(boolean_t any, uint32_t cause)
 {
 	proc_t p;
+	int pending_snapshot = 0;
 
 #ifndef CONFIG_FREEZE
 #pragma unused(any)
 #endif
+	
+	lck_mtx_lock(memorystatus_list_mlock);
 
-	if (jetsam_snapshot_list_count == 0) {
-		jetsam_snapshot_procs();
+	if (memorystatus_jetsam_snapshot_list_count == 0) {
+		memorystatus_jetsam_snapshot_procs_locked();
+	} else {
+		pending_snapshot = 1;
 	}
-	lck_mtx_lock(jetsam_list_mlock);
-	while (jetsam_priority_list_index < jetsam_priority_list_count) {
-		jetsam_priority_entry_t* jetsam_priority_entry = &jetsam_priority_list[jetsam_priority_list_index];
-		pid_t aPid = jetsam_priority_entry->pid;
+
+	while (next_memorystatus_node) {
+		memorystatus_node *node;
+		pid_t aPid;
 #if DEVELOPMENT || DEBUG
-		int activeProcess = jetsam_priority_entry->flags & kJetsamFlagsFrontmost;
-		int procSuspendedForDiagnosis = jetsam_priority_entry->flags & kJetsamFlagsSuspForDiagnosis;
+		int activeProcess;
+		int procSuspendedForDiagnosis;
 #endif /* DEVELOPMENT || DEBUG */
-		jetsam_priority_list_index++;
+
+		node = next_memorystatus_node;
+		next_memorystatus_node = TAILQ_NEXT(next_memorystatus_node, link);
+
+#if DEVELOPMENT || DEBUG
+		activeProcess = node->state & kProcessForeground;
+		procSuspendedForDiagnosis = node->state & kProcessSuspendedForDiag;
+#endif /* DEVELOPMENT || DEBUG */
+		
+		aPid = node->pid;
+
 		/* skip empty slots in the list */
-		if (aPid == 0) {
+		if (aPid == 0  || (node->state & kProcessKilled)) {
 			continue; // with lock held
 		}
-		lck_mtx_unlock(jetsam_list_mlock);
+
 		p = proc_find(aPid);
 		if (p != NULL) {
 			int flags = cause;
+			
 #if DEVELOPMENT || DEBUG
-			if ((jetsam_diagnostic_mode != kJetsamDiagnosticModeNone) && procSuspendedForDiagnosis) {
+			if ((memorystatus_jetsam_policy & kPolicyDiagnoseActive) && procSuspendedForDiagnosis) {
 				printf("jetsam: continuing after ignoring proc suspended already for diagnosis - %d\n", aPid);
 				proc_rele(p);
-				lck_mtx_lock(jetsam_list_mlock);
 				continue;
 			}
 #endif /* DEVELOPMENT || DEBUG */
+
 #if CONFIG_FREEZE
-			hibernation_node *node;
 			boolean_t skip;
-			if ((node = kern_hibernation_get_node(aPid))) {
-				boolean_t reclaim_proc = !(node->state & (kProcessBusy | kProcessNoReclaimWorth));
-				if (any || reclaim_proc) {
-					if (node->state & kProcessHibernated) {
-						flags |= kJetsamFlagsHibernated;
-					}
-					skip = FALSE;
-				} else {
-					skip = TRUE;
+			boolean_t reclaim_proc = !(node->state & (kProcessLocked | kProcessNoReclaimWorth));
+			if (any || reclaim_proc) {
+				if (node->state & kProcessFrozen) {
+					flags |= kMemorystatusFlagsFrozen;
 				}
-				kern_hibernation_release_node(node);
-			} else {
 				skip = FALSE;
+			} else {
+				skip = TRUE;
 			}
+			
 			if (skip) {
 				proc_rele(p);			
 			} else
 #endif
 			{
 #if DEVELOPMENT || DEBUG
-				if ((jetsam_diagnostic_mode != kJetsamDiagnosticModeNone) && activeProcess) {
-#if DEBUG
-					printf("jetsam: suspending pid %d [%s] (active) for diagnosis - memory_status_level: %d\n",
-						aPid, (p->p_comm ? p->p_comm: "(unknown)"), kern_memorystatus_level);
-#endif /* DEBUG */
-					jetsam_mark_pid_in_snapshot(aPid, kJetsamFlagsSuspForDiagnosis);
-					jetsam_priority_entry->flags |= kJetsamFlagsSuspForDiagnosis;
-					task_suspend(p->task);
-					proc_rele(p);
-					if (jetsam_diagnostic_mode == kJetsamDiagnosticModeStopAtFirstActive) {
+				if ((memorystatus_jetsam_policy & kPolicyDiagnoseActive) && activeProcess) {
+					MEMORYSTATUS_DEBUG(1, "jetsam: suspending pid %d [%s] (active) for diagnosis - memory_status_level: %d\n",
+						aPid, (p->p_comm ? p->p_comm: "(unknown)"), memorystatus_level);
+					memorystatus_mark_pid_in_snapshot(aPid, kMemorystatusFlagsSuspForDiagnosis);
+					node->state |= kProcessSuspendedForDiag;
+					if (memorystatus_jetsam_policy & kPolicyDiagnoseFirst) {
 						jetsam_diagnostic_suspended_one_active_proc = 1;
 						printf("jetsam: returning after suspending first active proc - %d\n", aPid);
 					}
+					lck_mtx_unlock(memorystatus_list_mlock);
+					task_suspend(p->task);
+					proc_rele(p);
 					return 0;
 				} else
 #endif /* DEVELOPMENT || DEBUG */
 				{
-					printf("jetsam: killing pid %d [%s] - memory_status_level: %d\n", 
-						aPid, (p->p_comm ? p->p_comm : "(unknown)"), kern_memorystatus_level);
-					jetsam_mark_pid_in_snapshot(aPid, flags);
-					exit1(p, W_EXITCODE(0, SIGKILL), (int *)NULL);
+					printf("memorystatus: jetsam killing pid %d [%s] - memorystatus_available_pages: %d\n", 
+						aPid, (p->p_comm ? p->p_comm : "(unknown)"), memorystatus_available_pages);
+					/* Shift queue, update stats */
+					memorystatus_move_node_to_exit_list(node);
+					memorystatus_mark_pid_in_snapshot(aPid, flags);
+					lck_mtx_unlock(memorystatus_list_mlock);
+					exit1_internal(p, W_EXITCODE(0, SIGKILL), (int *)NULL, FALSE, FALSE);
 					proc_rele(p);
-#if DEBUG
-					printf("jetsam: pid %d killed - memory_status_level: %d\n", aPid, kern_memorystatus_level);
-#endif /* DEBUG */
 					return 0;
 				}
 			}
 		}
-	    lck_mtx_lock(jetsam_list_mlock);
 	}
-	lck_mtx_unlock(jetsam_list_mlock);
+	
+	lck_mtx_unlock(memorystatus_list_mlock);
+	
+	// If we didn't kill anything, toss any newly-created snapshot
+	if (!pending_snapshot) {
+	    memorystatus_jetsam_snapshot.entry_count = memorystatus_jetsam_snapshot_list_count = 0;
+	}
+	
 	return -1;
 }
 
+int memorystatus_kill_top_proc_from_VM(void) {
+	return memorystatus_kill_top_proc(TRUE, kMemorystatusFlagsKilledVM);
+}
+
 static int
-jetsam_kill_hiwat_proc(void)
+memorystatus_kill_hiwat_proc(void)
 {
 	proc_t p;
-	int i;
-	if (jetsam_snapshot_list_count == 0) {
-		jetsam_snapshot_procs();
+	int pending_snapshot = 0;
+	memorystatus_node *next_hiwat_node;
+	
+	lck_mtx_lock(memorystatus_list_mlock);
+	
+	if (memorystatus_jetsam_snapshot_list_count == 0) {
+		memorystatus_jetsam_snapshot_procs_locked();
+	} else {
+		pending_snapshot = 1;
 	}
-	lck_mtx_lock(jetsam_list_mlock);
-	for (i = jetsam_priority_list_index; i < jetsam_priority_list_count; i++) {
+	
+	next_hiwat_node = next_memorystatus_node;
+	
+	while (next_hiwat_node) {
 		pid_t aPid;
 		int32_t hiwat;
-		aPid = jetsam_priority_list[i].pid;
-		hiwat = jetsam_priority_list[i].hiwat_pages;	
+		memorystatus_node *node;
+        
+		node = next_hiwat_node;
+		next_hiwat_node = TAILQ_NEXT(next_hiwat_node, link);
+		
+		aPid = node->pid;
+		hiwat = node->hiwat_pages;
+		
 		/* skip empty or non-hiwat slots in the list */
-		if (aPid == 0 || (hiwat < 0)) {
+		if (aPid == 0 || (hiwat < 0) || (node->state & kProcessKilled)) {
 			continue; // with lock held
 		}
+		
 		p = proc_find(aPid);
 		if (p != NULL) {
-			int32_t pages = (int32_t)jetsam_task_page_count(p->task);
+			int32_t pages = (int32_t)memorystatus_task_page_count(p->task);
 			boolean_t skip = (pages <= hiwat);
 #if DEVELOPMENT || DEBUG
-			if (!skip && (jetsam_diagnostic_mode != kJetsamDiagnosticModeNone)) {
-				if (jetsam_priority_list[i].flags & kJetsamFlagsSuspForDiagnosis) {
+			if (!skip && (memorystatus_jetsam_policy & kPolicyDiagnoseActive)) {
+				if (node->state & kProcessSuspendedForDiag) {
 					proc_rele(p);
 					continue;
 				}
 			}
 #endif /* DEVELOPMENT || DEBUG */
+
 #if CONFIG_FREEZE
 			if (!skip) {
-				hibernation_node *node;
-				if ((node = kern_hibernation_get_node(aPid))) {
-					if (node->state & kProcessBusy) {
-						kern_hibernation_release_node(node);
-						skip = TRUE;
-					} else {
-						kern_hibernation_free_node(node, TRUE);
-						skip = FALSE;
-					}
+				if (node->state & kProcessLocked) {
+					skip = TRUE;
+				} else {
+					skip = FALSE;
 				}				
 			}
 #endif
+
 			if (!skip) {
-#if DEBUG
-				printf("jetsam: %s pid %d [%s] - %d pages > hiwat (%d)\n",
-					(jetsam_diagnostic_mode != kJetsamDiagnosticModeNone)?"suspending": "killing", aPid, p->p_comm, pages, hiwat);
-#endif /* DEBUG */
+				MEMORYSTATUS_DEBUG(1, "jetsam: %s pid %d [%s] - %d pages > 1 (%d)\n",
+					(memorystatus_jetsam_policy & kPolicyDiagnoseActive) ? "suspending": "killing", aPid, p->p_comm, pages, hiwat);
 #if DEVELOPMENT || DEBUG
-				if (jetsam_diagnostic_mode != kJetsamDiagnosticModeNone) {
-					lck_mtx_unlock(jetsam_list_mlock);
+				if (memorystatus_jetsam_policy & kPolicyDiagnoseActive) {
+				    memorystatus_mark_pid_in_snapshot(aPid, kMemorystatusFlagsSuspForDiagnosis);
+					node->state |= kProcessSuspendedForDiag;
+					lck_mtx_unlock(memorystatus_list_mlock);
 					task_suspend(p->task);
 					proc_rele(p);
-#if DEBUG
-					printf("jetsam: pid %d suspended for diagnosis - memory_status_level: %d\n", aPid, kern_memorystatus_level);
-#endif /* DEBUG */
-					jetsam_mark_pid_in_snapshot(aPid, kJetsamFlagsSuspForDiagnosis);
-					jetsam_priority_list[i].flags |= kJetsamFlagsSuspForDiagnosis;
+					MEMORYSTATUS_DEBUG(1, "jetsam: pid %d suspended for diagnosis - memorystatus_available_pages: %d\n", aPid, memorystatus_available_pages);
 				} else
 #endif /* DEVELOPMENT || DEBUG */
-				{
-					jetsam_priority_list[i].pid = 0;
-					lck_mtx_unlock(jetsam_list_mlock);
+				{	
+					printf("memorystatus: jetsam killing pid %d [%s] (highwater) - memorystatus_available_pages: %d\n", 
+						aPid, (p->p_comm ? p->p_comm : "(unknown)"), memorystatus_available_pages);
+					/* Shift queue, update stats */
+					memorystatus_move_node_to_exit_list(node);
+					memorystatus_mark_pid_in_snapshot(aPid, kMemorystatusFlagsKilledHiwat);
+					lck_mtx_unlock(memorystatus_list_mlock);		    
 					exit1(p, W_EXITCODE(0, SIGKILL), (int *)NULL);
 					proc_rele(p);
-#if DEBUG
-					printf("jetsam: pid %d killed - memory_status_level: %d\n", aPid, kern_memorystatus_level);
-#endif /* DEBUG */
-					jetsam_mark_pid_in_snapshot(aPid, kJetsamFlagsKilledHiwat);
 				}
 				return 0;
 			} else {
@@ -513,276 +1281,273 @@ jetsam_kill_hiwat_proc(void)
 
 		}
 	}
-	lck_mtx_unlock(jetsam_list_mlock);
+	
+	lck_mtx_unlock(memorystatus_list_mlock);
+	
+	// If we didn't kill anything, toss any newly-created snapshot
+	if (!pending_snapshot) {
+		memorystatus_jetsam_snapshot.entry_count = memorystatus_jetsam_snapshot_list_count = 0;
+	}
+	
 	return -1;
 }
 
-#if CONFIG_FREEZE
 static void
-jetsam_send_hibernation_note(uint32_t flags, pid_t pid, uint32_t pages) {
-	int ret;
-	struct kev_msg ev_msg;
-	jetsam_hibernation_entry_t data;
+memorystatus_jetsam_thread_block(void)
+{
+ 	assert_wait(&memorystatus_jetsam_wakeup, THREAD_UNINT);
+	assert(memorystatus_jetsam_running == 1);
+	OSDecrementAtomic(&memorystatus_jetsam_running);
+	(void)thread_block((thread_continue_t)memorystatus_jetsam_thread);   
+}
+
+static void
+memorystatus_jetsam_thread(void *param __unused, wait_result_t wr __unused)
+{
+	boolean_t post_snapshot = FALSE; 
+	static boolean_t is_vm_privileged = FALSE;
+
+	if (is_vm_privileged == FALSE) {
+		/* 
+		 * It's the first time the thread has run, so just mark the thread as privileged and block.
+		 * This avoids a spurious pass with unset variables, as set out in <rdar://problem/9609402>.
+		 */
+		thread_wire(host_priv_self(), current_thread(), TRUE);
+		is_vm_privileged = TRUE;
+		memorystatus_jetsam_thread_block();
+	}
 	
-	ev_msg.vendor_code    = KEV_VENDOR_APPLE;
-	ev_msg.kev_class      = KEV_SYSTEM_CLASS;
-	ev_msg.kev_subclass   = KEV_MEMORYSTATUS_SUBCLASS;
+	assert(memorystatus_available_pages != (unsigned)-1);
+	
+	while(1) {
+		unsigned int last_available_pages;
 
-	ev_msg.event_code     = kMemoryStatusHibernationNote;
+#if DEVELOPMENT || DEBUG
+		jetsam_diagnostic_suspended_one_active_proc = 0;
+#endif /* DEVELOPMENT || DEBUG */
+	    
+		while (memorystatus_available_pages <= memorystatus_available_pages_highwater) {
+			if (memorystatus_kill_hiwat_proc() < 0) {
+				break;
+			}
+			post_snapshot = TRUE;
+		}
 
-	ev_msg.dv[0].data_length = sizeof data;
-	ev_msg.dv[0].data_ptr = &data;
-	ev_msg.dv[1].data_length = 0;
+		while (memorystatus_available_pages <= memorystatus_available_pages_critical) {
+			if (memorystatus_kill_top_proc(FALSE, kMemorystatusFlagsKilled) < 0) {
+				/* No victim was found - panic */
+				panic("memorystatus_jetsam_thread: no victim! available pages:%d, critical page level: %d\n",
+                                        memorystatus_available_pages, memorystatus_available_pages_critical);
+			}
+			post_snapshot = TRUE;
+#if DEVELOPMENT || DEBUG
+			if ((memorystatus_jetsam_policy & kPolicyDiagnoseFirst) && jetsam_diagnostic_suspended_one_active_proc) {
+				printf("jetsam: stopping killing since 1 active proc suspended already for diagnosis\n");
+				break; // we found first active proc, let's not kill any more
+			}
+#endif /* DEVELOPMENT || DEBUG */
+		}
+		
+		last_available_pages = memorystatus_available_pages;
 
-	data.pid = pid;
-	data.flags = flags;
-	data.pages = pages;
+		if (post_snapshot) {
+			size_t snapshot_size = sizeof(memorystatus_jetsam_snapshot_t) + sizeof(memorystatus_jetsam_snapshot_entry_t) * (memorystatus_jetsam_snapshot_list_count - 1);
+			memorystatus_jetsam_snapshot.notification_time = mach_absolute_time();
+			memorystatus_send_note(kMemorystatusSnapshotNote, &snapshot_size, sizeof(snapshot_size));
+		}
 
-	ret = kev_post_msg(&ev_msg);
-	if (ret) {
-		kern_memorystatus_kev_failure_count++;
-		printf("%s: kev_post_msg() failed, err %d\n", __func__, ret);
+		if (memorystatus_available_pages >= (last_available_pages + memorystatus_delta) ||
+		    last_available_pages >= (memorystatus_available_pages + memorystatus_delta)) {
+			continue;
+		}
+
+#if VM_PRESSURE_EVENTS
+		memorystatus_check_pressure_reset();
+#endif
+
+		memorystatus_jetsam_thread_block();
+	}
+}
+
+#endif /* CONFIG_JETSAM */
+
+#if CONFIG_FREEZE
+
+__private_extern__ void
+memorystatus_freeze_init(void)
+{
+	kern_return_t result;
+	thread_t thread;
+	
+	result = kernel_thread_start(memorystatus_freeze_thread, NULL, &thread);
+	if (result == KERN_SUCCESS) {
+		thread_deallocate(thread);
+	} else {
+		panic("Could not create memorystatus_freeze_thread");
 	}
 }
 
 static int
-jetsam_hibernate_top_proc(void)
+memorystatus_freeze_top_proc(boolean_t *memorystatus_freeze_swap_low)
 {
-	int hibernate_index;
 	proc_t p;
 	uint32_t i;
+	memorystatus_node *next_freeze_node;
 
-	lck_mtx_lock(jetsam_list_mlock);
+	lck_mtx_lock(memorystatus_list_mlock);
 	
-	for (hibernate_index = jetsam_priority_list_index; hibernate_index < jetsam_priority_list_count; hibernate_index++) {
+	next_freeze_node = next_memorystatus_node;
+	
+	while (next_freeze_node) {
+		memorystatus_node *node;
 		pid_t aPid;
-		uint32_t state = 0;
+		uint32_t state;
+		
+		node = next_freeze_node;
+		next_freeze_node = TAILQ_NEXT(next_freeze_node, link);
 
-		aPid = jetsam_priority_list[hibernate_index].pid;
+		aPid = node->pid;
+		state = node->state;
 
 		/* skip empty slots in the list */
 		if (aPid == 0) {
 			continue; // with lock held
 		}
 
-		if (kern_hibernation_get_process_state(aPid, &state, NULL) != 0) {
-			continue; // with lock held
-		}
-
-		/* ensure the process isn't marked as busy and is suspended */
-		if ((state & kProcessBusy) || !(state & kProcessSuspended)) {
+		/* Ensure the process is eligible for freezing */
+		if ((state & (kProcessKilled | kProcessLocked | kProcessFrozen)) || !(state & kProcessSuspended)) {
 			continue; // with lock held
 		}
 
 		p = proc_find(aPid);
 		if (p != NULL) {
-			hibernation_node *node;
-			boolean_t skip;
+			kern_return_t kr;
 			uint32_t purgeable, wired, clean, dirty;
 			boolean_t shared;
-			
-			lck_mtx_unlock(jetsam_list_mlock);
-			
-			if ((node = kern_hibernation_get_node(aPid))) {
-				if (node->state & kProcessBusy) {
-					skip = TRUE;
-				} else {
-					node->state |= kProcessBusy;
-					/* Whether we hibernate or not, increase the count so can we maintain the gap between hibernated and suspended processes. */
-					kern_memorystatus_hibernated_count++;
-					skip = FALSE;
-				}
-				kern_hibernation_release_node(node);
-			} else {
-				skip = TRUE;
-			}
-			
-			if (!skip) {
-				/* Only hibernate processes meeting our size criteria. If not met, mark it as such and return. */
-				task_freeze(p->task, &purgeable, &wired, &clean, &dirty, &shared, TRUE);
-				skip = (dirty < kern_memorystatus_hibernation_pages_min) || (dirty > kern_memorystatus_hibernation_pages_max);		
-			}
-			
-			if (!skip) {
-				unsigned int swap_pages_free = default_pager_swap_pages_free();
-				
-				/* Ensure there's actually enough space free to hibernate this process. */
-				if (dirty > swap_pages_free) {
-					kern_memorystatus_low_swap_pages = swap_pages_free;
-					skip = TRUE;
-				}
-			}
-
-			if (skip) {
-				kern_hibernation_set_process_state(aPid, kProcessIgnored);
+			uint32_t max_pages = 0;
+					
+			/* Only freeze processes meeting our minimum resident page criteria */
+			if (memorystatus_task_page_count(p->task) < memorystatus_freeze_pages_min) {
 				proc_rele(p);
+				continue;
+			} 
+
+			/* Ensure there's enough free space to freeze this process. */			
+			max_pages = MIN(default_pager_swap_pages_free(), memorystatus_freeze_pages_max);
+			if (max_pages < memorystatus_freeze_pages_min) {
+				*memorystatus_freeze_swap_low = TRUE;
+				proc_rele(p);
+				lck_mtx_unlock(memorystatus_list_mlock);
 				return 0;
 			}
-
-#if DEBUG
-			printf("jetsam: pid %d [%s] hibernating - memory_status_level: %d, purgeable: %d, wired: %d, clean: %d, dirty: %d, shared %d, free swap: %d\n", 
-				aPid, (p->p_comm ? p->p_comm : "(unknown)"), kern_memorystatus_level, purgeable, wired, clean, dirty, shared, default_pager_swap_pages_free());
-#endif
-
-			task_freeze(p->task, &purgeable, &wired, &clean, &dirty, &shared, FALSE);
+			
+			/* Mark as locked temporarily to avoid kill */
+			node->state |= kProcessLocked;
+			
+			kr = task_freeze(p->task, &purgeable, &wired, &clean, &dirty, max_pages, &shared, FALSE);
+			
+			MEMORYSTATUS_DEBUG(1, "memorystatus_freeze_top_proc: task_freeze %s for pid %d [%s] - "
+     			"memorystatus_pages: %d, purgeable: %d, wired: %d, clean: %d, dirty: %d, shared %d, free swap: %d\n", 
+        		(kr == KERN_SUCCESS) ? "SUCCEEDED" : "FAILED", aPid, (p->p_comm ? p->p_comm : "(unknown)"), 
+        		memorystatus_available_pages, purgeable, wired, clean, dirty, shared, default_pager_swap_pages_free());
+        		
 			proc_rele(p);
+     		
+			node->state &= ~kProcessLocked;
 			
-			kern_hibernation_set_process_state(aPid, kProcessHibernated | (shared ? 0: kProcessNoReclaimWorth));
+			if (KERN_SUCCESS == kr) {
+				memorystatus_freeze_entry_t data = { aPid, kMemorystatusFlagsFrozen, dirty };
+				
+				memorystatus_frozen_count++;
+				
+				node->state |= (kProcessFrozen | (shared ? 0: kProcessNoReclaimWorth));
 			
-			/* Update stats */
-			for (i = 0; i < sizeof(throttle_intervals) / sizeof(struct throttle_interval_t); i++) {
-				throttle_intervals[i].pageouts += dirty;
-			}
-			kern_memorystatus_hibernation_pageouts += dirty;
-			kern_memorystatus_hibernation_count++;
+				/* Update stats */
+				for (i = 0; i < sizeof(throttle_intervals) / sizeof(struct throttle_interval_t); i++) {
+        			throttle_intervals[i].pageouts += dirty;
+				}
 			
-			jetsam_send_hibernation_note(kJetsamFlagsHibernated, aPid, dirty);
+				memorystatus_freeze_pageouts += dirty;
+				memorystatus_freeze_count++;
 
-			return dirty;
+				lck_mtx_unlock(memorystatus_list_mlock);
+
+				memorystatus_send_note(kMemorystatusFreezeNote, &data, sizeof(data));
+
+				return dirty;
+			}
+        		
+			/* Failed; go round again */
 		}
 	}
-	lck_mtx_unlock(jetsam_list_mlock);
-	return -1;
-}
-#endif /* CONFIG_FREEZE */
-
-static void
-kern_memorystatus_thread(void)
-{
-	struct kev_msg ev_msg;
-	jetsam_kernel_stats_t data;
-	boolean_t post_memorystatus_snapshot = FALSE; 
-	int ret;
-
-	bzero(&data, sizeof(jetsam_kernel_stats_t));
-	bzero(&ev_msg, sizeof(struct kev_msg));
-	while(1) {
-
-#if DEVELOPMENT || DEBUG
-		jetsam_diagnostic_suspended_one_active_proc = 0;
-#endif /* DEVELOPMENT || DEBUG */
-
-		while (kern_memorystatus_level <= kern_memorystatus_level_highwater) {
-			if (jetsam_kill_hiwat_proc() < 0) {
-				break;
-			}
-			post_memorystatus_snapshot = TRUE;
-		}
-
-		while (kern_memorystatus_level <= kern_memorystatus_level_critical) {
-			if (jetsam_kill_top_proc(FALSE, kJetsamFlagsKilled) < 0) {
-				break;
-			}
-			post_memorystatus_snapshot = TRUE;
-#if DEVELOPMENT || DEBUG
-			if ((jetsam_diagnostic_mode == kJetsamDiagnosticModeStopAtFirstActive) && jetsam_diagnostic_suspended_one_active_proc) {
-				printf("jetsam: stopping killing since 1 active proc suspended already for diagnosis\n");
-				break; // we found first active proc, let's not kill any more
-			}
-#endif /* DEVELOPMENT || DEBUG */
-		}
-
-		kern_memorystatus_last_level = kern_memorystatus_level;
-
-		ev_msg.vendor_code    = KEV_VENDOR_APPLE;
-		ev_msg.kev_class      = KEV_SYSTEM_CLASS;
-		ev_msg.kev_subclass   = KEV_MEMORYSTATUS_SUBCLASS;
-
-		/* pass the memory status level (percent free) */
-		ev_msg.event_code     = kMemoryStatusLevelNote;
-
-		ev_msg.dv[0].data_length = sizeof kern_memorystatus_last_level;
-		ev_msg.dv[0].data_ptr = &kern_memorystatus_last_level;
-		ev_msg.dv[1].data_length = sizeof data;
-		ev_msg.dv[1].data_ptr = &data;
-		ev_msg.dv[2].data_length = 0;
-
-		data.free_pages = vm_page_free_count;
-		data.active_pages = vm_page_active_count;
-		data.inactive_pages = vm_page_inactive_count;
-		data.purgeable_pages = vm_page_purgeable_count;
-		data.wired_pages = vm_page_wire_count;
-
-		ret = kev_post_msg(&ev_msg);
-		if (ret) {
-			kern_memorystatus_kev_failure_count++;
-			printf("%s: kev_post_msg() failed, err %d\n", __func__, ret);
-		}
-
-		if (post_memorystatus_snapshot) {
-			size_t snapshot_size =  sizeof(jetsam_kernel_stats_t) + sizeof(size_t) + sizeof(jetsam_snapshot_entry_t) * jetsam_snapshot_list_count;
-			ev_msg.event_code = kMemoryStatusSnapshotNote;
-			ev_msg.dv[0].data_length = sizeof snapshot_size;
-			ev_msg.dv[0].data_ptr = &snapshot_size;
-			ev_msg.dv[1].data_length = 0;
-
-			ret = kev_post_msg(&ev_msg);
-			if (ret) {
-				kern_memorystatus_kev_failure_count++;
-				printf("%s: kev_post_msg() failed, err %d\n", __func__, ret);
-			}
-		}
-
-		if (kern_memorystatus_level >= kern_memorystatus_last_level + 5 ||
-		    kern_memorystatus_level <= kern_memorystatus_last_level - 5)
-			continue;
-
-		assert_wait(&kern_memorystatus_wakeup, THREAD_UNINT);
-		(void)thread_block((thread_continue_t)kern_memorystatus_thread);
-	}
-}
-
-#if CONFIG_FREEZE
-
-__private_extern__ void
-kern_hibernation_init(void)
-{
-    hibernation_lck_attr = lck_attr_alloc_init();
-    hibernation_lck_grp_attr = lck_grp_attr_alloc_init();
-    hibernation_lck_grp = lck_grp_alloc_init("hibernation",  hibernation_lck_grp_attr);
-    hibernation_mlock = lck_mtx_alloc_init(hibernation_lck_grp, hibernation_lck_attr);
 	
-	RB_INIT(&hibernation_tree_head);
-
-	(void)kernel_thread(kernel_task, kern_hibernation_thread);
+	lck_mtx_unlock(memorystatus_list_mlock);
+	
+	return -1;
 }
 
 static inline boolean_t 
-kern_hibernation_can_hibernate_processes(void) 
+memorystatus_can_freeze_processes(void) 
 {
 	boolean_t ret;
 	
-	lck_mtx_lock_spin(hibernation_mlock);
-	ret = (kern_memorystatus_suspended_count - kern_memorystatus_hibernated_count) > 
-				kern_memorystatus_hibernation_suspended_minimum ? TRUE : FALSE;
-	lck_mtx_unlock(hibernation_mlock);
+	lck_mtx_lock(memorystatus_list_mlock);
+	
+	if (memorystatus_suspended_count) {
+		uint32_t average_resident_pages, estimated_processes;
+        
+		/* Estimate the number of suspended processes we can fit */
+		average_resident_pages = memorystatus_suspended_resident_count / memorystatus_suspended_count;
+		estimated_processes = memorystatus_suspended_count +
+			((memorystatus_available_pages - memorystatus_available_pages_critical) / average_resident_pages);
+
+		/* If it's predicted that no freeze will occur, lower the threshold temporarily */
+		if (estimated_processes <= FREEZE_SUSPENDED_THRESHOLD_DEFAULT) {
+			memorystatus_freeze_suspended_threshold = FREEZE_SUSPENDED_THRESHOLD_LOW;
+		} else {
+			memorystatus_freeze_suspended_threshold = FREEZE_SUSPENDED_THRESHOLD_DEFAULT;        
+		}
+
+		MEMORYSTATUS_DEBUG(1, "memorystatus_can_freeze_processes: %d suspended processes, %d average resident pages / process, %d suspended processes estimated\n", 
+			memorystatus_suspended_count, average_resident_pages, estimated_processes);
+	
+		if ((memorystatus_suspended_count - memorystatus_frozen_count) > memorystatus_freeze_suspended_threshold) {
+			ret = TRUE;
+		} else {
+			ret = FALSE;
+		}
+	} else {
+		ret = FALSE;
+	}
+				
+	lck_mtx_unlock(memorystatus_list_mlock);
 	
 	return ret;
 }
 
 static boolean_t 
-kern_hibernation_can_hibernate(void)
+memorystatus_can_freeze(boolean_t *memorystatus_freeze_swap_low)
 {
-	/* Only hibernate if we're sufficiently low on memory; this holds off hibernation right after boot, 
-	   and is generally is a no-op once we've reached steady state. */
-	if (kern_memorystatus_level > kern_memorystatus_level_hibernate) {
+	/* Only freeze if we're sufficiently low on memory; this holds off freeze right
+	   after boot,  and is generally is a no-op once we've reached steady state. */
+	if (memorystatus_available_pages > memorystatus_freeze_threshold) {
 		return FALSE;
 	}
 	
 	/* Check minimum suspended process threshold. */
-	if (!kern_hibernation_can_hibernate_processes()) {
+	if (!memorystatus_can_freeze_processes()) {
 		return FALSE;
 	}
 
 	/* Is swap running low? */
-	if (kern_memorystatus_low_swap_pages) {
-		/* If there's been no movement in free swap pages since we last attempted hibernation, return. */
-		if (default_pager_swap_pages_free() <= kern_memorystatus_low_swap_pages) {
+	if (*memorystatus_freeze_swap_low) {
+		/* If there's been no movement in free swap pages since we last attempted freeze, return. */
+		if (default_pager_swap_pages_free() < memorystatus_freeze_pages_min) {
 			return FALSE;
 		}
 		
-		/* Pages have been freed, so we can retry. */
-		kern_memorystatus_low_swap_pages = 0;
+		/* Pages have been freed - we can retry. */
+		*memorystatus_freeze_swap_low = FALSE;	
 	}
 	
 	/* OK */
@@ -790,193 +1555,18 @@ kern_hibernation_can_hibernate(void)
 }
 
 static void
-kern_hibernation_add_node(hibernation_node *node)
-{
-	lck_mtx_lock_spin(hibernation_mlock);
-
-	RB_INSERT(hibernation_tree, &hibernation_tree_head, node);
-	kern_memorystatus_suspended_count++;
-
-	lck_mtx_unlock(hibernation_mlock);	
-}
-
-/* Returns with the hibernation lock taken */
-static hibernation_node *
-kern_hibernation_get_node(pid_t pid) 
-{
-	hibernation_node sought, *found;
-	sought.pid = pid;
-	lck_mtx_lock_spin(hibernation_mlock);
-	found = RB_FIND(hibernation_tree, &hibernation_tree_head, &sought);
-	if (!found) {
-		lck_mtx_unlock(hibernation_mlock);		
-	}
-	return found;
-}
-
-static void
-kern_hibernation_release_node(hibernation_node *node) 
-{
-#pragma unused(node)
-	lck_mtx_unlock(hibernation_mlock);	
-}
-
-static void 
-kern_hibernation_free_node(hibernation_node *node, boolean_t unlock) 
-{
-	/* make sure we're called with the hibernation_mlock held */
-	lck_mtx_assert(hibernation_mlock, LCK_MTX_ASSERT_OWNED);
-
-	if (node->state & (kProcessHibernated | kProcessIgnored)) {
-		kern_memorystatus_hibernated_count--;
-	} 
-
-	kern_memorystatus_suspended_count--;
-	
-	RB_REMOVE(hibernation_tree, &hibernation_tree_head, node);
-	kfree(node, sizeof(hibernation_node));
-
-	if (unlock) {
-		lck_mtx_unlock(hibernation_mlock);
-	}	
-}
-
-static void 
-kern_hibernation_register_pid(pid_t pid)
-{
-	hibernation_node *node;
-
-#if DEVELOPMENT || DEBUG
-	node = kern_hibernation_get_node(pid);
-	if (node) {
-		printf("kern_hibernation_register_pid: pid %d already registered!\n", pid);
-		kern_hibernation_release_node(node);
-		return;
-	}
-#endif
-
-	/* Register as a candiate for hibernation */
-	node = (hibernation_node *)kalloc(sizeof(hibernation_node));
-	if (node) {	
-		clock_sec_t sec;
-		clock_nsec_t nsec;
-		mach_timespec_t ts;
-		
-		memset(node, 0, sizeof(hibernation_node));
-
-		node->pid = pid;
-		node->state = kProcessSuspended;
-
-		clock_get_system_nanotime(&sec, &nsec);
-		ts.tv_sec = sec;
-		ts.tv_nsec = nsec;
-		
-		node->hibernation_ts = ts;
-
-		kern_hibernation_add_node(node);
-	}
-}
-
-static void 
-kern_hibernation_unregister_pid(pid_t pid)
-{
-	hibernation_node *node;
-	
-	node = kern_hibernation_get_node(pid);
-	if (node) {
-		kern_hibernation_free_node(node, TRUE);
-	}
-}
-
-void 
-kern_hibernation_on_pid_suspend(pid_t pid)
-{	
-	kern_hibernation_register_pid(pid);
-}
-
-/* If enabled, we bring all the hibernated pages back prior to resumption; otherwise, they're faulted back in on demand */
-#define THAW_ON_RESUME 1
-
-void
-kern_hibernation_on_pid_resume(pid_t pid, task_t task)
-{	
-#if THAW_ON_RESUME
-	hibernation_node *node;
-	if ((node = kern_hibernation_get_node(pid))) {
-		if (node->state & kProcessHibernated) {
-			node->state |= kProcessBusy;
-			kern_hibernation_release_node(node);
-			task_thaw(task);
-			jetsam_send_hibernation_note(kJetsamFlagsThawed, pid, 0);
-		} else {
-			kern_hibernation_release_node(node);
-		}
-	}
-#else
-#pragma unused(task)
-#endif
-	kern_hibernation_unregister_pid(pid);
-}
-
-void
-kern_hibernation_on_pid_hibernate(pid_t pid)
-{
-#pragma unused(pid)
-
-	/* Wake the hibernation thread */
-	thread_wakeup((event_t)&kern_hibernation_wakeup);	
-}
-
-static int 
-kern_hibernation_get_process_state(pid_t pid, uint32_t *state, mach_timespec_t *ts) 
-{
-	hibernation_node *found;
-	int err = ESRCH;
-	
-	*state = 0;
-
-	found = kern_hibernation_get_node(pid);
-	if (found) {
-		*state = found->state;
-		if (ts) {
-			*ts = found->hibernation_ts;
-		}
-		err = 0;
-		kern_hibernation_release_node(found);
-	}
-	
-	return err;
-}
-
-static int 
-kern_hibernation_set_process_state(pid_t pid, uint32_t state) 
-{
-	hibernation_node *found;
-	int err = ESRCH;
-
-	found = kern_hibernation_get_node(pid);
-	if (found) {
-		found->state = state;
-		err = 0;
-		kern_hibernation_release_node(found);
-	}
-	
-	return err;
-}
-
-static void
-kern_hibernation_update_throttle_interval(mach_timespec_t *ts, struct throttle_interval_t *interval)
+memorystatus_freeze_update_throttle_interval(mach_timespec_t *ts, struct throttle_interval_t *interval)
 {
 	if (CMP_MACH_TIMESPEC(ts, &interval->ts) >= 0) {
 		if (!interval->max_pageouts) {
-			interval->max_pageouts = (interval->burst_multiple * (((uint64_t)interval->mins * HIBERNATION_DAILY_PAGEOUTS_MAX) / (24 * 60)));
+			interval->max_pageouts = (interval->burst_multiple * (((uint64_t)interval->mins * FREEZE_DAILY_PAGEOUTS_MAX) / (24 * 60)));
 		} else {
-			printf("jetsam: %d minute throttle timeout, resetting\n", interval->mins);
+			printf("memorystatus_freeze_update_throttle_interval: %d minute throttle timeout, resetting\n", interval->mins);
 		}
 		interval->ts.tv_sec = interval->mins * 60;
 		interval->ts.tv_nsec = 0;
 		ADD_MACH_TIMESPEC(&interval->ts, ts);
-		/* Since we update the throttle stats pre-hibernation, adjust for overshoot here */
+		/* Since we update the throttle stats pre-freeze, adjust for overshoot here */
 		if (interval->pageouts > interval->max_pageouts) {
 			interval->pageouts -= interval->max_pageouts;
 		} else {
@@ -984,18 +1574,17 @@ kern_hibernation_update_throttle_interval(mach_timespec_t *ts, struct throttle_i
 		}
 		interval->throttle = FALSE;
 	} else if (!interval->throttle && interval->pageouts >= interval->max_pageouts) {
-		printf("jetsam: %d minute pageout limit exceeded; enabling throttle\n", interval->mins);
+		printf("memorystatus_freeze_update_throttle_interval: %d minute pageout limit exceeded; enabling throttle\n", interval->mins);
 		interval->throttle = TRUE;
 	}	
-#ifdef DEBUG
-	printf("jetsam: throttle updated - %d frozen (%d max) within %dm; %dm remaining; throttle %s\n", 
+
+	MEMORYSTATUS_DEBUG(1, "memorystatus_freeze_update_throttle_interval: throttle updated - %d frozen (%d max) within %dm; %dm remaining; throttle %s\n", 
 		interval->pageouts, interval->max_pageouts, interval->mins, (interval->ts.tv_sec - ts->tv_sec) / 60, 
 		interval->throttle ? "on" : "off");
-#endif
 }
 
 static boolean_t
-kern_hibernation_throttle_update(void) 
+memorystatus_freeze_update_throttle(void) 
 {
 	clock_sec_t sec;
 	clock_nsec_t nsec;
@@ -1004,7 +1593,7 @@ kern_hibernation_throttle_update(void)
 	boolean_t throttled = FALSE;
 
 #if DEVELOPMENT || DEBUG
-	if (!kern_memorystatus_hibernation_throttle_enabled)
+	if (!memorystatus_freeze_throttle_enabled)
 		return FALSE;
 #endif
 
@@ -1012,14 +1601,14 @@ kern_hibernation_throttle_update(void)
 	ts.tv_sec = sec;
 	ts.tv_nsec = nsec;
 	
-	/* Check hibernation pageouts over multiple intervals and throttle if we've exceeded our budget.
+	/* Check freeze pageouts over multiple intervals and throttle if we've exceeded our budget.
 	 *
-	 * This ensures that periods of inactivity can't be used as 'credit' towards hibernation if the device has
+	 * This ensures that periods of inactivity can't be used as 'credit' towards freeze if the device has
 	 * remained dormant for a long period. We do, however, allow increased thresholds for shorter intervals in
 	 * order to allow for bursts of activity.
 	 */
 	for (i = 0; i < sizeof(throttle_intervals) / sizeof(struct throttle_interval_t); i++) {
-		kern_hibernation_update_throttle_interval(&ts, &throttle_intervals[i]);
+		memorystatus_freeze_update_throttle_interval(&ts, &throttle_intervals[i]);
 		if (throttle_intervals[i].throttle == TRUE)
 			throttled = TRUE;
 	}								
@@ -1028,159 +1617,276 @@ kern_hibernation_throttle_update(void)
 }
 
 static void
-kern_hibernation_cull(void)
+memorystatus_freeze_thread(void *param __unused, wait_result_t wr __unused)
 {
-	hibernation_node *node, *next;
-	lck_mtx_lock(hibernation_mlock);
-
-	for (node = RB_MIN(hibernation_tree, &hibernation_tree_head); node != NULL; node = next) {
-		proc_t p;
-
-		next = RB_NEXT(hibernation_tree, &hibernation_tree_head, node);
-
-		/* TODO: probably suboptimal, so revisit should it cause a performance issue */
-		p = proc_find(node->pid);
-		if (p) {
-			proc_rele(p);
-		} else {
-			kern_hibernation_free_node(node, FALSE);				
-		}
-	}
-
-	lck_mtx_unlock(hibernation_mlock);	
-}
-
-static void
-kern_hibernation_thread(void)
-{
-	if (vm_freeze_enabled) {
-		if (kern_hibernation_can_hibernate()) {
-			
-			/* Cull dead processes */
-			kern_hibernation_cull();
-			
-			/* Only hibernate if we've not exceeded our pageout budgets */
-			if (!kern_hibernation_throttle_update()) {
-				jetsam_hibernate_top_proc();
+	static boolean_t memorystatus_freeze_swap_low = FALSE;
+	
+	if (memorystatus_freeze_enabled) {
+		if (memorystatus_can_freeze(&memorystatus_freeze_swap_low)) {
+			/* Only freeze if we've not exceeded our pageout budgets */
+			if (!memorystatus_freeze_update_throttle()) {
+				memorystatus_freeze_top_proc(&memorystatus_freeze_swap_low);
 			} else {
-				printf("kern_hibernation_thread: in throttle, ignoring hibernation\n");
-				kern_memorystatus_hibernation_throttle_count++; /* Throttled, update stats */
+				printf("memorystatus_freeze_thread: in throttle, ignoring freeze\n");
+				memorystatus_freeze_throttle_count++; /* Throttled, update stats */
 			}
 		}
 	}
 
-	assert_wait((event_t) &kern_hibernation_wakeup, THREAD_UNINT);
-	thread_block((thread_continue_t) kern_hibernation_thread);	
+	assert_wait((event_t) &memorystatus_freeze_wakeup, THREAD_UNINT);
+	thread_block((thread_continue_t) memorystatus_freeze_thread);	
 }
 
 #endif /* CONFIG_FREEZE */
 
-static int
-sysctl_io_variable(struct sysctl_req *req, void *pValue, size_t currentsize, size_t maxsize, size_t *newsize)
-{
-    int error;
+#if CONFIG_JETSAM
 
-    /* Copy blob out */
-    error = SYSCTL_OUT(req, pValue, currentsize);
+#if VM_PRESSURE_EVENTS
 
-    /* error or nothing to set */
-    if (error || !req->newptr)
-        return(error);
-
-    if (req->newlen > maxsize) {
-		return EINVAL;
+static inline boolean_t
+memorystatus_get_pressure_locked(void) {
+	if (memorystatus_available_pages > memorystatus_available_pages_pressure) {
+                /* Too many free pages */
+                return kVMPressureNormal;
 	}
-	error = SYSCTL_IN(req, pValue, req->newlen);
-
-	if (!error) {
-		*newsize = req->newlen;
+	
+#if CONFIG_FREEZE
+	if (memorystatus_frozen_count > 0) {
+                /* Frozen processes exist */
+                return kVMPressureNormal;	        
 	}
+#endif
 
-    return(error);
+	if (memorystatus_suspended_count > MEMORYSTATUS_SUSPENDED_THRESHOLD) {
+	        /* Too many supended processes */
+		return kVMPressureNormal;
+	}
+	
+	if (memorystatus_suspended_count > 0) {
+	        /* Some suspended processes - warn */
+		return kVMPressureWarning;
+	}
+    
+	/* Otherwise, pressure level is urgent */
+	return kVMPressureUrgent;
 }
 
-static int
-sysctl_handle_kern_memorystatus_priority_list(__unused struct sysctl_oid *oid, __unused void *arg1, __unused int arg2, struct sysctl_req *req)
-{
-	int i, ret;
-	jetsam_priority_entry_t temp_list[kMaxPriorityEntries];
-	size_t newsize, currentsize;
+pid_t
+memorystatus_request_vm_pressure_candidate(void) {
+	memorystatus_node *node;
+	pid_t pid = -1;
 
-	if (req->oldptr) {
-		lck_mtx_lock(jetsam_list_mlock);
-		for (i = 0; i < jetsam_priority_list_count; i++) {
-			temp_list[i] = jetsam_priority_list[i];
+	lck_mtx_lock(memorystatus_list_mlock);
+
+	/* Are we in a low memory state? */
+	memorystatus_vm_pressure_level = memorystatus_get_pressure_locked();
+	if (kVMPressureNormal != memorystatus_vm_pressure_level) {
+		TAILQ_FOREACH(node, &memorystatus_list, link) {
+			/* Skip ineligible processes */
+			if (node->state & (kProcessKilled | kProcessLocked | kProcessSuspended | kProcessFrozen | kProcessNotifiedForPressure)) {
+				continue;
+			}
+			node->state |= kProcessNotifiedForPressure;
+			pid = node->pid;
+			break;
 		}
-		lck_mtx_unlock(jetsam_list_mlock);
+	}
+    
+	lck_mtx_unlock(memorystatus_list_mlock);
+
+	return pid;
+}
+
+void
+memorystatus_send_pressure_note(pid_t pid) {
+    memorystatus_send_note(kMemorystatusPressureNote, &pid, sizeof(pid));
+}
+
+static void
+memorystatus_check_pressure_reset() {        
+	lck_mtx_lock(memorystatus_list_mlock);
+	
+	if (kVMPressureNormal != memorystatus_vm_pressure_level) {
+		memorystatus_vm_pressure_level = memorystatus_get_pressure_locked();
+		if (kVMPressureNormal == memorystatus_vm_pressure_level) {
+			memorystatus_node *node;
+			TAILQ_FOREACH(node, &memorystatus_list, link) {
+				node->state &= ~kProcessNotifiedForPressure;
+			}
+		}
+	}
+    
+	lck_mtx_unlock(memorystatus_list_mlock);
+}
+
+#endif /* VM_PRESSURE_EVENTS */
+
+/* Sysctls... */
+
+static int
+sysctl_memorystatus_list_change SYSCTL_HANDLER_ARGS
+{
+	int ret;
+	memorystatus_priority_entry_t entry;
+
+#pragma unused(oidp, arg1, arg2)
+
+	if (!req->newptr || req->newlen > sizeof(entry)) {
+		return EINVAL;
 	}
 
-	currentsize = sizeof(jetsam_priority_list[0]) * jetsam_priority_list_count;
+	ret = SYSCTL_IN(req, &entry, req->newlen);
+	if (ret) {
+		return ret;
+	}
 
-	ret = sysctl_io_variable(req, &temp_list[0], currentsize, sizeof(temp_list), &newsize);
+	memorystatus_list_change(FALSE, entry.pid, entry.priority, entry.flags, -1);
 
-	if (!ret && req->newptr) {
-		int temp_list_count = newsize / sizeof(jetsam_priority_list[0]);
-#if DEBUG 
-		printf("set jetsam priority pids = { ");
-		for (i = 0; i < temp_list_count; i++) {
-			printf("(%d, 0x%08x, %d) ", temp_list[i].pid, temp_list[i].flags, temp_list[i].hiwat_pages);
-		}
-		printf("}\n");
-#endif /* DEBUG */
-		lck_mtx_lock(jetsam_list_mlock);
-#if CONFIG_FREEZE
-		jetsam_priority_list_hibernation_index = 0;
-#endif
-		jetsam_priority_list_index = 0;
-		jetsam_priority_list_count = temp_list_count;
-		for (i = 0; i < temp_list_count; i++) {
-			jetsam_priority_list[i] = temp_list[i];
-		}
-		for (i = temp_list_count; i < kMaxPriorityEntries; i++) {
-			jetsam_priority_list[i].pid = 0;
-			jetsam_priority_list[i].flags = 0;
-			jetsam_priority_list[i].hiwat_pages = -1;
-			jetsam_priority_list[i].hiwat_reserved1 = -1;
-			jetsam_priority_list[i].hiwat_reserved2 = -1;
-			jetsam_priority_list[i].hiwat_reserved3 = -1;
-		}
-		lck_mtx_unlock(jetsam_list_mlock);
-	}	
 	return ret;
 }
 
+SYSCTL_PROC(_kern, OID_AUTO, memorystatus_jetsam_change, CTLTYPE_INT|CTLFLAG_WR|CTLFLAG_LOCKED|CTLFLAG_MASKED,
+    0, 0, &sysctl_memorystatus_list_change, "I", "");
+    
 static int
-sysctl_handle_kern_memorystatus_snapshot(__unused struct sysctl_oid *oid, __unused void *arg1, __unused int arg2, struct sysctl_req *req)
+sysctl_memorystatus_priority_list(__unused struct sysctl_oid *oid, __unused void *arg1, __unused int arg2, struct sysctl_req *req)
+{
+	int ret;
+	size_t allocated_size, list_size = 0;
+ 	memorystatus_priority_entry_t *list;
+ 	uint32_t list_count, i = 0;
+ 	memorystatus_node *node;
+        
+ 	/* Races, but this is only for diagnostic purposes */
+ 	list_count = memorystatus_list_count;
+	allocated_size = sizeof(memorystatus_priority_entry_t) * list_count;
+ 	list = kalloc(allocated_size);
+	if (!list) {
+		return ENOMEM;
+	}
+
+	memset(list, 0, allocated_size);
+        
+	lck_mtx_lock(memorystatus_list_mlock);
+
+	TAILQ_FOREACH(node, &memorystatus_list, link) {
+		list[i].pid = node->pid;
+		list[i].priority = node->priority; 
+		list[i].flags = memorystatus_build_flags_from_state(node->state);
+		list[i].hiwat_pages = node->hiwat_pages;
+		list_size += sizeof(memorystatus_priority_entry_t);
+		if (++i >= list_count) {
+			break;
+		}       
+	}
+	
+	lck_mtx_unlock(memorystatus_list_mlock);
+	
+	if (!list_size) {
+		if (req->oldptr) {
+			MEMORYSTATUS_DEBUG(1, "kern.memorystatus_priority_list returning EINVAL\n");
+			return EINVAL;
+		}
+		else {
+			MEMORYSTATUS_DEBUG(1, "kern.memorystatus_priority_list returning 0 for size\n");
+		}
+	} else {
+		MEMORYSTATUS_DEBUG(1, "kern.memorystatus_priority_list returning %ld for size\n", (long)list_size);
+	}
+	
+	ret = SYSCTL_OUT(req, list, list_size);
+
+	kfree(list, allocated_size);
+	
+	return ret;
+}
+
+SYSCTL_PROC(_kern, OID_AUTO, memorystatus_priority_list, CTLTYPE_OPAQUE|CTLFLAG_RD | CTLFLAG_LOCKED, 0, 0, sysctl_memorystatus_priority_list, "S,jetsam_priorities", "");
+
+static void
+memorystatus_update_levels_locked(void) {
+	/* Set the baseline levels in pages */
+	memorystatus_available_pages_critical = (CRITICAL_PERCENT / DELTA_PERCENT) * memorystatus_delta;
+	memorystatus_available_pages_highwater = (HIGHWATER_PERCENT / DELTA_PERCENT) * memorystatus_delta;
+#if VM_PRESSURE_EVENTS
+	memorystatus_available_pages_pressure = (PRESSURE_PERCENT / DELTA_PERCENT) * memorystatus_delta;
+#endif
+	
+#if DEBUG || DEVELOPMENT
+	if (memorystatus_jetsam_policy & kPolicyDiagnoseActive) {
+		memorystatus_available_pages_critical += memorystatus_jetsam_policy_offset_pages_diagnostic;
+		memorystatus_available_pages_highwater += memorystatus_jetsam_policy_offset_pages_diagnostic;
+#if VM_PRESSURE_EVENTS
+		memorystatus_available_pages_pressure += memorystatus_jetsam_policy_offset_pages_diagnostic;
+#endif
+	}
+#endif
+	
+	/* Only boost the critical level - it's more important to kill right away than issue warnings */
+	if (memorystatus_jetsam_policy & kPolicyMoreFree) {
+		memorystatus_available_pages_critical += memorystatus_jetsam_policy_offset_pages_more_free;
+	}
+}
+
+static int
+sysctl_memorystatus_jetsam_policy_more_free SYSCTL_HANDLER_ARGS
+{
+#pragma unused(arg1, arg2, oidp)
+	int error, more_free = 0;
+
+	error = priv_check_cred(kauth_cred_get(), PRIV_VM_JETSAM, 0);
+	if (error)
+		return (error);
+
+	error = sysctl_handle_int(oidp, &more_free, 0, req);
+	if (error || !req->newptr)
+		return (error);
+
+	lck_mtx_lock(memorystatus_list_mlock);
+	
+	if (more_free) {
+		memorystatus_jetsam_policy |= kPolicyMoreFree;
+	} else {
+ 		memorystatus_jetsam_policy &= ~kPolicyMoreFree;               
+	}
+        
+	memorystatus_update_levels_locked();
+		
+	lck_mtx_unlock(memorystatus_list_mlock);
+	
+	return 0;
+}
+
+SYSCTL_PROC(_kern, OID_AUTO, memorystatus_jetsam_policy_more_free, CTLTYPE_INT|CTLFLAG_WR|CTLFLAG_LOCKED|CTLFLAG_MASKED|CTLFLAG_ANYBODY,
+    0, 0, &sysctl_memorystatus_jetsam_policy_more_free, "I", "");
+
+static int
+sysctl_handle_memorystatus_snapshot(__unused struct sysctl_oid *oid, __unused void *arg1, __unused int arg2, struct sysctl_req *req)
 {
 	int ret;
 	size_t currentsize = 0;
 
-	if (jetsam_snapshot_list_count > 0) {
-		currentsize = sizeof(jetsam_kernel_stats_t) + sizeof(size_t) + sizeof(jetsam_snapshot_entry_t) * jetsam_snapshot_list_count;
+	if (memorystatus_jetsam_snapshot_list_count > 0) {
+		currentsize = sizeof(memorystatus_jetsam_snapshot_t) + sizeof(memorystatus_jetsam_snapshot_entry_t) * (memorystatus_jetsam_snapshot_list_count - 1);
 	}
 	if (!currentsize) {
 		if (req->oldptr) {
-#ifdef DEBUG
-			printf("kern.memorystatus_snapshot returning EINVAL\n");
-#endif
+			MEMORYSTATUS_DEBUG(1, "kern.memorystatus_snapshot returning EINVAL\n");
 			return EINVAL;
 		}
 		else {
-#ifdef DEBUG
-			printf("kern.memorystatus_snapshot returning 0 for size\n");
-#endif
+			MEMORYSTATUS_DEBUG(1, "kern.memorystatus_snapshot returning 0 for size\n");
 		}
 	} else {
-#ifdef DEBUG
-			printf("kern.memorystatus_snapshot returning %ld for size\n", (long)currentsize);
-#endif
+		MEMORYSTATUS_DEBUG(1, "kern.memorystatus_snapshot returning %ld for size\n", (long)currentsize);
 	}	
-	ret = sysctl_io_variable(req, &jetsam_snapshot, currentsize, 0, NULL);
+	ret = SYSCTL_OUT(req, &memorystatus_jetsam_snapshot, currentsize);
 	if (!ret && req->oldptr) {
-		jetsam_snapshot.entry_count = jetsam_snapshot_list_count = 0;
+		memorystatus_jetsam_snapshot.entry_count = memorystatus_jetsam_snapshot_list_count = 0;
 	}
 	return ret;
 }
 
-SYSCTL_PROC(_kern, OID_AUTO, memorystatus_priority_list, CTLTYPE_OPAQUE|CTLFLAG_RW | CTLFLAG_LOCKED, 0, 0, sysctl_handle_kern_memorystatus_priority_list, "S,jetsam_priorities", "");
-SYSCTL_PROC(_kern, OID_AUTO, memorystatus_snapshot, CTLTYPE_OPAQUE|CTLFLAG_RD, 0, 0, sysctl_handle_kern_memorystatus_snapshot, "S,jetsam_snapshot", "");
+SYSCTL_PROC(_kern, OID_AUTO, memorystatus_snapshot, CTLTYPE_OPAQUE|CTLFLAG_RD, 0, 0, sysctl_handle_memorystatus_snapshot, "S,memorystatus_snapshot", "");
+
+#endif /* CONFIG_JETSAM */

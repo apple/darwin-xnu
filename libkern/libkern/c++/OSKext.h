@@ -245,6 +245,7 @@ private:
         unsigned int delayAutounload:1;    // for development
 
         unsigned int CPPInitialized:1;
+        unsigned int jettisonLinkeditSeg:1;
     } flags;
 
 #if PRAGMA_MARK
@@ -388,9 +389,9 @@ private:
     static void recordIdentifierRequest(
         OSString * kextIdentifier);
 
+    virtual OSReturn slidePrelinkedExecutable(void);
     virtual OSReturn loadExecutable(void);
     virtual void     jettisonLinkeditSegment(void);
-    virtual OSReturn removeLinkeditHeaders(kernel_segment_command_t *linkedit);
     static  void     considerDestroyingLinkContext(void);
     virtual OSData * getExecutable(void);
     virtual void     setLinkedExecutable(OSData * anExecutable);
@@ -436,8 +437,6 @@ private:
         OSArray * kextIdentifiers = NULL,
         OSArray * keys = NULL);
     virtual OSDictionary * copyInfo(OSArray * keys = NULL);
-
-    static  OSData       * copySanitizedKernelImage(void);
 
    /* Logging to user space.
     */
@@ -573,7 +572,7 @@ public:
     static void     flushNonloadedKexts(Boolean flushPrelinkedKexts);
     static void     setKextdActive(Boolean active = true);
     static void     setDeferredLoadSucceeded(Boolean succeeded = true);
-    static void     considerRebuildOfPrelinkedKernel(OSString * moduleName);
+    static void     considerRebuildOfPrelinkedKernel(void);
 
     virtual bool    setAutounloadEnabled(bool flag);
 

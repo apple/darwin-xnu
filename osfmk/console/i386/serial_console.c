@@ -269,13 +269,6 @@ void
 cnputc(char c)
 {
 	console_buf_t	*cbp;
-#if MACH_KDB
-	/* Bypass locking/buffering if in debugger */
-	if (kdb_cpu == cpu_number()) {
-		_cnputc(c);
-		return;
-	}
-#endif /* MACH_KDB */	
 	mp_disable_preemption();
 	cbp = (console_buf_t *) current_cpu_datap()->cpu_console_buf;
 	if (cbp == NULL) {

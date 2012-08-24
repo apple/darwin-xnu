@@ -76,8 +76,6 @@ extern void arp_llreach_set_reachable(struct ifnet *, void *, unsigned int);
 extern errno_t arp_lookup_ip(ifnet_t interface,
     const struct sockaddr_in *ip_dest, struct sockaddr_dl *ll_dest,
     size_t ll_dest_len, route_t hint, mbuf_t packet);
-__private_extern__ errno_t arp_route_to_gateway_route(const struct sockaddr *,
-    route_t, route_t *);
 #endif /* KERNEL_PRIVATE */
 
 /*!

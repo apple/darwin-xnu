@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2010 Apple Inc.  All rights reserved.
+ * Copyright (c) 2000-2011 Apple Inc.  All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -237,6 +237,9 @@ nfsrv_init(void)
 	nfsrv_udpsock = NULL;
 	nfsrv_udp6sock = NULL;
 
+	/* Setup the up-call handling */
+	nfsrv_uc_init();
+	
 	/* initialization complete */
 	nfsrv_initted = NFSRV_INITIALIZED;
 }
@@ -1280,7 +1283,7 @@ nfsrv_write(
 			ioflags = (IO_METASYNC | IO_SYNC | IO_NODELOCKED);
 
 		error = VNOP_WRITE(vp, auio, ioflags, ctx);
-		OSAddAtomic(1, &nfsstats.srvvop_writes);
+		OSAddAtomic64(1, &nfsstats.srvvop_writes);
 
 		/* update export stats */
 		NFSStatAdd64(&nx->nx_stats.bytes_written, len);
@@ -1559,7 +1562,7 @@ loop1:
 			    if ((tlen = mbuf_len(m)) > 0)
 				uio_addiov(auio, CAST_USER_ADDR_T((caddr_t)mbuf_data(m)), tlen);
 			error = VNOP_WRITE(vp, auio, ioflags, ctx);
-			OSAddAtomic(1, &nfsstats.srvvop_writes);
+			OSAddAtomic64(1, &nfsstats.srvvop_writes);
 
 			/* update export stats */
 			NFSStatAdd64(&nx->nx_stats.bytes_written, nd->nd_len);
@@ -2142,6 +2145,7 @@ nfsrv_mknod(
 	uint32_t len = 0, cnflags;
 	u_int32_t major = 0, minor = 0;
 	enum vtype vtyp;
+	nfstype nvtype;
 	vnode_t vp, dvp, dirp;
 	struct nfs_filehandle nfh;
 	struct nfs_export *nx = NULL;
@@ -2192,9 +2196,9 @@ nfsrv_mknod(
 	dvp = ni.ni_dvp;
 	vp = ni.ni_vp;
 
-	nfsm_chain_get_32(error, nmreq, vtyp);
+	nfsm_chain_get_32(error, nmreq, nvtype);
 	nfsmerr_if(error);
-	vtyp = nfstov_type(vtyp, NFS_VER3);
+	vtyp = nfstov_type(nvtype, NFS_VER3);
 	if (!error && (vtyp != VCHR) && (vtyp != VBLK) && (vtyp != VSOCK) && (vtyp != VFIFO)) {
 		error = NFSERR_BADTYPE;
 		goto out;
@@ -3938,8 +3942,12 @@ nfsrv_readdir(
 	error = nfsrv_credcheck(nd, ctx, nx, nxo);
 	nfsmerr_if(error);
 
+	if (nxo->nxo_flags & NX_MANGLEDNAMES || nd->nd_vers == NFS_VER2)
+		vnopflag |= VNODE_READDIR_NAMEMAX;
+
 	if ((nd->nd_vers == NFS_VER2) || (nxo->nxo_flags & NX_32BITCLIENTS))
 		vnopflag |= VNODE_READDIR_SEEKOFF32;
+
 	if (nd->nd_vers == NFS_VER3) {
 		nfsm_srv_vattr_init(&attr, NFS_VER3);
 		error = attrerr = vnode_getattr(vp, &attr, ctx);
@@ -4159,6 +4167,9 @@ nfsrv_readdirplus(
 
 	if (nxo->nxo_flags & NX_32BITCLIENTS)
 		vnopflag |= VNODE_READDIR_SEEKOFF32;
+
+	if (nxo->nxo_flags & NX_MANGLEDNAMES)
+		vnopflag |= VNODE_READDIR_NAMEMAX;
 
 	nfsm_srv_vattr_init(&attr, NFS_VER3);
 	error = attrerr = vnode_getattr(vp, &attr, ctx);

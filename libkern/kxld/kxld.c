@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2007-2008 Apple Inc. All rights reserved.
+ * Copyright (c) 2007-2008, 2012 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -354,8 +354,9 @@ init_kext_objects(KXLDContext *context, u_char *file, u_long size,
      * export its symbols by name by value.  If it's indirect, just export the
      * C++ symbols by value.
      */
-    for (i = 0; i < ndependencies; ++i) { kext =
-        kxld_array_get_item(&context->dependencies, i); kext_object = NULL;
+    for (i = 0; i < ndependencies; ++i) {
+        kext = kxld_array_get_item(&context->dependencies, i);
+        kext_object = NULL;
         interface_object = NULL;
 
         kext_object = get_object_for_file(context, dependencies[i].kext,
@@ -432,7 +433,7 @@ get_object_for_file(KXLDContext *context, u_char *file, u_long size,
 
         if (!kxld_object_get_file(object)) {
             result = kxld_object_init_from_macho(object, file, size, name,
-                context->section_order, context->cputype, context->cpusubtype);
+                context->section_order, context->cputype, context->cpusubtype, context->flags);
             require_noerr(result, finish);
 
             rval = object;
@@ -480,6 +481,8 @@ allocate_kext(KXLDContext *context, void *callback_data,
         *linked_object_alloc_out = linked_object;
     }
 
+    kxld_kext_set_linked_object_size(context->kext, vmsize);
+    
     /* Zero out the memory before we fill it.  We fill this buffer in a
      * sparse fashion, and it's simpler to clear it now rather than
      * track and zero any pieces we didn't touch after we've written

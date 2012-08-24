@@ -87,9 +87,17 @@
 
 #include <sys/kdebug.h>
 
+#define VM_PAGE_CLEANED_TARGET	30000		/* 25600 pages = 100 MB */
+#define VM_PAGE_CLEANED_MIN	((VM_PAGE_CLEANED_TARGET * 80) / 100)
+
+#define VM_PAGE_AVAILABLE_COUNT()		((unsigned int)(vm_page_cleaned_count))
+
+/* externally manipulated counters */
+extern unsigned int vm_pageout_cleaned_reactivated, vm_pageout_cleaned_fault_reactivated, vm_pageout_cleaned_commit_reactivated;
+
 #if CONFIG_FREEZE
-extern boolean_t vm_freeze_enabled;
-#define VM_DYNAMIC_PAGING_ENABLED(port) ((vm_freeze_enabled == FALSE) && IP_VALID(port))
+extern boolean_t memorystatus_freeze_enabled;
+#define VM_DYNAMIC_PAGING_ENABLED(port) ((memorystatus_freeze_enabled == FALSE) && IP_VALID(port))
 #else
 #define VM_DYNAMIC_PAGING_ENABLED(port) IP_VALID(port)
 #endif
@@ -110,6 +118,8 @@ extern int	vm_debug_events;
 
 #define VM_UPL_PAGE_WAIT	0x120
 #define VM_IOPL_PAGE_WAIT	0x121
+
+#define VM_PRESSURE_EVENT	0x130
 
 #define VM_DEBUG_EVENT(name, event, control, arg1, arg2, arg3, arg4)	\
 	MACRO_BEGIN						\
@@ -159,20 +169,8 @@ extern vm_page_t          vm_page_get_next(vm_page_t page);
 #include <vm/vm_page.h>
 
 extern unsigned int	vm_pageout_scan_event_counter;
-extern unsigned int	vm_zf_queue_count;
+extern unsigned int	vm_page_anonymous_count;
 
-
-extern uint64_t	vm_zf_count;
-
-#define VM_ZF_COUNT_INCR()				\
-	MACRO_BEGIN					\
-	OSAddAtomic64(1, (SInt64 *) &vm_zf_count);	\
-	MACRO_END					\
-
-#define VM_ZF_COUNT_DECR()				\
-	MACRO_BEGIN					\
-	OSAddAtomic64(-1, (SInt64 *) &vm_zf_count);	\
-	MACRO_END					\
 
 /*
  * must hold the page queues lock to
@@ -182,11 +180,14 @@ struct vm_pageout_queue {
         queue_head_t	pgo_pending;	/* laundry pages to be processed by pager's iothread */
         unsigned int	pgo_laundry;	/* current count of laundry pages on queue or in flight */
         unsigned int	pgo_maxlaundry;
+	uint64_t	pgo_tid;	/* thread ID of I/O thread that services this queue */
+	uint8_t		pgo_lowpriority; /* iothread is set to use low priority I/O */
 
         unsigned int	pgo_idle:1,	/* iothread is blocked waiting for work to do */
 	                pgo_busy:1,     /* iothread is currently processing request from pgo_pending */
 			pgo_throttled:1,/* vm_pageout_scan thread needs a wakeup when pgo_laundry drops */
 		        pgo_draining:1,
+			pgo_inited:1,
 			:0;
 };
 
@@ -208,7 +209,8 @@ extern void		vm_pageout_object_terminate(
 					vm_object_t	object);
 
 extern void		vm_pageout_cluster(
-					vm_page_t	m);
+	                                vm_page_t	m,
+					boolean_t	pageout);
 
 extern void		vm_pageout_initialize_page(
 					vm_page_t	m);
@@ -328,6 +330,12 @@ extern void vector_upl_get_iostate_byindex(upl_t, uint32_t, upl_offset_t*, upl_s
 extern upl_t vector_upl_subupl_byindex(upl_t , uint32_t);
 extern upl_t vector_upl_subupl_byoffset(upl_t , upl_offset_t*, upl_size_t*);
 
+extern void vm_object_set_pmap_cache_attr(
+		vm_object_t		object,
+		upl_page_info_array_t	user_page_list,
+		unsigned int		num_pages,
+		boolean_t		batch_pmap_op);
+
 extern kern_return_t vm_object_iopl_request(
 	vm_object_t		object,
 	vm_object_offset_t	offset,
@@ -399,7 +407,7 @@ decl_simple_lock_data(extern, vm_paging_lock)
  */
 extern unsigned int    vm_backing_store_low;
 
-extern void vm_pageout_queue_steal(
+extern void vm_pageout_steal_laundry(
 	vm_page_t page, 
 	boolean_t queues_locked);
 	

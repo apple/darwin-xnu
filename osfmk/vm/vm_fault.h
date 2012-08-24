@@ -164,6 +164,7 @@ extern kern_return_t vm_fault_enter(
 	boolean_t change_wiring,
 	boolean_t no_cache,
 	boolean_t cs_bypass,
+	boolean_t *need_retry,
 	int *type_of_fault);
 
 #endif	/* MACH_KERNEL_PRIVATE */

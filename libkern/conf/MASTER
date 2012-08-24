@@ -51,13 +51,17 @@
 #
 ident		LIBKERN
 
-options         HIBERNATION     # system hibernation    # <hibernation>
+options 	HIBERNATION		# system hibernation		# <hibernation>
 options		KDEBUG			# kernel tracing		# <kdebug>
+options		IST_KDEBUG		# limited tracing		# <ist_kdebug>
+options		NO_KDEBUG       # no kernel tracing 	# <no_kdebug>
 options		GPROF			# kernel profiling		# <profile>
 options		LIBKERNCPP		# C++ implementation	# <libkerncpp>
 options		NETWORKING		# kernel networking		# <networking>
-options     CONFIG_DTRACE 	# dtrace support		# <config_dtrace>
+options     	CONFIG_DTRACE 	# dtrace support			# <config_dtrace>
+options		VM_PRESSURE_EVENTS					# <vm_pressure_events>
 options		CRYPTO			# cryptographic routines	# <ipsec,crypto>
+options		ALLCRYPTO		# <allcrypto>
 options		ZLIB		# zlib support			# <zlib>
 options		IOKITSTATS		# IOKit statistics		# <iokitstats>
 
@@ -69,11 +73,22 @@ options		IPSEC			# IP security	# <ipsec>
 
 options		CONFIG_KXLD		# kxld/runtime linking of kexts # <config_kxld>
 
+options		CONFIG_KEC_FIPS		# Kernel External Components for FIPS compliance (KEC_FIPS) # <config_kec_fips>
+
+
 # Note that when adding this config option to an architecture, one MUST
 # add the architecture to the preprocessor test at the beginning of
 # libkern/kmod/cplus_{start.c,stop.c}.
 options         CONFIG_STATIC_CPPINIT   # Static library initializes kext cpp runtime # <config_static_cppinit>
 
+# configurable kernel - general switch to say we are building for an
+# embedded device
+#
+options         CONFIG_EMBEDDED         # <config_embedded>
+
 # secure_kernel - secure kernel from user programs
 options     SECURE_KERNEL       # <secure_kernel> 
 
+
+options		DEBUG		# <debug>
+options		MACH_ASSERT	# <mach_assert>

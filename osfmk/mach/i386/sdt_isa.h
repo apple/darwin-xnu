@@ -41,7 +41,7 @@
  */
 #ifdef __x86_64__
 #define DTRACE_LAB(p, n)		\
-   "__dtrace_probeDOLLAR" DTRACE_TOSTRING(%=__LINE__) DTRACE_STRINGIFY(_##p##___##n)
+   "__dtrace_probe$" DTRACE_TOSTRING(%=__LINE__) DTRACE_STRINGIFY(_##p##___##n)
 
 #define DTRACE_LABEL(p, n)		\
       ".section __DATA, __data\n\t"	\

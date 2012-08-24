@@ -389,6 +389,7 @@ _mbuf_gethdr
 _mbuf_getpacket
 _mbuf_inbound_modified
 _mbuf_inet_cksum
+_mbuf_is_traffic_class_privileged
 _mbuf_leadingspace
 _mbuf_maxlen
 _mbuf_mclget

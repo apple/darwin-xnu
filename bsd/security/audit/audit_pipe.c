@@ -571,7 +571,7 @@ audit_pipe_alloc(void)
 
 	AUDIT_PIPE_LIST_WLOCK_ASSERT();
 
-	ap = malloc(sizeof(*ap), M_AUDIT_PIPE, M_NOWAIT | M_ZERO);
+	ap = malloc(sizeof(*ap), M_AUDIT_PIPE, M_WAITOK | M_ZERO);
 	if (ap == NULL)
 		return (NULL);
 

@@ -55,16 +55,16 @@ typedef mach_port_name_t mach_port_index_t;		/* index values */
 typedef mach_port_name_t mach_port_gen_t;		/* generation numbers */
 
 typedef struct ipc_entry *ipc_entry_t;
-typedef struct ipc_tree_entry *ipc_tree_entry_t;
+
 typedef struct ipc_table_size *ipc_table_size_t;
 typedef struct ipc_port_request *ipc_port_request_t;
 typedef struct ipc_pset *ipc_pset_t;
 typedef struct ipc_kmsg *ipc_kmsg_t;
 
 #define	IE_NULL	((ipc_entry_t) 0)
-#define	ITE_NULL	((ipc_tree_entry_t) 0)
+
 #define	ITS_NULL	((ipc_table_size_t) 0)
-#define 	ITS_SIZE_NONE	((ipc_table_elems_t) -1)
+#define ITS_SIZE_NONE	((ipc_table_elems_t) -1)
 #define	IPR_NULL	((ipc_port_request_t) 0)
 #define	IPS_NULL	((ipc_pset_t) 0)
 #define	IKM_NULL	((ipc_kmsg_t) 0)

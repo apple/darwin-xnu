@@ -81,7 +81,7 @@ protected:
     unsigned int   capacity;
     unsigned int   capacityIncrement;
 
-    struct ExpansionData { };
+    struct ExpansionData;
     
    /* Reserved for future use. (Internal use only)  */
     ExpansionData * reserved;
@@ -710,6 +710,9 @@ public:
     virtual bool appendByte(
         unsigned char byte,
         unsigned int  numBytes);
+
+
+    void setSerializable(bool serializable);
 
 #ifdef XNU_KERNEL_PRIVATE
 /* Available within xnu source only */

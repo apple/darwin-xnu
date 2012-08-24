@@ -131,6 +131,8 @@ A. How to build XNU:
 
   -project libkxld      # user-space version of kernel linker
 
+  -project libkmod	# static library automatically linked into kexts
+
   -project Libsyscall   # automatically generate BSD syscall stubs
 
 
@@ -154,7 +156,9 @@ A. How to build XNU:
 
    $ make -w              # trace recursive make invocations. Useful in combination with VERBOSE=YES
 
-   $ make BUILD_LTO=1	  # built with LLVM Link Time Optimization (experimental)
+   $ make BUILD_LTO=1	  # build with LLVM Link Time Optimization (experimental)
+
+   $ make BUILD_INTEGRATED_ASSEMBLER=1 # build with LLVM integrated assembler (experimental)
 
 =============================================
 B. How to install a new header file from XNU

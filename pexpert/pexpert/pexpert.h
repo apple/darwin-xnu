@@ -58,8 +58,6 @@ void PE_init_platform(
 	void *args);
 
 
-
-
 void PE_init_kprintf(
 	boolean_t vm_initialized);
 
@@ -170,6 +168,13 @@ enum {
     kDebugTypeNone    = 0,
     kDebugTypeDisplay = 1,
     kDebugTypeSerial  = 2 
+};
+
+/*  Scale factor values for PE_Video.v_scale */
+enum {
+   kPEScaleFactorUnknown = 0,
+   kPEScaleFactor1x      = 1,
+   kPEScaleFactor2x      = 2
 };
 
 struct PE_Video {

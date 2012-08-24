@@ -415,13 +415,11 @@ fpu_module_init(void)
 			  64 * fp_register_state_size,
 			  "x86 fpsave state");
 
-#if	ZONE_DEBUG
 	/* To maintain the required alignment, disable
 	 * zone debugging for this zone as that appends
 	 * 16 bytes to each element.
 	 */
-	zone_debug_disable(ifps_zone);
-#endif	
+	zone_change(ifps_zone, Z_ALIGNMENT_REQUIRED, TRUE);
 	/* Determine MXCSR reserved bits and configure initial FPU state*/
 	configure_mxcsr_capability_mask(&initial_fp_state);
 }
@@ -1014,7 +1012,7 @@ fp_setvalid(boolean_t value) {
 	}
 }
 
-__private_extern__ boolean_t
+boolean_t
 ml_fpu_avx_enabled(void) {
 	return (fpu_YMM_present == TRUE);
 }

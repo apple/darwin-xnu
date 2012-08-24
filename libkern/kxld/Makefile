@@ -18,10 +18,12 @@ ifndef SYMROOT
 SYMROOT=./BUILD/sym
 endif
 ifdef SRCROOT
+EXTHDRSRC=$(SRCROOT)/EXTERNAL_HEADERS
 HDRSRC=$(SRCROOT)/libkern/libkern
 OBJSRC=$(SRCROOT)/libkern/kxld
 else
 SRCROOT=.
+EXTHDRSRC=$(SRCROOT)/../../EXTERNAL_HEADERS
 HDRSRC=$(SRCROOT)/../libkern
 OBJSRC=$(SRCROOT)
 ROOT=BUILD
@@ -29,8 +31,11 @@ endif
 ifdef RC_CFLAGS
 ARCHS=$(addprefix -arch , $(RC_ARCHS))
 else
-ARCHS=-arch i386 -arch x86_64 -arch ppc
+ARCHS=-arch i386 -arch x86_64
 RC_CFLAGS=$(ARCHS) -pipe
+endif
+ifdef INSTALL_LOCATION
+override DSTROOT := $(DSTROOT)/$(INSTALL_LOCATION)
 endif
 
 PRODUCT_TYPE ?= DYLIB
@@ -60,7 +65,7 @@ CFLAGS=-std=c99 -Wall -Wextra -Werror -pedantic -Wformat=2 -Wcast-align \
 LDFLAGS=$(ARCHS) -dynamiclib -install_name $(LIBKXLD_INSTALLNAME) \
 	-compatibility_version $(COMPATIBILITY_VERSION) \
 	-current_version $(CURRENT_VERSION) -lstdc++
-INCLUDES=-I$(HDRSRC)
+INCLUDES=-I$(HDRSRC) -I$(EXTHDRSRC)
 
 ifneq ($(SDKROOT),/)
 	CFLAGS += -isysroot $(SDKROOT)
@@ -68,22 +73,18 @@ ifneq ($(SDKROOT),/)
 endif
 
 # Tools
-CC = xcrun -sdk $(SDKROOT) cc
+CC = xcrun -sdk $(SDKROOT) clang
 CLANG_ANALYZER = clang --analyze
 LIBTOOL = xcrun -sdk $(SDKROOT) libtool
 STRIP = xcrun -sdk $(SDKROOT) strip
 
-# Turn on -Wno-cast-align for arm since it won't build without it
-ifeq ($(findstring arm, $(ARCHS)),arm)
-CFLAGS+=-Wno-cast-align 
-endif
-
 # Files
 HDR_NAMES=kxld.h kxld_types.h WKdm.h
 OBJ_NAMES=kxld.o kxld_array.o kxld_copyright.o kxld_demangle.o kxld_dict.o \
-	kxld_kext.o kxld_object.o kxld_reloc.o kxld_sect.o kxld_seg.o 		\
-	kxld_sym.o kxld_symtab.o kxld_util.o kxld_uuid.o kxld_vtable.o \
-	WKdmCompress.o WKdmDecompress.o
+	kxld_kext.o kxld_object.o kxld_reloc.o kxld_sect.o kxld_seg.o	   \
+	kxld_srcversion.o kxld_sym.o kxld_symtab.o kxld_util.o kxld_uuid.o \
+    kxld_vtable.o kxld_versionmin.o WKdmCompress.o WKdmDecompress.o
+
 HDRS=$(addprefix $(HDRSRC)/, $(HDR_NAMES))
 OBJS=$(addprefix $(OBJROOT)/, $(OBJ_NAMES))
 
@@ -99,7 +100,7 @@ $(OBJROOT)/%.o : $(TESTSRC)/%.c
 SRCROOTESC=$(subst /,\/,$(SRCROOT))
 OBJROOTESC=$(subst /,\/,$(OBJROOT))
 SEDOBJS=sed -E 's/(^[a-z_]+)\.o/$(OBJROOTESC)\/\1\.o $(OBJROOTESC)\/\1\.d/'
-SEDSRCS=sed -E 's/([a-z_]+\.[ch])/$(SRCROOTESC)\/\1/g'
+SEDSRCS=sed -E 's/ ([a-z_]+\.[ch])/ $(SRCROOTESC)\/\1/g'
 $(OBJROOT)/%.d: $(OBJSRC)/%.c
 	@set -e; rm -f $@; \
 	$(CC) $(INCLUDES) -MM $< | $(SEDOBJS) | $(SEDSRCS) > $@;

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2010-2011 Apple Inc. All rights reserved.
+ * Copyright (c) 2010-2012 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -62,24 +62,62 @@ __private_extern__ int	nstat_collect = 1;
 SYSCTL_INT(_net, OID_AUTO, statistics, CTLFLAG_RW | CTLFLAG_LOCKED,
     &nstat_collect, 0, "Collect detailed statistics");
 
+enum
+{
+	NSTAT_FLAG_CLEANUP		= (0x1 << 0),
+	NSTAT_FLAG_REQCOUNTS	= (0x1 << 1)
+};
+
 typedef struct nstat_control_state
 {
-	struct nstat_control_state	*next;
-	u_int32_t					watching;
+	struct nstat_control_state	*ncs_next;
+	u_int32_t					ncs_watching;
 	decl_lck_mtx_data(, mtx);
-	kern_ctl_ref				kctl;
-	u_int32_t					unit;
-	nstat_src_ref_t				next_srcref;
-	struct nstat_src			*srcs;
-	int							cleanup;
-	int							suser;
+	kern_ctl_ref				ncs_kctl;
+	u_int32_t					ncs_unit;
+	nstat_src_ref_t				ncs_next_srcref;
+	struct nstat_src			*ncs_srcs;
+	u_int32_t					ncs_flags;
 } nstat_control_state;
+
+typedef struct nstat_provider
+{
+	struct nstat_provider	*next;
+	nstat_provider_id_t		nstat_provider_id;
+	size_t					nstat_descriptor_length;
+	errno_t					(*nstat_lookup)(const void *data, u_int32_t length, nstat_provider_cookie_t *out_cookie);
+	int						(*nstat_gone)(nstat_provider_cookie_t cookie);
+	errno_t					(*nstat_counts)(nstat_provider_cookie_t cookie, struct nstat_counts *out_counts, int *out_gone);
+	errno_t					(*nstat_watcher_add)(nstat_control_state *state);
+	void					(*nstat_watcher_remove)(nstat_control_state *state);
+	errno_t					(*nstat_copy_descriptor)(nstat_provider_cookie_t cookie, void *data, u_int32_t len);
+	void					(*nstat_release)(nstat_provider_cookie_t cookie, boolean_t locked);
+} nstat_provider;
+
+
+typedef struct nstat_src
+{
+	struct nstat_src		*next;
+	nstat_src_ref_t			srcref;
+	nstat_provider			*provider;
+	nstat_provider_cookie_t	cookie;
+} nstat_src;
+
+static errno_t		nstat_control_send_counts(nstat_control_state *,
+    			    nstat_src *, unsigned long long, int *); 
+static int		nstat_control_send_description(nstat_control_state *state, nstat_src *src, u_int64_t context);
+static errno_t		nstat_control_send_removed(nstat_control_state *, nstat_src *);
+static void		nstat_control_cleanup_source(nstat_control_state *state, nstat_src *src,
+    				boolean_t);
+
+static u_int32_t	nstat_udp_watchers = 0;
+static u_int32_t	nstat_tcp_watchers = 0;
 
 static void nstat_control_register(void);
 
 static volatile OSMallocTag	nstat_malloc_tag = NULL;
 static nstat_control_state	*nstat_controls = NULL;
-static uint64_t				nstat_idle_time = 0ULL;
+static uint64_t				nstat_idle_time = 0;
 static decl_lck_mtx_data(, nstat_mtx);
 
 static void
@@ -94,7 +132,7 @@ nstat_copy_sa_out(
 	if (src->sa_family == AF_INET6 &&
 		src->sa_len >= sizeof(struct sockaddr_in6))
 	{
-		struct sockaddr_in6	*sin6 = (struct sockaddr_in6*)dst;
+		struct sockaddr_in6	*sin6 = (struct sockaddr_in6*)(void *)dst;
 		if (IN6_IS_SCOPE_EMBED(&sin6->sin6_addr))
 		{
 			if (sin6->sin6_scope_id == 0)
@@ -143,20 +181,6 @@ nstat_ip6_to_sockaddr(
 
 #pragma mark -- Network Statistic Providers --
 
-typedef struct nstat_provider
-{
-	struct nstat_provider	*next;
-	nstat_provider_id_t		nstat_provider_id;
-	size_t					nstat_descriptor_length;
-	errno_t					(*nstat_lookup)(const void *data, u_int32_t length, nstat_provider_cookie_t *out_cookie);
-	int						(*nstat_gone)(nstat_provider_cookie_t cookie);
-	errno_t					(*nstat_counts)(nstat_provider_cookie_t cookie, struct nstat_counts *out_counts, int *out_gone);
-	errno_t					(*nstat_watcher_add)(nstat_control_state *state);
-	void					(*nstat_watcher_remove)(nstat_control_state *state);
-	errno_t					(*nstat_copy_descriptor)(nstat_provider_cookie_t cookie, void *data, u_int32_t len);
-	void					(*nstat_release)(nstat_provider_cookie_t cookie);
-} nstat_provider;
-
 static errno_t nstat_control_source_add(u_int64_t context, nstat_control_state *state, nstat_provider *provider, nstat_provider_cookie_t cookie);
 struct nstat_provider	*nstat_providers = NULL;
 
@@ -186,7 +210,6 @@ nstat_lookup_entry(
 	*out_provider = nstat_find_provider_by_id(id);
 	if (*out_provider == NULL)
 	{
-		printf("%s:%d: provider %u not found\n", __FUNCTION__, __LINE__, id);
 		return ENOENT;
 	}
 	
@@ -197,7 +220,7 @@ static void nstat_init_route_provider(void);
 static void nstat_init_tcp_provider(void);
 static void nstat_init_udp_provider(void);
 
-static void
+__private_extern__ void
 nstat_init(void)
 {
 	if (nstat_malloc_tag != NULL) return;
@@ -241,7 +264,7 @@ nstat_malloc_aligned(
 	u_int8_t	*aligned = buffer + sizeof(*hdr);
 	aligned = (u_int8_t*)P2ROUNDUP(aligned, alignment);
 	
-	hdr = (struct align_header*)(aligned - sizeof(*hdr));
+	hdr = (struct align_header*)(void *)(aligned - sizeof(*hdr));
 	hdr->offset = aligned - buffer;
 	hdr->length = size;
 	
@@ -253,7 +276,7 @@ nstat_free_aligned(
 	void		*buffer,
 	OSMallocTag	tag)
 {
-	struct align_header *hdr = (struct align_header*)((u_int8_t*)buffer - sizeof(*hdr));
+	struct align_header *hdr = (struct align_header*)(void *)((u_int8_t*)buffer - sizeof(*hdr));
 	OSFree(((char*)buffer) - hdr->offset, hdr->length, tag);
 }
 
@@ -280,7 +303,6 @@ nstat_route_lookup(
 	
 	if (length < sizeof(*param))
 	{
-		printf("%s:%d: expected %lu byte param, received %u\n", __FUNCTION__, __LINE__, sizeof(*param), length);
 		return EINVAL;
 	}
 	
@@ -288,16 +310,13 @@ nstat_route_lookup(
 		param->dst.v4.sin_family > AF_MAX ||
 		(param->mask.v4.sin_family != 0 && param->mask.v4.sin_family != param->dst.v4.sin_family))
 	{
-		printf("%s:%d invalid family (dst=%d, mask=%d)\n", __FUNCTION__, __LINE__,
-			param->dst.v4.sin_family, param->mask.v4.sin_family);
 		return EINVAL;
 	}
 	
 	if (param->dst.v4.sin_len > sizeof(param->dst) ||
 		(param->mask.v4.sin_family && param->mask.v4.sin_len > sizeof(param->mask.v4.sin_len)))
 	{
-		printf("%s:%d invalid length (dst=%d, mask=%d)\n", __FUNCTION__, __LINE__,
-			param->dst.v4.sin_len, param->mask.v4.sin_len);
+		return EINVAL;
 	}
 	
 	// TBD: Need to validate length of sockaddr for different families?
@@ -360,7 +379,8 @@ nstat_route_counts(
 
 static void
 nstat_route_release(
-	nstat_provider_cookie_t cookie)
+	nstat_provider_cookie_t cookie,
+	__unused int locked)
 {
 	rtfree((struct rtentry*)cookie);
 }
@@ -421,7 +441,6 @@ nstat_route_add_watcher(
 		result = rnh->rnh_walktree(rnh, nstat_route_walktree_add, state);
 		if (result != 0)
 		{
-			printf("%s:%d rnh_walktree failed: %d\n", __FUNCTION__, __LINE__, result);
 			break;
 		}
 	}
@@ -441,9 +460,9 @@ nstat_route_new_entry(
 	if ((rt->rt_flags & RTF_UP) != 0)
 	{
 		nstat_control_state	*state;
-		for (state = nstat_controls; state; state = state->next)
+		for (state = nstat_controls; state; state = state->ncs_next)
 		{
-			if ((state->watching & (1 << NSTAT_PROVIDER_ROUTE)) != 0)
+			if ((state->ncs_watching & (1 << NSTAT_PROVIDER_ROUTE)) != 0)
 			{
 				// this client is watching routes
 				// acquire a reference for the route
@@ -474,7 +493,6 @@ nstat_route_copy_descriptor(
 	nstat_route_descriptor	*desc = (nstat_route_descriptor*)data;
 	if (len < sizeof(*desc))
 	{
-		printf("%s:%d invalid length, wanted %lu, got %d\n", __FUNCTION__, __LINE__, sizeof(*desc), len);
 		return EINVAL;
 	}
 	bzero(desc, sizeof(*desc));
@@ -710,6 +728,7 @@ nstat_route_rtt(
 	}
 }
 
+
 #pragma mark -- TCP Provider --
 
 static nstat_provider	nstat_tcp_provider;
@@ -725,7 +744,6 @@ nstat_tcpudp_lookup(
 	const nstat_tcp_add_param	*param = (const nstat_tcp_add_param*)data;
 	if (length < sizeof(*param))
 	{
-		printf("%s:%d expected %lu byte param, received %u\n", __FUNCTION__, __LINE__, sizeof(*param), length);
 		return EINVAL;
 	}
 	
@@ -733,8 +751,6 @@ nstat_tcpudp_lookup(
 	if (param->remote.v4.sin_family != 0 &&
 		param->remote.v4.sin_family != param->local.v4.sin_family)
 	{
-		printf("%s:%d src family (%d) and dst family (%d) don't match\n",
-			__FUNCTION__, __LINE__, param->local.v4.sin_family, param->remote.v4.sin_family);
 		return EINVAL;
 	}
 	
@@ -748,9 +764,6 @@ nstat_tcpudp_lookup(
 		  		(param->remote.v4.sin_family != 0 &&
 		  		 param->remote.v4.sin_len != sizeof(param->remote.v4)))
 		  	{
-				printf("%s:%d invalid length for v4 src (%d) or dst (%d), should be %lu\n",
-					__FUNCTION__, __LINE__, param->local.v4.sin_len, param->remote.v4.sin_len,
-					sizeof(param->remote.v4));
 				return EINVAL;
 		  	}
 		  	
@@ -772,9 +785,6 @@ nstat_tcpudp_lookup(
 		  		(param->remote.v6.sin6_family != 0 &&
 				 param->remote.v6.sin6_len != sizeof(param->remote.v6)))
 			{
-				printf("%s:%d invalid length for v6 src (%d) or dst (%d), should be %lu\n",
-					__FUNCTION__, __LINE__, param->local.v6.sin6_len, param->remote.v6.sin6_len,
-					sizeof(param->remote.v6));
 				return EINVAL;
 			}
 			
@@ -788,7 +798,6 @@ nstat_tcpudp_lookup(
 #endif
 		
 		default:
-			printf("%s:%d unsupported address family %d\n", __FUNCTION__, __LINE__, param->local.v4.sin_family);
 			return EINVAL;
 	}
 	
@@ -836,34 +845,32 @@ nstat_tcp_counts(
 		*out_gone = 1;
 	}
 	
-	if (tp->t_state > TCPS_LISTEN)
-	{
-		atomic_get_64(out_counts->nstat_rxpackets, &inp->inp_stat->rxpackets);
-		atomic_get_64(out_counts->nstat_rxbytes, &inp->inp_stat->rxbytes);
-		atomic_get_64(out_counts->nstat_txpackets, &inp->inp_stat->txpackets);
-		atomic_get_64(out_counts->nstat_txbytes, &inp->inp_stat->txbytes);
-		out_counts->nstat_rxduplicatebytes = tp->t_stat.rxduplicatebytes;
-		out_counts->nstat_rxoutoforderbytes = tp->t_stat.rxoutoforderbytes;
-		out_counts->nstat_txretransmit = tp->t_stat.txretransmitbytes;
-		out_counts->nstat_connectattempts = tp->t_state >= TCPS_SYN_SENT ? 1 : 0;
-		out_counts->nstat_connectsuccesses = tp->t_state >= TCPS_ESTABLISHED ? 1 : 0;
-		out_counts->nstat_avg_rtt = tp->t_srtt;
-		out_counts->nstat_min_rtt = tp->t_rttbest;
-		out_counts->nstat_var_rtt = tp->t_rttvar;
-	}
+	atomic_get_64(out_counts->nstat_rxpackets, &inp->inp_stat->rxpackets);
+	atomic_get_64(out_counts->nstat_rxbytes, &inp->inp_stat->rxbytes);
+	atomic_get_64(out_counts->nstat_txpackets, &inp->inp_stat->txpackets);
+	atomic_get_64(out_counts->nstat_txbytes, &inp->inp_stat->txbytes);
+	out_counts->nstat_rxduplicatebytes = tp->t_stat.rxduplicatebytes;
+	out_counts->nstat_rxoutoforderbytes = tp->t_stat.rxoutoforderbytes;
+	out_counts->nstat_txretransmit = tp->t_stat.txretransmitbytes;
+	out_counts->nstat_connectattempts = tp->t_state >= TCPS_SYN_SENT ? 1 : 0;
+	out_counts->nstat_connectsuccesses = tp->t_state >= TCPS_ESTABLISHED ? 1 : 0;
+	out_counts->nstat_avg_rtt = tp->t_srtt;
+	out_counts->nstat_min_rtt = tp->t_rttbest;
+	out_counts->nstat_var_rtt = tp->t_rttvar;
+	if (out_counts->nstat_avg_rtt < out_counts->nstat_min_rtt)
+		out_counts->nstat_min_rtt = out_counts->nstat_avg_rtt;
 	
 	return 0;
 }
 
 static void
 nstat_tcp_release(
-	nstat_provider_cookie_t	cookie)
+	nstat_provider_cookie_t	cookie,
+	int locked)
 {
 	struct inpcb *inp = (struct inpcb*)cookie;
-	in_pcb_checkstate(inp, WNT_RELEASE, 0);
+	in_pcb_checkstate(inp, WNT_RELEASE, locked);
 }
-
-static u_int32_t	nstat_tcp_watchers = 0;
 
 static errno_t
 nstat_tcp_add_watcher(
@@ -908,9 +915,9 @@ nstat_tcp_new_pcb(
 	
 	lck_mtx_lock(&nstat_mtx);
 	nstat_control_state	*state;
-	for (state = nstat_controls; state; state = state->next)
+	for (state = nstat_controls; state; state = state->ncs_next)
 	{
-		if ((state->watching & (1 << NSTAT_PROVIDER_TCP)) != 0)
+		if ((state->ncs_watching & (1 << NSTAT_PROVIDER_TCP)) != 0)
 		{
 			// this client is watching tcp
 			// acquire a reference for it
@@ -928,6 +935,54 @@ nstat_tcp_new_pcb(
 	lck_mtx_unlock(&nstat_mtx);
 }
 
+__private_extern__ void
+nstat_pcb_detach(struct inpcb *inp)
+{
+	nstat_control_state *state;
+	nstat_src *src, *prevsrc;
+	nstat_src *dead_list = NULL;
+
+	if (inp == NULL || (nstat_tcp_watchers == 0 && nstat_udp_watchers == 0))
+		return;
+
+	lck_mtx_lock(&nstat_mtx);
+	for (state = nstat_controls; state; state = state->ncs_next) {
+		lck_mtx_lock(&state->mtx);
+		for (prevsrc = NULL, src = state->ncs_srcs; src;
+		    prevsrc = src, src = src->next)
+			if (src->cookie == inp)
+				break;
+
+		if (src) {
+			// send one last counts notification
+			nstat_control_send_counts(state, src, 0, NULL);
+
+			// send a last description
+			nstat_control_send_description(state, src, 0);
+
+			// send the source removed notification
+			nstat_control_send_removed(state, src);
+
+			if (prevsrc)
+				prevsrc->next = src->next;
+			else
+				state->ncs_srcs = src->next;
+
+			src->next = dead_list;
+			dead_list = src;
+		}
+		lck_mtx_unlock(&state->mtx);
+	}
+	lck_mtx_unlock(&nstat_mtx);
+
+	while (dead_list) {
+		src = dead_list;
+		dead_list = src->next;
+
+		nstat_control_cleanup_source(NULL, src, TRUE);
+	}
+}
+
 static errno_t
 nstat_tcp_copy_descriptor(
 	nstat_provider_cookie_t	cookie,
@@ -936,13 +991,15 @@ nstat_tcp_copy_descriptor(
 {
 	if (len < sizeof(nstat_tcp_descriptor))
 	{
-		printf("%s:%d invalid length, wanted %lu, got %d\n", __FUNCTION__, __LINE__, sizeof(nstat_tcp_descriptor), len);
 		return EINVAL;
 	}
 	
 	nstat_tcp_descriptor	*desc = (nstat_tcp_descriptor*)data;
 	struct inpcb			*inp = (struct inpcb*)cookie;
 	struct tcpcb			*tp = intotcpcb(inp);
+
+	if (inp->inp_state == INPCB_STATE_DEAD)
+		return EINVAL;
 	
 	bzero(desc, sizeof(*desc));
 	
@@ -962,8 +1019,8 @@ nstat_tcp_copy_descriptor(
 	}
 	
 	desc->state = intotcpcb(inp)->t_state;
-	if (inp->inp_route.ro_rt && inp->inp_route.ro_rt->rt_ifp)
-		desc->ifindex = inp->inp_route.ro_rt->rt_ifp->if_index;
+	desc->ifindex = (inp->inp_last_outifp == NULL) ? 0 :
+	    inp->inp_last_outifp->if_index;
 	
 	// danger - not locked, values could be bogus
 	desc->txunacked = tp->snd_max - tp->snd_una;
@@ -977,6 +1034,7 @@ nstat_tcp_copy_descriptor(
 		// they're in sync?
 		desc->upid = so->last_upid;
 		desc->pid = so->last_pid;
+		desc->traffic_class = so->so_traffic_class;
 		
 		proc_name(desc->pid, desc->pname, sizeof(desc->pname));
 		desc->pname[sizeof(desc->pname) - 1] = 0;
@@ -1054,13 +1112,12 @@ nstat_udp_counts(
 
 static void
 nstat_udp_release(
-	nstat_provider_cookie_t	cookie)
+	nstat_provider_cookie_t	cookie,
+	int locked)
 {
 	struct inpcb *inp = (struct inpcb*)cookie;
-	in_pcb_checkstate(inp, WNT_RELEASE, 0);
+	in_pcb_checkstate(inp, WNT_RELEASE, locked);
 }
-
-static u_int32_t	nstat_udp_watchers = 0;
 
 static errno_t
 nstat_udp_add_watcher(
@@ -1105,9 +1162,9 @@ nstat_udp_new_pcb(
 	
 	lck_mtx_lock(&nstat_mtx);
 	nstat_control_state	*state;
-	for (state = nstat_controls; state; state = state->next)
+	for (state = nstat_controls; state; state = state->ncs_next)
 	{
-		if ((state->watching & (1 << NSTAT_PROVIDER_UDP)) != 0)
+		if ((state->ncs_watching & (1 << NSTAT_PROVIDER_UDP)) != 0)
 		{
 			// this client is watching tcp
 			// acquire a reference for it
@@ -1133,13 +1190,15 @@ nstat_udp_copy_descriptor(
 {
 	if (len < sizeof(nstat_udp_descriptor))
 	{
-		printf("%s:%d invalid length, wanted %lu, got %d\n", __FUNCTION__, __LINE__, sizeof(nstat_tcp_descriptor), len);
 		return EINVAL;
 	}
 	
 	nstat_udp_descriptor	*desc = (nstat_udp_descriptor*)data;
 	struct inpcb			*inp = (struct inpcb*)cookie;
 	
+	if (inp->inp_state == INPCB_STATE_DEAD)
+		return EINVAL;
+
 	bzero(desc, sizeof(*desc));
 	
 	if (inp->inp_vflag & INP_IPV6)
@@ -1157,9 +1216,9 @@ nstat_udp_copy_descriptor(
 			&desc->remote.v4, sizeof(desc->remote));
 	}
 	
-	if (inp->inp_route.ro_rt && inp->inp_route.ro_rt->rt_ifp)
-		desc->ifindex = inp->inp_route.ro_rt->rt_ifp->if_index;
-	
+	desc->ifindex = (inp->inp_last_outifp == NULL) ? 0 :
+	    inp->inp_last_outifp->if_index;
+		
 	struct socket *so = inp->inp_socket;
 	if (so)
 	{
@@ -1170,6 +1229,7 @@ nstat_udp_copy_descriptor(
 		
 		desc->rcvbufsize = so->so_rcv.sb_hiwat;
 		desc->rcvbufused = so->so_rcv.sb_cc;
+		desc->traffic_class = so->so_traffic_class;
 		
 		proc_name(desc->pid, desc->pname, sizeof(desc->pname));
 		desc->pname[sizeof(desc->pname) - 1] = 0;
@@ -1197,22 +1257,12 @@ nstat_init_udp_provider(void)
 
 #pragma mark -- Kernel Control Socket --
 
-typedef struct nstat_src
-{
-	struct nstat_src		*next;
-	nstat_src_ref_t			srcref;
-	nstat_provider			*provider;
-	nstat_provider_cookie_t	cookie;
-} nstat_src;
-
 static kern_ctl_ref	nstat_ctlref = NULL;
 static lck_grp_t	*nstat_lck_grp = NULL;
 
 static errno_t	nstat_control_connect(kern_ctl_ref kctl, struct sockaddr_ctl *sac, void **uinfo);
 static errno_t	nstat_control_disconnect(kern_ctl_ref kctl, u_int32_t unit, void *uinfo);
 static errno_t	nstat_control_send(kern_ctl_ref kctl, u_int32_t unit, void *uinfo, mbuf_t m, int flags);
-static int		nstat_control_send_description(nstat_control_state *state, nstat_src *src, u_int64_t context);
-static void		nstat_control_cleanup_source(nstat_control_state *state, struct nstat_src *src);
 
 
 static void*
@@ -1222,43 +1272,47 @@ nstat_idle_check(
 {
 	lck_mtx_lock(&nstat_mtx);
 	
-	nstat_idle_time = 0ULL;
+	nstat_idle_time = 0;
 	
 	nstat_control_state *control;
 	nstat_src	*dead = NULL;
 	nstat_src	*dead_list = NULL;
-	for (control = nstat_controls; control; control = control->next)
+	for (control = nstat_controls; control; control = control->ncs_next)
 	{
 		lck_mtx_lock(&control->mtx);
-		nstat_src	**srcpp = &control->srcs;
+		nstat_src	**srcpp = &control->ncs_srcs;
 		
-		while(*srcpp != NULL)
+		if (!(control->ncs_flags & NSTAT_FLAG_REQCOUNTS))
 		{
-			if ((*srcpp)->provider->nstat_gone((*srcpp)->cookie))
+			while(*srcpp != NULL)
 			{
-				// Pull it off the list
-				dead = *srcpp;
-				*srcpp = (*srcpp)->next;
-				
-				// send a last description
-				nstat_control_send_description(control, dead, 0ULL);
-				
-				// send the source removed notification
-				nstat_msg_src_removed	removed;
-				removed.hdr.type = NSTAT_MSG_TYPE_SRC_REMOVED;
-				removed.hdr.context = 0;
-				removed.srcref = dead->srcref;
-				(void)ctl_enqueuedata(control->kctl, control->unit, &removed, sizeof(removed), CTL_DATA_EOR);
-				
-				// Put this on the list to release later
-				dead->next = dead_list;
-				dead_list = dead;
-			}
-			else
-			{
-				srcpp = &(*srcpp)->next;
+				if ((*srcpp)->provider->nstat_gone((*srcpp)->cookie))
+				{
+					// Pull it off the list
+					dead = *srcpp;
+					*srcpp = (*srcpp)->next;
+					
+					// send one last counts notification
+					nstat_control_send_counts(control, dead,
+					    0, NULL);
+						
+					// send a last description
+					nstat_control_send_description(control, dead, 0);
+					
+					// send the source removed notification
+					nstat_control_send_removed(control, dead);
+					
+					// Put this on the list to release later
+					dead->next = dead_list;
+					dead_list = dead;
+				}
+				else
+				{
+					srcpp = &(*srcpp)->next;
+				}
 			}
 		}
+		control->ncs_flags &= ~NSTAT_FLAG_REQCOUNTS;
 		lck_mtx_unlock(&control->mtx);
 	}
 	
@@ -1276,7 +1330,7 @@ nstat_idle_check(
 		dead = dead_list;
 		dead_list = dead->next;
 		
-		nstat_control_cleanup_source(NULL, dead);
+		nstat_control_cleanup_source(NULL, dead, FALSE);
 	}
 	
 	return NULL;
@@ -1301,27 +1355,20 @@ nstat_control_register(void)
 	nstat_control.ctl_disconnect = nstat_control_disconnect;
 	nstat_control.ctl_send = nstat_control_send;
 	
-	errno_t result = ctl_register(&nstat_control, &nstat_ctlref);
-	if (result != 0)
-		printf("%s:%d ctl_register failed: %d", __FUNCTION__, __LINE__, result);
+	ctl_register(&nstat_control, &nstat_ctlref);
 }
 
 static void
 nstat_control_cleanup_source(
 	nstat_control_state	*state,
-	struct nstat_src	*src)
+	struct nstat_src	*src,
+	boolean_t 		locked)
 {
 	if (state)
-	{
-		nstat_msg_src_removed	removed;
-		removed.hdr.type = NSTAT_MSG_TYPE_SRC_REMOVED;
-		removed.hdr.context = 0;
-		removed.srcref = src->srcref;
-		(void)ctl_enqueuedata(state->kctl, state->unit, &removed, sizeof(removed), CTL_DATA_EOR);
-	}
+		nstat_control_send_removed(state, src);
 	
 	// Cleanup the source if we found it.
-	src->provider->nstat_release(src->cookie);
+	src->provider->nstat_release(src->cookie, locked);
 	OSFree(src, sizeof(*src), nstat_malloc_tag);
 }
 
@@ -1336,20 +1383,16 @@ nstat_control_connect(
 	
 	bzero(state, sizeof(*state));
 	lck_mtx_init(&state->mtx, nstat_lck_grp, NULL);
-	state->kctl = kctl;
-	state->unit = sac->sc_unit;
+	state->ncs_kctl = kctl;
+	state->ncs_unit = sac->sc_unit;
+	state->ncs_flags = NSTAT_FLAG_REQCOUNTS;
 	*uinfo = state;
 	
-	// check if we're super user
-	proc_t	pself = proc_self();
-	state->suser = proc_suser(pself) == 0;
-	proc_rele(pself);
-	
 	lck_mtx_lock(&nstat_mtx);
-	state->next = nstat_controls;
+	state->ncs_next = nstat_controls;
 	nstat_controls = state;
 	
-	if (nstat_idle_time == 0ULL)
+	if (nstat_idle_time == 0)
 	{
 		clock_interval_to_deadline(60, NSEC_PER_SEC, &nstat_idle_time);
 		thread_call_func_delayed((thread_call_func_t)nstat_idle_check, NULL, nstat_idle_time);
@@ -1372,11 +1415,11 @@ nstat_control_disconnect(
 	// pull it out of the global list of states
 	lck_mtx_lock(&nstat_mtx);
 	nstat_control_state	**statepp;
-	for (statepp = &nstat_controls; *statepp; statepp = &(*statepp)->next)
+	for (statepp = &nstat_controls; *statepp; statepp = &(*statepp)->ncs_next)
 	{
 		if (*statepp == state)
 		{
-			*statepp = state->next;
+			*statepp = state->ncs_next;
 			break;
 		}
 	}
@@ -1385,8 +1428,8 @@ nstat_control_disconnect(
 	lck_mtx_lock(&state->mtx);
 	// Stop watching for sources
 	nstat_provider	*provider;
-	watching = state->watching;
-	state->watching = 0;
+	watching = state->ncs_watching;
+	state->ncs_watching = 0;
 	for (provider = nstat_providers; provider && watching;  provider = provider->next)
 	{
 		if ((watching & (1 << provider->nstat_provider_id)) != 0)
@@ -1397,11 +1440,11 @@ nstat_control_disconnect(
 	}
 	
 	// set cleanup flags
-	state->cleanup = TRUE;
+	state->ncs_flags |= NSTAT_FLAG_CLEANUP;
 	
 	// Copy out the list of sources
-	nstat_src	*srcs = state->srcs;
-	state->srcs = NULL;
+	nstat_src	*srcs = state->ncs_srcs;
+	state->ncs_srcs = NULL;
 	lck_mtx_unlock(&state->mtx);
 	
 	while (srcs)
@@ -1413,7 +1456,7 @@ nstat_control_disconnect(
 		srcs = src->next;
 		
 		// clean it up
-		nstat_control_cleanup_source(NULL, src);
+		nstat_control_cleanup_source(NULL, src, FALSE);
 	}
 	
 	OSFree(state, sizeof(*state), nstat_malloc_tag);
@@ -1430,24 +1473,49 @@ nstat_control_next_src_ref(
 	
 	for (i = 0; i < 1000 && toReturn == NSTAT_SRC_REF_INVALID; i++)
 	{
-		if (state->next_srcref == NSTAT_SRC_REF_INVALID ||
-			state->next_srcref == NSTAT_SRC_REF_ALL)
+		if (state->ncs_next_srcref == NSTAT_SRC_REF_INVALID ||
+			state->ncs_next_srcref == NSTAT_SRC_REF_ALL)
 		{
-			state->next_srcref = 1;
+			state->ncs_next_srcref = 1;
 		}
 		
 		nstat_src	*src;
-		for (src = state->srcs; src; src = src->next)
+		for (src = state->ncs_srcs; src; src = src->next)
 		{
-			if (src->srcref == state->next_srcref)
+			if (src->srcref == state->ncs_next_srcref)
 				break;
 		}
 		
-		if (src == NULL) toReturn = state->next_srcref;
-		state->next_srcref++;
+		if (src == NULL) toReturn = state->ncs_next_srcref;
+		state->ncs_next_srcref++;
 	}
 	
 	return toReturn;
+}
+
+static errno_t
+nstat_control_send_counts(
+	nstat_control_state	*state,
+	nstat_src		*src,
+	unsigned long long	context,
+	int *gone)
+{ 	
+	nstat_msg_src_counts counts;
+	int localgone = 0;
+	errno_t result = 0;
+
+	counts.hdr.type = NSTAT_MSG_TYPE_SRC_COUNTS;
+	counts.hdr.context = context;
+	counts.srcref = src->srcref;
+	bzero(&counts.counts, sizeof(counts.counts));
+	if (src->provider->nstat_counts(src->cookie, &counts.counts,
+	    &localgone) == 0) {
+		result = ctl_enqueuedata(state->ncs_kctl, state->ncs_unit, &counts,
+		    sizeof(counts), CTL_DATA_EOR);
+	}
+	if (gone)
+		*gone = localgone;
+	return result;
 }
 
 static int
@@ -1460,8 +1528,6 @@ nstat_control_send_description(
 	if (src->provider->nstat_descriptor_length == 0 ||
 		src->provider->nstat_copy_descriptor == NULL)
 	{
-		lck_mtx_unlock(&state->mtx);
-		printf("%s:%d - provider doesn't support descriptions\n", __FUNCTION__, __LINE__);
 		return EOPNOTSUPP;
 	}
 	
@@ -1471,8 +1537,6 @@ nstat_control_send_description(
 	u_int32_t		size = offsetof(nstat_msg_src_description, data) + src->provider->nstat_descriptor_length;
 	if (mbuf_allocpacket(MBUF_WAITOK, size, &one, &msg) != 0)
 	{
-		lck_mtx_unlock(&state->mtx);
-		printf("%s:%d - failed to allocate response\n", __FUNCTION__, __LINE__);
 		return ENOMEM;
 	}
 	
@@ -1486,7 +1550,6 @@ nstat_control_send_description(
 	if (result != 0)
 	{
 		mbuf_freem(msg);
-		printf("%s:%d - provider failed to copy descriptor %d\n", __FUNCTION__, __LINE__, result);
 		return result;
 	}
 	
@@ -1495,13 +1558,29 @@ nstat_control_send_description(
 	desc->srcref = src->srcref;
 	desc->provider = src->provider->nstat_provider_id;
 	
-	result = ctl_enqueuembuf(state->kctl, state->unit, msg, CTL_DATA_EOR);
+	result = ctl_enqueuembuf(state->ncs_kctl, state->ncs_unit, msg, CTL_DATA_EOR);
 	if (result != 0)
 	{
-		printf("%s:%d ctl_enqueuembuf returned error %d\n", __FUNCTION__, __LINE__, result);
 		mbuf_freem(msg);
 	}
 	
+	return result;
+}
+
+static errno_t
+nstat_control_send_removed(
+	nstat_control_state	*state,
+	nstat_src		*src)
+{
+	nstat_msg_src_removed removed;
+	errno_t result;
+
+	removed.hdr.type = NSTAT_MSG_TYPE_SRC_REMOVED;
+	removed.hdr.context = 0;
+	removed.srcref = src->srcref;
+	result = ctl_enqueuedata(state->ncs_kctl, state->ncs_unit, &removed,
+	    sizeof(removed), CTL_DATA_EOR);
+
 	return result;
 }
 
@@ -1515,8 +1594,6 @@ nstat_control_handle_add_request(
 	// Verify the header fits in the first mbuf
 	if (mbuf_len(m) < offsetof(nstat_msg_add_src_req, param))
 	{
-		printf("mbuf_len(m)=%lu, offsetof(nstat_msg_add_src_req*, param)=%lu\n",
-			mbuf_len(m), offsetof(nstat_msg_add_src_req, param));
 		return EINVAL;
 	}
 	
@@ -1524,7 +1601,6 @@ nstat_control_handle_add_request(
 	int32_t	paramlength = mbuf_pkthdr_len(m) - offsetof(nstat_msg_add_src_req, param);
 	if (paramlength < 0 || paramlength > 2 * 1024)
 	{
-		printf("invalid paramlength=%d\n", paramlength);
 		return EINVAL;
 	}
 	
@@ -1554,31 +1630,9 @@ nstat_control_handle_add_request(
 	
 	result = nstat_control_source_add(req->hdr.context, state, provider, cookie);
 	if (result != 0)
-		provider->nstat_release(cookie);
+		provider->nstat_release(cookie, 0);
 	
 	return result;
-}
-
-static int
-nstat_perm_check(
-	__unused nstat_control_state	*state)
-{
-	int allow = 0;
-#if !REQUIRE_ROOT_FOR_STATS
-	allow = 1;
-#else
-	// If the socket was created by a priv process, allow
-	if (state->suser) return 1;
-	
-	// If the current process is priv, allow
-	proc_t	self = proc_self();
-	allow = proc_suser(self) == 0;
-	proc_rele(self);
-	
-	// TBD: check for entitlement, root check is too coarse
-#endif /* REQUIRE_ROOT_FOR_STATS */
-	
-	return allow;
 }
 
 static errno_t
@@ -1588,16 +1642,9 @@ nstat_control_handle_add_all(
 {
 	errno_t	result = 0;
 	
-	if (!nstat_perm_check(state))
-	{
-		return EPERM;
-	}
-	
 	// Verify the header fits in the first mbuf
 	if (mbuf_len(m) < sizeof(nstat_msg_add_all_srcs))
 	{
-		printf("mbuf_len(m)=%lu, sizeof(nstat_msg_add_all_srcs)=%lu\n",
-			mbuf_len(m), sizeof(nstat_msg_add_all_srcs));
 		return EINVAL;
 	}
 	
@@ -1609,9 +1656,9 @@ nstat_control_handle_add_all(
 	
 	// Make sure we don't add the provider twice
 	lck_mtx_lock(&state->mtx);
-	if ((state->watching & (1 << provider->nstat_provider_id)) != 0)
+	if ((state->ncs_watching & (1 << provider->nstat_provider_id)) != 0)
 		result = EALREADY;
-	state->watching |= (1 << provider->nstat_provider_id);
+	state->ncs_watching |= (1 << provider->nstat_provider_id);
 	lck_mtx_unlock(&state->mtx);
 	if (result != 0) return result;
 	
@@ -1619,7 +1666,7 @@ nstat_control_handle_add_all(
 	if (result != 0)
 	{
 		lck_mtx_lock(&state->mtx);
-		state->watching &= ~(1 << provider->nstat_provider_id);
+		state->ncs_watching &= ~(1 << provider->nstat_provider_id);
 		lck_mtx_unlock(&state->mtx);
 	}
 	
@@ -1630,8 +1677,7 @@ nstat_control_handle_add_all(
 		success.context = req->hdr.context;
 		success.type = NSTAT_MSG_TYPE_SUCCESS;
 		success.pad = 0;
-		if (ctl_enqueuedata(state->kctl, state->unit, &success, sizeof(success), CTL_DATA_EOR) != 0)
-			printf("%s:%d - failed to enqueue success message\n", __FUNCTION__, __LINE__);
+		ctl_enqueuedata(state->ncs_kctl, state->ncs_unit, &success, sizeof(success), CTL_DATA_EOR);
 	}
 	
 	return result;
@@ -1671,7 +1717,7 @@ nstat_control_source_add(
 	lck_mtx_lock(&state->mtx);
 	
 	add->srcref = src->srcref = nstat_control_next_src_ref(state);
-	if (state->cleanup || src->srcref == NSTAT_SRC_REF_INVALID)
+	if (state->ncs_flags & NSTAT_FLAG_CLEANUP || src->srcref == NSTAT_SRC_REF_INVALID)
 	{
 		lck_mtx_unlock(&state->mtx);
 		OSFree(src, sizeof(*src), nstat_malloc_tag);
@@ -1682,23 +1728,22 @@ nstat_control_source_add(
 	src->cookie = cookie;
 	
 	// send the source added message
-	errno_t result = ctl_enqueuembuf(state->kctl, state->unit, msg, CTL_DATA_EOR);
+	errno_t result = ctl_enqueuembuf(state->ncs_kctl, state->ncs_unit, msg, CTL_DATA_EOR);
 	if (result != 0)
 	{
 		lck_mtx_unlock(&state->mtx);
-		printf("%s:%d ctl_enqueuembuf failed: %d\n", __FUNCTION__, __LINE__, result);
 		OSFree(src, sizeof(*src), nstat_malloc_tag);
 		mbuf_freem(msg);
 		return result;
 	}
 	
 	// Put the 	source in the list
-	src->next = state->srcs;
-	state->srcs = src;
+	src->next = state->ncs_srcs;
+	state->ncs_srcs = src;
 	
 	// send the description message
 	// not useful as the source is often not complete
-//	nstat_control_send_description(state, src, 0ULL);
+//	nstat_control_send_description(state, src, 0);
 	
 	lck_mtx_unlock(&state->mtx);
 	
@@ -1714,7 +1759,6 @@ nstat_control_handle_remove_request(
 	
 	if (mbuf_copydata(m, offsetof(nstat_msg_rem_src_req, srcref), sizeof(srcref), &srcref) != 0)
 	{
-		printf("%s:%d - invalid length %u, expected %lu\n", __FUNCTION__, __LINE__, (u_int32_t)mbuf_pkthdr_len(m), sizeof(nstat_msg_rem_src_req));
 		return EINVAL;
 	}
 	
@@ -1723,7 +1767,7 @@ nstat_control_handle_remove_request(
 	// Remove this source as we look for it
 	nstat_src	**nextp;
 	nstat_src	*src = NULL;
-	for (nextp = &state->srcs; *nextp; nextp = &(*nextp)->next)
+	for (nextp = &state->ncs_srcs; *nextp; nextp = &(*nextp)->next)
 	{
 		if ((*nextp)->srcref == srcref)
 		{
@@ -1735,7 +1779,7 @@ nstat_control_handle_remove_request(
 	
 	lck_mtx_unlock(&state->mtx);
 	
-	if (src) nstat_control_cleanup_source(state, src);
+	if (src) nstat_control_cleanup_source(state, src, FALSE);
 	
 	return src ? 0 : ENOENT;
 }
@@ -1758,12 +1802,13 @@ nstat_control_handle_query_request(
 	nstat_msg_query_src_req	req;
 	if (mbuf_copydata(m, 0, sizeof(req), &req) != 0)
 	{
-		printf("%s:%d - invalid length %u, expected %lu\n", __FUNCTION__, __LINE__, (u_int32_t)mbuf_pkthdr_len(m), sizeof(req));
 		return EINVAL;
 	}
 	
 	lck_mtx_lock(&state->mtx);
-	nstat_src	**srcpp = &state->srcs;
+	if (req.srcref == NSTAT_SRC_REF_ALL)
+		state->ncs_flags |= NSTAT_FLAG_REQCOUNTS;
+	nstat_src	**srcpp = &state->ncs_srcs;
 	while (*srcpp != NULL)
 	{
 		int	gone;
@@ -1772,26 +1817,20 @@ nstat_control_handle_query_request(
 		if (req.srcref == NSTAT_SRC_REF_ALL ||
 			(*srcpp)->srcref == req.srcref)
 		{
-			nstat_msg_src_counts	counts;
-			counts.hdr.type = NSTAT_MSG_TYPE_SRC_COUNTS;
-			counts.hdr.context = req.hdr.context;
-			counts.srcref = (*srcpp)->srcref;
-			bzero(&counts.counts, sizeof(counts.counts));
-			result = (*srcpp)->provider->nstat_counts((*srcpp)->cookie, &counts.counts, &gone);
+			result = nstat_control_send_counts(state, *srcpp,
+			    req.hdr.context, &gone);
 			
-			if (result == 0)
-			{
-				result = ctl_enqueuedata(state->kctl, state->unit, &counts, sizeof(counts), CTL_DATA_EOR);
-			}
-			else
-			{
-				printf("%s:%d provider->nstat_counts failed: %d\n", __FUNCTION__, __LINE__, result);
-			}
+			// If the counts message failed to enqueue then we should clear our flag so
+			// that a client doesn't miss anything on idle cleanup.
+			if (result != 0)
+				state->ncs_flags &= ~NSTAT_FLAG_REQCOUNTS;
 			
 			if (gone)
 			{
 				// send one last descriptor message so client may see last state
-				nstat_control_send_description(state, *srcpp, 0ULL);
+
+				nstat_control_send_description(state, *srcpp,
+				    0);
 				
 				// pull src out of the list
 				nstat_src	*src = *srcpp;
@@ -1818,7 +1857,7 @@ nstat_control_handle_query_request(
 		dead_srcs = src->next;
 		
 		// release src and send notification
-		nstat_control_cleanup_source(state, src);
+		nstat_control_cleanup_source(state, src, FALSE);
 	}
 	
 	if (req.srcref == NSTAT_SRC_REF_ALL)
@@ -1827,8 +1866,7 @@ nstat_control_handle_query_request(
 		success.context = req.hdr.context;
 		success.type = NSTAT_MSG_TYPE_SUCCESS;
 		success.pad = 0;
-		if (ctl_enqueuedata(state->kctl, state->unit, &success, sizeof(success), CTL_DATA_EOR) != 0)
-			printf("%s:%d - failed to enqueue success message\n", __FUNCTION__, __LINE__);
+		ctl_enqueuedata(state->ncs_kctl, state->ncs_unit, &success, sizeof(success), CTL_DATA_EOR);
 		result = 0;
 	}
 	
@@ -1843,14 +1881,13 @@ nstat_control_handle_get_src_description(
 	nstat_msg_get_src_description	req;
 	if (mbuf_copydata(m, 0, sizeof(req), &req) != 0)
 	{
-		printf("%s:%d - invalid length %u, expected %lu\n", __FUNCTION__, __LINE__, (u_int32_t)mbuf_pkthdr_len(m), sizeof(req));
 		return EINVAL;
 	}
 	
 	// Find the source
 	lck_mtx_lock(&state->mtx);
 	nstat_src	*src;
-	for (src = state->srcs; src; src = src->next)
+	for (src = state->ncs_srcs; src; src = src->next)
 	{
 		if (src->srcref == req.srcref)
 			break;
@@ -1860,7 +1897,6 @@ nstat_control_handle_get_src_description(
 	if (!src)
 	{
 		lck_mtx_unlock(&state->mtx);
-		printf("%s:%d - no matching source\n", __FUNCTION__, __LINE__);
 		return ENOENT;
 	}
 	
@@ -1886,8 +1922,6 @@ nstat_control_send(
 	if (mbuf_pkthdr_len(m) < sizeof(hdr))
 	{
 		// Is this the right thing to do?
-		printf("%s:%d - message too short, was %ld expected %lu\n", __FUNCTION__, __LINE__,
-			mbuf_pkthdr_len(m), sizeof(*hdr));
 		mbuf_freem(m);
 		return EINVAL;
 	}
@@ -1925,7 +1959,6 @@ nstat_control_send(
 			break;
 		
 		default:
-			printf("%s:%d - unknown message type %d\n", __FUNCTION__, __LINE__, hdr->type);
 			result = EINVAL;
 			break;
 	}

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2012 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -213,7 +213,7 @@ struct protosw inetsw[] = {
   encap_init,		0,		0,		0,
   0,
   &rip_usrreqs,
-  0,		0,		0,	{ 0, 0 },	0,	{ 0 }
+  0,		rip_unlock,		0,	{ 0, 0 },	0,	{ 0 }
 },
 # if INET6
 { SOCK_RAW,	&inetdomain,	IPPROTO_IPV6,	PR_ATOMIC|PR_ADDR|PR_LASTHDR,
@@ -222,7 +222,7 @@ struct protosw inetsw[] = {
   encap_init,	0,		0,		0,
   0,
   &rip_usrreqs,
-  0,		0,		0,	{ 0, 0 },	0,	{ 0 }
+  0,		rip_unlock,		0,	{ 0, 0 },	0,	{ 0 }
 },
 #endif
 #if IPDIVERT
@@ -242,7 +242,7 @@ struct protosw inetsw[] = {
   0,		0,		0,		0,
   0,
   &rip_usrreqs,
-  0,		0,		0,	{ 0, 0 },	0,	{ 0 }
+  0,		rip_unlock,		0,	{ 0, 0 },	0,	{ 0 }
 },
 #endif
 #if NSIP
@@ -252,7 +252,7 @@ struct protosw inetsw[] = {
   0,		0,		0,		0,
   0,
   &rip_usrreqs,
-  0,		0,		0,	{ 0, 0 },	0,	{ 0 }
+  0,		rip_unlock,		0,	{ 0, 0 },	0,	{ 0 }
 },
 #endif
 	/* raw wildcard */

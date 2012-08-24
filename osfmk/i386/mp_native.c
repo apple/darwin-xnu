@@ -110,17 +110,5 @@ i386_cpu_IPI(int cpu)
 	}
 #endif	/* MP_DEBUG */
 
-#if MACH_KDB
-#ifdef	MP_DEBUG
-	if(!trappedalready && (cpu_datap(cpu)->cpu_signals & 6)) {	/* (BRINGUP) */
-		if(kdb_cpu != cpu_number()) {
-			trappedalready = 1;
-			panic("i386_cpu_IPI: sending enter debugger signal (%08X) to cpu %d and I do not own debugger, owner = %08X\n", 
-				cpu_datap(cpu)->cpu_signals, cpu, kdb_cpu);
-		}
-	}
-#endif	/* MP_DEBUG */
-#endif
-
 	lapic_send_ipi(cpu, LAPIC_VECTOR(INTERPROCESSOR));
 }

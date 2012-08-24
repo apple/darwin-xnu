@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2011 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2012 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -175,6 +175,14 @@ struct	ip6_moptions {
 #define	IM6O_REMREF(_im6o)						\
 	im6o_remref(_im6o)
 
+struct ip6_exthdrs {
+	struct mbuf *ip6e_ip6;
+	struct mbuf *ip6e_hbh;
+	struct mbuf *ip6e_dest1;
+	struct mbuf *ip6e_rthdr;
+	struct mbuf *ip6e_dest2;
+};
+
 /*
  * Control options for outgoing packets
  */
@@ -348,18 +356,39 @@ struct ip6aux {
 #define	IPV6_FLAG_NOSRCIFSEL	0x80	/* bypas source address selection */
 #define	IPV6_OUTARGS		0x100	/* has ancillary output info */
 
-#ifdef __NO_STRICT_ALIGNMENT
-#define IP6_HDR_ALIGNED_P(ip)	1
-#else
-#define IP6_HDR_ALIGNED_P(ip)	((((intptr_t) (ip)) & 3) == 0)
-#endif
+#ifdef XNU_KERNEL_PRIVATE
+#define IP6_HDR_ALIGNED_P(_ip6)	((((uintptr_t)(_ip6)) & ((uintptr_t)3)) == 0)
 
 /*
- * Extra information passed to ip6_output when IP6_OUTARGS is set.
+ * On platforms which require strict alignment (currently for anything but
+ * i386 or x86_64), this macro checks whether the pointer to the IP header
+ * is 32-bit aligned, and assert otherwise.
+ */
+#if defined(__i386__) || defined(__x86_64__)
+#define	IP6_HDR_STRICT_ALIGNMENT_CHECK(_ip6) do { } while (0)
+#else /* !__i386__ && !__x86_64__ */
+#define	IP6_HDR_STRICT_ALIGNMENT_CHECK(_ip6) do {			\
+	if (!IP_HDR_ALIGNED_P(_ip6)) {					\
+		panic_plain("\n%s: Unaligned IPv6 header %p\n",		\
+		    __func__, _ip6);					\
+	}								\
+} while (0)
+#endif /* !__i386__ && !__x86_64__ */
+#endif /* XNU_KERNEL_PRIVATE */
+
+#include <net/flowadv.h>
+
+/*
+ * Extra information passed to ip6_output when IPV6_OUTARGS is set.
  */
 struct ip6_out_args {
 	unsigned int	ip6oa_boundif;	/* bound outgoing interface */
-	unsigned int	ip6oa_nocell;	/* don't use IFT_CELLULAR */
+	struct flowadv	ip6oa_flowadv;	/* flow advisory code */
+	u_int32_t	ip6oa_flags;	/* IP6OAF flags (see below) */
+#define	IP6OAF_SELECT_SRCIF	0x00000001	/* src interface selection */
+#define	IP6OAF_BOUND_IF		0x00000002	/* boundif value is valid */
+#define	IP6OAF_BOUND_SRCADDR	0x00000004	/* bound to src address */
+#define	IP6OAF_NO_CELLULAR	0x00000010	/* skip IFT_CELLULAR */
 };
 
 extern struct	ip6stat ip6stat;	/* statistics */
@@ -388,8 +417,7 @@ extern int	ip6_maxfragpackets; /* Maximum packets in reassembly queue */
 extern int	ip6_maxfrags;	/* Maximum fragments in reassembly queue */
 extern int	ip6_sourcecheck;	/* Verify source interface */
 extern int	ip6_sourcecheck_interval; /* Interval between log messages */
-extern int	ip6_accept_rtadv;	/* Acts as a host not a router */
-extern int	ip6_keepfaith;		/* Firewall Aided Internet Translator */
+extern int	ip6_accept_rtadv;	/* deprecated */
 extern int	ip6_log_interval;
 extern time_t	ip6_log_time;
 extern int	ip6_hdrnestlimit; /* upper limit of # of extension headers */
@@ -415,6 +443,7 @@ extern struct	pr_usrreqs rip6_usrreqs;
 extern struct   pr_usrreqs icmp6_dgram_usrreqs;
 
 extern int	ip6_doscopedroute;
+extern int	ip6_restrictrecvif;
 
 struct sockopt;
 
@@ -428,7 +457,6 @@ int 	icmp6_dgram_attach(struct socket *, int , struct proc *);
 
 struct in6_ifaddr;
 void	ip6_init(void);
-void ip6_fin(void);
 void	ip6_input(struct mbuf *);
 struct in6_ifaddr *ip6_getdstifaddr(struct mbuf *);
 void	ip6_freepcbopts(struct ip6_pktopts *);
@@ -454,12 +482,14 @@ int	ip6_process_hopopts(struct mbuf *, u_int8_t *, int, u_int32_t *,
 struct mbuf	**ip6_savecontrol_v4(struct inpcb *, struct mbuf *,
 	    struct mbuf **, int *);
 int	ip6_savecontrol(struct inpcb *, struct mbuf *, struct mbuf **);
-void	ip6_forward(struct mbuf *, struct route_in6 *, int);
+struct mbuf *ip6_forward(struct mbuf *, struct route_in6 *, int);
 void	ip6_notify_pmtu __P((struct inpcb *, struct sockaddr_in6 *,
 			     u_int32_t *));
 void	ip6_mloopback(struct ifnet *, struct mbuf *, struct sockaddr_in6 *);
 int	ip6_output(struct mbuf *, struct ip6_pktopts *, struct route_in6 *,
-	    int, struct ip6_moptions *, struct ifnet **,
+	    int, struct ip6_moptions *, struct ifnet **, struct ip6_out_args *);
+int	ip6_output_list(struct mbuf *, int, struct ip6_pktopts *,
+	    struct route_in6 *, int, struct ip6_moptions *, struct ifnet **,
 	    struct ip6_out_args *);
 int	ip6_ctloutput(struct socket *, struct sockopt *sopt);
 void	ip6_initpktopts(struct ip6_pktopts *);
@@ -488,7 +518,7 @@ extern struct in6_addrpolicy *
 	in6_addrsel_lookup_policy(struct sockaddr_in6 *);
 int in6_selectroute(struct sockaddr_in6 *, struct sockaddr_in6 *,
 	struct ip6_pktopts *, struct ip6_moptions *, struct route_in6 *,
-	struct ifnet **, struct rtentry **, int, unsigned int, unsigned int);
+	struct ifnet **, struct rtentry **, int, const struct ip6_out_args *);
 int ip6_setpktopts(struct mbuf *control, struct ip6_pktopts *opt, struct ip6_pktopts *stickyopt, int uproto);
 u_int32_t ip6_randomid(void);
 u_int32_t ip6_randomflowlabel(void);

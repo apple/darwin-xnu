@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2010 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2011 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -192,9 +192,9 @@
 #define M_FILEGLOB	99	/* fileglobal */
 #define M_KAUTH		100	/* kauth subsystem */
 #define M_DUMMYNET	101	/* dummynet */
-#ifndef __LP64__
+#if CONFIG_VFS_FUNNEL
 #define M_UNSAFEFS	102	/* storage for vnode lock state for unsafe FS */
-#endif /* __LP64__ */
+#endif /* CONFIG_VFS_FUNNEL */
 #define M_MACPIPELABEL	103	/* MAC pipe labels */
 #define M_MACTEMP	104	/* MAC framework */
 #define M_SBUF		105	/* string buffers */

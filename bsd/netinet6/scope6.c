@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2009-2010 Apple Inc. All rights reserved.
+ * Copyright (c) 2009-2011 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -117,7 +117,7 @@ scope6_ifattach(
 			bcopy((caddr_t)scope6_ids, q, n/2);
 			FREE((caddr_t)scope6_ids, M_IFADDR);
 		}
-		scope6_ids = (struct scope6_id *)q;
+		scope6_ids = (struct scope6_id *)(void *)q;
 	}
 
 #define SID scope6_ids[ifp->if_index]
@@ -365,7 +365,7 @@ rtkey_to_sa6(struct rtentry *rt, struct sockaddr_in6 *sin6)
 {
 	VERIFY(rt_key(rt)->sa_family == AF_INET6);
 
-	*sin6 = *((struct sockaddr_in6 *)rt_key(rt));
+	*sin6 = *((struct sockaddr_in6 *)(void *)rt_key(rt));
 	sin6->sin6_scope_id = 0;
 }
 
@@ -374,7 +374,7 @@ rtgw_to_sa6(struct rtentry *rt, struct sockaddr_in6 *sin6)
 {
 	VERIFY(rt->rt_flags & RTF_GATEWAY);
 
-	*sin6 = *((struct sockaddr_in6 *)rt->rt_gateway);
+	*sin6 = *((struct sockaddr_in6 *)(void *)rt->rt_gateway);
 	sin6->sin6_scope_id = 0;
 }
 
@@ -382,7 +382,7 @@ rtgw_to_sa6(struct rtentry *rt, struct sockaddr_in6 *sin6)
  * generate standard sockaddr_in6 from embedded form.
  */
 int
-sa6_recoverscope(struct sockaddr_in6 *sin6)
+sa6_recoverscope(struct sockaddr_in6 *sin6, boolean_t attachcheck)
 {
 	u_int32_t zoneid;
 
@@ -402,12 +402,25 @@ sa6_recoverscope(struct sockaddr_in6 *sin6)
 			/* sanity check */
 			if (if_index < zoneid)
 				return (ENXIO);
-			ifnet_head_lock_shared();
-			if (ifindex2ifnet[zoneid] == NULL) {
+			/*
+			 * We use the attachcheck parameter to skip the
+			 * interface attachment check.
+			 * Some callers might hold the ifnet_head lock in
+			 * exclusive mode. This means that:
+			 * 1) the interface can't go away -- hence we don't
+			 *    need to perform this check
+			 * 2) we can't perform this check because the lock is
+			 *    in exclusive mode and trying to lock it in shared
+			 *    mode would cause a deadlock.
+			 */
+			if (attachcheck) {
+				ifnet_head_lock_shared();
+				if (ifindex2ifnet[zoneid] == NULL) {
+					ifnet_head_done();
+					return (ENXIO);
+				}
 				ifnet_head_done();
-				return (ENXIO);
 			}
-			ifnet_head_done();
 			sin6->sin6_addr.s6_addr16[1] = 0;
 			sin6->sin6_scope_id = zoneid;
 		}
@@ -503,8 +516,14 @@ in6_setscope(struct in6_addr *in6, struct ifnet *ifp, u_int32_t *ret_id)
 
 	scope = in6_addrscope(in6);
 
-#define SID scope6_ids[index]
 	lck_mtx_lock(scope6_mutex);
+	if (index >= if_scope_indexlim) {
+		lck_mtx_unlock(scope6_mutex);
+		if (ret_id != NULL)
+			*ret_id = 0;
+		return (EINVAL);
+	}
+#define SID scope6_ids[index]
 	switch (scope) {
 	case IPV6_ADDR_SCOPE_INTFACELOCAL: /* should be interface index */
 		zoneid = SID.s6id_list[IPV6_ADDR_SCOPE_INTFACELOCAL];

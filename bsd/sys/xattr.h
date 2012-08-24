@@ -49,6 +49,7 @@
 
 #define	XATTR_MAXNAMELEN   127
 
+/* See the ATTR_CMN_FNDRINFO section of getattrlist(2) for details on FinderInfo */
 #define	XATTR_FINDERINFO_NAME	  "com.apple.FinderInfo"
 
 #define	XATTR_RESOURCEFORK_NAME	  "com.apple.ResourceFork"

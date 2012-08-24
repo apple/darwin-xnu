@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2004-2011 Apple Inc. All rights reserved.
+ * Copyright (c) 2004-2012 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -83,8 +83,6 @@
 #include <netinet/in_var.h>
 #include <kern/zalloc.h>
 
-#define	SA(p) ((struct sockaddr *)(p))
-#define SIN(s) ((struct sockaddr_in *)s)
 #define CONST_LLADDR(s) ((const u_char*)((s)->sdl_data + (s)->sdl_nlen))
 #define	equal(a1, a2) (bcmp((caddr_t)(a1), (caddr_t)(a2), (a1)->sa_len) == 0)
 
@@ -208,6 +206,7 @@ static struct llinfo_arp *arp_llinfo_alloc(void);
 static void arp_llinfo_free(void *);
 static void arp_llinfo_purge(struct rtentry *);
 static void arp_llinfo_get_ri(struct rtentry *, struct rt_reach_info *);
+static void arp_llinfo_get_iflri(struct rtentry *, struct ifnet_llreach_info *);
 
 static __inline void arp_llreach_use(struct llinfo_arp *);
 static __inline int arp_llreach_reachable(struct llinfo_arp *);
@@ -301,12 +300,38 @@ arp_llinfo_get_ri(struct rtentry *rt, struct rt_reach_info *ri)
 
 	if (lr == NULL) {
 		bzero(ri, sizeof (*ri));
+		ri->ri_rssi = IFNET_RSSI_UNKNOWN;
+		ri->ri_lqm = IFNET_LQM_THRESH_OFF;
+		ri->ri_npm = IFNET_NPM_THRESH_UNKNOWN;
 	} else {
 		IFLR_LOCK(lr);
 		/* Export to rt_reach_info structure */
 		ifnet_lr2ri(lr, ri);
-		/* Export ARP send expiration time */
-		ri->ri_snd_expire = ifnet_llreach_up2cal(lr, la->la_lastused);
+		/* Export ARP send expiration (calendar) time */
+		ri->ri_snd_expire =
+		    ifnet_llreach_up2calexp(lr, la->la_lastused);
+		IFLR_UNLOCK(lr);
+	}
+}
+
+static void
+arp_llinfo_get_iflri(struct rtentry *rt, struct ifnet_llreach_info *iflri)
+{
+	struct llinfo_arp *la = rt->rt_llinfo;
+	struct if_llreach *lr = la->la_llreach;
+
+	if (lr == NULL) {
+		bzero(iflri, sizeof (*iflri));
+		iflri->iflri_rssi = IFNET_RSSI_UNKNOWN;
+		iflri->iflri_lqm = IFNET_LQM_THRESH_OFF;
+		iflri->iflri_npm = IFNET_NPM_THRESH_UNKNOWN;
+	} else {
+		IFLR_LOCK(lr);
+		/* Export to ifnet_llreach_info structure */
+		ifnet_lr2iflri(lr, iflri);
+		/* Export ARP send expiration (uptime) time */
+		iflri->iflri_snd_expire =
+		    ifnet_llreach_up2upexp(lr, la->la_lastused);
 		IFLR_UNLOCK(lr);
 	}
 }
@@ -579,7 +604,7 @@ arp_rtrequest(
 		 * such as older version of routed or gated might provide,
 		 * restore cloning bit.
 		 */
-		if ((rt->rt_flags & RTF_HOST) == 0 &&
+		if ((rt->rt_flags & RTF_HOST) == 0 && rt_mask(rt) != NULL &&
 		    SIN(rt_mask(rt))->sin_addr.s_addr != 0xffffffff)
 			rt->rt_flags |= RTF_CLONING;
 		if (rt->rt_flags & RTF_CLONING) {
@@ -605,7 +630,7 @@ arp_rtrequest(
 				arp_llreach_use(la); /* Mark use timestamp */
 			RT_UNLOCK(rt);
 			dlil_send_arp(rt->rt_ifp, ARPOP_REQUEST,
-			    SDL(gate), rt_key(rt), NULL, rt_key(rt));
+			    SDL(gate), rt_key(rt), NULL, rt_key(rt), 0);
 			RT_LOCK(rt);
 		}
 		/*FALLTHROUGH*/
@@ -631,6 +656,7 @@ arp_rtrequest(
 			break;
 		}
 		rt->rt_llinfo_get_ri = arp_llinfo_get_ri;
+		rt->rt_llinfo_get_iflri = arp_llinfo_get_iflri;
 		rt->rt_llinfo_purge = arp_llinfo_purge;
 		rt->rt_llinfo_free = arp_llinfo_free;
 
@@ -860,192 +886,6 @@ arp_lookup_route(const struct in_addr *addr, int create, int proxy,
 }
 
 /*
- * arp_route_to_gateway_route will find the gateway route for a given route.
- *
- * If the route is down, look the route up again.
- * If the route goes through a gateway, get the route to the gateway.
- * If the gateway route is down, look it up again.
- * If the route is set to reject, verify it hasn't expired.
- *
- * If the returned route is non-NULL, the caller is responsible for
- * releasing the reference and unlocking the route.
- */
-#define senderr(e) { error = (e); goto bad; }
-__private_extern__ errno_t
-arp_route_to_gateway_route(const struct sockaddr *net_dest, route_t hint0,
-     route_t *out_route)
-{
-	uint64_t timenow;
-	route_t rt = hint0, hint = hint0;
-	errno_t error = 0;
-
-	*out_route = NULL;
-
-	/*
-	 * Next hop determination.  Because we may involve the gateway route
-	 * in addition to the original route, locking is rather complicated.
-	 * The general concept is that regardless of whether the route points
-	 * to the original route or to the gateway route, this routine takes
-	 * an extra reference on such a route.  This extra reference will be
-	 * released at the end.
-	 *
-	 * Care must be taken to ensure that the "hint0" route never gets freed
-	 * via rtfree(), since the caller may have stored it inside a struct
-	 * route with a reference held for that placeholder.
-	 */
-	if (rt != NULL) {
-		unsigned int ifindex;
-
-		RT_LOCK_SPIN(rt);
-		ifindex = rt->rt_ifp->if_index;
-		RT_ADDREF_LOCKED(rt);
-		if (!(rt->rt_flags & RTF_UP)) {
-			RT_REMREF_LOCKED(rt);
-			RT_UNLOCK(rt);
-			/* route is down, find a new one */
-			hint = rt = rtalloc1_scoped((struct sockaddr *)
-			    (size_t)net_dest, 1, 0, ifindex);
-			if (hint != NULL) {
-				RT_LOCK_SPIN(rt);
-				ifindex = rt->rt_ifp->if_index;
-			} else {
-				senderr(EHOSTUNREACH);
-			}
-		}
-
-		/*
-		 * We have a reference to "rt" by now; it will either
-		 * be released or freed at the end of this routine.
-		 */
-		RT_LOCK_ASSERT_HELD(rt);
-		if (rt->rt_flags & RTF_GATEWAY) {
-			struct rtentry *gwrt = rt->rt_gwroute;
-			struct sockaddr_in gw;
-
-			/* If there's no gateway rt, look it up */
-			if (gwrt == NULL) {
-				gw = *((struct sockaddr_in *)rt->rt_gateway);
-				RT_UNLOCK(rt);
-				goto lookup;
-			}
-			/* Become a regular mutex */
-			RT_CONVERT_LOCK(rt);
-
-			/*
-			 * Take gwrt's lock while holding route's lock;
-			 * this is okay since gwrt never points back
-			 * to "rt", so no lock ordering issues.
-			 */
-			RT_LOCK_SPIN(gwrt);
-			if (!(gwrt->rt_flags & RTF_UP)) {
-				struct rtentry *ogwrt;
-
-				rt->rt_gwroute = NULL;
-				RT_UNLOCK(gwrt);
-				gw = *((struct sockaddr_in *)rt->rt_gateway);
-				RT_UNLOCK(rt);
-				rtfree(gwrt);
-lookup:
-				gwrt = rtalloc1_scoped(
-				    (struct sockaddr *)&gw, 1, 0, ifindex);
-
-				RT_LOCK(rt);
-				/*
-				 * Bail out if the route is down, no route
-				 * to gateway, circular route, or if the
-				 * gateway portion of "rt" has changed.
-				 */
-				if (!(rt->rt_flags & RTF_UP) ||
-				    gwrt == NULL || gwrt == rt ||
-				    !equal(SA(&gw), rt->rt_gateway)) {
-					if (gwrt == rt) {
-						RT_REMREF_LOCKED(gwrt);
-						gwrt = NULL;
-					}
-					RT_UNLOCK(rt);
-					if (gwrt != NULL)
-						rtfree(gwrt);
-					senderr(EHOSTUNREACH);
-				}
-
-				/* Remove any existing gwrt */
-				ogwrt = rt->rt_gwroute;
-				if ((rt->rt_gwroute = gwrt) != NULL)
-					RT_ADDREF(gwrt);
-
-				/* Clean up "rt" now while we can */
-				if (rt == hint0) {
-					RT_REMREF_LOCKED(rt);
-					RT_UNLOCK(rt);
-				} else {
-					RT_UNLOCK(rt);
-					rtfree(rt);
-				}
-				rt = gwrt;
-				/* Now free the replaced gwrt */
-				if (ogwrt != NULL)
-					rtfree(ogwrt);
-				/* If still no route to gateway, bail out */
-				if (rt == NULL)
-					senderr(EHOSTUNREACH);
-			} else {
-				RT_ADDREF_LOCKED(gwrt);
-				RT_UNLOCK(gwrt);
-				/* Clean up "rt" now while we can */
-				if (rt == hint0) {
-					RT_REMREF_LOCKED(rt);
-					RT_UNLOCK(rt);
-				} else {
-					RT_UNLOCK(rt);
-					rtfree(rt);
-				}
-				rt = gwrt;
-			}
-
-			/* rt == gwrt; if it is now down, give up */
-			RT_LOCK_SPIN(rt);
-			if (!(rt->rt_flags & RTF_UP)) {
-				RT_UNLOCK(rt);
-				senderr(EHOSTUNREACH);
-			}
-		}
-
-		if (rt->rt_flags & RTF_REJECT) {
-			VERIFY(rt->rt_expire == 0 || rt->rt_rmx.rmx_expire != 0);
-			VERIFY(rt->rt_expire != 0 || rt->rt_rmx.rmx_expire == 0);
-			timenow = net_uptime();
-			if (rt->rt_expire == 0 ||
-			    timenow < rt->rt_expire) {
-				RT_UNLOCK(rt);
-				senderr(rt == hint ? EHOSTDOWN : EHOSTUNREACH);
-			}
-		}
-
-		/* Become a regular mutex */
-		RT_CONVERT_LOCK(rt);
-
-		/* Caller is responsible for cleaning up "rt" */
-		*out_route = rt;
-	}
-	return (0);
-
-bad:
-	/* Clean up route (either it is "rt" or "gwrt") */
-	if (rt != NULL) {
-		RT_LOCK_SPIN(rt);
-		if (rt == hint0) {
-			RT_REMREF_LOCKED(rt);
-			RT_UNLOCK(rt);
-		} else {
-			RT_UNLOCK(rt);
-			rtfree(rt);
-		}
-	}
-	return (error);
-}
-#undef senderr
-
-/*
  * This is the ARP pre-output routine; care must be taken to ensure that
  * the "hint" route never gets freed via rtfree(), since the caller may
  * have stored it inside a struct route with a reference held for that
@@ -1077,7 +917,7 @@ arp_lookup_ip(ifnet_t ifp, const struct sockaddr_in *net_dest,
 		 * Callee holds a reference on the route and returns
 		 * with the route entry locked, upon success.
 		 */
-		result = arp_route_to_gateway_route((const struct sockaddr*)
+		result = route_to_gwroute((const struct sockaddr *)
 		    net_dest, hint, &route);
 		if (result != 0)
 			return (result);
@@ -1194,6 +1034,7 @@ arp_lookup_ip(ifnet_t ifp, const struct sockaddr_in *net_dest,
 			if (llinfo->la_asked++ < arp_maxtries) {
 				struct ifaddr *rt_ifa = route->rt_ifa;
 				struct sockaddr *sa;
+				u_int32_t rtflags;
 
 				/* Become a regular mutex, just in case */
 				RT_CONVERT_LOCK(route);
@@ -1208,9 +1049,11 @@ arp_lookup_ip(ifnet_t ifp, const struct sockaddr_in *net_dest,
 				sa = rt_ifa->ifa_addr;
 				IFA_UNLOCK(rt_ifa);
 				arp_llreach_use(llinfo); /* Mark use timestamp */
+				rtflags = route->rt_flags;
 				RT_UNLOCK(route);
 				dlil_send_arp(ifp, ARPOP_REQUEST, NULL,
-				    sa, NULL, (const struct sockaddr*)net_dest);
+				    sa, NULL, (const struct sockaddr*)net_dest,
+				    rtflags);
 				IFA_REMREF(rt_ifa);
 				RT_LOCK(route);
 				result = EJUSTRETURN;
@@ -1385,7 +1228,7 @@ match:
 		u_char	storage[sizeof(struct kev_in_collision) + MAX_HW_LEN];
 		bzero(&ev_msg, sizeof(struct kev_msg));
 		bzero(storage, (sizeof(struct kev_in_collision) + MAX_HW_LEN));
-		in_collision = (struct kev_in_collision*)storage;
+		in_collision = (struct kev_in_collision*)(void *)storage;
 		log(LOG_ERR, "%s%d duplicate IP address %s sent from address %s\n",
 			ifp->if_name, ifp->if_unit,
 			inet_ntop(AF_INET, &sender_ip->sin_addr, ipv4str, sizeof(ipv4str)),
@@ -1646,7 +1489,7 @@ match:
 	/* Update the expire time for the route and clear the reject flag */
 	if (route->rt_expire) {
 		uint64_t timenow;
-                                            
+
 		timenow = net_uptime();
 		rt_setexpire(route,
 		    rt_expiry(route, timenow, arpt_keep));
@@ -1666,7 +1509,7 @@ match:
 		llinfo->la_hold = NULL;
 
 		RT_UNLOCK(route);
-		dlil_output(ifp, PF_INET, m0, (caddr_t)route, rt_key(route), 0);
+		dlil_output(ifp, PF_INET, m0, (caddr_t)route, rt_key(route), 0, NULL);
 		RT_REMREF(route);
 		route = NULL;
 	}
@@ -1748,7 +1591,7 @@ respond:
 
 	dlil_send_arp(ifp, ARPOP_REPLY,
 	    target_hw, (const struct sockaddr*)target_ip,
-	    sender_hw, (const struct sockaddr*)sender_ip);
+	    sender_hw, (const struct sockaddr*)sender_ip, 0);
 
 done:
 	if (best_ia != NULL)
@@ -1766,5 +1609,5 @@ arp_ifinit(struct ifnet *ifp, struct ifaddr *ifa)
 	ifa->ifa_flags |= RTF_CLONING;
 	sa = ifa->ifa_addr;
 	IFA_UNLOCK(ifa);
-	dlil_send_arp(ifp, ARPOP_REQUEST, NULL, sa, NULL, sa);
+	dlil_send_arp(ifp, ARPOP_REQUEST, NULL, sa, NULL, sa, 0);
 }

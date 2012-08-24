@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2010 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2012 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -109,6 +109,10 @@ int	ubc_setcred(struct vnode *, struct proc *);
 
 #if CONFIG_MACF
 #include <security/mac_framework.h>
+#endif
+
+#if CONFIG_PROTECT
+#include <sys/cprotect.h>
 #endif
 
 
@@ -445,7 +449,8 @@ continue_create_lookup:
 			}
 
 			need_vnop_open = !did_open;
-		} else {
+		} 
+		else {
 			if (fmode & O_EXCL)
 				error = EEXIST;
 
@@ -554,6 +559,25 @@ continue_create_lookup:
 				goto bad;
 			}
 		}
+
+#if CONFIG_PROTECT
+		/* 
+		 * Perform any content protection access checks prior to calling 
+		 * into the filesystem, if the raw encrypted mode was not 
+		 * requested.  
+		 * 
+		 * If the va_dataprotect_flags are NOT active, or if they are,
+		 * but they do not have the VA_DP_RAWENCRYPTED bit set, then we need 
+		 * to perform the checks.
+		 */
+		if (!(VATTR_IS_ACTIVE (vap, va_dataprotect_flags)) ||
+				((vap->va_dataprotect_flags & VA_DP_RAWENCRYPTED) == 0)) {
+			error = cp_handle_open (vp, fmode);	
+			if (error) {
+				goto bad;
+			}
+		}
+#endif
 
 		error = VNOP_OPEN(vp, fmode, ctx);
 		if (error) {
@@ -877,13 +901,18 @@ vn_read(struct fileproc *fp, struct uio *uio, int flags, vfs_context_t ctx)
 	}
 #endif
 
-	ioflag = 0;
+	/* This signals to VNOP handlers that this read came from a file table read */
+	ioflag = IO_SYSCALL_DISPATCH;
+
 	if (fp->f_fglob->fg_flag & FNONBLOCK)
 		ioflag |= IO_NDELAY;
 	if ((fp->f_fglob->fg_flag & FNOCACHE) || vnode_isnocache(vp))
-	        ioflag |= IO_NOCACHE;
+	    ioflag |= IO_NOCACHE;
+	if (fp->f_fglob->fg_flag & FENCRYPTED) {
+		ioflag |= IO_ENCRYPTED;
+	}
 	if (fp->f_fglob->fg_flag & FNORDAHEAD)
-	        ioflag |= IO_RAOFF;
+	    ioflag |= IO_RAOFF;
 
 	if ((flags & FOF_OFFSET) == 0)
 		uio->uio_offset = fp->f_fglob->fg_offset;
@@ -931,7 +960,12 @@ vn_write(struct fileproc *fp, struct uio *uio, int flags, vfs_context_t ctx)
 	}
 #endif
 
-	ioflag = IO_UNIT;
+	/* 
+	 * IO_SYSCALL_DISPATCH signals to VNOP handlers that this write originated 
+	 * from a file table write.
+	 */
+	ioflag = (IO_UNIT | IO_SYSCALL_DISPATCH);
+
 	if (vp->v_type == VREG && (fp->f_fglob->fg_flag & O_APPEND))
 		ioflag |= IO_APPEND;
 	if (fp->f_fglob->fg_flag & FNONBLOCK)
@@ -940,6 +974,8 @@ vn_write(struct fileproc *fp, struct uio *uio, int flags, vfs_context_t ctx)
 	        ioflag |= IO_NOCACHE;
 	if (fp->f_fglob->fg_flag & FNODIRECT)
 		ioflag |= IO_NODIRECT;
+	if (fp->f_fglob->fg_flag & FSINGLE_WRITER)
+		ioflag |= IO_SINGLE_WRITER;
 
 	/*
 	 * Treat synchronous mounts and O_FSYNC on the fd as equivalent.
@@ -1289,14 +1325,14 @@ vn_ioctl(struct fileproc *fp, u_long com, caddr_t data, vfs_context_t ctx)
 					error = ENXIO;
 					goto out;
 				}
-				*(int *)data = bdevsw[major(vp->v_rdev)].d_type;
+				*(int *)data = D_TYPEMASK & bdevsw[major(vp->v_rdev)].d_type;
 
 			} else if (vp->v_type == VCHR) {
 				if (major(vp->v_rdev) >= nchrdev) {
 					error = ENXIO;
 					goto out;
 				}
-				*(int *)data = cdevsw[major(vp->v_rdev)].d_type;
+				*(int *)data = D_TYPEMASK & cdevsw[major(vp->v_rdev)].d_type;
 			} else {
 				error = ENOTTY;
 				goto out;

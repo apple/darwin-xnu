@@ -280,6 +280,8 @@ bool OSSet::isEqualTo(const OSSet *aSet) const
 
     for ( i = 0; i < count; i++ ) {
         obj1 = aSet->members->getObject(i);
+	if (containsObject(obj1))
+		continue;
         obj2 = members->getObject(i);
         if ( !obj1 || !obj2 )
                 return false;

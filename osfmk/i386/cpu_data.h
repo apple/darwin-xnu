@@ -75,9 +75,6 @@ typedef struct rtclock_timer {
 
 typedef struct {
 	struct i386_tss         *cdi_ktss;
-#if    MACH_KDB
-	struct i386_tss         *cdi_dbtss;
-#endif /* MACH_KDB */
 	struct __attribute__((packed)) {
 		uint16_t size;
 		struct fake_descriptor *ptr;
@@ -97,9 +94,6 @@ typedef enum {
 
 typedef struct {
 	struct x86_64_tss		*cdi_ktss;
-#if    MACH_KDB
-	struct x86_64_tss		*cdi_dbtss;
-#endif /* MACH_KDB */
 	struct __attribute__((packed)) {
 		uint16_t size;
 		void *ptr;
@@ -194,15 +188,6 @@ typedef struct cpu_data
 	struct fake_descriptor	*cpu_ldtp;
 	cpu_desc_index_t	cpu_desc_index;
 	int			cpu_ldt;
-#ifdef MACH_KDB
-	/* XXX Untested: */
-	int			cpu_db_pass_thru;
-	vm_offset_t		cpu_db_stacks;
-	void			*cpu_kdb_saved_state;
-	spl_t			cpu_kdb_saved_ipl;
-	int			cpu_kdb_is_slave;
-	int			cpu_kdb_active;
-#endif /* MACH_KDB */
 	boolean_t		cpu_iflag;
 	boolean_t		cpu_boot_complete;
 	int			cpu_hibernate;
@@ -235,8 +220,10 @@ typedef struct cpu_data
 							   * validity flag.
 							   */
 	pal_rtc_nanotime_t	*cpu_nanotime;		/* Nanotime info */
+#if	CONFIG_COUNTERS
 	thread_t		csw_old_thread;
 	thread_t		csw_new_thread;
+#endif /* CONFIG COUNTERS */	
 #if	defined(__x86_64__)
 	uint32_t		cpu_pmap_pcid_enabled;
 	pcid_t			cpu_active_pcid;
@@ -409,5 +396,6 @@ cpu_datap(int cpu)
 }
 
 extern cpu_data_t *cpu_data_alloc(boolean_t is_boot_cpu);
+extern void cpu_data_realloc(void);
 
 #endif	/* I386_CPU_DATA */

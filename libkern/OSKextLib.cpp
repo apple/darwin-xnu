@@ -351,8 +351,8 @@ finish:
 /*********************************************************************
 * Gets the vm_map for the current kext
 *********************************************************************/
-extern vm_offset_t sectPRELINKB;
-extern int sectSizePRELINK;
+extern vm_offset_t segPRELINKB;
+extern unsigned long segSizePRELINK;
 extern int kth_started;
 extern vm_map_t g_kext_map;
 
@@ -362,8 +362,8 @@ kext_get_vm_map(kmod_info_t *info)
     vm_map_t kext_map = NULL;
 
     /* Set the vm map */
-    if ((info->address >= sectPRELINKB) && 
-            (info->address < (sectPRELINKB + sectSizePRELINK)))
+    if ((info->address >= segPRELINKB) && 
+            (info->address < (segPRELINKB + segSizePRELINK)))
     {
         kext_map = kernel_map;
     } else {

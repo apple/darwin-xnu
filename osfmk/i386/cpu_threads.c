@@ -64,10 +64,10 @@ decl_simple_lock_data(, x86_topo_lock);
 static struct cpu_cache {
 	int	level;	int	type;
 } cpu_caches [LCACHE_MAX] = {
-	[L1D] {	1,	CPU_CACHE_TYPE_DATA },
-	[L1I] {	1,	CPU_CACHE_TYPE_INST },
-	[L2U] { 2,	CPU_CACHE_TYPE_UNIF },
-	[L3U] { 3,	CPU_CACHE_TYPE_UNIF },
+	[L1D] = {	1,	CPU_CACHE_TYPE_DATA },
+	[L1I] = {	1,	CPU_CACHE_TYPE_INST },
+	[L2U] = { 2,	CPU_CACHE_TYPE_UNIF },
+	[L3U] = { 3,	CPU_CACHE_TYPE_UNIF },
 };
 
 static boolean_t

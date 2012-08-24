@@ -119,11 +119,15 @@ mmioctl(dev_t dev, u_long cmd, __unused caddr_t data,
 {
 	int minnum = minor(dev);
 
-	if ((minnum == 0) || (minnum == 1))
-#if !defined(SECURE_KERNEL)
-		if (setup_kmem == 0) 
-			return(EINVAL);
+	if (0 == minnum || 1 == minnum) {
+		/* /dev/mem and /dev/kmem */
+#if defined(SECURE_KERNEL)
+		return (ENODEV);
+#else
+		if (0 == setup_kmem) 
+			return (EINVAL);
 #endif
+	}
 
 	switch (cmd) {
 	case FIONBIO:

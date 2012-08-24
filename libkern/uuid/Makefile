@@ -13,7 +13,6 @@ INSTINC_SUBDIRS_I386 = \
 
 INSTINC_SUBDIRS_X86_64 = \
 
-INSTINC_SUBDIRS_ARM = \
 
 EXPINC_SUBDIRS = \
 
@@ -21,7 +20,7 @@ EXPINC_SUBDIRS_I386 = \
 
 EXPINC_SUBDIRS_X86_64 = \
 
-EXPINC_SUBDIRS_ARM = \
+
 
 # uuid.h is now installed by bsd/uuid/Makefile
 DATAFILES = \

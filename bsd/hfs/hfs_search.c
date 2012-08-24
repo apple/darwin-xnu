@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1997-2010 Apple Inc. All rights reserved.
+ * Copyright (c) 1997-2012 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -65,6 +65,8 @@
 #include "hfscommon/headers/BTreesPrivate.h"
 #include "hfscommon/headers/BTreeScanner.h"
 #include "hfscommon/headers/CatalogPrivate.h"
+
+#if CONFIG_SEARCHFS
 
 /* Search criterea. */
 struct directoryInfoSpec
@@ -206,7 +208,9 @@ hfs_vnop_search(ap)
 		return (EINVAL);
 
 	/*
-	 * Reject requests for unsupported attributes.
+	 * Fail requests for attributes that HFS does not support for the
+	 * items that match the search criteria.  Note that these checks
+	 * are for the OUTBOUND attributes to be returned (not search criteria).
 	 */
 	if ((ap->a_returnattrs->commonattr & ~HFS_ATTR_CMN_VALID) ||
 	    (ap->a_returnattrs->volattr != 0) ||
@@ -280,6 +284,7 @@ hfs_vnop_search(ap)
 		err = ENOMEM;
 		goto ExitThisRoutine;
 	}
+	bzero(attributesBuffer, eachReturnBufferSize);
 	variableBuffer = (void*)((char*) attributesBuffer + fixedBlockSize);
 
 	// XXXdbg - have to lock the user's buffer so we don't fault
@@ -422,7 +427,7 @@ ExitThisRoutine:
 	if (attributesBuffer)
 		FREE(attributesBuffer, M_TEMP);
 
-	if (hfsmp->jnl && user_start) {
+	if (user_start) {
 		vsunlock(user_start, user_len, TRUE);
 	}
 
@@ -1075,7 +1080,7 @@ InsertMatch(struct hfsmount *hfsmp, uio_t a_uio, CatalogRecord *rec,
 	
 	*((u_int32_t *)attributesBuffer) = packedBufferSize;	/* Store length of fixed + var block */
 	
-	err = uiomove( (caddr_t)attributesBuffer, packedBufferSize, a_uio );	/* XXX should be packedBufferSize */
+	err = uiomove( (caddr_t)attributesBuffer, packedBufferSize, a_uio );
 exit:
 	cat_releasedesc(&c_desc);
 	
@@ -1291,4 +1296,4 @@ UnpackSearchAttributeBlock( struct hfsmount *hfsmp, struct attrlist	*alist,
 
 	return (0);
 }
-
+#endif	/* CONFIG_SEARCHFS */

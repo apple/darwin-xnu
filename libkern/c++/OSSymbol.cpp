@@ -601,3 +601,33 @@ bool OSSymbol::isEqualTo(const OSMetaClassBase *obj) const
     else
 	return false;
 }
+
+unsigned int
+OSSymbol::bsearch(
+	const void *  key,
+	const void *  array,
+	unsigned int  arrayCount,
+	size_t        memberSize)
+{
+    const void **p;
+    unsigned int baseIdx = 0;
+    unsigned int lim;
+
+    for (lim = arrayCount; lim; lim >>= 1)
+    {
+	p = (typeof(p)) (((uintptr_t) array) + (baseIdx + (lim >> 1)) * memberSize);
+	if (key == *p)
+	{
+	    return (baseIdx + (lim >> 1));
+	}
+	if (key > *p) 
+	{	
+	    // move right
+	    baseIdx += (lim >> 1) + 1;
+	    lim--;
+	}
+	// else move left
+    }
+    // not found, insertion point here
+    return (baseIdx + (lim >> 1));
+}

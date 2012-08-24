@@ -95,8 +95,6 @@ struct if_bond_req {
 
 #pragma pack()
 
-#ifdef KERNEL_PRIVATE
-int bond_family_init(void) __attribute__((section("__TEXT, initcode")));
-#endif /* KERNEL_PRIVATE */
+#include <net/if_bond_internal.h>
 
 #endif /* _NET_IF_BOND_VAR_H_ */

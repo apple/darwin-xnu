@@ -59,7 +59,11 @@ __BEGIN_DECLS
 #define PROC_POLICY_HARDWARE_ACCESS	2	/* access to various hardware */
 #define PROC_POLICY_RESOURCE_STARVATION	3	/* behavior on resource starvation */
 #define PROC_POLICY_RESOURCE_USAGE	4	/* behavior on resource consumption */
+#if CONFIG_EMBEDDED
+#define PROC_POLICY_APP_LIFECYCLE	5	/* app life cycle management */
+#else /* CONFIG_EMBEDDED */
 #define PROC_POLICY_RESERVED		5	/* behavior on resource consumption */
+#endif /* CONFIG_EMBEDDED */
 #define PROC_POLICY_APPTYPE		6	/* behavior on resource consumption */
 
 /* sub policies for background policy */
@@ -85,28 +89,29 @@ __BEGIN_DECLS
 /* attribute values for disk hardware access, bit different as it should reflect IOPOL_XXX */
 #define PROC_POLICY_DISKACC_NONE	0
 #define PROC_POLICY_DISKACC_NORMAL	1	/* normal access to the disk */
+#define PROC_POLICY_DISKACC_FULLACCESS	1	/* normal access to the disk */
 #define PROC_POLICY_DISKACC_PASSIVE	2	/* treat the I/Os as passive */
 #define PROC_POLICY_DISKACC_THROTTLE	3	/* throttle the disk IOs */
-#define PROC_POLICY_DISKACC_DEFAULT	0
+#define PROC_POLICY_DISKACC_DEFAULT	PROC_POLICY_DISKACC_FULLACCESS
 
 /* attribute values for GPU hardware access */
 #define PROC_POLICY_GPUACC_NONE	0
 #define PROC_POLICY_GPUACC_FULLACCESS	0	/* complete access to the GPU */
 #define PROC_POLICY_GPUACC_DENYACCESS	1	/* deny any access to the GPU */
-#define PROC_POLICY_GPUACC_DEFAULT	0	/*  default is complete access */
+#define PROC_POLICY_GPUACC_DEFAULT	PROC_POLICY_GPUACC_FULLACCESS /*  default is complete access */
 
 /* atrribute values for  network hardware access */
 #define PROC_POLICY_NETACC_NONE	0
-#define PROC_POLICY_NETACC_NORMAL	0	/* complete access to the network */
+#define PROC_POLICY_NETACC_FULLACCESS	0	/* complete access to the network */
 #define PROC_POLICY_NETACC_THROTTLE	1	/* throttle access to network */
-#define PROC_POLICY_NETACC_DEFAULT	0	/*  default is complete access */
+#define PROC_POLICY_NETACC_DEFAULT	PROC_POLICY_NETACC_FULLACCESS /*  default is complete access */
 
 /* atrribute values for  network hardware access */
 #define PROC_POLICY_CPUACC_NONE		0
-#define PROC_POLICY_CPUACC_ALL		0	/* access to all avialable cpus */
+#define PROC_POLICY_CPUACC_FULLACCESS	0	/* access to all avialable cpus */
 #define PROC_POLICY_CPUACC_ONE		1	/* access to only one available cpu */
 #define PROC_POLICY_CPUACC_LLCACHE	2	/* access to only one last level cache */
-#define PROC_POLICY_CPUACC_DEFAULT	0	/*  default is access to all cpus */
+#define PROC_POLICY_CPUACC_DEFAULT	PROC_POLICY_CPUACC_FULLACCESS /*  default is access to all cpus */
 
 
 /* System Resource management (ie usage and starvation related) definitions */
@@ -124,12 +129,13 @@ __BEGIN_DECLS
 #define PROC_POLICY_RUSAGE_NETWORK	5	/* amount of network usage */
 #define PROC_POLICY_RUSAGE_POWER	6	/* amount of power/battery consumption */
 
-/* attribute values for the resource usage and low resource */
+/* attribute values for the resource usage and low resource - MUST match corresponding task definitions */
 #define PROC_POLICY_RSRCACT_NONE	0
 #define PROC_POLICY_RSRCACT_THROTTLE	1	/* throttle on resource condition */
 #define PROC_POLICY_RSRCACT_SUSPEND	2	/* suspend on resource condition */
 #define PROC_POLICY_RSRCACT_TERMINATE	3	/* kill on resource condition */
-#define PROC_POLICY_RSRCACT_NOTIFY	4	/* send kqueue notification */
+#define PROC_POLICY_RSRCACT_NOTIFY_KQ	4	/* send kqueue notification */
+#define PROC_POLICY_RSRCACT_NOTIFY_EXC	5	/* send exception */
 
 
 /* type of resource for kqueue notifiction */
@@ -158,14 +164,33 @@ typedef struct proc_policy_cpuusage_attr {
 	uint64_t	ppattr_cpu_attr_deadline;     /* 64bit deadline in nsecs */
 } proc_policy_cpuusage_attr_t;
 
+#if CONFIG_EMBEDDED
+/* sub policies for app lifecycle management */
+#define	PROC_POLICY_APPLIFE_NONE	0	/* does nothing.. */
+#define	PROC_POLICY_APPLIFE_STATE	1	/* sets the app to various lifecycle states */
+#define	PROC_POLICY_APPLIFE_DEVSTATUS	2	/* notes the device in inactive or short/long term */
+#define	PROC_POLICY_APPLIFE_PIDBIND	3	/* a thread is to be bound to another processes app state */
+#endif /* CONFIG_EMBEDDED */
 
 /* sub policies for PROC_POLICY_APPTYPE */
+#define	PROC_POLICY_APPTYPE_NONE	0	/* does nothing.. */
+#define	PROC_POLICY_APPTYPE_MODIFY	1	/* sets the app to various lifecycle states */
+#if CONFIG_EMBEDDED
+#define	PROC_POLICY_APPTYPE_THREADTHR	2	/* notes the device in inactive or short/long term */
+#endif /* CONFIG_EMBEDDED */
+
+
 #define PROC_POLICY_OSX_APPTYPE_NONE            0
+#if CONFIG_EMBEDDED
+#define PROC_POLICY_IOS_RESV1_APPTYPE           1	/* TAL based launched */
+#define PROC_POLICY_IOS_APPLE_DAEMON	        2	/* for user of IOS apple daemons  */
+#define PROC_POLICY_IOS_APPTYPE                 3	/* ios specific handling */
+#define PROC_POLICY_IOS_NONUITYPE               4	/* ios non graphics type */
+#else
 #define PROC_POLICY_OSX_APPTYPE_TAL             1	/* TAL based launched */
 #define PROC_POLICY_OSX_APPTYPE_WIDGET          2	/* for dashboard client */
 #define PROC_POLICY_OSX_APPTYPE_DASHCLIENT      2	/* rename to move away from widget */
-#define PROC_POLICY_IOS_APPTYPE                 3	/* ios specific handling */
-#define PROC_POLICY_IOS_NONUITYPE               4	/* ios non graphics type */
+#endif
 
 #ifndef KERNEL
 int process_policy(int scope, int action, int policy, int policy_subtype, proc_policy_attribute_t * attrp, pid_t target_pid, uint64_t target_threadid);

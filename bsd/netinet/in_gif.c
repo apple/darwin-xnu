@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2010 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2012 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -105,13 +105,13 @@ in_gif_output(
 	__unused struct rtentry *rt)
 {
 	struct gif_softc *sc = ifnet_softc(ifp);
-	struct sockaddr_in *dst = (struct sockaddr_in *)&sc->gif_ro.ro_dst;
-	struct sockaddr_in *sin_src = (struct sockaddr_in *)sc->gif_psrc;
-	struct sockaddr_in *sin_dst = (struct sockaddr_in *)sc->gif_pdst;
+	struct sockaddr_in *dst = (struct sockaddr_in *)(void *)&sc->gif_ro.ro_dst;
+	struct sockaddr_in *sin_src = (struct sockaddr_in *)(void *)sc->gif_psrc;
+	struct sockaddr_in *sin_dst = (struct sockaddr_in *)(void *)sc->gif_pdst;
 	struct ip iphdr;	/* capsule IP header, host byte ordered */
 	int proto, error;
 	u_int8_t tos;
-	struct ip_out_args ipoa = { IFSCOPE_NONE, 0 };
+	struct ip_out_args ipoa = { IFSCOPE_NONE, { 0 }, IPOAF_SELECT_SRCIF };
 
 	if (sin_src == NULL || sin_dst == NULL ||
 	    sin_src->sin_family != AF_INET ||
@@ -343,8 +343,8 @@ gif_encapcheck4(
 
 	/* sanity check done in caller */
 	sc = (struct gif_softc *)arg;
-	src = (struct sockaddr_in *)sc->gif_psrc;
-	dst = (struct sockaddr_in *)sc->gif_pdst;
+	src = (struct sockaddr_in *)(void *)sc->gif_psrc;
+	dst = (struct sockaddr_in *)(void *)sc->gif_pdst;
 
 	mbuf_copydata((struct mbuf *)(size_t)m, 0, sizeof(ip), &ip);
 

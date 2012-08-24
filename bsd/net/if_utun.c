@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008-2010 Apple Inc. All rights reserved.
+ * Copyright (c) 2008-2011 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -73,7 +73,12 @@ static errno_t	utun_demux(ifnet_t interface, mbuf_t data, char *frame_header,
 						   protocol_family_t *protocol);
 static errno_t	utun_framer(ifnet_t	interface, mbuf_t *packet,
 							const struct sockaddr *dest, const char *desk_linkaddr,
-							const char *frame_type);
+							const char *frame_type
+#if KPI_INTERFACE_EMBEDDED
+							,
+							u_int32_t *prepend_len, u_int32_t *postpend_len
+#endif /* KPI_INTERFACE_EMBEDDED */
+							);
 static errno_t	utun_add_proto(ifnet_t interface, protocol_family_t protocol,
 							   const struct ifnet_demux_desc *demux_array,
 							   u_int32_t demux_count);
@@ -88,15 +93,7 @@ static errno_t	utun_proto_input(ifnet_t interface, protocol_family_t protocol,
 static errno_t utun_proto_pre_output(ifnet_t interface, protocol_family_t protocol, 
 					 mbuf_t *packet, const struct sockaddr *dest, void *route,
 					 char *frame_type, char *link_layer_dest);
-
-/* Control block allocated for each kernel control connection */
-struct utun_pcb {
-	kern_ctl_ref	utun_ctlref;
-	ifnet_t			utun_ifp;
-	u_int32_t		utun_unit;
-	u_int32_t		utun_flags;
-	int				utun_ext_ifdata_stats;
-};
+__private_extern__ errno_t utun_pkt_input (struct utun_pcb *pcb, mbuf_t m);
 
 static kern_ctl_ref	utun_kctlref;
 static u_int32_t	utun_family;
@@ -104,7 +101,7 @@ static OSMallocTag	utun_malloc_tag;
 static SInt32		utun_ifcount = 0;
 
 /* Prepend length */
-static void*
+void*
 utun_alloc(size_t size)
 {
 	size_t	*mem = OSMalloc(size + sizeof(size_t), utun_malloc_tag);
@@ -117,7 +114,7 @@ utun_alloc(size_t size)
 	return (void*)mem;
 }
 
-static void
+void
 utun_free(void *ptr)
 {
 	size_t	*size = ptr;
@@ -423,7 +420,9 @@ utun_ctl_disconnect(
 	struct utun_pcb	*pcb = unitinfo;
 	ifnet_t			ifp = pcb->utun_ifp;
 	errno_t			result = 0;
-	
+
+	utun_cleanup_crypto(pcb);
+
 	pcb->utun_ctlref = NULL;
 	pcb->utun_unit = 0;
 	
@@ -455,37 +454,7 @@ utun_ctl_send(
 	mbuf_t					m,
 	__unused int			flags)
 {
-	struct utun_pcb						*pcb = unitinfo;
-	errno_t								result;
-	
-	mbuf_pkthdr_setrcvif(m, pcb->utun_ifp);
-	
-	bpf_tap_in(pcb->utun_ifp, DLT_NULL, m, 0, 0);
-	
-	if (pcb->utun_flags & UTUN_FLAGS_NO_INPUT) {
-		/* flush data */
-		mbuf_freem(m);
-		return 0;
-	}
-	
-	if (!pcb->utun_ext_ifdata_stats) {
-		struct ifnet_stat_increment_param	incs;
-	
-		bzero(&incs, sizeof(incs));
-		incs.packets_in = 1;
-		incs.bytes_in = mbuf_pkthdr_len(m);
-		result = ifnet_input(pcb->utun_ifp, m, &incs);
-	} else {
-		result = ifnet_input(pcb->utun_ifp, m, NULL);
-	}
-	if (result != 0) {
-		ifnet_stat_increment_in(pcb->utun_ifp, 0, 0, 1);
-		
-		printf("utun_ctl_send - ifnet_input failed: %d\n", result);
-		mbuf_freem(m);
-	}
-	
-	return 0;
+	return utun_pkt_input((struct utun_pcb *)unitinfo, m);
 }
 
 static errno_t
@@ -516,6 +485,30 @@ utun_ctl_setopt(
 				result = EMSGSIZE;
 			else
 				pcb->utun_flags = *(u_int32_t *)data;
+			break;
+
+		case UTUN_OPT_ENABLE_CRYPTO:
+			result = utun_ctl_enable_crypto(kctlref, unit, unitinfo, opt, data, len);
+			break;
+
+		case UTUN_OPT_CONFIG_CRYPTO_KEYS:
+			result = utun_ctl_config_crypto_keys(kctlref, unit, unitinfo, opt, data, len);
+			break;
+
+		case UTUN_OPT_UNCONFIG_CRYPTO_KEYS:
+			result = utun_ctl_unconfig_crypto_keys(kctlref, unit, unitinfo, opt, data, len);
+			break;
+
+		case UTUN_OPT_DISABLE_CRYPTO:
+			result = utun_ctl_disable_crypto(kctlref, unit, unitinfo, opt, data, len);
+			break;
+
+		case UTUN_OPT_STOP_CRYPTO_DATA_TRAFFIC:
+			result = utun_ctl_stop_crypto_data_traffic(kctlref, unit, unitinfo, opt, data, len);
+			break;
+
+		case UTUN_OPT_START_CRYPTO_DATA_TRAFFIC:
+			result = utun_ctl_start_crypto_data_traffic(kctlref, unit, unitinfo, opt, data, len);
 			break;
 
 		case UTUN_OPT_EXT_IFDATA_STATS:
@@ -586,6 +579,10 @@ utun_ctl_getopt(
 			*len = snprintf(data, *len, "%s%d", ifnet_name(pcb->utun_ifp), ifnet_unit(pcb->utun_ifp)) + 1;
 			break;
 
+		case UTUN_OPT_GENERATE_CRYPTO_KEYS_IDX:
+			result = utun_ctl_generate_crypto_keys_idx(kctlref, unit, unitinfo, opt, data, len);
+			break;
+
 		default:
 			result = ENOPROTOOPT;
 			break;
@@ -611,8 +608,18 @@ utun_output(
 		return 0;
 	}
 
+	// otherwise, fall thru to ctl_enqueumbuf
 	if (pcb->utun_ctlref) {
-		int	length = mbuf_pkthdr_len(data);
+		int	length;
+
+		// only pass packets to utun-crypto if crypto is enabled and 'suspend data traffic' is not.
+		if ((pcb->utun_flags & (UTUN_FLAGS_CRYPTO | UTUN_FLAGS_CRYPTO_STOP_DATA_TRAFFIC)) == UTUN_FLAGS_CRYPTO) {
+			if (utun_pkt_crypto_output(pcb, &data) == 0) {
+				return 0;
+			}
+		}
+
+		length = mbuf_pkthdr_len(data);
 		result = ctl_enqueuembuf(pcb->utun_ctlref, pcb->utun_unit, data, CTL_DATA_EOR);
 		if (result != 0) {
 			mbuf_freem(data);
@@ -657,7 +664,13 @@ utun_framer(
 		   mbuf_t				*packet,
 			__unused const struct sockaddr *dest, 
 			__unused const char *desk_linkaddr,
-			const char *frame_type)
+			const char *frame_type
+#if KPI_INTERFACE_EMBEDDED
+			,
+			u_int32_t *prepend_len, 
+			u_int32_t *postpend_len
+#endif /* KPI_INTERFACE_EMBEDDED */
+			)
 {
     if (mbuf_prepend(packet, sizeof(protocol_family_t), MBUF_DONTWAIT) != 0) {
 		printf("utun_framer - ifnet_output prepend failed\n");
@@ -667,6 +680,10 @@ utun_framer(
 		// just	return, because the buffer was freed in mbuf_prepend
         return EJUSTRETURN;	
     }
+#if KPI_INTERFACE_EMBEDDED
+	*prepend_len = sizeof(protocol_family_t);
+	*postpend_len = 0;
+#endif /* KPI_INTERFACE_EMBEDDED */
 	
     // place protocol number at the beginning of the mbuf
     *(protocol_family_t *)mbuf_data(*packet) = htonl(*(protocol_family_t *)(uintptr_t)(size_t)frame_type);
@@ -791,3 +808,48 @@ utun_attach_proto(
 	return result;
 }
 
+errno_t
+utun_pkt_input (struct utun_pcb *pcb, mbuf_t m)
+{
+	errno_t	result;
+	protocol_family_t protocol;
+
+	mbuf_pkthdr_setrcvif(m, pcb->utun_ifp);
+
+	bpf_tap_in(pcb->utun_ifp, DLT_NULL, m, 0, 0);
+
+	if (pcb->utun_flags & UTUN_FLAGS_NO_INPUT) {
+		/* flush data */
+		mbuf_freem(m);
+		return 0;
+	}
+	protocol = ntohl(*(u_int32_t *)mbuf_data(m));
+
+	// quick exit for keepalive packets
+	if (protocol == AF_UTUN && pcb->utun_flags & UTUN_FLAGS_CRYPTO) {
+		if (utun_pkt_crypto_output(pcb, &m) == 0) {
+			return 0;
+		}
+		printf("%s: utun_pkt_crypto_output failed, flags %x\n", __FUNCTION__, pcb->utun_flags);
+		return EINVAL;
+	}
+
+	if (!pcb->utun_ext_ifdata_stats) {
+		struct ifnet_stat_increment_param	incs;
+		
+		bzero(&incs, sizeof(incs));
+		incs.packets_in = 1;
+		incs.bytes_in = mbuf_pkthdr_len(m);
+		result = ifnet_input(pcb->utun_ifp, m, &incs);
+	} else {
+		result = ifnet_input(pcb->utun_ifp, m, NULL);
+	}
+	if (result != 0) {
+		ifnet_stat_increment_in(pcb->utun_ifp, 0, 0, 1);
+		
+		printf("%s - ifnet_input failed: %d\n", __FUNCTION__, result);
+		mbuf_freem(m);
+	}
+
+	return 0;
+}

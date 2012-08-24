@@ -56,6 +56,12 @@ extern int debug_container_malloc_size;
 #define ACCUMSIZE(s)
 #endif
 
+struct OSData::ExpansionData
+{
+    DeallocFunction deallocFunction;
+    bool            disableSerialization;
+};
+
 bool OSData::initWithCapacity(unsigned int inCapacity)
 {
     if (!super::init())
@@ -191,11 +197,12 @@ void OSData::free()
         kfree(data, capacity);
         ACCUMSIZE( -capacity );
     } else if (capacity == EXTERNAL) {
-	    DeallocFunction freemem = (DeallocFunction)reserved;
-		if (freemem && data && length) {
-			freemem(data, length);
-		}
+	DeallocFunction freemem = reserved ? reserved->deallocFunction : NULL;
+	if (freemem && data && length) {
+		freemem(data, length);
 	}
+    }
+    if (reserved) kfree(reserved, sizeof(ExpansionData));
     super::free();
 }
 
@@ -388,12 +395,16 @@ bool OSData::serialize(OSSerialize *s) const
     unsigned int i;
     const unsigned char *p;
     unsigned char c;
+    unsigned int serializeLength;
 
     if (s->previouslySerialized(this)) return true;
 
     if (!s->addXMLStartTag(this, "data")) return false;
 
-    for (i = 0, p = (unsigned char *)data; i < length; i++, p++) {
+    serializeLength = length;
+    if (reserved && reserved->disableSerialization) serializeLength = 0;
+
+    for (i = 0, p = (unsigned char *)data; i < serializeLength; i++, p++) {
         /* 3 bytes are encoded as 4 */
         switch (i % 3) {
 	case 0:
@@ -431,11 +442,24 @@ bool OSData::serialize(OSSerialize *s) const
     return s->addXMLEndTag("data");
 }
 
-/* Note I am just using the reserved pointer here instead of allocating a whole buffer
- * to hold one pointer.
- */
 void OSData::setDeallocFunction(DeallocFunction func)
 {
-    reserved = (ExpansionData *)func;
-	return;
+    if (!reserved)
+    {
+    	reserved = (typeof(reserved)) kalloc(sizeof(ExpansionData));
+	if (!reserved) return;
+	bzero(reserved, sizeof(ExpansionData));
+    }
+    reserved->deallocFunction = func;
+}
+
+void OSData::setSerializable(bool serializable)
+{
+    if (!reserved)
+    {
+    	reserved = (typeof(reserved)) kalloc(sizeof(ExpansionData));
+	if (!reserved) return;
+	bzero(reserved, sizeof(ExpansionData));
+    }
+    reserved->disableSerialization = (!serializable);
 }

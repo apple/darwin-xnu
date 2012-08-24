@@ -48,6 +48,10 @@ struct sockaddr;
 struct socket;
 struct sadb_msg;
 struct sadb_x_policy;
+struct secasindex;
+struct secashead;
+struct sadb_key;
+struct sadb_lifetime;
 
 extern struct secpolicy *key_allocsp(struct secpolicyindex *, u_int);
 extern struct secasvar *key_allocsa_policy(struct secasindex *);
@@ -75,7 +79,34 @@ extern void key_domain_init(void);
 extern int key_checktunnelsanity(struct secasvar *, u_int, caddr_t, caddr_t);
 extern void key_sa_recordxfer(struct secasvar *, struct mbuf *);
 extern void key_sa_routechange(struct sockaddr *);
+extern void key_sa_chgstate(struct secasvar *, u_int8_t);
 extern void key_sa_stir_iv(struct secasvar *);
+extern void key_delsah(struct secashead *sah);
+extern struct secashead *key_newsah2 (struct secasindex *saidx, u_int8_t dir);
+extern u_int32_t key_getspi2(struct sockaddr      *src,
+			     struct sockaddr      *dst,
+			     u_int8_t              proto,
+			     u_int8_t              mode,
+			     u_int32_t             reqid,
+			     struct sadb_spirange *spirange);
+extern struct secasvar * key_newsav2(struct secashead     *sah,
+				     u_int8_t              satype,
+				     u_int8_t              alg_auth,
+				     u_int8_t              alg_enc,
+				     u_int32_t             flags,
+				     u_int8_t              replay,
+				     struct sadb_key      *key_auth,
+				     u_int16_t             key_auth_len,
+				     struct sadb_key      *key_enc,
+				     u_int16_t             key_enc_len,
+				     u_int16_t             natt_port,
+				     u_int32_t             seq,
+				     u_int32_t             spi,
+				     u_int32_t             pid,
+				     struct sadb_lifetime *lifetime_hard,
+				     struct sadb_lifetime *lifetime_soft);
+extern void key_delsav(struct secasvar *sav);
+
 
 #endif /* KERNEL_PRIVATE */
 #endif /* _NETKEY_KEY_H_ */

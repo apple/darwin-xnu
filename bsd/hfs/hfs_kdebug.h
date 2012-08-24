@@ -37,8 +37,8 @@ enum {
 	HFSDBG_UNMAP_CALLBACK		0, extentCount, 0, 0 ... 0, 0, 0, 0
 	HFSDBG_UNMAP_FREE			startBlock, blockCount, 0, 0 ... err, 0, 0, 0
 	HFSDBG_UNMAP_ALLOC			startBlock, blockCount, 0, 0 ... err, 0, 0, 0
-	HFSDBG_REMOVE_EXTENT_CACHE	startBlock, blockCount, 0, 0 ... 0,   0, 0, 0
-	HFSDBG_ADD_EXTENT_CACHE		startBlock, blockCount, 0, 0 ... err, 0, 0, 0
+	HFSDBG_REMOVE_EXTENT_CACHE	startBlock, blockCount, vcbFreeExtCnt, 0 ... 0, 0, vcbFreeExtCnt, extentsRemoved
+	HFSDBG_ADD_EXTENT_CACHE		startBlock, blockCount, vcbFreeExtCnt, 0 ... 0, 0, vcbFreeExtCnt, retval
 	HFSDBG_MARK_ALLOC_BITMAP	startBlock, blockCount, 0, 0 ... err, 0, 0, 0
 	HFSDBG_MARK_FREE_BITMAP		startBlock, blockCount, valid, 0 ... err, 0, 0, 0
 	HFSDBG_BLOCK_DEALLOCATE		startBlock, blockCount, flags, 0 ... err, 0, 0, 0

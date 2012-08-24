@@ -86,11 +86,11 @@ audit_session_mksend(struct auditinfo_addr *aia_p, ipc_port_t *sessionport)
 
 		audit_session_aiaref(aia_p);
 
-		/* Need a send-once right for the target of the notification */
-		notifyport = ipc_port_make_sonce(port);
 
-		/* Request a no-senders notification (at the new make-send threshold) */
 		ip_lock(port);
+		/* Need a send-once right for the target of the notification */
+		notifyport = ipc_port_make_sonce_locked(port);
+		/* Request a no-senders notification (at the new make-send threshold) */
 		ipc_port_nsrequest(port, port->ip_mscount, notifyport, &notifyport);
 		/* port unlocked */
 
@@ -175,9 +175,7 @@ audit_session_nosenders(mach_msg_header_t *msg)
 	 * request, re-arm the notification with the new threshold.
 	 */
 	if (port->ip_mscount > notification->not_count) {
-		ip_unlock(port);
-		notifyport = ipc_port_make_sonce(port);
-		ip_lock(port);
+		notifyport = ipc_port_make_sonce_locked(port);
 		ipc_port_nsrequest(port, port->ip_mscount, notifyport, &notifyport);
 		/* port unlocked */
 

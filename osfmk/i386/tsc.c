@@ -36,7 +36,6 @@
  */
 
 #include <platforms.h>
-#include <mach_kdb.h>
 
 #include <mach/mach_types.h>
 
@@ -133,8 +132,32 @@ EFI_FSB_frequency(void)
 void
 tsc_init(void)
 {
-	uint64_t	busFCvtInt = 0;
 	boolean_t	N_by_2_bus_ratio = FALSE;
+
+	if (cpuid_vmm_present()) {
+		kprintf("VMM vendor %u TSC frequency %u KHz bus frequency %u KHz\n",
+				cpuid_vmm_info()->cpuid_vmm_family,
+				cpuid_vmm_info()->cpuid_vmm_tsc_frequency,
+				cpuid_vmm_info()->cpuid_vmm_bus_frequency);
+
+		if (cpuid_vmm_info()->cpuid_vmm_tsc_frequency &&
+			cpuid_vmm_info()->cpuid_vmm_bus_frequency) {
+
+			busFreq = (uint64_t)cpuid_vmm_info()->cpuid_vmm_bus_frequency * kilo;
+			busFCvtt2n = ((1 * Giga) << 32) / busFreq;
+			busFCvtn2t = 0xFFFFFFFFFFFFFFFFULL / busFCvtt2n;
+			
+			tscFreq = (uint64_t)cpuid_vmm_info()->cpuid_vmm_tsc_frequency * kilo;
+			tscFCvtt2n = ((1 * Giga) << 32) / tscFreq;
+			tscFCvtn2t = 0xFFFFFFFFFFFFFFFFULL / tscFCvtt2n;
+			
+			tscGranularity = tscFreq / busFreq;
+			
+			bus2tsc = tmrCvt(busFCvtt2n, tscFCvtn2t);
+
+			return;
+		}
+	}
 
 	/*
 	 * Get the FSB frequency and conversion factors from EFI.
@@ -146,7 +169,6 @@ tsc_init(void)
 	case CPUFAMILY_INTEL_SANDYBRIDGE:
 	case CPUFAMILY_INTEL_WESTMERE:
 	case CPUFAMILY_INTEL_NEHALEM: {
-		uint64_t cpu_mhz;
 		uint64_t msr_flex_ratio;
 		uint64_t msr_platform_info;
 
@@ -170,8 +192,6 @@ tsc_init(void)
 		if (busFreq == 0)
 		    busFreq = BASE_NHM_CLOCK_SOURCE;
 
-		cpu_mhz = tscGranularity * BASE_NHM_CLOCK_SOURCE;
-
 		break;
             }
 	default: {
@@ -186,19 +206,16 @@ tsc_init(void)
 	if (busFreq != 0) {
 		busFCvtt2n = ((1 * Giga) << 32) / busFreq;
 		busFCvtn2t = 0xFFFFFFFFFFFFFFFFULL / busFCvtt2n;
-		busFCvtInt = tmrCvt(1 * Peta, 0xFFFFFFFFFFFFFFFFULL / busFreq); 
 	} else {
 		panic("tsc_init: EFI not supported!\n");
 	}
 
-	kprintf(" BUS: Frequency = %6d.%04dMHz, "
-		"cvtt2n = %08X.%08X, cvtn2t = %08X.%08X, "
-		"cvtInt = %08X.%08X\n",
+	kprintf(" BUS: Frequency = %6d.%06dMHz, "
+		"cvtt2n = %08Xx.%08Xx, cvtn2t = %08Xx.%08Xx\n",
 		(uint32_t)(busFreq / Mega),
 		(uint32_t)(busFreq % Mega), 
 		(uint32_t)(busFCvtt2n >> 32), (uint32_t)busFCvtt2n,
-		(uint32_t)(busFCvtn2t >> 32), (uint32_t)busFCvtn2t,
-		(uint32_t)(busFCvtInt >> 32), (uint32_t)busFCvtInt);
+		(uint32_t)(busFCvtn2t >> 32), (uint32_t)busFCvtn2t);
 
 	/*
 	 * Get the TSC increment.  The TSC is incremented by this
@@ -206,8 +223,12 @@ tsc_init(void)
 	 * to and from nano-seconds.
 	 * The tsc granularity is also called the "bus ratio". If the N/2 bit
 	 * is set this indicates the bus ration is 0.5 more than this - i.e.
-	 * that the true bus ratio is (2*tscGranularity + 1)/2.
+	 * that the true bus ratio is (2*tscGranularity + 1)/2. If we cannot
+	 * determine the TSC conversion, assume it ticks at the bus frequency.
 	 */
+	if (tscGranularity == 0)
+		tscGranularity = 1;
+
 	if (N_by_2_bus_ratio)
 		tscFCvtt2n = busFCvtt2n * 2 / (1 + 2*tscGranularity);
 	else
@@ -216,8 +237,8 @@ tsc_init(void)
 	tscFreq = ((1 * Giga)  << 32) / tscFCvtt2n;
 	tscFCvtn2t = 0xFFFFFFFFFFFFFFFFULL / tscFCvtt2n;
 
-	kprintf(" TSC: Frequency = %6d.%04dMHz, "
-		"cvtt2n = %08X.%08X, cvtn2t = %08X.%08X, gran = %lld%s\n",
+	kprintf(" TSC: Frequency = %6d.%06dMHz, "
+		"cvtt2n = %08Xx.%08Xx, cvtn2t = %08Xx.%08Xx, gran = %lld%s\n",
 		(uint32_t)(tscFreq / Mega),
 		(uint32_t)(tscFreq % Mega), 
 		(uint32_t)(tscFCvtt2n >> 32), (uint32_t)tscFCvtt2n,

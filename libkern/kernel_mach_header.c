@@ -59,13 +59,34 @@ getlastaddr(void)
 	sgp = (kernel_segment_command_t *)
 		((uintptr_t)header + sizeof(kernel_mach_header_t));
 	for (i = 0; i < header->ncmds; i++){
-		if (   sgp->cmd == LC_SEGMENT_KERNEL) {
+		if (sgp->cmd == LC_SEGMENT_KERNEL) {
 			if (sgp->vmaddr + sgp->vmsize > last_addr)
 				last_addr = sgp->vmaddr + sgp->vmsize;
 		}
 		sgp = (kernel_segment_command_t *)((uintptr_t)sgp + sgp->cmdsize);
 	}
 	return last_addr;
+}
+
+/*
+ * Find the specified load command in the Mach-O headers, and return
+ * the command. If there is no such load command, NULL is returned.
+ */
+void *
+getcommandfromheader(kernel_mach_header_t *mhp, uint32_t cmd) {
+	struct load_command *lcp;
+	unsigned long i;
+
+	lcp = (struct load_command *) (mhp + 1);
+	for(i = 0; i < mhp->ncmds; i++){
+		if(lcp->cmd == cmd) {
+			return (void *)lcp;
+		}
+
+		lcp = (struct load_command *)((uintptr_t)lcp + lcp->cmdsize);
+	}
+
+	return NULL;
 }
 
 /*
@@ -76,23 +97,17 @@ getlastaddr(void)
 void *
 getuuidfromheader(kernel_mach_header_t *mhp, unsigned long *size)
 {
-	struct uuid_command *uuidp;
-	unsigned long i;
+    struct uuid_command *cmd = (struct uuid_command *)
+        getcommandfromheader(mhp, LC_UUID);
 
-	uuidp = (struct uuid_command *)
-		((uintptr_t)mhp + sizeof(kernel_mach_header_t));
-	for(i = 0; i < mhp->ncmds; i++){
-		if(uuidp->cmd == LC_UUID) {
-			if (size)
-				*size = sizeof(uuidp->uuid);
+    if (cmd != NULL) {
+        if (size) {
+            *size = sizeof(cmd->uuid);
+        }
+        return cmd->uuid;
+    }
 
-			return (void *)uuidp->uuid;
-		}
-
-		uuidp = (struct uuid_command *)((uintptr_t)uuidp + uuidp->cmdsize);
-	}
-
-	return NULL;
+    return NULL;
 }
 
 /*
@@ -323,68 +338,3 @@ nextsect(kernel_segment_command_t *sgp, kernel_section_t *sp)
 
 	return sp+1;
 }
-
-#ifdef MACH_KDB
-/*
- * This routine returns the section command for the symbol table in the
- * named segment for the mach_header pointer passed to it if it exist.
- * Otherwise it returns zero.
- */
-static struct symtab_command *
-getsectcmdsymtabfromheader(
-	kernel_mach_header_t *mhp)
-{
-	kernel_segment_command_t *sgp;
-	unsigned long i;
-
-	sgp = (kernel_segment_command_t *)
-		((uintptr_t)mhp + sizeof(kernel_mach_header_t));
-	for(i = 0; i < mhp->ncmds; i++){
-		if(sgp->cmd == LC_SYMTAB)
-		return((struct symtab_command *)sgp);
-		sgp = (kernel_segment_command_t *)((uintptr_t)sgp + sgp->cmdsize);
-	}
-	return((struct symtab_command *)NULL);
-}
-
-boolean_t getsymtab(kernel_mach_header_t *header,
-			vm_offset_t *symtab,
-			int *nsyms,
-			vm_offset_t *strtab,
-			vm_size_t *strtabsize)
-{
-	kernel_segment_command_t *seglink_cmd;
-	struct symtab_command *symtab_cmd;
-
-	seglink_cmd = NULL;
-	
-	if((header->magic != MH_MAGIC)
-	 && (header->magic != MH_MAGIC_64)) {						/* Check if this is a valid header format */
-		return (FALSE);									/* Bye y'all... */
-	}
-	
-	seglink_cmd = getsegbynamefromheader(header,"__LINKEDIT");
-	if (seglink_cmd == NULL) {
-		return(FALSE);
-	}
-
-	symtab_cmd = NULL;
-	symtab_cmd = getsectcmdsymtabfromheader(header);
-	if (symtab_cmd == NULL)
-		return(FALSE);
-
-	*nsyms = symtab_cmd->nsyms;
-	if(symtab_cmd->nsyms == 0) return (FALSE);	/* No symbols */
-
-	*strtabsize = symtab_cmd->strsize;
-	if(symtab_cmd->strsize == 0) return (FALSE);	/* Symbol length is 0 */
-	
-	*symtab = seglink_cmd->vmaddr + symtab_cmd->symoff -
-		seglink_cmd->fileoff;
-
-	*strtab = seglink_cmd->vmaddr + symtab_cmd->stroff -
-			seglink_cmd->fileoff;
-
-	return(TRUE);
-}
-#endif

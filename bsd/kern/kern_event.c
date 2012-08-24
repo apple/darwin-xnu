@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2008 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2011 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -93,7 +93,10 @@
 #include "net/net_str_id.h"
 
 #include <mach/task.h>
+
+#if VM_PRESSURE_EVENTS
 #include <kern/vm_pressure.h>
+#endif
 
 MALLOC_DEFINE(M_KQUEUE, "kqueue", "memory for kqueue system");
 
@@ -188,6 +191,7 @@ static struct filterops proc_filtops = {
         .f_event = filt_proc,
 };
 
+#if VM_PRESSURE_EVENTS
 static int filt_vmattach(struct knote *kn);
 static void filt_vmdetach(struct knote *kn);
 static int filt_vm(struct knote *kn, long hint);
@@ -196,6 +200,7 @@ static struct filterops vm_filtops = {
 	.f_detach = filt_vmdetach,
 	.f_event = filt_vm,
 };
+#endif /* VM_PRESSURE_EVENTS */
 
 extern struct filterops fs_filtops;
 
@@ -271,7 +276,12 @@ static struct filterops *sysfilt_ops[] = {
 	&fs_filtops,			/* EVFILT_FS */
 	&user_filtops,			/* EVFILT_USER */
 	&bad_filtops,			/* unused */
+#if VM_PRESSURE_EVENTS
 	&vm_filtops,			/* EVFILT_VM */
+#else
+	&bad_filtops,			/* EVFILT_VM */
+#endif
+	&file_filtops,			/* EVFILT_SOCK */
 };
 
 /*
@@ -549,12 +559,21 @@ filt_proc(struct knote *kn, long hint)
 			kn->kn_fflags |= NOTE_RESOURCEEND;
 			kn->kn_data = (hint & NOTE_PDATAMASK);
 		}
+#if CONFIG_EMBEDDED
+		/* If the event is one of the APPSTATE events,remove the rest */
+		if (((event & NOTE_APPALLSTATES) != 0) && ((kn->kn_sfflags & NOTE_APPALLSTATES) != 0)) {
+			/* only one state at a time */
+			kn->kn_fflags &= ~NOTE_APPALLSTATES;
+			kn->kn_fflags |= event;
+		}
+#endif /* CONFIG_EMBEDDED */
 	}
 
 	/* atomic check, no locking need when called from above */
 	return (kn->kn_fflags != 0); 
 }
 
+#if VM_PRESSURE_EVENTS
 /*
  * Virtual memory kevents
  *
@@ -584,14 +603,15 @@ filt_vm(struct knote *kn, long hint)
 {
 	/* hint == 0 means this is just an alive? check (always true) */
 	if (hint != 0) { 
-		/* If this knote is interested in the event specified in hint... */
-		if ((kn->kn_sfflags & hint) != 0) { 
-			kn->kn_fflags |= hint;
+		const pid_t pid = (pid_t)hint;
+		if ((kn->kn_sfflags & NOTE_VM_PRESSURE) && (kn->kn_kq->kq_p->p_pid == pid)) {
+			kn->kn_fflags |= NOTE_VM_PRESSURE;
 		}
 	}
 	
 	return (kn->kn_fflags != 0);
 }
+#endif /* VM_PRESSURE_EVENTS */
 
 /*
  * filt_timervalidate - process data from user
@@ -2405,19 +2425,21 @@ knote_detach(struct klist *list, struct knote *kn)
  * we permanently enqueue them here.
  *
  * kqueue and knote references are held by caller.
+ *
+ * caller provides the wait queue link structure.
  */
 int
-knote_link_wait_queue(struct knote *kn, struct wait_queue *wq)
+knote_link_wait_queue(struct knote *kn, struct wait_queue *wq, wait_queue_link_t wql)
 {
 	struct kqueue *kq = kn->kn_kq;
 	kern_return_t kr;
 
-	kr = wait_queue_link(wq, kq->kq_wqs);
+	kr = wait_queue_link_noalloc(wq, kq->kq_wqs, wql);
 	if (kr == KERN_SUCCESS) {
 		knote_markstayqueued(kn);
 		return 0;
 	} else {
-		return ENOMEM;
+		return EINVAL;
 	}
 }
 
@@ -2427,17 +2449,21 @@ knote_link_wait_queue(struct knote *kn, struct wait_queue *wq)
  *
  * Note that the unlink may have already happened from the other side, so
  * ignore any failures to unlink and just remove it from the kqueue list.
+ *
+ * On success, caller is responsible for the link structure
  */
-void
-knote_unlink_wait_queue(struct knote *kn, struct wait_queue *wq)
+int
+knote_unlink_wait_queue(struct knote *kn, struct wait_queue *wq, wait_queue_link_t *wqlp)
 {
 	struct kqueue *kq = kn->kn_kq;
+	kern_return_t kr;
 
-	(void) wait_queue_unlink(wq, kq->kq_wqs);
+	kr = wait_queue_unlink_nofree(wq, kq->kq_wqs, wqlp);
 	kqlock(kq);
 	kn->kn_status &= ~KN_STAYQUEUED;
 	knote_dequeue(kn);
 	kqunlock(kq);
+	return (kr != KERN_SUCCESS) ? EINVAL : 0;
 }
 
 /*
@@ -2487,7 +2513,7 @@ knote_fdclose(struct proc *p, int fd)
 
 /* proc_fdlock held on entry (and exit) */
 static int
-knote_fdpattach(struct knote *kn, struct filedesc *fdp, __unused struct proc *p)
+knote_fdpattach(struct knote *kn, struct filedesc *fdp, struct proc *p)
 {
 	struct klist *list = NULL;
 
@@ -2500,10 +2526,18 @@ knote_fdpattach(struct knote *kn, struct filedesc *fdp, __unused struct proc *p)
 		if ((u_int)fdp->fd_knlistsize <= kn->kn_id) {
 			u_int size = 0;
 
+			if (kn->kn_id >= (uint64_t)p->p_rlimit[RLIMIT_NOFILE].rlim_cur 
+			    || kn->kn_id >= (uint64_t)maxfiles)
+				return (EINVAL);
+		
 			/* have to grow the fd_knlist */
 			size = fdp->fd_knlistsize;
 			while (size <= kn->kn_id)
 				size += KQEXTENT;
+
+			if (size >= (UINT_MAX/sizeof(struct klist *)))
+				return (EINVAL);
+
 			MALLOC(list, struct klist *,
 			       size * sizeof(struct klist *), M_KQUEUE, M_WAITOK);
 			if (list == NULL)
@@ -2630,7 +2664,11 @@ knote_init(void)
 
 	/* Initialize the timer filter lock */
 	lck_mtx_init(&_filt_timerlock, kq_lck_grp, kq_lck_attr);
-	lck_mtx_init(&vm_pressure_klist_mutex, kq_lck_grp, kq_lck_attr);
+	
+#if VM_PRESSURE_EVENTS
+	/* Initialize the vm pressure list lock */
+	vm_pressure_init(kq_lck_grp, kq_lck_attr);
+#endif
 }
 SYSINIT(knote, SI_SUB_PSEUDO, SI_ORDER_ANY, knote_init, NULL)
 

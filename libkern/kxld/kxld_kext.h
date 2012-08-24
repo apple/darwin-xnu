@@ -28,7 +28,6 @@
 #ifndef _KXLD_KEXT_H_
 #define _KXLD_KEXT_H_
 
-#include <mach/machine.h>
 #include <sys/types.h>
 #if KERNEL
     #include <libkern/kxld_types.h>
@@ -76,7 +75,10 @@ kern_return_t kxld_kext_export_symbols(const KXLDKext *kext,
 void kxld_kext_get_vmsize(const KXLDKext *kext, 
     u_long *header_size, u_long *vmsize)
     __attribute__((nonnull, visibility("hidden")));
-    
+
+void kxld_kext_set_linked_object_size(KXLDKext *kext, u_long vmsize)
+__attribute__((nonnull, visibility("hidden")));
+
 kern_return_t kxld_kext_export_linked_object(const KXLDKext *kext,
     u_char *linked_object, kxld_addr_t *kmod_info)
     __attribute__((nonnull, visibility("hidden")));

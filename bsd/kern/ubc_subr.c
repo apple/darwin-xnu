@@ -1984,9 +1984,20 @@ ubc_create_upl(
 			uplflags |= UPL_FOR_PAGEOUT | UPL_CLEAN_IN_PLACE |
                                     UPL_COPYOUT_FROM | UPL_SET_INTERNAL | UPL_SET_LITE;
 		} else {
-			uplflags |= UPL_RET_ONLY_ABSENT | UPL_NOBLOCK |
+			uplflags |= UPL_RET_ONLY_ABSENT |
 				    UPL_NO_SYNC | UPL_CLEAN_IN_PLACE |
 				    UPL_SET_INTERNAL | UPL_SET_LITE;
+
+			/*
+			 * if the requested size == PAGE_SIZE, we don't want to set
+			 * the UPL_NOBLOCK since we may be trying to recover from a
+			 * previous partial pagein I/O that occurred because we were low
+			 * on memory and bailed early in order to honor the UPL_NOBLOCK...
+			 * since we're only asking for a single page, we can block w/o fear
+			 * of tying up pages while waiting for more to become available
+			 */
+			if (bufsize > PAGE_SIZE)
+				uplflags |= UPL_NOBLOCK;
 		}
 	} else {
 		uplflags &= ~UPL_FOR_PAGEOUT;
@@ -2344,6 +2355,16 @@ UBCINFOEXISTS(struct vnode * vp)
 }
 
 
+void
+ubc_upl_range_needed(
+	upl_t		upl,
+	int		index,
+	int		count)
+{
+	upl_range_needed(upl, index, count);
+}
+
+
 /*
  * CODE SIGNING
  */
@@ -2356,7 +2377,9 @@ static SInt32 cs_blob_count_peak = 0;
 
 int cs_validation = 1;
 
+#ifndef SECURE_KERNEL
 SYSCTL_INT(_vm, OID_AUTO, cs_validation, CTLFLAG_RW | CTLFLAG_LOCKED, &cs_validation, 0, "Do validate code signatures");
+#endif
 SYSCTL_INT(_vm, OID_AUTO, cs_blob_count, CTLFLAG_RD | CTLFLAG_LOCKED, (int *)(uintptr_t)&cs_blob_count, 0, "Current number of code signature blobs");
 SYSCTL_INT(_vm, OID_AUTO, cs_blob_size, CTLFLAG_RD | CTLFLAG_LOCKED, (int *)(uintptr_t)&cs_blob_size, 0, "Current size of all code signature blobs");
 SYSCTL_INT(_vm, OID_AUTO, cs_blob_count_peak, CTLFLAG_RD | CTLFLAG_LOCKED, &cs_blob_count_peak, 0, "Peak number of code signature blobs");
@@ -2760,6 +2783,7 @@ unsigned long cs_validate_page_bad_hash = 0;
 boolean_t
 cs_validate_page(
 	void			*_blobs,
+	memory_object_t		pager,
 	memory_object_offset_t	page_offset,
 	const void		*data,
 	boolean_t		*tainted)
@@ -2868,8 +2892,8 @@ cs_validate_page(
 		cs_validate_page_no_hash++;
 		if (cs_debug > 1) {
 			printf("CODE SIGNING: cs_validate_page: "
-			       "off 0x%llx: no hash to validate !?\n",
-			       page_offset);
+			       "mobj %p off 0x%llx: no hash to validate !?\n",
+			       pager, page_offset);
 		}
 		validated = FALSE;
 		*tainted = FALSE;
@@ -2893,10 +2917,10 @@ cs_validate_page(
 		if (bcmp(expected_hash, actual_hash, SHA1_RESULTLEN) != 0) {
 			if (cs_debug) {
 				printf("CODE SIGNING: cs_validate_page: "
-				       "off 0x%llx size 0x%lx: "
+				       "mobj %p off 0x%llx size 0x%lx: "
 				       "actual [0x%x 0x%x 0x%x 0x%x 0x%x] != "
 				       "expected [0x%x 0x%x 0x%x 0x%x 0x%x]\n",
-				       page_offset, size,
+				       pager, page_offset, size,
 				       asha1[0], asha1[1], asha1[2],
 				       asha1[3], asha1[4],
 				       esha1[0], esha1[1], esha1[2],
@@ -2907,8 +2931,9 @@ cs_validate_page(
 		} else {
 			if (cs_debug > 1) {
 				printf("CODE SIGNING: cs_validate_page: "
-				       "off 0x%llx size 0x%lx: SHA1 OK\n",
-				       page_offset, size);
+				       "mobj %p off 0x%llx size 0x%lx: "
+				       "SHA1 OK\n",
+				       pager, page_offset, size);
 			}
 			*tainted = FALSE;
 		}

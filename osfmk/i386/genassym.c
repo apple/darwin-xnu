@@ -55,9 +55,7 @@
  */
 
 #include <platforms.h>
-#include <mach_kdb.h>
 #include <mach_ldebug.h>
-#include <stat_time.h>
 
 /*
  * Pass field offsets to assembly code.
@@ -369,10 +367,6 @@ main(
 	DECLARE("INTEL_PTE_INVALID",	INTEL_PTE_INVALID);
 	DECLARE("NPGPTD", NPGPTD);
 #if defined(__x86_64__)
-	DECLARE("INITPT_SEG_BASE",INITPT_SEG_BASE);
-	DECLARE("INITGDT_SEG_BASE",INITGDT_SEG_BASE);
-	DECLARE("SLEEP_SEG_BASE",SLEEP_SEG_BASE);
-	DECLARE("PROT_MODE_GDT_SIZE",PROT_MODE_GDT_SIZE);
 	DECLARE("KERNEL_PML4_INDEX",KERNEL_PML4_INDEX);
 #endif
 	DECLARE("IDTSZ",	IDTSZ);
@@ -390,9 +384,6 @@ main(
 #ifdef __i386__
 	DECLARE("DF_TSS",	DF_TSS);
 	DECLARE("MC_TSS",	MC_TSS);
-#if	MACH_KDB
-	DECLARE("DEBUG_TSS",	DEBUG_TSS);
-#endif	/* MACH_KDB */
 	DECLARE("CPU_DATA_GS",	CPU_DATA_GS);
 #endif /* __i386__ */
 	DECLARE("SYSENTER_CS",	SYSENTER_CS);
@@ -515,17 +506,11 @@ main(
 		offsetof(cpu_data_t *, cpu_tlb_invalid_global));
 #endif /* x86_64 */
 	DECLARE("enaExpTrace",	enaExpTrace);
-	DECLARE("enaExpTraceb",	enaExpTraceb);
 	DECLARE("enaUsrFCall",	enaUsrFCall);
-	DECLARE("enaUsrFCallb",	enaUsrFCallb);
 	DECLARE("enaUsrPhyMp",	enaUsrPhyMp);
-	DECLARE("enaUsrPhyMpb",	enaUsrPhyMpb);
 	DECLARE("enaDiagSCs",	enaDiagSCs);
-	DECLARE("enaDiagSCsb",	enaDiagSCsb);
 	DECLARE("enaDiagEM",	enaDiagEM);
-	DECLARE("enaDiagEMb",	enaDiagEMb);
 	DECLARE("enaNotifyEM",	enaNotifyEM);
-	DECLARE("enaNotifyEMb",	enaNotifyEMb);
 	DECLARE("dgLock",		offsetof(struct diagWork *, dgLock));
 	DECLARE("dgFlags",		offsetof(struct diagWork *, dgFlags));
 	DECLARE("dgMisc1",		offsetof(struct diagWork *, dgMisc1));
@@ -592,13 +577,11 @@ main(
 	DECLARE("TIMER_HIGH",		offsetof(struct timer *, high_bits));
 	DECLARE("TIMER_HIGHCHK",	offsetof(struct timer *, high_bits_check));	
 #endif
-#if !STAT_TIME
 	DECLARE("TIMER_TSTAMP",
 		offsetof(struct timer *, tstamp));
 
 	DECLARE("THREAD_TIMER",
 		offsetof(struct processor *, processor_data.thread_timer));
-#endif
 	DECLARE("KERNEL_TIMER",
 		offsetof(struct processor *, processor_data.kernel_timer));
 	DECLARE("SYSTEM_TIMER",

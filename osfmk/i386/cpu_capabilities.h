@@ -96,20 +96,20 @@ int _NumCPUs( void )
  * Because Mach VM cannot map the last page of an address space, we don't use it.
  */
  
-#define	_COMM_PAGE32_AREA_LENGTH	( 2 * 4096 )				/* reserved length of entire comm area */
+#define	_COMM_PAGE32_AREA_LENGTH	( 1 * 4096 )				/* reserved length of entire comm area */
 #define _COMM_PAGE32_BASE_ADDRESS	( 0xffff0000 )				/* base address of allocated memory */
 #define _COMM_PAGE32_START_ADDRESS	( _COMM_PAGE32_BASE_ADDRESS )	/* address traditional commpage code starts on */
-#define _COMM_PAGE32_AREA_USED		( 2 * 4096 )				/* this is the amt actually allocated */
+#define _COMM_PAGE32_AREA_USED		( 1 * 4096 )				/* this is the amt actually allocated */
 #define _COMM_PAGE32_SIGS_OFFSET	0x8000					    /* offset to routine signatures */
 
-#define	_COMM_PAGE64_AREA_LENGTH	( 2 * 1024 * 1024 )			/* reserved length of entire comm area (2MB) */
+#define	_COMM_PAGE64_AREA_LENGTH	( 1 * 4096 )			/* reserved length of entire comm area (2MB) */
 #ifdef __ASSEMBLER__
 #define _COMM_PAGE64_BASE_ADDRESS	( 0x00007fffffe00000 )   /* base address of allocated memory */
 #else /* __ASSEMBLER__ */
 #define _COMM_PAGE64_BASE_ADDRESS	( 0x00007fffffe00000ULL )   /* base address of allocated memory */
 #endif /* __ASSEMBLER__ */
 #define _COMM_PAGE64_START_ADDRESS	( _COMM_PAGE64_BASE_ADDRESS )	/* address traditional commpage code starts on */
-#define _COMM_PAGE64_AREA_USED		( 2 * 4096 )				/* this is the amt actually populated */
+#define _COMM_PAGE64_AREA_USED		( 1 * 4096 )				/* this is the amt actually populated */
 
 /* no need for an Objective-C area on Intel */
 #define _COMM_PAGE32_OBJC_SIZE		0ULL
@@ -183,6 +183,8 @@ int _NumCPUs( void )
 #define _COMM_PAGE_GTOD_NS_BASE		(_COMM_PAGE_START_ADDRESS+0x070)	/* used by gettimeofday() */
 #define _COMM_PAGE_GTOD_SEC_BASE	(_COMM_PAGE_START_ADDRESS+0x078)	/* used by gettimeofday() */
 
+#define _COMM_PAGE_END			(_COMM_PAGE_START_ADDRESS+0xfff)	/* end of common page */
+
 /* Warning: kernel commpage.h has a matching c typedef for the following.  They must be kept in sync.  */
 /* These offsets are from _COMM_PAGE_TIME_DATA_START */
 
@@ -199,22 +201,40 @@ int _NumCPUs( void )
  /* When new jump table entries are added, corresponding symbols should be added below        */
  /* New slots should be allocated with at least 16-byte alignment. Some like bcopy require    */
  /* 32-byte alignment, and should be aligned as such in the assembly source before they are relocated */
-#define _COMM_PAGE_TEXT_START           (_COMM_PAGE_START_ADDRESS+0x080)    /* start of text section */
+#define _COMM_PAGE_TEXT_START		(_COMM_PAGE_START_ADDRESS+0x1000)
+#define _COMM_PAGE32_TEXT_START         (_COMM_PAGE32_BASE_ADDRESS+0x1000)    /* start of text section */
+#define _COMM_PAGE64_TEXT_START		(_COMM_PAGE64_BASE_ADDRESS+0x1000)
+#define _COMM_PAGE_TEXT_AREA_USED	( 1 * 4096 )
+#define _COMM_PAGE_TEXT_AREA_LENGTH	( 1 * 4096 )
+#define _PFZ32_SLIDE_RANGE		( 14 ) /* pages between 0xfffff000 and _COMM_PAGE32_TEXT_START */
+#define _PFZ64_SLIDE_RANGE		( 510 ) /* pages between 0x00007ffffffff000 and _COMM_PAGE64_TEXT_START */
 
-#define _COMM_PAGE_PREEMPT		(_COMM_PAGE_START_ADDRESS+0x5a0)	/* used by PFZ code */
-#define _COMM_PAGE_BACKOFF		(_COMM_PAGE_START_ADDRESS+0x1600)	/* called from PFZ */
+/* setup start offset in the commpage text region for each jump table entry 
+ * the Comm Page Offset is shortened to _COMM_TEXT_[label]_OFFSET
+ */
 
-#define _COMM_PAGE_PFZ_START		(_COMM_PAGE_START_ADDRESS+0x1c00)	/* start of Preemption Free Zone */
+#define _COMM_TEXT_PREEMPT_OFFSET		(0x5a0)	/* called from withing pfz */
+#define _COMM_TEXT_BACKOFF_OFFSET		(0x600)	/* called from PFZ */
+#define _COMM_TEXT_PFZ_START_OFFSET		(0xc00)	/* offset for Preemption Free Zone */
+#define _COMM_TEXT_PFZ_ENQUEUE_OFFSET		(0xc00)	/* internal FIFO enqueue */
+#define _COMM_TEXT_PFZ_DEQUEUE_OFFSET		(0xc80)	/* internal FIFO dequeue */
+#define _COMM_TEXT_PFZ_MUTEX_LOCK_OFFSET	(0xd00)	/* internal pthread_mutex_lock() */
+#define _COMM_TEXT_UNUSED_OFFSET		(0xd80)	/* end of routines in text page */
+#define _COMM_TEXT_PFZ_END_OFFSET		(0xfff)	/* offset for end of PFZ */
 
-#define _COMM_PAGE_PFZ_ENQUEUE		(_COMM_PAGE_START_ADDRESS+0x1c00)	/* internal routine for FIFO enqueue */
-#define _COMM_PAGE_PFZ_DEQUEUE		(_COMM_PAGE_START_ADDRESS+0x1c80)	/* internal routine for FIFO dequeue */
-#define	_COMM_PAGE_PFZ_MUTEX_LOCK	(_COMM_PAGE_START_ADDRESS+0x1d00)	/* internal routine for pthread_mutex_lock() */
 
-#define	_COMM_PAGE_UNUSED6		(_COMM_PAGE_START_ADDRESS+0x1d80)	/* unused space for PFZ code up to 0x1fff */
+#define _COMM_PAGE_PREEMPT		(_COMM_PAGE_TEXT_START+_COMM_TEXT_PREEMPT_OFFSET)
+#define _COMM_PAGE_BACKOFF		(_COMM_PAGE_TEXT_START+_COMM_TEXT_BACKOFF_OFFSET)	
 
-#define _COMM_PAGE_PFZ_END		(_COMM_PAGE_START_ADDRESS+0x1fff)	/* end of Preemption Free Zone */
+#define _COMM_PAGE_PFZ_START		(_COMM_PAGE_TEXT_START+_COMM_PAGE_PFZ_START_OFFSET)
 
-#define _COMM_PAGE_END			(_COMM_PAGE_START_ADDRESS+0x1fff)	/* end of common page - insert new stuff here */
+#define _COMM_PAGE_PFZ_ENQUEUE		(_COMM_PAGE_TEXT_START+_COMM_TEXT_PFZ_ENQUEUE_OFFSET)
+#define _COMM_PAGE_PFZ_DEQUEUE		(_COMM_PAGE_TEXT_START+_COMM_TEXT_PFZ_DEQUEUE_OFFSET)
+#define	_COMM_PAGE_PFZ_MUTEX_LOCK	(_COMM_PAGE_TEXT_START+_COMM_TEXT_PFZ_MUTEX_LOCK_OFFSET)
+
+#define	_COMM_PAGE_UNUSED6		(_COMM_PAGE_TEXT_START+_COMM_TEXT_UNUSED_OFFSET)	
+#define _COMM_PAGE_PFZ_END		(_COMM_PAGE_TEXT_START+_COMM_TEXT_PFZ_END_OFFSET)
+#define _COMM_PAGE_TEXT_END		(_COMM_PAGE_TEXT_START+_COMM_TEXT_PFZ_END_OFFSET) /* end of common text page */
 
 /* _COMM_PAGE_COMPARE_AND_SWAP{32,64}B are not used on x86 and are
  * maintained here for source compatability.  These will be removed at

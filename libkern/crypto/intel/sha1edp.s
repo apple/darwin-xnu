@@ -1199,8 +1199,13 @@ void SHA1( int HASH[], int MESSAGE[] )
 0:
 	INTERNAL_nossse3				// update W (i=16:79) and update ABCDE (i=0:63)	
 #if Multiple_Blocks
+#if defined(__x86_64__)
 	add	$$64, BUFFER_PTR			// BUFFER_PTR+=64;
 	sub	$$1, cnt					// pre-decrement cnt by 1
+#else
+	addl	$$64, BUFFER_PTR			// BUFFER_PTR+=64;
+	subl	$$1, cnt					// pre-decrement cnt by 1
+#endif
 	jbe	1f							// if cnt <= 0, branch to finish off
 	SOFTWARE_PIPELINING_nossse3		// update ABCDE (i=64:79) || big_endian_load(W) and W+K (i=0:15)
 	UPDATE_ALL_HASH					// update output hashes
@@ -1223,8 +1228,13 @@ void SHA1( int HASH[], int MESSAGE[] )
 0:
 	INTERNAL_ssse3					// update W (i=16:79) and update ABCDE (i=0:63)
 #if Multiple_Blocks
+#if defined(__x86_64__)
 	add	$$64, BUFFER_PTR			// BUFFER_PTR+=64;
 	sub	$$1, cnt					// pre-decrement cnt by 1
+#else
+	addl	$$64, BUFFER_PTR			// BUFFER_PTR+=64;
+	subl	$$1, cnt					// pre-decrement cnt by 1
+#endif
 	jbe	1f							// if cnt <= 0, branch to finish off
 	SOFTWARE_PIPELINING_ssse3		// update ABCDE (i=64:79) || big_endian_load(W) and W+K (i=0:15)
 	UPDATE_ALL_HASH					// update output hashes
@@ -1236,12 +1246,16 @@ void SHA1( int HASH[], int MESSAGE[] )
 	UPDATE_ALL_HASH					// update output hashes
 	.endm
 
+#ifdef	KERNEL
 #include <i386/cpu_capabilities.h>
+#else
+#include <System/i386/cpu_capabilities.h>
+#endif
 
 	.text
 
 	.globl _SHA1Transform
-	.private_extern	_SHA1Transform	
+	//.private_extern	_SHA1Transform	
 _SHA1Transform:
 
 	// detect SSSE3 and dispatch appropriate code branch

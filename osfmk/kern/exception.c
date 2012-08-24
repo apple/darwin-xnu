@@ -56,8 +56,6 @@
 /*
  */
 
-#include <mach_kdb.h>
-
 #include <mach/mach_types.h>
 #include <mach/boolean.h>
 #include <mach/kern_return.h>
@@ -86,22 +84,7 @@
 #include <kern/host.h>
 #include <kern/misc_protos.h>
 #include <string.h>
-
-#if	MACH_KDB
-#include <ddb/db_trap.h>
-#endif	/* MACH_KDB */
-
-#if	MACH_KDB
-
-#include <ddb/db_output.h>
-
-#if iPSC386 || iPSC860
-boolean_t debug_user_with_kdb = TRUE;
-#else
-boolean_t debug_user_with_kdb = FALSE;
-#endif
-
-#endif	/* MACH_KDB */
+#include <pexpert/pexpert.h>
 
 unsigned long c_thr_exc_raise = 0;
 unsigned long c_thr_exc_raise_state = 0;
@@ -328,13 +311,11 @@ exception_triage(
 
 	assert(exception != EXC_RPC_ALERT);
 
-	if (exception == KERN_SUCCESS)
-		panic("exception");
+	thread = current_thread();
 
 	/*
 	 * Try to raise the exception at the activation level.
 	 */
-	thread = current_thread();
 	mutex = &thread->mutex;
 	excp = &thread->exc_actions[exception];
 	kr = exception_deliver(thread, exception, code, codeCnt, excp, mutex);
@@ -365,22 +346,10 @@ exception_triage(
 	 * Nobody handled it, terminate the task.
 	 */
 
-#if	MACH_KDB
-	if (debug_user_with_kdb) {
-		/*
-		 *	Debug the exception with kdb.
-		 *	If kdb handles the exception,
-		 *	then thread_kdb_return won't return.
-		 */
-		db_printf("No exception server, calling kdb...\n");
-		thread_kdb_return();
-	}
-#endif	/* MACH_KDB */
-
 	(void) task_terminate(task);
 
 out:
-	if (exception != EXC_CRASH)
+	if ((exception != EXC_CRASH) && (exception != EXC_RESOURCE))
 		thread_exception_return();
 	return;
 }
@@ -413,11 +382,11 @@ bsd_exception(
 
 
 /*
- * Raise an EXC_CRASH exception on the dying task.
+ * Raise an exception on a task.
  * This should tell launchd to launch Crash Reporter for this task.
  */
-kern_return_t abnormal_exit_notify(mach_exception_data_type_t exccode, 
-		mach_exception_data_type_t excsubcode)
+kern_return_t task_exception_notify(exception_type_t exception,
+	mach_exception_data_type_t exccode, mach_exception_data_type_t excsubcode)
 {
 	mach_exception_data_type_t	code[EXCEPTION_CODE_MAX];
 	wait_interrupt_t		wsave;
@@ -426,7 +395,7 @@ kern_return_t abnormal_exit_notify(mach_exception_data_type_t exccode,
 	code[1] = excsubcode;
 
 	wsave = thread_interrupt_level(THREAD_UNINT);
-	exception_triage(EXC_CRASH, code, EXCEPTION_CODE_MAX);
+	exception_triage(exception, code, EXCEPTION_CODE_MAX);
 	(void) thread_interrupt_level(wsave);
 	return (KERN_SUCCESS);
 }

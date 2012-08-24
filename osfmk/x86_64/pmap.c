@@ -89,7 +89,6 @@
  */
 
 #include <string.h>
-#include <mach_kdb.h>
 #include <mach_ldebug.h>
 
 #include <libkern/OSAtomic.h>
@@ -100,6 +99,7 @@
 #include <kern/thread.h>
 #include <kern/zalloc.h>
 #include <kern/queue.h>
+#include <kern/ledger.h>
 #include <kern/mach_param.h>
 
 #include <kern/lock.h>
@@ -135,17 +135,13 @@
 #include <i386/pmap_internal.h>
 #include <i386/pmap_pcid.h>
 
-#if	MACH_KDB
-#include <ddb/db_command.h>
-#include <ddb/db_output.h>
-#include <ddb/db_sym.h>
-#include <ddb/db_print.h>
-#endif	/* MACH_KDB */
-
 #include <vm/vm_protos.h>
 
 #include <i386/mp.h>
 #include <i386/mp_desc.h>
+#include <libkern/kernel_mach_header.h>
+
+#include <pexpert/i386/efi.h>
 
 
 #ifdef IWANTTODEBUG
@@ -204,7 +200,7 @@ static struct vm_object kpdptobj_object_store;
  *	One byte per physical page.
  */
 char		*pmap_phys_attributes;
-unsigned int	last_managed_page = 0;
+ppnum_t		last_managed_page = 0;
 
 /*
  *	Amount of virtual memory mapped by one
@@ -225,9 +221,6 @@ pmap_memory_region_t pmap_memory_regions[PMAP_MEMORY_REGIONS_SIZE];
 
 struct pmap	kernel_pmap_store;
 pmap_t		kernel_pmap;
-
-pd_entry_t	high_shared_pde;
-pd_entry_t	commpage64_pde;
 
 struct zone	*pmap_zone;		/* zone of pmap structures */
 
@@ -252,12 +245,11 @@ pt_entry_t     *DMAP1, *DMAP2;
 caddr_t         DADDR1;
 caddr_t         DADDR2;
 
-/*
- * unlinks the pv_hashed_entry_t pvh from the singly linked hash chain.
- * properly deals with the anchor.
- * must be called with the hash locked, does not unlock it
- */
+const boolean_t	pmap_disable_kheap_nx = FALSE;
+const boolean_t	pmap_disable_kstack_nx = FALSE;
+extern boolean_t doconstro_override;
 
+extern long __stack_chk_guard[];
 
 /*
  *	Map memory at initialization.  The physical addresses being
@@ -279,7 +271,7 @@ pmap_map(
 	ps = PAGE_SIZE;
 	while (start_addr < end_addr) {
 		pmap_enter(kernel_pmap, (vm_map_offset_t)virt,
-			   (ppnum_t) i386_btop(start_addr), prot, flags, FALSE);
+			   (ppnum_t) i386_btop(start_addr), prot, VM_PROT_NONE, flags, TRUE);
 		virt += ps;
 		start_addr += ps;
 	}
@@ -293,7 +285,8 @@ extern  vm_offset_t		sHIB;
 extern  vm_offset_t		eHIB;
 extern  vm_offset_t		stext;
 extern  vm_offset_t		etext;
-extern  vm_offset_t		sdata;
+extern  vm_offset_t		sdata, edata;
+extern  vm_offset_t		sconstdata, econstdata;
 
 extern void			*KPTphys;
 
@@ -355,7 +348,7 @@ pmap_bootstrap(
 
 	kernel_pmap = &kernel_pmap_store;
 	kernel_pmap->ref_count = 1;
-	kernel_pmap->nx_enabled = FALSE;
+	kernel_pmap->nx_enabled = TRUE;
 	kernel_pmap->pm_task_map = TASK_MAP_64BIT;
 	kernel_pmap->pm_obj = (vm_object_t) NULL;
 	kernel_pmap->dirbase = (pd_entry_t *)((uintptr_t)IdlePTD);
@@ -434,6 +427,27 @@ pmap_bootstrap(
 
 	if (pmap_smep_enabled)
 		printf("PMAP: Supervisor Mode Execute Protection enabled\n");
+
+#if	DEBUG
+	printf("Stack canary: 0x%lx\n", __stack_chk_guard[0]);
+	printf("ml_early_random(): 0x%qx\n", ml_early_random());
+#endif
+	boolean_t ptmp;
+	/* Check if the user has requested disabling stack or heap no-execute
+	 * enforcement. These are "const" variables; that qualifier is cast away
+	 * when altering them. The TEXT/DATA const sections are marked
+	 * write protected later in the kernel startup sequence, so altering
+	 * them is possible at this point, in pmap_bootstrap().
+	 */
+	if (PE_parse_boot_argn("-pmap_disable_kheap_nx", &ptmp, sizeof(ptmp))) {
+		boolean_t *pdknxp = (boolean_t *) &pmap_disable_kheap_nx;
+		*pdknxp = TRUE;
+	}
+
+	if (PE_parse_boot_argn("-pmap_disable_kstack_nx", &ptmp, sizeof(ptmp))) {
+		boolean_t *pdknhp = (boolean_t *) &pmap_disable_kstack_nx;
+		*pdknhp = TRUE;
+	}
 
 	boot_args *args = (boot_args *)PE_state.bootArgs;
 	if (args->efiMode == kBootArgsEfiMode32) {
@@ -552,7 +566,7 @@ pmap_init(void)
 	for (i = 0; i < pmap_memory_region_count; i++, pmptr++) {
 		if (pmptr->type != kEfiConventionalMemory)
 			continue;
-		unsigned int pn;
+		ppnum_t pn;
 		for (pn = pmptr->base; pn <= pmptr->end; pn++) {
 			if (pn < last_pn) {
 				pmap_phys_attributes[pn] |= PHYS_MANAGED;
@@ -584,13 +598,12 @@ pmap_init(void)
 	pmap_anchor_zone = zinit(PAGE_SIZE, task_max, PAGE_SIZE, "pagetable anchors");
 	zone_change(pmap_anchor_zone, Z_NOENCRYPT, TRUE);
 
-#if	ZONE_DEBUG
 	/* The anchor is required to be page aligned. Zone debugging adds
-	 * padding which may violate that requirement. Disable it
-	 * to avoid assumptions.
+	 * padding which may violate that requirement. Tell the zone
+	 * subsystem that alignment is required.
 	 */
-	zone_debug_disable(pmap_anchor_zone);
-#endif	
+
+	zone_change(pmap_anchor_zone, Z_ALIGNMENT_REQUIRED, TRUE);
 
 	s = (vm_size_t) sizeof(struct pv_hashed_entry);
 	pv_hashed_list_zone = zinit(s, 10000*s /* Expandable zone */,
@@ -619,7 +632,41 @@ pmap_init(void)
 	 * Ensure the kernel's PML4 entry exists for the basement
 	 * before this is shared with any user.
 	 */
-	pmap_expand_pml4(kernel_pmap, KERNEL_BASEMENT);
+	pmap_expand_pml4(kernel_pmap, KERNEL_BASEMENT, PMAP_EXPAND_OPTIONS_NONE);
+}
+
+static
+void pmap_mark_range(pmap_t npmap, uint64_t sv, uint64_t nxrosz, boolean_t NX, boolean_t ro) {
+	uint64_t ev = sv + nxrosz, cv = sv;
+	pd_entry_t *pdep;
+	pt_entry_t *ptep = NULL;
+
+	assert(((sv & 0xFFFULL) | (nxrosz & 0xFFFULL)) == 0);
+
+	for (pdep = pmap_pde(npmap, cv); pdep != NULL && (cv < ev);) {
+		uint64_t pdev = (cv & ~((uint64_t)PDEMASK));
+
+		if (*pdep & INTEL_PTE_PS) {
+			if (NX)
+				*pdep |= INTEL_PTE_NX;
+			if (ro)
+				*pdep &= ~INTEL_PTE_WRITE;
+			cv += NBPD;
+			cv &= ~((uint64_t) PDEMASK);
+			pdep = pmap_pde(npmap, cv);
+			continue;
+		}
+
+		for (ptep = pmap_pte(npmap, cv); ptep != NULL && (cv < (pdev + NBPD)) && (cv < ev);) {
+			if (NX)
+				*ptep |= INTEL_PTE_NX;
+			if (ro)
+				*ptep &= ~INTEL_PTE_WRITE;
+			cv += NBPT;
+			ptep = pmap_pte(npmap, cv);
+		}
+	}
+	DPRINTF("%s(0x%llx, 0x%llx, %u, %u): 0x%llx, 0x%llx\n", __FUNCTION__, sv, nxrosz, NX, ro, cv, ptep ? *ptep: 0);
 }
 
 /*
@@ -667,49 +714,71 @@ pmap_init(void)
  * 4K pages covering [stext,etext] are coalesced as 2M large pages.
  * The now unused level-1 PTE pages are also freed.
  */
-extern uint32_t pmap_reserved_ranges;
+extern ppnum_t	vm_kernel_base_page;
 void
 pmap_lowmem_finalize(void)
 {
 	spl_t           spl;
 	int		i;
 
-	/* Check the kernel is linked at the expected base address */
-	if (i386_btop(kvtophys((vm_offset_t) &IdlePML4)) !=
-	    I386_KERNEL_IMAGE_BASE_PAGE)
-		panic("pmap_lowmem_finalize() unexpected kernel base address");
-
 	/*
 	 * Update wired memory statistics for early boot pages
 	 */
-	PMAP_ZINFO_PALLOC(bootstrap_wired_pages * PAGE_SIZE);
+	PMAP_ZINFO_PALLOC(kernel_pmap, bootstrap_wired_pages * PAGE_SIZE);
 
 	/*
-	 * Free all pages in pmap regions below the base:
+	 * Free pages in pmap regions below the base:
 	 * rdar://6332712
 	 *	We can't free all the pages to VM that EFI reports available.
 	 *	Pages in the range 0xc0000-0xff000 aren't safe over sleep/wake.
 	 *	There's also a size miscalculation here: pend is one page less
 	 *	than it should be but this is not fixed to be backwards
 	 *	compatible.
-	 *	Due to this current EFI limitation, we take only the first
-	 *	entry in the memory region table. However, the loop is retained
-	 * 	(with the intended termination criteria commented out) in the
-	 *	hope that some day we can free all low-memory ranges.
+	 * This is important for KASLR because up to 256*2MB = 512MB of space
+	 * needs has to be released to VM.
 	 */
 	for (i = 0;
-//	     pmap_memory_regions[i].end <= I386_KERNEL_IMAGE_BASE_PAGE;
-	     i < 1  && (pmap_reserved_ranges == 0);
+	     pmap_memory_regions[i].end < vm_kernel_base_page;
 	     i++) {
-		vm_offset_t	pbase = (vm_offset_t)i386_ptob(pmap_memory_regions[i].base);
-		vm_offset_t	pend  = (vm_offset_t)i386_ptob(pmap_memory_regions[i].end);
-//		vm_offset_t	pend  = i386_ptob(pmap_memory_regions[i].end+1);
+		vm_offset_t	pbase = i386_ptob(pmap_memory_regions[i].base);
+		vm_offset_t	pend  = i386_ptob(pmap_memory_regions[i].end+1);
 
-		DBG("ml_static_mfree(%p,%p) for pmap region %d\n",
+		DBG("pmap region %d [%p..[%p\n",
+		    i, (void *) pbase, (void *) pend);
+
+		if (pmap_memory_regions[i].attribute & EFI_MEMORY_KERN_RESERVED)
+			continue;
+		/*
+		 * rdar://6332712
+		 * Adjust limits not to free pages in range 0xc0000-0xff000.
+		 */
+		if (pbase >= 0xc0000 && pend <= 0x100000)
+			continue;
+		if (pbase < 0xc0000 && pend > 0x100000) {
+			/* page range entirely within region, free lower part */
+			DBG("- ml_static_mfree(%p,%p)\n",
+			    (void *) ml_static_ptovirt(pbase),
+			    (void *) (0xc0000-pbase));
+			ml_static_mfree(ml_static_ptovirt(pbase),0xc0000-pbase);
+			pbase = 0x100000;
+		}
+		if (pbase < 0xc0000)
+			pend = MIN(pend, 0xc0000);
+		if (pend  > 0x100000)
+			pbase = MAX(pbase, 0x100000);
+		DBG("- ml_static_mfree(%p,%p)\n",
 		    (void *) ml_static_ptovirt(pbase),
-		    (void *) (pend - pbase), i);
+		    (void *) (pend - pbase));
 		ml_static_mfree(ml_static_ptovirt(pbase), pend - pbase);
 	}
+
+	/* A final pass to get rid of all initial identity mappings to
+	 * low pages.
+	 */
+	DPRINTF("%s: Removing mappings from 0->0x%lx\n", __FUNCTION__, vm_kernel_base);
+
+	/* Remove all mappings past the descriptor aliases and low globals */
+	pmap_remove(kernel_pmap, LOWGLOBAL_ALIAS + PAGE_SIZE, vm_kernel_base);
 
 	/*
 	 * If text and data are both 2MB-aligned,
@@ -746,7 +815,7 @@ pmap_lowmem_finalize(void)
 
 			ptep = pmap_pte(kernel_pmap, (vm_map_offset_t)myva);
 			if (ptep)
-				pmap_store_pte(ptep, *ptep & ~INTEL_PTE_RW);
+				pmap_store_pte(ptep, *ptep & ~INTEL_PTE_WRITE);
 		}
 	}
 
@@ -784,7 +853,7 @@ pmap_lowmem_finalize(void)
 			pde |= pte_phys;	/* take page frame from pte */
 
 			if (wpkernel)
-				pde &= ~INTEL_PTE_RW;
+				pde &= ~INTEL_PTE_WRITE;
 			DBG("pmap_store_pte(%p,0x%llx)\n",
 				(void *)pdep, pde);
 			pmap_store_pte(pdep, pde);
@@ -807,19 +876,98 @@ pmap_lowmem_finalize(void)
 		pmap_kernel_text_ps = I386_LPGBYTES;
 	}
 
-	/* map lowmem global page into fixed addr */
-	pt_entry_t *pte = NULL;
-	if (0 == (pte = pmap_pte(kernel_pmap,
-				 VM_MIN_KERNEL_LOADED_ADDRESS + 0x2000)))
-		panic("lowmem pte");
-	/* make sure it is defined on page boundary */
-	assert(0 == ((vm_offset_t) &lowGlo & PAGE_MASK));
-	pmap_store_pte(pte, kvtophys((vm_offset_t)&lowGlo)
-				| INTEL_PTE_REF
-				| INTEL_PTE_MOD
-				| INTEL_PTE_WIRED
-				| INTEL_PTE_VALID
-				| INTEL_PTE_RW);
+	boolean_t doconstro = TRUE;
+
+	(void) PE_parse_boot_argn("dataconstro", &doconstro, sizeof(doconstro));
+
+	if ((sconstdata | econstdata) & PAGE_MASK) {
+		kprintf("Const DATA misaligned 0x%lx 0x%lx\n", sconstdata, econstdata);
+		if ((sconstdata & PAGE_MASK) || (doconstro_override == FALSE))
+			doconstro = FALSE;
+	}
+
+	if ((sconstdata > edata) || (sconstdata < sdata) || ((econstdata - sconstdata) >= (edata - sdata))) {
+		kprintf("Const DATA incorrect size 0x%lx 0x%lx 0x%lx 0x%lx\n", sconstdata, econstdata, sdata, edata);
+		doconstro = FALSE;
+	}
+
+	if (doconstro)
+		kprintf("Marking const DATA read-only\n");
+
+	vm_offset_t dva;
+
+	for (dva = sdata; dva < edata; dva += I386_PGBYTES) {
+		assert(((sdata | edata) & PAGE_MASK) == 0);
+		if ( (sdata | edata) & PAGE_MASK) {
+			kprintf("DATA misaligned, 0x%lx, 0x%lx\n", sdata, edata);
+			break;
+		}
+
+		pt_entry_t dpte, *dptep = pmap_pte(kernel_pmap, dva);
+
+		dpte = *dptep;
+
+		assert((dpte & INTEL_PTE_VALID));
+		if ((dpte & INTEL_PTE_VALID) == 0) {
+			kprintf("Missing data mapping 0x%lx 0x%lx 0x%lx\n", dva, sdata, edata);
+			continue;
+		}
+
+		dpte |= INTEL_PTE_NX;
+		if (doconstro && (dva >= sconstdata) && (dva < econstdata)) {
+			dpte &= ~INTEL_PTE_WRITE;
+		}
+		pmap_store_pte(dptep, dpte);
+	}
+	kernel_segment_command_t * seg;
+	kernel_section_t         * sec;
+
+	for (seg = firstseg(); seg != NULL; seg = nextsegfromheader(&_mh_execute_header, seg)) {
+		if (!strcmp(seg->segname, "__TEXT") ||
+		    !strcmp(seg->segname, "__DATA")) {
+			continue;
+		}
+		//XXX
+		if (!strcmp(seg->segname, "__KLD")) {
+			continue;
+		}
+		if (!strcmp(seg->segname, "__HIB")) {
+			for (sec = firstsect(seg); sec != NULL; sec = nextsect(seg, sec)) {
+				if (sec->addr & PAGE_MASK)
+					panic("__HIB segment's sections misaligned");
+				if (!strcmp(sec->sectname, "__text")) {
+					pmap_mark_range(kernel_pmap, sec->addr, round_page(sec->size), FALSE, TRUE);
+				} else {
+					pmap_mark_range(kernel_pmap, sec->addr, round_page(sec->size), TRUE, FALSE);
+				}
+			}
+		} else {
+			pmap_mark_range(kernel_pmap, seg->vmaddr, round_page_64(seg->vmsize), TRUE, FALSE);
+		}
+	}
+
+	/*
+	 * If we're debugging, map the low global vector page at the fixed
+	 * virtual address.  Otherwise, remove the mapping for this.
+	 */
+	if (debug_boot_arg) {
+		pt_entry_t *pte = NULL;
+		if (0 == (pte = pmap_pte(kernel_pmap, LOWGLOBAL_ALIAS)))
+			panic("lowmem pte");
+		/* make sure it is defined on page boundary */
+		assert(0 == ((vm_offset_t) &lowGlo & PAGE_MASK));
+		pmap_store_pte(pte, kvtophys((vm_offset_t)&lowGlo)
+					| INTEL_PTE_REF
+					| INTEL_PTE_MOD
+					| INTEL_PTE_WIRED
+					| INTEL_PTE_VALID
+					| INTEL_PTE_WRITE
+					| INTEL_PTE_NX);
+	} else {
+		pmap_remove(kernel_pmap,
+			    LOWGLOBAL_ALIAS, LOWGLOBAL_ALIAS + PAGE_SIZE);
+	}
+	
 	splx(spl);
 	if (pmap_pcid_ncpus)
 		tlb_flush_global();
@@ -908,6 +1056,7 @@ pmap_is_empty(
  */
 pmap_t
 pmap_create(
+	ledger_t		ledger,
 	    vm_map_size_t	sz,
 	    boolean_t		is_64bit)
 {
@@ -942,10 +1091,13 @@ pmap_create(
 	p->ref_count = 1;
 	p->nx_enabled = 1;
 	p->pm_shared = FALSE;
+	ledger_reference(ledger);
+	p->ledger = ledger;
 
 	p->pm_task_map = is_64bit ? TASK_MAP_64BIT : TASK_MAP_32BIT;;
 	if (pmap_pcid_ncpus)
 		pmap_pcid_initialize(p);
+
 	p->pm_pml4 = zalloc(pmap_anchor_zone);
 
 	pmap_assert((((uintptr_t)p->pm_pml4) & PAGE_MASK) == 0);
@@ -973,7 +1125,7 @@ pmap_create(
 	kpml4 = kernel_pmap->pm_pml4;
 	pml4[KERNEL_PML4_INDEX]    = kpml4[KERNEL_PML4_INDEX];
 	pml4[KERNEL_KEXTS_INDEX]   = kpml4[KERNEL_KEXTS_INDEX];
-	pml4[KERNEL_PHYSMAP_INDEX] = kpml4[KERNEL_PHYSMAP_INDEX];
+	pml4[KERNEL_PHYSMAP_PML4_INDEX] = kpml4[KERNEL_PHYSMAP_PML4_INDEX];
 
 	PMAP_TRACE(PMAP_CODE(PMAP__CREATE) | DBG_FUNC_START,
 		   p, is_64bit, 0, 0, 0);
@@ -1043,8 +1195,8 @@ pmap_destroy(pmap_t	p)
 	vm_object_deallocate(p->pm_obj);
 
 	OSAddAtomic(-inuse_ptepages,  &inuse_ptepages_count);
-	PMAP_ZINFO_PFREE(inuse_ptepages * PAGE_SIZE);
-
+	PMAP_ZINFO_PFREE(p, inuse_ptepages * PAGE_SIZE);
+	ledger_dereference(p->ledger);
 	zfree(pmap_zone, p);
 
 	PMAP_TRACE(PMAP_CODE(PMAP__DESTROY) | DBG_FUNC_END,
@@ -1078,7 +1230,6 @@ pmap_remove_some_phys(
 /* Implement to support working set code */
 
 }
-
 
 /*
  *	Set the physical protection on the
@@ -1142,19 +1293,14 @@ pmap_protect(
 					continue;
 
 				if (prot & VM_PROT_WRITE)
-					pmap_update_pte(spte, *spte,
-						*spte | INTEL_PTE_WRITE);
+					pmap_update_pte(spte, 0, INTEL_PTE_WRITE);
 				else
-					pmap_update_pte(spte, *spte,
-						*spte & ~INTEL_PTE_WRITE);
+					pmap_update_pte(spte, INTEL_PTE_WRITE, 0);
 
 				if (set_NX)
-					pmap_update_pte(spte, *spte,
-						*spte | INTEL_PTE_NX);
+					pmap_update_pte(spte, 0, INTEL_PTE_NX);
 				else
-					pmap_update_pte(spte, *spte,
-						*spte & ~INTEL_PTE_NX);
-
+					pmap_update_pte(spte, INTEL_PTE_NX, 0);
 				num_found++;
 			}
 		}
@@ -1190,17 +1336,17 @@ pmap_map_block(
 		cur_page_size =  PAGE_SIZE;
 
 	for (page = 0; page < size; page+=cur_page_size/PAGE_SIZE) {
-		pmap_enter(pmap, va, pa, prot, attr, TRUE);
+		pmap_enter(pmap, va, pa, prot, VM_PROT_NONE, attr, TRUE);
 		va += cur_page_size;
 		pa+=cur_page_size/PAGE_SIZE;
 	}
 }
 
-
-void
+kern_return_t
 pmap_expand_pml4(
 	pmap_t		map,
-	vm_map_offset_t	vaddr)
+	vm_map_offset_t	vaddr,
+	unsigned int options)
 {
 	vm_page_t	m;
 	pmap_paddr_t	pa;
@@ -1213,9 +1359,11 @@ pmap_expand_pml4(
 	/*
 	 *	Allocate a VM page for the pml4 page
 	 */
-	while ((m = vm_page_grab()) == VM_PAGE_NULL)
+	while ((m = vm_page_grab()) == VM_PAGE_NULL) {
+		if (options & PMAP_EXPAND_OPTIONS_NOWAIT)
+			return KERN_RESOURCE_SHORTAGE;
 		VM_PAGE_WAIT();
-
+	}
 	/*
 	 *	put the page into the pmap's obj list so it
 	 *	can be found later.
@@ -1235,7 +1383,7 @@ pmap_expand_pml4(
 
 	OSAddAtomic(1,  &inuse_ptepages_count);
 	OSAddAtomic64(1,  &alloc_ptepages_count);
-	PMAP_ZINFO_PALLOC(PAGE_SIZE);
+	PMAP_ZINFO_PALLOC(map, PAGE_SIZE);
 
 	/* Take the oject lock (mutex) before the PMAP_LOCK (spinlock) */
 	vm_object_lock(map->pm_obj_pml4);
@@ -1251,8 +1399,8 @@ pmap_expand_pml4(
 		VM_PAGE_FREE(m);
 
 		OSAddAtomic(-1,  &inuse_ptepages_count);
-		PMAP_ZINFO_PFREE(PAGE_SIZE);
-		return;
+		PMAP_ZINFO_PFREE(map, PAGE_SIZE);
+		return KERN_SUCCESS;
 	}
 
 #if 0 /* DEBUG */
@@ -1276,13 +1424,11 @@ pmap_expand_pml4(
 
 	PMAP_UNLOCK(map);
 
-	return;
+	return KERN_SUCCESS;
 }
 
-void
-pmap_expand_pdpt(
-		 pmap_t map,
-		 vm_map_offset_t vaddr)
+kern_return_t
+pmap_expand_pdpt(pmap_t map, vm_map_offset_t vaddr, unsigned int options)
 {
 	vm_page_t	m;
 	pmap_paddr_t	pa;
@@ -1293,14 +1439,19 @@ pmap_expand_pdpt(
 	DBG("pmap_expand_pdpt(%p,%p)\n", map, (void *)vaddr);
 
 	while ((pdptp = pmap64_pdpt(map, vaddr)) == PDPT_ENTRY_NULL) {
-		pmap_expand_pml4(map, vaddr);
+		kern_return_t pep4kr = pmap_expand_pml4(map, vaddr, options);
+		if (pep4kr != KERN_SUCCESS)
+			return pep4kr;
 	}
 
 	/*
 	 *	Allocate a VM page for the pdpt page
 	 */
-	while ((m = vm_page_grab()) == VM_PAGE_NULL)
+	while ((m = vm_page_grab()) == VM_PAGE_NULL) {
+		if (options & PMAP_EXPAND_OPTIONS_NOWAIT)
+			return KERN_RESOURCE_SHORTAGE;
 		VM_PAGE_WAIT();
+	}
 
 	/*
 	 *	put the page into the pmap's obj list so it
@@ -1321,7 +1472,7 @@ pmap_expand_pdpt(
 
 	OSAddAtomic(1,  &inuse_ptepages_count);
 	OSAddAtomic64(1,  &alloc_ptepages_count);
-	PMAP_ZINFO_PALLOC(PAGE_SIZE);
+	PMAP_ZINFO_PALLOC(map, PAGE_SIZE);
 
 	/* Take the oject lock (mutex) before the PMAP_LOCK (spinlock) */
 	vm_object_lock(map->pm_obj_pdpt);
@@ -1337,8 +1488,8 @@ pmap_expand_pdpt(
 		VM_PAGE_FREE(m);
 
 		OSAddAtomic(-1,  &inuse_ptepages_count);
-		PMAP_ZINFO_PFREE(PAGE_SIZE);
-		return;
+		PMAP_ZINFO_PFREE(map, PAGE_SIZE);
+		return KERN_SUCCESS;
 	}
 
 #if 0 /* DEBUG */
@@ -1362,7 +1513,7 @@ pmap_expand_pdpt(
 
 	PMAP_UNLOCK(map);
 
-	return;
+	return KERN_SUCCESS;
 
 }
 
@@ -1383,10 +1534,11 @@ pmap_expand_pdpt(
  *	has been expanded enough.
  *	(We won't loop forever, since page tables aren't shrunk.)
  */
-void
+kern_return_t
 pmap_expand(
 	pmap_t		map,
-	vm_map_offset_t	vaddr)
+	vm_map_offset_t	vaddr,
+	unsigned int options)
 {
 	pt_entry_t		*pdp;
 	register vm_page_t	m;
@@ -1406,15 +1558,19 @@ pmap_expand(
 
 
 	while ((pdp = pmap64_pde(map, vaddr)) == PD_ENTRY_NULL) {
-		/* need room for another pde entry */
-		pmap_expand_pdpt(map, vaddr);
+		kern_return_t pepkr = pmap_expand_pdpt(map, vaddr, options);
+		if (pepkr != KERN_SUCCESS)
+			return pepkr;
 	}
 
 	/*
 	 *	Allocate a VM page for the pde entries.
 	 */
-	while ((m = vm_page_grab()) == VM_PAGE_NULL)
+	while ((m = vm_page_grab()) == VM_PAGE_NULL) {
+		if (options & PMAP_EXPAND_OPTIONS_NOWAIT)
+			return KERN_RESOURCE_SHORTAGE;
 		VM_PAGE_WAIT();
+	}
 
 	/*
 	 *	put the page into the pmap's obj list so it
@@ -1435,7 +1591,7 @@ pmap_expand(
 
 	OSAddAtomic(1,  &inuse_ptepages_count);
 	OSAddAtomic64(1,  &alloc_ptepages_count);
-	PMAP_ZINFO_PALLOC(PAGE_SIZE);
+	PMAP_ZINFO_PALLOC(map, PAGE_SIZE);
 
 	/* Take the oject lock (mutex) before the PMAP_LOCK (spinlock) */
 	vm_object_lock(map->pm_obj);
@@ -1452,8 +1608,8 @@ pmap_expand(
 		VM_PAGE_FREE(m);
 
 		OSAddAtomic(-1,  &inuse_ptepages_count);
-		PMAP_ZINFO_PFREE(PAGE_SIZE);
-		return;
+		PMAP_ZINFO_PFREE(map, PAGE_SIZE);
+		return KERN_SUCCESS;
 	}
 
 #if 0 /* DEBUG */
@@ -1476,7 +1632,7 @@ pmap_expand(
 
 	PMAP_UNLOCK(map);
 
-	return;
+	return KERN_SUCCESS;
 }
 
 /* On K64 machines with more than 32GB of memory, pmap_steal_memory
@@ -1658,7 +1814,7 @@ pmap_collect(
 			VM_PAGE_FREE(m);
 
 			OSAddAtomic(-1,  &inuse_ptepages_count);
-			PMAP_ZINFO_PFREE(PAGE_SIZE);
+			PMAP_ZINFO_PFREE(p, PAGE_SIZE);
 		    }
 
 		    PMAP_LOCK(p);
@@ -1709,7 +1865,6 @@ pmap_pageable(
 	pmap++; start_addr++; end_addr++; pageable++;
 #endif	/* lint */
 }
-
 
 void 
 invalidate_icache(__unused vm_offset_t	addr,
@@ -2015,6 +2170,10 @@ pmap_flush_tlbs(pmap_t	pmap, vm_map_offset_t startv, vm_map_offset_t endv)
 		}
 	}
 
+	if (__improbable((pmap == kernel_pmap) && (flush_self != TRUE))) {
+		panic("pmap_flush_tlbs: pmap == kernel_pmap && flush_self != TRUE; kernel CR3: 0x%llX, CPU active CR3: 0x%llX, CPU Task Map: %d", kernel_pmap->pm_cr3, current_cpu_datap()->cpu_active_cr3, current_cpu_datap()->cpu_task_map);
+	}
+
 	PMAP_TRACE_CONSTANT(PMAP_CODE(PMAP__FLUSH_TLBS) | DBG_FUNC_END,
 	    pmap, cpus_to_signal, startv, endv, 0);
 }
@@ -2053,4 +2212,115 @@ pmap_update_interrupt(void)
 
         PMAP_TRACE(PMAP_CODE(PMAP__UPDATE_INTERRUPT) | DBG_FUNC_END,
 		   0, 0, 0, 0, 0);
+}
+
+#include <mach/mach_vm.h>	/* mach_vm_region_recurse() */
+/* Scan kernel pmap for W+X PTEs, scan kernel VM map for W+X map entries
+ * and identify ranges with mismatched VM permissions and PTE permissions
+ */
+kern_return_t
+pmap_permissions_verify(pmap_t ipmap, vm_map_t ivmmap, vm_offset_t sv, vm_offset_t ev) {
+	vm_offset_t cv = sv;
+	kern_return_t rv = KERN_SUCCESS;
+	uint64_t skip4 = 0, skip2 = 0;
+
+	sv &= ~PAGE_MASK_64;
+	ev &= ~PAGE_MASK_64;
+	while (cv < ev) {
+		if (__improbable((cv > 0x00007FFFFFFFFFFFULL) &&
+			(cv < 0xFFFF800000000000ULL))) {
+			cv = 0xFFFF800000000000ULL;
+		}
+		/* Potential inconsistencies from not holding pmap lock
+		 * but harmless for the moment.
+		 */
+		if (((cv & PML4MASK) == 0) && (pmap64_pml4(ipmap, cv) == 0)) {
+			if ((cv + NBPML4) > cv)
+				cv += NBPML4;
+			else
+				break;
+			skip4++;
+			continue;
+		}
+		if (((cv & PDMASK) == 0) && (pmap_pde(ipmap, cv) == 0)) {
+			if ((cv + NBPD) > cv)
+				cv += NBPD;
+			else
+				break;
+			skip2++;
+			continue;
+		}
+
+		pt_entry_t *ptep = pmap_pte(ipmap, cv);
+		if (ptep && (*ptep & INTEL_PTE_VALID)) {
+			if (*ptep & INTEL_PTE_WRITE) {
+				if (!(*ptep & INTEL_PTE_NX)) {
+					kprintf("W+X PTE at 0x%lx, P4: 0x%llx, P3: 0x%llx, P2: 0x%llx, PT: 0x%llx, VP: %u\n", cv, *pmap64_pml4(ipmap, cv), *pmap64_pdpt(ipmap, cv), *pmap64_pde(ipmap, cv), *ptep, pmap_valid_page((ppnum_t)(i386_btop(pte_to_pa(*ptep)))));
+					rv = KERN_FAILURE;
+				}
+			}
+		}
+		cv += PAGE_SIZE;
+	}
+	kprintf("Completed pmap scan\n");
+	cv = sv;
+
+	struct vm_region_submap_info_64 vbr;
+	mach_msg_type_number_t vbrcount = 0;
+	mach_vm_size_t	vmsize;
+	vm_prot_t	prot;
+	uint32_t nesting_depth = 0;
+	kern_return_t kret;
+	
+	while (cv < ev) {
+		
+		for (;;) {
+			vbrcount = VM_REGION_SUBMAP_INFO_COUNT_64;
+			if((kret = mach_vm_region_recurse(ivmmap, 
+				    (mach_vm_address_t *) &cv, &vmsize, &nesting_depth, 
+					(vm_region_recurse_info_t)&vbr,
+					&vbrcount)) != KERN_SUCCESS) {
+				break;
+			}
+
+			if(vbr.is_submap) {
+				nesting_depth++;
+				continue;
+			} else {
+				break;
+			}
+		}
+
+		if(kret != KERN_SUCCESS)
+			break;
+
+		prot = vbr.protection;
+
+		if ((prot & (VM_PROT_WRITE | VM_PROT_EXECUTE)) == (VM_PROT_WRITE | VM_PROT_EXECUTE)) {
+			kprintf("W+X map entry at address 0x%lx\n", cv);
+			rv = KERN_FAILURE;
+		}
+
+		if (prot) {
+			vm_offset_t pcv;
+			for (pcv = cv; pcv < cv + vmsize; pcv += PAGE_SIZE) {
+				pt_entry_t *ptep = pmap_pte(ipmap, pcv);
+				vm_prot_t tprot;
+
+				if ((ptep == NULL) || !(*ptep & INTEL_PTE_VALID))
+					continue;
+				tprot = VM_PROT_READ;
+				if (*ptep & INTEL_PTE_WRITE)
+					tprot |= VM_PROT_WRITE;
+				if ((*ptep & INTEL_PTE_NX) == 0)
+					tprot |= VM_PROT_EXECUTE;
+				if (tprot != prot) {
+					kprintf("PTE/map entry permissions mismatch at address 0x%lx, pte: 0x%llx, protection: 0x%x\n", pcv, *ptep, prot);
+					rv = KERN_FAILURE;
+				}
+			}
+		}
+		cv += vmsize;
+	}
+	return rv;
 }

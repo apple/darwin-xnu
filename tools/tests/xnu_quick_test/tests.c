@@ -12,6 +12,7 @@
 #include <sys/msg.h>		/* for message queue tests */
 #include <sys/syscall.h>	/* for get / settid */
 #include <sys/sysctl.h>		/* for determining hw */
+#include <sys/kas_info.h>	/* for kas_info() */
 #include <AvailabilityMacros.h>	/* for determination of Mac OS X version (tiger, leopard, etc.) */
 #include <libkern/OSByteOrder.h> /* for OSSwap32() */
 #include <mach/mach.h>
@@ -893,12 +894,19 @@ test_passed_exit:
  */
 int access_chmod_fchmod_test( void * the_argp )
 {
-	int			my_err;
-	int			my_fd = -1;
+	int		error_occurred;
+	int		my_err;
+	int		my_fd = -1;
+
 	char *		my_pathp = NULL;
-	uid_t euid,ruid;
-	struct stat		my_sb;
-	kern_return_t           my_kr;
+
+	uid_t		euid,ruid;
+	struct stat	my_sb;
+
+	FILE *		file_handle;
+
+	kern_return_t	my_kr;
+
 
         my_kr = vm_allocate((vm_map_t) mach_task_self(), (vm_address_t*)&my_pathp, PATH_MAX, VM_FLAGS_ANYWHERE);
         if(my_kr != KERN_SUCCESS){
@@ -963,49 +971,77 @@ int access_chmod_fchmod_test( void * the_argp )
 	
 	
 	/*  another test for the access system call  -- refer ro radar# 6725311 */
-	
-	system("touch /tmp/me");
-	system("echo local | sudo touch /tmp/notme");
-	
+
+#if !TARGET_OS_EMBEDDED	
+
+	/*
+	 * This test makes sure that the access system call does not give the current user extra
+	 * permissions on files the current user does not own. From radar #6725311, this could
+	 * happen when the current user calls access() on a file owned by the current user in
+	 * the same directory as the other files not owned by the current user.
+	 * 
+	 * Note: This test expects that the effective uid (euid) is set to root.
+	 *
+	 */
+
+	/* Create a file that root owns  */
+	file_handle = fopen(FILE_NOTME, "w");
+	fclose(file_handle);
+
+	/* Currently running as root (through setreuid manipulation), switch to running as the current user. */
 	euid = geteuid();
 	ruid = getuid();
-	//printf("effective user id is %d: and real user id is %d: \n", (int)euid, (int)ruid);
 	setreuid(ruid, ruid);
-	//printf("effective user id is %d: and real user id is %d: \n", (int)geteuid, (int)getuid);
+
+	/* Create a file that the current user owns  */
+	file_handle = fopen(FILE_ME, "w");
+	fclose(file_handle);
+
+	error_occurred = 0;
+
+	/* Try to remove the file owned by root (this should fail). */
 	my_err = unlink(FILE_NOTME);
+
 	if (my_err < 0) {
 		my_err = errno;
 	}
+
 	if (my_err == 0) {
-		printf("Unresolved: First attempt deleted '" FILE_NOTME "'! \n" );
-		goto test_failed_exit;
+		printf("Unresolved: First attempt deleted '" FILE_NOTME "'! \n");
+		error_occurred = 1;
 	} else {
 		printf("Status: First attempt to delete '" FILE_NOTME "' failed with error %d - %s.\n", my_err, strerror( my_err ));
-			
-		if (true) {
-			my_err = access(FILE_ME, _DELETE_OK);
-            if (my_err < 0) {
-                my_err = errno;
-            }
-			//printf("Status: access('" FILE_ME "') = %d - %s.\n", my_err, strerror( my_err ));
-          fprintf(stderr, "Status: access('" FILE_ME "') = %d\n", my_err);
-		}
+
+		/* Set _DELETE_OK on a file that the current user owns */
+		access(FILE_ME, _DELETE_OK);
+
+		/* Try to remove the file owned by root again (should give us: EPERM [13]) */
 		my_err = unlink(FILE_NOTME);
-        if (my_err < 0) {
-            my_err = errno;
-        }
-        if (my_err == 0) {
+
+		if (my_err < 0) {
+		    my_err = errno;
+		}
+
+		if (my_err == 0) {
 			printf("Failed: Second attempt deleted '" FILE_NOTME "'!\n");
-            //fprintf(stderr, "Failed: Second attempt deleted '" FILE_NOTME "'!\n");
-			goto test_failed_exit;
-        } else {
+			error_occurred = 1;
+		} else if (my_err == 13) {
 			printf("Passed: Second attempt to delete '" FILE_NOTME "' failed with error %d - %s.\n", my_err, strerror( my_err ));
-           // fprintf(stderr, "Passed: Second attempt to delete '" FILE_NOTME "' failed with error %d\n", my_err);
-			
-        }
+		} else {
+			printf("Failed: Second attempt to delete '" FILE_NOTME "' failed with error %d - %s.\n", my_err, strerror( my_err ));
+			error_occurred = 1;
+		}
 	}
+
+	/* Reset to running as root */
 	setreuid(ruid, euid);
-	//printf("effective user id is %d: and real user id is %d    ---1: \n", euid, ruid);
+
+	if(error_occurred == 1) {
+		goto test_failed_exit;
+	}
+
+#endif
+
 	/* end of test*/
 	
 	
@@ -1051,6 +1087,26 @@ test_passed_exit:
 	 }
 	return( my_err );
 }
+
+#if !TARGET_OS_EMBEDDED
+static bool _prime_groups(void)
+{
+	/*
+	 * prime groups with a known list to ensure consistent test behavior
+	 */
+	
+	gid_t	my_exp_groups[] = { getegid(), 20, 61, 12 };
+	int		my_err;
+
+	my_err = setgroups( ( sizeof(my_exp_groups) / sizeof(*my_exp_groups) ), &my_exp_groups[0] );
+	if ( my_err == -1 ) {
+		printf( "initial setgroups call failed.  got errno %d - %s. \n", errno, strerror( errno ) );
+		return false;
+	}
+
+	return true;
+}
+#endif
 
 /*  **************************************************************************************************************
  *	Test chown, fchown, lchown, lstat, readlink, symlink system calls.
@@ -1100,6 +1156,10 @@ int chown_fchown_lchown_lstat_symlink_test( void * the_argp )
 	/* get a test file name for the link */
 	my_err = create_random_name( my_link_pathp, 0 );
 	if ( my_err != 0 ) {
+		goto test_failed_exit;
+	}
+	
+	if ( !_prime_groups() ) {
 		goto test_failed_exit;
 	}
 	
@@ -2114,6 +2174,10 @@ int groups_test( void * the_argp )
 	my_real_gid = getgid( );
 	my_effective_gid = getegid( );
 
+	if ( !_prime_groups() ) {
+		goto test_failed_exit;
+	}
+	
 	/* start by getting list of groups the current user belongs to */
 	my_orig_group_count = getgroups( NGROUPS_MAX, &my_groups[0] );
 
@@ -3357,6 +3421,7 @@ int fcntl_test( void * the_argp )
 	close( my_newfd );
 	my_newfd = -1;
 
+#if !TARGET_OS_EMBEDDED /* This section of the test is specific for the desktop platform, refer <rdar://problem/8850905>*/
 	/* While we're here, dup it via an open of /dev/fd/<fd> .. */
 
 	{
@@ -3385,7 +3450,7 @@ int fcntl_test( void * the_argp )
 	}
 	close ( my_newfd );
 	my_newfd = -1;
-
+#endif
 	my_err = 0;
 	goto test_passed_exit;
 
@@ -4418,6 +4483,7 @@ typedef struct packed_result * packed_result_p;
 
 int searchfs_test( void * the_argp )
 {
+#if !TARGET_OS_EMBEDDED
 	int						my_err, my_items_found = 0, my_ebusy_count;
 	char *					my_pathp = NULL;
     unsigned long			my_matches;
@@ -4612,6 +4678,10 @@ test_passed_exit:
 		vm_deallocate(mach_task_self(), (vm_address_t)my_pathp, PATH_MAX);	
 	 }
 	return( my_err );
+#else
+	printf( "\t--> Not supported on EMBEDDED TARGET\n" );
+	return 0;
+#endif
 }
 
 
@@ -4623,7 +4693,6 @@ test_passed_exit:
  */
 int aio_tests( void * the_argp )
 {
-#if !TARGET_OS_EMBEDDED
 	int					my_err, i;
 	char *				my_pathp;
 	struct aiocb *		my_aiocbp;
@@ -4888,10 +4957,6 @@ test_passed_exit:
 		}
 	}
 	return( my_err );
-#else
-	printf( "\t--> Not supported on EMBEDDED TARGET\n" );
-	return 0;
-#endif
 }
 
 
@@ -5072,6 +5137,80 @@ test_passed_exit:
 	return my_err;
 }
 
+/*  **************************************************************************************************************
+ *	Test KASLR-related functionality
+ *  **************************************************************************************************************
+ */
+int kaslr_test( void * the_argp )
+{
+	int result = 0;
+	uint64_t slide = 0;
+	size_t size;
+	int slide_enabled;
+
+	size = sizeof(slide_enabled);
+	result = sysctlbyname("kern.slide", &slide_enabled, &size, NULL, 0);
+	if (result != 0) {
+		printf("sysctlbyname(\"kern.slide\") failed with errno %d\n", errno);
+		goto test_failed_exit;
+	}
+
+	/* Test positive case first */
+	size = sizeof(slide);
+	result = kas_info(KAS_INFO_KERNEL_TEXT_SLIDE_SELECTOR, &slide, &size);
+	if (result == 0) {
+		/* syscall supported, slide must be non-zero if running latest xnu and KASLR is enabled */
+		if (slide_enabled && (slide == 0)) {
+			printf("kas_info(KAS_INFO_KERNEL_TEXT_SLIDE_SELECTOR, &slide, &size) reported slide of 0x%016llx\n", slide);
+			goto test_failed_exit;
+		}
+		if (size != sizeof(slide)) {
+			printf("kas_info(KAS_INFO_KERNEL_TEXT_SLIDE_SELECTOR, &slide, &size) reported size of %lu\n", size);
+			goto test_failed_exit;
+		}
+	} else {
+		/* Only ENOTSUP is allowed. If so, assume all calls will be unsupported */
+		if (errno == ENOTSUP) {
+			return 0;
+		} else {
+			printf("kas_info(KAS_INFO_KERNEL_TEXT_SLIDE_SELECTOR, &slide, &size) returned unexpected errno (errno %d)\n", errno);
+			goto test_failed_exit;
+		}
+	}
+	
+	/* Negative cases for expected failures */
+	size = sizeof(slide);
+	result = kas_info(KAS_INFO_KERNEL_TEXT_SLIDE_SELECTOR, NULL /* EFAULT */, &size);
+	if ((result == 0) || (errno != EFAULT)) {
+		printf("kas_info(KAS_INFO_KERNEL_TEXT_SLIDE_SELECTOR, NULL, &size) returned unexpected success or errno (result %d errno %d)\n", result, errno);
+		goto test_failed_exit;
+	}
+
+	size = sizeof(slide) + 1; /* EINVAL */
+	result = kas_info(KAS_INFO_KERNEL_TEXT_SLIDE_SELECTOR, NULL, &size);
+	if ((result == 0) || (errno != EINVAL)) {
+		printf("kas_info(KAS_INFO_KERNEL_TEXT_SLIDE_SELECTOR, NULL, &size+1) returned unexpected success or errno (result %d errno %d)\n", result, errno);
+		goto test_failed_exit;
+	}
+
+	result = kas_info(KAS_INFO_KERNEL_TEXT_SLIDE_SELECTOR, NULL /* EFAULT */, NULL /* EFAULT */);
+	if ((result == 0) || (errno != EFAULT)) {
+		printf("kas_info(KAS_INFO_KERNEL_TEXT_SLIDE_SELECTOR, NULL, NULL) returned unexpected success or errno (result %d errno %d)\n", result, errno);
+		goto test_failed_exit;
+	}
+
+	size = sizeof(slide);
+	result = kas_info(KAS_INFO_MAX_SELECTOR /* EINVAL */, &slide, &size);
+	if ((result == 0) || (errno != EINVAL)) {
+		printf("kas_info(KAS_INFO_MAX_SELECTOR, &slide, &size) returned unexpected success or errno (result %d errno %d)\n", result, errno);
+		goto test_failed_exit;
+	}
+
+	return 0;
+
+test_failed_exit:
+	return -1;
+}
 
 #if TEST_SYSTEM_CALLS 
 

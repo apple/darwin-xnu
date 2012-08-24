@@ -62,7 +62,13 @@
  */
 #include <i386/seg.h>
 
-struct real_descriptor master_gdt[GDTSZ] __attribute__ ((section("__INITGDT,__data")))= {
+struct real_descriptor master_gdt[GDTSZ]
+#if __x86_64__
+	__attribute__((section("__HIB,__desc")))
+#else
+	__attribute__((section("__INITGDT,__DATA")))
+#endif
+	__attribute__((aligned(CPU_CACHE_SIZE))) = {
 	[SEL_TO_INDEX(KERNEL32_CS)] = MAKE_REAL_DESCRIPTOR(	/* kernel 32-bit code */ 
 		0,
 		0xfffff,

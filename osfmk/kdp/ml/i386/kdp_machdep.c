@@ -290,6 +290,7 @@ void
 kdp_machine_reboot(void)
 {
 	printf("Attempting system restart...");
+	kprintf("Attempting system restart...");
 	/* Call the platform specific restart*/
 	if (PE_halt_restart)
 		(*PE_halt_restart)(kPERestartCPU);

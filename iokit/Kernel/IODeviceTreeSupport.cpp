@@ -921,6 +921,7 @@ void IODTSetResolving( IORegistryEntry * 	regEntry,
     if( !prop)
         return;
 
+    prop->setSerializable(false);
     regEntry->setProperty( gIODTPersistKey, prop);
     prop->release();
     return;
@@ -928,8 +929,8 @@ void IODTSetResolving( IORegistryEntry * 	regEntry,
 
 static SInt32 DefaultCompare( UInt32 cellCount, UInt32 left[], UInt32 right[] )
 {
-    cellCount--;
-    return( left[ cellCount ] - right[ cellCount ] );
+	cellCount--;
+	return( left[ cellCount ] - right[ cellCount ] ); 
 }
 
 void IODTGetCellCounts( IORegistryEntry * regEntry,
@@ -959,14 +960,15 @@ bool IODTResolveAddressCell( IORegistryEntry * regEntry,
     // cells in addresses below regEntry
     UInt32		childSizeCells, childAddressCells;
     UInt32		childCells;
-    UInt32		cell[ 5 ], offset = 0, length;
-    UInt32		endCell[ 5 ];
+    UInt32		cell[ 8 ], length;
+    UInt64		offset = 0;
+    UInt32		endCell[ 8 ];
     UInt32		*range;
     UInt32		*lookRange;
     UInt32		*startRange;
     UInt32		*endRanges;
     bool		ok = true;
-    SInt32		diff, diff2, endDiff;
+    SInt64		diff, diff2, endDiff;
 
     IODTPersistent	*persist;
     IODTCompareAddressCellFunc	compare;
@@ -974,10 +976,13 @@ bool IODTResolveAddressCell( IORegistryEntry * regEntry,
     IODTGetCellCounts( regEntry, &childSizeCells, &childAddressCells );
     childCells = childAddressCells + childSizeCells;
 
+    if (childCells > sizeof(cell)/sizeof(cell[0]))
+        panic("IODTResolveAddressCell: Invalid device tree (%u,%u)", (uint32_t)childAddressCells, (uint32_t)childSizeCells);
+
     bcopy( cellsIn, cell, sizeof(UInt32) * childCells );
     if( childSizeCells > 1)
-        *len = IOPhysical32( cellsIn[ childAddressCells ],
-                             cellsIn[ childAddressCells + 1 ] );
+        *len = IOPhysical32( cellsIn[ childAddressCells + 1],
+                             cellsIn[ childAddressCells] );
     else
         *len = IOPhysical32( 0, cellsIn[ childAddressCells ] );
 
@@ -985,8 +990,13 @@ bool IODTResolveAddressCell( IORegistryEntry * regEntry,
     {
 	prop = OSDynamicCast( OSData, regEntry->getProperty( gIODTRangeKey ));
 	if( 0 == prop) {
-	    /* end of the road */
-	    *phys = IOPhysical32( 0,  cell[ childAddressCells - 1 ] + offset);
+            /* end of the road */
+	    if (childAddressCells == 2)  {
+                *phys = IOPhysical32( cell[ childAddressCells - 1 ], cell [ childAddressCells - 2 ]);
+	    } else  {
+	        *phys = IOPhysical32( 0, cell[ childAddressCells - 1 ]);
+	    }
+            *phys += offset;
 	    break;
 	}
 
@@ -1003,8 +1013,11 @@ bool IODTResolveAddressCell( IORegistryEntry * regEntry,
 	    if( prop) {
 		persist = (IODTPersistent *) prop->getBytesNoCopy();
 		compare = persist->compareFunc;
-	    } else
+	    } else if (addressCells == childAddressCells) {
 		compare = DefaultCompare;
+	    } else {
+	 	panic("There is no mixed comparison function yet...");
+	    }
 
 	    for( ok = false;
 		 range < endRanges;
@@ -1013,8 +1026,21 @@ bool IODTResolveAddressCell( IORegistryEntry * regEntry,
 		// is cell start within range?
 		diff = (*compare)( childAddressCells, cell, range );
 
+        if (childAddressCells > sizeof(endCell)/sizeof(endCell[0]))
+            panic("IODTResolveAddressCell: Invalid device tree (%u)", (uint32_t)childAddressCells);
+
 		bcopy(range, endCell, childAddressCells * sizeof(UInt32));
-		endCell[childAddressCells - 1] += range[childCells + addressCells - 1];
+
+		if (childAddressCells == 2) {
+			uint64_t sum = endCell[childAddressCells - 2] + IOPhysical32(range[childCells + addressCells - 1], range[childCells + addressCells - 2]);
+			endCell[childAddressCells - 2] = (uint32_t)(sum & 0x00000000FFFFFFFFULL);
+			if (sum > UINT32_MAX) {
+				endCell[childAddressCells - 1] += (uint32_t)((sum & 0xFFFFFFFF00000000ULL) >> 32);
+			}
+		} else {
+			endCell[childAddressCells - 1] += range[childCells + addressCells - 1];
+		}
+
 		diff2 = (*compare)( childAddressCells, cell, endCell );
 
 		if ((diff < 0) || (diff2 >= 0))
@@ -1025,7 +1051,17 @@ bool IODTResolveAddressCell( IORegistryEntry * regEntry,
 		{
 		    // search for cell end
 		    bcopy(cell, endCell, childAddressCells * sizeof(UInt32));
-		    endCell[childAddressCells - 1] += cell[childCells - 1] - 1;
+
+		    if (childSizeCells == 2) {
+			uint64_t sum;
+                        sum = endCell[childAddressCells - 2] + IOPhysical32(cell[childCells - 1], cell[childCells - 2]) - 1;
+			endCell[childAddressCells - 2] = (uint32_t)(sum & 0x00000000FFFFFFFFULL);
+			if (sum > UINT32_MAX) {
+				endCell[childAddressCells - 1] += (uint32_t)((sum & 0xFFFFFFFF00000000ULL) >> 32);
+			}
+		    } else {
+                        endCell[childAddressCells - 1] += cell[childCells - 1] - 1;
+		    }
 		    lookRange = startRange;
 		    for( ;
 			 lookRange < endRanges;
@@ -1048,6 +1084,9 @@ bool IODTResolveAddressCell( IORegistryEntry * regEntry,
 		offset += diff;
 		break;
 	    }
+
+        if (addressCells + sizeCells > sizeof(cell)/sizeof(cell[0]))
+            panic("IODTResolveAddressCell: Invalid device tree (%u, %u)", (uint32_t)addressCells, (uint32_t)sizeCells);
 
 	    // Get the physical start of the range from our parent
 	    bcopy( range + childAddressCells, cell, sizeof(UInt32) * addressCells );

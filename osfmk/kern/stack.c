@@ -39,6 +39,7 @@
 #include <kern/thread.h>
 #include <kern/zalloc.h>
 #include <kern/kalloc.h>
+#include <kern/ledger.h>
 
 #include <vm/vm_map.h>
 #include <vm/vm_kern.h>
@@ -85,7 +86,8 @@ STACK_ZINFO_PALLOC(thread_t thread)
 	task_t task;
 	zinfo_usage_t zinfo;
 
-	thread->tkm_private.alloc += kernel_stack_size;
+	ledger_credit(thread->t_ledger, task_ledgers.tkm_private, kernel_stack_size);
+
 	if (stack_fake_zone_index != -1 &&
 	    (task = thread->task) != NULL && (zinfo = task->tkm_zinfo) != NULL)
 		OSAddAtomic64(kernel_stack_size,
@@ -98,7 +100,8 @@ STACK_ZINFO_PFREE(thread_t thread)
 	task_t task;
 	zinfo_usage_t zinfo;
 
-	thread->tkm_private.free += kernel_stack_size;
+	ledger_debit(thread->t_ledger, task_ledgers.tkm_private, kernel_stack_size);
+
 	if (stack_fake_zone_index != -1 &&
 	    (task = thread->task) != NULL && (zinfo = task->tkm_zinfo) != NULL)
 		OSAddAtomic64(kernel_stack_size, 
@@ -108,8 +111,9 @@ STACK_ZINFO_PFREE(thread_t thread)
 static inline void
 STACK_ZINFO_HANDOFF(thread_t from, thread_t to)
 {
-	from->tkm_private.free += kernel_stack_size;
-	to->tkm_private.alloc += kernel_stack_size;
+	ledger_debit(from->t_ledger, task_ledgers.tkm_private, kernel_stack_size);
+	ledger_credit(to->t_ledger, task_ledgers.tkm_private, kernel_stack_size);
+
 	if (stack_fake_zone_index != -1) {
 		task_t task;
 		zinfo_usage_t zinfo;
@@ -213,7 +217,7 @@ stack_alloc_internal(void)
 		if (kernel_memory_allocate(kernel_map, &stack,
 					   kernel_stack_size + (2*PAGE_SIZE),
 					   stack_addr_mask,
-					   KMA_KOBJECT | guard_flags)
+					   KMA_KSTACK | KMA_KOBJECT | guard_flags)
 		    != KERN_SUCCESS)
 			panic("stack_alloc: kernel_memory_allocate");
 

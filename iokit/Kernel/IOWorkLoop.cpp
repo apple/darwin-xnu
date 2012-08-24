@@ -556,6 +556,8 @@ IOReturn IOWorkLoop::_maintRequest(void *inC, void *inD, void *, void *)
 
     case mRemoveEvent:
         if (inEvent->getWorkLoop()) {
+        	IOStatisticsDetachEventSource();
+    		
         	if (eventSourcePerformsWork(inEvent)) {
 				if (eventChain == inEvent)
 					eventChain = inEvent->getNext();
@@ -595,7 +597,6 @@ IOReturn IOWorkLoop::_maintRequest(void *inC, void *inD, void *, void *)
             inEvent->setNext(0);
             inEvent->release();
             SETP(&fFlags, kLoopRestart);
-            IOStatisticsDetachEventSource();
         }
         break;
 

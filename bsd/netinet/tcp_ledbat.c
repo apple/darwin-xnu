@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2010 Apple Inc. All rights reserved.
+ * Copyright (c) 2010-2011 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -60,7 +60,7 @@ int tcp_ledbat_cleanup(struct tcpcb *tp);
 void tcp_ledbat_cwnd_init(struct tcpcb *tp);
 void tcp_ledbat_inseq_ack_rcvd(struct tcpcb *tp, struct tcphdr *th);
 void tcp_ledbat_ack_rcvd(struct tcpcb *tp, struct tcphdr *th);
-void tcp_ledbat_pre_fr(struct tcpcb *tp, struct tcphdr *th);
+void tcp_ledbat_pre_fr(struct tcpcb *tp);
 void tcp_ledbat_post_fr(struct tcpcb *tp, struct tcphdr *th);
 void tcp_ledbat_after_idle(struct tcpcb *tp);
 void tcp_ledbat_after_timeout(struct tcpcb *tp);
@@ -290,9 +290,7 @@ tcp_ledbat_ack_rcvd(struct tcpcb *tp, struct tcphdr *th) {
 }
 
 void
-tcp_ledbat_pre_fr(struct tcpcb *tp, struct tcphdr *th) {
-#pragma unused(th)
-
+tcp_ledbat_pre_fr(struct tcpcb *tp) {
 	uint32_t win;
 
 	win = min(tp->snd_wnd, tp->snd_cwnd) / 
@@ -302,6 +300,8 @@ tcp_ledbat_pre_fr(struct tcpcb *tp, struct tcphdr *th) {
 	tp->snd_ssthresh = win * tp->t_maxseg; 
 	if (tp->bg_ssthresh > tp->snd_ssthresh)
 		tp->bg_ssthresh = tp->snd_ssthresh;
+
+	tcp_cc_resize_sndbuf(tp);
 }
 
 void
@@ -380,6 +380,8 @@ tcp_ledbat_after_timeout(struct tcpcb *tp) {
 
 		if (tp->bg_ssthresh > tp->snd_ssthresh)
 			tp->bg_ssthresh = tp->snd_ssthresh;
+
+		tcp_cc_resize_sndbuf(tp);
 	}
 }
 
@@ -401,7 +403,7 @@ int
 tcp_ledbat_delay_ack(struct tcpcb *tp, struct tcphdr *th) {
 	if ((tp->t_flags & TF_RXWIN0SENT) == 0 &&
 		(th->th_flags & TH_PUSH) == 0 &&
-		(tp->t_flags & TF_DELACK) == 0)
+		(tp->t_unacksegs == 1))
 		return(1);
 	return(0);
 }

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2007-2008 Apple Inc. All rights reserved.
+ * Copyright (c) 2007-2011 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -168,6 +168,11 @@ pf_get_ruleset_number(u_int8_t action)
 	case PF_NORDR:
 		return (PF_RULESET_RDR);
 		break;
+#if DUMMYNET
+	case PF_DUMMYNET:
+	case PF_NODUMMYNET:
+		return (PF_RULESET_DUMMYNET);
+#endif /* DUMMYNET */
 	default:
 		return (PF_RULESET_MAX);
 		break;
@@ -215,6 +220,29 @@ pf_find_ruleset(const char *path)
 		return (NULL);
 	else
 		return (&anchor->ruleset);
+}
+
+struct pf_ruleset *
+pf_find_ruleset_with_owner(const char *path, const char *owner, int is_anchor,
+    int *error)
+{
+	struct pf_anchor	*anchor;
+
+	while (*path == '/')
+		path++;
+	if (!*path)
+		return (&pf_main_ruleset);
+	anchor = pf_find_anchor(path);
+	if (anchor == NULL) {
+		*error = EINVAL;
+		return (NULL);
+	} else {
+		if ((owner && anchor->owner && (!strcmp(owner, anchor->owner)))
+		    || (is_anchor && !strcmp(anchor->owner, "")))
+			return (&anchor->ruleset);
+		*error = EPERM;
+		return NULL;
+	}
 }
 
 struct pf_ruleset *

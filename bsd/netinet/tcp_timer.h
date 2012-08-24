@@ -145,11 +145,12 @@
 #define TCPTV_UNACKWIN	( TCP_RETRANSHZ/10 )	/* Window for counting rcv bytes to see if 
 						   ack-stretching can start (default 100 ms) */
 #define TCPTV_MAXRCVIDLE (TCP_RETRANSHZ/5 ) 	/* Receiver idle time, avoid ack-stretching after that*/
+#define TCPTV_RCVBUFIDLE (TCP_RETRANSHZ/2) 	/* Receiver idle time, for rcv socket buffer resizing */
 
 /* No ack stretching during slow-start, until we see some packets.
  * By the time the receiver gets 512 packets, the senders cwnd 
- * should open by a few hundred packets considering the progression
- * during slow-start.
+ * should open by a few hundred packets consdering the 
+ * slow-start progression.
  */
 #define TCP_RCV_SS_PKTCOUNT     512
 
@@ -232,7 +233,7 @@ struct tcptimerlist {
 #define TCPTV_REXMTSLOP ( TCP_RETRANSHZ/5 )	/* rexmt slop allowed (200 ms) */
 
 /* macro to decide when retransmit slop (described above) should be added */
-#define TCP_ADD_REXMTSLOP(tp) ((tp->t_flags & TF_LOCAL) != 0 || tp->t_state >= TCPS_ESTABLISHED) 
+#define TCP_ADD_REXMTSLOP(tp) (tp->t_state >= TCPS_ESTABLISHED) 
 
 #define	TCPT_RANGESET(tv, value, tvmin, tvmax, addslop) do { \
 	(tv) = ((addslop) ? tcp_rexmt_slop : 0) + (value); \
@@ -245,6 +246,13 @@ struct tcptimerlist {
 #define TCP_KEEPIDLE(tp) \
 	(tp->t_keepidle && (tp->t_inpcb->inp_socket->so_options & SO_KEEPALIVE) ? \
 		tp->t_keepidle : tcp_keepidle)
+
+/* Since we did not add rexmt slop for local connections, we should add
+ * it to idle timeout. Otherwise local connections will reach idle state
+ * quickly
+ */
+#define TCP_IDLETIMEOUT(tp) \
+	(((TCP_ADD_REXMTSLOP(tp)) ? 0 : tcp_rexmt_slop) + tp->t_rxtcur)
 
 extern int tcp_keepinit;		/* time to establish connection */
 extern int tcp_keepidle;		/* time before keepalive probes begin */

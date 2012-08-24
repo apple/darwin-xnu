@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2008 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2011 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -641,7 +641,7 @@ flush_dcache64(addr64_t addr, unsigned count, int phys)
 		dcache_incoherent_io_flush64(addr, count);
 	}
 	else {
-		uint32_t  linesize = cpuid_info()->cache_linesize;
+		uint64_t  linesize = cpuid_info()->cache_linesize;
 		addr64_t  bound = (addr + count + linesize - 1) & ~(linesize - 1);
 		__mfence();
 		while (addr < bound) {
@@ -709,6 +709,20 @@ kdp_register_callout(void)
 {
 }
 #endif
+
+/*
+ * Return a uniformly distributed 64-bit random number.
+ *
+ * This interface should have minimal dependencies on kernel
+ * services, and thus be available very early in the life
+ * of the kernel.  But as a result, it may not be very random
+ * on all platforms.
+ */
+uint64_t
+early_random(void)
+{
+	return (ml_early_random());
+}
 
 #if !CONFIG_VMX
 int host_vmxon(boolean_t exclusive __unused)

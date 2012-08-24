@@ -28,7 +28,6 @@
 #include <i386/asm.h>
 #include <i386/asm64.h>
 #include <assym.s>
-#include <mach_kdb.h>
 #include <i386/eflags.h>
 #include <i386/trap.h>
 #include <i386/rtclock_asm.h>
@@ -48,7 +47,6 @@
 #define	LO_UNIX_SCALL		EXT(lo_unix_scall)
 #define	LO_MACH_SCALL		EXT(lo_mach_scall)
 #define	LO_MDEP_SCALL		EXT(lo_mdep_scall)
-#define	LO_DIAG_SCALL		EXT(lo_diag_scall)
 #define	LO_DOUBLE_FAULT		EXT(lo_df64)
 #define	LO_MACHINE_CHECK	EXT(lo_mc64)
 
@@ -162,19 +160,11 @@ EXCEP64_USR(0x04,t64_into)
 EXCEP64_USR(0x05,t64_bounds)
 EXCEPTION64(0x06,t64_invop)
 EXCEPTION64(0x07,t64_nofpu)
-#if	MACH_KDB
-EXCEP64_IST(0x08,db_task_dbl_fault64,1)
-#else
 EXCEP64_IST(0x08,hi64_double_fault,1)
-#endif
 EXCEPTION64(0x09,a64_fpu_over)
 EXCEPTION64(0x0a,a64_inv_tss)
 EXCEP64_SPC(0x0b,hi64_segnp)
-#if	MACH_KDB
-EXCEP64_IST(0x0c,db_task_stk_fault64,1)
-#else
 EXCEP64_SPC(0x0c,hi64_stack_fault)
-#endif
 EXCEP64_SPC(0x0d,hi64_gen_prot)
 EXCEP64_SPC(0x0e, hi64_page_fault)
 EXCEPTION64(0x0f,t64_trap_0f)
@@ -300,8 +290,7 @@ EXCEP64_USR(0x7f, t64_dtrace_ret)
 EXCEP64_SPC_USR(0x80,hi64_unix_scall)
 EXCEP64_SPC_USR(0x81,hi64_mach_scall)
 EXCEP64_SPC_USR(0x82,hi64_mdep_scall)
-EXCEP64_SPC_USR(0x83,hi64_diag_scall)
-
+INTERRUPT64(0x83)
 INTERRUPT64(0x84)
 INTERRUPT64(0x85)
 INTERRUPT64(0x86)
@@ -616,7 +605,7 @@ EXT(ret32_set_gs):
 
 	add	$(ISC32_OFFSET)+8+8+8, %rsp	/* pop compat frame +
 						   trapno, trapfn and error */	
-        cmp	$(SYSENTER_CS),ISF64_CS-8-8-8(%rsp)
+        cmpl	$(SYSENTER_CS),ISF64_CS-8-8-8(%rsp)
 					/* test for fast entry/exit */
         je      L_fast_exit
 EXT(ret32_iret):
@@ -630,7 +619,7 @@ L_fast_exit:
 	pop	%rcx			/* user return esp */
 	.code32
 	sti				/* interrupts enabled after sysexit */
-	sysexit				/* 32-bit sysexit */
+	.byte 0x0f,0x35			/* 32-bit sysexit */
 	.code64
 
 L_64bit_return:
@@ -731,14 +720,6 @@ L_mdep_scall_continue:
 	jmp	L_32bit_enter_check
 
 	
-Entry(hi64_diag_scall)
-	swapgs				/* switch to kernel gs (cpu_data) */
-L_diag_scall_continue:
-	push	%rax			/* save system call number */
-	push	$(LO_DIAG_SCALL)
-	push	$(DIAG_INT)
-	jmp	L_32bit_enter_check
-
 Entry(hi64_syscall)
 	swapgs				/* Kapow! get per-cpu data area */
 L_syscall_continue:
@@ -1604,34 +1585,6 @@ Entry(lo_mdep_scall)
 	/*
 	 * always returns through thread_exception_return
 	 */
-
-
-Entry(lo_diag_scall)
-	TIME_TRAP_UENTRY
-
-	movl	%gs:CPU_KERNEL_STACK,%edi
-	xchgl	%edi,%esp			/* switch to kernel stack */
-	movl	%gs:CPU_ACTIVE_THREAD,%ecx	/* get current thread     */
-	movl	TH_TASK(%ecx),%ebx		/* point to current task  */
-
-	/* Check for active vtimers in the current task */
-	TASK_VTIMER_CHECK(%ebx, %ecx)
-
-	pushl	%edi			/* push pbc stack for later */
-
-	CCALL1(diagCall, %edi)		// Call diagnostics
-	
-	cli				// Disable interruptions just in case
-	cmpl	$0,%eax			// What kind of return is this?
-	je	1f			// - branch if bad (zero)
-	popl	%esp			// Get back the original stack
-	jmp	return_to_user		// Normal return, do not check asts...
-1:
-	CCALL5(i386_exception, $EXC_SYSCALL, $0x6000, $0, $1, $0)
-		// pass what would be the diag syscall
-		// error return - cause an exception
-	/* no return */
-
 
 return_to_user:
 	TIME_TRAP_UEXIT

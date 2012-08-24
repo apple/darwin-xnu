@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2007-2008 Apple Inc. All rights reserved.
+ * Copyright (c) 2007-2008, 2012 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -47,11 +47,6 @@
     #define KXLD_USER_OR_LP64 1
 #endif
 
-/* For ppc-specific linking code */
-#if (!KERNEL || __ppc__)
-    #define KXLD_USER_OR_PPC 1
-#endif
-
 /* For i386-specific linking code */
 #if (!KERNEL || __i386__)
     #define KXLD_USER_OR_I386 1
@@ -68,29 +63,32 @@
 #endif
 
 /* For linking code specific to architectures that support common symbols */
-#if (!KERNEL || __i386__ || __ppc__)
+#if (!KERNEL || __i386__)
     #define KXLD_USER_OR_COMMON 1
 #endif
 
 /* For linking code specific to architectures that support strict patching */
-#if (!KERNEL || !(__i386__ || __ppc__))
+#if (!KERNEL || !__i386__)
     #define KXLD_USER_OR_STRICT_PATCHING 1
 #endif
 
 /* For linking code specific to architectures that use MH_OBJECT */
-#if (!KERNEL || __i386__ || __ppc__ || __arm__)
+#if (!KERNEL || __i386__)
     #define KXLD_USER_OR_OBJECT 1
 #endif
 
 /* For linking code specific to architectures that use MH_KEXT_BUNDLE */
-#if (!KERNEL || __i386__ || __x86_64__ || __arm__)
-    #define KXLD_USER_OR_BUNDLE 1
-#endif
+#define KXLD_USER_OR_BUNDLE 1
 
 /* We no longer need to generate our own GOT for any architectures, but the code
  * required to do this will be saved inside this macro.
  */
 #define KXLD_USER_OR_GOT 0
+
+/* for building the dysymtab command generation into the dylib */
+#if (!KERNEL)
+    #define KXLD_PIC_KEXTS 1
+#endif
 
 /*******************************************************************************
 * Types
@@ -117,6 +115,7 @@ typedef uint64_t kxld_size_t;
 /* Flags for general linker behavior */
 enum kxld_flags {
     kKxldFlagDefault = 0x0,
+    kKXLDFlagIncludeRelocs = 0x01
 };
 typedef enum kxld_flags KXLDFlags;
 

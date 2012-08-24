@@ -31,6 +31,7 @@
 
 #include <sys/param.h>
 #include <sys/mbuf.h>
+#include <sys/mcache.h>
 #include <sys/socket.h>
 #include <kern/debug.h>
 #include <libkern/OSAtomic.h>
@@ -43,6 +44,9 @@
 static const mbuf_flags_t mbuf_flags_mask = (MBUF_EXT | MBUF_PKTHDR | MBUF_EOR |
     MBUF_LOOP | MBUF_BCAST | MBUF_MCAST | MBUF_FRAG | MBUF_FIRSTFRAG |
     MBUF_LASTFRAG | MBUF_PROMISC | MBUF_HASFCS);
+
+#define	MBUF_PKTAUXF_MASK	\
+	(MBUF_PKTAUXF_INET_RESOLVE_RTR | MBUF_PKTAUXF_INET6_RESOLVE_RTR)
 
 void* mbuf_data(mbuf_t mbuf)
 {
@@ -1105,38 +1109,67 @@ mbuf_get_minclsize(void)
 	return (MHLEN + MLEN);
 }
 
-mbuf_traffic_class_t 
+mbuf_traffic_class_t
 mbuf_get_traffic_class(mbuf_t m)
 {
-	mbuf_traffic_class_t prio = MBUF_TC_BE;
-
 	if (m == NULL || !(m->m_flags & M_PKTHDR))
-		return (prio);
+		return (MBUF_TC_BE);
 
-	if (m->m_pkthdr.prio <= MBUF_TC_VO)
-		prio = m->m_pkthdr.prio;
-
-	return (prio);
+	return (m_get_traffic_class(m));
 }
 
-errno_t 
+errno_t
 mbuf_set_traffic_class(mbuf_t m, mbuf_traffic_class_t tc)
 {
-	errno_t error = 0;
-	
-	if (m == NULL || !(m->m_flags & M_PKTHDR))
-		return EINVAL;
+	if (m == NULL || !(m->m_flags & M_PKTHDR) ||
+	    ((u_int32_t)tc >= MBUF_TC_MAX))
+		return (EINVAL);
 
-	switch (tc) {
-		case MBUF_TC_BE:
-		case MBUF_TC_BK:
-		case MBUF_TC_VI:
-		case MBUF_TC_VO:
-			m->m_pkthdr.prio = tc;
-			break;
-		default:
-			error = EINVAL;
-			break;
-	}
-	return error;
+	return (m_set_traffic_class(m, tc));
+}
+
+int
+mbuf_is_traffic_class_privileged(mbuf_t m)
+{
+	if (m == NULL || !(m->m_flags & M_PKTHDR) ||
+	    !MBUF_VALID_SC(m->m_pkthdr.svc))
+		return (0);
+
+	return (m->m_pkthdr.aux_flags & MAUXF_PRIO_PRIVILEGED);
+}
+
+mbuf_svc_class_t
+mbuf_get_service_class(mbuf_t m)
+{
+	if (m == NULL || !(m->m_flags & M_PKTHDR))
+		return (MBUF_SC_BE);
+
+	return (m_get_service_class(m));
+}
+
+errno_t
+mbuf_set_service_class(mbuf_t m, mbuf_svc_class_t sc)
+{
+	if (m == NULL || !(m->m_flags & M_PKTHDR))
+		return (EINVAL);
+
+	return (m_set_service_class(m, sc));
+}
+
+errno_t
+mbuf_pkthdr_aux_flags(mbuf_t m, mbuf_pkthdr_aux_flags_t *flagsp)
+{
+	u_int32_t flags;
+	if (m == NULL || !(m->m_flags & M_PKTHDR) || flagsp == NULL)
+		return (EINVAL);
+
+	flags = m->m_pkthdr.aux_flags & MBUF_PKTAUXF_MASK;
+
+	/* These 2 flags are mutually exclusive */
+	VERIFY((flags &
+	    (MBUF_PKTAUXF_INET_RESOLVE_RTR | MBUF_PKTAUXF_INET6_RESOLVE_RTR)) !=
+	    (MBUF_PKTAUXF_INET_RESOLVE_RTR | MBUF_PKTAUXF_INET6_RESOLVE_RTR));
+
+	*flagsp = flags;
+	return (0);
 }

@@ -53,7 +53,7 @@ void (*dtrace_cpu_init)(processorid_t);
 void (*dtrace_modload)(struct modctl *);
 void (*dtrace_modunload)(struct modctl *);
 #else
-int (*dtrace_modload)(struct kmod_info *);
+int (*dtrace_modload)(struct kmod_info *, uint32_t);
 int (*dtrace_modunload)(struct kmod_info *);
 void (*dtrace_helpers_cleanup)(proc_t *);
 #endif  /*__APPLE__*/

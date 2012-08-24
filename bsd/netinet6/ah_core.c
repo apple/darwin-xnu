@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008 Apple Inc. All rights reserved.
+ * Copyright (c) 2008-2011 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -108,7 +108,7 @@
 #include <netkey/keydb.h>
 #include <libkern/crypto/md5.h>
 #include <libkern/crypto/sha1.h>
-#include <crypto/sha2/sha2.h>
+#include <libkern/crypto/sha2.h>
 
 #include <net/net_osdep.h>
 
@@ -300,7 +300,7 @@ ah_keyed_md5_init(state, sav)
 {
 	size_t padlen;
 	size_t keybitlen;
-	u_int8_t buf[32];
+	u_int8_t buf[32] __attribute__((aligned(4)));
 
 	if (!state)
 		panic("ah_keyed_md5_init: what?");
@@ -369,7 +369,7 @@ ah_keyed_md5_result(state, addr, l)
 	caddr_t addr;
 	size_t l;
 {
-	u_char digest[16];
+	u_char digest[16] __attribute__((aligned(4)));
 
 	if (!state)
 		panic("ah_keyed_md5_result: what?");
@@ -420,7 +420,7 @@ ah_keyed_sha1_init(state, sav)
 	SHA1_CTX *ctxt;
 	size_t padlen;
 	size_t keybitlen;
-	u_int8_t buf[32];
+	u_int8_t buf[32] __attribute__((aligned(4)));
 
 	if (!state)
 		panic("ah_keyed_sha1_init: what?");
@@ -491,7 +491,7 @@ ah_keyed_sha1_result(state, addr, l)
 	caddr_t addr;
 	size_t l;
 {
-	u_char digest[SHA1_RESULTLEN];	/* SHA-1 generates 160 bits */
+	u_char digest[SHA1_RESULTLEN] __attribute__((aligned(4)));	/* SHA-1 generates 160 bits */
 	SHA1_CTX *ctxt;
 
 	if (!state || !state->foo)
@@ -543,7 +543,7 @@ ah_hmac_md5_init(state, sav)
 {
 	u_char *ipad;
 	u_char *opad;
-	u_char tk[16];
+	u_char tk[16] __attribute__((aligned(4)));
 	u_char *key;
 	size_t keylen;
 	size_t i;
@@ -559,7 +559,7 @@ ah_hmac_md5_init(state, sav)
 
 	ipad = (u_char *)state->foo;
 	opad = (u_char *)(ipad + 64);
-	ctxt = (MD5_CTX *)(opad + 64);
+	ctxt = (MD5_CTX *)(void *)(opad + 64);
 
 	/* compress the key if necessery */
 	if (64 < _KEYLEN(state->sav->key_auth)) {
@@ -599,7 +599,7 @@ ah_hmac_md5_loop(state, addr, len)
 
 	if (!state || !state->foo)
 		panic("ah_hmac_md5_loop: what?");
-	ctxt = (MD5_CTX *)(((caddr_t)state->foo) + 128);
+	ctxt = (MD5_CTX *)(void *)(((caddr_t)state->foo) + 128);
 	MD5Update(ctxt, addr, len);
 }
 
@@ -609,7 +609,7 @@ ah_hmac_md5_result(state, addr, l)
 	caddr_t addr;
 	size_t l;
 {
-	u_char digest[16];
+	u_char digest[16] __attribute__((aligned(4)));
 	u_char *ipad;
 	u_char *opad;
 	MD5_CTX *ctxt;
@@ -619,7 +619,7 @@ ah_hmac_md5_result(state, addr, l)
 
 	ipad = (u_char *)state->foo;
 	opad = (u_char *)(ipad + 64);
-	ctxt = (MD5_CTX *)(opad + 64);
+	ctxt = (MD5_CTX *)(void *)(opad + 64);
 
 	MD5Final(&digest[0], ctxt);
 
@@ -669,7 +669,7 @@ ah_hmac_sha1_init(state, sav)
 	u_char *ipad;
 	u_char *opad;
 	SHA1_CTX *ctxt;
-	u_char tk[SHA1_RESULTLEN];	/* SHA-1 generates 160 bits */
+	u_char tk[SHA1_RESULTLEN] __attribute__((aligned(4)));	/* SHA-1 generates 160 bits */
 	u_char *key;
 	size_t keylen;
 	size_t i;
@@ -685,7 +685,7 @@ ah_hmac_sha1_init(state, sav)
 
 	ipad = (u_char *)state->foo;
 	opad = (u_char *)(ipad + 64);
-	ctxt = (SHA1_CTX *)(opad + 64);
+	ctxt = (SHA1_CTX *)(void *)(opad + 64);
 
 	/* compress the key if necessery */
 	if (64 < _KEYLEN(state->sav->key_auth)) {
@@ -726,7 +726,7 @@ ah_hmac_sha1_loop(state, addr, len)
 	if (!state || !state->foo)
 		panic("ah_hmac_sha1_loop: what?");
 
-	ctxt = (SHA1_CTX *)(((u_char *)state->foo) + 128);
+	ctxt = (SHA1_CTX *)(void *)(((u_char *)state->foo) + 128);
 	SHA1Update(ctxt, (caddr_t)addr, (size_t)len);
 }
 
@@ -736,7 +736,7 @@ ah_hmac_sha1_result(state, addr, l)
 	caddr_t addr;
 	size_t l;
 {
-	u_char digest[SHA1_RESULTLEN];	/* SHA-1 generates 160 bits */
+	u_char digest[SHA1_RESULTLEN] __attribute__((aligned(4)));	/* SHA-1 generates 160 bits */
 	u_char *ipad;
 	u_char *opad;
 	SHA1_CTX *ctxt;
@@ -746,7 +746,7 @@ ah_hmac_sha1_result(state, addr, l)
 
 	ipad = (u_char *)state->foo;
 	opad = (u_char *)(ipad + 64);
-	ctxt = (SHA1_CTX *)(opad + 64);
+	ctxt = (SHA1_CTX *)(void *)(opad + 64);
 
 	SHA1Final((caddr_t)&digest[0], ctxt);
 
@@ -809,7 +809,7 @@ ah_hmac_sha2_256_init(state, sav)
 	u_char *ipad;
 	u_char *opad;
 	SHA256_CTX *ctxt;
-	u_char tk[SHA256_DIGEST_LENGTH];
+	u_char tk[SHA256_DIGEST_LENGTH] __attribute__((aligned(4)));
 	u_char *key;
 	size_t keylen;
 	size_t i;
@@ -825,7 +825,7 @@ ah_hmac_sha2_256_init(state, sav)
 
 	ipad = (u_char *)state->foo;
 	opad = (u_char *)(ipad + 64);
-	ctxt = (SHA256_CTX *)(opad + 64);
+	ctxt = (SHA256_CTX *)(void *)(opad + 64);
 
 	/* compress the key if necessery */
 	if (64 < _KEYLEN(state->sav->key_auth)) {
@@ -869,7 +869,7 @@ ah_hmac_sha2_256_loop(state, addr, len)
 	if (!state || !state->foo)
 		panic("ah_hmac_sha2_256_loop: what?");
 
-	ctxt = (SHA256_CTX *)(((u_char *)state->foo) + 128);
+	ctxt = (SHA256_CTX *)(void *)(((u_char *)state->foo) + 128);
 	SHA256_Update(ctxt, (const u_int8_t *)addr, (size_t)len);
 }
 
@@ -879,7 +879,7 @@ ah_hmac_sha2_256_result(state, addr, l)
 	caddr_t addr;
 	size_t l;
 {
-	u_char digest[SHA256_DIGEST_LENGTH];
+	u_char digest[SHA256_DIGEST_LENGTH] __attribute__((aligned(4)));
 	u_char *ipad;
 	u_char *opad;
 	SHA256_CTX *ctxt;
@@ -889,7 +889,7 @@ ah_hmac_sha2_256_result(state, addr, l)
 
 	ipad = (u_char *)state->foo;
 	opad = (u_char *)(ipad + 64);
-	ctxt = (SHA256_CTX *)(opad + 64);
+	ctxt = (SHA256_CTX *)(void *)(opad + 64);
 
 	SHA256_Final((u_int8_t *)digest, ctxt);
 
@@ -951,7 +951,7 @@ ah_hmac_sha2_384_init(state, sav)
 	u_char *ipad;
 	u_char *opad;
 	SHA384_CTX *ctxt;
-	u_char tk[SHA384_DIGEST_LENGTH];
+	u_char tk[SHA384_DIGEST_LENGTH] __attribute__((aligned(4)));
 	u_char *key;
 	size_t keylen;
 	size_t i;
@@ -968,7 +968,7 @@ ah_hmac_sha2_384_init(state, sav)
 
 	ipad = (u_char *)state->foo;
 	opad = (u_char *)(ipad + 128);
-	ctxt = (SHA384_CTX *)(opad + 128);
+	ctxt = (SHA384_CTX *)(void *)(opad + 128);
 
 	/* compress the key if necessery */
 	if (128 < _KEYLEN(state->sav->key_auth)) {
@@ -1012,7 +1012,7 @@ ah_hmac_sha2_384_loop(state, addr, len)
 	if (!state || !state->foo)
 		panic("ah_hmac_sha2_384_loop: what?");
 
-	ctxt = (SHA384_CTX *)(((u_char *)state->foo) + 256);
+	ctxt = (SHA384_CTX *)(void *)(((u_char *)state->foo) + 256);
 	SHA384_Update(ctxt, (const u_int8_t *)addr, (size_t)len);
 }
 
@@ -1032,7 +1032,7 @@ ah_hmac_sha2_384_result(state, addr, l)
 
 	ipad = (u_char *)state->foo;
 	opad = (u_char *)(ipad + 128);
-	ctxt = (SHA384_CTX *)(opad + 128);
+	ctxt = (SHA384_CTX *)(void *)(opad + 128);
 
 	SHA384_Final((u_int8_t *)digest, ctxt);
 
@@ -1094,7 +1094,7 @@ ah_hmac_sha2_512_init(state, sav)
 	u_char *ipad;
 	u_char *opad;
 	SHA512_CTX *ctxt;
-	u_char tk[SHA512_DIGEST_LENGTH];
+	u_char tk[SHA512_DIGEST_LENGTH] __attribute__((aligned(4)));
 	u_char *key;
 	size_t keylen;
 	size_t i;
@@ -1111,7 +1111,7 @@ ah_hmac_sha2_512_init(state, sav)
 
 	ipad = (u_char *)state->foo;
 	opad = (u_char *)(ipad + 128);
-	ctxt = (SHA512_CTX *)(opad + 128);
+	ctxt = (SHA512_CTX *)(void *)(opad + 128);
 
 	/* compress the key if necessery */
 	if (128 < _KEYLEN(state->sav->key_auth)) {
@@ -1155,7 +1155,7 @@ ah_hmac_sha2_512_loop(state, addr, len)
 	if (!state || !state->foo)
 		panic("ah_hmac_sha2_512_loop: what?");
 
-	ctxt = (SHA512_CTX *)(((u_char *)state->foo) + 256);
+	ctxt = (SHA512_CTX *)(void *)(((u_char *)state->foo) + 256);
 	SHA512_Update(ctxt, (const u_int8_t *) addr, (size_t)len);
 }
 
@@ -1165,7 +1165,7 @@ ah_hmac_sha2_512_result(state, addr, l)
 	caddr_t addr;
 	size_t l;
 {
-	u_char digest[SHA512_DIGEST_LENGTH];
+	u_char digest[SHA512_DIGEST_LENGTH] __attribute__((aligned(4)));
 	u_char *ipad;
 	u_char *opad;
 	SHA512_CTX *ctxt;
@@ -1175,7 +1175,7 @@ ah_hmac_sha2_512_result(state, addr, l)
 
 	ipad = (u_char *)state->foo;
 	opad = (u_char *)(ipad + 128);
-	ctxt = (SHA512_CTX *)(opad + 128);
+	ctxt = (SHA512_CTX *)(void *)(opad + 128);
 
 	SHA512_Final((u_int8_t *)digest, ctxt);
 
@@ -1257,7 +1257,7 @@ ah4_calccksum(m, ahdat, len, algo, sav)
 	int hdrtype;
 	size_t advancewidth;
 	struct ah_algorithm_state algos;
-	u_char sumbuf[AH_MAXSUMSIZE];
+	u_char sumbuf[AH_MAXSUMSIZE] __attribute__((aligned(4)));
 	int error = 0;
 	int ahseen;
 	struct mbuf *n = NULL;
@@ -1503,7 +1503,7 @@ ah6_calccksum(m, ahdat, len, algo, sav)
 	int error;
 	int ahseen;
 	struct ah_algorithm_state algos;
-	u_char sumbuf[AH_MAXSUMSIZE];
+	u_char sumbuf[AH_MAXSUMSIZE] __attribute__((aligned(4)));
 
 	if ((m->m_flags & M_PKTHDR) == 0)
 		return EINVAL;

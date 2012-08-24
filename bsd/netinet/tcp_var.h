@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2011 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2012 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -170,6 +170,17 @@ struct tcptemp {
 	struct	tcphdr tt_t;
 };
 
+struct bwmeas {
+	tcp_seq bw_start;		/* start of bw measurement */
+	uint32_t bw_ts;		/* timestamp when bw measurement started */
+	uint32_t bw_size;		/* burst size in bytes for this bw measurement */
+	uint32_t bw_minsizepkts;	/* Min burst size as segments */
+	uint32_t bw_maxsizepkts;	/* Max burst size as segments */
+	uint32_t bw_minsize;	/* Min size in bytes */
+	uint32_t bw_maxsize;	/* Max size in bytes */
+	uint32_t bw_sndbw;		/* Measured send bw */
+};
+
 #define tcp6cb		tcpcb  /* for KAME src sync over BSD*'s */
 
 /*
@@ -210,7 +221,6 @@ struct tcpcb {
 #define	TF_WASFRECOVERY	0x400000	/* was in NewReno Fast Recovery */
 #define	TF_SIGNATURE	0x800000	/* require MD5 digests (RFC2385) */
 #define	TF_MAXSEGSNT	0x1000000	/* last segment sent was a full segment */
-#define	TF_SENDINPROG	0x2000000	/* send is in progress */
 #define TF_PMTUD	0x4000000	/* Perform Path MTU Discovery for this connection */
 #define	TF_CLOSING	0x8000000	/* pending tcp close */
 #define TF_TSO		0x10000000	/* TCP Segment Offloading is enable on this connection */
@@ -239,12 +249,10 @@ struct tcpcb {
 
 	u_int32_t	snd_wnd;		/* send window */
 	u_int32_t	snd_cwnd;		/* congestion-controlled window */
-	u_int32_t	snd_bwnd;		/* bandwidth-controlled window */
 	u_int32_t	snd_ssthresh;		/* snd_cwnd size threshold for
 					 * for slow start exponential to
 					 * linear switch
 					 */
-	u_int32_t	snd_bandwidth;	/* calculated bandwidth or 0 */
 	tcp_seq	snd_recover;		/* for use in NewReno Fast Recovery */
 
 	u_int	t_maxopd;		/* mss plus options */
@@ -254,8 +262,8 @@ struct tcpcb {
 	int	t_rtttime;		/* tcp clock when rtt calculation was started */
 	tcp_seq	t_rtseq;		/* sequence number being timed */
 
-	int	t_bw_rtttime;		/* used for bandwidth calculation */
-	tcp_seq	t_bw_rtseq;		/* used for bandwidth calculation */
+	u_int32_t rfbuf_ts;		/* recv buffer autoscaling timestamp */
+	u_int32_t rfbuf_cnt;		/* recv buffer autoscaling byte count */
 
 	int	t_rxtcur;		/* current retransmit value (ticks) */
 	u_int	t_maxseg;		/* maximum segment size */
@@ -302,7 +310,7 @@ struct tcpcb {
 	int	t_unacksegs;		/* received but unacked segments: used for delaying acks */
 	u_int32_t	t_persist_timeout;	/* ZWP persistence limit as set by PERSIST_TIMEOUT */
 	u_int32_t	t_persist_stop;		/* persistence limit deadline if triggered by ZWP */
-
+	u_int32_t	t_notsent_lowat;	/* Low water for not sent data */
 
 /* 3529618 MSS overload prevention */
 	u_int32_t	rcv_reset;
@@ -320,10 +328,9 @@ struct tcpcb {
 #define TE_SENDIPECT		0x04	/* Indicate we haven't sent or received non-ECN-setup SYN or SYN-ACK */
 #define TE_SENDCWR		0x08	/* Indicate that the next non-retransmit should have the TCP CWR flag set */
 #define TE_SENDECE		0x10	/* Indicate that the next packet should have the TCP ECE flag set */
-	tcp_seq snd_high;		/* for use in NewReno Fast Recovery */
-	tcp_seq snd_high_prev;	/* snd_high prior to retransmit */
+#define TE_ECN_ON		(TE_SETUPSENT | TE_SETUPRECEIVED) /* Indicate ECN was successfully negotiated on a connection) */
+
 	tcp_seq	snd_recover_prev;	/* snd_recover prior to retransmit */
-	u_char	snd_limited;		/* segments limited transmitted */
 /* anti DoS counters */
 	u_int32_t	rcv_second;		/* start of interval second */
 
@@ -362,7 +369,9 @@ struct tcpcb {
 	uint32_t	t_flagsext;		/* Another field to accommodate more flags */
 #define TF_RXTFINDROP	0x1			/* Drop conn after retransmitting FIN 3 times */
 #define TF_RCVUNACK_WAITSS	0x2		/* set when the receiver should not stretch acks */
-
+#define TF_BWMEAS_INPROGRESS	0x4		/* Indicate BW meas is happening */
+#define TF_MEASURESNDBW		0x8		/* Measure send bw on this connection */
+#define TF_LRO_OFFLOADED	0x10		/* Connection LRO offloaded */
 #if TRAFFIC_MGT
 	/* Inter-arrival jitter related state */
 	uint32_t 	iaj_rcv_ts;		/* tcp clock when the first packet was received */
@@ -374,10 +383,26 @@ struct tcpcb {
 	uint32_t	avg_iaj;		/* Mean */
 	uint32_t	std_dev_iaj;		/* Standard deviation */
 #endif /* TRAFFIC_MGT */
+	struct bwmeas	*t_bwmeas;		/* State for bandwidth measurement */ 
+	uint32_t	t_lropktlen;		/* Bytes in a LRO frame */
+	tcp_seq		t_idleat;		/* rcv_nxt at idle time */
 };
 
 #define IN_FASTRECOVERY(tp)	(tp->t_flags & TF_FASTRECOVERY)
-#define ENTER_FASTRECOVERY(tp)	tp->t_flags |= TF_FASTRECOVERY
+
+/*
+ * If the connection is in a throttled state due to advisory feedback from 
+ * the interface output queue, reset that state. We do this in favor
+ * of entering recovery because the data transfer during recovery 
+ * should be just a trickle and it will help to improve performance.
+ * We also do not want to back off twice in the same RTT.
+ */
+#define ENTER_FASTRECOVERY(_tp_) do {				\
+	(_tp_)->t_flags |= TF_FASTRECOVERY;			\
+	if (INP_IS_FLOW_CONTROLLED((_tp_)->t_inpcb))		\
+		inp_reset_fc_state((_tp_)->t_inpcb);		\
+} while(0)
+
 #define EXIT_FASTRECOVERY(tp)	tp->t_flags &= ~TF_FASTRECOVERY
 
 #if CONFIG_DTRACE
@@ -394,7 +419,9 @@ enum tcp_cc_event {
 	TCP_CC_ECN_RCVD,
 	TCP_CC_BAD_REXMT_RECOVERY,
 	TCP_CC_OUTPUT_ERROR,
-	TCP_CC_CHANGE_ALGO
+	TCP_CC_CHANGE_ALGO,
+	TCP_CC_FLOW_CONTROL,
+	TCP_CC_SUSPEND
 };
 #endif /* CONFIG_DTRACE */
 
@@ -685,14 +712,40 @@ struct	tcpstat {
 
 	/* SACK related stats */
 	u_int32_t	tcps_sack_recovery_episode; /* SACK recovery episodes */
-	u_int32_t  tcps_sack_rexmits;	    /* SACK rexmit segments   */
-	u_int32_t  tcps_sack_rexmit_bytes;	    /* SACK rexmit bytes      */
-	u_int32_t  tcps_sack_rcv_blocks;	    /* SACK blocks (options) received */
-	u_int32_t  tcps_sack_send_blocks;	    /* SACK blocks (options) sent     */
-	u_int32_t  tcps_sack_sboverflow;	    /* SACK sendblock overflow   */
+	u_int32_t 	tcps_sack_rexmits;	    /* SACK rexmit segments   */
+	u_int32_t 	tcps_sack_rexmit_bytes;	    /* SACK rexmit bytes      */
+	u_int32_t 	tcps_sack_rcv_blocks;	    /* SACK blocks (options) received */
+	u_int32_t 	tcps_sack_send_blocks;	    /* SACK blocks (options) sent     */
+	u_int32_t 	tcps_sack_sboverflow;	    /* SACK sendblock overflow   */
 
 	u_int32_t	tcps_bg_rcvtotal;	/* total background packets received */
 	u_int32_t	tcps_rxtfindrop;	/* drop conn after retransmitting FIN */
+	u_int32_t	tcps_fcholdpacket;	/* packets withheld because of flow control */
+
+	/* LRO related stats */
+	u_int32_t	tcps_coalesced_pack;	/* number of coalesced packets */
+	u_int32_t	tcps_flowtbl_full;	/* times flow table was full */
+	u_int32_t	tcps_flowtbl_collision;	/* collisions in flow tbl */
+	u_int32_t	tcps_lro_twopack;	/* 2 packets coalesced */
+	u_int32_t	tcps_lro_multpack;	/* 3 or 4 pkts coalesced */
+	u_int32_t	tcps_lro_largepack;	/* 5 or more pkts coalesced */
+};
+
+struct tcpstat_local {
+	u_int64_t badformat;
+	u_int64_t unspecv6;
+	u_int64_t synfin;
+	u_int64_t badformatipsec;
+	u_int64_t noconnnolist;
+	u_int64_t noconnlist;
+	u_int64_t listbadsyn;
+	u_int64_t icmp6unreach;
+	u_int64_t deprecate6;
+	u_int64_t ooopacket;
+	u_int64_t rstinsynrcv;
+	u_int64_t dospacket;
+	u_int64_t cleanup;
+	u_int64_t synwindow;
 };
 
 #pragma pack(4)
@@ -961,6 +1014,7 @@ int	 tcp_ctloutput(struct socket *, struct sockopt *);
 struct tcpcb *
 	 tcp_drop(struct tcpcb *, int);
 void	 tcp_drain(void);
+void	 tcp_getrt_rtt(struct tcpcb *tp, struct rtentry *rt);
 struct rmxp_tao *
 	 tcp_gettaocache(struct inpcb *);
 void	 tcp_init(void) __attribute__((section("__TEXT, initcode")));
@@ -998,8 +1052,22 @@ void	 tcp_free_sackholes(struct tcpcb *tp);
 int32_t	 tcp_sbspace(struct tcpcb *tp);
 void	 tcp_set_tso(struct tcpcb *tp, struct ifnet *ifp);
 void	 tcp_reset_stretch_ack(struct tcpcb *tp);
+void	 tcp_get_ports_used(unsigned int , uint8_t *);
+uint32_t tcp_count_opportunistic(unsigned int ifindex, u_int32_t flags);
+void	 tcp_set_max_rwinscale(struct tcpcb *tp, struct socket *so);
+u_int8_t tcp_cansbgrow(struct sockbuf *sb);
+struct bwmeas* tcp_bwmeas_alloc(struct tcpcb *tp);
+void tcp_bwmeas_free(struct tcpcb *tp);
+
+extern void tcp_set_background_cc(struct socket *);
+extern void tcp_set_foreground_cc(struct socket *);
+extern void tcp_set_recv_bg(struct socket *);
+extern void tcp_clear_recv_bg(struct socket *);
+#define	IS_TCP_RECV_BG(_so)	\
+	((_so)->so_traffic_mgt_flags & TRAFFIC_MGT_TCP_RECVBG)
 
 #if TRAFFIC_MGT
+#define CLEAR_IAJ_STATE(_tp_) (_tp_)->iaj_rcv_ts = 0
 void	 reset_acc_iaj(struct tcpcb *tp);
 #endif /* TRAFFIC_MGT */
 

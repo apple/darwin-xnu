@@ -85,6 +85,7 @@ ident		PEXPERT
 options		MACH_PE		# Objective-C support		# <mach_pe>
 options		MACH_KERNEL
 options		DEBUG		# general debugging code	# <debug>
+options		MACH_ASSERT	# 	  	    		# <mach_assert>
 options		CONFIG_DTRACE 	# dtrace support		# <config_dtrace>
 
 options		PANIC_INFO	# want kernel panic info	# <panic_info>

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2011 Apple Inc. All rights reserved.
+ * Copyright (c) 2011-2012 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -39,7 +39,8 @@ extern "C" {
 /*
  * Per-interface link-layer reachability information (private).
  */
-#define	IF_LLREACHINFO_ADDRLEN	64		/* max ll addr len */
+#define	IF_LLREACHINFO_ADDRLEN		64	/* max ll addr len */
+#define	IF_LLREACHINFO_RESERVED2	16	/* more reserved bits */
 
 struct if_llreach_info {
 	u_int32_t		lri_refcnt;	/* reference count */
@@ -49,6 +50,10 @@ struct if_llreach_info {
 	u_int16_t		lri_reserved;	/* for future use */
 	u_int16_t		lri_proto;	/* ll proto */
 	u_int8_t		lri_addr[IF_LLREACHINFO_ADDRLEN]; /* ll addr */
+	int32_t			lri_rssi;	/* received signal strength */
+	int32_t			lri_lqm;	/* link quality metric */
+	int32_t			lri_npm;	/* node proximity metric */
+	u_int8_t		lri_reserved2[IF_LLREACHINFO_RESERVED2];
 };
 
 #ifdef XNU_KERNEL_PRIVATE
@@ -92,6 +97,9 @@ struct if_llreach {
 		u_int16_t	proto;		/* ll proto */
 		u_int8_t	addr[IF_LLREACH_MAXLEN]; /* ll addr */
 	} lr_key;
+	int32_t			lr_rssi;	/* received signal strength */
+	int32_t			lr_lqm;		/* link quality metric */
+	int32_t			lr_npm;		/* node proximity metric */
 };
 
 RB_PROTOTYPE_SC_PREV(__private_extern__, ll_reach_tree, if_llreach,
@@ -126,6 +134,8 @@ RB_PROTOTYPE_SC_PREV(__private_extern__, ll_reach_tree, if_llreach,
 #define	IFLR_REMREF(_iflr)						\
 	iflr_remref(_iflr)
 
+struct ifnet_llreach_info;	/* forward declaration */
+
 extern void ifnet_llreach_init(void);
 extern void ifnet_llreach_ifattach(struct ifnet *, boolean_t);
 extern void ifnet_llreach_ifdetach(struct ifnet *);
@@ -136,8 +146,12 @@ extern int ifnet_llreach_reachable(struct if_llreach *);
 extern int ifnet_llreach_reachable_delta(struct if_llreach *, u_int64_t);
 extern void ifnet_llreach_set_reachable(struct ifnet *, u_int16_t, void *,
     unsigned int);
-extern u_int64_t ifnet_llreach_up2cal(struct if_llreach *, u_int64_t);
+extern u_int64_t ifnet_llreach_up2calexp(struct if_llreach *, u_int64_t);
+extern u_int64_t ifnet_llreach_up2upexp(struct if_llreach *, u_int64_t);
+extern int ifnet_llreach_get_defrouter(struct ifnet *, int,
+    struct ifnet_llreach_info *);
 extern void ifnet_lr2ri(struct if_llreach *, struct rt_reach_info *);
+extern void ifnet_lr2iflri(struct if_llreach *, struct ifnet_llreach_info *);
 extern void ifnet_lr2lri(struct if_llreach *, struct if_llreach_info *);
 extern void iflr_addref(struct if_llreach *, int);
 extern void iflr_remref(struct if_llreach *);

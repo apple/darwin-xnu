@@ -27,7 +27,6 @@
  */
 #include <i386/asm.h>
 #include <assym.s>
-#include <mach_kdb.h>
 #include <i386/eflags.h>
 #include <i386/rtclock_asm.h>
 #include <i386/trap.h>
@@ -77,7 +76,6 @@
 #define	HNDL_UNIX_SCALL		EXT(hndl_unix_scall)
 #define	HNDL_MACH_SCALL		EXT(hndl_mach_scall)
 #define	HNDL_MDEP_SCALL		EXT(hndl_mdep_scall)
-#define	HNDL_DIAG_SCALL		EXT(hndl_diag_scall)
 #define	HNDL_DOUBLE_FAULT	EXT(hndl_double_fault)
 #define	HNDL_MACHINE_CHECK	EXT(hndl_machine_check)
 
@@ -158,7 +156,7 @@ L_dispatch:
 	push	%rcx
 	mov	EXT(pal_efi_saved_cr3)(%rip), %rcx
 	mov	%rcx, %cr3
-	leaq	0(%rip), %rcx
+	leaq	(%rip), %rcx
 	shr	$32, %rcx		/* splice the upper 32-bits of rip */
 	shl	$32, %rsp		/* .. and the lower 32-bits of rsp */
 	shrd	$32, %rcx, %rsp		/* to recover the full 64-bits of rsp */
@@ -181,8 +179,8 @@ L_64bit_dispatch:
 	/*
 	 * Save segment regs - for completeness since theyre not used.
 	 */
-	mov	%fs, R64_FS(%rsp)
-	mov	%gs, R64_GS(%rsp)
+	movl	%fs, R64_FS(%rsp)
+	movl	%gs, R64_GS(%rsp)
 
 	/* Save general-purpose registers */
 	mov	%rax, R64_RAX(%rsp)
@@ -240,10 +238,10 @@ L_32bit_dispatch: /* 32-bit user task */
 	/*
 	 * Save segment regs
 	 */
-	mov	%ds, R32_DS(%rsp)
-	mov	%es, R32_ES(%rsp)
-	mov	%fs, R32_FS(%rsp)
-	mov	%gs, R32_GS(%rsp)
+	movl	%ds, R32_DS(%rsp)
+	movl	%es, R32_ES(%rsp)
+	movl	%fs, R32_FS(%rsp)
+	movl	%gs, R32_GS(%rsp)
 
 	/*
 	 * Save general 32-bit registers
@@ -322,7 +320,7 @@ L_common_dispatch:
 	mov	%gs:CPU_ACTIVE_THREAD, %rcx	/* Get the active thread */
 	cmpq	$0, TH_PCB_IDS(%rcx)	/* Is there a debug register state? */
 	je	3f
-	mov	$0, %rcx		/* If so, reset DR7 (the control) */
+	xor	%ecx, %ecx		/* If so, reset DR7 (the control) */
 	mov	%rcx, %dr7
 3:
 	incl	%gs:hwIntCnt(,%ebx,4)		// Bump the trap/intr count
@@ -340,7 +338,7 @@ Entry(ret_to_user)
 	mov	%gs:CPU_ACTIVE_THREAD, %rdx
 	movq	TH_PCB_IDS(%rdx),%rax	/* Obtain this thread's debug state */
 	
-	cmpq	$0,%rax			/* Is there a debug register context? */
+	test	%rax, %rax		/* Is there a debug register context? */
 	je	2f 			/* branch if not */
 	cmpl	$(TASK_MAP_32BIT), %gs:CPU_TASK_MAP /* Are we a 32-bit task? */
 	jne	1f
@@ -431,21 +429,21 @@ L_32bit_return:
 	 */
 	swapgs
 EXT(ret32_set_ds):	
-	movw	R32_DS(%rsp), %ds
+	movl	R32_DS(%rsp), %ds
 EXT(ret32_set_es):
-	movw	R32_ES(%rsp), %es
+	movl	R32_ES(%rsp), %es
 EXT(ret32_set_fs):
-	movw	R32_FS(%rsp), %fs
+	movl	R32_FS(%rsp), %fs
 EXT(ret32_set_gs):
-	movw	R32_GS(%rsp), %gs
+	movl	R32_GS(%rsp), %gs
 
 	/* pop compat frame + trapno, trapfn and error */	
 	add	$(ISC32_OFFSET)+8+8+8, %rsp
-        cmp	$(SYSENTER_CS),ISF64_CS-8-8-8(%rsp)
+	cmpl	$(SYSENTER_CS),ISF64_CS-8-8-8(%rsp)
 					/* test for fast entry/exit */
-        je      L_fast_exit
+	je      L_fast_exit
 EXT(ret32_iret):
-        iretq				/* return from interrupt */
+	iretq				/* return from interrupt */
 
 L_fast_exit:
 	pop	%rdx			/* user return eip */
@@ -454,7 +452,7 @@ L_fast_exit:
 	popf				/* flags - carry denotes failure */
 	pop	%rcx			/* user return esp */
 	sti				/* interrupts enabled after sysexit */
-	sysexit				/* 32-bit sysexit */
+	.byte 0x0f,0x35			/* 32-bit sysexit */
 
 ret_to_kernel:
 #if DEBUG_IDT64
@@ -553,14 +551,6 @@ Entry(idt64_mdep_scall)
 	pushq	$(MACHDEP_INT)
 	jmp	L_32bit_entry_check
 
-	
-Entry(idt64_diag_scall)
-	swapgs				/* switch to kernel gs (cpu_data) */
-	push	%rax			/* save system call number */
-	PUSH_FUNCTION(HNDL_DIAG_SCALL)
-	pushq	$(DIAG_INT)
-	jmp	L_32bit_entry_check
-
 Entry(hi64_syscall)
 Entry(idt64_syscall)
 L_syscall_continue:
@@ -582,6 +572,7 @@ L_syscall_continue:
 	movq	$(T_SYSCALL), ISF64_TRAPNO(%rsp)	/* trapno */
 	leaq	HNDL_SYSCALL(%rip), %r11;
 	movq	%r11, ISF64_TRAPFN(%rsp)
+	mov	ISF64_RFLAGS(%rsp), %r11	/* Avoid info leak,restore R11 */
 	jmp	L_64bit_dispatch		/* this can only be a 64-bit task */
 	
 /*
@@ -807,9 +798,9 @@ L_kernel_trap:
  *  24 ISF64_RIP:	rip
  *  32 ISF64_CS:	cs
  *  40 ISF64_RFLAGS:	rflags 
- *  48 ISF64_RSP:	rsp --> new trapno
- *  56 ISF64_SS:	ss  --> new trapfn
- *  64			pad --> new errcode
+ *  48 ISF64_RSP:	rsp  <-- new trapno
+ *  56 ISF64_SS:	ss   <-- new trapfn
+ *  64			pad8 <-- new errcode
  *  72			user rip
  *  80			user cs
  *  88			user rflags
@@ -820,7 +811,7 @@ L_fault_iret:
 	pop	%rax			/* recover saved %rax */
 	mov	%rax, ISF64_RIP(%rsp)	/* save rax (we don`t need saved rip) */
 	mov	ISF64_TRAPNO(%rsp), %rax
-	mov	%rax, ISF64_TRAPNO(%rsp)/* put in user trap number */
+	mov	%rax, ISF64_RSP(%rsp)   /* put in user trap number */
 	mov	ISF64_TRAPFN(%rsp), %rax
 	mov	%rax, ISF64_SS(%rsp)	/* put in user trap function */
 	mov	ISF64_ERR(%rsp), %rax	/* get error code */
@@ -1024,7 +1015,7 @@ Entry(hndl_allintrs)
 	incl	%gs:CPU_INTERRUPT_LEVEL
 
 	movq	%gs:CPU_INT_STATE, %rdi
-	
+
 	CCALL(interrupt)		/* call generic interrupt routine */
 
 	cli				/* just in case we returned with intrs enabled */
@@ -1240,34 +1231,6 @@ Entry(hndl_mdep_scall)
 	 * always returns through thread_exception_return
 	 */
 
-
-Entry(hndl_diag_scall)
-	TIME_TRAP_UENTRY
-
-	movq	%gs:CPU_KERNEL_STACK,%rdi
-	xchgq	%rdi,%rsp			/* switch to kernel stack */
-	
-	/* Check for active vtimers in the current task */
-	movq	%gs:CPU_ACTIVE_THREAD,%rcx	/* get current thread     */
-	movq	TH_TASK(%rcx),%rbx		/* point to current task  */
-	TASK_VTIMER_CHECK(%rbx,%rcx)
-
-	pushq	%rdi			/* push pcb stack */
-
-	CCALL(diagCall)			// Call diagnostics
-
-	cli				// Disable interruptions just in case
-	cmpl	$0,%eax			// What kind of return is this?
-	je	1f			// - branch if bad (zero)
-	popq	%rsp			// Get back the pcb stack
-	jmp	EXT(return_to_user)	// Normal return, do not check asts...
-1:
-	CCALL3(i386_exception, $EXC_SYSCALL, $0x6000, $1)
-		// pass what would be the diag syscall
-		// error return - cause an exception
-	/* no return */
-
-
 /*
  * 64bit Tasks
  * System call entries via syscall only:
@@ -1305,6 +1268,7 @@ Entry(hndl_syscall)
 	je	EXT(hndl_diag_scall64)
 
 	/* Syscall class unknown */
+	sti
 	CCALL3(i386_exception, $(EXC_SYSCALL), %rax, $1)
 	/* no return */
 
@@ -1338,16 +1302,16 @@ Entry(hndl_mdep_scall64)
 	 * always returns through thread_exception_return
 	 */
 
-
 Entry(hndl_diag_scall64)
 	pushq	%rdi			// Push the previous stack
 	CCALL(diagCall64)		// Call diagnostics
 	cli				// Disable interruptions just in case
-	cmpl	$0,%eax			// What kind of return is this?
+	test	%eax, %eax		// What kind of return is this?
 	je	1f			// - branch if bad (zero)
 	popq	%rsp			// Get back the pcb stack
 	jmp	EXT(return_to_user)	// Normal return, do not check asts...
 1:
+	sti
 	CCALL3(i386_exception, $EXC_SYSCALL, $0x6000, $1)
 	/* no return */
 

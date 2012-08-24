@@ -51,16 +51,32 @@
 #
 ident		LIBSA
 
-options		KDEBUG		# kernel tracing		# <kdebug>
+options		KDEBUG			# kernel tracing	# <kdebug>
+options		IST_KDEBUG		# limited tracing	# <ist_kdebug>
+options		NO_KDEBUG       # no kernel tracing # <no_kdebug>
+
 options		GPROF		# kernel profiling		# <profile>
 
 options		CONFIG_NOLIBKLD	# kernel linker			# <no_kld>
 
 options		MALLOC_RESET_GC					# <smaller_kld>
 options		CONFIG_DTRACE					# <config_dtrace>
+options		VM_PRESSURE_EVENTS				# <vm_pressure_events>
 
 options		CONFIG_NO_PANIC_STRINGS				# <no_panic_str>
 options		CONFIG_NO_PRINTF_STRINGS			# <no_printf_str>
 options		CONFIG_NO_KPRINTF_STRINGS			# <no_kprintf_str>
 
 options		CONFIG_KXLD		# kxld/runtime linking of kexts # <config_kxld>
+
+options		DEVELOPMENT		# dev kernel				# <development>
+
+# configurable kernel - general switch to say we are building for an
+# embedded device
+#
+options         CONFIG_EMBEDDED         # <config_embedded>
+
+# CONFIG_KEXT_BASEMENT - alloc post boot loaded kexts after prelinked kexts
+#
+options		CONFIG_KEXT_BASEMENT		#		# <config_kext_basement>
+

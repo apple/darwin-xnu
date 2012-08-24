@@ -11,6 +11,9 @@ UNCONFIGURED_HIB_FILES=					\
 
 HIB_FILES=$(filter $(UNCONFIGURED_HIB_FILES),$(OBJS))
 
+hibernate_restore.o_CFLAGS_ADD += -fno-stack-protector
+hibernate_bootstrap.o_CFLAGS_ADD += -fno-stack-protector
+
 ######################################################################
 #END	Machine dependent Makefile fragment for x86_64
 ######################################################################

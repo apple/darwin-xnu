@@ -111,9 +111,12 @@ ether_inet6_input(ifnet_t ifp, protocol_family_t protocol,
     mbuf_t packet, char *header)
 {
 #pragma unused(ifp, protocol)
-	struct ether_header *eh = (struct ether_header *)header;
+	struct ether_header *eh = (struct ether_header *)(void *)header;
+	u_int16_t ether_type;
 
-	if (eh->ether_type == htons(ETHERTYPE_IPV6)) {
+	bcopy(&eh->ether_type, &ether_type, sizeof (ether_type));
+
+	if (ether_type == htons(ETHERTYPE_IPV6)) {
 		struct ifnet *mifp;
 		/*
 		 * Trust the ifp in the mbuf, rather than ifproto's
@@ -155,11 +158,13 @@ ether_inet6_pre_output(ifnet_t ifp, protocol_family_t protocol_family,
 	 */
 	m->m_flags |= M_LOOP;
 
-	result = nd6_lookup_ipv6(ifp, (const struct sockaddr_in6 *)dst_netaddr,
-	    &sdl, sizeof (sdl), route, *m0);
+	result = nd6_lookup_ipv6(ifp, (const struct sockaddr_in6 *)
+	    (uintptr_t)(size_t)dst_netaddr, &sdl, sizeof (sdl), route, *m0);
 
 	if (result == 0) {
-		*(u_int16_t *)type = htons(ETHERTYPE_IPV6);
+		u_int16_t ethertype_ipv6 = htons(ETHERTYPE_IPV6);
+
+		bcopy(&ethertype_ipv6, type, sizeof (ethertype_ipv6));
 		bcopy(LLADDR(&sdl), edst, sdl.sdl_alen);
 	}
 
@@ -173,7 +178,7 @@ ether_inet6_resolve_multi(ifnet_t ifp, const struct sockaddr *proto_addr,
 	static const size_t minsize =
 	    offsetof(struct sockaddr_dl, sdl_data[0]) + ETHER_ADDR_LEN;
 	const struct sockaddr_in6 *sin6 =
-	    (const struct sockaddr_in6 *)proto_addr;
+	    (const struct sockaddr_in6 *)(uintptr_t)(size_t)proto_addr;
 
 	if (proto_addr->sa_family != AF_INET6)
 		return (EAFNOSUPPORT);
@@ -202,21 +207,28 @@ ether_inet6_prmod_ioctl(ifnet_t ifp, protocol_family_t protocol_family,
     u_long command, void *data)
 {
 #pragma unused(protocol_family)
-	struct ifreq *ifr = (struct ifreq *)data;
 	int error = 0;
 
 	switch (command) {
-	case SIOCSIFADDR:
+	case SIOCSIFADDR:		/* struct ifaddr pointer */
+		/*
+		 * Note: caller of ifnet_ioctl() passes in pointer to
+		 * struct ifaddr as parameter to SIOCSIFADDR, for legacy
+		 * reasons.
+		 */
 		if ((ifp->if_flags & IFF_RUNNING) == 0) {
 			ifnet_set_flags(ifp, IFF_UP, IFF_UP);
 			ifnet_ioctl(ifp, 0, SIOCSIFFLAGS, NULL);
 		}
 		break;
 
-	case SIOCGIFADDR:
+	case SIOCGIFADDR: {		/* struct ifreq */
+		struct ifreq *ifr = (struct ifreq *)(void *)data;
+
 		(void) ifnet_lladdr_copy_bytes(ifp, ifr->ifr_addr.sa_data,
 		    ETHER_ADDR_LEN);
 		break;
+	}
 
 	default:
 		error = EOPNOTSUPP;

@@ -32,7 +32,7 @@
 #include <libkern/libkern.h>
 #include <libkern/crypto/sha1.h>
 #include <libkern/crypto/md5.h>
-#include <crypto/des/des_locl.h>
+#include <libkern/crypto/des.h>
 
 #define KG_USAGE_SEAL 22
 #define KG_USAGE_SIGN 23
@@ -50,7 +50,7 @@ typedef struct {
 
 typedef struct {
 	MD5_CTX md5_ctx;
-	des_key_schedule *sched;
+	des_cbc_key_schedule *sched;
 } MD5_DESCBC_CTX;
 
 #define MD5_DESCBC_DIGEST_LENGTH 8
@@ -59,18 +59,13 @@ __BEGIN_DECLS
 
 void krb5_nfold(unsigned int, const unsigned char *, unsigned int, unsigned char *);
 void des3_make_key(const unsigned char[21], des_cblock[3]);
-int des3_key_sched(des_cblock[3], des_key_schedule[3]);
-void des3_cbc_encrypt(des_cblock *, des_cblock *, int32_t,
-			des_key_schedule[3], des_cblock *, des_cblock *, int);
 int des3_derive_key(des_cblock[3], des_cblock[3], const unsigned char *, int);
+
 void HMAC_SHA1_DES3KD_Init(HMAC_SHA1_DES3KD_CTX *, des_cblock[3], int);
 void HMAC_SHA1_DES3KD_Update(HMAC_SHA1_DES3KD_CTX *, void *, size_t);
 void HMAC_SHA1_DES3KD_Final(void *, HMAC_SHA1_DES3KD_CTX *);
-DES_LONG des_cbc_cksum(des_cblock *, des_cblock *, int32_t, des_key_schedule, des_cblock *);
-void	des_cbc_encrypt(des_cblock *, des_cblock *, int32_t, des_key_schedule,
-			des_cblock *, des_cblock *, int);
 
-void MD5_DESCBC_Init(MD5_DESCBC_CTX *, des_key_schedule *);
+void MD5_DESCBC_Init(MD5_DESCBC_CTX *, des_cbc_key_schedule *);
 void MD5_DESCBC_Update(MD5_DESCBC_CTX *, void *, size_t);
 void MD5_DESCBC_Final(void *, MD5_DESCBC_CTX *);
 

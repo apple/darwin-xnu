@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2008 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2012 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -60,6 +60,16 @@
 #include <sys/appleapiopts.h>
 
 #ifdef PRIVATE
+
+#include <netinet/ip_flowid.h>
+
+/* Apply ipv6 mask on ipv6 addr */
+#define APPLY_MASK(addr,mask)                          \
+    (addr)->__u6_addr.__u6_addr32[0] &= (mask)->__u6_addr.__u6_addr32[0]; \
+    (addr)->__u6_addr.__u6_addr32[1] &= (mask)->__u6_addr.__u6_addr32[1]; \
+    (addr)->__u6_addr.__u6_addr32[2] &= (mask)->__u6_addr.__u6_addr32[2]; \
+    (addr)->__u6_addr.__u6_addr32[3] &= (mask)->__u6_addr.__u6_addr32[3];
+
 /*
  * Definition of dummynet data structures. In the structures, I decided
  * not to use the macros in <sys/queue.h> in the hope of making the code
@@ -147,20 +157,48 @@ struct dn_heap {
  */
 #ifdef KERNEL
 #include <netinet/ip_var.h>	/* for ip_out_args */
+#include <netinet/ip6.h>	/* for ip6_out_args */
+#include <netinet6/ip6_var.h>	/* for ip6_out_args */
 
 struct dn_pkt_tag {
-    struct ip_fw *rule;		/* matching rule */
-    int dn_dir;			/* action when packet comes out. */
+    struct ip_fw	*dn_ipfw_rule;		/* matching IPFW rule */
+    void		*dn_pf_rule;		/* matching PF rule */
+    int			dn_dir;			/* action when packet comes out. */
 #define DN_TO_IP_OUT	1
 #define DN_TO_IP_IN	2
 #define DN_TO_BDG_FWD	3
-
-    dn_key output_time;		/* when the pkt is due for delivery	*/
-    struct ifnet *ifp;		/* interface, for ip_output		*/
-    struct sockaddr_in dn_dst ;
-    struct route ro;		/* route, for ip_output. MUST COPY	*/
-    int flags ;			/* flags, for ip_output (IPv6 ?)	*/
-    struct ip_out_args ipoa;	/* output args, for ip_output. MUST COPY */
+#define DN_TO_IP6_IN    4
+#define DN_TO_IP6_OUT   5
+    dn_key 		dn_output_time;		/* when the pkt is due for delivery	*/
+    struct ifnet	*dn_ifp;		/* interface, for ip[6]_output		*/
+    union {
+    	struct sockaddr_in	_dn_dst;
+    	struct sockaddr_in6	_dn_dst6 ;
+    } 			dn_dst_;
+#define dn_dst dn_dst_._dn_dst
+#define dn_dst6 dn_dst_._dn_dst6
+    union {
+    	struct route		_dn_ro;		/* route, for ip_output. MUST COPY	*/
+    	struct route_in6	_dn_ro6;	/* route, for ip6_output. MUST COPY	*/
+	} 		dn_ro_;
+#define dn_ro dn_ro_._dn_ro
+#define dn_ro6 dn_ro_._dn_ro6
+    struct route_in6	dn_ro6_pmtu;		/* for ip6_output */
+    struct ifnet	*dn_origifp;		/* for ip6_output */
+    u_int32_t		dn_mtu;			/* for ip6_output */
+    int			dn_alwaysfrag;		/* for ip6_output */
+    u_int32_t		dn_unfragpartlen;	/* for ip6_output */
+    struct ip6_exthdrs 	dn_exthdrs;		/* for ip6_output */
+    int			dn_flags ;		/* flags, for ip[6]_output */
+    int			dn_client;
+#define DN_CLIENT_IPFW	1
+#define DN_CLIENT_PF	2
+    union {
+    	struct ip_out_args	_dn_ipoa;	/* output args, for ip_output. MUST COPY */
+    	struct ip6_out_args	_dn_ip6oa;	/* output args, for ip_output. MUST COPY */
+    } 			dn_ipoa_;
+#define dn_ipoa dn_ipoa_._dn_ipoa
+#define dn_ip6oa dn_ipoa_._dn_ip6oa
 };
 #else
 struct dn_pkt;
@@ -236,7 +274,7 @@ flow using a number of heaps defined into the pipe itself.
  */
 struct dn_flow_queue {
     struct dn_flow_queue *next ;
-    struct ipfw_flow_id id ;
+    struct ip_flow_id id ;
 
     struct mbuf *head, *tail ;	/* queue of packets */
     u_int len ;
@@ -299,7 +337,7 @@ struct dn_flow_set {
     int qsize ;			/* queue size in slots or bytes */
     int plr ;			/* pkt loss rate (2^31-1 means 100%) */
 
-    struct ipfw_flow_id flow_mask ;
+    struct ip_flow_id flow_mask ;
 
     /* hash table of queues onto this flow_set */
     int rq_size ;		/* number of slots */
@@ -384,12 +422,11 @@ SLIST_HEAD(dn_pipe_head, dn_pipe);
 void ip_dn_init(void); /* called from raw_ip.c:load_ipfw() */
 
 typedef	int ip_dn_ctl_t(struct sockopt *); /* raw_ip.c */
-typedef	void ip_dn_ruledel_t(void *); /* ip_fw.c */
 typedef	int ip_dn_io_t(struct mbuf *m, int pipe_nr, int dir,
-	struct ip_fw_args *fwa);
+	struct ip_fw_args *fwa, int );
 extern	ip_dn_ctl_t *ip_dn_ctl_ptr;
-extern	ip_dn_ruledel_t *ip_dn_ruledel_ptr;
 extern	ip_dn_io_t *ip_dn_io_ptr;
+void dn_ipfw_rule_delete(void *);
 #define	DUMMYNET_LOADED	(ip_dn_io_ptr != NULL)
 
 #pragma pack(4)
@@ -403,7 +440,7 @@ struct dn_heap_32 {
 
 struct dn_flow_queue_32 {
     user32_addr_t next ;
-    struct ipfw_flow_id id ;
+    struct ip_flow_id id ;
 
     user32_addr_t head, tail ;	/* queue of packets */
     u_int len ;
@@ -454,7 +491,7 @@ struct dn_flow_set_32 {
     int qsize ;			/* queue size in slots or bytes */
     int plr ;			/* pkt loss rate (2^31-1 means 100%) */
 	
-    struct ipfw_flow_id flow_mask ;
+    struct ip_flow_id flow_mask ;
 	
     /* hash table of queues onto this flow_set */
     int rq_size ;		/* number of slots */
@@ -528,7 +565,7 @@ struct dn_heap_64 {
 
 struct dn_flow_queue_64 {
     user64_addr_t next ;
-    struct ipfw_flow_id id ;
+    struct ip_flow_id id ;
 
     user64_addr_t head, tail ;	/* queue of packets */
     u_int len ;
@@ -579,7 +616,7 @@ struct dn_flow_set_64 {
     int qsize ;			/* queue size in slots or bytes */
     int plr ;			/* pkt loss rate (2^31-1 means 100%) */
 	
-    struct ipfw_flow_id flow_mask ;
+    struct ip_flow_id flow_mask ;
 	
     /* hash table of queues onto this flow_set */
     int rq_size ;		/* number of slots */
@@ -654,7 +691,7 @@ ip_dn_claim_rule(struct mbuf *m)
 									  KERNEL_TAG_TYPE_DUMMYNET, NULL);
 	if (mtag != NULL) {
 		mtag->m_tag_type = KERNEL_TAG_TYPE_NONE;
-		return (((struct dn_pkt_tag *)(mtag+1))->rule);
+		return (((struct dn_pkt_tag *)(mtag+1))->dn_ipfw_rule);
 	} else
 		return (NULL);
 }

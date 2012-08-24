@@ -154,7 +154,7 @@ in6_addroute(void *v_arg, void *n_arg, struct radix_node_head *head,
 	    struct radix_node *treenodes)
 {
 	struct rtentry *rt = (struct rtentry *)treenodes;
-	struct sockaddr_in6 *sin6 = (struct sockaddr_in6 *)rt_key(rt);
+	struct sockaddr_in6 *sin6 = (struct sockaddr_in6 *)(void *)rt_key(rt);
 	struct radix_node *ret;
 
 	lck_mtx_assert(rnh_lock, LCK_MTX_ASSERT_OWNED);

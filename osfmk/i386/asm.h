@@ -61,13 +61,6 @@
 #include <gprof.h>
 #endif	/* _KERNEL */
 
-#ifdef MACH_KERNEL
-#include <mach_kdb.h>
-#else	/* !MACH_KERNEL */
-#define	MACH_KDB 0
-#endif	/* !MACH_KERNEL */
-
-
 #if	defined(MACH_KERNEL) || defined(_KERNEL)
 #include <gprof.h>
 #endif	/* MACH_KERNEL || _KERNEL */
@@ -284,17 +277,7 @@
 #define Lgmemload(lab,reg)	movl Lgotoff(lab),reg
 #define Lgmemstore(reg,lab,tmp)	movl reg,Lgotoff(lab)
 
-#ifdef ASSEMBLER
-#if	MACH_KDB
-#include <ddb/stab.h>
-/*
- * This pseudo-assembler line is added so that there will be at least
- *	one N_SO entry in the symbol stable to define the current file name.
- */
-#endif	/* MACH_KDB */
-
-#else /* NOT ASSEMBLER */
-
+#ifndef ASSEMBLER
 /* These defines are here for .c files that wish to reference global symbols
  * within __asm__ statements. 
  */

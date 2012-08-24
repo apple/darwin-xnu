@@ -63,11 +63,7 @@ extern kern_return_t fbt_perfCallback(int, struct savearea_t *, int, int);
 
 #define	SDT_PROBETAB_SIZE	0x1000		/* 4k entries -- 16K total */
 
-#if defined(__x86_64__)
-#define DTRACE_PROBE_PREFIX "_dtrace_probeDOLLAR"
-#else
 #define DTRACE_PROBE_PREFIX "_dtrace_probe$"
-#endif
 
 static dev_info_t		*sdt_devi;
 static int			sdt_verbose = 0;
@@ -508,14 +504,6 @@ static struct module g_sdt_mach_module;
 #include <mach-o/nlist.h>
 #include <libkern/kernel_mach_header.h>
 
-#if defined(__LP64__)
-#define KERNEL_MAGIC MH_MAGIC_64
-typedef struct nlist_64 kernel_nlist_t;
-#else
-#define KERNEL_MAGIC MH_MAGIC
-typedef struct nlist kernel_nlist_t;
-#endif
-
 void sdt_init( void )
 {
 	if (0 == gSDTInited)
@@ -528,7 +516,7 @@ void sdt_init( void )
 			return;
 		}
 
-		if (KERNEL_MAGIC != _mh_execute_header.magic) {
+		if (MH_MAGIC_KERNEL != _mh_execute_header.magic) {
 			g_sdt_kernctl.mod_address = (vm_address_t)NULL;
 			g_sdt_kernctl.mod_size = 0;
 		} else {

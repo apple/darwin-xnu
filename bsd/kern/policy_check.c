@@ -229,6 +229,7 @@ static struct mac_policy_ops policy_ops = {
 	CHECK_SET_INT_HOOK(proc_check_getaudit)
 	CHECK_SET_INT_HOOK(proc_check_getauid)
 	CHECK_SET_INT_HOOK(proc_check_getlcid)
+	CHECK_SET_INT_HOOK(proc_check_ledger)
 	CHECK_SET_INT_HOOK(proc_check_map_anon)
 	CHECK_SET_INT_HOOK(proc_check_mprotect)
 	CHECK_SET_INT_HOOK(proc_check_sched)
@@ -271,6 +272,7 @@ static struct mac_policy_ops policy_ops = {
 	CHECK_SET_INT_HOOK(system_check_swapoff)
 	CHECK_SET_INT_HOOK(system_check_swapon)
 	CHECK_SET_INT_HOOK(system_check_sysctl)
+	CHECK_SET_INT_HOOK(system_check_kas_info)
 	CHECK_SET_INT_HOOK(sysvmsq_check_enqueue)
 	CHECK_SET_INT_HOOK(sysvmsq_check_msgrcv)
 	CHECK_SET_INT_HOOK(sysvmsq_check_msgrmid)
@@ -447,7 +449,7 @@ static struct mac_policy_ops policy_ops = {
 	CHECK_SET_VOID_HOOK(task_label_update)
 	CHECK_SET_VOID_HOOK(vnode_label_associate_devfs)
 	CHECK_SET_VOID_HOOK(vnode_label_associate_file)
-	CHECK_SET_VOID_HOOK(vnode_label_associate_pipe)
+	CHECK_SET_VOID_HOOK(thread_userret)
 	CHECK_SET_VOID_HOOK(vnode_label_associate_posixsem)
 	CHECK_SET_VOID_HOOK(vnode_label_associate_posixshm)
 	CHECK_SET_VOID_HOOK(vnode_label_associate_singlelabel)
@@ -458,11 +460,8 @@ static struct mac_policy_ops policy_ops = {
 	CHECK_SET_VOID_HOOK(vnode_label_recycle)
 	CHECK_SET_VOID_HOOK(vnode_label_update)
 	CHECK_SET_VOID_HOOK(vnode_notify_rename)
-	.mpo_reserved12 = common_void_hook,
-	.mpo_reserved14 = common_void_hook,
-	.mpo_reserved15 = common_void_hook,
-	.mpo_reserved16 = common_void_hook,
-	.mpo_reserved17 = common_void_hook,
+	CHECK_SET_VOID_HOOK(thread_label_init)
+	CHECK_SET_VOID_HOOK(thread_label_destroy)
 	.mpo_reserved18 = common_void_hook,
 	.mpo_reserved19 = common_void_hook,
 	.mpo_reserved20 = common_void_hook,

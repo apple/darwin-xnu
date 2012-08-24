@@ -115,8 +115,11 @@
 #include <mach/vm_map.h>
 #include <mach/host_priv.h>
 
+#include <machine/machine_routines.h>
+
 #include <kern/cpu_number.h>
 #include <kern/host.h>
+#include <kern/task.h>
 
 #include <vm/vm_map.h>
 #include <vm/vm_kern.h>
@@ -145,8 +148,8 @@ mmap(proc_t p, struct mmap_args *uap, user_addr_t *retval)
 	int			err=0;
 	vm_map_t		user_map;
 	kern_return_t		result;
-	mach_vm_offset_t	user_addr;
-	mach_vm_size_t		user_size;
+	vm_map_offset_t		user_addr;
+	vm_map_size_t		user_size;
 	vm_object_offset_t	pageoff;
 	vm_object_offset_t	file_pos;
 	int			alloc_flags=0;
@@ -161,8 +164,8 @@ mmap(proc_t p, struct mmap_args *uap, user_addr_t *retval)
 	int fd = uap->fd;
 	int num_retries = 0;
 
-	user_addr = (mach_vm_offset_t)uap->addr;
-	user_size = (mach_vm_size_t) uap->len;
+	user_addr = (vm_map_offset_t)uap->addr;
+	user_size = (vm_map_size_t) uap->len;
 
 	AUDIT_ARG(addr, user_addr);
 	AUDIT_ARG(len, user_size);
@@ -207,7 +210,7 @@ mmap(proc_t p, struct mmap_args *uap, user_addr_t *retval)
 	user_size += pageoff;			/* low end... */
 	user_size = mach_vm_round_page(user_size);	/* hi end */
 
-	if ((flags & MAP_JIT) && ((flags & MAP_FIXED) || (flags & MAP_SHARED) || (flags & MAP_FILE))){
+	if ((flags & MAP_JIT) && ((flags & MAP_FIXED) || (flags & MAP_SHARED) || !(flags & MAP_ANON))){
 		return EINVAL;
 	}
 	/*
@@ -247,12 +250,11 @@ mmap(proc_t p, struct mmap_args *uap, user_addr_t *retval)
 #if CONFIG_MACF
 		/*
 		 * Entitlement check.
-		 * Re-enable once mac* is implemented.
 		 */
-		/*error = mac_proc_check_map_anon(p, user_addr, user_size, prot, flags, &maxprot);
+		error = mac_proc_check_map_anon(p, user_addr, user_size, prot, flags, &maxprot);
 		if (error) {
 			return EINVAL;
-		}*/		
+		}		
 #endif /* MAC */
 
 		/*
@@ -278,6 +280,9 @@ mmap(proc_t p, struct mmap_args *uap, user_addr_t *retval)
 	} else {
 		struct vnode_attr va;
 		vfs_context_t ctx = vfs_context_current();
+
+		if (flags & MAP_JIT)
+			return EINVAL;
 
 		/*
 		 * Mapping file, get fp for validation. Obtain vnode and make
@@ -403,13 +408,10 @@ mmap(proc_t p, struct mmap_args *uap, user_addr_t *retval)
 
 #if CONFIG_PROTECT
 			{
-				void *cnode;
-				if ((cnode = cp_get_protected_cnode(vp)) != NULL) {
-					error = cp_handle_vnop(cnode, CP_READ_ACCESS | CP_WRITE_ACCESS);
-					if (error) {
-						(void) vnode_put(vp);
-						goto bad;
-					}
+				error = cp_handle_vnop(vp, CP_READ_ACCESS | CP_WRITE_ACCESS, 0);
+				if (error) {
+					(void) vnode_put(vp);
+					goto bad;
 				}
 			}
 #endif /* CONFIG_PROTECT */
@@ -616,7 +618,6 @@ bad:
 	KERNEL_DEBUG_CONSTANT((BSDDBG_CODE(DBG_BSD_SC_EXTENDED_INFO, SYS_mmap) | DBG_FUNC_NONE), fd, (uint32_t)(*retval), (uint32_t)user_size, error, 0);
 	KERNEL_DEBUG_CONSTANT((BSDDBG_CODE(DBG_BSD_SC_EXTENDED_INFO2, SYS_mmap) | DBG_FUNC_NONE), (uint32_t)(*retval >> 32), (uint32_t)(user_size >> 32),
 			      (uint32_t)(file_pos >> 32), (uint32_t)file_pos, 0);
-
 	return(error);
 }
 
@@ -639,9 +640,7 @@ msync_nocancel(__unused proc_t p, struct msync_nocancel_args *uap, __unused int3
 
 	addr = (mach_vm_offset_t) uap->addr;
 	size = (mach_vm_size_t)uap->len;
-
 	KERNEL_DEBUG_CONSTANT((BSDDBG_CODE(DBG_BSD_SC_EXTENDED_INFO, SYS_msync) | DBG_FUNC_NONE), (uint32_t)(addr >> 32), (uint32_t)(size >> 32), 0, 0, 0);
-
 	if (addr & PAGE_MASK_64) {
 		/* UNIX SPEC: user address is not page-aligned, return EINVAL */
 		return EINVAL;
@@ -1175,14 +1174,11 @@ map_fd_funneled(
 #if CONFIG_PROTECT
 	/* check for content protection access */
 	{
-	void *cnode;
-	if ((cnode = cp_get_protected_cnode(vp)) != NULL) {
-		err = cp_handle_vnop(cnode, CP_READ_ACCESS | CP_WRITE_ACCESS);
-		if (err != 0) { 
-			(void)vnode_put(vp);
-			goto bad;
-		}
-	}
+		err = cp_handle_vnop(vp, CP_READ_ACCESS | CP_WRITE_ACCESS, 0);
+	 	if (err != 0) { 
+ 			(void) vnode_put(vp);
+ 			goto bad;
+ 		}
 	}
 #endif /* CONFIG_PROTECT */
 

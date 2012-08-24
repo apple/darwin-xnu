@@ -1,5 +1,6 @@
+
 /*
- * Copyright (c) 2000-2010 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2011 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -43,6 +44,7 @@
 #include <kern/locks.h>
 #include <sys/disk.h>
 
+
 typedef struct _blk_info {
     int32_t    bsize;
     union {
@@ -83,20 +85,20 @@ struct jnl_trim_list {
 typedef void (*jnl_trim_callback_t)(void *arg, uint32_t extent_count, const dk_extent_t *extents);
 
 typedef struct transaction {
-    int                  tbuffer_size;  // in bytes
-    char                *tbuffer;       // memory copy of the transaction
-    block_list_header   *blhdr;         // points to the first byte of tbuffer
-    int                  num_blhdrs;    // how many buffers we've allocated
-    int                  total_bytes;   // total # of bytes in transaction
-    int                  num_flushed;   // how many bytes have been flushed
-    int                  num_killed;    // how many bytes were "killed"
-    off_t                journal_start; // where in the journal this transaction starts
-    off_t                journal_end;   // where in the journal this transaction ends
-    struct journal      *jnl;           // ptr back to the journal structure
-    struct transaction  *next;          // list of tr's (either completed or to be free'd)
-    uint32_t             sequence_num;
-    struct jnl_trim_list trim;
-    boolean_t            delayed_header_write;
+    int                 tbuffer_size;  // in bytes
+    char               *tbuffer;       // memory copy of the transaction
+    block_list_header  *blhdr;         // points to the first byte of tbuffer
+    int                 num_blhdrs;    // how many buffers we've allocated
+    int                 total_bytes;   // total # of bytes in transaction
+    int                 num_flushed;   // how many bytes have been flushed
+    int                 num_killed;    // how many bytes were "killed"
+    off_t               journal_start; // where in the journal this transaction starts
+    off_t               journal_end;   // where in the journal this transaction ends
+    struct journal     *jnl;           // ptr back to the journal structure
+    struct transaction *next;          // list of tr's (either completed or to be free'd)
+    uint32_t            sequence_num;
+	struct jnl_trim_list trim;
+    boolean_t		delayed_header_write;
 } transaction;
 
 
@@ -136,7 +138,8 @@ typedef struct journal_header {
 typedef struct journal {
     lck_mtx_t           jlock;             // protects the struct journal data
     lck_mtx_t		flock;             // serializes flushing of journal
-    lck_rw_t            trim_lock;         // protects the async_trim field, below
+	lck_rw_t            trim_lock;         // protects the async_trim field, below
+
 
     struct vnode       *jdev;              // vnode of the device where the journal lives
     off_t               jdev_offset;       // byte offset to the start of the journal
@@ -154,7 +157,7 @@ typedef struct journal {
     boolean_t		asyncIO;
     boolean_t		writing_header;
     boolean_t		write_header_failed;
-
+	
     struct jnl_trim_list *async_trim;      // extents to be trimmed by transaction being asynchronously flushed
     jnl_trim_callback_t	trim_callback;
     void				*trim_callback_arg;
@@ -163,8 +166,8 @@ typedef struct journal {
     int32_t             header_buf_size;
     journal_header     *jhdr;              // points to the first byte of header_buf
 
-    uint32_t		saved_sequence_num;
-    uint32_t		sequence_num;
+	uint32_t		saved_sequence_num;
+	uint32_t		sequence_num;
 
     off_t               max_read_size;
     off_t               max_write_size;
@@ -191,6 +194,7 @@ typedef struct journal {
 #define JOURNAL_NEED_SWAP         0x00080000   // swap any data read from disk
 #define JOURNAL_DO_FUA_WRITES     0x00100000   // do force-unit-access writes
 #define JOURNAL_USE_UNMAP         0x00200000   // device supports UNMAP (TRIM)
+
 
 /* journal_open/create options are always in the low-16 bits */
 #define JOURNAL_OPTION_FLAGS_MASK 0x0000ffff

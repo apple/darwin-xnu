@@ -250,10 +250,10 @@ extern int	maxusers;
 #ifdef	mips
 #define DEV_MASK 0xf
 #define	DEV_SHIFT  4
-#else	mips
+#else	/* mips */
 #define DEV_MASK 0x7
 #define	DEV_SHIFT  3
-#endif	mips
+#endif	/* mips */
 
 /* External function references */
 char *get_rest(FILE *fp);

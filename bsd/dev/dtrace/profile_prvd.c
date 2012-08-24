@@ -227,7 +227,7 @@ profile_fire(void *arg)
 			x86_saved_state32_t *regs = saved_state32(tagged_regs);
 
 			dtrace_probe(prof->prof_id, 0x0, regs->eip, 0, 0, 0);
-		}	
+		}
 	}
 #else
 #error Unknown architecture
@@ -273,7 +273,7 @@ profile_tick(void *arg)
 			x86_saved_state32_t *regs = saved_state32(tagged_regs);
 
 			dtrace_probe(prof->prof_id, 0x0, regs->eip, 0, 0, 0);
-		}	
+		}
 	}
 #else
 #error Unknown architecture

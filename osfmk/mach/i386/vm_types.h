@@ -129,6 +129,8 @@ typedef uint64_t		vm_map_offset_t;
 typedef uint64_t		vm_map_address_t;
 typedef uint64_t		vm_map_size_t;
 
+typedef mach_vm_address_t	mach_port_context_t;
+
 #ifdef	MACH_KERNEL_PRIVATE
 
 #if VM32_SUPPORT

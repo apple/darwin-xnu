@@ -48,7 +48,7 @@ LABEL(___gettimeofday)
  *	This syscall is special cased: the timeval is returned in rax:rdx.
  */
 LABEL(___gettimeofday)
-    UNIX_SYSCALL_NONAME(gettimeofday,0)
+    UNIX_SYSCALL_NONAME(gettimeofday,0,cerror_nocancel)
     movq	%rax, (%rdi)
     movl	%edx, 8(%rdi)
     xorl	%eax, %eax

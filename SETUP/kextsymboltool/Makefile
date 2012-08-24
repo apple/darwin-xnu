@@ -13,7 +13,10 @@ CFLAGS = -isysroot $(HOST_SDKROOT) -g -O0 -I$(SOURCE) -I.
 
 WARNFLAGS = -Wall
 
-LDFLAGS = -isysroot $(HOST_SDKROOT) -lstdc++
+LDFLAGS = -isysroot $(HOST_SDKROOT) -L$(HOST_SPARSE_SDKROOT)/usr/local/lib/system -lstdc++
+ifneq ($(HOST_SPARSE_SDKROOT),/)
+LDFLAGS += -lmacho
+endif
 
 kextsymboltool: $(OBJS)
 	$(_v)$(HOST_CC) $(LDFLAGS) -o $@ $^

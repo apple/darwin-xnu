@@ -89,6 +89,7 @@ struct	sockaddr_un {
 
 /* Socket options. */
 #define LOCAL_PEERCRED          0x001           /* retrieve peer credentails */
+#define LOCAL_PEERPID           0x002           /* retrieve peer pid */
 
 #endif	/* (!_POSIX_C_SOURCE || _DARWIN_C_SOURCE) */
 

@@ -10,6 +10,9 @@ _mac_audit_text
 
 _mac_iokit_check_hid_control
 
+_mac_thread_get_threadlabel
+_mac_thread_get_uthreadlabel
+
 _sbuf_cat
 _sbuf_data
 _sbuf_delete

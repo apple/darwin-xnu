@@ -15,13 +15,11 @@ INSTINC_SUBDIRS_I386 = ${INSTINC_SUBDIRS} \
         i386
 INSTINC_SUBDIRS_X86_64 = ${INSTINC_SUBDIRS} \
         i386
-INSTINC_SUBDIRS_ARM = ${INSTINC_SUBDIRS} \
-        arm
+
 
 EXPINC_SUBDIRS = ${INSTINC_SUBDIRS}
 EXPINC_SUBDIRS_I386 = ${INSTINC_SUBDIRS_I386}
 EXPINC_SUBDIRS_X86_64 = ${INSTINC_SUBDIRS_X86_64}
-EXPINC_SUBDIRS_ARM = ${INSTINC_SUBDIRS_ARM}
 
 DATAFILES = \
 	OSAtomic.h	\
@@ -43,7 +41,7 @@ PRIVATE_DATAFILES =         \
 	OSKextLibPrivate.h  \
 	kext_request_keys.h \
 	mkext.h		    \
-	prelink.h           \
+	prelink.h	    \
 	WKdm.h
 
 INSTALL_MI_LIST	=       \
@@ -77,7 +75,8 @@ EXPORT_MI_LIST	=              \
 	${PRIVATE_DATAFILES}   \
 	kernel_mach_header.h   \
 	kxld.h                 \
-	kxld_types.h
+	kxld_types.h           \
+	stack_protector.h
 
 EXPORT_MI_GEN_LIST = version.h
 

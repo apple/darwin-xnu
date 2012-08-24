@@ -149,16 +149,6 @@ typedef struct
 #define DKIOCGETPHYSICALBLOCKSIZE             _IOR('d', 77, uint32_t)
 #define DKIOCGETCOMMANDPOOLSIZE               _IOR('d', 78, uint32_t)
 
-typedef struct
-{
-    uint64_t               offset;
-    uint64_t               length;
-
-    uint8_t                reserved0128[16];       /* reserved, clear to zero */
-} dk_discard_t __attribute__ ((deprecated));
-
-#define DKIOCDISCARD                          _IOW('d', 31, dk_discard_t)
-
 #ifdef KERNEL
 #define DK_FEATURE_FORCE_UNIT_ACCESS          0x00000001
 
@@ -182,10 +172,22 @@ typedef struct
 #define DKIOCLOCKPHYSICALEXTENTS              _IO('d', 81)
 #define DKIOCGETPHYSICALEXTENT                _IOWR('d', 82, dk_physical_extent_t)
 #define DKIOCUNLOCKPHYSICALEXTENTS            _IO('d', 83)
-
 #ifdef PRIVATE
-#define _DKIOCGETMIGRATIONUNITBYTESIZE        _IOR('d', 85, uint32_t)
+typedef struct _dk_cs_pin {
+	dk_extent_t	cp_extent;
+	int64_t		cp_flags;
+} _dk_cs_pin_t;
+#define _DKIOCSPINDISCARDDATA (1 << 0)
+#define _DKIOCCSPINEXTENT                     _IOW('d', 199, _dk_cs_pin_t)
+#define _DKIOCCSUNPINEXTENT                   _IOW('d', 200, _dk_cs_pin_t)
+#define _DKIOCGETMIGRATIONUNITBYTESIZE        _IOR('d', 201, uint32_t)
 #endif /* PRIVATE */
 #endif /* KERNEL */
+
+#ifdef PRIVATE
+#ifdef TARGET_OS_EMBEDDED
+#define _DKIOCSETSTATIC                       _IO('d', 84)
+#endif /* TARGET_OS_EMBEDDED */
+#endif /* PRIVATE */
 
 #endif	/* _SYS_DISK_H_ */

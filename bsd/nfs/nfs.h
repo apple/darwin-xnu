@@ -86,7 +86,7 @@ __private_extern__ int nfs_ticks;
 #define	NFS_MAXREXMIT	100		/* Stop counting after this many */
 #define	NFS_RETRANS	10		/* Num of retrans for soft mounts */
 #define	NFS_TRYLATERDEL	4		/* Initial try later delay (sec) */
-#define	NFS_MAXGRPS	16		/* Max. size of groups list */
+#define	NFS_MAXGRPS	16U		/* Max. size of groups list */
 #define	NFS_MINATTRTIMO 5		/* Attribute cache timeout in sec */
 #define	NFS_MAXATTRTIMO 60
 #define	NFS_MINDIRATTRTIMO 5		/* directory attribute cache timeout in sec */
@@ -476,6 +476,7 @@ struct user_nfs_export_args {
 #define NX_MAPALL		0x0008	/* map all access to anon credential */
 #define NX_32BITCLIENTS		0x0020	/* restrict directory cookies to 32 bits */
 #define NX_OFFLINE		0x0040	/* export is offline */
+#define NX_MANGLEDNAMES		0x0080	/* export will return mangled names for names > 255 bytes */
 
 /*
  * fs.nfs sysctl(3) export stats record structures
@@ -675,6 +676,13 @@ __private_extern__ int nfsrv_async, nfsrv_export_hash_size,
 			nfsrv_reqcache_size, nfsrv_sock_max_rec_queue_length;
 __private_extern__ uint32_t nfsrv_gss_context_ttl;
 __private_extern__ struct nfsstats nfsstats;
+#define NFS_UC_Q_DEBUG
+#ifdef NFS_UC_Q_DEBUG
+__private_extern__ int nfsrv_uc_use_proxy;
+__private_extern__ uint32_t nfsrv_uc_queue_limit;
+__private_extern__ uint32_t nfsrv_uc_queue_max_seen;
+__private_extern__ volatile uint32_t nfsrv_uc_queue_count;						      
+#endif
 
 #endif // KERNEL
 
@@ -686,38 +694,38 @@ __private_extern__ struct nfsstats nfsstats;
  * Stats structure
  */
 struct nfsstats {
-	int	attrcache_hits;
-	int	attrcache_misses;
-	int	lookupcache_hits;
-	int	lookupcache_misses;
-	int	direofcache_hits;
-	int	direofcache_misses;
-	int	biocache_reads;
-	int	read_bios;
-	int	read_physios;
-	int	biocache_writes;
-	int	write_bios;
-	int	write_physios;
-	int	biocache_readlinks;
-	int	readlink_bios;
-	int	biocache_readdirs;
-	int	readdir_bios;
-	int	rpccnt[NFS_NPROCS];
-	int	rpcretries;
-	int	srvrpccnt[NFS_NPROCS];
-	int	srvrpc_errs;
-	int	srv_errs;
-	int	rpcrequests;
-	int	rpctimeouts;
-	int	rpcunexpected;
-	int	rpcinvalid;
-	int	srvcache_inproghits;
-	int	srvcache_idemdonehits;
-	int	srvcache_nonidemdonehits;
-	int	srvcache_misses;
-	int	srvvop_writes;
-	int pageins;
-	int pageouts;
+	uint64_t	attrcache_hits;
+	uint64_t	attrcache_misses;
+	uint64_t	lookupcache_hits;
+	uint64_t	lookupcache_misses;
+	uint64_t	direofcache_hits;
+	uint64_t	direofcache_misses;
+	uint64_t	biocache_reads;
+	uint64_t	read_bios;
+	uint64_t	read_physios;
+	uint64_t	biocache_writes;
+	uint64_t	write_bios;
+	uint64_t	write_physios;
+	uint64_t	biocache_readlinks;
+	uint64_t	readlink_bios;
+	uint64_t	biocache_readdirs;
+	uint64_t	readdir_bios;
+	uint64_t	rpccnt[NFS_NPROCS];
+	uint64_t	rpcretries;
+	uint64_t	srvrpccnt[NFS_NPROCS];
+	uint64_t	srvrpc_errs;
+	uint64_t	srv_errs;
+	uint64_t	rpcrequests;
+	uint64_t	rpctimeouts;
+	uint64_t	rpcunexpected;
+	uint64_t	rpcinvalid;
+	uint64_t	srvcache_inproghits;
+	uint64_t	srvcache_idemdonehits;
+	uint64_t	srvcache_nonidemdonehits;
+	uint64_t	srvcache_misses;
+	uint64_t	srvvop_writes;
+	uint64_t	pageins;
+	uint64_t	pageouts;
 };
 #endif
 
@@ -790,6 +798,7 @@ struct nfs_fs_locations;
 struct nfs_location_index;
 struct nfs_socket;
 struct nfs_socket_search;
+struct nfsrv_uc_arg;
 
 /*
  * The set of signals the interrupt an I/O in progress for NFSMNT_INT mounts.
@@ -942,6 +951,8 @@ __private_extern__ int nfs_lockd_mounts, nfs_lockd_request_sent, nfs_single_des;
 __private_extern__ int nfs_tprintf_initial_delay, nfs_tprintf_delay;
 __private_extern__ int nfsiod_thread_count, nfsiod_thread_max, nfs_max_async_writes;
 __private_extern__ int nfs_idmap_ctrl, nfs_callback_port;
+__private_extern__ int nfs_is_mobile;
+__private_extern__ uint32_t nfs_squishy_flags;
 
 /* bits for nfs_idmap_ctrl: */
 #define NFS_IDMAP_CTRL_USE_IDMAP_SERVICE		0x00000001 /* use the ID mapping service */
@@ -971,6 +982,7 @@ struct nfsrv_sock {
 	TAILQ_ENTRY(nfsrv_sock) ns_chain;	/* List of all nfsrv_sock's */
 	TAILQ_ENTRY(nfsrv_sock) ns_svcq;	/* List of sockets needing servicing */
 	TAILQ_ENTRY(nfsrv_sock) ns_wgq;		/* List of sockets with a pending write gather */
+	struct nfsrv_uc_arg *ns_ua;		/* Opaque pointer to upcall */
 	lck_rw_t	ns_rwlock;		/* lock for most fields */
 	socket_t	ns_so;
 	mbuf_t		ns_nam;
@@ -1429,6 +1441,12 @@ void	nfs_ephemeral_mount_harvester_start(void);
 void	nfs_ephemeral_mount_harvester(__unused void *arg, __unused wait_result_t wr);
 #endif
 
+/* socket upcall interfaces */
+void nfsrv_uc_init(void);
+void nfsrv_uc_cleanup(void);
+void nfsrv_uc_addsock(struct nfsrv_sock *, int);
+void nfsrv_uc_dequeue(struct nfsrv_sock *);
+    
 __END_DECLS
 
 #endif	/* KERNEL */

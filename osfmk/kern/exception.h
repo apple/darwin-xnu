@@ -58,7 +58,7 @@ extern void exception_triage(
 extern kern_return_t sys_perf_notify(thread_t thread, int pid);
 
 /* Notify crash reporter */
-extern kern_return_t abnormal_exit_notify(mach_exception_data_type_t code, 
-		mach_exception_data_type_t subcode);
+extern kern_return_t task_exception_notify(exception_type_t exception,
+	mach_exception_data_type_t code, mach_exception_data_type_t subcode);
 
 #endif	/* _KERN_EXCEPTION_H_ */

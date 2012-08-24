@@ -114,7 +114,7 @@ init_macho(KXLDSymtab *symtab, struct symtab_command *src,
     boolean_t is_32_bit __unused)
 {
     kern_return_t rval = KERN_FAILURE;
-	u_long symoff;
+    u_long symoff;
     u_char * macho_or_linkedit = macho;
 
     check(symtab);
@@ -128,7 +128,7 @@ init_macho(KXLDSymtab *symtab, struct symtab_command *src,
 
     /* Initialize the string table */
 
-	if (kernel_linkedit_seg) {
+    if (kernel_linkedit_seg) {
 
        /* If initing the kernel file in memory, we can't trust
         * the symtab offsets directly, because the kernel file has been mapped
@@ -146,13 +146,13 @@ init_macho(KXLDSymtab *symtab, struct symtab_command *src,
         * the base of the linkedit segment.
         */
 
-		symoff = (u_long)(src->symoff - kernel_linkedit_seg->fileoff);
-		symtab->strings = (char *)(uintptr_t)kernel_linkedit_seg->base_addr +
+        symoff = (u_long)(src->symoff - kernel_linkedit_seg->fileoff);
+        symtab->strings = (char *)(uintptr_t)kernel_linkedit_seg->base_addr +
             src->stroff - kernel_linkedit_seg->fileoff;
         macho_or_linkedit = (u_char *)(uintptr_t)kernel_linkedit_seg->base_addr;
-	} else {
-		symoff = (u_long)src->symoff;
-		symtab->strings = (char *) (macho + src->stroff);
+    } else {
+        symoff = (u_long)src->symoff;
+        symtab->strings = (char *) (macho + src->stroff);
     }
 
     symtab->strsize = src->strsize;
@@ -185,7 +185,7 @@ init_syms_32(KXLDSymtab *symtab, u_char *macho, u_long offset, u_int nsyms)
     kern_return_t rval = KERN_FAILURE;
     KXLDSym *sym = NULL;
     u_int i = 0;
-    struct nlist *src_syms = (struct nlist *) (macho + offset);
+    struct nlist *src_syms = (struct nlist *) ((void *) (macho + offset));
 
     for (i = 0; i < nsyms; ++i) {
         sym = kxld_array_get_item(&symtab->syms, i);
@@ -212,7 +212,7 @@ init_syms_64(KXLDSymtab *symtab, u_char *macho, u_long offset, u_int nsyms)
     kern_return_t rval = KERN_FAILURE;
     KXLDSym *sym = NULL;
     u_int i = 0;
-    struct nlist_64 *src_syms = (struct nlist_64 *) (macho + offset);
+    struct nlist_64 *src_syms = (struct nlist_64 *) ((void *) (macho + offset));
 
     for (i = 0; i < nsyms; ++i) {
         sym = kxld_array_get_item(&symtab->syms, i);
@@ -421,6 +421,8 @@ kxld_symtab_get_macho_data_size(const KXLDSymtab *symtab, boolean_t is_32_bit)
         size += nsyms * sizeof(struct nlist_64);
     }
 
+    size = (size + 7) & ~7;
+
     return size;
 }
 
@@ -448,7 +450,7 @@ kxld_symtab_export_macho(const KXLDSymtab *symtab, u_char *buf,
 
     require_action(sizeof(*symtabhdr) <= header_size - *header_offset, 
         finish, rval=KERN_FAILURE);
-    symtabhdr = (struct symtab_command *) (buf + *header_offset);
+    symtabhdr = (struct symtab_command *) ((void *) (buf + *header_offset));
     *header_offset += sizeof(*symtabhdr);
     
     /* Initialize the symbol table header */
@@ -500,6 +502,8 @@ kxld_symtab_export_macho(const KXLDSymtab *symtab, u_char *buf,
 
     /* Update the data offset */
     *data_offset += (symtabhdr->nsyms * nlistsize) + stroff;
+
+    *data_offset = (*data_offset + 7) & ~7;
 
     rval = KERN_SUCCESS;
     

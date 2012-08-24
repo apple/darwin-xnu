@@ -72,6 +72,11 @@
 #include <hfs/hfscommon/headers/HybridAllocator.h>
 #endif
 
+#if CONFIG_PROTECT
+/* Forward declare the cprotect struct */
+struct cprotect;
+#endif
+
 /*
  *	Just reported via MIG interface.
  */
@@ -144,6 +149,7 @@ typedef struct hfsmount {
 	/* Physical Description */
 	u_int32_t     hfs_logical_block_size;	/* Logical block size of the disk as reported by ioctl(DKIOCGETBLOCKSIZE), always a multiple of 512 */
 	daddr64_t     hfs_logical_block_count;  /* Number of logical blocks on the disk */
+	u_int64_t     hfs_logical_bytes;	/* Number of bytes on the disk device this HFS is mounted on (blockcount * blocksize) */
 	daddr64_t     hfs_alt_id_sector;      	/* location of alternate VH/MDB */
 	u_int32_t     hfs_physical_block_size;	/* Physical block size of the disk as reported by ioctl(DKIOCGETPHYSICALBLOCKSIZE) */ 
 	u_int32_t     hfs_log_per_phys;		/* Number of logical blocks per physical block size */
@@ -320,6 +326,11 @@ typedef struct hfsmount {
 	u_int32_t		hfs_resize_blocksmoved;
 	u_int32_t		hfs_resize_totalblocks;
 	u_int32_t		hfs_resize_progress;
+#if CONFIG_PROTECT
+	struct cprotect *hfs_resize_cpentry;
+	u_int16_t		hfs_running_cp_major_vers;
+#endif
+
 
 	/* Per mount cnode hash variables: */
 	lck_mtx_t      hfs_chash_mutex;	/* protects access to cnode hash table */
@@ -438,7 +449,9 @@ enum privdirtype {FILE_HARDLINKS, DIR_HARDLINKS};
  */
 #define HFS_RDONLY_DOWNGRADE      0x80000
 #define HFS_DID_CONTIG_SCAN      0x100000
+#define HFS_UNMAP                0x200000
 #define HFS_SSD					 0x400000
+
 
 
 /* Macro to update next allocation block in the HFS mount structure.  If 
@@ -586,9 +599,9 @@ int hfs_vnop_readdirattr(struct vnop_readdirattr_args *);  /* in hfs_attrlist.c 
 
 int hfs_vnop_inactive(struct vnop_inactive_args *);        /* in hfs_cnode.c */
 int hfs_vnop_reclaim(struct vnop_reclaim_args *);          /* in hfs_cnode.c */
+
 int hfs_set_backingstore (struct vnode *vp, int val);				/* in hfs_cnode.c */
 int hfs_is_backingstore (struct vnode *vp, int *val);		/* in hfs_cnode.c */
-
 
 int hfs_vnop_link(struct vnop_link_args *);                /* in hfs_link.c */
 

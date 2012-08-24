@@ -71,6 +71,8 @@
 #define PIPE_SIZE	16384
 #endif
 
+#define PIPE_KVAMAX	(1024 * 1024 * 16)
+
 #ifndef BIG_PIPE_SIZE
 #define BIG_PIPE_SIZE	(64*1024)
 #endif

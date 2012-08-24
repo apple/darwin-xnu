@@ -40,6 +40,10 @@ extern "C" {
 #include <IOKit/IODeviceTreeSupport.h>
 #include <IOKit/IOCatalogue.h>
 
+#if __x86_64__
+#define KASLR_KEXT_DEBUG 0
+#endif
+
 #if PRAGMA_MARK
 #pragma mark Bootstrap Declarations
 #endif
@@ -100,20 +104,6 @@ static const char * sKernelComponentNames[] = {
    "com.apple.driver.AppleNMI",
    "com.apple.iokit.IOSystemManagementFamily",
    "com.apple.iokit.ApplePlatformFamily",
-   
-#if defined(__i386__) || defined(__arm__)
-   /* These ones are not supported on x86_64 or any newer platforms.
-    * They must be version 7.9.9; check by "com.apple.kernel.", with
-    * the trailing period; "com.apple.kernel" always represents the
-    * current kernel version.
-    */
-    "com.apple.kernel.6.0",
-    "com.apple.kernel.bsd",
-    "com.apple.kernel.iokit",
-    "com.apple.kernel.libkern",
-    "com.apple.kernel.mach",
-#endif
-
    NULL
 };
 
@@ -142,6 +132,7 @@ private:
         OSData   * deviceTreeData);
     
     OSReturn loadKernelComponentKexts(void);
+    void     loadKernelExternalComponents(void);
     void     readBuiltinPersonalities(void);
 
     void     loadSecurityExtensions(void);
@@ -207,6 +198,7 @@ KLDBootstrap::readStartupExtensions(void)
     }
 
     loadKernelComponentKexts();
+    loadKernelExternalComponents();
     readBuiltinPersonalities();
     OSKext::sendAllKextPersonalitiesToCatalog();
 
@@ -234,7 +226,7 @@ KLDBootstrap::readPrelinkedExtensions(
     void                      * prelinkData             = NULL;  // see code
     vm_size_t                   prelinkLength           = 0;
 
-#if !__LP64__ && !defined(__arm__)
+#if __i386__
     vm_map_offset_t             prelinkDataMapOffset    = 0;
     void                      * prelinkCopy             = NULL;  // see code
     kern_return_t               mem_result              = KERN_SUCCESS;
@@ -246,6 +238,9 @@ KLDBootstrap::readPrelinkedExtensions(
     OSNumber                  * prelinkCountObj         = NULL;  // must release
 
     u_int                       i = 0;
+#if NO_KEXTD
+    bool                        developerDevice;
+#endif
 
     OSKextLog(/* kext */ NULL,
         kOSKextLogProgressLevel |
@@ -260,18 +255,62 @@ KLDBootstrap::readPrelinkedExtensions(
             "Can't find prelinked kexts' text segment.");
         goto finish;
     }
+    
+#if KASLR_KEXT_DEBUG
+    unsigned long   scratchSize;
+    vm_offset_t     scratchAddr;
+    
+    IOLog("kaslr: prelinked kernel address info: \n");
+    
+    scratchAddr = (vm_offset_t) getsegdatafromheader(&_mh_execute_header, "__TEXT", &scratchSize);
+    IOLog("kaslr: start 0x%lx end 0x%lx length %lu for __TEXT \n", 
+          (unsigned long)scratchAddr, 
+          (unsigned long)(scratchAddr + scratchSize),
+          scratchSize);
+    
+    scratchAddr = (vm_offset_t) getsegdatafromheader(&_mh_execute_header, "__DATA", &scratchSize);
+    IOLog("kaslr: start 0x%lx end 0x%lx length %lu for __DATA \n", 
+          (unsigned long)scratchAddr, 
+          (unsigned long)(scratchAddr + scratchSize),
+          scratchSize);
+    
+    scratchAddr = (vm_offset_t) getsegdatafromheader(&_mh_execute_header, "__LINKEDIT", &scratchSize);
+    IOLog("kaslr: start 0x%lx end 0x%lx length %lu for __LINKEDIT \n", 
+          (unsigned long)scratchAddr, 
+          (unsigned long)(scratchAddr + scratchSize),
+          scratchSize);
+    
+    scratchAddr = (vm_offset_t) getsegdatafromheader(&_mh_execute_header, "__KLD", &scratchSize);
+    IOLog("kaslr: start 0x%lx end 0x%lx length %lu for __KLD \n", 
+          (unsigned long)scratchAddr, 
+          (unsigned long)(scratchAddr + scratchSize),
+          scratchSize);
+    
+    scratchAddr = (vm_offset_t) getsegdatafromheader(&_mh_execute_header, "__PRELINK_TEXT", &scratchSize);
+    IOLog("kaslr: start 0x%lx end 0x%lx length %lu for __PRELINK_TEXT \n", 
+          (unsigned long)scratchAddr, 
+          (unsigned long)(scratchAddr + scratchSize),
+          scratchSize);
+    
+    scratchAddr = (vm_offset_t) getsegdatafromheader(&_mh_execute_header, "__PRELINK_INFO", &scratchSize);
+    IOLog("kaslr: start 0x%lx end 0x%lx length %lu for __PRELINK_INFO \n", 
+          (unsigned long)scratchAddr, 
+          (unsigned long)(scratchAddr + scratchSize),
+          scratchSize);
+#endif
 
     prelinkData = (void *) prelinkTextSegment->vmaddr;
     prelinkLength = prelinkTextSegment->vmsize;
 
-#if !__LP64__ && !__arm__
-    /* XXX: arm's pmap implementation doesn't seem to let us do this */
-
+#if __i386__
     /* To enable paging and write/execute protections on the kext
      * executables, we need to copy them out of the booter-created
      * memory, reallocate that space with VM, then prelinkCopy them back in.
-     * This isn't necessary on LP64 because kexts have their own VM
-     * region on that architecture model.
+     *
+     * This isn't necessary on x86_64 because kexts have their own VM
+     * region for that architecture.
+     *
+     * XXX: arm's pmap implementation doesn't seem to let us do this.
      */
 
     mem_result = kmem_alloc(kernel_map, (vm_offset_t *)&prelinkCopy,
@@ -323,7 +362,7 @@ KLDBootstrap::readPrelinkedExtensions(
     memcpy(prelinkData, prelinkCopy, prelinkLength);
 
     kmem_free(kernel_map, (vm_offset_t)prelinkCopy, prelinkLength);
-#endif /* !__LP64__ && !__arm__*/
+#endif /* __i386__ */
 
    /* Unserialize the info dictionary from the prelink info section.
     */
@@ -345,6 +384,22 @@ KLDBootstrap::readPrelinkedExtensions(
         goto finish;
     }
 
+#if NO_KEXTD
+    /* Check if we should keep developer kexts around. Default:
+     *   Release: No
+     *   Development: Yes
+     *   Debug : Yes
+     * TODO: Check DeviceTree instead of a boot-arg <rdar://problem/10604201>
+     */
+#if DEVELOPMENT
+    developerDevice = true;
+#else
+    developerDevice = false;
+#endif
+
+    PE_parse_boot_argn("developer", &developerDevice, sizeof(developerDevice));
+#endif /* NO_KEXTD */
+
     infoDictArray = OSDynamicCast(OSArray, 
         prelinkInfoDict->getObject(kPrelinkInfoDictionaryKey));
     if (!infoDictArray) {
@@ -364,6 +419,34 @@ KLDBootstrap::readPrelinkedExtensions(
                 "Can't find info dictionary for prelinked kext #%d.", i);
             continue;
         }
+
+#if NO_KEXTD
+        /* If we're not on a developer device, skip and free developer kexts.
+         */
+        if (developerDevice == false) {
+            OSBoolean *devOnlyBool = OSDynamicCast(OSBoolean,
+                infoDict->getObject(kOSBundleDeveloperOnlyKey));
+            if (devOnlyBool == kOSBooleanTrue) {
+                OSString *bundleID = OSDynamicCast(OSString,
+                    infoDict->getObject(kCFBundleIdentifierKey));
+                if (bundleID) {
+                    OSKextLog(NULL, kOSKextLogWarningLevel | kOSKextLogGeneralFlag,
+                        "Kext %s not loading on non-dev device.", bundleID->getCStringNoCopy());
+                }
+
+                OSNumber *addressNum = OSDynamicCast(OSNumber,
+                    infoDict->getObject(kPrelinkExecutableLoadKey));
+                OSNumber *lengthNum = OSDynamicCast(OSNumber,
+                    infoDict->getObject(kPrelinkExecutableSizeKey));
+                if (addressNum && lengthNum) {
+#error Pick the right way to free prelinked data on this arch
+                }
+
+                infoDictArray->removeObject(i--);
+                continue;
+            }
+        }
+#endif /* NO_KEXTD */
 
        /* Create the kext for the entry, then release it, because the
         * kext system keeps them around until explicitly removed.
@@ -394,12 +477,13 @@ KLDBootstrap::readPrelinkedExtensions(
         "%u prelinked kexts", 
         infoDictArray->getCount());
 
-#if __LP64__
-        /* On LP64 systems, kexts are copied to their own special VM region
-         * during OSKext init time, so we can free the whole segment now.
+#if CONFIG_KEXT_BASEMENT
+        /* On CONFIG_KEXT_BASEMENT systems, kexts are copied to their own 
+         * special VM region during OSKext init time, so we can free the whole 
+         * segment now.
          */
         ml_static_mfree((vm_offset_t) prelinkData, prelinkLength);
-#endif /* __LP64__ */
+#endif /* __x86_64__ */
 
    /* Free the prelink info segment, we're done with it.
     */
@@ -665,7 +749,7 @@ KLDBootstrap::loadSecurityExtensions(void)
         }
 
         isSecurityKext = OSDynamicCast(OSBoolean,
-            theKext->getPropertyForHostArch("AppleSecurityExtension"));
+            theKext->getPropertyForHostArch(kAppleSecurityExtensionKey));
         if (isSecurityKext && isSecurityKext->isTrue()) {
             OSKextLog(/* kext */ NULL,
                 kOSKextLogStepLevel |
@@ -722,6 +806,80 @@ KLDBootstrap::loadKernelComponentKexts(void)
 
     OSSafeRelease(theKext);
     return result;
+}
+
+/*********************************************************************
+* Ensure that Kernel External Components are loaded early in boot,
+* before other kext personalities get sent to the IOCatalogue. These
+* kexts are treated specially because they may provide the implementation
+* for kernel-vended KPI, so they must register themselves before
+* general purpose IOKit probing begins.
+*********************************************************************/
+
+#define COM_APPLE_KEC  "com.apple.kec."
+
+void
+KLDBootstrap::loadKernelExternalComponents(void)
+{
+    OSDictionary         * extensionsDict = NULL;  // must release
+    OSCollectionIterator * keyIterator    = NULL;  // must release
+    OSString             * bundleID       = NULL;  // don't release
+    OSKext               * theKext        = NULL;  // don't release
+    OSBoolean            * isKernelExternalComponent = NULL;  // don't release
+
+    OSKextLog(/* kext */ NULL,
+        kOSKextLogStepLevel |
+        kOSKextLogLoadFlag,
+        "Loading Kernel External Components.");
+
+    extensionsDict = OSKext::copyKexts();
+    if (!extensionsDict) {
+        return;
+    }
+
+    keyIterator = OSCollectionIterator::withCollection(extensionsDict);
+    if (!keyIterator) {
+        OSKextLog(/* kext */ NULL,
+            kOSKextLogErrorLevel |
+            kOSKextLogGeneralFlag,
+            "Failed to allocate iterator for Kernel External Components.");
+        goto finish;
+    }
+
+    while ((bundleID = OSDynamicCast(OSString, keyIterator->getNextObject()))) {
+
+        const char * bundle_id = bundleID->getCStringNoCopy();
+        
+       /* Skip extensions whose bundle IDs don't start with "com.apple.kec.".
+        */
+        if (!bundle_id ||
+            (strncmp(bundle_id, COM_APPLE_KEC, CONST_STRLEN(COM_APPLE_KEC)) != 0)) {
+
+            continue;
+        }
+
+        theKext = OSDynamicCast(OSKext, extensionsDict->getObject(bundleID));
+        if (!theKext) {
+            continue;
+        }
+
+        isKernelExternalComponent = OSDynamicCast(OSBoolean,
+            theKext->getPropertyForHostArch(kAppleKernelExternalComponentKey));
+        if (isKernelExternalComponent && isKernelExternalComponent->isTrue()) {
+            OSKextLog(/* kext */ NULL,
+                kOSKextLogStepLevel |
+                kOSKextLogLoadFlag,
+                "Loading kernel external component %s.", bundleID->getCStringNoCopy());
+            OSKext::loadKextWithIdentifier(bundleID->getCStringNoCopy(),
+                /* allowDefer */ false);
+        }
+    }
+
+finish:
+    OSSafeRelease(keyIterator);
+    OSSafeRelease(extensionsDict);
+
+    return;
 }
 
 /*********************************************************************

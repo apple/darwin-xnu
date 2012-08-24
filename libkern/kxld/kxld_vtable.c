@@ -495,6 +495,7 @@ kxld_vtable_patch(KXLDVTable *vtable, const KXLDVTable *super_vtable,
     symtab = kxld_object_get_symtab(object);
 
     require_action(!vtable->is_patched, finish, rval=KERN_SUCCESS);
+    require_action(super_vtable->is_patched, finish, rval=KERN_FAILURE);
     require_action(vtable->entries.nitems >= super_vtable->entries.nitems, finish,
         rval=KERN_FAILURE;
         kxld_log(kKxldLogPatching, kKxldLogErr, kKxldLogMalformedVTable, 

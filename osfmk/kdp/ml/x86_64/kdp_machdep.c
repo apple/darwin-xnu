@@ -606,6 +606,7 @@ machine_trace_thread64(thread_t thread, char *tracepos, char *tracebound, int nf
 	else {
 		stackptr = STACK_IKS(thread->kernel_stack)->k_rbp;
 		init_rip = STACK_IKS(thread->kernel_stack)->k_rip;
+		init_rip = VM_KERNEL_UNSLIDE(init_rip);
 		kdp_pmap = 0;
 	}
 
@@ -635,6 +636,9 @@ machine_trace_thread64(thread_t thread, char *tracepos, char *tracebound, int nf
 		if (machine_read64(stackptr + RETURN_OFFSET64, (caddr_t) tracebuf, sizeof(addr64_t)) != sizeof(addr64_t)) {
 			break;
 		}
+		if (!user_p)
+			*tracebuf = VM_KERNEL_UNSLIDE(*tracebuf);
+
 		tracebuf++;
 
 		prevsp = stackptr;

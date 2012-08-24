@@ -32,7 +32,7 @@
 
 	Version:	HFS Plus 1.0
 
-	Copyright:	ÔøΩ 1996-2009 by Apple Computer, Inc., all rights reserved.
+	Copyright:	� 1996-2009 by Apple Computer, Inc., all rights reserved.
 
 */
 
@@ -70,6 +70,10 @@ Public routines:
 					filesystem.  It is also used to shrink or grow the number of blocks that the red-black tree should
 					know about. If growing, scan the new range of bitmap, and if shrinking, reduce the
 					number of items in the tree that we can allocate from.
+
+	UnmapBlocks	
+					Issues DKIOCUNMAPs to the device as it fills the internal volume buffer when iterating
+					the volume bitmap.
  
 Internal routines:
 	Note that the RBTree routines are guarded by a cpp check for CONFIG_HFS_ALLOC_RBTREE.  This
@@ -141,6 +145,16 @@ Internal routines:
 
 	ReleaseBitmapBlock
 					Release a bitmap block back into the buffer cache.
+	
+	remove_free_extent_cache
+					Remove an extent from the free extent cache.  Handles overlaps
+					with multiple extents in the cache, and handles splitting an
+					extent in the cache if the extent to be removed is in the middle
+					of a cached extent.
+	
+	add_free_extent_cache
+					Add an extent to the free extent cache.  It will merge the
+					input extent with extents already in the cache.
  
  
 Debug/Test Routines
@@ -204,6 +218,8 @@ Red Black Tree Specific Routines
 #include <sys/ubc.h>
 #include <sys/uio.h>
 #include <kern/kalloc.h>
+/* For VM Page size */
+#include <libkern/libkern.h>
 
 #include "../../hfs.h"
 #include "../../hfs_dbg.h"
@@ -213,6 +229,10 @@ Red Black Tree Specific Routines
 #include "../headers/FileMgrInternal.h"
 #include "../headers/HybridAllocator.h"
 #include "../../hfs_kdebug.h"
+
+/* Headers for unmap-on-mount support */
+#include <vfs/vfs_journal.h>
+#include <sys/disk.h>
 
 #ifndef CONFIG_HFS_TRIM
 #define CONFIG_HFS_TRIM 0
@@ -339,10 +359,25 @@ static OSErr BlockMarkFreeInternal(
 	u_int32_t	numBlocks, 
 	Boolean 	do_validate);
 
+
+static OSErr ReleaseScanBitmapBlock( struct buf *bp );
+
+static int hfs_track_unmap_blocks (struct hfsmount *hfsmp, u_int32_t offset, 
+                             u_int32_t numBlocks, struct jnl_trim_list *list);
+
+static int hfs_issue_unmap (struct hfsmount *hfsmp, struct jnl_trim_list *list);
+
+static int hfs_alloc_scan_block(struct hfsmount *hfsmp, 
+								u_int32_t startbit, 
+								u_int32_t endBit, 
+								u_int32_t *bitToScan,
+                                struct jnl_trim_list *list);
+
+int hfs_isallocated_scan (struct hfsmount *hfsmp,
+								 u_int32_t startingBlock,
+								 u_int32_t *bp_buf);
+
 #if CONFIG_HFS_ALLOC_RBTREE
-
-static OSErr ReleaseRBScanBitmapBlock( struct buf *bp );
-
 static OSErr BlockAllocateAnyRBTree(
 	ExtendedVCB		*vcb,
 	u_int32_t		startingBlock,
@@ -390,15 +425,6 @@ void check_rbtree_extents (struct hfsmount *hfsmp,
 	u_int32_t numBlocks,
 	int shouldBeFree);
 
-int hfs_isallocated_scan (struct hfsmount *hfsmp,
-								 u_int32_t startingBlock,
-								 u_int32_t *bp_buf);
-
-static int hfs_alloc_scan_block(struct hfsmount *hfsmp, 
-								u_int32_t startbit, 
-								u_int32_t endBit, 
-								u_int32_t *bitToScan);
-
 #define ASSERT_FREE 1
 #define ASSERT_ALLOC 0
 								
@@ -410,19 +436,13 @@ static Boolean add_free_extent_cache(struct hfsmount *hfsmp, u_int32_t startBloc
 static void sanity_check_free_ext(struct hfsmount *hfsmp, int check_allocated);
 
 #if ALLOC_DEBUG
-/* 
- * Extra #includes for the debug function below.  These are not normally #included because
- * they would constitute a layering violation
- */
-#include <vfs/vfs_journal.h>
-#include <sys/disk.h>
-
 /*
  * Validation Routine to verify that the TRIM list maintained by the journal
  * is in good shape relative to what we think the bitmap should have.  We should
  * never encounter allocated blocks in the TRIM list, so if we ever encounter them,
  * we panic.  
  */
+int trim_validate_bitmap (struct hfsmount *hfsmp);
 int trim_validate_bitmap (struct hfsmount *hfsmp) {
 	u_int64_t blockno_offset;
 	u_int64_t numblocks;
@@ -459,43 +479,60 @@ int trim_validate_bitmap (struct hfsmount *hfsmp) {
 
 #endif
 
+
 /*
-;________________________________________________________________________________
-;
-; Routine:		hfs_unmap_free_extent
-;
-; Function:		Make note of a range of allocation blocks that should be
-;				unmapped (trimmed).  That is, the given range of blocks no
-;				longer have useful content, and the device can unmap the
-;				previous contents.  For example, a solid state disk may reuse
-;				the underlying storage for other blocks.
-;
-;				This routine is only supported for journaled volumes.  The extent
-;				being freed is passed to the journal code, and the extent will
-;				be unmapped after the current transaction is written to disk.
-;
-; Input Arguments:
-;	hfsmp			- The volume containing the allocation blocks.
-;	startingBlock	- The first allocation block of the extent being freed.
-;	numBlocks		- The number of allocation blocks of the extent being freed.
-;________________________________________________________________________________
-*/
+ ;________________________________________________________________________________
+ ;
+ ; Routine:		hfs_unmap_free_extent
+ ;
+ ; Function:		Make note of a range of allocation blocks that should be
+ ;				unmapped (trimmed).  That is, the given range of blocks no
+ ;				longer have useful content, and the device can unmap the
+ ;				previous contents.  For example, a solid state disk may reuse
+ ;				the underlying storage for other blocks.
+ ;
+ ;				This routine is only supported for journaled volumes.  The extent
+ ;				being freed is passed to the journal code, and the extent will
+ ;				be unmapped after the current transaction is written to disk.
+ ;
+ ; Input Arguments:
+ ;	hfsmp			- The volume containing the allocation blocks.
+ ;	startingBlock	- The first allocation block of the extent being freed.
+ ;	numBlocks		- The number of allocation blocks of the extent being freed.
+ ;________________________________________________________________________________
+ */
 static void hfs_unmap_free_extent(struct hfsmount *hfsmp, u_int32_t startingBlock, u_int32_t numBlocks)
 {
 	u_int64_t offset;
 	u_int64_t length;
-	int err;
-	
+	u_int64_t device_sz;
+	int err = 0;
+			
 	if (hfs_kdebug_allocation & HFSDBG_UNMAP_ENABLED)
 		KERNEL_DEBUG_CONSTANT(HFSDBG_UNMAP_FREE | DBG_FUNC_START, startingBlock, numBlocks, 0, 0, 0);
 	
+	if (ALLOC_DEBUG) {
+		if (hfs_isallocated(hfsmp, startingBlock, numBlocks)) {
+			panic("hfs: %p: (%u,%u) unmapping allocated blocks", hfsmp, startingBlock, numBlocks);
+		}
+	}
+	
 	if (hfsmp->jnl != NULL) {
+		device_sz = hfsmp->hfs_logical_bytes;
 		offset = (u_int64_t) startingBlock * hfsmp->blockSize + (u_int64_t) hfsmp->hfsPlusIOPosOffset;
 		length = (u_int64_t) numBlocks * hfsmp->blockSize;
 
-		err = journal_trim_add_extent(hfsmp->jnl, offset, length);
-		if (err) {
-			printf("hfs_unmap_free_extent: error %d from journal_trim_add_extent", err);
+		/* Validate that the trim is in a valid range of bytes */
+		if ((offset >= device_sz) || ((offset + length) > device_sz)) {
+			printf("hfs_unmap_free_ext: ignoring trim @ off %lld len %lld \n", offset, length);
+			err = EINVAL;
+		}
+
+		if (err == 0) {
+			err = journal_trim_add_extent(hfsmp->jnl, offset, length);
+			if (err) {
+				printf("hfs_unmap_free_extent: error %d from journal_trim_add_extent", err);
+			}
 		}
 	}
 	
@@ -504,22 +541,107 @@ static void hfs_unmap_free_extent(struct hfsmount *hfsmp, u_int32_t startingBloc
 }
 
 
+
 /*
-;________________________________________________________________________________
-;
-; Routine:		hfs_unmap_alloc_extent
-;
-; Function:		Make note of a range of allocation blocks, some of
-;				which may have previously been passed to hfs_unmap_free_extent,
-;				is now in use on the volume.  The given blocks will be removed
-;				from any pending DKIOCUNMAP.
-;
-; Input Arguments:
-;	hfsmp			- The volume containing the allocation blocks.
-;	startingBlock	- The first allocation block of the extent being allocated.
-;	numBlocks		- The number of allocation blocks being allocated.
-;________________________________________________________________________________
-*/
+ ;________________________________________________________________________________
+ ;
+ ; Routine:		hfs_track_unmap_blocks
+ ;
+ ; Function:	Make note of a range of allocation blocks that should be
+ ;				unmapped (trimmed).  That is, the given range of blocks no
+ ;				longer have useful content, and the device can unmap the
+ ;				previous contents.  For example, a solid state disk may reuse
+ ;				the underlying storage for other blocks.
+ ;
+ ;				This routine is only supported for journaled volumes.  
+ ; 
+ ;              *****NOTE*****: 
+ ;              This function should *NOT* be used when the volume is fully 
+ ;              mounted.  This function is intended to support a bitmap iteration
+ ;              at mount time to fully inform the SSD driver of the state of all blocks
+ ;              at mount time, and assumes that there is no allocation/deallocation
+ ;              interference during its iteration.,
+ ;
+ ; Input Arguments:
+ ;	hfsmp			- The volume containing the allocation blocks.
+ ;	offset          - The first allocation block of the extent being freed.
+ ;	numBlocks		- The number of allocation blocks of the extent being freed.
+ ;  list            - The list of currently tracked trim ranges.
+ ;________________________________________________________________________________
+ */
+static int hfs_track_unmap_blocks (struct hfsmount *hfsmp, u_int32_t start, 
+                              u_int32_t numBlocks, struct jnl_trim_list *list) {
+    
+    u_int64_t offset;
+    u_int64_t length;
+    int error = 0;
+    
+    if ((hfsmp->hfs_flags & HFS_UNMAP) && (hfsmp->jnl != NULL)) {
+        int extent_no = list->extent_count;
+        offset = (u_int64_t) start * hfsmp->blockSize + (u_int64_t) hfsmp->hfsPlusIOPosOffset;
+        length = (u_int64_t) numBlocks * hfsmp->blockSize;
+        
+        
+        list->extents[extent_no].offset = offset;
+        list->extents[extent_no].length = length;
+        list->extent_count++;
+        if (list->extent_count == list->allocated_count) {
+            error = hfs_issue_unmap (hfsmp, list);
+        }
+    }
+
+    return error;
+}
+
+/*
+ ;________________________________________________________________________________
+ ;
+ ; Routine:		hfs_issue_unmap
+ ;
+ ; Function:	Issue a DKIOCUNMAP for all blocks currently tracked by the jnl_trim_list
+ ;
+ ; Input Arguments:
+ ;	hfsmp			- The volume containing the allocation blocks.
+ ;  list            - The list of currently tracked trim ranges.
+ ;________________________________________________________________________________
+ */
+
+static int hfs_issue_unmap (struct hfsmount *hfsmp, struct jnl_trim_list *list) {
+    dk_unmap_t unmap;
+    int error = 0;
+    
+    if (list->extent_count > 0) {
+        bzero(&unmap, sizeof(unmap));
+        unmap.extents = list->extents;
+        unmap.extentsCount = list->extent_count;
+        
+        /* Issue a TRIM and flush them out */
+        error = VNOP_IOCTL(hfsmp->hfs_devvp, DKIOCUNMAP, (caddr_t)&unmap, 0, vfs_context_kernel());
+        
+        bzero (list->extents, (list->allocated_count * sizeof(dk_extent_t)));
+        list->extent_count = 0;
+    }
+    return error;
+}
+
+
+
+/*
+ ;________________________________________________________________________________
+ ;
+ ; Routine:		hfs_unmap_alloc_extent
+ ;
+ ; Function:		Make note of a range of allocation blocks, some of
+ ;				which may have previously been passed to hfs_unmap_free_extent,
+ ;				is now in use on the volume.  The given blocks will be removed
+ ;				from any pending DKIOCUNMAP.
+ ;
+ ; Input Arguments:
+ ;	hfsmp			- The volume containing the allocation blocks.
+ ;	startingBlock	- The first allocation block of the extent being allocated.
+ ;	numBlocks		- The number of allocation blocks being allocated.
+ ;________________________________________________________________________________
+ */
 static void hfs_unmap_alloc_extent(struct hfsmount *hfsmp, u_int32_t startingBlock, u_int32_t numBlocks)
 {
 	u_int64_t offset;
@@ -593,6 +715,64 @@ hfs_trim_callback(void *arg, uint32_t extent_count, const dk_extent_t *extents)
 		KERNEL_DEBUG_CONSTANT(HFSDBG_UNMAP_CALLBACK | DBG_FUNC_END, 0, 0, 0, 0, 0);
 }
 
+
+/*
+ ;________________________________________________________________________________
+ ;
+ ; Routine:		UnmapBlocks
+ ;
+ ; Function:	Traverse the bitmap, and issue DKIOCUNMAPs to the underlying
+ ;				device as needed so that the underlying disk device is as
+ ;				up-to-date as possible with which blocks are unmapped.
+ ;
+ ; Input Arguments:
+ ;	hfsmp			- The volume containing the allocation blocks.
+ ;________________________________________________________________________________
+ */
+
+__private_extern__
+u_int32_t UnmapBlocks (struct hfsmount *hfsmp) {
+	u_int32_t blocks_scanned = 0;
+	int error = 0;
+    struct jnl_trim_list trimlist;
+    
+    /*
+     *struct jnl_trim_list {
+     uint32_t    allocated_count;
+     uint32_t    extent_count;
+     dk_extent_t *extents;
+     };
+    */
+    bzero (&trimlist, sizeof(trimlist));
+    if (CONFIG_HFS_TRIM) {
+        int alloc_count = PAGE_SIZE / sizeof(dk_extent_t);
+        void *extents = kalloc (alloc_count * sizeof(dk_extent_t));
+        if (extents == NULL) {
+            return ENOMEM;
+        }
+        trimlist.extents = (dk_extent_t*)extents;
+        trimlist.allocated_count = alloc_count;
+        trimlist.extent_count = 0;
+        
+        
+        
+        while ((blocks_scanned < hfsmp->totalBlocks) && (error == 0)){
+            error = hfs_alloc_scan_block (hfsmp, blocks_scanned, hfsmp->totalBlocks, 
+                                          &blocks_scanned, &trimlist);
+            if (error) {
+                printf("HFS: bitmap unmap scan error: %d\n", error);
+                break;
+            }
+        }
+        if (error == 0) {
+            hfs_issue_unmap(hfsmp, &trimlist);
+        }
+        if (trimlist.extents) {
+            kfree (trimlist.extents, (trimlist.allocated_count * sizeof(dk_extent_t)));
+        }
+	}
+	return error;
+}
 
 /*
  ;________________________________________________________________________________
@@ -1256,16 +1436,15 @@ static OSErr ReleaseBitmapBlock(
 	return (0);
 }
 
-#if CONFIG_HFS_ALLOC_RBTREE
 /*
- * ReleaseRBScanBitmapBlock is used to release struct bufs that were 
- * created for use by the Red-Black tree generation code.  We want to force 
+ * ReleaseScanBitmapBlock is used to release struct bufs that were 
+ * created for use by bitmap scanning code.  We want to force 
  * them to be purged out of the buffer cache ASAP, so we'll release them differently
  * than in the ReleaseBitmapBlock case.  Alternately, we know that we're only reading 
  * the blocks, so we will never dirty them as part of the tree building scan.
  */
 
-static OSErr ReleaseRBScanBitmapBlock(struct buf *bp ) {
+static OSErr ReleaseScanBitmapBlock(struct buf *bp ) {
 	
 	if (bp == NULL) {
 		return (0);
@@ -1283,9 +1462,6 @@ static OSErr ReleaseRBScanBitmapBlock(struct buf *bp ) {
 	
 	
 }
-
-#endif
-
 
 /*
 _______________________________________________________________________
@@ -1906,9 +2082,9 @@ Exit:
 		*actualStartBlock = 0;
 		*actualNumBlocks = 0;
 	}
-	
-    if (currCache)
-    	(void) ReleaseBitmapBlock(vcb, blockRef, dirty);
+
+	if (currCache)
+		(void) ReleaseBitmapBlock(vcb, blockRef, dirty);
 
 	if (hfs_kdebug_allocation & HFSDBG_ALLOC_ENABLED)
 		KERNEL_DEBUG_CONSTANT(HFSDBG_ALLOC_ANY_BITMAP | DBG_FUNC_END, err, *actualStartBlock, *actualNumBlocks, 0, 0);
@@ -1945,9 +2121,7 @@ static OSErr BlockAllocateKnown(
 	u_int32_t		*actualNumBlocks)
 {
 	OSErr			err;	
-	u_int32_t		i;
 	u_int32_t		foundBlocks;
-	u_int32_t		newStartBlock, newBlockCount;
 
 	if (hfs_kdebug_allocation & HFSDBG_ALLOC_ENABLED)
 		KERNEL_DEBUG_CONSTANT(HFSDBG_ALLOC_KNOWN_BITMAP | DBG_FUNC_START, 0, 0, maxBlocks, 0, 0);
@@ -1975,59 +2149,10 @@ static OSErr BlockAllocateKnown(
 		foundBlocks = maxBlocks;
 	*actualNumBlocks = foundBlocks;
 	
-	if (vcb->hfs_flags & HFS_HAS_SPARSE_DEVICE) {
-		// since sparse volumes keep the free extent list sorted by starting
-		// block number, the list won't get re-ordered, it may only shrink
-		//
-		vcb->vcbFreeExt[0].startBlock += foundBlocks;
-		vcb->vcbFreeExt[0].blockCount -= foundBlocks;
-		if (vcb->vcbFreeExt[0].blockCount == 0) {
-			for(i=1; i < vcb->vcbFreeExtCnt; i++) {
-				vcb->vcbFreeExt[i-1] = vcb->vcbFreeExt[i];
-			}
-			vcb->vcbFreeExtCnt--;
-		}
-
-		goto done;
-	}
-
-	//	Adjust the start and length of that extent.
-	newStartBlock = vcb->vcbFreeExt[0].startBlock + foundBlocks;
-	newBlockCount = vcb->vcbFreeExt[0].blockCount - foundBlocks;
-		
-	
-	//	The first extent might not be the largest anymore.  Bubble up any
-	//	(now larger) extents to the top of the list.
-	for (i=1; i<vcb->vcbFreeExtCnt; ++i)
-	{
-		if (vcb->vcbFreeExt[i].blockCount > newBlockCount)
-		{
-			vcb->vcbFreeExt[i-1].startBlock = vcb->vcbFreeExt[i].startBlock;
-			vcb->vcbFreeExt[i-1].blockCount = vcb->vcbFreeExt[i].blockCount;
-		}
-		else
-		{
-			break;
-		}
-	}
-	
-	//	If this is now the smallest known free extent, then it might be smaller than
-	//	other extents we didn't keep track of.  So, just forget about this extent.
-	//	After the previous loop, (i-1) is the index of the extent we just allocated from.
-	if (newBlockCount == 0)
-	{
-		// then just reduce the number of free extents since this guy got deleted
-		--vcb->vcbFreeExtCnt;
-	}
-	else
-	{
-		//	It's not the smallest, so store it in its proper place
-		vcb->vcbFreeExt[i-1].startBlock = newStartBlock;
-		vcb->vcbFreeExt[i-1].blockCount = newBlockCount;
-	}
-
-done:
 	lck_spin_unlock(&vcb->vcbFreeExtLock);
+
+	remove_free_extent_cache(vcb, *actualStartBlock, *actualNumBlocks);
+	
 	// sanity check
 	if ((*actualStartBlock + *actualNumBlocks) > vcb->allocLimit) 
 	{
@@ -2546,21 +2671,24 @@ OSErr BlockMarkFreeInternal(
 	register u_int32_t	numBlocks_in,
 	Boolean 		do_validate)
 {
-	OSErr			err;
+	OSErr		err;
 	u_int32_t	startingBlock = startingBlock_in;
 	u_int32_t	numBlocks = numBlocks_in;
-	register u_int32_t	*currentWord;	//	Pointer to current word within bitmap block
-	register u_int32_t	wordsLeft;		//	Number of words left in this bitmap block
-	register u_int32_t	bitMask;		//	Word with given bits already set (ready to OR in)
-	u_int32_t			firstBit;		//	Bit index within word of first bit to allocate
-	u_int32_t			numBits;		//	Number of bits in word to allocate
-	u_int32_t			*buffer = NULL;
-	uintptr_t  blockRef;
-	u_int32_t  bitsPerBlock;
-	u_int32_t  wordsPerBlock;
+	uint32_t	unmapStart = startingBlock_in;
+	uint32_t	unmapCount = numBlocks_in;
+	uint32_t	wordIndexInBlock;
+	u_int32_t	*currentWord;	//	Pointer to current word within bitmap block
+	u_int32_t	wordsLeft;		//	Number of words left in this bitmap block
+	u_int32_t	bitMask;		//	Word with given bits already set (ready to OR in)
+	u_int32_t	currentBit;		//	Bit index within word of current bit to allocate
+	u_int32_t	numBits;		//	Number of bits in word to allocate
+	u_int32_t	*buffer = NULL;
+	uintptr_t	blockRef;
+	u_int32_t	bitsPerBlock;
+	u_int32_t	wordsPerBlock;
     // XXXdbg
 	struct hfsmount *hfsmp = VCBTOHFS(vcb);
-
+	
 	if (hfs_kdebug_allocation & HFSDBG_BITMAP_ENABLED)
 		KERNEL_DEBUG_CONSTANT(HFSDBG_MARK_FREE_BITMAP | DBG_FUNC_START, startingBlock_in, numBlocks_in, do_validate, 0, 0);
 
@@ -2579,30 +2707,46 @@ OSErr BlockMarkFreeInternal(
 		err = EIO;
 		goto Exit;
 	}
-
+	
 	//
 	//	Pre-read the bitmap block containing the first word of allocation
 	//
-
+	
 	err = ReadBitmapBlock(vcb, startingBlock, &buffer, &blockRef);
 	if (err != noErr) goto Exit;
 	// XXXdbg
 	if (hfsmp->jnl) {
 		journal_modify_block_start(hfsmp->jnl, (struct buf *)blockRef);
 	}
-
+	
 	//
-	//	Initialize currentWord, and wordsLeft.
+	//	Figure out how many bits and words per bitmap block.
 	//
-	{
-		u_int32_t wordIndexInBlock;
+	bitsPerBlock  = vcb->vcbVBMIOSize * kBitsPerByte;
+	wordsPerBlock = vcb->vcbVBMIOSize / kBytesPerWord;
+	wordIndexInBlock = (startingBlock & (bitsPerBlock-1)) / kBitsPerWord;
+	
+	//
+	// Look for a range of free blocks immediately before startingBlock
+	// (up to the start of the current bitmap block).  Set unmapStart to
+	// the first free block.
+	//
+	currentWord = buffer + wordIndexInBlock;
+	currentBit = startingBlock % kBitsPerWord;
+	bitMask = kHighBitInWordMask >> currentBit;
+	while (true) {
+		// Move currentWord/bitMask back by one bit
+		bitMask <<= 1;
+		if (bitMask == 0) {
+			if (--currentWord < buffer)
+				break;
+			bitMask = kLowBitInWordMask;
+		}
 		
-		bitsPerBlock  = vcb->vcbVBMIOSize * kBitsPerByte;
-		wordsPerBlock = vcb->vcbVBMIOSize / kBytesPerWord;
-
-		wordIndexInBlock = (startingBlock & (bitsPerBlock-1)) / kBitsPerWord;
-		currentWord = buffer + wordIndexInBlock;
-		wordsLeft = wordsPerBlock - wordIndexInBlock;
+		if (*currentWord & SWAP_BE32(bitMask))
+			break;	// Found an allocated block.  Stop searching.
+		--unmapStart;
+		++unmapCount;
 	}
 	
 	//
@@ -2610,14 +2754,16 @@ OSErr BlockMarkFreeInternal(
 	//	boundary in the bitmap, then treat that first word
 	//	specially.
 	//
-
-	firstBit = startingBlock % kBitsPerWord;
-	if (firstBit != 0) {
-		bitMask = kAllBitsSetInWord >> firstBit;	//	turn off all bits before firstBit
-		numBits = kBitsPerWord - firstBit;			//	number of remaining bits in this word
+	
+	currentWord = buffer + wordIndexInBlock;
+	wordsLeft = wordsPerBlock - wordIndexInBlock;
+	currentBit = startingBlock % kBitsPerWord;
+	if (currentBit != 0) {
+		bitMask = kAllBitsSetInWord >> currentBit;	//	turn off all bits before currentBit
+		numBits = kBitsPerWord - currentBit;		//	number of remaining bits in this word
 		if (numBits > numBlocks) {
 			numBits = numBlocks;					//	entire allocation is inside this one word
-			bitMask &= ~(kAllBitsSetInWord >> (firstBit + numBits));	//	turn off bits after last
+			bitMask &= ~(kAllBitsSetInWord >> (currentBit + numBits));	//	turn off bits after last
 		}
 		if ((do_validate == true) && 
 		    (*currentWord & SWAP_BE32 (bitMask)) != SWAP_BE32 (bitMask)) {
@@ -2625,15 +2771,15 @@ OSErr BlockMarkFreeInternal(
 		}
 		*currentWord &= SWAP_BE32 (~bitMask);		//	clear the bits in the bitmap
 		numBlocks -= numBits;						//	adjust number of blocks left to free
-
+		
 		++currentWord;								//	move to next word
 		--wordsLeft;								//	one less word left in this block
 	}
-
+	
 	//
 	//	Free whole words (32 blocks) at a time.
 	//
-
+	
 	while (numBlocks >= kBitsPerWord) {
 		if (wordsLeft == 0) {
 			//	Read in the next bitmap block
@@ -2642,15 +2788,15 @@ OSErr BlockMarkFreeInternal(
 			buffer = NULL;
 			err = ReleaseBitmapBlock(vcb, blockRef, true);
 			if (err != noErr) goto Exit;
-
+			
 			err = ReadBitmapBlock(vcb, startingBlock, &buffer, &blockRef);
 			if (err != noErr) goto Exit;
-
+			
 			// XXXdbg
 			if (hfsmp->jnl) {
 				journal_modify_block_start(hfsmp->jnl, (struct buf *)blockRef);
 			}
-
+			
 			//	Readjust currentWord and wordsLeft
 			currentWord = buffer;
 			wordsLeft = wordsPerBlock;
@@ -2663,7 +2809,7 @@ OSErr BlockMarkFreeInternal(
 		numBlocks -= kBitsPerWord;
 		
 		++currentWord;								//	move to next word
-		--wordsLeft;								//	one less word left in this block
+		--wordsLeft;									//	one less word left in this block
 	}
 	
 	//
@@ -2679,10 +2825,10 @@ OSErr BlockMarkFreeInternal(
 			buffer = NULL;
 			err = ReleaseBitmapBlock(vcb, blockRef, true);
 			if (err != noErr) goto Exit;
-
+			
 			err = ReadBitmapBlock(vcb, startingBlock, &buffer, &blockRef);
 			if (err != noErr) goto Exit;
-
+			
 			// XXXdbg
 			if (hfsmp->jnl) {
 				journal_modify_block_start(hfsmp->jnl, (struct buf *)blockRef);
@@ -2697,34 +2843,59 @@ OSErr BlockMarkFreeInternal(
 			goto Corruption;
 		}
 		*currentWord &= SWAP_BE32 (~bitMask);			//	clear the bits in the bitmap
-
+		
 		//	No need to update currentWord or wordsLeft
 	}
-
+	
+	//
+	// Look for a range of free blocks immediately after the range we just freed
+	// (up to the end of the current bitmap block).
+	//
+	wordIndexInBlock = ((startingBlock_in + numBlocks_in - 1) & (bitsPerBlock-1)) / kBitsPerWord;
+	wordsLeft = wordsPerBlock - wordIndexInBlock;
+	currentWord = buffer + wordIndexInBlock;
+	currentBit = (startingBlock_in + numBlocks_in - 1) % kBitsPerWord;
+	bitMask = kHighBitInWordMask >> currentBit;
+	while (true) {
+		// Move currentWord/bitMask/wordsLeft forward one bit
+		bitMask >>= 1;
+		if (bitMask == 0) {
+			if (--wordsLeft == 0)
+				break;
+			++currentWord;
+			bitMask = kHighBitInWordMask;
+		}
+		
+		if (*currentWord & SWAP_BE32(bitMask))
+			break;	// Found an allocated block.  Stop searching.
+		++unmapCount;
+	}
+	
 Exit:
-
+	
 	if (buffer)
 		(void)ReleaseBitmapBlock(vcb, blockRef, true);
-
+	
 	if (err == noErr) {
-		hfs_unmap_free_extent(vcb, startingBlock_in, numBlocks_in);
+		hfs_unmap_free_extent(vcb, unmapStart, unmapCount);
 	}
 
 	if (hfs_kdebug_allocation & HFSDBG_BITMAP_ENABLED)
 		KERNEL_DEBUG_CONSTANT(HFSDBG_MARK_FREE_BITMAP | DBG_FUNC_END, err, 0, 0, 0, 0);
 
 	return err;
-
+	
 Corruption:
 #if DEBUG_BUILD
 	panic("hfs: BlockMarkFreeInternal: blocks not allocated!");
 #else
-	printf ("hfs: BlockMarkFreeInternal() trying to free unallocated blocks (%u,%u) on volume %s\n", startingBlock, numBlocks, vcb->vcbVN);
+	printf ("hfs: BlockMarkFreeInternal() trying to free unallocated blocks on volume %s\n", vcb->vcbVN);
 	hfs_mark_volume_inconsistent(vcb);
 	err = EIO;
 	goto Exit;
 #endif
 }
+
 
 #if CONFIG_HFS_ALLOC_RBTREE
 /*
@@ -3628,7 +3799,129 @@ hfs_isrbtree_active(struct hfsmount *hfsmp){
 	return 0;
 }
 
+
+/* 
+ * This function scans the specified bitmap block and acts on it as necessary.
+ * We may add it to the list of blocks to be UNMAP/TRIM'd or add it to allocator
+ * data structures.  This function is not #if'd to the CONFIG_RB case because
+ * we want to use it unilaterally at mount time if on a UNMAP-capable device.
+ * 
+ * Additionally, we may want an allocating thread to invoke this if the tree 
+ * does not have enough extents to satisfy an allocation request.
+ * 
+ * startbit		- the allocation block represented by a bit in 'allocblock' where we need to
+ *				start our scan.  For instance, we may need to start the normal allocation scan
+ *				in the middle of an existing allocation block.
+ * endBit		- the allocation block where we should end this search (inclusive).
+ * bitToScan	- output argument for this function to specify the next bit to scan.
+ *
+ * Returns:
+ *		0 on success
+ *		nonzero on failure. 
+ */
+
+static int hfs_alloc_scan_block(struct hfsmount *hfsmp, u_int32_t startbit, 
+                                u_int32_t endBit, u_int32_t *bitToScan, 
+                                struct jnl_trim_list *list) {
+    
+	int error;
+	u_int32_t curAllocBlock;
+	struct buf *blockRef = NULL;
+	u_int32_t *buffer = NULL;
+	u_int32_t wordIndexInBlock;
+	u_int32_t blockSize = (u_int32_t)hfsmp->vcbVBMIOSize;
+	u_int32_t wordsPerBlock = blockSize / kBytesPerWord; 
+	u_int32_t offset = 0;
+	u_int32_t size = 0;
+    
+	/* 
+	 * Read the appropriate block from the bitmap file.  ReadBitmapBlock
+	 * figures out which actual on-disk block corresponds to the bit we're 
+	 * looking at.
+	 */	
+	error = ReadBitmapBlock(hfsmp, startbit, &buffer, (uintptr_t*)&blockRef);
+	if (error) {
+		return error;
+	}
+	
+	/* curAllocBlock represents the logical block we're analyzing. */
+	curAllocBlock = startbit;	
+    
+	/*  Figure out which word curAllocBlock corresponds to in the block we read  */
+	wordIndexInBlock = (curAllocBlock / kBitsPerWord) % wordsPerBlock;
+	
+	/* Scan a word at a time */
+	while (wordIndexInBlock < wordsPerBlock) {
+		u_int32_t currentWord = SWAP_BE32(buffer[wordIndexInBlock]);
+		u_int32_t curBit;
+		
+		/* modulate curBit because it may start in the middle of a word */
+		for (curBit = curAllocBlock % kBitsPerWord; curBit < kBitsPerWord; curBit++) {
+			
+			u_int32_t is_allocated = currentWord & (1 << (kBitsWithinWordMask - curBit));
+			if (ALLOC_DEBUG) {
+				u_int32_t res = hfs_isallocated_scan (hfsmp, curAllocBlock, buffer); 
+				if ( ((res) && (!is_allocated)) || ((!res) && (is_allocated))) {
+					panic("hfs_alloc_scan: curAllocBit %u, curBit (%d), word (0x%x), is_allocated (0x%x)  res(0x%x) \n",
+						  curAllocBlock, curBit, currentWord, is_allocated, res);
+				}
+			}
+			/* 
+			 * If curBit is not allocated, keep track of the start of the free range.
+			 * Increment a running tally on how many free blocks in a row we've seen.
+			 */
+			if (!is_allocated) {
+				size++;
+				if (offset == 0) {
+					offset = curAllocBlock;
+				}
+			}
+			else {
+				/* 
+				 * If we hit an allocated block, insert the extent that tracked the range
+				 * we saw, and reset our tally counter.
+				 */
+				if (size != 0) {
 #if CONFIG_HFS_ALLOC_RBTREE
+					extent_tree_free_space(&hfsmp->offset_tree, size, offset);	
+#endif
+                    hfs_track_unmap_blocks (hfsmp, offset, size, list);                    
+                    size = 0;
+                    offset = 0;
+				}
+			}
+			curAllocBlock++;
+			/*
+			 * Exit early if the next bit we'd analyze would take us beyond the end of the 
+			 * range that we're supposed to scan.  
+			 */
+			if (curAllocBlock >= endBit) {
+				goto DoneScanning;
+			}
+		}
+		wordIndexInBlock++;
+	}
+DoneScanning:
+	
+	/* We may have been tracking a range of free blocks that hasn't been inserted yet. */
+	if (size != 0) {
+#if CONFIG_HFS_ALLOC_RBTREE
+		extent_tree_free_space(&hfsmp->offset_tree, size, offset);
+#endif
+        hfs_track_unmap_blocks (hfsmp, offset, size, list);
+	}
+	/* 
+	 * curAllocBlock represents the next block we need to scan while we're in this 
+	 * function. 
+	 */
+	*bitToScan = curAllocBlock;
+	
+	ReleaseScanBitmapBlock(blockRef);
+    
+	return 0;
+}
+
+
 /*
  * This function is basically the same as hfs_isallocated, except it's designed for 
  * use with the red-black tree validation code.  It assumes we're only checking whether
@@ -3706,116 +3999,7 @@ Exit:
 	
 }
 
-/* 
- * This function scans the specified block and adds it to the pair of trees specified 
- * in its arguments.  We break this behavior out of GenerateTree so that an allocating
- * thread can invoke this if the tree does not have enough extents to satisfy 
- * an allocation request.
- * 
- * startbit		- the allocation block represented by a bit in 'allocblock' where we need to
- *				start our scan.  For instance, we may need to start the normal allocation scan
- *				in the middle of an existing allocation block.
- * endBit		- the allocation block where we should end this search (inclusive).
- * bitToScan	- output argument for this function to specify the next bit to scan.
- *
- * Returns:
- *		0 on success
- *		nonzero on failure. 
- */
-
-static int hfs_alloc_scan_block(struct hfsmount *hfsmp, u_int32_t startbit, 
-						 u_int32_t endBit, u_int32_t *bitToScan) {
-
-	int error;
-	u_int32_t curAllocBlock;
-	struct buf *blockRef = NULL;
-	u_int32_t *buffer = NULL;
-	u_int32_t wordIndexInBlock;
-	u_int32_t blockSize = (u_int32_t)hfsmp->vcbVBMIOSize;
-	u_int32_t wordsPerBlock = blockSize / kBytesPerWord; 
-	u_int32_t offset = 0;
-	u_int32_t size = 0;
-
-	/* 
-	 * Read the appropriate block from the bitmap file.  ReadBitmapBlock
-	 * figures out which actual on-disk block corresponds to the bit we're 
-	 * looking at.
-	 */	
-	error = ReadBitmapBlock(hfsmp, startbit, &buffer, (uintptr_t*)&blockRef);
-	if (error) {
-		return error;
-	}
-	
-	/* curAllocBlock represents the logical block we're analyzing. */
-	curAllocBlock = startbit;	
-
-	/*  Figure out which word curAllocBlock corresponds to in the block we read  */
-	wordIndexInBlock = (curAllocBlock / kBitsPerWord) % wordsPerBlock;
-	
-	/* Scan a word at a time */
-	while (wordIndexInBlock < wordsPerBlock) {
-		u_int32_t currentWord = SWAP_BE32(buffer[wordIndexInBlock]);
-		u_int32_t curBit;
-		
-		/* modulate curBit because it may start in the middle of a word */
-		for (curBit = curAllocBlock % kBitsPerWord; curBit < kBitsPerWord; curBit++) {
-			
-			u_int32_t is_allocated = currentWord & (1 << (kBitsWithinWordMask - curBit));
-			if (ALLOC_DEBUG) {
-				u_int32_t res = hfs_isallocated_scan (hfsmp, curAllocBlock, buffer); 
-				if ( ((res) && (!is_allocated)) || ((!res) && (is_allocated))) {
-					panic("hfs_alloc_scan: curAllocBit %u, curBit (%d), word (0x%x), is_allocated (0x%x)  res(0x%x) \n",
-						  curAllocBlock, curBit, currentWord, is_allocated, res);
-				}
-			}
-			/* 
-			 * If curBit is not allocated, keep track of the start of the free range.
-			 * Increment a running tally on how many free blocks in a row we've seen.
-			 */
-			if (!is_allocated) {
-				size++;
-				if (offset == 0) {
-					offset = curAllocBlock;
-				}
-			}
-			else {
-				/* 
-				 * If we hit an allocated block, insert the extent that tracked the range
-				 * we saw, and reset our tally counter.
-				 */
-				if (size != 0) {
-					extent_tree_free_space(&hfsmp->offset_tree, size, offset);	
-					size = 0;
-					offset = 0;
-				}
-			}
-			curAllocBlock++;
-			/*
-			 * Exit early if the next bit we'd analyze would take us beyond the end of the 
-			 * range that we're supposed to scan.  
-			 */
-			if (curAllocBlock >= endBit) {
-				goto DoneScanning;
-			}
-		}
-		wordIndexInBlock++;
-	}
-DoneScanning:
-	
-	/* We may have been tracking a range of free blocks that hasn't been inserted yet. */
-	if (size != 0) {
-		extent_tree_free_space(&hfsmp->offset_tree, size, offset);	
-	}
-	/* 
-	 * curAllocBlock represents the next block we need to scan while we're in this 
-	 * function. 
-	 */
-	*bitToScan = curAllocBlock;
-	
-	ReleaseRBScanBitmapBlock(blockRef);
-
-	return 0;
-}
+#if CONFIG_HFS_ALLOC_RBTREE
 
 /*
  * Extern function that is called from mount and upgrade mount routines
@@ -4167,102 +4351,275 @@ u_int32_t UpdateAllocLimit (struct hfsmount *hfsmp, u_int32_t new_end_block) {
 
 
 /*
+ * Remove an extent from the list of free extents.
+ *
+ * This is a low-level routine.	 It does not handle overlaps or splitting;
+ * that is the responsibility of the caller.  The input extent must exactly
+ * match an extent already in the list; it will be removed, and any following
+ * extents in the list will be shifted up.
+ *
+ * Inputs:
+ *	startBlock - Start of extent to remove
+ *	blockCount - Number of blocks in extent to remove
+ *
+ * Result:
+ *	The index of the extent that was removed.
+ */
+static void remove_free_extent_list(struct hfsmount *hfsmp, int index)
+{
+	if (index < 0 || (uint32_t)index >= hfsmp->vcbFreeExtCnt) {
+		if (ALLOC_DEBUG)
+			panic("hfs: remove_free_extent_list: %p: index (%d) out of range (0, %u)", hfsmp, index, hfsmp->vcbFreeExtCnt);
+		else
+			printf("hfs: remove_free_extent_list: %p: index (%d) out of range (0, %u)", hfsmp, index, hfsmp->vcbFreeExtCnt);
+		return;
+	}
+	int shift_count = hfsmp->vcbFreeExtCnt - index - 1;
+	if (shift_count > 0) {
+		memmove(&hfsmp->vcbFreeExt[index], &hfsmp->vcbFreeExt[index+1], shift_count * sizeof(hfsmp->vcbFreeExt[0]));
+	}
+	hfsmp->vcbFreeExtCnt--;
+}
+
+
+/*
+ * Add an extent to the list of free extents.
+ *
+ * This is a low-level routine.	 It does not handle overlaps or coalescing;
+ * that is the responsibility of the caller.  This routine *does* make
+ * sure that the extent it is adding is inserted in the correct location.
+ * If the list is full, this routine will handle either removing the last
+ * extent in the list to make room for the new extent, or ignoring the
+ * new extent if it is "worse" than the last extent in the list.
+ *
+ * Inputs:
+ *	startBlock - Start of extent to add
+ *	blockCount - Number of blocks in extent to add
+ *
+ * Result:
+ *	The index where the extent that was inserted, or kMaxFreeExtents
+ *	if the extent was not inserted (the list was full, and the extent
+ *	being added was "worse" than everything in the list).
+ */
+static int add_free_extent_list(struct hfsmount *hfsmp, u_int32_t startBlock, u_int32_t blockCount)
+{
+	uint32_t i;
+	
+	/* ALLOC_DEBUG: Make sure no extents in the list overlap or are contiguous with the input extent. */
+	if (ALLOC_DEBUG) {
+		uint32_t endBlock = startBlock + blockCount;
+		for (i = 0; i < hfsmp->vcbFreeExtCnt; ++i) {
+			if (endBlock < hfsmp->vcbFreeExt[i].startBlock ||
+				startBlock > (hfsmp->vcbFreeExt[i].startBlock + hfsmp->vcbFreeExt[i].blockCount)) {
+					continue;
+			}
+			panic("hfs: add_free_extent_list: %p: extent(%u %u) overlaps existing extent (%u %u) at index %d",
+				hfsmp, startBlock, blockCount, hfsmp->vcbFreeExt[i].startBlock, hfsmp->vcbFreeExt[i].blockCount, i);
+		}
+	}	 
+
+	/* Figure out what index the new extent should be inserted at. */
+	for (i = 0; i < hfsmp->vcbFreeExtCnt; ++i) {
+		if (hfsmp->hfs_flags & HFS_HAS_SPARSE_DEVICE) {
+			/* The list is sorted by increasing offset. */
+			if (startBlock < hfsmp->vcbFreeExt[i].startBlock) {
+				break;
+			}
+		} else {
+			/* The list is sorted by decreasing size. */
+			if (blockCount > hfsmp->vcbFreeExt[i].blockCount) {
+				break;
+			}
+		}
+	}
+	
+	/* When we get here, i is the index where the extent should be inserted. */
+	if (i == kMaxFreeExtents) {
+		/*
+		 * The new extent is worse than anything already in the list,
+		 * and the list is full, so just ignore the extent to be added.
+		 */
+		return i;
+	}
+	
+	/*
+	 * Grow the list (if possible) to make room for an insert.
+	 */
+	if (hfsmp->vcbFreeExtCnt < kMaxFreeExtents)
+		hfsmp->vcbFreeExtCnt++;
+	
+	/*
+	 * If we'll be keeping any extents after the insert position, then shift them.
+	 */
+	int shift_count = hfsmp->vcbFreeExtCnt - i - 1;
+	if (shift_count > 0) {
+		memmove(&hfsmp->vcbFreeExt[i+1], &hfsmp->vcbFreeExt[i], shift_count * sizeof(hfsmp->vcbFreeExt[0]));
+	}
+	
+	/* Finally, store the new extent at its correct position. */
+	hfsmp->vcbFreeExt[i].startBlock = startBlock;
+	hfsmp->vcbFreeExt[i].blockCount = blockCount;
+	return i;
+}
+
+
+/*
  * Remove an entry from free extent cache after it has been allocated.
  *
- * This function does not split extents to remove them from the allocated list.  
+ * This is a high-level routine.  It handles removing a portion of a
+ * cached extent, potentially splitting it into two (if the cache was
+ * already full, throwing away the extent that would sort last).  It
+ * also handles removing an extent that overlaps multiple extents in
+ * the cache.
  *
  * Inputs: 
- * 	hfsmp		- mount point structure 
- * 	startBlock	- starting block of the extent to be removed. 
- * 	blockCount	- number of blocks of the extent to be removed.
+ *	hfsmp		- mount point structure 
+ *	startBlock	- starting block of the extent to be removed. 
+ *	blockCount	- number of blocks of the extent to be removed.
  */
 static void remove_free_extent_cache(struct hfsmount *hfsmp, u_int32_t startBlock, u_int32_t blockCount)
 {
-	int i, j;
+	u_int32_t i, insertedIndex;
+	u_int32_t currentStart, currentEnd, endBlock;
 	int extentsRemoved = 0;
-	u_int32_t start, end;
-
+	
 #if CONFIG_HFS_ALLOC_RBTREE
 	/* If red-black tree is enabled, no free extent cache is necessary */
 	if (hfs_isrbtree_active(hfsmp) == true) {
 		return;
 	}
 #endif
-
+	
 	if (hfs_kdebug_allocation & HFSDBG_EXT_CACHE_ENABLED)
 		KERNEL_DEBUG_CONSTANT(HFSDBG_REMOVE_EXTENT_CACHE | DBG_FUNC_START, startBlock, blockCount, 0, 0, 0);
-
+	
+	endBlock = startBlock + blockCount;
+	
 	lck_spin_lock(&hfsmp->vcbFreeExtLock);
-
-	for (i = 0; i < (int)hfsmp->vcbFreeExtCnt; i++) {
-		start = hfsmp->vcbFreeExt[i].startBlock;
-		end = start + hfsmp->vcbFreeExt[i].blockCount;
-
-		/* If the extent to remove from free extent list starts within 
-		 * this free extent, or, if it starts before this free extent 
-		 * but ends in this free extent, remove it by shifting all other
-		 * extents.
+	
+	/*
+	 * Iterate over all of the extents in the free extent cache, removing or
+	 * updating any entries that overlap with the input extent.
+	 */
+	for (i = 0; i < hfsmp->vcbFreeExtCnt; ++i) {
+		currentStart = hfsmp->vcbFreeExt[i].startBlock;
+		currentEnd = currentStart + hfsmp->vcbFreeExt[i].blockCount;
+		
+		/*
+		 * If the current extent is entirely before or entirely after the
+		 * the extent to be removed, then we keep it as-is.
 		 */
-		if (((startBlock >= start) && (startBlock < end)) ||
-		    ((startBlock < start) && (startBlock + blockCount) > start)) {
-			for (j = i; j < (int)hfsmp->vcbFreeExtCnt - 1; j++) {
-				hfsmp->vcbFreeExt[j] = hfsmp->vcbFreeExt[j+1];
-			}
-			hfsmp->vcbFreeExtCnt--;
-			/* Decrement the index so that we check the extent 
-			 * that just got shifted to the current index.
-			 */
-			i--;
-			extentsRemoved++;
+		if (currentEnd <= startBlock || currentStart >= endBlock) {
+			continue;
 		}
-		/* Continue looping as we might have to invalidate multiple extents, 
-		 * probably not possible in normal case, but does not hurt.
+		
+		/*
+		 * If the extent being removed entirely contains the current extent,
+		 * then remove the current extent.
 		 */
+		if (startBlock <= currentStart && endBlock >= currentEnd) {
+			remove_free_extent_list(hfsmp, i);
+			
+			/*
+			 * We just removed the extent at index i.  The extent at
+			 * index i+1 just got shifted to index i.  So decrement i
+			 * to undo the loop's "++i", and the next iteration will
+			 * examine index i again, which contains the next extent
+			 * in the list.
+			 */
+			--i;
+			++extentsRemoved;
+			continue;
+		}
+		
+		/*
+		 * If the extent being removed is strictly "in the middle" of the
+		 * current extent, then we need to split the current extent into
+		 * two discontiguous extents (the "head" and "tail").  The good
+		 * news is that we don't need to examine any other extents in
+		 * the list.
+		 */
+		if (startBlock > currentStart && endBlock < currentEnd) {
+			remove_free_extent_list(hfsmp, i);
+			add_free_extent_list(hfsmp, currentStart, startBlock - currentStart);
+			add_free_extent_list(hfsmp, endBlock, currentEnd - endBlock);
+			break;
+		}
+		
+		/*
+		 * The only remaining possibility is that the extent to be removed
+		 * overlaps the start or end (but not both!) of the current extent.
+		 * So we need to replace the current extent with a shorter one.
+		 *
+		 * The only tricky part is that the updated extent might be at a
+		 * different index than the original extent.  If the updated extent
+		 * was inserted after the current extent, then we need to re-examine
+		 * the entry at index i, since it now contains the extent that was
+		 * previously at index i+1.	 If the updated extent was inserted
+		 * before or at the same index as the removed extent, then the
+		 * following extents haven't changed position.
+		 */
+		remove_free_extent_list(hfsmp, i);
+		if (startBlock > currentStart) {
+			/* Remove the tail of the current extent. */
+			insertedIndex = add_free_extent_list(hfsmp, currentStart, startBlock - currentStart);
+		} else {
+			/* Remove the head of the current extent. */
+			insertedIndex = add_free_extent_list(hfsmp, endBlock, currentEnd - endBlock);
+		}
+		if (insertedIndex > i) {
+			--i;	/* Undo the "++i" in the loop, so we examine the entry at index i again. */
+		}
 	}
 	
 	lck_spin_unlock(&hfsmp->vcbFreeExtLock);
-
+	
 	sanity_check_free_ext(hfsmp, 0);
-
+	
 	if (hfs_kdebug_allocation & HFSDBG_EXT_CACHE_ENABLED)
 		KERNEL_DEBUG_CONSTANT(HFSDBG_REMOVE_EXTENT_CACHE | DBG_FUNC_END, 0, 0, 0, extentsRemoved, 0);
-
+	
 	return;
 }
 
+
 /*
- * Add an entry to free extent cache after it has been deallocated.  
+ * Add an entry to free extent cache after it has been deallocated.	 
  *
- * If the extent provided has blocks beyond current allocLimit, it 
- * is clipped to allocLimit.  This function does not merge contiguous 
- * extents, if they already exist in the list.
+ * This is a high-level routine.  It will merge overlapping or contiguous
+ * extents into a single, larger extent.
+ *
+ * If the extent provided has blocks beyond current allocLimit, it is
+ * clipped to allocLimit (so that we won't accidentally find and allocate
+ * space beyond allocLimit).
  *
  * Inputs: 
- * 	hfsmp		- mount point structure 
- * 	startBlock	- starting block of the extent to be removed. 
- * 	blockCount	- number of blocks of the extent to be removed.
+ *	hfsmp		- mount point structure 
+ *	startBlock	- starting block of the extent to be removed. 
+ *	blockCount	- number of blocks of the extent to be removed.
  *
  * Returns:
- * 	true		- if the extent was added successfully to the list
- * 	false		- if the extent was no added to the list, maybe because 
- * 			  the extent was beyond allocLimit, or is not best 
- * 			  candidate to be put in the cache.
+ *	true		- if the extent was added successfully to the list
+ *	false		- if the extent was not added to the list, maybe because 
+ *			  the extent was beyond allocLimit, or is not best 
+ *			  candidate to be put in the cache.
  */
-static Boolean add_free_extent_cache(struct hfsmount *hfsmp, u_int32_t startBlock, u_int32_t blockCount) 
+static Boolean add_free_extent_cache(struct hfsmount *hfsmp, u_int32_t startBlock, u_int32_t blockCount)
 {
 	Boolean retval = false;
-	u_int32_t start, end;
-	int i; 
+	uint32_t endBlock;
+	uint32_t currentEnd;
+	uint32_t i; 
 	
 	if (hfs_kdebug_allocation & HFSDBG_EXT_CACHE_ENABLED)
 		KERNEL_DEBUG_CONSTANT(HFSDBG_ADD_EXTENT_CACHE | DBG_FUNC_START, startBlock, blockCount, 0, 0, 0);
-
+	
 	/*
 	 * If using the red-black tree allocator, then there's no need to special case 
-	 * for the sparse device case.  We'll simply add the region we've recently freed
+	 * for the sparse device case.	We'll simply add the region we've recently freed
 	 * to the red-black tree, where it will get sorted by offset and length.  The only special 
 	 * casing will need to be done on the allocation side, where we may favor free extents
-	 * based on offset even if it will cause fragmentation.  This may be true, for example, if
+	 * based on offset even if it will cause fragmentation.	 This may be true, for example, if
 	 * we are trying to reduce the number of bandfiles created in a sparse bundle disk image. 
 	 */
 #if CONFIG_HFS_ALLOC_RBTREE
@@ -4270,93 +4627,58 @@ static Boolean add_free_extent_cache(struct hfsmount *hfsmp, u_int32_t startBloc
 		goto out_not_locked;
 	}
 #endif
-
+	
 	/* No need to add extent that is beyond current allocLimit */
 	if (startBlock >= hfsmp->allocLimit) {
 		goto out_not_locked;
 	}
-
+	
 	/* If end of the free extent is beyond current allocLimit, clip the extent */
 	if ((startBlock + blockCount) > hfsmp->allocLimit) {
 		blockCount = hfsmp->allocLimit - startBlock;
 	}
-
+	
 	lck_spin_lock(&hfsmp->vcbFreeExtLock);
-
-	/* If the free extent cache is full and the new extent fails to 
-	 * compare with the last extent, skip adding it to the list.
+	
+	/*
+	 * Make a pass through the free extent cache, looking for known extents that
+	 * overlap or are contiguous with the extent to be added.  We'll remove those
+	 * extents from the cache, and incorporate them into the new extent to be added.
 	 */
-	if (hfsmp->vcbFreeExtCnt == kMaxFreeExtents) {
-		if (hfsmp->hfs_flags & HFS_HAS_SPARSE_DEVICE) {
-			/* For sparse disks, free extent cache list is sorted by start block, lowest first */
-			if (startBlock > hfsmp->vcbFreeExt[kMaxFreeExtents-1].startBlock) {
-				goto out;
-			} 
+	endBlock = startBlock + blockCount;
+	for (i=0; i < hfsmp->vcbFreeExtCnt; ++i) {
+		currentEnd = hfsmp->vcbFreeExt[i].startBlock + hfsmp->vcbFreeExt[i].blockCount;
+		if (hfsmp->vcbFreeExt[i].startBlock > endBlock || currentEnd < startBlock) {
+			/* Extent i does not overlap and is not contiguous, so keep it. */
+			continue;
 		} else {
-			/* For normal mounts, free extent cache list is sorted by total blocks, highest first */
-			if (blockCount <= hfsmp->vcbFreeExt[kMaxFreeExtents-1].blockCount) {
-				goto out;
-			} 
+			/* We need to remove extent i and combine it with the input extent. */
+			if (hfsmp->vcbFreeExt[i].startBlock < startBlock)
+				startBlock = hfsmp->vcbFreeExt[i].startBlock;
+			if (currentEnd > endBlock)
+				endBlock = currentEnd;
+			
+			remove_free_extent_list(hfsmp, i);
+			/*
+			 * We just removed the extent at index i.  The extent at
+			 * index i+1 just got shifted to index i.  So decrement i
+			 * to undo the loop's "++i", and the next iteration will
+			 * examine index i again, which contains the next extent
+			 * in the list.
+			 */
+			--i;
 		}
 	}
-
-	/* Check if the current extent overlaps with any of the existing 
-	 * extents.  If yes, just skip adding it to the list.  We have 
-	 * to do this check before shifting the extent records.
-	 */
-	for (i = 0; i < (int)hfsmp->vcbFreeExtCnt; i++) {
-
-		start = hfsmp->vcbFreeExt[i].startBlock;
-		end = start + hfsmp->vcbFreeExt[i].blockCount;
-
-		if (((startBlock >= start) && (startBlock < end)) ||
-		    ((startBlock < start) && (startBlock + blockCount) > start)) {
-			goto out;
-		}
-	}
-
-	/* Scan the free extent cache array from tail to head till 
-	 * we find the entry after which our new entry should be 
-	 * inserted.  After we break out of this loop, the new entry 
-	 * will be inserted at 'i+1'.
-	 */
-	for (i = (int)hfsmp->vcbFreeExtCnt-1; i >= 0; i--) {
-		if (hfsmp->hfs_flags & HFS_HAS_SPARSE_DEVICE) {
-			/* For sparse devices, find entry with smaller start block than ours */
-			if (hfsmp->vcbFreeExt[i].startBlock < startBlock) {
-				break;
-			}
-		} else {
-			/* For normal devices, find entry with greater block count than ours */
-			if (hfsmp->vcbFreeExt[i].blockCount >= blockCount) {
-				break;
-			}
-		}
-
-		/* If this is not the right spot to insert, and this is 
-		 * not the last entry in the array, just shift it and 
-		 * continue check another one. 
-		 */
-		if ((i+1) < kMaxFreeExtents) {
-			hfsmp->vcbFreeExt[i+1] = hfsmp->vcbFreeExt[i];
-		}
-	}
-	/* 'i' points to one index offset before which the new extent should be inserted */
-	hfsmp->vcbFreeExt[i+1].startBlock = startBlock;
-	hfsmp->vcbFreeExt[i+1].blockCount = blockCount;
-	if (hfsmp->vcbFreeExtCnt < kMaxFreeExtents) {
-		hfsmp->vcbFreeExtCnt++;
-	}
-	retval = true;
-
-out:
+	add_free_extent_list(hfsmp, startBlock, endBlock - startBlock);
+	
 	lck_spin_unlock(&hfsmp->vcbFreeExtLock);
+	
 out_not_locked:
 	sanity_check_free_ext(hfsmp, 0);
-
+	
 	if (hfs_kdebug_allocation & HFSDBG_EXT_CACHE_ENABLED)
 		KERNEL_DEBUG_CONSTANT(HFSDBG_ADD_EXTENT_CACHE | DBG_FUNC_END, 0, 0, 0, retval, 0);
-
+	
 	return retval;
 }
 
@@ -4371,6 +4693,9 @@ static void sanity_check_free_ext(struct hfsmount *hfsmp, int check_allocated)
 	}
 
 	lck_spin_lock(&hfsmp->vcbFreeExtLock);
+	
+	if (hfsmp->vcbFreeExtCnt > kMaxFreeExtents)
+		panic("hfs: %p: free extent count (%u) is too large", hfsmp, hfsmp->vcbFreeExtCnt);
 	
 	/* 
 	 * Iterate the Free extent cache and ensure no entries are bogus or refer to

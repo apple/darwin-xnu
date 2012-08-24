@@ -113,7 +113,6 @@
 #define _IPC_IPC_INIT_H_
 
 extern int ipc_space_max;
-extern int ipc_tree_entry_max;
 extern int ipc_port_max;
 extern int ipc_pset_max;
 

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2010 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2012 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -223,7 +223,18 @@
 
 #ifdef PRIVATE
 #define	SIOCGIFGETRTREFCNT _IOWR('i', 137, struct ifreq) /* get interface route refcnt */
+#define	SIOCGIFLINKQUALITYMETRIC _IOWR('i', 138, struct ifreq) /* get LQM */
+#define SIOCSIFOPPORTUNISTIC	 _IOWR('i', 139, struct ifreq)	/* deprecated; use SIOCSIFTHROTTLE */
+#define SIOCGIFOPPORTUNISTIC	 _IOWR('i', 140, struct ifreq)	/* deprecated; use SIOCGIFTHROTTLE */
+#define	SIOCSETROUTERMODE	_IOWR('i', 141, struct ifreq)	/* enable/disable IPv4 router mode on interface */
+#define	SIOCGIFEFLAGS		_IOWR('i', 142, struct ifreq)	/* get extended ifnet flags */
+#define	SIOCSIFDESC	_IOWR('i', 143, struct if_descreq)
+#define	SIOCGIFDESC	_IOWR('i', 144, struct if_descreq)
+#define	SIOCSIFLINKPARAMS _IOWR('i', 145, struct if_linkparamsreq)
+#define	SIOCGIFLINKPARAMS _IOWR('i', 146, struct if_linkparamsreq)
+#define	SIOCGIFQUEUESTATS _IOWR('i', 147, struct if_qstatsreq)
+#define	SIOCSIFTHROTTLE	_IOWR('i', 148, struct if_throttlereq)
+#define	SIOCGIFTHROTTLE	_IOWR('i', 149, struct if_throttlereq)
 #endif /* PRIVATE */
-
 
 #endif /* !_SYS_SOCKIO_H_ */

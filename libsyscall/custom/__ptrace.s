@@ -36,7 +36,7 @@
 LEAF(___ptrace, 0)
 	xorl	%eax,%eax
 	REG_TO_EXTERN(%eax,_errno)
-UNIX_SYSCALL_NONAME(ptrace, 4)
+	UNIX_SYSCALL_NONAME(ptrace, 4, cerror)
 	ret
 
 #elif defined(__x86_64__)
@@ -47,7 +47,7 @@ LEAF(___ptrace, 0)
 	xorq	%rax,%rax
 	PICIFY(_errno)
 	movl	%eax,(%r11)
-UNIX_SYSCALL_NONAME(ptrace, 4)
+	UNIX_SYSCALL_NONAME(ptrace, 4, cerror)
 	ret
 
 #else

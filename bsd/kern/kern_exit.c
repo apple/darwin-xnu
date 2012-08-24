@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2007 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2011 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -119,6 +119,14 @@
 #include <kern/assert.h>
 #include <sys/codesign.h>
 
+#if VM_PRESSURE_EVENTS
+#include <kern/vm_pressure.h>
+#endif
+
+#if CONFIG_MEMORYSTATUS
+#include <sys/kern_memorystatus.h>
+#endif
+
 #if CONFIG_DTRACE
 /* Do not include dtrace.h, it redefines kmem_[alloc/free] */
 extern void (*dtrace_fasttrap_exit_ptr)(proc_t);
@@ -140,7 +148,7 @@ extern void dtrace_lazy_dofs_destroy(proc_t);
 #include <sys/sdt.h>
 
 extern char init_task_failure_data[];
-void proc_prepareexit(proc_t p, int rv);
+void proc_prepareexit(proc_t p, int rv, boolean_t perf_notify);
 void vfork_exit(proc_t p, int rv);
 void vproc_exit(proc_t p);
 __private_extern__ void munge_user64_rusage(struct rusage *a_rusage_p, struct user64_rusage *a_user_rusage_p);
@@ -156,15 +164,15 @@ int	wait1continue(int result);
 int	waitidcontinue(int result);
 int	*get_bsduthreadrval(thread_t);
 kern_return_t sys_perf_notify(thread_t thread, int pid);
-kern_return_t abnormal_exit_notify(mach_exception_data_type_t code, 
-		mach_exception_data_type_t subcode);
+kern_return_t task_exception_notify(exception_type_t exception,
+	mach_exception_data_type_t code, mach_exception_data_type_t subcode);
 void	delay(int);
 			
 /*
  * NOTE: Source and target may *NOT* overlap!
  * XXX Should share code with bsd/dev/ppc/unix_signal.c
  */
-static void
+void
 siginfo_user_to_user32(user_siginfo_t *in, user32_siginfo_t *out)
 {
 	out->si_signo	= in->si_signo;
@@ -179,7 +187,7 @@ siginfo_user_to_user32(user_siginfo_t *in, user32_siginfo_t *out)
 	out->si_band	= in->si_band;			/* range reduction */
 }
 
-static void
+void
 siginfo_user_to_user64(user_siginfo_t *in, user64_siginfo_t *out)
 {
 	out->si_signo	= in->si_signo;
@@ -192,6 +200,24 @@ siginfo_user_to_user64(user_siginfo_t *in, user64_siginfo_t *out)
 	/* following cast works for sival_int because of padding */
 	out->si_value.sival_ptr	= in->si_value.sival_ptr;
 	out->si_band	= in->si_band;			/* range reduction */
+}
+
+static int
+copyoutsiginfo(user_siginfo_t *native, boolean_t is64, user_addr_t uaddr)
+{
+	if (is64) {
+		user64_siginfo_t sinfo64;
+				
+		bzero(&sinfo64, sizeof (sinfo64));
+		siginfo_user_to_user64(native, &sinfo64);
+		return (copyout(&sinfo64, uaddr, sizeof (sinfo64)));
+	} else {
+		user32_siginfo_t sinfo32;
+
+		bzero(&sinfo32, sizeof (sinfo32));
+		siginfo_user_to_user32(native, &sinfo32);
+		return (copyout(&sinfo32, uaddr, sizeof (sinfo32)));
+	}
 }
 
 /*
@@ -219,9 +245,16 @@ exit(proc_t p, struct exit_args *uap, int *retval)
 int
 exit1(proc_t p, int rv, int *retval)
 {
+	return exit1_internal(p, rv, retval, TRUE, TRUE);
+}
+
+int
+exit1_internal(proc_t p, int rv, int *retval, boolean_t thread_can_terminate, boolean_t perf_notify)
+{
 	thread_t self = current_thread();
 	struct task *task = p->task;
 	struct uthread *ut;
+	int error = 0;
 
 	/*
 	 * If a thread in this task has already
@@ -231,10 +264,14 @@ exit1(proc_t p, int rv, int *retval)
 
 	 ut = get_bsdthread_info(self);
 	 if (ut->uu_flag & UT_VFORK) {
-			vfork_exit(p, rv);
-			vfork_return(p , retval, p->p_pid);
-			unix_syscall_return(0);
-			/* NOT REACHED */
+		if (!thread_can_terminate) {
+			return EINVAL;
+		}
+
+		vfork_exit(p, rv);
+		vfork_return(p , retval, p->p_pid);
+		unix_syscall_return(0);
+		/* NOT REACHED */
 	 }
 
 	/* 
@@ -254,8 +291,30 @@ exit1(proc_t p, int rv, int *retval)
 
 	DTRACE_PROC1(exit, int, CLD_EXITED);
 
+	/* mark process is going to exit and pull out of DBG/disk throttle */
+	proc_removethrottle(p);
+
+#if CONFIG_MEMORYSTATUS
+	memorystatus_list_remove(p->p_pid);
+#endif
+
         proc_lock(p);
-	proc_transstart(p, 1);
+	error = proc_transstart(p, 1);
+	if (error == EDEADLK) {
+		/* Temp: If deadlock error, then it implies multithreaded exec is
+		 * in progress. Instread of letting exit continue and 
+		 * corrupting the freed memory, let the exit thread
+		 * return. This will save corruption in remote case.
+		 */
+		proc_unlock(p);
+		if (current_proc() == p){
+			thread_exception_return();
+		} else {
+			/* external termination like jetsam */
+			return(error);
+		}
+	}
+
 	while (p->exit_thread != self) {
 		if (sig_try_locked(p) <= 0) {
 			proc_transend(p, 1);
@@ -264,7 +323,12 @@ exit1(proc_t p, int rv, int *retval)
 				return(0);
                         }
 			proc_unlock(p);
+			
 			thread_terminate(self);
+			if (!thread_can_terminate) {
+				return 0;
+			}
+
 			thread_exception_return();
 			/* NOTREACHED */
 		}
@@ -287,7 +351,7 @@ exit1(proc_t p, int rv, int *retval)
 	proc_transend(p, 1);
 	proc_unlock(p);
 
-	proc_prepareexit(p, rv);
+	proc_prepareexit(p, rv, perf_notify);
 
 	/* Last thread to terminate will call proc_exit() */
 	task_terminate_internal(task);
@@ -296,7 +360,7 @@ exit1(proc_t p, int rv, int *retval)
 }
 
 void
-proc_prepareexit(proc_t p, int rv) 
+proc_prepareexit(proc_t p, int rv, boolean_t perf_notify) 
 {
 	mach_exception_data_type_t code, subcode;
 	struct uthread *ut;
@@ -323,12 +387,14 @@ proc_prepareexit(proc_t p, int rv)
 			((ut->uu_exception & 0x0f) << 20) | 
 			((int)ut->uu_code & 0xfffff);
 		subcode = ut->uu_subcode;
-		(void) abnormal_exit_notify(code, subcode);
+		(void) task_exception_notify(EXC_CRASH, code, subcode);
 	}
 
 skipcheck:
-	/* Notify the perf server */
-	(void)sys_perf_notify(self, p->p_pid);
+	/* Notify the perf server? */
+	if (perf_notify) {
+		(void)sys_perf_notify(self, p->p_pid);
+	}
 
 	/*
 	 * Remove proc from allproc queue and from pidhash chain.
@@ -386,7 +452,7 @@ proc_exit(proc_t p)
 		p->p_lflag |= P_LEXIT;
 		proc_transend(p, 1);
 		proc_unlock(p);
-		proc_prepareexit(p, 0);	
+		proc_prepareexit(p, 0, TRUE);	
 		(void) task_terminate_internal(task);
 		proc_lock(p);
 	} else {
@@ -410,8 +476,9 @@ proc_exit(proc_t p)
 	proc_unlock(p);
 	pid = p->p_pid;
 	exitval = p->p_xstat;
-	KERNEL_DEBUG_CONSTANT(BSDDBG_CODE(DBG_BSD_PROC, BSD_PROC_EXIT) | DBG_FUNC_START,
-					      pid, exitval, 0, 0, 0);
+	KERNEL_DEBUG_CONSTANT_IST(KDEBUG_COMMON, 
+		BSDDBG_CODE(DBG_BSD_PROC, BSD_PROC_EXIT) | DBG_FUNC_START,
+		pid, exitval, 0, 0, 0);
 
 #if CONFIG_DTRACE
 	/*
@@ -451,12 +518,19 @@ proc_exit(proc_t p)
 
 	nspace_proc_exit(p);
 
+#if VM_PRESSURE_EVENTS
+	vm_pressure_proc_cleanup(p);
+#endif
+
 	/*
 	 * need to cancel async IO requests that can be cancelled and wait for those
 	 * already active.  MAY BLOCK!
 	 */
 	
 	proc_refdrain(p);
+
+	/* if any pending cpu limits action, clear it */
+	task_clear_cpuusage(p->task);
 
 	workqueue_mark_exiting(p);
 	workqueue_exit(p);
@@ -480,6 +554,12 @@ proc_exit(proc_t p)
 		throttle_lowpri_io(FALSE);
 	}
 
+#if !CONFIG_EMBEDDED
+	if (p->p_legacy_behavior & PROC_LEGACY_BEHAVIOR_IOTHROTTLE) {
+		throttle_legacy_process_decr();
+	}
+#endif
+
 #if SYSV_SHM
 	/* Close ref SYSV Shared memory*/
 	if (p->vm_shm)
@@ -501,8 +581,7 @@ proc_exit(proc_t p)
 			struct vnode *ttyvp;
 			int ttyvid;
 			struct vfs_context context;
-			struct tty * tp;
-
+			struct tty *tp;
 
 			/*
 			 * Controlling process.
@@ -510,55 +589,43 @@ proc_exit(proc_t p)
 			 * drain controlling terminal
 			 * and revoke access to controlling terminal.
 			 */
+			session_lock(sessp);
 			tp = SESSION_TP(sessp);
-
 			if ((tp != TTY_NULL) && (tp->t_session == sessp)) {
+				session_unlock(sessp);
+
 				tty_pgsignal(tp, SIGHUP, 1);
 
 				session_lock(sessp);
-				/* reget potentially tp due to revocation */
 				tp = SESSION_TP(sessp);
-				ttyvp = sessp->s_ttyvp;
-				ttyvid = sessp->s_ttyvid;
-				sessp->s_ttyvp = NULLVP;
-				sessp->s_ttyvid = 0;
-				sessp->s_ttyp = TTY_NULL;
-				sessp->s_ttypgrpid = NO_PID;
-				session_unlock(sessp);
+			}
+			ttyvp = sessp->s_ttyvp;
+			ttyvid = sessp->s_ttyvid;
+			sessp->s_ttyvp = NULLVP;
+			sessp->s_ttyvid = 0;
+			sessp->s_ttyp = TTY_NULL;
+			sessp->s_ttypgrpid = NO_PID;
+			session_unlock(sessp);
 
-				if ((ttyvp != NULLVP) && (vnode_getwithvid(ttyvp, ttyvid) == 0)) {
-
-					if (tp != TTY_NULL) {
-						tty_lock(tp);
-						(void) ttywait(tp);
-						tty_unlock(tp);
-					}
-					context.vc_thread = proc_thread(p); /* XXX */
-					context.vc_ucred = kauth_cred_proc_ref(p);
-					VNOP_REVOKE(ttyvp, REVOKEALL, &context);
-					vnode_put(ttyvp);
-					kauth_cred_unref(&context.vc_ucred);
+			if ((ttyvp != NULLVP) && (vnode_getwithvid(ttyvp, ttyvid) == 0)) {
+				if (tp != TTY_NULL) {
+					tty_lock(tp);
+					(void) ttywait(tp);
+					tty_unlock(tp);
 				}
-			} else {
-				session_lock(sessp);
-				/* reget potentially tp due to revocation */
-				tp = SESSION_TP(sessp);
-				ttyvp = sessp->s_ttyvp;
-				sessp->s_ttyvp = NULLVP;
-				sessp->s_ttyvid = 0;
-				sessp->s_ttyp = TTY_NULL;
-				sessp->s_ttypgrpid = NO_PID;
-				session_unlock(sessp);
+				context.vc_thread = proc_thread(p); /* XXX */
+				context.vc_ucred = kauth_cred_proc_ref(p);
+				vnode_rele(ttyvp);
+				VNOP_REVOKE(ttyvp, REVOKEALL, &context);
+				vnode_put(ttyvp);
+				kauth_cred_unref(&context.vc_ucred);
+				ttyvp = NULLVP;
 			}
 			if (ttyvp)
 				vnode_rele(ttyvp);
-			/*
-			 * s_ttyp is not zero'd; we use this to indicate
-			 * that the session once had a controlling terminal.
-			 * (for logging and informational purposes)
-			 */
+			if (tp)
+				ttyfree(tp);
 		}
-		
 		session_lock(sessp);
 		sessp->s_leader = NULL;
 		session_unlock(sessp);
@@ -783,8 +850,9 @@ proc_exit(proc_t p)
 		 * The write is to an int and is coherent. Also parent is
 		 *  keyed off of list lock for reaping
 		 */
-		KERNEL_DEBUG_CONSTANT(BSDDBG_CODE(DBG_BSD_PROC, BSD_PROC_EXIT) | DBG_FUNC_END,
-					      pid, exitval, 0, 0, 0);
+		KERNEL_DEBUG_CONSTANT_IST(KDEBUG_COMMON,
+			BSDDBG_CODE(DBG_BSD_PROC, BSD_PROC_EXIT) | DBG_FUNC_END,
+			pid, exitval, 0, 0, 0);
 		p->p_stat = SZOMB;
 		/* 
 		 * The current process can be reaped so, no one
@@ -806,8 +874,9 @@ proc_exit(proc_t p)
 		 *  keyed off of list lock for reaping
 		 */
 		proc_list_lock();
-		KERNEL_DEBUG_CONSTANT(BSDDBG_CODE(DBG_BSD_PROC, BSD_PROC_EXIT) | DBG_FUNC_END,
-					      pid, exitval, 0, 0, 0);
+		KERNEL_DEBUG_CONSTANT_IST(KDEBUG_COMMON,
+			BSDDBG_CODE(DBG_BSD_PROC, BSD_PROC_EXIT) | DBG_FUNC_END,
+			pid, exitval, 0, 0, 0);
 		/* check for sysctl zomb lookup */
 		while ((p->p_listflag & P_LIST_WAITING) == P_LIST_WAITING) {
 			msleep(&p->p_stat, proc_list_mlock, PWAIT, "waitcoll", 0);
@@ -1209,6 +1278,12 @@ out:
 	return (error);
 }
 
+#if DEBUG
+#define ASSERT_LCK_MTX_OWNED(lock)	\
+				lck_mtx_assert(lock, LCK_MTX_ASSERT_OWNED)
+#else
+#define ASSERT_LCK_MTX_OWNED(lock)	/* nothing */
+#endif
 
 int
 waitidcontinue(int result)
@@ -1218,12 +1293,12 @@ waitidcontinue(int result)
 	int *retval;
 
 	if (result)
-		return(result);
+		return (result);
 
 	thread = current_thread();
 	vt = get_bsduthreadarg(thread);
 	retval = get_bsduthreadrval(thread);
-	return(waitid(current_proc(), (struct waitid_args *)vt, retval));
+	return (waitid(current_proc(), (struct waitid_args *)vt, retval));
 }
 
 /*
@@ -1232,7 +1307,7 @@ waitidcontinue(int result)
  *
  * Parameters:	uap->idtype		one of P_PID, P_PGID, P_ALL
  *		uap->id			pid_t or gid_t or ignored
- *		uap->infop		Address of signinfo_t struct in
+ *		uap->infop		Address of siginfo_t struct in
  *					user space into which to return status
  *		uap->options		flag values
  *
@@ -1243,33 +1318,24 @@ int
 waitid(proc_t q, struct waitid_args *uap, int32_t *retval)
 {
 	__pthread_testcancel(1);
-	return(waitid_nocancel(q, (struct waitid_nocancel_args *)uap, retval));
+	return (waitid_nocancel(q, (struct waitid_nocancel_args *)uap, retval));
 }
 
 int
-waitid_nocancel(proc_t q, struct waitid_nocancel_args *uap, __unused int32_t *retval)
+waitid_nocancel(proc_t q, struct waitid_nocancel_args *uap,
+	__unused int32_t *retval)
 {
-	user_siginfo_t	collect64;	/* siginfo data to return to caller */
-
+	user_siginfo_t	siginfo;	/* siginfo data to return to caller */
+	boolean_t caller64 = IS_64BIT_PROCESS(q);
 	int nfound;
 	proc_t p;
 	int error;
 
-	/*
-	 * Forced validation of options for T.waitpid 21; should be a TSD!
-	 * This will pass the test, but note that we have more bits than the
-	 * standard specifies that we will allow in, in this case.  The test
-	 * passes because they light all the bits, not just the ones we allow,
-	 * and so the following check returns EINVAL like the test wants.
-	 */
-	if (((uap->options & (WNOHANG|WNOWAIT|WCONTINUED|WUNTRACED|WSTOPPED|WEXITED)) != uap->options) ||
-	    (uap->options == 0))
+	if (uap->options == 0 ||
+	    (uap->options & ~(WNOHANG|WNOWAIT|WCONTINUED|WSTOPPED|WEXITED)))
 		return (EINVAL);	/* bits set that aren't recognized */
 
-	/*
-	 * Overly critical options checking, per POSIX
-	 */
-	switch(uap->idtype) {
+	switch (uap->idtype) {
 	case P_PID:	/* child with process ID equal to... */
 	case P_PGID:	/* child with process group ID equal to... */
 		if (((int)uap->id) < 0)
@@ -1284,7 +1350,8 @@ loop:
 loop1:
 	nfound = 0;
 	for (p = q->p_children.lh_first; p != 0; p = p->p_sibling.le_next) {
-		switch(uap->idtype) {
+
+		switch (uap->idtype) {
 		case P_PID:	/* child with process ID equal to... */
 			if (p->p_pid != (pid_t)uap->id)
 				continue;
@@ -1304,68 +1371,44 @@ loop1:
 		 * the single return for waited process guarantee.
 		 */
 		if (p->p_listflag & P_LIST_WAITING) {
-			(void)msleep(&p->p_stat, proc_list_mlock, PWAIT, "waitidcoll", 0);
+			(void) msleep(&p->p_stat, proc_list_mlock,
+				PWAIT, "waitidcoll", 0);
 			goto loop1;
 		}
 		p->p_listflag |= P_LIST_WAITING;		/* mark busy */
 
 		nfound++;
 
-		/*
-		 * Types of processes we are interested in
-		 *
-		 * XXX Don't know what to do for WCONTINUED?!?
-		 */
-		switch(p->p_stat) {
+		bzero(&siginfo, sizeof (siginfo));
+
+		switch (p->p_stat) {
 		case SZOMB:		/* Exited */
 			if (!(uap->options & WEXITED))
 				break;
-
-			/* drop the lock and the thread is going to return */
 			proc_list_unlock();
+#if CONFIG_MACF
+			if ((error = mac_proc_check_wait(q, p)) != 0)
+				goto out;
+#endif
+			siginfo.si_signo = SIGCHLD;
+			siginfo.si_pid = p->p_pid;
+			siginfo.si_status = WEXITSTATUS(p->p_xstat);
+			if (WIFSIGNALED(p->p_xstat)) {
+				siginfo.si_code = WCOREDUMP(p->p_xstat) ?
+					CLD_DUMPED : CLD_KILLED;
+			} else
+				siginfo.si_code = CLD_EXITED;
 
-			/* Collect "siginfo" information for caller */
-			collect64.si_signo = SIGCHLD;
-			collect64.si_code = 0;
-			collect64.si_errno = 0;
-			collect64.si_pid = 0;
-			collect64.si_uid = 0;
-			collect64.si_addr  = 0;
-			collect64.si_status = WEXITSTATUS(p->p_xstat);
-			collect64.si_band = 0;
-
-			if (IS_64BIT_PROCESS(p)) {
-				user64_siginfo_t sinfo64;
-				
-				siginfo_user_to_user64(&collect64, &sinfo64);
-				
-				error = copyout((caddr_t)&sinfo64,
-					uap->infop,
-					sizeof(sinfo64));
-			} else {
-				user32_siginfo_t sinfo32;
-				
-				siginfo_user_to_user32(&collect64, &sinfo32);
-				
-				error = copyout((caddr_t)&sinfo32,
-								uap->infop,
-								sizeof(sinfo32));
-			}
-			/* information unavailable? */
-			if (error) 
+			if ((error = copyoutsiginfo(&siginfo,
+			    caller64, uap->infop)) != 0)
 				goto out;
 
 			/* Prevent other process for waiting for this event? */
 			if (!(uap->options & WNOWAIT)) {
-				/* Clean up */
-				(void)reap_child_locked(q, p, 0, 0, 0);
-			} else {
-				proc_list_lock();
-				p->p_listflag &= ~P_LIST_WAITING;
-				proc_list_unlock();
+				(void) reap_child_locked(q, p, 0, 0, 0);
+				return (0);
 			}
-
-			return (0);
+			goto out;
 
 		case SSTOP:		/* Stopped */
 			/*
@@ -1381,41 +1424,18 @@ loop1:
 			 */
 			if ((p->p_lflag & P_LWAITED) != 0)
 				break;
-
-			/* drop the lock and the thread is going to return */
 			proc_list_unlock();
+#if CONFIG_MACF
+			if ((error = mac_proc_check_wait(q, p)) != 0)
+				goto out;
+#endif
+			siginfo.si_signo = SIGCHLD;
+			siginfo.si_pid = p->p_pid;
+			siginfo.si_status = p->p_xstat;	/* signal number */
+			siginfo.si_code = CLD_STOPPED;
 
-			/* Collect "siginfo" information for caller */
-			collect64.si_signo = SIGCHLD;
-			collect64.si_code = 0;
-			collect64.si_errno = 0;
-			collect64.si_pid = 0;
-			collect64.si_uid = 0;
-			collect64.si_addr  = 0;
-			proc_lock(p);
-			collect64.si_status = p->p_xstat;
-			proc_unlock(p);
-			collect64.si_band = 0;
-
-			if (IS_64BIT_PROCESS(p)) {
-				user64_siginfo_t sinfo64;
-				
-				siginfo_user_to_user64(&collect64, &sinfo64);
-				
-				error = copyout((caddr_t)&sinfo64,
-								uap->infop,
-								sizeof(sinfo64));
-			} else {
-				user32_siginfo_t sinfo32;
-				
-				siginfo_user_to_user32(&collect64, &sinfo32);
-				
-				error = copyout((caddr_t)&sinfo32,
-								uap->infop,
-								sizeof(sinfo32));
-			}
-			/* information unavailable? */
-			if (error)
+			if ((error = copyoutsiginfo(&siginfo,
+			    caller64, uap->infop)) != 0)
 				goto out;
 
 			/* Prevent other process for waiting for this event? */
@@ -1424,12 +1444,9 @@ loop1:
 				p->p_lflag |= P_LWAITED;
 				proc_unlock(p);
 			}
-
-			error = 0;
 			goto out;
 
-		default:		/* All others */
-					/* ...meaning Continued */
+		default:		/* All other states => Continued */
 			if (!(uap->options & WCONTINUED))
 				break;
 
@@ -1440,60 +1457,40 @@ loop1:
 			 */
 			if ((p->p_flag & P_CONTINUED) == 0)
 				break;
-
-			/* drop the lock and the thread is going to return */
 			proc_list_unlock();
-
-			/* Collect "siginfo" information for caller */
+#if CONFIG_MACF
+			if ((error = mac_proc_check_wait(q, p)) != 0)
+				goto out;
+#endif
+			siginfo.si_signo = SIGCHLD;
+			siginfo.si_code = CLD_CONTINUED;
 			proc_lock(p);
-			collect64.si_signo = SIGCHLD;
-			collect64.si_code = CLD_CONTINUED;
-			collect64.si_errno = 0;
-			collect64.si_pid = p->p_contproc;
-			collect64.si_uid = 0;
-			collect64.si_addr  = 0;
-			collect64.si_status = p->p_xstat;
-			collect64.si_band = 0;
+			siginfo.si_pid = p->p_contproc;
+			siginfo.si_status = p->p_xstat;
 			proc_unlock(p);
 
-			if (IS_64BIT_PROCESS(p)) {
-				user64_siginfo_t sinfo64;
-				
-				siginfo_user_to_user64(&collect64, &sinfo64);
-				
-				error = copyout((caddr_t)&sinfo64,
-								uap->infop,
-								sizeof(sinfo64));
-			} else {
-				user32_siginfo_t sinfo32;
-				
-				siginfo_user_to_user32(&collect64, &sinfo32);
-				
-				error = copyout((caddr_t)&sinfo32,
-								uap->infop,
-								sizeof(sinfo32));
-			}
-			/* information unavailable? */
-			if (error)
+			if ((error = copyoutsiginfo(&siginfo,
+			    caller64, uap->infop)) != 0)
 				goto out;
 
 			/* Prevent other process for waiting for this event? */
 			if (!(uap->options & WNOWAIT)) {
-				OSBitAndAtomic(~((uint32_t)P_CONTINUED), &p->p_flag);
+				OSBitAndAtomic(~((uint32_t)P_CONTINUED),
+				    &p->p_flag);
 			}
-
-			error = 0;
 			goto out;
 		}
-		/* LIST LOCK IS HELD HERE */
+		ASSERT_LCK_MTX_OWNED(proc_list_mlock);
+
 		/* Not a process we are interested in; go on to next child */
-		
+
 		p->p_listflag &= ~P_LIST_WAITING;
 		wakeup(&p->p_stat);
 	}
+	ASSERT_LCK_MTX_OWNED(proc_list_mlock);
 
-	/* list lock is always held */
 	/* No child processes that could possibly satisfy the request? */
+
 	if (nfound == 0) {
 		proc_list_unlock();
 		return (ECHILD);
@@ -1501,10 +1498,24 @@ loop1:
 
 	if (uap->options & WNOHANG) {
 		proc_list_unlock();
+#if CONFIG_MACF
+		if ((error = mac_proc_check_wait(q, p)) != 0)
+			return (error);
+#endif
+		/*
+		 * The state of the siginfo structure in this case
+		 * is undefined.  Some implementations bzero it, some
+		 * (like here) leave it untouched for efficiency.
+		 *
+		 * Thus the most portable check for "no matching pid with
+		 * WNOHANG" is to store a zero into si_pid before
+		 * invocation, then check for a non-zero value afterwards.
+		 */
 		return (0);
 	}
 
-	if ((error = msleep0((caddr_t)q, proc_list_mlock, PWAIT | PCATCH | PDROP, "waitid", 0, waitidcontinue)))
+	if ((error = msleep0(q, proc_list_mlock,
+	    PWAIT | PCATCH | PDROP, "waitid", 0, waitidcontinue)) != 0)
 		return (error);
 
 	goto loop;
@@ -1682,6 +1693,12 @@ vproc_exit(proc_t p)
 	 */
 	fdfree(p);
 
+#if !CONFIG_EMBEDDED
+	if (p->p_legacy_behavior & PROC_LEGACY_BEHAVIOR_IOTHROTTLE) {
+		throttle_legacy_process_decr();
+	}
+#endif
+
 	sessp = proc_session(p);
 	if (SESS_LEADER(p, sessp)) {
 		
@@ -1689,7 +1706,7 @@ vproc_exit(proc_t p)
 			struct vnode *ttyvp;
 			int ttyvid;
 			struct vfs_context context;
-			struct tty * tp;
+			struct tty *tp;
 
 			/*
 			 * Controlling process.
@@ -1697,54 +1714,43 @@ vproc_exit(proc_t p)
 			 * drain controlling terminal
 			 * and revoke access to controlling terminal.
 			 */
+			session_lock(sessp);
 			tp = SESSION_TP(sessp);
-
 			if ((tp != TTY_NULL) && (tp->t_session == sessp)) {
+				session_unlock(sessp);
+
 				tty_pgsignal(tp, SIGHUP, 1);
-				tty_lock(tp);
-				(void) ttywait(tp);
-				tty_unlock(tp);
-				/*
-				 * The tty could have been revoked
-				 * if we blocked.
-				 */
 
 				session_lock(sessp);
-				/* reget in case of race */
 				tp = SESSION_TP(sessp);
-				ttyvp = sessp->s_ttyvp;
-				ttyvid = sessp->s_ttyvid;
-				sessp->s_ttyvp = NULL;
-				sessp->s_ttyvid = 0;
-				sessp->s_ttyp = TTY_NULL;
-				sessp->s_ttypgrpid = NO_PID;
-				session_unlock(sessp);
+			}
+			ttyvp = sessp->s_ttyvp;
+			ttyvid = sessp->s_ttyvid;
+			sessp->s_ttyvp = NULL;
+			sessp->s_ttyvid = 0;
+			sessp->s_ttyp = TTY_NULL;
+			sessp->s_ttypgrpid = NO_PID;
+			session_unlock(sessp);
 
-			       if ((ttyvp != NULLVP) && (vnode_getwithvid(ttyvp, ttyvid) == 0)) {
-					context.vc_thread = proc_thread(p); /* XXX */
-					context.vc_ucred = kauth_cred_proc_ref(p);
-					VNOP_REVOKE(ttyvp, REVOKEALL, &context);
-					vnode_put(ttyvp);
-					kauth_cred_unref(&context.vc_ucred);
+		       if ((ttyvp != NULLVP) && (vnode_getwithvid(ttyvp, ttyvid) == 0)) {
+			        if (tp != TTY_NULL) {
+					tty_lock(tp);
+					(void) ttywait(tp);
+					tty_unlock(tp);
 				}
-			} else {
-				session_lock(sessp);
-				ttyvp = sessp->s_ttyvp;
-				sessp->s_ttyvp = NULL;
-				sessp->s_ttyvid = 0;
-				sessp->s_ttyp = TTY_NULL;
-				sessp->s_ttypgrpid = NO_PID;
-				session_unlock(sessp);
+				context.vc_thread = proc_thread(p); /* XXX */
+				context.vc_ucred = kauth_cred_proc_ref(p);
+				vnode_rele(ttyvp);
+				VNOP_REVOKE(ttyvp, REVOKEALL, &context);
+				vnode_put(ttyvp);
+				kauth_cred_unref(&context.vc_ucred);
+				ttyvp = NULLVP;
 			}
 			if (ttyvp) 
 				vnode_rele(ttyvp);
-			/*
-			 * s_ttyp is not zero'd; we use this to indicate
-			 * that the session once had a controlling terminal.
-			 * (for logging and informational purposes)
-			 */
+			if (tp)
+				ttyfree(tp);
 		}
-
 		session_lock(sessp);
 		sessp->s_leader = NULL;
 		session_unlock(sessp);
@@ -1838,13 +1844,13 @@ vproc_exit(proc_t p)
 
 #ifdef  FIXME
 	    if (task) {
-		task_basic_info_data_t tinfo;
+		mach_task_basic_info_data_t tinfo;
 		task_thread_times_info_data_t ttimesinfo;
 		int task_info_stuff, task_ttimes_stuff;
 		struct timeval ut,st;
 
-		task_info_stuff	= TASK_BASIC_INFO_COUNT;
-		task_info(task, TASK_BASIC_INFO,
+		task_info_stuff	= MACH_TASK_BASIC_INFO_COUNT;
+		task_info(task, MACH_TASK_BASIC_INFO,
 			  &tinfo, &task_info_stuff);
 		p->p_ru->ru_utime.tv_sec = tinfo.user_time.seconds;
 		p->p_ru->ru_utime.tv_usec = tinfo.user_time.microseconds;

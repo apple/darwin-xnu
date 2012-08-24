@@ -737,10 +737,10 @@ gif_ioctl(
 
 			/* can't configure multiple multi-dest interfaces */
 #define multidest(x) \
-	(((struct sockaddr_in *)(x))->sin_addr.s_addr == INADDR_ANY)
+	(((struct sockaddr_in *)(void *)(x))->sin_addr.s_addr == INADDR_ANY)
 #if INET6
 #define multidest6(x) \
-	(IN6_IS_ADDR_UNSPECIFIED(&((struct sockaddr_in6 *)(x))->sin6_addr))
+	(IN6_IS_ADDR_UNSPECIFIED(&((struct sockaddr_in6 *)(void *)(x))->sin6_addr))
 #endif
 			if (dst->sa_family == AF_INET &&
 			    multidest(dst) && multidest(sc2->gif_pdst)) {

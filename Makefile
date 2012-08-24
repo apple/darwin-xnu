@@ -65,6 +65,8 @@ INSTALL_KERNEL_FILE = mach_kernel
 
 INSTALL_KERNEL_DIR = /
 
+INSTALL_KERNEL_SYM_DIR = $(INSTALL_KERNEL_DIR)/System/Library/Extensions/KDK/
+
 
 INSTMAN_SUBDIRS = \
 	bsd

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2010 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2012 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -217,31 +217,35 @@ udp6_input(
 
 	IP6_EXTHDR_CHECK(m, off, sizeof(struct udphdr), return IPPROTO_DONE);
 
+	/* Expect 32-bit aligned data pointer on strict-align platforms */
+	MBUF_STRICT_DATA_ALIGNMENT_CHECK_32(m);
+
 	ifp = m->m_pkthdr.rcvif;
 	ip6 = mtod(m, struct ip6_hdr *);
-
-#if defined(NFAITH) && 0 < NFAITH
-	if (faithprefix(&ip6->ip6_dst)) {
-		/* XXX send icmp6 host/port unreach? */
-		m_freem(m);
-		return IPPROTO_DONE;
-	}
-#endif
 
 	udpstat.udps_ipackets++;
 
 	plen = ntohs(ip6->ip6_plen) - off + sizeof(*ip6);
-	uh = (struct udphdr *)((caddr_t)ip6 + off);
+	uh = (struct udphdr *)(void *)((caddr_t)ip6 + off);
 	ulen = ntohs((u_short)uh->uh_ulen);
 
 	if (plen != ulen) {
 		udpstat.udps_badlen++;
+
+		if (ifp->if_udp_stat != NULL)
+			atomic_add_64(&ifp->if_udp_stat->badlength, 1);
+
 		goto bad;
 	}
 
 	/* destination port of 0 is illegal, based on RFC768. */
-	if (uh->uh_dport == 0)
+	if (uh->uh_dport == 0) {
+
+		if (ifp->if_udp_stat != NULL)
+			atomic_add_64(&ifp->if_udp_stat->port0, 1);
+
 		goto bad;
+	}
 
 	/*
 	 * Checksum extended UDP header and data.
@@ -254,6 +258,10 @@ udp6_input(
 		else {
 			if (in6_cksum(m, IPPROTO_UDP, off, ulen) != 0) {
 				udpstat.udps_badsum++;
+
+				if (ifp->if_udp_stat != NULL)
+					atomic_add_64(&ifp->if_udp_stat->badchksum, 1);
+
 				goto bad;
 			}
 		}
@@ -322,10 +330,15 @@ udp6_input(
 			if ((in6p->inp_vflag & INP_IPV6) == 0)
 				continue;
 
+			if (ip6_restrictrecvif && ifp != NULL &&
+			    (ifp->if_eflags & IFEF_RESTRICTED_RECV) &&
+			    !(in6p->in6p_flags & IN6P_RECV_ANYIF))
+				continue;
+
 			if (in_pcb_checkstate(in6p, WNT_ACQUIRE, 0) == WNT_STOPUSING)
 				continue;
 
-			udp_lock(in6p->in6p_socket, 1, 0);	
+			udp_lock(in6p->in6p_socket, 1, 0);
 
 			if (in_pcb_checkstate(in6p, WNT_RELEASE, 1) == WNT_STOPUSING) {
 				udp_unlock(in6p->in6p_socket, 1, 0);
@@ -345,7 +358,7 @@ udp6_input(
 				struct sockaddr_in6	 mcaddr;
 				int			 blocked;
 
-				IM6O_LOCK(imo);	
+				IM6O_LOCK(imo);
 				bzero(&mcaddr, sizeof(struct sockaddr_in6));
 				mcaddr.sin6_len = sizeof(struct sockaddr_in6);
 				mcaddr.sin6_family = AF_INET6;
@@ -354,7 +367,7 @@ udp6_input(
 				blocked = im6o_mc_filter(imo, ifp,
 					(struct sockaddr *)&mcaddr,
 					(struct sockaddr *)&fromsa);
-				IM6O_UNLOCK(imo);	
+				IM6O_UNLOCK(imo);
 				if (blocked != MCAST_PASS) {
 					udp_unlock(in6p->in6p_socket, 1, 0);
 					continue;
@@ -411,11 +424,18 @@ udp6_input(
 			 */
 			if (reuse_sock == 0 || ((m = n) == NULL))
 				break;
+
+			/*
+			 * Expect 32-bit aligned data pointer on strict-align
+			 * platforms.
+			 */
+			MBUF_STRICT_DATA_ALIGNMENT_CHECK_32(m);
+
 			/*
 			 * Recompute IP and UDP header pointers for new mbuf
 			 */
 			ip6 = mtod(m, struct ip6_hdr *);
-			uh = (struct udphdr *)((caddr_t)ip6 + off);
+			uh = (struct udphdr *)(void *)((caddr_t)ip6 + off);
 		}
 		lck_rw_done(pcbinfo->mtx);
 
@@ -429,6 +449,9 @@ udp6_input(
 #ifndef __APPLE__
 			udpstat.udps_noportmcast++;
 #endif
+			if (ifp->if_udp_stat != NULL)
+				atomic_add_64(&ifp->if_udp_stat->port_unreach, 1);
+
 			goto bad;
 		}
 
@@ -442,7 +465,11 @@ udp6_input(
 	in6p = in6_pcblookup_hash(&udbinfo, &ip6->ip6_src, uh->uh_sport,
 				  &ip6->ip6_dst, uh->uh_dport, 1,
 				  m->m_pkthdr.rcvif);
-	if (in6p == 0) {
+	if (in6p == NULL) {
+
+		if (ifp->if_udp_stat != NULL)
+			atomic_add_64(&ifp->if_udp_stat->port_unreach, 1);
+
 		if (log_in_vain) {
 			char buf[INET6_ADDRSTRLEN];
 
@@ -465,6 +492,9 @@ udp6_input(
 #ifndef __APPLE__
 			udpstat.udps_noportmcast++;
 #endif
+			if (ifp->if_udp_stat != NULL)
+				atomic_add_64(&ifp->if_udp_stat->badmcast, 1);
+
 			goto bad;
 		}
 		icmp6_error(m, ICMP6_DST_UNREACH, ICMP6_DST_UNREACH_NOPORT, 0);
@@ -478,6 +508,10 @@ udp6_input(
 		if (ipsec6_in_reject_so(m, in6p->in6p_socket)) {
 			IPSEC_STAT_INCREMENT(ipsec6stat.in_polvio);
 			in_pcb_checkstate(in6p, WNT_RELEASE, 0);
+
+			if (ifp->if_udp_stat != NULL)
+				atomic_add_64(&ifp->if_udp_stat->badipsec, 1);
+
 			goto bad;
 		}
 	}
@@ -491,12 +525,16 @@ udp6_input(
 
 	if (in_pcb_checkstate(in6p, WNT_RELEASE, 1) == WNT_STOPUSING) {
 		udp_unlock(in6p->in6p_socket, 1, 0);
+
+		if (ifp->if_udp_stat != NULL)
+			atomic_add_64(&ifp->if_udp_stat->cleanup, 1);
+
 		goto bad;
 	}
-		
+
 	init_sin6(&udp_in6, m); /* general init */
 	udp_in6.sin6_port = uh->uh_sport;
-	if ((in6p->in6p_flags & IN6P_CONTROLOPTS) != 0 || 
+	if ((in6p->in6p_flags & IN6P_CONTROLOPTS) != 0 ||
 		(in6p->in6p_socket->so_options & SO_TIMESTAMP) != 0 ||
 		(in6p->in6p_socket->so_options & SO_TIMESTAMP_MONOTONIC) != 0) {
 		ret = ip6_savecontrol(in6p, m, &opts);
@@ -688,7 +726,8 @@ udp6_attach(struct socket *so, __unused int proto, struct proc *p)
 	 * which may match an IPv4-mapped IPv6 address.
 	 */
 	inp->inp_ip_ttl = ip_defttl;
-	nstat_udp_new_pcb(inp);
+	if (nstat_collect)
+		nstat_udp_new_pcb(inp);
 	return 0;
 }
 
@@ -707,7 +746,7 @@ udp6_bind(struct socket *so, struct sockaddr *nam, struct proc *p)
 	if ((inp->inp_flags & IN6P_IPV6_V6ONLY) == 0) {
 		struct sockaddr_in6 *sin6_p;
 
-		sin6_p = (struct sockaddr_in6 *)nam;
+		sin6_p = (struct sockaddr_in6 *)(void *)nam;
 
 		if (IN6_IS_ADDR_UNSPECIFIED(&sin6_p->sin6_addr))
 			inp->inp_vflag |= INP_IPV4;
@@ -739,7 +778,7 @@ udp6_connect(struct socket *so, struct sockaddr *nam, struct proc *p)
 	if ((inp->inp_flags & IN6P_IPV6_V6ONLY) == 0) {
 		struct sockaddr_in6 *sin6_p;
 
-		sin6_p = (struct sockaddr_in6 *)nam;
+		sin6_p = (struct sockaddr_in6 *)(void *)nam;
 		if (IN6_IS_ADDR_V4MAPPED(&sin6_p->sin6_addr)) {
 			struct sockaddr_in sin;
 
@@ -765,6 +804,8 @@ udp6_connect(struct socket *so, struct sockaddr *nam, struct proc *p)
 			inp->inp_vflag |= INP_IPV6;
 		}
 		soisconnected(so);
+		if (inp->inp_flowhash == 0)
+			inp->inp_flowhash = inp_calc_flowhash(inp);
 	}
 	return error;
 }
@@ -801,8 +842,12 @@ udp6_disconnect(struct socket *so)
 		return ENOTCONN;
 
 	in6_pcbdisconnect(inp);
+
+	/* reset flow-controlled state, just in case */
+	inp_reset_fc_state(inp);
+
 	inp->in6p_laddr = in6addr_any;
-	inp->in6p_last_outif = 0;
+	inp->in6p_last_outifp = NULL;
 	so->so_state &= ~SS_ISCONNECTED;		/* XXX */
 	return 0;
 }
@@ -838,7 +883,7 @@ udp6_send(struct socket *so, int flags, struct mbuf *m, struct sockaddr *addr,
 		if (addr == 0)
 			hasv4addr = (inp->inp_vflag & INP_IPV4);
 		else {
-			sin6 = (struct sockaddr_in6 *)addr;
+			sin6 = (struct sockaddr_in6 *)(void *)addr;
 			hasv4addr = IN6_IS_ADDR_V4MAPPED(&sin6->sin6_addr)
 				? 1 : 0;
 		}

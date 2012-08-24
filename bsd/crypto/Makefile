@@ -10,17 +10,11 @@ include $(MakeInc_def)
 INSTINC_SUBDIRS = \
 	blowfish \
 	cast128 \
-	des	\
     rc4 \
-	aes \
-	sha2
-
 
 INSTINC_SUBDIRS_I386 = \
-	aes
 
 INSTINC_SUBDIRS_X86_64 = \
-	aes
 
 INSTINC_SUBDIRS_ARM = \
 
@@ -33,13 +27,21 @@ EXPINC_SUBDIRS_X86_64 = \
 EXPINC_SUBDIRS_ARM = \
 
 PRIVATE_DATAFILES = \
-	sha1.h
+	sha1.h \
+	sha2.h \
+	des.h \
+	aes.h aesxts.h \
 
 INSTALL_MI_DIR = crypto
 
 EXPORT_MI_DIR = ${INSTALL_MI_DIR}
 
 INSTALL_KF_MI_LCL_LIST = ${PRIVATE_DATAFILES}
+
+# We use this to install aesxts.h in Kernel.framework/PrivateHeaders 
+# in addition to Kernel.framework/PrivateHeaders/crypto
+# This should be removed once all clients are switched to include libkern/crypto/aesxts.h
+INSTALL_KF_MD_LCL_LIST = aesxts.h
 
 include $(MakeInc_rule)
 include $(MakeInc_dir)

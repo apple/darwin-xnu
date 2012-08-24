@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2010 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2012 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -97,12 +97,10 @@
 #include <sys/file_internal.h>
 #include <sys/event.h>
 
-#if defined(sparc) && BSD < 199103
-#include <sys/stream.h>
-#endif
 #include <sys/poll.h>
 
 #include <sys/socket.h>
+#include <sys/socketvar.h>
 #include <sys/vnode.h>
 
 #include <net/if.h>
@@ -110,6 +108,13 @@
 #include <net/bpfdesc.h>
 
 #include <netinet/in.h>
+#include <netinet/in_pcb.h>
+#include <netinet/in_var.h>
+#include <netinet/ip_var.h>
+#include <netinet/tcp.h>
+#include <netinet/tcp_var.h>
+#include <netinet/udp.h>
+#include <netinet/udp_var.h>
 #include <netinet/if_ether.h>
 #include <sys/kernel.h>
 #include <sys/sysctl.h>
@@ -127,19 +132,8 @@
 
 extern int tvtohz(struct timeval *);
 
-/*
- * Older BSDs don't have kernel malloc.
- */
-#if BSD < 199103
-extern bcopy();
-static caddr_t bpf_alloc();
-#include <net/bpf_compat.h>
-#define BPF_BUFSIZE (MCLBYTES-8)
-#define UIOMOVE(cp, len, code, uio) uiomove(cp, len, code, uio)
-#else
 #define BPF_BUFSIZE 4096
 #define UIOMOVE(cp, len, code, uio) uiomove(cp, len, uio)
-#endif
 
 
 #define PRINET  26			/* interruptible */
@@ -177,7 +171,8 @@ static struct bpf_d	**bpf_dtab = NULL;
 static unsigned int bpf_dtab_size = 0;
 static unsigned int	nbpfilter = 0;
 
-static lck_mtx_t		*bpf_mlock;
+decl_lck_mtx_data(static, bpf_mlock_data);
+static lck_mtx_t		*bpf_mlock = &bpf_mlock_data;
 static lck_grp_t		*bpf_mlock_grp;
 static lck_grp_attr_t	*bpf_mlock_grp_attr;
 static lck_attr_t		*bpf_mlock_attr;
@@ -199,13 +194,14 @@ static int	bpf_movein(struct uio *, int,
 static int	bpf_setif(struct bpf_d *, ifnet_t ifp, u_int32_t dlt);
 static void bpf_timed_out(void *, void *);
 static void bpf_wakeup(struct bpf_d *);
-static void	catchpacket(struct bpf_d *, u_char *, u_int,
-		    u_int, void (*)(const void *, void *, size_t));
+static void	catchpacket(struct bpf_d *, u_char *, struct mbuf *, u_int,
+		    u_int, int, void (*)(const void *, void *, size_t));
 static void	reset_d(struct bpf_d *);
 static int bpf_setf(struct bpf_d *, u_int bf_len, user_addr_t bf_insns);
-static int	bpf_getdltlist(struct bpf_d *, struct bpf_dltlist *,
-    struct proc *);
+static int	bpf_getdltlist(struct bpf_d *, caddr_t, struct proc *);
 static int	bpf_setdlt(struct bpf_d *, u_int);
+static int	bpf_set_traffic_class(struct bpf_d *, int);
+static void	bpf_set_packet_service_class(struct mbuf *, int);
 
 /*static  void *bpf_devfs_token[MAXBPFILTER];*/
 
@@ -222,8 +218,8 @@ static int bpf_tap_callback(struct ifnet *ifp, struct mbuf *m);
 	d_close_t	    bpfclose;
 	d_read_t	    bpfread;
 	d_write_t	    bpfwrite;
-    ioctl_fcn_t	    bpfioctl;
-    select_fcn_t	bpfselect;
+	ioctl_fcn_t	    bpfioctl;
+	select_fcn_t	    bpfselect;
 
 
 /* Darwin's cdevsw struct differs slightly from BSDs */
@@ -234,15 +230,15 @@ static struct cdevsw bpf_cdevsw = {
 	/* read */	    bpfread,
 	/* write */	    bpfwrite,
 	/* ioctl */	    bpfioctl,
-	/* stop */		eno_stop,
-	/* reset */		eno_reset,
-	/* tty */		NULL,
-	/* select */	bpfselect,
-	/* mmap */		eno_mmap,
-	/* strategy*/	eno_strat,
-	/* getc */		eno_getc,
-	/* putc */		eno_putc,
-	/* type */		0
+	/* stop */	    eno_stop,
+	/* reset */	    eno_reset,
+	/* tty */	    NULL,
+	/* select */	    bpfselect,
+	/* mmap */	    eno_mmap,
+	/* strategy*/	    eno_strat,
+	/* getc */	    eno_getc,
+	/* putc */	    eno_putc,
+	/* type */	    0
 };
 
 #define SOCKADDR_HDR_LEN	   offsetof(struct sockaddr, sa_data)
@@ -316,7 +312,7 @@ bpf_movein(struct uio *uio, int linktype, struct mbuf **mp, struct sockaddr *soc
 		sa_family = AF_IEEE80211;
 		hlen = 0;
 		break;
-	
+
 	case DLT_IEEE802_11_RADIO:
 		sa_family = AF_IEEE80211;
 		hlen = 0;
@@ -360,13 +356,8 @@ bpf_movein(struct uio *uio, int linktype, struct mbuf **mp, struct sockaddr *soc
 	if (m == 0)
 		return (ENOBUFS);
 	if ((unsigned)len > MHLEN) {
-#if BSD >= 199103
 		MCLGET(m, M_WAIT);
 		if ((m->m_flags & M_EXT) == 0) {
-#else
-		MCLGET(m);
-		if (m->m_len != MCLBYTES) {
-#endif
 			error = ENOBUFS;
 			goto bad;
 		}
@@ -381,11 +372,7 @@ bpf_movein(struct uio *uio, int linktype, struct mbuf **mp, struct sockaddr *soc
 	if (hlen != 0) {
 		m->m_pkthdr.len -= hlen;
 		m->m_len -= hlen;
-#if BSD >= 199103
 		m->m_data += hlen; /* XXX */
-#else
-		m->m_off += hlen;
-#endif
 		error = UIOMOVE((caddr_t)sockp->sa_data, hlen, UIO_WRITE, uio);
 		if (error)
 			goto bad;
@@ -691,7 +678,8 @@ bpfopen(dev_t dev, int flags, __unused int fmt,
 	d->bd_seesent = 1;
 	d->bd_oflags = flags;
 	d->bd_state = BPF_IDLE;
-    d->bd_thread_call = thread_call_allocate(bpf_timed_out, d);
+	d->bd_thread_call = thread_call_allocate(bpf_timed_out, d);
+	d->bd_traffic_class = SO_TC_BE;
 
 	if (d->bd_thread_call == NULL) {
 		printf("bpfopen: malloc thread call failed\n");
@@ -817,6 +805,26 @@ bpf_sleep(struct bpf_d *d, int pri, const char *wmesg, int timo)
 	return msleep1((caddr_t)d, bpf_mlock, pri, wmesg, abstime);
 }
 
+static struct inpcb *
+bpf_findinpcb(struct inpcbinfo *pcbinfo, uint32_t flowhash)
+{
+	struct inpcb *inp = NULL;
+
+	if (!flowhash) return (NULL);
+
+	lck_rw_lock_shared(pcbinfo->mtx);
+	LIST_FOREACH(inp, pcbinfo->listhead, inp_list) {
+		if (in_pcb_checkstate(inp, WNT_ACQUIRE, 0) != WNT_STOPUSING) {
+		    	if (inp->inp_flowhash == flowhash)
+				break;
+			in_pcb_checkstate(inp, WNT_RELEASE, 0);
+		}
+	}
+	lck_rw_done(pcbinfo->mtx);
+
+	return (inp);
+}
+
 /*
  * Rotate the packet buffers in descriptor d.  Move the store buffer
  * into the hold slot, and the free buffer into the store slot.
@@ -937,6 +945,39 @@ bpfread(dev_t dev, struct uio *uio, int ioflag)
 	 */
 
 	/*
+	 * Before we move data to userland, we fill out the extended
+	 * header fields.
+	 */
+	if (d->bd_extendedhdr) {
+		char *p;
+
+		p = d->bd_hbuf;
+		while (p < d->bd_hbuf + d->bd_hlen) {
+			struct bpf_hdr_ext *ehp;
+			struct inpcb *inp;
+			uint32_t flowhash;
+			pid_t pid;
+
+			ehp = (struct bpf_hdr_ext *)(void *)p;
+			if ((flowhash = ehp->bh_flowhash)) {
+				if (ehp->bh_flags & BPF_HDR_EXT_FLAGS_TCP)
+					inp = bpf_findinpcb(&tcbinfo, flowhash);
+				else
+					inp = bpf_findinpcb(&udbinfo, flowhash);
+				if (inp) {
+					socket_lock(inp->inp_socket, 0);
+					pid = inp->inp_socket->last_pid;
+					in_pcb_checkstate(inp, WNT_RELEASE, 1);
+					socket_unlock(inp->inp_socket, 0);
+					ehp->bh_pid = pid;
+					proc_name(pid, ehp->bh_comm, MAXCOMLEN);
+				}
+				ehp->bh_flowhash = 0;
+			}
+			p += BPF_WORDALIGN(ehp->bh_hdrlen + ehp->bh_caplen);
+		}
+	}
+	/*
 	 * Move data from hold buffer into user space.
 	 * We know the entire buffer is transferred since
 	 * we checked above that the read buffer is bpf_bufsize bytes.
@@ -965,19 +1006,11 @@ bpf_wakeup(struct bpf_d *d)
 	if (d->bd_async && d->bd_sig && d->bd_sigio)
 		pgsigio(d->bd_sigio, d->bd_sig);
 
-#if BSD >= 199103
 	selwakeup(&d->bd_sel);
 	KNOTE(&d->bd_sel.si_note, 1);
 #ifndef __APPLE__
 	/* XXX */
 	d->bd_sel.si_pid = 0;
-#endif
-#else
-	if (d->bd_selproc) {
-		selwakeup(d->bd_selproc, (int)d->bd_selcoll);
-		d->bd_selcoll = 0;
-		d->bd_selproc = 0;
-	}
 #endif
 }
 
@@ -1050,26 +1083,26 @@ bpfwrite(dev_t dev, struct uio *uio, __unused int ioflag)
 	}
 	((struct sockaddr *)dst_buf)->sa_len = sizeof(dst_buf);
 
-   /*
-    * fix for PR-6849527
-    * geting variables onto stack before dropping lock for bpf_movein()
-    */
-    bif_dlt = (int)d->bd_bif->bif_dlt;
-    bd_hdrcmplt  = d->bd_hdrcmplt;
- 
+	/*
+	 * fix for PR-6849527
+	 * geting variables onto stack before dropping lock for bpf_movein()
+	 */
+	bif_dlt = (int)d->bd_bif->bif_dlt;
+	bd_hdrcmplt  = d->bd_hdrcmplt;
+
 	/* bpf_movein allocating mbufs; drop lock */
-    lck_mtx_unlock(bpf_mlock);
+	lck_mtx_unlock(bpf_mlock);
 
 	error = bpf_movein(uio, bif_dlt, &m, 
-    bd_hdrcmplt ? NULL : (struct sockaddr *)dst_buf,
-    &datlen);
-	
-    if (error) {
+	bd_hdrcmplt ? NULL : (struct sockaddr *)dst_buf,
+	&datlen);
+
+	if (error) {
 		return (error);
 	}
 
 	/* taking the lock again and verifying whether device is open */
-    lck_mtx_lock(bpf_mlock);
+	lck_mtx_lock(bpf_mlock);
 	d = bpf_dtab[minor(dev)];
 	if (d == 0 || d == (void *)1) {
 		lck_mtx_unlock(bpf_mlock);
@@ -1093,16 +1126,19 @@ bpfwrite(dev_t dev, struct uio *uio, __unused int ioflag)
 #if CONFIG_MACF_NET
 	mac_mbuf_label_associate_bpfdesc(d, m);
 #endif
+
+	bpf_set_packet_service_class(m, d->bd_traffic_class);
+
 	lck_mtx_unlock(bpf_mlock);
 
 	if (d->bd_hdrcmplt) {
 		if (d->bd_bif->bif_send)
 			error = d->bd_bif->bif_send(ifp, d->bd_bif->bif_dlt, m);
 		else
-			error = dlil_output(ifp, 0, m, NULL, NULL, 1);
-	}
-	else {
-		error = dlil_output(ifp, PF_INET, m, NULL, (struct sockaddr *)dst_buf, 0);
+			error = dlil_output(ifp, 0, m, NULL, NULL, 1, NULL);
+	} else {
+		error = dlil_output(ifp, PF_INET, m, NULL,
+		    (struct sockaddr *)dst_buf, 0, NULL);
 	}
 
 	/*
@@ -1148,6 +1184,9 @@ reset_d(struct bpf_d *d)
  *  BIOCSHDRCMPLT	Set "header already complete" flag
  *  BIOCGSEESENT	Get "see packets sent" flag
  *  BIOCSSEESENT	Set "see packets sent" flag
+ *  BIOCSETTC		Set traffic class.
+ *  BIOCGETTC		Get traffic class.
+ *  BIOCSEXTHDR		Set "extended header" flag
  */
 /* ARGSUSED */
 int
@@ -1155,7 +1194,8 @@ bpfioctl(dev_t dev, u_long cmd, caddr_t addr, __unused int flags,
     struct proc *p)
 {
 	struct bpf_d *d;
-	int error = 0;
+	int error = 0, int_arg;
+	struct ifreq ifr;
 
 	lck_mtx_lock(bpf_mlock);
 
@@ -1178,7 +1218,7 @@ bpfioctl(dev_t dev, u_long cmd, caddr_t addr, __unused int flags,
 	/*
 	 * Check for read packet available.
 	 */
-	case FIONREAD:
+	case FIONREAD:			/* int */
 		{
 			int n;
 
@@ -1186,11 +1226,11 @@ bpfioctl(dev_t dev, u_long cmd, caddr_t addr, __unused int flags,
 			if (d->bd_hbuf)
 				n += d->bd_hlen;
 
-			*(int *)addr = n;
+			bcopy(&n, addr, sizeof (n));
 			break;
 		}
 
-	case SIOCGIFADDR:
+	case SIOCGIFADDR:		/* struct ifreq */
 		{
 			struct ifnet *ifp;
 
@@ -1206,44 +1246,47 @@ bpfioctl(dev_t dev, u_long cmd, caddr_t addr, __unused int flags,
 	/*
 	 * Get buffer len [for read()].
 	 */
-	case BIOCGBLEN:
-		*(u_int *)addr = d->bd_bufsize;
+	case BIOCGBLEN:			/* u_int */
+		bcopy(&d->bd_bufsize, addr, sizeof (u_int));
 		break;
 
 	/*
 	 * Set buffer length.
 	 */
-	case BIOCSBLEN:
-#if BSD < 199103
-		error = EINVAL;
-#else
+	case BIOCSBLEN:			/* u_int */
 		if (d->bd_bif != 0)
 			error = EINVAL;
 		else {
-			u_int size = *(u_int *)addr;
+			u_int size;
+
+			bcopy(addr, &size, sizeof (size));
 
 			if (size > bpf_maxbufsize)
-				*(u_int *)addr = size = bpf_maxbufsize;
+				size = bpf_maxbufsize;
 			else if (size < BPF_MINBUFSIZE)
-				*(u_int *)addr = size = BPF_MINBUFSIZE;
+				size = BPF_MINBUFSIZE;
+			bcopy(&size, addr, sizeof (size));
 			d->bd_bufsize = size;
 		}
-#endif
 		break;
 
 	/*
 	 * Set link layer read filter.
 	 */
-	case BIOCSETF32: {
-		struct bpf_program32 *prg32 = (struct bpf_program32 *)addr;
-		error = bpf_setf(d, prg32->bf_len,
-		    CAST_USER_ADDR_T(prg32->bf_insns));
+	case BIOCSETF32: {		/* struct bpf_program32 */
+		struct bpf_program32 prg32;
+
+		bcopy(addr, &prg32, sizeof (prg32));
+		error = bpf_setf(d, prg32.bf_len,
+		    CAST_USER_ADDR_T(prg32.bf_insns));
 		break;
 	}
 
-	case BIOCSETF64: {
-		struct bpf_program64 *prg64 = (struct bpf_program64 *)addr;
-		error = bpf_setf(d, prg64->bf_len, prg64->bf_insns);
+	case BIOCSETF64: {		/* struct bpf_program64 */
+		struct bpf_program64 prg64;
+
+		bcopy(addr, &prg64, sizeof (prg64));
+		error = bpf_setf(d, prg64.bf_len, prg64.bf_insns);
 		break;
 	}
 
@@ -1277,56 +1320,62 @@ bpfioctl(dev_t dev, u_long cmd, caddr_t addr, __unused int flags,
 	/*
 	 * Get device parameters.
 	 */
-	case BIOCGDLT:
+	case BIOCGDLT:			/* u_int */
 		if (d->bd_bif == 0)
 			error = EINVAL;
 		else
-			*(u_int *)addr = d->bd_bif->bif_dlt;
+			bcopy(&d->bd_bif->bif_dlt, addr, sizeof (u_int));
 		break;
 
 	/*
 	 * Get a list of supported data link types.
 	 */
-	case BIOCGDLTLIST:
+	case BIOCGDLTLIST:		/* struct bpf_dltlist */
 		if (d->bd_bif == NULL) {
 			error = EINVAL;
 		} else {
-			error = bpf_getdltlist(d,
-			    (struct bpf_dltlist *)addr, p);
+			error = bpf_getdltlist(d, addr, p);
 		}
 		break;
 
 	/*
 	 * Set data link type.
 	 */
-	case BIOCSDLT:
-			if (d->bd_bif == NULL)
-					error = EINVAL;
-			else
-					error = bpf_setdlt(d, *(u_int *)addr);
-			break;
+	case BIOCSDLT:			/* u_int */
+		if (d->bd_bif == NULL) {
+			error = EINVAL;
+		} else {
+			u_int dlt;
+
+			bcopy(addr, &dlt, sizeof (dlt));
+			error = bpf_setdlt(d, dlt);
+		}
+		break;
 
 	/*
 	 * Get interface name.
 	 */
-	case BIOCGETIF:
+	case BIOCGETIF:			/* struct ifreq */
 		if (d->bd_bif == 0)
 			error = EINVAL;
 		else {
 			struct ifnet *const ifp = d->bd_bif->bif_ifp;
-			struct ifreq *const ifr = (struct ifreq *)addr;
 
-			snprintf(ifr->ifr_name, sizeof(ifr->ifr_name),
-			    "%s%d", ifp->if_name, ifp->if_unit);
+			snprintf(((struct ifreq *)(void *)addr)->ifr_name,
+			    sizeof (ifr.ifr_name), "%s%d", ifp->if_name,
+			    ifp->if_unit);
 		}
 		break;
 
 	/*
 	 * Set interface.
 	 */
-	case BIOCSETIF: {
+	case BIOCSETIF: {		/* struct ifreq */
 		ifnet_t	ifp;
-		ifp = ifunit(((struct ifreq *)addr)->ifr_name);
+
+		bcopy(addr, &ifr, sizeof (ifr));
+		ifr.ifr_name[IFNAMSIZ - 1] = '\0';
+		ifp = ifunit(ifr.ifr_name);
 		if (ifp == NULL)
 			error = ENXIO;
 		else
@@ -1337,122 +1386,145 @@ bpfioctl(dev_t dev, u_long cmd, caddr_t addr, __unused int flags,
 	/*
 	 * Set read timeout.
 	 */
-        case BIOCSRTIMEOUT32:
-                {
-			struct user32_timeval *_tv = (struct user32_timeval *)addr;
-			struct timeval tv;
+        case BIOCSRTIMEOUT32: {		/* struct user32_timeval */
+		struct user32_timeval _tv;
+		struct timeval tv;
 
-			tv.tv_sec  = _tv->tv_sec;
-			tv.tv_usec = _tv->tv_usec;
+		bcopy(addr, &_tv, sizeof (_tv));
+		tv.tv_sec  = _tv.tv_sec;
+		tv.tv_usec = _tv.tv_usec;
 
-                        /*
-			 * Subtract 1 tick from tvtohz() since this isn't
-			 * a one-shot timer.
-			 */
-			if ((error = itimerfix(&tv)) == 0)
-				d->bd_rtout = tvtohz(&tv) - 1;
-			break;
-                }
+		/*
+		 * Subtract 1 tick from tvtohz() since this isn't
+		 * a one-shot timer.
+		 */
+		if ((error = itimerfix(&tv)) == 0)
+			d->bd_rtout = tvtohz(&tv) - 1;
+		break;
+	}
 
-        case BIOCSRTIMEOUT64:
-                {
-			struct user64_timeval *_tv = (struct user64_timeval *)addr;
-			struct timeval tv;
-                        
-			tv.tv_sec  = _tv->tv_sec;
-			tv.tv_usec = _tv->tv_usec;
-                        
-			/*
-			 * Subtract 1 tick from tvtohz() since this isn't
-			 * a one-shot timer.
-			 */
-			if ((error = itimerfix(&tv)) == 0)
-				d->bd_rtout = tvtohz(&tv) - 1;
-			break;
-                }
-	
+        case BIOCSRTIMEOUT64: {		/* struct user64_timeval */
+		struct user64_timeval _tv;
+		struct timeval tv;
+
+		bcopy(addr, &_tv, sizeof (_tv));
+		tv.tv_sec  = _tv.tv_sec;
+		tv.tv_usec = _tv.tv_usec;
+
+		/*
+		 * Subtract 1 tick from tvtohz() since this isn't
+		 * a one-shot timer.
+		 */
+		if ((error = itimerfix(&tv)) == 0)
+			d->bd_rtout = tvtohz(&tv) - 1;
+		break;
+	}
+
         /*
 	 * Get read timeout.
 	 */
-	case BIOCGRTIMEOUT32:
-		{
-			struct user32_timeval *tv = (struct user32_timeval *)addr;
+	case BIOCGRTIMEOUT32: {		/* struct user32_timeval */
+		struct user32_timeval tv;
 
-			tv->tv_sec = d->bd_rtout / hz;
-			tv->tv_usec = (d->bd_rtout % hz) * tick;
-			break;
-                }
+		bzero(&tv, sizeof (tv));
+		tv.tv_sec = d->bd_rtout / hz;
+		tv.tv_usec = (d->bd_rtout % hz) * tick;
+		bcopy(&tv, addr, sizeof (tv));
+		break;
+	}
 
-	case BIOCGRTIMEOUT64:
-		{
-			struct user64_timeval *tv = (struct user64_timeval *)addr;
+	case BIOCGRTIMEOUT64: {		/* struct user64_timeval */
+		struct user64_timeval tv;
 
-			tv->tv_sec = d->bd_rtout / hz;
-			tv->tv_usec = (d->bd_rtout % hz) * tick;
-			break;
-                }
+		bzero(&tv, sizeof (tv));
+		tv.tv_sec = d->bd_rtout / hz;
+		tv.tv_usec = (d->bd_rtout % hz) * tick;
+		bcopy(&tv, addr, sizeof (tv));
+		break;
+	}
 
 	/*
 	 * Get packet stats.
 	 */
-	case BIOCGSTATS:
-		{
-			struct bpf_stat *bs = (struct bpf_stat *)addr;
+	case BIOCGSTATS: {		/* struct bpf_stat */
+		struct bpf_stat bs;
 
-			bs->bs_recv = d->bd_rcount;
-			bs->bs_drop = d->bd_dcount;
-			break;
-		}
+		bzero(&bs, sizeof (bs));
+		bs.bs_recv = d->bd_rcount;
+		bs.bs_drop = d->bd_dcount;
+		bcopy(&bs, addr, sizeof (bs));
+		break;
+	}
 
 	/*
 	 * Set immediate mode.
 	 */
-	case BIOCIMMEDIATE:
-		d->bd_immediate = *(u_int *)addr;
+	case BIOCIMMEDIATE:		/* u_int */
+		bcopy(addr, &d->bd_immediate, sizeof (u_int));
 		break;
 
-	case BIOCVERSION:
-		{
-			struct bpf_version *bv = (struct bpf_version *)addr;
+	case BIOCVERSION: {		/* struct bpf_version */
+		struct bpf_version bv;
 
-			bv->bv_major = BPF_MAJOR_VERSION;
-			bv->bv_minor = BPF_MINOR_VERSION;
-			break;
-		}
+		bzero(&bv, sizeof (bv));
+		bv.bv_major = BPF_MAJOR_VERSION;
+		bv.bv_minor = BPF_MINOR_VERSION;
+		bcopy(&bv, addr, sizeof (bv));
+		break;
+	}
 
 	/*
 	 * Get "header already complete" flag
 	 */
-	case BIOCGHDRCMPLT:
-		*(u_int *)addr = d->bd_hdrcmplt;
+	case BIOCGHDRCMPLT:		/* u_int */
+		bcopy(&d->bd_hdrcmplt, addr, sizeof (u_int));
 		break;
 
 	/*
 	 * Set "header already complete" flag
 	 */
-	case BIOCSHDRCMPLT:
-		d->bd_hdrcmplt = *(u_int *)addr ? 1 : 0;
+	case BIOCSHDRCMPLT:		/* u_int */
+		bcopy(addr, &int_arg, sizeof (int_arg));
+		d->bd_hdrcmplt = int_arg ? 1 : 0;
 		break;
 
 	/*
 	 * Get "see sent packets" flag
 	 */
-	case BIOCGSEESENT:
-		*(u_int *)addr = d->bd_seesent;
+	case BIOCGSEESENT:		/* u_int */
+		bcopy(&d->bd_seesent, addr, sizeof (u_int));
 		break;
 
 	/*
 	 * Set "see sent packets" flag
 	 */
-	case BIOCSSEESENT:
-		d->bd_seesent = *(u_int *)addr;
+	case BIOCSSEESENT:		/* u_int */
+		bcopy(addr, &d->bd_seesent, sizeof (u_int));
 		break;
 
-	case FIONBIO:		/* Non-blocking I/O */
+	/*
+	 * Set traffic service class
+	 */
+	case BIOCSETTC: {		/* int */
+		int tc;
+
+		bcopy(addr, &tc, sizeof (int));
+		error = bpf_set_traffic_class(d, tc);
+		break;
+	}
+
+	/*
+	 * Get traffic service class
+	 */
+	case BIOCGETTC:			/* int */
+		bcopy(&d->bd_traffic_class, addr, sizeof (int));
 		break;
 
-	case FIOASYNC:		/* Send signal on receive packets */
-		d->bd_async = *(int *)addr;
+	case FIONBIO:		/* Non-blocking I/O; int */
+		break;
+
+	case FIOASYNC:		/* Send signal on receive packets; int */
+		bcopy(addr, &d->bd_async, sizeof (int));
 		break;
 #ifndef __APPLE__
 	case FIOSETOWN:
@@ -1473,23 +1545,25 @@ bpfioctl(dev_t dev, u_long cmd, caddr_t addr, __unused int flags,
 		*(int *)addr = -fgetown(d->bd_sigio);
 		break;
 #endif
-	case BIOCSRSIG:		/* Set receive signal */
-		{
-		 	u_int sig;
+	case BIOCSRSIG: {	/* Set receive signal; u_int */
+		u_int sig;
 
-			sig = *(u_int *)addr;
+		bcopy(addr, &sig, sizeof (u_int));
 
-			if (sig >= NSIG)
-				error = EINVAL;
-			else
-				d->bd_sig = sig;
-			break;
-		}
-	case BIOCGRSIG:
-		*(u_int *)addr = d->bd_sig;
+		if (sig >= NSIG)
+			error = EINVAL;
+		else
+			d->bd_sig = sig;
 		break;
 	}
-	
+	case BIOCGRSIG:			/* u_int */
+		bcopy(&d->bd_sig, addr, sizeof (u_int));
+		break;
+	case BIOCSEXTHDR:
+		bcopy(addr, &d->bd_extendedhdr, sizeof (u_int));
+		break;
+	}
+
 	lck_mtx_unlock(bpf_mlock);
 
 	return (error);
@@ -1592,18 +1666,20 @@ bpf_setif(struct bpf_d *d, ifnet_t theywant, u_int32_t dlt)
  * Get a list of available data link type of the interface.
  */
 static int
-bpf_getdltlist(struct bpf_d *d, struct bpf_dltlist *bfl, struct proc *p)
+bpf_getdltlist(struct bpf_d *d, caddr_t addr, struct proc *p)
 {
 	u_int		n;
 	int		error;
 	struct ifnet	*ifp;
 	struct bpf_if	*bp;
 	user_addr_t	dlist;
+	struct bpf_dltlist bfl;
 
+	bcopy(addr, &bfl, sizeof (bfl));
 	if (proc_is64bit(p)) {
-		dlist = (user_addr_t)bfl->bfl_u.bflu_pad;
+		dlist = (user_addr_t)bfl.bfl_u.bflu_pad;
 	} else {
-		dlist = CAST_USER_ADDR_T(bfl->bfl_u.bflu_list);
+		dlist = CAST_USER_ADDR_T(bfl.bfl_u.bflu_list);
 	}
 
 	ifp = d->bd_bif->bif_ifp;
@@ -1613,16 +1689,20 @@ bpf_getdltlist(struct bpf_d *d, struct bpf_dltlist *bfl, struct proc *p)
 		if (bp->bif_ifp != ifp)
 			continue;
 		if (dlist != USER_ADDR_NULL) {
-			if (n >= bfl->bfl_len) {
+			if (n >= bfl.bfl_len) {
 				return (ENOMEM);
 			}
 			error = copyout(&bp->bif_dlt, dlist,
 			    sizeof (bp->bif_dlt));
+			if (error != 0)
+				break;
 			dlist += sizeof (bp->bif_dlt);
 		}
 		n++;
 	}
-	bfl->bfl_len = n;
+	bfl.bfl_len = n;
+	bcopy(&bfl, addr, sizeof (bfl));
+
 	return (error);
 }
 
@@ -1667,6 +1747,29 @@ bpf_setdlt(struct bpf_d *d, uint32_t dlt)
 		}
 	}
 	return (bp == NULL ? EINVAL : 0);
+}
+
+static int
+bpf_set_traffic_class(struct bpf_d *d, int tc)
+{
+	int error = 0;
+
+	if (!SO_VALID_TC(tc))
+		error = EINVAL;
+	else
+		d->bd_traffic_class = tc;
+
+	return (error);
+}
+
+static void
+bpf_set_packet_service_class(struct mbuf *m, int tc)
+{
+	if (!(m->m_flags & M_PKTHDR))
+		return;
+
+	VERIFY(SO_VALID_TC(tc));
+	(void) m_set_service_class(m, so_tc2msc(tc));
 }
 
 /*
@@ -1843,17 +1946,6 @@ filt_bpfread(struct knote *kn, long hint)
 	return (ready);
 }
 
-static inline void*
-_cast_non_const(const void * ptr) {
-	union {
-		const void*		cval;
-		void*			val;
-	} ret;
-	
-	ret.cval = ptr;
-	return (ret.val);
-}
-
 /*
  * Copy data from an mbuf chain into a buffer.  This code is derived
  * from m_copydata in sys/uipc_mbuf.c.
@@ -1861,7 +1953,7 @@ _cast_non_const(const void * ptr) {
 static void
 bpf_mcopy(const void *src_arg, void *dst_arg, size_t len)
 {
-	struct mbuf *m = _cast_non_const(src_arg);
+	struct mbuf *m = (struct mbuf *)(uintptr_t)(src_arg);
 	u_int count;
 	u_char *dst;
 
@@ -1884,9 +1976,10 @@ bpf_tap_imp(
 	mbuf_t		m,
 	void*		hdr,
 	size_t		hlen,
-	int			outbound)
+	int		outbound)
 {
 	struct bpf_if *bp;
+	struct mbuf *savedm = m;
 
 	/*
 	 * It's possible that we get here after the bpf descriptor has been
@@ -1953,7 +2046,8 @@ bpf_tap_imp(
 				if (mac_bpfdesc_check_receive(d, bp->bif_ifp) != 0)
 					continue;
 #endif
-				catchpacket(d, (u_char *)m, pktlen, slen, bpf_mcopy);
+				catchpacket(d, (u_char *)m, savedm, pktlen,
+				    slen, outbound, bpf_mcopy);
 			}
 		}
 	}
@@ -1999,13 +2093,19 @@ static int bpf_tap_callback(struct ifnet *ifp, struct mbuf *m)
  * pkt is really an mbuf.
  */
 static void
-catchpacket(struct bpf_d *d, u_char *pkt, u_int pktlen, u_int snaplen, 
+catchpacket(struct bpf_d *d, u_char *pkt, struct mbuf *m, u_int pktlen,
+	u_int snaplen, int outbound,
 	void (*cpfn)(const void *, void *, size_t))
 {
 	struct bpf_hdr *hp;
+	struct bpf_hdr_ext *ehp;
 	int totlen, curlen;
-	int hdrlen = d->bd_bif->bif_hdrlen;
+	int hdrlen, caplen;
 	int do_wakeup = 0;
+	u_char *payload;
+
+	hdrlen = d->bd_extendedhdr ? d->bd_bif->bif_exthdrlen :
+	    d->bd_bif->bif_hdrlen;
 	/*
 	 * Figure out how many bytes to move.  If the packet is
 	 * greater or equal to the snapshot length, transfer that
@@ -2049,17 +2149,41 @@ catchpacket(struct bpf_d *d, u_char *pkt, u_int pktlen, u_int snaplen,
 	/*
 	 * Append the bpf header.
 	 */
-	hp = (struct bpf_hdr *)(d->bd_sbuf + curlen);
 	struct timeval tv;
 	microtime(&tv);
-	hp->bh_tstamp.tv_sec = tv.tv_sec;
-	hp->bh_tstamp.tv_usec = tv.tv_usec;
-	hp->bh_datalen = pktlen;
-	hp->bh_hdrlen = hdrlen;
+ 	if (d->bd_extendedhdr) {
+ 		ehp = (struct bpf_hdr_ext *)(void *)(d->bd_sbuf + curlen);
+ 		memset(ehp, 0, sizeof(*ehp));
+ 		ehp->bh_tstamp.tv_sec = tv.tv_sec;
+ 		ehp->bh_tstamp.tv_usec = tv.tv_usec;
+ 		ehp->bh_datalen = pktlen;
+ 		ehp->bh_hdrlen = hdrlen;
+ 		ehp->bh_caplen = totlen - hdrlen;
+ 		if (outbound) {
+			if (m->m_pkthdr.m_fhflags & PF_TAG_FLOWHASH)
+				ehp->bh_flowhash = m->m_pkthdr.m_flowhash;
+			ehp->bh_svc = so_svc2tc(m->m_pkthdr.svc);
+			ehp->bh_flags |= BPF_HDR_EXT_FLAGS_DIR_OUT;
+			if (m->m_pkthdr.m_fhflags & PF_TAG_TCP)
+				ehp->bh_flags |= BPF_HDR_EXT_FLAGS_TCP;
+ 		} else
+			ehp->bh_flags |= BPF_HDR_EXT_FLAGS_DIR_IN;
+ 		payload = (u_char *)ehp + hdrlen;
+ 		caplen = ehp->bh_caplen;
+ 	} else {
+ 		hp = (struct bpf_hdr *)(void *)(d->bd_sbuf + curlen);
+ 		hp->bh_tstamp.tv_sec = tv.tv_sec;
+ 		hp->bh_tstamp.tv_usec = tv.tv_usec;
+ 		hp->bh_datalen = pktlen;
+ 		hp->bh_hdrlen = hdrlen;
+ 		hp->bh_caplen = totlen - hdrlen;
+ 		payload = (u_char *)hp + hdrlen;
+ 		caplen = hp->bh_caplen;
+ 	}
 	/*
 	 * Copy the packet data into the store buffer and update its length.
 	 */
-	(*cpfn)(pkt, (u_char *)hp + hdrlen, (hp->bh_caplen = totlen - hdrlen));
+	(*cpfn)(pkt, payload, caplen);
 	d->bd_slen = curlen + totlen;
 
 	if (do_wakeup)
@@ -2180,6 +2304,8 @@ bpf_attach(
 	 * performance reasons and to alleviate alignment restrictions).
 	 */
 	bp_new->bif_hdrlen = BPF_WORDALIGN(hdrlen + SIZEOF_BPF_HDR) - hdrlen;
+	bp_new->bif_exthdrlen = BPF_WORDALIGN(hdrlen +
+	    sizeof(struct bpf_hdr_ext)) - hdrlen;
 	
 	/* Take a reference on the interface */
 	ifnet_reference(ifp);
@@ -2258,18 +2384,10 @@ bpf_init(__unused void *unused)
 
         bpf_mlock_attr = lck_attr_alloc_init();
 
-        bpf_mlock = lck_mtx_alloc_init(bpf_mlock_grp, bpf_mlock_attr);
+        lck_mtx_init(bpf_mlock, bpf_mlock_grp, bpf_mlock_attr);
 
-		if (bpf_mlock == 0) {
-			printf("bpf_init: failed to allocate bpf_mlock\n");
-			bpf_devsw_installed = 0;
-			return;
-		}
-		
 		maj = cdevsw_add(CDEV_MAJOR, &bpf_cdevsw);
 		if (maj == -1) {
-			if (bpf_mlock)
-				lck_mtx_free(bpf_mlock, bpf_mlock_grp);
 			if (bpf_mlock_attr)
 				lck_attr_free(bpf_mlock_attr);
 			if (bpf_mlock_grp)

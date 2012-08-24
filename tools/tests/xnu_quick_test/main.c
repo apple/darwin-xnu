@@ -43,6 +43,7 @@
 #include <time.h>
 #include <grp.h>
 #include <unistd.h>
+#include <ctype.h>
 #include <sys/mount.h>
 #include <sys/param.h>
 #include <sys/select.h>
@@ -106,8 +107,8 @@ struct test_entry   g_tests[] =
 	{1, &directory_tests, NULL, "getattrlist, getdirentriesattr, setattrlist"},
 #if !TARGET_OS_EMBEDDED
 	{1, &getdirentries_test, NULL, "getdirentries"},
-#endif
 	{1, &exchangedata_test, NULL, "exchangedata"},
+#endif
 	{1, &searchfs_test, NULL, "searchfs"},
 	{1, &sema2_tests, NULL, "sem_close, sem_open, sem_post, sem_trywait, sem_unlink, sem_wait"},
 	{1, &sema_tests, NULL, "semctl, semget, semop"},
@@ -124,6 +125,11 @@ struct test_entry   g_tests[] =
 	{1, &atomic_fifo_queue_test, NULL, "OSAtomicFifoEnqueue, OSAtomicFifoDequeue"},
 #endif
 	{1, &sched_tests, NULL, "Scheduler tests"},
+#if TARGET_OS_EMBEDDED
+	{1, &content_protection_test, NULL, "Content protection tests"},
+#endif
+	{1, &pipes_test, NULL, "Pipes tests"},
+	{1, &kaslr_test, NULL, "KASLR tests"},
 	{0, NULL, NULL, "last one"}
 };
 
@@ -132,7 +138,9 @@ static void list_all_tests( void );
 static void mark_tests_to_run( long my_start, long my_end );
 static int parse_tests_to_run( int argc, const char * argv[], int * indexp );
 static void usage( void );
+#if !TARGET_OS_EMBEDDED
 static int setgroups_if_single_user(void);
+#endif
 static const char *current_arch( void );
 
 /* globals */
@@ -269,23 +277,23 @@ g_testbots_active = 1;
 #endif
 	/* Code added to run xnu_quick_test under testbots */
 	if ( g_testbots_active == 1 ) {
-	printf("[TEST] xnu_quick_test \n");	/* Declare the beginning of test suite */
+		printf("[TEST] xnu_quick_test \n");	/* Declare the beginning of test suite */
 	}
-    
+
+#if !TARGET_OS_EMBEDDED    
 	/* Populate groups list if we're in single user mode */
 	if (setgroups_if_single_user()) {
 		return 1;
 	}
-    
+#endif
 	if ( list_the_tests != 0 ) {
 		list_all_tests( );
 		return 0;
 	}
 #if !TARGET_OS_EMBEDDED
 	if (g_xilog_active == 1) {	
-		logRef = XILogOpenLogExtended( logPath, "xnu_quick_test", "com.apple.coreos", 
-										config, xml, echo, NULL, "ResultOwner", 
-										"com.apple.coreos", NULL );
+		logRef = XILogOpenLogExtended( logPath, "xnu_quick_test", "com.apple.coreos", config, xml, 
+						echo, NULL, "ResultOwner", "com.apple.coreos", NULL );
 		if( logRef == NULL )  {
 			fprintf(stderr,"Couldn't create log: %s",logPath);
 			exit(-1);
@@ -304,9 +312,6 @@ g_testbots_active = 1;
 	printf( "Current architecture is %s\n", current_arch() );
 
 	/* Code added to run xnu_quick_test under testbots */
-        if ( g_testbots_active == 1 ) {
-        printf("[PASS] xnu_quick_test started\n");     
-        }
 		
 	/* run each test that is marked to run in our table until we complete all of them or
 	 * hit the maximum number of failures.
@@ -325,6 +330,11 @@ g_testbots_active = 1;
 			XILogMsg( "test #%d - %s \n", (i + 1), my_testp->test_infop );
 		}
 #endif
+
+		if ( g_testbots_active == 1 ) {
+			printf("[BEGIN] %s \n", my_testp->test_infop);
+		}
+
 		printf( "test #%d - %s \n", (i + 1), my_testp->test_infop );
 		fflush(stdout);
 		my_err = my_testp->test_routine( my_testp->test_input );
@@ -347,7 +357,7 @@ g_testbots_active = 1;
 				printf( "\n Reached the maximum number of failures - Aborting xnu_quick_test. \n" );
 	                        /* Code added to run xnu_quick_test under testbots */
         	                if ( g_testbots_active == 1 ) {
-				printf("[FAIL] %s \n", my_testp->test_infop);
+					printf("[FAIL] %s \n", my_testp->test_infop);
 				}	
 				goto exit_this_routine;
 			}
@@ -369,7 +379,7 @@ g_testbots_active = 1;
 #endif
 		/* Code added to run xnu_quick_test under testbots */
 		if ( g_testbots_active == 1 ) {
-		printf("[PASS] %s \n", my_testp->test_infop);
+			printf("[PASS] %s \n", my_testp->test_infop);
 		}	
 	}
 	
@@ -573,6 +583,7 @@ static void usage( void )
 
 } /* usage */
 
+#if !TARGET_OS_EMBEDDED
 /* This is a private API between Libinfo, Libc, and the DirectoryService daemon.
  * Since we are trying to determine if an external provider will back group
  * lookups, we can use this, without relying on additional APIs or tools
@@ -629,6 +640,7 @@ setgroups_if_single_user(void)
 
 	return retval;
 }
+#endif
 
 static const char *current_arch( void )
 {

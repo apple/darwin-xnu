@@ -91,6 +91,8 @@
 #define	B_IOSTREAMING	0x00001000	/* sequential access pattern detected */
 #define B_THROTTLED_IO	0x00002000	/* low priority I/O */
 #define B_ENCRYPTED_IO	0x00004000	/* Encrypted I/O */
+#define B_STATICCONTENT 0x00008000	/* Buffer is likely to remain unaltered */
+
 /*
  * make sure to check when adding flags that
  * that the new flags don't overlap the definitions
@@ -1033,35 +1035,105 @@ void	buf_set_redundancy_flags(buf_t, uint32_t);
  */
 bufattr_t buf_attr(buf_t);
 
+/*!
+ @function buf_markstatic
+ @abstract Mark a buffer as being likely to contain static data.
+ @param bp Buffer to mark.
+ @return void.
+ */
+ void buf_markstatic(buf_t);
+
+/*!
+ @function buf_static
+ @abstract Check if a buffer contains static data.
+ @param bp Buffer to test.
+ @return Nonzero if buffer has static data, 0 otherwise.
+ */
+int	buf_static(buf_t);
+
 #ifdef KERNEL_PRIVATE
 void	buf_setfilter(buf_t, void (*)(buf_t, void *), void *, void (**)(buf_t, void *), void **);
 
+bufattr_t bufattr_alloc(void);
+
+void bufattr_free(bufattr_t bap);
 
 /*!
- @function buf_getcpaddr
- @abstract Set the address of cp_entry on a buffer.
- @param bp Buffer whose cp entry value has to be set
- @return void.
- */
-void buf_setcpaddr(buf_t, void *);
-
-/*!
- @function buf_getcpaddr
+ @function bufattr_cpaddr
  @abstract Get the address of cp_entry on a buffer.
- @param bp Buffer whose error value to set.
+ @param bap Buffer Attribute whose cp_entry to get.
  @return int.
  */
-void *buf_getcpaddr(buf_t);
+void *bufattr_cpaddr(bufattr_t);
 
 /*!
- @function buf_throttled
+ @function bufattr_cpoff
+ @abstract Gets the file offset on the buffer.
+ @param bap Buffer Attribute whose file offset value is used
+ @return void.
+ */
+uint64_t bufattr_cpoff(bufattr_t);
+
+
+/*!
+ @function bufattr_setcpaddr
+ @abstract Set the address of cp_entry on a buffer attribute.
+ @param bap Buffer Attribute whose cp entry value has to be set
+ @return void.
+ */
+void bufattr_setcpaddr(bufattr_t, void *);
+
+/*!
+ @function bufattr_setcpoff
+ @abstract Set the file offset for a content protected I/O on 
+ a buffer attribute.
+ @param bap Buffer Attribute whose cp file offset has to be set
+ @return void.
+ */
+void bufattr_setcpoff(bufattr_t, uint64_t);
+
+/*!
+ @function bufattr_rawencrypted
+ @abstract Check if a buffer contains raw encrypted data.
+ @param bap Buffer attribute to test.
+ @return Nonzero if buffer has raw encrypted data, 0 otherwise.
+ */
+int bufattr_rawencrypted(bufattr_t bap);
+
+/*!
+ @function bufattr_throttled
  @abstract Check if a buffer is throttled.
  @param bap Buffer attribute to test.
  @return Nonzero if the buffer is throttled, 0 otherwise.
  */
 int bufattr_throttled(bufattr_t bap);
-#endif /* KERNEL_PRIVATE */
 
+/*!
+ @function bufattr_nocache
+ @abstract Check if a buffer has nocache attribute.
+ @param bap Buffer attribute to test.
+ @return Nonzero if the buffer is not cached, 0 otherwise.
+ */
+int bufattr_nocache(bufattr_t bap);
+
+/*!
+ @function bufattr_meta
+ @abstract Check if a buffer has meta attribute.
+ @param bap Buffer attribute to test.
+ @return Nonzero if the buffer has meta attribute, 0 otherwise.
+ */
+
+int bufattr_meta(bufattr_t bap);
+
+/*!
+ @function bufattr_delayidlesleep
+ @abstract Check if a buffer is marked to delay idle sleep on disk IO.
+ @param bap Buffer attribute to test.
+ @return Nonzero if the buffer is marked to delay idle sleep on disk IO, 0 otherwise.
+ */
+int bufattr_delayidlesleep(bufattr_t bap);
+
+#endif /* KERNEL_PRIVATE */
 
 __END_DECLS
 

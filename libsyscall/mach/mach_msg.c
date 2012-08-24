@@ -318,6 +318,7 @@ mach_msg_destroy(mach_msg_header_t *msg)
 		    /*
 		     * Just skip it.
 		     */
+		    dsc = &daddr->out_of_line;
 		    daddr = (mach_msg_descriptor_t *)(dsc + 1);
 		    break;
 	    }

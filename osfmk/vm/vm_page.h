@@ -179,19 +179,19 @@ struct vm_page {
 	 */
 #define local_id wire_count
 	unsigned int	wire_count:16,	/* how many wired down maps use me? (O&P) */
-	/* boolean_t */	inactive:1,	/* page is in inactive list (P) */
-			zero_fill:1,
-			active:1,	/* page is in active list (P) */
-			pageout_queue:1,/* page is on queue for pageout (P) */
-			speculative:1,	/* page is on speculative list (P) */
-			laundry:1,	/* page is being cleaned now (P)*/
+	/* boolean_t */	active:1,	/* page is in active list (P) */
+			inactive:1,	/* page is in inactive list (P) */
+			clean_queue:1,	/* page is in pre-cleaned list (P) */
+		        local:1,	/* page is in one of the local queues (P) */
+			speculative:1,	/* page is in speculative list (P) */
+			throttled:1,	/* pager is not responding (P) */
 			free:1,		/* page is on free list (P) */
+			pageout_queue:1,/* page is on queue for pageout (P) */
+			laundry:1,	/* page is being cleaned now (P)*/
 			reference:1,	/* page has been used (P) */
 			gobbled:1,      /* page used internally (P) */
 			private:1,	/* Page should not be returned to
 					 *  the free list (P) */
-			throttled:1,	/* pager is not responding (P) */
-		        local:1,
 			no_cache:1,	/* page is not to be cached and should
 					 * be reused ahead of other pages (P) */
 			__unused_pageq_bits:3;	/* 3 bits available here */
@@ -238,20 +238,13 @@ struct vm_page {
 					   page locked */
 			encrypted:1,	/* encrypted for secure swap (O) */
 			encrypted_cleaning:1,	/* encrypting page */
-			list_req_pending:1, /* pagein/pageout alt mechanism */
-					    /* allows creation of list      */
-					    /* requests on pages that are   */
-					    /* actively being paged.        */
-			dump_cleaning:1,   /* set by the pageout daemon when */
-					   /* a page being cleaned is       */
-					   /* encountered and targeted as   */
-					   /* a pageout candidate           */
 			cs_validated:1,    /* code-signing: page was checked */	
 			cs_tainted:1,	   /* code-signing: page is tainted */
 			reusable:1,
 		        lopage:1,
 			slid:1,
-			__unused_object_bits:7;  /* 7 bits available here */
+			was_dirty:1,	/* was this page previously dirty? */
+			__unused_object_bits:8;  /* 8 bits available here */
 
 #if __LP64__
 	unsigned int __unused_padding;	/* Pad structure explicitly
@@ -405,7 +398,9 @@ queue_head_t	vm_page_queue_active;	/* active memory queue */
 extern
 queue_head_t	vm_page_queue_inactive;	/* inactive memory queue for normal pages */
 extern
-queue_head_t	vm_page_queue_zf;	/* inactive memory queue for zero fill */
+queue_head_t    vm_page_queue_cleaned; /* clean-queue inactive memory */
+extern
+queue_head_t	vm_page_queue_anonymous;	/* inactive memory queue for anonymous pages */
 extern
 queue_head_t	vm_page_queue_throttled;	/* memory queue for throttled pageout pages */
 
@@ -423,6 +418,8 @@ unsigned int	vm_page_active_count;	/* How many pages are active? */
 extern
 unsigned int	vm_page_inactive_count;	/* How many pages are inactive? */
 extern
+unsigned int    vm_page_cleaned_count; /* How many pages are in the clean queue? */
+extern
 unsigned int	vm_page_throttled_count;/* How many inactives are throttled */
 extern
 unsigned int	vm_page_speculative_count;	/* How many speculative pages are unclaimed? */
@@ -438,6 +435,8 @@ extern
 uint32_t	vm_page_creation_throttle;	/* When to throttle new page creation */
 extern
 unsigned int	vm_page_inactive_target;/* How many do we want inactive? */
+extern
+unsigned int	vm_page_anonymous_min;	/* When it's ok to pre-clean */
 extern
 unsigned int	vm_page_inactive_min;   /* When do wakeup pageout */
 extern
@@ -563,6 +562,8 @@ extern void		vm_page_deactivate_internal(
 	                                vm_page_t	page,
 					boolean_t	clear_hw_reference);
 
+extern void		vm_page_enqueue_cleaned(vm_page_t page);
+
 extern void		vm_page_lru(
 					vm_page_t	page);
 
@@ -593,7 +594,8 @@ extern void		vm_page_insert_internal(
 					vm_object_t		object,
 					vm_object_offset_t	offset,
 					boolean_t		queues_lock_held,
-					boolean_t		insert_in_hash);
+					boolean_t		insert_in_hash,
+					boolean_t		batch_pmap_op);
 
 extern void		vm_page_replace(
 					vm_page_t		mem,
@@ -647,13 +649,43 @@ extern void		vm_page_free_prepare_object(
 	                                vm_page_t	page,
 					boolean_t	remove_from_hash);
 
-extern void		vm_check_memorystatus(void);
+#if CONFIG_JETSAM
+extern void memorystatus_update(unsigned int pages_avail);
 
+#define VM_CHECK_MEMORYSTATUS do { \
+	memorystatus_update(		\
+      		vm_page_active_count + 		\
+      		vm_page_inactive_count + 	\
+      		vm_page_speculative_count + 	\
+      		vm_page_free_count +		\
+      		(VM_DYNAMIC_PAGING_ENABLED(memory_manager_default) ? 0 : vm_page_purgeable_count) \
+		); \
+	} while(0)
+#else 
+#define VM_CHECK_MEMORYSTATUS do {} while(0)
+#endif
 
 /*
  *	Functions implemented as macros. m->wanted and m->busy are
  *	protected by the object lock.
  */
+
+#if CONFIG_EMBEDDED
+#define SET_PAGE_DIRTY(m, set_pmap_modified)				\
+		MACRO_BEGIN						\
+		vm_page_t __page__ = (m);				\
+		if (__page__->dirty == FALSE && (set_pmap_modified)) {	\
+			pmap_set_modify(__page__->phys_page);		\
+		}							\
+		__page__->dirty = TRUE;					\
+		MACRO_END
+#else /* CONFIG_EMBEDDED */
+#define SET_PAGE_DIRTY(m, set_pmap_modified)				\
+		MACRO_BEGIN						\
+		vm_page_t __page__ = (m);				\
+		__page__->dirty = TRUE;					\
+		MACRO_END
+#endif /* CONFIG_EMBEDDED */
 
 #define PAGE_ASSERT_WAIT(m, interruptible)			\
 		(((m)->wanted = TRUE),				\
@@ -736,16 +768,24 @@ extern void vm_page_queues_assert(vm_page_t mem, int val);
  * this is why its safe to utilze the wire_count field in the vm_page_t as the local_id...
  * 'wired' and local are ALWAYS mutually exclusive conditions.
  */
+
 #define VM_PAGE_QUEUES_REMOVE(mem)				\
 	MACRO_BEGIN						\
 	VM_PAGE_QUEUES_ASSERT(mem, 1);				\
 	assert(!mem->laundry);					\
-	assert(!mem->pageout_queue);				\
+/*								\
+ *	if (mem->pageout_queue)					\
+ * 		NOTE: VM_PAGE_QUEUES_REMOVE does not deal with removing pages from the pageout queue...	\
+ * 		the caller is responsible for determing if the page is on that queue, and if so, must	\
+ * 		either first remove it (it needs both the page queues lock and the object lock to do	\
+ * 		this via vm_pageout_steal_laundry), or avoid the call to VM_PAGE_QUEUES_REMOVE		\
+ */								\
 	if (mem->local) {					\
 		struct vpl	*lq;				\
 		assert(mem->object != kernel_object);		\
 		assert(!mem->inactive && !mem->speculative);	\
 		assert(!mem->active && !mem->throttled);	\
+		assert(!mem->clean_queue);			\
 		assert(!mem->fictitious);			\
 		lq = &vm_page_local_q[mem->local_id].vpl_un.vpl;	\
 		VPL_LOCK(&lq->vpl_lock);			\
@@ -760,6 +800,7 @@ extern void vm_page_queues_assert(vm_page_t mem, int val);
 	else if (mem->active) {					\
 		assert(mem->object != kernel_object);		\
 		assert(!mem->inactive && !mem->speculative);	\
+		assert(!mem->clean_queue);			\
 		assert(!mem->throttled);			\
 		assert(!mem->fictitious);			\
 		queue_remove(&vm_page_queue_active,		\
@@ -773,17 +814,24 @@ extern void vm_page_queues_assert(vm_page_t mem, int val);
 		assert(!mem->active && !mem->speculative);	\
 		assert(!mem->throttled);			\
 		assert(!mem->fictitious);			\
-		if (mem->zero_fill) {				\
-			queue_remove(&vm_page_queue_zf,		\
-			mem, vm_page_t, pageq);			\
-			vm_zf_queue_count--;			\
+		vm_page_inactive_count--;			\
+		if (mem->clean_queue) {				\
+			queue_remove(&vm_page_queue_cleaned,	\
+                        mem, vm_page_t, pageq);			\
+			mem->clean_queue = FALSE;		\
+			vm_page_cleaned_count--;		\
 		} else {					\
-			queue_remove(&vm_page_queue_inactive,	\
-			mem, vm_page_t, pageq);			\
+			if (mem->object->internal) {		\
+				queue_remove(&vm_page_queue_anonymous,	\
+				mem, vm_page_t, pageq);		\
+				vm_page_anonymous_count--;	\
+			} else {				\
+				queue_remove(&vm_page_queue_inactive,	\
+				mem, vm_page_t, pageq);		\
+			}					\
+			vm_purgeable_q_advance_all();		\
 		}						\
 		mem->inactive = FALSE;				\
-		vm_page_inactive_count--;			\
-		vm_purgeable_q_advance_all();			\
 	}							\
 								\
 	else if (mem->throttled) {				\
@@ -819,12 +867,12 @@ extern void vm_page_queues_assert(vm_page_t mem, int val);
 	assert(!mem->fictitious);				\
 	assert(!mem->laundry);					\
 	assert(!mem->pageout_queue);				\
-	if (mem->zero_fill) {					\
+	if (mem->object->internal) {				\
 		if (first == TRUE)				\
-			queue_enter_first(&vm_page_queue_zf, mem, vm_page_t, pageq);	\
+			queue_enter_first(&vm_page_queue_anonymous, mem, vm_page_t, pageq);	\
 		else						\
-			queue_enter(&vm_page_queue_zf, mem, vm_page_t, pageq);		\
-		vm_zf_queue_count++;				\
+			queue_enter(&vm_page_queue_anonymous, mem, vm_page_t, pageq);		\
+		vm_page_anonymous_count++;				\
 	} else {						\
 		if (first == TRUE)				\
 			queue_enter_first(&vm_page_queue_inactive, mem, vm_page_t, pageq); \
@@ -873,7 +921,7 @@ extern void vm_page_queues_assert(vm_page_t mem, int val);
 #define DW_set_reference		0x800
 #define DW_move_page			0x1000
 #define DW_VM_PAGE_QUEUES_REMOVE	0x2000
-#define DW_set_list_req_pending		0x4000
+#define DW_enqueue_cleaned      	0x4000
 
 struct vm_page_delayed_work {
 	vm_page_t	dw_m;
@@ -895,14 +943,6 @@ extern unsigned int vm_max_delayed_work_limit;
  * set, we need to set it and ask vm_page_do_delayed_work
  * to clear it and wakeup anyone that might have blocked on
  * it once we're done processing the page.
- *
- * additionally, we can't call vm_page_do_delayed_work with
- * list_req_pending == TRUE since it may need to 
- * drop the object lock before dealing
- * with this page and because list_req_pending == TRUE, 
- * busy == TRUE will NOT protect this page from being stolen
- * so clear list_req_pending and ask vm_page_do_delayed_work
- * to re-set it once it holds both the pageq and object locks
  */
 
 #define VM_PAGE_ADD_DELAYED_WORK(dwp, mem, dw_cnt)		\
@@ -912,13 +952,9 @@ extern unsigned int vm_max_delayed_work_limit;
 		if ( !(dwp->dw_mask & DW_vm_page_free))		\
 			dwp->dw_mask |= (DW_clear_busy | DW_PAGE_WAKEUP); \
 	}							\
-	if (mem->list_req_pending) {				\
-		mem->list_req_pending = FALSE;			\
-		dwp->dw_mask |= DW_set_list_req_pending;	\
-	}							\
 	dwp->dw_m = mem;					\
 	dwp++;							\
-	dw_count++;						\
+	dw_cnt++;						\
 	MACRO_END
 
 extern vm_page_t vm_object_page_grab(vm_object_t);

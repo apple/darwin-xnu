@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1998-2008 Apple Inc. All rights reserved.
+ * Copyright (c) 1998-2011 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -580,6 +580,9 @@ bool IOServiceUserNotification::init( mach_port_t port, natural_t type,
 				       void * reference, vm_size_t referenceSize,
 				       bool clientIs64 )
 {
+    if( !super::init())
+        return( false );
+
     newSet = OSArray::withCapacity( 1 );
     if( !newSet)
         return( false );
@@ -605,7 +608,7 @@ bool IOServiceUserNotification::init( mach_port_t port, natural_t type,
     pingMsg->notifyHeader.type = type;
     bcopy( reference, pingMsg->notifyHeader.reference, referenceSize );
 
-    return( super::init() );
+    return( true );
 }
 
 void IOServiceUserNotification::free( void )
@@ -622,8 +625,12 @@ void IOServiceUserNotification::free( void )
 
     super::free();
 
-    if( _pingMsg && _msgSize)
-        IOFree( _pingMsg, _msgSize);
+    if( _pingMsg && _msgSize) {
+		if (_pingMsg->msgHdr.msgh_remote_port) {
+			iokit_release_port_send(_pingMsg->msgHdr.msgh_remote_port);
+		}
+        IOFree(_pingMsg, _msgSize);
+	}
 
     if( _lastEntry)
         _lastEntry->release();
@@ -715,6 +722,8 @@ bool IOServiceMessageUserNotification::init( mach_port_t port, natural_t type,
 				void * reference, vm_size_t referenceSize, vm_size_t extraSize,
 				bool client64 )
 {
+    if( !super::init())
+        return( false );
 
     if (referenceSize > sizeof(OSAsyncReference64))
         return( false );
@@ -749,7 +758,7 @@ bool IOServiceMessageUserNotification::init( mach_port_t port, natural_t type,
     pingMsg->notifyHeader.type 		= type;
     bcopy( reference, pingMsg->notifyHeader.reference, referenceSize );
 
-    return( super::init() );
+    return( true );
 }
 
 void IOServiceMessageUserNotification::free( void )
@@ -762,8 +771,12 @@ void IOServiceMessageUserNotification::free( void )
 
     super::free();
 
-    if( _pingMsg && _msgSize)
+    if( _pingMsg && _msgSize) {
+		if (_pingMsg->msgHdr.msgh_remote_port) {
+			iokit_release_port_send(_pingMsg->msgHdr.msgh_remote_port);
+		}
         IOFree( _pingMsg, _msgSize);
+	}
 }
 
 IOReturn IOServiceMessageUserNotification::_handler( void * target, void * ref,
@@ -786,8 +799,8 @@ IOReturn IOServiceMessageUserNotification::handler( void * ref,
 
     if (kIOMessageCopyClientID == messageType)
     {
-	*((void **) messageArgument) = IOCopyLogNameForPID(owningPID);
-	return (kIOReturnSuccess);
+        *((void **) messageArgument) = OSNumber::withNumber(owningPID, 32);
+        return (kIOReturnSuccess);
     }
 
     data->messageType = messageType;
@@ -1619,6 +1632,60 @@ kern_return_t is_io_service_get_matching_services_ool(
     return( kr );
 }
 
+
+/* Routine io_service_get_matching_service */
+kern_return_t is_io_service_get_matching_service(
+	mach_port_t master_port,
+	io_string_t matching,
+	io_service_t *service )
+{
+    kern_return_t	kr;
+    OSObject *		obj;
+    OSDictionary *	dict;
+
+    if( master_port != master_device_port)
+        return( kIOReturnNotPrivileged);
+
+    obj = OSUnserializeXML( matching );
+
+    if( (dict = OSDynamicCast( OSDictionary, obj))) {
+        *service = IOService::copyMatchingService( dict );
+	kr = *service ? kIOReturnSuccess : kIOReturnNotFound;
+    } else
+	kr = kIOReturnBadArgument;
+
+    if( obj)
+        obj->release();
+
+    return( kr );
+}
+
+/* Routine io_service_get_matching_services_ool */
+kern_return_t is_io_service_get_matching_service_ool(
+	mach_port_t master_port,
+	io_buf_ptr_t matching,
+	mach_msg_type_number_t matchingCnt,
+	kern_return_t *result,
+	io_object_t *service )
+{
+    kern_return_t	kr;
+    vm_offset_t 	data;
+    vm_map_offset_t	map_data;
+
+    kr = vm_map_copyout( kernel_map, &map_data, (vm_map_copy_t) matching );
+    data = CAST_DOWN(vm_offset_t, map_data);
+
+    if( KERN_SUCCESS == kr) {
+        // must return success after vm_map_copyout() succeeds
+	*result = is_io_service_get_matching_service( master_port,
+			(char *) data, service );
+	vm_deallocate( kernel_map, data, matchingCnt );
+    }
+
+    return( kr );
+}
+
+
 static kern_return_t internal_io_service_add_notification(
 	mach_port_t master_port,
 	io_name_t notification_type,
@@ -1667,6 +1734,7 @@ static kern_return_t internal_io_service_add_notification(
 
         if( userNotify && !userNotify->init( port, userMsgType,
                                              reference, referenceSize, client64)) {
+			iokit_release_port_send(port);
             userNotify->release();
             userNotify = 0;
         }
@@ -1828,6 +1896,7 @@ static kern_return_t internal_io_service_add_interest_notification(
                                              reference, referenceSize,
 					     kIOUserNotifyMaxMessageSize,
 					     client64 )) {
+			iokit_release_port_send(port);
             userNotify->release();
             userNotify = 0;
         }
@@ -3842,72 +3911,6 @@ kern_return_t shim_io_async_method_structureI_structureO(
         }
     }
     while( false);
-
-    return( err);
-}
-
-/* Routine io_make_matching */
-kern_return_t is_io_make_matching(
-	mach_port_t	    master_port,
-	uint32_t	    type,
-	uint32_t		options,
-        io_struct_inband_t	input,
-        mach_msg_type_number_t	inputCount,
-	io_string_t	matching )
-{
-    OSSerialize * 	s;
-    IOReturn		err = kIOReturnSuccess;
-    OSDictionary *	dict;
-
-    if( master_port != master_device_port)
-        return( kIOReturnNotPrivileged);
-
-    switch( type) {
-
-	case kIOServiceMatching:
-            dict = IOService::serviceMatching( gIOServiceKey );
-	    break;
-
-	case kIOBSDNameMatching:
-	    dict = IOBSDNameMatching( (const char *) input );
-	    break;
-
-	case kIOOFPathMatching:
-	    dict = IOOFPathMatching( (const char *) input,
-                                    matching, sizeof( io_string_t));
-	    break;
-
-	default:
-	    dict = 0;
-    }
-
-    if( !dict)
-	return( kIOReturnUnsupported);
-
-    do {
-        s = OSSerialize::withCapacity(4096);
-        if( !s) {
-            err = kIOReturnNoMemory;
-	    continue;
-	}
-        s->clearText();
-        if( !dict->serialize( s )) {
-            err = kIOReturnUnsupported;
-	    continue;
-        }
-
-        if( s->getLength() > sizeof( io_string_t)) {
-            err = kIOReturnNoMemory;
-	    continue;
-        } else
-            strlcpy(matching, s->text(), sizeof(io_string_t));
-    }
-    while( false);
-
-    if( s)
-	s->release();
-    if( dict)
-	dict->release();
 
     return( err);
 }

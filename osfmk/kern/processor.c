@@ -332,34 +332,41 @@ processor_info(
 
 	case PROCESSOR_CPU_LOAD_INFO:
 	{
-		register processor_cpu_load_info_t	cpu_load_info;
+		processor_cpu_load_info_t	cpu_load_info;
+		timer_data_t	idle_temp;
+		timer_t		idle_state;
 
 		if (*count < PROCESSOR_CPU_LOAD_INFO_COUNT)
 			return (KERN_FAILURE);
 
 		cpu_load_info = (processor_cpu_load_info_t) info;
-		cpu_load_info->cpu_ticks[CPU_STATE_USER] =
+		if (precise_user_kernel_time) {
+			cpu_load_info->cpu_ticks[CPU_STATE_USER] =
 							(uint32_t)(timer_grab(&PROCESSOR_DATA(processor, user_state)) / hz_tick_interval);
-		cpu_load_info->cpu_ticks[CPU_STATE_SYSTEM] =
+			cpu_load_info->cpu_ticks[CPU_STATE_SYSTEM] =
 							(uint32_t)(timer_grab(&PROCESSOR_DATA(processor, system_state)) / hz_tick_interval);
-		{
-		timer_data_t	idle_temp;
-		timer_t		idle_state;
+		} else {
+			uint64_t tval = timer_grab(&PROCESSOR_DATA(processor, user_state)) +
+				timer_grab(&PROCESSOR_DATA(processor, system_state));
+
+			cpu_load_info->cpu_ticks[CPU_STATE_USER] = (uint32_t)(tval / hz_tick_interval);
+			cpu_load_info->cpu_ticks[CPU_STATE_SYSTEM] = 0;
+		}
 
 		idle_state = &PROCESSOR_DATA(processor, idle_state);
 		idle_temp = *idle_state;
 
 		if (PROCESSOR_DATA(processor, current_state) != idle_state ||
-		    timer_grab(&idle_temp) != timer_grab(idle_state))
+		    timer_grab(&idle_temp) != timer_grab(idle_state)) {
 			cpu_load_info->cpu_ticks[CPU_STATE_IDLE] =
 							(uint32_t)(timer_grab(&PROCESSOR_DATA(processor, idle_state)) / hz_tick_interval);
-		else {
+		} else {
 			timer_advance(&idle_temp, mach_absolute_time() - idle_temp.tstamp);
 				
 			cpu_load_info->cpu_ticks[CPU_STATE_IDLE] =
 				(uint32_t)(timer_grab(&idle_temp) / hz_tick_interval);
 		}
-		}
+
 		cpu_load_info->cpu_ticks[CPU_STATE_NICE] = 0;
 
 	    *count = PROCESSOR_CPU_LOAD_INFO_COUNT;
@@ -524,6 +531,9 @@ processor_get_assignment(
 	processor_set_t	*pset)
 {
 	int state;
+
+	if (processor == PROCESSOR_NULL)
+		return(KERN_INVALID_ARGUMENT);
 
 	state = processor->state;
 	if (state == PROCESSOR_SHUTDOWN || state == PROCESSOR_OFF_LINE)

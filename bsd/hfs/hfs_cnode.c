@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2002-2008 Apple Inc. All rights reserved.
+ * Copyright (c) 2002-2012 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -37,6 +37,7 @@
 #include <sys/quota.h>
 #include <sys/kdebug.h>
 #include <libkern/OSByteOrder.h>
+#include <sys/buf_internal.h>
 
 #include <kern/locks.h>
 
@@ -59,10 +60,11 @@ static void  hfs_reclaim_cnode(struct cnode *);
 static int hfs_cnode_teardown (struct vnode *vp, vfs_context_t ctx, int reclaim);
 static int hfs_isordered(struct cnode *, struct cnode *);
 
+extern int hfs_removefile_callback(struct buf *bp, void *hfsmp);
+
 __inline__ int hfs_checkdeleted (struct cnode *cp) {
 	return ((cp->c_flag & (C_DELETED | C_NOEXISTS)) ? ENOENT : 0);	
 }
-
 
 /*
  * Function used by a special fcntl() that decorates a cnode/vnode that
@@ -240,8 +242,35 @@ int hfs_cnode_teardown (struct vnode *vp, vfs_context_t ctx, int reclaim) {
 		(!ISSET(cp->c_flag, C_NOEXISTS)) &&
 		(VTOF(vp)->ff_blocks) &&
 		(reclaim == 0)) {
+		/* 
+		 * Note that if content protection is enabled, then this is where we will
+		 * attempt to issue IOs for all dirty regions of this file.  
+		 *
+		 * If we're called from hfs_vnop_inactive, all this means is at the time 
+		 * the logic for deciding to call this function, there were not any lingering
+		 * mmap/fd references for this file.  However, there is nothing preventing the system
+		 * from creating a new reference in between the time that logic was checked
+		 * and we entered hfs_vnop_inactive.  As a result, the only time we can guarantee
+		 * that there aren't any references is during vnop_reclaim.
+		 */
 		hfs_filedone(vp, ctx);
 	}
+
+ 	/* 
+	 * We're holding the cnode lock now.  Stall behind any shadow BPs that may
+	 * be involved with this vnode if it is a symlink.  We don't want to allow 
+	 * the blocks that we're about to release to be put back into the pool if there
+	 * is pending I/O to them.
+	 */
+	if (v_type == VLNK) {	
+		/* 
+		 * This will block if the asynchronous journal flush is in progress.
+		 * If this symlink is not being renamed over and doesn't have any open FDs,
+		 * then we'll remove it from the journal's bufs below in kill_block.
+		 */
+		buf_wait_for_shadow_io (vp, 0);
+	}
+
 	/* 
 	 * Remove any directory hints or cached origins
 	 */
@@ -282,9 +311,44 @@ int hfs_cnode_teardown (struct vnode *vp, vfs_context_t ctx, int reclaim) {
 	if ((v_type == VREG || v_type == VLNK) && 
 		(cp->c_flag & C_DELETED) &&
 		((forkcount == 1) || (!VNODE_IS_RSRC(vp)))) {
-		
+
+		/* Start a transaction here.  We're about to change file sizes */
+		if (started_tr == 0) {
+			if (hfs_start_transaction(hfsmp) != 0) {
+				error = EINVAL;
+				goto out;
+			}
+			else {
+				started_tr = 1;
+			}
+		}
+	
 		/* Truncate away our own fork data. (Case A, B, C above) */
 		if (VTOF(vp)->ff_blocks != 0) {
+			
+ 			/*
+			 * At this point, we have decided that this cnode is
+			 * suitable for full removal.  We are about to deallocate
+			 * its blocks and remove its entry from the catalog. 
+			 * If it was a symlink, then it's possible that the operation
+			 * which created it is still in the current transaction group
+			 * due to coalescing.  Take action here to kill the data blocks
+			 * of the symlink out of the journal before moving to 
+			 * deallocate the blocks.  We need to be in the middle of
+			 * a transaction before calling buf_iterate like this.
+			 * 
+			 * Note: we have to kill any potential symlink buffers out of 
+			 * the journal prior to deallocating their blocks.  This is so 
+			 * that we don't race with another thread that may be doing an 
+			 * an allocation concurrently and pick up these blocks. It could
+			 * generate I/O against them which could go out ahead of our journal
+			 * transaction.
+			 */
+
+			if (hfsmp->jnl && vnode_islnk(vp)) {
+				buf_iterate(vp, hfs_removefile_callback, BUF_SKIP_NONLOCKED, (void *)hfsmp);
+			}
+
 			/*
 			 * Since we're already inside a transaction,
 			 * tell hfs_truncate to skip the ubc_setsize.
@@ -303,46 +367,85 @@ int hfs_cnode_teardown (struct vnode *vp, vfs_context_t ctx, int reclaim) {
 		/* 
 		 * Truncate away the resource fork, if we represent the data fork and
 		 * it is the last fork.  That means, by definition, the rsrc fork is not in 
-		 * core.  So we bring it into core, and then truncate it away. 
+		 * core.  To avoid bringing a vnode into core for the sole purpose of deleting the
+		 * data in the resource fork, we call cat_lookup directly, then hfs_release_storage
+		 * to get rid of the resource fork's data. 
 		 * 
 		 * This is invoked via case A above only.
 		 */
 		if ((cp->c_blocks > 0) && (forkcount == 1) && (vp != cp->c_rsrc_vp)) {
-			struct vnode *rvp = NULLVP;
-			
-			/* 
-			 * It is safe for us to pass FALSE to the argument can_drop_lock
-			 * on this call to hfs_vgetrsrc.  We know that the resource fork does not 
-			 * exist in core, so we'll have to go to the catalog to retrieve its 
-			 * information.  That will attach the resource fork vnode to our cnode. 
-			 */
-			error = hfs_vgetrsrc(hfsmp, vp, &rvp, FALSE, FALSE);
-			if (error) {
+			struct cat_lookup_buffer *lookup_rsrc = NULL;
+			struct cat_desc *desc_ptr = NULL;
+			lockflags = 0;
+
+			MALLOC(lookup_rsrc, struct cat_lookup_buffer*, sizeof (struct cat_lookup_buffer), M_TEMP, M_WAITOK);
+			if (lookup_rsrc == NULL) {
+				printf("hfs_cnode_teardown: ENOMEM from MALLOC\n");
+				error = ENOMEM;
 				goto out;
 			}
+			else {
+				bzero (lookup_rsrc, sizeof (struct cat_lookup_buffer));
+			}
+
+			if (cp->c_desc.cd_namelen == 0) {
+				/* Initialize the rsrc descriptor for lookup if necessary*/
+				MAKE_DELETED_NAME (lookup_rsrc->lookup_name, HFS_TEMPLOOKUP_NAMELEN, cp->c_fileid);
+				
+				lookup_rsrc->lookup_desc.cd_nameptr = (const uint8_t*) lookup_rsrc->lookup_name;
+				lookup_rsrc->lookup_desc.cd_namelen = strlen (lookup_rsrc->lookup_name);
+				lookup_rsrc->lookup_desc.cd_parentcnid = hfsmp->hfs_private_desc[FILE_HARDLINKS].cd_cnid;
+				lookup_rsrc->lookup_desc.cd_cnid = cp->c_cnid;	
+				
+				desc_ptr = &lookup_rsrc->lookup_desc;
+			}
+			else {
+				desc_ptr = &cp->c_desc;	
+			}
+
+			lockflags = hfs_systemfile_lock (hfsmp, SFL_CATALOG, HFS_SHARED_LOCK);
+
+			error = cat_lookup (hfsmp, desc_ptr, 1, (struct cat_desc *) NULL, 
+					(struct cat_attr*) NULL, &lookup_rsrc->lookup_fork.ff_data, NULL);
+
+			hfs_systemfile_unlock (hfsmp, lockflags);
+			
+			if (error) {
+				FREE (lookup_rsrc, M_TEMP);
+				goto out;
+			}
+
 			/*
-			 * Defer the vnode_put and ubc_setsize on rvp until hfs_unlock().
-			 * 
-			 * By bringing the vnode into core above, we may force hfs_vnop_reclaim 
-			 * to only partially finish if that's what called us.  Bringing the 
-			 * resource fork into core results in a new rsrc vnode that will get 
-			 * immediately marked for termination below.  It will get recycled/reclaimed 
-			 * as soon as possible, but that could cause another round of inactive and reclaim. 
+			 * Make the filefork in our temporary struct look like a real 
+			 * filefork.  Fill in the cp, sysfileinfo and rangelist fields..
 			 */
-			cp->c_flag |= C_NEED_RVNODE_PUT | C_NEED_RSRC_SETSIZE;
-			error = hfs_truncate(rvp, (off_t)0, IO_NDELAY, 1, 0, ctx);
+			rl_init (&lookup_rsrc->lookup_fork.ff_invalidranges);
+			lookup_rsrc->lookup_fork.ff_cp = cp;
+
+			/* 
+			 * If there were no errors, then we have the catalog's fork information 
+			 * for the resource fork in question.  Go ahead and delete the data in it now.
+			 */
+
+			error = hfs_release_storage (hfsmp, NULL, &lookup_rsrc->lookup_fork, cp->c_fileid);
+			FREE(lookup_rsrc, M_TEMP);
+
 			if (error) {
 				goto out;
 			}
-			
-			/* 
-			 * Note that the following call to vnode_recycle is safe from within the
-			 * context of hfs_vnop_inactive or hfs_vnop_reclaim.  It is being invoked
-			 * on the RSRC fork vp (which is not our current vnode) As such, we hold 
-			 * an iocount on it and vnode_recycle will just add the MARKTERM bit at this
-			 * point.
+
+			/*
+			 * This fileid's resource fork extents have now been fully deleted on-disk
+			 * and this CNID is no longer valid. At this point, we should be able to
+			 * zero out cp->c_blocks to indicate there is no data left in this file.
 			 */
-			vnode_recycle(rvp);  /* all done with this vnode */
+			cp->c_blocks = 0;
+		}
+
+		/* End the transaction from the start of the file truncation segment */
+		if (started_tr) {
+			hfs_end_transaction(hfsmp);
+			started_tr = 0;
 		}
 	}
 	
@@ -485,11 +588,42 @@ out:
         hfs_end_transaction(hfsmp);
         started_tr = 0;
     }
-	
+
+#if 0
+#if CONFIG_PROTECT
+	/* 
+	 * cnode truncate lock and cnode lock are both held exclusive here. 
+	 *
+	 * Go ahead and flush the keys out if this cnode is the last fork
+	 * and it is not class F.  Class F keys should not be purged because they only
+	 * exist in memory and have no persistent keys.  Only do this 
+	 * if we haven't already done it yet (maybe a vnode skipped inactive 
+	 * and went straight to reclaim).  This function gets called from both reclaim and
+	 * inactive, so it will happen first in inactive if possible.
+	 * 
+	 * We need to be mindful that all pending IO for this file has already been
+	 * issued and completed before we bzero out the key.  This is because
+	 * if it isn't, tossing the key here could result in garbage IO being
+	 * written (by using the bzero'd key) if the writes are happening asynchronously.
+	 * 
+	 * In addition, class A files may have already been purged due to the 
+	 * lock event occurring.
+	 */
+	if (forkcount == 1) {
+		struct cprotect *entry = cp->c_cpentry;
+		if ((entry) && (entry->cp_pclass != PROTECTION_CLASS_F)) {
+			if ((cp->c_cpentry->cp_flags & CP_KEY_FLUSHED) == 0) {
+				cp->c_cpentry->cp_flags |= CP_KEY_FLUSHED;
+				bzero (cp->c_cpentry->cp_cache_key, cp->c_cpentry->cp_cache_key_len);
+				bzero (cp->c_cpentry->cp_cache_iv_ctx, sizeof(aes_encrypt_ctx));
+			}
+		}
+	}
+#endif
+#endif
 	
 	return error;	
 }
-
 
 
 /*
@@ -600,6 +734,7 @@ hfs_filedone(struct vnode *vp, vfs_context_t context)
 	struct rl_entry *invalid_range;
 	off_t leof;
 	u_int32_t blks, blocksize;
+	/* flags for zero-filling sparse ranges */
 	int cluster_flags = IO_CLOSE;
 	int cluster_zero_flags = IO_HEADZEROFILL | IO_NOZERODIRTY | IO_NOCACHE;
 
@@ -610,6 +745,25 @@ hfs_filedone(struct vnode *vp, vfs_context_t context)
 
 	if ((hfsmp->hfs_flags & HFS_READ_ONLY) || (fp->ff_blocks == 0))
 		return (0);
+
+#if CONFIG_PROTECT
+	/* 
+	 * Figure out if we need to do synchronous IO. 
+	 * 
+	 * If the file represents a content-protected file, we may need
+	 * to issue synchronous IO when we dispatch to the cluster layer.
+	 * If we didn't, then the IO would go out to the disk asynchronously.
+	 * If the vnode hits the end of inactive before getting reclaimed, the
+	 * content protection keys would be wiped/bzeroed out, and we'd end up
+	 * trying to issue the IO with an invalid key.  This will lead to file 
+	 * corruption.  IO_SYNC will force the cluster_push to wait until all IOs
+	 * have completed (though they may be in the track cache).
+	 */
+	if (cp_fs_protected(VTOVFS(vp))) {
+		cluster_flags |= IO_SYNC;
+		cluster_zero_flags |= IO_SYNC;
+	}
+#endif
 
 	/* 
 	 * If we are being invoked from F_SWAPDATAEXTENTS, then we 
@@ -654,8 +808,10 @@ hfs_filedone(struct vnode *vp, vfs_context_t context)
 	/*
 	 * Shrink the peof to the smallest size neccessary to contain the leof.
 	 */
-	if (blks < fp->ff_blocks)
+	if (blks < fp->ff_blocks) {
 		(void) hfs_truncate(vp, leof, IO_NDELAY, 0, 0, context);
+	}
+
 	hfs_unlock(cp);
 	(void) cluster_push(vp, cluster_flags);
 	hfs_lock(cp, HFS_FORCE_LOCK);
@@ -871,7 +1027,7 @@ hfs_getnewvnode(
 	if (cp == NULL) {
 		return (ENOENT);
 	}
-	
+
 	/* 
 	 * If we get a cnode/vnode pair out of hfs_chash_getcnode, then update the 
 	 * descriptor in the cnode as needed if the cnode represents a hardlink.  
@@ -913,7 +1069,7 @@ hfs_getnewvnode(
 					vnode_put (*vpp);
 					*vpp = NULL;
 				}
-
+				
 				/*
 				 * If we raced with VNOP_RECLAIM for this vnode, the hash code could
 				 * have observed it after the c_vp or c_rsrc_vp fields had been torn down;
@@ -925,17 +1081,22 @@ hfs_getnewvnode(
 				if (hflags) {
 					hfs_chashwakeup(hfsmp, cp, hflags);
 				}
-
+				
 				*out_flags = GNV_CAT_ATTRCHANGED;
 				return ERECYCLE;	
 			}
 			else {
-				/* Otherwise, CNID != fileid. Go ahead and copy in the new descriptor */
+				/* 
+				 * Otherwise, CNID != fileid. Go ahead and copy in the new descriptor. 
+				 *
+				 * Replacing the descriptor here is fine because we looked up the item without
+				 * a vnode in hand before.  If a vnode existed, its identity must be attached to this
+				 * item.  We are not susceptible to the lookup fastpath issue at this point.
+				 */
 				replace_desc(cp, descp);
 			}
 		}
 	}
-	
 	
 	/* Check if we found a matching vnode */
 	if (*vpp != NULL) {
@@ -1210,8 +1371,10 @@ hfs_getnewvnode(
 	}
 	
 #if CONFIG_PROTECT
-	if (!issystemfile && (*out_flags & GNV_NEW_CNODE))
+	/* Initialize the cp data structures. The key should be in place now. */
+	if (!issystemfile && (*out_flags & GNV_NEW_CNODE)) {
 		cp_entry_init(cp, mp);
+	}
 #endif
 
 	*vpp = vp;
@@ -1264,7 +1427,7 @@ hfs_reclaim_cnode(struct cnode *cp)
 	}
 #endif
 #if CONFIG_PROTECT
-	cp_entry_destroy(cp);
+	cp_entry_destroy(&cp->c_cpentry);
 #endif
 	
 	
@@ -1303,7 +1466,6 @@ hfs_valid_cnode(struct hfsmount *hfsmp, struct vnode *dvp, struct componentname 
 	if (dvp && cnp) {
 		int lookup = 0;
 		struct cat_fork fork;
-
 		bzero(&cndesc, sizeof(cndesc));
 		cndesc.cd_nameptr = (const u_int8_t *)cnp->cn_nameptr;
 		cndesc.cd_namelen = cnp->cn_namelen;
@@ -1327,6 +1489,7 @@ hfs_valid_cnode(struct hfsmount *hfsmp, struct vnode *dvp, struct componentname 
 		 */
 		
 		lookup = cat_lookup (hfsmp, &cndesc, 0, NULL, &attr, &fork, NULL);
+
 		if ((lookup == 0) && (cnid == attr.ca_fileid)) {
 			stillvalid = 1;
 			*error = 0;
@@ -1394,6 +1557,7 @@ notvalid:
 	return (stillvalid);
 }
 
+
 /*
  * Per HI and Finder requirements, HFS should add in the
  * date/time that a particular directory entry was added 
@@ -1408,11 +1572,11 @@ notvalid:
  */
 void hfs_write_dateadded (struct cat_attr *attrp, u_int32_t dateadded) {
 	u_int8_t *finfo = NULL;
-	
+
 	/* overlay the FinderInfo to the correct pointer, and advance */
 	finfo = (u_int8_t*)attrp->ca_finderinfo;
 	finfo = finfo + 16;
-	
+
 	/* 
 	 * Make sure to write it out as big endian, since that's how
 	 * finder info is defined.  
@@ -1427,27 +1591,27 @@ void hfs_write_dateadded (struct cat_attr *attrp, u_int32_t dateadded) {
 	else if (S_ISDIR(attrp->ca_mode)) {
 		struct FndrExtendedDirInfo *extinfo = (struct FndrExtendedDirInfo *)finfo;
 		extinfo->date_added = OSSwapHostToBigInt32(dateadded);		
-		attrp->ca_recflags |= kHFSHasDateAddedMask; 
+				attrp->ca_recflags |= kHFSHasDateAddedMask; 
 	}
-    
 	/* If it were neither directory/file, then we'd bail out */
 	return;
 }
 
+
 u_int32_t hfs_get_dateadded (struct cnode *cp) {
 	u_int8_t *finfo = NULL;
 	u_int32_t dateadded = 0;
-	
+
 	if ((cp->c_attr.ca_recflags & kHFSHasDateAddedMask) == 0) {
 		/* Date added was never set.  Return 0. */
 		return dateadded;
 	}
-	
-    
+
+
 	/* overlay the FinderInfo to the correct pointer, and advance */
 	finfo = (u_int8_t*)cp->c_finderinfo;
 	finfo = finfo + 16;
-	
+
 	/* 
 	 * FinderInfo is written out in big endian... make sure to convert it to host
 	 * native before we use it.
@@ -1460,11 +1624,9 @@ u_int32_t hfs_get_dateadded (struct cnode *cp) {
 		struct FndrExtendedDirInfo *extinfo = (struct FndrExtendedDirInfo *)finfo;
 		dateadded = OSSwapBigToHostInt32 (extinfo->date_added);
 	}
-    
+
 	return dateadded;
 }
-
-
 
 /*
  * Touch cnode times based on c_touch_xxx flags
@@ -1546,7 +1708,7 @@ hfs_touchtimes(struct hfsmount *hfsmp, struct cnode* cp)
 			cp->c_flag |= C_MODIFIED;
 			touchvol = 1;
 		}
-		
+
 		if (cp->c_flag & C_NEEDS_DATEADDED) {
 			hfs_write_dateadded (&(cp->c_attr), tv.tv_sec);
 			cp->c_flag |= C_MODIFIED;

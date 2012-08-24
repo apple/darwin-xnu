@@ -96,6 +96,8 @@ struct in_ifaddr {
 	struct sockaddr_in	ia_sockmask;	/* reserve space for general netmask */
 	TAILQ_ENTRY(in_ifaddr)	ia_hash;	/* hash bucket entry */
 };
+
+#define	ifatoia(ifa)	((struct in_ifaddr *)(void *)(ifa))
 #endif /* XNU_KERNEL_PRIVATE */
 
 struct	in_aliasreq {
@@ -458,6 +460,7 @@ do {									\
 
 struct	route;
 struct	ip_moptions;
+struct inpcb;
 
 /*
  * Return values for imo_multi_filter().
@@ -470,7 +473,7 @@ struct	ip_moptions;
 extern void in_ifaddr_init(void);
 extern int imo_multi_filter(const struct ip_moptions *, const struct ifnet *,
     const struct sockaddr *, const struct sockaddr *);
-extern int imo_clone(struct ip_moptions *, struct ip_moptions *);
+extern int imo_clone(struct inpcb *, struct inpcb *);
 extern void inm_commit(struct in_multi *);
 extern void inm_clear_recorded(struct in_multi *);
 extern void inm_print(const struct in_multi *);
@@ -497,8 +500,6 @@ extern u_int32_t inaddr_hashval(u_int32_t);
 extern void in_purgeaddrs(struct ifnet *);
 extern void	imf_leave(struct in_mfilter *);
 extern void	imf_purge(struct in_mfilter *);
-
-struct inpcb;
 
 __private_extern__ int inp_join_group(struct inpcb *, struct sockopt *);
 __private_extern__ int inp_leave_group(struct inpcb *, struct sockopt *);

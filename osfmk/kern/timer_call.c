@@ -74,6 +74,15 @@ lck_grp_attr_t          timer_call_lck_grp_attr;
 #define MPQUEUE(x)	((mpqueue_head_t *)(x))
 #define TIMER_CALL(x)	((timer_call_t)(x))
 
+
+uint64_t past_deadline_timers;
+uint64_t past_deadline_deltas;
+uint64_t past_deadline_longest;
+uint64_t past_deadline_shortest = ~0ULL;
+enum {PAST_DEADLINE_TIMER_ADJUSTMENT_NS = 10 * 1000};
+
+uint64_t past_deadline_timer_adjustment;
+
 static boolean_t timer_call_enter_internal(timer_call_t call, timer_call_param_t param1, uint64_t deadline, uint32_t flags);
 boolean_t 	mach_timer_coalescing_enabled = TRUE;
 
@@ -92,6 +101,7 @@ timer_call_initialize(void)
 	lck_attr_setdefault(&timer_call_lck_attr);
 	lck_grp_attr_setdefault(&timer_call_lck_grp_attr);
 	lck_grp_init(&timer_call_lck_grp, "timer_call", &timer_call_lck_grp_attr);
+	nanotime_to_absolutetime(0, PAST_DEADLINE_TIMER_ADJUSTMENT_NS, &past_deadline_timer_adjustment);
 }
 
 
@@ -332,6 +342,22 @@ timer_call_enter_internal(
 		deadline += slop;
 	}
 
+#if	defined(__i386__) || defined(__x86_64__)	
+	uint64_t ctime = mach_absolute_time();
+	if (__improbable(deadline < ctime)) {
+		uint64_t delta = (ctime - deadline);
+
+		past_deadline_timers++;
+		past_deadline_deltas += delta;
+		if (delta > past_deadline_longest)
+			past_deadline_longest = deadline;
+		if (delta < past_deadline_shortest)
+			past_deadline_shortest = delta;
+
+		deadline = ctime + past_deadline_timer_adjustment;
+		call->soft_deadline = deadline;
+	}
+#endif
 	queue = timer_queue_assign(deadline);
 
 	old_queue = timer_call_enqueue_deadline_unlocked(call, queue, deadline);
@@ -469,10 +495,9 @@ timer_queue_expire(
 			simple_unlock(&call->lock);
 			timer_call_unlock(queue);
 
-			KERNEL_DEBUG_CONSTANT(DECR_TIMER_CALLOUT | DBG_FUNC_START,
-					      func,
-					      param0,
-					      param1, 0, 0);
+			KERNEL_DEBUG_CONSTANT_IST(KDEBUG_TRACE, 
+				DECR_TIMER_CALLOUT | DBG_FUNC_START,
+				VM_KERNEL_UNSLIDE(func), param0, param1, 0, 0);
 
 #if CONFIG_DTRACE && (DEVELOPMENT || DEBUG )
 			DTRACE_TMR3(callout__start, timer_call_func_t, func, 
@@ -488,10 +513,9 @@ timer_queue_expire(
 										timer_call_param_t, param1);
 #endif
 
-			KERNEL_DEBUG_CONSTANT(DECR_TIMER_CALLOUT | DBG_FUNC_END,
-					      func,
-					      param0,
-					      param1, 0, 0);
+			KERNEL_DEBUG_CONSTANT_IST(KDEBUG_TRACE, 
+				DECR_TIMER_CALLOUT | DBG_FUNC_END,
+				VM_KERNEL_UNSLIDE(func), param0, param1, 0, 0);
 
 			timer_call_lock_spin(queue);
 		}

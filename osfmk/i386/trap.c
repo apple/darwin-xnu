@@ -60,8 +60,6 @@
 * Hardware trap/fault handler.
  */
 
-#include <mach_kdb.h>
-#include <mach_kgdb.h>
 #include <mach_kdp.h>
 #include <mach_ldebug.h>
 
@@ -93,18 +91,6 @@
 #include <kern/debug.h>
 
 #include <sys/kdebug.h>
-
-#if	MACH_KGDB
-#include <kgdb/kgdb_defs.h>
-#endif	/* MACH_KGDB */
-
-#if 	MACH_KDB
-#include <debug.h>
-#include <ddb/db_watch.h>
-#include <ddb/db_run.h>
-#include <ddb/db_break.h>
-#include <ddb/db_trap.h>
-#endif	/* MACH_KDB */
 
 #include <string.h>
 
@@ -167,7 +153,7 @@ thread_syscall_return(
 			    == (SYSCALL_CLASS_MACH << SYSCALL_CLASS_SHIFT);
 		if (kdebug_enable && is_mach) {
 		        /* Mach trap */
-		        KERNEL_DEBUG_CONSTANT(
+		        KERNEL_DEBUG_CONSTANT_IST(KDEBUG_TRACE, 
 			      MACHDBG_CODE(DBG_MACH_EXCP_SC,code)|DBG_FUNC_END,
 			      ret, 0, 0, 0, 0);
 		}
@@ -191,7 +177,7 @@ thread_syscall_return(
 		is_mach = (code < 0);
 		if (kdebug_enable && is_mach) {
 		        /* Mach trap */
-		        KERNEL_DEBUG_CONSTANT(
+		        KERNEL_DEBUG_CONSTANT_IST(KDEBUG_TRACE, 
 			      MACHDBG_CODE(DBG_MACH_EXCP_SC,-code)|DBG_FUNC_END,
 			      ret, 0, 0, 0, 0);
 		}
@@ -214,44 +200,6 @@ thread_syscall_return(
 }
 
 
-#if	MACH_KDB
-boolean_t	debug_all_traps_with_kdb = FALSE;
-extern struct db_watchpoint *db_watchpoint_list;
-extern boolean_t db_watchpoints_inserted;
-extern boolean_t db_breakpoints_inserted;
-
-void
-thread_kdb_return(void)
-{
-	thread_t		thr_act = current_thread();
-	x86_saved_state_t	*iss = USER_STATE(thr_act);
-
-	pal_register_cache_state(thr_act, DIRTY);
-
-        if (is_saved_state64(iss)) {
-	        x86_saved_state64_t	*regs;
-		
-		regs = saved_state64(iss);
-
-		if (kdb_trap(regs->isf.trapno, (int)regs->isf.err, (void *)regs)) {
-		        thread_exception_return();
-			/*NOTREACHED*/
-		}
-
-	} else {
-	        x86_saved_state32_t	*regs;
-		
-		regs = saved_state32(iss);
-
-		if (kdb_trap(regs->trapno, regs->err, (void *)regs)) {
-		        thread_exception_return();
-			/*NOTREACHED*/
-		}
-	}
-}
-
-#endif	/* MACH_KDB */
-
 static inline void
 user_page_fault_continue(
 			 kern_return_t	kr)
@@ -259,61 +207,24 @@ user_page_fault_continue(
 	thread_t	thread = current_thread();
 	user_addr_t	vaddr;
 
-#if	MACH_KDB
-	x86_saved_state_t *regs = USER_STATE(thread);
-	int		err;
-	int		trapno;
-
-	assert((is_saved_state32(regs) && !thread_is_64bit(thread)) ||
-	       (is_saved_state64(regs) &&  thread_is_64bit(thread)));
-#endif
-
-        if (thread_is_64bit(thread)) {
-	        x86_saved_state64_t	*uregs;
+	if (thread_is_64bit(thread)) {
+		x86_saved_state64_t	*uregs;
 
 		uregs = USER_REGS64(thread);
 
-#if	MACH_KDB
-		trapno = uregs->isf.trapno;
-		err = (int)uregs->isf.err;
-#endif
 		vaddr = (user_addr_t)uregs->cr2;
 	} else {
 	        x86_saved_state32_t	*uregs;
 
 		uregs = USER_REGS32(thread);
 
-#if	MACH_KDB
-		trapno = uregs->trapno;
-		err = uregs->err;
-#endif
 		vaddr = uregs->cr2;
 	}
 
 	if (__probable((kr == KERN_SUCCESS) || (kr == KERN_ABORTED))) {
-#if	MACH_KDB
-		if (!db_breakpoints_inserted) {
-			db_set_breakpoints();
-		}
-		if (db_watchpoint_list &&
-		    db_watchpoints_inserted &&
-		    (err & T_PF_WRITE) &&
-		    db_find_watchpoint(thread->map,
-				       (vm_offset_t)vaddr,
-				       saved_state32(regs)))
-			kdb_trap(T_WATCHPOINT, 0, saved_state32(regs));
-#endif	/* MACH_KDB */
 		thread_exception_return();
 		/*NOTREACHED*/
 	}
-
-#if	MACH_KDB
-	if (debug_all_traps_with_kdb &&
-	    kdb_trap(trapno, err, saved_state32(regs))) {
-		thread_exception_return();
-		/*NOTREACHED*/
-	}
-#endif	/* MACH_KDB */
 
 	/* PAL debug hook */
 	pal_dbg_page_fault( thread, vaddr, kr );
@@ -442,7 +353,8 @@ interrupt(x86_saved_state_t *state)
 	boolean_t	user_mode = FALSE;
 	int		ipl;
 	int		cnum = cpu_number();
-
+	int		itype = 0;
+	
 	if (is_saved_state64(state) == TRUE) {
 	        x86_saved_state64_t	*state64;
 
@@ -465,14 +377,23 @@ interrupt(x86_saved_state_t *state)
 		interrupt_num = state32->trapno;
 	}
 
-	KERNEL_DEBUG_CONSTANT(
+	if (interrupt_num == (LAPIC_DEFAULT_INTERRUPT_BASE + LAPIC_INTERPROCESSOR_INTERRUPT))
+		itype = 1;
+	else if (interrupt_num == (LAPIC_DEFAULT_INTERRUPT_BASE + LAPIC_TIMER_INTERRUPT))
+		itype = 2;
+	else
+		itype = 3;
+
+	KERNEL_DEBUG_CONSTANT_IST(KDEBUG_TRACE, 
 		MACHDBG_CODE(DBG_MACH_EXCP_INTR, 0) | DBG_FUNC_START,
-		interrupt_num, rip, user_mode, 0, 0);
+		interrupt_num,
+		(user_mode ? rip : VM_KERNEL_UNSLIDE(rip)),
+		user_mode, itype, 0);
 
 	SCHED_STATS_INTERRUPT(current_processor());
 
 	ipl = get_preemption_level();
-
+	
 	/*
 	 * Handle local APIC interrupts
 	 * else call platform expert for devices.
@@ -484,7 +405,8 @@ interrupt(x86_saved_state_t *state)
 		panic("Preemption level altered by interrupt vector 0x%x: initial 0x%x, final: 0x%x\n", interrupt_num, ipl, get_preemption_level());
 	}
 
-	KERNEL_DEBUG_CONSTANT(
+
+	KERNEL_DEBUG_CONSTANT_IST(KDEBUG_TRACE, 
 		MACHDBG_CODE(DBG_MACH_EXCP_INTR, 0) | DBG_FUNC_END,
 		interrupt_num, 0, 0, 0, 0);
 
@@ -514,7 +436,7 @@ interrupt(x86_saved_state_t *state)
 			kernel_stack_depth_max = (vm_offset_t)depth;
 			KERNEL_DEBUG_CONSTANT(
 				MACHDBG_CODE(DBG_MACH_SCHED, MACH_STACK_DEPTH),
-				(long) depth, (long) rip, 0, 0, 0);
+				(long) depth, (long) VM_KERNEL_UNSLIDE(rip), 0, 0, 0);
 		}
 	}
 }
@@ -562,9 +484,6 @@ kernel_trap(
 	int			fault_in_copy_window = -1;
 #endif
 	int			is_user = 0;
-#if MACH_KDB
-	pt_entry_t		*pte;
-#endif /* MACH_KDB */
 	
 	thread = current_thread();
 
@@ -639,8 +558,9 @@ kernel_trap(
 	if (__improbable(T_PREEMPT == type)) {
 	        ast_taken(AST_PREEMPTION, FALSE);
 
-		KERNEL_DEBUG_CONSTANT((MACHDBG_CODE(DBG_MACH_EXCP_KTRAP_x86, type)) | DBG_FUNC_NONE,
-				      0, 0, 0, kern_ip, 0);
+		KERNEL_DEBUG_CONSTANT_IST(KDEBUG_TRACE, 
+			(MACHDBG_CODE(DBG_MACH_EXCP_KTRAP_x86, type)) | DBG_FUNC_NONE,
+			0, 0, 0, VM_KERNEL_UNSLIDE(kern_ip), 0);
 		return;
 	}
 	
@@ -713,10 +633,11 @@ kernel_trap(
 #endif
 		}
 	}
-
-	KERNEL_DEBUG_CONSTANT(
+	user_addr_t	kd_vaddr = is_user ? vaddr : VM_KERNEL_UNSLIDE(vaddr);	
+	KERNEL_DEBUG_CONSTANT_IST(KDEBUG_TRACE, 
 		(MACHDBG_CODE(DBG_MACH_EXCP_KTRAP_x86, type)) | DBG_FUNC_NONE,
-		(unsigned)(vaddr >> 32), (unsigned)vaddr, is_user, kern_ip, 0);
+		(unsigned)(kd_vaddr >> 32), (unsigned)kd_vaddr, is_user,
+		VM_KERNEL_UNSLIDE(kern_ip), 0);
 
 
 	(void) ml_set_interrupts_enabled(intr);
@@ -760,24 +681,6 @@ kernel_trap(
 #endif
 	    case T_PAGE_FAULT:
 
-#if	MACH_KDB
-		/*
-		 * Check for watchpoint on kernel static data.
-		 * vm_fault would fail in this case 
-		 */
-		if (map == kernel_map && db_watchpoint_list && db_watchpoints_inserted &&
-		    (code & T_PF_WRITE) && vaddr < vm_map_max(map) &&
-		    ((*(pte = pmap_pte(kernel_pmap, (vm_map_offset_t)vaddr))) & INTEL_PTE_WRITE) == 0) {
-			pmap_store_pte(
-				pte,
-				*pte | INTEL_PTE_VALID | INTEL_PTE_WRITE);
-			/* XXX need invltlb here? */
-
-			result = KERN_SUCCESS;
-			goto look_for_watchpoints;
-		}
-#endif	/* MACH_KDB */
-
 #if CONFIG_DTRACE
 		if (thread != THREAD_NULL && thread->options & TH_OPT_DTRACE) {	/* Executing under dtrace_probe? */
 			if (dtrace_tally_fault(vaddr)) { /* Should a fault under dtrace be ignored? */
@@ -790,7 +693,6 @@ kernel_trap(
 			}
 		}
 #endif /* CONFIG_DTRACE */
-
 		
 		prot = VM_PROT_READ;
 
@@ -806,18 +708,6 @@ kernel_trap(
 				  prot,
 				  FALSE, 
 				  THREAD_UNINT, NULL, 0);
-
-#if	MACH_KDB
-		if (result == KERN_SUCCESS) {
-		        /*
-			 * Look for watchpoints
-			 */
-look_for_watchpoints:
-		        if (map == kernel_map && db_watchpoint_list && db_watchpoints_inserted && (code & T_PF_WRITE) &&
-			    db_find_watchpoint(map, vaddr, saved_state))
-			        kdb_trap(T_WATCHPOINT, 0, saved_state);
-		}
-#endif	/* MACH_KDB */
 
 		if (result == KERN_SUCCESS) {
 #if NCOPY_WINDOWS > 0
@@ -879,30 +769,14 @@ debugger_entry:
 		 * access through the debugger.
 		 */
 		sync_iss_to_iks(state);
-#if MACH_KDB
-restart_debugger:
-#endif /* MACH_KDB */		
 #if  MACH_KDP
-                if (current_debugger != KDB_CUR_DB) {
+		if (current_debugger != KDB_CUR_DB) {
 			if (kdp_i386_trap(type, saved_state, result, (vm_offset_t)vaddr))
 				return;
-		} else {
-#endif /* MACH_KDP */
-#if MACH_KDB
-			if (kdb_trap(type, code, saved_state)) {
-				if (switch_debugger) {
-					current_debugger = KDP_CUR_DB;
-					switch_debugger = 0;
-					goto restart_debugger;
-				}
-				return;
-			}
-#endif /* MACH_KDB */
-#if MACH_KDP
 		}
 #endif
 	}
-	__asm__ volatile("cli":::"cc");
+	pal_cli();
 	panic_trap(saved_state);
 	/*
 	 * NO RETURN
@@ -952,11 +826,12 @@ panic_trap(x86_saved_state32_t *regs)
 	      "EAX: 0x%08x, EBX: 0x%08x, ECX: 0x%08x, EDX: 0x%08x\n"
 	      "CR2: 0x%08x, EBP: 0x%08x, ESI: 0x%08x, EDI: 0x%08x\n"
 	      "EFL: 0x%08x, EIP: 0x%08x, CS:  0x%08x, DS:  0x%08x\n"
-	      "Error code: 0x%08x\n",
+	      "Error code: 0x%08x%s\n",
 	      regs->eip, regs->trapno, trapname, cr0, cr2, cr3, cr4,
 	      regs->eax,regs->ebx,regs->ecx,regs->edx,
 	      regs->cr2,regs->ebp,regs->esi,regs->edi,
-	      regs->efl,regs->eip,regs->cs & 0xFFFF, regs->ds & 0xFFFF, regs->err);
+	      regs->efl,regs->eip,regs->cs & 0xFFFF, regs->ds & 0xFFFF, regs->err,
+	      virtualized ? " VMM" : "");
 	/*
 	 * This next statement is not executed,
 	 * but it's needed to stop the compiler using tail call optimization
@@ -972,7 +847,7 @@ panic_trap(x86_saved_state64_t *regs)
 {
 	const char	*trapname = "Unknown";
 	pal_cr_t	cr0, cr2, cr3, cr4;
-	boolean_t	potential_smep_fault = FALSE;
+	boolean_t	potential_smep_fault = FALSE, potential_kernel_NX_fault = FALSE;
 
 	pal_get_control_registers( &cr0, &cr2, &cr3, &cr4 );
 	assert(ml_get_interrupts_enabled() == FALSE);
@@ -991,8 +866,12 @@ panic_trap(x86_saved_state64_t *regs)
 	if (regs->isf.trapno < TRAP_TYPES)
 	        trapname = trap_type[regs->isf.trapno];
 
-	if ((regs->isf.trapno == T_PAGE_FAULT) && (regs->isf.err == (T_PF_PROT | T_PF_EXECUTE)) && (pmap_smep_enabled) && (regs->isf.rip == regs->cr2) && (regs->isf.rip < VM_MAX_USER_PAGE_ADDRESS)) {
-		potential_smep_fault = TRUE;
+	if ((regs->isf.trapno == T_PAGE_FAULT) && (regs->isf.err == (T_PF_PROT | T_PF_EXECUTE)) && (regs->isf.rip == regs->cr2)) {
+		if (pmap_smep_enabled && (regs->isf.rip < VM_MAX_USER_PAGE_ADDRESS)) {
+			potential_smep_fault = TRUE;
+		} else if (regs->isf.rip >= VM_MIN_KERNEL_AND_KEXT_ADDRESS) {
+			potential_kernel_NX_fault = TRUE;
+		}
 	}
 
 #undef panic
@@ -1003,7 +882,7 @@ panic_trap(x86_saved_state64_t *regs)
 	      "R8:  0x%016llx, R9:  0x%016llx, R10: 0x%016llx, R11: 0x%016llx\n"
 	      "R12: 0x%016llx, R13: 0x%016llx, R14: 0x%016llx, R15: 0x%016llx\n"
 	      "RFL: 0x%016llx, RIP: 0x%016llx, CS:  0x%016llx, SS:  0x%016llx\n"
-	      "CR2: 0x%016llx, Error code: 0x%016llx, Faulting CPU: 0x%x%s\n",
+	      "Fault CR2: 0x%016llx, Error code: 0x%016llx, Fault CPU: 0x%x%s%s%s\n",
 	      regs->isf.rip, regs->isf.trapno, trapname,
 	      cr0, cr2, cr3, cr4,
 	      regs->rax, regs->rbx, regs->rcx, regs->rdx,
@@ -1012,7 +891,9 @@ panic_trap(x86_saved_state64_t *regs)
 	      regs->r12, regs->r13, regs->r14, regs->r15,
 	      regs->isf.rflags, regs->isf.rip, regs->isf.cs & 0xFFFF,
 	      regs->isf.ss & 0xFFFF,regs->cr2, regs->isf.err, regs->isf.cpu,
-	      potential_smep_fault ? " SMEP/NX fault" : "");
+	      virtualized ? " VMM" : "",
+	      potential_kernel_NX_fault ? " Kernel NX fault" : "",
+	      potential_smep_fault ? " SMEP/User NX fault" : "");
 	/*
 	 * This next statement is not executed,
 	 * but it's needed to stop the compiler using tail call optimization
@@ -1086,7 +967,7 @@ user_trap(
 
 	pal_sti();
 
-	KERNEL_DEBUG_CONSTANT(
+	KERNEL_DEBUG_CONSTANT_IST(KDEBUG_TRACE, 
 		(MACHDBG_CODE(DBG_MACH_EXCP_UTRAP_x86, type)) | DBG_FUNC_NONE,
 		(unsigned)(vaddr>>32), (unsigned)vaddr,
 		(unsigned)(rip>>32), (unsigned)rip, 0);
@@ -1269,14 +1150,6 @@ user_trap(
 		break;
 
 	    default:
-#if     MACH_KGDB
-		Debugger("Unanticipated user trap");
-		return;
-#endif  /* MACH_KGDB */
-#if	MACH_KDB
-		if (kdb_trap(type, err, saved_state32(saved_state)))
-		    return;
-#endif	/* MACH_KDB */
 		panic("Unexpected user trap, type %d", type);
 		return;
 	}
@@ -1336,39 +1209,6 @@ i386_exception(
 	/*NOTREACHED*/
 }
 
-
-#if	MACH_KDB
-
-extern void 	db_i386_state(x86_saved_state32_t *regs);
-
-#include <ddb/db_output.h>
-
-void 
-db_i386_state(
-	x86_saved_state32_t *regs)
-{
-  	db_printf("eip	%8x\n", regs->eip);
-  	db_printf("trap	%8x\n", regs->trapno);
-  	db_printf("err	%8x\n", regs->err);
-  	db_printf("efl	%8x\n", regs->efl);
-  	db_printf("ebp	%8x\n", regs->ebp);
-  	db_printf("esp	%8x\n", regs->cr2);
-  	db_printf("uesp	%8x\n", regs->uesp);
-  	db_printf("cs	%8x\n", regs->cs & 0xff);
-  	db_printf("ds	%8x\n", regs->ds & 0xff);
-  	db_printf("es	%8x\n", regs->es & 0xff);
-  	db_printf("fs	%8x\n", regs->fs & 0xff);
-  	db_printf("gs	%8x\n", regs->gs & 0xff);
-  	db_printf("ss	%8x\n", regs->ss & 0xff);
-  	db_printf("eax	%8x\n", regs->eax);
-  	db_printf("ebx	%8x\n", regs->ebx);
-   	db_printf("ecx	%8x\n", regs->ecx);
-  	db_printf("edx	%8x\n", regs->edx);
-  	db_printf("esi	%8x\n", regs->esi);
-  	db_printf("edi	%8x\n", regs->edi);
-}
-
-#endif	/* MACH_KDB */
 
 /* Synchronize a thread's i386_kernel_state (if any) with the given
  * i386_saved_state_t obtained from the trap/IPI handler; called in

@@ -196,7 +196,8 @@ enum reloc_type_generic
     GENERIC_RELOC_PAIR,		/* Only follows a GENERIC_RELOC_SECTDIFF */
     GENERIC_RELOC_SECTDIFF,
     GENERIC_RELOC_PB_LA_PTR,	/* prebound lazy pointer */
-    GENERIC_RELOC_LOCAL_SECTDIFF
+    GENERIC_RELOC_LOCAL_SECTDIFF,
+    GENERIC_RELOC_TLV		/* thread local variables */
 };
 
 #endif /* _MACHO_RELOC_H_ */

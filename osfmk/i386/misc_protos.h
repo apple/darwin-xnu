@@ -37,9 +37,11 @@
 struct boot_args;
 struct cpu_data;
 
+extern	boolean_t virtualized;
+
 extern void		vstart(vm_offset_t);
 extern void		i386_init(void);
-
+extern void		x86_init_wrapper(uintptr_t, uintptr_t) __attribute__((noreturn));
 extern void		i386_vm_init(
 				uint64_t,
 				boolean_t,
@@ -171,4 +173,5 @@ extern void act_machine_switch_pcb(thread_t old, thread_t new);
 #define FULL_SLAVE_INIT	(NULL)
 #define FAST_SLAVE_INIT	((void *)(uintptr_t)1)
 
+uint64_t ml_early_random(void);
 #endif /* _I386_MISC_PROTOS_H_ */

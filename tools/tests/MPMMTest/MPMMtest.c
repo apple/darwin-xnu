@@ -8,6 +8,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <err.h>
+#include <unistd.h>
 
 #include <pthread.h>
 #include <mach/mach.h>
@@ -417,6 +418,7 @@ server(void *serverarg)
 			}
 		}
 	}
+	return NULL;
 }
 
 static inline void
@@ -482,6 +484,7 @@ calibrate_client_work(void)
 			printf("calibration_count=%d calibration_usec=%d\n",
 				calibration_count, calibration_usec);
 	}
+	return NULL;
 }
 
 static void *
@@ -496,6 +499,7 @@ client_work(void)
 	if (client_delay) {
 		usleep(client_delay);
 	}
+	return NULL;
 }
 
 void *client(void *threadarg) 
@@ -505,7 +509,7 @@ void *client(void *threadarg)
 	mach_msg_header_t *req, *reply; 
 	mach_port_t bsport, servport;
 	kern_return_t ret;
-	long server_num = (long) threadarg;
+	int server_num = (int) threadarg;
 	void *ints = malloc(sizeof(u_int32_t) * num_ints);
 
 	if (verbose) 
@@ -602,7 +606,7 @@ void *client(void *threadarg)
 	}
 
 	free(ints);
-	return;
+	return NULL;
 }
 
 static void
@@ -617,12 +621,12 @@ thread_spawn(thread_id_t *thread, void *(fn)(void *), void *arg) {
 		if (ret != 0)
 			err(1, "pthread_create()");
 		if (verbose)
-			printf("created pthread 0x%x\n", thread->tid);
+			printf("created pthread %p\n", thread->tid);
 	} else {
 		thread->pid = fork();
 		if (thread->pid == 0) {
 			if (verbose)
-				printf("calling 0x%x(0x%x)\n", fn, arg);
+				printf("calling %p(%p)\n", fn, arg);
 			fn(arg);
 			exit(0);
 		}
@@ -636,10 +640,10 @@ thread_join(thread_id_t *thread) {
 	if (threaded) {
 		kern_return_t	ret;
 		if (verbose)
-			printf("joining thread 0x%x\n", thread->tid);
+			printf("joining thread %p\n", thread->tid);
 		ret = pthread_join(thread->tid, NULL);
 		if (ret != KERN_SUCCESS)
-			err(1, "pthread_join(0x%x)", thread->tid);
+			err(1, "pthread_join(%p)", thread->tid);
 	} else {
 		int	stat;
 		if (verbose)

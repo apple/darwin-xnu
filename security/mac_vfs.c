@@ -1221,7 +1221,7 @@ mac_mount_label_associate(vfs_context_t ctx, struct mount *mp)
 	}
 
 	MAC_PERFORM(mount_label_associate, cred, mp, mp->mnt_mntlabel);
-#if MAC_DEBUG
+#if DEBUG
 	printf("MAC Framework enabling %s support: %s -> %s (%s)\n",
 		mp->mnt_flag & MNT_MULTILABEL ? "multilabel" : "singlelabel", 
 		mp->mnt_vfsstat.f_mntfromname,

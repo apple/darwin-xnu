@@ -40,7 +40,7 @@ PSEUDO_INT(___pipe, pipe, 0)
 
 #elif defined(__x86_64__)
 
-PSEUDO(___pipe, pipe, 0)
+PSEUDO(___pipe, pipe, 0, cerror_nocancel)
 	movl	%eax, (%rdi)
 	movl	%edx, 4(%rdi)
 	xorl	%eax, %eax

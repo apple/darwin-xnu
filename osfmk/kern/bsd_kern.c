@@ -43,7 +43,6 @@
 #include <vm/vm_protos.h> /* last */
 
 #undef thread_should_halt
-#undef ipc_port_release
 
 /* BSD KERN COMPONENT INTERFACE */
 
@@ -54,10 +53,8 @@ extern unsigned int not_in_kdp; /* Skip acquiring locks if we're in kdp */
 thread_t get_firstthread(task_t);
 int get_task_userstop(task_t);
 int get_thread_userstop(thread_t);
-boolean_t thread_should_abort(thread_t);
 boolean_t current_thread_aborted(void);
 void task_act_iterate_wth_args(task_t, void(*)(thread_t, void *), void *);
-void ipc_port_release(ipc_port_t);
 kern_return_t get_signalact(task_t , thread_t *, int);
 int get_vmsubmap_entries(vm_map_t, vm_object_offset_t, vm_object_offset_t);
 void syscall_exit_funnelcheck(void);
@@ -218,6 +215,11 @@ check_actforsig(
 	return (result);
 }
 
+ledger_t  get_task_ledger(task_t t)
+{
+	return(t->ledger);
+}
+
 /*
  * This is only safe to call from a thread executing in
  * in the task's context or if the task is locked  Otherwise,
@@ -302,8 +304,9 @@ swap_task_map(task_t task, thread_t thread, vm_map_t map, boolean_t doswitch)
 	mp_disable_preemption();
 	old_map = task->map;
 	thread->map = task->map = map;
-	if (doswitch)
+	if (doswitch) {
 		pmap_switch(map->pmap);
+	}
 	mp_enable_preemption();
 	task_unlock(task);
 
@@ -462,6 +465,26 @@ get_thread_userstop(
  *
  */
 boolean_t
+get_task_pidsuspended(
+	task_t task)
+{
+    return (task->pidsuspended);
+}
+
+/*
+ *
+ */
+boolean_t 
+get_task_frozen(
+	task_t task)
+{
+    return (task->frozen);   
+}
+
+/*
+ *
+ */
+boolean_t
 thread_should_abort(
 	thread_t th)
 {
@@ -519,12 +542,6 @@ task_act_iterate_wth_args(
 	task_unlock(task);
 }
 
-void
-ipc_port_release(
-	ipc_port_t port)
-{
-	ipc_object_release(&(port)->ip_object);
-}
 
 void
 astbsd_on(void)
@@ -567,6 +584,10 @@ fill_taskprocinfo(task_t task, struct proc_taskinfo_internal * ptinfo)
 
 	queue_iterate(&task->threads, thread, thread_t, task_threads) {
 		uint64_t    tval;
+		spl_t x;
+
+		x = splsched();
+		thread_lock(thread);
 
 		if ((thread->state & TH_RUN) == TH_RUN)
 			numrunning++;
@@ -576,11 +597,21 @@ fill_taskprocinfo(task_t task, struct proc_taskinfo_internal * ptinfo)
 		tinfo.total_user += tval;
 
 		tval = timer_grab(&thread->system_timer);
-		tinfo.threads_system += tval;
-		tinfo.total_system += tval;
+
+		if (thread->precise_user_kernel_time) {
+			tinfo.threads_system += tval;
+			tinfo.total_system += tval;
+		} else {
+			/* system_timer may represent either sys or user */
+			tinfo.threads_user += tval;
+			tinfo.total_user += tval;
+		}
 
 		syscalls_unix += thread->syscalls_unix;
 		syscalls_mach += thread->syscalls_mach;
+
+		thread_unlock(thread);
+		splx(x);
 	}
 
 	ptinfo->pti_total_system = tinfo.total_system;
@@ -604,19 +635,21 @@ fill_taskprocinfo(task_t task, struct proc_taskinfo_internal * ptinfo)
 }
 
 int 
-fill_taskthreadinfo(task_t task, uint64_t thaddr, struct proc_threadinfo_internal * ptinfo, void * vpp, int *vidp)
+fill_taskthreadinfo(task_t task, uint64_t thaddr, int thuniqueid, struct proc_threadinfo_internal * ptinfo, void * vpp, int *vidp)
 {
 	thread_t  thact;
 	int err=0;
 	mach_msg_type_number_t count;
 	thread_basic_info_data_t basic_info;
 	kern_return_t kret;
+	uint64_t addr = 0;
 
 	task_lock(task);
 
 	for (thact  = (thread_t)queue_first(&task->threads);
 			!queue_end(&task->threads, (queue_entry_t)thact); ) {
-		if (thact->machine.cthread_self == thaddr)
+		addr = (thuniqueid==0)?thact->machine.cthread_self: thact->thread_id;
+		if (addr == thaddr)
 		{
 		
 			count = THREAD_BASIC_INFO_COUNT;
@@ -624,14 +657,9 @@ fill_taskthreadinfo(task_t task, uint64_t thaddr, struct proc_threadinfo_interna
 				err = 1;
 				goto out;	
 			}
-#if 0
-			ptinfo->pth_user_time = timer_grab(&basic_info.user_time);
-			ptinfo->pth_system_time = timer_grab(&basic_info.system_time);
-#else
 			ptinfo->pth_user_time = ((basic_info.user_time.seconds * NSEC_PER_SEC) + (basic_info.user_time.microseconds * NSEC_PER_USEC));
 			ptinfo->pth_system_time = ((basic_info.system_time.seconds * NSEC_PER_SEC) + (basic_info.system_time.microseconds * NSEC_PER_USEC));
 
-#endif
 			ptinfo->pth_cpu_usage = basic_info.cpu_usage;
 			ptinfo->pth_policy = basic_info.policy;
 			ptinfo->pth_run_state = basic_info.run_state;

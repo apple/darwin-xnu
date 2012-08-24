@@ -73,13 +73,14 @@
 #include <i386/misc_protos.h>
 #include <i386/mp.h>
 #include <i386/pmap.h>
+#if defined(__i386__)
+#include <i386/pmap_internal.h>
+#endif /* i386 */
 #if CONFIG_MCA
 #include <i386/machine_check.h>
 #endif
 
 #include <kern/misc_protos.h>
-
-#include <mach_kdb.h>
 
 #ifdef __x86_64__
 #define K_INTR_GATE (ACC_P|ACC_PL_K|ACC_INTR_GATE)
@@ -146,10 +147,11 @@
 	},
 
 #define USER_TRAP_SPC USER_TRAP
-			 
 
 // Declare the table using the macros we just set up
-struct fake_descriptor64 master_idt64[IDTSZ] __attribute__ ((aligned (4096))) = {
+struct fake_descriptor64 master_idt64[IDTSZ]
+	__attribute__ ((section("__HIB,__desc")))
+	__attribute__ ((aligned(PAGE_SIZE))) = {
 #include "../x86_64/idt_table.h"
 };
 #endif
@@ -163,7 +165,7 @@ struct fake_descriptor64 master_idt64[IDTSZ] __attribute__ ((aligned (4096))) = 
 /*
  * First cpu`s interrupt stack.
  */
-extern uint32_t		low_intstack[];	/* bottom */
+extern uint32_t		low_intstack[];		/* bottom */
 extern uint32_t		low_eintstack[];	/* top */
 
 /*
@@ -243,12 +245,14 @@ struct fake_descriptor cpudata_desc_pattern = {
 	ACC_P|ACC_PL_K|ACC_DATA_W
 };
 
+#if	NCOPY_WINDOWS > 0
 struct fake_descriptor userwindow_desc_pattern = {
 	(unsigned int) 0,
 	((NBPDE * NCOPY_WINDOWS) / PAGE_SIZE) - 1,
 	SZ_32 | SZ_G,
 	ACC_P|ACC_PL_U|ACC_DATA_W
 };
+#endif
 
 struct fake_descriptor physwindow_desc_pattern = {
 	(unsigned int) 0,
@@ -433,14 +437,6 @@ cpu_desc_init(cpu_data_t *cdp)
 		*(struct fake_descriptor *) &master_gdt[sel_idx(KERNEL_TSS)] =
 			temp_fake_desc;
 
-#if MACH_KDB
-		temp_fake_desc = tss_desc_pattern;
-		temp_fake_desc.offset = (vm_offset_t) &master_dbtss;
-		fix_desc(&temp_fake_desc, 1);
-		*(struct fake_descriptor *) &master_gdt[sel_idx(DEBUG_TSS)] =
-			temp_fake_desc;
-#endif
-
 		temp_fake_desc = cpudata_desc_pattern;
 		temp_fake_desc.offset = (vm_offset_t) &cpu_data_master;
 		fix_desc(&temp_fake_desc, 1);
@@ -508,13 +504,6 @@ cpu_desc_init(cpu_data_t *cdp)
 		bcopy((char *)master_gdt, (char *)cdt->gdt, sizeof(master_gdt));
 		bcopy((char *)master_ldt, (char *)cdp->cpu_ldtp, sizeof(master_ldt));
 		bzero((char *)&cdt->ktss, sizeof(struct i386_tss)); 
-#if	MACH_KDB
-		cdi->cdi_dbtss = (struct i386_tss *) (cpu_hi_desc +
-				offsetof(cpu_desc_table_t, dbtss));
-		bcopy((char *)&master_dbtss,
-				(char *)&cdt->dbtss,
-				sizeof(struct i386_tss));
-#endif	/* MACH_KDB */
 
 		/*
 		 * Fix up the entries in the GDT to point to
@@ -534,17 +523,6 @@ cpu_desc_init(cpu_data_t *cdp)
 		cdt->gdt[sel_idx(CPU_DATA_GS)] = cpudata_desc_pattern;
 		cdt->gdt[sel_idx(CPU_DATA_GS)].offset = (vm_offset_t) cdp;
 		fix_desc(&cdt->gdt[sel_idx(CPU_DATA_GS)], 1);
-
-#if	MACH_KDB /* this only works for legacy 32-bit machines */
-		cdt->gdt[sel_idx(DEBUG_TSS)] = tss_desc_pattern;
-		cdt->gdt[sel_idx(DEBUG_TSS)].offset = (vm_offset_t) cdi->cdi_dbtss;
-		fix_desc(&cdt->gdt[sel_idx(DEBUG_TSS)], 1);
-
-		cdt->dbtss.esp0 = (int)(db_task_stack_store +
-				(INTSTACK_SIZE * (cdp->cpu_number + 1)) - sizeof (natural_t));
-		cdt->dbtss.esp = cdt->dbtss.esp0;
-		cdt->dbtss.eip = (int)&db_task_start;
-#endif	/* MACH_KDB */
 
 		cdt->ktss.ss0 = KERNEL_DS;
 		cdt->ktss.io_bit_map_offset = 0x0FFF;	/* no IO bitmap */
@@ -568,10 +546,14 @@ cpu_desc_init64(cpu_data_t *cdp)
 		 */
 		cdi->cdi_ktss = (void *)&master_ktss64;
 		cdi->cdi_sstk = (vm_offset_t) &master_sstk.top;
+#if __x86_64__
+		cdi->cdi_gdt.ptr  = (void *)MASTER_GDT_ALIAS;
+		cdi->cdi_idt.ptr  = (void *)MASTER_IDT_ALIAS;
+#else
 		cdi->cdi_gdt.ptr  = (void *)master_gdt;
 		cdi->cdi_idt.ptr  = (void *)master_idt64;
+#endif
 		cdi->cdi_ldt  = (struct fake_descriptor *) master_ldt;
-
 
 		/* Replace the expanded LDTs and TSS slots in the GDT */
 		kernel_ldt_desc64.offset64 = UBER64(&master_ldt);
@@ -592,7 +574,11 @@ cpu_desc_init64(cpu_data_t *cdp)
 		/*
 		 * Set the double-fault stack as IST1 in the 64-bit TSS
 		 */
+#if __x86_64__
+		master_ktss64.ist1 = (uintptr_t) low_eintstack;
+#else
 		master_ktss64.ist1 = UBER64((uintptr_t) df_task_stack_end);
+#endif
 
 	} else {
 		cpu_desc_table64_t	*cdt = (cpu_desc_table64_t *) cdp->cpu_desc_tablep;
@@ -601,8 +587,12 @@ cpu_desc_init64(cpu_data_t *cdp)
 		 * heap (cpu_desc_table). 
 		 * LDT descriptors are mapped into a separate area.
 		 */
-		cdi->cdi_gdt.ptr  = (struct fake_descriptor *)cdt->gdt;
+#if __x86_64__
+		cdi->cdi_idt.ptr  = (void *)MASTER_IDT_ALIAS;
+#else
 		cdi->cdi_idt.ptr  = (void *)cdt->idt;
+#endif
+		cdi->cdi_gdt.ptr  = (struct fake_descriptor *)cdt->gdt;
 		cdi->cdi_ktss = (void *)&cdt->ktss;
 		cdi->cdi_sstk = (vm_offset_t)&cdt->sstk.top;
 		cdi->cdi_ldt  = cdp->cpu_ldtp;
@@ -610,7 +600,9 @@ cpu_desc_init64(cpu_data_t *cdp)
 		/*
 		 * Copy the tables
 		 */
+#if !__x86_64__
 		bcopy((char *)master_idt64, (char *)cdt->idt, sizeof(master_idt64));
+#endif
 		bcopy((char *)master_gdt, (char *)cdt->gdt, sizeof(master_gdt));
 		bcopy((char *)master_ldt, (char *)cdp->cpu_ldtp, sizeof(master_ldt));
 		bcopy((char *)&master_ktss64, (char *)&cdt->ktss, sizeof(struct x86_64_tss));
@@ -662,8 +654,8 @@ cpu_desc_load(cpu_data_t *cdp)
 	cdi->cdi_idt.size = 0x1000 + cdp->cpu_number;
 	cdi->cdi_gdt.size = sizeof(struct real_descriptor)*GDTSZ - 1;
 
-	lgdt((unsigned long *) &cdi->cdi_gdt);
-	lidt((unsigned long *) &cdi->cdi_idt);
+	lgdt((uintptr_t *) &cdi->cdi_gdt);
+	lidt((uintptr_t *) &cdi->cdi_idt);
 	lldt(KERNEL_LDT);
 
 	set_tr(KERNEL_TSS);
@@ -703,19 +695,18 @@ cpu_desc_load64(cpu_data_t *cdp)
 	/* Load the GDT, LDT, IDT and TSS */
 	cdi->cdi_gdt.size = sizeof(struct real_descriptor)*GDTSZ - 1;
 	cdi->cdi_idt.size = 0x1000 + cdp->cpu_number;
-	lgdt((unsigned long *) &cdi->cdi_gdt);
-	lidt((unsigned long *) &cdi->cdi_idt);
+	lgdt((uintptr_t *) &cdi->cdi_gdt);
+	lidt((uintptr_t *) &cdi->cdi_idt);
 	lldt(KERNEL_LDT);
 	set_tr(KERNEL_TSS);
 
-	/* Stuff the pre-cpu data area into the MSR and swapgs to activate */
-	wrmsr64(MSR_IA32_KERNEL_GS_BASE, (unsigned long)cdp);
+	/* Stuff the kernel per-cpu data area address into the MSRs */
+	wrmsr64(MSR_IA32_GS_BASE, (uintptr_t) cdp);
+	wrmsr64(MSR_IA32_KERNEL_GS_BASE, (uintptr_t) cdp);
+
 #if GPROF // Hack to enable mcount to work on K64
 	__asm__ volatile("mov %0, %%gs" : : "rm" ((unsigned short)(KERNEL_DS)));
 #endif
-	swapgs();
-
-	cpu_mode_init(cdp);
 #endif
 }
 
@@ -784,7 +775,7 @@ cpu_data_alloc(boolean_t is_boot_cpu)
 
 	if (is_boot_cpu) {
 		assert(real_ncpus == 1);
-		cdp = &cpu_data_master;
+		cdp = cpu_datap(0);
 		if (cdp->cpu_processor == NULL) {
 			simple_lock_init(&ncpus_lock, 0);
 			cdp->cpu_processor = cpu_processor_alloc(TRUE);
@@ -826,6 +817,7 @@ cpu_data_alloc(boolean_t is_boot_cpu)
 	 * Allocate descriptor table:
 	 * Size depends on cpu mode.
 	 */
+
 	ret = kmem_alloc(kernel_map, 
 			 (vm_offset_t *) &cdp->cpu_desc_tablep,
 			 cdp->cpu_is64bit ? sizeof(cpu_desc_table64_t)
@@ -1040,7 +1032,7 @@ cpu_physwindow_init(int cpu)
 		 * pte pointer we're interested in actually
 		 * exists in the page table
 		 */
-		pmap_expand(kernel_pmap, phys_window);
+		pmap_expand(kernel_pmap, phys_window, PMAP_EXPAND_OPTIONS_NONE);
 
 		cdp->cpu_physwindow_base = phys_window;
 		cdp->cpu_physwindow_ptep = vtopte(phys_window);
@@ -1072,8 +1064,50 @@ cpu_mode_init(cpu_data_t *cdp)
 #else
 	fast_syscall_init64(cdp);
 #endif
-
-	/* Call for per-cpu pmap mode initialization */
-	pmap_cpu_init();
 }
 
+#if __x86_64__
+/*
+ * Allocate a new interrupt stack for the boot processor from the
+ * heap rather than continue to use the statically allocated space.
+ * Also switch to a dynamically allocated cpu data area.
+ */
+void
+cpu_data_realloc(void)
+{
+	int		ret;
+	vm_offset_t	stack;
+	cpu_data_t	*cdp;
+	boolean_t	istate;
+
+	ret = kmem_alloc(kernel_map, &stack, INTSTACK_SIZE);
+	if (ret != KERN_SUCCESS) {
+		panic("cpu_data_realloc() stack alloc, ret=%d\n", ret);
+	}
+	bzero((void*) stack, INTSTACK_SIZE);
+	stack += INTSTACK_SIZE;
+
+	ret = kmem_alloc(kernel_map, (vm_offset_t *) &cdp, sizeof(cpu_data_t));
+	if (ret != KERN_SUCCESS) {
+		panic("cpu_data_realloc() cpu data alloc, ret=%d\n", ret);
+	}
+
+	/* Copy old contents into new area and make fix-ups */
+	bcopy((void *) &cpu_data_master, (void*) cdp, sizeof(cpu_data_t));
+	cdp->cpu_this = cdp;
+	cdp->cpu_int_stack_top = stack;
+	timer_call_initialize_queue(&cdp->rtclock_timer.queue);
+
+	kprintf("Reallocated master cpu data: %p, interrupt stack top: %p\n",
+		(void *) cdp, (void *) stack);
+
+	/*
+	 * With interrupts disabled commmit the new areas.
+	 */
+	istate = ml_set_interrupts_enabled(FALSE);
+	cpu_data_ptr[0] = cdp;
+	wrmsr64(MSR_IA32_GS_BASE, (uintptr_t) cdp);
+	wrmsr64(MSR_IA32_KERNEL_GS_BASE, (uintptr_t) cdp);
+	(void) ml_set_interrupts_enabled(istate);
+}
+#endif /* __x86_64__ */

@@ -56,10 +56,7 @@
 
 #include <mach_rt.h>
 #include <platforms.h>
-#include <mach_kdb.h>
-#include <mach_kgdb.h>
 #include <mach_kdp.h>
-#include <stat_time.h>
 #include <mach_assert.h>
 
 #include <sys/errno.h>
@@ -390,18 +387,6 @@ rdmsr_fail:
  */
 	RECOVERY_SECTION
 	RECOVER_TABLE_END
-
-	.data
-dr_msk:
-	.long	~0x000f0003
-	.long	~0x00f0000c
-	.long	~0x0f000030
-	.long	~0xf00000c0
-ENTRY(dr_addr)
-	.long	0,0,0,0
-	.long	0,0,0,0
-
-	.text
 
 /*
  * ffs(mask)

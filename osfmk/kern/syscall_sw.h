@@ -70,11 +70,7 @@ typedef	void	mach_munge_t(const void *, void *);
 
 typedef struct {
 	int			mach_trap_arg_count;
-	int			(*mach_trap_function)(void);
-#if 0 /* no active architectures use mungers for mach traps */
-	mach_munge_t		*mach_trap_arg_munge32; /* system call arguments for 32-bit */
-	mach_munge_t		*mach_trap_arg_munge64; /* system call arguments for 64-bit */
-#endif
+	kern_return_t		(*mach_trap_function)(void *);
 #if	MACH_ASSERT
 	const char*		mach_trap_name;
 #endif /* MACH_ASSERT */
@@ -83,16 +79,16 @@ typedef struct {
 #define MACH_TRAP_TABLE_COUNT   128
 
 
-extern mach_trap_t		mach_trap_table[];
+extern const mach_trap_t	mach_trap_table[];
 extern int			mach_trap_count;
 
 #if defined(__i386__) || defined(__x86_64__)
 #if	!MACH_ASSERT
 #define	MACH_TRAP(name, arg_count, munge32, munge64)	\
-		{ (arg_count), (int (*)(void)) (name)  }
+	{ (arg_count), (kern_return_t (*)(void *)) (name)  }
 #else
 #define MACH_TRAP(name, arg_count, munge32, munge64)		\
-		{ (arg_count), (int (*)(void)) (name), #name }
+	{ (arg_count), (kern_return_t (*)(void *)) (name), #name }
 #endif /* !MACH_ASSERT */
 #else  /* !defined(__i386__) && !defined(__x86_64__) && !defined(__arm__) */
 #error Unsupported architecture

@@ -63,7 +63,7 @@ int expected[4] = {
 };
 
 
-main(int argc, char *argv[])
+int main(int argc, char *argv[])
 {
 	int (*func)();
 	int result, test;

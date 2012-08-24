@@ -221,7 +221,7 @@ int	ifmedia_ioctl(struct ifnet *ifp, struct ifreq *ifr,
 #define IFM_FDX		0x00100000	/* Force full duplex */
 #define	IFM_HDX		0x00200000	/* Force half duplex */
 #define	IFM_FLOW	0x00400000	/* enable hardware flow control */
-#define IFM_EEE		0x00800000	/* Driver defined flag */
+#define IFM_EEE		0x00800000	/* Support energy efficient ethernet */
 #define IFM_FLAG0	0x01000000	/* Driver defined flag */
 #define IFM_FLAG1	0x02000000	/* Driver defined flag */
 #define IFM_FLAG2	0x04000000	/* Driver defined flag */

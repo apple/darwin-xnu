@@ -26,7 +26,9 @@
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 #include <vm/pmap.h>
+#include <kern/ledger.h>
 #include <i386/pmap_internal.h>
+
 
 /*
  *	Each entry in the pv_head_table is locked by a bit in the

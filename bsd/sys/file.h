@@ -85,23 +85,6 @@ struct posix_cred;
 typedef struct posix_cred *posix_cred_t;
 #endif	/* !_KAUTH_CRED_T */
 
-#pragma pack(4)
-
-/* for the compat sake;  */
-struct extern_file {
-	LIST_ENTRY(extern_file) f_list; /* list of active files */
-	short	f_flag;		/* see fcntl.h */
-	short	f_type;		/* descriptor type */
-	short	f_count;	/* reference count */
-	short	f_msgcount;	/* references from message queue */
-	kauth_cred_t f_cred;	/* credentials associated with descriptor */
-	void * f_ops;
-	off_t	f_offset;
-	caddr_t	f_data;		/* vnode or socket or SHM or semaphore */
-};
-
-#pragma pack()
-
 __BEGIN_DECLS
 #ifdef KERNEL
 int file_socket(int, socket_t *);

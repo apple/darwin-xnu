@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2004-2010 Apple Inc. All rights reserved.
+ * Copyright (c) 2004-2011 Apple Inc. All rights reserved.
  *
  * %Begin-Header%
  * Redistribution and use in source and binary forms, with or without
@@ -40,9 +40,7 @@
 #include <sys/systm.h>
 #include <sys/time.h>
 
-#include <net/if.h>
-#include <net/if_dl.h>
-#include <net/if_types.h>
+extern int uuid_get_ethernet(u_int8_t *);
 
 UUID_DEFINE(UUID_NULL, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
 
@@ -50,25 +48,8 @@ static void
 read_node(uint8_t *node)
 {
 #if NETWORKING
-	struct ifnet *ifp;
-	struct sockaddr_dl *sdl;
-
-	ifnet_head_lock_shared();
-	TAILQ_FOREACH(ifp, &ifnet_head, if_link) {
-		ifnet_lock_shared(ifp);
-		IFA_LOCK_SPIN(ifp->if_lladdr);
-		sdl = (struct sockaddr_dl *)ifp->if_lladdr->ifa_addr;
-		if (sdl->sdl_type == IFT_ETHER) {
-			memcpy(node, LLADDR(sdl), 6);
-			IFA_UNLOCK(ifp->if_lladdr);
-			ifnet_lock_done(ifp);
-			ifnet_head_done();
-			return;
-		}
-		IFA_UNLOCK(ifp->if_lladdr);
-		ifnet_lock_done(ifp);
-	}
-	ifnet_head_done();
+	if (uuid_get_ethernet(node) == 0)
+		return;
 #endif /* NETWORKING */
 
 	read_random(node, 6);

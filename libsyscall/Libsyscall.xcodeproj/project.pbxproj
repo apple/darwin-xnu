@@ -33,6 +33,7 @@
 /* End PBXAggregateTarget section */
 
 /* Begin PBXBuildFile section */
+		030B179B135377B400DAD1F0 /* open_dprotected_np.c in Sources */ = {isa = PBXBuildFile; fileRef = 030B179A135377B400DAD1F0 /* open_dprotected_np.c */; };
 		240BAC4C1214770F000A1719 /* memcpy.c in Sources */ = {isa = PBXBuildFile; fileRef = 24B028D511FF4FBB00CA64A9 /* memcpy.c */; };
 		2419382B12135FF6003CDE41 /* chmod.c in Sources */ = {isa = PBXBuildFile; fileRef = 2419382A12135FF6003CDE41 /* chmod.c */; };
 		242AB66611EBDC1200107336 /* errno.c in Sources */ = {isa = PBXBuildFile; fileRef = 242AB66511EBDC1200107336 /* errno.c */; };
@@ -86,6 +87,8 @@
 		24B8C2621237F53900D36CC3 /* remove-counter.c in Sources */ = {isa = PBXBuildFile; fileRef = 24B8C2611237F53900D36CC3 /* remove-counter.c */; };
 		24D1158311E671B20063D54D /* SYS.h in Headers */ = {isa = PBXBuildFile; fileRef = 24D1157411E671B20063D54D /* SYS.h */; };
 		24E4782712088267009A384D /* _libc_funcptr.c in Sources */ = {isa = PBXBuildFile; fileRef = 24E47824120881DF009A384D /* _libc_funcptr.c */; };
+		291D3C281354FDD100D46061 /* mach_port.c in Sources */ = {isa = PBXBuildFile; fileRef = 291D3C261354FDD100D46061 /* mach_port.c */; };
+		291D3C291354FDD100D46061 /* mach_vm.c in Sources */ = {isa = PBXBuildFile; fileRef = 291D3C271354FDD100D46061 /* mach_vm.c */; };
 		C99A4F501305B2BD0054B7B7 /* __get_cpu_capabilities.s in Sources */ = {isa = PBXBuildFile; fileRef = C99A4F4E1305B1B70054B7B7 /* __get_cpu_capabilities.s */; };
 		C99A4F531305B43F0054B7B7 /* init_cpu_capabilities.c in Sources */ = {isa = PBXBuildFile; fileRef = C99A4F511305B43F0054B7B7 /* init_cpu_capabilities.c */; };
 		C9D9BD17114B00600000D8B9 /* vm_map_compat.c in Sources */ = {isa = PBXBuildFile; fileRef = C9D9BCC2114B00600000D8B9 /* vm_map_compat.c */; };
@@ -113,7 +116,6 @@
 		C9D9BD2F114B00600000D8B9 /* vm_task.h in Headers */ = {isa = PBXBuildFile; fileRef = C9D9BCE3114B00600000D8B9 /* vm_task.h */; settings = {ATTRIBUTES = (Public, ); }; };
 		C9D9BD30114B00600000D8B9 /* host_priv.defs in Sources */ = {isa = PBXBuildFile; fileRef = C9D9BCE4114B00600000D8B9 /* host_priv.defs */; };
 		C9D9BD31114B00600000D8B9 /* host_security.defs in Sources */ = {isa = PBXBuildFile; fileRef = C9D9BCE5114B00600000D8B9 /* host_security.defs */; };
-		C9D9BD34114B00600000D8B9 /* ledger.defs in Sources */ = {isa = PBXBuildFile; fileRef = C9D9BCE9114B00600000D8B9 /* ledger.defs */; };
 		C9D9BD35114B00600000D8B9 /* lock_set.defs in Sources */ = {isa = PBXBuildFile; fileRef = C9D9BCEA114B00600000D8B9 /* lock_set.defs */; };
 		C9D9BD36114B00600000D8B9 /* mach_error_string.c in Sources */ = {isa = PBXBuildFile; fileRef = C9D9BCEB114B00600000D8B9 /* mach_error_string.c */; };
 		C9D9BD37114B00600000D8B9 /* mach_error.c in Sources */ = {isa = PBXBuildFile; fileRef = C9D9BCEC114B00600000D8B9 /* mach_error.c */; };
@@ -143,6 +145,7 @@
 		C9D9BD57114B00600000D8B9 /* task.defs in Sources */ = {isa = PBXBuildFile; fileRef = C9D9BD0F114B00600000D8B9 /* task.defs */; };
 		C9D9BD58114B00600000D8B9 /* thread_act.defs in Sources */ = {isa = PBXBuildFile; fileRef = C9D9BD10114B00600000D8B9 /* thread_act.defs */; };
 		C9D9BD59114B00600000D8B9 /* vm_map.defs in Sources */ = {isa = PBXBuildFile; fileRef = C9D9BD11114B00600000D8B9 /* vm_map.defs */; };
+		EE3F605A149A6D66003BAEBA /* getaudit.c in Sources */ = {isa = PBXBuildFile; fileRef = EE3F6059149A6D66003BAEBA /* getaudit.c */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -170,6 +173,7 @@
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
+		030B179A135377B400DAD1F0 /* open_dprotected_np.c */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.c; path = open_dprotected_np.c; sourceTree = "<group>"; };
 		240D716711933ED300556E97 /* mach_install_mig.sh */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = text.script.sh; path = mach_install_mig.sh; sourceTree = "<group>"; };
 		2419382A12135FF6003CDE41 /* chmod.c */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.c; path = chmod.c; sourceTree = "<group>"; };
 		2427FA821200BCF800EF7A1F /* compat-symlinks.sh */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = text.script.sh; path = "compat-symlinks.sh"; sourceTree = "<group>"; };
@@ -252,6 +256,8 @@
 		24D1159811E672270063D54D /* syscall.map */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = text; path = syscall.map; sourceTree = "<group>"; };
 		24D1159911E6723E0063D54D /* create-syscalls.pl */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = text.script.perl; path = "create-syscalls.pl"; sourceTree = "<group>"; };
 		24E47824120881DF009A384D /* _libc_funcptr.c */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.c; path = _libc_funcptr.c; sourceTree = "<group>"; };
+		291D3C261354FDD100D46061 /* mach_port.c */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.c; name = mach_port.c; path = mach/mach_port.c; sourceTree = "<group>"; };
+		291D3C271354FDD100D46061 /* mach_vm.c */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.c; name = mach_vm.c; path = mach/mach_vm.c; sourceTree = "<group>"; };
 		C99A4F4E1305B1B70054B7B7 /* __get_cpu_capabilities.s */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.asm; path = __get_cpu_capabilities.s; sourceTree = "<group>"; };
 		C99A4F511305B43F0054B7B7 /* init_cpu_capabilities.c */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.c; path = init_cpu_capabilities.c; sourceTree = "<group>"; };
 		C9D9BCBF114B00600000D8B9 /* .open_source_exclude */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = text; path = .open_source_exclude; sourceTree = "<group>"; };
@@ -287,7 +293,6 @@
 		C9D9BCE3114B00600000D8B9 /* vm_task.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = vm_task.h; sourceTree = "<group>"; };
 		C9D9BCE4114B00600000D8B9 /* host_priv.defs */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.mig; path = host_priv.defs; sourceTree = "<group>"; };
 		C9D9BCE5114B00600000D8B9 /* host_security.defs */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.mig; path = host_security.defs; sourceTree = "<group>"; };
-		C9D9BCE9114B00600000D8B9 /* ledger.defs */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.mig; path = ledger.defs; sourceTree = "<group>"; };
 		C9D9BCEA114B00600000D8B9 /* lock_set.defs */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.mig; path = lock_set.defs; sourceTree = "<group>"; };
 		C9D9BCEB114B00600000D8B9 /* mach_error_string.c */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.c; path = mach_error_string.c; sourceTree = "<group>"; };
 		C9D9BCEC114B00600000D8B9 /* mach_error.c */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.c; path = mach_error.c; sourceTree = "<group>"; };
@@ -319,6 +324,7 @@
 		C9D9BD11114B00600000D8B9 /* vm_map.defs */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.mig; path = vm_map.defs; sourceTree = "<group>"; };
 		C9D9BE0F114FFADC0000D8B9 /* Libsyscall.xcconfig */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = text.xcconfig; path = Libsyscall.xcconfig; sourceTree = "<group>"; };
 		D2AAC0630554660B00DB518D /* libsystem_kernel.a */ = {isa = PBXFileReference; explicitFileType = archive.ar; includeInIndex = 0; path = libsystem_kernel.a; sourceTree = BUILT_PRODUCTS_DIR; };
+		EE3F6059149A6D66003BAEBA /* getaudit.c */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.c; path = getaudit.c; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -344,6 +350,8 @@
 		08FB7794FE84155DC02AAC07 /* mach */ = {
 			isa = PBXGroup;
 			children = (
+				291D3C261354FDD100D46061 /* mach_port.c */,
+				291D3C271354FDD100D46061 /* mach_vm.c */,
 				C9D9BE0F114FFADC0000D8B9 /* Libsyscall.xcconfig */,
 				24D1158911E672270063D54D /* Platforms */,
 				24D1156511E671B20063D54D /* custom */,
@@ -383,7 +391,6 @@
 				C9D9BCD8114B00600000D8B9 /* mach */,
 				C9D9BCE4114B00600000D8B9 /* host_priv.defs */,
 				C9D9BCE5114B00600000D8B9 /* host_security.defs */,
-				C9D9BCE9114B00600000D8B9 /* ledger.defs */,
 				C9D9BCEA114B00600000D8B9 /* lock_set.defs */,
 				C9D9BCEB114B00600000D8B9 /* mach_error_string.c */,
 				C9D9BCEC114B00600000D8B9 /* mach_error.c */,
@@ -461,6 +468,7 @@
 				C99A4F4E1305B1B70054B7B7 /* __get_cpu_capabilities.s */,
 				247A08B211F8B05900E4693F /* _libkernel_init.h */,
 				247A08B311F8B05900E4693F /* _libkernel_init.c */,
+				030B179A135377B400DAD1F0 /* open_dprotected_np.c */,
 				24E47824120881DF009A384D /* _libc_funcptr.c */,
 				24A7C5CB11FF973C007669EB /* _errno.h */,
 				C99A4F511305B43F0054B7B7 /* init_cpu_capabilities.c */,
@@ -498,6 +506,7 @@
 				24A7C5AF11FF8DA6007669EB /* bind.c */,
 				248BA01C121C56BF008C073F /* connect.c */,
 				24A7C5B111FF8DA6007669EB /* getattrlist.c */,
+				EE3F6059149A6D66003BAEBA /* getaudit.c */,
 				24A7C5B211FF8DA6007669EB /* getpeername.c */,
 				24A7C5B311FF8DA6007669EB /* getsockname.c */,
 				24A7C5B411FF8DA6007669EB /* lchown.c */,
@@ -697,9 +706,9 @@
 			buildConfigurationList = 1DEB914A08733D8E0010E9CD /* Build configuration list for PBXNativeTarget "Libmach" */;
 			buildPhases = (
 				D2AAC0600554660B00DB518D /* Headers */,
+				2487545E11629934000975E0 /* Install Headers */,
 				D2AAC0610554660B00DB518D /* Sources */,
 				D289988505E68E00004EDB86 /* Frameworks */,
-				2487545E11629934000975E0 /* Install Headers */,
 			);
 			buildRules = (
 			);
@@ -819,7 +828,6 @@
 				C9D9BD22114B00600000D8B9 /* exc.defs in Sources */,
 				C9D9BD30114B00600000D8B9 /* host_priv.defs in Sources */,
 				C9D9BD31114B00600000D8B9 /* host_security.defs in Sources */,
-				C9D9BD34114B00600000D8B9 /* ledger.defs in Sources */,
 				C9D9BD35114B00600000D8B9 /* lock_set.defs in Sources */,
 				C9D9BD38114B00600000D8B9 /* mach_host.defs in Sources */,
 				C9D9BD3D114B00600000D8B9 /* mach_port.defs in Sources */,
@@ -898,6 +906,10 @@
 				24B8C2621237F53900D36CC3 /* remove-counter.c in Sources */,
 				C99A4F501305B2BD0054B7B7 /* __get_cpu_capabilities.s in Sources */,
 				C99A4F531305B43F0054B7B7 /* init_cpu_capabilities.c in Sources */,
+				030B179B135377B400DAD1F0 /* open_dprotected_np.c in Sources */,
+				291D3C281354FDD100D46061 /* mach_port.c in Sources */,
+				291D3C291354FDD100D46061 /* mach_vm.c in Sources */,
+				EE3F605A149A6D66003BAEBA /* getaudit.c in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

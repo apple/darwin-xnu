@@ -90,6 +90,7 @@ extern "C" {
 #define	LS_LCK_RW_LOCK_EXCL_TO_SHARED_ILK_SPIN	38
 
 #define	LS_NPROBES			40
+#define LS_LCK_INVALID			LS_NPROBES
 
 /*
  * Name the various locking functions...
@@ -168,9 +169,13 @@ extern void (*lockstat_probe)(dtrace_id_t, uint64_t, uint64_t,
     uint64_t, uint64_t, uint64_t);
 
 
+
 #ifdef _KERNEL
 
 #if	CONFIG_DTRACE
+
+extern void (lockstat_probe_wrapper)(int, uintptr_t, int);
+	
 /*
  * Macros to record lockstat probes.
  */

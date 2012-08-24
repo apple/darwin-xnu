@@ -56,6 +56,5 @@ int _mach_vsnprintf(char *buffer, int length, const char *fmt, va_list ap);
 // Actually in memcpy.c but MIG likes to include string.h
 
 void *memcpy(void *dst0, const void *src0, size_t length);
-int memcmp(const void *s1, const void *s2, size_t n);
 
 #endif /* _STRING_H_ */

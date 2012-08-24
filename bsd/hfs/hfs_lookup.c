@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1999-2008 Apple Inc. All rights reserved.
+ * Copyright (c) 1999-2012 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -80,6 +80,7 @@
 #include <sys/kdebug.h>
 #include <sys/kauth.h>
 #include <sys/namei.h>
+#include <sys/user.h>
 
 #include "hfs.h"
 #include "hfs_catalog.h"
@@ -498,12 +499,14 @@ hfs_vnop_lookup(struct vnop_lookup_args *ap)
 	 */
 
 	if ((flags & ISLASTCN) && (cp->c_flag & C_HARDLINK)) {
-		hfs_lock(cp, HFS_FORCE_LOCK);
+		int stale_link = 0;
+
+		hfs_lock(cp, HFS_FORCE_LOCK);	
 		if ((cp->c_parentcnid != dcp->c_cnid) ||
 		    (bcmp(cnp->cn_nameptr, cp->c_desc.cd_nameptr, cp->c_desc.cd_namelen) != 0)) {
 			struct cat_desc desc;
+			struct cat_attr lookup_attr;
 			int lockflags;
-
 			/*
 			 * Get an updated descriptor
 			 */
@@ -514,28 +517,84 @@ hfs_vnop_lookup(struct vnop_lookup_args *ap)
 			desc.cd_encoding = 0;
 			desc.cd_cnid = 0;
 			desc.cd_flags = S_ISDIR(cp->c_mode) ? CD_ISDIR : 0;
-	
+
+			/*
+			 * Because lookups call replace_desc to put a new descriptor in
+			 * the cnode we are modifying it is possible that this cnode's 
+			 * descriptor is out of date for the parent ID / name that
+			 * we are trying to look up. (It may point to a different hardlink).
+			 *
+			 * We need to be cautious that when re-supplying the 
+			 * descriptor below that the results of the catalog lookup
+			 * still point to the same raw inode for the hardlink.  This would 
+			 * not be the case if we found something in the cache above but 
+			 * the vnode it returned no longer has a valid hardlink for the 
+			 * parent ID/filename combo we are requesting.  (This is because 
+			 * hfs_unlink does not directly trigger namecache removal). 
+			 *
+			 * As a result, before vending out the vnode (and replacing
+			 * its descriptor) verify that the fileID is the same by comparing
+			 * the in-cnode attributes vs. the one returned from the lookup call
+			 * below.  If they do not match, treat this lookup as if we never hit
+			 * in the cache at all.
+			 */
 
 			lockflags = hfs_systemfile_lock(VTOHFS(dvp), SFL_CATALOG, HFS_SHARED_LOCK);		
-			if (cat_lookup(VTOHFS(vp), &desc, 0, &desc, NULL, NULL, NULL) == 0)
-				replace_desc(cp, &desc);
+		
+			error = cat_lookup(VTOHFS(vp), &desc, 0, &desc, &lookup_attr, NULL, NULL);	
+			
 			hfs_systemfile_unlock(VTOHFS(dvp), lockflags);
 
 			/* 
-			 * Save the origin info for file and directory hardlinks.  Directory hardlinks 
-			 * need the origin for '..' lookups, and file hardlinks need it to ensure that 
-			 * competing lookups do not cause us to vend different hardlinks than the ones requested.
-			 * We want to restrict saving the cache entries to LOOKUP namei operations, since
-			 * we're really doing this to protect getattr.
+			 * Note that cat_lookup may fail to find something with the name provided in the
+			 * stack-based descriptor above. In that case, an ENOENT is a legitimate errno
+			 * to be placed in error, which will get returned in the fastpath below.
 			 */
-			if (cnp->cn_nameiop == LOOKUP) {
-				hfs_savelinkorigin(cp, dcp->c_fileid);
+			if (error == 0) {
+				if (lookup_attr.ca_fileid == cp->c_attr.ca_fileid) {
+					/* It still points to the right raw inode.  Replacing the descriptor is fine */
+					replace_desc (cp, &desc);
+
+					/* 
+					 * Save the origin info for file and directory hardlinks.  Directory hardlinks 
+					 * need the origin for '..' lookups, and file hardlinks need it to ensure that 
+					 * competing lookups do not cause us to vend different hardlinks than the ones requested.
+					 * We want to restrict saving the cache entries to LOOKUP namei operations, since
+					 * we're really doing this to protect getattr.
+					 */
+					if (cnp->cn_nameiop == LOOKUP) {
+						hfs_savelinkorigin(cp, dcp->c_fileid);
+					}
+				}
+				else {
+					/* If the fileID does not match then do NOT replace the descriptor! */
+					stale_link = 1;
+				}	
 			}
 		}
-		hfs_unlock(cp);
-	}
+		hfs_unlock (cp);
+		
+		if (stale_link) {
+			/* 
+			 * If we had a stale_link, then we need to pretend as though
+			 * we never found this vnode and force a lookup through the 
+			 * traditional path.  Drop the iocount acquired through 
+			 * cache_lookup above and force a cat lookup / getnewvnode
+			 */
+			vnode_put(vp);
+			goto lookup;
+		}
+		
+		if (error) {
+			/* 
+			 * If the cat_lookup failed then the caller will not expect 
+			 * a vnode with an iocount on it.
+			 */
+			vnode_put(vp);
+		}
 
-	return (error);
+	}	
+	goto exit;
 	
 lookup:
 	/*
@@ -550,6 +609,24 @@ lookup:
 	if (cnode_locked)
 		hfs_unlock(VTOC(*vpp));
 exit:
+	{
+	uthread_t ut = (struct uthread *)get_bsdthread_info(current_thread());
+
+	/*
+	 * check to see if we issued any I/O while completing this lookup and
+	 * this thread/task is throttleable... if so, throttle now
+	 *
+	 * this allows us to throttle in between multiple meta data reads that
+	 * might result due to looking up a long pathname (since we'll have to
+	 * re-enter hfs_vnop_lookup for each component of the pathnam not in
+	 * the VFS cache), instead of waiting until the entire path lookup has
+	 * completed and throttling at the systemcall return
+	 */
+	if (__improbable(ut->uu_lowpri_window)) {
+		throttle_lowpri_io(TRUE);
+	}
+	}
+
 	return (error);
 }
 

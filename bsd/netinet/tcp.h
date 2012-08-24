@@ -213,19 +213,13 @@ struct tcphdr {
 					 * buffer queues.
 					 */
 #ifdef PRIVATE
-#define	TCP_INFO				0x200	/* retrieve tcp_info structure */
-
+#define	TCP_INFO		0x200	/* retrieve tcp_info structure */
+#define TCP_NOTSENT_LOWAT	0x201	/* Low water mark for TCP unsent data */
+#define TCP_MEASURE_SND_BW	0x202	/* Measure sender's bandwidth for this connection */
+#define TCP_MEASURE_BW_BURST	0x203	/* Burst size to use for bandwidth measurement */
+#define TCP_PEER_PID		0x204	/* Lookup pid of the process we're connected to */
 /*
- * The TCP_INFO socket option comes from the Linux 2.6 TCP API, and permits
- * the caller to query certain information about the state of a TCP
- * connection.  We provide an overlapping set of fields with the Linux
- * implementation, but since this is a fixed size structure, room has been
- * left for growth.  In order to maximize potential future compatibility with
- * the Linux API, the same variable names and order have been adopted, and
- * padding left to make room for omitted fields in case they are added later.
- *
- * XXX: This is currently an unstable ABI/API, in that it is expected to
- * change.
+ * The TCP_INFO socket option is a private API and is subject to change
  */
 #pragma pack(4)
 
@@ -234,14 +228,23 @@ struct tcphdr {
 #define	TCPI_OPT_WSCALE		0x04
 #define	TCPI_OPT_ECN		0x08
 
+#define TCPI_FLAG_LOSSRECOVERY	0x01	/* Currently in loss recovery */
+
 struct tcp_info {
 	u_int8_t	tcpi_state;			/* TCP FSM state. */
 	u_int8_t	tcpi_options;		/* Options enabled on conn. */
 	u_int8_t	tcpi_snd_wscale;	/* RFC1323 send shift value. */
 	u_int8_t	tcpi_rcv_wscale;	/* RFC1323 recv shift value. */
 
+	u_int32_t	tcpi_flags;			/* extra flags (TCPI_FLAG_xxx) */
+
+	u_int32_t	tcpi_rto;			/* Retransmission timeout in milliseconds */
 	u_int32_t	tcpi_snd_mss;		/* Max segment size for send. */
 	u_int32_t	tcpi_rcv_mss;		/* Max segment size for receive. */
+
+	u_int32_t	tcpi_rttcur;		/* Most recent value of RTT */
+	u_int32_t	tcpi_srtt;			/* Smoothed RTT */
+	u_int32_t	tcpi_rttvar;		/* RTT variance */
 
 	u_int32_t	tcpi_snd_ssthresh;	/* Slow start threshold. */
 	u_int32_t	tcpi_snd_cwnd;		/* Send congestion window. */
@@ -249,11 +252,28 @@ struct tcp_info {
 	u_int32_t	tcpi_rcv_space;		/* Advertised recv window. */
 
 	u_int32_t	tcpi_snd_wnd;		/* Advertised send window. */
-	u_int32_t	tcpi_snd_bwnd;		/* Bandwidth send window. */
 	u_int32_t	tcpi_snd_nxt;		/* Next egress seqno */
 	u_int32_t	tcpi_rcv_nxt;		/* Next ingress seqno */
 	
 	int32_t		tcpi_last_outif;	/* if_index of interface used to send last */
+	u_int32_t	tcpi_snd_sbbytes;	/* bytes in snd buffer including data inflight */
+	
+	u_int64_t	tcpi_txbytes __attribute__((aligned(8)));
+									/* total bytes sent */	
+	u_int64_t	tcpi_txretransmitbytes __attribute__((aligned(8)));
+									/* total bytes retransmitted */	
+	u_int64_t	tcpi_txunacked __attribute__((aligned(8)));
+									/* current number of bytes not acknowledged */	
+	u_int64_t	tcpi_rxbytes __attribute__((aligned(8)));
+									/* total bytes received */
+	u_int64_t	tcpi_rxduplicatebytes __attribute__((aligned(8)));
+									/* total duplicate bytes received */
+	u_int64_t	tcpi_snd_bw __attribute__((aligned(8)));		/* measured send bandwidth in bits/sec */
+};
+
+struct tcp_measure_bw_burst {
+	u_int32_t	min_burst_size; /* Minimum number of packets to use */
+	u_int32_t	max_burst_size; /* Maximum number of packets to use */
 };
 
 /*

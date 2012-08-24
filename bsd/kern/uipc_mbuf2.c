@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2010 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2011 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -399,13 +399,15 @@ m_tag_create(u_int32_t id, u_int16_t type, int len, int wait, struct mbuf *buf)
 		VERIFY(p->m_tag_cookie == M_TAG_VALID_PATTERN);
 
 		struct mbuf *m = m_dtom(p);
-		struct m_taghdr *hdr = (struct m_taghdr *)m->m_data;
+		struct m_taghdr *hdr = (struct m_taghdr *)(void *)m->m_data;
 
+		VERIFY(IS_P2ALIGNED(hdr + 1, sizeof (u_int64_t)));
 		VERIFY(m->m_flags & M_TAGHDR && !(m->m_flags & M_EXT));
 
 		/* The mbuf can store this m_tag */
 		if (M_TAG_ALIGN(len) <= MLEN - m->m_len) {
-			t = (struct m_tag *)(m->m_data + m->m_len);
+			t = (struct m_tag *)(void *)(m->m_data + m->m_len);
+			VERIFY(IS_P2ALIGNED(t, sizeof (u_int64_t)));
 			hdr->refcnt++;
 			m->m_len += M_TAG_ALIGN(len);
 			VERIFY(m->m_len <= MLEN);
@@ -445,14 +447,16 @@ m_tag_alloc(u_int32_t id, u_int16_t type, int len, int wait)
 
 		m->m_flags |= M_TAGHDR;
 
-		hdr = (struct m_taghdr *)m->m_data;
+		hdr = (struct m_taghdr *)(void *)m->m_data;
+		VERIFY(IS_P2ALIGNED(hdr + 1, sizeof (u_int64_t)));
 		hdr->refcnt = 1;
 		m->m_len += sizeof (struct m_taghdr);
-		t = (struct m_tag *)(m->m_data + m->m_len);
+		t = (struct m_tag *)(void *)(m->m_data + m->m_len);
+		VERIFY(IS_P2ALIGNED(t, sizeof (u_int64_t)));
 		m->m_len += M_TAG_ALIGN(len);
 		VERIFY(m->m_len <= MLEN);
         } else if (len + sizeof (struct m_tag) <= MCLBYTES) {
-		t = (struct m_tag *)m_mclalloc(wait);
+		t = (struct m_tag *)(void *)m_mclalloc(wait);
         } else {
                 t = NULL;
 	}
@@ -460,6 +464,7 @@ m_tag_alloc(u_int32_t id, u_int16_t type, int len, int wait)
 	if (t == NULL)
 		return (NULL);
 
+	VERIFY(IS_P2ALIGNED(t, sizeof (u_int64_t)));
 	t->m_tag_cookie = M_TAG_VALID_PATTERN;
 	t->m_tag_type = type;
 	t->m_tag_len = len;
@@ -489,10 +494,15 @@ m_tag_free(struct m_tag *t)
 #endif /* INET6 */
 	if (t == NULL)
 		return;
+
+	VERIFY(t->m_tag_cookie == M_TAG_VALID_PATTERN);
+
 	if (M_TAG_ALIGN(t->m_tag_len) + sizeof (struct m_taghdr) <= MLEN) {
 		struct mbuf * m = m_dtom(t);
 		VERIFY(m->m_flags & M_TAGHDR);
-		struct m_taghdr *hdr = (struct m_taghdr *)m->m_data;
+		struct m_taghdr *hdr = (struct m_taghdr *)(void *)m->m_data;
+
+		VERIFY(IS_P2ALIGNED(hdr + 1, sizeof (u_int64_t)));
 
 		/* No other tags in this mbuf */
 		if(--hdr->refcnt == 0) {
@@ -665,9 +675,8 @@ m_tag_init(struct mbuf *m)
 	VERIFY(m != NULL);
 
 	SLIST_INIT(&m->m_pkthdr.tags);
-#if PF_PKTHDR
 	bzero(&m->m_pkthdr.pf_mtag, sizeof (m->m_pkthdr.pf_mtag));
-#endif
+	bzero(&m->m_pkthdr.tcp_mtag, sizeof (m->m_pkthdr.tcp_mtag));
 }
 
 /* Get first tag in chain. */
@@ -690,9 +699,143 @@ m_tag_next(struct mbuf *m, struct m_tag *t)
 	return (SLIST_NEXT(t, m_tag_link));
 }
 
+int
+m_set_traffic_class(struct mbuf *m, mbuf_traffic_class_t tc)
+{
+	u_int32_t val = MBUF_TC2SCVAL(tc);	/* just the val portion */
+
+	return (m_set_service_class(m, m_service_class_from_val(val)));
+}
+
+mbuf_traffic_class_t
+m_get_traffic_class(struct mbuf *m)
+{
+	return (MBUF_SC2TC(m_get_service_class(m)));
+}
+
 void
-m_prio_init(struct mbuf *m)
+m_service_class_init(struct mbuf *m)
 {
 	if (m->m_flags & M_PKTHDR)
-		m->m_pkthdr.prio = MBUF_TC_BE;
+		(void) m_set_service_class(m, MBUF_SC_BE);
+}
+
+int
+m_set_service_class(struct mbuf *m, mbuf_svc_class_t sc)
+{
+	int error = 0;
+
+	VERIFY(m->m_flags & M_PKTHDR);
+
+	if (MBUF_VALID_SC(sc))
+		m->m_pkthdr.svc = sc;
+	else
+		error = EINVAL;
+
+	return (error);
+}
+
+mbuf_svc_class_t
+m_get_service_class(struct mbuf *m)
+{
+	mbuf_svc_class_t sc;
+
+	VERIFY(m->m_flags & M_PKTHDR);
+
+	if (MBUF_VALID_SC(m->m_pkthdr.svc))
+		sc = m->m_pkthdr.svc;
+	else
+		sc = MBUF_SC_BE;
+
+	return (sc);
+}
+
+mbuf_svc_class_t
+m_service_class_from_idx(u_int32_t i)
+{
+	mbuf_svc_class_t sc = MBUF_SC_BE;
+
+	switch (i) {
+	case SCIDX_BK_SYS:
+		return (MBUF_SC_BK_SYS);
+
+	case SCIDX_BK:
+		return (MBUF_SC_BK);
+
+	case SCIDX_BE:
+		return (MBUF_SC_BE);
+
+	case SCIDX_RD:
+		return (MBUF_SC_RD);
+
+	case SCIDX_OAM:
+		return (MBUF_SC_OAM);
+
+	case SCIDX_AV:
+		return (MBUF_SC_AV);
+
+	case SCIDX_RV:
+		return (MBUF_SC_RV);
+
+	case SCIDX_VI:
+		return (MBUF_SC_VI);
+
+	case SCIDX_VO:
+		return (MBUF_SC_VO);
+
+	case SCIDX_CTL:
+		return (MBUF_SC_CTL);
+
+	default:
+		break;
+	}
+
+	VERIFY(0);
+	/* NOTREACHED */
+	return (sc);
+}
+
+mbuf_svc_class_t
+m_service_class_from_val(u_int32_t v)
+{
+	mbuf_svc_class_t sc = MBUF_SC_BE;
+
+	switch (v) {
+	case SCVAL_BK_SYS:
+		return (MBUF_SC_BK_SYS);
+
+	case SCVAL_BK:
+		return (MBUF_SC_BK);
+
+	case SCVAL_BE:
+		return (MBUF_SC_BE);
+
+	case SCVAL_RD:
+		return (MBUF_SC_RD);
+
+	case SCVAL_OAM:
+		return (MBUF_SC_OAM);
+
+	case SCVAL_AV:
+		return (MBUF_SC_AV);
+
+	case SCVAL_RV:
+		return (MBUF_SC_RV);
+
+	case SCVAL_VI:
+		return (MBUF_SC_VI);
+
+	case SCVAL_VO:
+		return (MBUF_SC_VO);
+
+	case SCVAL_CTL:
+		return (MBUF_SC_CTL);
+
+	default:
+		break;
+	}
+
+	VERIFY(0);
+	/* NOTREACHED */
+	return (sc);
 }

@@ -856,7 +856,7 @@ kxld_sym_export_macho_32(const KXLDSym *sym, u_char *_nl, char *strtab,
     u_long *stroff, u_long strsize)
 {
     kern_return_t rval = KERN_FAILURE;
-    struct nlist *nl = (struct nlist *) _nl;
+    struct nlist *nl = (struct nlist *) ((void *) _nl);
     char *str = NULL;
     long bytes = 0;
 
@@ -897,7 +897,7 @@ kxld_sym_export_macho_64(const KXLDSym *sym, u_char *_nl, char *strtab,
     u_long *stroff, u_long strsize)
 {
     kern_return_t rval = KERN_FAILURE;
-    struct nlist_64 *nl = (struct nlist_64 *) _nl;
+    struct nlist_64 *nl = (struct nlist_64 *) ((void *) _nl);
     char *str = NULL;
     long bytes = 0;
 

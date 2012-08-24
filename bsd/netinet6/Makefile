@@ -18,14 +18,14 @@ EXPINC_SUBDIRS_I386 = \
 DATAFILES = \
 	ah.h ipsec.h pim6.h  \
 	esp.h in6.h ipcomp.h raw_ip6.h \
-	in6_var.h ip6_mroute.h nd6.h ip6_fw.h
+	in6_var.h ip6_mroute.h nd6.h
 
 PRIVATE_DATAFILES = \
-	in6_pcb.h ip6_var.h pim6_var.h mld6_var.h
+	in6_pcb.h ip6_var.h pim6_var.h mld6_var.h ip6_fw.h
 
 PRIVATE_KERNELFILES = \
 	ah6.h esp6.h esp_rijndael.h in6_gif.h in6_ifattach.h \
-	 in6_prefix.h ip6_ecn.h ip6_fw.h  \
+	 in6_prefix.h ip6_ecn.h \
 	ip6protosw.h ipcomp6.h ipsec6.h \
 	raw_ip6.h scope6_var.h tcp6_var.h udp6_var.h
 

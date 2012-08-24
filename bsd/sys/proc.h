@@ -182,7 +182,7 @@ struct extern_proc {
 #define	P_SSTEP		0x20000	/ * process needs single-step fixup ??? * /
 */
 
-#define	P_RESV5 	0x00040000	/* (P_WAITING) process has a wait() in progress */
+#define	P_DELAYIDLESLEEP 0x00040000	/* Process is marked to delay idle sleep on disk IO */
 #define	P_CHECKOPENEVT 	0x00080000	/* check if a vnode has the OPENEVT flag set on open */
 
 #define	P_DEPENDENCY_CAPABLE	0x00100000	/* process is ok to call vfs_markdependency() */
@@ -206,6 +206,16 @@ struct extern_proc {
 #define	P_PHYSIO	0		/* Obsolete: retained for compilation */
 #define	P_FSTRACE	0		/* Obsolete: retained for compilation */
 #define	P_SSTEP		0		/* Obsolete: retained for compilation */
+
+#define P_DIRTY_TRACK                           0x00000001      /* track dirty state */
+#define P_DIRTY_ALLOW_IDLE_EXIT                 0x00000002      /* process can be idle-exited when clean */
+#define P_DIRTY                                 0x00000004      /* process is dirty */
+#define P_DIRTY_SHUTDOWN                        0x00000008      /* process is dirty during shutdown */
+#define P_DIRTY_TERMINATED                      0x00000010      /* process has been marked for termination */
+#define P_DIRTY_BUSY                            0x00000020      /* serialization flag */
+
+#define P_DIRTY_CAN_IDLE_EXIT                   (P_DIRTY_TRACK | P_DIRTY_ALLOW_IDLE_EXIT)
+#define P_DIRTY_IS_DIRTY                        (P_DIRTY | P_DIRTY_SHUTDOWN)
 
 #endif /* XNU_KERNEL_PRIVATE || !KERNEL */
 
@@ -289,6 +299,7 @@ extern int IS_64BIT_PROCESS(proc_t);
 extern int	tsleep(void *chan, int pri, const char *wmesg, int timo);
 extern int	msleep1(void *chan, lck_mtx_t *mtx, int pri, const char *wmesg, u_int64_t timo);
 
+task_t proc_task(proc_t);
 extern int proc_pidversion(proc_t);
 extern int proc_getcdhash(proc_t, unsigned char *);
 #endif /* KERNEL_PRIVATE */

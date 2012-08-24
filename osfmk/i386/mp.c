@@ -29,7 +29,6 @@
  */
 
 #include <mach_rt.h>
-#include <mach_kdb.h>
 #include <mach_kdp.h>
 #include <mach_ldebug.h>
 #include <gprof.h>
@@ -79,16 +78,6 @@
 #include <chud/chud_xnu_private.h>
 
 #include <sys/kdebug.h>
-#if MACH_KDB
-#include <machine/db_machdep.h>
-#include <ddb/db_aout.h>
-#include <ddb/db_access.h>
-#include <ddb/db_sym.h>
-#include <ddb/db_variables.h>
-#include <ddb/db_command.h>
-#include <ddb/db_output.h>
-#include <ddb/db_expr.h>
-#endif
 
 #if	MP_DEBUG
 #define PAUSE		delay(1000000)
@@ -109,12 +98,6 @@
 
 void 		slave_boot_init(void);
 void		i386_cpu_IPI(int cpu);
-
-#if MACH_KDB
-static void	mp_kdb_wait(void);
-volatile boolean_t	mp_kdb_trap = FALSE;
-volatile long	mp_kdb_ncpus = 0;
-#endif
 
 static void	mp_kdp_wait(boolean_t flush, boolean_t isNMI);
 static void	mp_rendezvous_action(void);
@@ -246,8 +229,12 @@ smp_init(void)
 	mp_cpus_call_cpu_init();
 
 	if (PE_parse_boot_argn("TSC_sync_margin",
-				&TSC_sync_margin, sizeof(TSC_sync_margin)))
+					&TSC_sync_margin, sizeof(TSC_sync_margin))) {
 		kprintf("TSC sync Margin 0x%x\n", TSC_sync_margin);
+	} else if (cpuid_vmm_present()) {
+		kprintf("TSC sync margin disabled\n");
+		TSC_sync_margin = 0;
+	}
 	smp_initialized = TRUE;
 
 	cpu_prewarm_init();
@@ -394,12 +381,6 @@ start_cpu(void *arg)
 	}
 }
 
-extern char	prot_mode_gdt[];
-extern char	slave_boot_base[];
-extern char real_mode_bootstrap_base[];
-extern char real_mode_bootstrap_end[];
-extern char	slave_boot_end[];
-
 kern_return_t
 intel_startCPU(
 	int	slot_num)
@@ -476,9 +457,6 @@ cpu_signal_handler(x86_saved_state_t *regs)
 {
 	int		my_cpu;
 	volatile int	*my_word;
-#if	MACH_KDB && MACH_ASSERT
-	int		i=100;
-#endif	/* MACH_KDB && MACH_ASSERT */
 
 	SCHED_STATS_IPI(current_processor());
 
@@ -492,10 +470,6 @@ cpu_signal_handler(x86_saved_state_t *regs)
 	cpu_data_ptr[my_cpu]->cpu_prior_signals = *my_word;
 
 	do {
-#if	MACH_KDB && MACH_ASSERT
-		if (i-- <= 0)
-		    Debugger("cpu_signal_handler: signals did not clear");
-#endif	/* MACH_KDB && MACH_ASSERT */
 #if	MACH_KDP
 		if (i_bit(MP_KDP, my_word)) {
 			DBGLOG(cpu_handle,my_cpu,MP_KDP);
@@ -521,14 +495,6 @@ cpu_signal_handler(x86_saved_state_t *regs)
 			DBGLOG(cpu_handle,my_cpu,MP_AST);
 			i_bit_clear(MP_AST, my_word);
 			ast_check(cpu_to_processor(my_cpu));
-#if	MACH_KDB
-		} else if (i_bit(MP_KDB, my_word)) {
-
-			i_bit_clear(MP_KDB, my_word);
-			current_cpu_datap()->cpu_kdb_is_slave++;
-			mp_kdb_wait();
-			current_cpu_datap()->cpu_kdb_is_slave--;
-#endif	/* MACH_KDB */
 		} else if (i_bit(MP_RENDEZVOUS, my_word)) {
 			DBGLOG(cpu_handle,my_cpu,MP_RENDEZVOUS);
 			i_bit_clear(MP_RENDEZVOUS, my_word);
@@ -894,79 +860,95 @@ typedef struct {
 	void		*arg1;			/* routine's 2nd arg */
 	volatile long	*countp;		/* completion counter */
 } mp_call_t;
-	
+
+
+typedef struct {
+	queue_head_t		queue;
+	decl_simple_lock_data(,	lock);
+} mp_call_queue_t;
 #define MP_CPUS_CALL_BUFS_PER_CPU	MAX_CPUS
-static queue_head_t	mp_cpus_call_freelist;
-static queue_head_t	mp_cpus_call_queue[MAX_CPUS];
-/*
- * The free list and the per-cpu call queues are protected by the following
- * lock which is taken wil interrupts disabled.
- */
-decl_simple_lock_data(,mp_cpus_call_lock);
+static mp_call_queue_t	mp_cpus_call_freelist;
+static mp_call_queue_t	mp_cpus_call_head[MAX_CPUS];
 
 static inline boolean_t
-mp_call_lock(void)
+mp_call_head_lock(mp_call_queue_t *cqp)
 {
 	boolean_t	intrs_enabled;
 
 	intrs_enabled = ml_set_interrupts_enabled(FALSE);
-	simple_lock(&mp_cpus_call_lock);
+	simple_lock(&cqp->lock);
 
 	return intrs_enabled;
 }
 
 static inline boolean_t
-mp_call_is_locked(void)
+mp_call_head_is_locked(mp_call_queue_t *cqp)
 {
 	return !ml_get_interrupts_enabled() &&
-		hw_lock_held((hw_lock_t)&mp_cpus_call_lock);
+		hw_lock_held((hw_lock_t)&cqp->lock);
 }
 
 static inline void
-mp_call_unlock(boolean_t intrs_enabled)
+mp_call_head_unlock(mp_call_queue_t *cqp, boolean_t intrs_enabled)
 {
-	simple_unlock(&mp_cpus_call_lock);
+	simple_unlock(&cqp->lock);
 	ml_set_interrupts_enabled(intrs_enabled);
 }
 
 static inline mp_call_t *
 mp_call_alloc(void)
 {
-	mp_call_t	*callp;
+	mp_call_t	*callp = NULL;
+	boolean_t	intrs_enabled;
+	mp_call_queue_t	*cqp = &mp_cpus_call_freelist;
 
-	assert(mp_call_is_locked());
-	if (queue_empty(&mp_cpus_call_freelist))
-		return NULL;
-	queue_remove_first(&mp_cpus_call_freelist, callp, typeof(callp), link);
+	intrs_enabled = mp_call_head_lock(cqp);
+	if (!queue_empty(&cqp->queue))
+		queue_remove_first(&cqp->queue, callp, typeof(callp), link);
+	mp_call_head_unlock(cqp, intrs_enabled);
+
 	return callp;
 }
 
 static inline void
 mp_call_free(mp_call_t *callp)
 {
-	assert(mp_call_is_locked());
-	queue_enter_first(&mp_cpus_call_freelist, callp, typeof(callp), link);
+	boolean_t	intrs_enabled;
+	mp_call_queue_t	*cqp = &mp_cpus_call_freelist;
+
+	intrs_enabled = mp_call_head_lock(cqp);
+	queue_enter_first(&cqp->queue, callp, typeof(callp), link);
+	mp_call_head_unlock(cqp, intrs_enabled);
 }
 
 static inline mp_call_t *
-mp_call_dequeue(queue_t call_queue)
+mp_call_dequeue_locked(mp_call_queue_t *cqp)
 {
-	mp_call_t	*callp;
+	mp_call_t	*callp = NULL;
 
-	assert(mp_call_is_locked());
-	if (queue_empty(call_queue))
-		return NULL;
-	queue_remove_first(call_queue, callp, typeof(callp), link);
+	assert(mp_call_head_is_locked(cqp));
+	if (!queue_empty(&cqp->queue))
+		queue_remove_first(&cqp->queue, callp, typeof(callp), link);
 	return callp;
+}
+
+static inline void
+mp_call_enqueue_locked(
+	mp_call_queue_t	*cqp,
+	mp_call_t	*callp)
+{
+	queue_enter(&cqp->queue, callp, typeof(callp), link);
 }
 
 /* Called on the boot processor to initialize global structures */
 static void
 mp_cpus_call_init(void)
 {
+	mp_call_queue_t	*cqp = &mp_cpus_call_freelist;
+
 	DBG("mp_cpus_call_init()\n");
-	simple_lock_init(&mp_cpus_call_lock, 0);
-	queue_init(&mp_cpus_call_freelist);
+	simple_lock_init(&cqp->lock, 0);
+	queue_init(&cqp->queue);
 }
 
 /*
@@ -977,19 +959,18 @@ mp_cpus_call_init(void)
 static void
 mp_cpus_call_cpu_init(void)
 {
-	boolean_t	intrs_enabled;
 	int		i;
+	mp_call_queue_t	*cqp = &mp_cpus_call_head[cpu_number()];
 	mp_call_t	*callp;
 
-	if (mp_cpus_call_queue[cpu_number()].next != NULL)
+	if (cqp->queue.next != NULL)
 		return; /* restart/wake case: called already */
 
-	queue_init(&mp_cpus_call_queue[cpu_number()]);
+	simple_lock_init(&cqp->lock, 0);
+	queue_init(&cqp->queue);
 	for (i = 0; i < MP_CPUS_CALL_BUFS_PER_CPU; i++) {
 		callp = (mp_call_t *) kalloc(sizeof(mp_call_t));
-		intrs_enabled = mp_call_lock();
 		mp_call_free(callp);
-		mp_call_unlock(intrs_enabled);
 	}
 
 	DBG("mp_cpus_call_init() done on cpu %d\n", cpu_number());
@@ -1002,56 +983,30 @@ mp_cpus_call_cpu_init(void)
 static void
 mp_cpus_call_action(void)
 {
-	queue_t		cpu_head;
+	mp_call_queue_t	*cqp;
 	boolean_t	intrs_enabled;
 	mp_call_t	*callp;
 	mp_call_t	call;
 
 	assert(!ml_get_interrupts_enabled());
-	cpu_head = &mp_cpus_call_queue[cpu_number()];
-	intrs_enabled = mp_call_lock();
-	while ((callp = mp_call_dequeue(cpu_head)) != NULL) {
+	cqp = &mp_cpus_call_head[cpu_number()];
+	intrs_enabled = mp_call_head_lock(cqp);
+	while ((callp = mp_call_dequeue_locked(cqp)) != NULL) {
 		/* Copy call request to the stack to free buffer */
 		call = *callp;
 		mp_call_free(callp);
 		if (call.func != NULL) {
-			mp_call_unlock(intrs_enabled);
+			mp_call_head_unlock(cqp, intrs_enabled);
 			KERNEL_DEBUG_CONSTANT(
 				TRACE_MP_CPUS_CALL_ACTION,
 				call.func, call.arg0, call.arg1, call.countp, 0);
 			call.func(call.arg0, call.arg1);
-			(void) mp_call_lock();
+			(void) mp_call_head_lock(cqp);
 		}
 		if (call.countp != NULL)
 			atomic_incl(call.countp, 1);
 	}
-	mp_call_unlock(intrs_enabled);
-}
-
-static boolean_t
-mp_call_queue(
-	int		cpu, 
-        void		(*action_func)(void *, void *),
-        void		*arg0,
-        void		*arg1,
-	volatile long	*countp)
-{
-	queue_t		cpu_head = &mp_cpus_call_queue[cpu];
-	mp_call_t	*callp;
-
-	assert(mp_call_is_locked());
-	callp = mp_call_alloc();
-	if (callp == NULL)
-		return FALSE;
-
-	callp->func = action_func;
-	callp->arg0 = arg0;
-	callp->arg1 = arg1;
-	callp->countp = countp;
-
-	queue_enter(cpu_head, callp, typeof(callp), link);
-
-	return TRUE;
+	mp_call_head_unlock(cqp, intrs_enabled);
 }
 
 /*
@@ -1085,19 +1040,19 @@ mp_cpus_call(
 }
 
 static void
-mp_cpus_call_wait(boolean_t intrs_enabled,
-		  long mp_cpus_signals,
-		  volatile long *mp_cpus_calls)
+mp_cpus_call_wait(boolean_t	intrs_enabled,
+		  long		mp_cpus_signals,
+		  volatile long	*mp_cpus_calls)
 {
-	queue_t		cpu_head;
+	mp_call_queue_t		*cqp;
 
-	cpu_head = &mp_cpus_call_queue[cpu_number()];
+	cqp = &mp_cpus_call_head[cpu_number()];
 
 	while (*mp_cpus_calls < mp_cpus_signals) {
 		if (!intrs_enabled) {
-			if (!queue_empty(cpu_head))
+			/* Sniffing w/o locking */
+			if (!queue_empty(&cqp->queue))
 				mp_cpus_call_action();
-
 			handle_pending_TLB_flushes();
 		}
 		cpu_pause();
@@ -1124,7 +1079,7 @@ mp_cpus_call1(
 
 	KERNEL_DEBUG_CONSTANT(
 		TRACE_MP_CPUS_CALL | DBG_FUNC_START,
-		cpus, mode, action_func, arg0, arg1);
+		cpus, mode, VM_KERNEL_UNSLIDE(action_func), arg0, arg1);
 
 	if (!smp_initialized) {
 		if ((cpus & CPUMASK_SELF) == 0)
@@ -1158,7 +1113,8 @@ mp_cpus_call1(
 			if (mode == SYNC && action_func != NULL) {
 				KERNEL_DEBUG_CONSTANT(
 					TRACE_MP_CPUS_CALL_LOCAL,
-					action_func, arg0, arg1, 0, 0);
+					VM_KERNEL_UNSLIDE(action_func),
+					arg0, arg1, 0, 0);
 				action_func(arg0, arg1);
 			}
 		} else {
@@ -1166,41 +1122,52 @@ mp_cpus_call1(
 			 * Here to queue a call to cpu and IPI.
 			 * Spinning for request buffer unless NOSYNC.
 			 */
+			mp_call_t	*callp = NULL;
+			mp_call_queue_t	*cqp = &mp_cpus_call_head[cpu];
+
 		queue_call:
-			intrs_enabled = mp_call_lock();
+			if (callp == NULL)
+				callp = mp_call_alloc();
+			intrs_enabled = mp_call_head_lock(cqp);
 			if (!cpu_datap(cpu)->cpu_running) {
-				mp_call_unlock(intrs_enabled);
+				mp_call_head_unlock(cqp, intrs_enabled);
 				continue;
 			}
 			if (mode == NOSYNC) {
-				if (!mp_call_queue(cpu, action_func, arg0, arg1,
-						   NULL)) {
+				if (callp == NULL) {
 					cpus_notcalled |= cpu_to_cpumask(cpu);
-					mp_call_unlock(intrs_enabled);
+					mp_call_head_unlock(cqp, intrs_enabled);
 					KERNEL_DEBUG_CONSTANT(
 						TRACE_MP_CPUS_CALL_NOBUF,
 						cpu, 0, 0, 0, 0);
 					continue;
 				}
+				callp->countp = NULL;
 			} else {
-				if (!mp_call_queue(cpu, action_func, arg0, arg1,
-						      &mp_cpus_calls)) {
-					mp_call_unlock(intrs_enabled);
+				if (callp == NULL) {
+					mp_call_head_unlock(cqp, intrs_enabled);
 					KERNEL_DEBUG_CONSTANT(
 						TRACE_MP_CPUS_CALL_NOBUF,
 						cpu, 0, 0, 0, 0);
 					if (!intrs_enabled) {
-						mp_cpus_call_action();
+						/* Sniffing w/o locking */
+						if (!queue_empty(&cqp->queue))
+							mp_cpus_call_action();
 						handle_pending_TLB_flushes();
 					}
 					cpu_pause();
 					goto queue_call;
 				}
+				callp->countp = &mp_cpus_calls;
 			}
+			callp->func = action_func;
+			callp->arg0 = arg0;
+			callp->arg1 = arg1;
+			mp_call_enqueue_locked(cqp, callp);
 			mp_cpus_signals++;
 			cpus_called |= cpu_to_cpumask(cpu);
 			i386_signal_cpu(cpu, MP_CALL, ASYNC);
-			mp_call_unlock(intrs_enabled);
+			mp_call_head_unlock(cqp, intrs_enabled);
 			if (mode == SYNC) {
 				mp_cpus_call_wait(intrs_enabled, mp_cpus_signals, &mp_cpus_calls);
 			}
@@ -1211,7 +1178,7 @@ mp_cpus_call1(
 	if (mode != SYNC && call_self ) {
 		KERNEL_DEBUG_CONSTANT(
 			TRACE_MP_CPUS_CALL_LOCAL,
-			action_func, arg0, arg1, 0, 0);
+			VM_KERNEL_UNSLIDE(action_func), arg0, arg1, 0, 0);
 		if (action_func != NULL) {
 			ml_set_interrupts_enabled(FALSE);
 			action_func(arg0, arg1);
@@ -1423,7 +1390,10 @@ mp_kdp_enter(void)
 		 * "unsafe-to-interrupt" points such as the trampolines,
 		 * but neither do we want to lose state by waiting too long.
 		 */
-		tsc_timeout = rdtsc64() + (ncpus * 1000 * 1000);
+		tsc_timeout = rdtsc64() + (ncpus * 1000 * 1000 * 10ULL);
+
+		if (virtualized)
+			tsc_timeout = ~0ULL;
 
 		while (mp_kdp_ncpus != ncpus && rdtsc64() < tsc_timeout) {
 			/*
@@ -1454,7 +1424,7 @@ mp_kdp_enter(void)
 			cpu_NMI_interrupt(cpu);
 		}
 
-	DBG("mp_kdp_enter() %lu processors done %s\n",
+	DBG("mp_kdp_enter() %u processors done %s\n",
 	    (int)mp_kdp_ncpus, (mp_kdp_ncpus == ncpus) ? "OK" : "timed out");
 	
 	postcode(MP_KDP_ENTER);
@@ -1596,104 +1566,6 @@ cause_ast_check(
 	}
 }
 
-#if MACH_KDB
-/*
- * invoke kdb on slave processors 
- */
-
-void
-remote_kdb(void)
-{
-	unsigned int	my_cpu = cpu_number();
-	unsigned int	cpu;
-	int kdb_ncpus;
-	uint64_t tsc_timeout = 0;
-	
-	mp_kdb_trap = TRUE;
-	mp_kdb_ncpus = 1;
-	for (kdb_ncpus = 1, cpu = 0; cpu < real_ncpus; cpu++) {
-		if (cpu == my_cpu || !cpu_datap(cpu)->cpu_running)
-			continue;
-		kdb_ncpus++;
-		i386_signal_cpu(cpu, MP_KDB, ASYNC);
-	}
-	DBG("remote_kdb() waiting for (%d) processors to suspend\n",kdb_ncpus);
-
-	tsc_timeout = rdtsc64() + (kdb_ncpus * 100 * 1000 * 1000);
-
-	while (mp_kdb_ncpus != kdb_ncpus && rdtsc64() < tsc_timeout) {
-	        /*
-		 * a TLB shootdown request may be pending... this would result in the requesting
-		 * processor waiting in PMAP_UPDATE_TLBS() until this processor deals with it.
-		 * Process it, so it can now enter mp_kdp_wait()
-		 */
-	        handle_pending_TLB_flushes();
-
-		cpu_pause();
-	}
-	DBG("mp_kdp_enter() %lu processors done %s\n",
-		mp_kdb_ncpus, (mp_kdb_ncpus == kdb_ncpus) ? "OK" : "timed out");
-}
-
-static void
-mp_kdb_wait(void)
-{
-	DBG("mp_kdb_wait()\n");
-
-	/* If an I/O port has been specified as a debugging aid, issue a read */
-	panic_io_port_read();
-
-	atomic_incl(&mp_kdb_ncpus, 1);
-	while (mp_kdb_trap) {
-	        /*
-		 * a TLB shootdown request may be pending... this would result in the requesting
-		 * processor waiting in PMAP_UPDATE_TLBS() until this processor deals with it.
-		 * Process it, so it can now enter mp_kdp_wait()
-		 */
-	        handle_pending_TLB_flushes();
-
-		cpu_pause();
-	}
-	atomic_decl((volatile long *)&mp_kdb_ncpus, 1);
-	DBG("mp_kdb_wait() done\n");
-}
-
-/*
- * Clear kdb interrupt
- */
-
-void
-clear_kdb_intr(void)
-{
-	mp_disable_preemption();
-	i_bit_clear(MP_KDB, &current_cpu_datap()->cpu_signals);
-	mp_enable_preemption();
-}
-
-void
-mp_kdb_exit(void)
-{
-	DBG("mp_kdb_exit()\n");
-	atomic_decl((volatile long *)&mp_kdb_ncpus, 1);
-	mp_kdb_trap = FALSE;
-	__asm__ volatile("mfence");
-
-	while (mp_kdb_ncpus > 0) {
-	        /*
-		 * a TLB shootdown request may be pending... this would result in the requesting
-		 * processor waiting in PMAP_UPDATE_TLBS() until this processor deals with it.
-		 * Process it, so it can now enter mp_kdp_wait()
-		 */
-	        handle_pending_TLB_flushes();
-
-		cpu_pause();
-	}
-
-	DBG("mp_kdb_exit() done\n");
-}
-
-#endif /* MACH_KDB */
-
 void
 slave_machine_init(void *param)
 {
@@ -1717,54 +1589,6 @@ int cpu_number(void)
 {
 	return get_cpu_number();
 }
-
-#if	MACH_KDB
-#include <ddb/db_output.h>
-
-#define TRAP_DEBUG 0 /* Must match interrupt.s and spl.s */
-
-
-#if	TRAP_DEBUG
-#define MTRAPS 100
-struct mp_trap_hist_struct {
-	unsigned char type;
-	unsigned char data[5];
-} trap_hist[MTRAPS], *cur_trap_hist = trap_hist,
-    *max_trap_hist = &trap_hist[MTRAPS];
-
-void db_trap_hist(void);
-
-/*
- * SPL:
- *	1: new spl
- *	2: old spl
- *	3: new tpr
- *	4: old tpr
- * INT:
- * 	1: int vec
- *	2: old spl
- *	3: new spl
- *	4: post eoi tpr
- *	5: exit tpr
- */
-
-void
-db_trap_hist(void)
-{
-	int i,j;
-	for(i=0;i<MTRAPS;i++)
-	    if (trap_hist[i].type == 1 || trap_hist[i].type == 2) {
-		    db_printf("%s%s",
-			      (&trap_hist[i]>=cur_trap_hist)?"*":" ",
-			      (trap_hist[i].type == 1)?"SPL":"INT");
-		    for(j=0;j<5;j++)
-			db_printf(" %02x", trap_hist[i].data[j]);
-		    db_printf("\n");
-	    }
-		
-}
-#endif	/* TRAP_DEBUG */
-#endif	/* MACH_KDB */
 
 static void
 cpu_prewarm_init()

@@ -60,6 +60,8 @@
 #ifndef	_MACH_MACHINE_H_
 #define _MACH_MACHINE_H_
 
+#ifndef __ASSEMBLER__
+
 #include <stdint.h>
 #include <mach/machine/vm_types.h>
 #include <mach/boolean.h>
@@ -348,6 +350,10 @@ __END_DECLS
 #define CPU_SUBTYPE_ARM_V5TEJ           ((cpu_subtype_t) 7)
 #define CPU_SUBTYPE_ARM_XSCALE		((cpu_subtype_t) 8)
 #define CPU_SUBTYPE_ARM_V7		((cpu_subtype_t) 9)
+#define CPU_SUBTYPE_ARM_V7F		((cpu_subtype_t) 10) /* Cortex A9 */
+#define CPU_SUBTYPE_ARM_V7K		((cpu_subtype_t) 12) /* Kirkwood40 */
+
+#endif /* !__ASSEMBLER__ */
 
 /*
  *	CPU families (sysctl hw.cpufamily)

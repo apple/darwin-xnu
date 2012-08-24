@@ -38,7 +38,7 @@
  */
 
 #ifndef	_SYS_SPAWN_INTERNAL_H_
-#define	_SYS_SPAWN__INTERNALH_
+#define	_SYS_SPAWN_INTERNAL_H_
 
 #include <sys/_types.h>		/* __offsetof(), __darwin_size_t */
 #include <sys/syslimits.h>	/* PATH_MAX */
@@ -64,7 +64,7 @@ typedef enum {
 typedef struct _ps_port_action {
 	pspa_t			port_type;
 	exception_mask_t	mask;
-	mach_port_t		new_port;
+	mach_port_name_t	new_port;
 	exception_behavior_t	behavior;
 	thread_state_flavor_t	flavor;
 	int			which;
@@ -99,10 +99,55 @@ typedef struct _posix_spawnattr {
 	sigset_t	psa_sigmask;		/* signal set to mask */
 	pid_t		psa_pgroup;		/* pgroup to spawn into */
 	cpu_type_t	psa_binprefs[NBINPREFS];   /* cpu affinity prefs*/
-	_posix_spawn_port_actions_t	psa_ports; /* special/exception ports */
 	int		psa_pcontrol;		/* process control bits on resource starvation */
+	int		psa_apptype;		/* app type and process spec behav */
+	uint64_t 	psa_cpumonitor_percent; /* CPU usage monitor percentage */
+	uint64_t 	psa_cpumonitor_interval; /* CPU usage monitor interval, in seconds */
+	_posix_spawn_port_actions_t	psa_ports; /* special/exception ports */
+	/* XXX - k64/u32 unaligned below here */
+#if CONFIG_MEMORYSTATUS || CONFIG_EMBEDDED || TARGET_OS_EMBEDDED
+	/* Jetsam related */
+	short       psa_jetsam_flags; /* flags */
+	int         psa_priority;   /* relative importance */
+	int         psa_high_water_mark; /* resident page count limit */
+#endif
 } *_posix_spawnattr_t;
 
+/*
+ * Jetsam flags
+ */
+#if CONFIG_MEMORYSTATUS || CONFIG_EMBEDDED || TARGET_OS_EMBEDDED
+#define	POSIX_SPAWN_JETSAM_USE_EFFECTIVE_PRIORITY	0x1
+#endif
+
+/*
+ * DEPRECATED: maintained for transition purposes only
+ * posix_spawn apptype settings.
+ */
+#if TARGET_OS_EMBEDDED || CONFIG_EMBEDDED
+/* for compat sake */
+#define POSIX_SPAWN_OSX_TALAPP_START    0x0400
+#define POSIX_SPAWN_IOS_RESV1_APP_START 0x0400
+#define POSIX_SPAWN_IOS_APPLE_DAEMON_START      0x0800          /* not a bug, same as widget just rename */
+#define POSIX_SPAWN_IOS_APP_START       0x1000
+#else /* TARGET_OS_EMBEDDED */
+#define POSIX_SPAWN_OSX_TALAPP_START    0x0400
+#define POSIX_SPAWN_OSX_WIDGET_START    0x0800
+#define POSIX_SPAWN_OSX_DBCLIENT_START  0x0800          /* not a bug, same as widget just rename */
+#define POSIX_SPAWN_OSX_RESVAPP_START   0x1000          /* reserved for app start usages */
+#endif /* TARGET_OS_EMBEDDED */
+
+
+/*
+ * posix_spawn apptype and process attribute settings.
+ */
+#if TARGET_OS_EMBEDDED || CONFIG_EMBEDDED
+#define POSIX_SPAWN_APPTYPE_IOS_APPLEDAEMON    0x0001          /* it is an iOS apple daemon  */
+#else /* TARGET_OS_EMBEDDED */
+#define POSIX_SPAWN_APPTYPE_OSX_TAL	0x0001		/* it is a TAL app */
+#define POSIX_SPAWN_APPTYPE_OSX_WIDGET	0x0002		/* it is a widget */
+#define POSIX_SPAWN_APPTYPE_DELAYIDLESLEEP   0x10000000	/* Process is marked to delay idle sleep on disk IO */
+#endif /* TARGET_OS_EMBEDDED */
 
 /*
  * Allowable posix_spawn() file actions
@@ -190,7 +235,7 @@ struct _posix_spawn_args_desc {
 	__darwin_size_t	file_actions_size;	/* size of file actions block */
 	_posix_spawn_file_actions_t
 				file_actions;	/* pointer to block */
-	__darwin_size_t	port_actions_size; /* size of port actions block */
+	__darwin_size_t	port_actions_size; 	/* size of port actions block */
 	_posix_spawn_port_actions_t
 				port_actions; 	/* pointer to port block */
 };

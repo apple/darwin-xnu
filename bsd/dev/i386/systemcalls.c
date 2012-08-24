@@ -167,8 +167,9 @@ unix_syscall(x86_saved_state_t *state)
 		if (__probable(code != 180)) {
 	        	int *ip = (int *)vt;
 
-			KERNEL_DEBUG_CONSTANT(BSDDBG_CODE(DBG_BSD_EXCP_SC, code) | DBG_FUNC_START,
-				      *ip, *(ip+1), *(ip+2), *(ip+3), 0);
+			KERNEL_DEBUG_CONSTANT_IST(KDEBUG_TRACE,
+				BSDDBG_CODE(DBG_BSD_EXCP_SC, code) | DBG_FUNC_START,
+				*ip, *(ip+1), *(ip+2), *(ip+3), 0);
 		}
 		mungerp = callp->sy_arg_munge32;
 
@@ -182,7 +183,8 @@ unix_syscall(x86_saved_state_t *state)
 		if (mungerp != NULL)
 			(*mungerp)(NULL, vt);
 	} else
-		KERNEL_DEBUG_CONSTANT(BSDDBG_CODE(DBG_BSD_EXCP_SC, code) | DBG_FUNC_START,
+		KERNEL_DEBUG_CONSTANT_IST(KDEBUG_TRACE, 
+			BSDDBG_CODE(DBG_BSD_EXCP_SC, code) | DBG_FUNC_START,
 			0, 0, 0, 0, 0);
 
 	/*
@@ -256,8 +258,9 @@ unix_syscall(x86_saved_state_t *state)
 		throttle_lowpri_io(TRUE);
 	}
 	if (__probable(code != 180))
-	        KERNEL_DEBUG_CONSTANT(BSDDBG_CODE(DBG_BSD_EXCP_SC, code) | DBG_FUNC_END,
-				      error, uthread->uu_rval[0], uthread->uu_rval[1], p->p_pid, 0);
+		KERNEL_DEBUG_CONSTANT_IST(KDEBUG_TRACE, 
+			BSDDBG_CODE(DBG_BSD_EXCP_SC, code) | DBG_FUNC_END,
+			error, uthread->uu_rval[0], uthread->uu_rval[1], p->p_pid, 0);
 
 	if (__improbable(!is_vfork && callp->sy_call == (sy_call_t *)execve && !error)) {
 		pal_execve_return(thread);
@@ -328,8 +331,9 @@ unix_syscall64(x86_saved_state_t *state)
 		if (code != 180) {
 			uint64_t *ip = (uint64_t *)uargp;
 
-			KERNEL_DEBUG_CONSTANT(BSDDBG_CODE(DBG_BSD_EXCP_SC, code) | DBG_FUNC_START,
-					(int)(*ip), (int)(*(ip+1)), (int)(*(ip+2)), (int)(*(ip+3)), 0);
+			KERNEL_DEBUG_CONSTANT_IST(KDEBUG_TRACE, 
+				BSDDBG_CODE(DBG_BSD_EXCP_SC, code) | DBG_FUNC_START,
+				(int)(*ip), (int)(*(ip+1)), (int)(*(ip+2)), (int)(*(ip+3)), 0);
 		}
 		assert(callp->sy_narg <= 8);
 
@@ -354,8 +358,9 @@ unix_syscall64(x86_saved_state_t *state)
 			goto unsafe;
 		}
 	} else
-	        KERNEL_DEBUG_CONSTANT(BSDDBG_CODE(DBG_BSD_EXCP_SC, code) | DBG_FUNC_START,
-				      0, 0, 0, 0, 0);
+		KERNEL_DEBUG_CONSTANT_IST(KDEBUG_TRACE,
+			BSDDBG_CODE(DBG_BSD_EXCP_SC, code) | DBG_FUNC_START,
+			0, 0, 0, 0, 0);
 unsafe:
 
 	/*
@@ -453,8 +458,9 @@ unsafe:
 		throttle_lowpri_io(TRUE);
 	}
 	if (__probable(code != 180))
-	        KERNEL_DEBUG_CONSTANT(BSDDBG_CODE(DBG_BSD_EXCP_SC, code) | DBG_FUNC_END,
-				      error, uthread->uu_rval[0], uthread->uu_rval[1], p->p_pid, 0);
+		KERNEL_DEBUG_CONSTANT_IST(KDEBUG_TRACE, 
+			BSDDBG_CODE(DBG_BSD_EXCP_SC, code) | DBG_FUNC_END,
+			error, uthread->uu_rval[0], uthread->uu_rval[1], p->p_pid, 0);
 
 	thread_exception_return();
 	/* NOTREACHED */
@@ -599,8 +605,9 @@ unix_syscall_return(int error)
 		throttle_lowpri_io(TRUE);
 	}
 	if (code != 180)
-	        KERNEL_DEBUG_CONSTANT(BSDDBG_CODE(DBG_BSD_EXCP_SC, code) | DBG_FUNC_END,
-				      error, uthread->uu_rval[0], uthread->uu_rval[1], p->p_pid, 0);
+		KERNEL_DEBUG_CONSTANT_IST(KDEBUG_TRACE, 
+			BSDDBG_CODE(DBG_BSD_EXCP_SC, code) | DBG_FUNC_END,
+			error, uthread->uu_rval[0], uthread->uu_rval[1], p->p_pid, 0);
 
 	thread_exception_return();
 	/* NOTREACHED */

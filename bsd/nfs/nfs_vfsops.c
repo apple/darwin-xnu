@@ -1575,8 +1575,12 @@ nfs_convert_old_nfs_args(mount_t mp, user_addr_t data, vfs_context_t ctx, int ar
 	/* copy socket address */
 	if (inkernel)
 		bcopy(CAST_DOWN(void *, args.addr), &ss, args.addrlen);
-	else
-		error = copyin(args.addr, &ss, args.addrlen);
+	else {
+		if ((size_t)args.addrlen > sizeof (struct sockaddr_storage))
+			error = EINVAL;
+		else
+			error = copyin(args.addr, &ss, args.addrlen);
+	}
 	nfsmout_if(error);
 	ss.ss_len = args.addrlen;
 
@@ -2694,6 +2698,7 @@ mountnfs(
 		nmp->nm_acdirmax = NFS_MAXDIRATTRTIMO;
 		nmp->nm_auth = RPCAUTH_SYS;
 		nmp->nm_deadtimeout = 0;
+		nmp->nm_curdeadtimeout = 0;
 		NFS_BITMAP_SET(nmp->nm_flags, NFS_MFLAG_NOACL);
 	}
 

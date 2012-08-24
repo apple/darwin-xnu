@@ -103,8 +103,9 @@
 
 static int in_mask2len(struct in_addr *);
 static void in_len2mask(struct in_addr *, int);
-static int in_lifaddr_ioctl(struct socket *, u_long, caddr_t,
-	struct ifnet *, struct proc *);
+static int in_lifaddr_ioctl(struct socket *, u_long, struct if_laddrreq *,
+    struct ifnet *, struct proc *);
+static int in_setrouter(struct ifnet *, int);
 
 static void	in_socktrim(struct sockaddr_in *);
 static int	in_ifinit(struct ifnet *,
@@ -366,35 +367,37 @@ in_domifattach(struct ifnet *ifp)
  */
 /* ARGSUSED */
 int
-in_control(
-	struct socket *so,
-	u_long cmd,
-	caddr_t data,
-	struct ifnet *ifp,
-	struct proc *p)
+in_control(struct socket *so, u_long cmd, caddr_t data, struct ifnet *ifp,
+    struct proc *p)
 {
-	struct ifreq *ifr = (struct ifreq *)data;
-	struct in_ifaddr *ia = NULL, *iap;
+	struct in_ifaddr *ia = NULL;
 	struct ifaddr *ifa;
-	struct in_aliasreq *ifra = (struct in_aliasreq *)data;
 	struct sockaddr_in oldaddr;
 	int error = 0;
 	int hostIsNew, maskIsNew;
-	struct kev_msg        ev_msg;
-	struct kev_in_data    in_event_data;
+	struct kev_msg ev_msg;
+	struct kev_in_data in_event_data;
 
-	bzero(&in_event_data, sizeof(struct kev_in_data));
-	bzero(&ev_msg, sizeof(struct kev_msg));
+	bzero(&in_event_data, sizeof (struct kev_in_data));
+	bzero(&ev_msg, sizeof (struct kev_msg));
+
 	switch (cmd) {
-	case SIOCALIFADDR:
-	case SIOCDLIFADDR:
+	case SIOCALIFADDR:		/* struct if_laddrreq */
+	case SIOCDLIFADDR:		/* struct if_laddrreq */
 		if ((error = proc_suser(p)) != 0)
-			return error;
-		/*fall through*/
-	case SIOCGLIFADDR:
-		if (!ifp)
-			return EINVAL;
-		return in_lifaddr_ioctl(so, cmd, data, ifp, p);
+			return (error);
+		/* FALLTHRU */
+	case SIOCGLIFADDR: {		/* struct if_laddrreq */
+		struct if_laddrreq iflr;
+
+		if (ifp == NULL)
+			return (EINVAL);
+
+		bcopy(data, &iflr, sizeof (iflr));
+		error = in_lifaddr_ioctl(so, cmd, &iflr, ifp, p);
+		bcopy(&iflr, data, sizeof (iflr));
+		return (error);
+	}
 	}
 
 	/*
@@ -403,51 +406,75 @@ in_control(
 	 * If an alias address was specified, find that one instead of
 	 * the first one on the interface.
 	 */
-	if (ifp) {
+	if (ifp != NULL) {
+		struct in_ifaddr *iap;
+		struct sockaddr_in sin;
+
+		bcopy(&((struct ifreq *)(void *)data)->ifr_addr,
+		    &sin, sizeof (sin));
+
 		lck_rw_lock_shared(in_ifaddr_rwlock);
-		for (iap = in_ifaddrhead.tqh_first; iap; 
-		     iap = iap->ia_link.tqe_next)
-			if (iap->ia_ifp == ifp) {
-				IFA_LOCK(&iap->ia_ifa);
-				if (((struct sockaddr_in *)&ifr->ifr_addr)->sin_addr.s_addr ==
-				    iap->ia_addr.sin_addr.s_addr) {
-					ia = iap;
+		for (iap = in_ifaddrhead.tqh_first; iap != NULL;
+		     iap = iap->ia_link.tqe_next) {
+			if (iap->ia_ifp != ifp)
+				continue;
+
+			IFA_LOCK(&iap->ia_ifa);
+			if (sin.sin_addr.s_addr ==
+			    iap->ia_addr.sin_addr.s_addr) {
+				ia = iap;
+				IFA_UNLOCK(&iap->ia_ifa);
+				break;
+			} else if (ia == NULL) {
+				ia = iap;
+				if (sin.sin_family != AF_INET) {
 					IFA_UNLOCK(&iap->ia_ifa);
 					break;
-				} else if (ia == NULL) {
-					ia = iap;
-					if (ifr->ifr_addr.sa_family != AF_INET) {
-						IFA_UNLOCK(&iap->ia_ifa);
-						break;
-					}
 				}
-				IFA_UNLOCK(&iap->ia_ifa);
 			}
-		/* take a reference on ia before releasing lock */
-		if (ia != NULL) {
-			IFA_ADDREF(&ia->ia_ifa);
+			IFA_UNLOCK(&iap->ia_ifa);
 		}
+		/* take a reference on ia before releasing lock */
+		if (ia != NULL)
+			IFA_ADDREF(&ia->ia_ifa);
 		lck_rw_done(in_ifaddr_rwlock);
 	}
+
 	switch (cmd) {
-	case SIOCAUTOADDR:
-	case SIOCARPIPLL:
+	case SIOCAUTOADDR:		/* struct ifreq */
+	case SIOCARPIPLL:		/* struct ifreq */
+	case SIOCSETROUTERMODE:		/* struct ifreq */
 		if ((error = proc_suser(p)) != 0) {
 			goto done;
 		}
-		if (ifp == 0) {
+		if (ifp == NULL) {
 			error = EADDRNOTAVAIL;
 			goto done;
 		}
 		break;
 
-	case SIOCAIFADDR:
-	case SIOCDIFADDR:
-		if (ifp == 0) {
+	case SIOCAIFADDR:		/* struct ifaliasreq */
+	case SIOCDIFADDR: {		/* struct ifreq */
+		struct sockaddr_in addr, dstaddr;
+
+		if (ifp == NULL) {
 			error = EADDRNOTAVAIL;
 			goto done;
 		}
-		if (ifra->ifra_addr.sin_family == AF_INET) {
+
+		if (cmd == SIOCAIFADDR) {
+			bcopy(&((struct in_aliasreq *)(void *)data)->
+			    ifra_addr, &addr, sizeof (addr));
+			bcopy(&((struct in_aliasreq *)(void *)data)->
+			    ifra_dstaddr, &dstaddr, sizeof (dstaddr));
+		} else {
+			VERIFY(cmd == SIOCDIFADDR);
+			bcopy(&((struct ifreq *)(void *)data)->ifr_addr,
+			    &addr, sizeof (addr));
+			bzero(&dstaddr, sizeof (dstaddr));
+		}
+
+		if (addr.sin_family == AF_INET) {
 			struct in_ifaddr *oia;
 
 			lck_rw_lock_shared(in_ifaddr_rwlock);
@@ -455,7 +482,7 @@ in_control(
 				IFA_LOCK(&ia->ia_ifa);
 				if (ia->ia_ifp == ifp  &&
 				    ia->ia_addr.sin_addr.s_addr ==
-				    ifra->ifra_addr.sin_addr.s_addr) {
+				    addr.sin_addr.s_addr) {
 					IFA_ADDREF_LOCKED(&ia->ia_ifa);
 					IFA_UNLOCK(&ia->ia_ifa);
 					break;
@@ -465,26 +492,38 @@ in_control(
 			lck_rw_done(in_ifaddr_rwlock);
 			if (oia != NULL)
 				IFA_REMREF(&oia->ia_ifa);
-			if ((ifp->if_flags & IFF_POINTOPOINT)
-			    && (cmd == SIOCAIFADDR)
-			    && (ifra->ifra_dstaddr.sin_addr.s_addr
-				== INADDR_ANY)) {
+			if ((ifp->if_flags & IFF_POINTOPOINT) &&
+			    (cmd == SIOCAIFADDR) &&
+			    (dstaddr.sin_addr.s_addr == INADDR_ANY)) {
 				error = EDESTADDRREQ;
 				goto done;
 			}
-		}
-		else if (cmd == SIOCAIFADDR) {
+		} else if (cmd == SIOCAIFADDR) {
 			error = EINVAL;
 			goto done;
 		}
-		if (cmd == SIOCDIFADDR && ia == 0) {
+		if (cmd == SIOCDIFADDR && ia == NULL) {
 			error = EADDRNOTAVAIL;
 			goto done;
 		}
 		/* FALLTHROUGH */
-	case SIOCSIFADDR:
-	case SIOCSIFNETMASK:
-	case SIOCSIFDSTADDR:
+	}
+	case SIOCSIFADDR:		/* struct ifreq */
+	case SIOCSIFNETMASK:		/* struct ifreq */
+	case SIOCSIFDSTADDR: {		/* struct ifreq */
+		struct sockaddr_in addr;
+
+		if (cmd == SIOCAIFADDR) {
+			/* fell thru from above; just repeat it */
+			bcopy(&((struct in_aliasreq *)(void *)data)->
+			    ifra_addr, &addr, sizeof (addr));
+		} else {
+			VERIFY(cmd == SIOCDIFADDR || cmd == SIOCSIFADDR ||
+			    cmd == SIOCSIFNETMASK || cmd == SIOCSIFDSTADDR);
+			bcopy(&((struct ifreq *)(void *)data)->ifr_addr,
+			    &addr, sizeof (addr));
+		}
+
 		/* socket is NULL if called from in_purgeaddrs() */
 		if (so != NULL && (so->so_state & SS_PRIV) == 0) {
 			error = EPERM;
@@ -495,12 +534,11 @@ in_control(
 			error = EPERM;
 			goto done;
 		}
-		if (ifp == 0) {
+		if (ifp == NULL) {
 			error = EADDRNOTAVAIL;
 			goto done;
 		}
-		if (ifra->ifra_addr.sin_family != AF_INET 
-		    && cmd == SIOCSIFADDR) {
+		if (addr.sin_family != AF_INET && cmd == SIOCSIFADDR) {
 			error = EINVAL;
 			goto done;
 		}
@@ -521,7 +559,7 @@ in_control(
 			ifa->ifa_netmask = (struct sockaddr *)&ia->ia_sockmask;
 			ia->ia_sockmask.sin_len = 8;
 			if (ifp->if_flags & IFF_BROADCAST) {
-				ia->ia_broadaddr.sin_len = sizeof(ia->ia_addr);
+				ia->ia_broadaddr.sin_len = sizeof (ia->ia_addr);
 				ia->ia_broadaddr.sin_family = AF_INET;
 			}
 			ia->ia_ifp = ifp;
@@ -544,104 +582,161 @@ in_control(
 			IFA_ADDREF(ifa);
 			TAILQ_INSERT_TAIL(&in_ifaddrhead, ia, ia_link);
 			lck_rw_done(in_ifaddr_rwlock);
-			error = in_domifattach(ifp);
-			/* discard error,can be cold with unsupported interfaces */
-			if (error)
-				error = 0;
+			/* discard error */
+			(void) in_domifattach(ifp);
+			error = 0;
 		}
 		break;
+	}
 
-	case SIOCPROTOATTACH:
-	case SIOCPROTODETACH:
+	case SIOCPROTOATTACH:		/* struct ifreq */
+	case SIOCPROTODETACH:		/* struct ifreq */
 		if ((error = proc_suser(p)) != 0) {
 			goto done;
 		}
-		if (ifp == 0) {
+		if (ifp == NULL) {
 			error = EADDRNOTAVAIL;
 			goto done;
 		}
 		break;
 
-	case SIOCSIFBRDADDR:
+	case SIOCSIFBRDADDR:		/* struct ifreq */
 		if ((so->so_state & SS_PRIV) == 0) {
 			error = EPERM;
 			goto done;
 		}
 		/* FALLTHROUGH */
-
-	case SIOCGIFADDR:
-	case SIOCGIFNETMASK:
-	case SIOCGIFDSTADDR:
-	case SIOCGIFBRDADDR:
-		if (ia == (struct in_ifaddr *)0) {
+	case SIOCGIFADDR:		/* struct ifreq */
+	case SIOCGIFNETMASK:		/* struct ifreq */
+	case SIOCGIFDSTADDR:		/* struct ifreq */
+	case SIOCGIFBRDADDR:		/* struct ifreq */
+		if (ia == NULL) {
 			error = EADDRNOTAVAIL;
 			goto done;
 		}
 		break;
 	}
+
 	switch (cmd) {
-	case SIOCAUTOADDR:
+	case SIOCAUTOADDR: {		/* struct ifreq */
+		int intval;
+
+		VERIFY(ifp != NULL);
+		bcopy(&((struct ifreq *)(void *)data)->ifr_intval,
+		    &intval, sizeof (intval));
+
 		ifnet_lock_exclusive(ifp);
-		if (ifr->ifr_intval)
-			ifp->if_eflags |= IFEF_AUTOCONFIGURING;
-		else
+		if (intval) {
+			/*
+			 * An interface in IPv4 router mode implies that it
+			 * is configured with a static IP address and should
+			 * not act as a DHCP client; prevent SIOCAUTOADDR from
+			 * being set in that mode.
+			 */
+			if (ifp->if_eflags & IFEF_IPV4_ROUTER) {
+				intval = 0;	/* be safe; clear flag if set */
+				error = EBUSY;
+			} else {
+				ifp->if_eflags |= IFEF_AUTOCONFIGURING;
+			}
+		}
+		if (!intval)
 			ifp->if_eflags &= ~IFEF_AUTOCONFIGURING;
 		ifnet_lock_done(ifp);
 		break;
-	
-	case SIOCARPIPLL:
+	}
+
+	case SIOCARPIPLL: {		/* struct ifreq */
+		int intval;
+
+		VERIFY(ifp != NULL);
+		bcopy(&((struct ifreq *)(void *)data)->ifr_intval,
+		    &intval, sizeof (intval));
 		ipv4_ll_arp_aware = 1;
+
 		ifnet_lock_exclusive(ifp);
-		if (ifr->ifr_data)
-			ifp->if_eflags |= IFEF_ARPLL;
-		else
+		if (intval) {
+			/*
+			 * An interface in IPv4 router mode implies that it
+			 * is configured with a static IP address and should
+			 * not have to deal with IPv4 Link-Local Address;
+			 * prevent SIOCARPIPLL from being set in that mode.
+			 */
+			if (ifp->if_eflags & IFEF_IPV4_ROUTER) {
+				intval = 0;	/* be safe; clear flag if set */
+				error = EBUSY;
+			} else {
+				ifp->if_eflags |= IFEF_ARPLL;
+			}
+		}
+		if (!intval)
 			ifp->if_eflags &= ~IFEF_ARPLL;
 		ifnet_lock_done(ifp);
 		break;
+	}
 
-	case SIOCGIFADDR:
+	case SIOCGIFADDR:		/* struct ifreq */
+		VERIFY(ia != NULL);
 		IFA_LOCK(&ia->ia_ifa);
-		*((struct sockaddr_in *)&ifr->ifr_addr) = ia->ia_addr;
+		bcopy(&ia->ia_addr, &((struct ifreq *)(void *)data)->ifr_addr,
+		    sizeof (struct sockaddr_in));
 		IFA_UNLOCK(&ia->ia_ifa);
 		break;
 
-	case SIOCGIFBRDADDR:
+	case SIOCGIFBRDADDR:		/* struct ifreq */
+		VERIFY(ia != NULL);
 		if ((ifp->if_flags & IFF_BROADCAST) == 0) {
 			error = EINVAL;
 			break;
 		}
 		IFA_LOCK(&ia->ia_ifa);
-		*((struct sockaddr_in *)&ifr->ifr_dstaddr) = ia->ia_broadaddr;
+		bcopy(&ia->ia_broadaddr,
+		    &((struct ifreq *)(void *)data)->ifr_broadaddr,
+		    sizeof (struct sockaddr_in));
 		IFA_UNLOCK(&ia->ia_ifa);
 		break;
 
-	case SIOCGIFDSTADDR:
+	case SIOCGIFDSTADDR:		/* struct ifreq */
+		VERIFY(ia != NULL);
 		if ((ifp->if_flags & IFF_POINTOPOINT) == 0) {
 			error = EINVAL;
 			break;
 		}
 		IFA_LOCK(&ia->ia_ifa);
-		*((struct sockaddr_in *)&ifr->ifr_dstaddr) = ia->ia_dstaddr;
+		bcopy(&ia->ia_dstaddr,
+		    &((struct ifreq *)(void *)data)->ifr_dstaddr,
+		    sizeof (struct sockaddr_in));
 		IFA_UNLOCK(&ia->ia_ifa);
 		break;
 
-	case SIOCGIFNETMASK:
+	case SIOCGIFNETMASK:		/* struct ifreq */
+		VERIFY(ia != NULL);
 		IFA_LOCK(&ia->ia_ifa);
-		*((struct sockaddr_in *)&ifr->ifr_addr) = ia->ia_sockmask;
+		bcopy(&ia->ia_sockmask,
+		    &((struct ifreq *)(void *)data)->ifr_addr,
+		    sizeof (struct sockaddr_in));
 		IFA_UNLOCK(&ia->ia_ifa);
 		break;
 
-	case SIOCSIFDSTADDR:
+	case SIOCSIFDSTADDR:		/* struct ifreq */
+		VERIFY(ifp != NULL && ia != NULL);
 		if ((ifp->if_flags & IFF_POINTOPOINT) == 0) {
 			error = EINVAL;
 			break;
 		}
 		IFA_LOCK(&ia->ia_ifa);
 		oldaddr = ia->ia_dstaddr;
-		ia->ia_dstaddr = *(struct sockaddr_in *)&ifr->ifr_dstaddr;
+		bcopy(&((struct ifreq *)(void *)data)->ifr_dstaddr,
+		    &ia->ia_dstaddr, sizeof (struct sockaddr_in));
 		if (ia->ia_dstaddr.sin_family == AF_INET)
 			ia->ia_dstaddr.sin_len = sizeof (struct sockaddr_in);
 		IFA_UNLOCK(&ia->ia_ifa);
+		/*
+		 * NOTE: SIOCSIFDSTADDR is defined with struct ifreq
+		 * as parameter, but here we are sending it down
+		 * to the interface with a pointer to struct ifaddr,
+		 * for legacy reasons.
+		 */
 		error = ifnet_ioctl(ifp, PF_INET, SIOCSIFDSTADDR, ia);
 		IFA_LOCK(&ia->ia_ifa);
 		if (error == EOPNOTSUPP) {
@@ -660,11 +755,12 @@ in_control(
 
 		ev_msg.event_code = KEV_INET_SIFDSTADDR;
 
-		if (ia->ia_ifa.ifa_dstaddr)
-		     in_event_data.ia_dstaddr = 
-			  ((struct sockaddr_in *)ia->ia_ifa.ifa_dstaddr)->sin_addr;
-		else
-		     in_event_data.ia_dstaddr.s_addr  = 0;
+		if (ia->ia_ifa.ifa_dstaddr) {
+			in_event_data.ia_dstaddr = ((struct sockaddr_in *)
+			    (void *)ia->ia_ifa.ifa_dstaddr)->sin_addr;
+		} else {
+			in_event_data.ia_dstaddr.s_addr = INADDR_ANY;
+		}
 
 		in_event_data.ia_addr         = ia->ia_addr.sin_addr;
 		in_event_data.ia_net          = ia->ia_net;
@@ -673,12 +769,13 @@ in_control(
 		in_event_data.ia_subnetmask   = ia->ia_subnetmask;
 		in_event_data.ia_netbroadcast = ia->ia_netbroadcast;
 		IFA_UNLOCK(&ia->ia_ifa);
-		strncpy(&in_event_data.link_data.if_name[0], ifp->if_name, IFNAMSIZ);
+		(void) strncpy(&in_event_data.link_data.if_name[0],
+		    ifp->if_name, IFNAMSIZ);
 		in_event_data.link_data.if_family = ifp->if_family;
 		in_event_data.link_data.if_unit  = (u_int32_t) ifp->if_unit;
 
 		ev_msg.dv[0].data_ptr    = &in_event_data;
-		ev_msg.dv[0].data_length      = sizeof(struct kev_in_data);
+		ev_msg.dv[0].data_length = sizeof (struct kev_in_data);
 		ev_msg.dv[1].data_length = 0;
 
 		kev_post_msg(&ev_msg);
@@ -701,13 +798,15 @@ in_control(
 		lck_mtx_unlock(rnh_lock);
 		break;
 
-	case SIOCSIFBRDADDR:
+	case SIOCSIFBRDADDR:		/* struct ifreq */
+		VERIFY(ia != NULL);
 		if ((ifp->if_flags & IFF_BROADCAST) == 0) {
 			error = EINVAL;
 			break;
 		}
 		IFA_LOCK(&ia->ia_ifa);
-		ia->ia_broadaddr = *(struct sockaddr_in *)&ifr->ifr_broadaddr;
+		bcopy(&((struct ifreq *)(void *)data)->ifr_broadaddr,
+		    &ia->ia_broadaddr, sizeof (struct sockaddr_in));
 
 		ev_msg.vendor_code    = KEV_VENDOR_APPLE;
 		ev_msg.kev_class      = KEV_NETWORK_CLASS;
@@ -715,12 +814,12 @@ in_control(
 
 		ev_msg.event_code = KEV_INET_SIFBRDADDR;
 
-		if (ia->ia_ifa.ifa_dstaddr)
-		     in_event_data.ia_dstaddr = 
-			  ((struct sockaddr_in *)ia->ia_ifa.ifa_dstaddr)->sin_addr;
-		else
-		     in_event_data.ia_dstaddr.s_addr  = 0;
-
+		if (ia->ia_ifa.ifa_dstaddr) {
+			in_event_data.ia_dstaddr = ((struct sockaddr_in *)
+			    (void *)ia->ia_ifa.ifa_dstaddr)->sin_addr;
+		} else {
+			in_event_data.ia_dstaddr.s_addr = INADDR_ANY;
+		}
 		in_event_data.ia_addr         = ia->ia_addr.sin_addr;
 		in_event_data.ia_net          = ia->ia_net;
 		in_event_data.ia_netmask      = ia->ia_netmask;
@@ -728,36 +827,43 @@ in_control(
 		in_event_data.ia_subnetmask   = ia->ia_subnetmask;
 		in_event_data.ia_netbroadcast = ia->ia_netbroadcast;
 		IFA_UNLOCK(&ia->ia_ifa);
-		strncpy(&in_event_data.link_data.if_name[0], ifp->if_name, IFNAMSIZ);
+		(void) strncpy(&in_event_data.link_data.if_name[0],
+		    ifp->if_name, IFNAMSIZ);
 		in_event_data.link_data.if_family = ifp->if_family;
 		in_event_data.link_data.if_unit  = (u_int32_t) ifp->if_unit;
 
 		ev_msg.dv[0].data_ptr    = &in_event_data;
-		ev_msg.dv[0].data_length      = sizeof(struct kev_in_data);
+		ev_msg.dv[0].data_length = sizeof (struct kev_in_data);
 		ev_msg.dv[1].data_length = 0;
 
 		kev_post_msg(&ev_msg);
-
 		break;
 
-	case SIOCSIFADDR:
+	case SIOCSIFADDR: {		/* struct ifreq */
+		struct sockaddr_in addr;
+
+		VERIFY(ifp != NULL && ia != NULL);
+		bcopy(&((struct ifreq *)(void *)data)->ifr_addr,
+		    &addr, sizeof (addr));
 		/*
 		 * If this is a new address, the reference count for the
 		 * hash table has been taken at creation time above.
 		 */
-		error = in_ifinit(ifp, ia,
-		    (struct sockaddr_in *)&ifr->ifr_addr, 1);
+		error = in_ifinit(ifp, ia, &addr, 1);
 #if PF
 		if (!error)
 			(void) pf_ifaddr_hook(ifp, cmd);
 #endif /* PF */
 		break;
+	}
 
-	case SIOCPROTOATTACH:
+	case SIOCPROTOATTACH:		/* struct ifreq */
+		VERIFY(ifp != NULL);
 		error = in_domifattach(ifp);
 		break;
 
-	case SIOCPROTODETACH:
+	case SIOCPROTODETACH:		/* struct ifreq */
+		VERIFY(ifp != NULL);
                 /*
 		 * If an IPv4 address is still present, refuse to detach.
 		 */
@@ -779,10 +885,26 @@ in_control(
 		error = proto_unplumb(PF_INET, ifp);
 		break;
 
-	case SIOCSIFNETMASK: {
-		u_long i;
+	case SIOCSETROUTERMODE: {	/* struct ifreq */
+		int intval;
 
-		i = ifra->ifra_addr.sin_addr.s_addr;
+		VERIFY(ifp != NULL);
+		bcopy(&((struct ifreq *)(void *)data)->ifr_intval,
+		    &intval, sizeof (intval));
+
+		error = in_setrouter(ifp, intval);
+		break;
+	}
+
+	case SIOCSIFNETMASK: {		/* struct ifreq */
+		struct sockaddr_in addr;
+		in_addr_t i;
+
+		VERIFY(ifp != NULL && ia != NULL);
+		bcopy(&((struct ifreq *)(void *)data)->ifr_addr,
+		    &addr, sizeof (addr));
+		i = addr.sin_addr.s_addr;
+
 		IFA_LOCK(&ia->ia_ifa);
 		ia->ia_subnetmask = ntohl(ia->ia_sockmask.sin_addr.s_addr = i);
 		ev_msg.vendor_code    = KEV_VENDOR_APPLE;
@@ -791,12 +913,12 @@ in_control(
 
 		ev_msg.event_code = KEV_INET_SIFNETMASK;
 
-		if (ia->ia_ifa.ifa_dstaddr)
-		     in_event_data.ia_dstaddr = 
-			  ((struct sockaddr_in *)ia->ia_ifa.ifa_dstaddr)->sin_addr;
-		else
-		     in_event_data.ia_dstaddr.s_addr  = 0;
-
+		if (ia->ia_ifa.ifa_dstaddr) {
+		     in_event_data.ia_dstaddr = ((struct sockaddr_in *)
+		         (void *)ia->ia_ifa.ifa_dstaddr)->sin_addr;
+		} else {
+			in_event_data.ia_dstaddr.s_addr = INADDR_ANY;
+		}
 		in_event_data.ia_addr         = ia->ia_addr.sin_addr;
 		in_event_data.ia_net          = ia->ia_net;
 		in_event_data.ia_netmask      = ia->ia_netmask;
@@ -804,54 +926,65 @@ in_control(
 		in_event_data.ia_subnetmask   = ia->ia_subnetmask;
 		in_event_data.ia_netbroadcast = ia->ia_netbroadcast;
 		IFA_UNLOCK(&ia->ia_ifa);
-		strncpy(&in_event_data.link_data.if_name[0], ifp->if_name, IFNAMSIZ);
+		(void) strncpy(&in_event_data.link_data.if_name[0],
+		    ifp->if_name, IFNAMSIZ);
 		in_event_data.link_data.if_family = ifp->if_family;
 		in_event_data.link_data.if_unit  = (u_int32_t) ifp->if_unit;
 
 		ev_msg.dv[0].data_ptr    = &in_event_data;
-		ev_msg.dv[0].data_length      = sizeof(struct kev_in_data);
+		ev_msg.dv[0].data_length = sizeof (struct kev_in_data);
 		ev_msg.dv[1].data_length = 0;
 
 		kev_post_msg(&ev_msg);
-
 		break;
 	}
-	case SIOCAIFADDR:
+
+	case SIOCAIFADDR: {		/* struct ifaliasreq */
+		struct sockaddr_in addr, broadaddr, mask;
+
+		VERIFY(ifp != NULL && ia != NULL);
+		bcopy(&((struct ifaliasreq *)(void *)data)->ifra_addr,
+		    &addr, sizeof (addr));
+		bcopy(&((struct ifaliasreq *)(void *)data)->ifra_broadaddr,
+		    &broadaddr, sizeof (broadaddr));
+		bcopy(&((struct ifaliasreq *)(void *)data)->ifra_mask,
+		    &mask, sizeof (mask));
+
 		maskIsNew = 0;
 		hostIsNew = 1;
 		error = 0;
 
 		IFA_LOCK(&ia->ia_ifa);
 		if (ia->ia_addr.sin_family == AF_INET) {
-			if (ifra->ifra_addr.sin_len == 0) {
-				ifra->ifra_addr = ia->ia_addr;
+			if (addr.sin_len == 0) {
+				addr = ia->ia_addr;
 				hostIsNew = 0;
-			} else if (ifra->ifra_addr.sin_addr.s_addr ==
-					       ia->ia_addr.sin_addr.s_addr)
+			} else if (addr.sin_addr.s_addr ==
+			    ia->ia_addr.sin_addr.s_addr) {
 				hostIsNew = 0;
+			}
 		}
-		if (ifra->ifra_mask.sin_len) {
+		if (mask.sin_len) {
 			IFA_UNLOCK(&ia->ia_ifa);
 			in_ifscrub(ifp, ia, 0);
 			IFA_LOCK(&ia->ia_ifa);
-			ia->ia_sockmask = ifra->ifra_mask;
+			ia->ia_sockmask = mask;
 			ia->ia_subnetmask =
 			     ntohl(ia->ia_sockmask.sin_addr.s_addr);
 			maskIsNew = 1;
 		}
 		if ((ifp->if_flags & IFF_POINTOPOINT) &&
-		    (ifra->ifra_dstaddr.sin_family == AF_INET)) {
+		    (broadaddr.sin_family == AF_INET)) {
 			IFA_UNLOCK(&ia->ia_ifa);
 			in_ifscrub(ifp, ia, 0);
 			IFA_LOCK(&ia->ia_ifa);
-			ia->ia_dstaddr = ifra->ifra_dstaddr;
+			ia->ia_dstaddr = broadaddr;
 			ia->ia_dstaddr.sin_len = sizeof (struct sockaddr_in);
 			maskIsNew  = 1; /* We lie; but the effect's the same */
 		}
-		if (ifra->ifra_addr.sin_family == AF_INET &&
-		    (hostIsNew || maskIsNew)) {
+		if (addr.sin_family == AF_INET && (hostIsNew || maskIsNew)) {
 			IFA_UNLOCK(&ia->ia_ifa);
-			error = in_ifinit(ifp, ia, &ifra->ifra_addr, 0);
+			error = in_ifinit(ifp, ia, &addr, 0);
 		} else {
 			IFA_UNLOCK(&ia->ia_ifa);
 		}
@@ -861,51 +994,54 @@ in_control(
 #endif /* PF */
 		IFA_LOCK(&ia->ia_ifa);
 		if ((ifp->if_flags & IFF_BROADCAST) &&
-		    (ifra->ifra_broadaddr.sin_family == AF_INET))
-			ia->ia_broadaddr = ifra->ifra_broadaddr;
+		    (broadaddr.sin_family == AF_INET))
+			ia->ia_broadaddr = broadaddr;
 
 		/*
 		 * Report event.
 		 */
-
 		if ((error == 0) || (error == EEXIST)) {
-		     ev_msg.vendor_code    = KEV_VENDOR_APPLE;
-		     ev_msg.kev_class      = KEV_NETWORK_CLASS;
-		     ev_msg.kev_subclass   = KEV_INET_SUBCLASS;
+			ev_msg.vendor_code    = KEV_VENDOR_APPLE;
+			ev_msg.kev_class      = KEV_NETWORK_CLASS;
+			ev_msg.kev_subclass   = KEV_INET_SUBCLASS;
 
-		     if (hostIsNew)
-			  ev_msg.event_code = KEV_INET_NEW_ADDR;
-		     else
-			  ev_msg.event_code = KEV_INET_CHANGED_ADDR;
+			if (hostIsNew)
+				ev_msg.event_code = KEV_INET_NEW_ADDR;
+			else
+				ev_msg.event_code = KEV_INET_CHANGED_ADDR;
 
-		     if (ia->ia_ifa.ifa_dstaddr)
-			  in_event_data.ia_dstaddr = 
-			       ((struct sockaddr_in *)ia->ia_ifa.ifa_dstaddr)->sin_addr;
-		     else
-			  in_event_data.ia_dstaddr.s_addr  = 0;
+			if (ia->ia_ifa.ifa_dstaddr) {
+				in_event_data.ia_dstaddr =
+				    ((struct sockaddr_in *)(void *)ia->
+				    ia_ifa.ifa_dstaddr)->sin_addr;
+			} else {
+				in_event_data.ia_dstaddr.s_addr = INADDR_ANY;
+			}
+			in_event_data.ia_addr         = ia->ia_addr.sin_addr;
+			in_event_data.ia_net          = ia->ia_net;
+			in_event_data.ia_netmask      = ia->ia_netmask;
+			in_event_data.ia_subnet       = ia->ia_subnet;
+			in_event_data.ia_subnetmask   = ia->ia_subnetmask;
+			in_event_data.ia_netbroadcast = ia->ia_netbroadcast;
+			IFA_UNLOCK(&ia->ia_ifa);
+			(void) strncpy(&in_event_data.link_data.if_name[0],
+			    ifp->if_name, IFNAMSIZ);
+			in_event_data.link_data.if_family = ifp->if_family;
+			in_event_data.link_data.if_unit = ifp->if_unit;
 
-		     in_event_data.ia_addr         = ia->ia_addr.sin_addr;
-		     in_event_data.ia_net          = ia->ia_net;
-		     in_event_data.ia_netmask      = ia->ia_netmask;
-		     in_event_data.ia_subnet       = ia->ia_subnet;
-		     in_event_data.ia_subnetmask   = ia->ia_subnetmask;
-		     in_event_data.ia_netbroadcast = ia->ia_netbroadcast;
-		     IFA_UNLOCK(&ia->ia_ifa);
-		     strncpy(&in_event_data.link_data.if_name[0], ifp->if_name, IFNAMSIZ);
-		     in_event_data.link_data.if_family = ifp->if_family;
-		     in_event_data.link_data.if_unit  = (u_int32_t) ifp->if_unit;
+			ev_msg.dv[0].data_ptr	 = &in_event_data;
+			ev_msg.dv[0].data_length = sizeof (struct kev_in_data);
+			ev_msg.dv[1].data_length = 0;
 
-		     ev_msg.dv[0].data_ptr    = &in_event_data;
-		     ev_msg.dv[0].data_length      = sizeof(struct kev_in_data);
-		     ev_msg.dv[1].data_length = 0;
-
-		     kev_post_msg(&ev_msg);
+			kev_post_msg(&ev_msg);
 		} else {
-		     IFA_UNLOCK(&ia->ia_ifa);
+			IFA_UNLOCK(&ia->ia_ifa);
 		}
 		break;
+	}
 
-	case SIOCDIFADDR:
+	case SIOCDIFADDR:		/* struct ifreq */
+		VERIFY(ifp != NULL && ia != NULL);
 		error = ifnet_ioctl(ifp, PF_INET, SIOCDIFADDR, ia);
 		if (error == EOPNOTSUPP)
 			error = 0;
@@ -921,12 +1057,12 @@ in_control(
 		ev_msg.event_code = KEV_INET_ADDR_DELETED;
 
 		IFA_LOCK(&ia->ia_ifa);
-		if (ia->ia_ifa.ifa_dstaddr)
-		     in_event_data.ia_dstaddr = 
-			  ((struct sockaddr_in *)ia->ia_ifa.ifa_dstaddr)->sin_addr;
-		else
-		     in_event_data.ia_dstaddr.s_addr  = 0;
-
+		if (ia->ia_ifa.ifa_dstaddr) {
+		     in_event_data.ia_dstaddr = ((struct sockaddr_in *)
+		         (void *)ia->ia_ifa.ifa_dstaddr)->sin_addr;
+		} else {
+			in_event_data.ia_dstaddr.s_addr = INADDR_ANY;
+		}
 		in_event_data.ia_addr         = ia->ia_addr.sin_addr;
 		in_event_data.ia_net          = ia->ia_net;
 		in_event_data.ia_netmask      = ia->ia_netmask;
@@ -934,7 +1070,8 @@ in_control(
 		in_event_data.ia_subnetmask   = ia->ia_subnetmask;
 		in_event_data.ia_netbroadcast = ia->ia_netbroadcast;
 		IFA_UNLOCK(&ia->ia_ifa);
-		strncpy(&in_event_data.link_data.if_name[0], ifp->if_name, IFNAMSIZ);
+		(void) strncpy(&in_event_data.link_data.if_name[0],
+		    ifp->if_name, IFNAMSIZ);
 		in_event_data.link_data.if_family = ifp->if_family;
 		in_event_data.link_data.if_unit  = (u_int32_t) ifp->if_unit;
 
@@ -987,8 +1124,8 @@ in_control(
 				ifp->if_allhostsinm = NULL;
 
 				in_delmulti(inm);
-				/* release the reference for allhostsinm pointer */
-				INM_REMREF(inm); 
+				/* release the reference for allhostsinm */
+				INM_REMREF(inm);
 			}
 			lck_mtx_unlock(&ifp->if_addrconfig_lock);
 		} else {
@@ -1004,6 +1141,12 @@ in_control(
 		 */
 		ifa = ifa_ifpgetprimary(ifp, AF_INET);
 		if (ifa != NULL) {
+			/*
+			 * NOTE: SIOCSIFADDR is defined with struct ifreq
+			 * as parameter, but here we are sending it down
+			 * to the interface with a pointer to struct ifaddr,
+			 * for legacy reasons.
+			 */
 			error = ifnet_ioctl(ifp, PF_INET, SIOCSIFADDR, ifa);
 			if (error == EOPNOTSUPP)
 				error = 0;
@@ -1017,71 +1160,59 @@ in_control(
 		break;
 
 #ifdef __APPLE__
-    case SIOCSETOT: {
-        /*
-         * Inspiration from tcp_ctloutput() and ip_ctloutput()
-         * Special ioctl for OpenTransport sockets
-         */
-        struct	inpcb	*inp, *cloned_inp;
-        int 			error2 = 0;
-        int 			cloned_fd = *(int *)data;
+	case SIOCSETOT: {		/* int */
+		/*
+		 * Inspiration from tcp_ctloutput() and ip_ctloutput()
+		 * Special ioctl for OpenTransport sockets
+		 */
+		struct inpcb *inp, *cloned_inp;
+		int error2 = 0;
+		int cloned_fd;
 
-        inp = sotoinpcb(so);
-        if (inp == NULL) {
-            break;
-        }
+		bcopy(data, &cloned_fd, sizeof (cloned_fd));
 
-        /* let's make sure it's either -1 or a valid file descriptor */
-        if (cloned_fd != -1) {
-            struct socket	*cloned_so;
-            error2 = file_socket(cloned_fd, &cloned_so);
-            if (error2){
-                break;
-            }
-            cloned_inp = sotoinpcb(cloned_so);
+		inp = sotoinpcb(so);
+		if (inp == NULL) {
+			break;
+		}
+
+		/* let's make sure it's either -1 or a valid file descriptor */
+		if (cloned_fd != -1) {
+			struct socket	*cloned_so;
+			error2 = file_socket(cloned_fd, &cloned_so);
+			if (error2) {
+				break;
+			}
+			cloned_inp = sotoinpcb(cloned_so);
 			file_drop(cloned_fd);
-        } else {
-            cloned_inp = NULL;
-        }
+		} else {
+			cloned_inp = NULL;
+		}
 
-        if (cloned_inp == NULL) {
-            /* OT always uses IP_PORTRANGE_HIGH */
-            inp->inp_flags &= ~(INP_LOWPORT);
-            inp->inp_flags |= INP_HIGHPORT;
-            /* For UDP, OT allows broadcast by default */
-            if (so->so_type == SOCK_DGRAM)
-                so->so_options |= SO_BROADCAST;
-            /* For TCP we want to see MSG_OOB when receive urgent data */
-            else if (so->so_type == SOCK_STREAM)
-                so->so_options |= SO_WANTOOBFLAG;
-        } else {
-            inp->inp_ip_tos = cloned_inp->inp_ip_tos;
-            inp->inp_ip_ttl = cloned_inp->inp_ip_ttl;
-            inp->inp_flags = cloned_inp->inp_flags;
+		if (cloned_inp == NULL) {
+			/* OT always uses IP_PORTRANGE_HIGH */
+			inp->inp_flags &= ~(INP_LOWPORT);
+			inp->inp_flags |= INP_HIGHPORT;
+			/*
+			 * For UDP, OT allows broadcast by default;
+			 * for TCP we want to see MSG_OOB when we
+			 * receive urgent data.
+			 */
+			if (so->so_type == SOCK_DGRAM)
+				so->so_options |= SO_BROADCAST;
+			else if (so->so_type == SOCK_STREAM)
+				so->so_options |= SO_WANTOOBFLAG;
+		} else {
+			inp->inp_ip_tos = cloned_inp->inp_ip_tos;
+			inp->inp_ip_ttl = cloned_inp->inp_ip_ttl;
+			inp->inp_flags = cloned_inp->inp_flags;
 
-            /* Multicast options */
-            if (cloned_inp->inp_moptions != NULL) {
-                struct ip_moptions	*cloned_imo = cloned_inp->inp_moptions;
-                struct ip_moptions	*imo = inp->inp_moptions;
-
-                if (imo == NULL) {
-                    /*
-                     * No multicast option buffer attached to the pcb;
-                     * allocate one.
-                     */
-                    imo = ip_allocmoptions(M_WAITOK);
-                    if (imo == NULL) {
-                        error2 = ENOBUFS;
-                        break;
-                    }
-                    inp->inp_moptions = imo;
-                }
-
-		error2 = imo_clone(cloned_imo, imo);
-            }
-        }
-        break;
-    }
+			/* Multicast options */
+			if (cloned_inp->inp_moptions != NULL)
+				error2 = imo_clone(cloned_inp, inp);
+		}
+		break;
+	}
 #endif /* __APPLE__ */
 
 	default:
@@ -1111,21 +1242,12 @@ in_control(
  *	other values may be returned from in_ioctl()
  */
 static int
-in_lifaddr_ioctl(
-	struct socket *so,
-	u_long cmd,
-	caddr_t	data,
-	struct ifnet *ifp,
-	struct proc *p)
+in_lifaddr_ioctl(struct socket *so, u_long cmd, struct if_laddrreq *iflr,
+    struct ifnet *ifp, struct proc *p)
 {
-	struct if_laddrreq *iflr = (struct if_laddrreq *)data;
 	struct ifaddr *ifa;
 
-	/* sanity checks */
-	if (!data || !ifp) {
-		panic("invalid argument to in_lifaddr_ioctl");
-		/*NOTREACHED*/
-	}
+	VERIFY(ifp != NULL);
 
 	switch (cmd) {
 	case SIOCGLIFADDR:
@@ -1286,6 +1408,35 @@ in_lifaddr_ioctl(
 	}
 
 	return EOPNOTSUPP;	/*just for safety*/
+}
+
+/*
+ * Handle SIOCSETROUTERMODE to set or clear the IPv4 router mode flag on
+ * the interface.  When in this mode, IPv4 Link-Local Address support is
+ * disabled in ARP, and DHCP client support is disabled in IP input; turning
+ * any of them on would cause an error to be returned.  Entering or exiting
+ * this mode will result in the removal of IPv4 addresses currently configured
+ * on the interface.
+ */
+static int
+in_setrouter(struct ifnet *ifp, int enable)
+{
+	if (ifp->if_flags & IFF_LOOPBACK)
+		return (ENODEV);
+
+	ifnet_lock_exclusive(ifp);
+	if (enable) {
+		ifp->if_eflags |= IFEF_IPV4_ROUTER;
+		ifp->if_eflags &= ~(IFEF_ARPLL | IFEF_AUTOCONFIGURING);
+	} else {
+		ifp->if_eflags &= ~IFEF_IPV4_ROUTER;
+	}
+	ifnet_lock_done(ifp);
+
+	/* purge all IPv4 addresses configured on this interface */
+	in_purgeaddrs(ifp);
+
+	return (0);
 }
 
 /*
@@ -1463,6 +1614,12 @@ in_ifinit(
 	 * be reconfigured with the current primary IPV4 address.
 	 */
 	if (error == 0 && cmd == SIOCAIFADDR) {
+		/*
+		 * NOTE: SIOCSIFADDR is defined with struct ifreq
+		 * as parameter, but here we are sending it down
+		 * to the interface with a pointer to struct ifaddr,
+		 * for legacy reasons.
+		 */
 		error = ifnet_ioctl(ifp, PF_INET, SIOCSIFADDR, ifa0);
 		if (error == EOPNOTSUPP)
 			error = 0;
@@ -1674,9 +1831,9 @@ in_purgeaddrs(struct ifnet *ifp)
 
 				IFA_LOCK(ifa);
 				s = &((struct sockaddr_in *)
-				    ifa->ifa_addr)->sin_addr;
+				    (void *)ifa->ifa_addr)->sin_addr;
 				d = &((struct sockaddr_in *)
-				    ifa->ifa_dstaddr)->sin_addr;
+				    (void *)ifa->ifa_dstaddr)->sin_addr;
 				(void) inet_ntop(AF_INET, &s->s_addr, s_addr,
 				    sizeof (s_addr));
 				(void) inet_ntop(AF_INET, &d->s_addr, s_dstaddr,

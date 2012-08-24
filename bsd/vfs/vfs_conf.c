@@ -72,11 +72,11 @@
 #include <sys/mount_internal.h>
 #include <sys/vnode_internal.h>
 
-#ifndef __LP64__ 
-#define VFS_THREAD_SAFE_FLAG VFC_VFSTHREADSAFE /* This is only defined for 32-bit */
+#if CONFIG_VFS_FUNNEL
+#define VFS_THREAD_SAFE_FLAG VFC_VFSTHREADSAFE /* Only defined under CONFIG_VFS_FUNNEL */
 #else 
 #define VFS_THREAD_SAFE_FLAG 0
-#endif /* __LP64__  */
+#endif /* CONFIG_VFS_FUNNEL */
 
 
 /*

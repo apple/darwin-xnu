@@ -38,8 +38,11 @@
 
 // options for getExistingServices()
 enum {
-    kIONotifyOnce		= 0x00000001,
-    kIOServiceExistingSet	= 0x00000002
+    kIONotifyOnce	      = 0x00000001,
+    kIOServiceExistingSet     = 0x00000002,
+    kIOServiceChangesOK       = 0x00000004,
+    kIOServiceInternalDone    = 0x00000008,
+    kIOServiceClassDone       = 0x00000010,
 };
 
 // masks for __state[1]
@@ -56,7 +59,7 @@ enum {
     kIOServiceTermPhase2State	= 0x01000000,
     kIOServiceTermPhase3State	= 0x00800000,
     kIOServiceTermPhase1State	= 0x00400000,
-	kIOServiceTerm1WaiterState  = 0x00200000
+    kIOServiceTerm1WaiterState  = 0x00200000
 };
 
 // options for terminate()

@@ -2423,7 +2423,7 @@ extern void (*dtrace_cpu_init)(processorid_t);
 extern void (*dtrace_modload)(struct modctl *);
 extern void (*dtrace_modunload)(struct modctl *);
 #else
-extern int (*dtrace_modload)(struct kmod_info *);
+extern int (*dtrace_modload)(struct kmod_info *, uint32_t);
 extern int (*dtrace_modunload)(struct kmod_info *);
 #endif /* __APPLE__ */
 extern void (*dtrace_helpers_cleanup)(proc_t*);
@@ -2442,8 +2442,6 @@ extern hrtime_t dtrace_gethrtime(void);
 extern void dtrace_sync(void);
 extern void dtrace_toxic_ranges(void (*)(uintptr_t, uintptr_t));
 extern void dtrace_xcall(processorid_t, dtrace_xcall_t, void *);
-extern void dtrace_vpanic(const char *, __va_list);
-extern void dtrace_panic(const char *, ...);
 
 extern int dtrace_safe_defer_signal(void);
 extern void dtrace_safe_synchronous_signal(void);

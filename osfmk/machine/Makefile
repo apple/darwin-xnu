@@ -9,11 +9,12 @@ include $(MakeInc_def)
 
 
 DATAFILES = \
-	cpu_number.h	\
 	cpu_capabilities.h	\
+	cpu_number.h	\
 	io_map_entries.h \
 	lock.h	\
 	locks.h	\
+	machine_cpuid.h \
 	machine_routines.h	\
 	pal_routines.h		\
 	pal_hibernate.h		\

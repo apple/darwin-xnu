@@ -311,10 +311,28 @@ int	auditon(int, void *, int);
 int	auditctl(const char *);
 int	getauid(au_id_t *);
 int	setauid(const au_id_t *);
-int	getaudit(struct auditinfo *);
-int	setaudit(const struct auditinfo *);
 int	getaudit_addr(struct auditinfo_addr *, int);
 int	setaudit_addr(const struct auditinfo_addr *, int);
+
+#if defined(__APPLE__)
+#include <Availability.h>
+
+/*
+ * getaudit()/setaudit() are deprecated and have been replaced with
+ * wrappers to the getaudit_addr()/setaudit_addr() syscalls above.
+ */
+
+int	getaudit(struct auditinfo *)
+		__OSX_AVAILABLE_BUT_DEPRECATED(__MAC_10_0, __MAC_10_8,
+		    __IPHONE_2_0, __IPHONE_NA);
+int	setaudit(const struct auditinfo *)
+		__OSX_AVAILABLE_BUT_DEPRECATED(__MAC_10_0, __MAC_10_8,
+		    __IPHONE_2_0, __IPHONE_NA);
+#else
+
+int	getaudit(struct auditinfo *);
+int	setaudit(const struct auditinfo *);
+#endif /* !__APPLE__ */
 
 #ifdef __APPLE_API_PRIVATE
 #include <mach/port.h>

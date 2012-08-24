@@ -144,6 +144,7 @@ struct tty {
 	int	t_lowat;		/* Low water mark. */
 	int	t_gen;			/* Generation number. */
 	void	*t_iokit;		/* IOKit management */
+	int	t_refcnt;		/* reference count */
 };
 
 #define TTY_NULL (struct tty *)0

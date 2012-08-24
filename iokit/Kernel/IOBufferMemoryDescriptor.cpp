@@ -99,6 +99,8 @@ bool IOBufferMemoryDescriptor::initWithPhysicalMask(
 	return (false);
     _ranges.v64->address = 0;
     _ranges.v64->length  = 0;
+	//  make sure super::free doesn't dealloc _ranges before super::init
+	_flags = kIOMemoryAsReference;
 
     // Grab IOMD bits from the Buffer MD options
     iomdOptions  |= (options & kIOBufferDescriptorMemoryFlags);
@@ -146,6 +148,10 @@ bool IOBufferMemoryDescriptor::initWithPhysicalMask(
 
 	case kIOMapCopybackCache:
 	    SET_MAP_MEM(MAP_MEM_COPYBACK, memEntryCacheMode);
+	    break;
+
+	case kIOMapCopybackInnerCache:
+	    SET_MAP_MEM(MAP_MEM_INNERWBACK, memEntryCacheMode);
 	    break;
 
 	case kIOMapDefaultCache:

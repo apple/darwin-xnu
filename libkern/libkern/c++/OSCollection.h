@@ -102,7 +102,11 @@ protected:
     */
     unsigned int updateStamp;
 
+#ifdef XNU_KERNEL_PRIVATE
+protected:
+#else
 private:
+#endif /* XNU_KERNEL_PRIVATE */
     /* Reserved for future use.  (Internal use only)  */
     // ExpansionData * reserved;
     unsigned int fOptions;
@@ -230,6 +234,7 @@ public:
     */
     typedef enum {
         kImmutable  = 0x00000001,
+        kSort       = 0x00000002,
         kMASK       = (unsigned) -1
     } _OSCollectionFlags;
 

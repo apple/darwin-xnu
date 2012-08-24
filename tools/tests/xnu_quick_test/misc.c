@@ -139,6 +139,7 @@ int create_file_with_name( char *the_target_dirp, char *the_namep, int remove_ex
 			printf( "open failed with error %d - \"%s\" \n", errno, strerror( errno) );
 			goto failure_exit;
 		}
+		fcntl( my_fd, F_FULLFSYNC );
 		close( my_fd );
 	} 
 	goto routine_exit;
@@ -319,9 +320,9 @@ int get_architecture()
 	char *errmsg = NULL;
 
 	errmsg = "sysctlbyname() failed when getting hw.cputype";
-	if (my_err = sysctlbyname("hw.cputype", NULL, &length, NULL, 0)) goto finished;	/* get length of data */
+	if ((my_err = sysctlbyname("hw.cputype", NULL, &length, NULL, 0))) goto finished;	/* get length of data */
 	if (length != sizeof(buf))					 goto finished;
-	if (my_err = sysctlbyname("hw.cputype", &buf, &length, NULL, 0)) goto finished; /* copy data */
+	if ((my_err = sysctlbyname("hw.cputype", &buf, &length, NULL, 0))) goto finished; /* copy data */
 	switch (buf) {
 	case CPU_TYPE_X86:
 	case CPU_TYPE_X86_64:

@@ -45,6 +45,16 @@
 #include <i386/mp_desc.h>
 #include <i386/misc_protos.h>
 
+
+static uint64_t
+chudxnu_vm_unslide( uint64_t ptr, int kaddr )
+{
+	if( !kaddr )
+		return ptr;
+
+	return VM_KERNEL_UNSLIDE(ptr);
+}
+
 #if 0
 #pragma mark **** thread state ****
 #endif
@@ -236,7 +246,7 @@ static kern_return_t do_backtrace32(
 	if(ct >= max_idx)
 		return KERN_RESOURCE_SHORTAGE;	// no frames traced
 	
-	frames[ct++] = currPC;
+	frames[ct++] = chudxnu_vm_unslide(currPC, supervisor);
 
 	// build a backtrace of this 32 bit state.
 	while(VALID_STACK_ADDRESS(supervisor, currFP, kernStackMin, kernStackMax)) {
@@ -279,7 +289,7 @@ static kern_return_t do_backtrace32(
 		prevFP = (uint64_t) tmpWord;    // promote 32 bit address
 
         if(prevFP) {
-            frames[ct++] = currPC;
+            frames[ct++] = chudxnu_vm_unslide(currPC, supervisor);
             prevPC = currPC;
         }
         if(prevFP < currFP) {
@@ -314,7 +324,7 @@ static kern_return_t do_backtrace64(
 	if(*start_idx >= max_idx)
 		return KERN_RESOURCE_SHORTAGE;	// no frames traced
 	
-	frames[ct++] = currPC;
+	frames[ct++] = chudxnu_vm_unslide(currPC, supervisor);
 
 	// build a backtrace of this 32 bit state.
 	while(VALID_STACK_ADDRESS64(supervisor, currFP, kernStackMin, kernStackMax)) {
@@ -355,7 +365,7 @@ static kern_return_t do_backtrace64(
 		}
 
         if(VALID_STACK_ADDRESS64(supervisor, prevFP, kernStackMin, kernStackMax)) {
-            frames[ct++] = currPC;
+            frames[ct++] = chudxnu_vm_unslide(currPC, supervisor);
             prevPC = currPC;
         }
         if(prevFP < currFP) {
@@ -412,7 +422,7 @@ static kern_return_t do_kernel_backtrace(
 		return KERN_FAILURE;
 	}
 
-	frames[ct++] = (uint64_t)currPC;
+	frames[ct++] = chudxnu_vm_unslide((uint64_t)currPC, 1);
 
 	// build a backtrace of this kernel state
 #if __LP64__
@@ -454,7 +464,7 @@ static kern_return_t do_kernel_backtrace(
 #else
         if(VALID_STACK_ADDRESS(TRUE, prevFP, kernStackMin, kernStackMax)) {
 #endif
-            frames[ct++] = (uint64_t)currPC;
+            frames[ct++] = chudxnu_vm_unslide((uint64_t)currPC, 1);
             prevPC = currPC;
         }
         if(prevFP <= currFP) {

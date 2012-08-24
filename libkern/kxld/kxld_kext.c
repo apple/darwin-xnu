@@ -26,7 +26,6 @@
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 #include <string.h>
-#include <mach/machine.h>
 #include <mach/vm_param.h>
 #include <mach/vm_types.h>
 #include <mach/kmod.h>
@@ -60,7 +59,6 @@
 #include "kxld_seg.h"
 #include "kxld_symtab.h"
 #include "kxld_util.h"
-#include "kxld_uuid.h"
 #include "kxld_vtable.h"
 
 struct symtab_command;
@@ -185,9 +183,9 @@ kxld_kext_deinit(KXLDKext *kext)
 *******************************************************************************/
 kern_return_t 
 kxld_kext_export_symbols(const KXLDKext *kext, 
-    struct kxld_dict *defined_symbols_by_name,
-    struct kxld_dict *obsolete_symbols_by_name,
-    struct kxld_dict *defined_cxx_symbols_by_value)
+    KXLDDict *defined_symbols_by_name,
+    KXLDDict *obsolete_symbols_by_name,
+    KXLDDict *defined_cxx_symbols_by_value)
 {
     kern_return_t rval = KERN_FAILURE;
 
@@ -364,7 +362,16 @@ kxld_kext_get_vmsize(const KXLDKext *kext,
 {
     (void) kxld_object_get_vmsize(kext->kext, header_size, vmsize);
 }
-    
+
+/*******************************************************************************
+ *******************************************************************************/
+void 
+kxld_kext_set_linked_object_size(KXLDKext *kext, u_long vmsize)
+{
+    (void) kxld_object_set_linked_object_size(kext->kext, vmsize);
+}
+
+
 /*******************************************************************************
 *******************************************************************************/
 kern_return_t 

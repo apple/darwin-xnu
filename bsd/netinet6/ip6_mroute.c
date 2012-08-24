@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2003-2011 Apple Inc. All rights reserved.
+ * Copyright (c) 2003-2012 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -358,12 +358,17 @@ mrt6_ioctl(u_long cmd, caddr_t data)
 	int error = 0;
 
 	switch (cmd) {
-	case SIOCGETSGCNT_IN6:
-		return (get_sg_cnt((struct sioc_sg_req6 *)data));
-		/* NOTREACHED */
+	case SIOCGETSGCNT_IN6: {	/* struct sioc_sg_req6 */
+		struct sioc_sg_req6 req;
 
-	case SIOCGETMIFCNT_IN6_32:
-	case SIOCGETMIFCNT_IN6_64:
+		bcopy(data, &req, sizeof (req));
+		error = get_sg_cnt(&reg);
+		bcopy(&req, data, sizeof (req));
+		break;
+	}
+
+	case SIOCGETMIFCNT_IN6_32:	/* struct sioc_mif_req6_32 */
+	case SIOCGETMIFCNT_IN6_64:	/* struct sioc_mif_req6_64 */
 		return (get_mif6_cnt(data, cmd == SIOCGETMIFCNT_IN6_64));
 		/* NOTREACHED */
 
@@ -405,28 +410,36 @@ get_mif6_cnt(void *data, int p64)
 {
 	if (p64) {
 		struct sioc_mif_req6_64 *req = data;
+		mifi_t mifi;
 
-		mifi_t mifi = req->mifi;
-
+		bcopy(&req->mifi, &mifi, sizeof (mifi));
 		if (mifi >= nummifs)
 			return (EINVAL);
 
-		req->icount = mif6table[mifi].m6_pkt_in;
-		req->ocount = mif6table[mifi].m6_pkt_out;
-		req->ibytes = mif6table[mifi].m6_bytes_in;
-		req->obytes = mif6table[mifi].m6_bytes_out;
+		bcopy(&mif6table[mifi].m6_pkt_in, &req->icount,
+		    sizeof (req->icount));
+		bcopy(&mif6table[mifi].m6_pkt_out, &req->ocount,
+		    sizeof (req->ocount));
+		bcopy(&mif6table[mifi].m6_bytes_in, &req->ibytes,
+		    sizeof (req->ibytes));
+		bcopy(&mif6table[mifi].m6_bytes_out, &req->obytes,
+		    sizeof (req->obytes));
 	} else {
 		struct sioc_mif_req6_32 *req = data;
+		mifi_t mifi;
 
-		mifi_t mifi = req->mifi;
-
+		bcopy(&req->mifi, &mifi, sizeof (mifi));
 		if (mifi >= nummifs)
 			return (EINVAL);
 
-		req->icount = mif6table[mifi].m6_pkt_in;
-		req->ocount = mif6table[mifi].m6_pkt_out;
-		req->ibytes = mif6table[mifi].m6_bytes_in;
-		req->obytes = mif6table[mifi].m6_bytes_out;
+		bcopy(&mif6table[mifi].m6_pkt_in, &req->icount,
+		    sizeof (req->icount));
+		bcopy(&mif6table[mifi].m6_pkt_out, &req->ocount,
+		    sizeof (req->ocount));
+		bcopy(&mif6table[mifi].m6_bytes_in, &req->ibytes,
+		    sizeof (req->ibytes));
+		bcopy(&mif6table[mifi].m6_bytes_out, &req->obytes,
+		    sizeof (req->obytes));
 	}
 	return (0);
 }
@@ -1547,7 +1560,7 @@ phyint_send(ip6, mifp, m)
 		mb_copy->m_pkthdr.csum_flags = 0;
 
 		error = dlil_output(ifp, PF_INET6, mb_copy,
-				NULL, (struct sockaddr *)&ro.ro_dst, 0);
+				NULL, (struct sockaddr *)&ro.ro_dst, 0, NULL);
 #else
 		error = (*ifp->if_output)(ifp, mb_copy,
 					  (struct sockaddr *)&ro.ro_dst,
@@ -1675,6 +1688,9 @@ pim6_input(struct mbuf **mp, int *offp, int proto)
 	int off = *offp;
 
 	++pim6stat.pim6s_rcv_total;
+
+	/* Expect 32-bit aligned data pointer on strict-align platforms */
+	MBUF_STRICT_DATA_ALIGNMENT_CHECK_32(m);
 
 	ip6 = mtod(m, struct ip6_hdr *);
 	pimlen = m->m_pkthdr.len - *offp;
@@ -1876,7 +1892,7 @@ pim6_input(struct mbuf **mp, int *offp, int proto)
 #ifdef __APPLE__
 
                 if (lo_ifp) {
-                    dlil_output(lo_ifp, PF_INET6, m, 0, (struct sockaddr *)&dst, 0);
+                    dlil_output(lo_ifp, PF_INET6, m, 0, (struct sockaddr *)&dst, 0, NULL);
 		}
                 else {
                     printf("Warning: pim6_input call to dlil_find_dltag failed!\n");

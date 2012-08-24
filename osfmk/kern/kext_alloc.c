@@ -39,10 +39,20 @@
 #include <mach-o/loader.h>
 #include <libkern/kernel_mach_header.h>
 
+#define KASLR_IOREG_DEBUG 0
+
 
 vm_map_t g_kext_map = 0;
+#if KASLR_IOREG_DEBUG
+mach_vm_offset_t kext_alloc_base = 0;
+mach_vm_offset_t kext_alloc_max = 0;
+#else
 static mach_vm_offset_t kext_alloc_base = 0;
 static mach_vm_offset_t kext_alloc_max = 0;
+#if CONFIG_KEXT_BASEMENT
+static mach_vm_offset_t kext_post_boot_base = 0;
+#endif
+#endif
 
 /*
  * On x86_64 systems, kernel extension text must remain within 2GB of the
@@ -52,9 +62,10 @@ static mach_vm_offset_t kext_alloc_max = 0;
 void 
 kext_alloc_init(void)
 {
-#if __x86_64__
+#if CONFIG_KEXT_BASEMENT
     kern_return_t rval = 0;
     kernel_segment_command_t *text = NULL;
+    kernel_segment_command_t *prelinkTextSegment = NULL;
     mach_vm_offset_t text_end, text_start;
     mach_vm_size_t text_size;
     mach_vm_size_t kext_alloc_size;
@@ -72,9 +83,21 @@ kext_alloc_init(void)
     kext_alloc_base = KEXT_ALLOC_BASE(text_end);
     kext_alloc_size = KEXT_ALLOC_SIZE(text_size);
     kext_alloc_max = kext_alloc_base + kext_alloc_size;
+    
+    /* Post boot kext allocation will start after the prelinked kexts */
+    prelinkTextSegment = getsegbyname("__PRELINK_TEXT");
+    if (prelinkTextSegment) {
+        /* use kext_post_boot_base to start allocations past all the prelinked 
+         * kexts
+         */
+        kext_post_boot_base = 
+            vm_map_round_page(kext_alloc_base + prelinkTextSegment->vmsize);
+    }
+    else {
+        kext_post_boot_base = kext_alloc_base;
+    }
 
-    /* Allocate the subblock of the kernel map */
-
+    /* Allocate the sub block of the kernel map */
     rval = kmem_suballoc(kernel_map, (vm_offset_t *) &kext_alloc_base, 
 			 kext_alloc_size, /* pageable */ TRUE,
 			 VM_FLAGS_FIXED|VM_FLAGS_OVERWRITE,
@@ -91,33 +114,65 @@ kext_alloc_init(void)
 	    kernel_map->min_offset = kext_alloc_base;
     }
 
-    printf("kext submap [0x%llx - 0x%llx], kernel text [0x%llx - 0x%llx]\n",
-	   kext_alloc_base, kext_alloc_max, text->vmaddr,
-	   text->vmaddr + text->vmsize);
+    printf("kext submap [0x%lx - 0x%lx], kernel text [0x%lx - 0x%lx]\n",
+	   VM_KERNEL_UNSLIDE(kext_alloc_base),
+	   VM_KERNEL_UNSLIDE(kext_alloc_max),
+	   VM_KERNEL_UNSLIDE(text->vmaddr),
+	   VM_KERNEL_UNSLIDE(text->vmaddr + text->vmsize));
+
 #else
     g_kext_map = kernel_map;
     kext_alloc_base = VM_MIN_KERNEL_ADDRESS;
     kext_alloc_max = VM_MAX_KERNEL_ADDRESS;
-#endif /* __x86_64__ */
+#endif /* CONFIG_KEXT_BASEMENT */
 }
 
 kern_return_t
 kext_alloc(vm_offset_t *_addr, vm_size_t size, boolean_t fixed)
 {
     kern_return_t rval = 0;
+#if CONFIG_KEXT_BASEMENT
+    mach_vm_offset_t addr = (fixed) ? *_addr : kext_post_boot_base;
+#else
     mach_vm_offset_t addr = (fixed) ? *_addr : kext_alloc_base;
+#endif
     int flags = (fixed) ? VM_FLAGS_FIXED : VM_FLAGS_ANYWHERE;
  
-    /* Allocate the kext virtual memory */
+#if CONFIG_KEXT_BASEMENT
+    /* Allocate the kext virtual memory
+     * 10608884 - use mach_vm_map since we want VM_FLAGS_ANYWHERE allocated past
+     * kext_post_boot_base (when possible).  mach_vm_allocate will always 
+     * start at 0 into the map no matter what you pass in addr.  We want non 
+     * fixed (post boot) kext allocations to start looking for free space 
+     * just past where prelinked kexts have loaded.  
+     */
+    rval = mach_vm_map(g_kext_map, 
+                       &addr, 
+                       size, 
+                       0,
+                       flags,
+                       MACH_PORT_NULL,
+                       0,
+                       TRUE,
+                       VM_PROT_DEFAULT,
+                       VM_PROT_ALL,
+                       VM_INHERIT_DEFAULT);
+    if (rval != KERN_SUCCESS) {
+        printf("mach_vm_map failed - %d\n", rval);
+        goto finish;
+    }
+#else
     rval = mach_vm_allocate(g_kext_map, &addr, size, flags);
     if (rval != KERN_SUCCESS) {
         printf("vm_allocate failed - %d\n", rval);
         goto finish;
     }
+#endif
 
     /* Check that the memory is reachable by kernel text */
     if ((addr + size) > kext_alloc_max) {
         kext_free((vm_offset_t)addr, size);
+        rval = KERN_INVALID_ADDRESS;
         goto finish;
     }
 

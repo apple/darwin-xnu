@@ -551,9 +551,15 @@ static ast_t
 sched_fixedpriority_processor_csw_check(processor_t processor)
 {
 	run_queue_t		runq;
-	
+	boolean_t		has_higher;
+
 	runq = runq_for_processor(processor);
-	if (runq->highq > processor->current_pri) {
+	if (first_timeslice(processor)) {
+		has_higher = (runq->highq > processor->current_pri);
+	} else {
+		has_higher = (runq->highq >= processor->current_pri);
+	}
+	if (has_higher) {
 		if (runq->urgency > 0)
 			return (AST_PREEMPT | AST_URGENT);
 
@@ -647,6 +653,61 @@ sched_fixedpriority_update_priority(thread_t	thread)
 
 	}
 	
+#if CONFIG_EMBEDDED
+	/* Check for pending throttle transitions, and safely switch queues */
+	if ((thread->sched_flags & TH_SFLAG_PENDING_THROTTLE_MASK) && (thread->bound_processor == PROCESSOR_NULL)) {
+			boolean_t		removed = thread_run_queue_remove(thread);
+
+			if (thread->sched_flags & TH_SFLAG_PENDING_THROTTLE_DEMOTION) {
+				if (thread->sched_mode == TH_MODE_REALTIME) {
+					thread->saved_mode = thread->sched_mode;
+					thread->sched_mode = TH_MODE_TIMESHARE;
+
+					if ((thread->state & (TH_RUN|TH_IDLE)) == TH_RUN)
+						sched_share_incr();
+				} else {
+					/*
+					 * It's possible that this is a realtime thread that has
+					 * already tripped the failsafe, in which case it should not
+					 * degrade further.
+					 */
+					if (!(thread->sched_flags & TH_SFLAG_FAILSAFE)) {
+
+						thread->saved_mode = thread->sched_mode;
+
+						if (thread->sched_mode == TH_MODE_TIMESHARE) {
+							thread->sched_mode = TH_MODE_FAIRSHARE;
+						}
+					}
+				}
+				thread->sched_flags |= TH_SFLAG_THROTTLED;
+
+				KERNEL_DEBUG_CONSTANT(
+					MACHDBG_CODE(DBG_MACH_SCHED,MACH_FAIRSHARE_ENTER) | DBG_FUNC_NONE, (uintptr_t)thread_tid(thread), 0xFFFFFFFF, 0, 0, 0);
+
+			} else {
+				if ((thread->sched_mode == TH_MODE_TIMESHARE)
+					&& (thread->saved_mode == TH_MODE_REALTIME)) {
+					if ((thread->state & (TH_RUN|TH_IDLE)) == TH_RUN)
+						sched_share_decr();
+				}
+
+				thread->sched_mode = thread->saved_mode;
+				thread->saved_mode = TH_MODE_NONE;
+				thread->sched_flags &= ~TH_SFLAG_THROTTLED;
+
+				KERNEL_DEBUG_CONSTANT1(
+					MACHDBG_CODE(DBG_MACH_SCHED,MACH_FAIRSHARE_EXIT) | DBG_FUNC_NONE, 0, 0, 0, 0, thread_tid(thread));
+
+			}
+
+			thread->sched_flags &= ~(TH_SFLAG_PENDING_THROTTLE_MASK);
+
+			if (removed)
+				thread_setrun(thread, SCHED_TAILQ);
+	}
+#endif
+
 	/*
 	 *	Check for fail-safe release.
 	 */

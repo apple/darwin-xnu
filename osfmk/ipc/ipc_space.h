@@ -82,15 +82,15 @@
 
 #ifdef __APPLE_API_PRIVATE
 #if MACH_KERNEL_PRIVATE
-#include <mach_kdb.h>
 #include <kern/macro_help.h>
 #include <kern/kern_types.h>
 #include <kern/lock.h>
 #include <kern/task.h>
 #include <kern/zalloc.h>
 #include <ipc/ipc_entry.h>
-#include <ipc/ipc_splay.h>
 #include <ipc/ipc_types.h>
+
+#include <libkern/OSAtomic.h>
 
 /*
  *	Every task has a space of IPC capabilities.
@@ -98,38 +98,55 @@
  *	IPC kernel calls manipulate the space of the target task.
  *
  *	Every space has a non-NULL is_table with is_table_size entries.
- *	A space may have a NULL is_tree.  is_tree_small records the
- *	number of entries in the tree that, if the table were to grow
- *	to the next larger size, would move from the tree to the table.
  *
- *	is_growing marks when the table is in the process of growing.
- *	When the table is growing, it can't be freed or grown by another
- *	thread, because of krealloc/kmem_realloc's requirements.
- *
+ *	Only one thread can be growing the space at a time.  Others
+ *	that need it grown wait for the first.  We do almost all the
+ *	work with the space unlocked, so lookups proceed pretty much
+ *	unaffected while the grow operation is underway.
  */
 
 typedef natural_t ipc_space_refs_t;
+#define IS_REFS_MAX	0x0fffffff
+#define IS_INACTIVE	0x40000000	/* space is inactive */
+#define IS_GROWING	0x20000000	/* space is growing */
 
 struct ipc_space {
-	decl_lck_mtx_data(,is_ref_lock_data)
-	ipc_space_refs_t is_references;
-
-	decl_lck_mtx_data(,is_lock_data)
-	boolean_t is_active;		/* is the space alive? */
-	boolean_t is_growing;		/* is the space growing? */
-	ipc_entry_t is_table;		/* an array of entries */
+	lck_spin_t	is_lock_data;
+	ipc_space_refs_t is_bits;	/* holds refs, active, growing */
 	ipc_entry_num_t is_table_size;	/* current size of table */
-	struct ipc_table_size *is_table_next; /* info for larger table */
-	struct ipc_splay_tree is_tree;	/* a splay tree of entries */
-	ipc_entry_num_t is_tree_total;	/* number of entries in the tree */
-	ipc_entry_num_t is_tree_small;	/* # of small entries in the tree */
-	ipc_entry_num_t is_tree_hash;	/* # of hashed entries in the tree */
-	boolean_t is_fast;              /* for is_fast_space() */
-
+	ipc_entry_t is_table;		/* an array of entries */
 	task_t is_task;                 /* associated task */
+	struct ipc_table_size *is_table_next; /* info for larger table */
+	ipc_entry_num_t is_low_mod;	/* lowest modified entry during growth */
+	ipc_entry_num_t is_high_mod;	/* highest modified entry during growth */
 };
 
 #define	IS_NULL			((ipc_space_t) 0)
+
+#define is_active(is) 		(((is)->is_bits & IS_INACTIVE) != IS_INACTIVE)
+
+static inline void 
+is_mark_inactive(ipc_space_t is)
+{
+	assert(is_active(is));
+	OSBitOrAtomic(IS_INACTIVE, &is->is_bits);
+}
+
+#define is_growing(is)		(((is)->is_bits & IS_GROWING) == IS_GROWING)
+
+static inline void
+is_start_growing(ipc_space_t is)
+{
+	assert(!is_growing(is));
+	OSBitOrAtomic(IS_GROWING, &is->is_bits);
+}
+
+static inline void
+is_done_growing(ipc_space_t is)	
+{
+	assert(is_growing(is));
+	OSBitAndAtomic(~IS_GROWING, &is->is_bits);
+}
 
 extern zone_t ipc_space_zone;
 
@@ -141,62 +158,52 @@ extern ipc_space_t ipc_space_reply;
 #if	DIPC
 extern ipc_space_t ipc_space_remote;
 #endif	/* DIPC */
-#if	DIPC || MACH_KDB
+#if	DIPC
 extern ipc_space_t default_pager_space;
-#endif	/* DIPC || MACH_KDB */
+#endif	/* DIPC */
 
-#define is_fast_space(is)	((is)->is_fast)
+extern lck_grp_t 	ipc_lck_grp;
+extern lck_attr_t 	ipc_lck_attr;
 
-#define	is_ref_lock_init(is)	lck_mtx_init(&(is)->is_ref_lock_data, &ipc_lck_grp, &ipc_lck_attr)
-#define	is_ref_lock_destroy(is)	lck_mtx_destroy(&(is)->is_ref_lock_data, &ipc_lck_grp)
+#define	is_lock_init(is)	lck_spin_init(&(is)->is_lock_data, &ipc_lck_grp, &ipc_lck_attr)
+#define	is_lock_destroy(is)	lck_spin_destroy(&(is)->is_lock_data, &ipc_lck_grp)
 
-#define	ipc_space_reference_macro(is)					\
-MACRO_BEGIN								\
-	lck_mtx_lock(&(is)->is_ref_lock_data);				\
-	assert((is)->is_references > 0);				\
-	(is)->is_references++;						\
-	lck_mtx_unlock(&(is)->is_ref_lock_data);				\
-MACRO_END
-
-#define	ipc_space_release_macro(is)					\
-MACRO_BEGIN								\
-	ipc_space_refs_t _refs;						\
-									\
-	lck_mtx_lock(&(is)->is_ref_lock_data);				\
-	assert((is)->is_references > 0);				\
-	_refs = --(is)->is_references;					\
-	lck_mtx_unlock(&(is)->is_ref_lock_data);				\
-									\
-	if (_refs == 0) {						\
-		is_lock_destroy(is);					\
-		is_ref_lock_destroy(is);				\
-		is_free(is);						\
-	}								\
-MACRO_END
-
-#define	is_lock_init(is)	lck_mtx_init(&(is)->is_lock_data, &ipc_lck_grp, &ipc_lck_attr)
-#define	is_lock_destroy(is)	lck_mtx_destroy(&(is)->is_lock_data, &ipc_lck_grp)
-
-#define	is_read_lock(is)	lck_mtx_lock(&(is)->is_lock_data)
-#define is_read_unlock(is)	lck_mtx_unlock(&(is)->is_lock_data)
-#define is_read_sleep(is)	lck_mtx_sleep(&(is)->is_lock_data,	\
+#define	is_read_lock(is)	lck_spin_lock(&(is)->is_lock_data)
+#define is_read_unlock(is)	lck_spin_unlock(&(is)->is_lock_data)
+#define is_read_sleep(is)	lck_spin_sleep(&(is)->is_lock_data,	\
 							LCK_SLEEP_DEFAULT,					\
 							(event_t)(is),						\
 							THREAD_UNINT)
 
-#define	is_write_lock(is)	lck_mtx_lock(&(is)->is_lock_data)
-#define	is_write_lock_try(is)	lck_mtx_try_lock(&(is)->is_lock_data)
-#define is_write_unlock(is)	lck_mtx_unlock(&(is)->is_lock_data)
-#define is_write_sleep(is)	lck_mtx_sleep(&(is)->is_lock_data,	\
+#define	is_write_lock(is)	lck_spin_lock(&(is)->is_lock_data)
+#define	is_write_lock_try(is)	lck_spin_try_lock(&(is)->is_lock_data)
+#define is_write_unlock(is)	lck_spin_unlock(&(is)->is_lock_data)
+#define is_write_sleep(is)	lck_spin_sleep(&(is)->is_lock_data,	\
 							LCK_SLEEP_DEFAULT,					\
 							(event_t)(is),						\
 							THREAD_UNINT)
 
-#define	is_reference(is)	ipc_space_reference(is)
-#define	is_release(is)		ipc_space_release(is)
+#define is_refs(is)		((is)->is_bits & IS_REFS_MAX)
 
-#define	is_write_to_read_lock(is)
+static inline void
+is_reference(ipc_space_t is)
+{
+	assert(is_refs(is) > 0 && is_refs(is) < IS_REFS_MAX);
+	OSIncrementAtomic(&(is->is_bits));
+}
 
+
+static inline void
+is_release(ipc_space_t is) {
+	assert(is_refs(is) > 0);
+
+        /* If we just removed the last reference count */
+	if ( 1 == (OSDecrementAtomic(&(is->is_bits)) & IS_REFS_MAX)) {
+		is_lock_destroy(is);
+		is_free(is);
+	}
+}
+	
 #define	current_space_fast()	(current_task_fast()->itk_space)
 #define current_space()		(current_space_fast())
 
@@ -210,7 +217,7 @@ extern kern_return_t ipc_space_create(
 	ipc_space_t		*spacep);
 
 /* Mark a space as dead and cleans up the entries*/
-extern void ipc_space_destroy(
+extern void ipc_space_terminate(
 	ipc_space_t	space);
 
 /* Clean up the entries - but leave the space alive */

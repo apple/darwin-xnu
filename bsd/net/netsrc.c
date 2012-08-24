@@ -227,6 +227,8 @@ netsrc_ipv6(kern_ctl_ref kctl, uint32_t unit, struct netsrc_req *nrq)
 				nrp.nrp_flags |= NETSRC_IP6_FLAG_TENTATIVE;
 			if (ia->ia6_flags & IN6_IFF_DEPRECATED)
 				nrp.nrp_flags |= NETSRC_IP6_FLAG_DEPRECATED;
+			if (ia->ia6_flags & IN6_IFF_OPTIMISTIC)
+				nrp.nrp_flags |= NETSRC_IP6_FLAG_OPTIMISTIC;
 			sin6.sin6_family = AF_INET6;
 			sin6.sin6_len    = sizeof(sin6);
 			memcpy(&sin6.sin6_addr, in6, sizeof(*in6));

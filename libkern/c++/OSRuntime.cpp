@@ -548,6 +548,7 @@ void OSlibkernInit(void)
     // This must be called before calling OSRuntimeInitializeCPP.
     OSMetaClassBase::initialize();
     
+    g_kernel_kmod_info.address = (vm_address_t) &_mh_execute_header;
     if (kOSReturnSuccess != OSRuntimeInitializeCPP(&g_kernel_kmod_info, 0)) {
         panic("OSRuntime: C++ runtime failed to initialize.");
     }

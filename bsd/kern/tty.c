@@ -142,6 +142,9 @@ static void	ttyunblock(struct tty *tp);
 static int	ttywflush(struct tty *tp);
 static int	proc_compare(proc_t p1, proc_t p2);
 
+static void	ttyhold(struct tty *tp);
+static void	ttydeallocate(struct tty *tp);
+
 static int isctty(proc_t p, struct tty  *tp);
 static int isctty_sp(proc_t p, struct tty  *tp, struct session *sessp);
 
@@ -339,8 +342,9 @@ int
 ttyopen(dev_t device, struct tty *tp)
 {
 	proc_t p = current_proc();
-	struct pgrp * pg, * oldpg;
+	struct pgrp *pg, *oldpg;
 	struct session *sessp, *oldsess;
+	struct tty *oldtp;
 
 	TTY_LOCK_OWNED(tp);	/* debug assert */
 
@@ -359,15 +363,15 @@ ttyopen(dev_t device, struct tty *tp)
 	/*
 	 * First tty open affter setsid() call makes this tty its controlling
 	 * tty, if the tty does not already have a session associated with it.
-	 * Only do this if the process
 	 */
-	if (SESS_LEADER(p, sessp) &&			/* process is session leader */
+	if (SESS_LEADER(p, sessp) &&	/* the process is the session leader */
 	    sessp->s_ttyvp == NULL &&	/* but has no controlling tty */
-	    tp->t_session == NULL ) {		/* and tty not controlling */
+	    tp->t_session == NULL ) {	/* and tty not controlling */
 		session_lock(sessp);
 	    	if ((sessp->s_flags & S_NOCTTY) == 0) {	/* and no O_NOCTTY */
-			/* Hold on to the reference */
-			sessp->s_ttyp = tp;	/* XXX NOT A REFERENCE */
+			oldtp = sessp->s_ttyp;
+			ttyhold(tp);
+			sessp->s_ttyp = tp;
 			OSBitOrAtomic(P_CONTROLT, &p->p_flag);
 			session_unlock(sessp);
 			proc_list_lock();
@@ -385,6 +389,8 @@ ttyopen(dev_t device, struct tty *tp)
 				pg_rele(oldpg);
 			if (oldsess != SESSION_NULL)
 				session_rele(oldsess);	
+			if (NULL != oldtp)
+				ttyfree(oldtp);
 			tty_lock(tp);
 			goto out;
 	     	}
@@ -1047,8 +1053,9 @@ ttioctl_locked(struct tty *tp, u_long cmd, caddr_t data, int flag, proc_t p)
 {
 	int error = 0;
 	struct uthread *ut;
-	struct pgrp * pg, *oldpg;
-	struct session *sessp, * oldsessp;
+	struct pgrp *pg, *oldpg;
+	struct session *sessp, *oldsessp;
+	struct tty *oldtp;
 
 	TTY_LOCK_OWNED(tp);	/* debug assert */
 
@@ -1404,7 +1411,9 @@ ttioctl_locked(struct tty *tp, u_long cmd, caddr_t data, int flag, proc_t p)
 		tp->t_pgrp = pg;
 		proc_list_unlock();
 		session_lock(sessp);
-		sessp->s_ttyp = tp;	/* XXX NOT A REFERENCE */
+		oldtp = sessp->s_ttyp;
+		ttyhold(tp);
+		sessp->s_ttyp = tp;
 		session_unlock(sessp);
 		OSBitOrAtomic(P_CONTROLT, &p->p_flag);
 		/* SAFE: All callers drop the lock on return */
@@ -1414,6 +1423,8 @@ ttioctl_locked(struct tty *tp, u_long cmd, caddr_t data, int flag, proc_t p)
 			session_rele(oldsessp);
 		if (oldpg != PGRP_NULL)
 			pg_rele(oldpg);
+		if (NULL != oldtp)
+			ttyfree(oldtp);
 		tty_lock(tp);
 		break;
 
@@ -3038,19 +3049,48 @@ ttymalloc(void)
 		lck_mtx_init(&tp->t_lock, tty_lck_grp, tty_lck_attr);
 		klist_init(&tp->t_rsel.si_note);
 		klist_init(&tp->t_wsel.si_note);
+		tp->t_refcnt = 1;
 	}
-	return(tp);
+	return (tp);
 }
 
+/*
+ * Increment the reference count on a tty.
+ */
+static void
+ttyhold(struct tty *tp)
+{
+	TTY_LOCK_OWNED(tp);
+	tp->t_refcnt++;
+}
 
 /*
- * Free a tty structure and its buffers.
- *
- * Locks:	The tty_lock() is assumed to not be held at the time of
- *		the free; this functions destroys the mutex.
+ * Drops a reference count on a tty structure; if the reference count reaches
+ * zero, then also frees the structure and associated buffers.
  */
 void
 ttyfree(struct tty *tp)
+{
+	TTY_LOCK_NOTOWNED(tp);
+
+	tty_lock(tp);
+	if (--tp->t_refcnt == 0) {
+		tty_unlock(tp);
+		ttydeallocate(tp);
+	} else if (tp->t_refcnt < 0) {
+		panic("%s: freeing free tty %p", __func__, tp);
+	} else
+		tty_unlock(tp);
+}
+
+/*
+ * Deallocate a tty structure and its buffers.
+ *
+ * Locks:	The tty_lock() is assumed to not be held at the time of
+ *		the free; this function destroys the mutex.
+ */
+static void
+ttydeallocate(struct tty *tp)
 {
 	TTY_LOCK_NOTOWNED(tp);	/* debug assert */
 
@@ -3097,4 +3137,3 @@ isctty_sp(proc_t p, struct tty  *tp, struct session *sessp)
 	return(sessp == tp->t_session && p->p_flag & P_CONTROLT);
 
 }
-

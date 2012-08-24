@@ -101,9 +101,7 @@
 #include <net/pfkeyv2.h>
 #include <netkey/keydb.h>
 #include <netkey/key.h>
-#include <crypto/des/des.h>
-#include <crypto/blowfish/blowfish.h>
-#include <crypto/cast128/cast128.h>
+#include <libkern/crypto/des.h>
 
 #include <net/net_osdep.h>
 
@@ -111,6 +109,7 @@
 #define DBG_LAYER_BEG		NETDBG_CODE(DBG_NETIPSEC, 1)
 #define DBG_LAYER_END		NETDBG_CODE(DBG_NETIPSEC, 3)
 #define DBG_FNC_ESPAUTH		NETDBG_CODE(DBG_NETIPSEC, (8 << 8))
+#define MAX_SBUF_LEN            2000
 
 extern lck_mtx_t *sadb_mutex;
 
@@ -130,22 +129,6 @@ static int esp_des_blockdecrypt(const struct esp_algorithm *,
 static int esp_des_blockencrypt(const struct esp_algorithm *,
 	struct secasvar *, u_int8_t *, u_int8_t *);
 static int esp_cbc_mature(struct secasvar *);
-#if ALLCRYPTO
-static int esp_blowfish_schedule(const struct esp_algorithm *,
-	struct secasvar *);
-static int esp_blowfish_schedlen(const struct esp_algorithm *);
-static int esp_blowfish_blockdecrypt(const struct esp_algorithm *,
-	struct secasvar *, u_int8_t *, u_int8_t *);
-static int esp_blowfish_blockencrypt(const struct esp_algorithm *,
-	struct secasvar *, u_int8_t *, u_int8_t *);
-static int esp_cast128_schedule(const struct esp_algorithm *,
-	struct secasvar *);
-static int esp_cast128_schedlen(const struct esp_algorithm *);
-static int esp_cast128_blockdecrypt(const struct esp_algorithm *,
-	struct secasvar *, u_int8_t *, u_int8_t *);
-static int esp_cast128_blockencrypt(const struct esp_algorithm *,
-	struct secasvar *, u_int8_t *, u_int8_t *);
-#endif /* ALLCRYPTO */
 static int esp_3des_schedule(const struct esp_algorithm *,
 	struct secasvar *);
 static int esp_3des_schedlen(const struct esp_algorithm *);
@@ -178,19 +161,6 @@ static const struct esp_algorithm null_esp =
 	{ 1, 0, esp_null_mature, 0, 2048, 0, "null",
 		esp_common_ivlen, esp_null_decrypt,
 		esp_null_encrypt, NULL, NULL, NULL };
-#if ALLCRYPTO
-static const struct esp_algorithm blowfish_cbc =
-	{ 8, 8, esp_cbc_mature, 40, 448, esp_blowfish_schedlen, "blowfish-cbc",
-		esp_common_ivlen, esp_cbc_decrypt,
-		esp_cbc_encrypt, esp_blowfish_schedule,
-		esp_blowfish_blockdecrypt, esp_blowfish_blockencrypt, };
-static const struct esp_algorithm cast128_cbc =
-	{ 8, 8, esp_cbc_mature, 40, 128, esp_cast128_schedlen,
-		"cast128-cbc",
-		esp_common_ivlen, esp_cbc_decrypt,
-		esp_cbc_encrypt, esp_cast128_schedule,
-		esp_cast128_blockdecrypt, esp_cast128_blockencrypt, };
-#endif /* ALLCRYPTO */
 static const struct esp_algorithm aes_cbc =
 	{ 16, 16, esp_cbc_mature, 128, 256, esp_aes_schedlen,
 		"aes-cbc",
@@ -202,10 +172,6 @@ static const struct esp_algorithm *esp_algorithms[] = {
 	&des_cbc,
 	&des3_cbc,
 	&null_esp,
-#if ALLCRYPTO
-	&blowfish_cbc,
-	&cast128_cbc,
-#endif /* ALLCRYPTO */
 	&aes_cbc
 };
 
@@ -213,7 +179,6 @@ const struct esp_algorithm *
 esp_algorithm_lookup(idx)
 	int idx;
 {
-
 	switch (idx) {
 	case SADB_EALG_DESCBC:
 		return &des_cbc;
@@ -221,12 +186,6 @@ esp_algorithm_lookup(idx)
 		return &des3_cbc;
 	case SADB_EALG_NULL:
 		return &null_esp;
-#if ALLCRYPTO
-	case SADB_X_EALG_BLOWFISHCBC:
-		return &blowfish_cbc;
-	case SADB_X_EALG_CAST128CBC:
-		return &cast128_cbc;
-#endif /* ALLCRYPTO */
 	case SADB_X_EALG_RIJNDAELCBC:
 		return &aes_cbc;
 	default:
@@ -401,8 +360,7 @@ static int
 esp_des_schedlen(
 	__unused const struct esp_algorithm *algo)
 {
-
-	return sizeof(des_key_schedule);
+	return sizeof(des_ecb_key_schedule);
 }
 
 static int
@@ -412,8 +370,8 @@ esp_des_schedule(
 {
 
 	lck_mtx_assert(sadb_mutex, LCK_MTX_ASSERT_OWNED);
-	if (des_key_sched((des_cblock *)_KEYBUF(sav->key_enc),
-	    *(des_key_schedule *)sav->sched))
+	if (des_ecb_key_sched((des_cblock *)_KEYBUF(sav->key_enc),
+	    (des_ecb_key_schedule *)sav->sched))
 		return EINVAL;
 	else
 		return 0;
@@ -426,11 +384,10 @@ esp_des_blockdecrypt(
 	u_int8_t *s,
 	u_int8_t *d)
 {
-
 	/* assumption: d has a good alignment */
 	bcopy(s, d, sizeof(DES_LONG) * 2);
 	des_ecb_encrypt((des_cblock *)d, (des_cblock *)d,
-	    *(des_key_schedule *)sav->sched, DES_DECRYPT);
+	    (des_ecb_key_schedule *)sav->sched, DES_DECRYPT);
 	return 0;
 }
 
@@ -441,11 +398,10 @@ esp_des_blockencrypt(
 	u_int8_t *s,
 	u_int8_t *d)
 {
-
 	/* assumption: d has a good alignment */
 	bcopy(s, d, sizeof(DES_LONG) * 2);
 	des_ecb_encrypt((des_cblock *)d, (des_cblock *)d,
-	    *(des_key_schedule *)sav->sched, DES_ENCRYPT);
+	    (des_ecb_key_schedule *)sav->sched, DES_ENCRYPT);
 	return 0;
 }
 
@@ -498,9 +454,6 @@ esp_cbc_mature(sav)
 			return 1;
 		}
 		break;
-	case SADB_X_EALG_BLOWFISHCBC:
-	case SADB_X_EALG_CAST128CBC:
-		break;
 	case SADB_X_EALG_RIJNDAELCBC:
 		/* allows specific key sizes only */
 		if (!(keylen == 128 || keylen == 192 || keylen == 256)) {
@@ -515,123 +468,12 @@ esp_cbc_mature(sav)
 	return 0;
 }
 
-#if ALLCRYPTO
-static int
-esp_blowfish_schedlen(
-	__unused const struct esp_algorithm *algo)
-{
-
-	return sizeof(BF_KEY);
-}
-
-static int
-esp_blowfish_schedule(
-	__unused const struct esp_algorithm *algo,
-	struct secasvar *sav)
-{
-
-	lck_mtx_assert(sadb_mutex, LCK_MTX_ASSERT_OWNED);
-	BF_set_key((BF_KEY *)sav->sched, _KEYLEN(sav->key_enc),
-	    (u_int8_t *) _KEYBUF(sav->key_enc));
-	return 0;
-}
-
-static int
-esp_blowfish_blockdecrypt(
-	__unused const struct esp_algorithm *algo,
-	struct secasvar *sav,
-	u_int8_t *s,
-	u_int8_t *d)
-{
-	/* HOLY COW!  BF_decrypt() takes values in host byteorder */
-	BF_LONG t[2];
-
-	bcopy(s, t, sizeof(t));
-	t[0] = ntohl(t[0]);
-	t[1] = ntohl(t[1]);
-	BF_decrypt(t, (BF_KEY *)sav->sched);
-	t[0] = htonl(t[0]);
-	t[1] = htonl(t[1]);
-	bcopy(t, d, sizeof(t));
-	return 0;
-}
-
-static int
-esp_blowfish_blockencrypt(
-	__unused const struct esp_algorithm *algo,
-	struct secasvar *sav,
-	u_int8_t *s,
-	u_int8_t *d)
-{
-	/* HOLY COW!  BF_encrypt() takes values in host byteorder */
-	BF_LONG t[2];
-
-	bcopy(s, t, sizeof(t));
-	t[0] = ntohl(t[0]);
-	t[1] = ntohl(t[1]);
-	BF_encrypt(t, (BF_KEY *)sav->sched);
-	t[0] = htonl(t[0]);
-	t[1] = htonl(t[1]);
-	bcopy(t, d, sizeof(t));
-	return 0;
-}
-
-static int
-esp_cast128_schedlen(
-	__unused const struct esp_algorithm *algo)
-{
-
-	return sizeof(u_int32_t) * 32;
-}
-
-static int
-esp_cast128_schedule(
-	__unused const struct esp_algorithm *algo,
-	struct secasvar *sav)
-{
-	lck_mtx_assert(sadb_mutex, LCK_MTX_ASSERT_OWNED);
-	set_cast128_subkey((u_int32_t *)sav->sched, (u_int8_t *) _KEYBUF(sav->key_enc),
-		_KEYLEN(sav->key_enc));
-	return 0;
-}
-
-static int
-esp_cast128_blockdecrypt(
-	__unused const struct esp_algorithm *algo,
-	struct secasvar *sav,
-	u_int8_t *s,
-	u_int8_t *d)
-{
-
-	if (_KEYLEN(sav->key_enc) <= 80 / 8)
-		cast128_decrypt_round12(d, s, (u_int32_t *)sav->sched);
-	else
-		cast128_decrypt_round16(d, s, (u_int32_t *)sav->sched);
-	return 0;
-}
-
-static int
-esp_cast128_blockencrypt(
-	__unused const struct esp_algorithm *algo,
-	struct secasvar *sav,
-	u_int8_t *s,
-	u_int8_t *d)
-{
-
-	if (_KEYLEN(sav->key_enc) <= 80 / 8)
-		cast128_encrypt_round12(d, s, (u_int32_t *)sav->sched);
-	else
-		cast128_encrypt_round16(d, s, (u_int32_t *)sav->sched);
-	return 0;
-}
-#endif /* ALLCRYPTO */
-
 static int
 esp_3des_schedlen(
 	__unused const struct esp_algorithm *algo)
 {
 
-	return sizeof(des_key_schedule) * 3;
+	return sizeof(des3_ecb_key_schedule);
 }
 
 static int
@@ -639,20 +481,13 @@ esp_3des_schedule(
 	__unused const struct esp_algorithm *algo,
 	struct secasvar *sav)
 {
-	int error;
-	des_key_schedule *p;
-	int i;
-	char *k;
-
 	lck_mtx_assert(sadb_mutex, LCK_MTX_ASSERT_OWNED);
-	p = (des_key_schedule *)sav->sched;
-	k = _KEYBUF(sav->key_enc);
-	for (i = 0; i < 3; i++) {
-		error = des_key_sched((des_cblock *)(k + 8 * i), p[i]);
-		if (error)
-			return EINVAL;
-	}
-	return 0;
+
+	if (des3_ecb_key_sched((des_cblock *)_KEYBUF(sav->key_enc),
+	    (des3_ecb_key_schedule *)sav->sched))
+		return EINVAL;
+	else
+		return 0;
 }
 
 static int
@@ -662,13 +497,10 @@ esp_3des_blockdecrypt(
 	u_int8_t *s,
 	u_int8_t *d)
 {
-	des_key_schedule *p;
-
 	/* assumption: d has a good alignment */
-	p = (des_key_schedule *)sav->sched;
 	bcopy(s, d, sizeof(DES_LONG) * 2);
-	des_ecb3_encrypt((des_cblock *)d, (des_cblock *)d, 
-			 p[0], p[1], p[2], DES_DECRYPT);
+	des3_ecb_encrypt((des_cblock *)d, (des_cblock *)d,
+			 (des3_ecb_key_schedule *)sav->sched, DES_DECRYPT);
 	return 0;
 }
 
@@ -679,13 +511,10 @@ esp_3des_blockencrypt(
 	u_int8_t *s,
 	u_int8_t *d)
 {
-	des_key_schedule *p;
-
 	/* assumption: d has a good alignment */
-	p = (des_key_schedule *)sav->sched;
 	bcopy(s, d, sizeof(DES_LONG) * 2);
-	des_ecb3_encrypt((des_cblock *)d, (des_cblock *)d, 
-			 p[0], p[1], p[2], DES_ENCRYPT);
+	des3_ecb_encrypt((des_cblock *)d, (des_cblock *)d,
+			 (des3_ecb_key_schedule *)sav->sched, DES_ENCRYPT);
 	return 0;
 }
 
@@ -713,12 +542,12 @@ esp_cbc_decrypt(m, off, sav, algo, ivlen)
 	int soff, doff;	/* offset from the head of chain, to head of this mbuf */
 	int sn, dn;	/* offset from the head of the mbuf, to meat */
 	size_t ivoff, bodyoff;
-	u_int8_t iv[MAXIVLEN], *ivp;
-	u_int8_t sbuf[MAXIVLEN], *sp;
+	u_int8_t iv[MAXIVLEN] __attribute__((aligned(4))), *ivp;
+	u_int8_t *sbuf = NULL, *sp, *sp_unaligned;
 	u_int8_t *p, *q;
 	struct mbuf *scut;
 	int scutoff;
-	int i;
+	int i, result = 0;
 	int blocklen;
 	int derived;
 
@@ -820,6 +649,10 @@ esp_cbc_decrypt(m, off, sav, algo, ivlen)
 	while (s && s->m_len == 0)
 		s = s->m_next;
 
+	// Allocate blocksized buffer for unaligned or non-contiguous access
+	sbuf = (u_int8_t *)_MALLOC(blocklen, M_SECA, M_DONTWAIT);
+	if (sbuf == NULL)
+		return ENOBUFS;
 	while (soff < m->m_pkthdr.len) {
 		/* source */
 		if (sn + blocklen <= s->m_len) {
@@ -848,12 +681,19 @@ esp_cbc_decrypt(m, off, sav, algo, ivlen)
 				m_freem(m);
 				if (d0)
 					m_freem(d0);
-				return ENOBUFS;
+				result = ENOBUFS;
+				goto end;
 			}
 			if (!d0)
 				d0 = d;
 			if (dp)
 				dp->m_next = d;
+
+			// try to make mbuf data aligned
+			if (!IPSEC_IS_P2ALIGNED(d->m_data)) {
+				m_adj(d, IPSEC_GET_P2UNALIGNED_OFS(d->m_data));
+			}
+
 			d->m_len = 0;
 			d->m_len = (M_TRAILINGSPACE(d) / blocklen) * blocklen;
 			if (d->m_len > i)
@@ -862,7 +702,21 @@ esp_cbc_decrypt(m, off, sav, algo, ivlen)
 		}
 
 		/* decrypt */
+		// check input pointer alignment and use a separate aligned buffer (if sp is unaligned on 4-byte boundary).
+		if (IPSEC_IS_P2ALIGNED(sp)) {
+			sp_unaligned = NULL;
+		} else {
+			sp_unaligned = sp;
+			sp = sbuf;
+			memcpy(sp, sp_unaligned, blocklen);
+		}
+		// no need to check output pointer alignment
 		(*algo->blockdecrypt)(algo, sav, sp, mtod(d, u_int8_t *) + dn);
+
+		// update unaligned pointers
+		if (!IPSEC_IS_P2ALIGNED(sp_unaligned)) {
+			sp = sp_unaligned;
+		}
 
 		/* xor */
 		p = ivp ? ivp : iv;
@@ -895,8 +749,10 @@ esp_cbc_decrypt(m, off, sav, algo, ivlen)
 	/* just in case */
 	bzero(iv, sizeof(iv));
 	bzero(sbuf, sizeof(sbuf));
-
-	return 0;
+end:
+	if (sbuf != NULL)
+		FREE(sbuf, M_SECA);
+	return result;
 }
 
 static int
@@ -913,12 +769,12 @@ esp_cbc_encrypt(
 	int soff, doff;	/* offset from the head of chain, to head of this mbuf */
 	int sn, dn;	/* offset from the head of the mbuf, to meat */
 	size_t ivoff, bodyoff;
-	u_int8_t iv[MAXIVLEN], *ivp;
-	u_int8_t sbuf[MAXIVLEN], *sp;
+	u_int8_t iv[MAXIVLEN] __attribute__((aligned(4))), *ivp;
+	u_int8_t *sbuf = NULL, *sp, *sp_unaligned;
 	u_int8_t *p, *q;
 	struct mbuf *scut;
 	int scutoff;
-	int i;
+	int i, result = 0;
 	int blocklen;
 	int derived;
 
@@ -1026,6 +882,10 @@ esp_cbc_encrypt(
 	while (s && s->m_len == 0)
 		s = s->m_next;
 
+	// Allocate blocksized buffer for unaligned or non-contiguous access
+        sbuf = (u_int8_t *)_MALLOC(blocklen, M_SECA, M_DONTWAIT);
+        if (sbuf == NULL)
+                return ENOBUFS;
 	while (soff < m->m_pkthdr.len) {
 		/* source */
 		if (sn + blocklen <= s->m_len) {
@@ -1054,12 +914,19 @@ esp_cbc_encrypt(
 				m_freem(m);
 				if (d0)
 					m_freem(d0);
-				return ENOBUFS;
+				result = ENOBUFS;
+				goto end;
 			}
 			if (!d0)
 				d0 = d;
 			if (dp)
 				dp->m_next = d;
+
+			// try to make mbuf data aligned
+			if (!IPSEC_IS_P2ALIGNED(d->m_data)) {
+				m_adj(d, IPSEC_GET_P2UNALIGNED_OFS(d->m_data));
+			}
+
 			d->m_len = 0;
 			d->m_len = (M_TRAILINGSPACE(d) / blocklen) * blocklen;
 			if (d->m_len > i)
@@ -1074,7 +941,21 @@ esp_cbc_encrypt(
 			q[i] ^= p[i];
 
 		/* encrypt */
+		// check input pointer alignment and use a separate aligned buffer (if sp is not aligned on 4-byte boundary).
+		if (IPSEC_IS_P2ALIGNED(sp)) {
+			sp_unaligned = NULL;
+		} else {
+			sp_unaligned = sp;
+			sp = sbuf;
+			memcpy(sp, sp_unaligned, blocklen);
+		}
+		// no need to check output pointer alignment
 		(*algo->blockencrypt)(algo, sav, sp, mtod(d, u_int8_t *) + dn);
+
+		// update unaligned pointers
+		if (!IPSEC_IS_P2ALIGNED(sp_unaligned)) {
+			sp = sp_unaligned;
+		}
 
 		/* next iv */
 		ivp = mtod(d, u_int8_t *) + dn;
@@ -1099,8 +980,10 @@ esp_cbc_encrypt(
 	bzero(sbuf, sizeof(sbuf));
 
 	key_sa_stir_iv(sav);
-
-	return 0;
+end:
+	if (sbuf != NULL)
+		FREE(sbuf, M_SECA);
+	return result;
 }
 
 /*------------------------------------------------------------*/
@@ -1117,7 +1000,7 @@ esp_auth(m0, skip, length, sav, sum)
 	struct mbuf *m;
 	size_t off;
 	struct ah_algorithm_state s;
-	u_char sumbuf[AH_MAXSUMSIZE];
+	u_char sumbuf[AH_MAXSUMSIZE] __attribute__((aligned(4)));
 	const struct ah_algorithm *algo;
 	size_t siz;
 	int error;

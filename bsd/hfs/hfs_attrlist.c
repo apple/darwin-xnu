@@ -139,7 +139,7 @@ hfs_vnop_readdirattr(ap)
 		return (EINVAL);
 	}
 
-	if (VTOC(dvp)->c_flags & UF_COMPRESSED) {
+	if (VTOC(dvp)->c_bsdflags & UF_COMPRESSED) {
 		int compressed = hfs_file_is_compressed(VTOC(dvp), 0);  /* 0 == take the cnode lock */
 
 		if (!compressed) {

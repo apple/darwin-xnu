@@ -61,10 +61,7 @@ bool IOSubMemoryDescriptor::initSubRange( IOMemoryDescriptor * parent,
 					IOByteCount offset, IOByteCount length,
 					IODirection direction )
 {
-    if( !parent)
-	return( false);
-
-    if( (offset + length) > parent->getLength())
+    if( parent && ((offset + length) > parent->getLength()))
 	return( false);
 
     /*
@@ -83,10 +80,15 @@ bool IOSubMemoryDescriptor::initSubRange( IOMemoryDescriptor * parent,
 	 */
 
 	_parent->release();
-	_parent = 0;
     }
 
-    parent->retain();
+    if (parent) {
+	parent->retain();
+	_tag	= parent->getTag();
+    }
+    else {
+        _tag    = 0;
+    }
     _parent	= parent;
     _start	= offset;
     _length	= length;
@@ -94,7 +96,6 @@ bool IOSubMemoryDescriptor::initSubRange( IOMemoryDescriptor * parent,
 #ifndef __LP64__
     _direction  = (IODirection) (_flags & kIOMemoryDirectionMask);
 #endif /* !__LP64__ */
-    _tag	= parent->getTag();
 
     return( true );
 }
@@ -188,6 +189,19 @@ IOMemoryMap * IOSubMemoryDescriptor::makeMapping(
 uint64_t
 IOSubMemoryDescriptor::getPreparationID( void )
 {
-    return (_parent->getPreparationID());    
+    uint64_t pID;
+
+    if (!super::getKernelReserved())
+        return (kIOPreparationIDUnsupported);    
+
+    pID = _parent->getPreparationID();
+    if (reserved->kernReserved[0] != pID)
+    {
+        reserved->kernReserved[0] = pID;
+        reserved->preparationID   = kIOPreparationIDUnprepared;
+        super::setPreparationID();
+    }
+
+    return (super::getPreparationID());    
 }
 

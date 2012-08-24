@@ -528,7 +528,10 @@ affinity_set_place(affinity_space_t aspc, affinity_set_t new_aset)
 	 */
 	queue_iterate(&aspc->aspc_affinities,
 			 aset, affinity_set_t, aset_affinities) {
-		set_occupancy[aset->aset_num]++;
+		if(aset->aset_num < num_cpu_asets)
+			set_occupancy[aset->aset_num]++;
+		else
+			panic("aset_num = %d in %s\n", aset->aset_num, __FUNCTION__);
 	}
 
 	/*

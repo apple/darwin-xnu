@@ -31,12 +31,13 @@
 static boolean_t isargsep( char c);
 #if !CONFIG_EMBEDDED
 static int argstrcpy(char *from, char *to);
-#endif 
+#endif
 static int argstrcpy2(char *from,char *to, unsigned maxlen);
 static int argnumcpy(int val, void *to, unsigned maxlen);
 static int getval(char *s, int *val);
 
 extern int IODTGetDefault(const char *key, void *infoAddr, unsigned int infoSize);
+
 
 struct i24 {
 	int32_t	i24 : 24;
@@ -71,7 +72,7 @@ PE_parse_boot_argn(
 {
 	char *args;
 	char *cp, c;
-	unsigned int i;
+	uintptr_t i;
 	int val;
 	boolean_t arg_boolean;
 	boolean_t arg_found;

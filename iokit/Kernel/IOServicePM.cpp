@@ -47,6 +47,7 @@
 #include <IOKit/pwr_mgt/IOPMPrivate.h>
 
 #include <sys/proc.h>
+#include <sys/proc_internal.h>
 #include <libkern/OSDebug.h>
 
 // Required for notification instrumentation
@@ -90,8 +91,8 @@ static IOPMRequestQueue *    gIOPMReplyQueue    = 0;
 static IOPMWorkQueue *       gIOPMWorkQueue     = 0;
 static IOPMCompletionQueue * gIOPMFreeQueue     = 0;
 static IOPMRequest *         gIOPMRequest       = 0;
-static IOPlatformExpert *    gPlatform          = 0;
 static IOService *           gIOPMRootNode      = 0;
+static IOPlatformExpert *    gPlatform          = 0;
 
 static const OSSymbol *      gIOPMPowerClientDevice     = 0;
 static const OSSymbol *      gIOPMPowerClientDriver     = 0;
@@ -143,7 +144,7 @@ do {                                  \
 #define PM_LOCK_WAKEUP(event)       IOLockWakeup(fPMLock, event, false)
 
 #define ns_per_us                   1000
-#define k30seconds                  (30*1000000)
+#define k30Seconds                  (30*1000000)
 #define kMinAckTimeoutTicks         (10*1000000)
 #define kIOPMTardyAckSPSKey         "IOPMTardyAckSetPowerState"
 #define kIOPMTardyAckPSCKey         "IOPMTardyAckPowerStateChange"
@@ -196,6 +197,16 @@ enum {
     do { if (fPMActions.a) { \
          (fPMActions.a)(fPMActions.target, this, &fPMActions, x, y); } \
          } while (false)
+         
+static OSNumber * copyClientIDForNotification(
+    OSObject *object, 
+    IOPMInterestContext *context);
+
+static void logClientIDForNotification(
+    OSObject *object,
+    IOPMInterestContext *context, 
+    const char *logString);
+         
 
 //*********************************************************************************
 // PM machine states
@@ -746,6 +757,10 @@ void IOService::handlePMstop ( IOPMRequest * request )
 
 	PM_ASSERT_IN_GATE();
 	PM_LOG2("%s: %p %s start\n", getName(), this, __FUNCTION__);
+
+    // remove driver from prevent system sleep lists
+    getPMRootDomain()->updatePreventIdleSleepList(this, false);
+    getPMRootDomain()->updatePreventSystemSleepList(this, false);
 
     // remove the property
     removeProperty(kPwrMgtKey);			
@@ -1983,64 +1998,51 @@ void IOService::setParentInfo (
     }
 }
 
-//*********************************************************************************
-// [private] rebuildChildClampBits
-//
-// The ChildClamp bits (kIOPMChildClamp & kIOPMChildClamp2) in our capabilityFlags
-// indicate that one of our children (or grandchildren or great-grandchildren ...)
-// doesn't support idle or system sleep in its current state. Since we don't track
-// the origin of each bit, every time any child changes state we have to clear
-// these bits and rebuild them.
-//*********************************************************************************
+//******************************************************************************
+// [private] trackSystemSleepPreventers
+//******************************************************************************
 
-void IOService::rebuildChildClampBits ( void )
+void IOService::trackSystemSleepPreventers(
+    IOPMPowerStateIndex     oldPowerState,
+    IOPMPowerStateIndex     newPowerState,
+    IOPMPowerChangeFlags    changeFlags __unused )
 {
-    unsigned long		i;
-    OSIterator *		iter;
-    OSObject *			next;
-    IOPowerConnection *	connection;
-	unsigned long		powerState;
+    IOPMPowerFlags  oldCapability, newCapability;
 
-    // A child's desires has changed. We need to rebuild the child-clamp bits in
-	// our power state array. Start by clearing the bits in each power state.
-    
-    for ( i = 0; i < fNumberOfPowerStates; i++ )
+    oldCapability = fPowerStates[oldPowerState].capabilityFlags &
+                    (kIOPMPreventIdleSleep | kIOPMPreventSystemSleep);
+    newCapability = fPowerStates[newPowerState].capabilityFlags &
+                    (kIOPMPreventIdleSleep | kIOPMPreventSystemSleep);
+
+    if (fHeadNoteChangeFlags & kIOPMInitialPowerChange)
+        oldCapability = 0;
+    if (oldCapability == newCapability)
+        return;
+
+    if ((oldCapability ^ newCapability) & kIOPMPreventIdleSleep)
     {
-        fPowerStates[i].capabilityFlags &= ~(kIOPMChildClamp | kIOPMChildClamp2);
-    }
-
-	if (!inPlane(gIOPowerPlane))
-		return;
-
-    // Loop through the children. When we encounter the calling child, save the
-	// computed state as this child's desire. And set the ChildClamp bits in any
-    // of our states that some child has clamp on.
-
-    iter = getChildIterator(gIOPowerPlane);
-    if ( iter )
-    {
-        while ( (next = iter->getNextObject()) )
+#if SUPPORT_IDLE_CANCEL
+        if ((oldCapability & kIOPMPreventIdleSleep) == 0)
         {
-            if ( (connection = OSDynamicCast(IOPowerConnection, next)) )
-            {
-				if (connection->getReadyFlag() == false)
-				{
-					PM_LOG3("[%s] %s: connection not ready\n",
-						getName(), __FUNCTION__);
-					continue;
-				}
+            IOPMRequest *   cancelRequest;
 
-				powerState = connection->getDesiredDomainState();
-                if (powerState < fNumberOfPowerStates)
-                {
-                    if ( connection->getPreventIdleSleepFlag() )
-                        fPowerStates[powerState].capabilityFlags |= kIOPMChildClamp;
-                    if ( connection->getPreventSystemSleepFlag() )
-                        fPowerStates[powerState].capabilityFlags |= kIOPMChildClamp2;
-                }
+            cancelRequest = acquirePMRequest( this, kIOPMRequestTypeIdleCancel );
+            if (cancelRequest)
+            {
+                getPMRootDomain()->submitPMRequest( cancelRequest );
             }
         }
-        iter->release();
+#endif
+    
+        getPMRootDomain()->updatePreventIdleSleepList(this,
+            ((oldCapability & kIOPMPreventIdleSleep) == 0));
+    }
+
+    if ((oldCapability ^ newCapability) & kIOPMPreventSystemSleep)
+    {
+        
+        getPMRootDomain()->updatePreventSystemSleepList(this,
+            ((oldCapability & kIOPMPreventSystemSleep) == 0));
     }
 }
 
@@ -2059,7 +2061,6 @@ IOReturn IOService::requestPowerDomainState(
 	IOPMPowerFlags		outputPowerFlags;
     IOService *         child;
 	IOPMRequest *       subRequest;
-    bool                preventIdle, preventSleep; 
     bool                adjustPower = false;
 
     if (!initialized)
@@ -2081,10 +2082,6 @@ IOReturn IOService::requestPowerDomainState(
 
 	child = (IOService *) childConnection->getChildEntry(gIOPowerPlane);
 	assert(child);
-
-    preventIdle  = ((childRequestPowerFlags & kIOPMPreventIdleSleep) != 0);
-    preventSleep = ((childRequestPowerFlags & kIOPMPreventSystemSleep) != 0);
-    childRequestPowerFlags &= ~(kIOPMPreventIdleSleep | kIOPMPreventSystemSleep);
 
     // Merge in the power flags contributed by this power parent
     // at its current or impending power state. 
@@ -2156,9 +2153,7 @@ IOReturn IOService::requestPowerDomainState(
     // prevent idle/sleep flags towards the root domain.
 
     if (!childConnection->childHasRequestedPower() ||
-        (ps != childConnection->getDesiredDomainState()) ||
-        (childConnection->getPreventIdleSleepFlag() != preventIdle) ||
-        (childConnection->getPreventSystemSleepFlag() != preventSleep))
+        (ps != childConnection->getDesiredDomainState()))
         adjustPower = true;
 
 #if ENABLE_DEBUG_LOGS
@@ -2173,13 +2168,8 @@ IOReturn IOService::requestPowerDomainState(
 #endif
 
 	// Record the child's desires on the connection.
-#if SUPPORT_IDLE_CANCEL
-	bool attemptCancel = (preventIdle && !childConnection->getPreventIdleSleepFlag());
-#endif
 	childConnection->setChildHasRequestedPower();
 	childConnection->setDesiredDomainState( ps );
-	childConnection->setPreventIdleSleepFlag( preventIdle );
-	childConnection->setPreventSystemSleepFlag( preventSleep );
 
 	// Schedule a request to re-evaluate all children desires and
 	// adjust power state. Submit a request if one wasn't pending,
@@ -2196,17 +2186,6 @@ IOReturn IOService::requestPowerDomainState(
 			fAdjustPowerScheduled = true;
 		}
     }
-
-#if SUPPORT_IDLE_CANCEL
-	if (attemptCancel)
-	{
-		subRequest = acquirePMRequest( this, kIOPMRequestTypeIdleCancel );
-		if (subRequest)
-		{
-			submitPMRequest( subRequest );
-		}
-	}
-#endif
 
     return kIOReturnSuccess;
 }
@@ -3860,12 +3839,14 @@ bool IOService::notifyControllingDriver ( void )
 
     if (fInitialSetPowerState)
     {
+        fInitialSetPowerState = false;
+        fHeadNoteChangeFlags |= kIOPMInitialPowerChange;
+
         // Driver specified flag to skip the inital setPowerState()
         if (fHeadNotePowerArrayEntry->capabilityFlags & kIOPMInitialDeviceState)
         {
             return false;
         }
-        fInitialSetPowerState = false;
     }
 
     param = (DriverCallParam *) fDriverCallParamPtr;
@@ -3989,6 +3970,9 @@ void IOService::all_done ( void )
         // could our driver switch to the new state?
         if ( !( fHeadNoteChangeFlags & kIOPMNotDone) )
         {
+            trackSystemSleepPreventers(
+                fCurrentPowerState, fHeadNotePowerState, fHeadNoteChangeFlags);
+
 			// we changed, tell our parent
             requestDomainPower(fHeadNotePowerState);
 
@@ -4037,14 +4021,8 @@ void IOService::all_done ( void )
 			  ((fHeadNoteChangeFlags & kIOPMDomainDidChange)  &&
              (fCurrentPowerState < fHeadNotePowerState)))
         {
-            if ((fHeadNoteChangeFlags & kIOPMPowerSuppressed) &&
-                (fHeadNotePowerState != fCurrentPowerState) &&
-                (fHeadNotePowerState == fDesiredPowerState))
-            {
-                // Power changed, and desired power state restored.
-                // Clear any prior power desire while in suppressed state.
-                requestDomainPower(fHeadNotePowerState);
-            }
+            trackSystemSleepPreventers(
+                fCurrentPowerState, fHeadNotePowerState, fHeadNoteChangeFlags);
 
             // did power raise?
             if ( fCurrentPowerState < fHeadNotePowerState )
@@ -4221,7 +4199,6 @@ IOReturn IOService::requestDomainPower(
     IOPMPowerStateIndex ourPowerState,
     IOOptionBits        options )
 {
-    const IOPMPSEntry *             powerStateEntry;
     IOPMPowerFlags                  requestPowerFlags;
     IOPMPowerStateIndex             maxPowerState;
     IOPMRequestDomainPowerContext   context;
@@ -4236,13 +4213,7 @@ IOReturn IOService::requestDomainPower(
     // Fetch the input power flags for the requested power state.
     // Parent request is stated in terms of required power flags.
 
-	powerStateEntry = &fPowerStates[ourPowerState];
-	requestPowerFlags = powerStateEntry->inputPowerFlags;
-
-    if (powerStateEntry->capabilityFlags & (kIOPMChildClamp | kIOPMPreventIdleSleep))
-        requestPowerFlags |= kIOPMPreventIdleSleep;
-    if (powerStateEntry->capabilityFlags & (kIOPMChildClamp2 | kIOPMPreventSystemSleep))
-        requestPowerFlags |= kIOPMPreventSystemSleep;
+	requestPowerFlags = fPowerStates[ourPowerState].inputPowerFlags;
 
     // Disregard the "previous request" for power reservation.
 
@@ -5091,18 +5062,24 @@ static void logAppTimeouts ( OSObject * object, void * arg )
             (flag = context->responseArray->getObject(clientIndex)) &&
             (flag != kOSBooleanTrue))
         {
-            OSString * clientID = 0;
-            context->us->messageClient(context->messageType, object, &clientID);
-            PM_ERROR(context->errorLog, clientID ? clientID->getCStringNoCopy() : "");
+            OSString *logClientID = NULL;
+            OSNumber *clientID = copyClientIDForNotification(object, context);    
+            
+            if (clientID) {
+                logClientID = IOCopyLogNameForPID(clientID->unsigned32BitValue());
+                clientID->release();
+            }
+                
+            PM_ERROR(context->errorLog, logClientID ? logClientID->getCStringNoCopy() : "");
 
             // TODO: record message type if possible
             IOService::getPMRootDomain()->pmStatsRecordApplicationResponse(
                 gIOPMStatsApplicationResponseTimedOut,
-                clientID ? clientID->getCStringNoCopy() : "",
+                logClientID ? logClientID->getCStringNoCopy() : "",
                 0, (30*1000), -1);
 
-            if (clientID)
-                clientID->release();
+            if (logClientID)
+                logClientID->release();
         }
     }
 }
@@ -5225,7 +5202,7 @@ bool IOService::tellClientsWithResponse ( int messageType )
                 context.notifyType  = fOutOfBandParameter;
                 context.messageType = messageType;
             }
-            context.maxTimeRequested = k30seconds;
+            context.maxTimeRequested = k30Seconds;
 
             applyToInterested( gIOGeneralInterest,
 				pmTellClientWithResponse, (void *) &context );
@@ -5252,7 +5229,7 @@ bool IOService::tellClientsWithResponse ( int messageType )
             applyToInterested( gIOAppPowerStateInterest,
 				pmTellCapabilityAppWithResponse, (void *) &context );
             fNotifyClientArray = context.notifyClients;
-            context.maxTimeRequested = k30seconds;
+            context.maxTimeRequested = k30Seconds;
             break;
 
         case kNotifyCapabilityChangePriority:
@@ -5299,6 +5276,9 @@ void IOService::pmTellAppWithResponse ( OSObject * object, void * arg )
     IOPMInterestContext *   context = (IOPMInterestContext *) arg;
     IOServicePM *           pwrMgt = context->us->pwrMgt;
     uint32_t                msgIndex, msgRef, msgType;
+    OSNumber                *clientID = NULL;
+    proc_t                  proc = NULL;
+    boolean_t               proc_suspended = FALSE;
 #if LOG_APP_RESPONSE_TIMES
     AbsoluteTime            now;
 #endif
@@ -5306,19 +5286,34 @@ void IOService::pmTellAppWithResponse ( OSObject * object, void * arg )
     if (!OSDynamicCast(_IOServiceInterestNotifier, object))
         return;
 
+    if (context->us == getPMRootDomain())
+    {
+        if ((clientID = copyClientIDForNotification(object, context)))
+        {
+            uint32_t clientPID = clientID->unsigned32BitValue();
+            clientID->release();
+            proc = proc_find(clientPID);
+
+            if (proc)
+            {
+                proc_suspended = get_task_pidsuspended((task_t) proc->task);
+                proc_rele(proc);
+
+                if (proc_suspended)
+                {
+                    logClientIDForNotification(object, context, "PMTellAppWithResponse - Suspended");
+                    return;
+                }
+            }
+        }
+    }
+    
     if (context->messageFilter &&
         !context->messageFilter(context->us, object, context, 0, 0))
     {
         if (kIOLogDebugPower & gIOKitDebug)
         {
-            // Log client pid/name and client array index.
-            OSString * clientID = 0;
-            context->us->messageClient(kIOMessageCopyClientID, object, &clientID);
-            PM_LOG("%s DROP App %s, %s\n",
-                context->us->getName(),
-                getIOMessageString(context->messageType),
-                clientID ? clientID->getCStringNoCopy() : "");
-            if (clientID) clientID->release();
+            logClientIDForNotification(object, context, "DROP App");
         }
         return;
     }
@@ -5335,14 +5330,7 @@ void IOService::pmTellAppWithResponse ( OSObject * object, void * arg )
     OUR_PMLog(kPMLogAppNotify, msgType, msgRef);
     if (kIOLogDebugPower & gIOKitDebug)
     {
-        // Log client pid/name and client array index.
-        OSString * clientID = 0;
-        context->us->messageClient(kIOMessageCopyClientID, object, &clientID);
-        PM_LOG("%s MESG App(%u) %s, %s\n",
-            context->us->getName(),
-            msgIndex, getIOMessageString(msgType),
-            clientID ? clientID->getCStringNoCopy() : "");
-        if (clientID) clientID->release();
+        logClientIDForNotification(object, context, "MESG App");
     }
 
 #if LOG_APP_RESPONSE_TIMES
@@ -5433,15 +5421,12 @@ void IOService::pmTellClientWithResponse ( OSObject * object, void * arg )
     }
 
     retCode = context->us->messageClient(msgType, object, (void *) &notify, sizeof(notify));
-    if ( kIOReturnSuccess == retCode )
+
+    if (kIOReturnSuccess == retCode)
     {
-        if ( 0 == notify.returnValue )
-        {
-            // client doesn't want time to respond
+        if (0 == notify.returnValue) {
 			OUR_PMLog(kPMLogClientAcknowledge, msgRef, (uintptr_t) object);
-        }
-        else
-        {
+        } else {
             replied = kOSBooleanFalse;
             if ( notify.returnValue > context->maxTimeRequested )
             {
@@ -5458,9 +5443,7 @@ void IOService::pmTellClientWithResponse ( OSObject * object, void * arg )
                     context->maxTimeRequested = notify.returnValue;
             }
         }
-    }
-    else
-    {
+    } else {
         // not a client of ours
         // so we won't be waiting for response
 		OUR_PMLog(kPMLogClientAcknowledge, msgRef, 0);
@@ -5507,14 +5490,20 @@ void IOService::pmTellCapabilityAppWithResponse ( OSObject * object, void * arg 
     if (kIOLogDebugPower & gIOKitDebug)
     {
         // Log client pid/name and client array index.
-        OSString * clientID = 0;
+        OSNumber * clientID = NULL;
+        OSString * clientIDString = NULL;;
         context->us->messageClient(kIOMessageCopyClientID, object, &clientID);
+        if (clientID) {
+            clientIDString = IOCopyLogNameForPID(clientID->unsigned32BitValue());
+        }
+    
         PM_LOG("%s MESG App(%u) %s, wait %u, %s\n",
             context->us->getName(),
             msgIndex, getIOMessageString(msgType),
             (replied != kOSBooleanTrue),
-            clientID ? clientID->getCStringNoCopy() : "");
+            clientIDString ? clientIDString->getCStringNoCopy() : "");
         if (clientID) clientID->release();
+        if (clientIDString) clientIDString->release();
     }
 
     msgArg.notifyRef = msgRef;
@@ -5763,43 +5752,86 @@ static void tellKernelClientApplier ( OSObject * object, void * arg )
     }
 }
 
-//*********************************************************************************
-// [private] tellAppClientApplier
-//
-// Message a registered application.
-//*********************************************************************************
+static OSNumber * copyClientIDForNotification(
+    OSObject *object, 
+    IOPMInterestContext *context)
+{
+    OSNumber *clientID = NULL;
+    context->us->messageClient(kIOMessageCopyClientID, object, &clientID);
+    return clientID;
+}
+
+static void logClientIDForNotification(
+    OSObject *object,
+    IOPMInterestContext *context, 
+    const char *logString)
+{
+    OSString *logClientID = NULL;
+    OSNumber *clientID = copyClientIDForNotification(object, context);    
+
+    if (logString) 
+    {
+        if (clientID)
+            logClientID = IOCopyLogNameForPID(clientID->unsigned32BitValue());
+    
+        PM_LOG("%s %s %s, %s\n",
+            context->us->getName(), logString,
+            IOService::getIOMessageString(context->messageType),
+            logClientID ? logClientID->getCStringNoCopy() : "");
+
+        if (logClientID) 
+            logClientID->release();
+    }
+    
+    if (clientID) 
+        clientID->release();
+
+    return;
+}
+
 
 static void tellAppClientApplier ( OSObject * object, void * arg )
 {
     IOPMInterestContext * context = (IOPMInterestContext *) arg;
+    OSNumber            * clientID = NULL;
+    proc_t                proc = NULL;
+    boolean_t             proc_suspended = FALSE;
+    
+    if (context->us == IOService::getPMRootDomain())
+    {
+        if ((clientID = copyClientIDForNotification(object, context)))
+        {
+            uint32_t clientPID = clientID->unsigned32BitValue();
+            clientID->release();
+            proc = proc_find(clientPID);
+
+            if (proc)
+            {
+                proc_suspended = get_task_pidsuspended((task_t) proc->task);
+                proc_rele(proc);
+
+                if (proc_suspended)
+                {
+                    logClientIDForNotification(object, context, "tellAppClientApplier - Suspended");
+                    return;
+                }
+            }
+        }
+    }
 
     if (context->messageFilter &&
         !context->messageFilter(context->us, object, context, 0, 0))
     {
         if (kIOLogDebugPower & gIOKitDebug)
         {
-            // Log client pid/name and client array index.
-            OSString * clientID = 0;
-            context->us->messageClient(kIOMessageCopyClientID, object, &clientID);
-            PM_LOG("%s DROP App %s, %s\n",
-                context->us->getName(),
-                IOService::getIOMessageString(context->messageType),
-                clientID ? clientID->getCStringNoCopy() : "");
-            if (clientID) clientID->release();
+            logClientIDForNotification(object, context, "DROP App");
         }
         return;
     }
 
     if (kIOLogDebugPower & gIOKitDebug)
     {
-        // Log client pid/name and client array index.
-        OSString * clientID = 0;
-        context->us->messageClient(kIOMessageCopyClientID, object, &clientID);
-        PM_LOG("%s MESG App %s, %s\n",
-            context->us->getName(),
-            IOService::getIOMessageString(context->messageType),
-            clientID ? clientID->getCStringNoCopy() : "");
-        if (clientID) clientID->release();
+        logClientIDForNotification(object, context, "MESG App");
     }
 
     context->us->messageClient(context->messageType, object, 0);
@@ -5814,20 +5846,18 @@ bool IOService::checkForDone ( void )
     int			i = 0;
     OSObject *	theFlag;
 
-    if ( fResponseArray == NULL )
-    {
+    if (fResponseArray == NULL) {
         return true;
     }
     
-    for ( i = 0; ; i++ )
-    {
+    for (i = 0; ; i++) {
         theFlag = fResponseArray->getObject(i);
-        if ( theFlag == NULL )
-        {
+
+        if (NULL == theFlag) {
             break;
         }
-        if ( kOSBooleanTrue != theFlag ) 
-        {
+
+        if (kOSBooleanTrue != theFlag) {
             return false;
         }
     }
@@ -6778,7 +6808,6 @@ void IOService::executePMRequest( IOPMRequest * request )
 
 		case kIOPMRequestTypeAdjustPowerState:
 			fAdjustPowerScheduled = false;
-			rebuildChildClampBits();
 			adjustPowerState();
 			break;
 

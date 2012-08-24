@@ -411,7 +411,12 @@ MACRO_END
 			timer_t		idle_state;
 
 			GET_TICKS_VALUE(processor, CPU_STATE_USER, user_state);
-			GET_TICKS_VALUE(processor, CPU_STATE_SYSTEM, system_state);
+			if (precise_user_kernel_time) {
+				GET_TICKS_VALUE(processor, CPU_STATE_SYSTEM, system_state);
+			} else {
+				/* system_state may represent either sys or user */
+				GET_TICKS_VALUE(processor, CPU_STATE_USER, system_state);
+			}
 
 			idle_state = &PROCESSOR_DATA(processor, idle_state);
 			idle_temp = *idle_state;
@@ -427,6 +432,7 @@ MACRO_END
 			}
 		}
 		simple_unlock(&processor_list_lock);
+
 		*count = HOST_CPU_LOAD_INFO_COUNT;
 
 		return (KERN_SUCCESS);

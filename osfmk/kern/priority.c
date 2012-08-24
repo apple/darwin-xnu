@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2009 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2010 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -73,6 +73,7 @@
 #include <kern/spl.h>
 #include <kern/thread.h>
 #include <kern/processor.h>
+#include <kern/ledger.h>
 #include <machine/machparam.h>
 
 /*
@@ -94,6 +95,16 @@ thread_quantum_expire(
 
 	SCHED_STATS_QUANTUM_TIMER_EXPIRATION(processor);
 
+	/*
+	 * We bill CPU time to both the individual thread and its task.
+	 *
+	 * Because this balance adjustment could potentially attempt to wake this very
+	 * thread, we must credit the ledger before taking the thread lock. The ledger
+	 * pointers are only manipulated by the thread itself at the ast boundary.
+	 */
+	ledger_credit(thread->t_ledger, task_ledgers.cpu_time, thread->current_quantum);
+	ledger_credit(thread->t_threadledger, thread_ledgers.cpu_time, thread->current_quantum);
+
 	thread_lock(thread);
 
 	/*
@@ -101,19 +112,18 @@ thread_quantum_expire(
 	 * continue without re-entering the scheduler, so update this now.
 	 */
 	thread->last_run_time = processor->quantum_end;
-	
+
 	/*
 	 *	Check for fail-safe trip.
 	 */
-	if ((thread->sched_mode == TH_MODE_REALTIME || thread->sched_mode == TH_MODE_FIXED) && 
-	    !(thread->sched_flags & TH_SFLAG_PROMOTED) &&
-	    !(thread->options & TH_OPT_SYSTEM_CRITICAL)) {
-		uint64_t new_computation;
-
-		new_computation = processor->quantum_end - thread->computation_epoch;
-		new_computation += thread->computation_metered;
-		if (new_computation > max_unsafe_computation) {
-
+ 	if ((thread->sched_mode == TH_MODE_REALTIME || thread->sched_mode == TH_MODE_FIXED) && 
+ 	    !(thread->sched_flags & TH_SFLAG_PROMOTED) &&
+ 	    !(thread->options & TH_OPT_SYSTEM_CRITICAL)) {
+ 		uint64_t new_computation;
+  
+ 		new_computation = processor->quantum_end - thread->computation_epoch;
+ 		new_computation += thread->computation_metered;
+ 		if (new_computation > max_unsafe_computation) {
 			KERNEL_DEBUG_CONSTANT(MACHDBG_CODE(DBG_MACH_SCHED, MACH_FAILSAFE)|DBG_FUNC_NONE,
 					(uintptr_t)thread->sched_pri, (uintptr_t)thread->sched_mode, 0, 0, 0);
 
@@ -158,7 +168,23 @@ thread_quantum_expire(
 	thread_quantum_init(thread);
 	thread->last_quantum_refill_time = processor->quantum_end;
 
-	processor->quantum_end += thread->current_quantum;
+	/* Reload precise timing global policy to thread-local policy */
+	thread->precise_user_kernel_time = use_precise_user_kernel_time(thread);
+
+	/*
+	 * Since non-precise user/kernel time doesn't update the state/thread timer
+	 * during privilege transitions, synthesize an event now.
+	 */
+	if (!thread->precise_user_kernel_time) {
+		timer_switch(PROCESSOR_DATA(processor, current_state),
+					 processor->quantum_end,
+					 PROCESSOR_DATA(processor, current_state));
+		timer_switch(PROCESSOR_DATA(processor, thread_timer),
+					 processor->quantum_end,
+					 PROCESSOR_DATA(processor, thread_timer));
+	}
+
+	processor->quantum_end = mach_absolute_time() + thread->current_quantum;
 	timer_call_enter1(&processor->quantum_timer, thread,
 	    processor->quantum_end, TIMER_CALL_CRITICAL);
 
@@ -448,6 +474,50 @@ update_priority(
 
 		thread->sched_flags &= ~TH_SFLAG_FAILSAFE;
 	}
+
+#if CONFIG_EMBEDDED
+	/* Check for pending throttle transitions, and safely switch queues */
+	if (thread->sched_flags & TH_SFLAG_PENDING_THROTTLE_MASK) {
+			boolean_t		removed = thread_run_queue_remove(thread);
+
+			if (thread->sched_flags & TH_SFLAG_PENDING_THROTTLE_DEMOTION) {
+				if (thread->sched_mode == TH_MODE_REALTIME) {
+					thread->saved_mode = thread->sched_mode;
+					thread->sched_mode = TH_MODE_TIMESHARE;
+
+					if ((thread->state & (TH_RUN|TH_IDLE)) == TH_RUN)
+						sched_share_incr();
+				} else {
+					/*
+					 * It's possible that this is a realtime thread that has
+					 * already tripped the failsafe, in which case saved_mode
+					 * is already set correctly.
+					 */
+					if (!(thread->sched_flags & TH_SFLAG_FAILSAFE)) {
+						thread->saved_mode = thread->sched_mode;
+					}
+					thread->sched_flags &= ~TH_SFLAG_FAILSAFE;
+				}
+				thread->sched_flags |= TH_SFLAG_THROTTLED;
+
+			} else {
+				if ((thread->sched_mode == TH_MODE_TIMESHARE)
+					&& (thread->saved_mode == TH_MODE_REALTIME)) {
+					if ((thread->state & (TH_RUN|TH_IDLE)) == TH_RUN)
+						sched_share_decr();
+				}
+
+				thread->sched_mode = thread->saved_mode;
+				thread->saved_mode = TH_MODE_NONE;
+				thread->sched_flags &= ~TH_SFLAG_THROTTLED;
+			}
+
+			thread->sched_flags &= ~(TH_SFLAG_PENDING_THROTTLE_MASK);
+
+			if (removed)
+				thread_setrun(thread, SCHED_TAILQ);
+	}
+#endif
 
 	/*
 	 *	Recompute scheduled priority if appropriate.

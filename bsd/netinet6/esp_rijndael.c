@@ -64,6 +64,7 @@
 #include <sys/queue.h>
 #include <sys/syslog.h>
 #include <sys/mbuf.h>
+#include <sys/mcache.h>
 
 #include <kern/locks.h>
 
@@ -74,13 +75,14 @@
 #include <netinet6/esp.h>
 #include <netinet6/esp_rijndael.h>
 
-#include <crypto/aes/aes.h>
+#include <libkern/crypto/aes.h>
 
 #include <netkey/key.h>
 
 #include <net/net_osdep.h>
 
 #define AES_BLOCKLEN 16
+#define MAX_SBUF_LEN 2000
 
 extern lck_mtx_t *sadb_mutex;
 
@@ -149,8 +151,8 @@ esp_cbc_decrypt_aes(m, off, sav, algo, ivlen)
 	int soff;	/* offset from the head of chain, to head of this mbuf */
 	int sn, dn;	/* offset from the head of the mbuf, to meat */
 	size_t ivoff, bodyoff;
-	u_int8_t iv[AES_BLOCKLEN], *dptr;
-	u_int8_t sbuf[AES_BLOCKLEN], *sp;
+	u_int8_t iv[AES_BLOCKLEN] __attribute__((aligned(4))), *dptr;
+	u_int8_t sbuf[MAX_SBUF_LEN] __attribute__((aligned(4))), *sp, *sp_unaligned;
 	struct mbuf *scut;
 	int scutoff;
 	int	i, len;
@@ -251,6 +253,12 @@ esp_cbc_decrypt_aes(m, off, sav, algo, ivlen)
 				d0 = d;
 			if (dp)
 				dp->m_next = d;
+
+			// try to make mbuf data aligned
+			if (!IPSEC_IS_P2ALIGNED(d->m_data)) {
+				m_adj(d, IPSEC_GET_P2UNALIGNED_OFS(d->m_data));
+			}
+
 			d->m_len = M_TRAILINGSPACE(d);
 			d->m_len -= d->m_len % AES_BLOCKLEN;
 			if (d->m_len > i)
@@ -264,9 +272,23 @@ esp_cbc_decrypt_aes(m, off, sav, algo, ivlen)
 			len = d->m_len - dn;
 
 		/* decrypt */
+		// check input pointer alignment and use a separate aligned buffer (if sp is unaligned on 4-byte boundary).
+		if (IPSEC_IS_P2ALIGNED(sp)) {
+			sp_unaligned = NULL;
+		} else {
+			sp_unaligned = sp;
+			sp = sbuf;
+			memcpy(sp, sp_unaligned, len);
+		}
+		// no need to check output pointer alignment
 		aes_decrypt_cbc(sp, iv, len >> 4, dptr + dn, 
 				(aes_decrypt_ctx*)(&(((aes_ctx*)sav->sched)->decrypt)));
 		
+		// update unaligned pointers
+		if (!IPSEC_IS_P2ALIGNED(sp_unaligned)) {
+			sp = sp_unaligned;
+		}
+
 		/* udpate offsets */
 		sn += len;
 		dn += len;
@@ -309,8 +331,9 @@ esp_cbc_encrypt_aes(
 	int soff;	/* offset from the head of chain, to head of this mbuf */
 	int sn, dn;	/* offset from the head of the mbuf, to meat */
 	size_t ivoff, bodyoff;
-	u_int8_t *ivp, *dptr;
-	u_int8_t sbuf[AES_BLOCKLEN], *sp;
+	u_int8_t *ivp, *dptr, *ivp_unaligned;
+	u_int8_t sbuf[MAX_SBUF_LEN] __attribute__((aligned(4))), *sp, *sp_unaligned;
+	u_int8_t ivp_aligned_buf[AES_BLOCKLEN] __attribute__((aligned(4)));
 	struct mbuf *scut;
 	int scutoff;
 	int i, len;
@@ -412,6 +435,11 @@ esp_cbc_encrypt_aes(
 			if (dp)
 				dp->m_next = d;
 
+			// try to make mbuf data aligned
+			if (!IPSEC_IS_P2ALIGNED(d->m_data)) {
+				m_adj(d, IPSEC_GET_P2UNALIGNED_OFS(d->m_data));
+			}
+
 			d->m_len = M_TRAILINGSPACE(d);
 			d->m_len -= d->m_len % AES_BLOCKLEN;
 			if (d->m_len > i)
@@ -425,8 +453,33 @@ esp_cbc_encrypt_aes(
 			len = d->m_len - dn;
 		
 		/* encrypt */
+		// check input pointer alignment and use a separate aligned buffer (if sp is not aligned on 4-byte boundary).
+		if (IPSEC_IS_P2ALIGNED(sp)) {
+			sp_unaligned = NULL;
+		} else {
+			sp_unaligned = sp;
+			sp = sbuf;
+			memcpy(sp, sp_unaligned, len);
+		}
+		// check ivp pointer alignment and use a separate aligned buffer (if ivp is not aligned on 4-byte boundary).
+		if (IPSEC_IS_P2ALIGNED(ivp)) {
+			ivp_unaligned = NULL;
+		} else {
+			ivp_unaligned = ivp;
+			ivp = ivp_aligned_buf;
+			memcpy(ivp, ivp_unaligned, len);
+		}
+		// no need to check output pointer alignment
 		aes_encrypt_cbc(sp, ivp, len >> 4, dptr + dn, 
 			(aes_encrypt_ctx*)(&(((aes_ctx*)sav->sched)->encrypt)));
+
+		// update unaligned pointers
+		if (!IPSEC_IS_P2ALIGNED(sp_unaligned)) {
+			sp = sp_unaligned;
+		}
+		if (!IPSEC_IS_P2ALIGNED(ivp_unaligned)) {
+			ivp = ivp_unaligned;
+		}
 
 		/* update offsets */
 		sn += len;

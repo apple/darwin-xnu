@@ -81,6 +81,7 @@
  * Version 2.0.
  */
 #include <machine/reg.h>
+#include <machine/cpu_capabilities.h>
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -128,6 +129,7 @@
 #include <kern/sched_prim.h> /* thread_wakeup() */
 #include <kern/affinity.h>
 #include <kern/assert.h>
+#include <kern/task.h>
 
 #if CONFIG_MACF
 #include <security/mac.h>
@@ -138,8 +140,17 @@
 #include <vm/vm_kern.h>
 #include <vm/vm_protos.h>
 #include <vm/vm_kern.h>
+#include <vm/vm_fault.h>
+
+#include <kdp/kdp_dyld.h>
 
 #include <machine/pal_routines.h>
+
+#include <pexpert/pexpert.h>
+
+#if CONFIG_MEMORYSTATUS
+#include <sys/kern_memorystatus.h>
+#endif
 
 #if CONFIG_DTRACE
 /* Do not include dtrace.h, it redefines kmem_[alloc/free] */
@@ -154,7 +165,8 @@ extern void dtrace_lazy_dofs_destroy(proc_t);
 thread_t fork_create_child(task_t parent_task, proc_t child_proc, int inherit_memory, int is64bit);
 void vfork_exit(proc_t p, int rv);
 int setsigvec(proc_t, thread_t, int, struct __kern_sigaction *, boolean_t in_sigstart);
-extern void proc_apply_task_networkbg_internal(proc_t);
+extern void proc_apply_task_networkbg_internal(proc_t, thread_t);
+int task_set_cpuusage(task_t task, uint64_t percentage, uint64_t interval, uint64_t deadline, int scope);
 
 /*
  * Mach things for which prototypes are unavailable from Mach headers
@@ -218,11 +230,27 @@ static int exec_add_apple_strings(struct image_params *imgp);
 static int exec_handle_sugid(struct image_params *imgp);
 static int sugid_scripts = 0;
 SYSCTL_INT (_kern, OID_AUTO, sugid_scripts, CTLFLAG_RW | CTLFLAG_LOCKED, &sugid_scripts, 0, "");
-static kern_return_t create_unix_stack(vm_map_t map, user_addr_t user_stack,
-					int customstack, proc_t p);
+static kern_return_t create_unix_stack(vm_map_t map, load_result_t* load_result, proc_t p);
 static int copyoutptr(user_addr_t ua, user_addr_t ptr, int ptr_size);
 static void exec_resettextvp(proc_t, struct image_params *);
 static int check_for_signature(proc_t, struct image_params *);
+static void exec_prefault_data(proc_t, struct image_params *, load_result_t *);
+
+#if !CONFIG_EMBEDDED
+
+/* Identify process during exec and opt into legacy behaviors */
+
+struct legacy_behavior {
+    uuid_t    process_uuid;
+    uint32_t  legacy_mask;
+};
+
+static const struct legacy_behavior legacy_behaviors[] =
+{
+	{{ 0xF8, 0x7C, 0xC3, 0x67, 0xFB, 0x68, 0x37, 0x93, 0xBC, 0x34, 0xB2, 0xB6, 0x05, 0x2B, 0xCD, 0xE2 }, PROC_LEGACY_BEHAVIOR_IOTHROTTLE },
+	{{ 0x0B, 0x4E, 0xDF, 0xD8, 0x76, 0xD1, 0x3D, 0x4D, 0x9D, 0xD7, 0x37, 0x43, 0x1C, 0xA8, 0xFB, 0x26 }, PROC_LEGACY_BEHAVIOR_IOTHROTTLE },
+};
+#endif /* !CONFIG_EMBEDDED */
 
 /* We don't want this one exported */
 __private_extern__
@@ -374,96 +402,6 @@ exec_reset_save_path(struct image_params *imgp)
 	return (0);
 }
 
-#ifdef IMGPF_POWERPC
-/*
- * exec_powerpc32_imgact
- *
- * Implicitly invoke the PowerPC handler for a byte-swapped image magic
- * number.  This may happen either as a result of an attempt to invoke a
- * PowerPC image directly, or indirectly as the interpreter used in an
- * interpreter script.
- *
- * Parameters;	struct image_params *	image parameter block
- *
- * Returns:	-1		not an PowerPC image (keep looking)
- *		-3		Success: exec_archhandler_ppc: relookup
- *		>0		Failure: exec_archhandler_ppc: error number
- *
- * Note:	This image activator does not handle the case of a direct
- *		invocation of the exec_archhandler_ppc, since in that case, the
- *		exec_archhandler_ppc itself is not a PowerPC binary; instead,
- *		binary image activators must recognize the exec_archhandler_ppc;
- *		This is managed in exec_check_permissions().
- *
- * Note:	This image activator is limited to 32 bit powerpc images;
- *		if support for 64 bit powerpc images is desired, it would
- *		be more in line with this design to write a separate 64 bit
- *		image activator.
- */
-static int
-exec_powerpc32_imgact(struct image_params *imgp)
-{
-	struct mach_header *mach_header = (struct mach_header *)imgp->ip_vdata;
-	int error;
-	size_t len = 0;
-
-	/*
-	 * Make sure it's a PowerPC binary.  If we've already redirected
-	 * from an interpreted file once, don't do it again.
-	 */
-	if (mach_header->magic != MH_CIGAM) {
-		/*
-		 * If it's a cross-architecture 64 bit binary, then claim
-		 * it, but refuse to run it.
-		 */
-		if (mach_header->magic == MH_CIGAM_64)
-			return (EBADARCH);
-		return (-1);
-	}
-
-	/* If there is no exec_archhandler_ppc, we can't run it */
-	if (exec_archhandler_ppc.path[0] == 0)
-		return (EBADARCH);
-
-	/* Remember the type of the original file for later grading */
-	if (!imgp->ip_origcputype) {
-		imgp->ip_origcputype = 
-			OSSwapBigToHostInt32(mach_header->cputype);
-		imgp->ip_origcpusubtype = 
-			OSSwapBigToHostInt32(mach_header->cpusubtype);
-	}
-
-	/*
-	 * The PowerPC flag will be set by the exec_check_permissions()
-	 * call anyway; however, we set this flag here so that the relookup
-	 * in execve() does not follow symbolic links, as a side effect.
-	 */
-	imgp->ip_flags |= IMGPF_POWERPC;
-
-	/* impute an interpreter */
-	error = copystr(exec_archhandler_ppc.path, imgp->ip_interp_buffer,
-			IMG_SHSIZE, &len);
-	if (error)
-		return (error);
-
-	exec_reset_save_path(imgp);
-	exec_save_path(imgp, CAST_USER_ADDR_T(imgp->ip_interp_buffer),
-				   UIO_SYSSPACE);
-	
-	/*
-	 * provide a replacement string for p->p_comm; we have to use an
-	 * alternate buffer for this, rather than replacing it directly,
-	 * since the exec may fail and return to the parent.  In that case,
-	 * we would have erroneously changed the parent p->p_comm instead.
-	 */
-	strlcpy(imgp->ip_p_comm, imgp->ip_ndp->ni_cnd.cn_nameptr, MAXCOMLEN+1);
-						/* +1 to allow MAXCOMLEN characters to be copied */
-
-	return (-3);
-}
-#endif	/* IMGPF_POWERPC */
-
-
 /*
  * exec_shell_imgact
  *
@@ -510,11 +448,6 @@ exec_shell_imgact(struct image_params *imgp)
 	    (imgp->ip_flags & IMGPF_INTERPRET) != 0) {
 		return (-1);
 	}
-
-#ifdef IMGPF_POWERPC
-	if ((imgp->ip_flags & IMGPF_POWERPC) != 0)
-		  return (EBADARCH);
-#endif	/* IMGPF_POWERPC */
 
 	imgp->ip_flags |= IMGPF_INTERPRET;
 	imgp->ip_interp_sugid_fd = -1;
@@ -792,8 +725,15 @@ exec_mach_imgact(struct image_params *imgp)
 	/*
 	 * make sure it's a Mach-O 1.0 or Mach-O 2.0 binary; the difference
 	 * is a reserved field on the end, so for the most part, we can
-	 * treat them as if they were identical.
-	 */
+	 * treat them as if they were identical. Reverse-endian Mach-O
+	 * binaries are recognized but not compatible.
+ 	 */
+	if ((mach_header->magic == MH_CIGAM) ||
+	    (mach_header->magic == MH_CIGAM_64)) {
+		error = EBADARCH;
+		goto bad;
+	}
+
 	if ((mach_header->magic != MH_MAGIC) &&
 	    (mach_header->magic != MH_MAGIC_64)) {
 		error = -1;
@@ -873,21 +813,6 @@ grade:
 	    imgp->ip_endargv - imgp->ip_startargv);
 	AUDIT_ARG(envv, imgp->ip_endargv, imgp->ip_envc,
 	    imgp->ip_endenvv - imgp->ip_endargv);
-
-#ifdef IMGPF_POWERPC
-	/*
-	 * XXX
-	 *
-	 * Should be factored out; this is here because we might be getting
-	 * invoked this way as the result of a shell script, and the check
-	 * in exec_check_permissions() is not interior to the jump back up
-	 * to the "encapsulated_binary:" label in exec_activate_image().
-	 */
-	if (imgp->ip_vattr->va_fsid == exec_archhandler_ppc.fsid &&
-		imgp->ip_vattr->va_fileid == exec_archhandler_ppc.fileid) {
-		imgp->ip_flags |= IMGPF_POWERPC;
-	}
-#endif	/* IMGPF_POWERPC */
 
 	/*
 	 * We are being called to activate an image subsequent to a vfork()
@@ -971,10 +896,6 @@ grade:
 	vm_map_exec(get_task_map(task),
 		    task,
 		    (void *) p->p_fd->fd_rdir,
-#ifdef IMGPF_POWERPC
-		    imgp->ip_flags & IMGPF_POWERPC ?
-		    CPU_TYPE_POWERPC :
-#endif
 		    cpu_type());
 	
 	/*
@@ -997,8 +918,7 @@ grade:
 	
 	if (load_result.unixproc &&
 		create_unix_stack(get_task_map(task),
-				  load_result.user_stack,
-				  load_result.customstack,
+				  &load_result,
 				  p) != KERN_SUCCESS) {
 		error = load_return_to_errno(LOAD_NOSPACE);
 		goto badtoolate;
@@ -1042,6 +962,9 @@ grade:
 		task_set_dyld_info(task, load_result.all_image_info_addr,
 		    load_result.all_image_info_size);
 	}
+
+	/* Avoid immediate VM faults back into kernel */
+	exec_prefault_data(p, imgp, &load_result);
 
 	if (vfexec || spawn) {
 		vm_map_switch(old_map);
@@ -1095,6 +1018,28 @@ grade:
 	pal_dbg_set_task_name( p->task );
 
 	memcpy(&p->p_uuid[0], &load_result.uuid[0], sizeof(p->p_uuid));
+
+#if !CONFIG_EMBEDDED
+	unsigned int i;
+
+	if (!vfexec && !spawn) {
+		if (p->p_legacy_behavior & PROC_LEGACY_BEHAVIOR_IOTHROTTLE) {
+			throttle_legacy_process_decr();
+		}
+	}
+
+	p->p_legacy_behavior = 0;
+	for (i=0; i < sizeof(legacy_behaviors)/sizeof(legacy_behaviors[0]); i++) {
+		if (0 == uuid_compare(legacy_behaviors[i].process_uuid, p->p_uuid)) {
+			p->p_legacy_behavior = legacy_behaviors[i].legacy_mask;
+			break;
+		}
+	}
+
+	if (p->p_legacy_behavior & PROC_LEGACY_BEHAVIOR_IOTHROTTLE) {
+		throttle_legacy_process_incr();
+	}
+#endif
 
 // <rdar://6598155> dtrace code cleanup needed
 #if CONFIG_DTRACE
@@ -1154,18 +1099,11 @@ grade:
 		}
 	}
 
-#ifdef IMGPF_POWERPC
 	/*
-	 * Mark the process as powerpc or not.  If powerpc, set the affinity
-	 * flag, which will be used for grading binaries in future exec's
-	 * from the process.
+	 * Ensure the 'translated' and 'affinity' flags are cleared, since we
+	 * no longer run PowerPC binaries.
 	 */
-	if (((imgp->ip_flags & IMGPF_POWERPC) != 0))
-		OSBitOrAtomic(P_TRANSLATED, &p->p_flag);
-	else
-#endif	/* IMGPF_POWERPC */
-		OSBitAndAtomic(~((uint32_t)P_TRANSLATED), &p->p_flag);
-	OSBitAndAtomic(~((uint32_t)P_AFFINITY), &p->p_flag);
+	OSBitAndAtomic(~((uint32_t)(P_TRANSLATED | P_AFFINITY)), &p->p_flag);
 
 	/*
 	 * If posix_spawned with the START_SUSPENDED flag, stop the
@@ -1179,22 +1117,54 @@ grade:
 			proc_unlock(p);
 			(void) task_suspend(p->task);
 		}
-		if ((psa->psa_flags & POSIX_SPAWN_OSX_TALAPP_START) || (psa->psa_flags & POSIX_SPAWN_OSX_DBCLIENT_START) || (psa->psa_flags & POSIX_SPAWN_IOS_APP_START)) {
+#if CONFIG_EMBEDDED
+		if ((psa->psa_flags & POSIX_SPAWN_IOS_RESV1_APP_START) || (psa->psa_flags & POSIX_SPAWN_IOS_APPLE_DAEMON_START) || (psa->psa_flags & POSIX_SPAWN_IOS_APP_START)) {
+			if ((psa->psa_flags & POSIX_SPAWN_IOS_RESV1_APP_START))
+				apptype = PROC_POLICY_IOS_RESV1_APPTYPE;
+			else if (psa->psa_flags & POSIX_SPAWN_IOS_APPLE_DAEMON_START)
+				apptype = PROC_POLICY_IOS_APPLE_DAEMON;
+			else if (psa->psa_flags & POSIX_SPAWN_IOS_APP_START)
+				apptype = PROC_POLICY_IOS_APPTYPE;
+			else
+				apptype = PROC_POLICY_OSX_APPTYPE_NONE;
+			proc_set_task_apptype(p->task, apptype, imgp->ip_new_thread);
+			if (apptype == PROC_POLICY_IOS_RESV1_APPTYPE)
+				proc_apply_task_networkbg_internal(p, NULL);
+			}
+
+		if (psa->psa_apptype & POSIX_SPAWN_APPTYPE_IOS_APPLEDAEMON) {
+			apptype = PROC_POLICY_IOS_APPLE_DAEMON;
+			proc_set_task_apptype(p->task, apptype, imgp->ip_new_thread);
+		}
+#else /* CONFIG_EMBEDDED */
+		if ((psa->psa_flags & POSIX_SPAWN_OSX_TALAPP_START) || (psa->psa_flags & POSIX_SPAWN_OSX_DBCLIENT_START)) {
 			if ((psa->psa_flags & POSIX_SPAWN_OSX_TALAPP_START))
 				apptype = PROC_POLICY_OSX_APPTYPE_TAL;
 			else if (psa->psa_flags & POSIX_SPAWN_OSX_DBCLIENT_START)
 				apptype = PROC_POLICY_OSX_APPTYPE_DBCLIENT;
-			else if (psa->psa_flags & POSIX_SPAWN_IOS_APP_START)
-				apptype = PROC_POLICY_IOS_APPTYPE;
 			else
-				apptype = 0;
-			proc_set_task_apptype(p->task, apptype);
+				apptype = PROC_POLICY_OSX_APPTYPE_NONE;
+			proc_set_task_apptype(p->task, apptype, NULL);
 			if ((apptype == PROC_POLICY_OSX_APPTYPE_TAL) || 
 				(apptype == PROC_POLICY_OSX_APPTYPE_DBCLIENT)) {
-
-				proc_apply_task_networkbg_internal(p);
+				proc_apply_task_networkbg_internal(p, NULL);
 			}
 		}
+		if ((psa->psa_apptype & POSIX_SPAWN_APPTYPE_OSX_TAL) ||
+				(psa->psa_apptype & POSIX_SPAWN_APPTYPE_OSX_WIDGET)) {
+			if ((psa->psa_apptype & POSIX_SPAWN_APPTYPE_OSX_TAL))
+				apptype = PROC_POLICY_OSX_APPTYPE_TAL;
+			else if (psa->psa_flags & POSIX_SPAWN_APPTYPE_OSX_WIDGET)
+				apptype = PROC_POLICY_OSX_APPTYPE_DBCLIENT;
+			else
+				apptype = PROC_POLICY_OSX_APPTYPE_NONE;
+			proc_set_task_apptype(p->task, apptype, imgp->ip_new_thread);
+			if ((apptype == PROC_POLICY_OSX_APPTYPE_TAL) || 
+				(apptype == PROC_POLICY_OSX_APPTYPE_DBCLIENT)) {
+				proc_apply_task_networkbg_internal(p, NULL);
+			}
+		}
+#endif /* CONFIG_EMBEDDED */
 	}
 
 	/*
@@ -1249,9 +1219,6 @@ struct execsw {
 } execsw[] = {
 	{ exec_mach_imgact,		"Mach-o Binary" },
 	{ exec_fat_imgact,		"Fat Binary" },
-#ifdef IMGPF_POWERPC
-	{ exec_powerpc32_imgact,	"PowerPC binary" },
-#endif	/* IMGPF_POWERPC */
 	{ exec_shell_imgact,		"Interpreter Script" },
 	{ NULL, NULL}
 };
@@ -1393,16 +1360,6 @@ encapsulated_binary:
 			NDINIT(&nd, LOOKUP, OP_LOOKUP, FOLLOW | LOCKLEAF,
 				   UIO_SYSSPACE, CAST_USER_ADDR_T(imgp->ip_strings), imgp->ip_vfs_context);
 
-#ifdef IMGPF_POWERPC
-			/*
-			 * PowerPC does not follow symlinks because the
-			 * code which sets exec_archhandler_ppc.fsid and
-			 * exec_archhandler_ppc.fileid doesn't follow them.
-			 */
-			if (imgp->ip_flags & IMGPF_POWERPC)
-				nd.ni_cnd.cn_flags &= ~FOLLOW;
-#endif	/* IMGPF_POWERPC */
-
 			proc_transend(p, 0);
 			goto again;
 
@@ -1455,57 +1412,55 @@ exec_handle_port_actions(struct image_params *imgp, short psa_flags)
 	_ps_port_action_t *act = NULL;
 	task_t task = p->task;
 	ipc_port_t port = NULL;
-	errno_t ret = KERN_SUCCESS;
+	errno_t ret = 0;
 	int i;
 
 	for (i = 0; i < pacts->pspa_count; i++) {
 		act = &pacts->pspa_actions[i];
 
 		if (ipc_object_copyin(get_task_ipcspace(current_task()),
-				CAST_MACH_PORT_TO_NAME(act->new_port),
-				MACH_MSG_TYPE_COPY_SEND,
-				(ipc_object_t *) &port) != KERN_SUCCESS)
-			return EINVAL;
-
-		if (ret) 			
-			return ret;
+		    act->new_port, MACH_MSG_TYPE_COPY_SEND,
+		    (ipc_object_t *) &port) != KERN_SUCCESS)
+			return (EINVAL);
 
 		switch (act->port_type) {
-			case PSPA_SPECIAL:
-				/* Only allowed when not under vfork */
-				if (!(psa_flags & POSIX_SPAWN_SETEXEC))
-					return ENOTSUP;
-				ret = (task_set_special_port(task, 
-						act->which, 
-						port) == KERN_SUCCESS) ? 0 : EINVAL;
-				break;
-			case PSPA_EXCEPTION:
-				/* Only allowed when not under vfork */
-				if (!(psa_flags & POSIX_SPAWN_SETEXEC))
-					return ENOTSUP;
-				ret = (task_set_exception_ports(task, 
-						act->mask,
-						port, 
-						act->behavior, 
-						act->flavor) == KERN_SUCCESS) ? 0 : EINVAL;
-				break;
-#if CONFIG_AUDIT
-			case PSPA_AU_SESSION:
-				ret = audit_session_spawnjoin(p, 
-				    		port);
-				break;
-#endif
-			default:
+		case PSPA_SPECIAL:
+			/* Only allowed when not under vfork */
+			if (!(psa_flags & POSIX_SPAWN_SETEXEC))
+				ret = ENOTSUP;
+			else if (task_set_special_port(task,
+			    act->which, port) != KERN_SUCCESS)
 				ret = EINVAL;
+			break;
+
+		case PSPA_EXCEPTION:
+			/* Only allowed when not under vfork */
+			if (!(psa_flags & POSIX_SPAWN_SETEXEC))
+				ret = ENOTSUP;
+			else if (task_set_exception_ports(task, 
+			    act->mask, port, act->behavior, 
+			    act->flavor) != KERN_SUCCESS)
+				ret = EINVAL;
+			break;
+#if CONFIG_AUDIT
+		case PSPA_AU_SESSION:
+			ret = audit_session_spawnjoin(p, port);
+			break;
+#endif
+		default:
+			ret = EINVAL;
+			break;
 		}
+
 		/* action failed, so release port resources */
+
 		if (ret) { 
 			ipc_port_release_send(port);
-			return ret;
+			break;
 		}
 	}
 
-	return ret;
+	return (ret);
 }
 
 /*
@@ -2059,10 +2014,30 @@ posix_spawn(proc_t ap, struct posix_spawn_args *uap, int32_t *retval)
 					error = setsigvec(p, child_thread, sig + 1, &vec, spawn_no_exec);
 			}
 		}
+
+		/*
+		 * Activate the CPU usage monitor, if requested. This is done via a task-wide, per-thread CPU
+		 * usage limit, which will generate a resource exceeded exception if any one thread exceeds the
+		 * limit.
+		 *
+		 * Userland gives us interval in seconds, and the kernel SPI expects nanoseconds.
+		 */
+		if (px_sa.psa_cpumonitor_percent != 0) {
+			error = proc_set_task_ruse_cpu(p->task,
+					TASK_POLICY_RESOURCE_ATTRIBUTE_NOTIFY_EXC,
+					px_sa.psa_cpumonitor_percent,
+					px_sa.psa_cpumonitor_interval * NSEC_PER_SEC,
+					0);
+		}
 	}
 
 bad:
 	if (error == 0) {
+		/* reset delay idle sleep status if set */
+#if !CONFIG_EMBEDDED
+		if ((p->p_flag & P_DELAYIDLESLEEP) == P_DELAYIDLESLEEP)
+			OSBitAndAtomic(~((uint32_t)P_DELAYIDLESLEEP), &p->p_flag);
+#endif /* !CONFIG_EMBEDDED */
 		/* upon  successful spawn, re/set the proc control state */
 		if (imgp->ip_px_sa != NULL) {
 			switch (px_sa.psa_pcontrol) {
@@ -2080,8 +2055,20 @@ bad:
 					p->p_pcaction = 0;
 					break;
 			};
+#if !CONFIG_EMBEDDED
+			if ((px_sa.psa_apptype & POSIX_SPAWN_APPTYPE_DELAYIDLESLEEP) != 0)
+				OSBitOrAtomic(P_DELAYIDLESLEEP, &p->p_flag);
+#endif /* !CONFIG_EMBEDDED */
 		}
 		exec_resettextvp(p, imgp);
+		
+#if CONFIG_EMBEDDED
+		/* Has jetsam attributes? */
+		if (imgp->ip_px_sa != NULL) {
+        		memorystatus_list_change((px_sa.psa_jetsam_flags & POSIX_SPAWN_JETSAM_USE_EFFECTIVE_PRIORITY),
+        				p->p_pid, px_sa.psa_priority, -1, px_sa.psa_high_water_mark);
+		}
+#endif
 	}
 
 	/*
@@ -2969,6 +2956,9 @@ random_hex_str(char *str, int len)
 #define	ENTROPY_VALUES 2
 #define ENTROPY_KEY "malloc_entropy="
 
+#define PFZ_KEY "pfz="
+extern user32_addr_t commpage_text32_location;
+extern user64_addr_t commpage_text64_location;
 /*
  * Build up the contents of the apple[] string vector
  */
@@ -2976,15 +2966,30 @@ static int
 exec_add_apple_strings(struct image_params *imgp)
 {
 	int i, error;
-	int new_ptr_size = (imgp->ip_flags & IMGPF_IS_64BIT) ? 8 : 4;
+	int new_ptr_size=4;
 	char guard[19];
 	char guard_vec[strlen(GUARD_KEY) + 19 * GUARD_VALUES + 1];
 
 	char entropy[19];
 	char entropy_vec[strlen(ENTROPY_KEY) + 19 * ENTROPY_VALUES + 1];
 
+	char pfz_string[strlen(PFZ_KEY) + 16 + 4 +1];
+	
+	if( imgp->ip_flags & IMGPF_IS_64BIT) {
+		new_ptr_size = 8;
+		snprintf(pfz_string, sizeof(pfz_string),PFZ_KEY "0x%llx",commpage_text64_location);
+	}else{
+		snprintf(pfz_string, sizeof(pfz_string),PFZ_KEY "0x%x",commpage_text32_location);
+	}
+
 	/* exec_save_path stored the first string */
 	imgp->ip_applec = 1;
+
+	/* adding the pfz string */
+	error = exec_add_user_string(imgp, CAST_USER_ADDR_T(pfz_string),UIO_SYSSPACE,FALSE);
+	if(error)
+		goto bad;
+	imgp->ip_applec++;
 
 	/*
 	 * Supply libc with a collection of random values to use when
@@ -3115,18 +3120,6 @@ exec_check_permissions(struct image_params *imgp)
 	vnode_unlock(vp);
 #endif
 
-
-#ifdef IMGPF_POWERPC
-	/*
-	 * If the file we are about to attempt to load is the exec_handler_ppc,
-	 * which is determined by matching the vattr fields against previously
-	 * cached values, then we set the PowerPC environment flag.
-	 */
-	if (vap->va_fsid == exec_archhandler_ppc.fsid &&
-		vap->va_fileid == exec_archhandler_ppc.fileid) {
-		imgp->ip_flags |= IMGPF_POWERPC;
-	}
-#endif	/* IMGPF_POWERPC */
 
 	/* XXX May want to indicate to underlying FS that vnode is open */
 
@@ -3390,64 +3383,79 @@ handle_mac_transition:
  *		limits on stack growth, if they end up being needed.
  *
  * Parameters:	p			Process to set stack on
- *		user_stack		Address to set stack for process to
- *		customstack		FALSE if no custom stack in binary
- *		map			Address map in which to allocate the
- *					new stack, if 'customstack' is FALSE
+ *		load_result		Information from mach-o load commands
+ *		map			Address map in which to allocate the new stack
  *
  * Returns:	KERN_SUCCESS		Stack successfully created
  *		!KERN_SUCCESS		Mach failure code
  */
 static kern_return_t
-create_unix_stack(vm_map_t map, user_addr_t user_stack, int customstack,
+create_unix_stack(vm_map_t map, load_result_t* load_result, 
 			proc_t p)
 {
 	mach_vm_size_t		size, prot_size;
 	mach_vm_offset_t	addr, prot_addr;
 	kern_return_t		kr;
 
+	mach_vm_address_t	user_stack = load_result->user_stack;
+	
 	proc_lock(p);
 	p->user_stack = user_stack;
 	proc_unlock(p);
 
-	if (!customstack) {
+	if (!load_result->prog_allocated_stack) {
 		/*
 		 * Allocate enough space for the maximum stack size we
 		 * will ever authorize and an extra page to act as
-		 * a guard page for stack overflows.
+		 * a guard page for stack overflows. For default stacks,
+		 * vm_initial_limit_stack takes care of the extra guard page.
+		 * Otherwise we must allocate it ourselves.
 		 */
-		size = mach_vm_round_page(MAXSSIZ);
-#if STACK_GROWTH_UP
-		addr = mach_vm_trunc_page(user_stack);
-#else	/* STACK_GROWTH_UP */
-		addr = mach_vm_trunc_page(user_stack - size);
-#endif	/* STACK_GROWTH_UP */
+
+		size = mach_vm_round_page(load_result->user_stack_size);
+		if (load_result->prog_stack_size)
+			size += PAGE_SIZE;
+		addr = mach_vm_trunc_page(load_result->user_stack - size);
 		kr = mach_vm_allocate(map, &addr, size,
 					VM_MAKE_TAG(VM_MEMORY_STACK) |
-				      VM_FLAGS_FIXED);
+					VM_FLAGS_FIXED);
 		if (kr != KERN_SUCCESS) {
-			return kr;
+			/* If can't allocate at default location, try anywhere */
+			addr = 0;
+			kr = mach_vm_allocate(map, &addr, size,
+								  VM_MAKE_TAG(VM_MEMORY_STACK) |
+								  VM_FLAGS_ANYWHERE);
+			if (kr != KERN_SUCCESS)
+				return kr;
+
+			user_stack = addr + size;
+			load_result->user_stack = user_stack;
+
+			proc_lock(p);
+			p->user_stack = user_stack;
+			proc_unlock(p);
 		}
+
 		/*
 		 * And prevent access to what's above the current stack
 		 * size limit for this process.
 		 */
 		prot_addr = addr;
-#if STACK_GROWTH_UP
-		prot_addr += unix_stack_size(p);
-#endif /* STACK_GROWTH_UP */
-		prot_addr = mach_vm_round_page(prot_addr);
-		prot_size = mach_vm_trunc_page(size - unix_stack_size(p));
+		if (load_result->prog_stack_size)
+			prot_size = PAGE_SIZE;
+		else
+			prot_size = mach_vm_trunc_page(size - unix_stack_size(p));
 		kr = mach_vm_protect(map,
-				     prot_addr,
-				     prot_size,
-				     FALSE,
-				     VM_PROT_NONE);
+							 prot_addr,
+							 prot_size,
+							 FALSE,
+							 VM_PROT_NONE);
 		if (kr != KERN_SUCCESS) {
 			(void) mach_vm_deallocate(map, addr, size);
 			return kr;
 		}
 	}
+
 	return KERN_SUCCESS;
 }
 
@@ -3891,3 +3899,131 @@ done:
 	return error;
 }
 
+/*
+ * Typically as soon as we start executing this process, the
+ * first instruction will trigger a VM fault to bring the text
+ * pages (as executable) into the address space, followed soon
+ * thereafter by dyld data structures (for dynamic executable).
+ * To optimize this, as well as improve support for hardware
+ * debuggers that can only access resident pages present
+ * in the process' page tables, we prefault some pages if
+ * possible. Errors are non-fatal.
+ */
+static void exec_prefault_data(proc_t p __unused, struct image_params *imgp, load_result_t *load_result)
+{
+	int ret;
+	size_t expected_all_image_infos_size;
+
+	/*
+	 * Prefault executable or dyld entry point.
+	 */
+	vm_fault( current_map(),
+			  vm_map_trunc_page(load_result->entry_point),
+			  VM_PROT_READ | VM_PROT_EXECUTE,
+			  FALSE,
+			  THREAD_UNINT, NULL, 0);
+	
+	if (imgp->ip_flags & IMGPF_IS_64BIT) {
+		expected_all_image_infos_size = sizeof(struct user64_dyld_all_image_infos);
+	} else {
+		expected_all_image_infos_size = sizeof(struct user32_dyld_all_image_infos);
+	}
+
+	/* Decode dyld anchor structure from <mach-o/dyld_images.h> */
+	if (load_result->dynlinker &&
+		load_result->all_image_info_addr &&
+		load_result->all_image_info_size >= expected_all_image_infos_size) {
+		union {
+			struct user64_dyld_all_image_infos	infos64;
+			struct user32_dyld_all_image_infos	infos32;
+		} all_image_infos;
+
+		/*
+		 * Pre-fault to avoid copyin() going through the trap handler
+		 * and recovery path.
+		 */
+		vm_fault( current_map(),
+				  vm_map_trunc_page(load_result->all_image_info_addr),
+				  VM_PROT_READ | VM_PROT_WRITE,
+				  FALSE,
+				  THREAD_UNINT, NULL, 0);
+		if ((load_result->all_image_info_addr & PAGE_MASK) + expected_all_image_infos_size > PAGE_SIZE) {
+			/* all_image_infos straddles a page */
+			vm_fault( current_map(),
+					  vm_map_trunc_page(load_result->all_image_info_addr + expected_all_image_infos_size - 1),
+					  VM_PROT_READ | VM_PROT_WRITE,
+					  FALSE,
+					  THREAD_UNINT, NULL, 0);
+		}
+
+		ret = copyin(load_result->all_image_info_addr,
+					 &all_image_infos,
+					 expected_all_image_infos_size);
+		if (ret == 0 && all_image_infos.infos32.version >= 9) {
+
+			user_addr_t notification_address;
+			user_addr_t dyld_image_address;
+			user_addr_t dyld_version_address;
+			user_addr_t dyld_all_image_infos_address;
+			user_addr_t dyld_slide_amount;
+
+			if (imgp->ip_flags & IMGPF_IS_64BIT) {
+				notification_address = all_image_infos.infos64.notification;
+				dyld_image_address = all_image_infos.infos64.dyldImageLoadAddress;
+				dyld_version_address = all_image_infos.infos64.dyldVersion;
+				dyld_all_image_infos_address = all_image_infos.infos64.dyldAllImageInfosAddress;
+			} else {
+				notification_address = all_image_infos.infos32.notification;
+				dyld_image_address = all_image_infos.infos32.dyldImageLoadAddress;
+				dyld_version_address = all_image_infos.infos32.dyldVersion;
+				dyld_all_image_infos_address = all_image_infos.infos32.dyldAllImageInfosAddress;
+			}
+
+			/*
+			 * dyld statically sets up the all_image_infos in its Mach-O
+			 * binary at static link time, with pointers relative to its default
+			 * load address. Since ASLR might slide dyld before its first
+			 * instruction is executed, "dyld_slide_amount" tells us how far
+			 * dyld was loaded compared to its default expected load address.
+			 * All other pointers into dyld's image should be adjusted by this
+			 * amount. At some point later, dyld will fix up pointers to take
+			 * into account the slide, at which point the all_image_infos_address
+			 * field in the structure will match the runtime load address, and
+			 * "dyld_slide_amount" will be 0, if we were to consult it again.
+			 */
+
+			dyld_slide_amount = load_result->all_image_info_addr - dyld_all_image_infos_address;
+
+#if 0
+			kprintf("exec_prefault: 0x%016llx 0x%08x 0x%016llx 0x%016llx 0x%016llx 0x%016llx\n",
+					(uint64_t)load_result->all_image_info_addr,
+					all_image_infos.infos32.version,
+					(uint64_t)notification_address,
+					(uint64_t)dyld_image_address,
+					(uint64_t)dyld_version_address,
+					(uint64_t)dyld_all_image_infos_address);
+#endif
+
+			vm_fault( current_map(),
+					  vm_map_trunc_page(notification_address + dyld_slide_amount),
+					  VM_PROT_READ | VM_PROT_EXECUTE,
+					  FALSE,
+					  THREAD_UNINT, NULL, 0);
+			vm_fault( current_map(),
+					  vm_map_trunc_page(dyld_image_address + dyld_slide_amount),
+					  VM_PROT_READ | VM_PROT_EXECUTE,
+					  FALSE,
+					  THREAD_UNINT, NULL, 0);
+			vm_fault( current_map(),
+					  vm_map_trunc_page(dyld_version_address + dyld_slide_amount),
+					  VM_PROT_READ,
+					  FALSE,
+					  THREAD_UNINT, NULL, 0);
+			vm_fault( current_map(),
+					  vm_map_trunc_page(dyld_all_image_infos_address + dyld_slide_amount),
+					  VM_PROT_READ | VM_PROT_WRITE,
+					  FALSE,
+					  THREAD_UNINT, NULL, 0);
+		}
+	}
+}

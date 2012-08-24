@@ -131,12 +131,20 @@ thread_policy_common(
 		if (priority < MINPRI)
 			priority = MINPRI;
 
-		thread->importance = priority - thread->task_priority;
-
 #if CONFIG_EMBEDDED
+		if ((thread->task->ext_appliedstate.apptype == PROC_POLICY_IOS_APPLE_DAEMON)  &&
+			(thread->appliedstate.hw_bg == TASK_POLICY_BACKGROUND_ATTRIBUTE_ALL)) {
+			thread->saved_importance = priority - thread->task_priority;
+			priority = MAXPRI_THROTTLE;
+		} else  {
+			thread->importance = priority - thread->task_priority;
+		}
 		/* No one can have a base priority less than MAXPRI_THROTTLE */
 		if (priority < MAXPRI_THROTTLE) 
 			priority = MAXPRI_THROTTLE;
+#else	/* CONFIG_EMBEDDED */
+		thread->importance = priority - thread->task_priority;
+
 #endif /* CONFIG_EMBEDDED */
 
 		set_priority(thread, priority);

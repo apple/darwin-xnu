@@ -187,33 +187,6 @@ ipc_table_alloc(
 	return (void *)table;
 }
 
-/*
- *	Routine:	ipc_table_realloc
- *	Purpose:
- *		Reallocate a big table.
- *
- *		The new table remaps the old table,
- *		so copying is not necessary.
- *	Conditions:
- *		Only works for page-size or bigger tables.
- *		May block.
- */
-
-void *
-ipc_table_realloc(
-	vm_size_t	old_size,
-	void *		old_table,
-	vm_size_t	new_size)
-{
-	vm_offset_t new_table;
-
-	if (kmem_realloc(kalloc_map,
-			 (vm_offset_t) old_table, old_size,
-			 &new_table, new_size) != KERN_SUCCESS)
-		new_table = 0;
-
-	return (void *)new_table;
-}
 
 /*
  *	Routine:	ipc_table_free

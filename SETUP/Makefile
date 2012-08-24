@@ -10,7 +10,9 @@ include $(MakeInc_def)
 SETUP_SUBDIRS = 	\
 	config		\
 	kextsymboltool	\
-	setsegname
+	setsegname	\
+	decomment	\
+	md
 
 include $(MakeInc_rule)
 include $(MakeInc_dir)

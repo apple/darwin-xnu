@@ -15,16 +15,6 @@ bsd/dev/i386/sysctl.c           standard
 bsd/dev/i386/unix_signal.c	standard
 bsd/dev/i386/munge.s		standard
 
-bsd/crypto/aes/i386/AES.s		optional crypto
-bsd/crypto/aes/i386/aes_modes_asm.s	optional crypto
-bsd/crypto/aes/i386/aes_modes_hw.s	optional crypto
-bsd/crypto/aes/i386/aes_key_hw.s	optional crypto
-bsd/crypto/aes/i386/aes_crypt_hw.s	optional crypto
-bsd/crypto/aes/i386/aesxts_asm.s	optional crypto
-bsd/crypto/aes/i386/aesxts.c	optional crypto
-
-bsd/crypto/sha2/intel/sha256.s	optional crypto
-bsd/crypto/sha2/intel/sha256nossse3.s	optional crypto
 
 # Lightly ifdef'd to support K64 DTrace
 bsd/dev/i386/dtrace_isa.c	optional config_dtrace

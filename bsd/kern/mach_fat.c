@@ -198,30 +198,14 @@ fatfile_getarch_affinity(
 		struct vnode		*vp,
 		vm_offset_t		data_ptr,
 		struct fat_arch	*archret,
-		int 				affinity)
+		int 				affinity __unused)
 {
-		load_return_t lret;
-		int handler = (exec_archhandler_ppc.path[0] != 0);
-		cpu_type_t primary_type, fallback_type;
-
-		if (handler && affinity) {
-				primary_type = CPU_TYPE_POWERPC;
-				fallback_type = cpu_type();
-		} else {
-				primary_type = cpu_type();
-				fallback_type = CPU_TYPE_POWERPC;
-		}
 		/*
 		 * Ignore all architectural bits when determining if an image
 		 * in a fat file should be skipped or graded.
 		 */
-		lret = fatfile_getarch2(vp, data_ptr, primary_type, 
+		return fatfile_getarch2(vp, data_ptr, cpu_type(), 
 				CPU_ARCH_MASK, archret);
-		if ((lret != 0) && handler) {
-			lret = fatfile_getarch2(vp, data_ptr, fallback_type,
-						CPU_SUBTYPE_LIB64, archret);
-		}
-		return lret;
 }
 
 /**********************************************************************

@@ -245,7 +245,7 @@ enum {
  *  false       == Retain FV key when going to standby mode
  *  not present == Retain FV key when going to standby mode
  */
-#define kIOPMDestroyFVKeyOnStandbyKey       "DestroyFVKeyOnStandby"
+#define kIOPMDestroyFVKeyOnStandbyKey            "DestroyFVKeyOnStandby"
 
 /*******************************************************************************
  *
@@ -288,15 +288,7 @@ enum {
      */
     kIOPMDriverAssertionPreventDisplaySleepBit      = 0x40,
 
-    /*! kIOPMDriverAssertionReservedBit7
-     * Reserved for storage family.
-     */
-    kIOPMDriverAssertionReservedBit7                = 0x80,
-
-    /*! kIOPMDriverAssertionReservedBit8
-     * Reserved for networking family.
-     */
-    kIOPMDriverAssertionReservedBit8                = 0x100
+    kIOPMDriverAssertionReservedBit7                = 0x80
 };
 
  /* kIOPMAssertionsDriverKey
@@ -304,7 +296,7 @@ enum {
   * a bitfield describing the aggregate PM assertion levels.
   * Example: A value of 0 indicates that no driver has asserted anything.
   * Or, a value of <link>kIOPMDriverAssertionCPUBit</link>
-  *   indicates that a driver (or drivers) have asserted a need fro CPU and video.
+  *   indicates that a driver (or drivers) have asserted a need for CPU and video.
   */
 #define kIOPMAssertionsDriverKey            "DriverPMAssertions"
 
@@ -313,7 +305,7 @@ enum {
   * a bitfield describing the aggregate PM assertion levels.
   * Example: A value of 0 indicates that no driver has asserted anything.
   * Or, a value of <link>kIOPMDriverAssertionCPUBit</link>
-  *   indicates that a driver (or drivers) have asserted a need fro CPU and video.
+  *   indicates that a driver (or drivers) have asserted a need for CPU and video.
   */
 #define kIOPMAssertionsDriverDetailedKey    "DriverPMAssertionsDetailed"
 
@@ -416,6 +408,13 @@ enum {
 #define kIOPMMessageDriverAssertionsChanged  \
                 iokit_family_msg(sub_iokit_powermanagement, 0x150)
 
+/*! kIOPMMessageDarkWakeThermalEmergency
+ * Sent when machine becomes unsustainably warm in DarkWake.
+ * Kernel PM might choose to put the machine back to sleep right after.
+ */
+#define kIOPMMessageDarkWakeThermalEmergency \
+                iokit_family_msg(sub_iokit_powermanagement, 0x160)
+
 /*******************************************************************************
  *
  * Power commands issued to root domain
@@ -437,7 +436,8 @@ enum {
   kIOPMEnableClamshell          = (1<<7),  // sleep on clamshell closure
   kIOPMProcessorSpeedChange     = (1<<8),  // change the processor speed
   kIOPMOverTemp                 = (1<<9),  // system dangerously hot
-  kIOPMClamshellOpened          = (1<<10)  // clamshell was opened
+  kIOPMClamshellOpened          = (1<<10), // clamshell was opened
+  kIOPMDWOverTemp               = (1<<11)  // DarkWake thermal limits exceeded.
 };
 
 

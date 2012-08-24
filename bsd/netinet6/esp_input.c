@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008-2010 Apple Inc. All rights reserved.
+ * Copyright (c) 2008-2011 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -66,6 +66,7 @@
 #include <sys/systm.h>
 #include <sys/malloc.h>
 #include <sys/mbuf.h>
+#include <sys/mcache.h>
 #include <sys/domain.h>
 #include <sys/protosw.h>
 #include <sys/socket.h>
@@ -196,6 +197,9 @@ esp4_input(m, off)
 		}
 	}
 
+	/* Expect 32-bit aligned data pointer on strict-align platforms */
+	MBUF_STRICT_DATA_ALIGNMENT_CHECK_32(m);
+
 	ip = mtod(m, struct ip *);
 	// expect udp-encap and esp packets only
 	if (ip->ip_p != IPPROTO_ESP &&
@@ -205,7 +209,7 @@ esp4_input(m, off)
 		IPSEC_STAT_INCREMENT(ipsecstat.in_inval);
 		goto bad;
 	}
-	esp = (struct esp *)(((u_int8_t *)ip) + off);
+	esp = (struct esp *)(void *)(((u_int8_t *)ip) + off);
 #ifdef _IP_VHL
 	hlen = IP_VHL_HL(ip->ip_vhl) << 2;
 #else
@@ -276,8 +280,8 @@ esp4_input(m, off)
 
 	/* check ICV */
     {
-	u_char sum0[AH_MAXSUMSIZE];
-	u_char sum[AH_MAXSUMSIZE];
+	u_char sum0[AH_MAXSUMSIZE] __attribute__((aligned(4)));
+	u_char sum[AH_MAXSUMSIZE] __attribute__((aligned(4)));
 	const struct ah_algorithm *sumalgo;
 	size_t siz;
 
@@ -438,14 +442,25 @@ noreplaycheck:
 		    (sav->flags & SADB_X_EXT_OLD) == 0 &&
 		    seq && sav->replay &&
 		    seq >= sav->replay->lastseq)  {
-			struct udphdr *encap_uh = (__typeof__(encap_uh))((caddr_t)ip + off);
+			struct udphdr *encap_uh = (__typeof__(encap_uh))(void *)((caddr_t)ip + off);
 			if (encap_uh->uh_sport &&
 			    ntohs(encap_uh->uh_sport) != sav->remote_ike_port) {
 				sav->remote_ike_port = ntohs(encap_uh->uh_sport);
 			}
 		}
 		ip = esp4_input_strip_UDP_encap(m, off);
-		esp = (struct esp *)(((u_int8_t *)ip) + off);
+		esp = (struct esp *)(void *)(((u_int8_t *)ip) + off);
+	}
+
+	if (sav->utun_is_keepalive_fn) {
+		if (sav->utun_is_keepalive_fn(sav->utun_pcb, &m, nxt, sav->flags, (off + esplen + ivlen))) {
+			if (m) {
+				// not really bad, we just wanna exit
+				IPSEC_STAT_INCREMENT(ipsecstat.in_success);
+				m = NULL;
+			}
+			goto bad;
+		}
 	}
 
 	/* was it transmitted over the IPsec tunnel SA? */
@@ -513,6 +528,12 @@ noreplaycheck:
 				}
 			}
 
+			/*
+			 * Expect 32-bit aligned data pointer on strict-align
+			 * platforms.
+			 */
+			MBUF_STRICT_DATA_ALIGNMENT_CHECK_32(m);
+
 			ip6 = mtod(m, struct ip6_hdr *);
 
 			/* ECN consideration. */
@@ -560,6 +581,15 @@ noreplaycheck:
 
 		/* Clear the csum flags, they can't be valid for the inner headers */
 		m->m_pkthdr.csum_flags = 0;
+
+		if (sav->utun_in_fn) {
+			if (!(sav->utun_in_fn(sav->utun_pcb, &m, ifamily == AF_INET ? PF_INET : PF_INET6))) {
+				m = NULL;
+				// we just wanna exit since packet has been completely processed
+				goto bad;
+			}
+		}
+
 		if (proto_input(ifamily == AF_INET ? PF_INET : PF_INET6, m) != 0)
 			goto bad;
 
@@ -633,7 +663,7 @@ noreplaycheck:
 					}
 					ip = mtod(m, struct ip *);
 				}
-				udp = (struct udphdr *)(((u_int8_t *)ip) + off);
+				udp = (struct udphdr *)(void *)(((u_int8_t *)ip) + off);
 			
 				lck_mtx_lock(sadb_mutex);
 				if (sav->natt_encapsulated_src_port == 0) {	
@@ -651,6 +681,14 @@ noreplaycheck:
 			DTRACE_IP6(receive, struct mbuf *, m, struct inpcb *, NULL,
                         	struct ip *, ip, struct ifnet *, m->m_pkthdr.rcvif,
                         	struct ip *, ip, struct ip6_hdr *, NULL);
+
+			if (sav->utun_in_fn) {
+				if (!(sav->utun_in_fn(sav->utun_pcb, &m, PF_INET))) {
+					m = NULL;
+					// we just wanna exit since packet has been completely processed
+					goto bad;
+				}
+			}
 
 			ip_proto_dispatch_in(m, off, nxt, 0);
 		} else
@@ -708,7 +746,7 @@ esp6_input(struct mbuf **mp, int *offp, int proto)
 
 #ifndef PULLDOWN_TEST
 	IP6_EXTHDR_CHECK(m, off, ESPMAXLEN, {return IPPROTO_DONE;});
-	esp = (struct esp *)(mtod(m, caddr_t) + off);
+	esp = (struct esp *)(void *)(mtod(m, caddr_t) + off);
 #else
 	IP6_EXTHDR_GET(esp, struct esp *, m, off, ESPMAXLEN);
 	if (esp == NULL) {
@@ -716,6 +754,9 @@ esp6_input(struct mbuf **mp, int *offp, int proto)
 		return IPPROTO_DONE;
 	}
 #endif
+	/* Expect 32-bit data aligned pointer on strict-align platforms */
+	MBUF_STRICT_DATA_ALIGNMENT_CHECK_32(m);
+
 	ip6 = mtod(m, struct ip6_hdr *);
 
 	if (ntohs(ip6->ip6_plen) == 0) {
@@ -790,8 +831,8 @@ esp6_input(struct mbuf **mp, int *offp, int proto)
 
 	/* check ICV */
     {
-	u_char sum0[AH_MAXSUMSIZE];
-	u_char sum[AH_MAXSUMSIZE];
+	u_char sum0[AH_MAXSUMSIZE] __attribute__((aligned(4)));
+	u_char sum[AH_MAXSUMSIZE] __attribute__((aligned(4)));
 	const struct ah_algorithm *sumalgo;
 	size_t siz;
 
@@ -926,6 +967,17 @@ noreplaycheck:
 	ip6 = mtod(m, struct ip6_hdr *);
 	ip6->ip6_plen = htons(ntohs(ip6->ip6_plen) - taillen);
 
+	if (sav->utun_is_keepalive_fn) {
+		if (sav->utun_is_keepalive_fn(sav->utun_pcb, &m, nxt, sav->flags, (off + esplen + ivlen))) {
+			if (m) {
+				// not really bad, we just wanna exit
+				IPSEC_STAT_INCREMENT(ipsec6stat.in_success);
+				m = NULL;
+			}
+			goto bad;
+		}
+	}
+
 	/* was it transmitted over the IPsec tunnel SA? */
 	if (ipsec6_tunnel_validate(m, off + esplen + ivlen, nxt, sav)) {
 		ifaddr_t ifa;
@@ -990,6 +1042,14 @@ noreplaycheck:
 			if (ifa) {
 				m->m_pkthdr.rcvif = ifa->ifa_ifp;
 				IFA_REMREF(ifa);
+			}
+		}
+
+		if (sav->utun_in_fn) {
+			if (!(sav->utun_in_fn(sav->utun_pcb, &m, PF_INET6))) {
+				m = NULL;
+				// we just wanna exit since packet has been completely processed
+				goto bad;
 			}
 		}
 
@@ -1091,6 +1151,14 @@ noreplaycheck:
 			IPSEC_STAT_INCREMENT(ipsec6stat.in_nomem);
 			goto bad;
 		}
+
+		if (sav->utun_in_fn) {
+			if (!(sav->utun_in_fn(sav->utun_pcb, &m, PF_INET6))) {
+				m = NULL;
+				// we just wanna exit since packet has been completely processed
+				goto bad;
+			}
+		}
 	}
 
 	*offp = off;
@@ -1183,7 +1251,7 @@ esp6_ctlinput(cmd, sa, d)
 			m_copydata(m, off, sizeof(esp), (caddr_t)&esp);
 			espp = &esp;
 		} else
-			espp = (struct newesp*)(mtod(m, caddr_t) + off);
+			espp = (struct newesp*)(void *)(mtod(m, caddr_t) + off);
 
 		if (cmd == PRC_MSGSIZE) {
 			int valid = 0;
@@ -1193,7 +1261,7 @@ esp6_ctlinput(cmd, sa, d)
 			 * the address in the ICMP message payload.
 			 */
 			sa6_src = ip6cp->ip6c_src;
-			sa6_dst = (struct sockaddr_in6 *)sa;
+			sa6_dst = (struct sockaddr_in6 *)(void *)sa;
 			sav = key_allocsa(AF_INET6,
 					  (caddr_t)&sa6_src->sin6_addr,
 					  (caddr_t)&sa6_dst->sin6_addr,

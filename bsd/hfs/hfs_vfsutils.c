@@ -676,7 +676,7 @@ OSErr hfs_MountHFSPlusVolume(struct hfsmount *hfsmp, HFSPlusVolumeHeader *vhp,
 	volname_length = strlen ((const char*)vcb->vcbVN);
 	cat_releasedesc(&cndesc);
 	
-#define DKIOCCSSETLVNAME _IOW('d', 198, char[1024])
+#define DKIOCCSSETLVNAME _IOW('d', 198, char[256])
 
 
 	/* Send the volume name down to CoreStorage if necessary */	
@@ -3092,7 +3092,7 @@ check_for_tracked_file(struct vnode *vp, time_t ctime, uint64_t op_type, void *a
 		return 0;
 	}
 	
-	if (VTOC(vp)->c_flags & UF_TRACKED) {
+	if (VTOC(vp)->c_bsdflags & UF_TRACKED) {
 		// the file has the tracked bit set, so send an event to the tracked-file handler
 		int error;
 		
@@ -3137,7 +3137,7 @@ check_for_dataless_file(struct vnode *vp, uint64_t op_type)
 {
 	int error;
 
-	if (vp == NULL || (VTOC(vp)->c_flags & UF_COMPRESSED) == 0 || VTOCMP(vp) == NULL || VTOCMP(vp)->cmp_type != DATALESS_CMPFS_TYPE) {
+	if (vp == NULL || (VTOC(vp)->c_bsdflags & UF_COMPRESSED) == 0 || VTOCMP(vp) == NULL || VTOCMP(vp)->cmp_type != DATALESS_CMPFS_TYPE) {
 		// there's nothing to do, it's not dataless
 		return 0;
 	}
@@ -3155,7 +3155,7 @@ check_for_dataless_file(struct vnode *vp, uint64_t op_type)
 			// printf("hfs: dataless: got a signal while waiting for namespace handler...\n");
 			return EINTR;
 		}
-	} else if (VTOC(vp)->c_flags & UF_COMPRESSED) {
+	} else if (VTOC(vp)->c_bsdflags & UF_COMPRESSED) {
 		//
 		// if we're here, the dataless bit is still set on the file 
 		// which means it didn't get handled.  we return an error

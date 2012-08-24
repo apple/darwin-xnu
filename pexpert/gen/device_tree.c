@@ -127,10 +127,17 @@ GetNextChild(RealDTEntry sibling)
 static const char *
 GetNextComponent(const char *cp, char *bp)
 {
+	size_t length = 0;
+	char *origbp = bp;
+
 	while (*cp != 0) {
 		if (*cp == kDTPathNameSeparator) {
 			cp++;
 			break;
+		}
+		if (++length > kDTMaxEntryNameLength) {
+			*origbp = '\0';
+			return cp;
 		}
 		*bp++ = *cp++;
 	}

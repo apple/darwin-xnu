@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2011 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2012 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -140,12 +140,14 @@ struct iovec {
 #endif
 
 #ifdef PRIVATE
-#define SO_TCDBG_PID	0x01	/* Set/get traffic class for PID */
-#define SO_TCDBG_PNAME	0x02	/* Set/get traffic class for processes of that name */
-#define SO_TCDBG_PURGE	0x04	/* Purge entries for unused PIDs */
-#define SO_TCDBG_FLUSH	0x08	/* Flush all entries */
-#define SO_TCDBG_COUNT	0x10	/* Get count of entries */
-#define SO_TCDBG_LIST	0x20	/* List entries */
+#define SO_TCDBG_PID		0x01	/* Set/get traffic class for PID */
+#define SO_TCDBG_PNAME		0x02	/* Set/get traffic class for processes of that name */
+#define SO_TCDBG_PURGE		0x04	/* Purge entries for unused PIDs */
+#define SO_TCDBG_FLUSH		0x08	/* Flush all entries */
+#define SO_TCDBG_COUNT		0x10	/* Get count of entries */
+#define SO_TCDBG_LIST		0x20	/* List entries */
+#define SO_TCDBG_DELETE		0x40	/* Delete a process entry */
+#define SO_TCDBG_TCFLUSH_PID	0x80	/* Flush traffic class for PID */
 
 struct so_tcdbg {
 	u_int32_t	so_tcdbg_cmd;
@@ -153,6 +155,7 @@ struct so_tcdbg {
 	u_int32_t	so_tcdbg_count;
 	pid_t		so_tcdbg_pid;
 	char		so_tcdbg_pname[MAXCOMLEN + 1];
+	int32_t		so_tcdbg_opportunistic; /* -1: unspecified, 0: off, 1: on, other: errors */
 };
 #endif /* PRIVATE */
  
@@ -192,9 +195,10 @@ struct so_tcdbg {
 #else
 #define SO_DONTTRUNC	0x2000		/* APPLE: Retain unread data */
 					/*  (ATOMIC proto) */
-#define SO_WANTMORE		0x4000		/* APPLE: Give hint when more data ready */
+#define SO_WANTMORE	0x4000		/* APPLE: Give hint when more data ready */
 #define SO_WANTOOBFLAG	0x8000		/* APPLE: Want OOB in MSG_FLAG on receive */
-#endif
+
+#endif  /* (!__APPLE__) */
 #endif	/* (!_POSIX_C_SOURCE || _DARWIN_C_SOURCE) */
 
 /*
@@ -234,12 +238,85 @@ struct so_tcdbg {
 
 #ifdef PRIVATE
 #define	SO_EXECPATH	0x1085 		/* Application Firewall Socket option */
-#define SO_TRAFFIC_CLASS		0x1086		/* Traffic class (int)*/
-#define  SO_TC_BE	0		/* Best effort, normal */
-#define  SO_TC_BK	1		/* Background, low priority or bulk traffic */
-#define  SO_TC_VI	2		/* Interactive video, constant bit rate, low latency */
-#define  SO_TC_VO	3		/* Interactive voice, constant bit rate, lowest latency */
-#define  SO_TC_MAX	4		/* Max traffic class value */
+/*
+ * Traffic service class definitions (lowest to highest):
+ *
+ * SO_TC_BK_SYS
+ *	"Background System-Initiated", high delay tolerant, high loss
+ *	tolerant, elastic flow, variable size & long-lived.  E.g: system-
+ *	initiated iCloud synching or Time Capsule backup, for which there
+ *	is no progress feedbacks.
+ *
+ * SO_TC_BK
+ *	"Background", user-initiated, high delay tolerant, high loss tolerant,
+ *	elastic flow, variable size.  E.g. user-initiated iCloud synching or
+ *	Time Capsule backup; or traffics of background applications, for which
+ *	there is some progress feedbacks.
+ *
+ * SO_TC_BE
+ *	"Best Effort", unclassified/standard.  This is the default service
+ *	class; pretty much a mix of everything.
+ *
+ * SO_TC_RD
+ *	"Responsive Data", a notch higher than "Best Effort", medium delay
+ *	tolerant, elastic & inelastic flow, bursty, long-lived.  E.g. email,
+ *	instant messaging, for which there is a sense of interactivity and
+ *	urgency (user waiting for output).
+ *
+ * SO_TC_OAM
+ *	"Operations, Administration, and Management", medium delay tolerant,
+ *	low-medium loss tolerant, elastic & inelastic flows, variable size.
+ *	E.g. VPN tunnels.
+ *
+ * SO_TC_AV
+ *	"Multimedia Audio/Video Streaming", medium delay tolerant, low-medium
+ *	loss tolerant, elastic flow, constant packet interval, variable rate &
+ *	size.  E.g. AirPlay playback (both video and audio).
+ *
+ * SO_TC_RV
+ *	"Responsive Multimedia Audio/Video", low delay tolerant, low-medium
+ *	loss tolerant, elastic flow, variable packet interval, rate and size.
+ *	E.g. AirPlay mirroring, screen sharing.
+ *
+ * SO_TC_VI
+ *	"Interactive Video", low delay tolerant, low-medium loss tolerant,
+ *	elastic flow, constant packet interval, variable rate & size.  E.g.
+ *	FaceTime video.
+ *
+ * SO_TC_VO
+ *	"Interactive Voice", low delay tolerant, low loss tolerant, inelastic
+ *	flow, constant packet rate, somewhat fixed size.  E.g. VoIP including
+ *	FaceTime audio.
+ *
+ * SO_TC_CTL
+ *	"Network Control", low delay tolerant, low loss tolerant, inelastic
+ *	flow, rate is bursty but short, variable size.  E.g. DNS queries;
+ *	certain types of locally-originated ICMP, ICMPv6; IGMP/MLD join/leave,
+ *	ARP.
+ */
+#define SO_TRAFFIC_CLASS	0x1086	/* Traffic service class (int) */
+#define	 SO_TC_BK_SYS	100		/* lowest class */
+#define	 SO_TC_BK	200
+#define  SO_TC_BE	0
+#define	 SO_TC_RD	300
+#define	 SO_TC_OAM	400
+#define	 SO_TC_AV	500
+#define	 SO_TC_RV	600
+#define	 SO_TC_VI	700
+#define	 SO_TC_VO	800
+#define	 SO_TC_CTL	900		/* highest class */
+#define  SO_TC_MAX	10		/* Total # of traffic classes */
+#ifdef XNU_KERNEL_PRIVATE
+#define  _SO_TC_BK	1		/* deprecated */
+#define  _SO_TC_VI	2		/* deprecated */
+#define  _SO_TC_VO	3		/* deprecated */
+#define  _SO_TC_MAX	4		/* deprecated */
+
+#define	SO_VALID_TC(c)							\
+	(c == SO_TC_BK_SYS || c == SO_TC_BK || c == SO_TC_BE ||		\
+	c == SO_TC_RD || c == SO_TC_OAM || c == SO_TC_AV ||		\
+	c == SO_TC_RV || c == SO_TC_VI || c == SO_TC_VO || c == SO_TC_CTL)
+#endif /* XNU_KERNEL_PRIVATE */
 
 /* Background socket configuration flags */
 #define TRAFFIC_MGT_SO_BACKGROUND       0x0001  /* background socket */
@@ -248,8 +325,21 @@ struct so_tcdbg {
 #define SO_RECV_TRAFFIC_CLASS	0x1087		/* Receive traffic class (bool)*/
 #define SO_TRAFFIC_CLASS_DBG	0x1088		/* Debug traffic class (struct so_tcdbg) */
 #define SO_TRAFFIC_CLASS_STATS	0x1089		/* Traffic class statistics */
+#define SO_PRIVILEGED_TRAFFIC_CLASS 0x1090	/* Privileged traffic class (bool) */
 #define	SO_DEFUNCTOK	0x1100		/* can be defunct'd */
 #define	SO_ISDEFUNCT	0x1101		/* get defunct status */
+
+#define	SO_OPPORTUNISTIC	0x1102	/* deprecated; use SO_TRAFFIC_CLASS */
+
+/*
+ * SO_FLUSH flushes any unsent data generated by a given socket.  It takes
+ * an integer parameter, which can be any of the SO_TC traffic class values,
+ * or the special SO_TC_ALL value.
+ */
+#define	SO_FLUSH	0x1103		/* flush unsent data (int) */
+#define	 SO_TC_ALL	(-1)
+
+#define	SO_RECV_ANYIF	0x1104		/* unrestricted inbound processing */
 #endif /* PRIVATE */
 #endif	/* (!_POSIX_C_SOURCE || _DARWIN_C_SOURCE) */
 
@@ -284,7 +374,8 @@ struct so_np_extensions {
 
 #ifdef KERNEL_PRIVATE
 #define SONPX_MASK_VALID		(SONPX_SETOPTSHUT)
-#endif
+#define IS_SO_TC_BACKGROUND(_tc_) ((_tc_) == SO_TC_BK || (_tc_) == SO_TC_BK_SYS)
+#endif /* KERNEL_PRIVATE */
 
 #endif
 #endif
@@ -360,7 +451,10 @@ struct so_np_extensions {
 #define	AF_NETGRAPH	32		/* Netgraph sockets */
 #endif
 #define AF_IEEE80211    37              /* IEEE 802.11 protocol */
-#define	AF_MAX		38
+#ifdef __APPLE__
+#define AF_UTUN		38
+#endif
+#define	AF_MAX		39
 #endif	/* (!_POSIX_C_SOURCE || _DARWIN_C_SOURCE) */
 
 /*
@@ -460,6 +554,9 @@ struct sockaddr_storage {
 #define	PF_NETGRAPH	AF_NETGRAPH
 #endif
 
+#ifdef __APPLE__
+#define PF_UTUN		AF_UTUN
+#endif
 #define	PF_MAX		AF_MAX
 
 /*
@@ -773,6 +870,8 @@ struct omsghdr {
 	void		*msg_accrights;		/* access rights sent/rcvd */
 	int		msg_accrightslen;
 };
+
+#define	SA(s)	((struct sockaddr *)(void *)(s))
 #endif /* KERNEL_PRIVATE */
 #endif	/* (!_POSIX_C_SOURCE || _DARWIN_C_SOURCE) */
 

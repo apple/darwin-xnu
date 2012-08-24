@@ -58,7 +58,7 @@ kxld_sect_init_from_macho_32(KXLDSect *sect, u_char *macho, u_long *sect_offset,
     u_int sectnum, const KXLDRelocator *relocator)
 {
     kern_return_t rval = KERN_FAILURE;
-    struct section *src = (struct section *) (macho + *sect_offset);
+    struct section *src = (struct section *) ((void *) (macho + *sect_offset));
     struct relocation_info *relocs = NULL;
 
     check(sect);
@@ -82,7 +82,7 @@ kxld_sect_init_from_macho_32(KXLDSect *sect, u_char *macho, u_long *sect_offset,
         sect->data = NULL;
     }
 
-    relocs = (struct relocation_info *) (macho + src->reloff);
+    relocs = (struct relocation_info *) ((void *) (macho + src->reloff));
 
     rval = kxld_reloc_create_macho(&sect->relocs, relocator, 
         relocs, src->nreloc);
@@ -106,7 +106,7 @@ kxld_sect_init_from_macho_64(KXLDSect *sect, u_char *macho, u_long *sect_offset,
     u_int sectnum, const KXLDRelocator *relocator)
 {
     kern_return_t rval = KERN_FAILURE;
-    struct section_64 *src = (struct section_64 *) (macho + *sect_offset);
+    struct section_64 *src = (struct section_64 *) ((void *) (macho + *sect_offset));
     struct relocation_info *relocs = NULL;
 
     check(sect);
@@ -130,7 +130,7 @@ kxld_sect_init_from_macho_64(KXLDSect *sect, u_char *macho, u_long *sect_offset,
         sect->data = NULL;
     }
 
-    relocs = (struct relocation_info *) (macho + src->reloff);
+    relocs = (struct relocation_info *) ((void *) (macho + src->reloff));
 
     rval = kxld_reloc_create_macho(&sect->relocs, relocator, 
         relocs, src->nreloc);
@@ -430,11 +430,11 @@ export_macho(const KXLDSect *sect, u_char *buf, u_long offset, u_long bufsize)
     case S_LITERAL_POINTERS:
     case S_COALESCED:
     case S_16BYTE_LITERALS:
+    case S_SYMBOL_STUBS:
         memcpy(buf + offset, sect->data, (size_t)sect->size);
         break;
     case S_ZEROFILL: /* sect->data should be NULL, so we'll never get here */
     case S_LAZY_SYMBOL_POINTERS:
-    case S_SYMBOL_STUBS:
     case S_GB_ZEROFILL:
     case S_INTERPOSING:
     case S_DTRACE_DOF:
@@ -467,7 +467,7 @@ sect_export_macho_header_32(const KXLDSect *sect, u_char *buf,
     
     require_action(sizeof(*secthdr) <= header_size - *header_offset, finish,
         rval=KERN_FAILURE);
-    secthdr = (struct section *) (buf + *header_offset);
+    secthdr = (struct section *) ((void *) (buf + *header_offset));
     *header_offset += sizeof(*secthdr);
 
     /* Initalize header */
@@ -507,7 +507,7 @@ sect_export_macho_header_64(const KXLDSect *sect, u_char *buf,
     
     require_action(sizeof(*secthdr) <= header_size - *header_offset, finish,
         rval=KERN_FAILURE);
-    secthdr = (struct section_64 *) (buf + *header_offset);
+    secthdr = (struct section_64 *) ((void *) (buf + *header_offset));
     *header_offset += sizeof(*secthdr);
 
     /* Initalize header */

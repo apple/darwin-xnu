@@ -155,23 +155,8 @@ set_thread_state64(thread_t thread, x86_thread_state64_t *ts);
 static inline void
 machine_pmc_cswitch(thread_t /* old */, thread_t /* new */);
 
-static inline boolean_t
-machine_thread_pmc_eligible(thread_t);
-
 static inline void
 pmc_swi(thread_t /* old */, thread_t /*new */);
-
-static inline boolean_t
-machine_thread_pmc_eligible(thread_t t) {
-	/*
-	 * NOTE: Task-level reservations are propagated to child threads via
-	 * thread_create_internal.  Any mutation of task reservations forces a
-	 * recalculate of t_chud (for the pmc flag) for all threads in that task.
-	 * Consequently, we can simply check the current thread's flag against
-	 * THREAD_PMC_FLAG.  If the result is non-zero, we SWI for a PMC switch.
-	 */
-	return (t != NULL) ? ((t->t_chud & THREAD_PMC_FLAG) ? TRUE : FALSE) : FALSE;
-}
 
 static inline void
 pmc_swi(thread_t old, thread_t new) {
@@ -182,7 +167,7 @@ pmc_swi(thread_t old, thread_t new) {
 
 static inline void
 machine_pmc_cswitch(thread_t old, thread_t new) {
-	if (machine_thread_pmc_eligible(old) || machine_thread_pmc_eligible(new)) {
+	if (pmc_thread_eligible(old) || pmc_thread_eligible(new)) {
 		pmc_swi(old, new);
 	}
 }
@@ -1675,27 +1660,6 @@ machine_set_current_thread(thread_t thread)
 	current_cpu_datap()->cpu_active_thread = thread;
 }
 
-/*
- * This is called when a task is terminated, and also on exec().
- * Clear machine-dependent state that is stored on the task.
- */
-void
-machine_thread_terminate_self(void)
-{
-	task_t self_task = current_task();
-	if (self_task) {
-	    user_ldt_t user_ldt = self_task->i386_ldt;
-	    if (user_ldt != 0) {
-		self_task->i386_ldt = 0;
-		user_ldt_free(user_ldt);
-	    }
-
-	    if (self_task->task_debug != NULL) {
-		zfree(ids_zone, self_task->task_debug);
-		self_task->task_debug = NULL;
-	    }    
-	}
-}
 
 /*
  * Perform machine-dependent per-thread initializations
@@ -2129,4 +2093,12 @@ copy_debug_state64(
 	target->dr3 = src->dr3;
 	target->dr6 = src->dr6;
 	target->dr7 = src->dr7;
+}
+
+boolean_t is_useraddr64_canonical(uint64_t addr64);
+
+boolean_t
+is_useraddr64_canonical(uint64_t addr64)
+{
+	return IS_USERADDR64_CANONICAL(addr64);
 }

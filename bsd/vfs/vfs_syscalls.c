@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1995-2010 Apple Inc. All rights reserved.
+ * Copyright (c) 1995-2012 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -181,33 +181,6 @@ int open1(vfs_context_t, struct nameidata *, int, struct vnode_attr *, int32_t *
 
 __private_extern__
 int unlink1(vfs_context_t, struct nameidata *, int);
-
-
-#ifdef __APPLE_API_OBSOLETE
-struct fstatv_args {
-       int fd;			/* file descriptor of the target file */
-       struct vstat *vsb;	/* vstat structure for returned info  */
-};
-struct lstatv_args {
-       const char *path;	/* pathname of the target file       */
-       struct vstat *vsb;	/* vstat structure for returned info */
-};
-struct mkcomplex_args {
-        const char *path;	/* pathname of the file to be created */
-		mode_t mode;		/* access mode for the newly created file */
-        u_int32_t type;		/* format of the complex file */
-};
-struct statv_args {
-        const char *path;	/* pathname of the target file       */
-        struct vstat *vsb;	/* vstat structure for returned info */
-};
-
-int fstatv(proc_t p, struct fstatv_args *uap, int32_t *retval);
-int lstatv(proc_t p, struct lstatv_args *uap, int32_t *retval);
-int mkcomplex(proc_t p, struct mkcomplex_args *uap, int32_t *retval);
-int statv(proc_t p, struct statv_args *uap, int32_t *retval);
-
-#endif /* __APPLE_API_OBSOLETE */
 
 /*
  * incremented each time a mount or unmount operation occurs
@@ -500,6 +473,16 @@ mount_common(char *fstypename, vnode_t pvp, vnode_t vp,
 			goto out1;
 		}
 
+		/*
+		 * If content protection is enabled, update mounts are not
+		 * allowed to turn it off.
+		 */
+		if ((mp->mnt_flag & MNT_CPROTECT) && 
+			   ((flags & MNT_CPROTECT) == 0)) {
+			error = EINVAL;
+			goto out1;
+		}
+
 #ifdef CONFIG_IMGSRC_ACCESS 
 		/* Can't downgrade the backer of the root FS */
 		if ((mp->mnt_kern_flag & MNTK_BACKS_ROOT) &&
@@ -533,6 +516,8 @@ mount_common(char *fstypename, vnode_t pvp, vnode_t vp,
 				flags |= MNT_NOEXEC;
 		}
 		flag = mp->mnt_flag;
+
+
 
 		mp->mnt_flag |= flags & (MNT_RELOAD | MNT_FORCE | MNT_UPDATE);
 
@@ -1729,6 +1714,16 @@ safedounmount(struct mount *mp, int flags, vfs_context_t ctx)
 	proc_t p = vfs_context_proc(ctx);
 
 	/*
+	 * If the file system is not responding and MNT_NOBLOCK
+	 * is set and not a forced unmount then return EBUSY.
+	 */
+	if ((mp->mnt_kern_flag & MNT_LNOTRESP) &&
+		(flags & MNT_NOBLOCK) && ((flags & MNT_FORCE) == 0)) {
+		error = EBUSY;
+		goto out;
+	}
+
+	/*
 	 * Skip authorization if the mount is tagged as permissive and 
 	 * this is not a forced-unmount attempt.
 	 */
@@ -2370,7 +2365,7 @@ fstatfs64(__unused struct proc *p, struct fstatfs64_args *uap, __unused int32_t 
 
 	mp = vp->v_mount;
 	if (!mp) {
-		error = EBADF;;
+		error = EBADF;
 		goto out;
 	}
 	sp = &mp->mnt_vfsstat;
@@ -3052,6 +3047,14 @@ open1(vfs_context_t ctx, struct nameidata *ndp, int uflags, struct vnode_attr *v
 	fp->f_fglob->fg_ops = &vnops;
 	fp->f_fglob->fg_data = (caddr_t)vp;
 
+#if CONFIG_PROTECT
+	if (VATTR_IS_ACTIVE (vap, va_dataprotect_flags)) {
+		if (vap->va_dataprotect_flags & VA_DP_RAWENCRYPTED) {
+			fp->f_fglob->fg_flag |= FENCRYPTED;
+		}
+	}
+#endif
+
 	if (flags & (O_EXLOCK | O_SHLOCK)) {
 		lf.l_whence = SEEK_SET;
 		lf.l_start = 0;
@@ -3208,6 +3211,58 @@ open_extended(proc_t p, struct open_extended_args *uap, int32_t *retval)
 
 	return ciferror;
 }
+
+/* 
+ * Go through the data-protected atomically controlled open (2)
+ *  
+ * int open_dprotected_np(user_addr_t path, int flags, int class, int dpflags, int mode)
+ */
+int open_dprotected_np (__unused proc_t p, struct open_dprotected_np_args *uap, int32_t *retval) {
+	int flags = uap->flags;
+	int class = uap->class;
+	int dpflags = uap->dpflags;
+
+	/* 
+	 * Follow the same path as normal open(2)
+	 * Look up the item if it exists, and acquire the vnode.
+	 */
+	struct filedesc *fdp = p->p_fd;
+	struct vnode_attr va;
+	struct nameidata nd;
+	int cmode;
+	int error;
+	
+	VATTR_INIT(&va);
+	/* Mask off all but regular access permissions */
+	cmode = ((uap->mode &~ fdp->fd_cmask) & ALLPERMS) & ~S_ISTXT;
+	VATTR_SET(&va, va_mode, cmode & ACCESSPERMS);
+
+	NDINIT(&nd, LOOKUP, OP_OPEN, FOLLOW | AUDITVNPATH1, UIO_USERSPACE,
+	       uap->path, vfs_context_current());
+
+	/* 
+	 * Initialize the extra fields in vnode_attr to pass down our 
+	 * extra fields.
+	 * 1. target cprotect class.
+	 * 2. set a flag to mark it as requiring open-raw-encrypted semantics. 
+	 */ 
+	if (flags & O_CREAT) {	
+		VATTR_SET(&va, va_dataprotect_class, class);
+	}
+	
+	if (dpflags & O_DP_GETRAWENCRYPTED) {
+		if ( flags & (O_RDWR | O_WRONLY)) {
+			/* Not allowed to write raw encrypted bytes */
+			return EINVAL;		
+		}			
+		VATTR_SET(&va, va_dataprotect_flags, VA_DP_RAWENCRYPTED);
+	}
+
+	error = open1(vfs_context_current(), &nd, uap->flags, &va, retval);
+
+	return error;
+}
+
 
 int
 open(proc_t p, struct open_args *uap, int32_t *retval)
@@ -3889,7 +3944,7 @@ undelete(__unused proc_t p, struct undelete_args *uap, __unused int32_t *retval)
  */
 /* ARGSUSED */
 int
-unlink1(vfs_context_t ctx, struct nameidata *ndp, int nodelbusy)
+unlink1(vfs_context_t ctx, struct nameidata *ndp, int unlink_flags)
 {
 	vnode_t	vp, dvp;
 	int error;
@@ -3926,9 +3981,15 @@ lookup_continue:
 
 
 	/* With Carbon delete semantics, busy files cannot be deleted */
-	if (nodelbusy) {
+	if (unlink_flags & VNODE_REMOVE_NODELETEBUSY) {
 		flags |= VNODE_REMOVE_NODELETEBUSY;
 	}
+	
+	/* If we're told to, then skip any potential future upcalls */
+	if (unlink_flags & VNODE_REMOVE_SKIP_NAMESPACE_EVENT) {
+		flags |= VNODE_REMOVE_SKIP_NAMESPACE_EVENT;
+	}
+
 
 	if (vp) {
 		batched = vnode_compound_remove_available(vp);
@@ -4100,7 +4161,7 @@ delete(__unused proc_t p, struct delete_args *uap, __unused int32_t *retval)
 
 	NDINIT(&nd, DELETE, OP_UNLINK, AUDITVNPATH1, UIO_USERSPACE,
 	       uap->path, ctx);
-	return unlink1(ctx, &nd, 1);
+	return unlink1(ctx, &nd, VNODE_REMOVE_NODELETEBUSY);
 }
 
 /*
@@ -5089,8 +5150,8 @@ chmod2(vfs_context_t ctx, vnode_t vp, struct vnode_attr *vap)
 #endif
 
 #if CONFIG_MACF
-	error = mac_vnode_check_setmode(ctx, vp, (mode_t)vap->va_mode);
-	if (error)
+	if (VATTR_IS_ACTIVE(vap, va_mode) &&
+	    (error = mac_vnode_check_setmode(ctx, vp, (mode_t)vap->va_mode)) != 0)
 		return (error);
 #endif
 
@@ -5887,7 +5948,7 @@ rename(__unused proc_t p, struct rename_args *uap, __unused int32_t *retval)
 {
 	vnode_t tvp, tdvp;
 	vnode_t fvp, fdvp;
-	struct nameidata fromnd, tond;
+	struct nameidata *fromnd, *tond;
 	vfs_context_t ctx = vfs_context_current();
 	int error;
 	int do_retry;
@@ -5901,42 +5962,49 @@ rename(__unused proc_t p, struct rename_args *uap, __unused int32_t *retval)
 	vnode_t oparent = NULLVP;
 #if CONFIG_FSE
 	fse_info from_finfo, to_finfo;
-	struct vnode_attr fva, tva;
 #endif
 	int from_truncated=0, to_truncated;
 	int batched = 0;
 	struct vnode_attr *fvap, *tvap;
 	int continuing = 0;
-	
+	/* carving out a chunk for structs that are too big to be on stack. */
+	struct {
+		struct nameidata from_node, to_node;
+		struct vnode_attr fv_attr, tv_attr;
+	} * __rename_data;
+	MALLOC(__rename_data, void *, sizeof(*__rename_data), M_TEMP, M_WAITOK);
+	fromnd = &__rename_data->from_node;
+	tond = &__rename_data->to_node;
+
 	holding_mntlock = 0;
-    do_retry = 0;
+	do_retry = 0;
 retry:
 	fvp = tvp = NULL;
 	fdvp = tdvp = NULL;
 	fvap = tvap = NULL;
 	mntrename = FALSE;
 
-	NDINIT(&fromnd, DELETE, OP_UNLINK, WANTPARENT | AUDITVNPATH1,
+	NDINIT(fromnd, DELETE, OP_UNLINK, WANTPARENT | AUDITVNPATH1,
 	       UIO_USERSPACE, uap->from, ctx);
-	fromnd.ni_flag = NAMEI_COMPOUNDRENAME;
+	fromnd->ni_flag = NAMEI_COMPOUNDRENAME;
 	
-	NDINIT(&tond, RENAME, OP_RENAME, WANTPARENT | AUDITVNPATH2 | CN_NBMOUNTLOOK,
+	NDINIT(tond, RENAME, OP_RENAME, WANTPARENT | AUDITVNPATH2 | CN_NBMOUNTLOOK,
 	       UIO_USERSPACE, uap->to, ctx);
-	tond.ni_flag = NAMEI_COMPOUNDRENAME;
+	tond->ni_flag = NAMEI_COMPOUNDRENAME;
 	
 continue_lookup:
-	if ((fromnd.ni_flag & NAMEI_CONTLOOKUP) != 0 || !continuing) {
-		if ( (error = namei(&fromnd)) )
+	if ((fromnd->ni_flag & NAMEI_CONTLOOKUP) != 0 || !continuing) {
+		if ( (error = namei(fromnd)) )
 			goto out1;
-		fdvp = fromnd.ni_dvp;
-		fvp  = fromnd.ni_vp;
+		fdvp = fromnd->ni_dvp;
+		fvp  = fromnd->ni_vp;
 
 		if (fvp && fvp->v_type == VDIR)
-			tond.ni_cnd.cn_flags |= WILLBEDIR;
+			tond->ni_cnd.cn_flags |= WILLBEDIR;
 	}
 
-	if ((tond.ni_flag & NAMEI_CONTLOOKUP) != 0 || !continuing) {
-		if ( (error = namei(&tond)) ) {
+	if ((tond->ni_flag & NAMEI_CONTLOOKUP) != 0 || !continuing) {
+		if ( (error = namei(tond)) ) {
 			/*
 			 * Translate error code for rename("dir1", "dir2/.").
 			 */
@@ -5944,8 +6012,8 @@ continue_lookup:
 				error = EINVAL;
 			goto out1;
 		}
-		tdvp = tond.ni_dvp;
-		tvp  = tond.ni_vp;
+		tdvp = tond->ni_dvp;
+		tvp  = tond->ni_vp;
 	}	
 
 	batched = vnode_compound_rename_available(fdvp);
@@ -5968,7 +6036,7 @@ continue_lookup:
 	}
 
 	if (!batched) {
-		error = vn_authorize_rename(fdvp, fvp, &fromnd.ni_cnd, tdvp, tvp, &tond.ni_cnd, ctx, NULL);
+		error = vn_authorize_rename(fdvp, fvp, &fromnd->ni_cnd, tdvp, tvp, &tond->ni_cnd, ctx, NULL);
 		if (error) {
 			if (error == ENOENT) {
 				/*
@@ -6062,9 +6130,9 @@ continue_lookup:
 	 * XXX filesystem should take care of this itself, perhaps...
 	 */
 	if (fvp == tvp && fdvp == tdvp) {
-		if (fromnd.ni_cnd.cn_namelen == tond.ni_cnd.cn_namelen &&
-	       	    !bcmp(fromnd.ni_cnd.cn_nameptr, tond.ni_cnd.cn_nameptr,
-			  fromnd.ni_cnd.cn_namelen)) {
+		if (fromnd->ni_cnd.cn_namelen == tond->ni_cnd.cn_namelen &&
+	       	    !bcmp(fromnd->ni_cnd.cn_nameptr, tond->ni_cnd.cn_nameptr,
+			  fromnd->ni_cnd.cn_namelen)) {
 			goto out1;
 		}
 	}
@@ -6106,7 +6174,7 @@ continue_lookup:
 			 * nameidone has to happen before we vnode_put(tvp)
 			 * since it may need to release the fs_nodelock on the tvp
 			 */
-			nameidone(&tond);
+			nameidone(tond);
 
 			if (tvp)
 			        vnode_put(tvp);
@@ -6116,7 +6184,7 @@ continue_lookup:
 			 * nameidone has to happen before we vnode_put(fdvp)
 			 * since it may need to release the fs_nodelock on the fvp
 			 */
-			nameidone(&fromnd);
+			nameidone(fromnd);
 
 			vnode_put(fvp);
 			vnode_put(fdvp);
@@ -6155,23 +6223,23 @@ skipped_lookup:
 		if (fvp) {
 			get_fse_info(fvp, &from_finfo, ctx);
 		} else {
-			error = vfs_get_notify_attributes(&fva);
+			error = vfs_get_notify_attributes(&__rename_data->fv_attr);
 			if (error) {
 				goto out1;
 			}
 
-			fvap = &fva;
+			fvap = &__rename_data->fv_attr;
 		}
 
 		if (tvp) {
 		        get_fse_info(tvp, &to_finfo, ctx);
 		} else if (batched) {
-			error = vfs_get_notify_attributes(&tva);
+			error = vfs_get_notify_attributes(&__rename_data->tv_attr);
 			if (error) {
 				goto out1;
 			}
 
-			tvap = &tva;
+			tvap = &__rename_data->tv_attr;
 		}
 	}
 #else
@@ -6187,7 +6255,7 @@ skipped_lookup:
 			}
 		}
 
-		from_len = safe_getpath(fdvp, fromnd.ni_cnd.cn_nameptr, from_name, MAXPATHLEN, &from_truncated);
+		from_len = safe_getpath(fdvp, fromnd->ni_cnd.cn_nameptr, from_name, MAXPATHLEN, &from_truncated);
 
 		if (to_name == NULL) {
 			GET_PATH(to_name);
@@ -6197,11 +6265,11 @@ skipped_lookup:
 			}
 		}
 
-		to_len = safe_getpath(tdvp, tond.ni_cnd.cn_nameptr, to_name, MAXPATHLEN, &to_truncated);
+		to_len = safe_getpath(tdvp, tond->ni_cnd.cn_nameptr, to_name, MAXPATHLEN, &to_truncated);
 	} 
 	
-	error = vn_rename(fdvp, &fvp, &fromnd.ni_cnd, fvap,
-			    tdvp, &tvp, &tond.ni_cnd, tvap,
+	error = vn_rename(fdvp, &fvp, &fromnd->ni_cnd, fvap,
+			    tdvp, &tvp, &tond->ni_cnd, tvap,
 			    0, ctx);
 
 	if (holding_mntlock) {
@@ -6215,14 +6283,14 @@ skipped_lookup:
 	}
 	if (error) {
 		if (error == EKEEPLOOKING) {
-			if ((fromnd.ni_flag & NAMEI_CONTLOOKUP) == 0) {
-				if ((tond.ni_flag & NAMEI_CONTLOOKUP) == 0) {
+			if ((fromnd->ni_flag & NAMEI_CONTLOOKUP) == 0) {
+				if ((tond->ni_flag & NAMEI_CONTLOOKUP) == 0) {
 					panic("EKEEPLOOKING without NAMEI_CONTLOOKUP on either ndp?");
 				}
 			}
 
-			fromnd.ni_vp = fvp;
-			tond.ni_vp = tvp;
+			fromnd->ni_vp = fvp;
+			tond->ni_vp = tvp;
 	
 			goto continue_lookup;
 		}
@@ -6335,7 +6403,7 @@ skipped_lookup:
 		if (fdvp != tdvp)
 		        update_flags |= VNODE_UPDATE_PARENT;
 
-	        vnode_update_identity(fvp, tdvp, tond.ni_cnd.cn_nameptr, tond.ni_cnd.cn_namelen, tond.ni_cnd.cn_hash, update_flags);
+	        vnode_update_identity(fvp, tdvp, tond->ni_cnd.cn_nameptr, tond->ni_cnd.cn_namelen, tond->ni_cnd.cn_hash, update_flags);
 	}
 out1:
 	if (to_name != NULL) {
@@ -6356,7 +6424,7 @@ out1:
 		 * nameidone has to happen before we vnode_put(tdvp)
 		 * since it may need to release the fs_nodelock on the tdvp
 		 */
-		nameidone(&tond);
+		nameidone(tond);
 
 		if (tvp)
 		        vnode_put(tvp);
@@ -6367,22 +6435,24 @@ out1:
 		 * nameidone has to happen before we vnode_put(fdvp)
 		 * since it may need to release the fs_nodelock on the fdvp
 		 */
-		nameidone(&fromnd);
+		nameidone(fromnd);
 
 		if (fvp)
 		        vnode_put(fvp);
 	        vnode_put(fdvp);
 	}
 	
+	
 	/*
 	 * If things changed after we did the namei, then we will re-drive
 	 * this rename call from the top.
 	 */
-	if(do_retry) {
+	if (do_retry) {
 		do_retry = 0;
 		goto retry;
 	}
-	
+
+	FREE(__rename_data, M_TEMP);
 	return (error);
 }
 
@@ -6790,7 +6860,7 @@ vnode_readdir64(struct vnode *vp, struct uio *uio, int flags, int *eofflag,
 		 * use 32K in the MIN(), but we use magic number 87371 to
 		 * prevent uio_resid() * 3 / 8 from overflowing. 
 		 */
-		bufsize = 3 * MIN(uio_resid(uio), 87371) / 8;
+		bufsize = 3 * MIN((user_size_t)uio_resid(uio), 87371u) / 8;
 		MALLOC(bufptr, void *, bufsize, M_TEMP, M_WAITOK);
 		if (bufptr == NULL) {
 			return ENOMEM;
@@ -7096,65 +7166,6 @@ out:
  *  which are specific to the HFS & HFS Plus volume formats
  */
 
-#ifdef __APPLE_API_OBSOLETE
-
-/************************************************/
-/* *** Following calls will be deleted soon *** */
-/************************************************/
-
-/*
- * Make a complex file.  A complex file is one with multiple forks (data streams)
- */
-/* ARGSUSED */
-int
-mkcomplex(__unused proc_t p, __unused struct mkcomplex_args *uap, __unused int32_t *retval)
-{
-	return (ENOTSUP);
-}
-
-/*
- * Extended stat call which returns volumeid and vnodeid as well as other info
- */
-/* ARGSUSED */
-int
-statv(__unused proc_t p,
-	  __unused struct statv_args *uap,
-	  __unused int32_t *retval)
-{
-	return (ENOTSUP);	/*  We'll just return an error for now */
-
-} /* end of statv system call */
-
-/*
-* Extended lstat call which returns volumeid and vnodeid as well as other info
-*/
-/* ARGSUSED */
-int
-lstatv(__unused proc_t p,
-	   __unused struct lstatv_args *uap,
-	   __unused int32_t *retval)
-{
-       return (ENOTSUP);	/*  We'll just return an error for now */
-} /* end of lstatv system call */
-
-/*
-* Extended fstat call which returns volumeid and vnodeid as well as other info
-*/
-/* ARGSUSED */
-int
-fstatv(__unused proc_t p, 
-	   __unused struct fstatv_args *uap, 
-	   __unused int32_t *retval)
-{
-       return (ENOTSUP);	/*  We'll just return an error for now */
-} /* end of fstatv system call */
-
-
-/************************************************/
-/* *** Preceding calls will be deleted soon *** */
-/************************************************/
-
-#endif /* __APPLE_API_OBSOLETE */
 
 /*
 * Obtain attribute information on objects in a directory while enumerating
@@ -7421,6 +7432,7 @@ out2:
         return (error);
 }
 
+#if CONFIG_SEARCHFS
 
 /* ARGSUSED */
 
@@ -7638,6 +7650,15 @@ freeandexit:
 
 } /* end of searchfs system call */
 
+#else /* CONFIG_SEARCHFS */
+
+int
+searchfs(__unused proc_t p, __unused struct searchfs_args *uap, __unused int32_t *retval)
+{
+	return (ENOTSUP);
+}
+
+#endif /* CONFIG_SEARCHFS */
 
 
 lck_grp_attr_t *  nspace_group_attr;
@@ -9221,6 +9242,7 @@ fsgetpath(__unused proc_t p, struct fsgetpath_args *uap, user_ssize_t *retval)
 #endif
 	/* Obtain the absolute path to this vnode. */
 	bpflags = vfs_context_suser(ctx) ? BUILDPATH_CHECKACCESS : 0;
+	bpflags |= BUILDPATH_CHECK_MOVED;
 	error = build_path(vp, realpath, uap->bufsize, &length, bpflags, ctx);
 	vnode_put(vp);
 	if (error) {

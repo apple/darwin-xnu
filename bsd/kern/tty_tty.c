@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1997-2006 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 1997-2012 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -76,6 +76,7 @@
 /* Forward declarations for cdevsw[] entry */
 /* XXX we should consider making these static */
 int cttyopen(dev_t dev, int flag, int mode, proc_t p);
+int cttyclose(dev_t dev, int flag, int mode, proc_t p);
 int cttyread(dev_t dev, struct uio *uio, int flag);
 int cttywrite(dev_t dev, struct uio *uio, int flag);
 int cttyioctl(dev_t dev, u_long cmd, caddr_t addr, int flag, proc_t p);
@@ -85,31 +86,65 @@ static vnode_t cttyvp(proc_t p);
 int
 cttyopen(dev_t dev, int flag, __unused int mode, proc_t p)
 {
-	vnode_t ttyvp = cttyvp(p);
-	struct vfs_context context;
+	vnode_t ttyvp;
 	int error;
-
-	if (ttyvp == NULL)
-		return (ENXIO);
-
-	context.vc_thread = current_thread();
-	context.vc_ucred = kauth_cred_proc_ref(p);
 
 	/*
 	 * A little hack--this device, used by many processes,
-	 * happens to do an open on another device, which can 
-	 * cause unhappiness if the second-level open blocks indefinitely 
-	 * (as could be the case if the master side has hung up).  Since
-	 * we know that this driver doesn't care about the serializing
-	 * opens and closes, we can drop the lock.
+	 * does an open on another device, which can cause unhappiness
+	 * if the second-level open blocks indefinitely (e.g. if the
+	 * master side has hung up).  This driver doesn't care
+	 * about serializing opens and closes, so drop the lock.
 	 */
 	devsw_unlock(dev, S_IFCHR);
-	error = VNOP_OPEN(ttyvp, flag, &context);
+
+	if ((ttyvp = cttyvp(p)) == NULL) {
+		error = ENXIO;
+	} else {
+		struct vfs_context context;
+
+		context.vc_thread = current_thread();
+		context.vc_ucred = kauth_cred_proc_ref(p);
+
+		error = VNOP_OPEN(ttyvp, flag, &context);
+
+		kauth_cred_unref(&context.vc_ucred);
+		vnode_put(ttyvp);
+	}
+
 	devsw_lock(dev, S_IFCHR);
+	return (error);
+}
 
-	vnode_put(ttyvp);
-	kauth_cred_unref(&context.vc_ucred);
+/*
+ * This driver is marked D_TRACKCLOSE and so gets a close
+ * for every open so that ttyvp->v_specinfo->si_count can be kept sane.
+ */
+int
+cttyclose(dev_t dev, int flag, __unused int mode, proc_t p)
+{
+	vnode_t ttyvp;
+	int error;
 
+	/* See locking commentary above. */
+
+	devsw_unlock(dev, S_IFCHR);
+
+	if ((ttyvp = cttyvp(p)) == NULL) {
+		error = ENXIO;
+	} else {
+		struct vfs_context context;
+
+		context.vc_thread = current_thread();
+		context.vc_ucred = kauth_cred_proc_ref(p);
+
+		error = VNOP_CLOSE(ttyvp, flag, &context);
+
+		kauth_cred_unref(&context.vc_ucred);
+		vnode_put(ttyvp);
+	}
+
+	devsw_lock(dev, S_IFCHR);
 	return (error);
 }
 

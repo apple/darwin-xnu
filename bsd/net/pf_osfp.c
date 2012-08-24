@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2007-2010 Apple Inc. All rights reserved.
+ * Copyright (c) 2007-2011 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -109,7 +109,7 @@ pf_osfp_fingerprint(struct pf_pdesc *pd, struct mbuf *m, int off,
 	    pd->af))
 		return (NULL);
 
-	return (pf_osfp_fingerprint_hdr(ip, ip6, (struct tcphdr *)hdr));
+	return (pf_osfp_fingerprint_hdr(ip, ip6, (struct tcphdr *)(void *)hdr));
 }
 
 struct pf_osfp_enlist *

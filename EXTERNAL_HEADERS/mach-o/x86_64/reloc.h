@@ -114,9 +114,19 @@
  * 	lea L0(%rip), %rax
  * 		r_type=X86_64_RELOC_SIGNED, r_length=2, r_extern=0, r_pcrel=1, r_symbolnum=3
  * 		48 8d 05 56 00 00 00
- * 		// assumes L0 is in third section, has an address of 0x00000056 in .o
- * 		// file, and there is no previous non-local label
- * 
+ *		// assumes L0 is in third section and there is no previous non-local label.
+ *		// The rip-relative-offset of 0x00000056 is L0-address_of_next_instruction.
+ *		// address_of_next_instruction is the address of the relocation + 4.
+ *
+ *     add     $6,L0(%rip)
+ *             r_type=X86_64_RELOC_SIGNED_1, r_length=2, r_extern=0, r_pcrel=1, r_symbolnum=3
+ *		83 05 18 00 00 00 06
+ *		// assumes L0 is in third section and there is no previous non-local label.
+ *		// The rip-relative-offset of 0x00000018 is L0-address_of_next_instruction.
+ *		// address_of_next_instruction is the address of the relocation + 4 + 1.
+ *		// The +1 comes from SIGNED_1.  This is used because the relocation is not
+ *		// at the end of the instruction.
+ *
  * 	.quad L1
  * 		r_type=X86_64_RELOC_UNSIGNED, r_length=3, r_extern=1, r_pcrel=0, r_symbolnum=_prev
  * 		12 00 00 00 00 00 00 00
@@ -171,4 +181,5 @@ enum reloc_type_x86_64
 	X86_64_RELOC_SIGNED_1,		// for signed 32-bit displacement with a -1 addend
 	X86_64_RELOC_SIGNED_2,		// for signed 32-bit displacement with a -2 addend
 	X86_64_RELOC_SIGNED_4,		// for signed 32-bit displacement with a -4 addend
+	X86_64_RELOC_TLV,		// for thread local variables
 };

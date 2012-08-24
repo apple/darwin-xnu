@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2006 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2011 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -73,6 +73,7 @@
 #include <kern/zalloc.h>
 #include <kern/kalloc.h>
 #include <kern/lock.h>
+#include <kern/ledger.h>
 #include <vm/vm_kern.h>
 #include <vm/vm_object.h>
 #include <vm/vm_map.h>
@@ -114,7 +115,8 @@ KALLOC_ZINFO_SALLOC(vm_size_t bytes)
 	task_t task;
 	zinfo_usage_t zinfo;
 
-	thr->tkm_shared.alloc += bytes;
+	ledger_debit(thr->t_ledger, task_ledgers.tkm_shared, bytes);
+
 	if (kalloc_fake_zone_index != -1 && 
 	    (task = thr->task) != NULL && (zinfo = task->tkm_zinfo) != NULL)
 		zinfo[kalloc_fake_zone_index].alloc += bytes;
@@ -127,7 +129,8 @@ KALLOC_ZINFO_SFREE(vm_size_t bytes)
 	task_t task;
 	zinfo_usage_t zinfo;
 
-	thr->tkm_shared.free += bytes;
+	ledger_credit(thr->t_ledger, task_ledgers.tkm_shared, bytes);
+
 	if (kalloc_fake_zone_index != -1 && 
 	    (task = thr->task) != NULL && (zinfo = task->tkm_zinfo) != NULL)
 		zinfo[kalloc_fake_zone_index].free += bytes;
@@ -135,32 +138,147 @@ KALLOC_ZINFO_SFREE(vm_size_t bytes)
 
 /*
  *	All allocations of size less than kalloc_max are rounded to the
- *	next highest power of 2.  This allocator is built on top of
+ *	next nearest sized zone.  This allocator is built on top of
  *	the zone allocator.  A zone is created for each potential size
  *	that we are willing to get in small blocks.
  *
  *	We assume that kalloc_max is not greater than 64K;
- *	thus 16 is a safe array size for k_zone and k_zone_name.
  *
  *	Note that kalloc_max is somewhat confusingly named.
  *	It represents the first power of two for which no zone exists.
  *	kalloc_max_prerounded is the smallest allocation size, before
  *	rounding, for which no zone exists.
- *  Also if the allocation size is more than kalloc_kernmap_size 
- *  then allocate from kernel map rather than kalloc_map.
+ *
+ *	Also if the allocation size is more than kalloc_kernmap_size 
+ *	then allocate from kernel map rather than kalloc_map.
  */
 
-int first_k_zone = -1;
-struct zone *k_zone[16];
-static const char *k_zone_name[16] = {
-	"kalloc.1",		"kalloc.2",
-	"kalloc.4",		"kalloc.8",
-	"kalloc.16",		"kalloc.32",
-	"kalloc.64",		"kalloc.128",
-	"kalloc.256",		"kalloc.512",
-	"kalloc.1024",		"kalloc.2048",
-	"kalloc.4096",		"kalloc.8192",
-	"kalloc.16384",		"kalloc.32768"
+#if KALLOC_MINSIZE == 16 && KALLOC_LOG2_MINALIGN == 4
+
+/*
+ * "Legacy" aka "power-of-2" backing zones with 16-byte minimum
+ * size and alignment.  Users of this profile would probably
+ * benefit from some tuning.
+ */
+
+#define K_ZONE_SIZES			\
+	16,				\
+	32,				\
+/* 6 */	64,				\
+	128,				\
+	256,				\
+/* 9 */	512,				\
+	1024,				\
+	2048,				\
+/* C */	4096
+
+
+#define K_ZONE_NAMES			\
+	"kalloc.16",			\
+	"kalloc.32",			\
+/* 6 */	"kalloc.64",			\
+	"kalloc.128",			\
+	"kalloc.256",			\
+/* 9 */	"kalloc.512",			\
+	"kalloc.1024",			\
+	"kalloc.2048",			\
+/* C */	"kalloc.4096"
+
+#define K_ZONE_MAXIMA			\
+	1024,				\
+	4096,				\
+/* 6 */	4096,				\
+	4096,				\
+	4096,				\
+/* 9 */	1024,				\
+	1024,				\
+	1024,				\
+/* C */	1024
+
+#elif KALLOC_MINSIZE == 8 && KALLOC_LOG2_MINALIGN == 3
+
+/*
+ * Tweaked for ARM (and x64) in 04/2011
+ */
+
+#define K_ZONE_SIZES			\
+/* 3 */	8,				\
+	16,	24,			\
+	32,	40,	48,		\
+/* 6 */	64,	88,	112, 		\
+	128, 	192,			\
+	256, 	384,			\
+/* 9 */	512,	768, 			\
+	1024,	1536,			\
+	2048,	3072,			\
+	4096,	6144
+
+#define K_ZONE_NAMES			\
+/* 3 */	"kalloc.8",			\
+	"kalloc.16",	"kalloc.24",	\
+	"kalloc.32",	"kalloc.40",	"kalloc.48",	\
+/* 6 */	"kalloc.64",	"kalloc.88",	"kalloc.112",	\
+	"kalloc.128",	"kalloc.192",	\
+	"kalloc.256",	"kalloc.384",	\
+/* 9 */	"kalloc.512",	"kalloc.768",	\
+	"kalloc.1024",	"kalloc.1536",	\
+	"kalloc.2048",	"kalloc.3072",	\
+	"kalloc.4096",	"kalloc.6144"
+
+#define	K_ZONE_MAXIMA			\
+/* 3 */	1024,				\
+	1024,	1024,			\
+	4096,	4096,	4096,		\
+/* 6 */	4096,	4096,	4096,		\
+	4096,	4096,			\
+	4096,	4096,			\
+/* 9 */	1024,	1024,			\
+	1024,	1024,			\
+	1024,	1024,			\
+/* C */	1024,	64
+
+#else
+#error	missing zone size parameters for kalloc
+#endif
+
+#define KALLOC_MINALIGN (1 << KALLOC_LOG2_MINALIGN)
+
+static const int k_zone_size[] = {
+	K_ZONE_SIZES,
+	8192,
+	16384,
+/* F */	32768
+};
+
+#define N_K_ZONE	(sizeof (k_zone_size) / sizeof (k_zone_size[0]))
+
+/*
+ * Many kalloc() allocations are for small structures containing a few
+ * pointers and longs - the k_zone_dlut[] direct lookup table, indexed by
+ * size normalized to the minimum alignment, finds the right zone index
+ * for them in one dereference.
+ */
+
+#define INDEX_ZDLUT(size)	\
+			(((size) + KALLOC_MINALIGN - 1) / KALLOC_MINALIGN)
+#define N_K_ZDLUT	(2048 / KALLOC_MINALIGN)
+				/* covers sizes [0 .. 2048 - KALLOC_MINALIGN] */
+#define MAX_SIZE_ZDLUT	((N_K_ZDLUT - 1) * KALLOC_MINALIGN)
+
+static int8_t k_zone_dlut[N_K_ZDLUT];	/* table of indices into k_zone[] */
+
+/*
+ * If there's no hit in the DLUT, then start searching from k_zindex_start.
+ */
+static int k_zindex_start;
+
+static zone_t k_zone[N_K_ZONE];
+
+static const char *k_zone_name[N_K_ZONE] = {
+	K_ZONE_NAMES,
+	"kalloc.8192",
+	"kalloc.16384",
+/* F */	"kalloc.32768"
 };
 
 /*
@@ -169,24 +287,14 @@ static const char *k_zone_name[16] = {
  *  based on need, rather than just guessing; it also
  *  means its patchable in case you're wrong!
  */
-unsigned long k_zone_max[16] = {
-      1024,		/*      1 Byte  */
-      1024,		/*      2 Byte  */
-      1024,		/*      4 Byte  */
-      1024,		/*      8 Byte  */
-      1024,		/*     16 Byte  */
-      4096,		/*     32 Byte  */
-      4096,		/*     64 Byte  */
-      4096,		/*    128 Byte  */
-      4096,		/*    256 Byte  */
-      1024,		/*    512 Byte  */
-      1024,		/*   1024 Byte  */
-      1024,		/*   2048 Byte  */
-      1024,		/*   4096 Byte  */
-      4096,		/*   8192 Byte  */
-      64,		/*  16384 Byte  */
-      64,		/*  32768 Byte  */
+unsigned int k_zone_max[N_K_ZONE] = {
+	K_ZONE_MAXIMA,
+	4096,
+	64,
+/* F */	64
 };
+
+/* #define KALLOC_DEBUG		1 */
 
 /* forward declarations */
 void * kalloc_canblock(
@@ -277,25 +385,101 @@ kalloc_init(
 	 *	for the allocation, as we aren't sure how the memory
 	 *	will be handled.
 	 */
-	for (i = 0, size = 1; size < kalloc_max; i++, size <<= 1) {
-		if (size < KALLOC_MINSIZE) {
-			k_zone[i] = NULL;
-			continue;
-		}
-		if (size == KALLOC_MINSIZE) {
-			first_k_zone = i;
-		}
+	for (i = 0; (size = k_zone_size[i]) < kalloc_max; i++) {
 		k_zone[i] = zinit(size, k_zone_max[i] * size, size,
 				  k_zone_name[i]);
 		zone_change(k_zone[i], Z_CALLERACCT, FALSE);
 	}
+
+	/*
+	 * Build the Direct LookUp Table for small allocations
+	 */
+	for (i = 0, size = 0; i <= N_K_ZDLUT; i++, size += KALLOC_MINALIGN) {
+		int zindex = 0;
+
+		while ((vm_size_t)k_zone_size[zindex] < size)
+			zindex++;
+
+		if (i == N_K_ZDLUT) {
+			k_zindex_start = zindex;
+			break;
+		}
+		k_zone_dlut[i] = (int8_t)zindex;
+	}
+
+#ifdef KALLOC_DEBUG
+	printf("kalloc_init: k_zindex_start %d\n", k_zindex_start);
+
+	/*
+	 * Do a quick synthesis to see how well/badly we can
+	 * find-a-zone for a given size.
+	 * Useful when debugging/tweaking the array of zone sizes.
+	 * Cache misses probably more critical than compare-branches!
+	 */
+	for (i = 0; i < (int)N_K_ZONE; i++) {
+		vm_size_t testsize = (vm_size_t)k_zone_size[i] - 1;
+		int compare = 0;
+		int zindex;
+
+		if (testsize < MAX_SIZE_ZDLUT) {
+			compare += 1;	/* 'if' (T) */
+
+			long dindex = INDEX_ZDLUT(testsize);
+			zindex = (int)k_zone_dlut[dindex];
+
+		} else if (testsize < kalloc_max_prerounded) {
+
+			compare += 2;	/* 'if' (F), 'if' (T) */
+
+			zindex = k_zindex_start;
+			while ((vm_size_t)k_zone_size[zindex] < testsize) {
+				zindex++;
+				compare++;	/* 'while' (T) */
+			}
+			compare++;	/* 'while' (F) */
+		} else
+			break;	/* not zone-backed */
+
+		zone_t z = k_zone[zindex];
+		printf("kalloc_init: req size %4lu: %11s took %d compare%s\n",
+		    (unsigned long)testsize, z->zone_name, compare,
+		    compare == 1 ? "" : "s");
+	}
+#endif
 	kalloc_lck_grp = lck_grp_alloc_init("kalloc.large", LCK_GRP_ATTR_NULL);
 	lck_mtx_init(&kalloc_lock, kalloc_lck_grp, LCK_ATTR_NULL);
 	OSMalloc_init();
 #ifdef	MUTEX_ZONE	
 	lck_mtx_zone = zinit(sizeof(struct _lck_mtx_), 1024*256, 4096, "lck_mtx");
 #endif	
+}
 
+/*
+ * Given an allocation size, return the kalloc zone it belongs to.
+ * Direct LookUp Table variant.
+ */
+static __inline zone_t
+get_zone_dlut(vm_size_t size)
+{
+	long dindex = INDEX_ZDLUT(size);
+	int zindex = (int)k_zone_dlut[dindex];
+	return (k_zone[zindex]);
+}
+
+/* As above, but linear search k_zone_size[] for the next zone that fits. */
+
+static __inline zone_t
+get_zone_search(vm_size_t size, int zindex)
+{
+	assert(size < kalloc_max_prerounded);
+
+	while ((vm_size_t)k_zone_size[zindex] < size)
+		zindex++;
+
+	assert((unsigned)zindex < N_K_ZONE &&
+	    (vm_size_t)k_zone_size[zindex] < kalloc_max);
+
+	return (k_zone[zindex]);
 }
 
 void *
@@ -303,17 +487,19 @@ kalloc_canblock(
 		vm_size_t	size,
 		boolean_t       canblock)
 {
-	register int zindex;
-	register vm_size_t allocsize;
-	vm_map_t alloc_map = VM_MAP_NULL;
+	zone_t z;
 
-	/*
-	 * If size is too large for a zone, then use kmem_alloc.
-	 * (We use kmem_alloc instead of kmem_alloc_kobject so that
-	 * krealloc can use kmem_realloc.)
-	 */
-
-	if (size >= kalloc_max_prerounded) {
+	if (size < MAX_SIZE_ZDLUT)
+		z = get_zone_dlut(size);
+	else if (size < kalloc_max_prerounded)
+		z = get_zone_search(size, k_zindex_start);
+	else {
+		/*
+		 * If size is too large for a zone, then use kmem_alloc.
+		 * (We use kmem_alloc instead of kmem_alloc_kobject so that
+		 * krealloc can use kmem_realloc.)
+		 */
+		vm_map_t alloc_map;
 		void *addr;
 
 		/* kmem_alloc could block so we return if noblock */
@@ -357,19 +543,13 @@ kalloc_canblock(
 		}
 		return(addr);
 	}
-
-	/* compute the size of the block that we will actually allocate */
-
-	allocsize = KALLOC_MINSIZE;
-	zindex = first_k_zone;
-	while (allocsize < size) {
-		allocsize <<= 1;
-		zindex++;
-	}
-
-	/* allocate from the appropriate zone */
-	assert(allocsize < kalloc_max);
-	return(zalloc_canblock(k_zone[zindex], canblock));
+#ifdef KALLOC_DEBUG
+	if (size > z->elem_size)
+		panic("%s: z %p (%s) but requested size %lu", __func__,
+		    z, z->zone_name, (unsigned long)size);
+#endif
+	assert(size <= z->elem_size);
+	return (zalloc_canblock(z, canblock));
 }
 
 void *
@@ -386,164 +566,6 @@ kalloc_noblock(
 	return( kalloc_canblock(size, FALSE) );
 }
 
-
-void
-krealloc(
-	void		**addrp,
-	vm_size_t	old_size,
-	vm_size_t	new_size,
-	simple_lock_t	lock)
-{
-	register int zindex;
-	register vm_size_t allocsize;
-	void *naddr;
-	vm_map_t alloc_map = VM_MAP_NULL;
-
-	/* can only be used for increasing allocation size */
-
-	assert(new_size > old_size);
-
-	/* if old_size is zero, then we are simply allocating */
-
-	if (old_size == 0) {
-		simple_unlock(lock);
-		naddr = kalloc(new_size);
-		simple_lock(lock);
-		*addrp = naddr;
-		return;
-	}
-
-	/* if old block was kmem_alloc'd, then use kmem_realloc if necessary */
-
-	if (old_size >= kalloc_max_prerounded) {
-		if (old_size >=  kalloc_kernmap_size) 
-			alloc_map = kernel_map;
-		else
-			alloc_map = kalloc_map;
-
-		old_size = round_page(old_size);
-		new_size = round_page(new_size);
-		if (new_size > old_size) {
-
-			if (KERN_SUCCESS != kmem_realloc(alloc_map, 
-			    (vm_offset_t)*addrp, old_size,
-			    (vm_offset_t *)&naddr, new_size))
-				panic("krealloc: kmem_realloc");
-
-			simple_lock(lock);
-			*addrp = (void *) naddr;
-
-			/* kmem_realloc() doesn't free old page range. */
-			kmem_free(alloc_map, (vm_offset_t)*addrp, old_size);
-
-			kalloc_large_total += (new_size - old_size);
-			kalloc_large_sum += (new_size - old_size);
-
-			if (kalloc_large_total > kalloc_large_max)
-				kalloc_large_max = kalloc_large_total;
-
-		}
-		return;
-	}
-
-	/* compute the size of the block that we actually allocated */
-
-	allocsize = KALLOC_MINSIZE;
-	zindex = first_k_zone;
-	while (allocsize < old_size) {
-		allocsize <<= 1;
-		zindex++;
-	}
-
-	/* if new size fits in old block, then return */
-
-	if (new_size <= allocsize) {
-		return;
-	}
-
-	/* if new size does not fit in zone, kmem_alloc it, else zalloc it */
-
-	simple_unlock(lock);
-	if (new_size >= kalloc_max_prerounded) {
-		if (new_size >=  kalloc_kernmap_size) 
-			alloc_map = kernel_map;
-		else
-			alloc_map = kalloc_map;
-		if (KERN_SUCCESS != kmem_alloc(alloc_map, 
-		    (vm_offset_t *)&naddr, new_size)) {
-			panic("krealloc: kmem_alloc");
-			simple_lock(lock);
-			*addrp = NULL;
-			return;
-		}
-		kalloc_spin_lock();
-
-		kalloc_large_inuse++;
-		kalloc_large_sum += new_size;
-		kalloc_large_total += new_size;
-
-		if (kalloc_large_total > kalloc_large_max)
-		        kalloc_large_max = kalloc_large_total;
-
-		kalloc_unlock();
-
-		KALLOC_ZINFO_SALLOC(new_size);
-	} else {
-		register int new_zindex;
-
-		allocsize <<= 1;
-		new_zindex = zindex + 1;
-		while (allocsize < new_size) {
-			allocsize <<= 1;
-			new_zindex++;
-		}
-		naddr = zalloc(k_zone[new_zindex]);
-	}
-	simple_lock(lock);
-
-	/* copy existing data */
-
-	bcopy((const char *)*addrp, (char *)naddr, old_size);
-
-	/* free old block, and return */
-
-	zfree(k_zone[zindex], *addrp);
-
-	/* set up new address */
-
-	*addrp = (void *) naddr;
-}
-
-
-void *
-kget(
-	vm_size_t	size)
-{
-	register int zindex;
-	register vm_size_t allocsize;
-
-	/* size must not be too large for a zone */
-
-	if (size >= kalloc_max_prerounded) {
-		/* This will never work, so we might as well panic */
-		panic("kget");
-	}
-
-	/* compute the size of the block that we will actually allocate */
-
-	allocsize = KALLOC_MINSIZE;
-	zindex = first_k_zone;
-	while (allocsize < size) {
-		allocsize <<= 1;
-		zindex++;
-	}
-
-	/* allocate from the appropriate zone */
-
-	assert(allocsize < kalloc_max);
-	return(zget(k_zone[zindex]));
-}
-
 volatile SInt32 kfree_nop_count = 0;
 
 void
@@ -551,19 +573,23 @@ kfree(
 	void 		*data,
 	vm_size_t	size)
 {
-	register int zindex;
-	register vm_size_t freesize;
-	vm_map_t alloc_map = kernel_map;
+	zone_t z;
 
-	/* if size was too large for a zone, then use kmem_free */
+	if (size < MAX_SIZE_ZDLUT)
+		z = get_zone_dlut(size);
+	else if (size < kalloc_max_prerounded)
+		z = get_zone_search(size, k_zindex_start);
+	else {
+		/* if size was too large for a zone, then use kmem_free */
 
-	if (size >= kalloc_max_prerounded) {
+		vm_map_t alloc_map = kernel_map;
+
 		if ((((vm_offset_t) data) >= kalloc_map_min) && (((vm_offset_t) data) <= kalloc_map_max))
 			alloc_map = kalloc_map;
 		if (size > kalloc_largest_allocated) {
 			        /*
 				 * work around double FREEs of small MALLOCs
-				 * this use to end up being a nop
+				 * this used to end up being a nop
 				 * since the pointer being freed from an
 				 * alloc backed by the zalloc world could
 				 * never show up in the kalloc_map... however,
@@ -574,7 +600,7 @@ kfree(
 				 * the underlying allocation... that pointer ends up 
 				 * looking like a really big size on the 2nd FREE and
 				 * pushes the kfree into the kernel_map...  we
-				 * end up removing a ton of virutal space before we panic
+				 * end up removing a ton of virtual space before we panic
 				 * this check causes us to ignore the kfree for a size
 				 * that must be 'bogus'... note that it might not be due
 				 * to the above scenario, but it would still be wrong and
@@ -597,19 +623,14 @@ kfree(
 		return;
 	}
 
-	/* compute the size of the block that we actually allocated from */
-
-	freesize = KALLOC_MINSIZE;
-	zindex = first_k_zone;
-	while (freesize < size) {
-		freesize <<= 1;
-		zindex++;
-	}
-
 	/* free to the appropriate zone */
-
-	assert(freesize < kalloc_max);
-	zfree(k_zone[zindex], data);
+#ifdef KALLOC_DEBUG
+	if (size > z->elem_size)
+		panic("%s: z %p (%s) but requested size %lu", __func__,
+		    z, z->zone_name, (unsigned long)size);
+#endif
+	assert(size <= z->elem_size);
+	zfree(z, data);
 }
 
 #ifdef MACH_BSD
@@ -617,21 +638,10 @@ zone_t
 kalloc_zone(
 	vm_size_t       size)
 {
-	register int zindex = 0;
-	register vm_size_t allocsize;
-
-	/* compute the size of the block that we will actually allocate */
-
-	allocsize = size;
-	if (size <= kalloc_max) {
-		allocsize = KALLOC_MINSIZE;
-		zindex = first_k_zone;
-		while (allocsize < size) {
-			allocsize <<= 1;
-			zindex++;
-		}
-		return (k_zone[zindex]);
-	}
+	if (size < MAX_SIZE_ZDLUT)
+		return (get_zone_dlut(size));
+	if (size <= kalloc_max)
+		return (get_zone_search(size, k_zindex_start));
 	return (ZONE_NULL);
 }
 #endif
@@ -705,7 +715,7 @@ OSMalloc_Tagref(
 	 OSMallocTag		tag)
 {
 	if (!((tag->OSMT_state & OSMT_VALID_MASK) == OSMT_VALID)) 
-		panic("OSMalloc_Tagref(): bad state 0x%08X\n",tag->OSMT_state);
+		panic("OSMalloc_Tagref():'%s' has bad state 0x%08X\n", tag->OSMT_name, tag->OSMT_state);
 
 	(void)hw_atomic_add(&tag->OSMT_refcnt, 1);
 }
@@ -715,7 +725,7 @@ OSMalloc_Tagrele(
 	 OSMallocTag		tag)
 {
 	if (!((tag->OSMT_state & OSMT_VALID_MASK) == OSMT_VALID))
-		panic("OSMalloc_Tagref(): bad state 0x%08X\n",tag->OSMT_state);
+		panic("OSMalloc_Tagref():'%s' has bad state 0x%08X\n", tag->OSMT_name, tag->OSMT_state);
 
 	if (hw_atomic_sub(&tag->OSMT_refcnt, 1) == 0) {
 		if (hw_compare_and_store(OSMT_VALID|OSMT_RELEASED, OSMT_VALID|OSMT_RELEASED, &tag->OSMT_state)) {
@@ -724,7 +734,7 @@ OSMalloc_Tagrele(
 			OSMalloc_tag_unlock();
 			kfree((void*)tag, sizeof(*tag));
 		} else
-			panic("OSMalloc_Tagrele(): refcnt 0\n");
+			panic("OSMalloc_Tagrele():'%s' has refcnt 0\n", tag->OSMT_name);
 	}
 }
 
@@ -733,7 +743,7 @@ OSMalloc_Tagfree(
 	 OSMallocTag		tag)
 {
 	if (!hw_compare_and_store(OSMT_VALID, OSMT_VALID|OSMT_RELEASED, &tag->OSMT_state))
-		panic("OSMalloc_Tagfree(): bad state 0x%08X\n", tag->OSMT_state);
+		panic("OSMalloc_Tagfree():'%s' has bad state 0x%08X \n", tag->OSMT_name, tag->OSMT_state);
 
 	if (hw_atomic_sub(&tag->OSMT_refcnt, 1) == 0) {
 		OSMalloc_tag_spin_lock();
@@ -813,7 +823,7 @@ OSFree(
 	    && (size & ~PAGE_MASK)) {
 		kmem_free(kernel_map, (vm_offset_t)addr, size);
 	} else
-		kfree((void*)addr, size);
+		kfree((void *)addr, size);
 
 	OSMalloc_Tagrele(tag);
 }

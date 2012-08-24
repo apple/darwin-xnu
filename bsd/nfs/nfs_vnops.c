@@ -855,9 +855,34 @@ out:
 		NP(np, "nfs_vnop_open: error %d, %d", error, kauth_cred_getuid(noop->noo_cred));
 	if (noop)
 		nfs_open_owner_rele(noop);
+	if (!error && vtype == VREG && (ap->a_mode & FWRITE)) {
+		lck_mtx_lock(&nmp->nm_lock);
+		nmp->nm_state &= ~NFSSTA_SQUISHY;
+		nmp->nm_curdeadtimeout = nmp->nm_deadtimeout;
+		if (nmp->nm_curdeadtimeout <= 0)
+			nmp->nm_deadto_start = 0;
+		nmp->nm_writers++;
+		lck_mtx_unlock(&nmp->nm_lock);
+	}
+		
 	return (error);
 }
 
+static uint32_t
+nfs_no_of_open_file_writers(nfsnode_t np)
+{
+	uint32_t writers = 0;
+	struct nfs_open_file *nofp;
+
+	TAILQ_FOREACH(nofp,  &np->n_opens, nof_link) {
+		writers += nofp->nof_w + nofp->nof_rw + nofp->nof_w_dw + nofp->nof_rw_dw +
+			nofp->nof_w_drw + nofp->nof_rw_drw + nofp->nof_d_w_dw +
+			nofp->nof_d_rw_dw + nofp->nof_d_w_drw + nofp->nof_d_rw_drw +
+			nofp->nof_d_w + nofp->nof_d_rw;
+	}
+	
+	return (writers);
+}
 
 /*
  * NFS close vnode op
@@ -990,11 +1015,36 @@ nfs_vnop_close(
 		 * Guess this is the final close.
 		 * We should unlock all locks and close all opens.
 		 */
+		uint32_t writers;
 		mount_t mp = vnode_mount(vp);
 		int force = (!mp || (mp->mnt_kern_flag & MNTK_FRCUNMOUNT));
+
+		writers = nfs_no_of_open_file_writers(np);
 		nfs_release_open_state_for_node(np, force);
+		if (writers) {
+			lck_mtx_lock(&nmp->nm_lock);
+			if (writers > nmp->nm_writers) {
+				NP(np, "nfs_vnop_close: number of write opens for mount underrun. Node has %d"
+				   " opens for write. Mount has total of %d opens for write\n", 
+				   writers, nmp->nm_writers);
+				nmp->nm_writers = 0;
+			} else {
+				nmp->nm_writers -= writers;
+			}
+			lck_mtx_unlock(&nmp->nm_lock);
+		}
+		
 		return (error);
+	} else if (fflag & FWRITE) {
+		lck_mtx_lock(&nmp->nm_lock);
+		if (nmp->nm_writers == 0) {
+			NP(np, "nfs_vnop_close: removing open writer from mount, but mount has no files open for writing");
+		} else {
+			nmp->nm_writers--;
+		}
+		lck_mtx_unlock(&nmp->nm_lock);
 	}
+	
 
 	noop = nfs_open_owner_find(nmp, vfs_context_ucred(ctx), 0);
 	if (!noop) {
@@ -1065,7 +1115,7 @@ nfs_close(
 	struct nfs_lock_owner *nlop;
 	int error = 0, changed = 0, delegated = 0, closed = 0, downgrade = 0;
 	uint32_t newAccessMode, newDenyMode;
-
+	
 	/* warn if modes don't match current state */
 	if (((accessMode & nofp->nof_access) != accessMode) || ((denyMode & nofp->nof_deny) != denyMode))
 		NP(np, "nfs_close: mode mismatch %d %d, current %d %d, %d",
@@ -1191,6 +1241,7 @@ v3close:
 		NP(np, "nfs_close: LOST%s, %d", !nofp->nof_opencnt ? " (last)" : "",
 			kauth_cred_getuid(nofp->nof_owner->noo_cred));
 	}
+		
 	return (error);
 }
 
@@ -2011,7 +2062,7 @@ nfs_vnop_lookup(
 		/* FALLTHROUGH */
 	case -1:
 		/* cache hit, not really an error */
-		OSAddAtomic(1, &nfsstats.lookupcache_hits);
+		OSAddAtomic64(1, &nfsstats.lookupcache_hits);
 
 		nfs_node_clear_busy(dnp);
 		busyerror = ENOENT;
@@ -2063,7 +2114,7 @@ nfs_vnop_lookup(
 	error = 0;
 	newvp = NULLVP;
 
-	OSAddAtomic(1, &nfsstats.lookupcache_misses);
+	OSAddAtomic64(1, &nfsstats.lookupcache_misses);
 
 	error = nmp->nm_funcs->nf_lookup_rpc_async(dnp, cnp->cn_nameptr, cnp->cn_namelen, ctx, &req);
 	nfsmout_if(error);
@@ -2182,14 +2233,14 @@ nfs_vnop_readlink(
 		return (error);
 	}
 
-	OSAddAtomic(1, &nfsstats.biocache_readlinks);
+	OSAddAtomic64(1, &nfsstats.biocache_readlinks);
 	error = nfs_buf_get(np, 0, NFS_MAXPATHLEN, vfs_context_thread(ctx), NBLK_READ, &bp);
 	if (error) {
 		FSDBG(531, np, 0xd1e0002, 0, error);
 		return (error);
 	}
 	if (!ISSET(bp->nb_flags, NB_CACHE)) {
-		OSAddAtomic(1, &nfsstats.readlink_bios);
+		OSAddAtomic64(1, &nfsstats.readlink_bios);
 		buflen = bp->nb_bufsize;
 		error = nmp->nm_funcs->nf_readlink_rpc(np, bp->nb_data, &buflen, ctx);
 		if (error) {
@@ -2542,7 +2593,7 @@ nfs_vnop_write(
 	}
 
 	do {
-		OSAddAtomic(1, &nfsstats.biocache_writes);
+		OSAddAtomic64(1, &nfsstats.biocache_writes);
 		lbn = uio_offset(uio) / biosize;
 		on = uio_offset(uio) % biosize;
 		n = biosize - on;
@@ -4705,7 +4756,7 @@ nfs_vnop_readdir(
 	}
 
 	while (!error && !done) {
-		OSAddAtomic(1, &nfsstats.biocache_readdirs);
+		OSAddAtomic64(1, &nfsstats.biocache_readdirs);
 		cookie = nextcookie;
 getbuffer:
 		error = nfs_buf_get(dnp, lbn, NFS_DIRBLKSIZ, thd, NBLK_READ, &bp);
@@ -4955,7 +5006,7 @@ nfs_dir_cookie_to_lbn(nfsnode_t dnp, uint64_t cookie, int *ptc, uint64_t *lbnp)
 
 	if (cookie == dnp->n_eofcookie) { /* EOF cookie */
 		nfs_node_unlock(dnp);
-		OSAddAtomic(1, &nfsstats.direofcache_hits);
+		OSAddAtomic64(1, &nfsstats.direofcache_hits);
 		*ptc = 0;
 		return (-1);
 	}
@@ -4969,7 +5020,7 @@ nfs_dir_cookie_to_lbn(nfsnode_t dnp, uint64_t cookie, int *ptc, uint64_t *lbnp)
 			/* found a match for this cookie */
 			*lbnp = ndcc->cookies[i].lbn;
 			nfs_node_unlock(dnp);
-			OSAddAtomic(1, &nfsstats.direofcache_hits);
+			OSAddAtomic64(1, &nfsstats.direofcache_hits);
 			*ptc = 0;
 			return (0);
 		}
@@ -4981,14 +5032,14 @@ nfs_dir_cookie_to_lbn(nfsnode_t dnp, uint64_t cookie, int *ptc, uint64_t *lbnp)
 	if (eofptc) {
 		/* but 32-bit match hit the EOF cookie */
 		nfs_node_unlock(dnp);
-		OSAddAtomic(1, &nfsstats.direofcache_hits);
+		OSAddAtomic64(1, &nfsstats.direofcache_hits);
 		return (-1);
 	}
 	if (iptc >= 0) {
 		/* but 32-bit match got a hit */
 		*lbnp = ndcc->cookies[iptc].lbn;
 		nfs_node_unlock(dnp);
-		OSAddAtomic(1, &nfsstats.direofcache_hits);
+		OSAddAtomic64(1, &nfsstats.direofcache_hits);
 		return (0);
 	}
 	nfs_node_unlock(dnp);
@@ -5065,13 +5116,13 @@ nfs_dir_cookie_to_lbn(nfsnode_t dnp, uint64_t cookie, int *ptc, uint64_t *lbnp)
 	}
 	lck_mtx_unlock(nfs_buf_mutex);
 	if (found) {
-		OSAddAtomic(1, &nfsstats.direofcache_hits);
+		OSAddAtomic64(1, &nfsstats.direofcache_hits);
 		return (0);
 	}
 
 	/* still not found... oh well, just start a new block */
 	*lbnp = cookie;
-	OSAddAtomic(1, &nfsstats.direofcache_misses);
+	OSAddAtomic64(1, &nfsstats.direofcache_misses);
 	return (0);
 }
 
@@ -5333,7 +5384,7 @@ noplus:
 	} else {
 		cookie = bp->nb_lblkno;
 		/* increment with every buffer read */
-		OSAddAtomic(1, &nfsstats.readdir_bios);
+		OSAddAtomic64(1, &nfsstats.readdir_bios);
 	}
 	lastcookie = cookie;
 
@@ -5446,7 +5497,7 @@ nextbuffer:
 				space_free = nfs_dir_buf_freespace(bp, rdirplus);
 				dp = NFS_DIR_BUF_FIRST_DIRENTRY(bp);
 				/* increment with every buffer read */
-				OSAddAtomic(1, &nfsstats.readdir_bios);
+				OSAddAtomic64(1, &nfsstats.readdir_bios);
 			}
 			nmrepsave = nmrep;
 			dp->d_fileno = fileno;
@@ -6631,7 +6682,7 @@ nfs_vnop_pagein(
 	if (size <= 0) {
 		printf("nfs_pagein: invalid size %ld", size);
 		if (!nofreeupl)
-			(void) ubc_upl_abort(pl, 0);
+			(void) ubc_upl_abort_range(pl, pl_offset, size, 0);
 		return (EINVAL);
 	}
 	if (f_offset < 0 || f_offset >= (off_t)np->n_size || (f_offset & PAGE_MASK_64)) {
@@ -6698,7 +6749,7 @@ tryagain:
 #if UPL_DEBUG
 			upl_ubc_alias_set(pl, (uintptr_t) current_thread(), (uintptr_t) 2);
 #endif /* UPL_DEBUG */
-			OSAddAtomic(1, &nfsstats.pageins);
+			OSAddAtomic64(1, &nfsstats.pageins);
 			error = nmp->nm_funcs->nf_read_rpc_async_finish(np, req[nextwait], uio, &retsize, NULL);
 			req[nextwait] = NULL;
 			nextwait = (nextwait + 1) % MAXPAGINGREQS;
@@ -6944,7 +6995,7 @@ nfs_vnop_pageout(
 	if (size <= 0) {
 		printf("nfs_pageout: invalid size %ld", size);
 		if (!nofreeupl)
-			ubc_upl_abort(pl, 0);
+			ubc_upl_abort_range(pl, pl_offset, size, 0);
 		return (EINVAL);
 	}
 
@@ -6977,7 +7028,7 @@ nfs_vnop_pageout(
 				nfs_data_unlock_noupdate(np);
 				/* no panic. just tell vm we are busy */
 				if (!nofreeupl)
-					ubc_upl_abort(pl, 0);
+					ubc_upl_abort_range(pl, pl_offset, size, 0);
 				return (EBUSY);
 			}
 			if (bp->nb_dirtyend > 0) {
@@ -7024,7 +7075,7 @@ nfs_vnop_pageout(
 				    lck_mtx_unlock(nfs_buf_mutex);
 				    nfs_data_unlock_noupdate(np);
 				    if (!nofreeupl)
-					ubc_upl_abort(pl, 0);
+					    ubc_upl_abort_range(pl, pl_offset, size, 0);
 				    return (EBUSY);
 				}
 				if ((bp->nb_dirtyoff < start) ||
@@ -7135,7 +7186,7 @@ tryagain:
 			uio_reset(auio, txoffset, UIO_SYSSPACE, UIO_WRITE);
 			uio_addiov(auio, CAST_USER_ADDR_T(txaddr), iosize);
 			FSDBG(323, uio_offset(auio), iosize, txaddr, txsize);
-			OSAddAtomic(1, &nfsstats.pageouts);
+			OSAddAtomic64(1, &nfsstats.pageouts);
 			nfs_node_lock_force(np);
 			np->n_numoutput++;
 			nfs_node_unlock(np);

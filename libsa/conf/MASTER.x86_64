@@ -1,6 +1,6 @@
 ######################################################################
 #
-#  RELEASE	= [ intel mach libkerncpp config_dtrace config_kxld ]
+#  RELEASE	= [ intel mach libkerncpp config_dtrace config_kxld vm_pressure_events config_kext_basement ]
 #  PROFILE	= [ RELEASE profile ]
 #  DEBUG	= [ RELEASE debug ]
 #

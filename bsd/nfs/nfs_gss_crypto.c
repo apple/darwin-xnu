@@ -178,100 +178,6 @@ des3_make_key(const unsigned char randombits[21], des_cblock key[3])
 }
 
 /*
- * Make a triple des key schedule, from a triple des key.
- */
- 
-int
-des3_key_sched(des_cblock key[3], des_key_schedule sched[3])
-{
-	int i;
-	int rc = 0;
-	
-	for (i = 0; i < 3; i++)
-		rc |= des_key_sched(&key[i], sched[i]);
-
-	return (rc);
-}
-
-/*
- * Triple DES cipher block chaining mode encryption.
- */
- 
-void
-des3_cbc_encrypt(des_cblock *input, des_cblock *output, int32_t length, 
-		 des_key_schedule schedule[3], des_cblock *ivec, des_cblock *retvec, int encrypt)
-{
-	register DES_LONG tin0,tin1;
-	register DES_LONG tout0,tout1,xor0,xor1;
-	register unsigned char *in,*out,*retval;
-	register int32_t l=length;
-	DES_LONG tin[2];
-	unsigned char *iv;
-	tin0 = tin1 = 0;
-
-	in=(unsigned char *)input;
-	out=(unsigned char *)output;
-	retval=(unsigned char *)retvec;
-	iv=(unsigned char *)ivec;
-
-	if (encrypt) {
-		c2l(iv,tout0);
-		c2l(iv,tout1);
-		for (l-=8; l>=0; l-=8) {
-			c2l(in,tin0);
-			c2l(in,tin1);
-			tin0^=tout0; tin[0]=tin0;
-			tin1^=tout1; tin[1]=tin1;
-			des_encrypt3((DES_LONG *)tin,schedule[0], schedule[1], schedule[2]);
-			tout0=tin[0]; l2c(tout0,out);
-			tout1=tin[1]; l2c(tout1,out);
-		}
-		if (l != -8) {
-			c2ln(in,tin0,tin1,l+8);
-			tin0^=tout0; tin[0]=tin0;
-			tin1^=tout1; tin[1]=tin1;
-			des_encrypt3((DES_LONG *)tin,schedule[0], schedule[1], schedule[2]);
-			tout0=tin[0]; l2c(tout0,out);
-			tout1=tin[1]; l2c(tout1,out);
-		}
-		if (retval) {
-			l2c(tout0,retval);
-			l2c(tout1,retval);
-		}
-	} else {
-		c2l(iv,xor0);
-		c2l(iv,xor1);
-		for (l-=8; l>=0; l-=8) {
-			c2l(in,tin0); tin[0]=tin0;
-			c2l(in,tin1); tin[1]=tin1;
-			des_decrypt3((DES_LONG *)tin,schedule[0],schedule[1],schedule[2]);
-			tout0=tin[0]^xor0;
-			tout1=tin[1]^xor1;
-			l2c(tout0,out);
-			l2c(tout1,out);
-			xor0=tin0;
-			xor1=tin1;
-		}
-		if (l != -8) {
-			c2l(in,tin0); tin[0]=tin0;
-			c2l(in,tin1); tin[1]=tin1;
-			des_decrypt3((DES_LONG *)tin,schedule[0],schedule[1],schedule[2]);
-			tout0=tin[0]^xor0;
-			tout1=tin[1]^xor1;
-			l2cn(tout0,tout1,out,l+8);
-		/*	xor0=tin0;
-			xor1=tin1; */
-		}
-		if (retval) {
-			l2c(tin0,retval);
-			l2c(tin1,retval);
-		}
-	}
-	tin0=tin1=tout0=tout1=xor0=xor1=0;
-	tin[0]=tin[1]=0;
-}
-
-/*
  * Key derivation for triple DES.
  * Given the session key in in key, produce a new key in out key using
  * the supplied constant.
@@ -282,7 +188,7 @@ des3_derive_key(des_cblock inkey[3], des_cblock outkey[3],
 		const unsigned char *constant, int clen)
 {
 	des_cblock inblock, outblock, ivec;
-	des_key_schedule sched[3];
+	des3_cbc_key_schedule sched;
 	unsigned char rawkey[21];
 	size_t n, keybytes = sizeof(rawkey);
 
@@ -297,9 +203,9 @@ des3_derive_key(des_cblock inkey[3], des_cblock outkey[3],
 	/* loop encrypting the blocks until enough key bytes are generated */
 
 	bzero(ivec, sizeof(ivec));
-	des3_key_sched(inkey, sched);
+	des3_cbc_key_sched(inkey, &sched);
 	for (n = 0; n < sizeof(rawkey); n += sizeof(des_cblock)) {
-		des3_cbc_encrypt(&inblock, &outblock, sizeof(outblock), sched, &ivec, NULL, 1);
+		des3_cbc_encrypt(&inblock, &outblock, sizeof(outblock), &sched, &ivec, NULL, 1);
 		if ((keybytes - n) <= sizeof (des_cblock)) {
 			memcpy(rawkey+n, outblock, (keybytes - n));
 			break;
@@ -316,7 +222,7 @@ des3_derive_key(des_cblock inkey[3], des_cblock outkey[3],
 	bzero(inblock, sizeof (des_cblock));
 	bzero(outblock, sizeof (des_cblock));
 	bzero(rawkey, keybytes);
-	bzero(sched, sizeof (sched));
+	bzero(&sched, sizeof (sched));
 
 	return(0);
 }
@@ -376,129 +282,10 @@ HMAC_SHA1_DES3KD_Final(void *digest, HMAC_SHA1_DES3KD_CTX *ctx)
 }
 
 /*
- * XXX This function borrowed from OpenBSD.
- * It will likely be moved into kernel crypto.
- */
-DES_LONG
-des_cbc_cksum(des_cblock *input, des_cblock *output,
-		int32_t length, des_key_schedule schedule, des_cblock *ivec)
-{
-	register DES_LONG tout0,tout1,tin0,tin1;
-	register int32_t l=length;
-	DES_LONG tin[2];
-	unsigned char *in,*out,*iv;
-
-	in=(unsigned char *)input;
-	out=(unsigned char *)output;
-	iv=(unsigned char *)ivec;
-
-	c2l(iv,tout0);
-	c2l(iv,tout1);
-	for (; l>0; l-=8) {
-		if (l >= 8) {
-			c2l(in,tin0);
-			c2l(in,tin1);
-		} else
-			c2ln(in,tin0,tin1,l);
-			
-		tin0^=tout0; tin[0]=tin0;
-		tin1^=tout1; tin[1]=tin1;
-		des_encrypt1((DES_LONG *)tin,schedule,DES_ENCRYPT);
-		/* fix 15/10/91 eay - thanks to keithr@sco.COM */
-		tout0=tin[0];
-		tout1=tin[1];
-	}
-	if (out != NULL) {
-		l2c(tout0,out);
-		l2c(tout1,out);
-	}
-	tout0=tin0=tin1=tin[0]=tin[1]=0;
-	return(tout1);
-}
-
-/*
- * XXX This function borrowed from OpenBSD.
- * It will likely be moved into kernel crypto.
- */
-void
-des_cbc_encrypt(des_cblock *input, des_cblock *output, int32_t length,
-		des_key_schedule schedule, des_cblock *ivec, des_cblock *retvec, int encrypt)
-{
-	register DES_LONG tin0,tin1;
-	register DES_LONG tout0,tout1,xor0,xor1;
-	register unsigned char *in,*out,*retval;
-	register int32_t l=length;
-	DES_LONG tin[2];
-	unsigned char *iv;
-	tin0 = tin1 = 0;
-
-	in=(unsigned char *)input;
-	out=(unsigned char *)output;
-	retval=(unsigned char *)retvec;
-	iv=(unsigned char *)ivec;
-
-	if (encrypt) {
-		c2l(iv,tout0);
-		c2l(iv,tout1);
-		for (l-=8; l>=0; l-=8) {
-			c2l(in,tin0);
-			c2l(in,tin1);
-			tin0^=tout0; tin[0]=tin0;
-			tin1^=tout1; tin[1]=tin1;
-			des_encrypt1((DES_LONG *)tin,schedule,DES_ENCRYPT);
-			tout0=tin[0]; l2c(tout0,out);
-			tout1=tin[1]; l2c(tout1,out);
-		}
-		if (l != -8) {
-			c2ln(in,tin0,tin1,l+8);
-			tin0^=tout0; tin[0]=tin0;
-			tin1^=tout1; tin[1]=tin1;
-			des_encrypt1((DES_LONG *)tin,schedule,DES_ENCRYPT);
-			tout0=tin[0]; l2c(tout0,out);
-			tout1=tin[1]; l2c(tout1,out);
-		}
-		if (retval) {
-			l2c(tout0,retval);
-			l2c(tout1,retval);
-		}
-	} else {
-		c2l(iv,xor0);
-		c2l(iv,xor1);
-		for (l-=8; l>=0; l-=8) {
-			c2l(in,tin0); tin[0]=tin0;
-			c2l(in,tin1); tin[1]=tin1;
-			des_encrypt1((DES_LONG *)tin,schedule,DES_DECRYPT);
-			tout0=tin[0]^xor0;
-			tout1=tin[1]^xor1;
-			l2c(tout0,out);
-			l2c(tout1,out);
-			xor0=tin0;
-			xor1=tin1;
-		}
-		if (l != -8) {
-			c2l(in,tin0); tin[0]=tin0;
-			c2l(in,tin1); tin[1]=tin1;
-			des_encrypt1((DES_LONG *)tin,schedule,DES_DECRYPT);
-			tout0=tin[0]^xor0;
-			tout1=tin[1]^xor1;
-			l2cn(tout0,tout1,out,l+8);
-		/*	xor0=tin0;
-			xor1=tin1; */
-		}
-		if (retval) {
-			l2c(tin0,retval);
-			l2c(tin1,retval);
-		}
-	}
-	tin0=tin1=tout0=tout1=xor0=xor1=0;
-	tin[0]=tin[1]=0;
-}
-
-/*
  * Initialize an MD5 DES CBC context with a schedule.
  */
  
-void MD5_DESCBC_Init(MD5_DESCBC_CTX *ctx, des_key_schedule *sched)
+void MD5_DESCBC_Init(MD5_DESCBC_CTX *ctx, des_cbc_key_schedule *sched)
 {
 	MD5Init(&ctx->md5_ctx);
 	ctx->sched = sched;
@@ -519,7 +306,6 @@ void MD5_DESCBC_Update(MD5_DESCBC_CTX *ctx, void *data, size_t len)
  
 void MD5_DESCBC_Final(void *digest, MD5_DESCBC_CTX *ctx)
 {
-	des_cblock iv0;
 	unsigned char md5_digest[MD5_DIGEST_LENGTH];
 	
 	MD5Final(md5_digest, &ctx->md5_ctx);
@@ -527,8 +313,7 @@ void MD5_DESCBC_Final(void *digest, MD5_DESCBC_CTX *ctx)
 	/*
 	 * Now get the DES CBC checksum for the digest.
 	 */
-	bzero(iv0, sizeof (iv0));
-	(void) des_cbc_cksum((des_cblock *) md5_digest, (des_cblock *)digest,
-				sizeof (md5_digest), *ctx->sched, &iv0);
+	des_cbc_cksum((des_cblock *) md5_digest, (des_cblock *)digest,
+				sizeof (md5_digest), ctx->sched);
 }	
 

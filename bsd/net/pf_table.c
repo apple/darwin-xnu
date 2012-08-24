@@ -1517,7 +1517,7 @@ pfr_ina_define(struct pfr_table *tbl, user_addr_t addr, int size,
 		return (EBUSY);
 	tbl->pfrt_flags |= PFR_TFLAG_INACTIVE;
 	SLIST_INIT(&tableq);
-	kt = RB_FIND(pfr_ktablehead, &pfr_ktables, (struct pfr_ktable *)tbl);
+	kt = RB_FIND(pfr_ktablehead, &pfr_ktables, (struct pfr_ktable *)(void *)tbl);
 	if (kt == NULL) {
 		kt = pfr_create_ktable(tbl, 0, 1);
 		if (kt == NULL)
@@ -2005,7 +2005,7 @@ pfr_lookup_table(struct pfr_table *tbl)
 
 	/* struct pfr_ktable start like a struct pfr_table */
 	return (RB_FIND(pfr_ktablehead, &pfr_ktables,
-	    (struct pfr_ktable *)tbl));
+	    (struct pfr_ktable *)(void *)tbl));
 }
 
 int

@@ -82,7 +82,7 @@ int	scope6_get_default(u_int32_t *);
 u_int32_t scope6_in6_addrscope(struct in6_addr *);
 u_int32_t scope6_addr2default(struct in6_addr *);
 int	sa6_embedscope (struct sockaddr_in6 *, int);
-int	sa6_recoverscope (struct sockaddr_in6 *);
+int	sa6_recoverscope (struct sockaddr_in6 *, boolean_t);
 int	in6_setscope (struct in6_addr *, struct ifnet *, u_int32_t *);
 int	in6_clearscope (struct in6_addr *);
 extern void rtkey_to_sa6(struct rtentry *, struct sockaddr_in6 *);

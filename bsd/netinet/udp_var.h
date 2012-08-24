@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2008-2012 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -128,6 +128,17 @@ struct	udpstat {
 
 SYSCTL_DECL(_net_inet_udp);
 
+struct udpstat_local {
+	u_int64_t	port_unreach;
+	u_int64_t	faithprefix;	/* deprecated */
+	u_int64_t	port0;
+	u_int64_t	badlength;
+	u_int64_t	badchksum;
+	u_int64_t	badmcast;
+	u_int64_t	cleanup;
+	u_int64_t	badipsec;
+}; 
+
 extern struct	pr_usrreqs udp_usrreqs;
 extern struct	inpcbhead udb;
 extern struct	inpcbinfo udbinfo;
@@ -152,6 +163,8 @@ lck_mtx_t *	udp_getlock (struct socket *, int);
 #else
 void *	udp_getlock (struct socket *, int);
 #endif
+void udp_get_ports_used(unsigned int, uint8_t *);
+uint32_t udp_count_opportunistic(unsigned int, u_int32_t);
 
 #endif /* KERNEL_PRIVATE */
 #endif /* _NETINET_UDP_VAR_H_ */

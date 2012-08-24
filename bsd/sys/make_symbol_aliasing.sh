@@ -22,6 +22,23 @@
 # @APPLE_OSREFERENCE_LICENSE_HEADER_END@
 #
 
+function usage() {
+    echo "Usage: $0 <sdk> <output>" 1>&2
+    exit 1
+}
+
+if [ $# -ne 2 ]; then
+    usage
+fi
+
+SDKROOT="$1"
+OUTPUT="$2"
+
+if [ ! -x "${SDKROOT}/usr/local/libexec/availability.pl" ] ; then
+    echo "Unable to locate ${SDKROOT}/usr/local/libexec/availability.pl (or not executable)" >&2
+    exit 1
+fi
+	    
 {
 cat <<EOF
 /* Copyright (c) 2010 Apple Inc. All rights reserved.
@@ -82,5 +99,5 @@ for ver in $(${SDKROOT}/usr/local/libexec/availability.pl --macosx) ; do
     echo "#endif"
     echo ""
 done
-} > $1
+} > "$OUTPUT"
 

@@ -32,9 +32,9 @@
 
 	.data
 	.private_extern __current_pid
-__current_pid:
+L__current_pid_addr:
+ __current_pid:
 	.long 0
-L__current_pid_addr = __current_pid
 
 #if defined(__DYNAMIC__)
 #define GET_CURRENT_PID				\
@@ -61,7 +61,7 @@ LEAF(___getpid, 0)
 	jle		1f
 	ret
 1:
-	UNIX_SYSCALL_NONAME(getpid, 0)
+	UNIX_SYSCALL_NONAME(getpid, 0, cerror_nocancel)
 	movl		%eax, %edx
 	xorl		%eax, %eax
 	GET_CURRENT_PID
@@ -88,7 +88,7 @@ LEAF(___getpid, 0)
 	jle		1f
 	ret
 1:
-	UNIX_SYSCALL_NONAME(getpid, 0)
+	UNIX_SYSCALL_NONAME(getpid, 0, cerror_nocancel)
 	movl		%eax, %edx
 	xorl		%eax, %eax
 	leaq		__current_pid(%rip), %rcx

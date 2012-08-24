@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2010 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2011 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -97,7 +97,9 @@
 #include <net/ether_if_module.h>
 #include <sys/socketvar.h>
 #include <net/if_vlan_var.h>
-#include <net/if_bond_var.h>
+#if BOND
+#include <net/if_bond_internal.h>
+#endif /* BOND */
 #if IF_BRIDGE
 #include <net/if_bridgevar.h>
 #endif /* IF_BRIDGE */
@@ -357,7 +359,7 @@ ether_demux(
 	char				*frame_header,
 	protocol_family_t	*protocol_family)
 {
-	struct ether_header *eh = (struct ether_header *)frame_header;
+	struct ether_header *eh = (struct ether_header *)(void *)frame_header;
 	u_short			ether_type = eh->ether_type;
 	u_int16_t		type;
 	u_int8_t		*data;
@@ -416,7 +418,7 @@ ether_demux(
 	else if (ether_type == htons(ETHERTYPE_VLAN)) {
 		struct ether_vlan_header *	evl;
 
-		evl = (struct ether_vlan_header *)frame_header;
+		evl = (struct ether_vlan_header *)(void *)frame_header;
 		if (m->m_len < ETHER_VLAN_ENCAP_LEN
 		    || ntohs(evl->evl_proto) == ETHERTYPE_VLAN
 		    || EVL_VLANOFTAG(ntohs(evl->evl_tag)) != 0) {
@@ -443,13 +445,13 @@ ether_demux(
 	*/
 	
 	if (ntohs(ether_type) <= 1500) {
-		extProto1 = *(u_int32_t*)data;
+		bcopy(data, &extProto1, sizeof (u_int32_t));
 		
 		// SAP or SNAP
 		if ((extProto1 & htonl(0xFFFFFF00)) == htonl(0xAAAA0300)) {
 			// SNAP
 			type = DLIL_DESC_SNAP;
-			extProto2 = *(u_int32_t*)(data + sizeof(u_int32_t));
+			bcopy(data + sizeof(u_int32_t), &extProto2, sizeof (u_int32_t));
 			extProto1 &= htonl(0x000000FF);
 		} else {
 			type = DLIL_DESC_SAP;
@@ -504,11 +506,17 @@ ether_demux(
  */
 int
 ether_frameout(
-	struct ifnet			*ifp,
-	struct mbuf				**m,
-	const struct sockaddr	*ndest,
-	const char				*edst,
-	const char				*ether_type)
+			   struct ifnet			*ifp,
+			   struct mbuf				**m,
+			   const struct sockaddr	*ndest,
+			   const char				*edst,
+			   const char				*ether_type
+#if KPI_INTERFACE_EMBEDDED
+			   ,
+			   u_int32_t				*prepend_len,
+			   u_int32_t				*postpend_len
+#endif /* KPI_INTERFACE_EMBEDDED */
+			   )
 {
 	struct ether_header *eh;
 	int hlen;	/* link layer header length */
@@ -530,11 +538,11 @@ ether_frameout(
             if ((*m)->m_flags & M_BCAST) {
                 struct mbuf *n = m_copy(*m, 0, (int)M_COPYALL);
                 if (n != NULL)
-                    dlil_output(lo_ifp, ndest->sa_family, n, NULL, ndest, 0);
+                    dlil_output(lo_ifp, ndest->sa_family, n, NULL, ndest, 0, NULL);
             }
             else {
 					if (_ether_cmp(edst, ifnet_lladdr(ifp)) == 0) {
-                    dlil_output(lo_ifp, ndest->sa_family, *m, NULL, ndest, 0);
+                    dlil_output(lo_ifp, ndest->sa_family, *m, NULL, ndest, 0, NULL);
                     return EJUSTRETURN;
                 }
             }
@@ -550,7 +558,11 @@ ether_frameout(
 	    return (EJUSTRETURN);
 	}
 
-
+#if KPI_INTERFACE_EMBEDDED
+	*prepend_len = sizeof (struct ether_header);
+	*postpend_len = 0;
+#endif /* KPI_INTERFACE_EMBEDDED */
+	
 	eh = mtod(*m, struct ether_header *);
 	(void)memcpy(&eh->ether_type, ether_type,
 		sizeof(eh->ether_type));
@@ -582,7 +594,8 @@ ether_check_multi(
 			break;
 		
 		case AF_LINK:
-			e_addr = CONST_LLADDR((const struct sockaddr_dl*)proto_addr); 
+			e_addr = CONST_LLADDR((const struct sockaddr_dl*)
+			    (uintptr_t)(size_t)proto_addr);
 			if ((e_addr[0] & 0x01) != 0x01)
 				result = EADDRNOTAVAIL;
 			else

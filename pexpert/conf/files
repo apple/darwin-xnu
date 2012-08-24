@@ -1,5 +1,4 @@
 #
-OPTIONS/mach_kdb				optional mach_kdb
 OPTIONS/panic_info				optional panic_info
 OPTIONS/config_dtrace           optional config_dtrace
 

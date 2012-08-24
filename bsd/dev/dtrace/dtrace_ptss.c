@@ -127,10 +127,14 @@ dtrace_ptss_claim_entry(struct proc* p) {
 
 /*
  * This function does not require any locks to be held on entry.
+ *
+ * (PR-11138709) A NULL p->p_dtrace_ptss_pages means the entry can
+ * no longer be referenced safely. When found in this state, the chore
+ * of releasing an entry to the free list is ignored.
  */
 void
 dtrace_ptss_release_entry(struct proc* p, struct dtrace_ptss_page_entry* e) {
-	if (p && e) {
+	if (p && p->p_dtrace_ptss_pages && e) {
 		do {
 			e->next = p->p_dtrace_ptss_free_list;
 		} while (!OSCompareAndSwapPtr((void *)e->next, (void *)e, (void * volatile *)&p->p_dtrace_ptss_free_list));
@@ -164,7 +168,7 @@ dtrace_ptss_allocate_page(struct proc* p)
 #if CONFIG_EMBEDDED
 	/* The embedded OS has extra permissions for writable and executable pages. We can't pass in the flags
 	 * we need for the correct permissions from mach_vm_allocate, so need to call mach_vm_map directly. */
-	vm_map_offset_t map_addr = 0;
+	mach_vm_offset_t map_addr = 0;
 	kern_return_t kr = mach_vm_map(map, &map_addr, size, 0, VM_FLAGS_ANYWHERE, IPC_PORT_NULL, 0, FALSE, VM_PROT_READ|VM_PROT_EXECUTE, VM_PROT_READ|VM_PROT_EXECUTE, VM_INHERIT_DEFAULT);
 	if (kr != KERN_SUCCESS) {
 		goto err;

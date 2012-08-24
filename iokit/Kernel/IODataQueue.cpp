@@ -73,11 +73,19 @@ IODataQueue *IODataQueue::withEntries(UInt32 numEntries, UInt32 entrySize)
 
 Boolean IODataQueue::initWithCapacity(UInt32 size)
 {
+    vm_size_t allocSize = 0;
+
     if (!super::init()) {
         return false;
     }
 
-    dataQueue = (IODataQueueMemory *)IOMallocAligned(round_page(size + DATA_QUEUE_MEMORY_HEADER_SIZE), PAGE_SIZE);
+    allocSize = round_page(size + DATA_QUEUE_MEMORY_HEADER_SIZE);
+
+    if (allocSize < size) {
+        return false;
+    }
+
+    dataQueue = (IODataQueueMemory *)IOMallocAligned(allocSize, PAGE_SIZE);
     if (dataQueue == 0) {
         return false;
     }

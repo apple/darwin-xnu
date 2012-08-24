@@ -425,10 +425,9 @@ nfs3_lockd_request(
 	bcopy(saddr, &msg->lm_addr, min(sizeof msg->lm_addr, saddr->sa_len));
 	if (nmp->nm_vers == NFS_VER3)
 		msg->lm_flags |= LOCKD_MSG_NFSV3;
-#if 0 /* not yet */
+
 	if (nmp->nm_sotype != SOCK_DGRAM)
 		msg->lm_flags |= LOCKD_MSG_TCP;
-#endif
 
 	microuptime(&now);
 	starttime = now.tv_sec;

@@ -40,8 +40,6 @@
 #include	<machine/exec.h>
 #include	<machine/machine_routines.h>
 
-extern int bootarg_no64exec;	/* bsd_init.c */
-
 /**********************************************************************
  * Routine:	grade_binary()
  *
@@ -58,7 +56,7 @@ grade_binary(cpu_type_t exectype, __unused cpu_subtype_t execsubtype)
 	case CPU_TYPE_POWERPC:		/* via translator */
 		return 1;
 	case CPU_TYPE_X86_64:		/* native 64-bit */
-		return ((ml_is64bit() && !bootarg_no64exec) ? 2 : 0);
+		return (ml_is64bit() ? 2 : 0);
 	default:			/* all other binary types */
 		return 0;
 	}

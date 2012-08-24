@@ -659,7 +659,7 @@ do_objs(FILE *fp, const char *msg, int ext)
 #if	DO_SWAPFILE
 	register struct file_list *fl;
 	char swapname[32];
-#endif	DO_SWAPFILE
+#endif	/* DO_SWAPFILE */
 
 	fprintf(fp, "%s", msg);
 	lpos = strlen(msg);
@@ -693,7 +693,7 @@ do_objs(FILE *fp, const char *msg, int ext)
 			if (eq(sp, swapname))
 				goto cont;
 		}
-#endif	DO_SWAPFILE
+#endif	/* DO_SWAPFILE */
 		cp = (char *)sp + (len = strlen(sp)) - 1;
 		och = *cp;
 		*cp = 'o';
@@ -707,7 +707,7 @@ do_objs(FILE *fp, const char *msg, int ext)
 #if	DO_SWAPFILE
 cont:
 		;
-#endif	DO_SWAPFILE
+#endif	/* DO_SWAPFILE */
 	}
 	if (lpos != 8)
 		putc('\n', fp);
@@ -955,10 +955,11 @@ do_rules(FILE *f)
 				}
 				break;
 			default:
-			fprintf(f, "\t${S_RULE_1A}%s%.*s${S_RULE_1B}%s\n",
-					source_dir, (int)(tp-np), np, nl);
-			fprintf(f, "\t${S_RULE_2}%s\n", nl);
-			fprintf(f, "\t${S_RULE_3}\n\n");
+				fprintf(f, "\t${S_RULE_1A}%s%.*s${S_RULE_1B}%s\n",
+						source_dir, (int)(tp-np), np, nl);
+				fprintf(f, "\t${S_RULE_2}%s\n", nl);
+				fprintf(f, "\t${S_RULE_3}\n\n");
+				break;
 			}
 			continue;
 		}
@@ -989,7 +990,7 @@ do_rules(FILE *f)
 						source_dir, extras, np);
 				}
 				break;
-	#endif	0
+	#endif	/* 0 */
 			default:
 				goto common;
 			}
@@ -1091,9 +1092,9 @@ do_load(FILE *f)
 			fprintf(f, " %s", fl->f_needs);
 #ifdef	multimax
 	fprintf(f, "\n\nall .ORDER: includelinks ${LOAD}\n");
-#else	multimax
+#else	/* multimax */
 	fprintf(f, "\n\nall: includelinks ${LOAD}\n");
-#endif	multimax
+#endif	/* multimax */
 	fprintf(f, "\n");
 }
 
@@ -1138,7 +1139,7 @@ do_swapspec(__unused FILE *f, __unused const char *name, __unused char *sysname)
 		fprintf(f, "\t${C_RULE_3}\n");
 		fprintf(f, "\t${C_RULE_4}\n\n");
 	}
-#endif	DO_SWAPFILE
+#endif	/* DO_SWAPFILE */
 }
 
 char *

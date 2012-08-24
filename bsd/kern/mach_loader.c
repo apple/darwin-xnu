@@ -84,19 +84,8 @@
  * XXX vm/pmap.h should not treat these prototypes as MACH_KERNEL_PRIVATE
  * when KERNEL is defined.
  */
-extern pmap_t	pmap_create(vm_map_size_t size, boolean_t is_64bit);
-extern void	pmap_switch(pmap_t);
-
-/*
- * XXX kern/thread.h should not treat these prototypes as MACH_KERNEL_PRIVATE
- * when KERNEL is defined.
- */
-extern kern_return_t	thread_setstatus(thread_t thread, int flavor,
-				thread_state_t tstate,
-				mach_msg_type_number_t count);
-
-extern kern_return_t    thread_state_initialize(thread_t thread);
-
+extern pmap_t	pmap_create(ledger_t ledger, vm_map_size_t size,
+				boolean_t is_64bit);
 
 /* XXX should have prototypes in a shared header file */
 extern int	get_map_nentries(vm_map_t);
@@ -109,12 +98,15 @@ static load_result_t load_result_null = {
 	.mach_header = MACH_VM_MIN_ADDRESS,
 	.entry_point = MACH_VM_MIN_ADDRESS,
 	.user_stack = MACH_VM_MIN_ADDRESS,
+	.user_stack_size = 0,
 	.all_image_info_addr = MACH_VM_MIN_ADDRESS,
 	.all_image_info_size = 0,
 	.thread_count = 0,
 	.unixproc = 0,
 	.dynlinker = 0,
-	.customstack = 0,
+	.needs_dynlinker = 0,
+	.prog_allocated_stack = 0,
+	.prog_stack_size = 0,
 	.validentry = 0,
 	.csflags = 0,
 	.uuid = { 0 },
@@ -166,8 +158,18 @@ set_code_unprotect(
 	struct encryption_info_command	*lcp,
 	caddr_t				addr,
 	vm_map_t			map,
+	int64_t				slide,
 	struct vnode			*vp);
 #endif
+
+static
+load_return_t
+load_main(
+	struct entry_point_command	*epc,
+	thread_t		thread,
+	int64_t				slide,
+	load_result_t		*result
+);
 
 static load_return_t
 load_unixthread(
@@ -282,6 +284,7 @@ load_machfile(
 	struct vnode		*vp = imgp->ip_vp;
 	off_t			file_offset = imgp->ip_arch_offset;
 	off_t			macho_size = imgp->ip_arch_size;
+	off_t			file_size = imgp->ip_vattr->va_data_size;
 	
 	pmap_t			pmap = 0;	/* protected by create_map */
 	vm_map_t		map;
@@ -295,6 +298,10 @@ load_machfile(
 	proc_t p = current_proc();
 	mach_vm_offset_t	aslr_offset = 0;
 	kern_return_t 		kret;
+
+	if (macho_size > file_size) {
+		return(LOAD_BADMACHO);
+	}
 
 	if (new_map == VM_MAP_NULL) {
 		create_map = TRUE;
@@ -313,7 +320,8 @@ load_machfile(
 	}
 
 	if (create_map) {
-		pmap = pmap_create((vm_map_size_t) 0, (imgp->ip_flags & IMGPF_IS_64BIT));
+		pmap = pmap_create(get_task_ledger(task), (vm_map_size_t) 0,
+				(imgp->ip_flags & IMGPF_IS_64BIT));
 		pal_switch_pmap(thread, pmap, imgp->ip_flags & IMGPF_IS_64BIT);
 		map = vm_map_create(pmap,
 				0,
@@ -359,6 +367,19 @@ load_machfile(
 		return(lret);
 	}
 
+#if CONFIG_EMBEDDED
+	/*
+	 * Check to see if the page zero is enforced by the map->min_offset.
+	 */ 
+	if (vm_map_has_hard_pagezero(map, 0x1000) == FALSE) {
+		if (create_map) {
+			vm_map_deallocate(map);	/* will lose pmap reference too */
+		}
+		printf("Cannot enforce a hard page-zero for %s\n", imgp->ip_strings);
+		psignal(vfs_context_proc(imgp->ip_vfs_context), SIGKILL);
+		return (LOAD_BADMACHO);
+	}
+#else
 	/*
 	 * For 64-bit users, check for presence of a 4GB page zero
 	 * which will enable the kernel to share the user's address space
@@ -366,9 +387,10 @@ load_machfile(
 	 */ 
 
 	if ((imgp->ip_flags & IMGPF_IS_64BIT) &&
-	     vm_map_has_4GB_pagezero(map))
+	     vm_map_has_4GB_pagezero(map)) {
 		vm_map_set_4GB_pagezero(map);
-
+	}
+#endif
 	/*
 	 *	Commit to new map.
 	 *
@@ -396,23 +418,23 @@ load_machfile(
 			 *
 			 * NOTE: task_start_halt() makes sure that no new
 			 * threads are created in the task during the transition.
- 			 * We need to mark the workqueue as exiting before we
- 			 * wait for threads to terminate (at the end of which
- 			 * we no longer have a prohibition on thread creation).
- 			 * 
- 			 * Finally, clean up any lingering workqueue data structures
- 			 * that may have been left behind by the workqueue threads
- 			 * as they exited (and then clean up the work queue itself).
-  			 */
-  			kret = task_start_halt(task);
-  			if (kret != KERN_SUCCESS) {
-  				return(kret);		
-  			}
- 			proc_transcommit(p, 0);
- 			workqueue_mark_exiting(p);
-  			task_complete_halt(task);
- 			workqueue_exit(p);
-  		}
+			 * We need to mark the workqueue as exiting before we
+			 * wait for threads to terminate (at the end of which
+			 * we no longer have a prohibition on thread creation).
+			 * 
+			 * Finally, clean up any lingering workqueue data structures
+			 * that may have been left behind by the workqueue threads
+			 * as they exited (and then clean up the work queue itself).
+			 */
+			kret = task_start_halt(task);
+			if (kret != KERN_SUCCESS) {
+				return(kret);		
+			}
+			proc_transcommit(p, 0);
+			workqueue_mark_exiting(p);
+			task_complete_halt(task);
+			workqueue_exit(p);
+		}
 		old_map = swap_task_map(old_task, thread, map, !spawn);
 		vm_map_clear_4GB_pagezero(old_map);
 		vm_map_deallocate(old_map);
@@ -566,7 +588,6 @@ parse_machfile(
 	 */
 	for (pass = 1; pass <= 3; pass++) {
 
-#if CONFIG_EMBEDDED
 		/*
 		 * Check that the entry point is contained in an executable segments
 		 */ 
@@ -575,7 +596,6 @@ parse_machfile(
 			ret = LOAD_FAILURE;
 			break;
 		}
-#endif
 
 		/*
 		 * Loop through each of the load_commands indicated by the
@@ -637,6 +657,17 @@ parse_machfile(
 						 slide,
 						 result);
 				break;
+			case LC_MAIN:
+				if (pass != 1)
+					break;
+				if (depth != 1)
+					break;
+				ret = load_main(
+						 (struct entry_point_command *) lcp,
+						 thread,
+						 slide,
+						 result);
+				break;
 			case LC_LOAD_DYLINKER:
 				if (pass != 3)
 					break;
@@ -683,7 +714,7 @@ parse_machfile(
 					break;
 				ret = set_code_unprotect(
 					(struct encryption_info_command *) lcp,
-					addr, map, vp);
+					addr, map, slide, vp);
 				if (ret != LOAD_SUCCESS) {
 					printf("proc %d: set_code_unprotect() error %d "
 					       "for file \"%s\"\n",
@@ -717,16 +748,21 @@ parse_machfile(
 		    }
 	    }
 
-	    if (dlp != 0) {
+		/* Make sure if we need dyld, we got it */
+		if (result->needs_dynlinker && !dlp) {
+			ret = LOAD_FAILURE;
+		}
+
+	    if ((ret == LOAD_SUCCESS) && (dlp != 0)) {
 		    /* load the dylinker, and always slide it by the ASLR
 		     * offset regardless of PIE */
 		    ret = load_dylinker(dlp, dlarchbits, map, thread, depth, aslr_offset, result);
 	    }
 
-	    if(depth == 1) {
-		if (result->thread_count == 0) {
-			ret = LOAD_FAILURE;
-		}
+	    if((ret == LOAD_SUCCESS) && (depth == 1)) {
+			if (result->thread_count == 0) {
+				ret = LOAD_FAILURE;
+			}
 	    }
 	}
 
@@ -823,12 +859,13 @@ load_segment(
 {
 	struct segment_command_64 segment_command, *scp;
 	kern_return_t		ret;
-	mach_vm_offset_t	map_addr, map_offset;
-	mach_vm_size_t		map_size, seg_size, delta_size;
+	vm_map_offset_t		map_addr, map_offset;
+	vm_map_size_t		map_size, seg_size, delta_size;
 	vm_prot_t 		initprot;
 	vm_prot_t		maxprot;
 	size_t			segment_command_size, total_section_size,
 				single_section_size;
+	boolean_t		prohibit_pagezero_mapping = FALSE;
 	
 	if (LC_SEGMENT_64 == lcp->cmd) {
 		segment_command_size = sizeof(struct segment_command_64);
@@ -888,9 +925,15 @@ load_segment(
 		 */
 		seg_size += slide;
 		slide = 0;
-
+#if CONFIG_EMBEDDED
+		prohibit_pagezero_mapping = TRUE;
+#endif
 		/* XXX (4596982) this interferes with Rosetta, so limit to 64-bit tasks */
 		if (scp->cmd == LC_SEGMENT_64) {
+		        prohibit_pagezero_mapping = TRUE;
+		}
+		
+		if (prohibit_pagezero_mapping) {
 			/*
 			 * This is a "page zero" segment:  it starts at address 0,
 			 * is not mapped from the binary file and is not accessible.
@@ -1001,6 +1044,65 @@ load_segment(
 	return ret;
 }
 
+
+
+static
+load_return_t
+load_main(
+	struct entry_point_command	*epc,
+	thread_t		thread,
+	int64_t				slide,
+	load_result_t		*result
+)
+{
+	mach_vm_offset_t addr;
+	kern_return_t	ret;
+	
+	if (epc->cmdsize < sizeof(*epc))
+		return (LOAD_BADMACHO);
+	if (result->thread_count != 0) {
+		printf("load_main: already have a thread!");
+		return (LOAD_FAILURE);
+	}
+
+	if (thread == THREAD_NULL)
+		return (LOAD_SUCCESS);
+	
+	/* LC_MAIN specifies stack size but not location */
+	if (epc->stacksize) {
+		result->prog_stack_size = 1;
+		result->user_stack_size = epc->stacksize;
+	} else {
+		result->prog_stack_size = 0;
+		result->user_stack_size = MAXSSIZ;
+	}
+	result->prog_allocated_stack = 0;
+
+	/* use default location for stack */
+	ret = thread_userstackdefault(thread, &addr);
+	if (ret != KERN_SUCCESS)
+		return(LOAD_FAILURE);
+
+	/* The stack slides down from the default location */
+	result->user_stack = addr;
+	result->user_stack -= slide;
+
+	/* kernel does *not* use entryoff from LC_MAIN.	 Dyld uses it. */
+	result->needs_dynlinker = TRUE;
+	result->validentry = TRUE;
+
+	ret = thread_state_initialize( thread );
+	if (ret != KERN_SUCCESS) {
+		return(LOAD_FAILURE);
+	}
+
+	result->unixproc = TRUE;
+	result->thread_count++;
+
+	return(LOAD_SUCCESS);
+}
+
+
 static
 load_return_t
 load_unixthread(
@@ -1012,6 +1114,7 @@ load_unixthread(
 {
 	load_return_t	ret;
 	int customstack =0;
+	mach_vm_offset_t addr;
 	
 	if (tcp->cmdsize < sizeof(*tcp))
 		return (LOAD_BADMACHO);
@@ -1027,26 +1130,35 @@ load_unixthread(
 		       (uint32_t *)(((vm_offset_t)tcp) + 
 		       		sizeof(struct thread_command)),
 		       tcp->cmdsize - sizeof(struct thread_command),
-		       &result->user_stack,
+		       &addr,
 			   &customstack);
 	if (ret != LOAD_SUCCESS)
 		return(ret);
 
-	if (customstack)
-		result->customstack = 1;
-	else
-		result->customstack = 0;
+	/* LC_UNIXTHREAD optionally specifies stack size and location */
+    
+	if (customstack) {
+		result->prog_stack_size = 0;	/* unknown */
+		result->prog_allocated_stack = 1;
+	} else {
+		result->prog_allocated_stack = 0;
+		result->prog_stack_size = 0;
+		result->user_stack_size = MAXSSIZ;
+	}
 
-	result->user_stack += slide;
+	/* The stack slides down from the default location */
+	result->user_stack = addr;
+	result->user_stack -= slide;
 
 	ret = load_threadentry(thread,
 		       (uint32_t *)(((vm_offset_t)tcp) + 
 		       		sizeof(struct thread_command)),
 		       tcp->cmdsize - sizeof(struct thread_command),
-		       &result->entry_point);
+		       &addr);
 	if (ret != LOAD_SUCCESS)
 		return(ret);
 
+	result->entry_point = addr;
 	result->entry_point += slide;
 
 	ret = load_threadstate(thread,
@@ -1325,6 +1437,7 @@ load_dylinker(
 	if (ret == LOAD_SUCCESS) {		
 		result->dynlinker = TRUE;
 		result->entry_point = myresult->entry_point;
+		result->validentry = myresult->validentry;
 		result->all_image_info_addr = myresult->all_image_info_addr;
 		result->all_image_info_size = myresult->all_image_info_size;
 	}
@@ -1439,6 +1552,7 @@ set_code_unprotect(
 		   struct encryption_info_command *eip,
 		   caddr_t addr, 	
 		   vm_map_t map,
+		   int64_t slide,
 		   struct vnode	*vp)
 {
 	int result, len;
@@ -1517,7 +1631,7 @@ set_code_unprotect(
 				if ((seg64->fileoff <= eip->cryptoff) &&
 				    (seg64->fileoff+seg64->filesize >= 
 				     eip->cryptoff+eip->cryptsize)) {
-					map_offset = seg64->vmaddr + eip->cryptoff - seg64->fileoff;
+					map_offset = seg64->vmaddr + eip->cryptoff - seg64->fileoff + slide;
 					map_size = eip->cryptsize;
 					goto remap_now;
 				}
@@ -1526,7 +1640,7 @@ set_code_unprotect(
 				if ((seg32->fileoff <= eip->cryptoff) &&
 				    (seg32->fileoff+seg32->filesize >= 
 				     eip->cryptoff+eip->cryptsize)) {
-					map_offset = seg32->vmaddr + eip->cryptoff - seg32->fileoff;
+					map_offset = seg32->vmaddr + eip->cryptoff - seg32->fileoff + slide;
 					map_size = eip->cryptsize;
 					goto remap_now;
 				}

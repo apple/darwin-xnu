@@ -84,7 +84,6 @@ static boolean_t wait_queue_member_locked(
 
 static void wait_queues_init(void) __attribute__((section("__TEXT, initcode")));
 
-
 #define WAIT_QUEUE_MAX thread_max
 #define WAIT_QUEUE_SET_MAX task_max * 3
 #define WAIT_QUEUE_LINK_MAX PORT_MAX / 2 + (WAIT_QUEUE_MAX * WAIT_QUEUE_SET_MAX) / 64
@@ -128,16 +127,21 @@ volatile WaitQueueLink *unused_except_for_debugging;
 
 struct wait_queue boot_wait_queue[1];
 __private_extern__ struct wait_queue *wait_queues = &boot_wait_queue[0];
-
 __private_extern__ uint32_t num_wait_queues = 1;
 
+#define	P2ROUNDUP(x, align) (-(-((uint32_t)(x)) & -(align)))
+#define ROUNDDOWN(x,y)	(((x)/(y))*(y))
+
 static uint32_t
-compute_wait_hash_size(__unused unsigned cpu_count, __unused uint64_t memsize) {
-	uint32_t hsize = (uint32_t)round_page_64((thread_max / 11) * sizeof(struct wait_queue));
-	uint32_t bhsize;
+compute_wait_hash_size(void)
+{
+	uint32_t hsize, queues;
 	
-	if (PE_parse_boot_argn("wqsize", &bhsize, sizeof(bhsize)))
-		hsize = bhsize;
+	if (PE_parse_boot_argn("wqsize", &hsize, sizeof(hsize)))
+		return (hsize);
+
+	queues = thread_max / 11;
+	hsize = P2ROUNDUP(queues * sizeof(struct wait_queue), PAGE_SIZE);
 
 	return hsize;
 }
@@ -145,13 +149,37 @@ compute_wait_hash_size(__unused unsigned cpu_count, __unused uint64_t memsize) {
 static void
 wait_queues_init(void)
 {
-	uint32_t	i, whsize;
+	uint32_t	i, whsize, qsz;
 	kern_return_t	kret;
 
-	whsize = compute_wait_hash_size(processor_avail_count, machine_info.max_mem);
-	num_wait_queues = (whsize / ((uint32_t)sizeof(struct wait_queue))) - 1;
+	/*
+	 * Determine the amount of memory we're willing to reserve for
+	 * the waitqueue hash table
+	 */
+	whsize = compute_wait_hash_size();
 
-	kret = kernel_memory_allocate(kernel_map, (vm_offset_t *) &wait_queues, whsize, 0, KMA_KOBJECT|KMA_NOPAGEWAIT);
+	/* Determine the number of waitqueues we can fit. */
+	qsz = sizeof (struct wait_queue);
+	whsize = ROUNDDOWN(whsize, qsz);
+	num_wait_queues = whsize / qsz;
+
+	/*
+	 * The hash algorithm requires that this be a power of 2, so we
+	 * just mask off all the low-order bits.
+	 */
+	for (i = 0; i < 31; i++) {
+		uint32_t bit = (1 << i);
+		if ((num_wait_queues & bit) == num_wait_queues)
+			break;
+		num_wait_queues &= ~bit;
+	}
+	assert(num_wait_queues > 0);
+
+	/* Now determine how much memory we really need. */
+	whsize = P2ROUNDUP(num_wait_queues * qsz, PAGE_SIZE);
+
+	kret = kernel_memory_allocate(kernel_map, (vm_offset_t *) &wait_queues,
+	    whsize, 0, KMA_KOBJECT|KMA_NOPAGEWAIT);
 
 	if (kret != KERN_SUCCESS || wait_queues == NULL)
 		panic("kernel_memory_allocate() failed to allocate wait queues, error: %d, whsize: 0x%x", kret, whsize);
@@ -677,6 +705,60 @@ wait_queue_unlink_locked(
 }
 
 /*
+ *	Routine:	wait_queue_unlink_nofree
+ *	Purpose:
+ *		Remove the linkage between a wait queue and a set,
+ *		returning the linkage structure to the caller to
+ *		free later.
+ *	Conditions:
+ *		The wait queue being must be a member set queue
+ */
+kern_return_t
+wait_queue_unlink_nofree(
+	wait_queue_t wq,
+	wait_queue_set_t wq_set,
+	wait_queue_link_t *wqlp)
+{
+	wait_queue_element_t wq_element;
+	wait_queue_link_t wql;
+	queue_t q;
+	spl_t s;
+
+	if (!wait_queue_is_valid(wq) || !wait_queue_is_set(wq_set)) {
+		return KERN_INVALID_ARGUMENT;
+	}
+	s = splsched();
+	wait_queue_lock(wq);
+
+	q = &wq->wq_queue;
+	wq_element = (wait_queue_element_t) queue_first(q);
+	while (!queue_end(q, (queue_entry_t)wq_element)) {
+		WAIT_QUEUE_ELEMENT_CHECK(wq, wq_element);
+		if (wq_element->wqe_type == WAIT_QUEUE_LINK ||
+		    wq_element->wqe_type == WAIT_QUEUE_LINK_NOALLOC) {
+
+		   	wql = (wait_queue_link_t)wq_element;
+			
+			if (wql->wql_setqueue == wq_set) {
+
+				wqs_lock(wq_set);
+				wait_queue_unlink_locked(wq, wq_set, wql);
+				wqs_unlock(wq_set);
+				wait_queue_unlock(wq);
+				splx(s);
+				*wqlp = wql;
+				return KERN_SUCCESS;
+			}
+		}
+		wq_element = (wait_queue_element_t)
+				queue_next((queue_t) wq_element);
+	}
+	wait_queue_unlock(wq);
+	splx(s);
+	return KERN_NOT_IN_SET;
+}	
+
+/*
  *	Routine:	wait_queue_unlink
  *	Purpose:
  *		Remove the linkage between a wait queue and a set,
@@ -732,36 +814,97 @@ wait_queue_unlink(
 }	
 
 /*
- *	Routine:	wait_queue_unlink_all
+ *	Routine:	wait_queue_unlink_all_nofree_locked
  *	Purpose:
  *		Remove the linkage between a wait queue and all its sets.
- *		All the linkage structures that were allocated internally
- *		are freed.  The others are the caller's responsibility.
+ *		All the linkage structures are returned to the caller for
+ *		later freeing.
  *	Conditions:
- *		Nothing of interest locked.
+ *		Wait queue locked.
  */
 
-kern_return_t
-wait_queue_unlink_all(
-	wait_queue_t wq)
+static void
+wait_queue_unlink_all_nofree_locked(
+	wait_queue_t wq,
+	queue_t links)
 {
 	wait_queue_element_t wq_element;
 	wait_queue_element_t wq_next_element;
 	wait_queue_set_t wq_set;
 	wait_queue_link_t wql;
-	queue_head_t links_queue_head;
-	queue_t links = &links_queue_head;
 	queue_t q;
+
+	q = &wq->wq_queue;
+
+	wq_element = (wait_queue_element_t) queue_first(q);
+	while (!queue_end(q, (queue_entry_t)wq_element)) {
+
+		WAIT_QUEUE_ELEMENT_CHECK(wq, wq_element);
+		wq_next_element = (wait_queue_element_t)
+			     queue_next((queue_t) wq_element);
+
+		if (wq_element->wqe_type == WAIT_QUEUE_LINK ||
+		    wq_element->wqe_type == WAIT_QUEUE_LINK_NOALLOC) {
+			wql = (wait_queue_link_t)wq_element;
+			wq_set = wql->wql_setqueue;
+			wqs_lock(wq_set);
+			wait_queue_unlink_locked(wq, wq_set, wql);
+			wqs_unlock(wq_set);
+			enqueue(links, &wql->wql_links);
+		}
+		wq_element = wq_next_element;
+	}
+}	
+
+/*
+ *	Routine:	wait_queue_unlink_all_nofree
+ *	Purpose:
+ *		Remove the linkage between a wait queue and all its sets.
+ *		All the linkage structures are returned to the caller for
+ *		later freeing.
+ *	Conditions:
+ *		Nothing of interest locked.
+ */
+
+kern_return_t
+wait_queue_unlink_all_nofree(
+	wait_queue_t wq,
+	queue_t links)
+{
 	spl_t s;
 
 	if (!wait_queue_is_valid(wq)) {
 		return KERN_INVALID_ARGUMENT;
 	}
 
-	queue_init(links);
-
 	s = splsched();
 	wait_queue_lock(wq);
+	wait_queue_unlink_all_nofree_locked(wq, links);
+	wait_queue_unlock(wq);
+	splx(s);
+
+	return(KERN_SUCCESS);
+}	
+
+/*
+ *	Routine:	wait_queue_unlink_all_locked
+ *	Purpose:
+ *		Remove the linkage between a locked wait queue and all its
+ *		sets and enqueue the allocated ones onto the links queue
+ *		provided.
+ *	Conditions:
+ *		Wait queue locked.
+ */
+static void
+wait_queue_unlink_all_locked(
+	wait_queue_t wq,
+	queue_t links)
+{
+	wait_queue_element_t wq_element;
+	wait_queue_element_t wq_next_element;
+	wait_queue_set_t wq_set;
+	wait_queue_link_t wql;
+	queue_t q;
 
 	q = &wq->wq_queue;
 
@@ -785,6 +928,38 @@ wait_queue_unlink_all(
 		}
 		wq_element = wq_next_element;
 	}
+
+}
+
+
+/*
+ *	Routine:	wait_queue_unlink_all
+ *	Purpose:
+ *		Remove the linkage between a wait queue and all its sets.
+ *		All the linkage structures that were allocated internally
+ *		are freed.  The others are the caller's responsibility.
+ *	Conditions:
+ *		Nothing of interest locked.
+ */
+
+kern_return_t
+wait_queue_unlink_all(
+	wait_queue_t wq)
+{
+	wait_queue_link_t wql;
+	queue_head_t links_queue_head;
+	queue_t links = &links_queue_head;
+	spl_t s;
+
+	if (!wait_queue_is_valid(wq)) {
+		return KERN_INVALID_ARGUMENT;
+	}
+
+	queue_init(links);
+
+	s = splsched();
+	wait_queue_lock(wq);
+	wait_queue_unlink_all_locked(wq, links);
 	wait_queue_unlock(wq);
 	splx(s);
 
@@ -806,11 +981,69 @@ wait_subqueue_unlink_all(
 
 
 /*
+ *	Routine:	wait_queue_set_unlink_all_nofree
+ *	Purpose:
+ *		Remove the linkage between a set wait queue and all its
+ *		member wait queues and all the sets it may be a member of.
+ *		The links structures are returned for later freeing by the
+ *		caller.
+ *	Conditions:
+ *		The wait queue must be a set
+ */
+kern_return_t
+wait_queue_set_unlink_all_nofree(
+	wait_queue_set_t wq_set,
+	queue_t		links)
+{
+	wait_queue_link_t wql;
+	wait_queue_t wq;
+	queue_t q;
+	spl_t s;
+
+	if (!wait_queue_is_set(wq_set)) {
+		return KERN_INVALID_ARGUMENT;
+	}
+
+retry:
+	s = splsched();
+	wqs_lock(wq_set);
+
+	/* remove the wait queues that are members of our set */
+	q = &wq_set->wqs_setlinks;
+
+	wql = (wait_queue_link_t)queue_first(q);
+	while (!queue_end(q, (queue_entry_t)wql)) {
+		WAIT_QUEUE_SET_LINK_CHECK(wq_set, wql);
+		wq = wql->wql_queue;
+		if (wait_queue_lock_try(wq)) {
+			wait_queue_unlink_locked(wq, wq_set, wql);
+			wait_queue_unlock(wq);
+			enqueue(links, &wql->wql_links);
+			wql = (wait_queue_link_t)queue_first(q);
+		} else {
+			wqs_unlock(wq_set);
+			splx(s);
+			delay(1);
+			goto retry;
+		}
+	}
+
+	/* remove this set from sets it belongs to */
+	wait_queue_unlink_all_nofree_locked(&wq_set->wqs_wait_queue, links);
+
+	wqs_unlock(wq_set);
+	splx(s);
+
+	return(KERN_SUCCESS);
+}	
+
+/*
  *	Routine:	wait_queue_set_unlink_all
  *	Purpose:
  *		Remove the linkage between a set wait queue and all its
- *		member wait queues. The link structures are freed for those
- *		links which were dynamically allocated.
+ *		member wait queues and all the sets it may be members of.
+ *		The link structures are freed for those	links which were
+ *		dynamically allocated.
  *	Conditions:
  *		The wait queue must be a set
  */
@@ -835,6 +1068,7 @@ retry:
 	s = splsched();
 	wqs_lock(wq_set);
 
+	/* remove the wait queues that are members of our set */
 	q = &wq_set->wqs_setlinks;
 
 	wql = (wait_queue_link_t)queue_first(q);
@@ -857,6 +1091,11 @@ retry:
 			goto retry;
 		}
 	}
+
+
+	/* remove this set from sets it belongs to */
+	wait_queue_unlink_all_locked(&wq_set->wqs_wait_queue, links);
+
 	wqs_unlock(wq_set);
 	splx(s);
 

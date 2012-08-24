@@ -92,6 +92,7 @@
 
 #include <machine/thread.h>
 #include <machine/pal_routines.h>
+#include <machine/limits.h>
 
 #include <kern/kern_types.h>
 #include <kern/kalloc.h>
@@ -161,6 +162,10 @@ int task_threadmax = CONFIG_THREAD_MAX;
 
 static uint64_t		thread_unique_id = 0;
 
+struct _thread_ledger_indices thread_ledgers = { -1 };
+static ledger_template_t thread_ledger_template = NULL;
+void init_thread_ledgers(void);
+
 void
 thread_bootstrap(void)
 {
@@ -196,7 +201,7 @@ thread_bootstrap(void)
 	thread_template.promotions = 0;
 	thread_template.pending_promoter_index = 0;
 	thread_template.pending_promoter[0] =
-		thread_template.pending_promoter[1] = NULL;
+	thread_template.pending_promoter[1] = NULL;
 
 	thread_template.realtime.deadline = UINT64_MAX;
 
@@ -257,14 +262,17 @@ thread_bootstrap(void)
 	thread_template.syscalls_unix = 0;
 	thread_template.syscalls_mach = 0;
 
-	thread_template.tkm_private.alloc = 0;
-	thread_template.tkm_private.free = 0;
-	thread_template.tkm_shared.alloc = 0;
-	thread_template.tkm_shared.free = 0;
-	thread_template.actionstate = default_task_null_policy;
-	thread_template.ext_actionstate = default_task_null_policy;
+	thread_template.t_ledger = LEDGER_NULL;
+	thread_template.t_threadledger = LEDGER_NULL;
+
+	thread_template.appliedstate = default_task_null_policy;
+	thread_template.ext_appliedstate = default_task_null_policy;
 	thread_template.policystate = default_task_proc_policy;
 	thread_template.ext_policystate = default_task_proc_policy;
+#if CONFIG_EMBEDDED
+	thread_template.taskwatch = NULL;
+	thread_template.saved_importance = 0;
+#endif /* CONFIG_EMBEDDED */
 
 	init_thread = thread_template;
 	machine_set_current_thread(&init_thread);
@@ -290,6 +298,8 @@ thread_init(void)
 	 *	per-thread structures necessary.
 	 */
 	machine_thread_init();
+
+	init_thread_ledgers();
 }
 
 static void
@@ -353,6 +363,10 @@ thread_terminate_self(void)
 	splx(s);
 
 	thread_policy_reset(thread);
+
+#if CONFIG_EMBEDDED
+	thead_remove_taskwatch(thread);
+#endif /* CONFIG_EMBEDDED */
 
 	task = thread->task;
 	uthread_cleanup(task, thread->uthread, task->bsd_info);
@@ -438,6 +452,11 @@ thread_deallocate(
 	}
 #endif  /* MACH_BSD */   
 
+	if (thread->t_ledger)
+		ledger_dereference(thread->t_ledger);
+	if (thread->t_threadledger)
+		ledger_dereference(thread->t_threadledger);
+
 	if (thread->kernel_stack != 0)
 		stack_free(thread);
 
@@ -474,7 +493,11 @@ thread_terminate_daemon(void)
 
 		task_lock(task);
 		task->total_user_time += timer_grab(&thread->user_timer);
-		task->total_system_time += timer_grab(&thread->system_timer);
+		if (thread->precise_user_kernel_time) {
+			task->total_system_time += timer_grab(&thread->system_timer);
+		} else {
+			task->total_user_time += timer_grab(&thread->system_timer);
+		}
 
 		task->c_switch += thread->c_switch;
 		task->p_switch += thread->p_switch;
@@ -482,11 +505,6 @@ thread_terminate_daemon(void)
 
 		task->syscalls_unix += thread->syscalls_unix;
 		task->syscalls_mach += thread->syscalls_mach;
-
-		task->tkm_private.alloc += thread->tkm_private.alloc;
-		task->tkm_private.free += thread->tkm_private.free;
-		task->tkm_shared.alloc += thread->tkm_shared.alloc;
-		task->tkm_shared.free += thread->tkm_shared.free;
 
 		queue_remove(&task->threads, thread, thread_t, task_threads);
 		task->thread_count--;
@@ -669,7 +687,7 @@ thread_create_internal(
 		return (KERN_FAILURE);
 	}
 
-    new_thread->task = parent_task;
+	new_thread->task = parent_task;
 
 	thread_lock_init(new_thread);
 	wake_lock_init(new_thread);
@@ -716,6 +734,18 @@ thread_create_internal(
 
 	task_reference_internal(parent_task);
 
+	if (new_thread->task->rusage_cpu_flags & TASK_RUSECPU_FLAGS_PERTHR_LIMIT) {
+		/*
+		 * This task has a per-thread CPU limit; make sure this new thread
+		 * gets its limit set too, before it gets out of the kernel.
+		 */
+		set_astledger(new_thread);
+	}
+	new_thread->t_threadledger = LEDGER_NULL;	/* per thread ledger is not inherited */
+	new_thread->t_ledger = new_thread->task->ledger;
+	if (new_thread->t_ledger)
+		ledger_reference(new_thread->t_ledger);
+
 	/* Cache the task's map */
 	new_thread->map = parent_task->map;
 
@@ -759,6 +789,21 @@ thread_create_internal(
 #endif /* CONFIG_EMBEDDED */
 	new_thread->importance =
 					new_thread->priority - new_thread->task_priority;
+#if CONFIG_EMBEDDED
+	new_thread->saved_importance = new_thread->importance;
+	/* apple ios daemon starts all threads in darwin background */
+	if (parent_task->ext_appliedstate.apptype == PROC_POLICY_IOS_APPLE_DAEMON) {
+		/* Cannot use generic routines here so apply darwin bacground directly */
+		new_thread->policystate.hw_bg = TASK_POLICY_BACKGROUND_ATTRIBUTE_ALL;
+		/* set thread self backgrounding */
+		new_thread->appliedstate.hw_bg = new_thread->policystate.hw_bg;
+		/* priority will get recomputed suitably bit later */
+		new_thread->importance = INT_MIN;
+		/* to avoid changes to many pri compute routines, set the effect of those here */
+		new_thread->priority = MAXPRI_THROTTLE;
+	}
+#endif /* CONFIG_EMBEDDED */
+
 #if defined(CONFIG_SCHED_TRADITIONAL)
 	new_thread->sched_stamp = sched_tick;
 	new_thread->pri_shift = sched_pri_shift;
@@ -774,16 +819,16 @@ thread_create_internal(
 
 		kdbg_trace_data(parent_task->bsd_info, &dbg_arg2);
 
-		KERNEL_DEBUG_CONSTANT(
-					TRACEDBG_CODE(DBG_TRACE_DATA, 1) | DBG_FUNC_NONE,
-							(vm_address_t)(uintptr_t)thread_tid(new_thread), dbg_arg2, 0, 0, 0);
+		KERNEL_DEBUG_CONSTANT_IST(KDEBUG_TRACE, 
+			TRACEDBG_CODE(DBG_TRACE_DATA, 1) | DBG_FUNC_NONE,
+			(vm_address_t)(uintptr_t)thread_tid(new_thread), dbg_arg2, 0, 0, 0);
 
 		kdbg_trace_string(parent_task->bsd_info,
 							&dbg_arg1, &dbg_arg2, &dbg_arg3, &dbg_arg4);
 
-		KERNEL_DEBUG_CONSTANT(
-					TRACEDBG_CODE(DBG_TRACE_STRING, 1) | DBG_FUNC_NONE,
-							dbg_arg1, dbg_arg2, dbg_arg3, dbg_arg4, 0);
+		KERNEL_DEBUG_CONSTANT_IST(KDEBUG_TRACE, 
+			TRACEDBG_CODE(DBG_TRACE_STRING, 1) | DBG_FUNC_NONE,
+			dbg_arg1, dbg_arg2, dbg_arg3, dbg_arg4, 0);
 	}
 
 	DTRACE_PROC1(lwp__create, thread_t, *out_thread);
@@ -1026,7 +1071,7 @@ kernel_thread_start(
 	return kernel_thread_start_priority(continuation, parameter, -1, new_thread);
 }
 
-#ifndef	__LP64__
+#if defined(__i386__)
 
 thread_t
 kernel_thread(
@@ -1048,7 +1093,7 @@ kernel_thread(
 	return (thread);
 }
 
-#endif	/* __LP64__ */
+#endif /* defined(__i386__) */
 
 kern_return_t
 thread_info_internal(
@@ -1270,14 +1315,29 @@ thread_read_times(
 {
 	clock_sec_t		secs;
 	clock_usec_t	usecs;
+	uint64_t		tval_user, tval_system;
 
-	absolutetime_to_microtime(timer_grab(&thread->user_timer), &secs, &usecs);
-	user_time->seconds = (typeof(user_time->seconds))secs;
-	user_time->microseconds = usecs;
+	tval_user = timer_grab(&thread->user_timer);
+	tval_system = timer_grab(&thread->system_timer);
 
-	absolutetime_to_microtime(timer_grab(&thread->system_timer), &secs, &usecs);
-	system_time->seconds = (typeof(system_time->seconds))secs;
-	system_time->microseconds = usecs;
+	if (thread->precise_user_kernel_time) {
+		absolutetime_to_microtime(tval_user, &secs, &usecs);
+		user_time->seconds = (typeof(user_time->seconds))secs;
+		user_time->microseconds = usecs;
+		
+		absolutetime_to_microtime(tval_system, &secs, &usecs);
+		system_time->seconds = (typeof(system_time->seconds))secs;
+		system_time->microseconds = usecs;
+	} else {
+		/* system_timer may represent either sys or user */
+		tval_user += tval_system;
+		absolutetime_to_microtime(tval_user, &secs, &usecs);
+		user_time->seconds = (typeof(user_time->seconds))secs;
+		user_time->microseconds = usecs;
+
+		system_time->seconds = 0;
+		system_time->microseconds = 0;
+	}
 }
 
 kern_return_t
@@ -1367,6 +1427,128 @@ thread_wire(
 	boolean_t	wired)
 {
     return (thread_wire_internal(host_priv, thread, wired, NULL));
+}
+
+static void
+thread_resource_exception(const void *arg0, __unused const void *arg1)
+{
+	thread_t thread = current_thread();
+	int code = (int)((uintptr_t)arg0 & ((int)-1));
+	
+	assert(thread->t_threadledger != LEDGER_NULL);
+
+	/*
+	 * Disable the exception notification so we don't overwhelm
+	 * the listener with an endless stream of redundant exceptions.
+	 */
+	ledger_set_action(thread->t_threadledger, thread_ledgers.cpu_time,
+	    LEDGER_ACTION_IGNORE);
+	ledger_disable_callback(thread->t_threadledger, thread_ledgers.cpu_time);
+
+	/* XXX code should eventually be a user-exported namespace of resources */
+	(void) task_exception_notify(EXC_RESOURCE, code, 0); 
+}
+
+void
+init_thread_ledgers(void) {
+	ledger_template_t t;
+	int idx;
+	
+	assert(thread_ledger_template == NULL);
+
+	if ((t = ledger_template_create("Per-thread ledger")) == NULL)
+		panic("couldn't create thread ledger template");
+
+	if ((idx = ledger_entry_add(t, "cpu_time", "sched", "ns")) < 0) {
+		panic("couldn't create cpu_time entry for thread ledger template");
+	}
+
+	if (ledger_set_callback(t, idx, thread_resource_exception,
+				(void *)(uintptr_t)idx, NULL) < 0) {
+	    	panic("couldn't set thread ledger callback for cpu_time entry");
+	}
+
+	thread_ledgers.cpu_time = idx;
+	thread_ledger_template = t;
+}
+
+/*
+ * Set CPU usage limit on a thread.
+ *
+ * Calling with percentage of 0 will unset the limit for this thread.
+ */
+ 
+int
+thread_set_cpulimit(int action, uint8_t percentage, uint64_t interval_ns)
+{
+	thread_t	thread = current_thread(); 
+	ledger_t	l;
+	uint64_t 	limittime = 0;
+	uint64_t	abstime = 0;
+
+	assert(percentage <= 100);
+
+	if (percentage == 0) {
+		/*
+		 * Remove CPU limit, if any exists.
+		 */
+		if (thread->t_threadledger != LEDGER_NULL) {
+			/*
+			 * The only way to get a per-thread ledger is via CPU limits.
+			 */
+			assert(thread->options & (TH_OPT_PROC_CPULIMIT | TH_OPT_PRVT_CPULIMIT));
+			ledger_dereference(thread->t_threadledger);
+			thread->t_threadledger = LEDGER_NULL;
+			thread->options &= ~(TH_OPT_PROC_CPULIMIT | TH_OPT_PRVT_CPULIMIT);
+		}
+
+		return (0);
+	}
+
+ 	l = thread->t_threadledger;
+	if (l == LEDGER_NULL) {
+		/*
+		 * This thread doesn't yet have a per-thread ledger; so create one with the CPU time entry active.
+		 */
+		if ((l = ledger_instantiate(thread_ledger_template, LEDGER_CREATE_INACTIVE_ENTRIES)) == LEDGER_NULL)
+			return (KERN_RESOURCE_SHORTAGE);
+
+		/*
+		 * We are the first to create this thread's ledger, so only activate our entry.
+		 */
+		ledger_entry_setactive(l, thread_ledgers.cpu_time);
+		thread->t_threadledger = l;
+	}
+
+	/*
+	 * The limit is specified as a percentage of CPU over an interval in nanoseconds.
+	 * Calculate the amount of CPU time that the thread needs to consume in order to hit the limit.
+	 */
+	limittime = (interval_ns * percentage) / 100;
+	nanoseconds_to_absolutetime(limittime, &abstime); 
+	ledger_set_limit(l, thread_ledgers.cpu_time, abstime);
+	/*
+	 * Refill the thread's allotted CPU time every interval_ns nanoseconds.
+	 */
+	ledger_set_period(l, thread_ledgers.cpu_time, interval_ns);
+
+	/*
+	 * Ledgers supports multiple actions for one ledger entry, so we do too.
+	 */
+	if (action == THREAD_CPULIMIT_EXCEPTION) {
+		thread->options |= TH_OPT_PROC_CPULIMIT;
+		ledger_set_action(l, thread_ledgers.cpu_time, LEDGER_ACTION_EXCEPTION);
+	}
+
+	if (action == THREAD_CPULIMIT_BLOCK) {
+		thread->options |= TH_OPT_PRVT_CPULIMIT;
+		/* The per-thread ledger template by default has a callback for CPU time */
+		ledger_disable_callback(l, thread_ledgers.cpu_time);
+		ledger_set_action(l, thread_ledgers.cpu_time, LEDGER_ACTION_BLOCK);
+	}
+
+	thread->t_threadledger = l;
+	return (0);
 }
 
 int		split_funnel_off = 0;
@@ -1603,12 +1785,6 @@ vm_offset_t dtrace_get_kernel_stack(thread_t thread)
 
 int64_t dtrace_calc_thread_recent_vtime(thread_t thread)
 {
-#if STAT_TIME
-	if (thread != THREAD_NULL) {
-		return timer_grab(&(thread->system_timer)) + timer_grab(&(thread->user_timer));
-	} else
-		return 0;
-#else
 	if (thread != THREAD_NULL) {
 		processor_t             processor = current_processor();
 		uint64_t 				abstime = mach_absolute_time();
@@ -1620,7 +1796,6 @@ int64_t dtrace_calc_thread_recent_vtime(thread_t thread)
 				(abstime - timer->tstamp); /* XXX need interrupts off to prevent missed time? */
 	} else
 		return 0;
-#endif
 }
 
 void dtrace_set_thread_predcache(thread_t thread, uint32_t predcache)

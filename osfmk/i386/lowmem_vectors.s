@@ -56,7 +56,6 @@
  */
 
 #include <platforms.h>
-#include <mach_kdb.h>
 #include <mach_kdp.h>
 
 #include <i386/asm.h>

@@ -124,18 +124,6 @@ EXT(mc_task_stack):
 	.globl	EXT(mc_task_stack_end)
 EXT(mc_task_stack_end):
 
-#if	MACH_KDB
-/*
- * Stack for last-ditch debugger task for each processor.
- */
-	.align	12
-	.globl	EXT(db_task_stack_store)
-EXT(db_task_stack_store):
-	.space	(INTSTACK_SIZE*MAX_CPUS)
-
-#endif	/* MACH_KDB */
-
-
 /*
  * BSP CPU start here.
  *	eax points to kernbootstruct
@@ -153,18 +141,18 @@ LEXT(_start)
 	mov		%eax, %ebp		/* Move kernbootstruct to ebp */
 	mov		%eax, %ebx		/* get pointer to kernbootstruct */
 
-	mov	$EXT(low_eintstack),%esp			/* switch to the bootup stack */
+	mov	$EXT(low_eintstack),%esp	/* switch to the bootup stack */
 
 	POSTCODE(PSTART_ENTRY)
 
-	lgdt	EXT(gdtptr)					/* load GDT */
+	lgdt	EXT(gdtptr)			/* load GDT */
 
-	mov	$(KERNEL_DS),%ax				/* set kernel data segment */
+	mov	$(KERNEL_DS),%ax		/* set kernel data segment */
 	mov	%ax, %ds
 	mov	%ax, %es
 	mov	%ax, %ss
-	xor	%ax, %ax						/* fs must be zeroed; */
-	mov	%ax, %fs						/* some bootstrappers don`t do this */
+	xor	%ax, %ax			/* fs must be zeroed; */
+	mov	%ax, %fs			/* some bootstrappers don`t do this */
 	mov	%ax, %gs
 	cld
 
@@ -173,10 +161,10 @@ LEXT(_start)
 	call .-1
 
 paging:
-	andl	$0xfffffff0, %esp				/* align stack */
+	andl	$0xfffffff0, %esp		/* align stack */
 	subl	$0xc, %esp
-	pushl	%ebp						/* push boot args addr */
-	xorl	%ebp, %ebp					/* zero frame pointer */
+	pushl	%ebp				/* push boot args addr */
+	xorl	%ebp, %ebp			/* zero frame pointer */
 	
 	POSTCODE(PSTART_BEFORE_PAGING)
 
@@ -185,14 +173,16 @@ paging:
  */
 	movl	$EXT(IdlePDPT), %eax		/* CR3 */
 	movl	%eax, %cr3
-	movl	%cr4, %eax					/* PAE */
+	movl	%cr4, %eax			/* PAE */
 	orl	$(CR4_PAE), %eax
 	movl	%eax, %cr4
-	movl	%cr0,%eax					/* paging */
+	movl	%cr0,%eax			/* paging */
 	orl	$(CR0_PG|CR0_WP),%eax
 	movl	%eax,%cr0
+
+	POSTCODE(PSTART_VSTART)
 	
-	call	EXT(vstart)					/* run C code */
+	call	EXT(vstart)			/* run C code */
 	/*NOTREACHED*/
 	hlt
 
@@ -292,7 +282,7 @@ LEXT(hibernate_machine_entrypoint)
 	/* set up the page tables to use BootstrapPTD 
 	 * as done in idle_pt.c, but this must be done programatically */
 	mov $EXT(IdlePDPT), %eax
-	mov $EXT(BootstrapPTD) + (INTEL_PTE_VALID), %ecx
+	mov $EXT(BootPTD) + (INTEL_PTE_VALID), %ecx
 	mov $0x0, %edx
 	mov	%ecx, (0*8+0)(%eax)
 	mov %edx, (0*8+4)(%eax)

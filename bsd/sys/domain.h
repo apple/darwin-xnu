@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2006 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2006, 2012 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -120,6 +120,8 @@ extern struct	domain localdomain;
 __BEGIN_DECLS
 extern void	net_add_domain(struct domain *dp);
 extern int	net_del_domain(struct domain *);
+extern int	domain_proto_mtx_lock(void);
+extern void	domain_proto_mtx_unlock(int locked);
 __END_DECLS
 
 #define DOMAIN_SET(domain_set) 

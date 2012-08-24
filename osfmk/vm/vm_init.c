@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2007 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2011 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -64,6 +64,7 @@
  */
 
 #include <mach/machine/vm_types.h>
+#include <mach/vm_map.h>
 #include <kern/zalloc.h>
 #include <kern/kalloc.h>
 #include <kern/kext_alloc.h>
@@ -88,7 +89,11 @@ const vm_offset_t vm_min_kernel_address = VM_MIN_KERNEL_AND_KEXT_ADDRESS;
 const vm_offset_t vm_max_kernel_address = VM_MAX_KERNEL_ADDRESS;
 
 boolean_t vm_kernel_ready = FALSE;
+boolean_t kmem_ready = FALSE;
 boolean_t zlog_ready = FALSE;
+
+vm_offset_t kmapoff_kaddr;
+unsigned int kmapoff_pgcnt;
 
 /*
  *	vm_mem_bootstrap initializes the virtual memory system.
@@ -107,7 +112,7 @@ vm_mem_bootstrap(void)
 	 *	From here on, all physical memory is accounted for,
 	 *	and we use only virtual addresses.
 	 */
-#define vm_mem_bootstrap_kprintf(x)
+#define vm_mem_bootstrap_kprintf(x) /* kprintf(x) */
 
 	vm_mem_bootstrap_kprintf(("vm_mem_bootstrap: calling vm_page_bootstrap\n"));
 	vm_page_bootstrap(&start, &end);
@@ -124,11 +129,25 @@ vm_mem_bootstrap(void)
 
 	vm_kernel_ready = TRUE;
 
-	vm_mem_bootstrap_kprintf(("vm_mem_bootstrap: calling vm_map_int\n"));
+	vm_mem_bootstrap_kprintf(("vm_mem_bootstrap: calling vm_map_init\n"));
 	vm_map_init();
 
 	vm_mem_bootstrap_kprintf(("vm_mem_bootstrap: calling kmem_init\n"));
 	kmem_init(start, end);
+	kmem_ready = TRUE;
+	/*
+	 * Eat a random amount of kernel_map to fuzz subsequent heap, zone and
+	 * stack addresses. (With a 4K page and 9 bits of randomness, this
+	 * eats at most 2M of VA from the map.)
+	 */
+	if (!PE_parse_boot_argn("kmapoff", &kmapoff_pgcnt,
+	    sizeof (kmapoff_pgcnt)))
+		kmapoff_pgcnt = early_random() & 0x1ff;	/* 9 bits */
+
+	if (kmapoff_pgcnt > 0 &&
+	    vm_allocate(kernel_map, &kmapoff_kaddr,
+	    kmapoff_pgcnt * PAGE_SIZE_64, VM_FLAGS_ANYWHERE) != KERN_SUCCESS)
+		panic("cannot vm_allocate %u kernel_map pages", kmapoff_pgcnt);
 
 	vm_mem_bootstrap_kprintf(("vm_mem_bootstrap: calling pmap_init\n"));
 	pmap_init();
@@ -158,21 +177,27 @@ vm_mem_bootstrap(void)
 
 	vm_mem_bootstrap_kprintf(("vm_mem_bootstrap: calling zone_init\n"));
 	assert((vm_size_t) zsize == zsize);
-	zone_init((vm_size_t) zsize);						/* Allocate address space for zones */
-	
+	zone_init((vm_size_t) zsize);	/* Allocate address space for zones */
+
+	/* The vm_page_zone must be created prior to kalloc_init; that
+	 * routine can trigger zalloc()s (for e.g. mutex statistic structure
+	 * initialization). The vm_page_zone must exist to saisfy fictitious
+	 * page allocations (which are used for guard pages by the guard
+	 * mode zone allocator).
+	 */
+	vm_mem_bootstrap_kprintf(("vm_mem_bootstrap: calling vm_page_module_init\n"));
+	vm_page_module_init();
+
 	vm_mem_bootstrap_kprintf(("vm_mem_bootstrap: calling kalloc_init\n"));
 	kalloc_init();
 
 	vm_mem_bootstrap_kprintf(("vm_mem_bootstrap: calling vm_fault_init\n"));
 	vm_fault_init();
 
-	vm_mem_bootstrap_kprintf(("vm_mem_bootstrap: calling vm_page_module_init\n"));
-	vm_page_module_init();
-
 	vm_mem_bootstrap_kprintf(("vm_mem_bootstrap: calling memory_manager_default_init\n"));
 	memory_manager_default_init();
 
-	vm_mem_bootstrap_kprintf(("vm_mem_bootstrap: calling meory_object_control_bootstrap\n"));
+	vm_mem_bootstrap_kprintf(("vm_mem_bootstrap: calling memory_object_control_bootstrap\n"));
 	memory_object_control_bootstrap();
 
 	vm_mem_bootstrap_kprintf(("vm_mem_bootstrap: calling device_pager_bootstrap\n"));

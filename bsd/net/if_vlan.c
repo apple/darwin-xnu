@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2003-2011 Apple Inc. All rights reserved.
+ * Copyright (c) 2003-2012 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -1090,6 +1090,8 @@ vlan_output(struct ifnet * ifp, struct mbuf * m)
     int 			soft_vlan;
     u_short			tag;
     vlan_parent_ref		vlp = NULL;
+    int				err;
+    struct flowadv		adv = { FADV_SUCCESS };
 	
     if (m == 0) {
 	return (0);
@@ -1167,7 +1169,18 @@ vlan_output(struct ifnet * ifp, struct mbuf * m)
 	evl->evl_encap_proto = htons(ETHERTYPE_VLAN);
 	evl->evl_tag = htons(tag);
     }
-    return (ifnet_output_raw(p, PF_VLAN, m));
+
+    err = dlil_output(p, PF_VLAN, m, NULL, NULL, 1, &adv);
+
+    if (err == 0) {
+	if (adv.code == FADV_FLOW_CONTROLLED) {
+	    err = EQFULL;
+	} else if (adv.code == FADV_SUSPENDED) {
+	    err = EQSUSPENDED;
+	}
+    }
+
+    return (err);
 
  unlock_done:
     vlan_unlock();
@@ -1208,7 +1221,7 @@ vlan_input(ifnet_t p, __unused protocol_family_t protocol,
 		m_freem(m);
 		return 0;
 	    }
-	    evl = (struct ether_vlan_header *)frame_header;
+	    evl = (struct ether_vlan_header *)(void *)frame_header;
 	    if (ntohs(evl->evl_proto) == ETHERTYPE_VLAN) {
 		/* don't allow VLAN within VLAN */
 		m_freem(m);

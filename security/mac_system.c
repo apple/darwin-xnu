@@ -192,3 +192,16 @@ mac_system_check_sysctl(kauth_cred_t cred, int *name, u_int namelen,
 
 	return (error);
 }
+
+int
+mac_system_check_kas_info(kauth_cred_t cred, int selector)
+{
+	int error;
+
+	if (!mac_system_enforce)
+		return (0);
+
+	MAC_CHECK(system_check_kas_info, cred, selector);
+
+	return (error);
+}

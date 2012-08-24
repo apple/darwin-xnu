@@ -165,16 +165,6 @@ struct sembuf {
 #if !defined(_POSIX_C_SOURCE) || defined(_DARWIN_C_SOURCE)
 
 /*
- * System imposed limit on the value of the third parameter to semop().
- * This is arbitrary, and the standards unfortunately do not provide a
- * way for user applications to retrieve this value (e.g. via sysconf()
- * or from a manifest value in <unistd.h>).  The value shown here is
- * informational, and subject to change in future revisions.
- */
-#define MAX_SOPS	5	/* maximum # of sembuf's per semop call */
-
-
-/*
  * Union used as the fourth argment to semctl() in all cases.  Specific
  * member values are used for different values of the third parameter:
  * 

@@ -90,7 +90,8 @@
 #define HOST_CHUD_PORT                  (9 + HOST_MAX_SPECIAL_KERNEL_PORT)
 #define HOST_UNFREED_PORT		(10 + HOST_MAX_SPECIAL_KERNEL_PORT)
 #define HOST_AMFID_PORT			(11 + HOST_MAX_SPECIAL_KERNEL_PORT)
-#define HOST_MAX_SPECIAL_PORT           (12 + HOST_MAX_SPECIAL_KERNEL_PORT)
+#define HOST_GSSD_PORT			(12 + HOST_MAX_SPECIAL_KERNEL_PORT)
+#define HOST_MAX_SPECIAL_PORT           (13 + HOST_MAX_SPECIAL_KERNEL_PORT)
                                         /* room to grow here as well */
 
 /*
@@ -176,5 +177,12 @@
 	HOST_LOCAL_NODE, HOST_AMFID_PORT, (port)))
 #define host_set_amfid_port(host, port)	\
 	(host_set_special_port((host), HOST_AMFID_PORT, (port)))
+
+#define host_get_gssd_port(host, port)	\
+	(host_get_special_port((host),			\
+	HOST_LOCAL_NODE, HOST_GSSD_PORT, (port)))
+
+#define host_set_gssd_port(host, port)	\
+	(host_set_special_port((host), HOST_GSSD_PORT, (port)))
 
 #endif	/* _MACH_HOST_SPECIAL_PORTS_H_ */

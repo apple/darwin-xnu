@@ -143,6 +143,7 @@ typedef union vm_map_object {
 } vm_map_object_t;
 
 #define named_entry_lock_init(object)	lck_mtx_init(&(object)->Lock, &vm_object_lck_grp, &vm_object_lck_attr)
+#define named_entry_lock_destroy(object)	lck_mtx_destroy(&(object)->Lock, &vm_object_lck_grp)
 #define named_entry_lock(object)		lck_mtx_lock(&(object)->Lock)
 #define named_entry_unlock(object)		lck_mtx_unlock(&(object)->Lock)   
 
@@ -238,9 +239,15 @@ struct vm_map_entry {
 	/* boolean_t */		zero_wired_pages:1, /* zero out the wired pages of this entry it is being deleted without unwiring them */
 	/* boolean_t */		used_for_jit:1,
 	/* boolean_t */	from_reserved_zone:1;	/* Allocated from
-							 * kernel reserved zone	 */
+						 * kernel reserved zone	 */
 	unsigned short		wired_count;	/* can be paged if = 0 */
 	unsigned short		user_wired_count; /* for vm_wire */
+#if	DEBUG
+#define	MAP_ENTRY_CREATION_DEBUG (1)
+#endif	
+#if	MAP_ENTRY_CREATION_DEBUG
+	uintptr_t		vme_bt[16];
+#endif
 };
 
 /*
@@ -317,7 +324,7 @@ struct _vm_map {
 	/* boolean_t */		wait_for_space:1, /* Should callers wait for space? */
 	/* boolean_t */		wiring_required:1, /* All memory wired? */
 	/* boolean_t */		no_zero_fill:1, /*No zero fill absent pages */
-	/* boolean_t */		mapped:1, /*has this map been mapped */
+	/* boolean_t */		mapped_in_other_pmaps:1, /*has this submap been mapped in maps that use a different pmap */
 	/* boolean_t */		switch_protect:1, /*  Protect map from write faults while switched */
 	/* boolean_t */		disable_vmentry_reuse:1, /*  All vm entries should keep using newer and higher addresses in the map */ 
 	/* boolean_t */		map_disallow_data_exec:1, /* Disallow execution from data pages on exec-permissive architectures */
@@ -325,7 +332,7 @@ struct _vm_map {
 	unsigned int		timestamp;	/* Version number */
 	unsigned int		color_rr;	/* next color (not protected by a lock) */
 #if CONFIG_FREEZE
-	void			*default_freezer_toc;
+	void			*default_freezer_handle;
 #endif
  	boolean_t		jit_entry_exists;
 } ;
@@ -701,6 +708,11 @@ extern kern_return_t	vm_map_copyin_object(
 				vm_object_size_t	size,
 				vm_map_copy_t		*copy_result); /* OUT */
 
+extern kern_return_t	vm_map_random_address_for_size(
+				vm_map_t	map,
+				vm_map_offset_t	*address,
+				vm_map_size_t	size);
+
 /* Enter a mapping */
 extern kern_return_t	vm_map_enter(
 				vm_map_t		map,
@@ -753,6 +765,7 @@ extern	kern_return_t	vm_map_read_user(
 
 /* Create a new task map using an existing task map as a template. */
 extern vm_map_t		vm_map_fork(
+				ledger_t		ledger,
 				vm_map_t		old_map);
 
 /* Change inheritance */
@@ -982,17 +995,24 @@ extern void		vm_map_set_64bit(
 extern void		vm_map_set_32bit(
 			        vm_map_t		map);
 
+extern boolean_t	vm_map_has_hard_pagezero(
+		       		vm_map_t		map,
+				vm_map_offset_t		pagezero_size);
+
 extern boolean_t	vm_map_is_64bit(
 			        vm_map_t		map);
+#define vm_map_has_4GB_pagezero(map) 	vm_map_has_hard_pagezero(map, (vm_map_offset_t)0x100000000ULL)
 
-extern boolean_t	vm_map_has_4GB_pagezero(
-		       		vm_map_t		map);
 
 extern void		vm_map_set_4GB_pagezero(
 			        vm_map_t		map);
 
 extern void		vm_map_clear_4GB_pagezero(
 			        vm_map_t		map);
+
+extern kern_return_t	vm_map_raise_max_offset(
+	vm_map_t	map,
+	vm_map_offset_t	new_max_offset);
 
 extern kern_return_t	vm_map_raise_min_offset(
 	vm_map_t	map,
@@ -1078,12 +1098,17 @@ extern kern_return_t vm_map_sign(vm_map_t map,
 #endif
 
 #if CONFIG_FREEZE
+void	vm_map_freeze_thaw_init(void);
+void	vm_map_freeze_thaw(void);
+void	vm_map_demand_fault(void);
+
 extern kern_return_t vm_map_freeze_walk(
               	vm_map_t map,
               	unsigned int *purgeable_count,
               	unsigned int *wired_count,
               	unsigned int *clean_count,
               	unsigned int *dirty_count,
+             	unsigned int dirty_budget,
               	boolean_t *has_shared);
 
 extern kern_return_t vm_map_freeze(
@@ -1092,9 +1117,10 @@ extern kern_return_t vm_map_freeze(
              	unsigned int *wired_count,
              	unsigned int *clean_count,
              	unsigned int *dirty_count,
+             	unsigned int dirty_budget,
              	boolean_t *has_shared);
                 
-extern void vm_map_thaw(
+extern kern_return_t vm_map_thaw(
                 vm_map_t map);
 #endif
 

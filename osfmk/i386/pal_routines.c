@@ -64,12 +64,7 @@ struct pal_apic_table *apic_table = NULL;
 
 decl_simple_lock_data(static , pal_efi_lock);
 #ifdef __x86_64__
-#define PML4_PROT	(INTEL_PTE_VALID | INTEL_PTE_WRITE)
-#define INIT_PDPT_BASE	(INITPT_SEG_BASE + PAGE_SIZE)
-static pml4_entry_t IDPML4[PTE_PER_PAGE] __attribute__ ((aligned (4096))) = {
-	[0]		    = (uint64_t)(INIT_PDPT_BASE | PML4_PROT),
-	[KERNEL_PML4_INDEX] = (uint64_t)(INIT_PDPT_BASE | PML4_PROT),
-};
+static pml4_entry_t IDPML4[PTE_PER_PAGE] __attribute__ ((aligned (4096)));
 uint64_t	pal_efi_saved_cr0;
 uint64_t	pal_efi_saved_cr3;
 #endif
@@ -168,6 +163,14 @@ pal_efi_call_in_64bit_mode(uint64_t func,
         return KERN_NOT_SUPPORTED;
     }
 
+    if (func < VM_MIN_KERNEL_ADDRESS) {
+        /*
+         * EFI Runtime Services must be mapped in our address
+         * space at an appropriate location.
+         */
+        return KERN_INVALID_ADDRESS;
+    }
+
     _pal_efi_call_in_64bit_mode_asm(func,
                                     efi_reg,
                                     stack_contents,
@@ -245,6 +248,8 @@ pal_efi_call_in_32bit_mode(uint32_t func,
     MARK_CPU_IDLE(cpu_number());
     pal_efi_saved_cr3 = get_cr3_raw();
     pal_efi_saved_cr0 = get_cr0();
+    IDPML4[KERNEL_PML4_INDEX] = IdlePML4[KERNEL_PML4_INDEX];
+    IDPML4[0]		      = IdlePML4[KERNEL_PML4_INDEX];
     clear_ts();
     set_cr3_raw((uint64_t) ID_MAP_VTOP(IDPML4));
     

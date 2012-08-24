@@ -68,11 +68,15 @@ struct sockaddr;
 		option.
 	@constant SFLT_EXTENDED	Indicates that this socket filter utilizes
 		the extended fields within the sflt_filter structure.
+	@constant SFLT_EXTENDED_REGISTRY Indicates that this socket filter
+		wants to attach to all the sockets already present on the
+		system. It will also receive notifications for these sockets.
 */
 enum {
 	SFLT_GLOBAL		= 0x01,
 	SFLT_PROG		= 0x02,
-	SFLT_EXTENDED		= 0x04
+	SFLT_EXTENDED		= 0x04,
+	SFLT_EXTENDED_REGISTRY	= 0x08
 };
 typedef	u_int32_t	sflt_flags;
 

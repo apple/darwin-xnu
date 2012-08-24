@@ -103,6 +103,9 @@ chudxnu_cpu_alloc(boolean_t boot_processor)
 
 	mpqueue_init(&chud_proc_info->cpu_request_queue, &chud_request_lck_grp, &chud_request_lck_attr);
 
+	/* timer_call_cancel() can be called before first usage, so init here: <rdar://problem/9320202> */
+	timer_call_setup(&(chud_proc_info->cpu_timer_call), NULL, NULL);
+
 
 	return (void *)chud_proc_info;
 }

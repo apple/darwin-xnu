@@ -46,4 +46,6 @@ __get_cpu_capabilities:
 	movl	_COMM_PAGE_CPU_CAPABILITIES, %eax
 	ret
 
+#else
+#error Unsupported architecture
 #endif

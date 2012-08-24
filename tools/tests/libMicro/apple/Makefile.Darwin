@@ -53,15 +53,21 @@ endif
 ### OPT_FLAG value was modified from '-g' to '-Os' as part of the fix for radar 7508837
 OPT_FLAG=	-Os
 SEMOP_FLAG=	-DUSE_SEMOP
+ifeq "$(Embedded)" "YES"
+SEMOP_FLAG= 
+endif
 
 ###
 ###CFLAGS=		-Os -DUSE_SEMOP -fno-builtin $(NOPIC) $(ARCH_FLAG) -Wall
 ###extra_CFLAGS=	-Os -DUSE_SEMOP -fno-builtin $(NOPIC) $(ARCH_FLAG) -Wall
-### Added -DUSE_GETHRTIME to CFLAGS and extra_CFLAGS as part of the fix for radar 7508837
+###
 CFLAGS+=		$(OPT_FLAG) $(SEMOP_FLAG) -DUSE_GETHRTIME -fno-builtin $(NOPIC) $(ARCH_FLAG) -Wall
+
 ifeq "$(Embedded)" "YES"
-CFLAGS += -g -I $(SDKPATH)/System/Library/Frameworks/System.framework/Versions/B/PrivateHeaders/ -F/AppleInternal/Library/Frameworks/ $(MORECFLAGS)
+#CFLAGS+=		 $(OPT_FLAG) -DUSE_GETHRTIME -fno-builtin $(NOPIC) $(ARCH_FLAG) -Wall
+CFLAGS+= -g -I $(SDKPATH)/System/Library/Frameworks/System.framework/Versions/B/PrivateHeaders/ -F/AppleInternal/Library/Frameworks/ $(MORECFLAGS)
 endif
+
 extra_CFLAGS=	$(OPT_FLAG) $(SEMOP_FLAG) -DUSE_GETHRTIME -fno-builtin $(NOPIC) $(ARCH_FLAG) -Wall
 CPPFLAGS=		$(SEMOP_FLAG) -D_REENTRANT -Wall
 MATHLIB=	-lm

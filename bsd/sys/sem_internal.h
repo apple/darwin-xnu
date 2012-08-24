@@ -146,7 +146,7 @@ typedef union user_semun user_semun_t;
 #define SEMMSL	SEMMNS		/* max # of semaphores per id */
 #endif
 #ifndef SEMOPM
-#define SEMOPM	100		/* max # of operations per semop call */
+#define SEMOPM	5		/* max # of operations per semop call */
 #endif
 
 

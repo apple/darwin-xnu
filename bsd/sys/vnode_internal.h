@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2010 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2012 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -93,12 +93,13 @@ struct label;
 
 LIST_HEAD(buflists, buf);
 
-
+#if CONFIG_VFS_FUNNEL
 struct unsafe_fsnode {
 	lck_mtx_t fsnodelock;
 	int32_t	  fsnode_count;
 	void *	  fsnodeowner;
 };
+#endif /* CONFIG_VFS_FUNNEL */
 
 #if CONFIG_TRIGGERS
 /*
@@ -177,12 +178,14 @@ struct vnode {
 	const char *v_name;			/* name component of the vnode */
 	vnode_t v_parent;			/* pointer to parent vnode */
 	struct lockf	*v_lockf;		/* advisory lock list head */
-#ifndef __LP64__
+#if CONFIG_VFS_FUNNEL
         struct unsafe_fsnode *v_unsafefs;	/* pointer to struct used to lock */
 #else 
 	int32_t		v_reserved1;
+#ifdef __LP64__
 	int32_t		v_reserved2;
-#endif /* __LP64__ */
+#endif
+#endif /* CONFIG_VFS_FUNNEL */
 	int 	(**v_op)(void *);		/* vnode operations vector */
 	mount_t v_mount;			/* ptr to vfs we are in */
 	void *	v_data;				/* private data for fs */
@@ -213,8 +216,9 @@ struct vnode {
 /*
  * v_listflag
  */
-#define VLIST_RAGE    0x01            /* vnode is currently in the rapid age list */
-#define VLIST_DEAD    0x02            /* vnode is currently in the dead list */
+#define VLIST_RAGE		  0x01		/* vnode is currently in the rapid age list */
+#define VLIST_DEAD		  0x02		/* vnode is currently in the dead list */
+#define VLIST_ASYNC_WORK	  0x04		/* vnode is currently on the deferred async work queue */
 
 /*
  * v_lflags
@@ -372,6 +376,8 @@ struct ostat;
 
 #define BUILDPATH_NO_FS_ENTER 0x1 /* Use cache values, do not enter file system */
 #define BUILDPATH_CHECKACCESS 0x2 /* Check if parents have search rights */
+#define BUILDPATH_CHECK_MOVED 0x4 /* Return EAGAIN if the parent hierarchy is modified */
+
 int	build_path(vnode_t first_vp, char *buff, int buflen, int *outlen, int flags, vfs_context_t ctx);
 
 int 	bdevvp(dev_t dev, struct vnode **vpp);

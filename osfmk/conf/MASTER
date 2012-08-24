@@ -113,6 +113,18 @@ options		CONFIG_ZLEAKS	# Live zone leak debugging	# <zleaks>
 
 #
 options		ZONE_ALIAS_ADDR	#		# <zone_alias_addr>
+
+
+#
+# CONFIG_TASK_ZONE_INFO allows per-task zone information to be extracted
+# Primarily useful for xnu debug and development.
+#
+options		CONFIG_TASK_ZONE_INFO		# <task_zone_info>
+#
+# CONFIG_DEBUGGER_FOR_ZONE_INFO restricts zone info so that it is only
+# available when the kernel is being debugged.
+#
+options		CONFIG_DEBUGGER_FOR_ZONE_INFO	# <debugger_for_zone_info>
 # 
 # XPR_DEBUG enables the gathering of data through the XPR macros inserted
 #	into various subsystems. This option is normally only enabled for
@@ -130,9 +142,11 @@ options		XPR_DEBUG	#		# <debug>
 options		MACH_LDEBUG	#		# <debug>
 
 #
-# 
+# configuration option for full, partial, or no kernel debug event tracing
 #
-options		KDEBUG		# kernel tracing	# <kdebug>
+options		KDEBUG			# kernel tracing	# <kdebug>
+options		IST_KDEBUG		# limited tracing	# <ist_kdebug>
+options		NO_KDEBUG       # no kernel tracing # <no_kdebug>
 
 #
 # CONFIG_DTRACE enables code needed to support DTrace. Currently this is
@@ -193,6 +207,11 @@ options		HIBERNATION		#		# <hibernation>
 #
 options		CONFIG_SLEEP		#		# <config_sleep>
 
+# CONFIG_KEXT_BASEMENT - alloc post boot loaded kexts after prelinked kexts
+#
+options		CONFIG_KEXT_BASEMENT		#		# <config_kext_basement>
+
+
 #
 #  configurable kernel related resources (CONFIG_THREAD_MAX needs to stay in 
 #  sync with bsd/conf/MASTER until we fix the config system... todo XXX
@@ -208,6 +227,13 @@ options   CONFIG_TASK_MAX=512			# <bsmall>
 options   CONFIG_ZONE_MAP_MIN=12582912	# <medium,large,xlarge>
 options   CONFIG_ZONE_MAP_MIN=6291456	# <small,xsmall>
 options   CONFIG_ZONE_MAP_MIN=1048576	# <bsmall>
+
+# Sizes must be a power of two for the zhash to 
+# be able to just mask off bits instead of mod 
+options	  CONFIG_ZLEAK_ALLOCATION_MAP_NUM=16384 #<medium,large,xlarge>
+options	  CONFIG_ZLEAK_ALLOCATION_MAP_NUM=8192	#<small,xsmall,bsmall>
+options   CONFIG_ZLEAK_TRACE_MAP_NUM=8192 #<medium,large,xlarge>
+options   CONFIG_ZLEAK_TRACE_MAP_NUM=4096 #<small,xsmall,bsmall>
 
 #
 #  configurable kernel - use these options to strip strings from panic
@@ -260,12 +286,30 @@ options		CONFIG_SCHED_FIXEDPRIORITY	# <config_sched_fixedpriority>
 options		CONFIG_SCHED_GRRR_CORE		# <config_sched_grrr,config_sched_fixedpriority>
 
 options		CONFIG_SCHED_IDLE_IN_PLACE		# <config_sched_idle_in_place>
+options		CONFIG_GZALLOC			# <config_gzalloc>
+#
+# enable per-process memory priority tracking
+#
+options		CONFIG_MEMORYSTATUS				# <memorystatus>
 
 #
-# freeze - support app hibernation, used on embedded
+# enable jetsam - used on embedded
 #
-options		CONFIG_FREEZE	# <freeze>
+options		CONFIG_JETSAM				# <jetsam>
 
+#
+# enable freezing of suspended processes - used on embedded
+#
+options		CONFIG_FREEZE					# <freeze>
 
 options		CHECK_CS_VALIDATION_BITMAP	# <config_cs_validation_bitmap>
 
+#
+# Enable dispatch of memory pressure events from the vm_pageout_garbage_collect thread
+#
+options		VM_PRESSURE_EVENTS		# <vm_pressure_events>
+
+# Enable allocation of contiguous physical memory through vm_map_enter_cpm()
+options		VM_CPM		# <vm_cpm>
+
+options	    CONFIG_SKIP_PRECISE_USER_KERNEL_TIME	# <config_skip_precise_user_kernel_time>

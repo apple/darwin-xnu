@@ -44,8 +44,6 @@ OPTIONS/mach_cluster_stats	optional mach_cluster_stats
 OPTIONS/mach_counters		optional mach_counters
 OPTIONS/mach_ipc_debug		optional mach_ipc_debug
 OPTIONS/mach_ipc_test		optional mach_ipc_test
-OPTIONS/mach_kdb		optional mach_kdb
-OPTIONS/mach_kgdb		optional mach_kgdb
 OPTIONS/mach_kdp		optional mach_kdp
 OPTIONS/config_serial_kdp		optional config_serial_kdp
 OPTIONS/mach_kprof		optional mach_kprof
@@ -57,7 +55,6 @@ OPTIONS/advisory_pageout	optional advisory_pageout
 OPTIONS/mach_vm_debug		optional mach_vm_debug
 OPTIONS/mach_page_hash_stats    optional mach_page_hash_stats
 OPTIONS/mig_debug		optional mig_debug
-OPTIONS/stat_time		optional stat_time
 OPTIONS/time_stamp		optional time_stamp
 OPTIONS/xpr_debug		optional xpr_debug
 OPTIONS/bootstrap_symbols	optional bootstrap_symbols
@@ -104,27 +101,6 @@ osfmk/default_pager/dp_memory_object.c	standard
 ./UserNotification/UNDReplyServer.c		standard
 osfmk/UserNotification/KUNCUserNotifications.c	standard
 
-osfmk/ddb/db_access.c			optional mach_kdb
-osfmk/ddb/db_break.c			optional mach_kdb
-osfmk/ddb/db_command.c		optional mach_kdb
-osfmk/ddb/db_cond.c			optional mach_kdb
-osfmk/ddb/db_examine.c		optional mach_kdb
-osfmk/ddb/db_expr.c			optional mach_kdb
-osfmk/ddb/db_ext_symtab.c		standard
-osfmk/ddb/db_input.c			optional mach_kdb
-osfmk/ddb/db_lex.c			optional mach_kdb
-osfmk/ddb/db_macro.c			optional mach_kdb
-osfmk/ddb/db_output.c			optional mach_kdb
-osfmk/ddb/db_print.c			optional mach_kdb
-osfmk/ddb/db_run.c			optional mach_kdb
-osfmk/ddb/db_sym.c			optional mach_kdb
-osfmk/ddb/db_task_thread.c		optional mach_kdb
-osfmk/ddb/db_trap.c			optional mach_kdb
-osfmk/ddb/db_variables.c		optional mach_kdb
-osfmk/ddb/db_watch.c			optional mach_kdb
-osfmk/ddb/db_write_cmd.c		optional mach_kdb
-
-osfmk/ddb/tr.c			optional mach_tr
 osfmk/kdp/kdp.c			optional mach_kdp
 osfmk/kdp/kdp_udp.c			optional mach_kdp
 osfmk/kdp/kdp_serial.c			optional config_serial_kdp
@@ -139,10 +115,10 @@ osfmk/ipc/ipc_port.c			standard
 osfmk/ipc/ipc_pset.c			standard
 osfmk/ipc/ipc_right.c			standard
 osfmk/ipc/ipc_space.c			standard
-osfmk/ipc/ipc_splay.c			standard
 osfmk/ipc/ipc_table.c			standard
 osfmk/ipc/ipc_labelh.c			standard
 osfmk/ipc/mach_debug.c		standard
+osfmk/ipc/mach_kernelrpc.c		standard
 osfmk/ipc/mach_msg.c			standard
 osfmk/ipc/mach_port.c			standard
 osfmk/ipc/mig_log.c			optional mig_debug
@@ -167,7 +143,6 @@ osfmk/kern/ipc_tt.c			standard
 osfmk/kern/kalloc.c			standard
 osfmk/kern/ledger.c			standard
 osfmk/kern/locks.c			standard
-osfmk/kern/mach_clock.c		standard
 osfmk/kern/machine.c			standard
 osfmk/kern/mk_sp.c			standard
 osfmk/kern/mk_timer.c		standard
@@ -202,6 +177,7 @@ osfmk/kern/timer_call.c		standard
 osfmk/kern/wait_queue.c		standard
 osfmk/kern/xpr.c			optional xpr_debug
 osfmk/kern/zalloc.c			standard
+osfmk/kern/gzalloc.c		optional config_gzalloc
 osfmk/kern/bsd_kern.c		optional mach_bsd
 osfmk/kern/hibernate.c		optional hibernation
 osfmk/pmc/pmc.c				standard 
@@ -212,7 +188,6 @@ osfmk/pmc/pmc.c				standard
 ./mach/exc_server.c			optional mach_bsd
 ./mach/host_priv_server.c		standard
 ./mach/host_security_server.c		standard
-./mach/ledger_server.c			standard
 ./mach/lock_set_server.c		standard
 ./mach/mach_exc_user.c			standard
 ./mach/mach_exc_server.c		optional mach_bsd
@@ -288,5 +263,15 @@ osfmk/chud/chud_glue.c			standard
 osfmk/chud/chud_memory.c		standard
 osfmk/chud/chud_osfmk_callback.c	standard
 osfmk/chud/chud_thread.c		standard
+
+# Kernel performance monitoring
+osfmk/kperf/kperf.c                     optional kperf
+osfmk/kperf/action.c                    optional kperf
+osfmk/kperf/callstack.c                 optional kperf
+osfmk/kperf/pet.c                       optional kperf
+osfmk/kperf/filter.c                    optional kperf
+# osfmk/kperf/kperfbsd.c                    optional kperf # bsd/conf/files
+osfmk/kperf/threadinfo.c                optional kperf
+osfmk/kperf/timetrigger.c               optional kperf
 
 osfmk/console/serial_general.c	standard

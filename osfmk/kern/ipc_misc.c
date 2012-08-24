@@ -62,8 +62,8 @@ fileport_alloc(struct fileglob *fg)
 	}
 
 	ipc_kobject_set(fileport, (ipc_kobject_t)fg, IKOT_FILEPORT);
-	notifyport = ipc_port_make_sonce(fileport);
 	ip_lock(fileport); /* unlocked by ipc_port_nsrequest */
+	notifyport = ipc_port_make_sonce_locked(fileport);
 	ipc_port_nsrequest(fileport, 1, notifyport, &notifyport);
 
 	sendport = ipc_port_make_send(fileport);

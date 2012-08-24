@@ -355,13 +355,15 @@ routine io_iterator_is_valid(
 	out is_valid		: boolean_t
 	);
 
-routine io_make_matching(
+skip;
+/* was routine io_make_matching(
 	    master_port		: mach_port_t;
 	in  of_type		: uint32_t;
 	in  options		: uint32_t;
 	in  input		: io_struct_inband_t;
 	out matching		: io_string_t
 	);
+*/
 
 routine io_catalog_send_data(
 	    master_port		: mach_port_t;
@@ -694,6 +696,20 @@ routine io_connect_method_var_output(
 	out scalar_output	: io_scalar_inband64_t, CountInOut;
 	out var_output		: io_buf_ptr_t, physicalcopy
 	);
+
+routine io_service_get_matching_service(
+	    master_port		: mach_port_t;
+	in  matching		: io_string_t;
+	out service		: io_object_t
+	);
+
+routine io_service_get_matching_service_ool(
+	    master_port		: mach_port_t;
+	in  matching		: io_buf_ptr_t, physicalcopy;
+        out result		: kern_return_t;
+	out service		: io_object_t
+	);
+
 
 #endif /* IOKIT */
 

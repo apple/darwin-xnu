@@ -16,7 +16,6 @@ iokit/Kernel/IOHibernateRestoreKernel.c			optional hibernation
 iokit/Kernel/IOLib.cpp					optional iokitcpp
 iokit/Kernel/IOLocks.cpp				optional iokitcpp
 iokit/Kernel/IOConditionLock.cpp			optional iokitcpp
-iokit/Kernel/IOSyncer.cpp				optional iokitcpp
 
 #iokit/Kernel/IORuntime.cpp				optional iokitcpp
 iokit/Kernel/IOStartIOKit.cpp				optional iokitcpp

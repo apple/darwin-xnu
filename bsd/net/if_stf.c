@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2010 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2012 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -150,7 +150,7 @@
 #include <security/mac_framework.h>
 #endif
 
-#define GET_V4(x)	((const struct in_addr *)(&(x)->s6_addr16[1]))
+#define GET_V4(x) ((const struct in_addr *)(const void *)(&(x)->s6_addr16[1])) 
 
 static lck_grp_t *stf_mtx_grp;
 
@@ -473,7 +473,7 @@ stf_getsrcifa6(struct ifnet *ifp)
 			IFA_UNLOCK(ia);
 			continue;
 		}
-		sin6 = (struct sockaddr_in6 *)ia->ifa_addr;
+		sin6 = (struct sockaddr_in6 *)(void *)ia->ifa_addr;
 		if (!IN6_IS_ADDR_6TO4(&sin6->sin6_addr)) {
 			IFA_UNLOCK(ia);
 			continue;
@@ -524,11 +524,11 @@ stf_pre_output(
 	struct ip6_hdr *ip6;
 	struct in6_ifaddr *ia6;
 	struct sockaddr_in 	*dst4;
-	struct ip_out_args ipoa = { IFSCOPE_NONE, 0 };
+	struct ip_out_args ipoa = { IFSCOPE_NONE, { 0 }, IPOAF_SELECT_SRCIF };
 	errno_t				result = 0;
 
 	sc = ifnet_softc(ifp);
-	dst6 = (const struct sockaddr_in6 *)dst;
+	dst6 = (const struct sockaddr_in6 *)(const void *)dst;
 
 	/* just in case */
 	if ((ifnet_flags(ifp) & IFF_UP) == 0) {
@@ -603,7 +603,7 @@ stf_pre_output(
 		ip_ecn_ingress(ECN_NOCARE, &ip->ip_tos, &tos);
 
 	lck_mtx_lock(&sc->sc_ro_mtx);
-	dst4 = (struct sockaddr_in *)&sc->sc_ro.ro_dst;
+	dst4 = (struct sockaddr_in *)(void *)&sc->sc_ro.ro_dst;
 	if (dst4->sin_family != AF_INET ||
 	    bcmp(&dst4->sin_addr, &ip->ip_dst, sizeof(ip->ip_dst)) != 0) {
 		/* cache route doesn't match: always the case during the first use */
@@ -616,7 +616,8 @@ stf_pre_output(
 		}
 	}
 
-	result = ip_output_list(m, 0, NULL, &sc->sc_ro, IP_OUTARGS, NULL, &ipoa);
+	result = ip_output_list(m, 0, NULL, &sc->sc_ro, IP_OUTARGS, NULL,
+	    &ipoa);
 	lck_mtx_unlock(&sc->sc_ro_mtx);
 
 	/* Assumption: ip_output will free mbuf on errors */
@@ -865,7 +866,7 @@ stf_ioctl(
 			error = EAFNOSUPPORT;
 			break;
 		}
-		sin6 = (struct sockaddr_in6 *)ifa->ifa_addr;
+		sin6 = (struct sockaddr_in6 *)(void *)ifa->ifa_addr;
 		if (IN6_IS_ADDR_6TO4(&sin6->sin6_addr)) {
                         if ( !(ifnet_flags( ifp ) & IFF_UP) ) {
                                 /* do this only if the interface is not already up */

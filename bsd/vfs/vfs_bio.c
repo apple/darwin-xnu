@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2010 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2012 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -109,6 +109,7 @@
 #include <sys/ubc_internal.h>
 
 #include <sys/sdt.h>
+#include <sys/cprotect.h>
 
 
 #if BALANCE_QUEUES
@@ -382,28 +383,81 @@ buf_markfua(buf_t bp) {
         SET(bp->b_flags, B_FUA);
 }
 
-#ifdef CONFIG_PROTECT
-void *
-buf_getcpaddr(buf_t bp) {
-	return bp->b_cpentry;
+#if CONFIG_PROTECT
+void
+buf_setcpaddr(buf_t bp, struct cprotect *entry) {
+	bp->b_attr.ba_cpentry = entry;
 }
 
-void 
-buf_setcpaddr(buf_t bp, void *cp_entry_addr) {
-	bp->b_cpentry = (struct cprotect *) cp_entry_addr;
+void
+buf_setcpoff (buf_t bp, uint64_t foffset) {
+	bp->b_attr.ba_cp_file_off = foffset;
+}
+
+void *
+bufattr_cpaddr(bufattr_t bap) {
+	return (bap->ba_cpentry);
+}
+
+uint64_t
+bufattr_cpoff(bufattr_t bap) {
+	return (bap->ba_cp_file_off);
+}
+
+void
+bufattr_setcpaddr(bufattr_t bap, void *cp_entry_addr) {
+        bap->ba_cpentry = cp_entry_addr;
+}
+
+void
+bufattr_setcpoff(bufattr_t bap, uint64_t foffset) {
+        bap->ba_cp_file_off = foffset;
 }
 
 #else
 void *
-buf_getcpaddr(buf_t bp __unused) {
-	return NULL;
+bufattr_cpaddr(bufattr_t bap __unused) {
+        return NULL;
 }
 
-void 
-buf_setcpaddr(buf_t bp __unused, void *cp_entry_addr __unused) {
+uint64_t
+bufattr_cpoff(bufattr_t bap __unused) {
+	return 0;
+}
+
+void
+bufattr_setcpaddr(bufattr_t bap __unused, void *cp_entry_addr __unused) {
+}
+
+void
+bufattr_setcpoff(__unused bufattr_t bap, __unused uint64_t foffset) {
 	return;
 }
 #endif /* CONFIG_PROTECT */
+
+bufattr_t
+bufattr_alloc() {
+	bufattr_t bap;
+	MALLOC(bap, bufattr_t, sizeof(struct bufattr), M_TEMP, M_WAITOK);
+	if (bap == NULL)
+		return NULL;
+
+	bzero(bap, sizeof(struct bufattr));
+	return bap;
+}
+
+void
+bufattr_free(bufattr_t bap) {
+	if (bap)
+		FREE(bap, M_TEMP);
+}
+
+int
+bufattr_rawencrypted(bufattr_t bap) {
+	if ( (bap->ba_flags & BA_RAW_ENCRYPTED_IO) )
+		return 1;
+	return 0;
+}
 
 int
 bufattr_throttled(bufattr_t bap) {
@@ -412,9 +466,49 @@ bufattr_throttled(bufattr_t bap) {
 	return 0;
 }
 
+int
+bufattr_nocache(bufattr_t bap) {
+	if ( (bap->ba_flags & BA_NOCACHE) )
+		return 1;
+	return 0;
+}
+
+int
+bufattr_meta(bufattr_t bap) {
+	if ( (bap->ba_flags & BA_META) )
+		return 1;
+	return 0;
+}
+
+int
+#if !CONFIG_EMBEDDED
+bufattr_delayidlesleep(bufattr_t bap) 
+#else /* !CONFIG_EMBEDDED */
+bufattr_delayidlesleep(__unused bufattr_t bap) 
+#endif /* !CONFIG_EMBEDDED */
+{
+#if !CONFIG_EMBEDDED
+	if ( (bap->ba_flags & BA_DELAYIDLESLEEP) )
+		return 1;
+#endif /* !CONFIG_EMBEDDED */
+	return 0;
+}
+
 bufattr_t
 buf_attr(buf_t bp) {
 	return &bp->b_attr;
+}
+
+void 
+buf_markstatic(buf_t bp __unused) {
+	SET(bp->b_flags, B_STATICCONTENT);
+}
+
+int
+buf_static(buf_t bp) {
+    if ( (bp->b_flags & B_STATICCONTENT) )
+        return 1;
+    return 0;
 }
 
 errno_t
@@ -1135,7 +1229,7 @@ buf_strategy(vnode_t devvp, void *ap)
 		        return (cluster_bp(bp));
 		}
 		if (bp->b_blkno == bp->b_lblkno) {
-		        off_t	f_offset;
+		    off_t	f_offset;
 			size_t 	contig_bytes;
 		  
 			if ((error = VNOP_BLKTOOFF(vp, bp->b_lblkno, &f_offset))) {
@@ -1143,21 +1237,22 @@ buf_strategy(vnode_t devvp, void *ap)
 			        buf_seterror(bp, error);
 				buf_biodone(bp);
 
-			        return (error);
+			    return (error);
 			}
-			if ((error = VNOP_BLOCKMAP(vp, f_offset, bp->b_bcount, &bp->b_blkno, &contig_bytes, NULL, bmap_flags, NULL))) {
+
+		if ((error = VNOP_BLOCKMAP(vp, f_offset, bp->b_bcount, &bp->b_blkno, &contig_bytes, NULL, bmap_flags, NULL))) {
 				DTRACE_IO1(start, buf_t, bp);
 			        buf_seterror(bp, error);
 				buf_biodone(bp);
 
 			        return (error);
 			}
-			
+
 			DTRACE_IO1(start, buf_t, bp);
 #if CONFIG_DTRACE
 			dtrace_io_start_flag = 1;
 #endif /* CONFIG_DTRACE */			
-			
+
 			if ((bp->b_blkno == -1) || (contig_bytes == 0)) {
 				/* Set block number to force biodone later */
 				bp->b_blkno = -1;
@@ -1186,6 +1281,33 @@ buf_strategy(vnode_t devvp, void *ap)
 		DTRACE_IO1(start, buf_t, bp);
 #endif /* CONFIG_DTRACE */
 	
+#if CONFIG_PROTECT
+	/* Capture f_offset in the bufattr*/
+	if (bp->b_attr.ba_cpentry != 0) {
+		/* No need to go here for older EAs */
+		if(bp->b_attr.ba_cpentry->cp_flags & CP_OFF_IV_ENABLED) {
+			off_t f_offset;
+			if ((error = VNOP_BLKTOOFF(bp->b_vp, bp->b_lblkno, &f_offset)))
+				return error;
+
+			/* 
+			 * Attach the file offset to this buffer.  The
+			 * bufattr attributes will be passed down the stack
+			 * until they reach IOFlashStorage.  IOFlashStorage
+			 * will retain the offset in a local variable when it
+			 * issues its I/Os to the NAND controller.	 
+			 * 
+			 * Note that LwVM may end up splitting this I/O 
+			 * into sub-I/Os if it crosses a chunk boundary.  In this
+			 * case, LwVM will update this field when it dispatches
+			 * each I/O to IOFlashStorage.  But from our perspective
+			 * we have only issued a single I/O.
+			 */
+			bufattr_setcpoff (&(bp->b_attr), (u_int64_t)f_offset);
+		}
+	}
+#endif
+
 	/*
 	 * we can issue the I/O because...
 	 * either B_CLUSTER is set which
@@ -1489,12 +1611,20 @@ try_dirty_list:
 
 void
 buf_flushdirtyblks(vnode_t vp, int wait, int flags, const char *msg) {
+
+	(void) buf_flushdirtyblks_skipinfo(vp, wait, flags, msg);
+	return;
+}
+
+int
+buf_flushdirtyblks_skipinfo(vnode_t vp, int wait, int flags, const char *msg) {
 	buf_t	bp;
 	int	writes_issued = 0;
 	errno_t	error;
 	int	busy = 0;
 	struct	buflists local_iterblkhd;
 	int	lock_flags = BAC_NOWAIT | BAC_REMOVE;
+	int any_locked = 0;
 
 	if (flags & BUF_SKIP_LOCKED)
 	        lock_flags |= BAC_SKIP_LOCKED;
@@ -1508,11 +1638,26 @@ loop:
 			bp = LIST_FIRST(&local_iterblkhd);
 			LIST_REMOVE(bp, b_vnbufs);
 			LIST_INSERT_HEAD(&vp->v_dirtyblkhd, bp, b_vnbufs);
-			
-			if ((error = buf_acquire_locked(bp, lock_flags, 0, 0)) == EBUSY)
-			        busy++;
-			if (error)
-			        continue;
+
+			if ((error = buf_acquire_locked(bp, lock_flags, 0, 0)) == EBUSY) {
+				busy++;
+			}
+			if (error) {
+				/* 
+				 * If we passed in BUF_SKIP_LOCKED or BUF_SKIP_NONLOCKED,
+				 * we may want to do somethign differently if a locked or unlocked
+				 * buffer was encountered (depending on the arg specified).
+				 * In this case, we know that one of those two was set, and the
+				 * buf acquisition failed above.  
+				 * 
+				 * If it failed with EDEADLK, then save state which can be emitted
+				 * later on to the caller.  Most callers should not care.
+				 */
+				if (error == EDEADLK) {
+					any_locked++;
+				}
+				continue;
+			}
 			lck_mtx_unlock(buf_mtxp);
 
 			bp->b_flags &= ~B_LOCKED;
@@ -1558,6 +1703,8 @@ loop:
 			goto loop;
 		}
 	}
+
+	return any_locked;
 }
 
 
@@ -2267,6 +2414,8 @@ buf_brelse_shadow(buf_t bp)
 	buf_t	bp_data;
 	int	data_ref = 0;
 #endif
+	int need_wakeup = 0;
+
 	lck_mtx_lock_spin(buf_mtxp);
 
 	bp_head = (buf_t)bp->b_orig;
@@ -2334,8 +2483,17 @@ buf_brelse_shadow(buf_t bp)
 
 			bp_return = bp_head;
 		}
+		if (ISSET(bp_head->b_lflags, BL_WANTED_REF)) {
+			CLR(bp_head->b_lflags, BL_WANTED_REF);
+			need_wakeup = 1;
+		}
 	}
 	lck_mtx_unlock(buf_mtxp);
+	
+	if (need_wakeup) {
+		wakeup(bp_head);
+	}
+
 #ifdef BUF_MAKE_PRIVATE	
 	if (bp == bp_data && data_ref == 0)
 		buf_free_meta_store(bp);
@@ -2662,7 +2820,30 @@ incore_locked(vnode_t vp, daddr64_t blkno, struct bufhashhdr *dp)
 	return (NULL);
 }
 
+void
+buf_wait_for_shadow_io(vnode_t vp, daddr64_t blkno)
+{
+	buf_t bp;
+	struct	bufhashhdr *dp;
 
+	dp = BUFHASH(vp, blkno);
+
+	lck_mtx_lock_spin(buf_mtxp);
+
+	for (;;) {
+		if ((bp = incore_locked(vp, blkno, dp)) == NULL)
+			break;
+
+		if (bp->b_shadow_ref == 0)
+			break;
+
+		SET(bp->b_lflags, BL_WANTED_REF);
+
+		(void) msleep(bp, buf_mtxp, PSPIN | (PRIBIO+1), "buf_wait_for_shadow", NULL);
+	}
+	lck_mtx_unlock(buf_mtxp);
+}
+	
 /* XXX FIXME -- Update the comment to reflect the UBC changes (please) -- */
 /*
  * Get a block of requested size that is associated with
@@ -3409,9 +3590,6 @@ bcleanbuf(buf_t bp, boolean_t discard)
 		bp->b_bcount = 0;
 		bp->b_dirtyoff = bp->b_dirtyend = 0;
 		bp->b_validoff = bp->b_validend = 0;
-#ifdef CONFIG_PROTECT
-		bp->b_cpentry = 0;
-#endif
 		bzero(&bp->b_attr, sizeof(struct bufattr));
 
 		lck_mtx_lock_spin(buf_mtxp);
@@ -3654,12 +3832,15 @@ buf_biodone(buf_t bp)
 		else if (bp->b_flags & B_PASSIVE)
 			code |= DKIO_PASSIVE;
 
-		KERNEL_DEBUG_CONSTANT(FSDBG_CODE(DBG_DKRW, code) | DBG_FUNC_NONE,
+		if (bp->b_attr.ba_flags & BA_NOCACHE)
+			code |= DKIO_NOCACHE;
+
+		KERNEL_DEBUG_CONSTANT_IST(KDEBUG_COMMON, FSDBG_CODE(DBG_DKRW, code) | DBG_FUNC_NONE,
                               bp, (uintptr_t)bp->b_vp,
 				      bp->b_resid, bp->b_error, 0);
         }
 	if ((bp->b_vp != NULLVP) &&
-	    ((bp->b_flags & (B_IOSTREAMING | B_PAGEIO | B_READ)) == (B_PAGEIO | B_READ)) &&
+	    ((bp->b_flags & (B_THROTTLED_IO | B_PASSIVE | B_IOSTREAMING | B_PAGEIO | B_READ | B_THROTTLED_IO | B_PASSIVE)) == (B_PAGEIO | B_READ)) &&
 	    (bp->b_vp->v_mount->mnt_kern_flag & MNTK_ROOTDEV)) {
 	        microuptime(&priority_IO_timestamp_for_root);
 	        hard_throttle_on_root = 0;
@@ -3672,7 +3853,12 @@ buf_biodone(buf_t bp)
 	 * indicators
 	 */
 	CLR(bp->b_flags, (B_WASDIRTY | B_THROTTLED_IO | B_PASSIVE));
-	CLR(bp->b_attr.ba_flags, (BA_THROTTLED_IO));
+	CLR(bp->b_attr.ba_flags, (BA_META | BA_NOCACHE));
+#if !CONFIG_EMBEDDED
+	CLR(bp->b_attr.ba_flags, (BA_THROTTLED_IO | BA_DELAYIDLESLEEP));
+#else
+	CLR(bp->b_attr.ba_flags, BA_THROTTLED_IO);
+#endif /* !CONFIG_EMBEDDED */
 	DTRACE_IO1(done, buf_t, bp);
 
 	if (!ISSET(bp->b_flags, B_READ) && !ISSET(bp->b_flags, B_RAW))
@@ -3769,6 +3955,7 @@ count_lock_queue(void)
 
 /*
  * Return a count of 'busy' buffers. Used at the time of shutdown.
+ * note: This is also called from the mach side in debug context in kdp.c
  */
 int
 count_busy_buffers(void)
@@ -3864,9 +4051,6 @@ alloc_io_buf(vnode_t vp, int priv)
 	bp->b_bufsize = 0;
 	bp->b_upl = NULL;
 	bp->b_vp = vp;
-#ifdef CONFIG_PROTECT
-	bp->b_cpentry = 0;
-#endif
 	bzero(&bp->b_attr, sizeof(struct bufattr));
 
 	if (vp && (vp->v_type == VBLK || vp->v_type == VCHR))
@@ -4085,7 +4269,7 @@ buffer_cache_gc(int all)
 	boolean_t did_large_zfree = FALSE;
 	boolean_t need_wakeup = FALSE;
 	int now = buf_timestamp();
-	uint32_t found = 0, total_found = 0;
+	uint32_t found = 0;
 	struct bqueues privq;
 	int thresh_hold = BUF_STALE_THRESHHOLD;
 
@@ -4093,11 +4277,14 @@ buffer_cache_gc(int all)
 		thresh_hold = 0;
 	/* 
 	 * We only care about metadata (incore storage comes from zalloc()).
-	 * No more than 1024 buffers total, and only those not accessed within the
-	 * last 30s.  We will also only examine 128 buffers during a single grab
-	 * of the lock in order to limit lock hold time.
+	 * Unless "all" is set (used to evict meta data buffers in preparation
+	 * for deep sleep), we only evict up to BUF_MAX_GC_BATCH_SIZE buffers
+	 * that have not been accessed in the last 30s. This limit controls both
+	 * the hold time of the global lock "buf_mtxp" and the length of time
+	 * we spend compute bound in the GC thread which calls this function
 	 */
 	lck_mtx_lock(buf_mtxp);
+
 	do {
 		found = 0;
 		TAILQ_INIT(&privq);
@@ -4179,7 +4366,6 @@ buffer_cache_gc(int all)
 			bp->b_whichq = BQ_EMPTY;
 			BLISTNONE(bp);
 		}
-
 		lck_mtx_lock(buf_mtxp);
 
 		/* Back under lock, move them all to invalid hash and clear busy */
@@ -4199,9 +4385,8 @@ buffer_cache_gc(int all)
 
 		/* And do a big bulk move to the empty queue */
 		TAILQ_CONCAT(&bufqueues[BQ_EMPTY], &privq, b_freelist);
-		total_found += found;
 
-	} while ((all || (total_found < BUF_MAX_GC_COUNT)) && (found == BUF_MAX_GC_BATCH_SIZE));
+	} while (all && (found == BUF_MAX_GC_BATCH_SIZE));
 
 	lck_mtx_unlock(buf_mtxp);
 

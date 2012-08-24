@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1998-2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 1998-2011 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -51,19 +51,6 @@ extern "C" {
 #ifdef __cplusplus
 }
 #endif
-
-// IOMakeMatching
-/*!
-    @enum IOMakeMatching
-    @constant kIOServiceMatching
-    @constant kIOBSDNameMatching
-    @constant kIOOFPathMatching
-*/
-enum {
-    kIOServiceMatching		= 100,
-    kIOBSDNameMatching		= 101,
-    kIOOFPathMatching		= 102
-};
 
 // IOCatalogueSendData
 /*!

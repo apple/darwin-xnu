@@ -126,14 +126,15 @@ kmem_alloc_contig(
 
 	if (map == VM_MAP_NULL || (flags & ~(KMA_KOBJECT | KMA_LOMEM | KMA_NOPAGEWAIT))) 
 		return KERN_INVALID_ARGUMENT;
-	
-	if (size == 0) {
-		*addrp = 0;
-		return KERN_INVALID_ARGUMENT;
-	}
 
 	map_size = vm_map_round_page(size);
 	map_mask = (vm_map_offset_t)mask;
+	
+	/* Check for zero allocation size (either directly or via overflow) */
+	if (map_size == 0) {
+		*addrp = 0;
+		return KERN_INVALID_ARGUMENT;
+	}
 
 	/*
 	 *	Allocate a new object (if necessary) and the reference we
@@ -244,19 +245,21 @@ kernel_memory_allocate(
 	int			wired_page_count = 0;
 	int			i;
 	int			vm_alloc_flags;
+	vm_prot_t		kma_prot;
 
 	if (! vm_kernel_ready) {
 		panic("kernel_memory_allocate: VM is not ready");
 	}
 
-	if (size == 0) {
-		*addrp = 0;
-		return KERN_INVALID_ARGUMENT;
-	}
 	map_size = vm_map_round_page(size);
 	map_mask = (vm_map_offset_t) mask;
 	vm_alloc_flags = 0;
 
+	/* Check for zero allocation size (either directly or via overflow) */
+	if (map_size == 0) {
+		*addrp = 0;
+		return KERN_INVALID_ARGUMENT;
+	}
 
 	/*
 	 * limit the size of a single extent of wired memory
@@ -406,6 +409,9 @@ kernel_memory_allocate(
 		mem->busy = FALSE;
 		pg_offset += PAGE_SIZE_64;
 	}
+
+	kma_prot = VM_PROT_READ | VM_PROT_WRITE;
+
 	for (pg_offset = fill_start; pg_offset < fill_start + fill_size; pg_offset += PAGE_SIZE_64) {
 		if (wired_page_list == NULL)
 			panic("kernel_memory_allocate: wired_page_list == NULL");
@@ -422,7 +428,7 @@ kernel_memory_allocate(
 		mem->wpmapped = TRUE;
 
 		PMAP_ENTER(kernel_pmap, map_addr + pg_offset, mem, 
-			   VM_PROT_READ | VM_PROT_WRITE, 0, TRUE);
+			   kma_prot, VM_PROT_NONE, ((flags & KMA_KSTACK) ? VM_MEM_STACK : 0), TRUE);
 
 		if (flags & KMA_NOENCRYPT) {
 			bzero(CAST_DOWN(void *, (map_addr + pg_offset)), PAGE_SIZE);
@@ -812,7 +818,7 @@ kmem_remap_pages(
 	    mem->pmapped = TRUE;
 	    mem->wpmapped = TRUE;
 
-	    PMAP_ENTER(kernel_pmap, map_start, mem, protection, 0, TRUE);
+	    PMAP_ENTER(kernel_pmap, map_start, mem, protection, VM_PROT_NONE, 0, TRUE);
 
 	    map_start += PAGE_SIZE;
 	    offset += PAGE_SIZE;

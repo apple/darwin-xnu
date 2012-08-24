@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2004-2011 Apple Inc. All rights reserved.
+ * Copyright (c) 2004-2012 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -59,7 +59,8 @@
  * the IP filter is marjed and kipf_delayed_remove is set so that when 
  * kipf_ref eventually goes down to zero, the IP filter is removed
  */
-static lck_mtx_t *kipf_lock = 0;
+decl_lck_mtx_data(static, kipf_lock_data);
+static lck_mtx_t *kipf_lock = &kipf_lock_data;
 static u_int32_t kipf_ref = 0;
 static u_int32_t kipf_delayed_remove = 0;
 u_int32_t kipf_count = 0;
@@ -270,7 +271,7 @@ ipf_injectv4_out(mbuf_t data, ipfilter_t filter_ref, ipf_pktopts_t options)
 	errno_t error = 0;
 	struct m_tag *mtag = NULL;
 	struct ip_moptions *imo = NULL;
-	struct ip_out_args ipoa = { IFSCOPE_NONE, 0 };
+	struct ip_out_args ipoa = { IFSCOPE_NONE, { 0 }, 0 };
 
 	/* Make the IP header contiguous in the mbuf */
 	if ((size_t)m->m_len < sizeof (struct ip)) {
@@ -298,14 +299,18 @@ ipf_injectv4_out(mbuf_t data, ipfilter_t filter_ref, ipf_pktopts_t options)
 		imo->imo_multicast_loop = options->ippo_mcast_loop;
 	}
 
-	if (options != NULL &&
-	    (options->ippo_flags & (IPPOF_BOUND_IF | IPPOF_NO_IFT_CELLULAR))) {
+	if (options != NULL) {
+		if (options->ippo_flags & IPPOF_SELECT_SRCIF)
+			ipoa.ipoa_flags |= IPOAF_SELECT_SRCIF;
 		if (options->ippo_flags & IPPOF_BOUND_IF) {
+			ipoa.ipoa_flags |= IPOAF_BOUND_IF;
 			ipoa.ipoa_boundif = options->ippo_flags >>
 			    IPPOF_SHIFT_IFSCOPE;
 		}
 		if (options->ippo_flags & IPPOF_NO_IFT_CELLULAR)
-			ipoa.ipoa_nocell = 1;
+			ipoa.ipoa_flags |= IPOAF_NO_CELLULAR;
+		if (options->ippo_flags & IPPOF_BOUND_SRCADDR)
+			ipoa.ipoa_flags |= IPOAF_BOUND_SRCADDR;
 	}
 
 	bzero(&ro, sizeof(struct route));
@@ -341,7 +346,7 @@ ipf_injectv6_out(mbuf_t data, ipfilter_t filter_ref, ipf_pktopts_t options)
 	errno_t error = 0;
 	struct m_tag *mtag = NULL;
 	struct ip6_moptions *im6o = NULL;
-	struct ip6_out_args ip6oa = { IFSCOPE_NONE, 0 };
+	struct ip6_out_args ip6oa = { IFSCOPE_NONE, { 0 }, 0 };
 
 	/* Make the IP header contiguous in the mbuf */
 	if ((size_t)m->m_len < sizeof(struct ip6_hdr)) {
@@ -369,14 +374,18 @@ ipf_injectv6_out(mbuf_t data, ipfilter_t filter_ref, ipf_pktopts_t options)
 		im6o->im6o_multicast_loop = options->ippo_mcast_loop;
 	}
 
-	if (options != NULL &&
-	    (options->ippo_flags & (IPPOF_BOUND_IF | IPPOF_NO_IFT_CELLULAR))) {
+	if (options != NULL) {
+		if (options->ippo_flags & IPPOF_SELECT_SRCIF)
+			ip6oa.ip6oa_flags |= IP6OAF_SELECT_SRCIF;
 		if (options->ippo_flags & IPPOF_BOUND_IF) {
+			ip6oa.ip6oa_flags |= IP6OAF_BOUND_IF;
 			ip6oa.ip6oa_boundif = options->ippo_flags >>
 			    IPPOF_SHIFT_IFSCOPE;
 		}
 		if (options->ippo_flags & IPPOF_NO_IFT_CELLULAR)
-			ip6oa.ip6oa_nocell = 1;
+			ip6oa.ip6oa_flags |= IP6OAF_NO_CELLULAR;
+		if (options->ippo_flags & IPPOF_BOUND_SRCADDR)
+			ip6oa.ip6oa_flags |= IP6OAF_BOUND_SRCADDR;
 	}
 
 	bzero(&ro, sizeof(struct route_in6));
@@ -481,19 +490,9 @@ ipf_init(void)
 		goto done;
 	}
 	
-	kipf_lock = lck_mtx_alloc_init(lck_grp, lck_attributes);
-	if (kipf_lock == 0) {
-		printf("ipf_init: lck_mtx_alloc_init failed\n");
-		error = ENOMEM;
-		goto done;
-	}
+	lck_mtx_init(kipf_lock, lck_grp, lck_attributes);
+
 	done:
-	if (error != 0) {
-		if (kipf_lock) {
-			lck_mtx_free(kipf_lock, lck_grp);
-			kipf_lock = 0;
-		}
-	}
 	if (lck_grp) {
 		lck_grp_free(lck_grp);
 		lck_grp = 0;

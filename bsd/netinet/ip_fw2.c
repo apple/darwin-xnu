@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2004-2010 Apple Inc. All rights reserved.
+ * Copyright (c) 2004-2012 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -71,6 +71,7 @@
 #include <sys/systm.h>
 #include <sys/malloc.h>
 #include <sys/mbuf.h>
+#include <sys/mcache.h>
 #include <sys/kernel.h>
 #include <sys/proc.h>
 #include <sys/socket.h>
@@ -79,6 +80,7 @@
 #include <sys/syslog.h>
 #include <sys/ucred.h>
 #include <sys/kern_event.h>
+#include <sys/kauth.h>
 
 #include <net/if.h>
 #include <net/route.h>
@@ -139,8 +141,6 @@ static u_int32_t set_disable;
 int fw_verbose;
 static int verbose_limit;
 extern int fw_bypass;
-
-#define	IPFW_DEFAULT_RULE	65535
 
 #define IPFW_RULE_INACTIVE 1
 
@@ -301,13 +301,10 @@ static ip_fw_chk_t	ipfw_chk;
 lck_grp_t         *ipfw_mutex_grp;
 lck_grp_attr_t    *ipfw_mutex_grp_attr;
 lck_attr_t        *ipfw_mutex_attr;
-lck_mtx_t         *ipfw_mutex;
+decl_lck_mtx_data(,ipfw_mutex_data);
+lck_mtx_t         *ipfw_mutex = &ipfw_mutex_data;
 
 extern  void    ipfwsyslog( int level, const char *format,...);
-
-#if DUMMYNET
-ip_dn_ruledel_t *ip_dn_ruledel_ptr = NULL;	/* hook into dummynet */
-#endif /* DUMMYNET */
 
 #define KEV_LOG_SUBCLASS 10
 #define IPFWLOGEVENT    0
@@ -350,7 +347,10 @@ void    ipfwsyslog( int level, const char *format,...)
         ev_msg.event_code         = IPFWLOGEVENT;
 
 	/* get rid of the trailing \n */
-	dptr[loglen-1] = 0;
+	if (loglen < msgsize)
+		dptr[loglen-1] = 0;
+	else
+		dptr[msgsize-1] = 0;
 
         pri = LOG_PRI(level);
 
@@ -693,6 +693,19 @@ copyfrom64fw( struct ip_fw_64 *fw64, struct ip_fw *user_ip_fw, size_t copysize)
 	return( sizeof(struct ip_fw) + cmdsize - 4);
 }
 
+void
+externalize_flow_id(struct ipfw_flow_id *dst, struct ip_flow_id *src);
+void
+externalize_flow_id(struct ipfw_flow_id *dst, struct ip_flow_id *src)
+{
+	dst->dst_ip = src->dst_ip;
+	dst->src_ip = src->src_ip;
+	dst->dst_port = src->dst_port;
+	dst->src_port = src->src_port;
+	dst->proto = src->proto;
+	dst->flags = src->flags;
+}
+
 static
 void cp_dyn_to_comp_32( struct ipfw_dyn_rule_compat_32 *dyn_rule_vers1, int *len)
 {
@@ -704,8 +717,8 @@ void cp_dyn_to_comp_32( struct ipfw_dyn_rule_compat_32 *dyn_rule_vers1, int *len
 		for (i = 0; i < curr_dyn_buckets; i++) {
 			for ( p = ipfw_dyn_v[i] ; p != NULL ; p = p->next) {
 				dyn_rule_vers1->chain = (user32_addr_t)(p->rule->rulenum);
-				dyn_rule_vers1->id = p->id;
-				dyn_rule_vers1->mask = p->id;
+				externalize_flow_id(&dyn_rule_vers1->id, &p->id);
+				externalize_flow_id(&dyn_rule_vers1->mask, &p->id);
 				dyn_rule_vers1->type = p->dyn_type;
 				dyn_rule_vers1->expire = p->expire;
 				dyn_rule_vers1->pcnt = p->pcnt;
@@ -739,8 +752,8 @@ void cp_dyn_to_comp_64( struct ipfw_dyn_rule_compat_64 *dyn_rule_vers1, int *len
 		for (i = 0; i < curr_dyn_buckets; i++) {
 			for ( p = ipfw_dyn_v[i] ; p != NULL ; p = p->next) {
 				dyn_rule_vers1->chain = (user64_addr_t) p->rule->rulenum;
-				dyn_rule_vers1->id = p->id;
-				dyn_rule_vers1->mask = p->id;
+				externalize_flow_id(&dyn_rule_vers1->id, &p->id);
+				externalize_flow_id(&dyn_rule_vers1->mask, &p->id);
 				dyn_rule_vers1->type = p->dyn_type;
 				dyn_rule_vers1->expire = p->expire;
 				dyn_rule_vers1->pcnt = p->pcnt;
@@ -1239,7 +1252,7 @@ ipfw_log(struct ip_fw *f, u_int hlen, struct ether_header *eh,
  * and we want to find both in the same bucket.
  */
 static __inline int
-hash_packet(struct ipfw_flow_id *id)
+hash_packet(struct ip_flow_id *id)
 {
 	u_int32_t i;
 
@@ -1355,7 +1368,7 @@ next:
  * lookup a dynamic rule.
  */
 static ipfw_dyn_rule *
-lookup_dyn_rule(struct ipfw_flow_id *pkt, int *match_direction,
+lookup_dyn_rule(struct ip_flow_id *pkt, int *match_direction,
 	struct tcphdr *tcp)
 {
 	/*
@@ -1527,7 +1540,7 @@ realloc_dynamic_table(void)
  * - "parent" rules for the above (O_LIMIT_PARENT).
  */
 static ipfw_dyn_rule *
-add_dyn_rule(struct ipfw_flow_id *id, u_int8_t dyn_type, struct ip_fw *rule)
+add_dyn_rule(struct ip_flow_id *id, u_int8_t dyn_type, struct ip_fw *rule)
 {
 	ipfw_dyn_rule *r;
 	int i;
@@ -1585,7 +1598,7 @@ add_dyn_rule(struct ipfw_flow_id *id, u_int8_t dyn_type, struct ip_fw *rule)
  * If the lookup fails, then install one.
  */
 static ipfw_dyn_rule *
-lookup_dyn_parent(struct ipfw_flow_id *pkt, struct ip_fw *rule)
+lookup_dyn_parent(struct ip_flow_id *pkt, struct ip_fw *rule)
 {
 	ipfw_dyn_rule *q;
 	int i;
@@ -1629,10 +1642,10 @@ install_state(struct ip_fw *rule, ipfw_insn_limit *cmd,
 
 	DEB(printf("ipfw: install state type %d 0x%08x %u -> 0x%08x %u\n",
 	    cmd->o.opcode,
-	    (args->f_id.src_ip), (args->f_id.src_port),
-	    (args->f_id.dst_ip), (args->f_id.dst_port) );)
+	    (args->fwa_id.src_ip), (args->fwa_id.src_port),
+	    (args->fwa_id.dst_ip), (args->fwa_id.dst_port) );)
 
-	q = lookup_dyn_rule(&args->f_id, NULL, NULL);
+	q = lookup_dyn_rule(&args->fwa_id, NULL, NULL);
 
 	if (q != NULL) { /* should never occur */
 		if (last_log != timenow.tv_sec) {
@@ -1658,13 +1671,13 @@ install_state(struct ip_fw *rule, ipfw_insn_limit *cmd,
 
 	switch (cmd->o.opcode) {
 	case O_KEEP_STATE: /* bidir rule */
-		add_dyn_rule(&args->f_id, O_KEEP_STATE, rule);
+		add_dyn_rule(&args->fwa_id, O_KEEP_STATE, rule);
 		break;
 
 	case O_LIMIT: /* limit number of sessions */
 	    {
 		u_int16_t limit_mask = cmd->limit_mask;
-		struct ipfw_flow_id id;
+		struct ip_flow_id id;
 		ipfw_dyn_rule *parent;
 
 		DEB(printf("ipfw: installing dyn-limit rule %d\n",
@@ -1672,16 +1685,16 @@ install_state(struct ip_fw *rule, ipfw_insn_limit *cmd,
 
 		id.dst_ip = id.src_ip = 0;
 		id.dst_port = id.src_port = 0;
-		id.proto = args->f_id.proto;
+		id.proto = args->fwa_id.proto;
 
 		if (limit_mask & DYN_SRC_ADDR)
-			id.src_ip = args->f_id.src_ip;
+			id.src_ip = args->fwa_id.src_ip;
 		if (limit_mask & DYN_DST_ADDR)
-			id.dst_ip = args->f_id.dst_ip;
+			id.dst_ip = args->fwa_id.dst_ip;
 		if (limit_mask & DYN_SRC_PORT)
-			id.src_port = args->f_id.src_port;
+			id.src_port = args->fwa_id.src_port;
 		if (limit_mask & DYN_DST_PORT)
-			id.dst_port = args->f_id.dst_port;
+			id.dst_port = args->fwa_id.dst_port;
 		parent = lookup_dyn_parent(&id, rule);
 		if (parent == NULL) {
 			printf("ipfw: add parent failed\n");
@@ -1701,14 +1714,14 @@ install_state(struct ip_fw *rule, ipfw_insn_limit *cmd,
 				return 1;
 			}
 		}
-		add_dyn_rule(&args->f_id, O_LIMIT, (struct ip_fw *)parent);
+		add_dyn_rule(&args->fwa_id, O_LIMIT, (struct ip_fw *)parent);
 	    }
 		break;
 	default:
 		printf("ipfw: unknown dynamic rule type %u\n", cmd->o.opcode);
 		return 1;
 	}
-	lookup_dyn_rule(&args->f_id, NULL, NULL); /* XXX just set lifetime */
+	lookup_dyn_rule(&args->fwa_id, NULL, NULL); /* XXX just set lifetime */
 	return 0;
 }
 
@@ -1719,7 +1732,7 @@ install_state(struct ip_fw *rule, ipfw_insn_limit *cmd,
  * Otherwise we are sending a keepalive, and flags & TH_
  */
 static struct mbuf *
-send_pkt(struct ipfw_flow_id *id, u_int32_t seq, u_int32_t ack, int flags)
+send_pkt(struct ip_flow_id *id, u_int32_t seq, u_int32_t ack, int flags)
 {
 	struct mbuf *m;
 	struct ip *ip;
@@ -1803,35 +1816,35 @@ send_reject(struct ip_fw_args *args, int code, int offset, __unused int ip_len)
 
 	if (code != ICMP_REJECT_RST) { /* Send an ICMP unreach */
 		/* We need the IP header in host order for icmp_error(). */
-		if (args->eh != NULL) {
-			struct ip *ip = mtod(args->m, struct ip *);
+		if (args->fwa_eh != NULL) {
+			struct ip *ip = mtod(args->fwa_m, struct ip *);
 			ip->ip_len = ntohs(ip->ip_len);
 			ip->ip_off = ntohs(ip->ip_off);
 		}
-		args->m->m_flags |= M_SKIP_FIREWALL;
-		icmp_error(args->m, ICMP_UNREACH, code, 0L, 0);
-	} else if (offset == 0 && args->f_id.proto == IPPROTO_TCP) {
+		args->fwa_m->m_flags |= M_SKIP_FIREWALL;
+		icmp_error(args->fwa_m, ICMP_UNREACH, code, 0L, 0);
+	} else if (offset == 0 && args->fwa_id.proto == IPPROTO_TCP) {
 		struct tcphdr *const tcp =
-		    L3HDR(struct tcphdr, mtod(args->m, struct ip *));
+		    L3HDR(struct tcphdr, mtod(args->fwa_m, struct ip *));
 		if ( (tcp->th_flags & TH_RST) == 0) {
 			struct mbuf *m;
-			
-			m = send_pkt(&(args->f_id), ntohl(tcp->th_seq),
+
+			m = send_pkt(&(args->fwa_id), ntohl(tcp->th_seq),
 				ntohl(tcp->th_ack),
 				tcp->th_flags | TH_RST);
 			if (m != NULL) {
 				struct route sro;	/* fake route */
-				
+
 				bzero (&sro, sizeof (sro));
 				ip_output_list(m, 0, NULL, &sro, 0, NULL, NULL);
 				if (sro.ro_rt)
 					RTFREE(sro.ro_rt);
 			}
 		}
-		m_freem(args->m);
+		m_freem(args->fwa_m);
 	} else
-		m_freem(args->m);
-	args->m = NULL;
+		m_freem(args->fwa_m);
+	args->fwa_m = NULL;
 }
 
 /**
@@ -1877,18 +1890,18 @@ lookup_next_rule(struct ip_fw *me)
  *
  * Parameters:
  *
- *	args->m	(in/out) The packet; we set to NULL when/if we nuke it.
+ *	args->fwa_m	(in/out) The packet; we set to NULL when/if we nuke it.
  *		Starts with the IP header.
- *	args->eh (in)	Mac header if present, or NULL for layer3 packet.
- *	args->oif	Outgoing interface, or NULL if packet is incoming.
+ *	args->fwa_eh (in)	Mac header if present, or NULL for layer3 packet.
+ *	args->fwa_oif	Outgoing interface, or NULL if packet is incoming.
  *		The incoming interface is in the mbuf. (in)
- *	args->divert_rule (in/out)
+ *	args->fwa_divert_rule (in/out)
  *		Skip up to the first rule past this rule number;
  *		upon return, non-zero port number for divert or tee.
  *
- *	args->rule	Pointer to the last matching rule (in/out)
- *	args->next_hop	Socket we are forwarding to (out).
- *	args->f_id	Addresses grabbed from the packet (out)
+ *	args->fwa_ipfw_rule	Pointer to the last matching rule (in/out)
+ *	args->fwa_next_hop	Socket we are forwarding to (out).
+ *	args->fwa_id	Addresses grabbed from the packet (out)
  *
  * Return value:
  *
@@ -1917,10 +1930,10 @@ ipfw_chk(struct ip_fw_args *args)
 	 * the implementation of the various instructions to make sure
 	 * that they still work.
 	 *
-	 * args->eh	The MAC header. It is non-null for a layer2
+	 * args->fwa_eh	The MAC header. It is non-null for a layer2
 	 *	packet, it is NULL for a layer-3 packet.
 	 *
-	 * m | args->m	Pointer to the mbuf, as received from the caller.
+	 * m | args->fwa_m	Pointer to the mbuf, as received from the caller.
 	 *	It may change if ipfw_chk() does an m_pullup, or if it
 	 *	consumes the packet because it calls send_reject().
 	 *	XXX This has to change, so that ipfw_chk() never modifies
@@ -1929,16 +1942,16 @@ ipfw_chk(struct ip_fw_args *args)
 	 *	in sync with it (the packet is	supposed to start with
 	 *	the ip header).
 	 */
-	struct mbuf *m = args->m;
+	struct mbuf *m = args->fwa_m;
 	struct ip *ip = mtod(m, struct ip *);
 
 	/*
-	 * oif | args->oif	If NULL, ipfw_chk has been called on the
+	 * oif | args->fwa_oif	If NULL, ipfw_chk has been called on the
 	 *	inbound path (ether_input, bdg_forward, ip_input).
 	 *	If non-NULL, ipfw_chk has been called on the outbound path
 	 *	(ether_output, ip_output).
 	 */
-	struct ifnet *oif = args->oif;
+	struct ifnet *oif = args->fwa_oif;
 
 	struct ip_fw *f = NULL;		/* matching rule */
 	int retval = 0;
@@ -2003,23 +2016,23 @@ ipfw_chk(struct ip_fw_args *args)
 	 */
 
 	pktlen = m->m_pkthdr.len;
-	if (args->eh == NULL ||		/* layer 3 packet */
+	if (args->fwa_eh == NULL ||		/* layer 3 packet */
 		( m->m_pkthdr.len >= sizeof(struct ip) &&
-		    ntohs(args->eh->ether_type) == ETHERTYPE_IP))
+		    ntohs(args->fwa_eh->ether_type) == ETHERTYPE_IP))
 			hlen = ip->ip_hl << 2;
 
 	/*
 	 * Collect parameters into local variables for faster matching.
 	 */
 	if (hlen == 0) {	/* do not grab addresses for non-ip pkts */
-		proto = args->f_id.proto = 0;	/* mark f_id invalid */
+		proto = args->fwa_id.proto = 0;	/* mark f_id invalid */
 		goto after_ip_checks;
 	}
 
-	proto = args->f_id.proto = ip->ip_p;
+	proto = args->fwa_id.proto = ip->ip_p;
 	src_ip = ip->ip_src;
 	dst_ip = ip->ip_dst;
-	if (args->eh != NULL) { /* layer 2 packets are as on the wire */
+	if (args->fwa_eh != NULL) { /* layer 2 packets are as on the wire */
 		offset = ntohs(ip->ip_off) & IP_OFFMASK;
 		ip_len = ntohs(ip->ip_len);
 	} else {
@@ -2031,7 +2044,7 @@ ipfw_chk(struct ip_fw_args *args)
 #define PULLUP_TO(len)						\
 		do {						\
 			if ((m)->m_len < (len)) {		\
-			    args->m = m = m_pullup(m, (len));	\
+			    args->fwa_m = m = m_pullup(m, (len));	\
 			    if (m == 0)				\
 				goto pullup_failed;		\
 			    ip = mtod(m, struct ip *);		\
@@ -2048,7 +2061,7 @@ ipfw_chk(struct ip_fw_args *args)
 			tcp = L3HDR(struct tcphdr, ip);
 			dst_port = tcp->th_dport;
 			src_port = tcp->th_sport;
-			args->f_id.flags = tcp->th_flags;
+			args->fwa_id.flags = tcp->th_flags;
 			}
 			break;
 
@@ -2065,7 +2078,7 @@ ipfw_chk(struct ip_fw_args *args)
 
 		case IPPROTO_ICMP:
 			PULLUP_TO(hlen + 4);	/* type, code and checksum. */
-			args->f_id.flags = L3HDR(struct icmp, ip)->icmp_type;
+			args->fwa_id.flags = L3HDR(struct icmp, ip)->icmp_type;
 			break;
 
 		default:
@@ -2074,13 +2087,13 @@ ipfw_chk(struct ip_fw_args *args)
 #undef PULLUP_TO
 	}
 
-	args->f_id.src_ip = ntohl(src_ip.s_addr);
-	args->f_id.dst_ip = ntohl(dst_ip.s_addr);
-	args->f_id.src_port = src_port = ntohs(src_port);
-	args->f_id.dst_port = dst_port = ntohs(dst_port);
+	args->fwa_id.src_ip = ntohl(src_ip.s_addr);
+	args->fwa_id.dst_ip = ntohl(dst_ip.s_addr);
+	args->fwa_id.src_port = src_port = ntohs(src_port);
+	args->fwa_id.dst_port = dst_port = ntohs(dst_port);
 
 after_ip_checks:
-	if (args->rule) {
+	if (args->fwa_ipfw_rule) {
 		/*
 		 * Packet has already been tagged. Look for the next rule
 		 * to restart processing.
@@ -2094,18 +2107,18 @@ after_ip_checks:
 			return 0;
 		}
 
-		f = args->rule->next_rule;
+		f = args->fwa_ipfw_rule->next_rule;
 		if (f == NULL)
-			f = lookup_next_rule(args->rule);
+			f = lookup_next_rule(args->fwa_ipfw_rule);
 	} else {
 		/*
 		 * Find the starting rule. It can be either the first
 		 * one, or the one after divert_rule if asked so.
 		 */
-		int skipto = args->divert_rule;
+		int skipto = args->fwa_divert_rule;
 
 		f = layer3_chain;
-		if (args->eh == NULL && skipto != 0) {
+		if (args->fwa_eh == NULL && skipto != 0) {
 			if (skipto >= IPFW_DEFAULT_RULE) {
 				lck_mtx_unlock(ipfw_mutex);
 				return(IP_FW_PORT_DENY_FLAG); /* invalid */
@@ -2118,7 +2131,7 @@ after_ip_checks:
 			}
 		}
 	}
-	args->divert_rule = 0;	/* reset to avoid confusion later */
+	args->fwa_divert_rule = 0;	/* reset to avoid confusion later */
 
 	/*
 	 * Now scan the rules, and parse microinstructions for each rule.
@@ -2224,7 +2237,7 @@ check_body:
 				if (cmd->opcode == O_UID) {
 					match = 
 #ifdef __APPLE__
-						(pcb->inp_socket->so_uid == (uid_t)((ipfw_insn_u32 *)cmd)->d[0]);
+						(kauth_cred_getuid(pcb->inp_socket->so_cred) == (uid_t)((ipfw_insn_u32 *)cmd)->d[0]);
 #else
 						!socheckuid(pcb->inp_socket,
 						   (uid_t)((ipfw_insn_u32 *)cmd)->d[0]);
@@ -2258,12 +2271,12 @@ check_body:
 				break;
 
 			case O_MACADDR2:
-				if (args->eh != NULL) {	/* have MAC header */
+				if (args->fwa_eh != NULL) {	/* have MAC header */
 					u_int32_t *want = (u_int32_t *)
 						((ipfw_insn_mac *)cmd)->addr;
 					u_int32_t *mask = (u_int32_t *)
 						((ipfw_insn_mac *)cmd)->mask;
-					u_int32_t *hdr = (u_int32_t *)args->eh;
+					u_int32_t *hdr = (u_int32_t *)args->fwa_eh;
 
 					match =
 					    ( want[0] == (hdr[0] & mask[0]) &&
@@ -2273,9 +2286,9 @@ check_body:
 				break;
 
 			case O_MAC_TYPE:
-				if (args->eh != NULL) {
+				if (args->fwa_eh != NULL) {
 					u_int16_t t =
-					    ntohs(args->eh->ether_type);
+					    ntohs(args->fwa_eh->ether_type);
 					u_int16_t *p =
 					    ((ipfw_insn_u16 *)cmd)->ports;
 					int i;
@@ -2295,7 +2308,7 @@ check_body:
 				break;
 
 			case O_LAYER2:
-				match = (args->eh != NULL);
+				match = (args->fwa_eh != NULL);
 				break;
 
 			case O_PROTO:
@@ -2341,8 +2354,8 @@ check_body:
 					u_int32_t *d = (u_int32_t *)(cmd+1);
 					u_int32_t addr =
 					    cmd->opcode == O_IP_DST_SET ?
-						args->f_id.dst_ip :
-						args->f_id.src_ip;
+						args->fwa_id.dst_ip :
+						args->fwa_id.src_ip;
 
 					    if (addr < d[0])
 						    break;
@@ -2478,7 +2491,7 @@ check_body:
 
 			case O_LOG:
 				if (fw_verbose)
-					ipfw_log(f, hlen, args->eh, m, oif);
+					ipfw_log(f, hlen, args->fwa_eh, m, oif);
 				match = 1;
 				break;
 
@@ -2564,7 +2577,7 @@ check_body:
 				 * to be run first).
 				 */
 				if (dyn_dir == MATCH_UNKNOWN &&
-				    (q = lookup_dyn_rule(&args->f_id,
+				    (q = lookup_dyn_rule(&args->fwa_id,
 				     &dyn_dir, proto == IPPROTO_TCP ?
 					L3HDR(struct tcphdr, ip) : NULL))
 					!= NULL) {
@@ -2596,15 +2609,15 @@ check_body:
 
 			case O_PIPE:
 			case O_QUEUE:
-				args->rule = f; /* report matching rule */
+				args->fwa_ipfw_rule = f; /* report matching rule */
 				retval = cmd->arg1 | IP_FW_PORT_DYNT_FLAG;
 				goto done;
 
 			case O_DIVERT:
 			case O_TEE:
-				if (args->eh) /* not on layer 2 */
+				if (args->fwa_eh) /* not on layer 2 */
 					break;
-				args->divert_rule = f->rulenum;
+				args->fwa_divert_rule = f->rulenum;
 				retval = (cmd->opcode == O_DIVERT) ?
 				    cmd->arg1 :
 				    cmd->arg1 | IP_FW_PORT_TEE_FLAG;
@@ -2636,7 +2649,7 @@ check_body:
 				    !IN_MULTICAST(dst_ip.s_addr)) {
 					send_reject(args, cmd->arg1,
 					    offset,ip_len);
-					m = args->m;
+					m = args->fwa_m;
 				}
 				/* FALLTHROUGH */
 			case O_DENY:
@@ -2644,10 +2657,10 @@ check_body:
 				goto done;
 
 			case O_FORWARD_IP:
-				if (args->eh)	/* not valid on layer2 pkts */
+				if (args->fwa_eh)	/* not valid on layer2 pkts */
 					break;
 				if (!q || dyn_dir == MATCH_FORWARD)
-					args->next_hop =
+					args->fwa_next_hop =
 					    &((ipfw_insn_sa *)cmd)->sa;
 				retval = 0;
 				goto done;
@@ -2843,7 +2856,7 @@ delete_rule(struct ip_fw **head, struct ip_fw *prev, struct ip_fw *rule)
 
 #if DUMMYNET
 	if (DUMMYNET_LOADED)
-		ip_dn_ruledel_ptr(rule);
+		dn_ipfw_rule_delete(rule);
 #endif /* DUMMYNET */
 	_FREE(rule, M_IPFW);
 	return n;
@@ -3505,7 +3518,7 @@ ipfw_ctl(struct sockopt *sopt)
 						ipfw_dyn_dst->parent = CAST_DOWN(user64_addr_t, p->parent);
 						ipfw_dyn_dst->pcnt = p->pcnt;
 						ipfw_dyn_dst->bcnt = p->bcnt;
-						ipfw_dyn_dst->id = p->id;
+						externalize_flow_id(&ipfw_dyn_dst->id, &p->id);
 						ipfw_dyn_dst->expire =
 							TIME_LEQ(p->expire, timenow.tv_sec) ?
 							0 : p->expire - timenow.tv_sec;
@@ -3531,7 +3544,7 @@ ipfw_ctl(struct sockopt *sopt)
 						ipfw_dyn_dst->parent = CAST_DOWN_EXPLICIT(user32_addr_t, p->parent);
 						ipfw_dyn_dst->pcnt = p->pcnt;
 						ipfw_dyn_dst->bcnt = p->bcnt;
-						ipfw_dyn_dst->id = p->id;
+						externalize_flow_id(&ipfw_dyn_dst->id, &p->id);
 						ipfw_dyn_dst->expire =
 							TIME_LEQ(p->expire, timenow.tv_sec) ?
 							0 : p->expire - timenow.tv_sec;
@@ -3915,7 +3928,7 @@ ipfw_tick(__unused void * unused)
 		}
 	}
 	lck_mtx_unlock(ipfw_mutex);
-	
+
 	for (m = mnext = m0; m != NULL; m = mnext) {
 		struct route sro;	/* fake route */
 
@@ -3939,11 +3952,7 @@ ipfw_init(void)
 	ipfw_mutex_grp_attr = lck_grp_attr_alloc_init();
 	ipfw_mutex_grp = lck_grp_alloc_init("ipfw", ipfw_mutex_grp_attr);
 	ipfw_mutex_attr = lck_attr_alloc_init();
-
-	if ((ipfw_mutex = lck_mtx_alloc_init(ipfw_mutex_grp, ipfw_mutex_attr)) == NULL) {
-		printf("ipfw_init: can't alloc ipfw_mutex\n");
-		return;
-	}
+	lck_mtx_init(ipfw_mutex, ipfw_mutex_grp, ipfw_mutex_attr);
 
 	layer3_chain = NULL;
 

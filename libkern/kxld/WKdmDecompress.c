@@ -262,7 +262,7 @@ WKdm_decompress (WK_word* src_buf,
             WK_word missed_word = *(next_full_word++);
             WK_word *dict_location = 
               (WK_word *)
-              (((char *) dictionary) + HASH_TO_DICT_BYTE_OFFSET(missed_word));
+              ((void *) (((char *) dictionary) + HASH_TO_DICT_BYTE_OFFSET(missed_word)));
             *dict_location = missed_word;
             *next_output = missed_word;
             break;

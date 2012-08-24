@@ -113,7 +113,8 @@ int	uthread_get_background_state(uthread_t);
 static void do_background_socket(struct proc *p, thread_t thread, int priority);
 static int do_background_thread(struct proc *curp, thread_t thread, int priority);
 static int do_background_proc(struct proc *curp, struct proc *targetp, int priority);
-void proc_apply_task_networkbg_internal(proc_t);
+void proc_apply_task_networkbg_internal(proc_t, thread_t);
+void proc_restore_task_networkbg_internal(proc_t, thread_t);
 
 rlim_t maxdmap = MAXDSIZ;	/* XXX */ 
 rlim_t maxsmap = MAXSSIZ - PAGE_SIZE;	/* XXX */ 
@@ -368,6 +369,9 @@ setpriority(struct proc *curp, struct setpriority_args *uap, __unused int32_t *r
 	}
 
 	case PRIO_DARWIN_THREAD: {
+		/* process marked for termination no priority management */
+		if ((curp->p_lflag & P_LPTERMINATE) != 0)
+			return(EINVAL);
 		/* we currently only support the current thread */
 		if (uap->who != 0) {
 			return (EINVAL);
@@ -390,11 +394,16 @@ setpriority(struct proc *curp, struct setpriority_args *uap, __unused int32_t *r
 			refheld = 1;
 		}
 
-		error = do_background_proc(curp, p, uap->prio);
-		if (!error) {
-			(void) do_background_socket(p, NULL, uap->prio);
-		}
+		/* process marked for termination no priority management */
+		if ((p->p_lflag & P_LPTERMINATE) != 0) {
+			error = EINVAL;
+		} else {
+			error = do_background_proc(curp, p, uap->prio);
+			if (!error) {
+				(void) do_background_socket(p, NULL, uap->prio);
+			}
 		
+		}
 		found++;
 		if (refheld != 0)
 			proc_rele(p);
@@ -461,16 +470,13 @@ do_background_proc(struct proc *curp, struct proc *targetp, int priority)
 	int error = 0;
 	kauth_cred_t ucred;
 	kauth_cred_t target_cred;
-#if CONFIG_EMBEDDED
-	task_category_policy_data_t info;
-#endif
 
 	ucred = kauth_cred_get();
 	target_cred = kauth_cred_proc_ref(targetp);
 
 	if (!kauth_cred_issuser(ucred) && kauth_cred_getruid(ucred) &&
-	    kauth_cred_getuid(ucred) != kauth_cred_getuid(target_cred) &&
-	    kauth_cred_getruid(ucred) != kauth_cred_getuid(target_cred))
+		kauth_cred_getuid(ucred) != kauth_cred_getuid(target_cred) &&
+		kauth_cred_getruid(ucred) != kauth_cred_getuid(target_cred))
 	{
 		error = EPERM;
 		goto out;
@@ -482,49 +488,12 @@ do_background_proc(struct proc *curp, struct proc *targetp, int priority)
 		goto out;
 #endif
 
-#if !CONFIG_EMBEDDED
 	if (priority == PRIO_DARWIN_NONUI)
 		error = proc_apply_task_gpuacc(targetp->task, TASK_POLICY_HWACCESS_GPU_ATTRIBUTE_NOACCESS);
 	else
-		error = proc_set1_bgtaskpolicy(targetp->task, priority);
+		error = proc_set_and_apply_bgtaskpolicy(targetp->task, priority);
 	if (error)
 		goto out;
-#else /* !CONFIG_EMBEDDED */
-
-	/* set the max scheduling priority on the task */
-	if (priority == PRIO_DARWIN_BG) { 
-		info.role = TASK_THROTTLE_APPLICATION;
-	}
-	else if (priority == PRIO_DARWIN_NONUI) { 
-		info.role = TASK_NONUI_APPLICATION;
-	}
-	else {
-		info.role = TASK_DEFAULT_APPLICATION;
-	}
-
-	error = task_policy_set(targetp->task,
-			TASK_CATEGORY_POLICY,
-			(task_policy_t) &info,
-			TASK_CATEGORY_POLICY_COUNT);
-
-	if (error)
-		goto out;
-
-	proc_lock(targetp);
-
-	/* mark proc structure as backgrounded */
-	if (priority == PRIO_DARWIN_BG) {
-		targetp->p_lflag |= P_LBACKGROUND;
-	} else {
-		targetp->p_lflag &= ~P_LBACKGROUND;
-	}
-
-	/* set or reset the disk I/O priority */
-	targetp->p_iopol_disk = (priority == PRIO_DARWIN_BG ? 
-			IOPOL_THROTTLE : IOPOL_DEFAULT); 
-
-	proc_unlock(targetp);
-#endif /* !CONFIG_EMBEDDED */
 
 out:
 	kauth_cred_unref(&target_cred);
@@ -610,11 +579,7 @@ static int
 do_background_thread(struct proc *curp __unused, thread_t thread, int priority)
 {
 	struct uthread						*ut;
-#if !CONFIG_EMBEDDED
 	int error = 0;
-#else /* !CONFIG_EMBEDDED */
-	thread_precedence_policy_data_t		policy;
-#endif /* !CONFIG_EMBEDDED */
 	
 	ut = get_bsdthread_info(thread);
 
@@ -623,61 +588,9 @@ do_background_thread(struct proc *curp __unused, thread_t thread, int priority)
 		return(EPERM);
 	}
 
-#if !CONFIG_EMBEDDED
-	error = proc_set1_bgthreadpolicy(curp->task, thread_tid(thread), priority);
+	error = proc_set_and_apply_bgthreadpolicy(curp->task, thread_tid(thread), priority);
 	return(error);
-#else /* !CONFIG_EMBEDDED */
-	if ( (priority & PRIO_DARWIN_BG) == 0 ) {
-		/* turn off backgrounding of thread */
-		if ( (ut->uu_flag & UT_BACKGROUND) == 0 ) {
-			/* already off */
-			return(0);
-		}
 
-		/*
-		 * Clear background bit in thread and disable disk IO
-		 * throttle as well as network traffic management.
-		 * The corresponding socket flags for sockets created by
-		 * this thread will be cleared in do_background_socket().
-		 */
-		ut->uu_flag &= ~(UT_BACKGROUND | UT_BACKGROUND_TRAFFIC_MGT);
-		ut->uu_iopol_disk = IOPOL_NORMAL;
-
-		/* reset thread priority (we did not save previous value) */
-		policy.importance = 0;
-		thread_policy_set( thread, THREAD_PRECEDENCE_POLICY,
-						   (thread_policy_t)&policy,
-						   THREAD_PRECEDENCE_POLICY_COUNT );
-		return(0);
-	}
-	
-	/* background this thread */
-	if ( (ut->uu_flag & UT_BACKGROUND) != 0 ) {
-		/* already backgrounded */
-		return(0);
-	}
-
-	/*
-	 * Tag thread as background and throttle disk IO, as well
-	 * as regulate network traffics.  Future sockets created
-	 * by this thread will have their corresponding socket
-	 * flags set at socket create time.
-	 */
-	ut->uu_flag |= (UT_BACKGROUND | UT_BACKGROUND_TRAFFIC_MGT);
-	ut->uu_iopol_disk = IOPOL_THROTTLE;
-
-	policy.importance = INT_MIN;
-	thread_policy_set( thread, THREAD_PRECEDENCE_POLICY,
-					   (thread_policy_t)&policy,
-					   THREAD_PRECEDENCE_POLICY_COUNT );
-
-	/* throttle networking IO happens in socket( ) syscall.
-	 * If UT_{BACKGROUND,BACKGROUND_TRAFFIC_MGT} is set in the current
-	 * thread then TRAFFIC_MGT_SO_{BACKGROUND,BG_REGULATE} is set.
-	 * Existing sockets are taken care of by do_background_socket().
-	 */
-#endif /* !CONFIG_EMBEDDED */
-	return(0);
 }
 
 #if CONFIG_EMBEDDED
@@ -723,29 +636,6 @@ out:
 	proc_rele(curp);
 	kauth_cred_unref(&ucred);
 	return error;
-}
-#endif /* CONFIG_EMBEDDED */
-
-#if CONFIG_EMBEDDED
-/*
- * If the thread or its proc has been put into the background
- * with setpriority(PRIO_DARWIN_{THREAD,PROCESS}, *, PRIO_DARWIN_BG),
- * report that status.
- *
- * Returns: PRIO_DARWIN_BG if background
- * 			0 if foreground
- */
-int
-uthread_get_background_state(uthread_t uth)
-{
-	proc_t p = uth->uu_proc;
-	if (p && (p->p_lflag & P_LBACKGROUND))
-		return PRIO_DARWIN_BG;
-	
-	if (uth->uu_flag & UT_BACKGROUND)
-		return PRIO_DARWIN_BG;
-
-	return 0;
 }
 #endif /* CONFIG_EMBEDDED */
 
@@ -891,12 +781,7 @@ dosetrlimit(struct proc *p, u_int which, struct rlimit *limp)
 				size = round_page_64(limp->rlim_cur);
 				size -= round_page_64(alimp->rlim_cur);
 
-#if STACK_GROWTH_UP
-				/* go to top of current stack */
-			addr = p->user_stack + round_page_64(alimp->rlim_cur);
-#else	/* STACK_GROWTH_UP */
 			addr = p->user_stack - round_page_64(limp->rlim_cur);
-#endif /* STACK_GROWTH_UP */
 			kr = mach_vm_protect(current_map(), 
 					     addr, size,
 					     FALSE, VM_PROT_DEFAULT);
@@ -918,28 +803,6 @@ dosetrlimit(struct proc *p, u_int which, struct rlimit *limp)
 			 */
 			cur_sp = thread_adjuserstack(current_thread(),
 						     0);
-#if STACK_GROWTH_UP
-			if (cur_sp >= p->user_stack &&
-			    cur_sp < (p->user_stack +
-				      round_page_64(alimp->rlim_cur))) {
-				/* current stack pointer is in main stack */
-				if (cur_sp >= (p->user_stack +
-					       round_page_64(limp->rlim_cur))) {
-					/*
-					 * New limit would cause
-					 * current usage to be invalid:
-					 * reject new limit.
-					 */
-					error =  EINVAL;
-					goto out;
-			}
-			} else {
-				/* not on the main stack: reject */
-				error =  EINVAL;
-				goto out;
-		}
-				 
-#else	/* STACK_GROWTH_UP */
 			if (cur_sp <= p->user_stack &&
 			    cur_sp > (p->user_stack -
 				      round_page_64(alimp->rlim_cur))) {
@@ -959,16 +822,11 @@ dosetrlimit(struct proc *p, u_int which, struct rlimit *limp)
 				error =  EINVAL;
 				goto out;
 			}
-#endif	/* STACK_GROWTH_UP */
 				
 			size = round_page_64(alimp->rlim_cur);
 			size -= round_page_64(limp->rlim_cur);
 
-#if STACK_GROWTH_UP
-			addr = p->user_stack + round_page_64(limp->rlim_cur);
-#else	/* STACK_GROWTH_UP */
 			addr = p->user_stack - round_page_64(alimp->rlim_cur);
-#endif /* STACK_GROWTH_UP */
 
 			kr = mach_vm_protect(current_map(),
 					     addr, size,
@@ -1092,15 +950,15 @@ calcru(struct proc *p, struct timeval *up, struct timeval *sp, struct timeval *i
 
 	task = p->task;
 	if (task) {
-		task_basic_info_32_data_t tinfo;
+		mach_task_basic_info_data_t tinfo;
 		task_thread_times_info_data_t ttimesinfo;
 		task_events_info_data_t teventsinfo;
 		mach_msg_type_number_t task_info_count, task_ttimes_count;
 		mach_msg_type_number_t task_events_count;
 		struct timeval ut,st;
 
-		task_info_count	= TASK_BASIC_INFO_32_COUNT;
-		task_info(task, TASK_BASIC2_INFO_32,
+		task_info_count	= MACH_TASK_BASIC_INFO_COUNT;
+		task_info(task, MACH_TASK_BASIC_INFO,
 			  (task_info_t)&tinfo, &task_info_count);
 		ut.tv_sec = tinfo.user_time.seconds;
 		ut.tv_usec = tinfo.user_time.microseconds;
@@ -1136,7 +994,7 @@ calcru(struct proc *p, struct timeval *up, struct timeval *sp, struct timeval *i
 		if (p->p_stats->p_ru.ru_nivcsw < 0)
 			p->p_stats->p_ru.ru_nivcsw = 0;
 
-		p->p_stats->p_ru.ru_maxrss = tinfo.resident_size;
+		p->p_stats->p_ru.ru_maxrss = tinfo.resident_size_max;
 	}
 }
 
@@ -1330,13 +1188,7 @@ iopolicysys(__unused struct proc *p, __unused struct iopolicysys_args *uap, __un
 {
 	int	error = 0;
 	struct _iopol_param_t iop_param;
-#if !CONFIG_EMBEDDED
 	int processwide = 0;
-#else /* !CONFIG_EMBEDDED */
-	thread_t thread = THREAD_NULL;
-	struct uthread	*ut = NULL;
-	int *policy;
-#endif /* !CONFIG_EMBEDDED */
 
 	if ((error = copyin(uap->arg, &iop_param, sizeof(iop_param))) != 0)
 		goto out;
@@ -1346,7 +1198,6 @@ iopolicysys(__unused struct proc *p, __unused struct iopolicysys_args *uap, __un
 		goto out;
 	}
 
-#if !CONFIG_EMBEDDED
 	switch (iop_param.iop_scope) {
 	case IOPOL_SCOPE_PROCESS:
 		processwide = 1;
@@ -1366,6 +1217,7 @@ iopolicysys(__unused struct proc *p, __unused struct iopolicysys_args *uap, __un
 		case IOPOL_NORMAL:
 		case IOPOL_THROTTLE:
 		case IOPOL_PASSIVE:
+		case IOPOL_UTILITY:
 			if(processwide != 0)
 				proc_apply_task_diskacc(current_task(), iop_param.iop_policy);
 			else
@@ -1392,61 +1244,6 @@ iopolicysys(__unused struct proc *p, __unused struct iopolicysys_args *uap, __un
 		break;
 	}
 
-#else /* !CONFIG_EMBEDDED */
-	switch (iop_param.iop_scope) {
-	case IOPOL_SCOPE_PROCESS:
-		policy = &p->p_iopol_disk;
-		break;
-	case IOPOL_SCOPE_THREAD:
-		thread = current_thread();
-		ut = get_bsdthread_info(thread);
-		policy = &ut->uu_iopol_disk;
-		break;
-	default:
-		error = EINVAL;
-		goto out;
-	}
-		
-	switch(uap->cmd) {
-	case IOPOL_CMD_SET:
-		switch (iop_param.iop_policy) {
-		case IOPOL_DEFAULT:
-		case IOPOL_NORMAL:
-		case IOPOL_THROTTLE:
-		case IOPOL_PASSIVE:
-			proc_lock(p);
-			*policy = iop_param.iop_policy;
-			proc_unlock(p);
-			break;
-		default:
-			error = EINVAL;
-			goto out;
-		}
-		break;
-	case IOPOL_CMD_GET:
-		switch (*policy) {
-		case IOPOL_DEFAULT:
-		case IOPOL_NORMAL:
-		case IOPOL_THROTTLE:
-		case IOPOL_PASSIVE:
-			iop_param.iop_policy = *policy;
-			break;
-		default: // in-kernel 
-			// this should never happen
-			printf("%s: unknown I/O policy %d\n", __func__, *policy);
-			// restore to default value
-			*policy = IOPOL_DEFAULT;
-			iop_param.iop_policy = *policy;
-		}
-		
-		error = copyout((caddr_t)&iop_param, uap->arg, sizeof(iop_param));
-		break;
-	default:
-		error = EINVAL; // unknown command
-		break;
-	}
-
-#endif /* !CONFIG_EMBEDDED */
 out:
 	*retval = error;
 	return (error);
@@ -1458,28 +1255,7 @@ boolean_t thread_is_io_throttled(void);
 boolean_t
 thread_is_io_throttled(void) 
 {
-
-#if !CONFIG_EMBEDDED
-
 	return(proc_get_task_selfdiskacc() == IOPOL_THROTTLE);
-		
-#else /* !CONFIG_EMBEDDED */
-	int	policy;
-	struct uthread  *ut;
-
-	ut = get_bsdthread_info(current_thread());
-
-	if(ut){
-		policy = current_proc()->p_iopol_disk;
-
-		if (ut->uu_iopol_disk != IOPOL_DEFAULT)
-			policy = ut->uu_iopol_disk;
-
-		if (policy == IOPOL_THROTTLE)
-			return TRUE;
-	}
-	return FALSE;
-#endif /* !CONFIG_EMBEDDED */
 }
 
 void
@@ -1523,10 +1299,17 @@ proc_set_task_networkbg(void * bsdinfo, int setbg)
 }
 
 void
-proc_apply_task_networkbg_internal(proc_t p)
+proc_apply_task_networkbg_internal(proc_t p, thread_t thread)
 {
 	if (p != PROC_NULL) {
-		do_background_socket(p, NULL, PRIO_DARWIN_BG);
+		do_background_socket(p, thread, PRIO_DARWIN_BG);
+	}
+}
+void
+proc_restore_task_networkbg_internal(proc_t p, thread_t thread)
+{
+	if (p != PROC_NULL) {
+		do_background_socket(p, thread, PRIO_DARWIN_BG);
 	}
 }
 

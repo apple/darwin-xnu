@@ -58,7 +58,6 @@
 #include <sys/systm.h>			/* for unix_syscall_return() */
 #include <libkern/OSAtomic.h>
 
-extern boolean_t thread_should_abort(thread_t);	/* XXX */
 extern void compute_averunnable(void *);	/* XXX */
 
 

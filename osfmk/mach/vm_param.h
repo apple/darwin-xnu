@@ -106,8 +106,8 @@
  */
 
 #if 1
-#define atop(x)	((uint32_t)(x) >> PAGE_SHIFT)
-#define ptoa(x)	((uint32_t)(x) << PAGE_SHIFT)
+#define atop(x)	((vm_address_t)(x) >> PAGE_SHIFT)
+#define ptoa(x)	((vm_address_t)(x) << PAGE_SHIFT)
 #else
 #define atop(x) (0UL = 0)
 #define ptoa(x) (0UL = 0)
@@ -240,11 +240,41 @@ extern addr64_t 	vm_last_addr;	/* Highest kernel virtual address known to the VM
 extern const vm_offset_t	vm_min_kernel_address;
 extern const vm_offset_t	vm_max_kernel_address;
 
+extern vm_offset_t		vm_kernel_stext;
+extern vm_offset_t		vm_kernel_etext;
+extern vm_offset_t		vm_kernel_base;
+extern vm_offset_t		vm_kernel_top;
+extern vm_offset_t		vm_kernel_slide;
+extern vm_offset_t		vm_kernel_addrperm;
+
+#define VM_KERNEL_IS_SLID(_o)						       \
+		(((vm_offset_t)(_o) >= vm_kernel_base) &&		       \
+		 ((vm_offset_t)(_o) <  vm_kernel_top))
+/*
+ * VM_KERNEL_IS_KEXT is platform-specific, defined in <mach/machine/vm_param.h>.
+ * Set default if undefined.
+ */
+#ifndef	VM_KERNEL_IS_KEXT
+#define VM_KERNEL_IS_KEXT(_o)	(FALSE)
+#endif
+#define VM_KERNEL_UNSLIDE(_v)						       \
+		((VM_KERNEL_IS_SLID(_v) ||				       \
+		  VM_KERNEL_IS_KEXT(_v)) ?				       \
+			(vm_offset_t)(_v) - vm_kernel_slide :		       \
+			(vm_offset_t)(_v))
+#define VM_KERNEL_SLIDE(_u)						       \
+		((vm_offset_t)(_u) + vm_kernel_slide)
+
+#define	VM_KERNEL_ADDRPERM(_v)							\
+		(((vm_offset_t)(_v) == 0) ?					\
+			(vm_offset_t)(0) :					\
+			(vm_offset_t)(_v) + vm_kernel_addrperm)
+
 #endif	/* XNU_KERNEL_PRIVATE */
 
 extern vm_size_t	page_size;
 extern vm_size_t	page_mask;
-extern int			page_shift;
+extern int		page_shift;
 
 /* We need a way to get rid of compiler warnings when we cast from   */
 /* a 64 bit value to an address (which may be 32 bits or 64-bits).   */

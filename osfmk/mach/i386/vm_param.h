@@ -111,6 +111,7 @@
 #define i386_btop(x)		((ppnum_t)((x) >> I386_PGSHIFT))
 #define machine_btop(x)		i386_btop(x)
 #define i386_ptob(x)		(((pmap_paddr_t)(x)) << I386_PGSHIFT)
+#define machine_ptob(x)		i386_ptob(x)
 
 /*
  *	Round off or truncate to the nearest page.  These will work
@@ -149,7 +150,7 @@
 
 /* process-relative values (all 32-bit legacy only for now) */
 #define VM_MIN_ADDRESS		((vm_offset_t) 0)
-#define VM_USRSTACK32		((vm_offset_t) 0xC0000000)
+#define VM_USRSTACK32		((vm_offset_t) 0xC0000000)	/* ASLR slides stack down by up to 1 MB */
 #define VM_MAX_ADDRESS		((vm_offset_t) 0xFFE00000)
 
 
@@ -199,6 +200,10 @@
 #define KEXT_ALLOC_BASE(x)  ((x) - KEXT_ALLOC_MAX_OFFSET)
 #define KEXT_ALLOC_SIZE(x)  (KEXT_ALLOC_MAX_OFFSET - (x))
 
+#define VM_KERNEL_IS_KEXT(_o)						       \
+                (((vm_offset_t)(_o) >= VM_MIN_KERNEL_AND_KEXT_ADDRESS) &&      \
+                 ((vm_offset_t)(_o) <  VM_MIN_KERNEL_ADDRESS))
+
 #else
 #error unsupported architecture
 #endif
@@ -218,7 +223,23 @@
 #define VM32_MIN_ADDRESS		((vm32_offset_t) 0)
 #define VM32_MAX_ADDRESS		((vm32_offset_t) (VM_MAX_PAGE_ADDRESS & 0xFFFFFFFF))
 
+/*
+ * kalloc() parameters:
+ *
+ * Historically kalloc's underlying zones were power-of-2 sizes, with a
+ * KALLOC_MINSIZE of 16 bytes.  The allocator ensured that
+ * (sizeof == alignof) >= 16 for all kalloc allocations.
+ *
+ * Today kalloc may use zones with intermediate sizes, constrained by
+ * KALLOC_MINSIZE and a minimum alignment, expressed by KALLOC_LOG2_MINALIGN.
+ *
+ * The common alignment for LP64 is for longs and pointers i.e. 8 bytes.
+ */
+
 #if defined(__i386__)
+
+#define	KALLOC_MINSIZE		16	/* minimum allocation size */
+#define	KALLOC_LOG2_MINALIGN	4	/* log2 minimum alignment */
 
 #define LINEAR_KERNEL_ADDRESS	((vm_offset_t) 0x00000000)
 
@@ -229,12 +250,16 @@
 
 #elif defined(__x86_64__)
 
+#define	KALLOC_MINSIZE		16	/* minimum allocation size */
+#define	KALLOC_LOG2_MINALIGN	4	/* log2 minimum alignment */
+
 #define LINEAR_KERNEL_ADDRESS	((vm_offset_t) 0x00000000)
 
 #define VM_MIN_KERNEL_LOADED_ADDRESS	((vm_offset_t) 0xFFFFFF8000000000UL)
 #define VM_MAX_KERNEL_LOADED_ADDRESS	((vm_offset_t) 0xFFFFFF801FFFFFFFUL)
 
 #define NCOPY_WINDOWS 0
+
 
 #else
 #error unsupported architecture
@@ -248,34 +273,19 @@
 #define round_i386_to_vm(p)	(atop(round_page(i386_ptob(p))))
 #define vm_to_i386(p)		(i386_btop(ptoa(p)))
 
-#define PMAP_ENTER(pmap, virtual_address, page, protection, flags, wired) \
-	MACRO_BEGIN					\
-	pmap_t __pmap = (pmap);				\
-	vm_page_t __page = (page);			\
-	vm_prot_t __prot__ =  (protection);    		\
-							\
-	if (__pmap == kernel_pmap) {			\
-		__prot__ |= VM_PROT_WRITE;		\
-	} else {					\
-		assert(!__page->encrypted);		\
-	}						\
-							\
-	pmap_enter(					\
-		__pmap,					\
-		(virtual_address),			\
-		__page->phys_page,			\
-		__prot__,				\
-		flags,					\
-		(wired)					\
-	 );						\
-	MACRO_END
 
-#define PMAP_ENTER_OPTIONS(pmap, virtual_address, page, protection,	\
-				flags, wired, options, result)		\
+#define PMAP_SET_CACHE_ATTR(mem, object, cache_attr, batch_pmap_op)	\
 	MACRO_BEGIN							\
-		result=KERN_SUCCESS;					\
-		PMAP_ENTER(pmap, virtual_address, page, protection,	\
-				flags, wired);				\
+		pmap_set_cache_attributes((mem)->phys_page, (cache_attr));	\
+		(object)->set_cache_attr = TRUE;				\
+		(void) batch_pmap_op;					\
+	MACRO_END							
+
+#define PMAP_BATCH_SET_CACHE_ATTR(object, user_page_list, cache_attr, num_pages, batch_pmap_op)\
+	MACRO_BEGIN							\
+	(void) user_page_list;						\
+	(void) num_pages;						\
+	(void) batch_pmap_op;						\
 	MACRO_END
 
 #define IS_USERADDR64_CANONICAL(addr)			\

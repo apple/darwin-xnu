@@ -129,7 +129,7 @@ extern boolean_t ipc_right_check(
 	ipc_entry_t		entry);
 
 /* Clean up an entry in a dead space */
-extern void ipc_right_clean(
+extern void ipc_right_terminate(
 	ipc_space_t		space,
 	mach_port_name_t	name,
 	ipc_entry_t		entry);
@@ -177,7 +177,9 @@ extern kern_return_t ipc_right_copyin(
 	mach_msg_type_name_t	msgt_name,
 	boolean_t		deadok,
 	ipc_object_t		*objectp,
-	ipc_port_t		*sorightp);
+	ipc_port_t		*sorightp,
+	ipc_port_t		*releasep,
+	queue_t			links);
 
 /* Undo the effects of an ipc_right_copyin */
 extern void ipc_right_copyin_undo(
@@ -194,7 +196,8 @@ extern kern_return_t ipc_right_copyin_two(
 	mach_port_name_t	name,
 	ipc_entry_t		entry,
 	ipc_object_t		*objectp,
-	ipc_port_t		*sorightp);
+	ipc_port_t		*sorightp,
+	ipc_port_t		*releasep);
 
 /* Copyout a capability to a space */
 extern kern_return_t ipc_right_copyout(

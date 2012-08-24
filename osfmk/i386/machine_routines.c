@@ -47,17 +47,8 @@
 #include <i386/proc_reg.h>
 #include <mach/vm_param.h>
 #include <i386/pmap.h>
+#include <i386/pmap_internal.h>
 #include <i386/misc_protos.h>
-#if MACH_KDB
-#include <machine/db_machdep.h>
-#include <ddb/db_aout.h>
-#include <ddb/db_access.h>
-#include <ddb/db_sym.h>
-#include <ddb/db_variables.h>
-#include <ddb/db_command.h>
-#include <ddb/db_output.h>
-#include <ddb/db_expr.h>
-#endif
 
 #if DEBUG
 #define DBG(x...)	kprintf("DBG: " x)
@@ -73,6 +64,7 @@ unsigned int	LockTimeOut;
 unsigned int	LockTimeOutTSC;
 unsigned int	MutexSpin;
 uint64_t	LastDebuggerEntryAllowance;
+uint64_t	delay_spin_threshold;
 
 extern uint64_t panic_restart_timeout;
 
@@ -129,13 +121,13 @@ ml_static_mfree(
 {
 	addr64_t vaddr_cur;
 	ppnum_t ppn;
-
+	uint32_t freed_pages = 0;
 	assert(vaddr >= VM_MIN_KERNEL_ADDRESS);
 
 	assert((vaddr & (PAGE_SIZE-1)) == 0); /* must be page aligned */
 
 	for (vaddr_cur = vaddr;
-	     vaddr_cur < round_page_64(vaddr+size);
+ 	     vaddr_cur < round_page_64(vaddr+size);
 	     vaddr_cur += PAGE_SIZE) {
 		ppn = pmap_find_phys(kernel_pmap, vaddr_cur);
 		if (ppn != (vm_offset_t)NULL) {
@@ -146,10 +138,18 @@ ml_static_mfree(
 					kernel_pmap->stats.resident_count;
 			}
 			pmap_remove(kernel_pmap, vaddr_cur, vaddr_cur+PAGE_SIZE);
-			vm_page_create(ppn,(ppn+1));
-			vm_page_wire_count--;
+			assert(pmap_valid_page(ppn));
+
+			if (IS_MANAGED_PAGE(ppn)) {
+				vm_page_create(ppn,(ppn+1));
+				vm_page_wire_count--;
+				freed_pages++;
+			}
 		}
 	}
+#if	DEBUG	
+	kprintf("ml_static_mfree: Released 0x%x pages at VA %p, size:0x%llx, last ppn: 0x%x\n", freed_pages, (void *)vaddr, (uint64_t)size, ppn);
+#endif
 }
 
 
@@ -554,6 +554,22 @@ ml_init_lock_timeout(void)
 }
 
 /*
+ * Threshold above which we should attempt to block
+ * instead of spinning for clock_delay_until().
+ */
+void
+ml_init_delay_spin_threshold(void)
+{
+	nanoseconds_to_absolutetime(10ULL * NSEC_PER_USEC, &delay_spin_threshold);
+}
+
+boolean_t
+ml_delay_should_spin(uint64_t interval)
+{
+	return (interval < delay_spin_threshold) ? TRUE : FALSE;
+}
+
+/*
  * This is called from the machine-independent routine cpu_up()
  * to perform machine-dependent info updates. Defer to cpu_thread_init().
  */
@@ -683,45 +699,3 @@ kernel_preempt_check(void)
 boolean_t machine_timeout_suspended(void) {
 	return (virtualized || pmap_tlb_flush_timeout || spinlock_timed_out || panic_active() || mp_recent_debugger_activity());
 }
-
-#if MACH_KDB
-
-/*
- *	Display the global msrs
- * *		
- *	ms
- */
-void 
-db_msr(__unused db_expr_t addr,
-       __unused int have_addr,
-       __unused db_expr_t count,
-       __unused char *modif)
-{
-
-	uint32_t        i, msrlow, msrhigh;
-
-	/* Try all of the first 4096 msrs */
-	for (i = 0; i < 4096; i++) {
-		if (!rdmsr_carefully(i, &msrlow, &msrhigh)) {
-			db_printf("%08X - %08X.%08X\n", i, msrhigh, msrlow);
-		}
-	}
-
-	/* Try all of the 4096 msrs at 0x0C000000 */
-	for (i = 0; i < 4096; i++) {
-		if (!rdmsr_carefully(0x0C000000 | i, &msrlow, &msrhigh)) {
-			db_printf("%08X - %08X.%08X\n",
-				0x0C000000 | i, msrhigh, msrlow);
-		}
-	}
-
-	/* Try all of the 4096 msrs at 0xC0000000 */
-	for (i = 0; i < 4096; i++) {
-		if (!rdmsr_carefully(0xC0000000 | i, &msrlow, &msrhigh)) {
-			db_printf("%08X - %08X.%08X\n",
-				0xC0000000 | i, msrhigh, msrlow);
-		}
-	}
-}
-
-#endif

@@ -60,6 +60,8 @@ OSDefineMetaClassAndStructors(IORegistryEntry, OSObject)
 #define kIORegPlaneNameSuffixLen	(sizeof(kIORegPlaneNameSuffix) - 1)
 #define kIORegPlaneLocationSuffixLen	(sizeof(kIORegPlaneLocationSuffix) - 1)
 
+#define KASLR_IOREG_DEBUG 0
+
 static IORegistryEntry * gRegistryRoot;
 static OSDictionary * 	 gIORegistryPlanes;
 
@@ -526,6 +528,15 @@ IORegistryEntry::removeProperty( const OSSymbol * aKey)
     PUNLOCK;
 }
 
+#if KASLR_IOREG_DEBUG
+extern "C" {
+    
+bool ScanForAddrInObject(OSObject * theObject, 
+                         int indent);
+    
+}; /* extern "C" */
+#endif
+
 bool
 IORegistryEntry::setProperty( const OSSymbol * aKey, OSObject * anObject)
 {
@@ -543,7 +554,18 @@ IORegistryEntry::setProperty( const OSSymbol * aKey, OSObject * anObject)
 
     ret = getPropertyTable()->setObject( aKey, anObject );
     PUNLOCK;
-    
+
+#if KASLR_IOREG_DEBUG
+    if ( anObject && strcmp(kIOKitDiagnosticsKey, aKey->getCStringNoCopy()) != 0 ) {
+        if (ScanForAddrInObject(anObject, 0)) {
+            IOLog("%s: IORegistryEntry name %s with key \"%s\" \n",
+                  __FUNCTION__,
+                  getName(0),
+                  aKey->getCStringNoCopy() );        
+        }
+    }
+#endif
+
     return ret;
 }
 

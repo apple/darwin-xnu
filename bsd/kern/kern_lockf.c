@@ -127,11 +127,8 @@ typedef enum {
 static int	 lf_clearlock(struct lockf *);
 static overlap_t lf_findoverlap(struct lockf *,
 	    struct lockf *, int, struct lockf ***, struct lockf **);
-static struct lockf *lf_getblock(struct lockf *);
-static int	 lf_getlock(struct lockf *, struct flock *);
-#if CONFIG_EMBEDDED
-static int	 lf_getlockpid(struct vnode *, struct flock *);
-#endif
+static struct lockf *lf_getblock(struct lockf *, pid_t);
+static int	 lf_getlock(struct lockf *, struct flock *, pid_t);
 static int	 lf_setlock(struct lockf *);
 static int	 lf_split(struct lockf *, struct lockf *);
 static void	 lf_wakelock(struct lockf *, boolean_t);
@@ -173,11 +170,6 @@ lf_advlock(struct vnop_advlock_args *ap)
 	struct lockf **head = &vp->v_lockf;
 
 	/* XXX HFS may need a !vnode_isreg(vp) EISDIR error here */
-
-#if CONFIG_EMBEDDED
-	if (ap->a_op == F_GETLKPID)
-		return lf_getlockpid(vp, fl);
-#endif
 
 	/*
 	 * Avoid the common case of unlocking when inode has no locks.
@@ -287,9 +279,16 @@ lf_advlock(struct vnop_advlock_args *ap)
 		break;
 
 	case F_GETLK:
-		error = lf_getlock(lock, fl);
+		error = lf_getlock(lock, fl, -1);
 		FREE(lock, M_LOCKF);
 		break;
+
+#if CONFIG_EMBEDDED
+	case F_GETLKPID:
+		error = lf_getlock(lock, fl, fl->l_pid);
+		FREE(lock, M_LOCKF);
+		break;
+#endif
 
 	default:
 		FREE(lock, M_LOCKF);
@@ -302,6 +301,36 @@ lf_advlock(struct vnop_advlock_args *ap)
 	return (error);
 }
 
+/*
+ * Empty the queue of msleeping requests for a lock on the given vnode.
+ * Called with the vnode already locked.  Used for forced unmount, where
+ * a flock(2) invoker sleeping on a blocked lock holds an iocount reference
+ * that prevents the vnode from ever being drained.  Force unmounting wins.
+ */
+void
+lf_abort_advlocks(vnode_t vp)
+{
+	struct lockf *lock;
+
+	if ((lock = vp->v_lockf) == NULL)
+		return;	
+
+	lck_mtx_assert(&vp->v_lock, LCK_MTX_ASSERT_OWNED);
+
+	if (!TAILQ_EMPTY(&lock->lf_blkhd)) {
+		struct lockf *tlock;
+
+		TAILQ_FOREACH(tlock, &lock->lf_blkhd, lf_block) {
+			/*
+			 * Setting this flag should cause all
+			 * currently blocked F_SETLK request to
+			 * return to userland with an errno.
+			 */
+			tlock->lf_flags |= F_ABORT;
+		}
+		lf_wakelock(lock, TRUE);
+	}
+}
 
 /*
  * Take any lock attempts which are currently blocked by a given lock ("from")
@@ -351,8 +380,6 @@ lf_coalesce_adjacent(struct lockf *lock)
 		 * NOTE: Assumes that if two locks are adjacent on the number line 
 		 * and belong to the same owner, then they are adjacent on the list.
 		 */
-
-		/* If the lock ends adjacent to us, we can coelesce it */
 		if ((*lf)->lf_end != -1 &&
 		    ((*lf)->lf_end + 1) == lock->lf_start) {
 			struct lockf *adjacent = *lf;
@@ -439,7 +466,7 @@ lf_setlock(struct lockf *lock)
 	/*
 	 * Scan lock list for this file looking for locks that would block us.
 	 */
-	while ((block = lf_getblock(lock))) {
+	while ((block = lf_getblock(lock, -1))) {
 		/*
 		 * Free the structure and return if nonblocking.
 		 */
@@ -553,10 +580,14 @@ lf_setlock(struct lockf *lock)
 		error = msleep(lock, &vp->v_lock, priority, lockstr, 0);
 
 		if (!TAILQ_EMPTY(&lock->lf_blkhd)) {
-		        if ((block = lf_getblock(lock))) {
+		        if ((block = lf_getblock(lock, -1))) {
 				lf_move_blocked(block, lock);
 			}
 		}
+
+		if (error == 0 && (lock->lf_flags & F_ABORT) != 0)
+			error = EBADF;
+
 		if (error) {	/* XXX */
 			/*
 			 * We may have been awakened by a signal and/or by a
@@ -816,6 +847,7 @@ lf_clearlock(struct lockf *unlock)
  *		fl			Pointer to flock structure to receive
  *					the blocking lock information, if a
  *					blocking lock is found.
+ *		matchpid		-1, or pid value to match in lookup.
  *
  * Returns:	0			Success
  *
@@ -828,7 +860,7 @@ lf_clearlock(struct lockf *unlock)
  *		the blocking process ID for advisory record locks.
  */
 static int
-lf_getlock(struct lockf *lock, struct flock *fl)
+lf_getlock(struct lockf *lock, struct flock *fl, pid_t matchpid)
 {
 	struct lockf *block;
 
@@ -837,7 +869,7 @@ lf_getlock(struct lockf *lock, struct flock *fl)
 		lf_print("lf_getlock", lock);
 #endif /* LOCKF_DEBUGGING */
 
-	if ((block = lf_getblock(lock))) {
+	if ((block = lf_getblock(lock, matchpid))) {
 		fl->l_type = block->lf_type;
 		fl->l_whence = SEEK_SET;
 		fl->l_start = block->lf_start;
@@ -855,56 +887,6 @@ lf_getlock(struct lockf *lock, struct flock *fl)
 	return (0);
 }
 
-#if CONFIG_EMBEDDED
-int lf_getlockpid(struct vnode *vp, struct flock *fl)
-{
-	struct lockf *lf, *blk;
-
-	if (vp == 0)
-		return EINVAL;
-
-	fl->l_type = F_UNLCK;
-	
-	lck_mtx_lock(&vp->v_lock);
-
-	for (lf = vp->v_lockf; lf; lf = lf->lf_next) {
-
-		if (lf->lf_flags & F_POSIX) {
-			if ((((struct proc *)lf->lf_id)->p_pid) == fl->l_pid) {
-				fl->l_type = lf->lf_type;
-				fl->l_whence = SEEK_SET;
-				fl->l_start = lf->lf_start;
-				if (lf->lf_end == -1)
-					fl->l_len = 0;
-				else
-					fl->l_len = lf->lf_end - lf->lf_start + 1;
-
-				break;
-			}
-		}
-
-		TAILQ_FOREACH(blk, &lf->lf_blkhd, lf_block) {
-			if (blk->lf_flags & F_POSIX) {
-				if ((((struct proc *)blk->lf_id)->p_pid) == fl->l_pid) {
-					fl->l_type = blk->lf_type;
-					fl->l_whence = SEEK_SET;
-					fl->l_start = blk->lf_start;
-					if (blk->lf_end == -1)
-						fl->l_len = 0;
-					else
-						fl->l_len = blk->lf_end - blk->lf_start + 1;
-
-					break;
-				}
-			}
-		}
-	}
-
-	lck_mtx_unlock(&vp->v_lock);
-	return (0);
-}
-#endif
-
 /*
  * lf_getblock
  *
@@ -915,29 +897,35 @@ int lf_getlockpid(struct vnode *vp, struct flock *fl)
  *
  * Parameters:	lock			The lock for which we are interested
  *					in obtaining the blocking lock, if any
+ *		matchpid		-1, or pid value to match in lookup.
  *
  * Returns:	NOLOCKF			No blocking lock exists
  *		!NOLOCKF		The address of the blocking lock's
  *					struct lockf.
  */
 static struct lockf *
-lf_getblock(struct lockf *lock)
+lf_getblock(struct lockf *lock, pid_t matchpid)
 {
 	struct lockf **prev, *overlap, *lf = *(lock->lf_head);
-	int ovcase;
 
-	prev = lock->lf_head;
-	while ((ovcase = lf_findoverlap(lf, lock, OTHERS, &prev, &overlap)) != OVERLAP_NONE) {
+	for (prev = lock->lf_head;
+	    lf_findoverlap(lf, lock, OTHERS, &prev, &overlap) != OVERLAP_NONE;
+	    lf = overlap->lf_next) {
 		/*
-		 * We've found an overlap, see if it blocks us
+		 * Found an overlap.
+		 *
+		 * If we're matching pids, and it's a record lock,
+		 * but the pid doesn't match, then keep on looking ..
+		 */
+		if (matchpid != -1 &&
+		    (overlap->lf_flags & F_POSIX) != 0 &&
+		    proc_pid((struct proc *)(overlap->lf_id)) != matchpid)
+			continue;
+		/*
+		 * does it block us?
 		 */
 		if ((lock->lf_type == F_WRLCK || overlap->lf_type == F_WRLCK))
 			return (overlap);
-		/*
-		 * Nope, point to the next one on the list and
-		 * see if it blocks us
-		 */
-		lf = overlap->lf_next;
 	}
 	return (NOLOCKF);
 }
@@ -970,7 +958,7 @@ lf_getblock(struct lockf *lock)
  *					this is generally used to relink the
  *					lock list, avoiding a second iteration.
  *		*overlap		The pointer to the overlapping lock
- *					itself; this is ussed to return data in
+ *					itself; this is used to return data in
  *					the check == OTHERS case, and for the
  *					caller to modify the overlapping lock,
  *					in the check == SELF case

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2011 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -109,7 +109,7 @@ struct sockaddr_dl {
 #endif
 
 #ifdef BSD_KERNEL_PRIVATE
-#define SDL(s) ((struct sockaddr_dl *)s)
+#define SDL(s) ((struct sockaddr_dl *)(void *)s)
 #endif
 
 #ifndef KERNEL

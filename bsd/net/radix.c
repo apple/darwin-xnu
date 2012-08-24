@@ -101,7 +101,6 @@ static char *rn_zeros, *rn_ones;
 
 extern lck_grp_t	*domain_proto_mtx_grp;
 extern lck_attr_t	*domain_proto_mtx_attr;
-lck_mtx_t *rn_mutex;
 
 #define rn_masktop (mask_rnhead->rnh_treetop)
 #undef Bcmp
@@ -1173,6 +1172,4 @@ rn_init(void)
 		*cp++ = -1;
 	if (rn_inithead((void **)&mask_rnhead, 0) == 0)
 		panic("rn_init 2");
-
-	rn_mutex = lck_mtx_alloc_init(domain_proto_mtx_grp, domain_proto_mtx_attr);
 }

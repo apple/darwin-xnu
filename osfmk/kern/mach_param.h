@@ -83,8 +83,6 @@ extern int thread_max, task_threadmax, task_max;
 #define SET_MAX		(task_max + (thread_max * 2) + 200)
 					/* Max number of port sets */
 
-#define	ITE_MAX		(1 << 16)	/* Max number of splay tree entries */
-
 #define	SPACE_MAX	(task_max + 5)	/* Max number of IPC spaces */
 
 #define SEMAPHORE_MAX   (PORT_MAX >> 1)	/* Maximum number of semaphores */

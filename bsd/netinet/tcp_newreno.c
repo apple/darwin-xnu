@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2010 Apple Inc. All rights reserved.
+ * Copyright (c) 2010-2012 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -25,10 +25,46 @@
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
+/*
+ * Copyright (c) 1982, 1986, 1988, 1990, 1993, 1995
+ *      The Regents of the University of California.  All rights reserved.
+ *
+ * Redistribution and use in source and binary forms, with or without
+ * modification, are permitted provided that the following conditions
+ * are met:
+ * 1. Redistributions of source code must retain the above copyright
+ *    notice, this list of conditions and the following disclaimer.
+ * 2. Redistributions in binary form must reproduce the above copyright
+ *    notice, this list of conditions and the following disclaimer in the
+ *    documentation and/or other materials provided with the distribution.
+ * 3. All advertising materials mentioning features or use of this software
+ *    must display the following acknowledgement:
+ *      This product includes software developed by the University of
+ *      California, Berkeley and its contributors.
+ * 4. Neither the name of the University nor the names of its contributors
+ *    may be used to endorse or promote products derived from this software
+ *    without specific prior written permission.
+ *
+ * THIS SOFTWARE IS PROVIDED BY THE REGENTS AND CONTRIBUTORS ``AS IS'' AND
+ * ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+ * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+ * ARE DISCLAIMED.  IN NO EVENT SHALL THE REGENTS OR CONTRIBUTORS BE LIABLE
+ * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+ * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
+ * OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
+ * HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
+ * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
+ * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
+ * SUCH DAMAGE.
+ *
+ *      @(#)tcp_input.c 8.12 (Berkeley) 5/24/95
+ * $FreeBSD: src/sys/netinet/tcp_input.c,v 1.107.2.16 2001/08/22 00:59:12 silby Exp $
+ */
 #include <sys/param.h>
 #include <sys/systm.h>
 #include <sys/kernel.h>
 #include <sys/protosw.h>
+#include <sys/socketvar.h>
 
 #include <net/route.h>
 #include <netinet/in.h>
@@ -52,7 +88,7 @@ int tcp_newreno_cleanup(struct tcpcb *tp);
 void tcp_newreno_cwnd_init_or_reset(struct tcpcb *tp);
 void tcp_newreno_inseq_ack_rcvd(struct tcpcb *tp, struct tcphdr *th);
 void tcp_newreno_ack_rcvd(struct tcpcb *tp, struct tcphdr *th);
-void tcp_newreno_pre_fr(struct tcpcb *tp, struct tcphdr *th);
+void tcp_newreno_pre_fr(struct tcpcb *tp);
 void tcp_newreno_post_fr(struct tcpcb *tp, struct tcphdr *th);
 void tcp_newreno_after_idle(struct tcpcb *tp);
 void tcp_newreno_after_timeout(struct tcpcb *tp);
@@ -77,6 +113,43 @@ struct tcp_cc_algo tcp_cc_newreno = {
 extern int tcp_do_rfc3465;
 extern int tcp_do_rfc3465_lim2;
 extern int maxseg_unacked;
+extern u_int32_t tcp_autosndbuf_max;
+
+#define SET_SNDSB_IDEAL_SIZE(sndsb, size) \
+	sndsb->sb_idealsize = min(max(tcp_sendspace, tp->snd_ssthresh), \
+		tcp_autosndbuf_max); 
+
+void tcp_cc_resize_sndbuf(struct tcpcb *tp) {
+	struct sockbuf *sb;
+	/* If the send socket buffer size is bigger than ssthresh,
+	 * it is time to trim it because we do not want to hold
+	 * too many mbufs in the socket buffer
+	 */
+	sb = &(tp->t_inpcb->inp_socket->so_snd);
+	if (sb->sb_hiwat > tp->snd_ssthresh &&
+		(sb->sb_flags & SB_AUTOSIZE) != 0) {
+		if (sb->sb_idealsize > tp->snd_ssthresh) {
+			SET_SNDSB_IDEAL_SIZE(sb, tp->snd_ssthresh);
+		}
+		sb->sb_flags |= SB_TRIM;
+	}
+}
+
+void tcp_bad_rexmt_fix_sndbuf(struct tcpcb *tp) {
+	struct sockbuf *sb;
+	sb = &(tp->t_inpcb->inp_socket->so_snd);
+	if ((sb->sb_flags & (SB_TRIM|SB_AUTOSIZE)) == (SB_TRIM|SB_AUTOSIZE)) {
+		/* If there was a retransmission that was not necessary 
+		 * then the size of socket buffer can be restored to
+		 * what it was before
+		 */
+		SET_SNDSB_IDEAL_SIZE(sb, tp->snd_ssthresh);
+		if (sb->sb_hiwat <= sb->sb_idealsize) {
+			sbreserve(sb, sb->sb_idealsize);
+			sb->sb_flags &= ~SB_TRIM;
+		}
+	}
+}
 
 int tcp_newreno_init(struct tcpcb *tp) {
 #pragma unused(tp)
@@ -202,8 +275,7 @@ tcp_newreno_ack_rcvd(struct tcpcb *tp, struct tcphdr *th) {
 }
 
 void
-tcp_newreno_pre_fr(struct tcpcb *tp, struct tcphdr *th) {
-#pragma unused(th)
+tcp_newreno_pre_fr(struct tcpcb *tp) {
 
 	uint32_t win;
 
@@ -212,6 +284,8 @@ tcp_newreno_pre_fr(struct tcpcb *tp, struct tcphdr *th) {
 	if ( win < 2 )
 		win = 2;
 	tp->snd_ssthresh = win * tp->t_maxseg; 
+	tcp_cc_resize_sndbuf(tp);
+
 }
 
 void
@@ -273,6 +347,8 @@ tcp_newreno_after_timeout(struct tcpcb *tp) {
 		tp->snd_ssthresh = win * tp->t_maxseg;
 		tp->t_bytes_acked = 0;
 		tp->t_dupacks = 0;
+
+		tcp_cc_resize_sndbuf(tp);
 	}
 }
 
@@ -302,15 +378,15 @@ tcp_newreno_delay_ack(struct tcpcb *tp, struct tcphdr *th) {
 	case 2:
 		if ((tp->t_flags & TF_RXWIN0SENT) == 0 &&
 			(th->th_flags & TH_PUSH) == 0 &&
-			(tp->t_flags & TF_DELACK) == 0)
+			(tp->t_unacksegs == 1))
 			return(1);
 		break;
 	case 3:
 		if ((tp->t_flags & TF_RXWIN0SENT) == 0 &&
 			(th->th_flags & TH_PUSH) == 0 &&
-			((tp->t_unacksegs == 0) ||
+			((tp->t_unacksegs == 1) ||
 			((tp->t_flags & TF_STRETCHACK) != 0 &&
-			tp->t_unacksegs < (maxseg_unacked - 1))))
+			tp->t_unacksegs < (maxseg_unacked))))
 			return(1);
 		break;
 	}

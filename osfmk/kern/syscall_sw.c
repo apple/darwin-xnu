@@ -60,6 +60,7 @@
 #include <mach/mach_traps.h>
 
 #include <kern/syscall_sw.h>
+#include <sys/munge.h>
 
 /* Forwards */
 
@@ -78,6 +79,12 @@
  *
  * WARNING:	Don't use numbers 0 through -9.  They (along with
  *		the positive numbers) are reserved for Unix.
+ *
+ * WARNING:	The 'arg_count' parameter in the list below is poorly named.
+ *		It doesn't refer to the number of arguments the trap takes -
+ *		it actually refers to the number of 32-bit words that need
+ *		to be copied in from userspace.  The munging of words to trap
+ *		arguments is done in mach_call_munger().
  */
 
 int kern_invalid_debug = 0;
@@ -91,7 +98,7 @@ int kern_invalid_debug = 0;
 #include <kern/clock.h>
 #include <mach/mk_timer.h>
 
-mach_trap_t	mach_trap_table[MACH_TRAP_TABLE_COUNT] = {
+const mach_trap_t	mach_trap_table[MACH_TRAP_TABLE_COUNT] = {
 /* 0 */		MACH_TRAP(kern_invalid, 0, NULL, NULL),
 /* 1 */		MACH_TRAP(kern_invalid, 0, NULL, NULL),
 /* 2 */		MACH_TRAP(kern_invalid, 0, NULL, NULL),
@@ -102,20 +109,20 @@ mach_trap_t	mach_trap_table[MACH_TRAP_TABLE_COUNT] = {
 /* 7 */		MACH_TRAP(kern_invalid, 0, NULL, NULL),
 /* 8 */		MACH_TRAP(kern_invalid, 0, NULL, NULL),
 /* 9 */		MACH_TRAP(kern_invalid, 0, NULL, NULL),
-/* 10 */	MACH_TRAP(kern_invalid, 0, NULL, NULL),
+/* 10 */	MACH_TRAP(_kernelrpc_mach_vm_allocate_trap, 5, munge_wwlw, munge_dddd),
 /* 11 */	MACH_TRAP(kern_invalid, 0, NULL, NULL),
-/* 12 */	MACH_TRAP(kern_invalid, 0, NULL, NULL),
+/* 12 */	MACH_TRAP(_kernelrpc_mach_vm_deallocate_trap, 5, munge_wll, munge_ddd),
 /* 13 */	MACH_TRAP(kern_invalid, 0, NULL, NULL),
-/* 14 */	MACH_TRAP(kern_invalid, 0, NULL, NULL),
+/* 14 */	MACH_TRAP(_kernelrpc_mach_vm_protect_trap, 7, munge_wllww, munge_ddddd),
 /* 15 */	MACH_TRAP(kern_invalid, 0, NULL, NULL),
-/* 16 */	MACH_TRAP(kern_invalid, 0, NULL, NULL),
-/* 17 */	MACH_TRAP(kern_invalid, 0, NULL, NULL),
-/* 18 */	MACH_TRAP(kern_invalid, 0, NULL, NULL),
-/* 19 */	MACH_TRAP(kern_invalid, 0, NULL, NULL),
-/* 20 */	MACH_TRAP(kern_invalid, 0, NULL, NULL),
-/* 21 */	MACH_TRAP(kern_invalid, 0, NULL, NULL),
-/* 22 */	MACH_TRAP(kern_invalid, 0, NULL, NULL),
-/* 23 */	MACH_TRAP(kern_invalid, 0, NULL, NULL),
+/* 16 */	MACH_TRAP(_kernelrpc_mach_port_allocate_trap, 3, munge_www, munge_ddd),
+/* 17 */	MACH_TRAP(_kernelrpc_mach_port_destroy_trap, 2, munge_ww, munge_dd),
+/* 18 */	MACH_TRAP(_kernelrpc_mach_port_deallocate_trap, 2, munge_ww, munge_dd),
+/* 19 */	MACH_TRAP(_kernelrpc_mach_port_mod_refs_trap, 4, munge_wwww, munge_dddd),
+/* 20 */	MACH_TRAP(_kernelrpc_mach_port_move_member_trap, 3, munge_www, munge_ddd),
+/* 21 */	MACH_TRAP(_kernelrpc_mach_port_insert_right_trap, 4, munge_wwww, munge_dddd),
+/* 22 */	MACH_TRAP(_kernelrpc_mach_port_insert_member_trap, 3, munge_www, munge_ddd),
+/* 23 */	MACH_TRAP(_kernelrpc_mach_port_extract_member_trap, 3, munge_www, munge_ddd),
 /* 24 */	MACH_TRAP(kern_invalid, 0, NULL, NULL),
 /* 25 */	MACH_TRAP(kern_invalid, 0, NULL, NULL),
 /* 26 */	MACH_TRAP(mach_reply_port, 0, NULL, NULL),
@@ -241,20 +248,20 @@ const char * mach_syscall_name_table[MACH_TRAP_TABLE_COUNT] = {
 /* 7 */		"kern_invalid",
 /* 8 */		"kern_invalid",
 /* 9 */		"kern_invalid",
-/* 10 */	"kern_invalid",
+/* 10 */	"_kernelrpc_mach_vm_allocate_trap",
 /* 11 */	"kern_invalid",
-/* 12 */	"kern_invalid",
+/* 12 */	"_kernelrpc_mach_vm_deallocate_trap",
 /* 13 */	"kern_invalid",
-/* 14 */	"kern_invalid",
+/* 14 */	"_kernelrpc_mach_vm_protect_trap",
 /* 15 */	"kern_invalid",
-/* 16 */	"kern_invalid",
-/* 17 */	"kern_invalid",
-/* 18 */	"kern_invalid",
-/* 19 */	"kern_invalid",
-/* 20 */	"kern_invalid",
-/* 21 */	"kern_invalid",
-/* 22 */	"kern_invalid",
-/* 23 */	"kern_invalid",
+/* 16 */	"_kernelrpc_mach_port_allocate_trap",
+/* 17 */	"_kernelrpc_mach_port_destroy_trap",
+/* 18 */	"_kernelrpc_mach_port_deallocate_trap",
+/* 19 */	"_kernelrpc_mach_port_mod_refs_trap",
+/* 20 */	"_kernelrpc_mach_port_move_member_trap",
+/* 21 */	"_kernelrpc_mach_port_insert_right_trap",
+/* 22 */	"_kernelrpc_mach_port_insert_member_trap",
+/* 23 */	"_kernelrpc_mach_port_extract_member_trap",
 /* 24 */	"kern_invalid",
 /* 25 */	"kern_invalid",
 /* 26 */	"mach_reply_port",

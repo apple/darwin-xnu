@@ -201,6 +201,15 @@ void PE_init_platform(boolean_t vm_initialized, void * _args)
         PE_state.video.v_scale      = (kBootArgsFlagHiDPI & args->flags) ? 2 : 1;
         strlcpy(PE_state.video.v_pixelFormat, "PPPPPPPP",
 		sizeof(PE_state.video.v_pixelFormat));
+
+#ifdef  kBootArgsFlagHiDPI
+	if (args->flags & kBootArgsFlagHiDPI)
+                PE_state.video.v_scale = kPEScaleFactor2x;
+	else
+                PE_state.video.v_scale = kPEScaleFactor1x;
+#else
+	PE_state.video.v_scale = kPEScaleFactor1x;
+#endif
     }
 
     if (!vm_initialized) {

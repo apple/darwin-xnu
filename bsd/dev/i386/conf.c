@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1997-2006 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 1997-2012 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -121,6 +121,7 @@ extern d_ioctl_t	volioctl;
 #endif
 
 extern d_open_t		cttyopen;
+extern d_close_t	cttyclose;
 extern d_read_t		cttyread;
 extern d_write_t	cttywrite;
 extern d_ioctl_t	cttyioctl;
@@ -201,9 +202,9 @@ struct cdevsw	cdevsw[] =
     },
     NO_CDEVICE,								/* 1*/
     {
-	cttyopen,	nullclose,	cttyread,	cttywrite,	/* 2*/
+	cttyopen,	cttyclose,	cttyread,	cttywrite,	/* 2*/
 	cttyioctl,	nullstop,	nullreset,	0,		cttyselect,
-	eno_mmap,	eno_strat,	eno_getc,	eno_putc,	D_TTY
+	eno_mmap,	eno_strat,	eno_getc,	eno_putc,	D_TTY | D_TRACKCLOSE
     },
     {
 	nullopen,	nullclose,	mmread,		mmwrite,	/* 3*/
@@ -307,7 +308,7 @@ isdisk(dev_t dev, int type)
 		}
 		/* FALL THROUGH */
 	case VBLK:
-		if (bdevsw[maj].d_type == D_DISK) {
+		if ((D_TYPEMASK & bdevsw[maj].d_type) == D_DISK) {
 			return (1);
 		}
 		break;
@@ -324,7 +325,7 @@ static int chrtoblktab[] = {
 	/*  8 */	NODEV,		/*  9 */	NODEV,
 	/* 10 */	NODEV,		/* 11 */	NODEV,
 	/* 12 */	NODEV,		/* 13 */	NODEV,
-	/* 14 */	6,		/* 15 */	NODEV,
+	/* 14 */	NODEV,		/* 15 */	NODEV,
 	/* 16 */	NODEV,		/* 17 */	NODEV,
 	/* 18 */	NODEV,		/* 19 */	NODEV,
 	/* 20 */	NODEV,		/* 21 */	NODEV,
@@ -337,7 +338,7 @@ static int chrtoblktab[] = {
 	/* 34 */	NODEV,		/* 35 */	NODEV,
 	/* 36 */	NODEV,		/* 37 */	NODEV,
 	/* 38 */	NODEV,		/* 39 */	NODEV,
-	/* 40 */	NODEV,		/* 41 */	1,
+	/* 40 */	NODEV,		/* 41 */	NODEV,
 	/* 42 */	NODEV,		/* 43 */	NODEV,
 	/* 44 */	NODEV,
 };

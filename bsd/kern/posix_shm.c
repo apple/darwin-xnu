@@ -499,8 +499,8 @@ shm_open(proc_t p, struct shm_open_args *uap, int32_t *retval)
 			pinfo->pshm_mode = cmode;
 			pinfo->pshm_uid = kauth_getuid();
 			pinfo->pshm_gid = kauth_getgid();
-			bcopy(pnbuf, &pinfo->pshm_name[0], PSHMNAMLEN);
-			pinfo->pshm_name[PSHMNAMLEN]=0;
+			bcopy(pnbuf, &pinfo->pshm_name[0], pathlen);
+			pinfo->pshm_name[pathlen]=0;
 #if CONFIG_MACF
 			error = mac_posixshm_check_create(kauth_cred_get(), nameptr);
 			if (error) {
@@ -530,7 +530,7 @@ shm_open(proc_t p, struct shm_open_args *uap, int32_t *retval)
 			AUDIT_ARG(posix_ipc_perm, pinfo->pshm_uid,
 					pinfo->pshm_gid, pinfo->pshm_mode);
 #if CONFIG_MACF	
-			if ((error = mac_posixshm_check_open(kauth_cred_get(), pinfo))) {
+			if ((error = mac_posixshm_check_open(kauth_cred_get(), pinfo, fmode))) {
 				goto bad;
 			}
 #endif
@@ -550,7 +550,7 @@ shm_open(proc_t p, struct shm_open_args *uap, int32_t *retval)
 			goto bad;
 		}	
 #if CONFIG_MACF	
-		if ((error = mac_posixshm_check_open(kauth_cred_get(), pinfo))) {
+		if ((error = mac_posixshm_check_open(kauth_cred_get(), pinfo, fmode))) {
 			goto bad;
 		}
 #endif
@@ -829,10 +829,10 @@ pshm_access(struct pshminfo *pinfo, int mode, kauth_cred_t cred, __unused proc_t
 int
 pshm_mmap(__unused proc_t p, struct mmap_args *uap, user_addr_t *retval, struct fileproc *fp, off_t pageoff) 
 {
-	mach_vm_offset_t	user_addr = (mach_vm_offset_t)uap->addr;
-	mach_vm_size_t		user_size = (mach_vm_size_t)uap->len ;
-	mach_vm_offset_t	user_start_addr;
-	mach_vm_size_t		map_size, mapped_size;
+	vm_map_offset_t	user_addr = (vm_map_offset_t)uap->addr;
+	vm_map_size_t	user_size = (vm_map_size_t)uap->len ;
+	vm_map_offset_t	user_start_addr;
+	vm_map_size_t	map_size, mapped_size;
 	int prot = uap->prot;
 	int flags = uap->flags;
 	vm_object_offset_t file_pos = (vm_object_offset_t)uap->pos;
@@ -898,9 +898,9 @@ pshm_mmap(__unused proc_t p, struct mmap_args *uap, user_addr_t *retval, struct 
 
 	if ((flags & MAP_FIXED) == 0) {
 		alloc_flags = VM_FLAGS_ANYWHERE;
-		user_addr = mach_vm_round_page(user_addr); 
+		user_addr = vm_map_round_page(user_addr); 
 	} else {
-		if (user_addr != mach_vm_trunc_page(user_addr))
+		if (user_addr != vm_map_round_page(user_addr))
 			return (EINVAL);
 		/*
 		 * We do not get rid of the existing mappings here because
@@ -1099,15 +1099,23 @@ shm_unlink(__unused proc_t p, struct shm_unlink_args *uap,
 	AUDIT_ARG(posix_ipc_perm, pinfo->pshm_uid, pinfo->pshm_gid,
 		  pinfo->pshm_mode);
 
-	/*
-	 * JMM - How should permissions be checked?
+	/* 
+	 * following file semantics, unlink should be allowed 
+	 * for users with write permission only. 
 	 */
+	if ( (error = pshm_access(pinfo, FWRITE, kauth_cred_get(), p)) ) {
+		PSHM_SUBSYS_UNLOCK();
+		goto bad;
+	}
 
 	pinfo->pshm_flags |= PSHM_INDELETE;
 	pshm_cache_delete(pcache);
 	pinfo->pshm_flags |= PSHM_REMOVED;
 	/* release the existence reference */
  	if (!--pinfo->pshm_usecount) {
+#if CONFIG_MACF
+		mac_posixshm_label_destroy(pinfo);
+#endif
 		PSHM_SUBSYS_UNLOCK();
 		/*
 		 * If this is the last reference going away on the object,

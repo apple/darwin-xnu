@@ -28,13 +28,18 @@
 #ifndef _KXLD_UTIL_H_
 #define _KXLD_UTIL_H_
 
-#include <mach/machine.h>
 #include <sys/types.h>
 #if KERNEL
     #include <libkern/kxld_types.h>
+    #include <mach/machine.h>
 #else
     #include <architecture/byte_order.h>
     #include "kxld_types.h"
+
+    /* Get machine.h from the kernel source so we can support all platforms
+     * that the kernel supports. Otherwise we're at the mercy of the host.
+     */
+    #include "../../osfmk/mach/machine.h"
 #endif
 
 /* 64-bit helpers */

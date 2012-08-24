@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2006 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2011 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -112,6 +112,9 @@ extern int copyoutmsg(
 extern void inval_copy_windows(thread_t);
 extern void copy_window_fault(thread_t, vm_map_t, int);
 
+extern int copyin_validate(const user_addr_t, uintptr_t, vm_size_t);
+extern int copyout_validate(uintptr_t, const user_addr_t, vm_size_t);
+
 extern int sscanf(const char *input, const char *fmt, ...) __scanflike(2,3);
 
 /* sprintf() is being deprecated. Please use snprintf() instead. */ 
@@ -130,8 +133,6 @@ int     _consume_printf_args(int, ...);
 #define printf(x, ...)  do {} while (0)
 #endif
 #endif
-
-extern void dbugprintf(const char *format, ...) __printflike(1,2);
 
 extern int kdb_printf(const char *format, ...) __printflike(1,2);
 
@@ -195,6 +196,11 @@ extern void bootstrap_create(void);
 extern void Debugger(
 		const char	* message);
 
+extern void DebuggerWithContext(
+		unsigned int	reason,
+		void		*ctx,
+		const char	*message);
+
 extern void delay(
 		int		n);
 
@@ -214,5 +220,7 @@ user_addr_t get_useraddr(void);
 
 /* symbol lookup */
 struct kmod_info_t;
+
+extern uint64_t early_random(void);
 
 #endif	/* _MISC_PROTOS_H_ */

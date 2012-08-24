@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2011 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -132,7 +132,8 @@ struct sockaddr_inarp {
 	struct	in_addr sin_srcaddr;
 	u_short	sin_tos;
 	u_short	sin_other;
-#define SIN_PROXY 1
+#define	SIN_PROXY	0x1
+#define	SIN_ROUTER	0x2
 };
 /*
  * IP and ethernet specific routing flags

@@ -57,7 +57,7 @@
  */
 
 #include <platforms.h>
-#include <mach_kdb.h>
+#include <debug.h>
 
 #include <i386/asm.h>
 #include <i386/proc_reg.h>
@@ -73,9 +73,10 @@
 
 /*
  * Interrupt and bootup stack for initial processor.
+ * Note: we switch to a dynamically allocated interrupt stack once VM is up.
  */
 
-	/* in the __HIB section since the hibernate restore code uses this stack. */
+/* in the __HIB section since the hibernate restore code uses this stack. */
 	.section __HIB, __data
 	.align	12
 
@@ -96,17 +97,6 @@ EXT(gIOHibernateRestoreStackEnd):
 	.section __DATA, __data
 
 /*
- * Stack for last-gasp double-fault handler.
- */
-	.align	12
-	.globl	EXT(df_task_stack)
-EXT(df_task_stack):
-	.space	INTSTACK_SIZE
-	.globl	EXT(df_task_stack_end)
-EXT(df_task_stack_end):
-
-
-/*
  * Stack for machine-check handler.
  */
 	.align	12
@@ -116,6 +106,25 @@ EXT(mc_task_stack):
 	.globl	EXT(mc_task_stack_end)
 EXT(mc_task_stack_end):
 
+	/* Must not clobber EDI */
+#define SWITCH_TO_64BIT_MODE					 \
+	movl	$(CR4_PAE),%eax		/* enable PAE */	;\
+	movl	%eax,%cr4					;\
+	movl    $MSR_IA32_EFER,%ecx				;\
+	rdmsr							;\
+	/* enable long mode, NX */				;\
+	orl	$(MSR_IA32_EFER_LME | MSR_IA32_EFER_NXE),%eax	;\
+	wrmsr							;\
+	movl	$EXT(BootPML4),%eax				;\
+	movl	%eax,%cr3					;\
+	movl	%cr0,%eax					;\
+	orl	$(CR0_PG|CR0_WP),%eax	/* enable paging */	;\
+	movl	%eax,%cr0					;\
+	/* "The Aussie Maneuver" ("Myria" variant) */ 		;\
+	pushl $(0xcb<<24)|KERNEL64_CS /* reload CS with 0x08 */ ;\
+	call .-1						;\
+	.code64
+
 /*
  * BSP CPU start here.
  *	eax points to kernbootstruct
@@ -124,50 +133,16 @@ EXT(mc_task_stack_end):
  *	protected mode, no paging, flat 32-bit address space.
  *	(Code/data/stack segments have base == 0, limit == 4G)
  */
-
-#define SWITCH_TO_64BIT_MODE \
-	movl	$(CR4_PAE),%eax		/* enable PAE */		;\
-	movl	%eax,%cr4									;\
-	movl    $MSR_IA32_EFER,%ecx							;\
-	rdmsr												;\
-	orl	$MSR_IA32_EFER_LME,%eax	/* enable long mode */	;\
-	wrmsr												;\
-	movl	$INITPT_SEG_BASE,%eax						;\
-	movl	%eax,%cr3									;\
-	movl	%cr0,%eax									;\
-	orl	$(CR0_PG|CR0_WP),%eax	/* enable paging */		;\
-	movl	%eax,%cr0									;\
-	/* "The Aussie Maneuver" ("Myria" variant) */ 		;\
-	pushl $(0xcb<<24)|KERNEL64_CS /* reload CS with 0x08 */ ;\
-	call .-1											;\
-	.code64
-
-/*
- * [ We used to have a reason for the following statement; ]
- * [ but the issue has been fixed. The line is true        ]
- * [ nevertheless, therefore it should remain there.       ]
- * This proves that Little Endian is superior to Big Endian.
- */
 	
+.code32
 	.text
+	.section __HIB, __text
 	.align	ALIGN
 	.globl	EXT(_start)
-	.globl	EXT(_pstart)
+	.globl	EXT(pstart)
 LEXT(_start)
-LEXT(_pstart)
+LEXT(pstart)
 
-	.code32
-
-#if 0
-	mov $0x3f8, %dx
-	mov $0x4D, %al; out %al, %dx
-	mov $0x49, %al; out %al, %dx
-	mov $0x53, %al; out %al, %dx
-	mov $0x54, %al; out %al, %dx
-	mov $0x0D, %al; out %al, %dx
-	mov $0x0A, %al; out %al, %dx
-#endif
-	
 /*
  * Here we do the minimal setup to switch from 32 bit mode to 64 bit long mode.
  *
@@ -177,8 +152,13 @@ LEXT(_pstart)
  *	|			|
  *	| Kernel text/data	|
  *	|			|
- *	------------------------- Kernel start addr
+ *	|-----------------------| Kernel text base addr - 2MB-aligned
+ *	| padding		|
+ *	|-----------------------|
+ *	| __HIB section		|
+ *	|-----------------------| Page-aligned
  *	|			|
+ *	| padding		|
  *	|			|
  *	------------------------- 0
  *
@@ -186,13 +166,30 @@ LEXT(_pstart)
 	mov	%eax, %edi	/* save kernbootstruct */
 
 	/* Use low 32-bits of address as 32-bit stack */
-	movl $EXT(low_eintstack), %esp
+	movl	$EXT(low_eintstack), %esp
 	
+	POSTCODE(PSTART_ENTRY)
+
 	/*
 	 * Set up segmentation
 	 */
 	movl	$EXT(protected_mode_gdtr), %eax
 	lgdtl	(%eax)
+
+	/*
+	 * Rebase Boot page tables to kernel base address.
+	 */
+	movl	$EXT(BootPML4), %eax			// Level 4:
+	add	%eax, 0*8+0(%eax)			//  - 1:1
+	add	%eax, KERNEL_PML4_INDEX*8+0(%eax)	//  - kernel space
+
+	movl	$EXT(BootPDPT), %edx			// Level 3:
+	add	%eax, 0*8+0(%edx)
+	add	%eax, 1*8+0(%edx)
+	add	%eax, 2*8+0(%edx)
+	add	%eax, 3*8+0(%edx)
+
+	POSTCODE(PSTART_REBASE)
 
 /* the following code is shared by the master CPU and all slave CPUs */
 L_pstart_common:
@@ -209,16 +206,56 @@ L_pstart_common:
 	mov	%ax, %fs
 	mov	%ax, %gs
 
+	test	%edi, %edi /* Populate stack canary on BSP */
+	jz	Lvstartshim
+
+	mov	$1, %eax
+	cpuid
+	test	$(1 << 30), %ecx
+	jz	Lnon_rdrand
+	RDRAND_RAX		/* RAX := 64 bits of DRBG entropy */
+	jnc	Lnon_rdrand	/* TODO: complain if DRBG fails at this stage */
+
+Lstore_random_guard:
+	xor	%ah, %ah	/* Security: zero second byte of stack canary */
+	movq	%rax, ___stack_chk_guard(%rip)
+	/* %edi = boot_args_start if BSP */
+Lvstartshim:	
+
+	POSTCODE(PSTART_VSTART)
+
 	/* %edi = boot_args_start */
 	
-	leaq _vstart(%rip), %rcx
-	movq $0xffffff8000000000, %rax	/* adjust the pointer to be up high */
-	or %rax, %rsp			/* and stack pointer up there too */
-	or %rcx, %rax
-	andq $0xfffffffffffffff0, %rsp	/* align stack */
-	xorq %rbp, %rbp			/* zero frame pointer */
-	callq *%rax
+	leaq	_vstart(%rip), %rcx
+	movq	$0xffffff8000000000, %rax	/* adjust pointer up high */
+	or	%rax, %rsp			/* and stack pointer up there */
+	or	%rcx, %rax
+	andq	$0xfffffffffffffff0, %rsp	/* align stack */
+	xorq	%rbp, %rbp			/* zero frame pointer */
+	callq	*%rax
 
+Lnon_rdrand:
+	rdtsc /* EDX:EAX := TSC */
+	/* Distribute low order bits */
+	mov	%eax, %ecx
+	xor	%al, %ah
+	shl	$16, %rcx
+	xor	%rcx, %rax
+	xor	%eax, %edx
+
+	/* Incorporate ASLR entropy, if any */
+	lea	(%rip), %rcx
+	shr	$21, %rcx
+	movzbl	%cl, %ecx
+	shl	$16, %ecx
+	xor	%ecx, %edx
+
+	mov	%ah, %cl
+	ror	%cl, %edx /* Right rotate EDX (TSC&0xFF ^ (TSC>>8 & 0xFF))&1F */
+	shl	$32, %rdx
+	xor	%rdx, %rax
+	mov	%cl, %al
+	jmp	Lstore_random_guard
 /*
  * AP (slave) CPUs enter here.
  *
@@ -232,18 +269,11 @@ LEXT(slave_pstart)
 	.code32
 	cli				/* disable interrupts, so we don`t */
 					/* need IDT for a while */
-	POSTCODE(SLAVE_PSTART_ENTRY)
+	POSTCODE(SLAVE_PSTART)
 
 	movl	$EXT(mp_slave_stack) + PAGE_SIZE, %esp
 
-	/* set up identity mapping of page tables */
-	movl	$INITPT_SEG_BASE,%eax
-	movl	(KERNEL_PML4_INDEX*8)(%eax), %esi
-	movl	%esi, (0)(%eax)
-	movl	(KERNEL_PML4_INDEX*8+4)(%eax), %esi
-	movl	%esi, (0+4)(%eax)
-
-	movl	$0, %edi		/* "no kernbootstruct" */
+	xor 	%edi, %edi		/* AP, no "kernbootstruct" */
 
 	jmp	L_pstart_common		/* hop a ride to vstart() */
 
@@ -252,13 +282,13 @@ LEXT(slave_pstart)
 
 .section __HIB, __text
 /*
-This code is linked into the kernel but part of the "__HIB" section, which means
-its used by code running in the special context of restoring the kernel text and data
-from the hibernation image read by the booter. hibernate_kernel_entrypoint() and everything
-it calls or references (ie. hibernate_restore_phys_page())
-needs to be careful to only touch memory also in the "__HIB" section.
-*/
-
+ * This code is linked into the kernel but part of the "__HIB" section,
+ * which means it's used by code running in the special context of restoring
+ * the kernel text and data from the hibernation image read by the booter.
+ * hibernate_kernel_entrypoint() and everything it calls or references
+ * (ie. hibernate_restore_phys_page()) needs to be careful to only touch
+ * memory also in the "__HIB" section.
+ */
 
 	.align	ALIGN
 	.globl	EXT(hibernate_machine_entrypoint)
@@ -266,54 +296,35 @@ needs to be careful to only touch memory also in the "__HIB" section.
 LEXT(hibernate_machine_entrypoint)
 	movl    %eax, %edi /* regparm(1) calling convention */
 
-	/* restore gdt */
-	mov 	$(SLEEP_SEG_BASE)+20, %eax // load saved_gdt, this may break
+	/* Use low 32-bits of address as 32-bit stack */
+	movl $EXT(low_eintstack), %esp
+	
+	/*
+	 * Set up GDT
+	 */
+	movl	$EXT(master_gdtr), %eax
 	lgdtl	(%eax)
 
-	/* setup the protected mode segment registers */
-	mov		$KERNEL_DS, %eax
-	movw	%ax, %ds
-	movw	%ax, %es
-	movw	%ax, %ss
-	xor		%eax,%eax
-	movw	%ax, %fs
-	movw	%ax, %gs
-
-	/* set up the page tables to use BootstrapPTD 
-	 * as done in idle_pt.c, but this must be done programatically */
-	mov $(INITPT_SEG_BASE + PAGE_SIZE), %eax
-	mov $(INITPT_SEG_BASE + 2*PAGE_SIZE | INTEL_PTE_WRITE | INTEL_PTE_VALID), %ecx
-	mov $0x0, %edx
-	mov	%ecx, (0*8+0)(%eax)
-	mov %edx, (0*8+4)(%eax)
-	add	$(PAGE_SIZE), %ecx
-	mov %ecx, (1*8+0)(%eax)
-	mov %edx, (1*8+4)(%eax)
-	add	$(PAGE_SIZE), %ecx
-	mov %ecx, (2*8+0)(%eax)
-	mov %edx, (2*8+4)(%eax)
-	add	$(PAGE_SIZE), %ecx
-	mov %ecx, (3*8+0)(%eax)
-	mov %edx, (3*8+4)(%eax)
-
-	/* Temporary stack */
-	mov	$(REAL_MODE_BOOTSTRAP_OFFSET + PROT_MODE_START), %esp
-
+	/* Switch to 64-bit on the Boot PTs */
 	SWITCH_TO_64BIT_MODE
 
-	leaq EXT(hibernate_kernel_entrypoint)(%rip),%rcx
-	leaq EXT(gIOHibernateRestoreStackEnd)(%rip),%rsp	/* switch to the bootup stack */
-	movq $0xffffff8000000000, %rax	/* adjust the pointer to be up high */
-	orq %rax, %rsp			/* and stack pointer up there too :D */
-	orq %rcx, %rax			/* put entrypoint in %rax */
+	leaq	EXT(hibernate_kernel_entrypoint)(%rip),%rcx
+
+	/* adjust the pointers to be up high */
+	movq	$0xffffff8000000000, %rax
+	orq	%rax, %rsp
+	orq	%rcx, %rax
+
 	/* %edi is already filled with header pointer */
-	xorl %esi, %esi /* zero 2nd arg */
-	xorl %edx, %edx /* zero 3rd arg */
-	xorl %ecx, %ecx /* zero 4th arg */
-	andq $0xfffffffffffffff0, %rsp	/* align stack */
-					/* (future-proofing, stack should already be aligned) */
-	xorq %rbp, %rbp			/* zero frame pointer */
-	call *%rax /* call instead of jmp to keep the required stack alignment */
+	xorl	%esi, %esi			/* zero 2nd arg */
+	xorl	%edx, %edx			/* zero 3rd arg */
+	xorl	%ecx, %ecx			/* zero 4th arg */
+	andq	$0xfffffffffffffff0, %rsp	/* align stack */
+
+	/* call instead of jmp to keep the required stack alignment */
+	xorq	%rbp, %rbp			/* zero frame pointer */
+	call	*%rax
+
 	/* NOTREACHED */
 	hlt
 
@@ -325,41 +336,11 @@ LEXT(hibernate_machine_entrypoint)
 #include <i386/acpi.h>
 
 
-
-
-#define	PA(addr)	(addr)
-
 /*
  * acpi_wake_start
- *
- * The code from acpi_wake_start to acpi_wake_end is copied to
- * memory below 1MB.  The firmware waking vector is updated to
- * point at acpi_wake_start in low memory before sleeping.
  */
 
 .section __TEXT,__text
-.text
-.align	12	/* Page align for single bcopy_phys() */
-.code32
-.globl EXT(acpi_wake_prot)
-EXT(acpi_wake_prot):
-	/* protected mode, paging disabled */
-
-	/* jump to acpi_temp_alloc (stored in saved_tmp) */
-	mov $(SLEEP_SEG_BASE)+16, %eax 
-	mov (%eax), %ecx // Load acpi_temp_reloc from saved_eip
-	jmp	*%ecx
-acpi_temp_reloc:
-	mov $(SLEEP_SEG_BASE)+16, %esp  /* setup stack for 64bit */
-
-	SWITCH_TO_64BIT_MODE
-
-	lea Lwake_64(%rip), %rax
-	movq $0xffffff8000000000, %rdx
-	orq	%rdx, %rax
-	jmp *%rax
-.code32
-
 .code64
 
 /*
@@ -404,6 +385,8 @@ ENTRY(acpi_sleep_cpu)
 	mov	%rax, saved_cr0(%rip)
 	mov	%cr2, %rax
 	mov	%rax, saved_cr2(%rip)
+	mov	%cr3, %rax
+	mov	%rax, saved_cr3(%rip)
 	mov	%cr4, %rax
 	mov	%rax, saved_cr4(%rip)
 
@@ -432,13 +415,6 @@ ENTRY(acpi_sleep_cpu)
 	str	saved_tr(%rip)
 
 	/*
-	 * When system wakes up, the real mode wake handler will revert to
-	 * protected mode, then jump to the address stored at saved_eip.
-	 */
-	leaq	acpi_temp_reloc(%rip), %rax
-	mov		%eax, saved_eip(%rip)
-
-	/*
 	 * Call ACPI function provided by the caller to sleep the platform.
 	 * This call will not return on success.
 	 */
@@ -449,48 +425,47 @@ ENTRY(acpi_sleep_cpu)
 	/* sleep failed, no cpu context lost */
 	jmp	wake_restore
 
+.section __HIB, __text
+.code32
+.globl EXT(acpi_wake_prot)
+EXT(acpi_wake_prot):
+	/* protected mode, paging disabled */
+	movl	$EXT(low_eintstack), %esp
+
+	SWITCH_TO_64BIT_MODE
+
+	jmp	Lwake_64
+
+.section __TEXT,__text
+.code64
+
 .globl EXT(acpi_wake_prot_entry)
 EXT(acpi_wake_prot_entry):
 	POSTCODE(ACPI_WAKE_PROT_ENTRY)
-	/* Entry from the hibernate code in iokit/Kernel/IOHibernateRestoreKernel.c
-	 *
-	 * Reset the first 4 PDE's to point to entries in IdlePTD, as done in
-	 * Idle_PTs_init() during startup */
-	leaq	_IdlePDPT(%rip), %rax
-	movq	_IdlePTD(%rip), %rcx
-	mov		%ecx, %ecx /* zero top 32bits of %rcx */
-	orq		$(INTEL_PTE_WRITE|INTEL_PTE_VALID), %rcx
-	movq	%rcx, 0x0(%rax)
-	add		$0x1000, %rcx
-	movq	%rcx, 0x8(%rax)
-	add		$0x1000, %rcx
-	movq	%rcx, 0x10(%rax)
-	add		$0x1000, %rcx
-	movq	%rcx, 0x18(%rax)
-	mov 	%cr3, %rax
-	mov 	%rax, %cr3
-	
+	/* Return from hibernate code in iokit/Kernel/IOHibernateRestoreKernel.c
+	 */
 Lwake_64:
 	/*
 	 * restore cr4, PAE and NXE states in an orderly fashion
 	 */
-	mov		saved_cr4(%rip), %rcx
-	mov		%rcx, %cr4
+	mov	saved_cr4(%rip), %rcx
+	mov	%rcx, %cr4
 
-	mov		$(MSR_IA32_EFER), %ecx			/* MSR number in ecx */
-	rdmsr						/* MSR value return in edx: eax */
-	or		$(MSR_IA32_EFER_NXE), %eax		/* Set NXE bit in low 32-bits */
-	wrmsr						/* Update Extended Feature Enable reg */
-
-	/* restore kernel GDT */
-	lgdt	EXT(protected_mode_gdtr)(%rip)
+	mov	$(MSR_IA32_EFER), %ecx		/* MSR number in ecx */
+	rdmsr					/* MSR value in edx:eax */
+	or	$(MSR_IA32_EFER_NXE), %eax	/* Set NXE bit in low 32-bits */
+	wrmsr					/* Update */
 
 	movq	saved_cr2(%rip), %rax
-	mov		%rax, %cr2
+	mov	%rax, %cr2
 
 	/* restore CR0, paging enabled */
-	mov		saved_cr0(%rip), %rax
-	mov		%rax, %cr0
+	mov	saved_cr0(%rip), %rax
+	mov	%rax, %cr0
+
+	/* restore the page tables */
+	mov	saved_cr3(%rip), %rax
+	mov	%rax, %cr3
 
 	/* protected mode, paging enabled */
 	POSTCODE(ACPI_WAKE_PAGED_ENTRY)
@@ -500,7 +475,8 @@ Lwake_64:
 	movw	%ax, %ss
 	movw	%ax, %ds
 
-	/* restore local and interrupt descriptor tables */
+	/* restore descriptor tables */
+	lgdt	saved_gdt(%rip)
 	lldt	saved_ldt(%rip)
 	lidt	saved_idt(%rip)
 
@@ -580,7 +556,7 @@ wake_restore:
 	.byte	0x15				;\
 	.long	address-EXT(real_mode_bootstrap_base)
 
-.section __TEXT,__text
+.section __HIB, __text
 .align	12	/* Page align for single bcopy_phys() */
 .code32
 Entry(real_mode_bootstrap_base)
@@ -603,7 +579,7 @@ Entry(real_mode_bootstrap_base)
 	movw	%ax, %ds
 	movw	%ax, %es
 	movw	%ax, %ss
-	xor		%eax,%eax
+	xor	%eax,%eax
 	movw	%ax, %fs
 	movw	%ax, %gs
 
@@ -613,20 +589,22 @@ Entry(real_mode_bootstrap_base)
 	jmp 	*%ecx
 
 Entry(protected_mode_gdtr)
-	.short	160		/* limit (8*6 segs) */
+	.short	160		/* limit (8*20 segs) */
 	.quad	EXT(master_gdt)
 
 Entry(real_mode_bootstrap_end)
 
 /* Save area used across sleep/wake */
-.section __SLEEP, __data
+.section __HIB, __data
 .align	2
 
-temp_stack: .quad 0
-			.quad 0
-saved_eip:	.long 0
+/* gdtr for real address of master_gdt in HIB (not the aliased address) */
+Entry(master_gdtr)			
+		.word 160		/* limit (8*20 segs) */
+		.quad EXT(master_gdt)
+
 saved_gdt:	.word 0
-			.quad 0
+		.quad 0
 saved_rsp:	.quad 0
 saved_es:	.word 0
 saved_fs:	.word 0
@@ -634,6 +612,7 @@ saved_gs:	.word 0
 saved_ss:	.word 0
 saved_cr0:	.quad 0
 saved_cr2:	.quad 0
+saved_cr3:	.quad 0
 saved_cr4:	.quad 0
 saved_idt:	.word 0
 		.quad 0

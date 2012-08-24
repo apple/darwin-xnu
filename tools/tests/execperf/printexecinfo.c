@@ -6,6 +6,7 @@
 #include <mach-o/ldsyms.h>
 #include <mach-o/dyld_images.h>
 #include <stdlib.h>
+#include <sys/sysctl.h>
 
 __attribute__((constructor))
 void init(int argc, const char *argv[], const char *envp[], const char *appl[], void *vars __attribute__((unused))) {

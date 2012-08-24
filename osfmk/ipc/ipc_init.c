@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2007 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2012 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -74,6 +74,7 @@
 #include <mach_rt.h>
 
 #include <mach/port.h>
+#include <mach/message.h>
 #include <mach/kern_return.h>
 
 #include <kern/kern_types.h>
@@ -106,13 +107,20 @@
 vm_map_t ipc_kernel_map;
 vm_size_t ipc_kernel_map_size = 1024 * 1024;
 
+/* values to limit physical copy out-of-line memory descriptors */
 vm_map_t ipc_kernel_copy_map;
 #define IPC_KERNEL_COPY_MAP_SIZE (8 * 1024 * 1024)
 vm_size_t ipc_kernel_copy_map_size = IPC_KERNEL_COPY_MAP_SIZE;
-vm_size_t ipc_kmsg_max_vm_space = (IPC_KERNEL_COPY_MAP_SIZE * 7)/8;
+vm_size_t ipc_kmsg_max_vm_space = ((IPC_KERNEL_COPY_MAP_SIZE * 7) / 8);
+
+/* 
+ * values to limit inline message body handling
+ * avoid copyin/out limits - even after accounting for maximum descriptor expansion.
+ */
+#define IPC_KMSG_MAX_SPACE (64 * 1024 * 1024) /* keep in sync with COPYSIZELIMIT_PANIC */
+vm_size_t ipc_kmsg_max_body_space = ((IPC_KMSG_MAX_SPACE * 3)/4 - MAX_TRAILER_SIZE);
 
 int ipc_space_max;
-int ipc_tree_entry_max;
 int ipc_port_max;
 int ipc_pset_max;
 
@@ -142,7 +150,6 @@ ipc_bootstrap(void)
 	
 	ipc_port_multiple_lock_init();
 
-	ipc_port_timestamp_lock_init();
 	ipc_port_timestamp_data = 0;
 
 	/* all IPC zones should be exhaustible */
@@ -152,13 +159,6 @@ ipc_bootstrap(void)
 			       sizeof(struct ipc_space),
 			       "ipc spaces");
 	zone_change(ipc_space_zone, Z_NOENCRYPT, TRUE);
-
-	ipc_tree_entry_zone =
-		zinit(sizeof(struct ipc_tree_entry),
-			ipc_tree_entry_max * sizeof(struct ipc_tree_entry),
-			sizeof(struct ipc_tree_entry),
-			"ipc tree entries");
-	zone_change(ipc_tree_entry_zone, Z_NOENCRYPT, TRUE);
 
 	/*
 	 * populate all port(set) zones
@@ -217,7 +217,7 @@ ipc_bootstrap(void)
 #endif
 	mig_init();
 	ipc_table_init();
-	ipc_hash_init();
+
 	semaphore_init();
 	lock_set_init();
 	mk_timer_init();

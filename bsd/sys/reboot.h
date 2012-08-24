@@ -66,10 +66,6 @@
 
 #include <sys/appleapiopts.h>
 
-#ifdef	KERNEL_BUILD
-#include <mach_kdb.h>
-#endif	/* KERNEL_BUILD */
-
 /*
  * Arguments to reboot system call.
  */

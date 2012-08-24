@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2010-2011 Apple Inc. All rights reserved.
+ * Copyright (c) 2010-2012 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -351,7 +351,7 @@ im6o_match_group(const struct ip6_moptions *imo, const struct ifnet *ifp,
 
 	IM6O_LOCK_ASSERT_HELD(IM6O_CAST_TO_NONCONST(imo));
 
-	gsin6 = (const struct sockaddr_in6 *)group;
+	gsin6 = (struct sockaddr_in6 *)(uintptr_t)(size_t)group;
 
 	/* The im6o_membership array may be lazy allocated. */
 	if (imo->im6o_membership == NULL || imo->im6o_num_memberships == 0)
@@ -407,7 +407,7 @@ im6o_match_source(const struct ip6_moptions *imo, const size_t gidx,
 		return (NULL);
 	imf = &imo->im6o_mfilters[gidx];
 
-	psa = (const sockunion_t *)src;
+	psa = (sockunion_t *)(uintptr_t)(size_t)src;
 	find.im6s_addr = psa->sin6.sin6_addr;
 	in6_clearscope(&find.im6s_addr);		/* XXX */
 	ims = RB_FIND(ip6_msource_tree, &imf->im6f_sources, &find);
@@ -1662,7 +1662,11 @@ in6p_get_source_filters(struct inpcb *inp, struct sockopt *sopt)
 
 	if (ifp == NULL)
 		return (EADDRNOTAVAIL);
-		
+
+	if ((size_t) msfr.msfr_nsrcs >
+	    SIZE_MAX / sizeof(struct sockaddr_storage))
+		msfr.msfr_nsrcs = SIZE_MAX / sizeof(struct sockaddr_storage);
+
 	if (msfr.msfr_nsrcs > in6_mcast_maxsocksrc)
 		msfr.msfr_nsrcs = in6_mcast_maxsocksrc;
 
@@ -1703,12 +1707,13 @@ in6p_get_source_filters(struct inpcb *inp, struct sockopt *sopt)
 		tmp_ptr = CAST_USER_ADDR_T(msfr32.msfr_srcs);
 
 	if (tmp_ptr != USER_ADDR_NULL && msfr.msfr_nsrcs > 0) {
-		tss = _MALLOC(sizeof(struct sockaddr_storage) * msfr.msfr_nsrcs,
+		tss = _MALLOC((size_t) msfr.msfr_nsrcs * sizeof(*tss),
 		    M_TEMP, M_WAITOK | M_ZERO);
 		if (tss == NULL) {
 			IM6O_UNLOCK(imo);
 			return (ENOBUFS);
 		}
+		bzero(tss, (size_t) msfr.msfr_nsrcs * sizeof(*tss));
 	}
 
 	/*
@@ -1738,8 +1743,7 @@ in6p_get_source_filters(struct inpcb *inp, struct sockopt *sopt)
 	IM6O_UNLOCK(imo);
 
 	if (tss != NULL) {
-		error = copyout(tss, tmp_ptr,
-		    sizeof(struct sockaddr_storage) * msfr.msfr_nsrcs);
+		error = copyout(tss, tmp_ptr, ncsrcs * sizeof(*tss));
 		FREE(tss, M_TEMP);
 		if (error)
 			return (error);
@@ -1870,7 +1874,7 @@ in6p_lookup_mcast_ifp(const struct inpcb *in6p,
 		return NULL;
 
 	if (in6p != NULL && (in6p->inp_flags & INP_BOUND_IF))
-		ifscope = in6p->inp_boundif;
+		ifscope = in6p->inp_boundifp->if_index;
 
 	ifp = NULL;
 	memset(&ro6, 0, sizeof(struct route_in6));
@@ -1911,7 +1915,7 @@ in6p_lookup_v4addr(struct ipv6_mreq *mreq, struct ip_mreq *v4mreq)
 	ifa = ifa_ifpgetprimary(ifp, AF_INET);
 	if (ifa == NULL)
 		return (EADDRNOTAVAIL);
-	sin = (struct sockaddr_in *)ifa->ifa_addr;
+	sin = (struct sockaddr_in *)(uintptr_t)(size_t)ifa->ifa_addr;
 	v4mreq->imr_interface.s_addr = sin->sin_addr.s_addr;
 	IFA_REMREF(ifa);
 
@@ -2083,7 +2087,8 @@ in6p_join_group(struct inpcb *inp, struct sockopt *sopt)
 	 * a VERIFY() in in6_mc_join().
 	 */
 	if ((IN6_IS_ADDR_MC_LINKLOCAL(&gsa->sin6.sin6_addr) ||
-	    IN6_IS_ADDR_MC_INTFACELOCAL(&gsa->sin6.sin6_addr)) && scopeid == 0)
+	    IN6_IS_ADDR_MC_INTFACELOCAL(&gsa->sin6.sin6_addr)) &&
+	    (scopeid == 0 || gsa->sin6.sin6_addr.s6_addr16[1] == 0))
 		return (EINVAL);
 
 	imo = in6p_findmoptions(inp);
@@ -2626,6 +2631,10 @@ in6p_set_source_filters(struct inpcb *inp, struct sockopt *sopt)
 		memcpy(&msfr, &msfr32, sizeof(msfr));
 	}
 
+	if ((size_t) msfr.msfr_nsrcs >
+	    SIZE_MAX / sizeof(struct sockaddr_storage))
+		msfr.msfr_nsrcs = SIZE_MAX / sizeof(struct sockaddr_storage);
+
 	if (msfr.msfr_nsrcs > in6_mcast_maxsocksrc)
 		return (ENOBUFS);
 
@@ -2697,7 +2706,7 @@ in6p_set_source_filters(struct inpcb *inp, struct sockopt *sopt)
 
 		MLD_PRINTF(("%s: loading %lu source list entries\n",
 		    __func__, (unsigned long)msfr.msfr_nsrcs));
-		kss = _MALLOC(sizeof(struct sockaddr_storage) * msfr.msfr_nsrcs,
+		kss = _MALLOC((size_t) msfr.msfr_nsrcs * sizeof(*kss),
 		    M_TEMP, M_WAITOK);
 		if (kss == NULL) {
 			error = ENOMEM;
@@ -2705,7 +2714,7 @@ in6p_set_source_filters(struct inpcb *inp, struct sockopt *sopt)
 		}
 
 		error = copyin(tmp_ptr, kss,
-		    sizeof(struct sockaddr_storage) * msfr.msfr_nsrcs);
+		    (size_t) msfr.msfr_nsrcs * sizeof(*kss));
 		if (error) {
 			FREE(kss, M_TEMP);
 			goto out_imo_locked;

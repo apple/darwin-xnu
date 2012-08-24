@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2007-2010 by Apple Inc.. All rights reserved.
+ * Copyright (c) 2007-2011 by Apple Inc.. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -55,7 +55,7 @@
     
     For these macros to function properly, a program must specify the OS version range 
     it is targeting.  The min OS version is specified as an option to the compiler:
-    -mmacosx-version-min=10.x when building for Mac OS X, and -miphone-version-min=1.x.x
+    -mmacosx-version-min=10.x when building for Mac OS X, and -miphoneos-version-min=x.x
     when building for the iPhone.  The upper bound for the OS version is rarely needed,
     but it can be set on the command line via: -D__MAC_OS_X_VERSION_MAX_ALLOWED=10xx for
     Mac OS X and __IPHONE_OS_VERSION_MAX_ALLOWED = 1xxx for iPhone.  
@@ -124,6 +124,7 @@
 #define __MAC_10_5      1050
 #define __MAC_10_6      1060
 #define __MAC_10_7      1070
+#define __MAC_10_8      1080
 #define __MAC_NA        9999   /* not available */
 
 #define __IPHONE_2_0     20000
@@ -132,24 +133,30 @@
 #define __IPHONE_3_0     30000
 #define __IPHONE_3_1     30100
 #define __IPHONE_3_2     30200
+#define __IPHONE_4_0     40000
+#define __IPHONE_4_1     40100
+#define __IPHONE_4_2     40200
+#define __IPHONE_4_3     40300
+#define __IPHONE_5_0     50000
+#define __IPHONE_5_1     50100
 #define __IPHONE_NA      99999  /* not available */
 
 #include <AvailabilityInternal.h>
 
 
 #ifdef __IPHONE_OS_VERSION_MIN_REQUIRED
-    #define __OSX_AVAILABLE_STARTING(_mac, _iphone) __AVAILABILITY_INTERNAL##_iphone
-    #define __OSX_AVAILABLE_BUT_DEPRECATED(_macIntro, _macDep, _iphoneIntro, _iphoneDep) \
-                                                    __AVAILABILITY_INTERNAL##_iphoneIntro##_DEP##_iphoneDep
+    #define __OSX_AVAILABLE_STARTING(_osx, _ios) __AVAILABILITY_INTERNAL##_ios
+    #define __OSX_AVAILABLE_BUT_DEPRECATED(_osxIntro, _osxDep, _iosIntro, _iosDep) \
+                                                    __AVAILABILITY_INTERNAL##_iosIntro##_DEP##_iosDep
 
 #elif defined(__MAC_OS_X_VERSION_MIN_REQUIRED)
-    #define __OSX_AVAILABLE_STARTING(_mac, _iphone) __AVAILABILITY_INTERNAL##_mac
-    #define __OSX_AVAILABLE_BUT_DEPRECATED(_macIntro, _macDep, _iphoneIntro, _iphoneDep) \
-                                                    __AVAILABILITY_INTERNAL##_macIntro##_DEP##_macDep
+    #define __OSX_AVAILABLE_STARTING(_osx, _ios) __AVAILABILITY_INTERNAL##_osx
+    #define __OSX_AVAILABLE_BUT_DEPRECATED(_osxIntro, _osxDep, _iosIntro, _iosDep) \
+                                                    __AVAILABILITY_INTERNAL##_osxIntro##_DEP##_osxDep
 
 #else
-    #define __OSX_AVAILABLE_STARTING(_mac, _iphone)
-    #define __OSX_AVAILABLE_BUT_DEPRECATED(_macIntro, _macDep, _iphoneIntro, _iphoneDep) 
+    #define __OSX_AVAILABLE_STARTING(_osx, _ios)
+    #define __OSX_AVAILABLE_BUT_DEPRECATED(_osxIntro, _osxDep, _iosIntro, _iosDep) 
 #endif
 
 

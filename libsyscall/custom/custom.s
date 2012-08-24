@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1999-2007 Apple Inc. All rights reserved.
+ * Copyright (c) 1999-2011 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -35,14 +35,19 @@
 	.globl	_errno
 
 LABEL(cerror)
-	REG_TO_EXTERN(%eax, _errno)
+	movl	$0,%ecx
+	jmp		1f
+LABEL(cerror_nocancel)
+	movl	$1,%ecx
+1:	REG_TO_EXTERN(%eax, _errno)
 	mov		%esp,%edx
 	andl	$0xfffffff0,%esp
 	subl	$16,%esp
-	movl	%edx,4(%esp)
+	movl	%edx,8(%esp)
+	movl	%ecx,4(%esp)
 	movl	%eax,(%esp)
 	CALL_EXTERN(_cthread_set_errno_self)
-	movl	4(%esp),%esp
+	movl	8(%esp),%esp
 	movl	$-1,%eax
 	movl	$-1,%edx /* in case a 64-bit value is returned */
 	ret
@@ -57,7 +62,13 @@ LABEL(__sysenter_trap)
 	.globl	_errno
 
 LABEL(cerror)
-	PICIFY(_errno) /* address -> %r11 */
+	/* cancelable syscall, for arg1 to _cthread_set_errno_self */
+	movq	$0,%rsi
+	jmp		1f
+LABEL(cerror_nocancel)
+	/* non-cancelable, see above. */
+	movq	$1,%rsi
+1:	PICIFY(_errno) /* address -> %r11 */
 	movl	%eax,(%r11)
 	mov 	%rsp,%rdx
 	andq	$-16,%rsp

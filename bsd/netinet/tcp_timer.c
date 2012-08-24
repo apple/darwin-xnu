@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2011 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2012 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -78,6 +78,7 @@
 #include <kern/cpu_number.h>	/* before tcp_seq.h, for tcp_random18() */
 
 #include <net/route.h>
+#include <net/if_var.h>
 
 #include <netinet/in.h>
 #include <netinet/in_systm.h>
@@ -536,7 +537,7 @@ tcp_timers(tp, timer)
 	int timer;
 {
 	register int rexmt;
-	struct socket *so_tmp;
+	struct socket *so;
 	struct tcptemp *t_template;
 	int optlen = 0;
 	int idle_time = 0;
@@ -549,7 +550,7 @@ tcp_timers(tp, timer)
 	int isipv6 = (tp->t_inpcb->inp_vflag & INP_IPV4) == 0;
 #endif /* INET6 */
 
-	so_tmp = tp->t_inpcb->inp_socket;
+	so = tp->t_inpcb->inp_socket;
 	idle_time = tcp_now - tp->t_rcvtime;
 
 	switch (timer) {
@@ -581,7 +582,6 @@ tcp_timers(tp, timer)
 	 * to a longer retransmit interval and retransmit one segment.
 	 */
 	case TCPT_REXMT:
-		tcp_free_sackholes(tp);
 		/* Drop a connection in the retransmit timer
 		 * 1. If we have retransmitted more than TCP_MAXRXTSHIFT times
 		 * 2. If the time spent in this retransmission episode is more than
@@ -602,9 +602,12 @@ tcp_timers(tp, timer)
 				tcpstat.tcps_timeoutdrop++;
 			}
 			tp->t_rxtshift = TCP_MAXRXTSHIFT;
+			postevent(so, 0, EV_TIMEOUT);			
+			soevent(so, 
+			    (SO_FILT_HINT_LOCKED|SO_FILT_HINT_TIMEOUT));
 			tp = tcp_drop(tp, tp->t_softerror ?
 			    tp->t_softerror : ETIMEDOUT);
-			postevent(so_tmp, 0, EV_TIMEOUT);			
+
 			break;
 		}
 
@@ -633,6 +636,7 @@ tcp_timers(tp, timer)
 			tp->rxt_start = tcp_now;
 		}
 		tcpstat.tcps_rexmttimeo++;
+
 		if (tp->t_state == TCPS_SYN_SENT)
 			rexmt = TCP_REXMTVAL(tp) * tcp_syn_backoff[tp->t_rxtshift];
 		else
@@ -642,12 +646,17 @@ tcp_timers(tp, timer)
 			TCP_ADD_REXMTSLOP(tp));
 		tp->t_timer[TCPT_REXMT] = OFFSET_FROM_START(tp, tp->t_rxtcur);
 
+		if (INP_WAIT_FOR_IF_FEEDBACK(tp->t_inpcb))
+			goto fc_output;
+
+		tcp_free_sackholes(tp);
 		/*
 		 * Check for potential Path MTU Discovery Black Hole 
 		 */
 
 		if (tcp_pmtud_black_hole_detect && (tp->t_state == TCPS_ESTABLISHED)) {
-			if (((tp->t_flags & (TF_PMTUD|TF_MAXSEGSNT)) == (TF_PMTUD|TF_MAXSEGSNT)) && (tp->t_rxtshift == 2)) {
+			if (((tp->t_flags & (TF_PMTUD|TF_MAXSEGSNT)) == (TF_PMTUD|TF_MAXSEGSNT)) &&
+				 (tp->t_rxtshift == 2)) {
 				/* 
 				 * Enter Path MTU Black-hole Detection mechanism:
 				 * - Disable Path MTU Discovery (IP "DF" bit).
@@ -708,6 +717,7 @@ tcp_timers(tp, timer)
 		if ((tp->t_state == TCPS_SYN_SENT) &&
 		    (tp->t_rxtshift == tcp_broken_peer_syn_rxmit_thres))
 			tp->t_flags &= ~(TF_REQ_SCALE|TF_REQ_TSTMP|TF_REQ_CC);
+
 		/*
 		 * If losing, let the lower level know and try for
 		 * a better route.  Also, if we backed off this far,
@@ -747,6 +757,13 @@ tcp_timers(tp, timer)
 		tp->t_dupacks = 0;
 		EXIT_FASTRECOVERY(tp);
 
+		/* CWR notifications are to be sent on new data right after
+		 * RTOs, Fast Retransmits and ECE notification receipts.
+		 */
+		if ((tp->ecn_flags & TE_ECN_ON) == TE_ECN_ON) {
+			tp->ecn_flags |= TE_SENDCWR;
+		}
+fc_output:
 		DTRACE_TCP5(cc, void, NULL, struct inpcb *, tp->t_inpcb,
 			struct tcpcb *, tp, struct tcphdr *, NULL,
 			int32_t, TCP_CC_REXMT_TIMEOUT);
@@ -774,11 +791,13 @@ tcp_timers(tp, timer)
 		if ((tp->t_rxtshift == TCP_MAXRXTSHIFT &&
 		    (idle_time >= tcp_maxpersistidle ||
 		    idle_time >= TCP_REXMTVAL(tp) * tcp_totbackoff)) || 
-		    ((tp->t_persist_stop != 0) && (tp->t_persist_stop <= tcp_now))) {
+		    ((tp->t_persist_stop != 0) && 
+			TSTMP_LEQ(tp->t_persist_stop, tcp_now))) {
 			tcpstat.tcps_persistdrop++;
-			so_tmp = tp->t_inpcb->inp_socket;
+			postevent(so, 0, EV_TIMEOUT);
+			soevent(so,
+			    (SO_FILT_HINT_LOCKED|SO_FILT_HINT_TIMEOUT));
 			tp = tcp_drop(tp, ETIMEDOUT);
-			postevent(so_tmp, 0, EV_TIMEOUT);
 			break;
 		}
 		tcp_setpersist(tp);
@@ -818,7 +837,7 @@ tcp_timers(tp, timer)
 				unsigned int ifscope, nocell = 0;
 
 				if (tp->t_inpcb->inp_flags & INP_BOUND_IF)
-					ifscope = tp->t_inpcb->inp_boundif;
+					ifscope = tp->t_inpcb->inp_boundifp->if_index;
 				else
 					ifscope = IFSCOPE_NONE;
 
@@ -851,6 +870,13 @@ tcp_timers(tp, timer)
 			if ((tp->t_flags & TF_STRETCHACK) != 0)
 				tcp_reset_stretch_ack(tp);
 
+			/* If we are measuring inter packet arrival jitter for 
+			 * throttling a connection, this delayed ack might be 
+			 * the reason for accumulating some jitter. So let's
+			 * restart the measurement.
+			 */
+			CLEAR_IAJ_STATE(tp);
+
 			tcpstat.tcps_delack++;
 			(void) tcp_output(tp);
 		}
@@ -863,8 +889,10 @@ tcp_timers(tp, timer)
 #endif
 	dropit:
 		tcpstat.tcps_keepdrops++;
+		postevent(so, 0, EV_TIMEOUT);
+		soevent(so,
+		    (SO_FILT_HINT_LOCKED|SO_FILT_HINT_TIMEOUT));
 		tp = tcp_drop(tp, ETIMEDOUT);
-		postevent(so_tmp, 0, EV_TIMEOUT);
 		break;
 	}
 	return (tp);

@@ -128,10 +128,18 @@ struct kauth_identity_extlookup {
 	u_int32_t	el_member_valid; /* TTL on group lookup result */
 };
 
+struct kauth_cache_sizes {
+	u_int32_t kcs_group_size;
+	u_int32_t kcs_id_size;
+};
+
 #define KAUTH_EXTLOOKUP_REGISTER	(0)
 #define KAUTH_EXTLOOKUP_RESULT		(1<<0)
 #define KAUTH_EXTLOOKUP_WORKER		(1<<1)
 #define	KAUTH_EXTLOOKUP_DEREGISTER	(1<<2)
+#define	KAUTH_GET_CACHE_SIZES		(1<<3)
+#define	KAUTH_SET_CACHE_SIZES		(1<<4)
+#define	KAUTH_CLEAR_CACHES		(1<<5)
 
 
 #ifdef KERNEL
@@ -772,10 +780,12 @@ extern lck_grp_t *kauth_lck_grp;
 #ifdef XNU_KERNEL_PRIVATE
 __BEGIN_DECLS
 extern void	kauth_init(void) __attribute__((section("__TEXT, initcode")));
+extern void	kauth_cred_init(void) __attribute__((section("__TEXT, initcode")));
+#if CONFIG_EXT_RESOLVER
 extern void	kauth_identity_init(void) __attribute__((section("__TEXT, initcode")));
 extern void	kauth_groups_init(void) __attribute__((section("__TEXT, initcode")));
-extern void	kauth_cred_init(void) __attribute__((section("__TEXT, initcode")));
 extern void	kauth_resolver_init(void) __attribute__((section("__TEXT, initcode")));
+#endif
 __END_DECLS
 #endif /* XNU_KERNEL_PRIVATE */
 

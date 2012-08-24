@@ -133,11 +133,12 @@
 #include <sys/mcache.h>			/* for mcache_init() */
 #include <sys/mbuf.h>			/* for mbinit() */
 #include <sys/event.h>			/* for knote_init() */
-#include <sys/kern_memorystatus.h>	/* for kern_memorystatus_init() */
+#include <sys/kern_memorystatus.h>	/* for memorystatus_init() */
 #include <sys/aio_kern.h>		/* for aio_init() */
 #include <sys/semaphore.h>		/* for psem_cache_init() */
 #include <net/dlil.h>			/* for dlil_init() */
 #include <net/kpi_protocol.h>		/* for proto_kpi_init() */
+#include <net/iptap.h>			/* for iptap_init() */
 #include <sys/pipe.h>			/* for pipeinit() */
 #include <sys/socketvar.h>		/* for socketinit() */
 #include <sys/protosw.h>		/* for domaininit() */
@@ -154,6 +155,7 @@
 #include <net/if_utun.h>		/* for utun_register_control() */
 #include <net/net_str_id.h>		/* for net_str_id_init() */
 #include <net/netsrc.h>			/* for netsrc_init() */
+#include <net/ntstat.h>			/* for nstat_init() */
 #include <kern/assert.h>		/* for assert() */
 
 #include <net/init.h>
@@ -223,13 +225,6 @@ char	hostname[MAXHOSTNAMELEN];
 int		hostnamelen;
 char	domainname[MAXDOMNAMELEN];
 int		domainnamelen;
-#if defined(__i386__) || defined(__x86_64__)
-struct exec_archhandler exec_archhandler_ppc = {
-	.path = "/usr/libexec/oah/RosettaNonGrata",
-};
-#else /* __i386__ */
-struct exec_archhandler exec_archhandler_ppc;
-#endif /* __i386__ */
 
 char rootdevice[16]; 	/* hfs device names have at least 9 chars */
 
@@ -250,6 +245,7 @@ extern void klogwakeup(void);
 extern void file_lock_init(void);
 extern void kmeminit(void);
 extern void bsd_bufferinit(void);
+extern void throttle_init(void);
 
 extern int serverperfmode;
 extern int ncl;
@@ -263,13 +259,8 @@ __private_extern__ int execargs_cache_size = 0;
 __private_extern__ int execargs_free_count = 0;
 __private_extern__ vm_offset_t * execargs_cache = NULL;
 
-void bsd_exec_setup(int);
+void bsd_exec_setup(int) __attribute__((aligned(4096)));
 
-/*
- * Set to disable grading 64 bit Mach-o binaries as executable, for testing;
- * Intel only.
- */
-__private_extern__ int bootarg_no64exec = 0;
 __private_extern__ int bootarg_vnode_cache_defeat = 0;
 
 /*
@@ -329,7 +320,6 @@ extern void stackshot_lock_init(void);
 #if CONFIG_DTRACE
 	extern void dtrace_postinit(void);
 #endif
-
 
 /*
  * Initialization code.
@@ -394,14 +384,15 @@ void (*unmountroot_pre_hook)(void);
  * of the uu_context.vc_ucred field so that the uthread structure can be
  * used like any other.
  */
+extern void run_bringup_tests(void);
+
+extern void IOServicePublishResource(const char *, boolean_t);
+
 void
 bsd_init(void)
 {
 	struct uthread *ut;
 	unsigned int i;
-#if __i386__ || __x86_64__
-	int error;
-#endif	
 	struct vfs_context context;
 	kern_return_t	ret;
 	struct ucred temp_cred;
@@ -411,6 +402,8 @@ bsd_init(void)
 #endif
 
 #define bsd_init_kprintf(x...) /* kprintf("bsd_init: " x) */
+
+	throttle_init();
 
 	kernel_flock = funnel_alloc(KERNEL_FUNNEL);
 	if (kernel_flock == (funnel_t *)0 ) {
@@ -775,22 +768,26 @@ bsd_init(void)
 	socketinit();
 	bsd_init_kprintf("calling domaininit\n");
 	domaininit();
+	iptap_init();
 #endif /* SOCKETS */
 
 	kernproc->p_fd->fd_cdir = NULL;
 	kernproc->p_fd->fd_rdir = NULL;
 
 #if CONFIG_FREEZE
-	/* Initialise background hibernation */
-	bsd_init_kprintf("calling kern_hibernation_init\n");
-	kern_hibernation_init();
+#ifndef CONFIG_MEMORYSTATUS
+    #error "CONFIG_FREEZE defined without matching CONFIG_MEMORYSTATUS"
+#endif
+	/* Initialise background freezing */
+	bsd_init_kprintf("calling memorystatus_freeze_init\n");
+	memorystatus_freeze_init();
 #endif
 
-#if CONFIG_EMBEDDED
+#if CONFIG_MEMORYSTATUS
 	/* Initialize kernel memory status notifications */
-	bsd_init_kprintf("calling kern_memorystatus_init\n");
-	kern_memorystatus_init();
-#endif
+	bsd_init_kprintf("calling memorystatus_init\n");
+	memorystatus_init();
+#endif /* CONFIG_MEMORYSTATUS */
 
 #ifdef GPROF
 	/* Initialize kernel profiling. */
@@ -837,10 +834,8 @@ bsd_init(void)
 	
 	/* register user tunnel kernel control handler */
 	utun_register_control();
-    netsrc_init();
-	
-	/* wait for network domain to finish */
-	domainfin();
+	netsrc_init();
+	nstat_init();
 #endif /* NETWORKING */
 
 	bsd_init_kprintf("calling vnode_pager_bootstrap\n");
@@ -962,13 +957,6 @@ bsd_init(void)
 #endif
 
 	pal_kernel_announce();
-
-#if __i386__ || __x86_64__
-	/* this should be done after the root filesystem is mounted */
-	error = set_archhandler(kernproc, CPU_TYPE_POWERPC);
-	if (error) /* XXX make more generic */
-		exec_archhandler_ppc.path[0] = 0;
-#endif	
 
 	bsd_init_kprintf("calling mountroot_post_hook\n");
 
@@ -1130,10 +1118,6 @@ parse_bsd_args(void)
 
 	if (PE_parse_boot_argn("-x", namep, sizeof (namep))) /* safe boot */
 		boothowto |= RB_SAFEBOOT;
-
-	/* disable 64 bit grading */
-	if (PE_parse_boot_argn("-no64exec", namep, sizeof (namep)))
-		bootarg_no64exec = 1;
 
 	/* disable vnode_cache_is_authorized() by setting vnode_cache_defeat */
 	if (PE_parse_boot_argn("-vnode_cache_defeat", namep, sizeof (namep)))

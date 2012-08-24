@@ -25,10 +25,7 @@
  * 
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
-#include <mach_kdb.h>
 #include <zone_debug.h>
-#include <mach_kdb.h>
-
 #include <mach/boolean.h>
 #include <mach/kern_return.h>
 #include <mach/mig_errors.h>
@@ -116,6 +113,9 @@ extern void iokit_retain_port( ipc_port_t port );
 extern void iokit_release_port( ipc_port_t port );
 extern void iokit_release_port_send( ipc_port_t port );
 
+extern void iokit_lock_port(ipc_port_t port);
+extern void iokit_unlock_port(ipc_port_t port);
+
 extern kern_return_t iokit_switch_object_port( ipc_port_t port, io_object_t obj, ipc_kobject_type_t type );
 
 /*
@@ -145,7 +145,7 @@ iokit_lookup_object_port(
 	if (!IP_VALID(port))
 	    return (NULL);
 
-	ip_lock(port);
+	iokit_lock_port(port);
 	if (ip_active(port) && (ip_kotype(port) == IKOT_IOKIT_OBJECT)) {
 	    obj = (io_object_t) port->ip_kobject;
 	    iokit_add_reference( obj );
@@ -153,7 +153,7 @@ iokit_lookup_object_port(
 	else
 	    obj = NULL;
 
-	ip_unlock(port);
+	iokit_unlock_port(port);
 
 	return( obj );
 }
@@ -167,7 +167,7 @@ iokit_lookup_connect_port(
 	if (!IP_VALID(port))
 	    return (NULL);
 
-	ip_lock(port);
+	iokit_lock_port(port);
 	if (ip_active(port) && (ip_kotype(port) == IKOT_IOKIT_CONNECT)) {
 	    obj = (io_object_t) port->ip_kobject;
 	    iokit_add_reference( obj );
@@ -175,7 +175,7 @@ iokit_lookup_connect_port(
 	else
 	    obj = NULL;
 
-	ip_unlock(port);
+	iokit_unlock_port(port);
 
 	return( obj );
 }
@@ -192,14 +192,19 @@ iokit_lookup_connect_ref(io_object_t connectRef, ipc_space_t space)
 		kr = ipc_object_translate(space, CAST_MACH_PORT_TO_NAME(connectRef), MACH_PORT_RIGHT_SEND, (ipc_object_t *)&port);
 
 		if (kr == KERN_SUCCESS) {
-            assert(IP_VALID(port));
-            
-            if (ip_active(port) && (ip_kotype(port) == IKOT_IOKIT_CONNECT)) {
-                obj = (io_object_t) port->ip_kobject;
-                iokit_add_reference(obj);
-            }
-            
-            ip_unlock(port);
+			assert(IP_VALID(port));
+
+			ip_reference(port);
+			ip_unlock(port);
+
+			iokit_lock_port(port);
+			if (ip_active(port) && (ip_kotype(port) == IKOT_IOKIT_CONNECT)) {
+				obj = (io_object_t) port->ip_kobject;
+				iokit_add_reference(obj);
+			}
+			iokit_unlock_port(port);
+
+			ip_release(port);
 		}
 	}
 
@@ -228,6 +233,20 @@ EXTERN void
 iokit_release_port_send( ipc_port_t port )
 {
     ipc_port_release_send( port );
+}
+
+extern lck_mtx_t iokit_obj_to_port_binding_lock;
+
+EXTERN void
+iokit_lock_port( __unused ipc_port_t port )
+{
+    lck_mtx_lock(&iokit_obj_to_port_binding_lock);
+}
+
+EXTERN void
+iokit_unlock_port( __unused ipc_port_t port )
+{
+    lck_mtx_unlock(&iokit_obj_to_port_binding_lock);
 }
 
 /*
@@ -298,9 +317,10 @@ iokit_alloc_object_port( io_object_t obj, ipc_kobject_type_t type )
 	ipc_kobject_set( port, (ipc_kobject_t) obj, type);
 
         /* Request no-senders notifications on the port. */
-        notify = ipc_port_make_sonce( port);
         ip_lock( port);
+        notify = ipc_port_make_sonce_locked( port);
         ipc_port_nsrequest( port, 1, notify, &notify);
+	/* port unlocked */
         assert( notify == IP_NULL);
 	gIOKitPortCount++;
 
@@ -326,7 +346,9 @@ iokit_destroy_object_port( ipc_port_t port )
 EXTERN kern_return_t
 iokit_switch_object_port( ipc_port_t port, io_object_t obj, ipc_kobject_type_t type )
 {
+    iokit_lock_port(port);
     ipc_kobject_set( port, (ipc_kobject_t) obj, type);
+    iokit_unlock_port(port);
 
     return( KERN_SUCCESS);
 }
@@ -388,7 +410,7 @@ iokit_no_senders( mach_no_senders_notification_t * notification )
 
     // convert a port to io_object_t.
     if( IP_VALID(port)) {
-        ip_lock(port);
+        iokit_lock_port(port);
         if( ip_active(port)) {
             obj = (io_object_t) port->ip_kobject;
 	    type = ip_kotype( port );
@@ -398,7 +420,7 @@ iokit_no_senders( mach_no_senders_notification_t * notification )
             else
                 obj = NULL;
 	}
-        ip_unlock(port);
+        iokit_unlock_port(port);
 
         if( obj ) {
 
@@ -406,11 +428,15 @@ iokit_no_senders( mach_no_senders_notification_t * notification )
 
             if( KERN_SUCCESS != iokit_client_died( obj, port, type, &mscount ))
 	    {
-		/* Re-request no-senders notifications on the port. */
-		notify = ipc_port_make_sonce( port);
-		ip_lock( port);
-		ipc_port_nsrequest( port, mscount + 1, notify, &notify);
-		assert( notify == IP_NULL);
+		/* Re-request no-senders notifications on the port (if still active) */
+		ip_lock(port);
+		if (ip_active(port)) {
+			notify = ipc_port_make_sonce_locked(port);
+			ipc_port_nsrequest( port, mscount + 1, notify, &notify);
+			/* port unlocked */
+			if ( notify != IP_NULL)
+				ipc_port_release_sonce(notify);
+		}
 	    }
             iokit_remove_reference( obj );
         }
@@ -478,6 +504,9 @@ kern_return_t IOMapPages(vm_map_t map, mach_vm_address_t va, mach_vm_address_t p
 	case kIOMapCopybackCache:
 	    flags = VM_WIMG_COPYBACK;
 	    break;
+	case kIOMapCopybackInnerCache:
+	    flags = VM_WIMG_INNERWBACK;
+	    break;
     }
 
     pmap_set_cache_attributes(pagenum, flags);
@@ -540,7 +569,7 @@ kern_return_t IOProtectCacheMode(vm_map_t __unused map, mach_vm_address_t __unus
     {
 	ppnum_t ppnum = pmap_find_phys(pmap, va + off);
 	if (ppnum)
-	    pmap_enter(pmap, va + off, ppnum, prot, flags, TRUE);
+	    pmap_enter(pmap, va + off, ppnum, prot, VM_PROT_NONE, flags, TRUE);
     }
 
     return (KERN_SUCCESS);

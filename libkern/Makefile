@@ -22,12 +22,12 @@ EXPINC_SUBDIRS_ARM = ${EXPINC_SUBDIRS}
 
 SETUP_SUBDIRS =
 
-COMP_SUBDIRS_I386 = conf kmod
-COMP_SUBDIRS_X86_64 = conf kmod
-COMP_SUBDIRS_ARM = conf kmod
+COMP_SUBDIRS_I386 = conf
+COMP_SUBDIRS_X86_64 = conf
+COMP_SUBDIRS_ARM = conf
 
 
-INST_SUBDIRS = kmod
+INST_SUBDIRS = 
 
 include $(MakeInc_rule)
 include $(MakeInc_dir)

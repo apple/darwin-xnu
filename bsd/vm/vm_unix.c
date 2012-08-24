@@ -77,6 +77,7 @@
 #include <sys/sysctl.h>
 #include <sys/cprotect.h>
 #include <sys/kpi_socket.h>
+#include <sys/kas_info.h>
 
 #include <security/audit/audit.h>
 #include <security/mac.h>
@@ -94,9 +95,7 @@
 
 #include <vm/vm_protos.h>
 
-#if CONFIG_FREEZE
 #include <sys/kern_memorystatus.h>
-#endif
 
 
 int _shared_region_map( struct proc*, int, unsigned int, struct shared_file_mapping_np*, memory_object_control_t*, struct shared_file_mapping_np*); 
@@ -474,7 +473,7 @@ task_for_pid_posix_check(proc_t target)
 	int allowed; 
 
 	/* No task_for_pid on bad targets */
-	if (target == PROC_NULL || target->p_stat == SZOMB) {
+	if (target->p_stat == SZOMB) {
 		return FALSE;
 	}
 
@@ -573,9 +572,13 @@ task_for_pid(
 
 
 	p = proc_find(pid);
+	if (p == PROC_NULL) {
+		error = KERN_FAILURE;
+		goto tfpout;
+	}
+
 #if CONFIG_AUDIT
-	if (p != PROC_NULL)
-		AUDIT_ARG(process, p);
+	AUDIT_ARG(process, p);
 #endif
 
 	if (!(task_for_pid_posix_check(p))) {
@@ -745,6 +748,11 @@ pid_suspend(struct proc *p __unused, struct pid_suspend_args *args, int *ret)
 	}
 
 	targetproc = proc_find(pid);
+	if (targetproc == PROC_NULL) {
+		error = ESRCH;
+		goto out;
+	}
+
 	if (!task_for_pid_posix_check(targetproc)) {
 		error = EPERM;
 		goto out;
@@ -781,7 +789,7 @@ pid_suspend(struct proc *p __unused, struct pid_suspend_args *args, int *ret)
 #endif
 
 	task_reference(target);
-	error = task_suspend(target);
+	error = task_pidsuspend(target);
 	if (error) {
 		if (error == KERN_INVALID_ARGUMENT) {
 			error = EINVAL;
@@ -789,11 +797,13 @@ pid_suspend(struct proc *p __unused, struct pid_suspend_args *args, int *ret)
 			error = EPERM;
 		}
 	}
-	task_deallocate(target);
-
-#if CONFIG_FREEZE
-	kern_hibernation_on_pid_suspend(pid);
+#if CONFIG_MEMORYSTATUS
+	else {
+    	memorystatus_on_suspend(pid);
+    }
 #endif
+
+	task_deallocate(target);
 
 out:
 	if (targetproc != PROC_NULL)
@@ -824,6 +834,11 @@ pid_resume(struct proc *p __unused, struct pid_resume_args *args, int *ret)
 	}
 
 	targetproc = proc_find(pid);
+	if (targetproc == PROC_NULL) {
+		error = ESRCH;
+		goto out;
+	}
+
 	if (!task_for_pid_posix_check(targetproc)) {
 		error = EPERM;
 		goto out;
@@ -861,11 +876,11 @@ pid_resume(struct proc *p __unused, struct pid_resume_args *args, int *ret)
 
 	task_reference(target);
 
-#if CONFIG_FREEZE
-	kern_hibernation_on_pid_resume(pid, target);
+#if CONFIG_MEMORYSTATUS
+	memorystatus_on_resume(pid);
 #endif
 
-	error = task_resume(target);
+	error = task_pidresume(target);
 	if (error) {
 		if (error == KERN_INVALID_ARGUMENT) {
 			error = EINVAL;
@@ -873,15 +888,15 @@ pid_resume(struct proc *p __unused, struct pid_resume_args *args, int *ret)
 			error = EPERM;
 		}
 	}
+	
 	task_deallocate(target);
 
 out:
 	if (targetproc != PROC_NULL)
 		proc_rele(targetproc);
+	
 	*ret = error;
 	return error;
-
-	return 0;
 }
 
 #if CONFIG_EMBEDDED
@@ -905,14 +920,19 @@ pid_hibernate(struct proc *p __unused, struct pid_hibernate_args *args, int *ret
 #endif
 
 	/*
-	 * The only accepted pid value here is currently -1, since we just kick off the hibernation thread
+	 * The only accepted pid value here is currently -1, since we just kick off the freeze thread
 	 * here - individual ids aren't required. However, it's intended that that this call is to change
-	 * in the future to initiate hibernation of individual processes. In anticipation, we'll obtain the
+	 * in the future to initiate freeze of individual processes. In anticipation, we'll obtain the
 	 * process handle for potentially valid values and call task_for_pid_posix_check(); this way, everything
 	 * is validated correctly and set for further refactoring. See <rdar://problem/7839708> for more details.
 	 */
 	if (pid >= 0) {
 		targetproc = proc_find(pid);
+		if (targetproc == PROC_NULL) {
+			error = ESRCH;
+			goto out;
+		}
+
 		if (!task_for_pid_posix_check(targetproc)) {
 			error = EPERM;
 			goto out;
@@ -920,7 +940,7 @@ pid_hibernate(struct proc *p __unused, struct pid_hibernate_args *args, int *ret
 	}
 
 	if (pid == -1) {
-		kern_hibernation_on_pid_hibernate(pid);
+		memorystatus_on_inactivity(pid);
 	} else {
 		error = EPERM;
 	}
@@ -962,6 +982,11 @@ pid_shutdown_sockets(struct proc *p __unused, struct pid_shutdown_sockets_args *
 #endif
 
 	targetproc = proc_find(pid);
+	if (targetproc == PROC_NULL) {
+		error = ESRCH;
+		goto out;
+	}
+
 	if (!task_for_pid_posix_check(targetproc)) {
 		error = EPERM;
 		goto out;
@@ -1075,7 +1100,7 @@ shared_region_check_np(
 	__unused int				*retvalp)
 {
 	vm_shared_region_t	shared_region;
-	mach_vm_offset_t	start_address;
+	mach_vm_offset_t	start_address = 0;
 	int			error;
 	kern_return_t		kr;
 
@@ -1248,12 +1273,10 @@ _shared_region_map(
 #if CONFIG_PROTECT
 	/* check for content protection access */
 	{
-	void *cnode;
-	if ((cnode = cp_get_protected_cnode(vp)) != NULL) {
-		error = cp_handle_vnop(cnode, CP_READ_ACCESS | CP_WRITE_ACCESS);
-		if (error) 
+		error = cp_handle_vnop(vp, CP_READ_ACCESS | CP_WRITE_ACCESS, 0);
+		if (error) { 
 			goto done;
-	}
+		}
 	}
 #endif /* CONFIG_PROTECT */
 
@@ -1442,7 +1465,7 @@ _shared_region_slide(uint32_t slide,
 	if (slide_info_entry == NULL){
 		error = EFAULT;
 	} else {	
-		error = copyin(slide_start,
+		error = copyin((user_addr_t)slide_start,
 			       slide_info_entry,
 			       (vm_size_t)slide_size);
 	}
@@ -1482,20 +1505,22 @@ shared_region_map_and_slide_np(
 #define SFM_MAX_STACK	8
 	struct shared_file_mapping_np	stack_mappings[SFM_MAX_STACK];
 
+	/* Is the process chrooted?? */
+	if (p->p_fd->fd_rdir != NULL) {
+		kr = EINVAL;
+		goto done;
+	}
+		
 	if ((kr = vm_shared_region_sliding_valid(slide)) != KERN_SUCCESS) {
 		if (kr == KERN_INVALID_ARGUMENT) {
 			/*
 			 * This will happen if we request sliding again 
 			 * with the same slide value that was used earlier
-			 * for the very first sliding. We continue through
-			 * to the mapping layer. This is so that we can be
-			 * absolutely certain that the same mappings have
-			 * been requested.
+			 * for the very first sliding.
 			 */
 			kr = KERN_SUCCESS;
-		} else {
-			goto done;
 		}
+		goto done;
 	}
 
 	if (mappings_count == 0) {
@@ -1603,6 +1628,66 @@ SYSCTL_QUAD(_vm, OID_AUTO, can_reuse_failure, CTLFLAG_RD | CTLFLAG_LOCKED,
 	   &vm_page_stats_reusable.can_reuse_failure, "");
 
 
+extern unsigned int vm_page_free_count, vm_page_speculative_count;
+SYSCTL_UINT(_vm, OID_AUTO, page_free_count, CTLFLAG_RD | CTLFLAG_LOCKED, &vm_page_free_count, 0, "");
+SYSCTL_UINT(_vm, OID_AUTO, page_speculative_count, CTLFLAG_RD | CTLFLAG_LOCKED, &vm_page_speculative_count, 0, "");
+
+extern unsigned int vm_page_cleaned_count;
+SYSCTL_UINT(_vm, OID_AUTO, page_cleaned_count, CTLFLAG_RD | CTLFLAG_LOCKED, &vm_page_cleaned_count, 0, "Cleaned queue size");
+
+/* pageout counts */
+extern unsigned int vm_pageout_inactive_dirty_internal, vm_pageout_inactive_dirty_external, vm_pageout_inactive_clean, vm_pageout_speculative_clean, vm_pageout_inactive_used;
+extern unsigned int vm_pageout_freed_from_inactive_clean, vm_pageout_freed_from_speculative;
+SYSCTL_UINT(_vm, OID_AUTO, pageout_inactive_dirty_internal, CTLFLAG_RD | CTLFLAG_LOCKED, &vm_pageout_inactive_dirty_internal, 0, "");
+SYSCTL_UINT(_vm, OID_AUTO, pageout_inactive_dirty_external, CTLFLAG_RD | CTLFLAG_LOCKED, &vm_pageout_inactive_dirty_external, 0, "");
+SYSCTL_UINT(_vm, OID_AUTO, pageout_inactive_clean, CTLFLAG_RD | CTLFLAG_LOCKED, &vm_pageout_inactive_clean, 0, "");
+SYSCTL_UINT(_vm, OID_AUTO, pageout_speculative_clean, CTLFLAG_RD | CTLFLAG_LOCKED, &vm_pageout_speculative_clean, 0, "");
+SYSCTL_UINT(_vm, OID_AUTO, pageout_inactive_used, CTLFLAG_RD | CTLFLAG_LOCKED, &vm_pageout_inactive_used, 0, "");
+SYSCTL_UINT(_vm, OID_AUTO, pageout_freed_from_inactive_clean, CTLFLAG_RD | CTLFLAG_LOCKED, &vm_pageout_freed_from_inactive_clean, 0, "");
+SYSCTL_UINT(_vm, OID_AUTO, pageout_freed_from_speculative, CTLFLAG_RD | CTLFLAG_LOCKED, &vm_pageout_freed_from_speculative, 0, "");
+
+extern unsigned int vm_pageout_freed_from_cleaned;
+SYSCTL_UINT(_vm, OID_AUTO, pageout_freed_from_cleaned, CTLFLAG_RD | CTLFLAG_LOCKED, &vm_pageout_freed_from_cleaned, 0, "");
+
+/* counts of pages entering the cleaned queue */
+extern unsigned int vm_pageout_enqueued_cleaned, vm_pageout_enqueued_cleaned_from_inactive_clean, vm_pageout_enqueued_cleaned_from_inactive_dirty;
+SYSCTL_UINT(_vm, OID_AUTO, pageout_enqueued_cleaned, CTLFLAG_RD | CTLFLAG_LOCKED, &vm_pageout_enqueued_cleaned, 0, ""); /* sum of next two */
+SYSCTL_UINT(_vm, OID_AUTO, pageout_enqueued_cleaned_from_inactive_clean, CTLFLAG_RD | CTLFLAG_LOCKED, &vm_pageout_enqueued_cleaned_from_inactive_clean, 0, "");
+SYSCTL_UINT(_vm, OID_AUTO, pageout_enqueued_cleaned_from_inactive_dirty, CTLFLAG_RD | CTLFLAG_LOCKED, &vm_pageout_enqueued_cleaned_from_inactive_dirty, 0, "");
+
+/* counts of pages leaving the cleaned queue */
+extern unsigned int vm_pageout_cleaned_reclaimed, vm_pageout_cleaned_reactivated, vm_pageout_cleaned_reference_reactivated, vm_pageout_cleaned_volatile_reactivated, vm_pageout_cleaned_fault_reactivated, vm_pageout_cleaned_commit_reactivated, vm_pageout_cleaned_busy, vm_pageout_cleaned_nolock;
+SYSCTL_UINT(_vm, OID_AUTO, pageout_cleaned, CTLFLAG_RD | CTLFLAG_LOCKED, &vm_pageout_cleaned_reclaimed, 0, "Cleaned pages reclaimed");
+SYSCTL_UINT(_vm, OID_AUTO, pageout_cleaned_reactivated, CTLFLAG_RD | CTLFLAG_LOCKED, &vm_pageout_cleaned_reactivated, 0, "Cleaned pages reactivated"); /* sum of all reactivated AND busy and nolock (even though those actually get reDEactivated */
+SYSCTL_UINT(_vm, OID_AUTO, pageout_cleaned_reference_reactivated, CTLFLAG_RD | CTLFLAG_LOCKED, &vm_pageout_cleaned_reference_reactivated, 0, "Cleaned pages reference reactivated");
+SYSCTL_UINT(_vm, OID_AUTO, pageout_cleaned_volatile_reactivated, CTLFLAG_RD | CTLFLAG_LOCKED, &vm_pageout_cleaned_volatile_reactivated, 0, "Cleaned pages volatile reactivated");
+SYSCTL_UINT(_vm, OID_AUTO, pageout_cleaned_fault_reactivated, CTLFLAG_RD | CTLFLAG_LOCKED, &vm_pageout_cleaned_fault_reactivated, 0, "Cleaned pages fault reactivated");
+SYSCTL_UINT(_vm, OID_AUTO, pageout_cleaned_commit_reactivated, CTLFLAG_RD | CTLFLAG_LOCKED, &vm_pageout_cleaned_commit_reactivated, 0, "Cleaned pages commit reactivated");
+SYSCTL_UINT(_vm, OID_AUTO, pageout_cleaned_busy, CTLFLAG_RD | CTLFLAG_LOCKED, &vm_pageout_cleaned_busy, 0, "Cleaned pages busy (deactivated)");
+SYSCTL_UINT(_vm, OID_AUTO, pageout_cleaned_nolock, CTLFLAG_RD | CTLFLAG_LOCKED, &vm_pageout_cleaned_nolock, 0, "Cleaned pages no-lock (deactivated)");
+
+#include <kern/thread.h>
+#include <sys/user.h>
+
+void vm_pageout_io_throttle(void);
+
+void vm_pageout_io_throttle(void) {
+	struct uthread *uthread = get_bsdthread_info(current_thread());
+ 
+               /*
+                * thread is marked as a low priority I/O type
+                * and the I/O we issued while in this cleaning operation
+                * collided with normal I/O operations... we'll
+                * delay in order to mitigate the impact of this
+                * task on the normal operation of the system
+                */
+
+	if (uthread->uu_lowpri_window) {
+		throttle_lowpri_io(TRUE);
+	}
+
+}
+
 int
 vm_pressure_monitor(
 	__unused struct proc *p,
@@ -1638,4 +1723,78 @@ vm_pressure_monitor(
 
 	*retval = (int) pages_wanted;
 	return 0;
+}
+
+int
+kas_info(struct proc *p,
+			  struct kas_info_args *uap,
+			  int *retval __unused)
+{
+#ifdef SECURE_KERNEL
+	(void)p;
+	(void)uap;
+	return ENOTSUP;
+#else /* !SECURE_KERNEL */
+	int			selector = uap->selector;
+	user_addr_t	valuep = uap->value;
+	user_addr_t	sizep = uap->size;
+	user_size_t size;
+	int			error;
+
+	if (!kauth_cred_issuser(kauth_cred_get())) {
+		return EPERM;
+	}
+
+#if CONFIG_MACF
+	error = mac_system_check_kas_info(kauth_cred_get(), selector);
+	if (error) {
+		return error;
+	}
+#endif
+
+	if (IS_64BIT_PROCESS(p)) {
+		user64_size_t size64;
+		error = copyin(sizep, &size64, sizeof(size64));
+		size = (user_size_t)size64;
+	} else {
+		user32_size_t size32;
+		error = copyin(sizep, &size32, sizeof(size32));
+		size = (user_size_t)size32;
+	}
+	if (error) {
+		return error;
+	}
+
+	switch (selector) {
+		case KAS_INFO_KERNEL_TEXT_SLIDE_SELECTOR:
+			{
+				uint64_t slide = vm_kernel_slide;
+
+				if (sizeof(slide) != size) {
+					return EINVAL;
+				}
+				
+				if (IS_64BIT_PROCESS(p)) {
+					user64_size_t size64 = (user64_size_t)size;
+					error = copyout(&size64, sizep, sizeof(size64));
+				} else {
+					user32_size_t size32 = (user32_size_t)size;
+					error = copyout(&size32, sizep, sizeof(size32));
+				}
+				if (error) {
+					return error;
+				}
+				
+				error = copyout(&slide, valuep, sizeof(slide));
+				if (error) {
+					return error;
+				}
+			}
+			break;
+		default:
+			return EINVAL;
+	}
+
+	return 0;
+#endif /* !SECURE_KERNEL */
 }

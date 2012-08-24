@@ -81,7 +81,7 @@ mk_timer_create_trap(
 	}
 
 	simple_lock_init(&timer->lock, 0);
-	call_entry_setup(&timer->call_entry, mk_timer_expire, timer);
+	thread_call_setup(&timer->call_entry, mk_timer_expire, timer);
 	timer->is_armed = timer->is_dead = FALSE;
 	timer->active = 0;
 
@@ -190,6 +190,18 @@ mk_timer_expire(
 	simple_unlock(&timer->lock);
 }
 
+/*
+ * mk_timer_destroy_trap: Destroy the Mach port associated with a timer
+ *
+ * Parameters:  args                     User argument descriptor (see below)
+ *
+ * Indirect:     args->name               Mach port name
+ *
+ *
+ * Returns:        0                      Success
+ *                !0                      Not success           
+ *
+ */
 kern_return_t
 mk_timer_destroy_trap(
 	struct mk_timer_destroy_trap_args *args)
@@ -215,6 +227,19 @@ mk_timer_destroy_trap(
 	return (result);
 }
 
+/*
+ * mk_timer_arm_trap: Start (arm) a timer
+ *
+ * Parameters:  args                     User argument descriptor (see below)
+ *
+ * Indirect:     args->name               Mach port name
+ *               args->expire_time        Time when timer expires
+ *
+ *
+ * Returns:        0                      Success
+ *                !0                      Not success           
+ *
+ */
 kern_return_t
 mk_timer_arm_trap(
 	struct mk_timer_arm_trap_args *args)
@@ -254,6 +279,19 @@ mk_timer_arm_trap(
 	return (result);
 }
 
+/*
+ * mk_timer_cancel_trap: Cancel a timer
+ *
+ * Parameters:  args                     User argument descriptor (see below)
+ *
+ * Indirect:     args->name               Mach port name
+ *               args->result_time        The armed time of the cancelled timer (return value)
+ *
+ *
+ * Returns:        0                      Success
+ *                !0                      Not success           
+ *
+ */
 kern_return_t
 mk_timer_cancel_trap(
 	struct mk_timer_cancel_trap_args *args)
@@ -278,7 +316,7 @@ mk_timer_cancel_trap(
 		ip_unlock(port);
 
 		if (timer->is_armed) {
-			armed_time = timer->call_entry.deadline;
+			armed_time = timer->call_entry.tc_call.deadline;
 			if (thread_call_cancel(&timer->call_entry))
 				timer->active--;
 			timer->is_armed = FALSE;

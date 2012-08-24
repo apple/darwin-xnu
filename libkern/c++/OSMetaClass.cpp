@@ -95,7 +95,9 @@ static enum {
 static const int      kClassCapacityIncrement = 40;
 static const int      kKModCapacityIncrement  = 10;
 static OSDictionary * sAllClassesDict;
+static unsigned int   sDeepestClass;
 IOLock              * sAllClassesLock = NULL;
+IOLock              * sInstancesLock  = NULL;
 
 /*
  * While loading a kext and running all its constructors to register
@@ -111,6 +113,13 @@ static struct StalledData {
 } * sStalled;
 IOLock * sStalledClassesLock = NULL;
 
+
+struct ExpansionData {
+    OSOrderedSet * instances;
+    OSKext *       kext;
+};
+
+
 #if PRAGMA_MARK
 #pragma mark OSMetaClassBase
 #endif /* PRAGMA_MARK */
@@ -118,6 +127,7 @@ IOLock * sStalledClassesLock = NULL;
 * OSMetaClassBase.
 *********************************************************************/
 
+#if APPLE_KEXT_VTABLE_PADDING
 /*********************************************************************
 * Reserved vtable functions.
 *********************************************************************/
@@ -139,7 +149,8 @@ void OSMetaClassBase::_RESERVEDOSMetaClassBase5()
     { panic("OSMetaClassBase::_RESERVEDOSMetaClassBase%d called.", 5); }
 void OSMetaClassBase::_RESERVEDOSMetaClassBase6()
     { panic("OSMetaClassBase::_RESERVEDOSMetaClassBase%d called.", 6); }
-    
+#endif
+
 /*********************************************************************
 * These used to be inline in the header but gcc didn't believe us
 * Now we MUST pull the inline out at least until the compiler is
@@ -176,8 +187,10 @@ initialize()
 {
     sAllClassesLock = IOLockAlloc();
     sStalledClassesLock = IOLockAlloc();
+    sInstancesLock = IOLockAlloc();
 }
 
+#if APPLE_KEXT_VTABLE_PADDING
 /*********************************************************************
 * If you need this slot you had better setup an IOCTL style interface.
 * 'Cause the whole kernel world depends on OSMetaClassBase and YOU
@@ -186,6 +199,7 @@ initialize()
 void
 OSMetaClassBase::_RESERVEDOSMetaClassBase7()
 { panic("OSMetaClassBase::_RESERVEDOSMetaClassBase%d called.", 7); }
+#endif
 
 /*********************************************************************
 *********************************************************************/
@@ -285,6 +299,7 @@ const OSMetaClass * OSMetaClass::getMetaClass() const
 * OSMetaClass
 *********************************************************************/
 
+#if APPLE_KEXT_VTABLE_PADDING
 /*********************************************************************
 * Reserved functions.
 *********************************************************************/
@@ -304,6 +319,7 @@ void OSMetaClass::_RESERVEDOSMetaClass6()
     { panic("OSMetaClass::_RESERVEDOSMetaClass%d called", 6); }
 void OSMetaClass::_RESERVEDOSMetaClass7()
     { panic("OSMetaClass::_RESERVEDOSMetaClass%d called", 7); }
+#endif
 
 /*********************************************************************
 *********************************************************************/
@@ -377,6 +393,9 @@ OSMetaClass::OSMetaClass(
     classSize = inClassSize;
     superClassLink = inSuperClass;
 
+    reserved = IONew(ExpansionData, 1);
+    bzero(reserved, sizeof(ExpansionData));
+
    /* Hack alert: We are just casting inClassName and storing it in
     * an OSString * instance variable. This may be because you can't
     * create C++ objects in static constructors, but I really don't know!
@@ -420,7 +439,7 @@ OSMetaClass::OSMetaClass(
 *********************************************************************/
 OSMetaClass::~OSMetaClass()
 {
-    OSKext * myKext = (OSKext *)reserved; // do not release
+    OSKext * myKext = reserved ? reserved->kext : 0; // do not release
 
    /* Hack alert: 'className' is a C string during early C++ init, and
     * is converted to a real OSSymbol only when we record the OSKext in
@@ -494,7 +513,13 @@ OSMetaClass::getClassName() const
     if (!className) return NULL;
     return className->getCStringNoCopy();
 }
-
+/*********************************************************************
+*********************************************************************/
+const OSSymbol *
+OSMetaClass::getClassNameSymbol() const
+{
+    return className;
+}
 /*********************************************************************
 *********************************************************************/
 unsigned int
@@ -571,6 +596,7 @@ OSMetaClass::postModLoad(void * loadHandle)
                 result = kOSMetaClassNoDicts;
                 break;
             }
+            sAllClassesDict->setOptions(OSCollection::kSort, OSCollection::kSort);
 
         // No break; fall through
 
@@ -605,7 +631,7 @@ OSMetaClass::postModLoad(void * loadHandle)
             */
             IOLockLock(sAllClassesLock);
             for (i = 0; i < sStalled->count; i++) {
-                OSMetaClass * me = sStalled->classes[i];
+                const OSMetaClass * me = sStalled->classes[i];
                 OSMetaClass * orig = OSDynamicCast(OSMetaClass,
                     sAllClassesDict->getObject((const char *)me->className));
                 
@@ -618,10 +644,13 @@ OSMetaClass::postModLoad(void * loadHandle)
                         "OSMetaClass: Kext %s class %s is a duplicate;"
                         "kext %s already has a class by that name.",
                          sStalled->kextIdentifier, (const char *)me->className,
-                        ((OSKext *)orig->reserved)->getIdentifierCString());
+                        ((OSKext *)orig->reserved->kext)->getIdentifierCString());
                     result = kOSMetaClassDuplicateClass;
                     break;
                 }
+		unsigned int depth = 1;
+		while ((me = me->superClassLink)) depth++;
+		if (depth > sDeepestClass) sDeepestClass = depth;
             }
             IOLockUnlock(sAllClassesLock);
             
@@ -649,7 +678,7 @@ OSMetaClass::postModLoad(void * loadHandle)
                 
                /* Do not retain the kext object here.
                 */
-                me->reserved = (ExpansionData *)myKext;
+                me->reserved->kext = myKext;
                 if (myKext) {
                     result = myKext->addClass(me, sStalled->count);
                     if (result != kOSReturnSuccess) {
@@ -718,7 +747,7 @@ OSMetaClass::instanceDestructed() const
     }
 
     if (((int)instanceCount) < 0) {
-        OSKext * myKext = (OSKext *)reserved;
+        OSKext * myKext = reserved->kext;
 
         OSKextLog(myKext, kOSMetaClassLogSpec,
             // xxx - this phrasing is rather cryptic
@@ -755,6 +784,138 @@ OSMetaClass::reportModInstances(const char * kextIdentifier)
     OSKext::reportOSMetaClassInstances(kextIdentifier,
         kOSKextLogExplicitLevel);
     return;
+}
+/*********************************************************************
+*********************************************************************/
+
+void
+OSMetaClass::addInstance(const OSObject * instance, bool super) const
+{
+    if (!super) IOLockLock(sInstancesLock);
+
+    if (!reserved->instances) {
+	reserved->instances = OSOrderedSet::withCapacity(16);
+	if (superClassLink) {
+	    superClassLink->addInstance(reserved->instances, true);
+	}
+    }
+    reserved->instances->setLastObject(instance);
+
+    if (!super) IOLockUnlock(sInstancesLock);
+}
+
+void
+OSMetaClass::removeInstance(const OSObject * instance, bool super) const
+{
+    if (!super) IOLockLock(sInstancesLock);
+
+    if (reserved->instances) {
+	reserved->instances->removeObject(instance);
+	if (0 == reserved->instances->getCount()) {
+	    if (superClassLink) {
+		superClassLink->removeInstance(reserved->instances, true);
+	    }
+	    reserved->instances->release();
+	    reserved->instances = 0;
+	}
+    }
+
+    if (!super) IOLockUnlock(sInstancesLock);
+}
+
+void
+OSMetaClass::applyToInstances(OSOrderedSet * set,
+			      OSMetaClassInstanceApplierFunction  applier,
+                              void * context)
+{
+    enum { 	    kLocalDepth = 24 };
+    unsigned int    _nextIndex[kLocalDepth];
+    OSOrderedSet *  _sets[kLocalDepth];
+    unsigned int *  nextIndex = &_nextIndex[0];
+    OSOrderedSet ** sets      = &_sets[0];
+    OSObject *      obj;
+    OSOrderedSet *  childSet;
+    unsigned int    maxDepth;
+    unsigned int    idx;
+    unsigned int    level;
+    bool            done;
+
+    maxDepth = sDeepestClass;
+    if (maxDepth > kLocalDepth)
+    {
+    	nextIndex = IONew(typeof(nextIndex[0]), maxDepth);
+    	sets      = IONew(typeof(sets[0]), maxDepth);
+    }
+    done = false;
+    level = 0;
+    idx = 0;
+    do
+    {
+	while (!done && (obj = set->getObject(idx++)))
+	{
+	    if ((childSet = OSDynamicCast(OSOrderedSet, obj)))
+	    {
+		if (level >= maxDepth) panic(">maxDepth");
+		sets[level] = set;
+		nextIndex[level] = idx;
+		level++;
+		set = childSet;
+		idx = 0;
+		break;
+	    }
+	    done = (*applier)(obj, context);
+	}
+	if (!obj)
+	{
+	    if (!done && level)
+	    {
+		level--;
+		set = sets[level];
+		idx = nextIndex[level];
+	    } else done = true;
+	}
+    }
+    while (!done);
+    if (maxDepth > kLocalDepth)
+    {
+    	IODelete(nextIndex, typeof(nextIndex[0]), maxDepth);
+    	IODelete(sets, typeof(sets[0]), maxDepth);
+    }
+}
+
+void
+OSMetaClass::applyToInstances(OSMetaClassInstanceApplierFunction applier,
+                              void * context) const
+{
+    IOLockLock(sInstancesLock);
+    if (reserved->instances) applyToInstances(reserved->instances, applier, context);
+    IOLockUnlock(sInstancesLock);
+}
+
+void
+OSMetaClass::applyToInstancesOfClassName(
+    				const OSSymbol * name,
+    				OSMetaClassInstanceApplierFunction  applier,
+                                void * context)
+{
+    OSMetaClass  * meta;
+    OSOrderedSet * set = 0;
+
+    IOLockLock(sAllClassesLock);
+    if (sAllClassesDict 
+    	&& (meta = (OSMetaClass *) sAllClassesDict->getObject(name))
+    	&& (set = meta->reserved->instances))
+    {
+    	set->retain();
+    }
+    IOLockUnlock(sAllClassesLock);
+
+    if (!set) return;
+
+    IOLockLock(sInstancesLock);
+    applyToInstances(set, applier, context);
+    IOLockUnlock(sInstancesLock);
+    set->release();
 }
 
 /*********************************************************************
@@ -922,7 +1083,7 @@ OSMetaClass::getSuperClass() const
 const OSSymbol *
 OSMetaClass::getKmodName() const
 {
-    OSKext * myKext = (OSKext *)reserved;
+    OSKext * myKext = reserved ? reserved->kext : 0;
     if (myKext) {
         return myKext->getIdentifier();
     }

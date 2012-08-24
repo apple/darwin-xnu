@@ -357,6 +357,7 @@ apple_protect_pager_data_request(
 	fault_info.stealth = TRUE;
 	fault_info.io_sync = FALSE;
 	fault_info.mark_zf_absent = FALSE;
+	fault_info.batch_pmap_op = FALSE;
 	interruptible = fault_info.interruptible;
 
 	pager = apple_protect_pager_lookup(mem_obj);
@@ -512,6 +513,7 @@ apple_protect_pager_data_request(
 			   kernel_mapping,
 			   src_page->phys_page,
 			   VM_PROT_READ,
+			   VM_PROT_NONE,
 			   0,
 			   TRUE);
 		/*
@@ -527,6 +529,7 @@ apple_protect_pager_data_request(
 			   kernel_mapping + PAGE_SIZE_64,
 			   dst_pnum,
 			   VM_PROT_READ | VM_PROT_WRITE,
+			   VM_PROT_NONE,
 			   0,
 			   TRUE);
 

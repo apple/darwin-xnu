@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2011 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2012 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -151,11 +151,11 @@ extern lck_mtx_t *addrsel_mutex;
 
 static int selectroute(struct sockaddr_in6 *, struct sockaddr_in6 *,
 	struct ip6_pktopts *, struct ip6_moptions *, struct route_in6 *,
-	struct ifnet **, struct rtentry **, int, int, unsigned int,
-	unsigned int);
+	struct ifnet **, struct rtentry **, int, int,
+	const struct ip6_out_args *ip6oa);
 static int in6_selectif(struct sockaddr_in6 *, struct ip6_pktopts *,
-	struct ip6_moptions *, struct route_in6 *ro, unsigned int,
-	unsigned int, struct ifnet **);
+	struct ip6_moptions *, struct route_in6 *ro,
+	const struct ip6_out_args *, struct ifnet **);
 static void init_policy_queue(void);
 static int add_addrsel_policyent(const struct in6_addrpolicy *);
 #ifdef ENABLE_ADDRSEL
@@ -192,6 +192,11 @@ void addrsel_policy_init(void);
 	goto out;		/* XXX: we can't use 'break' here */ \
 } while(0)
 
+/*
+ * Regardless of error, it will return an ifp with a reference held if the
+ * caller provides a non-NULL ifpp.  The caller is responsible for checking
+ * if the returned ifp is valid and release its reference at all times.
+ */
 struct in6_addr *
 in6_selectsrc(struct sockaddr_in6 *dstsock, struct ip6_pktopts *opts,
     struct inpcb *inp, struct route_in6 *ro,
@@ -208,7 +213,7 @@ in6_selectsrc(struct sockaddr_in6 *dstsock, struct ip6_pktopts *opts,
 	int prefer_tempaddr;
 	struct ip6_moptions *mopts;
 	struct timeval timenow;
-	unsigned int nocell;
+	struct ip6_out_args ip6oa = { ifscope, { 0 }, IP6OAF_SELECT_SRCIF };
 	boolean_t islocal = FALSE;
 
 	getmicrotime(&timenow);
@@ -220,11 +225,14 @@ in6_selectsrc(struct sockaddr_in6 *dstsock, struct ip6_pktopts *opts,
 
 	if (inp != NULL) {
 		mopts = inp->in6p_moptions;
-		nocell = (inp->inp_flags & INP_NO_IFT_CELLULAR) ? 1 : 0;
+		if (inp->inp_flags & INP_NO_IFT_CELLULAR)
+			ip6oa.ip6oa_flags |= IP6OAF_NO_CELLULAR;
 	} else {
 		mopts = NULL;
-		nocell = 0;
 	}
+
+	if (ip6oa.ip6oa_boundif != IFSCOPE_NONE)
+		ip6oa.ip6oa_flags |= IP6OAF_BOUND_IF;
 
 	/*
 	 * If the source address is explicitly specified by the caller,
@@ -238,9 +246,10 @@ in6_selectsrc(struct sockaddr_in6 *dstsock, struct ip6_pktopts *opts,
 		struct in6_ifaddr *ia6;
 
 		/* get the outgoing interface */
-		if ((*errorp = in6_selectif(dstsock, opts, mopts, ro, ifscope,
-		    nocell, &ifp)) != 0) {
-			return (NULL);
+		if ((*errorp = in6_selectif(dstsock, opts, mopts, ro, &ip6oa,
+		    &ifp)) != 0) {
+			src_storage = NULL;
+			goto done;
 		}
 
 		/*
@@ -254,48 +263,44 @@ in6_selectsrc(struct sockaddr_in6 *dstsock, struct ip6_pktopts *opts,
 		srcsock.sin6_family = AF_INET6;
 		srcsock.sin6_len = sizeof(srcsock);
 		srcsock.sin6_addr = pi->ipi6_addr;
-		if (ifp) {
+		if (ifp != NULL) {
 			*errorp = in6_setscope(&srcsock.sin6_addr, ifp, NULL);
 			if (*errorp != 0) {
-				ifnet_release(ifp);
-				return (NULL);
+				src_storage = NULL;
+				goto done;
 			}
 		}
-		ia6 = (struct in6_ifaddr *)ifa_ifwithaddr((struct sockaddr *)(&srcsock));
+		ia6 = (struct in6_ifaddr *)ifa_ifwithaddr((struct sockaddr *)
+		    (&srcsock));
 		if (ia6 == NULL) {
 			*errorp = EADDRNOTAVAIL;
-			if (ifp != NULL)
-				ifnet_release(ifp);
-			return (NULL);
+			src_storage = NULL;
+			goto done;
 		}
 		IFA_LOCK_SPIN(&ia6->ia_ifa);
 		if ((ia6->ia6_flags & (IN6_IFF_ANYCAST | IN6_IFF_NOTREADY)) ||
-		    (nocell && (ia6->ia_ifa.ifa_ifp->if_type == IFT_CELLULAR))) {
+		    ((ip6oa.ip6oa_flags & IP6OAF_NO_CELLULAR) &&
+		     (ia6->ia_ifa.ifa_ifp->if_type == IFT_CELLULAR))) {
 			IFA_UNLOCK(&ia6->ia_ifa);
 			IFA_REMREF(&ia6->ia_ifa);
 			*errorp = EADDRNOTAVAIL;
-			if (ifp != NULL)
-				ifnet_release(ifp);
-			return (NULL);
+			src_storage = NULL;
+			goto done;
 		}
 
 		*src_storage = satosin6(&ia6->ia_addr)->sin6_addr;
 		IFA_UNLOCK(&ia6->ia_ifa);
 		IFA_REMREF(&ia6->ia_ifa);
-		if (ifpp != NULL) {
-			/* if ifp is non-NULL, refcnt held in in6_selectif() */
-			*ifpp = ifp;
-		} else if (ifp != NULL) {
-			ifnet_release(ifp);
-		}
-		return (src_storage);
+		goto done;
 	}
 
 	/*
 	 * Otherwise, if the socket has already bound the source, just use it.
 	 */
-	if (inp != NULL && !IN6_IS_ADDR_UNSPECIFIED(&inp->in6p_laddr)) 
-		return (&inp->in6p_laddr);
+	if (inp != NULL && !IN6_IS_ADDR_UNSPECIFIED(&inp->in6p_laddr)) {
+		src_storage = &inp->in6p_laddr;
+		goto done;
+	}
 
 	/*
 	 * If the address is not specified, choose the best one based on
@@ -303,19 +308,16 @@ in6_selectsrc(struct sockaddr_in6 *dstsock, struct ip6_pktopts *opts,
 	 */
 
 	/* get the outgoing interface */
-	if ((*errorp = in6_selectif(dstsock, opts, mopts, ro, ifscope, nocell,
-	    &ifp)) != 0)
-		return (NULL);
+	if ((*errorp = in6_selectif(dstsock, opts, mopts, ro, &ip6oa,
+	    &ifp)) != 0) {
+		src_storage = NULL;
+		goto done;
+	}
 
-#ifdef DIAGNOSTIC
-	if (ifp == NULL)	/* this should not happen */
-		panic("in6_selectsrc: NULL ifp");
-#endif
 	*errorp = in6_setscope(&dst, ifp, &odstzone);
 	if (*errorp != 0) {
-		if (ifp != NULL)
-			ifnet_release(ifp);
-		return (NULL);
+		src_storage = NULL;
+		goto done;
 	}
 	lck_rw_lock_shared(&in6_ifaddr_rwlock);
 
@@ -351,6 +353,10 @@ in6_selectsrc(struct sockaddr_in6 *dstsock, struct ip6_pktopts *opts,
 		if (!ip6_use_deprecated && IFA6_IS_DEPRECATED(ia))
 			goto next;
 
+		if (!nd6_optimistic_dad &&
+		     (ia->ia6_flags & IN6_IFF_OPTIMISTIC) != 0)
+			goto next;
+
 		/* Rule 1: Prefer same address */
 		if (IN6_ARE_ADDR_EQUAL(&dst, &ia->ia_addr.sin6_addr))
 			BREAK(1); /* there should be no better candidate */
@@ -379,6 +385,17 @@ in6_selectsrc(struct sockaddr_in6 *dstsock, struct ip6_pktopts *opts,
 		if (!IFA6_IS_DEPRECATED(ia_best) && IFA6_IS_DEPRECATED(ia))
 			NEXTSRC(3);
 		if (IFA6_IS_DEPRECATED(ia_best) && !IFA6_IS_DEPRECATED(ia))
+			REPLACE(3);
+
+		/*
+		 * RFC 4429 says that optimistic addresses are equivalent to
+		 * deprecated addresses, so avoid them here.
+		 */
+		if ((ia_best->ia6_flags & IN6_IFF_OPTIMISTIC) == 0 &&
+		    (ia->ia6_flags & IN6_IFF_OPTIMISTIC) != 0)
+			NEXTSRC(3);
+		if ((ia_best->ia6_flags & IN6_IFF_OPTIMISTIC) != 0 &&
+		    (ia->ia6_flags & IN6_IFF_OPTIMISTIC) == 0)
 			REPLACE(3);
 
 		/* Rule 4: Prefer home addresses */
@@ -507,23 +524,24 @@ out:
 
 	lck_rw_done(&in6_ifaddr_rwlock);
 
-	if (nocell && ia_best != NULL &&
-	    (ia_best->ia_ifa.ifa_ifp->if_type == IFT_CELLULAR)) {
+	if (ia_best != NULL &&
+	    (ip6oa.ip6oa_flags & IP6OAF_NO_CELLULAR) &&
+	    ia_best->ia_ifa.ifa_ifp->if_type == IFT_CELLULAR) {
 		IFA_REMREF(&ia_best->ia_ifa);
 		ia_best = NULL;
 	}
 
-	if ( (ia = ia_best) == NULL) {
+	if ((ia = ia_best) == NULL) {
 		*errorp = EADDRNOTAVAIL;
-		if (ifp != NULL)
-			ifnet_release(ifp);
-		return (NULL);
+		src_storage = NULL;
+		goto done;
 	}
 
 	IFA_LOCK_SPIN(&ia->ia_ifa);
 	*src_storage = satosin6(&ia->ia_addr)->sin6_addr;
 	IFA_UNLOCK(&ia->ia_ifa);
 	IFA_REMREF(&ia->ia_ifa);
+done:
 	if (ifpp != NULL) {
 		/* if ifp is non-NULL, refcnt held in in6_selectif() */
 		*ifpp = ifp;
@@ -542,7 +560,10 @@ out:
  * i.e. for any given pcb there can only be one thread performing output at
  * the IPv6 layer.
  *
- * This routine is analogous to in_selectsrcif() for IPv4.
+ * This routine is analogous to in_selectsrcif() for IPv4.  Regardless of
+ * error, it will return an ifp with a reference held if the caller provides
+ * a non-NULL retifp.  The caller is responsible for checking if the
+ * returned ifp is valid and release its reference at all times.
  *
  * clone - meaningful only for bsdi and freebsd
  */
@@ -550,17 +571,18 @@ static int
 selectroute(struct sockaddr_in6 *srcsock, struct sockaddr_in6 *dstsock,
     struct ip6_pktopts *opts, struct ip6_moptions *mopts, struct route_in6 *ro,
     struct ifnet **retifp, struct rtentry **retrt, int clone,
-    int norouteok, unsigned int ifscope, unsigned int nocell)
+    int norouteok, const struct ip6_out_args *ip6oa)
 {
 	int error = 0;
-	struct ifnet *ifp = NULL;
+	struct ifnet *ifp = NULL, *ifp0 = NULL;
 	struct route_in6 *route = NULL;
 	struct sockaddr_in6 *sin6_next;
 	struct in6_pktinfo *pi = NULL;
 	struct in6_addr *dst = &dstsock->sin6_addr;
 	struct ifaddr *ifa = NULL;
 	char s_src[MAX_IPv6_STR_LEN], s_dst[MAX_IPv6_STR_LEN];
-	boolean_t select_srcif;
+	boolean_t select_srcif, proxied_ifa = FALSE;
+	unsigned int ifscope = ip6oa->ip6oa_boundif;
 
 #if 0
 	char ip6buf[INET6_ADDRSTRLEN];
@@ -622,7 +644,8 @@ selectroute(struct sockaddr_in6 *srcsock, struct sockaddr_in6 *dstsock,
 		ifscope = pi->ipi6_ifindex;
 		ifnet_head_lock_shared();
 		/* ifp may be NULL if detached or out of range */
-		ifp = (ifscope <= if_index) ? ifindex2ifnet[ifscope] : NULL;
+		ifp = ifp0 =
+		    ((ifscope <= if_index) ? ifindex2ifnet[ifscope] : NULL);
 		ifnet_head_done();
 		if (norouteok || retrt == NULL || IN6_IS_ADDR_MULTICAST(dst)) {
 			/*
@@ -645,7 +668,7 @@ selectroute(struct sockaddr_in6 *srcsock, struct sockaddr_in6 *dstsock,
 	 */
 	if (IN6_IS_ADDR_MULTICAST(dst) && mopts != NULL) {
 		IM6O_LOCK(mopts);
-		if ((ifp = mopts->im6o_multicast_ifp) != NULL) {
+		if ((ifp = ifp0 = mopts->im6o_multicast_ifp) != NULL) {
 			IM6O_UNLOCK(mopts);
 			goto done; /* we do not need a route for multicast. */
 		}
@@ -711,6 +734,21 @@ getsrcif:
 		ifa = (struct ifaddr *)
 		    ifa_foraddr6_scoped(&srcsock->sin6_addr, scope);
 
+		/*
+		 * If we are forwarding and proxying prefix(es), see if the
+		 * source address is one of ours and is a proxied address;
+		 * if so, use it.
+		 */
+		if (ifa == NULL && ip6_forwarding && nd6_prproxy) {
+			ifa = (struct ifaddr *)
+			    ifa_foraddr6(&srcsock->sin6_addr);
+			if (ifa != NULL && !(proxied_ifa =
+			    nd6_prproxy_ifaddr((struct in6_ifaddr *)ifa))) {
+				IFA_REMREF(ifa);
+				ifa = NULL;
+			}
+		}
+
 		if (ip6_select_srcif_debug && ifa != NULL) {
 			if (ro->ro_rt != NULL) {
 				printf("%s->%s ifscope %d->%d ifa_if %s "
@@ -746,7 +784,7 @@ getsrcif:
 	}
 
 getroute:
-	if (ifa != NULL)
+	if (ifa != NULL && !proxied_ifa)
 		ifscope = ifa->ifa_ifp->if_index;
 
 	/*
@@ -776,7 +814,7 @@ getroute:
 		    (RTF_UP | RTF_LLINFO) ||
 		    ron->ro_rt->generation_id != route_generation ||
 		    (select_srcif && (ifa == NULL ||
-		    ifa->ifa_ifp != ron->ro_rt->rt_ifp)))) ||
+		    (ifa->ifa_ifp != ron->ro_rt->rt_ifp && !proxied_ifa))))) ||
 		    !IN6_ARE_ADDR_EQUAL(&satosin6(&ron->ro_dst)->sin6_addr,
 		    &sin6_next->sin6_addr)) {
 			if (ron->ro_rt != NULL) {
@@ -804,7 +842,7 @@ getroute:
 			}
 		}
 		route = ron;
-		ifp = ron->ro_rt->rt_ifp;
+		ifp = ifp0 = ron->ro_rt->rt_ifp;
 
 		/*
 		 * When cloning is required, try to allocate a route to the
@@ -836,7 +874,7 @@ getroute:
 	    ro->ro_rt->generation_id != route_generation ||
 	    !IN6_ARE_ADDR_EQUAL(&satosin6(&ro->ro_dst)->sin6_addr, dst) ||
 	    (select_srcif && (ifa == NULL ||
-	    ifa->ifa_ifp != ro->ro_rt->rt_ifp)))) {
+	    (ifa->ifa_ifp != ro->ro_rt->rt_ifp && !proxied_ifa))))) {
 		RT_UNLOCK(ro->ro_rt);
 		rtfree(ro->ro_rt);
 		ro->ro_rt = NULL;
@@ -874,7 +912,7 @@ getroute:
 
 	if (ro->ro_rt != NULL) {
 		RT_LOCK_ASSERT_HELD(ro->ro_rt);
-		ifp = ro->ro_rt->rt_ifp;
+		ifp = ifp0 = ro->ro_rt->rt_ifp;
 	} else {
 		error = EHOSTUNREACH;
 	}
@@ -883,6 +921,7 @@ getroute:
 validateroute:
 	if (select_srcif) {
 		boolean_t has_route = (route != NULL && route->ro_rt != NULL);
+		boolean_t srcif_selected = FALSE;
 
 		if (has_route)
 			RT_LOCK_ASSERT_HELD(route->ro_rt);
@@ -895,28 +934,48 @@ validateroute:
 		if (has_route && (ifa == NULL ||
 		    (ifa->ifa_ifp != ifp && ifp != lo_ifp) ||
 		    !(route->ro_rt->rt_flags & RTF_UP))) {
-			if (ip6_select_srcif_debug) {
-				if (ifa != NULL) {
-					printf("%s->%s ifscope %d ro_if %s "
-					    "!= ifa_if %s (cached route "
-					    "cleared)\n", s_src, s_dst,
-					    ifscope, if_name(ifp),
-					    if_name(ifa->ifa_ifp));
-				} else {
-					printf("%s->%s ifscope %d ro_if %s "
-					    "(no ifa_if found)\n", s_src,
-					    s_dst, ifscope, if_name(ifp));
+			/*
+			 * If the destination address belongs to a proxied
+			 * prefix, relax the requirement and allow the packet
+			 * to come out of the proxy interface with the source
+			 * address of the real interface.
+			 */
+			if (ifa != NULL && proxied_ifa &&
+			    (route->ro_rt->rt_flags & (RTF_UP|RTF_PROXY)) ==
+			    (RTF_UP|RTF_PROXY)) {
+				srcif_selected = TRUE;
+			} else {
+				if (ip6_select_srcif_debug) {
+					if (ifa != NULL) {
+						printf("%s->%s ifscope %d "
+						    "ro_if %s != ifa_if %s "
+						    "(cached route cleared)\n",
+						    s_src, s_dst,
+						    ifscope, if_name(ifp),
+						    if_name(ifa->ifa_ifp));
+					} else {
+						printf("%s->%s ifscope %d "
+						    "ro_if %s (no ifa_if "
+						    "found)\n", s_src, s_dst,
+						    ifscope, if_name(ifp));
+					}
 				}
+				RT_UNLOCK(route->ro_rt);
+				rtfree(route->ro_rt);
+				route->ro_rt = NULL;
+				route->ro_flags &= ~ROF_SRCIF_SELECTED;
+				error = EHOSTUNREACH;
+				/* Undo the settings done above */
+				route = NULL;
+				ifp = NULL;	/* ditch ifp; keep ifp0 */
+				has_route = FALSE;
 			}
-			RT_UNLOCK(route->ro_rt);
-			rtfree(route->ro_rt);
-			route->ro_rt = NULL;
-			route->ro_flags &= ~ROF_SRCIF_SELECTED;
-			error = EHOSTUNREACH;
-			/* Undo the settings done above */
-			route = NULL;
-			ifp = NULL;
 		} else if (has_route) {
+			srcif_selected = TRUE;
+		}
+
+		if (srcif_selected) {
+			VERIFY(has_route);
 			route->ro_flags |= ROF_SRCIF_SELECTED;
 			route->ro_rt->generation_id = route_generation;
 			RT_UNLOCK(route->ro_rt);
@@ -943,17 +1002,18 @@ validateroute:
 	}
 
 done:
-	if (nocell && error == 0) {
-		if ((ifp != NULL && ifp->if_type == IFT_CELLULAR) ||
+	if (error == 0) {
+		if ((ip6oa->ip6oa_flags & IP6OAF_NO_CELLULAR) &&
+		    ((ifp != NULL && ifp->if_type == IFT_CELLULAR) ||
 		    (route != NULL && route->ro_rt != NULL &&
-		    route->ro_rt->rt_ifp->if_type == IFT_CELLULAR)) {
+		    route->ro_rt->rt_ifp->if_type == IFT_CELLULAR))) {
 			if (route != NULL && route->ro_rt != NULL) {
 				rtfree(route->ro_rt);
 				route->ro_rt = NULL;
 				route->ro_flags &= ~ROF_SRCIF_SELECTED;
 				route = NULL;
 			}
-			ifp = NULL;
+			ifp = NULL;	/* ditch ifp; keep ifp0 */
 			error = EHOSTUNREACH;
 		}
 	}
@@ -968,12 +1028,19 @@ done:
 	if (error == EHOSTUNREACH)
 		ip6stat.ip6s_noroute++;
 
+	/*
+	 * We'll return ifp regardless of error, so pick it up from ifp0
+	 * in case it was nullified above.  Caller is responsible for
+	 * releasing the ifp if it is non-NULL.
+	 */
+	ifp = ifp0;
+	if (retifp != NULL) {
+		if (ifp != NULL)
+			ifnet_reference(ifp);	/* for caller */
+		*retifp = ifp;
+	}
+
 	if (error == 0) {
-		if (retifp != NULL) {
-			if (ifp != NULL)
-				ifnet_reference(ifp);	/* for caller */
-			*retifp = ifp;
-		}
 		if (retrt != NULL && route != NULL)
 			*retrt = route->ro_rt;	/* ro_rt may be NULL */
 	} else if (select_srcif && ip6_select_srcif_debug) {
@@ -989,12 +1056,17 @@ done:
 	return (error);
 }
 
+/*
+ * Regardless of error, it will return an ifp with a reference held if the
+ * caller provides a non-NULL retifp.  The caller is responsible for checking
+ * if the returned ifp is valid and release its reference at all times.
+ */
 static int
 in6_selectif(struct sockaddr_in6 *dstsock, struct ip6_pktopts *opts,
-    struct ip6_moptions *mopts, struct route_in6 *ro, unsigned int ifscope,
-    unsigned int nocell, struct ifnet **retifp)
+    struct ip6_moptions *mopts, struct route_in6 *ro,
+    const struct ip6_out_args *ip6oa, struct ifnet **retifp)
 {
-	int error;
+	int err = 0;
 	struct route_in6 sro;
 	struct rtentry *rt = NULL;
 
@@ -1003,12 +1075,9 @@ in6_selectif(struct sockaddr_in6 *dstsock, struct ip6_pktopts *opts,
 		ro = &sro;
 	}
 
-	if ((error = selectroute(NULL, dstsock, opts, mopts, ro, retifp,
-	    &rt, 0, 1, ifscope, nocell)) != 0) {
-		if (ro == &sro && rt && rt == sro.ro_rt)
-			rtfree(rt);
-		return (error);
-	}
+	if ((err = selectroute(NULL, dstsock, opts, mopts, ro, retifp,
+	    &rt, 0, 1, ip6oa)) != 0)
+		goto done;
 
 	/*
 	 * do not use a rejected or black hole route.
@@ -1028,11 +1097,8 @@ in6_selectif(struct sockaddr_in6 *dstsock, struct ip6_pktopts *opts,
 	 * We thus reject the case here.
 	 */
 	if (rt && (rt->rt_flags & (RTF_REJECT | RTF_BLACKHOLE))) {
-		int flags = (rt->rt_flags & RTF_HOST ? EHOSTUNREACH : ENETUNREACH);
-
-		if (ro == &sro && rt && rt == sro.ro_rt)
-			rtfree(rt);
-		return (flags);
+		err = ((rt->rt_flags & RTF_HOST) ? EHOSTUNREACH : ENETUNREACH);
+		goto done;
 	}
 
 	/*
@@ -1042,30 +1108,41 @@ in6_selectif(struct sockaddr_in6 *dstsock, struct ip6_pktopts *opts,
 	 * destination address (which should probably be one of our own
 	 * addresses.)
 	 */
-	if (rt && rt->rt_ifa && rt->rt_ifa->ifa_ifp) {
+	if (rt != NULL && rt->rt_ifa != NULL && rt->rt_ifa->ifa_ifp != NULL &&
+	    retifp != NULL) {
+		ifnet_reference(rt->rt_ifa->ifa_ifp);
 		if (*retifp != NULL)
 			ifnet_release(*retifp);
 		*retifp = rt->rt_ifa->ifa_ifp;
-		ifnet_reference(*retifp);
 	}
 
+done:
 	if (ro == &sro && rt && rt == sro.ro_rt)
 		rtfree(rt);
-	return (0);
+
+	/*
+	 * retifp might point to a valid ifp with a reference held;
+	 * caller is responsible for releasing it if non-NULL.
+	 */
+	return (err);
 }
 
 /*
+ * Regardless of error, it will return an ifp with a reference held if the
+ * caller provides a non-NULL retifp.  The caller is responsible for checking
+ * if the returned ifp is valid and release its reference at all times.
+ *
  * clone - meaningful only for bsdi and freebsd
  */
 int
 in6_selectroute(struct sockaddr_in6 *srcsock, struct sockaddr_in6 *dstsock,
     struct ip6_pktopts *opts, struct ip6_moptions *mopts, struct route_in6 *ro,
     struct ifnet **retifp, struct rtentry **retrt, int clone,
-    unsigned int ifscope, unsigned int nocell)
+    const struct ip6_out_args *ip6oa)
 {
 
 	return (selectroute(srcsock, dstsock, opts, mopts, ro, retifp,
-	    retrt, clone, 0, ifscope, nocell));
+	    retrt, clone, 0, ip6oa));
 }
 
 /*
@@ -1085,7 +1162,16 @@ in6_selecthlim(
 	} else {
 		lck_rw_lock_shared(nd_if_rwlock);
 		if (ifp && ifp->if_index < nd_ifinfo_indexlim) {
-			u_int8_t chlim = nd_ifinfo[ifp->if_index].chlim;
+			u_int8_t chlim;
+			struct nd_ifinfo *ndi = &nd_ifinfo[ifp->if_index];
+
+			if (ndi->initialized) {
+				lck_mtx_lock(&ndi->lock);
+				chlim = ndi->chlim;
+				lck_mtx_unlock(&ndi->lock);
+			} else {
+				chlim = ip6_defhlim;
+			}
 			lck_rw_done(nd_if_rwlock);
 			return (chlim);
 		} else {
@@ -1166,7 +1252,7 @@ in6_pcbsetport(
 				 * occurred above.
 				 */
 				inp->in6p_laddr = in6addr_any;
-				inp->in6p_last_outif = 0;
+				inp->in6p_last_outifp = NULL;
 				if (!locked)
 					lck_rw_done(pcbinfo->mtx);
 				return (EAGAIN);
@@ -1190,7 +1276,7 @@ in6_pcbsetport(
 				 * occurred above.
 				 */
 				inp->in6p_laddr = in6addr_any;
-				inp->in6p_last_outif = 0;
+				inp->in6p_last_outifp = NULL;
 				if (!locked)
 					lck_rw_done(pcbinfo->mtx);
 				return (EAGAIN);
@@ -1207,7 +1293,7 @@ in6_pcbsetport(
 	if (in_pcbinshash(inp, 1) != 0) {
 		inp->in6p_laddr = in6addr_any;
 		inp->inp_lport = 0;
-		inp->in6p_last_outif = 0;
+		inp->in6p_last_outifp = NULL;
 		if (!locked)
 			lck_rw_done(pcbinfo->mtx);
 		return (EAGAIN);
@@ -1530,7 +1616,7 @@ in6_src_ioctl(u_long cmd, caddr_t data)
 	if (cmd != SIOCAADDRCTL_POLICY && cmd != SIOCDADDRCTL_POLICY)
 		return (EOPNOTSUPP); /* check for safety */
 
-	ent0 = *(struct in6_addrpolicy *)data;
+	bcopy(data, &ent0, sizeof (ent0));
 
 	if (ent0.label == ADDR_LABEL_NOTAPP)
 		return (EINVAL);

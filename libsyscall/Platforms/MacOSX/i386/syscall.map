@@ -60,6 +60,7 @@ _recvmsg$NOCANCEL$UNIX2003	___recvmsg_nocancel
 _recvmsg$UNIX2003	___recvmsg
 _select$DARWIN_EXTSN	___select
 _select$DARWIN_EXTSN$NOCANCEL	___select_nocancel
+_sem_open	___sem_open
 _sem_wait	___sem_wait_nocancel
 _sem_wait$NOCANCEL$UNIX2003	___sem_wait_nocancel
 _sem_wait$UNIX2003	___sem_wait

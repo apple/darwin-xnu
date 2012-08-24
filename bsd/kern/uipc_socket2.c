@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1998-2011 Apple Inc. All rights reserved.
+ * Copyright (c) 1998-2012 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -76,6 +76,7 @@
 #include <sys/kauth.h>
 #include <sys/malloc.h>
 #include <sys/mbuf.h>
+#include <sys/mcache.h>
 #include <sys/protosw.h>
 #include <sys/stat.h>
 #include <sys/socket.h>
@@ -93,6 +94,8 @@
 #if CONFIG_MACF
 #include <security/mac_framework.h>
 #endif
+
+#include <mach/vm_param.h>
 
 /* TODO: this should be in a header file somewhere */
 extern void postevent(struct socket *, struct sockbuf *, int);
@@ -122,9 +125,11 @@ u_int32_t	sb_max = SB_MAX;		/* XXX should be static */
 u_int32_t	high_sb_max = SB_MAX;
 
 static	u_int32_t sb_efficiency = 8;	/* parameter for sbreserve() */
-__private_extern__ unsigned int total_mb_cnt = 0;
-__private_extern__ unsigned int total_cl_cnt = 0;
-__private_extern__ int sbspace_factor = 8;
+__private_extern__ int32_t total_sbmb_cnt = 0;
+
+/* Control whether to throttle sockets eligible to be throttled */
+__private_extern__ u_int32_t net_io_policy_throttled = 0;
+static int sysctl_io_policy_throttled SYSCTL_HANDLER_ARGS;
 
 /*
  * Procedures to manipulate state flags of socket
@@ -197,6 +202,7 @@ soisconnected(struct socket *so)
 		wakeup((caddr_t)&so->so_timeo);
 		sorwakeup(so);
 		sowwakeup(so);
+		soevent(so, SO_FILT_HINT_LOCKED);
 	}
 }
 
@@ -205,6 +211,7 @@ soisdisconnecting(struct socket *so)
 {
 	so->so_state &= ~SS_ISCONNECTING;
 	so->so_state |= (SS_ISDISCONNECTING|SS_CANTRCVMORE|SS_CANTSENDMORE);
+	soevent(so, SO_FILT_HINT_LOCKED);
 	sflt_notify(so, sock_evt_disconnecting, NULL);
 	wakeup((caddr_t)&so->so_timeo);
 	sowwakeup(so);
@@ -216,6 +223,7 @@ soisdisconnected(struct socket *so)
 {
 	so->so_state &= ~(SS_ISCONNECTING|SS_ISCONNECTED|SS_ISDISCONNECTING);
 	so->so_state |= (SS_CANTRCVMORE|SS_CANTSENDMORE|SS_ISDISCONNECTED);
+	soevent(so, SO_FILT_HINT_LOCKED);
 	sflt_notify(so, sock_evt_disconnected, NULL);
 	wakeup((caddr_t)&so->so_timeo);
 	sowwakeup(so);
@@ -231,6 +239,7 @@ sodisconnectwakeup(struct socket *so)
 {
 	so->so_state &= ~(SS_ISCONNECTING|SS_ISCONNECTED|SS_ISDISCONNECTING);
 	so->so_state |= (SS_CANTRCVMORE|SS_CANTSENDMORE|SS_ISDISCONNECTED);
+	soevent(so, SO_FILT_HINT_LOCKED);
 	wakeup((caddr_t)&so->so_timeo);
 	sowwakeup(so);
 	sorwakeup(so);
@@ -297,8 +306,10 @@ sonewconn_internal(struct socket *head, int connstatus)
 	so->so_proto = head->so_proto;
 	so->so_timeo = head->so_timeo;
 	so->so_pgid  = head->so_pgid;
-	so->so_uid = head->so_uid;
-	so->so_gid = head->so_gid;
+	kauth_cred_ref(head->so_cred);
+	so->so_cred = head->so_cred;
+	so->last_pid = head->last_pid;
+	so->last_upid = head->last_upid;
 	/* inherit socket options stored in so_flags */
 	so->so_flags = head->so_flags & (SOF_NOSIGPIPE |
 					 SOF_NOADDRAVAIL |
@@ -306,7 +317,10 @@ sonewconn_internal(struct socket *head, int connstatus)
 					 SOF_NOTIFYCONFLICT | 
 					 SOF_BINDRANDOMPORT | 
 					 SOF_NPX_SETOPTSHUT |
-					 SOF_NODEFUNCT);
+					 SOF_NODEFUNCT |
+					 SOF_PRIVILEGED_TRAFFIC_CLASS|
+					 SOF_NOTSENT_LOWAT |
+					 SOF_USELRO);
 	so->so_usecount = 1;
 	so->next_lock_lr = 0;
 	so->next_unlock_lr = 0;
@@ -330,6 +344,8 @@ sonewconn_internal(struct socket *head, int connstatus)
 		sodealloc(so);
 		return ((struct socket *)0);
 	}
+	so->so_rcv.sb_flags |= (head->so_rcv.sb_flags & SB_USRSIZE);
+	so->so_snd.sb_flags |= (head->so_snd.sb_flags & SB_USRSIZE);
 
 	/*
 	 * Must be done with head unlocked to avoid deadlock
@@ -419,6 +435,7 @@ void
 socantsendmore(struct socket *so)
 {
 	so->so_state |= SS_CANTSENDMORE;
+	soevent(so, SO_FILT_HINT_LOCKED);
 	sflt_notify(so, sock_evt_cantsendmore, NULL);
 	sowwakeup(so);
 }
@@ -427,6 +444,7 @@ void
 socantrcvmore(struct socket *so)
 {
 	so->so_state |= SS_CANTRCVMORE;
+	soevent(so, SO_FILT_HINT_LOCKED);
 	sflt_notify(so, sock_evt_cantrecvmore, NULL);
 	sorwakeup(so);
 }
@@ -576,15 +594,15 @@ sowakeup(struct socket *so, struct sockbuf *sb)
 		so_upcall = so->so_upcall;
 		so_upcallarg = so->so_upcallarg;
 		/* Let close know that we're about to do an upcall */
-		so->so_flags |= SOF_UPCALLINUSE;
+		so->so_upcallusecount++;
 
 		socket_unlock(so, 0);
 		(*so_upcall)(so, so_upcallarg, M_DONTWAIT);
 		socket_lock(so, 0);
 
-		so->so_flags &= ~SOF_UPCALLINUSE;
+		so->so_upcallusecount--;
 		/* Tell close that it's safe to proceed */
-		if (so->so_flags & SOF_CLOSEWAIT)
+		if (so->so_flags & SOF_CLOSEWAIT && so->so_upcallusecount == 0)
 			wakeup((caddr_t)&so->so_upcall);
 	}
 }
@@ -631,8 +649,14 @@ soreserve(struct socket *so, u_int32_t sndcc, u_int32_t rcvcc)
 
 	if (sbreserve(&so->so_snd, sndcc) == 0)
 		goto bad;
+	else
+		so->so_snd.sb_idealsize = sndcc;
+
 	if (sbreserve(&so->so_rcv, rcvcc) == 0)
 		goto bad2;
+	else
+		so->so_rcv.sb_idealsize = rcvcc;
+
 	if (so->so_rcv.sb_lowat == 0)
 		so->so_rcv.sb_lowat = 1;
 	if (so->so_snd.sb_lowat == 0)
@@ -1445,6 +1469,7 @@ sbcreatecontrol(caddr_t p, int size, int type, int level)
 	if ((m = m_get(M_DONTWAIT, MT_CONTROL)) == NULL)
 		return ((struct mbuf *)NULL);
 	cp = mtod(m, struct cmsghdr *);
+	VERIFY(IS_P2ALIGNED(cp, sizeof (u_int32_t)));
 	/* XXX check size? */
 	(void) memcpy(CMSG_DATA(cp), p, size);
 	m->m_len = CMSG_SPACE(size);
@@ -1464,24 +1489,26 @@ sbcreatecontrol_mbuf(caddr_t p, int size, int type, int level, struct mbuf** mp)
 		*mp = sbcreatecontrol(p, size, type, level);
 		return mp;
 	}
-	
+
 	if (CMSG_SPACE((u_int)size) + (*mp)->m_len > MLEN){
 		mp = &(*mp)->m_next;
 		*mp = sbcreatecontrol(p, size, type, level);
 		return mp;
 	}
-	
+
 	m = *mp;
-	
-	cp = (struct cmsghdr *) (mtod(m, char *) + m->m_len);
+
+	cp = (struct cmsghdr *)(void *)(mtod(m, char *) + m->m_len);
+	/* CMSG_SPACE ensures 32-bit alignment */
+	VERIFY(IS_P2ALIGNED(cp, sizeof (u_int32_t)));
 	m->m_len += CMSG_SPACE(size);
-	
+
 	/* XXX check size? */
 	(void) memcpy(CMSG_DATA(cp), p, size);
 	cp->cmsg_len = CMSG_LEN(size);
 	cp->cmsg_level = level;
 	cp->cmsg_type = type;
-	
+
 	return mp;
 }
 
@@ -1699,9 +1726,10 @@ soreadable(struct socket *so)
 int
 sowriteable(struct socket *so)
 {
-	return ((sbspace(&(so)->so_snd) >= (so)->so_snd.sb_lowat &&
-	    ((so->so_state&SS_ISCONNECTED) ||
-	    (so->so_proto->pr_flags&PR_CONNREQUIRED) == 0)) ||
+	return ((!so_wait_for_if_feedback(so) &&
+	    sbspace(&(so)->so_snd) >= (so)->so_snd.sb_lowat &&
+	    ((so->so_state & SS_ISCONNECTED) ||
+	    (so->so_proto->pr_flags & PR_CONNREQUIRED) == 0)) ||
 	    (so->so_state & SS_CANTSENDMORE) ||
 	    so->so_error);
 }
@@ -1711,7 +1739,7 @@ sowriteable(struct socket *so)
 void
 sballoc(struct sockbuf *sb, struct mbuf *m)
 {
-	int cnt = 1;
+	u_int32_t cnt = 1;
 	sb->sb_cc += m->m_len; 
 	if (m->m_type != MT_DATA && m->m_type != MT_HEADER && 
 		m->m_type != MT_OOBDATA)
@@ -1720,9 +1748,10 @@ sballoc(struct sockbuf *sb, struct mbuf *m)
 	
 	if (m->m_flags & M_EXT) {
 		sb->sb_mbcnt += m->m_ext.ext_size; 
-		cnt += m->m_ext.ext_size / MSIZE ;
+		cnt += (m->m_ext.ext_size >> MSIZESHIFT) ;
 	}
-	OSAddAtomic(cnt, &total_mb_cnt);
+	OSAddAtomic(cnt, &total_sbmb_cnt);
+	VERIFY(total_sbmb_cnt > 0);
 }
 
 /* adjust counters in sb reflecting freeing of m */
@@ -1730,6 +1759,7 @@ void
 sbfree(struct sockbuf *sb, struct mbuf *m)
 {
 	int cnt = -1;
+
 	sb->sb_cc -= m->m_len;
 	if (m->m_type != MT_DATA && m->m_type != MT_HEADER &&     
 		m->m_type != MT_OOBDATA)
@@ -1737,9 +1767,10 @@ sbfree(struct sockbuf *sb, struct mbuf *m)
 	sb->sb_mbcnt -= MSIZE; 
 	if (m->m_flags & M_EXT) {
 		sb->sb_mbcnt -= m->m_ext.ext_size; 
-		cnt -= m->m_ext.ext_size / MSIZE ;
+		cnt -= (m->m_ext.ext_size >> MSIZESHIFT) ;
 	}
-	OSAddAtomic(cnt, &total_mb_cnt);
+	OSAddAtomic(cnt, &total_sbmb_cnt);
+	VERIFY(total_sbmb_cnt >= 0);
 }
 
 /*
@@ -1818,6 +1849,14 @@ sowwakeup(struct socket *so)
 	if (sb_notify(&so->so_snd))
 		sowakeup(so, &so->so_snd);
 }
+
+void
+soevent(struct socket *so, long hint)
+{
+	if (so->so_flags & SOF_KNOTE)
+		KNOTE(&so->so_klist, hint);
+}
+
 #endif /* __APPLE__ */
 
 /*
@@ -1847,12 +1886,12 @@ void
 sotoxsocket(struct socket *so, struct xsocket *xso)
 {
 	xso->xso_len = sizeof (*xso);
-	xso->xso_so = (_XSOCKET_PTR(struct socket *))(uintptr_t)so;
+	xso->xso_so = (_XSOCKET_PTR(struct socket *))VM_KERNEL_ADDRPERM(so);
 	xso->so_type = so->so_type;
-	xso->so_options = so->so_options;
+	xso->so_options = (short)(so->so_options & 0xffff);
 	xso->so_linger = so->so_linger;
 	xso->so_state = so->so_state;
-	xso->so_pcb = (_XSOCKET_PTR(caddr_t))(uintptr_t)so->so_pcb;
+	xso->so_pcb = (_XSOCKET_PTR(caddr_t))VM_KERNEL_ADDRPERM(so->so_pcb);
 	if (so->so_proto) {
 		xso->xso_protocol = so->so_proto->pr_protocol;
 		xso->xso_family = so->so_proto->pr_domain->dom_family;
@@ -1868,7 +1907,7 @@ sotoxsocket(struct socket *so, struct xsocket *xso)
 	xso->so_oobmark = so->so_oobmark;
 	sbtoxsockbuf(&so->so_snd, &xso->so_snd);
 	sbtoxsockbuf(&so->so_rcv, &xso->so_rcv);
-	xso->so_uid = so->so_uid;
+	xso->so_uid = kauth_cred_getuid(so->so_cred);
 }
 
 
@@ -1878,12 +1917,12 @@ void
 sotoxsocket64(struct socket *so, struct xsocket64 *xso)
 {
         xso->xso_len = sizeof (*xso);
-        xso->xso_so = (u_int64_t)(uintptr_t)so;
+        xso->xso_so = (u_int64_t)VM_KERNEL_ADDRPERM(so);
         xso->so_type = so->so_type;
-        xso->so_options = so->so_options;
+        xso->so_options = (short)(so->so_options & 0xffff);
         xso->so_linger = so->so_linger;
         xso->so_state = so->so_state;
-        xso->so_pcb = (u_int64_t)(uintptr_t)so->so_pcb;
+        xso->so_pcb = (u_int64_t)VM_KERNEL_ADDRPERM(so->so_pcb);
         if (so->so_proto) {
                 xso->xso_protocol = so->so_proto->pr_protocol;
                 xso->xso_family = so->so_proto->pr_domain->dom_family;
@@ -1899,7 +1938,7 @@ sotoxsocket64(struct socket *so, struct xsocket64 *xso)
         xso->so_oobmark = so->so_oobmark;
         sbtoxsockbuf(&so->so_snd, &xso->so_snd);
         sbtoxsockbuf(&so->so_rcv, &xso->so_rcv);
-        xso->so_uid = so->so_uid;
+        xso->so_uid = kauth_cred_getuid(so->so_cred);
 }
 
 #endif /* !CONFIG_EMBEDDED */
@@ -1925,12 +1964,29 @@ sbtoxsockbuf(struct sockbuf *sb, struct xsockbuf *xsb)
 		xsb->sb_timeo = 1;
 }
 
+/*
+ * Based on the policy set by an all knowing decison maker, throttle sockets
+ * that either have been marked as belonging to "background" process.
+ */
 int
-soisbackground(struct socket *so)
+soisthrottled(struct socket *so)
 {
-	return (so->so_traffic_mgt_flags & TRAFFIC_MGT_SO_BACKGROUND);
+	/*
+	 * On non-embedded, we rely on implicit throttling by the application,
+	 * as we're missing the system-wide "decision maker".
+	 */
+	return (
+#if CONFIG_EMBEDDED
+	    net_io_policy_throttled &&
+#endif /* CONFIG_EMBEDDED */
+	    (so->so_traffic_mgt_flags & TRAFFIC_MGT_SO_BACKGROUND));
 }
 
+int
+soisprivilegedtraffic(struct socket *so)
+{
+	return (so->so_flags & SOF_PRIVILEGED_TRAFFIC_CLASS);
+}
 
 /*
  * Here is the definition of some of the basic objects in the kern.ipc
@@ -1959,6 +2015,27 @@ sysctl_sb_max(__unused struct sysctl_oid *oidp, __unused void *arg1,
 	return error;
 }
 
+static int
+sysctl_io_policy_throttled SYSCTL_HANDLER_ARGS
+{
+#pragma unused(arg1, arg2)
+	int i, err;
+
+	i = net_io_policy_throttled;
+
+	err = sysctl_handle_int(oidp, &i, 0, req);
+	if (err != 0 || req->newptr == USER_ADDR_NULL)
+		return (err);
+
+	if (i != net_io_policy_throttled)
+		SOTHROTTLELOG(("throttle: network IO policy throttling is "
+		    "now %s\n", i ? "ON" : "OFF"));
+
+	net_io_policy_throttled = i;
+
+	return (err);
+}
+
 SYSCTL_PROC(_kern_ipc, KIPC_MAXSOCKBUF, maxsockbuf, CTLTYPE_INT | CTLFLAG_RW | CTLFLAG_LOCKED,
     &sb_max, 0, &sysctl_sb_max, "IU", "Maximum socket buffer size");
 
@@ -1966,8 +2043,6 @@ SYSCTL_INT(_kern_ipc, OID_AUTO, maxsockets, CTLFLAG_RD | CTLFLAG_LOCKED,
     &maxsockets, 0, "Maximum number of sockets avaliable");
 SYSCTL_INT(_kern_ipc, KIPC_SOCKBUF_WASTE, sockbuf_waste_factor, CTLFLAG_RW | CTLFLAG_LOCKED,
     &sb_efficiency, 0, "");
-SYSCTL_INT(_kern_ipc, OID_AUTO, sbspace_factor, CTLFLAG_RW | CTLFLAG_LOCKED,
-    &sbspace_factor, 0, "Ratio of mbuf/cluster use for socket layers");
 SYSCTL_INT(_kern_ipc, KIPC_NMBCLUSTERS, nmbclusters, CTLFLAG_RD | CTLFLAG_LOCKED,
     &nmbclusters, 0, "");
 SYSCTL_INT(_kern_ipc, OID_AUTO, njcl, CTLFLAG_RD | CTLFLAG_LOCKED, &njcl, 0, "");
@@ -1976,3 +2051,9 @@ SYSCTL_INT(_kern_ipc, KIPC_SOQLIMITCOMPAT, soqlimitcompat, CTLFLAG_RW | CTLFLAG_
     &soqlimitcompat, 1, "Enable socket queue limit compatibility");
 SYSCTL_INT(_kern_ipc, OID_AUTO, soqlencomp, CTLFLAG_RW | CTLFLAG_LOCKED,
     &soqlencomp, 0, "Listen backlog represents only complete queue");
+
+SYSCTL_NODE(_kern_ipc, OID_AUTO, io_policy, CTLFLAG_RW, 0, "network IO policy");
+
+SYSCTL_PROC(_kern_ipc_io_policy, OID_AUTO, throttled,
+    CTLTYPE_INT | CTLFLAG_RW | CTLFLAG_LOCKED, &net_io_policy_throttled, 0,
+    sysctl_io_policy_throttled, "I", "");

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2006-2010 Apple Inc. All rights reserved.
+ * Copyright (c) 2006-2011 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -75,7 +75,7 @@
 	(sizeof (void *) + MCACHE_SIZE(ncpu) + CPU_CACHE_SIZE)
 
 #define	MCACHE_CPU(c) \
-	(mcache_cpu_t *)((char *)(c) + MCACHE_SIZE(cpu_number()))
+	(mcache_cpu_t *)((void *)((char *)(c) + MCACHE_SIZE(cpu_number())))
 
 /*
  * MCACHE_LIST_LOCK() and MCACHE_LIST_UNLOCK() are macros used
@@ -1416,7 +1416,7 @@ mcache_buffer_log(mcache_audit_t *mca, void *addr, mcache_t *cp)
 __private_extern__ void
 mcache_set_pattern(u_int64_t pattern, void *buf_arg, size_t size)
 {
-	u_int64_t *buf_end = (u_int64_t *)((char *)buf_arg + size);
+	u_int64_t *buf_end = (u_int64_t *)((void *)((char *)buf_arg + size));
 	u_int64_t *buf = (u_int64_t *)buf_arg;
 
 	VERIFY(IS_P2ALIGNED(buf_arg, sizeof (u_int64_t)));
@@ -1429,7 +1429,7 @@ mcache_set_pattern(u_int64_t pattern, void *buf_arg, size_t size)
 __private_extern__ void *
 mcache_verify_pattern(u_int64_t pattern, void *buf_arg, size_t size)
 {
-	u_int64_t *buf_end = (u_int64_t *)((char *)buf_arg + size);
+	u_int64_t *buf_end = (u_int64_t *)((void *)((char *)buf_arg + size));
 	u_int64_t *buf;
 
 	VERIFY(IS_P2ALIGNED(buf_arg, sizeof (u_int64_t)));
@@ -1446,7 +1446,7 @@ __private_extern__ void *
 mcache_verify_set_pattern(u_int64_t old, u_int64_t new, void *buf_arg,
     size_t size)
 {
-	u_int64_t *buf_end = (u_int64_t *)((char *)buf_arg + size);
+	u_int64_t *buf_end = (u_int64_t *)((void *)((char *)buf_arg + size));
 	u_int64_t *buf;
 
 	VERIFY(IS_P2ALIGNED(buf_arg, sizeof (u_int64_t)));

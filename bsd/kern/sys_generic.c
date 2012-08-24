@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2007 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2010 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -93,6 +93,7 @@
 #include <sys/poll.h>
 #include <sys/event.h>
 #include <sys/eventvar.h>
+#include <sys/proc.h>
 
 #include <mach/mach_types.h>
 #include <kern/kern_types.h>
@@ -100,6 +101,8 @@
 #include <kern/kalloc.h>
 #include <kern/thread.h>
 #include <kern/clock.h>
+#include <kern/ledger.h>
+#include <kern/task.h>
 
 #include <sys/mbuf.h>
 #include <sys/socket.h>
@@ -1567,6 +1570,7 @@ poll_callback(__unused struct kqueue *kq, struct kevent64_s *kevp, void *data)
 {
 	struct poll_continue_args *cont = (struct poll_continue_args *)data;
 	struct pollfd *fds = CAST_DOWN(struct pollfd *, kevp->udata);
+	short prev_revents = fds->revents;
 	short mask;
 
 	/* convert the results back into revents */
@@ -1606,7 +1610,7 @@ poll_callback(__unused struct kqueue *kq, struct kevent64_s *kevp, void *data)
 		break;
 	}
 
-	if (fds->revents)
+	if (fds->revents != 0 && prev_revents == 0)
 		cont->pca_rfds++;
 
 	return 0;
@@ -2044,14 +2048,14 @@ postpipeevent(struct pipe *pipep, int event)
 			  evq->ee_req.er_rcnt = pipep->pipe_buffer.cnt;
 		  }
 		  if ((evq->ee_eventmask & EV_WR) && 
-		      (pipep->pipe_buffer.size - pipep->pipe_buffer.cnt) >= PIPE_BUF) {
+		      (MAX(pipep->pipe_buffer.size,PIPE_SIZE) - pipep->pipe_buffer.cnt) >= PIPE_BUF) {
 
 		          if (pipep->pipe_state & PIPE_EOF) {
 			          mask |= EV_WR|EV_RESET;
 				  break;
 			  }
 			  mask |= EV_WR;
-			  evq->ee_req.er_wcnt = pipep->pipe_buffer.size - pipep->pipe_buffer.cnt;
+			  evq->ee_req.er_wcnt = MAX(pipep->pipe_buffer.size, PIPE_SIZE) - pipep->pipe_buffer.cnt;
 		  }
 		  break;
 
@@ -2818,4 +2822,112 @@ gethostuuid(struct proc *p, struct gethostuuid_args *uap, __unused int32_t *retv
 	}
 
 	return (error);
+}
+
+/*
+ * ledger
+ *
+ * Description:	Omnibus system call for ledger operations
+ */
+int
+ledger(struct proc *p, struct ledger_args *args, __unused int32_t *retval)
+{
+	int rval, pid, len, error;
+#ifdef LEDGER_DEBUG
+	struct ledger_limit_args lla;
+#endif
+	task_t task;
+	proc_t proc;
+
+	/* Finish copying in the necessary args before taking the proc lock */
+	error = 0;
+	len = 0;
+	if (args->cmd == LEDGER_ENTRY_INFO)
+		error = copyin(args->arg3, (char *)&len, sizeof (len));
+	else if (args->cmd == LEDGER_TEMPLATE_INFO)
+		error = copyin(args->arg2, (char *)&len, sizeof (len));
+#ifdef LEDGER_DEBUG
+	else if (args->cmd == LEDGER_LIMIT)
+		error = copyin(args->arg2, (char *)&lla, sizeof (lla));
+#endif
+	if (error)
+		return (error);
+	if (len < 0)
+		return (EINVAL);
+
+	rval = 0;
+	if (args->cmd != LEDGER_TEMPLATE_INFO) {
+		pid = args->arg1;
+		proc = proc_find(pid);
+		if (proc == NULL)
+			return (ESRCH);
+
+#if CONFIG_MACF
+		error = mac_proc_check_ledger(p, proc, args->cmd);
+		if (error) {
+			proc_rele(proc);
+			return (error);
+		}
+#endif
+
+		task = proc->task;
+	}
+		
+	switch (args->cmd) {
+#ifdef LEDGER_DEBUG
+		case LEDGER_LIMIT: {
+			if (!is_suser())
+				rval = EPERM;
+			rval = ledger_limit(task, &lla);
+			proc_rele(proc);
+			break;
+		}
+#endif
+		case LEDGER_INFO: {
+			struct ledger_info info;
+
+			rval = ledger_info(task, &info);
+			proc_rele(proc);
+			if (rval == 0)
+				rval = copyout(&info, args->arg2,
+				    sizeof (info));
+			break;
+		}
+
+		case LEDGER_ENTRY_INFO: {
+			void *buf;
+			int sz;
+
+			rval = ledger_entry_info(task, &buf, &len);
+			proc_rele(proc);
+			if ((rval == 0) && (len > 0)) {
+				sz = len * sizeof (struct ledger_entry_info);
+				rval = copyout(buf, args->arg2, sz);
+				kfree(buf, sz);
+			}
+			if (rval == 0)
+				rval = copyout(&len, args->arg3, sizeof (len));
+			break;
+		}
+
+		case LEDGER_TEMPLATE_INFO: {
+			void *buf;
+			int sz;
+
+			rval = ledger_template_info(&buf, &len);
+			if ((rval == 0) && (len > 0)) {
+				sz = len * sizeof (struct ledger_template_info);
+				rval = copyout(buf, args->arg1, sz);
+				kfree(buf, sz);
+			}
+			if (rval == 0)
+				rval = copyout(&len, args->arg2, sizeof (len));
+			break;
+		}
+
+		default:
+			rval = EINVAL;
+	}
+
+	return (rval);
 }

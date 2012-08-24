@@ -55,8 +55,6 @@
  */
 
 #include <mach_assert.h>
-#include <mach_kdb.h>
-#include <mach_kgdb.h>
 #include <mach_kdp.h>
 
 #include <kern/cpu_number.h>
@@ -122,6 +120,9 @@ unsigned int debug_buf_size = sizeof(debug_buf);
 
 static char model_name[64];
 /* uuid_string_t */ char kernel_uuid[37]; 
+
+static spl_t panic_prologue(const char *str);
+static void panic_epilogue(spl_t s);
 
 struct pasc {
   unsigned a: 7;
@@ -227,13 +228,10 @@ void _consume_panic_args(int a __unused, ...)
     panic("panic");
 }
 
-void
-panic(const char *str, ...)
+static spl_t
+panic_prologue(const char *str)
 {
-	va_list	listp;
 	spl_t	s;
-	thread_t thread;
-	wait_queue_t wq;
 
 	if (kdebug_enable) {
 		ml_set_interrupts_enabled(TRUE);
@@ -255,21 +253,14 @@ panic(const char *str, ...)
 
 	panic_safe();
 
-	thread = current_thread();		/* Get failing thread */
-	wq = thread->wait_queue;		/* Save the old value */
-	thread->wait_queue = NULL;		/* Clear the wait so we do not get double panics when we try locks */
-
 	if( logPanicDataToScreen )
 		disable_debug_output = FALSE;
 		
 	debug_mode = TRUE;
 
-	/* panic_caller is initialized to 0.  If set, don't change it */
-	if ( ! panic_caller )
-		panic_caller = (unsigned long)(char *)__builtin_return_address(0);
-	
 restart:
 	PANIC_LOCK();
+
 	if (panicstr) {
 		if (cpu_number() != paniccpu) {
 			PANIC_UNLOCK();
@@ -294,6 +285,42 @@ restart:
 	panicwait = 1;
 
 	PANIC_UNLOCK();
+	return(s);
+}
+
+
+static void
+panic_epilogue(spl_t	s)
+{
+	/*
+	 * Release panicstr so that we can handle normally other panics.
+	 */
+	PANIC_LOCK();
+	panicstr = (char *)0;
+	PANIC_UNLOCK();
+
+	if (return_on_panic) {
+		panic_normal();
+		enable_preemption();
+		splx(s);
+		return;
+	}
+	kdb_printf("panic: We are hanging here...\n");
+	panic_stop();
+	/* NOTREACHED */
+}
+
+void
+panic(const char *str, ...)
+{
+	va_list	listp;
+	spl_t	s;
+
+	/* panic_caller is initialized to 0.  If set, don't change it */
+	if ( ! panic_caller )
+		panic_caller = (unsigned long)(char *)__builtin_return_address(0);
+	
+	s = panic_prologue(str);
 	kdb_printf("panic(cpu %d caller 0x%lx): ", (unsigned) paniccpu, panic_caller);
 	if (str) {
 		va_start(listp, str);
@@ -307,24 +334,34 @@ restart:
 	 */
 	panicwait = 0;
 	Debugger("panic");
-	/*
-	 * Release panicstr so that we can handle normally other panics.
-	 */
-	PANIC_LOCK();
-	panicstr = (char *)0;
-	PANIC_UNLOCK();
-	thread->wait_queue = wq; 	/* Restore the wait queue */
+	panic_epilogue(s);
+}
 
-	if (return_on_panic) {
-		panic_normal();
-		enable_preemption();
-		splx(s);
-		return;
+void
+panic_context(unsigned int reason, void *ctx, const char *str, ...)
+{
+	va_list	listp;
+	spl_t	s;
+
+	/* panic_caller is initialized to 0.  If set, don't change it */
+	if ( ! panic_caller )
+		panic_caller = (unsigned long)(char *)__builtin_return_address(0);
+	
+	s = panic_prologue(str);
+	kdb_printf("panic(cpu %d caller 0x%lx): ", (unsigned) paniccpu, panic_caller);
+	if (str) {
+		va_start(listp, str);
+		_doprnt(str, &listp, consdebug_putc, 0);
+		va_end(listp);
 	}
+	kdb_printf("\n");
 
-	kdb_printf("panic: We are hanging here...\n");
-	panic_stop();
-	/* NOTREACHED */
+	/*
+	 * Release panicwait indicator so that other cpus may call Debugger().
+	 */
+	panicwait = 0;
+	DebuggerWithContext(reason, ctx, "panic");
+	panic_epilogue(s);
 }
 
 void
@@ -446,6 +483,15 @@ static void panic_display_kernel_uuid(void) {
 		kdb_printf("Kernel UUID: %s\n", tmp_kernel_uuid);
 }
 
+static void panic_display_kernel_aslr(void) {
+#if	defined(__x86_64__)
+	if (vm_kernel_slide) {
+		kdb_printf("Kernel slide:     0x%016lx\n", vm_kernel_slide);
+		kdb_printf("Kernel text base: %p\n", (void *) vm_kernel_stext);
+	}
+#endif
+}
+
 static void panic_display_uptime(void) {
 	uint64_t	uptime;
 	absolutetime_to_nanoseconds(mach_absolute_time(), &uptime);
@@ -469,6 +515,7 @@ __private_extern__ void panic_display_system_configuration(void) {
 		    (osversion[0] != 0) ? osversion : "Not yet set");
 		kdb_printf("\nKernel version:\n%s\n",version);
 		panic_display_kernel_uuid();
+		panic_display_kernel_aslr();
 		panic_display_pal_info();
 		panic_display_model_name();
 		panic_display_uptime();

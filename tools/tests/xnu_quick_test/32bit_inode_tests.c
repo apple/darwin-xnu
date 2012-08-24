@@ -42,7 +42,7 @@ int getdirentries_test( void * the_argp )
 	char *				my_pathp = NULL;
 	char *				my_bufp = NULL;
 	char *				my_file_namep;
-	unsigned long		my_base;
+	long				my_base;
 	unsigned long		my_count;
 	unsigned long		my_new_state;
 	fsobj_id_t			my_obj_id;

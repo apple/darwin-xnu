@@ -49,7 +49,7 @@ typedef struct kxld_relocator KXLDRelocator;
 typedef struct kxld_reloc KXLDReloc;
 
 typedef boolean_t (*RelocHasPair)(u_int r_type);
-typedef boolean_t (*RelocIsPair)(u_int r_type, u_int prev_r_type);
+typedef u_int (*RelocGetPairType)(u_int prev_r_type);
 typedef boolean_t (*RelocHasGot)(u_int r_type);
 typedef kern_return_t(*ProcessReloc)(const KXLDRelocator *relocator, 
     u_char *instruction, u_int length, u_int pcrel, kxld_addr_t base_pc, 
@@ -58,7 +58,7 @@ typedef kern_return_t(*ProcessReloc)(const KXLDRelocator *relocator,
 
 struct kxld_relocator {
     RelocHasPair reloc_has_pair;
-    RelocIsPair reloc_is_pair;
+    RelocGetPairType reloc_get_pair_type;
     RelocHasGot reloc_has_got;
     ProcessReloc process_reloc;
     const struct kxld_symtab *symtab;
@@ -69,10 +69,12 @@ struct kxld_relocator {
     u_int function_align; /* Power of two alignment of functions */
     boolean_t is_32_bit;
     boolean_t swap;
+    boolean_t may_scatter;
 };
 
 struct kxld_reloc {
     u_int address;
+    u_int pair_address;
     u_int target;
     u_int pair_target;
     u_int target_type:3;
@@ -104,7 +106,7 @@ void kxld_relocator_clear(KXLDRelocator *relocator)
 boolean_t kxld_relocator_has_pair(const KXLDRelocator *relocator, u_int r_type)
     __attribute__((pure, nonnull,visibility("hidden")));
 
-boolean_t kxld_relocator_is_pair(const KXLDRelocator *relocator, u_int r_type, 
+u_int kxld_relocator_get_pair_type(const KXLDRelocator *relocator,
     u_int last_r_type)
     __attribute__((pure, nonnull,visibility("hidden")));
 
@@ -126,6 +128,21 @@ kern_return_t kxld_reloc_get_reloc_index_by_offset(const struct kxld_array *relo
 KXLDReloc * kxld_reloc_get_reloc_by_offset(const struct kxld_array *relocs, 
     kxld_addr_t offset)
     __attribute__((pure, nonnull, visibility("hidden")));
+
+#if KXLD_PIC_KEXTS
+u_long kxld_reloc_get_macho_header_size(void)
+    __attribute__((pure, visibility("hidden")));
+
+u_long kxld_reloc_get_macho_data_size(const struct kxld_array *locrelocs,
+    const struct kxld_array *extrelocs)
+    __attribute__((pure, nonnull, visibility("hidden")));
+
+kern_return_t kxld_reloc_export_macho(const KXLDRelocator *relocator,
+    const struct kxld_array *locrelocs, const struct kxld_array *extrelocs,
+    u_char *buf,  u_long *header_offset, u_long header_size,
+    u_long *data_offset, u_long size)
+    __attribute__((nonnull, visibility("hidden")));
+#endif /* KXLD_PIC_KEXTS */
 
 /*******************************************************************************
 * Modifiers

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008-2010 Apple Inc. All rights reserved.
+ * Copyright (c) 2008-2011 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -58,10 +58,6 @@
 
 #if CONFIG_COUNTERS
 #include <pmc/pmc.h>
-#endif
-
-#if MACH_KDB
-#include <machine/db_machdep.h>
 #endif
 
 #include <sys/kdebug.h>
@@ -132,13 +128,19 @@ legacy_init(void)
 		panic("legacy_init: vm_map_find_entry FAILED (err=%d)", result);
 	}
 	vm_map_unlock(kernel_map);
-/* Map in the local APIC non-cacheable, as recommended by Intel
- * in section 8.4.1 of the "System Programming Guide".
- */
+
+	/*
+	 * Map in the local APIC non-cacheable, as recommended by Intel
+	 * in section 8.4.1 of the "System Programming Guide".
+	 * In fact, this is redundant because EFI will have assigned an
+	 * MTRR physical range containing the local APIC's MMIO space as
+	 * UC and this will override the default PAT setting.
+	 */
 	pmap_enter(pmap_kernel(),
 			lapic_vbase,
 			(ppnum_t) i386_btop(lapic_pbase),
 			VM_PROT_READ|VM_PROT_WRITE,
+			VM_PROT_NONE,
 			VM_WIMG_IO,
 			TRUE);
 }
@@ -258,7 +260,6 @@ static const char *TMR_str[] = {
 	"Periodic",
 	"TSC-Deadline",
 	"Illegal"
-	"Illegal"
 };
 
 void
@@ -358,26 +359,6 @@ lapic_dump(void)
 		kprintf("%08x",LAPIC_READ_OFFSET(ISR_BASE, i));
 	kprintf("\n");
 }
-
-#if MACH_KDB
-/*
- *	Displays apic junk
- *
- *	da
- */
-void 
-db_apic(__unused db_expr_t addr,
-	__unused int have_addr,
-	__unused db_expr_t count,
-	__unused char *modif)
-{
-
-	lapic_dump();
-
-	return;
-}
-
-#endif
 
 boolean_t
 lapic_probe(void)
@@ -550,7 +531,6 @@ lapic_config_timer(
 /*
  * Configure TSC-deadline timer mode. The lapic interrupt is always unmasked.
  */
-__private_extern__
 void
 lapic_config_tsc_deadline_timer(void)
 {
@@ -582,7 +562,6 @@ lapic_set_timer_fast(
 	LAPIC_WRITE(TIMER_INITIAL_COUNT, initial_count);
 }
 
-__private_extern__
 void
 lapic_set_tsc_deadline_timer(uint64_t deadline)
 {
@@ -590,7 +569,6 @@ lapic_set_tsc_deadline_timer(uint64_t deadline)
 	wrmsr64(MSR_IA32_TSC_DEADLINE, deadline);
 }
 
-__private_extern__
 uint64_t
 lapic_get_tsc_deadline_timer(void)
 {
@@ -917,3 +895,4 @@ lapic_disable_timer(void)
 		lvt_timer = LAPIC_READ(LVT_TIMER);
 	}
 }
+

@@ -182,7 +182,7 @@ IOReturn IOCommandGate::runAction(Action inAction,
 	
 	if (trace)
 		IOTimeStampStartConstant(IODBG_CMDQ(IOCMDQ_ACTION),
-								 (uintptr_t) inAction, (uintptr_t) owner);
+					 VM_KERNEL_UNSLIDE(inAction), (uintptr_t) owner);
 	
     IOStatisticsActionCall();
 	
@@ -191,7 +191,7 @@ IOReturn IOCommandGate::runAction(Action inAction,
 	
 	if (trace)
 		IOTimeStampEndConstant(IODBG_CMDQ(IOCMDQ_ACTION),
-							   (uintptr_t) inAction, (uintptr_t) owner);
+				       VM_KERNEL_UNSLIDE(inAction), (uintptr_t) owner);
     
     openGate();
 	
@@ -220,7 +220,7 @@ IOReturn IOCommandGate::attemptAction(Action inAction,
 		
         if (trace)
             IOTimeStampStartConstant(IODBG_CMDQ(IOCMDQ_ACTION),
-									 (uintptr_t) inAction, (uintptr_t) owner);
+				     VM_KERNEL_UNSLIDE(inAction), (uintptr_t) owner);
         
         IOStatisticsActionCall();
         
@@ -228,7 +228,7 @@ IOReturn IOCommandGate::attemptAction(Action inAction,
 		
         if (trace)
             IOTimeStampEndConstant(IODBG_CMDQ(IOCMDQ_ACTION),
-								   (uintptr_t) inAction, (uintptr_t) owner);
+				   VM_KERNEL_UNSLIDE(inAction), (uintptr_t) owner);
     }
 
     openGate();

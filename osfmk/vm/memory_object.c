@@ -176,57 +176,12 @@ memory_object_lock_page(
             m, should_return, should_flush, prot, 0);
 
 
-	if (m->busy || m->cleaning) {
-		if (m->list_req_pending &&
-		    should_return == MEMORY_OBJECT_RETURN_NONE &&
-		    should_flush == TRUE) {
+	if (m->busy || m->cleaning)
+		return (MEMORY_OBJECT_LOCK_RESULT_MUST_BLOCK);
 
-			if (m->absent) {
-				/*
-				 * this is the list_req_pending | absent | busy case
-				 * which originates from vm_fault_page. 
-				 * Combine that with should_flush == TRUE and we
-				 * have a case where we need to toss the page from
-				 * the object.
-				 */
-				if (!VM_PAGE_WIRED(m)) {
-					return (MEMORY_OBJECT_LOCK_RESULT_MUST_FREE);
-				} else {
-					return (MEMORY_OBJECT_LOCK_RESULT_DONE);
-				}
-			}
-			if  (m->pageout || m->cleaning) {
-				/*
-				 * if pageout is set, page was earmarked by vm_pageout_scan
-				 * to be cleaned and stolen... if cleaning is set, we're
-				 * pre-cleaning pages for a hibernate...
-				 * in either case, we're going
-				 * to take it back since we are being asked to
-				 * flush the page w/o cleaning it (i.e. we don't
-				 * care that it's dirty, we want it gone from
-				 * the cache) and we don't want to stall
-				 * waiting for it to be cleaned for 2 reasons...
-				 * 1 - no use paging it out since we're probably
-				 *     shrinking the file at this point or we no
-				 *     longer care about the data in the page
-				 * 2 - if we stall, we may casue a deadlock in
-				 *     the FS trying to acquire its locks
-				 *     on the VNOP_PAGEOUT path presuming that
-				 *     those locks are already held on the truncate
-				 *     path before calling through to this function
-				 *
-				 * so undo all of the state that vm_pageout_scan
-				 * hung on this page
-				 */
+	if (m->laundry)
+		vm_pageout_steal_laundry(m, FALSE);
 
-				vm_pageout_queue_steal(m, FALSE);
-				PAGE_WAKEUP_DONE(m);
-			} else {
-				panic("list_req_pending on page %p without absent/pageout/cleaning set\n", m);
-			}
-		} else
-			return (MEMORY_OBJECT_LOCK_RESULT_MUST_BLOCK);
-	}
 	/*
 	 *	Don't worry about pages for which the kernel
 	 *	does not have any data.
@@ -262,8 +217,9 @@ memory_object_lock_page(
 		 * for the page to go from the clean to the dirty state
 		 * after we've made our decision
 		 */
-		if (pmap_disconnect(m->phys_page) & VM_MEM_MODIFIED)
-			m->dirty = TRUE;
+		if (pmap_disconnect(m->phys_page) & VM_MEM_MODIFIED) {
+			SET_PAGE_DIRTY(m, FALSE);
+		}
 	} else {
 		/*
 		 * If we are decreasing permission, do it now;
@@ -651,12 +607,6 @@ vm_object_update_extent(
 				next_offset = offset + PAGE_SIZE_64;
 
 				/*
-				 * Clean
-				 */
-				m->list_req_pending = TRUE;
-				m->cleaning = TRUE;
-
-				/*
 				 * wired pages shouldn't be flushed and
 				 * since they aren't on any queue,
 				 * no need to remove them
@@ -667,10 +617,7 @@ vm_object_update_extent(
 						/*
 						 * add additional state for the flush
 						 */
-						m->busy = TRUE;
 						m->pageout = TRUE;
-
-						dwp->dw_mask |= DW_vm_page_wire;
 					}
 					/*
 					 * we use to remove the page from the queues at this
@@ -858,6 +805,7 @@ vm_object_update(
 		fault_info.io_sync = FALSE;
 		fault_info.cs_bypass = FALSE;
 		fault_info.mark_zf_absent = FALSE;
+		fault_info.batch_pmap_op = FALSE;
 
 		vm_object_paging_begin(copy_object);
 
@@ -1793,7 +1741,6 @@ host_default_memory_manager(
 
 		thread_wakeup((event_t) &memory_manager_default);
 
-#ifndef CONFIG_FREEZE
 		/*
 		 * Now that we have a default pager for anonymous memory,
 		 * reactivate all the throttled pages (i.e. dirty pages with
@@ -1803,7 +1750,6 @@ host_default_memory_manager(
 		{
 			vm_page_reactivate_all_throttled();
 		}
-#endif
 	}
  out:
 	lck_mtx_unlock(&memory_manager_default_lock);

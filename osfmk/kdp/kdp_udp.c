@@ -35,7 +35,6 @@
  * Kernel Debugging Protocol UDP implementation.
  */
 
-#include <mach_kdb.h>
 #include <mach/boolean.h>
 #include <mach/mach_types.h>
 #include <mach/exception_types.h>
@@ -302,7 +301,6 @@ inline static void kdp_receive_data(void *packet, unsigned int *len,
 }
 
 
-
 void kdp_register_link(kdp_link_t link, kdp_mode_t mode)
 {
         kdp_en_linkstatus = link;
@@ -322,12 +320,7 @@ kdp_register_send_receive(
 {
 	unsigned int	debug = 0;
 
-	debug_log_init();
-
-	kdp_timer_callout_init();
-
 	PE_parse_boot_argn("debug", &debug, sizeof (debug));
-	kdp_crashdump_feature_mask = htonl(kdp_crashdump_feature_mask);
 
 
 	if (!debug)
@@ -1144,6 +1137,7 @@ kdp_connection_wait(void)
         }
             
 	printf("\nWaiting for remote debugger connection.\n");
+	kprintf("\nWaiting for remote debugger connection.\n");
 
 
 	if (reattach_wait == 0) {
@@ -1153,9 +1147,6 @@ kdp_connection_wait(void)
 			printf("------------    ----\n");
 			printf("continue....    'c'\n");
 			printf("reboot......    'r'\n");
-#if MACH_KDB
-			printf("enter kdb...    'k'\n");
-#endif
 		}
 	} else
 		reattach_wait = 0;
@@ -1175,15 +1166,7 @@ kdp_connection_wait(void)
 					printf("Rebooting...\n");
 					kdp_machine_reboot();
 					break;
-#if MACH_KDB
-				case 'k':
-					printf("calling kdb...\n");
-					if (kdp_call_kdb())
-						return;
-					else
-						printf("not implemented...\n");
-#endif
-					default:
+				default:
 					break;
 		    		}
 			}
@@ -1218,6 +1201,7 @@ kdp_connection_wait(void)
 	if (current_debugger == KDP_CUR_DB)
 		active_debugger=1;
 	printf("Connected to remote debugger.\n");
+	kprintf("Connected to remote debugger.\n");
 }
 
 static void
@@ -1280,13 +1264,16 @@ kdp_raise_exception(
 )
 {
     int			index;
+    unsigned int	initial_not_in_kdp = not_in_kdp;
 
+    not_in_kdp = 0;
     /* Was a system trace requested ? */
     if (kdp_snapshot && (!panic_active()) && (panic_caller == 0)) {
 	    stack_snapshot_ret = kdp_stackshot(stack_snapshot_pid,
 	    stack_snapshot_buf, stack_snapshot_bufsize,
 	    stack_snapshot_flags, stack_snapshot_dispatch_offset, 
 		&stack_snapshot_bytes_traced);
+	    not_in_kdp = initial_not_in_kdp;
 	    return;
     }
 
@@ -1396,6 +1383,9 @@ kdp_raise_exception(
 exit_raise_exception:
     if (kdp_en_setmode)  
         (*kdp_en_setmode)(FALSE); /* link cleanup */
+
+    not_in_kdp = initial_not_in_kdp;
+
     enable_preemption();
 }
 
@@ -1419,13 +1409,13 @@ create_panic_header(unsigned int request, const char *corename,
 	struct ether_header	*eh;
 	struct corehdr		*coreh;
 	const char		*mode = "octet";
-	char			modelen  = strlen(mode);
+	char			modelen  = strlen(mode) + 1;
 
 	size_t			fmask_size = sizeof(KDP_FEATURE_MASK_STRING) + sizeof(kdp_crashdump_feature_mask);
 
 	pkt.off = sizeof (struct ether_header);
 	pkt.len = (unsigned int)(length + ((request == KDP_WRQ) ? modelen + fmask_size : 0) + 
-	    (corename ? strlen(corename): 0) + sizeof(struct corehdr));
+	(corename ? (strlen(corename) + 1 ): 0) + sizeof(struct corehdr));
 
 #if DO_ALIGN
 	bcopy((char *)&pkt.data[pkt.off], (char *)ui, sizeof(*ui));
@@ -1902,7 +1892,6 @@ kdp_panic_dump(void)
 	}
 
 	flag_panic_dump_in_progress = TRUE;
-	not_in_kdp = 0;
 
 	if (pkt.input)
 		kdp_panic("kdp_panic_dump: unexpected pending input packet");
@@ -2024,7 +2013,6 @@ abort_panic_transfer(void)
 {
 	flag_panic_dump_in_progress = FALSE;
 	flag_dont_abort_panic_dump  = FALSE;
-	not_in_kdp = 1;
 	panic_block = 0;
 }
 
@@ -2120,11 +2108,26 @@ kdp_init(void)
 		strlcat(kdp_kernelversion_string, kernel_uuid, sizeof(kdp_kernelversion_string));
 	}
 
+#if defined(__x86_64__) || defined(__arm__)
+	debug_log_init();
+
+	if (vm_kernel_slide) {
+		char	KASLR_stext[19];
+		strlcat(kdp_kernelversion_string, "; stext=", sizeof(kdp_kernelversion_string));
+		snprintf(KASLR_stext, sizeof(KASLR_stext), "%p", (void *) vm_kernel_stext);
+		strlcat(kdp_kernelversion_string, KASLR_stext, sizeof(kdp_kernelversion_string));
+	}
+#endif
+
 	if (debug_boot_arg & DB_REBOOT_POST_CORE)
 		kdp_flag |= REBOOT_POST_CORE;
 #if	defined(__x86_64__)	
 	kdp_machine_init();
 #endif
+
+	kdp_timer_callout_init();
+	kdp_crashdump_feature_mask = htonl(kdp_crashdump_feature_mask);
+
 #if CONFIG_SERIAL_KDP
 	char kdpname[80];
 	struct in_addr ipaddr;

@@ -151,6 +151,7 @@ vm_map_store_entry_unlink( vm_map_t map, vm_map_entry_t entry)
 	}
 	
 	_vm_map_store_entry_unlink(&VMEU_map->hdr, VMEU_entry);
+	vm_map_store_update( map, entry, VM_MAP_ENTRY_DELETE);
 	update_first_free_ll(VMEU_map, VMEU_first_free);
 #ifdef VM_MAP_STORE_USE_RB
 	update_first_free_rb(VMEU_map, VMEU_first_free);

@@ -114,28 +114,34 @@ lck_grp_attr_t   *pthread_lck_grp_attr;
 lck_grp_t    *pthread_lck_grp;
 lck_attr_t   *pthread_lck_attr;
 
-extern kern_return_t thread_getstatus(register thread_t act, int flavor,
-			thread_state_t tstate, mach_msg_type_number_t *count);
-extern kern_return_t thread_setstatus(thread_t thread, int flavor,
-			thread_state_t tstate, mach_msg_type_number_t count);
 extern void thread_set_cthreadself(thread_t thread, uint64_t pself, int isLP64);
 extern kern_return_t mach_port_deallocate(ipc_space_t, mach_port_name_t);
 extern kern_return_t semaphore_signal_internal_trap(mach_port_name_t);
 
 extern void workqueue_thread_yielded(void);
 
-static int workqueue_additem(struct workqueue *wq, int prio, user_addr_t item, int affinity);
-static boolean_t workqueue_run_nextitem(proc_t p, struct workqueue *wq, thread_t th,
-					user_addr_t oc_item, int oc_prio, int oc_affinity);
-static void wq_runitem(proc_t p, user_addr_t item, thread_t th, struct threadlist *tl,
+#if defined(__i386__) || defined(__x86_64__)
+extern boolean_t is_useraddr64_canonical(uint64_t addr64);
+#endif
+
+static boolean_t workqueue_run_nextreq(proc_t p, struct workqueue *wq, thread_t th, boolean_t force_oc,
+					boolean_t  overcommit, int oc_prio, int oc_affinity);
+
+static boolean_t workqueue_run_one(proc_t p, struct workqueue *wq, boolean_t overcommit, int priority);
+
+static void wq_runreq(proc_t p, boolean_t overcommit, uint32_t priority, thread_t th, struct threadlist *tl,
 		       int reuse_thread, int wake_thread, int return_directly);
+
+static int setup_wqthread(proc_t p, thread_t th, boolean_t overcommit, uint32_t priority, int reuse_thread, struct threadlist *tl);
+
 static void wq_unpark_continue(void);
 static void wq_unsuspend_continue(void);
-static int setup_wqthread(proc_t p, thread_t th, user_addr_t item, int reuse_thread, struct threadlist *tl);
+
 static boolean_t workqueue_addnewthread(struct workqueue *wq, boolean_t oc_thread);
 static void workqueue_removethread(struct threadlist *tl, int fromexit);
 static void workqueue_lock_spin(proc_t);
 static void workqueue_unlock(proc_t);
+
 int proc_settargetconc(pid_t pid, int queuenum, int32_t targetconc);
 int proc_setalltargetconc(pid_t pid, int32_t * targetconcp);
 
@@ -149,6 +155,12 @@ int proc_setalltargetconc(pid_t pid, int32_t * targetconcp);
 #define TRUNC_DOWN32(a,c)       ((((uint32_t)a)-(c)) & ((uint32_t)(-(c))))
 #define TRUNC_DOWN64(a,c)       ((((uint64_t)a)-(c)) & ((uint64_t)(-(c))))
 
+
+/* flag values for reuse field in the libc side _pthread_wqthread */
+#define	WQ_FLAG_THREAD_PRIOMASK		0x0000ffff
+#define	WQ_FLAG_THREAD_OVERCOMMIT	0x00010000	/* thread is with overcommit prio */
+#define	WQ_FLAG_THREAD_REUSE		0x00020000	/* thread is being reused */
+#define	WQ_FLAG_THREAD_NEWSPI		0x00040000	/* the call is with new SPIs */
 
 /*
  * Flags filed passed to bsdthread_create and back in pthread_start 
@@ -322,6 +334,13 @@ bsdthread_create(__unused struct proc *p, struct bsdthread_create_args  *uap, us
 		 */
 		ts64->rsp = (uint64_t)(th_stack - C_64_REDZONE_LEN);
 
+		/* Disallow setting non-canonical PC or stack */
+		if (!is_useraddr64_canonical(ts64->rsp) ||
+		    !is_useraddr64_canonical(ts64->rip)) {
+			error = EINVAL;
+			goto out;
+		}
+
 		thread_set_wq_state64(th, (thread_state_t)ts64);
 	}
 	}
@@ -332,8 +351,16 @@ bsdthread_create(__unused struct proc *p, struct bsdthread_create_args  *uap, us
 	if ((flags & PTHREAD_START_SETSCHED) != 0) {
 		thread_extended_policy_data_t    extinfo;
 		thread_precedence_policy_data_t   precedinfo;
+#if CONFIG_EMBEDDED
+		int ret = 0;
+#endif /* CONFIG_EMBEDDED */
 
 		importance = (flags & PTHREAD_START_IMPORTANCE_MASK);
+#if CONFIG_EMBEDDED
+		/* sets the saved importance for apple ios daemon if backgrounded. else returns 0 */
+		ret = proc_setthread_saved_importance(th, importance);
+		if (ret == 0) {
+#endif /* CONFIG_EMBEDDED */
 		policy = (flags >> PTHREAD_START_POLICY_BITSHIFT) & PTHREAD_START_POLICY_MASK;
 
 		if (policy == SCHED_OTHER)
@@ -345,6 +372,9 @@ bsdthread_create(__unused struct proc *p, struct bsdthread_create_args  *uap, us
 #define BASEPRI_DEFAULT 31
 		precedinfo.importance = (importance - BASEPRI_DEFAULT);
 		thread_policy_set(th, THREAD_PRECEDENCE_POLICY, (thread_policy_t)&precedinfo, THREAD_PRECEDENCE_POLICY_COUNT);
+#if CONFIG_EMBEDDED
+		}
+#endif /* CONFIG_EMBEDDED */
 	}
 
 	kret = thread_resume(th);
@@ -510,7 +540,7 @@ workqueue_interval_timer_start(struct workqueue *wq)
 
 	thread_call_enter_delayed(wq->wq_atimer_call, deadline);
 
-	KERNEL_DEBUG(0xefffd110, wq, wq->wq_itemcount, wq->wq_flags, wq->wq_timer_interval, 0);
+	KERNEL_DEBUG(0xefffd110, wq, wq->wq_reqcount, wq->wq_flags, wq->wq_timer_interval, 0);
 }
 
 
@@ -630,14 +660,14 @@ again:
 		 * new work within our acceptable time interval because
 		 * there were no idle threads left to schedule
 		 */
-		if (wq->wq_itemcount) {
+		if (wq->wq_reqcount) {
 			uint32_t	priority;
 			uint32_t	affinity_tag;
 			uint32_t	i;
 			uint64_t	curtime;
 
 			for (priority = 0; priority < WORKQUEUE_NUMPRIOS; priority++) {
-				if (wq->wq_list_bitmap & (1 << priority))
+				if (wq->wq_requests[priority])
 					break;
 			}
 			assert(priority < WORKQUEUE_NUMPRIOS);
@@ -675,23 +705,23 @@ again:
 					break;
 				}
 			}
-			if (wq->wq_itemcount) {
+			if (wq->wq_reqcount) {
 				/*
 				 * as long as we have threads to schedule, and we successfully
 				 * scheduled new work, keep trying
 				 */
 				while (wq->wq_thidlecount && !(wq->wq_flags & WQ_EXITING)) {
 					/*
-					 * workqueue_run_nextitem is responsible for
+					 * workqueue_run_nextreq is responsible for
 					 * dropping the workqueue lock in all cases
 					 */
-					retval = workqueue_run_nextitem(p, wq, THREAD_NULL, 0, 0, 0);
+					retval = workqueue_run_nextreq(p, wq, THREAD_NULL, FALSE, FALSE, 0, 0);
 					workqueue_lock_spin(p);
 
 					if (retval == FALSE)
 						break;
 				}
-				if ( !(wq->wq_flags & WQ_EXITING) && wq->wq_itemcount) {
+				if ( !(wq->wq_flags & WQ_EXITING) && wq->wq_reqcount) {
 
 					if (wq->wq_thidlecount == 0 && retval == TRUE && add_thread == TRUE)
 						goto again;
@@ -699,7 +729,7 @@ again:
 					if (wq->wq_thidlecount == 0 || busycount)
 						WQ_TIMER_NEEDED(wq, start_timer);
 
-					KERNEL_DEBUG(0xefffd108 | DBG_FUNC_NONE, wq, wq->wq_itemcount, wq->wq_thidlecount, busycount, 0);
+					KERNEL_DEBUG(0xefffd108 | DBG_FUNC_NONE, wq, wq->wq_reqcount, wq->wq_thidlecount, busycount, 0);
 				}
 			}
 		}
@@ -734,12 +764,12 @@ workqueue_thread_yielded(void)
 
 	p = current_proc();
 
-	if ((wq = p->p_wqptr) == NULL || wq->wq_itemcount == 0)
+	if ((wq = p->p_wqptr) == NULL || wq->wq_reqcount == 0)
 		return;
 	
 	workqueue_lock_spin(p);
 
-	if (wq->wq_itemcount) {
+	if (wq->wq_reqcount) {
 		uint64_t	curtime;
 		uint64_t	elapsed;
 		clock_sec_t	secs;
@@ -752,7 +782,7 @@ workqueue_thread_yielded(void)
 			workqueue_unlock(p);
 			return;
 		}
-		KERNEL_DEBUG(0xefffd138 | DBG_FUNC_START, wq, wq->wq_thread_yielded_count, wq->wq_itemcount, 0, 0);
+		KERNEL_DEBUG(0xefffd138 | DBG_FUNC_START, wq, wq->wq_thread_yielded_count, wq->wq_reqcount, 0, 0);
 
 		wq->wq_thread_yielded_count = 0;
 
@@ -768,11 +798,11 @@ workqueue_thread_yielded(void)
 				 * 'workqueue_addnewthread' drops the workqueue lock
 				 * when creating the new thread and then retakes it before
 				 * returning... this window allows other threads to process
-				 * work on the queue, so we need to recheck for available work
+				 * requests, so we need to recheck for available work
 				 * if none found, we just return...  the newly created thread
 				 * will eventually get used (if it hasn't already)...
 				 */
-				if (wq->wq_itemcount == 0) {
+				if (wq->wq_reqcount == 0) {
 					workqueue_unlock(p);
 					return;
 				}
@@ -780,9 +810,8 @@ workqueue_thread_yielded(void)
 			if (wq->wq_thidlecount) {
 				uint32_t	priority;
 				uint32_t	affinity = -1;
-				user_addr_t	item;
-				struct workitem *witem = NULL;
-				struct workitemlist *wl = NULL;
+				boolean_t	overcommit = FALSE;
+				boolean_t	force_oc = FALSE;
 				struct uthread    *uth;
 				struct threadlist *tl;
 
@@ -791,38 +820,31 @@ workqueue_thread_yielded(void)
 					affinity = tl->th_affinity_tag;
 
 				for (priority = 0; priority < WORKQUEUE_NUMPRIOS; priority++) {
-					if (wq->wq_list_bitmap & (1 << priority)) {
-						wl = (struct workitemlist *)&wq->wq_list[priority];
+					if (wq->wq_requests[priority])
 						break;
-					}
 				}
-				assert(wl != NULL);
-				assert(!(TAILQ_EMPTY(&wl->wl_itemlist)));
+				assert(priority < WORKQUEUE_NUMPRIOS);
 
-				witem = TAILQ_FIRST(&wl->wl_itemlist);
-				TAILQ_REMOVE(&wl->wl_itemlist, witem, wi_entry);
+				wq->wq_reqcount--;
+				wq->wq_requests[priority]--;
 
-				if (TAILQ_EMPTY(&wl->wl_itemlist))
-					wq->wq_list_bitmap &= ~(1 << priority);
-				wq->wq_itemcount--;
+				if (wq->wq_ocrequests[priority]) {
+					wq->wq_ocrequests[priority]--;
+					overcommit = TRUE;
+				} else
+					force_oc = TRUE;
 
-				item = witem->wi_item;
-				witem->wi_item = (user_addr_t)0;
-				witem->wi_affinity = 0;
-
-				TAILQ_INSERT_HEAD(&wl->wl_freelist, witem, wi_entry);
-
-				(void)workqueue_run_nextitem(p, wq, THREAD_NULL, item, priority, affinity);
+				(void)workqueue_run_nextreq(p, wq, THREAD_NULL, force_oc, overcommit, priority, affinity);
 				/*
-				 * workqueue_run_nextitem is responsible for
+				 * workqueue_run_nextreq is responsible for
 				 * dropping the workqueue lock in all cases
 				 */
-				KERNEL_DEBUG(0xefffd138 | DBG_FUNC_END, wq, wq->wq_thread_yielded_count, wq->wq_itemcount, 1, 0);
+				KERNEL_DEBUG(0xefffd138 | DBG_FUNC_END, wq, wq->wq_thread_yielded_count, wq->wq_reqcount, 1, 0);
 
 				return;
 			}
 		}
-		KERNEL_DEBUG(0xefffd138 | DBG_FUNC_END, wq, wq->wq_thread_yielded_count, wq->wq_itemcount, 2, 0);
+		KERNEL_DEBUG(0xefffd138 | DBG_FUNC_END, wq, wq->wq_thread_yielded_count, wq->wq_reqcount, 2, 0);
 	}
 	workqueue_unlock(p);
 }
@@ -868,7 +890,7 @@ workqueue_callback(int type, thread_t thread)
 
 			OSCompareAndSwap64(*lastblocked_ptr, (UInt64)curtime, lastblocked_ptr);
 
-			if (wq->wq_itemcount)
+			if (wq->wq_reqcount)
 				WQ_TIMER_NEEDED(wq, start_timer);
 
 			if (start_timer == TRUE)
@@ -1090,13 +1112,11 @@ workq_open(struct proc *p, __unused struct workq_open_args  *uap, __unused int32
 	int wq_size;
 	char * ptr;
 	char * nptr;
-	int j;
 	uint32_t i;
 	uint32_t num_cpus;
 	int error = 0;
 	boolean_t need_wakeup = FALSE;
-	struct workitem * witem;
-	struct workitemlist *wl;
+
 
 	if ((p->p_lflag & P_LREGISTER) == 0)
 		return(EINVAL);
@@ -1138,10 +1158,10 @@ workq_open(struct proc *p, __unused struct workq_open_args  *uap, __unused int32
 		workqueue_unlock(p);
 
 		wq_size = sizeof(struct workqueue) +
-			(num_cpus * WORKQUEUE_NUMPRIOS * sizeof(uint32_t)) +
+			(num_cpus * WORKQUEUE_NUMPRIOS * sizeof(uint16_t)) +
 			(num_cpus * WORKQUEUE_NUMPRIOS * sizeof(uint32_t)) +
 			(num_cpus * WORKQUEUE_NUMPRIOS * sizeof(uint64_t)) +
-			sizeof(uint64_t);
+			sizeof(uint32_t) + sizeof(uint64_t);
 
 		ptr = (char *)kalloc(wq_size);
 		bzero(ptr, wq_size);
@@ -1153,25 +1173,20 @@ workq_open(struct proc *p, __unused struct workq_open_args  *uap, __unused int32
 		wq->wq_task = current_task();
 		wq->wq_map  = current_map();
 
-		for (i = 0; i < WORKQUEUE_NUMPRIOS; i++) {
-		        wl = (struct workitemlist *)&wq->wq_list[i];
-			TAILQ_INIT(&wl->wl_itemlist);
-			TAILQ_INIT(&wl->wl_freelist);
-
-			for (j = 0; j < WORKITEM_SIZE; j++) {
-			        witem = &wq->wq_array[(i*WORKITEM_SIZE) + j];
-				TAILQ_INSERT_TAIL(&wl->wl_freelist, witem, wi_entry);
-			}
+		for (i = 0; i < WORKQUEUE_NUMPRIOS; i++)
 			wq->wq_reqconc[i] = wq->wq_affinity_max;
-		}
+
 		nptr = ptr + sizeof(struct workqueue);
 
 		for (i = 0; i < WORKQUEUE_NUMPRIOS; i++) {
-			wq->wq_thactive_count[i] = (uint32_t *)nptr;
-			nptr += (num_cpus * sizeof(uint32_t));
+			wq->wq_thscheduled_count[i] = (uint16_t *)nptr;
+			nptr += (num_cpus * sizeof(uint16_t));
 		}
+		nptr += (sizeof(uint32_t) - 1);
+		nptr = (char *)((uintptr_t)nptr & ~(sizeof(uint32_t) - 1));
+
 		for (i = 0; i < WORKQUEUE_NUMPRIOS; i++) {
-			wq->wq_thscheduled_count[i] = (uint32_t *)nptr;
+			wq->wq_thactive_count[i] = (uint32_t *)nptr;
 			nptr += (num_cpus * sizeof(uint32_t));
 		}
 		/*
@@ -1208,59 +1223,86 @@ out:
 	return(error);
 }
 
+
 int
 workq_kernreturn(struct proc *p, struct workq_kernreturn_args  *uap, __unused int32_t *retval)
 {
-	user_addr_t item = uap->item;
-	int options	= uap->options;
-	int prio	= uap->prio;	/* should  be used to find the right workqueue */
-	int affinity	= uap->affinity;
-	int error	= 0;
-	thread_t th	= THREAD_NULL;
-	user_addr_t oc_item = 0;
         struct workqueue *wq;
+	int error	= 0;
 
 	if ((p->p_lflag & P_LREGISTER) == 0)
 		return(EINVAL);
 
-	/*
-	 * affinity not yet hooked up on this path
-	 */
-	affinity = -1;
+	switch (uap->options) {
 
-	switch (options) {
+		case WQOPS_QUEUE_NEWSPISUPP:
+			break;
 
-		case WQOPS_QUEUE_ADD: {
-			
-			if (prio & WORKQUEUE_OVERCOMMIT) {
-				prio &= ~WORKQUEUE_OVERCOMMIT;
-				oc_item = item;
+		case WQOPS_QUEUE_REQTHREADS: {
+			/*
+			 * for this operation, we re-purpose the affinity
+			 * argument as the number of threads to start
+			 */
+			boolean_t overcommit = FALSE;
+			int priority	     = uap->prio;
+			int reqcount	     = uap->affinity;
+
+			if (priority & WORKQUEUE_OVERCOMMIT) {
+				priority &= ~WORKQUEUE_OVERCOMMIT;
+				overcommit = TRUE;
 			}
-			if ((prio < 0) || (prio >= WORKQUEUE_NUMPRIOS))
-			        return (EINVAL);
-
-			workqueue_lock_spin(p);
-
-			if ((wq = (struct workqueue *)p->p_wqptr) == NULL) {
-			        workqueue_unlock(p);
-			        return (EINVAL);
+			if ((reqcount <= 0) || (priority < 0) || (priority >= WORKQUEUE_NUMPRIOS)) {
+				error = EINVAL;
+				break;
 			}
-			if (wq->wq_thidlecount == 0 && (oc_item || (wq->wq_constrained_threads_scheduled < wq->wq_affinity_max))) {
+                        workqueue_lock_spin(p);
 
-				workqueue_addnewthread(wq, oc_item ? TRUE : FALSE);
+                        if ((wq = (struct workqueue *)p->p_wqptr) == NULL) {
+                                workqueue_unlock(p);
 
-				if (wq->wq_thidlecount == 0)
-					oc_item = 0;
+				error = EINVAL;
+				break;
+                        }
+			if (overcommit == FALSE) {
+				wq->wq_reqcount += reqcount;
+				wq->wq_requests[priority] += reqcount;
+				
+				KERNEL_DEBUG(0xefffd008 | DBG_FUNC_NONE, wq, priority, wq->wq_requests[priority], reqcount, 0);
+
+				while (wq->wq_reqcount) {
+					if (workqueue_run_one(p, wq, overcommit, priority) == FALSE)
+						break;
+				}
+			} else {
+				KERNEL_DEBUG(0xefffd13c | DBG_FUNC_NONE, wq, priority, wq->wq_requests[priority], reqcount, 0);
+
+				while (reqcount) {
+					if (workqueue_run_one(p, wq, overcommit, priority) == FALSE)
+						break;
+					reqcount--;
+				}
+				if (reqcount) {
+					/*
+					 * we need to delay starting some of the overcommit requests...
+					 * we should only fail to create the overcommit threads if
+					 * we're at the max thread limit... as existing threads
+					 * return to the kernel, we'll notice the ocrequests
+					 * and spin them back to user space as the overcommit variety
+					 */
+					wq->wq_reqcount += reqcount;
+					wq->wq_requests[priority] += reqcount;
+					wq->wq_ocrequests[priority] += reqcount;
+
+					KERNEL_DEBUG(0xefffd140 | DBG_FUNC_NONE, wq, priority, wq->wq_requests[priority], reqcount, 0);
+				}
 			}
-			if (oc_item == 0)
-				error = workqueue_additem(wq, prio, item, affinity);
+			workqueue_unlock(p);
 
-		        KERNEL_DEBUG(0xefffd008 | DBG_FUNC_NONE, wq, prio, affinity, oc_item, 0);
 		        }
 			break;
-		case WQOPS_THREAD_RETURN: {
 
-		        th = current_thread();
+		case WQOPS_THREAD_RETURN: {
+		        thread_t th = current_thread();
 		        struct uthread *uth = get_bsdthread_info(th);
 
 			/* reset signal mask on the workqueue thread to default state */
@@ -1269,50 +1311,29 @@ workq_kernreturn(struct proc *p, struct workq_kernreturn_args  *uap, __unused in
 				uth->uu_sigmask = ~workq_threadmask;
 				proc_unlock(p);
 			}
-
 			workqueue_lock_spin(p);
 
 			if ((wq = (struct workqueue *)p->p_wqptr) == NULL || (uth->uu_threadlist == NULL)) {
 			        workqueue_unlock(p);
-			        return (EINVAL);
+
+				error = EINVAL;
+				break;
 			}
 		        KERNEL_DEBUG(0xefffd004 | DBG_FUNC_END, wq, 0, 0, 0, 0);
-		        }
-			break;
-		case WQOPS_THREAD_SETCONC: {
 
-			if ((prio < 0) || (prio > WORKQUEUE_NUMPRIOS))
-			        return (EINVAL);
-
-			workqueue_lock_spin(p);
-
-			if ((wq = (struct workqueue *)p->p_wqptr) == NULL) {
-			        workqueue_unlock(p);
-			        return (EINVAL);
-			}
+			(void)workqueue_run_nextreq(p, wq, th, FALSE, FALSE, 0, -1);
 			/*
-			 * for this operation, we re-purpose the affinity
-			 * argument as the concurrency target
+			 * workqueue_run_nextreq is responsible for
+			 * dropping the workqueue lock in all cases
 			 */
-			if (prio < WORKQUEUE_NUMPRIOS)
-				wq->wq_reqconc[prio] = affinity;
-			else {
-				for (prio = 0; prio < WORKQUEUE_NUMPRIOS; prio++)
-					wq->wq_reqconc[prio] = affinity;
-
-			}
 		        }
 			break;
+		
 		default:
-		        return (EINVAL);
+			error = EINVAL;
+			break;
 	}
-	(void)workqueue_run_nextitem(p, wq, th, oc_item, prio, affinity);
-	/*
-	 * workqueue_run_nextitem is responsible for
-	 * dropping the workqueue lock in all cases
-	 */
 	return (error);
-
 }
 
 /*
@@ -1426,30 +1447,6 @@ workqueue_exit(struct proc *p)
 	}
 }
 
-static int 
-workqueue_additem(struct workqueue *wq, int prio, user_addr_t item, int affinity)
-{
-	struct workitem	*witem;
-	struct workitemlist *wl;
-
-	wl = (struct workitemlist *)&wq->wq_list[prio];
-
-	if (TAILQ_EMPTY(&wl->wl_freelist))
-		return (ENOMEM);
-
-	witem = (struct workitem *)TAILQ_FIRST(&wl->wl_freelist);
-	TAILQ_REMOVE(&wl->wl_freelist, witem, wi_entry);
-
-	witem->wi_item = item;
-	witem->wi_affinity = affinity;
-	TAILQ_INSERT_TAIL(&wl->wl_itemlist, witem, wi_entry);
-
-	wq->wq_list_bitmap |= (1 << prio);
-
-	wq->wq_itemcount++;
-
-	return (0);
-}
 
 static int workqueue_importance[WORKQUEUE_NUMPRIOS] = 
 {
@@ -1464,37 +1461,69 @@ static int workqueue_policy[WORKQUEUE_NUMPRIOS] =
 };
 
 
+
+static boolean_t
+workqueue_run_one(proc_t p, struct workqueue *wq, boolean_t overcommit, int priority)
+{
+	boolean_t	ran_one;
+
+	if (wq->wq_thidlecount == 0) {
+		if (overcommit == FALSE) {
+			if (wq->wq_constrained_threads_scheduled < wq->wq_affinity_max)
+				workqueue_addnewthread(wq, overcommit);
+		} else {
+			workqueue_addnewthread(wq, overcommit);
+
+			if (wq->wq_thidlecount == 0)
+				return (FALSE);
+		}
+	}
+	ran_one = workqueue_run_nextreq(p, wq, THREAD_NULL, FALSE, overcommit, priority, -1);
+	/*
+	 * workqueue_run_nextreq is responsible for
+	 * dropping the workqueue lock in all cases
+	 */
+	workqueue_lock_spin(p);
+
+	return (ran_one);
+}
+
+
+
 /*
- * workqueue_run_nextitem:
+ * workqueue_run_nextreq:
  *   called with the workqueue lock held...
  *   responsible for dropping it in all cases
  */
 static boolean_t
-workqueue_run_nextitem(proc_t p, struct workqueue *wq, thread_t thread, user_addr_t oc_item, int oc_prio, int oc_affinity)
+workqueue_run_nextreq(proc_t p, struct workqueue *wq, thread_t thread,
+		      boolean_t force_oc, boolean_t overcommit, int oc_prio, int oc_affinity)
 {
-	struct workitem *witem = NULL;
-	user_addr_t item = 0;
 	thread_t th_to_run = THREAD_NULL;
 	thread_t th_to_park = THREAD_NULL;
 	int wake_thread = 0;
-	int reuse_thread = 1;
+	int reuse_thread = WQ_FLAG_THREAD_REUSE;
 	uint32_t priority, orig_priority;
 	uint32_t affinity_tag, orig_affinity_tag;
 	uint32_t i, n;
-	uint32_t activecount;
 	uint32_t busycount;
 	uint32_t us_to_wait;
 	struct threadlist *tl = NULL;
 	struct threadlist *ttl = NULL;
 	struct uthread *uth = NULL;
-	struct workitemlist *wl = NULL;
 	boolean_t start_timer = FALSE;
 	boolean_t adjust_counters = TRUE;
 	uint64_t  curtime;
 
 
-	KERNEL_DEBUG(0xefffd000 | DBG_FUNC_START, wq, thread, wq->wq_thidlecount, wq->wq_itemcount, 0);
+	KERNEL_DEBUG(0xefffd000 | DBG_FUNC_START, wq, thread, wq->wq_thidlecount, wq->wq_reqcount, 0);
 
+	if (thread != THREAD_NULL) {
+		uth = get_bsdthread_info(thread);
+
+		if ( (tl = uth->uu_threadlist) == NULL)
+			panic("wq thread with no threadlist ");
+	}
 	/*
 	 * from here until we drop the workq lock
 	 * we can't be pre-empted since we hold 
@@ -1504,14 +1533,15 @@ workqueue_run_nextitem(proc_t p, struct workqueue *wq, thread_t thread, user_add
 	 * and these values are used to index the multi-dimensional
 	 * counter arrays in 'workqueue_callback'
 	 */
-	if (oc_item) {
+dispatch_overcommit:
+
+	if (overcommit == TRUE || force_oc == TRUE) {
 		uint32_t min_scheduled = 0;
 		uint32_t scheduled_count;
 		uint32_t active_count;
 		uint32_t t_affinity = 0;
 
 		priority = oc_prio;
-		item = oc_item;
 
 		if ((affinity_tag = oc_affinity) == (uint32_t)-1) {
 			for (affinity_tag = 0; affinity_tag < wq->wq_reqconc[priority]; affinity_tag++) {
@@ -1536,37 +1566,55 @@ workqueue_run_nextitem(proc_t p, struct workqueue *wq, thread_t thread, user_add
 			}
 			affinity_tag = t_affinity;
 		}
+		if (thread != THREAD_NULL) {
+			th_to_run = thread;
+			goto pick_up_work;
+		}
 		goto grab_idle_thread;
+	}
+	if (wq->wq_reqcount) {
+		for (priority = 0; priority < WORKQUEUE_NUMPRIOS; priority++) {
+			if (wq->wq_requests[priority])
+				break;
+		}
+		assert(priority < WORKQUEUE_NUMPRIOS);
+
+		if (wq->wq_ocrequests[priority] && (thread != THREAD_NULL || wq->wq_thidlecount)) {
+			/*
+			 * handle delayed overcommit request...
+			 * they have priority over normal requests
+			 * within a given priority level
+			 */
+			wq->wq_reqcount--;
+			wq->wq_requests[priority]--;
+			wq->wq_ocrequests[priority]--;
+
+			oc_prio = priority;
+			overcommit = TRUE;
+
+			goto dispatch_overcommit;
+		}
 	}
 	/*
 	 * if we get here, the work should be handled by a constrained thread
 	 */
-	if (wq->wq_itemcount == 0 || wq->wq_constrained_threads_scheduled >= wq_max_constrained_threads) {
+	if (wq->wq_reqcount == 0 || wq->wq_constrained_threads_scheduled >= wq_max_constrained_threads) {
 		/*
 		 * no work to do, or we're already at or over the scheduling limit for
 		 * constrained threads...  just return or park the thread...
 		 * do not start the timer for this condition... if we don't have any work,
 		 * we'll check again when new work arrives... if we're over the limit, we need 1 or more
-		 * constrained threads to return to the kernel before we can dispatch work from our queue
+		 * constrained threads to return to the kernel before we can dispatch additional work
 		 */
 	        if ((th_to_park = thread) == THREAD_NULL)
 		        goto out_of_work;
 		goto parkit;
 	}
-	for (priority = 0; priority < WORKQUEUE_NUMPRIOS; priority++) {
-		if (wq->wq_list_bitmap & (1 << priority)) {
-			wl = (struct workitemlist *)&wq->wq_list[priority];
-			break;
-		}
-	}
-	assert(wl != NULL);
-	assert(!(TAILQ_EMPTY(&wl->wl_itemlist)));
 
 	curtime = mach_absolute_time();
 
 	if (thread != THREAD_NULL) {
-	        uth = get_bsdthread_info(thread);
-		tl = uth->uu_threadlist;
+
 		affinity_tag = tl->th_affinity_tag;
 
 		/*
@@ -1576,6 +1624,10 @@ workqueue_run_nextitem(proc_t p, struct workqueue *wq, thread_t thread, user_add
 		 * we're considering running work for
 		 */
 		if (affinity_tag < wq->wq_reqconc[priority]) {
+			uint32_t  bcount = 0;
+			uint32_t  acount = 0;
+			uint32_t  tcount = 0;
+
 			/*
 			 * we're a worker thread from the pool... currently we
 			 * are considered 'active' which means we're counted
@@ -1583,56 +1635,84 @@ workqueue_run_nextitem(proc_t p, struct workqueue *wq, thread_t thread, user_add
 			 * add up the active counts of all the priority levels
 			 * up to and including the one we want to schedule
 			 */
-			for (activecount = 0, i = 0; i <= priority; i++) {
-				uint32_t  acount;
+			for (i = 0; i <= priority; i++) {
 
-				acount = wq->wq_thactive_count[i][affinity_tag];
+				tcount = wq->wq_thactive_count[i][affinity_tag];
+				acount += tcount;
 
-				if (acount == 0 && wq->wq_thscheduled_count[i][affinity_tag]) {
+				if (tcount == 0 && wq->wq_thscheduled_count[i][affinity_tag]) {
 					if (wq_thread_is_busy(curtime, &wq->wq_lastblocked_ts[i][affinity_tag]))
-						acount = 1;
+						bcount++;
 				}
-				activecount += acount;
 			}
-			if (activecount == 1) {
+			if ((acount + bcount) == 1) {
 				/*
 				 * we're the only active thread associated with our
 				 * affinity group at this priority level and higher,
+				 * and there are no threads considered 'busy',
 				 * so pick up some work and keep going
 				 */
 				th_to_run = thread;
 				goto pick_up_work;
 			}
+			if (wq->wq_reqconc[priority] == 1) {
+				/*
+				 * we have at least one other active or busy thread running at this
+				 * priority level or higher and since we only have 
+				 * 1 affinity group to schedule against, no need
+				 * to try and find another... we can't start up another thread to
+				 * service the request and we already have the info
+				 * needed to determine if we need to start a timer or not
+				 */
+				if (acount == 1) {
+					/*
+					 * we're the only active thread, but we must have found
+					 * at least 1 busy thread, so indicate that we need
+					 * to start a timer
+					 */
+					busycount = 1;
+				} else
+					busycount = 0;
+
+				affinity_tag = 1;
+				goto cant_schedule;
+			}
 		}
 		/*
 		 * there's more than 1 thread running in this affinity group
 		 * or the concurrency level has been cut back for this priority...
-		 * lets continue on and look for an 'empty' group to run this
-		 * work item in
+		 * let's continue on and look for an 'empty' group to run this
+		 * work request in
 		 */
 	}
 	busycount = 0;
 
 	for (affinity_tag = 0; affinity_tag < wq->wq_reqconc[priority]; affinity_tag++) {
+		boolean_t	can_schedule;
+
 		/*
 		 * look for first affinity group that is currently not active
 		 * i.e. no active threads at this priority level or higher
 		 * and no threads that have run recently
 		 */
-		for (activecount = 0, i = 0; i <= priority; i++) {
-			if ((activecount = wq->wq_thactive_count[i][affinity_tag]))
+		for (i = 0; i <= priority; i++) {
+			can_schedule = FALSE;
+
+			if (wq->wq_thactive_count[i][affinity_tag])
 				break;
 
-			if (wq->wq_thscheduled_count[i][affinity_tag]) {
-				if (wq_thread_is_busy(curtime, &wq->wq_lastblocked_ts[i][affinity_tag])) {
-					busycount++;
-					break;
-				}
+			if (wq->wq_thscheduled_count[i][affinity_tag] &&
+			    wq_thread_is_busy(curtime, &wq->wq_lastblocked_ts[i][affinity_tag])) {
+				busycount++;
+				break;
 			}
+			can_schedule = TRUE;
 		}
-		if (activecount == 0 && busycount == 0)
+		if (can_schedule == TRUE)
 			break;
 	}
+cant_schedule:
+
 	if (affinity_tag >= wq->wq_reqconc[priority]) {
 		/*
 		 * we've already got at least 1 thread per
@@ -1644,7 +1724,7 @@ workqueue_run_nextitem(proc_t p, struct workqueue *wq, thread_t thread, user_add
 			 * 'busy' state... make sure we start
 			 * the timer because if they are the only
 			 * threads keeping us from scheduling
-			 * this workitem, we won't get a callback
+			 * this work request, we won't get a callback
 			 * to kick off the timer... we need to
 			 * start it now...
 			 */
@@ -1671,6 +1751,8 @@ workqueue_run_nextitem(proc_t p, struct workqueue *wq, thread_t thread, user_add
 		th_to_run = thread;
 		goto pick_up_work;
 	}
+
+grab_idle_thread:
 	if (wq->wq_thidlecount == 0) {
 		/*
  		 * we don't have a thread to schedule, but we have
@@ -1683,14 +1765,12 @@ workqueue_run_nextitem(proc_t p, struct workqueue *wq, thread_t thread, user_add
 
 		goto no_thread_to_run;
 	}
-
-grab_idle_thread:
 	/*
 	 * we've got a candidate (affinity group with no currently
 	 * active threads) to start a new thread on...
 	 * we already know there is both work available
 	 * and an idle thread, so activate a thread and then
-	 * fall into the code that pulls a new workitem...
+	 * fall into the code that pulls a new work request...
 	 */
 	TAILQ_FOREACH(ttl, &wq->wq_thidlelist, th_entry) {
 		if (ttl->th_affinity_tag == affinity_tag || ttl->th_affinity_tag == (uint16_t)-1) {
@@ -1727,18 +1807,9 @@ grab_idle_thread:
 	th_to_run = tl->th_thread;
 
 pick_up_work:
-	if (item == 0) {
-		witem = TAILQ_FIRST(&wl->wl_itemlist);
-		TAILQ_REMOVE(&wl->wl_itemlist, witem, wi_entry);
-
-		if (TAILQ_EMPTY(&wl->wl_itemlist))
-			wq->wq_list_bitmap &= ~(1 << priority);
-		wq->wq_itemcount--;
-
-		item = witem->wi_item;
-		witem->wi_item = (user_addr_t)0;
-		witem->wi_affinity = 0;
-		TAILQ_INSERT_HEAD(&wl->wl_freelist, witem, wi_entry);
+	if (overcommit == FALSE && force_oc == FALSE) {
+		wq->wq_reqcount--;
+		wq->wq_requests[priority]--;
 
 		if ( !(tl->th_flags & TH_LIST_CONSTRAINED)) {
 			wq->wq_constrained_threads_scheduled++;
@@ -1792,38 +1863,25 @@ pick_up_work:
 		thread_precedence_policy_data_t	precedinfo;
 		thread_extended_policy_data_t	extinfo;
 		uint32_t	policy;
+#if CONFIG_EMBEDDED
+		int retval = 0;
 
+		/* sets the saved importance for apple ios daemon if backgrounded. else returns 0 */
+		retval = proc_setthread_saved_importance(th_to_run, workqueue_importance[priority]);
+		if (retval == 0) {
+#endif /* CONFIG_EMBEDDED */
 		policy = workqueue_policy[priority];
 		
 		KERNEL_DEBUG(0xefffd120 | DBG_FUNC_START, wq, orig_priority, tl->th_policy, 0, 0);
 
 		if ((orig_priority == WORKQUEUE_BG_PRIOQUEUE) || (priority == WORKQUEUE_BG_PRIOQUEUE)) {
-			struct uthread *ut = NULL;
-
-	        	ut = get_bsdthread_info(th_to_run);
-
 			if (orig_priority == WORKQUEUE_BG_PRIOQUEUE) {
 				/* remove the disk throttle, importance will be reset in anycase */
-#if !CONFIG_EMBEDDED
 				proc_restore_workq_bgthreadpolicy(th_to_run);
-#else /* !CONFIG_EMBEDDED */
-				if ((ut->uu_flag & UT_BACKGROUND) != 0) {
-					ut->uu_flag &= ~UT_BACKGROUND;
-					ut->uu_iopol_disk = IOPOL_NORMAL;
-				}
-#endif /* !CONFIG_EMBEDDED */
 			} 
 
 			if (priority == WORKQUEUE_BG_PRIOQUEUE) {
-#if !CONFIG_EMBEDDED
-			proc_apply_workq_bgthreadpolicy(th_to_run);
-#else /* !CONFIG_EMBEDDED */
-				if ((ut->uu_flag & UT_BACKGROUND) == 0) {
-					/* set diskthrottling */
-					ut->uu_flag |= UT_BACKGROUND;
-					ut->uu_iopol_disk = IOPOL_THROTTLE;
-				}
-#endif /* !CONFIG_EMBEDDED */
+				proc_apply_workq_bgthreadpolicy(th_to_run);
 			}
 		}
 
@@ -1839,6 +1897,9 @@ pick_up_work:
 
 
 		KERNEL_DEBUG(0xefffd120 | DBG_FUNC_END, wq,  priority, policy, 0, 0);
+#if CONFIG_EMBEDDED
+		}
+#endif /* CONFIG_EMBEDDED */
 	}
 	if (kdebug_enable) {
 		int	lpri = -1;
@@ -1866,11 +1927,11 @@ pick_up_work:
 		}
 	}
 	/*
-	 * if current thread is reused for workitem, does not return via unix_syscall
+	 * if current thread is reused for work request, does not return via unix_syscall
 	 */
-	wq_runitem(p, item, th_to_run, tl, reuse_thread, wake_thread, (thread == th_to_run));
+	wq_runreq(p, overcommit, priority, th_to_run, tl, reuse_thread, wake_thread, (thread == th_to_run));
 	
-	KERNEL_DEBUG(0xefffd000 | DBG_FUNC_END, wq, thread_tid(th_to_run), item, 1, 0);
+	KERNEL_DEBUG(0xefffd000 | DBG_FUNC_END, wq, thread_tid(th_to_run), overcommit, 1, 0);
 
 	return (TRUE);
 
@@ -1894,11 +1955,6 @@ parkit:
 	 * this is a workqueue thread with no more
 	 * work to do... park it for now
 	 */
-	uth = get_bsdthread_info(th_to_park);
-	tl = uth->uu_threadlist;
-	if (tl == 0) 
-	        panic("wq thread with no threadlist ");
-	
 	TAILQ_REMOVE(&wq->wq_thrunlist, tl, th_entry);
 	tl->th_flags &= ~TH_LIST_RUNNING;
 
@@ -2032,7 +2088,7 @@ wq_unpark_continue(void)
 			if ((tl->th_flags & (TH_LIST_RUNNING | TH_LIST_BUSY)) == TH_LIST_RUNNING) {
 				/*
 				 * a normal wakeup of this thread occurred... no need 
-				 * for any synchronization with the timer and wq_runitem
+				 * for any synchronization with the timer and wq_runreq
 				 */
 normal_return_to_user:			
 				thread_sched_call(th_to_unpark, workqueue_callback);
@@ -2088,7 +2144,7 @@ normal_return_to_user:
 
 
 static void 
-wq_runitem(proc_t p, user_addr_t item, thread_t th, struct threadlist *tl,
+wq_runreq(proc_t p, boolean_t overcommit, uint32_t priority, thread_t th, struct threadlist *tl,
 	   int reuse_thread, int wake_thread, int return_directly)
 {
 	int ret = 0;
@@ -2096,7 +2152,7 @@ wq_runitem(proc_t p, user_addr_t item, thread_t th, struct threadlist *tl,
 
 	KERNEL_DEBUG1(0xefffd004 | DBG_FUNC_START, tl->th_workq, tl->th_priority, tl->th_affinity_tag, thread_tid(current_thread()), thread_tid(th));
 
-	ret = setup_wqthread(p, th, item, reuse_thread, tl);
+	ret = setup_wqthread(p, th, overcommit, priority, reuse_thread, tl);
 
 	if (ret != 0)
 		panic("setup_wqthread failed  %x\n", ret);
@@ -2106,7 +2162,7 @@ wq_runitem(proc_t p, user_addr_t item, thread_t th, struct threadlist *tl,
 
 		thread_exception_return();
 
-		panic("wq_runitem: thread_exception_return returned ...\n");
+		panic("wq_runreq: thread_exception_return returned ...\n");
 	}
 	if (wake_thread) {
 		workqueue_lock_spin(p);
@@ -2141,8 +2197,15 @@ wq_runitem(proc_t p, user_addr_t item, thread_t th, struct threadlist *tl,
 
 
 int
-setup_wqthread(proc_t p, thread_t th, user_addr_t item, int reuse_thread, struct threadlist *tl)
+setup_wqthread(proc_t p, thread_t th, boolean_t overcommit, uint32_t priority, int reuse_thread, struct threadlist *tl)
 {
+	uint32_t flags = reuse_thread | WQ_FLAG_THREAD_NEWSPI;
+
+	if (overcommit == TRUE)
+		flags |= WQ_FLAG_THREAD_OVERCOMMIT;
+
+	flags |= priority;
+
 #if defined(__i386__) || defined(__x86_64__)
 	int isLP64 = 0;
 
@@ -2158,16 +2221,14 @@ setup_wqthread(proc_t p, thread_t th, user_addr_t item, int reuse_thread, struct
 		ts->eax = (unsigned int)(tl->th_stackaddr + PTH_DEFAULT_STACKSIZE + PTH_DEFAULT_GUARDSIZE);
 		ts->ebx = (unsigned int)tl->th_thport;
 		ts->ecx = (unsigned int)(tl->th_stackaddr + PTH_DEFAULT_GUARDSIZE);
-		ts->edx = (unsigned int)item;
-		ts->edi = (unsigned int)reuse_thread;
+		ts->edx = (unsigned int)0;
+		ts->edi = (unsigned int)flags;
 		ts->esi = (unsigned int)0;
 		/*
 		 * set stack pointer
 		 */
         	ts->esp = (int)((vm_offset_t)((tl->th_stackaddr + PTH_DEFAULT_STACKSIZE + PTH_DEFAULT_GUARDSIZE) - C_32_STK_ALIGN));
 
-		if ((reuse_thread != 0) && (ts->eax == (unsigned int)0))
-			panic("setup_wqthread: setting reuse thread with null pthread\n");
 		thread_set_wq_state32(th, (thread_state_t)ts);
 
 	} else {
@@ -2178,8 +2239,8 @@ setup_wqthread(proc_t p, thread_t th, user_addr_t item, int reuse_thread, struct
 		ts64->rdi = (uint64_t)(tl->th_stackaddr + PTH_DEFAULT_STACKSIZE + PTH_DEFAULT_GUARDSIZE);
 		ts64->rsi = (uint64_t)(tl->th_thport);
 		ts64->rdx = (uint64_t)(tl->th_stackaddr + PTH_DEFAULT_GUARDSIZE);
-		ts64->rcx = (uint64_t)item;
-		ts64->r8 = (uint64_t)reuse_thread;
+		ts64->rcx = (uint64_t)0;
+		ts64->r8 = (uint64_t)flags;
 		ts64->r9 = (uint64_t)0;
 
 		/*
@@ -2187,8 +2248,6 @@ setup_wqthread(proc_t p, thread_t th, user_addr_t item, int reuse_thread, struct
 		 */
 		ts64->rsp = (uint64_t)((tl->th_stackaddr + PTH_DEFAULT_STACKSIZE + PTH_DEFAULT_GUARDSIZE) - C_64_REDZONE_LEN);
 
-		if ((reuse_thread != 0) && (ts64->rdi == (uint64_t)0))
-			panic("setup_wqthread: setting reuse thread with null pthread\n");
 		thread_set_wq_state64(th, (thread_state_t)ts64);
 	}
 #else

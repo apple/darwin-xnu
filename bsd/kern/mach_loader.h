@@ -53,13 +53,16 @@ typedef struct _load_result {
 	user_addr_t		mach_header;
 	user_addr_t		entry_point;
 	user_addr_t		user_stack;
+	mach_vm_size_t		user_stack_size;
 	mach_vm_address_t	all_image_info_addr;
 	mach_vm_size_t		all_image_info_size;
 	int			thread_count;
 	unsigned int
 		/* boolean_t */	unixproc	:1,
+				needs_dynlinker : 1,
 				dynlinker	:1,
-				customstack	:1,
+				prog_allocated_stack	:1,
+				prog_stack_size : 1,    
 				validentry	:1,
 						:0;
 	unsigned int		csflags;

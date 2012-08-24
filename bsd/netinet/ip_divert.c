@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2010 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2012 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -242,7 +242,7 @@ divert_packet(struct mbuf *m, int incoming, int port, int rule)
 				continue;
 			}
 			divsrc.sin_addr =
-			    ((struct sockaddr_in *) ifa->ifa_addr)->sin_addr;
+			    ((struct sockaddr_in *)(void *) ifa->ifa_addr)->sin_addr;
 			IFA_UNLOCK(ifa);
 			break;
 		}
@@ -314,12 +314,12 @@ div_output(struct socket *so, struct mbuf *m, struct sockaddr *addr,
 {
 	struct inpcb *const inp = sotoinpcb(so);
 	struct ip *const ip = mtod(m, struct ip *);
-	struct sockaddr_in *sin = (struct sockaddr_in *)addr;
+	struct sockaddr_in *sin = (struct sockaddr_in *)(void *)addr;
 	int error = 0;
-	mbuf_traffic_class_t mtc = MBUF_TC_UNSPEC;
+	mbuf_svc_class_t msc = MBUF_SC_UNSPEC;
 
 	if (control != NULL) {
-		mtc = mbuf_traffic_class_from_control(control);
+		msc = mbuf_service_class_from_control(control);
 
 		m_freem(control);		/* XXX */
 	}
@@ -357,7 +357,8 @@ div_output(struct socket *so, struct mbuf *m, struct sockaddr *addr,
 
 	/* Reinject packet into the system as incoming or outgoing */
 	if (!sin || sin->sin_addr.s_addr == 0) {
-		struct ip_out_args ipoa = { IFSCOPE_NONE, 0 };
+		struct ip_out_args ipoa =
+		    { IFSCOPE_NONE, { 0 }, IPOAF_SELECT_SRCIF };
 		struct route ro;
 		struct ip_moptions *imo;
 
@@ -381,7 +382,7 @@ div_output(struct socket *so, struct mbuf *m, struct sockaddr *addr,
 		/* Copy the cached route and take an extra reference */
 		inp_route_copyout(inp, &ro);
 
-		set_packet_tclass(m, so, mtc, 0);
+		set_packet_service_class(m, so, msc, 0);
 
 		imo = inp->inp_moptions;
 		if (imo != NULL)
@@ -518,7 +519,7 @@ div_bind(struct socket *so, struct sockaddr *nam, struct proc *p)
 	if (nam->sa_family != AF_INET) {
 		error = EAFNOSUPPORT;
 	} else {
-               ((struct sockaddr_in *)nam)->sin_addr.s_addr = INADDR_ANY;
+               ((struct sockaddr_in *)(void *)nam)->sin_addr.s_addr = INADDR_ANY;
 		error = in_pcbbind(inp, nam, p);
 	}
 	return error;

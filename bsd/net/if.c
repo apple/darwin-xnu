@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2010 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2012 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -111,6 +111,11 @@
 #include <netinet/in_var.h>
 #include <netinet/ip_var.h>
 #include <netinet/ip6.h>
+#include <netinet/ip_var.h>
+#include <netinet/tcp.h>
+#include <netinet/tcp_var.h>
+#include <netinet/udp.h>
+#include <netinet/udp_var.h>
 #if INET6
 #include <netinet6/in6_var.h>
 #include <netinet6/in6_ifattach.h>
@@ -122,6 +127,9 @@
 #include <security/mac_framework.h>
 #endif
 
+#if PF_ALTQ
+#include <net/altq/if_altq.h>
+#endif /* !PF_ALTQ */
 
 /*
  * System initialization
@@ -132,8 +140,9 @@ lck_attr_t	*ifa_mtx_attr;
 lck_grp_t	*ifa_mtx_grp;
 static lck_grp_attr_t	*ifa_mtx_grp_attr;
 
+static int ifioctl_ifreq(struct socket *, u_long, struct ifreq *,
+    struct proc *);
 static int ifconf(u_long cmd, user_addr_t ifrp, int * ret_space);
-static void if_qflush(struct ifqueue *);
 __private_extern__ void link_rtrequest(int, struct rtentry *, struct sockaddr *);
 void if_rtproto_del(struct ifnet *ifp, int protocol);
 
@@ -151,7 +160,6 @@ static int	if_clone_list(int count, int * total, user_addr_t dst);
 
 MALLOC_DEFINE(M_IFADDR, "ifaddr", "interface address");
 
-int	ifqmaxlen = IFQ_MAXLEN;
 struct	ifnethead ifnet_head = TAILQ_HEAD_INITIALIZER(ifnet_head);
 
 static int	if_cloners_count;
@@ -413,8 +421,8 @@ if_next_index(void)
 		}
 
 		/* switch to the new tables and size */
-		ifnet_addrs = (struct ifaddr **)new_ifnet_addrs;
-		ifindex2ifnet = (struct ifnet **)new_ifindex2ifnet;
+		ifnet_addrs = (struct ifaddr **)(void *)new_ifnet_addrs;
+		ifindex2ifnet = (struct ifnet **)(void *)new_ifindex2ifnet;
 		if_indexlim = new_if_indexlim;
 
 		/* release the old data */
@@ -951,7 +959,8 @@ ifa_ifwithnet_common(const struct sockaddr *addr, unsigned int ifscope)
 	 * so do that if we can.
 	 */
 	if (af == AF_LINK) {
-		const struct sockaddr_dl *sdl = (const struct sockaddr_dl *)addr;
+		const struct sockaddr_dl *sdl =
+		    (const struct sockaddr_dl *)(uintptr_t)(size_t)addr;
 		if (sdl->sdl_index && sdl->sdl_index <= if_index) {
 			ifa = ifnet_addrs[sdl->sdl_index - 1];
 			if (ifa != NULL)
@@ -1220,6 +1229,7 @@ if_updown(
 	int i;
 	struct ifaddr **ifa;
 	struct timespec	tv;
+	struct ifclassq *ifq = &ifp->if_snd;
 
 	/* Wait until no one else is changing the up/down state */
 	while ((ifp->if_eflags & IFEF_UPDOWNCHANGE) != 0) {
@@ -1229,16 +1239,16 @@ if_updown(
 		msleep(&ifp->if_eflags, NULL, 0, "if_updown", &tv);
 		ifnet_lock_exclusive(ifp);
 	}
-	
+
 	/* Verify that the interface isn't already in the right state */
 	if ((!up && (ifp->if_flags & IFF_UP) == 0) ||
 		(up && (ifp->if_flags & IFF_UP) == IFF_UP)) {
 		return;
 	}
-	
+
 	/* Indicate that the up/down state is changing */
 	ifp->if_eflags |= IFEF_UPDOWNCHANGE;
-	
+
 	/* Mark interface up or down */
 	if (up) {
 		ifp->if_flags |= IFF_UP;
@@ -1246,9 +1256,9 @@ if_updown(
 	else {
 		ifp->if_flags &= ~IFF_UP;
 	}
-	
+
 	ifnet_touch_lastchange(ifp);
-	
+
 	/* Drop the lock to notify addresses and route */
 	ifnet_lock_done(ifp);
 	if (ifnet_get_address_list(ifp, &ifa) == 0) {
@@ -1258,15 +1268,19 @@ if_updown(
 		ifnet_free_address_list(ifa);
 	}
 	rt_ifmsg(ifp);
-	
-	/* Aquire the lock to clear the changing flag and flush the send queue */
-	ifnet_lock_exclusive(ifp);
+
 	if (!up)
-		if_qflush(&ifp->if_snd);
+		if_qflush(ifp, 0);
+
+	/* Inform all transmit queues about the new link state */
+	IFCQ_LOCK(ifq);
+	ifnet_update_sndq(ifq, up ? CLASSQ_EV_LINK_UP : CLASSQ_EV_LINK_DOWN);
+	IFCQ_UNLOCK(ifq);
+
+	/* Aquire the lock to clear the changing flag */
+	ifnet_lock_exclusive(ifp);
 	ifp->if_eflags &= ~IFEF_UPDOWNCHANGE;
 	wakeup(&ifp->if_eflags);
-	
-	return;
 }
 
 /*
@@ -1298,19 +1312,61 @@ if_up(
 /*
  * Flush an interface queue.
  */
-static void
-if_qflush(struct ifqueue *ifq)
+void
+if_qflush(struct ifnet *ifp, int ifq_locked)
 {
-	struct mbuf *m, *n;
+	struct ifclassq *ifq = &ifp->if_snd;
 
-	n = ifq->ifq_head;
-	while ((m = n) != 0) {
-		n = m->m_act;
-		m_freem(m);
+	if (!ifq_locked)
+		IFCQ_LOCK(ifq);
+
+	if (IFCQ_IS_ENABLED(ifq))
+		IFCQ_PURGE(ifq);
+#if PF_ALTQ
+	if (IFCQ_IS_DRAINING(ifq))
+		ifq->ifcq_drain = 0;
+	if (ALTQ_IS_ENABLED(IFCQ_ALTQ(ifq)))
+		ALTQ_PURGE(IFCQ_ALTQ(ifq));
+#endif /* PF_ALTQ */
+
+	VERIFY(IFCQ_IS_EMPTY(ifq));
+
+	if (!ifq_locked)
+		IFCQ_UNLOCK(ifq);
+}
+
+void
+if_qflush_sc(struct ifnet *ifp, mbuf_svc_class_t sc, u_int32_t flow,
+    u_int32_t *packets, u_int32_t *bytes, int ifq_locked)
+{
+	struct ifclassq *ifq = &ifp->if_snd;
+	u_int32_t cnt = 0, len = 0;
+	u_int32_t a_cnt = 0, a_len = 0;
+
+	VERIFY(sc == MBUF_SC_UNSPEC || MBUF_VALID_SC(sc));
+	VERIFY(flow != 0);
+
+	if (!ifq_locked)
+		IFCQ_LOCK(ifq);
+
+	if (IFCQ_IS_ENABLED(ifq))
+		IFCQ_PURGE_SC(ifq, sc, flow, cnt, len);
+#if PF_ALTQ
+	if (IFCQ_IS_DRAINING(ifq)) {
+		VERIFY((signed)(ifq->ifcq_drain - cnt) >= 0);
+		ifq->ifcq_drain -= cnt;
 	}
-	ifq->ifq_head = NULL;
-	ifq->ifq_tail = NULL;
-	ifq->ifq_len = 0;
+	if (ALTQ_IS_ENABLED(IFCQ_ALTQ(ifq)))
+		ALTQ_PURGE_SC(IFCQ_ALTQ(ifq), sc, flow, a_cnt, a_len);
+#endif /* PF_ALTQ */
+
+	if (!ifq_locked)
+		IFCQ_UNLOCK(ifq);
+
+	if (packets != NULL)
+		*packets = cnt + a_cnt;
+	if (bytes != NULL)
+		*bytes = len + a_len;
 }
 
 /*
@@ -1371,7 +1427,7 @@ struct ifnet *
 if_withname(struct sockaddr *sa)
 {
 	char ifname[IFNAMSIZ+1];
-	struct sockaddr_dl *sdl = (struct sockaddr_dl *)sa;
+	struct sockaddr_dl *sdl = (struct sockaddr_dl *)(void *)sa;
 
 	if ( (sa->sa_family != AF_LINK) || (sdl->sdl_nlen == 0) ||
 	     (sdl->sdl_nlen > IFNAMSIZ) )
@@ -1396,60 +1452,110 @@ if_withname(struct sockaddr *sa)
 int
 ifioctl(struct socket *so, u_long cmd, caddr_t data, struct proc *p)
 {
-	struct ifnet *ifp;
-	struct ifreq *ifr;
-	struct ifstat *ifs;
+	char ifname[IFNAMSIZ + 1];
+	struct ifnet *ifp = NULL;
+	struct ifstat *ifs = NULL;
 	int error = 0;
-	short oif_flags;
-	struct kev_msg        ev_msg;
-	struct net_event_data ev_data;
 
-	bzero(&ev_data, sizeof(struct net_event_data));
-	bzero(&ev_msg, sizeof(struct kev_msg));
+	bzero(ifname, sizeof (ifname));
+
+	/*
+	 * ioctls which don't require ifp, or ifreq ioctls
+	 */
 	switch (cmd) {
-	case OSIOCGIFCONF32:
-	case SIOCGIFCONF32: {
-		struct ifconf32 *ifc = (struct ifconf32 *)data;
-		return (ifconf(cmd, CAST_USER_ADDR_T(ifc->ifc_req),
-		    &ifc->ifc_len));
-		/* NOTREACHED */
+	case OSIOCGIFCONF32:			/* struct ifconf32 */
+	case SIOCGIFCONF32: {			/* struct ifconf32 */
+		struct ifconf32 ifc;
+		bcopy(data, &ifc, sizeof (ifc));
+		error = ifconf(cmd, CAST_USER_ADDR_T(ifc.ifc_req),
+		    &ifc.ifc_len);
+		bcopy(&ifc, data, sizeof (ifc));
+		goto done;
 	}
-	case SIOCGIFCONF64:
-	case OSIOCGIFCONF64: {
-		struct ifconf64 *ifc = (struct ifconf64 *)data;
-		return (ifconf(cmd, ifc->ifc_req, &ifc->ifc_len));
-		/* NOTREACHED */
+
+	case SIOCGIFCONF64:			/* struct ifconf64 */
+	case OSIOCGIFCONF64: {			/* struct ifconf64 */
+		struct ifconf64 ifc;
+		bcopy(data, &ifc, sizeof (ifc));
+		error = ifconf(cmd, ifc.ifc_req, &ifc.ifc_len);
+		bcopy(&ifc, data, sizeof (ifc));
+		goto done;
 	}
-	}
-	ifr = (struct ifreq *)data;
-	switch (cmd) {
-	case SIOCIFCREATE:
-	case SIOCIFCREATE2:
-                error = proc_suser(p);
-                if (error)
-                        return (error);
-                return if_clone_create(ifr->ifr_name, sizeof(ifr->ifr_name),
-			 cmd == SIOCIFCREATE2 ? ifr->ifr_data : NULL);
-	case SIOCIFDESTROY:
-		error = proc_suser(p);
-		if (error)
-			return (error);
-		return if_clone_destroy(ifr->ifr_name);
+
 #if IF_CLONE_LIST
-	case SIOCIFGCLONERS32: {
-		struct if_clonereq32 *ifcr = (struct if_clonereq32 *)data;
-		return (if_clone_list(ifcr->ifcr_count, &ifcr->ifcr_total,
-		    CAST_USER_ADDR_T(ifcr->ifcru_buffer)));
-		/* NOTREACHED */
-
+	case SIOCIFGCLONERS32: {		/* struct if_clonereq32 */
+		struct if_clonereq32 ifcr;
+		bcopy(data, &ifcr, sizeof (ifcr));
+		error = if_clone_list(ifcr.ifcr_count, &ifcr.ifcr_total,
+		    CAST_USER_ADDR_T(ifcr.ifcru_buffer));
+		bcopy(&ifcr, data, sizeof (ifcr));
+		goto done;
 	}
-	case SIOCIFGCLONERS64: {
-		struct if_clonereq64 *ifcr = (struct if_clonereq64 *)data;
-		return (if_clone_list(ifcr->ifcr_count, &ifcr->ifcr_total,
-		    ifcr->ifcru_buffer));
-		/* NOTREACHED */
-	    }
+
+	case SIOCIFGCLONERS64: {		/* struct if_clonereq64 */
+		struct if_clonereq64 ifcr;
+		bcopy(data, &ifcr, sizeof (ifcr));
+		error = if_clone_list(ifcr.ifcr_count, &ifcr.ifcr_total,
+		    ifcr.ifcru_buffer);
+		bcopy(&ifcr, data, sizeof (ifcr));
+		goto done;
+	}
 #endif /* IF_CLONE_LIST */
+
+	case SIOCSIFDSTADDR:			/* struct ifreq */
+	case SIOCSIFADDR:			/* struct ifreq */
+	case SIOCSIFBRDADDR:			/* struct ifreq */
+	case SIOCSIFNETMASK:			/* struct ifreq */
+	case OSIOCGIFADDR:			/* struct ifreq */
+	case OSIOCGIFDSTADDR:			/* struct ifreq */
+	case OSIOCGIFBRDADDR:			/* struct ifreq */
+	case OSIOCGIFNETMASK:			/* struct ifreq */
+	case SIOCSIFKPI:			/* struct ifreq */
+		if (so->so_proto == NULL) {
+			error = EOPNOTSUPP;
+			goto done;
+		}
+		/* FALLTHRU */
+	case SIOCIFCREATE:			/* struct ifreq */
+	case SIOCIFCREATE2:			/* struct ifreq */
+	case SIOCIFDESTROY:			/* struct ifreq */
+	case SIOCGIFFLAGS:			/* struct ifreq */
+	case SIOCGIFEFLAGS:			/* struct ifreq */
+	case SIOCGIFCAP:			/* struct ifreq */
+	case SIOCGIFMAC:			/* struct ifreq */
+	case SIOCGIFMETRIC:			/* struct ifreq */
+	case SIOCGIFMTU:			/* struct ifreq */
+	case SIOCGIFPHYS:			/* struct ifreq */
+	case SIOCSIFFLAGS:			/* struct ifreq */
+	case SIOCSIFCAP:			/* struct ifreq */
+	case SIOCSIFPHYS:			/* struct ifreq */
+	case SIOCSIFMTU:			/* struct ifreq */
+	case SIOCADDMULTI:			/* struct ifreq */
+	case SIOCDELMULTI:			/* struct ifreq */
+	case SIOCDIFPHYADDR:			/* struct ifreq */
+	case SIOCSIFMEDIA:			/* struct ifreq */
+	case SIOCSIFGENERIC:			/* struct ifreq */
+	case SIOCSIFLLADDR:			/* struct ifreq */
+	case SIOCSIFALTMTU:			/* struct ifreq */
+	case SIOCSIFVLAN:			/* struct ifreq */
+	case SIOCSIFBOND:			/* struct ifreq */
+	case SIOCGIFPSRCADDR:			/* struct ifreq */
+	case SIOCGIFPDSTADDR:			/* struct ifreq */
+	case SIOCGIFGENERIC:			/* struct ifreq */
+	case SIOCGIFDEVMTU:			/* struct ifreq */
+	case SIOCGIFVLAN:			/* struct ifreq */
+	case SIOCGIFBOND:			/* struct ifreq */
+	case SIOCGIFWAKEFLAGS:			/* struct ifreq */
+	case SIOCGIFGETRTREFCNT:		/* struct ifreq */
+	case SIOCSIFOPPORTUNISTIC:		/* struct ifreq */
+	case SIOCGIFOPPORTUNISTIC:		/* struct ifreq */
+	case SIOCGIFLINKQUALITYMETRIC: {	/* struct ifreq */
+		struct ifreq ifr;
+		bcopy(data, &ifr, sizeof (ifr));
+		error = ifioctl_ifreq(so, cmd, &ifr, p);
+		bcopy(&ifr, data, sizeof (ifr));
+		goto done;
+	}
 	}
 
 	/*
@@ -1457,8 +1563,355 @@ ifioctl(struct socket *so, u_long cmd, caddr_t data, struct proc *p)
 	 * here to ensure that the ifnet, if found, has been fully attached.
 	 */
 	dlil_if_lock();
-	ifp = ifunit(ifr->ifr_name);
+	switch (cmd) {
+	case SIOCSIFPHYADDR: {			/* struct ifaliasreq */
+		bcopy(((struct ifaliasreq *)(void *)data)->ifra_name,
+		    ifname, IFNAMSIZ);
+		ifp = ifunit(ifname);
+		break;
+	}
+
+#if INET6
+	case SIOCSIFPHYADDR_IN6_32: {		/* struct in6_aliasreq_32 */
+		bcopy(((struct in6_aliasreq_32 *)(void *)data)->ifra_name,
+		    ifname, IFNAMSIZ);
+		ifp = ifunit(ifname);
+		break;
+	}
+
+	case SIOCSIFPHYADDR_IN6_64: {		/* struct in6_aliasreq_64 */
+		bcopy(((struct in6_aliasreq_64 *)(void *)data)->ifra_name,
+		    ifname, IFNAMSIZ);
+		ifp = ifunit(ifname);
+		break;
+	}
+#endif
+
+	case SIOCSLIFPHYADDR:			/* struct if_laddrreq */
+	case SIOCGLIFPHYADDR: {			/* struct if_laddrreq */
+		bcopy(((struct if_laddrreq *)(void *)data)->iflr_name,
+		    ifname, IFNAMSIZ);
+		ifp = ifunit(ifname);
+		break;
+	}
+
+	case SIOCGIFSTATUS: {			/* struct ifstat */
+		ifs = _MALLOC(sizeof (*ifs), M_DEVBUF, M_WAITOK);
+		if (ifs == NULL) {
+			error = ENOMEM;
+			dlil_if_unlock();
+			goto done;
+		}
+		bcopy(data, ifs, sizeof (*ifs));
+		ifs->ifs_name[IFNAMSIZ - 1] = '\0';
+		ifp = ifunit(ifs->ifs_name);
+		break;
+	}
+
+	case SIOCGIFMEDIA32: {			/* struct ifmediareq32 */
+		bcopy(((struct ifmediareq32 *)(void *)data)->ifm_name,
+		    ifname, IFNAMSIZ);
+		ifp = ifunit(ifname);
+		break;
+	}
+
+	case SIOCGIFMEDIA64: {			/* struct ifmediareq64 */
+		bcopy(((struct ifmediareq64 *)(void *)data)->ifm_name,
+		    ifname, IFNAMSIZ);
+		ifp = ifunit(ifname);
+		break;
+	}
+
+	case SIOCSIFDESC:			/* struct if_descreq */
+	case SIOCGIFDESC: {			/* struct if_descreq */
+		bcopy(((struct if_descreq *)(void *)data)->ifdr_name,
+		    ifname, IFNAMSIZ);
+		ifp = ifunit(ifname);
+		break;
+	}
+
+	case SIOCSIFLINKPARAMS:			/* struct if_linkparamsreq */
+	case SIOCGIFLINKPARAMS: {		/* struct if_linkparamsreq */
+		bcopy(((struct if_linkparamsreq *)(void *)data)->iflpr_name,
+		    ifname, IFNAMSIZ);
+		ifp = ifunit(ifname);
+		break;
+	}
+
+	case SIOCGIFQUEUESTATS: {		/* struct if_qstatsreq */
+		bcopy(((struct if_qstatsreq *)(void *)data)->ifqr_name,
+		    ifname, IFNAMSIZ);
+		ifp = ifunit(ifname);
+		break;
+	}
+
+	case SIOCSIFTHROTTLE:			/* struct if_throttlereq */
+	case SIOCGIFTHROTTLE: {			/* struct if_throttlereq */
+		bcopy(((struct if_throttlereq *)(void *)data)->ifthr_name,
+		    ifname, IFNAMSIZ);
+		ifp = ifunit(ifname);
+		break;
+	}
+
+	default: {
+		/*
+		 * This is a bad assumption, but the code seems to
+		 * have been doing this in the past; caveat emptor.
+		 */
+		bcopy(((struct ifreq *)(void *)data)->ifr_name,
+		    ifname, IFNAMSIZ);
+		ifp = ifunit(ifname);
+		break;
+	}
+	}
 	dlil_if_unlock();
+
+	if (ifp == NULL) {
+		error = ENXIO;
+		goto done;
+	}
+
+	switch (cmd) {
+	case SIOCSIFPHYADDR:			/* struct ifaliasreq */
+#if INET6
+	case SIOCSIFPHYADDR_IN6_32:		/* struct in6_aliasreq_32 */
+	case SIOCSIFPHYADDR_IN6_64:		/* struct in6_aliasreq_64 */
+#endif
+	case SIOCSLIFPHYADDR:			/* struct if_laddrreq */
+		error = proc_suser(p);
+		if (error != 0)
+			break;
+
+		error = ifnet_ioctl(ifp, so->so_proto->pr_domain->dom_family,
+		    cmd, data);
+		if (error != 0)
+			break;
+
+		ifnet_touch_lastchange(ifp);
+		break;
+
+	case SIOCGIFSTATUS:			/* struct ifstat */
+		VERIFY(ifs != NULL);
+		ifs->ascii[0] = '\0';
+
+		error = ifnet_ioctl(ifp, so->so_proto->pr_domain->dom_family,
+		    cmd, (caddr_t)ifs);
+
+		bcopy(ifs, data, sizeof (*ifs));
+		break;
+
+	case SIOCGLIFPHYADDR:			/* struct if_laddrreq */
+	case SIOCGIFMEDIA32:			/* struct ifmediareq32 */
+	case SIOCGIFMEDIA64:			/* struct ifmediareq64 */
+		error = ifnet_ioctl(ifp, so->so_proto->pr_domain->dom_family,
+		    cmd, data);
+		break;
+
+	case SIOCSIFDESC: {			/* struct if_descreq */
+		struct if_descreq *ifdr = (struct if_descreq *)(void *)data;
+		u_int32_t ifdr_len;
+
+		if ((error = proc_suser(p)) != 0)
+                        break;
+
+		ifnet_lock_exclusive(ifp);
+		bcopy(&ifdr->ifdr_len, &ifdr_len, sizeof (ifdr_len));
+		if (ifdr_len > sizeof (ifdr->ifdr_desc) ||
+		    ifdr_len > ifp->if_desc.ifd_maxlen) {
+			error = EINVAL;
+			ifnet_lock_done(ifp);
+			break;
+		}
+
+		bzero(ifp->if_desc.ifd_desc, ifp->if_desc.ifd_maxlen);
+		if ((ifp->if_desc.ifd_len = ifdr_len) > 0) {
+			bcopy(ifdr->ifdr_desc, ifp->if_desc.ifd_desc,
+			    MIN(ifdr_len, ifp->if_desc.ifd_maxlen));
+		}
+		ifnet_lock_done(ifp);
+		break;
+	}
+
+	case SIOCGIFDESC: {			/* struct if_descreq */
+		struct if_descreq *ifdr = (struct if_descreq *)(void *)data;
+		u_int32_t ifdr_len;
+
+		ifnet_lock_shared(ifp);
+		ifdr_len = MIN(ifp->if_desc.ifd_len, sizeof (ifdr->ifdr_desc));
+		bcopy(&ifdr_len, &ifdr->ifdr_len, sizeof (ifdr_len));
+		bzero(&ifdr->ifdr_desc, sizeof (ifdr->ifdr_desc));
+		if (ifdr_len > 0) {
+			bcopy(ifp->if_desc.ifd_desc, ifdr->ifdr_desc, ifdr_len);
+		}
+		ifnet_lock_done(ifp);
+		break;
+	}
+
+	case SIOCSIFLINKPARAMS: {		/* struct if_linkparamsreq */
+		struct if_linkparamsreq *iflpr =
+		    (struct if_linkparamsreq *)(void *)data;
+		struct ifclassq *ifq = &ifp->if_snd;
+		struct tb_profile tb = { 0, 0, 0 };
+
+		if ((error = proc_suser(p)) != 0)
+                        break;
+
+		IFCQ_LOCK(ifq);
+		if (!IFCQ_IS_READY(ifq)) {
+			error = ENXIO;
+			IFCQ_UNLOCK(ifq);
+			break;
+		}
+		bcopy(&iflpr->iflpr_output_tbr_rate, &tb.rate,
+		    sizeof (tb.rate));
+		bcopy(&iflpr->iflpr_output_tbr_percent, &tb.percent,
+		    sizeof (tb.percent));
+		error = ifclassq_tbr_set(ifq, &tb, TRUE);
+		IFCQ_UNLOCK(ifq);
+		break;
+	}
+
+	case SIOCGIFLINKPARAMS: {		/* struct if_linkparamsreq */
+		struct if_linkparamsreq *iflpr =
+		    (struct if_linkparamsreq *)(void *)data;
+		struct ifclassq *ifq = &ifp->if_snd;
+		u_int32_t sched_type = PKTSCHEDT_NONE, flags = 0;
+		u_int64_t tbr_bw = 0, tbr_pct = 0;
+
+		IFCQ_LOCK(ifq);
+#if PF_ALTQ
+		if (ALTQ_IS_ENABLED(IFCQ_ALTQ(ifq))) {
+			sched_type = IFCQ_ALTQ(ifq)->altq_type;
+			flags |= IFLPRF_ALTQ;
+		} else
+#endif /* PF_ALTQ */
+		{
+			if (IFCQ_IS_ENABLED(ifq))
+				sched_type = ifq->ifcq_type;
+		}
+		bcopy(&sched_type, &iflpr->iflpr_output_sched,
+		    sizeof (iflpr->iflpr_output_sched));
+
+		if (IFCQ_TBR_IS_ENABLED(ifq)) {
+			tbr_bw = ifq->ifcq_tbr.tbr_rate_raw;
+			tbr_pct = ifq->ifcq_tbr.tbr_percent;
+		}
+		bcopy(&tbr_bw, &iflpr->iflpr_output_tbr_rate,
+		    sizeof (iflpr->iflpr_output_tbr_rate));
+		bcopy(&tbr_pct, &iflpr->iflpr_output_tbr_percent,
+		    sizeof (iflpr->iflpr_output_tbr_percent));
+		IFCQ_UNLOCK(ifq);
+
+		if (ifp->if_output_sched_model ==
+		    IFNET_SCHED_MODEL_DRIVER_MANAGED)
+			flags |= IFLPRF_DRVMANAGED;
+		bcopy(&flags, &iflpr->iflpr_flags, sizeof (iflpr->iflpr_flags));
+		bcopy(&ifp->if_output_bw, &iflpr->iflpr_output_bw,
+		    sizeof (iflpr->iflpr_output_bw));
+		bcopy(&ifp->if_input_bw, &iflpr->iflpr_input_bw,
+		    sizeof (iflpr->iflpr_input_bw));
+		break;
+	}
+
+	case SIOCGIFQUEUESTATS: {		/* struct if_qstatsreq */
+		struct if_qstatsreq *ifqr = (struct if_qstatsreq *)(void *)data;
+		u_int32_t ifqr_len, ifqr_slot;
+
+		bcopy(&ifqr->ifqr_slot, &ifqr_slot, sizeof (ifqr_slot));
+		bcopy(&ifqr->ifqr_len, &ifqr_len, sizeof (ifqr_len));
+		error = ifclassq_getqstats(&ifp->if_snd, ifqr_slot,
+		    ifqr->ifqr_buf, &ifqr_len);
+		if (error != 0)
+			ifqr_len = 0;
+		bcopy(&ifqr_len, &ifqr->ifqr_len, sizeof (ifqr_len));
+		break;
+	}
+
+	case SIOCSIFTHROTTLE: {			/* struct if_throttlereq */
+		struct if_throttlereq *ifthr =
+		    (struct if_throttlereq *)(void *)data;
+		u_int32_t ifthr_level;
+
+		/*
+		 * XXX: Use priv_check_cred() instead of root check?
+		 */
+		if ((error = proc_suser(p)) != 0)
+                        break;
+
+		bcopy(&ifthr->ifthr_level, &ifthr_level, sizeof (ifthr_level));
+		error = ifnet_set_throttle(ifp, ifthr_level);
+		if (error == EALREADY)
+			error = 0;
+		break;
+	}
+
+	case SIOCGIFTHROTTLE: {			/* struct if_throttlereq */
+		struct if_throttlereq *ifthr =
+		    (struct if_throttlereq *)(void *)data;
+		u_int32_t ifthr_level;
+
+		if ((error = ifnet_get_throttle(ifp, &ifthr_level)) == 0) {
+			bcopy(&ifthr_level, &ifthr->ifthr_level,
+			    sizeof (ifthr_level));
+		}
+		break;
+	}
+
+	default:
+		if (so->so_proto == NULL) {
+			error = EOPNOTSUPP;
+			break;
+		}
+
+		socket_lock(so, 1);
+		error = ((*so->so_proto->pr_usrreqs->pru_control)(so, cmd,
+		    data, ifp, p));
+		socket_unlock(so, 1);
+
+		if (error == EOPNOTSUPP || error == ENOTSUP) {
+			error = ifnet_ioctl(ifp,
+			    so->so_proto->pr_domain->dom_family, cmd, data);
+		}
+		break;
+	}
+
+done:
+	if (ifs != NULL)
+		_FREE(ifs, M_DEVBUF);
+
+	return (error);
+}
+
+static int
+ifioctl_ifreq(struct socket *so, u_long cmd, struct ifreq *ifr, struct proc *p)
+{
+	struct ifnet *ifp;
+	u_long ocmd = cmd;
+	int error = 0;
+	struct kev_msg ev_msg;
+	struct net_event_data ev_data;
+
+	bzero(&ev_data, sizeof (struct net_event_data));
+	bzero(&ev_msg, sizeof (struct kev_msg));
+
+	ifr->ifr_name[IFNAMSIZ - 1] = '\0';
+
+	switch (cmd) {
+	case SIOCIFCREATE:
+	case SIOCIFCREATE2:
+                error = proc_suser(p);
+                if (error)
+                        return (error);
+                return (if_clone_create(ifr->ifr_name, sizeof(ifr->ifr_name),
+		    cmd == SIOCIFCREATE2 ? ifr->ifr_data : NULL));
+	case SIOCIFDESTROY:
+		error = proc_suser(p);
+		if (error)
+			return (error);
+		return (if_clone_destroy(ifr->ifr_name));
+	}
+
+	ifp = ifunit(ifr->ifr_name);
 	if (ifp == NULL)
 		return (ENXIO);
 
@@ -1466,6 +1919,12 @@ ifioctl(struct socket *so, u_long cmd, caddr_t data, struct proc *p)
 	case SIOCGIFFLAGS:
 		ifnet_lock_shared(ifp);
 		ifr->ifr_flags = ifp->if_flags;
+		ifnet_lock_done(ifp);
+		break;
+
+	case SIOCGIFEFLAGS:
+		ifnet_lock_shared(ifp);
+		ifr->ifr_eflags = ifp->if_eflags;
 		ifnet_lock_done(ifp);
 		break;
 
@@ -1499,6 +1958,24 @@ ifioctl(struct socket *so, u_long cmd, caddr_t data, struct proc *p)
 		ifnet_lock_done(ifp);
 		break;
 
+	case SIOCGIFWAKEFLAGS:
+		ifnet_lock_shared(ifp);
+		ifr->ifr_wake_flags = ifnet_get_wake_flags(ifp);
+		ifnet_lock_done(ifp);
+		break;
+
+	case SIOCGIFGETRTREFCNT:
+		ifnet_lock_shared(ifp);
+		ifr->ifr_route_refcnt = ifp->if_route_refcnt;
+		ifnet_lock_done(ifp);
+		break;
+
+	case SIOCGIFLINKQUALITYMETRIC:
+		ifnet_lock_shared(ifp);
+		ifr->ifr_link_quality_metric = ifp->if_lqm;
+		ifnet_lock_done(ifp);
+		break;
+
 	case SIOCSIFFLAGS:
 		error = proc_suser(p);
 		if (error != 0)
@@ -1512,7 +1989,7 @@ ifioctl(struct socket *so, u_long cmd, caddr_t data, struct proc *p)
 		 * for the SIOCSIFFLAGS case.
 		 */
 		(void) ifnet_ioctl(ifp, so->so_proto->pr_domain->dom_family,
-		    cmd, data);
+		    cmd, (caddr_t)ifr);
 
 		/*
 		 * Send the event even upon error from the driver because
@@ -1544,7 +2021,7 @@ ifioctl(struct socket *so, u_long cmd, caddr_t data, struct proc *p)
 			break;
 		}
 		error = ifnet_ioctl(ifp, so->so_proto->pr_domain->dom_family,
-		    cmd, data);
+		    cmd, (caddr_t)ifr);
 
 		ifnet_touch_lastchange(ifp);
 		break;
@@ -1584,7 +2061,7 @@ ifioctl(struct socket *so, u_long cmd, caddr_t data, struct proc *p)
 			break;
 
 		error = ifnet_ioctl(ifp, so->so_proto->pr_domain->dom_family,
-		    cmd, data);
+		    cmd, (caddr_t)ifr);
 		if (error != 0)
 			break;
 
@@ -1604,9 +2081,9 @@ ifioctl(struct socket *so, u_long cmd, caddr_t data, struct proc *p)
 		ifnet_touch_lastchange(ifp);
 		break;
 
-	case SIOCSIFMTU:
-	{
+	case SIOCSIFMTU: {
 		u_int32_t oldmtu = ifp->if_mtu;
+		struct ifclassq *ifq = &ifp->if_snd;
 
 		error = proc_suser(p);
 		if (error != 0)
@@ -1621,7 +2098,7 @@ ifioctl(struct socket *so, u_long cmd, caddr_t data, struct proc *p)
 			break;
 		}
 		error = ifnet_ioctl(ifp, so->so_proto->pr_domain->dom_family,
-		    cmd, data);
+		    cmd, (caddr_t)ifr);
 		if (error != 0)
 			break;
 
@@ -1651,6 +2128,10 @@ ifioctl(struct socket *so, u_long cmd, caddr_t data, struct proc *p)
 #if INET6
 			nd6_setmtu(ifp);
 #endif
+			/* Inform all transmit queues about the new MTU */
+			IFCQ_LOCK(ifq);
+			ifnet_update_sndq(ifq, CLASSQ_EV_LINK_MTU);
+			IFCQ_UNLOCK(ifq);
 		}
 		break;
 	}
@@ -1710,13 +2191,7 @@ ifioctl(struct socket *so, u_long cmd, caddr_t data, struct proc *p)
 		ifnet_touch_lastchange(ifp);
 		break;
 
-	case SIOCSIFPHYADDR:
 	case SIOCDIFPHYADDR:
-#if INET6
-	case SIOCSIFPHYADDR_IN6_32:
-	case SIOCSIFPHYADDR_IN6_64:
-#endif
-	case SIOCSLIFPHYADDR:
 	case SIOCSIFMEDIA:
 	case SIOCSIFGENERIC:
 	case SIOCSIFLLADDR:
@@ -1728,60 +2203,41 @@ ifioctl(struct socket *so, u_long cmd, caddr_t data, struct proc *p)
 			break;
 
 		error = ifnet_ioctl(ifp, so->so_proto->pr_domain->dom_family,
-		    cmd, data);
+		    cmd, (caddr_t)ifr);
 		if (error != 0)
 			break;
 
 		ifnet_touch_lastchange(ifp);
 		break;
 
-	case SIOCGIFSTATUS:
-		ifs = (struct ifstat *)data;
-		ifs->ascii[0] = '\0';
-
 	case SIOCGIFPSRCADDR:
 	case SIOCGIFPDSTADDR:
-	case SIOCGLIFPHYADDR:
-	case SIOCGIFMEDIA32:
-	case SIOCGIFMEDIA64:
 	case SIOCGIFGENERIC:
 	case SIOCGIFDEVMTU:
-		error = ifnet_ioctl(ifp, so->so_proto->pr_domain->dom_family,
-		    cmd, data);
-		break;
-
 	case SIOCGIFVLAN:
 	case SIOCGIFBOND:
 		error = ifnet_ioctl(ifp, so->so_proto->pr_domain->dom_family,
-		    cmd, data);
+		    cmd, (caddr_t)ifr);
 		break;
 
-	case SIOCGIFWAKEFLAGS:
-		ifnet_lock_shared(ifp);
-		ifr->ifr_wake_flags = ifnet_get_wake_flags(ifp);
-		ifnet_lock_done(ifp);
+	case SIOCSIFOPPORTUNISTIC:
+	case SIOCGIFOPPORTUNISTIC:
+		error = ifnet_getset_opportunistic(ifp, cmd, ifr, p);
 		break;
 
-	case SIOCGIFGETRTREFCNT:
-		ifnet_lock_shared(ifp);
-		ifr->ifr_route_refcnt = ifp->if_route_refcnt;
-		ifnet_lock_done(ifp);
-		break;
+	case SIOCSIFDSTADDR:
+	case SIOCSIFADDR:
+	case SIOCSIFBRDADDR:
+	case SIOCSIFNETMASK:
+	case OSIOCGIFADDR:
+	case OSIOCGIFDSTADDR:
+	case OSIOCGIFBRDADDR:
+	case OSIOCGIFNETMASK:
+	case SIOCSIFKPI:
+		VERIFY(so->so_proto != NULL);
 
-	default:
-		oif_flags = ifp->if_flags;
-		if (so->so_proto == NULL) {
-			error = EOPNOTSUPP;
-			break;
-		}
-	    {
-		u_long ocmd = cmd;
-
-		switch (cmd) {
-		case SIOCSIFDSTADDR:
-		case SIOCSIFADDR:
-		case SIOCSIFBRDADDR:
-		case SIOCSIFNETMASK:
+		if (cmd == SIOCSIFDSTADDR || cmd == SIOCSIFADDR ||
+		    cmd == SIOCSIFBRDADDR || cmd == SIOCSIFNETMASK) {
 #if BYTE_ORDER != BIG_ENDIAN
 			if (ifr->ifr_addr.sa_family == 0 &&
 			    ifr->ifr_addr.sa_len < 16) {
@@ -1792,27 +2248,19 @@ ifioctl(struct socket *so, u_long cmd, caddr_t data, struct proc *p)
 			if (ifr->ifr_addr.sa_len == 0)
 				ifr->ifr_addr.sa_len = 16;
 #endif
-			break;
-
-		case OSIOCGIFADDR:
-			cmd = SIOCGIFADDR;
-			break;
-
-		case OSIOCGIFDSTADDR:
-			cmd = SIOCGIFDSTADDR;
-			break;
-
-		case OSIOCGIFBRDADDR:
-			cmd = SIOCGIFBRDADDR;
-			break;
-
-		case OSIOCGIFNETMASK:
-			cmd = SIOCGIFNETMASK;
+		} else if (cmd == OSIOCGIFADDR) {
+			cmd = SIOCGIFADDR;	/* struct ifreq */
+		} else if (cmd == OSIOCGIFDSTADDR) {
+			cmd = SIOCGIFDSTADDR;	/* struct ifreq */
+		} else if (cmd == OSIOCGIFBRDADDR) {
+			cmd = SIOCGIFBRDADDR;	/* struct ifreq */
+		} else if (cmd == OSIOCGIFNETMASK) {
+			cmd = SIOCGIFNETMASK;	/* struct ifreq */
 		}
 
 		socket_lock(so, 1);
 		error = ((*so->so_proto->pr_usrreqs->pru_control)(so, cmd,
-		    data, ifp, p));
+		    (caddr_t)ifr, ifp, p));
 		socket_unlock(so, 1);
 
 		switch (ocmd) {
@@ -1820,22 +2268,28 @@ ifioctl(struct socket *so, u_long cmd, caddr_t data, struct proc *p)
 		case OSIOCGIFDSTADDR:
 		case OSIOCGIFBRDADDR:
 		case OSIOCGIFNETMASK:
-			*(u_short *)&ifr->ifr_addr = ifr->ifr_addr.sa_family;
-
+			bcopy(&ifr->ifr_addr.sa_family, &ifr->ifr_addr,
+			    sizeof (u_short));
 		}
-	    }
+
 		if (cmd == SIOCSIFKPI) {
 			int temperr = proc_suser(p);
 			if (temperr != 0)
 				error = temperr;
 		}
 
-		if (error == EOPNOTSUPP || error == ENOTSUP)
+		if (error == EOPNOTSUPP || error == ENOTSUP) {
 			error = ifnet_ioctl(ifp,
-			    so->so_proto->pr_domain->dom_family, cmd, data);
-
+			    so->so_proto->pr_domain->dom_family, cmd,
+			    (caddr_t)ifr);
+		}
 		break;
+
+	default:
+		VERIFY(0);
+		/* NOTREACHED */
 	}
+
 	return (error);
 }
 
@@ -1959,7 +2413,7 @@ ifconf(u_long cmd, user_addr_t ifrp, int * ret_space)
 			addrs++;
 			if (cmd == OSIOCGIFCONF32 || cmd == OSIOCGIFCONF64) {
 				struct osockaddr *osa =
-					 (struct osockaddr *)&ifr.ifr_addr;
+				    (struct osockaddr *)(void *)&ifr.ifr_addr;
 				ifr.ifr_addr = *sa;
 				osa->sa_family = sa->sa_family;
 				error = copyout((caddr_t)&ifr, ifrp,
@@ -2018,7 +2472,7 @@ if_allmulti(struct ifnet *ifp, int onswitch)
 {
 	int error = 0;
 	int	modified = 0;
-	
+
 	ifnet_lock_exclusive(ifp);
 
 	if (onswitch) {
@@ -2036,7 +2490,7 @@ if_allmulti(struct ifnet *ifp, int onswitch)
 		}
 	}
 	ifnet_lock_done(ifp);
-	
+
 	if (modified)
 		error = ifnet_ioctl(ifp, 0, SIOCSIFFLAGS, NULL);
 
@@ -2345,56 +2799,58 @@ if_addmulti_doesexist(struct ifnet *ifp, const struct sockaddr *sa,
  * Radar 3642395, make sure all multicasts are in a standard format.
  */
 static struct sockaddr*
-copy_and_normalize(
-	const struct sockaddr	*original)
+copy_and_normalize(const struct sockaddr *original)
 {
-	int					alen = 0;
+	int			alen = 0;
 	const u_char		*aptr = NULL;
 	struct sockaddr		*copy = NULL;
 	struct sockaddr_dl	*sdl_new = NULL;
-	int					len = 0;
-	
+	int			len = 0;
+
 	if (original->sa_family != AF_LINK &&
-		original->sa_family != AF_UNSPEC) {
+	    original->sa_family != AF_UNSPEC) {
 		/* Just make a copy */
-		MALLOC(copy, struct sockaddr*, original->sa_len, M_IFADDR, M_WAITOK);
+		MALLOC(copy, struct sockaddr*, original->sa_len,
+		    M_IFADDR, M_WAITOK);
 		if (copy != NULL)
 			bcopy(original, copy, original->sa_len);
-		return copy;
+		return (copy);
 	}
-	
+
 	switch (original->sa_family) {
 		case AF_LINK: {
-			const struct sockaddr_dl	*sdl_original =
-											(const struct sockaddr_dl*)original;
-			
-			if (sdl_original->sdl_nlen + sdl_original->sdl_alen + sdl_original->sdl_slen +
-				offsetof(struct sockaddr_dl, sdl_data) > sdl_original->sdl_len)
-				return NULL;
-			
+			const struct sockaddr_dl *sdl_original =
+			    (struct sockaddr_dl*)(uintptr_t)(size_t)original;
+
+			if (sdl_original->sdl_nlen + sdl_original->sdl_alen +
+			    sdl_original->sdl_slen +
+			    offsetof(struct sockaddr_dl, sdl_data) >
+			    sdl_original->sdl_len)
+				return (NULL);
+
 			alen = sdl_original->sdl_alen;
 			aptr = CONST_LLADDR(sdl_original);
 		}
 		break;
-		
+
 		case AF_UNSPEC: {
 			if (original->sa_len < ETHER_ADDR_LEN +
-				offsetof(struct sockaddr, sa_data)) {
-				return NULL;
+			    offsetof(struct sockaddr, sa_data)) {
+				return (NULL);
 			}
-			
+
 			alen = ETHER_ADDR_LEN;
 			aptr = (const u_char*)original->sa_data;
 		}
 		break;
 	}
-	
+
 	if (alen == 0 || aptr == NULL)
-		return NULL;
-	
+		return (NULL);
+
 	len = alen + offsetof(struct sockaddr_dl, sdl_data);
 	MALLOC(sdl_new, struct sockaddr_dl*, len, M_IFADDR, M_WAITOK);
-	
+
 	if (sdl_new != NULL) {
 		bzero(sdl_new, len);
 		sdl_new->sdl_len = len;
@@ -2402,8 +2858,8 @@ copy_and_normalize(
 		sdl_new->sdl_alen = alen;
 		bcopy(aptr, LLADDR(sdl_new), alen);
 	}
-	
-	return (struct sockaddr*)sdl_new;
+
+	return ((struct sockaddr*)sdl_new);
 }
 
 /*
@@ -2888,9 +3344,9 @@ if_data_internal_to_if_data(struct ifnet *ifp,
 #define COPYFIELD(fld)		if_data->fld = if_data_int->fld
 #define COPYFIELD32(fld)	if_data->fld = (u_int32_t)(if_data_int->fld)
 /* compiler will cast down to 32-bit */
-#define	COPYFIELD32_ATOMIC(fld) do {						\
-	atomic_get_64(if_data->fld,						\
-	    (u_int64_t *)(void *)(uintptr_t)&if_data_int->fld);			\
+#define	COPYFIELD32_ATOMIC(fld) do {					\
+	atomic_get_64(if_data->fld,					\
+	    (u_int64_t *)(void *)(uintptr_t)&if_data_int->fld);		\
 } while (0)
 
 	COPYFIELD(ifi_type);
@@ -2923,7 +3379,7 @@ if_data_internal_to_if_data(struct ifnet *ifp,
 
 	COPYFIELD(ifi_recvtiming);
 	COPYFIELD(ifi_xmittiming);
-	
+
 	if_data->ifi_lastchange.tv_sec = if_data_int->ifi_lastchange.tv_sec;
 	if_data->ifi_lastchange.tv_usec = if_data_int->ifi_lastchange.tv_usec;
 
@@ -2947,9 +3403,9 @@ if_data_internal_to_if_data64(struct ifnet *ifp,
 {
 #pragma unused(ifp)
 #define COPYFIELD64(fld)	if_data64->fld = if_data_int->fld
-#define COPYFIELD64_ATOMIC(fld) do {						\
-	atomic_get_64(if_data64->fld,						\
-	(u_int64_t *)(void *)(uintptr_t)&if_data_int->fld);			\
+#define COPYFIELD64_ATOMIC(fld) do {					\
+	atomic_get_64(if_data64->fld,					\
+	    (u_int64_t *)(void *)(uintptr_t)&if_data_int->fld);		\
 } while (0)
 
 	COPYFIELD64(ifi_type);
@@ -2996,11 +3452,16 @@ __private_extern__ void
 if_copy_traffic_class(struct ifnet *ifp,
     struct if_traffic_class *if_tc)
 {
-#define COPY_IF_TC_FIELD64_ATOMIC(fld) do {				\
-	atomic_get_64(if_tc->fld,							\
-	(u_int64_t *)(void *)(uintptr_t)&ifp->if_tc.fld);	\
+#define COPY_IF_TC_FIELD64_ATOMIC(fld) do {			\
+	atomic_get_64(if_tc->fld,				\
+	    (u_int64_t *)(void *)(uintptr_t)&ifp->if_tc.fld);	\
 } while (0)
 
+	bzero(if_tc, sizeof (*if_tc));
+	COPY_IF_TC_FIELD64_ATOMIC(ifi_ibepackets);
+	COPY_IF_TC_FIELD64_ATOMIC(ifi_ibebytes);
+	COPY_IF_TC_FIELD64_ATOMIC(ifi_obepackets);
+	COPY_IF_TC_FIELD64_ATOMIC(ifi_obebytes);
 	COPY_IF_TC_FIELD64_ATOMIC(ifi_ibkpackets);
 	COPY_IF_TC_FIELD64_ATOMIC(ifi_ibkbytes);
 	COPY_IF_TC_FIELD64_ATOMIC(ifi_obkpackets);
@@ -3013,10 +3474,83 @@ if_copy_traffic_class(struct ifnet *ifp,
 	COPY_IF_TC_FIELD64_ATOMIC(ifi_ivobytes);
 	COPY_IF_TC_FIELD64_ATOMIC(ifi_ovopackets);
 	COPY_IF_TC_FIELD64_ATOMIC(ifi_ovobytes);
+	COPY_IF_TC_FIELD64_ATOMIC(ifi_ipvpackets);
+	COPY_IF_TC_FIELD64_ATOMIC(ifi_ipvbytes);
+	COPY_IF_TC_FIELD64_ATOMIC(ifi_opvpackets);
+	COPY_IF_TC_FIELD64_ATOMIC(ifi_opvbytes);
 
 #undef COPY_IF_TC_FIELD64_ATOMIC
 }
 
+void
+if_copy_data_extended(struct ifnet *ifp, struct if_data_extended *if_de)
+{
+#define COPY_IF_DE_FIELD64_ATOMIC(fld) do {			\
+	atomic_get_64(if_de->fld,				\
+	    (u_int64_t *)(void *)(uintptr_t)&ifp->if_data.fld);	\
+} while (0)
+
+	bzero(if_de, sizeof (*if_de));
+	COPY_IF_DE_FIELD64_ATOMIC(ifi_alignerrs);
+
+#undef COPY_IF_DE_FIELD64_ATOMIC
+}
+
+void
+if_copy_packet_stats(struct ifnet *ifp, struct if_packet_stats *if_ps)
+{
+#define COPY_IF_PS_TCP_FIELD64_ATOMIC(fld) do {				\
+	atomic_get_64(if_ps->ifi_tcp_##fld,				\
+	    (u_int64_t *)(void *)(uintptr_t)&ifp->if_tcp_stat->fld);	\
+} while (0)
+
+#define COPY_IF_PS_UDP_FIELD64_ATOMIC(fld) do {				\
+	atomic_get_64(if_ps->ifi_udp_##fld,				\
+	    (u_int64_t *)(void *)(uintptr_t)&ifp->if_udp_stat->fld);	\
+} while (0)
+
+	COPY_IF_PS_TCP_FIELD64_ATOMIC(badformat);
+	COPY_IF_PS_TCP_FIELD64_ATOMIC(unspecv6);
+	COPY_IF_PS_TCP_FIELD64_ATOMIC(synfin);
+	COPY_IF_PS_TCP_FIELD64_ATOMIC(badformatipsec);
+	COPY_IF_PS_TCP_FIELD64_ATOMIC(noconnnolist);
+	COPY_IF_PS_TCP_FIELD64_ATOMIC(noconnlist);
+	COPY_IF_PS_TCP_FIELD64_ATOMIC(listbadsyn);
+	COPY_IF_PS_TCP_FIELD64_ATOMIC(icmp6unreach);
+	COPY_IF_PS_TCP_FIELD64_ATOMIC(deprecate6);
+	COPY_IF_PS_TCP_FIELD64_ATOMIC(ooopacket);
+	COPY_IF_PS_TCP_FIELD64_ATOMIC(rstinsynrcv);
+	COPY_IF_PS_TCP_FIELD64_ATOMIC(dospacket);
+	COPY_IF_PS_TCP_FIELD64_ATOMIC(cleanup);
+	COPY_IF_PS_TCP_FIELD64_ATOMIC(synwindow);
+
+	COPY_IF_PS_UDP_FIELD64_ATOMIC(port_unreach);
+	COPY_IF_PS_UDP_FIELD64_ATOMIC(faithprefix);
+	COPY_IF_PS_UDP_FIELD64_ATOMIC(port0);
+	COPY_IF_PS_UDP_FIELD64_ATOMIC(badlength);
+	COPY_IF_PS_UDP_FIELD64_ATOMIC(badchksum);
+	COPY_IF_PS_UDP_FIELD64_ATOMIC(badmcast);
+	COPY_IF_PS_UDP_FIELD64_ATOMIC(cleanup);
+	COPY_IF_PS_UDP_FIELD64_ATOMIC(badipsec);
+
+#undef COPY_IF_PS_TCP_FIELD64_ATOMIC
+#undef COPY_IF_PS_UDP_FIELD64_ATOMIC
+}
+
+void
+if_copy_rxpoll_stats(struct ifnet *ifp, struct if_rxpoll_stats *if_rs)
+{
+	bzero(if_rs, sizeof (*if_rs));
+	if (!(ifp->if_eflags & IFEF_RXPOLL) || !ifnet_is_attached(ifp, 1))
+		return;
+
+	/* by now, ifnet will stay attached so if_inp must be valid */
+	VERIFY(ifp->if_inp != NULL);
+	bcopy(&ifp->if_inp->pstats, if_rs, sizeof (*if_rs));
+
+	/* Release the IO refcnt */
+	ifnet_decr_iorefcnt(ifp);
+}
 
 struct ifaddr *
 ifa_remref(struct ifaddr *ifa, int locked)

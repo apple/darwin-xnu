@@ -47,7 +47,8 @@
 
 #define	FIRST_NET_STR_ID				1000
 static SLIST_HEAD(,net_str_id_entry)	net_str_id_list = {NULL};
-static lck_mtx_t						*net_str_id_lock = NULL;
+decl_lck_mtx_data(static, net_str_id_lock_data);
+static lck_mtx_t	*net_str_id_lock = &net_str_id_lock_data;
 
 static u_int32_t nsi_kind_next[NSI_MAX_KIND] = { FIRST_NET_STR_ID, FIRST_NET_STR_ID, FIRST_NET_STR_ID };
 static u_int32_t nsi_next_id = FIRST_NET_STR_ID;
@@ -71,7 +72,7 @@ net_str_id_init(void)
 	lck_grp_attr_free(grp_attrib);
 	lck_attrb = lck_attr_alloc_init();
 	
-	net_str_id_lock = lck_mtx_alloc_init(lck_group, lck_attrb);
+	lck_mtx_init(net_str_id_lock, lck_group, lck_attrb);
 	
 	lck_grp_free(lck_group);
 	lck_attr_free(lck_attrb);

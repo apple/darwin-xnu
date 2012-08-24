@@ -60,8 +60,15 @@ options		CONFIG_LCTX	# Login Context
 
 options		CONFIG_DTRACE 	# dtrace support	# <config_dtrace>
 
+options		VM_PRESSURE_EVENTS		# <vm_pressure_events>
+
 options		CONFIG_NO_PANIC_STRINGS			# <no_panic_str>
 options		CONFIG_NO_PRINTF_STRINGS		# <no_printf_str>
 options		CONFIG_NO_KPRINTF_STRINGS		# <no_kprintf_str>
 options		CONFIG_FSE	# file system events	# <config_fse>
 options		CONFIG_TRIGGERS	# trigger vnodes	# <config_triggers>
+options		CONFIG_EXT_RESOLVER	# e.g. memberd	# <config_ext_resolver>
+
+options		SECURE_KERNEL				# <secure_kernel>
+options		DEBUG		# 	# <debug>
+options		MACH_ASSERT	#	# <mach_assert>

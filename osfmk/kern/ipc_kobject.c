@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2008 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2010 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -93,7 +93,6 @@
 #include <mach/host_security_server.h>
 #include <mach/clock_server.h>
 #include <mach/clock_priv_server.h>
-#include <mach/ledger_server.h>
 #include <mach/lock_set_server.h>
 #include <default_pager/default_pager_object_server.h>
 #include <mach/memory_object_server.h>
@@ -189,7 +188,6 @@ const struct mig_subsystem *mig_e[] = {
         (const struct mig_subsystem *)&is_iokit_subsystem,
         (const struct mig_subsystem *)&memory_object_name_subsystem,
 	(const struct mig_subsystem *)&lock_set_subsystem,
-	(const struct mig_subsystem *)&ledger_subsystem,
 	(const struct mig_subsystem *)&task_subsystem,
 	(const struct mig_subsystem *)&thread_act_subsystem,
 #if VM32_SUPPORT
@@ -317,6 +315,13 @@ ipc_kobject_server(
 #define	InP	((mach_msg_header_t *) request->ikm_header)
 #define	OutP	((mig_reply_error_t *) reply->ikm_header)
 
+	    /* 
+	     * MIG should really assure no data leakage -
+	     * but until it does, pessimistically zero the
+	     * whole reply buffer.
+	     */
+	    bzero((void *)OutP, reply_size);
+
 	    OutP->NDR = NDR_record;
 	    OutP->Head.msgh_size = sizeof(mig_reply_error_t);
 
@@ -324,6 +329,7 @@ ipc_kobject_server(
 		MACH_MSGH_BITS(MACH_MSGH_BITS_LOCAL(InP->msgh_bits), 0);
 	    OutP->Head.msgh_remote_port = InP->msgh_local_port;
 	    OutP->Head.msgh_local_port  = MACH_PORT_NULL;
+	    OutP->Head.msgh_reserved = (mach_msg_size_t)InP->msgh_id; /* useful for debug */
 	    OutP->Head.msgh_id = InP->msgh_id + 100;
 
 #undef	InP
@@ -590,68 +596,3 @@ ipc_kobject_notify(
                 return FALSE;
         }
 }
-
-
-
-#include <mach_kdb.h>
-#if	MACH_COUNTERS && MACH_KDB
-
-#include <ddb/db_output.h>
-#include <ddb/db_sym.h>
-
-#define printf  kdbprintf
-
-extern void kobjserver_stats(void);
-extern void bucket_stats_print(mig_hash_t *bucket);
-
-extern void kobjserver_stats_clear(void);
-
-
-void
-kobjserver_stats_clear(void)
-{
-	int i;
-	for (i = 0; i < MAX_MIG_ENTRIES; i++) {
-		mig_buckets[i].callcount = 0;
-	}
-}
-
-void
-kobjserver_stats(void)
-{
-    register unsigned int i, n = sizeof(mig_e)/sizeof(struct mig_subsystem);
-    register unsigned int howmany;
-    register mach_msg_id_t j, pos, nentry, range;
-	
-    db_printf("Kobject server call counts:\n");
-    for (i = 0; i < n; i++) {
-	db_printf("  ");
-	db_printsym((vm_offset_t)mig_e[i], DB_STGY_ANY);
-	db_printf(":\n");
-	range = mig_e[i]->end - mig_e[i]->start;
-	if (!mig_e[i]->start || range < 0) continue;
-
-	for  (j = 0; j < range; j++) {
-	    nentry = j + mig_e[i]->start;	
-	    for (pos = MIG_HASH(nentry) % MAX_MIG_ENTRIES, howmany = 1;
-		 mig_buckets[pos].num;
-		 pos++, pos = pos % MAX_MIG_ENTRIES, howmany++) {
-		    if (mig_buckets[pos].num == nentry)
-			bucket_stats_print(&mig_buckets[pos]);
-	    }
-	}
-    }
-}
-
-void
-bucket_stats_print(mig_hash_t *bucket)
-{
-	if (bucket->callcount) {
-		db_printf("    ");
-		db_printsym((vm_offset_t)bucket->routine, DB_STGY_ANY);
-		db_printf(" (%d):\t%d\n", bucket->num, bucket->callcount);
-	}
-}
-
-
-#endif	/* MACH_COUNTERS && MACH_KDB */

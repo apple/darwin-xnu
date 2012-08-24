@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008-2010 Apple Inc. All rights reserved.
+ * Copyright (c) 2008-2011 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -1363,7 +1363,7 @@ typedef enum {
 #ifdef XNU_KERNEL_PRIVATE
 	MBUF_TC_UNSPEC	= -1,		/* Internal: not specified */
 #endif
-	MBUF_TC_BE 		= 0,
+	MBUF_TC_BE		= 0,
 	MBUF_TC_BK		= 1,
 	MBUF_TC_VI		= 2,
 	MBUF_TC_VO		= 3
@@ -1385,10 +1385,132 @@ extern mbuf_traffic_class_t mbuf_get_traffic_class(mbuf_t mbuf);
 	@function mbuf_set_traffic_class
 	@discussion Set the traffic class of an mbuf packet.
 	@param mbuf The mbuf to set the traffic class on.
-	@ac The traffic class
+	@tc The traffic class
 	@result 0 on success, EINVAL if bad paramater is passed
 */
 extern errno_t mbuf_set_traffic_class(mbuf_t mbuf, mbuf_traffic_class_t tc);
+
+/*!
+	@function mbuf_is_traffic_class_privileged
+	@discussion Returns the privileged status of the traffic class
+		of the packet specified by the mbuf.
+	@param mbuf The mbuf to retrieve the status from.
+	@result Non-zero if privileged, 0 otherwise.
+ */
+extern int mbuf_is_traffic_class_privileged(mbuf_t mbuf);
+
+#ifdef KERNEL_PRIVATE
+/*!
+	@enum mbuf_svc_class_t
+	@abstract Service class of a packet
+	@discussion Property that represents the category of service
+		of a packet. This information may be used by the driver
+		and at the link level.
+	@constant MBUF_SC_BK_SYS "Background System-Initiated", high delay
+		tolerant, high loss tolerant, elastic flow, variable size &
+		long-lived.
+	@constant MBUF_SC_BK "Background", user-initiated, high delay tolerant,
+		high loss tolerant, elastic flow, variable size.  This level
+		corresponds to WMM access class "BG", or MBUF_TC_BK.
+	@constant MBUF_SC_BE "Best Effort", unclassified/standard.  This is
+		the default service class; pretty much a mix of everything.
+		This level corresponds to WMM access class "BE" or MBUF_TC_BE.
+	@constant MBUF_SC_RD
+		"Responsive Data", a notch higher than "Best Effort", medium
+		delay tolerant, medium loss tolerant, elastic flow, bursty,
+		long-lived.
+	@constant MBUF_SC_OAM "Operations, Administration, and Management",
+		medium delay tolerant, low-medium loss tolerant, elastic &
+		inelastic flows, variable size.
+	@constant MBUF_SC_AV "Multimedia Audio/Video Streaming", medium delay
+		tolerant, low-medium loss tolerant, elastic flow, constant
+		packet interval, variable rate & size.
+	@constant MBUF_SC_RV "Responsive Multimedia Audio/Video", low delay
+		tolerant, low-medium loss tolerant, elastic flow, variable
+		packet interval, rate and size.
+	@constant MBUF_SC_VI "Interactive Video", low delay tolerant, low-
+		medium loss tolerant, elastic flow, constant packet interval,
+		variable rate & size.  This level corresponds to WMM access
+		class "VI" or MBUF_TC_VI.
+	@constant MBUF_SC_VO "Interactive Voice", low delay tolerant, low loss
+		tolerant, inelastic flow, constant packet rate, somewhat fixed
+		size.  This level corresponds to WMM access class "VO" or
+		MBUF_TC_VO.
+	@constant MBUF_SC_CTL "Network Control", low delay tolerant, low loss
+		tolerant, inelastic flow, rate is short & burst, variable size.
+*/
+typedef enum {
+#ifdef XNU_KERNEL_PRIVATE
+	MBUF_SC_UNSPEC		= -1,		/* Internal: not specified */
+#endif
+	MBUF_SC_BK_SYS		= 0x00080090,	/* lowest class */
+	MBUF_SC_BK		= 0x00100080,
+
+	MBUF_SC_BE		= 0x00000000,
+	MBUF_SC_RD		= 0x00180010,
+	MBUF_SC_OAM		= 0x00200020,
+
+	MBUF_SC_AV		= 0x00280120,
+	MBUF_SC_RV		= 0x00300110,
+	MBUF_SC_VI		= 0x00380100,
+
+	MBUF_SC_VO		= 0x00400180,
+	MBUF_SC_CTL		= 0x00480190,	/* highest class */
+} mbuf_svc_class_t;
+
+/*!
+	@function mbuf_get_service_class
+	@discussion Get the service class of an mbuf packet
+	@param mbuf The mbuf to get the service class of.
+	@result The service class
+*/
+extern mbuf_svc_class_t mbuf_get_service_class(mbuf_t mbuf);
+
+/*!
+	@function mbuf_set_servicec_class
+	@discussion Set the service class of an mbuf packet.
+	@param mbuf The mbuf to set the service class on.
+	@sc The service class
+	@result 0 on success, EINVAL if bad paramater is passed
+*/
+extern errno_t mbuf_set_service_class(mbuf_t mbuf, mbuf_svc_class_t sc);
+
+/*!
+	@function mbuf_is_service_class_privileged
+	@discussion Returns the privileged status of the service class
+		of the packet specified by the mbuf.
+	@param mbuf The mbuf to retrieve the status from.
+	@result Non-zero if privileged, 0 otherwise.
+ */
+extern int mbuf_is_service_class_privileged(mbuf_t mbuf);
+
+/*
+	@enum mbuf_pkthdr_aux_flags_t
+	@abstract Constants defining mbuf auxiliary flags.  Only the flags
+		listed below can be retrieved.
+	@constant MBUF_PKTAUXF_INET_RESOLVE_RTR Indicates this is an ARP
+		request packet, whose target is the address of the default
+		IPv4 router.
+	@constant MBUF_PKTAUXF_INET6_RESOLVE_RTR Indicates this is an ICMPv6
+		Neighbor Solicitation packet, whose target is the address of
+		the default IPv6 router.
+ */
+enum {
+	MBUF_PKTAUXF_INET_RESOLVE_RTR	= 0x0004,
+	MBUF_PKTAUXF_INET6_RESOLVE_RTR	= 0x0008,
+};
+typedef u_int32_t mbuf_pkthdr_aux_flags_t;
+
+/*
+	@function mbuf_pkthdr_aux_flags
+	@discussion Returns the auxiliary flags of a packet.
+	@param mbuf The mbuf containing the packet header.
+	@param paux_flags Pointer to mbuf_pkthdr_aux_flags_t variable.
+	@result 0 upon success otherwise the errno error.
+*/
+extern errno_t mbuf_pkthdr_aux_flags(mbuf_t mbuf,
+    mbuf_pkthdr_aux_flags_t *paux_flags);
+#endif /* KERNEL_PRIVATE */
 
 /* IF_QUEUE interaction */
 

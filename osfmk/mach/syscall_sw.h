@@ -76,6 +76,25 @@
  *	table in <kern/syscall_sw.c>.
  */
 
+/* 
+ * i386 and x86_64 just load of the stack or use
+ * registers in order; no munging is required, 
+ * and number of args is ignored.  ARM loads args
+ * into registers beyond r3, unlike the normal 
+ * procedure call standard; we pad for 64-bit args.
+ */
+kernel_trap(_kernelrpc_mach_vm_allocate_trap,-10,5) /* 4 args, +1 for mach_vm_size_t */
+kernel_trap(_kernelrpc_mach_vm_deallocate_trap,-12,5) /* 3 args, +2 for mach_vm_size_t and mach_vm_address_t */
+kernel_trap(_kernelrpc_mach_vm_protect_trap,-14,7) /* 5 args, +2 for mach_vm_address_t and mach_vm_size_t */
+kernel_trap(_kernelrpc_mach_port_allocate_trap,-16,3)
+kernel_trap(_kernelrpc_mach_port_destroy_trap,-17,2)
+kernel_trap(_kernelrpc_mach_port_deallocate_trap,-18,2)
+kernel_trap(_kernelrpc_mach_port_mod_refs_trap,-19,4)
+kernel_trap(_kernelrpc_mach_port_move_member_trap,-20,3)
+kernel_trap(_kernelrpc_mach_port_insert_right_trap,-21,4)
+kernel_trap(_kernelrpc_mach_port_insert_member_trap,-22,3)
+kernel_trap(_kernelrpc_mach_port_extract_member_trap,-23,3)
+
 kernel_trap(mach_reply_port,-26,0)
 kernel_trap(thread_self_trap,-27,0)
 kernel_trap(task_self_trap,-28,0)

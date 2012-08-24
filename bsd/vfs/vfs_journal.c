@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2002-2011 Apple Inc. All rights reserved.
+ * Copyright (c) 2002-2012 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -115,9 +115,11 @@ SYSCTL_INT(_vfs_generic_jnl_kdebug, OID_AUTO, trim, CTLFLAG_RW|CTLFLAG_LOCKED, &
 #define KERNEL_DEBUG KERNEL_DEBUG_CONSTANT
 #endif
 
+
 #ifndef CONFIG_HFS_TRIM
 #define CONFIG_HFS_TRIM 0
 #endif
+
 
 #if JOURNALING
 
@@ -136,8 +138,7 @@ enum {
 unsigned int jnl_trim_flush_limit = JOURNAL_FLUSH_TRIM_EXTENTS;
 SYSCTL_UINT (_kern, OID_AUTO, jnl_trim_flush, CTLFLAG_RW, &jnl_trim_flush_limit, 0, "number of trimmed extents to cause a journal flush");
 
-
-/* XXX next prototytype should be from libsa/stdlib.h> but conflicts libkern */
+/* XXX next prototype should be from libsa/stdlib.h> but conflicts libkern */
 __private_extern__ void qsort(
 	void * array,
 	size_t nmembers,
@@ -1099,6 +1100,7 @@ replay_journal(journal *jnl)
 	struct bucket	*co_buf;
 	int		num_buckets = STARTING_BUCKETS, num_full, check_past_jnl_end = 1, in_uncharted_territory=0;
 	uint32_t	last_sequence_num = 0;
+	int 		replay_retry_count = 0;
     
 	// wrap the start ptr if it points to the very end of the journal
 	if (jnl->jhdr->start == jnl->jhdr->size) {
@@ -1336,11 +1338,25 @@ restart_replay:
 		
 bad_txn_handling:
 		if (bad_blocks) {
+			/* Journal replay got error before it found any valid 
+			 *  transations, abort replay */
 			if (txn_start_offset == 0) {
 				printf("jnl: %s: no known good txn start offset! aborting journal replay.\n", jnl->jdev_name);
 				goto bad_replay;
 			}
 
+			/* Repeated error during journal replay, abort replay */
+			if (replay_retry_count == 3) {
+				printf("jnl: %s: repeated errors replaying journal! aborting journal replay.\n", jnl->jdev_name);
+				goto bad_replay;
+			}
+			replay_retry_count++;
+
+			/* There was an error replaying the journal (possibly 
+			 * EIO/ENXIO from the device).  So retry replaying all 
+			 * the good transactions that we found before getting 
+			 * the error.  
+			 */
 			jnl->jhdr->start = orig_jnl_start;
 			jnl->jhdr->end = txn_start_offset;
 			check_past_jnl_end = 0;
@@ -1763,7 +1779,8 @@ journal_create(struct vnode *jvp,
 	lck_mtx_init(&jnl->jlock, jnl_mutex_group, jnl_lock_attr);
 	lck_mtx_init(&jnl->flock, jnl_mutex_group, jnl_lock_attr);
 	lck_rw_init(&jnl->trim_lock, jnl_mutex_group, jnl_lock_attr);
-	
+
+
 	jnl->flushing = FALSE;
 	jnl->asyncIO = FALSE;
 	jnl->flush_aborted = FALSE;
@@ -1911,26 +1928,24 @@ journal_open(struct vnode *jvp,
 		jnl->jhdr->magic = JOURNAL_HEADER_MAGIC;
 	}
 
-    if (phys_blksz != (size_t)jnl->jhdr->jhdr_size && jnl->jhdr->jhdr_size != 0) {
-	/*
-	 * The volume has probably been resized (such that we had to adjust the
-	 * logical sector size), or copied to media with a different logical
-	 * sector size.
-	 *
-	 * Temporarily change the device's logical block size to match the
-	 * journal's header size.  This will allow us to replay the journal
-	 * safely.  If the replay succeeds, we will update the journal's header
-	 * size (later in this function).
-	 */
+	if (phys_blksz != (size_t)jnl->jhdr->jhdr_size && jnl->jhdr->jhdr_size != 0) {
+		/*
+		 * The volume has probably been resized (such that we had to adjust the
+		 * logical sector size), or copied to media with a different logical
+		 * sector size.
+		 * 
+		 * Temporarily change the device's logical block size to match the
+		 * journal's header size.  This will allow us to replay the journal
+		 * safely.  If the replay succeeds, we will update the journal's header
+		 * size (later in this function).
+		 */
+		orig_blksz = phys_blksz;
+		phys_blksz = jnl->jhdr->jhdr_size;
+		VNOP_IOCTL(jvp, DKIOCSETBLOCKSIZE, (caddr_t)&phys_blksz, FWRITE, &context);
+		printf("jnl: %s: open: temporarily switched block size from %u to %u\n",
+			   jdev_name, orig_blksz, phys_blksz);
+	}
 
-	orig_blksz = phys_blksz;
-	phys_blksz = jnl->jhdr->jhdr_size;
-	VNOP_IOCTL(jvp, DKIOCSETBLOCKSIZE, (caddr_t)&phys_blksz, FWRITE, &context);
-
-	printf("jnl: %s: open: temporarily switched block size from %u to %u\n",
-	       jdev_name, orig_blksz, phys_blksz);
-    }
-    
 	if (   jnl->jhdr->start <= 0
 	       || jnl->jhdr->start > jnl->jhdr->size
 	       || jnl->jhdr->start > 1024*1024*1024) {
@@ -1980,68 +1995,71 @@ journal_open(struct vnode *jvp,
 		printf("jnl: %s: journal_open: Error replaying the journal!\n", jdev_name);
 		goto bad_journal;
 	}
+	
+	/*
+	 * When we get here, we know that the journal is empty (jnl->jhdr->start ==
+	 * jnl->jhdr->end).  If the device's logical block size was different from
+	 * the journal's header size, then we can now restore the device's logical
+	 * block size and update the journal's header size to match.
+	 *
+	 * Note that we also adjust the journal's start and end so that they will
+	 * be aligned on the new block size.  We pick a new sequence number to
+	 * avoid any problems if a replay found previous transactions using the old
+	 * journal header size.  (See the comments in journal_create(), above.)
+	 */
+	
+	if (orig_blksz != 0) {
+		VNOP_IOCTL(jvp, DKIOCSETBLOCKSIZE, (caddr_t)&orig_blksz, FWRITE, &context);
+		phys_blksz = orig_blksz;
+		
+		orig_blksz = 0;
+		
+		jnl->jhdr->jhdr_size = phys_blksz;
+		jnl->jhdr->start = phys_blksz;
+		jnl->jhdr->end = phys_blksz;
+		jnl->jhdr->sequence_num = (jnl->jhdr->sequence_num +
+								   (journal_size / phys_blksz) +
+								   (random() % 16384)) & 0x00ffffff;
+		
+		if (write_journal_header(jnl, 1, jnl->jhdr->sequence_num)) {
+			printf("jnl: %s: open: failed to update journal header size\n", jdev_name);
+			goto bad_journal;
+		}
+	}
 
-    /*
-     * When we get here, we know that the journal is empty (jnl->jhdr->start ==
-     * jnl->jhdr->end).  If the device's logical block size was different from
-     * the journal's header size, then we can now restore the device's logical
-     * block size and update the journal's header size to match.
-     *
-     * Note that we also adjust the journal's start and end so that they will
-     * be aligned on the new block size.  We pick a new sequence number to
-     * avoid any problems if a replay found previous transactions using the old
-     * journal header size.  (See the comments in journal_create(), above.)
-     */
-    if (orig_blksz != 0) {
-	VNOP_IOCTL(jvp, DKIOCSETBLOCKSIZE, (caddr_t)&orig_blksz, FWRITE, &context);
-	phys_blksz = orig_blksz;
-	orig_blksz = 0;
-	printf("jnl: %s: open: restored block size to %u\n", jdev_name, phys_blksz);
-	
-	jnl->jhdr->jhdr_size = phys_blksz;
-	jnl->jhdr->start = phys_blksz;
-	jnl->jhdr->end = phys_blksz;
-	jnl->jhdr->sequence_num = (jnl->jhdr->sequence_num +
-				   (journal_size / phys_blksz) +
-				   (random() % 16384)) & 0x00ffffff;
-	
-	if (write_journal_header(jnl, 1, jnl->jhdr->sequence_num)) {
-		printf("jnl: %s: open: failed to update journal header size\n", jdev_name);
+	// make sure this is in sync!
+	jnl->active_start = jnl->jhdr->start;
+	jnl->sequence_num = jnl->jhdr->sequence_num;
+
+	// set this now, after we've replayed the journal
+	size_up_tbuffer(jnl, tbuffer_size, phys_blksz);
+
+	// TODO: Does this need to change if the device's logical block size changed?
+	if ((off_t)(jnl->jhdr->blhdr_size/sizeof(block_info)-1) > (jnl->jhdr->size/jnl->jhdr->jhdr_size)) {
+		printf("jnl: %s: open: jhdr size and blhdr size are not compatible (0x%llx, %d, %d)\n", jdev_name, jnl->jhdr->size,
+		       jnl->jhdr->blhdr_size, jnl->jhdr->jhdr_size);
 		goto bad_journal;
 	}
-    }
-    
-    // make sure this is in sync!
-    jnl->active_start = jnl->jhdr->start;
-    jnl->sequence_num = jnl->jhdr->sequence_num;
 
-    // set this now, after we've replayed the journal
-    size_up_tbuffer(jnl, tbuffer_size, phys_blksz);
+	lck_mtx_init(&jnl->jlock, jnl_mutex_group, jnl_lock_attr);
+	lck_mtx_init(&jnl->flock, jnl_mutex_group, jnl_lock_attr);
+	lck_rw_init(&jnl->trim_lock, jnl_mutex_group, jnl_lock_attr);
 
-    // TODO: Does this need to change if the device's logical block size changed?
-    if ((off_t)(jnl->jhdr->blhdr_size/sizeof(block_info)-1) > (jnl->jhdr->size/jnl->jhdr->jhdr_size)) {
-	printf("jnl: %s: open: jhdr size and blhdr size are not compatible (0x%llx, %d, %d)\n", jdev_name, jnl->jhdr->size,
-	   jnl->jhdr->blhdr_size, jnl->jhdr->jhdr_size);
-	goto bad_journal;
-    }
+	return jnl;
 
-    lck_mtx_init(&jnl->jlock, jnl_mutex_group, jnl_lock_attr);
-
-    return jnl;
-
-  bad_journal:
-    if (orig_blksz != 0) {
-	phys_blksz = orig_blksz;
-	VNOP_IOCTL(jvp, DKIOCSETBLOCKSIZE, (caddr_t)&orig_blksz, FWRITE, &context);
-	printf("jnl: %s: open: restored block size to %u after error\n", jdev_name, orig_blksz);
-    }
-    kmem_free(kernel_map, (vm_offset_t)jnl->header_buf, phys_blksz);
-  bad_kmem_alloc:
-    if (jdev_name) {
-	vfs_removename(jdev_name);
-    }
-    FREE_ZONE(jnl, sizeof(struct journal), M_JNL_JNL);
-    return NULL;    
+bad_journal:
+	if (orig_blksz != 0) {
+		phys_blksz = orig_blksz;
+		VNOP_IOCTL(jvp, DKIOCSETBLOCKSIZE, (caddr_t)&orig_blksz, FWRITE, &context);
+		printf("jnl: %s: open: restored block size after error\n", jdev_name);
+	}
+	kmem_free(kernel_map, (vm_offset_t)jnl->header_buf, phys_blksz);
+bad_kmem_alloc:
+	if (jdev_name) {
+		vfs_removename(jdev_name);
+	}
+	FREE_ZONE(jnl, sizeof(struct journal), M_JNL_JNL);
+	return NULL;    
 }
 
 
@@ -2351,7 +2369,7 @@ check_free_space(journal *jnl, int desired_size, boolean_t *delayed_header_write
 
 			lcl_counter = 0;
 			while (jnl->old_start[i] & 0x8000000000000000LL) {
-				if (lcl_counter++ > 1000) {
+				if (lcl_counter++ > 10000) {
 					panic("jnl: check_free_space: tr starting @ 0x%llx not flushing (jnl %p).\n",
 					      jnl->old_start[i], jnl);
 				}
@@ -2922,7 +2940,6 @@ journal_kill_block(journal *jnl, struct buf *bp)
 	return 0;
 }
 
-
 /*
 ;________________________________________________________________________________
 ;
@@ -3016,24 +3033,23 @@ trim_realloc(struct jnl_trim_list *trim)
 	return 0;
 }
 
-
 /*
-;________________________________________________________________________________
-;
-; Routine:		trim_search_extent
-;
-; Function:		Search the given extent list to see if any of its extents
-;				overlap the given extent.
-;
-; Input Arguments:
-;	trim		- The trim list to be searched.
-;	offset		- The first byte of the range to be searched for.
-;	length		- The number of bytes of the extent being searched for.
-;
-; Output:
-;	(result)	- TRUE if one or more extents overlap, FALSE otherwise.
-;________________________________________________________________________________
-*/
+ ;________________________________________________________________________________
+ ;
+ ; Routine:		trim_search_extent
+ ;
+ ; Function:		Search the given extent list to see if any of its extents
+ ;				overlap the given extent.
+ ;
+ ; Input Arguments:
+ ;	trim		- The trim list to be searched.
+ ;	offset		- The first byte of the range to be searched for.
+ ;	length		- The number of bytes of the extent being searched for.
+ ;
+ ; Output:
+ ;	(result)	- TRUE if one or more extents overlap, FALSE otherwise.
+ ;________________________________________________________________________________
+ */
 static int
 trim_search_extent(struct jnl_trim_list *trim, uint64_t offset, uint64_t length)
 {
@@ -3092,7 +3108,7 @@ journal_trim_add_extent(journal *jnl, uint64_t offset, uint64_t length)
 	dk_extent_t *extent;
 	uint32_t insert_index;
 	uint32_t replace_count;
-	
+		
 	CHECK_JOURNAL(jnl);
 
 	/* TODO: Is it OK to manipulate the trim list even if JOURNAL_INVALID is set?  I think so... */
@@ -3112,9 +3128,9 @@ journal_trim_add_extent(journal *jnl, uint64_t offset, uint64_t length)
 	}
 
 	free_old_stuff(jnl);
-	
+		
 	end = offset + length;
-	
+		
 	/*
 	 * Find the range of existing extents that can be combined with the
 	 * input extent.  We start by counting the number of extents that end
@@ -3132,7 +3148,7 @@ journal_trim_add_extent(journal *jnl, uint64_t offset, uint64_t length)
 		++replace_count;
 		++extent;
 	}
-	
+		
 	/*
 	 * If none of the existing extents can be combined with the input extent,
 	 * then just insert it in the list (before item number insert_index).
@@ -3331,24 +3347,23 @@ trim_remove_extent(struct jnl_trim_list *trim, uint64_t offset, uint64_t length)
 	return 0;
 }
 
-
 /*
-;________________________________________________________________________________
-;
-; Routine:		journal_trim_remove_extent
-;
-; Function:		Make note of a range of bytes, some of which may have previously
-;				been passed to journal_trim_add_extent, is now in use on the
-;				volume.  The given bytes will be not be trimmed as part of
-;				this transaction, or a pending trim of a transaction being
-;				asynchronously flushed.
-;
-; Input Arguments:
-;	jnl			- The journal for the volume containing the byte range.
-;	offset		- The first byte of the range to be trimmed.
-;	length		- The number of bytes of the extent being trimmed.
-;________________________________________________________________________________
-*/
+ ;________________________________________________________________________________
+ ;
+ ; Routine:		journal_trim_remove_extent
+ ;
+ ; Function:		Make note of a range of bytes, some of which may have previously
+ ;				been passed to journal_trim_add_extent, is now in use on the
+ ;				volume.  The given bytes will be not be trimmed as part of
+ ;				this transaction, or a pending trim of a transaction being
+ ;				asynchronously flushed.
+ ;
+ ; Input Arguments:
+ ;	jnl			- The journal for the volume containing the byte range.
+ ;	offset		- The first byte of the range to be trimmed.
+ ;	length		- The number of bytes of the extent being trimmed.
+ ;________________________________________________________________________________
+ */
 __private_extern__ int
 journal_trim_remove_extent(journal *jnl, uint64_t offset, uint64_t length)
 {
@@ -3374,7 +3389,7 @@ journal_trim_remove_extent(journal *jnl, uint64_t offset, uint64_t length)
 	}
 
 	free_old_stuff(jnl);
-	
+		
 	error = trim_remove_extent(&tr->trim, offset, length);
 	if (error == 0) {
 		int found = FALSE;
@@ -3424,11 +3439,11 @@ journal_trim_flush(journal *jnl, transaction *tr)
 	if (jnl_kdebug)
 		KERNEL_DEBUG_CONSTANT(DBG_JOURNAL_TRIM_FLUSH | DBG_FUNC_START, jnl, tr, 0, tr->trim.extent_count, 0);
 
+	lck_rw_lock_shared(&jnl->trim_lock);
 	if (tr->trim.extent_count > 0) {
 		dk_unmap_t unmap;
 				
 		bzero(&unmap, sizeof(unmap));
-		lck_rw_lock_shared(&jnl->trim_lock);
 		if (CONFIG_HFS_TRIM && (jnl->flags & JOURNAL_USE_UNMAP)) {
 			unmap.extents = tr->trim.extents;
 			unmap.extentsCount = tr->trim.extent_count;
@@ -3439,12 +3454,12 @@ journal_trim_flush(journal *jnl, transaction *tr)
 				KERNEL_DEBUG_CONSTANT(DBG_JOURNAL_TRIM_UNMAP | DBG_FUNC_END, errno, 0, 0, 0, 0);
 			if (errno) {
 				printf("jnl: error %d from DKIOCUNMAP (extents=%lx, count=%u); disabling trim for %s\n",
-						errno, (unsigned long) (unmap.extents), unmap.extentsCount,
-						jnl->jdev_name);
+					   errno, (unsigned long) (unmap.extents), unmap.extentsCount,
+					   jnl->jdev_name);
 				jnl->flags &= ~JOURNAL_USE_UNMAP;
 			}
 		}
-
+		
 		/*
 		 * Call back into the file system to tell them that we have
 		 * trimmed some extents and that they can now be reused.
@@ -3456,9 +3471,8 @@ journal_trim_flush(journal *jnl, transaction *tr)
 		 */
 		if (jnl->trim_callback)
 			jnl->trim_callback(jnl->trim_callback_arg, tr->trim.extent_count, tr->trim.extents);
-
-		lck_rw_unlock_shared(&jnl->trim_lock);
 	}
+	lck_rw_unlock_shared(&jnl->trim_lock);
 
 	/*
 	 * If the transaction we're flushing was the async transaction, then
@@ -3475,6 +3489,11 @@ journal_trim_flush(journal *jnl, transaction *tr)
 		jnl->async_trim = NULL;
 	lck_rw_unlock_exclusive(&jnl->trim_lock);
 
+	/*
+	 * By the time we get here, no other thread can discover the address
+	 * of "tr", so it is safe for us to manipulate tr->trim without
+	 * holding any locks.
+	 */
 	if (tr->trim.extents) {			
 		kfree(tr->trim.extents, tr->trim.allocated_count * sizeof(dk_extent_t));
 		tr->trim.allocated_count = 0;
@@ -3487,7 +3506,6 @@ journal_trim_flush(journal *jnl, transaction *tr)
 
 	return errno;
 }
-
 
 static int
 journal_binfo_cmp(const void *a, const void *b)
@@ -3607,7 +3625,7 @@ end_transaction(transaction *tr, int force_it, errno_t (*callback)(void*), void 
 		KERNEL_DEBUG(0xbbbbc018|DBG_FUNC_END, jnl, tr, ret_val, 0, 0);
 		goto done;
 	}
-
+	
 	/*
 	 * Store a pointer to this transaction's trim list so that
 	 * future transactions can find it.
@@ -3634,7 +3652,7 @@ end_transaction(transaction *tr, int force_it, errno_t (*callback)(void*), void 
 	 * of the journal flush, 'saved_sequence_num' remains stable
 	 */
 	jnl->saved_sequence_num = jnl->sequence_num;
-
+	
 	/*
 	 * if we're here we're going to flush the transaction buffer to disk.
 	 * 'check_free_space' will not return untl there is enough free
@@ -3822,15 +3840,7 @@ done:
 static void
 finish_end_thread(transaction *tr)
 {
-#if !CONFIG_EMBEDDED
 	proc_apply_thread_selfdiskacc(IOPOL_PASSIVE);
-#else /* !CONFIG_EMBEDDED */
-	struct uthread	*ut;
-
-	ut = get_bsdthread_info(current_thread());
-	ut->uu_iopol_disk = IOPOL_PASSIVE;
-#endif /* !CONFIG_EMBEDDED */
-
 	finish_end_transaction(tr, NULL, NULL);
 
 	thread_deallocate(current_thread());
@@ -3840,14 +3850,7 @@ finish_end_thread(transaction *tr)
 static void
 write_header_thread(journal *jnl)
 {
-#if !CONFIG_EMBEDDED
 	proc_apply_thread_selfdiskacc(IOPOL_PASSIVE);
-#else /* !CONFIG_EMBEDDED */
-	struct uthread	*ut;
-
-	ut = get_bsdthread_info(current_thread());
-	ut->uu_iopol_disk = IOPOL_PASSIVE;
-#endif /* !CONFIG_EMBEDDED */
 
 	if (write_journal_header(jnl, 1, jnl->saved_sequence_num))
 		jnl->write_header_failed = TRUE;
@@ -4249,7 +4252,7 @@ abort_transaction(journal *jnl, transaction *tr)
 					 */
 					vnode_rele_ext(bp_vp, 0, 1);
 				} else {
-					printf("jnl: %s: abort_tr: could not find block %Ld vp %p!\n",
+					printf("jnl: %s: abort_tr: could not find block %lld vp %p!\n",
 					       jnl->jdev_name, blhdr->binfo[i].bnum, tbp);
 					if (bp) {
 						buf_brelse(bp);
@@ -4275,6 +4278,7 @@ abort_transaction(journal *jnl, transaction *tr)
 	if (jnl->async_trim == &tr->trim)
 		jnl->async_trim = NULL;
 	lck_rw_unlock_exclusive(&jnl->trim_lock);
+	
 	
 	if (tr->trim.extents) {
 		kfree(tr->trim.extents, tr->trim.allocated_count * sizeof(dk_extent_t));
@@ -4520,7 +4524,8 @@ int journal_relocate(journal *jnl, off_t offset, off_t journal_size, int32_t tbu
 {
 	int		ret;
 	transaction	*tr;
-	
+	size_t i = 0;
+
 	/*
 	 * Sanity check inputs, and adjust the size of the transaction buffer.
 	 */
@@ -4565,7 +4570,23 @@ int journal_relocate(journal *jnl, off_t offset, off_t journal_size, int32_t tbu
 		return ret;
 	}
 	wait_condition(jnl, &jnl->flushing, "end_transaction");
-	
+
+	/*
+	 * At this point, we have completely flushed the contents of the current
+	 * journal to disk (and have asynchronously written all of the txns to 
+	 * their actual desired locations).  As a result, we can (and must) clear 
+	 * out the old_start array.  If we do not, then if the last written transaction
+	 * started at the beginning of the journal (starting 1 block into the 
+	 * journal file) it could confuse the buffer_flushed callback. This is
+	 * because we're about to reset the start/end pointers of the journal header
+	 * below. 
+	 */
+	lock_oldstart(jnl); 
+	for (i = 0; i < sizeof (jnl->old_start) / sizeof(jnl->old_start[0]); i++) { 
+		jnl->old_start[i] = 0; 
+	}
+	unlock_oldstart(jnl);
+
 	/* Update the journal's offset and size in memory. */
 	jnl->jdev_offset = offset;
 	jnl->jhdr->start = jnl->jhdr->end = jnl->jhdr->jhdr_size;

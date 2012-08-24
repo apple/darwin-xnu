@@ -881,12 +881,17 @@ mach_vm_map(
 	vm_prot_t		max_protection,
 	vm_inherit_t		inheritance)
 {
+	kern_return_t		kr;
+	vm_map_offset_t 	vmmaddr;
+
+	vmmaddr = (vm_map_offset_t) *address;
+
 	/* filter out any kernel-only flags */
 	if (flags & ~VM_FLAGS_USER_MAP)
 		return KERN_INVALID_ARGUMENT;
 
-	return vm_map_enter_mem_object(target_map,
-				       address,
+	kr = vm_map_enter_mem_object(target_map,
+				       &vmmaddr,
 				       initial_size,
 				       mask,
 				       flags,
@@ -896,6 +901,9 @@ mach_vm_map(
 				       cur_protection,
 				       max_protection,
 				       inheritance);
+
+	*address = vmmaddr;
+	return kr;
 }
 
 
@@ -1887,6 +1895,9 @@ mach_make_memory_entry_64(
 		} else if (access == MAP_MEM_COPYBACK) {
 		   SET_MAP_MEM(access, parent_entry->protection);
 		   wimg_mode = VM_WIMG_USE_DEFAULT;
+		} else if (access == MAP_MEM_INNERWBACK) {
+		   SET_MAP_MEM(access, parent_entry->protection);
+		   wimg_mode = VM_WIMG_INNERWBACK;
 		} else if (access == MAP_MEM_WTHRU) {
 		   SET_MAP_MEM(access, parent_entry->protection);
 		   wimg_mode = VM_WIMG_WTHRU;
@@ -1951,6 +1962,8 @@ mach_make_memory_entry_64(
 			wimg_mode = VM_WIMG_IO;
 		} else if (access == MAP_MEM_COPYBACK) {
 			wimg_mode = VM_WIMG_USE_DEFAULT;
+		} else if (access == MAP_MEM_INNERWBACK) {
+			wimg_mode = VM_WIMG_INNERWBACK;
 		} else if (access == MAP_MEM_WTHRU) {
 			wimg_mode = VM_WIMG_WTHRU;
 		} else if (access == MAP_MEM_WCOMB) {
@@ -2156,6 +2169,10 @@ redo_lookup:
 						 */
 						protections &= next_entry->max_protection;
 					}
+					if ((next_entry->wired_count) &&
+					    (map_entry->wired_count == 0)) {
+						break;
+					}
 					if(((next_entry->max_protection) 
 						& protections) != protections) {
 			 			break;
@@ -2264,7 +2281,7 @@ redo_lookup:
 					object, map_entry->offset,
 					total_size,
 					((map_entry->is_shared 
-						|| target_map->mapped)
+					  || target_map->mapped_in_other_pmaps)
 							? PMAP_NULL :
 							target_map->pmap),
 					map_entry->vme_start,
@@ -2276,6 +2293,9 @@ redo_lookup:
 
 				vm_object_lock(shadow_object);
 				while (total_size) {
+				    assert((next_entry->wired_count == 0) ||
+					   (map_entry->wired_count));
+
 				   if(next_entry->object.vm_object == object) {
 					vm_object_reference_locked(shadow_object);
 					next_entry->object.vm_object 
@@ -2327,6 +2347,8 @@ redo_lookup:
 				wimg_mode = VM_WIMG_IO;
 			} else if (access == MAP_MEM_COPYBACK) {
 				wimg_mode = VM_WIMG_USE_DEFAULT;
+			} else if (access == MAP_MEM_INNERWBACK) {
+				wimg_mode = VM_WIMG_INNERWBACK;
 			} else if (access == MAP_MEM_WTHRU) {
 				wimg_mode = VM_WIMG_WTHRU;
 			} else if (access == MAP_MEM_WCOMB) {
@@ -2768,8 +2790,10 @@ mach_destroy_memory_entry(
 	assert(ip_kotype(port) == IKOT_NAMED_ENTRY);
 #endif /* MACH_ASSERT */
 	named_entry = (vm_named_entry_t)port->ip_kobject;
-	lck_mtx_lock(&(named_entry)->Lock);
+
+	named_entry_lock(named_entry);
 	named_entry->ref_count -= 1;
+
 	if(named_entry->ref_count == 0) {
 		if (named_entry->is_sub_map) {
 			vm_map_deallocate(named_entry->backing.map);
@@ -2778,12 +2802,13 @@ mach_destroy_memory_entry(
 			vm_object_deallocate(named_entry->backing.object);
 		} /* else JMM - need to drop reference on pager in that case */
 
-		lck_mtx_unlock(&(named_entry)->Lock);
+		named_entry_unlock(named_entry);
+		named_entry_lock_destroy(named_entry);
 
 		kfree((void *) port->ip_kobject,
 		      sizeof (struct vm_named_entry));
 	} else
-		lck_mtx_unlock(&(named_entry)->Lock);
+		named_entry_unlock(named_entry);
 }
 
 /* Allow manipulation of individual page state.  This is actually part of */

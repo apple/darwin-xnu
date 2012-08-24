@@ -230,6 +230,31 @@ machine_task_get_state(task_t task,
 }
 
 /*
+ * This is called when a task is terminated, and also on exec().
+ * Clear machine-dependent state that is stored on the task.
+ */
+void
+machine_task_terminate(task_t task)
+{
+	if (task) {
+		user_ldt_t user_ldt;
+		void *task_debug;
+
+		user_ldt = task->i386_ldt;
+		if (user_ldt != 0) {
+			task->i386_ldt = 0;
+			user_ldt_free(user_ldt);
+		}
+
+		task_debug = task->task_debug;
+		if (task_debug != NULL) {
+			task->task_debug = NULL;
+			zfree(ids_zone, task_debug);
+		}	 
+	}
+}
+
+/*
  * Set initial default state on a thread as stored in the MACHINE_TASK data.
  * Note: currently only debug state is supported.
  */

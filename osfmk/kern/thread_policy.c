@@ -164,12 +164,6 @@ thread_policy_set_internal(
 		if (thread->sched_flags & TH_SFLAG_DEMOTED_MASK) {
 			thread->saved_mode = TH_MODE_REALTIME;
 		}
-#if CONFIG_EMBEDDED
-		else if (thread->task_priority <= MAXPRI_THROTTLE) {
-			thread->saved_mode = TH_MODE_REALTIME;
-			thread->sched_flags |= TH_SFLAG_THROTTLED;		
-		}
-#endif
 		else {
 			if (thread->sched_mode == TH_MODE_TIMESHARE) {
 				if ((thread->state & (TH_RUN|TH_IDLE)) == TH_RUN)
@@ -293,55 +287,31 @@ thread_throttle(
 	thread_t		thread,
 	integer_t		task_priority)
 {
-	if (!(thread->sched_flags & TH_SFLAG_THROTTLED) && 
-		(task_priority <= MAXPRI_THROTTLE)) {
+	if ((!(thread->sched_flags & TH_SFLAG_THROTTLED)
+		 || (thread->sched_flags & TH_SFLAG_PENDING_THROTTLE_PROMOTION))
+		 && (task_priority <= MAXPRI_THROTTLE)) {
 
-		if (!((thread->sched_mode == TH_MODE_REALTIME) ||
-			  (thread->saved_mode == TH_MODE_REALTIME))) {
-			return;
+		/* Kill a promotion if it was in flight */
+		thread->sched_flags &= ~TH_SFLAG_PENDING_THROTTLE_PROMOTION;
+
+		if (!(thread->sched_flags & TH_SFLAG_THROTTLED)) {
+			/*
+			 * Set the pending bit so that we can switch runqueues
+			 * (potentially) at a later time safely
+			 */
+			thread->sched_flags |= TH_SFLAG_PENDING_THROTTLE_DEMOTION;
 		}
-
-		/* Demote to timeshare if throttling */
-		if (thread->sched_mode == TH_MODE_REALTIME)		
-		{
-			thread->saved_mode = TH_MODE_REALTIME;
-
-			if (thread->sched_mode == TH_MODE_TIMESHARE) {
-				if ((thread->state & (TH_RUN|TH_IDLE)) == TH_RUN)
-					sched_share_incr();
-			}
-		}
-
-		/* TH_SFLAG_FAILSAFE and TH_SFLAG_THROTTLED are mutually exclusive,
-		 * since a throttled thread is not realtime during the throttle
-		 * and doesn't need the failsafe repromotion. We therefore clear
-		 * the former and set the latter flags here.
-		 */
-		thread->sched_flags &= ~TH_SFLAG_FAILSAFE;
-		thread->sched_flags |= TH_SFLAG_THROTTLED;
-		
-		if (SCHED(supports_timeshare_mode)())
-			thread->sched_mode = TH_MODE_TIMESHARE;
-		else
-			thread->sched_mode = TH_MODE_FIXED;
 	}
-	else if ((thread->sched_flags & TH_SFLAG_THROTTLED) &&
-			 (task_priority > MAXPRI_THROTTLE)) {
+	else if (((thread->sched_flags & TH_SFLAG_THROTTLED)
+			  || (thread->sched_flags & TH_SFLAG_PENDING_THROTTLE_DEMOTION))
+			  && (task_priority > MAXPRI_THROTTLE)) {
 
-		/* Promote back to real time if unthrottling */
-		if (!(thread->saved_mode == TH_MODE_TIMESHARE)) {
+		/* Kill a demotion if it was in flight */
+		thread->sched_flags &= ~TH_SFLAG_PENDING_THROTTLE_DEMOTION;
 
-			thread->sched_mode = thread->saved_mode;
-
-			if (thread->sched_mode == TH_MODE_TIMESHARE) {
-				if ((thread->state & (TH_RUN|TH_IDLE)) == TH_RUN)
-					sched_share_decr();
-			}
-			
-			thread->saved_mode = TH_MODE_NONE;
+		if (thread->sched_flags & TH_SFLAG_THROTTLED) {
+			thread->sched_flags |= TH_SFLAG_PENDING_THROTTLE_PROMOTION;
 		}
-
-		thread->sched_flags &= ~TH_SFLAG_THROTTLED;
 	}	
 }
 #endif
@@ -393,6 +363,7 @@ thread_policy_reset(
 		}
 	}
 	else {
+		thread->sched_mode = thread->saved_mode;
 		thread->saved_mode = TH_MODE_NONE;
 		thread->sched_flags &= ~TH_SFLAG_DEMOTED_MASK;
 	}

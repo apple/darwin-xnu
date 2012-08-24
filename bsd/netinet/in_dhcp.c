@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1988-2010 Apple Inc. All rights reserved.
+ * Copyright (c) 1988-2011 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -105,16 +105,16 @@ inet_aifaddr(struct socket * so, const char * name,
     bzero(&ifra, sizeof(ifra));
     strlcpy(ifra.ifra_name, name, sizeof(ifra.ifra_name));
     if (addr) {
-	*((struct sockaddr_in *)&ifra.ifra_addr) = blank_sin;
-	((struct sockaddr_in *)&ifra.ifra_addr)->sin_addr = *addr;
+	*((struct sockaddr_in *)(void *)&ifra.ifra_addr) = blank_sin;
+	((struct sockaddr_in *)(void *)&ifra.ifra_addr)->sin_addr = *addr;
     }
     if (mask) {
-	*((struct sockaddr_in *)&ifra.ifra_mask) = blank_sin;
-	((struct sockaddr_in *)&ifra.ifra_mask)->sin_addr = *mask;
+	*((struct sockaddr_in *)(void *)&ifra.ifra_mask) = blank_sin;
+	((struct sockaddr_in *)(void *)&ifra.ifra_mask)->sin_addr = *mask;
     }
     if (broadcast) {
-	*((struct sockaddr_in *)&ifra.ifra_broadaddr) = blank_sin;
-	((struct sockaddr_in *)&ifra.ifra_broadaddr)->sin_addr = *broadcast;
+	*((struct sockaddr_in *)(void *)&ifra.ifra_broadaddr) = blank_sin;
+	((struct sockaddr_in *)(void *)&ifra.ifra_broadaddr)->sin_addr = *broadcast;
     }
     return (ifioctl(so, SIOCAIFADDR, (caddr_t)&ifra, current_proc()));
 }
@@ -140,13 +140,13 @@ struct dhcp_context {
 static __inline__ struct dhcp_packet *
 dhcp_context_request(struct dhcp_context * context)
 {
-    return ((struct dhcp_packet *)context->request);
+    return ((struct dhcp_packet *)(void *)context->request);
 }
 
 static __inline__ struct dhcp *
 dhcp_context_reply(struct dhcp_context * context)
 {
-    return ((struct dhcp *)context->reply);
+    return ((struct dhcp *)(void *)context->reply);
 }
 
 struct mbuf * ip_pkt_to_mbuf(caddr_t pkt, int pktsize);
@@ -291,7 +291,7 @@ link_print(struct sockaddr_dl * dl_p)
 static struct sockaddr_dl *
 link_from_ifnet(struct ifnet * ifp)
 {
-    return ((struct sockaddr_dl *)ifp->if_lladdr->ifa_addr);
+    return ((struct sockaddr_dl *)(void *)ifp->if_lladdr->ifa_addr);
 }
 
 /*
@@ -309,7 +309,7 @@ send_packet(struct ifnet * ifp, struct dhcp_packet * pkt, int pkt_size)
     dest.sin_port = htons(IPPORT_BOOTPS);
     dest.sin_addr.s_addr = INADDR_BROADCAST;
     m = ip_pkt_to_mbuf((caddr_t)pkt, pkt_size);
-    return dlil_output(ifp, PF_INET, m, 0, (struct sockaddr *)&dest, 0);
+    return dlil_output(ifp, PF_INET, m, 0, (struct sockaddr *)&dest, 0, NULL);
 }
 
 /*

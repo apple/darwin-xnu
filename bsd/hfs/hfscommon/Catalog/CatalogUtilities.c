@@ -28,6 +28,9 @@
 #include <sys/param.h>
 #include <sys/utfconv.h>
 #include <sys/stat.h>
+#include <sys/kernel.h>
+#include <sys/malloc.h>
+#include <libkern/libkern.h>
 
 #include	"../headers/FileMgrInternal.h"
 #include	"../headers/BTreesInternal.h"
@@ -52,10 +55,15 @@ LocateCatalogNodeByKey(const ExtendedVCB *volume, u_int32_t hint, CatalogKey *ke
 	HFSCatalogNodeID	threadParentID;
 	u_int16_t tempSize;
 	FSBufferDescriptor	 btRecord;
-	BTreeIterator		 searchIterator; 
+	struct BTreeIterator *searchIterator;
 	FCB			*fcb;
 
-	bzero(&searchIterator, sizeof(searchIterator));
+	MALLOC (searchIterator, struct BTreeIterator*, sizeof(struct BTreeIterator), M_TEMP, M_WAITOK);
+	if (searchIterator == NULL) {
+		return memFullErr;  // translates to ENOMEM
+	}
+
+	bzero(searchIterator, sizeof(*searchIterator));
 
 	fcb = GetFileControlBlock(volume->catalogRefNum);
 
@@ -63,22 +71,27 @@ LocateCatalogNodeByKey(const ExtendedVCB *volume, u_int32_t hint, CatalogKey *ke
 	btRecord.itemCount = 1;
 	btRecord.itemSize = sizeof(CatalogRecord);
 
-	searchIterator.hint.nodeNum = hint;
+	searchIterator->hint.nodeNum = hint;
 
-	bcopy(keyPtr, &searchIterator.key, sizeof(CatalogKey));
+	bcopy(keyPtr, &searchIterator->key, sizeof(CatalogKey));
 	
-	result = BTSearchRecord( fcb, &searchIterator, &btRecord, &tempSize, &searchIterator );
+	result = BTSearchRecord( fcb, searchIterator, &btRecord, &tempSize, searchIterator );
 
 	if (result == noErr)
 	{
-		*newHint = searchIterator.hint.nodeNum;
+		*newHint = searchIterator->hint.nodeNum;
 
-		BlockMoveData(&searchIterator.key, keyPtr, sizeof(CatalogKey));
+		BlockMoveData(&searchIterator->key, keyPtr, sizeof(CatalogKey));
 	}
 
-	if (result == btNotFound)
-		result = cmNotFound;	
-	ReturnIfError(result);
+	if (result == btNotFound) {
+		result = cmNotFound;
+	}	
+
+	if (result) {
+		FREE(searchIterator, M_TEMP);
+		return result;
+	}
 	
 	// if we got a thread record, then go look up real record
 	switch ( dataPtr->recordType )
@@ -103,6 +116,7 @@ LocateCatalogNodeByKey(const ExtendedVCB *volume, u_int32_t hint, CatalogKey *ke
 	if ( threadParentID )		// found a thread
 		result = LocateCatalogRecord(volume, threadParentID, nodeName, kNoHint, keyPtr, dataPtr, newHint);
 	
+	FREE (searchIterator, M_TEMP);
 	return result;
 }
 
@@ -122,11 +136,17 @@ LocateCatalogRecord(const ExtendedVCB *volume, HFSCatalogNodeID folderID, const 
 	OSErr result;
 	uint16_t tempSize;
 	FSBufferDescriptor btRecord;
-	BTreeIterator searchIterator;
+	struct BTreeIterator *searchIterator = NULL;
 	FCB *fcb;
 	BTreeControlBlock *btcb;
 
-	bzero(&searchIterator, sizeof(searchIterator));
+	MALLOC (searchIterator, struct BTreeIterator*, sizeof(struct BTreeIterator), M_TEMP, M_WAITOK);
+	if (searchIterator == NULL) {
+		return memFullErr;  // translates to ENOMEM
+	}
+
+	bzero(searchIterator, sizeof(*searchIterator));
+
 
 	fcb = GetFileControlBlock(volume->catalogRefNum);
 	btcb = (BTreeControlBlock *)fcb->fcbBTCBPtr;
@@ -135,14 +155,15 @@ LocateCatalogRecord(const ExtendedVCB *volume, HFSCatalogNodeID folderID, const 
 	btRecord.itemCount = 1;
 	btRecord.itemSize = sizeof(CatalogRecord);
 
-	BuildCatalogKey(folderID, name, (volume->vcbSigWord == kHFSPlusSigWord), (CatalogKey *)&searchIterator.key);
+	BuildCatalogKey(folderID, name, (volume->vcbSigWord == kHFSPlusSigWord), (CatalogKey *)&searchIterator->key);
 
-	result = BTSearchRecord(fcb, &searchIterator, &btRecord, &tempSize, &searchIterator);
+	result = BTSearchRecord(fcb, searchIterator, &btRecord, &tempSize, searchIterator);
 	if (result == noErr) {
-		*newHint = searchIterator.hint.nodeNum;
-		BlockMoveData(&searchIterator.key, keyPtr, CalcKeySize(btcb, &searchIterator.key));
+		*newHint = searchIterator->hint.nodeNum;
+		BlockMoveData(&searchIterator->key, keyPtr, CalcKeySize(btcb, &searchIterator->key));
 	}
 
+	FREE (searchIterator, M_TEMP);
 	return (result == btNotFound ? cmNotFound : result);
 }
 

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2005 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2010 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -74,11 +74,17 @@
 #ifdef	MACH_KERNEL_PRIVATE
 
 #include <zone_debug.h>
-#include <mach_kdb.h>
 #include <kern/lock.h>
 #include <kern/locks.h>
 #include <kern/queue.h>
-#include <kern/call_entry.h>
+#include <kern/thread_call.h>
+
+#if	CONFIG_GZALLOC
+typedef struct gzalloc_data {
+	uint32_t	gzfc_index;
+	vm_offset_t 	*gzfc;
+} gzalloc_data_t;
+#endif
 
 /*
  *	A zone is a collection of fixed size blocks for which there
@@ -111,27 +117,33 @@ struct zone {
 	/* boolean_t */	async_pending :1,	/* asynchronous allocation pending? */
 #if CONFIG_ZLEAKS
 	/* boolean_t */ zleak_on :1,	/* Are we collecting allocation information? */
-#endif	/* ZONE_DEBUG */
+#endif	/* CONFIG_ZLEAKS */
 	/* boolean_t */	caller_acct: 1, /* do we account allocation/free to the caller? */  
 	/* boolean_t */	doing_gc :1,	/* garbage collect in progress? */
 	/* boolean_t */ noencrypt :1,
 	/* boolean_t */	no_callout:1,
-	/* boolean_t */	async_prio_refill:1;
+	/* boolean_t */	async_prio_refill:1,
+	/* boolean_t */	gzalloc_exempt:1,
+	/* boolean_t */	alignment_required:1;
 	int		index;		/* index into zone_info arrays for this zone */
 	struct zone *	next_zone;	/* Link for all-zones list */
-	call_entry_data_t	call_async_alloc;	/* callout for asynchronous alloc */
+	thread_call_data_t call_async_alloc;	/* callout for asynchronous alloc */
 	const char	*zone_name;	/* a name for the zone */
 #if	ZONE_DEBUG
 	queue_head_t	active_zones;	/* active elements */
 #endif	/* ZONE_DEBUG */
 
 #if CONFIG_ZLEAKS
-	uint32_t num_allocs;	/* alloc stats for zleak benchmarks */
+	uint32_t num_allocs;		/* alloc stats for zleak benchmarks */
 	uint32_t num_frees;		/* free stats for zleak benchmarks */
-	uint32_t zleak_capture; /* per-zone counter for capturing every N allocations */
+	uint32_t zleak_capture;		/* per-zone counter for capturing every N allocations */
 #endif /* CONFIG_ZLEAKS */
+	uint32_t free_check_count;	/* counter for poisoning/checking every N frees */
 	vm_size_t	prio_refill_watermark;
 	thread_t	zone_replenish_thread;
+#if	CONFIG_GZALLOC
+	gzalloc_data_t	gz;
+#endif /* CONFIG_GZALLOC */
 };
 
 /*
@@ -145,7 +157,7 @@ typedef struct zinfo_usage_store_t {
 } zinfo_usage_store_t;
 typedef zinfo_usage_store_t *zinfo_usage_t;
 
-extern void		zone_gc(void);
+extern void		zone_gc(boolean_t);
 extern void		consider_zone_gc(boolean_t);
 
 /* Steal memory for zone module */
@@ -178,23 +190,15 @@ extern void		stack_fake_zone_info(
 
 #if		ZONE_DEBUG
 
-#if		MACH_KDB
-
-extern void *	next_element(
-				zone_t		z,
-				void 		*elt);
-
-extern void *	first_element(
-				zone_t		z);
-
-#endif	/* MACH_KDB */
-
 extern void		zone_debug_enable(
 				zone_t		z);
 
 extern void		zone_debug_disable(
 				zone_t		z);
 
+#define zone_debug_enabled(z) z->active_zones.next
+#define	ROUNDUP(x,y)		((((x)+(y)-1)/(y))*(y))
+#define ZONE_DEBUG_OFFSET	ROUNDUP(sizeof(queue_chain_t),16)
 #endif	/* ZONE_DEBUG */
 
 #endif	/* MACH_KERNEL_PRIVATE */
@@ -260,6 +264,8 @@ extern void		zone_prio_refill_configure(zone_t, vm_size_t);
 #define Z_NOCALLOUT 	7	/* Don't asynchronously replenish the zone via
 				 * callouts
 				 */
+#define Z_ALIGNMENT_REQUIRED 8
+#define Z_GZALLOC_EXEMPT 9	/* Not tracked in guard allocation mode */
 /* Preallocate space for zone from zone map */
 extern void		zprealloc(
 					zone_t		zone,
@@ -305,10 +311,31 @@ extern int get_zleak_state(void);
 #endif	/* CONFIG_ZLEAKS */
 
 /* These functions used for leak detection both in zalloc.c and mbuf.c */
-extern uint32_t fastbacktrace(uintptr_t* bt, uint32_t max_frames);
-extern uintptr_t hash_mix(uintptr_t x);
-extern uint32_t hashbacktrace(uintptr_t* bt, uint32_t depth, uint32_t max_size);
-extern uint32_t hashaddr(uintptr_t pt, uint32_t max_size);
+extern uint32_t fastbacktrace(uintptr_t* bt, uint32_t max_frames) __attribute__((noinline));
+extern uintptr_t hash_mix(uintptr_t);
+extern uint32_t hashbacktrace(uintptr_t *, uint32_t, uint32_t);
+extern uint32_t hashaddr(uintptr_t, uint32_t);
+
+#define lock_zone(zone)					\
+MACRO_BEGIN						\
+	lck_mtx_lock_spin(&(zone)->lock);		\
+MACRO_END
+
+#define unlock_zone(zone)				\
+MACRO_BEGIN						\
+	lck_mtx_unlock(&(zone)->lock);			\
+MACRO_END
+
+#if	CONFIG_GZALLOC
+void gzalloc_init(vm_size_t);
+void gzalloc_zone_init(zone_t);
+void gzalloc_configure(void);
+void gzalloc_reconfigure(zone_t);
+boolean_t gzalloc_enabled(void);
+
+vm_offset_t gzalloc_alloc(zone_t, boolean_t);
+boolean_t gzalloc_free(zone_t, void *);
+#endif /* CONFIG_GZALLOC */
 
 #endif	/* XNU_KERNEL_PRIVATE */
 

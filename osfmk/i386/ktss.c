@@ -64,7 +64,6 @@
  */
 #include <i386/tss.h>
 #include <i386/pmap.h>
-#include <mach_kdb.h>
 
 #ifdef __i386__
 struct i386_tss	master_ktss
@@ -194,41 +193,4 @@ struct i386_tss	master_mctss
 					   so no bitmap */
 };
 
-#if	MACH_KDB
-
-struct i386_tss	master_dbtss
-	__attribute__ ((section ("__DESC, master_dbtss")))
-	__attribute__ ((aligned (4096))) = {
-	0,				/* back link */
-	0,				/* esp0 */
-	KERNEL_DS,			/* ss0 */
-	0,				/* esp1 */
-	0,				/* ss1 */
-	0,				/* esp2 */
-	0,				/* ss2 */
-	(int) IdlePDPT,		/* cr3 */
-	0,				/* eip */
-	0,				/* eflags */
-	0,				/* eax */
-	0,				/* ecx */
-	0,				/* edx */
-	0,				/* ebx */
-	0,				/* esp */
-	0,				/* ebp */
-	0,				/* esi */
-	0,				/* edi */
-	KERNEL_DS,			/* es */
-	KERNEL32_CS,			/* cs */
-	KERNEL_DS,			/* ss */
-	KERNEL_DS,			/* ds */
-	KERNEL_DS,			/* fs */
-	KERNEL_DS,			/* gs */
-	KERNEL_LDT,			/* ldt */
-	0,				/* trace_trap */
-	0x0FFF				/* IO bitmap offset -
-					   beyond end of TSS segment,
-					   so no bitmap */
-};
-
-#endif	/* MACH_KDB */
-#endif
+#endif /* __i386__ */

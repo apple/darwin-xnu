@@ -72,7 +72,6 @@
 #include <ipc/ipc_right.h>
 #include <ipc/ipc_space.h>
 #include <ipc/ipc_port.h>
-#include <ipc/ipc_print.h>
 
 #include <kern/kern_types.h>
 #include <kern/spl.h>
@@ -186,15 +185,16 @@ ipc_pset_member(
 
 kern_return_t
 ipc_pset_add(
-	ipc_pset_t	pset,
-	ipc_port_t	port)
+	ipc_pset_t	  pset,
+	ipc_port_t	  port,
+	wait_queue_link_t wql)
 {
 	kern_return_t kr;
 
 	assert(ips_active(pset));
 	assert(ip_active(port));
 	
-	kr = ipc_mqueue_add(&port->ip_messages, &pset->ips_messages);
+	kr = ipc_mqueue_add(&port->ip_messages, &pset->ips_messages, wql);
 
 	if (kr == KERN_SUCCESS)
 		port->ip_pset_count++;
@@ -216,8 +216,9 @@ ipc_pset_add(
 
 kern_return_t
 ipc_pset_remove(
-	ipc_pset_t	pset,
-	ipc_port_t	port)
+	ipc_pset_t	  pset,
+	ipc_port_t	  port,
+	wait_queue_link_t *wqlp)
 {
 	kern_return_t kr;
 
@@ -226,7 +227,7 @@ ipc_pset_remove(
 	if (port->ip_pset_count == 0)
 		return KERN_NOT_IN_SET;
 
-	kr = ipc_mqueue_remove(&port->ip_messages, &pset->ips_messages);
+	kr = ipc_mqueue_remove(&port->ip_messages, &pset->ips_messages, wqlp);
 
 	if (kr == KERN_SUCCESS)
 		port->ip_pset_count--;
@@ -244,7 +245,8 @@ ipc_pset_remove(
 
 kern_return_t
 ipc_pset_remove_from_all(
-	ipc_port_t	port)
+	ipc_port_t	port,
+	queue_t		links)
 {
 	assert(ip_active(port));
 	
@@ -254,7 +256,7 @@ ipc_pset_remove_from_all(
 	/* 
 	 * Remove the port's mqueue from all sets
 	 */
-	ipc_mqueue_remove_from_all(&port->ip_messages);
+	ipc_mqueue_remove_from_all(&port->ip_messages, links);
 	port->ip_pset_count = 0;
 	return KERN_SUCCESS;
 }
@@ -275,6 +277,11 @@ ipc_pset_destroy(
 	ipc_pset_t	pset)
 {
 	spl_t		s;
+	queue_head_t link_data;
+	queue_t links = &link_data;
+	wait_queue_link_t wql;
+
+	queue_init(links);
 
 	assert(ips_active(pset));
 
@@ -283,7 +290,7 @@ ipc_pset_destroy(
 	/*
 	 * remove all the member message queues
 	 */
-	ipc_mqueue_remove_all(&pset->ips_messages);
+	ipc_mqueue_remove_all(&pset->ips_messages, links);
 	
 	/*
 	 * Set all waiters on the portset running to
@@ -295,8 +302,14 @@ ipc_pset_destroy(
 	imq_unlock(&pset->ips_messages);
 	splx(s);
 
-	ips_release(pset);	/* consume the ref our caller gave us */
-	ips_check_unlock(pset);
+	ips_unlock(pset);
+	ips_release(pset);       /* consume the ref our caller gave us */
+
+	while(!queue_empty(links)) {
+		wql = (wait_queue_link_t) dequeue(links);
+		wait_queue_link_free(wql);
+	}
+
 }
 
 /* Kqueue EVFILT_MACHPORT support */
@@ -321,6 +334,7 @@ filt_machportattach(
         struct knote *kn)
 {
         mach_port_name_t        name = (mach_port_name_t)kn->kn_kevent.ident;
+	wait_queue_link_t	wql = wait_queue_link_allocate();
         ipc_pset_t              pset = IPS_NULL;
         int                     result = ENOSYS;
         kern_return_t           kr;
@@ -329,14 +343,10 @@ filt_machportattach(
                                   MACH_PORT_RIGHT_PORT_SET,
                                   (ipc_object_t *)&pset);
         if (kr != KERN_SUCCESS) {
-                result = (kr == KERN_INVALID_NAME ? ENOENT : ENOTSUP);
-                goto done;
+		wait_queue_link_free(wql);
+                return (kr == KERN_INVALID_NAME ? ENOENT : ENOTSUP);
         }
         /* We've got a lock on pset */
-
-	/* keep a reference for the knote */
-	kn->kn_ptr.p_pset = pset; 
-	ips_reference(pset);
 
 	/* 
 	 * Bind the portset wait queue directly to knote/kqueue.
@@ -344,9 +354,17 @@ filt_machportattach(
 	 * rather than having to call knote() from the Mach code on each
 	 * message.
 	 */
-	result = knote_link_wait_queue(kn, &pset->ips_messages.imq_wait_queue);
+	result = knote_link_wait_queue(kn, &pset->ips_messages.imq_wait_queue, wql);
+	if (result == 0) {
+		/* keep a reference for the knote */
+		kn->kn_ptr.p_pset = pset; 
+		ips_reference(pset);
+		ips_unlock(pset);
+		return 0;
+	}
+
 	ips_unlock(pset);
-done:
+	wait_queue_link_free(wql);
 	return result;
 }
 
@@ -355,16 +373,19 @@ filt_machportdetach(
         struct knote *kn)
 {
         ipc_pset_t              pset = kn->kn_ptr.p_pset;
+	wait_queue_link_t	wql = WAIT_QUEUE_LINK_NULL;
 
 	/*
 	 * Unlink the portset wait queue from knote/kqueue,
 	 * and release our reference on the portset.
 	 */
 	ips_lock(pset);
-	knote_unlink_wait_queue(kn, &pset->ips_messages.imq_wait_queue);
-	ips_release(kn->kn_ptr.p_pset);
-	kn->kn_ptr.p_pset = IPS_NULL; 
-	ips_check_unlock(pset);
+	(void)knote_unlink_wait_queue(kn, &pset->ips_messages.imq_wait_queue, &wql);
+	kn->kn_ptr.p_pset = IPS_NULL;
+	ips_unlock(pset);
+	ips_release(pset);
+	if (wql != WAIT_QUEUE_LINK_NULL)
+		wait_queue_link_free(wql);
 }
 
 static int
@@ -393,8 +414,9 @@ filt_machport(
 	if (kr != KERN_SUCCESS || pset != kn->kn_ptr.p_pset || !ips_active(pset)) {
 		kn->kn_data = 0;
 		kn->kn_flags |= (EV_EOF | EV_ONESHOT);
-		if (pset != IPS_NULL)
-			ips_check_unlock(pset);
+		if (pset != IPS_NULL) {
+			ips_unlock(pset);
+		}
 		return(1);
         }
 
@@ -448,7 +470,7 @@ filt_machport(
 	 * portset and return zero.
 	 */
 	if (self->ith_state == MACH_RCV_TIMED_OUT) {
-		ipc_pset_release(pset);
+		ips_release(pset);
 		return 0;
 	}
 
@@ -461,7 +483,7 @@ filt_machport(
 		assert(self->ith_state == MACH_RCV_TOO_LARGE);
 		assert(self->ith_kmsg == IKM_NULL);
 		kn->kn_data = self->ith_receiver_name;
-		ipc_pset_release(pset);
+		ips_release(pset);
 		return 1;
 	}
 
@@ -523,55 +545,3 @@ filt_machportpeek(struct knote *kn)
 
 	return (ipc_mqueue_peek(set_mq));
 }
-
-
-#include <mach_kdb.h>
-#if	MACH_KDB
-
-#include <ddb/db_output.h>
-
-#define	printf	kdbprintf
-
-int
-ipc_list_count(
-	struct ipc_kmsg *base)
-{
-	register int count = 0;
-
-	if (base) {
-		struct ipc_kmsg *kmsg = base;
-
-		++count;
-		while (kmsg && kmsg->ikm_next != base
-			    && kmsg->ikm_next != IKM_BOGUS){
-			kmsg = kmsg->ikm_next;
-			++count;
-		}
-	}
-	return(count);
-}
-
-/*
- *	Routine:	ipc_pset_print
- *	Purpose:
- *		Pretty-print a port set for kdb.
- */
-void
-ipc_pset_print(
-	ipc_pset_t	pset)
-{
-	printf("pset 0x%x\n", pset);
-
-	db_indent += 2;
-
-	ipc_object_print(&pset->ips_object);
-	iprintf("local_name = 0x%x\n", pset->ips_local_name);
-	iprintf("%d kmsgs => 0x%x",
-		ipc_list_count(pset->ips_messages.imq_messages.ikmq_base),
-		pset->ips_messages.imq_messages.ikmq_base);
-	printf(",rcvrs queue= 0x%x\n", &pset->ips_messages.imq_wait_queue);
-
-	db_indent -=2;
-}
-
-#endif	/* MACH_KDB */

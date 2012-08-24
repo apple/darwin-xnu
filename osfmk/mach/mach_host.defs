@@ -172,7 +172,7 @@ routine	kmod_get_info(
  *	DEPRECATED!  Use mach_zone_info() instead.
  */
 routine host_zone_info(
-		host		: host_t;
+		host		: host_priv_t;
 	out	names		: zone_name_array_t,
 					Dealloc;
 	out	info		: zone_info_array_t,
@@ -188,16 +188,8 @@ routine host_virtual_physical_table_info(
 	out	info		: hash_info_bucket_array_t,
 					Dealloc);
 
-/*
- *	Returns information about the global reverse hash table.
- *      This call is only valid on MACH_IPC_DEBUG kernels.
- *      Otherwise, KERN_FAILURE is returned.
- */
-routine host_ipc_hash_info(
-		host		: host_t;
-	out	info		: hash_info_bucket_array_t,
-					Dealloc);
 
+skip; /* was host_ipc_hash_info */
 skip; /* was enable_bluebox */
 skip; /* was disable_bluebox */
 
@@ -265,11 +257,22 @@ routine host_statistics64(
  *	address space sizes (unlike host_zone_info()).
  */
 routine mach_zone_info(
-		host		: host_t;
+		host		: host_priv_t;
 	out	names		: mach_zone_name_array_t,
 					Dealloc;
 	out	info		: mach_zone_info_array_t,
 					Dealloc);
 
+#ifdef PRIVATE
+/*
+ *	Forces a zone allocator garbage collections pass.
+ *	Pages with no in-use allocations are returned to
+ *	the VM system for re-use.
+ */    
+routine mach_zone_force_gc(
+		host		: host_t);
+#else
+skip;
+#endif
 
 /* vim: set ft=c : */

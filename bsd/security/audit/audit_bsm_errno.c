@@ -1,5 +1,5 @@
 /*-
- * Copyright (c) 2008-2009 Apple Inc.
+ * Copyright (c) 2008-2011 Apple Inc.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -452,6 +452,7 @@ static const struct bsm_errno bsm_errnos[] = {
 	{ BSM_ERRNO_EINPROGRESS, EINPROGRESS,
 	    ES("Operation now in progress") },
 	{ BSM_ERRNO_ESTALE, ESTALE, ES("Stale NFS file handle") },
+	{ BSM_ERRNO_EQFULL, EQFULL, ES("Interface output queue is full") },
 	{ BSM_ERRNO_EPWROFF,
 #ifdef EPWROFF
 	EPWROFF,

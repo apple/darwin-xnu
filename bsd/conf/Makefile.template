@@ -1,5 +1,5 @@
 #
-# Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
+# Copyright (c) 2000-2011 Apple Inc. All rights reserved.
 #
 # @APPLE_LICENSE_HEADER_START@
 # 
@@ -102,6 +102,7 @@ OBJS_NO_SIGN_COMPARE =		\
 		mld6.o	\
 		nd6.o	\
 		nd6_nbr.o	\
+		nd6_prproxy.o	\
 		nd6_rtr.o	\
 		raw_ip6.o	\
 		route6.o	\
@@ -117,6 +118,163 @@ OBJS_NO_SIGN_COMPARE =		\
 		uipc_socket2.o
 
 $(foreach file,$(OBJS_NO_SIGN_COMPARE),$(eval $(call add_perfile_cflags,$(file),-Wno-sign-compare)))
+
+# Objects that want -Wcast-align warning treated as error
+OBJS_ERROR_CAST_ALIGN =			\
+		kern_control.o		\
+		mcache.o		\
+		sys_socket.o		\
+		uipc_mbuf.o		\
+		uipc_mbuf2.o		\
+		uipc_socket.o		\
+		uipc_socket2.o		\
+		uipc_syscalls.o		\
+		bpf.o			\
+		bpf_filter.o		\
+		bridgestp.o		\
+		bsd_comp.o		\
+		devtimer.o		\
+		dlil.o			\
+		ether_if_module.o	\
+		ether_inet_pr_module.o	\
+		ether_inet6_pr_module.o	\
+		flowhash.o		\
+		if.o			\
+		if_bridge.o		\
+		if_gif.o		\
+		if_llreach.o		\
+		if_loop.o		\
+		if_media.o		\
+		if_mib.o		\
+		if_pflog.o		\
+		if_stf.o		\
+		if_utun.o		\
+		if_utun_crypto.o	\
+		if_utun_crypto_ipsec.o	\
+		if_vlan.o		\
+		init.o			\
+		iptap.o			\
+		kext_net.o		\
+		kpi_interface.o		\
+		kpi_interfacefilter.o	\
+		kpi_protocol.o		\
+		kpi_protocol.o		\
+		ndrv.o			\
+		net_osdep.o		\
+		net_str_id.o		\
+		netsrc.o		\
+		ntstat.o		\
+		pf.o			\
+		pf_if.o			\
+		pf_ioctl.o		\
+		pf_norm.o		\
+		pf_osfp.o		\
+		pf_ruleset.o		\
+		pf_table.o		\
+		ppp_deflate.o		\
+		radix.o			\
+		raw_cb.o		\
+		raw_usrreq.o		\
+		route.o			\
+		rtsock.o		\
+		dhcp_options.o		\
+		altq_cbq.o		\
+		altq_fairq.o		\
+		altq_hfsc.o		\
+		altq_priq.o		\
+		altq_qfq.o		\
+		altq_subr.o		\
+		pktsched.o		\
+		pktsched_cbq.o		\
+		pktsched_fairq.o	\
+		pktsched_hfsc.o		\
+		pktsched_priq.o		\
+		pktsched_qfq.o		\
+		pktsched_rmclass.o	\
+		pktsched_tcq.o		\
+		classq.o		\
+		classq_blue.o		\
+		classq_red.o		\
+		classq_rio.o		\
+		classq_sfb.o		\
+		classq_subr.o		\
+		classq_util.o		\
+		igmp.o			\
+		in.o			\
+		in_arp.o		\
+		in_cksum.o		\
+		in_dhcp.o		\
+		in_gif.o		\
+		in_mcast.o		\
+		in_pcb.o		\
+		in_pcblist.o		\
+		in_proto.o		\
+		in_rmx.o		\
+		in_tclass.o		\
+		ip_divert.o		\
+		ip_ecn.o		\
+		ip_encap.o		\
+		ip_icmp.o		\
+		ip_id.o			\
+		ip_input.o		\
+		ip_mroute.o		\
+		ip_output.o		\
+		kpi_ipfilter.o		\
+		raw_ip.o		\
+		tcp_debug.o		\
+		tcp_input.o		\
+		tcp_ledbat.o		\
+		tcp_newreno.o		\
+		tcp_output.o		\
+		tcp_sack.o		\
+		tcp_subr.o		\
+		tcp_timer.o		\
+		tcp_usrreq.o		\
+		udp_usrreq.o		\
+		ah_core.o		\
+		ah_input.o		\
+		ah_output.o		\
+		dest6.o			\
+		esp_core.o		\
+		esp_input.o		\
+		esp_output.o		\
+		esp_rijndael.o		\
+		frag6.o			\
+		icmp6.o			\
+		in6.o			\
+		in6_cksum.o		\
+		in6_gif.o		\
+		in6_ifattach.o		\
+		in6_mcast.o		\
+		in6_pcb.o		\
+		in6_prefix.o		\
+		in6_proto.o		\
+		in6_rmx.o		\
+		in6_src.o		\
+		ip6_forward.o		\
+		ip6_id.o		\
+		ip6_input.o		\
+		ip6_mroute.o		\
+		ip6_output.o		\
+		ipcomp_core.o		\
+		ipcomp_input.o		\
+		ipcomp_output.o		\
+		ipsec.o			\
+		mld6.o			\
+		nd6.o			\
+		nd6_nbr.o		\
+		nd6_rtr.o		\
+		raw_ip6.o		\
+		route6.o		\
+		scope6.o		\
+		udp6_output.o		\
+		udp6_usrreq.o		\
+		key.o			\
+		key_debug.o		\
+		keydb.o			\
+		keysock.o
+
+$(foreach file,$(OBJS_ERROR_CAST_ALIGN),$(eval $(call add_perfile_cflags,$(file),-Werror=cast-align)))
 
 #
 # Directories for mig generated files

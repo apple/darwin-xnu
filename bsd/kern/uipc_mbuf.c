@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1998-2011 Apple Inc. All rights reserved.
+ * Copyright (c) 1998-2012 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -303,7 +303,8 @@ extern ppnum_t pmap_find_phys(pmap_t pmap, addr64_t va);
 extern vm_map_t mb_map;		/* special map */
 
 /* Global lock */
-static lck_mtx_t *mbuf_mlock;
+decl_lck_mtx_data(static, mbuf_mlock_data);
+static lck_mtx_t *mbuf_mlock = &mbuf_mlock_data;
 static lck_attr_t *mbuf_mlock_attr;
 static lck_grp_t *mbuf_mlock_grp;
 static lck_grp_attr_t *mbuf_mlock_grp_attr;
@@ -449,14 +450,15 @@ int njcl;			/* # of clusters for jumbo sizes */
 int njclbytes;			/* size of a jumbo cluster */
 union mbigcluster *mbutl;	/* first mapped cluster address */
 union mbigcluster *embutl;	/* ending virtual address of mclusters */
-int max_linkhdr;		/* largest link-level header */
-int max_protohdr;		/* largest protocol header */
+int _max_linkhdr;		/* largest link-level header */
+int _max_protohdr;		/* largest protocol header */
 int max_hdr;			/* largest link+protocol header */
 int max_datalen;		/* MHLEN - max_hdr */
 
 static boolean_t mclverify;	/* debug: pattern-checking */
 static boolean_t mcltrace;	/* debug: stack tracing */
 static boolean_t mclfindleak;	/* debug: leak detection */
+static boolean_t mclexpleak;	/* debug: expose leak info to user space */
 
 /* mbuf leak detection variables */
 static struct mleak_table mleak_table;
@@ -495,6 +497,22 @@ struct mtrace {
  */
 #define	MLEAK_NUM_TRACES		5
 
+#define	MB_LEAK_SPACING_64 "                    "
+#define MB_LEAK_SPACING_32 "            "
+
+
+#define	MB_LEAK_HDR_32	"\n\
+    trace [1]   trace [2]   trace [3]   trace [4]   trace [5]  \n\
+    ----------  ----------  ----------  ----------  ---------- \n\
+"
+
+#define	MB_LEAK_HDR_64	"\n\
+    trace [1]           trace [2]           trace [3]       \
+        trace [4]           trace [5]      \n\
+    ------------------  ------------------  ------------------  \
+    ------------------  ------------------ \n\
+"
+
 static uint32_t mleak_alloc_buckets = MLEAK_ALLOCATION_MAP_NUM;
 static uint32_t mleak_trace_buckets = MLEAK_TRACE_MAP_NUM;
 
@@ -504,7 +522,8 @@ static struct mtrace *mleak_traces;
 static struct mtrace *mleak_top_trace[MLEAK_NUM_TRACES];
 
 /* Lock to protect mleak tables from concurrent modification */
-static lck_mtx_t *mleak_lock;
+decl_lck_mtx_data(static, mleak_lock_data);
+static lck_mtx_t *mleak_lock = &mleak_lock_data;
 static lck_attr_t *mleak_lock_attr;
 static lck_grp_t *mleak_lock_grp;
 static lck_grp_attr_t *mleak_lock_grp_attr;
@@ -588,7 +607,9 @@ static int mb_waiters;			/* number of waiters */
 
 #define	MB_WDT_MAXTIME	10		/* # of secs before watchdog panic */
 static struct timeval mb_wdtstart;	/* watchdog start timestamp */
-static char mbuf_dump_buf[256];
+static char *mbuf_dump_buf;
+
+#define	MBUF_DUMP_BUF_SIZE	2048
 
 /*
  * mbuf watchdog is enabled by default on embedded platforms.  It is
@@ -656,6 +677,8 @@ static void mleak_activate(void);
 static void mleak_logger(u_int32_t, mcache_obj_t *, boolean_t);
 static boolean_t mleak_log(uintptr_t *, mcache_obj_t *, uint32_t, int);
 static void mleak_free(mcache_obj_t *);
+static void mleak_sort_traces(void);
+static void mleak_update_stats(void);
 
 static mcl_slab_t *slab_get(void *);
 static void slab_init(mcl_slab_t *, mbuf_class_t, u_int32_t,
@@ -769,8 +792,9 @@ static struct mbuf *m_split0(struct mbuf *, int, int, int);
 		(m)->m_pkthdr.vlan_tag = 0;				\
 		(m)->m_pkthdr.socket_id = 0;				\
 		(m)->m_pkthdr.vt_nrecs = 0;				\
+		(m)->m_pkthdr.aux_flags = 0;				\
 		m_tag_init(m);						\
-		m_prio_init(m);						\
+		m_service_class_init(m);				\
 	}								\
 }
 
@@ -856,7 +880,7 @@ static mbuf_mtypes_t *mbuf_mtypes;	/* per-CPU statistics */
 	((size_t)(&((mbuf_mtypes_t *)0)->mbs_cpu[n]))
 
 #define	MTYPES_CPU(p) \
-	((mtypes_cpu_t *)((char *)(p) + MBUF_MTYPES_SIZE(cpu_number())))
+	((mtypes_cpu_t *)(void *)((char *)(p) + MBUF_MTYPES_SIZE(cpu_number())))
 
 #define	mtype_stat_add(type, n) {					\
 	if ((unsigned)(type) < MT_MAX) {				\
@@ -1032,42 +1056,14 @@ static int
 mleak_top_trace_sysctl SYSCTL_HANDLER_ARGS
 {
 #pragma unused(oidp, arg1, arg2)
-	mleak_trace_stat_t *mltr;
 	int i;
 
 	/* Ensure leak tracing turned on */
-	if (!mclfindleak)
+	if (!mclfindleak || !mclexpleak)
 		return (ENXIO);
 
-	VERIFY(mleak_stat != NULL);
-#ifdef __LP64__
-	VERIFY(mleak_stat->ml_isaddr64);
-#else
-	VERIFY(!mleak_stat->ml_isaddr64);
-#endif /* !__LP64__ */
-	VERIFY(mleak_stat->ml_cnt == MLEAK_NUM_TRACES);
-
 	lck_mtx_lock(mleak_lock);
-	mltr = &mleak_stat->ml_trace[0];
-	bzero(mltr, sizeof (*mltr) * MLEAK_NUM_TRACES);
-	for (i = 0; i < MLEAK_NUM_TRACES; i++) {
-		int j;
-
-		if (mleak_top_trace[i] == NULL ||
-		    mleak_top_trace[i]->allocs == 0)
-			continue;
-
-		mltr->mltr_collisions	= mleak_top_trace[i]->collisions;
-		mltr->mltr_hitcount	= mleak_top_trace[i]->hitcount;
-		mltr->mltr_allocs	= mleak_top_trace[i]->allocs;
-		mltr->mltr_depth	= mleak_top_trace[i]->depth;
-
-		VERIFY(mltr->mltr_depth <= MLEAK_STACK_DEPTH);
-		for (j = 0; j < mltr->mltr_depth; j++)
-			mltr->mltr_addr[j] = mleak_top_trace[i]->addr[j];
-
-		mltr++;
-	}
+	mleak_update_stats();
 	i = SYSCTL_OUT(req, mleak_stat, MLEAK_STAT_SIZE(MLEAK_NUM_TRACES));
 	lck_mtx_unlock(mleak_lock);
 
@@ -1081,7 +1077,7 @@ mleak_table_sysctl SYSCTL_HANDLER_ARGS
 	int i = 0;
 
 	/* Ensure leak tracing turned on */
-	if (!mclfindleak)
+	if (!mclfindleak || !mclexpleak)
 		return (ENXIO);
 
 	lck_mtx_lock(mleak_lock);
@@ -1264,7 +1260,7 @@ typedef struct ncl_tbl {
 
 /* Non-server */
 static ncl_tbl_t ncl_table[] = {
-	{ (1ULL << GBSHIFT)       /*  1 GB */,	(64 << MBSHIFT)	 /*  64 MB */ },
+	{ (1ULL << GBSHIFT)	  /*  1 GB */,	(64 << MBSHIFT)	 /*  64 MB */ },
 	{ (1ULL << (GBSHIFT + 3)) /*  8 GB */,	(96 << MBSHIFT)	 /*  96 MB */ },
 	{ (1ULL << (GBSHIFT + 4)) /* 16 GB */,	(128 << MBSHIFT) /* 128 MB */ },
 	{ 0, 0 }
@@ -1272,7 +1268,7 @@ static ncl_tbl_t ncl_table[] = {
 
 /* Server */
 static ncl_tbl_t ncl_table_srv[] = {
-	{ (1ULL << GBSHIFT)       /*  1 GB */,	(96 << MBSHIFT)  /*  96 MB */ },
+	{ (1ULL << GBSHIFT)	  /*  1 GB */,	(96 << MBSHIFT)  /*  96 MB */ },
 	{ (1ULL << (GBSHIFT + 2)) /*  4 GB */,	(128 << MBSHIFT) /* 128 MB */ },
 	{ (1ULL << (GBSHIFT + 3)) /*  8 GB */,	(160 << MBSHIFT) /* 160 MB */ },
 	{ (1ULL << (GBSHIFT + 4)) /* 16 GB */,	(192 << MBSHIFT) /* 192 MB */ },
@@ -1318,6 +1314,74 @@ mbinit(void)
 	void *buf;
 	thread_t thread = THREAD_NULL;
 
+	/*
+	 * These MBUF_ values must be equal to their private counterparts.
+	 */
+	_CASSERT(MBUF_EXT == M_EXT);
+	_CASSERT(MBUF_PKTHDR == M_PKTHDR);
+	_CASSERT(MBUF_EOR == M_EOR);
+	_CASSERT(MBUF_LOOP == M_LOOP);
+	_CASSERT(MBUF_BCAST == M_BCAST);
+	_CASSERT(MBUF_MCAST == M_MCAST);
+	_CASSERT(MBUF_FRAG == M_FRAG);
+	_CASSERT(MBUF_FIRSTFRAG == M_FIRSTFRAG);
+	_CASSERT(MBUF_LASTFRAG == M_LASTFRAG);
+	_CASSERT(MBUF_PROMISC == M_PROMISC);
+	_CASSERT(MBUF_HASFCS == M_HASFCS);
+
+	_CASSERT(MBUF_TYPE_FREE == MT_FREE);
+	_CASSERT(MBUF_TYPE_DATA == MT_DATA);
+	_CASSERT(MBUF_TYPE_HEADER == MT_HEADER);
+	_CASSERT(MBUF_TYPE_SOCKET == MT_SOCKET);
+	_CASSERT(MBUF_TYPE_PCB == MT_PCB);
+	_CASSERT(MBUF_TYPE_RTABLE == MT_RTABLE);
+	_CASSERT(MBUF_TYPE_HTABLE == MT_HTABLE);
+	_CASSERT(MBUF_TYPE_ATABLE == MT_ATABLE);
+	_CASSERT(MBUF_TYPE_SONAME == MT_SONAME);
+	_CASSERT(MBUF_TYPE_SOOPTS == MT_SOOPTS);
+	_CASSERT(MBUF_TYPE_FTABLE == MT_FTABLE);
+	_CASSERT(MBUF_TYPE_RIGHTS == MT_RIGHTS);
+	_CASSERT(MBUF_TYPE_IFADDR == MT_IFADDR);
+	_CASSERT(MBUF_TYPE_CONTROL == MT_CONTROL);
+	_CASSERT(MBUF_TYPE_OOBDATA == MT_OOBDATA);
+
+	_CASSERT(MBUF_TSO_IPV4 == CSUM_TSO_IPV4);
+	_CASSERT(MBUF_TSO_IPV6 == CSUM_TSO_IPV6);
+	_CASSERT(MBUF_CSUM_REQ_SUM16 == CSUM_TCP_SUM16);
+	_CASSERT(MBUF_CSUM_TCP_SUM16 == MBUF_CSUM_REQ_SUM16);
+	_CASSERT(MBUF_CSUM_REQ_IP == CSUM_IP);
+	_CASSERT(MBUF_CSUM_REQ_TCP == CSUM_TCP);
+	_CASSERT(MBUF_CSUM_REQ_UDP == CSUM_UDP);
+	_CASSERT(MBUF_CSUM_REQ_TCPIPV6 == CSUM_TCPIPV6);
+	_CASSERT(MBUF_CSUM_REQ_UDPIPV6 == CSUM_UDPIPV6);
+	_CASSERT(MBUF_CSUM_DID_IP == CSUM_IP_CHECKED);
+	_CASSERT(MBUF_CSUM_IP_GOOD == CSUM_IP_VALID);
+	_CASSERT(MBUF_CSUM_DID_DATA == CSUM_DATA_VALID);
+	_CASSERT(MBUF_CSUM_PSEUDO_HDR == CSUM_PSEUDO_HDR);
+
+	_CASSERT(MBUF_WAITOK == M_WAIT);
+	_CASSERT(MBUF_DONTWAIT == M_DONTWAIT);
+	_CASSERT(MBUF_COPYALL == M_COPYALL);
+
+	_CASSERT(MBUF_PKTAUXF_INET_RESOLVE_RTR == MAUXF_INET_RESOLVE_RTR);
+	_CASSERT(MBUF_PKTAUXF_INET6_RESOLVE_RTR == MAUXF_INET6_RESOLVE_RTR);
+
+	_CASSERT(MBUF_SC2TC(MBUF_SC_BK_SYS) == MBUF_TC_BK);
+	_CASSERT(MBUF_SC2TC(MBUF_SC_BK) == MBUF_TC_BK);
+	_CASSERT(MBUF_SC2TC(MBUF_SC_BE) == MBUF_TC_BE);
+	_CASSERT(MBUF_SC2TC(MBUF_SC_RD) == MBUF_TC_BE);
+	_CASSERT(MBUF_SC2TC(MBUF_SC_OAM) == MBUF_TC_BE);
+	_CASSERT(MBUF_SC2TC(MBUF_SC_AV) == MBUF_TC_VI);
+	_CASSERT(MBUF_SC2TC(MBUF_SC_RV) == MBUF_TC_VI);
+	_CASSERT(MBUF_SC2TC(MBUF_SC_VI) == MBUF_TC_VI);
+	_CASSERT(MBUF_SC2TC(MBUF_SC_VO) == MBUF_TC_VO);
+	_CASSERT(MBUF_SC2TC(MBUF_SC_CTL) == MBUF_TC_VO);
+
+	_CASSERT(MBUF_TC2SCVAL(MBUF_TC_BK) == SCVAL_BK);
+	_CASSERT(MBUF_TC2SCVAL(MBUF_TC_BE) == SCVAL_BE);
+	_CASSERT(MBUF_TC2SCVAL(MBUF_TC_VI) == SCVAL_VI);
+	_CASSERT(MBUF_TC2SCVAL(MBUF_TC_VO) == SCVAL_VO);
+
 	if (nmbclusters == 0)
 		nmbclusters = NMBCLUSTERS;
 
@@ -1331,7 +1395,7 @@ mbinit(void)
 	mbuf_mlock_grp_attr = lck_grp_attr_alloc_init();
 	mbuf_mlock_grp = lck_grp_alloc_init("mbuf", mbuf_mlock_grp_attr);
 	mbuf_mlock_attr = lck_attr_alloc_init();
-	mbuf_mlock = lck_mtx_alloc_init(mbuf_mlock_grp, mbuf_mlock_attr);
+	lck_mtx_init(mbuf_mlock, mbuf_mlock_grp, mbuf_mlock_attr);
 
 	/*
 	 * Allocate cluster slabs table:
@@ -1369,13 +1433,14 @@ mbinit(void)
 	mclverify = (mbuf_debug & MCF_VERIFY);
 	mcltrace = (mbuf_debug & MCF_TRACE);
 	mclfindleak = !(mbuf_debug & MCF_NOLEAKLOG);
+	mclexpleak = mclfindleak && (mbuf_debug & MCF_EXPLEAKLOG);
 
 	/* Enable mbuf leak logging, with a lock to protect the tables */
 
 	mleak_lock_grp_attr = lck_grp_attr_alloc_init();
 	mleak_lock_grp = lck_grp_alloc_init("mleak_lock", mleak_lock_grp_attr);
 	mleak_lock_attr = lck_attr_alloc_init();
-	mleak_lock = lck_mtx_alloc_init(mleak_lock_grp, mleak_lock_attr);
+	lck_mtx_init(mleak_lock, mleak_lock_grp, mleak_lock_attr);
 
 	mleak_activate();
 
@@ -1390,7 +1455,7 @@ mbinit(void)
 	bzero((char *)mcl_paddr, mcl_pages * sizeof (ppnum_t));
 
 	embutl = (union mbigcluster *)
-	    ((unsigned char *)mbutl + (nmbclusters * MCLBYTES));
+	    ((void *)((unsigned char *)mbutl + (nmbclusters * MCLBYTES)));
 	VERIFY((((char *)embutl - (char *)mbutl) % MBIGCLBYTES) == 0);
 
 	/* Prime up the freelist */
@@ -1500,6 +1565,10 @@ mbinit(void)
 			sb_max = high_sb_max;
 		}
 	}
+
+	/* allocate space for mbuf_dump_buf */
+	MALLOC(mbuf_dump_buf, char *, MBUF_DUMP_BUF_SIZE, M_TEMP, M_WAITOK);
+	VERIFY(mbuf_dump_buf != NULL);
 
 	printf("mbinit: done [%d MB total pool size, (%d/%d) split]\n",
 	    (nmbclusters << MCLSHIFT) >> MBSHIFT,
@@ -2177,7 +2246,7 @@ cslab_free(mbuf_class_t class, mcache_obj_t *list, int purged)
 			MEXT_REF(m) = 0;
 			MEXT_FLAGS(m) = 0;
 
-			rfa = (mcache_obj_t *)MEXT_RFA(m);
+			rfa = (mcache_obj_t *)(void *)MEXT_RFA(m);
 			rfa->obj_next = ref_list;
 			ref_list = rfa;
 			MEXT_RFA(m) = NULL;
@@ -2331,7 +2400,7 @@ mbuf_cslab_alloc(void *arg, mcache_obj_t ***plist, unsigned int needed,
 
 		rfa = (struct ext_ref *)ref_list;
 		ref_list = ref_list->obj_next;
-		((mcache_obj_t *)rfa)->obj_next = NULL;
+		((mcache_obj_t *)(void *)rfa)->obj_next = NULL;
 
 		/*
 		 * If auditing is enabled, construct the shadow mbuf
@@ -3514,7 +3583,8 @@ m_copy_pkthdr(struct mbuf *to, struct mbuf *from)
 		m_tag_delete_chain(to, NULL);
 	to->m_pkthdr = from->m_pkthdr;		/* especially tags */
 	m_tag_init(from);			/* purge tags from src */
-	m_prio_init(from);			/* reset priority from src */
+	m_service_class_init(from);		/* reset svc class from src */
+	from->m_pkthdr.aux_flags = 0;		/* clear aux flags from src */
 	to->m_flags = (from->m_flags & M_COPYFLAGS) | (to->m_flags & M_EXT);
 	if ((to->m_flags & M_EXT) == 0)
 		to->m_data = to->m_pktdat;
@@ -3536,6 +3606,14 @@ m_dup_pkthdr(struct mbuf *to, struct mbuf *from, int how)
 	to->m_pkthdr = from->m_pkthdr;
 	m_tag_init(to);
 	return (m_tag_copy_chain(to, from, how));
+}
+
+void
+m_copy_pftag(struct mbuf *to, struct mbuf *from)
+{
+	to->m_pkthdr.pf_mtag = from->m_pkthdr.pf_mtag;
+	to->m_pkthdr.pf_mtag.pftag_hdr = NULL;
+	to->m_pkthdr.pf_mtag.pftag_flags &= ~(PF_TAG_HDR_INET|PF_TAG_HDR_INET6);
 }
 
 /*
@@ -3644,6 +3722,12 @@ m_getpackets_internal(unsigned int *num_needed, int num_with_pkthdrs,
 			m_freem_list(top);
 		return (NULL);
 	}
+
+	if (pnum > *num_needed) {
+		printf("%s: File a radar related to <rdar://10146739>. \
+			needed = %u, pnum = %u, num_needed = %u \n",
+			__func__, needed, pnum, *num_needed);
+	}		
 
 	*num_needed = pnum;
 	return (top);
@@ -4086,7 +4170,7 @@ m_freem_list(struct mbuf *m)
 			if (!(m->m_flags & M_EXT))
 				goto simple_free;
 
-			o = (mcache_obj_t *)m->m_ext.ext_buf;
+			o = (mcache_obj_t *)(void *)m->m_ext.ext_buf;
 			refcnt = m_decref(m);
 			composite = (MEXT_FLAGS(m) & EXTF_COMPOSITE);
 			if (refcnt == 0 && !composite) {
@@ -4104,7 +4188,7 @@ m_freem_list(struct mbuf *m)
 					    m->m_ext.ext_size,
 					    m->m_ext.ext_arg);
 				}
-				rfa = (mcache_obj_t *)MEXT_RFA(m);
+				rfa = (mcache_obj_t *)(void *)MEXT_RFA(m);
 				rfa->obj_next = ref_list;
 				ref_list = rfa;
 				MEXT_RFA(m) = NULL;
@@ -5597,6 +5681,123 @@ m_last(struct mbuf *m)
 	return (m);
 }
 
+unsigned int
+m_fixhdr(struct mbuf *m0)
+{
+	u_int len;
+
+	len = m_length2(m0, NULL);
+	m0->m_pkthdr.len = len;
+	return (len);
+}
+
+unsigned int
+m_length2(struct mbuf *m0, struct mbuf **last)
+{
+	struct mbuf *m;
+	u_int len;
+
+	len = 0;
+	for (m = m0; m != NULL; m = m->m_next) {
+		len += m->m_len;
+		if (m->m_next == NULL)
+			break;
+	}
+	if (last != NULL)
+		*last = m;
+	return (len);
+}
+
+/*
+ * Defragment a mbuf chain, returning the shortest possible chain of mbufs
+ * and clusters.  If allocation fails and this cannot be completed, NULL will
+ * be returned, but the passed in chain will be unchanged.  Upon success,
+ * the original chain will be freed, and the new chain will be returned.
+ *
+ * If a non-packet header is passed in, the original mbuf (chain?) will
+ * be returned unharmed.
+ *
+ * If offset is specfied, the first mbuf in the chain will have a leading
+ * space of the amount stated by the "off" parameter.
+ *
+ * This routine requires that the m_pkthdr.header field of the original
+ * mbuf chain is cleared by the caller.
+ */
+struct mbuf *
+m_defrag_offset(struct mbuf *m0, u_int32_t off, int how)
+{
+	struct mbuf *m_new = NULL, *m_final = NULL;
+	int progress = 0, length, pktlen;
+
+	if (!(m0->m_flags & M_PKTHDR))
+		return (m0);
+
+	VERIFY(off < MHLEN);
+	m_fixhdr(m0); /* Needed sanity check */
+
+	pktlen = m0->m_pkthdr.len + off;
+	if (pktlen > MHLEN)
+		m_final = m_getcl(how, MT_DATA, M_PKTHDR);
+	else
+		m_final = m_gethdr(how, MT_DATA);
+
+	if (m_final == NULL)
+		goto nospace;
+
+	if (off > 0) {
+		pktlen -= off;
+		m_final->m_len -= off;
+		m_final->m_data += off;
+	}
+
+	/*
+	 * Caller must have handled the contents pointed to by this
+	 * pointer before coming here, as otherwise it will point to
+	 * the original mbuf which will get freed upon success.
+	 */
+	VERIFY(m0->m_pkthdr.header == NULL);
+
+	if (m_dup_pkthdr(m_final, m0, how) == 0)
+		goto nospace;
+
+	m_new = m_final;
+
+	while (progress < pktlen) {
+		length = pktlen - progress;
+		if (length > MCLBYTES)
+			length = MCLBYTES;
+
+		if (m_new == NULL) {
+			if (length > MLEN)
+				m_new = m_getcl(how, MT_DATA, 0);
+			else
+				m_new = m_get(how, MT_DATA);
+			if (m_new == NULL)
+				goto nospace;
+		}
+
+		m_copydata(m0, progress, length, mtod(m_new, caddr_t));
+		progress += length;
+		m_new->m_len = length;
+		if (m_new != m_final)
+			m_cat(m_final, m_new);
+		m_new = NULL;
+	}
+	m_freem(m0);
+	m0 = m_final;
+	return (m0);
+nospace:
+	if (m_final)
+		m_freem(m_final);
+	return (NULL);
+}
+
+struct mbuf *
+m_defrag(struct mbuf *m0, int how)
+{
+	return (m_defrag_offset(m0, 0, how));
+}
+
 void
 m_mchtype(struct mbuf *m, int t)
 {
@@ -6315,7 +6516,6 @@ mleak_log(uintptr_t *bt, mcache_obj_t *addr, uint32_t depth, int num)
 	struct mallocation *allocation;
 	struct mtrace *trace;
 	uint32_t trace_index;
-	int i;
 
 	/* Quit if someone else modifying the tables */
 	if (!lck_mtx_try_lock_spin(mleak_lock)) {
@@ -6389,22 +6589,6 @@ mleak_log(uintptr_t *bt, mcache_obj_t *addr, uint32_t depth, int num)
 	mleak_table.alloc_recorded++;
 	mleak_table.outstanding_allocs++;
 
-	/* keep a log of the last 5 traces to be top trace, in order */
-	for (i = 0; i < MLEAK_NUM_TRACES; i++) {
-		if (mleak_top_trace[i] == NULL ||
-		    mleak_top_trace[i]->allocs <= trace->allocs) {
-			if (mleak_top_trace[i] != trace) {
-				int j = MLEAK_NUM_TRACES;
-				while (--j > i) {
-					mleak_top_trace[j] =
-					    mleak_top_trace[j - 1];
-				}
-				mleak_top_trace[i] = trace;
-			}
-			break;
-		}
-	}
-
 	lck_mtx_unlock(mleak_lock);
 	return (TRUE);
 }
@@ -6435,6 +6619,90 @@ mleak_free(mcache_obj_t *addr)
 			lck_mtx_unlock(mleak_lock);
 		}
 		addr = addr->obj_next;
+	}
+}
+
+static void
+mleak_sort_traces()
+{
+	int i, j, k;
+	struct mtrace *swap;
+
+	for(i = 0; i < MLEAK_NUM_TRACES; i++)
+		mleak_top_trace[i] = NULL;
+
+	for(i = 0, j = 0; j < MLEAK_NUM_TRACES && i < mleak_trace_buckets; i++)
+	{
+		if (mleak_traces[i].allocs <= 0)
+			continue;
+
+		mleak_top_trace[j] = &mleak_traces[i];
+		for (k = j; k > 0; k--) {
+			if (mleak_top_trace[k]->allocs <=
+			    mleak_top_trace[k-1]->allocs)
+				break;
+
+			swap = mleak_top_trace[k-1];
+			mleak_top_trace[k-1] = mleak_top_trace[k];
+			mleak_top_trace[k] = swap;
+		}
+		j++;
+	}
+
+	j--;
+	for(; i < mleak_trace_buckets; i++) {
+		if (mleak_traces[i].allocs <= mleak_top_trace[j]->allocs)
+			continue;
+
+		mleak_top_trace[j] = &mleak_traces[i];
+
+		for (k = j; k > 0; k--) {
+			if (mleak_top_trace[k]->allocs <=
+			    mleak_top_trace[k-1]->allocs)
+				break;
+
+			swap = mleak_top_trace[k-1];
+			mleak_top_trace[k-1] = mleak_top_trace[k];
+			mleak_top_trace[k] = swap;
+		}
+	}
+}
+
+static void
+mleak_update_stats()
+{
+	mleak_trace_stat_t *mltr;
+	int i;
+
+	VERIFY(mleak_stat != NULL);
+#ifdef __LP64__
+	VERIFY(mleak_stat->ml_isaddr64);
+#else
+	VERIFY(!mleak_stat->ml_isaddr64);
+#endif /* !__LP64__ */
+	VERIFY(mleak_stat->ml_cnt == MLEAK_NUM_TRACES);
+
+	mleak_sort_traces();
+
+	mltr = &mleak_stat->ml_trace[0];
+	bzero(mltr, sizeof (*mltr) * MLEAK_NUM_TRACES);
+	for (i = 0; i < MLEAK_NUM_TRACES; i++) {
+	int j;
+
+		if (mleak_top_trace[i] == NULL ||
+		    mleak_top_trace[i]->allocs == 0)
+			continue;
+
+		mltr->mltr_collisions	= mleak_top_trace[i]->collisions;
+		mltr->mltr_hitcount	= mleak_top_trace[i]->hitcount;
+		mltr->mltr_allocs	= mleak_top_trace[i]->allocs;
+		mltr->mltr_depth	= mleak_top_trace[i]->depth;
+
+		VERIFY(mltr->mltr_depth <= MLEAK_STACK_DEPTH);
+		for (j = 0; j < mltr->mltr_depth; j++)
+			mltr->mltr_addr[j] = mleak_top_trace[i]->addr[j];
+
+		mltr++;
 	}
 }
 
@@ -6478,8 +6746,9 @@ mbuf_dump(void)
 	uint8_t seen[256];
 	struct mbtypes *mp;
 	mb_class_stat_t *sp;
+	mleak_trace_stat_t *mltr;
 	char *c = mbuf_dump_buf;
-	int i, k, clen = sizeof (mbuf_dump_buf);
+	int i, k, clen = MBUF_DUMP_BUF_SIZE;
 
 	mbuf_dump_buf[0] = '\0';
 
@@ -6577,6 +6846,77 @@ mbuf_dump(void)
 	    "in use)\n", totmem / 1024, totpct);
 	MBUF_DUMP_BUF_CHK();
 
+	/* mbuf leak detection statistics */
+	mleak_update_stats();
+
+	k = snprintf(c, clen, "\nmbuf leak detection table:\n");
+	MBUF_DUMP_BUF_CHK();
+	k = snprintf(c, clen, "\ttotal captured: %u (one per %u)\n",
+	    mleak_table.mleak_capture / mleak_table.mleak_sample_factor,
+	    mleak_table.mleak_sample_factor);
+	MBUF_DUMP_BUF_CHK();
+	k = snprintf(c, clen, "\ttotal allocs outstanding: %llu\n",
+	    mleak_table.outstanding_allocs);
+	MBUF_DUMP_BUF_CHK();
+	k = snprintf(c, clen, "\tnew hash recorded: %llu allocs, %llu traces\n",
+	    mleak_table.alloc_recorded, mleak_table.trace_recorded);
+	MBUF_DUMP_BUF_CHK();
+	k = snprintf(c, clen, "\thash collisions: %llu allocs, %llu traces\n",
+	    mleak_table.alloc_collisions, mleak_table.trace_collisions);
+	MBUF_DUMP_BUF_CHK();
+	k = snprintf(c, clen, "\toverwrites: %llu allocs, %llu traces\n",
+	    mleak_table.alloc_overwrites, mleak_table.trace_overwrites);
+	MBUF_DUMP_BUF_CHK();
+	k = snprintf(c, clen, "\tlock conflicts: %llu\n\n",
+	    mleak_table.total_conflicts);
+	MBUF_DUMP_BUF_CHK();
+
+	k = snprintf(c, clen, "top %d outstanding traces:\n",
+	    mleak_stat->ml_cnt);
+	MBUF_DUMP_BUF_CHK();
+	for (i = 0; i < mleak_stat->ml_cnt; i++) {
+		mltr = &mleak_stat->ml_trace[i];
+		k = snprintf(c, clen, "[%d] %llu outstanding alloc(s), "
+		    "%llu hit(s), %llu collision(s)\n", (i + 1),
+		    mltr->mltr_allocs, mltr->mltr_hitcount,
+		    mltr->mltr_collisions);
+		MBUF_DUMP_BUF_CHK();
+	}
+
+	if (mleak_stat->ml_isaddr64)
+		k = snprintf(c, clen, MB_LEAK_HDR_64);
+	else
+		k = snprintf(c, clen, MB_LEAK_HDR_32);
+	MBUF_DUMP_BUF_CHK();
+
+	for (i = 0; i < MLEAK_STACK_DEPTH; i++) {
+		int j;
+		k = snprintf(c, clen, "%2d: ", (i + 1));
+		MBUF_DUMP_BUF_CHK();
+		for (j = 0; j < mleak_stat->ml_cnt; j++) {
+			mltr = &mleak_stat->ml_trace[j];
+			if (i < mltr->mltr_depth) {
+				if (mleak_stat->ml_isaddr64) {
+					k = snprintf(c, clen, "0x%0llx  ",
+					    mltr->mltr_addr[i]);
+				} else {
+					k = snprintf(c, clen,
+					    "0x%08x  ",
+					    (u_int32_t)mltr->mltr_addr[i]);
+				}
+			} else {
+				if (mleak_stat->ml_isaddr64)
+					k = snprintf(c, clen,
+					    MB_LEAK_SPACING_64);
+				else
+					k = snprintf(c, clen,
+					    MB_LEAK_SPACING_32);
+			}
+			MBUF_DUMP_BUF_CHK();
+		}
+		k = snprintf(c, clen, "\n");
+		MBUF_DUMP_BUF_CHK();
+	}
 done:
 	return (mbuf_dump_buf);
 }

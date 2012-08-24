@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2009 Apple Inc. All rights reserved.
+ * Copyright (c) 2009, 2011-2012 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -26,22 +26,28 @@
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 #include <string.h>
-
-#include <mach-o/loader.h>
-#include <mach-o/nlist.h>
-#include <mach-o/reloc.h>
 #include <sys/types.h>
 
 #if KERNEL
     #include <libkern/kernel_mach_header.h>
+    #include <mach/machine.h>
     #include <mach/vm_param.h>
     #include <mach-o/fat.h>
 #else /* !KERNEL */
+    /* Get machine.h from the kernel source so we can support all platforms
+     * that the kernel supports. Otherwise we're at the mercy of the host.
+     */
+    #include "../../osfmk/mach/machine.h"
+
     #include <architecture/byte_order.h>
     #include <mach/mach_init.h>
     #include <mach-o/arch.h>
     #include <mach-o/swap.h>
 #endif /* KERNEL */
+
+#include <mach-o/loader.h>
+#include <mach-o/nlist.h>
+#include <mach-o/reloc.h>
 
 #define DEBUG_ASSERT_COMPONENT_NAME_STRING "kxld"
 #include <AssertMacros.h>
@@ -51,9 +57,11 @@
 #include "kxld_reloc.h"
 #include "kxld_sect.h"
 #include "kxld_seg.h"
+#include "kxld_srcversion.h"
 #include "kxld_symtab.h"
 #include "kxld_util.h"
 #include "kxld_uuid.h"
+#include "kxld_versionmin.h"
 #include "kxld_vtable.h"
 
 #include "kxld_object.h"
@@ -75,15 +83,21 @@ struct kxld_object {
     KXLDArray locrelocs;
     KXLDRelocator relocator;
     KXLDuuid uuid;
+    KXLDversionmin versionmin;
+    KXLDsrcversion srcversion;
     KXLDSymtab *symtab;
     struct dysymtab_command *dysymtab_hdr;
     kxld_addr_t link_addr;
+    u_long    output_buffer_size;
     boolean_t is_kernel;
     boolean_t is_final_image;
     boolean_t is_linked;
     boolean_t got_is_created;
 #if KXLD_USER_OR_OBJECT
     KXLDArray *section_order;
+#endif
+#if KXLD_PIC_KEXTS
+    boolean_t include_kaslr_relocs;
 #endif
 #if !KERNEL
     enum NXByteOrder host_order;
@@ -128,6 +142,11 @@ static boolean_t target_supports_object(const KXLDObject *object)
 static kern_return_t init_from_object(KXLDObject *object);
 static kern_return_t process_relocs_from_sections(KXLDObject *object);
 #endif /* KXLD_USER_OR_OBJECT */
+
+#if KXLD_PIC_KEXTS
+static boolean_t target_supports_slideable_kexts(const KXLDObject *object);
+#endif  /* KXLD_PIC_KEXTS */
+
 
 static kern_return_t export_macho_header(const KXLDObject *object, u_char *buf, 
     u_int ncmds, u_long *header_offset, u_long header_size);
@@ -183,7 +202,7 @@ kxld_object_sizeof(void)
 kern_return_t 
 kxld_object_init_from_macho(KXLDObject *object, u_char *file, u_long size,
     const char *name, KXLDArray *section_order __unused, 
-    cpu_type_t cputype, cpu_subtype_t cpusubtype)
+    cpu_type_t cputype, cpu_subtype_t cpusubtype, KXLDFlags flags __unused)
 {
     kern_return_t       rval    = KERN_FAILURE;
     KXLDSeg           * seg     = NULL;
@@ -198,6 +217,10 @@ kxld_object_init_from_macho(KXLDObject *object, u_char *file, u_long size,
 #if KXLD_USER_OR_OBJECT
     object->section_order = section_order;
 #endif
+#if KXLD_PIC_KEXTS
+    object->include_kaslr_relocs = ((flags & kKXLDFlagIncludeRelocs) == kKXLDFlagIncludeRelocs);
+#endif
+    
     /* Find the local architecture */
 
     rval = get_target_machine_info(object, cputype, cpusubtype);
@@ -231,10 +254,10 @@ kxld_object_init_from_macho(KXLDObject *object, u_char *file, u_long size,
      */
 
     if (kxld_object_is_32_bit(object)) {
-        struct mach_header *mach_hdr = (struct mach_header *) object->file;
+        struct mach_header *mach_hdr = (struct mach_header *) ((void *) object->file);
         object->filetype = mach_hdr->filetype;
     } else {
-        struct mach_header_64 *mach_hdr = (struct mach_header_64 *) object->file;
+        struct mach_header_64 *mach_hdr = (struct mach_header_64 *) ((void *) object->file);
         object->filetype = mach_hdr->filetype;
     }
 
@@ -273,7 +296,12 @@ kxld_object_init_from_macho(KXLDObject *object, u_char *file, u_long size,
         seg = kxld_object_get_seg_by_name(object, SEG_LINKEDIT);
         if (seg) {
             (void) kxld_seg_populate_linkedit(seg, object->symtab,
-                kxld_object_is_32_bit(object));
+                kxld_object_is_32_bit(object)
+#if KXLD_PIC_KEXTS
+                , &object->locrelocs, &object->extrelocs,
+                target_supports_slideable_kexts(object)
+#endif
+                );
         }
     }
 
@@ -344,9 +372,6 @@ get_target_machine_info(KXLDObject *object, cpu_type_t cputype __unused,
         case CPU_TYPE_I386:
             object->cpusubtype = CPU_SUBTYPE_I386_ALL;
             break;
-        case CPU_TYPE_POWERPC:
-            object->cpusubtype = CPU_SUBTYPE_POWERPC_ALL;
-            break;
         case CPU_TYPE_X86_64:
             object->cpusubtype = CPU_SUBTYPE_X86_64_ALL;
             break;
@@ -367,9 +392,6 @@ get_target_machine_info(KXLDObject *object, cpu_type_t cputype __unused,
     case CPU_TYPE_I386:
     case CPU_TYPE_X86_64:
         object->target_order = NX_LittleEndian;
-        break;
-    case CPU_TYPE_POWERPC:
-        object->target_order = NX_BigEndian;
         break;
     default:
         rval = KERN_NOT_SUPPORTED;
@@ -393,7 +415,7 @@ get_macho_slice_for_arch(KXLDObject *object, u_char *file, u_long size)
     kern_return_t rval = KERN_FAILURE;
     struct mach_header *mach_hdr = NULL;
 #if !KERNEL
-    struct fat_header *fat = (struct fat_header *) file;
+    struct fat_header *fat = (struct fat_header *) ((void *) file);
     struct fat_arch *archs = (struct fat_arch *) &fat[1];
     boolean_t swap = FALSE;
 #endif /* KERNEL */
@@ -462,7 +484,7 @@ get_macho_slice_for_arch(KXLDObject *object, u_char *file, u_long size)
     }
     require_noerr(rval, finish);
 
-    mach_hdr = (struct mach_header *) object->file;
+    mach_hdr = (struct mach_header *) ((void *) object->file);
     require_action(object->cputype == mach_hdr->cputype, finish,
         rval=KERN_FAILURE;
         kxld_log(kKxldLogLinking, kKxldLogErr, kKxldLogTruncatedMachO));
@@ -484,6 +506,8 @@ init_from_final_linked_image(KXLDObject *object, u_int *filetype_out,
     struct load_command *cmd_hdr = NULL;
     struct symtab_command *symtab_hdr = NULL;
     struct uuid_command *uuid_hdr = NULL;
+    struct version_min_command *versionmin_hdr = NULL;
+    struct source_version_command *source_version_hdr = NULL;
     u_long base_offset = 0;
     u_long offset = 0;
     u_long sect_offset = 0;
@@ -504,7 +528,7 @@ init_from_final_linked_image(KXLDObject *object, u_int *filetype_out,
 
     offset = base_offset;
     for (i = 0; i < ncmds; ++i, offset += cmd_hdr->cmdsize) {
-        cmd_hdr = (struct load_command *) (object->file + offset);
+        cmd_hdr = (struct load_command *) ((void *) (object->file + offset));
 
         switch(cmd_hdr->cmd) {
 #if KXLD_USER_OR_ILP32
@@ -525,7 +549,7 @@ init_from_final_linked_image(KXLDObject *object, u_int *filetype_out,
         case LC_SEGMENT_64:
             {
                 struct segment_command_64 *seg_hdr = 
-                    (struct segment_command_64 *) cmd_hdr;
+                    (struct segment_command_64 *) ((void *) cmd_hdr);
 
                 /* Ignore segments with no vm size */
                 if (!seg_hdr->vmsize) continue;
@@ -554,7 +578,7 @@ init_from_final_linked_image(KXLDObject *object, u_int *filetype_out,
 
     offset = base_offset;
     for (i = 0; i < ncmds; ++i, offset += cmd_hdr->cmdsize) {
-        cmd_hdr = (struct load_command *) (object->file + offset); 
+        cmd_hdr = (struct load_command *) ((void *) (object->file + offset)); 
         seg = NULL;
 
         switch(cmd_hdr->cmd) {
@@ -580,7 +604,7 @@ init_from_final_linked_image(KXLDObject *object, u_int *filetype_out,
         case LC_SEGMENT_64:
             {
                 struct segment_command_64 *seg_hdr = 
-                    (struct segment_command_64 *) cmd_hdr;
+                    (struct segment_command_64 *) ((void *) cmd_hdr);
 
                 /* Ignore segments with no vm size */
                 if (!seg_hdr->vmsize) continue;
@@ -601,26 +625,44 @@ init_from_final_linked_image(KXLDObject *object, u_int *filetype_out,
             uuid_hdr = (struct uuid_command *) cmd_hdr;
             kxld_uuid_init_from_macho(&object->uuid, uuid_hdr);
             break;
+        case LC_VERSION_MIN_MACOSX:
+        case LC_VERSION_MIN_IPHONEOS:
+            versionmin_hdr = (struct version_min_command *) cmd_hdr;
+            kxld_versionmin_init_from_macho(&object->versionmin, versionmin_hdr);
+            break;
+        case LC_SOURCE_VERSION:
+            source_version_hdr = (struct source_version_command *) (void *) cmd_hdr;
+            kxld_srcversion_init_from_macho(&object->srcversion, source_version_hdr);
+            break;
         case LC_DYSYMTAB:
             object->dysymtab_hdr = (struct dysymtab_command *) cmd_hdr;            
 
             rval = kxld_reloc_create_macho(&object->extrelocs, &object->relocator,
-                (struct relocation_info *) (object->file + object->dysymtab_hdr->extreloff), 
+                (struct relocation_info *) ((void *) (object->file + object->dysymtab_hdr->extreloff)), 
                 object->dysymtab_hdr->nextrel);
             require_noerr(rval, finish);
 
             rval = kxld_reloc_create_macho(&object->locrelocs, &object->relocator,
-                (struct relocation_info *) (object->file + object->dysymtab_hdr->locreloff), 
+                (struct relocation_info *) ((void *) (object->file + object->dysymtab_hdr->locreloff)), 
                 object->dysymtab_hdr->nlocrel);
             require_noerr(rval, finish);
 
             break;
         case LC_UNIXTHREAD:
-            /* Don't need to do anything with UNIXTHREAD for the kernel */
+        case LC_MAIN:
+            /* Don't need to do anything with UNIXTHREAD or MAIN for the kernel */
             require_action(kxld_object_is_kernel(object), 
                 finish, rval=KERN_FAILURE;
                 kxld_log(kKxldLogLinking, kKxldLogErr, kKxldLogMalformedMachO
-                    "LC_UNIXTHREAD segment is not valid in a kext."));
+                    "LC_UNIXTHREAD/LC_MAIN segment is not valid in a kext."));
+            break;
+        case LC_CODE_SIGNATURE:
+        case LC_DYLD_INFO:
+        case LC_DYLD_INFO_ONLY:
+        case LC_FUNCTION_STARTS:
+        case LC_DATA_IN_CODE:
+        case LC_DYLIB_CODE_SIGN_DRS:
+            /* Various metadata that might be stored in the linkedit segment */
             break;
         default:
             rval=KERN_FAILURE;
@@ -695,7 +737,7 @@ init_from_execute(KXLDObject *object)
         kxld_log(kKxldLogLinking, kKxldLogErr, kKxldLogMalformedMachO));
 #endif
 
-	KXLD_3264_FUNC(kxld_object_is_32_bit(object), rval,
+    KXLD_3264_FUNC(kxld_object_is_32_bit(object), rval,
         kxld_symtab_init_from_macho_32, kxld_symtab_init_from_macho_64,
         object->symtab, symtab_hdr, object->file, kernel_linkedit_seg);
     require_noerr(rval, finish);
@@ -736,11 +778,9 @@ finish:
 /*******************************************************************************
 *******************************************************************************/
 static boolean_t
-target_supports_bundle(const KXLDObject *object)
+target_supports_bundle(const KXLDObject *object __unused)
 {
-    return (object->cputype == CPU_TYPE_I386    ||
-            object->cputype == CPU_TYPE_X86_64  ||
-            object->cputype == CPU_TYPE_ARM);
+    return TRUE;
 }
 
 /*******************************************************************************
@@ -782,9 +822,7 @@ finish:
 *******************************************************************************/
 static boolean_t target_supports_object(const KXLDObject *object)
 {
-    return (object->cputype == CPU_TYPE_POWERPC ||
-            object->cputype == CPU_TYPE_I386    ||
-            object->cputype == CPU_TYPE_ARM);
+    return (object->cputype == CPU_TYPE_I386);
 }
 
 /*******************************************************************************
@@ -825,7 +863,7 @@ init_from_object(KXLDObject *object)
      */
 
     for (; i < ncmds; ++i, offset += cmd_hdr->cmdsize) {
-        cmd_hdr = (struct load_command *) (object->file + offset);
+        cmd_hdr = (struct load_command *) ((void *) (object->file + offset));
 
         switch(cmd_hdr->cmd) {
 #if KXLD_USER_OR_ILP32
@@ -861,7 +899,7 @@ init_from_object(KXLDObject *object)
         case LC_SEGMENT_64:
             {
                 struct segment_command_64 *seg_hdr =
-                    (struct segment_command_64 *) cmd_hdr;
+                    (struct segment_command_64 *) ((void *) cmd_hdr);
 
                 /* Ignore segments with no vm size */
                 if (!seg_hdr->vmsize) continue;
@@ -900,8 +938,21 @@ init_from_object(KXLDObject *object)
             kxld_uuid_init_from_macho(&object->uuid, uuid_hdr);
             break;
         case LC_UNIXTHREAD:
-            /* Don't need to do anything with UNIXTHREAD */
+        case LC_MAIN:
+            /* Don't need to do anything with UNIXTHREAD or MAIN */
             break;
+        case LC_CODE_SIGNATURE:
+        case LC_DYLD_INFO:
+        case LC_DYLD_INFO_ONLY:
+        case LC_FUNCTION_STARTS:
+        case LC_DATA_IN_CODE:
+        case LC_DYLIB_CODE_SIGN_DRS:
+            /* Various metadata that might be stored in the linkedit segment */
+            break;
+        case LC_VERSION_MIN_MACOSX:
+        case LC_VERSION_MIN_IPHONEOS:
+        case LC_SOURCE_VERSION:
+            /* Not supported for object files, fall through */
         default:
             rval = KERN_FAILURE;
             kxld_log(kKxldLogLinking, kKxldLogErr, kKxldLogMalformedMachO
@@ -964,7 +1015,7 @@ finish:
 static u_long
 get_macho_cmd_data_32(u_char *file, u_long offset, u_int *filetype, u_int *ncmds)
 {
-    struct mach_header *mach_hdr = (struct mach_header *) (file + offset);
+    struct mach_header *mach_hdr = (struct mach_header *) ((void *) (file + offset));
 
     if (filetype) *filetype = mach_hdr->filetype;
     if (ncmds) *ncmds = mach_hdr->ncmds;
@@ -980,7 +1031,7 @@ get_macho_cmd_data_32(u_char *file, u_long offset, u_int *filetype, u_int *ncmds
 static u_long
 get_macho_cmd_data_64(u_char *file, u_long offset, u_int *filetype,  u_int *ncmds)
 {
-    struct mach_header_64 *mach_hdr = (struct mach_header_64 *) (file + offset);
+    struct mach_header_64 *mach_hdr = (struct mach_header_64 *) ((void *) (file + offset));
 
     if (filetype) *filetype = mach_hdr->filetype;
     if (ncmds) *ncmds = mach_hdr->ncmds;
@@ -997,28 +1048,39 @@ get_macho_header_size(const KXLDObject *object)
     KXLDSeg *seg = NULL;
     u_long header_size = 0;
     u_int i = 0;
+    boolean_t   object_is_32_bit = kxld_object_is_32_bit(object);
 
     check(object);
 
     /* Mach, segment, symtab, and UUID headers */
 
-    if (kxld_object_is_32_bit(object)) {
-        header_size += sizeof(struct mach_header);
-    } else {
-        header_size += sizeof(struct mach_header_64);
-    }
+    header_size += object_is_32_bit ? sizeof(struct mach_header) : sizeof(struct mach_header_64);
 
     for (i = 0; i < object->segs.nitems; ++i) {
         seg = kxld_array_get_item(&object->segs, i);
-        header_size += kxld_seg_get_macho_header_size(seg, kxld_object_is_32_bit(object));
+        header_size += kxld_seg_get_macho_header_size(seg, object_is_32_bit);
     }
 
     header_size += kxld_symtab_get_macho_header_size();
+
+#if KXLD_PIC_KEXTS
+    if (target_supports_slideable_kexts(object)) {
+        header_size += kxld_reloc_get_macho_header_size();
+    }
+#endif	/* KXLD_PIC_KEXTS */
 
     if (object->uuid.has_uuid) {
         header_size += kxld_uuid_get_macho_header_size();
     }
 
+    if (object->versionmin.has_versionmin) {
+        header_size += kxld_versionmin_get_macho_header_size();
+    }
+
+    if (object->srcversion.has_srcversion) {
+        header_size += kxld_srcversion_get_macho_header_size();
+    }
+    
     return header_size;
 }
 
@@ -1033,10 +1095,47 @@ get_macho_data_size(const KXLDObject *object)
 
     check(object);
 
+    /* total all segment vmsize values */
     for (i = 0; i < object->segs.nitems; ++i) {
         seg = kxld_array_get_item(&object->segs, i);
         data_size += (u_long) kxld_seg_get_vmsize(seg);
     }
+
+#if KXLD_PIC_KEXTS
+    {
+        /* ensure that when we eventually emit the final linked object, 
+         * appending the __DYSYMTAB data after the __LINKEDIT data will
+         * not overflow the space allocated for the __LINKEDIT segment
+         */
+        
+        u_long  seg_vmsize = 0;
+        u_long  symtab_size = 0;
+        u_long  reloc_size = 0;
+        
+        /* get current __LINKEDIT sizes */
+        seg = kxld_object_get_seg_by_name(object, SEG_LINKEDIT);
+        seg_vmsize = (u_long) kxld_seg_get_vmsize(seg);
+        
+        /* get size of symbol table data that will eventually be dumped
+         * into the __LINKEDIT segment
+         */
+        symtab_size = kxld_symtab_get_macho_data_size(object->symtab, kxld_object_is_32_bit(object));
+        
+        if (target_supports_slideable_kexts(object)) {
+            /* get size of __DYSYMTAB relocation entries */
+            reloc_size = kxld_reloc_get_macho_data_size(&object->locrelocs, &object->extrelocs);
+        }
+        
+        /* combine, and ensure they'll both fit within the page(s)
+         * allocated for the __LINKEDIT segment. If they'd overflow,
+         * increase the vmsize appropriately so no overflow will occur
+         */
+        if ((symtab_size + reloc_size) > seg_vmsize) {
+            u_long  overflow = (symtab_size + reloc_size) - seg_vmsize;
+            data_size += round_page(overflow);
+        }
+    }
+#endif  // KXLD_PIC_KEXTS
 
     return data_size;
 }
@@ -1395,7 +1494,7 @@ set_is_object_linked(KXLDObject *object)
     }
 
     if (object->is_final_image) {
-        object->is_linked = !object->extrelocs.nitems && !object->locrelocs.nitems;
+        object->is_linked = !object->extrelocs.nitems;
         return;
     }
 
@@ -1442,6 +1541,8 @@ void kxld_object_clear(KXLDObject *object __unused)
     kxld_array_reset(&object->locrelocs);
     kxld_relocator_clear(&object->relocator);
     kxld_uuid_clear(&object->uuid);
+    kxld_versionmin_clear(&object->versionmin);
+    kxld_srcversion_clear(&object->srcversion);
 
     if (object->symtab) kxld_symtab_clear(object->symtab);
 
@@ -1570,8 +1671,7 @@ kxld_object_target_supports_strict_patching(const KXLDObject *object)
 {
     check(object);
 
-    return (object->cputype != CPU_TYPE_I386 && 
-            object->cputype != CPU_TYPE_POWERPC);
+    return (object->cputype != CPU_TYPE_I386);
 }
 
 /*******************************************************************************
@@ -1581,8 +1681,7 @@ kxld_object_target_supports_common_symbols(const KXLDObject *object)
 {
     check(object);
 
-    return (object->cputype == CPU_TYPE_I386 || 
-            object->cputype == CPU_TYPE_POWERPC);
+    return (object->cputype == CPU_TYPE_I386);
 }
 
 /*******************************************************************************
@@ -1606,6 +1705,15 @@ kxld_object_get_vmsize(const KXLDObject *object, u_long *header_size,
 }
 
 /*******************************************************************************
+ *******************************************************************************/
+void
+kxld_object_set_linked_object_size(KXLDObject *object, u_long vmsize)
+{
+    object->output_buffer_size = vmsize;	/* cache this for use later */
+    return;
+}
+
+/*******************************************************************************
 *******************************************************************************/
 kern_return_t 
 kxld_object_export_linked_object(const KXLDObject *object, 
@@ -1619,6 +1727,7 @@ kxld_object_export_linked_object(const KXLDObject *object,
     u_long data_offset = 0;
     u_int ncmds = 0;
     u_int i = 0;
+    boolean_t   is_32bit_object = kxld_object_is_32_bit(object);
 
     check(object);
     check(linked_object);
@@ -1627,36 +1736,74 @@ kxld_object_export_linked_object(const KXLDObject *object,
 
     header_size = get_macho_header_size(object);
     data_offset = (object->is_final_image) ? header_size : round_page(header_size);
-    size = data_offset + get_macho_data_size(object);
+    size = object->output_buffer_size;
 
     /* Copy data to the file */
 
-    ncmds = object->segs.nitems + (object->uuid.has_uuid == TRUE) + 1 /* linkedit */;
+    ncmds = object->segs.nitems + 1 /* LC_SYMTAB */;
 
-    rval = export_macho_header(object, linked_object, ncmds, 
-        &header_offset, header_size);
+#if KXLD_PIC_KEXTS
+    /* don't write out a DYSYMTAB segment for targets that can't digest it
+     */
+    if (target_supports_slideable_kexts(object)) {
+        ncmds++; /* dysymtab */
+    }
+#endif	/* KXLD_PIC_KEXTS */
+
+    if (object->uuid.has_uuid == TRUE) {
+        ncmds++;
+    }
+
+    if (object->versionmin.has_versionmin == TRUE) {
+        ncmds++;
+    }
+
+    if (object->srcversion.has_srcversion == TRUE) {
+        ncmds++;
+    }
+    
+    rval = export_macho_header(object, linked_object, ncmds, &header_offset, header_size);
     require_noerr(rval, finish);
 
     for (i = 0; i < object->segs.nitems; ++i) {
         seg = kxld_array_get_item(&object->segs, i);
 
-        rval = kxld_seg_export_macho_to_vm(seg, linked_object, &header_offset, 
-            header_size, size, object->link_addr, kxld_object_is_32_bit(object));
+        rval = kxld_seg_export_macho_to_vm(seg, linked_object, &header_offset,
+            header_size, size, object->link_addr, is_32bit_object);
         require_noerr(rval, finish);
     }
 
     seg = kxld_object_get_seg_by_name(object, SEG_LINKEDIT);
     data_offset = (u_long) (seg->link_addr - object->link_addr);
+    
     rval = kxld_symtab_export_macho(object->symtab, linked_object, &header_offset,
-        header_size, &data_offset, size, kxld_object_is_32_bit(object));
+        header_size, &data_offset, size, is_32bit_object);
     require_noerr(rval, finish);
 
+#if KXLD_PIC_KEXTS
+    if (target_supports_slideable_kexts(object)) {
+        rval = kxld_reloc_export_macho(&object->relocator, &object->locrelocs,
+            &object->extrelocs, linked_object, &header_offset, header_size,
+            &data_offset, size);
+        require_noerr(rval, finish);
+    }
+#endif	/* KXLD_PIC_KEXTS */
+
     if (object->uuid.has_uuid) {
-        rval = kxld_uuid_export_macho(&object->uuid, linked_object, 
-            &header_offset, header_size);
+        rval = kxld_uuid_export_macho(&object->uuid, linked_object, &header_offset, header_size);
         require_noerr(rval, finish);
     }
 
+    if (object->versionmin.has_versionmin) {
+        rval = kxld_versionmin_export_macho(&object->versionmin, linked_object, &header_offset, header_size);
+        require_noerr(rval, finish);
+    }
+
+    if (object->srcversion.has_srcversion) {
+        rval = kxld_srcversion_export_macho(&object->srcversion, linked_object, &header_offset, header_size);
+        require_noerr(rval, finish);
+    }
+    
 #if !KERNEL
     unswap_macho(linked_object, object->host_order, object->target_order);
 #endif /* KERNEL */
@@ -1706,7 +1853,7 @@ export_macho_header_32(const KXLDObject *object, u_char *buf, u_int ncmds,
 
     require_action(sizeof(*mach) <= header_size - *header_offset, finish,
         rval=KERN_FAILURE);
-    mach = (struct mach_header *) (buf + *header_offset);
+    mach = (struct mach_header *) ((void *) (buf + *header_offset));
 
     mach->magic = MH_MAGIC;
     mach->cputype = object->cputype;
@@ -1741,7 +1888,7 @@ export_macho_header_64(const KXLDObject *object, u_char *buf, u_int ncmds,
     
     require_action(sizeof(*mach) <= header_size - *header_offset, finish,
         rval=KERN_FAILURE);
-    mach = (struct mach_header_64 *) (buf + *header_offset);
+    mach = (struct mach_header_64 *) ((void *) (buf + *header_offset));
     
     mach->magic = MH_MAGIC_64;
     mach->cputype = object->cputype;
@@ -1965,16 +2112,10 @@ process_symbol_pointers(KXLDObject *object)
      */
 
     sect = kxld_object_get_sect_by_name(object, SEG_DATA, SECT_SYM_PTRS);
-    if (!sect) {
+    if (!sect || !(sect->flags & S_NON_LAZY_SYMBOL_POINTERS)) {
         rval = KERN_SUCCESS;
         goto finish;
     }
-
-    require_action(sect->flags & S_NON_LAZY_SYMBOL_POINTERS,
-        finish, rval=KERN_FAILURE;
-        kxld_log(kKxldLogLinking, kKxldLogErr, kKxldLogMalformedMachO 
-            "Section %s,%s does not have S_NON_LAZY_SYMBOL_POINTERS flag.",
-            SEG_DATA, SECT_SYM_PTRS));
 
     /* Calculate the table offset and number of entries in the section */
 
@@ -1989,7 +2130,8 @@ process_symbol_pointers(KXLDObject *object)
 
     require_action(firstsym + nsyms <= object->dysymtab_hdr->nindirectsyms,
         finish, rval=KERN_FAILURE;
-        kxld_log(kKxldLogLinking, kKxldLogErr, kKxldLogMalformedMachO));
+        kxld_log(kKxldLogLinking, kKxldLogErr, kKxldLogMalformedMachO
+            "firstsym + nsyms > object->dysymtab_hdr->nindirectsyms"));
 
     /* Iterate through the indirect symbol table and fill in the section of
      * symbol pointers.  There are three cases:
@@ -2001,7 +2143,7 @@ process_symbol_pointers(KXLDObject *object)
      *      action is required.
      */
 
-    symidx = (int32_t *) (object->file + object->dysymtab_hdr->indirectsymoff);
+    symidx = (int32_t *) ((void *) (object->file + object->dysymtab_hdr->indirectsymoff));
     symidx += firstsym;
     symptr = sect->data;
     for (i = 0; i < nsyms; ++i, ++symidx, symptr+=symptrsize) {
@@ -2088,10 +2230,10 @@ static void
 add_to_ptr(u_char *symptr, kxld_addr_t val, boolean_t is_32_bit)
 {
     if (is_32_bit) {
-        uint32_t *ptr = (uint32_t *) symptr;
+        uint32_t *ptr = (uint32_t *) ((void *) symptr);
         *ptr += (uint32_t) val;
     } else {
-        uint64_t *ptr = (uint64_t *) symptr;
+        uint64_t *ptr = (uint64_t *) ((void *) symptr);
         *ptr += (uint64_t) val;
     }
 }
@@ -2146,7 +2288,7 @@ populate_kmod_info(KXLDObject *object)
  
     kmodsect = kxld_array_get_item(&object->sects, kmodsym->sectnum);
     kmod_offset = (u_long) (kmodsym->base_addr -  kmodsect->base_addr);
-    kmod_info = (kmod_info_t *) (kmodsect->data + kmod_offset);
+    kmod_info = (kmod_info_t *) ((void *) (kmodsect->data + kmod_offset));
 
     if (kxld_object_is_32_bit(object)) {
         kmod_info_32_v1_t *kmod = (kmod_info_32_v1_t *) (kmod_info);
@@ -2183,3 +2325,16 @@ finish:
     return rval;
 }
 
+#if KXLD_PIC_KEXTS
+/*******************************************************************************
+ *******************************************************************************/
+static boolean_t
+target_supports_slideable_kexts(const KXLDObject *object)
+{
+    check(object);
+
+    return (   object->cputype != CPU_TYPE_I386
+            && object->include_kaslr_relocs
+           );
+}
+#endif  /* KXLD_PIC_KEXTS */

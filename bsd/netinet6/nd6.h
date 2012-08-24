@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2011 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2012 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -70,7 +70,9 @@
 #include <sys/queue.h>
 
 #ifdef XNU_KERNEL_PRIVATE
+#include <net/flowadv.h>
 #include <kern/locks.h>
+#include <sys/tree.h>
 
 struct	llinfo_nd6 {
 	/*
@@ -117,16 +119,17 @@ struct	llinfo_nd6 {
 #ifdef XNU_KERNEL_PRIVATE
 #define ND6_IS_LLINFO_PROBREACH(n) ((n)->ln_state > ND6_LLINFO_INCOMPLETE)
 #define ND6_LLINFO_PERMANENT(n) (((n)->ln_expire == 0) && ((n)->ln_state > ND6_LLINFO_INCOMPLETE))
-#define ND6_IFF_PERFORMNUD	0x1
-#define ND6_IFF_ACCEPT_RTADV	0x2 /* APPLE: not used. Innterface specific router advertisments are
-				     * handled with a specific ifnet flag: IFEF_ACCEPT_RTADVD
-				     */
-#define ND6_IFF_PREFER_SOURCE	0x4 /* APPLE: NOT USED not related to ND. */
-#define ND6_IFF_IFDISABLED	0x8 /* IPv6 operation is disabled due to
-				     * DAD failure.  (XXX: not ND-specific)
-				     */
-#define ND6_IFF_DONT_SET_IFROUTE	0x10 /* NOT USED */
 
+#define ND6_EUI64_GBIT	0x01
+#define ND6_EUI64_UBIT	0x02
+
+#define ND6_EUI64_TO_IFID(in6)		do {(in6)->s6_addr[8] ^= ND6_EUI64_UBIT; } while (0)
+#define ND6_EUI64_GROUP(in6)		((in6)->s6_addr[8] & ND6_EUI64_GBIT)
+#define ND6_EUI64_INDIVIDUAL(in6)	(!ND6_EUI64_GROUP(in6))
+#define ND6_EUI64_LOCAL(in6)		((in6)->s6_addr[8] & ND6_EUI64_UBIT)
+#define ND6_EUI64_UNIVERSAL(in6)	(!ND6_EUI64_LOCAL(in6))
+#define ND6_IFID_LOCAL(in6)		(!ND6_EUI64_LOCAL(in6))
+#define ND6_IFID_UNIVERSAL(in6)		(!ND6_EUI64_UNIVERSAL(in6))
 #endif /* XNU_KERNEL_PRIVATE */
 
 #if !defined(XNU_KERNEL_PRIVATE)
@@ -145,13 +148,15 @@ struct nd_ifinfo_compat {
 	u_int8_t chlim;			/* CurHopLimit */
 	u_int8_t receivedra;
 	/* the following 3 members are for privacy extension for addrconf */
-	u_int8_t randomseed0[8]; /* upper 64 bits of MD5 digest */
+	u_int8_t randomseed0[8]; /* upper 64 bits of SHA1 digest */
 	u_int8_t randomseed1[8]; /* lower 64 bits (usually the EUI64 IFID) */
 	u_int8_t randomid[8];	/* current random ID */
 };
 
 #if defined(XNU_KERNEL_PRIVATE)
 struct nd_ifinfo {
+	decl_lck_mtx_data(, lock);
+	boolean_t initialized; /* Flag to see the entry is initialized */
 	u_int32_t linkmtu;		/* LinkMTU */
 	u_int32_t maxmtu;		/* Upper bound of LinkMTU */
 	u_int32_t basereachable;	/* BaseReachableTime */
@@ -160,9 +165,9 @@ struct nd_ifinfo {
 	u_int32_t flags;		/* Flags */
 	int recalctm;			/* BaseReacable re-calculation timer */
 	u_int8_t chlim;			/* CurHopLimit */
-	u_int8_t initialized; /* Flag to see the entry is initialized */
+	u_int8_t _pad[3];
 	/* the following 3 members are for privacy extension for addrconf */
-	u_int8_t randomseed0[8]; /* upper 64 bits of MD5 digest */
+	u_int8_t randomseed0[8]; /* upper 64 bits of SHA1 digest */
 	u_int8_t randomseed1[8]; /* lower 64 bits (usually the EUI64 IFID) */
 	u_int8_t randomid[8];	/* current random ID */
 	/* keep track of routers and prefixes on this link */
@@ -171,7 +176,20 @@ struct nd_ifinfo {
 };
 #endif /* XNU_KERNEL_PRIVATE */
 
-#define ND6_IFF_PERFORMNUD	0x1
+#define ND6_IFF_PERFORMNUD		0x1
+#if defined(PRIVATE)
+#define ND6_IFF_ACCEPT_RTADV		0x2 /* APPLE: not used. Innterface specific router
+					     * advertisments are handled with a specific ifnet
+					     * flag: IFEF_ACCEPT_RTADVD
+					     */
+#define ND6_IFF_PREFER_SOURCE		0x4 /* APPLE: NOT USED not related to ND. */
+#define ND6_IFF_IFDISABLED		0x8 /* IPv6 operation is disabled due to
+					     * DAD failure.  (XXX: not ND-specific)
+					     */
+#define ND6_IFF_DONT_SET_IFROUTE	0x10 /* NOT USED */
+#endif /* PRIVATE */
+#define ND6_IFF_PROXY_PREFIXES		0x20
+#define ND6_IFF_IGNORE_NA		0x40
 
 struct in6_nbrinfo {
 	char ifname[IFNAMSIZ];	/* if name, e.g. "en0" */
@@ -425,8 +443,9 @@ struct	in6_ndifreq_64 {
 /* Prefix status */
 #define NDPRF_ONLINK		0x1
 #define NDPRF_DETACHED		0x2
-#define	NDPRF_STATIC		0x100
-#define	NDPRF_IFSCOPE		0x1000
+#define NDPRF_STATIC		0x100
+#define NDPRF_IFSCOPE		0x1000
+#define NDPRF_PRPROXY		0x2000
 #ifdef XNU_KERNEL_PRIVATE
 #define	NDPRF_PROCESSED		0x08000
 #endif
@@ -451,7 +470,9 @@ __private_extern__ lck_rw_t *nd_if_rwlock;
 /*
  * In a more readable form, we derive linkmtu based on:
  *
- * if (ND_IFINFO(ifp)->linkmtu && ND_IFINFO(ifp)->linkmtu < ifp->if_mtu)
+ * if (ND_IFINFO(ifp) == NULL || !ND_IFINFO(ifp)->initialized)
+ *         linkmtu = ifp->if_mtu;
+ * else if (ND_IFINFO(ifp)->linkmtu && ND_IFINFO(ifp)->linkmtu < ifp->if_mtu)
  *         linkmtu = ND_IFINFO(ifp)->linkmtu;
  * else if ((ND_IFINFO(ifp)->maxmtu && ND_IFINFO(ifp)->maxmtu < ifp->if_mtu))
  *         linkmtu = ND_IFINFO(ifp)->maxmtu;
@@ -459,8 +480,8 @@ __private_extern__ lck_rw_t *nd_if_rwlock;
  *         linkmtu = ifp->if_mtu;
  */
 #define IN6_LINKMTU(ifp)						      \
-	(ND_IFINFO(ifp) == NULL ? (ifp)->if_mtu :			      \
-	((ND_IFINFO(ifp)->linkmtu &&					      \
+	((ND_IFINFO(ifp) == NULL || !ND_IFINFO(ifp)->initialized) ?	      \
+	(ifp)->if_mtu :	((ND_IFINFO(ifp)->linkmtu &&			      \
 	ND_IFINFO(ifp)->linkmtu < (ifp)->if_mtu) ? ND_IFINFO(ifp)->linkmtu :  \
 	((ND_IFINFO(ifp)->maxmtu && ND_IFINFO(ifp)->maxmtu < (ifp)->if_mtu) ? \
 	ND_IFINFO(ifp)->maxmtu : (ifp)->if_mtu)))
@@ -530,11 +551,15 @@ struct	nd_defrouter {
 #define	NDDR_REMREF_LOCKED(_nddr)					\
 	nddr_remref(_nddr, 1)
 
+/* define struct prproxy_sols_tree */
+RB_HEAD(prproxy_sols_tree, nd6_prproxy_soltgt);
+
 struct nd_prefix {
 	decl_lck_mtx_data(, ndpr_lock);
 	u_int32_t	ndpr_refcount;	/* reference count */
 	u_int32_t	ndpr_debug;	/* see ifa_debug flags */
 	struct ifnet *ndpr_ifp;
+	struct rtentry *ndpr_rt;
 	LIST_ENTRY(nd_prefix) ndpr_entry;
 	struct sockaddr_in6 ndpr_prefix;	/* prefix */
 	struct in6_addr ndpr_mask; /* netmask derived from the prefix */
@@ -550,6 +575,9 @@ struct nd_prefix {
 	LIST_HEAD(pr_rtrhead, nd_pfxrouter) ndpr_advrtrs;
 	u_char	ndpr_plen;
 	int	ndpr_addrcnt;	/* reference counter from addresses */
+	u_int32_t ndpr_allmulti_cnt;		/* total all-multi reqs */
+	u_int32_t ndpr_prproxy_sols_cnt;	/* total # of proxied NS */
+	struct prproxy_sols_tree ndpr_prproxy_sols; /* tree of proxied NS */
 	void (*ndpr_trace)		/* callback fn for tracing refs */
 	    (struct nd_prefix *, int);
 };
@@ -636,6 +664,51 @@ struct nd_pfxrouter {
 
 LIST_HEAD(nd_prhead, nd_prefix);
 
+struct nd_prefix_list {
+	struct nd_prefix_list *next;
+	struct nd_prefix pr;
+};
+#endif /* XNU_KERNEL_PRIVATE */
+
+#if defined(PRIVATE)
+/* ND6 kernel event subclass value */
+#define KEV_ND6_SUBCLASS		7
+/* ND6 kernel event action type */
+#define KEV_ND6_RA			1
+/* ND6 RA L2 source address length */
+#define ND6_ROUTER_LL_SIZE		64
+
+struct nd6_ra_prefix {
+	struct sockaddr_in6 prefix;
+	struct prf_ra raflags;
+	u_int32_t prefixlen;
+	u_int32_t origin;
+	u_int64_t vltime;
+	u_int64_t pltime;
+	u_int64_t expire;
+	u_int32_t flags;
+	u_int32_t refcnt;
+	u_int32_t if_index;
+	u_int32_t pad;
+};
+
+/* ND6 router advertisement valid bits */
+#define KEV_ND6_DATA_VALID_MTU		(0x1 << 0)
+#define KEV_ND6_DATA_VALID_PREFIX	(0x1 << 1)
+
+struct kev_nd6_ra_data {
+	u_int8_t lladdr[ND6_ROUTER_LL_SIZE];
+	u_int32_t lladdrlen;
+	u_int32_t mtu;
+	u_int32_t list_index;
+	u_int32_t list_length;
+	u_int32_t flags;
+	struct nd6_ra_prefix prefix;
+	u_int32_t pad;
+};
+#endif /* PRIVATE */
+
+#if defined(XNU_KERNEL_PRIVATE)
 /* nd6.c */
 extern int nd6_prune;
 extern int nd6_delay;
@@ -652,9 +725,15 @@ extern struct nd_prhead nd_prefix;
 extern int nd6_debug;
 extern size_t nd_ifinfo_indexlim;
 extern int nd6_onlink_ns_rfc4861;
+extern int nd6_optimistic_dad;
 
 #define nd6log(x)	do { if (nd6_debug >= 1) log x; } while (0)
 #define nd6log2(x)	do { if (nd6_debug >= 2) log x; } while (0)
+
+#define ND6_OPTIMISTIC_DAD_LINKLOCAL	(1 << 0)
+#define ND6_OPTIMISTIC_DAD_AUTOCONF	(1 << 1)
+#define ND6_OPTIMISTIC_DAD_TEMPORARY	(1 << 2)
+#define ND6_OPTIMISTIC_DAD_DYNAMIC	(1 << 3)
 
 /* nd6_rtr.c */
 extern int nd6_defifindex;
@@ -710,11 +789,13 @@ extern int nd6_ioctl(u_long, caddr_t, struct ifnet *);
 extern void nd6_cache_lladdr(struct ifnet *, struct in6_addr *,
     char *, int, int, int);
 extern int nd6_output(struct ifnet *, struct ifnet *, struct mbuf *,
-    struct sockaddr_in6 *, struct rtentry *);
+    struct sockaddr_in6 *, struct rtentry *, struct flowadv *);
 extern int nd6_storelladdr(struct ifnet *, struct rtentry *, struct mbuf *,
     struct sockaddr *, u_char *);
 extern int nd6_need_cache(struct ifnet *);
 extern void nd6_drain(void *);
+extern void nd6_post_msg(u_int32_t, struct nd_prefix_list *, u_int32_t, u_int32_t, char *, u_int32_t);
+extern int nd6_setifinfo(struct ifnet *, u_int32_t, u_int32_t);
 
 /* nd6_nbr.c */
 extern void nd6_nbr_init(void);
@@ -732,14 +813,17 @@ extern void nd6_llreach_alloc(struct rtentry *, struct ifnet *, void *,
     unsigned int, boolean_t);
 extern void nd6_llreach_set_reachable(struct ifnet *, void *, unsigned int);
 extern void nd6_llreach_use(struct llinfo_nd6 *);
+extern void nd6_alt_node_addr_decompose(struct ifnet *, struct sockaddr *,
+    struct sockaddr_dl *, struct sockaddr_in6 *);
+extern void nd6_alt_node_present(struct ifnet *, struct sockaddr_in6 *,
+    struct sockaddr_dl *, int32_t, int, int);
+extern void nd6_alt_node_absent(struct ifnet *, struct sockaddr_in6 *);
 
 /* nd6_rtr.c */
 extern void nd6_rtr_init(void);
 extern void nd6_rs_input(struct mbuf *, int, int);
 extern void nd6_ra_input(struct mbuf *, int, int);
 extern void prelist_del(struct nd_prefix *);
-extern void defrouter_addreq(struct nd_defrouter *, boolean_t);
-extern void defrouter_delreq(struct nd_defrouter *);
 extern void defrouter_select(struct ifnet *);
 extern void defrouter_reset(void);
 extern int defrtrlist_ioctl(u_long, caddr_t);
@@ -765,6 +849,24 @@ extern void nddr_addref(struct nd_defrouter *, int);
 extern struct nd_defrouter *nddr_remref(struct nd_defrouter *, int);
 extern void ndpr_addref(struct nd_prefix *, int);
 extern struct nd_prefix *ndpr_remref(struct nd_prefix *, int);
+
+/* nd6_prproxy.c */
+struct ip6_hdr;
+extern u_int32_t nd6_prproxy;
+extern void nd6_prproxy_init(void);
+extern int nd6_if_prproxy(struct ifnet *, boolean_t);
+extern void nd6_prproxy_prelist_update(struct nd_prefix *, struct nd_prefix *);
+extern boolean_t nd6_prproxy_ifaddr(struct in6_ifaddr *);
+extern boolean_t nd6_prproxy_isours(struct mbuf *, struct ip6_hdr *,
+    struct route_in6 *, unsigned int);
+extern void nd6_prproxy_ns_output(struct ifnet *, struct in6_addr *,
+    struct in6_addr *, struct llinfo_nd6 *);
+extern void nd6_prproxy_ns_input(struct ifnet *, struct in6_addr *,
+    char *, int, struct in6_addr *, struct in6_addr *);
+extern void nd6_prproxy_na_input(struct ifnet *, struct in6_addr *,
+    struct in6_addr *, struct in6_addr *, int);
+extern void nd6_prproxy_sols_reap(struct nd_prefix *);
+extern void nd6_prproxy_sols_prune(struct nd_prefix *, u_int32_t);
 #endif /* XNU_KERNEL_PRIVATE */
 
 #ifdef KERNEL

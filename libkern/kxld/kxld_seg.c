@@ -39,6 +39,7 @@
 #define DEBUG_ASSERT_COMPONENT_NAME_STRING "kxld"
 #include <AssertMacros.h>
 
+#include "kxld_reloc.h"
 #include "kxld_sect.h"
 #include "kxld_seg.h"
 #include "kxld_symtab.h"
@@ -494,6 +495,8 @@ kxld_seg_get_macho_header_size(const KXLDSeg *seg, boolean_t is_32_bit)
 
 /*******************************************************************************
 *******************************************************************************/
+/* This is no longer used, but may be useful some day... */
+#if 0
 u_long
 kxld_seg_get_macho_data_size(const KXLDSeg *seg)
 {
@@ -511,6 +514,7 @@ kxld_seg_get_macho_data_size(const KXLDSeg *seg)
 
     return round_page(size);
 }
+#endif
 
 /*******************************************************************************
 *******************************************************************************/
@@ -535,9 +539,9 @@ kxld_seg_export_macho_to_file_buffer(const KXLDSeg *seg, u_char *buf,
     u_long base_data_offset = *data_offset;
     u_int i = 0;
     struct segment_command *hdr32 = 
-        (struct segment_command *) (buf + *header_offset);
+        (struct segment_command *) ((void *) (buf + *header_offset));
     struct segment_command_64 *hdr64 = 
-        (struct segment_command_64 *) (buf + *header_offset);
+        (struct segment_command_64 *) ((void *) (buf + *header_offset));
 
     check(seg);
     check(buf);
@@ -634,7 +638,7 @@ seg_export_macho_header_32(const KXLDSeg *seg, u_char *buf,
 
     require_action(sizeof(*seghdr) <= header_size - *header_offset, finish,
         rval=KERN_FAILURE);
-    seghdr = (struct segment_command *) (buf + *header_offset);
+    seghdr = (struct segment_command *) ((void *) (buf + *header_offset));
     *header_offset += sizeof(*seghdr);
 
     seghdr->cmd = LC_SEGMENT;
@@ -674,7 +678,7 @@ seg_export_macho_header_64(const KXLDSeg *seg, u_char *buf,
 
     require_action(sizeof(*seghdr) <= header_size - *header_offset, finish,
         rval=KERN_FAILURE);
-    seghdr = (struct segment_command_64 *) (buf + *header_offset);
+    seghdr = (struct segment_command_64 *) ((void *) (buf + *header_offset));
     *header_offset += sizeof(*seghdr);
 
     seghdr->cmd = LC_SEGMENT_64;
@@ -752,8 +756,7 @@ kxld_seg_finish_init(KXLDSeg *seg)
         }
 
         /* XXX Cross architecture linking will fail if the page size ever differs
-         * from 4096.  (As of this writing, we're fine on ppc, i386, x86_64, and
-         * arm.)
+         * from 4096.  (As of this writing, we're fine on i386, x86_64, and arm).
          */
         seg->vmsize = round_page(maxaddr + maxsize - seg->base_addr);
     }
@@ -807,9 +810,24 @@ kxld_seg_relocate(KXLDSeg *seg, kxld_addr_t link_addr)
 /*******************************************************************************
 *******************************************************************************/
 void 
-kxld_seg_populate_linkedit(KXLDSeg *seg,
-    const KXLDSymtab *symtab, boolean_t is_32_bit)
+kxld_seg_populate_linkedit(KXLDSeg *seg, const KXLDSymtab *symtab, boolean_t is_32_bit 
+#if KXLD_PIC_KEXTS
+    , const KXLDArray *locrelocs
+    , const KXLDArray *extrelocs
+    , boolean_t target_supports_slideable_kexts
+#endif  /* KXLD_PIC_KEXTS */
+    )
 {
-    seg->vmsize = round_page(kxld_symtab_get_macho_data_size(symtab, is_32_bit));
+    u_long size = 0;
+
+    size += kxld_symtab_get_macho_data_size(symtab, is_32_bit);
+
+#if KXLD_PIC_KEXTS
+    if (target_supports_slideable_kexts) {
+        size += kxld_reloc_get_macho_data_size(locrelocs, extrelocs);
+    }
+#endif	/* KXLD_PIC_KEXTS */
+
+    seg->vmsize = round_page(size);
 }
 

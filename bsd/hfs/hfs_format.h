@@ -373,7 +373,6 @@ enum {
 
 	kHFSHasDateAddedBit = 0x0007,	/* File/Folder has the date-added stored in the finder info. */
 	kHFSHasDateAddedMask = 0x0080 
-
 };
 
 

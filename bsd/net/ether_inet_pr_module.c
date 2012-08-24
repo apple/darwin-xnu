@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2011 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2012 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -109,7 +109,7 @@ extern void kdp_set_ip_and_mac_addresses(struct in_addr *ipaddr,
     struct ether_addr *macaddr);
 
 #define	_ip_copy(dst, src)	\
-	(*(dst) = *(src))
+	bcopy(src, dst, sizeof (struct in_addr))
 
 static void
 ether_inet_arp_input(struct ifnet *ifp, struct mbuf *m)
@@ -142,9 +142,9 @@ ether_inet_arp_input(struct ifnet *ifp, struct mbuf *m)
 	bzero(&sender_ip, sizeof (sender_ip));
 	sender_ip.sin_len = sizeof (sender_ip);
 	sender_ip.sin_family = AF_INET;
-	_ip_copy(&sender_ip.sin_addr, (const struct in_addr *)ea->arp_spa);
+	_ip_copy(&sender_ip.sin_addr, ea->arp_spa);
 	target_ip = sender_ip;
-	_ip_copy(&target_ip.sin_addr, (const struct in_addr *)ea->arp_tpa);
+	_ip_copy(&target_ip.sin_addr, ea->arp_tpa);
 
 	bzero(&sender_hw, sizeof (sender_hw));
 	sender_hw.sdl_len = sizeof (sender_hw);
@@ -247,21 +247,24 @@ ether_inet_pre_output(ifnet_t ifp, protocol_family_t protocol_family,
 		struct sockaddr_dl ll_dest;
 
 		result = arp_lookup_ip(ifp,
-		    (const struct sockaddr_in *)dst_netaddr, &ll_dest,
-		    sizeof (ll_dest), (route_t)route, *m0);
+		    (const struct sockaddr_in *)(uintptr_t)(size_t)dst_netaddr,
+		    &ll_dest, sizeof (ll_dest), (route_t)route, *m0);
 		if (result == 0) {
+			u_int16_t ethertype_ip = htons(ETHERTYPE_IP);
+
 			bcopy(LLADDR(&ll_dest), edst, ETHER_ADDR_LEN);
-			*(u_int16_t *)type = htons(ETHERTYPE_IP);
+			bcopy(&ethertype_ip, type, sizeof (ethertype_ip));
 		}
-	break;
+		break;
 	}
 
 	case pseudo_AF_HDRCMPLT:
 	case AF_UNSPEC:
 		m->m_flags &= ~M_LOOP;
-		eh = (const struct ether_header *)dst_netaddr->sa_data;
+		eh = (const struct ether_header *)(uintptr_t)(size_t)
+		    dst_netaddr->sa_data;
 		(void) memcpy(edst, eh->ether_dhost, 6);
-		*(u_short *)type = eh->ether_type;
+		bcopy(&eh->ether_type, type, sizeof (u_short));
 		break;
 
 	default:
@@ -281,7 +284,8 @@ ether_inet_resolve_multi(ifnet_t ifp, const struct sockaddr *proto_addr,
 {
 	static const size_t minsize =
 	    offsetof(struct sockaddr_dl, sdl_data[0]) + ETHER_ADDR_LEN;
-	const struct sockaddr_in *sin = (const struct sockaddr_in *)proto_addr;
+	const struct sockaddr_in *sin =
+	    (const struct sockaddr_in *)(uintptr_t)(size_t)proto_addr;
 
 	if (proto_addr->sa_family != AF_INET)
 		return (EAFNOSUPPORT);
@@ -310,13 +314,18 @@ ether_inet_prmod_ioctl(ifnet_t ifp, protocol_family_t protocol_family,
     u_long command, void *data)
 {
 #pragma unused(protocol_family)
-	ifaddr_t ifa = data;
-	struct ifreq *ifr = data;
 	int error = 0;
 
 	switch (command) {
-	case SIOCSIFADDR:
-	case SIOCAIFADDR:
+	case SIOCSIFADDR:		/* struct ifaddr pointer */
+	case SIOCAIFADDR: {		/* struct ifaddr pointer */
+		/*
+		 * Note: caller of ifnet_ioctl() passes in pointer to
+		 * struct ifaddr as parameter to SIOC{A,S}IFADDR, for
+		 * legacy reasons.
+		 */
+		struct ifaddr *ifa = data;
+
 		if (!(ifnet_flags(ifp) & IFF_RUNNING)) {
 			ifnet_set_flags(ifp, IFF_UP, IFF_UP);
 			ifnet_ioctl(ifp, 0, SIOCSIFFLAGS, NULL);
@@ -326,6 +335,10 @@ ether_inet_prmod_ioctl(ifnet_t ifp, protocol_family_t protocol_family,
 			break;
 
 		inet_arp_init_ifaddr(ifp, ifa);
+
+		if (command != SIOCSIFADDR)
+			break;
+
 		/*
 		 * Register new IP and MAC addresses with the kernel
 		 * debugger if the interface is the same as was registered
@@ -334,18 +347,21 @@ ether_inet_prmod_ioctl(ifnet_t ifp, protocol_family_t protocol_family,
 		 * Do this only for the first address of the interface
 		 * and not for aliases.
 		 */
-		if (command == SIOCSIFADDR &&
-		    ((kdp_get_interface() != 0 &&
+		if ((kdp_get_interface() != 0 &&
 		    kdp_get_interface() == ifp->if_softc) ||
-		    (kdp_get_interface() == 0 && ifp->if_unit == 0)))
+		    (kdp_get_interface() == 0 && ifp->if_unit == 0))
 			kdp_set_ip_and_mac_addresses(&(IA_SIN(ifa)->sin_addr),
 			    ifnet_lladdr(ifp));
 		break;
+	}
 
-	case SIOCGIFADDR:
+	case SIOCGIFADDR: {		/* struct ifreq */
+		struct ifreq *ifr = data;
+
 		ifnet_lladdr_copy_bytes(ifp, ifr->ifr_addr.sa_data,
 		    ETHER_ADDR_LEN);
 		break;
+	}
 
 	default:
 		error = EOPNOTSUPP;
@@ -390,9 +406,9 @@ ether_inet_arp(ifnet_t ifp, u_short arpop, const struct sockaddr_dl *sender_hw,
 	struct ether_header *eh;
 	struct ether_arp *ea;
 	const struct sockaddr_in *sender_ip =
-	    (const struct sockaddr_in *)sender_proto;
-	const struct sockaddr_in *target_ip =
-	    (const struct sockaddr_in *)target_proto;
+	    (const struct sockaddr_in *)(uintptr_t)(size_t)sender_proto;
+	const struct sockaddr_inarp *target_ip =
+	    (const struct sockaddr_inarp *)(uintptr_t)(size_t)target_proto;
 	char *datap;
 
 	if (target_ip == NULL)
@@ -459,8 +475,9 @@ ether_inet_arp(ifnet_t ifp, u_short arpop, const struct sockaddr_dl *sender_hw,
 			IFA_LOCK(ifa);
 			if (ifa->ifa_addr != NULL &&
 			    ifa->ifa_addr->sa_family == AF_INET) {
-				bcopy(&((struct sockaddr_in *)ifa->ifa_addr)->
-				    sin_addr, ea->arp_spa, sizeof(ea->arp_spa));
+				bcopy(&((struct sockaddr_in *)(void *)
+				    ifa->ifa_addr)->sin_addr, ea->arp_spa,
+				    sizeof (ea->arp_spa));
 				IFA_UNLOCK(ifa);
 				break;
 			}
@@ -488,6 +505,23 @@ ether_inet_arp(ifnet_t ifp, u_short arpop, const struct sockaddr_dl *sender_hw,
 
 	/* Target IP */
 	bcopy(&target_ip->sin_addr, ea->arp_tpa, sizeof (ea->arp_tpa));
+
+	/*
+	 * If this is an ARP request for a (default) router, mark
+	 * the packet accordingly so that the driver can find out,
+	 * in case it needs to perform driver-specific action(s).
+	 */
+	if (arpop == ARPOP_REQUEST && (target_ip->sin_other & SIN_ROUTER)) {
+		m->m_pkthdr.aux_flags |= MAUXF_INET_RESOLVE_RTR;
+		VERIFY(!(m->m_pkthdr.aux_flags & MAUXF_INET6_RESOLVE_RTR));
+	}
+
+	if (ifp->if_eflags & IFEF_TXSTART) {
+		/* Use control service class if the interface 
+		 * supports transmit-start model
+		 */
+		(void) m_set_service_class(m, MBUF_SC_CTL);
+	}
 
 	ifnet_output_raw(ifp, PF_INET, m);
 

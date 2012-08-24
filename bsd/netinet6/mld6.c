@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2011 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2012 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -125,7 +125,7 @@
 #include <netinet6/mld6.h>
 #include <netinet6/mld6_var.h>
 
-/* Lock group and attribute for mld6_mtx */
+/* Lock group and attribute for mld_mtx */
 static lck_attr_t       *mld_mtx_attr;
 static lck_grp_t        *mld_mtx_grp;
 static lck_grp_attr_t   *mld_mtx_grp_attr;
@@ -236,16 +236,14 @@ static int interface_timers_running6;
 static int state_change_timers_running6;
 static int current_state_timers_running6;
 
-static decl_lck_mtx_data(, mld6_mtx);
-
 #define	MLD_LOCK()			\
-	lck_mtx_lock(&mld6_mtx)
+	lck_mtx_lock(&mld_mtx)
 #define	MLD_LOCK_ASSERT_HELD()		\
-	lck_mtx_assert(&mld6_mtx, LCK_MTX_ASSERT_OWNED)
+	lck_mtx_assert(&mld_mtx, LCK_MTX_ASSERT_OWNED)
 #define	MLD_LOCK_ASSERT_NOTHELD()	\
-	lck_mtx_assert(&mld6_mtx, LCK_MTX_ASSERT_NOTOWNED)
+	lck_mtx_assert(&mld_mtx, LCK_MTX_ASSERT_NOTOWNED)
 #define	MLD_UNLOCK()			\
-	lck_mtx_unlock(&mld6_mtx)
+	lck_mtx_unlock(&mld_mtx)
 
 #define	MLD_ADD_DETACHED_IN6M(_head, _in6m) {				\
 	SLIST_INSERT_HEAD(_head, _in6m, in6m_dtle);			\
@@ -498,6 +496,9 @@ mld_domifattach(struct ifnet *ifp, int how)
 	MLI_ADDREF_LOCKED(mli); /* hold a reference for mli_head */
 	MLI_ADDREF_LOCKED(mli); /* hold a reference for caller */
 	MLI_UNLOCK(mli);
+	ifnet_lock_shared(ifp);
+	mld6_initsilent(ifp, mli);
+	ifnet_lock_done(ifp);
 
 	LIST_INSERT_HEAD(&mli_head, mli, mli_link);
 
@@ -528,6 +529,9 @@ mld_domifreattach(struct mld_ifinfo *mli)
 	mli->mli_debug |= IFD_ATTACHED;
 	MLI_ADDREF_LOCKED(mli); /* hold a reference for mli_head */
 	MLI_UNLOCK(mli);
+	ifnet_lock_shared(ifp);
+	mld6_initsilent(ifp, mli);
+	ifnet_lock_done(ifp);
 
 	LIST_INSERT_HEAD(&mli_head, mli, mli_link);
 
@@ -593,6 +597,21 @@ mli_delete(const struct ifnet *ifp, struct mld_in6m_relhead *in6m_dthead)
 	panic("%s: mld_ifinfo not found for ifp %p\n", __func__,  ifp);
 }
 
+__private_extern__ void
+mld6_initsilent(struct ifnet *ifp, struct mld_ifinfo *mli)
+{
+	ifnet_lock_assert(ifp, IFNET_LCK_ASSERT_OWNED);
+
+	MLI_LOCK_ASSERT_NOTHELD(mli);
+	MLI_LOCK(mli);
+	if (!(ifp->if_flags & IFF_MULTICAST) &&
+	    (ifp->if_eflags & (IFEF_IPV6_ND6ALT|IFEF_LOCALNET_PRIVATE)))
+		mli->mli_flags |= MLIF_SILENT;
+	else
+		mli->mli_flags &= ~MLIF_SILENT;
+	MLI_UNLOCK(mli);
+}
+
 static void
 mli_initvar(struct mld_ifinfo *mli, struct ifnet *ifp, int reattach)
 {
@@ -606,9 +625,6 @@ mli_initvar(struct mld_ifinfo *mli, struct ifnet *ifp, int reattach)
 	mli->mli_qri = MLD_QRI_INIT;
 	mli->mli_uri = MLD_URI_INIT;
 
-	/* ifnet is not yet attached; no need to hold ifnet lock */
-	if (!(ifp->if_flags & IFF_MULTICAST))
-		mli->mli_flags |= MLIF_SILENT;
 	if (mld_use_allow)
 		mli->mli_flags |= MLIF_USEALLOW;
 	if (!reattach)
@@ -1164,7 +1180,7 @@ mld_v2_process_group_query(struct in6_multi *inm, int timer, struct mbuf *m0,
 		for (i = 0; i < nsrc; i++) {
 			sp = mtod(m, uint8_t *) + soff;
 			retval = in6m_record_source(inm,
-			    (const struct in6_addr *)sp);
+			    (const struct in6_addr *)(void *)sp);
 			if (retval < 0)
 				break;
 			nrecorded += retval;
@@ -1989,7 +2005,6 @@ mld_v1_transmit_report(struct in6_multi *in6m, const int type)
 
 	mh->m_flags |= M_MLDV1;
 
-	
 	/*
 	 * Due to the fact that at this point we are possibly holding
 	 * in6_multihead_lock in shared or exclusive mode, we can't call
@@ -3286,6 +3301,13 @@ mld_dispatch_packet(struct mbuf *m)
 	mld = (struct mld_hdr *)(mtod(md, uint8_t *) + off);
 	type = mld->mld_type;
 
+	if (ifp->if_eflags & IFEF_TXSTART) {
+		/* Use control service class if the outgoing 
+		 * interface supports transmit-start model.
+		 */
+		(void) m_set_service_class(m0, MBUF_SC_CTL);
+	}
+
 	error = ip6_output(m0, &mld_po, NULL, IPV6_UNSPECSRC, im6o,
 	    &oifp, NULL);
 
@@ -3424,7 +3446,7 @@ mld_init(void)
 
 	MLD_PRINTF(("%s: initializing\n", __func__));
 
-        /* Setup lock group and attribute for mld6_mtx */
+        /* Setup lock group and attribute for mld_mtx */
         mld_mtx_grp_attr = lck_grp_attr_alloc_init();
         mld_mtx_grp = lck_grp_alloc_init("mld_mtx\n", mld_mtx_grp_attr);
         mld_mtx_attr = lck_attr_alloc_init();

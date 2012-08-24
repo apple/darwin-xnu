@@ -2,17 +2,21 @@ SDKROOT ?= /
 Product=$(shell tconf --product)
 Embedded=$(shell tconf --test TARGET_OS_EMBEDDED)
 
+SDKVERSION=$(shell xcodebuild -sdk $(SDKROOT) -version SDKVersion | head -1)
+
 ifeq "$(Embedded)" "YES"
 XILogFLAG =
 SDKPATH = $(shell xcodebuild -sdk $(SDKROOT) -version Path)
-CFLAGS += -isysroot $(SDKPATH)
-LIBFLAGS += -isysroot $(SDKPATH)
+CFLAGS += -isysroot $(SDKPATH) -miphoneos-version-min=$(SDKVERSION)
+LIBFLAGS += -isysroot $(SDKPATH) -miphoneos-version-min=$(SDKVERSION)
 else
 XILogFLAG = -framework XILog
+CFLAGS += -mmacosx-version-min=$(SDKVERSION)
+LIBFLAGS += -mmacosx-version-min=$(SDKVERSION)
 endif
 
-HOSTCC = gcc
-CC = xcrun -sdk $(SDKROOT) gcc
+HOSTCC = cc
+CC = xcrun -sdk $(SDKROOT) cc
 
 ifdef RC_BUILDIT
 DOING_BUILDIT=yes
@@ -42,7 +46,7 @@ else
 		# this hack should be removed once tconf gets
 		# <rdar://problem/6618734>
 		ifeq "$(Product)" "iPhone"
-		ARCH=armv6
+		ARCH=armv7
 		endif
 		ifeq "$(Product)" "AppleTV"
 		ARCH=i386
@@ -57,18 +61,26 @@ else
 endif
 
 
-CFLAGS += -g -I $(SDKPATH)/System/Library/Frameworks/System.framework/Versions/B/PrivateHeaders/ -F/AppleInternal/Library/Frameworks/ $(MORECFLAGS)
+CFLAGS += -g -I $(SDKPATH)/System/Library/Frameworks/System.framework/Versions/B/PrivateHeaders/ -F/AppleInternal/Library/Frameworks/ $(MORECFLAGS) -Wno-deprecated-declarations
 LIBFLAGS += -I $(SDKPATH)/System/Library/Frameworks/System.framework/Versions/B/PrivateHeaders  -F/AppleInternal/Library/Frameworks/ $(XILogFLAG)
+
+# The current implementation of the content protection test requires IOKit.
+ifeq "$(Product)" "iPhone"
+LIBFLAGS += -framework IOKit
+endif
 
 MY_OBJECTS = $(OBJROOT)/main.o $(OBJROOT)/memory_tests.o $(OBJROOT)/misc.o \
 			 $(OBJROOT)/sema_tests.o $(OBJROOT)/shared_memory_tests.o \
 			 $(OBJROOT)/socket_tests.o $(OBJROOT)/tests.o \
 			 $(OBJROOT)/xattr_tests.o $(OBJROOT)/kqueue_tests.o \
 			 $(OBJROOT)/machvm_tests.o $(OBJROOT)/commpage_tests.o \
-			 $(OBJROOT)/atomic_fifo_queue_test.o $(OBJROOT)/sched_tests.o
+			 $(OBJROOT)/atomic_fifo_queue_test.o $(OBJROOT)/sched_tests.o \
+			 $(OBJROOT)/pipes_tests.o
 
 ifneq "$(Product)" "iPhone"
 MY_OBJECTS += $(OBJROOT)/32bit_inode_tests.o
+else
+MY_OBJECTS += $(OBJROOT)/content_protection_test.o
 endif
 
 # In networked home directories, the chown will fail; we notice and print a helpful message
@@ -112,9 +124,9 @@ ifeq "$(Product)" "MacOSX"
 
 endif
 ifeq "$(Product)" "iPhone"
-	$(CC) -arch armv6 -isysroot $(SDKROOT) $(CFLAGS) helpers/sleep.c -o $(DSTROOT)/helpers/sleep-arm
-	$(CC) $(LIBFLAGS) -arch armv6 -isysroot $(SDKROOT) $(OBJROOT)/misc.o helpers/launch.c -o $(DSTROOT)/helpers/launch-arm
-	$(CC) $(MY_ARCH) -isysroot $(SDKROOT)	helpers/arch.c -o $(DSTROOT)/helpers/arch
+	$(CC) $(CFLAGS) helpers/sleep.c -o $(DSTROOT)/helpers/sleep-arm
+	$(CC) $(LIBFLAGS) $(CFLAGS) $(OBJROOT)/misc.o helpers/launch.c -o $(DSTROOT)/helpers/launch-arm
+	$(CC) $(MY_ARCH) $(CFLAGS) helpers/arch.c -o $(DSTROOT)/helpers/arch
 endif
 	
 	
@@ -136,7 +148,7 @@ $(OBJROOT)/memory_tests.o : memory_tests.c tests.h
 # misc.o has to be built 3-way for the helpers to link
 $(OBJROOT)/misc.o : misc.c tests.h
 ifeq "$(Product)" "iPhone"
-	$(CC) -arch armv6 $(CFLAGS) -c misc.c   -o $@
+	$(CC) -arch armv7 $(CFLAGS) -c misc.c   -o $@
 else
 	$(CC) -arch i386 -arch x86_64 $(CFLAGS) -c misc.c   -o $@
 endif
@@ -174,6 +186,11 @@ $(OBJROOT)/commpage_tests.o : commpage_tests.c tests.h
 $(OBJROOT)/atomic_fifo_queue_test.o : atomic_fifo_queue_test.c tests.h
 	$(CC) $(CFLAGS) -c atomic_fifo_queue_test.c    -o $@
 
+$(OBJROOT)/content_protection_test.o : content_protection_test.c tests.h
+	$(CC) $(CFLAGS) -c content_protection_test.c -o $@
+
+$(OBJROOT)/pipes_tests.o : pipes_tests.c tests.h
+	$(CC) $(CFLAGS) -c pipes_tests.c -o $@
 
 ifndef DOING_BUILDIT
 .PHONY : clean

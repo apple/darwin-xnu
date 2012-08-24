@@ -26,6 +26,7 @@
 # Use is subject to license terms.
 #
 
+Embedded=$(shell tconf --test TARGET_OS_EMBEDDED)
 
 ALL = 			\
 		create_file	\
@@ -52,7 +53,6 @@ ALL = 			\
 		posix_spawn		\
 		trivial			\
 		vm_allocate \
-		od_query_create_with_node   \
 		mbr_check_service_membership  \
 		getpwnam		\
 		mbr_check_membership	\
@@ -63,3 +63,9 @@ ALL = 			\
 		getaddrinfo_host	\
 		getaddrinfo_port	\
 		getgrnam
+
+# Compile the following test on desktop platform only  
+ifeq "$(Embedded)" "NO"
+ALL += od_query_create_with_node
+endif
+

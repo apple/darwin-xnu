@@ -31,7 +31,7 @@
 
 #include <gssd/gssd_mach.h>
 #include <sys/param.h>
-#include <crypto/des/des.h>
+#include <libkern/crypto/des.h>
 
 #define RPCSEC_GSS			6
 #define	RPCSEC_GSS_VERS_1		1
@@ -78,13 +78,13 @@ typedef struct {
 	union {
 		struct {
 			des_cblock  *key;
-			des_key_schedule gss_sched;
-			des_key_schedule gss_sched_Ke;
+			des_cbc_key_schedule gss_sched;
+			des_cbc_key_schedule gss_sched_Ke;
 		} des;
 		struct {
 			des_cblock		(*key)[3];
 			des_cblock		ckey[3];
-			des_key_schedule	gss_sched[3];
+			des3_cbc_key_schedule	gss_sched;
 		} des3;
 	} ks_u;
 } gss_key_info;

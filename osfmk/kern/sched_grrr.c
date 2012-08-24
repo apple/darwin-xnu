@@ -231,7 +231,6 @@ const struct sched_dispatch_table sched_grrr_dispatch = {
 	TRUE /* direct_dispatch_to_idle_processors */
 };
 
-extern int	default_preemption_rate;
 extern int	max_unsafe_quanta;
 
 static uint32_t grrr_quantum_us;

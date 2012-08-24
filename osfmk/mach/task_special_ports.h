@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2002 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2010 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -82,27 +82,12 @@ typedef	int	task_special_port_t;
  * Evolving and likely to change.
  */
 
-#define TASK_WIRED_LEDGER_PORT	5	/* Wired resource ledger for task. */
-
-#define TASK_PAGED_LEDGER_PORT	6	/* Paged resource ledger for task. */
-
 #define TASK_SEATBELT_PORT	7	/* Seatbelt compiler/DEM port for task. */
 
-#define TASK_GSSD_PORT		8	/* GSSD port for security context */
+/* PORT 8 was the GSSD TASK PORT which transformed to a host port */
 
 #define TASK_ACCESS_PORT	9	/* Permission check for task_for_pid. */
 
-#define task_get_wired_ledger_port(task, port)	\
-		(task_get_special_port((task), TASK_WIRED_LEDGER_PORT, (port)))
-
-#define task_set_wired_ledger_port(task, port)	\
-		(task_set_special_port((task), TASK_WIRED_LEDGER_PORT, (port)))
-
-#define task_get_paged_ledger_port(task, port)	\
-		(task_get_special_port((task), TASK_PAGED_LEDGER_PORT, (port)))
-
-#define task_set_paged_ledger_port(task, port)	\
-		(task_set_special_port((task), TASK_PAGED_LEDGER_PORT, (port)))
 
 /*
  *	Definitions for ease of use
@@ -125,12 +110,6 @@ typedef	int	task_special_port_t;
 
 #define task_set_bootstrap_port(task, port)	\
 		(task_set_special_port((task), TASK_BOOTSTRAP_PORT, (port)))
-
-#define task_get_gssd_port(task, port)	\
-		(task_get_special_port((task), TASK_GSSD_PORT, (port)))
-
-#define task_set_gssd_port(task, port)	\
-		(task_set_special_port((task), TASK_GSSD_PORT, (port)))
 
 #define task_get_task_access_port(task, port)	\
 		(task_get_special_port((task), TASK_ACCESS_PORT, (port)))

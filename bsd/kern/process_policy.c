@@ -69,6 +69,10 @@
 
 #include <kern/ipc_misc.h>
 #include <vm/vm_protos.h>
+#if CONFIG_EMBEDDED
+#include <security/mac.h>
+#include <sys/kern_memorystatus.h>
+#endif /* CONFIG_EMBEDDED */
 
 static int handle_background(int scope, int action, int policy, int policy_subtype, user_addr_t attrp, proc_t proc, uint64_t target_threadid);
 static int handle_hwaccess(int scope, int action, int policy, int policy_subtype, user_addr_t attrp, proc_t proc, uint64_t target_threadid);
@@ -78,6 +82,11 @@ static int handle_apptype(int scope, int action, int policy, int policy_subtype,
 
 extern kern_return_t task_suspend(task_t);
 extern kern_return_t task_resume(task_t);
+
+#if CONFIG_EMBEDDED
+static int handle_applifecycle(int scope, int action, int policy, int policy_subtype, user_addr_t attrp, proc_t proc, uint64_t target_threadid);
+#endif /* CONFIG_EMBEDDED */
+
 
 /***************************** process_policy ********************/
 
@@ -91,7 +100,7 @@ extern kern_return_t task_resume(task_t);
 
 /* system call implementaion */
 int
-process_policy(struct proc *p, struct process_policy_args * uap, __unused int32_t *retval)
+process_policy(__unused struct proc *p, struct process_policy_args * uap, __unused int32_t *retval)
 {
 	int error = 0;
 	int scope = uap->scope;
@@ -101,7 +110,7 @@ process_policy(struct proc *p, struct process_policy_args * uap, __unused int32_
 	user_addr_t attrp = uap->attrp;
 	pid_t target_pid = uap->target_pid;
 	uint64_t target_threadid = uap->target_threadid;
-	proc_t proc = PROC_NULL;
+	proc_t target_proc = PROC_NULL;
 	proc_t curp = current_proc();
 	kauth_cred_t my_cred;
 #if CONFIG_EMBEDDED
@@ -111,17 +120,17 @@ process_policy(struct proc *p, struct process_policy_args * uap, __unused int32_
 	if ((scope != PROC_POLICY_SCOPE_PROCESS) && (scope != PROC_POLICY_SCOPE_THREAD)) {
 		return(EINVAL);
 	}
-	proc = proc_find(target_pid);
-	if (proc == PROC_NULL)  {
-		return(EINVAL);
+	target_proc = proc_find(target_pid);
+	if (target_proc == PROC_NULL)  {
+		return(ESRCH);
 	}
 
-	my_cred = kauth_cred_proc_ref(curp);
+	my_cred = kauth_cred_get();
 
 #if CONFIG_EMBEDDED
-	target_cred = kauth_cred_proc_ref(proc);
+	target_cred = kauth_cred_proc_ref(target_proc);
 
-	if (suser(my_cred, NULL) && kauth_cred_getruid(my_cred) &&
+	if (!kauth_cred_issuser(my_cred) && kauth_cred_getruid(my_cred) &&
 	    kauth_cred_getuid(my_cred) != kauth_cred_getuid(target_cred) &&
 	    kauth_cred_getruid(my_cred) != kauth_cred_getuid(target_cred))
 #else
@@ -131,7 +140,7 @@ process_policy(struct proc *p, struct process_policy_args * uap, __unused int32_
 	 */
 	if ((policy != PROC_POLICY_RESOURCE_STARVATION) && 
 		(policy != PROC_POLICY_APPTYPE) && 
-		(suser(my_cred, NULL) && curp != p))
+		(!kauth_cred_issuser(my_cred) && curp != p))
 #endif
 	{
 		error = EPERM;
@@ -139,27 +148,39 @@ process_policy(struct proc *p, struct process_policy_args * uap, __unused int32_
 	}
 
 #if CONFIG_MACF
-	error = mac_proc_check_sched(curp, p);
-	if (error) 
-		goto out;
-#endif
+#if CONFIG_EMBEDDED
+	/* Lifecycle management will invoke approp macf checks */
+	if (policy != PROC_POLICY_APP_LIFECYCLE) {
+#endif /* CONFIG_EMBEDDED */
+		error = mac_proc_check_sched(curp, target_proc);
+		if (error) 
+			goto out;
+#if CONFIG_EMBEDDED
+	}
+#endif /* CONFIG_EMBEDDED */
+#endif /* CONFIG_MACF */
 
 
 	switch(policy) {
 		case PROC_POLICY_BACKGROUND:
-			error = handle_background(scope, action, policy, policy_subtype, attrp, proc, target_threadid);
+			error = handle_background(scope, action, policy, policy_subtype, attrp, target_proc, target_threadid);
 			break;
 		case PROC_POLICY_HARDWARE_ACCESS:
-			error = handle_hwaccess(scope, action, policy, policy_subtype, attrp, proc, target_threadid);
+			error = handle_hwaccess(scope, action, policy, policy_subtype, attrp, target_proc, target_threadid);
 			break;
 		case PROC_POLICY_RESOURCE_STARVATION:
-			error = handle_lowresrouce(scope, action, policy, policy_subtype, attrp, proc, target_threadid);
+			error = handle_lowresrouce(scope, action, policy, policy_subtype, attrp, target_proc, target_threadid);
 			break;
 		case PROC_POLICY_RESOURCE_USAGE:
-			error = handle_resourceuse(scope, action, policy, policy_subtype, attrp, proc, target_threadid);
+			error = handle_resourceuse(scope, action, policy, policy_subtype, attrp, target_proc, target_threadid);
 			break;
+#if CONFIG_EMBEDDED
+		case PROC_POLICY_APP_LIFECYCLE:
+			error = handle_applifecycle(scope, action, policy, policy_subtype, attrp, target_proc, target_threadid);
+			break;
+#endif /* CONFIG_EMBEDDED */
 		case PROC_POLICY_APPTYPE:
-			error = handle_apptype(scope, action, policy, policy_subtype, attrp, proc, target_threadid);
+			error = handle_apptype(scope, action, policy, policy_subtype, attrp, target_proc, target_threadid);
 			break;
 		default:
 			error = EINVAL;
@@ -167,8 +188,7 @@ process_policy(struct proc *p, struct process_policy_args * uap, __unused int32_
 	}
 
 out:
-	proc_rele(proc);
-        kauth_cred_unref(&my_cred);
+	proc_rele(target_proc);
 #if CONFIG_EMBEDDED
         kauth_cred_unref(&target_cred);
 #endif
@@ -355,6 +375,12 @@ handle_resourceuse(__unused int scope, __unused int action, __unused int policy,
 					cpuattr.ppattr_cpu_attr_interval, 
 					cpuattr.ppattr_cpu_attr_deadline); 
 			}
+			break;
+
+		case PROC_POLICY_ACTION_RESTORE:
+			error = proc_clear_task_ruse_cpu(proc->task);
+			break;
+
 		default:
 			error = EINVAL;
 			break;
@@ -364,13 +390,123 @@ handle_resourceuse(__unused int scope, __unused int action, __unused int policy,
 	return(error);
 }
 
+#if CONFIG_EMBEDDED
+static int 
+handle_applifecycle(__unused int scope, int action, __unused int policy, int policy_subtype, user_addr_t attrp, proc_t proc, uint64_t target_threadid)
+{
+
+	int error = 0;
+	int state = 0, oldstate = 0; 
+	int noteval = 0;
+
+	
+
+	switch(policy_subtype) {
+		case PROC_POLICY_APPLIFE_NONE:
+			error = 0;
+			break;
+
+		case PROC_POLICY_APPLIFE_STATE:
+#if CONFIG_MACF
+			error = mac_proc_check_sched(current_proc(), proc);
+			if (error) 
+				goto out;
+#endif
+			switch (action) {
+				case PROC_POLICY_ACTION_GET :
+					state = proc_lf_getappstate(proc->task);
+					error = copyout((int *)&state, (user_addr_t)attrp, sizeof(int));
+					break;
+				case PROC_POLICY_ACTION_APPLY :
+				case PROC_POLICY_ACTION_SET :
+					error = copyin((user_addr_t)attrp, (int  *)&state, sizeof(int));
+					if ((error == 0) && (state != TASK_APPSTATE_NONE)) {
+						oldstate = proc_lf_getappstate(proc->task);
+						error = proc_lf_setappstate(proc->task, state);
+						if (error == 0) {
+							switch (state) {
+								case TASK_APPSTATE_ACTIVE:
+									noteval = NOTE_APPACTIVE;
+									break;
+								case TASK_APPSTATE_BACKGROUND:
+									noteval = NOTE_APPBACKGROUND;
+									break;
+								case TASK_APPSTATE_NONUI:
+									noteval = NOTE_APPNONUI;
+									break;
+								case TASK_APPSTATE_INACTIVE:
+									noteval = NOTE_APPINACTIVE;
+									break;
+							}
+					
+							proc_lock(proc);	
+							proc_knote(proc, noteval);
+							proc_unlock(proc);	
+						}
+					}
+					break;
+
+				default:
+					error = EINVAL;
+					break;
+			}
+			break;
+
+		case PROC_POLICY_APPLIFE_DEVSTATUS:
+#if CONFIG_MACF
+			/* ToDo - this should be a generic check, since we could potentially hang other behaviours here. */
+			error = mac_proc_check_suspend_resume(current_proc(), MAC_PROC_CHECK_HIBERNATE);
+			if (error) {
+				error = EPERM;
+				goto out;
+			}
+#endif
+			if (action == PROC_POLICY_ACTION_APPLY) {
+				/* Used as a freeze hint */
+				memorystatus_on_inactivity(-1);
+				
+				/* in future use devicestatus for pid_socketshutdown() */
+				error = 0;
+			 } else {
+				error = EINVAL;
+			}
+			break;
+
+		case PROC_POLICY_APPLIFE_PIDBIND:
+#if CONFIG_MACF
+			error = mac_proc_check_suspend_resume(current_proc(), MAC_PROC_CHECK_PIDBIND);
+			if (error) {
+				error = EPERM;
+				goto out;
+			}
+#endif
+			error = copyin((user_addr_t)attrp, (int  *)&state, sizeof(int));
+			if (error != 0)
+				goto out;
+			if (action == PROC_POLICY_ACTION_APPLY) {
+				/* bind the thread in target_thread in current process to target_proc */
+				error = proc_lf_pidbind(current_task(), target_threadid, proc->task, state);
+			 } else
+				error = EINVAL;
+			break;
+		default:
+			error = EINVAL;
+			break;	
+	}
+
+out:
+	return(error);
+}
+#endif /* CONFIG_EMBEDDED */
+
 
 static int 
-handle_apptype(__unused int scope, int action, __unused int policy, int policy_subtype, __unused user_addr_t attrp, proc_t proc, __unused uint64_t target_threadid)
+handle_apptype(__unused int scope, int action, __unused int policy, int policy_subtype, __unused user_addr_t attrp, proc_t target_proc, __unused uint64_t target_threadid)
 {
 	int error = 0;
 
 	switch(policy_subtype) {
+#if !CONFIG_EMBEDDED
 		case PROC_POLICY_OSX_APPTYPE_TAL:
 			/* need to be super user to do this */
 			if (kauth_cred_issuser(kauth_cred_get()) == 0) {
@@ -381,9 +517,14 @@ handle_apptype(__unused int scope, int action, __unused int policy, int policy_s
 		case PROC_POLICY_OSX_APPTYPE_DASHCLIENT:
 			/* no special priv needed */
 			break;
+#endif /* !CONFIG_EMBEDDED */
 		case PROC_POLICY_OSX_APPTYPE_NONE:
+#if CONFIG_EMBEDDED
+		case PROC_POLICY_IOS_RESV1_APPTYPE:
+		case PROC_POLICY_IOS_APPLE_DAEMON:
 		case PROC_POLICY_IOS_APPTYPE:
 		case PROC_POLICY_IOS_NONUITYPE:
+#endif /* CONFIG_EMBEDDED */
 			return(ENOTSUP);
 			break;
 		default:
@@ -393,20 +534,23 @@ handle_apptype(__unused int scope, int action, __unused int policy, int policy_s
 	switch (action) {
 		case PROC_POLICY_ACTION_ENABLE:
 			/* reapply the app foreground/background policy */
-			error = proc_enable_task_apptype(proc->task, policy_subtype);
+			error = proc_enable_task_apptype(target_proc->task, policy_subtype);
 			break;
 		case PROC_POLICY_ACTION_DISABLE: 
 			/* remove the app foreground/background policy */
-			error = proc_disable_task_apptype(proc->task, policy_subtype);
+			error = proc_disable_task_apptype(target_proc->task, policy_subtype);
 			break;
 		default:
 			error = EINVAL;
 			break;
 	}
 				
+#if !CONFIG_EMBEDDED
 out:
+#endif /* !CONFIG_EMBEDDED */
 	return(error);
 }
+
 
 int
 proc_apply_resource_actions(void * bsdinfo, int type, int action)
@@ -426,10 +570,14 @@ proc_apply_resource_actions(void * bsdinfo, int type, int action)
 			psignal(p, SIGKILL);
 			break;
 
-		case PROC_POLICY_RSRCACT_NOTIFY:
+		case PROC_POLICY_RSRCACT_NOTIFY_KQ:
 			proc_lock(p);
 			proc_knote(p, NOTE_RESOURCEEND | (type & 0xff));
 			proc_unlock(p);
+			break;
+		
+		case PROC_POLICY_RSRCACT_NOTIFY_EXC:
+			panic("shouldn't be applying exception notification to process!");
 			break;
 	}
 
@@ -445,7 +593,8 @@ proc_restore_resource_actions(void * bsdinfo, __unused int type, int action)
 	switch(action) {
 		case PROC_POLICY_RSRCACT_THROTTLE:
 		case PROC_POLICY_RSRCACT_TERMINATE:
-		case PROC_POLICY_RSRCACT_NOTIFY:
+		case PROC_POLICY_RSRCACT_NOTIFY_KQ:
+		case PROC_POLICY_RSRCACT_NOTIFY_EXC:
 			/* no need to do anything */
 			break;
 

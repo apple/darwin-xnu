@@ -90,14 +90,14 @@
 
 #define	NUM_MALLOC_TYPES	11
 
+#ifdef	M_WAITOK
+#undef 	M_WAITOK
+#define M_WAITOK	0x0000	/* ok to block */
+#endif
 #ifdef	M_NOWAIT
 #undef 	M_NOWAIT
 #endif
-#define	M_NOWAIT	0x0000	/* do not block */
-#ifdef	M_WAITOK
-#undef 	M_WAITOK
-#define M_WAITOK	0x0001	/* ok to block */
-#endif
+#define	M_NOWAIT	0x0001	/* do not block */
 #ifdef	M_ZERO
 #undef	M_ZERO
 #endif

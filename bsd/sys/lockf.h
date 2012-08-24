@@ -108,6 +108,7 @@ __BEGIN_DECLS
 int	lf_advlock(struct vnop_advlock_args *);
 int	lf_assert(struct vnop_advlock_args *, void **);
 void	lf_commit(void *, int);
+void	lf_abort_advlocks(vnode_t);
 
 #ifdef LOCKF_DEBUG
 void	lf_print(char *, struct lockf *);

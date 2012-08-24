@@ -114,6 +114,8 @@ options		NORMA_ETHER	# NORMA across ethernet		# <norma_ether>
 options		SIMPLE_CLOCK	# don't assume fixed tick	# <simple_clock>
 options		XPR_DEBUG	# kernel tracing		# <xpr_debug>
 options		KDEBUG		# kernel tracing		# <kdebug>
+options		IST_KDEBUG	# limited kernel tracing 	# <ist_kdebug>
+options		NO_KDEBUG       # no kernel tracing # <no_kdebug>
 options		DDM_DEBUG	# driverkit-style tracing	# <ddm_debug>
 options		MACH_OLD_VM_COPY # Old vm_copy technology	# <!newvm>
 options		NO_DIRECT_RPC	# for untyped mig servers	# 
@@ -127,8 +129,15 @@ options		ROUTING		# routing			# <routing>
 options		VLAN		#				# <vlan>
 options		BOND		#				# <bond>
 options		PF		# Packet Filter			# <pf>
-options		PF_PKTHDR	# PF tag inside mbuf pkthdr	# <pf_pkthdr>
+options		PF_ALTQ		# PF ALTQ (Alternate Queueing)	# <pf_altq>
 options		PFLOG		# PF log interface		# <pflog>
+options		PKTSCHED_CBQ	# CBQ packet scheduler		# <pktsched_cbq>
+options		PKTSCHED_HFSC	# H-FSC packet scheduler	# <pktsched_hfsc>
+options		PKTSCHED_PRIQ	# PRIQ packet scheduler		# <pktsched_priq>
+options		PKTSCHED_FAIRQ	# FAIRQ packet scheduler	# <pktsched_fairq>
+options		CLASSQ_BLUE	# BLUE queueing algorithm	# <classq_blue>
+options		CLASSQ_RED	# RED queueing algorithm	# <classq_red>
+options		CLASSQ_RIO	# RIO queueing algorithm	# <classq_rio>
 options		IPDIVERT        # Divert sockets (for NAT)      # <ipdivert>
 options		IPFIREWALL      # IP Firewalling (used by NAT)  # <ipfirewall>
 options		IPFIREWALL_FORWARD      #Transparent proxy      # <ipfirewall>
@@ -182,7 +191,10 @@ options		FDESC		# fdesc_fs support		# <fdesc>
 options		DEVFS		# devfs support			# <devfs>
 options		JOURNALING	# journaling support	# <journaling>
 options		HFS_COMPRESSION	# hfs compression	# <hfs_compression>
-options		CONFIG_HFS_TRIM	# HFS trims unused blocks	# <config_hfs_trim>
+options		CONFIG_HFS_STD	# hfs standard support	# <config_hfs_std>
+options		CONFIG_HFS_TRIM	# hfs trims unused blocks	# <config_hfs_trim>
+options		CONFIG_HFS_MOUNT_UNMAP	#hfs trims blocks at mount	# <config_hfs_mount_unmap>
+
 
 #
 #	file system features
@@ -193,6 +205,9 @@ options		NAMEDSTREAMS	# named stream vnop support	# <namedstreams>
 options		CONFIG_VOLFS	# volfs path support (legacy)	# <config_volfs>
 options		CONFIG_IMGSRC_ACCESS # source of imageboot dmg	# <config_imgsrc_access>
 options		CONFIG_TRIGGERS	# trigger vnodes		# <config_triggers>
+options		CONFIG_VFS_FUNNEL # thread unsafe vfs's	# <config_vfs_funnel>
+options		CONFIG_EXT_RESOLVER # e.g. memberd		# <config_ext_resolver>
+options		CONFIG_SEARCHFS	# searchfs syscall support	# <config_searchfs>
 
 #
 # NFS support
@@ -234,7 +249,6 @@ options         "IPV6FIREWALL_DEFAULT_TO_ACCEPT"	#IPv6 Firewall Feature   	# <ip
 
 pseudo-device   gif     1		# <gif>
 pseudo-device   dummy   2		# <dummy>
-pseudo-device   faith   1		# <faith>
 pseudo-device   stf 	1 		# <stf>
 
 options			crypto			# <ipsec,crypto>
@@ -337,16 +351,16 @@ options        CONFIG_NMBCLUSTERS="((1024 * 512) / MCLBYTES)"		# <medium>
 options        CONFIG_NMBCLUSTERS="((1024 * 256) / MCLBYTES)"		# <bsmall,xsmall,small>
 
 #
-# set maximum space used for packet buffers
-#
-options CONFIG_USESOCKTHRESHOLD=1	# <large,xlarge,medium>
-options CONFIG_USESOCKTHRESHOLD=0	# <bsmall,xsmall,small>
-
-#
 # Configure size of TCP hash table
 #
 options CONFIG_TCBHASHSIZE=4096		# <medium,large,xlarge>
 options CONFIG_TCBHASHSIZE=128		# <xsmall,small,bsmall>
+
+#
+# Configure bandwidth limiting sysctl
+#
+options CONFIG_ICMP_BANDLIM=250		# <medium,large,xlarge>
+options CONFIG_ICMP_BANDLIM=50		# <xsmall,small,bsmall>
 
 #
 #  configurable async IO options 
@@ -435,17 +449,30 @@ options		CONFIG_CODE_DECRYPTION	# <config_embedded>
 #
 # User Content Protection, used on embedded
 #
-
 options		CONFIG_PROTECT	# <config_protect>
 
 #
-# freeze - support app hibernation, used on embedded
-# CONFIG_FREEZE_SUSPENDED_MIN is the minimum number of suspended  
-# processes to be left unhibernated
+# enable per-process memory priority tracking
+#
+options		CONFIG_MEMORYSTATUS				# <memorystatus>
+
+#
+# enable jetsam - used on embedded
+#
+options		CONFIG_JETSAM				# <jetsam>
+
+#
+# enable freezing of suspended processes - used on embedded
 #
 options		CONFIG_FREEZE					# <freeze>
 
 options		CHECK_CS_VALIDATION_BITMAP			# <config_cs_validation_bitmap>
+
+#
+# memory pressure event support
+# must be set in both bsd/conf and osfmk/conf MASTER files
+#
+options		VM_PRESSURE_EVENTS		# <vm_pressure_events>
 
 #
 #  Ethernet (ARP)
@@ -507,4 +534,3 @@ pseudo-device	sdt		1	init	sdt_init	# <config_dtrace>
 pseudo-device	systrace	1	init	systrace_init	# <config_dtrace>
 pseudo-device	fbt		1	init	fbt_init	# <config_dtrace>
 pseudo-device	profile_prvd	1	init	profile_init	# <config_dtrace>
-

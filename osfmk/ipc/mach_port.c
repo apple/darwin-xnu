@@ -221,7 +221,6 @@ mach_port_names(
 	mach_port_type_t	**typesp,
 	mach_msg_type_number_t	*typesCnt)
 {
-	ipc_tree_entry_t tentry;
 	ipc_entry_t table;
 	ipc_entry_num_t tsize;
 	mach_port_index_t index;
@@ -250,7 +249,7 @@ mach_port_names(
 		vm_size_t size_needed;
 
 		is_read_lock(space);
-		if (!space->is_active) {
+		if (!is_active(space)) {
 			is_read_unlock(space);
 			if (size != 0) {
 				kmem_free(ipc_kernel_map, addr1, size);
@@ -260,8 +259,7 @@ mach_port_names(
 		}
 
 		/* upper bound on number of names in the space */
-
-		bound = space->is_table_size + space->is_tree_total;
+		bound = space->is_table_size;
 		size_needed = round_page(bound * sizeof(mach_port_name_t));
 
 		if (size_needed <= size)
@@ -330,17 +328,6 @@ mach_port_names(
 		}
 	}
 
-	for (tentry = ipc_splay_traverse_start(&space->is_tree);
-	    tentry != ITE_NULL;
-	    tentry = ipc_splay_traverse_next(&space->is_tree, FALSE)) {
-		ipc_entry_t entry = &tentry->ite_entry;
-		mach_port_name_t name = tentry->ite_name;
-
-		assert(IE_BITS_TYPE(tentry->ite_bits) != MACH_PORT_TYPE_NONE);
-		mach_port_names_helper(timestamp, entry, name, names,
-				       types, &actual);
-	}
-	ipc_splay_traverse_finish(&space->is_tree);
 	is_read_unlock(space);
 
 	if (actual == 0) {
@@ -441,17 +428,16 @@ mach_port_type(
 	kr = ipc_right_lookup_write(space, name, &entry);
 	if (kr != KERN_SUCCESS)
 		return kr;
-	/* space is write-locked and active */
 
+	/* space is write-locked and active */
 	kr = ipc_right_info(space, name, entry, typep, &urefs);
-	if (kr == KERN_SUCCESS)
-		is_write_unlock(space);
+	/* space is unlocked */
+
 #if 1
         /* JMM - workaround rdar://problem/9121297 (CF being too picky on these bits). */
         *typep &= ~(MACH_PORT_TYPE_SPREQUEST | MACH_PORT_TYPE_SPREQUEST_DELAYED);
 #endif
 
-	/* space is unlocked */
 	return kr;
 }
 
@@ -470,25 +456,20 @@ mach_port_type(
  *		KERN_INVALID_VALUE	The nname isn't a legal name.
  *		KERN_NAME_EXISTS	The nname already denotes a right.
  *		KERN_RESOURCE_SHORTAGE	Couldn't allocate memory.
+ *
+ *      This interface is obsolete and always returns
+ *      KERN_NOT_SUPPORTED.
  */
 
 kern_return_t
 mach_port_rename(
-	ipc_space_t		space,
-	mach_port_name_t	oname,
-	mach_port_name_t	nname)
+	__unused ipc_space_t		space,
+	__unused mach_port_name_t	oname,
+	__unused mach_port_name_t	nname)
 {
-	if (space == IS_NULL)
-		return KERN_INVALID_TASK;
-
-	if (!MACH_PORT_VALID(oname))
-		return KERN_INVALID_NAME;
-
-	if (!MACH_PORT_VALID(nname))
-		return KERN_INVALID_VALUE;
-
-	return ipc_object_rename(space, oname, nname);
+	return KERN_NOT_SUPPORTED;
 }
+
 
 /*
  *	Routine:	mach_port_allocate_name [kernel call]
@@ -650,8 +631,6 @@ mach_port_allocate_full(
 	if (qosp->name) {
 		if (!MACH_PORT_VALID (*namep))
 			return (KERN_INVALID_VALUE);
-		if (is_fast_space (space))
-			return (KERN_FAILURE);
 	}
 
 	if (qosp->prealloc) {
@@ -750,8 +729,7 @@ mach_port_destroy(
 		return kr;
 	/* space is write-locked and active */
 
-	kr = ipc_right_destroy(space, name, entry); 
-	is_write_unlock(space);
+	kr = ipc_right_destroy(space, name, entry); /* unlocks space */
 	return kr;
 }
 
@@ -843,12 +821,13 @@ mach_port_get_refs(
 	kr = ipc_right_lookup_write(space, name, &entry);
 	if (kr != KERN_SUCCESS)
 		return kr;
-	/* space is write-locked and active */
 
-	kr = ipc_right_info(space, name, entry, &type, &urefs);	/* unlocks */
+	/* space is write-locked and active */
+	kr = ipc_right_info(space, name, entry, &type, &urefs);
+	/* space is unlocked */
+
 	if (kr != KERN_SUCCESS)
-		return kr;	/* space is unlocked */
-	is_write_unlock(space);
+		return kr;	
 
 	if (type & MACH_PORT_TYPE(right))
 		switch (right) {
@@ -1027,7 +1006,7 @@ kern_return_t
 mach_port_get_context(
 	ipc_space_t		space,
 	mach_port_name_t	name,
-	mach_vm_address_t 	*context)
+	mach_vm_address_t	*context)
 {
 	ipc_port_t port;
 	kern_return_t kr;
@@ -1068,7 +1047,7 @@ kern_return_t
 mach_port_set_context(
 	ipc_space_t		space,
 	mach_port_name_t	name,
-	mach_vm_address_t 	context)
+	mach_vm_address_t	context)
 {
 	ipc_port_t port;
 	kern_return_t kr;
@@ -1093,6 +1072,9 @@ mach_port_set_context(
 
 /*
  *	Routine:	mach_port_gst_helper
+ *	Conditions:
+ *		portspace is locked for both the recieve right and pset
+ *		under observation.
  *	Purpose:
  *		A helper function for mach_port_get_set_status.
  */
@@ -1108,14 +1090,13 @@ mach_port_gst_helper(
 	mach_port_name_t name;
 
 	assert(port != IP_NULL);
-
-	ip_lock(port);
+	/*
+	 * The space lock is held by the calling function,
+	 * hence it is OK to read name without the port lock.
+	 */
 	assert(ip_active(port));
-
 	name = port->ip_receiver_name;
 	assert(name != MACH_PORT_NULL);
-
-	ip_unlock(port);
 
 	if (ipc_pset_member(pset, port)) {
 		ipc_entry_num_t actual = *actualp;
@@ -1167,7 +1148,6 @@ mach_port_get_set_status(
 	size = PAGE_SIZE;	/* initial guess */
 
 	for (;;) {
-		ipc_tree_entry_t tentry;
 		ipc_entry_t entry, table;
 		ipc_entry_num_t tsize;
 		mach_port_index_t index;
@@ -1220,21 +1200,6 @@ mach_port_get_set_status(
 			}
 		}
 
-		for (tentry = ipc_splay_traverse_start(&space->is_tree);
-		    tentry != ITE_NULL;
-		    tentry = ipc_splay_traverse_next(&space->is_tree,FALSE)) {
-			ipc_entry_bits_t bits = tentry->ite_bits;
-
-			assert(IE_BITS_TYPE(bits) != MACH_PORT_TYPE_NONE);
-
-			if (bits & MACH_PORT_TYPE_RECEIVE) {
-			    ipc_port_t port = (ipc_port_t) tentry->ite_object;
-
-			    mach_port_gst_helper(pset, port, maxnames,
-						 names, &actual);
-			}
-		}
-		ipc_splay_traverse_finish(&space->is_tree);
 		is_read_unlock(space);
 
 		if (actual <= maxnames)
@@ -1311,6 +1276,9 @@ mach_port_move_member(
 	ipc_port_t port;
 	ipc_pset_t nset;
 	kern_return_t kr;
+	wait_queue_link_t wql;
+	queue_head_t links_data;
+	queue_t links = &links_data;
 
 	if (space == IS_NULL)
 		return KERN_INVALID_TASK;
@@ -1320,15 +1288,22 @@ mach_port_move_member(
 
 	if (after == MACH_PORT_DEAD)
 		return KERN_INVALID_RIGHT;
+	else if (after == MACH_PORT_NULL)
+		wql = WAIT_QUEUE_LINK_NULL;
+	else
+		wql = wait_queue_link_allocate();
+
+	queue_init(links);
 
 	kr = ipc_right_lookup_read(space, member, &entry);
 	if (kr != KERN_SUCCESS)
-		return kr;
+		goto done;
 	/* space is read-locked and active */
 
 	if ((entry->ie_bits & MACH_PORT_TYPE_RECEIVE) == 0) {
 		is_read_unlock(space);
-		return KERN_INVALID_RIGHT;
+		kr = KERN_INVALID_RIGHT;
+		goto done;
 	}
 
 	port = (ipc_port_t) entry->ie_object;
@@ -1340,27 +1315,38 @@ mach_port_move_member(
 		entry = ipc_entry_lookup(space, after);
 		if (entry == IE_NULL) {
 			is_read_unlock(space);
-			return KERN_INVALID_NAME;
+			kr = KERN_INVALID_NAME;
+			goto done;
 		}
 
 		if ((entry->ie_bits & MACH_PORT_TYPE_PORT_SET) == 0) {
 			is_read_unlock(space);
-			return KERN_INVALID_RIGHT;
+			kr = KERN_INVALID_RIGHT;
+			goto done;
 		}
 
 		nset = (ipc_pset_t) entry->ie_object;
 		assert(nset != IPS_NULL);
 	}
 	ip_lock(port);
-	ipc_pset_remove_from_all(port);
+	ipc_pset_remove_from_all(port, links);
 
 	if (nset != IPS_NULL) {
 		ips_lock(nset);
-		kr = ipc_pset_add(nset, port);
+		kr = ipc_pset_add(nset, port, wql);
 		ips_unlock(nset);
 	}
 	ip_unlock(port);
 	is_read_unlock(space);
+
+ done:
+	if (kr != KERN_SUCCESS && wql != WAIT_QUEUE_LINK_NULL)
+		wait_queue_link_free(wql);
+	while(!queue_empty(links)) {
+		wql = (wait_queue_link_t) dequeue(links);
+		wait_queue_link_free(wql);
+	}
+
 	return kr;
 }
 
@@ -1811,6 +1797,7 @@ mach_port_insert_member(
 	ipc_object_t obj;
 	ipc_object_t psobj;
 	kern_return_t kr;
+	wait_queue_link_t wql;
 
 	if (space == IS_NULL)
 		return KERN_INVALID_TASK;
@@ -1818,19 +1805,26 @@ mach_port_insert_member(
 	if (!MACH_PORT_VALID(name) || !MACH_PORT_VALID(psname))
 		return KERN_INVALID_RIGHT;
 
+	wql = wait_queue_link_allocate();
+
 	kr = ipc_object_translate_two(space, 
 				      name, MACH_PORT_RIGHT_RECEIVE, &obj,
 				      psname, MACH_PORT_RIGHT_PORT_SET, &psobj);
 	if (kr != KERN_SUCCESS)
-		return kr;
+		goto done;
 
 	/* obj and psobj are locked (and were locked in that order) */
 	assert(psobj != IO_NULL);
 	assert(obj != IO_NULL);
 
-	kr = ipc_pset_add((ipc_pset_t)psobj, (ipc_port_t)obj);
+	kr = ipc_pset_add((ipc_pset_t)psobj, (ipc_port_t)obj, wql);
 	io_unlock(psobj);
 	io_unlock(obj);
+
+ done:
+	if (kr != KERN_SUCCESS)
+		wait_queue_link_free(wql);
+
 	return kr;
 }
 
@@ -1861,6 +1855,7 @@ mach_port_extract_member(
 	ipc_object_t psobj;
 	ipc_object_t obj;
 	kern_return_t kr;
+	wait_queue_link_t wql = WAIT_QUEUE_LINK_NULL;
 
 	if (space == IS_NULL)
 		return KERN_INVALID_TASK;
@@ -1878,9 +1873,13 @@ mach_port_extract_member(
 	assert(psobj != IO_NULL);
 	assert(obj != IO_NULL);
 
-	kr = ipc_pset_remove((ipc_pset_t)psobj, (ipc_port_t)obj);
+	kr = ipc_pset_remove((ipc_pset_t)psobj, (ipc_port_t)obj, &wql);
 	io_unlock(psobj);
 	io_unlock(obj);
+
+	if (wql != WAIT_QUEUE_LINK_NULL)
+		wait_queue_link_free(wql);
+
 	return kr;
 }
 
@@ -1898,7 +1897,7 @@ task_set_port_space(
 	
 	is_write_lock(space);
 
-	if (!space->is_active) {
+	if (!is_active(space)) {
 		is_write_unlock(space);
 		return KERN_INVALID_TASK;
 	}
@@ -1937,6 +1936,7 @@ mach_get_label(
 	dead = ipc_right_check(space, port, name, entry);
 	if (dead) {
 		is_write_unlock(space);
+		ip_release(port);
 		return KERN_INVALID_RIGHT;
 	}
 	/* port is now locked */
@@ -1980,6 +1980,7 @@ mach_get_label_text(
 	labelstr_t		outlabel)
 {
 	ipc_entry_t entry;
+	ipc_port_t port;
 	kern_return_t kr;
 	struct label *l;
 	int dead;
@@ -1994,10 +1995,11 @@ mach_get_label_text(
 	if (kr != KERN_SUCCESS)
 		return kr;
 
-	dead = ipc_right_check(space, (ipc_port_t) entry->ie_object, name,
-	    entry);
+	port = (ipc_port_t)entry->ie_object;
+	dead = ipc_right_check(space, port, name, entry);
 	if (dead) {
 		is_write_unlock(space);
+		ip_release(port);
 		return KERN_INVALID_RIGHT;
 	}
 	/* object (port) is now locked */

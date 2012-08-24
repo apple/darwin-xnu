@@ -309,3 +309,6 @@ Entry(call_continuation)
 	call	EXT(thread_terminate)
 
 
+Entry(ml_early_random)
+	xor	%eax, %eax
+	ret

@@ -144,7 +144,6 @@ MACRO_END
 #define ikm_prealloc_clear_inuse(kmsg, port)				\
 MACRO_BEGIN								\
 	(kmsg)->ikm_prealloc = IP_NULL;					\
-	ip_release(port);						\
 MACRO_END
 
 #define	ikm_init(kmsg, size)						\
@@ -407,6 +406,13 @@ extern mach_msg_body_t *ipc_kmsg_get_scatter(
 extern void ipc_kmsg_free_scatter(
         mach_msg_body_t 	*slist,
         mach_msg_size_t		slist_size);
+
+
+extern mach_msg_trailer_size_t
+ipc_kmsg_add_trailer(ipc_kmsg_t kmsg, ipc_space_t space, 
+		mach_msg_option_t option, thread_t thread, 
+		mach_port_seqno_t seqno, boolean_t minimal_trailer,
+		mach_vm_offset_t context);
 
 #endif	/* _IPC_IPC_KMSG_H_ */
 

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2002 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2012 Apple, Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -256,7 +256,8 @@ __END_DECLS
 #endif
 
 #if __DARWIN_C_LEVEL >= __DARWIN_C_FULL
-#define	ELAST		105		/* Must be equal largest errno */
+#define	EQFULL		106		/* Interface output queue is full */
+#define	ELAST		106		/* Must be equal largest errno */
 #endif
 
 #ifdef KERNEL
@@ -272,8 +273,10 @@ __END_DECLS
 #define ECVCERORR	256
 #define ECVPERORR	512
 #else /* BSD_KERNEL_PRIVATE */
-/* -5 and -6 are reserved for kernel internal use */
+/* -5, -6 and -7 and -106 are reserved for kernel internal use */
 #endif /* BSD_KERNEL_PRIVATE */
-
-#endif
+#ifdef PRIVATE
+#define	EQSUSPENDED	(-EQFULL)	/* Output queue is suspended */
+#endif /* PRIVATE */
+#endif /* KERNEL */
 #endif /* _SYS_ERRNO_H_ */

@@ -58,19 +58,19 @@ void video_scroll_down(	void	*start,  /* HIGH addr */
 
 struct vc_info
 {
-    unsigned int	v_height;	/* pixels */
-    unsigned int	v_width;	/* pixels */
-    unsigned int	v_depth;
-    unsigned int	v_rowbytes;
-    unsigned long	v_baseaddr;
-    unsigned int	v_type;
-    char		v_name[32];
-    uint64_t		v_physaddr;
-    unsigned int	v_rows;		/* characters */
-    unsigned int	v_columns;	/* characters */
-    unsigned int	v_rowscanbytes;	/* Actualy number of bytes used for display per row*/
-    unsigned int	v_scale;
-    unsigned int	v_reserved[4];
+	unsigned int	v_height;	/* pixels */
+	unsigned int	v_width;	/* pixels */
+	unsigned int	v_depth;
+	unsigned int	v_rowbytes;
+	unsigned long	v_baseaddr;
+	unsigned int	v_type;
+	char		v_name[32];
+	uint64_t	v_physaddr;
+	unsigned int	v_rows;		/* characters */
+	unsigned int	v_columns;	/* characters */
+	unsigned int	v_rowscanbytes;	/* Actualy number of bytes used for display per row*/
+	unsigned int	v_scale;	
+	unsigned int	v_reserved[4];
 };
 
 struct vc_progress_element {

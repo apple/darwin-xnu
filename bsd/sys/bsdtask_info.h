@@ -107,7 +107,7 @@ extern uint32_t vnode_vid(void *vp);
 
 extern int fill_procregioninfo(task_t t, uint64_t arg, struct proc_regioninfo_internal *pinfo, uintptr_t *vp, uint32_t *vid);
 void fill_taskprocinfo(task_t task, struct proc_taskinfo_internal * ptinfo);
-int fill_taskthreadinfo(task_t task, uint64_t thaddr, struct proc_threadinfo_internal * ptinfo, void *, int *);
+int fill_taskthreadinfo(task_t task, uint64_t thaddr, int thuniqueid, struct proc_threadinfo_internal * ptinfo, void *, int *);
 int fill_taskthreadlist(task_t task, void * buffer, int thcount);
 int get_numthreads(task_t);
 void bsd_getthreadname(void *uth, char* buffer);

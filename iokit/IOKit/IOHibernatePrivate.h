@@ -33,9 +33,12 @@ extern "C" {
 #endif
 
 #ifdef KERNEL
-#include <crypto/aes.h>
+#include <libkern/crypto/aes.h>
 #include <uuid/uuid.h>
 #endif
+
+#ifndef __IOKIT_IOHIBERNATEPRIVATE_H
+#define __IOKIT_IOHIBERNATEPRIVATE_H
 
 struct IOPolledFileExtent
 {
@@ -96,8 +99,9 @@ struct IOHibernateImageHeader
 
     uint32_t	debugFlags;
     uint32_t	options;
+    uint32_t	sleepTime;
 
-    uint32_t	reserved[70];		// make sizeof == 512
+    uint32_t	reserved[69];		// make sizeof == 512
 
     uint64_t	encryptEnd __attribute__ ((packed));
     uint64_t	deviceBase __attribute__ ((packed));
@@ -235,6 +239,18 @@ static const uint8_t gIOHibernateProgressAlpha			\
     { 0x00,0x66,0xdb,0xf3,0xdb,0x66,0x00 }			\
 };
 
+struct hibernate_preview_t
+{
+    uint32_t  imageCount;	// Number of images
+    uint32_t  width;      	// Width
+    uint32_t  height;     	// Height
+    uint32_t  depth;      	// Pixel Depth
+    uint32_t  lockTime;     // Lock time
+    uint32_t  reservedG[8]; // reserved
+    uint32_t  reservedK[8]; // reserved
+};
+typedef struct hibernate_preview_t hibernate_preview_t;
+
 #ifdef KERNEL
 
 #ifdef __cplusplus
@@ -242,9 +258,12 @@ static const uint8_t gIOHibernateProgressAlpha			\
 void     IOHibernateSystemInit(IOPMrootDomain * rootDomain);
 
 IOReturn IOHibernateSystemSleep(void);
+IOReturn IOHibernateIOKitSleep(void);
 IOReturn IOHibernateSystemHasSlept(void);
 IOReturn IOHibernateSystemWake(void);
 IOReturn IOHibernateSystemPostWake(void);
+bool     IOHibernateWasScreenLocked(void);
+void     IOHibernateSetScreenLocked(uint32_t lockState);
 
 #endif /* __cplusplus */
 
@@ -419,12 +438,14 @@ enum
 #define kIOHibernateFeatureKey		"Hibernation"
 #define kIOHibernatePreviewBufferKey	"IOPreviewBuffer"
 
+#ifndef kIOHibernatePreviewActiveKey
 #define kIOHibernatePreviewActiveKey	"IOHibernatePreviewActive"
 // values for kIOHibernatePreviewActiveKey
 enum {
     kIOHibernatePreviewActive  = 0x00000001,
     kIOHibernatePreviewUpdates = 0x00000002
 };
+#endif
 
 #define kIOHibernateOptionsKey      "IOHibernateOptions"
 #define kIOHibernateGfxStatusKey    "IOHibernateGfxStatus"
@@ -446,6 +467,25 @@ enum {
 #define kIOHibernateBootSwitchVarsKey			"boot-switch-vars"
 
 #define kIOHibernateUseKernelInterpreter    0x80000000
+
+enum
+{
+	kIOPreviewImageIndexDesktop = 0, 
+	kIOPreviewImageIndexLockScreen = 1, 
+	kIOPreviewImageCount = 2
+};
+
+enum
+{
+	kIOScreenLockNoLock          = 1,
+	kIOScreenLockUnlocked        = 2,
+	kIOScreenLockLocked          = 3,
+	kIOScreenLockFileVaultDialog = 4,
+};	
+
+#define kIOScreenLockStateKey      "IOScreenLockState"
+
+#endif /* ! __IOKIT_IOHIBERNATEPRIVATE_H */
 
 #ifdef __cplusplus
 }

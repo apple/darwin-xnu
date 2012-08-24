@@ -76,6 +76,12 @@ subsystem
 #include <mach/mach_types.defs>
 #include <mach_debug/mach_debug_types.defs>
 
+#if !KERNEL && !LIBSYSCALL_INTERFACE
+#define PREFIX(NAME) _kernelrpc_ ## NAME
+#else
+#define PREFIX(NAME) NAME
+#endif
+
 /*
  *	Allocate zero-filled memory in the address space
  *	of the target task, either at the specified address,
@@ -84,27 +90,50 @@ subsystem
  *	allocation actually took place is returned.
  */
 #if !defined(_MACH_VM_PUBLISH_AS_LOCAL_)
-routine mach_vm_allocate(
-#else
-routine vm_allocate(
-#endif
+routine PREFIX(mach_vm_allocate) (
 		target		: vm_task_entry_t;
 	inout	address		: mach_vm_address_t;
 		size		: mach_vm_size_t;
 		flags		: int);
+
+#else
+
+#if !KERNEL && !LIBSYSCALL_INTERFACE
+skip;
+#else
+routine PREFIX(vm_allocate) (
+		target		: vm_task_entry_t;
+	inout	address		: mach_vm_address_t;
+		size		: mach_vm_size_t;
+		flags		: int);
+
+#endif
+
+#endif
+
 
 /*
  *	Deallocate the specified range from the virtual
  *	address space of the target virtual memory map.
  */
 #if !defined(_MACH_VM_PUBLISH_AS_LOCAL_)
-routine mach_vm_deallocate(
-#else
-routine vm_deallocate(
-#endif
+routine PREFIX(mach_vm_deallocate) (
 		target		: vm_task_entry_t;
 		address		: mach_vm_address_t;
 		size		: mach_vm_size_t);
+
+#else
+
+#if !KERNEL && !LIBSYSCALL_INTERFACE
+skip;
+#else
+routine PREFIX(vm_deallocate) (
+		target		: vm_task_entry_t;
+		address		: mach_vm_address_t;
+		size		: mach_vm_size_t);
+#endif
+
+#endif
 
 /*
  *	Set the current or maximum protection attribute
@@ -117,15 +146,30 @@ routine vm_deallocate(
  *	*permissions*.
  */
 #if !defined(_MACH_VM_PUBLISH_AS_LOCAL_)
-routine mach_vm_protect(
-#else
-routine vm_protect(
-#endif
+routine PREFIX(mach_vm_protect) (
 		target_task	: vm_task_entry_t;
 		address		: mach_vm_address_t;
 		size		: mach_vm_size_t;
 		set_maximum	: boolean_t;
 		new_protection	: vm_prot_t);
+
+
+#else
+
+#if !KERNEL && !LIBSYSCALL_INTERFACE
+skip;
+#else
+
+routine PREFIX(vm_protect) (
+		target_task	: vm_task_entry_t;
+		address		: mach_vm_address_t;
+		size		: mach_vm_size_t;
+		set_maximum	: boolean_t;
+		new_protection	: vm_prot_t);
+
+#endif
+
+#endif
 
 /*
  *	Set the inheritance attribute for the specified range

@@ -95,6 +95,8 @@ type vm_offset_t = natural_t;
 type vm_size_t = natural_t;
 #endif
 
+type mach_port_context_t = uint64_t;
+
 /*
  * The mach_vm_xxx_t types are sized to hold the
  * maximum pointer, offset, etc... supported on the

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1999-2007 Apple Inc. All rights reserved.
+ * Copyright (c) 1999-2011 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -48,6 +48,8 @@
 
 #include <sys/syscall.h>
 
+/* Binary compatibility stubs for syscalls that no longer exist */
+
 #ifndef SYS_setquota
 #define SYS_setquota	148
 #endif
@@ -86,14 +88,14 @@ LEAF(_##name, 0)					;\
 2:
 
 #if defined(__SYSCALL_32BIT_ARG_BYTES) && ((__SYSCALL_32BIT_ARG_BYTES >= 4) && (__SYSCALL_32BIT_ARG_BYTES <= 20))
-#define UNIX_SYSCALL_NONAME(name, nargs)			\
+#define UNIX_SYSCALL_NONAME(name, nargs, cerror)			\
 	movl	$(SYS_##name | (__SYSCALL_32BIT_ARG_BYTES << I386_SYSCALL_ARG_BYTES_SHIFT)), %eax		;\
 	UNIX_SYSCALL_SYSENTER					;\
 	jnb	2f						;\
 	BRANCH_EXTERN(cerror)					;\
 2:
 #else /* __SYSCALL_32BIT_ARG_BYTES < 4 || > 20 */
-#define UNIX_SYSCALL_NONAME(name, nargs)		\
+#define UNIX_SYSCALL_NONAME(name, nargs, cerror)		\
 	.globl	cerror					;\
 	movl	$ SYS_##name, %eax			;\
 	UNIX_SYSCALL_SYSENTER				;\
@@ -107,19 +109,23 @@ LEAF(_##name, 0)					;\
 	movl	$ SYS_##name, %eax			;\
 	UNIX_SYSCALL_TRAP				;\
 	jnb	2f					;\
-	BRANCH_EXTERN(cerror)  				;\
+	BRANCH_EXTERN(cerror_nocancel) 				;\
 2:
 
-#define PSEUDO(pseudo, name, nargs)			\
+#define PSEUDO(pseudo, name, nargs, cerror)			\
 LEAF(pseudo, 0)					;\
-	UNIX_SYSCALL_NONAME(name, nargs)
+	UNIX_SYSCALL_NONAME(name, nargs, cerror)
 
 #define PSEUDO_INT(pseudo, name, nargs)			\
 LEAF(pseudo, 0)					;\
 	UNIX_SYSCALL_INT_NONAME(name, nargs)
 
+#define __SYSCALL2(pseudo, name, nargs, cerror)			\
+	PSEUDO(pseudo, name, nargs, cerror)			;\
+	ret
+
 #define __SYSCALL(pseudo, name, nargs)			\
-	PSEUDO(pseudo, name, nargs)			;\
+	PSEUDO(pseudo, name, nargs, cerror)			;\
 	ret
 
 #define __SYSCALL_INT(pseudo, name, nargs)		\
@@ -144,7 +150,7 @@ LEAF(_##name, 0)					;\
 	BRANCH_EXTERN(cerror)  				;\
 2:
 
-#define UNIX_SYSCALL_NONAME(name, nargs)		\
+#define UNIX_SYSCALL_NONAME(name, nargs, cerror)		\
 	.globl	cerror					;\
 	movl	$ SYSCALL_CONSTRUCT_UNIX(SYS_##name), %eax	;\
 	UNIX_SYSCALL_SYSCALL				;\
@@ -152,14 +158,19 @@ LEAF(_##name, 0)					;\
 	BRANCH_EXTERN(cerror)  				;\
 2:
 
-#define PSEUDO(pseudo, name, nargs)			\
+#define PSEUDO(pseudo, name, nargs, cerror)			\
 LEAF(pseudo, 0)					;\
-	UNIX_SYSCALL_NONAME(name, nargs)
+	UNIX_SYSCALL_NONAME(name, nargs, cerror)
+
+#define __SYSCALL2(pseudo, name, nargs, cerror) \
+	PSEUDO(pseudo, name, nargs, cerror)			;\
+	ret
 
 #define __SYSCALL(pseudo, name, nargs)			\
-	PSEUDO(pseudo, name, nargs)			;\
+	PSEUDO(pseudo, name, nargs, cerror)			;\
 	ret
 
 #else
 #error Unsupported architecture
 #endif
+

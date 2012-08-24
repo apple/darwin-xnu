@@ -61,7 +61,6 @@
  *	Locking primitives implementation
  */
 
-#include <mach_kdb.h>
 #include <mach_ldebug.h>
 
 #include <kern/lock.h>
@@ -77,12 +76,6 @@
 #include <kern/debug.h>
 #include <string.h>
 
-#if	MACH_KDB
-#include <ddb/db_command.h>
-#include <ddb/db_output.h>
-#include <ddb/db_sym.h>
-#include <ddb/db_print.h>
-#endif	/* MACH_KDB */
 #include <i386/machine_routines.h> /* machine_timeout_suspended() */
 #include <machine/machine_cpu.h>
 #include <i386/mp.h>
@@ -122,12 +115,6 @@
 unsigned int LcksOpts=0;
 
 /* Forwards */
-
-#if	MACH_KDB
-void	db_print_simple_lock(
-			simple_lock_t	addr);
-#endif	/* MACH_KDB */
-
 
 #if	USLOCK_DEBUG
 /*
@@ -2102,66 +2089,3 @@ lck_mtx_lock_wait_x86 (
 	}
 #endif
 }
-
-
-#if	MACH_KDB
-
-void
-db_show_one_lock(
-	lock_t  *lock)
-{
-	db_printf("Read_count = 0x%x, %swant_upgrade, %swant_write, ",
-		  lock->lck_rw_shared_count,
-		  lock->lck_rw_want_upgrade ? "" : "!",
-		  lock->lck_rw_want_write ? "" : "!");
-	db_printf("%swaiting, %scan_sleep\n", 
-		  (lock->lck_r_waiting || lock->lck_w_waiting) ? "" : "!", 
-		  lock->lck_rw_can_sleep ? "" : "!");
-	db_printf("Interlock:\n");
-	db_show_one_simple_lock((db_expr_t) ((vm_offset_t)simple_lock_addr(lock->lck_rw_interlock)),
-			TRUE, (db_expr_t)0, (char *)0);
-}
-
-/*
- * Routines to print out simple_locks and mutexes in a nicely-formatted
- * fashion.
- */
-
-const char *simple_lock_labels =	"ENTRY    ILK THREAD   DURATION CALLER";
-
-void
-db_show_one_simple_lock (
-	db_expr_t	addr,
-	boolean_t	have_addr,
-	__unused db_expr_t	count,
-	__unused char		* modif)
-{
-	simple_lock_t	saddr = (simple_lock_t) ((vm_offset_t) addr);
-
-	if (saddr == (simple_lock_t)0 || !have_addr) {
-		db_error ("No simple_lock\n");
-	}
-#if	USLOCK_DEBUG
-	else if (saddr->lock_type != USLOCK_TAG)
-		db_error ("Not a simple_lock\n");
-#endif	/* USLOCK_DEBUG */
-
-	db_printf ("%s\n", simple_lock_labels);
-	db_print_simple_lock (saddr);
-}
-
-void
-db_print_simple_lock (
-	simple_lock_t	addr)
-{
-
-	db_printf ("%08x %3d", addr, *hw_lock_addr(addr->interlock));
-#if	USLOCK_DEBUG
-	db_printf (" %08x", addr->debug.lock_thread);
-	db_printf (" %08x ", addr->debug.duration[1]);
-	db_printsym ((int)addr->debug.lock_pc, DB_STGY_ANY);
-#endif	/* USLOCK_DEBUG */
-	db_printf ("\n");
-}
-
-#endif	/* MACH_KDB */

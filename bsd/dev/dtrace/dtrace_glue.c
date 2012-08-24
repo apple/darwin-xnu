@@ -1480,13 +1480,6 @@ dtrace_tally_fault(user_addr_t uaddr)
 	return( DTRACE_CPUFLAG_ISSET(CPU_DTRACE_NOFAULT) ? TRUE : FALSE );
 }
 
-void
-dtrace_vpanic(const char *format, va_list alist)
-{
-	vuprintf( format, alist );
-	panic("dtrace_vpanic");
-}
-
 #define TOTTY   0x02
 extern int prf(const char *, va_list, int, struct tty *); /* bsd/kern/subr_prf.h */
 

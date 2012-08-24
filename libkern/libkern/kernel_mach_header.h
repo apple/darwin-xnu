@@ -45,6 +45,8 @@ extern "C" {
 
 #include <mach/mach_types.h>
 #include <mach-o/loader.h>
+#include <mach-o/nlist.h>
+#include <mach-o/reloc.h>
 
 #if	!KERNEL
 #error this header for kernel use only
@@ -55,15 +57,19 @@ extern "C" {
 typedef struct mach_header_64	kernel_mach_header_t;
 typedef struct segment_command_64 kernel_segment_command_t;
 typedef struct section_64		kernel_section_t;
+typedef struct nlist_64         kernel_nlist_t;
 
-#define LC_SEGMENT_KERNEL		LC_SEGMENT_64
+#define MH_MAGIC_KERNEL         MH_MAGIC_64
+#define LC_SEGMENT_KERNEL       LC_SEGMENT_64
 
 #else
 
 typedef struct mach_header		kernel_mach_header_t;
 typedef struct segment_command	kernel_segment_command_t;
 typedef struct section			kernel_section_t;
+typedef struct nlist            kernel_nlist_t;
 
+#define MH_MAGIC_KERNEL         MH_MAGIC
 #define LC_SEGMENT_KERNEL		LC_SEGMENT
 #define SECT_CONSTRUCTOR		"__constructor"
 #define SECT_DESTRUCTOR			"__destructor"
@@ -95,15 +101,8 @@ kernel_section_t *getsectbynamefromheader(
 void *getsectdatafromheader(kernel_mach_header_t *, const char *, const char *, unsigned long *);
 kernel_section_t *firstsect(kernel_segment_command_t *sgp);
 kernel_section_t *nextsect(kernel_segment_command_t *sgp, kernel_section_t *sp);
+void *getcommandfromheader(kernel_mach_header_t *, uint32_t);
 void *getuuidfromheader(kernel_mach_header_t *, unsigned long *);
-
-#if MACH_KDB
-boolean_t getsymtab(kernel_mach_header_t *header,
-                    vm_offset_t *symtab,
-                    int *nsyms,
-                    vm_offset_t *strtab,
-                    vm_size_t *strtabsize);
-#endif
 
 #ifdef __cplusplus
 }

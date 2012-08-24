@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2010 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2011 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -575,7 +575,10 @@ cat_lookupmangled(struct hfsmount *hfsmp, struct cat_desc *descp, int wantrsrc,
 	cnid_t fileID;
 	u_int32_t prefixlen;
 	int result;
-	int extlen1, extlen2;
+	u_int8_t utf8[NAME_MAX + 1];
+	u_int32_t utf8len;
+	u_int16_t unicode[kHFSPlusMaxFileNameChars + 1];
+	size_t unicodelen;
 	
 	if (wantrsrc)
 		return (ENOENT);
@@ -598,19 +601,26 @@ cat_lookupmangled(struct hfsmount *hfsmp, struct cat_desc *descp, int wantrsrc,
 	if (descp->cd_parentcnid != outdescp->cd_parentcnid)
 		goto falsematch;
 
-	if (((u_int16_t)outdescp->cd_namelen < prefixlen) ||
-		bcmp(outdescp->cd_nameptr, descp->cd_nameptr, prefixlen-6) != 0)
+	/*
+	 * Compare the mangled version of file name looked up from the 
+	 * disk with the mangled name provided by the user.  Note that 
+	 * this comparison is case-sensitive, which should be fine
+	 * since we're trying to prevent user space from constructing
+	 * a mangled name that differs from the one they'd get from the
+	 * file system.
+	 */
+	result = utf8_decodestr(outdescp->cd_nameptr, outdescp->cd_namelen,
+			unicode, &unicodelen, sizeof(unicode), ':', 0);
+	if (result) {
 		goto falsematch;
-
-	extlen1 = CountFilenameExtensionChars(descp->cd_nameptr, descp->cd_namelen);
-	extlen2 = CountFilenameExtensionChars(outdescp->cd_nameptr, outdescp->cd_namelen);
-	if (extlen1 != extlen2)
+	}
+	result = ConvertUnicodeToUTF8Mangled(unicodelen, unicode, 
+			sizeof(utf8), &utf8len, utf8, fileID);
+	if ((result != 0) || 
+	    ((u_int16_t)descp->cd_namelen != utf8len) ||
+	    (bcmp(descp->cd_nameptr, utf8, utf8len) != 0)) { 
 		goto falsematch;
-
-	if (bcmp(outdescp->cd_nameptr + (outdescp->cd_namelen - extlen2),
-			descp->cd_nameptr + (descp->cd_namelen - extlen1),
-			extlen1) != 0)
-		goto falsematch;
+	}
 
 	return (0);
 
@@ -657,6 +667,7 @@ cat_lookupbykey(struct hfsmount *hfsmp, CatalogKey *keyp, int flags, u_int32_t h
 	if (!std_hfs) {
 		parentid = keyp->hfsPlus.parentID;
 	}
+	
 	encoding = getencoding(recp);
 	hint = iterator->hint.nodeNum;
 
@@ -707,7 +718,7 @@ cat_lookupbykey(struct hfsmount *hfsmp, CatalogKey *keyp, int flags, u_int32_t h
 				/* Update the inode number for this hard link */
 				attrp->ca_linkref = ilink;
 			}
-
+			
 			/* 
 			 * Set kHFSHasLinkChainBit for hard links, and reset it for all 
 			 * other items.  Also set linkCount to 1 for regular files.
@@ -728,12 +739,10 @@ cat_lookupbykey(struct hfsmount *hfsmp, CatalogKey *keyp, int flags, u_int32_t h
 				}
 			} else { 
 				/* Make sure that this non-hard link (regular) record is not 
-				 * an inode record or a valid hard link being that is not 
-				 * resolved for volume resize purposes.  We do not want to 
-				 * reset the hard link bit or reset link count on these records.
+				 * an inode record that was looked up and we do not end up 
+				 * reseting the hard link bit on it.
 				 */
-				if (!(flags & HFS_LOOKUP_HARDLINK) && 
-				    (parentid != hfsmp->hfs_private_desc[FILE_HARDLINKS].cd_cnid) && 
+				if ((parentid != hfsmp->hfs_private_desc[FILE_HARDLINKS].cd_cnid) && 
 				    (parentid != hfsmp->hfs_private_desc[DIR_HARDLINKS].cd_cnid)) {
 					/* This is not a hard link or inode and the link count bit was set */
 					if (attrp->ca_recflags & kHFSHasLinkChainMask) {
@@ -1111,10 +1120,11 @@ cat_rename (
 	 * When moving a directory, make sure its a valid move.
 	 */
 	if (directory && (from_cdp->cd_parentcnid != to_cdp->cd_parentcnid)) {
-		struct BTreeIterator iterator;
+		struct BTreeIterator *dir_iterator = NULL;
+
 		cnid_t cnid = from_cdp->cd_cnid;
 		cnid_t pathcnid = todir_cdp->cd_parentcnid;
-
+	
 		/* First check the obvious ones */
 		if (cnid == fsRtDirID  ||
 		    cnid == to_cdp->cd_parentcnid  ||
@@ -1122,25 +1132,33 @@ cat_rename (
 			result = EINVAL;
 			goto exit;
 		}
-		bzero(&iterator, sizeof(iterator));
+		/* now allocate the dir_iterator */
+		MALLOC (dir_iterator, struct BTreeIterator*, sizeof(struct BTreeIterator), M_TEMP, M_WAITOK);
+		if (dir_iterator == NULL) {
+			return ENOMEM; 
+		}
+		bzero(dir_iterator, sizeof(*dir_iterator));
+			
 		/*
 		 * Traverse destination path all the way back to the root
 		 * making sure that source directory is not encountered.
 		 *
 		 */
 		while (pathcnid > fsRtDirID) {
-			buildthreadkey(pathcnid, std_hfs,
-					(CatalogKey *)&iterator.key);
-			result = BTSearchRecord(fcb, &iterator, &btdata,
-					&datasize, NULL);
-			if (result) goto exit;
-			
+			buildthreadkey(pathcnid, std_hfs, (CatalogKey *)&dir_iterator->key);
+			result = BTSearchRecord(fcb, dir_iterator, &btdata, &datasize, NULL);
+			if (result) {
+				FREE(dir_iterator, M_TEMP);
+				goto exit;
+			}
 			pathcnid = getparentcnid(recp);
 			if (pathcnid == cnid || pathcnid == 0) {
 				result = EINVAL;
+				FREE(dir_iterator, M_TEMP);
 				goto exit;
 			}
 		}
+		FREE(dir_iterator, M_TEMP);
 	}
 
 	/*
@@ -1783,7 +1801,7 @@ catrec_update(const CatalogKey *ckp, CatalogRecord *crp, struct update_state *st
 			 * a hardlink.  In this case, update the linkcount from the cat_attr passed in.
 			 */
 			if ((descp->cd_cnid != attrp->ca_fileid) || (attrp->ca_linkcount > 1 ) ||
-					(file->hl_linkCount > 1)) {
+				(file->hl_linkCount > 1)) {
 				file->hl_linkCount = attrp->ca_linkcount;
 			}
 		}
@@ -1966,7 +1984,7 @@ cat_update_siblinglinks(struct hfsmount *hfsmp, cnid_t linkfileid, cnid_t prevli
 	/* Create an iterator for use by us temporarily */
 	MALLOC(iterator, BTreeIterator *, sizeof(*iterator), M_TEMP, M_WAITOK);
 	bzero(iterator, sizeof(*iterator));
-
+	
 	result = getkey(hfsmp, linkfileid, (CatalogKey *)&iterator->key);
 	if (result == 0) {
 		result = BTUpdateRecord(fcb, iterator, (IterateCallBackProcPtr)update_siblinglinks_callback, &state);
@@ -1974,7 +1992,7 @@ cat_update_siblinglinks(struct hfsmount *hfsmp, cnid_t linkfileid, cnid_t prevli
 	} else {
 		printf("hfs: cat_update_siblinglinks: couldn't resolve cnid %d\n", linkfileid);
 	}
-
+	
 	FREE (iterator, M_TEMP);
 	return MacToVFSError(result);
 }
@@ -2041,16 +2059,13 @@ cat_lookup_siblinglinks(struct hfsmount *hfsmp, cnid_t linkfileid, cnid_t *prevl
 	/* Create an iterator for use by us temporarily */
 	MALLOC(iterator, BTreeIterator *, sizeof(*iterator), M_TEMP, M_WAITOK);
 	bzero(iterator, sizeof(*iterator));
-
-
+	
 	if ((result = getkey(hfsmp, linkfileid, (CatalogKey *)&iterator->key))) {
-		printf("hfs: cat_lookup_siblinglinks: getkey for %d failed %d\n", linkfileid, result);
 		goto exit;
 	}
 	BDINIT(btdata, &file);
 
 	if ((result = BTSearchRecord(fcb, iterator, &btdata, NULL, NULL))) {
-		printf("hfs: cat_lookup_siblinglinks: cannot find %d\n", linkfileid);
 		goto exit;
 	}
 	/* The prev/next chain is only valid when kHFSHasLinkChainMask is set. */
@@ -2737,7 +2752,7 @@ typedef struct linkinfo linkinfo_t;
 
 /* State information for the getdirentries_callback function. */
 struct packdirentry_state {
-	int            cbs_extended;
+	int            cbs_flags;		/* VNODE_READDIR_* flags */
 	u_int32_t      cbs_parentID;
 	u_int32_t      cbs_index;
 	uio_t	       cbs_uio;
@@ -2814,7 +2829,7 @@ getdirentries_callback(const CatalogKey *ckp, const CatalogRecord *crp,
 		 * especially since it's closer to the return of this function.
 		 */		 
 			
-		if (state->cbs_extended) {
+		if (state->cbs_flags & VNODE_READDIR_EXTENDED) {
 			/* The last record has not been returned yet, so we 
 			 * want to stop after packing the last item 
 			 */
@@ -2832,16 +2847,26 @@ getdirentries_callback(const CatalogKey *ckp, const CatalogRecord *crp,
 		}
 	}
 
-	if (state->cbs_extended) {
+	if (state->cbs_flags & VNODE_READDIR_EXTENDED) {
 		entry = state->cbs_direntry;
 		nameptr = (u_int8_t *)&entry->d_name[0];
-		maxnamelen = NAME_MAX;
+		if (state->cbs_flags & VNODE_READDIR_NAMEMAX) {
+			/*
+			 * The NFS server sometimes needs to make filenames fit in
+			 * NAME_MAX bytes (since its client may not be able to
+			 * handle a longer name).  In that case, NFS will ask us
+			 * to mangle the name to keep it short enough.
+			 */
+			maxnamelen = NAME_MAX;
+		} else {
+			maxnamelen = sizeof(entry->d_name);
+		}
 	} else {
 		nameptr = (u_int8_t *)&catent.d_name[0];
-		maxnamelen = NAME_MAX;
+		maxnamelen = sizeof(catent.d_name);
 	}
 
-	if (state->cbs_extended && stop_after_pack) {
+	if ((state->cbs_flags & VNODE_READDIR_EXTENDED) && stop_after_pack) {
 		/* The last item returns a non-zero invalid cookie */
 		cnid = INT_MAX;		
 	} else {
@@ -2951,7 +2976,7 @@ encodestr:
 		}
 	}
 
-	if (state->cbs_extended) {
+	if (state->cbs_flags & VNODE_READDIR_EXTENDED) {
 		/*
 		 * The index is 1 relative and includes "." and ".."
 		 *
@@ -2983,7 +3008,7 @@ encodestr:
 		return (0);	/* stop */
 	}
 
-	if (!state->cbs_extended || state->cbs_hasprevdirentry) {
+	if (!(state->cbs_flags & VNODE_READDIR_EXTENDED) || state->cbs_hasprevdirentry) {
 		state->cbs_result = uiomove(uioaddr, uiosize, state->cbs_uio);
 		if (state->cbs_result == 0) {
 			++state->cbs_index;
@@ -3047,7 +3072,7 @@ encodestr:
 	}
 
 	/* Fill the direntry to be used the next time */
-	if (state->cbs_extended) {	
+	if (state->cbs_flags & VNODE_READDIR_EXTENDED) {	
 		if (stop_after_pack) {
 			state->cbs_eof = true;
 			return (0);	/* stop */
@@ -3167,8 +3192,8 @@ getdirentries_std_callback(const CatalogKey *ckp, const CatalogRecord *crp,
  * Pack a uio buffer with directory entries from the catalog
  */
 int
-cat_getdirentries(struct hfsmount *hfsmp, int entrycnt, directoryhint_t *dirhint,
-				  uio_t uio, int extended, int * items, int * eofflag)
+cat_getdirentries(struct hfsmount *hfsmp, u_int32_t entrycnt, directoryhint_t *dirhint,
+				  uio_t uio, int flags, int * items, int * eofflag)
 {
 	FCB* fcb;
 	BTreeIterator * iterator;
@@ -3180,7 +3205,10 @@ cat_getdirentries(struct hfsmount *hfsmp, int entrycnt, directoryhint_t *dirhint
 	int result;
 	int index;
 	int have_key;
-
+	int extended;
+	
+	extended = flags & VNODE_READDIR_EXTENDED;
+	
 	if (extended && (hfsmp->hfs_flags & HFS_STANDARD)) {
 		return (ENOTSUP);
 	}
@@ -3189,7 +3217,7 @@ cat_getdirentries(struct hfsmount *hfsmp, int entrycnt, directoryhint_t *dirhint
 	/*
 	 * Get a buffer for link info array, btree iterator and a direntry:
 	 */
-	maxlinks = MIN(entrycnt, uio_resid(uio) / SMALL_DIRENTRY_SIZE);
+	maxlinks = MIN(entrycnt, (u_int32_t)(uio_resid(uio) / SMALL_DIRENTRY_SIZE));
 	bufsize = MAXPATHLEN + (maxlinks * sizeof(linkinfo_t)) + sizeof(*iterator);
 	if (extended) {
 		bufsize += 2*sizeof(struct direntry);
@@ -3197,7 +3225,7 @@ cat_getdirentries(struct hfsmount *hfsmp, int entrycnt, directoryhint_t *dirhint
 	MALLOC(buffer, void *, bufsize, M_TEMP, M_WAITOK);
 	bzero(buffer, bufsize);
 
-	state.cbs_extended = extended;
+	state.cbs_flags = flags;
 	state.cbs_hasprevdirentry = false;
 	state.cbs_previlinkref = 0;
 	state.cbs_nlinks = 0;
@@ -3323,7 +3351,7 @@ cat_getdirentries(struct hfsmount *hfsmp, int entrycnt, directoryhint_t *dirhint
 		 * dummy values to copy the last directory entry stored in 
 		 * packdirentry_state 
 		 */
-		if (state.cbs_extended && (result == fsBTRecordNotFoundErr)) {
+		if (extended && (result == fsBTRecordNotFoundErr)) {
 			CatalogKey ckp;
 			CatalogRecord crp;
 

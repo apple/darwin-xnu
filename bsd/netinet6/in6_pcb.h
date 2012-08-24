@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008-2011 Apple Inc. All rights reserved.
+ * Copyright (c) 2008-2012 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -95,17 +95,13 @@
 #include <sys/appleapiopts.h>
 
 #ifdef KERNEL_PRIVATE
-#define	satosin6(sa)	((struct sockaddr_in6 *)(sa))
-#define	sin6tosa(sin6)	((struct sockaddr *)(sin6))
-#define	ifatoia6(ifa)	((struct in6_ifaddr *)(ifa))
-
 extern void in6_losing(struct inpcb *);
 extern int in6_pcbbind(struct inpcb *, struct sockaddr *, struct proc *);
 extern int in6_pcbconnect(struct inpcb *, struct sockaddr *, struct proc *);
 extern void in6_pcbdetach(struct inpcb *);
 extern void in6_pcbdisconnect(struct inpcb *);
 extern int in6_pcbladdr(struct inpcb *, struct sockaddr *,
-    struct in6_addr *, unsigned int *);
+    struct in6_addr *, struct ifnet **);
 extern struct inpcb *in6_pcblookup_local(struct inpcbinfo *, struct in6_addr *,
     u_int, int);
 extern struct inpcb *in6_pcblookup_hash(struct inpcbinfo *, struct in6_addr *,
@@ -126,6 +122,8 @@ extern int in6_selecthlim(struct in6pcb *, struct ifnet *);
 extern int in6_pcbsetport(struct in6_addr *, struct inpcb *,
     struct proc *, int);
 extern void init_sin6(struct sockaddr_in6 *sin6, struct mbuf *m);
+extern void in6p_route_copyout(struct inpcb *, struct route_in6 *);
+extern void in6p_route_copyin(struct inpcb *, struct route_in6 *);
 #endif /* KERNEL_PRIVATE */
 
 #endif /* !_NETINET6_IN6_PCB_H_ */

@@ -36,7 +36,7 @@
 #define IMAGE_AREA	(BITMAP_AREA    - HIB_MAP_SIZE)
 #define IMAGE2_AREA	(IMAGE_AREA     - HIB_MAP_SIZE)
 
-#define HIB_BASE sectINITPTB
+#define HIB_BASE segHIBB
 #define HIB_ENTRYPOINT acpi_wake_prot_entry
 
 uintptr_t pal_hib_map(uintptr_t v, uint64_t p);

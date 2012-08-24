@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2012 Apple, Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -84,8 +84,6 @@ short appletalk_inited = 0;
 void atalk_load(void);
 void atalk_unload(void);
 
-extern lck_mtx_t *domain_proto_mtx;
-
 extern int pktsIn, pktsOut;
 
 
@@ -99,9 +97,9 @@ void atalk_load()
 		for 2225395
 		this happens in adsp_open and is undone on ADSP_UNLINK 
 */
-	lck_mtx_unlock(domain_proto_mtx);
+	domain_proto_mtx_unlock(TRUE);
 	proto_register_input(PF_APPLETALK, at_input_packet, NULL, 0);
-	lck_mtx_lock(domain_proto_mtx);
+	domain_proto_mtx_lock();
 } /* atalk_load */
 
 /* Undo everything atalk_load() did. */
@@ -190,7 +188,7 @@ int pat_output(patp, mlist, dst_addr, type)
 				(m->m_next)->m_len);
 #endif
 		atalk_unlock();
-		dlil_output(patp->aa_ifp, PF_APPLETALK, m, NULL, &dst, 0);
+		dlil_output(patp->aa_ifp, PF_APPLETALK, m, NULL, &dst, 0, NULL);
 		atalk_lock();
 
 		pktsOut++;

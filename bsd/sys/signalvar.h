@@ -194,11 +194,11 @@ int sigprop[NSIG + 1] = {
 int	coredump(struct proc *p);
 void	execsigs(struct proc *p, thread_t thread);
 void	gsignal(int pgid, int sig);
-int	issignal(struct proc *p);
+int	issignal_locked(struct proc *p);
 int	CURSIG(struct proc *p);
 int clear_procsiglist(struct proc *p, int bit, int in_signalstart);
 int set_procsigmask(struct proc *p, int bit);
-void	postsig(int sig);
+void	postsig_locked(int sig);
 void	siginit(struct proc *p) __attribute__((section("__TEXT, initcode")));
 void	trapsignal(struct proc *p, int sig, unsigned code);
 void	pt_setrunnable(struct proc *p);

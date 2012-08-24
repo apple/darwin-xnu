@@ -45,31 +45,25 @@
 
 #if defined(MACH_KERNEL)
 
-#if defined(BSMALL_LATER)
-/* Really small configurations don't need type checking */
-#define __MigTypeCheck 0
-#else
+#if !defined(__MigTypeCheck)
 /* Turn MIG type checking on by default for kernel */
 #define __MigTypeCheck 1
 #endif
+
 #define __MigKernelSpecificCode 1
 #define _MIG_KERNEL_SPECIFIC_CODE_ 1
 
-/* Otherwise check legacy setting (temporary) */
-#elif defined(TypeCheck)  
-
-#define __MigTypeCheck TypeCheck
-
 #elif !defined(__MigTypeCheck)
 
-/* otherwise, default MIG type checking on - except in small configurations */
-#if defined(BSMALL)
-#define __MigTypeCheck 0
+#if defined(TypeCheck)
+/* use legacy setting (temporary) */
+#define __MigTypeCheck TypeCheck
 #else
+/* default MIG type checking on */
 #define __MigTypeCheck 1
 #endif
 
-#endif /* !defined(__MigTypeCheck) */
+#endif /* !defined(MACH_KERNEL) && !defined(__MigTypeCheck) */
 
 /*
  * Pack MIG message structs.

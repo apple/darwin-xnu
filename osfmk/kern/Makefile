@@ -24,6 +24,7 @@ EXPORT_ONLY_FILES = \
 	kalloc.h \
 	kext_alloc.h \
 	kern_types.h \
+	ledger.h \
 	lock.h \
 	locks.h \
 	host.h \

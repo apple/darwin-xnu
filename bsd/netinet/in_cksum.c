@@ -177,7 +177,7 @@ inet_cksum(struct mbuf *m, unsigned int nxt, unsigned int skip,
 		for (; skip && m; m = m->m_next) {
 			if (m->m_len > skip) {
 				mlen = m->m_len - skip;
-				w = (u_short *)(m->m_data+skip);
+				w = (u_short *)(void *)(m->m_data+skip);
 				goto skip_start;
 			} else {
 				skip -= m->m_len;
@@ -200,7 +200,7 @@ inet_cksum(struct mbuf *m, unsigned int nxt, unsigned int skip,
 			 */
 			s_util.c[1] = *(char *)w;
 			sum += s_util.s;
-			w = (u_short *)((char *)w + 1);
+			w = (u_short *)(void *)((char *)w + 1);
 			mlen = m->m_len - 1;
 			len--;
 		} else {
@@ -218,7 +218,7 @@ skip_start:
 			REDUCE;
 			sum <<= 8;
 			s_util.c[0] = *(u_char *)w;
-			w = (u_short *)((char *)w + 1);
+			w = (u_short *)(void *)((char *)w + 1);
 			mlen--;
 			byte_swapped = 1;
 		}

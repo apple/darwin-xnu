@@ -118,7 +118,7 @@
 /*
  * NFS globals
  */
-struct nfsstats	nfsstats;
+struct nfsstats	__attribute__((aligned(8))) nfsstats;
 size_t nfs_mbuf_mhlen = 0, nfs_mbuf_minclsize = 0;
 
 /*
@@ -1055,7 +1055,7 @@ nfsm_rpchead2(struct nfsmount *nmp, int sotype, int prog, int vers, int proc, in
 			if (groupcount < 1)
 				return (EINVAL);
 
-			auth_len = ((((groupcount - 1) > nmp->nm_numgrps) ?
+			auth_len = (((((uint32_t)groupcount - 1) > nmp->nm_numgrps) ?
 				nmp->nm_numgrps : (groupcount - 1)) << 2) +
 				5 * NFSX_UNSIGNED;
 			break;
@@ -1169,7 +1169,7 @@ add_cred:
 			error = 0;
 			req->r_auth = auth_type = RPCAUTH_SYS;
 			(void)kauth_cred_getgroups(cred, grouplist, &groupcount);
-			auth_len = ((((groupcount - 1) > nmp->nm_numgrps) ?
+			auth_len = (((((uint32_t)groupcount - 1) > nmp->nm_numgrps) ?
 				nmp->nm_numgrps : (groupcount - 1)) << 2) +
 				5 * NFSX_UNSIGNED;
 			authsiz = nfsm_rndup(auth_len);
@@ -1216,6 +1216,7 @@ nfs_parsefattr(struct nfsm_chain *nmc, int nfsvers, struct nfs_vattr *nvap)
 {
 	int error = 0;
 	enum vtype vtype;
+	nfstype nvtype;
 	u_short vmode;
 	uint32_t val, val2;
 	dev_t rdev;
@@ -1237,12 +1238,12 @@ nfs_parsefattr(struct nfsm_chain *nmc, int nfsvers, struct nfs_vattr *nvap)
 	NFS_BITMAP_SET(nvap->nva_bitmap, NFS_FATTR_TIME_MODIFY);
 	NFS_BITMAP_SET(nvap->nva_bitmap, NFS_FATTR_TIME_METADATA);
 
-	nfsm_chain_get_32(error, nmc, vtype);
+	nfsm_chain_get_32(error, nmc, nvtype);
 	nfsm_chain_get_32(error, nmc, vmode);
 	nfsmout_if(error);
 
 	if (nfsvers == NFS_VER3) {
-		nvap->nva_type = nfstov_type(vtype, nfsvers);
+		nvap->nva_type = vtype = nfstov_type(nvtype, nfsvers);
 	} else {
 		/*
 		 * The duplicate information returned in fa_type and fa_mode
@@ -1261,7 +1262,7 @@ nfs_parsefattr(struct nfsm_chain *nmc, int nfsvers, struct nfs_vattr *nvap)
 		 * contain any type information (while also introducing
 		 * sockets and FIFOs for fa_type).
 		 */
-		vtype = nfstov_type(vtype, nfsvers);
+		vtype = nfstov_type(nvtype, nfsvers);
 		if ((vtype == VNON) || ((vtype == VREG) && ((vmode & S_IFMT) != 0)))
 			vtype = IFTOVT(vmode);
 		nvap->nva_type = vtype;
@@ -1635,7 +1636,7 @@ nfs_getattrcache(nfsnode_t np, struct nfs_vattr *nvaper, int flags)
 	/* Check if the attributes are valid. */
 	if (!NATTRVALID(np) || ((flags & NGA_ACL) && !NACLVALID(np))) {
 		FSDBG(528, np, 0, 0xffffff01, ENOENT);
-		OSAddAtomic(1, &nfsstats.attrcache_misses);
+		OSAddAtomic64(1, &nfsstats.attrcache_misses);
 		return (ENOENT);
 	}
 
@@ -1644,18 +1645,18 @@ nfs_getattrcache(nfsnode_t np, struct nfs_vattr *nvaper, int flags)
 	microuptime(&nowup);
 	if ((nowup.tv_sec - np->n_attrstamp) >= timeo) {
 		FSDBG(528, np, 0, 0xffffff02, ENOENT);
-		OSAddAtomic(1, &nfsstats.attrcache_misses);
+		OSAddAtomic64(1, &nfsstats.attrcache_misses);
 		return (ENOENT);
 	}
 	if ((flags & NGA_ACL) && ((nowup.tv_sec - np->n_aclstamp) >= timeo)) {
 		FSDBG(528, np, 0, 0xffffff02, ENOENT);
-		OSAddAtomic(1, &nfsstats.attrcache_misses);
+		OSAddAtomic64(1, &nfsstats.attrcache_misses);
 		return (ENOENT);
 	}
 
 	nvap = &np->n_vattr;
 	FSDBG(528, np, nvap->nva_size, np->n_size, 0xcace);
-	OSAddAtomic(1, &nfsstats.attrcache_hits);
+	OSAddAtomic64(1, &nfsstats.attrcache_hits);
 
 	if (nvap->nva_type != VREG) {
 		np->n_size = nvap->nva_size;
@@ -2099,12 +2100,12 @@ nfsrv_namei(
 
 	/* Check for encountering a symbolic link */
 	if (cnp->cn_flags & ISSYMLINK) {
-#ifndef __LP64__
+#if CONFIG_VFS_FUNNEL
 	        if ((cnp->cn_flags & FSNODELOCKHELD)) {
 		        cnp->cn_flags &= ~FSNODELOCKHELD;
 			unlock_fsnode(nip->ni_dvp, NULL);
 		}
-#endif /* __LP64__ */
+#endif /* CONFIG_VFS_FUNNEL */
 		if (cnp->cn_flags & (LOCKPARENT | WANTPARENT))
 			vnode_put(nip->ni_dvp);
 		if (nip->ni_vp) {

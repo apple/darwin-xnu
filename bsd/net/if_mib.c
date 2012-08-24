@@ -108,12 +108,12 @@ SYSCTL_NODE(_net_link_generic, IFMIB_IFALLDATA, ifalldata, CTLFLAG_RD | CTLFLAG_
 
 static int make_ifmibdata(struct ifnet *, int *, struct sysctl_req *);
 
-int 
+int
 make_ifmibdata(struct ifnet *ifp, int *name, struct sysctl_req *req)
 {
 	struct ifmibdata	ifmd;
 	int error = 0;
-	
+
 	switch(name[1]) {
 	default:
 		error = ENOENT;
@@ -127,15 +127,15 @@ make_ifmibdata(struct ifnet *ifp, int *name, struct sysctl_req *req)
 		if (ifnet_is_attached(ifp, 0)) {
 			snprintf(ifmd.ifmd_name, sizeof(ifmd.ifmd_name), "%s%d",
 				ifp->if_name, ifp->if_unit);
-	
+
 #define COPY(fld) ifmd.ifmd_##fld = ifp->if_##fld
 			COPY(pcount);
 			COPY(flags);
 			if_data_internal_to_if_data64(ifp, &ifp->if_data, &ifmd.ifmd_data);
 #undef COPY
-			ifmd.ifmd_snd_len = ifp->if_snd.ifq_len;
-			ifmd.ifmd_snd_maxlen = ifp->if_snd.ifq_maxlen;
-			ifmd.ifmd_snd_drops = ifp->if_snd.ifq_drops;
+			ifmd.ifmd_snd_len = IFCQ_LEN(&ifp->if_snd);
+			ifmd.ifmd_snd_maxlen = IFCQ_MAXLEN(&ifp->if_snd);
+			ifmd.ifmd_snd_drops = ifp->if_snd.ifcq_dropcnt.packets;
 		}
 		error = SYSCTL_OUT(req, &ifmd, sizeof ifmd);
 		if (error || !req->newptr)
@@ -176,15 +176,25 @@ make_ifmibdata(struct ifnet *ifp, int *name, struct sysctl_req *req)
 		break;
 
 	case IFDATA_SUPPLEMENTAL: {
-		struct if_traffic_class if_tc;
+		struct ifmibdata_supplemental *ifmd_supp;
 
-		if_copy_traffic_class(ifp, &if_tc);
-		
-		error = SYSCTL_OUT(req, &if_tc, sizeof(struct if_traffic_class));
+		if ((ifmd_supp = _MALLOC(sizeof (*ifmd_supp), M_TEMP,
+		    M_NOWAIT | M_ZERO)) == NULL) {
+			error = ENOMEM;
+			break;
+		}
+
+		if_copy_traffic_class(ifp, &ifmd_supp->ifmd_traffic_class);
+		if_copy_data_extended(ifp, &ifmd_supp->ifmd_data_extended);
+		if_copy_packet_stats(ifp, &ifmd_supp->ifmd_packet_stats);
+		if_copy_rxpoll_stats(ifp, &ifmd_supp->ifmd_rxpoll_stats);
+
+		error = SYSCTL_OUT(req, ifmd_supp, sizeof (*ifmd_supp));
+		_FREE(ifmd_supp, M_TEMP);
 		break;
 	}
 	}
-	
+
 	return error;
 }
 

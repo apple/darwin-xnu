@@ -129,6 +129,10 @@ extern void dtrace_lazy_dofs_duplicate(proc_t, proc_t);
 
 #include <sys/sdt.h>
 
+#if CONFIG_MEMORYSTATUS
+#include <sys/kern_memorystatus.h>
+#endif
+
 /* XXX routines which should have Mach prototypes, but don't */
 void thread_set_parent(thread_t parent, int pid);
 extern void act_thread_catt(void *ctx);
@@ -158,8 +162,8 @@ void proc_vfork_end(proc_t parent_proc);
  * Notes:	Although this function increments a count, a count in
  *		excess of 1 is not currently supported.  According to the
  *		POSIX standard, calling anything other than execve() or
- *		_exit() fillowing a vfork(), including calling vfork()
- *		itself again, will result in undefned behaviour
+ *		_exit() following a vfork(), including calling vfork()
+ *		itself again, will result in undefined behaviour
  */
 void
 proc_vfork_begin(proc_t parent_proc)
@@ -179,7 +183,7 @@ proc_vfork_begin(proc_t parent_proc)
  *
  * Returns:	(void)
  *
- * Notes:	Decerements the count; currently, reentrancy of vfork()
+ * Notes:	Decrements the count; currently, reentrancy of vfork()
  *		is unsupported on the current process
  */
 void
@@ -189,7 +193,6 @@ proc_vfork_end(proc_t parent_proc)
 	parent_proc->p_vforkcnt--;
 	if (parent_proc->p_vforkcnt < 0)
 		panic("vfork cnt is -ve");
-	/* resude the vfork count; clear the flag when it goes to 0 */
 	if (parent_proc->p_vforkcnt == 0)
 		parent_proc->p_lflag  &= ~P_LVFORK;
 	proc_unlock(parent_proc);
@@ -650,6 +653,12 @@ fork1(proc_t parent_proc, thread_t *child_threadp, int kind)
 	/* return the thread pointer to the caller */
 	*child_threadp = child_thread;
 
+#if CONFIG_MEMORYSTATUS
+	if (!err) {
+		memorystatus_list_add(child_proc->p_pid, DEFAULT_JETSAM_PRIORITY, -1);
+	}
+#endif
+
 bad:
 	/*
 	 * In the error case, we return a 0 value for the returned pid (but
@@ -671,48 +680,53 @@ bad:
  *		this is done by reassociating the parent process structure
  *		with the task, thread, and uthread.
  *
+ *		Refer to the ASCII art above vfork() to figure out the
+ *		state we're undoing.
+ *
  * Parameters:	child_proc		Child process
  *		retval			System call return value array
  *		rval			Return value to present to parent
  *
  * Returns:	void
  *
- * Note:	The caller resumes or exits the parent, as appropriate, after
- *		callling this function.
+ * Notes:	The caller resumes or exits the parent, as appropriate, after
+ *		calling this function.
  */
 void
 vfork_return(proc_t child_proc, int32_t *retval, int rval)
 {
-	proc_t parent_proc = child_proc->p_pptr;
-	thread_t parent_thread = (thread_t)current_thread();
-	uthread_t parent_uthread = (uthread_t)get_bsdthread_info(parent_thread);
+	task_t parent_task = get_threadtask(child_proc->p_vforkact);
+	proc_t parent_proc = get_bsdtask_info(parent_task);
+	thread_t th = current_thread();
+	uthread_t uth = get_bsdthread_info(th);
 	
-	act_thread_catt(parent_uthread->uu_userstate);
+	act_thread_catt(uth->uu_userstate);
 
-	/* end vfork in parent */
+	/* clear vfork state in parent proc structure */
 	proc_vfork_end(parent_proc);
 
 	/* REPATRIATE PARENT TASK, THREAD, UTHREAD */
-	parent_uthread->uu_userstate = 0;
-	parent_uthread->uu_flag &= ~UT_VFORK;
+	uth->uu_userstate = 0;
+	uth->uu_flag &= ~UT_VFORK;
 	/* restore thread-set-id state */
-	if (parent_uthread->uu_flag & UT_WASSETUID) {
-		parent_uthread->uu_flag |= UT_SETUID;
-		parent_uthread->uu_flag &= UT_WASSETUID;
+	if (uth->uu_flag & UT_WASSETUID) {
+		uth->uu_flag |= UT_SETUID;
+		uth->uu_flag &= UT_WASSETUID;
 	}
-	parent_uthread->uu_proc = 0;
-	parent_uthread->uu_sigmask = parent_uthread->uu_vforkmask;
-	child_proc->p_lflag  &= ~P_LINVFORK;
-	child_proc->p_vforkact = (void *)0;
+	uth->uu_proc = 0;
+	uth->uu_sigmask = uth->uu_vforkmask;
 
-	thread_set_parent(parent_thread, rval);
+	proc_lock(child_proc);
+	child_proc->p_lflag &= ~P_LINVFORK;
+	child_proc->p_vforkact = 0;
+	proc_unlock(child_proc);
+
+	thread_set_parent(th, rval);
 
 	if (retval) {
 		retval[0] = rval;
 		retval[1] = 0;			/* mark parent */
 	}
-
-	return;
 }
 
 
@@ -1006,6 +1020,12 @@ forkproc_free(proc_t p)
 	/* Need to undo the effects of the fdcopy(), if any */
 	fdfree(p);
 
+#if !CONFIG_EMBEDDED
+	if (p->p_legacy_behavior & PROC_LEGACY_BEHAVIOR_IOTHROTTLE) {
+		throttle_legacy_process_decr();
+	}
+#endif
+
 	/*
 	 * Drop the reference on a text vnode pointer, if any
 	 * XXX This code is broken in forkproc(); see <rdar://4256419>;
@@ -1174,9 +1194,20 @@ retry:
 	 * Increase reference counts on shared objects.
 	 * The p_stats and p_sigacts substructs are set in vm_fork.
 	 */
+#if !CONFIG_EMBEDDED
+	child_proc->p_flag = (parent_proc->p_flag & (P_LP64 | P_TRANSLATED | P_AFFINITY | P_DISABLE_ASLR | P_DELAYIDLESLEEP));
+#else /*  !CONFIG_EMBEDDED */
 	child_proc->p_flag = (parent_proc->p_flag & (P_LP64 | P_TRANSLATED | P_AFFINITY | P_DISABLE_ASLR));
+#endif /* !CONFIG_EMBEDDED */
 	if (parent_proc->p_flag & P_PROFIL)
 		startprofclock(child_proc);
+
+#if !CONFIG_EMBEDDED
+	if (child_proc->p_legacy_behavior & PROC_LEGACY_BEHAVIOR_IOTHROTTLE) {
+		throttle_legacy_process_incr();
+	}
+#endif
+
 	/*
 	 * Note that if the current thread has an assumed identity, this
 	 * credential will be granted to the new process.
@@ -1319,6 +1350,9 @@ retry:
 	}
 #endif
 
+	/* Default to no tracking of dirty state */
+	child_proc->p_dirty = 0;
+
 bad:
 	return(child_proc);
 }
@@ -1393,6 +1427,7 @@ uthread_alloc(task_t task, thread_t thread, int noinherit)
 	p = (proc_t) get_bsdtask_info(task);
 	uth = (uthread_t)ut;
 	uth->uu_kwe.kwe_uth = uth;
+	uth->uu_thread = thread;
 
 	/*
 	 * Thread inherits credential from the creating thread, if both
@@ -1445,6 +1480,9 @@ uthread_alloc(task_t task, thread_t thread, int noinherit)
 		if (p->p_dtrace_ptss_pages != NULL) {
 			uth->t_dtrace_scratch = dtrace_ptss_claim_entry(p);
 		}
+#endif
+#if CONFIG_MACF
+		mac_thread_label_init(uth);
 #endif
 	}
 
@@ -1532,6 +1570,9 @@ uthread_cleanup(task_t task, void *uthread, void * bsd_info)
 		if (tmpptr != NULL) {
 			dtrace_ptss_release_entry(p, tmpptr);
 		}
+#endif
+#if CONFIG_MACF
+		mac_thread_label_destroy(uth);
 #endif
 	}
 }

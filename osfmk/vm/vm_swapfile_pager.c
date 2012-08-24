@@ -412,6 +412,7 @@ swapfile_pager_data_request(
 			   kernel_mapping,
 			   dst_pnum,
 			   VM_PROT_READ | VM_PROT_WRITE,
+			   VM_PROT_NONE,
 			   0,
 			   TRUE);
 

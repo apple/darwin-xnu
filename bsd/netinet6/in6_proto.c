@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008-2010 Apple Inc. All rights reserved.
+ * Copyright (c) 2008-2012 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -395,7 +395,7 @@ int	ip6_forwarding = IPV6FORWARDING;	/* act as router? */
 int	ip6_sendredirects = IPV6_SENDREDIRECTS;
 int	ip6_defhlim = IPV6_DEFHLIM;
 int	ip6_defmcasthlim = IPV6_DEFAULT_MULTICAST_HOPS;
-int	ip6_accept_rtadv = 0;	/* "IPV6FORWARDING ? 0 : 1" is dangerous */
+int	ip6_accept_rtadv = 1;	/* deprecated */
 int	ip6_maxfragpackets;	/* initialized in frag6.c:frag6_init() */
 int	ip6_maxfrags;
 int	ip6_log_interval = 5;
@@ -417,7 +417,7 @@ int	ip6_maxdynroutes = 1024;	/* Max # of routes created via redirect */
 int	ip6_only_allow_rfc4193_prefix = 0;	/* Only allow RFC4193 style Unique Local IPv6 Unicast prefixes */
 
 u_int32_t ip6_id = 0UL;
-int	ip6_keepfaith = 0;
+static int ip6_keepfaith = 0;
 time_t	ip6_log_time = (time_t)0L;
 int	nd6_onlink_ns_rfc4861 = 0; /* allow 'on-link' nd6 NS (as in RFC 4861) */
 
@@ -521,10 +521,10 @@ SYSCTL_INT(_net_inet6_ip6, IPV6CTL_MAXFRAGPACKETS,
 SYSCTL_INT(_net_inet6_ip6, IPV6CTL_MAXFRAGS,
         maxfrags, CTLFLAG_RW | CTLFLAG_LOCKED,           &ip6_maxfrags,  0, "");
 SYSCTL_INT(_net_inet6_ip6, IPV6CTL_ACCEPT_RTADV,
-	accept_rtadv, CTLFLAG_RW | CTLFLAG_LOCKED,
+	accept_rtadv, CTLFLAG_RD | CTLFLAG_LOCKED,
 	&ip6_accept_rtadv,	0, "");
 SYSCTL_INT(_net_inet6_ip6, IPV6CTL_KEEPFAITH,
-	keepfaith, CTLFLAG_RW | CTLFLAG_LOCKED,		&ip6_keepfaith,	0, "");
+	keepfaith, CTLFLAG_RD | CTLFLAG_LOCKED,		&ip6_keepfaith,	0, "");
 SYSCTL_INT(_net_inet6_ip6, IPV6CTL_LOG_INTERVAL,
 	log_interval, CTLFLAG_RW | CTLFLAG_LOCKED, &ip6_log_interval,	0, "");
 SYSCTL_INT(_net_inet6_ip6, IPV6CTL_HDRNESTLIMIT,
@@ -609,3 +609,5 @@ SYSCTL_INT(_net_inet6_icmp6, ICMPV6CTL_ND6_DEBUG,
 SYSCTL_INT(_net_inet6_icmp6, ICMPV6CTL_ND6_ONLINKNSRFC4861,
 	nd6_onlink_ns_rfc4861, CTLFLAG_RW | CTLFLAG_LOCKED, &nd6_onlink_ns_rfc4861, 0,
 	"Accept 'on-link' nd6 NS in compliance with RFC 4861.");
+SYSCTL_INT(_net_inet6_icmp6, ICMPV6CTL_ND6_OPTIMISTIC_DAD,
+	nd6_optimistic_dad, CTLFLAG_RW | CTLFLAG_LOCKED,	&nd6_optimistic_dad,		0, "");

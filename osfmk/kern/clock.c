@@ -126,6 +126,9 @@ static thread_call_data_t	calend_wakecall;
 
 extern	void	IOKitResetTime(void);
 
+void _clock_delay_until_deadline(uint64_t		interval,
+								 uint64_t		deadline);
+
 static uint64_t		clock_boottime;				/* Seconds boottime epoch */
 
 #define TIME_ADD(rsecs, secs, rfrac, frac, unit)	\
@@ -773,6 +776,15 @@ mach_wait_until_continue(
 	/*NOTREACHED*/
 }
 
+/*
+ * mach_wait_until_trap: Suspend execution of calling thread until the specified time has passed
+ *
+ * Parameters:    args->deadline          Amount of time to wait
+ *
+ * Returns:        0                      Success
+ *                !0                      Not success           
+ *
+ */
 kern_return_t
 mach_wait_until_trap(
 	struct mach_wait_until_trap_args	*args)
@@ -796,27 +808,44 @@ clock_delay_until(
 	if (now >= deadline)
 		return;
 
-	if (	(deadline - now) < (8 * sched_cswtime)	||
+	_clock_delay_until_deadline(deadline - now, deadline);
+}
+
+/*
+ * Preserve the original precise interval that the client
+ * requested for comparison to the spin threshold.
+ */
+void
+_clock_delay_until_deadline(
+	uint64_t		interval,
+	uint64_t		deadline)
+{
+
+	if (interval == 0)
+		return;
+
+	if (	ml_delay_should_spin(interval)	||
 			get_preemption_level() != 0				||
-			ml_get_interrupts_enabled() == FALSE	)
+			ml_get_interrupts_enabled() == FALSE	) {
 		machine_delay_until(deadline);
-	else {
-		assert_wait_deadline((event_t)clock_delay_until, THREAD_UNINT, deadline - sched_cswtime);
+	} else {
+		assert_wait_deadline((event_t)clock_delay_until, THREAD_UNINT, deadline);
 
 		thread_block(THREAD_CONTINUE_NULL);
 	}
 }
+
 
 void
 delay_for_interval(
 	uint32_t		interval,
 	uint32_t		scale_factor)
 {
-	uint64_t		end;
+	uint64_t		abstime;
 
-	clock_interval_to_deadline(interval, scale_factor, &end);
+	clock_interval_to_absolutetime_interval(interval, scale_factor, &abstime);
 
-	clock_delay_until(end);
+	_clock_delay_until_deadline(abstime, mach_absolute_time() + abstime);
 }
 
 void

@@ -19,7 +19,6 @@ DATAFILES = \
 	bootp.h icmp6.h if_ether.h icmp_var.h \
 	igmp.h igmp_var.h in.h in_pcb.h \
 	in_systm.h in_var.h ip.h ip6.h \
-	ip_fw.h ip_fw2.h \
 	ip_icmp.h ip_mroute.h ip_var.h tcp.h \
 	tcp_fsm.h tcp_seq.h tcp_timer.h tcp_var.h \
 	tcpip.h udp.h udp_var.h
@@ -29,8 +28,10 @@ KERNELFILES = \
 
 PRIVATE_DATAFILES = \
 	ip_dummynet.h \
+	ip_flowid.h \
+	ip_fw.h ip_fw2.h \
 	tcp_debug.h \
-	in_gif.h ip_compat.h
+	in_gif.h ip_compat.h 
 
 PRIVATE_KERNELFILES = ${KERNELFILES} \
 	ip_ecn.h ip_encap.h

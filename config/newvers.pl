@@ -18,6 +18,10 @@
 #   ###KERNEL_BUILD_OBJROOT###              xnu/xnu-690.obj~2/RELEASE_PPC
 #   ###KERNEL_BUILD_DATE###                 Sun Oct 24 05:33:28 PDT 2004
 
+use File::Basename;
+
+use strict;
+
 sub ReadFile {
   my ($fileName) = @_;
   my $data;
@@ -39,17 +43,43 @@ sub WriteFile {
   close(OUT);
 }
 
+die("SRCROOT not defined") unless defined($ENV{'SRCROOT'});
+die("OBJROOT not defined") unless defined($ENV{'OBJROOT'});
+
 my $versfile = "MasterVersion";
-$versfile = "$ENV{'SRCROOT'}/config/$versfile" if ($ENV{'SRCROOT'});
-my $BUILD_OBJROOT=$ENV{'OBJROOT'} . "/" . $ENV{'KERNEL_CONFIG'} . '_' . $ENV{'ARCH_CONFIG'};
-if($ENV{'MACHINE_CONFIG'} ne "DEFAULT") {
-    $BUILD_OBJROOT .= '_' . $ENV{'MACHINE_CONFIG'};
-}
+$versfile = "$ENV{'SRCROOT'}/config/$versfile";
+my $BUILD_SRCROOT=$ENV{'SRCROOT'};
+$BUILD_SRCROOT =~ s,/+$,,;
+my $BUILD_OBJROOT=$ENV{'OBJROOT'};
+$BUILD_OBJROOT =~ s,/+$,,;
+my $BUILD_OBJPATH=$ENV{'OBJPATH'} || $ENV{'OBJROOT'};
+$BUILD_OBJPATH =~ s,/+$,,;
 my $BUILD_DATE = `date`;
 $BUILD_DATE =~ s/[\n\t]//g;
 my $BUILDER=`whoami`;
 $BUILDER =~ s/[\n\t]//g;
-$BUILD_OBJROOT =~ s|.*(xnu.*)|$1|;
+
+# Handle two scenarios:
+# SRCROOT=/tmp/xnu
+# OBJROOT=/tmp/xnu/BUILD/obj
+# OBJPATH=/tmp/xnu/BUILD/obj/RELEASE_X86_64
+#
+# SRCROOT=/SourceCache/xnu/xnu-1234
+# OBJROOT=/tmp/xnu/xnu-1234~1.obj
+# OBJPATH=/tmp/xnu/xnu-1234~1.obj/RELEASE_X86_64
+#
+# If SRCROOT is a strict prefix of OBJPATH, we
+# want to preserve the "interesting" part
+# starting with "xnu". If it's not a prefix,
+# the basename of OBJROOT itself is "interesting".
+
+if ($BUILD_OBJPATH =~ m,^$BUILD_SRCROOT/(.*)$,) {
+    $BUILD_OBJROOT = basename($BUILD_SRCROOT) . "/" . $1;
+} elsif ($BUILD_OBJPATH =~ m,^$BUILD_OBJROOT/(.*)$,) {
+    $BUILD_OBJROOT = basename($BUILD_OBJROOT) . "/" . $1;
+} else {
+    # Use original OBJROOT
+}
 
 my $rawvers = &ReadFile($versfile);
 #$rawvers =~ s/\s//g;

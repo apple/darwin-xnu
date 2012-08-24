@@ -76,6 +76,7 @@
 #include <sys/ubc.h>
 #include <sys/malloc.h>
 #include <sys/fcntl.h>
+#include <sys/time.h>
 
 #include <nfs/rpcv2.h>
 #include <nfs/nfsproto.h>
@@ -1177,3 +1178,36 @@ nfs_data_update_size(nfsnode_t np, int datalocked)
 	FSDBG_BOT(272, np, np->n_flag, np->n_size, np->n_newsize);
 }
 
+#define DODEBUG 1
+int
+nfs_mount_is_dirty(mount_t mp)
+{
+	u_long i;
+	nfsnode_t np;
+#ifdef DODEBUG	
+	struct timeval now, then, diff;
+	u_long ncnt = 0;
+	microuptime(&now);
+#endif
+	lck_mtx_lock(nfs_node_hash_mutex);
+	for (i = 0; i <= nfsnodehash; i++) {
+		LIST_FOREACH(np, &nfsnodehashtbl[i], n_hash) {
+#ifdef DODEBUG
+			ncnt++;
+#endif			
+			if (np->n_mount == mp && !LIST_EMPTY(&np->n_dirtyblkhd))
+				goto out;
+		}
+	}
+out:
+	lck_mtx_unlock(nfs_node_hash_mutex);
+#ifdef DODEBUG
+	microuptime(&then);
+	timersub(&then, &now, &diff);
+	
+	printf("nfs_mount_is_dirty took %lld mics for %ld slots and %ld nodes return %d\n",
+	       (uint64_t)diff.tv_sec * 1000000LL + diff.tv_usec, i, ncnt, (i <= nfsnodehash));
+#endif
+
+	return (i <=  nfsnodehash);
+}

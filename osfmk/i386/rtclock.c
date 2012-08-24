@@ -40,7 +40,6 @@
  */
 
 #include <platforms.h>
-#include <mach_kdb.h>
 
 #include <mach/mach_types.h>
 
@@ -378,6 +377,7 @@ rtclock_init(void)
 		rtc_timer_init();
 		clock_timebase_init();
 		ml_init_lock_timeout();
+		ml_init_delay_spin_threshold();
 	}
 
     	/* Set fixed configuration for lapic timers */

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2006 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2010 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -63,7 +63,6 @@
 #include "default_pager_internal.h"
 #include <default_pager/default_pager_object_server.h>
 #include <kern/host.h>
-#include <kern/ledger.h>
 #include <mach/host_info.h>
 #include <mach/host_priv.h>
 #include <mach/vm_map.h>
@@ -282,20 +281,9 @@ start_def_pager( __unused char *bs_device )
 */
 /*
 	MACH_PORT_FACE		security_port;
-	MACH_PORT_FACE		root_ledger_wired;
-	MACH_PORT_FACE		root_ledger_paged;
 */
 	__unused static char here[] = "main";
 
-
-
-/*
-	default_pager_host_port = ipc_port_make_send(realhost.host_priv_self);
-	master_device_port = ipc_port_make_send(master_device_port);
-	root_ledger_wired = ipc_port_make_send(root_wired_ledger_port);
-	root_ledger_paged = ipc_port_make_send(root_paged_ledger_port);
-	security_port = ipc_port_make_send(realhost.host_security_self);
-*/
 
 
 #if NORMA_VM

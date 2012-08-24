@@ -172,7 +172,7 @@ s/\$//g
 	}
 	NR == 1 {
 		printf "\n/* The casts are bogus but will do for now. */\n" > sysent
-		printf "__private_extern__ struct sysent %s[] = {\n",switchname > sysent
+		printf "__private_extern__ const struct sysent %s[] = {\n",switchname > sysent
 
 		printf "#ifndef %s\n", sysproto_h > sysarg
 		printf "#define\t%s\n\n", sysproto_h > sysarg
@@ -210,7 +210,7 @@ s/\$//g
 		printf "#define\tPADR_(t)\t0\n" > sysarg
 		printf "#endif\n" > sysarg
 		printf "\n__BEGIN_DECLS\n" > sysarg
-		printf "#ifndef __arm__\n" > sysarg
+		printf "#if !defined(__arm__)\n" > sysarg
 		printf "void munge_w(const void *, void *);  \n" > sysarg
 		printf "void munge_ww(const void *, void *);  \n" > sysarg
 		printf "void munge_www(const void *, void *);  \n" > sysarg
@@ -243,7 +243,7 @@ s/\$//g
 		printf "void munge_wwwsw(const void *, void *);  \n" > sysarg
 		printf "void munge_llllll(const void *, void *); \n" > sysarg
 		printf "#else \n" > sysarg
-		printf "/* ARM does not need mungers for BSD system calls */\n" > sysarg
+		printf "/* ARM does not need mungers for BSD system calls. */\n" > sysarg
 		printf "#define munge_w  NULL \n" > sysarg
 		printf "#define munge_ww  NULL \n" > sysarg
 		printf "#define munge_www  NULL \n" > sysarg

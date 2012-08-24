@@ -34,6 +34,8 @@
 
 #include <stdint.h>
 #include <sys/cdefs.h>
+#include <libkern/OSByteOrder.h>
+
 
 typedef struct {
     unsigned char       mig_vers;
@@ -65,19 +67,15 @@ typedef struct {
 
 extern NDR_record_t NDR_record;
 
-#if defined(BSMALL)
+/* NDR conversion off by default */
+
+#if !defined(__NDR_convert__)
 #define __NDR_convert__ 0
-#define __NDR_convert__int_rep__ 0
-#else
-#ifndef __NDR_convert__
-#define __NDR_convert__ 1
-#endif /* __NDR_convert__ */
+#endif /* !defined(__NDR_convert__) */
 
 #ifndef __NDR_convert__int_rep__
-#define __NDR_convert__int_rep__ 1
+#define __NDR_convert__int_rep__ __NDR_convert__
 #endif /* __NDR_convert__int_rep__ */
-
-#endif /* defined(BSMALL) */
 
 #ifndef __NDR_convert__char_rep__
 #define __NDR_convert__char_rep__ 0
@@ -102,8 +100,6 @@ extern NDR_record_t NDR_record;
 	r(&(a)[__i__ * __S__], f, __S__); } while (0)
 
 #if __NDR_convert__int_rep__
-
-#include <libkern/OSByteOrder.h>
 
 #define __NDR_READSWAP_assign(a, rs)	do { *(a) = rs(a); } while (0)
 

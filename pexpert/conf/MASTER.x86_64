@@ -5,7 +5,7 @@
 #
 #  RELEASE	= [ intel mach mach_pe panic_info config_dtrace ]
 #  PROFILE	= [ RELEASE profile ]
-#  DEBUG	= [ RELEASE debug ]
+#  DEBUG	= [ RELEASE debug mach_assert ]
 #
 #  EMBEDDED	= [ intel mach mach_pe panic_info ]
 #  DEVELOPMENT	= [ EMBEDDED ]

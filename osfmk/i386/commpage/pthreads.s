@@ -82,6 +82,8 @@
  * are located in the PFZ.
  */
 
+/* Work around 10062261 with a dummy non-local symbol */
+pthreads_dummy_symbol:
 
 /* Internal routine to handle pthread mutex lock operation.  This is in the PFZ.
  *	%edi == ptr to LVAL/UVAL pair

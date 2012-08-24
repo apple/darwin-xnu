@@ -32,6 +32,12 @@
 
 	.globl _OSCompareAndSwap
 _OSCompareAndSwap: #;oldValue, newValue, ptr
+#if	DEBUG
+	test	$3, %rdx
+	jz	1f
+	ud2
+1:
+#endif	
 	movl		 %edi, %eax
 	lock
 	cmpxchgl	%esi, (%rdx)	#; CAS (eax is an implicit operand)
@@ -48,6 +54,12 @@ _OSCompareAndSwap: #;oldValue, newValue, ptr
 
 _OSCompareAndSwap64:
 _OSCompareAndSwapPtr: #;oldValue, newValue, ptr
+#if	DEBUG
+	test	$7, %rdx
+	jz	1f
+	ud2
+1:
+#endif
 	movq		%rdi, %rax
 	lock
 	cmpxchgq	%rsi, (%rdx)	#; CAS (rax is an implicit operand)
@@ -63,6 +75,12 @@ _OSCompareAndSwapPtr: #;oldValue, newValue, ptr
 	.globl	_OSAddAtomic64
 _OSAddAtomic64:
 _OSAddAtomicLong:
+#if	DEBUG
+	test	$7, %rsi
+	jz	1f
+	ud2
+1:
+#endif
 	lock
 	xaddq	%rdi, (%rsi)		#; Atomic exchange and add
 	movq	%rdi, %rax;
@@ -75,6 +93,12 @@ _OSAddAtomicLong:
 
 	.globl	_OSAddAtomic
 _OSAddAtomic:
+#if	DEBUG
+	test	$3, %rsi
+	jz	1f
+	ud2
+1:
+#endif
 	lock
 	xaddl	%edi, (%rsi)		#; Atomic exchange and add
 	movl	%edi, %eax;

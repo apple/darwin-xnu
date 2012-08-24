@@ -31,7 +31,7 @@
 
 #include <i386/pal_hibernate.h>
 
-extern pd_entry_t BootstrapPTD[2048];
+extern pd_entry_t BootPTD[2048];
 
 // src is virtually mapped, not page aligned, 
 // dst is a physical 4k page aligned ptr, len is one 4K page
@@ -82,9 +82,9 @@ pal_hib_map(uintptr_t virt, uint64_t phys)
     index = (virt >> I386_LPGSHIFT);
     virt += (uintptr_t)(phys & I386_LPGMASK);
     phys  = ((phys & ~((uint64_t)I386_LPGMASK)) | INTEL_PTE_PS  | INTEL_PTE_VALID | INTEL_PTE_WRITE);
-    BootstrapPTD[index] = phys;
+    BootPTD[index] = phys;
     invlpg(virt);
-    BootstrapPTD[index + 1] = (phys + I386_LPGBYTES);
+    BootPTD[index + 1] = (phys + I386_LPGBYTES);
     invlpg(virt + I386_LPGBYTES);
 
     return (virt);

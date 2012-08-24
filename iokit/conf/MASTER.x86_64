@@ -3,9 +3,9 @@
 #  Standard Apple Mac OS Configurations:
 #  -------- ----- ------ ---------------
 #
-#  RELEASE	= [ intel mach iokitcpp hibernation medium crypto config_dtrace config_sleep iokitstats ]
+#  RELEASE	= [ intel mach iokitcpp hibernation medium crypto config_dtrace config_sleep iokitstats vm_pressure_events ]
 #  PROFILE	= [ RELEASE profile ]
-#  DEBUG	= [ RELEASE debug ]
+#  DEBUG	= [ RELEASE debug mach_assert ]
 #
 #  EMBEDDED	= [ intel mach iokitcpp hibernation no_kextd bsmall crypto ]
 #  DEVELOPMENT	= [ EMBEDDED development ]

@@ -88,6 +88,7 @@
 #include <sys/kdebug.h>
 #include <sys/fslog.h>
 #include <sys/ubc.h>
+#include <sys/buf_internal.h>
 
 #include <kern/locks.h>
 
@@ -154,9 +155,11 @@ static int hfs_vptofh(struct vnode *vp, int *fhlenp, unsigned char *fhp, vfs_con
 static int hfs_file_extent_overlaps(struct hfsmount *hfsmp, u_int32_t allocLimit, struct HFSPlusCatalogFile *filerec);
 static int hfs_journal_replay(vnode_t devvp, vfs_context_t context);
 static int hfs_reclaimspace(struct hfsmount *hfsmp, u_int32_t allocLimit, u_int32_t reclaimblks, vfs_context_t context);
+static int hfs_extend_journal(struct hfsmount *hfsmp, u_int32_t sector_size, u_int64_t sector_count, vfs_context_t context);
 
 void hfs_initialize_allocator (struct hfsmount *hfsmp);
 int hfs_teardown_allocator (struct hfsmount *hfsmp);
+void hfs_unmap_blocks (struct hfsmount *hfsmp);
 
 int hfs_mount(struct mount *mp, vnode_t  devvp, user_addr_t data, vfs_context_t context);
 int hfs_mountfs(struct vnode *devvp, struct mount *mp, struct hfs_mount_args *args, int journal_replay_only, vfs_context_t context);
@@ -292,25 +295,21 @@ hfs_mount(struct mount *mp, vnode_t devvp, user_addr_t data, vfs_context_t conte
 			retval = hfs_flushvolumeheader(hfsmp, MNT_WAIT, 0);
 			hfsmp->hfs_flags |= HFS_READ_ONLY;
 
-			/* also get the volume bitmap blocks */
-			if (!retval) {
-				if (vnode_mount(hfsmp->hfs_devvp) == mp) {
-					retval = hfs_fsync(hfsmp->hfs_devvp, MNT_WAIT, 0, p);
-				} else {
-					vnode_get(hfsmp->hfs_devvp);
-					retval = VNOP_FSYNC(hfsmp->hfs_devvp, MNT_WAIT, context);
-					vnode_put(hfsmp->hfs_devvp);
-				}
-			}
-			if (retval) {
-				if (HFS_MOUNT_DEBUG) {
-					printf("hfs_mount: FSYNC on devvp returned %d for fs %s\n", retval, hfsmp->vcbVN);
-				}
-				hfsmp->hfs_flags &= ~HFS_RDONLY_DOWNGRADE;
-				hfsmp->hfs_downgrading_proc = NULL;
-				hfsmp->hfs_flags &= ~HFS_READ_ONLY;
-				goto out;
-			}
+			/*
+			 * Close down the journal. 
+			 *
+			 * NOTE: It is critically important to close down the journal
+			 * and have it issue all pending I/O prior to calling VNOP_FSYNC below.
+			 * In a journaled environment it is expected that the journal be
+			 * the only actor permitted to issue I/O for metadata blocks in HFS.
+			 * If we were to call VNOP_FSYNC prior to closing down the journal,
+			 * we would inadvertantly issue (and wait for) the I/O we just 
+			 * initiated above as part of the flushvolumeheader call.
+			 * 
+			 * To avoid this, we follow the same order of operations as in
+			 * unmount and issue the journal_close prior to calling VNOP_FSYNC.
+			 */
+	
 			if (hfsmp->jnl) {
 				hfs_lock_global (hfsmp, HFS_EXCLUSIVE_LOCK);
 
@@ -324,6 +323,31 @@ hfs_mount(struct mount *mp, vnode_t devvp, user_addr_t data, vfs_context_t conte
 				hfs_unlock_global (hfsmp);
 			}
 
+
+			/*
+			 * Write out any pending I/O still outstanding against the device node
+			 * now that the journal has been closed.
+			 */
+			if (!retval) {
+				if (vnode_mount(hfsmp->hfs_devvp) == mp) {
+					retval = hfs_fsync(hfsmp->hfs_devvp, MNT_WAIT, 0, p);
+				} else {
+					vnode_get(hfsmp->hfs_devvp);
+					retval = VNOP_FSYNC(hfsmp->hfs_devvp, MNT_WAIT, context);
+					vnode_put(hfsmp->hfs_devvp);
+				}
+			}
+
+			if (retval) {
+				if (HFS_MOUNT_DEBUG) {
+					printf("hfs_mount: FSYNC on devvp returned %d for fs %s\n", retval, hfsmp->vcbVN);
+				}
+				hfsmp->hfs_flags &= ~HFS_RDONLY_DOWNGRADE;
+				hfsmp->hfs_downgrading_proc = NULL;
+				hfsmp->hfs_flags &= ~HFS_READ_ONLY;
+				goto out;
+			}
+	
 #if CONFIG_HFS_ALLOC_RBTREE
 			(void) hfs_teardown_allocator(hfsmp);
 #endif						
@@ -439,7 +463,7 @@ hfs_mount(struct mount *mp, vnode_t devvp, user_addr_t data, vfs_context_t conte
 				 * Allow hot file clustering if conditions allow.
 				 */
 				if ((hfsmp->hfs_flags & HFS_METADATA_ZONE) && 
-						((hfsmp->hfs_flags & HFS_SSD) == 0)) {
+					   ((hfsmp->hfs_mp->mnt_kern_flag & MNTK_SSD) == 0))	{
 					(void) hfs_recording_init(hfsmp);
 				}
 				/* Force ACLs on HFS+ file systems. */
@@ -465,6 +489,9 @@ hfs_mount(struct mount *mp, vnode_t devvp, user_addr_t data, vfs_context_t conte
 			 * Only do this if we're operating on a read-write mount (we wouldn't care for read-only),
 			 * which has not previously encountered a bad error on the red-black tree code.  Also, don't
 			 * try to re-build a tree that already exists. 
+			 *
+			 * When this is enabled, we must re-integrate the above function into our bitmap iteration
+			 * so that we accurately send TRIMs down to the underlying disk device as needed.
 			 */
 			
 			if (hfsmp->extent_tree_flags == 0) {
@@ -504,32 +531,49 @@ hfs_mount(struct mount *mp, vnode_t devvp, user_addr_t data, vfs_context_t conte
 		 */
 		if ((retval == 0) && (cp_fs_protected (mp))) {
 			int err = 0;
-			struct cp_root_xattr xattr;
-			bzero (&xattr, sizeof(struct cp_root_xattr));
+			
+			struct cp_root_xattr *xattr = NULL;
+			MALLOC (xattr, struct cp_root_xattr*, sizeof(struct cp_root_xattr), M_TEMP, M_WAITOK);
+			if (xattr == NULL) {
+				err = ENOMEM;
+				goto badalloc;
+			}
+			bzero (xattr, sizeof(struct cp_root_xattr));
 			hfsmp = vfs_fsprivate(mp);
 
 			/* go get the EA to get the version information */
-			err = cp_getrootxattr (hfsmp, &xattr);
-			/* If there was no EA there, then write one out. */
+			err = cp_getrootxattr (hfsmp, xattr);
+			/* 
+			 * If there was no EA there, then write one out. 
+			 * Assuming EA is not present on the root means 
+			 * this is an erase install or a very old FS
+			 */
 			if (err == ENOATTR) {
-				bzero(&xattr, sizeof(struct cp_root_xattr));
-				xattr.major_version = CP_CURRENT_MAJOR_VERS;
-				xattr.minor_version = CP_CURRENT_MINOR_VERS;
-				xattr.flags = 0;
+				printf("No root EA set, creating new EA with new version: %d\n", CP_NEW_MAJOR_VERS);
+				bzero(xattr, sizeof(struct cp_root_xattr));
+				xattr->major_version = CP_NEW_MAJOR_VERS;
+				xattr->minor_version = CP_MINOR_VERS;
+				xattr->flags = 0;
 
-				err = cp_setrootxattr (hfsmp, &xattr);
-			}	
+				err = cp_setrootxattr (hfsmp, xattr);
+			}
+
 			/* 
 			 * For any other error, including having an out of date CP version in the
 			 * EA, or for an error out of cp_setrootxattr, deny the mount 
 			 * and do not proceed further.
 			 */
-			if (err || xattr.major_version != CP_CURRENT_MAJOR_VERS)  {
+			if (err || (xattr->major_version != CP_NEW_MAJOR_VERS && xattr->major_version != CP_PREV_MAJOR_VERS))  {
 				/* Deny the mount and tear down. */
 				retval = EPERM;
 				(void) hfs_unmount (mp, MNT_FORCE, context);
-			}	
-		}				  
+			}
+			printf("Running with CP root xattr: %d.%d\n", xattr->major_version, xattr->minor_version);
+badalloc:
+			if(xattr) {
+				FREE(xattr, M_TEMP);
+			}
+		}
 #endif
 	}
 out:
@@ -1155,6 +1199,22 @@ bailout:
 #endif
 }
 
+void hfs_unmap_blocks (struct hfsmount *hfsmp) {
+	/*
+	 * Take the allocation file lock.  Journal transactions will block until
+	 * we're done here. 
+	 */
+	int flags = hfs_systemfile_lock(hfsmp, SFL_BITMAP, HFS_EXCLUSIVE_LOCK);
+
+	/*
+	 * UnmapBlocks assumes that the bitmap lock is held when you call the function.
+	 * We don't care if there were any error issuing unmaps yet.
+	 */
+	(void) UnmapBlocks(hfsmp);
+
+	hfs_systemfile_unlock(hfsmp, flags);
+}
+
 
 /* 
  * Teardown code for the Red-Black Tree allocator. 
@@ -1205,7 +1265,6 @@ hfs_teardown_allocator (struct hfsmount *hfsmp) {
 	
 }
 
-
 static int hfs_root_unmounted_cleanly = 0;
 
 SYSCTL_DECL(_vfs_generic);
@@ -1239,6 +1298,7 @@ hfs_mountfs(struct vnode *devvp, struct mount *mp, struct hfs_mount_args *args,
 	daddr64_t mdb_offset;
 	int isvirtual = 0;
 	int isroot = 0;
+	u_int32_t device_features = 0;
 	int isssd;
 #if CONFIG_HFS_ALLOC_RBTREE
 	thread_t allocator_thread;
@@ -1405,9 +1465,21 @@ hfs_mountfs(struct vnode *devvp, struct mount *mp, struct hfs_mount_args *args,
 	bzero(hfsmp, sizeof(struct hfsmount));
 	
 	hfs_chashinit_finish(hfsmp);
-
+	
 	/*
-	 * See if the disk is a solid state device.  We need this to decide what to do about 
+	 * See if the disk supports unmap (trim).
+	 *
+	 * NOTE: vfs_init_io_attributes has not been called yet, so we can't use the io_flags field
+	 * returned by vfs_ioattr.  We need to call VNOP_IOCTL ourselves.
+	 */
+	if (VNOP_IOCTL(devvp, DKIOCGETFEATURES, (caddr_t)&device_features, 0, context) == 0) {
+		if (device_features & DK_FEATURE_UNMAP) {
+			hfsmp->hfs_flags |= HFS_UNMAP;
+		}
+	}	
+
+	/* 
+	 * See if the disk is a solid state device, too.  We need this to decide what to do about 
 	 * hotfiles.
 	 */
 	if (VNOP_IOCTL(devvp, DKIOCISSOLIDSTATE, (caddr_t)&isssd, 0, context) == 0) {
@@ -1434,6 +1506,7 @@ hfs_mountfs(struct vnode *devvp, struct mount *mp, struct hfs_mount_args *args,
 	vnode_ref(devvp);  /* Hold a ref on the device, dropped when hfsmp is freed. */
 	hfsmp->hfs_logical_block_size = log_blksize;
 	hfsmp->hfs_logical_block_count = log_blkcnt;
+	hfsmp->hfs_logical_bytes = (uint64_t) log_blksize * (uint64_t) log_blkcnt;
 	hfsmp->hfs_physical_block_size = phys_blksize;
 	hfsmp->hfs_log_per_phys = (phys_blksize / log_blksize);
 	hfsmp->hfs_flags |= HFS_WRITEABLE_MEDIA;
@@ -1493,7 +1566,7 @@ hfs_mountfs(struct vnode *devvp, struct mount *mp, struct hfs_mount_args *args,
 	/* Mount a standard HFS disk */
 	if ((SWAP_BE16(mdbp->drSigWord) == kHFSSigWord) &&
 	    (mntwrapper || (SWAP_BE16(mdbp->drEmbedSigWord) != kHFSPlusSigWord))) {
-
+#if CONFIG_HFS_STD 
 		/* On 10.6 and beyond, non read-only mounts for HFS standard vols get rejected */
 		if (vfs_isrdwr(mp)) {
 			retval = EROFS;
@@ -1529,6 +1602,7 @@ hfs_mountfs(struct vnode *devvp, struct mount *mp, struct hfs_mount_args *args,
 			}
 			hfsmp->hfs_logical_block_size = log_blksize;
 			hfsmp->hfs_logical_block_count = log_blkcnt;
+			hfsmp->hfs_logical_bytes = (uint64_t) log_blksize * (uint64_t) log_blkcnt;
 			hfsmp->hfs_physical_block_size = log_blksize;
 			hfsmp->hfs_log_per_phys = 1;
 		}
@@ -1548,6 +1622,11 @@ hfs_mountfs(struct vnode *devvp, struct mount *mp, struct hfs_mount_args *args,
 		retval = hfs_MountHFSVolume(hfsmp, mdbp, p);
 		if (retval)
 			(void) hfs_relconverter(hfsmp->hfs_encoding);
+#else
+		/* On platforms where HFS Standard is not supported, deny the mount altogether */
+		retval = EINVAL;
+		goto error_exit;
+#endif
 
 	} else /* Mount an HFS Plus disk */ {
 		HFSPlusVolumeHeader *vhp;
@@ -1595,6 +1674,7 @@ hfs_mountfs(struct vnode *devvp, struct mount *mp, struct hfs_mount_args *args,
 				/* Update logical /physical block size */
 				hfsmp->hfs_logical_block_size = log_blksize;
 				hfsmp->hfs_physical_block_size = log_blksize;
+				
 				phys_blksize = log_blksize;
 				hfsmp->hfs_log_per_phys = 1;
 			}
@@ -1604,6 +1684,8 @@ hfs_mountfs(struct vnode *devvp, struct mount *mp, struct hfs_mount_args *args,
 
 			hfsmp->hfs_logical_block_count = disksize / log_blksize;
 	
+			hfsmp->hfs_logical_bytes = (uint64_t) hfsmp->hfs_logical_block_count * (uint64_t) hfsmp->hfs_logical_block_size;
+			
 			mdb_offset = (daddr64_t)((embeddedOffset / log_blksize) + HFS_PRI_SECTOR(log_blksize));
 			retval = (int)buf_meta_bread(devvp, HFS_PHYSBLK_ROUNDDOWN(mdb_offset, hfsmp->hfs_log_per_phys),
 					phys_blksize, cred, &bp);
@@ -1624,7 +1706,7 @@ hfs_mountfs(struct vnode *devvp, struct mount *mp, struct hfs_mount_args *args,
 		}
 
 		if (isroot) {
-			hfs_root_unmounted_cleanly = (SWAP_BE32(vhp->attributes) & kHFSVolumeUnmountedMask) != 0;
+			hfs_root_unmounted_cleanly = ((SWAP_BE32(vhp->attributes) & kHFSVolumeUnmountedMask) != 0);
 		}
 
 		/*
@@ -1758,7 +1840,7 @@ hfs_mountfs(struct vnode *devvp, struct mount *mp, struct hfs_mount_args *args,
 		 */
 		if ((retval == ENXIO) && (log_blksize > 512) && (log_blksize != minblksize)) {
 			printf("hfs_mountfs: could not use physical block size "
-				"(%d) switching to 512\n", log_blksize);
+					"(%d) switching to 512\n", log_blksize);
 			log_blksize = 512;
 			if (VNOP_IOCTL(devvp, DKIOCSETBLOCKSIZE, (caddr_t)&log_blksize, FWRITE, context)) {
 				if (HFS_MOUNT_DEBUG) { 
@@ -1776,10 +1858,12 @@ hfs_mountfs(struct vnode *devvp, struct mount *mp, struct hfs_mount_args *args,
 			}
 			devvp->v_specsize = log_blksize;
 			/* Note: relative block count adjustment (in case this is an embedded volume). */
-    			hfsmp->hfs_logical_block_count *= hfsmp->hfs_logical_block_size / log_blksize;
-     			hfsmp->hfs_logical_block_size = log_blksize;
-     			hfsmp->hfs_log_per_phys = hfsmp->hfs_physical_block_size / log_blksize;
- 
+			hfsmp->hfs_logical_block_count *= hfsmp->hfs_logical_block_size / log_blksize;
+			hfsmp->hfs_logical_block_size = log_blksize;
+			hfsmp->hfs_log_per_phys = hfsmp->hfs_physical_block_size / log_blksize;
+	
+			hfsmp->hfs_logical_bytes = (uint64_t) hfsmp->hfs_logical_block_count * (uint64_t) hfsmp->hfs_logical_block_size;
+
 			if (hfsmp->jnl && hfsmp->jvp == devvp) {
 			    // close and re-open this with the new block size
 			    journal_close(hfsmp->jnl);
@@ -1931,7 +2015,20 @@ hfs_mountfs(struct vnode *devvp, struct mount *mp, struct hfs_mount_args *args,
 			}
 		}
 	}
-	
+
+#if CONFIG_HFS_MOUNT_UNMAP
+	/* Enable UNMAPs for embedded SSDs only for now */
+	/*
+	 * TODO: Should we enable this for CoreStorage volumes, too?
+	 */
+	if ((hfsmp->hfs_flags & HFS_READ_ONLY) == 0) {
+		if (hfsmp->hfs_flags & HFS_UNMAP) {
+			hfs_unmap_blocks(hfsmp);
+		}
+	}
+#endif
+
+
 #if CONFIG_HFS_ALLOC_RBTREE
 	/* 
 	 * We spawn a thread to create the pair of red-black trees for this volume.
@@ -3456,11 +3553,11 @@ hfs_flushMDB(struct hfsmount *hfsmp, int waitfor, int altflush)
 	HFSMasterDirectoryBlock	*mdb;
 	struct buf *bp = NULL;
 	int retval;
-	int sectorsize;
+	int sector_size;
 	ByteCount namelen;
 
-	sectorsize = hfsmp->hfs_logical_block_size;
-	retval = (int)buf_bread(hfsmp->hfs_devvp, (daddr64_t)HFS_PRI_SECTOR(sectorsize), sectorsize, NOCRED, &bp);
+	sector_size = hfsmp->hfs_logical_block_size;
+	retval = (int)buf_bread(hfsmp->hfs_devvp, (daddr64_t)HFS_PRI_SECTOR(sector_size), sector_size, NOCRED, &bp);
 	if (retval) {
 		if (bp)
 			buf_brelse(bp);
@@ -3469,7 +3566,7 @@ hfs_flushMDB(struct hfsmount *hfsmp, int waitfor, int altflush)
 
 	lck_mtx_lock(&hfsmp->hfs_mutex);
 
-	mdb = (HFSMasterDirectoryBlock *)(buf_dataptr(bp) + HFS_PRI_OFFSET(sectorsize));
+	mdb = (HFSMasterDirectoryBlock *)(buf_dataptr(bp) + HFS_PRI_OFFSET(sector_size));
     
 	mdb->drCrDate	= SWAP_BE32 (UTCToLocal(to_hfs_time(vcb->hfs_itime)));
 	mdb->drLsMod	= SWAP_BE32 (UTCToLocal(to_hfs_time(vcb->vcbLsMod)));
@@ -3524,8 +3621,8 @@ hfs_flushMDB(struct hfsmount *hfsmp, int waitfor, int altflush)
 	if (altflush) {
 		struct buf *alt_bp = NULL;
 
-		if (buf_meta_bread(hfsmp->hfs_devvp, hfsmp->hfs_alt_id_sector, sectorsize, NOCRED, &alt_bp) == 0) {
-			bcopy(mdb, (char *)buf_dataptr(alt_bp) + HFS_ALT_OFFSET(sectorsize), kMDBSize);
+		if (buf_meta_bread(hfsmp->hfs_devvp, hfsmp->hfs_alt_id_sector, sector_size, NOCRED, &alt_bp) == 0) {
+			bcopy(mdb, (char *)buf_dataptr(alt_bp) + HFS_ALT_OFFSET(sector_size), kMDBSize);
 
 			(void) VNOP_BWRITE(alt_bp);
 		} else if (alt_bp)
@@ -3870,9 +3967,10 @@ hfs_extendfs(struct hfsmount *hfsmp, u_int64_t newsize, vfs_context_t context)
 	u_int64_t  newblkcnt;
 	u_int64_t  prev_phys_block_count;
 	u_int32_t  addblks;
-	u_int64_t  sectorcnt;
-	u_int32_t  sectorsize;
-	u_int32_t  phys_sectorsize;
+	u_int64_t  sector_count;
+	u_int32_t  sector_size;
+	u_int32_t  phys_sector_size;
+	u_int32_t  overage_blocks;	
 	daddr64_t  prev_alt_sector;
 	daddr_t	   bitmapblks;
 	int  lockflags = 0;
@@ -3916,33 +4014,33 @@ hfs_extendfs(struct hfsmount *hfsmp, u_int64_t newsize, vfs_context_t context)
 		if (error)
 			return (error);
 	}
-	if (VNOP_IOCTL(devvp, DKIOCGETBLOCKSIZE, (caddr_t)&sectorsize, 0, context)) {
+	if (VNOP_IOCTL(devvp, DKIOCGETBLOCKSIZE, (caddr_t)&sector_size, 0, context)) {
 		return (ENXIO);
 	}
-	if (sectorsize != hfsmp->hfs_logical_block_size) {
+	if (sector_size != hfsmp->hfs_logical_block_size) {
 		return (ENXIO);
 	}
-	if (VNOP_IOCTL(devvp, DKIOCGETBLOCKCOUNT, (caddr_t)&sectorcnt, 0, context)) {
+	if (VNOP_IOCTL(devvp, DKIOCGETBLOCKCOUNT, (caddr_t)&sector_count, 0, context)) {
 		return (ENXIO);
 	}
-	if ((sectorsize * sectorcnt) < newsize) {
+	if ((sector_size * sector_count) < newsize) {
 		printf("hfs_extendfs: not enough space on device\n");
 		return (ENOSPC);
 	}
-	error = VNOP_IOCTL(devvp, DKIOCGETPHYSICALBLOCKSIZE, (caddr_t)&phys_sectorsize, 0, context);
+	error = VNOP_IOCTL(devvp, DKIOCGETPHYSICALBLOCKSIZE, (caddr_t)&phys_sector_size, 0, context);
 	if (error) {
 		if ((error != ENOTSUP) && (error != ENOTTY)) {
 			return (ENXIO);
 		}
 		/* If ioctl is not supported, force physical and logical sector size to be same */
-		phys_sectorsize = sectorsize;
+		phys_sector_size = sector_size;
 	}
 	oldsize = (u_int64_t)hfsmp->totalBlocks * (u_int64_t)hfsmp->blockSize;
 
 	/*
 	 * Validate new size.
 	 */
-	if ((newsize <= oldsize) || (newsize % sectorsize) || (newsize % phys_sectorsize)) {
+	if ((newsize <= oldsize) || (newsize % sector_size) || (newsize % phys_sector_size)) {
 		printf("hfs_extendfs: invalid size\n");
 		return (EINVAL);
 	}
@@ -3966,7 +4064,7 @@ hfs_extendfs(struct hfsmount *hfsmp, u_int64_t newsize, vfs_context_t context)
 	}
 	hfsmp->hfs_flags |= HFS_RESIZE_IN_PROGRESS;
 	HFS_MOUNT_UNLOCK(hfsmp, TRUE);
-
+	
 	/* Start with a clean journal. */
 	hfs_journal_flush(hfsmp, TRUE);
 
@@ -3978,6 +4076,21 @@ hfs_extendfs(struct hfsmount *hfsmp, u_int64_t newsize, vfs_context_t context)
 		goto out;
 	}
 	transaction_begun = 1;
+
+
+	/* Update the hfsmp fields for the physical information about the device */	
+	prev_phys_block_count = hfsmp->hfs_logical_block_count;
+	prev_alt_sector = hfsmp->hfs_alt_id_sector;
+
+	hfsmp->hfs_logical_block_count = sector_count;
+	/* 
+	 * Note that the new AltVH location must be based on the device's EOF rather than the new
+	 * filesystem's EOF, so we use logical_block_count here rather than newsize.
+	 */
+	hfsmp->hfs_alt_id_sector = (hfsmp->hfsPlusIOPosOffset / sector_size) +
+	                          HFS_ALT_SECTOR(sector_size, hfsmp->hfs_logical_block_count);
+	hfsmp->hfs_logical_bytes = (uint64_t) sector_count * (uint64_t) sector_size;
+
 
 	/*
 	 * Note: we take the attributes lock in case we have an attribute data vnode
@@ -4005,9 +4118,19 @@ hfs_extendfs(struct hfsmount *hfsmp, u_int64_t newsize, vfs_context_t context)
 	 * After extending the file system, those bits can represent valid 
 	 * allocation blocks, so we mark all the bits from the end of current 
 	 * volume to end of allocation bitmap as "free".
+	 *
+	 * Figure out the number of overage blocks before proceeding though,
+	 * so we don't add more bytes to our I/O than necessary.  
+	 * First figure out the total number of blocks representable by the 
+	 * end of the bitmap file vs. the total number of blocks in the new FS.
+	 * Then subtract away the number of blocks in the current FS.  This is how much
+	 * we can mark as free right now without having to grow the bitmap file.
 	 */
-	BlockMarkFreeUnused(vcb, vcb->totalBlocks, 
-			(fp->ff_blocks * vcb->blockSize * 8) - vcb->totalBlocks);
+	overage_blocks = fp->ff_blocks * vcb->blockSize * 8;
+	overage_blocks = MIN (overage_blocks, newblkcnt);
+   	overage_blocks -= vcb->totalBlocks;
+
+	BlockMarkFreeUnused(vcb, vcb->totalBlocks, overage_blocks);
 
 	if (bitmapblks > 0) {
 		daddr64_t blkno;
@@ -4125,14 +4248,8 @@ hfs_extendfs(struct hfsmount *hfsmp, u_int64_t newsize, vfs_context_t context)
 	/*
 	 * Adjust file system variables for new space.
 	 */
-	prev_phys_block_count = hfsmp->hfs_logical_block_count;
-	prev_alt_sector = hfsmp->hfs_alt_id_sector;
-
 	vcb->totalBlocks += addblks;
 	vcb->freeBlocks += addblks;
-	hfsmp->hfs_logical_block_count = newsize / sectorsize;
-	hfsmp->hfs_alt_id_sector = (hfsmp->hfsPlusIOPosOffset / sectorsize) +
-	                          HFS_ALT_SECTOR(sectorsize, hfsmp->hfs_logical_block_count);
 	MarkVCBDirty(vcb);
 	error = hfs_flushvolumeheader(hfsmp, MNT_WAIT, HFS_ALTFLUSH);
 	if (error) {
@@ -4223,11 +4340,30 @@ hfs_extendfs(struct hfsmount *hfsmp, u_int64_t newsize, vfs_context_t context)
 	 *
 	 * We only update hfsmp->allocLimit if totalBlocks actually increased. 
 	 */
-	
 	if (error == 0) {
 		UpdateAllocLimit(hfsmp, hfsmp->totalBlocks);
 	}
-	
+
+	/* Release all locks and sync up journal content before 
+	 * checking and extending, if required, the journal 
+	 */
+	if (lockflags) {
+		hfs_systemfile_unlock(hfsmp, lockflags);
+		lockflags = 0;
+	}
+	if (transaction_begun) {
+		hfs_end_transaction(hfsmp);
+		hfs_journal_flush(hfsmp, TRUE);
+		transaction_begun = 0;
+	}
+
+	/* Increase the journal size, if required. */
+	error = hfs_extend_journal(hfsmp, sector_size, sector_count, context);
+	if (error) {
+		printf ("hfs_extendfs: Could not extend journal size\n");
+		goto out_noalloc;
+	}
+
 	/* Log successful extending */
 	printf("hfs_extendfs: extended \"%s\" to %d blocks (was %d blocks)\n",
 	       hfsmp->vcbVN, hfsmp->totalBlocks, (u_int32_t)(oldsize/hfsmp->blockSize));
@@ -4239,7 +4375,8 @@ out:
 		VTOC(vp)->c_blocks = fp->ff_blocks;
 		
 	}
-	
+
+out_noalloc:
 	HFS_MOUNT_LOCK(hfsmp, TRUE);	
 	hfsmp->hfs_flags &= ~HFS_RESIZE_IN_PROGRESS;
 	HFS_MOUNT_UNLOCK(hfsmp, TRUE);	
@@ -4530,6 +4667,14 @@ hfs_truncatefs(struct hfsmount *hfsmp, u_int64_t newsize, vfs_context_t context)
 	 */
 	hfsmp->totalBlocks = newblkcnt;
 	hfsmp->hfs_logical_block_count = newsize / hfsmp->hfs_logical_block_size;
+	hfsmp->hfs_logical_bytes = (uint64_t) hfsmp->hfs_logical_block_count * (uint64_t) hfsmp->hfs_logical_block_size;
+
+	/*
+	 * Note that although the logical block size is updated here, it is only done for
+	 * the benefit of the partition management software.  The logical block count change 
+	 * has not yet actually been propagated to the disk device yet. 
+	 */
+
 	hfsmp->hfs_alt_id_sector = HFS_ALT_SECTOR(hfsmp->hfs_logical_block_size, hfsmp->hfs_logical_block_count);
 	MarkVCBDirty(hfsmp);
 	error = hfs_flushvolumeheader(hfsmp, MNT_WAIT, HFS_ALTFLUSH);
@@ -4641,6 +4786,9 @@ hfs_invalidate_sectors(struct vnode *vp, daddr64_t sectorStart, daddr64_t sector
  * physical block number of any buffer cache block in the copied extent
  * (so that if the block is written, it will go through VNOP_BLOCKMAP to
  * determine the new physical block number).
+ *
+ * At this point, for regular files, we hold the truncate lock exclusive
+ * and the cnode lock exclusive.
  */
 static int
 hfs_copy_extent(
@@ -4677,23 +4825,44 @@ hfs_copy_extent(
 		panic("hfs_copy_extent: vp=%p (cp=%p) not owned?\n", vp, cp);
 
 #if CONFIG_PROTECT
-	/* Prepare the CP blob and get it ready for use */
-	if (!vnode_issystem (vp) && vnode_isreg(vp) &&
-			cp_fs_protected (hfsmp->hfs_mp)) {
+	/* 
+	 * Prepare the CP blob and get it ready for use, if necessary.
+	 *
+	 * Note that we specifically *exclude* system vnodes (catalog, bitmap, extents, EAs),
+	 * because they are implicitly protected via the media key on iOS.  As such, they
+	 * must not be relocated except with the media key.  So it is OK to not pass down
+	 * a special cpentry to the IOMedia/LwVM code for handling. 
+	 */
+	if (!vnode_issystem (vp) && vnode_isreg(vp) && cp_fs_protected (hfsmp->hfs_mp)) {
 		int cp_err = 0;
-		cp_err = cp_handle_relocate (cp);
+		/* 
+		 * Ideally, the file whose extents we are about to manipulate is using the
+		 * newer offset-based IVs so that we can manipulate it regardless of the 
+		 * current lock state.  However, we must maintain support for older-style 
+		 * EAs.  
+		 * 
+		 * For the older EA case, the IV was tied to the device LBA for file content.
+		 * This means that encrypted data cannot be moved from one location to another
+		 * in the filesystem without garbling the IV data.  As a result, we need to 
+		 * access the file's plaintext because we cannot do our AES-symmetry trick 
+		 * here.  This requires that we attempt a key-unwrap here (via cp_handle_relocate) 
+		 * to make forward progress.  If the keys are unavailable then we will 
+		 * simply stop the resize in its tracks here since we cannot move 
+		 * this extent at this time.
+		 */
+		if ((cp->c_cpentry->cp_flags & CP_OFF_IV_ENABLED) == 0) {
+			cp_err = cp_handle_relocate(cp, hfsmp);
+		}
+
 		if (cp_err) {
-			/* 
-			 * can't copy the file because we couldn't set up keys.
-			 * bail out 
-			 */
+			printf ("hfs_copy_extent: cp_handle_relocate failed (%d) \n", cp_err);
 			return cp_err;
 		}
-		else {
-			cpenabled = 1;
-		}
+
+		cpenabled = 1;
 	}
 #endif
+
 
 	/*
 	 * Determine the I/O size to use
@@ -4725,10 +4894,31 @@ hfs_copy_extent(
 		buf_setblkno(bp, srcSector);
 		buf_setlblkno(bp, srcSector);
 
-		/* Attach the CP to the buffer */
+		/*
+		 * Note that because this is an I/O to the device vp
+		 * it is correct to have lblkno and blkno both point to the 
+		 * start sector being read from.  If it were being issued against the
+		 * underlying file then that would be different.
+		 */
+
+		/* Attach the new CP blob  to the buffer if needed */
 #if CONFIG_PROTECT
 		if (cpenabled) {
-			buf_setcpaddr (bp, cp->c_cpentry);
+			if (cp->c_cpentry->cp_flags & CP_OFF_IV_ENABLED) {
+				/* attach the RELOCATION_INFLIGHT flag for the underlying call to VNOP_STRATEGY */
+				cp->c_cpentry->cp_flags |= CP_RELOCATION_INFLIGHT;
+				buf_setcpaddr(bp, hfsmp->hfs_resize_cpentry);
+			}
+			else {
+				/* 
+				 * Use the cnode's cp key.  This file is tied to the 
+				 * LBAs of the physical blocks that it occupies.
+				 */
+				buf_setcpaddr (bp, cp->c_cpentry);
+			}
+		
+			/* Initialize the content protection file offset to start at 0 */
+			buf_setcpoff (bp, 0);
 		}
 #endif
 
@@ -4737,6 +4927,12 @@ hfs_copy_extent(
 		if (!err)
 			err = buf_biowait(bp);
 		if (err) {
+#if CONFIG_PROTECT
+			/* Turn the flag off in error cases. */
+			if (cpenabled) {
+				cp->c_cpentry->cp_flags &= ~CP_RELOCATION_INFLIGHT;
+			}
+#endif
 			printf("hfs_copy_extent: Error %d from VNOP_STRATEGY (read)\n", err);
 			break;
 		}
@@ -4751,17 +4947,39 @@ hfs_copy_extent(
 			buf_markfua(bp);
 
 #if CONFIG_PROTECT
-		/* Attach the CP to the buffer */
+		/* Attach the CP to the buffer if needed */
 		if (cpenabled) {
-			buf_setcpaddr (bp, cp->c_cpentry);
-		}
+			if (cp->c_cpentry->cp_flags & CP_OFF_IV_ENABLED) {
+				buf_setcpaddr(bp, hfsmp->hfs_resize_cpentry);
+			}
+			else {
+				/* 
+				 * Use the cnode's CP key.  This file is still tied
+				 * to the LBAs of the physical blocks that it occupies.
+				 */
+				buf_setcpaddr (bp, cp->c_cpentry);
+			}
+			/* 
+			 * The last STRATEGY call may have updated the cp file offset behind our
+			 * back, so we cannot trust it.  Re-initialize the content protection
+			 * file offset back to 0 before initiating the write portion of this I/O.
+			 */
+			buf_setcpoff (bp, 0);
+		}			
 #endif
 			
 		/* Do the write */
 		vnode_startwrite(hfsmp->hfs_devvp);
 		err = VNOP_STRATEGY(bp);
-		if (!err)
+		if (!err) {
 			err = buf_biowait(bp);
+		}
+#if CONFIG_PROTECT
+		/* Turn the flag off regardless once the strategy call finishes. */
+		if (cpenabled) {
+			cp->c_cpentry->cp_flags &= ~CP_RELOCATION_INFLIGHT;
+		}
+#endif
 		if (err) {
 			printf("hfs_copy_extent: Error %d from VNOP_STRATEGY (write)\n", err);
 			break;
@@ -5564,7 +5782,7 @@ out:
 static void 
 hfs_truncatefs_progress(struct hfsmount *hfsmp)
 {
-	u_int32_t cur_progress;
+	u_int32_t cur_progress = 0;
 
 	hfs_resize_progress(hfsmp, &cur_progress);
 	if (cur_progress > (hfsmp->hfs_resize_progress + 9)) {
@@ -5629,6 +5847,17 @@ hfs_reclaim_file(struct hfsmount *hfsmp, struct vnode *vp, u_int32_t fileID,
 	}
 
 	cp = VTOC(vp);
+
+	if (hfs_resize_debug) {
+		const char *filename = (const char *) cp->c_desc.cd_nameptr;
+		int namelen = cp->c_desc.cd_namelen;
+
+		if (filename == NULL) {
+			filename = "";
+			namelen = 0;
+		}
+		printf("hfs_reclaim_file: reclaiming '%.*s'\n", namelen, filename);
+	}
 
 	MALLOC(extent_info, struct hfs_reclaim_extent_info *, 
 	       sizeof(struct hfs_reclaim_extent_info), M_TEMP, M_WAITOK);
@@ -5895,6 +6124,7 @@ struct hfs_journal_relocate_args {
 	struct hfsmount *hfsmp;
 	vfs_context_t context;
 	u_int32_t newStartBlock;
+	u_int32_t newBlockCount;
 };
 
 static errno_t
@@ -5910,7 +6140,7 @@ hfs_journal_relocate_callback(void *_args)
 		hfsmp->vcbJinfoBlock * (hfsmp->blockSize/hfsmp->hfs_logical_block_size),
 		hfsmp->blockSize, vfs_context_ucred(args->context), &bp);
 	if (error) {
-		printf("hfs_reclaim_journal_file: failed to read JIB (%d)\n", error);
+		printf("hfs_journal_relocate_callback: failed to read JIB (%d)\n", error);
 		if (bp) {
         		buf_brelse(bp);
 		}
@@ -5918,18 +6148,18 @@ hfs_journal_relocate_callback(void *_args)
 	}
 	jibp = (JournalInfoBlock*) buf_dataptr(bp);
 	jibp->offset = SWAP_BE64((u_int64_t)args->newStartBlock * hfsmp->blockSize);
-	jibp->size = SWAP_BE64(hfsmp->jnl_size);
+	jibp->size = SWAP_BE64((u_int64_t)args->newBlockCount * hfsmp->blockSize);
 	if (journal_uses_fua(hfsmp->jnl))
 		buf_markfua(bp);
 	error = buf_bwrite(bp);
 	if (error) {
-		printf("hfs_reclaim_journal_file: failed to write JIB (%d)\n", error);
+		printf("hfs_journal_relocate_callback: failed to write JIB (%d)\n", error);
 		return error;
 	}
 	if (!journal_uses_fua(hfsmp->jnl)) {
 		error = VNOP_IOCTL(hfsmp->hfs_devvp, DKIOCSYNCHRONIZECACHE, NULL, FWRITE, args->context);
 		if (error) {
-			printf("hfs_reclaim_journal_file: DKIOCSYNCHRONIZECACHE failed (%d)\n", error);
+			printf("hfs_journal_relocate_callback: DKIOCSYNCHRONIZECACHE failed (%d)\n", error);
 			error = 0;		/* Don't fail the operation. */
 		}
 	}
@@ -5938,8 +6168,21 @@ hfs_journal_relocate_callback(void *_args)
 }
 
 
+/* Type of resize operation in progress */
+#define HFS_RESIZE_TRUNCATE	1
+#define HFS_RESIZE_EXTEND	2
+
+/* 
+ * Core function to relocate the journal file.  This function takes the 
+ * journal size of the newly relocated journal --- the caller can 
+ * provide a new journal size if they want to change the size of 
+ * the journal.  The function takes care of updating the journal info 
+ * block and all other data structures correctly.
+ *
+ * Note: This function starts a transaction and grabs the btree locks. 
+ */
 static int
-hfs_reclaim_journal_file(struct hfsmount *hfsmp, u_int32_t allocLimit, vfs_context_t context)
+hfs_relocate_journal_file(struct hfsmount *hfsmp, u_int32_t jnl_size, int resize_type, vfs_context_t context)
 {
 	int error;
 	int journal_err;
@@ -5948,51 +6191,70 @@ hfs_reclaim_journal_file(struct hfsmount *hfsmp, u_int32_t allocLimit, vfs_conte
 	u_int32_t newStartBlock;
 	u_int32_t oldBlockCount;
 	u_int32_t newBlockCount;
+	u_int32_t jnlBlockCount;
+	u_int32_t alloc_skipfreeblks;
 	struct cat_desc journal_desc;
 	struct cat_attr journal_attr;
 	struct cat_fork journal_fork;
 	struct hfs_journal_relocate_args callback_args;
 
-	if (hfsmp->jnl_start + (hfsmp->jnl_size / hfsmp->blockSize) <= allocLimit) {
-		/* The journal does not require relocation */
-		return 0;
+	/* Calculate the number of allocation blocks required for the journal */ 
+	jnlBlockCount = howmany(jnl_size, hfsmp->blockSize);
+
+	/* 
+	 * During truncatefs(), the volume free block count is updated
+	 * before relocating data and reflects the total number of free
+	 * blocks that will exist on volume after the resize is successful.
+	 * This means that the allocation blocks required for relocation 
+	 * have already been reserved and accounted for in the free block 
+	 * count.  Therefore, block allocation and deallocation routines 
+	 * can skip the free block check by passing HFS_ALLOC_SKIPFREEBLKS 
+	 * flag. 
+	 *
+	 * This special handling is not required when the file system 
+	 * is being extended as we want all the allocated and deallocated
+	 * blocks to be accounted for correctly. 
+	 */
+	if (resize_type == HFS_RESIZE_TRUNCATE) {
+		alloc_skipfreeblks = HFS_ALLOC_SKIPFREEBLKS;
+	} else {
+		alloc_skipfreeblks = 0;
 	}
 
 	error = hfs_start_transaction(hfsmp);
 	if (error) {
-		printf("hfs_reclaim_journal_file: hfs_start_transaction returned %d\n", error);
+		printf("hfs_relocate_journal_file: hfs_start_transaction returned %d\n", error);
 		return error;
 	}
 	lockflags = hfs_systemfile_lock(hfsmp, SFL_CATALOG | SFL_BITMAP, HFS_EXCLUSIVE_LOCK);
 	
-	oldBlockCount = hfsmp->jnl_size / hfsmp->blockSize;
-	
-	/* TODO: Allow the journal to change size based on the new volume size. */
-	error = BlockAllocate(hfsmp, 1, oldBlockCount, oldBlockCount, 
-			HFS_ALLOC_METAZONE | HFS_ALLOC_FORCECONTIG | HFS_ALLOC_SKIPFREEBLKS, 
+	error = BlockAllocate(hfsmp, 1, jnlBlockCount, jnlBlockCount, 
+			HFS_ALLOC_METAZONE | HFS_ALLOC_FORCECONTIG | alloc_skipfreeblks,
 			 &newStartBlock, &newBlockCount);
 	if (error) {
-		printf("hfs_reclaim_journal_file: BlockAllocate returned %d\n", error);
+		printf("hfs_relocate_journal_file: BlockAllocate returned %d\n", error);
 		goto fail;
 	}
-	if (newBlockCount != oldBlockCount) {
-		printf("hfs_reclaim_journal_file: newBlockCount != oldBlockCount (%u, %u)\n", newBlockCount, oldBlockCount);
+	if (newBlockCount != jnlBlockCount) {
+		printf("hfs_relocate_journal_file: newBlockCount != jnlBlockCount (%u, %u)\n", newBlockCount, jnlBlockCount);
 		goto free_fail;
 	}
 	
-	error = BlockDeallocate(hfsmp, hfsmp->jnl_start, oldBlockCount, HFS_ALLOC_SKIPFREEBLKS);
+	error = cat_idlookup(hfsmp, hfsmp->hfs_jnlfileid, 1, &journal_desc, &journal_attr, &journal_fork);
 	if (error) {
-		printf("hfs_reclaim_journal_file: BlockDeallocate returned %d\n", error);
+		printf("hfs_relocate_journal_file: cat_idlookup returned %d\n", error);
+		goto free_fail;
+	}
+
+	oldStartBlock = journal_fork.cf_extents[0].startBlock;
+	oldBlockCount = journal_fork.cf_extents[0].blockCount;
+	error = BlockDeallocate(hfsmp, oldStartBlock, oldBlockCount, alloc_skipfreeblks);
+	if (error) {
+		printf("hfs_relocate_journal_file: BlockDeallocate returned %d\n", error);
 		goto free_fail;
 	}
 
 	/* Update the catalog record for .journal */
-	error = cat_idlookup(hfsmp, hfsmp->hfs_jnlfileid, 1, &journal_desc, &journal_attr, &journal_fork);
-	if (error) {
-		printf("hfs_reclaim_journal_file: cat_idlookup returned %d\n", error);
-		goto free_fail;
-	}
-	oldStartBlock = journal_fork.cf_extents[0].startBlock;
 	journal_fork.cf_size = newBlockCount * hfsmp->blockSize;
 	journal_fork.cf_extents[0].startBlock = newStartBlock;
 	journal_fork.cf_extents[0].blockCount = newBlockCount;
@@ -6000,54 +6262,117 @@ hfs_reclaim_journal_file(struct hfsmount *hfsmp, u_int32_t allocLimit, vfs_conte
 	error = cat_update(hfsmp, &journal_desc, &journal_attr, &journal_fork, NULL);
 	cat_releasedesc(&journal_desc);  /* all done with cat descriptor */
 	if (error) {
-		printf("hfs_reclaim_journal_file: cat_update returned %d\n", error);
+		printf("hfs_relocate_journal_file: cat_update returned %d\n", error);
 		goto free_fail;
 	}
-	callback_args.hfsmp = hfsmp;
-	callback_args.context = context;
-	callback_args.newStartBlock = newStartBlock;
 	
-	error = journal_relocate(hfsmp->jnl, (off_t)newStartBlock*hfsmp->blockSize,
-		(off_t)newBlockCount*hfsmp->blockSize, 0,
-		hfs_journal_relocate_callback, &callback_args);
-	if (error) {
-		/* NOTE: journal_relocate will mark the journal invalid. */
-		printf("hfs_reclaim_journal_file: journal_relocate returned %d\n", error);
-		goto fail;
+	/*
+	 * If the journal is part of the file system, then tell the journal
+	 * code about the new location.  If the journal is on an external
+	 * device, then just keep using it as-is.
+	 */
+	if (hfsmp->jvp == hfsmp->hfs_devvp) {
+		callback_args.hfsmp = hfsmp;
+		callback_args.context = context;
+		callback_args.newStartBlock = newStartBlock;
+		callback_args.newBlockCount = newBlockCount;
+
+		error = journal_relocate(hfsmp->jnl, (off_t)newStartBlock*hfsmp->blockSize,
+			(off_t)newBlockCount*hfsmp->blockSize, 0,
+			hfs_journal_relocate_callback, &callback_args);
+		if (error) {
+			/* NOTE: journal_relocate will mark the journal invalid. */
+			printf("hfs_relocate_journal_file: journal_relocate returned %d\n", error);
+			goto fail;
+		}
+		if (hfs_resize_debug) {
+			printf ("hfs_relocate_journal_file: Successfully relocated journal from (%u,%u) to (%u,%u)\n", oldStartBlock, oldBlockCount, newStartBlock, newBlockCount);
+		}
+		hfsmp->jnl_start = newStartBlock;
+		hfsmp->jnl_size = (off_t)newBlockCount * hfsmp->blockSize;
 	}
-	hfsmp->jnl_start = newStartBlock;
-	hfsmp->jnl_size = (off_t)newBlockCount * hfsmp->blockSize;
 
 	hfs_systemfile_unlock(hfsmp, lockflags);
 	error = hfs_end_transaction(hfsmp);
 	if (error) {
-		printf("hfs_reclaim_journal_file: hfs_end_transaction returned %d\n", error);
+		printf("hfs_relocate_journal_file: hfs_end_transaction returned %d\n", error);
 	}
-	
-	/* Account for the blocks relocated and print progress */
-	hfsmp->hfs_resize_blocksmoved += oldBlockCount;
-	hfs_truncatefs_progress(hfsmp);
-	if (!error) {
-		printf ("hfs_reclaim_journal_file: Relocated %u blocks from journal on \"%s\"\n", 
-				oldBlockCount, hfsmp->vcbVN);
-		if (hfs_resize_debug) {
-			printf ("hfs_reclaim_journal_file: Successfully relocated journal from (%u,%u) to (%u,%u)\n", oldStartBlock, oldBlockCount, newStartBlock, newBlockCount);
-		}
-	}
+
 	return error;
 
 free_fail:
 	journal_err = BlockDeallocate(hfsmp, newStartBlock, newBlockCount, HFS_ALLOC_SKIPFREEBLKS); 
 	if (journal_err) {
-		printf("hfs_reclaim_journal_file: BlockDeallocate returned %d\n", error);
+		printf("hfs_relocate_journal_file: BlockDeallocate returned %d\n", error);
 		hfs_mark_volume_inconsistent(hfsmp);
 	}
 fail:
 	hfs_systemfile_unlock(hfsmp, lockflags);
 	(void) hfs_end_transaction(hfsmp);
 	if (hfs_resize_debug) {
-		printf ("hfs_reclaim_journal_file: Error relocating journal file (error=%d)\n", error);
+		printf ("hfs_relocate_journal_file: Error relocating journal file (error=%d)\n", error);
 	}
+	return error;
+}
+
+
+/* 
+ * Relocate the journal file when the file system is being truncated.  
+ * We do not down-size the journal when the file system size is 
+ * reduced, so we always provide the current journal size to the 
+ * relocate code. 
+ */
+static int 
+hfs_reclaim_journal_file(struct hfsmount *hfsmp, u_int32_t allocLimit, vfs_context_t context)
+{
+	int error = 0;
+	u_int32_t startBlock;
+	u_int32_t blockCount = hfsmp->jnl_size / hfsmp->blockSize;
+
+	/*
+	 * Figure out the location of the .journal file.  When the journal
+	 * is on an external device, we need to look up the .journal file.
+	 */
+	if (hfsmp->jvp == hfsmp->hfs_devvp) {
+		startBlock = hfsmp->jnl_start;
+		blockCount = hfsmp->jnl_size / hfsmp->blockSize;
+	} else {
+		u_int32_t fileid;
+		u_int32_t old_jnlfileid;
+		struct cat_attr attr;
+		struct cat_fork fork;
+
+		/*
+		 * The cat_lookup inside GetFileInfo will fail because hfs_jnlfileid
+		 * is set, and it is trying to hide the .journal file.  So temporarily
+		 * unset the field while calling GetFileInfo.
+		 */
+		old_jnlfileid = hfsmp->hfs_jnlfileid;
+		hfsmp->hfs_jnlfileid = 0;
+		fileid = GetFileInfo(hfsmp, kHFSRootFolderID, ".journal", &attr, &fork);
+		hfsmp->hfs_jnlfileid = old_jnlfileid;
+		if (fileid != old_jnlfileid) {
+			printf("hfs_reclaim_journal_file: cannot find .journal file!\n");
+			return EIO;
+		}
+
+		startBlock = fork.cf_extents[0].startBlock;
+		blockCount = fork.cf_extents[0].blockCount;
+	}
+
+	if (startBlock + blockCount <= allocLimit) {
+		/* The journal file does not require relocation */
+		return 0;
+	}
+
+	error = hfs_relocate_journal_file(hfsmp, blockCount * hfsmp->blockSize, HFS_RESIZE_TRUNCATE, context);
+	if (error == 0) {
+		hfsmp->hfs_resize_blocksmoved += blockCount;
+		hfs_truncatefs_progress(hfsmp);
+		printf ("hfs_reclaim_journal_file: Relocated %u blocks from journal on \"%s\"\n", 
+				blockCount, hfsmp->vcbVN);
+	}
+
 	return error;
 }
 
@@ -6134,7 +6459,7 @@ hfs_reclaim_journal_info_block(struct hfsmount *hfsmp, u_int32_t allocLimit, vfs
 	/* Update the catalog record for .journal_info_block */
 	error = cat_idlookup(hfsmp, hfsmp->hfs_jnlinfoblkid, 1, &jib_desc, &jib_attr, &jib_fork);
 	if (error) {
-		printf("hfs_reclaim_journal_file: cat_idlookup returned %d\n", error);
+		printf("hfs_reclaim_journal_info_block: cat_idlookup returned %d\n", error);
 		goto fail;
 	}
 	oldBlock = jib_fork.cf_extents[0].startBlock;
@@ -6191,6 +6516,72 @@ fail:
 	if (hfs_resize_debug) {
 		printf ("hfs_reclaim_journal_info_block: Error relocating journal info block (error=%d)\n", error);
 	}
+	return error;
+}
+
+
+static u_int64_t
+calculate_journal_size(struct hfsmount *hfsmp, u_int32_t sector_size, u_int64_t sector_count) 
+{
+	u_int64_t journal_size;
+	u_int32_t journal_scale;
+
+#define DEFAULT_JOURNAL_SIZE (8*1024*1024)
+#define MAX_JOURNAL_SIZE     (512*1024*1024)
+
+	/* Calculate the journal size for this volume.   We want 
+	 * at least 8 MB of journal for each 100 GB of disk space. 
+	 * We cap the size at 512 MB, unless the allocation block
+	 * size is larger, in which case, we use one allocation 
+	 * block.
+	 */
+	journal_scale = (sector_size * sector_count) / ((u_int64_t)100 * 1024 * 1024 * 1024);
+	journal_size = DEFAULT_JOURNAL_SIZE * (journal_scale + 1);
+	if (journal_size > MAX_JOURNAL_SIZE) {
+		journal_size = MAX_JOURNAL_SIZE;
+	}
+	if (journal_size < hfsmp->blockSize) {
+		journal_size = hfsmp->blockSize;
+	}
+	return journal_size;
+}
+		
+
+/* 
+ * Calculate the expected journal size based on current partition size.  
+ * If the size of the current journal is less than the calculated size, 
+ * force journal relocation with the new journal size. 
+ */
+static int 
+hfs_extend_journal(struct hfsmount *hfsmp, u_int32_t sector_size, u_int64_t sector_count, vfs_context_t context)
+{
+	int error = 0;
+	u_int64_t calc_journal_size;
+
+	if (hfsmp->jvp != hfsmp->hfs_devvp) {
+		if (hfs_resize_debug) {
+			printf("hfs_extend_journal: not resizing the journal because it is on an external device.\n");
+		}
+		return 0;
+	}
+
+	calc_journal_size = calculate_journal_size(hfsmp, sector_size, sector_count);
+	if (calc_journal_size <= hfsmp->jnl_size) {
+		/* The journal size requires no modification */
+		goto out;
+	}
+
+	if (hfs_resize_debug) {
+		printf ("hfs_extend_journal: journal old=%u, new=%qd\n", hfsmp->jnl_size, calc_journal_size);
+	}
+
+	/* Extend the journal to the new calculated size */
+	error = hfs_relocate_journal_file(hfsmp, calc_journal_size, HFS_RESIZE_EXTEND, context);
+	if (error == 0) {
+		printf ("hfs_extend_journal: Extended journal size to %u bytes on \"%s\"\n", 
+				hfsmp->jnl_size, hfsmp->vcbVN);
+	}
+out:
 	return error;
 }
 
@@ -6524,8 +6915,28 @@ hfs_reclaim_filespace(struct hfsmount *hfsmp, u_int32_t allocLimit, vfs_context_
 	prev_blocksmoved = hfsmp->hfs_resize_blocksmoved;
 
 	if (kmem_alloc(kernel_map, (vm_offset_t *)&iterator, sizeof(*iterator))) {
-		return ENOMEM;
+		error = ENOMEM;	
+		goto reclaim_filespace_done;
 	}
+
+#if CONFIG_PROTECT
+	int keys_generated = 0;
+	/*
+	 * For content-protected filesystems, we may need to relocate files that
+	 * are encrypted.  If they use the new-style offset-based IVs, then
+	 * we can move them regardless of the lock state.  We create a temporary
+	 * key here that we use to read/write the data, then we discard it at the
+	 * end of the function.
+	 */
+	if (cp_fs_protected (hfsmp->hfs_mp)) {
+		error = cp_entry_gentempkeys(&hfsmp->hfs_resize_cpentry, hfsmp);
+		if (error) {
+			printf("hfs_reclaimspace: Error generating temporary keys for resize (%d)\n", error);
+			goto reclaim_filespace_done;
+		}
+	}
+#endif
+
 	bzero(iterator, sizeof(*iterator));
 
 	btdata.bufferAddress = &filerec;
@@ -6556,6 +6967,9 @@ hfs_reclaim_filespace(struct hfsmount *hfsmp, u_int32_t allocLimit, vfs_context_
 
 		/* We want to allow open-unlinked files to be moved, so allow_deleted == 1 */
 		if (hfs_vget(hfsmp, filerec.fileID, &vp, 0, 1) != 0) {
+			if (hfs_resize_debug) {
+				printf("hfs_reclaim_filespace: hfs_vget(%u) failed.\n", filerec.fileID);
+			}
 			continue;
 		}
 
@@ -6615,7 +7029,16 @@ hfs_reclaim_filespace(struct hfsmount *hfsmp, u_int32_t allocLimit, vfs_context_
 				files_moved, hfsmp->vcbVN);
 	}
 
-	kmem_free(kernel_map, (vm_offset_t)iterator, sizeof(*iterator));
+reclaim_filespace_done:
+	if (iterator) {
+		kmem_free(kernel_map, (vm_offset_t)iterator, sizeof(*iterator));
+	}
+
+#if CONFIG_PROTECT
+	if (keys_generated) {
+		cp_entry_destroy(&hfsmp->hfs_resize_cpentry);
+	}
+#endif
 	return error;
 }
 
@@ -7153,7 +7576,7 @@ hfs_rename_volume(struct vnode *vp, const char *name, proc_t p)
 				if (!error) {
 					strlcpy((char *)vcb->vcbVN, name, sizeof(vcb->vcbVN));
 					volname_length = strlen ((const char*)vcb->vcbVN);
-#define DKIOCCSSETLVNAME _IOW('d', 198, char[1024])
+#define DKIOCCSSETLVNAME _IOW('d', 198, char[256])
 					/* Send the volume name down to CoreStorage if necessary */	
 					error = utf8_normalizestr(vcb->vcbVN, volname_length, (u_int8_t*)converted_volname, &conv_volname_length, 256, UTF_PRECOMPOSED);
 					if (error == 0) {
@@ -7256,6 +7679,7 @@ void hfs_mark_volume_inconsistent(struct hfsmount *hfsmp)
 static int hfs_journal_replay(vnode_t devvp, vfs_context_t context)
 {
 	int retval = 0;
+	int error = 0;
 	struct mount *mp = NULL;
 	struct hfs_mount_args *args = NULL;
 
@@ -7285,7 +7709,10 @@ static int hfs_journal_replay(vnode_t devvp, vfs_context_t context)
 	buf_flushdirtyblks(devvp, TRUE, 0, "hfs_journal_replay");
 	
 	/* FSYNC the devnode to be sure all data has been flushed */
-	retval = VNOP_FSYNC(devvp, MNT_WAIT, context);
+	error = VNOP_FSYNC(devvp, MNT_WAIT, context);
+	if (error) {
+		retval = error;
+	}
 
 out:
 	if (mp) {

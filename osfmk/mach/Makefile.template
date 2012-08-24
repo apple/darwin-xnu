@@ -32,8 +32,6 @@ CLOCK_REPLY_FILES = clock_reply.h clock_reply_user.c
 
 BOOTSTRAP_FILES = bootstrap_server.h bootstrap_server.c
 
-LEDGER_FILES = ledger_user.c ledger_server.h ledger_server.c
-
 SYNC_FILES = sync_server.h sync_server.c
 
 MACH_USER_FILES = mach_user.h mach_user.c
@@ -41,7 +39,7 @@ MACH_USER_FILES = mach_user.h mach_user.c
 OTHERS	= ${MACH_FILES} ${MACH_PORT_FILES} \
 	${EXC_FILES} ${MACH_EXC_FILES} \
 	${MEMORY_OBJECT_FILES} ${MEMORY_OBJECT_DEFAULT_FILES} \
-	${PROF_FILES} ${MACH_HOST_FILES} ${LEDGER_FILES} \
+	${PROF_FILES} ${MACH_HOST_FILES} \
 	${CLOCK_FILES} ${CLOCK_REPLY_FILES} ${BOOTSTRAP_FILES} \
 	${BOOTSTRAP_FILES} ${SYNC_FILES} \
 	${MACH_USER_FILES} 
@@ -150,16 +148,6 @@ ${BOOTSTRAP_FILES}: mach/bootstrap.defs
 		-server bootstrap_server.c              \
 		$<
 
-.ORDER: ${LEDGER_FILES}
-
-${LEDGER_FILES}: mach/ledger.defs ${MACH_TYPES_DEFS}
-	${_MIG_} ${_MIGFLAGS_} ${MIGKSFLAGS} ${MIGKUFLAGS}      \
-		-header /dev/null                               \
-		-user ledger_user.c                             \
-		-sheader ledger_server.h                        \
-		-server ledger_server.c                         \
-		$<
-                  
 .ORDER: ${SYNC_FILES}
         
 ${SYNC_FILES}: mach/sync.defs 

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2008 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2012 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -192,6 +192,11 @@ static unsigned int crc32tab[256];
  * If BUILDPATH_NO_FS_ENTER is set in flags, it only uses values present
  * in the name cache and does not enter the file system.
  *
+ * If BUILDPATH_CHECK_MOVED is set in flags, we return EAGAIN when 
+ * we encounter ENOENT during path reconstruction.  ENOENT means that 
+ * one of the parents moved while we were building the path.  The 
+ * caller can special handle this case by calling build_path again.
+ *
  * passed in vp must have a valid io_count reference
  */
 int
@@ -309,7 +314,8 @@ again:
 		 * Walk up the parent chain.
 		 */
 		if (((vp->v_parent != NULLVP) && !fixhardlink) ||
-		    (flags & BUILDPATH_NO_FS_ENTER)) {
+				(flags & BUILDPATH_NO_FS_ENTER)) {
+
 			/*
 			 * In this if () block we are not allowed to enter the filesystem
 			 * to conclusively get the most accurate parent identifier.
@@ -323,17 +329,17 @@ again:
 
 				/* The code below will exit early if 'tvp = vp' == NULL */
 			}
-
 			vp = vp->v_parent;
-			
+
 			/*
 			 * if the vnode we have in hand isn't a directory and it
 			 * has a v_parent, then we started with the resource fork
 			 * so skip up to avoid getting a duplicate copy of the
 			 * file name in the path.
 			 */
-			if (vp && !vnode_isdir(vp) && vp->v_parent)
+			if (vp && !vnode_isdir(vp) && vp->v_parent) {
 				vp = vp->v_parent;
+			}
 		} else {
 			/*
 			 * No parent, go get it if supported.
@@ -492,6 +498,14 @@ out:
 	 */
 	*outlen = &buff[buflen] - end;
  
+	/* One of the parents was moved during path reconstruction. 
+	 * The caller is interested in knowing whether any of the 
+	 * parents moved via BUILDPATH_CHECK_MOVED, so return EAGAIN.
+	 */
+	if ((ret == ENOENT) && (flags & BUILDPATH_CHECK_MOVED)) {
+		ret = EAGAIN;
+	}
+
 	return (ret);
 }
 

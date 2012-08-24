@@ -26,10 +26,10 @@
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 
-#if CONFIG_FREEZE
-
 #ifndef	_DEFAULT_FREEZER_H_
 #define _DEFAULT_FREEZER_H_
+
+#if CONFIG_FREEZE
 
 #ifdef MACH_KERNEL
 
@@ -41,6 +41,7 @@
 #include <mach/memory_object_server.h>
 #include <mach/upl.h>
 #include <mach/vm_map.h>
+#include <vm/vm_protos.h>
 #include <vm/memory_object.h>
 #include <vm/vm_pageout.h> 
 #include <vm/vm_map.h>
@@ -122,21 +123,35 @@ struct default_freezer_mapping_table {
 };
 typedef struct default_freezer_mapping_table_entry *default_freezer_mapping_table_entry_t;
 
+struct default_freezer_handle {
+	lck_rw_t				dfh_lck;
+	uint32_t				dfh_ref_count;
+	default_freezer_mapping_table_t		dfh_table;
+	vm_object_t				dfh_compact_object;
+	vm_object_offset_t			dfh_compact_offset;
+};
+typedef struct default_freezer_handle	*default_freezer_handle_t;
+
 struct default_freezer_memory_object{
 	struct ipc_object_header	fo_pager_header;	/* fake ip_kotype() */
 	memory_object_pager_ops_t	fo_pager_ops; 		/* == &default_freezer_ops */
 	memory_object_control_t		fo_pager_control;
-	vm_object_t			        fo_compact_object;
-	default_freezer_mapping_table_t		fo_table;
+	default_freezer_handle_t	fo_df_handle;
 };
 typedef struct default_freezer_memory_object *default_freezer_memory_object_t;
 
 
-__private_extern__ void*	default_freezer_mapping_create(vm_object_t, vm_offset_t);
+__private_extern__ void	default_freezer_handle_lock(default_freezer_handle_t);
+__private_extern__ void	default_freezer_handle_unlock(default_freezer_handle_t);
 
-__private_extern__ void		default_freezer_mapping_free(void**, boolean_t all);
+extern lck_grp_attr_t	default_freezer_handle_lck_grp_attr;	
+extern lck_grp_t	default_freezer_handle_lck_grp;
 
-__private_extern__  kern_return_t	default_freezer_mapping_store( default_freezer_mapping_table_t *,
+__private_extern__ default_freezer_mapping_table_t	default_freezer_mapping_create(vm_object_t, vm_offset_t);
+
+__private_extern__ void		default_freezer_mapping_free(default_freezer_mapping_table_t *table_p, boolean_t all);
+
+__private_extern__  kern_return_t	default_freezer_mapping_store( default_freezer_mapping_table_t ,
 									memory_object_offset_t,
 									memory_object_t,
 									memory_object_offset_t );
@@ -147,14 +162,12 @@ __private_extern__ kern_return_t	default_freezer_mapping_update( default_freezer
 									memory_object_offset_t *,
 									boolean_t );
 
-__private_extern__  void	default_freezer_memory_object_create(vm_object_t, vm_object_t, default_freezer_mapping_table_t);
+__private_extern__ void	default_freezer_handle_reference_locked(default_freezer_handle_t);
 
-__private_extern__  void	default_freezer_pack_page(vm_page_t, vm_object_t, vm_object_offset_t, void**);
+__private_extern__ boolean_t	default_freezer_handle_deallocate_locked(default_freezer_handle_t);
 
-__private_extern__  void	default_freezer_unpack(vm_object_t, void**);
-
-__private_extern__ vm_object_t	default_freezer_get_compact_vm_object(void**);
+__private_extern__ void	default_freezer_memory_object_create(vm_object_t, default_freezer_handle_t);
 
 #endif /* MACH_KERNEL */
-#endif /* DEFAULT_FREEZER_H */
 #endif /* CONFIG_FREEZE */
+#endif /* DEFAULT_FREEZER_H */

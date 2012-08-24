@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2010 Apple Inc. All rights reserved.
+ * Copyright (c) 2010-2012 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -67,8 +67,10 @@
 #include <sys/kernel.h>
 #include <sys/sysctl.h>
 #include <sys/dtrace.h>
+#include <sys/kauth.h>
 
 #include <net/route.h>
+#include <net/if_var.h>
 
 #include <netinet/in.h>
 #include <netinet/in_pcb.h>
@@ -124,7 +126,7 @@ sotoxsocket_n(struct socket *so, struct xsocket_n *xso)
 		xso->so_error = so->so_error;
 		xso->so_pgid = so->so_pgid;
 		xso->so_oobmark = so->so_oobmark;
-		xso->so_uid = so->so_uid;
+		xso->so_uid = kauth_cred_getuid(so->so_cred);
 	}
 }
 
@@ -186,6 +188,7 @@ inpcb_to_xinpcb_n(struct inpcb *inp, struct xinpcb_n *xinp)
 	xinp->inp_depend6.inp6_cksum = inp->inp_depend6.inp6_cksum;
 	xinp->inp_depend6.inp6_ifindex = inp->inp_depend6.inp6_ifindex;
 	xinp->inp_depend6.inp6_hops = inp->inp_depend6.inp6_hops;
+	xinp->inp_flowhash = inp->inp_flowhash;
 }
 
 __private_extern__ void
@@ -381,3 +384,69 @@ done:
 	return error;
 }
 
+__private_extern__ void
+inpcb_get_ports_used(unsigned int ifindex, uint8_t *bitfield, struct inpcbinfo *pcbinfo)
+{
+	lck_rw_lock_shared(pcbinfo->mtx);
+	
+	struct inpcb *inp;
+	inp_gen_t	gencnt = pcbinfo->ipi_gencnt;
+	for (inp = LIST_FIRST(pcbinfo->listhead); inp; inp = LIST_NEXT(inp, inp_list)) {
+		if (inp->inp_gencnt <= gencnt && inp->inp_state != INPCB_STATE_DEAD &&
+			(ifindex == 0 || inp->inp_last_outifp == NULL || ifindex == inp->inp_last_outifp->if_index)) {
+			uint16_t port = ntohs(inp->inp_lport);
+			bitfield[port / 8] |= 1 << (port & 0x7);
+		}
+	}
+	
+	lck_rw_done(pcbinfo->mtx);
+}
+
+__private_extern__ uint32_t
+inpcb_count_opportunistic(unsigned int ifindex, struct inpcbinfo *pcbinfo,
+    u_int32_t flags)
+{
+	uint32_t opportunistic = 0;
+
+	lck_rw_lock_shared(pcbinfo->mtx);
+
+	struct inpcb *inp;
+	inp_gen_t	gencnt = pcbinfo->ipi_gencnt;
+	for (inp = LIST_FIRST(pcbinfo->listhead);
+		inp; inp = LIST_NEXT(inp, inp_list)) {
+		if (inp->inp_gencnt <= gencnt &&
+		    inp->inp_state != INPCB_STATE_DEAD &&
+		    inp->inp_socket != NULL &&
+		    so_get_opportunistic(inp->inp_socket) &&
+		    inp->inp_last_outifp != NULL &&
+		    ifindex == inp->inp_last_outifp->if_index) {
+			opportunistic++;
+			struct socket *so = inp->inp_socket;
+			if ((flags & INPCB_OPPORTUNISTIC_SETCMD) &&
+			    (so->so_state & SS_ISCONNECTED)) {
+				socket_lock(so, 1);
+				if (flags & INPCB_OPPORTUNISTIC_THROTTLEON) {
+					so->so_flags |= SOF_SUSPENDED;
+					soevent(so,
+					    (SO_FILT_HINT_LOCKED |
+					    SO_FILT_HINT_SUSPEND));
+				} else {
+					so->so_flags &= ~(SOF_SUSPENDED);
+					soevent(so,
+					    (SO_FILT_HINT_LOCKED |
+					    SO_FILT_HINT_RESUME));
+				}
+				SOTHROTTLELOG(("throttle[%d]: so %p [%d,%d] "
+				    "%s\n", so->last_pid, so, INP_SOCKAF(so),
+				    INP_SOCKTYPE(so),
+				    (so->so_flags & SOF_SUSPENDED) ?
+				    "SUSPENDED" : "RESUMED"));
+				socket_unlock(so, 1);
+			}
+		}
+	}
+
+	lck_rw_done(pcbinfo->mtx);
+
+	return (opportunistic);
+}

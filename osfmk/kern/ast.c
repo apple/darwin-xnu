@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2009 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2010 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -78,10 +78,11 @@
 #include <kern/processor.h>
 #include <kern/spl.h>
 #include <kern/wait_queue.h>
+#include <kern/ledger.h>
 #include <mach/policy.h>
 #include <machine/trap.h> // for CHUD AST hook
 #include <machine/pal_routines.h>
-
+#include <security/mac_mach_internal.h> // for MACF AST hook
 
 volatile perfASTCallback perfASTHook;
 
@@ -90,6 +91,8 @@ void
 ast_init(void)
 {
 }
+
+extern void chudxnu_thread_ast(thread_t); // XXX this should probably be in a header...
 
 /*
  * Called at splsched.
@@ -157,12 +160,34 @@ ast_taken(
 				bsd_ast(thread);
 			}
 #endif
-
+#if CONFIG_MACF
+			/*
+			 * Handle MACF hook.
+			 */
+			if (reasons & AST_MACF) {
+				thread_ast_clear(thread, AST_MACF);
+				mac_thread_userret(thread);
+			}
+#endif
 			/* 
 			 * Thread APC hook.
 			 */
 			if (reasons & AST_APC)
 				act_execute_returnhandlers();
+
+			if (reasons & AST_LEDGER) {
+				thread_ast_clear(thread, AST_LEDGER);
+				ledger_ast(thread);
+			}
+
+			/*
+			 * Kernel Profiling Hook
+			 */
+			if (reasons & AST_KPERF)
+			{
+				thread_ast_clear(thread, AST_KPERF);
+				chudxnu_thread_ast(thread);
+			}
 
 			ml_set_interrupts_enabled(FALSE);
 

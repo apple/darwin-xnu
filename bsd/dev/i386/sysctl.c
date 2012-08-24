@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2003 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2003-2011 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -36,6 +36,7 @@
 #include <i386/ucode.h>
 #include <kern/clock.h>
 #include <libkern/libkern.h>
+#include <i386/lapic.h>
 
 static int
 _i386_cpu_info SYSCTL_HANDLER_ARGS
@@ -118,6 +119,7 @@ cpu_xsave SYSCTL_HANDLER_ARGS
         return ENOENT;
     return _i386_cpu_info(oidp, ptr, arg2, req);
 }
+
 
 static int
 cpu_features SYSCTL_HANDLER_ARGS
@@ -279,6 +281,26 @@ misc_interrupt_latency_max(__unused struct sysctl_oid *oidp, __unused void *arg1
 
 	return error;
 }
+
+/*
+ * Triggers a machine-check exception - for a suitably configured kernel only.
+ */
+extern void mca_exception_panic(void);
+static int
+misc_machine_check_panic(__unused struct sysctl_oid *oidp, __unused void *arg1, __unused int arg2, struct sysctl_req *req)
+{
+	int changed = 0, error;
+	char buf[128];
+	buf[0] = '\0';
+
+	error = sysctl_io_string(req, buf, sizeof(buf), 0, &changed);
+
+	if (error == 0 && changed) {
+		mca_exception_panic();
+	}
+	return error;
+}
+
 
 SYSCTL_NODE(_machdep, OID_AUTO, cpu, CTLFLAG_RW|CTLFLAG_LOCKED, 0,
 	"CPU info");
@@ -660,6 +682,15 @@ SYSCTL_PROC(_machdep_cpu, OID_AUTO, ucupdate,
 			CTLTYPE_INT | CTLFLAG_WR | CTLFLAG_LOCKED, 0, 0,
             cpu_ucode_update, "S", "Microcode update interface");
 
+static const uint32_t apic_timer_vector = (LAPIC_DEFAULT_INTERRUPT_BASE + LAPIC_TIMER_INTERRUPT);
+static const uint32_t apic_IPI_vector = (LAPIC_DEFAULT_INTERRUPT_BASE + LAPIC_INTERPROCESSOR_INTERRUPT);
+
+SYSCTL_NODE(_machdep, OID_AUTO, vectors, CTLFLAG_RD | CTLFLAG_LOCKED, 0,
+	"Interrupt vector assignments");
+
+SYSCTL_UINT     (_machdep_vectors, OID_AUTO, timer, CTLFLAG_RD | CTLFLAG_KERN | CTLFLAG_LOCKED, (uint32_t *)&apic_timer_vector, 0, "");
+SYSCTL_UINT     (_machdep_vectors, OID_AUTO, IPI, CTLFLAG_RD | CTLFLAG_KERN | CTLFLAG_LOCKED, (uint32_t *)&apic_IPI_vector, 0, "");
+
 uint64_t pmap_pv_hashlist_walks;
 uint64_t pmap_pv_hashlist_cnts;
 uint32_t pmap_pv_hashlist_max;
@@ -709,6 +740,13 @@ SYSCTL_PROC(_machdep_misc, OID_AUTO, panic_restart_timeout,
 	    0, 0,
 	    panic_set_restart_timeout, "I", "Panic restart timeout in seconds");
 
-SYSCTL_PROC(_machdep_misc, OID_AUTO, interrupt_latency_max, CTLTYPE_STRING | CTLFLAG_RW | CTLFLAG_LOCKED, 
+SYSCTL_PROC(_machdep_misc, OID_AUTO, interrupt_latency_max,
+	    CTLTYPE_STRING | CTLFLAG_RW | CTLFLAG_LOCKED, 
 	    0, 0,
 	    misc_interrupt_latency_max, "A", "Maximum Interrupt latency");
+
+SYSCTL_PROC(_machdep_misc, OID_AUTO, machine_check_panic,
+	    CTLTYPE_STRING | CTLFLAG_RW | CTLFLAG_LOCKED, 
+	    0, 0,
+	    misc_machine_check_panic, "A", "Machine-check exception test");
+

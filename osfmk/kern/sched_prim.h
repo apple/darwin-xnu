@@ -93,7 +93,8 @@ extern void			thread_unstop(
 
 /* Wait for a thread to stop running */
 extern void			thread_wait(
-						thread_t	thread);
+						thread_t	thread,
+						boolean_t	until_not_runnable);
 
 /* Unblock thread on wake up */
 extern boolean_t	thread_unblock(
@@ -385,23 +386,22 @@ extern kern_return_t	thread_wakeup_prim(
 							boolean_t			one_thread,
 							wait_result_t			result);
 
-#ifdef MACH_KERNEL_PRIVATE
-extern kern_return_t	thread_wakeup_prim_internal(
-							event_t				event,
+extern kern_return_t    thread_wakeup_prim_internal(
+	                                                event_t				event,
 							boolean_t			one_thread,
 							wait_result_t			result,
 							int				priority);
-#endif
+
 
 #define thread_wakeup(x)					\
-	                thread_wakeup_prim((x), FALSE, THREAD_AWAKENED)
+			thread_wakeup_prim((x), FALSE, THREAD_AWAKENED)
 #define thread_wakeup_with_result(x, z)		\
-	                thread_wakeup_prim((x), FALSE, (z))
+			thread_wakeup_prim((x), FALSE, (z))
 #define thread_wakeup_one(x)				\
-	                thread_wakeup_prim((x), TRUE, THREAD_AWAKENED)
+			thread_wakeup_prim((x), TRUE, THREAD_AWAKENED)
 
 #ifdef MACH_KERNEL_PRIVATE
-#define thread_wakeup_one_with_pri(x, pri)				\
+#define thread_wakeup_one_with_pri(x, pri)                              \
 	                thread_wakeup_prim_internal((x), TRUE, THREAD_AWAKENED, pri)
 #endif
 

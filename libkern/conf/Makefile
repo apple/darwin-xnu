@@ -42,9 +42,11 @@ $(COMPOBJROOT)/$(LIBKERN_KERNEL_CONFIG)/Makefile :  $(SOURCE)/MASTER  \
 
 do_all: $(COMPOBJROOT)/$(LIBKERN_KERNEL_CONFIG)/Makefile
 	$(_v)next_source=$(subst conf/,,$(SOURCE));			\
+	next_relsource=$(subst conf/,,$(RELATIVE_SOURCE_PATH));		\
 	${MAKE} -C $(COMPOBJROOT)/$(LIBKERN_KERNEL_CONFIG)	\
 		MAKEFILES=$(TARGET)/$(LIBKERN_KERNEL_CONFIG)/Makefile	\
 		SOURCE=$${next_source}			\
+		RELATIVE_SOURCE_PATH=$${next_relsource}			\
 		TARGET=$(TARGET)					\
 		INCL_MAKEDEP=FALSE	\
 		KERNEL_CONFIG=$(LIBKERN_KERNEL_CONFIG)	\

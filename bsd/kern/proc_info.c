@@ -48,6 +48,7 @@
 #include <sys/sysctl.h>
 #include <sys/user.h>
 #include <sys/aio_kern.h>
+#include <sys/kern_memorystatus.h>
 
 #include <security/audit/audit.h>
 
@@ -96,6 +97,8 @@ int proc_pidfdinfo(int pid, int flavor,int fd, user_addr_t buffer, uint32_t buff
 int proc_kernmsgbuf(user_addr_t buffer, uint32_t buffersize, int32_t * retval);
 int proc_setcontrol(int pid, int flavor, uint64_t arg, user_addr_t buffer, uint32_t buffersize, int32_t * retval);
 int proc_pidfileportinfo(int pid, int flavor, mach_port_name_t name, user_addr_t buffer, uint32_t buffersize, int32_t *retval);
+int proc_dirtycontrol(int pid, int flavor, uint64_t arg, int32_t * retval);
+int proc_terminate(int pid, int32_t * retval);
 
 /* protos for procpidinfo calls */
 int proc_pidfdlist(proc_t p, user_addr_t buffer, uint32_t buffersize, int32_t *retval);
@@ -103,7 +106,7 @@ int proc_pidbsdinfo(proc_t p, struct proc_bsdinfo *pbsd, int zombie);
 int proc_pidshortbsdinfo(proc_t p, struct proc_bsdshortinfo *pbsd_shortp, int zombie);
 int proc_pidtaskinfo(proc_t p, struct proc_taskinfo *ptinfo);
 int proc_pidallinfo(proc_t p, int flavor, uint64_t arg, user_addr_t buffer, uint32_t buffersize, int32_t *retval);
-int proc_pidthreadinfo(proc_t p, uint64_t arg,  struct proc_threadinfo *pthinfo);
+int proc_pidthreadinfo(proc_t p, uint64_t arg,  int thuniqueid, struct proc_threadinfo *pthinfo);
 int proc_pidthreadpathinfo(proc_t p, uint64_t arg,  struct proc_threadwithpathinfo *pinfo);
 int proc_pidlistthreads(proc_t p,  user_addr_t buffer, uint32_t buffersize, int32_t *retval);
 int proc_pidregioninfo(proc_t p, uint64_t arg, user_addr_t buffer, uint32_t buffersize, int32_t *retval);
@@ -127,10 +130,15 @@ int pid_atalkinfo(struct atalk  * at, struct fileproc * fp,  int closeonexec, us
 
 /* protos for misc */
 
+void proc_dirty_start(struct proc *p);
+void proc_dirty_end(struct proc *p);
+
 int fill_vnodeinfo(vnode_t vp, struct vnode_info *vinfo);
 void  fill_fileinfo(struct fileproc * fp, int closeonexec, struct proc_fileinfo * finfo);
 static int proc_security_policy(proc_t p);
 static void munge_vinfo_stat(struct stat64 *sbp, struct vinfo_stat *vsbp);
+
+extern int cansignal(struct proc *, kauth_cred_t, struct proc *, int, int);
 
 uint64_t get_dispatchqueue_offset_from_proc(void *p)
 {
@@ -169,7 +177,10 @@ proc_info_internal(int callnum, int pid, int flavor, uint64_t arg, user_addr_t b
 			return(proc_setcontrol(pid, flavor, arg, buffer, buffersize, retval));
 		case 6:	/* proc_pidfileportinfo */
 			return(proc_pidfileportinfo(pid, flavor, (mach_port_name_t)arg, buffer, buffersize, retval));
-
+		case 7: /* proc_terminate */
+			return(proc_terminate(pid, retval));
+		case 8: /* proc_dirtycontrol */
+			return(proc_dirtycontrol(pid, flavor, arg, retval));
 		default:
 				return(EINVAL);
 	}
@@ -525,6 +536,10 @@ proc_pidbsdinfo(proc_t p, struct proc_bsdinfo * pbsd, int zombie)
 			pbsd->pbi_flags |= PROC_FLAG_CTTY;
 	}
 
+#if !CONFIG_EMBEDDED
+	if ((p->p_flag & P_DELAYIDLESLEEP) == P_DELAYIDLESLEEP) 
+		pbsd->pbi_flags |= PROC_FLAG_DELAYIDLESLEEP;
+#endif /* !CONFIG_EMBEDDED */
 
 	switch(PROC_CONTROL_STATE(p)) {
 		case P_PCTHROTTLE:
@@ -553,6 +568,8 @@ proc_pidbsdinfo(proc_t p, struct proc_bsdinfo * pbsd, int zombie)
 
 	if (zombie == 0)
 		pbsd->pbi_nfiles = p->p_fd->fd_nfiles;
+	
+	pbsd->e_tdev = NODEV;
 	if (pg != PGRP_NULL) {
 		pbsd->pbi_pgid = p->p_pgrpid;
 		pbsd->pbi_pjobc = pg->pg_jobc;
@@ -600,6 +617,10 @@ proc_pidshortbsdinfo(proc_t p, struct proc_bsdshortinfo * pbsd_shortp, int zombi
 		pbsd_shortp->pbsi_flags |= PROC_FLAG_PSUGID;
 	if ((p->p_flag & P_EXEC) == P_EXEC) 
 		pbsd_shortp->pbsi_flags |= PROC_FLAG_EXEC;
+#if !CONFIG_EMBEDDED
+	if ((p->p_flag & P_DELAYIDLESLEEP) == P_DELAYIDLESLEEP) 
+		pbsd_shortp->pbsi_flags |= PROC_FLAG_DELAYIDLESLEEP;
+#endif /* !CONFIG_EMBEDDED */
 
 	switch(PROC_CONTROL_STATE(p)) {
 		case P_PCTHROTTLE:
@@ -652,14 +673,14 @@ proc_pidtaskinfo(proc_t p, struct proc_taskinfo * ptinfo)
 
 
 int 
-proc_pidthreadinfo(proc_t p, uint64_t arg,  struct proc_threadinfo *pthinfo)
+proc_pidthreadinfo(proc_t p, uint64_t arg,  int thuniqueid, struct proc_threadinfo *pthinfo)
 {
 	int error = 0;
 	uint64_t threadaddr = (uint64_t)arg;
 
 	bzero(pthinfo, sizeof(struct proc_threadinfo));
 
-	error = fill_taskthreadinfo(p->task, threadaddr, (struct proc_threadinfo_internal *)pthinfo, NULL, NULL);
+	error = fill_taskthreadinfo(p->task, threadaddr, thuniqueid, (struct proc_threadinfo_internal *)pthinfo, NULL, NULL);
 	if (error)
 		return(ESRCH);
 	else
@@ -704,7 +725,7 @@ proc_pidthreadpathinfo(proc_t p, uint64_t arg,  struct proc_threadwithpathinfo *
 
 	bzero(pinfo, sizeof(struct proc_threadwithpathinfo));
 
-	error = fill_taskthreadinfo(p->task, threadaddr, (struct proc_threadinfo_internal *)&pinfo->pt, (void *)&vp, &vid);
+	error = fill_taskthreadinfo(p->task, threadaddr, 0, (struct proc_threadinfo_internal *)&pinfo->pt, (void *)&vp, &vid);
 	if (error)
 		return(ESRCH);
 
@@ -937,6 +958,7 @@ proc_pidinfo(int pid, int flavor, uint64_t arg, user_addr_t buffer, uint32_t  bu
 	int refheld = 0, shortversion = 0;
 	uint32_t size;
 	int zombie = 0;
+	int thuniqueid = 0;
 
 	switch (flavor) {
 		case PROC_PIDLISTFDS:
@@ -988,6 +1010,9 @@ proc_pidinfo(int pid, int flavor, uint64_t arg, user_addr_t buffer, uint32_t  bu
 			size = PROC_PIDLISTFILEPORTS_SIZE;
 			if (buffer == (user_addr_t)0)
 				size = 0;
+			break;
+		case PROC_PIDTHREADID64INFO:
+			size = PROC_PIDTHREADID64INFO_SIZE;
 			break;
 		default:
 			return(EINVAL);
@@ -1099,10 +1124,12 @@ proc_pidinfo(int pid, int flavor, uint64_t arg, user_addr_t buffer, uint32_t  bu
 		}
 		break;
 
+		case PROC_PIDTHREADID64INFO:
+			thuniqueid = 1;
 		case PROC_PIDTHREADINFO:{
 		struct proc_threadinfo pthinfo;
 
-			error  = proc_pidthreadinfo(p,  arg, &pthinfo);
+			error  = proc_pidthreadinfo(p,  arg, thuniqueid, &pthinfo);
 			if (error == 0) {
 				error = copyout(&pthinfo, buffer, sizeof(struct proc_threadinfo));
 				if (error == 0)
@@ -1756,12 +1783,277 @@ proc_setcontrol(int pid, int flavor, uint64_t arg, user_addr_t buffer, uint32_t 
 		}
 		break;
 
+		case PROC_SELFSET_DELAYIDLESLEEP: {
+			/* mark or clear the process property to delay idle sleep disk IO */
+			if (pcontrol != 0)
+				OSBitOrAtomic(P_DELAYIDLESLEEP, &pself->p_flag);
+			else
+				OSBitAndAtomic(~((uint32_t)P_DELAYIDLESLEEP), &pself->p_flag);
+		}
+		break;
+
 		default:
 			error = ENOTSUP;
 	}
 	
 out:
 	return(error);
+}
+
+void
+proc_dirty_start(struct proc *p)
+{
+	proc_lock(p);
+	while (p->p_dirty & P_DIRTY_BUSY) {
+		msleep(&p->p_dirty, &p->p_mlock, 0, "proc_dirty_start", NULL);
+	}
+	p->p_dirty |= P_DIRTY_BUSY;
+	proc_unlock(p);
+}
+
+void
+proc_dirty_end(struct proc *p)
+{
+	proc_lock(p);
+	if (p->p_dirty & P_DIRTY_BUSY) {
+		p->p_dirty &= ~P_DIRTY_BUSY;
+		wakeup(&p->p_dirty);
+	}
+	proc_unlock(p);
+}
+
+static boolean_t
+proc_validate_track_flags(uint32_t pcontrol, struct proc *target_p) {
+	/* Check idle exit isn't specified independently */
+	if ((pcontrol & PROC_DIRTY_TRACK_MASK) == PROC_DIRTY_ALLOW_IDLE_EXIT) {
+		return false;		
+	}
+	
+	/* See that the process isn't marked for termination */
+	if (target_p->p_dirty & P_DIRTY_TERMINATED) {
+		return false;		
+	}
+	
+	return true;
+}
+
+int
+proc_dirtycontrol(int pid, int flavor, uint64_t arg, int32_t *retval) {
+	struct proc *target_p;
+	int error = 0;
+	uint32_t pcontrol = (uint32_t)arg;
+	kauth_cred_t my_cred, target_cred;
+	boolean_t self = FALSE;
+	boolean_t child = FALSE;
+	pid_t selfpid;
+
+	target_p = proc_find(pid);
+	if (target_p == PROC_NULL) {
+		return(ESRCH);
+	}
+	
+	my_cred = kauth_cred_get();
+	target_cred = kauth_cred_proc_ref(target_p);
+	
+	selfpid = proc_selfpid();
+	if (pid == selfpid) {
+		self = TRUE;
+	} else if (target_p->p_ppid == selfpid) {
+		child = TRUE;
+	}
+	
+	switch (flavor) {
+		case PROC_DIRTYCONTROL_TRACK: {
+			/* Only allow the process itself, its parent, or root */
+			if ((self == FALSE) && (child == FALSE) && kauth_cred_issuser(kauth_cred_get()) != TRUE) {
+				error = EPERM;
+				goto out;
+			}
+			
+			proc_dirty_start(target_p);	
+
+			if (proc_validate_track_flags(pcontrol, target_p)) {
+				/* Cumulative, as per <rdar://problem/11159924> */
+				target_p->p_dirty |= 
+					((pcontrol & PROC_DIRTY_TRACK) ? P_DIRTY_TRACK : 0) |
+					((pcontrol & PROC_DIRTY_ALLOW_IDLE_EXIT) ? P_DIRTY_ALLOW_IDLE_EXIT : 0);	
+#if CONFIG_MEMORYSTATUS
+				if ((target_p->p_dirty & P_DIRTY_CAN_IDLE_EXIT) == P_DIRTY_CAN_IDLE_EXIT) {
+					memorystatus_on_track_dirty(pid, TRUE);
+				}
+#endif
+			} else {
+				error = EINVAL;
+			}
+			
+			proc_dirty_end(target_p);
+		}
+		break;
+
+		case PROC_DIRTYCONTROL_SET: {
+			boolean_t kill = false;
+			
+			/* Check privileges; use cansignal() here since the process could be terminated */
+			if (!cansignal(current_proc(), my_cred, target_p, SIGKILL, 0)) {
+				error = EPERM;
+				goto out;
+			}
+			
+			proc_dirty_start(target_p);
+			
+			if (!(target_p->p_dirty & P_DIRTY_TRACK)) {
+				/* Dirty tracking not enabled */
+				error = EINVAL;			
+			} else if (pcontrol && (target_p->p_dirty & P_DIRTY_TERMINATED)) {
+				/* 
+				 * Process is set to be terminated and we're attempting to mark it dirty.
+				 * Set for termination and marking as clean is OK - see <rdar://problem/10594349>.
+				 */
+				error = EBUSY;		
+			} else {
+				int flag = (self == TRUE) ? P_DIRTY : P_DIRTY_SHUTDOWN;
+		        if (pcontrol && !(target_p->p_dirty & flag)) {
+					target_p->p_dirty |= flag;
+				} else if ((pcontrol == 0) && (target_p->p_dirty & flag)) {
+					if ((flag == P_DIRTY_SHUTDOWN) && (!target_p->p_dirty & P_DIRTY)) {
+						/* Clearing the dirty shutdown flag, and the process is otherwise clean - kill */
+						target_p->p_dirty |= P_DIRTY_TERMINATED;
+						kill = true;
+					} else if ((flag == P_DIRTY) && (target_p->p_dirty & P_DIRTY_TERMINATED)) {
+						/* Kill previously terminated processes if set clean */
+						kill = true;						
+					}
+					target_p->p_dirty &= ~flag;
+				} else {
+					/* Already set */
+					error = EALREADY;
+				}
+			}
+#if CONFIG_MEMORYSTATUS
+			if ((error == 0) && ((target_p->p_dirty & P_DIRTY_CAN_IDLE_EXIT) == P_DIRTY_CAN_IDLE_EXIT)) {
+				memorystatus_on_dirty(pid, pcontrol ? TRUE : FALSE);
+			}
+#endif
+			proc_dirty_end(target_p);
+
+			if ((error == 0) && (kill == true)) {
+				psignal(target_p, SIGKILL);
+			}
+		}
+		break;
+		
+		case PROC_DIRTYCONTROL_GET: {
+			/* No permissions check - dirty state is freely available */
+			if (retval) {
+				proc_dirty_start(target_p);
+				
+				*retval = 0;
+				if (target_p->p_dirty & P_DIRTY_TRACK) {
+					*retval |= PROC_DIRTY_TRACKED;
+					if (target_p->p_dirty & P_DIRTY_ALLOW_IDLE_EXIT) {
+						*retval |= PROC_DIRTY_ALLOWS_IDLE_EXIT;
+					}
+					if (target_p->p_dirty & P_DIRTY) {
+						*retval |= PROC_DIRTY_IS_DIRTY;
+					}
+				}
+				
+				proc_dirty_end(target_p);
+			} else {
+				error = EINVAL;
+			}
+		}
+		break;
+	}
+
+out:
+	proc_rele(target_p);
+    kauth_cred_unref(&target_cred);
+	
+	return(error);	
+}
+
+/*
+ * proc_terminate() provides support for sudden termination.
+ * SIGKILL is issued to tracked, clean processes; otherwise,
+ * SIGTERM is sent.
+ */
+
+int
+proc_terminate(int pid, int32_t *retval)
+{
+	int error = 0;
+	proc_t p;
+	kauth_cred_t uc = kauth_cred_get();
+	int sig;
+
+#if 0
+	/* XXX: Check if these are necessary */
+	AUDIT_ARG(pid, pid);
+	AUDIT_ARG(signum, sig);
+#endif
+
+	if (pid <= 0 || retval == NULL) {
+		return (EINVAL);
+	}
+
+	if ((p = proc_find(pid)) == NULL) {
+		return (ESRCH);
+	}
+
+#if 0
+	/* XXX: Check if these are necessary */
+	AUDIT_ARG(process, p);
+#endif
+
+	/* Check privileges; if SIGKILL can be issued, then SIGTERM is also OK */
+	if (!cansignal(current_proc(), uc, p, SIGKILL, 0)) {
+		error = EPERM;
+		goto out;
+	}
+	
+	proc_dirty_start(p);
+	
+	p->p_dirty |= P_DIRTY_TERMINATED;
+	
+	if ((p->p_dirty & (P_DIRTY_TRACK|P_DIRTY_IS_DIRTY)) == P_DIRTY_TRACK) {
+		/* Clean; mark as terminated and issue SIGKILL */
+		sig = SIGKILL;
+	} else {
+		/* Dirty, terminated, or state tracking is unsupported; issue SIGTERM to allow cleanup */
+		sig = SIGTERM;
+	}
+
+	proc_dirty_end(p);
+
+	proc_removethrottle(p);
+
+	psignal(p, sig);
+	*retval = sig;
+
+out:
+	proc_rele(p);
+	
+	return error;
+}
+
+void
+proc_removethrottle(proc_t p)
+
+{
+	/* remove throttled states in all threads; process is going to terminate soon */
+	proc_lock(p);
+
+	/* if already marked marked for proc_termiantion.. */
+	if ((p->p_lflag & P_LPTERMINATE) != 0) {
+		proc_unlock(p);
+		return;
+	}
+	p->p_lflag |= P_LPTERMINATE;
+	proc_unlock(p);
+
+	(void)proc_task_remove_throttle(p->task);
+
 }
 
 

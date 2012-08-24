@@ -91,7 +91,7 @@
 41	AUE_DUP		ALL	{ int dup(u_int fd); } 
 42	AUE_PIPE	ALL	{ int pipe(void); } 
 43	AUE_GETEGID	ALL	{ int getegid(void); } 
-44	AUE_PROFILE	ALL	{ int profil(short *bufbase, size_t bufsize, u_long pcoffset, u_int pcscale); } 
+44	AUE_NULL	ALL	{ int nosys(void); } { old profil }
 45	AUE_NULL	ALL	{ int nosys(void); } { old ktrace }
 46	AUE_SIGACTION	ALL	{ int sigaction(int signum, struct __sigaction *nsa, struct sigaction *osa) NO_SYSCALL_STUB; } 
 47	AUE_GETGID	ALL	{ int getgid(void); } 
@@ -255,13 +255,13 @@
 167	AUE_MOUNT	ALL	{ int mount(char *type, char *path, int flags, caddr_t data); } 
 168	AUE_NULL	ALL	{ int nosys(void); }   { old ustat }
 169	AUE_CSOPS	ALL	{ int csops(pid_t pid, uint32_t ops, user_addr_t useraddr, user_size_t usersize); } 
-170	AUE_NULL	HN	{ int nosys(void); }   { old table }
+170	AUE_CSOPS	ALL	{ int csops_audittoken(pid_t pid, uint32_t ops, user_addr_t useraddr, user_size_t usersize, user_addr_t uaudittoken); } 
 171	AUE_NULL	ALL	{ int nosys(void); }   { old wait3 }
 172	AUE_NULL	ALL	{ int nosys(void); }   { old rpause	}	
 173	AUE_WAITID	ALL	{ int waitid(idtype_t idtype, id_t id, siginfo_t *infop, int options); } 
 174	AUE_NULL	ALL	{ int nosys(void); }   { old getdents }
 175	AUE_NULL	ALL	{ int nosys(void); }   { old gc_control }
-176	AUE_ADDPROFILE	ALL	{ int add_profil(short *bufbase, size_t bufsize, u_long pcoffset, u_int pcscale); } 
+176	AUE_NULL	ALL	{ int nosys(void); }   { old add_profil }
 177	AUE_NULL	ALL	{ int nosys(void); } 
 178	AUE_NULL	ALL	{ int nosys(void); } 
 179	AUE_NULL	ALL	{ int nosys(void); } 
@@ -322,10 +322,12 @@
 ; to HFS semantics, they are not specific to the HFS filesystem.
 ; We expect all filesystems to recognize the call and report that it is
 ; not supported or to actually implement it.
-216	AUE_MKCOMPLEX	UHN	{ int mkcomplex(const char *path, mode_t mode, u_long type); } 	{ soon to be obsolete }
-217	AUE_STATV	UHN	{ int statv(const char *path, struct vstat *vsb); } 	{ soon to be obsolete }
-218	AUE_LSTATV	UHN	{ int lstatv(const char *path, struct vstat *vsb); } 	{ soon to be obsolete }
-219	AUE_FSTATV	UHN	{ int fstatv(int fd, struct vstat *vsb); } 	{ soon to be obsolete }
+
+; 216-> 219 used to be mkcomplex and {f,l}statv variants. They are gone now.
+216	AUE_NULL	ALL	{ int open_dprotected_np(user_addr_t path, int flags, int class, int dpflags, int mode) NO_SYSCALL_STUB; }
+217	AUE_NULL	ALL	{ int nosys(void); }
+218	AUE_NULL	ALL	{ int nosys(void); }
+219	AUE_NULL	ALL	{ int nosys(void); }
 220	AUE_GETATTRLIST	ALL	{ int getattrlist(const char *path, struct attrlist *alist, void *attributeBuffer, size_t bufferSize, u_long options) NO_SYSCALL_STUB; } 
 221	AUE_SETATTRLIST	ALL	{ int setattrlist(const char *path, struct attrlist *alist, void *attributeBuffer, size_t bufferSize, u_long options) NO_SYSCALL_STUB; } 
 222	AUE_GETDIRENTRIESATTR	ALL	{ int getdirentriesattr(int fd, struct attrlist *alist, void *buffer, size_t buffersize, u_long *count, u_long *basep, u_long *newstate, u_long options); } 
@@ -417,7 +419,7 @@
 #endif
 266	AUE_SHMOPEN	ALL	{ int shm_open(const char *name, int oflag, int mode); } 
 267	AUE_SHMUNLINK	ALL	{ int shm_unlink(const char *name); } 
-268	AUE_SEMOPEN	ALL	{ user_addr_t sem_open(const char *name, int oflag, int mode, int value); } 
+268	AUE_SEMOPEN	ALL	{ user_addr_t sem_open(const char *name, int oflag, int mode, int value) NO_SYSCALL_STUB; } 
 269	AUE_SEMCLOSE	ALL	{ int sem_close(sem_t *sem); } 
 270	AUE_SEMUNLINK	ALL	{ int sem_unlink(const char *name); } 
 271	AUE_SEMWAIT	ALL	{ int sem_wait(sem_t *sem); } 
@@ -442,7 +444,11 @@
 290	AUE_GETWGROUPS	ALL	{ int getwgroups(user_addr_t setlen, user_addr_t guidset) NO_SYSCALL_STUB; }
 291	AUE_MKFIFO_EXTENDED	ALL	{ int mkfifo_extended(user_addr_t path, uid_t uid, gid_t gid, int mode, user_addr_t xsecurity) NO_SYSCALL_STUB; } 
 292	AUE_MKDIR_EXTENDED	ALL	{ int mkdir_extended(user_addr_t path, uid_t uid, gid_t gid, int mode, user_addr_t xsecurity) NO_SYSCALL_STUB; } 
+#if CONFIG_EXT_RESOLVER
 293	AUE_IDENTITYSVC	ALL	{ int identitysvc(int opcode, user_addr_t message) NO_SYSCALL_STUB; } 
+#else
+293	AUE_NULL	ALL	{ int nosys(void); } 
+#endif
 294	AUE_NULL	ALL	{ int shared_region_check_np(uint64_t *start_address) NO_SYSCALL_STUB; }
 295	AUE_NULL	ALL	{ int nosys(void); } { old shared_region_map_np }
 296	AUE_NULL	ALL	{ int vm_pressure_monitor(int wait_for_pressure, int nsecs_monitored, uint32_t *pages_reclaimed); }
@@ -534,8 +540,8 @@
 352	AUE_NULL	ALL	{ int nosys(void); } 
 353	AUE_GETAUID	ALL	{ int getauid(au_id_t *auid); } 
 354	AUE_SETAUID	ALL	{ int setauid(au_id_t *auid); } 
-355	AUE_GETAUDIT	ALL	{ int getaudit(struct auditinfo *auditinfo); } 
-356	AUE_SETAUDIT	ALL	{ int setaudit(struct auditinfo *auditinfo); } 
+355	AUE_NULL	ALL	{ int nosys(void); }	{ old getaudit }
+356	AUE_NULL	ALL	{ int nosys(void); }	{ old setaudit }
 357	AUE_GETAUDIT_ADDR	ALL	{ int getaudit_addr(struct auditinfo_addr *auditinfo_addr, int length); } 
 358	AUE_SETAUDIT_ADDR	ALL	{ int setaudit_addr(struct auditinfo_addr *auditinfo_addr, int length); } 
 359	AUE_AUDITCTL	ALL	{ int auditctl(char *path); } 
@@ -568,7 +574,7 @@
 371     AUE_NULL        ALL     { int nosys(void); }   { old __semwait_signal }
 #endif
 372	AUE_NULL	ALL	{ uint64_t thread_selfid (void) NO_SYSCALL_STUB; } 
-373	AUE_NULL	ALL	{ int nosys(void); } 
+373	AUE_LEDGER	ALL	{ int ledger(int cmd, caddr_t arg1, caddr_t arg2, caddr_t arg3); } 
 374	AUE_NULL	ALL	{ int nosys(void); } 
 375	AUE_NULL	ALL	{ int nosys(void); } 
 376	AUE_NULL	ALL	{ int nosys(void); } 
@@ -658,9 +664,9 @@
 435	AUE_NULL	ALL	{ int pid_hibernate(int pid); }
 436	AUE_NULL	ALL	{ int pid_shutdown_sockets(int pid, int level); }
 #else
-435	AUE_NULL	ALL	{ int nosys(void); } 
+435	AUE_NULL	ALL	{ int nosys(void); }
 436	AUE_NULL	ALL	{ int nosys(void); }
 #endif
 437	AUE_NULL	ALL	{ int nosys(void); } { old shared_region_slide_np }
 438	AUE_NULL	ALL	{ int shared_region_map_and_slide_np(int fd, uint32_t count, const struct shared_file_mapping_np *mappings, uint32_t slide, uint64_t* slide_start, uint32_t slide_size) NO_SYSCALL_STUB; }
-
+439	AUE_NULL	ALL	{ int kas_info(int selector, void *value, size_t *size); }

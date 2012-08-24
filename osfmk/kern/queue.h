@@ -614,8 +614,12 @@ MACRO_END
  */
 struct mpqueue_head {
 	struct queue_entry	head;		/* header for queue */
+#if defined(__i386__) || defined(__x86_64__)
 	lck_mtx_t		lock_data;
 	lck_mtx_ext_t		lock_data_ext;
+#else
+	lck_spin_t		lock_data;
+#endif
 };
 
 typedef struct mpqueue_head	mpqueue_head_t;

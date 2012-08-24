@@ -33,6 +33,7 @@
        
 #include <i386/postcode.h>
 #include <i386/apic.h>
+#include <i386/vmx/vmx_asm.h>
 #include <assym.s>
 
 /*
@@ -161,7 +162,7 @@ Lslow:
 	hlt
 	.data
 1: 	String	"_rtc_nanotime_read() - slow algorithm not supported"
-
+	.text
 
 Entry(call_continuation)
 	movq	%rdi,%rcx			/* get continuation */
@@ -173,3 +174,86 @@ Entry(call_continuation)
 	movq	%gs:CPU_ACTIVE_THREAD,%rdi
 	call	EXT(thread_terminate)
 
+Entry(x86_init_wrapper)
+	xor	%rbp, %rbp
+	movq	%rsi, %rsp
+	callq	*%rdi
+
+	/*
+	* Generate a 64-bit quantity with possibly random characteristics, intended for use
+	* before the kernel entropy pool is available. The processor's RNG is used if
+	* available, and a value derived from the Time Stamp Counter is returned if not.
+	* Multiple invocations may result in well-correlated values if sourced from the TSC.
+	*/
+Entry(ml_early_random)
+	mov	%rbx, %rsi
+	mov	$1, %eax
+	cpuid
+	mov	%rsi, %rbx
+	test	$(1 << 30), %ecx
+	jz	Lnon_rdrand
+	RDRAND_RAX		/* RAX := 64 bits of DRBG entropy */
+	jnc	Lnon_rdrand
+	ret
+Lnon_rdrand:
+	rdtsc /* EDX:EAX := TSC */
+	/* Distribute low order bits */
+	mov	%eax, %ecx
+	xor	%al, %ah
+	shl	$16, %rcx
+	xor	%rcx, %rax
+	xor	%eax, %edx
+
+	/* Incorporate ASLR entropy, if any */
+	lea	(%rip), %rcx
+	shr	$21, %rcx
+	movzbl	%cl, %ecx
+	shl	$16, %ecx
+	xor	%ecx, %edx
+
+	mov	%ah, %cl
+	ror	%cl, %edx /* Right rotate EDX (TSC&0xFF ^ (TSC>>8 & 0xFF))&1F */
+	shl	$32, %rdx
+	xor	%rdx, %rax
+	mov	%cl, %al
+	ret
+	
+#if CONFIG_VMX
+
+/*
+ *	__vmxon -- Enter VMX Operation
+ *	int __vmxon(addr64_t v);
+ */
+Entry(__vmxon)
+	FRAME
+	push	%rdi
+	
+	mov	$(VMX_FAIL_INVALID), %ecx
+	mov	$(VMX_FAIL_VALID), %edx
+	mov	$(VMX_SUCCEED), %eax
+	vmxon	(%rsp)
+	cmovcl 	%ecx, %eax	/* CF = 1, ZF = 0 */
+	cmovzl	%edx, %eax	/* CF = 0, ZF = 1 */
+
+	pop	%rdi
+	EMARF
+	ret
+
+/*
+ *	__vmxoff -- Leave VMX Operation
+ *	int __vmxoff(void);
+ */
+Entry(__vmxoff)
+	FRAME
+	
+	mov	$(VMX_FAIL_INVALID), %ecx
+	mov	$(VMX_FAIL_VALID), %edx
+	mov	$(VMX_SUCCEED), %eax
+	vmxoff
+	cmovcl 	%ecx, %eax	/* CF = 1, ZF = 0 */
+	cmovzl	%edx, %eax	/* CF = 0, ZF = 1 */
+
+	EMARF
+	ret
+
+#endif /* CONFIG_VMX */

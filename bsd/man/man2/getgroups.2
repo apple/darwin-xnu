@@ -1,5 +1,5 @@
 .\"
-.\" Copyright (c) 2008, 2010 Apple Inc.  All rights reserved.
+.\" Copyright (c) 2008-2011 Apple Inc.  All rights reserved.
 .\"
 .\" @APPLE_LICENSE_HEADER_START@
 .\" 
@@ -56,7 +56,7 @@
 .\"
 .\"     @(#)getgroups.2	8.2 (Berkeley) 4/16/94
 .\"
-.Dd September 17, 2010
+.Dd October 28, 2011
 .Dt GETGROUPS 2
 .Os BSD 4.2
 .Sh NAME
@@ -90,6 +90,13 @@ is 0,
 returns the number of groups without modifying the
 .Fa grouplist[]
 array.
+.Pp
+Calling
+.Xr initgroups 3
+to opt-in for supplementary groups will cause
+.Fn getgroups
+to return a single entry, the GID that was passed to 
+.Xr initgroups 3 .
 .Pp
 To provide compatibility with applications that use
 .Fn getgroups

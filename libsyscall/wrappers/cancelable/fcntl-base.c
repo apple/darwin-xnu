@@ -45,15 +45,15 @@ fcntl(int fd, int cmd, ...)
 	 case F_PREALLOCATE:
 	 case F_SETSIZE:
 	 case F_RDADVISE:
-	 case F_READBOOTSTRAP:
-	 case F_WRITEBOOTSTRAP:
 	 case F_LOG2PHYS:
+	 case F_LOG2PHYS_EXT:
 	 case F_GETPATH:
 	 case F_GETPATH_MTMINFO:
 	 case F_PATHPKG_CHECK:
 	 case F_OPENFROM:
 	 case F_UNLINKFROM:
 	 case F_ADDSIGS:
+	 case F_ADDFILESIGS:
 		arg = va_arg(ap, void *);
 		break;
 	 default:

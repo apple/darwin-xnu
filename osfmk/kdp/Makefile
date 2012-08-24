@@ -15,10 +15,13 @@ DATAFILES = \
 		kdp_callout.h \
 		kdp_en_debugger.h
 
-EXPORT_MI_LIST	= ${DATAFILES}
+EXPORT_MI_LIST	= ${DATAFILES} kdp_dyld.h
+
+INSTALL_KF_MI_LIST = ${DATAFILES}
+
+INSTALL_KF_MI_LCL_LIST = ${DATAFILES}
 
 EXPORT_MI_DIR = kdp
-
 
 include $(MakeInc_rule)
 include $(MakeInc_dir)

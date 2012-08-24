@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2010 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2012 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -236,17 +236,44 @@ struct ip_linklocal_stat {
 #define	IP_ALLOWBROADCAST	SO_BROADCAST	/* can send broadcast packets (0x0020) */
 #define	IP_OUTARGS		0x100		/* has ancillary output info */
 
+#ifdef XNU_KERNEL_PRIVATE
+#define IP_HDR_ALIGNED_P(_ip)	((((uintptr_t)(_ip)) & ((uintptr_t)3)) == 0)
+
+/*
+ * On platforms which require strict alignment (currently for anything but
+ * i386 or x86_64), this macro checks whether the pointer to the IP header
+ * is 32-bit aligned, and assert otherwise.
+ */
+#if defined(__i386__) || defined(__x86_64__)
+#define	IP_HDR_STRICT_ALIGNMENT_CHECK(_ip) do { } while (0)
+#else /* !__i386__ && !__x86_64__ */
+#define	IP_HDR_STRICT_ALIGNMENT_CHECK(_ip) do {				\
+	if (!IP_HDR_ALIGNED_P(_ip)) {					\
+		panic_plain("\n%s: Unaligned IP header %p\n",		\
+		    __func__, _ip);					\
+	}								\
+} while (0)
+#endif /* !__i386__ && !__x86_64__ */
+#endif /* XNU_KERNEL_PRIVATE */
+
 struct ip;
 struct inpcb;
 struct route;
 struct sockopt;
 
+#include <net/flowadv.h>
+
 /*
  * Extra information passed to ip_output when IP_OUTARGS is set.
  */
 struct ip_out_args {
-	unsigned int	ipoa_boundif;	/* bound outgoing interface */
-	unsigned int	ipoa_nocell;	/* don't use IFT_CELLULAR */
+	unsigned int	ipoa_boundif;	/* boundif interface index */
+	struct flowadv	ipoa_flowadv;	/* flow advisory code */
+	u_int32_t	ipoa_flags;	/* IPOAF flags (see below) */
+#define	IPOAF_SELECT_SRCIF	0x00000001	/* src interface selection */
+#define	IPOAF_BOUND_IF		0x00000002	/* boundif value is valid */
+#define	IPOAF_BOUND_SRCADDR	0x00000004	/* bound to src address */
+#define	IPOAF_NO_CELLULAR	0x00000010	/* skip IFT_CELLULAR */
 };
 
 extern struct	ipstat	ipstat;
@@ -263,6 +290,7 @@ extern u_int32_t	(*ip_mcast_src)(int);
 extern int rsvp_on;
 extern struct	pr_usrreqs rip_usrreqs;
 extern int	ip_doscopedroute;
+extern int	ip_restrictrecvif;
 
 extern void ip_moptions_init(void);
 extern struct ip_moptions *ip_allocmoptions(int);
@@ -304,7 +332,7 @@ int	ip_rsvp_done(void);
 int	ip_rsvp_vif_init(struct socket *, struct sockopt *);
 int	ip_rsvp_vif_done(struct socket *, struct sockopt *);
 void	ip_rsvp_force_done(struct socket *);
-
+void	ip_proto_dispatch_in_wrapper(struct mbuf *, int, u_int8_t);
 void	in_delayed_cksum(struct mbuf *m);
 
 extern void tcp_in_cksum_stats(u_int32_t);

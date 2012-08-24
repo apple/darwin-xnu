@@ -75,6 +75,12 @@
 #define	__END_DECLS
 #endif
 
+/* This SDK is designed to work with clang and specific versions of
+ * gcc >= 4.0 with Apple's patch sets */
+#if !defined(__GNUC__) || __GNUC__ < 4
+#warning "Unsupported compiler detected"
+#endif
+
 /*
  * The __CONCAT macro is used to concatenate parts of symbol names, e.g.
  * with "#define OLD(foo) __CONCAT(old,foo)", OLD(foo) produces oldfoo.
@@ -126,62 +132,44 @@
 #endif /* !NO_ANSI_KEYWORDS */
 #endif /* !(__STDC__ || __cplusplus) */
 
-/*
- * GCC1 and some versions of GCC2 declare dead (non-returning) and
- * pure (no side effects) functions using "volatile" and "const";
- * unfortunately, these then cause warnings under "-ansi -pedantic".
- * GCC2 uses a new, peculiar __attribute__((attrs)) style.  All of
- * these work for GNU C++ (modulo a slight glitch in the C++ grammar
- * in the distribution version of 2.5.5).
+#define __dead2		__attribute__((noreturn))
+#define __pure2		__attribute__((const))
+
+/* __unused denotes variables and functions that may not be used, preventing
+ * the compiler from warning about it if not used.
  */
-#if defined(__MWERKS__) && (__MWERKS__ > 0x2400)
-	/* newer Metrowerks compilers support __attribute__() */
-#elif __GNUC__ > 2 || __GNUC__ == 2 && __GNUC_MINOR__ >= 5
-#define	__dead2		__attribute__((__noreturn__))
-#define	__pure2		__attribute__((__const__))
-#if __GNUC__ == 2 && __GNUC_MINOR__ >= 5 && __GNUC_MINOR__ < 7
-#define	__unused	/* no attribute */
-#else
-#define	__unused	__attribute__((__unused__))
-#endif
-#else
-#define	__attribute__(x)	/* delete __attribute__ if non-gcc or gcc1 */
-#if defined(__GNUC__) && !defined(__STRICT_ANSI__)
-/* __dead and __pure are depreciated.  Use __dead2 and __pure2 instead */
-#define	__dead		__volatile
-#define	__pure		__const
-#endif
-#endif
+#define __unused	__attribute__((unused))
+
+/* __used forces variables and functions to be included even if it appears
+ * to the compiler that they are not used (and would thust be discarded).
+ */
+#define __used		__attribute__((used))
+
+/* __deprecated causes the compiler to produce a warning when encountering
+ * code using the deprecated functionality.  This may require turning on
+ * such wardning with the -Wdeprecated flag.
+ */
+#define __deprecated	__attribute__((deprecated))
+
+/* __unavailable causes the compiler to error out when encountering
+ * code using the tagged function of variable.
+ */
+#define __unavailable	__attribute__((unavailable))
 
 /* Delete pseudo-keywords wherever they are not available or needed. */
 #ifndef __dead
 #define	__dead
 #define	__pure
 #endif
-#ifndef __dead2
-#define	__dead2
-#define	__pure2
-#define	__unused
-#endif
-
-#if defined(__GNUC__) && __GNUC__ >= 4
-#define __used __attribute__((__used__))
-#else
-#define __used
-#endif
 
 /*
- * GCC 2.95 provides `__restrict' as an extension to C90 to support the
- * C99-specific `restrict' type qualifier.  We happen to use `__restrict' as
- * a way to define the `restrict' type qualifier without disturbing older
- * software that is unaware of C99 keywords.
+ * We use `__restrict' as a way to define the `restrict' type qualifier
+ * without disturbing older software that is unaware of C99 keywords.
  */
-#if !(__GNUC__ == 2 && __GNUC_MINOR__ == 95)
 #if __STDC_VERSION__ < 199901
 #define __restrict
 #else
 #define __restrict	restrict
-#endif
 #endif
 
 /*
@@ -192,15 +180,10 @@
  * mismatch between the format string and subsequent function parameter
  * types.
  */
-#if __GNUC__ > 2 || __GNUC__ == 2 && __GNUC_MINOR__ >= 7
 #define __printflike(fmtarg, firstvararg) \
 		__attribute__((__format__ (__printf__, fmtarg, firstvararg)))
 #define __scanflike(fmtarg, firstvararg) \
 		__attribute__((__format__ (__scanf__, fmtarg, firstvararg)))
-#else
-#define __printflike(fmtarg, firstvararg)
-#define __scanflike(fmtarg, firstvararg)
-#endif
 
 #define __IDSTRING(name,string) static const char name[] __used = string
 
@@ -219,6 +202,12 @@
 #ifndef __PROJECT_VERSION
 #define __PROJECT_VERSION(s) __IDSTRING(project_version,s)
 #endif
+
+/* Source compatibility only, ID string not emitted in object file */
+#ifndef __FBSDID
+#define __FBSDID(s) 
+#endif
+
 
 /*
  * COMPILATION ENVIRONMENTS -- see compat(5) for additional detail
@@ -451,7 +440,7 @@
 #else
 #include <sys/_symbol_aliasing.h>
 
-#if defined(__IPHONE_OS_VERSION_MIN_REQUIRED)
+#if defined(__ENVIRONMENT_IPHONE_OS_VERSION_MIN_REQUIRED__)
 #define __DARWIN_ALIAS_STARTING(_mac, _iphone, x)   __DARWIN_ALIAS_STARTING_IPHONE_##_iphone(x)
 #elif defined(__ENVIRONMENT_MAC_OS_X_VERSION_MIN_REQUIRED__)
 #define __DARWIN_ALIAS_STARTING(_mac, _iphone, x)   __DARWIN_ALIAS_STARTING_MAC_##_mac(x)
@@ -515,17 +504,6 @@
 #define _POSIX_C_SOURCE         198808L
 #endif
 
-/*
- * Deprecation macro
- */
-#if defined(__GNUC__) && ((__GNUC__ >= 4) || ((__GNUC__ == 3) && (__GNUC_MINOR__ >= 1)))
-#define __deprecated __attribute__((deprecated))
-#define __unavailable __attribute__((unavailable))
-#else
-#define __deprecated /* nothing */
-#define __unavailable /* nothing */
-#endif
-
 /* POSIX C deprecation macros */
 #ifdef KERNEL
 #define __POSIX_C_DEPRECATED(ver)
@@ -562,20 +540,6 @@
 				&& (__STDC_VERSION__-0 < 199901L) \
 				&& !defined(__GNUG__))
 
-/*
- * Long double compatibility macro allow selecting variant symbols based
- * on the old (compatible) 64-bit long doubles, or the new 128-bit
- * long doubles.  This applies only to ppc; i386 already has long double
- * support, while ppc64 doesn't have any backwards history.
- */
-#if   defined(__i386__) || defined(__x86_64__)
-#  define	__DARWIN_LDBL_COMPAT(x)	/* nothing */
-#  define	__DARWIN_LDBL_COMPAT2(x) /* nothing */
-#  define	__DARWIN_LONG_DOUBLE_IS_DOUBLE	0
-#else
-#  error Unknown architecture
-#endif
-
 /*****************************************
  *  Public darwin-specific feature macros
  *****************************************/
@@ -586,14 +550,6 @@
  */
 #if __DARWIN_64_BIT_INO_T
 #define _DARWIN_FEATURE_64_BIT_INODE		1
-#endif
-
-/*
- * _DARWIN_FEATURE_LONG_DOUBLE_IS_DOUBLE indicates when the long double type
- * is the same as the double type (ppc and arm only)
- */
-#if __DARWIN_LONG_DOUBLE_IS_DOUBLE
-#define _DARWIN_FEATURE_LONG_DOUBLE_IS_DOUBLE	1
 #endif
 
 /*

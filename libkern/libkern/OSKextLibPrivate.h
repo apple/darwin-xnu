@@ -72,6 +72,28 @@ typedef uint8_t OSKextExcludeLevel;
  */
 #define kOSBundleHelperKey      "OSBundleHelper"
 
+/*!
+ * @define   kOSBundleDeveloperOnlyKey
+ * @abstract A boolean value indicating whether the kext should only load on
+ *           Developer devices.
+ */
+#define kOSBundleDeveloperOnlyKey		"OSBundleDeveloperOnly"
+
+
+/*!
+ * @define   kAppleSecurityExtensionKey
+ * @abstract A boolean value indicating whether the kext registers
+ *           MACF hooks.
+ */
+#define kAppleSecurityExtensionKey	"AppleSecurityExtension"
+
+/*!
+ * @define   kAppleKernelExternalComponentKey
+ * @abstract A boolean value indicating whether the kext is vending kernel
+ *           KPI, and needs special loading behavior.
+ */
+#define kAppleKernelExternalComponentKey	"AppleKernelExternalComponent"
+
 // properties found in the registry root
 #define kOSKernelCPUTypeKey             "OSKernelCPUType"
 #define kOSKernelCPUSubtypeKey          "OSKernelCPUSubtype"

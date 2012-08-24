@@ -88,6 +88,7 @@
 #include <sys/kauth.h>
 #include <sys/sysproto.h>
 
+#include <mach/exception_types.h>
 #include <mach/vm_types.h>
 #include <mach/vm_prot.h>
 
@@ -123,7 +124,11 @@ SYSCTL_NODE(, OID_AUTO, security, CTLFLAG_RW|CTLFLAG_LOCKED, 0,
 SYSCTL_NODE(_security, OID_AUTO, mac, CTLFLAG_RW|CTLFLAG_LOCKED, 0,
     "TrustedBSD MAC policy controls");
 
-
+#if DEBUG
+#define SECURITY_MAC_CTLFLAGS CTLFLAG_RW | CTLFLAG_LOCKED
+#else
+#define SECURITY_MAC_CTLFLAGS CTLFLAG_RD | CTLFLAG_LOCKED
+#endif
 
 /*
  * Declare that the kernel provides MAC support, version 1.  This permits
@@ -163,7 +168,7 @@ int	mac_late = 0;
  */
 #if CONFIG_MACF_NET
 unsigned int mac_label_mbufs	= 1;
-SYSCTL_UINT(_security_mac, OID_AUTO, label_mbufs, CTLFLAG_RW | CTLFLAG_LOCKED,
+SYSCTL_UINT(_security_mac, OID_AUTO, label_mbufs, SECURITY_MAC_CTLFLAGS,
 	&mac_label_mbufs, 0, "Label all MBUFs");
 #endif
 
@@ -180,86 +185,67 @@ SYSCTL_UINT(_security_mac, OID_AUTO, label_mbufs, CTLFLAG_RW | CTLFLAG_LOCKED,
  * be a problem.
  */
 unsigned int	mac_label_vnodes = 0;
-SYSCTL_UINT(_security_mac, OID_AUTO, labelvnodes, CTLFLAG_RW | CTLFLAG_LOCKED,
+SYSCTL_UINT(_security_mac, OID_AUTO, labelvnodes, SECURITY_MAC_CTLFLAGS,
     &mac_label_vnodes, 0, "Label all vnodes");
 
 
 unsigned int	mac_mmap_revocation = 0;
-SYSCTL_UINT(_security_mac, OID_AUTO, mmap_revocation, CTLFLAG_RW | CTLFLAG_LOCKED,
+SYSCTL_UINT(_security_mac, OID_AUTO, mmap_revocation, SECURITY_MAC_CTLFLAGS,
     &mac_mmap_revocation, 0, "Revoke mmap access to files on subject "
     "relabel");
 
 unsigned int	mac_mmap_revocation_via_cow = 0;
-SYSCTL_UINT(_security_mac, OID_AUTO, mmap_revocation_via_cow, CTLFLAG_RW | CTLFLAG_LOCKED,
+SYSCTL_UINT(_security_mac, OID_AUTO, mmap_revocation_via_cow, SECURITY_MAC_CTLFLAGS,
     &mac_mmap_revocation_via_cow, 0, "Revoke mmap access to files via "
     "copy-on-write semantics, or by removing all write access");
 
 unsigned int mac_device_enforce = 1;
-SYSCTL_UINT(_security_mac, OID_AUTO, device_enforce, CTLFLAG_RW | CTLFLAG_LOCKED,
+SYSCTL_UINT(_security_mac, OID_AUTO, device_enforce, SECURITY_MAC_CTLFLAGS,
 	   &mac_device_enforce, 0, "Enforce MAC policy on device operations");
 
-unsigned int mac_file_enforce = 0;
-SYSCTL_UINT(_security_mac, OID_AUTO, file_enforce, CTLFLAG_RW | CTLFLAG_LOCKED,
-	&mac_file_enforce, 0, "Enforce MAC policy on file operations");
-
-unsigned int mac_iokit_enforce = 0;
-SYSCTL_UINT(_security_mac, OID_AUTO, iokit_enforce, CTLFLAG_RW | CTLFLAG_LOCKED,
-	&mac_file_enforce, 0, "Enforce MAC policy on IOKit operations");
-
 unsigned int	mac_pipe_enforce = 1;
-SYSCTL_UINT(_security_mac, OID_AUTO, pipe_enforce, CTLFLAG_RW | CTLFLAG_LOCKED,
+SYSCTL_UINT(_security_mac, OID_AUTO, pipe_enforce, SECURITY_MAC_CTLFLAGS,
     &mac_pipe_enforce, 0, "Enforce MAC policy on pipe operations");
 
 unsigned int	mac_posixsem_enforce = 1;
-SYSCTL_UINT(_security_mac, OID_AUTO, posixsem_enforce, CTLFLAG_RW | CTLFLAG_LOCKED,
+SYSCTL_UINT(_security_mac, OID_AUTO, posixsem_enforce, SECURITY_MAC_CTLFLAGS,
     &mac_posixsem_enforce, 0, "Enforce MAC policy on POSIX semaphores");
 
 unsigned int mac_posixshm_enforce = 1;
-SYSCTL_UINT(_security_mac, OID_AUTO, posixshm_enforce, CTLFLAG_RW | CTLFLAG_LOCKED,
+SYSCTL_UINT(_security_mac, OID_AUTO, posixshm_enforce, SECURITY_MAC_CTLFLAGS,
     &mac_posixshm_enforce, 0, "Enforce MAC policy on Posix Shared Memory");
 
 unsigned int	mac_proc_enforce = 1;
-SYSCTL_UINT(_security_mac, OID_AUTO, proc_enforce, CTLFLAG_RW | CTLFLAG_LOCKED,
+SYSCTL_UINT(_security_mac, OID_AUTO, proc_enforce, SECURITY_MAC_CTLFLAGS,
 	   &mac_proc_enforce, 0, "Enforce MAC policy on process operations");
 
 unsigned int mac_socket_enforce = 1;
-SYSCTL_UINT(_security_mac, OID_AUTO, socket_enforce, CTLFLAG_RW | CTLFLAG_LOCKED,
+SYSCTL_UINT(_security_mac, OID_AUTO, socket_enforce, SECURITY_MAC_CTLFLAGS,
 	&mac_socket_enforce, 0, "Enforce MAC policy on socket operations");
 
 unsigned int	mac_system_enforce = 1;
-SYSCTL_UINT(_security_mac, OID_AUTO, system_enforce, CTLFLAG_RW | CTLFLAG_LOCKED,
+SYSCTL_UINT(_security_mac, OID_AUTO, system_enforce, SECURITY_MAC_CTLFLAGS,
     &mac_system_enforce, 0, "Enforce MAC policy on system-wide interfaces");
 
 unsigned int	mac_sysvmsg_enforce = 1;
-SYSCTL_UINT(_security_mac, OID_AUTO, sysvmsg_enforce, CTLFLAG_RW | CTLFLAG_LOCKED,
+SYSCTL_UINT(_security_mac, OID_AUTO, sysvmsg_enforce, SECURITY_MAC_CTLFLAGS,
     &mac_sysvmsg_enforce, 0, "Enforce MAC policy on System V IPC message queues");
 
 unsigned int	mac_sysvsem_enforce = 1;
-SYSCTL_UINT(_security_mac, OID_AUTO, sysvsem_enforce, CTLFLAG_RW | CTLFLAG_LOCKED,
+SYSCTL_UINT(_security_mac, OID_AUTO, sysvsem_enforce, SECURITY_MAC_CTLFLAGS,
     &mac_sysvsem_enforce, 0, "Enforce MAC policy on System V IPC semaphores");
 
 unsigned int	mac_sysvshm_enforce = 1;
-SYSCTL_INT(_security_mac, OID_AUTO, sysvshm_enforce, CTLFLAG_RW | CTLFLAG_LOCKED,
+SYSCTL_INT(_security_mac, OID_AUTO, sysvshm_enforce, SECURITY_MAC_CTLFLAGS,
     &mac_sysvshm_enforce, 0, "Enforce MAC policy on System V Shared Memory");
 
 unsigned int	mac_vm_enforce = 1;
-SYSCTL_INT(_security_mac, OID_AUTO, vm_enforce, CTLFLAG_RW | CTLFLAG_LOCKED,
+SYSCTL_INT(_security_mac, OID_AUTO, vm_enforce, SECURITY_MAC_CTLFLAGS,
 	   &mac_vm_enforce, 0, "Enforce MAC policy on VM operations");
 
 unsigned int	mac_vnode_enforce = 1;
-SYSCTL_UINT(_security_mac, OID_AUTO, vnode_enforce, CTLFLAG_RW | CTLFLAG_LOCKED,
+SYSCTL_UINT(_security_mac, OID_AUTO, vnode_enforce, SECURITY_MAC_CTLFLAGS,
 	   &mac_vnode_enforce, 0, "Enforce MAC policy on vnode operations");
-
-
-#if CONFIG_MACF_MACH
-unsigned int	mac_port_enforce = 0;
-SYSCTL_UINT(_security_mac, OID_AUTO, port_enforce, CTLFLAG_RW | CTLFLAG_LOCKED,
-    &mac_port_enforce, 0, "Enforce MAC policy on Mach port operations");
-
-unsigned int	mac_task_enforce = 0;
-SYSCTL_UINT(_security_mac, OID_AUTO, task_enforce, CTLFLAG_RW | CTLFLAG_LOCKED,
-    &mac_task_enforce, 0, "Enforce MAC policy on Mach task operations");
-#endif
 
 #if CONFIG_AUDIT
 /*
@@ -2254,6 +2240,61 @@ __mac_get_mount(proc_t p __unused, struct __mac_get_mount_args *uap,
 	return mac_mount_label_get(mp, uap->mac_p);
 }
 
+/*
+ * mac_schedule_userret()
+ *
+ * Schedule a callback to the mpo_thread_userret hook. The mpo_thread_userret
+ * hook is called just before the thread exit from the kernel in ast_taken().
+ *
+ * Returns:	 0		Success
+ * 		!0		Not successful
+ */
+int
+mac_schedule_userret(void)
+{
+
+	act_set_astmacf(current_thread());
+	return (0);
+}
+
+/*
+ * mac_do_machexc()
+ *
+ * Do a Mach exception.  This should only be done in the mpo_thread_userret
+ * callback.
+ *
+ * params:	code		exception code
+ * 		subcode		exception subcode
+ * 		flags		flags:
+ * 				MAC_DOEXCF_TRACED  Only do exception if being
+ * 						   ptrace()'ed.
+ *
+ *
+ * Returns:	 0		Success
+ * 		!0		Not successful
+ */
+int
+mac_do_machexc(int64_t code, int64_t subcode, uint32_t flags)
+{
+	mach_exception_data_type_t  codes[EXCEPTION_CODE_MAX];
+	proc_t p = current_proc();
+
+	/* Only allow execption codes in MACF's reserved range. */
+	if ((code < EXC_MACF_MIN) || (code > EXC_MACF_MAX))
+		return (1);
+
+	if (flags & MAC_DOEXCF_TRACED &&
+	    !(p->p_lflag & P_LTRACED && (p->p_lflag & P_LPPWAIT) == 0))
+		return (0);
+
+
+	/* Send the Mach exception */
+	codes[0] = (mach_exception_data_type_t)code;
+	codes[1] = (mach_exception_data_type_t)subcode;
+
+	return (bsd_exception(EXC_SOFTWARE, codes, 2) != KERN_SUCCESS);
+}
+
 #else /* MAC */
 
 int
@@ -2403,5 +2444,19 @@ __mac_get_mount(proc_t p __unused,
 {
 
 	return (ENOSYS);
+}
+
+int
+mac_schedule_userret(void)
+{
+
+	return (1);
+}
+
+int
+mac_do_machexc(int64_t code __unused, int64_t subcode __unused, uint32_t flags __unused)
+{
+
+	return (1);
 }
 #endif /* !MAC */

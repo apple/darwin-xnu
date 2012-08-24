@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2009-2010 Apple Inc. All rights reserved.
+ * Copyright (c) 2009-2011 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -118,7 +118,7 @@ extern int ipsec_bypass;
  *
  */
 
-void
+struct mbuf *
 ip6_forward(struct mbuf *m, struct route_in6 *ip6forward_rt,
     int srcrt)
 {
@@ -126,6 +126,7 @@ ip6_forward(struct mbuf *m, struct route_in6 *ip6forward_rt,
 	struct sockaddr_in6 *dst;
 	struct rtentry *rt;
 	int error, type = 0, code = 0;
+	boolean_t proxy = FALSE;
 	struct mbuf *mcopy = NULL;
 	struct ifnet *ifp, *origifp;	/* maybe unnecessary */
 	u_int32_t inzone, outzone;
@@ -142,8 +143,24 @@ ip6_forward(struct mbuf *m, struct route_in6 *ip6forward_rt,
 	getmicrotime(&timenow);
 #if PF
 	pf_mtag = pf_find_mtag(m);
-	if (pf_mtag != NULL && pf_mtag->rtableid != IFSCOPE_NONE)
-		ifscope = pf_mtag->rtableid;
+	if (pf_mtag != NULL && pf_mtag->pftag_rtableid != IFSCOPE_NONE)
+		ifscope = pf_mtag->pftag_rtableid;
+
+	/*
+	 * If the caller provides a route which is on a different interface
+	 * than the one specified for scoped forwarding, discard the route
+	 * and do a lookup below.
+	 */
+	if (ifscope != IFSCOPE_NONE && (rt = ip6forward_rt->ro_rt) != NULL) {
+		RT_LOCK(rt);
+		if (rt->rt_ifp->if_index != ifscope) {
+			RT_UNLOCK(rt);
+			rtfree(rt);
+			rt = ip6forward_rt->ro_rt = NULL;
+		} else {
+			RT_UNLOCK(rt);
+		}
+	}
 #endif /* PF */
 
 #if IPSEC
@@ -158,7 +175,7 @@ ip6_forward(struct mbuf *m, struct route_in6 *ip6forward_rt,
 		if (ipsec6_in_reject(m, NULL)) {
 			IPSEC_STAT_INCREMENT(ipsec6stat.in_polvio);
 			m_freem(m);
-			return;
+			return (NULL);
 		}
 	}
 #endif /*IPSEC*/
@@ -185,15 +202,34 @@ ip6_forward(struct mbuf *m, struct route_in6 *ip6forward_rt,
 			    if_name(m->m_pkthdr.rcvif));
 		}
 		m_freem(m);
-		return;
+		return (NULL);
 	}
 
 	if (ip6->ip6_hlim <= IPV6_HLIMDEC) {
 		/* XXX in6_ifstat_inc(rt->rt_ifp, ifs6_in_discard) */
 		icmp6_error(m, ICMP6_TIME_EXCEEDED,
 				ICMP6_TIME_EXCEED_TRANSIT, 0);
-		return;
+		return (NULL);
 	}
+
+	/*
+	 * See if the destination is a proxied address, and if so pretend
+	 * that it's for us.  This is mostly to handle NUD probes against
+	 * the proxied addresses.  We filter for ICMPv6 here and will let
+	 * icmp6_input handle the rest.
+	 */
+	if (!srcrt && nd6_prproxy) {
+		VERIFY(!IN6_IS_ADDR_MULTICAST(&ip6->ip6_dst));
+		proxy = nd6_prproxy_isours(m, ip6, ip6forward_rt, ifscope);
+		/*
+		 * Don't update hop limit while proxying; RFC 4389 4.1.
+		 * Also skip IPsec forwarding path processing as this
+		 * packet is not to be forwarded.
+		 */
+		if (proxy)
+			goto skip_ipsec;
+	}
+
 	ip6->ip6_hlim -= IPV6_HLIMDEC;
 
 	/*
@@ -224,7 +260,7 @@ ip6_forward(struct mbuf *m, struct route_in6 *ip6forward_rt,
 #endif
 		}
 		m_freem(m);
-		return;
+		return (NULL);
 	}
 
 	error = 0;
@@ -247,7 +283,7 @@ ip6_forward(struct mbuf *m, struct route_in6 *ip6forward_rt,
 #endif
 		}
 		m_freem(m);
-		return;
+		return (NULL);
 
 	case IPSEC_POLICY_BYPASS:
 	case IPSEC_POLICY_NONE:
@@ -269,7 +305,7 @@ ip6_forward(struct mbuf *m, struct route_in6 *ip6forward_rt,
 #endif
 			}
 			m_freem(m);
-			return;
+			return (NULL);
 		}
 		/* do IPsec */
 		break;
@@ -300,7 +336,7 @@ ip6_forward(struct mbuf *m, struct route_in6 *ip6forward_rt,
 	error = ipsec6_output_tunnel(&state, sp, 0);
 	key_freesp(sp, KEY_SADB_UNLOCKED);
 	if (state.tunneled == 4)
-		return;  /* packet is gone - sent over IPv4 */
+		return (NULL);  /* packet is gone - sent over IPv4 */
 		
 	m = state.m;
 	if (state.ro.ro_rt) {
@@ -332,7 +368,7 @@ ip6_forward(struct mbuf *m, struct route_in6 *ip6forward_rt,
 #endif
 		}
 		m_freem(m);
-		return;
+		return (NULL);
 	}
     }
     skip_ipsec:
@@ -375,7 +411,7 @@ ip6_forward(struct mbuf *m, struct route_in6 *ip6forward_rt,
 				icmp6_error(mcopy, ICMP6_DST_UNREACH,
 					    ICMP6_DST_UNREACH_NOROUTE, 0);
 			m_freem(m);
-			return;
+			return (NULL);
 		}
 		RT_LOCK_ASSERT_HELD(rt);
 	} else if (rt == NULL || !(rt->rt_flags & RTF_UP) ||
@@ -402,7 +438,7 @@ ip6_forward(struct mbuf *m, struct route_in6 *ip6forward_rt,
 				icmp6_error(mcopy, ICMP6_DST_UNREACH,
 				    ICMP6_DST_UNREACH_NOROUTE, 0);
 			m_freem(m);
-			return;
+			return (NULL);
 		}
 		RT_LOCK(rt);
 		/* Take an extra ref for ourselves */
@@ -414,7 +450,8 @@ ip6_forward(struct mbuf *m, struct route_in6 *ip6forward_rt,
 	 * destination for the reason that the destination is beyond the scope
 	 * of the source address, discard the packet and return an icmp6
 	 * destination unreachable error with Code 2 (beyond scope of source
-	 * address).  We use a local copy of ip6_src, since in6_setscope()
+	 * address) unless we are proxying (source address is link local
+	 * for NUDs.)  We use a local copy of ip6_src, since in6_setscope()
 	 * will possibly modify its first argument.
 	 * [draft-ietf-ipngwg-icmp-v3-04.txt, Section 3.1]
 	 */
@@ -424,15 +461,16 @@ ip6_forward(struct mbuf *m, struct route_in6 *ip6forward_rt,
 		ip6stat.ip6s_cantforward++;
 		ip6stat.ip6s_badscope++;
 		m_freem(m);
-		return;
+		return (NULL);
 	}
 	if (in6_setscope(&src_in6, m->m_pkthdr.rcvif, &inzone)) {
 		ip6stat.ip6s_cantforward++;
 		ip6stat.ip6s_badscope++;
 		m_freem(m);
-		return;
+		return (NULL);
 	}
-	if (inzone != outzone) {
+
+	if (inzone != outzone && !proxy) {
 		ip6stat.ip6s_cantforward++;
 		ip6stat.ip6s_badscope++;
 		in6_ifstat_inc(rt->rt_ifp, ifs6_in_discard);
@@ -455,7 +493,7 @@ ip6_forward(struct mbuf *m, struct route_in6 *ip6forward_rt,
 				    ICMP6_DST_UNREACH_BEYONDSCOPE, 0);
 		}
 		m_freem(m);
-		return;
+		return (NULL);
 	}
 
 	/*
@@ -472,7 +510,7 @@ ip6_forward(struct mbuf *m, struct route_in6 *ip6forward_rt,
 		ip6stat.ip6s_cantforward++;
 		ip6stat.ip6s_badscope++;
 		m_freem(m);
-		return;
+		return (NULL);
 	}
 
 	if (m->m_pkthdr.len > rt->rt_ifp->if_mtu) {
@@ -520,11 +558,11 @@ ip6_forward(struct mbuf *m, struct route_in6 *ip6forward_rt,
 			RT_UNLOCK(rt);
 		}
 		m_freem(m);
-		return;
+		return (NULL);
  	}
 
 	if (rt->rt_flags & RTF_GATEWAY)
-		dst = (struct sockaddr_in6 *)rt->rt_gateway;
+		dst = (struct sockaddr_in6 *)(void *)rt->rt_gateway;
 
 	/*
 	 * If we are to forward the packet using the same interface
@@ -535,7 +573,8 @@ ip6_forward(struct mbuf *m, struct route_in6 *ip6forward_rt,
 	 * Also, don't send redirect if forwarding using a route
 	 * modified by a redirect.
 	 */
-	if (ip6_sendredirects && rt->rt_ifp == m->m_pkthdr.rcvif && !srcrt &&
+	if (!proxy &&
+	    ip6_sendredirects && rt->rt_ifp == m->m_pkthdr.rcvif && !srcrt &&
 	    (rt->rt_flags & (RTF_DYNAMIC|RTF_MODIFIED)) == 0) {
 		if ((rt->rt_ifp->if_flags & IFF_POINTOPOINT) != 0) {
 			/*
@@ -553,7 +592,7 @@ ip6_forward(struct mbuf *m, struct route_in6 *ip6forward_rt,
 			icmp6_error(mcopy, ICMP6_DST_UNREACH,
 				    ICMP6_DST_UNREACH_ADDR, 0);
 			m_freem(m);
-			return;
+			return (NULL);
 		}
 		type = ND_REDIRECT;
 	}
@@ -628,11 +667,23 @@ ip6_forward(struct mbuf *m, struct route_in6 *ip6forward_rt,
 	/* Drop the lock but retain the extra ref */
 	RT_UNLOCK(rt);
 
+	/*
+	 * If this is to be processed locally, let ip6_input have it.
+	 */
+	if (proxy) {
+		VERIFY(m->m_pkthdr.aux_flags & MAUXF_PROXY_DST);
+		/* Release extra ref */
+		RT_REMREF(rt);
+		if (mcopy != NULL)
+			m_freem(mcopy);
+		return (m);
+	}
+
 #if PF
 	/* Invoke outbound packet filter */
-	error = pf_af_hook(ifp, NULL, &m, AF_INET6, FALSE);
+	error = pf_af_hook(ifp, NULL, &m, AF_INET6, FALSE, NULL);
 
-	if (error) {
+	if (error != 0 || m == NULL) {
 		if (m != NULL) {
 			panic("%s: unexpected packet %p\n", __func__, m);
 			/* NOTREACHED */
@@ -643,7 +694,7 @@ ip6_forward(struct mbuf *m, struct route_in6 *ip6forward_rt,
 	ip6 = mtod(m, struct ip6_hdr *);
 #endif /* PF */
 
-	error = nd6_output(ifp, origifp, m, dst, rt);
+	error = nd6_output(ifp, origifp, m, dst, rt, NULL);
 	if (error) {
 		in6_ifstat_inc(ifp, ifs6_out_discard);
 		ip6stat.ip6s_cantforward++;
@@ -664,7 +715,7 @@ senderr:
 	if (mcopy == NULL) {
 		/* Release extra ref */
 		RT_REMREF(rt);
-		return;
+		return (NULL);
 	}
 	switch (error) {
 	case 0:
@@ -673,7 +724,7 @@ senderr:
 			icmp6_redirect_output(mcopy, rt);
 			/* Release extra ref */
 			RT_REMREF(rt);
-			return;
+			return (NULL);
 		}
 #endif
 		goto freecopy;
@@ -698,11 +749,11 @@ senderr:
 	icmp6_error(mcopy, type, code, 0);
 	/* Release extra ref */
 	RT_REMREF(rt);
-	return;
+	return (NULL);
 
  freecopy:
 	m_freem(mcopy);
 	/* Release extra ref */
 	RT_REMREF(rt);
-	return;
+	return (NULL);
 }

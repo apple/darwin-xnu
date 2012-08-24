@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2003-2006 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2003-2012 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -73,7 +73,11 @@
 					/* (-11) unused */
 #define EVFILT_VM		(-12)	/* Virtual memory events */
 
-#define EVFILT_SYSCOUNT		12
+#ifdef PRIVATE
+#define EVFILT_SOCK		(-13)	/* Socket events */
+#endif /* PRIVATE */
+
+#define EVFILT_SYSCOUNT		13
 #define EVFILT_THREADMARKER	EVFILT_SYSCOUNT /* Internal use only */
 
 #pragma pack(4)
@@ -242,6 +246,18 @@ struct kevent64_s {
 #define	NOTE_SIGNAL	0x08000000		/* shared with EVFILT_SIGNAL */
 #define	NOTE_EXITSTATUS	0x04000000		/* exit status to be returned, valid for child process only */
 #define	NOTE_RESOURCEEND 0x02000000		/* resource limit reached, resource type returned */
+
+#if CONFIG_EMBEDDED
+/* 0x01000000  is reserved for future use */
+
+/* App states notification */
+#define	NOTE_APPACTIVE		0x00800000	/* app went to active state */
+#define	NOTE_APPBACKGROUND	0x00400000	/* app went to background */
+#define	NOTE_APPNONUI		0x00200000	/* app went to active with no UI */
+#define	NOTE_APPINACTIVE	0x00100000	/* app went to inactive state */
+#define NOTE_APPALLSTATES	0x00f00000
+#endif /* CONFIG_EMBEDDED */
+
 #define	NOTE_PDATAMASK	0x000fffff		/* mask for pid/signal */
 #define	NOTE_PCTRLMASK	(~NOTE_PDATAMASK)
 
@@ -265,6 +281,23 @@ struct kevent64_s {
 #define NOTE_NSECONDS	0x00000004		/* data is nanoseconds     */
 #define NOTE_ABSOLUTE	0x00000008		/* absolute timeout        */
 						/* ... implicit EV_ONESHOT */
+#ifdef PRIVATE
+/*
+ * data/hint fflags for EVFILT_SOCK, shared with userspace.
+ *
+ */
+#define	NOTE_CONNRESET		0x00000001 /* Received RST */
+#define	NOTE_READCLOSED		0x00000002 /* Read side is shutdown */
+#define	NOTE_WRITECLOSED	0x00000004 /* Write side is shutdown */
+#define	NOTE_TIMEOUT		0x00000008 /* timeout: rexmt, keep-alive or persist */
+#define	NOTE_NOSRCADDR		0x00000010 /* source address not available */
+#define	NOTE_IFDENIED		0x00000020 /* interface denied connection */
+#define	NOTE_SUSPEND		0x00000040 /* output queue suspended */
+#define	NOTE_RESUME		0x00000080 /* output queue resumed */
+#define NOTE_KEEPALIVE		0x00000100 /* TCP Keepalive received */
+
+#endif /* PRIVATE */
+
 /*
  * data/hint fflags for EVFILT_MACHPORT, shared with userspace.
  *
@@ -382,8 +415,8 @@ extern void	klist_init(struct klist *list);
 extern void	knote(struct klist *list, long hint);
 extern int	knote_attach(struct klist *list, struct knote *kn);
 extern int	knote_detach(struct klist *list, struct knote *kn);
-extern int	knote_link_wait_queue(struct knote *kn, struct wait_queue *wq);	
-extern void	knote_unlink_wait_queue(struct knote *kn, struct wait_queue *wq);
+extern int	knote_link_wait_queue(struct knote *kn, struct wait_queue *wq, wait_queue_link_t wql);	
+extern int	knote_unlink_wait_queue(struct knote *kn, struct wait_queue *wq, wait_queue_link_t *wqlp);
 extern void	knote_fdclose(struct proc *p, int fd);
 extern void	knote_markstayqueued(struct knote *kn);
 

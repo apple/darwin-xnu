@@ -13,7 +13,6 @@ OPTIONS/debug			optional debug
 
 
 OPTIONS/gprof		optional gprof
-OPTIONS/db_machine_commands	optional db_machine_commands
 OPTIONS/dynamic_num_nodes	optional dynamic_num_nodes
 OPTIONS/vtoc_compat	optional vtoc_compat
 OPTIONS/fddi		optional fddi
@@ -34,6 +33,12 @@ osfmk/i386/bsd_i386.c		optional mach_bsd
 osfmk/i386/bsd_i386_native.c	optional mach_bsd
 osfmk/i386/machdep_call.c	optional mach_bsd
 
+# Order is important here for __HIB section
+osfmk/x86_64/boot_pt.c		standard
+osfmk/i386/mp_desc.c		standard
+osfmk/i386/gdt.c		standard
+osfmk/x86_64/start.s		standard
+
 osfmk/x86_64/bcopy.s		standard
 osfmk/x86_64/bzero.s		standard
 osfmk/i386/cpu.c		standard
@@ -42,10 +47,8 @@ osfmk/i386/cpu_threads.c	standard
 osfmk/i386/cpu_topology.c	standard
 osfmk/i386/etimer.c		standard
 osfmk/i386/fpu.c		standard
-osfmk/i386/gdt.c		standard
 osfmk/i386/i386_lock.s	standard
 osfmk/i386/i386_init.c		standard
-osfmk/i386/idle_pt.c		standard
 osfmk/i386/i386_vm_init.c	standard
 osfmk/i386/io_map.c		standard
 osfmk/i386/ktss.c		standard
@@ -54,15 +57,13 @@ osfmk/x86_64/loose_ends.c	standard
 osfmk/x86_64/copyio.c		standard
 osfmk/i386/locks_i386.c	standard
 osfmk/x86_64/locore.s	standard
-osfmk/x86_64/start.s	standard
-osfmk/x86_64/lowmem_vectors.s	standard
+osfmk/x86_64/lowmem_vectors.c	standard
 osfmk/x86_64/cswitch.s	standard
 osfmk/i386/machine_routines.c		standard
 osfmk/x86_64/machine_routines_asm.s	standard
 osfmk/i386/machine_check.c	optional config_mca
 osfmk/i386/machine_task.c		standard
 osfmk/x86_64/mcount.s		optional profile
-osfmk/i386/mp_desc.c		standard
 #osfmk/x86_64/ntoh.s		standard
 osfmk/i386/pcb.c		standard
 osfmk/i386/pcb_native.c		standard
@@ -129,6 +130,8 @@ osfmk/i386/vmx/vmx_shims.c			optional config_vmx
 #osfmk/OPTIONS/ec		optional ec
 #osfmk/OPTIONS/hi_res_clock	optional hi_res_clock
 
+# Kernel performance monitoring
+osfmk/kperf/x86_64/kperf_mp.c   optional kperf
 
 osfmk/i386/startup64.c		standard
 osfmk/x86_64/idt64.s		standard

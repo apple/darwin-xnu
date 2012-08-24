@@ -22,7 +22,6 @@ INSTINC_SUBDIRS_ARM =	\
 
 
 EXPORT_FILES = \
-	AppleSecureBootEpoch.h \
 	Availability.h	\
 	AvailabilityInternal.h	\
 	AvailabilityMacros.h	\

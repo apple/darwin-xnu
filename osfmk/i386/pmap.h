@@ -107,17 +107,16 @@
 
 #endif	/* ASSEMBLER */
 
-#define NPGPTD          4
-#define PDESHIFT        21
-#define PTEMASK         0x1ff
-#define PTEINDX         3
+#define NPGPTD          4ULL
+#define PDESHIFT        21ULL
+#define PTEMASK         0x1ffULL
+#define PTEINDX         3ULL
 
-#define PTESHIFT        12
+#define PTESHIFT        12ULL
 
-
+#ifdef __i386__
 #define INITPT_SEG_BASE  0x100000
-#define INITGDT_SEG_BASE 0x106000
-#define SLEEP_SEG_BASE   0x107000
+#endif
 
 #ifdef __x86_64__
 #define LOW_4GB_MASK	((vm_offset_t)0x00000000FFFFFFFFUL)
@@ -135,7 +134,7 @@
 #define NBPTD           (NPGPTD << PAGE_SHIFT)
 #define NPDEPTD         (NBPTD / (sizeof (pd_entry_t)))
 #define NPDEPG          (PAGE_SIZE/(sizeof (pd_entry_t)))
-#define NBPDE           (1 << PDESHIFT)
+#define NBPDE           (1ULL << PDESHIFT)
 #define PDEMASK         (NBPDE - 1)
 
 #define PTE_PER_PAGE	512 /* number of PTE's per page on any level */
@@ -153,7 +152,7 @@ typedef uint64_t        pdpt_entry_t;
 #define NPDPTPG         (PAGE_SIZE/(sizeof (pdpt_entry_t)))
 #define PDPTSHIFT       30
 #define PDPTPGSHIFT     9
-#define NBPDPT          (1 << PDPTSHIFT)
+#define NBPDPT          (1ULL << PDPTSHIFT)
 #define PDPTMASK        (NBPDPT-1)
 #define PDPT_ENTRY_NULL ((pdpt_entry_t *) 0)
 
@@ -161,7 +160,7 @@ typedef uint64_t        pd_entry_t;
 #define NPDPG           (PAGE_SIZE/(sizeof (pd_entry_t)))
 #define PDSHIFT         21
 #define PDPGSHIFT       9
-#define NBPD            (1 << PDSHIFT)
+#define NBPD            (1ULL << PDSHIFT)
 #define PDMASK          (NBPD-1)
 #define PD_ENTRY_NULL   ((pd_entry_t *) 0)
 
@@ -169,7 +168,7 @@ typedef uint64_t        pt_entry_t;
 #define NPTPG           (PAGE_SIZE/(sizeof (pt_entry_t)))
 #define PTSHIFT         12
 #define PTPGSHIFT       9
-#define NBPT            (1 << PTSHIFT)
+#define NBPT            (1ULL << PTSHIFT)
 #define PTMASK          (NBPT-1)
 #define PT_ENTRY_NULL	((pt_entry_t *) 0)
 
@@ -234,58 +233,6 @@ pmap_store_pte(pt_entry_t *entryp, pt_entry_t value)
 #endif
 }
 
-/*
- * Atomic 64-bit compare and exchange of a page table entry.
- */
-static inline boolean_t
-pmap_cmpx_pte(pt_entry_t *entryp, pt_entry_t old, pt_entry_t new)
-{
-	boolean_t		ret;
-
-#ifdef __i386__
-	/*
-	 * Load the old value into %edx:%eax
-	 * Load the new value into %ecx:%ebx
-	 * Compare-exchange-8bytes at address entryp (loaded in %edi)
-	 * If the compare succeeds, the new value is stored, return TRUE.
-	 * Otherwise, no swap is made, return FALSE.
-	 */
-	asm volatile(
-		"	lock; cmpxchg8b (%1)	\n\t"
-		"	setz	%%al		\n\t"
-		"	movzbl	%%al,%0"
-		: "=a" (ret)
-		: "D" (entryp),
-		  "a" ((uint32_t)old),
-		  "d" ((uint32_t)(old >> 32)),
-		  "b" ((uint32_t)new),
-		  "c" ((uint32_t)(new >> 32))
-		: "memory");
-#else
-	/*
-	 * Load the old value into %rax
-	 * Load the new value into another register
-	 * Compare-exchange-quad at address entryp
-	 * If the compare succeeds, the new value is stored, return TRUE.
-	 * Otherwise, no swap is made, return FALSE.
-	 */
-	asm volatile(
-		"	lock; cmpxchgq %2,(%3)	\n\t"
-		"	setz	%%al		\n\t"
-		"	movzbl	%%al,%0"
-		: "=a" (ret)
-		: "a" (old),
-		  "r" (new),
-		  "r" (entryp)
-		: "memory");
-#endif
-	return ret;
-}
-
-#define pmap_update_pte(entryp, old, new) \
-	while (!pmap_cmpx_pte((entryp), (old), (new)))
-
-
 /* in 64 bit spaces, the number of each type of page in the page tables */
 #define NPML4PGS        (1ULL * (PAGE_SIZE/(sizeof (pml4_entry_t))))
 #define NPDPTPGS        (NPML4PGS * (PAGE_SIZE/(sizeof (pdpt_entry_t))))
@@ -302,14 +249,15 @@ pmap_cmpx_pte(pt_entry_t *entryp, pt_entry_t old, pt_entry_t new)
 #define KERNEL_UBER_BASE	(0ULL - NBPML4)
 #define KERNEL_UBER_BASE_HI32	((uint32_t)(KERNEL_UBER_BASE >> 32))
 #else
-#define KERNEL_PML4_INDEX	511
+#define KERNEL_PML4_INDEX		511
 #define KERNEL_KEXTS_INDEX	510	/* Home of KEXTs - the basement */
-#define KERNEL_PHYSMAP_INDEX	509	/* virtual to physical map */ 
+#define KERNEL_PHYSMAP_PML4_INDEX	509	/* virtual to physical map */ 
 #define KERNEL_BASE		(0ULL - NBPML4)
 #define KERNEL_BASEMENT		(KERNEL_BASE - NBPML4)
 #endif
 
 #define	VM_WIMG_COPYBACK	VM_MEM_COHERENT
+#define	VM_WIMG_COPYBACKLW	VM_WIMG_COPYBACK
 #define	VM_WIMG_DEFAULT		VM_MEM_COHERENT
 /* ?? intel ?? */
 #define VM_WIMG_IO		(VM_MEM_COHERENT | 	\
@@ -317,7 +265,7 @@ pmap_cmpx_pte(pt_entry_t *entryp, pt_entry_t old, pt_entry_t new)
 #define VM_WIMG_WTHRU		(VM_MEM_WRITE_THROUGH | VM_MEM_COHERENT | VM_MEM_GUARDED)
 /* write combining mode, aka store gather */
 #define VM_WIMG_WCOMB		(VM_MEM_NOT_CACHEABLE | VM_MEM_COHERENT) 
-
+#define	VM_WIMG_INNERWBACK	VM_MEM_COHERENT
 /*
  * Pte related macros
  */
@@ -426,19 +374,19 @@ enum  high_fixed_addresses {
  *	without using the bit fields).
  */
 
-#define INTEL_PTE_VALID		0x00000001
-#define INTEL_PTE_WRITE		0x00000002
-#define INTEL_PTE_RW		0x00000002
-#define INTEL_PTE_USER		0x00000004
-#define INTEL_PTE_WTHRU		0x00000008
-#define INTEL_PTE_NCACHE 	0x00000010
-#define INTEL_PTE_REF		0x00000020
-#define INTEL_PTE_MOD		0x00000040
-#define INTEL_PTE_PS		0x00000080
-#define INTEL_PTE_PTA		0x00000080
-#define INTEL_PTE_GLOBAL	0x00000100
-#define INTEL_PTE_WIRED		0x00000200
-#define INTEL_PDPTE_NESTED	0x00000400
+#define INTEL_PTE_VALID		0x00000001ULL
+#define INTEL_PTE_WRITE		0x00000002ULL
+#define INTEL_PTE_RW		0x00000002ULL
+#define INTEL_PTE_USER		0x00000004ULL
+#define INTEL_PTE_WTHRU		0x00000008ULL
+#define INTEL_PTE_NCACHE 	0x00000010ULL
+#define INTEL_PTE_REF		0x00000020ULL
+#define INTEL_PTE_MOD		0x00000040ULL
+#define INTEL_PTE_PS		0x00000080ULL
+#define INTEL_PTE_PTA		0x00000080ULL
+#define INTEL_PTE_GLOBAL	0x00000100ULL
+#define INTEL_PTE_WIRED		0x00000200ULL
+#define INTEL_PDPTE_NESTED	0x00000400ULL
 #define INTEL_PTE_PFN		PG_FRAME
 
 #define INTEL_PTE_NX		(1ULL << 63)
@@ -477,14 +425,16 @@ extern pt_entry_t	PTmap[], APTmap[], Upte;
 extern pd_entry_t	PTD[], APTD[], PTDpde[], APTDpde[], Upde;
 extern pmap_paddr_t	lo_kernel_cr3;
 extern pdpt_entry_t	*IdlePDPT64;
+extern pdpt_entry_t	IdlePDPT[];
+extern pml4_entry_t	IdlePML4[];
 #else
 extern pt_entry_t	*PTmap;
+extern pdpt_entry_t	*IdlePDPT;
+extern pml4_entry_t	*IdlePML4;
 #endif
 extern boolean_t	no_shared_cr3;
 extern addr64_t		kernel64_cr3;
 extern pd_entry_t	*IdlePTD;	/* physical addr of "Idle" state PTD */
-extern pdpt_entry_t	IdlePDPT[];
-extern pml4_entry_t	IdlePML4[];
 
 extern uint64_t		pmap_pv_hashlist_walks;
 extern uint64_t		pmap_pv_hashlist_cnts;
@@ -503,25 +453,46 @@ extern uint32_t		pmap_kernel_text_ps;
 #define	vtopte(va)	(PTmap + i386_btop((vm_offset_t)va))
 #endif
 
+
 #ifdef __x86_64__
 #define ID_MAP_VTOP(x)	((void *)(((uint64_t)(x)) & LOW_4GB_MASK))
 
-#define PHYSMAP_BASE	KVADDR(KERNEL_PHYSMAP_INDEX,0,0,0)
+extern	uint64_t physmap_base, physmap_max;
+
 #define NPHYSMAP (MAX(K64_MAXMEM/GB + 4, 4))
-#define PHYSMAP_PTOV(x)	((void *)(((uint64_t)(x)) + PHYSMAP_BASE))
 
 static inline boolean_t physmap_enclosed(addr64_t a) {
 	return (a < (NPHYSMAP * GB));
 }
-#endif
+
+static	inline void * PHYSMAP_PTOV_check(void *paddr) {
+	uint64_t pvaddr = (uint64_t)paddr + physmap_base;
+
+	if (__improbable(pvaddr >= physmap_max))
+		panic("PHYSMAP_PTOV bounds exceeded, 0x%qx, 0x%qx, 0x%qx",
+		      pvaddr, physmap_base, physmap_max);
+
+	return (void *)pvaddr;
+}
+
+#define PHYSMAP_PTOV(x)	(PHYSMAP_PTOV_check((void*) (x)))
+
+/*
+ * For KASLR, we alias the master processor's IDT and GDT at fixed
+ * virtual addresses to defeat SIDT/SGDT address leakage.
+ */
+#define MASTER_IDT_ALIAS	(VM_MIN_KERNEL_ADDRESS + 0x0000)
+#define MASTER_GDT_ALIAS	(VM_MIN_KERNEL_ADDRESS + 0x1000)
+
+/*
+ * The low global vector page is mapped at a fixed alias also.
+ */
+#define LOWGLOBAL_ALIAS		(VM_MIN_KERNEL_ADDRESS + 0x2000)
+
+#endif /*__x86_64__ */
 
 typedef	volatile long	cpu_set;	/* set of CPUs - must be <= 32 */
 					/* changed by other processors */
-struct md_page {
-  int pv_list_count;
-  TAILQ_HEAD(,pv_entry)  pv_list;
-};
-
 #include <vm/vm_page.h>
 
 /*
@@ -551,6 +522,7 @@ struct pmap {
 	struct pmap_statistics	stats;	/* map statistics */
 	int		ref_count;	/* reference count */
         int		nx_enabled;
+	ledger_t	ledger;		/* ledger tracking phys mappings */
 };
 
 
@@ -639,9 +611,10 @@ extern void		pmap_update_interrupt(void);
 extern addr64_t		(kvtophys)(
 				vm_offset_t	addr);
 
-extern void		pmap_expand(
+extern kern_return_t	pmap_expand(
 				pmap_t		pmap,
-				vm_map_offset_t	addr);
+				vm_map_offset_t	addr,
+				unsigned int options);
 #if	!defined(__x86_64__)
 extern pt_entry_t	*pmap_pte(
 				struct pmap	*pmap,
@@ -932,6 +905,8 @@ extern boolean_t pmap_is_empty(pmap_t		pmap,
 
 #define MACHINE_BOOTSTRAPPTD	1	/* Static bootstrap page-tables */
 
+kern_return_t
+pmap_permissions_verify(pmap_t, vm_map_t, vm_offset_t, vm_offset_t);
 
 #endif	/* ASSEMBLER */
 

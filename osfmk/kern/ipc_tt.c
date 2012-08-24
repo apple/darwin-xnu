@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2007 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2010 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -144,7 +144,6 @@ ipc_task_init(
 	task->itk_nself = nport;
 	task->itk_sself = ipc_port_make_send(kport);
 	task->itk_space = space;
-	space->is_fast = FALSE;
 
 #if CONFIG_MACF_MACH
 	if (parent)
@@ -325,9 +324,6 @@ ipc_task_terminate(
 	for (i = 0; i < TASK_PORT_REGISTER_MAX; i++)
 		if (IP_VALID(task->itk_registered[i]))
 			ipc_port_release_send(task->itk_registered[i]);
-
-	ipc_port_release_send(task->wired_ledger_port);
-	ipc_port_release_send(task->paged_ledger_port);
 
 	/* destroy the kernel ports */
 	ipc_port_dealloc_kernel(kport);
@@ -858,22 +854,10 @@ task_get_special_port(
 		port = ipc_port_copy_send(task->itk_bootstrap);
 		break;
 
-	    case TASK_WIRED_LEDGER_PORT:
-		port = ipc_port_copy_send(task->wired_ledger_port);
-		break;
-
-	    case TASK_PAGED_LEDGER_PORT:
-		port = ipc_port_copy_send(task->paged_ledger_port);
-		break;
-                    
 	    case TASK_SEATBELT_PORT:
 		port = ipc_port_copy_send(task->itk_seatbelt);
 		break;
 
-	    case TASK_GSSD_PORT:
-		port = ipc_port_copy_send(task->itk_gssd);
-		break;
-			
 	    case TASK_ACCESS_PORT:
 		port = ipc_port_copy_send(task->itk_task_access);
 		break;
@@ -929,22 +913,10 @@ task_set_special_port(
 		whichp = &task->itk_bootstrap;
 		break;
 
-	    case TASK_WIRED_LEDGER_PORT:
-		whichp = &task->wired_ledger_port;
-		break;
-
-	    case TASK_PAGED_LEDGER_PORT:
-		whichp = &task->paged_ledger_port;
-		break;
-                    
 	    case TASK_SEATBELT_PORT:
 		whichp = &task->itk_seatbelt;
 		break;
 
-	    case TASK_GSSD_PORT:
-		whichp = &task->itk_gssd;
-		break;
-		
 	    case TASK_ACCESS_PORT:
 		whichp = &task->itk_task_access;
 		break;

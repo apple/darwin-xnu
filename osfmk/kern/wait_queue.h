@@ -36,13 +36,13 @@
 #include <mach/kern_return.h>		/* for kern_return_t */
 
 #include <kern/kern_types.h>		/* for wait_queue_t */
+#include <kern/queue.h>
 
 #include <sys/cdefs.h>
 
 #ifdef	MACH_KERNEL_PRIVATE
 
 #include <kern/lock.h>
-#include <kern/queue.h>
 #include <mach/branch_predicates.h>
 
 #include <machine/cpu_number.h>
@@ -271,12 +271,11 @@ static inline uint32_t wq_hash(char *key)
 	hash ^= (hash >> 11);
 	hash += (hash << 15);
 
+	hash &= (num_wait_queues - 1);
 	return hash;
 }
 
-/* TBD: It should be possible to eliminate the divide here */
-#define       wait_hash(event)						\
-	(wq_hash((char *)&event) % (num_wait_queues))
+#define	wait_hash(event) wq_hash((char *)&event) 
 
 #endif	/* MACH_KERNEL_PRIVATE */
 
@@ -334,6 +333,19 @@ extern kern_return_t wait_queue_set_unlink_all(
 extern kern_return_t wait_queue_set_unlink_one(
 			wait_queue_set_t set_queue,
 			wait_queue_link_t link);
+
+extern kern_return_t wait_queue_unlink_nofree(
+			wait_queue_t wait_queue,
+			wait_queue_set_t set_queue,
+			wait_queue_link_t *wqlp);
+
+extern kern_return_t wait_queue_unlink_all_nofree(
+			wait_queue_t wait_queue,
+			queue_t links);
+
+extern kern_return_t wait_queue_set_unlink_all_nofree(
+			wait_queue_set_t set_queue,
+			queue_t links);
 
 extern wait_queue_link_t wait_queue_link_allocate(void);
 

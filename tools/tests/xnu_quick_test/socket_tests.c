@@ -210,7 +210,7 @@ int socket_tests( void * the_argp )
 		}
 #endif
 		
-#if 1
+#if !TARGET_OS_EMBEDDED
 		/* sendfile test. Open libsystem, set up some headers, and send it */
 		struct sf_hdtr		my_sf_hdtr;
 		int					my_libsys_fd;
@@ -328,7 +328,7 @@ int socket_tests( void * the_argp )
 		}
 #endif
 
-#if 1
+#if !TARGET_OS_EMBEDDED
 		size_t neededBytes = 11;
 			
 		/* Check for sendfile output */

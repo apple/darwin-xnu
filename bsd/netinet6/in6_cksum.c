@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2009 Apple Inc. All rights reserved.
+ * Copyright (c) 2009-2011 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -219,7 +219,7 @@ inet6_cksum(struct mbuf *m, unsigned int nxt, unsigned int off,
 			break;
 		m = m->m_next;
 	}
-	w = (u_int16_t *)(mtod(m, u_char *) + off);
+	w = (u_int16_t *)(void *)(mtod(m, u_char *) + off);
 	mlen = m->m_len - off;
 	if (len < mlen)
 		mlen = len;
@@ -231,7 +231,7 @@ inet6_cksum(struct mbuf *m, unsigned int nxt, unsigned int off,
 		REDUCE;
 		sum <<= 8;
 		s_util.c[0] = *(u_char *)w;
-		w = (u_int16_t *)((char *)w + 1);
+		w = (u_int16_t *)(void *)((char *)w + 1);
 		mlen--;
 		byte_swapped = 1;
 	}
@@ -292,7 +292,7 @@ inet6_cksum(struct mbuf *m, unsigned int nxt, unsigned int off,
 			 */
 			s_util.c[1] = *(char *)w;
 			sum += s_util.s;
-			w = (u_int16_t *)((char *)w + 1);
+			w = (u_int16_t *)(void *)((char *)w + 1);
 			mlen = m->m_len - 1;
 			len--;
 		} else
@@ -307,7 +307,7 @@ inet6_cksum(struct mbuf *m, unsigned int nxt, unsigned int off,
 			REDUCE;
 			sum <<= 8;
 			s_util.c[0] = *(u_char *)w;
-			w = (u_int16_t *)((char *)w + 1);
+			w = (u_int16_t *)(void *)((char *)w + 1);
 			mlen--;
 			byte_swapped = 1;
 		}

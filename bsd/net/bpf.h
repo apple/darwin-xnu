@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2008 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2012 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -76,6 +76,7 @@
 
 #ifndef _NET_BPF_H_
 #define _NET_BPF_H_
+#include <sys/param.h>
 #include <sys/appleapiopts.h>
 #include <sys/types.h>
 #include <sys/time.h>
@@ -193,6 +194,11 @@ struct bpf_version {
 #define BIOCSSEESENT	_IOW('B',119, u_int)
 #define BIOCSDLT        _IOW('B',120, u_int)
 #define BIOCGDLTLIST    _IOWR('B',121, struct bpf_dltlist)
+#ifdef PRIVATE
+#define	BIOCGETTC	_IOR('B', 122, int)
+#define	BIOCSETTC	_IOW('B', 123, int)
+#define	BIOCSEXTHDR	_IOW('B', 124, u_int)
+#endif /* PRIVATE */
 
 /*
  * Structure prepended to each packet.
@@ -204,15 +210,36 @@ struct bpf_hdr {
 	u_short		bh_hdrlen;	/* length of bpf header (this struct
 					   plus alignment padding) */
 };
+#ifdef KERNEL
 /*
  * Because the structure above is not a multiple of 4 bytes, some compilers
  * will insist on inserting padding; hence, sizeof(struct bpf_hdr) won't work.
  * Only the kernel needs to know about it; applications use bh_hdrlen.
  */
-#ifdef KERNEL
 #define	SIZEOF_BPF_HDR	(sizeof(struct bpf_hdr) <= 20 ? 18 : \
     sizeof(struct bpf_hdr))
 #endif
+#ifdef PRIVATE
+/*
+ * This structure must be a multiple of 4 bytes.
+ * It includes padding and spare fields that we can use later if desired.
+ */
+struct bpf_hdr_ext {
+	struct BPF_TIMEVAL bh_tstamp;	/* time stamp */
+	bpf_u_int32	bh_caplen;	/* length of captured portion */
+	bpf_u_int32	bh_datalen;	/* original length of packet */
+	u_short		bh_hdrlen;	/* length of bpf header */
+	u_short		bh_flags;
+#define BPF_HDR_EXT_FLAGS_DIR_IN	0x0000
+#define BPF_HDR_EXT_FLAGS_DIR_OUT	0x0001
+#define	BPF_HDR_EXT_FLAGS_TCP		0x0002
+	pid_t		bh_pid;		/* process PID */
+	char		bh_comm[MAXCOMLEN+1]; /* process command */
+	u_char		_bh_pad2[3];
+	bpf_u_int32	bh_svc;		/* service class */
+	bpf_u_int32	bh_flowhash;	/* kernel reserved; 0 in userland */
+};
+#endif /* PRIVATE */
 
 /*
  * Data-link level type codes.

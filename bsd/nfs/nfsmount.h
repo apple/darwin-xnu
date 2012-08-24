@@ -261,7 +261,7 @@ struct nfsmount {
 	mount_t	nm_mountp;		/* VFS structure for this filesystem */
 	nfsnode_t nm_dnp;		/* root directory nfsnode pointer */
 	struct nfs_fs_locations nm_locations; /* file system locations */
-	int	nm_numgrps;		/* Max. size of groupslist */
+	uint32_t nm_numgrps;		/* Max. size of groupslist */
 	TAILQ_HEAD(, nfs_gss_clnt_ctx) nm_gsscl; /* GSS user contexts */
 	int	nm_timeo;		/* Init timer for NFSMNT_DUMBTIMR */
 	int	nm_retry;		/* Max retries */
@@ -275,6 +275,8 @@ struct nfsmount {
 	uint32_t nm_acdirmin;		/* dir min attr cache timeout */
 	uint32_t nm_acdirmax;		/* dir max attr cache timeout */
 	uint32_t nm_auth;		/* security mechanism flavor being used */
+	uint32_t nm_writers;		/* Number of nodes open for writing */
+	uint32_t nm_mappers;		/* Number of nodes that have mmapped */
 	struct nfs_sec nm_sec;		/* acceptable security mechanism flavors */
 	struct nfs_sec nm_servsec;	/* server's acceptable security mechanism flavors */
 	fhandle_t *nm_fh;		/* initial file handle */
@@ -330,7 +332,8 @@ struct nfsmount {
 	time_t	nm_reconnect_start;	/* reconnect start time */
 	int	nm_tprintf_initial_delay;	/* delay first "server down" */
 	int	nm_tprintf_delay;	/* delay between "server down" */
-	int	nm_deadtimeout;		/* delay between first "server down" and dead */
+	int	nm_deadtimeout;		/* delay between first "server down" and dead set at mount time */
+	int	nm_curdeadtimeout;	/* current dead timeout. Adjusted by mount state and mobility */
 	int	nm_srtt[4];		/* Timers for RPCs */
 	int	nm_sdrtt[4];
 	int	nm_timeouts;		/* Request timeouts */
@@ -372,6 +375,7 @@ struct nfsmount {
 #define NFSSTA_RECOVER		0x08000000  /* mount state needs to be recovered */
 #define NFSSTA_RECOVER_EXPIRED	0x10000000  /* mount state expired */
 #define NFSSTA_REVOKE		0x20000000  /* need to scan for revoked nodes */
+#define	NFSSTA_SQUISHY		0x40000000  /* we can ask to be forcibly unmounted */
 
 /* flags for nm_sockflags */
 #define NMSOCK_READY		0x0001	/* socket is ready for use */

@@ -40,6 +40,7 @@ DATAFILES = \
 PRIVATE_DATAFILES = \
 	codesign.h \
 	content_protection.h \
+	decmpfs.h \
 	disklabel.h \
 	fileport.h \
 	fsctl.h \
@@ -47,6 +48,7 @@ PRIVATE_DATAFILES = \
 	fslog.h \
 	imgsrc.h \
 	ipcs.h \
+	kas_info.h \
 	shm_internal.h \
 	spawn_internal.h \
 	tree.h \
@@ -66,7 +68,7 @@ KERNELFILES = \
 	errno.h ev.h event.h fcntl.h file.h filio.h \
 	ioccom.h ioctl.h ipc.h \
 	ioctl_compat.h  kernel.h kernel_types.h kern_event.h lctx.h lock.h lockf.h \
-	kauth.h kdebug.h  md5.h kern_callout.h kern_control.h kern_memorystatus.h imgact.h malloc.h namei.h \
+	kauth.h kdebug.h  md5.h kern_control.h kern_memorystatus.h imgact.h malloc.h namei.h \
 	mman.h mbuf.h mount.h netport.h param.h paths.h \
 	proc.h  queue.h random.h resource.h \
 	sbuf.h posix_sem.h posix_shm.h sem.h shm.h \
@@ -120,7 +122,7 @@ INSTALL_MI_DIR = sys
 
 EXPORT_MI_LIST	= ${KERNELFILES} ${PRIVATE_KERNELFILES} linker_set.h bsdtask_info.h pthread_internal.h filedesc.h pipe.h resourcevar.h semaphore.h \
 								vnode_internal.h proc_internal.h file_internal.h mount_internal.h \
-								uio_internal.h tree.h
+								uio_internal.h tree.h munge.h
 
 EXPORT_MI_GEN_LIST = syscall.h sysproto.h
 
@@ -152,12 +154,12 @@ sysproto.h: $(SRCROOT)/bsd/kern/syscalls.master $(MAKESYSCALLS)
 MAKE_POSIX_AVAILABILITY = $(SRCROOT)/bsd/sys/make_posix_availability.sh
 _posix_availability.h: $(MAKE_POSIX_AVAILABILITY)
 	@echo "Generating bsd/sys/$@"
-	$(_v)$(MAKE_POSIX_AVAILABILITY) $@
+	$(_v)$(MAKE_POSIX_AVAILABILITY) "$@"
 
 MAKE_SYMBOL_ALIASING = $(SRCROOT)/bsd/sys/make_symbol_aliasing.sh
 _symbol_aliasing.h: $(MAKE_SYMBOL_ALIASING)
 	@echo "Generating bsd/sys/$@"
-	$(_v)$(MAKE_SYMBOL_ALIASING) $@
+	$(_v)$(MAKE_SYMBOL_ALIASING) "$(SDKROOT)" "$@"
 
 include $(MakeInc_rule)
 include $(MakeInc_dir)

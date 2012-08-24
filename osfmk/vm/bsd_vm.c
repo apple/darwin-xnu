@@ -407,63 +407,8 @@ memory_object_control_uiomove(
 		        if ((dst_page = vm_page_lookup(object, offset)) == VM_PAGE_NULL)
 			        break;
 
-			/*
-			 * if we're in this routine, we are inside a filesystem's
-			 * locking model, so we don't ever want to wait for pages that have
-			 * list_req_pending == TRUE since it means that the
-			 * page is a candidate for some type of I/O operation,
-			 * but that it has not yet been gathered into a UPL...
-			 * this implies that it is still outside the domain
-			 * of the filesystem and that whoever is responsible for
-			 * grabbing it into a UPL may be stuck behind the filesystem
-			 * lock this thread owns, or trying to take a lock exclusively
-			 * and waiting for the readers to drain from a rw lock...
-			 * if we block in those cases, we will deadlock
-			 */
-			if (dst_page->list_req_pending) {
 
-				if (dst_page->absent) {
-					/*
-					 * this is the list_req_pending | absent | busy case
-					 * which originates from vm_fault_page... we want
-					 * to fall out of the fast path and go back
-					 * to the caller which will gather this page
-					 * into a UPL and issue the I/O if no one
-					 * else beats us to it
-					 */
-					break;
-				}
-				if (dst_page->pageout || dst_page->cleaning) {
-					/*
-					 * this is the list_req_pending | pageout | busy case
-					 * or the list_req_pending | cleaning case...
-					 * which originate from the pageout_scan and
-					 * msync worlds for the pageout case and the hibernate
-					 * pre-cleaning world for the cleaning case...
-					 * we need to reset the state of this page to indicate
-					 * it should stay in the cache marked dirty... nothing else we
-					 * can do at this point... we can't block on it, we can't busy
-					 * it and we can't clean it from this routine.
-					 */
-					vm_page_lockspin_queues();
-
-					vm_pageout_queue_steal(dst_page, TRUE); 
-					vm_page_deactivate(dst_page);
-
-					vm_page_unlock_queues();
-				}
-				/*
-				 * this is the list_req_pending | cleaning case...
-				 * we can go ahead and deal with this page since
-				 * its ok for us to mark this page busy... if a UPL
-				 * tries to gather this page, it will block until the
-				 * busy is cleared, thus allowing us safe use of the page
-				 * when we're done with it, we will clear busy and wake
-				 * up anyone waiting on it, thus allowing the UPL creation
-				 * to finish
-				 */
-
-			} else if (dst_page->busy || dst_page->cleaning) {
+			if (dst_page->busy || dst_page->cleaning) {
 				/*
 				 * someone else is playing with the page... if we've
 				 * already collected pages into this run, go ahead
@@ -476,7 +421,11 @@ memory_object_control_uiomove(
 				PAGE_SLEEP(object, dst_page, THREAD_UNINT);
 				continue;
 			}
-
+			if (dst_page->laundry) {
+				dst_page->pageout = FALSE;
+				
+				vm_pageout_steal_laundry(dst_page, FALSE);
+			}
 			/*
 			 * this routine is only called when copying
 			 * to/from real files... no need to consider
@@ -485,7 +434,7 @@ memory_object_control_uiomove(
 			assert(!dst_page->encrypted);
 
 		        if (mark_dirty) {
-			        dst_page->dirty = TRUE;
+				SET_PAGE_DIRTY(dst_page, FALSE);
 				if (dst_page->cs_validated && 
 				    !dst_page->cs_tainted) {
 					/*

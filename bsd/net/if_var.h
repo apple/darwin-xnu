@@ -91,7 +91,7 @@
 #define APPLE_IF_FAM_DISC      8
 #define APPLE_IF_FAM_MDECAP    9
 #define APPLE_IF_FAM_GIF       10
-#define APPLE_IF_FAM_FAITH     11
+#define APPLE_IF_FAM_FAITH     11	/* deprecated */
 #define APPLE_IF_FAM_STF       12
 #define APPLE_IF_FAM_FIREWIRE  13
 #define APPLE_IF_FAM_BOND      14
@@ -225,6 +225,10 @@ struct if_data64 {
 
 #ifdef PRIVATE
 struct if_traffic_class {
+	u_int64_t		ifi_ibepackets;	/* TC_BE packets received on interface */
+	u_int64_t		ifi_ibebytes;	/* TC_BE bytes received on interface */
+	u_int64_t		ifi_obepackets;	/* TC_BE packet sent on interface */
+	u_int64_t		ifi_obebytes;	/* TC_BE bytes sent on interface */
 	u_int64_t		ifi_ibkpackets;	/* TC_BK packets received on interface */
 	u_int64_t		ifi_ibkbytes;	/* TC_BK bytes received on interface */
 	u_int64_t		ifi_obkpackets;	/* TC_BK packet sent on interface */
@@ -237,6 +241,77 @@ struct if_traffic_class {
 	u_int64_t		ifi_ivobytes;	/* TC_VO bytes received on interface */
 	u_int64_t		ifi_ovopackets;	/* TC_VO packets sent on interface */
 	u_int64_t		ifi_ovobytes;	/* TC_VO bytes sent on interface */
+	u_int64_t		ifi_ipvpackets;	/* TC priv packets received on interface */
+	u_int64_t		ifi_ipvbytes;	/* TC priv bytes received on interface */
+	u_int64_t		ifi_opvpackets;	/* TC priv packets sent on interface */
+	u_int64_t		ifi_opvbytes;	/* TC priv bytes sent on interface */
+};
+
+struct if_data_extended {
+	u_int64_t	ifi_alignerrs;	/* unaligned (32-bit) input pkts */
+};
+
+struct if_packet_stats {
+	/* TCP */
+	u_int64_t		ifi_tcp_badformat;
+	u_int64_t		ifi_tcp_unspecv6;
+	u_int64_t		ifi_tcp_synfin;
+	u_int64_t		ifi_tcp_badformatipsec;
+	u_int64_t		ifi_tcp_noconnnolist;
+	u_int64_t		ifi_tcp_noconnlist;
+	u_int64_t		ifi_tcp_listbadsyn;
+	u_int64_t		ifi_tcp_icmp6unreach;
+	u_int64_t		ifi_tcp_deprecate6;
+	u_int64_t		ifi_tcp_rstinsynrcv;
+	u_int64_t		ifi_tcp_ooopacket;
+	u_int64_t		ifi_tcp_dospacket;
+	u_int64_t		ifi_tcp_cleanup;
+	u_int64_t		ifi_tcp_synwindow;
+	/* UDP */
+	u_int64_t		ifi_udp_port_unreach;
+	u_int64_t		ifi_udp_faithprefix;
+	u_int64_t		ifi_udp_port0;
+	u_int64_t		ifi_udp_badlength;
+	u_int64_t		ifi_udp_badchksum;
+	u_int64_t		ifi_udp_badmcast;
+	u_int64_t		ifi_udp_cleanup;
+	u_int64_t		ifi_udp_badipsec;
+};
+
+struct if_description {
+	u_int32_t	ifd_maxlen;	/* must be IF_DESCSIZE */
+	u_int32_t	ifd_len;	/* actual ifd_desc length */
+	u_int8_t	*ifd_desc;	/* ptr to desc buffer */
+};
+
+struct if_bandwidths {
+	u_int64_t	eff_bw;		/* effective bandwidth */
+	u_int64_t	max_bw;		/* maximum theoretical bandwidth */
+};
+
+struct if_rxpoll_stats {
+	u_int32_t	ifi_poll_off_req;	/* total # of POLL_OFF reqs */
+	u_int32_t	ifi_poll_off_err;	/* total # of POLL_OFF errors */
+	u_int32_t	ifi_poll_on_req;	/* total # of POLL_ON reqs */
+	u_int32_t	ifi_poll_on_err;	/* total # of POLL_ON errors */
+
+	u_int32_t	ifi_poll_wakeups_avg;	/* avg # of wakeup reqs */
+	u_int32_t	ifi_poll_wakeups_lowat;	/* wakeups low watermark */
+	u_int32_t	ifi_poll_wakeups_hiwat;	/* wakeups high watermark */
+
+	u_int64_t	ifi_poll_packets;	/* total # of polled packets */
+	u_int32_t	ifi_poll_packets_avg;	/* average polled packets */
+	u_int32_t	ifi_poll_packets_min;	/* smallest polled packets */
+	u_int32_t	ifi_poll_packets_max;	/* largest polled packets */
+	u_int32_t	ifi_poll_packets_lowat;	/* packets low watermark */
+	u_int32_t	ifi_poll_packets_hiwat;	/* packets high watermark */
+
+	u_int64_t	ifi_poll_bytes;		/* total # of polled bytes */
+	u_int32_t	ifi_poll_bytes_avg;	/* average polled bytes */
+	u_int32_t	ifi_poll_bytes_min;	/* smallest polled bytes */
+	u_int32_t	ifi_poll_bytes_max;	/* largest polled bytes */
+	u_int32_t	ifi_poll_bytes_lowat;	/* bytes low watermark */
+	u_int32_t	ifi_poll_bytes_hiwat;	/* bytes high watermark */
 };
 #endif /* PRIVATE */
 
@@ -253,7 +328,7 @@ struct	ifqueue {
 	int	ifq_drops;
 };
 
-#ifdef XNU_KERNEL_PRIVATE
+#ifdef BSD_KERNEL_PRIVATE
 /*
  * Internal storage of if_data. This is bound to change. Various places in the
  * stack will translate this data structure in to the externally visible
@@ -289,13 +364,33 @@ struct if_data_internal {
 	u_int64_t	ifi_noproto;	/* destined for unsupported protocol */
 	u_int32_t	ifi_recvtiming;	/* usec spent receiving when timing */
 	u_int32_t	ifi_xmittiming;	/* usec spent xmitting when timing */
+	u_int64_t	ifi_alignerrs;	/* unaligned (32-bit) input pkts */
 #define IF_LASTCHANGEUPTIME	1	/* lastchange: 1-uptime 0-calendar time */
 	struct	timeval ifi_lastchange;	/* time of last administrative change */
 	u_int32_t	ifi_hwassist;	/* HW offload capabilities */
 	u_int32_t	ifi_tso_v4_mtu;	/* TCP Segment Offload IPv4 maximum segment size */
 	u_int32_t	ifi_tso_v6_mtu;	/* TCP Segment Offload IPv6 maximum segment size */
 };
-#endif /* XNU_KERNEL_PRIVATE */
+
+/*
+ * Fields per interface to measure perceived bandwidth.
+ */
+
+struct if_measured_bw {
+	u_int64_t	bw;		/* measured bandwidth in bytes per ms */
+	u_int64_t	bytes;		/* XXX not needed */
+	u_int64_t	ts;		/* XXX not needed */
+	u_int64_t	cur_seq __attribute((aligned(8)));	/* current sequence for marking a packet */
+	u_int64_t	start_ts;	/* time at which a measurement started */
+	u_int64_t	start_seq;	/* sequence at which a measurement should start */
+	u_int64_t	last_seq;	/* last recorded seq */
+	u_int64_t	last_ts;	/* last recorded ts */
+	u_int32_t	flags __attribute__((aligned(4)));		/* flags */
+#define IF_MEASURED_BW_INPROGRESS 0x1
+#define IF_MEASURED_BW_CALCULATION 0x2
+};
+
+#endif /* BSD_KERNEL_PRIVATE */
 
 #ifdef PRIVATE
 #define	if_mtu		if_data.ifi_mtu
@@ -322,12 +417,13 @@ struct if_data_internal {
 #define if_recvquota	if_data.ifi_recvquota
 #define	if_xmitquota	if_data.ifi_xmitquota
 #endif /* PRIVATE */
-#ifdef XNU_KERNEL_PRIVATE
+#ifdef BSD_KERNEL_PRIVATE
 #define	if_tso_v4_mtu	if_data.ifi_tso_v4_mtu
 #define	if_tso_v6_mtu	if_data.ifi_tso_v6_mtu
-#endif /* XNU_KERNEL_PRIVATE */
+#define	if_alignerrs	if_data.ifi_alignerrs
+#endif /* BSD_KERNEL_PRIVATE */
 
-#ifdef XNU_KERNEL_PRIVATE
+#ifdef BSD_KERNEL_PRIVATE
 /*
  * Forward structure declarations for function prototypes [sic].
  */
@@ -340,6 +436,8 @@ struct ifaddr;
 struct tqdummy;
 struct proto_hash_entry;
 struct dlil_threading_info;
+struct tcpstat_local;
+struct udpstat_local;
 #if PF
 struct pfi_kif;
 #endif /* PF */
@@ -352,7 +450,7 @@ LIST_HEAD(ifmultihead, ifmultiaddr);
 TAILQ_HEAD(tailq_head, tqdummy);
 TAILQ_HEAD(ifnet_filter_head, ifnet_filter);
 TAILQ_HEAD(ddesc_head_name, dlil_demux_desc);
-#endif /* XNU_KERNEL_PRIVATE */
+#endif /* BSD_KERNEL_PRIVATE */
 
 #ifdef PRIVATE
 /*
@@ -386,9 +484,13 @@ TAILQ_HEAD(ddesc_head_name, dlil_demux_desc);
 #define IF_HWASSIST_TSO_V6		0x00400000	/* will do TCP Segment offload for IPv6, IFNET_TSO_IPV6 */
 #endif /* PRIVATE */
 
-#ifdef XNU_KERNEL_PRIVATE
+#ifdef BSD_KERNEL_PRIVATE
+/*
+ * ifnet is private to BSD portion of kernel
+ */
 #include <sys/tree.h>
 #include <netinet/in.h>
+#include <net/classq/if_classq.h>
 
 RB_HEAD(ll_reach_tree, if_llreach);	/* define struct ll_reach_tree */
 
@@ -404,6 +506,7 @@ struct ifnet {
 	decl_lck_rw_data(, if_lock);
 	void		*if_softc;	/* pointer to driver state */
 	const char	*if_name;	/* name, e.g. ``en'' or ``lo'' */
+	struct if_description if_desc;	/* extended description */
 	TAILQ_ENTRY(ifnet) if_link;	/* all struct ifnets are chained */
 	TAILQ_ENTRY(ifnet) if_detaching_link; /* list of detaching ifnets */
 
@@ -435,6 +538,11 @@ struct ifnet {
 	ifnet_family_t		if_family;	/* value assigned by Apple */
 	uintptr_t		if_family_cookie;
 	ifnet_output_func	if_output;
+	ifnet_pre_enqueue_func	if_pre_enqueue;
+	ifnet_start_func	if_start;
+	ifnet_ctl_func		if_output_ctl;
+	ifnet_input_poll_func	if_input_poll;
+	ifnet_ctl_func		if_input_ctl;
 	ifnet_ioctl_func	if_ioctl;
 	ifnet_set_bpf_tap	if_set_bpf_tap;
 	ifnet_detached_func	if_free;
@@ -447,6 +555,18 @@ struct ifnet {
 	struct proto_hash_entry	*if_proto_hash;
 	void			*if_kpi_storage;
 
+	decl_lck_mtx_data(, if_start_lock);
+	u_int32_t		if_start_req;
+	u_int32_t		if_start_active; /* output is active */
+	struct timespec		if_start_cycle;	 /* restart interval */
+	struct thread		*if_start_thread;
+
+	struct ifclassq		if_snd;		/* transmit queue */
+	u_int32_t		if_output_sched_model;	/* tx sched model */
+
+	struct if_bandwidths	if_output_bw;
+	struct if_bandwidths	if_input_bw;
+
 	decl_lck_mtx_data(, if_flt_lock)
 	u_int32_t		if_flt_busy;
 	u_int32_t		if_flt_waiters;
@@ -458,9 +578,14 @@ struct ifnet {
 	decl_lck_mtx_data(, if_addrconfig_lock); /* for serializing addr config */
 	struct in_multi		*if_allhostsinm; /* store all-hosts inm for this ifp */
 
-	struct dlil_threading_info *if_input_thread;
+	decl_lck_mtx_data(, if_poll_lock);
+	u_int16_t		if_poll_req;
+	u_int16_t		if_poll_update;	/* link update */
+	u_int32_t		if_poll_active;	/* polling is active */
+	struct timespec		if_poll_cycle;  /* poll interval */
+	struct thread		*if_poll_thread;
 
-	struct ifqueue		if_snd;
+	struct dlil_threading_info *if_inp;
 
 	struct	ifprefixhead	if_prefixhead;	/* list of prefixes per if */
 	struct {
@@ -476,7 +601,6 @@ struct ifnet {
 
 	u_int32_t		if_wake_properties;
 #if PF
-	struct thread		*if_pf_curthread;
 	struct pfi_kif		*if_pf_kif;
 #endif /* PF */
 
@@ -504,6 +628,11 @@ struct ifnet {
 #if INET6
 	struct mld_ifinfo	*if_mli;	/* for MLDv2 */
 #endif /* INET6 */
+
+	int			if_lqm;		/* link quality metric */
+	struct if_measured_bw	if_bw;
+	struct tcpstat_local	*if_tcp_stat;	/* TCP specific stats */
+	struct udpstat_local	*if_udp_stat;	/* UDP specific stats */
 };
 
 /*
@@ -542,7 +671,8 @@ struct if_clone {
  */
 #define	IF_QFULL(ifq)		((ifq)->ifq_len >= (ifq)->ifq_maxlen)
 #define	IF_DROP(ifq)		((ifq)->ifq_drops++)
-#define	IF_ENQUEUE(ifq, m) {						\
+
+#define	IF_ENQUEUE(ifq, m) do {						\
 	(m)->m_nextpkt = NULL;						\
 	if ((ifq)->ifq_tail == NULL)					\
 		(ifq)->ifq_head = m;					\
@@ -550,15 +680,17 @@ struct if_clone {
 		((struct mbuf*)(ifq)->ifq_tail)->m_nextpkt = m;		\
 	(ifq)->ifq_tail = m;						\
 	(ifq)->ifq_len++;						\
-}
-#define	IF_PREPEND(ifq, m) {						\
+} while (0)
+
+#define	IF_PREPEND(ifq, m) do {						\
 	(m)->m_nextpkt = (ifq)->ifq_head;				\
 	if ((ifq)->ifq_tail == NULL)					\
 		(ifq)->ifq_tail = (m);					\
 	(ifq)->ifq_head = (m);						\
 	(ifq)->ifq_len++;						\
-}
-#define	IF_DEQUEUE(ifq, m) {						\
+} while (0)
+
+#define	IF_DEQUEUE(ifq, m) do {						\
 	(m) = (ifq)->ifq_head;						\
 	if (m != NULL) {						\
 		if (((ifq)->ifq_head = (m)->m_nextpkt) == NULL)		\
@@ -566,8 +698,9 @@ struct if_clone {
 		(m)->m_nextpkt = NULL;					\
 		(ifq)->ifq_len--;					\
 	}								\
-}
-#define	IF_REMQUEUE(ifq, m) {						\
+} while (0)
+
+#define	IF_REMQUEUE(ifq, m) do {					\
 	struct mbuf *_p = (ifq)->ifq_head;				\
 	struct mbuf *_n = (m)->m_nextpkt;				\
 	if ((m) == _p)							\
@@ -588,14 +721,15 @@ struct if_clone {
 	if (_p != NULL)							\
 		_p->m_nextpkt = _n;					\
 	(m)->m_nextpkt = NULL;						\
-}
+} while (0)
+
 #define IF_DRAIN(ifq) do {						\
-	struct mbuf *m;							\
+	struct mbuf *_m;						\
 	for (;;) {							\
-		IF_DEQUEUE(ifq, m);					\
-		if (m == NULL)						\
+		IF_DEQUEUE(ifq, _m);					\
+		if (_m == NULL)						\
 			break;						\
-		m_freem(m);						\
+		m_freem(_m);						\
 	}								\
 } while (0)
 
@@ -749,7 +883,8 @@ struct ifmultiaddr {
 
 __private_extern__ struct ifnethead ifnet_head;
 __private_extern__ struct ifnet **ifindex2ifnet;
-__private_extern__ int ifqmaxlen;
+__private_extern__ u_int32_t if_sndq_maxlen;
+__private_extern__ u_int32_t if_rcvq_maxlen;
 __private_extern__ int if_index;
 __private_extern__ struct ifaddr **ifnet_addrs;
 __private_extern__ lck_attr_t *ifa_mtx_attr;
@@ -757,6 +892,8 @@ __private_extern__ lck_grp_t *ifa_mtx_grp;
 __private_extern__ lck_grp_t *ifnet_lock_group;
 __private_extern__ lck_attr_t *ifnet_lock_attr;
 extern ifnet_t lo_ifp;
+extern uint32_t if_bw_measure_size;
+extern u_int32_t if_bw_smoothing_val;
 
 extern int if_addmulti(struct ifnet *, const struct sockaddr *,
     struct ifmultiaddr **);
@@ -774,6 +911,9 @@ extern int ifioctl(struct socket *, u_long, caddr_t, struct proc *);
 extern int ifioctllocked(struct socket *, u_long, caddr_t, struct proc *);
 extern struct ifnet *ifunit(const char *);
 extern struct ifnet *if_withname(struct sockaddr *);
+extern void if_qflush(struct ifnet *, int);
+extern void if_qflush_sc(struct ifnet *, mbuf_svc_class_t, u_int32_t,
+    u_int32_t *, u_int32_t *, int);
 
 extern struct if_clone *if_clone_lookup(const char *, u_int32_t *);
 extern int if_clone_attach(struct if_clone *);
@@ -801,6 +941,10 @@ __private_extern__ errno_t ifnet_set_idle_flags_locked(ifnet_t, u_int32_t,
     u_int32_t);
 __private_extern__ int ifnet_is_attached(struct ifnet *, int refio);
 __private_extern__ void ifnet_decr_iorefcnt(struct ifnet *);
+__private_extern__ void ifnet_set_start_cycle(struct ifnet *,
+    struct timespec *);
+__private_extern__ void ifnet_set_poll_cycle(struct ifnet *,
+    struct timespec *);
 
 __private_extern__ void if_attach_ifa(struct ifnet *, struct ifaddr *);
 __private_extern__ void if_attach_link_ifa(struct ifnet *, struct ifaddr *);
@@ -812,15 +956,18 @@ __private_extern__ void dlil_if_unlock(void);
 __private_extern__ void dlil_if_lock_assert(void);
 
 extern struct ifaddr *ifa_ifwithaddr(const struct sockaddr *);
-extern struct ifaddr *ifa_ifwithaddr_scoped(const struct sockaddr *, unsigned int);
+extern struct ifaddr *ifa_ifwithaddr_scoped(const struct sockaddr *,
+    unsigned int);
 extern struct ifaddr *ifa_ifwithdstaddr(const struct sockaddr *);
 extern struct ifaddr *ifa_ifwithnet(const struct sockaddr *);
-extern struct ifaddr *ifa_ifwithnet_scoped(const struct sockaddr *, unsigned int);
+extern struct ifaddr *ifa_ifwithnet_scoped(const struct sockaddr *,
+    unsigned int);
 extern struct ifaddr *ifa_ifwithroute(int, const struct sockaddr *,
     const struct sockaddr *);
-extern struct	ifaddr *ifa_ifwithroute_locked(int, const struct sockaddr *, const struct sockaddr *);
-extern struct ifaddr *ifa_ifwithroute_scoped_locked(int, const struct sockaddr *,
-    const struct sockaddr *, unsigned int);
+extern struct	ifaddr *ifa_ifwithroute_locked(int, const struct sockaddr *,
+    const struct sockaddr *);
+extern struct ifaddr *ifa_ifwithroute_scoped_locked(int,
+    const struct sockaddr *, const struct sockaddr *, unsigned int);
 extern struct ifaddr *ifaof_ifpforaddr(const struct sockaddr *, struct ifnet *);
 __private_extern__ struct ifaddr *ifa_ifpgetprimary(struct ifnet *, int);
 extern void ifa_addref(struct ifaddr *, int);
@@ -836,6 +983,16 @@ __private_extern__ struct in_ifaddr *ifa_foraddr(unsigned int);
 __private_extern__ struct in_ifaddr *ifa_foraddr_scoped(unsigned int,
     unsigned int);
 
+extern void ifnet_fclist_append(struct sfb *sp, struct sfb_fc_list *fcl);
+extern struct sfb_bin_fcentry* ifnet_fce_alloc(int how);
+extern void ifnet_fce_free(struct sfb_bin_fcentry *);
+
+struct ifreq;
+extern errno_t ifnet_getset_opportunistic(struct ifnet *, u_long,
+    struct ifreq *, struct proc *);
+extern int ifnet_get_throttle(struct ifnet *, u_int32_t *);
+extern int ifnet_set_throttle(struct ifnet *, u_int32_t);
+
 #if INET6
 struct in6_addr;
 __private_extern__ struct in6_ifaddr *ifa_foraddr6(struct in6_addr *);
@@ -849,6 +1006,12 @@ __private_extern__ void	if_data_internal_to_if_data64(struct ifnet *ifp,
     const struct if_data_internal *if_data_int, struct if_data64 *if_data64);
 __private_extern__ void	if_copy_traffic_class(struct ifnet *ifp,
     struct if_traffic_class *if_tc);
+__private_extern__ void	if_copy_data_extended(struct ifnet *ifp,
+    struct if_data_extended *if_de);
+__private_extern__ void if_copy_packet_stats(struct ifnet *ifp,
+    struct if_packet_stats *if_ps);
+__private_extern__ void if_copy_rxpoll_stats(struct ifnet *ifp,
+    struct if_rxpoll_stats *if_rs);
 
 __private_extern__ struct rtentry *ifnet_cached_rtlookup_inet(struct ifnet *,
     struct in_addr);
@@ -857,5 +1020,19 @@ __private_extern__ struct rtentry *ifnet_cached_rtlookup_inet6(struct ifnet *,
     struct in6_addr *);
 #endif /* INET6 */
 
+__private_extern__ void if_lqm_update(struct ifnet *, int32_t);
+__private_extern__ void ifnet_update_sndq(struct ifclassq *, cqev_t);
+__private_extern__ void ifnet_update_rcv(struct ifnet *, cqev_t);
+
+__private_extern__ errno_t ifnet_set_input_bandwidths(struct ifnet *,
+    struct if_bandwidths *);
+__private_extern__ errno_t ifnet_set_output_bandwidths(struct ifnet *,
+    struct if_bandwidths *, boolean_t);
+__private_extern__ u_int64_t ifnet_output_linkrate(struct ifnet *);
+__private_extern__ u_int64_t ifnet_input_linkrate(struct ifnet *);
+#endif /* BSD_KERNEL_PRIVATE */
+#ifdef XNU_KERNEL_PRIVATE
+/* for uuid.c */
+__private_extern__ int uuid_get_ethernet(u_int8_t *);
 #endif /* XNU_KERNEL_PRIVATE */
 #endif /* !_NET_IF_VAR_H_ */

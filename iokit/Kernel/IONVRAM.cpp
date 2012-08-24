@@ -228,23 +228,24 @@ bool IODTNVRAM::serializeProperties(OSSerialize *s) const
   bool                 result, hasPrivilege;
   UInt32               variablePerm;
   const OSSymbol       *key;
-  OSDictionary         *dict = 0, *tmpDict = 0;
+  OSDictionary         *dict;
   OSCollectionIterator *iter = 0;
   
   // Verify permissions.
   hasPrivilege = (kIOReturnSuccess == IOUserClient::clientHasPrivilege(current_task(), kIONVRAMPrivilege));
 
-  tmpDict = OSDictionary::withCapacity(1);
-  if (tmpDict == 0) return false;
+  dict = OSDictionary::withCapacity(1);
+  if (dict == 0) return false;
 
   if (_ofDict == 0) {
     /* No nvram. Return an empty dictionary. */
-    dict = tmpDict;
   } else {
     /* Copy properties with client privilege. */
     iter = OSCollectionIterator::withCollection(_ofDict);
-    if (iter == 0) return false;
-    
+    if (iter == 0) {
+      dict->release();
+      return false;
+    }
     while (1) {
       key = OSDynamicCast(OSSymbol, iter->getNextObject());
       if (key == 0) break;
@@ -252,15 +253,14 @@ bool IODTNVRAM::serializeProperties(OSSerialize *s) const
       variablePerm = getOFVariablePerm(key);
       if ((hasPrivilege || (variablePerm != kOFVariablePermRootOnly)) &&
 	  ( ! (variablePerm == kOFVariablePermKernelOnly && current_task() != kernel_task) )) {
-	tmpDict->setObject(key, _ofDict->getObject(key));
+	dict->setObject(key, _ofDict->getObject(key));
       }
-      dict = tmpDict;
     }
   }
 
   result = dict->serialize(s);
-  
-  if (tmpDict != 0) tmpDict->release();
+ 
+  dict->release();
   if (iter != 0) iter->release();
   
   return result;

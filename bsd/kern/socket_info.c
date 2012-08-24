@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2005-2006 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2005-2012 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -42,6 +42,7 @@
 #include <sys/unpcb.h>
 #include <sys/sys_domain.h>
 #include <sys/kern_event.h>
+#include <mach/vm_param.h>
 #include <net/ndrv_var.h>
 #include <netinet/in_pcb.h>
 #include <netinet/tcp_var.h>
@@ -67,12 +68,12 @@ fill_sockbuf_info(struct sockbuf *sb, struct sockbuf_info *sbi)
 static void
 fill_common_sockinfo(struct socket *so, struct socket_info *si)
 {
-	si->soi_so = (u_int64_t)((uintptr_t)so);
+	si->soi_so = (u_int64_t)VM_KERNEL_ADDRPERM(so);
 	si->soi_type = so->so_type;
-	si->soi_options = so->so_options;
+	si->soi_options = (short)(so->so_options & 0xffff);
 	si->soi_linger = so->so_linger;
 	si->soi_state = so->so_state;
-	si->soi_pcb = (u_int64_t)((uintptr_t)so->so_pcb);
+	si->soi_pcb = (u_int64_t)VM_KERNEL_ADDRPERM(so->so_pcb);
 	if (so->so_proto) {
 		si->soi_protocol = so->so_proto->pr_protocol;
 		if (so->so_proto->pr_domain)
@@ -148,7 +149,8 @@ fill_socketinfo(struct socket *so, struct socket_info *si)
 				tcpsi->tcpsi_timer[TCPT_2MSL] = tp->t_timer[TCPT_2MSL];
 				tcpsi->tcpsi_mss = tp->t_maxseg;
 				tcpsi->tcpsi_flags = tp->t_flags;
-				tcpsi->tcpsi_tp = (u_int64_t)((uintptr_t)tp);
+				tcpsi->tcpsi_tp =
+				    (u_int64_t)VM_KERNEL_ADDRPERM(tp);
 			}
 			break;
 		}
@@ -158,10 +160,11 @@ fill_socketinfo(struct socket *so, struct socket_info *si)
 			
 			si->soi_kind = SOCKINFO_UN;
 			
-			unsi->unsi_conn_pcb = (uint64_t)((uintptr_t)unp->unp_conn);
+			unsi->unsi_conn_pcb =
+			    (uint64_t)VM_KERNEL_ADDRPERM(unp->unp_conn);
 			if (unp->unp_conn)
-				unsi->unsi_conn_so = (uint64_t)((uintptr_t)unp->unp_conn->unp_socket);
-				
+				unsi->unsi_conn_so = (uint64_t)
+				    VM_KERNEL_ADDRPERM(unp->unp_conn->unp_socket);
 			
 			if (unp->unp_addr) {
 				size_t	addrlen = unp->unp_addr->sun_len;

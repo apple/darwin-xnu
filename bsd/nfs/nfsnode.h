@@ -595,8 +595,8 @@ struct nfsnode {
 		struct nfs_sillyrename *nf_silly;/* Ptr to silly rename struct */
 		struct nfsdmap *nd_cookiecache; /* dir cookie cache */
 	} n_un3;
+	uint32_t		n_flag;		/* node flags */
 	u_short			n_fhsize;	/* size in bytes, of fh */
-	u_short			n_flag;		/* node flags */
 	u_short			n_hflag;	/* node hash flags */
 	u_short			n_bflag;	/* node buffer flags */
 	u_short			n_mflag;	/* node mount flags */
@@ -672,22 +672,22 @@ struct nfsnode {
 /*
  * Flags for n_flag
  */
-#define	NUPDATESIZE	0x0001	/* size of file needs updating */
-#define	NREVOKE		0x0002	/* node revoked */
-#define	NMODIFIED	0x0004	/* Might have a modified buffer in bio */
-#define	NWRITEERR	0x0008	/* Flag write errors so close will know */
-#define	NNEEDINVALIDATE	0x0010	/* need to call vinvalbuf() */
-#define	NGETATTRINPROG	0x0020	/* GETATTR RPC in progress */
-#define	NGETATTRWANT	0x0040	/* waiting for GETATTR RPC */
-#define	NACC		0x0100	/* Special file accessed */
-#define	NUPD		0x0200	/* Special file updated */
-#define	NCHG		0x0400	/* Special file times changed */
-#define	NNEGNCENTRIES	0x0800	/* directory has negative name cache entries */
-#define	NBUSY		0x1000	/* node is busy */
-#define	NBUSYWANT	0x2000	/* waiting on busy node */
-#define NISDOTZFS	0x4000	/* a ".zfs" directory */
-#define NISDOTZFSCHILD	0x8000	/* a child of a ".zfs" directory */
-  
+#define	NUPDATESIZE	0x00001	/* size of file needs updating */
+#define	NREVOKE		0x00002	/* node revoked */
+#define	NMODIFIED	0x00004	/* Might have a modified buffer in bio */
+#define	NWRITEERR	0x00008	/* Flag write errors so close will know */
+#define	NNEEDINVALIDATE	0x00010	/* need to call vinvalbuf() */
+#define	NGETATTRINPROG	0x00020	/* GETATTR RPC in progress */
+#define	NGETATTRWANT	0x00040	/* waiting for GETATTR RPC */
+#define	NACC		0x00100	/* Special file accessed */
+#define	NUPD		0x00200	/* Special file updated */
+#define	NCHG		0x00400	/* Special file times changed */
+#define	NNEGNCENTRIES	0x00800	/* directory has negative name cache entries */
+#define	NBUSY		0x01000	/* node is busy */
+#define	NBUSYWANT	0x02000	/* waiting on busy node */
+#define NISDOTZFS	0x04000	/* a ".zfs" directory */
+#define NISDOTZFSCHILD	0x08000	/* a child of a ".zfs" directory */
+#define NISMAPPED	0x10000	/* node is mmapped   */
 
 /*
  * Flags for n_hflag
@@ -824,6 +824,7 @@ void nfs_data_update_size(nfsnode_t, int);
 /* other stuff */
 int nfs_removeit(struct nfs_sillyrename *);
 int nfs_nget(mount_t,nfsnode_t,struct componentname *,u_char *,int,struct nfs_vattr *,u_int64_t *,uint32_t,int,nfsnode_t*);
+int nfs_mount_is_dirty(mount_t);
 void nfs_dir_cookie_cache(nfsnode_t, uint64_t, uint64_t);
 int nfs_dir_cookie_to_lbn(nfsnode_t, uint64_t, int *, uint64_t *);
 void nfs_invaldir(nfsnode_t);

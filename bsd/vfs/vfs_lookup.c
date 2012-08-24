@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2010 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2011 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -524,12 +524,12 @@ lookup_handle_rsrc_fork(vnode_t dp, struct nameidata *ndp, struct componentname 
 	/* The "parent" of the stream is the file. */
 	if (wantparent) {
 		if (ndp->ni_dvp) {
-#ifndef __LP64__
+#if CONFIG_VFS_FUNNEL
 			if (ndp->ni_cnd.cn_flags & FSNODELOCKHELD) {
 				ndp->ni_cnd.cn_flags &= ~FSNODELOCKHELD;
 				unlock_fsnode(ndp->ni_dvp, NULL);
 			}	
-#endif /* __LP64__ */
+#endif /* CONFIG_VFS_FUNNEL */
 			vnode_put(ndp->ni_dvp);
 		}
 		ndp->ni_dvp = dp;
@@ -1020,12 +1020,12 @@ lookup_error:
 		if ((error == ENOENT) &&
 		    (dp->v_flag & VROOT) && (dp->v_mount != NULL) &&
 		    (dp->v_mount->mnt_flag & MNT_UNION)) {
-#ifndef __LP64__
+#if CONFIG_VFS_FUNNEL
 		        if ((cnp->cn_flags & FSNODELOCKHELD)) {
 			        cnp->cn_flags &= ~FSNODELOCKHELD;
 				unlock_fsnode(dp, NULL);
 			}	
-#endif /* __LP64__ */
+#endif /* CONFIG_VFS_FUNNEL */
 			tdp = dp;
 			dp = tdp->v_mount->mnt_vnodecovered;
 
@@ -1098,12 +1098,12 @@ returned_from_lookup_path:
 
 	return (0);
 bad2:
-#ifndef __LP64__
+#if CONFIG_VFS_FUNNEL
 	if ((cnp->cn_flags & FSNODELOCKHELD)) {
 	        cnp->cn_flags &= ~FSNODELOCKHELD;
 		unlock_fsnode(ndp->ni_dvp, NULL);
 	}
-#endif /* __LP64__ */
+#endif /* CONFIG_VFS_FUNNEL */
 	if (ndp->ni_dvp)
 		vnode_put(ndp->ni_dvp);
 
@@ -1115,12 +1115,12 @@ bad2:
 	return (error);
 
 bad:
-#ifndef __LP64__
+#if CONFIG_VFS_FUNNEL
 	if ((cnp->cn_flags & FSNODELOCKHELD)) {
 	        cnp->cn_flags &= ~FSNODELOCKHELD;
 		unlock_fsnode(ndp->ni_dvp, NULL);
 	}	
-#endif /* __LP64__ */
+#endif /* CONFIG_VFS_FUNNEL */
 	if (dp)
 	        vnode_put(dp);
 	ndp->ni_vp = NULLVP;
@@ -1280,12 +1280,12 @@ lookup_handle_symlink(struct nameidata *ndp, vnode_t *new_dp, vfs_context_t ctx)
 	vnode_t dp;
 	char *tmppn;
 
-#ifndef __LP64__
+#if CONFIG_VFS_FUNNEL
 	if ((cnp->cn_flags & FSNODELOCKHELD)) {
 		cnp->cn_flags &= ~FSNODELOCKHELD;
 		unlock_fsnode(ndp->ni_dvp, NULL);
 	}	
-#endif /* __LP64__ */
+#endif /* CONFIG_VFS_FUNNEL */
 
 	if (ndp->ni_loopcnt++ >= MAXSYMLINKS) {
 		return ELOOP;
@@ -1494,14 +1494,14 @@ bad:
 void
 namei_unlock_fsnode(struct nameidata *ndp) 
 {
-#ifndef __LP64__
+#if CONFIG_VFS_FUNNEL
 	if ((ndp->ni_cnd.cn_flags & FSNODELOCKHELD)) {
 	        ndp->ni_cnd.cn_flags &= ~FSNODELOCKHELD;
 		unlock_fsnode(ndp->ni_dvp, NULL);
 	}	
 #else
 	(void)ndp;
-#endif /* __LP64__ */
+#endif /* CONFIG_VFS_FUNNEL */
 }
 
 /*
@@ -1553,7 +1553,7 @@ nameidone(struct nameidata *ndp)
  * fails because /foo_bar_baz is not found will only log "/foo_bar_baz", with
  * no '>' padding.  But /foo_bar/spam would log "/foo_bar>>>>".
  */
-#if !defined(NO_KDEBUG)
+#if (KDEBUG_LEVEL >= KDEBUG_LEVEL_IST)
 static void
 kdebug_lookup(struct vnode *dp, struct componentname *cnp)
 {
@@ -1590,7 +1590,7 @@ kdebug_lookup(struct vnode *dp, struct componentname *cnp)
 	if (dbg_namelen <= 12)
 		code |= DBG_FUNC_END;
 
-	KERNEL_DEBUG_CONSTANT(code, dp, dbg_parms[0], dbg_parms[1], dbg_parms[2], 0);
+	KERNEL_DEBUG_CONSTANT_IST(KDEBUG_TRACE, code, dp, dbg_parms[0], dbg_parms[1], dbg_parms[2], 0);
 
 	code &= ~DBG_FUNC_START;
 
@@ -1598,15 +1598,15 @@ kdebug_lookup(struct vnode *dp, struct componentname *cnp)
 		if (dbg_namelen <= 16)
 			code |= DBG_FUNC_END;
 
-		KERNEL_DEBUG_CONSTANT(code, dbg_parms[i], dbg_parms[i+1], dbg_parms[i+2], dbg_parms[i+3], 0);
+		KERNEL_DEBUG_CONSTANT_IST(KDEBUG_TRACE, code, dbg_parms[i], dbg_parms[i+1], dbg_parms[i+2], dbg_parms[i+3], 0);
 	}
 }
-#else /* NO_KDEBUG */
+#else /* (KDEBUG_LEVEL >= KDEBUG_LEVEL_IST) */
 static void
 kdebug_lookup(struct vnode *dp __unused, struct componentname *cnp __unused)
 {
 }
-#endif /* NO_KDEBUG */
+#endif /* (KDEBUG_LEVEL >= KDEBUG_LEVEL_IST) */
 
 int
 vfs_getbyid(fsid_t *fsid, ino64_t ino, vnode_t *vpp, vfs_context_t ctx)

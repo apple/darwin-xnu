@@ -27,7 +27,7 @@ include $(MakeInc_def)
 # CFLAGS
 #
 CFLAGS+= -include meta_features.h -DLIBKERN_KERNEL_PRIVATE -DOSALLOCDEBUG=1 \
-	$(CFLAGS_INLINE_CONFIG)
+         $(CFLAGS_INLINE_CONFIG)
 
 # zlib is 3rd party source
 compress.o_CWARNFLAGS_ADD = -Wno-cast-qual 
@@ -40,6 +40,9 @@ uncompr.o_CWARNFLAGS_ADD = -Wno-cast-qual
 
 # warnings in bison-generated code
 OSUnserializeXML.cpo_CXXWARNFLAGS_ADD = -Wno-uninitialized
+
+# Runtime support functions don't interact well with LTO (9294679)
+stack_protector.o_CFLAGS_ADD += $(CFLAGS_NOLTO_FLAG)
 
 #
 # Directories for mig generated files
@@ -87,10 +90,10 @@ LDOBJS = $(OBJS)
 
 $(COMPONENT).filelist: $(LDOBJS)
 	$(_v)if [ $(BUILD_MACHO_OBJ) -eq 1 ]; then \
-	for hib_file in ${HIB_FILES};		\
+	for hib_file in ${HIB_FILES}; \
 	do	\
-                $(SEG_HACK) __HIB $${hib_file} -o $${hib_file}__; \
-                mv $${hib_file}__ $${hib_file} ; \
+		$(SEG_HACK) __HIB $${hib_file} -o $${hib_file}__; \
+		mv $${hib_file}__ $${hib_file} ; \
 	done; \
 	fi
 	@echo LDFILELIST $(COMPONENT)

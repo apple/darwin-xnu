@@ -1,4 +1,8 @@
 
+# libIOKit
+
+iokit/Kernel/IOSyncer.cpp				optional iokitcpp
+
 # Shared lock
 
 iokit/Kernel/i386/IOSharedLock.s                            standard

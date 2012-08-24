@@ -778,7 +778,7 @@ nfs4_readdir_rpc(nfsnode_t dnp, struct nfsbuf *bp, vfs_context_t ctx)
 	} else {
 		cookie = bp->nb_lblkno;
 		/* increment with every buffer read */
-		OSAddAtomic(1, &nfsstats.readdir_bios);
+		OSAddAtomic64(1, &nfsstats.readdir_bios);
 	}
 	lastcookie = cookie;
 
@@ -946,7 +946,7 @@ nextbuffer:
 				space_free = nfs_dir_buf_freespace(bp, rdirplus);
 				dp = NFS_DIR_BUF_FIRST_DIRENTRY(bp);
 				/* increment with every buffer read */
-				OSAddAtomic(1, &nfsstats.readdir_bios);
+				OSAddAtomic64(1, &nfsstats.readdir_bios);
 			}
 			nmrepsave = nmrep;
 			dp->d_fileno = cookie; /* placeholder */
@@ -2830,6 +2830,26 @@ out:
 	}
 	if (noop)
 		nfs_open_owner_rele(noop);
+
+	if (!error) {
+		int ismapped = 0;
+		nfs_node_lock_force(np);
+		if ((np->n_flag & NISMAPPED) == 0) {
+			np->n_flag |= NISMAPPED;
+			ismapped = 1;
+		}
+		nfs_node_unlock(np);
+		if (ismapped) {
+			lck_mtx_lock(&nmp->nm_lock);
+			nmp->nm_state &= ~NFSSTA_SQUISHY;
+			nmp->nm_curdeadtimeout = nmp->nm_deadtimeout;
+			if (nmp->nm_curdeadtimeout <= 0)
+				nmp->nm_deadto_start = 0;
+			nmp->nm_mappers++;
+			lck_mtx_unlock(&nmp->nm_lock);
+		}
+	}
+
 	return (error);
 }
 
@@ -2849,10 +2869,26 @@ nfs_vnop_mnomap(
 	struct nfs_open_file *nofp = NULL;
 	off_t size;
 	int error;
-
+	int is_mapped_flag = 0;
+	
 	nmp = VTONMP(vp);
 	if (!nmp)
 		return (ENXIO);
+
+	nfs_node_lock_force(np);
+	if (np->n_flag & NISMAPPED) {
+		is_mapped_flag = 1;
+		np->n_flag &= ~NISMAPPED;
+	}
+	nfs_node_unlock(np);
+	if (is_mapped_flag) {
+		lck_mtx_lock(&nmp->nm_lock);
+		if (nmp->nm_mappers)
+			nmp->nm_mappers--;
+		else
+			NP(np, "nfs_vnop_mnomap: removing mmap reference from mount, but mount has no files mmapped");
+		lck_mtx_unlock(&nmp->nm_lock);
+	}
 
 	/* flush buffers/ubc before we drop the open (in case it's our last open) */
 	nfs_flush(np, MNT_WAIT, vfs_context_thread(ctx), V_IGNORE_WRITEERR);
@@ -3797,7 +3833,8 @@ error_out:
 			wakeup(newnflp);
 		} else {
 			/* remove newnflp from lock list and destroy */
-			TAILQ_REMOVE(&np->n_locks, newnflp, nfl_link);
+			if (inqueue)
+				TAILQ_REMOVE(&np->n_locks, newnflp, nfl_link);
 			nfs_file_lock_destroy(newnflp);
 		}
 		lck_mtx_unlock(&np->n_openlock);
@@ -5753,6 +5790,7 @@ nfs_release_open_state_for_node(nfsnode_t np, int force)
 		lck_mtx_lock(&nofp->nof_lock);
 		nofp->nof_flags &= ~NFS_OPEN_FILE_REOPEN;
 		nofp->nof_flags |= NFS_OPEN_FILE_LOST;
+		
 		lck_mtx_unlock(&nofp->nof_lock);
 		if (!force && nmp && (nmp->nm_vers >= NFS_VER4))
 			nfs4_close_rpc(np, nofp, NULL, nofp->nof_owner->noo_cred, R_RECOVER);
@@ -6984,7 +7022,7 @@ nfs4_named_attr_get(
 			/* FALLTHROUGH */
 		case -1:
 			/* cache hit, not really an error */
-			OSAddAtomic(1, &nfsstats.lookupcache_hits);
+			OSAddAtomic64(1, &nfsstats.lookupcache_hits);
 			if (!anp && avp)
 				*anpp = anp = VTONFS(avp);
 
@@ -7524,7 +7562,7 @@ nfsmout:
 			/* don't save the data if dirty or potential I/O conflict */
 			if (!error && bp && !bp->nb_dirtyoff && !(bp->nb_dirty & pagemask) &&
 			    timevalcmp(&anp->n_lastio, &now, <)) {
-				OSAddAtomic(1, &nfsstats.read_bios);
+				OSAddAtomic64(1, &nfsstats.read_bios);
 				CLR(bp->nb_flags, (NB_DONE|NB_ASYNC));
 				SET(bp->nb_flags, NB_READ);
 				NFS_BUF_MAP(bp);
@@ -7951,7 +7989,7 @@ nfs4_vnop_listxattr(
 	nextcookie = lbn = 0;
 
 	while (!error && !done) {
-		OSAddAtomic(1, &nfsstats.biocache_readdirs);
+		OSAddAtomic64(1, &nfsstats.biocache_readdirs);
 		cookie = nextcookie;
 getbuffer:
 		error = nfs_buf_get(adnp, lbn, NFS_DIRBLKSIZ, vfs_context_thread(ctx), NBLK_READ, &bp);

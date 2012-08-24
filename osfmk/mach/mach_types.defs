@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2009 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2010 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -215,6 +215,8 @@ type thread_policy_t		= array[*:16] of integer_t;
 		 * task audit token (8 ints)
 		 * dyld info (2 64-bit ints and 1 int)
 		 * task_extmod_info_t (8 64-bit ints)
+		 * task_basic_info_64_2_t
+		 * mach_task_basic_info_t (12 ints)
 		 * If other task_info flavors are added, this
 		 * definition may need to be changed. (See
 		 * mach/task_info.h and mach/policy.h) */
@@ -404,6 +406,9 @@ type ledger_t = mach_port_t
 
 type ledger_array_t	 	= ^array[] of ledger_t;
 type ledger_item_t		= integer_t;
+     				  /* DEPRECATED */
+
+type ledger_amount_t		= int64_t;
 
 type security_token_t		= struct[2] of uint32_t;
 type audit_token_t		= struct[8] of uint32_t;

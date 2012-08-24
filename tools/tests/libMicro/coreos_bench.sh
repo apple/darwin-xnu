@@ -621,8 +621,6 @@ pwrite		$OPTS -N "pwrite_n1k"	-s 1k	-I 100		-f /dev/null
 pwrite		$OPTS -N "pwrite_n10k"	-s 10k	-I 100		-f /dev/null 
 pwrite		$OPTS -N "pwrite_n100k"	-s 100k	-I 100		-f /dev/null 
 
-mmap		$OPTS -N "mmap_z8k"	-l 8k   -I 1000	-B 50	-f /dev/zero
-mmap		$OPTS -N "mmap_z128k"	-l 128k	-I 2000	-B 100	-f /dev/zero
 mmap		$OPTS -N "mmap_t8k"	-l 8k	-I 1000		-f $TFILE
 mmap		$OPTS -N "mmap_t128k"	-l 128k	-I 1000		-f $TFILE
 mmap		$OPTS -N "mmap_u8k"	-l 8k	-I 1000		-f $VFILE
@@ -631,8 +629,7 @@ mmap		$OPTS -N "mmap_a8k"	-l 8k	-I 200		-f MAP_ANON
 mmap		$OPTS -N "mmap_a128k"	-l 128k	-I 200		-f MAP_ANON
 
 
-mmap		$OPTS -N "mmap_rz8k"	-l 8k	-I 2000 -r	-f /dev/zero
-mmap		$OPTS -N "mmap_rz128k"	-l 128k	-I 2000 -r	-f /dev/zero
+
 mmap		$OPTS -N "mmap_rt8k"	-l 8k	-I 2000 -r	-f $TFILE
 mmap		$OPTS -N "mmap_rt128k"	-l 128k	-I 20000 -r	-f $TFILE
 mmap		$OPTS -N "mmap_ru8k"	-l 8k	-I 2000 -r	-f $VFILE
@@ -640,8 +637,7 @@ mmap		$OPTS -N "mmap_ru128k"	-l 128k	-I 20000 -r	-f $VFILE
 mmap		$OPTS -N "mmap_ra8k"	-l 8k	-I 2000 -r	-f MAP_ANON
 mmap		$OPTS -N "mmap_ra128k"	-l 128k	-I 20000 -r	-f MAP_ANON
 
-mmap		$OPTS -N "mmap_wz8k"	-l 8k	-I 5000 -w	-B 50 -f /dev/zero
-mmap		$OPTS -N "mmap_wz128k"	-l 128k	-I 50000 -w	-B 50 -f /dev/zero
+
 mmap		$OPTS -N "mmap_wt8k"	-l 8k	-I 5000 -w	-f $TFILE
 mmap		$OPTS -N "mmap_wt128k"	-l 128k	-I 50000 -w	-f $TFILE
 mmap		$OPTS -N "mmap_wu8k"	-l 8k	-I 5000 -w	-f $VFILE
@@ -649,8 +645,7 @@ mmap		$OPTS -N "mmap_wu128k"	-l 128k	-I 500000 -w	-f $VFILE
 mmap		$OPTS -N "mmap_wa8k"	-l 8k	-I 3000 -w	-f MAP_ANON
 mmap		$OPTS -N "mmap_wa128k"	-l 128k	-I 50000 -w	-f MAP_ANON
 
-munmap		$OPTS -N "unmap_z8k"	-l 8k   -I 500		-f /dev/zero
-munmap		$OPTS -N "unmap_z128k"	-l 128k	-I 500	-B 100	-f /dev/zero
+
 munmap		$OPTS -N "unmap_t8k"	-l 8k	-I 500		-f $TFILE
 munmap		$OPTS -N "unmap_t128k"	-l 128k	-I 500		-f $TFILE
 munmap		$OPTS -N "unmap_u8k"	-l 8k	-I 500		-f $VFILE
@@ -658,8 +653,7 @@ munmap		$OPTS -N "unmap_u128k"	-l 128k	-I 500		-f $VFILE
 munmap		$OPTS -N "unmap_a8k"	-l 8k	-I 500		-f MAP_ANON
 munmap		$OPTS -N "unmap_a128k"	-l 128k	-I 500		-f MAP_ANON
 
-munmap		$OPTS -N "unmap_rz8k"	-l 8k	-I 1000	-r	-f /dev/zero
-munmap		$OPTS -N "unmap_rz128k"	-l 128k	-I 2000 -r	-B 100 -f /dev/zero
+
 munmap		$OPTS -N "unmap_rt8k"	-l 8k	-I 1000	-r	-f $TFILE
 munmap		$OPTS -N "unmap_rt128k"	-l 128k	-I 3000	-r	-f $TFILE
 munmap		$OPTS -N "unmap_ru8k"	-l 8k	-I 1000	-r	-f $VFILE
@@ -669,15 +663,13 @@ munmap		$OPTS -N "unmap_ra128k"	-l 128k	-I 2000	-r	-f MAP_ANON
 
 connection	$OPTS -N "conn_connect"		-B 256 	-c
 
-munmap		$OPTS -N "unmap_wz8k"	-l 8k	-I 1000	-w	-f /dev/zero
-munmap		$OPTS -N "unmap_wz128k"	-l 128k	-I 8000	-w	-B 100 -f /dev/zero
+
 munmap		$OPTS -N "unmap_wt8k"	-l 8k	-I 1000	-w	-f $TFILE
 munmap		$OPTS -N "unmap_wt128k"	-l 128k	-I 10000	-w	-f $TFILE
 munmap		$OPTS -N "unmap_wu8k"	-l 8k	-I 1000	-w	-f $VFILE
 munmap		$OPTS -N "unmap_wu128k"	-l 128k	-I 50000	-w -B 10	-f $VFILE
 munmap		$OPTS -N "unmap_wa8k"	-l 8k	-I 1000	-w	-f MAP_ANON
 munmap		$OPTS -N "unmap_wa128k"	-l 128k	-I 10000	-w	-f MAP_ANON
-
 
 mprotect	$OPTS -N "mprot_z8k"	-l 8k  -I 300			-f /dev/zero
 mprotect	$OPTS -N "mprot_z128k"	-l 128k	-I 500		-f /dev/zero

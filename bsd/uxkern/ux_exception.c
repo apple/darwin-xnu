@@ -239,7 +239,6 @@ catch_mach_exception_raise(
 	task_t			self = current_task();
 	thread_t		th_act;
 	ipc_port_t 		thread_port;
-	struct task		*sig_task;
 	struct proc		*p;
 	kern_return_t		result = MACH_MSG_SUCCESS;
 	int			ux_signal = 0;
@@ -273,10 +272,9 @@ catch_mach_exception_raise(
 	    ux_exception(exception, code[0], code[1], &ux_signal, &ucode);
 
 	    ut = get_bsdthread_info(th_act);
-	    sig_task = get_threadtask(th_act);
-	    p = (struct proc *) get_bsdtask_info(sig_task);
+	    p = proc_findthread(th_act);
 
-	    /* Can't deliver a signal without a bsd process */
+	    /* Can't deliver a signal without a bsd process reference */
 	    if (p == NULL) {
 		    ux_signal = 0;
 		    result = KERN_FAILURE;
@@ -298,15 +296,9 @@ catch_mach_exception_raise(
 		    struct sigacts	*ps;
 
 		    sp = code[1];
-		    if (ut && (ut->uu_flag & UT_VFORK))
-			    p = ut->uu_proc;
-#if STACK_GROWTH_UP
-		    stack_min = p->user_stack;
-		    stack_max = p->user_stack + MAXSSIZ;
-#else /* STACK_GROWTH_UP */
+
 		    stack_max = p->user_stack;
 		    stack_min = p->user_stack - MAXSSIZ;
-#endif /* STACK_GROWTH_UP */
 		    if (sp >= stack_min &&
 			sp < stack_max) {
 			    /*
@@ -344,7 +336,8 @@ catch_mach_exception_raise(
 			ut->uu_subcode = code[1];			
 			threadsignal(th_act, ux_signal, code[0]);
 	    }
-
+	    if (p != NULL) 
+		    proc_rele(p);
 	    thread_deallocate(th_act);
 	}
 	else

@@ -737,20 +737,11 @@ static void dtrace_helper_provider_destroy(dtrace_helper_provider_t *);
  * for these functions, there will be a comment above the function reading
  * "Note:  not called from probe context."
  */
-void
-dtrace_panic(const char *format, ...)
-{
-	va_list alist;
-
-	va_start(alist, format);
-	dtrace_vpanic(format, alist);
-	va_end(alist);
-}
 
 int
 dtrace_assfail(const char *a, const char *f, int l)
 {
-	dtrace_panic("assertion failed: %s, file: %s, line: %d", a, f, l);
+	panic("dtrace: assertion failed: %s, file: %s, line: %d", a, f, l);
 
 	/*
 	 * We just need something here that even the most clever compiler
@@ -6168,7 +6159,7 @@ dtrace_action_panic(dtrace_ecb_t *ecb)
 	 * thread calls panic() from dtrace_probe(), and that panic() is
 	 * called exactly once.)
 	 */
-	dtrace_panic("dtrace: panic action at probe %s:%s:%s:%s (ecb %p)",
+	panic("dtrace: panic action at probe %s:%s:%s:%s (ecb %p)",
 	    probe->dtpr_provider->dtpv_name, probe->dtpr_mod,
 	    probe->dtpr_func, probe->dtpr_name, (void *)ecb);
 
@@ -6231,7 +6222,6 @@ dtrace_action_stop(void)
 		uthread->t_dtrace_stop = 1;
 		act_set_astbsd(current_thread());
 	}
-
 #endif /* __APPLE__ */
 }
 
@@ -6246,7 +6236,6 @@ dtrace_action_pidresume(uint64_t pid)
 		DTRACE_CPUFLAG_SET(CPU_DTRACE_ILLOP);		
 		return;
 	}
-
         uthread_t uthread = (uthread_t)get_bsdthread_info(current_thread());
 
 	/*
@@ -16289,7 +16278,7 @@ static void
 dtrace_module_loaded(struct modctl *ctl)
 #else
 static int
-dtrace_module_loaded(struct kmod_info *kmod)
+dtrace_module_loaded(struct kmod_info *kmod, uint32_t flag)
 #endif /* __APPLE__ */
 {
 	dtrace_provider_t *prv;
@@ -16378,16 +16367,36 @@ dtrace_module_loaded(struct kmod_info *kmod)
 	lck_mtx_lock(&dtrace_lock);
 	
 	/*
-	 * If the module does not have a valid UUID, we will not be able to find symbols for it from
-	 * userspace. Go ahead and instrument it now.
+	 * DTrace must decide if it will instrument modules lazily via
+	 * userspace symbols (default mode), or instrument immediately via 
+	 * kernel symbols (non-default mode)
+	 *
+	 * When in default/lazy mode, DTrace will only support modules
+	 * built with a valid UUID.
+	 *
+	 * Overriding the default can be done explicitly in one of
+	 * the following two ways.
+	 *
+	 * A module can force symbols from kernel space using the plist key,
+	 * OSBundleForceDTraceInit (see kmod.h).  If this per kext state is set,
+	 * we fall through and instrument this module now.
+	 *
+	 * Or, the boot-arg, dtrace_kernel_symbol_mode, can be set to force symbols
+	 * from kernel space (see dtrace_impl.h).  If this system state is set
+	 * to a non-userspace mode, we fall through and instrument the module now.
 	 */
-	if (MOD_HAS_UUID(ctl) && (dtrace_kernel_symbol_mode == DTRACE_KERNEL_SYMBOLS_FROM_USERSPACE)) {
+
+	if ((dtrace_kernel_symbol_mode == DTRACE_KERNEL_SYMBOLS_FROM_USERSPACE) &&
+	    (!(flag & KMOD_DTRACE_FORCE_INIT)))
+	{
+		/* We will instrument the module lazily -- this is the default */
 		lck_mtx_unlock(&dtrace_lock);
 		lck_mtx_unlock(&mod_lock);
 		lck_mtx_unlock(&dtrace_provider_lock);
 		return 0;
 	}
 	
+	/* We will instrument the module immediately using kernel symbols */
 	ctl->mod_flags |= MODCTL_HAS_KERNEL_SYMBOLS;
 	
 	lck_mtx_unlock(&dtrace_lock);
@@ -19713,6 +19722,8 @@ dtrace_init( void )
 
 		(void)dtrace_abs_to_nano(0LL); /* Force once only call to clock_timebase_info (which can take a lock) */
 
+		dtrace_isa_init();
+		
 		/*
 		 * See dtrace_impl.h for a description of dof modes.
 		 * The default is lazy dof.
@@ -19781,7 +19792,7 @@ dtrace_postinit(void)
 	fake_kernel_kmod.address = g_kernel_kmod_info.address;
 	fake_kernel_kmod.size = g_kernel_kmod_info.size;
 
-	if (dtrace_module_loaded(&fake_kernel_kmod) != 0) {
+	if (dtrace_module_loaded(&fake_kernel_kmod, 0) != 0) {
 		printf("dtrace_postinit: Could not register mach_kernel modctl\n");
 	}
 	

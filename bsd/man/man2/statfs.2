@@ -49,7 +49,7 @@
 .Fn statfs "const char *path" "struct statfs *buf"
 .Ft int
 .Fn fstatfs "int fd" "struct statfs *buf"
-.Sh TRANSITIIONAL SYNOPSIS (NOW DEPRECATED)
+.Sh TRANSITIONAL SYNOPSIS (NOW DEPRECATED)
 .Ft int
 .br
 .Fn statfs64 "const char *path" "struct statfs64 *buf" ;
@@ -149,7 +149,7 @@ The
 routine returns the same information about an open file referenced by descriptor
 .Fa fd .
 .Sh FLAGS
-.Bl -tag -width MNT_UNKOWNPERMISSIONS
+.Bl -tag -width MNT_UNKNOWNPERMISSIONS
 These are some of the flags that may be present in the f_flags field. 
 .It Dv MNT_RDONLY
 A read-only filesystem
@@ -187,6 +187,8 @@ File system is journaled
 File system should defer writes
 .It Dv MNT_MULTILABEL
 MAC support for individual labels
+.It Dv MNT_CPROTECT
+File system supports per-file encrypted data protection
 .El
 .Sh CAVEATS
 In Mac OS X versions before 10.4, f_iosize is 4096. On these older

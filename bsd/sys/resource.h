@@ -284,6 +284,7 @@ struct rlimit {
 #define IOPOL_NORMAL	1
 #define IOPOL_PASSIVE	2
 #define IOPOL_THROTTLE	3
+#define IOPOL_UTILITY	4
 
 #ifdef PRIVATE
 /*

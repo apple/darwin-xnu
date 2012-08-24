@@ -73,7 +73,8 @@
 
 #include <net/raw_cb.h>
 
-lck_mtx_t 	*raw_mtx;	/*### global raw cb mutex for now */
+decl_lck_mtx_data(,raw_mtx_data);	/*### global raw cb mutex for now */
+lck_mtx_t 	*raw_mtx = &raw_mtx_data;
 lck_attr_t 	*raw_mtx_attr;
 lck_grp_t 	*raw_mtx_grp;
 lck_grp_attr_t 	*raw_mtx_grp_attr;
@@ -89,10 +90,7 @@ raw_init(void)
 
 	raw_mtx_attr = lck_attr_alloc_init();
 
-	if ((raw_mtx = lck_mtx_alloc_init(raw_mtx_grp, raw_mtx_attr)) == NULL) {
-		printf("raw_init: can't alloc raw_mtx\n");
-		return;
-	}
+	lck_mtx_init(raw_mtx, raw_mtx_grp, raw_mtx_attr);
 	LIST_INIT(&rawcb_list);
 }
 

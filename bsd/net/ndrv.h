@@ -169,4 +169,12 @@ struct ndrv_protocol_desc32 {
  * you a second or two.
  */
 
+/* Max number of descriptions allowed by default */
+#define NDRV_DMUX_MAX_DESCR	1024
+ 
+/*
+ * sysctl MIB tags at the kern.ipc.nrdv level
+ */
+#define NRDV_MULTICAST_ADDRS_PER_SOCK 1	/* to toggle NDRV_DMUX_MAX_DESCR value */
+
 #endif	/* _NET_NDRV_H */

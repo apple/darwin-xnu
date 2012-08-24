@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2004-2005 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2004-2005, 2011 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -122,10 +122,7 @@ struct image_params {
  */
 #define	IMGPF_NONE		0x00000000	/* No flags */
 #define	IMGPF_INTERPRET		0x00000001	/* Interpreter invoked */
-#define	IMGPF_POWERPC		0x00000002	/* ppc mode for x86 */
-#if CONFIG_EMBEDDED
-#undef IMGPF_POWERPC
-#endif
+#define	IMGPF_RESERVED		0x00000002
 #define	IMGPF_WAS_64BIT		0x00000004	/* exec from a 64Bit binary */
 #define	IMGPF_IS_64BIT		0x00000008	/* exec to a 64Bit binary */
 #define	IMGPF_SPAWN		0x00000010	/* spawn (without setexec) */

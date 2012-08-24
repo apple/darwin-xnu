@@ -27,6 +27,7 @@
  */
 
 #include <mach/mach_types.h>
+#include <mach/vm_param.h>
 #include <sys/appleapiopts.h>
 #include <kern/debug.h>
 #include <uuid/uuid.h>
@@ -46,6 +47,9 @@
 #include <kern/clock.h>
 #include <vm/vm_map.h>
 #include <vm/vm_kern.h>
+#include <vm/vm_pageout.h>
+
+extern int count_busy_buffers(void);   /* must track with declaration in bsd/sys/buf_internal.h */
 
 #define DO_ALIGN	1	/* align all packet data accesses */
 
@@ -1068,17 +1072,33 @@ kdp_copyin(pmap_t p, uint64_t uaddr, void *dest, size_t size) {
 
 
 static void
-kdp_mem_snapshot(struct mem_snapshot *mem_snap)
+kdp_mem_and_io_snapshot(struct mem_and_io_snapshot *memio_snap)
 {
-  mem_snap->snapshot_magic = STACKSHOT_MEM_SNAPSHOT_MAGIC;
-  mem_snap->free_pages = vm_page_free_count;
-  mem_snap->active_pages = vm_page_active_count;
-  mem_snap->inactive_pages = vm_page_inactive_count;
-  mem_snap->purgeable_pages = vm_page_purgeable_count;
-  mem_snap->wired_pages = vm_page_wire_count;
-  mem_snap->speculative_pages = vm_page_speculative_count;
-  mem_snap->throttled_pages = vm_page_throttled_count;
+  unsigned int pages_reclaimed;
+  unsigned int pages_wanted;
+  kern_return_t kErr;
+
+  memio_snap->snapshot_magic = STACKSHOT_MEM_AND_IO_SNAPSHOT_MAGIC;
+  memio_snap->free_pages = vm_page_free_count;
+  memio_snap->active_pages = vm_page_active_count;
+  memio_snap->inactive_pages = vm_page_inactive_count;
+  memio_snap->purgeable_pages = vm_page_purgeable_count;
+  memio_snap->wired_pages = vm_page_wire_count;
+  memio_snap->speculative_pages = vm_page_speculative_count;
+  memio_snap->throttled_pages = vm_page_throttled_count;
+  memio_snap->busy_buffer_count = count_busy_buffers();
+  kErr = mach_vm_pressure_monitor(FALSE, VM_PRESSURE_TIME_WINDOW, &pages_reclaimed, &pages_wanted);
+  if ( ! kErr ) {
+	memio_snap->pages_wanted = (uint32_t)pages_wanted;
+	memio_snap->pages_reclaimed = (uint32_t)pages_reclaimed;
+	memio_snap->pages_wanted_reclaimed_valid = 1;
+  } else {
+	memio_snap->pages_wanted = 0;
+	memio_snap->pages_reclaimed = 0;
+	memio_snap->pages_wanted_reclaimed_valid = 0;
+  }
 }
+
 
 
 /* 
@@ -1126,12 +1146,12 @@ kdp_stackshot(int pid, void *tracebuf, uint32_t tracebuf_size, uint32_t trace_fl
 	boolean_t save_loadinfo_p = ((trace_flags & STACKSHOT_SAVE_LOADINFO) != 0);
 
 	if(trace_flags & STACKSHOT_GET_GLOBAL_MEM_STATS) {
-	  if(tracepos + sizeof(struct mem_snapshot) > tracebound) {
+	  if(tracepos + sizeof(struct mem_and_io_snapshot) > tracebound) {
 	    error = -1;
 	    goto error_exit;
 	  }
-	  kdp_mem_snapshot((struct mem_snapshot *)tracepos);
-	  tracepos += sizeof(struct mem_snapshot);
+	  kdp_mem_and_io_snapshot((struct mem_and_io_snapshot *)tracepos);
+	  tracepos += sizeof(struct mem_and_io_snapshot);
 	}
 
 walk_list:
@@ -1165,14 +1185,14 @@ walk_list:
 			if (have_pmap && task->active && save_loadinfo_p && task_pid > 0) {
 				// Read the dyld_all_image_infos struct from the task memory to get UUID array count and location
 				if (task64) {
-					struct dyld_all_image_infos64 task_image_infos;
-					if (kdp_copyin(task->map->pmap, task->all_image_info_addr, &task_image_infos, sizeof(struct dyld_all_image_infos64))) {
+					struct user64_dyld_all_image_infos task_image_infos;
+					if (kdp_copyin(task->map->pmap, task->all_image_info_addr, &task_image_infos, sizeof(struct user64_dyld_all_image_infos))) {
 						uuid_info_count = (uint32_t)task_image_infos.uuidArrayCount;
 						uuid_info_addr = task_image_infos.uuidArray;
 					}
 				} else {
-					struct dyld_all_image_infos task_image_infos;
-					if (kdp_copyin(task->map->pmap, task->all_image_info_addr, &task_image_infos, sizeof(struct dyld_all_image_infos))) {
+					struct user32_dyld_all_image_infos task_image_infos;
+					if (kdp_copyin(task->map->pmap, task->all_image_info_addr, &task_image_infos, sizeof(struct user32_dyld_all_image_infos))) {
 						uuid_info_count = task_image_infos.uuidArrayCount;
 						uuid_info_addr = task_image_infos.uuidArray;
 					}
@@ -1205,6 +1225,8 @@ walk_list:
 				task_snap->ss_flags |= kUser64_p;
 			if (!task->active) 
 				task_snap->ss_flags |= kTerminatedSnapshot;
+			if(task->pidsuspended) task_snap->ss_flags |= kPidSuspended;
+			if(task->frozen) task_snap->ss_flags |= kFrozen;
 
 			task_snap->suspend_count = task->suspend_count;
 			task_snap->task_size = have_pmap ? pmap_resident_count(task->map->pmap) : 0;
@@ -1217,7 +1239,7 @@ walk_list:
 			tracepos += sizeof(struct task_snapshot);
 
 			if (task_pid > 0 && uuid_info_count > 0) {
-				uint32_t uuid_info_size = (uint32_t)(task64 ? sizeof(struct dyld_uuid_info64) : sizeof(struct dyld_uuid_info));
+				uint32_t uuid_info_size = (uint32_t)(task64 ? sizeof(struct user64_dyld_uuid_info) : sizeof(struct user32_dyld_uuid_info));
 				uint32_t uuid_info_array_size = uuid_info_count * uuid_info_size;
 
 				if (tracepos + uuid_info_array_size > tracebound) {
@@ -1234,6 +1256,8 @@ walk_list:
 			}
 
 			queue_iterate(&task->threads, thread, thread_t, task_threads){
+				uint64_t tval;
+
 				if ((thread == NULL) || (ml_nofault_copy((vm_offset_t) thread, (vm_offset_t) &cthread, sizeof(struct thread)) != sizeof(struct thread)))
 					goto error_exit;
 
@@ -1245,10 +1269,19 @@ walk_list:
 				tsnap = (thread_snapshot_t) tracepos;
 				tsnap->thread_id = thread_tid(thread);
 				tsnap->state = thread->state;
-				tsnap->wait_event = thread->wait_event;
-				tsnap->continuation = (uint64_t) (uintptr_t) thread->continuation;
-				tsnap->user_time = safe_grab_timer_value(&thread->user_timer);
-				tsnap->system_time = safe_grab_timer_value(&thread->system_timer);
+				tsnap->sched_pri = thread->sched_pri;
+				tsnap->sched_flags = thread->sched_flags;
+				tsnap->wait_event = VM_KERNEL_UNSLIDE(thread->wait_event);
+				tsnap->continuation = VM_KERNEL_UNSLIDE(thread->continuation);
+				tval = safe_grab_timer_value(&thread->user_timer);
+				tsnap->user_time = tval;
+				tval = safe_grab_timer_value(&thread->system_timer);
+				if (thread->precise_user_kernel_time) {
+					tsnap->system_time = tval;
+				} else {
+					tsnap->user_time += tval;
+					tsnap->system_time = 0;
+				}
 				tsnap->snapshot_magic = STACKSHOT_THREAD_SNAPSHOT_MAGIC;
 				tracepos += sizeof(struct thread_snapshot);
 				tsnap->ss_flags = 0;

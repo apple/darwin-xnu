@@ -147,7 +147,7 @@ IODMACommand::initWithSpecification(SegmentFunction outSegFunc,
 				    IOMapper       *mapper,
 				    void           *refCon)
 {
-    if (!super::init() || !outSegFunc || !numAddressBits)
+    if (!super::init() || !outSegFunc)
         return false;
 
     bool is32Bit = (OutputHost32   == outSegFunc || OutputBig32 == outSegFunc
@@ -502,7 +502,7 @@ IODMACommand::walkAll(UInt8 op)
 		}
 		else
 		{
-		    DEBG("IODMACommand !iovmAlloc");
+		    DEBG("IODMACommand !alloc IOBMD");
 		    return (kIOReturnNoResources);
 		}
 	    }
@@ -513,6 +513,11 @@ IODMACommand::walkAll(UInt8 op)
 	    state->fLocalMapperPageCount = atop_64(round_page(
 	    	    state->fPreparedLength + ((state->fPreparedOffset + fMDSummary.fPageAlign) & page_mask)));
 	    state->fLocalMapperPageAlloc = fMapper->iovmAllocDMACommand(this, state->fLocalMapperPageCount);
+            if (!state->fLocalMapperPageAlloc)
+            {
+                DEBG("IODMACommand !iovmAlloc");
+                return (kIOReturnNoResources);
+            }
 	    state->fMapContig = true;
 	}
     }
@@ -610,7 +615,7 @@ IODMACommand::prepareWithSpecification(SegmentFunction	outSegFunc,
     if (fActive)
         return kIOReturnNotPermitted;
 
-    if (!outSegFunc || !numAddressBits)
+    if (!outSegFunc)
         return kIOReturnBadArgument;
 
     bool is32Bit = (OutputHost32   == outSegFunc || OutputBig32 == outSegFunc
@@ -1143,7 +1148,7 @@ IODMACommand::clientOutputSegment(
     SegmentFunction segmentFunction = (SegmentFunction) reference;
     IOReturn ret = kIOReturnSuccess;
 
-    if ((target->fNumAddressBits < 64) 
+    if (target->fNumAddressBits && (target->fNumAddressBits < 64) 
 	&& ((segment.fIOVMAddr + segment.fLength - 1) >> target->fNumAddressBits)
 	&& (target->reserved->fLocalMapperPageAlloc || !target->reserved->fLocalMapper))
     {

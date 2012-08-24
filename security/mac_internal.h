@@ -184,8 +184,6 @@ extern struct mac_policy_list mac_policy_list;
  * at all in the system.
  */
 extern unsigned int mac_device_enforce;
-extern unsigned int mac_file_enforce;
-extern unsigned int mac_iokit_enforce;
 extern unsigned int mac_pipe_enforce;
 extern unsigned int mac_posixsem_enforce;
 extern unsigned int mac_posixshm_enforce;
@@ -197,11 +195,6 @@ extern unsigned int mac_sysvsem_enforce;
 extern unsigned int mac_sysvshm_enforce;
 extern unsigned int mac_vm_enforce;
 extern unsigned int mac_vnode_enforce;
-
-#if CONFIG_MACF_MACH
-extern unsigned int mac_port_enforce;
-extern unsigned int mac_task_enforce;
-#endif
 
 #if CONFIG_MACF_NET
 extern unsigned int mac_label_mbufs;

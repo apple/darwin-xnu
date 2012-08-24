@@ -1044,7 +1044,7 @@ semop(struct proc *p, struct semop_args *uap, int32_t *retval)
 {
 	int semid = uap->semid;
 	int nsops = uap->nsops;
-	struct sembuf sops[MAX_SOPS];
+	struct sembuf sops[seminfo.semopm];
 	register struct semid_kernel *semakptr;
 	register struct sembuf *sopptr = NULL;	/* protected by 'semptr' */
 	register struct sem *semptr = NULL;	/* protected by 'if' */
@@ -1084,14 +1084,15 @@ semop(struct proc *p, struct semop_args *uap, int32_t *retval)
 		goto semopout;
 	}
 
-	if (nsops < 0 || nsops > MAX_SOPS) {
+	if (nsops < 0 || nsops > seminfo.semopm) {
 #ifdef SEM_DEBUG
-		printf("too many sops (max=%d, nsops=%d)\n", MAX_SOPS, nsops);
+		printf("too many sops (max=%d, nsops=%d)\n",
+		    seminfo.semopm, nsops);
 #endif
 		eval = E2BIG;
 		goto semopout;
 	}
-
+	
 	/*  OK for LP64, since sizeof(struct sembuf) is currently invariant */
 	if ((eval = copyin(uap->sops, &sops, nsops * sizeof(struct sembuf))) != 0) {
 #ifdef SEM_DEBUG

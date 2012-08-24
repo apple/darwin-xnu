@@ -55,7 +55,6 @@
  */
 
 #include <platforms.h>
-#include <mach_kdb.h>
 
 #include <mach/i386/vm_param.h>
 
@@ -79,18 +78,33 @@
 #include <mach/thread_status.h>
 #include <pexpert/i386/efi.h>
 #include <i386/i386_lowmem.h>
+#ifdef __x86_64__
+#include <x86_64/lowglobals.h>
+#else
 #include <i386/lowglobals.h>
+#endif
 #include <i386/pal_routines.h>
 
 #include <mach-o/loader.h>
 #include <libkern/kernel_mach_header.h>
+
 
 vm_size_t	mem_size = 0; 
 pmap_paddr_t	first_avail = 0;/* first after page tables */
 
 uint64_t	max_mem;        /* Size of physical memory (bytes), adjusted by maxmem */
 uint64_t        mem_actual;
-uint64_t	sane_size = 0;  /* Memory size to use for defaults calculations */
+uint64_t	sane_size = 0;  /* Memory size for defaults calculations */
+
+/*
+ * KASLR parameters
+ */
+ppnum_t		vm_kernel_base_page;
+vm_offset_t	vm_kernel_base;
+vm_offset_t	vm_kernel_top;
+vm_offset_t	vm_kernel_stext;
+vm_offset_t	vm_kernel_etext;
+vm_offset_t	vm_kernel_slide;
 
 #define MAXLORESERVE	(32 * 1024 * 1024)
 
@@ -112,21 +126,23 @@ vm_offset_t	virtual_avail, virtual_end;
 static pmap_paddr_t	avail_remaining;
 vm_offset_t     static_memory_end = 0;
 
-vm_offset_t	sHIB, eHIB, stext, etext, sdata, edata, end;
+vm_offset_t	sHIB, eHIB, stext, etext, sdata, edata, sconstdata, econstdata, end;
 
 /*
  * _mh_execute_header is the mach_header for the currently executing kernel
  */
-void *sectTEXTB; unsigned long sectSizeTEXT;
-void *sectDATAB; unsigned long sectSizeDATA;
-void *sectOBJCB; unsigned long sectSizeOBJC;
-void *sectLINKB; unsigned long sectSizeLINK;
-void *sectPRELINKB; unsigned long sectSizePRELINK;
-void *sectHIBB; unsigned long sectSizeHIB;
-void *sectINITPTB; unsigned long sectSizeINITPT;
+vm_offset_t segTEXTB; unsigned long segSizeTEXT;
+vm_offset_t segDATAB; unsigned long segSizeDATA;
+vm_offset_t segLINKB; unsigned long segSizeLINK;
+vm_offset_t segPRELINKB; unsigned long segSizePRELINK;
+vm_offset_t segHIBB; unsigned long segSizeHIB;
+vm_offset_t sectCONSTB; unsigned long sectSizeConst;
 
-kernel_segment_command_t *segTEXT;
-kernel_section_t *cursectTEXT, *lastsectTEXT;
+boolean_t doconstro_override = FALSE;
+
+static kernel_segment_command_t *segTEXT, *segDATA;
+static kernel_section_t *cursectTEXT, *lastsectTEXT;
+static kernel_section_t *sectDCONST;
 
 extern uint64_t firmware_Conventional_bytes;
 extern uint64_t firmware_RuntimeServices_bytes;
@@ -138,8 +154,19 @@ extern uint64_t firmware_Unusable_bytes;
 extern uint64_t firmware_other_bytes;
 uint64_t firmware_MMIO_bytes;
 
+/*
+ * Linker magic to establish the highest address in the kernel.
+ * This is replicated from libsa which marks last_kernel_symbol
+ * but that's not visible from here in osfmk.
+ */
+__asm__(".zerofill __LAST, __last, _kernel_top, 0");
+extern void 	*kernel_top;
+
 #if	DEBUG
 #define	PRINT_PMAP_MEMORY_TABLE
+#define DBG(x...)       kprintf(x)
+#else
+#define DBG(x...)
 #endif /* DEBUG */
 /*
  * Basic VM initialization.
@@ -164,64 +191,124 @@ i386_vm_init(uint64_t	maxmem,
 	uint32_t  mbuf_reserve = 0;
 	boolean_t mbuf_override = FALSE;
 	boolean_t coalescing_permitted;
-#if DEBUG
-	kprintf("Boot args revision: %d version: %d",
-		args->Revision, args->Version);
-	kprintf("  commandline: \"");
-	for(i=0; i<BOOT_LINE_LENGTH; i++)
-		kprintf("%c", args->CommandLine[i]);
-	kprintf("\"\n");
-#endif
+	vm_kernel_base_page = i386_btop(args->kaddr);
+#ifdef __x86_64__
+	vm_offset_t base_address;
+	vm_offset_t static_base_address;
 
+	/*
+	 * Establish the KASLR parameters.
+	 */
+	static_base_address = ml_static_ptovirt(KERNEL_BASE_OFFSET);
+	base_address        = ml_static_ptovirt(args->kaddr);
+	vm_kernel_slide     = base_address - static_base_address;
+	if (args->kslide) {
+		kprintf("KASLR slide: 0x%016lx dynamic\n", vm_kernel_slide);
+		if (vm_kernel_slide != ((vm_offset_t)args->kslide))
+			panic("Kernel base inconsistent with slide - rebased?");
+	} else {
+		/* No slide relative to on-disk symbols */
+		kprintf("KASLR slide: 0x%016lx static and ignored\n",
+			vm_kernel_slide);
+		vm_kernel_slide = 0;
+	}
+
+	/*
+	 * Zero out local relocations to avoid confusing kxld.
+	 * TODO: might be better to move this code to OSKext::initialize
+	 */
+	if (_mh_execute_header.flags & MH_PIE) {
+		struct load_command *loadcmd;
+		uint32_t cmd;
+
+		loadcmd = (struct load_command *)((uintptr_t)&_mh_execute_header +
+						  sizeof (_mh_execute_header));
+
+		for (cmd = 0; cmd < _mh_execute_header.ncmds; cmd++) {
+			if (loadcmd->cmd == LC_DYSYMTAB) {
+				struct dysymtab_command *dysymtab;
+
+				dysymtab = (struct dysymtab_command *)loadcmd;
+				dysymtab->nlocrel = 0;
+				dysymtab->locreloff = 0;
+				kprintf("Hiding local relocations\n");
+				break;
+			}
+			loadcmd = (struct load_command *)((uintptr_t)loadcmd + loadcmd->cmdsize);
+		}
+	}
+
+#endif // __x86_64__
+        
 	/*
 	 * Now retrieve addresses for end, edata, and etext 
 	 * from MACH-O headers.
 	 */
-
-	sectTEXTB = (void *) getsegdatafromheader(
-		&_mh_execute_header, "__TEXT", &sectSizeTEXT);
-	sectDATAB = (void *) getsegdatafromheader(
-		&_mh_execute_header, "__DATA", &sectSizeDATA);
-	sectOBJCB = (void *) getsegdatafromheader(
-		&_mh_execute_header, "__OBJC", &sectSizeOBJC);
-	sectLINKB = (void *) getsegdatafromheader(
-		&_mh_execute_header, "__LINKEDIT", &sectSizeLINK);
-	sectHIBB = (void *)getsegdatafromheader(
-		&_mh_execute_header, "__HIB", &sectSizeHIB);
-	sectINITPTB = (void *)getsegdatafromheader(
-		&_mh_execute_header, "__INITPT", &sectSizeINITPT);
-	sectPRELINKB = (void *) getsegdatafromheader(
-		&_mh_execute_header, "__PRELINK_TEXT", &sectSizePRELINK);
-
-	segTEXT = getsegbynamefromheader(&_mh_execute_header, "__TEXT");
+	segTEXTB = (vm_offset_t) getsegdatafromheader(&_mh_execute_header,
+					"__TEXT", &segSizeTEXT);
+	segDATAB = (vm_offset_t) getsegdatafromheader(&_mh_execute_header,
+					"__DATA", &segSizeDATA);
+	segLINKB = (vm_offset_t) getsegdatafromheader(&_mh_execute_header,
+					"__LINKEDIT", &segSizeLINK);
+	segHIBB  = (vm_offset_t) getsegdatafromheader(&_mh_execute_header,
+					"__HIB", &segSizeHIB);
+	segPRELINKB = (vm_offset_t) getsegdatafromheader(&_mh_execute_header,
+					"__PRELINK_TEXT", &segSizePRELINK);
+	segTEXT = getsegbynamefromheader(&_mh_execute_header,
+					"__TEXT");
+	segDATA = getsegbynamefromheader(&_mh_execute_header,
+					"__DATA");
+	sectDCONST = getsectbynamefromheader(&_mh_execute_header,
+					"__DATA", "__const");
 	cursectTEXT = lastsectTEXT = firstsect(segTEXT);
 	/* Discover the last TEXT section within the TEXT segment */
 	while ((cursectTEXT = nextsect(segTEXT, cursectTEXT)) != NULL) {
 		lastsectTEXT = cursectTEXT;
 	}
 
-	sHIB  = (vm_offset_t) sectHIBB;
-	eHIB  = (vm_offset_t) sectHIBB + sectSizeHIB;
+	sHIB  = segHIBB;
+	eHIB  = segHIBB + segSizeHIB;
 	/* Zero-padded from ehib to stext if text is 2M-aligned */
-	stext = (vm_offset_t) sectTEXTB;
+	stext = segTEXTB;
+#ifdef __x86_64__
+	lowGlo.lgStext = stext;
+#endif
 	etext = (vm_offset_t) round_page_64(lastsectTEXT->addr + lastsectTEXT->size);
 	/* Zero-padded from etext to sdata if text is 2M-aligned */
-	sdata = (vm_offset_t) sectDATAB;
-	edata = (vm_offset_t) sectDATAB + sectSizeDATA;
+	sdata = segDATAB;
+	edata = segDATAB + segSizeDATA;
 
-#if DEBUG
-	kprintf("sectTEXTB    = %p\n", sectTEXTB);
-	kprintf("sectDATAB    = %p\n", sectDATAB);
-	kprintf("sectOBJCB    = %p\n", sectOBJCB);
-	kprintf("sectLINKB    = %p\n", sectLINKB);
-	kprintf("sectHIBB     = %p\n", sectHIBB);
-	kprintf("sectPRELINKB = %p\n", sectPRELINKB);
-	kprintf("eHIB         = %p\n", (void *) eHIB);
-	kprintf("stext        = %p\n", (void *) stext);
-	kprintf("etext        = %p\n", (void *) etext);
-	kprintf("sdata        = %p\n", (void *) sdata);
-	kprintf("edata        = %p\n", (void *) edata);
-#endif
+	sectCONSTB = (vm_offset_t) sectDCONST->addr;
+	sectSizeConst = sectDCONST->size;
+	sconstdata = sectCONSTB;
+	econstdata = sectCONSTB + sectSizeConst;
+
+	if (sectSizeConst & PAGE_MASK) {
+		kernel_section_t *ns = nextsect(segDATA, sectDCONST);
+		if (ns && !(ns->addr & PAGE_MASK))
+			doconstro_override = TRUE;
+	} else
+		doconstro_override = TRUE;
+
+	DBG("segTEXTB    = %p\n", (void *) segTEXTB);
+	DBG("segDATAB    = %p\n", (void *) segDATAB);
+	DBG("segLINKB    = %p\n", (void *) segLINKB);
+	DBG("segHIBB     = %p\n", (void *) segHIBB);
+	DBG("segPRELINKB = %p\n", (void *) segPRELINKB);
+	DBG("sHIB        = %p\n", (void *) sHIB);
+	DBG("eHIB        = %p\n", (void *) eHIB);
+	DBG("stext       = %p\n", (void *) stext);
+	DBG("etext       = %p\n", (void *) etext);
+	DBG("sdata       = %p\n", (void *) sdata);
+	DBG("edata       = %p\n", (void *) edata);
+	DBG("sconstdata  = %p\n", (void *) sconstdata);
+	DBG("econstdata  = %p\n", (void *) econstdata);
+	DBG("kernel_top  = %p\n", (void *) &kernel_top);
+
+	vm_kernel_base  = sHIB;
+	vm_kernel_top   = (vm_offset_t) &kernel_top;
+	vm_kernel_stext = stext;
+	vm_kernel_etext = etext;
 
 	vm_set_page_size();
 
@@ -328,10 +415,10 @@ i386_vm_init(uint64_t	maxmem,
 			break;
 		}
 
-#if DEBUG
-		kprintf("EFI region %d: type %u/%d, base 0x%x, top 0x%x\n",
-			i, mptr->Type, pmap_type, base, top);
-#endif
+		DBG("EFI region %d: type %u/%d, base 0x%x, top 0x%x %s\n",
+		    i, mptr->Type, pmap_type, base, top,
+		    (mptr->Attribute&EFI_MEMORY_KERN_RESERVED)? "RESERVED" :
+		    (mptr->Attribute&EFI_MEMORY_RUNTIME)? "RUNTIME" : "");
 
 		if (maxpg) {
 		        if (base >= maxpg)
@@ -384,7 +471,7 @@ i386_vm_init(uint64_t	maxmem,
 
 
 				if ((mptr->Attribute & EFI_MEMORY_KERN_RESERVED) &&
-				    (top < I386_KERNEL_IMAGE_BASE_PAGE)) {
+				    (top < vm_kernel_base_page)) {
 					pmptr->alloc = pmptr->base;
 					pmap_reserved_range_indices[pmap_last_reserved_range_index++] = pmap_memory_region_count;
 				}
@@ -518,7 +605,7 @@ i386_vm_init(uint64_t	maxmem,
 	if ( (maxmem > (uint64_t)first_avail) && (maxmem < sane_size)) {
 		ppnum_t discarded_pages  = (ppnum_t)((sane_size - maxmem) >> I386_PGSHIFT);
 		ppnum_t	highest_pn = 0;
-		ppnum_t	cur_alloc  = 0;
+		ppnum_t	cur_end  = 0;
 		uint64_t	pages_to_use;
 		unsigned	cur_region = 0;
 
@@ -532,15 +619,15 @@ i386_vm_init(uint64_t	maxmem,
 		pages_to_use = avail_remaining;
 
 		while (cur_region < pmap_memory_region_count && pages_to_use) {
-		        for (cur_alloc = pmap_memory_regions[cur_region].alloc;
-			     cur_alloc < pmap_memory_regions[cur_region].end && pages_to_use;
-			     cur_alloc++) {
-			        if (cur_alloc > highest_pn)
-				        highest_pn = cur_alloc;
+		        for (cur_end = pmap_memory_regions[cur_region].base;
+			     cur_end < pmap_memory_regions[cur_region].end && pages_to_use;
+			     cur_end++) {
+			        if (cur_end > highest_pn)
+				        highest_pn = cur_end;
 				pages_to_use--;
 			}
 			if (pages_to_use == 0)
-			        pmap_memory_regions[cur_region].end = cur_alloc;
+			        pmap_memory_regions[cur_region].end = cur_end;
 
 			cur_region++;
 		}

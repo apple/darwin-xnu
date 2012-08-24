@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2010-2011 Apple Inc. All rights reserved.
+ * Copyright (c) 2010-2012 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -347,7 +347,7 @@ imo_match_group(const struct ip_moptions *imo, const struct ifnet *ifp,
 
 	IMO_LOCK_ASSERT_HELD(IMO_CAST_TO_NONCONST(imo));
 
-	gsin = (const struct sockaddr_in *)group;
+	gsin = (struct sockaddr_in *)(uintptr_t)(size_t)group;
 
 	/* The imo_membership array may be lazy allocated. */
 	if (imo->imo_membership == NULL || imo->imo_num_memberships == 0)
@@ -399,7 +399,7 @@ imo_match_source(const struct ip_moptions *imo, const size_t gidx,
 	imf = &imo->imo_mfilters[gidx];
 
 	/* Source trees are keyed in host byte order. */
-	psa = (const sockunion_t *)src;
+	psa = (sockunion_t *)(uintptr_t)(size_t)src;
 	find.ims_haddr = ntohl(psa->sin.sin_addr.s_addr);
 	ims = RB_FIND(ip_msource_tree, &imf->imf_sources, &find);
 
@@ -448,9 +448,21 @@ imo_multi_filter(const struct ip_moptions *imo, const struct ifnet *ifp,
 }
 
 int
-imo_clone(struct ip_moptions *from, struct ip_moptions *to)
+imo_clone(struct inpcb *from_inp, struct inpcb *to_inp)
 {
 	int i, err = 0;
+	struct ip_moptions *from;
+	struct ip_moptions *to;
+
+	from = inp_findmoptions(from_inp);
+	if (from == NULL)
+		return (ENOMEM); 
+
+	to = inp_findmoptions(to_inp);
+	if (to == NULL) {
+		IMO_REMREF(from);
+		return (ENOMEM);
+	}
 
 	IMO_LOCK(from);
 	IMO_LOCK(to);
@@ -497,16 +509,21 @@ imo_clone(struct ip_moptions *from, struct ip_moptions *to)
 	 * Source filtering doesn't apply to OpenTransport socket,
 	 * so simply hold additional reference count per membership.
 	 */
-        for (i = 0; i < from->imo_num_memberships; i++) {
-		to->imo_membership[i] = from->imo_membership[i];
-		INM_ADDREF(from->imo_membership[i]);
+	for (i = 0; i < from->imo_num_memberships; i++) {
+		to->imo_membership[i] = 
+			in_addmulti(&from->imo_membership[i]->inm_addr,
+						from->imo_membership[i]->inm_ifp);
+		if (to->imo_membership[i] == NULL)
+			break;
 		to->imo_num_memberships++;
         }
 	VERIFY(to->imo_num_memberships == from->imo_num_memberships);
 
 done:
 	IMO_UNLOCK(to);
+	IMO_REMREF(to);
 	IMO_UNLOCK(from);
+	IMO_REMREF(from);
 
 	return (err);
 }
@@ -1710,7 +1727,11 @@ inp_get_source_filters(struct inpcb *inp, struct sockopt *sopt)
 
 	if (ifp == NULL)
 		return (EADDRNOTAVAIL);
-		
+
+	if ((size_t) msfr.msfr_nsrcs >
+	    SIZE_MAX / sizeof(struct sockaddr_storage))
+		msfr.msfr_nsrcs = SIZE_MAX / sizeof(struct sockaddr_storage);
+
 	if (msfr.msfr_nsrcs > in_mcast_maxsocksrc)
 		msfr.msfr_nsrcs = in_mcast_maxsocksrc;
 
@@ -1750,12 +1771,13 @@ inp_get_source_filters(struct inpcb *inp, struct sockopt *sopt)
 
 	tss = NULL;
 	if (tmp_ptr != USER_ADDR_NULL && msfr.msfr_nsrcs > 0) {
-		tss = _MALLOC(sizeof(struct sockaddr_storage) * msfr.msfr_nsrcs,
+		tss = _MALLOC((size_t) msfr.msfr_nsrcs * sizeof(*tss),
 		    M_TEMP, M_WAITOK | M_ZERO);
 		if (tss == NULL) {
 			IMO_UNLOCK(imo);
 			return (ENOBUFS);
 		}
+		bzero(tss, (size_t) msfr.msfr_nsrcs * sizeof(*tss));
 	}
 
 	/*
@@ -1785,8 +1807,7 @@ inp_get_source_filters(struct inpcb *inp, struct sockopt *sopt)
 	IMO_UNLOCK(imo);
 
 	if (tss != NULL) {
-		error = copyout(tss, tmp_ptr,
-		    sizeof(struct sockaddr_storage) * ncsrcs);
+		error = copyout(tss, tmp_ptr, ncsrcs * sizeof(*tss));
 		FREE(tss, M_TEMP);
 		if (error)
 			return (error);
@@ -1980,7 +2001,7 @@ inp_lookup_mcast_ifp(const struct inpcb *inp,
 		unsigned int ifscope = IFSCOPE_NONE;
 
 		if (inp != NULL && (inp->inp_flags & INP_BOUND_IF))
-			ifscope = inp->inp_boundif;
+			ifscope = inp->inp_boundifp->if_index;
 
 		bzero(&ro, sizeof (ro));
 		memcpy(&ro.ro_dst, gsin, sizeof(struct sockaddr_in));
@@ -2673,6 +2694,10 @@ inp_set_source_filters(struct inpcb *inp, struct sockopt *sopt)
 		memcpy(&msfr, &msfr32, sizeof(msfr));
 	}
 
+	if ((size_t) msfr.msfr_nsrcs >
+	    SIZE_MAX / sizeof(struct sockaddr_storage))
+		msfr.msfr_nsrcs = SIZE_MAX / sizeof(struct sockaddr_storage);
+
 	if (msfr.msfr_nsrcs > in_mcast_maxsocksrc)
 		return (ENOBUFS);
 
@@ -2742,14 +2767,14 @@ inp_set_source_filters(struct inpcb *inp, struct sockopt *sopt)
 
 		IGMP_PRINTF(("%s: loading %lu source list entries\n",
 		    __func__, (unsigned long)msfr.msfr_nsrcs));
-		kss = _MALLOC(sizeof(struct sockaddr_storage) * msfr.msfr_nsrcs,
+		kss = _MALLOC((size_t) msfr.msfr_nsrcs * sizeof(*kss),
 		    M_TEMP, M_WAITOK);
 		if (kss == NULL) {
 			error = ENOMEM;
 			goto out_imo_locked;
 		}
 		error = copyin(tmp_ptr, kss,
-		    sizeof(struct sockaddr_storage) * msfr.msfr_nsrcs);
+		    (size_t) msfr.msfr_nsrcs * sizeof(*kss));
 		if (error) {
 			FREE(kss, M_TEMP);
 			goto out_imo_locked;

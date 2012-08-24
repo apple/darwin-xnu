@@ -65,6 +65,30 @@ struct filefork {
 };
 typedef struct filefork filefork_t;
 
+
+#define HFS_TEMPLOOKUP_NAMELEN 32
+
+/*
+ * Catalog Lookup struct (runtime)
+ *
+ * This is used so that when we need to malloc a container for a catalog
+ * lookup operation, we can acquire memory for everything in one fell swoop
+ * as opposed to putting many of these objects on the stack.  The cat_fork
+ * data structure can take up 100+bytes easily, and that can add to stack
+ * overhead.  
+ *
+ * As a result, we use this to easily pass around the memory needed for a
+ * lookup operation.
+ */
+struct cat_lookup_buffer {
+	struct cat_desc lookup_desc;
+	struct cat_attr lookup_attr;
+	struct filefork lookup_fork;
+	struct componentname lookup_cn;
+	char lookup_name[HFS_TEMPLOOKUP_NAMELEN]; /* for open-unlinked paths only */
+};
+
+
 /* Aliases for common fields */
 #define ff_size          ff_data.cf_size
 #define ff_new_size      ff_data.cf_new_size
@@ -161,7 +185,7 @@ typedef struct cnode cnode_t;
 #define c_ctime		c_attr.ca_ctime
 #define c_itime		c_attr.ca_itime
 #define c_btime		c_attr.ca_btime
-#define c_flags		c_attr.ca_flags
+#define c_bsdflags		c_attr.ca_flags
 #define c_finderinfo	c_attr.ca_finderinfo
 #define c_blocks	c_attr.ca_union2.cau_blocks
 #define c_entries	c_attr.ca_union2.cau_entries
@@ -192,7 +216,12 @@ typedef struct cnode cnode_t;
 #define C_FORCEUPDATE      0x00100  /* force the catalog entry update */
 #define C_HASXATTRS        0x00200  /* cnode has extended attributes */
 #define C_NEG_ENTRIES      0x00400  /* directory has negative name entries */
-#define C_SWAPINPROGRESS   0x00800	/* cnode's data is about to be swapped.  Issue synchronous cluster io */
+/* 
+ * For C_SSD_STATIC: SSDs may want to deal with the file payload data in a 
+ * different manner knowing that the content is not likely to be modified. This is
+ * purely advisory at the HFS level, and is not maintained after the cnode goes out of core.
+ */
+#define C_SSD_STATIC       0x00800  /* Assume future writes contain static content */
 
 #define C_NEED_DATA_SETSIZE  0x01000  /* Do a ubc_setsize(0) on c_rsrc_vp after the unlock */
 #define C_NEED_RSRC_SETSIZE  0x02000  /* Do a ubc_setsize(0) on c_vp after the unlock */
@@ -202,6 +231,9 @@ typedef struct cnode cnode_t;
 #define C_RENAMED			0x10000	/* cnode was deleted as part of rename; C_DELETED should also be set */
 #define C_NEEDS_DATEADDED	0x20000 /* cnode needs date-added written to the finderinfo bit */
 #define C_BACKINGSTORE		0x40000 /* cnode is a backing store for an existing or currently-mounting filesystem */
+#define C_SWAPINPROGRESS   	0x80000	/* cnode's data is about to be swapped.  Issue synchronous cluster io */
+
+
 #define ZFTIMELIMIT	(5 * 60)
 
 /*
@@ -318,8 +350,8 @@ extern void  hfs_chash_rehash(struct hfsmount *hfsmp, struct cnode *cp1, struct 
 extern void  hfs_chashwakeup(struct hfsmount *hfsmp, struct cnode *cp, int flags);
 extern void  hfs_chash_mark_in_transit(struct hfsmount *hfsmp, struct cnode *cp);
 
-extern struct vnode * hfs_chash_getvnode(struct hfsmount *hfsmp, ino_t inum, int wantrsrc,
-										 int skiplock, int allow_deleted);
+extern struct vnode * hfs_chash_getvnode(struct hfsmount *hfsmp, ino_t inum, int wantrsrc, 
+										int skiplock, int allow_deleted);
 extern struct cnode * hfs_chash_getcnode(struct hfsmount *hfsmp, ino_t inum, struct vnode **vpp, 
 										 int wantrsrc, int skiplock, int *out_flags, int *hflags);
 extern int hfs_chash_snoop(struct hfsmount *, ino_t, int, int (*)(const struct cat_desc *,

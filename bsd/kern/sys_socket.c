@@ -189,6 +189,7 @@ soioctl(struct socket *so, u_long cmd, caddr_t data, struct proc *p)
 {
 	int error = 0;
 	int dropsockref = -1;
+	int int_arg;
 
 	socket_lock(so, 1);
 
@@ -201,16 +202,18 @@ soioctl(struct socket *so, u_long cmd, caddr_t data, struct proc *p)
 
 	switch (cmd) {
 
-	case FIONBIO:
-		if (*(int *)data)
+	case FIONBIO:			/* int */
+		bcopy(data, &int_arg, sizeof (int_arg));
+		if (int_arg)
 			so->so_state |= SS_NBIO;
 		else
 			so->so_state &= ~SS_NBIO;
 
 		goto out;
 
-	case FIOASYNC:
-		if (*(int *)data) {
+	case FIOASYNC:			/* int */
+		bcopy(data, &int_arg, sizeof (int_arg));
+		if (int_arg) {
 			so->so_state |= SS_ASYNC;
 			so->so_rcv.sb_flags |= SB_ASYNC;
 			so->so_snd.sb_flags |= SB_ASYNC;
@@ -221,29 +224,32 @@ soioctl(struct socket *so, u_long cmd, caddr_t data, struct proc *p)
 		}
 		goto out;
 
-	case FIONREAD:
-		*(int *)data = so->so_rcv.sb_cc;
+	case FIONREAD:			/* int */
+		bcopy(&so->so_rcv.sb_cc, data, sizeof (u_int32_t));
 		goto out;
 
-	case SIOCSPGRP:
-		so->so_pgid = *(int *)data;
+	case SIOCSPGRP:			/* int */
+		bcopy(data, &so->so_pgid, sizeof (pid_t));
 		goto out;
 
-	case SIOCGPGRP:
-		*(int *)data = so->so_pgid;
+	case SIOCGPGRP:			/* int */
+		bcopy(&so->so_pgid, data, sizeof (pid_t));
 		goto out;
 
-	case SIOCATMARK:
-		*(int *)data = (so->so_state&SS_RCVATMARK) != 0;
+	case SIOCATMARK:		/* int */
+		int_arg = (so->so_state & SS_RCVATMARK) != 0;
+		bcopy(&int_arg, data, sizeof (int_arg));
 		goto out;
 
-	case SIOCSETOT: {
+	case SIOCSETOT: {		/* int */
 		/*
 		 * Set socket level options here and then call protocol
 		 * specific routine.
 		 */
 		struct socket *cloned_so = NULL;
-		int cloned_fd = *(int *)data;
+		int cloned_fd;
+
+		bcopy(data, &cloned_fd, sizeof (cloned_fd));
 
 		/* let's make sure it's either -1 or a valid file descriptor */
 		if (cloned_fd != -1) {
@@ -441,8 +447,8 @@ soo_stat(struct socket *so, void *ub, int isstat64)
 		if ((so->so_state & SS_CANTSENDMORE) == 0)
 			sb64->st_mode |= S_IWUSR | S_IWGRP | S_IWOTH;
 		sb64->st_size = so->so_rcv.sb_cc - so->so_rcv.sb_ctl;
-		sb64->st_uid = so->so_uid;
-		sb64->st_gid = so->so_gid;
+		sb64->st_uid = kauth_cred_getuid(so->so_cred);
+		sb64->st_gid = kauth_cred_getgid(so->so_cred);
 	} else {
 		sb->st_mode = S_IFSOCK;
 		if ((so->so_state & SS_CANTRCVMORE) == 0 ||
@@ -451,8 +457,8 @@ soo_stat(struct socket *so, void *ub, int isstat64)
 		if ((so->so_state & SS_CANTSENDMORE) == 0)
 			sb->st_mode |= S_IWUSR | S_IWGRP | S_IWOTH;
 		sb->st_size = so->so_rcv.sb_cc - so->so_rcv.sb_ctl;
-		sb->st_uid = so->so_uid;
-		sb->st_gid = so->so_gid;
+		sb->st_uid = kauth_cred_getuid(so->so_cred);
+		sb->st_gid = kauth_cred_getgid(so->so_cred);
 	}
 
 	ret = (*so->so_proto->pr_usrreqs->pru_sense)(so, ub, isstat64);
@@ -489,6 +495,7 @@ soo_drain(struct fileproc *fp, __unused vfs_context_t ctx)
 		wakeup((caddr_t)&so->so_timeo);
 		sorwakeup(so);
 		sowwakeup(so);
+		soevent(so, SO_FILT_HINT_LOCKED);
 
 		socket_unlock(so, 1);
 	}

@@ -60,6 +60,15 @@ int mac_port_label_compute(struct label *subj, struct label *obj,
     const char *serv, struct label *out);
 int mac_port_check_method(task_t task, struct label *sub, struct label *obj, int msgid);
 
+/* mac_do_machexc() flags */
+#define	MAC_DOEXCF_TRACED	0x01	/* Only do mach exeception if
+					   being ptrace()'ed */
+struct uthread;
+int	mac_do_machexc(int64_t code, int64_t subcode, uint32_t flags __unused);
+int	mac_schedule_userret(void);
+struct label *mac_thread_get_threadlabel(struct thread *thread);
+struct label *mac_thread_get_uthreadlabel(struct uthread *uthread);
+
 #if CONFIG_MACF
 void mac_policy_init(void);
 void mac_policy_initmach(void);
@@ -106,6 +115,10 @@ int mac_port_label_internalize(struct label *label, char *string);
 void	mac_task_label_update(struct label *cred, struct label *task);
 int	mac_port_check_service(struct label *subj, struct label *obj,
 	    const char *serv, const char *perm);
+
+/* threads */
+void	act_set_astmacf(struct thread *);
+void	mac_thread_userret(struct thread *);
 #endif /* MAC */
 
 #endif	/* !_SECURITY_MAC_MACH_INTERNAL_H_ */

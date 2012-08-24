@@ -156,7 +156,7 @@ int commpage_data_tests( void * the_argp )
 #endif /* __i386__ || __x86_64__ */
 	 
 	/* These fields are not implemented for all architectures */
-#ifdef _COMM_PAGE_SCHED_GEN
+#if defined(_COMM_PAGE_SCHED_GEN) && !TARGET_OS_EMBEDDED
 	uint32_t preempt_count1, preempt_count2;
 	uint64_t count;
 
@@ -189,8 +189,11 @@ int commpage_data_tests( void * the_argp )
 		goto fail;
 	}
 
+	/* We shouldn't be supporting userspace processor_start/processor_exit on embedded */
+#if !TARGET_OS_EMBEDDED
 	ret = active_cpu_test();
 	if (ret) goto fail;
+#endif /* !TARGET_OS_EMBEDDED */
 #endif /* _COMM_PAGE_ACTIVE_CPUS */
 
 #ifdef _COMM_PAGE_PHYSICAL_CPUS
@@ -289,8 +292,8 @@ int active_cpu_test(void)
 	processor_t             *processor_list;                
 	host_name_port_t        host;
 	struct processor_basic_info     processor_basic_info;
-	int                     cpu_count;
-	int                     data_count;
+	mach_msg_type_number_t  cpu_count;
+	mach_msg_type_number_t  data_count;
 	int                     i;
 
 

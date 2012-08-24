@@ -395,7 +395,7 @@ static struct getattrlist_attrtab getattrlist_common_tab[] = {
 	{ATTR_CMN_FILEID,	VATTR_BIT(va_fileid), 		sizeof(uint64_t),		KAUTH_VNODE_READ_ATTRIBUTES},
 	{ATTR_CMN_PARENTID,	VATTR_BIT(va_parentid),		sizeof(uint64_t),		KAUTH_VNODE_READ_ATTRIBUTES},
 	{ATTR_CMN_FULLPATH, 0, 	sizeof(struct attrreference),	KAUTH_VNODE_READ_ATTRIBUTES	},
-    {ATTR_CMN_ADDEDTIME, VATTR_BIT(va_addedtime), ATTR_TIME_SIZE,	KAUTH_VNODE_READ_ATTRIBUTES}, 
+	{ATTR_CMN_ADDEDTIME, VATTR_BIT(va_addedtime), ATTR_TIME_SIZE,	KAUTH_VNODE_READ_ATTRIBUTES}, 
 	{ATTR_CMN_RETURNED_ATTRS, 0,				sizeof(attribute_set_t),	0},
 	{0, 0, 0, 0}
 };
@@ -544,7 +544,6 @@ getattrlist_fixupattrs(attribute_set_t *asp, struct vnode_attr *vap)
 			 * on.  This is done so that we can uncheck those bits and re-request
 			 * a vnode_getattr from the filesystem again.
 			 */
-
 			if ((tab->attr & asp->commonattr) &&
 			    (tab->bits & vap->va_active) &&
 			    (tab->bits & vap->va_supported) == 0) {
@@ -1774,7 +1773,6 @@ getattrlist_internal(vnode_t vp, struct getattrlist_args *uap, proc_t p, vfs_con
 		ab.actual.commonattr |= ATTR_CMN_ADDEDTIME;
 	}
 
-
 	/* directory attributes *********************************************/
 	if (al.dirattr && (vtype == VDIR)) {
 		if (al.dirattr & ATTR_DIR_LINKCOUNT) {  /* full count of entries */
@@ -2137,6 +2135,21 @@ setattrlist_internal(vnode_t vp, struct setattrlist_args *uap, proc_t p, vfs_con
 		}
 	}
 
+	/*
+	 * If the caller's bitmaps indicate that there are no attributes to set,
+	 * then exit early.  In particular, we want to avoid the MALLOC below
+	 * since the caller's bufferSize could be zero, and MALLOC of zero bytes
+	 * returns a NULL pointer, which would cause setattrlist to return ENOMEM.
+	 */
+	if (al.commonattr == 0 &&
+		(al.volattr & ~ATTR_VOL_INFO) == 0 &&
+		al.dirattr == 0 &&
+		al.fileattr == 0 &&
+		al.forkattr == 0) {
+		error = 0;
+		goto out;
+	}
+		
 	/*
 	 * Make the naive assumption that the caller has supplied a reasonable buffer
 	 * size.  We could be more careful by pulling in the fixed-size region, checking

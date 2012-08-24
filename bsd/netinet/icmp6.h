@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000,2008-2010 Apple Inc. All rights reserved.
+ * Copyright (c) 2000,2008-2012 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -94,10 +94,6 @@
 #ifndef _NETINET_ICMP6_H_
 #define _NETINET_ICMP6_H_
 #include <sys/appleapiopts.h>
-
-#ifdef XNU_KERNEL_PRIVATE
-#include <sys/mcache.h>
-#endif
 
 #define ICMPV6_PLD_MAXLEN	1232	/* IPV6_MMTU - sizeof(struct ip6_hdr)
 					   - sizeof(struct icmp6_hdr) */
@@ -333,6 +329,7 @@ struct nd_opt_hdr {		/* Neighbor discovery option header */
 #define ND_OPT_REDIRECTED_HEADER	4
 #define ND_OPT_MTU			5
 #define ND_OPT_RDNSS			25	/* RFC 5006 */
+#define ND_OPT_DNSSL			31	/* RFC 6106 */
 
 #define ND_OPT_ROUTE_INFO		200	/* draft-ietf-ipngwg-router-preference, not officially assigned yet */
 
@@ -380,6 +377,14 @@ struct nd_opt_rdnss {	/* recursive domain name system servers */
     u_int16_t		nd_opt_rdnss_reserved;
     u_int32_t		nd_opt_rdnss_lifetime;
     struct in6_addr	nd_opt_rdnss_addr[1];
+} __attribute__((__packed__));
+
+struct nd_opt_dnssl {	/* domain name search list */
+    u_int8_t		nd_opt_dnssl_type;
+    u_int8_t		nd_opt_dnssl_len;
+    u_int16_t 		nd_opt_dnssl_reserved;
+    u_int32_t		nd_opt_dnssl_lifetime;
+    u_int8_t		nd_opt_dnssl_domains[8];
 } __attribute__((__packed__));
 
 /*
@@ -648,26 +653,27 @@ struct icmp6stat {
 #if 0	/*obsoleted*/
 #define ICMPV6CTL_ERRRATELIMIT		5	/* ICMPv6 error rate limitation */
 #endif
-#define ICMPV6CTL_ND6_PRUNE			6
-#define ICMPV6CTL_ND6_DELAY			8
+#define ICMPV6CTL_ND6_PRUNE		6
+#define ICMPV6CTL_ND6_DELAY		8
 #define ICMPV6CTL_ND6_UMAXTRIES		9
 #define ICMPV6CTL_ND6_MMAXTRIES		10
 #define ICMPV6CTL_ND6_USELOOPBACK	11
 /*#define ICMPV6CTL_ND6_PROXYALL	12	obsoleted, do not reuse here */
-#define ICMPV6CTL_NODEINFO			13
+#define ICMPV6CTL_NODEINFO		13
 #define ICMPV6CTL_ERRPPSLIMIT		14	/* ICMPv6 error pps limitation */
 #define ICMPV6CTL_ND6_MAXNUDHINT	15
 #define ICMPV6CTL_MTUDISC_HIWAT		16
 #define ICMPV6CTL_MTUDISC_LOWAT		17
-#define ICMPV6CTL_ND6_DEBUG			18
+#define ICMPV6CTL_ND6_DEBUG		18
 #define ICMPV6CTL_ND6_DRLIST		19
 #define ICMPV6CTL_ND6_PRLIST		20
 #define ICMPV6CTL_MLD_MAXSRCFILTER	21
 #define ICMPV6CTL_MLD_SOMAXSRC		22
 #define ICMPV6CTL_MLD_VERSION		23
 #define ICMPV6CTL_ND6_MAXQLEN		24
-#define	ICMPV6CTL_ND6_ACCEPT_6TO4	25
-#define ICMPV6CTL_MAXID				26
+#define ICMPV6CTL_ND6_ACCEPT_6TO4	25
+#define ICMPV6CTL_ND6_OPTIMISTIC_DAD	26	/* RFC 4429 */
+#define ICMPV6CTL_MAXID			27
 
 #ifdef KERNEL_PRIVATE
 #define ICMPV6CTL_NAMES { \
@@ -697,6 +703,7 @@ struct icmp6stat {
 	{ 0, 0 }, \
 	{ 0, 0 }, \
 	{ "nd6_accept_6to4", CTLTYPE_INT }, \
+	{ "nd6_optimistic_dad", CTLTYPE_INT }, \
 }
 
 #define RTF_PROBEMTU	RTF_PROTO1
@@ -722,14 +729,14 @@ void	icmp6_mtudisc_update(struct ip6ctlparam *, int);
 extern lck_rw_t icmp6_ifs_rwlock;
 /* XXX: is this the right place for these macros? */
 #define icmp6_ifstat_inc(ifp, tag) \
-do {									\
-	lck_rw_lock_shared(&icmp6_ifs_rwlock);				\
-	if ((ifp) && (ifp)->if_index <= if_index			\
-	 && (ifp)->if_index < icmp6_ifstatmax				\
-	 && icmp6_ifstat && icmp6_ifstat[(ifp)->if_index]) {		\
-		atomic_add_64(&icmp6_ifstat[(ifp)->if_index]->tag, 1);	\
-	}								\
-	lck_rw_done(&icmp6_ifs_rwlock);					\
+do {								\
+	lck_rw_lock_shared(&icmp6_ifs_rwlock);			\
+	if ((ifp) && (ifp)->if_index <= if_index		\
+	 && (ifp)->if_index < icmp6_ifstatmax			\
+	 && icmp6_ifstat && icmp6_ifstat[(ifp)->if_index]) {	\
+		icmp6_ifstat[(ifp)->if_index]->tag++;		\
+	}							\
+	lck_rw_done(&icmp6_ifs_rwlock);				\
 } while (0)
 
 #define icmp6_ifoutstat_inc(ifp, type, code) \

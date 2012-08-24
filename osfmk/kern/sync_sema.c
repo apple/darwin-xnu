@@ -58,6 +58,8 @@
 #include <kern/zalloc.h>
 #include <kern/mach_param.h>
 
+#include <libkern/OSAtomic.h>
+
 static unsigned int semaphore_event;
 #define SEMAPHORE_EVENT CAST_EVENT64_T(&semaphore_event)
 
@@ -179,7 +181,12 @@ semaphore_create(
 	}
 
 	s->count = value;
-	s->ref_count = (task == kernel_task) ? 1 : 2;
+
+	/*
+	 * One reference for caller, one for port, and one for owner
+	 * task (if not the kernel itself).
+	 */
+	s->ref_count = (task == kernel_task) ? 2 : 3;
 
 	/*
 	 *  Create and initialize the semaphore port
@@ -1060,9 +1067,21 @@ semaphore_dereference(
 	if (semaphore != NULL) {
 		ref_count = hw_atomic_sub(&semaphore->ref_count, 1);
 
+		if (ref_count == 1) {
+			ipc_port_t port = semaphore->port;
+
+			if (IP_VALID(port) && 
+			    OSCompareAndSwapPtr(port, IP_NULL, &semaphore->port)) {
+				/*
+				 * We get to disassociate the port from the sema and
+				 * drop the port's reference on the sema.
+				 */
+				ipc_port_dealloc_kernel(port);
+				ref_count = hw_atomic_sub(&semaphore->ref_count, 1);
+			}
+		}
 		if (ref_count == 0) {
 			assert(wait_queue_empty(&semaphore->wait_queue));
-			ipc_port_dealloc_kernel(semaphore->port);
 			zfree(semaphore_zone, semaphore);
 		}
 	}

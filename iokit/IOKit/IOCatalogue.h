@@ -57,17 +57,11 @@ class IOCatalogue : public OSObject
     OSDeclareDefaultStructors(IOCatalogue)
     
 private:
-    OSCollectionIterator   * kernelTables;
-    OSArray                * array;
-    IOLock *                 lock;
+    IORWLock *               lock;
     SInt32                   generation;
-
-/* This stuff is no longer used at all but was exported in prior
- * releases, so we keep it around for i386 only.
- */
-#if __i386__
-    IOLock *                 kld_lock;
-#endif /* __i386__ */
+    OSDictionary           * personalities;
+    OSArray * arrayForPersonality(OSDictionary * dict);
+    void addPersonality(OSDictionary * dict);
 
 public:
     /*!
@@ -273,6 +267,9 @@ private:
         @param moduleName An OSString containing the name of the module to unload.
      */
     IOReturn unloadModule( OSString * moduleName ) const;
+
+    IOReturn _removeDrivers(OSDictionary * matching);
+    IOReturn _terminateDrivers(OSDictionary * matching);
 };
 
 extern const OSSymbol * gIOClassKey;

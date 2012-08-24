@@ -120,17 +120,6 @@ extern void			clock_gettimeofday_set_commpage(
 extern void			machine_delay_until(
 						uint64_t		deadline);
 
-#include <stat_time.h>
-
-#if	STAT_TIME || GPROF
-
-extern void		hertz_tick(
-					natural_t		ticks,
-					boolean_t		usermode,	/* executing user code */
-					natural_t		pc);
-
-#endif	/* STAT_TIME */
-
 extern uint32_t		hz_tick_interval;
 
 extern void		absolutetime_to_nanotime(
@@ -267,10 +256,12 @@ extern void             nanoseconds_to_absolutetime(
 	}											\
   } while (0)
 
+#include <Availability.h>
 
-extern mach_timespec_t	clock_get_system_value(void);
+/* Use mach_absolute_time() */
+extern mach_timespec_t	clock_get_system_value(void) __OSX_AVAILABLE_BUT_DEPRECATED(__MAC_10_0, __MAC_10_8, __IPHONE_2_0, __IPHONE_NA);
 
-extern mach_timespec_t	clock_get_calendar_value(void);
+extern mach_timespec_t	clock_get_calendar_value(void) __OSX_AVAILABLE_BUT_DEPRECATED(__MAC_10_0, __MAC_10_8, __IPHONE_2_0, __IPHONE_NA);
 
 #else	/* __LP64__ */
 

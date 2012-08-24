@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2007 Apple Inc. All rights reserved.
+ * Copyright (c) 2007-2011 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -71,8 +71,6 @@
 #include <sys/socket.h>
 #include <sys/socketvar.h>
 
-#include <net/if.h>
-#include <net/if_var.h>
 #include <net/route.h>
 
 #include <netinet/in.h>

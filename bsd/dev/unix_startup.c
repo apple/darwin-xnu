@@ -157,11 +157,7 @@ bsd_startupearly(void)
 
 #if SOCKETS
 	{
-#if CONFIG_USESOCKTHRESHOLD
-		static const unsigned int	maxspace = 64 * 1024;
-#else
 		static const unsigned int	maxspace = 128 * 1024;
-#endif
 		int             scale;
 
 		nmbclusters = bsd_mbuf_cluster_reserve(NULL) / MCLBYTES;
@@ -303,7 +299,6 @@ done:
 #if defined(__LP64__)
 extern int tcp_tcbhashsize;
 extern int max_cached_sock_count;
-void IOSleep(int);
 #endif 
 
 

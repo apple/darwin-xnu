@@ -68,6 +68,10 @@ subsystem
 #endif	/* KERNEL_SERVER */
 	  mach_port 3200;
 
+#if !KERNEL && !LIBSYSCALL_INTERFACE
+	UserPrefix _kernelrpc_;
+#endif
+
 #include <mach/std_types.defs>
 #include <mach/mach_types.defs>
 #include <mach_debug/mach_debug_types.defs>
@@ -98,6 +102,9 @@ routine mach_port_type(
  *	Changes the name by which a port (or port set) is known to
  *	the target task.  The new name can't be in use.  The
  *	old name becomes available for recycling.
+ *
+ *	This interface is OBSOLETE and will always
+ *	return KERN_NOT_SUPPORTED.
  */
 
 routine mach_port_rename(
@@ -475,7 +482,12 @@ routine mach_port_extract_member(
 routine mach_port_get_context(
 		task		: ipc_space_t;
 		name		: mach_port_name_t;
-	out context		: mach_vm_address_t);
+#ifdef LIBSYSCALL_INTERFACE
+	out context		: mach_port_context_t
+#else
+	out context		: mach_vm_address_t
+#endif
+	);
 
 /*
  * Only valid for receive rights.
@@ -485,7 +497,12 @@ routine mach_port_get_context(
 routine mach_port_set_context(
 		task		: ipc_space_t;
 		name		: mach_port_name_t;
-		context		: mach_vm_address_t);
+#ifdef LIBSYSCALL_INTERFACE
+		context		: mach_port_context_t
+#else
+		context		: mach_vm_address_t
+#endif
+		);
 
 /*
  *	Return the type and address of the kernel object

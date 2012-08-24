@@ -323,7 +323,7 @@ extern int cat_update (	struct hfsmount *hfsmp,
 
 extern int cat_getdirentries(
 			struct hfsmount *hfsmp,
-			int entrycnt,
+			u_int32_t entrycnt,
 			directoryhint_t *dirhint,
 			uio_t uio,
 			int extended,

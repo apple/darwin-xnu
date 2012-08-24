@@ -330,12 +330,14 @@ struct	proc {
 	char	p_name[(2*MAXCOMLEN)+1];	/* PL */
 
 	struct 	pgrp *p_pgrp;	/* Pointer to process group. (LL) */
-#if CONFIG_EMBEDDED
-	int		p_iopol_disk;	/* disk I/O policy (PL) */
-#endif /* CONFIG_EMBEDDED */
 	uint32_t	p_csflags;	/* flags for codesign (PL) */
 	uint32_t	p_pcaction;	/* action  for process control on starvation */
 	uint8_t p_uuid[16];		/* from LC_UUID load command */
+
+#if !CONFIG_EMBEDDED
+#define PROC_LEGACY_BEHAVIOR_IOTHROTTLE (0x00000001)
+	 uint32_t	p_legacy_behavior;
+#endif
 
 /* End area that is copied on creation. */
 /* XXXXXXXXXXXXX End of BCOPY'ed on fork (AIOLOCK)XXXXXXXXXXXXXXXX */
@@ -379,6 +381,10 @@ struct	proc {
 #endif /* SIGNAL_DEBUG */
 #endif /* DIAGNOSTIC */
 	uint64_t	p_dispatchqueue_offset;
+#if VM_PRESSURE_EVENTS
+	struct timeval	vm_pressure_last_notify_tstamp;
+#endif
+	int		p_dirty;			/* dirty state */ 
 };
 
 #define PGRPID_DEAD 0xdeaddead
@@ -430,10 +436,8 @@ struct	proc {
 #define P_UNUSED  	0x00200000 	/* Unused */
 #define P_LRAGE_VNODES	0x00400000
 #define P_LREGISTER	0x00800000	/* thread start fns registered  */
-#if CONFIG_EMBEDDED
-#define P_LBACKGROUND	0x01000000
-#endif /* CONFIG_EMBEDDED */
-#define P_LVMRSRCOWNER	0x02000000	/* can handle the resource ownership of  */
+#define P_LVMRSRCOWNER	0x01000000	/* can handle the resource ownership of  */
+#define P_LPTERMINATE	0x02000000	/* can handle the resource ownership of  */
 
 /* Process control state for resource starvation */
 #define P_PCTHROTTLE	1
@@ -686,6 +690,7 @@ extern int	tsleep1(void *chan, int pri, const char *wmesg, u_int64_t abstime, in
 extern int	msleep0(void *chan, lck_mtx_t *mtx, int pri, const char *wmesg, int timo, int (*continuation)(int));
 extern void	vfork_return(struct proc *child, int32_t *retval, int rval);
 extern int	exit1(struct proc *, int, int *);
+extern int	exit1_internal(struct proc *, int, int *, boolean_t, boolean_t);
 extern int	fork1(proc_t, thread_t *, int);
 extern void vfork_exit_internal(struct proc *p, int rv, int forced);
 extern void proc_reparentlocked(struct proc *child, struct proc * newparent, int cansignal, int locked);
@@ -694,6 +699,7 @@ extern int proc_iterate(int flags, int (*callout)(proc_t , void *), void *arg, i
 extern int proc_rebootscan(int (*callout)(proc_t , void *), void *arg, int (*filterfn)(proc_t , void *), void *filterarg);
 extern int proc_childrenwalk(proc_t p, int (*callout)(proc_t , void *), void *arg);
 extern proc_t proc_findinternal(int pid, int funneled);
+extern proc_t proc_findthread(thread_t thread);
 extern void proc_refdrain(proc_t);
 extern void proc_childdrainlocked(proc_t);
 extern void proc_childdrainstart(proc_t);
@@ -739,6 +745,7 @@ extern int proc_pendingsignals(proc_t, sigset_t);
 int proc_getpcontrol(int pid, int * pcontrolp);
 int proc_dopcontrol(proc_t p, void *unused_arg);
 int proc_resetpcontrol(int pid);
+extern void proc_removethrottle(proc_t);
 #if PSYNCH
 void pth_proc_hashinit(proc_t);
 void pth_proc_hashdelete(proc_t);

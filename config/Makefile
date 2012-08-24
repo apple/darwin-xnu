@@ -93,7 +93,7 @@ $(OBJPATH)/allsymbols: $(OBJPATH)/mach_kernel
 $(SYMBOL_SET_BUILD): $(OBJPATH)/%.symbolset :  %.exports %.$(ARCH_CONFIG_LC).exports $(OBJPATH)/allsymbols
 	$(_v)if [ "$*" != System6.0 -o $(SUPPORT_SYSTEM60_KEXT) -eq 1 ]; then	\
 		$(KEXT_CREATE_SYMBOL_SET) \
-		$($(addsuffix $(ARCH_CONFIG),ARCH_FLAGS_ALL_)) \
+		$($(addsuffix $(ARCH_CONFIG),ARCH_FLAGS_)) \
 		-import $(OBJPATH)/allsymbols \
 		-export $*.exports \
 		-export $*.$(ARCH_CONFIG_LC).exports \
@@ -107,13 +107,37 @@ $(SYMBOL_SET_BUILD): $(OBJPATH)/%.symbolset :  %.exports %.$(ARCH_CONFIG_LC).exp
 # symbolsets for the primary machine configuration for each kernel/arch config
 $(SYMBOL_SET_FAT): $(OBJROOT)/%.symbolset :
 	$(_v)per_arch_symbolsets="";			\
-	kernel_config=$(INSTALL_TYPE);			\
-	machine_config=$(MACHINE_CONFIG);		\
 	for arch_config in $(INSTALL_ARCHS);		\
 	do						\
+							\
+	my_counter=1;					\
+	found_arch=0;					\
+	for my_config in $(TARGET_CONFIGS_UC);		\
+	do						\
+		if [ $${my_counter} -eq 1 ] ; then	\
+			kernel_config=$${my_config};	\
+		elif [ $${my_counter} -eq 2 ] ; then	\
+			if [ $${my_config} = $${arch_config} ]; then \
+				found_arch=1;		\
+			fi;				\
+		else					\
+			if [ $${found_arch} -eq 1 ]; then \
+				machine_config=$${my_config};\
+				break;			\
+			fi;				\
+			my_counter=0;			\
+		fi;					\
+		my_counter=$$((my_counter + 1));	\
+	done;						\
+							\
 	if [ $${arch_config} = ARM ] ; then		\
 		if [ $${machine_config} = DEFAULT ] ; then		\
 			machine_config=$(DEFAULT_ARM_MACHINE_CONFIG);	\
+		fi;							\
+	fi;						\
+	if [ $${arch_config} = L4_ARM ] ; then		\
+		if [ $${machine_config} = DEFAULT ] ; then		\
+			machine_config=$(DEFAULT_L4_ARM_MACHINE_CONFIG);	\
 		fi;							\
 	fi;						\
 	if [ $${machine_config} = DEFAULT ] ; then	\
@@ -133,14 +157,14 @@ $(SYMBOL_SET_FAT): $(OBJROOT)/%.symbolset :
 
 build_symbol_sets:	$(SYMBOL_SET_BUILD) $(OBJPATH)/allsymbols
 	$(_v)$(KEXT_CREATE_SYMBOL_SET) \
-		$($(addsuffix $(ARCH_CONFIG),ARCH_FLAGS_ALL_)) \
+		$($(addsuffix $(ARCH_CONFIG),ARCH_FLAGS_)) \
 		$(foreach comp,$(filter-out System6.0 Private,$(SYMBOL_COMPONENT_LIST)), \
 			-export $(SRCROOT)/$(COMPONENT)/$(comp).exports \
 			-export $(SRCROOT)/$(COMPONENT)/$(comp).$(ARCH_CONFIG_LC).exports) \
 		-import $(OBJPATH)/allsymbols \
 		-output /dev/null $(_vstdout);
 	$(_v)$(KEXT_CREATE_SYMBOL_SET) \
-		$($(addsuffix $(ARCH_CONFIG),ARCH_FLAGS_ALL_)) \
+		$($(addsuffix $(ARCH_CONFIG),ARCH_FLAGS_)) \
 		$(foreach comp,$(filter-out System6.0 Unsupported,$(SYMBOL_COMPONENT_LIST)), \
 			-export $(SRCROOT)/$(COMPONENT)/$(comp).exports \
 			-export $(SRCROOT)/$(COMPONENT)/$(comp).$(ARCH_CONFIG_LC).exports) \

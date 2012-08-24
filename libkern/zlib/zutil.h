@@ -280,7 +280,7 @@ extern const char * const z_errmsg[10]; /* indexed by 2-zlib_error */
 #endif
 
 /* Diagnostic functions */
-#ifdef DEBUG
+#if defined(DEBUG) && !defined(KERNEL)
 #  include <stdio.h>
    extern int z_verbose;
    extern void z_error    OF((char *m));
@@ -298,7 +298,7 @@ extern const char * const z_errmsg[10]; /* indexed by 2-zlib_error */
 #  define Tracec(c,x)
 #  define Tracecv(c,x)
 #endif
-
+#undef DEBUG
 
 #ifndef NO_ZCFUNCS
 voidpf zcalloc OF((voidpf opaque, unsigned items, unsigned size));

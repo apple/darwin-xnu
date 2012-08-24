@@ -68,15 +68,6 @@ extern int default_pager_init_flag;
 /*
  * osfmk
  */
-#ifndef _KERN_IPC_TT_H_	/* XXX FBDP */
-/* these should be exported cleanly from OSFMK since BSD needs them */
-extern ipc_port_t convert_task_to_port(
-	task_t		task);
-extern ipc_port_t convert_thread_to_port(
-	thread_t		thread);
-extern ipc_port_t convert_task_name_to_port(
-	task_name_t	task_name);
-#endif /* _KERN_IPC_TT_H_ */
 #ifndef _IPC_IPC_PORT_H_
 extern mach_port_name_t ipc_port_copyout_send(
 	ipc_port_t	sright,
@@ -343,7 +334,38 @@ extern kern_return_t default_pager_memory_object_create(
 
 #if CONFIG_FREEZE
 extern unsigned int default_pager_swap_pages_free(void);
-#endif
+struct default_freezer_handle;
+struct vm_page;
+__private_extern__ void	default_freezer_init(void);
+__private_extern__ struct default_freezer_handle* default_freezer_handle_allocate(void);
+__private_extern__ kern_return_t
+default_freezer_handle_init(
+	struct  default_freezer_handle *df_handle);
+__private_extern__ void
+default_freezer_handle_deallocate(
+	struct default_freezer_handle *df_handle);
+__private_extern__ void
+default_freezer_pageout(
+	struct default_freezer_handle *df_handle);
+__private_extern__ kern_return_t
+default_freezer_pack(
+	unsigned int		*purgeable_count,
+	unsigned int		*wired_count,
+	unsigned int		*clean_count,
+	unsigned int		*dirty_count,
+	unsigned int		dirty_budget,
+	boolean_t		*shared,
+	vm_object_t		src_object,
+	struct default_freezer_handle *df_handle);
+__private_extern__ void
+default_freezer_unpack(
+	struct default_freezer_handle *df_handle);	
+__private_extern__ void
+default_freezer_pack_page(
+	struct vm_page* p,
+	struct default_freezer_handle *df_handle);
+
+#endif /* CONFIG_FREEZE */
 
 extern void   device_pager_reference(memory_object_t);
 extern void   device_pager_deallocate(memory_object_t);
@@ -410,6 +432,7 @@ extern void log_unnest_badness(vm_map_t, vm_map_offset_t, vm_map_offset_t);
 extern int cs_allow_invalid(struct proc *p);
 extern int cs_invalid_page(addr64_t vaddr);
 extern boolean_t cs_validate_page(void *blobs,
+				  memory_object_t pager,
 				  memory_object_offset_t offset, 
 				  const void *data,
 				  boolean_t *tainted);

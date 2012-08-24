@@ -26,3 +26,13 @@
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 
+
+void *chudxnu_platform_ptr(void);
+
+void *
+chudxnu_platform_ptr(void)
+{
+	return (void *)0;
+}
+
+

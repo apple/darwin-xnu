@@ -34,19 +34,11 @@ USER_TRAP(0x04,idt64_into)
 USER_TRAP(0x05,idt64_bounds)
 TRAP(0x06,idt64_invop)
 TRAP(0x07,idt64_nofpu)
-#if	MACH_KDB
-TRAP_IST(0x08,idt64_db_task_dbl_fault)
-#else
 TRAP_IST(0x08,idt64_double_fault)
-#endif
 TRAP(0x09,idt64_fpu_over)
 TRAP(0x0a,idt64_inv_tss)
 TRAP_SPC(0x0b,idt64_segnp)
-#if	MACH_KDB
-TRAP_IST(0x0c,idt64_db_task_stk_fault)
-#else
 TRAP_SPC(0x0c,idt64_stack_fault)
-#endif
 TRAP_SPC(0x0d,idt64_gen_prot)
 TRAP_SPC(0x0e,idt64_page_fault)
 TRAP(0x0f,idt64_trap_0f)
@@ -172,8 +164,8 @@ USER_TRAP(0x7f, idt64_dtrace_ret) /* Required by dtrace "fasttrap" */
 USER_TRAP_SPC(0x80,idt64_unix_scall)
 USER_TRAP_SPC(0x81,idt64_mach_scall)
 USER_TRAP_SPC(0x82,idt64_mdep_scall)
-USER_TRAP_SPC(0x83,idt64_diag_scall)
 
+INTERRUPT(0x83)
 INTERRUPT(0x84)
 INTERRUPT(0x85)
 INTERRUPT(0x86)

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2011 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -412,7 +412,6 @@ struct sadb_sastat {
 #define SADB_X_EXT_NATT_KEEPALIVE	0x0004	/* Local node is behind NAT, send keepalives */
 											/* Should only be set for outbound SAs */
 #define SADB_X_EXT_NATT_MULTIPLEUSERS 0x0008	/* For use on VPN server - support multiple users 	*/
-#define SADB_X_EXT_NATT_DETECTED_PEER 0x0010
 
 #endif /* PRIVATE */	
 
@@ -425,6 +424,12 @@ struct sadb_sastat {
 #define SADB_X_EXT_PRAND	0x0100	/* random padding for ESP */
 #define SADB_X_EXT_PZERO	0x0200	/* zero padding for ESP */
 #define SADB_X_EXT_PMASK	0x0300	/* mask for padding flag */
+
+#ifdef PRIVATE
+#define SADB_X_EXT_NATT_DETECTED_PEER 0x1000
+#define SADB_X_EXT_ESP_KEEPALIVE      0x2000
+#define SADB_X_EXT_PUNT_RX_KEEPALIVE  0x4000
+#endif /* PRIVATE */	
 
 #if 1
 #define SADB_X_EXT_RAWCPI	0x0080	/* use well known CPI (IPComp) */

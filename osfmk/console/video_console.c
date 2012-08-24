@@ -1281,6 +1281,8 @@ gc_show_cursor(unsigned int xx, unsigned int yy)
 static void
 gc_update_color(int color, boolean_t fore)
 {
+	assert(gc_ops.update_color);
+
 	gc_color_code = COLOR_CODE_SET(gc_color_code, color, fore);
 	gc_ops.update_color(color, fore);
 }
@@ -2465,8 +2467,6 @@ vc_progress_task(__unused void *arg0, __unused void *arg)
 
     if( vc_progress_enable) {
 
-	KERNEL_DEBUG_CONSTANT(0x7020008, vc_progress_count, 0, 0, 0, 0);
-
         vc_progress_count++;
         if( vc_progress_count >= vc_progress->count) {
             vc_progress_count = 0;
@@ -2579,7 +2579,14 @@ initialize_screen(PE_Video * boot_vinfo, unsigned int op)
 #else
 		    new_vinfo.v_type = 0;
 #endif
-		    new_vinfo.v_scale = boot_vinfo->v_scale;
+            unsigned int scale   = (unsigned int)boot_vinfo->v_scale;
+            if (scale == kPEScaleFactor1x )
+                new_vinfo.v_scale = kPEScaleFactor1x;
+            else if (scale == kPEScaleFactor2x)
+                new_vinfo.v_scale = kPEScaleFactor2x;
+            else /* Scale factor not set, default to 1x */
+                new_vinfo.v_scale = kPEScaleFactor1x;
+
 		}
      
 		if (!lastVideoMapped)
@@ -2749,6 +2756,8 @@ initialize_screen(PE_Video * boot_vinfo, unsigned int op)
 			gc_acquired = FALSE;
 			gc_desire_text = FALSE;
 			gc_enable( FALSE );
+			if ( gc_graphics_boot == FALSE ) break;
+
 			vc_progress_set( FALSE, 0 );
 #if !CONFIG_EMBEDDED
 			vc_enable_progressmeter( FALSE );

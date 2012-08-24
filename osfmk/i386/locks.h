@@ -123,9 +123,9 @@ extern void		lck_mtx_unlock_wakeup_x86(lck_mtx_t *mutex, int prior_lock_state);
 extern void		lck_mtx_lock_mark_destroyed(lck_mtx_t *mutex);
 extern int		lck_mtx_lock_grab_mutex(lck_mtx_t *mutex);
 
-extern void		hw_lock_byte_init(uint8_t *lock_byte);
-extern void		hw_lock_byte_lock(uint8_t *lock_byte);
-extern void		hw_lock_byte_unlock(uint8_t *lock_byte);
+extern void		hw_lock_byte_init(volatile uint8_t *lock_byte);
+extern void		hw_lock_byte_lock(volatile uint8_t *lock_byte);
+extern void		hw_lock_byte_unlock(volatile uint8_t *lock_byte);
 
 typedef struct {
 	unsigned int		type;
@@ -191,7 +191,7 @@ typedef struct __lck_mtx_ext_t__	lck_mtx_ext_t;
 #pragma pack(1)		/* Make sure the structure stays as we defined it */
 typedef struct _lck_rw_t_internal_ {
 	volatile uint16_t	lck_rw_shared_count;	/* No. of accepted readers */
-	uint8_t			lck_rw_interlock; 	/* Interlock byte */
+	volatile uint8_t	lck_rw_interlock; 	/* Interlock byte */
 	volatile uint8_t
 				lck_rw_priv_excl:1,	/* Writers prioritized if set */
 				lck_rw_want_upgrade:1,	/* Read-to-write upgrade waiting */

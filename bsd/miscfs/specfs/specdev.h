@@ -112,9 +112,9 @@ struct specinfo {
  */
 #define	SPECHSZ	64
 #if	((SPECHSZ&(SPECHSZ-1)) == 0)
-#define	SPECHASH(rdev)	(((rdev>>5)+(rdev))&(SPECHSZ-1))
+#define	SPECHASH(rdev)	(((rdev>>21)+(rdev))&(SPECHSZ-1))
 #else
-#define	SPECHASH(rdev)	(((unsigned)((rdev>>5)+(rdev)))%SPECHSZ)
+#define	SPECHASH(rdev)	(((unsigned)((rdev>>21)+(rdev)))%SPECHSZ)
 #endif
 
 extern struct vnode *speclisth[SPECHSZ];

@@ -173,7 +173,6 @@ extern struct wait_queue select_conflict_queue;
 /*
  * Descriptor management.
  */
-struct filelist filehead;	/* head of list of open files */
 struct fmsglist fmsghead;	/* head of list of open files */
 struct fmsglist fmsg_ithead;	/* head of list of open files */
 int nfiles;			/* actual number of open files */
@@ -184,7 +183,6 @@ lck_grp_t * file_lck_grp;
 lck_attr_t * file_lck_attr;
 
 lck_mtx_t * uipc_lock;
-lck_mtx_t * file_flist_lock;
 
 
 /*
@@ -210,7 +208,6 @@ file_lock_init(void)
 	file_lck_attr = lck_attr_alloc_init();
 
 	uipc_lock = lck_mtx_alloc_init(file_lck_grp, file_lck_attr);
-	file_flist_lock = lck_mtx_alloc_init(file_lck_grp, file_lck_attr);
 }
 
 
@@ -866,7 +863,9 @@ fcntl_nocancel(proc_t p, struct fcntl_nocancel_args *uap, int32_t *retval)
 			goto outdrop;
 		}
 
-		if ((fl.l_whence == SEEK_CUR) && (fl.l_start + offset < fl.l_start)) {
+		volatile off_t affected_lock_area_set = 0;
+		affected_lock_area_set = fl.l_start + offset;
+		if ((fl.l_whence == SEEK_CUR) && (affected_lock_area_set < fl.l_start)) {
 		    error = EOVERFLOW;
 		    goto outdrop;
 		}
@@ -941,11 +940,13 @@ fcntl_nocancel(proc_t p, struct fcntl_nocancel_args *uap, int32_t *retval)
 		if (error)
 			goto outdrop;
 
+		volatile off_t affected_lock_area_end = 0;
+		affected_lock_area_end = fl.l_start + offset;
 		/* Check starting byte and ending byte for EOVERFLOW in SEEK_CUR */
 		/* and ending byte for EOVERFLOW in SEEK_SET */
 		if (((fl.l_whence == SEEK_CUR) && 
-		     ((fl.l_start + offset < fl.l_start) ||
-		      ((fl.l_len > 0) && (fl.l_start+offset + fl.l_len - 1 < fl.l_start+offset)))) ||
+		     ((affected_lock_area_end < fl.l_start) ||
+		      ((fl.l_len > 0) && (affected_lock_area_end + fl.l_len - 1 < affected_lock_area_end)))) ||
 		    ((fl.l_whence == SEEK_SET) && (fl.l_len > 0) && (fl.l_start + fl.l_len - 1 < fl.l_start)))
 		{
 			/* lf_advlock doesn't check start/end for F_GETLK if file has no locks */
@@ -1161,6 +1162,18 @@ fcntl_nocancel(proc_t p, struct fcntl_nocancel_args *uap, int32_t *retval)
 
 		goto out;
 
+	case F_SINGLE_WRITER:
+		if (fp->f_type != DTYPE_VNODE) {
+			error = EBADF;
+			goto out;
+		}
+		if (uap->arg)
+		        fp->f_fglob->fg_flag |= FSINGLE_WRITER;
+		else
+		        fp->f_fglob->fg_flag &= ~FSINGLE_WRITER;
+
+		goto out;
+
 	case F_GLOBAL_NOCACHE:
 	        if (fp->f_type != DTYPE_VNODE) {
 		        error = EBADF;
@@ -1239,58 +1252,6 @@ fcntl_nocancel(proc_t p, struct fcntl_nocancel_args *uap, int32_t *retval)
                 }
                 goto outdrop;
 
-
-	case F_READBOOTSTRAP:
-	case F_WRITEBOOTSTRAP: {
-		user32_fbootstraptransfer_t user32_fbt_struct;
-		user_fbootstraptransfer_t user_fbt_struct;
-		int	sizeof_struct;
-		caddr_t boot_structp;
-
-		if (fp->f_type != DTYPE_VNODE) {
-			error = EBADF;
-			goto out;
-		}
-		vp = (struct vnode *)fp->f_data;
-		proc_fdunlock(p);
-
-		if (IS_64BIT_PROCESS(p)) {
-			sizeof_struct = sizeof(user_fbt_struct);
-			boot_structp = (caddr_t) &user_fbt_struct;
-		}
-		else {
-			sizeof_struct = sizeof(user32_fbt_struct);
-			boot_structp = (caddr_t) &user32_fbt_struct;
-		}
-		error = copyin(argp, boot_structp, sizeof_struct);
-		if (error)
-			goto outdrop;
-		if ( (error = vnode_getwithref(vp)) ) {
-			goto outdrop;
-		}
-		if (uap->cmd == F_WRITEBOOTSTRAP) {
-		        /*
-			 * Make sure that we are root.  Updating the
-			 * bootstrap on a disk could be a security hole
-			 */
-			if (!is_suser()) {
-				(void)vnode_put(vp);
-				error = EACCES;
-				goto outdrop;
-			}
-		}
-		if (strncmp(vnode_mount(vp)->mnt_vfsstat.f_fstypename, "hfs",
-			sizeof(vnode_mount(vp)->mnt_vfsstat.f_fstypename)) != 0) {
-			error = EINVAL;
-		} else {
-			/*
-			 * call vnop_ioctl to handle the I/O
-			 */
-			error = VNOP_IOCTL(vp, uap->cmd, boot_structp, 0, &context);
-		}
-		(void)vnode_put(vp);
-		goto outdrop;
-	}
 	case F_LOG2PHYS:
 	case F_LOG2PHYS_EXT: {
 		struct log2phys l2p_struct;    /* structure for allocate command */
@@ -1577,7 +1538,7 @@ fcntl_nocancel(proc_t p, struct fcntl_nocancel_args *uap, int32_t *retval)
 			goto outdrop;
 		}
 				   
-#define CS_MAX_BLOB_SIZE (1ULL * 1024 * 1024) /* XXX ? */
+#define CS_MAX_BLOB_SIZE (1280ULL * 1024) /* max shared cache file XXX ? */
 		if (fs.fs_blob_size > CS_MAX_BLOB_SIZE) {
 			error = E2BIG;
 			vnode_put(vp);
@@ -1692,7 +1653,7 @@ fcntl_nocancel(proc_t p, struct fcntl_nocancel_args *uap, int32_t *retval)
 		break;
 	}
 			
-#ifdef CONFIG_PROTECT
+#if CONFIG_PROTECT
 	case F_GETPROTECTIONCLASS: {
 		int class = 0;
 		
@@ -1746,28 +1707,80 @@ fcntl_nocancel(proc_t p, struct fcntl_nocancel_args *uap, int32_t *retval)
 		vnode_put(vp);
 		break;
 	}	
+
+	case F_TRANSCODEKEY: {
+
+		if (fp->f_type != DTYPE_VNODE) {
+			error = EBADF;
+			goto out;
+		}
+		
+		vp = (struct vnode *)fp->f_data;
+		proc_fdunlock(p);
+
+		if (vnode_getwithref(vp)) {
+			error = ENOENT;
+			goto outdrop;
+		}	
+		
+		error = cp_vnode_transcode (vp);
+		vnode_put(vp);
+		break;
+	}	
+
+	case F_GETPROTECTIONLEVEL:  {
+		uint32_t cp_version = 0;
+
+		if (fp->f_type != DTYPE_VNODE) {
+			error = EBADF; 
+			goto out;
+		}
+
+		vp = (struct vnode*) fp->f_data;
+		proc_fdunlock (p);
+
+		if (vnode_getwithref(vp)) {
+			error = ENOENT;
+			goto outdrop;
+		}
+
+		/*
+		 * if cp_get_major_vers fails, error will be set to proper errno 
+		 * and cp_version will still be 0.
+		 */
+
+		error = cp_get_root_major_vers (vp, &cp_version);
+		*retval = cp_version;
+
+		vnode_put (vp);
+		break;
+	}
+	
 #endif /* CONFIG_PROTECT */
-			
+
 	case F_MOVEDATAEXTENTS: {
 		struct fileproc *fp2 = NULL;
 		struct vnode *src_vp = NULLVP;
 		struct vnode *dst_vp = NULLVP;
 		/* We need to grab the 2nd FD out of the argments before moving on. */
 		int fd2 = CAST_DOWN_EXPLICIT(int32_t, uap->arg);
-
+		
 		if (fp->f_type != DTYPE_VNODE) {
 			error = EBADF;
 			goto out;
 		}
-		vp = src_vp = (struct vnode *)fp->f_data;
 
 		/* For now, special case HFS+ only, since this is SPI. */
+		src_vp = (struct vnode *)fp->f_data;
 		if (src_vp->v_tag != VT_HFS) {
 			error = EINVAL;
 			goto out;
 		}
 
-		/* We're still holding the proc FD lock */
+		/*
+		 * Get the references before we start acquiring iocounts on the vnodes, 
+		 * while we still hold the proc fd lock
+		 */
 		if ( (error = fp_lookup(p, fd2, &fp2, 1)) ) {
 			error = EBADF;
 			goto out;
@@ -1778,8 +1791,6 @@ fcntl_nocancel(proc_t p, struct fcntl_nocancel_args *uap, int32_t *retval)
 			goto out;
 		}
 		dst_vp = (struct vnode *)fp2->f_data;
-
-		/* For now, special case HFS+ only, since this is SPI. */
 		if (dst_vp->v_tag != VT_HFS) {
 			fp_drop(p, fd2, fp2, 1);
 			error = EINVAL;
@@ -1799,8 +1810,6 @@ fcntl_nocancel(proc_t p, struct fcntl_nocancel_args *uap, int32_t *retval)
 
 		proc_fdunlock(p);
 
-		/* Proc lock dropped; now we have a legit pair of FDs.  Go to work */
-
 		if (vnode_getwithref(src_vp)) {
 			fp_drop(p, fd2, fp2, 0);
 			error = ENOENT;
@@ -1812,12 +1821,11 @@ fcntl_nocancel(proc_t p, struct fcntl_nocancel_args *uap, int32_t *retval)
 			error = ENOENT;
 			goto outdrop;
 		}	
-
+		
 		/* 
 		 * Basic asserts; validate they are not the same and that
 		 * both live on the same filesystem.
 		 */
-
 		if (dst_vp == src_vp) {
 			vnode_put (src_vp);
 			vnode_put (dst_vp);
@@ -1825,7 +1833,7 @@ fcntl_nocancel(proc_t p, struct fcntl_nocancel_args *uap, int32_t *retval)
 			error = EINVAL;
 			goto outdrop;
 		}	
-	
+
 		if (dst_vp->v_mount != src_vp->v_mount) {
 			vnode_put (src_vp);
 			vnode_put (dst_vp);
@@ -1834,31 +1842,33 @@ fcntl_nocancel(proc_t p, struct fcntl_nocancel_args *uap, int32_t *retval)
 			goto outdrop;
 		}
 
+		/* Now we have a legit pair of FDs.  Go to work */
+
 		/* Now check for write access to the target files */
 		if(vnode_authorize(src_vp, NULLVP, 
-					(KAUTH_VNODE_ACCESS | KAUTH_VNODE_WRITE_DATA), &context) != 0) {
+						   (KAUTH_VNODE_ACCESS | KAUTH_VNODE_WRITE_DATA), &context) != 0) {
 			vnode_put(src_vp);
 			vnode_put(dst_vp);
 			fp_drop(p, fd2, fp2, 0);
 			error = EBADF;
 			goto outdrop;
 		}
-
+		
 		if(vnode_authorize(dst_vp, NULLVP, 
-					(KAUTH_VNODE_ACCESS | KAUTH_VNODE_WRITE_DATA), &context) != 0) {
+						   (KAUTH_VNODE_ACCESS | KAUTH_VNODE_WRITE_DATA), &context) != 0) {
 			vnode_put(src_vp);
 			vnode_put(dst_vp);
 			fp_drop(p, fd2, fp2, 0);
 			error = EBADF;
 			goto outdrop;
 		}
-
+			
 		/* Verify that both vps point to files and not directories */
-		if (!vnode_isreg(src_vp) || !vnode_isreg(dst_vp)) {
-			vnode_put(src_vp);
-			vnode_put(dst_vp);
-			fp_drop(p, fd2, fp2, 0);
+		if ( !vnode_isreg(src_vp) || !vnode_isreg(dst_vp)) {
 			error = EINVAL;
+			vnode_put (src_vp);
+			vnode_put (dst_vp);
+			fp_drop (p, fd2, fp2, 0);
 			goto outdrop;
 		}
 
@@ -1866,15 +1876,54 @@ fcntl_nocancel(proc_t p, struct fcntl_nocancel_args *uap, int32_t *retval)
 		 * The exchangedata syscall handler passes in 0 for the flags to VNOP_EXCHANGE.
 		 * We'll pass in our special bit indicating that the new behavior is expected
 		 */
-
+		
 		error = VNOP_EXCHANGE(src_vp, dst_vp, FSOPT_EXCHANGE_DATA_ONLY, &context);
-
+		
 		vnode_put (src_vp);
 		vnode_put (dst_vp);
 		fp_drop(p, fd2, fp2, 0);
 		break;
 	}
+			
+			
+	/*
+	 * SPI (private) for indicating to a filesystem that subsequent writes to
+	 * the open FD will represent static content.
+	 */
+	case F_SETSTATICCONTENT: {
+		caddr_t ioctl_arg = NULL;
 
+		if (uap->arg) {
+			ioctl_arg = (caddr_t) 1;
+		}
+
+		if (fp->f_type != DTYPE_VNODE) {
+			error = EBADF;
+			goto out;
+		}
+		vp = (struct vnode *)fp->f_data;
+		proc_fdunlock(p);
+
+		error = vnode_getwithref(vp);
+		if (error) {
+			error = ENOENT;
+			goto outdrop;
+		}
+
+		/* Only go forward if you have write access */
+		vfs_context_t ctx = vfs_context_current();
+		if(vnode_authorize(vp, NULLVP, (KAUTH_VNODE_ACCESS | KAUTH_VNODE_WRITE_DATA), ctx) != 0) {
+			vnode_put(vp);
+			error = EBADF;
+			goto outdrop;
+		}
+
+		error = VNOP_IOCTL(vp, uap->cmd, ioctl_arg, 0, &context);
+		(void)vnode_put(vp);
+		
+		break;
+	}
+	
 	/* 
 	 * Set the vnode pointed to by 'fd'
 	 * and tag it as the (potentially future) backing store
@@ -1885,12 +1934,12 @@ fcntl_nocancel(proc_t p, struct fcntl_nocancel_args *uap, int32_t *retval)
 			error = EBADF;
 			goto out;
 		}
-		vp = (struct vnode *)fp->f_data;
 		
+		vp = (struct vnode *)fp->f_data;
+
 		if (vp->v_tag != VT_HFS) {
 			error = EINVAL;
 			goto out;
-
 		}
 		proc_fdunlock(p);
 
@@ -1910,14 +1959,12 @@ fcntl_nocancel(proc_t p, struct fcntl_nocancel_args *uap, int32_t *retval)
 		
 		/* If arg != 0, set, otherwise unset */
 		if (uap->arg) {
-			error = hfs_set_backingstore (vp, 1);
+			error = VNOP_IOCTL (vp, uap->cmd, (caddr_t)1, 0, &context);
 		}
 		else {
-			error = hfs_set_backingstore (vp, 0);
+			error = VNOP_IOCTL (vp, uap->cmd, (caddr_t)NULL, 0, &context);
 		}
-		/* Success. explicitly set error to 0. */
-		error = 0;
-
+		
 		vnode_put(vp);
 		break;
 	}
@@ -1949,7 +1996,7 @@ fcntl_nocancel(proc_t p, struct fcntl_nocancel_args *uap, int32_t *retval)
 			/* Check for error from vn_getpath before moving on */
 			if ((error = vn_getpath(vp, pathbufp, &pathlen)) == 0) {
 				if (vp->v_tag == VT_HFS) {
-					error = hfs_is_backingstore (vp, &backingstore);
+					error = VNOP_IOCTL (vp, uap->cmd, (caddr_t) &backingstore, 0, &context);
 				}
 				(void)vnode_put(vp);
 
@@ -1972,7 +2019,6 @@ fcntl_nocancel(proc_t p, struct fcntl_nocancel_args *uap, int32_t *retval)
 		FREE(pathbufp, M_TEMP);
 		goto outdrop;
 	}
-
 
 	default:
 		/*
@@ -3920,7 +3966,7 @@ int
 falloc_locked(proc_t p, struct fileproc **resultfp, int *resultfd,
 	      vfs_context_t ctx, int locked)
 {
-	struct fileproc *fp, *fq;
+	struct fileproc *fp;
 	struct fileglob *fg;
 	int error, nfd;
 
@@ -3988,16 +4034,7 @@ falloc_locked(proc_t p, struct fileproc **resultfp, int *resultfd,
 	mac_file_label_associate(fp->f_cred, fg);
 #endif
 
-	lck_mtx_lock_spin(file_flist_lock);
-
-	nfiles++;
-
-	if ( (fq = p->p_fd->fd_ofiles[0]) ) {
-		LIST_INSERT_AFTER(fq->f_fglob, fg, f_list);
-	} else {
-		LIST_INSERT_HEAD(&filehead, fg, f_list);
-	}
-	lck_mtx_unlock(file_flist_lock);
+	OSAddAtomic(1, &nfiles);
 
 	p->p_fd->fd_ofiles[nfd] = fp;
 
@@ -4028,10 +4065,7 @@ falloc_locked(proc_t p, struct fileproc **resultfp, int *resultfd,
 void
 fg_free(struct fileglob *fg)
 {
-	lck_mtx_lock_spin(file_flist_lock);
-	LIST_REMOVE(fg, f_list);
-	nfiles--;
-	lck_mtx_unlock(file_flist_lock);
+	OSAddAtomic(-1, &nfiles);
 
 	if (IS_VALID_CRED(fg->fg_cred)) {
 		kauth_cred_unref(&fg->fg_cred);
@@ -4089,7 +4123,7 @@ fdexec(proc_t p, short flags)
 		struct fileproc *fp = fdp->fd_ofiles[i];
 		char *flagp = &fdp->fd_ofileflags[i];
 
-		if (cloexec_default) {
+		if (fp && cloexec_default) {
 			/*
 			 * Reverse the usual semantics of file descriptor
 			 * inheritance - all of them should be closed

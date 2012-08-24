@@ -153,7 +153,7 @@ uiomove64(const addr64_t c_cp, int n, struct uio *uio)
 		if (n > 0 && acnt > (uint64_t)n)
 			acnt = n;
 
-		switch (uio->uio_segflg) {
+		switch ((int) uio->uio_segflg) {
 
 		case UIO_USERSPACE64:
 		case UIO_USERISPACE64:
@@ -280,7 +280,7 @@ ureadc(int c, struct uio *uio)
 	if (uio_curriovlen(uio) <= 0)
 		panic("ureadc: non-positive iovlen");
 
-	switch (uio->uio_segflg) {
+	switch ((int) uio->uio_segflg) {
 
 	case UIO_USERSPACE32:
 	case UIO_USERSPACE:

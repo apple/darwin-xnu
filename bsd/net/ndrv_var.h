@@ -62,11 +62,12 @@ struct ndrv_cb
 	struct sockproto nd_proto;	/* proto family, protocol */
 	int nd_descrcnt;		/* # elements in nd_dlist - Obsolete */
 	TAILQ_HEAD(dlist, dlil_demux_desc) nd_dlist; /* Descr. list */
+	u_int32_t nd_dlist_cnt; /* Descr. list count */
 	struct ifnet *nd_if; /* obsolete, maintained for binary compatibility */
-    u_int32_t	nd_proto_family;
-    u_int32_t	nd_family;
-    struct ndrv_multiaddr*	nd_multiaddrs;
-    short	nd_unit;
+	u_int32_t nd_proto_family;
+	u_int32_t nd_family;
+	struct ndrv_multiaddr* nd_multiaddrs;
+	short nd_unit;
 };
 
 #define	sotondrvcb(so)		((struct ndrv_cb *)(so)->so_pcb)

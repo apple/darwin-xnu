@@ -45,6 +45,7 @@ _open	___open
 _recvfrom	___recvfrom
 _recvmsg	___recvmsg
 _semctl	___semctl
+_sem_open ___sem_open
 _sendmsg	___sendmsg
 _sendto	___sendto
 _setattrlist	___setattrlist

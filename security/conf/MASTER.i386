@@ -1,6 +1,6 @@
 ######################################################################
 #
-#  RELEASE	= [ intel mach libkerncpp config_dtrace audit ]
+#  RELEASE	= [ intel mach libkerncpp config_dtrace audit vm_pressure_events ]
 #  PROFILE	= [ RELEASE profile ]
 #  DEBUG	= [ RELEASE debug ]
 #
@@ -20,6 +20,8 @@ options		CONFIG_MACF			# Mandatory Access Control Framework
 options		CONFIG_MACF_SOCKET_SUBSET	# MACF subset of socket support
 options		CONFIG_FSE
 options		CONFIG_TRIGGERS
+options		CONFIG_VFS_FUNNEL
+options		CONFIG_EXT_RESOLVER
 #options	CONFIG_MACF_SOCKET
 #options	CONFIG_MACF_NET
 #options	CONFIG_MACF_ALWAYS_LABEL_MBUF

@@ -73,7 +73,6 @@
 #define _IPC_IPC_OBJECT_H_
 
 #include <mach_rt.h>
-#include <mach_kdb.h>
 
 #include <mach/kern_return.h>
 #include <mach/message.h>
@@ -81,6 +80,7 @@
 #include <kern/macro_help.h>
 #include <kern/zalloc.h>
 #include <ipc/ipc_types.h>
+#include <libkern/OSAtomic.h>
 
 typedef natural_t ipc_object_refs_t;	/* for ipc/ipc_object.h		*/
 typedef natural_t ipc_object_bits_t;
@@ -100,7 +100,7 @@ typedef natural_t ipc_object_type_t;
 struct ipc_object {
 	ipc_object_bits_t io_bits;
 	ipc_object_refs_t io_references;
-	decl_lck_mtx_data(,	io_lock_data)
+	lck_spin_t	io_lock_data;
 };
 
 /*
@@ -165,26 +165,17 @@ extern void	io_free(
  * (ipc_port and ipc_pset).
  */
 #define io_lock_init(io) \
-	lck_mtx_init(&(io)->io_lock_data, &ipc_lck_grp, &ipc_lck_attr)
+	lck_spin_init(&(io)->io_lock_data, &ipc_lck_grp, &ipc_lck_attr)
 #define io_lock_destroy(io) \
-	lck_mtx_destroy(&(io)->io_lock_data, &ipc_lck_grp)
+	lck_spin_destroy(&(io)->io_lock_data, &ipc_lck_grp)
 #define	io_lock(io) \
-	lck_mtx_lock(&(io)->io_lock_data)
+	lck_spin_lock(&(io)->io_lock_data)
 #define	io_lock_try(io) \
-	lck_mtx_try_lock(&(io)->io_lock_data)
+	lck_spin_try_lock(&(io)->io_lock_data)
 #define	io_unlock(io) \
-	lck_mtx_unlock(&(io)->io_lock_data)
+	lck_spin_unlock(&(io)->io_lock_data)
 
 #define _VOLATILE_ volatile
-
-#define io_check_unlock(io) 						\
-MACRO_BEGIN								\
-	_VOLATILE_ ipc_object_refs_t _refs = (io)->io_references;	\
-									\
-	io_unlock(io);							\
-	if (_refs == 0)							\
-		io_free(io_otype(io), io);				\
-MACRO_END
 
 /* Sanity check the ref count.  If it is 0, we may be doubly zfreeing.
  * If it is larger than max int, it has been corrupted, probably by being
@@ -198,18 +189,24 @@ MACRO_END
 #define IO_MAX_REFERENCES						\
 	(unsigned)(~0 ^ (1 << (sizeof(int)*BYTE_SIZE - 1)))
 
-#define	io_reference(io)						\
-MACRO_BEGIN								\
-	assert((io)->io_references < IO_MAX_REFERENCES);		\
-	(io)->io_references++;						\
-MACRO_END
+static inline void
+io_reference(ipc_object_t io) {
+	assert((io)->io_references > 0 &&
+	    (io)->io_references < IO_MAX_REFERENCES);
+	OSIncrementAtomic(&((io)->io_references));
+}
 
-#define	io_release(io)							\
-MACRO_BEGIN								\
-	assert((io)->io_references > 0 &&				\
-		    (io)->io_references <= IO_MAX_REFERENCES);		\
-	(io)->io_references--;						\
-MACRO_END
+
+static inline void
+io_release(ipc_object_t io) {
+	assert((io)->io_references > 0 &&
+	    (io)->io_references < IO_MAX_REFERENCES);
+        /* If we just removed the last reference count */
+	if ( 1 == OSDecrementAtomic(&((io)->io_references))) {
+		/* Free the object */
+		io_free(io_otype((io)), (io));
+	}
+}
 
 /*   
  * Retrieve a label for use in a kernel call that takes a security
@@ -333,13 +330,5 @@ extern kern_return_t ipc_object_rename(
 	ipc_space_t		space,
 	mach_port_name_t	oname,
 	mach_port_name_t	nname);
-
-#if	MACH_KDB
-/* Pretty-print an ipc object */
-
-extern void ipc_object_print(
-	ipc_object_t	object);
-
-#endif	/* MACH_KDB */
 
 #endif	/* _IPC_IPC_OBJECT_H_ */

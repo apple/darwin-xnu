@@ -647,7 +647,7 @@ vm_shared_region_create(
 	}
 
 	/* create a VM sub map and its pmap */
-	sub_map = vm_map_create(pmap_create(0, is_64bit),
+	sub_map = vm_map_create(pmap_create(NULL, 0, is_64bit),
 				0, size,
 				TRUE);
 	if (sub_map == VM_MAP_NULL) {
@@ -851,13 +851,13 @@ vm_shared_region_undo_mappings(
 	unsigned int		j = 0;
 	vm_shared_region_t	shared_region = NULL;
 	boolean_t		reset_shared_region_state = FALSE;
-	
+
 	shared_region = vm_shared_region_get(current_task());
 	if (shared_region == NULL) {
-		SHARED_REGION_TRACE_DEBUG(("Failed to undo mappings because of NULL shared region.\n"));
+		printf("Failed to undo mappings because of NULL shared region.\n");
 		return;
 	}
-
+	
 
 	if (sr_map == NULL) {
 		ipc_port_t		sr_handle;
@@ -968,7 +968,7 @@ vm_shared_region_map_file(
 	mach_vm_offset_t	sr_base_address;
 	unsigned int		i;
 	mach_port_t		map_port;
-	mach_vm_offset_t	target_address;
+	vm_map_offset_t		target_address;
 	vm_object_t		object;
 	vm_object_size_t	obj_size;
 	boolean_t		found_mapping_to_slide = FALSE;
@@ -1384,7 +1384,7 @@ vm_shared_region_sliding_valid(uint32_t slide) {
 
 	if ((shared_region_completed_slide == TRUE) && slide) {
 	        if (slide != slide_info.slide) {
-			SHARED_REGION_TRACE_DEBUG(("Only one shared region can be slid\n"));
+			printf("Only one shared region can be slid\n");
 			kr = KERN_FAILURE;	
 		} else if (slide == slide_info.slide) {
 			/*
@@ -1429,7 +1429,7 @@ vm_shared_region_slide_init(
 	}
 
 	if (slide_info_size > SANE_SLIDE_INFO_SIZE) {
-		SHARED_REGION_TRACE_DEBUG(("Slide_info_size too large: %lx\n", (uintptr_t)slide_info_size));
+		printf("Slide_info_size too large: %lx\n", (uintptr_t)slide_info_size);
 		kr = KERN_FAILURE;
 		return kr;
 	}
@@ -1619,7 +1619,8 @@ vm_shared_region_slide(vm_offset_t vaddr, uint32_t pageIndex)
 								 * to the upper 32 bits.
 								 * The sliding failed...
 								 */
-								printf("vm_shared_region_slide() carry over\n");
+								printf("vm_shared_region_slide() carry over: i=%d j=%d b=0x%x slide=0x%x old=0x%x new=0x%x\n",
+								       i, j, b, slide, old_value, *ptr_to_slide);
 								return KERN_FAILURE;
 							}
 						}
@@ -1643,6 +1644,17 @@ vm_named_entry_t commpage64_entry = NULL;
 vm_map_t commpage32_map = VM_MAP_NULL;
 vm_map_t commpage64_map = VM_MAP_NULL;
 
+ipc_port_t commpage_text32_handle = IPC_PORT_NULL;
+ipc_port_t commpage_text64_handle = IPC_PORT_NULL;
+vm_named_entry_t commpage_text32_entry = NULL;
+vm_named_entry_t commpage_text64_entry = NULL;
+vm_map_t commpage_text32_map = VM_MAP_NULL;
+vm_map_t commpage_text64_map = VM_MAP_NULL;
+
+user32_addr_t commpage_text32_location = (user32_addr_t) _COMM_PAGE32_TEXT_START;
+user64_addr_t commpage_text64_location = (user64_addr_t) _COMM_PAGE64_TEXT_START;
+
+#if defined(__i386__) || defined(__x86_64__)
 /*
  * Create a memory entry, VM submap and pmap for one commpage.
  */
@@ -1664,7 +1676,7 @@ _vm_commpage_init(
 	if (kr != KERN_SUCCESS) {
 		panic("_vm_commpage_init: could not allocate mem_entry");
 	}
-	new_map = vm_map_create(pmap_create(0, FALSE), 0, size, TRUE);
+	new_map = vm_map_create(pmap_create(NULL, 0, FALSE), 0, size, TRUE);
 	if (new_map == VM_MAP_NULL) {
 		panic("_vm_commpage_init: could not allocate VM map");
 	}
@@ -1679,6 +1691,42 @@ _vm_commpage_init(
 		("commpage: _init(0x%llx) <- %p\n",
 		 (long long)size, *handlep));
 }
+#endif
+
+
+/*
+ *Initialize the comm text pages at boot time
+ */
+ extern u_int32_t random(void);
+ void
+vm_commpage_text_init(void)
+{
+	SHARED_REGION_TRACE_DEBUG(
+		("commpage text: ->init()\n"));
+#if defined(__i386__) || defined(__x86_64__)
+	/* create the 32 bit comm text page */
+	unsigned int offset = (random() % _PFZ32_SLIDE_RANGE) << PAGE_SHIFT; /* restricting to 32bMAX-2PAGE */
+	_vm_commpage_init(&commpage_text32_handle, _COMM_PAGE_TEXT_AREA_LENGTH);
+	commpage_text32_entry = (vm_named_entry_t) commpage_text32_handle->ip_kobject;
+	commpage_text32_map = commpage_text32_entry->backing.map;
+	commpage_text32_location = (user32_addr_t) (_COMM_PAGE32_TEXT_START + offset);
+	/* XXX if (cpu_is_64bit_capable()) ? */
+        /* create the 64-bit comm page */
+	offset = (random() % _PFZ64_SLIDE_RANGE) << PAGE_SHIFT; /* restricting sliding upto 2Mb range */
+        _vm_commpage_init(&commpage_text64_handle, _COMM_PAGE_TEXT_AREA_LENGTH);
+        commpage_text64_entry = (vm_named_entry_t) commpage_text64_handle->ip_kobject;
+        commpage_text64_map = commpage_text64_entry->backing.map;
+	commpage_text64_location = (user64_addr_t) (_COMM_PAGE64_TEXT_START + offset);
+
+	commpage_text_populate();
+#else
+#error Unknown architecture.
+#endif /* __i386__ || __x86_64__ */
+	/* populate the routines in here */
+	SHARED_REGION_TRACE_DEBUG(
+                ("commpage text: init() <-\n"));
+
+}
 
 /*
  * Initialize the comm pages at boot time.
@@ -1689,6 +1737,7 @@ vm_commpage_init(void)
 	SHARED_REGION_TRACE_DEBUG(
 		("commpage: -> init()\n"));
 
+#if defined(__i386__) || defined(__x86_64__)
 	/* create the 32-bit comm page */
 	_vm_commpage_init(&commpage32_handle, _COMM_PAGE32_AREA_LENGTH);
 	commpage32_entry = (vm_named_entry_t) commpage32_handle->ip_kobject;
@@ -1699,6 +1748,8 @@ vm_commpage_init(void)
 	_vm_commpage_init(&commpage64_handle, _COMM_PAGE64_AREA_LENGTH);
 	commpage64_entry = (vm_named_entry_t) commpage64_handle->ip_kobject;
 	commpage64_map = commpage64_entry->backing.map;
+
+#endif /* __i386__ || __x86_64__ */
 
 	/* populate them according to this specific platform */
 	commpage_populate();
@@ -1722,9 +1773,9 @@ vm_commpage_enter(
 	vm_map_t	map,
 	task_t		task)
 {
-	ipc_port_t		commpage_handle;
-	vm_map_offset_t		commpage_address, objc_address;
-	vm_map_size_t		commpage_size, objc_size;
+	ipc_port_t		commpage_handle, commpage_text_handle;
+	vm_map_offset_t		commpage_address, objc_address, commpage_text_address;
+	vm_map_size_t		commpage_size, objc_size, commpage_text_size;
 	int			vm_flags;
 	kern_return_t		kr;
 
@@ -1732,6 +1783,7 @@ vm_commpage_enter(
 		("commpage: -> enter(%p,%p)\n",
 		 map, task));
 
+	commpage_text_size = _COMM_PAGE_TEXT_AREA_LENGTH;
 	/* the comm page is likely to be beyond the actual end of the VM map */
 	vm_flags = VM_FLAGS_FIXED | VM_FLAGS_BEYOND_MAX;
 
@@ -1743,6 +1795,8 @@ vm_commpage_enter(
 		commpage_size = _COMM_PAGE64_AREA_LENGTH;
 		objc_size = _COMM_PAGE64_OBJC_SIZE;
 		objc_address = _COMM_PAGE64_OBJC_BASE;
+		commpage_text_handle = commpage_text64_handle;
+		commpage_text_address = (vm_map_offset_t) commpage_text64_location;
 	} else {
 		commpage_handle = commpage32_handle;
 		commpage_address =
@@ -1750,6 +1804,8 @@ vm_commpage_enter(
 		commpage_size = _COMM_PAGE32_AREA_LENGTH;
 		objc_size = _COMM_PAGE32_OBJC_SIZE;
 		objc_address = _COMM_PAGE32_OBJC_BASE;
+		commpage_text_handle = commpage_text32_handle;
+		commpage_text_address = (vm_map_offset_t) commpage_text32_location;
 	}
 
 	if ((commpage_address & (pmap_nesting_size_min - 1)) == 0 &&
@@ -1757,7 +1813,6 @@ vm_commpage_enter(
 		/* the commpage is properly aligned or sized for pmap-nesting */
 		vm_flags |= VM_MAKE_TAG(VM_MEMORY_SHARED_PMAP);
 	}
-
 	/* map the comm page in the task's address space */
 	assert(commpage_handle != IPC_PORT_NULL);
 	kr = vm_map_enter_mem_object(
@@ -1769,8 +1824,8 @@ vm_commpage_enter(
 		commpage_handle,
 		0,
 		FALSE,
-		VM_PROT_READ|VM_PROT_EXECUTE,
-		VM_PROT_READ|VM_PROT_EXECUTE,
+		VM_PROT_READ,
+		VM_PROT_READ,
 		VM_INHERIT_SHARE);
 	if (kr != KERN_SUCCESS) {
 		SHARED_REGION_TRACE_ERROR(
@@ -1778,6 +1833,28 @@ vm_commpage_enter(
 			 "commpage %p mapping failed 0x%x\n",
 			 map, (long long)commpage_address,
 			 (long long)commpage_size, commpage_handle, kr));
+	}
+
+	/* map the comm text page in the task's address space */
+	assert(commpage_text_handle != IPC_PORT_NULL);
+	kr = vm_map_enter_mem_object(
+		map,
+		&commpage_text_address,
+		commpage_text_size,
+		0,
+		vm_flags,
+		commpage_text_handle,
+		0,
+		FALSE,
+		VM_PROT_READ|VM_PROT_EXECUTE,
+		VM_PROT_READ|VM_PROT_EXECUTE,
+		VM_INHERIT_SHARE);
+	if (kr != KERN_SUCCESS) {
+		SHARED_REGION_TRACE_ERROR(
+			("commpage text: enter(%p,0x%llx,0x%llx) "
+			 "commpage text %p mapping failed 0x%x\n",
+			 map, (long long)commpage_text_address,
+			 (long long)commpage_text_size, commpage_text_handle, kr));
 	}
 
 	/*

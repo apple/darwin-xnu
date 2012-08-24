@@ -1,4 +1,5 @@
 export SOURCE=$(shell /bin/pwd)
+export RELATIVE_SOURCE_PATH ?= .
 
 #
 # gnumake 3.77 support
@@ -25,11 +26,11 @@ export COMPONENT_LIST 	= osfmk bsd libkern iokit pexpert libsa security
 export COMPONENT_LIST_UC := $(shell printf "%s" "$(COMPONENT_LIST)" | $(TR) a-z A-Z)
 endif
 ifndef	COMPONENT
-export COMPONENT 	:= $(firstword $(subst /, ,$(shell $(RELPATH) $(SRCROOT) $(SOURCE))))
+export COMPONENT 	:= $(firstword $(subst /, ,$(RELATIVE_SOURCE_PATH)))
 export COMPONENT_IMPORT_LIST := $(filter-out $(COMPONENT),$(COMPONENT_LIST)) 
 else
 ifeq	($(COMPONENT), .)
-export COMPONENT        := $(firstword $(subst /, ,$(shell $(RELPATH) $(SRCROOT) $(SOURCE))))
+export COMPONENT 	:= $(if $(word 2,$(subst /, ,$(RELATIVE_SOURCE_PATH))),$(word 2,$(subst /, ,$(RELATIVE_SOURCE_PATH))),$(firstword $(subst /, ,$(RELATIVE_SOURCE_PATH))))
 export COMPONENT_IMPORT_LIST := $(filter-out $(COMPONENT),$(COMPONENT_LIST)) 
 endif
 endif
@@ -42,9 +43,13 @@ endif
 
 ifndef ARCH_CONFIGS
 ifdef RC_ARCHS
-export ARCH_CONFIGS 	:= $(shell printf "%s" "$(RC_ARCHS)" | $(TR) a-z A-Z | sed -e 's/ARMV./ARM/g')
+export ARCH_CONFIGS 	:= $(shell printf "%s" "$(RC_ARCHS)" | $(TR) a-z A-Z | sed -E 's/ARMV[0-9][A-Z]?/ARM/g')
 else
-export ARCH_CONFIGS 	:= $(shell arch | $(TR) a-z A-Z | sed -e 's/ARMV./ARM/g')
+ifeq ($(PLATFORM),iPhoneOS)
+	export ARCH_CONFIGS 	:= ARM
+else
+	export ARCH_CONFIGS 	:= $(shell arch | $(TR) a-z A-Z | sed -E 's/ARMV[0-9][A-Z]?/ARM/g')
+endif
 endif
 endif
 ifdef	ARCH_CONFIG
@@ -104,10 +109,12 @@ export MACHINE_CONFIG 	= DEFAULT
 endif
 
 
+#
+# Machine Configuration options  
+#
+export SUPPORTED_I386_MACHINE_CONFIGS := DEFAULT
+export SUPPORTED_X86_64_MACHINE_CONFIGS := DEFAULT
 
-ifndef SUPPORTED_MACHINE_CONFIGS
-export SUPPORTED_MACHINE_CONFIGS = DEFAULT
-endif
 
 #
 # Target configuration options.  NOTE - target configurations will 
@@ -117,10 +124,10 @@ endif
 # kernel configuration, the second is the architecture configuration,
 # and the third is the machine configuration.  You may pass in as
 # many groups of configurations as you wish.  Each item passed in is
-# seperated by whitespace.
+# separated by whitespace.
 #
 # Example:
-#	TARGET_CONFIGS="release x86_64 default debug i386 default release arm MX31ADS"
+#	TARGET_CONFIGS="release x86_64 default debug i386 default release arm S5l8920X"
 # Parameters may be in upper or lower case (they are converted to upper).
 #
 # "default" parameter is a special case.  It means use the default value for 
@@ -138,9 +145,17 @@ ifdef TARGET_CONFIGS
 	export MACHINE_CONFIG	= $(word 3, $(TARGET_CONFIGS_UC))
 	export DEFAULT_KERNEL_CONFIG = $(word 1, $(TARGET_CONFIGS_UC))
 else
-	# generate TARGET_CONFIGS using KERNEL_CONFIGS and ARCH_CONFIGS and MACHINE_CONFIG (which defaults to "DEFAULT")
-	temp_list = $(foreach my_kern_config, $(KERNEL_CONFIGS), $(my_kern_config) arch_slot $(MACHINE_CONFIG))
-	export TARGET_CONFIGS = $(strip $(foreach my_arch_config, $(ARCH_CONFIGS), $(subst arch_slot,$(my_arch_config),$(temp_list))))
+
+	ifneq ($(filter %_embedded,$(MAKECMDGOALS)),)
+# generate set of standard embedded configs
+		export TARGET_CONFIGS = $(TARGET_CONFIGS_EMBEDDED)
+	else ifneq ($(filter %_devicemap,$(MAKECMDGOALS)),)
+		DEVICEMAP_PLATFORMS = $(shell $(EMBEDDED_DEVICE_MAP) -query SELECT DISTINCT Platform FROM Targets | $(TR) [:lower:] [:upper:])
+		export TARGET_CONFIGS = $(foreach my_kernel_config,$(KERNEL_CONFIGS_EMBEDDED),$(foreach my_arch,$(ARCH_CONFIGS),$(foreach my_machine_config,$(filter $(DEVICEMAP_PLATFORMS),$(SUPPORTED_$(my_arch)_MACHINE_CONFIGS)),$(my_kernel_config) $(my_arch) $(my_machine_config) )))
+	else
+# generate TARGET_CONFIGS using KERNEL_CONFIGS and ARCH_CONFIGS and MACHINE_CONFIG (which defaults to "DEFAULT")
+		export TARGET_CONFIGS = $(strip $(foreach my_arch_config, $(ARCH_CONFIGS), $(foreach my_kern_config, $(KERNEL_CONFIGS), $(my_kern_config) $(my_arch_config) $(MACHINE_CONFIG))))
+	endif
 	export TARGET_CONFIGS_UC := $(shell printf "%s" "$(TARGET_CONFIGS)" | $(TR) a-z A-Z)
 	export MACHINE_CONFIG	= $(word 3, $(TARGET_CONFIGS_UC))
 	export DEFAULT_KERNEL_CONFIG = $(word 1, $(TARGET_CONFIGS_UC))
@@ -166,8 +181,10 @@ endif
 endif
 
 ifneq ($(MACHINE_CONFIG),)
-ifeq ($(filter $(MACHINE_CONFIG),$(SUPPORTED_MACHINE_CONFIGS)),)
+ifneq ($(ARCH_CONFIG),)
+ifeq ($(filter $(MACHINE_CONFIG),$(SUPPORTED_$(ARCH_CONFIG)_MACHINE_CONFIGS)),)
 $(error Unsupported MACHINE_CONFIG $(MACHINE_CONFIG))
+endif
 endif
 endif
 
@@ -180,7 +197,7 @@ endif
 #
 # Kernel Configuration to install
 #
-#  supported install architecture : I386 X86_64 ARM
+#  supported install architecture : I386 X86_64 
 #
 export INSTALL_TYPE 	= $(DEFAULT_KERNEL_CONFIG)
 
@@ -192,6 +209,22 @@ endif
 export INSTALL_ARCH_DEFAULT	= $(firstword $(INSTALL_ARCHS))
 ifeq ($(INSTALL_ARCH_DEFAULT),)
 $(error Could not determine INSTALL_ARCH_DEFAULT)
+endif
+
+#
+# Deployment target flag
+#
+ifndef DEPLOYMENT_TARGET_FLAGS
+SDKVERSION=$(shell xcodebuild -sdk $(SDKROOT) -version SDKVersion | head -1)
+ifeq ($(PLATFORM),MacOSX)
+    export DEPLOYMENT_TARGET_FLAGS := -mmacosx-version-min=$(SDKVERSION)
+else ifeq ($(PLATFORM),iPhoneOS)
+    export DEPLOYMENT_TARGET_FLAGS := -miphoneos-version-min=$(SDKVERSION)
+else ifeq ($(PLATFORM),iPhoneSimulator)
+    export DEPLOYMENT_TARGET_FLAGS := 
+else
+    export DEPLOYMENT_TARGET_FLAGS := 
+endif
 endif
 
 #
@@ -231,8 +264,8 @@ CXXWARNFLAGS_STD = \
 	-Wcast-qual -Wwrite-strings -Wswitch -Wcast-align -Wchar-subscripts \
 	-Wredundant-decls -Wextra-tokens
 
-# Certain warnings are non-fatal (8474835)
-CXXWARNFLAGS_STD += -Wno-error=cast-align
+# Certain warnings are non-fatal (8474835, 9000888)
+CXXWARNFLAGS_STD += -Wno-error=cast-align -Wno-error=overloaded-virtual
 
 # Can be overridden in Makefile.template or Makefile.$arch
 export CXXWARNFLAGS ?= $(CXXWARNFLAGS_STD)
@@ -253,11 +286,6 @@ endif
 
 ARCH_FLAGS_I386		  = -arch i386
 ARCH_FLAGS_X86_64	  = -arch x86_64
-ARCH_FLAGS_ARM		  = $($(addsuffix $(MACHINE_CONFIG),ARCH_FLAGS_ARM_))
-
-ARCH_FLAGS_ALL_I386		= $(ARCH_FLAGS_I386)
-ARCH_FLAGS_ALL_X86_64		= $(ARCH_FLAGS_X86_64)
-ARCH_FLAGS_ALL_ARM		= -arch arm
 
 
 #
@@ -274,10 +302,9 @@ export DSYMBUILDDIR = ./Contents/Resources/DWARF/
 # We must not use -fno-keep-inline-functions, or it will remove the dtrace
 # probes from the kernel.
 #
-export CFLAGS_GEN = -static $(DEBUG_CFLAGS) -nostdinc \
-	-freorder-blocks				      \
-	-fno-builtin -fno-common -msoft-float \
-	-fsigned-bitfields -fno-stack-protector $(OTHER_CFLAGS)
+export CFLAGS_GEN = $(DEBUG_CFLAGS) -nostdinc \
+	-freorder-blocks -fno-builtin -fno-common \
+	-fsigned-bitfields $(OTHER_CFLAGS)
 
 ifeq ($(BUILD_STABS),1)
 export CFLAGS_GEN += -gstabs+
@@ -291,15 +318,15 @@ endif
 
 export CFLAGS_RELEASE 	= 
 export CFLAGS_DEVELOPMENT 	=
-export CFLAGS_DEBUG 	= 
-export CFLAGS_PROFILE 	=  -pg
+export CFLAGS_DEBUG 	= -fstack-protector-all
+export CFLAGS_PROFILE 	= -pg
 
-export CFLAGS_I386 	= -Di386 -DI386 -D__I386__ \
-				-DPAGE_SIZE_FIXED
+export CFLAGS_I386 	= -static -Di386 -DI386 -D__I386__ \
+				-DPAGE_SIZE_FIXED -msoft-float \
+				-integrated-as
 export CFLAGS_X86_64	= -Dx86_64 -DX86_64 -D__X86_64__ -DLP64 \
-				-DPAGE_SIZE_FIXED -mkernel
-export CFLAGS_ARM 	= -Darm -DARM -D__ARM__ -DPAGE_SIZE_FIXED \
-				-fno-strict-aliasing -fno-keep-inline-functions
+				-DPAGE_SIZE_FIXED -mkernel -msoft-float \
+				-integrated-as
 
 
 ifeq (-arch armv7,$(ARCH_FLAGS_ARM))
@@ -308,12 +335,7 @@ endif
 ifeq (-arch armv6,$(ARCH_FLAGS_ARM))
 CFLAGS_ARM		+= -mthumb
 endif
-ifeq (-arch armv5,$(ARCH_FLAGS_ARM))
-CFLAGS_ARM		+= -mno-thumb
-endif
-ifeq (-arch xscale,$(ARCH_FLAGS_ARM))
-CFLAGS_ARM		+= -mthumb
-endif
+
 
 export CFLAGS_RELEASEI386 = -O2
 export CFLAGS_DEVELOPMENTI386 = -O2
@@ -328,7 +350,7 @@ export CFLAGS_PROFILEX86_64 = -O2
 
 export CFLAGS_RELEASEARM = -O2
 export CFLAGS_DEVELOPMENTARM = -O2
-export CFLAGS_DEBUGARM = -O2
+export CFLAGS_DEBUGARM = -O0
 export CFLAGS_PROFILEARM = -O2
 
 export CFLAGS 	= $(CFLAGS_GEN) \
@@ -337,6 +359,7 @@ export CFLAGS 	= $(CFLAGS_GEN) \
 		  $($(addsuffix $(ARCH_CONFIG),CFLAGS_)) \
 		  $($(addsuffix $(KERNEL_CONFIG),CFLAGS_)) \
 		  $($(addsuffix $(ARCH_CONFIG), $(addsuffix $(KERNEL_CONFIG),CFLAGS_))) \
+		  $(DEPLOYMENT_TARGET_FLAGS) \
 		  $(DEFINES)
 
 #
@@ -344,29 +367,12 @@ export CFLAGS 	= $(CFLAGS_GEN) \
 #
 
 OTHER_CXXFLAGS	=
-	      	
-CXXFLAGS_GEN  = -fno-rtti -fno-exceptions -fcheck-new -fapple-kext \
-			$(OTHER_CXXFLAGS)
+
+CXXFLAGS_GEN  = -fapple-kext $(OTHER_CXXFLAGS)
 
 CXXFLAGS      = $(CXXFLAGS_GEN) \
 		  $($(addsuffix $(ARCH_CONFIG),CXXFLAGS_)) \
 		  $($(addsuffix $(KERNEL_CONFIG),CXXFLAGS_))
-
-
-#
-# Support for LLVM Link Time Optimization (LTO)
-#
-
-ifeq ($(BUILD_LTO),1)
-export CFLAGS_GEN	+= -flto
-export CXXFLAGS_GEN	+= -flto
-export BUILD_MACHO_OBJ	= 0
-export BUILD_LTO	= 1
-else
-export BUILD_MACHO_OBJ	= 1
-export BUILD_LTO	= 0
-endif
-
 
 #
 # Assembler command
@@ -377,7 +383,7 @@ S_KCC	= $(CC)
 #
 # Default SFLAGS
 #
-export SFLAGS_GEN = -static -D__ASSEMBLER__ $(OTHER_CFLAGS)
+export SFLAGS_GEN = -D__ASSEMBLER__ $(OTHER_CFLAGS)
 
 export SFLAGS_RELEASE 	= 
 export SFLAGS_DEVELOPMENT 	= 
@@ -385,15 +391,17 @@ export SFLAGS_DEBUG 	=
 export SFLAGS_PROFILE 	= 
 
 export SFLAGS_I386	= $(CFLAGS_I386)
-export SFLAGS_ARM	= $(CFLAGS_ARM)
 export SFLAGS_X86_64 	= $(CFLAGS_X86_64)
+
 
 export SFLAGS 	= $(SFLAGS_GEN) \
 		  $($(addsuffix $(MACHINE_CONFIG),MACHINE_FLAGS_)) \
 		  $($(addsuffix $(ARCH_CONFIG),ARCH_FLAGS_)) \
 		  $($(addsuffix $(ARCH_CONFIG),SFLAGS_)) \
 		  $($(addsuffix $(KERNEL_CONFIG),SFLAGS_)) \
+		  $(DEPLOYMENT_TARGET_FLAGS) \
 		  $(DEFINES)
+
 
 #
 # Linker command
@@ -403,19 +411,22 @@ LD	= $(KC++) -nostdlib
 #
 # Default LDFLAGS
 #
-
 export LDFLAGS_KERNEL_GEN = \
-	-static \
 	-nostdlib \
 	-fapple-kext \
 	-Wl,-e,__start \
 	-Wl,-sectalign,__TEXT,__text,0x1000 \
+	-Wl,-sectalign,__TEXT,initcode,0x1000 \
 	-Wl,-sectalign,__DATA,__common,0x1000 \
 	-Wl,-sectalign,__DATA,__bss,0x1000 \
 	-Wl,-sectcreate,__PRELINK_TEXT,__text,/dev/null \
 	-Wl,-sectcreate,__PRELINK_STATE,__kernel,/dev/null \
         -Wl,-sectcreate,__PRELINK_STATE,__kexts,/dev/null \
-	-Wl,-sectcreate,__PRELINK_INFO,__info,/dev/null
+	-Wl,-sectcreate,__PRELINK_INFO,__info,/dev/null \
+	-Wl,-new_linker \
+	-Wl,-pagezero_size,0x0 \
+	-Wl,-version_load_command \
+	-Wl,-function_starts
 
 # Availability of DWARF allows DTrace CTF (compressed type format) to be constructed.
 # ctf_insert creates the CTF section.  It needs reserved padding in the
@@ -431,8 +442,6 @@ export LDFLAGS_KERNEL_DEBUG 	=
 export LDFLAGS_KERNEL_PROFILE 	= 
 
 export LDFLAGS_KERNEL_RELEASEI386     = \
-	-Wl,-new_linker \
-	-Wl,-pagezero_size,0x0 \
 	-Wl,-segaddr,__INITPT,0x00100000 \
 	-Wl,-segaddr,__INITGDT,0x00106000 \
 	-Wl,-segaddr,__SLEEP,0x00107000 \
@@ -444,34 +453,58 @@ export LDFLAGS_KERNEL_DEBUGI386 = $(LDFLAGS_KERNEL_RELEASEI386)
 export LDFLAGS_KERNEL_DEVELOPMENTI386 = $(LDFLAGS_KERNEL_RELEASEI386)
 export LDFLAGS_KERNEL_PROFILEI386 = $(LDFLAGS_KERNEL_RELEASEI386)
 
-# Keep these constants in sync with the *_SEG_BASE definitions in i386/pmap.h
-export LDFLAGS_KERNEL_RELEASEX86_64   = \
-	-Wl,-new_linker \
-	-Wl,-pagezero_size,0x0 \
-	-Wl,-segaddr,__INITPT,0xffffff8000100000 \
-	-Wl,-segaddr,__INITGDT,0xffffff8000106000 \
-	-Wl,-segaddr,__SLEEP,0xffffff8000107000 \
-	-Wl,-segaddr,__HIB,0xffffff8000108000 \
-	-Wl,-image_base,0xffffff8000200000 \
-	-Wl,-seg_page_size,__TEXT,0x200000
+# KASLR static slide config:
+ifndef SLIDE
+SLIDE=0x00
+endif
+KERNEL_MIN_ADDRESS      := 0xffffff8000000000
+KERNEL_BASE_OFFSET      := 0x100000
+KERNEL_STATIC_SLIDE     := $(shell printf "0x%016x" \
+			   $$[ $(SLIDE) << 21 ])
+KERNEL_STATIC_BASE      := $(shell printf "0x%016x" \
+			   $$[ $(KERNEL_MIN_ADDRESS) + $(KERNEL_BASE_OFFSET) ])
+KERNEL_HIB_SECTION_BASE := $(shell printf "0x%016x" \
+			   $$[ $(KERNEL_STATIC_BASE) + $(KERNEL_STATIC_SLIDE) ])
+KERNEL_TEXT_BASE        := $(shell printf "0x%016x" \
+			   $$[ $(KERNEL_HIB_SECTION_BASE) + 0x100000 ])
+
+export LDFLAGS_KERNEL_RELEASEX86_64 = \
+	-Wl,-pie \
+	-Wl,-segaddr,__HIB,$(KERNEL_HIB_SECTION_BASE) \
+	-Wl,-image_base,$(KERNEL_TEXT_BASE) \
+	-Wl,-seg_page_size,__TEXT,0x200000 \
+	-Wl,-sectalign,__DATA,__const,0x1000 \
+	-Wl,-sectalign,__DATA,__sysctl_set,0x1000 \
+	-Wl,-sectalign,__HIB,__bootPT,0x1000 \
+	-Wl,-sectalign,__HIB,__desc,0x1000 \
+	-Wl,-sectalign,__HIB,__data,0x1000 \
+	-Wl,-sectalign,__HIB,__text,0x1000 \
+	-Wl,-sectalign,__HIB,__const,0x1000 \
+	-Wl,-sectalign,__HIB,__bss,0x1000 \
+	-Wl,-sectalign,__HIB,__common,0x1000 \
+
+# Define KERNEL_BASE_OFFSET so known at compile time:
+export CFLAGS_X86_64 += -DKERNEL_BASE_OFFSET=$(KERNEL_BASE_OFFSET)
 
 export LDFLAGS_KERNEL_DEBUGX86_64 = $(LDFLAGS_KERNEL_RELEASEX86_64)
 export LDFLAGS_KERNEL_DEVELOPMENTX86_64 = $(LDFLAGS_KERNEL_RELEASEX86_64)
 export LDFLAGS_KERNEL_PROFILEX86_64 = $(LDFLAGS_KERNEL_RELEASEX86_64)
 
 export LDFLAGS_KERNEL_RELEASEARM     = \
-	-Wl,-new_linker \
-	-Wl,-pagezero_size,0x0 \
+	-Wl,-pie \
+	-Wl,-static \
 	-Wl,-image_base,0x80001000 \
 	-Wl,-exported_symbols_list,$(TARGET)/kernel-kpi.exp
 
 export LDFLAGS_KERNEL_DEVELOPMENTARM     = \
-	-Wl,-new_linker \
-	-Wl,-pagezero_size,0x0 \
+	-Wl,-pie \
+	-Wl,-static \
 	-Wl,-image_base,0x80001000
 
 export LDFLAGS_KERNEL_DEBUGARM = $(LDFLAGS_KERNEL_DEVELOPMENTARM)
 
+# Offset image base by page to have iBoot load kernel TEXT correctly.
+# First page is used for various purposes : sleep token, reset vector.
 
 export LDFLAGS_KERNEL	= $(LDFLAGS_KERNEL_GEN) \
 		  $($(addsuffix $(MACHINE_CONFIG),MACHINE_FLAGS_)) \
@@ -479,7 +512,7 @@ export LDFLAGS_KERNEL	= $(LDFLAGS_KERNEL_GEN) \
 		  $($(addsuffix $(ARCH_CONFIG),LDFLAGS_KERNEL_)) \
 		  $($(addsuffix $(KERNEL_CONFIG),LDFLAGS_KERNEL_)) \
 		  $($(addsuffix $(ARCH_CONFIG), $(addsuffix $(KERNEL_CONFIG),LDFLAGS_KERNEL_))) \
-
+		  $(DEPLOYMENT_TARGET_FLAGS)
 
 #
 # Default runtime libraries to be linked with the kernel
@@ -501,7 +534,40 @@ export INCFLAGS 	= $(INCFLAGS_LOCAL) $(INCFLAGS_GEN) $(INCFLAGS_IMPORT) $(INCFLA
 #
 # Default MIGFLAGS
 #
-export MIGFLAGS	= $(DEFINES) $(INCFLAGS) $($(addsuffix $(ARCH_CONFIG),CFLAGS_)) $($(addsuffix $(ARCH_CONFIG),ARCH_FLAGS_))
+export MIGFLAGS	= $(DEFINES) $(INCFLAGS) $($(addsuffix $(ARCH_CONFIG),CFLAGS_)) \
+			  $($(addsuffix $(ARCH_CONFIG),ARCH_FLAGS_)) \
+			  $(DEPLOYMENT_TARGET_FLAGS)
+
+#
+# Support for LLVM Link Time Optimization (LTO)
+#
+
+ifeq ($(BUILD_LTO),1)
+export CFLAGS_GEN	+= -flto
+export CXXFLAGS_GEN	+= -flto
+export LDFLAGS_KERNEL_GEN	+= -Wl,-object_path_lto,$(TARGET)/lto.o
+export CFLAGS_NOLTO_FLAG = -fno-lto
+export BUILD_MACHO_OBJ	= 0
+export BUILD_LTO	= 1
+else
+export CFLAGS_NOLTO_FLAG =
+export BUILD_MACHO_OBJ	= 1
+export BUILD_LTO	= 0
+endif
+
+#
+# Support for LLVM Integrated Assembler with clang driver
+#
+ifeq ($(BUILD_INTEGRATED_ASSEMBLER),1)
+export SFLAGS_GEN	+= -integrated-as
+export CFLAGS_GEN	+= -integrated-as
+export CXXFLAGS_GEN	+= -integrated-as
+export SFLAGS_NOINTEGRATEDAS_FLAGS	= -no-integrated-as
+export CFLAGS_NOINTEGRATEDAS_FLAGS	= -no-integrated-as
+else
+export SFLAGS_NOINTEGRATEDAS_FLAGS	=
+export CFLAGS_NOINTEGRATEDAS_FLAGS	=
+endif
 
 #
 # Default VPATH
@@ -564,7 +630,7 @@ KINCFRAME_UNIFDEF  = $(PLATFORM_UNIFDEF) $(XNU_PRIVATE_UNIFDEF) -UKERNEL_PRIVATE
 
 
 #
-# Compononent Header file destinations
+# Component Header file destinations
 #
 EXPDIR = EXPORT_HDRS/$(COMPONENT)
 
@@ -583,7 +649,6 @@ export STRIP_FLAGS 	= $($(addsuffix $(KERNEL_CONFIG),STRIP_FLAGS_))
 #
 export DSYMUTIL_FLAGS_I386 = --arch=i386
 export DSYMUTIL_FLAGS_X86_64 = --arch=x86_64
-export DSYMUTIL_FLAGS_ARM = --arch=arm
 
 export DSYMUTIL_FLAGS = $($(addsuffix $(ARCH_CONFIG),DSYMUTIL_FLAGS_))
 

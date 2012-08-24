@@ -168,6 +168,15 @@ typedef struct kmod_info_64_v1 {
 /* Implementation now in libkern/OSKextLib.cpp. */
 extern void kmod_panic_dump(vm_offset_t * addr, unsigned int dump_cnt);
 
+#if CONFIG_DTRACE
+/*
+ * DTrace can take a flag indicating whether it should instrument
+ * probes immediately based on kernel symbols.  This per kext
+ * flag overrides system mode in dtrace_modload().
+ */
+#define KMOD_DTRACE_FORCE_INIT	0x01
+#endif /* CONFIG_DTRACE */
+
 #endif    /* KERNEL_PRIVATE */
 
 

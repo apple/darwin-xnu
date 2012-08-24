@@ -40,7 +40,7 @@ __BEGIN_DECLS
 
 /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
 
-#if !defined(NO_KDEBUG)
+#if (KDEBUG_LEVEL >= KDEBUG_LEVEL_STANDARD)
 
 #define IOServiceTrace(csc, a, b, c, d) do {				\
     if(kIOTraceIOService & gIOKitDebug) {				\
@@ -48,7 +48,7 @@ __BEGIN_DECLS
     }									\
 } while(0)
 
-#else /* NO_KDEBUG */
+#else /* (KDEBUG_LEVEL >= KDEBUG_LEVEL_STANDARD) */
 
 #define IOServiceTrace(csc, a, b, c, d) do {	\
   (void)a;					\
@@ -57,7 +57,7 @@ __BEGIN_DECLS
   (void)d;					\
 } while (0)
 
-#endif /* NO_KDEBUG */
+#endif /* (KDEBUG_LEVEL >= KDEBUG_LEVEL_STANDARD) */
 
 /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
 
@@ -99,7 +99,7 @@ extern ppnum_t IOGetLastPageNumber(void);
 extern ppnum_t gIOLastPage;
 
 /* Physical to physical copy (ints must be disabled) */
-extern void bcopy_phys(addr64_t from, addr64_t to, int size);
+extern void bcopy_phys(addr64_t from, addr64_t to, vm_size_t size);
 
 __END_DECLS
 
@@ -164,8 +164,25 @@ struct IODMACommandInternal
     UInt64   fActualByteCount;
 };
 
+struct IOMemoryDescriptorDevicePager {
+    void *		         devicePager;
+    unsigned int	     pagerContig:1;
+    unsigned int	     unused:31;
+    IOMemoryDescriptor * memory;
+};
+
+struct IOMemoryDescriptorReserved {
+    IOMemoryDescriptorDevicePager dp;
+    uint64_t                      preparationID;
+    // for kernel IOMD subclasses... they have no expansion
+    uint64_t                      kernReserved[4];
+};
+
+
 extern "C" struct timeval gIOLastSleepTime;
 extern "C" struct timeval gIOLastWakeTime;
+
+extern clock_sec_t gIOConsoleLockTime;
 
 extern "C" void IOKitResetTime( void );
 extern "C" void IOKitInitializeTime( void );
@@ -175,5 +192,8 @@ extern "C" OSString * IOCopyLogNameForPID(int pid);
 #if defined(__i386__) || defined(__x86_64__)
 extern "C" void IOSetKeyStoreData(IOMemoryDescriptor * data);
 #endif
+
+void IOScreenLockTimeUpdate(clock_sec_t secs);
+
 
 #endif /* ! _IOKIT_KERNELINTERNAL_H */

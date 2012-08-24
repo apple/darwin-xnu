@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2011 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -68,18 +68,21 @@
  */
 
 #include <sys/param.h>
+#include <string.h>
 
 #ifdef sun
 #include <netinet/in.h>
 #endif
 
-#if defined(sparc) || defined(mips) || defined(ibm032) || defined(__alpha__)
-#define BPF_ALIGN
-#endif
+#if !defined(__i386__) && !defined(__x86_64__)
+#define BPF_ALIGN 1
+#else /* defined(__i386__) || defined(__x86_64__) */
+#define BPF_ALIGN 0
+#endif /* defined(__i386__) || defined(__x86_64__) */
 
-#ifndef BPF_ALIGN
-#define EXTRACT_SHORT(p)	((u_int16_t)ntohs(*(u_int16_t *)p))
-#define EXTRACT_LONG(p)		(ntohl(*(u_int32_t *)p))
+#if !BPF_ALIGN
+#define EXTRACT_SHORT(p)	((u_int16_t)ntohs(*(u_int16_t *)(void *)p))
+#define EXTRACT_LONG(p)		(ntohl(*(u_int32_t *)(void *)p))
 #else
 #define EXTRACT_SHORT(p)\
 	((u_int16_t)\
@@ -211,6 +214,8 @@ bpf_filter(const struct bpf_insn *pc, u_char *p, u_int wirelen, u_int buflen)
 	register bpf_u_int32 k;
 	int32_t mem[BPF_MEMWORDS];
 
+	bzero(mem, sizeof(mem));
+
 	if (pc == 0)
 		/*
 		 * No filter means accept all.
@@ -242,7 +247,7 @@ bpf_filter(const struct bpf_insn *pc, u_char *p, u_int wirelen, u_int buflen)
 
 				if (buflen != 0)
 					return 0;
-				A = m_xword((struct mbuf *)p, k, &merr);
+				A = m_xword((struct mbuf *)(void *)p, k, &merr);
 				if (merr != 0)
 					return 0;
 				continue;
@@ -255,7 +260,7 @@ bpf_filter(const struct bpf_insn *pc, u_char *p, u_int wirelen, u_int buflen)
 				A = EXTRACT_LONG(&p[k]);
 			else
 #endif
-				A = ntohl(*(int32_t *)(p + k));
+				A = ntohl(*(int32_t *)(void *)(p + k));
 			continue;
 
 		case BPF_LD|BPF_H|BPF_ABS:
@@ -266,7 +271,7 @@ bpf_filter(const struct bpf_insn *pc, u_char *p, u_int wirelen, u_int buflen)
 
 				if (buflen != 0)
 					return 0;
-				A = m_xhalf((struct mbuf *)p, k, &merr);
+				A = m_xhalf((struct mbuf *)(void *)p, k, &merr);
 				continue;
 #else
 				return 0;
@@ -283,7 +288,7 @@ bpf_filter(const struct bpf_insn *pc, u_char *p, u_int wirelen, u_int buflen)
 
 				if (buflen != 0)
 					return 0;
-				m = (struct mbuf *)p;
+				m = (struct mbuf *)(void *)p;
 				MINDEX(m, k);
 				A = mtod(m, u_char *)[k];
 				continue;
@@ -311,7 +316,7 @@ bpf_filter(const struct bpf_insn *pc, u_char *p, u_int wirelen, u_int buflen)
 
 				if (buflen != 0)
 					return 0;
-				A = m_xword((struct mbuf *)p, k, &merr);
+				A = m_xword((struct mbuf *)(void *)p, k, &merr);
 				if (merr != 0)
 					return 0;
 				continue;
@@ -324,7 +329,7 @@ bpf_filter(const struct bpf_insn *pc, u_char *p, u_int wirelen, u_int buflen)
 				A = EXTRACT_LONG(&p[k]);
 			else
 #endif
-				A = ntohl(*(int32_t *)(p + k));
+				A = ntohl(*(int32_t *)(void *)(p + k));
 			continue;
 
 		case BPF_LD|BPF_H|BPF_IND:
@@ -336,7 +341,7 @@ bpf_filter(const struct bpf_insn *pc, u_char *p, u_int wirelen, u_int buflen)
 
 				if (buflen != 0)
 					return 0;
-				A = m_xhalf((struct mbuf *)p, k, &merr);
+				A = m_xhalf((struct mbuf *)(void *)p, k, &merr);
 				if (merr != 0)
 					return 0;
 				continue;
@@ -355,7 +360,7 @@ bpf_filter(const struct bpf_insn *pc, u_char *p, u_int wirelen, u_int buflen)
 
 				if (buflen != 0)
 					return 0;
-				m = (struct mbuf *)p;
+				m = (struct mbuf *)(void *)p;
 				MINDEX(m, k);
 				A = mtod(m, u_char *)[k];
 				continue;
@@ -374,7 +379,7 @@ bpf_filter(const struct bpf_insn *pc, u_char *p, u_int wirelen, u_int buflen)
 
 				if (buflen != 0)
 					return 0;
-				m = (struct mbuf *)p;
+				m = (struct mbuf *)(void *)p;
 				MINDEX(m, k);
 				X = (mtod(m, u_char *)[k] & 0xf) << 2;
 				continue;

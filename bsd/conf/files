@@ -26,7 +26,6 @@ OPTIONS/mach_host			optional mach_host
 OPTIONS/mach_ipc_compat			optional mach_ipc_compat
 OPTIONS/mach_ipc_debug			optional mach_ipc_debug
 OPTIONS/mach_ipc_test			optional mach_ipc_test
-OPTIONS/mach_kdb			optional mach_kdb
 OPTIONS/mach_ldebug			optional mach_ldebug
 OPTIONS/mach_load			optional mach_load
 OPTIONS/mach_machine_routines		optional mach_machine_routines
@@ -108,13 +107,21 @@ OPTIONS/ipfirewall			optional ipfirewall
 OPTIONS/ipv6firewall		optional ipv6firewall
 OPTIONS/tcpdebug			optional tcpdebug
 OPTIONS/if_bridge			optional if_bridge
-OPTIONS/faith				optional faith
+OPTIONS/bridgestp			optional bridgestp if_bridge
 OPTIONS/gif					optional gif
 OPTIONS/netat				optional netat
 OPTIONS/sendfile			optional sendfile
 OPTIONS/randomipid			optional randomipid
 OPTIONS/pf				optional pf
-
+OPTIONS/pflog				optional pflog pf
+OPTIONS/pf_altq				optional pf_altq pf
+OPTIONS/classq_blue			optional classq_blue
+OPTIONS/classq_red			optional classq_red
+OPTIONS/classq_rio			optional classq_rio
+OPTIONS/pktsched_cbq			optional pktsched_cbq
+OPTIONS/pktsched_fairq			optional pktsched_fairq
+OPTIONS/pktsched_hfsc			optional pktsched_hfsc
+OPTIONS/pktsched_priq			optional pktsched_priq
 OPTIONS/zlib				optional zlib
 
 #
@@ -193,7 +200,7 @@ bsd/kern/decmpfs.c			standard
 bsd/net/bpf.c				optional bpfilter
 bsd/net/bpf_filter.c			optional bpfilter
 bsd/net/if_bridge.c			optional if_bridge
-bsd/net/bridgestp.c			optional if_bridge
+bsd/net/bridgestp.c			optional bridgestp
 bsd/net/bsd_comp.c			optional ppp_bsdcomp
 bsd/net/if.c				optional networking
 bsd/net/init.c				optional sockets
@@ -229,7 +236,9 @@ bsd/net/kpi_protocol.c		optional networking
 bsd/net/kpi_interfacefilter.c	optional networking
 bsd/net/net_str_id.c			optional networking
 bsd/net/if_utun.c          		optional networking
-bsd/net/if_pflog.c			optional pflog pf
+bsd/net/if_utun_crypto.c		optional networking
+bsd/net/if_utun_crypto_ipsec.c		optional networking
+bsd/net/if_pflog.c			optional pflog
 bsd/net/pf.c				optional pf
 bsd/net/pf_if.c				optional pf
 bsd/net/pf_ioctl.c			optional pf
@@ -237,7 +246,33 @@ bsd/net/pf_norm.c			optional pf
 bsd/net/pf_osfp.c			optional pf
 bsd/net/pf_ruleset.c			optional pf
 bsd/net/pf_table.c			optional pf
+bsd/net/iptap.c				optional networking
 bsd/net/if_llreach.c          		optional networking
+bsd/net/flowhash.c			optional networking
+
+bsd/net/classq/classq.c			optional networking
+bsd/net/classq/classq_blue.c		optional classq_blue
+bsd/net/classq/classq_red.c		optional classq_red
+bsd/net/classq/classq_rio.c		optional classq_rio
+bsd/net/classq/classq_sfb.c		optional networking
+bsd/net/classq/classq_subr.c		optional networking
+bsd/net/classq/classq_util.c		optional networking
+
+bsd/net/pktsched/pktsched.c		optional networking
+bsd/net/pktsched/pktsched_cbq.c		optional pktsched_cbq
+bsd/net/pktsched/pktsched_fairq.c	optional pktsched_fairq
+bsd/net/pktsched/pktsched_hfsc.c	optional pktsched_hfsc
+bsd/net/pktsched/pktsched_priq.c	optional pktsched_priq
+bsd/net/pktsched/pktsched_qfq.c		optional networking
+bsd/net/pktsched/pktsched_rmclass.c	optional pktsched_cbq
+bsd/net/pktsched/pktsched_tcq.c		optional networking
+
+bsd/net/altq/altq_cbq.c			optional pktsched_cbq pf_altq
+bsd/net/altq/altq_fairq.c		optional pktsched_fairq pf_altq
+bsd/net/altq/altq_hfsc.c		optional pktsched_hfsc pf_altq
+bsd/net/altq/altq_priq.c		optional pktsched_priq pf_altq
+bsd/net/altq/altq_qfq.c			optional pf_altq
+bsd/net/altq/altq_subr.c		optional pf_altq
 
 bsd/netinet/igmp.c			optional inet
 bsd/netinet/in.c			optional inet
@@ -268,6 +303,7 @@ bsd/netinet/tcp_subr.c			optional inet
 bsd/netinet/tcp_timer.c			optional inet
 bsd/netinet/tcp_usrreq.c		optional inet
 bsd/netinet/tcp_newreno.c		optional inet
+bsd/netinet/tcp_lro.c                   optional inet
 bsd/netinet/tcp_ledbat.c		optional inet
 bsd/netinet/udp_usrreq.c		optional inet
 bsd/netinet/in_gif.c      		optional gif inet
@@ -305,6 +341,7 @@ bsd/netinet6/in6_rmx.c      		optional inet6
 bsd/netinet6/mld6.c         		optional inet6
 bsd/netinet6/nd6.c          		optional inet6
 bsd/netinet6/nd6_nbr.c      		optional inet6
+bsd/netinet6/nd6_prproxy.c     		optional inet6
 bsd/netinet6/nd6_rtr.c      		optional inet6
 bsd/netinet6/raw_ip6.c      		optional inet6
 bsd/netinet6/route6.c       		optional inet6
@@ -318,10 +355,6 @@ bsd/netkey/key_debug.c    		optional ipsec
 bsd/netkey/keysock.c      		optional ipsec
 bsd/netkey/keydb.c      		optional ipsec
 
-bsd/crypto/sha2/sha2.c			optional crypto allcrypto
-bsd/crypto/des/des_ecb.c  		optional crypto
-bsd/crypto/des/des_enc.c  		optional crypto
-bsd/crypto/des/des_setkey.c       	optional crypto
 bsd/crypto/blowfish/bf_enc.c      	optional crypto allcrypto
 bsd/crypto/blowfish/bf_skey.c     	optional crypto allcrypto
 bsd/crypto/cast128/cast128.c      	optional crypto allcrypto
@@ -419,6 +452,7 @@ bsd/nfs/nfs_vfsops.c			optional nfsclient
 bsd/nfs/nfs_vnops.c			optional nfsclient
 bsd/nfs/nfs4_subs.c			optional nfsclient
 bsd/nfs/nfs4_vnops.c			optional nfsclient
+bsd/nfs/nfs_upcall.c			optional nfsserver
 
 bsd/kern/netboot.c			optional nfsclient
 
@@ -489,7 +523,6 @@ bsd/kern/kern_symfile.c			standard
 bsd/kern/kern_descrip.c			standard
 bsd/kern/kern_event.c			standard
 bsd/kern/kern_control.c			optional networking
-bsd/kern/kern_callout.c			standard
 bsd/kern/kern_exec.c			standard
 bsd/kern/kern_exit.c			standard
 bsd/kern/kern_lockf.c			standard
@@ -508,7 +541,7 @@ bsd/kern/kern_subr.c			standard
 bsd/kern/kern_synch.c			standard
 bsd/kern/kern_sysctl.c			standard
 bsd/kern/kern_newsysctl.c		standard
-bsd/kern/kern_memorystatus.c		optional config_embedded
+bsd/kern/kern_memorystatus.c	optional config_memorystatus
 bsd/kern/kern_mib.c			standard
 bsd/kern/kpi_mbuf.c			optional sockets
 bsd/kern/kern_time.c			standard
@@ -558,7 +591,7 @@ bsd/kern/pthread_support.c		optional psynch
 bsd/kern/pthread_synch.c		standard
 bsd/kern/proc_info.c			standard
 bsd/kern/process_policy.c		standard
-bsd/kern/vm_pressure.c			standard
+bsd/kern/vm_pressure.c			optional vm_pressure_events
 bsd/kern/socket_info.c			optional sockets
 
 bsd/vm/vnode_pager.c			standard
@@ -572,6 +605,8 @@ bsd/conf/param.c			standard
 
 bsd/dev/chud/chud_bsd_callback.c	standard
 bsd/dev/chud/chud_process.c		standard
+
+
 
 bsd/dev/dtrace/dtrace.c			optional config_dtrace
 bsd/dev/dtrace/lockstat.c		optional config_dtrace
@@ -588,4 +623,6 @@ bsd/dev/dtrace/profile_prvd.c		optional config_dtrace
 bsd/dev/dtrace/fasttrap.c		optional config_dtrace
 
 bsd/kern/imageboot.c                  optional config_imageboot
+
+osfmk/kperf/kperfbsd.c			optional kperf
 

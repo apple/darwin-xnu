@@ -125,10 +125,6 @@ pfloginit(void)
 {
 	int i;
 
-	if (pf_perim_lock == NULL || pf_lock == NULL) {
-		panic("%s: called before PF is initialized", __func__);
-		/* NOTREACHED */
-	}
 	LIST_INIT(&pflogif_list);
 	for (i = 0; i < PFLOGIFS_MAX; i++)
 		pflogifs[i] = NULL;

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2010 Apple Inc.  All rights reserved.
+ * Copyright (c) 2000-2011 Apple Inc.  All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -166,6 +166,9 @@ SYSCTL_INT(_vfs_generic_nfs_client, OID_AUTO, access_dotzfs, CTLFLAG_RW | CTLFLA
 SYSCTL_INT(_vfs_generic_nfs_client, OID_AUTO, access_for_getattr, CTLFLAG_RW | CTLFLAG_LOCKED, &nfs_access_for_getattr, 0, "");
 SYSCTL_INT(_vfs_generic_nfs_client, OID_AUTO, idmap_ctrl, CTLFLAG_RW | CTLFLAG_LOCKED, &nfs_idmap_ctrl, 0, "");
 SYSCTL_INT(_vfs_generic_nfs_client, OID_AUTO, callback_port, CTLFLAG_RW | CTLFLAG_LOCKED, &nfs_callback_port, 0, "");
+SYSCTL_INT(_vfs_generic_nfs_client, OID_AUTO, is_mobile, CTLFLAG_RW | CTLFLAG_LOCKED, &nfs_is_mobile, 0, "");
+SYSCTL_INT(_vfs_generic_nfs_client, OID_AUTO, squishy_flags, CTLFLAG_RW | CTLFLAG_LOCKED, &nfs_squishy_flags, 0, "");
+
 #endif /* NFSCLIENT */
 
 #if NFSSERVER
@@ -184,6 +187,12 @@ SYSCTL_INT(_vfs_generic_nfs_server, OID_AUTO, fsevents, CTLFLAG_RW | CTLFLAG_LOC
 #endif
 SYSCTL_INT(_vfs_generic_nfs_server, OID_AUTO, nfsd_thread_max, CTLFLAG_RW | CTLFLAG_LOCKED, &nfsd_thread_max, 0, "");
 SYSCTL_INT(_vfs_generic_nfs_server, OID_AUTO, nfsd_thread_count, CTLFLAG_RD | CTLFLAG_LOCKED, &nfsd_thread_count, 0, "");
+#ifdef NFS_UC_Q_DEBUG
+SYSCTL_INT(_vfs_generic_nfs_server, OID_AUTO, use_upcall_svc, CTLFLAG_RW | CTLFLAG_LOCKED, &nfsrv_uc_use_proxy, 0, "");
+SYSCTL_INT(_vfs_generic_nfs_server, OID_AUTO, upcall_queue_limit, CTLFLAG_RW | CTLFLAG_LOCKED, &nfsrv_uc_queue_limit, 0, "");
+SYSCTL_INT(_vfs_generic_nfs_server, OID_AUTO, upcall_queue_max_seen, CTLFLAG_RW | CTLFLAG_LOCKED, &nfsrv_uc_queue_max_seen, 0, "");
+SYSCTL_INT(_vfs_generic_nfs_server, OID_AUTO, upcall_queue_count, CTLFLAG_RD | CTLFLAG_LOCKED, (int *)&nfsrv_uc_queue_count, 0, "");
+#endif
 #endif /* NFSSERVER */
 
 
@@ -724,6 +733,7 @@ nfssvc_addsock(socket_t so, mbuf_t mynam)
 {
 	struct nfsrv_sock *slp;
 	int error = 0, sodomain, sotype, soprotocol, on = 1;
+	int first;
 	struct timeval timeo;
 
 	/* make sure mbuf constants are set up */
@@ -808,6 +818,7 @@ nfssvc_addsock(socket_t so, mbuf_t mynam)
 	}
 
 	/* add the socket to the list */
+	first = TAILQ_EMPTY(&nfsrv_socklist);
 	TAILQ_INSERT_TAIL(&nfsrv_socklist, slp, ns_chain);
 
 	sock_retain(so); /* grab a retain count on the socket */
@@ -815,10 +826,8 @@ nfssvc_addsock(socket_t so, mbuf_t mynam)
 	slp->ns_sotype = sotype;
 	slp->ns_nam = mynam;
 
-	/* set up the socket upcall */
-	sock_setupcall(so, nfsrv_rcv, slp);
-	/* just playin' it safe */
-	sock_setsockopt(so, SOL_SOCKET, SO_UPCALLCLOSEWAIT, &on, sizeof(on));
+	/* set up the socket up-call */
+	nfsrv_uc_addsock(slp, first);
 
 	/* mark that the socket is not in the nfsrv_sockwg list */
 	slp->ns_wgq.tqe_next = SLPNOLIST;
@@ -878,6 +887,7 @@ nfssvc_nfsd(void)
 	u_quad_t cur_usec;
 	struct timeval now;
 	struct vfs_context context;
+	struct timespec to;
 
 #ifndef nolint
 	cacherep = RC_DOIT;
@@ -891,10 +901,15 @@ nfssvc_nfsd(void)
 	lck_mtx_lock(nfsd_mutex);
 	if (nfsd_thread_count++ == 0)
 		nfsrv_initcache();		/* Init the server request cache */
+	
 	TAILQ_INSERT_TAIL(&nfsd_head, nfsd, nfsd_chain);
 	lck_mtx_unlock(nfsd_mutex);
 
 	context.vc_thread = current_thread();
+
+	/* Set time out so that nfsd threads can wake up a see if they are still needed. */
+	to.tv_sec = 5;
+	to.tv_nsec = 0;
 
 	/*
 	 * Loop getting rpc requests until SIGKILL.
@@ -923,12 +938,14 @@ nfssvc_nfsd(void)
 				}
 				nfsd->nfsd_flag |= NFSD_WAITING;
 				TAILQ_INSERT_HEAD(&nfsd_queue, nfsd, nfsd_queue);
-				error = msleep(nfsd, nfsd_mutex, PSOCK | PCATCH, "nfsd", NULL);
+				error = msleep(nfsd, nfsd_mutex, PSOCK | PCATCH, "nfsd", &to);
 				if (error) {
 					if (nfsd->nfsd_flag & NFSD_WAITING) {
 						TAILQ_REMOVE(&nfsd_queue, nfsd, nfsd_queue);
 						nfsd->nfsd_flag &= ~NFSD_WAITING;
 					}
+					if (error == EWOULDBLOCK)
+						continue;
 					goto done;
 				}
 			}
@@ -1083,7 +1100,7 @@ nfssvc_nfsd(void)
 
 			}
 			if (error) {
-				OSAddAtomic(1, &nfsstats.srv_errs);
+				OSAddAtomic64(1, &nfsstats.srv_errs);
 				nfsrv_updatecache(nd, FALSE, mrep);
 				if (nd->nd_nam2) {
 					mbuf_freem(nd->nd_nam2);
@@ -1091,7 +1108,7 @@ nfssvc_nfsd(void)
 				}
 				break;
 			}
-			OSAddAtomic(1, &nfsstats.srvrpccnt[nd->nd_procnum]);
+			OSAddAtomic64(1, &nfsstats.srvrpccnt[nd->nd_procnum]);
 			nfsrv_updatecache(nd, TRUE, mrep);
 			/* FALLTHRU */
 
@@ -1282,8 +1299,8 @@ nfsrv_zapsock(struct nfsrv_sock *slp)
 		return;
 
 	/*
-	 * Attempt to deter future upcalls, but leave the
-	 * upcall info in place to avoid a race with the
+	 * Attempt to deter future up-calls, but leave the
+	 * up-call info in place to avoid a race with the
 	 * networking code.
 	 */
 	socket_lock(so, 1);
@@ -1291,6 +1308,11 @@ nfsrv_zapsock(struct nfsrv_sock *slp)
 	socket_unlock(so, 1);
 
 	sock_shutdown(so, SHUT_RDWR);
+
+	/*
+	 * Remove from the up-call queue
+	 */
+	nfsrv_uc_dequeue(slp);
 }
 
 /*
@@ -1315,6 +1337,9 @@ nfsrv_slpfree(struct nfsrv_sock *slp)
 		mbuf_freem(slp->ns_frag);
 	slp->ns_nam = slp->ns_raw = slp->ns_rec = slp->ns_frag = NULL;
 	slp->ns_reccnt = 0;
+
+	if (slp->ns_ua)
+		FREE(slp->ns_ua, M_NFSSVC);
 
 	for (nwp = slp->ns_tq.lh_first; nwp; nwp = nnwp) {
 		nnwp = nwp->nd_tq.le_next;
@@ -1506,6 +1531,8 @@ nfsrv_cleanup(void)
 	lck_mtx_unlock(nfsrv_fmod_mutex);
 #endif
 
+	nfsrv_uc_cleanup();     /* Stop nfs socket up-call threads */
+	
 	nfs_gss_svc_cleanup();	/* Remove any RPCSEC_GSS contexts */
 
 	nfsrv_cleancache();	/* And clear out server cache */

@@ -57,7 +57,6 @@
  */
 #include <i386/asm.h>
 #include <assym.s>
-#include <mach_kdb.h>
 #include <i386/eflags.h>
 #include <i386/trap.h>
 #include <i386/rtclock_asm.h>
@@ -76,8 +75,6 @@
 #define	LO_UNIX_SCALL		EXT(lo_unix_scall32)
 #define	LO_MACH_SCALL		EXT(lo_mach_scall32)
 #define	LO_MDEP_SCALL		EXT(lo_mdep_scall32)
-#define	LO_DIAG_SCALL		EXT(lo_diag_scall32)
-
 
 #define HI_DATA(lo_addr)	( (EXT(lo_addr) - EXT(hi_remap_data)) + HIGH_IDT_BASE )
 #define HI_TEXT(lo_text)	( (EXT(lo_text) - EXT(hi_remap_text)) + HIGH_MEM_BASE )
@@ -155,8 +152,6 @@ Entry(name)				;\
  * Extra-special interrupt code.  Note that no offset may be
  * specified in a task gate descriptor, so name is ignored.
  */
-#define	EXCEP_TASK(n,name)  \
-	IDT_BASE_ENTRY_TG(0,DEBUG_TSS,K_TASK_GATE)
 
 /* Double-fault fatal handler */
 #define DF_FATAL_TASK(n,name)  \
@@ -208,19 +203,11 @@ EXCEP_USR(0x04,t_into)
 EXCEP_USR(0x05,t_bounds)
 EXCEPTION(0x06,t_invop)
 EXCEPTION(0x07,t_nofpu)
-#if	MACH_KDB
-EXCEP_TASK(0x08,db_task_dbl_fault)
-#else
 DF_FATAL_TASK(0x08,df_task_start)
-#endif
 EXCEPTION(0x09,a_fpu_over)
 EXCEPTION(0x0a,a_inv_tss)
 EXCEP_SPC(0x0b,hi_segnp)
-#if	MACH_KDB
-EXCEP_TASK(0x0c,db_task_stk_fault)
-#else
 EXCEP_ERR(0x0c,t_stack_fault)
-#endif
 EXCEP_SPC(0x0d,hi_gen_prot)
 EXCEP_SPC(0x0e,hi_page_fault)
 EXCEPTION(0x0f,t_trap_0f)
@@ -346,8 +333,7 @@ EXCEP_USR(0x7f, t_dtrace_ret)
 EXCEP_SPC_USR(0x80,hi_unix_scall)
 EXCEP_SPC_USR(0x81,hi_mach_scall)
 EXCEP_SPC_USR(0x82,hi_mdep_scall)
-EXCEP_SPC_USR(0x83,hi_diag_scall)
-
+INTERRUPT(0x83)
 INTERRUPT(0x84)
 INTERRUPT(0x85)
 INTERRUPT(0x86)
@@ -604,14 +590,6 @@ Entry(hi_mdep_scall)
         pusha                           /* save the general registers */
 	movl	$(LO_MDEP_SCALL),%ebx
 	jmp	enter_lohandler
-
-	
-Entry(hi_diag_scall)
-	pushl   %eax                    // Save sselector
-        pushl   $0                      // Clear trap number slot
-        pusha                           // save the general registers
-	movl	$(LO_DIAG_SCALL),%ebx	// Get the function down low to transfer to
-	jmp	enter_lohandler			// Leap to it...
 
 	
 /*
@@ -1222,32 +1200,6 @@ Entry(lo_mdep_scall32)
 	 */
 
 
-Entry(lo_diag_scall32)
-	TIME_TRAP_UENTRY
-
-	movl	%gs:CPU_KERNEL_STACK,%edi
-	xchgl	%edi,%esp			/* switch to kernel stack */
-	movl	%gs:CPU_ACTIVE_THREAD,%ecx	/* get current thread     */
-	movl	TH_TASK(%ecx),%ebx		/* point to current task  */
-
-	/* Check for active vtimers in the current task */
-	TASK_VTIMER_CHECK(%ebx, %ecx)
-
-	pushl	%edi			/* push pbc stack for later */
-
-	CCALL1(diagCall, %edi)		// Call diagnostics
-	
-	cli				// Disable interruptions just in case
-	popl	%esp			// Get back the original stack
-	cmpl	$0,%eax			// What kind of return is this?
-	jne	EXT(return_to_user)	// Normal return, do not check asts...
-
-	CCALL5(i386_exception, $EXC_SYSCALL, $0x6000, $0, $1, $0)
-		// pass what would be the diag syscall
-		// error return - cause an exception
-	/* no return */
-	
-
 LEXT(return_to_user)
 	TIME_TRAP_UEXIT
 	jmp	ret_to_user
@@ -1267,69 +1219,3 @@ Entry(df_task_start)
 Entry(mc_task_start)
 	CCALL1(panic_machine_check32, $(T_MACHINE_CHECK))
 	hlt
-
-#if MACH_KDB
-#include <i386/lapic.h>
-#define CX(addr,reg)	addr(,reg,4)
-#if	0
-/*
- * Note that the per-fault entry points are not currently
- * functional.  The only way to make them work would be to
- * set up separate TSS's for each fault type, which doesn't
- * currently seem worthwhile.  (The offset part of a task
- * gate is always ignored.)  So all faults that task switch
- * currently resume at db_task_start.
- */
-/*
- * Double fault (Murphy's point) - error code (0) on stack
- */
-Entry(db_task_dbl_fault)
-	popl	%eax
-	movl	$(T_DOUBLE_FAULT),%ebx
-	jmp	db_task_start
-/*
- * Segment not present - error code on stack
- */
-Entry(db_task_seg_np)
-	popl	%eax
-	movl	$(T_SEGMENT_NOT_PRESENT),%ebx
-	jmp	db_task_start
-/*
- * Stack fault - error code on (current) stack
- */
-Entry(db_task_stk_fault)
-	popl	%eax
-	movl	$(T_STACK_FAULT),%ebx
-	jmp	db_task_start
-/*
- * General protection fault - error code on stack
- */
-Entry(db_task_gen_prot)
-	popl	%eax
-	movl	$(T_GENERAL_PROTECTION),%ebx
-	jmp	db_task_start
-#endif	/* 0 */
-/*
- * The entry point where execution resumes after last-ditch debugger task
- * switch.
- */
-Entry(db_task_start)
-	movl	%esp,%edx
-	subl	$(ISS32_SIZE),%edx
-	movl	%edx,%esp		/* allocate x86_saved_state on stack */
-	movl	%eax,R32_ERR(%esp)
-	movl	%ebx,R32_TRAPNO(%esp)
-	pushl	%edx
-	CPU_NUMBER(%edx)
-	movl	CX(EXT(master_dbtss),%edx),%edx
-	movl	TSS_LINK(%edx),%eax
-	pushl	%eax			/* pass along selector of previous TSS */
-	call	EXT(db_tss_to_frame)
-	popl	%eax			/* get rid of TSS selector */
-	call	EXT(db_trap_from_asm)
-	addl	$0x4,%esp
-	/*
-	 * And now...?
-	 */
-	iret				/* ha, ha, ha... */
-#endif	/* MACH_KDB */

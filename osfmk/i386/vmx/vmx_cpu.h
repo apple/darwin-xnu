@@ -93,4 +93,16 @@ void vmx_get_specs(void);
 void vmx_resume(void);
 void vmx_suspend(void);
 
+/*
+ *	__vmxoff -- Leave VMX Operation
+ *
+ */
+extern int __vmxoff(void);
+
+/*
+ *	__vmxon -- Enter VMX Operation
+ *
+ */
+extern int __vmxon(addr64_t v);
+
 #endif	/* _I386_VMX_CPU_H_ */

@@ -244,9 +244,6 @@ __private_extern__ void ml_copy_phys(addr64_t src64, addr64_t dst64, vm_size_t b
 	src = (void *) ((uintptr_t)src_map->prv_CADDR | ((uint32_t)src64 & INTEL_OFFMASK));
 	dst = (void *) ((uintptr_t)dst_map->prv_CADDR | ((uint32_t)dst64 & INTEL_OFFMASK));
 #elif defined(__x86_64__)
-	src = PHYSMAP_PTOV(src64);
-	dst = PHYSMAP_PTOV(dst64);
-
 	addr64_t debug_pa = 0;
 
 	/* If either destination or source are outside the
@@ -256,10 +253,15 @@ __private_extern__ void ml_copy_phys(addr64_t src64, addr64_t dst64, vm_size_t b
 
 	if (physmap_enclosed(src64) == FALSE) {
 		src = (void *)(debugger_window_kva | (src64 & INTEL_OFFMASK));
+		dst = PHYSMAP_PTOV(dst64);
 		debug_pa = src64 & PG_FRAME;
 	} else if (physmap_enclosed(dst64) == FALSE) {
+		src = PHYSMAP_PTOV(src64);
 		dst = (void *)(debugger_window_kva | (dst64 & INTEL_OFFMASK));
 		debug_pa = dst64 & PG_FRAME;
+	} else {
+		src = PHYSMAP_PTOV(src64);
+		dst = PHYSMAP_PTOV(dst64);
 	}
 	/* DRK: debugger only routine, we don't bother checking for an
 	 * identical mapping.

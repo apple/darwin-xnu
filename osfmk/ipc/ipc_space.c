@@ -69,8 +69,6 @@
  *	Functions to manipulate IPC capability spaces.
  */
 
-#include <mach_kdb.h>
-
 #include <mach/boolean.h>
 #include <mach/kern_return.h>
 #include <mach/port.h>
@@ -79,7 +77,6 @@
 #include <kern/zalloc.h>
 #include <ipc/port.h>
 #include <ipc/ipc_entry.h>
-#include <ipc/ipc_splay.h>
 #include <ipc/ipc_object.h>
 #include <ipc/ipc_hash.h>
 #include <ipc/ipc_table.h>
@@ -91,31 +88,26 @@
 zone_t ipc_space_zone;
 ipc_space_t ipc_space_kernel;
 ipc_space_t ipc_space_reply;
-#if	MACH_KDB
-ipc_space_t default_pager_space;
-#endif	/* MACH_KDB */
 
 /*
  *	Routine:	ipc_space_reference
  *	Routine:	ipc_space_release
  *	Purpose:
- *		Function versions of the IPC space macros.
- *		The "is_" cover macros can be defined to use the
- *		macros or the functions, as desired.
+ *		Function versions of the IPC space inline reference.
  */
 
 void
 ipc_space_reference(
 	ipc_space_t	space)
 {
-	ipc_space_reference_macro(space);
+	is_reference(space);
 }
 
 void
 ipc_space_release(
 	ipc_space_t	space)
 {
-	ipc_space_release_macro(space);
+	is_release(space);
 }
 
 /*
@@ -169,21 +161,14 @@ ipc_space_create(
 	}
 	table[new_size-1].ie_next = 0;
 
-	is_ref_lock_init(space);
-	space->is_references = 2;
-
 	is_lock_init(space);
-	space->is_active = TRUE;
-	space->is_growing = FALSE;
-	space->is_table = table;
+	space->is_bits = 2; /* 2 refs, active, not growing */
 	space->is_table_size = new_size;
+	space->is_table = table;
 	space->is_table_next = initial+1;
-
-	ipc_splay_tree_init(&space->is_tree);
-	space->is_tree_total = 0;
-	space->is_tree_small = 0;
-	space->is_tree_hash = 0;
 	space->is_task = NULL;
+	space->is_low_mod = new_size;
+	space->is_high_mod = 0;
 
 	*spacep = space;
 	return KERN_SUCCESS;
@@ -214,12 +199,8 @@ ipc_space_create_special(
 	if (space == IS_NULL)
 		return KERN_RESOURCE_SHORTAGE;
 
-	is_ref_lock_init(space);
-	space->is_references = 1;
-
 	is_lock_init(space);
-	space->is_active = FALSE;
-
+	space->is_bits = IS_INACTIVE | 1; /* 1 ref, not active, not growing */
 	*spacep = space;
 	return KERN_SUCCESS;
 }
@@ -235,7 +216,6 @@ void
 ipc_space_clean(
 	ipc_space_t space)
 {
-	ipc_tree_entry_t tentry;
 	ipc_entry_t table;
 	ipc_entry_num_t size;
 	mach_port_index_t index;
@@ -245,11 +225,12 @@ ipc_space_clean(
 	 *	we must wait until they finish and figure
 	 *	out the space died.
 	 */
+ retry:
 	is_write_lock(space);
-	while (space->is_growing)
+	while (is_growing(space))
 		is_write_sleep(space);
 
-	if (!space->is_active) {
+	if (!is_active(space)) {
 		is_write_unlock(space);
 		return;
 	}
@@ -257,10 +238,6 @@ ipc_space_clean(
 	/*
 	 *	Now we can futz with it	since we have the write lock.
 	 */
-#if	MACH_KDB
-	if (space == default_pager_space)
-		default_pager_space = IS_NULL;
-#endif	/* MACH_KDB */
 
 	table = space->is_table;
 	size = space->is_table_size;
@@ -273,40 +250,23 @@ ipc_space_clean(
 		if (type != MACH_PORT_TYPE_NONE) {
 			mach_port_name_t name =	MACH_PORT_MAKE(index,
 						IE_BITS_GEN(entry->ie_bits));
-			ipc_right_destroy(space, name, entry);
+			ipc_right_destroy(space, name, entry); /* unlocks space */
+			goto retry;
 		}
 	}
 
-	/*
+        /*
 	 * JMM - Now the table is cleaned out.  We don't bother shrinking the
 	 * size of the table at this point, but we probably should if it is
-	 * really large.  Lets just clean up the splay tree.
+	 * really large.
 	 */
- start_splay:
-	for (tentry = ipc_splay_traverse_start(&space->is_tree);
-	     tentry != ITE_NULL;
-	     tentry = ipc_splay_traverse_next(&space->is_tree, TRUE)) {
-		mach_port_type_t type;
-		mach_port_name_t name = tentry->ite_name;
-
-		type = IE_BITS_TYPE(tentry->ite_bits);
-		/*
-		 * If it is a real right, then destroy it.  This will have the
-		 * side effect of removing it from the splay, so start over.
-		 */
-		if(type != MACH_PORT_TYPE_NONE) {
-			ipc_splay_traverse_finish(&space->is_tree);
-			ipc_right_destroy(space, name, &tentry->ite_entry);
-			goto start_splay;
-		}
-	}
-	ipc_splay_traverse_finish(&space->is_tree);
+	
 	is_write_unlock(space);
 }
 
 
 /*
- *	Routine:	ipc_space_destroy
+ *	Routine:	ipc_space_terminate
  *	Purpose:
  *		Marks the space as dead and cleans up the entries.
  *		Does nothing if the space is already dead.
@@ -315,11 +275,9 @@ ipc_space_clean(
  */
 
 void
-ipc_space_destroy(
+ipc_space_terminate(
 	ipc_space_t	space)
 {
-	boolean_t active;
-	ipc_tree_entry_t tentry;
 	ipc_entry_t table;
 	ipc_entry_num_t size;
 	mach_port_index_t index;
@@ -327,31 +285,26 @@ ipc_space_destroy(
 	assert(space != IS_NULL);
 
 	is_write_lock(space);
-	active = space->is_active;
-	space->is_active = FALSE;
-	is_write_unlock(space);
-
-	if (!active)
+	if (!is_active(space)) {
+		is_write_unlock(space);
 		return;
-
+	}
+	is_mark_inactive(space);
 
 	/*
 	 *	If somebody is trying to grow the table,
 	 *	we must wait until they finish and figure
 	 *	out the space died.
 	 */
-	is_read_lock(space);
-	while (space->is_growing)
-		is_read_sleep(space);
+	while (is_growing(space))
+		is_write_sleep(space);
 
-	is_read_unlock(space);
+	is_write_unlock(space);
+
+
 	/*
 	 *	Now we can futz with it	unlocked.
 	 */
-#if	MACH_KDB
-	if (space == default_pager_space)
-		default_pager_space = IS_NULL;
-#endif	/* MACH_KDB */
 
 	table = space->is_table;
 	size = space->is_table_size;
@@ -366,29 +319,12 @@ ipc_space_destroy(
 
 			name = MACH_PORT_MAKE(index,
 					      IE_BITS_GEN(entry->ie_bits));
-			ipc_right_clean(space, name, entry);
+			ipc_right_terminate(space, name, entry);
 		}
 	}
 
 	it_entries_free(space->is_table_next-1, table);
 	space->is_table_size = 0;
-
-	for (tentry = ipc_splay_traverse_start(&space->is_tree);
-	     tentry != ITE_NULL;
-	     tentry = ipc_splay_traverse_next(&space->is_tree, TRUE)) {
-		mach_port_type_t type;
-		mach_port_name_t name = tentry->ite_name;
-
-		type = IE_BITS_TYPE(tentry->ite_bits);
-		assert(type != MACH_PORT_TYPE_NONE);
-
-		ipc_right_clean(space, name, &tentry->ite_entry);
-
-		if(type == MACH_PORT_TYPE_SEND)
-			ipc_hash_global_delete(space, tentry->ite_object,
-					       name, tentry);
-	}
-	ipc_splay_traverse_finish(&space->is_tree);
 
 	/*
 	 *	Because the space is now dead,

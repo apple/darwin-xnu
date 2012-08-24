@@ -150,7 +150,7 @@ WKdm_compress (WK_word* src_buf,
       */
      dict_location =
        (WK_word *)
-       (((char*) dictionary) + HASH_TO_DICT_BYTE_OFFSET(input_word));
+       ((void*) (((char*) dictionary) + HASH_TO_DICT_BYTE_OFFSET(input_word)));
 
      dict_word = *dict_location;
 
@@ -232,7 +232,7 @@ WKdm_compress (WK_word* src_buf,
 #endif
 
   boundary_tmp = WK_pack_2bits(tempTagsArray,
-		               (WK_word *) next_tag,
+		               (WK_word *) ((void *) next_tag),
 			       dest_buf + HEADER_SIZE_IN_WORDS);
 
 #ifdef WK_DEBUG  

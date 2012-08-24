@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2003-2011 Apple Inc. All rights reserved.
+ * Copyright (c) 2003-2012 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -120,6 +120,7 @@
 #include <net/route.h>
 #include <net/kpi_protocol.h>
 #include <net/ntstat.h>
+#include <net/init.h>
 
 #include <netinet/in.h>
 #include <netinet/in_systm.h>
@@ -147,13 +148,17 @@ extern int ipsec_bypass;
 
 #include <netinet6/ip6_fw.h>
 
+#if DUMMYNET
+#include <netinet/ip_fw.h>
+#include <netinet/ip_dummynet.h>
+#endif /* DUMMYNET */
+
 #include <netinet/kpi_ipfilter_var.h>
 
 #include <netinet6/ip6protosw.h>
 
 /* we need it for NLOOP. */
 #include "loop.h"
-#include "faith.h"
 
 #include <net/net_osdep.h>
 
@@ -181,13 +186,10 @@ int ip6_sourcecheck_interval;		/* XXX */
 const int int6intrq_present = 1;
 
 int ip6_ours_check_algorithm;
-int in6_init2done = 0;
-int in6_init_done = 0;
 
-#define _CASSERT(x)	\
-	switch (0) { case 0: case (x): ; }
 #define IN6_IFSTAT_REQUIRE_ALIGNED_64(f)	\
 	_CASSERT(!(offsetof(struct in6_ifstat, f) % sizeof (uint64_t)))
+
 #define ICMP6_IFSTAT_REQUIRE_ALIGNED_64(f)	\
 	_CASSERT(!(offsetof(struct icmp6_ifstat, f) % sizeof (uint64_t)))
 
@@ -203,12 +205,18 @@ struct ip6stat ip6stat;
 #ifdef __APPLE__
 struct ifqueue ip6intrq;
 decl_lck_mtx_data(, ip6_init_mutex);
-lck_mtx_t 		*dad6_mutex;
-lck_mtx_t 		*nd6_mutex;
-lck_mtx_t		*prefix6_mutex;
-lck_mtx_t		*scope6_mutex;
+decl_lck_mtx_data(, proxy6_lock);
+decl_lck_mtx_data(, dad6_mutex_data);
+decl_lck_mtx_data(, nd6_mutex_data);
+decl_lck_mtx_data(, prefix6_mutex_data);
+decl_lck_mtx_data(, scope6_mutex_data);
+lck_mtx_t		*dad6_mutex = &dad6_mutex_data;
+lck_mtx_t		*nd6_mutex = &nd6_mutex_data;
+lck_mtx_t		*prefix6_mutex = &prefix6_mutex_data;
+lck_mtx_t		*scope6_mutex = &scope6_mutex_data;
 #ifdef ENABLE_ADDRSEL
-lck_mtx_t		*addrsel_mutex;
+decl_lck_mtx_data(, addrsel_mutex_data);
+lck_mtx_t		*addrsel_mutex = &addrsel_mutex_data;
 #endif
 decl_lck_rw_data(, in6_ifs_rwlock);
 decl_lck_rw_data(, icmp6_ifs_rwlock);
@@ -220,7 +228,7 @@ extern lck_mtx_t	*inet6_domain_mutex;
 extern int loopattach_done;
 extern void addrsel_policy_init(void);
 
-static void ip6_init2(void *);
+static void ip6_init_delayed(void);
 static struct ip6aux *ip6_setdstifaddr(struct mbuf *, struct in6_ifaddr *);
 
 static int ip6_hopopts_input(u_int32_t *, u_int32_t *, struct mbuf **, int *);
@@ -230,17 +238,55 @@ static struct mbuf *ip6_pullexthdr(struct mbuf *, size_t, int);
 
 #ifdef __APPLE__
 void gifattach(void);
-void faithattach(void);
 void stfattach(void);
 #endif
-
-extern lck_mtx_t *domain_proto_mtx;
 
 SYSCTL_DECL(_net_inet6_ip6);
 
 int	ip6_doscopedroute = 1;
 SYSCTL_INT(_net_inet6_ip6, OID_AUTO, scopedroute, CTLFLAG_RD | CTLFLAG_LOCKED,
      &ip6_doscopedroute, 0, "Enable IPv6 scoped routing");
+
+int	ip6_restrictrecvif = 1;
+SYSCTL_INT(_net_inet6_ip6, OID_AUTO, restrictrecvif,
+    CTLFLAG_RW | CTLFLAG_LOCKED, &ip6_restrictrecvif, 0,
+    "Enable inbound interface restrictions");
+
+/*
+ * On platforms which require strict alignment (currently for anything but
+ * i386 or x86_64), check if the IP header pointer is 32-bit aligned; if not,
+ * copy the contents of the mbuf chain into a new chain, and free the original
+ * one.  Create some head room in the first mbuf of the new chain, in case
+ * it's needed later on.
+ *
+ * RFC 2460 says that IPv6 headers are 64-bit aligned, but network interfaces
+ * mostly align to 32-bit boundaries.  Care should be taken never to use 64-bit
+ * load/store operations on the fields in IPv6 headers.
+ */
+#if defined(__i386__) || defined(__x86_64__)
+#define	IP6_HDR_ALIGNMENT_FIXUP(_m, _ifp, _action) do { } while (0)
+#else /* !__i386__ && !__x86_64__ */
+#define	IP6_HDR_ALIGNMENT_FIXUP(_m, _ifp, _action) do {			\
+	if (!IP6_HDR_ALIGNED_P(mtod(_m, caddr_t))) {			\
+		struct mbuf *_n;					\
+		struct ifnet *__ifp = (_ifp);				\
+		atomic_add_64(&(__ifp)->if_alignerrs, 1);		\
+		if (((_m)->m_flags & M_PKTHDR) &&			\
+		    (_m)->m_pkthdr.header != NULL)			\
+			(_m)->m_pkthdr.header = NULL;			\
+		_n = m_defrag_offset(_m, max_linkhdr, M_NOWAIT);	\
+		if (_n == NULL) {					\
+			ip6stat.ip6s_toosmall++;			\
+			m_freem(_m);					\
+			(_m) = NULL;					\
+			_action						\
+		} else {						\
+			VERIFY(_n != (_m));				\
+			(_m) = _n;					\
+		}							\
+	}								\
+} while (0)
+#endif /* !__i386__ && !__x86_64__ */
 
 static void
 ip6_proto_input(
@@ -286,30 +332,20 @@ ip6_init()
 	ip6_mutex_grp = lck_grp_alloc_init("ip6", ip6_mutex_grp_attr);
 	ip6_mutex_attr = lck_attr_alloc_init();
 
-	if ((dad6_mutex = lck_mtx_alloc_init(ip6_mutex_grp, ip6_mutex_attr)) == NULL) {
-		panic("ip6_init: can't alloc dad6_mutex\n");
-	}
-	if ((nd6_mutex = lck_mtx_alloc_init(ip6_mutex_grp, ip6_mutex_attr)) == NULL) {
-		panic("ip6_init: can't alloc nd6_mutex\n");
-	}
-
-	if ((prefix6_mutex = lck_mtx_alloc_init(ip6_mutex_grp, ip6_mutex_attr)) == NULL) {
-		panic("ip6_init: can't alloc prefix6_mutex\n");
-	}
-
-	if ((scope6_mutex = lck_mtx_alloc_init(ip6_mutex_grp, ip6_mutex_attr)) == NULL) {
-		panic("ip6_init: can't alloc scope6_mutex\n");
-	}
+	lck_mtx_init(dad6_mutex, ip6_mutex_grp, ip6_mutex_attr);
+	lck_mtx_init(nd6_mutex, ip6_mutex_grp, ip6_mutex_attr);
+	lck_mtx_init(prefix6_mutex, ip6_mutex_grp, ip6_mutex_attr);
+	lck_mtx_init(scope6_mutex, ip6_mutex_grp, ip6_mutex_attr);
 
 #ifdef ENABLE_ADDRSEL
-	if ((addrsel_mutex = lck_mtx_alloc_init(ip6_mutex_grp, ip6_mutex_attr)) == NULL) {
-		panic("ip6_init: can't alloc addrsel_mutex\n");
-	}
+	lck_mtx_init(addrsel_mutex, ip6_mutex_grp, ip6_mutex_attr);
 #endif
+
+	lck_mtx_init(&proxy6_lock, ip6_mutex_grp, ip6_mutex_attr);
+	lck_mtx_init(&ip6_init_mutex, ip6_mutex_grp, ip6_mutex_attr);
 
 	lck_rw_init(&in6_ifs_rwlock, ip6_mutex_grp, ip6_mutex_attr);
 	lck_rw_init(&icmp6_ifs_rwlock, ip6_mutex_grp, ip6_mutex_attr);
-	lck_mtx_init(&ip6_init_mutex, ip6_mutex_grp, ip6_mutex_attr);
 
 	inet6domain.dom_flags = DOM_REENTRANT;	
 
@@ -393,25 +429,22 @@ ip6_init()
 	ip6_flow_seq = random() ^ tv.tv_usec;
 	microtime(&tv);
 	ip6_desync_factor = (random() ^ tv.tv_usec) % MAX_TEMP_DESYNC_FACTOR;
-	timeout(ip6_init2, (caddr_t)0, 1 * hz);
 
-	lck_mtx_unlock(domain_proto_mtx);	
+	/*
+	 * P2P interfaces often route the local address to the loopback
+	 * interface. At this point, lo0 hasn't been initialized yet, which
+	 * means that we need to delay the IPv6 configuration of lo0.
+	 */
+	net_init_add(ip6_init_delayed);
+
+	domain_proto_mtx_unlock(TRUE);
 	proto_register_input(PF_INET6, ip6_proto_input, NULL, 0);
-	lck_mtx_lock(domain_proto_mtx);	
+	domain_proto_mtx_lock();
 }
 
 static void
-ip6_init2(
-	__unused void *dummy)
+ip6_init_delayed(void)
 {
-	/*
-	 * to route local address of p2p link to loopback,
-	 * assign loopback address first.
-	 */
-	if (loopattach_done == 0) {
-		timeout(ip6_init2, (caddr_t)0, 1 * hz);
-		return;
-	}
 	(void) in6_ifattach(lo_ifp, NULL, NULL);
 
 #ifdef __APPLE__
@@ -426,29 +459,10 @@ ip6_init2(
 #if NGIF
 	gifattach();
 #endif
-#if NFAITH
-	faithattach();
-#endif
 #if NSTF
 	stfattach();
 #endif
-#endif
-	in6_init2done = 1;
-
-	lck_mtx_lock(&ip6_init_mutex);
-	in6_init_done = 1;
-	wakeup(&in6_init_done);
-	lck_mtx_unlock(&ip6_init_mutex);
-}
-
-void
-ip6_fin()
-{
-	lck_mtx_lock(&ip6_init_mutex);
-	while (in6_init_done == 0) {
-		(void) msleep(&in6_init_done, &ip6_init_mutex, 0, "ip6_fin()", NULL);
-	}
-	lck_mtx_unlock(&ip6_init_mutex);
+#endif /* __APPLE__ */
 }
 
 void
@@ -465,6 +479,12 @@ ip6_input(struct mbuf *m)
 	struct in6_ifaddr *ia6 = NULL;
 	struct route_in6 ip6_forward_rt;
 	struct sockaddr_in6 *dst6;
+#if DUMMYNET
+	struct m_tag	*tag;
+	struct ip_fw_args args;
+		
+	bzero(&args, sizeof(struct ip_fw_args));
+#endif /* DUMMYNET */
 
 	bzero(&ip6_forward_rt, sizeof(ip6_forward_rt));
 
@@ -472,6 +492,28 @@ ip6_input(struct mbuf *m)
 	 * processing
 	 */
 	MBUF_INPUT_CHECK(m, m->m_pkthdr.rcvif);
+
+	/* Perform IP header alignment fixup, if needed */
+	IP6_HDR_ALIGNMENT_FIXUP(m, m->m_pkthdr.rcvif, return;);
+
+#if DUMMYNET
+	if ((tag = m_tag_locate(m, KERNEL_MODULE_TAG_ID,
+	    KERNEL_TAG_TYPE_DUMMYNET, NULL)) != NULL) {
+		struct dn_pkt_tag	*dn_tag;
+
+		dn_tag = (struct dn_pkt_tag *)(tag+1);
+		
+		args.fwa_pf_rule = dn_tag->dn_pf_rule;
+		
+		m_tag_delete(m, tag);
+	}
+	
+	if (args.fwa_pf_rule) {
+		ip6 = mtod(m, struct ip6_hdr *); /* In case PF got disabled */
+
+		goto check_with_pf;
+	}
+#endif /* DUMMYNET */
 
 	/*
 	 * No need to proccess packet twice if we've 
@@ -485,7 +527,7 @@ ip6_input(struct mbuf *m)
 		goto injectit;
 	} else
 		seen = 1;
-	
+
 #if IPSEC
 	/*
 	 * should the inner packet be considered authentic?
@@ -524,7 +566,11 @@ ip6_input(struct mbuf *m)
 #undef M2MMAX
 	}
 
-	/* drop the packet if IPv6 operation is disabled on the IF */
+	/*
+	 * Drop the packet if IPv6 operation is disabled on the IF;
+	 * accessing the flag is done without acquiring nd_ifinfo lock
+	 * for performance reasons.
+	 */
 	lck_rw_lock_shared(nd_if_rwlock);
 	if (m->m_pkthdr.rcvif->if_index < nd_ifinfo_indexlim &&
 	    (nd_ifinfo[m->m_pkthdr.rcvif->if_index].flags & ND6_IFF_IFDISABLED)) {
@@ -684,12 +730,19 @@ ip6_input(struct mbuf *m)
 		}
 	}
 
+#if DUMMYNET
+check_with_pf:
+#endif
 #if PF
 	/* Invoke inbound packet filter */
 	if (PF_IS_ENABLED) {
 		int error;
-		error = pf_af_hook(m->m_pkthdr.rcvif, NULL, &m, AF_INET6, TRUE);
-		if (error != 0) {
+#if DUMMYNET
+		error = pf_af_hook(m->m_pkthdr.rcvif, NULL, &m, AF_INET6, TRUE, &args);
+#else
+		error = pf_af_hook(m->m_pkthdr.rcvif, NULL, &m, AF_INET6, TRUE, NULL);
+#endif
+		if (error != 0 || m == NULL) {
 			if (m != NULL) {
 				panic("%s: unexpected packet %p\n", __func__, m);
 				/* NOTREACHED */
@@ -740,12 +793,11 @@ ip6_input(struct mbuf *m)
 		if (in6m != NULL) {
 			IN6M_REMREF(in6m);
 			ours = 1;
-		}
-		else 
+		} else if (!nd6_prproxy
 #if MROUTING
-		if (!ip6_mrouter)
+		    && !ip6_mrouter
 #endif
-		{
+		    ) {
 			ip6stat.ip6s_notmember++;
 			ip6stat.ip6s_cantforward++;
 			in6_ifstat_inc(ifp, ifs6_in_discard);
@@ -841,21 +893,6 @@ ip6_input(struct mbuf *m)
 		goto bad;
 	}
 
-	/*
-	 * FAITH (Firewall Aided Internet Translator)
-	 */
-#if defined(NFAITH) && 0 < NFAITH
-	if (ip6_keepfaith) {
-		if (ip6_forward_rt.ro_rt && ip6_forward_rt.ro_rt->rt_ifp
-		 && ip6_forward_rt.ro_rt->rt_ifp->if_type == IFT_FAITH) {
-			/* XXX do we need more sanity checks? */
-			ours = 1;
-			deliverifp = ip6_forward_rt.ro_rt->rt_ifp; /* faith */
-			RT_UNLOCK(ip6_forward_rt.ro_rt);
-			goto hbhcheck;
-		}
-	}
-#endif
 	if (ip6_forward_rt.ro_rt != NULL)
 		RT_UNLOCK(ip6_forward_rt.ro_rt);
 
@@ -873,8 +910,7 @@ ip6_input(struct mbuf *m)
 	/*
 	 * record address information into m_aux, if we don't have one yet.
 	 * note that we are unable to record it, if the address is not listed
-	 * as our interface address (e.g. multicast addresses, addresses
-	 * within FAITH prefixes and such).
+	 * as our interface address (e.g. multicast addresses, etc.)
 	 */
 	if (deliverifp && (ia6 = ip6_getdstifaddr(m)) == NULL) {
 		ia6 = in6_ifawithifp(deliverifp, &ip6->ip6_dst);
@@ -1007,12 +1043,40 @@ ip6_input(struct mbuf *m)
 			goto bad;
 		}
 #endif
+		if (!ours && nd6_prproxy) {
+			/*
+			 * If this isn't for us, this might be a Neighbor
+			 * Solicitation (dst is solicited-node multicast)
+			 * against an address in one of the proxied prefixes;
+			 * if so, claim the packet and let icmp6_input()
+			 * handle the rest.
+			 */
+			ours = nd6_prproxy_isours(m, ip6, NULL, IFSCOPE_NONE);
+			VERIFY(!ours ||
+			    (m->m_pkthdr.aux_flags & MAUXF_PROXY_DST));
+		}
 		if (!ours)
 			goto bad;
 	} else if (!ours) {
-		ip6_forward(m, &ip6_forward_rt, 0);
-		goto done;
-	}	
+		/*
+		 * The unicast forwarding function might return the packet
+		 * if we are proxying prefix(es), and if the packet is an
+		 * ICMPv6 packet that has failed the zone checks, but is
+		 * targetted towards a proxied address (this is optimized by
+		 * way of RTF_PROXY test.)  If so, claim the packet as ours
+		 * and let icmp6_input() handle the rest.  The packet's hop
+		 * limit value is kept intact (it's not decremented).  This
+		 * is for supporting Neighbor Unreachability Detection between
+		 * proxied nodes on different links (src is link-local, dst
+		 * is target address.)
+		 */
+		if ((m = ip6_forward(m, &ip6_forward_rt, 0)) == NULL)
+			goto done;
+		VERIFY(ip6_forward_rt.ro_rt != NULL);
+		VERIFY(m->m_pkthdr.aux_flags & MAUXF_PROXY_DST);
+		deliverifp = ip6_forward_rt.ro_rt->rt_ifp;
+		ours = 1;
+	}
 
 	ip6 = mtod(m, struct ip6_hdr *);
 
@@ -1041,6 +1105,13 @@ ip6_input(struct mbuf *m)
 injectit:
 	nest = 0;
 
+	/*
+	 * Perform IP header alignment fixup again, if needed.  Note that
+	 * we do it once for the outermost protocol, and we assume each
+	 * protocol handler wouldn't mess with the alignment afterwards.
+	 */
+	IP6_HDR_ALIGNMENT_FIXUP(m, m->m_pkthdr.rcvif, return;);
+
 	while (nxt != IPPROTO_DONE) {
 		struct ipfilter *filter;
 		int (*pr_input)(struct mbuf **, int *, int);
@@ -1067,7 +1138,8 @@ injectit:
 		 * note that we do not visit this with protocols with pcb layer
 		 * code - like udp/tcp/raw ip.
 		 */
-		if ((ipsec_bypass == 0) && (ip6_protox[nxt]->pr_flags & PR_LASTHDR) != 0) {
+		if ((ipsec_bypass == 0) &&
+		    (ip6_protox[nxt]->pr_flags & PR_LASTHDR) != 0) {
 			if (ipsec6_in_reject(m, NULL)) {
 				IPSEC_STAT_INCREMENT(ipsec6stat.in_polvio);
 				goto bad;
@@ -1082,13 +1154,15 @@ injectit:
 			ipf_ref();
 			TAILQ_FOREACH(filter, &ipv6_filters, ipf_link) {
 				if (seen == 0) {
-					if ((struct ipfilter *)inject_ipfref == filter)
+					if ((struct ipfilter *)inject_ipfref ==
+					    filter)
 						seen = 1;
 				} else if (filter->ipf_filter.ipf_input) {
 					errno_t result;
-					
+
 					result = filter->ipf_filter.ipf_input(
-						filter->ipf_filter.cookie, (mbuf_t*)&m, off, nxt);
+						filter->ipf_filter.cookie,
+						(mbuf_t *)&m, off, nxt);
 					if (result == EJUSTRETURN) {
 						ipf_unref();
 						goto done;
@@ -1431,12 +1505,12 @@ ip6_savecontrol_v4(struct inpcb *inp, struct mbuf *m, struct mbuf **mp,
 				return NULL;
         }
 	if ((inp->inp_socket->so_flags & SOF_RECV_TRAFFIC_CLASS) != 0) {
-		int tc = m->m_pkthdr.prio;
-		
+		int tc = m_get_traffic_class(m);
+
 		mp = sbcreatecontrol_mbuf((caddr_t) &tc, sizeof(tc),
 			SO_TRAFFIC_CLASS, SOL_SOCKET, mp);
-		if (*mp == NULL) 
-			return NULL;
+		if (*mp == NULL)
+			return (NULL);
 	}
 
 	if ((ip6->ip6_vfc & IPV6_VERSION_MASK) != IPV6_VERSION) {
@@ -1716,7 +1790,7 @@ ip6_notify_pmtu(struct inpcb *in6p, struct sockaddr_in6 *dst, u_int32_t *mtu)
 	bzero(&mtuctl, sizeof(mtuctl));	/* zero-clear for safety */
 	mtuctl.ip6m_mtu = *mtu;
 	mtuctl.ip6m_addr = *dst;
-	if (sa6_recoverscope(&mtuctl.ip6m_addr))
+	if (sa6_recoverscope(&mtuctl.ip6m_addr, TRUE))
 		return;
 
 	if ((m_mtu = sbcreatecontrol((caddr_t)&mtuctl, sizeof(mtuctl),
@@ -1950,13 +2024,13 @@ ip6_lasthdr(m, off, proto, nxtp)
 }
 
 struct ip6aux *
-ip6_addaux(
-	struct mbuf *m)
+ip6_addaux(struct mbuf *m)
 {
 	struct m_tag		*tag;
-	
+
 	/* Check if one is already allocated */
-	tag = m_tag_locate(m, KERNEL_MODULE_TAG_ID, KERNEL_TAG_TYPE_INET6, NULL);
+	tag = m_tag_locate(m, KERNEL_MODULE_TAG_ID,
+	    KERNEL_TAG_TYPE_INET6, NULL);
 	if (tag == NULL) {
 		/* Allocate a tag */
 		tag = m_tag_create(KERNEL_MODULE_TAG_ID, KERNEL_TAG_TYPE_INET6,
@@ -1967,28 +2041,28 @@ ip6_addaux(
 			m_tag_prepend(m, tag);
 		}
 	}
-	
-	return tag ? (struct ip6aux*)(tag + 1) : NULL;
+
+	return (tag ? (struct ip6aux *)(tag + 1) : NULL);
 }
 
 struct ip6aux *
-ip6_findaux(
-	struct mbuf *m)
+ip6_findaux(struct mbuf *m)
 {
 	struct m_tag	*tag;
-	
-	tag = m_tag_locate(m, KERNEL_MODULE_TAG_ID, KERNEL_TAG_TYPE_INET6, NULL);
-	
-	return tag ? (struct ip6aux*)(tag + 1) : NULL;
+
+	tag = m_tag_locate(m, KERNEL_MODULE_TAG_ID,
+	    KERNEL_TAG_TYPE_INET6, NULL);
+
+	return (tag ? (struct ip6aux *)(tag + 1) : NULL);
 }
 
 void
-ip6_delaux(
-	struct mbuf *m)
+ip6_delaux(struct mbuf *m)
 {
 	struct m_tag	*tag;
 
-	tag = m_tag_locate(m, KERNEL_MODULE_TAG_ID, KERNEL_TAG_TYPE_INET6, NULL);
+	tag = m_tag_locate(m, KERNEL_MODULE_TAG_ID,
+	    KERNEL_TAG_TYPE_INET6, NULL);
 	if (tag) {
 		m_tag_delete(m, tag);
 	}

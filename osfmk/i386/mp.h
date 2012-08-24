@@ -114,9 +114,6 @@ extern	void	mp_kdp_enter(void);
 extern	void	mp_kdp_exit(void);
 
 extern	boolean_t	mp_recent_debugger_activity(void);
-#if MACH_KDB
-extern void mp_kdb_exit(void);
-#endif
 
 /*
  * All cpu rendezvous:

@@ -121,6 +121,7 @@ typedef struct nstat_tcp_descriptor
 	u_int32_t	txunacked;
 	u_int32_t	txwindow;
 	u_int32_t	txcwindow;
+	u_int32_t	traffic_class;
 	
 	u_int64_t	upid;
 	u_int32_t	pid;
@@ -147,6 +148,7 @@ typedef struct nstat_udp_descriptor
 	
 	u_int32_t	rcvbufsize;
 	u_int32_t	rcvbufused;
+	u_int32_t	traffic_class;
 	
 	u_int64_t	upid;
 	u_int32_t	pid;
@@ -191,7 +193,7 @@ typedef struct nstat_route_descriptor
 
 enum
 {
-	// generice respnse messages
+	// generic response messages
 	NSTAT_MSG_TYPE_SUCCESS			= 0
 	,NSTAT_MSG_TYPE_ERROR			= 1
 	
@@ -315,6 +317,8 @@ enum
 // indicates whether or not collection of statistics is enabled
 extern int	nstat_collect;
 
+void nstat_init(void);
+
 // Route collection routines
 void nstat_route_connect_attempt(struct rtentry *rte);
 void nstat_route_connect_success(struct rtentry *rte);
@@ -328,6 +332,7 @@ struct inpcb;
 void nstat_tcp_new_pcb(struct inpcb *inp);
 void nstat_udp_new_pcb(struct inpcb *inp);
 void nstat_route_new_entry(struct rtentry *rt);
+void nstat_pcb_detach(struct inpcb *inp);
 
 // locked_add_64 uses atomic operations on 32bit so the 64bit
 // value can be properly read. The values are only ever incremented

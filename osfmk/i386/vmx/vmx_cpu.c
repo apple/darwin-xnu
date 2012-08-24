@@ -211,7 +211,14 @@ vmx_on(void *arg __unused)
 	assert(vmx_is_cr0_valid(&cpu->specs));
 	assert(vmx_is_cr4_valid(&cpu->specs));
 	
-	if ((result = __vmxon(&vmxon_region_paddr)) != VMX_SUCCEED) {
+#if defined(__i386__)
+	if (!cpu_mode_is64bit())
+		result = VMX_FAIL_INVALID; /* Not supported in legacy mode */
+	else
+#endif
+	result = __vmxon(vmxon_region_paddr);
+
+	if (result != VMX_SUCCEED) {
 		panic("vmx_on: unexpected return %d from __vmxon()", result);
 	}
 }
@@ -226,7 +233,14 @@ vmx_off(void *arg __unused)
 	int result;
 	
 	/* Tell the CPU to release the VMXON region */
-	if ((result = __vmxoff()) != VMX_SUCCEED) {
+#if defined(__i386__)
+	if (!cpu_mode_is64bit())
+		result = VMX_FAIL_INVALID; /* Not supported in legacy mode */
+	else
+#endif
+	result = __vmxoff();
+
+	if (result != VMX_SUCCEED) {
 		panic("vmx_off: unexpected return %d from __vmxoff()", result);
 	}
 }

@@ -11,7 +11,6 @@ INSTINC_SUBDIRS =
 
 EXPORT_FILES = \
 	fat.h		\
-	kld.h		\
 	loader.h	\
 	nlist.h		\
 	reloc.h

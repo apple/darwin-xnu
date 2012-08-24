@@ -30,7 +30,6 @@
  */
 
 #include <platforms.h>
-#include <mach_kdb.h>
 
 #include <mach/mach_types.h>
 

@@ -78,6 +78,7 @@
 #include <mach/machine/vm_types.h>
 
 #include <sys/cdefs.h>
+#include <sys/appleapiopts.h>
 
 /*
  *  The timeout mechanism uses mach_msg_timeout_t values,
@@ -427,9 +428,8 @@ typedef struct
   mach_port_seqno_t		msgh_seqno;
   security_token_t		msgh_sender;
   audit_token_t			msgh_audit;
-  mach_vm_address_t		msgh_context;
+  mach_port_context_t		msgh_context;
 } mach_msg_context_trailer_t;
-
 
 typedef struct
 {
@@ -448,7 +448,7 @@ typedef struct
   mach_port_seqno_t             msgh_seqno;
   security_token_t              msgh_sender;
   audit_token_t                 msgh_audit;
-  mach_vm_address_t             msgh_context;
+  mach_port_context_t		msgh_context;
   int				msgh_ad;
   msg_labels_t                  msgh_labels;
 } mach_msg_mac_trailer_t;
@@ -515,9 +515,19 @@ typedef union
 /*
  *  There is no fixed upper bound to the size of Mach messages.
  */
-
 #define	MACH_MSG_SIZE_MAX	((mach_msg_size_t) ~0)
 
+#if defined(__APPLE_API_PRIVATE)
+/*
+ *  But architectural limits of a given implementation, or
+ *  temporal conditions may cause unpredictable send failures
+ *  for messages larger than MACH_MSG_SIZE_RELIABLE.
+ *
+ *  In either case, waiting for memory is [currently] outside
+ *  the scope of send timeout values provided to IPC.
+ */
+#define	MACH_MSG_SIZE_RELIABLE	((mach_msg_size_t) 256 * 1024)
+#endif
 /*
  *  Compatibility definitions, for code written
  *  when there was a msgh_kind instead of msgh_seqno.
@@ -621,7 +631,8 @@ typedef integer_t mach_msg_option_t;
  * It also makes things work properly if MACH_RCV_TRAILER_LABELS is ORed 
  * with one of the other options.
  */
-#define REQUESTED_TRAILER_SIZE(y) 				\
+
+#define REQUESTED_TRAILER_SIZE_NATIVE(y)			\
 	((mach_msg_trailer_size_t)				\
 	 ((GET_RCV_ELEMENTS(y) == MACH_RCV_TRAILER_NULL) ?	\
 	  sizeof(mach_msg_trailer_t) :				\
@@ -636,6 +647,15 @@ typedef integer_t mach_msg_option_t;
 	     ((GET_RCV_ELEMENTS(y) == MACH_RCV_TRAILER_AV) ?	\
 	      sizeof(mach_msg_mac_trailer_t) :      		\
 	     sizeof(mach_msg_max_trailer_t))))))))
+
+
+#ifdef XNU_KERNEL_PRIVATE
+
+#define REQUESTED_TRAILER_SIZE(is64, y) REQUESTED_TRAILER_SIZE_NATIVE(y)
+
+#else /* XNU_KERNEL_PRIVATE */
+#define REQUESTED_TRAILER_SIZE(y) REQUESTED_TRAILER_SIZE_NATIVE(y)
+#endif /* XNU_KERNEL_PRIVATE */
 
 /*
  *  Much code assumes that mach_msg_return_t == kern_return_t.

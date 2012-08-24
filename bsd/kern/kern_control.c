@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1999-2008 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 1999-2011 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -654,34 +654,38 @@ ctl_ioctl(__unused struct socket *so, u_long cmd, caddr_t data,
 		/* get the number of controllers */
 		case CTLIOCGCOUNT: {
 			struct kctl	*kctl;
-			int n = 0;
+			u_int32_t n = 0;
 
 			lck_mtx_lock(ctl_mtx);
 			TAILQ_FOREACH(kctl, &ctl_head, next)
 				n++;
 			lck_mtx_unlock(ctl_mtx);
-
-			*(u_int32_t *)data = n;
+			
+			bcopy(&n, data, sizeof (n));
 			error = 0;
 			break;
 		}
 		case CTLIOCGINFO: {
-			struct ctl_info *ctl_info = (struct ctl_info *)data;
+			struct ctl_info ctl_info;
 			struct kctl 	*kctl = 0;
-			size_t name_len = strlen(ctl_info->ctl_name);
-			
+			size_t name_len;
+
+			bcopy(data, &ctl_info, sizeof (ctl_info));
+			name_len = strnlen(ctl_info.ctl_name, MAX_KCTL_NAME);
+
 			if (name_len == 0 || name_len + 1 > MAX_KCTL_NAME) {
 				error = EINVAL;
 				break;
 			}
 			lck_mtx_lock(ctl_mtx);
-			kctl = ctl_find_by_name(ctl_info->ctl_name);
+			kctl = ctl_find_by_name(ctl_info.ctl_name);
 			lck_mtx_unlock(ctl_mtx);
 			if (kctl == 0) {
 				error = ENOENT;
 				break;
 			}
-			ctl_info->ctl_id = kctl->id;
+			ctl_info.ctl_id = kctl->id;
+			bcopy(&ctl_info, data, sizeof (ctl_info));
 			error = 0;
 			break;
 		}

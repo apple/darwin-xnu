@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2010 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -260,8 +260,12 @@ typedef exception_handler_array_t exception_port_arrary_t;
 #define CLOCK_NULL		((clock_t) 0)
 #define UND_SERVER_NULL		((UNDServerRef) 0)
 
-typedef natural_t 		ledger_item_t;
-#define LEDGER_ITEM_INFINITY ((ledger_item_t) (~0))
+/* DEPRECATED */
+typedef natural_t	ledger_item_t;
+#define LEDGER_ITEM_INFINITY	((ledger_item_t) (~0))
+
+typedef int64_t 		ledger_amount_t;
+#define LEDGER_LIMIT_INFINITY ((ledger_amount_t)(((uint64_t)1 << 63) - 1))
 
 typedef mach_vm_offset_t	*emulation_vector_t;
 typedef char			*user_subsystem_t;

@@ -41,7 +41,6 @@
  *	Contiguous physical memory allocator.
  */
 
-#include <mach_kdb.h>
 #include <mach_counters.h>
 
 #include <mach/mach_types.h>
@@ -55,15 +54,5 @@
  */
 extern kern_return_t
 cpm_allocate(vm_size_t size, vm_page_t *list, ppnum_t max_pnum, ppnum_t pnum_mask, boolean_t wire, int flags);
-
-/*
- *	CPM-specific event counters.
- */
-#define	VM_CPM_COUNTERS		(MACH_KDB && MACH_COUNTERS && VM_CPM)
-#if	VM_CPM_COUNTERS
-#define	cpm_counter(foo)	foo
-#else	/* VM_CPM_COUNTERS */
-#define	cpm_counter(foo)
-#endif	/* VM_CPM_COUNTERS */
 
 #endif	/* _VM_CPM_H_ */

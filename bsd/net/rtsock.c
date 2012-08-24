@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2011 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2012 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -118,14 +118,17 @@ static void	rt_setif(struct rtentry *, struct sockaddr *, struct sockaddr *,
 		    struct sockaddr *, unsigned int);
 static void rt_drainall(void);
 
+#ifndef SIN
 #define	SIN(sa)		((struct sockaddr_in *)(size_t)(sa))
+#endif
 
-
-SYSCTL_NODE(_net, OID_AUTO, idle, CTLFLAG_RW, 0, "idle network monitoring");
+SYSCTL_NODE(_net, OID_AUTO, idle, CTLFLAG_RW|CTLFLAG_LOCKED, 0,
+    "idle network monitoring");
 
 static struct timeval last_ts;
 
-SYSCTL_NODE(_net_idle, OID_AUTO, route, CTLFLAG_RW, 0, "idle route monitoring");
+SYSCTL_NODE(_net_idle, OID_AUTO, route, CTLFLAG_RW|CTLFLAG_LOCKED, 0,
+    "idle route monitoring");
 
 static int rt_if_idle_drain_interval = RT_IF_IDLE_DRAIN_INTERVAL;
 SYSCTL_INT(_net_idle_route, OID_AUTO, drain_interval, CTLFLAG_RW,
@@ -330,7 +333,7 @@ route_output(struct mbuf *m, struct socket *so)
 	int sendonlytoself = 0;
 	unsigned int ifscope = IFSCOPE_NONE;
 
-#define senderr(e) { error = e; goto flush;}
+#define senderr(e) { error = (e); goto flush;}
 	if (m == NULL ||
 	    ((m->m_len < sizeof(intptr_t)) && (m = m_pullup(m, sizeof(intptr_t))) == 0))
 		return (ENOBUFS);
@@ -434,6 +437,12 @@ route_output(struct mbuf *m, struct socket *so)
 	}
 
 	/*
+	 * RTF_PROXY can only be set internally from within the kernel.
+	 */
+	if (rtm->rtm_flags & RTF_PROXY)
+		senderr(EINVAL);
+
+	/*
 	 * For AF_INET, always zero out the embedded scope ID.  If this is
 	 * a scoped request, it must be done explicitly by setting RTF_IFSCOPE
 	 * flag and the corresponding rtm_index value.  This is to prevent
@@ -464,7 +473,7 @@ route_output(struct mbuf *m, struct socket *so)
  * confusing the routing table with a wrong route to the previous default gateway
  */
 {
-#define satosinaddr(sa) (((struct sockaddr_in *)sa)->sin_addr.s_addr)
+#define satosinaddr(sa) (((struct sockaddr_in *)(void *)sa)->sin_addr.s_addr)
 	
 			if (check_routeselfref && (info.rti_info[RTAX_DST] && info.rti_info[RTAX_DST]->sa_family == AF_INET) && 
 				(info.rti_info[RTAX_NETMASK] && satosinaddr(info.rti_info[RTAX_NETMASK]) == INADDR_BROADCAST) &&
@@ -620,8 +629,9 @@ route_output(struct mbuf *m, struct socket *so)
 				case RTM_CHANGE:
 					if (info.rti_info[RTAX_GATEWAY] && (error = rt_setgate(rt,
 					    rt_key(rt), info.rti_info[RTAX_GATEWAY]))) {
+						int tmp = error;
 						RT_UNLOCK(rt);
-						senderr(error);
+						senderr(tmp);
 					}
 					/*
 					 * If they tried to change things but didn't specify
@@ -1162,8 +1172,7 @@ again:
 			if (rw->w_tmemsize < len) {
 				if (rw->w_tmem)
 					FREE(rw->w_tmem, M_RTABLE);
-				rw->w_tmem = (caddr_t)
-					_MALLOC(len, M_RTABLE, M_WAITOK); /*###LD0412 was NOWAIT */
+				rw->w_tmem = _MALLOC(len, M_RTABLE, M_WAITOK);
 				if (rw->w_tmem)
 					rw->w_tmemsize = len;
 			}
@@ -1175,7 +1184,7 @@ again:
 		}
 	}
 	if (cp) {
-		struct rt_msghdr *rtm = (struct rt_msghdr *)cp0;
+		struct rt_msghdr *rtm = (struct rt_msghdr *)(void *)cp0;
 
 		rtm->rtm_version = RTM_VERSION;
 		rtm->rtm_type = type;
@@ -1392,7 +1401,8 @@ sysctl_dumpentry(struct radix_node *rn, void *vw)
 	if (w->w_op != NET_RT_DUMP2) {
 		size = rt_msg2(RTM_GET, &info, 0, w);
 		if (w->w_req && w->w_tmem) {
-			struct rt_msghdr *rtm = (struct rt_msghdr *)w->w_tmem;
+			struct rt_msghdr *rtm =
+			    (struct rt_msghdr *)(void *)w->w_tmem;
 
 			rtm->rtm_flags = rt->rt_flags;
 			rtm->rtm_use = rt->rt_use;
@@ -1409,7 +1419,8 @@ sysctl_dumpentry(struct radix_node *rn, void *vw)
 	} else {
 		size = rt_msg2(RTM_GET2, &info, 0, w);
 		if (w->w_req && w->w_tmem) {
-			struct rt_msghdr2 *rtm = (struct rt_msghdr2 *)w->w_tmem;
+			struct rt_msghdr2 *rtm =
+			    (struct rt_msghdr2 *)(void *)w->w_tmem;
 
 			rtm->rtm_flags = rt->rt_flags;
 			rtm->rtm_use = rt->rt_use;
@@ -1455,7 +1466,8 @@ sysctl_dumpentry_ext(struct radix_node *rn, void *vw)
 	
 	size = rt_msg2(RTM_GET_EXT, &info, 0, w);
 	if (w->w_req && w->w_tmem) {
-		struct rt_msghdr_ext *ertm = (struct rt_msghdr_ext *)w->w_tmem;
+		struct rt_msghdr_ext *ertm =
+		    (struct rt_msghdr_ext *)(void *)w->w_tmem;
 
 		ertm->rtm_flags = rt->rt_flags;
 		ertm->rtm_use = rt->rt_use;
@@ -1465,8 +1477,12 @@ sysctl_dumpentry_ext(struct radix_node *rn, void *vw)
 		ertm->rtm_seq = 0;
 		ertm->rtm_errno = 0;
 		ertm->rtm_addrs = info.rti_addrs;
-		if (rt->rt_llinfo_get_ri == NULL)
+		if (rt->rt_llinfo_get_ri == NULL) {
 			bzero(&ertm->rtm_ri, sizeof (ertm->rtm_ri));
+			ertm->rtm_ri.ri_rssi = IFNET_RSSI_UNKNOWN;
+			ertm->rtm_ri.ri_lqm = IFNET_LQM_THRESH_OFF;
+			ertm->rtm_ri.ri_npm = IFNET_NPM_THRESH_UNKNOWN;
+		}
 		else
 			rt->rt_llinfo_get_ri(rt, &ertm->rtm_ri);
 
@@ -1538,7 +1554,7 @@ sysctl_iflist(int af, struct walkarg *w)
 				len = rt_msg2(RTM_IFINFO, &info, (caddr_t)cp, NULL);
 				info.rti_info[RTAX_IFP] = NULL;
 	
-				ifm = (struct if_msghdr *)cp;
+				ifm = (struct if_msghdr *)(void *)cp;
 				ifm->ifm_index = ifp->if_index;
 				ifm->ifm_flags = (u_short)ifp->if_flags;
 				if_data_internal_to_if_data(ifp, &ifp->if_data,
@@ -1573,7 +1589,7 @@ sysctl_iflist(int af, struct walkarg *w)
 					}
 					len = rt_msg2(RTM_NEWADDR, &info, (caddr_t)cp, NULL);
 	
-					ifam = (struct ifa_msghdr *)cp;
+					ifam = (struct ifa_msghdr *)(void *)cp;
 					ifam->ifam_index = ifa->ifa_ifp->if_index;
 					ifam->ifam_flags = ifa->ifa_flags;
 					ifam->ifam_metric = ifa->ifa_metric;
@@ -1667,13 +1683,14 @@ sysctl_iflist2(int af, struct walkarg *w)
 				len = rt_msg2(RTM_IFINFO2, &info, (caddr_t)cp, NULL);
 				info.rti_info[RTAX_IFP] = NULL;
 		
-				ifm = (struct if_msghdr2 *)cp;
+				ifm = (struct if_msghdr2 *)(void *)cp;
 				ifm->ifm_addrs = info.rti_addrs;
 				ifm->ifm_flags = (u_short)ifp->if_flags;
 				ifm->ifm_index = ifp->if_index;
-				ifm->ifm_snd_len = ifp->if_snd.ifq_len;
-				ifm->ifm_snd_maxlen = ifp->if_snd.ifq_maxlen;
-				ifm->ifm_snd_drops = ifp->if_snd.ifq_drops;
+				ifm->ifm_snd_len = IFCQ_LEN(&ifp->if_snd);
+				ifm->ifm_snd_maxlen = IFCQ_MAXLEN(&ifp->if_snd);
+				ifm->ifm_snd_drops =
+				    ifp->if_snd.ifcq_dropcnt.packets;
 				ifm->ifm_timer = ifp->if_timer;
 				if_data_internal_to_if_data64(ifp, &ifp->if_data,
 					&ifm->ifm_data);
@@ -1706,7 +1723,7 @@ sysctl_iflist2(int af, struct walkarg *w)
 					}
 					len = rt_msg2(RTM_NEWADDR, &info, (caddr_t)cp, 0);
 
-					ifam = (struct ifa_msghdr *)cp;
+					ifam = (struct ifa_msghdr *)(void *)cp;
 					ifam->ifam_index = ifa->ifa_ifp->if_index;
 					ifam->ifam_flags = ifa->ifa_flags;
 					ifam->ifam_metric = ifa->ifa_metric;
@@ -1761,7 +1778,7 @@ sysctl_iflist2(int af, struct walkarg *w)
 						}
 						len = rt_msg2(RTM_NEWMADDR2, &info, (caddr_t)cp, 0);
 
-						ifmam = (struct ifma_msghdr2 *)cp;
+						ifmam = (struct ifma_msghdr2 *)(void *)cp;
 						ifmam->ifmam_addrs = info.rti_addrs;
 						ifmam->ifmam_flags = 0;
 						ifmam->ifmam_index =

@@ -126,6 +126,25 @@ my %Symbols = (
     },
 );
 
+# An explicit list of cancelable syscalls. For creating stubs that call the
+# cancellable version of cerror.
+my @Cancelable = qw/
+	accept access aio_suspend
+	close connect
+	fcntl fdatasync fpathconf fstat fsync
+	getlogin
+	ioctl
+	link lseek lstat
+	msgrcv msgsnd msync
+	open
+	pathconf poll posix_spawn pread pwrite
+	read readv recvfrom recvmsg rename
+	__semwait_signal __sigwait
+	select sem_wait semop sendmsg sendto sigsuspend stat symlink sync
+	unlink
+	wait4 waitid write writev
+/;
+
 sub usage {
     die "Usage: $MyName syscalls.master custom-directory platforms-directory out-directory\n";
 }
@@ -216,7 +235,7 @@ sub checkForCustomStubs {
         $$sym{is_custom} = $source;
         if (!$$sym{is_private}) {
             foreach my $subarch (@Architectures) {
-                (my $arch = $subarch) =~ s/arm(.*)/arm/;
+                (my $arch = $subarch) =~ s/arm(v.*)/arm/;
                 $$sym{aliases}{$arch} = [] unless $$sym{aliases}{$arch};
                 push(@{$$sym{aliases}{$arch}}, $$sym{asm_sym});
             }
@@ -237,7 +256,7 @@ sub readAliases {
     
     my @a = ();
     for my $arch (@Architectures) {
-        (my $new_arch = $arch) =~ s/arm(.*)/arm/g;
+        (my $new_arch = $arch) =~ s/arm(v.*)/arm/g;
         push(@a, $new_arch) unless grep { $_ eq $new_arch } @a;
     }
     
@@ -294,18 +313,22 @@ sub writeStubForSymbol {
     
     my @conditions;
     for my $subarch (@Architectures) {
-        (my $arch = $subarch) =~ s/arm(.*)/arm/;
+        (my $arch = $subarch) =~ s/arm(v.*)/arm/;
         push(@conditions, "defined(__${arch}__)") unless grep { $_ eq $arch } @{$$symbol{except}};
     }
+
+	my %is_cancel;
+	for (@Cancelable) { $is_cancel{$_} = 1 };
     
     print $f "#define __SYSCALL_32BIT_ARG_BYTES $$symbol{bytes}\n";
     print $f "#include \"SYS.h\"\n\n";
     if (scalar(@conditions)) {
+        my $nc = ($is_cancel{$$symbol{syscall}} ? "cerror" : "cerror_nocancel");
         printf $f "#if " . join(" || ", @conditions) . "\n";
-        printf $f "__SYSCALL(%s, %s, %d)\n", $$symbol{asm_sym}, $$symbol{syscall}, $$symbol{nargs};
+        printf $f "__SYSCALL2(%s, %s, %d, %s)\n", $$symbol{asm_sym}, $$symbol{syscall}, $$symbol{nargs}, $nc;
         if (!$$symbol{is_private} && (scalar(@conditions) < scalar(@Architectures))) {
             printf $f "#else\n";
-            printf $f "__SYSCALL(%s, %s, %d)\n", "__".$$symbol{asm_sym}, $$symbol{syscall}, $$symbol{nargs};
+            printf $f "__SYSCALL2(%s, %s, %d, %s)\n", "__".$$symbol{asm_sym}, $$symbol{syscall}, $$symbol{nargs}, $nc;
         }
         printf $f "#endif\n\n";
     } else {
@@ -318,7 +341,7 @@ sub writeAliasesForSymbol {
     my ($f, $symbol) = @_;
     
     foreach my $subarch (@Architectures) {
-        (my $arch = $subarch) =~ s/arm(.*)/arm/;
+        (my $arch = $subarch) =~ s/arm(v.*)/arm/;
         
         next unless scalar($$symbol{aliases}{$arch});
         

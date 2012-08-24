@@ -1475,7 +1475,7 @@ nfs_buf_read(struct nfsbuf *bp)
 
 	NFS_BUF_MAP(bp);
 
-	OSAddAtomic(1, &nfsstats.read_bios);
+	OSAddAtomic64(1, &nfsstats.read_bios);
 
 	error = nfs_buf_read_rpc(bp, thd, cred);
 	/*
@@ -2028,7 +2028,7 @@ nfs_bioread(nfsnode_t np, uio_t uio, int ioflag, vfs_context_t ctx)
 			}
 			/* count any biocache reads that we just copied directly */
 			if (lbn != (uio_offset(uio)/biosize)) {
-				OSAddAtomic((uio_offset(uio)/biosize) - lbn, &nfsstats.biocache_reads);
+				OSAddAtomic64((uio_offset(uio)/biosize) - lbn, &nfsstats.biocache_reads);
 				FSDBG(514, np, 0xcacefeed, uio_offset(uio), error);
 			}
 		}
@@ -2059,7 +2059,7 @@ nfs_bioread(nfsnode_t np, uio_t uio, int ioflag, vfs_context_t ctx)
 			readaheads = 1;
 		}
 
-		OSAddAtomic(1, &nfsstats.biocache_reads);
+		OSAddAtomic64(1, &nfsstats.biocache_reads);
 
 		/*
 		 * If the block is in the cache and has the required data
@@ -2425,7 +2425,7 @@ nfs_buf_write(struct nfsbuf *bp)
 		bp->nb_offio = doff;
 		bp->nb_endio = dend;
 
-		OSAddAtomic(1, &nfsstats.write_bios);
+		OSAddAtomic64(1, &nfsstats.write_bios);
 
 		SET(bp->nb_flags, NB_WRITEINPROG);
 		error = nfs_buf_write_rpc(bp, iomode, thd, cred);
@@ -2613,7 +2613,7 @@ nfs_buf_write_dirty_pages(struct nfsbuf *bp, thread_t thd, kauth_cred_t cred)
 		return (0);
 
 	/* there are pages marked dirty that need to be written out */
-	OSAddAtomic(1, &nfsstats.write_bios);
+	OSAddAtomic64(1, &nfsstats.write_bios);
 	NFS_BUF_MAP(bp);
 	SET(bp->nb_flags, NB_WRITEINPROG);
 	npages = bp->nb_bufsize / PAGE_SIZE;

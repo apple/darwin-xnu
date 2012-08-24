@@ -63,8 +63,8 @@ typedef struct {
     int				bsd_style;
 } machdep_call_t;
 
-extern machdep_call_t		machdep_call_table[];
-extern machdep_call_t		machdep_call_table64[];
+extern const machdep_call_t		machdep_call_table[];
+extern const machdep_call_t		machdep_call_table64[];
 
 extern int			machdep_call_count;
 

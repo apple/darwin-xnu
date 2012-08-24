@@ -204,6 +204,7 @@ extern kern_return_t vm_shared_region_slide(
 	vm_offset_t	vaddr, 
 	uint32_t pageIndex);
 extern void vm_commpage_init(void);
+extern void vm_commpage_text_init(void);
 extern kern_return_t vm_commpage_enter(
 	struct _vm_map		*map,
 	struct task		*task);

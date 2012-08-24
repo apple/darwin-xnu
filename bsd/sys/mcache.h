@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2006-2010 Apple Inc. All rights reserved.
+ * Copyright (c) 2006-2012 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -58,6 +58,15 @@ extern "C" {
 #define	ASSERT(EX)	((void)0)
 #endif
 
+/*
+ * Compile time assert; this should be on its own someday.
+ */
+#define	_CASSERT(x)	\
+	switch (0) { case 0: case (x): ; }
+
+/*
+ * Atomic macros; these should be on their own someday.
+ */
 #define	atomic_add_16_ov(a, n)						\
 	((u_int16_t) OSAddAtomic16(n, (volatile SInt16 *)a))
 
@@ -245,9 +254,11 @@ typedef struct mcache {
 #define	MCF_TRACE	0x00000002	/* enable transaction auditing */
 #define	MCF_NOCPUCACHE	0x00000010	/* disable CPU layer caching */
 #define	MCF_NOLEAKLOG	0x00000100	/* disable leak logging */
+#define	MCF_EXPLEAKLOG	0x00000200	/* expose leak info to user space */
 
 #define	MCF_DEBUG	(MCF_VERIFY | MCF_TRACE)
-#define	MCF_FLAGS_MASK	(MCF_DEBUG | MCF_NOCPUCACHE | MCF_NOLEAKLOG)
+#define	MCF_FLAGS_MASK	\
+	(MCF_DEBUG | MCF_NOCPUCACHE | MCF_NOLEAKLOG | MCF_EXPLEAKLOG)
 
 /* Valid values for notify callback */
 #define	MCN_RETRYALLOC	0x00000001	/* Allocation should be retried */

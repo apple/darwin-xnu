@@ -71,6 +71,7 @@
 #include <sys/time.h>
 #include <sys/kernel.h>
 #include <sys/resourcevar.h>
+#include <miscfs/specfs/specdev.h>
 #include <sys/uio_internal.h>
 #include <libkern/libkern.h>
 #include <machine/machine_routines.h>
@@ -116,6 +117,8 @@
 #define CL_IOSTREAMING	0x4000
 #define CL_CLOSE	0x8000
 #define	CL_ENCRYPTED	0x10000
+#define CL_RAW_ENCRYPTED	0x20000
+#define CL_NOCACHE	0x40000
 
 #define MAX_VECTOR_UPL_ELEMENTS	8
 #define MAX_VECTOR_UPL_SIZE	(2 * MAX_UPL_SIZE) * PAGE_SIZE
@@ -202,6 +205,30 @@ static kern_return_t vfs_drt_control(void **cmapp, int op_type);
 
 
 /*
+ * For throttled IO to check whether
+ * a block is cached by the boot cache
+ * and thus it can avoid delaying the IO.
+ *
+ * bootcache_contains_block is initially
+ * NULL. The BootCache will set it while
+ * the cache is active and clear it when
+ * the cache is jettisoned.
+ *
+ * Returns 0 if the block is not
+ * contained in the cache, 1 if it is
+ * contained.
+ *
+ * The function pointer remains valid
+ * after the cache has been evicted even
+ * if bootcache_contains_block has been
+ * cleared.
+ *
+ * See rdar://9974130 The new throttling mechanism breaks the boot cache for throttled IOs
+ */
+int (*bootcache_contains_block)(dev_t device, u_int64_t blkno) = NULL;
+
+
+/*
  * limit the internal I/O size so that we
  * can represent it in a 32 bit int
  */
@@ -214,16 +241,26 @@ static kern_return_t vfs_drt_control(void **cmapp, int op_type);
 #define WRITE_THROTTLE_SSD	2
 #define WRITE_BEHIND		1
 #define WRITE_BEHIND_SSD	1
-#define PREFETCH		3
-#define PREFETCH_SSD		2
 
-#define IO_SCALE(vp, base)		(vp->v_mount->mnt_ioscale * base)
+#if CONFIG_EMBEDDED
+#define PREFETCH		1
+#define PREFETCH_SSD		1
+uint32_t speculative_prefetch_max = 512;	/* maximum number of pages to use for a specluative read-ahead */
+uint32_t speculative_prefetch_max_iosize = (512 * 1024);       /* maximum I/O size to use for a specluative read-ahead */
+#else
+#define PREFETCH		3
+#define PREFETCH_SSD		1
+uint32_t speculative_prefetch_max = (MAX_UPL_SIZE * 3);
+uint32_t speculative_prefetch_max_iosize = (512 * 1024);       /* maximum I/O size to use for a specluative read-ahead on SSDs*/
+#endif
+
+
+#define IO_SCALE(vp, base)		(vp->v_mount->mnt_ioscale * (base))
 #define MAX_CLUSTER_SIZE(vp)		(cluster_max_io_size(vp->v_mount, CL_WRITE))
-#define MAX_PREFETCH(vp, size, is_ssd)	(size * IO_SCALE(vp, (is_ssd && !ignore_is_ssd) ? PREFETCH_SSD : PREFETCH))
+#define MAX_PREFETCH(vp, size, is_ssd)	(size * IO_SCALE(vp, ((is_ssd && !ignore_is_ssd) ? PREFETCH_SSD : PREFETCH)))
 
 int	ignore_is_ssd = 0;
 int	speculative_reads_disabled = 0;
-uint32_t speculative_prefetch_max = (MAX_UPL_SIZE * 3);
 
 /*
  * throttle the number of async writes that
@@ -231,10 +268,24 @@ uint32_t speculative_prefetch_max = (MAX_UPL_SIZE * 3);
  * before we issue a synchronous write 
  */
 #define HARD_THROTTLE_MAXCNT	0
-#define HARD_THROTTLE_MAXSIZE	(256 * 1024)
+#define HARD_THROTTLE_MAX_IOSIZE (128 * 1024)
+#define LEGACY_HARD_THROTTLE_MAX_IOSIZE (512 * 1024)
 
+extern int32_t throttle_legacy_process_count;
 int hard_throttle_on_root = 0;
+uint32_t hard_throttle_max_iosize = HARD_THROTTLE_MAX_IOSIZE;
+uint32_t legacy_hard_throttle_max_iosize = LEGACY_HARD_THROTTLE_MAX_IOSIZE;
 struct timeval priority_IO_timestamp_for_root;
+
+#if CONFIG_EMBEDDED
+#define THROTTLE_MAX_IOSIZE (hard_throttle_max_iosize)
+#else
+#define THROTTLE_MAX_IOSIZE (throttle_legacy_process_count == 0 ? hard_throttle_max_iosize : legacy_hard_throttle_max_iosize)
+#endif
+
+
+SYSCTL_INT(_debug, OID_AUTO, lowpri_throttle_max_iosize, CTLFLAG_RW | CTLFLAG_LOCKED, &hard_throttle_max_iosize, 0, "");
+SYSCTL_INT(_debug, OID_AUTO, lowpri_legacy_throttle_max_iosize, CTLFLAG_RW | CTLFLAG_LOCKED, &legacy_hard_throttle_max_iosize, 0, "");
 
 
 void
@@ -426,31 +477,47 @@ cluster_syncup(vnode_t vp, off_t newEOF, int (*callback)(buf_t, void *), void *c
 }
 
 
+static int
+cluster_io_present_in_BC(vnode_t vp, off_t f_offset)
+{
+	daddr64_t blkno;
+	size_t	  io_size;
+	int (*bootcache_check_fn)(dev_t device, u_int64_t blkno) = bootcache_contains_block;
+	
+	if (bootcache_check_fn) {
+		if (VNOP_BLOCKMAP(vp, f_offset, PAGE_SIZE, &blkno, &io_size, NULL, VNODE_READ, NULL))
+			return(0);
+
+		if (io_size == 0)
+			return (0);
+
+		if (bootcache_check_fn(vp->v_mount->mnt_devvp->v_rdev, blkno))
+			return(1);
+	}
+	return(0);
+}
+
+
 static int 
 cluster_hard_throttle_on(vnode_t vp, uint32_t hard_throttle)
 {
-	struct uthread	*ut;
+	int throttle_type = 0;
 
-	if (hard_throttle) {
-		static struct timeval hard_throttle_maxelapsed = { 0, 200000 };
+	if ( (throttle_type = throttle_io_will_be_throttled(-1, vp->v_mount)) )
+		return(throttle_type);
 
-		if (vp->v_mount->mnt_kern_flag & MNTK_ROOTDEV) {
-			struct timeval elapsed;
+	if (hard_throttle && (vp->v_mount->mnt_kern_flag & MNTK_ROOTDEV)) {
+		static struct timeval hard_throttle_maxelapsed = { 0, 100000 };
+		struct timeval elapsed;
 
-			if (hard_throttle_on_root)
-				return(1);
-
-			microuptime(&elapsed);
-			timevalsub(&elapsed, &priority_IO_timestamp_for_root);
-
-			if (timevalcmp(&elapsed, &hard_throttle_maxelapsed, <))
-				return(1);
-		}
-	}
-	if (throttle_get_io_policy(&ut) == IOPOL_THROTTLE) {
-		if (throttle_io_will_be_throttled(-1, vp->v_mount)) {
+		if (hard_throttle_on_root)
 			return(1);
-		}
+
+		microuptime(&elapsed);
+		timevalsub(&elapsed, &priority_IO_timestamp_for_root);
+
+		if (timevalcmp(&elapsed, &hard_throttle_maxelapsed, <))
+			return(1);
 	}
 	return(0);
 }
@@ -707,7 +774,7 @@ uint32_t
 cluster_hard_throttle_limit(vnode_t vp, uint32_t *limit, uint32_t hard_throttle)
 {
 	if (cluster_hard_throttle_on(vp, hard_throttle)) {
-		*limit = HARD_THROTTLE_MAXSIZE;
+		*limit = THROTTLE_MAX_IOSIZE;
 		return 1;
 	}
 	return 0;   
@@ -948,8 +1015,8 @@ cluster_io(vnode_t vp, upl_t upl, vm_offset_t upl_offset, off_t f_offset, int no
 
 	if (flags & CL_THROTTLE) {
 	        if ( !(flags & CL_PAGEOUT) && cluster_hard_throttle_on(vp, 1)) {
-		        if (max_iosize > HARD_THROTTLE_MAXSIZE)
-			        max_iosize = HARD_THROTTLE_MAXSIZE;
+		        if (max_iosize > THROTTLE_MAX_IOSIZE)
+			        max_iosize = THROTTLE_MAX_IOSIZE;
 			async_throttle = HARD_THROTTLE_MAXCNT;
 		} else {
 		        if ( (flags & CL_DEV_MEMORY) )
@@ -1397,6 +1464,8 @@ cluster_io(vnode_t vp, upl_t upl, vm_offset_t upl_offset, off_t f_offset, int no
 		}
 		cbp->b_cliodone = (void *)callback;
 		cbp->b_flags |= io_flags;
+		if (flags & CL_NOCACHE)
+			cbp->b_attr.ba_flags |= BA_NOCACHE;
 
 		cbp->b_lblkno = lblkno;
 		cbp->b_blkno  = blkno;
@@ -1489,6 +1558,14 @@ cluster_io(vnode_t vp, upl_t upl, vm_offset_t upl_offset, off_t f_offset, int no
 		if ( !(io_flags & B_READ))
 		        vnode_startwrite(vp);
 				
+		if (flags & CL_RAW_ENCRYPTED) {
+			/* 
+			 * User requested raw encrypted bytes.
+			 * Twiddle the bit in the ba_flags for the buffer
+			 */
+			cbp->b_attr.ba_flags |= BA_RAW_ENCRYPTED_IO;
+		}
+		
 		(void) VNOP_STRATEGY(cbp);
 
 		if (need_EOT == TRUE) {
@@ -1914,9 +1991,10 @@ cluster_write_ext(vnode_t vp, struct uio *uio, off_t oldEOF, off_t newEOF, off_t
 	else
 		bflag = 0;
 
-	if (vp->v_flag & VNOCACHE_DATA)
+	if (vp->v_flag & VNOCACHE_DATA){
 	        flags |= IO_NOCACHE;
-
+		bflag |= CL_NOCACHE;
+	}
         if (uio == NULL) {
 	        /*
 		 * no user data...
@@ -2058,7 +2136,10 @@ cluster_write_direct(vnode_t vp, struct uio *uio, off_t oldEOF, off_t newEOF, in
 	user_addr_t	 iov_base;
 	u_int32_t	 mem_alignment_mask;
 	u_int32_t	 devblocksize;
+	u_int32_t	 max_io_size;
 	u_int32_t	 max_upl_size;
+	u_int32_t        max_vector_size;
+	boolean_t	 io_throttled = FALSE;
 
 	u_int32_t	 vector_upl_iosize = 0;
  	int		 issueVectorUPL = 0,useVectorUPL = (uio->uio_iovcnt > 1);
@@ -2080,7 +2161,10 @@ cluster_write_direct(vnode_t vp, struct uio *uio, off_t oldEOF, off_t newEOF, in
 
 	if (flags & IO_PASSIVE)
 		io_flag |= CL_PASSIVE;
-
+	
+	if (flags & IO_NOCACHE)
+		io_flag |= CL_NOCACHE;
+	
 	iostate.io_completed = 0;
 	iostate.io_issued = 0;
 	iostate.io_error = 0;
@@ -2129,6 +2213,33 @@ next_dwrite:
         }
 
 	while (io_req_size >= PAGE_SIZE && uio->uio_offset < newEOF && retval == 0) {
+		int	throttle_type;
+
+		if ( (throttle_type = cluster_hard_throttle_on(vp, 1)) ) {
+			/*
+			 * we're in the throttle window, at the very least
+			 * we want to limit the size of the I/O we're about
+			 * to issue
+			 */
+			if ( (flags & IO_RETURN_ON_THROTTLE) && throttle_type == 2) {
+				/*
+				 * we're in the throttle window and at least 1 I/O
+				 * has already been issued by a throttleable thread
+				 * in this window, so return with EAGAIN to indicate
+				 * to the FS issuing the cluster_write call that it
+				 * should now throttle after dropping any locks
+				 */
+				throttle_info_update_by_mount(vp->v_mount);
+
+				io_throttled = TRUE;
+				goto wait_for_dwrites;
+			}
+			max_vector_size = THROTTLE_MAX_IOSIZE;
+			max_io_size = THROTTLE_MAX_IOSIZE;
+		} else {
+			max_vector_size = MAX_VECTOR_UPL_SIZE;
+			max_io_size = max_upl_size;
+		}
 
 	        if (first_IO) {
 		        cluster_syncup(vp, newEOF, callback, callback_arg);
@@ -2137,8 +2248,8 @@ next_dwrite:
 	        io_size  = io_req_size & ~PAGE_MASK;
 		iov_base = uio_curriovbase(uio);
 
-		if (io_size > max_upl_size)
-		        io_size = max_upl_size;
+		if (io_size > max_io_size)
+		        io_size = max_io_size;
 
 		if(useVectorUPL && (iov_base & PAGE_MASK)) {
 			/*
@@ -2304,7 +2415,7 @@ next_dwrite:
 			vector_upl_iosize += io_size;
 			vector_upl_size += upl_size;
 
-			if(issueVectorUPL || vector_upl_index ==  MAX_VECTOR_UPL_ELEMENTS || vector_upl_size >= MAX_VECTOR_UPL_SIZE) {
+			if(issueVectorUPL || vector_upl_index ==  MAX_VECTOR_UPL_ELEMENTS || vector_upl_size >= max_vector_size) {
 				retval = vector_cluster_io(vp, vector_upl, vector_upl_offset, v_upl_uio_offset, vector_upl_iosize, io_flag, (buf_t)NULL, &iostate, callback, callback_arg);
 				reset_vector_run_state();
 			}
@@ -2366,6 +2477,9 @@ wait_for_dwrites:
 	        retval = iostate.io_error;
 
 	lck_mtx_destroy(&iostate.io_mtxp, cl_mtx_grp);
+
+	if (io_throttled == TRUE && retval == 0)
+		retval = EAGAIN;
 
 	if (io_req_size && retval == 0) {
 	        /*
@@ -2671,7 +2785,9 @@ cluster_write_copy(vnode_t vp, struct uio *uio, u_int32_t io_req_size, off_t old
 		bflag = CL_PASSIVE;
 	else
 		bflag = 0;
-
+	if (flags & IO_NOCACHE)
+		bflag |= CL_NOCACHE;
+	
 	zero_cnt  = 0;
 	zero_cnt1 = 0;
 	zero_off  = 0;
@@ -3286,17 +3402,34 @@ cluster_read_ext(vnode_t vp, struct uio *uio, off_t filesize, int xflags, int (*
 	        flags |= IO_NOCACHE;
 	if ((vp->v_flag & VRAOFF) || speculative_reads_disabled)
 	        flags |= IO_RAOFF;
+	
+	/* 
+	 * If we're doing an encrypted IO, then first check to see
+	 * if the IO requested was page aligned.  If not, then bail 
+	 * out immediately.
+	 */
+	if (flags & IO_ENCRYPTED) {		
+		if (read_length & PAGE_MASK) {
+			retval = EINVAL;
+			return retval;
+		}
+	}
 
-        /*
+	/*
 	 * do a read through the cache if one of the following is true....
 	 *   NOCACHE is not true
 	 *   the uio request doesn't target USERSPACE
+	 * Alternatively, if IO_ENCRYPTED is set, then we want to bypass the cache as well.
+	 * Reading encrypted data from a CP filesystem should never result in the data touching
+	 * the UBC.
+	 *
 	 * otherwise, find out if we want the direct or contig variant for
 	 * the first vector in the uio request
 	 */
-	if ( (flags & IO_NOCACHE) && UIO_SEG_IS_USER_SPACE(uio->uio_segflg) )
-	        retval = cluster_io_type(uio, &read_type, &read_length, 0);
-
+	if (((flags & IO_NOCACHE) || (flags & IO_ENCRYPTED)) && UIO_SEG_IS_USER_SPACE(uio->uio_segflg)) {
+		retval = cluster_io_type(uio, &read_type, &read_length, 0);
+	}
+	
 	while ((cur_resid = uio_resid(uio)) && uio->uio_offset < filesize && retval == 0) {
 
 		switch (read_type) {
@@ -3380,33 +3513,28 @@ cluster_read_copy(vnode_t vp, struct uio *uio, u_int32_t io_req_size, off_t file
 	struct cl_extent	extent;
 	int              bflag;
 	int		 take_reference = 1;
-#if CONFIG_EMBEDDED
-	struct uthread  *ut;
-#endif /* CONFIG_EMBEDDED */
 	int		 policy = IOPOL_DEFAULT;
 	boolean_t	 iolock_inited = FALSE;
 
 	KERNEL_DEBUG((FSDBG_CODE(DBG_FSRW, 32)) | DBG_FUNC_START,
 		     (int)uio->uio_offset, io_req_size, (int)filesize, flags, 0);
+	
+	if (flags & IO_ENCRYPTED) {
+		panic ("encrypted blocks will hit UBC!");
+	}
 			 
-#if !CONFIG_EMBEDDED
 	policy = proc_get_task_selfdiskacc();
-#else /* !CONFIG_EMBEDDED */
-	policy = current_proc()->p_iopol_disk;
 
-	ut = get_bsdthread_info(current_thread());
-
-	if (ut->uu_iopol_disk != IOPOL_DEFAULT)
-		policy = ut->uu_iopol_disk;
-#endif /* !CONFIG_EMBEDDED */
-
-	if (policy == IOPOL_THROTTLE || (flags & IO_NOCACHE))
+	if (policy == IOPOL_THROTTLE || policy == IOPOL_UTILITY || (flags & IO_NOCACHE))
 		take_reference = 0;
 
 	if (flags & IO_PASSIVE)
 		bflag = CL_PASSIVE;
 	else
 		bflag = 0;
+
+	if (flags & IO_NOCACHE)
+		bflag |= CL_NOCACHE;
 
 	max_io_size = cluster_max_io_size(vp->v_mount, CL_READ);
 	max_prefetch = MAX_PREFETCH(vp, max_io_size, (vp->v_mount->mnt_kern_flag & MNTK_SSD));
@@ -3422,13 +3550,15 @@ cluster_read_copy(vnode_t vp, struct uio *uio, u_int32_t io_req_size, off_t file
 		rap = NULL;
 	} else {
 	        if (cluster_hard_throttle_on(vp, 1)) {
+			/*
+			 * we're in the throttle window, at the very least
+			 * we want to limit the size of the I/O we're about
+			 * to issue
+			 */
 		        rd_ahead_enabled = 0;
 			prefetch_enabled = 0;
 
-			max_rd_size = HARD_THROTTLE_MAXSIZE;
-		} else if (policy == IOPOL_THROTTLE) {
-		        rd_ahead_enabled = 0;
-			prefetch_enabled = 0;
+			max_rd_size = THROTTLE_MAX_IOSIZE;
 		}
 	        if ((rap = cluster_get_rap(vp)) == NULL)
 		        rd_ahead_enabled = 0;
@@ -3547,6 +3677,30 @@ cluster_read_copy(vnode_t vp, struct uio *uio, u_int32_t io_req_size, off_t file
 			 */
 			max_size = filesize - uio->uio_offset;
 		}
+
+		iostate.io_completed = 0;
+		iostate.io_issued = 0;
+		iostate.io_error = 0;
+		iostate.io_wanted = 0;
+
+		if ( (flags & IO_RETURN_ON_THROTTLE) ) {
+			if (cluster_hard_throttle_on(vp, 0) == 2) {
+				if ( !cluster_io_present_in_BC(vp, uio->uio_offset)) {
+					/*
+					 * we're in the throttle window and at least 1 I/O
+					 * has already been issued by a throttleable thread
+					 * in this window, so return with EAGAIN to indicate
+					 * to the FS issuing the cluster_read call that it
+					 * should now throttle after dropping any locks
+					 */
+					throttle_info_update_by_mount(vp->v_mount);
+
+					retval = EAGAIN;
+					break;
+				}
+			}
+		}
+
 		/*
 		 * compute the size of the upl needed to encompass
 		 * the requested read... limit each call to cluster_io
@@ -3608,10 +3762,6 @@ cluster_read_copy(vnode_t vp, struct uio *uio, u_int32_t io_req_size, off_t file
 			if (upl_valid_page(pl, last_pg))
 				break;
 		}
-		iostate.io_completed = 0;
-		iostate.io_issued = 0;
-		iostate.io_error = 0;
-		iostate.io_wanted = 0;
 
 		if (start_pg < last_pg) {		
 		        /*
@@ -3804,16 +3954,20 @@ cluster_read_copy(vnode_t vp, struct uio *uio, u_int32_t io_req_size, off_t file
 
 		if (io_req_size) {
 		        if (cluster_hard_throttle_on(vp, 1)) {
+				/*
+				 * we're in the throttle window, at the very least
+				 * we want to limit the size of the I/O we're about
+				 * to issue
+				 */
 			        rd_ahead_enabled = 0;
 				prefetch_enabled = 0;
-
-				max_rd_size = HARD_THROTTLE_MAXSIZE;
+				max_rd_size = THROTTLE_MAX_IOSIZE;
 			} else {
-			        if (max_rd_size == HARD_THROTTLE_MAXSIZE) {
+			        if (max_rd_size == THROTTLE_MAX_IOSIZE) {
 				        /*
 					 * coming out of throttled state
 					 */
-					if (policy != IOPOL_THROTTLE) {
+					if (policy != IOPOL_THROTTLE && policy != IOPOL_UTILITY) {
 						if (rap != NULL)
 							rd_ahead_enabled = 1;
 						prefetch_enabled = 1;
@@ -3884,7 +4038,9 @@ cluster_read_direct(vnode_t vp, struct uio *uio, off_t filesize, int *read_type,
 	u_int32_t	 max_upl_size;
 	u_int32_t        max_rd_size;
 	u_int32_t        max_rd_ahead;
+	u_int32_t        max_vector_size;
 	boolean_t	 strict_uncached_IO = FALSE;
+	boolean_t	 io_throttled = FALSE;
 
 	u_int32_t	 vector_upl_iosize = 0;
 	int		 issueVectorUPL = 0,useVectorUPL = (uio->uio_iovcnt > 1);
@@ -3904,6 +4060,14 @@ cluster_read_direct(vnode_t vp, struct uio *uio, off_t filesize, int *read_type,
 
 	if (flags & IO_PASSIVE)
 		io_flag |= CL_PASSIVE;
+
+	if (flags & IO_ENCRYPTED) {
+		io_flag |= CL_RAW_ENCRYPTED;
+	}
+
+	if (flags & IO_NOCACHE) {
+		io_flag |= CL_NOCACHE;
+	}
 
 	iostate.io_completed = 0;
 	iostate.io_issued = 0;
@@ -3960,7 +4124,17 @@ next_dread:
 		 * I/O that ends on a page boundary in cluster_io
 		 */
 		misaligned = 1;
-        }
+    }
+
+	/* 
+	 * The user must request IO in aligned chunks.  If the 
+	 * offset into the file is bad, or the userland pointer 
+	 * is non-aligned, then we cannot service the encrypted IO request.
+	 */
+	if ((flags & IO_ENCRYPTED) && (misaligned)) {
+		retval = EINVAL;
+	}
+
 	/*
 	 * When we get to this point, we know...
 	 *  -- the offset into the file is on a devblocksize boundary
@@ -3970,22 +4144,32 @@ next_dread:
 	        u_int32_t io_start;
 
 	        if (cluster_hard_throttle_on(vp, 1)) {
-		        max_rd_size  = HARD_THROTTLE_MAXSIZE;
-			max_rd_ahead = HARD_THROTTLE_MAXSIZE - 1;
+			/*
+			 * we're in the throttle window, at the very least
+			 * we want to limit the size of the I/O we're about
+			 * to issue
+			 */
+		        max_rd_size  = THROTTLE_MAX_IOSIZE;
+			max_rd_ahead = THROTTLE_MAX_IOSIZE - 1;
+			max_vector_size = THROTTLE_MAX_IOSIZE;
 		} else {
 		        max_rd_size  = max_upl_size;
 			max_rd_ahead = max_rd_size * IO_SCALE(vp, 2);
+			max_vector_size = MAX_VECTOR_UPL_SIZE;
 		}
 		io_start = io_size = io_req_size;
 
 		/*
 		 * First look for pages already in the cache
-		 * and move them to user space.
+		 * and move them to user space.  But only do this
+		 * check if we are not retrieving encrypted data directly
+		 * from the filesystem;  those blocks should never
+		 * be in the UBC. 
 		 *
 		 * cluster_copy_ubc_data returns the resid
 		 * in io_size
 		 */
-		if (strict_uncached_IO == FALSE) {
+		if ((strict_uncached_IO == FALSE) && ((flags & IO_ENCRYPTED) == 0)) {
 			retval = cluster_copy_ubc_data_internal(vp, uio, (int *)&io_size, 0, 0);
 		}
 		/*
@@ -4018,9 +4202,14 @@ next_dread:
 		}
 
 		/*
-		 * check to see if we are finished with this request...
+		 * check to see if we are finished with this request.
+		 *
+		 * If we satisfied this IO already, then io_req_size will be 0.
+		 * Otherwise, see if the IO was mis-aligned and needs to go through 
+		 * the UBC to deal with the 'tail'.
+		 *
 		 */
-		if (io_req_size == 0 || misaligned) {
+		if (io_req_size == 0 || (misaligned)) {
 		        /*
 			 * see if there's another uio vector to
 			 * process that's of type IO_DIRECT
@@ -4046,13 +4235,31 @@ next_dread:
 		 * (which overlaps the end of the direct read) in order to 
 		 * get at the overhang bytes
 		 */
-		if (io_size & (devblocksize - 1)) {
-		        /*
-			 * request does NOT end on a device block boundary
-			 * so clip it back to a PAGE_SIZE boundary
-			 */
-		        io_size &= ~PAGE_MASK;
-			io_min = PAGE_SIZE;
+		if (io_size & (devblocksize - 1)) {			
+			if (flags & IO_ENCRYPTED) {
+				/* 
+				 * Normally, we'd round down to the previous page boundary to 
+				 * let the UBC manage the zero-filling of the file past the EOF.
+				 * But if we're doing encrypted IO, we can't let any of
+				 * the data hit the UBC.  This means we have to do the full
+				 * IO to the upper block boundary of the device block that
+				 * contains the EOF. The user will be responsible for not
+				 * interpreting data PAST the EOF in its buffer.
+				 *
+				 * So just bump the IO back up to a multiple of devblocksize
+				 */
+				io_size = ((io_size + devblocksize) & ~(devblocksize - 1));
+				io_min = io_size;					
+			}
+			else {
+				/* 
+				 * Clip the request to the previous page size boundary
+				 * since request does NOT end on a device block boundary
+				 */
+				io_size &= ~PAGE_MASK;
+				io_min = PAGE_SIZE;
+			}
+			
 		}
 		if (retval || io_size < io_min) {
 		        /*
@@ -4065,10 +4272,14 @@ next_dread:
 		        goto wait_for_dreads;
 		}
 
-		if (strict_uncached_IO == FALSE) {
+		/* 
+		 * Don't re-check the UBC data if we are looking for uncached IO
+		 * or asking for encrypted blocks.
+		 */
+		if ((strict_uncached_IO == FALSE) && ((flags & IO_ENCRYPTED) == 0)) {
 
 			if ((xsize = io_size) > max_rd_size)
-		        	xsize = max_rd_size;
+				xsize = max_rd_size;
 
 			io_size = 0;
 
@@ -4083,6 +4294,25 @@ next_dread:
 				continue;
 			}
 		}
+		if ( (flags & IO_RETURN_ON_THROTTLE) ) {
+			if (cluster_hard_throttle_on(vp, 0) == 2) {
+				if ( !cluster_io_present_in_BC(vp, uio->uio_offset)) {
+					/*
+					 * we're in the throttle window and at least 1 I/O
+					 * has already been issued by a throttleable thread
+					 * in this window, so return with EAGAIN to indicate
+					 * to the FS issuing the cluster_read call that it
+					 * should now throttle after dropping any locks
+					 */
+					throttle_info_update_by_mount(vp->v_mount);
+
+					io_throttled = TRUE;
+					goto wait_for_dreads;
+				}
+			}
+		}
+		if (io_size > max_rd_size)
+			io_size = max_rd_size;
 
 		iov_base = uio_curriovbase(uio);
 
@@ -4216,7 +4446,7 @@ next_dread:
 			vector_upl_size += upl_size;
 			vector_upl_iosize += io_size;
 			
-			if(issueVectorUPL || vector_upl_index ==  MAX_VECTOR_UPL_ELEMENTS || vector_upl_size >= MAX_VECTOR_UPL_SIZE) {
+			if(issueVectorUPL || vector_upl_index ==  MAX_VECTOR_UPL_ELEMENTS || vector_upl_size >= max_vector_size) {
 				retval = vector_cluster_io(vp, vector_upl, vector_upl_offset, v_upl_uio_offset, vector_upl_iosize,  io_flag, (buf_t)NULL, &iostate, callback, callback_arg);
 				reset_vector_run_state();	
 			}
@@ -4224,9 +4454,24 @@ next_dread:
 		/*
 		 * update the uio structure
 		 */
-		uio_update(uio, (user_size_t)io_size);
-
-		io_req_size -= io_size;
+		if ((flags & IO_ENCRYPTED) && (max_io_size < io_size)) {
+			uio_update(uio, (user_size_t)max_io_size);
+		}
+		else {
+			uio_update(uio, (user_size_t)io_size);
+		}
+		/*
+		 * Under normal circumstances, the io_size should not be
+		 * bigger than the io_req_size, but we may have had to round up
+		 * to the end of the page in the encrypted IO case.  In that case only,
+		 * ensure that we only decrement io_req_size to 0. 
+		 */
+		if ((flags & IO_ENCRYPTED) && (io_size > io_req_size)) {
+			io_req_size = 0;
+		}
+		else {
+			io_req_size -= io_size;
+		}
 
 		KERNEL_DEBUG((FSDBG_CODE(DBG_FSRW, 73)) | DBG_FUNC_END,
 			     upl, (int)uio->uio_offset, io_req_size, retval, 0);
@@ -4263,6 +4508,9 @@ wait_for_dreads:
 	        retval = iostate.io_error;
 
 	lck_mtx_destroy(&iostate.io_mtxp, cl_mtx_grp);
+
+	if (io_throttled == TRUE && retval == 0)
+		retval = EAGAIN;
 
 	if (io_req_size && retval == 0) {
 	        /*
@@ -4311,7 +4559,10 @@ cluster_read_contig(vnode_t vp, struct uio *uio, off_t filesize, int *read_type,
 		bflag = CL_PASSIVE;
 	else
 		bflag = 0;
-
+	
+	if (flags & IO_NOCACHE)
+		bflag |= CL_NOCACHE;
+	
 	/*
 	 * When we enter this routine, we know
 	 *  -- the read_length will not exceed the current iov_len
@@ -4594,6 +4845,16 @@ advisory_read_ext(vnode_t vp, off_t filesize, off_t f_offset, int resid, int (*c
 		return(EINVAL);
 
 	max_io_size = cluster_max_io_size(vp->v_mount, CL_READ);
+
+#if CONFIG_EMBEDDED
+	if (max_io_size > speculative_prefetch_max_iosize)
+		max_io_size = speculative_prefetch_max_iosize;
+#else
+	if ((vp->v_mount->mnt_kern_flag & MNTK_SSD) && !ignore_is_ssd) {
+		if (max_io_size > speculative_prefetch_max_iosize)
+			max_io_size = speculative_prefetch_max_iosize;
+	}
+#endif
 
 	KERNEL_DEBUG((FSDBG_CODE(DBG_FSRW, 60)) | DBG_FUNC_START,
 		     (int)f_offset, resid, (int)filesize, 0, 0);
@@ -5222,6 +5483,9 @@ cluster_push_now(vnode_t vp, struct cl_extent *cl, off_t EOF, int flags, int (*c
 		if (flags & IO_CLOSE)
 		        io_flags |= CL_CLOSE;
 
+		if (flags & IO_NOCACHE)
+			io_flags |= CL_NOCACHE;
+
 		retval = cluster_io(vp, upl, upl_offset, upl_f_offset + upl_offset, io_size,
 				    io_flags, (buf_t)NULL, (struct clios *)NULL, callback, callback_arg);
 
@@ -5347,6 +5611,9 @@ cluster_align_phys_io(vnode_t vp, struct uio *uio, addr64_t usr_paddr, u_int32_t
 		bflag = CL_PASSIVE;
 	else
 		bflag = 0;
+
+	if (flags & IO_NOCACHE)
+		bflag |= CL_NOCACHE;
 
 	upl_flags = UPL_SET_LITE;
 

@@ -492,6 +492,8 @@ struct ifbpstpconf64 {
 
 #ifdef XNU_KERNEL_PRIVATE
 
+extern u_int8_t	bstp_etheraddr[ETHER_ADDR_LEN];
+
 int	bridgeattach(int);
 
 #endif /* XNU_KERNEL_PRIVATE */

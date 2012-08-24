@@ -1,3 +1,5 @@
+#include <stdlib.h>
+
 void mystart(void) __asm__("mystart");
 
 void mystart(void) {

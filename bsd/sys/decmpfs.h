@@ -28,6 +28,8 @@
 #ifndef _SYS_DECMPFS_H_
 #define _SYS_DECMPFS_H_ 1
 
+#include <sys/kernel_types.h>
+
 #define MAX_DECMPFS_XATTR_SIZE 3802
 
 /*
@@ -61,7 +63,7 @@ enum {
     
     /* additional types defined in AppleFSCompression project */
     
-    CMP_MAX         = 255
+    CMP_MAX         = 255 /* Highest compression_type supported */
 };
 
 typedef struct {
@@ -71,25 +73,19 @@ typedef struct {
 
 #if KERNEL
 
+#if XNU_KERNEL_PRIVATE
+
 #include <kern/locks.h>
 
-#if defined(__i386__) || defined(__x86_64__)
-#define DECMPFS_SUPPORTS_SWAP64 1
-/* otherwise, no OSCompareAndSwap64, so use a mutex */
-#endif
-
 typedef struct decmpfs_cnode {
-	uint8_t cmp_state;
-	uint8_t cmp_minimal_xattr;       /* if non-zero, this file's com.apple.decmpfs xattr contained only the minimal decmpfs_disk_header */
-	uint32_t cmp_type;
-	uint32_t lockcount;
-	void    *lockowner;              /* cnode's lock owner (if a thread is currently holding an exclusive lock) */
+    uint8_t cmp_state;
+    uint8_t cmp_minimal_xattr;       /* if non-zero, this file's com.apple.decmpfs xattr contained only the minimal decmpfs_disk_header */
+    uint32_t cmp_type;
+    uint32_t lockcount;
+    void    *lockowner;              /* cnode's lock owner (if a thread is currently holding an exclusive lock) */
     uint64_t uncompressed_size __attribute__((aligned(8)));
+    uint64_t decompression_flags;
     lck_rw_t compressed_data_lock;
-#if !DECMPFS_SUPPORTS_SWAP64
-    /* we need a lock since we can't atomically fetch/set 64 bits */
-    lck_mtx_t uncompressed_size_mtx;
-#endif /* !DECMPFS_SUPPORTS_SWAP64 */
 } decmpfs_cnode;
 
 /* return values from decmpfs_file_is_compressed */
@@ -128,19 +124,32 @@ int decmpfs_update_attributes(vnode_t vp, struct vnode_attr *vap);
 errno_t decmpfs_pagein_compressed(struct vnop_pagein_args *ap, int *is_compressed, decmpfs_cnode *cp);
 errno_t decmpfs_read_compressed(struct vnop_read_args *ap, int *is_compressed, decmpfs_cnode *cp);
 
+#endif /* XNU_KERNEL_PRIVATE */
+
 /* types shared between the kernel and kexts */
 typedef int (*decmpfs_validate_compressed_file_func)(vnode_t vp, vfs_context_t ctx, decmpfs_header *hdr);
 typedef void (*decmpfs_adjust_fetch_region_func)(vnode_t vp, vfs_context_t ctx, decmpfs_header *hdr, off_t *offset, user_ssize_t *size);
 typedef int (*decmpfs_fetch_uncompressed_data_func)(vnode_t vp, vfs_context_t ctx, decmpfs_header *hdr, off_t offset, user_ssize_t size, int nvec, decmpfs_vector *vec, uint64_t *bytes_read);
 typedef int (*decmpfs_free_compressed_data_func)(vnode_t vp, vfs_context_t ctx, decmpfs_header *hdr);
+typedef uint64_t (*decmpfs_get_decompression_flags_func)(vnode_t vp, vfs_context_t ctx, decmpfs_header *hdr); // returns flags from the DECMPFS_FLAGS enumeration below
 
-#define DECMPFS_REGISTRATION_VERSION 1
+enum {
+    DECMPFS_FLAGS_FORCE_FLUSH_ON_DECOMPRESS = 1 << 0,
+};
+
+/* Versions that are supported for binary compatibility */
+#define DECMPFS_REGISTRATION_VERSION_V1 1
+#define DECMPFS_REGISTRATION_VERSION_V3 3
+
+#define DECMPFS_REGISTRATION_VERSION (DECMPFS_REGISTRATION_VERSION_V3)
+
 typedef struct {
     int                                   decmpfs_registration;
     decmpfs_validate_compressed_file_func validate;
     decmpfs_adjust_fetch_region_func      adjust_fetch;
     decmpfs_fetch_uncompressed_data_func  fetch;
     decmpfs_free_compressed_data_func     free_data;
+    decmpfs_get_decompression_flags_func  get_flags;
 } decmpfs_registration;
 
 /* hooks for kexts to call */

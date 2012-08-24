@@ -1603,7 +1603,7 @@ audit_sdev_alloc(void)
 
 	AUDIT_SDEV_LIST_WLOCK_ASSERT();
 
-	asdev = malloc(sizeof (*asdev), M_AUDIT_SDEV, M_NOWAIT | M_ZERO);
+	asdev = malloc(sizeof (*asdev), M_AUDIT_SDEV, M_WAITOK | M_ZERO);
 	if (NULL == asdev)
 		return (NULL);
 

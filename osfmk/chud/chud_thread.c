@@ -550,3 +550,73 @@ chudxnu_thread_set_marked(thread_t thread, boolean_t new_value)
 	return FALSE;
 }
 
+/* XXX: good thing this code is experimental... */
+
+/* external handler */
+extern void (*chudxnu_thread_ast_handler)(thread_t);
+void (*chudxnu_thread_ast_handler)(thread_t) = NULL;
+
+/* AST callback to dispatch to AppleProfile */
+extern void chudxnu_thread_ast(thread_t);
+void
+chudxnu_thread_ast(thread_t thread)
+{
+	/* atomicness for kdebug events */
+	void (*handler)(thread_t) = chudxnu_thread_ast_handler;
+	if( handler )
+		handler( thread );
+
+	thread->t_chud = 0;
+}
+
+
+
+/* Get and set bits on the thread and trigger an AST handler */
+void chudxnu_set_thread_ast( thread_t thread );
+void
+chudxnu_set_thread_ast( thread_t thread )
+{
+	/* FIXME: only call this on current thread from an interrupt handler for now... */
+	if( thread != current_thread() )
+		panic( "unsafe AST set" );
+
+	act_set_kperf(thread);
+}
+
+/* get and set the thread bits */
+extern uint32_t chudxnu_get_thread_bits( thread_t thread );
+extern void chudxnu_set_thread_bits( thread_t thread, uint32_t bits );
+
+uint32_t
+chudxnu_get_thread_bits( thread_t thread )
+{
+	return thread->t_chud;
+}
+
+void
+chudxnu_set_thread_bits( thread_t thread, uint32_t bits )
+{
+	thread->t_chud = bits;
+}
+
+/* get and set thread dirty bits. so CHUD can track whether the thread
+ * has been dispatched since it last looked. caller must hold the
+ * thread lock
+ */
+boolean_t
+chudxnu_thread_get_dirty(thread_t thread)
+{
+	if( thread->c_switch != thread->chud_c_switch )
+		return TRUE;
+	else
+		return FALSE;
+}
+
+void
+chudxnu_thread_set_dirty(thread_t thread, boolean_t makedirty)
+{
+	if( makedirty )
+		thread->chud_c_switch = thread->c_switch - 1;
+	else
+		thread->chud_c_switch = thread->c_switch;
+}

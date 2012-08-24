@@ -137,67 +137,6 @@ mach_port_get_srights(
 }
 #endif /* MACH_IPC_DEBUG */
 
-/*
- *	Routine:	host_ipc_hash_info
- *	Purpose:
- *		Return information about the global reverse hash table.
- *	Conditions:
- *		Nothing locked.  Obeys CountInOut protocol.
- *	Returns:
- *		KERN_SUCCESS		Returned information.
- *		KERN_INVALID_HOST	The host is null.
- *		KERN_RESOURCE_SHORTAGE	Couldn't allocate memory.
- */
-
-#if !MACH_IPC_DEBUG
-kern_return_t
-host_ipc_hash_info(
-	__unused host_t			host,
-	__unused hash_info_bucket_array_t	*infop,
-	__unused mach_msg_type_number_t 	*countp)
-{
-        return KERN_FAILURE;
-}
-#else
-kern_return_t
-host_ipc_hash_info(
-	host_t					host,
-	hash_info_bucket_array_t		*infop,
-	mach_msg_type_number_t 		*countp)
-{
-	vm_map_copy_t copy;
-	vm_offset_t addr;
-	vm_size_t size;
-	hash_info_bucket_t *info;
-	natural_t count;
-	kern_return_t kr;
-
-	if (host == HOST_NULL)
-		return KERN_INVALID_HOST;
-
-	/* start with in-line data */
-
-	count = ipc_hash_size();
-	size = round_page(count * sizeof(hash_info_bucket_t));
-	kr = kmem_alloc_pageable(ipc_kernel_map, &addr, size);
-	if (kr != KERN_SUCCESS)
-		return KERN_RESOURCE_SHORTAGE;
-
-	info = (hash_info_bucket_t *) addr;
-	count = ipc_hash_info(info, count);
-
-	if (size > count * sizeof(hash_info_bucket_t))
-		bzero((char *)&info[count], size - count * sizeof(hash_info_bucket_t));
-
-	kr = vm_map_copyin(ipc_kernel_map, (vm_map_address_t)addr, 
-			   (vm_map_size_t)size, TRUE, &copy);
-	assert(kr == KERN_SUCCESS);
-
-	*infop = (hash_info_bucket_t *) copy;
-	*countp = count;
-	return KERN_SUCCESS;
-}
-#endif /* MACH_IPC_DEBUG */
 
 /*
  *	Routine:	mach_port_space_info
@@ -231,16 +170,12 @@ mach_port_space_info(
 	ipc_info_space_t		*infop,
 	ipc_info_name_array_t		*tablep,
 	mach_msg_type_number_t 		*tableCntp,
-	ipc_info_tree_name_array_t	*treep,
-	mach_msg_type_number_t 		*treeCntp)
+	__unused ipc_info_tree_name_array_t	*treep,
+	__unused mach_msg_type_number_t         *treeCntp)
 {
 	ipc_info_name_t *table_info;
 	vm_offset_t table_addr;
 	vm_size_t table_size, table_size_needed;
-	ipc_info_tree_name_t *tree_info;
-	vm_offset_t tree_addr;
-	vm_size_t tree_size, tree_size_needed;
-	ipc_tree_entry_t tentry;
 	ipc_entry_t table;
 	ipc_entry_num_t tsize;
 	mach_port_index_t index;
@@ -254,28 +189,21 @@ mach_port_space_info(
 	/* start with in-line memory */
 
 	table_size = 0;
-	tree_size = 0;
 
 	for (;;) {
 		is_read_lock(space);
-		if (!space->is_active) {
+		if (!is_active(space)) {
 			is_read_unlock(space);
 			if (table_size != 0)
 				kmem_free(ipc_kernel_map,
 					  table_addr, table_size);
-			if (tree_size != 0)
-				kmem_free(ipc_kernel_map,
-					  tree_addr, tree_size);
 			return KERN_INVALID_TASK;
 		}
 
 		table_size_needed = round_page(space->is_table_size
 					       * sizeof(ipc_info_name_t));
-		tree_size_needed = round_page(space->is_tree_total
-					      * sizeof(ipc_info_tree_name_t));
 
-		if ((table_size_needed == table_size) &&
-		    (tree_size_needed == tree_size))
+		if (table_size_needed == table_size)
 			break;
 
 		is_read_unlock(space);
@@ -285,23 +213,11 @@ mach_port_space_info(
 				kmem_free(ipc_kernel_map, table_addr, table_size);
 			kr = kmem_alloc(ipc_kernel_map,	&table_addr, table_size_needed);
 			if (kr != KERN_SUCCESS) {
-				if (tree_size != 0)
-					kmem_free(ipc_kernel_map, tree_addr, tree_size);
 				return KERN_RESOURCE_SHORTAGE;
 			}
 			table_size = table_size_needed;
 		}
-		if (tree_size != tree_size_needed) {
-			if (tree_size != 0)
-				kmem_free(ipc_kernel_map, tree_addr, tree_size);
-			kr = kmem_alloc(ipc_kernel_map, &tree_addr, tree_size_needed);
-			if (kr != KERN_SUCCESS) {
-				if (table_size != 0)
-					kmem_free(ipc_kernel_map, table_addr, table_size);
-				return KERN_RESOURCE_SHORTAGE;
-			}
-			tree_size = tree_size_needed;
-		}
+
 	}
 	/* space is read-locked and active; we have enough wired memory */
 
@@ -309,9 +225,6 @@ mach_port_space_info(
 	infop->iis_genno_mask = MACH_PORT_NGEN(MACH_PORT_DEAD);
 	infop->iis_table_size = space->is_table_size;
 	infop->iis_table_next = space->is_table_next->its_size;
-	infop->iis_tree_size = space->is_tree_total;
-	infop->iis_tree_small = space->is_tree_small;
-	infop->iis_tree_hash = space->is_tree_hash;
 
 	/* walk the table for this space */
 	table = space->is_table;
@@ -324,7 +237,6 @@ mach_port_space_info(
 
 		bits = entry->ie_bits;
 		iin->iin_name = MACH_PORT_MAKE(index, IE_BITS_GEN(bits));
-		iin->iin_collision = (bits & IE_BITS_COLLISION) ? TRUE : FALSE;
 		iin->iin_type = IE_BITS_TYPE(bits);
 		if ((entry->ie_bits & MACH_PORT_TYPE_PORT_RIGHTS) != MACH_PORT_TYPE_NONE &&
 		    entry->ie_request != IE_REQ_NONE) {
@@ -342,48 +254,6 @@ mach_port_space_info(
 		iin->iin_hash = entry->ie_index;
 	}
 
-	/* walk the splay tree for this space */
-	tree_info = (ipc_info_tree_name_array_t)tree_addr;
-	for (tentry = ipc_splay_traverse_start(&space->is_tree), index = 0;
-	     tentry != ITE_NULL;
-	     tentry = ipc_splay_traverse_next(&space->is_tree, FALSE)) {
-		ipc_info_tree_name_t *iitn = &tree_info[index++];
-		ipc_info_name_t *iin = &iitn->iitn_name;
-		ipc_entry_t entry = &tentry->ite_entry;
-		ipc_entry_bits_t bits = entry->ie_bits;
-
-		assert(IE_BITS_TYPE(bits) != MACH_PORT_TYPE_NONE);
-
-		iin->iin_name = tentry->ite_name;
-		iin->iin_collision = (bits & IE_BITS_COLLISION) ? TRUE : FALSE;
-		iin->iin_type = IE_BITS_TYPE(bits);
-		if ((entry->ie_bits & MACH_PORT_TYPE_PORT_RIGHTS) != MACH_PORT_TYPE_NONE &&
-		    entry->ie_request != IE_REQ_NONE) {
-			ipc_port_t port = (ipc_port_t) entry->ie_object;
-
-			assert(IP_VALID(port));
-			ip_lock(port);
-			iin->iin_type |= ipc_port_request_type(port, iin->iin_name, entry->ie_request);
-			ip_unlock(port);
-		}
-
-		iin->iin_urefs = IE_BITS_UREFS(bits);
-		iin->iin_object = (natural_t)(uintptr_t)entry->ie_object;
-		iin->iin_next = entry->ie_next;
-		iin->iin_hash = entry->ie_index;
-
-		if (tentry->ite_lchild == ITE_NULL)
-			iitn->iitn_lchild = MACH_PORT_NULL;
-		else
-			iitn->iitn_lchild = tentry->ite_lchild->ite_name;
-
-		if (tentry->ite_rchild == ITE_NULL)
-			iitn->iitn_rchild = MACH_PORT_NULL;
-		else
-			iitn->iitn_rchild = tentry->ite_rchild->ite_name;
-
-	}
-	ipc_splay_traverse_finish(&space->is_tree);
 	is_read_unlock(space);
 
 	/* prepare the table out-of-line data for return */
@@ -405,24 +275,9 @@ mach_port_space_info(
 		*tableCntp = 0;
 	}
 
-	/* prepare the tree out-of-line data for return */
-	if (tree_size > 0) {
-		if (tree_size > infop->iis_tree_size * sizeof(ipc_info_tree_name_t))
-			bzero((char *)&tree_info[infop->iis_tree_size],
-			      tree_size - infop->iis_tree_size * sizeof(ipc_info_tree_name_t));
-
-		kr = vm_map_unwire(ipc_kernel_map, vm_map_trunc_page(tree_addr),
-				   vm_map_round_page(tree_addr + tree_size), FALSE);
-		assert(kr == KERN_SUCCESS);
-		kr = vm_map_copyin(ipc_kernel_map, (vm_map_address_t)tree_addr, 
-				   (vm_map_size_t)tree_size, TRUE, &copy);
-		assert(kr == KERN_SUCCESS);
-		*treep = (ipc_info_tree_name_t *)copy;
-		*treeCntp = infop->iis_tree_size;
-	} else {
-		*treep = (ipc_info_tree_name_t *)0;
-		*treeCntp = 0;
-	}
+	/* splay tree is obsolete, no work to do... */
+	*treep = (ipc_info_tree_name_t *)0;
+	*treeCntp = 0;
 	return KERN_SUCCESS;
 }
 #endif /* MACH_IPC_DEBUG */
@@ -537,6 +392,7 @@ mach_port_kobject(
 	ipc_entry_t entry;
 	ipc_port_t port;
 	kern_return_t kr;
+	mach_vm_address_t kaddr;
 
 	if (space == IS_NULL)
 		return KERN_INVALID_TASK;
@@ -563,10 +419,15 @@ mach_port_kobject(
 	}
 
 	*typep = (unsigned int) ip_kotype(port);
-	*addrp = (mach_vm_address_t)port->ip_kobject;
+	kaddr = (mach_vm_address_t)port->ip_kobject;
 	ip_unlock(port);
-	return KERN_SUCCESS;
 
+	if (0 != kaddr && is_ipc_kobject(*typep))
+		*addrp = VM_KERNEL_ADDRPERM(VM_KERNEL_UNSLIDE(kaddr));
+	else
+		*addrp = 0;
+
+	return KERN_SUCCESS;
 }
 #endif /* MACH_IPC_DEBUG */
 /*

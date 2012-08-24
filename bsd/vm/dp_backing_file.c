@@ -279,12 +279,10 @@ macx_swapon(
 
 #if CONFIG_PROTECT
 	{
-		void *cnode = NULL;
 		/* initialize content protection keys manually */
-		if ((cnode = cp_get_protected_cnode(vp)) != 0) {
-			if ((error = cp_handle_vnop(cnode, CP_WRITE_ACCESS)) != 0)
-				goto swapon_bailout;
-		}
+		if ((error = cp_handle_vnop(vp, CP_WRITE_ACCESS, 0)) != 0) {
+			goto swapon_bailout;
+ 		}
 	}
 #endif
 
@@ -474,21 +472,12 @@ macx_swapoff(
 
 	ut = get_bsdthread_info(current_thread());
 
-#if !CONFIG_EMBEDDED
 	orig_iopol_disk = proc_get_thread_selfdiskacc();
 	proc_apply_thread_selfdiskacc(IOPOL_THROTTLE);
-#else /* !CONFIG_EMBEDDED */
-	orig_iopol_disk = ut->uu_iopol_disk;
-	ut->uu_iopol_disk = IOPOL_THROTTLE;
-#endif /* !CONFIG_EMBEDDED */
 
 	kr = default_pager_backing_store_delete(backing_store);
 
-#if !CONFIG_EMBEDDED
 	proc_apply_thread_selfdiskacc(orig_iopol_disk);
-#else /* !CONFIG_EMBEDDED */
-	ut->uu_iopol_disk = orig_iopol_disk;
-#endif /* !CONFIG_EMBEDDED */
 
 	switch (kr) {
 		case KERN_SUCCESS:

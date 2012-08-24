@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2004-2007 Apple Inc. All rights reserved.
+ * Copyright (c) 2004-2012 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -1515,7 +1515,7 @@ ipfw_version_latest_to_one_32(struct ip_fw_32 *curr_rule, struct ip_fw_compat_32
 	if (!rule_vers1)
 		return;
 		
-	bzero(rule_vers1, sizeof(struct ip_fw_compat));
+	bzero(rule_vers1, sizeof(struct ip_fw_compat_32));
 	
 	rule_vers1->version = IP_FW_VERSION_1;
 	rule_vers1->context = CAST_DOWN_EXPLICIT(user32_addr_t,curr_rule->context);
@@ -1541,7 +1541,7 @@ ipfw_version_latest_to_one_64(struct ip_fw_64 *curr_rule, struct ip_fw_compat_64
 	if (!rule_vers1)
 		return;
 		
-	bzero(rule_vers1, sizeof(struct ip_fw_compat));
+	bzero(rule_vers1, sizeof(struct ip_fw_compat_64));
 	
 	rule_vers1->version = IP_FW_VERSION_1;
 	rule_vers1->context = CAST_DOWN_EXPLICIT(__uint64_t, curr_rule->context);

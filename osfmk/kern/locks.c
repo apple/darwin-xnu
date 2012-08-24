@@ -53,7 +53,6 @@
  * any improvements or extensions that they make and grant Carnegie Mellon
  * the rights to redistribute these changes.
  */
-#include <mach_kdb.h>
 #include <mach_ldebug.h>
 #include <debug.h>
 
@@ -366,6 +365,7 @@ void
 lck_attr_setdefault(
 	lck_attr_t	*attr)
 {
+#if   __i386__ || __x86_64__
 #if     !DEBUG
  	if (LcksOpts & enaLkDeb)
  		attr->lck_attr_val =  LCK_ATTR_DEBUG;
@@ -374,6 +374,9 @@ lck_attr_setdefault(
 #else
  	attr->lck_attr_val =  LCK_ATTR_DEBUG;
 #endif	/* !DEBUG */
+#else
+#error Unknown architecture.
+#endif	/* __arm__ */
 }
 
 

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1998-2009 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 1998-2011 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -179,11 +179,11 @@ class IOPlatformExpert;
     @abstract The base class for most I/O Kit families, devices, and drivers.
     @discussion The IOService base class defines APIs used to publish services, instantiate other services based on the existance of a providing service (ie. driver stacking), destroy a service and its dependent stack, notify interested parties of service state changes, and general utility functions useful across all families. 
 
-Types of service are specified with a matching dictionary that describes properties of the service. For example, a matching dictionary might describe any IOUSBDevice (or subclass), an IOUSBDevice with a certain class code, or a IOPCIDevice with a set of OpenFirmware matching names or device & vendor IDs. Since the matching dictionary is interpreted by the family which created the service, as well as generically by IOService, the list of properties considered for matching depends on the familiy.
+Types of service are specified with a matching dictionary that describes properties of the service. For example, a matching dictionary might describe any IOUSBDevice (or subclass), an IOUSBDevice with a certain class code, or a IOPCIDevice with a set of matching names or device & vendor IDs. Since the matching dictionary is interpreted by the family which created the service, as well as generically by IOService, the list of properties considered for matching depends on the familiy.
 
 Matching dictionaries are associated with IOService classes by the catalogue, as driver property tables, and also supplied by clients of the notification APIs.
 
-IOService provides matching based on C++ class (via OSMetaClass dynamic casting), registry entry name, a registry path to the service (which includes OpenFirmware paths), a name assigned by BSD, or by its location (its point of attachment).
+IOService provides matching based on C++ class (via OSMetaClass dynamic casting), registry entry name, a registry path to the service (which includes device tree paths), a name assigned by BSD, or by its location (its point of attachment).
 
 <br><br>Driver Instantiation by IOService<br><br>
 
@@ -231,7 +231,7 @@ A string defining the driver category for matching purposes. All drivers with no
 <br>
 	<code>kIONameMatchKey, extern const OSSymbol * gIONameMatchKey, "IONameMatch"</code>
 <br>
-A string or collection of strings that match the provider's name. The comparison is implemented with the @link //apple_ref/cpp/instm/IORegistryEntry/compareNames/virtualbool/(OSObject*,OSString**) IORegistryEntry::compareNames@/link method, which supports a single string, or any collection (OSArray, OSSet, OSDictionary etc.) of strings. IOService objects with OpenFirmware device tree properties (eg. IOPCIDevice) will also be matched based on that standard's "compatible", "name", "device_type" properties. The matching name will be left in the driver's property table in the <code>kIONameMatchedKey</code> property.
+A string or collection of strings that match the provider's name. The comparison is implemented with the @link //apple_ref/cpp/instm/IORegistryEntry/compareNames/virtualbool/(OSObject*,OSString**) IORegistryEntry::compareNames@/link method, which supports a single string, or any collection (OSArray, OSSet, OSDictionary etc.) of strings. IOService objects with device tree properties (eg. IOPCIDevice) will also be matched based on that standard's "compatible", "name", "device_type" properties. The matching name will be left in the driver's property table in the <code>kIONameMatchedKey</code> property.
 <br>
 Examples
 <pre>
@@ -727,6 +727,14 @@ public:
     @result An instance of an iterator over a set of IOService objects. To be released by the caller. */
 
     static OSIterator * getMatchingServices( OSDictionary * matching );
+
+/*! @function copyMatchingService
+    @abstract Finds one of the current published IOService objects matching a matching dictionary.
+    @discussion Provides a method to find one member of the set of published IOService objects matching the supplied matching dictionary.   
+    @param matching The matching dictionary describing the desired IOService object.
+    @result The IOService object or NULL. To be released by the caller. */
+
+    static IOService * copyMatchingService( OSDictionary * matching );
 
 public:
     /* Helpers to make matching dictionaries for simple cases,
@@ -1254,6 +1262,11 @@ private:
     void doServiceTerminate( IOOptionBits options );
 
 private:
+
+    bool matchPassive(OSDictionary * table, uint32_t options);
+    bool matchInternal(OSDictionary * table, uint32_t options, unsigned int * did);
+    static bool instanceMatch(const OSObject * entry, void * context);
+
     static OSObject * copyExistingServices( OSDictionary * matching,
 		 IOOptionBits inState, IOOptionBits options = 0 );
 
@@ -1778,7 +1791,7 @@ private:
     bool checkForDone ( void );
     bool responseValid ( uint32_t x, int pid );
     void computeDesiredState ( unsigned long tempDesire = 0 );
-    void rebuildChildClampBits ( void );
+    void trackSystemSleepPreventers( IOPMPowerStateIndex, IOPMPowerStateIndex, IOPMPowerChangeFlags );
     void tellSystemCapabilityChange( uint32_t nextMS );
 
 	static void ack_timer_expired( thread_call_param_t, thread_call_param_t );

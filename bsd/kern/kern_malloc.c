@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2010 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2011 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -273,11 +273,11 @@ const char *memname[] = {
 	"fileglob",		/* 99 M_FILEGLOB */ 
 	"kauth",		/* 100 M_KAUTH */ 
 	"dummynet",		/* 101 M_DUMMYNET */ 
-#ifndef __LP64__
+#if CONFIG_VFS_FUNNEL
 	"unsafe_fsnode",	/* 102 M_UNSAFEFS */ 
 #else
 	"",			/* 102 M_UNSAFEFS */ 
-#endif /* __LP64__ */
+#endif /* CONFIG_VFS_FUNNEL */
 	"macpipelabel", /* 103 M_MACPIPELABEL */
 	"mactemp",      /* 104 M_MACTEMP */
 	"sbuf",         /* 105 M_SBUF */
@@ -459,11 +459,11 @@ struct kmzones {
 	{ SOS(fileglob),	KMZ_CREATEZONE, TRUE },	/* 99 M_FILEGLOB */
 	{ 0,		KMZ_MALLOC, FALSE },		/* 100 M_KAUTH */
 	{ 0,		KMZ_MALLOC, FALSE },		/* 101 M_DUMMYNET */
-#ifndef __LP64__
+#if CONFIG_VFS_FUNNEL
 	{ SOS(unsafe_fsnode),KMZ_CREATEZONE, TRUE },	/* 102 M_UNSAFEFS */
 #else 
 	{ 0,		KMZ_MALLOC, FALSE },		/* 102 M_UNSAFEFS */
-#endif /* __LP64__ */
+#endif /* CONFIG_VFS_FUNNEL */
 	{ 0,		KMZ_MALLOC, FALSE },		/* 103 M_MACPIPELABEL */
 	{ 0,		KMZ_MALLOC, FALSE },		/* 104 M_MACTEMP */
 	{ 0,		KMZ_MALLOC, FALSE },		/* 105 M_SBUF */
@@ -562,11 +562,23 @@ _MALLOC(
 		return (NULL);
 
 	if (flags & M_NOWAIT) {
-		hdr = (void *)kalloc_noblock(memsize);
+               if (size > memsize)   /* overflow detected */
+                       return (NULL);
+               else
+                       hdr = (void *)kalloc_noblock(memsize); 
 	} else {
-		hdr = (void *)kalloc(memsize);
+               if (size > memsize) {
+                       /*
+                        * We get here when the caller told us to block, waiting for memory but an overflow
+                        * has been detected.  The caller isn't expecting a NULL return code so we panic
+                        * with a descriptive message.
+                        */
+                       panic("_MALLOC: overflow detected, size %llu ", (uint64_t) size);
+               }
+               else
+                       hdr = (void *)kalloc(memsize);
 
-		if (hdr == NULL) {
+	       if (hdr == NULL) {
 
 			/*
 			 * We get here when the caller told us to block waiting for memory, but

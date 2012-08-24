@@ -98,40 +98,39 @@ extern void ipc_hash_delete(
 
 /*
  *	For use by functions that know what they're doing:
- *	the global primitives, for splay tree entries,
- *	and the local primitives, for table entries.
+ *	local primitives are for table entries.
  */
 
-/* Delete an entry from the global reverse hash table */
-extern void ipc_hash_global_delete(
-	ipc_space_t		space,
-	ipc_object_t		obj,
-	mach_port_name_t	name,
-	ipc_tree_entry_t	entry);
-
 /* Lookup (space, obj) in local hash table */
-extern boolean_t ipc_hash_local_lookup(
-	ipc_space_t		space,
+extern boolean_t ipc_hash_table_lookup(
+	ipc_entry_t		table,
+	ipc_entry_num_t		size,
 	ipc_object_t		obj,
 	mach_port_name_t	*namep,
 	ipc_entry_t		*entryp);
 
 /* Inserts an entry into the local reverse hash table */
-extern void ipc_hash_local_insert(
-	ipc_space_t		space,
+extern void ipc_hash_table_insert(
+	ipc_entry_t		table,
+	ipc_entry_num_t		size,
 	ipc_object_t		obj,
 	mach_port_index_t	index,
 	ipc_entry_t		entry);
 
-/* Initialize the reverse hash table implementation */
-extern void ipc_hash_init(void) __attribute__((section("__TEXT, initcode")));
+/* Delete an entry from the appropriate reverse hash table */
+extern void ipc_hash_table_delete(
+	ipc_entry_t		table,
+	ipc_entry_num_t		size,
+	ipc_object_t		obj,
+	mach_port_name_t	name,
+	ipc_entry_t		entry);
 
 #include <mach_ipc_debug.h>
 
 #if	MACH_IPC_DEBUG
 
 #include <mach_debug/hash_info.h>
-extern natural_t ipc_hash_size(void);
+
 extern natural_t ipc_hash_info(
 	hash_info_bucket_t	*info,
 	natural_t count);

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2010 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2011 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -175,9 +175,9 @@ struct nameidata {
 #define	AUDITVNPATH2	0x00200000 /* audit the path/vnode info */
 #define	USEDVP		0x00400000 /* start the lookup at ndp.ni_dvp */
 #define	CN_VOLFSPATH	0x00800000 /* user path was a volfs style path */
-#ifndef __LP64__
+#if CONFIG_VFS_FUNNEL
 #define FSNODELOCKHELD	0x01000000
-#endif /* __LP64__ */
+#endif /* CONFIG_VFS_FUNNEL */
 #define UNIONCREATED	0x02000000 /* union fs creation of vnode */
 #if NAMEDRSRCFORK
 #define CN_WANTSRSRCFORK 0x04000000

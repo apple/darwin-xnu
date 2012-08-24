@@ -89,7 +89,7 @@
 #include <libkern/libkern.h>
 
 #include <mach/task.h>
-#include <mach/task_special_ports.h>
+#include <mach/host_special_ports.h>
 #include <mach/host_priv.h>
 #include <mach/thread_act.h>
 #include <mach/mig_errors.h>
@@ -199,8 +199,8 @@ static int	nfs_gss_svc_gssd_upcall(struct nfs_gss_svc_ctx *);
 static int	nfs_gss_svc_seqnum_valid(struct nfs_gss_svc_ctx *, uint32_t);
 #endif /* NFSSERVER */
 
-static void	task_release_special_port(mach_port_t);
-static mach_port_t task_copy_special_port(mach_port_t);
+static void	host_release_special_port(mach_port_t);
+static mach_port_t host_copy_special_port(mach_port_t);
 static void	nfs_gss_mach_alloc_buffer(u_char *, uint32_t, vm_map_copy_t *);
 static int	nfs_gss_mach_vmcopyout(vm_map_copy_t, uint32_t, u_char *);
 static int	nfs_gss_token_get(gss_key_info *ki, u_char *, u_char *, int, uint32_t *, u_char *);
@@ -1321,8 +1321,46 @@ nfs_gss_clnt_svcname(struct nfsmount *nmp)
 }
 
 /*
+ * Get a mach port to talk to gssd.
+ * gssd lives in the root bootstrap, so we call gssd's lookup routine
+ * to get a send right to talk to a new gssd instance that launchd has launched
+ * based on the cred's uid and audit session id.
+ */
+#define kauth_cred_getasid(cred) ((cred)->cr_audit.as_aia_p->ai_asid)
+#define kauth_cred_getauid(cred) ((cred)->cr_audit.as_aia_p->ai_auid)
+
+static mach_port_t
+nfs_gss_clnt_get_upcall_port(kauth_cred_t credp)
+{
+	mach_port_t gssd_host_port, uc_port = IPC_PORT_NULL;
+	kern_return_t kr;
+	au_asid_t asid;
+	uid_t uid;
+
+	kr = host_get_gssd_port(host_priv_self(), &gssd_host_port);
+	if (kr != KERN_SUCCESS) {
+		printf("nfs_gss_get_upcall_port: can't get gssd port, status %x (%d)\n", kr, kr);
+		return (IPC_PORT_NULL);
+	}
+	if (!IPC_PORT_VALID(gssd_host_port)) {
+		printf("nfs_gss_get_upcall_port: gssd port not valid\n");
+		return (IPC_PORT_NULL);
+	}
+
+	asid = kauth_cred_getasid(credp);
+	uid = kauth_cred_getauid(credp);
+	if (uid == AU_DEFAUDITID)
+		uid = kauth_cred_getuid(credp);
+	kr = mach_gss_lookup(gssd_host_port, uid, asid, &uc_port);
+	if (kr != KERN_SUCCESS)
+		printf("nfs_gss_clnt_get_upcall_port: mach_gssd_lookup failed: status %x (%d)\n", kr, kr);
+
+	return (uc_port);
+}
+
+/*
  * Make an upcall to the gssd using Mach RPC
- * The upcall is made using a task special port.
+ * The upcall is made using a host special port.
  * This allows launchd to fire up the gssd in the
  * user's session.  This is important, since gssd
  * must have access to the user's credential cache.
@@ -1351,16 +1389,9 @@ nfs_gss_clnt_gssd_upcall(struct nfsreq *req, struct nfs_gss_clnt_ctx *cp)
 	 */
 	uprinc[0] = '\0';
 	if (!IPC_PORT_VALID(cp->gss_clnt_mport)) {
-		kr = task_get_gssd_port(get_threadtask(req->r_thread), &cp->gss_clnt_mport);
-		if (kr != KERN_SUCCESS) {
-			printf("nfs_gss_clnt_gssd_upcall: can't get gssd port, status %x (%d)\n", kr, kr);
+		cp->gss_clnt_mport = nfs_gss_clnt_get_upcall_port(req->r_cred);
+		if (cp->gss_clnt_mport == IPC_PORT_NULL)
 			goto out;
-		}
-		if (!IPC_PORT_VALID(cp->gss_clnt_mport)) {
-			printf("nfs_gss_clnt_gssd_upcall: gssd port not valid\n");
-			cp->gss_clnt_mport = NULL;
-			goto out;
-		}
 	}
 
 	if (cp->gss_clnt_tokenlen > 0)
@@ -1394,8 +1425,9 @@ retry:
 				nfs_gss_mach_alloc_buffer(cp->gss_clnt_token, cp->gss_clnt_tokenlen, &itoken);
 			goto retry;
 		}
-		task_release_special_port(cp->gss_clnt_mport);
-		cp->gss_clnt_mport = NULL;
+
+		host_release_special_port(cp->gss_clnt_mport);
+		cp->gss_clnt_mport = IPC_PORT_NULL;
 		goto out;
 	}
 
@@ -1583,7 +1615,7 @@ nfs_gss_clnt_ctx_remove(struct nfsmount *nmp, struct nfs_gss_clnt_ctx *cp)
 	if (nmp != NULL)
 		TAILQ_REMOVE(&nmp->nm_gsscl, cp, gss_clnt_entries);
 
-	task_release_special_port(cp->gss_clnt_mport);
+	host_release_special_port(cp->gss_clnt_mport);
 
 	if (cp->gss_clnt_mtx)
 		lck_mtx_destroy(cp->gss_clnt_mtx, nfs_gss_clnt_grp);
@@ -1623,7 +1655,7 @@ nfs_gss_clnt_ctx_renew(struct nfsreq *req)
 		return (0);	// already being renewed
 	}
 	saved_uid = cp->gss_clnt_uid;
-	saved_mport = task_copy_special_port(cp->gss_clnt_mport);
+	saved_mport = host_copy_special_port(cp->gss_clnt_mport);
 
 	/* Remove the old context */
 	cp->gss_clnt_flags |= GSS_CTX_INVAL;
@@ -1649,7 +1681,7 @@ nfs_gss_clnt_ctx_renew(struct nfsreq *req)
 	}
 
 	ncp->gss_clnt_uid = saved_uid;
-	ncp->gss_clnt_mport = task_copy_special_port(saved_mport); // re-use the gssd port
+	ncp->gss_clnt_mport = host_copy_special_port(saved_mport); // re-use the gssd port
 	ncp->gss_clnt_mtx = lck_mtx_alloc_init(nfs_gss_clnt_grp, LCK_ATTR_NULL);
 	ncp->gss_clnt_thread = current_thread();
 	lck_mtx_lock(&nmp->nm_lock);
@@ -1662,7 +1694,7 @@ nfs_gss_clnt_ctx_renew(struct nfsreq *req)
 
 	error = nfs_gss_clnt_ctx_init_retry(req, ncp); // Initialize new context
 out:
-	task_release_special_port(saved_mport);
+	host_release_special_port(saved_mport);
 	if (error)
 		nfs_gss_clnt_ctx_unref(req);
 
@@ -2557,7 +2589,7 @@ nfs_gss_svc_gssd_upcall(struct nfs_gss_svc_ctx *cp)
 	int error = 0;
 	char svcname[] = "nfs";
 
-	kr = task_get_gssd_port(get_threadtask(current_thread()), &mp);
+	kr = host_get_gssd_port(host_priv_self(), &mp);
 	if (kr != KERN_SUCCESS) {
 		printf("nfs_gss_svc_gssd_upcall: can't get gssd port, status %x (%d)\n", kr, kr);
 		goto out;
@@ -2595,11 +2627,11 @@ retry:
 				nfs_gss_mach_alloc_buffer(cp->gss_svc_token, cp->gss_svc_tokenlen, &itoken);
 			goto retry;
 		}
-		task_release_special_port(mp);
+		host_release_special_port(mp);
 		goto out;
 	}
 
-	task_release_special_port(mp);
+	host_release_special_port(mp);
 
 	if (skeylen > 0) {
 		if (skeylen != SKEYLEN && skeylen != SKEYLEN3) {
@@ -2765,8 +2797,8 @@ nfs_gss_svc_cleanup(void)
  */
 
 /*
- * Release a task special port that was obtained by task_get_special_port
- * or one of its macros (task_get_gssd_port in this case).
+ * Release a host special port that was obtained by host_get_special_port
+ * or one of its macros (host_get_gssd_port in this case).
  * This really should be in a public kpi. 
  */
 
@@ -2775,16 +2807,16 @@ extern void ipc_port_release_send(ipc_port_t);
 extern ipc_port_t ipc_port_copy_send(ipc_port_t);
 
 static void
-task_release_special_port(mach_port_t mp)
+host_release_special_port(mach_port_t mp)
 {
 	if (IPC_PORT_VALID(mp))
 		ipc_port_release_send(mp);
 }
 
 static mach_port_t
-task_copy_special_port(mach_port_t mp)
+host_copy_special_port(mach_port_t mp)
 {
-	return ipc_port_copy_send(mp);
+	return (ipc_port_copy_send(mp));
 }
 
 /*
@@ -3393,15 +3425,15 @@ gss_des_crypt(gss_key_info *ki, des_cblock *in, des_cblock *out,
 	switch (ki->type) {
 	case NFS_GSS_1DES:
 			{
-				des_key_schedule *sched = ((usage == KG_USAGE_SEAL) ?
+				des_cbc_key_schedule *sched = ((usage == KG_USAGE_SEAL) ?
 							&ki->ks_u.des.gss_sched_Ke :
 							&ki->ks_u.des.gss_sched);
-				des_cbc_encrypt(in, out, len, *sched, iv, retiv, encrypt); 
+				des_cbc_encrypt(in, out, len, sched, iv, retiv, encrypt);
 			}
 			break;
 	case NFS_GSS_3DES:
 
-			des3_cbc_encrypt(in, out, len, ki->ks_u.des3.gss_sched, iv, retiv, encrypt);
+			des3_cbc_encrypt(in, out, len, &ki->ks_u.des3.gss_sched, iv, retiv, encrypt);
 			break;
 	}
 }
@@ -3419,12 +3451,12 @@ gss_key_init(gss_key_info *ki, uint32_t skeylen)
 				ki->type = NFS_GSS_1DES;
 				ki->hash_len = MD5_DESCBC_DIGEST_LENGTH;
 				ki->ks_u.des.key = (des_cblock *)ki->skey;
-				rc = des_key_sched(ki->ks_u.des.key, ki->ks_u.des.gss_sched);
+				rc = des_cbc_key_sched(ki->ks_u.des.key, &ki->ks_u.des.gss_sched);
 				if (rc)
 					return (rc);
 				for (i = 0; i < ki->keybytes; i++)
 					k[0][i] = 0xf0 ^ (*ki->ks_u.des.key)[i];
-				rc = des_key_sched(&k[0], ki->ks_u.des.gss_sched_Ke);
+				rc = des_cbc_key_sched(&k[0], &ki->ks_u.des.gss_sched_Ke);
 				break;
 	case 3*sizeof(des_cblock):	
 				ki->type = NFS_GSS_3DES;
@@ -3432,7 +3464,7 @@ gss_key_init(gss_key_info *ki, uint32_t skeylen)
 				ki->ks_u.des3.key = (des_cblock (*)[3])ki->skey;
 				des3_derive_key(*ki->ks_u.des3.key, ki->ks_u.des3.ckey,
 						KEY_USAGE_DES3_SIGN, KEY_USAGE_LEN);
- 				rc = des3_key_sched(*ki->ks_u.des3.key, ki->ks_u.des3.gss_sched);
+				rc = des3_cbc_key_sched(*ki->ks_u.des3.key, &ki->ks_u.des3.gss_sched);
 				if (rc)
 					return (rc);
 				break;

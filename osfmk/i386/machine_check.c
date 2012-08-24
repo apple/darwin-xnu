@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2007 Apple Inc. All rights reserved.
+ * Copyright (c) 2007-2011 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -36,6 +36,17 @@
 #include <i386/machine_check.h>
 #include <i386/proc_reg.h>
 
+/*
+ * At the time of the machine-check exception, all hardware-threads panic.
+ * Each thread saves the state of its MCA registers to its per-cpu data area.
+ *
+ * State reporting is serialized so one thread dumps all valid state for all
+ * threads to the panic log. This may entail spinning waiting for other
+ * threads to complete saving state to memory. A timeout applies to this wait
+ * -- in particular, a 3-strikes timeout may prevent a thread from taking
+ * part is the affair.
+ */
+
 #define IF(bool,str)	((bool) ? (str) : "")
 
 static boolean_t	mca_initialized = FALSE;
@@ -60,6 +71,8 @@ typedef struct {
 } mca_mci_bank_t;
 
 typedef struct mca_state {
+	boolean_t		mca_is_saved;
+	boolean_t		mca_is_valid;	/* some state is valid */
 	ia32_mcg_ctl_t		mca_mcg_ctl;
 	ia32_mcg_status_t	mca_mcg_status;
 	mca_mci_bank_t		mca_error_bank[0];
@@ -206,6 +219,7 @@ mca_save_state(mca_state_t *mca_state)
 					rdmsr64(IA32_MCi_MISC(i)) : 0ULL;	
 		bank->mca_mci_addr = (bank->mca_mci_status.bits.addrv)?
 					rdmsr64(IA32_MCi_ADDR(i)) : 0ULL;	
+		mca_state->mca_is_valid = TRUE;
 	} 
 
 	/*
@@ -213,7 +227,9 @@ mca_save_state(mca_state_t *mca_state)
 	 * and don't care about races
 	 */
 	if (x86_package()->mca_state == NULL)
-		x86_package()->mca_state = mca_state;
+			x86_package()->mca_state = mca_state;
+
+	mca_state->mca_is_saved = TRUE;
 }
 
 void
@@ -358,9 +374,9 @@ mca_dump_bank_mc8(mca_state_t *state, int i)
 
 static const char *mca_threshold_status[] = {
 	[THRESHOLD_STATUS_NO_TRACKING] =	"No tracking",
-	[THRESHOLD_STATUS_GREEN] =	"Green",
-	[THRESHOLD_STATUS_YELLOW] =	"Yellow",
-	[THRESHOLD_STATUS_RESERVED] =	"Reserved"
+	[THRESHOLD_STATUS_GREEN] =		"Green",
+	[THRESHOLD_STATUS_YELLOW] =		"Yellow",
+	[THRESHOLD_STATUS_RESERVED] =		"Reserved"
 };
 
 static void
@@ -423,41 +439,24 @@ mca_dump_bank(mca_state_t *state, int i)
 }
 
 static void
-mca_dump_error_banks(mca_state_t *state)
+mca_cpu_dump_error_banks(mca_state_t *state)
 {
 	unsigned int 		i;
 
+	if (!state->mca_is_valid)
+		return;
+
 	kdb_printf("MCA error-reporting registers:\n");
 	for (i = 0; i < mca_error_bank_count; i++ ) {
-		if (i == 8) {
+		if (i == 8 && state == x86_package()->mca_state) {
 			/*
 			 * Fatal Memory Error
 			 */
 
-			/* Dump MC8 for local package */
+			/* Dump MC8 for this package */
 			kdb_printf(" Package %d logged:\n",
 				   x86_package()->ppkg_num);
 			mca_dump_bank_mc8(state, 8);
-
-			/* If there's other packages, report their MC8s */
-			x86_pkg_t	*pkg;
-			uint64_t	deadline;
-			for (pkg = x86_pkgs; pkg != NULL; pkg = pkg->next) {
-				if (pkg == x86_package())
-					continue;
-				deadline = mach_absolute_time() + LockTimeOut;
-				while  (pkg->mca_state == NULL &&
-					mach_absolute_time() < deadline)
-					cpu_pause();
-				if (pkg->mca_state) {
-					kdb_printf(" Package %d logged:\n",
-						   pkg->ppkg_num);
-					mca_dump_bank_mc8(pkg->mca_state, 8);
-				} else {
-					kdb_printf(" Package %d timed out!\n",
-						   pkg->ppkg_num);
-				}
-			}
 			continue;
 		}
 		mca_dump_bank(state, i);
@@ -467,8 +466,9 @@ mca_dump_error_banks(mca_state_t *state)
 void
 mca_dump(void)
 {
-	ia32_mcg_status_t	status;
-	mca_state_t		*mca_state = current_cpu_datap()->cpu_mca_state;
+	mca_state_t	*mca_state = current_cpu_datap()->cpu_mca_state;
+	uint64_t	deadline;
+	unsigned int	i = 0;
 
 	/*
 	 * Capture local MCA registers to per-cpu data.
@@ -476,8 +476,7 @@ mca_dump(void)
 	mca_save_state(mca_state);
 
 	/*
-	 * Serialize in case of multiple simultaneous machine-checks.
-	 * Only the first caller is allowed to dump MCA registers,
+	 * Serialize: the first caller controls dumping MCA registers,
 	 * other threads spin meantime.
 	 */
 	simple_lock(&mca_lock);
@@ -491,11 +490,23 @@ mca_dump(void)
 	simple_unlock(&mca_lock);
 
 	/*
+	 * Wait for all other hardware threads to save their state.
+	 * Or timeout.
+	 */
+	deadline = mach_absolute_time() + LockTimeOut;
+	while (mach_absolute_time() < deadline && i < real_ncpus) {
+		if (!cpu_datap(i)->cpu_mca_state->mca_is_saved) {
+			cpu_pause();
+			continue;
+		}
+		i += 1;
+	}
+
+	/*
 	 * Report machine-check capabilities:
 	 */
 	kdb_printf(
-		"Machine-check capabilities (cpu %d) 0x%016qx:\n",
-		cpu_number(), ia32_mcg_cap.u64);
+		"Machine-check capabilities 0x%016qx:\n", ia32_mcg_cap.u64);
 
 	mca_report_cpu_info();
 
@@ -512,19 +523,32 @@ mca_dump(void)
 			" %d extended MSRs present\n", mca_extended_MSRs_count);
  
 	/*
-	 * Report machine-check status:
+	 * Dump all processor state:
 	 */
-	status.u64 = rdmsr64(IA32_MCG_STATUS);
-	kdb_printf(
-		"Machine-check status 0x%016qx:\n%s%s%s", status.u64,
-		IF(status.bits.ripv, " restart IP valid\n"),
-		IF(status.bits.eipv, " error IP valid\n"),
-		IF(status.bits.mcip, " machine-check in progress\n"));
+	for (i = 0; i < real_ncpus; i++) {
+		mca_state_t		*mcsp = cpu_datap(i)->cpu_mca_state;
+		ia32_mcg_status_t	status;
 
-	/*
-	 * Dump error-reporting registers:
-	 */
-	mca_dump_error_banks(mca_state);
+		kdb_printf("Processor %d: ", i);
+		if (mcsp == NULL ||
+		    mcsp->mca_is_saved == FALSE ||
+		    mcsp->mca_mcg_status.u64 == 0) {
+			kdb_printf("no machine-check status reported\n");
+			continue;
+		}
+		if (!mcsp->mca_is_valid) {
+			kdb_printf("no valid machine-check state\n");
+			continue;
+		}
+		status = mcsp->mca_mcg_status;
+		kdb_printf(
+			"machine-check status 0x%016qx:\n%s%s%s", status.u64,
+			IF(status.bits.ripv, " restart IP valid\n"),
+			IF(status.bits.eipv, " error IP valid\n"),
+			IF(status.bits.mcip, " machine-check in progress\n"));
+
+		mca_cpu_dump_error_banks(mcsp);
+	}
 
 	/*
 	 * Dump any extended machine state:
@@ -538,4 +562,16 @@ mca_dump(void)
 
 	/* Update state to release any other threads. */
 	mca_dump_state = DUMPED;
+}
+
+
+extern void mca_exception_panic(void);
+extern void mtrr_lapic_cached(void);
+void mca_exception_panic(void)
+{
+#if DEBUG
+	mtrr_lapic_cached();
+#else
+	kprintf("mca_exception_panic() requires DEBUG build\n");
+#endif
 }

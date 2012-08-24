@@ -103,6 +103,7 @@
 #include <vm/vm_protos.h>
 #include <vm/vm_map.h>		/* vm_map_switch_protect() */
 #include <mach/task.h>
+#include <mach/message.h>
 
 #if CONFIG_MACF
 #include <security/mac_framework.h>
@@ -174,6 +175,7 @@ static void pgrp_remove(proc_t p);
 static void pgrp_replace(proc_t p, struct pgrp *pgrp);
 static void pgdelete_dropref(struct pgrp *pgrp);
 extern void pg_rele_dropref(struct pgrp * pgrp);
+static int csops_internal(pid_t pid, int ops, user_addr_t uaddr, user_size_t usersize, user_addr_t uaddittoken);
 
 struct fixjob_iterargs {
 	struct pgrp * pg;
@@ -350,6 +352,23 @@ proc_findinternal(int pid, int locked)
 		proc_list_unlock();
 	}
 
+	return(p);
+}
+
+proc_t
+proc_findthread(thread_t thread)
+{
+	proc_t p = PROC_NULL;
+	struct uthread *uth;
+
+	proc_list_lock();
+	uth = get_bsdthread_info(thread);
+	if (uth && (uth->uu_flag & UT_VFORK))
+		p = uth->uu_proc;
+	else
+		p = (proc_t)(get_bsdthreadtask_info(thread));
+	p = proc_ref_locked(p);
+	proc_list_unlock();
 	return(p);
 }
 
@@ -731,6 +750,12 @@ proc_suser(proc_t p)
 	error = suser(my_cred, &p->p_acflag);
 	kauth_cred_unref(&my_cred);
 	return(error);
+}
+
+task_t
+proc_task(proc_t proc)
+{
+	return (task_t)proc->task;
 }
 
 /*      
@@ -1686,10 +1711,31 @@ SYSCTL_INT(_kern_lctx, OID_AUTO, max, CTLFLAG_RW | CTLFLAG_LOCKED, &maxlcid, 0, 
 int 
 csops(__unused proc_t p, struct csops_args *uap, __unused int32_t *retval)
 {
-	int ops = uap->ops;
-	pid_t pid = uap->pid;
-	user_addr_t uaddr = uap->useraddr;
-	size_t usize = (size_t)CAST_DOWN(size_t, uap->usersize);
+	return(csops_internal(uap->pid, uap->ops, uap->useraddr, 
+		uap->usersize, USER_ADDR_NULL));
+}
+
+int 
+csops_audittoken(__unused proc_t p, struct csops_audittoken_args *uap, __unused int32_t *retval)
+{
+	if (uap->uaudittoken == USER_ADDR_NULL)
+		return(EINVAL);
+	switch (uap->ops) {
+		case CS_OPS_PIDPATH:
+		case CS_OPS_ENTITLEMENTS_BLOB:
+			break;
+		default:
+			return(EINVAL);
+	};
+
+	return(csops_internal(uap->pid, uap->ops, uap->useraddr, 
+		uap->usersize, uap->uaudittoken));
+}
+
+static int
+csops_internal(pid_t pid, int ops, user_addr_t uaddr, user_size_t usersize, user_addr_t uaudittoken)
+{
+	size_t usize = (size_t)CAST_DOWN(size_t, usersize);
 	proc_t pt;
 	uint32_t retflags;
 	int vid, forself;
@@ -1698,6 +1744,8 @@ csops(__unused proc_t p, struct csops_args *uap, __unused int32_t *retval)
 	off_t toff;
 	char * buf;
 	unsigned char cdhash[SHA1_RESULTLEN];
+	audit_token_t token;
+	unsigned int upid=0, uidversion = 0;
 	
 	forself = error = 0;
 
@@ -1714,15 +1762,37 @@ csops(__unused proc_t p, struct csops_args *uap, __unused int32_t *retval)
 			return(EOVERFLOW);
 		if (kauth_cred_issuser(kauth_cred_get()) != TRUE) 
 			return(EPERM);
-	} else if ((forself == 0) && ((ops != CS_OPS_STATUS) && (ops != CS_OPS_CDHASH) && (ops != CS_OPS_PIDOFFSET) && (kauth_cred_issuser(kauth_cred_get()) != TRUE))) {
-		return(EPERM);
+	} else {
+		switch (ops) {
+		case CS_OPS_STATUS:
+		case CS_OPS_CDHASH:
+		case CS_OPS_PIDOFFSET:
+		case CS_OPS_ENTITLEMENTS_BLOB:
+			break;	/* unrestricted */
+		default:
+			if (forself == 0 && kauth_cred_issuser(kauth_cred_get()) != TRUE)
+				return(EPERM);
+			break;
+		}
 	}
 
 	pt = proc_find(pid);
 	if (pt == PROC_NULL)
 		return(ESRCH);
 
-
+	upid = pt->p_pid;
+	uidversion = pt->p_idversion;
+	if (uaudittoken != USER_ADDR_NULL) {
+		
+		error = copyin(uaudittoken, &token, sizeof(audit_token_t));
+		if (error != 0)
+			goto out;
+		/* verify the audit token pid/idversion matches with proc */
+		if ((token.val[5] != upid) || (token.val[7] != uidversion)) {
+			error = ESRCH;
+			goto out;
+		}
+	}
 
 	switch (ops) {
 
@@ -1833,20 +1903,34 @@ csops(__unused proc_t p, struct csops_args *uap, __unused int32_t *retval)
 			return error;
 
 		case CS_OPS_ENTITLEMENTS_BLOB: {
-			char zeros[8] = { 0 };
+			char fakeheader[8] = { 0 };
 			void *start;
 			size_t length;
 
-			if (0 != (error = cs_entitlements_blob_get(pt,
-			    &start, &length)))
+			if ((pt->p_csflags & CS_VALID) == 0) {
+				error = EINVAL;
 				break;
-			if (usize < sizeof(zeros) || usize < length) {
+			}
+			if (usize < sizeof(fakeheader)) {
 				error = ERANGE;
 				break;
 			}
+			if (0 != (error = cs_entitlements_blob_get(pt,
+			    &start, &length)))
+				break;
+			/* if no entitlement, fill in zero header */
 			if (NULL == start) {
-				start = zeros;
-				length = sizeof(zeros);
+				start = fakeheader;
+				length = sizeof(fakeheader);
+			} else if (usize < length) {
+				/* ... if input too short, copy out length of entitlement */
+				uint32_t length32 = htonl((uint32_t)length);
+				memcpy(&fakeheader[4], &length32, sizeof(length32));
+
+				error = copyout(fakeheader, uaddr, sizeof(fakeheader));
+				if (error == 0)
+					error = ERANGE; /* input buffer to short, ERANGE signals that */
+				break;
 			}
 			error = copyout(start, uaddr, length);
 			break;
@@ -1866,7 +1950,6 @@ out:
 	proc_rele(pt);
 	return(error);
 }
-
 
 int
 proc_iterate(flags, callout, arg, filterfn, filterarg)

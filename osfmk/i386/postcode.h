@@ -114,37 +114,25 @@
  * The following postcodes are defined for stages of early startup:
  */
 
-#define	_PSTART_ENTRY			0xFF
-#define	_PSTART_RELOC			0xFE
-#define	PSTART_ENTRY			0xFD
-#define PSTART_PAGE_TABLES		0xFC
-#if defined(__x86_64__)
-#define PSTART_BEFORE_ID_MAP		0xFB
-#else
-#define PSTART_BEFORE_PAGING		0xFB
-#endif
-#define VSTART_ENTRY			0xFA
-#define VSTART_STACK_SWITCH		0xF9
-#define VSTART_BEFORE_PAGING		0xF8
-#define VSTART_EXIT			0xF7
-#define	I386_INIT_ENTRY			0xF6
-#define	CPU_INIT_D			0xF5
-#define	PE_INIT_PLATFORM_D		0xF4
+#define	PSTART_ENTRY			0xFF
+#define PSTART_REBASE			0xFE
+#define PSTART_BEFORE_PAGING		0xFE
+#define	PSTART_VSTART			0xFD
+#define VSTART_ENTRY			0xFC
+#define VSTART_IDLE_PTS_INIT		0xFB
+#define VSTART_PHYSMAP_INIT		0xFA
+#define VSTART_DESC_ALIAS_INIT		0xF9
+#define VSTART_SET_CR3			0xF8
+#define VSTART_CPU_DESC_INIT		0xF7
+#define VSTART_CPU_MODE_INIT		0xF6
+#define VSTART_EXIT			0xF5
+#define	I386_INIT_ENTRY			0xF4
+#define	CPU_INIT_D			0xF3
+#define	PE_INIT_PLATFORM_D		0xF2
 
-#define	SLAVE_RSTART_ENTRY		0xEF
-#define	SLAVE_REAL_TO_PROT_ENTRY	0xEE
-#define	SLAVE_REAL_TO_PROT_EXIT		0xED
-#define	SLAVE_STARTPROG_ENTRY		0xEC
-#define	SLAVE_STARTPROG_EXIT		0xEB
-#define	SLAVE_PSTART_ENTRY		0xEA
-#define	SLAVE_PSTART_EXIT		0xE9
-#if defined(__i386__)
-#define	SLAVE_VSTART_ENTRY		0xE8
-#define	SLAVE_VSTART_DESC_INIT		0xE7
-#define	SLAVE_VSTART_STACK_SWITCH	0xE6
-#define	SLAVE_VSTART_EXIT		0xE5
-#endif
-#define	I386_INIT_SLAVE			0xE4
+#define	SLAVE_STARTPROG_ENTRY		0xEF
+#define	SLAVE_PSTART			0xEE
+#define	I386_INIT_SLAVE			0xED
 
 #define	PANIC_DOUBLE_FAULT		0xDF	/* Double Fault exception */
 #define	PANIC_MACHINE_CHECK		0xDE	/* Machine-Check */

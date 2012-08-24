@@ -74,9 +74,14 @@ extern	commpage_descriptor*	commpage_64_routines[];
 
 extern vm_map_t	commpage32_map;	// the shared submap, set up in vm init
 extern vm_map_t	commpage64_map;	// the shared submap, set up in vm init
+extern vm_map_t	commpage_text32_map;	// the shared submap, set up in vm init
+extern vm_map_t	commpage_text64_map;	// the shared submap, set up in vm init
+
 
 char	*commPagePtr32 = NULL;		// virtual addr in kernel map of 32-bit commpage
 char	*commPagePtr64 = NULL;		// ...and of 64-bit commpage
+char	*commPageTextPtr32 = NULL;		// virtual addr in kernel map of 32-bit commpage
+char	*commPageTextPtr64 = NULL;		// ...and of 64-bit commpage
 uint32_t     _cpu_capabilities = 0;          // define the capability vector
 
 int	noVMX = 0;		/* if true, do not set kHasAltivec in ppc _cpu_capabilities */
@@ -105,22 +110,24 @@ decl_simple_lock_data(static,commpage_active_cpus_lock);
 static  void*
 commpage_allocate( 
 	vm_map_t	submap,			// commpage32_map or commpage_map64
-	size_t		area_used )		// _COMM_PAGE32_AREA_USED or _COMM_PAGE64_AREA_USED
+	size_t		area_used,		// _COMM_PAGE32_AREA_USED or _COMM_PAGE64_AREA_USED
+	vm_prot_t	uperm)
 {
 	vm_offset_t	kernel_addr = 0;	// address of commpage in kernel map
 	vm_offset_t	zero = 0;
 	vm_size_t	size = area_used;	// size actually populated
 	vm_map_entry_t	entry;
 	ipc_port_t	handle;
+	kern_return_t	kr;
 
 	if (submap == NULL)
 		panic("commpage submap is null");
 
-	if (vm_map(kernel_map,&kernel_addr,area_used,0,VM_FLAGS_ANYWHERE,NULL,0,FALSE,VM_PROT_ALL,VM_PROT_ALL,VM_INHERIT_NONE))
-		panic("cannot allocate commpage");
+	if ((kr = vm_map(kernel_map,&kernel_addr,area_used,0,VM_FLAGS_ANYWHERE,NULL,0,FALSE,VM_PROT_ALL,VM_PROT_ALL,VM_INHERIT_NONE)))
+		panic("cannot allocate commpage %d", kr);
 
-	if (vm_map_wire(kernel_map,kernel_addr,kernel_addr+area_used,VM_PROT_DEFAULT,FALSE))
-		panic("cannot wire commpage");
+	if ((kr = vm_map_wire(kernel_map,kernel_addr,kernel_addr+area_used,VM_PROT_DEFAULT,FALSE)))
+		panic("cannot wire commpage: %d", kr);
 
 	/* 
 	 * Now that the object is created and wired into the kernel map, mark it so that no delay
@@ -130,19 +137,19 @@ commpage_allocate(
 	 *
 	 * JMM - What we really need is a way to create it like this in the first place.
 	 */
-	if (!vm_map_lookup_entry( kernel_map, vm_map_trunc_page(kernel_addr), &entry) || entry->is_sub_map)
-		panic("cannot find commpage entry");
+	if (!(kr = vm_map_lookup_entry( kernel_map, vm_map_trunc_page(kernel_addr), &entry) || entry->is_sub_map))
+		panic("cannot find commpage entry %d", kr);
 	entry->object.vm_object->copy_strategy = MEMORY_OBJECT_COPY_NONE;
 
-	if (mach_make_memory_entry( kernel_map,		// target map
+	if ((kr = mach_make_memory_entry( kernel_map,		// target map
 				    &size,		// size 
 				    kernel_addr,	// offset (address in kernel map)
-				    VM_PROT_ALL,	// map it RWX
+				    uperm,	// protections as specified
 				    &handle,		// this is the object handle we get
-				    NULL ))		// parent_entry (what is this?)
-		panic("cannot make entry for commpage");
+				    NULL )))		// parent_entry (what is this?)
+		panic("cannot make entry for commpage %d", kr);
 
-	if (vm_map_64(	submap,				// target map (shared submap)
+	if ((kr = vm_map_64(	submap,				// target map (shared submap)
 			&zero,				// address (map into 1st page in submap)
 			area_used,			// size
 			0,				// mask
@@ -150,19 +157,18 @@ commpage_allocate(
 			handle,				// port is the memory entry we just made
 			0,                              // offset (map 1st page in memory entry)
 			FALSE,                          // copy
-			VM_PROT_READ|VM_PROT_EXECUTE,   // cur_protection (R-only in user map)
-			VM_PROT_READ|VM_PROT_EXECUTE,   // max_protection
-			VM_INHERIT_SHARE ))             // inheritance
-		panic("cannot map commpage");
+			uperm,   // cur_protection (R-only in user map)
+			uperm,   // max_protection
+		        VM_INHERIT_SHARE )))             // inheritance
+		panic("cannot map commpage %d", kr);
 
 	ipc_port_release(handle);
-	
-	// Initialize the text section of the commpage with INT3
-	char *commpage_ptr = (char*)(intptr_t)kernel_addr;
-	vm_size_t i;
-	for( i = _COMM_PAGE_TEXT_START - _COMM_PAGE_START_ADDRESS; i < size; i++ )
-		// This is the hex for the X86 opcode INT3
-		commpage_ptr[i] = 0xCC;
+	/* Make the kernel mapping non-executable. This cannot be done
+	 * at the time of map entry creation as mach_make_memory_entry
+	 * cannot handle disjoint permissions at this time.
+	 */
+	kr = vm_protect(kernel_map, kernel_addr, area_used, FALSE, VM_PROT_READ | VM_PROT_WRITE);
+	assert (kr == KERN_SUCCESS);
 
 	return (void*)(intptr_t)kernel_addr;                     // return address in kernel map
 }
@@ -331,21 +337,20 @@ commpage_populate_one(
 	char **		kernAddressPtr,	// &commPagePtr32 or &commPagePtr64
 	size_t		area_used,	// _COMM_PAGE32_AREA_USED or _COMM_PAGE64_AREA_USED
 	commpage_address_t base_offset,	// will become commPageBaseOffset
-	commpage_descriptor** commpage_routines, // list of routine ptrs for this commpage
 	commpage_time_data** time_data,	// &time_data32 or &time_data64
-	const char*	signature )	// "commpage 32-bit" or "commpage 64-bit"
+	const char*	signature,	// "commpage 32-bit" or "commpage 64-bit"
+	vm_prot_t	uperm)
 {
 	uint8_t	c1;
    	short   c2;
 	int	    c4;
 	uint64_t c8;
 	uint32_t	cfamily;
-	commpage_descriptor **rd;
 	short   version = _COMM_PAGE_THIS_VERSION;
 
 	next = 0;
 	cur_routine = 0;
-	commPagePtr = (char *)commpage_allocate( submap, (vm_size_t) area_used );
+	commPagePtr = (char *)commpage_allocate( submap, (vm_size_t) area_used, uperm );
 	*kernAddressPtr = commPagePtr;				// save address either in commPagePtr32 or 64
 	commPageBaseOffset = base_offset;
 
@@ -380,12 +385,6 @@ commpage_populate_one(
 	cfamily = cpuid_info()->cpuid_cpufamily;
 	commpage_stuff(_COMM_PAGE_CPUFAMILY, &cfamily, 4);
 
-	for( rd = commpage_routines; *rd != NULL ; rd++ )
-		commpage_stuff_routine(*rd);
-
-	if (!matched)
-		panic("commpage no match on last routine");
-
 	if (next > _COMM_PAGE_END)
 		panic("commpage overflow: next = 0x%08x, commPagePtr = 0x%p", next, commPagePtr);
 
@@ -408,9 +407,9 @@ commpage_populate( void )
 				&commPagePtr32,
 				_COMM_PAGE32_AREA_USED,
 				_COMM_PAGE32_BASE_ADDRESS,
-				commpage_32_routines, 
 				&time_data32,
-				"commpage 32-bit");
+				"commpage 32-bit",
+				VM_PROT_READ);
 #ifndef __LP64__
 	pmap_commpage32_init((vm_offset_t) commPagePtr32, _COMM_PAGE32_BASE_ADDRESS, 
 			   _COMM_PAGE32_AREA_USED/INTEL_PGBYTES);
@@ -422,9 +421,9 @@ commpage_populate( void )
 					&commPagePtr64,
 					_COMM_PAGE64_AREA_USED,
 					_COMM_PAGE32_START_ADDRESS, /* commpage address are relative to 32-bit commpage placement */
-					commpage_64_routines, 
 					&time_data64,
-					"commpage 64-bit");
+					"commpage 64-bit",
+					VM_PROT_READ);
 #ifndef __LP64__
 		pmap_commpage64_init((vm_offset_t) commPagePtr64, _COMM_PAGE64_BASE_ADDRESS, 
 				   _COMM_PAGE64_AREA_USED/INTEL_PGBYTES);
@@ -437,6 +436,63 @@ commpage_populate( void )
 	rtc_nanotime_init_commpage();
 }
 
+/* Fill in the common routines during kernel initialization. 
+ * This is called before user-mode code is running.
+ */
+void commpage_text_populate( void ){
+	commpage_descriptor **rd;
+	
+	next =0;
+	cur_routine=0;
+	commPagePtr = (char *) commpage_allocate(commpage_text32_map, (vm_size_t) _COMM_PAGE_TEXT_AREA_USED, VM_PROT_READ | VM_PROT_EXECUTE);
+	commPageTextPtr32 = commPagePtr;
+	
+	char *cptr = commPagePtr;
+	int i=0;
+	for(; i< _COMM_PAGE_TEXT_AREA_USED; i++){
+		cptr[i]=0xCC;
+	}
+	
+	commPageBaseOffset = _COMM_PAGE_TEXT_START;
+	for (rd = commpage_32_routines; *rd != NULL; rd++) {
+		commpage_stuff_routine(*rd);
+	}
+	if (!matched)
+		panic(" commpage_text no match for last routine ");
+
+#ifndef __LP64__
+	pmap_commpage32_init((vm_offset_t) commPageTextPtr32, _COMM_PAGE_TEXT_START, 
+			   _COMM_PAGE_TEXT_AREA_USED/INTEL_PGBYTES);
+#endif	
+
+	if (_cpu_capabilities & k64Bit) {
+		next =0;
+		cur_routine=0;
+		commPagePtr = (char *) commpage_allocate(commpage_text64_map, (vm_size_t) _COMM_PAGE_TEXT_AREA_USED, VM_PROT_READ | VM_PROT_EXECUTE);
+		commPageTextPtr64 = commPagePtr;
+
+		cptr=commPagePtr;
+		for(i=0; i<_COMM_PAGE_TEXT_AREA_USED; i++){
+			cptr[i]=0xCC;
+		}
+
+		for (rd = commpage_64_routines; *rd !=NULL; rd++) {
+			commpage_stuff_routine(*rd);
+		}
+
+#ifndef __LP64__
+	pmap_commpage64_init((vm_offset_t) commPageTextPtr64, _COMM_PAGE_TEXT_START, 
+			   _COMM_PAGE_TEXT_AREA_USED/INTEL_PGBYTES);
+#endif	
+	}
+
+	if (!matched)
+		panic(" commpage_text no match for last routine ");
+
+	if (next > _COMM_PAGE_TEXT_END) 
+		panic("commpage text overflow: next=0x%08x, commPagePtr=%p", next, commPagePtr); 
+
+}
 
 /* Update commpage nanotime information.  Note that we interleave
  * setting the 32- and 64-bit commpages, in order to keep nanotime more
@@ -618,13 +674,16 @@ commpage_update_active_cpus(void)
 	simple_unlock(&commpage_active_cpus_lock);
 }
 
+extern user32_addr_t commpage_text32_location;
+extern user64_addr_t commpage_text64_location;
 
 /* Check to see if a given address is in the Preemption Free Zone (PFZ) */
 
 uint32_t
 commpage_is_in_pfz32(uint32_t addr32)
 {
-	if ( (addr32 >= _COMM_PAGE_PFZ_START) && (addr32 < _COMM_PAGE_PFZ_END)) {
+	if ( (addr32 >= (commpage_text32_location + _COMM_TEXT_PFZ_START_OFFSET)) 
+		&& (addr32 < (commpage_text32_location+_COMM_TEXT_PFZ_END_OFFSET))) {
 		return 1;
 	}
 	else
@@ -634,8 +693,8 @@ commpage_is_in_pfz32(uint32_t addr32)
 uint32_t
 commpage_is_in_pfz64(addr64_t addr64)
 {
-	if ( (addr64 >= _COMM_PAGE_32_TO_64(_COMM_PAGE_PFZ_START))
-	     && (addr64 <  _COMM_PAGE_32_TO_64(_COMM_PAGE_PFZ_END))) {
+	if ( (addr64 >= (commpage_text64_location + _COMM_TEXT_PFZ_START_OFFSET))
+	     && (addr64 <  (commpage_text64_location + _COMM_TEXT_PFZ_END_OFFSET))) {
 		return 1;
 	}
 	else

@@ -149,18 +149,6 @@ extern thread_t	convert_port_to_thread(
 extern thread_t	port_name_to_thread(
 	mach_port_name_t	port_name);
 
-/* Convert from a task to a port */
-extern ipc_port_t convert_task_to_port(
-	task_t			task);
-
-/* Convert from a task name to a port */
-extern ipc_port_t convert_task_name_to_port(
-	task_name_t		task_name);
-
-/* Convert from a thread to a port */
-extern ipc_port_t	convert_thread_to_port(
-	thread_t		thread);
-
 /* Deallocate a space ref produced by convert_port_to_space */
 extern void space_deallocate(
 	ipc_space_t		space);

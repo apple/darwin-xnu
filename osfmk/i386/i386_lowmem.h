@@ -32,7 +32,9 @@
 
 #ifdef __APPLE_API_PRIVATE
 
-/* The kernel is linked at VM_MIN_KERNEL_ADDRESS + 0x100000 */
+/*
+ * The kernel better be statically linked at VM_MIN_KERNEL_ADDRESS + 0x100000
+ */
 #define I386_KERNEL_IMAGE_BASE_PAGE	0x100
 
 #if defined(__i386__)

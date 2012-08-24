@@ -39,6 +39,9 @@ class OSString;
 class OSSymbol;
 class OSDictionary;
 class OSSerialize;
+#ifdef XNU_KERNEL_PRIVATE
+class OSOrderedSet;
+#endif
 
 
 /*!
@@ -54,24 +57,32 @@ class OSSerialize;
 /*! @parseOnly */
 #define APPLE_KEXT_COMPATIBILITY
 
+#ifdef XNU_KERNEL_PRIVATE
+
+#ifdef CONFIG_EMBEDDED
+#define APPLE_KEXT_VTABLE_PADDING   0
+#else /* CONFIG_EMBEDDED */
 /*! @parseOnly */
 #define APPLE_KEXT_VTABLE_PADDING   1
+#endif /* CONFIG_EMBEDDED */
+
+#else /* XNU_KERNEL_PRIVATE */
+#include <TargetConditionals.h>
+
+#if TARGET_OS_EMBEDDED
+#define APPLE_KEXT_VTABLE_PADDING   0
+#else /* TARGET_OS_EMBEDDED */
+/*! @parseOnly */
+#define APPLE_KEXT_VTABLE_PADDING   1
+#endif /* TARGET_OS_EMBEDDED */
+
+#endif /* XNU_KERNEL_PRIVATE */
 
 #if defined(__LP64__)
 /*! @parseOnly */
 #define APPLE_KEXT_LEGACY_ABI  0
 #else
 #define APPLE_KEXT_LEGACY_ABI  1
-#endif
-
-#if APPLE_KEXT_VTABLE_PADDING
-/*! @parseOnly */
-#define APPLE_KEXT_PAD_METHOD  virtual
-/*! @parseOnly */
-#define APPLE_KEXT_PAD_IMPL(index)  gMetaClass.reservedCalled(index)
-#else
-#define APPLE_KEXT_PAD_METHOD  static
-#define APPLE_KEXT_PAD_IMPL(index)  
 #endif
 
 #if defined(__LP64__)
@@ -329,6 +340,7 @@ _ptmf2ptf(const OSMetaClassBase *self, void (OSMetaClassBase::*func)(void))
 }
 
 #else /* !APPLE_KEXT_LEGACY_ABI */
+#if   defined(__i386__) || defined(__x86_64__)
 
 // Slightly less arcane and slightly less evil code to do
 // the same for kexts compiled with the standard Itanium C++
@@ -361,6 +373,9 @@ _ptmf2ptf(const OSMetaClassBase *self, void (OSMetaClassBase::*func)(void))
     }
 }
 
+#else
+#error Unknown architecture.
+#endif /* __arm__ */
 
 #endif /* !APPLE_KEXT_LEGACY_ABI */
 
@@ -745,14 +760,21 @@ protected:
         const int    freeWhen) const = 0;
 
 private:
+#if APPLE_KEXT_VTABLE_PADDING
     // Virtual Padding
     virtual void _RESERVEDOSMetaClassBase3();
     virtual void _RESERVEDOSMetaClassBase4();
     virtual void _RESERVEDOSMetaClassBase5();
     virtual void _RESERVEDOSMetaClassBase6();
     virtual void _RESERVEDOSMetaClassBase7();
+#endif
 } APPLE_KEXT_COMPATIBILITY;
 
+
+#ifdef XNU_KERNEL_PRIVATE
+typedef bool (*OSMetaClassInstanceApplierFunction)(const OSObject * instance,
+						   void * context);
+#endif /* XNU_KERNEL_PRIVATE */
 
 /*!
  * @class OSMetaClass
@@ -848,10 +870,8 @@ private:
     // Can never be allocated must be created at compile time
     static void * operator new(size_t size);
 
-    struct ExpansionData { };
-
    /* Reserved for future use.  (Internal use only) */
-    ExpansionData *reserved;
+    struct ExpansionData *reserved;
 
    /* superClass Handle to the superclass's meta class. */
     const OSMetaClass *superClassLink;
@@ -1474,7 +1494,6 @@ public:
     */
     const OSMetaClass * getSuperClass() const;
 
-
    /*!
     * @function getKmodName
     *
@@ -1501,6 +1520,7 @@ public:
     * Returns the name of the C++ class managed by this metaclass.
     */
     const char * getClassName() const;
+    const OSSymbol * getClassNameSymbol() const;
 
 
    /*!
@@ -1531,6 +1551,21 @@ public:
     */
     virtual OSObject * alloc() const = 0;
 
+#ifdef XNU_KERNEL_PRIVATE
+    void addInstance(const OSObject * instance, bool super = false) const;	
+    void removeInstance(const OSObject * instance, bool super = false) const;
+    void applyToInstances(OSMetaClassInstanceApplierFunction applier, 
+                          void * context) const;
+    static void applyToInstancesOfClassName(
+    				const OSSymbol * name,
+    				OSMetaClassInstanceApplierFunction  applier,
+                                void * context);
+private:
+    static void applyToInstances(OSOrderedSet * set,
+			         OSMetaClassInstanceApplierFunction  applier,
+                                 void * context);
+public:
+#endif
 
    /* Not to be included in headerdoc.
     *
@@ -1939,9 +1974,13 @@ public:
     * <code>@link OSMetaClassDeclareReservedUsed
     *       OSMetaClassDeclareReservedUsed@/link</code>.
     */
+#if APPLE_KEXT_VTABLE_PADDING
 #define OSMetaClassDeclareReservedUnused(className, index)        \
     private:                                                      \
-    APPLE_KEXT_PAD_METHOD void _RESERVED ## className ## index ()
+    virtual void _RESERVED ## className ## index ()
+#else
+#define OSMetaClassDeclareReservedUnused(className, index)
+#endif
 
 
    /*!
@@ -2001,9 +2040,13 @@ public:
     * <code>@link OSMetaClassDefineReservedUsed
     *       OSMetaClassDefineReservedUsed@/link</code>.
     */
+#if APPLE_KEXT_VTABLE_PADDING
 #define OSMetaClassDefineReservedUnused(className, index)       \
 void className ::_RESERVED ## className ## index ()             \
-    { APPLE_KEXT_PAD_IMPL(index); }
+	{ gMetaClass.reservedCalled(index); }
+#else
+#define OSMetaClassDefineReservedUnused(className, index)
+#endif
 
 
    /*!

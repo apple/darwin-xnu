@@ -80,9 +80,6 @@
  *	Spaces hold capabilities for ipc_object_t's.
  *	Each ipc_entry_t records a capability.  Most capabilities have
  *	small names, and the entries are elements of a table.
- *	Capabilities can have large names, and a splay tree holds
- *	those entries.  The cutoff point between the table and the tree
- *	is adjusted dynamically to minimize memory consumption.
  *
  *	The ie_index field of entries in the table implements
  *	a ordered hash table with open addressing and linear probing.
@@ -100,19 +97,15 @@
 struct ipc_entry {
 	struct ipc_object *ie_object;
 	ipc_entry_bits_t ie_bits;
+	mach_port_index_t ie_index;
 	union {
 		mach_port_index_t next;		/* next in freelist, or...  */
 		ipc_table_index_t request;	/* dead name request notify */
 	} index;
-	union {
-		mach_port_index_t table;
-		struct ipc_tree_entry *tree;
-	} hash;
 };
 
 #define	ie_request	index.request
 #define	ie_next		index.next
-#define	ie_index	hash.table
 
 #define IE_REQ_NONE		0		/* no request */
 
@@ -121,9 +114,6 @@ struct ipc_entry {
 
 #define	IE_BITS_TYPE_MASK	0x001f0000	/* 5 bits of capability type */
 #define	IE_BITS_TYPE(bits)	((bits) & IE_BITS_TYPE_MASK)
-
-#define	IE_BITS_COLLISION	0x00800000	/* 1 bit for collisions */
-
 
 #ifndef NO_PORT_GEN
 #define	IE_BITS_GEN_MASK	0xff000000	/* 8 bits for generation */
@@ -139,24 +129,6 @@ struct ipc_entry {
 
 
 #define	IE_BITS_RIGHT_MASK	0x007fffff	/* relevant to the right */
-
-struct ipc_tree_entry {
-	struct ipc_entry ite_entry;
-	mach_port_name_t ite_name;
-	struct ipc_space *ite_space;
-	struct ipc_tree_entry *ite_lchild;
-	struct ipc_tree_entry *ite_rchild;
-};
-
-#define	ite_bits	ite_entry.ie_bits
-#define	ite_object	ite_entry.ie_object
-#define	ite_request	ite_entry.ie_request
-#define	ite_next	ite_entry.hash.tree
-
-extern zone_t ipc_tree_entry_zone;
-
-#define ite_alloc()	((ipc_tree_entry_t) zalloc(ipc_tree_entry_zone))
-#define	ite_free(ite)	zfree(ipc_tree_entry_zone, (ite))
 
 /*
  * Exported interfaces
@@ -187,6 +159,12 @@ extern kern_return_t ipc_entry_alloc_name(
 
 /* Deallocate an entry from a space */
 extern void ipc_entry_dealloc(
+	ipc_space_t		space,
+	mach_port_name_t	name,
+	ipc_entry_t		entry);
+
+/* Mark and entry modified in a space */
+extern void ipc_entry_modified(
 	ipc_space_t		space,
 	mach_port_name_t	name,
 	ipc_entry_t		entry);

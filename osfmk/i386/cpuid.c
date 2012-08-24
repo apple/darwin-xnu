@@ -29,21 +29,10 @@
  * @OSF_COPYRIGHT@
  */
 #include <platforms.h>
-#include <mach_kdb.h>
 #include <vm/vm_page.h>
 #include <pexpert/pexpert.h>
 
 #include <i386/cpuid.h>
-#if MACH_KDB
-#include <machine/db_machdep.h>
-#include <ddb/db_aout.h>
-#include <ddb/db_access.h>
-#include <ddb/db_sym.h>
-#include <ddb/db_variables.h>
-#include <ddb/db_command.h>
-#include <ddb/db_output.h>
-#include <ddb/db_expr.h>
-#endif
 
 static	boolean_t	cpuid_dbg
 #if DEBUG
@@ -633,7 +622,7 @@ cpuid_set_generic_info(i386_cpu_info_t *info_p)
 	DBG(" features            : 0x%016llx\n", info_p->cpuid_features);
 	DBG(" extfeatures         : 0x%016llx\n", info_p->cpuid_extfeatures);
 	DBG(" logical_per_package : %d\n", info_p->cpuid_logical_per_package);
-        DBG(" microcode_version   : 0x%08x\n", info_p->cpuid_microcode_version);
+	DBG(" microcode_version   : 0x%08x\n", info_p->cpuid_microcode_version);
 
 	/* Fold in the Invariant TSC feature bit, if present */
 	if (info_p->cpuid_max_ext >= 0x80000007) {
@@ -1089,49 +1078,70 @@ cpuid_leaf7_features(void)
 {
 	return cpuid_info()->cpuid_leaf7_features;
 }
- 
 
-#if MACH_KDB
+static i386_vmm_info_t	*_cpuid_vmm_infop = NULL;
+static i386_vmm_info_t	_cpuid_vmm_info;
 
-/*
- *	Display the cpuid
- * *		
- *	cp
- */
-void 
-db_cpuid(__unused db_expr_t addr,
-	 __unused int have_addr,
-	 __unused db_expr_t count,
-	 __unused char *modif)
+static void
+cpuid_init_vmm_info(i386_vmm_info_t *info_p)
 {
+	uint32_t	reg[4];
+	uint32_t	max_vmm_leaf;
 
-	uint32_t        i, mid;
-	uint32_t        cpid[4];
+	bzero(info_p, sizeof(*info_p));
 
-	do_cpuid(0, cpid);	/* Get the first cpuid which is the number of
-				 * basic ids */
-	db_printf("%08X - %08X %08X %08X %08X\n",
-		0, cpid[eax], cpid[ebx], cpid[ecx], cpid[edx]);
+	if (!cpuid_vmm_present())
+		return;
 
-	mid = cpid[eax];	/* Set the number */
-	for (i = 1; i <= mid; i++) {	/* Dump 'em out */
-		do_cpuid(i, cpid);	/* Get the next */
-		db_printf("%08X - %08X %08X %08X %08X\n",
-			i, cpid[eax], cpid[ebx], cpid[ecx], cpid[edx]);
+	DBG("cpuid_init_vmm_info(%p)\n", info_p);
+
+	/* do cpuid 0x40000000 to get VMM vendor */
+	cpuid_fn(0x40000000, reg);
+	max_vmm_leaf = reg[eax];
+	bcopy((char *)&reg[ebx], &info_p->cpuid_vmm_vendor[0], 4);
+	bcopy((char *)&reg[ecx], &info_p->cpuid_vmm_vendor[4], 4);
+	bcopy((char *)&reg[edx], &info_p->cpuid_vmm_vendor[8], 4);
+	info_p->cpuid_vmm_vendor[12] = '\0';
+
+	if (0 == strcmp(info_p->cpuid_vmm_vendor, CPUID_VMM_ID_VMWARE)) {
+		/* VMware identification string: kb.vmware.com/kb/1009458 */
+		info_p->cpuid_vmm_family = CPUID_VMM_FAMILY_VMWARE;
+	} else {
+		info_p->cpuid_vmm_family = CPUID_VMM_FAMILY_UNKNOWN;
 	}
-	db_printf("\n");
 
-	do_cpuid(0x80000000, cpid);	/* Get the first extended cpuid which
-					 * is the number of extended ids */
-	db_printf("%08X - %08X %08X %08X %08X\n",
-		0x80000000, cpid[eax], cpid[ebx], cpid[ecx], cpid[edx]);
-
-	mid = cpid[eax];	/* Set the number */
-	for (i = 0x80000001; i <= mid; i++) {	/* Dump 'em out */
-		do_cpuid(i, cpid);	/* Get the next */
-		db_printf("%08X - %08X %08X %08X %08X\n",
-			i, cpid[eax], cpid[ebx], cpid[ecx], cpid[edx]);
+	/* VMM generic leaves: https://lkml.org/lkml/2008/10/1/246 */
+	if (max_vmm_leaf >= 0x40000010) {
+		cpuid_fn(0x40000010, reg);
+		
+		info_p->cpuid_vmm_tsc_frequency = reg[eax];
+		info_p->cpuid_vmm_bus_frequency = reg[ebx];
 	}
+
+	DBG(" vmm_vendor          : %s\n", info_p->cpuid_vmm_vendor);
+	DBG(" vmm_family          : %u\n", info_p->cpuid_vmm_family);
+	DBG(" vmm_bus_frequency   : %u\n", info_p->cpuid_vmm_bus_frequency);
+	DBG(" vmm_tsc_frequency   : %u\n", info_p->cpuid_vmm_tsc_frequency);
 }
 
-#endif
+boolean_t
+cpuid_vmm_present(void)
+{
+	return (cpuid_features() & CPUID_FEATURE_VMM) ? TRUE : FALSE;
+}
+
+i386_vmm_info_t *
+cpuid_vmm_info(void)
+{
+	if (_cpuid_vmm_infop == NULL) {
+		cpuid_init_vmm_info(&_cpuid_vmm_info);
+		_cpuid_vmm_infop = &_cpuid_vmm_info;
+	}
+	return _cpuid_vmm_infop;
+}
+
+uint32_t
+cpuid_vmm_family(void)
+{
+	return cpuid_vmm_info()->cpuid_vmm_family;
+}

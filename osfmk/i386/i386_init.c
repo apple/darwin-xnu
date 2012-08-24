@@ -55,7 +55,6 @@
  */
 
 #include <platforms.h>
-#include <mach_kdb.h>
 
 #include <mach/i386/vm_param.h>
 
@@ -102,9 +101,6 @@
 #include <i386/locks.h> /* LcksOpts */
 #ifdef __i386__
 #include <i386/cpu_capabilities.h>
-#if	MACH_KDB
-#include <machine/db_machdep.h>
-#endif
 #endif
 #if DEBUG
 #include <machine/pal_routines.h>
@@ -115,9 +111,6 @@
 #else
 #define DBG(x...)
 #endif
-#if	MACH_KDB
-#include <ddb/db_aout.h>
-#endif /* MACH_KDB */
 
 int			debug_task;
 
@@ -128,14 +121,15 @@ extern const char	version[];
 extern const char	version_variant[];
 extern int		nx_enabled;
 
-#ifdef __x86_64__
-extern void		*low_eintstack;
-#endif
+uint64_t		physmap_base, physmap_max;
 
-void			*KPTphys;
+pd_entry_t		*KPTphys;
 pd_entry_t		*IdlePTD;
 #ifdef __i386__
 pd_entry_t		*IdlePDPT64;
+#else
+pdpt_entry_t		*IdlePDPT;
+pml4_entry_t		*IdlePML4;
 #endif
 
 char *physfree;
@@ -200,8 +194,11 @@ x86_64_post_sleep(uint64_t new_cr3)
 // NPHYSMAP is determined by the maximum supported RAM size plus 4GB to account
 // the PCI hole (which is less 4GB but not more).
 
-// Compile-time guard:
-extern int maxphymapsupported[NPHYSMAP <= PTE_PER_PAGE ? 1 : -1];
+/* Compile-time guard: NPHYSMAP is capped to 256GiB, accounting for
+ * randomisation
+ */
+extern int maxphymapsupported[NPHYSMAP <= (PTE_PER_PAGE/2) ? 1 : -1];
+
 static void
 physmap_init(void)
 {
@@ -210,31 +207,113 @@ physmap_init(void)
 		pt_entry_t entries[PTE_PER_PAGE];
 	} * physmapL2 = ALLOCPAGES(NPHYSMAP);
 
-	uintptr_t i;
-	for(i=0;i<NPHYSMAP;i++) {
-		physmapL3[i] = ((uintptr_t)ID_MAP_VTOP(&physmapL2[i]))
+	uint64_t i;
+	uint8_t phys_random_L3 = ml_early_random() & 0xFF;
+
+	/* We assume NX support. Mark all levels of the PHYSMAP NX
+	 * to avoid granting executability via a single bit flip.
+	 */
+	assert(cpuid_extfeatures() & CPUID_EXTFEATURE_XD);
+
+	for(i = 0; i < NPHYSMAP; i++) {
+		physmapL3[i + phys_random_L3] =
+				((uintptr_t)ID_MAP_VTOP(&physmapL2[i]))
 				| INTEL_PTE_VALID
+				| INTEL_PTE_NX
 				| INTEL_PTE_WRITE;
-		uintptr_t j;
-		for(j=0;j<PTE_PER_PAGE;j++) {
-			physmapL2[i].entries[j] = (((i*PTE_PER_PAGE+j)<<PDSHIFT)
+
+		uint64_t j;
+		for(j = 0; j < PTE_PER_PAGE; j++) {
+			physmapL2[i].entries[j] =
+			    ((i * PTE_PER_PAGE + j) << PDSHIFT)
 							| INTEL_PTE_PS
 							| INTEL_PTE_VALID
-							| INTEL_PTE_WRITE);
+			    				| INTEL_PTE_NX
+							| INTEL_PTE_WRITE;
 		}
 	}
 
-	IdlePML4[KERNEL_PHYSMAP_INDEX] = ((uintptr_t)ID_MAP_VTOP(physmapL3))
-						| INTEL_PTE_VALID
-						| INTEL_PTE_WRITE;
-	if (cpuid_extfeatures() & CPUID_EXTFEATURE_XD) {
-		IdlePML4[KERNEL_PHYSMAP_INDEX] |= INTEL_PTE_NX;
-	}
+	IdlePML4[KERNEL_PHYSMAP_PML4_INDEX] =
+					((uintptr_t)ID_MAP_VTOP(physmapL3))
+					| INTEL_PTE_VALID
+					| INTEL_PTE_NX
+					| INTEL_PTE_WRITE;
 
-	DBG("physical map idlepml4[%d]: 0x%llx\n",
-		KERNEL_PHYSMAP_INDEX, IdlePML4[KERNEL_PHYSMAP_INDEX]);
+	physmap_base = KVADDR(KERNEL_PHYSMAP_PML4_INDEX, phys_random_L3, 0, 0);
+	physmap_max = physmap_base + NPHYSMAP * GB;
+	DBG("Physical address map base: 0x%qx\n", physmap_base);
+	DBG("Physical map idlepml4[%d]: 0x%llx\n",
+		KERNEL_PHYSMAP_PML4_INDEX, IdlePML4[KERNEL_PHYSMAP_PML4_INDEX]);
 }
-#endif
+
+static void
+descriptor_alias_init()
+{
+	vm_offset_t	master_gdt_phys;
+	vm_offset_t	master_gdt_alias_phys;
+	vm_offset_t	master_idt_phys;
+	vm_offset_t	master_idt_alias_phys;
+
+	assert(((vm_offset_t)master_gdt & PAGE_MASK) == 0);
+	assert(((vm_offset_t)master_idt64 & PAGE_MASK) == 0);
+
+	master_gdt_phys       = (vm_offset_t) ID_MAP_VTOP(master_gdt);
+	master_idt_phys       = (vm_offset_t) ID_MAP_VTOP(master_idt64);
+	master_gdt_alias_phys = (vm_offset_t) ID_MAP_VTOP(MASTER_GDT_ALIAS);
+	master_idt_alias_phys = (vm_offset_t) ID_MAP_VTOP(MASTER_IDT_ALIAS);
+	
+	DBG("master_gdt_phys:       %p\n", (void *) master_gdt_phys);
+	DBG("master_idt_phys:       %p\n", (void *) master_idt_phys);
+	DBG("master_gdt_alias_phys: %p\n", (void *) master_gdt_alias_phys);
+	DBG("master_idt_alias_phys: %p\n", (void *) master_idt_alias_phys);
+
+	KPTphys[atop_kernel(master_gdt_alias_phys)] = master_gdt_phys |
+		INTEL_PTE_VALID | INTEL_PTE_NX | INTEL_PTE_WRITE;
+	KPTphys[atop_kernel(master_idt_alias_phys)] = master_idt_phys |
+		INTEL_PTE_VALID | INTEL_PTE_NX;	/* read-only */
+}
+
+static void
+Idle_PTs_init(void)
+{
+	/* Allocate the "idle" kernel page tables: */
+	KPTphys  = ALLOCPAGES(NKPT);		/* level 1 */
+	IdlePTD  = ALLOCPAGES(NPGPTD);		/* level 2 */
+	IdlePDPT = ALLOCPAGES(1);		/* level 3 */
+	IdlePML4 = ALLOCPAGES(1);		/* level 4 */
+
+	// Fill the lowest level with everything up to physfree
+	fillkpt(KPTphys,
+		INTEL_PTE_WRITE, 0, 0, (int)(((uintptr_t)physfree) >> PAGE_SHIFT));
+
+	/* IdlePTD */
+	fillkpt(IdlePTD,
+		INTEL_PTE_WRITE, (uintptr_t)ID_MAP_VTOP(KPTphys), 0, NKPT);
+
+	// IdlePDPT entries
+	fillkpt(IdlePDPT,
+		INTEL_PTE_WRITE, (uintptr_t)ID_MAP_VTOP(IdlePTD), 0, NPGPTD);
+
+	// IdlePML4 single entry for kernel space.
+	fillkpt(IdlePML4 + KERNEL_PML4_INDEX,
+		INTEL_PTE_WRITE, (uintptr_t)ID_MAP_VTOP(IdlePDPT), 0, 1);
+	
+	postcode(VSTART_PHYSMAP_INIT);
+
+	physmap_init();
+
+	postcode(VSTART_DESC_ALIAS_INIT);
+
+	descriptor_alias_init();
+
+	postcode(VSTART_SET_CR3);
+
+	// Switch to the page tables..
+	set_cr3_raw((uintptr_t)ID_MAP_VTOP(IdlePML4));
+
+}
+
+#else /* __x86_64__ */
 
 static void
 Idle_PTs_init(void)
@@ -243,36 +322,32 @@ Idle_PTs_init(void)
 	KPTphys  = ALLOCPAGES(NKPT);		/* level 1 */
 	IdlePTD  = ALLOCPAGES(NPGPTD);		/* level 2 */
 
-#ifdef __x86_64__
-	physmap_init();
-#else
 	IdlePDPT64 = ALLOCPAGES(1);
 
 	// Recursive mapping of PTEs
 	fillkpt(IdlePTD, INTEL_PTE_WRITE, (uintptr_t)IdlePTD, PTDPTDI, NPGPTD);
 	// commpage
 	fillkpt(IdlePTD, INTEL_PTE_WRITE|INTEL_PTE_USER, (uintptr_t)ALLOCPAGES(1), _COMM_PAGE32_BASE_ADDRESS >> PDESHIFT,1);
-#endif
+
 	// Fill the lowest level with everything up to physfree
 	fillkpt(KPTphys,
-			INTEL_PTE_WRITE, 0, 0, (int)(((uintptr_t)physfree) >> PAGE_SHIFT));
+		INTEL_PTE_WRITE, 0, 0, (int)(((uintptr_t)physfree) >> PAGE_SHIFT));
 
 	// Rewrite the 2nd-lowest level  to point to pages of KPTphys.
 	// This was previously filled statically by idle_pt.c, and thus
 	// must be done after the KPTphys fill since IdlePTD is in use
 	fillkpt(IdlePTD,
-			INTEL_PTE_WRITE, (uintptr_t)ID_MAP_VTOP(KPTphys), 0, NKPT);
+		INTEL_PTE_WRITE, (uintptr_t)ID_MAP_VTOP(KPTphys), 0, NKPT);
 
 	// IdlePDPT entries
-#ifdef __i386__
 	fillkpt(IdlePDPT, 0, (uintptr_t)IdlePTD, 0, NPGPTD);
-#else
-	fillkpt(IdlePDPT, INTEL_PTE_WRITE, (uintptr_t)ID_MAP_VTOP(IdlePTD), 0, NPGPTD);
-#endif
+
+	postcode(VSTART_SET_CR3);
 
 	// Flush the TLB now we're done rewriting the page tables..
 	set_cr3_raw(get_cr3_raw());
 }
+#endif
 
 /*
  * vstart() is called in the natural mode (64bit for K64, 32 for K32)
@@ -294,7 +369,7 @@ vstart(vm_offset_t boot_args_start)
 {
 	boolean_t	is_boot_cpu = !(boot_args_start == 0);
 	int		cpu;
-	uint32_t lphysfree;
+	uint32_t	lphysfree;
 
 	postcode(VSTART_ENTRY);
 
@@ -320,14 +395,8 @@ vstart(vm_offset_t boot_args_start)
 			kernelBootArgs, 
 			&kernelBootArgs->ksize,
 			&kernelBootArgs->kaddr);
-#ifdef	__x86_64__
-		/* enable NX/XD, boot processor */
-		if (cpuid_extfeatures() & CPUID_EXTFEATURE_XD) {
-			wrmsr64(MSR_IA32_EFER, rdmsr64(MSR_IA32_EFER) | MSR_IA32_EFER_NXE);
-			DBG("vstart() NX/XD enabled\n");
-		}
-#endif
-		postcode(PSTART_PAGE_TABLES);
+
+		postcode(VSTART_IDLE_PTS_INIT);
 
 		Idle_PTs_init();
 
@@ -348,17 +417,16 @@ vstart(vm_offset_t boot_args_start)
 		PE_init_platform(FALSE, kernelBootArgs);
 		postcode(PE_INIT_PLATFORM_D);
 	} else {
+#ifdef	__x86_64__
+		/* Switch to kernel's page tables (from the Boot PTs) */
+		set_cr3_raw((uintptr_t)ID_MAP_VTOP(IdlePML4));
+#endif
 		/* Find our logical cpu number */
 		cpu = lapic_to_cpu[(LAPIC_READ(ID)>>LAPIC_ID_SHIFT) & LAPIC_ID_MASK];
 		DBG("CPU: %d, GSBASE initial value: 0x%llx\n", cpu, rdmsr64(MSR_IA32_GS_BASE));
-#ifdef	__x86_64__
-		if (cpuid_extfeatures() & CPUID_EXTFEATURE_XD) {
-			wrmsr64(MSR_IA32_EFER, rdmsr64(MSR_IA32_EFER) | MSR_IA32_EFER_NXE);
-			DBG("vstart() NX/XD enabled, non-boot\n");
-		}
-#endif
 	}
 
+	postcode(VSTART_CPU_DESC_INIT);
 #ifdef __x86_64__
 	if(is_boot_cpu)
 		cpu_desc_init64(cpu_datap(cpu));
@@ -368,16 +436,12 @@ vstart(vm_offset_t boot_args_start)
 		cpu_desc_init(cpu_datap(cpu));
 	cpu_desc_load(cpu_datap(cpu));
 #endif
+	postcode(VSTART_CPU_MODE_INIT);
 	if (is_boot_cpu)
 		cpu_mode_init(current_cpu_datap()); /* cpu_mode_init() will be
 						     * invoked on the APs
 						     * via i386_init_slave()
 						     */
-#ifdef __x86_64__
-	/* Done with identity mapping */
-	IdlePML4[0] = 0;
-#endif
-
 	postcode(VSTART_EXIT);
 #ifdef __i386__
 	if (cpuid_extfeatures() & CPUID_EXTFEATURE_XD) {
@@ -391,26 +455,9 @@ vstart(vm_offset_t boot_args_start)
 		i386_init_slave();
 	/*NOTREACHED*/
 #else
-	/* We need to switch to a new per-cpu stack, but we must do this atomically with
-	 * the call to ensure the compiler doesn't assume anything about the stack before
-	 * e.g. tail-call optimisations
-	 */
-	if (is_boot_cpu)
-	{
-		asm volatile(
-				"mov %1, %%rdi;"
-				"mov %0, %%rsp;"
-				"call _i386_init;"	: : "r" 
-				(cpu_datap(cpu)->cpu_int_stack_top), "r" (boot_args_start));
-	}
-	else
-	{
-		asm volatile(
-				"mov %0, %%rsp;"
-				"call _i386_init_slave;"	: : "r" 
-				(cpu_datap(cpu)->cpu_int_stack_top));
-	}
-	/*NOTREACHED*/
+	x86_init_wrapper(is_boot_cpu ? (uintptr_t) i386_init
+				     : (uintptr_t) i386_init_slave,
+			 cpu_datap(cpu)->cpu_int_stack_top);
 #endif
 }
 
@@ -555,6 +602,7 @@ do_init_slave(boolean_t fast_restart)
 		assert(!ml_get_interrupts_enabled());
   
 		cpu_mode_init(current_cpu_datap());
+		pmap_cpu_init();
   
 #if CONFIG_MCA
 		mca_cpu_init();
@@ -586,14 +634,6 @@ do_init_slave(boolean_t fast_restart)
 #endif
 
 	cpu_thread_init();	/* not strictly necessary */
-
-#ifdef __x86_64__
-	/* Re-zero the identity-map for the idle PT's. This MUST be done before 
-	 * cpu_running is set so that other slaves can set up their own
-	 * identity-map */
-	if (!fast_restart)
-	    IdlePML4[0] = 0;
-#endif
 
 	cpu_init();	/* Sets cpu_running which starter cpu waits for */ 
 

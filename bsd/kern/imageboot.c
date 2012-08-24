@@ -195,6 +195,7 @@ imageboot_mount_image(const char *root_path, int height)
 		vnode_get_and_drop_always(old_rootvnode);
 	    }
 #else 
+	    height = 0; /* keep the compiler from complaining */
 	    vnode_get_and_drop_always(old_rootvnode);
 #endif /* CONFIG_IMGSRC_ACCESS */
 	}

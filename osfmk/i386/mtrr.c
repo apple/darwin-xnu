@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2011 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -34,6 +34,7 @@
 #include <i386/mp.h>
 #include <i386/proc_reg.h>
 #include <i386/mtrr.h>
+#include <i386/machine_check.h>
 
 struct mtrr_var_range {
 	uint64_t  base;		/* in IA32_MTRR_PHYSBASE format */
@@ -62,6 +63,7 @@ decl_simple_lock_data(static, mtrr_lock);
 #define MTRR_LOCK()	simple_lock(&mtrr_lock);
 #define MTRR_UNLOCK()	simple_unlock(&mtrr_lock);
 
+//#define MTRR_DEBUG 1
 #if	MTRR_DEBUG
 #define DBG(x...)	kprintf(x)
 #else
@@ -692,3 +694,62 @@ pat_init(void)
 	}
 	ml_set_interrupts_enabled(istate);
 }
+
+#if DEBUG
+void
+mtrr_lapic_cached(void);
+void
+mtrr_lapic_cached(void)
+{
+	boolean_t	istate;
+	uint32_t	lo;
+	uint32_t	hi;
+	uint64_t	lapic_pbase;
+	uint64_t	base;
+	uint64_t	length;
+	uint32_t	type;
+	unsigned int	i;
+
+	/* Find the local APIC physical base address */
+	rdmsr(MSR_IA32_APIC_BASE, lo, hi);
+	lapic_pbase = (lo &  MSR_IA32_APIC_BASE_BASE);
+
+	DBG("mtrr_lapic_cached() on cpu %d, lapic_pbase: 0x%016llx\n",
+	    get_cpu_number(), lapic_pbase);
+
+	istate = ml_set_interrupts_enabled(FALSE);
+
+	/*
+	 * Search for the variable range MTRR mapping the lapic.
+	 * Flip its type to WC and return.
+	 */
+	for (i = 0; i < mtrr_state.var_count; i++) {
+		if (!(mtrr_state.var_range[i].mask & IA32_MTRR_PHYMASK_VALID))
+			continue;
+		base = mtrr_state.var_range[i].base & IA32_MTRR_PHYSBASE_MASK;
+		type = (uint32_t)(mtrr_state.var_range[i].base & IA32_MTRR_PHYSBASE_TYPE);
+		length = MASK_TO_LEN(mtrr_state.var_range[i].mask);
+		DBG("%d: base: 0x%016llx size: 0x%016llx type: %d\n",
+		     i, base, length, type);
+		if (base <= lapic_pbase &&
+		    lapic_pbase <= base + length - PAGE_SIZE) {
+			DBG("mtrr_lapic_cached() matched var: %d\n", i);
+			mtrr_state.var_range[i].base &=~IA32_MTRR_PHYSBASE_TYPE;
+			mtrr_state.var_range[i].base |= MTRR_TYPE_WRITECOMBINE;
+			ml_set_interrupts_enabled(istate);
+		}
+	}
+
+	/*
+	 * In case we didn't find a covering variable range,
+	 * we slam WC into the default memory type.
+	 */
+	mtrr_state.MTRRdefType = MTRR_TYPE_WRITECOMBINE;
+
+	mtrr_update_cpu(); 
+
+	ml_set_interrupts_enabled(istate);
+
+	return;
+}
+#endif /* DEBUG */

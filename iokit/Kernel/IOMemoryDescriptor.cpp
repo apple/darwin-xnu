@@ -181,18 +181,12 @@ kern_return_t device_data_action(
                vm_object_offset_t      offset, 
                vm_size_t               size)
 {
-    struct ExpansionData {
-        void *				devicePager;
-        unsigned int			pagerContig:1;
-        unsigned int			unused:31;
-	IOMemoryDescriptor *		memory;
-    };
     kern_return_t	 kr;
-    ExpansionData *      ref = (ExpansionData *) device_handle;
+    IOMemoryDescriptorReserved * ref = (IOMemoryDescriptorReserved *) device_handle;
     IOMemoryDescriptor * memDesc;
 
     LOCK;
-    memDesc = ref->memory;
+    memDesc = ref->dp.memory;
     if( memDesc)
     {
 	memDesc->retain();
@@ -210,15 +204,9 @@ kern_return_t device_data_action(
 kern_return_t device_close(
                uintptr_t     device_handle)
 {
-    struct ExpansionData {
-        void *				devicePager;
-        unsigned int			pagerContig:1;
-        unsigned int			unused:31;
-	IOMemoryDescriptor *		memory;
-    };
-    ExpansionData *   ref = (ExpansionData *) device_handle;
+    IOMemoryDescriptorReserved * ref = (IOMemoryDescriptorReserved *) device_handle;
 
-    IODelete( ref, ExpansionData, 1 );
+    IODelete( ref, IOMemoryDescriptorReserved, 1 );
 
     return( kIOReturnSuccess );
 }
@@ -935,7 +923,7 @@ void IOGeneralMemoryDescriptor::free()
     if( reserved)
     {
 	LOCK;
-	reserved->memory = 0;
+	reserved->dp.memory = 0;
 	UNLOCK;
     }
 
@@ -961,11 +949,19 @@ void IOGeneralMemoryDescriptor::free()
 	_ranges.v = NULL;
     }
 
-    if (reserved && reserved->devicePager)
-	device_pager_deallocate( (memory_object_t) reserved->devicePager );
+    if (reserved)
+    {
+        if (reserved->dp.devicePager)
+        {
+            // memEntry holds a ref on the device pager which owns reserved
+            // (IOMemoryDescriptorReserved) so no reserved access after this point
+            device_pager_deallocate( (memory_object_t) reserved->dp.devicePager );
+        }
+        else
+            IODelete(reserved, IOMemoryDescriptorReserved, 1);
+        reserved = NULL;
+    }
 
-    // memEntry holds a ref on the device pager which owns reserved
-    // (ExpansionData) so no reserved access after this point
     if (_memEntry)
         ipc_port_release_send( (ipc_port_t) _memEntry );
 
@@ -1151,7 +1147,10 @@ IOGeneralMemoryDescriptor::getPreparationID( void )
 	return (kIOPreparationIDUnprepared);
 
     if (_flags & (kIOMemoryTypePhysical | kIOMemoryTypePhysical64))
-	return (kIOPreparationIDAlwaysPrepared);
+    {
+        IOMemoryDescriptor::setPreparationID();
+        return (IOMemoryDescriptor::getPreparationID());
+    }
 
     if (!_memoryEntries || !(dataP = getDataP(_memoryEntries)))
 	return (kIOPreparationIDUnprepared);
@@ -1163,10 +1162,35 @@ IOGeneralMemoryDescriptor::getPreparationID( void )
     return (dataP->fPreparationID);
 }
 
-uint64_t
-IOMemoryDescriptor::getPreparationID( void )
+IOMemoryDescriptorReserved * IOMemoryDescriptor::getKernelReserved( void )
 {
-    return (kIOPreparationIDUnsupported);    
+    if (!reserved)
+    {
+        reserved = IONew(IOMemoryDescriptorReserved, 1);
+        if (reserved)
+            bzero(reserved, sizeof(IOMemoryDescriptorReserved));
+    }
+    return (reserved);
+}
+
+void IOMemoryDescriptor::setPreparationID( void )
+{
+    if (getKernelReserved() && (kIOPreparationIDUnprepared == reserved->preparationID))
+    {
+#if defined(__ppc__ )
+        reserved->preparationID = gIOMDPreparationID++;
+#else
+        reserved->preparationID = OSIncrementAtomic64(&gIOMDPreparationID);
+#endif
+    }
+}
+
+uint64_t IOMemoryDescriptor::getPreparationID( void )
+{
+    if (reserved)
+        return (reserved->preparationID);    
+    else
+        return (kIOPreparationIDUnsupported);    
 }
 
 IOReturn IOGeneralMemoryDescriptor::dmaCommandOperation(DMACommandOps op, void *vData, UInt dataSize) const
@@ -1830,6 +1854,7 @@ IOReturn IOMemoryDescriptor::performOperation( IOOptionBits options,
                                                 IOByteCount offset, IOByteCount length )
 {
     IOByteCount remaining;
+    unsigned int res;
     void (*func)(addr64_t pa, unsigned int count) = 0;
 
     switch (options)
@@ -1855,6 +1880,7 @@ IOReturn IOMemoryDescriptor::performOperation( IOOptionBits options,
     if (kIOMemoryThreadSafe & _flags)
 	LOCK;
 
+    res = 0x0UL;
     remaining = length = min(length, getLength() - offset);
     while (remaining)
     // (process another target segment?)
@@ -1882,8 +1908,12 @@ IOReturn IOMemoryDescriptor::performOperation( IOOptionBits options,
     return (remaining ? kIOReturnUnderrun : kIOReturnSuccess);
 }
 
+#if defined(__i386__) || defined(__x86_64__)
 extern vm_offset_t		first_avail;
 #define io_kernel_static_end	first_avail
+#else
+#error io_kernel_static_end is undefined for this architecture
+#endif
 
 static kern_return_t
 io_get_kernel_static_upl(
@@ -2365,11 +2395,14 @@ IOReturn IOGeneralMemoryDescriptor::doMap(
                     {
                         segDestAddr  = address;
                         segLen      -= offset;
+                        srcAddr     += offset;
                         mapLength    = length;
 
                         while (true)
                         {
                             vm_prot_t cur_prot, max_prot;
+
+                            if (segLen > length) segLen = length;
                             kr = mach_vm_remap(map, &segDestAddr, round_page_64(segLen), PAGE_MASK, 
                                                     VM_FLAGS_FIXED | VM_FLAGS_OVERWRITE,
                                                     get_task_map(_task), trunc_page_64(srcAddr),
@@ -2430,13 +2463,10 @@ IOReturn IOGeneralMemoryDescriptor::doMap(
 
 	    pa = getPhysicalSegment( offset, &segLen, kIOMemoryMapperNone );
 
-            if( !reserved) {
-                reserved = IONew( ExpansionData, 1 );
-                if( !reserved)
-                    continue;
-            }
-            reserved->pagerContig = (1 == _rangesCount);
-	    reserved->memory = this;
+            if( !getKernelReserved())
+                continue;
+            reserved->dp.pagerContig = (1 == _rangesCount);
+	    reserved->dp.memory      = this;
 
 	    /*What cache mode do we need*/
             switch(options & kIOMapCacheMask ) {
@@ -2477,7 +2507,7 @@ IOReturn IOGeneralMemoryDescriptor::doMap(
 		    break;
             }
 
-	    flags |= reserved->pagerContig ? DEVICE_PAGER_CONTIGUOUS : 0;
+	    flags |= reserved->dp.pagerContig ? DEVICE_PAGER_CONTIGUOUS : 0;
 
             pager = device_pager_setup( (memory_object_t) 0, (uintptr_t) reserved, 
 								size, flags);
@@ -2496,11 +2526,7 @@ IOReturn IOGeneralMemoryDescriptor::doMap(
                 }
             }
 	    if( pager && sharedMem)
-		reserved->devicePager    = pager;
-	    else {
-		IODelete( reserved, ExpansionData, 1 );
-		reserved = 0;
-	    }
+		reserved->dp.devicePager    = pager;
 
         } while( false );
 
@@ -2643,6 +2669,10 @@ static kern_return_t IOMemoryDescriptorMapAlloc(vm_map_t map, void * _ref)
                     SET_MAP_MEM(MAP_MEM_COPYBACK, memEntryCacheMode);
                     break;
 
+		case kIOMapCopybackInnerCache:
+                    SET_MAP_MEM(MAP_MEM_INNERWBACK, memEntryCacheMode);
+                    break;
+
 		case kIOMapDefaultCache:
 		default:
                     SET_MAP_MEM(MAP_MEM_NOOP, memEntryCacheMode);
@@ -2783,7 +2813,7 @@ IOReturn IOMemoryDescriptor::doMap(
 	pageOffset = sourceAddr - trunc_page( sourceAddr );
 
 	if( reserved)
-	    pager = (memory_object_t) reserved->devicePager;
+	    pager = (memory_object_t) reserved->dp.devicePager;
 	else
 	    pager = MACH_PORT_NULL;
 
@@ -2839,7 +2869,7 @@ IOReturn IOMemoryDescriptor::doMap(
 		mapping->fMemory->_memEntry = me;
 	    }
 	    if (pager)
-		err = handleFault( reserved->devicePager, mapping->fAddressMap, mapping->fAddress, offset, length, options );
+		err = handleFault( pager, mapping->fAddressMap, mapping->fAddress, offset, length, options );
 	}
 	else
 	{
@@ -2871,8 +2901,8 @@ IOReturn IOMemoryDescriptor::doMap(
 
 #if DEBUG
 	if (kIOLogMapping & gIOKitDebug)
-	    IOLog("mapping(%x) desc %p @ %lx, map %p, address %qx, offset %qx, length %qx\n", 
-		    err, this, sourceAddr, mapping, address, offset, length);
+	    IOLog("mapping(%x) desc %p @ %qx, map %p, address %qx, offset %qx, length %qx\n", 
+		  err, this, (uint64_t)sourceAddr, mapping, address, offset, length);
 #endif
 
 	    if (err == KERN_SUCCESS)
@@ -2950,7 +2980,7 @@ IOReturn IOMemoryDescriptor::handleFault(
 
 
         if( pager) {
-            if( reserved && reserved->pagerContig) {
+            if( reserved && reserved->dp.pagerContig) {
                 IOPhysicalLength	allLen;
                 addr64_t		allPhys;
 
@@ -3424,8 +3454,8 @@ IOMemoryMap * IOMemoryDescriptor::createMappingInTask(
 
 #if DEBUG
     if (!result)
-	IOLog("createMappingInTask failed desc %p, addr %qx, options %lx, offset %qx, length %qx\n",
-		    this, atAddress, options, offset, length);
+	IOLog("createMappingInTask failed desc %p, addr %qx, options %x, offset %qx, length %llx\n",
+		this, atAddress, (uint32_t) options, offset, length);
 #endif
 
     return (result);

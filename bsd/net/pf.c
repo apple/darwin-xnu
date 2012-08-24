@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2007-2011 Apple Inc. All rights reserved.
+ * Copyright (c) 2007-2012 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -104,7 +104,7 @@
 #include <netinet/icmp_var.h>
 #include <net/if_ether.h>
 #include <net/ethernet.h>
-
+#include <net/flowhash.h>
 #include <net/pfvar.h>
 #include <net/if_pflog.h>
 
@@ -120,15 +120,11 @@
 #include <netinet6/nd6.h>
 #endif /* INET6 */
 
-#ifndef NO_APPLE_EXTENSIONS
-#define DPFPRINTF(n, x)	(pf_status.debug >= (n) ? printf x : ((void)0))
-#else
-#define DPFPRINTF(n, x)	if (pf_status.debug >= (n)) printf x
-#endif
+#if DUMMYNET
+#include <netinet/ip_dummynet.h>
+#endif /* DUMMYNET */
 
-/* XXX: should be in header somewhere */
-#define	satosin(sa)	((struct sockaddr_in *)(sa))
-#define sintosa(sin)	((struct sockaddr *)(sin))
+#define DPFPRINTF(n, x)	(pf_status.debug >= (n) ? printf x : ((void)0))
 
 /*
  * On Mac OS X, the rtableid value is treated as the interface scope
@@ -145,8 +141,10 @@
 /*
  * Global variables
  */
-lck_mtx_t *pf_lock;
-lck_rw_t *pf_perim_lock;
+decl_lck_mtx_data(,pf_lock_data);
+decl_lck_rw_data(,pf_perim_lock_data);
+lck_mtx_t *pf_lock = &pf_lock_data;
+lck_rw_t *pf_perim_lock = &pf_perim_lock_data;
 
 /* state tables */
 struct pf_state_tree_lan_ext	 pf_statetbl_lan_ext;
@@ -155,14 +153,14 @@ struct pf_state_tree_ext_gwy	 pf_statetbl_ext_gwy;
 struct pf_palist	 pf_pabuf;
 struct pf_status	 pf_status;
 
-#if ALTQ
+#if PF_ALTQ
 struct pf_altqqueue	 pf_altqs[2];
 struct pf_altqqueue	*pf_altqs_active;
 struct pf_altqqueue	*pf_altqs_inactive;
 u_int32_t		 ticket_altqs_active;
 u_int32_t		 ticket_altqs_inactive;
 int			 altqs_inactive_open;
-#endif /* ALTQ */
+#endif /* PF_ALTQ */
 u_int32_t		 ticket_pabuf;
 
 static MD5_CTX		 pf_tcp_secret_ctx;
@@ -179,11 +177,10 @@ static struct pf_anchor_stackframe {
 
 struct pool		 pf_src_tree_pl, pf_rule_pl, pf_pooladdr_pl;
 struct pool		 pf_state_pl, pf_state_key_pl;
-#if ALTQ
+#if PF_ALTQ
 struct pool		 pf_altq_pl;
-#endif /* ALTQ */
+#endif /* PF_ALTQ */
 
-#ifndef NO_APPLE_EXTENSIONS
 typedef void (*hook_fn_t)(void *);
 
 struct hook_desc {
@@ -204,7 +201,6 @@ struct pool		 pf_app_state_pl;
 static void		 pf_print_addr(struct pf_addr *addr, sa_family_t af);
 static void		 pf_print_sk_host(struct pf_state_host *, u_int8_t, int,
 			    u_int8_t);
-#endif
 
 static void		 pf_print_host(struct pf_addr *, u_int16_t, u_int8_t);
 
@@ -233,7 +229,6 @@ static void		 pf_send_tcp(const struct pf_rule *, sa_family_t,
 			    u_int16_t, struct ether_header *, struct ifnet *);
 static void		 pf_send_icmp(struct mbuf *, u_int8_t, u_int8_t,
 			    sa_family_t, struct pf_rule *);
-#ifndef NO_APPLE_EXTENSIONS
 static struct pf_rule	*pf_match_translation(struct pf_pdesc *, struct mbuf *,
 			    int, int, struct pfi_kif *, struct pf_addr *,
 			    union pf_state_xport *, struct pf_addr *,
@@ -244,17 +239,6 @@ static struct pf_rule	*pf_get_translation_aux(struct pf_pdesc *,
 			    union pf_state_xport *, struct pf_addr *,
 			    union pf_state_xport *, struct pf_addr *,
 			    union pf_state_xport *);
-#else
-struct pf_rule		*pf_match_translation(struct pf_pdesc *, struct mbuf *,
-			    int, int, struct pfi_kif *,
-			    struct pf_addr *, u_int16_t, struct pf_addr *,
-			    u_int16_t, int);
-struct pf_rule		*pf_get_translation(struct pf_pdesc *, struct mbuf *,
-			    int, int, struct pfi_kif *, struct pf_src_node **,
-			    struct pf_addr *, u_int16_t,
-			    struct pf_addr *, u_int16_t,
-			    struct pf_addr *, u_int16_t *);
-#endif
 static void		 pf_attach_state(struct pf_state_key *,
 			    struct pf_state *, int);
 static void		 pf_detach_state(struct pf_state *, int);
@@ -263,6 +247,11 @@ static int		 pf_test_rule(struct pf_rule **, struct pf_state **,
 			    int, struct pfi_kif *, struct mbuf *, int,
 			    void *, struct pf_pdesc *, struct pf_rule **,
 			    struct pf_ruleset **, struct ifqueue *);
+#if DUMMYNET
+static int		 pf_test_dummynet(struct pf_rule **, int, 
+			    struct pfi_kif *, struct mbuf **, 
+			    struct pf_pdesc *, struct ip_fw_args *);
+#endif /* DUMMYNET */
 static int		 pf_test_fragment(struct pf_rule **, int,
 			    struct pfi_kif *, struct mbuf *, void *,
 			    struct pf_pdesc *, struct pf_rule **,
@@ -270,15 +259,9 @@ static int		 pf_test_fragment(struct pf_rule **, int,
 static int		 pf_test_state_tcp(struct pf_state **, int,
 			    struct pfi_kif *, struct mbuf *, int,
 			    void *, struct pf_pdesc *, u_short *);
-#ifndef NO_APPLE_EXTENSIONS
 static int		 pf_test_state_udp(struct pf_state **, int,
 			    struct pfi_kif *, struct mbuf *, int,
 			    void *, struct pf_pdesc *, u_short *);
-#else
-static int		 pf_test_state_udp(struct pf_state **, int,
-			    struct pfi_kif *, struct mbuf *, int,
-			    void *, struct pf_pdesc *);
-#endif
 static int		 pf_test_state_icmp(struct pf_state **, int,
 			    struct pfi_kif *, struct mbuf *, int,
 			    void *, struct pf_pdesc *, u_short *);
@@ -291,18 +274,11 @@ static void		 pf_hash(struct pf_addr *, struct pf_addr *,
 static int		 pf_map_addr(u_int8_t, struct pf_rule *,
 			    struct pf_addr *, struct pf_addr *,
 			    struct pf_addr *, struct pf_src_node **);
-#ifndef NO_APPLE_EXTENSIONS
 static int		 pf_get_sport(struct pf_pdesc *, struct pfi_kif *,
 			    struct pf_rule *, struct pf_addr *,
 			    union pf_state_xport *, struct pf_addr *,
 			    union pf_state_xport *, struct pf_addr *,
 			    union pf_state_xport *, struct pf_src_node **);
-#else
-int			 pf_get_sport(sa_family_t, u_int8_t, struct pf_rule *,
-			    struct pf_addr *, struct pf_addr *, u_int16_t,
-			    struct pf_addr *, u_int16_t *, u_int16_t, u_int16_t,
-			    struct pf_src_node **);
-#endif
 static void		 pf_route(struct mbuf **, struct pf_rule *, int,
 			    struct ifnet *, struct pf_state *,
 			    struct pf_pdesc *);
@@ -330,7 +306,6 @@ static void		 pf_stateins_err(const char *, struct pf_state *,
 			    struct pfi_kif *);
 static int		 pf_check_congestion(struct ifqueue *);
 
-#ifndef NO_APPLE_EXTENSIONS
 #if 0
 static const char *pf_pptp_ctrl_type_name(u_int16_t code);
 #endif
@@ -344,7 +319,6 @@ static int		pf_ike_compare(struct pf_app_state *,
 			    struct pf_app_state *);
 static int		pf_test_state_esp(struct pf_state **, int,
 			    struct pfi_kif *, int, struct pf_pdesc *);
-#endif
 
 extern struct pool pfr_ktable_pl;
 extern struct pool pfr_kentry_pl;
@@ -356,10 +330,9 @@ struct pf_pool_limit pf_pool_limits[PF_LIMIT_MAX] = {
 	{ &pf_src_tree_pl, PFSNODE_HIWAT },
 	{ &pf_frent_pl, PFFRAG_FRENT_HIWAT },
 	{ &pfr_ktable_pl, PFR_KTABLE_HIWAT },
-	{ &pfr_kentry_pl, PFR_KENTRY_HIWAT }
+	{ &pfr_kentry_pl, PFR_KENTRY_HIWAT },
 };
 
-#ifndef NO_APPLE_EXTENSIONS
 struct mbuf *
 pf_lazy_makewritable(struct pf_pdesc *pd, struct mbuf *m, int len)
 {
@@ -425,6 +398,10 @@ pf_state_lookup_aux(struct pf_state **state, struct pfi_kif *kif,
 	do {								 \
 		int action;						 \
 		*state = pf_find_state(kif, &key, direction);		 \
+		if (*state != NULL && pd != NULL && 			 \
+			pd->flowhash == 0) {				 \
+			pd->flowhash = (*state)->state_key->flowhash;	 \
+		}							 \
 		if (pf_state_lookup_aux(state, kif, direction, &action)) \
 			return (action);				 \
 	} while (0)
@@ -443,31 +420,6 @@ pf_state_lookup_aux(struct pf_state **state, struct pfi_kif *kif,
 #define STATE_GRE_TRANSLATE(sk)						\
 	(STATE_ADDR_TRANSLATE(sk) ||					\
 	(sk)->lan.xport.call_id != (sk)->gwy.xport.call_id)
-
-#else
-#define STATE_LOOKUP()							\
-	do {								\
-		*state = pf_find_state(kif, &key, direction);		\
-		if (*state == NULL || (*state)->timeout == PFTM_PURGE)	\
-			return (PF_DROP);				\
-		if (direction == PF_OUT &&				\
-		    (((*state)->rule.ptr->rt == PF_ROUTETO &&		\
-		    (*state)->rule.ptr->direction == PF_OUT) ||		\
-		    ((*state)->rule.ptr->rt == PF_REPLYTO &&		\
-		    (*state)->rule.ptr->direction == PF_IN)) &&		\
-		    (*state)->rt_kif != NULL &&				\
-		    (*state)->rt_kif != kif)				\
-			return (PF_PASS);				\
-	} while (0)
-
-#define	STATE_TRANSLATE(sk) \
-	(sk)->lan.addr.addr32[0] != (sk)->gwy.addr.addr32[0] || \
-	((sk)->af == AF_INET6 && \
-	((sk)->lan.addr.addr32[1] != (sk)->gwy.addr.addr32[1] || \
-	(sk)->lan.addr.addr32[2] != (sk)->gwy.addr.addr32[2] || \
-	(sk)->lan.addr.addr32[3] != (sk)->gwy.addr.addr32[3])) || \
-	(sk)->lan.port != (sk)->gwy.port
-#endif
 
 #define BOUND_IFACE(r, k) \
 	((r)->rule_flag & PFRULE_IFBOUND) ? (k) : pfi_all
@@ -524,7 +476,6 @@ RB_GENERATE(pf_state_tree_id, pf_state,
 #define	PF_DT_SKIP_LANEXT	0x01
 #define	PF_DT_SKIP_EXTGWY	0x02
 
-#ifndef NO_APPLE_EXTENSIONS
 static const u_int16_t PF_PPTP_PORT = 1723;
 static const u_int32_t PF_PPTP_MAGIC_NUMBER = 0x1A2B3C4D;
 
@@ -807,7 +758,6 @@ struct pf_esp_hdr {
 	u_int32_t seqno;
 	u_int8_t payload[];
 };
-#endif
 
 static __inline int
 pf_src_compare(struct pf_src_node *a, struct pf_src_node *b)
@@ -857,16 +807,13 @@ static __inline int
 pf_state_compare_lan_ext(struct pf_state_key *a, struct pf_state_key *b)
 {
 	int	diff;
-#ifndef NO_APPLE_EXTENSIONS
-	int extfilter;
-#endif
+	int	extfilter;
 
 	if ((diff = a->proto - b->proto) != 0)
 		return (diff);
 	if ((diff = a->af - b->af) != 0)
 		return (diff);
 
-#ifndef NO_APPLE_EXTENSIONS
 	extfilter = PF_EXTFILTER_APD;
 
 	switch (a->proto) {
@@ -911,7 +858,6 @@ pf_state_compare_lan_ext(struct pf_state_key *a, struct pf_state_key *b)
 	default:
 		break;
 	}
-#endif
 
 	switch (a->af) {
 #if INET
@@ -920,24 +866,16 @@ pf_state_compare_lan_ext(struct pf_state_key *a, struct pf_state_key *b)
 			return (1);
 		if (a->lan.addr.addr32[0] < b->lan.addr.addr32[0])
 			return (-1);
-#ifndef NO_APPLE_EXTENSIONS
 		if (extfilter < PF_EXTFILTER_EI) {
 			if (a->ext.addr.addr32[0] > b->ext.addr.addr32[0])
 				return (1);
 			if (a->ext.addr.addr32[0] < b->ext.addr.addr32[0])
 				return (-1);
 		}
-#else
-		if (a->ext.addr.addr32[0] > b->ext.addr.addr32[0])
-			return (1);
-		if (a->ext.addr.addr32[0] < b->ext.addr.addr32[0])
-			return (-1);
-#endif
 		break;
 #endif /* INET */
 #if INET6
 	case AF_INET6:
-#ifndef NO_APPLE_EXTENSIONS
 		if (a->lan.addr.addr32[3] > b->lan.addr.addr32[3])
 			return (1);
 		if (a->lan.addr.addr32[3] < b->lan.addr.addr32[3])
@@ -973,45 +911,10 @@ pf_state_compare_lan_ext(struct pf_state_key *a, struct pf_state_key *b)
 			if (a->ext.addr.addr32[0] < b->ext.addr.addr32[0])
 				return (-1);
 		}
-#else
-		if (a->lan.addr.addr32[3] > b->lan.addr.addr32[3])
-			return (1);
-		if (a->lan.addr.addr32[3] < b->lan.addr.addr32[3])
-			return (-1);
-		if (a->ext.addr.addr32[3] > b->ext.addr.addr32[3])
-			return (1);
-		if (a->ext.addr.addr32[3] < b->ext.addr.addr32[3])
-			return (-1);
-		if (a->lan.addr.addr32[2] > b->lan.addr.addr32[2])
-			return (1);
-		if (a->lan.addr.addr32[2] < b->lan.addr.addr32[2])
-			return (-1);
-		if (a->ext.addr.addr32[2] > b->ext.addr.addr32[2])
-			return (1);
-		if (a->ext.addr.addr32[2] < b->ext.addr.addr32[2])
-			return (-1);
-		if (a->lan.addr.addr32[1] > b->lan.addr.addr32[1])
-			return (1);
-		if (a->lan.addr.addr32[1] < b->lan.addr.addr32[1])
-			return (-1);
-		if (a->ext.addr.addr32[1] > b->ext.addr.addr32[1])
-			return (1);
-		if (a->ext.addr.addr32[1] < b->ext.addr.addr32[1])
-			return (-1);
-		if (a->lan.addr.addr32[0] > b->lan.addr.addr32[0])
-			return (1);
-		if (a->lan.addr.addr32[0] < b->lan.addr.addr32[0])
-			return (-1);
-		if (a->ext.addr.addr32[0] > b->ext.addr.addr32[0])
-			return (1);
-		if (a->ext.addr.addr32[0] < b->ext.addr.addr32[0])
-			return (-1);
-#endif
 		break;
 #endif /* INET6 */
 	}
 
-#ifndef NO_APPLE_EXTENSIONS
 	if (a->app_state && b->app_state) {
 		if (a->app_state->compare_lan_ext &&
 		    b->app_state->compare_lan_ext) {
@@ -1025,12 +928,6 @@ pf_state_compare_lan_ext(struct pf_state_key *a, struct pf_state_key *b)
 				return (diff);
 		}
 	}
-#else
-	if ((diff = a->lan.port - b->lan.port) != 0)
-		return (diff);
-	if ((diff = a->ext.port - b->ext.port) != 0)
-		return (diff);
-#endif
 
 	return (0);
 }
@@ -1039,9 +936,7 @@ static __inline int
 pf_state_compare_ext_gwy(struct pf_state_key *a, struct pf_state_key *b)
 {
 	int	diff;
-#ifndef NO_APPLE_EXTENSIONS
-	int extfilter;
-#endif
+	int	extfilter;
 
 	if ((diff = a->proto - b->proto) != 0)
 		return (diff);
@@ -1049,7 +944,6 @@ pf_state_compare_ext_gwy(struct pf_state_key *a, struct pf_state_key *b)
 	if ((diff = a->af - b->af) != 0)
 		return (diff);
 
-#ifndef NO_APPLE_EXTENSIONS
 	extfilter = PF_EXTFILTER_APD;
 
 	switch (a->proto) {
@@ -1094,12 +988,10 @@ pf_state_compare_ext_gwy(struct pf_state_key *a, struct pf_state_key *b)
 	default:
 		break;
 	}
-#endif
 
 	switch (a->af) {
 #if INET
 	case AF_INET:
-#ifndef NO_APPLE_EXTENSIONS
 		if (a->gwy.addr.addr32[0] > b->gwy.addr.addr32[0])
 			return (1);
 		if (a->gwy.addr.addr32[0] < b->gwy.addr.addr32[0])
@@ -1110,21 +1002,10 @@ pf_state_compare_ext_gwy(struct pf_state_key *a, struct pf_state_key *b)
 			if (a->ext.addr.addr32[0] < b->ext.addr.addr32[0])
 				return (-1);
 		}
-#else
-		if (a->ext.addr.addr32[0] > b->ext.addr.addr32[0])
-			return (1);
-		if (a->ext.addr.addr32[0] < b->ext.addr.addr32[0])
-			return (-1);
-		if (a->gwy.addr.addr32[0] > b->gwy.addr.addr32[0])
-			return (1);
-		if (a->gwy.addr.addr32[0] < b->gwy.addr.addr32[0])
-			return (-1);
-#endif
 		break;
 #endif /* INET */
 #if INET6
 	case AF_INET6:
-#ifndef NO_APPLE_EXTENSIONS
 		if (a->gwy.addr.addr32[3] > b->gwy.addr.addr32[3])
 			return (1);
 		if (a->gwy.addr.addr32[3] < b->gwy.addr.addr32[3])
@@ -1160,45 +1041,10 @@ pf_state_compare_ext_gwy(struct pf_state_key *a, struct pf_state_key *b)
 			if (a->ext.addr.addr32[0] < b->ext.addr.addr32[0])
 				return (-1);
 		}
-#else
-		if (a->ext.addr.addr32[3] > b->ext.addr.addr32[3])
-			return (1);
-		if (a->ext.addr.addr32[3] < b->ext.addr.addr32[3])
-			return (-1);
-		if (a->gwy.addr.addr32[3] > b->gwy.addr.addr32[3])
-			return (1);
-		if (a->gwy.addr.addr32[3] < b->gwy.addr.addr32[3])
-			return (-1);
-		if (a->ext.addr.addr32[2] > b->ext.addr.addr32[2])
-			return (1);
-		if (a->ext.addr.addr32[2] < b->ext.addr.addr32[2])
-			return (-1);
-		if (a->gwy.addr.addr32[2] > b->gwy.addr.addr32[2])
-			return (1);
-		if (a->gwy.addr.addr32[2] < b->gwy.addr.addr32[2])
-			return (-1);
-		if (a->ext.addr.addr32[1] > b->ext.addr.addr32[1])
-			return (1);
-		if (a->ext.addr.addr32[1] < b->ext.addr.addr32[1])
-			return (-1);
-		if (a->gwy.addr.addr32[1] > b->gwy.addr.addr32[1])
-			return (1);
-		if (a->gwy.addr.addr32[1] < b->gwy.addr.addr32[1])
-			return (-1);
-		if (a->ext.addr.addr32[0] > b->ext.addr.addr32[0])
-			return (1);
-		if (a->ext.addr.addr32[0] < b->ext.addr.addr32[0])
-			return (-1);
-		if (a->gwy.addr.addr32[0] > b->gwy.addr.addr32[0])
-			return (1);
-		if (a->gwy.addr.addr32[0] < b->gwy.addr.addr32[0])
-			return (-1);
-#endif
 		break;
 #endif /* INET6 */
 	}
 
-#ifndef NO_APPLE_EXTENSIONS
 	if (a->app_state && b->app_state) {
 		if (a->app_state->compare_ext_gwy &&
 		    b->app_state->compare_ext_gwy) {
@@ -1212,12 +1058,6 @@ pf_state_compare_ext_gwy(struct pf_state_key *a, struct pf_state_key *b)
 				return (diff);
 		}
 	}
-#else
-	if ((diff = a->ext.port - b->ext.port) != 0)
-		return (diff);
-	if ((diff = a->gwy.port - b->gwy.port) != 0)
-		return (diff);
-#endif
 
 	return (0);
 }
@@ -1262,7 +1102,8 @@ pf_find_state_byid(struct pf_state_cmp *key)
 {
 	pf_status.fcounters[FCNT_STATE_SEARCH]++;
 
-	return (RB_FIND(pf_state_tree_id, &tree_id, (struct pf_state *)key));
+	return (RB_FIND(pf_state_tree_id, &tree_id,
+	    (struct pf_state *)(void *)key));
 }
 
 static struct pf_state *
@@ -1529,7 +1370,6 @@ pf_stateins_err(const char *tree, struct pf_state *s, struct pfi_kif *kif)
 	struct pf_state_key	*sk = s->state_key;
 
 	if (pf_status.debug >= PF_DEBUG_MISC) {
-#ifndef NO_APPLE_EXTENSIONS
 		printf("pf: state insert failed: %s %s ", tree, kif->pfik_name);
 		switch (sk->proto) {
 		case IPPROTO_TCP:
@@ -1557,18 +1397,6 @@ pf_stateins_err(const char *tree, struct pf_state *s, struct pfi_kif *kif)
 		printf(" ext: ");
 		pf_print_sk_host(&sk->ext, sk->af, sk->proto,
 		    sk->proto_variant);
-#else
-		printf("pf: state insert failed: %s %s", tree, kif->pfik_name);
-		printf(" lan: ");
-		pf_print_host(&sk->lan.addr, sk->lan.port,
-		    sk->af);
-		printf(" gwy: ");
-		pf_print_host(&sk->gwy.addr, sk->gwy.port,
-		    sk->af);
-		printf(" ext: ");
-		pf_print_host(&sk->ext.addr, sk->ext.port,
-		    sk->af);
-#endif
 		if (s->sync_flags & PFSTATE_FROMSYNC)
 			printf(" (from sync)");
 		printf("\n");
@@ -1634,64 +1462,76 @@ pf_insert_state(struct pfi_kif *kif, struct pf_state *s)
 	return (0);
 }
 
+static int
+pf_purge_thread_cont(int err)
+{
+#pragma unused(err)
+	static u_int32_t nloops = 0;
+	int t = 1;	/* 1 second */
+
+	lck_rw_lock_shared(pf_perim_lock);
+	lck_mtx_lock(pf_lock);
+
+	/* purge everything if not running */
+	if (!pf_status.running) {
+		pf_purge_expired_states(pf_status.states);
+		pf_purge_expired_fragments();
+		pf_purge_expired_src_nodes();
+
+		/* terminate thread (we don't currently do this) */
+		if (pf_purge_thread == NULL) {
+			lck_mtx_unlock(pf_lock);
+			lck_rw_done(pf_perim_lock);
+
+			thread_deallocate(current_thread());
+			thread_terminate(current_thread());
+			/* NOTREACHED */
+			return (0);
+		} else {
+			/* if there's nothing left, sleep w/o timeout */
+			if (pf_status.states == 0 &&
+			    pf_normalize_isempty() &&
+			    RB_EMPTY(&tree_src_tracking)) {
+				nloops = 0;
+				t = 0;
+			}
+			goto done;
+		}
+	}
+
+	/* process a fraction of the state table every second */
+	pf_purge_expired_states(1 + (pf_status.states
+	    / pf_default_rule.timeout[PFTM_INTERVAL]));
+
+	/* purge other expired types every PFTM_INTERVAL seconds */
+	if (++nloops >= pf_default_rule.timeout[PFTM_INTERVAL]) {
+		pf_purge_expired_fragments();
+		pf_purge_expired_src_nodes();
+		nloops = 0;
+	}
+done:
+	lck_mtx_unlock(pf_lock);
+	lck_rw_done(pf_perim_lock);
+
+	(void) tsleep0(pf_purge_thread_fn, PWAIT, "pf_purge_cont",
+	    t * hz, pf_purge_thread_cont);
+	/* NOTREACHED */
+	VERIFY(0);
+
+	return (0);
+}
+
 void
 pf_purge_thread_fn(void *v, wait_result_t w)
 {
 #pragma unused(v, w)
-	u_int32_t nloops = 0;
-	int t = 0;
-
-	for (;;) {
-		(void) tsleep(pf_purge_thread_fn, PWAIT, "pftm", t * hz);
-
-		lck_rw_lock_shared(pf_perim_lock);
-		lck_mtx_lock(pf_lock);
-
-		/* purge everything if not running */
-		if (!pf_status.running) {
-			pf_purge_expired_states(pf_status.states);
-			pf_purge_expired_fragments();
-			pf_purge_expired_src_nodes();
-
-			/* terminate thread (we don't currently do this) */
-			if (pf_purge_thread == NULL) {
-				lck_mtx_unlock(pf_lock);
-				lck_rw_done(pf_perim_lock);
-
-				thread_deallocate(current_thread());
-				thread_terminate(current_thread());
-				/* NOTREACHED */
-				return;
-			} else {
-				/* if there's nothing left, sleep w/o timeout */
-				if (pf_status.states == 0 &&
-				    pf_normalize_isempty() &&
-				    RB_EMPTY(&tree_src_tracking))
-					t = 0;
-
-				lck_mtx_unlock(pf_lock);
-				lck_rw_done(pf_perim_lock);
-				continue;
-			}
-		} else if (t == 0) {
-			/* Set timeout to 1 second */
-			t = 1;
-		}
-
-		/* process a fraction of the state table every second */
-		pf_purge_expired_states(1 + (pf_status.states
-		    / pf_default_rule.timeout[PFTM_INTERVAL]));
-
-		/* purge other expired types every PFTM_INTERVAL seconds */
-		if (++nloops >= pf_default_rule.timeout[PFTM_INTERVAL]) {
-			pf_purge_expired_fragments();
-			pf_purge_expired_src_nodes();
-			nloops = 0;
-		}
-
-		lck_mtx_unlock(pf_lock);
-		lck_rw_done(pf_perim_lock);
-	}
+	(void) tsleep0(pf_purge_thread_fn, PWAIT, "pf_purge", 0,
+	    pf_purge_thread_cont);
+	/*
+	 * tsleep0() shouldn't have returned as PCATCH was not set;
+	 * therefore assert in this case.
+	 */
+	VERIFY(0);
 }
 
 u_int64_t
@@ -1795,7 +1635,6 @@ pf_unlink_state(struct pf_state *cur)
 {
 	lck_mtx_assert(pf_lock, LCK_MTX_ASSERT_OWNED);
 
-#ifndef NO_APPLE_EXTENSIONS
 	if (cur->src.state == PF_TCPS_PROXY_DST) {
 		pf_send_tcp(cur->rule.ptr, cur->state_key->af,
 		    &cur->state_key->ext.addr, &cur->state_key->lan.addr,
@@ -1806,15 +1645,6 @@ pf_unlink_state(struct pf_state *cur)
 	}
 
 	hook_runloop(&cur->unlink_hooks, HOOK_REMOVE|HOOK_FREE);
-#else
-	if (cur->src.state == PF_TCPS_PROXY_DST) {
-		pf_send_tcp(cur->rule.ptr, cur->state_key->af,
-		    &cur->state_key->ext.addr, &cur->state_key->lan.addr,
-		    cur->state_key->ext.port, cur->state_key->lan.port,
-		    cur->src.seqhi, cur->src.seqlo + 1,
-		    TH_RST|TH_ACK, 0, 0, 0, 1, cur->tag, NULL, NULL);
-	}
-#endif
 	RB_REMOVE(pf_state_tree_id, &tree_id, cur);
 #if NPFSYNC
 	if (cur->creatorid == pf_status.hostid)
@@ -1933,7 +1763,6 @@ pf_tbladdr_copyout(struct pf_addr_wrap *aw)
 	    kt->pfrkt_cnt : -1;
 }
 
-#ifndef NO_APPLE_EXTENSIONS
 static void
 pf_print_addr(struct pf_addr *addr, sa_family_t af)
 {
@@ -2016,76 +1845,13 @@ pf_print_sk_host(struct pf_state_host *sh, sa_family_t af, int proto,
 		break;
 	}
 }
-#endif
 
 static void
 pf_print_host(struct pf_addr *addr, u_int16_t p, sa_family_t af)
 {
-#ifndef NO_APPLE_EXTENSIONS
 	pf_print_addr(addr, af);
 	if (p)
 		printf("[%u]", ntohs(p));
-#else
-	switch (af) {
-#if INET
-	case AF_INET: {
-		u_int32_t a = ntohl(addr->addr32[0]);
-		printf("%u.%u.%u.%u", (a>>24)&255, (a>>16)&255,
-		    (a>>8)&255, a&255);
-		if (p) {
-			p = ntohs(p);
-			printf(":%u", p);
-		}
-		break;
-	}
-#endif /* INET */
-#if INET6
-	case AF_INET6: {
-		u_int16_t b;
-		u_int8_t i, curstart = 255, curend = 0,
-		    maxstart = 0, maxend = 0;
-		for (i = 0; i < 8; i++) {
-			if (!addr->addr16[i]) {
-				if (curstart == 255)
-					curstart = i;
-				else
-					curend = i;
-			} else {
-				if (curstart) {
-					if ((curend - curstart) >
-					    (maxend - maxstart)) {
-						maxstart = curstart;
-						maxend = curend;
-						curstart = 255;
-					}
-				}
-			}
-		}
-		for (i = 0; i < 8; i++) {
-			if (i >= maxstart && i <= maxend) {
-				if (maxend != 7) {
-					if (i == maxstart)
-						printf(":");
-				} else {
-					if (i == maxend)
-						printf(":");
-				}
-			} else {
-				b = ntohs(addr->addr16[i]);
-				printf("%x", b);
-				if (i < 7)
-					printf(":");
-			}
-		}
-		if (p) {
-			p = ntohs(p);
-			printf("[%u]", p);
-		}
-		break;
-	}
-#endif /* INET6 */
-	}
-#endif
 }
 
 void
@@ -2093,14 +1859,12 @@ pf_print_state(struct pf_state *s)
 {
 	struct pf_state_key *sk = s->state_key;
 	switch (sk->proto) {
-#ifndef NO_APPLE_EXTENSIONS
 	case IPPROTO_ESP:
 		printf("ESP ");
 		break;
 	case IPPROTO_GRE:
 		printf("GRE%u ", sk->proto_variant);
 		break;
-#endif
 	case IPPROTO_TCP:
 		printf("TCP ");
 		break;
@@ -2117,19 +1881,11 @@ pf_print_state(struct pf_state *s)
 		printf("%u ", sk->proto);
 		break;
 	}
-#ifndef NO_APPLE_EXTENSIONS
 	pf_print_sk_host(&sk->lan, sk->af, sk->proto, sk->proto_variant);
 	printf(" ");
 	pf_print_sk_host(&sk->gwy, sk->af, sk->proto, sk->proto_variant);
 	printf(" ");
 	pf_print_sk_host(&sk->ext, sk->af, sk->proto, sk->proto_variant);
-#else
-	pf_print_host(&sk->lan.addr, sk->lan.port, sk->af);
-	printf(" ");
-	pf_print_host(&sk->gwy.addr, sk->gwy.port, sk->af);
-	printf(" ");
-	pf_print_host(&sk->ext.addr, sk->ext.port, sk->af);
-#endif
 	printf(" [lo=%u high=%u win=%u modulator=%u", s->src.seqlo,
 	    s->src.seqhi, s->src.max_win, s->src.seqdiff);
 	if (s->src.wscale && s->dst.wscale)
@@ -2197,7 +1953,6 @@ pf_calc_skip_steps(struct pf_rulequeue *rules)
 		if (cur->src.neg != prev->src.neg ||
 		    pf_addr_wrap_neq(&cur->src.addr, &prev->src.addr))
 			PF_SET_SKIP_STEPS(PF_SKIP_SRC_ADDR);
-#ifndef NO_APPLE_EXTENSIONS
 		{
 			union pf_rule_xport *cx = &cur->src.xport;
 			union pf_rule_xport *px = &prev->src.xport;
@@ -2217,16 +1972,9 @@ pf_calc_skip_steps(struct pf_rulequeue *rules)
 				break;
 			}
 		}
-#else
-		if (cur->src.port[0] != prev->src.port[0] ||
-		    cur->src.port[1] != prev->src.port[1] ||
-		    cur->src.port_op != prev->src.port_op)
-			PF_SET_SKIP_STEPS(PF_SKIP_SRC_PORT);
-#endif
 		if (cur->dst.neg != prev->dst.neg ||
 		    pf_addr_wrap_neq(&cur->dst.addr, &prev->dst.addr))
 			PF_SET_SKIP_STEPS(PF_SKIP_DST_ADDR);
-#ifndef NO_APPLE_EXTENSIONS
 		{
 			union pf_rule_xport *cx = &cur->dst.xport;
 			union pf_rule_xport *px = &prev->dst.xport;
@@ -2252,18 +2000,38 @@ pf_calc_skip_steps(struct pf_rulequeue *rules)
 				break;
 			}
 		}
-#else
-		if (cur->dst.port[0] != prev->dst.port[0] ||
-		    cur->dst.port[1] != prev->dst.port[1] ||
-		    cur->dst.port_op != prev->dst.port_op)
-			PF_SET_SKIP_STEPS(PF_SKIP_DST_PORT);
-#endif
 
 		prev = cur;
 		cur = TAILQ_NEXT(cur, entries);
 	}
 	for (i = 0; i < PF_SKIP_COUNT; ++i)
 		PF_SET_SKIP_STEPS(i);
+}
+
+u_int32_t
+pf_calc_state_key_flowhash(struct pf_state_key *sk)
+{
+	struct pf_flowhash_key fh __attribute__((aligned(8)));
+
+	bzero(&fh, sizeof (fh));
+	if (PF_ALEQ(&sk->lan.addr, &sk->ext.addr, sk->af)) {
+		bcopy(&sk->lan.addr, &fh.ap1.addr, sizeof (fh.ap1.addr));
+		bcopy(&sk->ext.addr, &fh.ap2.addr, sizeof (fh.ap2.addr));
+	} else {
+		bcopy(&sk->ext.addr, &fh.ap1.addr, sizeof (fh.ap1.addr));
+		bcopy(&sk->lan.addr, &fh.ap2.addr, sizeof (fh.ap2.addr));
+	}
+	if (sk->lan.xport.spi <= sk->ext.xport.spi) {
+		fh.ap1.xport.spi = sk->lan.xport.spi;
+		fh.ap2.xport.spi = sk->ext.xport.spi;
+	} else {
+		fh.ap1.xport.spi = sk->ext.xport.spi;
+		fh.ap2.xport.spi = sk->lan.xport.spi;
+	}
+	fh.af = sk->af;
+	fh.proto = sk->proto;
+
+	return (net_flowhash(&fh, sizeof (fh), pf_hash_seed));
 }
 
 static int
@@ -2556,11 +2324,7 @@ pf_modulate_sack(struct mbuf *m, int off, struct pf_pdesc *pd,
 					    dst->seqdiff), 0);
 					memcpy(&opt[i], &sack, sizeof (sack));
 				}
-#ifndef NO_APPLE_EXTENSIONS
 				copyback = off + sizeof (*th) + thoptlen;
-#else
-				copyback = 1;
-#endif
 			}
 			/* FALLTHROUGH */
 		default:
@@ -2571,17 +2335,12 @@ pf_modulate_sack(struct mbuf *m, int off, struct pf_pdesc *pd,
 		}
 	}
 
-#ifndef NO_APPLE_EXTENSIONS
 	if (copyback) {
 		m = pf_lazy_makewritable(pd, m, copyback);
 		if (!m)
 			return (-1);
 		m_copyback(m, off + sizeof (*th), thoptlen, opts);
 	}
-#else
-	if (copyback)
-		m_copyback(m, off + sizeof (*th), thoptlen, opts);
-#endif
 	return (copyback);
 }
 
@@ -2637,19 +2396,37 @@ pf_send_tcp(const struct pf_rule *r, sa_family_t af,
 	}
 
 	if (tag)
-		pf_mtag->flags |= PF_TAG_GENERATED;
-	pf_mtag->tag = rtag;
+		pf_mtag->pftag_flags |= PF_TAG_GENERATED;
+	pf_mtag->pftag_tag = rtag;
 
 	if (r != NULL && PF_RTABLEID_IS_VALID(r->rtableid))
-		pf_mtag->rtableid = r->rtableid;
+		pf_mtag->pftag_rtableid = r->rtableid;
 
-#if ALTQ
-	if (r != NULL && r->qid) {
-		pf_mtag->qid = r->qid;
-		/* add hints for ecn */
-		pf_mtag->hdr = mtod(m, struct ip *);
+#if PF_ALTQ
+	if (altq_allowed && r != NULL && r->qid)
+		pf_mtag->pftag_qid = r->qid;
+#endif /* PF_ALTQ */
+
+	/* add hints for ecn */
+	pf_mtag->pftag_hdr = mtod(m, struct ip *);
+	/* record address family */
+	pf_mtag->pftag_flags &= ~(PF_TAG_HDR_INET | PF_TAG_HDR_INET6);
+	switch (af) {
+#if INET
+	case AF_INET:
+		pf_mtag->pftag_flags |= PF_TAG_HDR_INET;
+		break;
+#endif /* INET */
+#if INET6
+	case AF_INET6:
+		pf_mtag->pftag_flags |= PF_TAG_HDR_INET6;
+		break;
+#endif /* INET6 */
 	}
-#endif /* ALTQ */
+	/* indicate this is TCP */
+	pf_mtag->pftag_flags |= PF_TAG_TCP;
+
+	/* Make sure headers are 32-bit aligned */
 	m->m_data += max_linkhdr;
 	m->m_pkthdr.len = m->m_len = len;
 	m->m_pkthdr.rcvif = NULL;
@@ -2665,7 +2442,7 @@ pf_send_tcp(const struct pf_rule *r, sa_family_t af,
 		h->ip_src.s_addr = saddr->v4.s_addr;
 		h->ip_dst.s_addr = daddr->v4.s_addr;
 
-		th = (struct tcphdr *)((caddr_t)h + sizeof (struct ip));
+		th = (struct tcphdr *)(void *)((caddr_t)h + sizeof (struct ip));
 		break;
 #endif /* INET */
 #if INET6
@@ -2678,7 +2455,8 @@ pf_send_tcp(const struct pf_rule *r, sa_family_t af,
 		memcpy(&h6->ip6_src, &saddr->v6, sizeof (struct in6_addr));
 		memcpy(&h6->ip6_dst, &daddr->v6, sizeof (struct in6_addr));
 
-		th = (struct tcphdr *)((caddr_t)h6 + sizeof (struct ip6_hdr));
+		th = (struct tcphdr *)(void *)
+		    ((caddr_t)h6 + sizeof (struct ip6_hdr));
 		break;
 #endif /* INET6 */
 	}
@@ -2764,18 +2542,34 @@ pf_send_icmp(struct mbuf *m, u_int8_t type, u_int8_t code, sa_family_t af,
 	if ((pf_mtag = pf_get_mtag(m0)) == NULL)
 		return;
 
-	pf_mtag->flags |= PF_TAG_GENERATED;
+	pf_mtag->pftag_flags |= PF_TAG_GENERATED;
 
 	if (PF_RTABLEID_IS_VALID(r->rtableid))
-		pf_mtag->rtableid = r->rtableid;
+		pf_mtag->pftag_rtableid = r->rtableid;
 
-#if ALTQ
-	if (r->qid) {
-		pf_mtag->qid = r->qid;
-		/* add hints for ecn */
-		pf_mtag->hdr = mtod(m0, struct ip *);
+#if PF_ALTQ
+	if (altq_allowed && r->qid)
+		pf_mtag->pftag_qid = r->qid;
+#endif /* PF_ALTQ */
+
+	/* add hints for ecn */
+	pf_mtag->pftag_hdr = mtod(m0, struct ip *);
+	/* record address family */
+	pf_mtag->pftag_flags &=
+	    ~(PF_TAG_HDR_INET | PF_TAG_HDR_INET6 | PF_TAG_TCP);
+	switch (af) {
+#if INET
+	case AF_INET:
+		pf_mtag->pftag_flags |= PF_TAG_HDR_INET;
+		break;
+#endif /* INET */
+#if INET6
+	case AF_INET6:
+		pf_mtag->pftag_flags |= PF_TAG_HDR_INET6;
+		break;
+#endif /* INET6 */
 	}
-#endif /* ALTQ */
+
 	switch (af) {
 #if INET
 	case AF_INET:
@@ -2911,7 +2705,6 @@ pf_match_port(u_int8_t op, u_int16_t a1, u_int16_t a2, u_int16_t p)
 	return (pf_match(op, a1, a2, p));
 }
 
-#ifndef NO_APPLE_EXTENSIONS
 int
 pf_match_xport(u_int8_t proto, u_int8_t proto_variant, union pf_rule_xport *rx,
     union pf_state_xport *sx)
@@ -2946,7 +2739,6 @@ pf_match_xport(u_int8_t proto, u_int8_t proto_variant, union pf_rule_xport *rx,
 
 	return (d);
 }
-#endif
 
 int
 pf_match_uid(u_int8_t op, uid_t a1, uid_t a2, uid_t u)
@@ -2970,7 +2762,7 @@ pf_match_tag(struct mbuf *m, struct pf_rule *r, struct pf_mtag *pf_mtag,
 {
 #pragma unused(m)
 	if (*tag == -1)
-		*tag = pf_mtag->tag;
+		*tag = pf_mtag->pftag_tag;
 
 	return ((!r->match_tag_not && r->match_tag == *tag) ||
 	    (r->match_tag_not && r->match_tag != *tag));
@@ -2978,18 +2770,25 @@ pf_match_tag(struct mbuf *m, struct pf_rule *r, struct pf_mtag *pf_mtag,
 
 int
 pf_tag_packet(struct mbuf *m, struct pf_mtag *pf_mtag, int tag,
-    unsigned int rtableid)
+    unsigned int rtableid, struct pf_pdesc *pd)
 {
-	if (tag <= 0 && !PF_RTABLEID_IS_VALID(rtableid))
+	if (tag <= 0 && !PF_RTABLEID_IS_VALID(rtableid) && 
+		(pd == NULL || pd->flowhash == 0))
 		return (0);
 
 	if (pf_mtag == NULL && (pf_mtag = pf_get_mtag(m)) == NULL)
 		return (1);
 
 	if (tag > 0)
-		pf_mtag->tag = tag;
+		pf_mtag->pftag_tag = tag;
 	if (PF_RTABLEID_IS_VALID(rtableid))
-		pf_mtag->rtableid = rtableid;
+		pf_mtag->pftag_rtableid = rtableid;
+	if (pd != NULL && pd->flowhash != 0) {
+		pf_mtag->pftag_flags |= PF_TAG_FLOWHASH;
+		pf_mtag->pftag_flowhash = pd->flowhash;
+		pf_mtag->pftag_flags |= (pd->flags & PFDESC_FLOW_ADV) ?
+			PF_TAG_FLOWADV : 0;
+	}
 
 	return (0);
 }
@@ -3297,8 +3096,10 @@ pf_map_addr(sa_family_t af, struct pf_rule *r, struct pf_addr *saddr,
 		}
 		break;
 	case PF_POOL_SRCHASH:
-		pf_hash(saddr, (struct pf_addr *)&hash, &rpool->key, af);
-		PF_POOLMASK(naddr, raddr, rmask, (struct pf_addr *)&hash, af);
+		pf_hash(saddr, (struct pf_addr *)(void *)&hash,
+		    &rpool->key, af);
+		PF_POOLMASK(naddr, raddr, rmask,
+		    (struct pf_addr *)(void *)&hash, af);
 		break;
 	case PF_POOL_ROUNDROBIN:
 		if (rpool->cur->addr.type == PF_ADDR_TABLE) {
@@ -3363,32 +3164,20 @@ pf_map_addr(sa_family_t af, struct pf_rule *r, struct pf_addr *saddr,
 	return (0);
 }
 
-#ifndef NO_APPLE_EXTENSIONS
 static int
 pf_get_sport(struct pf_pdesc *pd, struct pfi_kif *kif, struct pf_rule *r,
     struct pf_addr *saddr, union pf_state_xport *sxport, struct pf_addr *daddr,
     union pf_state_xport *dxport, struct pf_addr *naddr,
     union pf_state_xport *nxport, struct pf_src_node **sn)
-#else
-int
-pf_get_sport(sa_family_t af, u_int8_t proto, struct pf_rule *r,
-    struct pf_addr *saddr, struct pf_addr *daddr, u_int16_t dport,
-    struct pf_addr *naddr, u_int16_t *nport, u_int16_t low, u_int16_t high,
-    struct pf_src_node **sn)
-#endif
 {
 #pragma unused(kif)
 	struct pf_state_key_cmp	key;
 	struct pf_addr		init_addr;
-#ifndef NO_APPLE_EXTENSIONS
 	unsigned int cut;
 	sa_family_t af = pd->af;
 	u_int8_t proto = pd->proto;
 	unsigned int low = r->rpool.proxy_port[0];
 	unsigned int high = r->rpool.proxy_port[1];
-#else
-	u_int16_t		cut;
-#endif
 
 	bzero(&init_addr, sizeof (init_addr));
 	if (pf_map_addr(af, r, saddr, naddr, &init_addr, sn))
@@ -3399,7 +3188,6 @@ pf_get_sport(sa_family_t af, u_int8_t proto, struct pf_rule *r,
 		high = 65535;
 	}
 
-#ifndef NO_APPLE_EXTENSIONS
 	if (!nxport)
 		return (0); /* No output necessary. */
 
@@ -3459,13 +3247,11 @@ pf_get_sport(sa_family_t af, u_int8_t proto, struct pf_rule *r,
 			return (0);
 		}
 	}
-#endif
 	do {
 		key.af = af;
 		key.proto = proto;
 		PF_ACPY(&key.ext.addr, daddr, key.af);
 		PF_ACPY(&key.gwy.addr, naddr, key.af);
-#ifndef NO_APPLE_EXTENSIONS
 		switch (proto) {
 			case IPPROTO_UDP:
 				key.proto_variant = r->extfilter;
@@ -3478,54 +3264,31 @@ pf_get_sport(sa_family_t af, u_int8_t proto, struct pf_rule *r,
 			key.ext.xport = *dxport;
 		else
 			memset(&key.ext.xport, 0, sizeof (key.ext.xport));
-#else
-		key.ext.port = dport;
-#endif
 		/*
 		 * port search; start random, step;
 		 * similar 2 portloop in in_pcbbind
 		 */
 		if (!(proto == IPPROTO_TCP || proto == IPPROTO_UDP ||
 		    proto == IPPROTO_ICMP)) {
-#ifndef NO_APPLE_EXTENSIONS
 			if (dxport)
 				key.gwy.xport = *dxport;
 			else
 				memset(&key.gwy.xport, 0,
 				    sizeof (key.ext.xport));
-#else
-			key.gwy.port = dport;
-#endif
 			if (pf_find_state_all(&key, PF_IN, NULL) == NULL)
 				return (0);
 		} else if (low == 0 && high == 0) {
-#ifndef NO_APPLE_EXTENSIONS
 			key.gwy.xport = *nxport;
-#else
-			key.gwy.port = *nport;
-#endif
 			if (pf_find_state_all(&key, PF_IN, NULL) == NULL)
 				return (0);
 		} else if (low == high) {
-#ifndef NO_APPLE_EXTENSIONS
 			key.gwy.xport.port = htons(low);
 			if (pf_find_state_all(&key, PF_IN, NULL) == NULL) {
 				nxport->port = htons(low);
 				return (0);
 			}
-#else
-			key.gwy.port = htons(low);
-			if (pf_find_state_all(&key, PF_IN, NULL) == NULL) {
-				*nport = htons(low);
-				return (0);
-			}
-#endif
 		} else {
-#ifndef NO_APPLE_EXTENSIONS
 			unsigned int tmp;
-#else
-			u_int16_t tmp;
-#endif
 			if (low > high) {
 				tmp = low;
 				low = high;
@@ -3535,38 +3298,20 @@ pf_get_sport(sa_family_t af, u_int8_t proto, struct pf_rule *r,
 			cut = htonl(random()) % (1 + high - low) + low;
 			/* low <= cut <= high */
 			for (tmp = cut; tmp <= high; ++(tmp)) {
-#ifndef NO_APPLE_EXTENSIONS
 				key.gwy.xport.port = htons(tmp);
 				if (pf_find_state_all(&key, PF_IN, NULL) ==
 				    NULL) {
 					nxport->port = htons(tmp);
 					return (0);
 				}
-#else
-				key.gwy.port = htons(tmp);
-				if (pf_find_state_all(&key, PF_IN, NULL) ==
-				    NULL) {
-					*nport = htons(tmp);
-					return (0);
-				}
-#endif
 			}
 			for (tmp = cut - 1; tmp >= low; --(tmp)) {
-#ifndef NO_APPLE_EXTENSIONS
 				key.gwy.xport.port = htons(tmp);
 				if (pf_find_state_all(&key, PF_IN, NULL) ==
 				    NULL) {
 					nxport->port = htons(tmp);
 					return (0);
 				}
-#else
-				key.gwy.port = htons(tmp);
-				if (pf_find_state_all(&key, PF_IN, NULL) ==
-				    NULL) {
-					*nport = htons(tmp);
-					return (0);
-				}
-#endif
 			}
 		}
 
@@ -3587,18 +3332,11 @@ pf_get_sport(sa_family_t af, u_int8_t proto, struct pf_rule *r,
 	return (1);					/* none available */
 }
 
-#ifndef NO_APPLE_EXTENSIONS
 static struct pf_rule *
 pf_match_translation(struct pf_pdesc *pd, struct mbuf *m, int off,
     int direction, struct pfi_kif *kif, struct pf_addr *saddr,
     union pf_state_xport *sxport, struct pf_addr *daddr,
     union pf_state_xport *dxport, int rs_num)
-#else
-struct pf_rule *
-pf_match_translation(struct pf_pdesc *pd, struct mbuf *m, int off,
-    int direction, struct pfi_kif *kif, struct pf_addr *saddr, u_int16_t sport,
-    struct pf_addr *daddr, u_int16_t dport, int rs_num)
-#endif
 {
 	struct pf_rule		*r, *rm = NULL;
 	struct pf_ruleset	*ruleset = NULL;
@@ -3610,16 +3348,13 @@ pf_match_translation(struct pf_pdesc *pd, struct mbuf *m, int off,
 	while (r && rm == NULL) {
 		struct pf_rule_addr	*src = NULL, *dst = NULL;
 		struct pf_addr_wrap	*xdst = NULL;
-#ifndef NO_APPLE_EXTENSIONS
 		struct pf_addr_wrap	*xsrc = NULL;
 		union pf_rule_xport	rdrxport;
-#endif
 
 		if (r->action == PF_BINAT && direction == PF_IN) {
 			src = &r->dst;
 			if (r->rpool.cur != NULL)
 				xdst = &r->rpool.cur->addr;
-#ifndef NO_APPLE_EXTENSIONS
 		} else if (r->action == PF_RDR && direction == PF_OUT) {
 			dst = &r->src;
 			src = &r->dst;
@@ -3629,7 +3364,6 @@ pf_match_translation(struct pf_pdesc *pd, struct mbuf *m, int off,
 				    htons(r->rpool.proxy_port[0]);
 				xsrc = &r->rpool.cur->addr;
 			}
-#endif
 		} else {
 			src = &r->src;
 			dst = &r->dst;
@@ -3644,7 +3378,6 @@ pf_match_translation(struct pf_pdesc *pd, struct mbuf *m, int off,
 			r = r->skip[PF_SKIP_AF].ptr;
 		else if (r->proto && r->proto != pd->proto)
 			r = r->skip[PF_SKIP_PROTO].ptr;
-#ifndef NO_APPLE_EXTENSIONS
 		else if (xsrc && PF_MISMATCHAW(xsrc, saddr, pd->af, 0, NULL))
 			r = TAILQ_NEXT(r, entries);
 		else if (!xsrc && PF_MISMATCHAW(&src->addr, saddr, pd->af,
@@ -3656,14 +3389,6 @@ pf_match_translation(struct pf_pdesc *pd, struct mbuf *m, int off,
 			r = TAILQ_NEXT(r, entries);
 		else if (!xsrc && !pf_match_xport(r->proto,
 		    r->proto_variant, &src->xport, sxport))
-#else
-		else if (PF_MISMATCHAW(&src->addr, saddr, pd->af,
-		    src->neg, kif))
-			r = r->skip[src == &r->src ? PF_SKIP_SRC_ADDR :
-			    PF_SKIP_DST_ADDR].ptr;
-		else if (src->port_op && !pf_match_port(src->port_op,
-		    src->port[0], src->port[1], sport))
-#endif
 			r = r->skip[src == &r->src ? PF_SKIP_SRC_PORT :
 			    PF_SKIP_DST_PORT].ptr;
 		else if (dst != NULL &&
@@ -3672,14 +3397,8 @@ pf_match_translation(struct pf_pdesc *pd, struct mbuf *m, int off,
 		else if (xdst != NULL && PF_MISMATCHAW(xdst, daddr, pd->af,
 		    0, NULL))
 			r = TAILQ_NEXT(r, entries);
-#ifndef NO_APPLE_EXTENSIONS
 		else if (dst && !pf_match_xport(r->proto, r->proto_variant,
 		    &dst->xport, dxport))
-#else
-		else if (dst != NULL && dst->port_op &&
-		    !pf_match_port(dst->port_op, dst->port[0],
-		    dst->port[1], dport))
-#endif
 			r = r->skip[PF_SKIP_DST_PORT].ptr;
 		else if (r->match_tag && !pf_match_tag(m, r, pd->pf_mtag, &tag))
 			r = TAILQ_NEXT(r, entries);
@@ -3702,7 +3421,7 @@ pf_match_translation(struct pf_pdesc *pd, struct mbuf *m, int off,
 			pf_step_out_of_anchor(&asd, &ruleset, rs_num, &r,
 			    NULL, NULL);
 	}
-	if (pf_tag_packet(m, pd->pf_mtag, tag, rtableid))
+	if (pf_tag_packet(m, pd->pf_mtag, tag, rtableid, NULL))
 		return (NULL);
 	if (rm != NULL && (rm->action == PF_NONAT ||
 	    rm->action == PF_NORDR || rm->action == PF_NOBINAT))
@@ -3710,25 +3429,15 @@ pf_match_translation(struct pf_pdesc *pd, struct mbuf *m, int off,
 	return (rm);
 }
 
-#ifndef NO_APPLE_EXTENSIONS
 static struct pf_rule *
 pf_get_translation_aux(struct pf_pdesc *pd, struct mbuf *m, int off,
     int direction, struct pfi_kif *kif, struct pf_src_node **sn,
     struct pf_addr *saddr, union pf_state_xport *sxport, struct pf_addr *daddr,
     union pf_state_xport *dxport, struct pf_addr *naddr,
     union pf_state_xport *nxport)
-#else
-struct pf_rule *
-pf_get_translation(struct pf_pdesc *pd, struct mbuf *m, int off, int direction,
-    struct pfi_kif *kif, struct pf_src_node **sn,
-    struct pf_addr *saddr, u_int16_t sport,
-    struct pf_addr *daddr, u_int16_t dport,
-    struct pf_addr *naddr, u_int16_t *nport)
-#endif
 {
 	struct pf_rule	*r = NULL;
 
-#ifndef NO_APPLE_EXTENSIONS
 	if (direction == PF_OUT) {
 		r = pf_match_translation(pd, m, off, direction, kif, saddr,
 		    sxport, daddr, dxport, PF_RULESET_BINAT);
@@ -3745,21 +3454,6 @@ pf_get_translation(struct pf_pdesc *pd, struct mbuf *m, int off, int direction,
 			r = pf_match_translation(pd, m, off, direction, kif,
 			    saddr, sxport, daddr, dxport, PF_RULESET_BINAT);
 	}
-#else
-	if (direction == PF_OUT) {
-		r = pf_match_translation(pd, m, off, direction, kif, saddr,
-		    sport, daddr, dport, PF_RULESET_BINAT);
-		if (r == NULL)
-			r = pf_match_translation(pd, m, off, direction, kif,
-			    saddr, sport, daddr, dport, PF_RULESET_NAT);
-	} else {
-		r = pf_match_translation(pd, m, off, direction, kif, saddr,
-		    sport, daddr, dport, PF_RULESET_RDR);
-		if (r == NULL)
-			r = pf_match_translation(pd, m, off, direction, kif,
-			    saddr, sport, daddr, dport, PF_RULESET_BINAT);
-	}
-#endif
 
 	if (r != NULL) {
 		switch (r->action) {
@@ -3768,14 +3462,8 @@ pf_get_translation(struct pf_pdesc *pd, struct mbuf *m, int off, int direction,
 		case PF_NORDR:
 			return (NULL);
 		case PF_NAT:
-#ifndef NO_APPLE_EXTENSIONS
 			if (pf_get_sport(pd, kif, r, saddr, sxport, daddr,
 			    dxport, naddr, nxport, sn)) {
-#else
-			if (pf_get_sport(pd->af, pd->proto, r, saddr,
-			    daddr, dport, naddr, nport, r->rpool.proxy_port[0],
-			    r->rpool.proxy_port[1], sn)) {
-#endif
 				DPFPRINTF(PF_DEBUG_MISC,
 				    ("pf: NAT proxy port allocation "
 				    "(%u-%u) failed\n",
@@ -3863,7 +3551,6 @@ pf_get_translation(struct pf_pdesc *pd, struct mbuf *m, int off, int direction,
 			}
 			break;
 		case PF_RDR: {
-#ifndef NO_APPLE_EXTENSIONS
 			switch (direction) {
 			case PF_OUT:
 				if (r->dst.addr.type == PF_ADDR_DYNIFTL) {
@@ -3939,31 +3626,6 @@ pf_get_translation(struct pf_pdesc *pd, struct mbuf *m, int off, int direction,
 				}
 				break;
 			}
-#else
-			if (pf_map_addr(pd->af, r, saddr, naddr, NULL, sn))
-				return (NULL);
-			if ((r->rpool.opts & PF_POOL_TYPEMASK) ==
-			    PF_POOL_BITMASK)
-				PF_POOLMASK(naddr, naddr,
-				    &r->rpool.cur->addr.v.a.mask, daddr,
-				    pd->af);
-
-			if (r->rpool.proxy_port[1]) {
-				u_int32_t	tmp_nport;
-
-				tmp_nport = ((ntohs(dport) -
-				    ntohs(r->dst.port[0])) %
-				    (r->rpool.proxy_port[1] -
-				    r->rpool.proxy_port[0] + 1)) +
-				    r->rpool.proxy_port[0];
-
-				/* wrap around if necessary */
-				if (tmp_nport > 65535)
-					tmp_nport -= 65535;
-				*nport = htons((u_int16_t)tmp_nport);
-			} else if (r->rpool.proxy_port[0])
-				*nport = htons(r->rpool.proxy_port[0]);
-#endif
 			break;
 		}
 		default:
@@ -4183,7 +3845,7 @@ pf_calc_mss(struct pf_addr *addr, sa_family_t af, u_int16_t offer)
 	case AF_INET:
 		hlen = sizeof (struct ip);
 		bzero(&ro, sizeof (ro));
-		dst = (struct sockaddr_in *)&ro.ro_dst;
+		dst = (struct sockaddr_in *)(void *)&ro.ro_dst;
 		dst->sin_family = AF_INET;
 		dst->sin_len = sizeof (*dst);
 		dst->sin_addr = addr->v4;
@@ -4195,7 +3857,7 @@ pf_calc_mss(struct pf_addr *addr, sa_family_t af, u_int16_t offer)
 	case AF_INET6:
 		hlen = sizeof (struct ip6_hdr);
 		bzero(&ro6, sizeof (ro6));
-		dst6 = (struct sockaddr_in6 *)&ro6.ro_dst;
+		dst6 = (struct sockaddr_in6 *)(void *)&ro6.ro_dst;
 		dst6->sin6_family = AF_INET6;
 		dst6->sin6_len = sizeof (*dst6);
 		dst6->sin6_addr = addr->v6;
@@ -4274,16 +3936,14 @@ pf_detach_state(struct pf_state *s, int flags)
 		if (!(flags & PF_DT_SKIP_LANEXT))
 			RB_REMOVE(pf_state_tree_lan_ext,
 			    &pf_statetbl_lan_ext, sk);
-#ifndef NO_APPLE_EXTENSIONS
 		if (sk->app_state)
 			pool_put(&pf_app_state_pl, sk->app_state);
-#endif
 		pool_put(&pf_state_key_pl, sk);
 	}
 }
 
 struct pf_state_key *
-pf_alloc_state_key(struct pf_state *s)
+pf_alloc_state_key(struct pf_state *s, struct pf_state_key *psk)
 {
 	struct pf_state_key	*sk;
 
@@ -4292,6 +3952,20 @@ pf_alloc_state_key(struct pf_state *s)
 	bzero(sk, sizeof (*sk));
 	TAILQ_INIT(&sk->states);
 	pf_attach_state(sk, s, 0);
+
+	/* initialize state key from psk, if provided */
+	if (psk != NULL) {
+		bcopy(&psk->lan, &sk->lan, sizeof (sk->lan));
+		bcopy(&psk->gwy, &sk->gwy, sizeof (sk->gwy));
+		bcopy(&psk->ext, &sk->ext, sizeof (sk->ext));
+		sk->af = psk->af;
+		sk->proto = psk->proto;
+		sk->direction = psk->direction;
+		sk->proto_variant = psk->proto_variant;
+		VERIFY(psk->app_state == NULL);
+		sk->flowhash = psk->flowhash;
+		/* don't touch tree entries, states and refcnt on sk */
+	}
 
 	return (sk);
 }
@@ -4334,9 +4008,6 @@ pf_test_rule(struct pf_rule **rm, struct pf_state **sm, int direction,
 #pragma unused(h)
 	struct pf_rule		*nr = NULL;
 	struct pf_addr		*saddr = pd->src, *daddr = pd->dst;
-#ifdef NO_APPLE_EXTENSIONS
-	u_int16_t		 bport, nport = 0;
-#endif
 	sa_family_t		 af = pd->af;
 	struct pf_rule		*r, *a = NULL;
 	struct pf_ruleset	*ruleset = NULL;
@@ -4350,15 +4021,11 @@ pf_test_rule(struct pf_rule **rm, struct pf_state **sm, int direction,
 	int			 match = 0;
 	int			 state_icmp = 0;
 	u_int16_t		 mss = tcp_mssdflt;
-#ifdef NO_APPLE_EXTENSIONS
-	u_int16_t		 sport, dport;
-#endif
 	u_int8_t		 icmptype = 0, icmpcode = 0;
 
-#ifndef NO_APPLE_EXTENSIONS
 	struct pf_grev1_hdr	*grev1 = pd->hdr.grev1;
 	union pf_state_xport bxport, nxport, sxport, dxport;
-#endif
+	struct pf_state_key	 psk;
 
 	lck_mtx_assert(pf_lock, LCK_MTX_ASSERT_OWNED);
 
@@ -4367,46 +4034,28 @@ pf_test_rule(struct pf_rule **rm, struct pf_state **sm, int direction,
 		return (PF_DROP);
 	}
 
-#ifndef NO_APPLE_EXTENSIONS
 	hdrlen = 0;
 	sxport.spi = 0;
 	dxport.spi = 0;
 	nxport.spi = 0;
-#else
-	sport = dport = hdrlen = 0;
-#endif
 
 	switch (pd->proto) {
 	case IPPROTO_TCP:
-#ifndef NO_APPLE_EXTENSIONS
 		sxport.port = th->th_sport;
 		dxport.port = th->th_dport;
-#else
-		sport = th->th_sport;
-		dport = th->th_dport;
-#endif
 		hdrlen = sizeof (*th);
 		break;
 	case IPPROTO_UDP:
-#ifndef NO_APPLE_EXTENSIONS
 		sxport.port = pd->hdr.udp->uh_sport;
 		dxport.port = pd->hdr.udp->uh_dport;
-#else
-		sport = pd->hdr.udp->uh_sport;
-		dport = pd->hdr.udp->uh_dport;
-#endif
 		hdrlen = sizeof (*pd->hdr.udp);
 		break;
 #if INET
 	case IPPROTO_ICMP:
 		if (pd->af != AF_INET)
 			break;
-#ifndef NO_APPLE_EXTENSIONS
 		sxport.port = dxport.port = pd->hdr.icmp->icmp_id;
 		hdrlen = ICMP_MINLEN;
-#else
-		sport = dport = pd->hdr.icmp->icmp_id;
-#endif
 		icmptype = pd->hdr.icmp->icmp_type;
 		icmpcode = pd->hdr.icmp->icmp_code;
 
@@ -4422,11 +4071,7 @@ pf_test_rule(struct pf_rule **rm, struct pf_state **sm, int direction,
 	case IPPROTO_ICMPV6:
 		if (pd->af != AF_INET6)
 			break;
-#ifndef NO_APPLE_EXTENSIONS
 		sxport.port = dxport.port = pd->hdr.icmp6->icmp6_id;
-#else
-		sport = dport = pd->hdr.icmp6->icmp6_id;
-#endif
 		hdrlen = sizeof (*pd->hdr.icmp6);
 		icmptype = pd->hdr.icmp6->icmp6_type;
 		icmpcode = pd->hdr.icmp6->icmp6_code;
@@ -4438,7 +4083,6 @@ pf_test_rule(struct pf_rule **rm, struct pf_state **sm, int direction,
 			state_icmp++;
 		break;
 #endif /* INET6 */
-#ifndef NO_APPLE_EXTENSIONS
 	case IPPROTO_GRE:
 		if (pd->proto_variant == PF_GRE_PPTP_VARIANT) {
 			sxport.call_id = dxport.call_id =
@@ -4451,80 +4095,55 @@ pf_test_rule(struct pf_rule **rm, struct pf_state **sm, int direction,
 		dxport.spi = pd->hdr.esp->spi;
 		hdrlen = sizeof (*pd->hdr.esp);
 		break;
-#endif
 	}
 
 	r = TAILQ_FIRST(pf_main_ruleset.rules[PF_RULESET_FILTER].active.ptr);
 
 	if (direction == PF_OUT) {
-#ifndef NO_APPLE_EXTENSIONS
 		bxport = nxport = sxport;
 		/* check outgoing packet for BINAT/NAT */
 		if ((nr = pf_get_translation_aux(pd, m, off, PF_OUT, kif, &nsn,
 		    saddr, &sxport, daddr, &dxport, &pd->naddr, &nxport)) !=
 		    NULL) {
-#else
-		bport = nport = sport;
-		/* check outgoing packet for BINAT/NAT */
-		if ((nr = pf_get_translation(pd, m, off, PF_OUT, kif, &nsn,
-		    saddr, sport, daddr, dport, &pd->naddr, &nport)) != NULL) {
-#endif
 			PF_ACPY(&pd->baddr, saddr, af);
 			switch (pd->proto) {
 			case IPPROTO_TCP:
-#ifndef NO_APPLE_EXTENSIONS
 				pf_change_ap(direction, pd->mp, saddr,
 				    &th->th_sport, pd->ip_sum, &th->th_sum,
 				    &pd->naddr, nxport.port, 0, af);
 				sxport.port = th->th_sport;
-#else
-				pf_change_ap(saddr, &th->th_sport, pd->ip_sum,
-				    &th->th_sum, &pd->naddr, nport, 0, af);
-				sport = th->th_sport;
-#endif
 				rewrite++;
 				break;
 			case IPPROTO_UDP:
-#ifndef NO_APPLE_EXTENSIONS
 				pf_change_ap(direction, pd->mp, saddr,
 				    &pd->hdr.udp->uh_sport, pd->ip_sum,
 				    &pd->hdr.udp->uh_sum, &pd->naddr,
 				    nxport.port, 1, af);
 				sxport.port = pd->hdr.udp->uh_sport;
-#else
-				pf_change_ap(saddr, &pd->hdr.udp->uh_sport,
-				    pd->ip_sum, &pd->hdr.udp->uh_sum,
-				    &pd->naddr, nport, 1, af);
-				sport = pd->hdr.udp->uh_sport;
-#endif
 				rewrite++;
 				break;
 #if INET
 			case IPPROTO_ICMP:
-				pf_change_a(&saddr->v4.s_addr, pd->ip_sum,
-				    pd->naddr.v4.s_addr, 0);
-#ifndef NO_APPLE_EXTENSIONS
-				pd->hdr.icmp->icmp_cksum = pf_cksum_fixup(
-				    pd->hdr.icmp->icmp_cksum, sxport.port,
-				    nxport.port, 0);
-				pd->hdr.icmp->icmp_id = nxport.port;
-				++rewrite;
-#else
-				pd->hdr.icmp->icmp_cksum = pf_cksum_fixup(
-				    pd->hdr.icmp->icmp_cksum, sport, nport, 0);
-				pd->hdr.icmp->icmp_id = nport;
-				m_copyback(m, off, ICMP_MINLEN, pd->hdr.icmp);
-#endif
+				if (pd->af == AF_INET) {
+					pf_change_a(&saddr->v4.s_addr, pd->ip_sum,
+					    pd->naddr.v4.s_addr, 0);
+					pd->hdr.icmp->icmp_cksum = pf_cksum_fixup(
+					    pd->hdr.icmp->icmp_cksum, sxport.port,
+					    nxport.port, 0);
+					pd->hdr.icmp->icmp_id = nxport.port;
+					++rewrite;
+				}
 				break;
 #endif /* INET */
 #if INET6
 			case IPPROTO_ICMPV6:
-				pf_change_a6(saddr, &pd->hdr.icmp6->icmp6_cksum,
-				    &pd->naddr, 0);
-				rewrite++;
+				if (pd->af == AF_INET6) {
+					pf_change_a6(saddr, &pd->hdr.icmp6->icmp6_cksum,
+					    &pd->naddr, 0);
+					rewrite++;
+				}
 				break;
 #endif /* INET */
-#ifndef NO_APPLE_EXTENSIONS
 			case IPPROTO_GRE:
 				switch (af) {
 #if INET
@@ -4557,7 +4176,6 @@ pf_test_rule(struct pf_rule **rm, struct pf_state **sm, int direction,
 #endif /* INET6 */
 				}
 				break;
-#endif
 			default:
 				switch (af) {
 #if INET
@@ -4580,63 +4198,45 @@ pf_test_rule(struct pf_rule **rm, struct pf_state **sm, int direction,
 			pd->nat_rule = nr;
 		}
 	} else {
-#ifndef NO_APPLE_EXTENSIONS
 		bxport.port = nxport.port = dxport.port;
 		/* check incoming packet for BINAT/RDR */
 		if ((nr = pf_get_translation_aux(pd, m, off, PF_IN, kif, &nsn,
 		    saddr, &sxport, daddr, &dxport, &pd->naddr, &nxport)) !=
 		    NULL) {
-#else
-		bport = nport = dport;
-		/* check incoming packet for BINAT/RDR */
-		if ((nr = pf_get_translation(pd, m, off, PF_IN, kif, &nsn,
-		    saddr, sport, daddr, dport, &pd->naddr, &nport)) != NULL) {
-#endif
 			PF_ACPY(&pd->baddr, daddr, af);
 			switch (pd->proto) {
 			case IPPROTO_TCP:
-#ifndef NO_APPLE_EXTENSIONS
 				pf_change_ap(direction, pd->mp, daddr,
 				    &th->th_dport, pd->ip_sum, &th->th_sum,
 				    &pd->naddr, nxport.port, 0, af);
 				dxport.port = th->th_dport;
-#else
-				pf_change_ap(daddr, &th->th_dport, pd->ip_sum,
-				    &th->th_sum, &pd->naddr, nport, 0, af);
-				dport = th->th_dport;
-#endif
 				rewrite++;
 				break;
 			case IPPROTO_UDP:
-#ifndef NO_APPLE_EXTENSIONS
 				pf_change_ap(direction, pd->mp, daddr,
 				    &pd->hdr.udp->uh_dport, pd->ip_sum,
 				    &pd->hdr.udp->uh_sum, &pd->naddr,
 				    nxport.port, 1, af);
 				dxport.port = pd->hdr.udp->uh_dport;
-#else
-				pf_change_ap(direction, daddr,
-				    &pd->hdr.udp->uh_dport,
-				    pd->ip_sum, &pd->hdr.udp->uh_sum,
-				    &pd->naddr, nport, 1, af);
-				dport = pd->hdr.udp->uh_dport;
-#endif
 				rewrite++;
 				break;
 #if INET
 			case IPPROTO_ICMP:
-				pf_change_a(&daddr->v4.s_addr, pd->ip_sum,
-				    pd->naddr.v4.s_addr, 0);
+				if (pd->af == AF_INET) {
+					pf_change_a(&daddr->v4.s_addr, pd->ip_sum,
+					    pd->naddr.v4.s_addr, 0);
+				}
 				break;
 #endif /* INET */
 #if INET6
 			case IPPROTO_ICMPV6:
-				pf_change_a6(daddr, &pd->hdr.icmp6->icmp6_cksum,
-				    &pd->naddr, 0);
-				rewrite++;
+				if (pd->af == AF_INET6) {
+					pf_change_a6(daddr, &pd->hdr.icmp6->icmp6_cksum,
+					    &pd->naddr, 0);
+					rewrite++;
+				}
 				break;
 #endif /* INET6 */
-#ifndef NO_APPLE_EXTENSIONS
 			case IPPROTO_GRE:
 				if (pd->proto_variant == PF_GRE_PPTP_VARIANT)
 					grev1->call_id = nxport.call_id;
@@ -4671,7 +4271,6 @@ pf_test_rule(struct pf_rule **rm, struct pf_state **sm, int direction,
 #endif /* INET6 */
 				}
 				break;
-#endif
 			default:
 				switch (af) {
 #if INET
@@ -4695,10 +4294,8 @@ pf_test_rule(struct pf_rule **rm, struct pf_state **sm, int direction,
 		}
 	}
 
-#ifndef NO_APPLE_EXTENSIONS
 	if (nr && nr->tag > 0)
 		tag = nr->tag;
-#endif
 
 	while (r != NULL) {
 		r->evaluations++;
@@ -4714,33 +4311,23 @@ pf_test_rule(struct pf_rule **rm, struct pf_state **sm, int direction,
 		    r->src.neg, kif))
 			r = r->skip[PF_SKIP_SRC_ADDR].ptr;
 		/* tcp/udp only. port_op always 0 in other cases */
-#ifndef NO_APPLE_EXTENSIONS
 		else if (r->proto == pd->proto &&
 		    (r->proto == IPPROTO_TCP || r->proto == IPPROTO_UDP) &&
 		    r->src.xport.range.op &&
 		    !pf_match_port(r->src.xport.range.op,
 		    r->src.xport.range.port[0], r->src.xport.range.port[1],
 		    th->th_sport))
-#else
-		else if (r->src.port_op && !pf_match_port(r->src.port_op,
-		    r->src.port[0], r->src.port[1], th->th_sport))
-#endif
 			r = r->skip[PF_SKIP_SRC_PORT].ptr;
 		else if (PF_MISMATCHAW(&r->dst.addr, daddr, af,
 		    r->dst.neg, NULL))
 			r = r->skip[PF_SKIP_DST_ADDR].ptr;
 		/* tcp/udp only. port_op always 0 in other cases */
-#ifndef NO_APPLE_EXTENSIONS
 		else if (r->proto == pd->proto &&
 		    (r->proto == IPPROTO_TCP || r->proto == IPPROTO_UDP) &&
 		    r->dst.xport.range.op &&
 		    !pf_match_port(r->dst.xport.range.op,
 		    r->dst.xport.range.port[0], r->dst.xport.range.port[1],
 		    th->th_dport))
-#else
-		else if (r->dst.port_op && !pf_match_port(r->dst.port_op,
-		    r->dst.port[0], r->dst.port[1], th->th_dport))
-#endif
 			r = r->skip[PF_SKIP_DST_PORT].ptr;
 		/* icmp only. type always 0 in other cases */
 		else if (r->type && r->type != icmptype + 1)
@@ -4748,7 +4335,14 @@ pf_test_rule(struct pf_rule **rm, struct pf_state **sm, int direction,
 		/* icmp only. type always 0 in other cases */
 		else if (r->code && r->code != icmpcode + 1)
 			r = TAILQ_NEXT(r, entries);
-		else if (r->tos && !(r->tos == pd->tos))
+		else if ((r->rule_flag & PFRULE_TOS) && r->tos &&
+		    !(r->tos & pd->tos))
+			r = TAILQ_NEXT(r, entries);
+		else if ((r->rule_flag & PFRULE_DSCP) && r->tos &&
+		    !(r->tos & (pd->tos & DSCP_MASK)))
+			r = TAILQ_NEXT(r, entries);
+		else if ((r->rule_flag & PFRULE_SC) && r->tos &&
+		    ((r->tos & SCIDX_MASK) != pd->sc))
 			r = TAILQ_NEXT(r, entries);
 		else if (r->rule_flag & PFRULE_FRAGMENT)
 			r = TAILQ_NEXT(r, entries);
@@ -4804,7 +4398,6 @@ pf_test_rule(struct pf_rule **rm, struct pf_state **sm, int direction,
 	REASON_SET(&reason, PFRES_MATCH);
 
 	if (r->log || (nr != NULL && nr->log)) {
-#ifndef NO_APPLE_EXTENSIONS
 		if (rewrite > 0) {
 			if (rewrite < off + hdrlen)
 				rewrite = off + hdrlen;
@@ -4817,10 +4410,6 @@ pf_test_rule(struct pf_rule **rm, struct pf_state **sm, int direction,
 
 			m_copyback(m, off, hdrlen, pd->hdr.any);
 		}
-#else
-		if (rewrite)
-			m_copyback(m, off, hdrlen, pd->hdr.any);
-#endif
 		PFLOG_PACKET(kif, h, m, af, direction, reason, r->log ? r : nr,
 		    a, ruleset, pd);
 	}
@@ -4834,34 +4423,19 @@ pf_test_rule(struct pf_rule **rm, struct pf_state **sm, int direction,
 			if (direction == PF_OUT) {
 				switch (pd->proto) {
 				case IPPROTO_TCP:
-#ifndef NO_APPLE_EXTENSIONS
 					pf_change_ap(direction, pd->mp, saddr,
 					    &th->th_sport, pd->ip_sum,
 					    &th->th_sum, &pd->baddr,
 					    bxport.port, 0, af);
 					sxport.port = th->th_sport;
-#else
-					pf_change_ap(saddr, &th->th_sport,
-					    pd->ip_sum, &th->th_sum,
-					    &pd->baddr, bport, 0, af);
-					sport = th->th_sport;
-#endif
 					rewrite++;
 					break;
 				case IPPROTO_UDP:
-#ifndef NO_APPLE_EXTENSIONS
 					pf_change_ap(direction, pd->mp, saddr,
 					    &pd->hdr.udp->uh_sport, pd->ip_sum,
 					    &pd->hdr.udp->uh_sum, &pd->baddr,
 					    bxport.port, 1, af);
 					sxport.port = pd->hdr.udp->uh_sport;
-#else
-					pf_change_ap(saddr,
-					    &pd->hdr.udp->uh_sport, pd->ip_sum,
-					    &pd->hdr.udp->uh_sum, &pd->baddr,
-					    bport, 1, af);
-					sport = pd->hdr.udp->uh_sport;
-#endif
 					rewrite++;
 					break;
 				case IPPROTO_ICMP:
@@ -4870,7 +4444,6 @@ pf_test_rule(struct pf_rule **rm, struct pf_state **sm, int direction,
 #endif
 					/* nothing! */
 					break;
-#ifndef NO_APPLE_EXTENSIONS
 				case IPPROTO_GRE:
 					PF_ACPY(&pd->baddr, saddr, af);
 					++rewrite;
@@ -4908,7 +4481,6 @@ pf_test_rule(struct pf_rule **rm, struct pf_state **sm, int direction,
 #endif /* INET6 */
 					}
 					break;
-#endif
 				default:
 					switch (af) {
 					case AF_INET:
@@ -4924,34 +4496,19 @@ pf_test_rule(struct pf_rule **rm, struct pf_state **sm, int direction,
 			} else {
 				switch (pd->proto) {
 				case IPPROTO_TCP:
-#ifndef NO_APPLE_EXTENSIONS
 					pf_change_ap(direction, pd->mp, daddr,
 					    &th->th_dport, pd->ip_sum,
 					    &th->th_sum, &pd->baddr,
 					    bxport.port, 0, af);
 					dxport.port = th->th_dport;
-#else
-					pf_change_ap(daddr, &th->th_dport,
-					    pd->ip_sum, &th->th_sum,
-					    &pd->baddr, bport, 0, af);
-					dport = th->th_dport;
-#endif
 					rewrite++;
 					break;
 				case IPPROTO_UDP:
-#ifndef NO_APPLE_EXTENSIONS
 					pf_change_ap(direction, pd->mp, daddr,
 					    &pd->hdr.udp->uh_dport, pd->ip_sum,
 					    &pd->hdr.udp->uh_sum, &pd->baddr,
 					    bxport.port, 1, af);
 					dxport.port = pd->hdr.udp->uh_dport;
-#else
-					pf_change_ap(daddr,
-					    &pd->hdr.udp->uh_dport, pd->ip_sum,
-					    &pd->hdr.udp->uh_sum, &pd->baddr,
-					    bport, 1, af);
-					dport = pd->hdr.udp->uh_dport;
-#endif
 					rewrite++;
 					break;
 				case IPPROTO_ICMP:
@@ -4960,7 +4517,6 @@ pf_test_rule(struct pf_rule **rm, struct pf_state **sm, int direction,
 #endif
 					/* nothing! */
 					break;
-#ifndef NO_APPLE_EXTENSIONS
 				case IPPROTO_GRE:
 					if (pd->proto_variant ==
 					    PF_GRE_PPTP_VARIANT)
@@ -4999,7 +4555,6 @@ pf_test_rule(struct pf_rule **rm, struct pf_state **sm, int direction,
 #endif /* INET6 */
 					}
 					break;
-#endif
 				default:
 					switch (af) {
 					case AF_INET:
@@ -5054,16 +4609,12 @@ pf_test_rule(struct pf_rule **rm, struct pf_state **sm, int direction,
 				    r->return_ttl, 1, 0, pd->eh, kif->pfik_ifp);
 			}
 		} else if (pd->proto != IPPROTO_ICMP && af == AF_INET &&
-#ifndef NO_APPLE_EXTENSIONS
 		    pd->proto != IPPROTO_ESP && pd->proto != IPPROTO_AH &&
-#endif
 		    r->return_icmp)
 			pf_send_icmp(m, r->return_icmp >> 8,
 			    r->return_icmp & 255, af, r);
 		else if (pd->proto != IPPROTO_ICMPV6 && af == AF_INET6 &&
-#ifndef NO_APPLE_EXTENSIONS
 		    pd->proto != IPPROTO_ESP && pd->proto != IPPROTO_AH &&
-#endif
 		    r->return_icmp6)
 			pf_send_icmp(m, r->return_icmp6 >> 8,
 			    r->return_icmp6 & 255, af, r);
@@ -5072,7 +4623,91 @@ pf_test_rule(struct pf_rule **rm, struct pf_state **sm, int direction,
 	if (r->action == PF_DROP)
 		return (PF_DROP);
 
-	if (pf_tag_packet(m, pd->pf_mtag, tag, rtableid)) {
+	/* prepare state key, for flowhash and/or the state (if created) */
+	bzero(&psk, sizeof (psk));
+	psk.proto = pd->proto;
+	psk.direction = direction;
+	psk.af = af;
+	if (pd->proto == IPPROTO_UDP) {
+		if (ntohs(pd->hdr.udp->uh_sport) == PF_IKE_PORT &&
+		    ntohs(pd->hdr.udp->uh_dport) == PF_IKE_PORT) {
+			psk.proto_variant = PF_EXTFILTER_APD;
+		} else {
+			psk.proto_variant = nr ? nr->extfilter : r->extfilter;
+			if (psk.proto_variant < PF_EXTFILTER_APD)
+				psk.proto_variant = PF_EXTFILTER_APD;
+		}
+	} else if (pd->proto == IPPROTO_GRE) {
+		psk.proto_variant = pd->proto_variant;
+	}
+	if (direction == PF_OUT) {
+		PF_ACPY(&psk.gwy.addr, saddr, af);
+		PF_ACPY(&psk.ext.addr, daddr, af);
+		switch (pd->proto) {
+		case IPPROTO_UDP:
+			psk.gwy.xport = sxport;
+			psk.ext.xport = dxport;
+			break;
+		case IPPROTO_ESP:
+			psk.gwy.xport.spi = 0;
+			psk.ext.xport.spi = pd->hdr.esp->spi;
+			break;
+		case IPPROTO_ICMP:
+#if INET6
+		case IPPROTO_ICMPV6:
+#endif
+			psk.gwy.xport.port = nxport.port;
+			psk.ext.xport.spi = 0;
+			break;
+		default:
+			psk.gwy.xport = sxport;
+			psk.ext.xport = dxport;
+			break;
+		}
+		if (nr != NULL) {
+			PF_ACPY(&psk.lan.addr, &pd->baddr, af);
+			psk.lan.xport = bxport;
+		} else {
+			PF_ACPY(&psk.lan.addr, &psk.gwy.addr, af);
+			psk.lan.xport = psk.gwy.xport;
+		}
+	} else {
+		PF_ACPY(&psk.lan.addr, daddr, af);
+		PF_ACPY(&psk.ext.addr, saddr, af);
+		switch (pd->proto) {
+		case IPPROTO_ICMP:
+#if INET6
+		case IPPROTO_ICMPV6:
+#endif
+			psk.lan.xport = nxport;
+			psk.ext.xport.spi = 0;
+			break;
+		case IPPROTO_ESP:
+			psk.ext.xport.spi = 0;
+			psk.lan.xport.spi = pd->hdr.esp->spi;
+			break;
+		default:
+			psk.lan.xport = dxport;
+			psk.ext.xport = sxport;
+			break;
+		}
+		if (nr != NULL) {
+			PF_ACPY(&psk.gwy.addr, &pd->baddr, af);
+			psk.gwy.xport = bxport;
+		} else {
+			PF_ACPY(&psk.gwy.addr, &psk.lan.addr, af);
+			psk.gwy.xport = psk.lan.xport;
+		}
+	}
+	if (pd->flowhash != 0) {
+		/* flowhash was already computed by upper layers */
+		psk.flowhash = pd->flowhash;
+	} else {
+		psk.flowhash = pf_calc_state_key_flowhash(&psk);
+		pd->flowhash = psk.flowhash;
+	}
+
+	if (pf_tag_packet(m, pd->pf_mtag, tag, rtableid, pd)) {
 		REASON_SET(&reason, PFRES_MEMORY);
 		return (PF_DROP);
 	}
@@ -5083,7 +4718,6 @@ pf_test_rule(struct pf_rule **rm, struct pf_state **sm, int direction,
 		struct pf_state	*s = NULL;
 		struct pf_state_key *sk = NULL;
 		struct pf_src_node *sn = NULL;
-#ifndef NO_APPLE_EXTENSIONS
 		struct pf_ike_hdr ike;
 
 		if (pd->proto == IPPROTO_UDP) {
@@ -5124,7 +4758,6 @@ pf_test_rule(struct pf_rule **rm, struct pf_state **sm, int direction,
 				goto cleanup;
 			}
 		}
-#endif
 
 		/* check maximums */
 		if (r->max_states && (r->states >= r->max_states)) {
@@ -5142,9 +4775,7 @@ pf_test_rule(struct pf_rule **rm, struct pf_state **sm, int direction,
 		/* src node for translation rule */
 		if (nr != NULL && (nr->rpool.opts & PF_POOL_STICKYADDR) &&
 		    ((direction == PF_OUT &&
-#ifndef NO_APPLE_EXTENSIONS
 		    nr->action != PF_RDR &&
-#endif
 		    pf_insert_src_node(&nsn, nr, &pd->baddr, af) != 0) ||
 		    (pf_insert_src_node(&nsn, nr, saddr, af) != 0))) {
 			REASON_SET(&reason, PFRES_SRCLIMIT);
@@ -5168,19 +4799,15 @@ cleanup:
 				pool_put(&pf_src_tree_pl, nsn);
 			}
 			if (sk != NULL) {
-#ifndef NO_APPLE_EXTENSIONS
 				if (sk->app_state)
 					pool_put(&pf_app_state_pl,
 					    sk->app_state);
-#endif
 				pool_put(&pf_state_key_pl, sk);
 			}
 			return (PF_DROP);
 		}
 		bzero(s, sizeof (*s));
-#ifndef NO_APPLE_EXTENSIONS
 		TAILQ_INIT(&s->unlink_hooks);
-#endif
 		s->rule.ptr = r;
 		s->nat_rule.ptr = nr;
 		s->anchor.ptr = a;
@@ -5236,7 +4863,6 @@ cleanup:
 #endif
 			s->timeout = PFTM_ICMP_FIRST_PACKET;
 			break;
-#ifndef NO_APPLE_EXTENSIONS
 		case IPPROTO_GRE:
 			s->src.state = PFGRE1S_INITIATING;
 			s->dst.state = PFGRE1S_NO_TRAFFIC;
@@ -5247,7 +4873,6 @@ cleanup:
 			s->dst.state = PFESPS_NO_TRAFFIC;
 			s->timeout = PFTM_ESP_FIRST_PACKET;
 			break;
-#endif
 		default:
 			s->src.state = PFOTHERS_SINGLE;
 			s->dst.state = PFOTHERS_NO_TRAFFIC;
@@ -5293,136 +4918,14 @@ cleanup:
 			}
 		}
 
-		if ((sk = pf_alloc_state_key(s)) == NULL) {
+		/* allocate state key and import values from psk */
+		if ((sk = pf_alloc_state_key(s, &psk)) == NULL) {
 			REASON_SET(&reason, PFRES_MEMORY);
 			goto cleanup;
 		}
 
-		sk->proto = pd->proto;
-		sk->direction = direction;
-		sk->af = af;
-#ifndef NO_APPLE_EXTENSIONS
-		if (pd->proto == IPPROTO_UDP) {
-			if (ntohs(pd->hdr.udp->uh_sport) == PF_IKE_PORT &&
-			    ntohs(pd->hdr.udp->uh_dport) == PF_IKE_PORT) {
-				sk->proto_variant = PF_EXTFILTER_APD;
-			} else {
-				sk->proto_variant = nr ? nr->extfilter :
-				    r->extfilter;
-				if (sk->proto_variant < PF_EXTFILTER_APD)
-					sk->proto_variant = PF_EXTFILTER_APD;
-			}
-		} else if (pd->proto == IPPROTO_GRE) {
-			sk->proto_variant = pd->proto_variant;
-		}
-#endif
-		if (direction == PF_OUT) {
-			PF_ACPY(&sk->gwy.addr, saddr, af);
-			PF_ACPY(&sk->ext.addr, daddr, af);
-			switch (pd->proto) {
-#ifndef NO_APPLE_EXTENSIONS
-			case IPPROTO_UDP:
-				sk->gwy.xport = sxport;
-				sk->ext.xport = dxport;
-				break;
-			case IPPROTO_ESP:
-				sk->gwy.xport.spi = 0;
-				sk->ext.xport.spi = pd->hdr.esp->spi;
-				break;
-#endif
-			case IPPROTO_ICMP:
-#if INET6
-			case IPPROTO_ICMPV6:
-#endif
-#ifndef NO_APPLE_EXTENSIONS
-				sk->gwy.xport.port = nxport.port;
-				sk->ext.xport.spi = 0;
-#else
-				sk->gwy.port = nport;
-				sk->ext.port = 0;
-#endif
-				break;
-			default:
-#ifndef NO_APPLE_EXTENSIONS
-				sk->gwy.xport = sxport;
-				sk->ext.xport = dxport;
-				break;
-#else
-				sk->gwy.port = sport;
-				sk->ext.port = dport;
-#endif
-			}
-#ifndef NO_APPLE_EXTENSIONS
-			if (nr != NULL) {
-				PF_ACPY(&sk->lan.addr, &pd->baddr, af);
-				sk->lan.xport = bxport;
-			} else {
-				PF_ACPY(&sk->lan.addr, &sk->gwy.addr, af);
-				sk->lan.xport = sk->gwy.xport;
-			}
-#else
-			if (nr != NULL) {
-				PF_ACPY(&sk->lan.addr, &pd->baddr, af);
-				sk->lan.port = bport;
-			} else {
-				PF_ACPY(&sk->lan.addr, &sk->gwy.addr, af);
-				sk->lan.port = sk->gwy.port;
-			}
-#endif
-		} else {
-			PF_ACPY(&sk->lan.addr, daddr, af);
-			PF_ACPY(&sk->ext.addr, saddr, af);
-			switch (pd->proto) {
-			case IPPROTO_ICMP:
-#if INET6
-			case IPPROTO_ICMPV6:
-#endif
-#ifndef NO_APPLE_EXTENSIONS
-				sk->lan.xport = nxport;
-				sk->ext.xport.spi = 0;
-#else
-				sk->lan.port = nport;
-				sk->ext.port = 0;
-#endif
-				break;
-#ifndef NO_APPLE_EXTENSIONS
-			case IPPROTO_ESP:
-				sk->ext.xport.spi = 0;
-				sk->lan.xport.spi = pd->hdr.esp->spi;
-				break;
-			default:
-				sk->lan.xport = dxport;
-				sk->ext.xport = sxport;
-				break;
-#else
-			default:
-				sk->lan.port = dport;
-				sk->ext.port = sport;
-#endif
-			}
-#ifndef NO_APPLE_EXTENSIONS
-			if (nr != NULL) {
-				PF_ACPY(&sk->gwy.addr, &pd->baddr, af);
-				sk->gwy.xport = bxport;
-			} else {
-				PF_ACPY(&sk->gwy.addr, &sk->lan.addr, af);
-				sk->gwy.xport = sk->lan.xport;
-			}
-		}
-#else
-			if (nr != NULL) {
-				PF_ACPY(&sk->gwy.addr, &pd->baddr, af);
-				sk->gwy.port = bport;
-			} else {
-				PF_ACPY(&sk->gwy.addr, &sk->lan.addr, af);
-				sk->gwy.port = sk->lan.port;
-			}
-		}
-#endif
-
 		pf_set_rt_ifp(s, saddr);	/* needs s->state_key set */
 
-#ifndef NO_APPLE_EXTENSIONS
 		m = pd->mp;
 
 		if (sk->app_state == 0) {
@@ -5484,7 +4987,6 @@ cleanup:
 				break;
 			}
 		}
-#endif
 
 		if (pf_insert_state(BOUND_IFACE(r, kif), s)) {
 			if (pd->proto == IPPROTO_TCP)
@@ -5505,7 +5007,6 @@ cleanup:
 		    r->keep_state == PF_STATE_SYNPROXY) {
 			s->src.state = PF_TCPS_PROXY_SRC;
 			if (nr != NULL) {
-#ifndef NO_APPLE_EXTENSIONS
 				if (direction == PF_OUT) {
 					pf_change_ap(direction, pd->mp, saddr,
 					    &th->th_sport, pd->ip_sum,
@@ -5519,19 +5020,6 @@ cleanup:
 					    bxport.port, 0, af);
 					sxport.port = th->th_dport;
 				}
-#else
-				if (direction == PF_OUT) {
-					pf_change_ap(saddr, &th->th_sport,
-					    pd->ip_sum, &th->th_sum, &pd->baddr,
-					    bport, 0, af);
-					sport = th->th_sport;
-				} else {
-					pf_change_ap(daddr, &th->th_dport,
-					    pd->ip_sum, &th->th_sum, &pd->baddr,
-					    bport, 0, af);
-					sport = th->th_dport;
-				}
-#endif
 			}
 			s->src.seqhi = htonl(random());
 			/* Find mss option */
@@ -5546,7 +5034,6 @@ cleanup:
 			return (PF_SYNPROXY_DROP);
 		}
 
-#ifndef NO_APPLE_EXTENSIONS
 		if (sk->app_state && sk->app_state->handler) {
 			int offx = off;
 
@@ -5572,11 +5059,9 @@ cleanup:
 				m = pd->mp;
 			}
 		}
-#endif
 	}
 
 	/* copy back packet headers if we performed NAT operations */
-#ifndef NO_APPLE_EXTENSIONS
 	if (rewrite) {
 		if (rewrite < off + hdrlen)
 			rewrite = off + hdrlen;
@@ -5589,13 +5074,281 @@ cleanup:
 
 		m_copyback(m, off, hdrlen, pd->hdr.any);
 	}
-#else
-	if (rewrite)
-		m_copyback(m, off, hdrlen, pd->hdr.any);
-#endif
 
 	return (PF_PASS);
 }
+
+#if DUMMYNET
+/*
+ * When pf_test_dummynet() returns PF_PASS, the rule matching parameter "rm" 
+ * remains unchanged, meaning the packet did not match a dummynet rule.
+ * when the packet does match a dummynet rule, pf_test_dummynet() returns 
+ * PF_PASS and zero out the mbuf rule as the packet is effectively siphoned 
+ * out by dummynet.
+ */
+static int
+pf_test_dummynet(struct pf_rule **rm, int direction, struct pfi_kif *kif, 
+    struct mbuf **m0, struct pf_pdesc *pd, struct ip_fw_args *fwa)
+{
+	struct mbuf		*m = *m0;
+	struct pf_rule		*am = NULL;
+	struct pf_ruleset	*rsm = NULL;
+	struct pf_addr		*saddr = pd->src, *daddr = pd->dst;
+	sa_family_t		 af = pd->af;
+	struct pf_rule		*r, *a = NULL;
+	struct pf_ruleset	*ruleset = NULL;
+	struct tcphdr		*th = pd->hdr.tcp;
+	u_short			 reason;
+	int			 hdrlen = 0;
+	int			 tag = -1;
+	unsigned int		 rtableid = IFSCOPE_NONE;
+	int			 asd = 0;
+	int			 match = 0;
+	u_int8_t		 icmptype = 0, icmpcode = 0;
+	union pf_state_xport	nxport, sxport, dxport;
+	struct ip_fw_args	dnflow;
+	struct pf_rule		*prev_matching_rule = fwa ? fwa->fwa_pf_rule : NULL;
+	int			found_prev_rule = (prev_matching_rule) ? 0 : 1;
+
+	lck_mtx_assert(pf_lock, LCK_MTX_ASSERT_OWNED);
+
+	if (!DUMMYNET_LOADED)
+		return (PF_PASS);
+	
+	if (TAILQ_EMPTY(pf_main_ruleset.rules[PF_RULESET_DUMMYNET].active.ptr)) {
+		return (PF_PASS);
+	}
+	bzero(&dnflow, sizeof(dnflow));
+
+	hdrlen = 0;
+	sxport.spi = 0;
+	dxport.spi = 0;
+	nxport.spi = 0;
+
+	/* Fragments don't gave protocol headers */
+	if (!(pd->flags & PFDESC_IP_FRAG))	
+		switch (pd->proto) {
+		case IPPROTO_TCP:
+			dnflow.fwa_id.flags = pd->hdr.tcp->th_flags;
+			dnflow.fwa_id.dst_port = pd->hdr.tcp->th_dport;
+			dnflow.fwa_id.src_port = pd->hdr.tcp->th_sport;
+			sxport.port = pd->hdr.tcp->th_sport;
+			dxport.port = pd->hdr.tcp->th_dport;
+			hdrlen = sizeof (*th);
+			break;
+		case IPPROTO_UDP:
+			dnflow.fwa_id.dst_port = pd->hdr.udp->uh_dport;
+			dnflow.fwa_id.src_port = pd->hdr.udp->uh_sport;
+			sxport.port = pd->hdr.udp->uh_sport;
+			dxport.port = pd->hdr.udp->uh_dport;
+			hdrlen = sizeof (*pd->hdr.udp);
+			break;
+#if INET
+		case IPPROTO_ICMP:
+			if (pd->af != AF_INET)
+				break;
+			sxport.port = dxport.port = pd->hdr.icmp->icmp_id;
+			hdrlen = ICMP_MINLEN;
+			icmptype = pd->hdr.icmp->icmp_type;
+			icmpcode = pd->hdr.icmp->icmp_code;
+			break;
+#endif /* INET */
+#if INET6
+		case IPPROTO_ICMPV6:
+			if (pd->af != AF_INET6)
+				break;
+			sxport.port = dxport.port = pd->hdr.icmp6->icmp6_id;
+			hdrlen = sizeof (*pd->hdr.icmp6);
+			icmptype = pd->hdr.icmp6->icmp6_type;
+			icmpcode = pd->hdr.icmp6->icmp6_code;
+			break;
+#endif /* INET6 */
+		case IPPROTO_GRE:
+			if (pd->proto_variant == PF_GRE_PPTP_VARIANT) {
+				sxport.call_id = dxport.call_id =
+				    pd->hdr.grev1->call_id;
+				hdrlen = sizeof (*pd->hdr.grev1);
+			}
+			break;
+		case IPPROTO_ESP:
+			sxport.spi = 0;
+			dxport.spi = pd->hdr.esp->spi;
+			hdrlen = sizeof (*pd->hdr.esp);
+			break;
+		}
+
+	r = TAILQ_FIRST(pf_main_ruleset.rules[PF_RULESET_DUMMYNET].active.ptr);
+
+	while (r != NULL) {
+		r->evaluations++;
+		if (pfi_kif_match(r->kif, kif) == r->ifnot)
+			r = r->skip[PF_SKIP_IFP].ptr;
+		else if (r->direction && r->direction != direction)
+			r = r->skip[PF_SKIP_DIR].ptr;
+		else if (r->af && r->af != af)
+			r = r->skip[PF_SKIP_AF].ptr;
+		else if (r->proto && r->proto != pd->proto)
+			r = r->skip[PF_SKIP_PROTO].ptr;
+		else if (PF_MISMATCHAW(&r->src.addr, saddr, af,
+		    r->src.neg, kif))
+			r = r->skip[PF_SKIP_SRC_ADDR].ptr;
+		/* tcp/udp only. port_op always 0 in other cases */
+		else if (r->proto == pd->proto && 
+		    (r->proto == IPPROTO_TCP || r->proto == IPPROTO_UDP) &&
+		    ((pd->flags & PFDESC_IP_FRAG) ||
+		    ((r->src.xport.range.op &&
+		    !pf_match_port(r->src.xport.range.op,
+		    r->src.xport.range.port[0], r->src.xport.range.port[1],
+		    th->th_sport)))))
+			r = r->skip[PF_SKIP_SRC_PORT].ptr;
+		else if (PF_MISMATCHAW(&r->dst.addr, daddr, af,
+		    r->dst.neg, NULL))
+			r = r->skip[PF_SKIP_DST_ADDR].ptr;
+		/* tcp/udp only. port_op always 0 in other cases */
+		else if (r->proto == pd->proto &&
+		    (r->proto == IPPROTO_TCP || r->proto == IPPROTO_UDP) &&
+		    r->dst.xport.range.op &&
+		    ((pd->flags & PFDESC_IP_FRAG) ||
+		    !pf_match_port(r->dst.xport.range.op,
+		    r->dst.xport.range.port[0], r->dst.xport.range.port[1],
+		    th->th_dport)))
+			r = r->skip[PF_SKIP_DST_PORT].ptr;
+		/* icmp only. type always 0 in other cases */
+		else if (r->type && 
+			((pd->flags & PFDESC_IP_FRAG) ||
+			r->type != icmptype + 1))
+			r = TAILQ_NEXT(r, entries);
+		/* icmp only. type always 0 in other cases */
+		else if (r->code && 
+			((pd->flags & PFDESC_IP_FRAG) ||
+			r->code != icmpcode + 1))
+			r = TAILQ_NEXT(r, entries);
+		else if (r->tos && !(r->tos == pd->tos))
+			r = TAILQ_NEXT(r, entries);
+		else if (r->rule_flag & PFRULE_FRAGMENT)
+			r = TAILQ_NEXT(r, entries);
+		else if (pd->proto == IPPROTO_TCP &&
+		    ((pd->flags & PFDESC_IP_FRAG) ||
+		    (r->flagset & th->th_flags) != r->flags))
+			r = TAILQ_NEXT(r, entries);
+		else if (r->match_tag && !pf_match_tag(m, r, pd->pf_mtag, &tag))
+			r = TAILQ_NEXT(r, entries);
+		else {
+			/* 
+			 * Need to go past the previous dummynet matching rule	
+			 */
+			if (r->anchor == NULL) {
+				if (found_prev_rule) {
+					if (r->tag)
+						tag = r->tag;
+					if (PF_RTABLEID_IS_VALID(r->rtableid))
+						rtableid = r->rtableid;
+					match = 1;
+					*rm = r;
+					am = a;
+					rsm = ruleset;
+					if ((*rm)->quick)
+						break;
+				} else if (r == prev_matching_rule) {
+					found_prev_rule = 1;
+				}
+				r = TAILQ_NEXT(r, entries);
+			} else {
+				pf_step_into_anchor(&asd, &ruleset,
+				    PF_RULESET_DUMMYNET, &r, &a, &match);
+			}
+		}
+		if (r == NULL && pf_step_out_of_anchor(&asd, &ruleset,
+		    PF_RULESET_DUMMYNET, &r, &a, &match))
+			break;
+	}
+	r = *rm;
+	a = am;
+	ruleset = rsm;
+
+	if (!match)
+		return (PF_PASS);
+
+	REASON_SET(&reason, PFRES_DUMMYNET);
+
+	if (r->log) {
+		PFLOG_PACKET(kif, h, m, af, direction, reason, r,
+		    a, ruleset, pd);
+	}
+
+	if (r->action == PF_NODUMMYNET) {
+		int dirndx = (direction == PF_OUT);
+		
+		r->packets[dirndx]++;
+		r->bytes[dirndx] += pd->tot_len;
+
+		return (PF_PASS);
+	}
+	if (pf_tag_packet(m, pd->pf_mtag, tag, rtableid, pd)) {
+		REASON_SET(&reason, PFRES_MEMORY);
+
+		return (PF_DROP);
+	}
+
+	if (r->dnpipe && ip_dn_io_ptr != NULL) {
+		int dirndx = (direction == PF_OUT);
+		
+		r->packets[dirndx]++;
+		r->bytes[dirndx] += pd->tot_len;
+		
+		dnflow.fwa_cookie = r->dnpipe;
+		dnflow.fwa_pf_rule = r;
+		dnflow.fwa_id.addr_type = (af == AF_INET) ? 4 : 6;
+		dnflow.fwa_id.proto = pd->proto;
+		dnflow.fwa_flags = r->dntype;
+		
+		if (fwa != NULL) {
+			dnflow.fwa_oif = fwa->fwa_oif;
+			dnflow.fwa_oflags = fwa->fwa_oflags;
+			/*
+			 * Note that fwa_ro, fwa_dst and fwa_ipoa are 
+			 * actually in a union so the following does work  
+			 * for both IPv4 and IPv6
+			 */
+			dnflow.fwa_ro = fwa->fwa_ro;
+			dnflow.fwa_dst = fwa->fwa_dst;
+			dnflow.fwa_ipoa = fwa->fwa_ipoa;
+			dnflow.fwa_ro6_pmtu = fwa->fwa_ro6_pmtu;
+			dnflow.fwa_origifp = fwa->fwa_origifp;
+			dnflow.fwa_mtu = fwa->fwa_mtu;
+			dnflow.fwa_alwaysfrag = fwa->fwa_alwaysfrag;
+			dnflow.fwa_unfragpartlen = fwa->fwa_unfragpartlen;
+			dnflow.fwa_exthdrs = fwa->fwa_exthdrs;
+		}
+		
+		if (af == AF_INET) {
+			struct ip *iphdr = mtod(m, struct ip *);
+			NTOHS(iphdr->ip_len);
+			NTOHS(iphdr->ip_off);
+		}
+		/* 
+		 * Don't need to unlock pf_lock as NET_THREAD_HELD_PF 
+		 * allows for recursive behavior
+		 */
+		ip_dn_io_ptr(m,
+			dnflow.fwa_cookie,
+			af == AF_INET ? 
+				direction == PF_IN ? DN_TO_IP_IN : DN_TO_IP_OUT :
+				direction == PF_IN ? DN_TO_IP6_IN : DN_TO_IP6_OUT,
+			&dnflow, DN_CLIENT_PF);
+		
+		/*
+		 * The packet is siphoned out by dummynet so return a NULL 
+		 * mbuf so the caller can still return success.
+		 */
+		*m0 = NULL;
+		 
+		return (PF_PASS);
+	}
+
+	return (PF_PASS);
+}
+#endif /* DUMMYNET */
 
 static int
 pf_test_fragment(struct pf_rule **rm, int direction, struct pfi_kif *kif,
@@ -5628,11 +5381,17 @@ pf_test_fragment(struct pf_rule **rm, int direction, struct pfi_kif *kif,
 		else if (PF_MISMATCHAW(&r->dst.addr, pd->dst, af,
 		    r->dst.neg, NULL))
 			r = r->skip[PF_SKIP_DST_ADDR].ptr;
-		else if (r->tos && !(r->tos == pd->tos))
+                else if ((r->rule_flag & PFRULE_TOS) && r->tos &&
+		    !(r->tos & pd->tos))
+			r = TAILQ_NEXT(r, entries);
+                else if ((r->rule_flag & PFRULE_DSCP) && r->tos &&
+		    !(r->tos & (pd->tos & DSCP_MASK)))
+			r = TAILQ_NEXT(r, entries);
+                else if ((r->rule_flag & PFRULE_SC) && r->tos &&
+		    ((r->tos & SCIDX_MASK) != pd->sc))
 			r = TAILQ_NEXT(r, entries);
 		else if (r->os_fingerprint != PF_OSFP_ANY)
 			r = TAILQ_NEXT(r, entries);
-#ifndef NO_APPLE_EXTENSIONS
 		else if (pd->proto == IPPROTO_UDP &&
 		    (r->src.xport.range.op || r->dst.xport.range.op))
 			r = TAILQ_NEXT(r, entries);
@@ -5640,14 +5399,6 @@ pf_test_fragment(struct pf_rule **rm, int direction, struct pfi_kif *kif,
 		    (r->src.xport.range.op || r->dst.xport.range.op ||
 		    r->flagset))
 			r = TAILQ_NEXT(r, entries);
-#else
-		else if (pd->proto == IPPROTO_UDP &&
-		    (r->src.port_op || r->dst.port_op))
-			r = TAILQ_NEXT(r, entries);
-		else if (pd->proto == IPPROTO_TCP &&
-		    (r->src.port_op || r->dst.port_op || r->flagset))
-			r = TAILQ_NEXT(r, entries);
-#endif
 		else if ((pd->proto == IPPROTO_ICMP ||
 		    pd->proto == IPPROTO_ICMPV6) &&
 		    (r->type || r->code))
@@ -5686,7 +5437,7 @@ pf_test_fragment(struct pf_rule **rm, int direction, struct pfi_kif *kif,
 	if (r->action != PF_PASS)
 		return (PF_DROP);
 
-	if (pf_tag_packet(m, pd->pf_mtag, tag, -1)) {
+	if (pf_tag_packet(m, pd->pf_mtag, tag, -1, NULL)) {
 		REASON_SET(&reason, PFRES_MEMORY);
 		return (PF_DROP);
 	}
@@ -5694,7 +5445,6 @@ pf_test_fragment(struct pf_rule **rm, int direction, struct pfi_kif *kif,
 	return (PF_PASS);
 }
 
-#ifndef NO_APPLE_EXTENSIONS
 static void
 pf_pptp_handler(struct pf_state *s, int direction, int off,
     struct pf_pdesc *pd, struct pfi_kif *kif)
@@ -5763,7 +5513,7 @@ pf_pptp_handler(struct pf_state *s, int direction, int off,
 			return;
 		}
 
-		gsk = pf_alloc_state_key(gs);
+		gsk = pf_alloc_state_key(gs, NULL);
 		if (!gsk) {
 			pool_put(&pf_app_state_pl, gas);
 			pool_put(&pf_state_pl, gs);
@@ -5780,6 +5530,7 @@ pf_pptp_handler(struct pf_state *s, int direction, int off,
 		gsk->lan.xport.call_id = 0;
 		gsk->gwy.xport.call_id = 0;
 		gsk->ext.xport.call_id = 0;
+		gsk->flowhash = pf_calc_state_key_flowhash(gsk);
 		memset(gas, 0, sizeof (*gas));
 		gas->u.grev1.pptp_state = s;
 		STATE_INC_COUNTERS(gs);
@@ -6038,7 +5789,6 @@ pf_ike_compare(struct pf_app_state *a, struct pf_app_state *b)
 	int64_t d = a->u.ike.cookie - b->u.ike.cookie;
 	return ((d > 0) ? 1 : ((d < 0) ? -1 : 0));
 }
-#endif
 
 static int
 pf_test_state_tcp(struct pf_state **state, int direction, struct pfi_kif *kif,
@@ -6055,31 +5805,19 @@ pf_test_state_tcp(struct pf_state **state, int direction, struct pfi_kif *kif,
 	int			 copyback = 0;
 	struct pf_state_peer	*src, *dst;
 
-#ifndef NO_APPLE_EXTENSIONS
 	key.app_state = 0;
-#endif
 	key.af = pd->af;
 	key.proto = IPPROTO_TCP;
 	if (direction == PF_IN)	{
 		PF_ACPY(&key.ext.addr, pd->src, key.af);
 		PF_ACPY(&key.gwy.addr, pd->dst, key.af);
-#ifndef NO_APPLE_EXTENSIONS
 		key.ext.xport.port = th->th_sport;
 		key.gwy.xport.port = th->th_dport;
-#else
-		key.ext.port = th->th_sport;
-		key.gwy.port = th->th_dport;
-#endif
 	} else {
 		PF_ACPY(&key.lan.addr, pd->src, key.af);
 		PF_ACPY(&key.ext.addr, pd->dst, key.af);
-#ifndef NO_APPLE_EXTENSIONS
 		key.lan.xport.port = th->th_sport;
 		key.ext.xport.port = th->th_dport;
-#else
-		key.lan.port = th->th_sport;
-		key.ext.port = th->th_dport;
-#endif
 	}
 
 	STATE_LOOKUP();
@@ -6142,11 +5880,7 @@ pf_test_state_tcp(struct pf_state **state, int direction, struct pfi_kif *kif,
 			if ((*state)->dst.seqhi == 1)
 				(*state)->dst.seqhi = htonl(random());
 			pf_send_tcp((*state)->rule.ptr, pd->af, &psrc->addr,
-#ifndef NO_APPLE_EXTENSIONS
 			    &pdst->addr, psrc->xport.port, pdst->xport.port,
-#else
-			    &pdst->addr, psrc->port, pdst->port,
-#endif
 			    (*state)->dst.seqhi, 0, TH_SYN, 0,
 			    (*state)->src.mss, 0, 0, (*state)->tag, NULL, NULL);
 			REASON_SET(reason, PFRES_SYNPROXY);
@@ -6165,11 +5899,7 @@ pf_test_state_tcp(struct pf_state **state, int direction, struct pfi_kif *kif,
 			    TH_ACK, (*state)->src.max_win, 0, 0, 0,
 			    (*state)->tag, NULL, NULL);
 			pf_send_tcp((*state)->rule.ptr, pd->af, &psrc->addr,
-#ifndef NO_APPLE_EXTENSIONS
 			    &pdst->addr, psrc->xport.port, pdst->xport.port,
-#else
-			    &pdst->addr, psrc->port, pdst->port,
-#endif
 			    (*state)->src.seqhi + 1, (*state)->src.seqlo + 1,
 			    TH_ACK, (*state)->dst.max_win, 0, 0, 1,
 			    0, NULL, NULL);
@@ -6259,10 +5989,7 @@ pf_test_state_tcp(struct pf_state **state, int direction, struct pfi_kif *kif,
 					    >> sws;
 					dws = dst->wscale & PF_WSCALE_MASK;
 				} else {
-#ifndef NO_APPLE_MODIFICATION
 					/*
-					 * <rdar://5786370>
-					 *
 					 * Window scale negotiation has failed,
 					 * therefore we must restore the window
 					 * scale in the state record that we
@@ -6270,17 +5997,12 @@ pf_test_state_tcp(struct pf_state **state, int direction, struct pfi_kif *kif,
 					 * pf_test_rule().  Care is required to
 					 * prevent arithmetic overflow from
 					 * zeroing the window when it's
-					 * truncated down to 16-bits.   --jhw
+					 * truncated down to 16-bits.
 					 */
 					u_int32_t max_win = dst->max_win;
 					max_win <<=
 					    dst->wscale & PF_WSCALE_MASK;
 					dst->max_win = MIN(0xffff, max_win);
-#else
-					/* fixup other window */
-					dst->max_win <<= dst->wscale &
-					    PF_WSCALE_MASK;
-#endif
 					/* in case of a retrans SYN|ACK */
 					dst->wscale = 0;
 				}
@@ -6298,16 +6020,10 @@ pf_test_state_tcp(struct pf_state **state, int direction, struct pfi_kif *kif,
 		 * the crappy stack check or if we picked up the connection
 		 * after establishment)
 		 */
-#ifndef NO_APPLE_MODIFICATIONS
 		if (src->seqhi == 1 ||
 		    SEQ_GEQ(end + MAX(1, (u_int32_t)dst->max_win << dws),
 		    src->seqhi))
 			src->seqhi = end + MAX(1, (u_int32_t)dst->max_win << dws);
-#else
-		if (src->seqhi == 1 ||
-		    SEQ_GEQ(end + MAX(1, dst->max_win << dws), src->seqhi))
-			src->seqhi = end + MAX(1, dst->max_win << dws);
-#endif
 		if (win > src->max_win)
 			src->max_win = win;
 
@@ -6363,7 +6079,6 @@ pf_test_state_tcp(struct pf_state **state, int direction, struct pfi_kif *kif,
 	 * options anyway.
 	 */
 	if (dst->seqdiff && (th->th_off << 2) > (int)sizeof (struct tcphdr)) {
-#ifndef NO_APPLE_EXTENSIONS
 		copyback = pf_modulate_sack(m, off, pd, th, dst);
 		if (copyback == -1) {
 			REASON_SET(reason, PFRES_MEMORY);
@@ -6371,21 +6086,13 @@ pf_test_state_tcp(struct pf_state **state, int direction, struct pfi_kif *kif,
 		}
 
 		m = pd->mp;
-#else
-		if (pf_modulate_sack(m, off, pd, th, dst))
-			copyback = 1;
-#endif
 	}
 
 
 #define MAXACKWINDOW (0xffff + 1500)	/* 1500 is an arbitrary fudge factor */
 	if (SEQ_GEQ(src->seqhi, end) &&
 	    /* Last octet inside other's window space */
-#ifndef NO_APPLE_MODIFICATIONS
 	    SEQ_GEQ(seq, src->seqlo - ((u_int32_t)dst->max_win << dws)) &&
-#else
-	    SEQ_GEQ(seq, src->seqlo - (dst->max_win << dws)) &&
-#endif
 	    /* Retrans: not more than one window back */
 	    (ackskew >= -MAXACKWINDOW) &&
 	    /* Acking not more than one reassembled fragment backwards */
@@ -6401,9 +6108,7 @@ pf_test_state_tcp(struct pf_state **state, int direction, struct pfi_kif *kif,
 			    *state, src, dst, &copyback))
 				return (PF_DROP);
 
-#ifndef NO_APPLE_EXTENSIONS
 			m = pd->mp;
-#endif
 		}
 
 		/* update max window */
@@ -6413,13 +6118,8 @@ pf_test_state_tcp(struct pf_state **state, int direction, struct pfi_kif *kif,
 		if (SEQ_GT(end, src->seqlo))
 			src->seqlo = end;
 		/* slide the window of what the other end can send */
-#ifndef NO_APPLE_MODIFICATIONS
 		if (SEQ_GEQ(ack + ((u_int32_t)win << sws), dst->seqhi))
 			dst->seqhi = ack + MAX(((u_int32_t)win << sws), 1);
-#else
-		if (SEQ_GEQ(ack + (win << sws), dst->seqhi))
-			dst->seqhi = ack + MAX((win << sws), 1);
-#endif
 
 		/* update states */
 		if (th->th_flags & TH_SYN)
@@ -6507,9 +6207,7 @@ pf_test_state_tcp(struct pf_state **state, int direction, struct pfi_kif *kif,
 			if (pf_normalize_tcp_stateful(m, off, pd, reason, th,
 			    *state, src, dst, &copyback))
 				return (PF_DROP);
-#ifndef NO_APPLE_EXTENSIONS
 			m = pd->mp;
-#endif
 		}
 
 		/* update max window */
@@ -6519,13 +6217,8 @@ pf_test_state_tcp(struct pf_state **state, int direction, struct pfi_kif *kif,
 		if (SEQ_GT(end, src->seqlo))
 			src->seqlo = end;
 		/* slide the window of what the other end can send */
-#ifndef NO_APPLE_MODIFICATIONS
 		if (SEQ_GEQ(ack + ((u_int32_t)win << sws), dst->seqhi))
 			dst->seqhi = ack + MAX(((u_int32_t)win << sws), 1);
-#else
-		if (SEQ_GEQ(ack + (win << sws), dst->seqhi))
-			dst->seqhi = ack + MAX((win << sws), 1);
-#endif
 
 		/*
 		 * Cannot set dst->seqhi here since this could be a shotgunned
@@ -6567,12 +6260,8 @@ pf_test_state_tcp(struct pf_state **state, int direction, struct pfi_kif *kif,
 			    "fwd" : "rev");
 			printf("pf: State failure on: %c %c %c %c | %c %c\n",
 			    SEQ_GEQ(src->seqhi, end) ? ' ' : '1',
-#ifndef NO_APPLE_MODIFICATIONS
 			    SEQ_GEQ(seq,
 			    src->seqlo - ((u_int32_t)dst->max_win << dws)) ?
-#else
-			    SEQ_GEQ(seq, src->seqlo - (dst->max_win << dws)) ?
-#endif
 			    ' ': '2',
 			    (ackskew >= -MAXACKWINDOW) ? ' ' : '3',
 			    (ackskew <= (MAXACKWINDOW << sws)) ? ' ' : '4',
@@ -6585,7 +6274,6 @@ pf_test_state_tcp(struct pf_state **state, int direction, struct pfi_kif *kif,
 
 	/* Any packets which have gotten here are to be passed */
 
-#ifndef NO_APPLE_EXTENSIONS
 	if ((*state)->state_key->app_state &&
 	    (*state)->state_key->app_state->handler) {
 		(*state)->state_key->app_state->handler(*state, direction,
@@ -6622,74 +6310,39 @@ pf_test_state_tcp(struct pf_state **state, int direction, struct pfi_kif *kif,
 		/* Copyback sequence modulation or stateful scrub changes */
 		m_copyback(m, off, sizeof (*th), th);
 	}
-#else
-	/* translate source/destination address, if necessary */
-	if (STATE_TRANSLATE((*state)->state_key)) {
-		if (direction == PF_OUT)
-			pf_change_ap(pd->src, pd->mp, &th->th_sport, pd->ip_sum,
-			    &th->th_sum, &(*state)->state_key->gwy.addr,
-			    (*state)->state_key->gwy.port, 0, pd->af);
-		else
-			pf_change_ap(pd->dst, pd->mp, &th->th_dport, pd->ip_sum,
-			    &th->th_sum, &(*state)->state_key->lan.addr,
-			    (*state)->state_key->lan.port, 0, pd->af);
-		m_copyback(m, off, sizeof (*th), th);
-	} else if (copyback) {
-		/* Copyback sequence modulation or stateful scrub changes */
-		m_copyback(m, off, sizeof (*th), th);
-	}
-#endif
 
 	return (PF_PASS);
 }
 
-#ifndef NO_APPLE_EXTENSIONS
 static int
 pf_test_state_udp(struct pf_state **state, int direction, struct pfi_kif *kif,
     struct mbuf *m, int off, void *h, struct pf_pdesc *pd, u_short *reason)
-#else
-pf_test_state_udp(struct pf_state **state, int direction, struct pfi_kif *kif,
-    struct mbuf *m, int off, void *h, struct pf_pdesc *pd)
-#endif
 {
 #pragma unused(h)
 	struct pf_state_peer	*src, *dst;
 	struct pf_state_key_cmp	 key;
 	struct udphdr		*uh = pd->hdr.udp;
-#ifndef NO_APPLE_EXTENSIONS
 	struct pf_app_state as;
 	int dx, action, extfilter;
 	key.app_state = 0;
 	key.proto_variant = PF_EXTFILTER_APD;
-#endif
 
 	key.af = pd->af;
 	key.proto = IPPROTO_UDP;
 	if (direction == PF_IN)	{
 		PF_ACPY(&key.ext.addr, pd->src, key.af);
 		PF_ACPY(&key.gwy.addr, pd->dst, key.af);
-#ifndef NO_APPLE_EXTENSIONS
 		key.ext.xport.port = uh->uh_sport;
 		key.gwy.xport.port = uh->uh_dport;
 		dx = PF_IN;
-#else
-		key.ext.port = uh->uh_sport;
-		key.gwy.port = uh->uh_dport;
-#endif
 	} else {
 		PF_ACPY(&key.lan.addr, pd->src, key.af);
 		PF_ACPY(&key.ext.addr, pd->dst, key.af);
-#ifndef NO_APPLE_EXTENSIONS
 		key.lan.xport.port = uh->uh_sport;
 		key.ext.xport.port = uh->uh_dport;
 		dx = PF_OUT;
-#else
-		key.lan.port = uh->uh_sport;
-		key.ext.port = uh->uh_dport;
-#endif
 	}
 
-#ifndef NO_APPLE_EXTENSIONS
 	if (ntohs(uh->uh_sport) == PF_IKE_PORT &&
 	    ntohs(uh->uh_dport) == PF_IKE_PORT) {
 		struct pf_ike_hdr ike;
@@ -6734,11 +6387,12 @@ pf_test_state_udp(struct pf_state **state, int direction, struct pfi_kif *kif,
 		*state = pf_find_state(kif, &key, dx);
 	}
 
+	if ((*state) != NULL && pd != NULL &&
+		pd->flowhash == 0)
+		pd->flowhash = (*state)->state_key->flowhash;
+
 	if (pf_state_lookup_aux(state, kif, direction, &action))
 		return (action);
-#else
-	STATE_LOOKUP();
-#endif
 
 	if (direction == (*state)->state_key->direction) {
 		src = &(*state)->src;
@@ -6761,7 +6415,6 @@ pf_test_state_udp(struct pf_state **state, int direction, struct pfi_kif *kif,
 	else
 		(*state)->timeout = PFTM_UDP_SINGLE;
 
-#ifndef NO_APPLE_EXTENSIONS
 	extfilter = (*state)->state_key->proto_variant;
 	if (extfilter > PF_EXTFILTER_APD) {
 		(*state)->state_key->ext.xport.port = key.ext.xport.port;
@@ -6801,20 +6454,6 @@ pf_test_state_udp(struct pf_state **state, int direction, struct pfi_kif *kif,
 			    (*state)->state_key->lan.xport.port, 1, pd->af);
 		m_copyback(m, off, sizeof (*uh), uh);
 	}
-#else
-	/* translate source/destination address, if necessary */
-	if (STATE_TRANSLATE((*state)->state_key)) {
-		if (direction == PF_OUT)
-			pf_change_ap(pd->src, &uh->uh_sport, pd->ip_sum,
-			    &uh->uh_sum, &(*state)->state_key->gwy.addr,
-			    (*state)->state_key->gwy.port, 1, pd->af);
-		else
-			pf_change_ap(pd->dst, &uh->uh_dport, pd->ip_sum,
-			    &uh->uh_sum, &(*state)->state_key->lan.addr,
-			    (*state)->state_key->lan.port, 1, pd->af);
-		m_copyback(m, off, sizeof (*uh), uh);
-	}
-#endif
 
 	return (PF_PASS);
 }
@@ -6830,10 +6469,8 @@ pf_test_state_icmp(struct pf_state **state, int direction, struct pfi_kif *kif,
 	int		 state_icmp = 0;
 	struct pf_state_key_cmp key;
 
-#ifndef NO_APPLE_EXTENSIONS
 	struct pf_app_state as;
 	key.app_state = 0;
-#endif
 
 	switch (pd->proto) {
 #if INET
@@ -6876,23 +6513,13 @@ pf_test_state_icmp(struct pf_state **state, int direction, struct pfi_kif *kif,
 		if (direction == PF_IN)	{
 			PF_ACPY(&key.ext.addr, pd->src, key.af);
 			PF_ACPY(&key.gwy.addr, pd->dst, key.af);
-#ifndef NO_APPLE_EXTENSIONS
 			key.ext.xport.port = 0;
 			key.gwy.xport.port = icmpid;
-#else
-			key.ext.port = 0;
-			key.gwy.port = icmpid;
-#endif
 		} else {
 			PF_ACPY(&key.lan.addr, pd->src, key.af);
 			PF_ACPY(&key.ext.addr, pd->dst, key.af);
-#ifndef NO_APPLE_EXTENSIONS
 			key.lan.xport.port = icmpid;
 			key.ext.xport.port = 0;
-#else
-			key.lan.port = icmpid;
-			key.ext.port = 0;
-#endif
 		}
 
 		STATE_LOOKUP();
@@ -6909,7 +6536,6 @@ pf_test_state_icmp(struct pf_state **state, int direction, struct pfi_kif *kif,
 					pf_change_a(&saddr->v4.s_addr,
 					    pd->ip_sum,
 					    (*state)->state_key->gwy.addr.v4.s_addr, 0);
-#ifndef NO_APPLE_EXTENSIONS
 					pd->hdr.icmp->icmp_cksum =
 					    pf_cksum_fixup(
 					    pd->hdr.icmp->icmp_cksum, icmpid,
@@ -6920,14 +6546,6 @@ pf_test_state_icmp(struct pf_state **state, int direction, struct pfi_kif *kif,
 					    off + ICMP_MINLEN);
 					if (!m)
 						return (PF_DROP);
-#else
-					pd->hdr.icmp->icmp_cksum =
-					    pf_cksum_fixup(
-					    pd->hdr.icmp->icmp_cksum, icmpid,
-					    (*state)->state_key->gwy.port, 0);
-					pd->hdr.icmp->icmp_id =
-					    (*state)->state_key->gwy.port;
-#endif
 					m_copyback(m, off, ICMP_MINLEN,
 					    pd->hdr.icmp);
 					break;
@@ -6937,12 +6555,10 @@ pf_test_state_icmp(struct pf_state **state, int direction, struct pfi_kif *kif,
 					pf_change_a6(saddr,
 					    &pd->hdr.icmp6->icmp6_cksum,
 					    &(*state)->state_key->gwy.addr, 0);
-#ifndef NO_APPLE_EXTENSIONS
 					m = pf_lazy_makewritable(pd, m,
 					    off + sizeof (struct icmp6_hdr));
 					if (!m)
 						return (PF_DROP);
-#endif
 					m_copyback(m, off,
 					    sizeof (struct icmp6_hdr),
 					    pd->hdr.icmp6);
@@ -6956,7 +6572,6 @@ pf_test_state_icmp(struct pf_state **state, int direction, struct pfi_kif *kif,
 					pf_change_a(&daddr->v4.s_addr,
 					    pd->ip_sum,
 					    (*state)->state_key->lan.addr.v4.s_addr, 0);
-#ifndef NO_APPLE_EXTENSIONS
 					pd->hdr.icmp->icmp_cksum =
 					    pf_cksum_fixup(
 					    pd->hdr.icmp->icmp_cksum, icmpid,
@@ -6967,14 +6582,6 @@ pf_test_state_icmp(struct pf_state **state, int direction, struct pfi_kif *kif,
 					    off + ICMP_MINLEN);
 					if (!m)
 						return (PF_DROP);
-#else
-					pd->hdr.icmp->icmp_cksum =
-					    pf_cksum_fixup(
-					    pd->hdr.icmp->icmp_cksum, icmpid,
-					    (*state)->state_key->lan.port, 0);
-					pd->hdr.icmp->icmp_id =
-					    (*state)->state_key->lan.port;
-#endif
 					m_copyback(m, off, ICMP_MINLEN,
 					    pd->hdr.icmp);
 					break;
@@ -6984,12 +6591,10 @@ pf_test_state_icmp(struct pf_state **state, int direction, struct pfi_kif *kif,
 					pf_change_a6(daddr,
 					    &pd->hdr.icmp6->icmp6_cksum,
 					    &(*state)->state_key->lan.addr, 0);
-#ifndef NO_APPLE_EXTENSIONS
 					m = pf_lazy_makewritable(pd, m,
 					    off + sizeof (struct icmp6_hdr));
 					if (!m)
 						return (PF_DROP);
-#endif
 					m_copyback(m, off,
 					    sizeof (struct icmp6_hdr),
 					    pd->hdr.icmp6);
@@ -7134,23 +6739,13 @@ pf_test_state_icmp(struct pf_state **state, int direction, struct pfi_kif *kif,
 			if (direction == PF_IN)	{
 				PF_ACPY(&key.ext.addr, pd2.dst, key.af);
 				PF_ACPY(&key.gwy.addr, pd2.src, key.af);
-#ifndef NO_APPLE_EXTENSIONS
 				key.ext.xport.port = th.th_dport;
 				key.gwy.xport.port = th.th_sport;
-#else
-				key.ext.port = th.th_dport;
-				key.gwy.port = th.th_sport;
-#endif
 			} else {
 				PF_ACPY(&key.lan.addr, pd2.dst, key.af);
 				PF_ACPY(&key.ext.addr, pd2.src, key.af);
-#ifndef NO_APPLE_EXTENSIONS
 				key.lan.xport.port = th.th_dport;
 				key.ext.xport.port = th.th_sport;
-#else
-				key.lan.port = th.th_dport;
-				key.ext.port = th.th_sport;
-#endif
 			}
 
 			STATE_LOOKUP();
@@ -7177,12 +6772,8 @@ pf_test_state_icmp(struct pf_state **state, int direction, struct pfi_kif *kif,
 			}
 
 			if (!SEQ_GEQ(src->seqhi, seq) ||
-#ifndef NO_APPLE_MODIFICATION
 			    !SEQ_GEQ(seq,
 			    src->seqlo - ((u_int32_t)dst->max_win << dws))) {
-#else
-			    !SEQ_GEQ(seq, src->seqlo - (dst->max_win << dws))) {
-#endif
 				if (pf_status.debug >= PF_DEBUG_MISC) {
 					printf("pf: BAD ICMP %d:%d ",
 					    icmptype, pd->hdr.icmp->icmp_code);
@@ -7201,21 +6792,13 @@ pf_test_state_icmp(struct pf_state **state, int direction, struct pfi_kif *kif,
 				if (direction == PF_IN) {
 					pf_change_icmp(pd2.src, &th.th_sport,
 					    daddr, &(*state)->state_key->lan.addr,
-#ifndef NO_APPLE_EXTENSIONS
 					    (*state)->state_key->lan.xport.port, NULL,
-#else
-					    (*state)->state_key->lan.port, NULL,
-#endif
 					    pd2.ip_sum, icmpsum,
 					    pd->ip_sum, 0, pd2.af);
 				} else {
 					pf_change_icmp(pd2.dst, &th.th_dport,
 					    saddr, &(*state)->state_key->gwy.addr,
-#ifndef NO_APPLE_EXTENSIONS
 					    (*state)->state_key->gwy.xport.port, NULL,
-#else
-					    (*state)->state_key->gwy.port, NULL,
-#endif
 					    pd2.ip_sum, icmpsum,
 					    pd->ip_sum, 0, pd2.af);
 				}
@@ -7223,11 +6806,9 @@ pf_test_state_icmp(struct pf_state **state, int direction, struct pfi_kif *kif,
 			}
 
 			if (copyback) {
-#ifndef NO_APPLE_EXTENSIONS
 				m = pf_lazy_makewritable(pd, m, off2 + 8);
 				if (!m)
 					return (PF_DROP);
-#endif
 				switch (pd2.af) {
 #if INET
 				case AF_INET:
@@ -7255,9 +6836,7 @@ pf_test_state_icmp(struct pf_state **state, int direction, struct pfi_kif *kif,
 		}
 		case IPPROTO_UDP: {
 			struct udphdr		uh;
-#ifndef NO_APPLE_EXTENSIONS
 			int dx, action;
-#endif
 			if (!pf_pull_hdr(m, off2, &uh, sizeof (uh),
 			    NULL, reason, pd2.af)) {
 				DPFPRINTF(PF_DEBUG_MISC,
@@ -7271,28 +6850,17 @@ pf_test_state_icmp(struct pf_state **state, int direction, struct pfi_kif *kif,
 			if (direction == PF_IN)	{
 				PF_ACPY(&key.ext.addr, pd2.dst, key.af);
 				PF_ACPY(&key.gwy.addr, pd2.src, key.af);
-#ifndef NO_APPLE_EXTENSIONS
 				key.ext.xport.port = uh.uh_dport;
 				key.gwy.xport.port = uh.uh_sport;
 				dx = PF_IN;
-#else
-				key.ext.port = uh.uh_dport;
-				key.gwy.port = uh.uh_sport;
-#endif
 			} else {
 				PF_ACPY(&key.lan.addr, pd2.dst, key.af);
 				PF_ACPY(&key.ext.addr, pd2.src, key.af);
-#ifndef NO_APPLE_EXTENSIONS
 				key.lan.xport.port = uh.uh_dport;
 				key.ext.xport.port = uh.uh_sport;
 				dx = PF_OUT;
-#else
-				key.lan.port = uh.uh_dport;
-				key.ext.port = uh.uh_sport;
-#endif
 			}
 
-#ifndef NO_APPLE_EXTENSIONS
 			key.proto_variant = PF_EXTFILTER_APD;
 
 			if (ntohs(uh.uh_sport) == PF_IKE_PORT &&
@@ -7335,40 +6903,31 @@ pf_test_state_icmp(struct pf_state **state, int direction, struct pfi_kif *kif,
 				*state = pf_find_state(kif, &key, dx);
 			}
 
+			if (*state != NULL && pd != NULL &&
+				pd->flowhash == 0)
+				pd->flowhash = (*state)->state_key->flowhash;
+
 			if (pf_state_lookup_aux(state, kif, direction, &action))
 				return (action);
-#else
-			STATE_LOOKUP();
-#endif
 
 			if (STATE_TRANSLATE((*state)->state_key)) {
 				if (direction == PF_IN) {
 					pf_change_icmp(pd2.src, &uh.uh_sport,
 					    daddr, &(*state)->state_key->lan.addr,
-#ifndef NO_APPLE_EXTENSIONS
 					    (*state)->state_key->lan.xport.port, &uh.uh_sum,
-#else
-					    (*state)->state_key->lan.port, &uh.uh_sum,
-#endif
 					    pd2.ip_sum, icmpsum,
 					    pd->ip_sum, 1, pd2.af);
 				} else {
 					pf_change_icmp(pd2.dst, &uh.uh_dport,
 					    saddr, &(*state)->state_key->gwy.addr,
-#ifndef NO_APPLE_EXTENSIONS
 					    (*state)->state_key->gwy.xport.port, &uh.uh_sum,
-#else
-					    (*state)->state_key->gwy.port, &uh.uh_sum,
-#endif
 					    pd2.ip_sum, icmpsum,
 					    pd->ip_sum, 1, pd2.af);
 				}
-#ifndef NO_APPLE_EXTENSIONS
 				m = pf_lazy_makewritable(pd, m,
 				    off2 + sizeof (uh));
 				if (!m)
 					return (PF_DROP);
-#endif
 				switch (pd2.af) {
 #if INET
 				case AF_INET:
@@ -7410,23 +6969,13 @@ pf_test_state_icmp(struct pf_state **state, int direction, struct pfi_kif *kif,
 			if (direction == PF_IN)	{
 				PF_ACPY(&key.ext.addr, pd2.dst, key.af);
 				PF_ACPY(&key.gwy.addr, pd2.src, key.af);
-#ifndef NO_APPLE_EXTENSIONS
 				key.ext.xport.port = 0;
 				key.gwy.xport.port = iih.icmp_id;
-#else
-				key.ext.port = 0;
-				key.gwy.port = iih.icmp_id;
-#endif
 			} else {
 				PF_ACPY(&key.lan.addr, pd2.dst, key.af);
 				PF_ACPY(&key.ext.addr, pd2.src, key.af);
-#ifndef NO_APPLE_EXTENSIONS
 				key.lan.xport.port = iih.icmp_id;
 				key.ext.xport.port = 0;
-#else
-				key.lan.port = iih.icmp_id;
-				key.ext.port = 0;
-#endif
 			}
 
 			STATE_LOOKUP();
@@ -7435,29 +6984,19 @@ pf_test_state_icmp(struct pf_state **state, int direction, struct pfi_kif *kif,
 				if (direction == PF_IN) {
 					pf_change_icmp(pd2.src, &iih.icmp_id,
 					    daddr, &(*state)->state_key->lan.addr,
-#ifndef NO_APPLE_EXTENSIONS
 					    (*state)->state_key->lan.xport.port, NULL,
-#else
-					    (*state)->state_key->lan.port, NULL,
-#endif
 					    pd2.ip_sum, icmpsum,
 					    pd->ip_sum, 0, AF_INET);
 				} else {
 					pf_change_icmp(pd2.dst, &iih.icmp_id,
 					    saddr, &(*state)->state_key->gwy.addr,
-#ifndef NO_APPLE_EXTENSIONS
 					    (*state)->state_key->gwy.xport.port, NULL,
-#else
-					    (*state)->state_key->gwy.port, NULL,
-#endif
 					    pd2.ip_sum, icmpsum,
 					    pd->ip_sum, 0, AF_INET);
 				}
-#ifndef NO_APPLE_EXTENSIONS
 				m = pf_lazy_makewritable(pd, m, off2 + ICMP_MINLEN);
 				if (!m)
 					return (PF_DROP);
-#endif
 				m_copyback(m, off, ICMP_MINLEN, pd->hdr.icmp);
 				m_copyback(m, ipoff2, sizeof (h2), &h2);
 				m_copyback(m, off2, ICMP_MINLEN, &iih);
@@ -7484,23 +7023,13 @@ pf_test_state_icmp(struct pf_state **state, int direction, struct pfi_kif *kif,
 			if (direction == PF_IN)	{
 				PF_ACPY(&key.ext.addr, pd2.dst, key.af);
 				PF_ACPY(&key.gwy.addr, pd2.src, key.af);
-#ifndef NO_APPLE_EXTENSIONS
 				key.ext.xport.port = 0;
 				key.gwy.xport.port = iih.icmp6_id;
-#else
-				key.ext.port = 0;
-				key.gwy.port = iih.icmp6_id;
-#endif
 			} else {
 				PF_ACPY(&key.lan.addr, pd2.dst, key.af);
 				PF_ACPY(&key.ext.addr, pd2.src, key.af);
-#ifndef NO_APPLE_EXTENSIONS
 				key.lan.xport.port = iih.icmp6_id;
 				key.ext.xport.port = 0;
-#else
-				key.lan.port = iih.icmp6_id;
-				key.ext.port = 0;
-#endif
 			}
 
 			STATE_LOOKUP();
@@ -7509,30 +7038,20 @@ pf_test_state_icmp(struct pf_state **state, int direction, struct pfi_kif *kif,
 				if (direction == PF_IN) {
 					pf_change_icmp(pd2.src, &iih.icmp6_id,
 					    daddr, &(*state)->state_key->lan.addr,
-#ifndef NO_APPLE_EXTENSIONS
 					    (*state)->state_key->lan.xport.port, NULL,
-#else
-					    (*state)->state_key->lan.port, NULL,
-#endif
 					    pd2.ip_sum, icmpsum,
 					    pd->ip_sum, 0, AF_INET6);
 				} else {
 					pf_change_icmp(pd2.dst, &iih.icmp6_id,
 					    saddr, &(*state)->state_key->gwy.addr,
-#ifndef NO_APPLE_EXTENSIONS
 					    (*state)->state_key->gwy.xport.port, NULL,
-#else
-					    (*state)->state_key->gwy.port, NULL,
-#endif
 					    pd2.ip_sum, icmpsum,
 					    pd->ip_sum, 0, AF_INET6);
 				}
-#ifndef NO_APPLE_EXTENSIONS
 				m = pf_lazy_makewritable(pd, m, off2 +
 				    sizeof (struct icmp6_hdr));
 				if (!m)
 					return (PF_DROP);
-#endif
 				m_copyback(m, off, sizeof (struct icmp6_hdr),
 				    pd->hdr.icmp6);
 				m_copyback(m, ipoff2, sizeof (h2_6), &h2_6);
@@ -7550,23 +7069,13 @@ pf_test_state_icmp(struct pf_state **state, int direction, struct pfi_kif *kif,
 			if (direction == PF_IN)	{
 				PF_ACPY(&key.ext.addr, pd2.dst, key.af);
 				PF_ACPY(&key.gwy.addr, pd2.src, key.af);
-#ifndef NO_APPLE_EXTENSIONS
 				key.ext.xport.port = 0;
 				key.gwy.xport.port = 0;
-#else
-				key.ext.port = 0;
-				key.gwy.port = 0;
-#endif
 			} else {
 				PF_ACPY(&key.lan.addr, pd2.dst, key.af);
 				PF_ACPY(&key.ext.addr, pd2.src, key.af);
-#ifndef NO_APPLE_EXTENSIONS
 				key.lan.xport.port = 0;
 				key.ext.xport.port = 0;
-#else
-				key.lan.port = 0;
-				key.ext.port = 0;
-#endif
 			}
 
 			STATE_LOOKUP();
@@ -7588,25 +7097,17 @@ pf_test_state_icmp(struct pf_state **state, int direction, struct pfi_kif *kif,
 				switch (pd2.af) {
 #if INET
 				case AF_INET:
-#ifndef NO_APPLE_EXTENSIONS
 					m = pf_lazy_makewritable(pd, m,
 					    ipoff2 + sizeof (h2));
 					if (!m)
 						return (PF_DROP);
-#endif
-					m_copyback(m, off, ICMP_MINLEN,
-					    pd->hdr.icmp);
-					m_copyback(m, ipoff2, sizeof (h2), &h2);
-					break;
 #endif /* INET */
 #if INET6
 				case AF_INET6:
-#ifndef NO_APPLE_EXTENSIONS
 					m = pf_lazy_makewritable(pd, m,
 					    ipoff2 + sizeof (h2_6));
 					if (!m)
 						return (PF_DROP);
-#endif
 					m_copyback(m, off,
 					    sizeof (struct icmp6_hdr),
 					    pd->hdr.icmp6);
@@ -7624,7 +7125,6 @@ pf_test_state_icmp(struct pf_state **state, int direction, struct pfi_kif *kif,
 	}
 }
 
-#ifndef NO_APPLE_EXTENSIONS
 static int
 pf_test_state_grev1(struct pf_state **state, int direction,
     struct pfi_kif *kif, int off, struct pf_pdesc *pd)
@@ -7726,7 +7226,7 @@ pf_test_state_grev1(struct pf_state **state, int direction,
 	return (PF_PASS);
 }
 
-int
+static int
 pf_test_state_esp(struct pf_state **state, int direction, struct pfi_kif *kif,
     int off, struct pf_pdesc *pd)
 {
@@ -7814,6 +7314,11 @@ pf_test_state_esp(struct pf_state **state, int direction, struct pfi_kif *kif,
 		}
 	}
 
+	if (*state != NULL && pd != NULL &&
+		pd->flowhash == 0) {
+		pd->flowhash = (*state)->state_key->flowhash;
+	}
+
 	if (pf_state_lookup_aux(state, kif, direction, &action))
 		return (action);
 
@@ -7878,7 +7383,6 @@ pf_test_state_esp(struct pf_state **state, int direction, struct pfi_kif *kif,
 
 	return (PF_PASS);
 }
-#endif
 
 static int
 pf_test_state_other(struct pf_state **state, int direction, struct pfi_kif *kif,
@@ -7887,31 +7391,19 @@ pf_test_state_other(struct pf_state **state, int direction, struct pfi_kif *kif,
 	struct pf_state_peer	*src, *dst;
 	struct pf_state_key_cmp	 key;
 
-#ifndef NO_APPLE_EXTENSIONS
 	key.app_state = 0;
-#endif
 	key.af = pd->af;
 	key.proto = pd->proto;
 	if (direction == PF_IN)	{
 		PF_ACPY(&key.ext.addr, pd->src, key.af);
 		PF_ACPY(&key.gwy.addr, pd->dst, key.af);
-#ifndef NO_APPLE_EXTENSIONS
 		key.ext.xport.port = 0;
 		key.gwy.xport.port = 0;
-#else
-		key.ext.port = 0;
-		key.gwy.port = 0;
-#endif
 	} else {
 		PF_ACPY(&key.lan.addr, pd->src, key.af);
 		PF_ACPY(&key.ext.addr, pd->dst, key.af);
-#ifndef NO_APPLE_EXTENSIONS
 		key.lan.xport.port = 0;
 		key.ext.xport.port = 0;
-#else
-		key.lan.port = 0;
-		key.ext.port = 0;
-#endif
 	}
 
 	STATE_LOOKUP();
@@ -7938,11 +7430,7 @@ pf_test_state_other(struct pf_state **state, int direction, struct pfi_kif *kif,
 		(*state)->timeout = PFTM_OTHER_SINGLE;
 
 	/* translate source/destination address, if necessary */
-#ifndef NO_APPLE_EXTENSIONS
 	if (STATE_ADDR_TRANSLATE((*state)->state_key)) {
-#else
-	if (STATE_TRANSLATE((*state)->state_key)) {
-#endif
 		if (direction == PF_OUT) {
 			switch (pd->af) {
 #if INET
@@ -8143,7 +7631,7 @@ pf_route(struct mbuf **m, struct pf_rule *r, int dir, struct ifnet *oifp,
 	    (dir != PF_IN && dir != PF_OUT) || oifp == NULL)
 		panic("pf_route: invalid parameters");
 
-	if (pd->pf_mtag->routed++ > 3) {
+	if (pd->pf_mtag->pftag_routed++ > 3) {
 		m0 = *m;
 		*m = NULL;
 		goto bad;
@@ -8168,7 +7656,7 @@ pf_route(struct mbuf **m, struct pf_rule *r, int dir, struct ifnet *oifp,
 
 	ro = &iproute;
 	bzero((caddr_t)ro, sizeof (*ro));
-	dst = satosin(&ro->ro_dst);
+	dst = satosin((void *)&ro->ro_dst);
 	dst->sin_family = AF_INET;
 	dst->sin_len = sizeof (*dst);
 	dst->sin_addr = ip->ip_dst;
@@ -8185,7 +7673,7 @@ pf_route(struct mbuf **m, struct pf_rule *r, int dir, struct ifnet *oifp,
 		ro->ro_rt->rt_use++;
 
 		if (ro->ro_rt->rt_flags & RTF_GATEWAY)
-			dst = satosin(ro->ro_rt->rt_gateway);
+			dst = satosin((void *)ro->ro_rt->rt_gateway);
 		RT_UNLOCK(ro->ro_rt);
 	} else {
 		if (TAILQ_EMPTY(&r->rpool.list)) {
@@ -8211,7 +7699,7 @@ pf_route(struct mbuf **m, struct pf_rule *r, int dir, struct ifnet *oifp,
 		goto bad;
 
 	if (oifp != ifp) {
-		if (pf_test(PF_OUT, ifp, &m0, NULL) != PF_PASS)
+		if (pf_test(PF_OUT, ifp, &m0, NULL, NULL) != PF_PASS)
 			goto bad;
 		else if (m0 == NULL)
 			goto done;
@@ -8279,7 +7767,7 @@ pf_route(struct mbuf **m, struct pf_rule *r, int dir, struct ifnet *oifp,
 		ip->ip_sum = 0;
 		if (sw_csum & CSUM_DELAY_IP)
 			ip->ip_sum = in_cksum(m0, ip->ip_hl << 2);
-		error = ifnet_output(ifp, PF_INET, m0, ro, sintosa(dst));
+		error = ifnet_output(ifp, PF_INET, m0, ro->ro_rt, sintosa(dst));
 		goto done;
 	}
 
@@ -8300,12 +7788,12 @@ pf_route(struct mbuf **m, struct pf_rule *r, int dir, struct ifnet *oifp,
 	m1 = m0;
 
 	/* PR-8933605: send ip_len,ip_off to ip_fragment in host byte order */
-#if BYTE_ORDER != BIG_ENDIAN		
+#if BYTE_ORDER != BIG_ENDIAN
 	NTOHS(ip->ip_off);
 	NTOHS(ip->ip_len);
 #endif
 	error = ip_fragment(m0, ifp, ifp->if_mtu, sw_csum);
-	
+
 	if (error) {
 		m0 = NULL;
 		goto bad;
@@ -8315,7 +7803,7 @@ pf_route(struct mbuf **m, struct pf_rule *r, int dir, struct ifnet *oifp,
 		m1 = m0->m_nextpkt;
 		m0->m_nextpkt = 0;
 		if (error == 0)
-			error = ifnet_output(ifp, PF_INET, m0, ro,
+			error = ifnet_output(ifp, PF_INET, m0, ro->ro_rt,
 			    sintosa(dst));
 		else
 			m_freem(m0);
@@ -8357,7 +7845,7 @@ pf_route6(struct mbuf **m, struct pf_rule *r, int dir, struct ifnet *oifp,
 	    (dir != PF_IN && dir != PF_OUT) || oifp == NULL)
 		panic("pf_route6: invalid parameters");
 
-	if (pd->pf_mtag->routed++ > 3) {
+	if (pd->pf_mtag->pftag_routed++ > 3) {
 		m0 = *m;
 		*m = NULL;
 		goto bad;
@@ -8392,7 +7880,7 @@ pf_route6(struct mbuf **m, struct pf_rule *r, int dir, struct ifnet *oifp,
 
 		if ((pf_mtag = pf_get_mtag(m0)) == NULL)
 			goto bad;
-		pf_mtag->flags |= PF_TAG_GENERATED;
+		pf_mtag->pftag_flags |= PF_TAG_GENERATED;
 		ip6_output(m0, NULL, NULL, 0, NULL, NULL, NULL);
 		return;
 	}
@@ -8419,7 +7907,7 @@ pf_route6(struct mbuf **m, struct pf_rule *r, int dir, struct ifnet *oifp,
 		goto bad;
 
 	if (oifp != ifp) {
-		if (pf_test6(PF_OUT, ifp, &m0, NULL) != PF_PASS)
+		if (pf_test6(PF_OUT, ifp, &m0, NULL, NULL) != PF_PASS)
 			goto bad;
 		else if (m0 == NULL)
 			goto done;
@@ -8438,7 +7926,7 @@ pf_route6(struct mbuf **m, struct pf_rule *r, int dir, struct ifnet *oifp,
 	if (IN6_IS_SCOPE_EMBED(&dst->sin6_addr))
 		dst->sin6_addr.s6_addr16[1] = htons(ifp->if_index);
 	if ((unsigned)m0->m_pkthdr.len <= ifp->if_mtu) {
-		error = nd6_output(ifp, ifp, m0, dst, NULL);
+		error = nd6_output(ifp, ifp, m0, dst, NULL, NULL);
 	} else {
 		in6_ifstat_inc(ifp, ifs6_in_toobig);
 		if (r->rt != PF_DUPTO)
@@ -8549,22 +8037,24 @@ pf_check_proto_cksum(struct mbuf *m, int off, int len, u_int8_t p,
 }
 
 #if INET
-#ifndef NO_APPLE_EXTENSIONS
 #define PF_APPLE_UPDATE_PDESC_IPv4()				\
 	do {							\
 		if (m && pd.mp && m != pd.mp) {			\
 			m = pd.mp;				\
 			h = mtod(m, struct ip *);		\
+			pd.pf_mtag = pf_get_mtag(m);		\
 		}						\
 	} while (0)
-#endif
 
 int
 pf_test(int dir, struct ifnet *ifp, struct mbuf **m0,
-    struct ether_header *eh)
+    struct ether_header *eh, struct ip_fw_args *fwa)
 {
+#if !DUMMYNET
+#pragma unused(fwa)
+#endif
 	struct pfi_kif		*kif;
-	u_short			 action, reason = 0, log = 0;
+	u_short			 action = PF_PASS, reason = 0, log = 0;
 	struct mbuf		*m = *m0;
 	struct ip		*h = 0;
 	struct pf_rule		*a = NULL, *r = &pf_default_rule, *tr, *nr;
@@ -8587,7 +8077,7 @@ pf_test(int dir, struct ifnet *ifp, struct mbuf **m0,
 		return (PF_DROP);
 	}
 
-	if (pd.pf_mtag->flags & PF_TAG_GENERATED)
+	if (pd.pf_mtag->pftag_flags & PF_TAG_GENERATED)
 		return (PF_PASS);
 
 	kif = (struct pfi_kif *)ifp->if_pf_kif;
@@ -8605,6 +8095,22 @@ pf_test(int dir, struct ifnet *ifp, struct mbuf **m0,
 		panic("non-M_PKTHDR is passed to pf_test");
 #endif /* DIAGNOSTIC */
 
+	/* initialize enough of pd for the done label */
+	h = mtod(m, struct ip *);
+	pd.mp = m;
+	pd.lmw = 0;
+	pd.pf_mtag = pf_get_mtag(m);
+	pd.src = (struct pf_addr *)&h->ip_src;
+	pd.dst = (struct pf_addr *)&h->ip_dst;
+	PF_ACPY(&pd.baddr, dir == PF_OUT ? pd.src : pd.dst, AF_INET);
+	pd.ip_sum = &h->ip_sum;
+	pd.proto = h->ip_p;
+	pd.proto_variant = 0;
+	pd.af = AF_INET;
+	pd.tos = h->ip_tos;
+	pd.tot_len = ntohs(h->ip_len);
+	pd.eh = eh;
+
 	if (m->m_pkthdr.len < (int)sizeof (*h)) {
 		action = PF_DROP;
 		REASON_SET(&reason, PFRES_SHORT);
@@ -8612,11 +8118,22 @@ pf_test(int dir, struct ifnet *ifp, struct mbuf **m0,
 		goto done;
 	}
 
+#if DUMMYNET
+	if (fwa != NULL && fwa->fwa_pf_rule != NULL)
+		goto nonormalize;
+#endif /* DUMMYNET */
+
 	/* We do IP header normalization and packet reassembly here */
-	if (pf_normalize_ip(m0, dir, kif, &reason, &pd) != PF_PASS) {
+	action = pf_normalize_ip(m0, dir, kif, &reason, &pd);
+	pd.mp = m = *m0;
+	if (action != PF_PASS || pd.lmw < 0) {
 		action = PF_DROP;
 		goto done;
 	}
+
+#if DUMMYNET
+nonormalize:
+#endif /* DUMMYNET */
 	m = *m0;	/* pf_normalize messes with m0 */
 	h = mtod(m, struct ip *);
 
@@ -8633,18 +8150,32 @@ pf_test(int dir, struct ifnet *ifp, struct mbuf **m0,
 	PF_ACPY(&pd.baddr, dir == PF_OUT ? pd.src : pd.dst, AF_INET);
 	pd.ip_sum = &h->ip_sum;
 	pd.proto = h->ip_p;
-#ifndef NO_APPLE_EXTENSIONS
 	pd.proto_variant = 0;
 	pd.mp = m;
 	pd.lmw = 0;
-#endif
+	pd.pf_mtag = pf_get_mtag(m);
 	pd.af = AF_INET;
 	pd.tos = h->ip_tos;
+	pd.sc = MBUF_SCIDX(mbuf_get_service_class(m));
 	pd.tot_len = ntohs(h->ip_len);
 	pd.eh = eh;
+	if (pd.pf_mtag != NULL && pd.pf_mtag->pftag_flowhash != 0) {
+		pd.flowhash = pd.pf_mtag->pftag_flowhash;
+		pd.flags |= (m->m_pkthdr.m_fhflags & PF_TAG_FLOWADV) ?
+		    PFDESC_FLOW_ADV : 0;
+	}
 
 	/* handle fragments that didn't get reassembled by normalization */
 	if (h->ip_off & htons(IP_MF | IP_OFFMASK)) {
+		pd.flags |= PFDESC_IP_FRAG;
+#if DUMMYNET
+		/* Traffic goes through dummynet first */
+		action = pf_test_dummynet(&r, dir, kif, &m, &pd, fwa);
+		if (action == PF_DROP || m == NULL) {
+			*m0 = NULL;
+			return (action);
+		}
+#endif /* DUMMYNET */
 		action = pf_test_fragment(&r, dir, kif, m, h,
 		    &pd, &a, &ruleset);
 		goto done;
@@ -8663,21 +8194,25 @@ pf_test(int dir, struct ifnet *ifp, struct mbuf **m0,
 		pd.p_len = pd.tot_len - off - (th.th_off << 2);
 		if ((th.th_flags & TH_ACK) && pd.p_len == 0)
 			pqid = 1;
+#if DUMMYNET
+		/* Traffic goes through dummynet first */
+		action = pf_test_dummynet(&r, dir, kif, &m, &pd, fwa);
+		if (action == PF_DROP || m == NULL) {
+			*m0 = NULL;
+			return (action);
+		}
+#endif /* DUMMYNET */
 		action = pf_normalize_tcp(dir, kif, m, 0, off, h, &pd);
-#ifndef NO_APPLE_EXTENSIONS
 		if (pd.lmw < 0)
 			goto done;
 		PF_APPLE_UPDATE_PDESC_IPv4();
-#endif
 		if (action == PF_DROP)
 			goto done;
 		action = pf_test_state_tcp(&s, dir, kif, m, off, h, &pd,
 		    &reason);
-#ifndef NO_APPLE_EXTENSIONS
 		if (pd.lmw < 0)
 			goto done;
 		PF_APPLE_UPDATE_PDESC_IPv4();
-#endif
 		if (action == PF_PASS) {
 #if NPFSYNC
 			pfsync_update_state(s);
@@ -8707,15 +8242,19 @@ pf_test(int dir, struct ifnet *ifp, struct mbuf **m0,
 			REASON_SET(&reason, PFRES_SHORT);
 			goto done;
 		}
-#ifndef NO_APPLE_EXTENSIONS
+#if DUMMYNET
+		/* Traffic goes through dummynet first */
+		action = pf_test_dummynet(&r, dir, kif, &m, &pd, fwa);
+		if (action == PF_DROP || m == NULL) {
+			*m0 = NULL;
+			return (action);
+		}
+#endif /* DUMMYNET */
 		action = pf_test_state_udp(&s, dir, kif, m, off, h, &pd,
 		    &reason);
 		if (pd.lmw < 0)
 			goto done;
 		PF_APPLE_UPDATE_PDESC_IPv4();
-#else
-		action = pf_test_state_udp(&s, dir, kif, m, off, h, &pd);
-#endif
 		if (action == PF_PASS) {
 #if NPFSYNC
 			pfsync_update_state(s);
@@ -8738,13 +8277,19 @@ pf_test(int dir, struct ifnet *ifp, struct mbuf **m0,
 			log = action != PF_PASS;
 			goto done;
 		}
+#if DUMMYNET
+		/* Traffic goes through dummynet first */
+		action = pf_test_dummynet(&r, dir, kif, &m, &pd, fwa);
+		if (action == PF_DROP || m == NULL) {
+			*m0 = NULL;
+			return (action);
+		}
+#endif /* DUMMYNET */
 		action = pf_test_state_icmp(&s, dir, kif, m, off, h, &pd,
 		    &reason);
-#ifndef NO_APPLE_EXTENSIONS
 		if (pd.lmw < 0)
 			goto done;
 		PF_APPLE_UPDATE_PDESC_IPv4();
-#endif
 		if (action == PF_PASS) {
 #if NPFSYNC
 			pfsync_update_state(s);
@@ -8758,7 +8303,6 @@ pf_test(int dir, struct ifnet *ifp, struct mbuf **m0,
 		break;
 	}
 
-#ifndef NO_APPLE_EXTENSIONS
 	case IPPROTO_ESP: {
 		struct pf_esp_hdr	esp;
 
@@ -8768,6 +8312,14 @@ pf_test(int dir, struct ifnet *ifp, struct mbuf **m0,
 			log = action != PF_PASS;
 			goto done;
 		}
+#if DUMMYNET
+		/* Traffic goes through dummynet first */
+		action = pf_test_dummynet(&r, dir, kif, &m, &pd, fwa);
+		if (action == PF_DROP || m == NULL) {
+			*m0 = NULL;
+			return (action);
+		}
+#endif /* DUMMYNET */
 		action = pf_test_state_esp(&s, dir, kif, off, &pd);
 		if (pd.lmw < 0)
 			goto done;
@@ -8793,6 +8345,14 @@ pf_test(int dir, struct ifnet *ifp, struct mbuf **m0,
 			log = (action != PF_PASS);
 			goto done;
 		}
+#if DUMMYNET
+		/* Traffic goes through dummynet first */
+		action = pf_test_dummynet(&r, dir, kif, &m, &pd, fwa);
+		if (action == PF_DROP || m == NULL) {
+			*m0 = NULL;
+			return (action);
+		}
+#endif /* DUMMYNET */
 		if ((ntohs(grev1.flags) & PF_GRE_FLAG_VERSION_MASK) == 1 &&
 		    ntohs(grev1.protocol_type) == PF_GRE_PPP_ETHERTYPE) {
 			if (ntohs(grev1.payload_length) >
@@ -8823,15 +8383,20 @@ pf_test(int dir, struct ifnet *ifp, struct mbuf **m0,
 
 		/* not GREv1/PPTP, so treat as ordinary GRE... */
 	}
-#endif
 
 	default:
+#if DUMMYNET
+		/* Traffic goes through dummynet first */
+		action = pf_test_dummynet(&r, dir, kif, &m, &pd, fwa);
+		if (action == PF_DROP || m == NULL) {
+			*m0 = NULL;
+			return (action);
+		}
+#endif /* DUMMYNET */
 		action = pf_test_state_other(&s, dir, kif, &pd);
-#ifndef NO_APPLE_EXTENSIONS
 		if (pd.lmw < 0)
 			goto done;
 		PF_APPLE_UPDATE_PDESC_IPv4();
-#endif
 		if (action == PF_PASS) {
 #if NPFSYNC
 			pfsync_update_state(s);
@@ -8846,10 +8411,8 @@ pf_test(int dir, struct ifnet *ifp, struct mbuf **m0,
 	}
 
 done:
-#ifndef NO_APPLE_EXTENSIONS
 	*m0 = pd.mp;
 	PF_APPLE_UPDATE_PDESC_IPv4();
-#endif
 
 	if (action == PF_PASS && h->ip_hl > 5 &&
 	    !((s && s->allow_opts) || r->allow_opts)) {
@@ -8861,20 +8424,31 @@ done:
 		    (unsigned int) h->ip_hl));
 	}
 
-	if ((s && s->tag) || PF_RTABLEID_IS_VALID(r->rtableid))
+	if ((s && s->tag) || PF_RTABLEID_IS_VALID(r->rtableid) ||
+	    pd.flowhash != 0)
 		(void) pf_tag_packet(m, pd.pf_mtag, s ? s->tag : 0,
-		    r->rtableid);
+		    r->rtableid, &pd);
 
-#if ALTQ
-	if (action == PF_PASS && r->qid) {
-		if (pqid || (pd.tos & IPTOS_LOWDELAY))
-			pd.pf_mtag->qid = r->pqid;
-		else
-			pd.pf_mtag->qid = r->qid;
+	if (action == PF_PASS) {
+#if PF_ALTQ
+		if (altq_allowed && r->qid) {
+			if (pqid || (pd.tos & IPTOS_LOWDELAY))
+				pd.pf_mtag->pftag_qid = r->pqid;
+			else
+				pd.pf_mtag->pftag_qid = r->qid;
+		}
+#endif /* PF_ALTQ */
 		/* add hints for ecn */
-		pd.pf_mtag->hdr = h;
+		pd.pf_mtag->pftag_hdr = h;
+		/* record address family */
+		pd.pf_mtag->pftag_flags &= ~PF_TAG_HDR_INET6;
+		pd.pf_mtag->pftag_flags |= PF_TAG_HDR_INET;
+		/* record TCP vs. non-TCP */
+		if (pd.proto == IPPROTO_TCP)
+			pd.pf_mtag->pftag_flags |= PF_TAG_TCP;
+		else
+			pd.pf_mtag->pftag_flags &= ~PF_TAG_TCP;
 	}
-#endif /* ALTQ */
 
 	/*
 	 * connections redirected to loopback should not match sockets
@@ -8886,7 +8460,7 @@ done:
 	    (s->nat_rule.ptr->action == PF_RDR ||
 	    s->nat_rule.ptr->action == PF_BINAT) &&
 	    (ntohl(pd.dst->v4.s_addr) >> IN_CLASSA_NSHIFT) == IN_LOOPBACKNET)
-		pd.pf_mtag->flags |= PF_TAG_TRANSLATE_LOCALHOST;
+		pd.pf_mtag->pftag_flags |= PF_TAG_TRANSLATE_LOCALHOST;
 
 	if (log) {
 		struct pf_rule *lr;
@@ -8966,7 +8540,6 @@ done:
 			    tr->dst.neg);
 	}
 
-#ifndef NO_APPLE_EXTENSIONS
 	VERIFY(m == NULL || pd.mp == NULL || pd.mp == m);
 
 	if (*m0) {
@@ -8983,7 +8556,6 @@ done:
 
 		*m0 = m;
 	}
-#endif
 
 	if (action == PF_SYNPROXY_DROP) {
 		m_freem(*m0);
@@ -8998,7 +8570,6 @@ done:
 #endif /* INET */
 
 #if INET6
-#ifndef NO_APPLE_EXTENSIONS
 #define PF_APPLE_UPDATE_PDESC_IPv6()				\
 	do {							\
 		if (m && pd.mp && m != pd.mp) {			\
@@ -9008,14 +8579,16 @@ done:
 			h = mtod(m, struct ip6_hdr *);		\
 		}						\
 	} while (0)
-#endif
 
 int
 pf_test6(int dir, struct ifnet *ifp, struct mbuf **m0,
-    struct ether_header *eh)
+    struct ether_header *eh, struct ip_fw_args *fwa)
 {
+#if !DUMMYNET
+#pragma unused(fwa)
+#endif
 	struct pfi_kif		*kif;
-	u_short			 action, reason = 0, log = 0;
+	u_short			 action = PF_PASS, reason = 0, log = 0;
 	struct mbuf		*m = *m0, *n = NULL;
 	struct ip6_hdr		*h;
 	struct pf_rule		*a = NULL, *r = &pf_default_rule, *tr, *nr;
@@ -9024,6 +8597,7 @@ pf_test6(int dir, struct ifnet *ifp, struct mbuf **m0,
 	struct pf_ruleset	*ruleset = NULL;
 	struct pf_pdesc		 pd;
 	int			 off, terminal = 0, dirndx, rh_cnt = 0;
+	u_int8_t		 nxt;
 
 	lck_mtx_assert(pf_lock, LCK_MTX_ASSERT_OWNED);
 
@@ -9038,7 +8612,7 @@ pf_test6(int dir, struct ifnet *ifp, struct mbuf **m0,
 		return (PF_DROP);
 	}
 
-	if (pd.pf_mtag->flags & PF_TAG_GENERATED)
+	if (pd.pf_mtag->pftag_flags & PF_TAG_GENERATED)
 		return (PF_PASS);
 
 	kif = (struct pfi_kif *)ifp->if_pf_kif;
@@ -9058,6 +8632,29 @@ pf_test6(int dir, struct ifnet *ifp, struct mbuf **m0,
 
 	h = mtod(m, struct ip6_hdr *);
 
+	nxt = h->ip6_nxt;
+	off = ((caddr_t)h - m->m_data) + sizeof(struct ip6_hdr);
+	pd.mp = m;
+	pd.lmw = 0;
+	pd.pf_mtag = pf_get_mtag(m);
+	pd.src = (struct pf_addr *)&h->ip6_src;
+	pd.dst = (struct pf_addr *)&h->ip6_dst;
+	PF_ACPY(&pd.baddr, dir == PF_OUT ? pd.src : pd.dst, AF_INET6);
+	pd.ip_sum = NULL;
+	pd.af = AF_INET6;
+	pd.proto = nxt;
+	pd.proto_variant = 0;
+	pd.tos = 0;
+	pd.sc = MBUF_SCIDX(mbuf_get_service_class(m));
+	pd.tot_len = ntohs(h->ip6_plen) + sizeof(struct ip6_hdr);
+	pd.eh = eh;
+
+	if (pd.pf_mtag->pftag_flowhash != 0) {
+		pd.flowhash = pd.pf_mtag->pftag_flowhash;
+		pd.flags |= (m->m_pkthdr.m_fhflags & PF_TAG_FLOWADV) ?
+		    PFDESC_FLOW_ADV : 0;
+	}
+
 	if (m->m_pkthdr.len < (int)sizeof (*h)) {
 		action = PF_DROP;
 		REASON_SET(&reason, PFRES_SHORT);
@@ -9065,12 +8662,22 @@ pf_test6(int dir, struct ifnet *ifp, struct mbuf **m0,
 		goto done;
 	}
 
+#if DUMMYNET
+	if (fwa != NULL && fwa->fwa_pf_rule != NULL)
+		goto nonormalize;
+#endif /* DUMMYNET */
+
 	/* We do IP header normalization and packet reassembly here */
-	if (pf_normalize_ip6(m0, dir, kif, &reason, &pd) != PF_PASS) {
+	action = pf_normalize_ip6(m0, dir, kif, &reason, &pd);
+	pd.mp = m = *m0;
+	if (action != PF_PASS || pd.lmw < 0) {
 		action = PF_DROP;
 		goto done;
 	}
-	m = *m0;	/* pf_normalize messes with m0 */
+
+#if DUMMYNET
+nonormalize:
+#endif /* DUMMYNET */
 	h = mtod(m, struct ip6_hdr *);
 
 #if 1
@@ -9096,56 +8703,54 @@ pf_test6(int dir, struct ifnet *ifp, struct mbuf **m0,
 
 	off = ((caddr_t)h - m->m_data) + sizeof (struct ip6_hdr);
 	pd.proto = h->ip6_nxt;
-#ifndef NO_APPLE_EXTENSIONS
 	pd.proto_variant = 0;
 	pd.mp = m;
 	pd.lmw = 0;
-#endif
-	do {
-		switch (pd.proto) {
-		case IPPROTO_FRAGMENT:
-			action = pf_test_fragment(&r, dir, kif, m, h,
-			    &pd, &a, &ruleset);
-			if (action == PF_DROP)
-				REASON_SET(&reason, PFRES_FRAG);
-			goto done;
-		case IPPROTO_ROUTING: {
-			struct ip6_rthdr rthdr;
+	pd.pf_mtag = pf_get_mtag(m);
 
-			if (rh_cnt++) {
-				DPFPRINTF(PF_DEBUG_MISC,
-				    ("pf: IPv6 more than one rthdr\n"));
-				action = PF_DROP;
-				REASON_SET(&reason, PFRES_IPOPTIONS);
-				log = 1;
-				goto done;
-			}
-			if (!pf_pull_hdr(m, off, &rthdr, sizeof (rthdr), NULL,
+	do {
+		switch (nxt) {
+		case IPPROTO_FRAGMENT: {
+			struct ip6_frag ip6f;
+			
+			pd.flags |= PFDESC_IP_FRAG;
+			if (!pf_pull_hdr(m, off, &ip6f, sizeof ip6f, NULL,
 			    &reason, pd.af)) {
 				DPFPRINTF(PF_DEBUG_MISC,
-				    ("pf: IPv6 short rthdr\n"));
+				    ("pf: IPv6 short fragment header\n"));
 				action = PF_DROP;
 				REASON_SET(&reason, PFRES_SHORT);
 				log = 1;
 				goto done;
 			}
-			if (rthdr.ip6r_type == IPV6_RTHDR_TYPE_0) {
-				DPFPRINTF(PF_DEBUG_MISC,
-				    ("pf: IPv6 rthdr0\n"));
-				action = PF_DROP;
-				REASON_SET(&reason, PFRES_IPOPTIONS);
-				log = 1;
-				goto done;
+			pd.proto = nxt = ip6f.ip6f_nxt;
+#if DUMMYNET
+			/* Traffic goes through dummynet first */
+			action = pf_test_dummynet(&r, dir, kif, &m, &pd, fwa);
+			if (action == PF_DROP || m == NULL) {
+				*m0 = NULL;
+				return (action);
 			}
-			/* FALLTHROUGH */
+#endif /* DUMMYNET */
+			action = pf_test_fragment(&r, dir, kif, m, h, &pd, &a,
+			    &ruleset);
+			if (action == PF_DROP) {
+				REASON_SET(&reason, PFRES_FRAG);
+				log = 1;
+			}
+			goto done;
 		}
+		case IPPROTO_ROUTING:
+			++rh_cnt;
+			/* FALL THROUGH */
+
 		case IPPROTO_AH:
 		case IPPROTO_HOPOPTS:
 		case IPPROTO_DSTOPTS: {
 			/* get next header and header length */
 			struct ip6_ext	opt6;
 
-			if (!pf_pull_hdr(m, off, &opt6, sizeof (opt6),
+			if (!pf_pull_hdr(m, off, &opt6, sizeof(opt6),
 			    NULL, &reason, pd.af)) {
 				DPFPRINTF(PF_DEBUG_MISC,
 				    ("pf: IPv6 short opt\n"));
@@ -9157,7 +8762,7 @@ pf_test6(int dir, struct ifnet *ifp, struct mbuf **m0,
 				off += (opt6.ip6e_len + 2) * 4;
 			else
 				off += (opt6.ip6e_len + 1) * 8;
-			pd.proto = opt6.ip6e_nxt;
+			nxt = opt6.ip6e_nxt;
 			/* goto the next header */
 			break;
 		}
@@ -9183,21 +8788,25 @@ pf_test6(int dir, struct ifnet *ifp, struct mbuf **m0,
 			goto done;
 		}
 		pd.p_len = pd.tot_len - off - (th.th_off << 2);
+#if DUMMYNET
+		/* Traffic goes through dummynet first */
+		action = pf_test_dummynet(&r, dir, kif, &m, &pd, fwa);
+		if (action == PF_DROP || m == NULL) {
+			*m0 = NULL;
+			return (action);
+		}
+#endif /* DUMMYNET */
 		action = pf_normalize_tcp(dir, kif, m, 0, off, h, &pd);
-#ifndef NO_APPLE_EXTENSIONS
 		if (pd.lmw < 0)
 			goto done;
 		PF_APPLE_UPDATE_PDESC_IPv6();
-#endif
 		if (action == PF_DROP)
 			goto done;
 		action = pf_test_state_tcp(&s, dir, kif, m, off, h, &pd,
 		    &reason);
-#ifndef NO_APPLE_EXTENSIONS
 		if (pd.lmw < 0)
 			goto done;
 		PF_APPLE_UPDATE_PDESC_IPv6();
-#endif
 		if (action == PF_PASS) {
 #if NPFSYNC
 			pfsync_update_state(s);
@@ -9227,15 +8836,19 @@ pf_test6(int dir, struct ifnet *ifp, struct mbuf **m0,
 			REASON_SET(&reason, PFRES_SHORT);
 			goto done;
 		}
-#ifndef NO_APPLE_EXTENSIONS
+#if DUMMYNET
+		/* Traffic goes through dummynet first */
+		action = pf_test_dummynet(&r, dir, kif, &m, &pd, fwa);
+		if (action == PF_DROP || m == NULL) {
+			*m0 = NULL;
+			return (action);
+		}
+#endif /* DUMMYNET */
 		action = pf_test_state_udp(&s, dir, kif, m, off, h, &pd,
 		    &reason);
 		if (pd.lmw < 0)
 			goto done;
 		PF_APPLE_UPDATE_PDESC_IPv6();
-#else
-		action = pf_test_state_udp(&s, dir, kif, m, off, h, &pd);
-#endif
 		if (action == PF_PASS) {
 #if NPFSYNC
 			pfsync_update_state(s);
@@ -9258,13 +8871,19 @@ pf_test6(int dir, struct ifnet *ifp, struct mbuf **m0,
 			log = action != PF_PASS;
 			goto done;
 		}
+#if DUMMYNET
+		/* Traffic goes through dummynet first */
+		action = pf_test_dummynet(&r, dir, kif, &m, &pd, fwa);
+		if (action == PF_DROP || m == NULL) {
+			*m0 = NULL;
+			return (action);
+		}
+#endif /* DUMMYNET */
 		action = pf_test_state_icmp(&s, dir, kif,
 		    m, off, h, &pd, &reason);
-#ifndef NO_APPLE_EXTENSIONS
 		if (pd.lmw < 0)
 			goto done;
 		PF_APPLE_UPDATE_PDESC_IPv6();
-#endif
 		if (action == PF_PASS) {
 #if NPFSYNC
 			pfsync_update_state(s);
@@ -9278,7 +8897,6 @@ pf_test6(int dir, struct ifnet *ifp, struct mbuf **m0,
 		break;
 	}
 
-#ifndef NO_APPLE_EXTENSIONS
 	case IPPROTO_ESP: {
 		struct pf_esp_hdr	esp;
 
@@ -9288,6 +8906,14 @@ pf_test6(int dir, struct ifnet *ifp, struct mbuf **m0,
 			log = action != PF_PASS;
 			goto done;
 		}
+#if DUMMYNET
+		/* Traffic goes through dummynet first */
+		action = pf_test_dummynet(&r, dir, kif, &m, &pd, fwa);
+		if (action == PF_DROP || m == NULL) {
+			*m0 = NULL;
+			return (action);
+		}
+#endif /* DUMMYNET */
 		action = pf_test_state_esp(&s, dir, kif, off, &pd);
 		if (pd.lmw < 0)
 			goto done;
@@ -9314,6 +8940,14 @@ pf_test6(int dir, struct ifnet *ifp, struct mbuf **m0,
 			log = (action != PF_PASS);
 			goto done;
 		}
+#if DUMMYNET
+		/* Traffic goes through dummynet first */
+		action = pf_test_dummynet(&r, dir, kif, &m, &pd, fwa);
+		if (action == PF_DROP || m == NULL) {
+			*m0 = NULL;
+			return (action);
+		}
+#endif /* DUMMYNET */
 		if ((ntohs(grev1.flags) & PF_GRE_FLAG_VERSION_MASK) == 1 &&
 		    ntohs(grev1.protocol_type) == PF_GRE_PPP_ETHERTYPE) {
 			if (ntohs(grev1.payload_length) >
@@ -9344,15 +8978,20 @@ pf_test6(int dir, struct ifnet *ifp, struct mbuf **m0,
 
 		/* not GREv1/PPTP, so treat as ordinary GRE... */
 	}
-#endif
 
 	default:
+#if DUMMYNET
+		/* Traffic goes through dummynet first */
+		action = pf_test_dummynet(&r, dir, kif, &m, &pd, fwa);
+		if (action == PF_DROP || m == NULL) {
+			*m0 = NULL;
+			return (action);
+		}
+#endif /* DUMMYNET */
 		action = pf_test_state_other(&s, dir, kif, &pd);
-#ifndef NO_APPLE_EXTENSIONS
 		if (pd.lmw < 0)
 			goto done;
 		PF_APPLE_UPDATE_PDESC_IPv6();
-#endif
 		if (action == PF_PASS) {
 #if NPFSYNC
 			pfsync_update_state(s);
@@ -9367,10 +9006,8 @@ pf_test6(int dir, struct ifnet *ifp, struct mbuf **m0,
 	}
 
 done:
-#ifndef NO_APPLE_EXTENSIONS
 	*m0 = pd.mp;
 	PF_APPLE_UPDATE_PDESC_IPv6();
-#endif
 
 	if (n != m) {
 		m_freem(n);
@@ -9387,27 +9024,37 @@ done:
 		    ("pf: dropping packet with dangerous v6 headers\n"));
 	}
 
-	if ((s && s->tag) || PF_RTABLEID_IS_VALID(r->rtableid))
+	if ((s && s->tag) || PF_RTABLEID_IS_VALID(r->rtableid) || pd.flowhash != 0)
 		(void) pf_tag_packet(m, pd.pf_mtag, s ? s->tag : 0,
-		    r->rtableid);
+		    r->rtableid, &pd);
 
-#if ALTQ
-	if (action == PF_PASS && r->qid) {
-		if (pd.tos & IPTOS_LOWDELAY)
-			pd.pf_mtag->qid = r->pqid;
-		else
-			pd.pf_mtag->qid = r->qid;
+	if (action == PF_PASS) {
+#if PF_ALTQ
+		if (altq_allowed && r->qid) {
+			if (pd.tos & IPTOS_LOWDELAY)
+				pd.pf_mtag->pftag_qid = r->pqid;
+			else
+				pd.pf_mtag->pftag_qid = r->qid;
+		}
+#endif /* PF_ALTQ */
 		/* add hints for ecn */
-		pd.pf_mtag->hdr = h;
+		pd.pf_mtag->pftag_hdr = h;
+		/* record address family */
+		pd.pf_mtag->pftag_flags &= ~PF_TAG_HDR_INET;
+		pd.pf_mtag->pftag_flags |= PF_TAG_HDR_INET6;
+		/* record TCP vs. non-TCP */
+		if (pd.proto == IPPROTO_TCP)
+			pd.pf_mtag->pftag_flags |= PF_TAG_TCP;
+		else
+			pd.pf_mtag->pftag_flags &= ~PF_TAG_TCP;
 	}
-#endif /* ALTQ */
 
 	if (dir == PF_IN && action == PF_PASS && (pd.proto == IPPROTO_TCP ||
 	    pd.proto == IPPROTO_UDP) && s != NULL && s->nat_rule.ptr != NULL &&
 	    (s->nat_rule.ptr->action == PF_RDR ||
 	    s->nat_rule.ptr->action == PF_BINAT) &&
 	    IN6_IS_ADDR_LOOPBACK(&pd.dst->v6))
-		pd.pf_mtag->flags |= PF_TAG_TRANSLATE_LOCALHOST;
+		pd.pf_mtag->pftag_flags |= PF_TAG_TRANSLATE_LOCALHOST;
 
 	if (log) {
 		struct pf_rule *lr;
@@ -9495,7 +9142,6 @@ done:
 		/* pf_route6 can free the mbuf causing *m0 to become NULL */
 		pf_route6(m0, r, dir, kif->pfik_ifp, s, &pd);
 #else
-#ifndef NO_APPLE_EXTENSIONS
 	VERIFY(m == NULL || pd.mp == NULL || pd.mp == m);
 
 	if (*m0) {
@@ -9526,23 +9172,7 @@ done:
 		/* pf_route6 can free the mbuf causing *m0 to become NULL */
 		pf_route6(m0, r, dir, kif->pfik_ifp, s, &pd);
 	}
-#else
-	if (action != PF_SYNPROXY_DROP && r->rt)
-		/* pf_route6 can free the mbuf causing *m0 to become NULL */
-		pf_route6(m0, r, dir, kif->pfik_ifp, s, &pd);
-
-	if (action == PF_PASS) {
-		m = *m0;
-		h = mtod(m, struct ip6_hdr *);
-	}
-
-	if (action == PF_SYNPROXY_DROP) {
-		m_freem(*m0);
-		*m0 = NULL;
-		action = PF_PASS;
-	}
-#endif
-#endif
+#endif /* 0 */
 
 	return (action);
 }
@@ -9627,41 +9257,16 @@ pool_put(struct pool *pp, void *v)
 struct pf_mtag *
 pf_find_mtag(struct mbuf *m)
 {
-#if !PF_PKTHDR
-	struct m_tag	*mtag;
-
-	if ((mtag = m_tag_locate(m, KERNEL_MODULE_TAG_ID,
-	    KERNEL_TAG_TYPE_PF, NULL)) == NULL)
-		return (NULL);
-
-	return ((struct pf_mtag *)(mtag + 1));
-#else
 	if (!(m->m_flags & M_PKTHDR))
 		return (NULL);
 
-	return (&m->m_pkthdr.pf_mtag);
-#endif /* PF_PKTHDR */
+	return (m_pftag(m));
 }
 
 struct pf_mtag *
 pf_get_mtag(struct mbuf *m)
 {
-#if !PF_PKTHDR
-	struct m_tag    *mtag;
-
-	if ((mtag = m_tag_locate(m, KERNEL_MODULE_TAG_ID, KERNEL_TAG_TYPE_PF,
-	    NULL)) == NULL) {
-		mtag = m_tag_create(KERNEL_MODULE_TAG_ID, KERNEL_TAG_TYPE_PF,
-		    sizeof (struct pf_mtag), M_NOWAIT, m);
-		if (mtag == NULL)
-			return (NULL);
-		bzero(mtag + 1, sizeof (struct pf_mtag));
-		m_tag_prepend(m, mtag);
-	}
-	return ((struct pf_mtag *)(mtag + 1));
-#else
 	return (pf_find_mtag(m));
-#endif /* PF_PKTHDR */
 }
 
 uint64_t

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2003-2011 Apple Inc. All rights reserved.
+ * Copyright (c) 2003-2012 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -65,7 +65,7 @@
 #include <sys/sockio.h>
 #include <sys/kernel.h>
 #include <sys/syslog.h>
-#include <libkern/crypto/md5.h>
+#include <libkern/crypto/sha1.h>
 #include <libkern/OSAtomic.h>
 #include <kern/lock.h>
 
@@ -92,6 +92,11 @@
 
 #include <net/net_osdep.h>
 
+#define	IN6_IFSTAT_ALLOC_SIZE	\
+    sizeof(void *) + sizeof(struct in6_ifstat) + sizeof(uint64_t) 
+#define	ICMP6_IFSTAT_ALLOC_SIZE \
+    sizeof(void *) + sizeof(struct icmp6_ifstat) + sizeof(uint64_t)
+
 struct in6_ifstat **in6_ifstat = NULL;
 struct icmp6_ifstat **icmp6_ifstat = NULL;
 size_t in6_ifstatmax = 0;
@@ -117,23 +122,12 @@ static int get_ifid(struct ifnet *, struct ifnet *, struct in6_addr *);
 static int in6_ifattach_linklocal(struct ifnet *, struct ifnet *, struct in6_aliasreq *);
 static int in6_ifattach_loopback(struct ifnet *);
 
-#define EUI64_GBIT	0x01
-#define EUI64_UBIT	0x02
-#define EUI64_TO_IFID(in6)	do {(in6)->s6_addr[8] ^= EUI64_UBIT; } while (0)
-#define EUI64_GROUP(in6)	((in6)->s6_addr[8] & EUI64_GBIT)
-#define EUI64_INDIVIDUAL(in6)	(!EUI64_GROUP(in6))
-#define EUI64_LOCAL(in6)	((in6)->s6_addr[8] & EUI64_UBIT)
-#define EUI64_UNIVERSAL(in6)	(!EUI64_LOCAL(in6))
-
-#define IFID_LOCAL(in6)		(!EUI64_LOCAL(in6))
-#define IFID_UNIVERSAL(in6)	(!EUI64_UNIVERSAL(in6))
-
 /*
  * Generate a last-resort interface identifier, when the machine has no
  * IEEE802/EUI64 address sources.
  * The goal here is to get an interface identifier that is
  * (1) random enough and (2) does not change across reboot.
- * We currently use MD5(hostname) for it.
+ * We currently use SHA1(hostname) for it.
  *
  * in6 - upper 64bits are preserved
  */
@@ -142,8 +136,8 @@ get_rand_ifid(
 	__unused struct ifnet *ifp,
 	struct in6_addr *in6)	/* upper 64bits are preserved */
 {
-	MD5_CTX ctxt;
-	u_int8_t digest[16];
+	SHA1_CTX ctxt;
+	u_int8_t digest[SHA1_RESULTLEN];
 	int hostnlen	= strlen(hostname);
 
 #if 0
@@ -154,19 +148,19 @@ get_rand_ifid(
 
 	/* generate 8 bytes of pseudo-random value. */
 	bzero(&ctxt, sizeof(ctxt));
-	MD5Init(&ctxt);
-	MD5Update(&ctxt, hostname, hostnlen);
-	MD5Final(digest, &ctxt);
+	SHA1Init(&ctxt);
+	SHA1Update(&ctxt, hostname, hostnlen);
+	SHA1Final(digest, &ctxt);
 
 	/* assumes sizeof(digest) > sizeof(ifid) */
 	bcopy(digest, &in6->s6_addr[8], 8);
 
 	/* make sure to set "u" bit to local, and "g" bit to individual. */
-	in6->s6_addr[8] &= ~EUI64_GBIT;	/* g bit to "individual" */
-	in6->s6_addr[8] |= EUI64_UBIT;	/* u bit to "local" */
+	in6->s6_addr[8] &= ~ND6_EUI64_GBIT;	/* g bit to "individual" */
+	in6->s6_addr[8] |= ND6_EUI64_UBIT;	/* u bit to "local" */
 
 	/* convert EUI64 into IPv6 interface identifier */
-	EUI64_TO_IFID(in6);
+	ND6_EUI64_TO_IFID(in6);
 
 	return 0;
 }
@@ -177,8 +171,8 @@ generate_tmp_ifid(
 	const u_int8_t *seed1,
 	u_int8_t *ret)
 {
-	MD5_CTX ctxt;
-	u_int8_t seed[16], digest[16], nullbuf[8];
+	SHA1_CTX ctxt;
+	u_int8_t seed[16], nullbuf[8], digest[SHA1_RESULTLEN];
 	u_int32_t val32;
 	struct timeval tv;
 
@@ -211,17 +205,17 @@ generate_tmp_ifid(
 
 	/* generate 16 bytes of pseudo-random value. */
 	bzero(&ctxt, sizeof(ctxt));
-	MD5Init(&ctxt);
-	MD5Update(&ctxt, seed, sizeof(seed));
-	MD5Final(digest, &ctxt);
+	SHA1Init(&ctxt);
+	SHA1Update(&ctxt, seed, sizeof(seed));
+	SHA1Final(digest, &ctxt);
 
 	/*
 	 * RFC 4941 3.2.1. (3)
-	 * Take the left-most 64-bits of the MD5 digest and set bit 6 (the
+	 * Take the left-most 64-bits of the SHA1 digest and set bit 6 (the
 	 * left-most bit is numbered 0) to zero.
 	 */
 	bcopy(digest, ret, 8);
-	ret[0] &= ~EUI64_UBIT;
+	ret[0] &= ~ND6_EUI64_UBIT;
 
 	/*
 	 * XXX: we'd like to ensure that the generated value is not zero
@@ -230,7 +224,7 @@ generate_tmp_ifid(
 	 */
 	if (bcmp(nullbuf, ret, sizeof(nullbuf)) == 0) {
 		nd6log((LOG_INFO,
-		    "generate_tmp_ifid: computed MD5 value is zero.\n"));
+		    "generate_tmp_ifid: computed SHA1 value is zero.\n"));
 
 		microtime(&tv);
 		val32 = random() ^ tv.tv_usec;
@@ -239,7 +233,7 @@ generate_tmp_ifid(
 
 	/*
 	 * RFC 4941 3.2.1. (4)
-	 * Take the rightmost 64-bits of the MD5 digest and save them in
+	 * Take the next 64-bits of the SHA1 digest and save them in
 	 * stable storage as the history value to be used in the next
 	 * iteration of the algorithm.
 	 */
@@ -280,7 +274,7 @@ in6_get_hw_ifid(
 	/* Why doesn't this code use ifnet_addrs? */
 	ifnet_lock_shared(ifp);
 	ifa = ifp->if_lladdr;
-	sdl = (struct sockaddr_dl *)ifa->ifa_addr;
+	sdl = (struct sockaddr_dl *)(void *)ifa->ifa_addr;
 	if (sdl->sdl_alen == 0) {
 		ifnet_lock_done(ifp);
 		return (-1);
@@ -351,8 +345,8 @@ in6_get_hw_ifid(
 		/*
 		 * due to insufficient bitwidth, we mark it local.
 		 */
-		in6->s6_addr[8] &= ~EUI64_GBIT;	/* g bit to "individual" */
-		in6->s6_addr[8] |= EUI64_UBIT;	/* u bit to "local" */
+		in6->s6_addr[8] &= ~ND6_EUI64_GBIT;	/* g bit to "individual" */
+		in6->s6_addr[8] |= ND6_EUI64_UBIT;	/* u bit to "local" */
 		break;
 
 	case IFT_GIF:
@@ -375,17 +369,17 @@ in6_get_hw_ifid(
 	}
 
 	/* sanity check: g bit must not indicate "group" */
-	if (EUI64_GROUP(in6))
+	if (ND6_EUI64_GROUP(in6))
 		goto done;
 
 	/* convert EUI64 into IPv6 interface identifier */
-	EUI64_TO_IFID(in6);
+	ND6_EUI64_TO_IFID(in6);
 
 	/*
 	 * sanity check: ifid must not be all zero, avoid conflict with
 	 * subnet router anycast
 	 */
-	if ((in6->s6_addr[8] & ~(EUI64_GBIT | EUI64_UBIT)) == 0x00 &&
+	if ((in6->s6_addr[8] & ~(ND6_EUI64_GBIT | ND6_EUI64_UBIT)) == 0x00 &&
 	    bcmp(&in6->s6_addr[9], allzero, 7) == 0) {
 		goto done;
 	}
@@ -443,7 +437,7 @@ get_ifid(
 		 * to borrow ifid from other interface, ifid needs to be
 		 * globally unique
 		 */
-		if (IFID_UNIVERSAL(in6)) {
+		if (ND6_IFID_UNIVERSAL(in6)) {
 			nd6log((LOG_DEBUG,
 			    "%s: borrow interface identifier from %s\n",
 			    if_name(ifp0), if_name(ifp)));
@@ -685,8 +679,8 @@ in6_nigroup(
 {
 	const char *p;
 	u_char *q;
-	MD5_CTX ctxt;
-	u_int8_t digest[16];
+	SHA1_CTX ctxt;
+	u_int8_t digest[SHA1_RESULTLEN];
 	char l;
 	char n[64];	/* a single label must not exceed 63 chars */
 
@@ -708,10 +702,10 @@ in6_nigroup(
 
 	/* generate 8 bytes of pseudo-random value. */
 	bzero(&ctxt, sizeof(ctxt));
-	MD5Init(&ctxt);
-	MD5Update(&ctxt, &l, sizeof(l));
-	MD5Update(&ctxt, n, l);
-	MD5Final(digest, &ctxt);
+	SHA1Init(&ctxt);
+	SHA1Update(&ctxt, &l, sizeof(l));
+	SHA1Update(&ctxt, n, l);
+	SHA1Final(digest, &ctxt);
 
 	bzero(in6, sizeof(*in6));
 	in6->s6_addr16[0] = IPV6_ADDR_INT16_MLL;
@@ -756,6 +750,7 @@ in6_ifattach(
 	struct in6_ifaddr *ia;
 	struct in6_addr in6;
 	int error;
+	void *buf;
 
 	lck_rw_lock_exclusive(&in6_ifs_rwlock);
 	/*
@@ -776,29 +771,30 @@ in6_ifattach(
 		caddr_t q;
         
 		n = if_indexlim * sizeof(struct in6_ifstat *);
-		q = (caddr_t)_MALLOC(n, M_IFADDR, M_WAITOK);
+		q = (caddr_t)_MALLOC(n, M_IFADDR, M_WAITOK|M_ZERO);
 		if (q == NULL) {
 			lck_rw_done(&in6_ifs_rwlock);
 			return ENOBUFS;
 		}
-		bzero(q, n);
 		if (in6_ifstat) {
 			bcopy((caddr_t)in6_ifstat, q,
 				in6_ifstatmax * sizeof(struct in6_ifstat *));
 			FREE((caddr_t)in6_ifstat, M_IFADDR);
 		}
-		in6_ifstat = (struct in6_ifstat **)q;
+		in6_ifstat = (struct in6_ifstat **)(void *)q;
 		in6_ifstatmax = if_indexlim;
 	}
     
 	if (in6_ifstat[ifp->if_index] == NULL) {
-		in6_ifstat[ifp->if_index] = (struct in6_ifstat *)
-			_MALLOC(sizeof(struct in6_ifstat), M_IFADDR, M_WAITOK);
-		if (in6_ifstat[ifp->if_index] == NULL) {
+		buf = _MALLOC(IN6_IFSTAT_ALLOC_SIZE, M_IFADDR, M_WAITOK);
+		if (buf == NULL) {
 			lck_rw_done(&in6_ifs_rwlock);
 			return ENOBUFS;
 		}
-		bzero(in6_ifstat[ifp->if_index], sizeof(struct in6_ifstat));
+		bzero(buf, IN6_IFSTAT_ALLOC_SIZE);
+		in6_ifstat[ifp->if_index] = (struct in6_ifstat *)
+		    P2ROUNDUP((intptr_t)buf + sizeof(void *), sizeof(uint64_t));
+		VERIFY(IS_P2ALIGNED(in6_ifstat[ifp->if_index], sizeof(uint64_t)));
 	}
 	lck_rw_done(&in6_ifs_rwlock);
 
@@ -808,29 +804,30 @@ in6_ifattach(
 		caddr_t q;
         
 		n = if_indexlim * sizeof(struct icmp6_ifstat *);
-		q = (caddr_t)_MALLOC(n, M_IFADDR, M_WAITOK);
+		q = (caddr_t)_MALLOC(n, M_IFADDR, M_WAITOK|M_ZERO);
 		if (q == NULL) {
 			lck_rw_done(&icmp6_ifs_rwlock);
 			return ENOBUFS;
 		}
-		bzero(q, n);
 		if (icmp6_ifstat) {
 			bcopy((caddr_t)icmp6_ifstat, q,
 				icmp6_ifstatmax * sizeof(struct icmp6_ifstat *));
 			FREE((caddr_t)icmp6_ifstat, M_IFADDR);
 		}
-		icmp6_ifstat = (struct icmp6_ifstat **)q;
+		icmp6_ifstat = (struct icmp6_ifstat **)(void *)q;
 		icmp6_ifstatmax = if_indexlim;
 	}
 
 	if (icmp6_ifstat[ifp->if_index] == NULL) {
-		icmp6_ifstat[ifp->if_index] = (struct icmp6_ifstat *)
-			_MALLOC(sizeof(struct icmp6_ifstat), M_IFADDR, M_WAITOK);
-		if (icmp6_ifstat[ifp->if_index] == NULL) {
+		buf = _MALLOC(ICMP6_IFSTAT_ALLOC_SIZE, M_IFADDR, M_WAITOK);
+		if (buf == NULL) {
 			lck_rw_done(&icmp6_ifs_rwlock);
 			return ENOBUFS;
 		}
-		bzero(icmp6_ifstat[ifp->if_index], sizeof(struct icmp6_ifstat));
+		bzero(buf, ICMP6_IFSTAT_ALLOC_SIZE);
+		icmp6_ifstat[ifp->if_index] = (struct icmp6_ifstat *)
+		    P2ROUNDUP((intptr_t)buf + sizeof(void *), sizeof(uint64_t));
+		VERIFY(IS_P2ALIGNED(icmp6_ifstat[ifp->if_index], sizeof(uint64_t)));
 	}
 	lck_rw_done(&icmp6_ifs_rwlock);
 
@@ -1113,7 +1110,9 @@ in6_get_tmpifid(
 	struct nd_ifinfo *ndi;
 
 	lck_rw_lock_shared(nd_if_rwlock);
-	ndi = &nd_ifinfo[ifp->if_index];
+	ndi = ND_IFINFO(ifp);
+	VERIFY(ndi != NULL && ndi->initialized);
+	lck_mtx_lock(&ndi->lock);
 	bzero(nullbuf, sizeof(nullbuf));
 	if (bcmp(ndi->randomid, nullbuf, sizeof(nullbuf)) == 0) {
 		/* we've never created a random ID.  Create a new one. */
@@ -1128,13 +1127,14 @@ in6_get_tmpifid(
 					ndi->randomid);
 	}
 	bcopy(ndi->randomid, retbuf, 8);
+	lck_mtx_unlock(&ndi->lock);
 	lck_rw_done(nd_if_rwlock);
 }
 
 void
-in6_tmpaddrtimer(
-	__unused void *ignored_arg)
+in6_tmpaddrtimer(void *arg)
 {
+#pragma unused(arg)
 	int i;
 	struct nd_ifinfo *ndi;
 	u_int8_t nullbuf[8];
@@ -1143,23 +1143,25 @@ in6_tmpaddrtimer(
 		      (ip6_temp_preferred_lifetime - ip6_desync_factor -
 		       ip6_temp_regen_advance) * hz);
 
-	if (ip6_use_tempaddr) {
-		lck_rw_lock_shared(nd_if_rwlock);
-		bzero(nullbuf, sizeof(nullbuf));
-		for (i = 1; i < nd_ifinfo_indexlim + 1; i++) {
-			ndi = &nd_ifinfo[i];
-			if ((ndi->flags | ND6_IFF_PERFORMNUD) != ND6_IFF_PERFORMNUD)
-				continue;
-			if (bcmp(ndi->randomid, nullbuf, sizeof(nullbuf)) != 0) {
-				/*
-				 * We've been generating a random ID on this interface.
-				 * Create a new one.
-				 */
-				(void)generate_tmp_ifid(ndi->randomseed0,
-							ndi->randomseed1,
-							ndi->randomid);
-			}
+	lck_rw_lock_shared(nd_if_rwlock);
+	bzero(nullbuf, sizeof(nullbuf));
+	for (i = 1; i < if_index + 1; i++) {
+		if (!nd_ifinfo || i >= nd_ifinfo_indexlim)
+			break;
+		ndi = &nd_ifinfo[i];
+		if (!ndi->initialized)
+			continue;
+		lck_mtx_lock(&ndi->lock);
+		if (bcmp(ndi->randomid, nullbuf, sizeof(nullbuf)) != 0) {
+			/*
+			 * We've been generating a random ID on this interface.
+			 * Create a new one.
+			 */
+			(void)generate_tmp_ifid(ndi->randomseed0,
+						ndi->randomseed1,
+						ndi->randomid);
 		}
-		lck_rw_done(nd_if_rwlock);
+		lck_mtx_unlock(&ndi->lock);
 	}
+	lck_rw_done(nd_if_rwlock);
 }

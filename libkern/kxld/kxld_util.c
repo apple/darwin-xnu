@@ -271,7 +271,7 @@ validate_and_swap_macho_32(u_char *file, u_long size
     )
 {
     kern_return_t rval = KERN_FAILURE;
-    struct mach_header *mach_hdr = (struct mach_header *) file;
+    struct mach_header *mach_hdr = (struct mach_header *) ((void *) file);
     struct load_command *load_hdr = NULL;
     struct segment_command *seg_hdr = NULL;
     struct section *sects = NULL;
@@ -325,7 +325,7 @@ validate_and_swap_macho_32(u_char *file, u_long size
     for(i = 0; i < mach_hdr->ncmds; ++i, offset += cmdsize) {
 
         /* Get the load command and size */
-        load_hdr = (struct load_command *) (file + offset);
+        load_hdr = (struct load_command *) ((void *) (file + offset));
         cmd = load_hdr->cmd;
         cmdsize = load_hdr->cmdsize;
 
@@ -382,7 +382,7 @@ validate_and_swap_macho_32(u_char *file, u_long size
                     kxld_log(kKxldLogLinking, kKxldLogErr, kKxldLogTruncatedMachO));
 
                 /* Swap the relocation entries */
-                relocs = (struct relocation_info *) (file + sects[j].reloff);
+                relocs = (struct relocation_info *) ((void *) (file + sects[j].reloff));
 #if !KERNEL
                 if (swap) {
                     swap_relocation_info(relocs, sects[j].nreloc, 
@@ -412,7 +412,7 @@ validate_and_swap_macho_32(u_char *file, u_long size
 
 #if !KERNEL
             /* Swap the symbol table entries */
-            symtab = (struct nlist *) (file + symtab_hdr->symoff);
+            symtab = (struct nlist *) ((void *) (file + symtab_hdr->symoff));
             if (swap) swap_nlist(symtab, symtab_hdr->nsyms, host_order);
 #endif /* !KERNEL */
 
@@ -442,7 +442,7 @@ validate_and_swap_macho_64(u_char *file, u_long size
     )
 {
     kern_return_t rval = KERN_FAILURE;
-    struct mach_header_64 *mach_hdr = (struct mach_header_64 *) file;
+    struct mach_header_64 *mach_hdr = (struct mach_header_64 *) ((void *) file);
     struct load_command *load_hdr = NULL;
     struct segment_command_64 *seg_hdr = NULL;
     struct section_64 *sects = NULL;
@@ -495,7 +495,7 @@ validate_and_swap_macho_64(u_char *file, u_long size
     /* Validate and potentially swap the load commands */
     for(i = 0; i < mach_hdr->ncmds; ++i, offset += cmdsize) {
         /* Get the load command and size */
-        load_hdr = (struct load_command *) (file + offset);
+        load_hdr = (struct load_command *) ((void *) (file + offset));
         cmd = load_hdr->cmd;
         cmdsize = load_hdr->cmdsize;
 
@@ -513,7 +513,7 @@ validate_and_swap_macho_64(u_char *file, u_long size
         switch(cmd) {
         case LC_SEGMENT_64:
             /* Get and swap the segment header */
-            seg_hdr = (struct segment_command_64 *) load_hdr;
+            seg_hdr = (struct segment_command_64 *) ((void *) load_hdr);
 #if !KERNEL
             if (swap) swap_segment_command_64(seg_hdr, host_order);
 #endif /* !KERNEL */
@@ -551,7 +551,7 @@ validate_and_swap_macho_64(u_char *file, u_long size
                     kxld_log(kKxldLogLinking, kKxldLogErr, kKxldLogTruncatedMachO));
 
                 /* Swap the relocation entries */
-                relocs = (struct relocation_info *) (file + sects[j].reloff);
+                relocs = (struct relocation_info *) ((void *) (file + sects[j].reloff));
 #if !KERNEL
                 if (swap) {
                     swap_relocation_info(relocs, sects[j].nreloc, 
@@ -581,7 +581,7 @@ validate_and_swap_macho_64(u_char *file, u_long size
 
 #if !KERNEL
             /* Swap the symbol table entries */
-            symtab = (struct nlist_64 *) (file + symtab_hdr->symoff);
+            symtab = (struct nlist_64 *) ((void *) (file + symtab_hdr->symoff));
             if (swap) swap_nlist_64(symtab, symtab_hdr->nsyms, host_order);
 #endif /* !KERNEL */
 
@@ -607,7 +607,7 @@ finish:
 void unswap_macho(u_char *file, enum NXByteOrder host_order, 
     enum NXByteOrder target_order)
 {
-    struct mach_header *hdr = (struct mach_header *) file;
+    struct mach_header *hdr = (struct mach_header *) ((void *) file);
 
     if (!hdr) return;
 
@@ -624,7 +624,7 @@ static void
 unswap_macho_32(u_char *file, enum NXByteOrder host_order, 
     enum NXByteOrder target_order)
 {
-    struct mach_header *mach_hdr = (struct mach_header *) file;
+    struct mach_header *mach_hdr = (struct mach_header *) ((void *) file);
     struct load_command *load_hdr = NULL;
     struct segment_command *seg_hdr = NULL;
     struct section *sects = NULL;
@@ -641,7 +641,7 @@ unswap_macho_32(u_char *file, enum NXByteOrder host_order,
 
     offset = sizeof(*mach_hdr);
     for(i = 0; i < mach_hdr->ncmds; ++i, offset += size) {
-        load_hdr = (struct load_command *) (file + offset);
+        load_hdr = (struct load_command *) ((void *) (file + offset));
         cmd = load_hdr->cmd;
         size = load_hdr->cmdsize;
 
@@ -659,7 +659,7 @@ unswap_macho_32(u_char *file, enum NXByteOrder host_order,
             break;
         case LC_SYMTAB:
             symtab_hdr = (struct symtab_command *) load_hdr;
-            symtab = (struct nlist*) (file + symtab_hdr->symoff);
+            symtab = (struct nlist*) ((void *) (file + symtab_hdr->symoff));
 
             swap_nlist(symtab, symtab_hdr->nsyms, target_order);
             swap_symtab_command(symtab_hdr, target_order);
@@ -680,7 +680,7 @@ static void
 unswap_macho_64(u_char *file, enum NXByteOrder host_order, 
     enum NXByteOrder target_order)
 {
-    struct mach_header_64 *mach_hdr = (struct mach_header_64 *) file;
+    struct mach_header_64 *mach_hdr = (struct mach_header_64 *) ((void *) file);
     struct load_command *load_hdr = NULL;
     struct segment_command_64 *seg_hdr = NULL;
     struct section_64 *sects = NULL;
@@ -697,13 +697,13 @@ unswap_macho_64(u_char *file, enum NXByteOrder host_order,
 
     offset = sizeof(*mach_hdr);
     for(i = 0; i < mach_hdr->ncmds; ++i, offset += size) {
-        load_hdr = (struct load_command *) (file + offset);
+        load_hdr = (struct load_command *) ((void *) (file + offset));
         cmd = load_hdr->cmd;
         size = load_hdr->cmdsize;
 
         switch(cmd) {
         case LC_SEGMENT_64:
-            seg_hdr = (struct segment_command_64 *) load_hdr;
+            seg_hdr = (struct segment_command_64 *) ((void *) load_hdr);
             sects = (struct section_64 *) &seg_hdr[1];
 
             /* We don't need to unswap relocations because this function is
@@ -715,7 +715,7 @@ unswap_macho_64(u_char *file, enum NXByteOrder host_order,
             break;
         case LC_SYMTAB:
             symtab_hdr = (struct symtab_command *) load_hdr;
-            symtab = (struct nlist_64 *) (file + symtab_hdr->symoff);
+            symtab = (struct nlist_64 *) ((void *) (file + symtab_hdr->symoff));
 
             swap_nlist_64(symtab, symtab_hdr->nsyms, target_order);
             swap_symtab_command(symtab_hdr, target_order);

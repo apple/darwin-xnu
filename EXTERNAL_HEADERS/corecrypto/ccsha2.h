@@ -1,0 +1,62 @@
+/*
+ *  ccsha2.h
+ *  corecrypto
+ *
+ *  Created by Fabrice Gautier on 12/3/10.
+ *  Copyright 2010,2011 Apple Inc. All rights reserved.
+ *
+ */
+
+#ifndef _CORECRYPTO_CCSHA2_H_
+#define _CORECRYPTO_CCSHA2_H_
+
+#include <corecrypto/ccdigest.h>
+
+/* sha2 selectors */
+const struct ccdigest_info *ccsha224_di(void);
+const struct ccdigest_info *ccsha256_di(void);
+const struct ccdigest_info *ccsha384_di(void);
+const struct ccdigest_info *ccsha512_di(void);
+
+/* TODO: Placeholders */
+#define ccoid_sha224 ((unsigned char *)"\x06\x09\x60\x86\x48\x01\x65\x03\x04\x02\x04")
+#define ccoid_sha224_len 11
+
+#define ccoid_sha256 ((unsigned char *)"\x06\x09\x60\x86\x48\x01\x65\x03\x04\x02\x01")
+#define ccoid_sha256_len 11
+
+#define ccoid_sha384 ((unsigned char *)"\x06\x09\x60\x86\x48\x01\x65\x03\x04\x02\x02")
+#define ccoid_sha384_len 11
+
+#define ccoid_sha512 ((unsigned char *)"\x06\x09\x60\x86\x48\x01\x65\x03\x04\x02\x03")
+#define ccoid_sha512_len 11
+
+
+/* SHA256 */
+#define CCSHA256_BLOCK_SIZE  64
+#define	CCSHA256_OUTPUT_SIZE 32
+#define	CCSHA256_STATE_SIZE  32
+extern const struct ccdigest_info ccsha256_ltc_di;
+extern const struct ccdigest_info ccsha256_vng_intel_SSE3_di;
+extern const struct ccdigest_info ccsha256_vng_intel_NOSSE3_di;
+extern const struct ccdigest_info ccsha256_vng_armv7neon_di;
+extern const uint32_t ccsha256_K[64];
+
+/* SHA224 */
+#define	CCSHA224_OUTPUT_SIZE 28
+extern const struct ccdigest_info ccsha224_ltc_di;
+extern const struct ccdigest_info ccsha224_vng_intel_SSE3_di;
+extern const struct ccdigest_info ccsha224_vng_intel_NOSSE3_di;
+extern const struct ccdigest_info ccsha224_vng_armv7neon_di;
+
+/* SHA512 */
+#define CCSHA512_BLOCK_SIZE  128
+#define	CCSHA512_OUTPUT_SIZE  64
+#define	CCSHA512_STATE_SIZE   64
+extern const struct ccdigest_info ccsha512_ltc_di;
+
+/* SHA384 */
+#define	CCSHA384_OUTPUT_SIZE  48
+extern const struct ccdigest_info ccsha384_ltc_di;
+
+#endif /* _CORECRYPTO_CCSHA2_H_ */

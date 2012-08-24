@@ -21,7 +21,8 @@ INSTINC_SUBDIRS = \
 	vm \
 	libsa \
 	kdp \
-	pmc
+	pmc \
+	kperf
 INSTINC_SUBDIRS_I386 = \
 	mach	\
 	i386
@@ -29,9 +30,6 @@ INSTINC_SUBDIRS_X86_64 = \
 	mach	\
 	i386	\
 	x86_64
-INSTINC_SUBDIRS_ARM = \
-	mach	\
-	arm
 
 EXPINC_SUBDIRS = \
 	mach	\
@@ -50,7 +48,8 @@ EXPINC_SUBDIRS = \
 	libsa \
 	kdp \
 	console \
-	pmc
+	pmc \
+	kperf
 
 EXPINC_SUBDIRS_I386 = \
 	mach	\
@@ -59,9 +58,6 @@ EXPINC_SUBDIRS_X86_64 = \
 	mach	\
 	i386	\
 	x86_64
-EXPINC_SUBDIRS_ARM = \
-	mach	\
-	arm
 
 SETUP_SUBDIRS =
 

@@ -89,7 +89,7 @@ typedef	struct wide {
 
 typedef SInt32				OSStatus;
 
-#if defined(__LP64__) && defined(KERNEL)
+#if (defined(__LP64__) || defined (__arm__)) && defined(KERNEL)
 #ifndef ABSOLUTETIME_SCALAR_TYPE
 #define ABSOLUTETIME_SCALAR_TYPE    1
 #endif

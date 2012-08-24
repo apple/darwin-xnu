@@ -544,7 +544,9 @@ SYSCTL_DECL(_user);
 #define KERN_KDGETENTROPY       16
 #define KERN_KDWRITETR		17
 #define KERN_KDWRITEMAP		18
-
+#define KERN_KDENABLE_BG_TRACE	19
+#define KERN_KDDISABLE_BG_TRACE	20
+#define KERN_KDSET_TYPEFILTER   22
 
 /* KERN_PANICINFO types */
 #define	KERN_PANICINFO_MAXSIZE	1	/* quad: panic UI image size limit */

@@ -104,6 +104,7 @@ void panic_64(x86_saved_state_t *, int, const char *, boolean_t);
 
 extern volatile int panic_double_fault_cpu;
 
+
 #if defined(__x86_64__) && DEBUG
 /*
  * K64 debug - fatal handler for debug code in the trap vectors.
@@ -161,13 +162,13 @@ panic_32(__unused int code, __unused int pc, __unused const char *msg, boolean_t
 	      "CR0: 0x%08x, CR2: 0x%08x, CR3: 0x%08x, CR4: 0x%08x\n"
 	      "EAX: 0x%08x, EBX: 0x%08x, ECX: 0x%08x, EDX: 0x%08x\n"
 	      "ESP: 0x%08x, EBP: 0x%08x, ESI: 0x%08x, EDI: 0x%08x\n"
-	      "EFL: 0x%08x, EIP: 0x%08x\n",
+	      "EFL: 0x%08x, EIP: 0x%08x%s\n",
 		  msg,
 	      my_ktss->eip, code,
 	      (uint32_t)get_cr0(), (uint32_t)get_cr2(), (uint32_t)get_cr3(), (uint32_t)get_cr4(),
 	      my_ktss->eax, my_ktss->ebx, my_ktss->ecx, my_ktss->edx,
 	      my_ktss->esp, my_ktss->ebp, my_ktss->esi, my_ktss->edi,
-	      my_ktss->eflags, my_ktss->eip);
+	      my_ktss->eflags, my_ktss->eip, virtualized ? " VMM" : "");
 }
 
 /*
@@ -233,7 +234,7 @@ panic_64(x86_saved_state_t *sp, __unused int pc, __unused const char *msg, boole
 		      "RSP: 0x%016qx, RBP: 0x%016qx, RSI: 0x%016qx, RDI: 0x%016qx\n"
 		      "R8:  0x%016qx, R9:  0x%016qx, R10: 0x%016qx, R11: 0x%016qx\n"
 		      "R12: 0x%016qx, R13: 0x%016qx, R14: 0x%016qx, R15: 0x%016qx\n"
-		      "RFL: 0x%016qx, RIP: 0x%016qx, CR2: 0x%016qx\n",
+		      "RFL: 0x%016qx, RIP: 0x%016qx, CR2: 0x%016qx%s\n",
 			  msg,
 		      ss64p->isf.trapno, ss64p->isf.err,
 		      (uint32_t)get_cr0(), (uint32_t)get_cr2(), (uint32_t)get_cr3(), (uint32_t)get_cr4(),
@@ -241,7 +242,8 @@ panic_64(x86_saved_state_t *sp, __unused int pc, __unused const char *msg, boole
 		      ss64p->isf.rsp, ss64p->rbp, ss64p->rsi, ss64p->rdi,
 		      ss64p->r8, ss64p->r9, ss64p->r10, ss64p->r11,
 		      ss64p->r12, ss64p->r13, ss64p->r14, ss64p->r15,
-		      ss64p->isf.rflags, ss64p->isf.rip, ss64p->cr2);
+		      ss64p->isf.rflags, ss64p->isf.rip, ss64p->cr2,
+			  virtualized ? " VMM" : "");
 	} else {
 		x86_saved_state32_t	*ss32p = saved_state32(sp);
 		panic("%s at 0x%08x, trapno:0x%x, err:0x%x,"
@@ -249,13 +251,13 @@ panic_64(x86_saved_state_t *sp, __unused int pc, __unused const char *msg, boole
 		      "CR0: 0x%08x, CR2: 0x%08x, CR3: 0x%08x, CR4: 0x%08x\n"
 		      "EAX: 0x%08x, EBX: 0x%08x, ECX: 0x%08x, EDX: 0x%08x\n"
 		      "ESP: 0x%08x, EBP: 0x%08x, ESI: 0x%08x, EDI: 0x%08x\n"
-		      "EFL: 0x%08x, EIP: 0x%08x\n",
+		      "EFL: 0x%08x, EIP: 0x%08x%s\n",
 		      msg,
 			  ss32p->eip, ss32p->trapno, ss32p->err,
 		      (uint32_t)get_cr0(), (uint32_t)get_cr2(), (uint32_t)get_cr3(), (uint32_t)get_cr4(),
 		      ss32p->eax, ss32p->ebx, ss32p->ecx, ss32p->edx,
 		      ss32p->uesp, ss32p->ebp, ss32p->esi, ss32p->edi,
-		      ss32p->efl, ss32p->eip);
+		      ss32p->efl, ss32p->eip, virtualized ? " VMM" : "");
 	}
 #else
 	x86_saved_state64_t *regs = saved_state64(sp);
@@ -266,7 +268,7 @@ panic_64(x86_saved_state_t *sp, __unused int pc, __unused const char *msg, boole
 	      "R8:  0x%016llx, R9:  0x%016llx, R10: 0x%016llx, R11: 0x%016llx\n"
 	      "R12: 0x%016llx, R13: 0x%016llx, R14: 0x%016llx, R15: 0x%016llx\n"
 	      "RFL: 0x%016llx, RIP: 0x%016llx, CS:  0x%016llx, SS:  0x%016llx\n"
-	      "Error code: 0x%016llx\n",
+	      "Error code: 0x%016llx%s\n",
 	      msg,
 		  regs->isf.rip,
 	      get_cr0(), get_cr2(), get_cr3_raw(), get_cr4(),
@@ -275,7 +277,7 @@ panic_64(x86_saved_state_t *sp, __unused int pc, __unused const char *msg, boole
 	      regs->r8,  regs->r9,  regs->r10, regs->r11,
 	      regs->r12, regs->r13, regs->r14, regs->r15,
 	      regs->isf.rflags, regs->isf.rip, regs->isf.cs & 0xFFFF,  regs->isf.ss & 0xFFFF,
-	      regs->isf.err);
+	      regs->isf.err, virtualized ? " VMM" : "");
 #endif
 }
 

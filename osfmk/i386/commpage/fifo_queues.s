@@ -56,6 +56,9 @@
  * But we still must take a spinlock to serialize, and in case of page faults.
  */
 
+/* Work around 10062261 with a dummy non-local symbol */
+fifo_queue_dummy_symbol:	
+
 /*
  *	typedef	volatile struct {
  *		void	*opaque1;  <-- ptr to first queue element or null

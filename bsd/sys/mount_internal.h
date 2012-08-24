@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2010 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2011 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -265,7 +265,7 @@ extern struct mount * dead_mountp;
 #define MNTK_AUTH_OPAQUE_ACCESS 0x40000000      /* VNOP_ACCESS is reliable for remote auth */
 #define MNTK_EXTENDED_SECURITY	0x80000000	/* extended security supported */
 
-#define	MNT_LBUSY		0x00000001	/* mount is busy */
+#define	MNT_LNOTRESP		0x00000001	/* mount not responding */
 #define MNT_LUNMOUNT		0x00000002	/* mount in unmount */
 #define MNT_LFORCE		0x00000004	/* mount in forced unmount */
 #define MNT_LDRAIN		0x00000008	/* mount in drain */
@@ -319,9 +319,9 @@ struct vfstable {
 #define	VFC_VFSPREFLIGHT	0x040
 #define	VFC_VFSREADDIR_EXTENDED	0x080
 #define	VFC_VFS64BITREADY	0x100
-#ifndef __LP64__
+#if CONFIG_VFS_FUNNEL
 #define	VFC_VFSTHREADSAFE	0x200
-#endif /* __LP64__ */
+#endif /* CONFIG_VFS_FUNNEL */
 #define	VFC_VFSNOMACLABEL	0x1000
 #define	VFC_VFSVNOP_PAGEINV2	0x2000
 #define	VFC_VFSVNOP_PAGEOUTV2	0x4000
@@ -466,8 +466,10 @@ boolean_t vfs_iskernelmount(mount_t);
 #endif
 
 /* throttled I/O api */
-int throttle_get_io_policy(struct uthread **ut);
-int throttle_io_will_be_throttled(int lowpri_window_msecs, mount_t mp);
+int  throttle_get_io_policy(struct uthread **ut);
+int  throttle_io_will_be_throttled(int lowpri_window_msecs, mount_t mp);
+void throttle_info_update_by_mount(mount_t mp);
+void unthrottle_thread(uthread_t);
 
 /* throttled I/O helper function */
 /* convert the lowest bit to a device index */

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2011 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2012 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -78,28 +78,37 @@
 
 #define KEV_DL_SUBCLASS 2
 
-#define KEV_DL_SIFFLAGS	    1
-#define KEV_DL_SIFMETRICS   2
-#define KEV_DL_SIFMTU	    3
-#define KEV_DL_SIFPHYS	    4
-#define KEV_DL_SIFMEDIA	    5
-#define KEV_DL_SIFGENERIC   6
-#define KEV_DL_ADDMULTI	    7
-#define KEV_DL_DELMULTI	    8
-#define KEV_DL_IF_ATTACHED  9
-#define KEV_DL_IF_DETACHING 10
-#define KEV_DL_IF_DETACHED  11
-#define KEV_DL_LINK_OFF	    12
-#define KEV_DL_LINK_ON	    13
-#define KEV_DL_PROTO_ATTACHED	14
-#define KEV_DL_PROTO_DETACHED	15
-#define KEV_DL_LINK_ADDRESS_CHANGED	16
-#define KEV_DL_WAKEFLAGS_CHANGED	17
-#define KEV_DL_IF_IDLE_ROUTE_REFCNT	18
-#define KEV_DL_IFCAP_CHANGED		19
+#define KEV_DL_SIFFLAGS				1
+#define KEV_DL_SIFMETRICS			2
+#define KEV_DL_SIFMTU				3
+#define KEV_DL_SIFPHYS				4
+#define KEV_DL_SIFMEDIA				5
+#define KEV_DL_SIFGENERIC			6
+#define KEV_DL_ADDMULTI				7
+#define KEV_DL_DELMULTI				8
+#define KEV_DL_IF_ATTACHED			9
+#define KEV_DL_IF_DETACHING			10
+#define KEV_DL_IF_DETACHED			11
+#define KEV_DL_LINK_OFF				12
+#define KEV_DL_LINK_ON				13
+#define KEV_DL_PROTO_ATTACHED			14
+#define KEV_DL_PROTO_DETACHED			15
+#define KEV_DL_LINK_ADDRESS_CHANGED		16
+#define KEV_DL_WAKEFLAGS_CHANGED		17
+#define KEV_DL_IF_IDLE_ROUTE_REFCNT		18
+#define KEV_DL_IFCAP_CHANGED			19
+#define KEV_DL_LINK_QUALITY_METRIC_CHANGED	20
+#define KEV_DL_NODE_PRESENCE			21
+#define KEV_DL_NODE_ABSENCE			22
+#define KEV_DL_MASTER_ELECTED			23
 
 #include <net/if_var.h>
 #include <sys/types.h>
+
+#ifdef PRIVATE
+#include <net/if_dl.h>
+#include <netinet/in.h>
+#endif
 #endif
 
 #ifdef KERNEL_PRIVATE
@@ -142,24 +151,43 @@ struct if_clonereq32 {
 #define	IFF_ALTPHYS	IFF_LINK2	/* use alternate physical connection */
 #define	IFF_MULTICAST	0x8000		/* supports multicast */
 
-#ifdef KERNEL_PRIVATE
+#ifdef PRIVATE
 /* extended flags definitions:  (all bits are reserved for internal/future use) */
-#define IFEF_AUTOCONFIGURING	0x1
-#define IFEF_DVR_REENTRY_OK	0x20	/* When set, driver may be reentered from its own thread */
-#define IFEF_ACCEPT_RTADVD	0x40	/* set to accept IPv6 router advertisement on the interface */
-#define _IFEF_DETACHING		0x80	/* deprecated */
-#define IFEF_USEKPI		0x100	/* Set when interface is created through the KPIs */
+#define IFEF_AUTOCONFIGURING	0x1	/* allow BOOTP/DHCP replies to enter */
+#define _IFEF_DVR_REENTRY_OK	0x20	/* deprecated */
+#define IFEF_ACCEPT_RTADV	0x40	/* set to accept IPv6 Router Advertisement on the interface */
+#define IFEF_TXSTART		0x80	/* interface has start callback */
+#define IFEF_RXPOLL		0x100	/* interface supports opportunistic input polling */
 #define IFEF_VLAN		0x200	/* interface has one or more vlans */
 #define IFEF_BOND		0x400	/* interface is part of bond */
 #define	IFEF_ARPLL		0x800	/* ARP for IPv4LL addresses on this port */
 #define	IFEF_NOWINDOWSCALE	0x1000	/* Don't scale TCP window on iface */
 #define	IFEF_NOAUTOIPV6LL	0x2000	/* Interface IPv6 LinkLocal address not provided by kernel */
-#define IFEF_SERVICE_TRIGGERED	0x20000	/* interface is on-demand dynamically created/destroyed */
+#define	IFEF_IPV4_ROUTER	0x8000	/* set on internal-network-facing interface when in IPv4 router mode */
+#define	IFEF_IPV6_ROUTER	0x10000	/* set on internal-network-facing interface when in IPv6 router mode */
+#define IFEF_LOCALNET_PRIVATE	0x20000	/* local private network */
+#define IFEF_IPV6_ND6ALT	0x40000	/* alternative KPI for IPv6 neighbor discovery */
+#define IFEF_SERVICE_TRIGGERED	IFEF_LOCALNET_PRIVATE
+#define	IFEF_RESTRICTED_RECV	0x80000 /* interface restricts inbound pkts */
+#define	IFEF_AWDL		0x100000   /* Apple Wireless Direct Link */
+#define	IFEF_NOACKPRI		0x200000   /* Don't use TCP ACK prioritization on interface */
 #define	IFEF_SENDLIST		0x10000000 /* Interface supports sending a list of packets */
 #define _IFEF_REUSE		0x20000000 /* deprecated */
 #define _IFEF_INUSE		0x40000000 /* deprecated */
 #define IFEF_UPDOWNCHANGE	0x80000000 /* Interface's up/down state is changing */
+#ifdef XNU_KERNEL_PRIVATE
+/*
+ * Current requirements for an AWDL interface.  Setting/clearing IFEF_AWDL
+ * will also trigger the setting/clearing of the rest of the flags.  Once
+ * IFEF_AWDL is set, the rest of flags cannot be cleared, by definition.
+ */
+#define	IFEF_AWDL_MASK \
+	(IFEF_LOCALNET_PRIVATE | IFEF_IPV6_ND6ALT | IFEF_RESTRICTED_RECV | \
+	IFEF_AWDL)
+#endif /* XNU_KERNEL_PRIVATE */
+#endif /* PRIVATE */
 
+#ifdef KERNEL_PRIVATE
 /*
  * !!! NOTE !!!
  *
@@ -176,7 +204,6 @@ struct if_clonereq32 {
 #define	IFF_CANTCHANGE \
 	(IFF_BROADCAST|IFF_POINTOPOINT|IFF_RUNNING|IFF_OACTIVE|\
 	    IFF_SIMPLEX|IFF_MULTICAST|IFF_ALLMULTI)
-
 #endif /* KERNEL_PRIVATE */
 
 /*
@@ -213,7 +240,7 @@ struct if_clonereq32 {
 #define IFCAP_VALID (IFCAP_HWCSUM | IFCAP_TSO | IFCAP_LRO | IFCAP_VLAN_MTU | \
 	IFCAP_VLAN_HWTAGGING | IFCAP_JUMBO_MTU | IFCAP_AV)
 
-#define	IFQ_MAXLEN	50
+#define	IFQ_MAXLEN	128
 #define	IFNET_SLOWHZ	1		/* granularity is 1 second */
 
 /*
@@ -368,7 +395,7 @@ struct	ifreq {
 		int	ifru_mtu;
 		int	ifru_phys;
 		int	ifru_media;
-		int 	ifru_intval;
+		int	ifru_intval;
 		caddr_t	ifru_data;
 #ifdef KERNEL_PRIVATE
 		u_int64_t ifru_data64;	/* 64-bit ifru_data */
@@ -377,7 +404,18 @@ struct	ifreq {
 		struct	ifkpi	ifru_kpi;
 		u_int32_t ifru_wake_flags;
 		u_int32_t ifru_route_refcnt;
+#ifdef PRIVATE
+		int	ifru_link_quality_metric;
+#endif /* PRIVATE */
 		int     ifru_cap[2];
+#ifdef PRIVATE
+		struct {
+			uint32_t	ifo_flags;
+#define IFRIFOF_BLOCK_OPPORTUNISTIC	0x00000001
+			uint32_t	ifo_inuse;
+		} ifru_opportunistic;
+		u_int64_t ifru_eflags;
+#endif /* PRIVATE */
 	} ifr_ifru;
 #define	ifr_addr	ifr_ifru.ifru_addr	/* address */
 #define	ifr_dstaddr	ifr_ifru.ifru_dstaddr	/* other end of p-to-p link */
@@ -401,8 +439,15 @@ struct	ifreq {
 #define ifr_kpi		ifr_ifru.ifru_kpi
 #define ifr_wake_flags	ifr_ifru.ifru_wake_flags /* wake capabilities of devive */
 #define ifr_route_refcnt ifr_ifru.ifru_route_refcnt /* route references on interface */
+#ifdef PRIVATE
+#define ifr_link_quality_metric ifr_ifru.ifru_link_quality_metric /* LQM */
+#endif /* PRIVATE */
 #define ifr_reqcap      ifr_ifru.ifru_cap[0]    /* requested capabilities */
 #define ifr_curcap      ifr_ifru.ifru_cap[1]    /* current capabilities */
+#ifdef PRIVATE
+#define ifr_opportunistic	ifr_ifru.ifru_opportunistic    /* current capabilities */
+#define	ifr_eflags	ifr_ifru.ifru_eflags	/* extended flags  */
+#endif
 };
 
 #define	_SIZEOF_ADDR_IFREQ(ifr) \
@@ -561,6 +606,166 @@ struct if_laddrreq {
 	struct sockaddr_storage	addr;   /* in/out */
 	struct sockaddr_storage	dstaddr; /* out */
 };
+
+#ifdef PRIVATE
+/*
+ *	Link Quality Metrics
+ *
+ *	IFNET_LQM_THRESH_OFF	Metric is not available; device is off.
+ *	IFNET_LQM_THRESH_UNKNOWN Metric is not (yet) known.
+ *	IFNET_LQM_THRESH_POOR	Link quality is considered poor by driver.
+ *	IFNET_LQM_THRESH_GOOD	Link quality is considered good by driver.
+ */
+enum {
+	IFNET_LQM_THRESH_OFF		= (-2),
+	IFNET_LQM_THRESH_UNKNOWN	= (-1),
+	IFNET_LQM_THRESH_POOR		= 50,
+	IFNET_LQM_THRESH_GOOD		= 100
+};
+#ifdef XNU_KERNEL_PRIVATE
+#define	IFNET_LQM_MIN	IFNET_LQM_THRESH_OFF
+#define	IFNET_LQM_MAX	IFNET_LQM_THRESH_GOOD
+#endif /* XNU_KERNEL_PRIVATE */
+
+/*
+ * DLIL KEV_DL_LINK_QUALITY_METRIC_CHANGED structure
+ */
+struct kev_dl_link_quality_metric_data {
+	struct net_event_data	link_data;
+	int			link_quality_metric;
+};
+
+#define	IF_DESCSIZE	128
+
+/*
+ * Structure for SIOC[SG]IFDESC
+ */
+struct if_descreq {
+	char			ifdr_name[IFNAMSIZ];	/* interface name */
+	u_int32_t		ifdr_len;		/* up to IF_DESCSIZE */
+	u_int8_t		ifdr_desc[IF_DESCSIZE];	/* opaque data */
+};
+
+/*
+ *	Output packet scheduling models
+ *
+ *	IFNET_SCHED_MODEL_NORMAL The default output packet scheduling model
+ *		where the driver or media does not require strict scheduling
+ *		strategy, and that the networking stack is free to choose the
+ *		most appropriate scheduling and queueing algorithm, including
+ *		shaping traffics.
+ *	IFNET_SCHED_MODEL_DRIVER_MANAGED The alternative output packet
+ *		scheduling model where the driver or media requires strict
+ *		scheduling strategy (e.g. 802.11 WMM), and that the networking
+ *		stack is only responsible for creating multiple queues for the
+ *		corresponding service classes.
+ */
+enum {
+	IFNET_SCHED_MODEL_NORMAL		= 0,
+	IFNET_SCHED_MODEL_DRIVER_MANAGED	= 1,
+#ifdef XNU_KERNEL_PRIVATE
+	IFNET_SCHED_MODEL_MAX			= 2,
+#endif /* XNU_KERNEL_PRIVATE */
+};
+
+/*
+ * Values for iflpr_flags
+ */
+#define	IFLPRF_ALTQ		0x1	/* configured via PF/ALTQ */
+#define	IFLPRF_DRVMANAGED	0x2	/* output queue scheduled by drv */
+
+/*
+ * Structure for SIOCGIFLINKPARAMS
+ */
+struct if_linkparamsreq {
+	char		iflpr_name[IFNAMSIZ];	/* interface name */
+	u_int32_t	iflpr_flags;
+	u_int32_t	iflpr_output_sched;
+	u_int64_t	iflpr_output_tbr_rate;
+	u_int32_t	iflpr_output_tbr_percent;
+	struct if_bandwidths iflpr_output_bw;
+	struct if_bandwidths iflpr_input_bw;
+};
+
+/*
+ * Structure for SIOCGIFQUEUESTATS
+ */
+struct if_qstatsreq {
+	char		ifqr_name[IFNAMSIZ];	/* interface name */
+	u_int32_t	ifqr_slot;
+	void		*ifqr_buf		__attribute__((aligned(8)));
+	int		 ifqr_len		__attribute__((aligned(8)));
+};
+
+/*
+ * Node Proximity Metrics
+ */
+enum {
+	IFNET_NPM_THRESH_UNKNOWN	= (-1),
+	IFNET_NPM_THRESH_NEAR		= 30,
+	IFNET_NPM_THRESH_GENERAL	= 70,
+	IFNET_NPM_THRESH_FAR		= 100,
+};
+
+/*
+ *	Received Signal Strength Indication [special values]
+ *
+ *	IFNET_RSSI_UNKNOWN	Metric is not (yet) known.
+ */
+enum {
+	IFNET_RSSI_UNKNOWN	= ((-2147483647)-1),	/* INT32_MIN */
+};
+
+
+/*
+ * DLIL KEV_DL_NODE_PRESENCE/KEV_DL_NODE_ABSENCE event structures
+ */
+struct kev_dl_node_presence {
+	struct net_event_data   link_data;
+	struct sockaddr_in6	sin6_node_address;
+	struct sockaddr_dl	sdl_node_address;
+	int32_t			rssi;
+	int			link_quality_metric;
+	int			node_proximity_metric;
+	u_int8_t		node_service_info[48];
+};
+
+struct kev_dl_node_absence {
+	struct net_event_data   link_data;
+	struct sockaddr_in6	sin6_node_address;
+	struct sockaddr_dl	sdl_node_address;
+};
+
+/*
+ * Structure for SIOC[SG]IFTHROTTLE
+ */
+struct if_throttlereq {
+	char		ifthr_name[IFNAMSIZ];	/* interface name */
+	u_int32_t	ifthr_level;
+};
+
+/*
+ *	Interface throttling levels
+ *
+ *	IFNET_THROTTLE_OFF The default throttling level (no throttling.)
+ *		All service class queues operate normally according to the
+ *		standard packet scheduler configuration.
+ *	IFNET_THROTTLE_OPPORTUNISTIC One or more service class queues that
+ *		are responsible for managing "opportunistic" traffics are
+ *		suspended.  Packets enqueued on those queues will be dropped
+ *		and a flow advisory error will be generated to the data
+ *		source.  Existing packets in the queues will stay enqueued
+ *		until the interface is no longer throttled, or until they
+ *		are explicitly flushed.
+ */
+enum {
+	IFNET_THROTTLE_OFF			= 0,
+	IFNET_THROTTLE_OPPORTUNISTIC		= 1,
+#ifdef XNU_KERNEL_PRIVATE
+	IFNET_THROTTLE_MAX			= 2,
+#endif /* XNU_KERNEL_PRIVATE */
+};
+#endif /* PRIVATE */
 
 #ifdef KERNEL
 #ifdef MALLOC_DECLARE

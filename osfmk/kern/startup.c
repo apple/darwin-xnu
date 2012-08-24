@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2009 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2010 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -225,13 +225,11 @@ kernel_bootstrap(void)
 	kernel_bootstrap_kprintf("calling clock_init\n");
 	clock_init();
 
+	ledger_init();
 
 	/*
 	 *	Initialize the IPC, task, and thread subsystems.
 	 */
-	kernel_bootstrap_kprintf("calling ledger_init\n");
-	ledger_init();
-
 	kernel_bootstrap_kprintf("calling task_init\n");
 	task_init();
 
@@ -249,19 +247,14 @@ kernel_bootstrap(void)
 	thread->state = TH_RUN;
 	thread_deallocate(thread);
 
-	/* transfer statistics from init thread to kernel */
-	thread_t init_thread = current_thread();
-	kernel_task->tkm_private.alloc = init_thread->tkm_private.alloc;
-	kernel_task->tkm_private.free = init_thread->tkm_private.free;
-	kernel_task->tkm_shared.alloc = init_thread->tkm_shared.alloc;
-	kernel_task->tkm_shared.free = init_thread->tkm_shared.free;
-
 	kernel_bootstrap_kprintf("calling load_context - done\n");
 	load_context(thread);
 	/*NOTREACHED*/
 }
 
 int kth_started = 0;
+
+vm_offset_t vm_kernel_addrperm;
 
 /*
  * Now running in a thread.  Kick off other services,
@@ -383,10 +376,20 @@ kernel_bootstrap_thread(void)
 	 */
 	vm_shared_region_init();
 	vm_commpage_init();
+	vm_commpage_text_init();
 
 #if CONFIG_MACF
 	mac_policy_initmach();
 #endif
+
+	/*
+	 * Initialize the global used for permuting kernel
+	 * addresses that may be exported to userland as tokens
+	 * using VM_KERNEL_ADDRPERM(). Force the random number
+	 * to be odd to avoid mapping a non-zero
+	 * word-aligned address to zero via addition.
+	 */
+	vm_kernel_addrperm = (vm_offset_t)early_random() | 1;
 
 	/*
 	 *	Start the user bootstrap.
@@ -496,7 +499,7 @@ load_context(
 	 * should never occur since the thread is expected
 	 * to have reserved stack.
 	 */
-	load_context_kprintf("stack %x, stackptr %x\n", 
+	load_context_kprintf("thread %p, stack %x, stackptr %x\n", thread, 
 			     thread->kernel_stack, thread->machine.kstackptr);
 	if (!thread->kernel_stack) {
 		load_context_kprintf("calling stack_alloc_try\n");
@@ -560,7 +563,6 @@ scale_setup()
 	bsd_scale_setup(scale);
 	
 	ipc_space_max = SPACE_MAX;
-	ipc_tree_entry_max = ITE_MAX;
 	ipc_port_max = PORT_MAX;
 	ipc_pset_max = SET_MAX;
 	semaphore_max = SEMAPHORE_MAX;

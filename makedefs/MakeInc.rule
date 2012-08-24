@@ -51,9 +51,9 @@ ifndef INSTALL_KF_MD_GEN_LIST
 endif
 
 ifneq ($(MACHINE_CONFIG), DEFAULT)
-	OBJPATH = $(OBJROOT)/$(KERNEL_CONFIG)_$(ARCH_CONFIG)_$(MACHINE_CONFIG)
+	export OBJPATH = $(OBJROOT)/$(KERNEL_CONFIG)_$(ARCH_CONFIG)_$(MACHINE_CONFIG)
 else
-	OBJPATH = $(OBJROOT)/$(KERNEL_CONFIG)_$(ARCH_CONFIG)
+	export OBJPATH = $(OBJROOT)/$(KERNEL_CONFIG)_$(ARCH_CONFIG)
 endif
 
 INSTALL_MI_GEN_FILES = $(addprefix $(DSTROOT)/$(INCDIR)/$(INSTALL_MI_DIR)/, $(INSTALL_MI_GEN_LIST))
@@ -513,13 +513,14 @@ endif
 # Compilation rules to generate .o from .s
 #
 
-S_RULE_1A=$(_v)${S_KCC} -c -MD ${SFLAGS} -DASSEMBLER ${INCFLAGS} ${$@_INCFLAGS}
+S_RULE_1A=$(_v)${S_KCC} -c ${SFLAGS} -MD -DASSEMBLER ${$@_SFLAGS_ADD} ${INCFLAGS} ${$@_INCFLAGS}
 S_RULE_1B=$*.s
 S_RULE_2=@echo AS $@
 S_RULE_3=
 
 #
 # Compilation rules to generate .o from .c for normal files
+# 
 C_RULE_1A=$(_v)${KCC} -c ${filter-out ${$@_CFLAGS_RM}, ${CFLAGS} ${CWARNFLAGS}} -MD ${$@_CFLAGS_ADD} ${$@_CWARNFLAGS_ADD} ${INCFLAGS} ${$@_INCFLAGS} 
 C_RULE_1B=$*.c
 C_RULE_2=@echo CC $@
@@ -527,10 +528,18 @@ ifeq ($(BUILD_MACHO_OBJ),0)
 C_RULE_3=
 else ifeq ($(BUILD_STABS),1)
 C_RULE_3=
+else ifeq ($(BUILD_DWARF),1)
+C_RULE_3=$(_v)${CTFCONVERT} -l xnu -v -o $@.ctf $@ > /dev/null && $(CTFSCRUB) `cat $(SRCROOT)/config/DtraceIgnored.symbols` $@.ctf || true;
 else
-C_RULE_3=$(_v)${CTFCONVERT} -l xnu -v -o $(TARGET)$(COMP_OBJ_DIR)/$(KERNEL_CONFIG)/$@.ctf $@ > /dev/null && $(CTFSCRUB) `cat $(SRCROOT)/config/DtraceIgnored.symbols` $(TARGET)$(COMP_OBJ_DIR)/$(KERNEL_CONFIG)/$@.ctf || true;
+C_RULE_3=
 endif
 C_RULE_4=
+
+ifeq ($(ARCH_CONFIG),ARM)
+ifeq ($(KERNEL_CONFIG),RELEASE)
+C_RULE_3=
+endif
+endif
 
 #
 # Compilation rules to generate .o from .c for driver files
@@ -553,10 +562,17 @@ ifeq ($(BUILD_MACHO_OBJ),0)
 P_RULE_4=
 else ifeq ($(BUILD_STABS),1)
 P_RULE_4=
+else ifeq ($(BUILD_DWARF),1)
+P_RULE_4=$(_v)${CTFCONVERT} -l xnu -v -o $@.ctf $@ > /dev/null && $(CTFSCRUB) `cat $(SRCROOT)/config/DtraceIgnored.symbols` $@.ctf || true;
 else
-P_RULE_4=$(_v)${CTFCONVERT} -l xnu -v -o $(TARGET)$(COMP_OBJ_DIR)/$(KERNEL_CONFIG)/$@.ctf $@ > /dev/null && $(CTFSCRUB) `cat $(SRCROOT)/config/DtraceIgnored.symbols` $(TARGET)$(COMP_OBJ_DIR)/$(KERNEL_CONFIG)/$@.ctf || true;
+P_RULE_4=
 endif
 
+ifeq ($(ARCH_CONFIG),ARM)
+ifeq ($(KERNEL_CONFIG),RELEASE)
+P_RULE_4=
+endif
+endif
 
 setup_build_all: 
 
@@ -582,6 +598,7 @@ $(TARGET)/mach_kernel: $(addprefix $(TARGET)/,$(foreach component,$(COMPONENT_LI
 	$(_v)if [ $(BUILD_DWARF)  -eq  1 ]; then \
 		echo DSYMUTIL mach_kernel.sys; \
 		$(DSYMUTIL) $(DSYMUTIL_FLAGS) $(TARGET)/mach_kernel.sys -o $(TARGET)/mach_kernel.sys.dSYM > /dev/null; \
+		$(MKDIR) $(TARGET)/mach_kernel.sys.dSYM/$(DSYMRESDIR); \
 		$(INSTALL) $(INSTALL_FLAGS) $(SRCROOT)/kgmacros $(TARGET)/mach_kernel.sys.dSYM/$(DSYMRESDIR)/kgmacros; \
 	fi;
 	$(_v)if [ $(MACHINE_CONFIG) != DEFAULT ] ; then     \
@@ -591,18 +608,30 @@ $(TARGET)/mach_kernel: $(addprefix $(TARGET)/,$(foreach component,$(COMPONENT_LI
 	fi;
 	@echo STRIP mach_kernel
 	$(_v)$(STRIP) $(STRIP_FLAGS) $(TARGET)/mach_kernel.sys -o $(TARGET)/mach_kernel
-	$(_v)if [ $(BUILD_MACHO_OBJ) -eq 1 -a $(BUILD_DWARF) -eq 1 ]; then			\
+
+	$(_v)kernel_config=$(KERNEL_CONFIG);				   \
+	onearch=$(ARCH_CONFIG);								   \
+	skip_ctf=FALSE;										   \
+	if [ $${kernel_config} = RELEASE ]; then          	   \
+	    if [[ $${onearch} = ARM ]]; then	\
+            skip_ctf=TRUE;                                 \
+            echo "Skipping CTF processing"; 			   \
+		fi												   \
+    fi;													   \
+    if [ $${skip_ctf} = FALSE ]; then					   \
+	if [ $(BUILD_MACHO_OBJ) -eq 1 -a $(BUILD_DWARF) -eq 1 ]; then	   \
 		echo CTFMERGE mach_kernel;   		     	\
 		$(FIND) $(OBJPATH)/ -name \*.ctf -size 0	\
 			-exec $(RM) -rf {} \;	;		\
-		$(CTFMERGE) -l xnu -o $(TARGET)/mach_kernel     \
-			    -Z $(TARGET)/mach_kernel.ctfdata	\
-			    $(OBJPATH)/*/$(KERNEL_CONFIG)/*.*o.ctf || true; 	\
+		$(FIND) $(OBJPATH)/ -name \*.ctf |		\
+			$(XARGS) $(CTFMERGE) -l xnu -o $(TARGET)/mach_kernel \
+			    -Z $(TARGET)/mach_kernel.ctfdata || true; 	\
 		echo CTFINSERT mach_kernel;   		     	\
 		$(CTFINSERT) $(TARGET)/mach_kernel		\
 			 $($(addsuffix $(ARCH_CONFIG),ARCH_FLAGS_)) $(TARGET)/mach_kernel.ctfdata \
 			 -o $(TARGET)/mach_kernel || true;	\
 			 $(RM) -f $(TARGET)/mach_kernel.ctfdata > /dev/null || true; \
+	fi;							\
 	fi;							\
 
 version.o: $(OBJPATH)/version.c
@@ -632,6 +661,7 @@ build_mach_kernel_exports:
 	$(_v)${MAKE}					\
 		MAKEFILES=${SOURCE}/config/Makefile	\
 		SOURCE=${SOURCE}/config			\
+		RELATIVE_SOURCE_PATH=${RELATIVE_SOURCE_PATH}/config	\
 		TARGET=$${TARGET}			\
 	build_mach_kernel_exports;
 
@@ -663,11 +693,19 @@ $(INSTALL_KERNEL_FILE_FILES): $(TARGET)/mach_kernel force_kernel_file_install
 	fi
 
 INSTALL_KERNEL_FILESYS_FILES = $(addprefix $(SYMROOT)$(INSTALL_KERNEL_DIR), $(INSTALL_KERNEL_FILE))
+ifeq ($(PLATFORM),iPhoneOS)
+INSTALL_KERNEL_FILESYS_FILES += $(addprefix $(DSTROOT)$(INSTALL_KERNEL_SYM_DIR), $(INSTALL_KERNEL_FILE))
+endif
 
 force_kernel_filesys_install:
 
 $(INSTALL_KERNEL_FILESYS_FILES): $(TARGET)/mach_kernel.sys force_kernel_filesys_install
 	@echo Installing $< in $@;
+ifeq ($(PLATFORM),iPhoneOS)
+	$(_v)if [ ! -e $(DSTROOT)$(INSTALL_KERNEL_SYM_DIR) ]; then	\
+		$(MKDIR) $(DSTROOT)$(INSTALL_KERNEL_SYM_DIR);		\
+	fi;
+endif
 	$(_v)if [ ! -e $(SYMROOT)$(INSTALL_KERNEL_DIR) ]; then	\
 		$(MKDIR) $(SYMROOT)$(INSTALL_KERNEL_DIR);		\
 	fi;							\

@@ -176,6 +176,9 @@
 
 #define	PMAP_PCID_PRESERVE (1ULL << 63)
 #define	PMAP_PCID_MASK (0xFFF)
+
+#define RDRAND_RAX 	.byte 0x48, 0x0f, 0xc7, 0xf0
+
 #ifndef	ASSEMBLER
 
 #include <sys/cdefs.h>

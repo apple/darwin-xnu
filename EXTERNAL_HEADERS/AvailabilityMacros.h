@@ -97,7 +97,7 @@
 #define MAC_OS_X_VERSION_10_5 1050
 #define MAC_OS_X_VERSION_10_6 1060
 #define MAC_OS_X_VERSION_10_7 1070
-
+#define MAC_OS_X_VERSION_10_8 1080
 
 /* 
  * If min OS not specified, assume 10.1 for ppc and 10.4 for all others
@@ -121,13 +121,13 @@
 #endif
 
 /*
- * if max OS not specified, assume largerof(10.6, min)
+ * if max OS not specified, assume larger of (10.8, min)
  */
 #ifndef MAC_OS_X_VERSION_MAX_ALLOWED
-    #if MAC_OS_X_VERSION_MIN_REQUIRED > MAC_OS_X_VERSION_10_7
+    #if MAC_OS_X_VERSION_MIN_REQUIRED > MAC_OS_X_VERSION_10_8
         #define MAC_OS_X_VERSION_MAX_ALLOWED MAC_OS_X_VERSION_MIN_REQUIRED
     #else
-        #define MAC_OS_X_VERSION_MAX_ALLOWED MAC_OS_X_VERSION_10_7
+        #define MAC_OS_X_VERSION_MAX_ALLOWED MAC_OS_X_VERSION_10_8
     #endif
 #endif
 
@@ -171,7 +171,6 @@
 #endif
 
 
-
 /*
  * AVAILABLE_MAC_OS_X_VERSION_10_0_AND_LATER
  * 
@@ -194,11 +193,6 @@
  */
 #define DEPRECATED_IN_MAC_OS_X_VERSION_10_0_AND_LATER     DEPRECATED_ATTRIBUTE
 
-
-
-
-
-
 /*
  * AVAILABLE_MAC_OS_X_VERSION_10_1_AND_LATER
  * 
@@ -214,8 +208,8 @@
 
 /*
  * AVAILABLE_MAC_OS_X_VERSION_10_1_AND_LATER_BUT_DEPRECATED
- * 
- * Used on declarations introduced in Mac OS X 10.1, 
+ *
+ * Used on declarations introduced in Mac OS X 10.1,
  * and deprecated in Mac OS X 10.1
  */
 #if MAC_OS_X_VERSION_MIN_REQUIRED >= MAC_OS_X_VERSION_10_1
@@ -226,8 +220,8 @@
 
 /*
  * AVAILABLE_MAC_OS_X_VERSION_10_0_AND_LATER_BUT_DEPRECATED_IN_MAC_OS_X_VERSION_10_1
- * 
- * Used on declarations introduced in Mac OS X 10.0, 
+ *
+ * Used on declarations introduced in Mac OS X 10.0,
  * but later deprecated in Mac OS X 10.1
  */
 #if MAC_OS_X_VERSION_MIN_REQUIRED >= MAC_OS_X_VERSION_10_1
@@ -238,19 +232,14 @@
 
 /*
  * DEPRECATED_IN_MAC_OS_X_VERSION_10_1_AND_LATER
- * 
- * Used on types deprecated in Mac OS X 10.1 
+ *
+ * Used on types deprecated in Mac OS X 10.1
  */
 #if MAC_OS_X_VERSION_MIN_REQUIRED >= MAC_OS_X_VERSION_10_1
     #define DEPRECATED_IN_MAC_OS_X_VERSION_10_1_AND_LATER    DEPRECATED_ATTRIBUTE
 #else
     #define DEPRECATED_IN_MAC_OS_X_VERSION_10_1_AND_LATER
 #endif
-
-
-
-
-
 
 
 /*
@@ -268,8 +257,8 @@
 
 /*
  * AVAILABLE_MAC_OS_X_VERSION_10_2_AND_LATER_BUT_DEPRECATED
- * 
- * Used on declarations introduced in Mac OS X 10.2, 
+ *
+ * Used on declarations introduced in Mac OS X 10.2,
  * and deprecated in Mac OS X 10.2
  */
 #if MAC_OS_X_VERSION_MIN_REQUIRED >= MAC_OS_X_VERSION_10_2
@@ -280,8 +269,8 @@
 
 /*
  * AVAILABLE_MAC_OS_X_VERSION_10_0_AND_LATER_BUT_DEPRECATED_IN_MAC_OS_X_VERSION_10_2
- * 
- * Used on declarations introduced in Mac OS X 10.0, 
+ *
+ * Used on declarations introduced in Mac OS X 10.0,
  * but later deprecated in Mac OS X 10.2
  */
 #if MAC_OS_X_VERSION_MIN_REQUIRED >= MAC_OS_X_VERSION_10_2
@@ -292,8 +281,8 @@
 
 /*
  * AVAILABLE_MAC_OS_X_VERSION_10_1_AND_LATER_BUT_DEPRECATED_IN_MAC_OS_X_VERSION_10_2
- * 
- * Used on declarations introduced in Mac OS X 10.1, 
+ *
+ * Used on declarations introduced in Mac OS X 10.1,
  * but later deprecated in Mac OS X 10.2
  */
 #if MAC_OS_X_VERSION_MIN_REQUIRED >= MAC_OS_X_VERSION_10_2
@@ -304,17 +293,14 @@
 
 /*
  * DEPRECATED_IN_MAC_OS_X_VERSION_10_2_AND_LATER
- * 
- * Used on types deprecated in Mac OS X 10.2 
+ *
+ * Used on types deprecated in Mac OS X 10.2
  */
 #if MAC_OS_X_VERSION_MIN_REQUIRED >= MAC_OS_X_VERSION_10_2
     #define DEPRECATED_IN_MAC_OS_X_VERSION_10_2_AND_LATER    DEPRECATED_ATTRIBUTE
 #else
     #define DEPRECATED_IN_MAC_OS_X_VERSION_10_2_AND_LATER
 #endif
-
-
-
 
 
 /*
@@ -332,8 +318,8 @@
 
 /*
  * AVAILABLE_MAC_OS_X_VERSION_10_3_AND_LATER_BUT_DEPRECATED
- * 
- * Used on declarations introduced in Mac OS X 10.3, 
+ *
+ * Used on declarations introduced in Mac OS X 10.3,
  * and deprecated in Mac OS X 10.3
  */
 #if MAC_OS_X_VERSION_MIN_REQUIRED >= MAC_OS_X_VERSION_10_3
@@ -344,8 +330,8 @@
 
 /*
  * AVAILABLE_MAC_OS_X_VERSION_10_0_AND_LATER_BUT_DEPRECATED_IN_MAC_OS_X_VERSION_10_3
- * 
- * Used on declarations introduced in Mac OS X 10.0, 
+ *
+ * Used on declarations introduced in Mac OS X 10.0,
  * but later deprecated in Mac OS X 10.3
  */
 #if MAC_OS_X_VERSION_MIN_REQUIRED >= MAC_OS_X_VERSION_10_3
@@ -356,8 +342,8 @@
 
 /*
  * AVAILABLE_MAC_OS_X_VERSION_10_1_AND_LATER_BUT_DEPRECATED_IN_MAC_OS_X_VERSION_10_3
- * 
- * Used on declarations introduced in Mac OS X 10.1, 
+ *
+ * Used on declarations introduced in Mac OS X 10.1,
  * but later deprecated in Mac OS X 10.3
  */
 #if MAC_OS_X_VERSION_MIN_REQUIRED >= MAC_OS_X_VERSION_10_3
@@ -368,8 +354,8 @@
 
 /*
  * AVAILABLE_MAC_OS_X_VERSION_10_2_AND_LATER_BUT_DEPRECATED_IN_MAC_OS_X_VERSION_10_3
- * 
- * Used on declarations introduced in Mac OS X 10.2, 
+ *
+ * Used on declarations introduced in Mac OS X 10.2,
  * but later deprecated in Mac OS X 10.3
  */
 #if MAC_OS_X_VERSION_MIN_REQUIRED >= MAC_OS_X_VERSION_10_3
@@ -380,18 +366,14 @@
 
 /*
  * DEPRECATED_IN_MAC_OS_X_VERSION_10_3_AND_LATER
- * 
- * Used on types deprecated in Mac OS X 10.3 
+ *
+ * Used on types deprecated in Mac OS X 10.3
  */
 #if MAC_OS_X_VERSION_MIN_REQUIRED >= MAC_OS_X_VERSION_10_3
     #define DEPRECATED_IN_MAC_OS_X_VERSION_10_3_AND_LATER    DEPRECATED_ATTRIBUTE
 #else
     #define DEPRECATED_IN_MAC_OS_X_VERSION_10_3_AND_LATER
 #endif
-
-
-
-
 
 
 /*
@@ -409,8 +391,8 @@
 
 /*
  * AVAILABLE_MAC_OS_X_VERSION_10_4_AND_LATER_BUT_DEPRECATED
- * 
- * Used on declarations introduced in Mac OS X 10.4, 
+ *
+ * Used on declarations introduced in Mac OS X 10.4,
  * and deprecated in Mac OS X 10.4
  */
 #if MAC_OS_X_VERSION_MIN_REQUIRED >= MAC_OS_X_VERSION_10_4
@@ -421,8 +403,8 @@
 
 /*
  * AVAILABLE_MAC_OS_X_VERSION_10_0_AND_LATER_BUT_DEPRECATED_IN_MAC_OS_X_VERSION_10_4
- * 
- * Used on declarations introduced in Mac OS X 10.0, 
+ *
+ * Used on declarations introduced in Mac OS X 10.0,
  * but later deprecated in Mac OS X 10.4
  */
 #if MAC_OS_X_VERSION_MIN_REQUIRED >= MAC_OS_X_VERSION_10_4
@@ -433,8 +415,8 @@
 
 /*
  * AVAILABLE_MAC_OS_X_VERSION_10_1_AND_LATER_BUT_DEPRECATED_IN_MAC_OS_X_VERSION_10_4
- * 
- * Used on declarations introduced in Mac OS X 10.1, 
+ *
+ * Used on declarations introduced in Mac OS X 10.1,
  * but later deprecated in Mac OS X 10.4
  */
 #if MAC_OS_X_VERSION_MIN_REQUIRED >= MAC_OS_X_VERSION_10_4
@@ -445,8 +427,8 @@
 
 /*
  * AVAILABLE_MAC_OS_X_VERSION_10_2_AND_LATER_BUT_DEPRECATED_IN_MAC_OS_X_VERSION_10_4
- * 
- * Used on declarations introduced in Mac OS X 10.2, 
+ *
+ * Used on declarations introduced in Mac OS X 10.2,
  * but later deprecated in Mac OS X 10.4
  */
 #if MAC_OS_X_VERSION_MIN_REQUIRED >= MAC_OS_X_VERSION_10_4
@@ -457,8 +439,8 @@
 
 /*
  * AVAILABLE_MAC_OS_X_VERSION_10_3_AND_LATER_BUT_DEPRECATED_IN_MAC_OS_X_VERSION_10_4
- * 
- * Used on declarations introduced in Mac OS X 10.3, 
+ *
+ * Used on declarations introduced in Mac OS X 10.3,
  * but later deprecated in Mac OS X 10.4
  */
 #if MAC_OS_X_VERSION_MIN_REQUIRED >= MAC_OS_X_VERSION_10_4
@@ -469,17 +451,14 @@
 
 /*
  * DEPRECATED_IN_MAC_OS_X_VERSION_10_4_AND_LATER
- * 
- * Used on types deprecated in Mac OS X 10.4 
+ *
+ * Used on types deprecated in Mac OS X 10.4
  */
 #if MAC_OS_X_VERSION_MIN_REQUIRED >= MAC_OS_X_VERSION_10_4
     #define DEPRECATED_IN_MAC_OS_X_VERSION_10_4_AND_LATER    DEPRECATED_ATTRIBUTE
 #else
     #define DEPRECATED_IN_MAC_OS_X_VERSION_10_4_AND_LATER
 #endif
-
-
-
 
 
 /*
@@ -497,8 +476,8 @@
 
 /*
  * AVAILABLE_MAC_OS_X_VERSION_10_5_AND_LATER_BUT_DEPRECATED
- * 
- * Used on declarations introduced in Mac OS X 10.5, 
+ *
+ * Used on declarations introduced in Mac OS X 10.5,
  * and deprecated in Mac OS X 10.5
  */
 #if MAC_OS_X_VERSION_MIN_REQUIRED >= MAC_OS_X_VERSION_10_5
@@ -509,8 +488,8 @@
 
 /*
  * AVAILABLE_MAC_OS_X_VERSION_10_0_AND_LATER_BUT_DEPRECATED_IN_MAC_OS_X_VERSION_10_5
- * 
- * Used on declarations introduced in Mac OS X 10.0, 
+ *
+ * Used on declarations introduced in Mac OS X 10.0,
  * but later deprecated in Mac OS X 10.5
  */
 #if MAC_OS_X_VERSION_MIN_REQUIRED >= MAC_OS_X_VERSION_10_5
@@ -521,8 +500,8 @@
 
 /*
  * AVAILABLE_MAC_OS_X_VERSION_10_1_AND_LATER_BUT_DEPRECATED_IN_MAC_OS_X_VERSION_10_5
- * 
- * Used on declarations introduced in Mac OS X 10.1, 
+ *
+ * Used on declarations introduced in Mac OS X 10.1,
  * but later deprecated in Mac OS X 10.5
  */
 #if MAC_OS_X_VERSION_MIN_REQUIRED >= MAC_OS_X_VERSION_10_5
@@ -533,8 +512,8 @@
 
 /*
  * AVAILABLE_MAC_OS_X_VERSION_10_2_AND_LATER_BUT_DEPRECATED_IN_MAC_OS_X_VERSION_10_5
- * 
- * Used on declarations introduced in Mac OS X 10.2, 
+ *
+ * Used on declarations introduced in Mac OS X 10.2,
  * but later deprecated in Mac OS X 10.5
  */
 #if MAC_OS_X_VERSION_MIN_REQUIRED >= MAC_OS_X_VERSION_10_5
@@ -545,8 +524,8 @@
 
 /*
  * AVAILABLE_MAC_OS_X_VERSION_10_3_AND_LATER_BUT_DEPRECATED_IN_MAC_OS_X_VERSION_10_5
- * 
- * Used on declarations introduced in Mac OS X 10.3, 
+ *
+ * Used on declarations introduced in Mac OS X 10.3,
  * but later deprecated in Mac OS X 10.5
  */
 #if MAC_OS_X_VERSION_MIN_REQUIRED >= MAC_OS_X_VERSION_10_5
@@ -557,8 +536,8 @@
 
 /*
  * AVAILABLE_MAC_OS_X_VERSION_10_4_AND_LATER_BUT_DEPRECATED_IN_MAC_OS_X_VERSION_10_5
- * 
- * Used on declarations introduced in Mac OS X 10.4, 
+ *
+ * Used on declarations introduced in Mac OS X 10.4,
  * but later deprecated in Mac OS X 10.5
  */
 #if MAC_OS_X_VERSION_MIN_REQUIRED >= MAC_OS_X_VERSION_10_5
@@ -569,18 +548,14 @@
 
 /*
  * DEPRECATED_IN_MAC_OS_X_VERSION_10_5_AND_LATER
- * 
- * Used on types deprecated in Mac OS X 10.5 
+ *
+ * Used on types deprecated in Mac OS X 10.5
  */
 #if MAC_OS_X_VERSION_MIN_REQUIRED >= MAC_OS_X_VERSION_10_5
     #define DEPRECATED_IN_MAC_OS_X_VERSION_10_5_AND_LATER    DEPRECATED_ATTRIBUTE
 #else
     #define DEPRECATED_IN_MAC_OS_X_VERSION_10_5_AND_LATER
 #endif
-
-
-
-
 
 
 /*
@@ -598,8 +573,8 @@
 
 /*
  * AVAILABLE_MAC_OS_X_VERSION_10_6_AND_LATER_BUT_DEPRECATED
- * 
- * Used on declarations introduced in Mac OS X 10.6, 
+ *
+ * Used on declarations introduced in Mac OS X 10.6,
  * and deprecated in Mac OS X 10.6
  */
 #if MAC_OS_X_VERSION_MIN_REQUIRED >= MAC_OS_X_VERSION_10_6
@@ -610,8 +585,8 @@
 
 /*
  * AVAILABLE_MAC_OS_X_VERSION_10_0_AND_LATER_BUT_DEPRECATED_IN_MAC_OS_X_VERSION_10_6
- * 
- * Used on declarations introduced in Mac OS X 10.0, 
+ *
+ * Used on declarations introduced in Mac OS X 10.0,
  * but later deprecated in Mac OS X 10.6
  */
 #if MAC_OS_X_VERSION_MIN_REQUIRED >= MAC_OS_X_VERSION_10_6
@@ -622,8 +597,8 @@
 
 /*
  * AVAILABLE_MAC_OS_X_VERSION_10_1_AND_LATER_BUT_DEPRECATED_IN_MAC_OS_X_VERSION_10_6
- * 
- * Used on declarations introduced in Mac OS X 10.1, 
+ *
+ * Used on declarations introduced in Mac OS X 10.1,
  * but later deprecated in Mac OS X 10.6
  */
 #if MAC_OS_X_VERSION_MIN_REQUIRED >= MAC_OS_X_VERSION_10_6
@@ -634,8 +609,8 @@
 
 /*
  * AVAILABLE_MAC_OS_X_VERSION_10_2_AND_LATER_BUT_DEPRECATED_IN_MAC_OS_X_VERSION_10_6
- * 
- * Used on declarations introduced in Mac OS X 10.2, 
+ *
+ * Used on declarations introduced in Mac OS X 10.2,
  * but later deprecated in Mac OS X 10.6
  */
 #if MAC_OS_X_VERSION_MIN_REQUIRED >= MAC_OS_X_VERSION_10_6
@@ -646,8 +621,8 @@
 
 /*
  * AVAILABLE_MAC_OS_X_VERSION_10_3_AND_LATER_BUT_DEPRECATED_IN_MAC_OS_X_VERSION_10_6
- * 
- * Used on declarations introduced in Mac OS X 10.3, 
+ *
+ * Used on declarations introduced in Mac OS X 10.3,
  * but later deprecated in Mac OS X 10.6
  */
 #if MAC_OS_X_VERSION_MIN_REQUIRED >= MAC_OS_X_VERSION_10_6
@@ -658,8 +633,8 @@
 
 /*
  * AVAILABLE_MAC_OS_X_VERSION_10_4_AND_LATER_BUT_DEPRECATED_IN_MAC_OS_X_VERSION_10_6
- * 
- * Used on declarations introduced in Mac OS X 10.4, 
+ *
+ * Used on declarations introduced in Mac OS X 10.4,
  * but later deprecated in Mac OS X 10.6
  */
 #if MAC_OS_X_VERSION_MIN_REQUIRED >= MAC_OS_X_VERSION_10_6
@@ -670,8 +645,8 @@
 
 /*
  * AVAILABLE_MAC_OS_X_VERSION_10_5_AND_LATER_BUT_DEPRECATED_IN_MAC_OS_X_VERSION_10_6
- * 
- * Used on declarations introduced in Mac OS X 10.5, 
+ *
+ * Used on declarations introduced in Mac OS X 10.5,
  * but later deprecated in Mac OS X 10.6
  */
 #if MAC_OS_X_VERSION_MIN_REQUIRED >= MAC_OS_X_VERSION_10_6
@@ -682,17 +657,14 @@
 
 /*
  * DEPRECATED_IN_MAC_OS_X_VERSION_10_6_AND_LATER
- * 
- * Used on types deprecated in Mac OS X 10.6 
+ *
+ * Used on types deprecated in Mac OS X 10.6
  */
 #if MAC_OS_X_VERSION_MIN_REQUIRED >= MAC_OS_X_VERSION_10_6
     #define DEPRECATED_IN_MAC_OS_X_VERSION_10_6_AND_LATER    DEPRECATED_ATTRIBUTE
 #else
     #define DEPRECATED_IN_MAC_OS_X_VERSION_10_6_AND_LATER
 #endif
-
-
-
 
 
 /*
@@ -710,8 +682,8 @@
 
 /*
  * AVAILABLE_MAC_OS_X_VERSION_10_7_AND_LATER_BUT_DEPRECATED
- * 
- * Used on declarations introduced in Mac OS X 10.7, 
+ *
+ * Used on declarations introduced in Mac OS X 10.7,
  * and deprecated in Mac OS X 10.7
  */
 #if MAC_OS_X_VERSION_MIN_REQUIRED >= MAC_OS_X_VERSION_10_7
@@ -722,8 +694,8 @@
 
 /*
  * AVAILABLE_MAC_OS_X_VERSION_10_0_AND_LATER_BUT_DEPRECATED_IN_MAC_OS_X_VERSION_10_7
- * 
- * Used on declarations introduced in Mac OS X 10.0, 
+ *
+ * Used on declarations introduced in Mac OS X 10.0,
  * but later deprecated in Mac OS X 10.7
  */
 #if MAC_OS_X_VERSION_MIN_REQUIRED >= MAC_OS_X_VERSION_10_7
@@ -734,8 +706,8 @@
 
 /*
  * AVAILABLE_MAC_OS_X_VERSION_10_1_AND_LATER_BUT_DEPRECATED_IN_MAC_OS_X_VERSION_10_7
- * 
- * Used on declarations introduced in Mac OS X 10.1, 
+ *
+ * Used on declarations introduced in Mac OS X 10.1,
  * but later deprecated in Mac OS X 10.7
  */
 #if MAC_OS_X_VERSION_MIN_REQUIRED >= MAC_OS_X_VERSION_10_7
@@ -746,8 +718,8 @@
 
 /*
  * AVAILABLE_MAC_OS_X_VERSION_10_2_AND_LATER_BUT_DEPRECATED_IN_MAC_OS_X_VERSION_10_7
- * 
- * Used on declarations introduced in Mac OS X 10.2, 
+ *
+ * Used on declarations introduced in Mac OS X 10.2,
  * but later deprecated in Mac OS X 10.7
  */
 #if MAC_OS_X_VERSION_MIN_REQUIRED >= MAC_OS_X_VERSION_10_7
@@ -758,8 +730,8 @@
 
 /*
  * AVAILABLE_MAC_OS_X_VERSION_10_3_AND_LATER_BUT_DEPRECATED_IN_MAC_OS_X_VERSION_10_7
- * 
- * Used on declarations introduced in Mac OS X 10.3, 
+ *
+ * Used on declarations introduced in Mac OS X 10.3,
  * but later deprecated in Mac OS X 10.7
  */
 #if MAC_OS_X_VERSION_MIN_REQUIRED >= MAC_OS_X_VERSION_10_7
@@ -770,8 +742,8 @@
 
 /*
  * AVAILABLE_MAC_OS_X_VERSION_10_4_AND_LATER_BUT_DEPRECATED_IN_MAC_OS_X_VERSION_10_7
- * 
- * Used on declarations introduced in Mac OS X 10.4, 
+ *
+ * Used on declarations introduced in Mac OS X 10.4,
  * but later deprecated in Mac OS X 10.7
  */
 #if MAC_OS_X_VERSION_MIN_REQUIRED >= MAC_OS_X_VERSION_10_7
@@ -782,8 +754,8 @@
 
 /*
  * AVAILABLE_MAC_OS_X_VERSION_10_5_AND_LATER_BUT_DEPRECATED_IN_MAC_OS_X_VERSION_10_7
- * 
- * Used on declarations introduced in Mac OS X 10.5, 
+ *
+ * Used on declarations introduced in Mac OS X 10.5,
  * but later deprecated in Mac OS X 10.7
  */
 #if MAC_OS_X_VERSION_MIN_REQUIRED >= MAC_OS_X_VERSION_10_7
@@ -794,8 +766,8 @@
 
 /*
  * AVAILABLE_MAC_OS_X_VERSION_10_6_AND_LATER_BUT_DEPRECATED_IN_MAC_OS_X_VERSION_10_7
- * 
- * Used on declarations introduced in Mac OS X 10.6, 
+ *
+ * Used on declarations introduced in Mac OS X 10.6,
  * but later deprecated in Mac OS X 10.7
  */
 #if MAC_OS_X_VERSION_MIN_REQUIRED >= MAC_OS_X_VERSION_10_7
@@ -806,14 +778,150 @@
 
 /*
  * DEPRECATED_IN_MAC_OS_X_VERSION_10_7_AND_LATER
- * 
- * Used on types deprecated in Mac OS X 10.7 
+ *
+ * Used on types deprecated in Mac OS X 10.7
  */
 #if MAC_OS_X_VERSION_MIN_REQUIRED >= MAC_OS_X_VERSION_10_7
     #define DEPRECATED_IN_MAC_OS_X_VERSION_10_7_AND_LATER    DEPRECATED_ATTRIBUTE
 #else
     #define DEPRECATED_IN_MAC_OS_X_VERSION_10_7_AND_LATER
 #endif
+
+
+/*
+ * AVAILABLE_MAC_OS_X_VERSION_10_8_AND_LATER
+ * 
+ * Used on declarations introduced in Mac OS X 10.8 
+ */
+#if MAC_OS_X_VERSION_MAX_ALLOWED < MAC_OS_X_VERSION_10_8
+    #define AVAILABLE_MAC_OS_X_VERSION_10_8_AND_LATER     UNAVAILABLE_ATTRIBUTE
+#elif MAC_OS_X_VERSION_MIN_REQUIRED < MAC_OS_X_VERSION_10_8
+    #define AVAILABLE_MAC_OS_X_VERSION_10_8_AND_LATER     WEAK_IMPORT_ATTRIBUTE
+#else
+    #define AVAILABLE_MAC_OS_X_VERSION_10_8_AND_LATER
+#endif
+
+/*
+ * AVAILABLE_MAC_OS_X_VERSION_10_8_AND_LATER_BUT_DEPRECATED
+ *
+ * Used on declarations introduced in Mac OS X 10.8,
+ * and deprecated in Mac OS X 10.8
+ */
+#if MAC_OS_X_VERSION_MIN_REQUIRED >= MAC_OS_X_VERSION_10_8
+    #define AVAILABLE_MAC_OS_X_VERSION_10_8_AND_LATER_BUT_DEPRECATED    DEPRECATED_ATTRIBUTE
+#else
+    #define AVAILABLE_MAC_OS_X_VERSION_10_8_AND_LATER_BUT_DEPRECATED    AVAILABLE_MAC_OS_X_VERSION_10_8_AND_LATER
+#endif
+
+/*
+ * AVAILABLE_MAC_OS_X_VERSION_10_0_AND_LATER_BUT_DEPRECATED_IN_MAC_OS_X_VERSION_10_8
+ *
+ * Used on declarations introduced in Mac OS X 10.0,
+ * but later deprecated in Mac OS X 10.8
+ */
+#if MAC_OS_X_VERSION_MIN_REQUIRED >= MAC_OS_X_VERSION_10_8
+    #define AVAILABLE_MAC_OS_X_VERSION_10_0_AND_LATER_BUT_DEPRECATED_IN_MAC_OS_X_VERSION_10_8    DEPRECATED_ATTRIBUTE
+#else
+    #define AVAILABLE_MAC_OS_X_VERSION_10_0_AND_LATER_BUT_DEPRECATED_IN_MAC_OS_X_VERSION_10_8    AVAILABLE_MAC_OS_X_VERSION_10_0_AND_LATER
+#endif
+
+/*
+ * AVAILABLE_MAC_OS_X_VERSION_10_1_AND_LATER_BUT_DEPRECATED_IN_MAC_OS_X_VERSION_10_8
+ *
+ * Used on declarations introduced in Mac OS X 10.1,
+ * but later deprecated in Mac OS X 10.8
+ */
+#if MAC_OS_X_VERSION_MIN_REQUIRED >= MAC_OS_X_VERSION_10_8
+    #define AVAILABLE_MAC_OS_X_VERSION_10_1_AND_LATER_BUT_DEPRECATED_IN_MAC_OS_X_VERSION_10_8    DEPRECATED_ATTRIBUTE
+#else
+    #define AVAILABLE_MAC_OS_X_VERSION_10_1_AND_LATER_BUT_DEPRECATED_IN_MAC_OS_X_VERSION_10_8    AVAILABLE_MAC_OS_X_VERSION_10_1_AND_LATER
+#endif
+
+/*
+ * AVAILABLE_MAC_OS_X_VERSION_10_2_AND_LATER_BUT_DEPRECATED_IN_MAC_OS_X_VERSION_10_8
+ *
+ * Used on declarations introduced in Mac OS X 10.2,
+ * but later deprecated in Mac OS X 10.8
+ */
+#if MAC_OS_X_VERSION_MIN_REQUIRED >= MAC_OS_X_VERSION_10_8
+    #define AVAILABLE_MAC_OS_X_VERSION_10_2_AND_LATER_BUT_DEPRECATED_IN_MAC_OS_X_VERSION_10_8    DEPRECATED_ATTRIBUTE
+#else
+    #define AVAILABLE_MAC_OS_X_VERSION_10_2_AND_LATER_BUT_DEPRECATED_IN_MAC_OS_X_VERSION_10_8    AVAILABLE_MAC_OS_X_VERSION_10_2_AND_LATER
+#endif
+
+/*
+ * AVAILABLE_MAC_OS_X_VERSION_10_3_AND_LATER_BUT_DEPRECATED_IN_MAC_OS_X_VERSION_10_8
+ *
+ * Used on declarations introduced in Mac OS X 10.3,
+ * but later deprecated in Mac OS X 10.8
+ */
+#if MAC_OS_X_VERSION_MIN_REQUIRED >= MAC_OS_X_VERSION_10_8
+    #define AVAILABLE_MAC_OS_X_VERSION_10_3_AND_LATER_BUT_DEPRECATED_IN_MAC_OS_X_VERSION_10_8    DEPRECATED_ATTRIBUTE
+#else
+    #define AVAILABLE_MAC_OS_X_VERSION_10_3_AND_LATER_BUT_DEPRECATED_IN_MAC_OS_X_VERSION_10_8    AVAILABLE_MAC_OS_X_VERSION_10_3_AND_LATER
+#endif
+
+/*
+ * AVAILABLE_MAC_OS_X_VERSION_10_4_AND_LATER_BUT_DEPRECATED_IN_MAC_OS_X_VERSION_10_8
+ *
+ * Used on declarations introduced in Mac OS X 10.4,
+ * but later deprecated in Mac OS X 10.8
+ */
+#if MAC_OS_X_VERSION_MIN_REQUIRED >= MAC_OS_X_VERSION_10_8
+    #define AVAILABLE_MAC_OS_X_VERSION_10_4_AND_LATER_BUT_DEPRECATED_IN_MAC_OS_X_VERSION_10_8    DEPRECATED_ATTRIBUTE
+#else
+    #define AVAILABLE_MAC_OS_X_VERSION_10_4_AND_LATER_BUT_DEPRECATED_IN_MAC_OS_X_VERSION_10_8    AVAILABLE_MAC_OS_X_VERSION_10_4_AND_LATER
+#endif
+
+/*
+ * AVAILABLE_MAC_OS_X_VERSION_10_5_AND_LATER_BUT_DEPRECATED_IN_MAC_OS_X_VERSION_10_8
+ *
+ * Used on declarations introduced in Mac OS X 10.5,
+ * but later deprecated in Mac OS X 10.8
+ */
+#if MAC_OS_X_VERSION_MIN_REQUIRED >= MAC_OS_X_VERSION_10_8
+    #define AVAILABLE_MAC_OS_X_VERSION_10_5_AND_LATER_BUT_DEPRECATED_IN_MAC_OS_X_VERSION_10_8    DEPRECATED_ATTRIBUTE
+#else
+    #define AVAILABLE_MAC_OS_X_VERSION_10_5_AND_LATER_BUT_DEPRECATED_IN_MAC_OS_X_VERSION_10_8    AVAILABLE_MAC_OS_X_VERSION_10_5_AND_LATER
+#endif
+
+/*
+ * AVAILABLE_MAC_OS_X_VERSION_10_6_AND_LATER_BUT_DEPRECATED_IN_MAC_OS_X_VERSION_10_8
+ *
+ * Used on declarations introduced in Mac OS X 10.6,
+ * but later deprecated in Mac OS X 10.8
+ */
+#if MAC_OS_X_VERSION_MIN_REQUIRED >= MAC_OS_X_VERSION_10_8
+    #define AVAILABLE_MAC_OS_X_VERSION_10_6_AND_LATER_BUT_DEPRECATED_IN_MAC_OS_X_VERSION_10_8    DEPRECATED_ATTRIBUTE
+#else
+    #define AVAILABLE_MAC_OS_X_VERSION_10_6_AND_LATER_BUT_DEPRECATED_IN_MAC_OS_X_VERSION_10_8    AVAILABLE_MAC_OS_X_VERSION_10_6_AND_LATER
+#endif
+
+/*
+ * AVAILABLE_MAC_OS_X_VERSION_10_7_AND_LATER_BUT_DEPRECATED_IN_MAC_OS_X_VERSION_10_8
+ *
+ * Used on declarations introduced in Mac OS X 10.7,
+ * but later deprecated in Mac OS X 10.8
+ */
+#if MAC_OS_X_VERSION_MIN_REQUIRED >= MAC_OS_X_VERSION_10_8
+    #define AVAILABLE_MAC_OS_X_VERSION_10_7_AND_LATER_BUT_DEPRECATED_IN_MAC_OS_X_VERSION_10_8    DEPRECATED_ATTRIBUTE
+#else
+    #define AVAILABLE_MAC_OS_X_VERSION_10_7_AND_LATER_BUT_DEPRECATED_IN_MAC_OS_X_VERSION_10_8    AVAILABLE_MAC_OS_X_VERSION_10_7_AND_LATER
+#endif
+
+/*
+ * DEPRECATED_IN_MAC_OS_X_VERSION_10_8_AND_LATER
+ *
+ * Used on types deprecated in Mac OS X 10.8
+ */
+#if MAC_OS_X_VERSION_MIN_REQUIRED >= MAC_OS_X_VERSION_10_8
+    #define DEPRECATED_IN_MAC_OS_X_VERSION_10_8_AND_LATER    DEPRECATED_ATTRIBUTE
+#else
+    #define DEPRECATED_IN_MAC_OS_X_VERSION_10_8_AND_LATER
+#endif
+
+
+
 
 #endif  /* __AVAILABILITYMACROS__ */
 

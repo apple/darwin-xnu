@@ -71,9 +71,9 @@ extern int64_t dtrace_systrace_syscall(uintptr_t arg0, uintptr_t arg1,
     uintptr_t arg2, uintptr_t arg3, uintptr_t arg4, uintptr_t arg5);
 #else
 extern void (*systrace_probe)(dtrace_id_t, uint64_t, uint64_t,
-    uint64_t, uint64_t, uint64_t, uint64_t, uint64_t, uint64_t);
+    uint64_t, uint64_t, uint64_t);
 extern void systrace_stub(dtrace_id_t, uint64_t, uint64_t,
-    uint64_t, uint64_t, uint64_t, uint64_t, uint64_t, uint64_t);
+    uint64_t, uint64_t, uint64_t);
 
 extern int32_t dtrace_systrace_syscall(struct proc *, void *, int *);
 

@@ -67,8 +67,6 @@
 #ifndef	_KERN_SCHED_H_
 #define _KERN_SCHED_H_
 
-#include <stat_time.h>
-
 #include <mach/policy.h>
 #include <kern/kern_types.h>
 #include <kern/queue.h>
@@ -288,7 +286,8 @@ extern uint32_t default_timeshare_constraint;
 
 extern uint32_t	max_rt_quantum, min_rt_quantum;
 
-extern uint32_t	sched_cswtime;
+extern int default_preemption_rate;
+extern int default_bg_preemption_rate;
 
 #if defined(CONFIG_SCHED_TRADITIONAL)
 
@@ -317,6 +316,9 @@ extern void		compute_memory_pressure(
 					void			*arg);
 
 extern void		compute_zone_gc_throttle(
+					void			*arg);
+
+extern void		compute_pageout_gc_throttle(
 					void			*arg);
 
 extern void		compute_pmap_gc_throttle(

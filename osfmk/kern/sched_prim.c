@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2009 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2010 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -65,9 +65,6 @@
  */
 
 #include <debug.h>
-#include <mach_kdb.h>
-
-#include <ddb/db_output.h>
 
 #include <mach/mach_types.h>
 #include <mach/machine.h>
@@ -98,6 +95,7 @@
 #include <kern/task.h>
 #include <kern/thread.h>
 #include <kern/wait_queue.h>
+#include <kern/ledger.h>
 
 #include <vm/pmap.h>
 #include <vm/vm_kern.h>
@@ -122,6 +120,9 @@ decl_simple_lock_data(static,fs_lock);
 #define		DEFAULT_PREEMPTION_RATE		100		/* (1/s) */
 int			default_preemption_rate = DEFAULT_PREEMPTION_RATE;
 
+#define		DEFAULT_BG_PREEMPTION_RATE	400		/* (1/s) */
+int			default_bg_preemption_rate = DEFAULT_BG_PREEMPTION_RATE;
+
 #define		MAX_UNSAFE_QUANTA			800
 int			max_unsafe_quanta = MAX_UNSAFE_QUANTA;
 
@@ -140,8 +141,10 @@ uint64_t	sched_safe_duration;
 
 uint32_t	std_quantum;
 uint32_t	min_std_quantum;
+uint32_t	bg_quantum;
 
 uint32_t	std_quantum_us;
+uint32_t	bg_quantum_us;
 
 #endif /* CONFIG_SCHED_TRADITIONAL */
 
@@ -151,8 +154,6 @@ uint32_t	default_timeshare_constraint;
 
 uint32_t	max_rt_quantum;
 uint32_t	min_rt_quantum;
-
-uint32_t	sched_cswtime;
 
 #if defined(CONFIG_SCHED_TRADITIONAL)
 
@@ -594,6 +595,12 @@ sched_traditional_init(void)
 
 	printf("standard timeslicing quantum is %d us\n", std_quantum_us);
 
+	if (default_bg_preemption_rate < 1)
+		default_bg_preemption_rate = DEFAULT_BG_PREEMPTION_RATE;
+	bg_quantum_us = (1000 * 1000) / default_bg_preemption_rate;
+
+	printf("standard background quantum is %d us\n", bg_quantum_us);
+
 	load_shift_init();
 	preempt_pri_init();
 	sched_tick = 0;
@@ -615,6 +622,12 @@ sched_traditional_timebase_init(void)
 	clock_interval_to_absolutetime_interval(250, NSEC_PER_USEC, &abstime);
 	assert((abstime >> 32) == 0 && (uint32_t)abstime != 0);
 	min_std_quantum = (uint32_t)abstime;
+
+	/* quantum for background tasks */
+	clock_interval_to_absolutetime_interval(
+							bg_quantum_us, NSEC_PER_USEC, &abstime);
+	assert((abstime >> 32) == 0 && (uint32_t)abstime != 0);
+	bg_quantum = (uint32_t)abstime;
 
 	/* scheduler tick interval */
 	clock_interval_to_absolutetime_interval(USEC_PER_SEC >> SCHED_TICK_SHIFT,
@@ -911,9 +924,12 @@ thread_unblock(
 	thread->computation_metered = 0;
 	thread->reason = AST_NONE;
 
-	KERNEL_DEBUG_CONSTANT(
-		MACHDBG_CODE(DBG_MACH_SCHED,MACH_MAKE_RUNNABLE) | DBG_FUNC_NONE,
-					(uintptr_t)thread_tid(thread), thread->sched_pri, 0, 0, 0);
+	/* Event should only be triggered if thread is not already running */
+	if (result == FALSE) {
+		KERNEL_DEBUG_CONSTANT_IST(KDEBUG_TRACE,
+			MACHDBG_CODE(DBG_MACH_SCHED,MACH_MAKE_RUNNABLE) | DBG_FUNC_NONE,
+			(uintptr_t)thread_tid(thread), thread->sched_pri, thread->wait_result, 0, 0);
+	}
 
 	DTRACE_SCHED2(wakeup, struct thread *, thread, struct proc *, thread->task->bsd_info);
 
@@ -985,7 +1001,8 @@ thread_mark_wait_locked(
 			(!at_safe_point &&
 				(thread->sched_flags & TH_SFLAG_ABORTSAFELY))) {
 
-		DTRACE_SCHED(sleep);
+		if ( !(thread->state & TH_TERMINATE))
+			DTRACE_SCHED(sleep);
 
 		thread->state |= (interruptible) ? TH_WAIT : (TH_WAIT | TH_UNINT);
 		thread->at_safe_point = at_safe_point;
@@ -1062,6 +1079,10 @@ assert_wait(
 
 	assert(event != NO_EVENT);
 
+	KERNEL_DEBUG_CONSTANT_IST(KDEBUG_TRACE,
+		MACHDBG_CODE(DBG_MACH_SCHED, MACH_WAIT)|DBG_FUNC_NONE,
+		VM_KERNEL_UNSLIDE(event), 0, 0, 0, 0);
+
 	index = wait_hash(event);
 	wq = &wait_queues[index];
 	return wait_queue_assert_wait(wq, event, interruptible, 0);
@@ -1088,6 +1109,11 @@ assert_wait_timeout(
 	thread_lock(thread);
 
 	clock_interval_to_deadline(interval, scale_factor, &deadline);
+	
+	KERNEL_DEBUG_CONSTANT_IST(KDEBUG_TRACE,
+		MACHDBG_CODE(DBG_MACH_SCHED, MACH_WAIT)|DBG_FUNC_NONE,
+		VM_KERNEL_UNSLIDE(event), interruptible, deadline, 0, 0);
+	
 	wresult = wait_queue_assert_wait64_locked(wqueue, CAST_DOWN(event64_t, event),
 													interruptible, deadline, thread);
 
@@ -1115,6 +1141,10 @@ assert_wait_deadline(
 	s = splsched();
 	wait_queue_lock(wqueue);
 	thread_lock(thread);
+
+	KERNEL_DEBUG_CONSTANT_IST(KDEBUG_TRACE,
+		MACHDBG_CODE(DBG_MACH_SCHED, MACH_WAIT)|DBG_FUNC_NONE,
+		VM_KERNEL_UNSLIDE(event), interruptible, deadline, 0, 0);
 
 	wresult = wait_queue_assert_wait64_locked(wqueue, CAST_DOWN(event64_t,event),
 													interruptible, deadline, thread);
@@ -1326,6 +1356,16 @@ thread_unstop(
 }
 
 /*
+ * Thread locked, returns the same way
+ */
+static inline boolean_t
+thread_isoncpu(thread_t thread)
+{
+	processor_t processor = thread->last_processor;
+
+	return ((processor != PROCESSOR_NULL) && (processor->active_thread == thread));
+}
+/*
  * thread_wait:
  *
  * Wait for a thread to stop running. (non-interruptible)
@@ -1333,19 +1373,32 @@ thread_unstop(
  */
 void
 thread_wait(
-	thread_t		thread)
+	thread_t	thread,
+	boolean_t	until_not_runnable)
 {
 	wait_result_t	wresult;
-	spl_t			s = splsched();
+	boolean_t 	oncpu;
+	processor_t	processor;
+	spl_t		s = splsched();
 
 	wake_lock(thread);
 	thread_lock(thread);
 
-	while (thread->state & TH_RUN) {
-		processor_t		processor = thread->last_processor;
+	/*
+	 * Wait until not running on a CPU.  If stronger requirement
+	 * desired, wait until not runnable.  Assumption: if thread is
+	 * on CPU, then TH_RUN is set, so we're not waiting in any case
+	 * where the original, pure "TH_RUN" check would have let us 
+	 * finish.
+	 */
+	while ((oncpu = thread_isoncpu(thread)) || 
+			(until_not_runnable && (thread->state & TH_RUN))) {
 
-		if (processor != PROCESSOR_NULL && processor->active_thread == thread)
+		if (oncpu) {
+			assert(thread->state & TH_RUN);
+			processor = thread->last_processor;
 			cause_ast_check(processor);
+		}
 
 		thread->wake_active = TRUE;
 		thread_unlock(thread);
@@ -1481,7 +1534,7 @@ thread_wakeup_prim_internal(
 	if (one_thread)
 		return (wait_queue_wakeup_one(wq, event, result, priority));
 	else
-		return (wait_queue_wakeup_all(wq, event, result));
+	    return (wait_queue_wakeup_all(wq, event, result));
 }
 
 /*
@@ -1766,6 +1819,9 @@ thread_select_idle(
 	processor->current_pri = IDLEPRI;
 	processor->current_thmode = TH_MODE_NONE;
 
+	/* Reload precise timing global policy to thread-local policy */
+	thread->precise_user_kernel_time = use_precise_user_kernel_time(thread);
+	
 	thread_unlock(thread);
 
 	/*
@@ -1982,6 +2038,9 @@ thread_invoke(
 	assert(thread_runnable(thread));
 #endif
 
+	/* Reload precise timing global policy to thread-local policy */
+	thread->precise_user_kernel_time = use_precise_user_kernel_time(thread);
+	
 	/*
 	 * Allow time constraint threads to hang onto
 	 * a stack.
@@ -2025,9 +2084,20 @@ thread_invoke(
 			self->last_run_time = processor->last_dispatch;
 			thread_timer_event(processor->last_dispatch, &thread->system_timer);
 			PROCESSOR_DATA(processor, kernel_timer) = &thread->system_timer;
+
+			/*
+			 * Since non-precise user/kernel time doesn't update the state timer
+			 * during privilege transitions, synthesize an event now.
+			 */
+			if (!thread->precise_user_kernel_time) {
+				timer_switch(PROCESSOR_DATA(processor, current_state),
+							 processor->last_dispatch,
+							 PROCESSOR_DATA(processor, current_state));
+			}
 	
-			KERNEL_DEBUG_CONSTANT(MACHDBG_CODE(DBG_MACH_SCHED, MACH_STACK_HANDOFF)|DBG_FUNC_NONE,
-										self->reason, (uintptr_t)thread_tid(thread), self->sched_pri, thread->sched_pri, 0);
+			KERNEL_DEBUG_CONSTANT_IST(KDEBUG_TRACE,
+				MACHDBG_CODE(DBG_MACH_SCHED, MACH_STACK_HANDOFF)|DBG_FUNC_NONE,
+				self->reason, (uintptr_t)thread_tid(thread), self->sched_pri, thread->sched_pri, 0);
 
 			if ((thread->chosen_processor != processor) && (thread->chosen_processor != NULL)) {
 				KERNEL_DEBUG_CONSTANT(MACHDBG_CODE(DBG_MACH_SCHED, MACH_MOVED)|DBG_FUNC_NONE,
@@ -2062,8 +2132,9 @@ thread_invoke(
 			counter(++c_thread_invoke_same);
 			thread_unlock(self);
 
-			KERNEL_DEBUG_CONSTANT(MACHDBG_CODE(DBG_MACH_SCHED,MACH_SCHED) | DBG_FUNC_NONE,
-								self->reason, (uintptr_t)thread_tid(thread), self->sched_pri, thread->sched_pri, 0);
+			KERNEL_DEBUG_CONSTANT_IST(KDEBUG_TRACE,
+				MACHDBG_CODE(DBG_MACH_SCHED,MACH_SCHED) | DBG_FUNC_NONE,
+				self->reason, (uintptr_t)thread_tid(thread), self->sched_pri, thread->sched_pri, 0);
 
 			self->continuation = self->parameter = NULL;
 
@@ -2092,8 +2163,9 @@ need_stack:
 			counter(++c_thread_invoke_same);
 			thread_unlock(self);
 
-			KERNEL_DEBUG_CONSTANT(MACHDBG_CODE(DBG_MACH_SCHED,MACH_SCHED) | DBG_FUNC_NONE,
-								self->reason, (uintptr_t)thread_tid(thread), self->sched_pri, thread->sched_pri, 0);
+			KERNEL_DEBUG_CONSTANT_IST(KDEBUG_TRACE,
+				MACHDBG_CODE(DBG_MACH_SCHED,MACH_SCHED) | DBG_FUNC_NONE,
+				self->reason, (uintptr_t)thread_tid(thread), self->sched_pri, thread->sched_pri, 0);
 
 			return (TRUE);
 		}
@@ -2126,8 +2198,20 @@ need_stack:
 	thread_timer_event(processor->last_dispatch, &thread->system_timer);
 	PROCESSOR_DATA(processor, kernel_timer) = &thread->system_timer;
 
-	KERNEL_DEBUG_CONSTANT(MACHDBG_CODE(DBG_MACH_SCHED,MACH_SCHED) | DBG_FUNC_NONE,
-							self->reason, (uintptr_t)thread_tid(thread), self->sched_pri, thread->sched_pri, 0);
+	/*
+	 * Since non-precise user/kernel time doesn't update the state timer
+	 * during privilege transitions, synthesize an event now.
+	 */
+	if (!thread->precise_user_kernel_time) {
+		timer_switch(PROCESSOR_DATA(processor, current_state),
+					 processor->last_dispatch,
+					 PROCESSOR_DATA(processor, current_state));
+	}
+	
+
+	KERNEL_DEBUG_CONSTANT_IST(KDEBUG_TRACE,
+		MACHDBG_CODE(DBG_MACH_SCHED,MACH_SCHED) | DBG_FUNC_NONE,
+		self->reason, (uintptr_t)thread_tid(thread), self->sched_pri, thread->sched_pri, 0);
 
 	if ((thread->chosen_processor != processor) && (thread->chosen_processor != NULL)) {
 		KERNEL_DEBUG_CONSTANT(MACHDBG_CODE(DBG_MACH_SCHED, MACH_MOVED)|DBG_FUNC_NONE,
@@ -2143,7 +2227,9 @@ need_stack:
 	 * and address space if required.  We will next run
 	 * as a result of a subsequent context switch.
 	 */
+	assert(continuation == self->continuation);
 	thread = machine_switch_context(self, continuation, thread);
+	assert(self == current_thread());
 	TLOG(1,"thread_invoke: returning machine_switch_context: self %p continuation %p thread %p\n", self, continuation, thread);
 
 	DTRACE_SCHED(on__cpu);
@@ -2192,15 +2278,34 @@ thread_dispatch(
 			stack_free(thread);
 
 		if (!(thread->state & TH_IDLE)) {
+			int64_t consumed;
+			int64_t remainder = 0;
+
+			if (processor->quantum_end > processor->last_dispatch)
+				remainder = processor->quantum_end -
+				    processor->last_dispatch;
+
+			consumed = thread->current_quantum - remainder;
+
+			if ((thread->reason & AST_LEDGER) == 0)
+				/*
+				 * Bill CPU time to both the individual thread
+				 * and the task.
+				 */
+				ledger_credit(thread->t_ledger,
+				    task_ledgers.cpu_time, consumed);
+				ledger_credit(thread->t_threadledger,
+				    thread_ledgers.cpu_time, consumed);
+
 			wake_lock(thread);
 			thread_lock(thread);
 
 			/*
 			 *	Compute remainder of current quantum.
 			 */
-			if (	first_timeslice(processor)							&&
-					processor->quantum_end > processor->last_dispatch		)
-				thread->current_quantum = (uint32_t)(processor->quantum_end - processor->last_dispatch);
+			if (first_timeslice(processor) &&
+			    processor->quantum_end > processor->last_dispatch)
+				thread->current_quantum = (uint32_t)remainder;
 			else
 				thread->current_quantum = 0;
 
@@ -2222,7 +2327,7 @@ thread_dispatch(
 				 */
 				if (thread->current_quantum < min_std_quantum) {
 					thread->reason |= AST_QUANTUM;
-					thread->current_quantum += std_quantum;
+					thread->current_quantum += SCHED(initial_quantum_size)(thread);
 				}
 #endif
 			}
@@ -2253,7 +2358,15 @@ thread_dispatch(
 
 				thread->reason = AST_NONE;
 
-				thread_unlock(thread);
+				if (thread->wake_active) {
+					thread->wake_active = FALSE;
+					thread_unlock(thread);
+
+					thread_wakeup(&thread->wake_active);
+				}
+				else
+					thread_unlock(thread);
+
 				wake_unlock(thread);
 			}
 			else {
@@ -2382,13 +2495,10 @@ thread_block_reason(
 	self->continuation = continuation;
 	self->parameter = parameter;
 
-	if (__improbable(kdebug_thread_block && kdebug_enable && self->state != TH_RUN)) {
-		uint32_t        bt[8];
-
-		OSBacktrace((void **)&bt[0], 8);
-
-		KERNEL_DEBUG_CONSTANT(0x140004c | DBG_FUNC_START, bt[0], bt[1], bt[2], bt[3], 0);
-		KERNEL_DEBUG_CONSTANT(0x140004c | DBG_FUNC_END, bt[4], bt[5], bt[6], bt[7], 0);
+	if (__improbable(kdebug_thread_block && kdebug_enable && self->state != TH_RUN)) {		
+		KERNEL_DEBUG_CONSTANT_IST(KDEBUG_TRACE,
+			MACHDBG_CODE(DBG_MACH_SCHED,MACH_BLOCK), 
+			reason, VM_KERNEL_UNSLIDE(continuation), 0, 0, 0);
 	}
 
 	do {
@@ -2471,9 +2581,9 @@ void
 thread_continue(
 	register thread_t	thread)
 {
-	register thread_t			self = current_thread();
+	register thread_t		self = current_thread();
 	register thread_continue_t	continuation;
-	register void				*parameter;
+	register void			*parameter;
 
 	DTRACE_SCHED(on__cpu);
 
@@ -2506,9 +2616,12 @@ thread_quantum_init(thread_t thread)
 
 #if defined(CONFIG_SCHED_TRADITIONAL)
 static uint32_t
-sched_traditional_initial_quantum_size(thread_t thread __unused)
+sched_traditional_initial_quantum_size(thread_t thread)
 {
-	return std_quantum;
+	if ((thread == THREAD_NULL) || thread->priority > MAXPRI_THROTTLE)
+		return std_quantum;
+	else
+		return bg_quantum;
 }
 
 static sched_mode_t
@@ -2851,7 +2964,7 @@ realtime_setrun(
 		int prstate = processor->state;
 		if (processor == current_processor())
 			ast_on(AST_PREEMPT | AST_URGENT);
-		else if ((prstate == PROCESSOR_DISPATCHING)  || (prstate == PROCESSOR_IDLE))
+		else if ((prstate == PROCESSOR_IDLE)  || (prstate == PROCESSOR_DISPATCHING))
 			machine_signal_idle(processor);
 		else
 			cause_ast_check(processor);
@@ -3021,11 +3134,17 @@ static ast_t
 processor_csw_check(processor_t processor)
 {
 	run_queue_t		runq;
+	boolean_t		has_higher;
 
 	assert(processor->active_thread != NULL);
 	
 	runq = runq_for_processor(processor);
-	if (runq->highq > processor->current_pri) {
+	if (first_timeslice(processor)) {
+		has_higher = (runq->highq > processor->current_pri);
+	} else {
+		has_higher = (runq->highq >= processor->current_pri);
+	}
+	if (has_higher) {
 		if (runq->urgency > 0)
 			return (AST_PREEMPT | AST_URGENT);
 		
@@ -3529,24 +3648,18 @@ csw_check(
 	processor_t		processor)
 {
 	ast_t			result = AST_NONE;
+	thread_t		thread = processor->active_thread;
 
 	if (first_timeslice(processor)) {
 		if (rt_runq.count > 0)
 			return (AST_PREEMPT | AST_URGENT);
-
-		result |= SCHED(processor_csw_check)(processor);
-		if (result & AST_URGENT)
-			return result;
 	}
 	else {
 		if (rt_runq.count > 0 && BASEPRI_RTQUEUES >= processor->current_pri)
 			return (AST_PREEMPT | AST_URGENT);
-
-		result |= SCHED(processor_csw_check)(processor);
-		if (result & AST_URGENT)
-			return result;
 	}
 
+	result = SCHED(processor_csw_check)(processor);
 	if (result != AST_NONE)
 		return (result);
 
@@ -3556,7 +3669,7 @@ csw_check(
 	if (machine_processor_is_inactive(processor))
 		return (AST_PREEMPT);
 
-	if (processor->active_thread->state & TH_SUSP)
+	if (thread->state & TH_SUSP)
 		return (AST_PREEMPT);
 
 	return (AST_NONE);
@@ -3911,8 +4024,9 @@ processor_idle(
 	int					state;
 	(void)splsched();
 
-	KERNEL_DEBUG_CONSTANT(
-		MACHDBG_CODE(DBG_MACH_SCHED,MACH_IDLE) | DBG_FUNC_START, (uintptr_t)thread_tid(thread), 0, 0, 0, 0);
+	KERNEL_DEBUG_CONSTANT_IST(KDEBUG_TRACE,
+		MACHDBG_CODE(DBG_MACH_SCHED,MACH_IDLE) | DBG_FUNC_START, 
+		(uintptr_t)thread_tid(thread), 0, 0, 0, 0);
 
 	SCHED_STATS_CPU_IDLE_START(processor);
 
@@ -3962,16 +4076,18 @@ processor_idle(
 			thread_setrun(new_thread, SCHED_HEADQ);
 			thread_unlock(new_thread);
 
-			KERNEL_DEBUG_CONSTANT(
-				MACHDBG_CODE(DBG_MACH_SCHED,MACH_IDLE) | DBG_FUNC_END, (uintptr_t)thread_tid(thread), state, 0, 0, 0);
+			KERNEL_DEBUG_CONSTANT_IST(KDEBUG_TRACE,
+				MACHDBG_CODE(DBG_MACH_SCHED,MACH_IDLE) | DBG_FUNC_END, 
+				(uintptr_t)thread_tid(thread), state, 0, 0, 0);
 
 			return (THREAD_NULL);
 		}
 
 		pset_unlock(pset);
 
-		KERNEL_DEBUG_CONSTANT(
-				      MACHDBG_CODE(DBG_MACH_SCHED,MACH_IDLE) | DBG_FUNC_END, (uintptr_t)thread_tid(thread), state, (uintptr_t)thread_tid(new_thread), 0, 0);
+		KERNEL_DEBUG_CONSTANT_IST(KDEBUG_TRACE,
+			MACHDBG_CODE(DBG_MACH_SCHED,MACH_IDLE) | DBG_FUNC_END, 
+			(uintptr_t)thread_tid(thread), state, (uintptr_t)thread_tid(new_thread), 0, 0);
 			
 		return (new_thread);
 	}
@@ -4003,8 +4119,9 @@ processor_idle(
 			thread_setrun(new_thread, SCHED_HEADQ);
 			thread_unlock(new_thread);
 
-			KERNEL_DEBUG_CONSTANT(
-				MACHDBG_CODE(DBG_MACH_SCHED,MACH_IDLE) | DBG_FUNC_END, (uintptr_t)thread_tid(thread), state, 0, 0, 0);
+			KERNEL_DEBUG_CONSTANT_IST(KDEBUG_TRACE,
+				MACHDBG_CODE(DBG_MACH_SCHED,MACH_IDLE) | DBG_FUNC_END, 
+				(uintptr_t)thread_tid(thread), state, 0, 0, 0);
 		
 			return (THREAD_NULL);
 		}
@@ -4012,8 +4129,9 @@ processor_idle(
 
 	pset_unlock(pset);
 
-	KERNEL_DEBUG_CONSTANT(
-		MACHDBG_CODE(DBG_MACH_SCHED,MACH_IDLE) | DBG_FUNC_END, (uintptr_t)thread_tid(thread), state, 0, 0, 0);
+	KERNEL_DEBUG_CONSTANT_IST(KDEBUG_TRACE,
+		MACHDBG_CODE(DBG_MACH_SCHED,MACH_IDLE) | DBG_FUNC_END, 
+		(uintptr_t)thread_tid(thread), state, 0, 0, 0);
 		
 	return (THREAD_NULL);
 }
@@ -4087,15 +4205,14 @@ sched_startup(void)
 	thread_deallocate(thread);
 
 	/*
-	 * Yield to the sched_init_thread while it times
-	 * a series of context switches back.  It stores
-	 * the baseline value in sched_cswtime.
+	 * Yield to the sched_init_thread once, to
+	 * initialize our own thread after being switched
+	 * back to.
 	 *
 	 * The current thread is the only other thread
 	 * active at this point.
 	 */
-	while (sched_cswtime == 0)
-		thread_block(THREAD_CONTINUE_NULL);
+	thread_block(THREAD_CONTINUE_NULL);
 }
 
 #if defined(CONFIG_SCHED_TRADITIONAL)
@@ -4139,67 +4256,10 @@ sched_traditional_tick_continue(void)
 
 #endif /* CONFIG_SCHED_TRADITIONAL */
 
-static uint32_t
-time_individual_cswitch(void)
-{
-	uint32_t switches = 0;
-	uint64_t newtime, starttime;
-
-	/* Wait for absolute time to increase. */
-	starttime = mach_absolute_time();
-	do {
-		newtime = mach_absolute_time();
-	} while (newtime == starttime);
-
-	/* Measure one or more context switches until time increases again.
-	 * This ensures we get non-zero timings even if absolute time
-	 * increases very infrequently compared to CPU clock. */
-	starttime = newtime;
-	do {
-		thread_block(THREAD_CONTINUE_NULL);
-		newtime = mach_absolute_time();
-		++switches;
-	} while (newtime == starttime);
-	/* Round up. */
-	return (uint32_t) ((newtime - starttime + switches - 1) / switches);
-}
-
-/*
- * Time a series of context switches to determine
- * a baseline.  Toss the high and low and return
- * the one-way value.
- */
-static uint32_t
-time_cswitch(void)
-{
-	uint32_t	new, hi, low, accum;
-	int			i, tries = 7, denom;
-
-	accum = hi = low = 0;
-	for (i = 0; i < tries; ++i) {
-		new = time_individual_cswitch();
-
-		if (i == 0)
-			accum = hi = low = new;
-		else {
-			if (new < low)
-				low = new;
-			else
-			if (new > hi)
-				hi = new;
-			accum += new;
-		}
-	}
-	/* Round up. */
-	denom = 2 * (tries - 2);
-	return (accum - hi - low + denom - 1) / denom;
-}
-
 void
 sched_init_thread(void (*continuation)(void))
 {
-	sched_cswtime = time_cswitch();
-	assert(sched_cswtime > 0);
+	thread_block(THREAD_CONTINUE_NULL);
 
 	continuation();
 
@@ -4446,35 +4506,3 @@ thread_runnable(
 	return ((thread->state & (TH_RUN|TH_WAIT)) == TH_RUN);
 }
 #endif	/* DEBUG */
-
-#if	MACH_KDB
-#include <ddb/db_output.h>
-#define	printf		kdbprintf
-void			db_sched(void);
-
-void
-db_sched(void)
-{
-	iprintf("Scheduling Statistics:\n");
-	db_indent += 2;
-	iprintf("Thread invocations:  csw %d same %d\n",
-		c_thread_invoke_csw, c_thread_invoke_same);
-#if	MACH_COUNTERS
-	iprintf("Thread block:  calls %d\n",
-		c_thread_block_calls);
-	iprintf("Idle thread:\n\thandoff %d block %d\n",
-		c_idle_thread_handoff,
-		c_idle_thread_block);
-	iprintf("Sched thread blocks:  %d\n", c_sched_thread_block);
-#endif	/* MACH_COUNTERS */
-	db_indent -= 2;
-}
-
-#include <ddb/db_output.h>
-void		db_show_thread_log(void);
-
-void
-db_show_thread_log(void)
-{
-}
-#endif	/* MACH_KDB */

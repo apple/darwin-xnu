@@ -294,6 +294,9 @@ typedef struct user32_siginfo {
 	user32_ulong_t	__pad[7];		/* Reserved for Future Use */
 } user32_siginfo_t;
 
+void siginfo_user_to_user32(user_siginfo_t *, user32_siginfo_t *);
+void siginfo_user_to_user64(user_siginfo_t *, user64_siginfo_t *);
+
 #endif	/* BSD_KERNEL_PRIVATE */
 
 /* 

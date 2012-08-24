@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2010 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2012 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -71,6 +71,7 @@
 #include <sys/kernel.h>
 #include <sys/malloc.h>
 #include <sys/mbuf.h>
+#include <sys/mcache.h>
 #include <sys/proc.h>
 #include <sys/domain.h>
 #include <sys/protosw.h>
@@ -130,10 +131,10 @@ struct	inpcbinfo ripcbinfo;
 /* control hooks for ipfw and dummynet */
 #if IPFIREWALL
 ip_fw_ctl_t *ip_fw_ctl_ptr;
+#endif /* IPFIREWALL */
 #if DUMMYNET
 ip_dn_ctl_t *ip_dn_ctl_ptr;
 #endif /* DUMMYNET */
-#endif /* IPFIREWALL */
 
 /*
  * Nominal space allocated to a raw ip socket.
@@ -201,6 +202,9 @@ rip_input(m, iphlen)
 	struct inpcb *last = 0;
 	struct mbuf *opts = 0;
 	int skipit = 0, ret = 0;
+
+	/* Expect 32-bit aligned data pointer on strict-align platforms */
+	MBUF_STRICT_DATA_ALIGNMENT_CHECK_32(m);
 
 	ripsrc.sin_addr = ip->ip_src;
 	lck_rw_lock_shared(ripcbinfo.mtx);
@@ -349,21 +353,28 @@ rip_output(
 	register struct ip *ip;
 	register struct inpcb *inp = sotoinpcb(so);
 	int flags = (so->so_options & SO_DONTROUTE) | IP_ALLOWBROADCAST;
-	struct ip_out_args ipoa;
+	struct ip_out_args ipoa = { IFSCOPE_NONE, { 0 }, IPOAF_SELECT_SRCIF };
 	struct ip_moptions *imo;
 	int error = 0;
-	mbuf_traffic_class_t mtc = MBUF_TC_UNSPEC;
+	mbuf_svc_class_t msc = MBUF_SC_UNSPEC;
 
 	if (control != NULL) {
-		mtc = mbuf_traffic_class_from_control(control);
+		msc = mbuf_service_class_from_control(control);
 
 		m_freem(control);
 	}
-	/* If socket was bound to an ifindex, tell ip_output about it */
-	ipoa.ipoa_boundif = (inp->inp_flags & INP_BOUND_IF) ?
-	    inp->inp_boundif : IFSCOPE_NONE;
-	ipoa.ipoa_nocell = (inp->inp_flags & INP_NO_IFT_CELLULAR) ? 1 : 0;
+
 	flags |= IP_OUTARGS;
+	/* If socket was bound to an ifindex, tell ip_output about it */
+	if (inp->inp_flags & INP_BOUND_IF) {
+		ipoa.ipoa_boundif = inp->inp_boundifp->if_index;
+		ipoa.ipoa_flags |= IPOAF_BOUND_IF;
+	}
+	if (inp->inp_flags & INP_NO_IFT_CELLULAR)
+		ipoa.ipoa_flags |=  IPOAF_NO_CELLULAR;
+
+	if (inp->inp_flowhash == 0)
+		inp->inp_flowhash = inp_calc_flowhash(inp);
 
 	/*
 	 * If the user handed us a complete IP packet, use it.
@@ -411,6 +422,9 @@ rip_output(
 		OSAddAtomic(1, &ipstat.ips_rawout);
 	}
 
+	if (inp->inp_laddr.s_addr != INADDR_ANY)
+		ipoa.ipoa_flags |= IPOAF_BOUND_SRCADDR;
+
 #if IPSEC
 	if (ipsec_bypass == 0 && ipsec_setsocket(m, so) != 0) {
 		m_freem(m);
@@ -424,7 +438,9 @@ rip_output(
 		inp->inp_route.ro_rt = NULL;
 	}
 
-	set_packet_tclass(m, so, mtc, 0);
+	set_packet_service_class(m, so, msc, 0);
+	m->m_pkthdr.m_flowhash = inp->inp_flowhash;
+	m->m_pkthdr.m_fhflags |= PF_TAG_FLOWHASH;
 
 #if CONFIG_MACF_NET
 	mac_mbuf_label_associate_inpcb(inp, m);
@@ -446,7 +462,7 @@ rip_output(
 
 	if (inp->inp_route.ro_rt != NULL) {
 		struct rtentry *rt = inp->inp_route.ro_rt;
-		unsigned int outif;
+		struct ifnet *outif;
 
 		if ((rt->rt_flags & (RTF_MULTICAST|RTF_BROADCAST)) ||
 		    inp->inp_socket == NULL ||
@@ -463,12 +479,11 @@ rip_output(
 		}
 		/*
 		 * If this is a connected socket and the destination
-		 * route is unicast, update outif with that of the route
-		 * interface index used by IP.
+		 * route is unicast, update outif with that of the
+		 * route interface used by IP.
 		 */
-		if (rt != NULL &&
-		    (outif = rt->rt_ifp->if_index) != inp->inp_last_outif)
-			inp->inp_last_outif = outif;
+		if (rt != NULL && (outif = rt->rt_ifp) != inp->inp_last_outifp)
+			inp->inp_last_outifp = outif;
 	}
 
 	return (error);
@@ -503,7 +518,9 @@ rip_ctloutput(so, sopt)
 	struct	inpcb *inp = sotoinpcb(so);
 	int	error, optval;
 
-	if (sopt->sopt_level != IPPROTO_IP)
+	/* Allow <SOL_SOCKET,SO_FLUSH> at this level */
+	if (sopt->sopt_level != IPPROTO_IP &&
+	    !(sopt->sopt_level == SOL_SOCKET && sopt->sopt_name == SO_FLUSH))
 		return (EINVAL);
 
 	error = 0;
@@ -516,10 +533,10 @@ rip_ctloutput(so, sopt)
 			error = sooptcopyout(sopt, &optval, sizeof optval);
 			break;
 
-        case IP_STRIPHDR:
-            optval = inp->inp_flags & INP_STRIPHDR;
-            error = sooptcopyout(sopt, &optval, sizeof optval);
-            break;
+		case IP_STRIPHDR:
+			optval = inp->inp_flags & INP_STRIPHDR;
+			error = sooptcopyout(sopt, &optval, sizeof optval);
+			break;
 
 #if IPFIREWALL
 		case IP_FW_ADD:
@@ -537,6 +554,8 @@ rip_ctloutput(so, sopt)
 
 #if DUMMYNET
 		case IP_DUMMYNET_GET:
+			if (!DUMMYNET_LOADED)
+				ip_dn_init();
 			if (DUMMYNET_LOADED)
 				error = ip_dn_ctl_ptr(sopt);
 			else
@@ -576,17 +595,16 @@ rip_ctloutput(so, sopt)
 				inp->inp_flags &= ~INP_HDRINCL;
 			break;
 
-        case IP_STRIPHDR:
-            error = sooptcopyin(sopt, &optval, sizeof optval,
-                        sizeof optval);
-            if (error)
-                break;
-            if (optval)
-                inp->inp_flags |= INP_STRIPHDR;
-            else
-                inp->inp_flags &= ~INP_STRIPHDR;
-            break;
-
+		case IP_STRIPHDR:
+			error = sooptcopyin(sopt, &optval, sizeof optval,
+			    sizeof optval);
+			if (error)
+				break;
+			if (optval)
+				inp->inp_flags |= INP_STRIPHDR;
+			else
+				inp->inp_flags &= ~INP_STRIPHDR;
+			break;
 
 #if IPFIREWALL
 		case IP_FW_ADD:
@@ -612,6 +630,8 @@ rip_ctloutput(so, sopt)
 		case IP_DUMMYNET_CONFIGURE:
 		case IP_DUMMYNET_DEL:
 		case IP_DUMMYNET_FLUSH:
+			if (!DUMMYNET_LOADED)
+				ip_dn_init();
 			if (DUMMYNET_LOADED)
 				error = ip_dn_ctl_ptr(sopt);
 			else
@@ -632,11 +652,11 @@ rip_ctloutput(so, sopt)
 		case IP_RSVP_VIF_ON:
 			error = ip_rsvp_vif_init(so, sopt);
 			break;
-			
+
 		case IP_RSVP_VIF_OFF:
 			error = ip_rsvp_vif_done(so, sopt);
 			break;
-		
+
 		case MRT_INIT:
 		case MRT_DONE:
 		case MRT_ADD_VIF:
@@ -648,6 +668,14 @@ rip_ctloutput(so, sopt)
 			error = ip_mrouter_set(so, sopt);
 			break;
 #endif /* MROUTING */
+
+		case SO_FLUSH:
+			if ((error = sooptcopyin(sopt, &optval, sizeof (optval),
+			    sizeof (optval))) != 0)
+				break;
+
+			error = inp_flush(inp, optval);
+			break;
 
 		default:
 			error = ip_ctloutput(so, sopt);
@@ -822,9 +850,9 @@ __private_extern__ int
 rip_bind(struct socket *so, struct sockaddr *nam, __unused struct proc *p)
 {
 	struct inpcb *inp = sotoinpcb(so);
-	struct sockaddr_in *addr = (struct sockaddr_in *)nam;
+	struct sockaddr_in *addr = (struct sockaddr_in *)(void *)nam;
 	struct ifaddr *ifa = NULL;
-	unsigned int outif = 0;
+	struct ifnet *outif = NULL;
 
 	if (nam->sa_len != sizeof(*addr))
 		return EINVAL;
@@ -837,12 +865,12 @@ rip_bind(struct socket *so, struct sockaddr *nam, __unused struct proc *p)
 	}
 	else if (ifa) {
 		IFA_LOCK(ifa);
-		outif = ifa->ifa_ifp->if_index;
+		outif = ifa->ifa_ifp;
 		IFA_UNLOCK(ifa);
 		IFA_REMREF(ifa);
 	}
 	inp->inp_laddr = addr->sin_addr;
-	inp->inp_last_outif = outif;
+	inp->inp_last_outifp = outif;
 	return 0;
 }
 
@@ -850,7 +878,7 @@ __private_extern__ int
 rip_connect(struct socket *so, struct sockaddr *nam, __unused  struct proc *p)
 {
 	struct inpcb *inp = sotoinpcb(so);
-	struct sockaddr_in *addr = (struct sockaddr_in *)nam;
+	struct sockaddr_in *addr = (struct sockaddr_in *)(void *)nam;
 
 	if (nam->sa_len != sizeof(*addr))
 		return EINVAL;
@@ -861,6 +889,7 @@ rip_connect(struct socket *so, struct sockaddr *nam, __unused  struct proc *p)
 		return EAFNOSUPPORT;
 	inp->inp_faddr = addr->sin_addr;
 	soisconnected(so);
+
 	return 0;
 }
 
@@ -889,7 +918,7 @@ rip_send(struct socket *so, __unused int flags, struct mbuf *m, struct sockaddr 
 			m_freem(m);
 			return ENOTCONN;
 		}
-		dst = ((struct sockaddr_in *)nam)->sin_addr.s_addr;
+		dst = ((struct sockaddr_in *)(void *)nam)->sin_addr.s_addr;
 	}
 	return rip_output(m, so, dst, control);
 }

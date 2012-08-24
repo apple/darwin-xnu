@@ -865,6 +865,18 @@ again:
 	lck_mtx_unlock(&hfsmp->hfs_mutex);
 
 	(void) hfs_flushvolumeheader(hfsmp, MNT_WAIT, HFS_ALTFLUSH);
+
+	if (intrans) {
+		hfs_end_transaction(hfsmp);
+		intrans = 0;
+	}
+
+	/* Initialize the vnode for virtual attribute data file */
+	result = init_attrdata_vnode(hfsmp);
+	if (result) {
+		printf("hfs_create_attr_btree: init_attrdata_vnode() error=%d\n", result); 
+	}
+
 exit:
 	if (vp) {
 		hfs_unlock(VTOC(vp));

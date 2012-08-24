@@ -202,12 +202,12 @@ loop:
 		 */
 		if (!allow_deleted) {
 			if (cp->c_flag & (C_NOEXISTS | C_DELETED)) {
-				if (!skiplock)
-						hfs_unlock(cp);
+				if (!skiplock) {
+					hfs_unlock(cp);
+				}
 				vnode_put(vp);
-	
 				return (NULL);
-			}
+			}			
 		}
 		return (vp);
 	}
@@ -342,12 +342,12 @@ loop_with_lock:
 		        	goto loop;
 		}
 		if (ncp) {
-		        /*
+			/*
 			 * someone else won the race to create
 			 * this cnode and add it to the hash
 			 * just dump our allocation
 			 */
-		    FREE_ZONE(ncp, sizeof(struct cnode), M_HFSNODE);
+			FREE_ZONE(ncp, sizeof(struct cnode), M_HFSNODE);
 			ncp = NULL;
 		}
 
@@ -376,9 +376,8 @@ loop_with_lock:
 				vnode_put(vp);
 			} else {
 				hfs_chash_lock_spin(hfsmp);
-		        CLR(cp->c_hflag, H_ATTACH);
+				CLR(cp->c_hflag, H_ATTACH);
 				*hflags &= ~H_ATTACH;
-
 				if (ISSET(cp->c_hflag, H_WAITING)) {
 					CLR(cp->c_hflag, H_WAITING);
 					wakeup((caddr_t)cp);
@@ -403,7 +402,8 @@ loop_with_lock:
 
 	if (ncp == NULL) {
 		hfs_chash_unlock(hfsmp);
-	    MALLOC_ZONE(ncp, struct cnode *, sizeof(struct cnode), M_HFSNODE, M_WAITOK);
+
+	        MALLOC_ZONE(ncp, struct cnode *, sizeof(struct cnode), M_HFSNODE, M_WAITOK);
 		/*
 		 * since we dropped the chash lock, 
 		 * we need to go back and re-verify

@@ -101,13 +101,10 @@ extern "C"
 uint32_t
 hibernate_sum_page(uint8_t *buf, uint32_t ppnum);
 
-extern vm_offset_t sectHIBB;
-extern unsigned long sectSizeHIB;
-extern vm_offset_t sectDATAB;
-extern unsigned long sectSizeDATA;
-#if defined(__i386__) || defined(__x86_64__)
-extern vm_offset_t sectINITPTB;
-#endif
+extern vm_offset_t segHIBB;
+extern unsigned long segSizeHIB;
+extern vm_offset_t segDATAB;
+extern unsigned long segSizeDATA;
 
 extern ppnum_t gIOHibernateHandoffPages[];
 extern uint32_t gIOHibernateHandoffPageCount;

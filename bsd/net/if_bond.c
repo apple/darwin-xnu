@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2004-2011 Apple Inc. All rights reserved.
+ * Copyright (c) 2004-2012 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -512,11 +512,15 @@ packet_buffer_allocate(int length)
     /* leave room for ethernet header */
     size = length + sizeof(struct ether_header);
     if (size > (int)MHLEN) {
-	/* XXX doesn't handle large payloads */
-	printf("bond: packet_buffer_allocate size %d > max %u\n", size, MHLEN);
-	return (NULL);
+	if (size > (int)MCLBYTES) {
+	    printf("bond: packet_buffer_allocate size %d > max %u\n",
+	           size, MCLBYTES);
+	    return (NULL);
+	}
+	m = m_getcl(M_WAITOK, MT_DATA, M_PKTHDR);
+    } else {
+	m = m_gethdr(M_WAITOK, MT_DATA);
     }
-    m = m_gethdr(M_WAITOK, MT_DATA);
     if (m == NULL) {
 	return (NULL);
     }
@@ -1470,6 +1474,8 @@ bond_output(struct ifnet * ifp, struct mbuf * m)
     uint32_t			h;
     ifbond_ref			ifb;
     struct ifnet *		port_ifp = NULL;
+    int				err;
+    struct flowadv		adv = { FADV_SUCCESS };
 	
     if (m == 0) {
 	return (0);
@@ -1517,7 +1523,17 @@ bond_output(struct ifnet * ifp, struct mbuf * m)
     }
     bond_bpf_output(ifp, m, bpf_func);
 
-    return (ifnet_output_raw(port_ifp, PF_BOND, m));
+    err = dlil_output(port_ifp, PF_BOND, m, NULL, NULL, 1, &adv);
+
+    if (err == 0) {
+	if (adv.code == FADV_FLOW_CONTROLLED) {
+	    err = EQFULL;
+	} else if (adv.code == FADV_SUSPENDED) {
+	    err = EQSUSPENDED;
+	}
+    }
+
+    return (err);
 
  done:
     bond_unlock();
@@ -2561,10 +2577,6 @@ static int
 bond_set_promisc(__unused struct ifnet *ifp)
 {
     int 		error = 0;
-    /*
-     * The benefit of doing this currently does not warrant
-     * the added code complexity. Do nothing and return.
-     */
     return (error);
 }
 

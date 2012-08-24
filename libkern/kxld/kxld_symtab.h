@@ -28,7 +28,6 @@
 #ifndef _KXLD_SYMTAB_H_
 #define _KXLD_SYMTAB_H_
 
-#include <mach/machine.h>
 #include <sys/types.h>
 #if KERNEL
     #include <libkern/kxld_types.h>

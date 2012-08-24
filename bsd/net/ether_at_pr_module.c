@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000,2009 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2011 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -186,12 +186,16 @@ ether_at_prmod_ioctl(
     u_int32_t					command,
     void						*data)
 {
-    struct ifreq *ifr = data;
     int error = 0;
 
     switch (command) {
 
-    case SIOCSIFADDR:
+    case SIOCSIFADDR:		/* struct ifaddr pointer */
+	/*
+	 * Note: caller of ifnet_ioctl() passes in pointer to
+	 * struct ifaddr as parameter to SIOCSIFADDR, for legacy
+	 * reasons.
+	 */
 	 if ((ifp->if_flags & IFF_RUNNING) == 0) {
 	      ifnet_set_flags(ifp, IFF_UP, IFF_UP);
 	      ifnet_ioctl(ifp, 0, SIOCSIFFLAGS, NULL);
@@ -199,9 +203,12 @@ ether_at_prmod_ioctl(
 
 	break;
 
-    case SIOCGIFADDR:
+    case SIOCGIFADDR: {		/* struct ifreq */
+	struct ifreq *ifr = data;
+
 	ifnet_lladdr_copy_bytes(ifp, ifr->ifr_addr.sa_data, ETHER_ADDR_LEN);
 	break;
+    }
 
     default:
 	error = EOPNOTSUPP;

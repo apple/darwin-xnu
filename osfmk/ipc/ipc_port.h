@@ -186,7 +186,6 @@ struct ipc_port {
 #define	ip_lock(port)		io_lock(&(port)->ip_object)
 #define	ip_lock_try(port)	io_lock_try(&(port)->ip_object)
 #define	ip_unlock(port)		io_unlock(&(port)->ip_object)
-#define	ip_check_unlock(port)	io_check_unlock(&(port)->ip_object)
 
 #define	ip_reference(port)	io_reference(&(port)->ip_object)
 #define	ip_release(port)	io_release(&(port)->ip_object)
@@ -259,6 +258,7 @@ extern lck_attr_t 	ipc_lck_attr;
  *	when it is taken.
  */
 
+#if 1
 decl_lck_mtx_data(extern,ipc_port_multiple_lock_data)
 extern lck_mtx_ext_t	ipc_port_multiple_lock_data_ext;
 
@@ -270,6 +270,18 @@ extern lck_mtx_ext_t	ipc_port_multiple_lock_data_ext;
 
 #define	ipc_port_multiple_unlock()					\
 		lck_mtx_unlock(&ipc_port_multiple_lock_data)
+#else
+lck_spin_t ipc_port_multiple_lock_data;
+
+#define	ipc_port_multiple_lock_init()					\
+		lck_spin_init(&ipc_port_multiple_lock_data, &ipc_lck_grp, &ipc_lck_attr)
+
+#define	ipc_port_multiple_lock()					\
+		lck_spin_lock(&ipc_port_multiple_lock_data)
+
+#define	ipc_port_multiple_unlock()					\
+		lck_spin_unlock(&ipc_port_multiple_lock_data)
+#endif
 
 /*
  *	The port timestamp facility provides timestamps
@@ -277,19 +289,7 @@ extern lck_mtx_ext_t	ipc_port_multiple_lock_data_ext;
  *	mach_port_names with port death.
  */
 
-decl_lck_mtx_data(extern,ipc_port_timestamp_lock_data)
-extern lck_mtx_ext_t	ipc_port_timestamp_lock_data_ext;
-
 extern ipc_port_timestamp_t ipc_port_timestamp_data;
-
-#define	ipc_port_timestamp_lock_init()					\
-		lck_mtx_init_ext(&ipc_port_timestamp_lock_data, &ipc_port_timestamp_lock_data_ext, &ipc_lck_grp, &ipc_lck_attr)
-
-#define	ipc_port_timestamp_lock()					\
-		lck_mtx_lock(&ipc_port_timestamp_lock_data)
-
-#define	ipc_port_timestamp_unlock()					\
-		lck_mtx_unlock(&ipc_port_timestamp_lock_data)
 
 /* Retrieve a port timestamp value */
 extern ipc_port_timestamp_t ipc_port_timestamp(void);
@@ -385,7 +385,8 @@ MACRO_END
 
 /* Prepare a receive right for transmission/destruction */
 extern void ipc_port_clear_receiver(
-	ipc_port_t		port);
+	ipc_port_t		port,
+	queue_t			links);
 
 /* Initialize a newly-allocated port */
 extern void ipc_port_init(
@@ -454,9 +455,19 @@ extern mach_port_name_t ipc_port_copyout_send(
 extern void ipc_port_release_send(
 	ipc_port_t	port);
 
+extern void ipc_port_reference(
+	ipc_port_t port);
+
+extern void ipc_port_release(
+	ipc_port_t port);
+
 #endif /* KERNEL_PRIVATE */
 
 #if MACH_KERNEL_PRIVATE
+
+/* Make a naked send-once right from a locked and active receive right */
+extern ipc_port_t ipc_port_make_sonce_locked(
+	ipc_port_t	port);
 
 /* Make a naked send-once right from a receive right */
 extern ipc_port_t ipc_port_make_sonce(
@@ -501,12 +512,6 @@ extern void ipc_port_debug_init(void);
 		ipc_port_alloc_special(ipc_space_reply)
 #define	ipc_port_dealloc_reply(port)	\
 		ipc_port_dealloc_special((port), ipc_space_reply)
-
-#define	ipc_port_reference(port)	\
-		ipc_object_reference(&(port)->ip_object)
-
-#define	ipc_port_release(port)		\
-		ipc_object_release(&(port)->ip_object)
 
 #endif /* MACH_KERNEL_PRIVATE */
 

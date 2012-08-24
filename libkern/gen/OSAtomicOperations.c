@@ -54,48 +54,10 @@ enum {
  * Like standards, there are a lot of atomic ops to choose from!
  */
 
-#if !defined(__i386__) && !defined(__x86_64__)
+#if defined(__i386__) || defined(__x86_64__)
 /* Implemented in assembly for i386 and x86_64 */
-#undef OSAddAtomic
-SInt32
-OSAddAtomic(SInt32 amount, volatile SInt32 * value)
-{
-	SInt32 oldValue;
-	SInt32 newValue;
-
-	do {
-		oldValue = *value;
-		newValue = oldValue + amount;
-	} while (!OSCompareAndSwap((UInt32)oldValue,
-				(UInt32)newValue,
-				(volatile UInt32 *) value));
-	return oldValue;
-}
-
-#undef OSAddAtomicLong
-long
-OSAddAtomicLong(long theAmount, volatile long *address)
-{
-#if __LP64__
-#error Unimplemented
 #else
-	return (long)OSAddAtomic((SInt32)theAmount, address);
-#endif
-}
-
-/* Implemented as an assembly alias for i386 */
-#undef OSCompareAndSwapPtr
-Boolean OSCompareAndSwapPtr(void *oldValue, void *newValue,
-			    void * volatile *address)
-{
-#if __LP64__
-  return OSCompareAndSwap64((UInt64)oldValue, (UInt64)newValue,
-			  (volatile UInt64 *)address);
-#else
-  return OSCompareAndSwap((UInt32)oldValue, (UInt32)newValue,
-			  (volatile UInt32 *)address);
-#endif
-}
+#error Unsupported arch
 #endif
 
 #undef OSIncrementAtomic

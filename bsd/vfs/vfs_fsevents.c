@@ -61,7 +61,7 @@
 #include <security/audit/audit.h>
 #include <bsm/audit_kevents.h>
 
-
+#include <pexpert/pexpert.h>
 
 typedef struct kfs_event {
     LIST_ENTRY(kfs_event) kevent_list;
@@ -124,8 +124,8 @@ typedef struct fs_event_watcher {
 #define MAX_WATCHERS  8
 static fs_event_watcher *watcher_table[MAX_WATCHERS];
 
-
-#define MAX_KFS_EVENTS   4096
+#define DEFAULT_MAX_KFS_EVENTS   4096
+static int max_kfs_events = DEFAULT_MAX_KFS_EVENTS;
 
 // we allocate kfs_event structures out of this zone
 static zone_t     event_zone;
@@ -190,9 +190,11 @@ fsevents_internal_init(void)
 
     lck_rw_init(&event_handling_lock, fsevent_rw_group, fsevent_lock_attr);
 
+    PE_get_default("kern.maxkfsevents", &max_kfs_events, sizeof(max_kfs_events));
+
     event_zone = zinit(sizeof(kfs_event),
-	               MAX_KFS_EVENTS * sizeof(kfs_event),
-	               MAX_KFS_EVENTS * sizeof(kfs_event),
+	               max_kfs_events * sizeof(kfs_event),
+	               max_kfs_events * sizeof(kfs_event),
 	               "fs-event-buf");
     if (event_zone == NULL) {
 	printf("fsevents: failed to initialize the event zone.\n");
@@ -204,7 +206,7 @@ fsevents_internal_init(void)
     zone_change(event_zone, Z_COLLECT, FALSE);
     zone_change(event_zone, Z_CALLERACCT, FALSE);
 
-    if (zfill(event_zone, MAX_KFS_EVENTS) < MAX_KFS_EVENTS) {
+    if (zfill(event_zone, max_kfs_events) < max_kfs_events) {
 	printf("fsevents: failed to pre-fill the event zone.\n");	
     }
     
@@ -999,13 +1001,7 @@ add_fsevent(int type, vfs_context_t ctx, ...)
 		    
 		    pathbuff[0] = '\0';
 		    if ((ret = vn_getpath(vp, pathbuff, &pathbuff_len)) != 0 || pathbuff[0] == '\0') {
-			struct vnode *orig_vp = vp;
 			
-			if (ret != ENOSPC) {
-				printf("add_fsevent: unable to get path for vp %p (%s; ret %d; type %d)\n",
-				       vp, vp->v_name ? vp->v_name : "-UNKNOWN-FILE", ret, type);
-			}
-
 			cur->flags |= KFSE_CONTAINS_DROPPED_EVENTS;
 			
 			do {
@@ -1027,7 +1023,6 @@ add_fsevent(int type, vfs_context_t ctx, ...)
 			} while (ret == ENOSPC);
 				
 			if (ret != 0 || vp == NULL) {
-				printf("add_fsevent: unabled to get a path for vp %p.  dropping the event.\n", orig_vp);
 				error = ENOENT;
 				if (need_event_unlock == 0) {
 					// then we only grabbed it shared 
@@ -1277,13 +1272,13 @@ release_event_ref(kfs_event *kfse)
 
 
 static int
-add_watcher(int8_t *event_list, int32_t num_events, int32_t eventq_size, fs_event_watcher **watcher_out)
+add_watcher(int8_t *event_list, int32_t num_events, int32_t eventq_size, fs_event_watcher **watcher_out, void *fseh)
 {
     int               i;
     fs_event_watcher *watcher;
 
-    if (eventq_size <= 0 || eventq_size > 100*MAX_KFS_EVENTS) {
-	eventq_size = MAX_KFS_EVENTS;
+    if (eventq_size <= 0 || eventq_size > 100*max_kfs_events) {
+	eventq_size = max_kfs_events;
     }
 
     // Note: the event_queue follows the fs_event_watcher struct
@@ -1308,7 +1303,7 @@ add_watcher(int8_t *event_list, int32_t num_events, int32_t eventq_size, fs_even
     watcher->blockers     = 0;
     watcher->num_readers  = 0;
     watcher->max_event_id = 0;
-    watcher->fseh         = NULL;
+    watcher->fseh         = fseh;
 
     watcher->num_dropped  = 0;      // XXXdbg - debugging
 
@@ -1922,13 +1917,14 @@ typedef struct ext_fsevent_dev_filter_args {
 } ext_fsevent_dev_filter_args;
 #pragma pack(pop)
 
+#define NEW_FSEVENTS_DEVICE_FILTER      _IOW('s', 100, ext_fsevent_dev_filter_args)
+
 typedef struct old_fsevent_dev_filter_args {
     uint32_t  num_devices;
     int32_t   devices;
 } old_fsevent_dev_filter_args;
 
 #define	OLD_FSEVENTS_DEVICE_FILTER	_IOW('s', 100, old_fsevent_dev_filter_args)
-#define	NEW_FSEVENTS_DEVICE_FILTER	_IOW('s', 100, ext_fsevent_dev_filter_args)
 
 #if __LP64__
 /* need this in spite of the padding due to alignment of devices */
@@ -1948,7 +1944,8 @@ fseventsf_ioctl(struct fileproc *fp, u_long cmd, caddr_t data, vfs_context_t ctx
 
     if (proc_is64bit(vfs_context_proc(ctx))) {
 	devfilt_args = (ext_fsevent_dev_filter_args *)data;
-    } else if (cmd == OLD_FSEVENTS_DEVICE_FILTER) {
+    }
+    else if (cmd == OLD_FSEVENTS_DEVICE_FILTER) {
 	old_fsevent_dev_filter_args *udev_filt_args = (old_fsevent_dev_filter_args *)data;
 	
 	devfilt_args = &_devfilt_args;
@@ -1956,7 +1953,8 @@ fseventsf_ioctl(struct fileproc *fp, u_long cmd, caddr_t data, vfs_context_t ctx
 
 	devfilt_args->num_devices = udev_filt_args->num_devices;
 	devfilt_args->devices     = CAST_USER_ADDR_T(udev_filt_args->devices);
-    } else {
+    }
+    else {
 #if __LP64__
 	fsevent_dev_filter_args32 *udev_filt_args = (fsevent_dev_filter_args32 *)data;
 #else
@@ -2530,14 +2528,14 @@ fseventsioctl(__unused dev_t dev, u_long cmd, caddr_t data, __unused int flag, s
 	    error = add_watcher(event_list,
 				fse_clone_args->num_events,
 				fse_clone_args->event_queue_depth,
-				&fseh->watcher);
+			        &fseh->watcher,
+			        fseh);
 	    if (error) {
 		FREE(event_list, M_TEMP);
 		FREE(fseh, M_TEMP);
 		return error;
 	    }
 
-	    // connect up the watcher with this fsevent_handle
 	    fseh->watcher->fseh = fseh;
 
 	    error = falloc(p, &f, &fd, vfs_context_current());

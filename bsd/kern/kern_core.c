@@ -211,9 +211,9 @@ coredump(proc_t core_proc)
 	int		command_size, header_size, tstate_size;
 	int		hoffset;
 	off_t		foffset;
-	vm_map_offset_t	vmoffset;
+	mach_vm_offset_t vmoffset;
 	vm_offset_t	header;
-	vm_map_size_t	vmsize;
+	mach_vm_size_t	vmsize;
 	vm_prot_t	prot;
 	vm_prot_t	maxprot;
 	vm_inherit_t	inherit;

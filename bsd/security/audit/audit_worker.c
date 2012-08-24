@@ -1,5 +1,5 @@
 /*-
- * Copyright (c) 1999-2010 Apple Inc.
+ * Copyright (c) 1999-2011 Apple Inc.
  * Copyright (c) 2006-2008 Robert N. M. Watson
  * All rights reserved.
  *
@@ -105,10 +105,10 @@ static struct vnode		*audit_vp;
 #define	AUDIT_WORKER_SX_DESTROY()	slck_destroy(&audit_worker_sl)
 
 /*
- * The audit_draining flag is set when audit is disabled and the audit
+ * The audit_q_draining flag is set when audit is disabled and the audit
  * worker queue is being drained.
  */
-static int			audit_draining;
+static int			audit_q_draining;
 
 /*
  * The special kernel audit record, audit_drain_kar, is used to mark the end of
@@ -460,7 +460,7 @@ audit_worker(void)
 		while ((ar = TAILQ_FIRST(&ar_worklist))) {
 			TAILQ_REMOVE(&ar_worklist, ar, k_q);
 			if (ar->k_ar_commit & AR_DRAIN_QUEUE) {
-				audit_draining = 0;
+				audit_q_draining = 0;
 				cv_broadcast(&audit_drain_cv);
 			} else {
 				audit_worker_process_record(ar);
@@ -485,10 +485,40 @@ audit_rotate_vnode(kauth_cred_t cred, struct vnode *vp)
 {
 	kauth_cred_t old_audit_cred;
 	struct vnode *old_audit_vp;
-	int audit_was_enabled;
 
 	KASSERT((cred != NULL && vp != NULL) || (cred == NULL && vp == NULL),
 	    ("audit_rotate_vnode: cred %p vp %p", cred, vp));
+
+
+	mtx_lock(&audit_mtx);
+	if (audit_enabled && (NULL == vp)) {
+		/* Auditing is currently enabled but will be disabled. */
+
+		/*
+		 * Disable auditing now so nothing more is added while the
+		 * audit worker thread is draining the audit record queue.
+		 */
+		audit_enabled = 0;
+
+		/*
+		 * Drain the auditing queue by inserting a drain record at the
+		 * end of the queue and waiting for the audit worker thread
+		 * to find this record and signal that it is done before
+		 * we close the audit trail.
+		 */
+		audit_q_draining = 1;
+		while (audit_q_len >= audit_qctrl.aq_hiwater)
+			cv_wait(&audit_watermark_cv, &audit_mtx);
+		TAILQ_INSERT_TAIL(&audit_q, &audit_drain_kar, k_q);
+		audit_q_len++;
+		cv_signal(&audit_worker_cv);
+	}
+
+	/* If the audit queue is draining then wait here until it's done. */
+	while (audit_q_draining)
+		cv_wait(&audit_drain_cv, &audit_mtx);
+	mtx_unlock(&audit_mtx);
+
 
 	/*
 	 * Rotate the vnode/cred, and clear the rotate flag so that we will
@@ -498,37 +528,10 @@ audit_rotate_vnode(kauth_cred_t cred, struct vnode *vp)
 	old_audit_cred = audit_ctx.vc_ucred;
 	old_audit_vp = audit_vp;
 	audit_ctx.vc_ucred = cred;
+	audit_vp = vp;
 	audit_file_rotate_wait = 0;
-	audit_was_enabled = audit_enabled;
-	if ((audit_enabled = (NULL != vp)))
-		audit_vp = vp;
-	audit_draining = (audit_was_enabled && !audit_enabled);
+	audit_enabled = (audit_vp != NULL);
 	AUDIT_WORKER_SX_XUNLOCK();
-
-	/*
-	 * If audit (was enabled and) is now disabled then drain the audit
-	 * record queue and wait until it is done.
-	 */
-	mtx_lock(&audit_mtx);
-	if (audit_draining) {
-		/*
-		 * Insert the special drain record in the queue.
-		 */
-		while (audit_q_len >= audit_qctrl.aq_hiwater)
-			cv_wait(&audit_watermark_cv, &audit_mtx);
-		TAILQ_INSERT_TAIL(&audit_q, &audit_drain_kar, k_q);
-		audit_q_len++;
-		cv_signal(&audit_worker_cv);
-
-		/*
-		 * Wait for the audit worker thread to signal it is done.
-		 */
-		while (audit_draining)
-			cv_wait(&audit_drain_cv, &audit_mtx);
-
-		audit_vp = NULL;
-	}
-	mtx_unlock(&audit_mtx);
 
 	/*
 	 * If there was an old vnode/credential, close and free.

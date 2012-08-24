@@ -11,7 +11,6 @@ OPTIONS/debug			optional debug
 
 
 OPTIONS/gprof		optional gprof
-OPTIONS/db_machine_commands	optional db_machine_commands
 OPTIONS/dynamic_num_nodes	optional dynamic_num_nodes
 OPTIONS/vtoc_compat	optional vtoc_compat
 OPTIONS/fddi		optional fddi
@@ -27,8 +26,6 @@ osfmk/i386/pmap_common.c	standard
 osfmk/i386/pal_routines.c	optional pal_i386
 osfmk/i386/pal_routines_asm.s	optional pal_i386
 
-osfmk/ddb/db_aout.c		optional mach_kdb
-
 osfmk/i386/bsd_i386.c		optional mach_bsd
 osfmk/i386/bsd_i386_native.c	optional mach_bsd
 osfmk/i386/machdep_call.c	optional mach_bsd
@@ -40,9 +37,6 @@ osfmk/i386/cpu.c		standard
 osfmk/i386/cpuid.c		standard
 osfmk/i386/cpu_threads.c	standard
 osfmk/i386/cpu_topology.c	standard
-osfmk/i386/db_disasm.c	optional mach_kdb
-osfmk/i386/db_interface.c	optional mach_kdb
-osfmk/i386/db_trace.c		optional mach_kdb
 osfmk/i386/etimer.c		standard
 osfmk/i386/fpu.c		standard
 osfmk/i386/gdt.c		standard

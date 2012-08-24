@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2010 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2012 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -69,6 +69,7 @@
 #include <sys/param.h>
 #include <sys/systm.h>
 #include <sys/mbuf.h>
+#include <sys/mcache.h>
 #include <sys/protosw.h>
 #include <sys/socket.h>
 #include <sys/time.h>
@@ -98,11 +99,6 @@
 #if IPSEC
 #include <netinet6/ipsec.h>
 #include <netkey/key.h>
-#endif
-
-#if defined(NFAITH) && NFAITH > 0
-#include "faith.h"
-#include <net/if_types.h>
 #endif
 
  /* XXX This one should go in sys/mbuf.h. It is used to avoid that
@@ -144,22 +140,32 @@ SYSCTL_INT(_net_inet_icmp, OID_AUTO, log_redirect, CTLFLAG_RW | CTLFLAG_LOCKED,
 	&log_redirect, 0, "");
 
 #if ICMP_BANDLIM 
- 
+
+/* Default values in case CONFIG_ICMP_BANDLIM is not defined in the MASTER file */
+#ifndef CONFIG_ICMP_BANDLIM
+#if !CONFIG_EMBEDDED
+#define CONFIG_ICMP_BANDLIM 250
+#else /* CONFIG_EMBEDDED */
+#define CONFIG_ICMP_BANDLIM 50
+#endif /* CONFIG_EMBEDDED */
+#endif /* CONFIG_ICMP_BANDLIM */
+
 /*    
  * ICMP error-response bandwidth limiting sysctl.  If not enabled, sysctl
  *      variable content is -1 and read-only.
  */     
     
-static int      icmplim = 250;
+static int      icmplim = CONFIG_ICMP_BANDLIM;
 SYSCTL_INT(_net_inet_icmp, ICMPCTL_ICMPLIM, icmplim, CTLFLAG_RW | CTLFLAG_LOCKED,
 	&icmplim, 0, "");
-#else
+
+#else /* ICMP_BANDLIM */
 
 static int      icmplim = -1;
 SYSCTL_INT(_net_inet_icmp, ICMPCTL_ICMPLIM, icmplim, CTLFLAG_RD | CTLFLAG_LOCKED,
 	&icmplim, 0, "");
 	
-#endif 
+#endif /* ICMP_BANDLIM */
 
 /*
  * ICMP broadcast echo sysctl
@@ -192,10 +198,15 @@ icmp_error(
 	u_int32_t nextmtu)
 {
 	struct ip *oip = mtod(n, struct ip *), *nip;
-	unsigned oiplen = IP_VHL_HL(oip->ip_vhl) << 2;
+	unsigned oiplen;
 	struct icmp *icp;
 	struct mbuf *m;
 	unsigned icmplen;
+
+	/* Expect 32-bit aligned data pointer on strict-align platforms */
+	MBUF_STRICT_DATA_ALIGNMENT_CHECK_32(n);
+
+	oiplen = IP_VHL_HL(oip->ip_vhl) << 2;
 
 #if ICMPPRINTFS
 	if (icmpprintfs)
@@ -212,7 +223,8 @@ icmp_error(
 		goto freeit;
 	if (oip->ip_p == IPPROTO_ICMP && type != ICMP_REDIRECT &&
 	  n->m_len >= oiplen + ICMP_MINLEN &&
-	  !ICMP_INFOTYPE(((struct icmp *)((caddr_t)oip + oiplen))->icmp_type)) {
+	  !ICMP_INFOTYPE(((struct icmp *)(void *)((caddr_t)oip + oiplen))->
+	  icmp_type)) {
 		icmpstat.icps_oldicmp++;
 		goto freeit;
 	}
@@ -312,11 +324,16 @@ icmp_input(struct mbuf *m, int hlen)
 {
 	struct icmp *icp;
 	struct ip *ip = mtod(m, struct ip *);
-	int icmplen = ip->ip_len;
+	int icmplen;
 	int i;
 	struct in_ifaddr *ia;
 	void (*ctlfunc)(int, struct sockaddr *, void *);
 	int code;
+
+	/* Expect 32-bit aligned data pointer on strict-align platforms */
+	MBUF_STRICT_DATA_ALIGNMENT_CHECK_32(m);
+
+	icmplen = ip->ip_len;
 
 	/*
 	 * Locate icmp structure in mbuf, and check
@@ -352,21 +369,6 @@ icmp_input(struct mbuf *m, int hlen)
 	}
 	m->m_len += hlen;
 	m->m_data -= hlen;
-
-#if defined(NFAITH) && 0 < NFAITH
-	if (m->m_pkthdr.rcvif && m->m_pkthdr.rcvif->if_type == IFT_FAITH) {
-		/*
-		 * Deliver very specific ICMP type only.
-		 */
-		switch (icp->icmp_type) {
-		case ICMP_UNREACH:
-		case ICMP_TIMXCEED:
-			break;
-		default:
-			goto freeit;
-		}
-	}
-#endif
 
 #if ICMPPRINTFS
 	if (icmpprintfs)
@@ -514,7 +516,6 @@ icmp_input(struct mbuf *m, int hlen)
 			goto reflect;
 
 	case ICMP_MASKREQ:
-#define	satosin(sa)	((struct sockaddr_in *)(sa))
 		if (icmpmaskrepl == 0)
 			break;
 		/*
@@ -810,10 +811,13 @@ icmp_send(struct mbuf *m, struct mbuf *opts)
 	int hlen;
 	struct icmp *icp;
 	struct route ro;
-	struct ip_out_args ipoa = { IFSCOPE_NONE, 0 };
+	struct ip_out_args ipoa = { IFSCOPE_NONE, { 0 },
+	    IPOAF_SELECT_SRCIF | IPOAF_BOUND_SRCADDR };
 
-	if ((m->m_flags & M_PKTHDR) && m->m_pkthdr.rcvif != NULL)
+	if ((m->m_flags & M_PKTHDR) && m->m_pkthdr.rcvif != NULL) {
 		ipoa.ipoa_boundif = m->m_pkthdr.rcvif->if_index;
+		ipoa.ipoa_flags |= IPOAF_BOUND_IF;
+	}
 
 	hlen = IP_VHL_HL(ip->ip_vhl) << 2;
 	m->m_data += hlen;
@@ -1059,9 +1063,6 @@ icmp_dgram_ctloutput(struct socket *so, struct sockopt *sopt)
 		case IP_PORTRANGE:
 		case IP_RECVIF:
 		case IP_IPSEC_POLICY:
-#if defined(NFAITH) && NFAITH > 0
-		case IP_FAITH:
-#endif
 		case IP_STRIPHDR:
 		case IP_RECVTTL:
 		case IP_BOUND_IF:
@@ -1092,6 +1093,8 @@ icmp_dgram_send(struct socket *so, int flags, struct mbuf *m, struct sockaddr *n
 	int icmplen;
 
 	if ((inp->inp_flags & INP_HDRINCL) != 0) {
+		/* Expect 32-bit aligned data pointer on strict-align platforms */
+		MBUF_STRICT_DATA_ALIGNMENT_CHECK_32(m);
 		/*
 		 * This is not raw IP, we liberal only for fields TOS, id and TTL 
 		 */
@@ -1141,8 +1144,8 @@ icmp_dgram_send(struct socket *so, int flags, struct mbuf *m, struct sockaddr *n
 ours:
 		/* Do not trust we got a valid checksum */
 		ip->ip_sum = 0;
-		
-		icp = (struct icmp *)(((char *)m->m_data) + hlen);
+
+		icp = (struct icmp *)(void *)(((char *)m->m_data) + hlen);
 		icmplen = m->m_pkthdr.len - hlen;
 	} else {
 		if ((icmplen = m->m_pkthdr.len) < ICMP_MINLEN) {

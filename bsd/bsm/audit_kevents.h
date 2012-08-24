@@ -1,5 +1,5 @@
 /*-
- * Copyright (c) 2005-2009 Apple Inc.
+ * Copyright (c) 2005-2010 Apple Inc.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -732,6 +732,7 @@
 #define	AUE_INITGROUPS		AUE_NULL
 #define	AUE_IOPOLICYSYS		AUE_NULL
 #define	AUE_ISSETUGID		AUE_NULL
+#define	AUE_LEDGER		AUE_NULL
 #define	AUE_LIOLISTIO		AUE_NULL
 #define	AUE_LISTXATTR		AUE_NULL
 #define	AUE_LSTATV		AUE_NULL

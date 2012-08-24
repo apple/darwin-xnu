@@ -88,16 +88,6 @@ extern "C" {
  */
 #define kKextRequestPredicateGetLoaded             "Get Loaded Kext Info"
 
-/* Predicate: Get Kernel Image
- * Argument:  None
- * Response:  Raw bytes + length containing the sanitized image of the kernel.
- * Op result: OSReturn indicating any errors in processing (see OSKextLib.h)
- *
- * Retrieves a sanitized image of the running kernel for use in generating
- * debug symbols in user space.
- */
-#define kKextRequestPredicateGetKernelImage    "Get Kernel Image"
-
 /* Predicate: Get Kernel Load Address
  * Argument:  None
  * Response:  OSNumber containing kernel load address.

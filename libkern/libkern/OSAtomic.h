@@ -85,8 +85,6 @@ extern Boolean OSCompareAndSwap64(
 
 #endif /* defined(__i386__) || defined(__x86_64__) */
 
-#if defined(__i386__) || defined(__x86_64__) || defined(__arm__)
-
 /*!
  * @function OSAddAtomic64
  *
@@ -129,8 +127,6 @@ inline static SInt64 OSDecrementAtomic64(volatile SInt64 * address)
 {
     return OSAddAtomic64(-1LL, address);
 }
-
-#endif  /* defined(__i386__) || defined(__x86_64__) || defined(__arm__) */
 
 #if XNU_KERNEL_PRIVATE
 /* Not to be included in headerdoc.

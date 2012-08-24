@@ -27,6 +27,7 @@
  */
 #include <vm/pmap.h>
 #include <vm/vm_map.h>
+#include <kern/ledger.h>
 #include <i386/pmap_internal.h>
 
 void		pmap_remove_range(
@@ -34,6 +35,8 @@ void		pmap_remove_range(
 			vm_map_offset_t	va,
 			pt_entry_t	*spte,
 			pt_entry_t	*epte);
+
+uint32_t pmap_update_clear_pte_count;
 
 /*
  * The Intel platform can nest at the PDE level, so NBPDE (i.e. 2MB) at a time,
@@ -105,7 +108,7 @@ kern_return_t pmap_nest(pmap_t grand, pmap_t subord, addr64_t va_start, addr64_t
 
 			while (0 == npde || ((*npde & INTEL_PTE_VALID) == 0)) {
 				PMAP_UNLOCK(subord);
-				pmap_expand_pdpt(subord, nvaddr);
+				pmap_expand_pdpt(subord, nvaddr, PMAP_EXPAND_OPTIONS_NONE);
 				PMAP_LOCK(subord);
 				npde = pmap64_pdpt(subord, nvaddr);
 			}
@@ -118,7 +121,7 @@ kern_return_t pmap_nest(pmap_t grand, pmap_t subord, addr64_t va_start, addr64_t
 
 			while (0 == npde || ((*npde & INTEL_PTE_VALID) == 0)) {
 				PMAP_UNLOCK(subord);
-				pmap_expand(subord, nvaddr);
+				pmap_expand(subord, nvaddr, PMAP_EXPAND_OPTIONS_NONE);
 				PMAP_LOCK(subord);
 				npde = pmap_pde(subord, nvaddr);
 			}
@@ -144,7 +147,7 @@ kern_return_t pmap_nest(pmap_t grand, pmap_t subord, addr64_t va_start, addr64_t
 			pde = pmap64_pdpt(grand, vaddr);
 			if (0 == pde) {
 				PMAP_UNLOCK(grand);
-				pmap_expand_pml4(grand, vaddr);
+				pmap_expand_pml4(grand, vaddr, PMAP_EXPAND_OPTIONS_NONE);
 				PMAP_LOCK(grand);
 				pde = pmap64_pdpt(grand, vaddr);
 			}
@@ -163,7 +166,7 @@ kern_return_t pmap_nest(pmap_t grand, pmap_t subord, addr64_t va_start, addr64_t
 			pde = pmap_pde(grand, vaddr);
 			if ((0 == pde) && cpu_64bit) {
 				PMAP_UNLOCK(grand);
-				pmap_expand_pdpt(grand, vaddr);
+				pmap_expand_pdpt(grand, vaddr, PMAP_EXPAND_OPTIONS_NONE);
 				PMAP_LOCK(grand);
 				pde = pmap_pde(grand, vaddr);
 			}
@@ -362,7 +365,7 @@ pmap_update_cache_attributes_locked(ppnum_t pn, unsigned attributes) {
 				panic("pmap_update_cache_attributes_locked: Missing PTE, pmap: %p, pn: 0x%x vaddr: 0x%llx kernel_pmap: %p", pmap, pn, vaddr, kernel_pmap);
 
 			nexth = (pv_hashed_entry_t)queue_next(&pvh_e->qlink);
-			pmap_update_pte(ptep, *ptep, (*ptep & ~PHYS_CACHEABILITY_MASK) | attributes);
+			pmap_update_pte(ptep, PHYS_CACHEABILITY_MASK, attributes);
 			PMAP_UPDATE_TLBS(pmap, vaddr, vaddr + PAGE_SIZE);
 			pvh_e = nexth;
 		} while ((pv_e = (pv_rooted_entry_t)nexth) != pv_h);
@@ -395,18 +398,34 @@ void x86_filter_TLB_coherency_interrupts(boolean_t dofilter) {
  *	or lose information.  That is, this routine must actually
  *	insert this page into the given map NOW.
  */
+
 void
 pmap_enter(
 	register pmap_t		pmap,
  	vm_map_offset_t		vaddr,
 	ppnum_t                 pn,
 	vm_prot_t		prot,
+	vm_prot_t		fault_type,
 	unsigned int 		flags,
 	boolean_t		wired)
 {
+	(void) pmap_enter_options(pmap, vaddr, pn, prot, fault_type, flags, wired, PMAP_EXPAND_OPTIONS_NONE);
+}
+
+kern_return_t
+pmap_enter_options(
+	register pmap_t		pmap,
+ 	vm_map_offset_t		vaddr,
+	ppnum_t                 pn,
+	vm_prot_t		prot,
+	__unused vm_prot_t	fault_type,
+	unsigned int 		flags,
+	boolean_t		wired,
+	unsigned int		options)
+{
 	pt_entry_t		*pte;
 	pv_rooted_entry_t	pv_h;
-	int			pai;
+	ppnum_t			pai;
 	pv_hashed_entry_t	pvh_e;
 	pv_hashed_entry_t	pvh_new;
 	pt_entry_t		template;
@@ -421,24 +440,34 @@ pmap_enter(
 	vm_object_t		delpage_pm_obj = NULL;
 	int			delpage_pde_index = 0;
 	pt_entry_t		old_pte;
+	kern_return_t		kr_expand;
 
 	pmap_intr_assert();
-	assert(pn != vm_page_fictitious_addr);
 
 	if (pmap == PMAP_NULL)
-		return;
+		return KERN_INVALID_ARGUMENT;
+
+	/* N.B. We can be supplied a zero page frame in the NOENTER case, it's an
+	 * unused value for that scenario.
+	 */
+	assert(pn != vm_page_fictitious_addr);
+
 	if (pn == vm_page_guard_addr)
-		return;
+		return KERN_INVALID_ARGUMENT;
 
 	PMAP_TRACE(PMAP_CODE(PMAP__ENTER) | DBG_FUNC_START,
-		   pmap,
-		   (uint32_t) (vaddr >> 32), (uint32_t) vaddr,
-		   pn, prot);
+	    pmap,
+	    (uint32_t) (vaddr >> 32), (uint32_t) vaddr,
+	    pn, prot);
 
 	if ((prot & VM_PROT_EXECUTE) || !nx_enabled || !pmap->nx_enabled)
 		set_NX = FALSE;
 	else
 		set_NX = TRUE;
+
+	if (__improbable(set_NX && (pmap == kernel_pmap) && ((pmap_disable_kstack_nx && (flags & VM_MEM_STACK)) || (pmap_disable_kheap_nx && !(flags & VM_MEM_STACK))))) {
+		set_NX = FALSE;
+	}
 
 	/*
 	 *	Must allocate a new pvlist entry while we're unlocked;
@@ -463,7 +492,9 @@ Retry:
 	 	while ((pte = pmap64_pde(pmap, vaddr)) == PD_ENTRY_NULL) {
 			/* need room for another pde entry */
 			PMAP_UNLOCK(pmap);
-			pmap_expand_pdpt(pmap, vaddr);
+			kr_expand = pmap_expand_pdpt(pmap, vaddr, options);
+			if (kr_expand != KERN_SUCCESS)
+				return kr_expand;
 			PMAP_LOCK(pmap);
 		}
 	} else {
@@ -473,9 +504,15 @@ Retry:
 			 * going to grow pde level page(s)
 			 */
 			PMAP_UNLOCK(pmap);
-			pmap_expand(pmap, vaddr);
+			kr_expand = pmap_expand(pmap, vaddr, options);
+			if (kr_expand != KERN_SUCCESS)
+				return kr_expand;
 			PMAP_LOCK(pmap);
 		}
+	}
+	if (options & PMAP_EXPAND_OPTIONS_NOENTER) {
+		PMAP_UNLOCK(pmap);
+		return KERN_SUCCESS;
 	}
 
 	if (superpage && *pte && !(*pte & INTEL_PTE_PS)) {
@@ -540,14 +577,15 @@ Retry:
 
 		if (wired) {
 			template |= INTEL_PTE_WIRED;
-			if (!iswired(old_attributes))
-				OSAddAtomic(+1,
-					&pmap->stats.wired_count);
+			if (!iswired(old_attributes))  {
+				OSAddAtomic(+1, &pmap->stats.wired_count);
+				pmap_ledger_credit(pmap, task_ledgers.wired_mem, PAGE_SIZE);
+			}
 		} else {
 			if (iswired(old_attributes)) {
 				assert(pmap->stats.wired_count >= 1);
-				OSAddAtomic(-1,
-					&pmap->stats.wired_count);
+				OSAddAtomic(-1, &pmap->stats.wired_count);
+				pmap_ledger_debit(pmap, task_ledgers.wired_mem, PAGE_SIZE);
 			}
 		}
 		if (superpage)		/* this path can not be used */
@@ -557,8 +595,11 @@ Retry:
 		    ((old_attributes ^ template) != INTEL_PTE_WIRED);
 
 		/* store modified PTE and preserve RC bits */
-		pmap_update_pte(pte, *pte,
-			template | (*pte & (INTEL_PTE_REF | INTEL_PTE_MOD)));
+		pt_entry_t npte, opte;;
+		do {
+			opte = *pte;
+			npte = template | (opte & (INTEL_PTE_REF | INTEL_PTE_MOD));
+		} while (!pmap_cmpx_pte(pte, opte, npte));
 		if (old_pa_locked) {
 			UNLOCK_PVH(pai);
 			old_pa_locked = FALSE;
@@ -588,7 +629,7 @@ Retry:
 	         */
 
 		/* invalidate the PTE */
-		pmap_update_pte(pte, *pte, (*pte & ~INTEL_PTE_VALID));
+		pmap_update_pte(pte, INTEL_PTE_VALID, 0);
 		/* propagate invalidate everywhere */
 		PMAP_UPDATE_TLBS(pmap, vaddr, vaddr + PAGE_SIZE);
 		/* remember reference and change */
@@ -599,14 +640,14 @@ Retry:
 
 		if (IS_MANAGED_PAGE(pai)) {
 			pmap_assert(old_pa_locked == TRUE);
+			pmap_ledger_debit(pmap, task_ledgers.phys_mem, PAGE_SIZE);
 			assert(pmap->stats.resident_count >= 1);
-			OSAddAtomic(-1,
-				&pmap->stats.resident_count);
-
+			OSAddAtomic(-1, &pmap->stats.resident_count);
 			if (iswired(*pte)) {
 				assert(pmap->stats.wired_count >= 1);
-				OSAddAtomic(-1,
-					&pmap->stats.wired_count);
+				OSAddAtomic(-1, &pmap->stats.wired_count);
+				pmap_ledger_debit(pmap, task_ledgers.wired_mem,
+				    PAGE_SIZE);
 			}
 			pmap_phys_attributes[pai] |= oattr;
 
@@ -627,8 +668,8 @@ Retry:
 
 			if (iswired(*pte)) {
 				assert(pmap->stats.wired_count >= 1);
-				OSAddAtomic(-1,
-					&pmap->stats.wired_count);
+				OSAddAtomic(-1, &pmap->stats.wired_count);
+				pmap_ledger_debit(pmap, task_ledgers.wired_mem, PAGE_SIZE);
 			}
 		}
 	}
@@ -708,6 +749,7 @@ Retry:
 	         * only count the mapping
 	         * for 'managed memory'
 	         */
+		pmap_ledger_credit(pmap, task_ledgers.phys_mem, PAGE_SIZE);
 		OSAddAtomic(+1,  &pmap->stats.resident_count);
 		if (pmap->stats.resident_count > pmap->stats.resident_max) {
 			pmap->stats.resident_max = pmap->stats.resident_count;
@@ -716,6 +758,7 @@ Retry:
 		/* Account for early mappings created before "managed pages"
 		 * are determined. Consider consulting the available DRAM map.
 		 */
+		pmap_ledger_credit(pmap, task_ledgers.phys_mem, PAGE_SIZE);
 		OSAddAtomic(+1,  &pmap->stats.resident_count);
 	}
 	/*
@@ -746,6 +789,7 @@ Retry:
 	if (wired) {
 		template |= INTEL_PTE_WIRED;
 		OSAddAtomic(+1,  & pmap->stats.wired_count);
+		pmap_ledger_credit(pmap, task_ledgers.wired_mem, PAGE_SIZE);
 	}
 	if (superpage)
 		template |= INTEL_PTE_PS;
@@ -781,10 +825,11 @@ Done:
 		vm_object_unlock(delpage_pm_obj);
 		VM_PAGE_FREE(m);
 		OSAddAtomic(-1,  &inuse_ptepages_count);
-		PMAP_ZINFO_PFREE(PAGE_SIZE);
+		PMAP_ZINFO_PFREE(pmap, PAGE_SIZE);
 	}
 
 	PMAP_TRACE(PMAP_CODE(PMAP__ENTER) | DBG_FUNC_END, 0, 0, 0, 0, 0);
+	return KERN_SUCCESS;
 }
 
 /*
@@ -812,7 +857,7 @@ pmap_remove_range(
 	pv_hashed_entry_t       pvh_e;
 	int			pvh_cnt = 0;
 	int			num_removed, num_unwired, num_found, num_invalid;
-	int			pai;
+	ppnum_t			pai;
 	pmap_paddr_t		pa;
 	vm_map_offset_t		vaddr;
 
@@ -861,8 +906,8 @@ pmap_remove_range(
 		if ((p & INTEL_PTE_VALID) == 0)
 			num_invalid++;
 
-		/* invalidate the PTE */ 
-		pmap_update_pte(cpte, *cpte, (*cpte & ~INTEL_PTE_VALID));
+		/* invalidate the PTE */
+		pmap_update_pte(cpte, INTEL_PTE_VALID, 0);
 	}
 
 	if (num_found == 0) {
@@ -933,6 +978,7 @@ update_counts:
 	if (pmap->stats.resident_count < num_removed)
 	        panic("pmap_remove_range: resident_count");
 #endif
+	pmap_ledger_debit(pmap, task_ledgers.phys_mem, machine_ptob(num_removed));
 	assert(pmap->stats.resident_count >= num_removed);
 	OSAddAtomic(-num_removed,  &pmap->stats.resident_count);
 
@@ -942,6 +988,7 @@ update_counts:
 #endif
 	assert(pmap->stats.wired_count >= num_unwired);
 	OSAddAtomic(-num_unwired,  &pmap->stats.wired_count);
+	pmap_ledger_debit(pmap, task_ledgers.wired_mem, machine_ptob(num_unwired));
 
 	return;
 }
@@ -1144,11 +1191,12 @@ pmap_page_protect(
 			/*
 		         * Remove the mapping, collecting dirty bits.
 		         */
-			pmap_update_pte(pte, *pte, *pte & ~INTEL_PTE_VALID);
+			pmap_update_pte(pte, INTEL_PTE_VALID, 0);
 
 			/* Remove per-pmap wired count */
 			if (iswired(*pte)) {
 				OSAddAtomic(-1, &pmap->stats.wired_count);
+				pmap_ledger_debit(pmap, task_ledgers.wired_mem, PAGE_SIZE);
 			}
 
 			PMAP_UPDATE_TLBS(pmap, vaddr, vaddr+PAGE_SIZE);
@@ -1160,9 +1208,9 @@ pmap_page_protect(
 			if (pmap->stats.resident_count < 1)
 				panic("pmap_page_protect: resident_count");
 #endif
+			pmap_ledger_debit(pmap, task_ledgers.phys_mem, PAGE_SIZE);
 			assert(pmap->stats.resident_count >= 1);
 			OSAddAtomic(-1,  &pmap->stats.resident_count);
-
 			/*
 		         * Deal with the pv_rooted_entry.
 		         */
@@ -1190,8 +1238,7 @@ pmap_page_protect(
 		         */
 			pmap_phys_attributes[pai] |=
 			    *pte & (PHYS_MODIFIED|PHYS_REFERENCED);
-
-			pmap_update_pte(pte, *pte, *pte & ~INTEL_PTE_WRITE);
+			pmap_update_pte(pte, INTEL_PTE_WRITE, 0);
 			PMAP_UPDATE_TLBS(pmap, vaddr, vaddr+PAGE_SIZE);
 		}
 		pvh_e = nexth;
@@ -1265,7 +1312,7 @@ phys_attribute_clear(
 	/*
 	 * Walk down PV list, clearing all modify or reference bits.
 	 * We do not have to lock the pv_list because we have
-	 * the entire pmap system locked.
+	 * the per-pmap lock
 	 */
 	if (pv_h->pmap != PMAP_NULL) {
 		/*
@@ -1285,8 +1332,7 @@ phys_attribute_clear(
 			  */
 			pte = pmap_pte(pmap, va);
 			attributes |= *pte & (PHYS_MODIFIED|PHYS_REFERENCED);
-
-			pmap_update_pte(pte, *pte, (*pte & ~bits));
+			pmap_update_pte(pte, bits, 0);
 			/* Ensure all processors using this translation
 			 * invalidate this TLB entry. The invalidation *must*
 			 * follow the PTE update, to ensure that the TLB
@@ -1415,8 +1461,9 @@ pmap_change_wiring(
 		/*
 		 * wiring down mapping
 		 */
+		pmap_ledger_credit(map, task_ledgers.wired_mem, PAGE_SIZE);
 		OSAddAtomic(+1,  &map->stats.wired_count);
-		pmap_update_pte(pte, *pte, (*pte | INTEL_PTE_WIRED));
+		pmap_update_pte(pte, 0, INTEL_PTE_WIRED);
 	}
 	else if (!wired && iswired(*pte)) {
 		/*
@@ -1424,7 +1471,8 @@ pmap_change_wiring(
 		 */
 		assert(map->stats.wired_count >= 1);
 		OSAddAtomic(-1,  &map->stats.wired_count);
-		pmap_update_pte(pte, *pte, (*pte & ~INTEL_PTE_WIRED));
+		pmap_ledger_debit(map, task_ledgers.wired_mem, PAGE_SIZE);
+		pmap_update_pte(pte, INTEL_PTE_WIRED, 0);
 	}
 
 	PMAP_UNLOCK(map);
@@ -1459,6 +1507,12 @@ pmap_map_bd(
 		if (!(flags & (VM_MEM_GUARDED)))
 			template |= INTEL_PTE_PTA;
 	}
+
+#if    defined(__x86_64__)
+	if ((prot & VM_PROT_EXECUTE) == 0)
+		template |= INTEL_PTE_NX;
+#endif
+
 	if (prot & VM_PROT_WRITE)
 		template |= INTEL_PTE_WRITE;
 

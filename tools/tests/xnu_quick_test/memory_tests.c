@@ -49,16 +49,14 @@ crashcount(char *namebuf1, char *namebuf2)
 	char		*crash_file_pfx = "xnu_quick_test";
 	int		crash_file_pfxlen = strlen(crash_file_pfx);
 	struct stat	sb;
-	DIR		*dirp1, *dirp2;
+	DIR		*dirp1 = NULL, *dirp2 = NULL;
 	struct dirent	*dep1, *dep2;
 	int		count = 0;
 
-	/* If we can't open the directory, it hasn't been created */
-	if ((dirp1 = opendir(crashdir1)) == NULL) {
-		return( 0 );
-	}
+	/* If we can't open the directory, dirp1 will be NULL */
+	dirp1 = opendir(crashdir1);
 
-	while((dep1 = readdir(dirp1)) != NULL) {
+	while(dirp1 != NULL && ((dep1 = readdir(dirp1)) != NULL)) {
 		if (strncmp(crash_file_pfx, dep1->d_name, crash_file_pfxlen))
 			continue;
 		/* record each one to get the last one */
@@ -70,14 +68,14 @@ crashcount(char *namebuf1, char *namebuf2)
 		count++;
 	}
 
-	closedir(dirp1);
+	if (dirp1 != NULL)
+		closedir(dirp1);
 
-	/* If we can't open the directory, it hasn't been created */
-        if ((dirp2 = opendir(crashdir2)) == NULL) {
-                return( 0 );
-        }
+#if !TARGET_OS_EMBEDDED
+	/* If we can't open the directory, dirp2 will be NULL */
+        dirp2 = opendir(crashdir2);
 
-        while((dep2 = readdir(dirp2)) != NULL) {
+        while(dirp2 != NULL && (dep2 = readdir(dirp2)) != NULL) {
                 if (strncmp(crash_file_pfx, dep2->d_name, crash_file_pfxlen))
                         continue;
                 /* record each one to get the last one */
@@ -88,10 +86,10 @@ crashcount(char *namebuf1, char *namebuf2)
                 }
                 count++;
         }
-
-        closedir(dirp2);
-
-	return( count/2 );
+	if (dirp2 != NULL)
+	        closedir(dirp2);
+#endif
+	return( count );
 }
 
 
@@ -155,6 +153,8 @@ int memory_tests( void * the_argp )
 	 * Find out how many crashes there have already been; if it's not
 	 * zero, then don't even attempt this test.
 	 */
+	 my_namebuf1[0] = '\0';
+	 my_namebuf2[0] = '\0';
 	if ((my_crashcount = crashcount(my_namebuf1, my_namebuf2)) != 0) {
 		printf( "memtest aborted: can not distinguish our expected crash from \n");
 		printf( "%d existing crashes including %s \n", my_crashcount, my_namebuf2);
@@ -406,23 +406,27 @@ exit_child:
 	 * Find out how many crashes there have already been; if it's not
 	 * one, then don't even attempt this test.
 	 */
-	if ((my_crashcount = crashcount(my_namebuf1, my_namebuf2)) != 1) {
+	my_namebuf1[0] = '\0';
+	my_namebuf2[0] = '\0';
+	my_crashcount = crashcount(my_namebuf1, my_namebuf2);
+	if (!(my_crashcount == 1 || my_crashcount == 2)) {
 		printf( "child did not crash as expected \n");
-		printf( "saw %d crashes including %s \n", my_crashcount, my_namebuf2);
+		printf( "saw %d crashes including %s \n", my_crashcount, my_namebuf1);
 		goto test_failed_exit;
 	}
 
 	/* post-remove the expected crash report */
-	if (unlink(my_namebuf1)) {
+	if (unlink(my_namebuf1) && !(errno == ENOENT || errno == ENOTDIR)) {
 		printf("unlink of expected crash report '%s' failed \n", my_namebuf1);
 		goto test_failed_exit;
 	}
-
-        if (unlink(my_namebuf2)) {
+#if !TARGET_OS_EMBEDDED
+	/* /Library/Logs/DiagnosticReports/ does not exist on embedded targets. */
+        if (unlink(my_namebuf2) && !(errno == ENOENT || errno == ENOTDIR)) {
                 printf("unlink of expected crash report '%s' failed \n", my_namebuf2);
                 goto test_failed_exit;
         }
-
+#endif
 	/* make sure shared page got modified in child */
 	if ( strcmp( my_test_page_p, "parent data child data" ) != 0 ) {
 		printf( "minherit did not work correctly - shared page looks wrong \n" );

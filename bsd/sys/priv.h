@@ -80,6 +80,17 @@
 #define	PRIV_ADJTIME		1000	/* Set time adjustment. */
 
 /*
+ * Virtual memory privileges.
+ */
+#define	PRIV_VM_PRESSURE	6000	/* Check VM pressure. */
+#define	PRIV_VM_JETSAM	   	6001	/* Adjust jetsam configuration. */
+
+/*
+ * Network stack privileges.
+ */
+#define	PRIV_NET_PRIVILEGED_TRAFFIC_CLASS	10000	/* Set SO_PRIVILEGED_TRAFFIC_CLASS. */ 
+
+/*
  * IPv4 and IPv6 privileges.
  */
 #define	PRIV_NETINET_RESERVEDPORT	11000	/* Bind low port number. */

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2011 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2012 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -103,6 +103,9 @@ struct rt_reach_info {
 	u_int32_t		ri_probes;	/* total # of probes */
 	u_int64_t		ri_snd_expire;	/* transmit expiration (calendar) time */
 	u_int64_t		ri_rcv_expire;	/* receive expiration (calendar) time */
+	int32_t			ri_rssi;	/* received signal strength */
+	int32_t			ri_lqm;		/* link quality metric */
+	int32_t			ri_npm;		/* node proximity metric */
 };
 #else
 struct route;
@@ -154,13 +157,14 @@ struct rt_metrics {
 #ifndef RNF_NORMAL
 #include <net/radix.h>
 #endif
+struct ifnet_llreach_info;	/* forward declaration */
 /*
  * Kernel routing entry structure (private).
  */
 struct rtentry {
 	struct	radix_node rt_nodes[2];	/* tree glue, and other values */
-#define	rt_key(r)	((struct sockaddr *)((r)->rt_nodes->rn_key))
-#define	rt_mask(r)	((struct sockaddr *)((r)->rt_nodes->rn_mask))
+#define	rt_key(r)	((struct sockaddr *)(void *)((r)->rt_nodes->rn_key))
+#define	rt_mask(r)	((struct sockaddr *)(void *)((r)->rt_nodes->rn_mask))
 	struct	sockaddr *rt_gateway;	/* value */
 	int32_t	rt_refcnt;		/* # held references */
 	uint32_t rt_flags;		/* up/down?, host/net */
@@ -170,6 +174,8 @@ struct rtentry {
 	void	*rt_llinfo;		/* pointer to link level info cache */
 	void	(*rt_llinfo_get_ri)	/* llinfo get reachability info fn */
 	    (struct rtentry *, struct rt_reach_info *);
+	void	(*rt_llinfo_get_iflri)	/* ifnet llinfo get reach. info fn */
+	    (struct rtentry *, struct ifnet_llreach_info *);
 	void	(*rt_llinfo_purge)(struct rtentry *); /* llinfo purge fn */
 	void	(*rt_llinfo_free)(void *); /* link level info free function */
 	struct	rt_metrics rt_rmx;	/* metrics used by rx'ing protocols */
@@ -222,7 +228,9 @@ extern void rt_setexpire(struct rtentry *, uint64_t);
 #define RTF_IFSCOPE	0x1000000	/* has valid interface scope */
 #define RTF_CONDEMNED	0x2000000	/* defunct; no longer modifiable */
 #define RTF_IFREF	0x4000000	/* route holds a ref to interface */
-					/* 0x8000000 and up unassigned */
+#define	RTF_PROXY	0x8000000	/* proxying, no interface scope */
+#define	RTF_ROUTER	0x10000000	/* host is a router */
+					/* 0x20000000 and up unassigned */
 
 /*
  * Routing statistics.
@@ -535,6 +543,12 @@ extern void rt_set_idleref(struct rtentry *);
 extern void rt_clear_idleref(struct rtentry *);
 extern void rt_aggdrain(int);
 extern boolean_t rt_validate(struct rtentry *);
+extern void rt_set_proxy(struct rtentry *, boolean_t);
+extern void rt_set_gwroute(struct rtentry *, struct sockaddr *,
+    struct rtentry *);
+extern void rt_revalidate_gwroute(struct rtentry *, struct rtentry *);
+extern errno_t route_to_gwroute(const struct sockaddr *, struct rtentry *,
+    struct rtentry **);
 
 #ifdef XNU_KERNEL_PRIVATE
 extern void route_copyin(struct route *src, struct route *dst, size_t length);

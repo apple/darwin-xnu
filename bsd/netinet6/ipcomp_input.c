@@ -39,6 +39,7 @@
 #include <sys/systm.h>
 #include <sys/malloc.h>
 #include <sys/mbuf.h>
+#include <sys/mcache.h>
 #include <sys/domain.h>
 #include <sys/protosw.h>
 #include <sys/socket.h>
@@ -96,7 +97,6 @@ ipcomp4_input(struct mbuf *m, int off)
 	size_t newlen, olen;
 	struct secasvar *sav = NULL;
 
-
 	if (m->m_pkthdr.len < off + sizeof(struct ipcomp)) {
 		ipseclog((LOG_DEBUG, "IPv4 IPComp input: assumption failed "
 		    "(packet too short)\n"));
@@ -113,6 +113,10 @@ ipcomp4_input(struct mbuf *m, int off)
 		goto fail;
 	}
 	ipcomp = mtod(md, struct ipcomp *);
+
+	/* Expect 32-bit aligned data pointer on strict-align platforms */
+	MBUF_STRICT_DATA_ALIGNMENT_CHECK_32(m);
+
 	ip = mtod(m, struct ip *);
 	nxt = ipcomp->comp_nxt;
 #ifdef _IP_VHL
@@ -266,6 +270,10 @@ ipcomp6_input(struct mbuf **mp, int *offp, int proto)
 		goto fail;
 	}
 	ipcomp = mtod(md, struct ipcomp *);
+
+	/* Expect 32-bit aligned data pointer on strict-align platforms */
+	MBUF_STRICT_DATA_ALIGNMENT_CHECK_32(m);
+
 	ip6 = mtod(m, struct ip6_hdr *);
 	nxt = ipcomp->comp_nxt;
 

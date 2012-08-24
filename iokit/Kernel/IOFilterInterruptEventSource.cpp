@@ -157,14 +157,14 @@ void IOFilterInterruptEventSource::normalInterruptOccurred
 	
 	if (trace)
 		IOTimeStampStartConstant(IODBG_INTES(IOINTES_FILTER),
-								 (uintptr_t) filterAction, (uintptr_t) owner, (uintptr_t) this, (uintptr_t) workLoop);
+					 VM_KERNEL_UNSLIDE(filterAction), (uintptr_t) owner, (uintptr_t) this, (uintptr_t) workLoop);
     
     // Call the filter.
     filterRes = (*filterAction)(owner, this);
 	
 	if (trace)
 		IOTimeStampEndConstant(IODBG_INTES(IOINTES_FILTER),
-							   (uintptr_t) filterAction, (uintptr_t) owner, (uintptr_t) this, (uintptr_t) workLoop);
+				       VM_KERNEL_UNSLIDE(filterAction), (uintptr_t) owner, (uintptr_t) this, (uintptr_t) workLoop);
 	
     if (filterRes)
         signalInterrupt();
@@ -178,14 +178,14 @@ void IOFilterInterruptEventSource::disableInterruptOccurred
 	
 	if (trace)
 		IOTimeStampStartConstant(IODBG_INTES(IOINTES_FILTER),
-								 (uintptr_t) filterAction, (uintptr_t) owner, (uintptr_t) this, (uintptr_t) workLoop);
+					 VM_KERNEL_UNSLIDE(filterAction), (uintptr_t) owner, (uintptr_t) this, (uintptr_t) workLoop);
     
     // Call the filter.
     filterRes = (*filterAction)(owner, this);
 	
 	if (trace)
 		IOTimeStampEndConstant(IODBG_INTES(IOINTES_FILTER),
-							   (uintptr_t) filterAction, (uintptr_t) owner, (uintptr_t) this, (uintptr_t) workLoop);
+				       VM_KERNEL_UNSLIDE(filterAction), (uintptr_t) owner, (uintptr_t) this, (uintptr_t) workLoop);
 	
     if (filterRes) {
         prov->disableInterrupt(source);	/* disable the interrupt */

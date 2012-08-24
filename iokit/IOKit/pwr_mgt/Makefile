@@ -15,7 +15,7 @@ NOT_EXPORT_HEADERS = \
 	IOPMinformee.h		\
 	IOPMinformeeList.h	\
 	IOPMlog.h		\
-	IOPMPagingPlexus.h
+	IOPMPrivate.h
 	
 INSTINC_SUBDIRS =
 INSTINC_SUBDIRS_I386 =

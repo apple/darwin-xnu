@@ -63,7 +63,6 @@
 #error "not ported to this architecture"
 #endif
 
-
 typedef struct lockstat_probe {
 	const char	*lsp_func;
 	const char	*lsp_name;
@@ -74,21 +73,19 @@ typedef struct lockstat_probe {
 lockstat_probe_t lockstat_probes[] =
 {
 #if defined(__i386__) || defined(__x86_64__)
-	/* Not implemented yet on PPC... */
+	/* Only provide implemented probes for each architecture  */
 	{ LS_LCK_MTX_LOCK,	LSA_ACQUIRE,	LS_LCK_MTX_LOCK_ACQUIRE, DTRACE_IDNONE },
 	{ LS_LCK_MTX_LOCK,	LSA_SPIN,	LS_LCK_MTX_LOCK_SPIN, DTRACE_IDNONE },
+	{ LS_LCK_MTX_LOCK,	LSA_BLOCK,	LS_LCK_MTX_LOCK_BLOCK, DTRACE_IDNONE },	
 	{ LS_LCK_MTX_TRY_LOCK,	LSA_ACQUIRE,	LS_LCK_MTX_TRY_LOCK_ACQUIRE, DTRACE_IDNONE },
 	{ LS_LCK_MTX_TRY_SPIN_LOCK, LSA_ACQUIRE, LS_LCK_MTX_TRY_SPIN_LOCK_ACQUIRE, DTRACE_IDNONE },
 	{ LS_LCK_MTX_UNLOCK,	LSA_RELEASE,	LS_LCK_MTX_UNLOCK_RELEASE, DTRACE_IDNONE },
 	{ LS_LCK_MTX_EXT_LOCK,	LSA_ACQUIRE,	LS_LCK_MTX_EXT_LOCK_ACQUIRE, DTRACE_IDNONE },
 	{ LS_LCK_MTX_EXT_LOCK,	LSA_SPIN,	LS_LCK_MTX_EXT_LOCK_SPIN, DTRACE_IDNONE },
-	{ LS_LCK_MTX_EXT_TRY_LOCK, LSA_ACQUIRE,	LS_LCK_MTX_TRY_EXT_LOCK_ACQUIRE, DTRACE_IDNONE },
-	{ LS_LCK_MTX_UNLOCK,	LSA_RELEASE,	LS_LCK_MTX_EXT_UNLOCK_RELEASE, DTRACE_IDNONE },
-	{ LS_LCK_MTX_LOCK_SPIN_LOCK,	LSA_ACQUIRE,	LS_LCK_MTX_LOCK_SPIN_ACQUIRE, DTRACE_IDNONE },
-#endif
-	{ LS_LCK_MTX_LOCK,	LSA_BLOCK,	LS_LCK_MTX_LOCK_BLOCK, DTRACE_IDNONE },
 	{ LS_LCK_MTX_EXT_LOCK,	LSA_BLOCK,	LS_LCK_MTX_EXT_LOCK_BLOCK, DTRACE_IDNONE },
-
+//	{ LS_LCK_MTX_EXT_TRY_LOCK, LSA_ACQUIRE,	LS_LCK_MTX_TRY_EXT_LOCK_ACQUIRE, DTRACE_IDNONE },	
+	{ LS_LCK_MTX_EXT_UNLOCK,   LSA_RELEASE,	LS_LCK_MTX_EXT_UNLOCK_RELEASE, DTRACE_IDNONE },
+	{ LS_LCK_MTX_LOCK_SPIN_LOCK,	LSA_ACQUIRE,	LS_LCK_MTX_LOCK_SPIN_ACQUIRE, DTRACE_IDNONE },
 	{ LS_LCK_RW_LOCK_SHARED,	LSR_ACQUIRE,	LS_LCK_RW_LOCK_SHARED_ACQUIRE, DTRACE_IDNONE },
 	{ LS_LCK_RW_LOCK_SHARED,	LSR_BLOCK,	LS_LCK_RW_LOCK_SHARED_BLOCK, DTRACE_IDNONE },
 	{ LS_LCK_RW_LOCK_SHARED,	LSR_SPIN,	LS_LCK_RW_LOCK_SHARED_SPIN, DTRACE_IDNONE },
@@ -99,11 +96,10 @@ lockstat_probe_t lockstat_probes[] =
 	{ LS_LCK_RW_TRY_LOCK_SHARED,	LSR_ACQUIRE,	LS_LCK_RW_TRY_LOCK_SHARED_ACQUIRE, DTRACE_IDNONE },
 	{ LS_LCK_RW_TRY_LOCK_EXCL,	LSR_ACQUIRE,	LS_LCK_RW_TRY_LOCK_EXCL_ACQUIRE, DTRACE_IDNONE },
 	{ LS_LCK_RW_LOCK_SHARED_TO_EXCL, LSR_UPGRADE,	LS_LCK_RW_LOCK_SHARED_TO_EXCL_UPGRADE, DTRACE_IDNONE },
-	{ LS_LCK_RW_LOCK_SHARED_TO_EXCL,	LSR_BLOCK,	LS_LCK_RW_LOCK_SHARED_TO_EXCL_BLOCK, DTRACE_IDNONE },
 	{ LS_LCK_RW_LOCK_SHARED_TO_EXCL,	LSR_SPIN,	LS_LCK_RW_LOCK_SHARED_TO_EXCL_SPIN, DTRACE_IDNONE },
+	{ LS_LCK_RW_LOCK_SHARED_TO_EXCL,	LSR_BLOCK,	LS_LCK_RW_LOCK_SHARED_TO_EXCL_BLOCK, DTRACE_IDNONE },	
 	{ LS_LCK_RW_LOCK_EXCL_TO_SHARED,	LSR_DOWNGRADE,	LS_LCK_RW_LOCK_EXCL_TO_SHARED_DOWNGRADE, DTRACE_IDNONE },
-
-
+#endif
 #ifdef	LATER
 	/* Interlock and spinlock measurements would be nice, but later */
 	{ LS_LCK_SPIN_LOCK,	LSS_ACQUIRE,	LS_LCK_SPIN_LOCK_ACQUIRE, DTRACE_IDNONE },
@@ -130,6 +126,8 @@ extern void lck_mtx_unlock_lockstat_patch_point(void);
 extern void lck_mtx_lock_ext_lockstat_patch_point(void);
 extern void lck_mtx_ext_unlock_lockstat_patch_point(void);
 
+extern void lck_rw_done_release1_lockstat_patch_point(void);
+extern void lck_rw_done_release2_lockstat_patch_point(void);
 extern void lck_rw_lock_shared_lockstat_patch_point(void);
 extern void lck_rw_lock_exclusive_lockstat_patch_point(void);
 extern void lck_rw_lock_shared_to_exclusive_lockstat_patch_point(void);
@@ -138,60 +136,88 @@ extern void lck_rw_try_lock_exclusive_lockstat_patch_point(void);
 extern void lck_mtx_lock_spin_lockstat_patch_point(void);
 #endif /* CONFIG_DTRACE */
 
-vm_offset_t *assembly_probes[] = {
+typedef struct lockstat_assembly_probe {
+	int lsap_probe;
+	vm_offset_t * lsap_patch_point;
+} lockstat_assembly_probe_t;
+	
+
+	lockstat_assembly_probe_t assembly_probes[] =
+	{
 #if CONFIG_DTRACE
 #if defined(__i386__) || defined(__x86_64__)
-	/*
-	 * On x86 these points are better done via hot patches, which ensure
-	 * there is zero overhead when not in use.  On x86 these patch points
-	 * are swapped between the return instruction and a no-op, with the
-	 * Dtrace call following the return.
-	 */ 
-	(vm_offset_t *) lck_mtx_lock_lockstat_patch_point,
-	(vm_offset_t *) lck_mtx_try_lock_lockstat_patch_point,
-	(vm_offset_t *) lck_mtx_try_lock_spin_lockstat_patch_point,
-	(vm_offset_t *) lck_mtx_unlock_lockstat_patch_point,
-	(vm_offset_t *) lck_mtx_lock_ext_lockstat_patch_point,
-	(vm_offset_t *) lck_mtx_ext_unlock_lockstat_patch_point,
-	(vm_offset_t *) lck_rw_lock_shared_lockstat_patch_point,
-	(vm_offset_t *) lck_rw_lock_exclusive_lockstat_patch_point,
-	(vm_offset_t *) lck_rw_lock_shared_to_exclusive_lockstat_patch_point,
-	(vm_offset_t *) lck_rw_try_lock_shared_lockstat_patch_point,
-	(vm_offset_t *) lck_rw_try_lock_exclusive_lockstat_patch_point,
-	(vm_offset_t *) lck_mtx_lock_spin_lockstat_patch_point,
-#else
-	(vm_offset_t *) lck_mtx_unlock_lockstat_patch_point,
+		/*
+		 * On x86 these points are better done via hot patches, which ensure
+		 * there is zero overhead when not in use.  On x86 these patch points
+		 * are swapped between the return instruction and a no-op, with the
+		 * Dtrace call following the return.
+		 */ 
+		{ LS_LCK_MTX_LOCK_ACQUIRE,		(vm_offset_t *) lck_mtx_lock_lockstat_patch_point },
+		{ LS_LCK_MTX_TRY_LOCK_ACQUIRE,		(vm_offset_t *) lck_mtx_try_lock_lockstat_patch_point },
+		{ LS_LCK_MTX_TRY_SPIN_LOCK_ACQUIRE,	(vm_offset_t *) lck_mtx_try_lock_spin_lockstat_patch_point },
+		{ LS_LCK_MTX_UNLOCK_RELEASE,		(vm_offset_t *) lck_mtx_unlock_lockstat_patch_point },
+		{ LS_LCK_MTX_EXT_LOCK_ACQUIRE,		(vm_offset_t *) lck_mtx_lock_ext_lockstat_patch_point },
+		{ LS_LCK_MTX_EXT_UNLOCK_RELEASE,	(vm_offset_t *) lck_mtx_ext_unlock_lockstat_patch_point },
+		{ LS_LCK_RW_LOCK_SHARED_ACQUIRE,	(vm_offset_t *) lck_rw_lock_shared_lockstat_patch_point },
+		{ LS_LCK_RW_LOCK_EXCL_ACQUIRE,		(vm_offset_t *) lck_rw_lock_exclusive_lockstat_patch_point },
+		{ LS_LCK_RW_LOCK_SHARED_TO_EXCL_UPGRADE,(vm_offset_t *) lck_rw_lock_shared_to_exclusive_lockstat_patch_point },
+		{ LS_LCK_RW_TRY_LOCK_SHARED_ACQUIRE,	(vm_offset_t *) lck_rw_try_lock_shared_lockstat_patch_point },
+		{ LS_LCK_RW_TRY_LOCK_EXCL_ACQUIRE,	(vm_offset_t *) lck_rw_try_lock_exclusive_lockstat_patch_point },
+		{ LS_LCK_MTX_LOCK_SPIN_ACQUIRE,		(vm_offset_t *) lck_mtx_lock_spin_lockstat_patch_point },
 #endif
 #endif /* CONFIG_DTRACE */
-	NULL
+		{ LS_LCK_INVALID, NULL }
 };
 /*
  * Hot patch switches back and forth the probe points between NOP and RET.
- * The argument indicates whether the probe point is on or off.
+ * The active argument indicates whether the probe point will turn on or off.
+ *	on == plant a NOP and thus fall through to the probe call
+ *     off == plant a RET and thus avoid the probe call completely
+ * The lsap_probe identifies which probe we will patch.
  */
 #if defined(__APPLE__)
 static
-#endif /* __APPLE__ */
-void lockstat_hot_patch(boolean_t active)
+void lockstat_hot_patch(boolean_t active, int ls_probe)
 {
 #pragma unused(active)
 	int i;
 
-
-	for (i = 0; assembly_probes[i]; i++) {
+	/*
+	 * Loop through entire table, in case there are
+	 * multiple patch points per probe. 
+	 */
+	for (i = 0; assembly_probes[i].lsap_patch_point; i++) {
+		if (ls_probe == assembly_probes[i].lsap_probe)
 #if defined(__i386__) || defined(__x86_64__)
-		uint8_t instr;
-		instr = (active ? NOP : RET );
-		(void) ml_nofault_copy( (vm_offset_t)&instr, *(assembly_probes[i]), 
+		{			
+			uint8_t instr;
+			instr = (active ? NOP : RET );
+			(void) ml_nofault_copy( (vm_offset_t)&instr, *(assembly_probes[i].lsap_patch_point), 
 								sizeof(instr));
+		}
 #endif
-	}
+	} /* for */
 }
-
+#endif /* __APPLE__*/
 
 
 void (*lockstat_probe)(dtrace_id_t, uint64_t, uint64_t,
 				    uint64_t, uint64_t, uint64_t);
+
+#if defined(__APPLE__)
+/* This wrapper is used by arm assembler hot patched probes */
+void
+lockstat_probe_wrapper(int probe, uintptr_t lp, int rwflag)
+{
+	dtrace_id_t id;
+	id = lockstat_probemap[probe];
+	if (id != 0)
+	{
+		(*lockstat_probe)(id, (uintptr_t)lp, (uint64_t)rwflag, 0,0,0);
+	}
+}
+#endif /* __APPLE__ */
+    
 
 static dev_info_t	*lockstat_devi;	/* saved in xxattach() for xxinfo() */
 static dtrace_provider_id_t lockstat_id;
@@ -209,7 +235,7 @@ lockstat_enable(void *arg, dtrace_id_t id, void *parg)
 	lockstat_probemap[probe->lsp_probe] = id;
 	membar_producer();
 
-	lockstat_hot_patch(TRUE);
+	lockstat_hot_patch(TRUE, probe->lsp_probe);
 	membar_producer();
 	return(0);
 
@@ -227,7 +253,7 @@ lockstat_disable(void *arg, dtrace_id_t id, void *parg)
 	ASSERT(lockstat_probemap[probe->lsp_probe]);
 
 	lockstat_probemap[probe->lsp_probe] = 0;
-	lockstat_hot_patch(FALSE);
+	lockstat_hot_patch(FALSE, probe->lsp_probe);
 	membar_producer();
 
 	/*

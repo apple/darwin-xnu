@@ -237,6 +237,7 @@ extern void mld_slowtimo(void);
 extern void mld_init(void);
 extern void mli_addref(struct mld_ifinfo *, int);
 extern void mli_remref(struct mld_ifinfo *);
+__private_extern__ void mld6_initsilent(struct ifnet *, struct mld_ifinfo *);
 
 #ifdef SYSCTL_DECL
 SYSCTL_DECL(_net_inet6_mld);

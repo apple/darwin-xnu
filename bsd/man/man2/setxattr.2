@@ -175,6 +175,15 @@ Not enough space left on the file system.
 .Xr getxattr 2 ,
 .Xr listxattr 2 ,
 .Xr removexattr 2
+.Sh NOTES
+Due to historical reasons, the
+.Dv XATTR_FINDERINFO_NAME
+(defined to be 
+.Dq com.apple.FinderInfo )
+extended attribute must be 32 bytes; see the
+.Dv ATTR_CMN_FNDRINFO
+section in
+.Xr getattrlist 2 .
 .Sh HISTORY
 .Fn setxattr
 and

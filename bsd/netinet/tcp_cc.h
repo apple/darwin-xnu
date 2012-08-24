@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2010 Apple Inc. All rights reserved.
+ * Copyright (c) 2010-2011 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -97,7 +97,7 @@ struct tcp_cc_algo {
 	void (*ack_rcvd) (struct tcpcb *tp, struct tcphdr *th);
 
 	/* called before entering FR */
-	void (*pre_fr) (struct tcpcb *tp, struct tcphdr *th);
+	void (*pre_fr) (struct tcpcb *tp);
 
 	/*  after exiting FR */
 	void (*post_fr) (struct tcpcb *tp, struct tcphdr *th);
@@ -119,6 +119,9 @@ struct tcp_cc_algo {
 extern struct tcp_cc_algo* tcp_cc_algo_list[TCP_CC_ALGO_COUNT];
 
 #define CC_ALGO(tp) (tcp_cc_algo_list[tp->tcp_cc_index])
+
+extern void tcp_cc_resize_sndbuf(struct tcpcb *tp);
+extern void tcp_bad_rexmt_fix_sndbuf(struct tcpcb *tp);
 
 #endif /* KERNEL */
 #endif /* _NETINET_CC_H_ */

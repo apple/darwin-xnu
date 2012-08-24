@@ -27,6 +27,9 @@
  */
 
 #include "../headers/BTreesPrivate.h"
+#include <sys/kernel.h>
+#include <sys/malloc.h>
+#include <libkern/libkern.h>
 
 
 // local routines
@@ -37,11 +40,16 @@ static Boolean	ValidHFSRecord(const void *record, const BTreeControlBlock *btcb,
 OSErr ReplaceBTreeRecord(FileReference refNum, const void* key, u_int32_t hint, void *newData, u_int16_t dataSize, u_int32_t *newHint)
 {
 	FSBufferDescriptor	btRecord;
-	BTreeIterator		iterator;
+	struct BTreeIterator *iterator = NULL;
 	FCB					*fcb;
 	BTreeControlBlock	*btcb;
 	OSStatus			result;
 
+	MALLOC (iterator, struct BTreeIterator *, sizeof (struct BTreeIterator), M_TEMP, M_WAITOK);
+	if (iterator == NULL) {
+		return memFullErr;  //translates to ENOMEM		
+	}
+	bzero (iterator, sizeof (*iterator));
 
 	fcb = GetFileControlBlock(refNum);
 	btcb = (BTreeControlBlock*) fcb->fcbBTCBPtr;
@@ -50,24 +58,25 @@ OSErr ReplaceBTreeRecord(FileReference refNum, const void* key, u_int32_t hint, 
 	btRecord.itemSize = dataSize;
 	btRecord.itemCount = 1;
 
-	iterator.hint.nodeNum = hint;
+	iterator->hint.nodeNum = hint;
 
 	result = CheckBTreeKey((const BTreeKey *) key, btcb);
-	ExitOnError(result);
+	if (result) {
+		goto ErrorExit;
+	}
 
-	BlockMoveData(key, &iterator.key, CalcKeySize(btcb, (const BTreeKey *) key));		//€€ should we range check against maxkeylen?
+	BlockMoveData(key, &iterator->key, CalcKeySize(btcb, (const BTreeKey *) key));		//€€ should we range check against maxkeylen?
 
 	if ( DEBUG_BUILD && !ValidHFSRecord(newData, btcb, dataSize) )
 		DebugStr("ReplaceBTreeRecord: bad record?");
 
-	result = BTReplaceRecord( fcb, &iterator, &btRecord, dataSize );
+	result = BTReplaceRecord( fcb, iterator, &btRecord, dataSize );
 
-	*newHint = iterator.hint.nodeNum;
-
-	//€€ do we need to invalidate the iterator?
+	*newHint = iterator->hint.nodeNum;
 
 ErrorExit:
 
+	FREE (iterator, M_TEMP);
 	return result;
 }
 

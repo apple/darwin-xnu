@@ -57,6 +57,8 @@ __BEGIN_DECLS
 
 /* code sign operations */
 int csops(pid_t pid, unsigned int  ops, void * useraddr, size_t usersize);
+/* works only with CS_OPS_PIDPATH and CS_OPS_ENTITLEMENTS_BLOB */
+int csops_audittoken(pid_t pid, unsigned int  ops, void * useraddr, size_t usersize, audit_token_t * token);
 
 __END_DECLS
 

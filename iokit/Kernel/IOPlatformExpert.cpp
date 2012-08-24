@@ -747,10 +747,16 @@ static void IOShutdownNotificationsTimedOut(
     thread_call_param_t p0, 
     thread_call_param_t p1)
 {
+#ifdef CONFIG_EMBEDDED
+    /* 30 seconds has elapsed - panic */
+    panic("Halt/Restart Timed Out");
+
+#else /* ! CONFIG_EMBEDDED */
     int type = (int)(long)p0;
 
     /* 30 seconds has elapsed - resume shutdown */
     if(gIOPlatform) gIOPlatform->haltRestart(type);
+#endif /* CONFIG_EMBEDDED */
 }
 
 
@@ -960,6 +966,41 @@ void IOPlatformExpert::registerNVRAMController(IONVRAMController * caller)
     OSString *        string = 0;
     uuid_string_t     uuid;
 
+#if CONFIG_EMBEDDED
+    entry = IORegistryEntry::fromPath( "/chosen", gIODTPlane );
+    if ( entry )
+    {
+        OSData * data1;
+
+        data1 = OSDynamicCast( OSData, entry->getProperty( "unique-chip-id" ) );
+        if ( data1 && data1->getLength( ) == 8 )
+        {
+            OSData * data2;
+
+            data2 = OSDynamicCast( OSData, entry->getProperty( "chip-id" ) );
+            if ( data2 && data2->getLength( ) == 4 )
+            {
+                SHA1_CTX     context;
+                uint8_t      digest[ SHA_DIGEST_LENGTH ];
+                const uuid_t space = { 0xA6, 0xDD, 0x4C, 0xCB, 0xB5, 0xE8, 0x4A, 0xF5, 0xAC, 0xDD, 0xB6, 0xDC, 0x6A, 0x05, 0x42, 0xB8 };
+
+                SHA1Init( &context );
+                SHA1Update( &context, space, sizeof( space ) );
+                SHA1Update( &context, data1->getBytesNoCopy( ), data1->getLength( ) );
+                SHA1Update( &context, data2->getBytesNoCopy( ), data2->getLength( ) );
+                SHA1Final( digest, &context );
+
+                digest[ 6 ] = ( digest[ 6 ] & 0x0F ) | 0x50;
+                digest[ 8 ] = ( digest[ 8 ] & 0x3F ) | 0x80;
+
+                uuid_unparse( digest, uuid );
+                string = OSString::withCString( uuid );
+            }
+        }
+
+        entry->release( );
+    }
+#else /* !CONFIG_EMBEDDED */
     entry = IORegistryEntry::fromPath( "/efi/platform", gIODTPlane );
     if ( entry )
     {
@@ -984,6 +1025,7 @@ void IOPlatformExpert::registerNVRAMController(IONVRAMController * caller)
 
         entry->release( );
     }
+#endif /* !CONFIG_EMBEDDED */
 
     if ( string == 0 )
     {

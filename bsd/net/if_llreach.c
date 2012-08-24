@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2011 Apple Inc. All rights reserved.
+ * Copyright (c) 2011-2012 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -122,6 +122,8 @@
 #include <net/if_var.h>
 #include <net/if_llreach.h>
 #include <net/dlil.h>
+#include <net/kpi_interface.h>
+#include <net/route.h>
 
 #include <kern/assert.h>
 #include <kern/locks.h>
@@ -343,6 +345,9 @@ found:
 	lr->lr_ifp = ifp;
 	lr->lr_key.proto = llproto;
 	bcopy(addr, &lr->lr_key.addr, IF_LLREACH_MAXLEN);
+	lr->lr_rssi = IFNET_RSSI_UNKNOWN;
+	lr->lr_lqm = IFNET_LQM_THRESH_UNKNOWN;
+	lr->lr_npm = IFNET_NPM_THRESH_UNKNOWN;
 	RB_INSERT(ll_reach_tree, &ifp->if_ll_srcs, lr);
 	IFLR_UNLOCK(lr);
 	lck_rw_done(&ifp->if_llreach_lock);
@@ -386,7 +391,7 @@ ifnet_llreach_free(struct if_llreach *lr)
 }
 
 u_int64_t
-ifnet_llreach_up2cal(struct if_llreach *lr, u_int64_t uptime)
+ifnet_llreach_up2calexp(struct if_llreach *lr, u_int64_t uptime)
 {
 	u_int64_t calendar = 0;
 
@@ -409,6 +414,62 @@ ifnet_llreach_up2cal(struct if_llreach *lr, u_int64_t uptime)
 	}
 
 	return (calendar);
+}
+
+u_int64_t
+ifnet_llreach_up2upexp(struct if_llreach *lr, u_int64_t uptime)
+{
+	return (lr->lr_reachable + uptime);
+}
+
+int
+ifnet_llreach_get_defrouter(struct ifnet *ifp, int af,
+    struct ifnet_llreach_info *iflri)
+{
+	struct radix_node_head *rnh;
+	struct sockaddr_storage dst_ss, mask_ss;
+	struct rtentry *rt;
+	int error = ESRCH;
+
+	VERIFY(ifp != NULL && iflri != NULL &&
+	    (af == AF_INET || af == AF_INET6));
+
+	bzero(iflri, sizeof (*iflri));
+
+	if ((rnh = rt_tables[af]) == NULL)
+		return (error);
+
+	bzero(&dst_ss, sizeof (dst_ss));
+	bzero(&mask_ss, sizeof (mask_ss));
+	dst_ss.ss_family = af;
+	dst_ss.ss_len = (af == AF_INET) ? sizeof (struct sockaddr_in) :
+	    sizeof (struct sockaddr_in6);
+
+	lck_mtx_lock(rnh_lock);
+	rt = rt_lookup(TRUE, SA(&dst_ss), SA(&mask_ss), rnh, ifp->if_index);
+	if (rt != NULL) {
+		struct rtentry *gwrt;
+
+		RT_LOCK(rt);
+		if ((rt->rt_flags & RTF_GATEWAY) &&
+		    (gwrt = rt->rt_gwroute) != NULL &&
+		    rt_key(rt)->sa_family == rt_key(gwrt)->sa_family &&
+		    (gwrt->rt_flags & RTF_UP)) {
+			RT_UNLOCK(rt);
+			RT_LOCK(gwrt);
+			if (gwrt->rt_llinfo_get_iflri != NULL) {
+				(*gwrt->rt_llinfo_get_iflri)(gwrt, iflri);
+				error = 0;
+			}
+			RT_UNLOCK(gwrt);
+		} else {
+			RT_UNLOCK(rt);
+		}
+		rtfree_locked(rt);
+	}
+	lck_mtx_unlock(rnh_lock);
+
+	return (error);
 }
 
 static struct if_llreach *
@@ -495,6 +556,44 @@ ifnet_lr2ri(struct if_llreach *lr, struct rt_reach_info *ri)
 	ri->ri_refcnt = lri.lri_refcnt;
 	ri->ri_probes = lri.lri_probes;
 	ri->ri_rcv_expire = lri.lri_expire;
+	ri->ri_rssi = lri.lri_rssi;
+	ri->ri_lqm = lri.lri_lqm;
+	ri->ri_npm = lri.lri_npm;
+}
+
+void
+ifnet_lr2iflri(struct if_llreach *lr, struct ifnet_llreach_info *iflri)
+{
+	IFLR_LOCK_ASSERT_HELD(lr);
+
+	bzero(iflri, sizeof (*iflri));
+	/*
+	 * Note here we return request count, not actual memory refcnt.
+	 */
+	iflri->iflri_refcnt = lr->lr_reqcnt;
+	iflri->iflri_probes = lr->lr_probes;
+	iflri->iflri_rcv_expire = ifnet_llreach_up2upexp(lr, lr->lr_lastrcvd);
+	iflri->iflri_curtime = net_uptime();
+	switch (lr->lr_key.proto) {
+	case ETHERTYPE_IP:
+		iflri->iflri_netproto = PF_INET;
+		break;
+	case ETHERTYPE_IPV6:
+		iflri->iflri_netproto = PF_INET6;
+		break;
+	default:
+		/*
+		 * This shouldn't be possible for the time being,
+		 * since link-layer reachability records are only
+		 * kept for ARP and ND6.
+		 */
+		iflri->iflri_netproto = PF_UNSPEC;
+		break;
+	}
+	bcopy(&lr->lr_key.addr, &iflri->iflri_addr, IF_LLREACH_MAXLEN);
+	iflri->iflri_rssi = lr->lr_rssi;
+	iflri->iflri_lqm = lr->lr_lqm;
+	iflri->iflri_npm = lr->lr_npm;
 }
 
 void
@@ -509,9 +608,12 @@ ifnet_lr2lri(struct if_llreach *lr, struct if_llreach_info *lri)
 	lri->lri_refcnt	= lr->lr_reqcnt;
 	lri->lri_ifindex = lr->lr_ifp->if_index;
 	lri->lri_probes	= lr->lr_probes;
-	lri->lri_expire = ifnet_llreach_up2cal(lr, lr->lr_lastrcvd);
+	lri->lri_expire = ifnet_llreach_up2calexp(lr, lr->lr_lastrcvd);
 	lri->lri_proto = lr->lr_key.proto;
 	bcopy(&lr->lr_key.addr, &lri->lri_addr, IF_LLREACH_MAXLEN);
+	lri->lri_rssi = lr->lr_rssi;
+	lri->lri_lqm = lr->lr_lqm;
+	lri->lri_npm = lr->lr_npm;
 }
 
 static int

@@ -87,7 +87,9 @@
 #include <pexpert/pexpert.h>
 
 #define __PSYNCH_DEBUG__ 0			/* debug panic actions  */
+#if (KDEBUG && STANDARD_KDEBUG)
 #define _PSYNCH_TRACE_ 1		/* kdebug trace */
+#endif
 
 #define __TESTMODE__ 2		/* 0 - return error on user error conditions */
 				/* 1 - log error on user error conditions */
@@ -1739,8 +1741,13 @@ out:
  *  psynch_rw_longrdlock: This system call is used for psync rwlock long readers to block.
  */
 int
+#ifdef NOTYET
+psynch_rw_longrdlock(__unused proc_t p, struct psynch_rw_longrdlock_args * uap,  __unused uint32_t * retval)
+#else /* NOTYET */
 psynch_rw_longrdlock(__unused proc_t p, __unused struct psynch_rw_longrdlock_args * uap,  __unused uint32_t * retval)
+#endif /* NOTYET */
 {
+#ifdef NOTYET
 	user_addr_t rwlock  = uap->rwlock;
 	uint32_t lgen = uap->lgenval;
 	uint32_t ugen = uap->ugenval;
@@ -1875,7 +1882,11 @@ out:
 	__PTHREAD_TRACE_DEBUG(_PSYNCH_TRACE_RWLRDLOCK | DBG_FUNC_END, (uint32_t)rwlock, 0, returnbits, error, 0);
 #endif /* _PSYNCH_TRACE_ */
 	return(error);
+#else /* NOTYET */
+	return(ESRCH);
+#endif /* NOTYET */
 }
+
 
 /*
  *  psynch_rw_wrlock: This system call is used for psync rwlock writers to block.
@@ -2029,8 +2040,13 @@ out1:
  *  psynch_rw_yieldwrlock: This system call is used for psync rwlock yielding writers to block.
  */
 int
+#ifdef NOTYET
 psynch_rw_yieldwrlock(__unused proc_t p, __unused struct  psynch_rw_yieldwrlock_args * uap, __unused uint32_t * retval)
+#else /* NOTYET */
+psynch_rw_yieldwrlock(__unused proc_t p, __unused struct  __unused psynch_rw_yieldwrlock_args * uap, __unused uint32_t * retval)
+#endif /* NOTYET */
 {
+#ifdef NOTYET
 	user_addr_t rwlock  = uap->rwlock;
 	uint32_t lgen = uap->lgenval;
 	uint32_t ugen = uap->ugenval;
@@ -2166,6 +2182,9 @@ out:
 	__PTHREAD_TRACE_DEBUG(_PSYNCH_TRACE_RWYWRLOCK | DBG_FUNC_END, (uint32_t)rwlock, 1, returnbits, error, 0);
 #endif /* _PSYNCH_TRACE_ */
 	return(error);
+#else /* NOTYET */
+	return(ESRCH);
+#endif /* NOTYET */
 }
 
 #if NOTYET
@@ -2657,12 +2676,13 @@ pth_proc_hashdelete(proc_t p)
 		pthread_debug_proc = PROC_NULL;
 #endif /* _PSYNCH_TRACE_ */
 	hashptr = p->p_pthhash;
+	p->p_pthhash = NULL;
 	if (hashptr == NULL)
 		return;
 
+	pthread_list_lock();
 	for(i= 0; i < hashsize; i++) {
 		while ((kwq = LIST_FIRST(&hashptr[i])) != NULL) {
-			pthread_list_lock();
 			if ((kwq->kw_pflags & KSYN_WQ_INHASH) != 0) {
 				kwq->kw_pflags &= ~KSYN_WQ_INHASH;
 				LIST_REMOVE(kwq, kw_hash);
@@ -2679,10 +2699,11 @@ pth_proc_hashdelete(proc_t p)
 				ksyn_freeallkwe(&kwq->kw_ksynqueues[KSYN_QUEUE_WRITER]);
 			lck_mtx_destroy(&kwq->kw_lock, pthread_lck_grp);
 			zfree(kwq_zone, kwq);
+			pthread_list_lock();
 		}
 	}
-	FREE(p->p_pthhash, M_PROC);
-	p->p_pthhash = NULL;
+	pthread_list_unlock();
+	FREE(hashptr, M_PROC);
 }
 
 /* no lock held for this as the waitqueue is getting freed */
@@ -3066,8 +3087,8 @@ ksyn_block_thread_locked(ksyn_wait_queue_t kwq, uint64_t abstime, ksyn_waitq_ele
 #endif
 {
 	kern_return_t kret;
-	int error = 0;
 #if _PSYNCH_TRACE_
+	int error = 0;
 	uthread_t uth = NULL;
 #endif /* _PSYNCH_TRACE_ */
 
@@ -4161,7 +4182,7 @@ update_low_high(ksyn_wait_queue_t kwq, uint32_t lockseq)
 uint32_t 
 find_nextlowseq(ksyn_wait_queue_t kwq)
 {
-	uint32_t numbers[4];
+	uint32_t numbers[KSYN_QUEUE_MAX];
 	int count = 0, i;
 	uint32_t lowest;
 
@@ -4188,7 +4209,7 @@ find_nextlowseq(ksyn_wait_queue_t kwq)
 uint32_t
 find_nexthighseq(ksyn_wait_queue_t kwq)
 {
-	uint32_t numbers[4];
+	uint32_t numbers[KSYN_QUEUE_MAX];
 	int count = 0, i;
 	uint32_t highest;
 

@@ -115,7 +115,8 @@ struct vm_object_fault_info {
 	/* boolean_t */	io_sync:1,
 	/* boolean_t */ cs_bypass:1,
 	/* boolean_t */	mark_zf_absent:1,
-		__vm_object_fault_info_unused_bits:27;
+	/* boolean_t */ batch_pmap_op:1,
+		__vm_object_fault_info_unused_bits:26;
 };
 
 
@@ -477,7 +478,7 @@ __private_extern__ void	vm_object_res_deallocate(
 	vm_object_lock_assert_shared(object);				\
 	assert((RLObject)->ref_count > 0);				\
 	OSAddAtomic(1, &(RLObject)->ref_count);		\
-	assert((RLObject)->ref_count > 1);				\
+	assert((RLObject)->ref_count > 0);				\
 	/* XXX we would need an atomic version of the following ... */	\
 	vm_object_res_reference(RLObject);				\
 	MACRO_END
@@ -699,39 +700,35 @@ __private_extern__ void		vm_object_reap_pages(
 #define REAP_DATA_FLUSH	3
 
 #if CONFIG_FREEZE
+struct default_freezer_handle;
 
 __private_extern__ kern_return_t 
 vm_object_pack(
-	unsigned int       *purgeable_count,
-	unsigned int       *wired_count,
-	unsigned int       *clean_count,
-	unsigned int       *dirty_count,
-	boolean_t          *shared,
-	vm_object_t         src_object,
-	vm_object_t         dst_object,
-	void		      **table,
-	vm_object_offset_t *offset);
+	unsigned int		*purgeable_count,
+	unsigned int		*wired_count,
+	unsigned int		*clean_count,
+	unsigned int		*dirty_count,
+	unsigned int		dirty_budget,
+	boolean_t		*shared,
+	vm_object_t		src_object,
+	struct default_freezer_handle *df_handle);
 
 __private_extern__ void
 vm_object_pack_pages(
-	unsigned int       *wired_count,
-	unsigned int       *clean_count,
-	unsigned int       *dirty_count,
-	vm_object_t         src_object,
-	vm_object_t         dst_object,
-	void		      **table,
-	vm_object_offset_t *offset);
+	unsigned int		*wired_count,
+	unsigned int		*clean_count,
+	unsigned int		*dirty_count,
+	unsigned int		dirty_budget,
+	vm_object_t		src_object,
+	struct default_freezer_handle *df_handle);
 
-__private_extern__ void vm_object_pageout(
-    vm_object_t     object);
-
-__private_extern__  kern_return_t vm_object_pagein(
+__private_extern__ void
+vm_object_pageout(
 	vm_object_t     object);
 
-__private_extern__ void vm_object_unpack(
-	vm_object_t     object,
-	void          **table);
-
+__private_extern__  kern_return_t
+vm_object_pagein(
+	vm_object_t     object);
 #endif /* CONFIG_FREEZE */
 
 /*

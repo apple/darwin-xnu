@@ -108,10 +108,7 @@ void
 ipc_object_reference(
 	ipc_object_t	object)
 {
-	io_lock(object);
-	assert(object->io_references > 0);
 	io_reference(object);
-	io_unlock(object);
 }
 
 /*
@@ -124,10 +121,7 @@ void
 ipc_object_release(
 	ipc_object_t	object)
 {
-	io_lock(object);
-	assert(object->io_references > 0);
 	io_release(object);
-	io_check_unlock(object);
 }
 
 /*
@@ -263,7 +257,7 @@ ipc_object_alloc_dead(
 
 	assert(entry->ie_object == IO_NULL);
 	entry->ie_bits |= MACH_PORT_TYPE_DEAD_NAME | 1;
-	
+	ipc_entry_modified(space, *namep, entry);
 	is_write_unlock(space);
 	return KERN_SUCCESS;
 }
@@ -301,7 +295,7 @@ ipc_object_alloc_dead_name(
 
 	assert(entry->ie_object == IO_NULL);
 	entry->ie_bits |= MACH_PORT_TYPE_DEAD_NAME | 1;
-
+	ipc_entry_modified(space, name, entry);
 	is_write_unlock(space);
 	return KERN_SUCCESS;
 }
@@ -366,6 +360,7 @@ ipc_object_alloc(
 
 	entry->ie_bits |= type | urefs;
 	entry->ie_object = object;
+	ipc_entry_modified(space, *namep, entry);
 
 	io_lock(object);
 	is_write_unlock(space);
@@ -441,6 +436,7 @@ ipc_object_alloc_name(
 
 	entry->ie_bits |= type | urefs;
 	entry->ie_object = object;
+	ipc_entry_modified(space, name, entry);
 
 	io_lock(object);
 	is_write_unlock(space);
@@ -506,7 +502,13 @@ ipc_object_copyin(
 {
 	ipc_entry_t entry;
 	ipc_port_t soright;
+	ipc_port_t release_port;
 	kern_return_t kr;
+	queue_head_t links_data;
+	queue_t links = &links_data;
+	wait_queue_link_t wql;
+
+	queue_init(links);
 
 	/*
 	 *	Could first try a read lock when doing
@@ -519,12 +521,23 @@ ipc_object_copyin(
 		return kr;
 	/* space is write-locked and active */
 
+	release_port = IP_NULL;
 	kr = ipc_right_copyin(space, name, entry,
 			      msgt_name, TRUE,
-			      objectp, &soright);
+			      objectp, &soright,
+			      &release_port,
+			      links);
 	if (IE_BITS_TYPE(entry->ie_bits) == MACH_PORT_TYPE_NONE)
 		ipc_entry_dealloc(space, name, entry);
 	is_write_unlock(space);
+
+	while(!queue_empty(links)) {
+		wql = (wait_queue_link_t) dequeue(links);
+		wait_queue_link_free(wql);
+	}
+
+	if (release_port != IP_NULL)
+		ip_release(release_port);
 
 	if ((kr == KERN_SUCCESS) && (soright != IP_NULL))
 		ipc_notify_port_deleted(soright, name);
@@ -752,7 +765,7 @@ ipc_object_copyout(
 	is_write_lock(space);
 
 	for (;;) {
-		if (!space->is_active) {
+		if (!is_active(space)) {
 			is_write_unlock(space);
 			return KERN_INVALID_TASK;
 		}
@@ -1075,82 +1088,3 @@ io_free(
 	io_lock_destroy(object);
 	zfree(ipc_object_zones[otype], object);
 }
-
-#include <mach_kdb.h>
-#if	MACH_KDB
-
-#include <ddb/db_output.h>
-
-#define	printf	kdbprintf 
-
-/*
- *	Routine:	ipc_object_print
- *	Purpose:
- *		Pretty-print an object for kdb.
- */
-
-const char *ikot_print_array[IKOT_MAX_TYPE] = {
-	"(NONE)             ",
-	"(THREAD)           ",
-	"(TASK)             ",
-	"(HOST)             ",
-	"(HOST_PRIV)        ",
-	"(PROCESSOR)        ",
-	"(PSET)             ",
-	"(PSET_NAME)        ",
-	"(TIMER)            ",
-	"(PAGER_REQUEST)    ",
-	"(DEVICE)           ",	/* 10 */
-	"(XMM_OBJECT)       ",
-	"(XMM_PAGER)        ",
-	"(XMM_KERNEL)       ",
-	"(XMM_REPLY)        ",
-	"(NOTDEF 15)        ",
-	"(NOTDEF 16)        ",
-	"(HOST_SECURITY)    ",
-	"(LEDGER)           ",
-	"(MASTER_DEVICE)    ",
-	"(ACTIVATION)       ",	/* 20 */
-	"(SUBSYSTEM)        ",
-	"(IO_DONE_QUEUE)    ",
-	"(SEMAPHORE)        ",
-	"(LOCK_SET)         ",
-	"(CLOCK)            ",
-	"(CLOCK_CTRL)       ",	/* 26 */
-	"(IOKIT_SPARE)	    ",  /* 27 */
-	"(NAMED_MEM_ENTRY)  ",	/* 28 */
-	"(IOKIT_CONNECT)    ",
-	"(IOKIT_OBJECT)     ",	/* 30 */
-	"(UPL)              ",
-	"(MEM_OBJ_CONTROL)  ",
-	"(AU_SESSIONPORT)   ",	/* 33 */
-	"(FILEPORT)", /* 34 */
-#if CONFIG_MACF_MACH
-	"(LABELH)           ",
-#endif
-/*
- * Add new entries here.
- * Please keep in sync with kern/ipc_kobject.h
- */
-	"(UNKNOWN)          "	/* magic catchall	*/
-};
-
-void
-ipc_object_print(
-	ipc_object_t	object)
-{
-	int kotype;
-
-	iprintf("%s", io_active(object) ? "active" : "dead");
-	printf(", refs=%d", object->io_references);
-	printf(", otype=%d", io_otype(object));
-	kotype = io_kotype(object);
-	if (kotype >= 0 && kotype < IKOT_MAX_TYPE)
-		printf(", kotype=%d %s\n", io_kotype(object),
-		       ikot_print_array[kotype]);
-	else
-		printf(", kotype=0x%x %s\n", io_kotype(object),
-		       ikot_print_array[IKOT_UNKNOWN]);
-}
-
-#endif	/* MACH_KDB */

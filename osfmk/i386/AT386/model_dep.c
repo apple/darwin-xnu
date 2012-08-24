@@ -67,7 +67,6 @@
  */
 
 #include <platforms.h>
-#include <mach_kdb.h>
 
 #include <mach/i386/vm_param.h>
 
@@ -102,9 +101,6 @@
 #include <i386/pmCPU.h>
 #include <architecture/i386/pio.h> /* inb() */
 #include <pexpert/i386/boot.h>
-#if	MACH_KDB
-#include <ddb/db_aout.h>
-#endif /* MACH_KDB */
 
 #include <vm/pmap.h>
 #include <vm/vm_map.h>
@@ -116,6 +112,7 @@
 #include <pexpert/i386/efi.h>
 
 #include <kern/thread.h>
+#include <kern/sched.h>
 #include <mach-o/loader.h>
 #include <mach-o/nlist.h>
 
@@ -130,7 +127,6 @@
 
 static void machine_conf(void);
 
-extern int		default_preemption_rate;
 extern int		max_unsafe_quanta;
 extern int		max_poll_quanta;
 extern unsigned int	panic_is_inited;
@@ -149,12 +145,6 @@ volatile int panic_double_fault_cpu = -1;
 #define PRINT_ARGS_FROM_STACK_FRAME	0
 #else
 #error unsupported architecture
-#endif
-
-#ifdef __LP64__
-typedef struct nlist_64 kernel_nlist_t;
-#else
-typedef struct nlist kernel_nlist_t;
 #endif
 
 typedef struct _cframe_t {
@@ -204,30 +194,6 @@ machine_startup(void)
 	hw_lock_init(&debugger_lock);	/* initialize debugger lock */
 #endif
 	hw_lock_init(&pbtlock);		/* initialize print backtrace lock */
-
-#if	MACH_KDB
-	/*
-	 * Initialize KDB
-	 */
-#if	DB_MACHINE_COMMANDS
-	db_machine_commands_install(ppc_db_commands);
-#endif	/* DB_MACHINE_COMMANDS */
-	ddb_init();
-
-	if (boot_arg & DB_KDB)
-		current_debugger = KDB_CUR_DB;
-
-	/*
-	 * Cause a breakpoint trap to the debugger before proceeding
-	 * any further if the proper option bit was specified in
-	 * the boot flags.
-	 */
-	if (halt_in_debugger && (current_debugger == KDB_CUR_DB)) {
-	        Debugger("inline call to debugger(machine_startup)");
-		halt_in_debugger = 0;
-		active_debugger =1;
-	}
-#endif /* MACH_KDB */
 
 	if (PE_parse_boot_argn("preempt", &boot_arg, sizeof (boot_arg))) {
 		default_preemption_rate = boot_arg;
@@ -690,6 +656,11 @@ hibernate_newruntime_map(void * map, vm_size_t map_size, uint32_t system_table_o
 void
 machine_init(void)
 {
+#if __x86_64__
+	/* Now with VM up, switch to dynamically allocated cpu data */
+	cpu_data_realloc();
+#endif
+
         /* Ensure panic buffer is initialized. */
         debug_log_init();
 
@@ -805,10 +776,18 @@ machine_halt_cpu(void) {
 	 * writing, this is routine is chained through AppleSMC->
 	 * AppleACPIPlatform
 	 */
-
 	if (PE_halt_restart)
 		(*PE_halt_restart)(kPERestartCPU);
 	pmCPUHalt(PM_HALT_DEBUG);
+}
+
+void
+DebuggerWithContext(
+	__unused unsigned int	reason,
+	__unused void 		*ctx,
+	const char		*message)
+{
+	Debugger(message);
 }
 
 void

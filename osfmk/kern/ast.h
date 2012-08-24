@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2010 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -89,12 +89,16 @@ typedef uint32_t		ast_t;
 #define AST_HANDOFF		0x08
 #define AST_YIELD		0x10
 #define AST_APC			0x20	/* migration APC hook */
+#define AST_LEDGER		0x40
+
 /*
  * JMM - This is here temporarily. AST_BSD is used to simulate a
  * general purpose mechanism for setting asynchronous procedure calls
  * from the outside.
  */
 #define AST_BSD			0x80
+#define AST_KPERF		0x100   /* kernel profiling */
+#define	AST_MACF		0x200	/* MACF user ret pending */
 
 #define AST_NONE		0x00
 #define AST_ALL			(~AST_NONE)
@@ -140,7 +144,7 @@ extern ast_t 	*ast_pending(void);
 #define MACHINE_AST_PER_THREAD  0
 #endif
 
-#define AST_PER_THREAD	(AST_APC | AST_BSD | MACHINE_AST_PER_THREAD)
+#define AST_PER_THREAD	(AST_APC | AST_BSD | AST_MACF | MACHINE_AST_PER_THREAD | AST_LEDGER)
 /*
  *	ast_pending(), ast_on(), ast_off(), ast_context(), and ast_propagate()
  *	assume splsched.

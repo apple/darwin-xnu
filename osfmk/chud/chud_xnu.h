@@ -99,6 +99,9 @@ enum {
 
 extern int chudxnu_thread_get_scheduler_state(thread_t thread);
 
+extern boolean_t chudxnu_thread_get_dirty(thread_t thread);
+extern void chudxnu_thread_set_dirty(thread_t thread, boolean_t);
+
 #if 0
 #pragma mark **** memory ****
 #endif

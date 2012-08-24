@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2004-2010 Apple Inc. All rights reserved.
+ * Copyright (c) 2004-2012 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -59,13 +59,31 @@
 
 #if NAMEDSTREAMS
 
+static int shadow_sequence;
+
 /*
  * We use %p to prevent loss of precision for pointers on varying architectures.
  */
-#define MAKE_SHADOW_NAME(VP, NAME)  \
-	snprintf((NAME), sizeof((NAME)), ".vfs_rsrc_stream_%p%08x%p", (void*)(VP), (VP)->v_id, (VP)->v_data);
 
-static int shadow_sequence;
+#define SHADOW_NAME_FMT		".vfs_rsrc_stream_%p%08x%p"
+#define SHADOW_DIR_FMT		".vfs_rsrc_streams_%p%x"
+#define SHADOW_DIR_CONTAINER "/var/run"
+
+#define MAKE_SHADOW_NAME(VP, NAME)  \
+	snprintf((NAME), sizeof((NAME)), (SHADOW_NAME_FMT), \
+			((void*)(VM_KERNEL_ADDRPERM(VP))), \
+			((VP)->v_id), \
+			((void*)(VM_KERNEL_ADDRPERM((VP)->v_data))))
+
+/* The full path to the shadow directory */
+#define MAKE_SHADOW_DIRNAME(VP, NAME)	\
+	snprintf((NAME), sizeof((NAME)), (SHADOW_DIR_CONTAINER "/" SHADOW_DIR_FMT), \
+			((void*)(VM_KERNEL_ADDRPERM(VP))), shadow_sequence)
+
+/* The shadow directory as a 'leaf' entry */
+#define MAKE_SHADOW_DIR_LEAF(VP, NAME)	\
+	snprintf((NAME), sizeof((NAME)), (SHADOW_DIR_FMT), \
+			((void*)(VM_KERNEL_ADDRPERM(VP))), shadow_sequence)
 
 
 static int  default_getnamedstream(vnode_t vp, vnode_t *svpp, const char *name, enum nsoperation op, vfs_context_t context);
@@ -960,8 +978,7 @@ get_shadow_dir(vnode_t *sdvpp, vfs_context_t context)
 
 
 	bzero(tmpname, sizeof(tmpname));
-	snprintf(tmpname, sizeof(tmpname), "/var/run/.vfs_rsrc_streams_%p%x",
-			(void*)rootvnode, shadow_sequence);
+	MAKE_SHADOW_DIRNAME(rootvnode, tmpname);
 	/* 
 	 * Look up the shadow directory to ensure that it still exists. 
 	 * By looking it up, we get an iocounted dvp to use, and avoid some coherency issues
@@ -980,15 +997,21 @@ get_shadow_dir(vnode_t *sdvpp, vfs_context_t context)
 	sdvp = NULLVP;
 	bzero (tmpname, sizeof(tmpname));
 
-	/* Obtain the vnode for "/var/run" directory. */
-	if (vnode_lookup("/var/run", 0, &dvp, context) != 0) {
+	/* 
+	 * Obtain the vnode for "/var/run" directory. 
+	 * This is defined in the SHADOW_DIR_CONTAINER macro
+	 */
+	if (vnode_lookup(SHADOW_DIR_CONTAINER, 0, &dvp, context) != 0) {
 		error = ENOTSUP;
 		goto out;
 	}
 
-	/* Create the shadow stream directory. */
-	snprintf(tmpname, sizeof(tmpname), ".vfs_rsrc_streams_%p%x",
-	         (void*)rootvnode, shadow_sequence);
+	/* 
+	 * Create the shadow stream directory.
+	 * 'dvp' below suggests the parent directory so 
+	 * we only need to provide the leaf entry name
+	 */
+	MAKE_SHADOW_DIR_LEAF(rootvnode, tmpname);
 	bzero(&cn, sizeof(cn));
 	cn.cn_nameiop = LOOKUP;
 	cn.cn_flags = ISLASTCN;

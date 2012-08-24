@@ -514,11 +514,11 @@ sock_setsockopt(
 /*
  * This follows the recommended mappings between DSCP code points and WMM access classes
  */
-static u_int8_t so_tc_from_dscp(u_int8_t dscp);
-static u_int8_t
+static u_int32_t so_tc_from_dscp(u_int8_t dscp);
+static u_int32_t
 so_tc_from_dscp(u_int8_t dscp)
 {
-	u_int8_t tc;
+	u_int32_t tc;
 
 	if (dscp >= 0x30 && dscp <= 0x3f)
 		tc = SO_TC_VO;
@@ -529,7 +529,7 @@ so_tc_from_dscp(u_int8_t dscp)
 	else
 		tc = SO_TC_BE;
 
-	return tc;
+	return (tc);
 }
 
 errno_t
@@ -946,6 +946,8 @@ sock_socket(
 #endif
 		(*new_so)->so_upcall = (so_upcall)callback;
 		(*new_so)->so_upcallarg = context;
+		(*new_so)->last_pid = 0;
+		(*new_so)->last_upid = 0;
 	}
 	return error;
 }
@@ -978,7 +980,7 @@ sock_release(socket_t sock)
 		return;
 	socket_lock(sock, 1);
 
-	if (sock->so_flags & SOF_UPCALLINUSE)
+	if (sock->so_upcallusecount)
 		soclose_wait_locked(sock);
 
 	sock->so_retaincnt--;

@@ -45,6 +45,8 @@ struct thread_snapshot {
 	uint64_t 		user_time;
 	uint64_t 		system_time;
 	int32_t  		state;
+	int32_t			sched_pri;   // scheduled (current) priority
+	int32_t			sched_flags; // scheduler flags
 	char			ss_flags;
 } __attribute__ ((packed));
 
@@ -69,7 +71,7 @@ struct task_snapshot {
 } __attribute__ ((packed));
 
 
-struct mem_snapshot {
+struct mem_and_io_snapshot {
 	uint32_t	snapshot_magic;
 	uint32_t	free_pages;
 	uint32_t	active_pages;
@@ -78,14 +80,23 @@ struct mem_snapshot {
 	uint32_t	wired_pages;
 	uint32_t	speculative_pages;
 	uint32_t	throttled_pages;
+	int			busy_buffer_count;
+	uint32_t	pages_wanted;
+	uint32_t	pages_reclaimed;
+	uint8_t		pages_wanted_reclaimed_valid; // did mach_vm_pressure_monitor succeed?
 } __attribute__((packed));
+
 
 enum {
 	kUser64_p = 0x1,
 	kKernel64_p = 0x2,
 	kHasDispatchSerial = 0x4,
-	kTerminatedSnapshot = 0x8
+	kTerminatedSnapshot = 0x8,
+	kPidSuspended = 0x10,  // true for suspended task
+	kFrozen = 0x20         // true for hibernated task (along with pidsuspended)
 };
+
+#define VM_PRESSURE_TIME_WINDOW 5 /* seconds */
 
 enum {
 	STACKSHOT_GET_DQ = 0x1,
@@ -93,9 +104,9 @@ enum {
 	STACKSHOT_GET_GLOBAL_MEM_STATS = 0x4
 };
 
-#define STACKSHOT_THREAD_SNAPSHOT_MAGIC 0xfeedface
-#define STACKSHOT_TASK_SNAPSHOT_MAGIC 0xdecafbad
-#define STACKSHOT_MEM_SNAPSHOT_MAGIC  0xabcddcba
+#define STACKSHOT_THREAD_SNAPSHOT_MAGIC 	0xfeedface
+#define STACKSHOT_TASK_SNAPSHOT_MAGIC   	0xdecafbad
+#define STACKSHOT_MEM_AND_IO_SNAPSHOT_MAGIC	0xbfcabcde
 
 #endif /* __APPLE_API_UNSTABLE */
 #endif /* __APPLE_API_PRIVATE */
@@ -204,7 +215,7 @@ extern int debug_kprint_current_process(const char **namep);
 	} while (0)
 #else /* !DEBUG */
 #define DEBUG_KPRINT_SYSCALL_PREDICATE_INTERNAL(mask, namep) (0)
-#define DEBUG_KPRINT_SYSCALL_MASK(mask, fmt, args...) do { } while(0)
+#define DEBUG_KPRINT_SYSCALL_MASK(mask, fmt, args...) do { } while (0) /* kprintf(fmt, args) */
 #endif /* !DEBUG */
 
 enum {
@@ -233,6 +244,7 @@ extern void panic(const char *string, ...) __printflike(1,2);
 
 #if KERNEL_PRIVATE
 void _consume_panic_args(int, ...);
+void panic_context(unsigned int reason, void *ctx, const char *string, ...);
 #endif
 
 #if CONFIG_NO_PANIC_STRINGS

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2004-2011 Apple Inc. All rights reserved.
+ * Copyright (c) 2004-2012 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -34,11 +34,34 @@
 
 #ifndef __KPI_INTERFACE__
 #define __KPI_INTERFACE__
+
+#ifndef XNU_KERNEL_PRIVATE
+#include <TargetConditionals.h>
+#endif
+
 #include <sys/kernel_types.h>
+
+#ifdef KERNEL_PRIVATE
+#include <sys/kpi_mbuf.h>
+#endif /* KERNEL_PRIVATE */
 
 #ifndef _SA_FAMILY_T
 #define _SA_FAMILY_T
 typedef __uint8_t		sa_family_t;
+#endif
+
+#ifdef XNU_KERNEL_PRIVATE
+#if CONFIG_EMBEDDED
+	#define KPI_INTERFACE_EMBEDDED 1
+#else
+	#define KPI_INTERFACE_EMBEDDED 0
+#endif
+#else
+#if TARGET_OS_EMBEDDED
+	#define KPI_INTERFACE_EMBEDDED 1
+#else
+	#define KPI_INTERFACE_EMBEDDED 0
+#endif
 #endif
 
 struct timeval;
@@ -81,7 +104,7 @@ enum {
 	IFNET_FAMILY_DISC		= 8,
 	IFNET_FAMILY_MDECAP		= 9,
 	IFNET_FAMILY_GIF		= 10,
-	IFNET_FAMILY_FAITH		= 11,
+	IFNET_FAMILY_FAITH		= 11,	/* deprecated */
 	IFNET_FAMILY_STF		= 12,
 	IFNET_FAMILY_FIREWIRE		= 13,
 	IFNET_FAMILY_BOND		= 14,
@@ -310,6 +333,10 @@ typedef void (*ifnet_event_func)(ifnet_t interface, const struct kev_msg *msg);
 		protocol's pre-output function.
 	@param frame_type The frame type as determined by the protocol's
 		pre-output function.
+	@param prepend_len The length of prepended bytes to the mbuf. 
+		(ONLY used if KPI_INTERFACE_EMBEDDED is defined to 1)
+	@param postpend_len The length of the postpended bytes to the mbuf.
+		(ONLY used if KPI_INTERFACE_EMBEDDED is defined to 1)
 	@result
 		If the result is zero, processing will continue normally.
 		If the result is EJUSTRETURN, processing will stop but the
@@ -318,8 +345,11 @@ typedef void (*ifnet_event_func)(ifnet_t interface, const struct kev_msg *msg);
 			the packet will be freed.
  */
 typedef errno_t (*ifnet_framer_func)(ifnet_t interface, mbuf_t *packet,
-    const struct sockaddr *dest, const char *desk_linkaddr,
-    const char *frame_type);
+	const struct sockaddr *dest, const char *desk_linkaddr, const char *frame_type
+#if KPI_INTERFACE_EMBEDDED
+	, u_int32_t *prepend_len, u_int32_t *postpend_len
+#endif /* KPI_INTERFACE_EMBEDDED */
+	);
 
 /*!
 	@typedef ifnet_add_proto_func
@@ -560,9 +590,9 @@ struct ifnet_stat_increment_param {
 /*!
 	@struct ifnet_init_params
 	@discussion This structure is used to define various properties of
-		the interface when calling ifnet_init. A copy of these values
-		will be stored in the ifnet and can not be modified while the
-		interface is attached.
+		the interface when calling ifnet_allocate. A copy of these
+		values will be stored in the ifnet and cannot be modified
+		while the interface is attached.
 	@field uniqueid An identifier unique to this instance of the
 		interface.
 	@field uniqueid_len The length, in bytes, of the uniqueid.
@@ -617,6 +647,245 @@ struct ifnet_init_params {
 	const void		*broadcast_addr;	/* required for non point-to-point interfaces */
 	u_int32_t		broadcast_len;		/* required for non point-to-point interfaces */
 };
+
+#ifdef KERNEL_PRIVATE
+/* Valid values for version */
+#define	IFNET_INIT_VERSION_2		2
+#define	IFNET_INIT_CURRENT_VERSION	IFNET_INIT_VERSION_2
+
+/* Valid values for flags */
+#define	IFNET_INIT_LEGACY	0x1	/* legacy network interface model */
+#define	IFNET_INIT_INPUT_POLL	0x2	/* opportunistic input polling model */
+
+/*
+	@typedef ifnet_pre_enqueue_func
+	@discussion ifnet_pre_enqueue_func is called for each outgoing packet
+		for the interface. The driver may perform last-minute changes
+		on the (fully formed) packet, but it is responsible for calling
+		ifnet_enqueue() to enqueue the packet upon completion.
+	@param interface The interface being sent on.
+	@param data The packet to be sent.
+ */
+typedef errno_t (*ifnet_pre_enqueue_func)(ifnet_t interface, mbuf_t data);
+
+/*
+	@typedef ifnet_start_func
+	@discussion ifnet_start_func is used to indicate to the driver that
+		one or more packets may be dequeued by calling ifnet_dequeue()
+		or ifnet_dequeue_multi(). This routine gets invoked when
+		ifnet_start() is called; the ifnet_start_func callback will
+		be executed within the context of a dedicated kernel thread,
+		hence it is guaranteed to be single threaded. The driver must
+		employ additional serializations if this callback routine is
+		to be called directly from another context, in order to prevent
+		race condition related issues (e.g. out-of-order packets.)
+		The dequeued packets will be fully formed packets (including
+		frame headers). The packets must be freed by the driver.
+	@param interface The interface being sent on.
+ */
+typedef void (*ifnet_start_func)(ifnet_t interface);
+
+/*
+	@typedef ifnet_input_poll_func
+	@discussion ifnet_input_poll_func is called by the network stack to
+		retrieve one or more packets from the driver which implements
+		the new driver input model.
+	@param interface The interface to retrieve the packets from.
+	@param flags For future use.
+	@param max_count The maximum number of packets to be dequeued.
+	@param first_packet Pointer to the first packet being dequeued.
+	@param last_packet Pointer to the last packet being dequeued.
+	@param cnt Pointer to a storage for the number of packets dequeued.
+	@param len Pointer to a storage for the total length (in bytes)
+		of the dequeued packets.
+ */
+typedef void (*ifnet_input_poll_func)(ifnet_t interface, u_int32_t flags,
+    u_int32_t max_count, mbuf_t *first_packet, mbuf_t *last_packet,
+    u_int32_t *cnt, u_int32_t *len);
+
+/*
+	@enum Interface control commands
+	@abstract Constants defining control commands.
+	@constant IFNET_CTL_SET_INPUT_MODEL Set input model.
+	@constant IFNET_CTL_GET_INPUT_MODEL Get input model.
+ */
+enum {
+	IFNET_CTL_SET_INPUT_MODEL	= 1,
+	IFNET_CTL_GET_INPUT_MODEL	= 2,
+};
+
+/*
+	@typedef ifnet_ctl_cmd_t
+	@abstract Storage type for the interface control command.
+ */
+typedef u_int32_t ifnet_ctl_cmd_t;
+
+/*
+	@enum Interface model sub-commands
+	@abstract Constants defining model sub-commands.
+	@constant IFNET_MODEL_INPUT_POLL_OFF Polling is inactive.  When set,
+		the network stack will no longer invoke the input_poll callback
+		until the next time polling is turned on; the driver should
+		proceed to pushing the packets up to the network stack as in
+		the legacy input model, and if applicable, the driver should
+		also enable receive interrupt for the hardware.  During get,
+		this indicates that the driver is currently operating in
+		the legacy/push input model.
+	@constant IFNET_MODEL_INPUT_POLL_ON Polling is active.  When set, the
+		network stack will begin to invoke the input_poll callback to
+		retrieve packets from the driver until the next time polling
+		is turned off; the driver should no longer be pushing packets
+		up to the network stack, and if applicable, the driver should
+		also disable receive interrupt for the hardware.  During get,
+		this indicates that the driver is currently operating in
+		the new/pull input model.
+ */
+enum {
+	IFNET_MODEL_INPUT_POLL_OFF	= 0,
+	IFNET_MODEL_INPUT_POLL_ON	= 1,
+};
+
+/*
+	@typedef ifnet_model_t
+	@abstract Storage type for the interface model sub-command.
+ */
+typedef u_int32_t ifnet_model_t;
+
+/*
+	@struct ifnet_model_params
+	@discussion This structure is used as parameter to the ifnet model
+		sub-commands.
+	@field model The interface model.
+ */
+struct ifnet_model_params {
+	ifnet_model_t		model;
+	u_int32_t		reserved[3];
+};
+
+/*
+	@typedef ifnet_ctl_func
+	@discussion ifnet_ctl_func is called by the network stack to inform
+		about changes in parameters, or retrieve the parameters
+		related to the output or input processing or capabilities.
+	@param interface The interface.
+	@param cmd The ifnet_ctl_cmd_t interface control command.
+	@param arglen The length of the command argument.
+	@param arg The command argument.
+	@result 0 upon success, otherwise errno error.
+ */
+typedef errno_t (*ifnet_ctl_func)(ifnet_t interface, ifnet_ctl_cmd_t cmd,
+    u_int32_t arglen, void *arg);
+
+/*
+	@struct ifnet_init_eparams
+	@discussion This structure is used to define various properties of
+		the interface when calling ifnet_allocate_extended. A copy of
+		these values will be stored in the ifnet and cannot be modified
+		while the interface is attached.
+	@field ver The current structure version (IFNET_INIT_CURRENT_VERSION)
+	@field len The length of this structure.
+	@field flags See above values for flags.
+	@field uniqueid An identifier unique to this instance of the
+		interface.
+	@field uniqueid_len The length, in bytes, of the uniqueid.
+	@field name The interface name (i.e. en).
+	@field unit The interface unit number (en0's unit number is 0).
+	@field family The interface family.
+	@field type The interface type (see sys/if_types.h). Must be less
+		than 256. For new types, use IFT_OTHER.
+	@field sndq_maxlen The maximum size of the output queue; valid only
+		if IFNET_INIT_LEGACY is not set.
+	@field output The output function for the interface. Every packet the
+		stack attempts to send through this interface will go out
+		through this function.
+	@field pre_enqueue The pre_enqueue function for the interface, valid
+		only if IFNET_INIT_LEGACY is not set, and optional if it is set.
+	@field start The start function for the interface, valid only if
+		IFNET_INIT_LEGACY is not set, and required if it is set.
+	@field output_ctl The output control function for the interface, valid
+		only if IFNET_INIT_LEGACY is not set.
+	@field output_sched_model The IFNET_SCHED_MODEL value for the output
+		queue, as defined in net/if.h
+	@field output_bw The effective output bandwidth (in bits per second.)
+	@field output_bw_max The maximum theoretical output bandwidth
+		(in bits per second.)
+	@field input_poll The poll function for the interface, valid only if
+		IFNET_INIT_LEGACY is not set and only if IFNET_INIT_INPUT_POLL
+		is set.
+	@field input_ctl The input control function for the interface, valid
+		only if IFNET_INIT_LEGACY is not set and only if opportunistic
+		input polling is enabled via IFNET_INIT_INPUT_POLL flag.
+	@field rcvq_maxlen The size of the driver's receive ring or the total
+		count of descriptors used in the receive path; valid only if
+		IFNET_INIT_INPUT_POLL is set.
+	@field input_bw The effective input bandwidth (in bits per second.)
+	@field input_bw_max The maximum theoretical input bandwidth
+		(in bits per second.)
+	@field demux The function used to determine the protocol family of an
+		incoming packet.
+	@field add_proto The function used to attach a protocol to this
+		interface.
+	@field del_proto The function used to remove a protocol from this
+		interface.
+	@field framer The function used to frame outbound packets, may be NULL.
+	@field softc Driver specific storage. This value can be retrieved from
+		the ifnet using the ifnet_softc function.
+	@field ioctl The function used to handle ioctls.
+	@field set_bpf_tap The function used to set the bpf_tap function.
+	@field detach The function called to let the driver know the interface
+		has been detached.
+	@field event The function to notify the interface of various interface
+		specific kernel events.
+	@field broadcast_addr The link-layer broadcast address for this
+		interface.
+	@field broadcast_len The length of the link-layer broadcast address.
+*/
+struct ifnet_init_eparams {
+	u_int32_t		ver;			/* required */
+	u_int32_t		len;			/* required */
+	u_int32_t		flags;			/* optional */
+
+	/* used to match recycled interface */
+	const void		*uniqueid;		/* optional */
+	u_int32_t		uniqueid_len;		/* optional */
+
+	/* used to fill out initial values for interface */
+	const char		*name;			/* required */
+	u_int32_t		unit;			/* required */
+	ifnet_family_t		family;			/* required */
+	u_int32_t		type;			/* required */
+	u_int32_t		sndq_maxlen;		/* optional, only for new model */
+	ifnet_output_func	output;			/* required only for legacy model */
+	ifnet_pre_enqueue_func	pre_enqueue;		/* optional, only for new model */
+	ifnet_start_func	start;			/* required only for new model */
+	ifnet_ctl_func		output_ctl;		/* optional, only for new model */
+	u_int32_t		output_sched_model;	/* optional, only for new model */
+	u_int32_t		reserved;		/* for future use */
+	u_int64_t		output_bw;		/* optional */
+	u_int64_t		output_bw_max;		/* optional */
+	u_int64_t		_reserved[4];		/* for future use */
+	ifnet_input_poll_func	input_poll;		/* optional, ignored for legacy model */
+	ifnet_ctl_func		input_ctl;		/* required for opportunistic polling */
+	u_int32_t		rcvq_maxlen;		/* optional, only for opportunistic polling */
+	u_int32_t		__reserved;		/* for future use */
+	u_int64_t		input_bw;		/* optional */
+	u_int64_t		input_bw_max;		/* optional */
+	u_int64_t		___reserved[4];		/* for future use */
+	ifnet_demux_func	demux;			/* required  */
+	ifnet_add_proto_func	add_proto;		/* required  */
+	ifnet_del_proto_func	del_proto;		/* required  */
+	ifnet_check_multi	check_multi;		/* required for non point-to-point interfaces */
+	ifnet_framer_func	framer;			/* optional */
+	void			*softc;			/* optional */
+	ifnet_ioctl_func	ioctl;			/* optional */
+	ifnet_set_bpf_tap	set_bpf_tap;		/* deprecated */
+	ifnet_detached_func	detach;			/* optional */
+	ifnet_event_func	event;			/* optional */
+	const void		*broadcast_addr;	/* required for non point-to-point interfaces */
+	u_int32_t		broadcast_len;		/* required for non point-to-point interfaces */
+	u_int64_t		____reserved[4];	/* for future use */
+};
+#endif /* KERNEL_PRIVATE */
 
 /*!
 	@struct ifnet_stats_param
@@ -743,6 +1012,250 @@ __BEGIN_DECLS
  */
 extern errno_t ifnet_allocate(const struct ifnet_init_params *init,
     ifnet_t *interface);
+
+#ifdef KERNEL_PRIVATE
+/*
+	@function ifnet_allocate_extended
+	@discussion An extended/newer variant of ifnet_allocate, with additional
+		support for the new output and input driver models.
+	@param init The initial values for the interface. These values can
+		not be changed after the interface has been allocated.
+	@param interface The interface allocated upon success.
+	@result May return ENOMEM if there is insufficient memory or EEXIST
+		if an interface with the same uniqueid and family has already
+		been allocated and is in use.
+ */
+extern errno_t ifnet_allocate_extended(const struct ifnet_init_eparams *init,
+    ifnet_t *interface);
+
+/*
+	@function ifnet_purge
+	@discussion Purge the output queue of an interface which implements
+		the new driver output model.
+	@param interface The interface to purge.
+ */
+extern void ifnet_purge(ifnet_t interface);
+
+/*
+	@function ifnet_enqueue
+	@discussion Enqueue a packet to the output queue of an interface
+		which implements the new driver output model.
+	@param interface The interface to enqueue the packet to.
+	@param packet The packet being enqueued; only one packet is allowed
+		to be enqueued at a time.
+	@result May return EINVAL if the parameters are invalid; ENXIO if
+		the interface doesn't implement the new driver output model;
+		EQFULL if the output queue is flow-controlled; or EQSUSPENDED
+		if the output queue is suspended.  This routine either frees
+		or consumes the packet; the caller must not modify or free
+		it after calling this routine.  Any attempt to enqueue more
+		than one packet will cause the entire packet chain to be freed.
+ */
+extern errno_t ifnet_enqueue(ifnet_t interface, mbuf_t packet);
+
+/*
+	@function ifnet_dequeue
+	@discussion Dequeue a packet from the output queue of an interface
+		which implements the new driver output model, and that the
+		output scheduling model is set to IFNET_SCHED_MODEL_NORMAL.
+	@param interface The interface to dequeue the packet from.
+	@param packet Pointer to the packet being dequeued.
+	@result May return EINVAL if the parameters are invalid, ENXIO if
+		the interface doesn't implement the new driver output model
+		or the output scheduling model isn't IFNET_SCHED_MODEL_NORMAL,
+		or EAGAIN if there is currently no packet available to
+		be dequeued.
+ */
+extern errno_t ifnet_dequeue(ifnet_t interface, mbuf_t *packet);
+
+/*
+	@function ifnet_dequeue_service_class
+	@discussion Dequeue a packet of a particular service class from the
+		appropriate output queue of an interface which implements the
+		new driver output model, and that the output scheduling model
+		is set to IFNET_SCHED_MODEL_DRIVER_MANAGED.
+	@param interface The interface to dequeue the packet from.
+	@param tc The service class.
+	@param packet Pointer to the packet being dequeued.
+	@result May return EINVAL if the parameters are invalid, ENXIO if
+		the interface doesn't implement the new driver output model
+		or if the output scheduling model isn't configured to
+		IFNET_SCHED_MODEL_DRIVER_MANAGED, or EAGAIN if there
+		is currently no packet available to be dequeued.
+ */
+extern errno_t ifnet_dequeue_service_class(ifnet_t interface,
+    mbuf_svc_class_t tc, mbuf_t *packet);
+
+/*
+	@function ifnet_dequeue_multi
+	@discussion Dequeue one or more packets from the output queue of an
+		interface which implements the new driver output model, and that
+		the output scheduling model is set to IFNET_SCHED_MODEL_NORMAL.
+		The returned packet chain is traversable with mbuf_nextpkt().
+	@param interface The interface to dequeue the packets from.
+	@param first_packet Pointer to the first packet being dequeued.
+	@param last_packet Pointer to the last packet being dequeued.  Caller
+		may supply NULL if not interested in value.
+	@param cnt Pointer to a storage for the number of packets dequeued.
+		Caller may supply NULL if not interested in value.
+	@param len Pointer to a storage for the total length (in bytes)
+		of the dequeued packets.  Caller may supply NULL if not
+		interested in value.
+	@result May return EINVAL if the parameters are invalid, ENXIO if
+		the interface doesn't implement the new driver output model
+		or the output scheduling model isn't IFNET_SCHED_MODEL_NORMAL,
+		or EAGAIN if there is currently no packet available to
+		be dequeued.
+ */
+extern errno_t ifnet_dequeue_multi(ifnet_t interface, u_int32_t max,
+    mbuf_t *first_packet, mbuf_t *last_packet, u_int32_t *cnt, u_int32_t *len);
+
+/*
+	@function ifnet_dequeue_service_class_multi
+	@discussion Dequeue one or more packets of a particular service class
+		from the appropriate output queue of an interface which
+		implements the new driver output model, and that the output
+		scheduling model is set to IFNET_SCHED_MODEL_DRIVER_MANAGED.
+		The returned packet chain is traversable with mbuf_nextpkt().
+	@param interface The interface to dequeue the packets from.
+	@param tc The service class.
+	@param first_packet Pointer to the first packet being dequeued.
+	@param last_packet Pointer to the last packet being dequeued.  Caller
+		may supply NULL if not interested in value.
+	@param cnt Pointer to a storage for the number of packets dequeued.
+		Caller may supply NULL if not interested in value.
+	@param len Pointer to a storage for the total length (in bytes)
+		of the dequeued packets.  Caller may supply NULL if not
+		interested in value.
+	@result May return EINVAL if the parameters are invalid, ENXIO if
+		the interface doesn't implement the new driver output model
+		or if the output scheduling model isn't configured to
+		IFNET_SCHED_MODEL_DRIVER_MANAGED, or EAGAIN if there
+		is currently no packet available to be dequeued.
+ */
+extern errno_t ifnet_dequeue_service_class_multi(ifnet_t interface,
+    mbuf_svc_class_t tc, u_int32_t max, mbuf_t *first_packet,
+    mbuf_t *last_packet, u_int32_t *cnt, u_int32_t *len);
+
+/*
+	@function ifnet_set_output_sched_model
+	@discussion Set the output scheduling model of an interface which
+		implements the new driver output model.
+	@param interface The interface to set scheduling model on.
+	@param model The IFNET_SCHED_MODEL value as defined in net/if.h
+	@result May return EINVAL if the parameters are invalid or ENXIO if
+		the interface doesn't implement the new driver output model.
+ */
+extern errno_t ifnet_set_output_sched_model(ifnet_t interface,
+    u_int32_t model);
+
+/*
+	@function ifnet_set_sndq_maxlen
+	@discussion Set the maximum length of the output queue of an
+		interface which implements the new driver output model.
+		This call may be issued post ifnet_allocate_extended in
+		order to modify the maximum output queue length previously
+		set at registration time.
+	@param interface The interface to set the max queue length on.
+	@param maxqlen The maximum number of packets in the output queue.
+	@result May return EINVAL if the parameters are invalid or ENXIO if
+		the interface doesn't implement the new driver output model.
+ */
+extern errno_t ifnet_set_sndq_maxlen(ifnet_t interface, u_int32_t maxqlen);
+
+/*
+	@function ifnet_get_sndq_maxlen
+	@discussion Get the maximum length of the output queue of an
+		interface which implements the new driver output model.
+	@param interface The interface to get the max queue length on.
+	@param maxqlen Pointer to a storage for the maximum number of packets
+		in the output queue.
+	@result May return EINVAL if the parameters are invalid or ENXIO if
+		the interface doesn't implement the new driver output model.
+ */
+extern errno_t ifnet_get_sndq_maxlen(ifnet_t interface, u_int32_t *maxqlen);
+
+/*
+	@function ifnet_get_sndq_len
+	@discussion Get the current length of the output queue of an
+		interface which implements the new driver output model.
+	@param interface The interface to get the current queue length on.
+	@param qlen Pointer to a storage for the current number of packets
+		in the output queue.
+	@result May return EINVAL if the parameters are invalid or ENXIO if
+		the interface doesn't implement the new driver output model.
+ */
+extern errno_t ifnet_get_sndq_len(ifnet_t interface, u_int32_t *qlen);
+
+/*
+	@function ifnet_set_rcvq_maxlen
+	@discussion Set the maximum length of the input queue of an
+		interface which implements the new driver input model.
+		This call may be issued post ifnet_allocate_extended in
+		order to modify the maximum input queue length previously
+		set at registration time.
+	@param interface The interface to set the max queue length on.
+	@param maxqlen The maximum number of packets in the input queue.
+		Drivers typically set this to the size of the receive ring
+		or the total number of descriptors used for the input path.
+	@result May return EINVAL if the parameters are invalid or ENXIO if
+		the interface doesn't implement the new driver input model.
+ */
+extern errno_t ifnet_set_rcvq_maxlen(ifnet_t interface, u_int32_t maxqlen);
+
+/*
+	@function ifnet_get_rcvq_maxlen
+	@discussion Get the maximum length of the input queue of an
+		interface which implements the new driver input model.
+	@param interface The interface to get the max queue length on.
+	@param maxqlen Pointer to a storage for the maximum number of packets
+		in the input queue.
+	@result May return EINVAL if the parameters are invalid or ENXIO if
+		the interface doesn't implement the new driver input model.
+ */
+extern errno_t ifnet_get_rcvq_maxlen(ifnet_t interface, u_int32_t *maxqlen);
+
+/*
+	@function ifnet_start
+	@discussion Trigger the transmission at the driver layer on an
+		interface which implements the new driver output model.
+	@param interface The interface to start the transmission on.
+ */
+extern void ifnet_start(ifnet_t interface);
+
+/*
+	@function ifnet_transmit_burst_start
+	@discussion Inform the kernel about the beginning of transmission
+		of a burst.  This function should be called when a burst of
+		packets are scheduled to get transmitted over the link. The
+		callback will be used by the system to start measuring
+		bandwidth available on that link.  The driver may choose to
+		adopt this scheme for uplink bandwidth measurement, in case
+		the information can't be obtained from the hardware.  Else
+		it may alternatively inform the network stack about the
+		information using ifnet_set_bandwidths.
+	@param interface The interface.
+	@param mbuf_t The first packet in a burst of packets that has been
+		scheduled to transmit.
+*/
+extern void ifnet_transmit_burst_start(ifnet_t interface, mbuf_t pkt);
+
+/*
+	@function ifnet_transmit_burst_end
+	@discussion Inform the kernel about the end of transmission of a burst.
+		This function should be called when the transmission of a burst
+		of packets is done. This information will be used by the
+		system to estimate bandwidth available on that link.  The
+		driver may choose to adopt this scheme for uplink bandwidth
+		measurement, in case the information can't be obtained from
+		the hardware.  Else it may alternatively inform the network
+		stack about the information using ifnet_set_bandwidths.
+	@param interface The interface.
+	@param mbuf_t The last packet in the burst that has been successfully
+		transmitted.
+*/
+extern void ifnet_transmit_burst_end(ifnet_t interface, mbuf_t pkt);
+#endif /* KERNEL_PRIVATE */
 
 /*!
 	@function ifnet_reference
@@ -903,7 +1416,7 @@ extern u_int16_t ifnet_flags(ifnet_t interface);
 
 
 #ifdef KERNEL_PRIVATE
-/*!
+/*
 	@function ifnet_set_eflags
 	@discussion Sets the extended interface flags to new_flags. This
 		function lets you specify which flags you want to change using
@@ -919,7 +1432,7 @@ extern u_int16_t ifnet_flags(ifnet_t interface);
 extern errno_t ifnet_set_eflags(ifnet_t interface, u_int32_t new_flags,
     u_int32_t mask);
 
-/*!
+/*
 	@function ifnet_eflags
 	@discussion Returns the extended interface flags that are set.
 	@param interface Interface to retrieve the flags from.
@@ -927,7 +1440,7 @@ extern errno_t ifnet_set_eflags(ifnet_t interface, u_int32_t new_flags,
  */
 extern u_int32_t ifnet_eflags(ifnet_t interface);
 
-/*!
+/*
 	@function ifnet_set_idle_flags
 	@discussion Sets the if_idle_flags to new_flags. This function
 		lets you specify which flags you want to change using the
@@ -947,7 +1460,7 @@ extern u_int32_t ifnet_eflags(ifnet_t interface);
 extern errno_t ifnet_set_idle_flags(ifnet_t interface, u_int32_t new_flags,
     u_int32_t mask);
 
-/*!
+/*
 	@function ifnet_idle_flags
 	@discussion Returns the value of if_idle_flags.
 	@param interface Interface to retrieve the flags from.
@@ -955,6 +1468,101 @@ extern errno_t ifnet_set_idle_flags(ifnet_t interface, u_int32_t new_flags,
 */
 extern u_int32_t ifnet_idle_flags(ifnet_t interface);
 
+/*
+	@function ifnet_set_link_quality
+	@discussion Sets the Link Quality Metric for the ifnet.
+	@param interface Interface for which the Link Quality Metric should
+		be associated to.
+	@param quality IFNET_LQM value as defined in net/if.h.
+	@result 0 on success otherwise the errno error.  EINVAL if quality
+		is not a valid value.  ENXIO if the interface is not attached.
+*/
+extern errno_t ifnet_set_link_quality(ifnet_t interface, int quality);
+
+/*
+	@function ifnet_link_quality
+	@discussion Returns the Link Quality Metric for the ifnet.
+	@param interface Interface to retrieve the value from.
+	@result IFNET_LQM as defined in net/if.h
+*/
+extern int ifnet_link_quality(ifnet_t interface);
+
+/*
+	@struct ifnet_llreach_info
+	@discussion This structure is used to describe the link-layer
+		reachability information of an on-link node.
+	@field iflri_refcnt The number of network-layer objects referring
+		to this link-layer reachability record.
+	@field iflri_probes The total number of outstanding probes.
+	@field iflri_snd_expire The send expiration time.  This is calculated
+		based on the last time the system transmitted a packet to the
+		node.  A zero value indicates that a packet has not been sent
+		to the node.  A non-zero value indicates the time before the
+		record is determined to be invalid.  When the record is no
+		longer valid, the system will send probe(s) to resolve the
+		node again.  This value is relative to the current time
+		specified in iflri_curtime.
+	@field iflri_rcv_expire The receive expiriation time.  This is
+		calculated based on the last time the system received a packet
+		from the node.  A zero value indicates that a packet has not
+		been received from the node.  A non-zero value indicates the
+		time before the record is determined to be invalid.  When the
+		record is no longer valid, the system will send probe(s) to
+		resolve the node again.  This value is relative to the current
+		time specified in iflri_curtime.
+	@field iflri_curtime The current time when this record was retrieved.
+	@field iflri_netproto The protocol number of the network-layer object.
+	@field iflri_addr The link-layer address of the node.
+	@field iflri_rssi The received signal strength indication (RSSI) of the
+		node in dBm.  The special value IFNET_RSSI_UNKNOWN is used when
+		the RSSI is either unknown or inapplicable for the interface.
+	@field iflri_lqm The link quality metric (LQM) to the node.  The
+		special value IFNET_LQM_UNKNOWN is used when the LQM is not
+		currently known.  The special value IFNET_LQM_OFF is used when
+		the link quality metric is inapplicable to nodes at this
+		attached to the network at this interface.
+	@field iflri_npm The node proximity metric (NPM) to the node.  The
+		special value IFNET_NPM_UNKNOWN is used when the NPM is not
+		currently known.
+ */
+#define	IFNET_LLREACHINFO_ADDRLEN	64	/* max ll addr len */
+
+struct ifnet_llreach_info {
+	u_int32_t iflri_refcnt;
+	u_int32_t iflri_probes;
+	u_int64_t iflri_snd_expire;
+	u_int64_t iflri_rcv_expire;
+	u_int64_t iflri_curtime;
+	u_int32_t iflri_netproto;
+	u_int8_t  iflri_addr[IFNET_LLREACHINFO_ADDRLEN];
+	int32_t   iflri_rssi;
+	int32_t   iflri_lqm;
+	int32_t   iflri_npm;
+};
+
+/*
+	@function ifnet_inet_defrouter_llreachinfo
+	@discussion Retrieve link-layer reachability information of the
+		default IPv4 router specific to the interface.
+	@param interface The interface associated with the default IPv4 router.
+	@param pinfo Pointer to the ifnet_llreach_info structure where the
+		information will be returned to, upon success.
+	@result	0 upon success, otherwise errno error.
+ */
+extern errno_t ifnet_inet_defrouter_llreachinfo(ifnet_t interface,
+    struct ifnet_llreach_info *pinfo);
+
+/*
+	@function ifnet_inet6_defrouter_llreachinfo
+	@discussion Retrieve link-layer reachability information of the
+		default IPv6 router specific to the interface.
+	@param interface The interface associated with the default IPv6 router.
+	@param pinfo Pointer to the ifnet_llreach_info structure where the
+		information will be returned to, upon success.
+	@result	0 upon success, otherwise errno error.
+ */
+extern errno_t ifnet_inet6_defrouter_llreachinfo(ifnet_t interface,
+    struct ifnet_llreach_info *pinfo);
 #endif /* KERNEL_PRIVATE */
 
 /*!
@@ -1258,6 +1866,28 @@ extern errno_t ifnet_output_raw(ifnet_t interface,
 extern errno_t ifnet_input(ifnet_t interface, mbuf_t first_packet,
     const struct ifnet_stat_increment_param *stats);
 
+#ifdef KERNEL_PRIVATE
+/*
+	@function ifnet_input_extended
+	@discussion Inputs packets from the interface. The interface's demux
+		will be called to determine the protocol. Once the protocol is
+		determined, the interface filters and protocol filters will be
+		called. From there, the packet will be passed to the registered
+		protocol. If there is an error, the mbuf chain will be freed.
+	@param interface The interface.
+	@param first_packet The first packet in a chain of packets.
+	@param last_packet The last packet in a chain of packets.  This may be
+		set to NULL if the driver does not have the information.
+	@param stats Counts to be integrated in to the stats. The interface
+		statistics will be incremented by the amounts specified in
+		stats. Unlike ifnet_input(), this parameter is required by
+		this extended variant.
+	@result 0 on success otherwise the errno error.
+ */
+extern errno_t ifnet_input_extended(ifnet_t interface, mbuf_t first_packet,
+    mbuf_t last_packet, const struct ifnet_stat_increment_param *stats);
+#endif /* KERNEL_PRIVATE */
+
 /*!
 	@function ifnet_ioctl
 	@discussion Calls the interface's ioctl function with the parameters
@@ -1391,6 +2021,38 @@ extern errno_t ifnet_set_baudrate(ifnet_t interface, u_int64_t baudrate);
 	@result The baudrate.
  */
 extern u_int64_t ifnet_baudrate(ifnet_t interface);
+
+#ifdef KERNEL_PRIVATE
+typedef struct if_bandwidths if_bandwidths_t;
+
+/*
+	@function ifnet_set_bandwidths
+	@param interface The interface.
+	@param output_bw The output bandwidth values (in bits per second).
+		May be set to NULL if the caller does not want to alter the
+		existing output bandwidth values.
+	@param input_bw The input bandwidth values (in bits per second).
+		May be set to NULL if the caller does not want to alter the
+		existing input bandwidth values.
+	@result 0 on success otherwise the errno error.
+ */
+extern errno_t ifnet_set_bandwidths(ifnet_t interface,
+    if_bandwidths_t *output_bw, if_bandwidths_t *input_bw);
+
+/*
+	@function ifnet_bandwidths
+	@param interface The interface.
+	@param output_bw The output bandwidth values (in bits per second).
+		May be set to NULL if the caller does not want to retrieve the
+		output bandwidth value.
+	@param input_bw The input bandwidth values (in bits per second).
+		May be set to NULL if the caller does not want to retrieve the
+		input bandwidth value.
+	@result 0 on success otherwise the errno error.
+ */
+extern errno_t ifnet_bandwidths(ifnet_t interface, if_bandwidths_t *output_bw,
+    if_bandwidths_t *input_bw);
+#endif /* KERNEL_PRIVATE */
 
 /*!
 	@function ifnet_stat_increment
@@ -2009,6 +2671,71 @@ extern errno_t ifnet_clone_attach(struct ifnet_clone_params *cloner_params, if_c
 	@result Returns 0 on success. 
  */
 extern errno_t ifnet_clone_detach(if_clone_t ifcloner);
+
+/******************************************************************************/
+/* misc                                                                       */
+/******************************************************************************/
+
+/*
+	@function ifnet_get_local_ports
+	@discussion Returns a bitfield indicating which ports have sockets
+		open. An interface that supports waking the host on unicast traffic may
+		use this information to discard incoming unicast packets that don't have
+		a corresponding bit set instead of waking up the host. For port 0x0001,
+		bit 1 of the first byte would be set. For port n, bit 1 << (n % 8) of
+		the (n / 8)'th byte would be set.
+	@param ifp The interface in question.
+	@param bitfield A pointer to 8192 bytes.
+	@result Returns 0 on success.
+ */
+extern errno_t ifnet_get_local_ports(ifnet_t ifp, uint8_t *bitfield);
+/******************************************************************************/
+/* for interfaces that support dynamic node absence/presence events           */
+/******************************************************************************/
+
+/*
+	@function ifnet_notice_node_presence
+	@discussion Provided for network interface drivers to notify the
+		system of a change detected in the presence of the specified
+		node.
+	@param ifp The interface attached to the link where the specified node
+		is present.
+	@param sa The AF_LINK family address of the node whose presence is
+		changing.
+	@param rssi The received signal strength indication as measured in
+		dBm by a radio receiver.
+	@param lqm A link quality metric associated with the specified node.
+	@param npm A node proximity metric associated with the specified node.
+	@param srvinfo A fixed-size array of octets containing opaque service
+		information data used by the mDNS responder subsystem.
+	@result Returns 0 on success, or EINVAL if arguments are invalid.
+ */
+extern errno_t
+ifnet_notice_node_presence(ifnet_t ifp, struct sockaddr* sa, int32_t rssi,
+    int lqm, int npm, u_int8_t srvinfo[48]);
+
+/*
+	@function ifnet_notice_node_absence
+	@discussion Provided for network interface drivers to notify the
+		system that the absence of the specified node has been detected.
+	@param ifp The interface attached to the link where the absence of the
+		specified node has been detected.
+	@param sa The AF_LINK family address of the node whose absence has been
+		detected.
+	@result Returns 0 on success, or EINVAL if arguments are invalid.
+ */
+extern errno_t ifnet_notice_node_absence(ifnet_t ifp, struct sockaddr* sa);
+
+/*
+	@function ifnet_notice_master_elected
+	@discussion Provided for network interface drivers to notify the system
+		that the nodes with a locally detected presence on the attached
+		link have elected a new master.
+	@param ifp The interface attached to the link where the new master has
+		been elected.
+	@result Returns 0 on success, or EINVAL if arguments are invalid.
+ */
+extern errno_t ifnet_notice_master_elected(ifnet_t ifp);
 
 #endif /* KERNEL_PRIVATE */
 

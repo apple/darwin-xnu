@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2010 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2012 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -89,10 +89,12 @@
 #include <sys/socketvar.h>
 #include <sys/time.h>
 #include <sys/sysctl.h>
-//#include <sys/mcache.h>
 #include <net/if.h>
 #include <net/route.h>
 #include <net/kpi_protocol.h>
+#if DUMMYNET
+#include <net/kpi_protocol.h>
+#endif /* DUMMYNET */
 #include <netinet/in.h>
 #include <netinet/in_systm.h>
 #include <netinet/in_var.h>
@@ -100,6 +102,11 @@
 #include <netinet/ip_fw.h>
 #include <netinet/ip_dummynet.h>
 #include <netinet/ip_var.h>
+
+#include <netinet/ip6.h>       /* for ip6_input, ip6_output prototypes */
+#include <netinet6/ip6_var.h>
+
+static struct ip_fw default_rule;
 
 /*
  * We keep a private variable for the simulation time, but we could
@@ -211,7 +218,8 @@ SYSCTL_INT(_net_inet_ip_dummynet, OID_AUTO, debug, CTLFLAG_RW | CTLFLAG_LOCKED, 
 static lck_grp_t         *dn_mutex_grp;
 static lck_grp_attr_t    *dn_mutex_grp_attr;
 static lck_attr_t        *dn_mutex_attr;
-static lck_mtx_t         *dn_mutex;
+decl_lck_mtx_data(static, dn_mutex_data);
+static lck_mtx_t         *dn_mutex = &dn_mutex_data;
 
 static int config_pipe(struct dn_pipe *p);
 static int ip_dn_ctl(struct sockopt *sopt);
@@ -220,7 +228,6 @@ static void dummynet(void *);
 static void dummynet_flush(void);
 void dummynet_drain(void);
 static ip_dn_io_t dummynet_io;
-static void dn_rule_delete(void *);
 
 int if_tx_rdy(struct ifnet *ifp);
 
@@ -687,11 +694,12 @@ static struct dn_pkt_tag *
 dn_tag_get(struct mbuf *m)
 {
     struct m_tag *mtag = m_tag_first(m);
-/*	KASSERT(mtag != NULL &&
-	    mtag->m_tag_id == KERNEL_MODULE_TAG_ID &&
-	    mtag->m_tag_type == KERNEL_TAG_TYPE_DUMMYNET,
-	    ("packet on dummynet queue w/o dummynet tag!"));
-*/
+
+    if (!(mtag != NULL &&
+          mtag->m_tag_id == KERNEL_MODULE_TAG_ID &&
+          mtag->m_tag_type == KERNEL_TAG_TYPE_DUMMYNET))
+	panic("packet on dummynet queue w/o dummynet tag: %p", m);
+
     return (struct dn_pkt_tag *)(mtag+1);
 }
 
@@ -716,16 +724,16 @@ dn_tag_get(struct mbuf *m)
 static void
 transmit_event(struct dn_pipe *pipe, struct mbuf **head, struct mbuf **tail)
 {
-    struct mbuf *m ;
-    struct dn_pkt_tag *pkt ;
-    u_int64_t schedule_time;
+	struct mbuf *m ;
+	struct dn_pkt_tag *pkt = NULL;
+	u_int64_t schedule_time;
 
 	lck_mtx_assert(dn_mutex, LCK_MTX_ASSERT_OWNED);
-	ASSERT(serialize >= 0);
+        ASSERT(serialize >= 0);
 	if (serialize == 0) {
 		while ((m = pipe->head) != NULL) {
 			pkt = dn_tag_get(m);
-			if (!DN_KEY_LEQ(pkt->output_time, curr_time))
+			if (!DN_KEY_LEQ(pkt->dn_output_time, curr_time))
 				break;
 
 			pipe->head = m->m_nextpkt;
@@ -738,19 +746,19 @@ transmit_event(struct dn_pipe *pipe, struct mbuf **head, struct mbuf **tail)
 		
 		if (*tail != NULL)
 			(*tail)->m_nextpkt = NULL;
-		}
+	}
 
-		schedule_time = DN_KEY_LEQ(pkt->output_time, curr_time) ?
-		    curr_time+1 : pkt->output_time;
+	schedule_time = pkt == NULL || DN_KEY_LEQ(pkt->dn_output_time, curr_time) ?
+		curr_time + 1 : pkt->dn_output_time;
 
-    /* if there are leftover packets, put the pipe into the heap for next ready event */
-    if ((m = pipe->head) != NULL) {
+	/* if there are leftover packets, put the pipe into the heap for next ready event */
+	if ((m = pipe->head) != NULL) {
 		pkt = dn_tag_get(m);
 		/* XXX should check errors on heap_insert, by draining the
 		 * whole pipe p and hoping in the future we are more successful
 		 */
 		heap_insert(&extract_heap, schedule_time, pipe);
-    }
+	}
 }
 
 /*
@@ -783,7 +791,7 @@ move_pkt(struct mbuf *pkt, struct dn_flow_queue *q,
     q->len-- ;
     q->len_bytes -= len ;
 
-    dt->output_time = curr_time + p->delay ;
+    dt->dn_output_time = curr_time + p->delay ;
 
     if (p->head == NULL)
 	p->head = pkt;
@@ -875,11 +883,11 @@ ready_event_wfq(struct dn_pipe *p, struct mbuf **head, struct mbuf **tail)
 	int64_t p_numbytes = p->numbytes;
 
 	lck_mtx_assert(dn_mutex, LCK_MTX_ASSERT_OWNED);
-	
+
     if (p->if_name[0] == 0) /* tx clock is simulated */
 	p_numbytes += ( curr_time - p->sched_time ) * p->bandwidth;
     else { /* tx clock is for real, the ifq must be empty or this is a NOP */
-	if (p->ifp && p->ifp->if_snd.ifq_head != NULL)
+	if (p->ifp && !IFCQ_IS_EMPTY(&p->ifp->if_snd))
 	    return ;
 	else {
 	    DPRINTF(("dummynet: pipe %d ready from %s --\n",
@@ -968,7 +976,7 @@ ready_event_wfq(struct dn_pipe *p, struct mbuf **head, struct mbuf **tail)
 
 	if (p->bandwidth > 0)
 	    t = ( p->bandwidth -1 - p_numbytes) / p->bandwidth ;
-	dn_tag_get(p->tail)->output_time += t ;
+	dn_tag_get(p->tail)->dn_output_time += t ;
 	p->sched_time = curr_time ;
 	heap_insert(&wfq_ready_heap, curr_time + t, (void *)p);
 	/* XXX should check errors on heap_insert, and drain the whole
@@ -1055,7 +1063,7 @@ dummynet(__unused void * unused)
 	    q->S = q->F + 1 ; /* mark timestamp as invalid */
 	    pe->sum -= q->fs->weight ;
 	}
-	
+
 	/* check the heaps to see if there's still stuff in there, and 
 	 * only set the timer if there are packets to process 
 	 */
@@ -1097,10 +1105,15 @@ dummynet_send(struct mbuf *m)
 		m->m_nextpkt = NULL;
 		pkt = dn_tag_get(m);
 		
+		DPRINTF(("dummynet_send m: %p dn_dir: %d dn_flags: 0x%x\n",
+				m, pkt->dn_dir, pkt->dn_flags));
+		
 	switch (pkt->dn_dir) {
 		case DN_TO_IP_OUT: {
-			struct route tmp_rt = pkt->ro;
-			(void)ip_output(m, NULL, &tmp_rt, pkt->flags, NULL, NULL);
+			struct route tmp_rt = pkt->dn_ro;
+			/* Force IP_RAWOUTPUT as the IP header is fully formed */
+			pkt->dn_flags |= IP_RAWOUTPUT | IP_FORWARDING;
+			(void)ip_output(m, NULL, &tmp_rt, pkt->dn_flags, NULL, NULL);
 			if (tmp_rt.ro_rt) {
 				rtfree(tmp_rt.ro_rt);
 				tmp_rt.ro_rt = NULL;
@@ -1110,7 +1123,22 @@ dummynet_send(struct mbuf *m)
 		case DN_TO_IP_IN :
 			proto_inject(PF_INET, m);
 			break ;
-	
+#ifdef INET6
+		case DN_TO_IP6_OUT: {
+			struct route_in6 ro6;
+
+			ro6 = pkt->dn_ro6;
+
+			ip6_output(m, NULL, &ro6, IPV6_FORWARDING, NULL, NULL, NULL);
+
+			if (ro6.ro_rt)
+				rtfree(ro6.ro_rt);	
+			break;
+		}
+		case DN_TO_IP6_IN:
+			proto_inject(PF_INET6, m);
+			break;
+#endif /* INET6 */	
 		default:
 			printf("dummynet: bad switch %d!\n", pkt->dn_dir);
 			m_freem(m);
@@ -1150,7 +1178,7 @@ if_tx_rdy(struct ifnet *ifp)
     }
     if (p != NULL) {
 	DPRINTF(("dummynet: ++ tx rdy from %s%d - qlen %d\n", ifp->if_name,
-		ifp->if_unit, ifp->if_snd.ifq_len));
+		ifp->if_unit, IFCQ_LEN(&ifp->if_snd)));
 	p->numbytes = 0 ; /* mark ready for I/O */
 	ready_event_wfq(p, &head, &tail);
     }
@@ -1161,11 +1189,12 @@ if_tx_rdy(struct ifnet *ifp)
 	
 	lck_mtx_unlock(dn_mutex);
 
-	
 	/* Send out the de-queued list of ready-to-send packets */
 	if (head != NULL) {
 		dummynet_send(head);
+		lck_mtx_lock(dn_mutex);
 		serialize--;
+		lck_mtx_unlock(dn_mutex);
 	}
     return 0;
 }
@@ -1243,41 +1272,84 @@ create_queue(struct dn_flow_set *fs, int i)
  * so that further searches take less time.
  */
 static struct dn_flow_queue *
-find_queue(struct dn_flow_set *fs, struct ipfw_flow_id *id)
+find_queue(struct dn_flow_set *fs, struct ip_flow_id *id)
 {
     int i = 0 ; /* we need i and q for new allocations */
     struct dn_flow_queue *q, *prev;
+    int is_v6 = IS_IP6_FLOW_ID(id);
 
     if ( !(fs->flags_fs & DN_HAVE_FLOW_MASK) )
 	q = fs->rq[0] ;
     else {
-	/* first, do the masking */
-	id->dst_ip &= fs->flow_mask.dst_ip ;
-	id->src_ip &= fs->flow_mask.src_ip ;
+	/* first, do the masking, then hash */
 	id->dst_port &= fs->flow_mask.dst_port ;
 	id->src_port &= fs->flow_mask.src_port ;
 	id->proto &= fs->flow_mask.proto ;
 	id->flags = 0 ; /* we don't care about this one */
-	/* then, hash function */
-	i = ( (id->dst_ip) & 0xffff ) ^
-	    ( (id->dst_ip >> 15) & 0xffff ) ^
-	    ( (id->src_ip << 1) & 0xffff ) ^
-	    ( (id->src_ip >> 16 ) & 0xffff ) ^
-	    (id->dst_port << 1) ^ (id->src_port) ^
-	    (id->proto );
+        if (is_v6) {
+            APPLY_MASK(&id->dst_ip6, &fs->flow_mask.dst_ip6);
+            APPLY_MASK(&id->src_ip6, &fs->flow_mask.src_ip6);
+            id->flow_id6 &= fs->flow_mask.flow_id6;
+
+            i = ((id->dst_ip6.__u6_addr.__u6_addr32[0]) & 0xffff)^
+                ((id->dst_ip6.__u6_addr.__u6_addr32[1]) & 0xffff)^
+                ((id->dst_ip6.__u6_addr.__u6_addr32[2]) & 0xffff)^
+                ((id->dst_ip6.__u6_addr.__u6_addr32[3]) & 0xffff)^
+
+                ((id->dst_ip6.__u6_addr.__u6_addr32[0] >> 15) & 0xffff)^
+                ((id->dst_ip6.__u6_addr.__u6_addr32[1] >> 15) & 0xffff)^
+                ((id->dst_ip6.__u6_addr.__u6_addr32[2] >> 15) & 0xffff)^
+                ((id->dst_ip6.__u6_addr.__u6_addr32[3] >> 15) & 0xffff)^
+
+                ((id->src_ip6.__u6_addr.__u6_addr32[0] << 1) & 0xfffff)^
+                ((id->src_ip6.__u6_addr.__u6_addr32[1] << 1) & 0xfffff)^
+                ((id->src_ip6.__u6_addr.__u6_addr32[2] << 1) & 0xfffff)^
+                ((id->src_ip6.__u6_addr.__u6_addr32[3] << 1) & 0xfffff)^
+
+                ((id->src_ip6.__u6_addr.__u6_addr32[0] << 16) & 0xffff)^
+                ((id->src_ip6.__u6_addr.__u6_addr32[1] << 16) & 0xffff)^
+                ((id->src_ip6.__u6_addr.__u6_addr32[2] << 16) & 0xffff)^
+                ((id->src_ip6.__u6_addr.__u6_addr32[3] << 16) & 0xffff)^
+
+                (id->dst_port << 1) ^ (id->src_port) ^
+                (id->proto ) ^
+                (id->flow_id6);
+        } else {
+            id->dst_ip &= fs->flow_mask.dst_ip ;
+            id->src_ip &= fs->flow_mask.src_ip ;
+
+            i = ( (id->dst_ip) & 0xffff ) ^
+                ( (id->dst_ip >> 15) & 0xffff ) ^
+                ( (id->src_ip << 1) & 0xffff ) ^
+                ( (id->src_ip >> 16 ) & 0xffff ) ^
+                (id->dst_port << 1) ^ (id->src_port) ^
+                (id->proto );
+        }
 	i = i % fs->rq_size ;
 	/* finally, scan the current list for a match */
 	searches++ ;
 	for (prev=NULL, q = fs->rq[i] ; q ; ) {
 	    search_steps++;
-	    if (id->dst_ip == q->id.dst_ip &&
-		    id->src_ip == q->id.src_ip &&
-		    id->dst_port == q->id.dst_port &&
-		    id->src_port == q->id.src_port &&
-		    id->proto == q->id.proto &&
-		    id->flags == q->id.flags)
-		break ; /* found */
-	    else if (pipe_expire && q->head == NULL && q->S == q->F+1 ) {
+            if (is_v6 &&
+                    IN6_ARE_ADDR_EQUAL(&id->dst_ip6,&q->id.dst_ip6) &&
+                    IN6_ARE_ADDR_EQUAL(&id->src_ip6,&q->id.src_ip6) &&
+                    id->dst_port == q->id.dst_port &&
+                    id->src_port == q->id.src_port &&
+                    id->proto == q->id.proto &&
+                    id->flags == q->id.flags &&
+                    id->flow_id6 == q->id.flow_id6)
+                break ; /* found */
+
+            if (!is_v6 && id->dst_ip == q->id.dst_ip &&
+                    id->src_ip == q->id.src_ip &&
+                    id->dst_port == q->id.dst_port &&
+                    id->src_port == q->id.src_port &&
+                    id->proto == q->id.proto &&
+                    id->flags == q->id.flags)
+                break ; /* found */
+
+            /* No match. Check if we can expire the entry */
+	    if (pipe_expire && q->head == NULL && q->S == q->F+1 ) {
 		/* entry is idle and not in any heap, expire it */
 		struct dn_flow_queue *old_q = q ;
 
@@ -1451,9 +1523,9 @@ locate_pipe(int pipe_nr)
  *
  */
 static int
-dummynet_io(struct mbuf *m, int pipe_nr, int dir, struct ip_fw_args *fwa)
+dummynet_io(struct mbuf *m, int pipe_nr, int dir, struct ip_fw_args *fwa, int client)
 {
-	struct mbuf *head = NULL, *tail = NULL;
+    struct mbuf *head = NULL, *tail = NULL;
     struct dn_pkt_tag *pkt;
     struct m_tag *mtag;
     struct dn_flow_set *fs = NULL;
@@ -1464,15 +1536,28 @@ dummynet_io(struct mbuf *m, int pipe_nr, int dir, struct ip_fw_args *fwa)
     struct timespec ts;
     struct timeval	tv;
     
-#if IPFW2
-    ipfw_insn *cmd = fwa->rule->cmd + fwa->rule->act_ofs;
+    DPRINTF(("dummynet_io m: %p pipe: %d dir: %d client: %d\n",
+    		m, pipe_nr, dir, client));
 
-    if (cmd->opcode == O_LOG)
-	cmd += F_LEN(cmd);
-    is_pipe = (cmd->opcode == O_PIPE);
+#if IPFIREWALL
+#if IPFW2
+    if (client == DN_CLIENT_IPFW) {
+        ipfw_insn *cmd = fwa->fwa_ipfw_rule->cmd + fwa->fwa_ipfw_rule->act_ofs;
+
+        if (cmd->opcode == O_LOG)
+	    cmd += F_LEN(cmd);
+        is_pipe = (cmd->opcode == O_PIPE);
+    }
 #else
-    is_pipe = (fwa->rule->fw_flg & IP_FW_F_COMMAND) == IP_FW_F_PIPE;
+    if (client == DN_CLIENT_IPFW)
+        is_pipe = (fwa->fwa_ipfw_rule->fw_flg & IP_FW_F_COMMAND) == IP_FW_F_PIPE;
 #endif
+#endif /* IPFIREWALL */
+
+#if DUMMYNET
+    if (client == DN_CLIENT_PF)
+    	is_pipe = fwa->fwa_flags == DN_IS_PIPE ? 1 : 0;
+#endif /* DUMMYNET */
 
     pipe_nr &= 0xffff ;
 
@@ -1482,7 +1567,7 @@ dummynet_io(struct mbuf *m, int pipe_nr, int dir, struct ip_fw_args *fwa)
          * here we convert secs and usecs to msecs (just divide the 
          * usecs and take the closest whole number).
 	 */
-        microuptime(&tv);
+    microuptime(&tv);
 	curr_time = (tv.tv_sec * 1000) + (tv.tv_usec / 1000);
 	
    /*
@@ -1511,7 +1596,7 @@ dummynet_io(struct mbuf *m, int pipe_nr, int dir, struct ip_fw_args *fwa)
 	    goto dropit ;
 	}
     }
-    q = find_queue(fs, &(fwa->f_id));
+    q = find_queue(fs, &(fwa->fwa_id));
     if ( q == NULL )
 	goto dropit ;		/* cannot allocate queue		*/
     /*
@@ -1542,28 +1627,70 @@ dummynet_io(struct mbuf *m, int pipe_nr, int dir, struct ip_fw_args *fwa)
     bzero(pkt, sizeof(struct dn_pkt_tag));
     /* ok, i can handle the pkt now... */
     /* build and enqueue packet + parameters */
-    pkt->rule = fwa->rule ;
+    /*
+     * PF is checked before ipfw so remember ipfw rule only when
+     * the caller is ipfw. When the caller is PF, fwa_ipfw_rule
+     * is a fake rule just used for convenience
+     */
+    if (client == DN_CLIENT_IPFW)
+    	pkt->dn_ipfw_rule = fwa->fwa_ipfw_rule;
+    pkt->dn_pf_rule = fwa->fwa_pf_rule;
     pkt->dn_dir = dir ;
+    pkt->dn_client = client;
 
-    pkt->ifp = fwa->oif;
+    pkt->dn_ifp = fwa->fwa_oif;
     if (dir == DN_TO_IP_OUT) {
-	/*
-	 * We need to copy *ro because for ICMP pkts (and maybe others)
-	 * the caller passed a pointer into the stack; dst might also be
-	 * a pointer into *ro so it needs to be updated.
-	 */
-	pkt->ro = *(fwa->ro);
-	if (fwa->ro->ro_rt)
-		RT_ADDREF(fwa->ro->ro_rt);
-
-	if (fwa->dst == (struct sockaddr_in *)&fwa->ro->ro_dst) /* dst points into ro */
-	    fwa->dst = (struct sockaddr_in *)&(pkt->ro.ro_dst) ;
-
-	bcopy (fwa->dst, &pkt->dn_dst, sizeof(pkt->dn_dst));
-	pkt->flags = fwa->flags;
-	if (fwa->ipoa != NULL)
-		pkt->ipoa = *(fwa->ipoa);
-	}
+		/*
+		 * We need to copy *ro because for ICMP pkts (and maybe others)
+		 * the caller passed a pointer into the stack; dst might also be
+		 * a pointer into *ro so it needs to be updated.
+		 */
+		if (fwa->fwa_ro) {
+			pkt->dn_ro = *(fwa->fwa_ro);
+			if (fwa->fwa_ro->ro_rt)
+				RT_ADDREF(fwa->fwa_ro->ro_rt);
+		}
+		if (fwa->fwa_dst) {
+			if (fwa->fwa_dst == (struct sockaddr_in *)&fwa->fwa_ro->ro_dst) /* dst points into ro */
+				fwa->fwa_dst = (struct sockaddr_in *)&(pkt->dn_ro.ro_dst) ;
+	
+			bcopy (fwa->fwa_dst, &pkt->dn_dst, sizeof(pkt->dn_dst));
+		}
+    } else if (dir == DN_TO_IP6_OUT) {
+		if (fwa->fwa_ro6) {
+			pkt->dn_ro6 = *(fwa->fwa_ro6);
+			if (fwa->fwa_ro6->ro_rt)
+				RT_ADDREF(fwa->fwa_ro6->ro_rt);
+		}
+		if (fwa->fwa_ro6_pmtu) {
+			pkt->dn_ro6_pmtu = *(fwa->fwa_ro6_pmtu);
+			if (fwa->fwa_ro6_pmtu->ro_rt)
+				RT_ADDREF(fwa->fwa_ro6_pmtu->ro_rt);
+		}
+		if (fwa->fwa_dst6) {
+			if (fwa->fwa_dst6 == (struct sockaddr_in6 *)&fwa->fwa_ro6->ro_dst) /* dst points into ro */
+				fwa->fwa_dst6 = (struct sockaddr_in6 *)&(pkt->dn_ro6.ro_dst) ;
+	
+			bcopy (fwa->fwa_dst6, &pkt->dn_dst6, sizeof(pkt->dn_dst6));
+		}
+		pkt->dn_origifp = fwa->fwa_origifp;
+		pkt->dn_mtu = fwa->fwa_mtu;
+		pkt->dn_alwaysfrag = fwa->fwa_alwaysfrag;
+		pkt->dn_unfragpartlen = fwa->fwa_unfragpartlen;
+		if (fwa->fwa_exthdrs) {
+			bcopy (fwa->fwa_exthdrs, &pkt->dn_exthdrs, sizeof(pkt->dn_exthdrs));
+			/* 
+			 * Need to zero out the source structure so the mbufs
+			 * won't be freed by ip6_output()
+			 */ 
+			bzero(fwa->fwa_exthdrs, sizeof(struct ip6_exthdrs));
+		}
+    }
+    if (dir == DN_TO_IP_OUT || dir == DN_TO_IP6_OUT) {
+		pkt->dn_flags = fwa->fwa_oflags;
+		if (fwa->fwa_ipoa != NULL)
+			pkt->dn_ipoa = *(fwa->fwa_ipoa);
+    }
     if (q->head == NULL)
 	q->head = m;
     else
@@ -1587,7 +1714,7 @@ dummynet_io(struct mbuf *m, int pipe_nr, int dir, struct ip_fw_args *fwa)
 	if (pipe->bandwidth)
 	    t = SET_TICKS(m, q, pipe);
 	q->sched_time = curr_time ;
-	if (t == 0)     /* must process it now */
+	if (t == 0)	/* must process it now */
 	    ready_event( q , &head, &tail );
 	else
 	    heap_insert(&ready_heap, curr_time + t , q );
@@ -1653,9 +1780,10 @@ done:
 	}
 
 	lck_mtx_unlock(dn_mutex);
-
-	if (head != NULL)
+	
+	if (head != NULL) {
 		dummynet_send(head);
+	}
 
     return 0;
 
@@ -1675,9 +1803,9 @@ dropit:
 	struct m_tag *tag = m_tag_locate(m, KERNEL_MODULE_TAG_ID, KERNEL_TAG_TYPE_DUMMYNET, NULL); \
 	if (tag) {						\
 		struct dn_pkt_tag *n = (struct dn_pkt_tag *)(tag+1);	\
-		if (n->ro.ro_rt != NULL) {			\
-			rtfree(n->ro.ro_rt);			\
-			n->ro.ro_rt = NULL;			\
+		if (n->dn_ro.ro_rt != NULL) {			\
+			rtfree(n->dn_ro.ro_rt);			\
+			n->dn_ro.ro_rt = NULL;			\
 		}						\
 	}							\
 	m_tag_delete(_m, tag);					\
@@ -1761,9 +1889,11 @@ dummynet_flush(void)
 
 	lck_mtx_lock(dn_mutex);
 
-    /* remove all references to pipes ...*/
-    flush_pipe_ptrs(NULL);
- 
+#if IPFW2
+	/* remove all references to pipes ...*/
+	flush_pipe_ptrs(NULL);
+#endif /* IPFW2 */
+
 	/* Free heaps so we don't have unwanted events. */
 	heap_free(&ready_heap);
 	heap_free(&wfq_ready_heap);
@@ -1789,9 +1919,8 @@ dummynet_flush(void)
 }
 
 
-extern struct ip_fw *ip_fw_default_rule ;
 static void
-dn_rule_delete_fs(struct dn_flow_set *fs, void *r)
+dn_ipfw_rule_delete_fs(struct dn_flow_set *fs, void *r)
 {
     int i ;
     struct dn_flow_queue *q ;
@@ -1801,8 +1930,8 @@ dn_rule_delete_fs(struct dn_flow_set *fs, void *r)
 	for (q = fs->rq[i] ; q ; q = q->next )
 	    for (m = q->head ; m ; m = m->m_nextpkt ) {
 		struct dn_pkt_tag *pkt = dn_tag_get(m) ;
-		if (pkt->rule == r)
-		    pkt->rule = ip_fw_default_rule ;
+		if (pkt->dn_ipfw_rule == r)
+		    pkt->dn_ipfw_rule = &default_rule ;
 	    }
 }
 /*
@@ -1810,7 +1939,7 @@ dn_rule_delete_fs(struct dn_flow_set *fs, void *r)
  * from packets matching this rule.
  */
 void
-dn_rule_delete(void *r)
+dn_ipfw_rule_delete(void *r)
 {
     struct dn_pipe *p ;
     struct dn_flow_set *fs ;
@@ -1827,16 +1956,16 @@ dn_rule_delete(void *r)
      */
     for (i = 0; i < HASHSIZE; i++)
 	SLIST_FOREACH(fs, &flowsethash[i], next)
-		dn_rule_delete_fs(fs, r);
+		dn_ipfw_rule_delete_fs(fs, r);
 
     for (i = 0; i < HASHSIZE; i++)
 	SLIST_FOREACH(p, &pipehash[i], next) {
 		fs = &(p->fs);
-		dn_rule_delete_fs(fs, r);
+		dn_ipfw_rule_delete_fs(fs, r);
 		for (m = p->head ; m ; m = m->m_nextpkt ) {
 			pkt = dn_tag_get(m);
-			if (pkt->rule == r)
-				pkt->rule = ip_fw_default_rule;
+			if (pkt->dn_ipfw_rule == r)
+				pkt->dn_ipfw_rule = &default_rule;
 		}
 	}
 	lck_mtx_unlock(dn_mutex);
@@ -1933,9 +2062,9 @@ set_fs_parms(struct dn_flow_set *x, struct dn_flow_set *src)
 	    x->qsize = 1024*1024 ;
     } else {
 	if (x->qsize == 0)
-	    x->qsize = 50;
+	    x->qsize = 50 ;
 	if (x->qsize > 100)
-	    x->qsize = 50;
+	    x->qsize = 50 ;
     }
     /* configuring RED */
     if ( x->flags_fs & DN_IS_RED )
@@ -2161,8 +2290,10 @@ delete_pipe(struct dn_pipe *p)
 	/* Unlink from list of pipes. */
 	SLIST_REMOVE(&pipehash[HASH(b->pipe_nr)], b, dn_pipe, next);
 
+#if IPFW2
 	/* remove references to this pipe from the ip_fw rules. */
 	flush_pipe_ptrs(&(b->fs));
+#endif /* IPFW2 */
 
 	/* Remove all references to this pipe from flow_sets. */
 	for (i = 0; i < HASHSIZE; i++)
@@ -2193,8 +2324,10 @@ delete_pipe(struct dn_pipe *p)
 	    return EINVAL ; /* not found */
 	}
 
+#if IPFW2
 	/* remove references to this flow_set from the ip_fw rules. */
 	flush_pipe_ptrs(b);
+#endif /* IPFW2 */
 
 	/* Unlink from list of flowsets. */
 	SLIST_REMOVE( &flowsethash[HASH(b->fs_nr)], b, dn_flow_set, next);
@@ -2443,21 +2576,30 @@ ip_dn_init(void)
 	dn_mutex_grp_attr = lck_grp_attr_alloc_init();
 	dn_mutex_grp = lck_grp_alloc_init("dn", dn_mutex_grp_attr);
 	dn_mutex_attr = lck_attr_alloc_init();
-
-	if ((dn_mutex = lck_mtx_alloc_init(dn_mutex_grp, dn_mutex_attr)) == NULL) {
-		printf("ip_dn_init: can't alloc dn_mutex\n");
-		return;
-	}
+	lck_mtx_init(dn_mutex, dn_mutex_grp, dn_mutex_attr);
 
 	ready_heap.size = ready_heap.elements = 0 ;
-    ready_heap.offset = 0 ;
+	ready_heap.offset = 0 ;
 
-    wfq_ready_heap.size = wfq_ready_heap.elements = 0 ;
-    wfq_ready_heap.offset = 0 ;
+	wfq_ready_heap.size = wfq_ready_heap.elements = 0 ;
+	wfq_ready_heap.offset = 0 ;
 
-    extract_heap.size = extract_heap.elements = 0 ;
-    extract_heap.offset = 0 ;
-    ip_dn_ctl_ptr = ip_dn_ctl;
-    ip_dn_io_ptr = dummynet_io;
-    ip_dn_ruledel_ptr = dn_rule_delete;
+	extract_heap.size = extract_heap.elements = 0 ;
+	extract_heap.offset = 0 ;
+	ip_dn_ctl_ptr = ip_dn_ctl;
+	ip_dn_io_ptr = dummynet_io;
+
+	bzero(&default_rule, sizeof default_rule);
+	
+	default_rule.act_ofs = 0;
+	default_rule.rulenum = IPFW_DEFAULT_RULE;
+	default_rule.cmd_len = 1;
+	default_rule.set = RESVD_SET;
+
+	default_rule.cmd[0].len = 1;
+	default_rule.cmd[0].opcode = 
+#ifdef IPFIREWALL_DEFAULT_TO_ACCEPT
+                                1 ? O_ACCEPT :
+#endif
+                                O_DENY;
 }

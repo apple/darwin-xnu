@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2010 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -35,7 +35,6 @@
 #include <mach/exc_server.h>
 #include <mach/host_priv.h>
 #include <mach/host_security.h>
-#include <mach/ledger.h>
 #include <mach/lock_set.h>
 #include <mach/mach_exc_server.h>
 #include <mach/mach_host.h>

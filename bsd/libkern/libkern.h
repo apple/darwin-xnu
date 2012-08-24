@@ -77,6 +77,7 @@
 #include <sys/types.h>
 #include <mach/vm_param.h>
 
+
 #ifdef __APPLE_API_OBSOLETE
 /* BCD conversions. */
 extern u_char const	bcd2bin_data[];

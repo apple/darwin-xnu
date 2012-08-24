@@ -94,7 +94,8 @@
 
 #include <kern/thread.h>
 
-static lck_mtx_t		*bstp_task_mtx = NULL;
+decl_lck_mtx_data(static, bstp_task_mtx_data);
+static lck_mtx_t		*bstp_task_mtx = &bstp_task_mtx_data;
 static lck_grp_t 		*bstp_task_grp = NULL;
 static lck_attr_t 		*bstp_task_attr = NULL;
 static thread_t			bstp_task_thread;
@@ -142,10 +143,9 @@ static void bstp_task_drain(struct bstp_task *);
 #define	INFO_SAME	0
 #define	INFO_WORSE	-1
 
-const uint8_t bstp_etheraddr[] = { 0x01, 0x80, 0xc2, 0x00, 0x00, 0x00 };
-
 LIST_HEAD(, bstp_state) bstp_list;
-static lck_mtx_t		*bstp_list_mtx;
+decl_lck_mtx_data(static, bstp_list_mtx_data);
+static lck_mtx_t		*bstp_list_mtx = &bstp_list_mtx_data;
 static lck_grp_t 		*bstp_lock_grp = NULL;
 static lck_attr_t 		*bstp_lock_attr = NULL;
 
@@ -2326,7 +2326,7 @@ bstp_sys_init(void)
 #if BRIDGE_DEBUG
 	lck_attr_setdebug(bstp_lock_attr);
 #endif
-	bstp_list_mtx = lck_mtx_alloc_init(bstp_lock_grp, bstp_lock_attr);
+	lck_mtx_init(bstp_list_mtx, bstp_lock_grp, bstp_lock_attr);
 	lck_grp_attr_free(lck_grp_attr);
 
 	LIST_INIT(&bstp_list);
@@ -2349,7 +2349,7 @@ bstp_create_task_thread(void)
 #if BRIDGE_DEBUG
 	lck_attr_setdebug(bstp_task_attr);
 #endif
-	bstp_task_mtx = lck_mtx_alloc_init(bstp_lock_grp, bstp_lock_attr);
+	lck_mtx_init(bstp_task_mtx, bstp_lock_grp, bstp_lock_attr);
 	lck_grp_attr_free(lck_grp_attr);
 
 	error = kernel_thread_start((thread_continue_t)bstp_task_thread_func, NULL, &bstp_task_thread);

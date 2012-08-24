@@ -187,6 +187,7 @@ extern void		pmap_virtual_space(
  *	Routines to manage the physical map data structure.
  */
 extern pmap_t		pmap_create(	/* Create a pmap_t. */
+				ledger_t	ledger,
 				vm_map_size_t	size,
 #ifdef __i386__
 				boolean_t	is_64bit);
@@ -204,6 +205,7 @@ extern void		pmap_enter(	/* Enter a mapping */
 				vm_map_offset_t	v,
 				ppnum_t		pn,
 				vm_prot_t	prot,
+				vm_prot_t	fault_type,
 				unsigned int	flags,
 				boolean_t	wired);
 
@@ -212,6 +214,7 @@ extern kern_return_t	pmap_enter_options(
 					   vm_map_offset_t v,
 					   ppnum_t pn,
 					   vm_prot_t prot,
+					   vm_prot_t fault_type,
 					   unsigned int flags,
 					   boolean_t wired,
 					   unsigned int options);
@@ -374,24 +377,25 @@ extern kern_return_t	(pmap_attribute)(	/* Get/Set special memory
 /*
  *	Macro to be used in place of pmap_enter()
  */
-#define PMAP_ENTER(pmap, virtual_address, page, protection, flags, wired) \
+#define PMAP_ENTER(pmap, virtual_address, page, protection, fault_type, flags, wired) \
 	MACRO_BEGIN							\
 	pmap_t		__pmap = (pmap);				\
 	vm_page_t	__page = (page);				\
 									\
 	PMAP_ENTER_CHECK(__pmap, __page)				\
-	pmap_enter(__pmap,					\
+	pmap_enter(__pmap,						\
 		(virtual_address),					\
 		__page->phys_page,					\
-			(protection),					\
+		(protection),						\
+		(fault_type),						\
 		(flags),						\
 		(wired));						\
 	MACRO_END
 #endif	/* !PMAP_ENTER */
 
 #ifndef	PMAP_ENTER_OPTIONS
-#define PMAP_ENTER_OPTIONS(pmap, virtual_address, page, protection,	\
-				flags, wired, options, result) \
+#define PMAP_ENTER_OPTIONS(pmap, virtual_address, page, protection, fault_type,	\
+				flags, wired, options, result) 		\
 	MACRO_BEGIN							\
 	pmap_t		__pmap = (pmap);				\
 	vm_page_t	__page = (page);				\
@@ -400,12 +404,40 @@ extern kern_return_t	(pmap_attribute)(	/* Get/Set special memory
 	result = pmap_enter_options(__pmap,				\
 		(virtual_address),					\
 		__page->phys_page,					\
-			(protection),					\
+		(protection),						\
+		(fault_type),						\
 		(flags),						\
 		(wired),						\
-		options);					\
+		options);						\
 	MACRO_END
 #endif	/* !PMAP_ENTER_OPTIONS */
+
+#ifndef PMAP_SET_CACHE_ATTR
+#define PMAP_SET_CACHE_ATTR(mem, object, cache_attr, batch_pmap_op)		\
+	MACRO_BEGIN								\
+		if (!batch_pmap_op) {						\
+			pmap_set_cache_attributes(mem->phys_page, cache_attr);	\
+			object->set_cache_attr = TRUE;				\
+		}								\
+	MACRO_END							
+#endif	/* PMAP_SET_CACHE_ATTR */
+
+#ifndef PMAP_BATCH_SET_CACHE_ATTR
+#define PMAP_BATCH_SET_CACHE_ATTR(object, user_page_list,			\
+					cache_attr, num_pages, batch_pmap_op)	\
+	MACRO_BEGIN								\
+		if ((batch_pmap_op)) {						\
+			unsigned int __page_idx=0;				\
+			while (__page_idx < (num_pages)) {			\
+				pmap_set_cache_attributes(			\
+					user_page_list[__page_idx].phys_addr,	\
+					(cache_attr));				\
+				__page_idx++;					\
+			}							\
+			(object)->set_cache_attr = TRUE;			\
+		}								\
+	MACRO_END
+#endif	/* PMAP_BATCH_SET_CACHE_ATTR */
 
 #define PMAP_ENTER_CHECK(pmap, page)					\
 {									\
@@ -494,10 +526,14 @@ extern pmap_t	kernel_pmap;			/* The kernel's map */
 #define VM_WIMG_MASK		0xFF
 
 #define VM_MEM_SUPERPAGE	0x100		/* map a superpage instead of a base page */
+#define VM_MEM_STACK		0x200
 
 #define PMAP_OPTIONS_NOWAIT	0x1		/* don't block, return 
 						 * KERN_RESOURCE_SHORTAGE 
 						 * instead */
+#define PMAP_OPTIONS_NOENTER	0x2		/* expand pmap if needed
+						 * but don't enter mapping
+						 */
 
 #if	!defined(__LP64__)
 extern vm_offset_t	pmap_extract(pmap_t pmap,

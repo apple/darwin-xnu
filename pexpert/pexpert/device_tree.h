@@ -57,11 +57,11 @@ typedef char DTPropertyNameBuf[32];
 
 /* Entry Name Definitions (Entry Names are C-Strings)*/
 enum {
-	kDTMaxEntryNameLength		= 31	/* Max length of a C-String Entry Name (terminator not included) */
+	kDTMaxEntryNameLength		= 63	/* Max length of a C-String Entry Name (terminator not included) */
 };
 
 /* length of DTEntryNameBuf = kDTMaxEntryNameLength +1*/
-typedef char DTEntryNameBuf[32];
+typedef char DTEntryNameBuf[kDTMaxEntryNameLength+1];
 
 
 /* Entry*/

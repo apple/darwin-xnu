@@ -120,24 +120,29 @@ struct cdevsw nocdev = NO_CDEVICE;
  *	  else see whether the index is free
  *	return the major number that is free else -1
  *
+ *	if index is negative, we start
+ *	looking for a free slot at the absolute value of index,
+ *	instead of starting at 0
  */
 int
 bdevsw_isfree(int index)
 {
 	struct bdevsw *devsw;
-	if (index == -1) {
-	    devsw = bdevsw;
-	    for(index=0; index < nblkdev; index++, devsw++) {
-		if(memcmp((char *)devsw, 
-			    (char *)&nobdev, 
-			    sizeof(struct bdevsw)) == 0)
-		    break;
-	    }
-	} else {
-		/* NB: Not used below unless index is in range */
-		devsw = &bdevsw[index];
-	}
 
+	if (index < 0) {
+	    if (index == -1)
+	    	index = 1;	/* start at 1 to avoid collision with volfs (Radar 2842228) */
+	    else
+	        index = -index;	/* start at least this far up in the table */
+	    devsw = &bdevsw[index];
+	    for(; index < nblkdev; index++, devsw++) {
+	        if(memcmp((char *)devsw, 
+	        	    (char *)&nobdev, 
+	        	    sizeof(struct bdevsw)) == 0)
+	            break;
+	    }
+	}
+	devsw = &bdevsw[index];
 	if ((index < 0) || (index >= nblkdev) ||
 	    (memcmp((char *)devsw, 
 		          (char *)&nobdev, 
@@ -151,33 +156,22 @@ bdevsw_isfree(int index)
  *	if index is -1, find a free slot to add
  *	  else see whether the slot is free
  *	return the major number that is used else -1
+ *
+ *	if index is negative, we start
+ *	looking for a free slot at the absolute value of index,
+ *	instead of starting at 0
  */
 int
 bdevsw_add(int index, struct bdevsw * bsw) 
 {
-	struct bdevsw *devsw;
-
-	if (index == -1) {
-	    devsw = &bdevsw[1];		/* Start at slot 1 - this is a hack to fix the index=1 hack */
-	    /* yes, start at 1 to avoid collision with volfs (Radar 2842228) */
-	    for(index=1; index < nblkdev; index++, devsw++) {
-		if(memcmp((char *)devsw, 
-			    (char *)&nobdev, 
-			    sizeof(struct bdevsw)) == 0)
-		    break;
-	    }
-	}
-	devsw = &bdevsw[index];
-	if ((index < 0) || (index >= nblkdev) ||
-	    (memcmp((char *)devsw, 
-		          (char *)&nobdev, 
-			  sizeof(struct bdevsw)) != 0)) {
+	index = bdevsw_isfree(index);
+	if (index < 0) {
 		return(-1);
 	}
 	bdevsw[index] = *bsw;
 	return(index);
 }
-/* 
+/*
  *	if the slot has the same bsw, then remove
  *	else -1
  */
@@ -201,19 +195,27 @@ bdevsw_remove(int index, struct bdevsw * bsw)
  *	if index is -1, return a free slot if avaliable
  *	  else see whether the index is free
  *	return the major number that is free else -1
+ *
+ *	if index is negative, we start
+ *	looking for a free slot at the absolute value of index,
+ *	instead of starting at 0
  */
 int
 cdevsw_isfree(int index)
 {
 	struct cdevsw *devsw;
 
-	if (index == -1) {
-	    devsw = cdevsw;
-	    for(index=0; index < nchrdev; index++, devsw++) {
-		if(memcmp((char *)devsw, 
-			    (char *)&nocdev, 
-			    sizeof(struct cdevsw)) == 0)
-		    break;
+	if (index < 0) {
+	    if (index == -1)
+	    	index = 0;
+	    else
+	        index = -index;	/* start at least this far up in the table */
+	    devsw = &cdevsw[index];
+	    for(; index < nchrdev; index++, devsw++) {
+	        if(memcmp((char *)devsw, 
+	        	    (char *)&nocdev, 
+	        	    sizeof(struct cdevsw)) == 0)
+	            break;
 	    }
 	}
 	devsw = &cdevsw[index];
@@ -231,45 +233,27 @@ cdevsw_isfree(int index)
  *	  else see whether the slot is free
  *	return the major number that is used else -1
  *
+ *	if index is negative, we start
+ *	looking for a free slot at the absolute value of index,
+ *	instead of starting at 0
+ *
  * NOTE:	In practice, -1 is unusable, since there are kernel internal
  *		devices that call this function with absolute index values,
  *		which will stomp on free-slot based assignments that happen
- *		before them.  Therefore, if index is negative, we start
- *		looking for a free slot at the absolute value of index,
- *		instead of starting at 0 (lets out slot 1, but that's one
- *		of the problem slots down low - the vndevice).  -12 is
- *		currently a safe starting point.
+ *		before them.  -24 is currently a safe starting point.
  */
 int
 cdevsw_add(int index, struct cdevsw * csw) 
 {
-	struct cdevsw *devsw;
-
+	index = cdevsw_isfree(index);
 	if (index < 0) {
-	    if (index == -1)
-	    	index = 0;	/* historical behaviour; XXX broken */
-	    else
-	        index = -index;	/* start at least this far up in the table */
-	    devsw = &cdevsw[index];
-	    for(; index < nchrdev; index++, devsw++) {
-		if(memcmp((char *)devsw, 
-			    (char *)&nocdev, 
-			    sizeof(struct cdevsw)) == 0)
-		    break;
-	    }
-	}
-	devsw = &cdevsw[index];
-	if ((index < 0) || (index >= nchrdev) ||
-	    (memcmp((char *)devsw, 
-		          (char *)&nocdev, 
-			  sizeof(struct cdevsw)) != 0)) {
 		return(-1);
 	}
 	cdevsw[index] = *csw;
 	return(index);
 }
 /*
- *	if the index has the same bsw, then remove
+ *	if the slot has the same csw, then remove
  *	else -1
  */
 int

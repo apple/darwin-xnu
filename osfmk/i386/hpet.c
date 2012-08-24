@@ -58,16 +58,6 @@
 #include <i386/cpu_topology.h>
 #include <i386/cpu_threads.h>
 #include <pexpert/device_tree.h>
-#if	MACH_KDB
-#include <machine/db_machdep.h>
-#include <ddb/db_aout.h>
-#include <ddb/db_access.h>
-#include <ddb/db_sym.h>
-#include <ddb/db_variables.h>
-#include <ddb/db_command.h>
-#include <ddb/db_output.h>
-#include <ddb/db_expr.h>
-#endif /* MACH_KDB */
 
 /* Decimal powers: */
 #define kilo (1000ULL)
@@ -296,10 +286,6 @@ hpet_init(void)
 	hpet2bus = tmrCvt(hpetCvtt2n, busFCvtn2t);
 	DBG(" CVT: HPET to BUS = %08X.%08X\n",
 	    (uint32_t)(hpet2bus >> 32), (uint32_t)hpet2bus);
-
-#if MACH_KDB
-	db_display_hpet((hpetReg_t *)hpetArea);	/* (BRINGUP) */
-#endif
 }
 
 /*
@@ -484,64 +470,3 @@ rdHPET(void)
 
 	return (((uint64_t) high) << 32) | low;
 }
-
-#if MACH_KDB
-
-#define HI32(x)	((uint32_t)(((x) >> 32) & 0xFFFFFFFF))
-#define LO32(x)	((uint32_t)((x) & 0xFFFFFFFF))
-
-/*
- *	Displays HPET memory mapped area
- *	hp
- */
-void 
-db_hpet(__unused db_expr_t addr, __unused int have_addr, __unused db_expr_t count, __unused char *modif)
-{
-
-	db_display_hpet((hpetReg_t *) hpetArea);	/* Dump out the HPET
-							 * stuff */
-	return;
-}
-
-void
-db_display_hpet(hpetReg_t *hpt)
-{
-	uint64_t        cmain;
-
-	cmain = hpt->MAIN_CNT;	/* Get the main timer */
-
-	/* General capabilities */
-	db_printf("  GCAP_ID = %08X.%08X\n",
-		  HI32(hpt->GCAP_ID), LO32(hpt->GCAP_ID));
-	/* General configuration */
-	db_printf(" GEN_CONF = %08X.%08X\n",
-		  HI32(hpt->GEN_CONF), LO32(hpt->GEN_CONF));
-	/* General Interrupt status */
-	db_printf("GINTR_STA = %08X.%08X\n",
-		  HI32(hpt->GINTR_STA), LO32(hpt->GINTR_STA));
-	/* Main counter */
-	db_printf(" MAIN_CNT = %08X.%08X\n",
-		  HI32(cmain), LO32(cmain));
-	/* Timer 0 config and cap */
-	db_printf("TIM0_CONF = %08X.%08X\n",
-		  HI32(hpt->TIM0_CONF), LO32(hpt->TIM0_CONF));
-	/* Timer 0 comparator */
-	db_printf("TIM0_COMP = %08X.%08X\n",
-		  HI32(hpt->TIM0_COMP), LO32(hpt->TIM0_COMP));
-	/* Timer 1 config and cap */
-	db_printf("TIM0_CONF = %08X.%08X\n",
-		  HI32(hpt->TIM1_CONF), LO32(hpt->TIM1_CONF));
-	/* Timer 1 comparator */
-	db_printf("TIM1_COMP = %08X.%08X\n",
-		  HI32(hpt->TIM1_COMP), LO32(hpt->TIM1_COMP));
-	/* Timer 2 config and cap */
-	db_printf("TIM2_CONF = %08X.%08X\n",
-		  HI32(hpt->TIM2_CONF), LO32(hpt->TIM2_CONF));
-	/* Timer 2 comparator */
-	db_printf("TIM2_COMP = %08X.%08X\n",
-		  HI32(hpt->TIM2_COMP), LO32(hpt->TIM2_COMP));
-
-	db_printf("\nHPET Frequency = %d.%05dMHz\n",
-	  (uint32_t) (hpetFreq / 1000000), (uint32_t) (hpetFreq % 1000000));
-}
-#endif

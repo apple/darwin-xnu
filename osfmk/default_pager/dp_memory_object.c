@@ -350,8 +350,8 @@ default_pager_add(
 		pset = default_pager_external_set;
 	}
 
-	ipc_port_make_sonce(mem_obj);
 	ip_lock(mem_obj);  /* unlocked in nsrequest below */
+	ipc_port_make_sonce_locked(mem_obj);
 	ipc_port_nsrequest(mem_obj, sync, mem_obj, &previous);
 }
 

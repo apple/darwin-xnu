@@ -1,8 +1,8 @@
 /*
- * Copyright (c) 2000-2011 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2012 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
- * 
+ *
  * This file contains Original Code and/or Modifications of Original Code
  * as defined in and that are subject to the Apple Public Source License
  * Version 2.0 (the 'License'). You may not use this file except in
@@ -11,10 +11,10 @@
  * unlawful or unlicensed copies of an Apple operating system, or to
  * circumvent, violate, or enable the circumvention or violation of, any
  * terms of an Apple operating system software license agreement.
- * 
+ *
  * Please obtain a copy of the License at
  * http://www.opensource.apple.com/apsl/ and read it before using this file.
- * 
+ *
  * The Original Code and all software distributed under the License are
  * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
@@ -22,7 +22,7 @@
  * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
  * Please see the License for the specific language governing rights and
  * limitations under the License.
- * 
+ *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*
@@ -60,7 +60,7 @@
  *	@(#)route.c	8.2 (Berkeley) 11/15/93
  * $FreeBSD: src/sys/net/route.c,v 1.59.2.3 2001/07/29 19:18:02 ume Exp $
  */
- 
+
 #include <sys/param.h>
 #include <sys/sysctl.h>
 #include <sys/systm.h>
@@ -204,7 +204,8 @@ struct route_cb route_cb;
 __private_extern__ struct rtstat rtstat  = { 0, 0, 0, 0, 0 };
 struct radix_node_head *rt_tables[AF_MAX+1];
 
-lck_mtx_t		*rnh_lock;	/* global routing tables mutex */
+decl_lck_mtx_data(,rnh_lock_data);	/* global routing tables mutex */
+lck_mtx_t		*rnh_lock = &rnh_lock_data;
 static lck_attr_t	*rnh_lock_attr;
 static lck_grp_t	*rnh_lock_grp;
 static lck_grp_attr_t	*rnh_lock_grp_attr;
@@ -214,7 +215,6 @@ static lck_attr_t	*rte_mtx_attr;
 static lck_grp_t	*rte_mtx_grp;
 static lck_grp_attr_t	*rte_mtx_grp_attr;
 
-lck_mtx_t 	*route_domain_mtx;	/*### global routing tables mutex for now */
 int rttrash = 0;		/* routes not in table but not freed */
 
 unsigned int rte_debug;
@@ -337,9 +337,6 @@ struct sockaddr_inifscope {
 #define	sin_scope_id	un._in_index.ifscope
 };
 
-#define	SA(sa)		((struct sockaddr *)(size_t)(sa))
-#define	SIN(sa)		((struct sockaddr_in *)(size_t)(sa))
-#define	SIN6(sa)	((struct sockaddr_in6 *)(size_t)(sa))
 #define	SINIFSCOPE(sa)	((struct sockaddr_inifscope *)(size_t)(sa))
 #define	SIN6IFSCOPE(sa)	SIN6(sa)
 
@@ -398,7 +395,7 @@ static unsigned int primary6_ifscope = IFSCOPE_NONE;
 SYSCTL_DECL(_net_idle_route);
 
 static int rt_if_idle_expire_timeout = RT_IF_IDLE_EXPIRE_TIMEOUT;
-SYSCTL_INT(_net_idle_route, OID_AUTO, expire_timeout, CTLFLAG_RW,
+SYSCTL_INT(_net_idle_route, OID_AUTO, expire_timeout, CTLFLAG_RW|CTLFLAG_LOCKED,
     &rt_if_idle_expire_timeout, 0, "Default expiration time on routes for "
     "interface idle reference counting");
 
@@ -749,11 +746,7 @@ route_init(void)
 	rnh_lock_grp_attr = lck_grp_attr_alloc_init();
 	rnh_lock_grp = lck_grp_alloc_init("route", rnh_lock_grp_attr);
 	rnh_lock_attr = lck_attr_alloc_init();
-	if ((rnh_lock = lck_mtx_alloc_init(rnh_lock_grp,
-	    rnh_lock_attr)) == NULL) {
-		printf("route_init: can't alloc rnh_lock\n");
-		return;
-	}
+	lck_mtx_init(rnh_lock, rnh_lock_grp, rnh_lock_attr);
 
 	rte_mtx_grp_attr = lck_grp_attr_alloc_init();
 	rte_mtx_grp = lck_grp_alloc_init(RTE_NAME, rte_mtx_grp_attr);
@@ -763,7 +756,6 @@ route_init(void)
 	rn_init();	/* initialize all zeroes, all ones, mask table */
 	lck_mtx_unlock(rnh_lock);
 	rtable_init((void **)rt_tables);
-	route_domain_mtx = routedomain.dom_mtx;
 
 	if (rte_debug & RTD_DEBUG)
 		size = sizeof (struct rtentry_dbg);
@@ -1453,7 +1445,7 @@ ifa_ifwithroute_common_locked(int flags, const struct sockaddr *dst,
 #else
 	if (dst != NULL && dst->sa_family == AF_INET && ip_doscopedroute)
 #endif /* !INET6 */
-		dst = sa_copy(SA(dst), &dst_ss, NULL);
+		dst = sa_copy(SA((uintptr_t)dst), &dst_ss, NULL);
 
 #if INET6
 	if (gw != NULL &&
@@ -1462,7 +1454,7 @@ ifa_ifwithroute_common_locked(int flags, const struct sockaddr *dst,
 #else
 	if (gw != NULL && gw->sa_family == AF_INET && ip_doscopedroute)
 #endif /* !INET6 */
-		gw = sa_copy(SA(gw), &gw_ss, NULL);
+		gw = sa_copy(SA((uintptr_t)gw), &gw_ss, NULL);
 
 	if (!(flags & RTF_GATEWAY)) {
 		/*
@@ -1709,6 +1701,14 @@ rtrequest_common_locked(int req, struct sockaddr *dst0,
 		rt->rt_flags |= RTF_CONDEMNED;
 
 		/*
+		 * Clear RTF_ROUTER if it's set.
+		 */
+		if (rt->rt_flags & RTF_ROUTER) {
+			VERIFY(rt->rt_flags & RTF_HOST);
+			rt->rt_flags &= ~RTF_ROUTER;
+		}
+
+		/*
 		 * Now search what's left of the subtree for any cloned
 		 * routes which might have been formed from this node.
 		 */
@@ -1819,10 +1819,13 @@ rtrequest_common_locked(int req, struct sockaddr *dst0,
 		 * When scoped routing is enabled, cloned entries are
 		 * always scoped according to the interface portion of
 		 * the parent route.  The exception to this are IPv4
-		 * link local addresses.
+		 * link local addresses, or those routes that are cloned
+		 * from a RTF_PROXY route.  For the latter, the clone
+		 * gets to keep the RTF_PROXY flag.
 		 */
-		if (af == AF_INET &&
-		    IN_LINKLOCAL(ntohl(SIN(dst)->sin_addr.s_addr))) {
+		if ((af == AF_INET &&
+		    IN_LINKLOCAL(ntohl(SIN(dst)->sin_addr.s_addr))) ||
+		    (rt->rt_flags & RTF_PROXY)) {
 			ifscope = IFSCOPE_NONE;
 			flags &= ~RTF_IFSCOPE;
 		} else {
@@ -1878,11 +1881,12 @@ makeroute:
 		 * also add the rt_gwroute if possible.
 		 */
 		if ((error = rt_setgate(rt, dst, gateway)) != 0) {
+			int tmp = error;
 			RT_UNLOCK(rt);
 			nstat_route_detach(rt);
 			rte_lock_destroy(rt);
 			rte_free(rt);
-			senderr(error);
+			senderr(tmp);
 		}
 
 		/*
@@ -1949,10 +1953,8 @@ makeroute:
 		 * then un-make it (this should be a function)
 		 */
 		if (rn == NULL) {
-			if (rt->rt_gwroute) {
-				rtfree_locked(rt->rt_gwroute);
-				rt->rt_gwroute = NULL;
-			}
+			/* Clear gateway route */
+			rt_set_gwroute(rt, rt_key(rt), NULL);
 			if (rt->rt_ifa) {
 				IFA_REMREF(rt->rt_ifa);
 				rt->rt_ifa = NULL;
@@ -1978,8 +1980,10 @@ makeroute:
 		 */
 		if (req == RTM_RESOLVE) {
 			RT_LOCK_SPIN(*ret_nrt);
-			VERIFY((*ret_nrt)->rt_expire == 0 || (*ret_nrt)->rt_rmx.rmx_expire != 0);
-			VERIFY((*ret_nrt)->rt_expire != 0 || (*ret_nrt)->rt_rmx.rmx_expire == 0);
+			VERIFY((*ret_nrt)->rt_expire == 0 ||
+			    (*ret_nrt)->rt_rmx.rmx_expire != 0);
+			VERIFY((*ret_nrt)->rt_expire != 0 ||
+			    (*ret_nrt)->rt_rmx.rmx_expire == 0);
 			rt->rt_rmx = (*ret_nrt)->rt_rmx;
 			rt_setexpire(rt, (*ret_nrt)->rt_expire);
 			if ((*ret_nrt)->rt_flags & (RTF_CLONING | RTF_PRCLONING)) {
@@ -2029,10 +2033,13 @@ makeroute:
 		}
 
 		/*
-		 * We repeat the same procedure from rt_setgate() here because
-		 * it doesn't fire when we call it there because the node
-		 * hasn't been added to the tree yet.
+		 * We repeat the same procedures from rt_setgate() here
+		 * because they weren't completed when we called it earlier,
+		 * since the node was embryonic.
 		 */
+		if ((rt->rt_flags & RTF_GATEWAY) && rt->rt_gwroute != NULL)
+			rt_set_gwroute(rt, rt_key(rt), rt->rt_gwroute);
+
 		if (req == RTM_ADD &&
 		    !(rt->rt_flags & RTF_HOST) && rt_mask(rt) != NULL) {
 			struct rtfc_arg arg;
@@ -2044,7 +2051,7 @@ makeroute:
 		} else {
 			RT_UNLOCK(rt);
 		}
-		
+
 		nstat_route_new_entry(rt);
 		break;
 	}
@@ -2053,6 +2060,7 @@ bad:
 		IFA_REMREF(ifa);
 	return (error);
 }
+#undef senderr
 
 int
 rtrequest(int req, struct sockaddr *dst, struct sockaddr *gateway,
@@ -2221,6 +2229,7 @@ rt_setgate(struct rtentry *rt, struct sockaddr *dst, struct sockaddr *gate)
 {
 	int dlen = SA_SIZE(dst->sa_len), glen = SA_SIZE(gate->sa_len);
 	struct radix_node_head *rnh = rt_tables[dst->sa_family];
+	boolean_t loop = FALSE;
 
 	lck_mtx_assert(rnh_lock, LCK_MTX_ASSERT_OWNED);
 	RT_LOCK_ASSERT_HELD(rt);
@@ -2235,14 +2244,39 @@ rt_setgate(struct rtentry *rt, struct sockaddr *dst, struct sockaddr *gate)
 	/* Add an extra ref for ourselves */
 	RT_ADDREF_LOCKED(rt);
 
+	if (rt->rt_flags & RTF_GATEWAY) {
+		if ((dst->sa_len == gate->sa_len) &&
+		    (dst->sa_family == AF_INET || dst->sa_family == AF_INET6)) {
+			struct sockaddr_storage dst_ss, gate_ss;
+
+			(void) sa_copy(dst, &dst_ss, NULL);
+			(void) sa_copy(gate, &gate_ss, NULL);
+
+			loop = equal(SA(&dst_ss), SA(&gate_ss));
+		} else {
+			loop = (dst->sa_len == gate->sa_len &&
+			    equal(dst, gate));
+		}
+	}
+
+	/*
+	 * A (cloning) network route with the destination equal to the gateway
+	 * will create an endless loop (see notes below), so disallow it.
+	 */
+	if (((rt->rt_flags & (RTF_HOST|RTF_GATEWAY|RTF_LLINFO)) ==
+	    RTF_GATEWAY) && loop) {
+		/* Release extra ref */
+		RT_REMREF_LOCKED(rt);
+		return (EADDRNOTAVAIL);
+	}
+
 	/*
 	 * A host route with the destination equal to the gateway
 	 * will interfere with keeping LLINFO in the routing
 	 * table, so disallow it.
 	 */
 	if (((rt->rt_flags & (RTF_HOST|RTF_GATEWAY|RTF_LLINFO)) ==
-	    (RTF_HOST|RTF_GATEWAY)) && (dst->sa_len == gate->sa_len) &&
-	    (bcmp(dst, gate, dst->sa_len) == 0)) {
+	    (RTF_HOST|RTF_GATEWAY)) && loop) {
 		/*
 		 * The route might already exist if this is an RTM_CHANGE
 		 * or a routing redirect, so try to delete it.
@@ -2279,8 +2313,12 @@ rt_setgate(struct rtentry *rt, struct sockaddr *dst, struct sockaddr *gate)
 			ifscope = IFSCOPE_NONE;
 
 		RT_UNLOCK(rt);
-		gwrt = rtalloc1_scoped_locked(gate, 1,
-		    RTF_CLONING | RTF_PRCLONING, ifscope);
+		/*
+		 * Don't ignore RTF_CLONING, since we prefer that rt_gwroute
+		 * points to a clone rather than a cloning route; see above
+		 * check for cloning loop avoidance (dst == gate).
+		 */
+		gwrt = rtalloc1_scoped_locked(gate, 1, RTF_PRCLONING, ifscope);
 		if (gwrt != NULL)
 			RT_LOCK_ASSERT_NOTHELD(gwrt);
 		RT_LOCK(rt);
@@ -2330,9 +2368,8 @@ rt_setgate(struct rtentry *rt, struct sockaddr *dst, struct sockaddr *gate)
 			return (EBUSY);
 		}
 
-		if (rt->rt_gwroute != NULL)
-			rtfree_locked(rt->rt_gwroute);
-		rt->rt_gwroute = gwrt;
+		/* Set gateway route; callee adds ref to gwrt if non-NULL */
+		rt_set_gwroute(rt, dst, gwrt);
 
 		/*
 		 * In case the (non-scoped) default route gets modified via
@@ -2356,8 +2393,14 @@ rt_setgate(struct rtentry *rt, struct sockaddr *dst, struct sockaddr *gate)
 		if ((dst->sa_family == AF_INET) &&
 		    gwrt != NULL && gwrt->rt_gateway->sa_family == AF_LINK &&
 		    (gwrt->rt_ifp->if_index == get_primary_ifscope(AF_INET) ||
-		    get_primary_ifscope(AF_INET) == IFSCOPE_NONE))
-			kdp_set_gateway_mac(SDL(gwrt->rt_gateway)->sdl_data);
+		    get_primary_ifscope(AF_INET) == IFSCOPE_NONE)) {
+			kdp_set_gateway_mac(SDL((void *)gwrt->rt_gateway)->
+			    sdl_data);
+		}
+
+		/* Release extra ref from rtalloc1() */
+		if (gwrt != NULL)
+			RT_REMREF(gwrt);
 	}
 
 	/*
@@ -2373,9 +2416,8 @@ rt_setgate(struct rtentry *rt, struct sockaddr *dst, struct sockaddr *gate)
 		/* The underlying allocation is done with M_WAITOK set */
 		R_Malloc(new, caddr_t, dlen + glen);
 		if (new == NULL) {
-			if (rt->rt_gwroute != NULL)
-				rtfree_locked(rt->rt_gwroute);
-			rt->rt_gwroute = NULL;
+			/* Clear gateway route */
+			rt_set_gwroute(rt, dst, NULL);
 			/* Release extra ref */
 			RT_REMREF_LOCKED(rt);
 			return (ENOBUFS);
@@ -2435,6 +2477,60 @@ rt_setgate(struct rtentry *rt, struct sockaddr *dst, struct sockaddr *gate)
 }
 
 #undef SA_SIZE
+
+void
+rt_set_gwroute(struct rtentry *rt, struct sockaddr *dst, struct rtentry *gwrt)
+{
+	boolean_t gwrt_isrouter;
+
+	lck_mtx_assert(rnh_lock, LCK_MTX_ASSERT_OWNED);
+	RT_LOCK_ASSERT_HELD(rt);
+
+	if (gwrt != NULL)
+		RT_ADDREF(gwrt);	/* for this routine */
+
+	/*
+	 * Get rid of existing gateway route; if rt_gwroute is already
+	 * set to gwrt, this is slightly redundant (though safe since
+	 * we held an extra ref above) but makes the code simpler.
+	 */
+	if (rt->rt_gwroute != NULL) {
+		struct rtentry *ogwrt = rt->rt_gwroute;
+
+		VERIFY(rt != ogwrt);	/* sanity check */
+		rt->rt_gwroute = NULL;
+		RT_UNLOCK(rt);
+		rtfree_locked(ogwrt);
+		RT_LOCK(rt);
+		VERIFY(rt->rt_gwroute == NULL);
+	}
+
+	/*
+	 * And associate the new gateway route.
+	 */
+	if ((rt->rt_gwroute = gwrt) != NULL) {
+		RT_ADDREF(gwrt);	/* for rt */
+
+		if (rt->rt_flags & RTF_WASCLONED) {
+			/* rt_parent might be NULL if rt is embryonic */
+			gwrt_isrouter = (rt->rt_parent != NULL &&
+			    SA_DEFAULT(rt_key(rt->rt_parent)) &&
+			    !RT_HOST(rt->rt_parent));
+		} else {
+			gwrt_isrouter = (SA_DEFAULT(dst) && !RT_HOST(rt));
+		}
+
+		/* If gwrt points to a default router, mark it accordingly */
+		if (gwrt_isrouter && RT_HOST(gwrt) &&
+		    !(gwrt->rt_flags & RTF_ROUTER)) {
+			RT_LOCK(gwrt);
+			gwrt->rt_flags |= RTF_ROUTER;
+			RT_UNLOCK(gwrt);
+		}
+
+		RT_REMREF(gwrt);	/* for this routine */
+	}
+}
 
 static void
 rt_maskedcopy(struct sockaddr *src, struct sockaddr *dst,
@@ -2706,7 +2802,7 @@ rt_validate(struct rtentry *rt)
 {
 	RT_LOCK_ASSERT_HELD(rt);
 
-	if (!(rt->rt_flags & RTF_CONDEMNED)) {
+	if ((rt->rt_flags & (RTF_UP | RTF_CONDEMNED)) == RTF_UP) {
 		int af = rt_key(rt)->sa_family;
 
 		if (af == AF_INET)
@@ -2970,6 +3066,34 @@ rt_clear_idleref(struct rtentry *rt)
 	}
 }
 
+void
+rt_set_proxy(struct rtentry *rt, boolean_t set)
+{
+	lck_mtx_lock(rnh_lock);
+	RT_LOCK(rt);
+	/*
+	 * Search for any cloned routes which might have
+	 * been formed from this node, and delete them.
+	 */
+	if (rt->rt_flags & (RTF_CLONING | RTF_PRCLONING)) {
+		struct radix_node_head *rnh = rt_tables[rt_key(rt)->sa_family];
+
+		if (set)
+			rt->rt_flags |= RTF_PROXY;
+		else
+			rt->rt_flags &= ~RTF_PROXY;
+
+		RT_UNLOCK(rt);
+		if (rnh != NULL && rt_mask(rt)) {
+			rnh->rnh_walktree_from(rnh, rt_key(rt), rt_mask(rt),
+			    rt_fixdelete, rt);
+		}
+	} else {
+		RT_UNLOCK(rt);
+	}
+	lck_mtx_unlock(rnh_lock);
+}
+
 static void
 rte_lock_init(struct rtentry *rt)
 {
@@ -3188,4 +3312,256 @@ route_copyin(
 
 	/* This function consumes the reference */
 	src->ro_rt = NULL;
+}
+
+/*
+ * route_to_gwroute will find the gateway route for a given route.
+ *
+ * If the route is down, look the route up again.
+ * If the route goes through a gateway, get the route to the gateway.
+ * If the gateway route is down, look it up again.
+ * If the route is set to reject, verify it hasn't expired.
+ *
+ * If the returned route is non-NULL, the caller is responsible for
+ * releasing the reference and unlocking the route.
+ */
+#define senderr(e) { error = (e); goto bad; }
+errno_t
+route_to_gwroute(const struct sockaddr *net_dest, struct rtentry *hint0,
+     struct rtentry **out_route)
+{
+	uint64_t timenow;
+	struct rtentry *rt = hint0, *hint = hint0;
+	errno_t error = 0;
+	unsigned int ifindex;
+	boolean_t gwroute;
+
+	*out_route = NULL;
+
+	if (rt == NULL)
+		return (0);
+
+	/*
+	 * Next hop determination.  Because we may involve the gateway route
+	 * in addition to the original route, locking is rather complicated.
+	 * The general concept is that regardless of whether the route points
+	 * to the original route or to the gateway route, this routine takes
+	 * an extra reference on such a route.  This extra reference will be
+	 * released at the end.
+	 *
+	 * Care must be taken to ensure that the "hint0" route never gets freed
+	 * via rtfree(), since the caller may have stored it inside a struct
+	 * route with a reference held for that placeholder.
+	 */
+	RT_LOCK_SPIN(rt);
+	ifindex = rt->rt_ifp->if_index;
+	RT_ADDREF_LOCKED(rt);
+	if (!(rt->rt_flags & RTF_UP)) {
+		RT_REMREF_LOCKED(rt);
+		RT_UNLOCK(rt);
+		/* route is down, find a new one */
+		hint = rt = rtalloc1_scoped((struct sockaddr *)
+		    (size_t)net_dest, 1, 0, ifindex);
+		if (hint != NULL) {
+			RT_LOCK_SPIN(rt);
+			ifindex = rt->rt_ifp->if_index;
+		} else {
+			senderr(EHOSTUNREACH);
+		}
+	}
+
+	/*
+	 * We have a reference to "rt" by now; it will either
+	 * be released or freed at the end of this routine.
+	 */
+	RT_LOCK_ASSERT_HELD(rt);
+	if ((gwroute = (rt->rt_flags & RTF_GATEWAY))) {
+		struct rtentry *gwrt = rt->rt_gwroute;
+		struct sockaddr_storage ss;
+		struct sockaddr *gw = (struct sockaddr *)&ss;
+
+		VERIFY(rt == hint);
+		RT_ADDREF_LOCKED(hint);
+
+		/* If there's no gateway rt, look it up */
+		if (gwrt == NULL) {
+			bcopy(rt->rt_gateway, gw, MIN(sizeof (ss),
+			    rt->rt_gateway->sa_len));
+			RT_UNLOCK(rt);
+			goto lookup;
+		}
+		/* Become a regular mutex */
+		RT_CONVERT_LOCK(rt);
+
+		/*
+		 * Take gwrt's lock while holding route's lock;
+		 * this is okay since gwrt never points back
+		 * to "rt", so no lock ordering issues.
+		 */
+		RT_LOCK_SPIN(gwrt);
+		if (!(gwrt->rt_flags & RTF_UP)) {
+			rt->rt_gwroute = NULL;
+			RT_UNLOCK(gwrt);
+			bcopy(rt->rt_gateway, gw, MIN(sizeof (ss),
+			    rt->rt_gateway->sa_len));
+			RT_UNLOCK(rt);
+			rtfree(gwrt);
+lookup:
+			lck_mtx_lock(rnh_lock);
+			gwrt = rtalloc1_scoped_locked(gw, 1, 0, ifindex);
+
+			RT_LOCK(rt);
+			/*
+			 * Bail out if the route is down, no route
+			 * to gateway, circular route, or if the
+			 * gateway portion of "rt" has changed.
+			 */
+			if (!(rt->rt_flags & RTF_UP) || gwrt == NULL ||
+			    gwrt == rt || !equal(gw, rt->rt_gateway)) {
+				if (gwrt == rt) {
+					RT_REMREF_LOCKED(gwrt);
+					gwrt = NULL;
+				}
+				VERIFY(rt == hint);
+				RT_REMREF_LOCKED(hint);
+				hint = NULL;
+				RT_UNLOCK(rt);
+				if (gwrt != NULL)
+					rtfree_locked(gwrt);
+				lck_mtx_unlock(rnh_lock);
+				senderr(EHOSTUNREACH);
+			}
+			VERIFY(gwrt != NULL);
+			/*
+			 * Set gateway route; callee adds ref to gwrt;
+			 * gwrt has an extra ref from rtalloc1() for
+			 * this routine.
+			 */
+			rt_set_gwroute(rt, rt_key(rt), gwrt);
+			VERIFY(rt == hint);
+			RT_REMREF_LOCKED(rt);	/* hint still holds a refcnt */
+			RT_UNLOCK(rt);
+			lck_mtx_unlock(rnh_lock);
+			rt = gwrt;
+		} else {
+			RT_ADDREF_LOCKED(gwrt);
+			RT_UNLOCK(gwrt);
+			VERIFY(rt == hint);
+			RT_REMREF_LOCKED(rt);	/* hint still holds a refcnt */
+			RT_UNLOCK(rt);
+			rt = gwrt;
+		}
+		VERIFY(rt == gwrt && rt != hint);
+
+		/*
+		 * This is an opportunity to revalidate the parent route's
+		 * rt_gwroute, in case it now points to a dead route entry.
+		 * Parent route won't go away since the clone (hint) holds
+		 * a reference to it.  rt == gwrt.
+		 */
+		RT_LOCK_SPIN(hint);
+		if ((hint->rt_flags & (RTF_WASCLONED | RTF_UP)) ==
+		    (RTF_WASCLONED | RTF_UP)) {
+			struct rtentry *prt = hint->rt_parent;
+			VERIFY(prt != NULL);
+
+			RT_CONVERT_LOCK(hint);
+			RT_ADDREF(prt);
+			RT_UNLOCK(hint);
+			rt_revalidate_gwroute(prt, rt);
+			RT_REMREF(prt);
+		} else {
+			RT_UNLOCK(hint);
+		}
+
+		/* Clean up "hint" now; see notes above regarding hint0 */
+		if (hint == hint0)
+			RT_REMREF(hint);
+		else
+			rtfree(hint);
+		hint = NULL;
+
+		/* rt == gwrt; if it is now down, give up */
+		RT_LOCK_SPIN(rt);
+		if (!(rt->rt_flags & RTF_UP)) {
+			RT_UNLOCK(rt);
+			senderr(EHOSTUNREACH);
+		}
+	}
+
+	if (rt->rt_flags & RTF_REJECT) {
+		VERIFY(rt->rt_expire == 0 || rt->rt_rmx.rmx_expire != 0);
+		VERIFY(rt->rt_expire != 0 || rt->rt_rmx.rmx_expire == 0);
+		timenow = net_uptime();
+		if (rt->rt_expire == 0 || timenow < rt->rt_expire) {
+			RT_UNLOCK(rt);
+			senderr(!gwroute ? EHOSTDOWN : EHOSTUNREACH);
+		}
+	}
+
+	/* Become a regular mutex */
+	RT_CONVERT_LOCK(rt);
+
+	/* Caller is responsible for cleaning up "rt" */
+	*out_route = rt;
+	return (0);
+
+bad:
+	/* Clean up route (either it is "rt" or "gwrt") */
+	if (rt != NULL) {
+		RT_LOCK_SPIN(rt);
+		if (rt == hint0) {
+			RT_REMREF_LOCKED(rt);
+			RT_UNLOCK(rt);
+		} else {
+			RT_UNLOCK(rt);
+			rtfree(rt);
+		}
+	}
+	return (error);
+}
+#undef senderr
+
+void
+rt_revalidate_gwroute(struct rtentry *rt, struct rtentry *gwrt)
+{
+	VERIFY(rt->rt_flags & (RTF_CLONING | RTF_PRCLONING));
+	VERIFY(gwrt != NULL);
+
+	RT_LOCK_SPIN(rt);
+	if ((rt->rt_flags & (RTF_GATEWAY | RTF_UP)) == (RTF_GATEWAY | RTF_UP) &&
+	    rt->rt_ifp == gwrt->rt_ifp && rt->rt_gateway->sa_family ==
+	    rt_key(gwrt)->sa_family && (rt->rt_gwroute == NULL ||
+	    !(rt->rt_gwroute->rt_flags & RTF_UP))) {
+		boolean_t isequal;
+
+		if (rt->rt_gateway->sa_family == AF_INET ||
+		    rt->rt_gateway->sa_family == AF_INET6) {
+			struct sockaddr_storage key_ss, gw_ss;
+			/*
+			 * We need to compare rt_key and rt_gateway; create
+			 * local copies to get rid of any ifscope association.
+			 */
+			(void) sa_copy(rt_key(gwrt), &key_ss, NULL);
+			(void) sa_copy(rt->rt_gateway, &gw_ss, NULL);
+
+			isequal = equal(SA(&key_ss), SA(&gw_ss));
+		} else {
+			isequal = equal(rt_key(gwrt), rt->rt_gateway);
+		}
+
+		/* If they are the same, update gwrt */
+		if (isequal) {
+			RT_UNLOCK(rt);
+			lck_mtx_lock(rnh_lock);
+			RT_LOCK(rt);
+			rt_set_gwroute(rt, rt_key(rt), gwrt);
+			RT_UNLOCK(rt);
+			lck_mtx_unlock(rnh_lock);
+		} else {
+			RT_UNLOCK(rt);
+		}
+	} else {
+		RT_UNLOCK(rt);
+	}
 }

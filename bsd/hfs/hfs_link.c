@@ -503,7 +503,7 @@ hfs_vnop_link(struct vnop_link_args *ap)
 		error = EMLINK;
 		goto out;
 	}
-	if (cp->c_flags & (IMMUTABLE | APPEND)) {
+	if (cp->c_bsdflags & (IMMUTABLE | APPEND)) {
 		error = EPERM;
 		goto out;
 	}

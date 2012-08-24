@@ -106,7 +106,7 @@ in_addroute(void *v_arg, void *n_arg, struct radix_node_head *head,
 	    struct radix_node *treenodes)
 {
 	struct rtentry *rt = (struct rtentry *)treenodes;
-	struct sockaddr_in *sin = (struct sockaddr_in *)rt_key(rt);
+	struct sockaddr_in *sin = (struct sockaddr_in *)(void *)rt_key(rt);
 	struct radix_node *ret;
 
 	lck_mtx_assert(rnh_lock, LCK_MTX_ASSERT_OWNED);
@@ -145,11 +145,9 @@ in_addroute(void *v_arg, void *n_arg, struct radix_node_head *head,
 			/* Become a regular mutex */
 			RT_CONVERT_LOCK(rt);
 			IFA_LOCK_SPIN(rt->rt_ifa);
-#define satosin(sa) ((struct sockaddr_in *)sa)
 			if (satosin(rt->rt_ifa->ifa_addr)->sin_addr.s_addr
 			    == sin->sin_addr.s_addr)
 				rt->rt_flags |= RTF_LOCAL;
-#undef satosin
 			IFA_UNLOCK(rt->rt_ifa);
 		}
 	}
@@ -211,8 +209,9 @@ in_validate(struct radix_node *rn)
 			/* It's one of ours; unexpire it */
 			rt->rt_flags &= ~RTPRF_OURS;
 			rt_setexpire(rt, 0);
-		} else if ((rt->rt_flags & RTF_LLINFO) &&
-		    (rt->rt_flags & RTF_HOST) && rt->rt_gateway != NULL &&
+		} else if ((rt->rt_flags & (RTF_LLINFO | RTF_HOST)) ==
+		    (RTF_LLINFO | RTF_HOST) && rt->rt_llinfo != NULL &&
+		    rt->rt_gateway != NULL &&
 		    rt->rt_gateway->sa_family == AF_LINK) {
 			/* It's ARP; let it be handled there */
 			arp_validate(rt);

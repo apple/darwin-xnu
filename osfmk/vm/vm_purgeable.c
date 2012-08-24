@@ -99,7 +99,7 @@ vm_purgeable_token_check_queue(purgeable_q_t queue)
 	{
 		our_inactive_count = page_cnt + queue->new_pages + token_new_pagecount;
 		assert(our_inactive_count >= 0);
-		assert((uint32_t) our_inactive_count == vm_page_inactive_count);
+		assert((uint32_t) our_inactive_count == vm_page_inactive_count - vm_page_cleaned_count);
 	}
 }
 #endif
@@ -321,6 +321,68 @@ vm_purgeable_token_remove_first(purgeable_q_t queue)
 	return token;
 }
 
+static token_idx_t 
+vm_purgeable_token_remove_last(purgeable_q_t queue)
+{
+#if MACH_ASSERT
+	lck_mtx_assert(&vm_page_queue_lock, LCK_MTX_ASSERT_OWNED);
+#endif
+	
+	token_idx_t     token;
+	token = queue->token_q_tail;
+
+	assert(token);
+
+	if (token) {
+		assert(queue->token_q_head);
+
+		if (queue->token_q_tail == queue->token_q_head)
+			assert(tokens[token].next == 0);
+
+		if (queue->token_q_unripe == 0) {
+			/* we're removing a ripe token. decrease count */
+			available_for_purge--;
+			assert(available_for_purge >= 0);
+		} else if (queue->token_q_unripe == token) {
+			/* we're removing the only unripe token */
+			queue->token_q_unripe = 0;
+		}
+			
+		if (token == queue->token_q_head) {
+			/* token is the last one in the queue */
+			queue->token_q_head = 0;
+			queue->token_q_tail = 0;
+		} else {
+			token_idx_t new_tail;
+
+			for (new_tail = queue->token_q_head;
+			     tokens[new_tail].next != token && new_tail != 0;
+			     new_tail = tokens[new_tail].next) {
+			}
+			assert(tokens[new_tail].next == token);
+			queue->token_q_tail = new_tail;
+			tokens[new_tail].next = 0;
+		}
+
+		queue->new_pages += tokens[token].count;
+
+#if MACH_ASSERT
+		queue->debug_count_tokens--;
+		vm_purgeable_token_check_queue(queue);
+
+		KERNEL_DEBUG_CONSTANT((MACHDBG_CODE(DBG_MACH_VM, TOKEN_DELETE)),
+				      queue->type,
+				      tokens[queue->token_q_head].count,	/* num pages on new
+										 * first token */
+				      token_new_pagecount,	/* num pages waiting for
+								 * next token */
+				      available_for_purge,
+				      0);
+#endif
+	}
+	return token;
+}
+
 /* 
  * Delete first token from queue. Return token to token queue.
  * Call with page queue locked. 
@@ -332,6 +394,21 @@ vm_purgeable_token_delete_first(purgeable_q_t queue)
 	lck_mtx_assert(&vm_page_queue_lock, LCK_MTX_ASSERT_OWNED);
 #endif
 	token_idx_t     token = vm_purgeable_token_remove_first(queue);
+
+	if (token) {
+		/* stick removed token on free queue */
+		tokens[token].next = token_free_idx;
+		token_free_idx = token;
+	}
+}
+
+void
+vm_purgeable_token_delete_last(purgeable_q_t queue)
+{
+#if MACH_ASSERT
+	lck_mtx_assert(&vm_page_queue_lock, LCK_MTX_ASSERT_OWNED);
+#endif
+	token_idx_t     token = vm_purgeable_token_remove_last(queue);
 
 	if (token) {
 		/* stick removed token on free queue */

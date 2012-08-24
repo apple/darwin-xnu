@@ -102,9 +102,10 @@ struct sigframe32 {
 
 /*
  * NOTE: Source and target may *NOT* overlap!
+ * XXX: Unify with bsd/kern/kern_exit.c
  */
 static void
-siginfo_user_to_user32(user_siginfo_t *in, user32_siginfo_t *out)
+siginfo_user_to_user32_x86(user_siginfo_t *in, user32_siginfo_t *out)
 {
 	out->si_signo	= in->si_signo;
 	out->si_errno	= in->si_errno;
@@ -120,7 +121,7 @@ siginfo_user_to_user32(user_siginfo_t *in, user32_siginfo_t *out)
 }
 
 static void
-siginfo_user_to_user64(user_siginfo_t *in, user64_siginfo_t *out)
+siginfo_user_to_user64_x86(user_siginfo_t *in, user64_siginfo_t *out)
 {
 	out->si_signo	= in->si_signo;
 	out->si_errno	= in->si_errno;
@@ -521,7 +522,7 @@ sendsig(struct proc *p, user_addr_t ua_catcher, int sig, int mask, __unused uint
 		
 		bzero((caddr_t)&sinfo64_user64, sizeof(sinfo64_user64));
 			  
-		siginfo_user_to_user64(&sinfo64,&sinfo64_user64);
+		siginfo_user_to_user64_x86(&sinfo64,&sinfo64_user64);
 
 #if CONFIG_DTRACE
         bzero((caddr_t)&(ut->t_dtrace_siginfo), sizeof(ut->t_dtrace_siginfo));
@@ -560,7 +561,7 @@ sendsig(struct proc *p, user_addr_t ua_catcher, int sig, int mask, __unused uint
 
 		bzero((caddr_t)&sinfo32, sizeof(sinfo32));
 
-		siginfo_user_to_user32(&sinfo64,&sinfo32);
+		siginfo_user_to_user32_x86(&sinfo64,&sinfo32);
 
 #if CONFIG_DTRACE
         bzero((caddr_t)&(ut->t_dtrace_siginfo), sizeof(ut->t_dtrace_siginfo));

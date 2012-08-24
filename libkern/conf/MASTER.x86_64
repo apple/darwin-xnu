@@ -1,8 +1,8 @@
 ######################################################################
 #
-#  RELEASE	= [ intel mach libkerncpp hibernation networking config_dtrace crypto zlib config_kxld iokitstats ]
+#  RELEASE	= [ intel mach libkerncpp hibernation networking config_dtrace crypto allcrypto zlib config_kxld iokitstats vm_pressure_events config_kec_fips ]
 #  PROFILE	= [ RELEASE profile ]
-#  DEBUG	= [ RELEASE debug mach_kdb ]
+#  DEBUG	= [ RELEASE debug mach_assert ]
 #
 #  EMBEDDED	= [ intel mach libkerncpp hibernation networking crypto zlib ]
 #  DEVELOPMENT	= [ EMBEDDED ]
@@ -11,7 +11,5 @@
 
 machine		"x86_64"					# <intel>
 cpu		"x86_64"					# <intel>
-
-options		MACH_KDB	#				# <mach_kdb>
 
 options     NO_NESTED_PMAP                  # <no_nested_pmap>

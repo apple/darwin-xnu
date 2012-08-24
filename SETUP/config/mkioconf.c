@@ -554,7 +554,7 @@ pseudo_inits(FILE *fp)
 			continue;
 		fprintf(fp, "extern int %s(int);\n", dp->d_init);
 	}
-#endif	notdef
+#endif	/* notdef */
 	fprintf(fp, "struct pseudo_init {\n");
 	fprintf(fp, "\tint\tps_count;\n\tint\t(*ps_func)();\n");
 	fprintf(fp, "} pseudo_inits[] = {\n");
@@ -567,7 +567,7 @@ pseudo_inits(FILE *fp)
 			count = 1;
 		fprintf(fp, "\t{%d,\t%s},\n", count, dp->d_init);
 	}
-#endif	notdef
+#endif	/* notdef */
 	fprintf(fp, "\t{0,\t0},\n};\n");
 }
 #endif
@@ -731,7 +731,7 @@ romp_ioconf(void)
  	(void) fclose(fp);
 } 
 
-#endif	MACHINE_ROMP
+#endif	/* MACHINE_ROMP */
 
 #if	MACHINE_MMAX
 void
@@ -875,7 +875,7 @@ mmax_ioconf(void)
 	(void) fclose(fp);
 }
 
-#endif	MACHINE_MMAX
+#endif	/* MACHINE_MMAX */
 
 #if	MACHINE_SQT
 
@@ -1207,7 +1207,7 @@ sqt_ioconf(void)
 	(void) fclose(fp);
 }
 
-#endif	MACHINE_SQT
+#endif	/* MACHINE_SQT */
 #if	MACHINE_I386
 void
 i386_ioconf(void)
@@ -1228,7 +1228,7 @@ i386_ioconf(void)
 	i386_pseudo_inits (fp);
 	(void) fclose(fp);
 }
-#endif	MACHINE_I386
+#endif	/* MACHINE_I386 */
 
 #if MACHINE_MIPSY || MACHINE_MIPS
 
@@ -1513,7 +1513,7 @@ is_declared(const char *cp)
 	}
 	return(0);
 }
-#endif MACHINE_MIPSY || MACHINE_MIPS
+#endif /* MACHINE_MIPSY || MACHINE_MIPS */
 
 #if	MACHINE_M68K
 char	*m68k_dn(const char *name);
@@ -1709,7 +1709,7 @@ m68k_dn(const char *name)
 {
 	sprintf(errbuf, "&%sdriver", name); return ns(errbuf);
 }
-#endif	MACHINE_M68K
+#endif	/* MACHINE_M68K */
 
 #if	MACHINE_M88K || MACHINE_M98K
 char	*nrw_dn(char *name);
@@ -1800,7 +1800,7 @@ m98k_dn(char *name)
 }
 
 
-#endif	MACHINE_M88K || MACHINE_M98K
+#endif	/* MACHINE_M88K || MACHINE_M98K */
 
 #ifdef MACHINE_HPPA
 char	*hppa_dn(char *name);
@@ -1855,7 +1855,7 @@ hppa_dn(char *name)
 	return (errbuf);
 }
 
-#endif MACHINE_HPPA
+#endif /* MACHINE_HPPA */
 
 #ifdef MACHINE_SPARC
 char	*sparc_dn(char *name);
@@ -1909,7 +1909,7 @@ sparc_dn(char *name)
 	return (errbuf);
 }
 
-#endif MACHINE_SPARC
+#endif /* MACHINE_SPARC */
 
 #ifdef MACHINE_PPC
 char	*ppc_dn(char *name);
@@ -1964,7 +1964,7 @@ ppc_dn(name)
 	return (errbuf);
 }
 
-#endif MACHINE_PPC
+#endif /* MACHINE_PPC */
 
 #ifdef MACHINE_ARM
 void	arm_pseudo_inits(FILE *fp);

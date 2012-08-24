@@ -32,12 +32,29 @@
 #define MAX_DISPLAY_STR 128
 #define MAX_PRINC_STR 1024
 
-typedef enum gssd_mechtype { GSSD_NO_MECH = -1, GSSD_KRB5_MECH = 0,
-				GSSD_SPNEGO_MECH, GSSD_NTLM_MECH } gssd_mechtype;
-typedef enum gssd_nametype { GSSD_STRING_NAME = 0, GSSD_EXPORT, 
-				GSSD_ANONYMOUS, GSSD_HOSTBASED, GSSD_USER, GSSD_MACHINE_UID,
-				GSSD_STRING_UID, GSSD_KRB5_PRINCIPAL, GSSD_KRB5_REFERRAL, 
-				GSSD_NTLM_PRINCIPAL, GSSD_NTLM_BLOB} gssd_nametype;
+typedef enum gssd_mechtype {
+	GSSD_NO_MECH = -1,
+	GSSD_KRB5_MECH = 0,
+	GSSD_SPNEGO_MECH,
+	GSSD_NTLM_MECH,
+	GSSD_IAKERB_MECH
+} gssd_mechtype;
+
+typedef enum gssd_nametype {
+	GSSD_STRING_NAME = 0,
+	GSSD_EXPORT, 
+	GSSD_ANONYMOUS,
+	GSSD_HOSTBASED,
+	GSSD_USER,
+	GSSD_MACHINE_UID,
+	GSSD_STRING_UID,
+	GSSD_KRB5_PRINCIPAL,
+	GSSD_KRB5_REFERRAL, 
+	GSSD_NTLM_PRINCIPAL,
+	GSSD_NTLM_BLOB,
+	GSSD_UUID
+} gssd_nametype;
+
 typedef char *gssd_string;
 typedef char *gssd_dstring;
 typedef uint8_t *gssd_byte_buffer;

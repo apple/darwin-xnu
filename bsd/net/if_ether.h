@@ -50,7 +50,12 @@ errno_t	ether_add_proto(ifnet_t interface, protocol_family_t protocol,
 errno_t	ether_del_proto(ifnet_t interface, protocol_family_t protocol);
 errno_t ether_frameout(ifnet_t interface, mbuf_t *packet,
 					   const struct sockaddr *dest, const char *dest_lladdr,
-					   const char *frame_type);
+					   const char *frame_type
+#if KPI_INTERFACE_EMBEDDED
+					   , 
+					   u_int32_t *prepend_len, u_int32_t *postpend_len
+#endif /* KPI_INTERFACE_EMBEDDED */
+					   );
 errno_t	ether_ioctl(ifnet_t interface, u_int32_t command, void* data);
 errno_t	ether_check_multi(ifnet_t ifp, const struct sockaddr *multicast);
 

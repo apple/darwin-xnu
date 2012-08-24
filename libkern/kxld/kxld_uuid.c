@@ -78,7 +78,7 @@ kxld_uuid_export_macho(const KXLDuuid *uuid, u_char *buf,
 
     require_action(sizeof(*uuidhdr) <= header_size - *header_offset, finish,
         rval=KERN_FAILURE);
-    uuidhdr = (struct uuid_command *) (buf + *header_offset);
+    uuidhdr = (struct uuid_command *) ((void *) (buf + *header_offset));
     *header_offset += sizeof(*uuidhdr);
 
     uuidhdr->cmd = LC_UUID;

@@ -73,8 +73,8 @@
  * compile time; you *cannot* set it higher than the hard limit!!
  */
 #define	ARG_MAX		   (256 * 1024)	/* max bytes for an exec function */
-#define	CHILD_MAX		   266	/* max simultaneous processes */
 #if !defined(_POSIX_C_SOURCE) || defined(_DARWIN_C_SOURCE)
+#define	CHILD_MAX		   266	/* max simultaneous processes */
 #define	GID_MAX		   2147483647U	/* max value for a gid_t (2^31-2) */
 #endif /* (_POSIX_C_SOURCE && !_DARWIN_C_SOURCE) */
 #define	LINK_MAX		32767	/* max file link count */

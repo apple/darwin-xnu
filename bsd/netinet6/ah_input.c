@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008 Apple Inc. All rights reserved.
+ * Copyright (c) 2008-2011 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -66,6 +66,7 @@
 #include <sys/systm.h>
 #include <sys/malloc.h>
 #include <sys/mbuf.h>
+#include <sys/mcache.h>
 #include <sys/domain.h>
 #include <sys/protosw.h>
 #include <sys/socket.h>
@@ -152,9 +153,15 @@ ah4_input(struct mbuf *m, int off)
 		}
 	}
 
+	/* Expect 32-bit aligned data pointer on strict-align platforms */
+	MBUF_STRICT_DATA_ALIGNMENT_CHECK_32(m);
+
 	ip = mtod(m, struct ip *);
-	ah = (struct ah *)(((caddr_t)ip) + off);
+	ah = (struct ah *)(void *)(((caddr_t)ip) + off);
 #else
+	/* Expect 32-bit aligned data pointer on strict-align platforms */
+	MBUF_STRICT_DATA_ALIGNMENT_CHECK_32(m);
+
 	ip = mtod(m, struct ip *);
 	IP6_EXTHDR_GET(ah, struct ah *, m, off, sizeof(struct newah));
 	if (ah == NULL) {
@@ -260,9 +267,11 @@ ah4_input(struct mbuf *m, int off)
 			IPSEC_STAT_INCREMENT(ipsecstat.in_inval);
 			goto fail;
 		}
+		/* Expect 32-bit aligned data ptr on strict-align platforms */
+		MBUF_STRICT_DATA_ALIGNMENT_CHECK_32(m);
 
 		ip = mtod(m, struct ip *);
-		ah = (struct ah *)(((caddr_t)ip) + off);
+		ah = (struct ah *)(void *)(((caddr_t)ip) + off);
 	}
 #else
 	IP6_EXTHDR_GET(ah, struct ah *, m, off,
@@ -628,7 +637,7 @@ ah6_input(struct mbuf **mp, int *offp, int proto)
 
 #ifndef PULLDOWN_TEST
 	IP6_EXTHDR_CHECK(m, off, sizeof(struct ah), {return IPPROTO_DONE;});
-	ah = (struct ah *)(mtod(m, caddr_t) + off);
+	ah = (struct ah *)(void *)(mtod(m, caddr_t) + off);
 #else
 	IP6_EXTHDR_GET(ah, struct ah *, m, off, sizeof(struct newah));
 	if (ah == NULL) {
@@ -637,6 +646,9 @@ ah6_input(struct mbuf **mp, int *offp, int proto)
 		return IPPROTO_DONE;
 	}
 #endif
+	/* Expect 32-bit aligned data pointer on strict-align platforms */
+	MBUF_STRICT_DATA_ALIGNMENT_CHECK_32(m);
+
 	ip6 = mtod(m, struct ip6_hdr *);
 	nxt = ah->ah_nxt;
 
@@ -1059,7 +1071,7 @@ ah6_ctlinput(cmd, sa, d)
 			m_copydata(m, off, sizeof(ah), (caddr_t)&ah);
 			ahp = &ah;
 		} else
-			ahp = (struct newah *)(mtod(m, caddr_t) + off);
+			ahp = (struct newah *)(void *)(mtod(m, caddr_t) + off);
 
 		if (cmd == PRC_MSGSIZE) {
 			int valid = 0;
@@ -1069,7 +1081,7 @@ ah6_ctlinput(cmd, sa, d)
 			 * the address in the ICMP message payload.
 			 */
 			sa6_src = ip6cp->ip6c_src;
-			sa6_dst = (struct sockaddr_in6 *)sa;
+			sa6_dst = (struct sockaddr_in6 *)(void *)sa;
 			sav = key_allocsa(AF_INET6,
 					  (caddr_t)&sa6_src->sin6_addr,
 					  (caddr_t)&sa6_dst->sin6_addr,

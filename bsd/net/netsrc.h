@@ -53,6 +53,7 @@ struct netsrc_rep {
 #define	NETSRC_IP6_FLAG_TENTATIVE	0x0001
 #define	NETSRC_IP6_FLAG_TEMPORARY	0x0002
 #define	NETSRC_IP6_FLAG_DEPRECATED	0x0004
+#define	NETSRC_IP6_FLAG_OPTIMISTIC	0x0008
 	uint16_t nrp_flags;
 	uint16_t nrp_label;
 	uint16_t nrp_precedence;

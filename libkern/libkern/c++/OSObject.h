@@ -36,6 +36,10 @@ HISTORY
 
 #include <libkern/c++/OSMetaClass.h>
 
+#if defined(__clang__)
+#pragma clang diagnostic ignored "-Woverloaded-virtual"
+#endif
+
 class OSSymbol;
 class OSString;
 

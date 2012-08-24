@@ -95,6 +95,9 @@
  
 #define EXC_CRASH		10	/* Abnormal process exit */
 
+#define EXC_RESOURCE		11	/* Hit resource consumption limit */
+		/* Exact resource is in code field. */
+
 /*
  *	Machine-independent exception behaviors
  */
@@ -131,6 +134,7 @@
 #define EXC_MASK_MACH_SYSCALL		(1 << EXC_MACH_SYSCALL)
 #define EXC_MASK_RPC_ALERT		(1 << EXC_RPC_ALERT)
 #define EXC_MASK_CRASH			(1 << EXC_CRASH)
+#define EXC_MASK_RESOURCE		(1 << EXC_RESOURCE)
 
 #define EXC_MASK_ALL	(EXC_MASK_BAD_ACCESS |			\
 			 EXC_MASK_BAD_INSTRUCTION |		\
@@ -141,6 +145,7 @@
 			 EXC_MASK_SYSCALL |			\
 			 EXC_MASK_MACH_SYSCALL |		\
 			 EXC_MASK_RPC_ALERT |			\
+			 EXC_MASK_RESOURCE |			\
 			 EXC_MASK_MACHINE)
 
 #ifdef	KERNEL_PRIVATE
@@ -153,8 +158,12 @@
  * Machine independent codes for EXC_SOFTWARE
  * Codes 0x10000 - 0x1FFFF reserved for OS emulation (Unix) 
  * 0x10000 - 0x10002 in use for unix signals
+ * 0x20000 - 0x2FFFF reserved for MACF
  */
 #define	EXC_SOFT_SIGNAL		0x10003	/* Unix signal exceptions */
+
+#define	EXC_MACF_MIN		0x20000 /* MACF exceptions */
+#define	EXC_MACF_MAX		0x2FFFF
 
 #ifndef	ASSEMBLER
 

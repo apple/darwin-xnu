@@ -38,7 +38,7 @@
 #ifndef	__ASSEMBLER__
 
 extern	void	commpage_populate( void ); 	/* called once during startup */
-
+extern  void	commpage_text_populate( void );
 #endif	/* __ASSEMBLER__ */
 
 #endif	/* _MACHINE_COMMPAGE_H */

@@ -5,6 +5,7 @@
 #include <errno.h>
 #include <err.h>
 #include <pthread.h>
+#include <spawn.h>
 
 extern char **environ;
 

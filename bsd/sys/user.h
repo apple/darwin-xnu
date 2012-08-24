@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2010 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2011 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -80,7 +80,6 @@
 #include <sys/vm.h>		/* XXX */
 #include <sys/sysctl.h>
 
-
 #ifdef KERNEL
 #ifdef BSD_KERNEL_PRIVATE
 #include <sys/pthread_internal.h> /* for uu_kwe entry */
@@ -102,6 +101,8 @@ struct vfs_context {
 #ifdef BSD_KERNEL_PRIVATE
 /* XXX Deprecated: xnu source compatability */
 #define uu_ucred	uu_context.vc_ucred
+
+struct label;		/* MAC label dummy struct */
 
 #define MAXTHREADNAMESIZE 64
 /*
@@ -159,10 +160,8 @@ struct uthread {
 	caddr_t uu_wchan;			/* sleeping thread wait channel */
 	const char *uu_wmesg;			/* ... wait message */
 	int uu_flag;
-#if CONFIG_EMBEDDED
-	int uu_iopol_disk;			/* disk I/O policy */
-#endif /* CONFIG_EMBEDDED */
 	struct proc * uu_proc;
+	thread_t uu_thread;
 	void * uu_userstate;
 	wait_queue_set_t uu_wqset;			/* cached across select calls */
 	size_t uu_allocsize;				/* ...size of select cache */
@@ -177,11 +176,13 @@ struct uthread {
 
 	struct kaudit_record 	*uu_ar;			/* audit record */
 	struct task*	uu_aio_task;			/* target task for async io */
-
+    
+	u_int32_t	uu_network_lock_held;		/* network support for pf locking */
 	lck_mtx_t	*uu_mtx;
 
+	TAILQ_ENTRY(uthread) uu_throttlelist;	/* List of uthreads currently throttled */
+	int		uu_on_throttlelist;
 	int		uu_lowpri_window;
-	boolean_t	uu_throttle_isssd;
 	boolean_t	uu_throttle_bc;
 	void	*	uu_throttle_info; 	/* pointer to throttled I/Os info */
 
@@ -203,8 +204,8 @@ struct uthread {
 	uint32_t	t_dtrace_errno; /* Most recent errno */
         uint8_t         t_dtrace_stop;  /* indicates a DTrace desired stop */
         uint8_t         t_dtrace_sig;   /* signal sent via DTrace's raise() */
-        uint64_t	t_dtrace_resumepid; /* DTrace's pidresume() pid */
-
+        uint64_t        t_dtrace_resumepid; /* DTrace's pidresume() pid */
+			     
         union __tdu {
                 struct __tds {
                         uint8_t _t_dtrace_on;   /* hit a fasttrap tracepoint */
@@ -236,10 +237,12 @@ struct uthread {
 #if __sol64 || defined(__APPLE__)
         uint64_t        t_dtrace_regv;  /* DTrace saved reg from fasttrap */
 #endif
+	void *		t_dtrace_syscall_args;
 #endif /* CONFIG_DTRACE */
 	void *		uu_threadlist;
 	char *		pth_name;
 	struct ksyn_waitq_element  uu_kwe;		/* user for pthread synch */
+	struct label *	uu_label;	/* MAC label */
 };
 
 typedef struct uthread * uthread_t;
@@ -256,9 +259,7 @@ typedef struct uthread * uthread_t;
 #define UT_PASSIVE_IO	0x00000100	/* this thread issues passive I/O */
 #define UT_PROCEXIT	0x00000200	/* this thread completed the  proc exit */
 #define UT_RAGE_VNODES	0x00000400	/* rapid age any vnodes created by this thread */	
-#if CONFIG_EMBEDDED
-#define UT_BACKGROUND	0x00000800	/* this thread is in background state */	
-#endif /* !CONFIG_EMBEDDED */
+/* 0x00000800 unused, used to be UT_BACKGROUND */
 #define UT_BACKGROUND_TRAFFIC_MGT	0x00001000 /* background traffic is regulated */
 
 #define	UT_VFORK	0x02000000	/* thread has vfork children */

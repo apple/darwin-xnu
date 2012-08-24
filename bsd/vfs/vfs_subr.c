@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2010 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2012 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -105,7 +105,9 @@
 #include <sys/kdebug.h>
 #include <sys/kauth.h>
 #include <sys/user.h>
+#include <sys/systm.h>
 #include <sys/kern_memorystatus.h>
+#include <sys/lockf.h>
 #include <miscfs/fifofs/fifo.h>
 
 #include <string.h>
@@ -113,6 +115,9 @@
 
 
 #include <kern/assert.h>
+#include <mach/kern_return.h>
+#include <kern/thread.h>
+#include <kern/sched_prim.h>
 
 #include <miscfs/specfs/specdev.h>
 
@@ -183,9 +188,11 @@ __private_extern__ int unlink1(vfs_context_t, struct nameidata *, int);
 extern int system_inshutdown;
 
 static void vnode_list_add(vnode_t);
+static void vnode_async_list_add(vnode_t);
 static void vnode_list_remove(vnode_t);
 static void vnode_list_remove_locked(vnode_t);
 
+static void vnode_abort_advlocks(vnode_t);
 static errno_t vnode_drain(vnode_t);
 static void vgone(vnode_t, int flags);
 static void vclean(vnode_t vp, int flag);
@@ -223,6 +230,8 @@ static void vnode_resolver_detach(vnode_t);
 
 TAILQ_HEAD(freelst, vnode) vnode_free_list;	/* vnode free list */
 TAILQ_HEAD(deadlst, vnode) vnode_dead_list;	/* vnode dead list */
+TAILQ_HEAD(async_work_lst, vnode) vnode_async_work_list;
+
 
 TAILQ_HEAD(ragelst, vnode) vnode_rage_list;	/* vnode rapid age list */
 struct timeval rage_tv;
@@ -262,7 +271,6 @@ static int nummounts = 0;
 	} while(0)
 
 
-
 /* remove a vnode from dead vnode list */
 #define VREMDEAD(fun, vp)	\
 	do {	\
@@ -271,6 +279,17 @@ static int nummounts = 0;
 		VLISTNONE((vp));	\
 		vp->v_listflag &= ~VLIST_DEAD;	\
 		deadvnodes--;	\
+	} while(0)
+
+
+/* remove a vnode from async work vnode list */
+#define VREMASYNC_WORK(fun, vp)	\
+	do {	\
+		VLISTCHECK((fun), (vp), "async_work");	\
+		TAILQ_REMOVE(&vnode_async_work_list, (vp), v_freelist);	\
+		VLISTNONE((vp));	\
+		vp->v_listflag &= ~VLIST_ASYNC_WORK;	\
+		async_work_vnodes--;	\
 	} while(0)
 
 
@@ -304,15 +323,21 @@ u_int32_t vnodetarget;		/* target for vnreclaim() */
  */
 #define VNODE_FREE_MIN		CONFIG_VNODE_FREE_MIN	/* freelist should have at least this many */
 
+
+static void async_work_continue(void);
+
 /*
  * Initialize the vnode management data structures.
  */
 __private_extern__ void
 vntblinit(void)
 {
+	thread_t	thread = THREAD_NULL;
+
 	TAILQ_INIT(&vnode_free_list);
 	TAILQ_INIT(&vnode_rage_list);
 	TAILQ_INIT(&vnode_dead_list);
+	TAILQ_INIT(&vnode_async_work_list);
 	TAILQ_INIT(&mountlist);
 
 	if (!vnodetarget)
@@ -329,6 +354,12 @@ vntblinit(void)
 	 * we want to cache
 	 */
 	(void) adjust_vm_object_cache(0, desiredvnodes - VNODE_FREE_MIN);
+
+	/*
+	 * create worker threads
+	 */
+	kernel_thread_start((thread_continue_t)async_work_continue, NULL, &thread);
+	thread_deallocate(thread);
 }
 
 /* Reset the VM Object Cache with the values passed in */
@@ -1201,8 +1232,13 @@ vfs_getnewfsid(struct mount *mp)
  * Routines having to do with the management of the vnode table.
  */
 extern int (**dead_vnodeop_p)(void *);
-long numvnodes, freevnodes, deadvnodes;
+long numvnodes, freevnodes, deadvnodes, async_work_vnodes;
 
+
+int async_work_timed_out = 0;
+int async_work_handled = 0;
+int dead_vnode_wanted = 0;
+int dead_vnode_waited = 0;
 
 /*
  * Move a vnode from one mount queue to another.
@@ -1555,6 +1591,34 @@ out:
 }
 
 
+static boolean_t
+vnode_on_reliable_media(vnode_t vp)
+{
+	if ( !(vp->v_mount->mnt_kern_flag & MNTK_VIRTUALDEV) && (vp->v_mount->mnt_flag & MNT_LOCAL) )
+		return (TRUE);
+	return (FALSE);
+}
+
+static void
+vnode_async_list_add(vnode_t vp)
+{
+	vnode_list_lock();
+
+	if (VONLIST(vp) || (vp->v_lflag & (VL_TERMINATE|VL_DEAD)))
+		panic("vnode_async_list_add: %p is in wrong state", vp);
+
+	TAILQ_INSERT_HEAD(&vnode_async_work_list, vp, v_freelist);
+	vp->v_listflag |= VLIST_ASYNC_WORK;
+
+	async_work_vnodes++;
+
+	vnode_list_unlock();
+
+	wakeup(&vnode_async_work_list);
+
+}
+
+
 /*
  * put the vnode on appropriate free list.
  * called with vnode LOCKED
@@ -1562,6 +1626,8 @@ out:
 static void
 vnode_list_add(vnode_t vp)
 {
+	boolean_t need_dead_wakeup = FALSE;
+
 #if DIAGNOSTIC
 	lck_mtx_assert(&vp->v_lock, LCK_MTX_ASSERT_OWNED);
 #endif
@@ -1603,7 +1669,13 @@ vnode_list_add(vnode_t vp)
 		        TAILQ_INSERT_HEAD(&vnode_dead_list, vp, v_freelist);
 			vp->v_listflag |= VLIST_DEAD;
 			deadvnodes++;
-		} else if ((vp->v_flag & VAGE)) {
+
+			if (dead_vnode_wanted) {
+				dead_vnode_wanted--;
+				need_dead_wakeup = TRUE;
+			}
+
+		} else if ( (vp->v_flag & VAGE) ) {
 		        TAILQ_INSERT_HEAD(&vnode_free_list, vp, v_freelist);
 			vp->v_flag &= ~VAGE;
 			freevnodes++;
@@ -1613,6 +1685,9 @@ vnode_list_add(vnode_t vp)
 		}
 	}
 	vnode_list_unlock();
+
+	if (need_dead_wakeup == TRUE)
+		wakeup_one((caddr_t)&dead_vnode_wanted);
 }
 
 
@@ -1633,6 +1708,8 @@ vnode_list_remove_locked(vnode_t vp)
 		        VREMRAGE("vnode_list_remove", vp);
 		else if (vp->v_listflag & VLIST_DEAD)
 		        VREMDEAD("vnode_list_remove", vp);
+		else if (vp->v_listflag & VLIST_ASYNC_WORK)
+		        VREMASYNC_WORK("vnode_list_remove", vp);
 		else
 		        VREMFREE("vnode_list_remove", vp);
 	}
@@ -1744,9 +1821,15 @@ vnode_rele_internal(vnode_t vp, int fmode, int dont_reenter, int locked)
 		 * if it's been marked for termination
 		 */
 	        if (dont_reenter) {
-		        if ( !(vp->v_lflag & (VL_TERMINATE | VL_DEAD | VL_MARKTERM)) )
+		        if ( !(vp->v_lflag & (VL_TERMINATE | VL_DEAD | VL_MARKTERM)) ) {
 			        vp->v_lflag |= VL_NEEDINACTIVE;
-		        vp->v_flag |= VAGE;
+				
+				if (vnode_on_reliable_media(vp) == FALSE) {
+					vnode_async_list_add(vp);
+					goto done;
+				}
+			}
+			vp->v_flag |= VAGE;
 		}
 	        vnode_list_add(vp);
 
@@ -1947,6 +2030,7 @@ loop:
 #ifdef JOE_DEBUG
 				record_vp(vp, 1);
 #endif
+				vnode_abort_advlocks(vp);
 				vnode_reclaim_internal(vp, 1, 1, 0);
 				vnode_dropiocount(vp);
 				vnode_list_add(vp);
@@ -2641,6 +2725,10 @@ vfs_sysctl(int *name, u_int namelen, user_addr_t oldp, size_t *oldlenp,
 	int error;
 	struct vfsconf vfsc;
 
+	if (namelen > CTL_MAXNAME) {
+		return (EINVAL);
+	}
+
 	/* All non VFS_GENERIC and in VFS_GENERIC, 
 	 * VFS_MAXTYPENUM, VFS_CONF, VFS_SET_PACKAGE_EXTS
 	 * needs to have root priv to have modifiers. 
@@ -2729,6 +2817,7 @@ vfs_sysctl(int *name, u_int namelen, user_addr_t oldp, size_t *oldlenp,
 	 * We need to get back into the general MIB, so we need to re-prepend
 	 * CTL_VFS to our name and try userland_sysctl().
 	 */
+
 	usernamelen = namelen + 1;
 	MALLOC(username, int *, usernamelen * sizeof(*username),
 	    M_TEMP, M_WAITOK);
@@ -3039,8 +3128,10 @@ vfs_init_io_attributes(vnode_t devvp, mount_t mp)
 
 	if (features & DK_FEATURE_FORCE_UNIT_ACCESS)
 	        mp->mnt_ioflags |= MNT_IOFLAGS_FUA_SUPPORTED;
+	
 	if (features & DK_FEATURE_UNMAP)
-	        mp->mnt_ioflags |= MNT_IOFLAGS_UNMAP_SUPPORTED;
+		mp->mnt_ioflags |= MNT_IOFLAGS_UNMAP_SUPPORTED;
+	
 	return (error);
 }
 
@@ -3058,8 +3149,20 @@ vfs_event_init(void)
 }
 
 void
-vfs_event_signal(__unused fsid_t *fsid, u_int32_t event, __unused intptr_t data)
+vfs_event_signal(fsid_t *fsid, u_int32_t event, intptr_t data)
 {
+	if (event == VQ_DEAD || event == VQ_NOTRESP) {
+		struct mount *mp = vfs_getvfs(fsid);
+		if (mp) {
+			mount_lock_spin(mp);
+			if (data)
+				mp->mnt_kern_flag &= ~MNT_LNOTRESP;	// Now responding
+			else
+				mp->mnt_kern_flag |= MNT_LNOTRESP;	// Not responding
+			mount_unlock(mp);
+		}
+	}
+
 	lck_mtx_lock(fs_klist_lock);
 	KNOTE(&fs_klist, event);
 	lck_mtx_unlock(fs_klist_lock);
@@ -3480,28 +3583,162 @@ SYSCTL_PROC(_vfs_generic, OID_AUTO, noremotehang, CTLFLAG_RW | CTLFLAG_ANYBODY,
 	
 long num_reusedvnodes = 0;
 
+
+static vnode_t
+process_vp(vnode_t vp, int want_vp, int *deferred)
+{
+	unsigned int  vpid;
+
+	*deferred = 0;
+
+	vpid = vp->v_id;
+
+	vnode_list_remove_locked(vp);
+
+	vnode_list_unlock();
+
+	vnode_lock_spin(vp);
+
+	/* 
+	 * We could wait for the vnode_lock after removing the vp from the freelist
+	 * and the vid is bumped only at the very end of reclaim. So it is  possible
+	 * that we are looking at a vnode that is being terminated. If so skip it.
+	 */ 
+	if ((vpid != vp->v_id) || (vp->v_usecount != 0) || (vp->v_iocount != 0) || 
+	    VONLIST(vp) || (vp->v_lflag & VL_TERMINATE)) {
+		/*
+		 * we lost the race between dropping the list lock
+		 * and picking up the vnode_lock... someone else
+		 * used this vnode and it is now in a new state
+		 */
+		vnode_unlock(vp);
+		
+		return (NULLVP);
+	}
+	if ( (vp->v_lflag & (VL_NEEDINACTIVE | VL_MARKTERM)) == VL_NEEDINACTIVE ) {
+	        /*
+		 * we did a vnode_rele_ext that asked for
+		 * us not to reenter the filesystem during
+		 * the release even though VL_NEEDINACTIVE was
+		 * set... we'll do it here by doing a
+		 * vnode_get/vnode_put
+		 *
+		 * pick up an iocount so that we can call
+		 * vnode_put and drive the VNOP_INACTIVE...
+		 * vnode_put will either leave us off 
+		 * the freelist if a new ref comes in,
+		 * or put us back on the end of the freelist
+		 * or recycle us if we were marked for termination...
+		 * so we'll just go grab a new candidate
+		 */
+	        vp->v_iocount++;
+#ifdef JOE_DEBUG
+		record_vp(vp, 1);
+#endif
+		vnode_put_locked(vp);
+		vnode_unlock(vp);
+
+		return (NULLVP);
+	}
+	/*
+	 * Checks for anyone racing us for recycle
+	 */ 
+	if (vp->v_type != VBAD) {
+		if (want_vp && vnode_on_reliable_media(vp) == FALSE) {
+			vnode_async_list_add(vp);
+			vnode_unlock(vp);
+			
+			*deferred = 1;
+
+			return (NULLVP);
+		}
+		if (vp->v_lflag & VL_DEAD)
+			panic("new_vnode(%p): the vnode is VL_DEAD but not VBAD", vp);
+
+		vnode_lock_convert(vp);
+		(void)vnode_reclaim_internal(vp, 1, want_vp, 0);
+
+		if (want_vp) {
+			if ((VONLIST(vp)))
+				panic("new_vnode(%p): vp on list", vp);
+			if (vp->v_usecount || vp->v_iocount || vp->v_kusecount ||
+			    (vp->v_lflag & (VNAMED_UBC | VNAMED_MOUNT | VNAMED_FSHASH)))
+				panic("new_vnode(%p): free vnode still referenced", vp);
+			if ((vp->v_mntvnodes.tqe_prev != 0) && (vp->v_mntvnodes.tqe_next != 0))
+				panic("new_vnode(%p): vnode seems to be on mount list", vp);
+			if ( !LIST_EMPTY(&vp->v_nclinks) || !LIST_EMPTY(&vp->v_ncchildren))
+				panic("new_vnode(%p): vnode still hooked into the name cache", vp);
+		} else {
+			vnode_unlock(vp);
+			vp = NULLVP;
+		}
+	}
+	return (vp);
+}
+
+
+
+static void
+async_work_continue(void)
+{
+	struct async_work_lst *q;
+	int	deferred;
+	vnode_t	vp;
+
+	q = &vnode_async_work_list;
+
+	for (;;) {
+
+		vnode_list_lock();
+
+		if ( TAILQ_EMPTY(q) ) {
+			assert_wait(q, (THREAD_UNINT));
+	
+			vnode_list_unlock();
+			
+			thread_block((thread_continue_t)async_work_continue);
+
+			continue;
+		}
+		async_work_handled++;
+
+		vp = TAILQ_FIRST(q);
+
+		vp = process_vp(vp, 0, &deferred);
+
+		if (vp != NULLVP)
+			panic("found VBAD vp (%p) on async queue", vp);
+	}
+}
+
+
 static int
 new_vnode(vnode_t *vpp)
 {
 	vnode_t	vp;
-	int retries = 0;				/* retry incase of tablefull */
+	uint32_t retries = 0, max_retries = 100;		/* retry incase of tablefull */
 	int force_alloc = 0, walk_count = 0;
-	unsigned int  vpid;
-	struct timespec ts;
+	boolean_t need_reliable_vp = FALSE;
+	int deferred;
+        struct timeval initial_tv;
         struct timeval current_tv;
-#ifndef __LP64__
+#if CONFIG_VFS_FUNNEL
         struct unsafe_fsnode *l_unsafefs = 0;
-#endif /* __LP64__ */
+#endif /* CONFIG_VFS_FUNNEL */
 	proc_t  curproc = current_proc();
 
+	initial_tv.tv_sec = 0;
 retry:
-	microuptime(&current_tv);
-
 	vp = NULLVP;
 
 	vnode_list_lock();
 
+	if (need_reliable_vp == TRUE)
+		async_work_timed_out++;
+
 	if ((numvnodes - deadvnodes) < desiredvnodes || force_alloc) {
+		struct timespec ts;
+
 		if ( !TAILQ_EMPTY(&vnode_dead_list)) {
 			/*
 			 * Can always reuse a dead one
@@ -3534,6 +3771,7 @@ retry:
 		vp->v_iocount = 1;
 		goto done;
 	}
+	microuptime(&current_tv);
 
 #define MAX_WALK_COUNT 1000
 
@@ -3542,10 +3780,10 @@ retry:
 	      (current_tv.tv_sec - rage_tv.tv_sec) >= RAGE_TIME_LIMIT)) {
 
 		TAILQ_FOREACH(vp, &vnode_rage_list, v_freelist) {
-		    if ( !(vp->v_listflag & VLIST_RAGE))
-			panic("new_vnode: vp (%p) on RAGE list not marked VLIST_RAGE", vp);
+			if ( !(vp->v_listflag & VLIST_RAGE))
+				panic("new_vnode: vp (%p) on RAGE list not marked VLIST_RAGE", vp);
 
-		    // if we're a dependency-capable process, skip vnodes that can
+			// if we're a dependency-capable process, skip vnodes that can
 			// cause recycling deadlocks. (i.e. this process is diskimages
 			// helper and the vnode is in a disk image).  Querying the
 			// mnt_kern_flag for the mount's virtual device status
@@ -3553,19 +3791,27 @@ retry:
 			// may not be updated if there are multiple devnode layers 
 			// in between the disk image and the final consumer.
 
-		    if ((curproc->p_flag & P_DEPENDENCY_CAPABLE) == 0 || vp->v_mount == NULL || 
-					(vp->v_mount->mnt_kern_flag & MNTK_VIRTUALDEV) == 0) {
-				break;
-		    }
+			if ((curproc->p_flag & P_DEPENDENCY_CAPABLE) == 0 || vp->v_mount == NULL || 
+			    (vp->v_mount->mnt_kern_flag & MNTK_VIRTUALDEV) == 0) {
+				/*
+				 * if need_reliable_vp == TRUE, then we've already sent one or more
+				 * non-reliable vnodes to the async thread for processing and timed
+				 * out waiting for a dead vnode to show up.  Use the MAX_WALK_COUNT
+				 * mechanism to first scan for a reliable vnode before forcing 
+				 * a new vnode to be created
+				 */
+				if (need_reliable_vp == FALSE || vnode_on_reliable_media(vp) == TRUE)
+					break;
+			}
 
-		    // don't iterate more than MAX_WALK_COUNT vnodes to
-		    // avoid keeping the vnode list lock held for too long.
-		    if (walk_count++ > MAX_WALK_COUNT) {
+			// don't iterate more than MAX_WALK_COUNT vnodes to
+			// avoid keeping the vnode list lock held for too long.
+
+			if (walk_count++ > MAX_WALK_COUNT) {
 				vp = NULL;
-			break;
-		    }
+				break;
+			}
 		}
-
 	}
 
 	if (vp == NULL && !TAILQ_EMPTY(&vnode_free_list)) {
@@ -3583,19 +3829,27 @@ retry:
 			// may not be updated if there are multiple devnode layers 
 			// in between the disk image and the final consumer.
 
-		    if ((curproc->p_flag & P_DEPENDENCY_CAPABLE) == 0 || vp->v_mount == NULL || 
-					(vp->v_mount->mnt_kern_flag & MNTK_VIRTUALDEV) == 0) {
+			if ((curproc->p_flag & P_DEPENDENCY_CAPABLE) == 0 || vp->v_mount == NULL || 
+			    (vp->v_mount->mnt_kern_flag & MNTK_VIRTUALDEV) == 0) {
+				/*
+				 * if need_reliable_vp == TRUE, then we've already sent one or more
+				 * non-reliable vnodes to the async thread for processing and timed
+				 * out waiting for a dead vnode to show up.  Use the MAX_WALK_COUNT
+				 * mechanism to first scan for a reliable vnode before forcing 
+				 * a new vnode to be created
+				 */
+				if (need_reliable_vp == FALSE || vnode_on_reliable_media(vp) == TRUE)
+					break;
+			}
+
+			// don't iterate more than MAX_WALK_COUNT vnodes to
+			// avoid keeping the vnode list lock held for too long.
+
+			if (walk_count++ > MAX_WALK_COUNT) {
+				vp = NULL;
 				break;
-		    }
-
-		    // don't iterate more than MAX_WALK_COUNT vnodes to
-		    // avoid keeping the vnode list lock held for too long.
-		    if (walk_count++ > MAX_WALK_COUNT) {
-			vp = NULL;
-			break;
-		    }
+			}
 		}
-
 	}
 
 	//
@@ -3608,9 +3862,9 @@ retry:
 	// the allocation.
 	//
 	if (vp == NULL && walk_count >= MAX_WALK_COUNT) {
-	    force_alloc = 1;
-	    vnode_list_unlock();
-	    goto retry;
+		force_alloc = 1;
+		vnode_list_unlock();
+		goto retry;
 	}
 
 	if (vp == NULL) {
@@ -3618,9 +3872,9 @@ retry:
 		 * we've reached the system imposed maximum number of vnodes
 		 * but there isn't a single one available
 		 * wait a bit and then retry... if we can't get a vnode
-		 * after 100 retries, than log a complaint
+		 * after our target number of retries, than log a complaint
 		 */
-		if (++retries <= 100) {
+		if (++retries <= max_retries) {
 			vnode_list_unlock();
 			delay_for_interval(1, 1000 * 1000);
 			goto retry;
@@ -3631,12 +3885,12 @@ retry:
 		log(LOG_EMERG, "%d desired, %d numvnodes, "
 			"%d free, %d dead, %d rage\n",
 		        desiredvnodes, numvnodes, freevnodes, deadvnodes, ragevnodes);
-#if CONFIG_EMBEDDED
+#if CONFIG_JETSAM
 		/*
 		 * Running out of vnodes tends to make a system unusable. Start killing
 		 * processes that jetsam knows are killable.
 		 */
-		if (jetsam_kill_top_proc(TRUE, kJetsamFlagsKilledVnodes) < 0) {
+		if (memorystatus_kill_top_proc(TRUE, kMemorystatusFlagsKilledVnodes) < 0) {
 			/*
 			 * If jetsam can't find any more processes to kill and there
 			 * still aren't any free vnodes, panic. Hopefully we'll get a
@@ -3645,7 +3899,13 @@ retry:
 			panic("vnode table is full\n");
 		}
 
-		delay_for_interval(1, 1000 * 1000);
+		/* 
+		 * Now that we've killed someone, wait a bit and continue looking 
+		 * (with fewer retries before trying another kill).
+		 */
+		delay_for_interval(3, 1000 * 1000);
+		retries = 0;	
+		max_retries = 10;
 		goto retry;
 #endif
 
@@ -3653,80 +3913,66 @@ retry:
 		return (ENFILE);
 	}
 steal_this_vp:
-	vpid = vp->v_id;
+	if ((vp = process_vp(vp, 1, &deferred)) == NULLVP) {
+		if (deferred) {
+			int	elapsed_msecs;
+			struct timeval elapsed_tv;
 
-	vnode_list_remove_locked(vp);
+			if (initial_tv.tv_sec == 0)
+				microuptime(&initial_tv);
 
-	vnode_list_unlock();
+			vnode_list_lock();
 
-	vnode_lock_spin(vp);
+			dead_vnode_waited++;
+			dead_vnode_wanted++;
 
-	/* 
-	 * We could wait for the vnode_lock after removing the vp from the freelist
-	 * and the vid is bumped only at the very end of reclaim. So it is  possible
-	 * that we are looking at a vnode that is being terminated. If so skip it.
-	 */ 
-	if ((vpid != vp->v_id) || (vp->v_usecount != 0) || (vp->v_iocount != 0) || 
-			VONLIST(vp) || (vp->v_lflag & VL_TERMINATE)) {
-		/*
-		 * we lost the race between dropping the list lock
-		 * and picking up the vnode_lock... someone else
-		 * used this vnode and it is now in a new state
-		 * so we need to go back and try again
-		 */
-		vnode_unlock(vp);
-		goto retry;
-	}
-	if ( (vp->v_lflag & (VL_NEEDINACTIVE | VL_MARKTERM)) == VL_NEEDINACTIVE ) {
-	        /*
-		 * we did a vnode_rele_ext that asked for
-		 * us not to reenter the filesystem during
-		 * the release even though VL_NEEDINACTIVE was
-		 * set... we'll do it here by doing a
-		 * vnode_get/vnode_put
-		 *
-		 * pick up an iocount so that we can call
-		 * vnode_put and drive the VNOP_INACTIVE...
-		 * vnode_put will either leave us off 
-		 * the freelist if a new ref comes in,
-		 * or put us back on the end of the freelist
-		 * or recycle us if we were marked for termination...
-		 * so we'll just go grab a new candidate
-		 */
-	        vp->v_iocount++;
-#ifdef JOE_DEBUG
-		record_vp(vp, 1);
-#endif
-		vnode_put_locked(vp);
-		vnode_unlock(vp);
+			/*
+			 * note that we're only going to explicitly wait 10ms
+			 * for a dead vnode to become available, since even if one
+			 * isn't available, a reliable vnode might now be available
+			 * at the head of the VRAGE or free lists... if so, we
+			 * can satisfy the new_vnode request with less latency then waiting
+			 * for the full 100ms duration we're ultimately willing to tolerate
+			 */
+			assert_wait_timeout((caddr_t)&dead_vnode_wanted, (THREAD_INTERRUPTIBLE), 10000, NSEC_PER_USEC);
+
+			vnode_list_unlock();
+
+			thread_block(THREAD_CONTINUE_NULL);
+
+			microuptime(&elapsed_tv);
+			
+			timevalsub(&elapsed_tv, &initial_tv);
+			elapsed_msecs = elapsed_tv.tv_sec * 1000 + elapsed_tv.tv_usec / 1000;
+
+			if (elapsed_msecs >= 100) {
+				/*
+				 * we've waited long enough... 100ms is 
+				 * somewhat arbitrary for this case, but the
+				 * normal worst case latency used for UI
+				 * interaction is 100ms, so I've chosen to
+				 * go with that.
+				 *
+				 * setting need_reliable_vp to TRUE
+				 * forces us to find a reliable vnode
+				 * that we can process synchronously, or
+				 * to create a new one if the scan for
+				 * a reliable one hits the scan limit
+				 */
+				need_reliable_vp = TRUE;
+			}
+		}
 		goto retry;
 	}
 	OSAddAtomicLong(1, &num_reusedvnodes);
 
-	/* Checks for anyone racing us for recycle */ 
-	if (vp->v_type != VBAD) {
-		if (vp->v_lflag & VL_DEAD)
-			panic("new_vnode(%p): the vnode is VL_DEAD but not VBAD", vp);
-		vnode_lock_convert(vp);
-		(void)vnode_reclaim_internal(vp, 1, 1, 0);
 
-		if ((VONLIST(vp)))
-		        panic("new_vnode(%p): vp on list", vp);
-		if (vp->v_usecount || vp->v_iocount || vp->v_kusecount ||
-		    (vp->v_lflag & (VNAMED_UBC | VNAMED_MOUNT | VNAMED_FSHASH)))
-		        panic("new_vnode(%p): free vnode still referenced", vp);
-		if ((vp->v_mntvnodes.tqe_prev != 0) && (vp->v_mntvnodes.tqe_next != 0))
-		        panic("new_vnode(%p): vnode seems to be on mount list", vp);
-		if ( !LIST_EMPTY(&vp->v_nclinks) || !LIST_EMPTY(&vp->v_ncchildren))
-		        panic("new_vnode(%p): vnode still hooked into the name cache", vp);
-	}
-
-#ifndef __LP64__
+#if CONFIG_VFS_FUNNEL
 	if (vp->v_unsafefs) {
 	        l_unsafefs = vp->v_unsafefs;
 		vp->v_unsafefs = (struct unsafe_fsnode *)NULL;
 	}
-#endif /* __LP64__ */
+#endif /* CONFIG_VFS_FUNNEL */
 
 #if CONFIG_MACF
 	/*
@@ -3757,12 +4003,12 @@ steal_this_vp:
 
 	vnode_unlock(vp);
 
-#ifndef __LP64__
+#if CONFIG_VFS_FUNNEL
 	if (l_unsafefs) {
 	        lck_mtx_destroy(&l_unsafefs->fsnodelock, vnode_lck_grp);
 		FREE_ZONE((void *)l_unsafefs, sizeof(struct unsafe_fsnode), M_UNSAFEFS);
 	}
-#endif /* __LP64__ */
+#endif /* CONFIG_VFS_FUNNEL */
 
 done:
 	*vpp = vp;
@@ -3988,6 +4234,18 @@ vnode_suspend(vnode_t vp)
 	return(0);
 }
 					
+/*
+ * Release any blocked locking requests on the vnode.
+ * Used for forced-unmounts.
+ *
+ * XXX	What about network filesystems?
+ */
+static void
+vnode_abort_advlocks(vnode_t vp)
+{
+	if (vp->v_flag & VLOCKLOCAL)
+		lf_abort_advlocks(vp);
+}
 					
 
 static errno_t 
@@ -4345,6 +4603,14 @@ vnode_create(uint32_t flavor, uint32_t size, void *data, vnode_t *vpp)
 			insert = 0;
 			vnode_unlock(vp);
 		}
+
+		if (VCHR == vp->v_type) {
+			u_int maj = major(vp->v_rdev);
+
+			if (maj < (u_int)nchrdev &&
+			    (D_TYPEMASK & cdevsw[maj].d_type) == D_TTY)
+				vp->v_flag |= VISTTY;
+		}
 	}
 
 	if (vp->v_type == VFIFO) {
@@ -4378,7 +4644,7 @@ vnode_create(uint32_t flavor, uint32_t size, void *data, vnode_t *vpp)
 			 */
 			insmntque(vp, param->vnfs_mp);
 		}
-#ifndef __LP64__
+#if CONFIG_VFS_FUNNEL
 		if ((param->vnfs_mp->mnt_vtable->vfc_vfsflags & VFC_VFSTHREADSAFE) == 0) {
 			MALLOC_ZONE(vp->v_unsafefs, struct unsafe_fsnode *,
 				    sizeof(struct unsafe_fsnode), M_UNSAFEFS, M_WAITOK);
@@ -4386,7 +4652,7 @@ vnode_create(uint32_t flavor, uint32_t size, void *data, vnode_t *vpp)
 			vp->v_unsafefs->fsnodeowner  = (void *)NULL;
 			lck_mtx_init(&vp->v_unsafefs->fsnodelock, vnode_lck_grp, vnode_lck_attr);
 		}
-#endif /* __LP64__ */
+#endif /* CONFIG_VFS_FUNNEL */
 	}
 	if (dvp && vnode_ref(dvp) == 0) {
 		vp->v_parent = dvp;
@@ -7747,7 +8013,7 @@ errno_t rmdir_remove_orphaned_appleDouble(vnode_t vp , vfs_context_t ctx, int * 
 				       UIO_SYSSPACE, CAST_USER_ADDR_T(dp->d_name),
 				       ctx);
 				nd_temp.ni_dvp = vp;
-				error = unlink1(ctx, &nd_temp, 0);
+				error = unlink1(ctx, &nd_temp, VNODE_REMOVE_SKIP_NAMESPACE_EVENT);
 
 				if (error &&  error != ENOENT) {
 					goto outsc;

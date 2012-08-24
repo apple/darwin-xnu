@@ -42,7 +42,7 @@
 
 extern kern_return_t	kern_invalid(void);
 
-machdep_call_t		machdep_call_table[] = {
+const machdep_call_t		machdep_call_table[] = {
 	MACHDEP_CALL_ROUTINE(kern_invalid,0),
 	MACHDEP_CALL_ROUTINE(kern_invalid,0),
 	MACHDEP_CALL_ROUTINE(kern_invalid,0),
@@ -51,7 +51,7 @@ machdep_call_t		machdep_call_table[] = {
 	MACHDEP_BSD_CALL_ROUTINE(i386_set_ldt,3),
 	MACHDEP_BSD_CALL_ROUTINE(i386_get_ldt,3),
 };
-machdep_call_t		machdep_call_table64[] = {
+const machdep_call_t		machdep_call_table64[] = {
 	MACHDEP_CALL_ROUTINE(kern_invalid,0),
 	MACHDEP_CALL_ROUTINE(kern_invalid,0),
 	MACHDEP_CALL_ROUTINE(kern_invalid,0),

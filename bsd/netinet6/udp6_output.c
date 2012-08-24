@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2011 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2012 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -137,8 +137,6 @@
 extern int ipsec_bypass;
 #endif /*IPSEC*/
 
-#include "faith.h"
-
 #include <net/net_osdep.h>
 
 /*
@@ -186,16 +184,29 @@ udp6_output(in6p, m, addr6, control, p)
 	int flags;
 	struct sockaddr_in6 tmp;
 	struct	in6_addr storage;
-	mbuf_traffic_class_t mtc = MBUF_TC_UNSPEC;
-	struct ip6_out_args ip6oa = { IFSCOPE_NONE, 0 };
+	mbuf_svc_class_t msc = MBUF_SC_UNSPEC;
+	struct ip6_out_args ip6oa =
+	    { IFSCOPE_NONE, { 0 }, IP6OAF_SELECT_SRCIF };
+	struct flowadv *adv = &ip6oa.ip6oa_flowadv;
+	int flowadv = 0;
 
-	if (in6p->inp_flags & INP_BOUND_IF)
-		ip6oa.ip6oa_boundif = in6p->inp_boundif;
+	/* Enable flow advisory only when connected */
+	flowadv = (in6p->inp_socket->so_state & SS_ISCONNECTED) ? 1 : 0;
 
-	ip6oa.ip6oa_nocell = (in6p->inp_flags & INP_NO_IFT_CELLULAR) ? 1 : 0;
+	if (flowadv && INP_WAIT_FOR_IF_FEEDBACK(in6p)) {
+		error = ENOBUFS;
+		goto release;
+	}
+
+	if (in6p->inp_flags & INP_BOUND_IF) {
+		ip6oa.ip6oa_boundif = in6p->inp_boundifp->if_index;
+		ip6oa.ip6oa_flags |= IP6OAF_BOUND_IF;
+	}
+	if (in6p->inp_flags & INP_NO_IFT_CELLULAR)
+		ip6oa.ip6oa_flags |= IP6OAF_NO_CELLULAR;
 
 	if (control) {
-		mtc = mbuf_traffic_class_from_control(control);
+		msc = mbuf_service_class_from_control(control);
 
 		if ((error = ip6_setpktopts(control, &opt, NULL, IPPROTO_UDP)) != 0)
 			goto release;
@@ -212,7 +223,9 @@ udp6_output(in6p, m, addr6, control, p)
 		 * and in6_pcbsetport in order to fill in the local address
 		 * and the local port.
 		 */
-		struct sockaddr_in6 *sin6 = (struct sockaddr_in6 *)addr6;
+		struct sockaddr_in6 *sin6 =
+		    (struct sockaddr_in6 *)(void *)addr6;
+
 		if (sin6->sin6_port == 0) {
 			error = EADDRNOTAVAIL;
 			goto release;
@@ -296,6 +309,9 @@ udp6_output(in6p, m, addr6, control, p)
 		fport = in6p->in6p_fport;
 	}
 
+	if (in6p->inp_flowhash == 0)
+		in6p->inp_flowhash = inp_calc_flowhash(in6p);
+
 	if (af == AF_INET)
 		hlen = sizeof(struct ip);
 
@@ -312,7 +328,7 @@ udp6_output(in6p, m, addr6, control, p)
 	/*
 	 * Stuff checksum and output datagram.
 	 */
-	udp6 = (struct udphdr *)(mtod(m, caddr_t) + hlen);
+	udp6 = (struct udphdr *)(void *)(mtod(m, caddr_t) + hlen);
 	udp6->uh_sport = in6p->in6p_lport; /* lport is always set in the PCB */
 	udp6->uh_dport = fport;
 	if (plen <= 0xffff)
@@ -342,6 +358,9 @@ udp6_output(in6p, m, addr6, control, p)
 		m->m_pkthdr.csum_flags = CSUM_UDPIPV6;
 		m->m_pkthdr.csum_data = offsetof(struct udphdr, uh_sum);
 
+		if (!IN6_IS_ADDR_UNSPECIFIED(laddr))
+			ip6oa.ip6oa_flags |= IP6OAF_BOUND_SRCADDR;
+
 		flags = IPV6_OUTARGS;
 
 		udp6stat.udp6s_opackets++;
@@ -353,26 +372,53 @@ udp6_output(in6p, m, addr6, control, p)
 #endif /*IPSEC*/
 		m->m_pkthdr.socket_id = get_socket_id(in6p->in6p_socket);
 
-		set_packet_tclass(m, in6p->in6p_socket, mtc, 1);
+		set_packet_service_class(m, in6p->in6p_socket, msc, PKT_SCF_IPV6);
+
+		m->m_pkthdr.m_flowhash = in6p->inp_flowhash;
+		m->m_pkthdr.m_fhflags |= PF_TAG_FLOWHASH;
+		if (flowadv)
+			m->m_pkthdr.m_fhflags |= PF_TAG_FLOWADV;
 
 		im6o = in6p->in6p_moptions;
-		if (im6o != NULL)
-			IM6O_ADDREF(im6o);
+		if (im6o != NULL) {
+			IM6O_LOCK(im6o);
+			IM6O_ADDREF_LOCKED(im6o);
+			if (IN6_IS_ADDR_MULTICAST(&ip6->ip6_dst) &&
+			    im6o->im6o_multicast_ifp != NULL) {
+				in6p->in6p_last_outifp = im6o->im6o_multicast_ifp;
+			}
+			IM6O_UNLOCK(im6o);
+		}
+
+		in6p->inp_sndinprog_cnt++;
 
 		error = ip6_output(m, optp, &in6p->in6p_route,
 		    flags, im6o, NULL, &ip6oa);
 
 		if (im6o != NULL)
 			IM6O_REMREF(im6o);
-		
+
 		if (error == 0 && nstat_collect) {
 			locked_add_64(&in6p->inp_stat->txpackets, 1);
 			locked_add_64(&in6p->inp_stat->txbytes, ulen);
 		}
 
+		if (flowadv && (adv->code == FADV_FLOW_CONTROLLED ||
+		    adv->code == FADV_SUSPENDED)) {
+			/* return an error to indicate
+			 * that the packet has been dropped
+			 */
+			error = ENOBUFS;
+			inp_set_fc_state(in6p, adv->code);
+		}
+
+		VERIFY(in6p->inp_sndinprog_cnt > 0);
+		if ( --in6p->inp_sndinprog_cnt == 0)
+			in6p->inp_flags &= ~(INP_FC_FEEDBACK);
+
 		if (in6p->in6p_route.ro_rt != NULL) {
 			struct rtentry *rt = in6p->in6p_route.ro_rt;
-			unsigned int outif;
+			struct ifnet *outif;
 
 			if ((rt->rt_flags & RTF_MULTICAST) ||
 			    in6p->in6p_socket == NULL ||
@@ -390,11 +436,11 @@ udp6_output(in6p, m, addr6, control, p)
 			/*
 			 * If this is a connected socket and the destination
 			 * route is not multicast, update outif with that of
-			 * the route interface index used by IP.
+			 * the route interface used by IP.
 			 */
-			if (rt != NULL && (outif = rt->rt_ifp->if_index) !=
-			    in6p->in6p_last_outif)
-				in6p->in6p_last_outif = outif;
+			if (rt != NULL &&
+			    (outif = rt->rt_ifp) != in6p->in6p_last_outifp)
+				in6p->in6p_last_outifp = outif;
 		}
 		break;
 	case AF_INET:

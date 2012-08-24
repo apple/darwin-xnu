@@ -74,8 +74,6 @@
 #include <ipc/ipc_object.h>
 #include <ipc/ipc_mqueue.h>
 
-#include <mach_kdb.h>
-
 struct ipc_pset {
 
 	/*
@@ -93,7 +91,6 @@ struct ipc_pset {
 #define	ips_lock(pset)		io_lock(&(pset)->ips_object)
 #define	ips_lock_try(pset)	io_lock_try(&(pset)->ips_object)
 #define	ips_unlock(pset)	io_unlock(&(pset)->ips_object)
-#define	ips_check_unlock(pset)	io_check_unlock(&(pset)->ips_object)
 #define	ips_reference(pset)	io_reference(&(pset)->ips_object)
 #define	ips_release(pset)	io_release(&(pset)->ips_object)
 
@@ -112,7 +109,8 @@ extern kern_return_t ipc_pset_alloc_name(
 /* Add a port to a port set */
 extern kern_return_t ipc_pset_add(
 	ipc_pset_t	pset,
-	ipc_port_t	port);
+	ipc_port_t	port,
+	wait_queue_link_t wql);
 
 /* determine if port is a member of set */
 extern boolean_t ipc_pset_member(
@@ -122,25 +120,16 @@ extern boolean_t ipc_pset_member(
 /* Remove a port from a port set */
 extern kern_return_t ipc_pset_remove(
 	ipc_pset_t	pset,
-	ipc_port_t	port);
+	ipc_port_t	port,
+	wait_queue_link_t *wqlp);
 
 /* Remove a port from all its current port sets */
 extern kern_return_t ipc_pset_remove_from_all(
-	ipc_port_t	port);
+	ipc_port_t	port,
+	queue_t		links);
 
 /* Destroy a port_set */
 extern void ipc_pset_destroy(
 	ipc_pset_t	pset);
-
-#define	ipc_pset_reference(pset)	\
-		ipc_object_reference(&(pset)->ips_object)
-
-#define	ipc_pset_release(pset)		\
-		ipc_object_release(&(pset)->ips_object)
-
-
-#if	MACH_KDB
-int ipc_list_count(struct ipc_kmsg *base);
-#endif	/* MACH_KDB */
 
 #endif	/* _IPC_IPC_PSET_H_ */

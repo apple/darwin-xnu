@@ -188,6 +188,7 @@ cpu_IA32e_disable(cpu_data_t *cdp)
 #endif
 
 #if DEBUG
+extern void dump_regs64(void);
 extern void dump_gdt(void *);
 extern void dump_ldt(void *);
 extern void dump_idt(void *);
@@ -349,4 +350,49 @@ dump_tss(void *tssp)
 		kprintf("%p: 0x%08x\n", ip+0, *(ip+0));
 	}
 }
+
+#if defined(__x86_64__)
+void dump_regs64(void)
+{
+
+#define SNAP_REG(reg)						\
+	uint64_t	reg;					\
+	__asm__ volatile("mov %%" #reg ", %0" : "=m" (reg))
+
+#define KPRINT_REG(reg)						\
+	kprintf("%3s: %p\n", #reg, (void *) reg)
+
+	SNAP_REG(rsp);
+	SNAP_REG(rbp);
+	SNAP_REG(rax);
+	SNAP_REG(rbx);
+	SNAP_REG(rcx);
+	SNAP_REG(rdx);
+	SNAP_REG(rsi);
+	SNAP_REG(rdi);
+	SNAP_REG(r8);
+	SNAP_REG(r9);
+	SNAP_REG(r10);
+	SNAP_REG(r11);
+	SNAP_REG(r12);
+	SNAP_REG(r13);
+	SNAP_REG(r14);
+
+	KPRINT_REG(rsp);
+	KPRINT_REG(rbp);
+	KPRINT_REG(rax);
+	KPRINT_REG(rbx);
+	KPRINT_REG(rcx);
+	KPRINT_REG(rdx);
+	KPRINT_REG(rsi);
+	KPRINT_REG(rdi);
+	KPRINT_REG(r8);
+	KPRINT_REG(r9);
+	KPRINT_REG(r10);
+	KPRINT_REG(r11);
+	KPRINT_REG(r12);
+	KPRINT_REG(r13);
+	KPRINT_REG(r14);
+}
+#endif /* __x86_64__ */
 #endif /* DEBUG */

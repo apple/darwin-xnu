@@ -82,9 +82,7 @@ mach_get_task_label(
 	kr = ipc_object_copyout(space, (ipc_object_t) lh->lh_port,
 	    MACH_MSG_TYPE_PORT_SEND, 0, outlabel);
 	if (kr != KERN_SUCCESS) {
-		ip_lock(lh->lh_port);
 		ip_release(lh->lh_port);
-		ip_check_unlock(lh->lh_port);
 		*outlabel = MACH_PORT_NULL;
 	}
   
@@ -236,14 +234,16 @@ mac_port_check_service_obj(
 		return kr;
 	}
 
-	dead = ipc_right_check(space, (ipc_port_t) entry->ie_object, obj, entry);
+	objp = entry->ie_object;
+	port = (ipc_port_t)objp;
+	dead = ipc_right_check(space, port, obj, entry);
 	if (dead) {
 		is_write_unlock(space);
+		ip_release(port);
 		mac_task_label_destroy(&subjl);
 		return KERN_INVALID_RIGHT;
 	}
 
-	objp = entry->ie_object;
 	io_lock (objp);
 	is_write_unlock (space);
 

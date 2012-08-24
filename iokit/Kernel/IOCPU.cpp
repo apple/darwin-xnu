@@ -42,6 +42,7 @@ extern "C" {
 #include <IOKit/IOLib.h>
 #include <IOKit/IOPlatformExpert.h>
 #include <IOKit/pwr_mgt/RootDomain.h>
+#include <IOKit/pwr_mgt/IOPMPrivate.h>
 #include <IOKit/IOUserClient.h>
 #include <IOKit/IOKitKeysPrivate.h>
 #include <IOKit/IOCPU.h>
@@ -50,13 +51,15 @@ extern "C" {
 #include <kern/queue.h>
 
 typedef kern_return_t (*iocpu_platform_action_t)(void * refcon0, void * refcon1, uint32_t priority,
-						 void * param1, void * param2, void * param3);
+						 void * param1, void * param2, void * param3,
+						 const char * name);
 
 struct iocpu_platform_action_entry
 {
     queue_chain_t                     link;
     iocpu_platform_action_t           action;
     int32_t	                      priority;
+    const char *		      name;
     void *	                      refcon0;
     void *			      refcon1;
     struct iocpu_platform_action_entry * alloc_list;
@@ -168,7 +171,7 @@ iocpu_run_platform_actions(queue_head_t * queue, uint32_t first_priority, uint32
 	if ((pri >= first_priority) && (pri <= last_priority))
 	{
 	    //kprintf("[%p]", next->action);
-	    ret = (*next->action)(next->refcon0, next->refcon1, pri, param1, param2, param3);
+	    ret = (*next->action)(next->refcon0, next->refcon1, pri, param1, param2, param3, next->name);
 	}
 	if (KERN_SUCCESS == result)
 	    result = ret;
@@ -194,13 +197,14 @@ IOCPURunPlatformActiveActions(void)
 
 static kern_return_t 
 IOServicePlatformAction(void * refcon0, void * refcon1, uint32_t priority,
-			  void * param1, void * param2, void * param3)
+			  void * param1, void * param2, void * param3,
+			  const char * service_name)
 {
     IOReturn	     ret;
     IOService *      service  = (IOService *)      refcon0;
     const OSSymbol * function = (const OSSymbol *) refcon1;
 
-    kprintf("%s -> %s\n", function->getCStringNoCopy(), service->getName());
+    kprintf("%s -> %s\n", function->getCStringNoCopy(), service_name);
 
     ret = service->callPlatformFunction(function, false, 
 					 (void *) priority, param1, param2, param3);
@@ -223,6 +227,7 @@ IOInstallServicePlatformAction(IOService * service,
 
     entry = IONew(iocpu_platform_action_entry_t, 1);
     entry->action = &IOServicePlatformAction;
+    entry->name = service->getName();
     priority = num->unsigned32BitValue();
     if (reverse)
 	entry->priority = -priority;
@@ -306,8 +311,9 @@ void IOCPUSleepKernel(void)
 
     kprintf("IOCPUSleepKernel\n");
 
-    OSIterator * iter;
-    IOService *  service;
+    IORegistryIterator * iter;
+    OSOrderedSet *       all;
+    IOService *          service;
 
     rootDomain->tracePoint( kIOPMTracePointSleepPlatformActions );
 
@@ -318,19 +324,28 @@ void IOCPUSleepKernel(void)
 					    kIORegistryIterateRecursively );
     if( iter)
     {
-	do
+	all = 0;
+	do 
 	{
-	    iter->reset();
-	    while((service = (IOService *) iter->getNextObject()))
+	    if (all)
+		all->release();
+	    all = iter->iterateAll();
+	}
+	while (!iter->isValid());
+	iter->release();
+
+	if (all)
+	{
+	    while((service = (IOService *) all->getFirstObject()))
 	    {
 		IOInstallServicePlatformAction(service, gIOPlatformSleepActionKey,   &gIOSleepActionQueue,		 false);
 		IOInstallServicePlatformAction(service, gIOPlatformWakeActionKey,    &gIOWakeActionQueue,		 true);
 		IOInstallServicePlatformAction(service, gIOPlatformQuiesceActionKey, iocpu_get_platform_quiesce_queue(), false);
 		IOInstallServicePlatformAction(service, gIOPlatformActiveActionKey,  iocpu_get_platform_active_queue(),  true);
+		all->removeObject(service);
 	    }
-	}
-	while( !service && !iter->isValid());
-	iter->release();
+	    all->release();
+	}	
     }
 
     iocpu_run_platform_actions(&gIOSleepActionQueue, 0, 0U-1,

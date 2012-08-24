@@ -3,8 +3,8 @@
 OPTIONS/libkerncpp					optional libkerncpp
 OPTIONS/kdebug						optional kdebug
 OPTIONS/gprof						optional gprof
-OPTIONS/config_dtrace				optional config_dtrace
-OPTIONS/hibernation				optional hibernation
+OPTIONS/config_dtrace					optional config_dtrace
+OPTIONS/hibernation					optional hibernation
 OPTIONS/networking					optional networking
 OPTIONS/crypto						optional crypto
 OPTIONS/zlib						optional zlib
@@ -59,10 +59,15 @@ libkern/zlib/trees.c                                    optional zlib
 libkern/zlib/uncompr.c                                  optional zlib
 libkern/zlib/zutil.c                                    optional zlib
 
-libkern/crypto/md5.c				optional crypto
-libkern/crypto/md5.c				optional networking
-libkern/crypto/sha1.c				optional crypto
-libkern/crypto/sha1.c				optional ipsec
+libkern/crypto/register_crypto.c		optional crypto
+libkern/crypto/corecrypto_sha2.c               optional crypto allcrypto
+libkern/crypto/corecrypto_sha1.c		optional crypto
+libkern/crypto/corecrypto_sha1.c		optional ipsec
+libkern/crypto/corecrypto_md5.c			optional crypto
+libkern/crypto/corecrypto_md5.c			optional networking
+libkern/crypto/corecrypto_des.c			optional crypto
+libkern/crypto/corecrypto_aes.c			optional crypto
+libkern/crypto/corecrypto_aesxts.c		optional crypto
 
 libkern/stack_protector.c       standard
 
@@ -76,9 +81,11 @@ libkern/kxld/kxld_reloc.c       optional config_kxld
 libkern/kxld/kxld_object.c      optional config_kxld
 libkern/kxld/kxld_sect.c        optional config_kxld
 libkern/kxld/kxld_seg.c         optional config_kxld
+libkern/kxld/kxld_srcversion.c  optional config_kxld
 libkern/kxld/kxld_sym.c         optional config_kxld
 libkern/kxld/kxld_symtab.c      optional config_kxld
 libkern/kxld/kxld_util.c        optional config_kxld
 libkern/kxld/kxld_uuid.c        optional config_kxld
+libkern/kxld/kxld_versionmin.c  optional config_kxld
 libkern/kxld/kxld_vtable.c      optional config_kxld
 libkern/kxld/kxld_stubs.c       standard

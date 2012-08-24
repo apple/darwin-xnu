@@ -56,7 +56,6 @@
 /* 
  */
 
-#include <stat_time.h>
 #include <machine_timer_routines.h>
 
 #include <mach/kern_return.h>
@@ -67,6 +66,12 @@
 #include <kern/sched_prim.h>
 #include <kern/timer.h>
 
+#if CONFIG_EMBEDDED
+int precise_user_kernel_time = 0;
+#else
+int precise_user_kernel_time = 1;
+#endif
+
 /*
  *	timer_init initializes a timer.
  */
@@ -74,9 +79,7 @@ void
 timer_init(
 	timer_t		timer)
 {
-#if	!STAT_TIME
 	timer->tstamp = 0;
-#endif	/* STAT_TIME */
 #if	defined(__LP64__)
 	timer->all_bits = 0;
 #else
@@ -119,8 +122,6 @@ timer_advance(
 		timer->low_bits = (uint32_t)low;
 #endif 	/* defined(__LP64__) */
 }
-
-#if	!STAT_TIME
 
 void
 timer_start(
@@ -188,5 +189,3 @@ thread_timer_event(
 }
 
 #endif	/* MACHINE_TIMER_ROUTINES */
-
-#endif	/* STAT_TIME */

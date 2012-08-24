@@ -53,7 +53,7 @@ gssd_mach  999;
 
 serverprefix svc_;
 
-routine mach_gss_init_sec_context(
+Routine mach_gss_init_sec_context(
 	server			: mach_port_t;
 	in  mech		: gssd_mechtype;
 	in  intoken		: gssd_byte_buffer;
@@ -64,6 +64,7 @@ routine mach_gss_init_sec_context(
 	in  gssd_flags		: uint32_t;
 	inout context		: gssd_ctx;
 	inout cred_handle	: gssd_cred;
+	ServerAuditToken atoken	: audit_token_t;
 	out  ret_flags		: uint32_t;
 	out  key		: gssd_byte_buffer, dealloc;
 	out outtoken		: gssd_byte_buffer, dealloc;
@@ -78,6 +79,7 @@ routine mach_gss_accept_sec_context(
 	in  gssd_flags		: uint32_t;
 	inout context		: gssd_ctx;
 	inout cred_handle	: gssd_cred;
+	ServerAuditToken atoken	: audit_token_t;
 	out flags		: uint32_t;
 	out uid			: uint32_t;
 	out gids		: gssd_gid_list;
@@ -93,7 +95,8 @@ simpleroutine mach_gss_log_error(
 	in  uid			: uint32_t;
 	in  source		: gssd_string;
 	in  major_stat		: uint32_t;
-	in  minor_stat		: uint32_t
+	in  minor_stat		: uint32_t;
+	ServerAuditToken atoken	: audit_token_t
 );
 
 routine mach_gss_init_sec_context_v2(
@@ -109,6 +112,7 @@ routine mach_gss_init_sec_context_v2(
 	inout gssd_flags	: uint32_t;
 	inout context		: gssd_ctx;
 	inout cred_handle	: gssd_cred;
+	ServerAuditToken atoken	: audit_token_t;
 	out  ret_flags		: uint32_t;
 	out  key		: gssd_byte_buffer, dealloc;
 	out outtoken		: gssd_byte_buffer, dealloc;
@@ -125,6 +129,7 @@ routine mach_gss_accept_sec_context_v2(
 	inout gssd_flags	: uint32_t;
 	inout context		: gssd_ctx;
 	inout cred_handle	: gssd_cred;
+	ServerAuditToken atoken	: audit_token_t;
 	out flags		: uint32_t;
 	out uid			: uint32_t;
 	out gids		: gssd_gid_list;
@@ -139,6 +144,7 @@ routine mach_gss_hold_cred(
 	in  mech		: gssd_mechtype;
 	in  nt			: gssd_nametype;
 	in  princ		: gssd_byte_buffer;
+	ServerAuditToken atoken	: audit_token_t;
 	out major_stat		: uint32_t;
 	out minor_stat		: uint32_t
 );
@@ -148,6 +154,15 @@ routine mach_gss_unhold_cred(
 	in  mech		: gssd_mechtype;
 	in  nt			: gssd_nametype;
 	in  princ		: gssd_byte_buffer;
+	ServerAuditToken atoken	: audit_token_t;
 	out major_stat		: uint32_t;
 	out minor_stat		: uint32_t
+);
+
+routine mach_gss_lookup(
+	server			: mach_port_t;
+	in  uid			: uint32_t;
+	in  asid		: int32_t;
+	ServerAuditToken atoken	: audit_token_t;
+	out gssd_session_port	: mach_port_t
 );

@@ -55,8 +55,9 @@
 					 * Random values used by execve tests to 
 					 * determine architecture of machine.
 					 */
-#define	FILE_NOTME	"/tmp/notme"	/* file in /tm not owned by me */
-#define	FILE_ME		"/tmp/me"	/* file in /tmp owned by me */
+
+#define FILE_NOTME "/private/tmp/notme"		/* file in /private/tmp not owned by the current user */
+#define FILE_ME "/private/tmp/me"		/* file in /private/tmp owned by the current user */
 
 typedef int (*test_rtn_t)(void *);
 
@@ -72,6 +73,7 @@ int create_file_with_name( char *the_pathp, char *the_namep, int remove_existing
 int create_random_name( char *the_pathp, int do_open );
 int directory_tests( void * the_argp );
 int do_execve_test(char * path, char * argv[], void * envpi, int killwait);
+int do_spawn_test(int arch, int shouldfail);
 int dup_test( void * the_argp );
 int exchangedata_test( void * the_argp );
 int execve_kill_vfork_test( void * the_argp );
@@ -118,6 +120,9 @@ int statfs_32bit_inode_tests( void * the_argp );
 int commpage_data_tests( void * the_argp );
 int atomic_fifo_queue_test( void * the_argp );
 int sched_tests( void * the_argp );
+int content_protection_test( void * the_argp );
+int pipes_test( void * the_argp );
+int kaslr_test( void * the_argp );
 
 struct test_entry 
 {

@@ -68,8 +68,6 @@ extern void *kalloc(vm_size_t	size);
 
 extern void *kalloc_noblock(vm_size_t	size);
 
-extern void *kget(vm_size_t	size);
-
 extern void kfree(void		*data,
 		  vm_size_t	size);
 
@@ -79,14 +77,7 @@ __END_DECLS
 
 #include <kern/lock.h>
 
-#define KALLOC_MINSIZE		16
-
 extern void		kalloc_init(void) __attribute__((section("__TEXT, initcode")));
-
-extern void		krealloc(void		**addrp,
-				 vm_size_t	old_size,
-				 vm_size_t	new_size,
-				 simple_lock_t	lock);
 
 extern void		kalloc_fake_zone_init( int );
 

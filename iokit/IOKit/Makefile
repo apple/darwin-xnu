@@ -26,12 +26,11 @@ INSTINC_SUBDIRS_I386 =
 
 INSTINC_SUBDIRS_X86_64 = 
 
-INSTINC_SUBDIRS_ARM = 
 
 EXPINC_SUBDIRS = ${INSTINC_SUBDIRS}
 EXPINC_SUBDIRS_I386 = ${INSTINC_SUBDIRS_I386}
 EXPINC_SUBDIRS_X86_64 = ${INSTINC_SUBDIRS_X86_64}
-EXPINC_SUBDIRS_ARM = ${INSTINC_SUBDIRS_ARM}
+
 
 NOT_EXPORT_HEADERS = 
 
@@ -39,7 +38,7 @@ NOT_KF_MI_HEADERS  = $(NOT_EXPORT_HEADERS)			\
 		     IOKitKeysPrivate.h IOCPU.h			\
 		     IOHibernatePrivate.h IOPolledInterface.h	\
 		     IOCommandQueue.h IOLocksPrivate.h 		\
-		     AppleKeyStoreInterface.h			\
+		     IOSyncer.h AppleKeyStoreInterface.h	\
 		     IOStatistics.h IOStatisticsPrivate.h
 
 NOT_LOCAL_HEADERS = 

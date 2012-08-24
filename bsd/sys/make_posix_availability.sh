@@ -22,6 +22,17 @@
 # @APPLE_OSREFERENCE_LICENSE_HEADER_END@
 #
 
+function usage() {
+    echo "Usage: $0 <output>" 1>&2
+    exit 1
+}
+
+if [ $# -ne 1 ]; then
+    usage
+fi
+
+OUTPUT="$1"
+
 POSIX_VALUES="198808L 199009L 199209L 199309L 199506L 200112L 200809L"
 
 {
@@ -67,5 +78,5 @@ for value in ${POSIX_VALUES} ; do
     echo "#endif"
     echo
 done
-} > $1
+} > "$OUTPUT"
 

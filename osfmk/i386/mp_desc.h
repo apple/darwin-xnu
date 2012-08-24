@@ -60,7 +60,6 @@
 #ifndef	_I386_MP_DESC_H_
 #define	_I386_MP_DESC_H_
 
-#include <mach_kdb.h>
 #include <sys/cdefs.h>
 
 __BEGIN_DECLS
@@ -80,19 +79,18 @@ __BEGIN_DECLS
 /*
  * The descriptor tables are together in a structure
  * allocated one per processor (except for the boot processor).
- * Note that dbtss could be conditionalized on MACH_KDB, but
- * doing so increases misconfiguration risk.
  */
 typedef struct cpu_desc_table {
 	struct fake_descriptor	idt[IDTSZ] __attribute__ ((aligned (16)));
 	struct fake_descriptor	gdt[GDTSZ] __attribute__ ((aligned (16)));
 	struct i386_tss		ktss       __attribute__ ((aligned (16)));
-	struct i386_tss		dbtss      __attribute__ ((aligned (16)));
 	struct sysenter_stack	sstk;
 } cpu_desc_table_t;
 
 typedef struct cpu_desc_table64 {
+#if !__x86_64__
 	struct fake_descriptor64 idt[IDTSZ]      __attribute__ ((aligned (16)));
+#endif
 	struct fake_descriptor	gdt[GDTSZ]       __attribute__ ((aligned (16)));
 	struct x86_64_tss	ktss             __attribute__ ((aligned (16)));
 	struct sysenter_stack	sstk	         __attribute__ ((aligned (16)));
@@ -103,7 +101,6 @@ typedef struct cpu_desc_table64 {
 #define	current_idt()	(current_cpu_datap()->cpu_desc_index.cdi_idt.ptr)
 #define	current_ldt()	(current_cpu_datap()->cpu_desc_index.cdi_ldt)
 #define	current_ktss()	(current_cpu_datap()->cpu_desc_index.cdi_ktss)
-#define	current_dbtss()	(current_cpu_datap()->cpu_desc_index.cdi_dbtss)
 #define	current_sstk()	(current_cpu_datap()->cpu_desc_index.cdi_sstk)
 
 #define	current_ktss64() ((struct x86_64_tss *) current_ktss())

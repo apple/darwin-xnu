@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1998-2008 Apple Inc. All rights reserved.
+ * Copyright (c) 1998-2011 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -155,83 +155,6 @@ OSDictionary * IOUUIDMatching( void )
     return IOService::resourceMatching( "boot-uuid-media" );
 }
 
-
-OSDictionary * IOCDMatching( void )
-{
-    OSDictionary *	dict;
-    const OSSymbol *	str;
-    
-    dict = IOService::serviceMatching( "IOMedia" );
-    if( dict == 0 ) {
-        IOLog("Unable to find IOMedia\n");
-        return 0;
-    }
-    
-    str = OSSymbol::withCString( "CD_ROM_Mode_1" );
-    if( str == 0 ) {
-        dict->release();
-        return 0;
-    }
-    
-    dict->setObject( "Content Hint", (OSObject *)str );
-    str->release();        
-    return( dict );
-}
-
-OSDictionary * IONetworkMatching(  const char * path,
-				   char * buf, int maxLen )
-{
-    OSDictionary *	matching = 0;
-    OSDictionary *	dict;
-    OSString *		str;
-    char *		comp;
-    const char *	skip;
-    int			len;
-
-    do {
-
-	len = strlen( kIODeviceTreePlane ":" );
-	maxLen -= len;
-	if( maxLen <= 0)
-	    continue;
-
-	strlcpy( buf, kIODeviceTreePlane ":", len + 1 );
-	comp = buf + len;
-
-        // remove parameters following ':' from the path
-        skip = strchr( path, ':');
-	if( !skip)
-	    continue;
-
-        len = skip - path;
-	maxLen -= len;
-	if( maxLen <= 0)
-	    continue;
-	strlcpy( comp, path, len + 1 );
-
-	matching = IOService::serviceMatching( "IONetworkInterface" );
-	if( !matching)
-	    continue;
-	dict = IOService::addLocation( matching );
-	if( !dict)
-	    continue;
-
-	str = OSString::withCString( buf );
-	if( !str)
-	    continue;
-        dict->setObject( kIOPathMatchKey, str );
-	str->release();
-
-	return( matching );
-
-    } while( false );
-
-    if( matching)
-        matching->release();
-
-    return( 0 );
-}
-
 OSDictionary * IONetworkNamePrefixMatching( const char * prefix )
 {
     OSDictionary *	 matching;
@@ -339,120 +262,12 @@ static bool IORegisterNetworkInterface( IOService * netif )
 	return ( netif->getProperty( kIOBSDNameKey ) != 0 );
 }
 
-OSDictionary * IODiskMatching( const char * path, char * buf, int maxLen )
-{
-    const char * look;
-    const char * alias;
-    char *       comp;
-    long         unit = -1;
-    long         partition = -1;
-    long		 lun = -1;
-    char         c;
-    int          len;
-
-    // scan the tail of the path for "@unit:partition"
-    do {
-        // Have to get the full path to the controller - an alias may
-        // tell us next to nothing, like "hd:8"
-        alias = IORegistryEntry::dealiasPath( &path, gIODTPlane );
-		
-        look = path + strlen( path);
-        c = ':';
-        while( look != path) {
-            if( *(--look) == c) {
-                if( c == ':') {
-                    partition = strtol( look + 1, 0, 0 );
-                    c = '@';
-                } else if( c == '@') {
-                    unit = strtol( look + 1, &comp, 16 );
-
-                    if( *comp == ',') {
-                        lun = strtol( comp + 1, 0, 16 );
-                    }
-                    
-                    c = '/';
-                } else if( c == '/') {
-                    c = 0;
-                    break;
-                }
-            }
-
-	        if( alias && (look == path)) {
-                path = alias;
-                look = path + strlen( path);
-                alias = 0;
-            }
-        }
-        if( c || unit == -1 || partition == -1)
-            continue;
-		
-        len = strlen( "{" kIOPathMatchKey "='" kIODeviceTreePlane ":" );
-        maxLen -= len;
-        if( maxLen <= 0)
-            continue;
-
-        snprintf( buf, len + 1, "{" kIOPathMatchKey "='" kIODeviceTreePlane ":" );
-        comp = buf + len;
-
-        if( alias) {
-            len = strlen( alias );
-            maxLen -= len;
-            if( maxLen <= 0)
-                continue;
-
-            strlcpy( comp, alias, len + 1 );
-            comp += len;
-        }
-
-        if ( (look - path)) {
-            len = (look - path);
-            maxLen -= len;
-            if( maxLen <= 0)
-                continue;
-
-            strlcpy( comp, path, len + 1 );
-            comp += len;
-        }
-			
-        if ( lun != -1 )
-        {
-            len = strlen( "/@hhhhhhhh,hhhhhhhh:dddddddddd';}" );
-            maxLen -= len;
-            if( maxLen <= 0)
-                continue;
-
-            snprintf( comp, len + 1, "/@%lx,%lx:%ld';}", unit, lun, partition );
-        }
-        else
-        {
-            len = strlen( "/@hhhhhhhh:dddddddddd';}" );
-            maxLen -= len;
-            if( maxLen <= 0)
-                continue;
-
-            snprintf( comp, len + 1, "/@%lx:%ld';}", unit, partition );
-        }
-		
-        return( OSDynamicCast(OSDictionary, OSUnserialize( buf, 0 )) );
-
-    } while( false );
-
-    return( 0 );
-}
-
 OSDictionary * IOOFPathMatching( const char * path, char * buf, int maxLen )
 {
     OSDictionary *	matching;
     OSString *		str;
     char *		comp;
     int			len;
-
-    /* need to look up path, get device type,
-        call matching help based on device type */
-
-    matching = IODiskMatching( path, buf, maxLen );
-    if( matching)
-	return( matching );
 
     do {
 
@@ -490,42 +305,6 @@ OSDictionary * IOOFPathMatching( const char * path, char * buf, int maxLen )
     return( 0 );
 }
 
-IOService * IOFindMatchingChild( IOService * service )
-{
-    // find a matching child service
-    IOService * child = 0;
-    OSIterator * iter = service->getClientIterator();
-    if ( iter ) {
-        while( ( child = (IOService *) iter->getNextObject() ) ) {
-            OSDictionary * dict = OSDictionary::withCapacity( 1 );
-            if( dict == 0 ) {
-                iter->release();
-                return 0;
-            }
-            const OSSymbol * str = OSSymbol::withCString( "Apple_HFS" );
-            if( str == 0 ) {
-                dict->release();
-                iter->release();
-                return 0;
-            }
-            dict->setObject( "Content", (OSObject *)str );
-            str->release();
-            if ( child->compareProperty( dict, "Content" ) ) {
-                dict->release();
-                break;
-            }
-            dict->release();
-            IOService * subchild = IOFindMatchingChild( child );
-            if ( subchild ) {
-                child = subchild;
-                break;
-            }
-        }
-        iter->release();
-    }
-    return child;
-}
-
 static int didRam = 0;
 
 kern_return_t IOFindBSDRoot( char * rootName, unsigned int rootNameSize,
@@ -538,18 +317,15 @@ kern_return_t IOFindBSDRoot( char * rootName, unsigned int rootNameSize,
     OSString *		iostr;
     OSNumber *		off;
     OSData *		data = 0;
-    UInt32		*ramdParms = 0;
 
     UInt32		flags = 0;
     int			mnr, mjr;
-    bool		findHFSChild = false;
     const char *        mediaProperty = 0;
     char *		rdBootVar;
     enum {		kMaxPathBuf = 512, kMaxBootVar = 128 };
     char *		str;
     const char *	look = 0;
     int			len;
-    bool		forceNet = false;
     bool		debugInfoPrintedOnce = false;
     const char * 	uuidStr = NULL;
 
@@ -599,33 +375,9 @@ kern_return_t IOFindBSDRoot( char * rootName, unsigned int rootNameSize,
 		    uuidStr = NULL;
 		}
 	    }
-
-	    // else try for an OF Path
-	    data = (OSData *) regEntry->getProperty( "rootpath" );
 	    regEntry->release();
-	    if( data) continue;
-	}
-        if( (regEntry = IORegistryEntry::fromPath( "/options", gIODTPlane ))) {
-	    data = (OSData *) regEntry->getProperty( "boot-file" );
-	    regEntry->release();
-	    if( data) continue;
 	}
     } while( false );
-
-    if( data && !uuidStr)
-        look = (const char *) data->getBytesNoCopy();
-
-    if( rdBootVar[0] == '*') {
-        look = rdBootVar + 1;
-		forceNet = false;
-    } else {
-        if( (regEntry = IORegistryEntry::fromPath( "/", gIODTPlane ))) {
-            forceNet = (0 != regEntry->getProperty( "net-boot" ));
-	    	regEntry->release();
-		}
-    }
-
-
 
 //
 //	See if we have a RAMDisk property in /chosen/memory-map.  If so, make it into a device.
@@ -637,7 +389,7 @@ kern_return_t IOFindBSDRoot( char * rootName, unsigned int rootNameSize,
 		if((regEntry = IORegistryEntry::fromPath( "/chosen/memory-map", gIODTPlane ))) {	/* Find the map node */
 			data = (OSData *)regEntry->getProperty("RAMDisk");	/* Find the ram disk, if there */
 			if(data) {											/* We found one */
-
+				UInt32		*ramdParms = 0;
 				ramdParms = (UInt32 *)data->getBytesNoCopy();	/* Point to the ram disk base and size */
 				(void)mdevadd(-1, ml_static_ptovirt(ramdParms[0]) >> 12, ramdParms[1] >> 12, 0);	/* Initialize it and pass back the device number */
 			}
@@ -676,19 +428,6 @@ kern_return_t IOFindBSDRoot( char * rootName, unsigned int rootNameSize,
 		}
 	}
 
-    if( look) {
-	// from OpenFirmware path
-	IOLog("From path: \"%s\", ", look);
-
-        if (!matching) {
-            if( forceNet || (0 == strncmp( look, "enet", strlen( "enet" ))) ) {
-                matching = IONetworkMatching( look, str, kMaxPathBuf );
-            } else {
-                matching = IODiskMatching( look, str, kMaxPathBuf );
-            }
-        }
-    }
-    
       if( (!matching) && rdBootVar[0] ) {
 	// by BSD name
 	look = rdBootVar;
@@ -697,10 +436,7 @@ kern_return_t IOFindBSDRoot( char * rootName, unsigned int rootNameSize,
     
 	if ( strncmp( look, "en", strlen( "en" )) == 0 ) {
 	    matching = IONetworkNamePrefixMatching( "en" );
-	} else if ( strncmp( look, "cdrom", strlen( "cdrom" )) == 0 ) {
-            matching = IOCDMatching();
-            findHFSChild = true;
-        } else if ( strncmp( look, "uuid", strlen( "uuid" )) == 0 ) {
+	} else if ( strncmp( look, "uuid", strlen( "uuid" )) == 0 ) {
             char *uuid;
             OSString *uuidString;
 
@@ -772,25 +508,7 @@ kern_return_t IOFindBSDRoot( char * rootName, unsigned int rootNameSize,
     } while( !service);
     matching->release();
 
-    if ( service && findHFSChild ) {
-        bool waiting = true;
-        uint64_t    timeoutNS;
-
-        // wait for children services to finish registering
-        while ( waiting ) {
-            timeoutNS = ROOTDEVICETIMEOUT;
-            timeoutNS *= kSecondScale;
-            
-            if ( (service->waitQuiet(timeoutNS) ) == kIOReturnSuccess) {
-                waiting = false;
-            } else {
-                IOLog( "Waiting for child registration\n" );
-            }
-        }
-        // look for a subservice with an Apple_HFS child
-        IOService * subservice = IOFindMatchingChild( service );
-        if ( subservice ) service = subservice;
-    } else if ( service && mediaProperty ) {
+    if ( service && mediaProperty ) {
         service = (IOService *)service->getProperty(mediaProperty);
     }
 

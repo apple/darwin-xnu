@@ -20,6 +20,7 @@ runs the libMicro test suite excluding the lmbench tests and gives you a text fi
 gives you a html file comparing two runs.
 
 *** To run libMicro testsuite with stepper disabled ***
+*** For Desktop use coreos_bench script***
 
 To get a more consistent result of libMicro benchmark run, we need to disable the 
 stepper to prevent it from causing wide variations in results. See rdar://6243819 
@@ -38,6 +39,10 @@ which provides '/usr/local/bin/pstates'.
 
 2) 'coreos_bench' script is used exactly like the 'bench' script. All the usage examples for 
 'bench' script in this readme file also holds true for 'coreos_bench' script. 
+
+
+
+
 
 *** Makefile ***
 
@@ -62,8 +67,11 @@ ARCH 		defaults to  i386
 	the makefile will automatically build with ARCH_FLAG="-arch i386 -arch x86_64" and put the results in bin-fat
 
         to build for ARM architecture,
-        first set an environment variable 'SDKROOT' to point to iPhone sdk
-                make ARCH=ARM_ARCH where ARM_ARCH can be armv6 or armv7
+        first set an environment variable 'SDKROOT' to point to iPhone internal sdk
+	For example:
+		$export SDKROOT="/Developer/Platforms/iPhoneOS.platform/Developer/SDKs/iPhoneOS5.0.Internal.sdk/"
+	to build use:
+                make ARCH=ARM_ARCH where ARM_ARCH can be for e.g. armv6, armv7 
         this will put the results in bin-ARM_ARCH
 
 	to build with only two of the architectures see below
@@ -98,6 +106,9 @@ system then needs to be rebooted.
 
 The shell script "bench" will run all the benchmarks, or you can
 pass it a parameter to run a single benchmark, e.g.
+
+*** To run libMicro on the embedded platform, use "embd_bench" script. 'embd_bench' script is used exactly like the 'bench' script. All the usage examples for 
+'bench' script in this readme file also holds true for 'embd_bench' script. ***
 
 	bench lmbench_bw_unix
 

@@ -88,6 +88,7 @@ kern_return_t vm_purgeable_token_add(purgeable_q_t queue);
 
 /* enter with page queue locked */
 void vm_purgeable_token_delete_first(purgeable_q_t queue);
+void vm_purgeable_token_delete_last(purgeable_q_t queue);
 
 /*
  * decrement token counters.

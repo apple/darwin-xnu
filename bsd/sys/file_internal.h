@@ -139,7 +139,6 @@ typedef enum {
 #define FG_NOSIGPIPE	0x40	/* don't deliver SIGPIPE with EPIPE return */
 
 struct fileglob {
-	LIST_ENTRY(fileglob) f_list;/* list of active files */
 	LIST_ENTRY(fileglob) f_msglist;/* list of active files */
 	int32_t	fg_flag;		/* see fcntl.h */
 	file_type_t fg_type;		/* descriptor type */
@@ -172,9 +171,7 @@ struct fileglob {
 };
 
 #ifdef __APPLE_API_PRIVATE
-LIST_HEAD(filelist, fileglob);
 LIST_HEAD(fmsglist, fileglob);
-extern struct filelist filehead;	/* head of list of open files */
 extern struct fmsglist fmsghead;	/* head of list of open files */
 extern int maxfiles;			/* kernel limit on number of open files */
 extern int nfiles;			/* actual number of open files */

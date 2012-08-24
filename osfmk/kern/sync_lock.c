@@ -51,6 +51,7 @@
 
 #include <ipc/ipc_port.h>
 #include <ipc/ipc_space.h>
+#include <libkern/OSAtomic.h>
 
 /*
  *	Ulock ownership MACROS
@@ -838,9 +839,7 @@ lock_handoff_accept (lock_set_t lock_set, int lock_id)
 void
 lock_set_reference(lock_set_t lock_set)
 {
-	lock_set_lock(lock_set);
-	lock_set->ref_count++;
-	lock_set_unlock(lock_set);
+	OSIncrementAtomic(&((lock_set)->ref_count));
 }
 
 /*
@@ -852,14 +851,9 @@ lock_set_reference(lock_set_t lock_set)
 void
 lock_set_dereference(lock_set_t lock_set)
 {
-	int	ref_count;
 	int 	size;
 
-	lock_set_lock(lock_set);
-	ref_count = --(lock_set->ref_count);
-	lock_set_unlock(lock_set);
-
-	if (ref_count == 0) {
+	if (1 == OSDecrementAtomic(&((lock_set)->ref_count))) {
 		ipc_port_dealloc_kernel(lock_set->port);
 		size = (int)(sizeof(struct lock_set) +
 			(sizeof(struct ulock) * (lock_set->n_ulocks - 1)));

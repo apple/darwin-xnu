@@ -39,7 +39,6 @@
 #include <IOKit/IOKitDebug.h>
 
 #if IOKITSTATS
-
 bool IOStatistics::enabled = false;
 
 uint32_t IOStatistics::sequenceID = 0;
@@ -178,14 +177,10 @@ void IOStatistics::initialize()
 		return;
 	}
 
-#if DEVELOPMENT || DEBUG
-	/* Always enabled in development and debug builds. */
-#else
-	/* Only enabled in release builds if the boot argument is set. */
+	/* Only enabled if the boot argument is set. */
 	if (!(kIOStatistics & gIOKitDebug)) {
 		return;
 	}
-#endif	
 	
 	sysctl_register_oid(&sysctl__debug_iokit_statistics_general);
 	sysctl_register_oid(&sysctl__debug_iokit_statistics_workloop);
@@ -1218,7 +1213,7 @@ KextNode *IOStatistics::getKextNodeFromBacktrace(boolean_t write) {
 	vm_offset_t *scanAddr = NULL;
 	uint32_t i;
 	KextNode *found = NULL, *ke = NULL;
-
+    
 	btCount = OSBacktrace(bt, btCount);
 
 	if (write) {
@@ -1230,7 +1225,7 @@ KextNode *IOStatistics::getKextNodeFromBacktrace(boolean_t write) {
 	/* Ignore first levels */
 	scanAddr = (vm_offset_t *)&bt[btMin - 1];
 
-	for (i = 0; i < btCount; i++, scanAddr++) {
+	for (i = btMin - 1; i < btCount; i++, scanAddr++) {
 		ke = RB_ROOT(&kextAddressHead);
 		while (ke) {
 			if (*scanAddr < ke->address) {

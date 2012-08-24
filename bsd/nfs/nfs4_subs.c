@@ -439,7 +439,7 @@ out:
  * get the list of supported security flavors
  *
  * How we get them depends on what args we are given:
- * 
+ *
  * FH?   Name?  Action
  * ----- -----  ------
  * YES   YES    Use the fh and name provided
@@ -1666,6 +1666,8 @@ nfs4_parsefattr(
 			nfsm_chain_get_32(error, nmc, ace_flags);
 			nfsm_chain_get_32(error, nmc, ace_mask);
 			nfsm_chain_get_32(error, nmc, len);
+			if (!error && len >= NFS_MAX_WHO)
+				error = EBADRPC;
 			acl->acl_ace[i].ace_flags = nfs4_ace_nfstype_to_vfstype(ace_type, &error);
 			acl->acl_ace[i].ace_flags |= nfs4_ace_nfsflags_to_vfsflags(ace_flags);
 			acl->acl_ace[i].ace_rights = nfs4_ace_nfsmask_to_vfsrights(ace_mask);
@@ -1675,16 +1677,12 @@ nfs4_parsefattr(
 					s = sbuf;
 					slen = sizeof(sbuf);
 				}
-				if (len >= NFS_MAX_WHO) {
-					error = EBADRPC;
-				} else {
-					/* Let's add a bit more if we can to the allocation as to try and avoid future allocations */
-					MALLOC(s, char*, (len + 16 < NFS_MAX_WHO) ? len+16 : NFS_MAX_WHO, M_TEMP, M_WAITOK);
-					if (s)
-						slen = (len + 16 < NFS_MAX_WHO) ? len+16 : NFS_MAX_WHO;
-					else
-						error = ENOMEM;
-				}
+				/* Let's add a bit more if we can to the allocation as to try and avoid future allocations */
+				MALLOC(s, char*, (len + 16 < NFS_MAX_WHO) ? len+16 : NFS_MAX_WHO, M_TEMP, M_WAITOK);
+				if (s)
+					slen = (len + 16 < NFS_MAX_WHO) ? len+16 : NFS_MAX_WHO;
+				else
+					error = ENOMEM;
 			}
 			if (error2)
 				nfsm_chain_adv(error, nmc, nfsm_rndup(len));
@@ -1999,22 +1997,20 @@ nfs4_parsefattr(
 	}
 	if (NFS_BITMAP_ISSET(bitmap, NFS_FATTR_OWNER)) {
 		nfsm_chain_get_32(error, nmc, len);
+		if (!error && len >= NFS_MAX_WHO)
+			error = EBADRPC;
 		if (!error && (len >= slen)) {
 			if (s != sbuf) {
 				FREE(s, M_TEMP);
 				s = sbuf;
 				slen = sizeof(sbuf);
 			}
-			if (len >= NFS_MAX_WHO) {
-				error = EBADRPC;
-			} else {
-				/* Let's add a bit more if we can to the allocation as to try and avoid future allocations */
-				MALLOC(s, char*, (len + 16 < NFS_MAX_WHO) ? len+16 : NFS_MAX_WHO, M_TEMP, M_WAITOK);
-				if (s)
-					slen = (len + 16 < NFS_MAX_WHO) ? len+16 : NFS_MAX_WHO;
-				else
-					error = ENOMEM;
-			}
+			/* Let's add a bit more if we can to the allocation as to try and avoid future allocations */
+			MALLOC(s, char*, (len + 16 < NFS_MAX_WHO) ? len+16 : NFS_MAX_WHO, M_TEMP, M_WAITOK);
+			if (s)
+				slen = (len + 16 < NFS_MAX_WHO) ? len+16 : NFS_MAX_WHO;
+			else
+				error = ENOMEM;
 		}
 		nfsm_chain_get_opaque(error, nmc, len, s);
 		if (!error) {
@@ -2036,22 +2032,20 @@ nfs4_parsefattr(
 	}
 	if (NFS_BITMAP_ISSET(bitmap, NFS_FATTR_OWNER_GROUP)) {
 		nfsm_chain_get_32(error, nmc, len);
+		if (!error && len >= NFS_MAX_WHO)
+			error = EBADRPC;
 		if (!error && (len >= slen)) {
 			if (s != sbuf) {
 				FREE(s, M_TEMP);
 				s = sbuf;
 				slen = sizeof(sbuf);
 			}
-			if (len >= NFS_MAX_WHO) {
-				error = EBADRPC;
-			} else {
-				/* Let's add a bit more if we can to the allocation as to try and avoid future allocations */
-				MALLOC(s, char*, (len + 16 < NFS_MAX_WHO) ? len+16 : NFS_MAX_WHO, M_TEMP, M_WAITOK);
-				if (s)
-					slen = (len + 16 < NFS_MAX_WHO) ? len+16 : NFS_MAX_WHO;
-				else
-					error = ENOMEM;
-			}
+			/* Let's add a bit more if we can to the allocation as to try and avoid future allocations */
+			MALLOC(s, char*, (len + 16 < NFS_MAX_WHO) ? len+16 : NFS_MAX_WHO, M_TEMP, M_WAITOK);
+			if (s)
+				slen = (len + 16 < NFS_MAX_WHO) ? len+16 : NFS_MAX_WHO;
+			else
+				error = ENOMEM;
 		}
 		nfsm_chain_get_opaque(error, nmc, len, s);
 		if (!error) {
@@ -2696,4 +2690,3 @@ recheckdeleg:
 			vfs_statfs(nmp->nm_mountp)->f_mntfromname, nmp->nm_stategenid, error);
 	}
 }
-

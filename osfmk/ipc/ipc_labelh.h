@@ -89,6 +89,7 @@ MACRO_END
 extern zone_t ipc_labelh_zone;
 
 #define lh_lock_init(lh)	lck_mtx_init(&(lh)->lh_lock_data, &ipc_lck_grp, &ipc_lck_attr)
+#define lh_lock_destroy(lh)	lck_mtx_destroy(&(lh)->lh_lock_data, &ipc_lck_grp)
 #define lh_lock(lh)			lck_mtx_lock(&(lh)->lh_lock_data)
 #define lh_unlock(lh)		lck_mtx_unlock(&(lh)->lh_lock_data)
 

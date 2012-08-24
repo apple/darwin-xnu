@@ -78,6 +78,8 @@
 
 #include <mach/rpc.h>
 
+#include <security/mac_mach_internal.h>
+
 void			act_abort(thread_t);
 void			install_special_handler_locked(thread_t);
 void			special_handler_continue(void);
@@ -134,7 +136,7 @@ thread_terminate_internal(
 	thread_mtx_unlock(thread);
 
 	if (thread != current_thread() && result == KERN_SUCCESS)
-		thread_wait(thread);
+		thread_wait(thread, FALSE);
 
 	return (result);
 }
@@ -236,7 +238,7 @@ thread_suspend(
 	thread_mtx_unlock(thread);
 
 	if (thread != self && result == KERN_SUCCESS)
-		thread_wait(thread);
+		thread_wait(thread, TRUE);
 
 	return (result);
 }
@@ -575,7 +577,7 @@ thread_state_initialize(
 			thread_release(thread);
 		}
 		else
-            result = machine_thread_state_initialize( thread );
+			result = machine_thread_state_initialize( thread );
 	}
 	else
 		result = KERN_TERMINATED;
@@ -897,54 +899,64 @@ act_get_state(
     return (thread_get_state(thread, flavor, state, count));
 }
 
-void
-act_set_astbsd(
-	thread_t	thread)
+static void
+act_set_ast(
+	    thread_t	thread,
+	    ast_t ast)
 {
 	spl_t		s = splsched();
 	
 	if (thread == current_thread()) {
-		thread_ast_set(thread, AST_BSD);
+		thread_ast_set(thread, ast);
 		ast_propagate(thread->ast);
 	}
 	else {
 		processor_t		processor;
 
 		thread_lock(thread);
-		thread_ast_set(thread, AST_BSD);
+		thread_ast_set(thread, ast);
 		processor = thread->last_processor;
-		if (	processor != PROCESSOR_NULL					&&
-				processor->state == PROCESSOR_RUNNING		&&
-				processor->active_thread == thread			)
+		if ( processor != PROCESSOR_NULL            &&
+		     processor->state == PROCESSOR_RUNNING  &&
+		     processor->active_thread == thread	     )
 			cause_ast_check(processor);
 		thread_unlock(thread);
 	}
 	
 	splx(s);
+}
+
+void
+act_set_astbsd(
+	thread_t	thread)
+{
+	act_set_ast( thread, AST_BSD );
 }
 
 void
 act_set_apc(
 	thread_t	thread)
 {
-	spl_t		s = splsched();
-	
-	if (thread == current_thread()) {
-		thread_ast_set(thread, AST_APC);
-		ast_propagate(thread->ast);
-	}
-	else {
-		processor_t		processor;
-
-		thread_lock(thread);
-		thread_ast_set(thread, AST_APC);
-		processor = thread->last_processor;
-		if (	processor != PROCESSOR_NULL					&&
-				processor->state == PROCESSOR_RUNNING		&&
-				processor->active_thread == thread			)
-			cause_ast_check(processor);
-		thread_unlock(thread);
-	}
-	
-	splx(s);
+	act_set_ast( thread, AST_APC );
 }
+
+void
+act_set_kperf(
+	thread_t	thread)
+{
+	/* safety check */
+	if (thread != current_thread())
+		if( !ml_get_interrupts_enabled() )
+			panic("unsafe act_set_kperf operation");
+
+	act_set_ast( thread, AST_KPERF );
+}
+
+#if CONFIG_MACF
+void
+act_set_astmacf(
+	thread_t	thread)
+{
+	act_set_ast( thread, AST_MACF);
+}
+#endif

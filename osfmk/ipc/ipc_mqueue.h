@@ -150,7 +150,8 @@ extern void ipc_mqueue_changed(
 /* Add the specific mqueue as a member of the set */
 extern kern_return_t ipc_mqueue_add(
 	ipc_mqueue_t		mqueue,
-	ipc_mqueue_t	 	set_mqueue);
+	ipc_mqueue_t	 	set_mqueue,
+	wait_queue_link_t	wql);
 
 /* Check to see if mqueue is member of set_mqueue */
 extern boolean_t ipc_mqueue_member(
@@ -160,15 +161,18 @@ extern boolean_t ipc_mqueue_member(
 /* Remove an mqueue from a specific set */
 extern kern_return_t ipc_mqueue_remove(
 	ipc_mqueue_t	 	mqueue,
-	ipc_mqueue_t		set_mqueue);
+	ipc_mqueue_t		set_mqueue,
+	wait_queue_link_t 	*wqlp);
 
 /* Remove an mqueue from all sets */
 extern void ipc_mqueue_remove_from_all(
-	ipc_mqueue_t		mqueue);
+	ipc_mqueue_t		mqueue,
+	queue_t 		links);
 
 /* Remove all the members of the specifiied set */
 extern void ipc_mqueue_remove_all(
-	ipc_mqueue_t		mqueue);
+	ipc_mqueue_t		mqueue,
+	queue_t			links);
 
 /* Send a message to a port */
 extern mach_msg_return_t ipc_mqueue_send(

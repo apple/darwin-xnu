@@ -73,8 +73,8 @@ uint64_t pmc_spin_timeout_count = 0;	/* Number of times where a PMC spin loop ca
 	do { \
 		kprintf("perfmon: %p (obj: %p refCt: %u switchable: %u)\n", \
 			x, x->object, x->useCount, \
-			x->methods.supports_context_switching ? \
-			x->methods.supports_context_switching(x->object) : 0); \
+			(x->methods.flags & PERFMON_FLAG_SUPPORTS_CONTEXT_SWITCHING) ? \
+			1 : 0); \
 	} while(0)
 
 static const char const * pmc_state_state_name(pmc_state_t state) {
@@ -190,8 +190,10 @@ static lck_grp_attr_t *pmc_lock_grp_attr;
 static lck_attr_t *pmc_lock_attr;
 
 /* PMC tracking queue locks */
-static lck_spin_t perf_monitor_queue_spin;		/* protects adding and removing from queue */
-static lck_spin_t perf_counters_queue_spin;		/* protects adding and removing from queue */
+
+static lck_mtx_t  cpu_monitor_queue_mutex;   /* protects per-cpu queues at initialisation time */
+static lck_spin_t perf_monitor_queue_spin;   /* protects adding and removing from queue */
+static lck_spin_t perf_counters_queue_spin;  /* protects adding and removing from queue */
 
 /* Reservation tracking queues lock */
 static lck_spin_t reservations_spin;
@@ -201,10 +203,13 @@ static lck_spin_t reservations_spin;
  *
  * Keeps track of registered perf monitors and perf counters
  */
-static queue_t perf_monitors_queue = NULL;
+
+static queue_head_t **cpu_monitor_queues = NULL;
+
+static queue_head_t *perf_monitors_queue = NULL;
 static volatile uint32_t perf_monitors_count = 0U;
 
-static queue_t perf_counters_queue = NULL;
+static queue_head_t *perf_counters_queue = NULL;
 static volatile uint32_t perf_counters_count = 0U;
 
 /* 
@@ -218,15 +223,15 @@ static volatile uint32_t perf_counters_count = 0U;
  * every task and thread) to determine if/when a new reservation would
  * constitute a conflict.
  */
-static queue_t system_reservations = NULL;
+ 
+static queue_head_t *system_reservations = NULL;
 static volatile uint32_t system_reservation_count = 0U;
 
-static queue_t task_reservations = NULL;
+static queue_head_t *task_reservations = NULL;
 static volatile uint32_t task_reservation_count = 0U;
 
-static queue_t thread_reservations = NULL;
+static queue_head_t *thread_reservations = NULL;
 static volatile uint32_t thread_reservation_count = 0U;
-
 
 #if XNU_KERNEL_PRIVATE
 
@@ -248,6 +253,8 @@ static void init_pmc_locks(void) {
 	lck_spin_init(&perf_counters_queue_spin, pmc_lock_grp, pmc_lock_attr);
 
 	lck_spin_init(&reservations_spin, pmc_lock_grp, pmc_lock_attr);
+
+	lck_mtx_init(&cpu_monitor_queue_mutex, pmc_lock_grp, pmc_lock_attr);
 }
 
 /*
@@ -272,27 +279,28 @@ static void init_pmc_zones(void) {
  * registering and reserving individual pmcs and perf monitors.
  */
 static void init_pmc_queues(void) {
-	perf_monitors_queue = (queue_t)kalloc(sizeof(queue_t));
+    
+	perf_monitors_queue = (queue_head_t*)kalloc(sizeof(queue_head_t));
 	assert(perf_monitors_queue);
 
 	queue_init(perf_monitors_queue);
 
-	perf_counters_queue = (queue_t)kalloc(sizeof(queue_t));
+	perf_counters_queue = (queue_head_t*)kalloc(sizeof(queue_head_t));
 	assert(perf_counters_queue);
 
 	queue_init(perf_counters_queue);
 
-	system_reservations = (queue_t)kalloc(sizeof(queue_t));
+	system_reservations = (queue_head_t*)kalloc(sizeof(queue_t));
 	assert(system_reservations);
 
 	queue_init(system_reservations);
 
-	task_reservations = (queue_t)kalloc(sizeof(queue_t));
+	task_reservations = (queue_head_t*)kalloc(sizeof(queue_head_t));
 	assert(task_reservations);
 
 	queue_init(task_reservations);
 
-	thread_reservations = (queue_t)kalloc(sizeof(queue_t));
+	thread_reservations = (queue_head_t*)kalloc(sizeof(queue_head_t));
 	assert(thread_reservations);
 
 	queue_init(thread_reservations);
@@ -329,7 +337,7 @@ static void perf_monitor_free(void *pm) {
 	zfree(perf_small_zone, pm);
 }
 
-static void perf_monitor_init(perf_monitor_t pm) {
+static void perf_monitor_init(perf_monitor_t pm, int cpu) {
 	assert(pm);
 
 	pm->object = NULL;
@@ -337,8 +345,13 @@ static void perf_monitor_init(perf_monitor_t pm) {
 	bzero(&(pm->methods), sizeof(perf_monitor_methods_t));
 
 	pm->useCount = 1;	/* initial retain count of 1, for caller */
+	
+	pm->reservedCounters = 0;
+    
+	pm->cpu = cpu;
 
 	pm->link.next = pm->link.prev = (queue_entry_t)NULL;
+	pm->cpu_link.next = pm->cpu_link.prev = (queue_entry_t)NULL;
 }
 
 /*
@@ -347,6 +360,13 @@ static void perf_monitor_init(perf_monitor_t pm) {
  */
 static void perf_monitor_dequeue(perf_monitor_t pm) {
 	lck_spin_lock(&perf_monitor_queue_spin);
+	
+	if (pm->methods.flags & PERFMON_FLAG_REQUIRES_IDLE_NOTIFICATIONS) {
+		/* If this flag is set, the monitor is already validated to be 
+		 * accessible from a single cpu only.
+		 */
+		queue_remove(cpu_monitor_queues[pm->cpu], pm, perf_monitor_t, cpu_link); 
+	}
 	
 	/* 
 	 * remove the @pm object from the @perf_monitor_queue queue (it is of type
@@ -364,13 +384,45 @@ static void perf_monitor_dequeue(perf_monitor_t pm) {
  * thereby registering it for use with the system.
  */
 static void perf_monitor_enqueue(perf_monitor_t pm) {
+    
+	lck_mtx_lock(&cpu_monitor_queue_mutex);
 	lck_spin_lock(&perf_monitor_queue_spin);
 
+	if (pm->cpu >= 0) {
+            	/* Deferred initialisation; saves memory and permits ml_get_max_cpus()
+            	 * to block until cpu initialisation is complete.
+            	 */
+            	if (!cpu_monitor_queues) {
+            		uint32_t max_cpus;
+            		queue_head_t **queues;
+            		uint32_t i;
+		
+            		lck_spin_unlock(&perf_monitor_queue_spin);
+    		
+            		max_cpus = ml_get_max_cpus();
+
+            		queues = (queue_head_t**)kalloc(sizeof(queue_head_t*) * max_cpus);
+            		assert(queues);
+            		for (i = 0; i < max_cpus; i++) {
+            			queue_head_t *queue = (queue_head_t*)kalloc(sizeof(queue_head_t));
+            			assert(queue);
+            			queue_init(queue);
+            			queues[i] = queue;
+            		}
+		
+            		lck_spin_lock(&perf_monitor_queue_spin);
+		
+            		cpu_monitor_queues = queues;
+            	}
+	    
+		queue_enter(cpu_monitor_queues[pm->cpu], pm, perf_monitor_t, cpu_link);
+	}
+	
 	queue_enter(perf_monitors_queue, pm, perf_monitor_t, link);
-
 	perf_monitors_count++;
-
+	
 	lck_spin_unlock(&perf_monitor_queue_spin);
+	lck_mtx_unlock(&cpu_monitor_queue_mutex);
 }
 
 /*
@@ -417,8 +469,7 @@ static perf_monitor_t perf_monitor_find(perf_monitor_object_t monitor) {
 	lck_spin_lock(&perf_monitor_queue_spin);
 	
 	queue_iterate(perf_monitors_queue, element, perf_monitor_t, link) {
-		if(element && element->object == monitor) {
-			/* We found it - reference the object. */
+ 		if(element->object == monitor) {
 			perf_monitor_reference(element);
 			found = element;
 			break;
@@ -432,8 +483,9 @@ static perf_monitor_t perf_monitor_find(perf_monitor_object_t monitor) {
 
 /*
  * perf_monitor_add_pmc adds a newly registered PMC to the perf monitor it is
- * aassociated with.
+ * associated with.
  */
+
 static void perf_monitor_add_pmc(perf_monitor_t pm, pmc_t pmc __unused) {
 	assert(pm);
 	assert(pmc);
@@ -546,9 +598,8 @@ static pmc_t pmc_find(pmc_object_t object) {
 	pmc_t found = NULL;
 
 	queue_iterate(perf_counters_queue, element, pmc_t, link) {
-		if(element && element->object == object) {
+		if(element->object == object) {
 			pmc_reference(element);
-
 			found = element;
 			break;
 		}
@@ -750,8 +801,7 @@ static uint32_t pmc_accessible_core_count(pmc_t pmc) {
  * matches the new incoming one (for thread/task reservations only).  Will only
  * return TRUE if the task/thread matches.
  */
-static boolean_t pmc_internal_reservation_queue_contains_pmc(queue_t queue, pmc_reservation_t
-resv) {
+static boolean_t pmc_internal_reservation_queue_contains_pmc(queue_t queue, pmc_reservation_t resv) {
 	assert(queue);
 	assert(resv);
 
@@ -759,62 +809,60 @@ resv) {
 	pmc_reservation_t tmp = NULL;
 
 	queue_iterate(queue, tmp, pmc_reservation_t, link) {
-		if(tmp) {
-			if(tmp->pmc == resv->pmc) {
-				/* PMC matches - make sure scope matches first */
-				switch(PMC_FLAG_SCOPE(tmp->flags)) {
-					case PMC_FLAG_SCOPE_SYSTEM:
+		if(tmp->pmc == resv->pmc) {
+			/* PMC matches - make sure scope matches first */
+			switch(PMC_FLAG_SCOPE(tmp->flags)) {
+				case PMC_FLAG_SCOPE_SYSTEM:
+					/*
+					 * Found a reservation in system queue with same pmc - always a
+					 * conflict.
+					 */
+					ret = TRUE;
+					break;
+				case PMC_FLAG_SCOPE_THREAD:
+					/*
+					 * Found one in thread queue with the same PMC as the
+					 * argument. Only a conflict if argument scope isn't
+					 * thread or system, or the threads match.
+					 */
+					ret = (PMC_FLAG_SCOPE(resv->flags) != PMC_FLAG_SCOPE_THREAD) || 
+						(tmp->thread == resv->thread);
+
+					if(!ret) {
 						/*
-						 * Found a reservation in system queue with same pmc - always a
-						 * conflict.
+						 * so far, no conflict - check that the pmc that is
+						 * being reserved isn't accessible from more than
+						 * one core, if it is, we need to say it's already
+						 * taken.
 						 */
-						ret = TRUE;
-						break;
-					case PMC_FLAG_SCOPE_THREAD:
+						if(1 != pmc_accessible_core_count(tmp->pmc)) {
+							ret = TRUE;
+						}
+					}
+					break;
+				case PMC_FLAG_SCOPE_TASK:
+					/* 
+					 * Follow similar semantics for task scope.
+					 */
+
+					ret = (PMC_FLAG_SCOPE(resv->flags) != PMC_FLAG_SCOPE_TASK) ||
+						(tmp->task == resv->task);
+					if(!ret) {
 						/*
-						 * Found one in thread queue with the same PMC as the
-						 * argument. Only a conflict if argument scope isn't
-						 * thread or system, or the threads match.
+						 * so far, no conflict - check that the pmc that is
+						 * being reserved isn't accessible from more than
+						 * one core, if it is, we need to say it's already
+						 * taken.
 						 */
-						ret = (PMC_FLAG_SCOPE(resv->flags) != PMC_FLAG_SCOPE_THREAD) || 
-							(tmp->thread == resv->thread);
-
-						if(!ret) {
-							/*
-							 * so far, no conflict - check that the pmc that is
-							 * being reserved isn't accessible from more than
-							 * one core, if it is, we need to say it's already
-							 * taken.
-							 */
-							if(1 != pmc_accessible_core_count(tmp->pmc)) {
-								ret = TRUE;
-							}
+						if(1 != pmc_accessible_core_count(tmp->pmc)) {
+							ret = TRUE;
 						}
-						break;
-					case PMC_FLAG_SCOPE_TASK:
-						/* 
-						 * Follow similar semantics for task scope.
-						 */
+					}
 
-						ret = (PMC_FLAG_SCOPE(resv->flags) != PMC_FLAG_SCOPE_TASK) ||
-							(tmp->task == resv->task);
-						if(!ret) {
-							/*
-							 * so far, no conflict - check that the pmc that is
-							 * being reserved isn't accessible from more than
-							 * one core, if it is, we need to say it's already
-							 * taken.
-							 */
-							if(1 != pmc_accessible_core_count(tmp->pmc)) {
-								ret = TRUE;
-							}
-						}
-
-						break;
-				}
-
-				if(ret) break;
+					break;
 			}
+
+			if(ret) break;
 		}
 	}
 
@@ -823,7 +871,7 @@ resv) {
 
 /*
  * pmc_internal_reservation_validate_for_pmc returns TRUE if the given reservation can be 
- * added to its target queue without createing conflicts (target queue is 
+ * added to its target queue without creating conflicts (target queue is 
  * determined by the reservation's scope flags). Further, this method returns
  * FALSE if any level contains a reservation for a PMC that can be accessed from
  * more than just 1 core, and the given reservation also wants the same PMC.
@@ -912,54 +960,50 @@ static boolean_t pmc_internal_reservation_add(pmc_reservation_t resv) {
 
 	/* Check if the reservation can be added without conflicts */
 	if(pmc_internal_reservation_validate_for_pmc(resv)) {
-		ret = TRUE;
-	}
-
-	if(ret) {
+	    
 		/* add reservation to appropriate scope */
 		switch(PMC_FLAG_SCOPE(resv->flags)) {
+		case PMC_FLAG_SCOPE_SYSTEM:
+			/* Simply add it to the system queue */
+			pmc_internal_reservation_enqueue(system_reservations, resv);
+			system_reservation_count++;
+			
+			lck_spin_unlock(&reservations_spin);
 
-			/* System-wide counter */
-			case PMC_FLAG_SCOPE_SYSTEM:
-				/* Simply add it to the system queue */
-				pmc_internal_reservation_enqueue(system_reservations, resv);
-				system_reservation_count++;
-				
-				lck_spin_unlock(&reservations_spin);
+			break;
 
-				break;
+		case PMC_FLAG_SCOPE_TASK:
+			assert(resv->task);
 
-			/* Task-switched counter */
-			case PMC_FLAG_SCOPE_TASK:
-				assert(resv->task);
+			/* Not only do we enqueue it in our local queue for tracking */
+			pmc_internal_reservation_enqueue(task_reservations, resv);
+			task_reservation_count++;
 
-				/* Not only do we enqueue it in our local queue for tracking */
-				pmc_internal_reservation_enqueue(task_reservations, resv);
-				task_reservation_count++;
+			lck_spin_unlock(&reservations_spin);
 
-				lck_spin_unlock(&reservations_spin);
+			/* update the task mask, and propagate it to existing threads */
+			pmc_internal_update_task_flag(resv->task, TRUE);
+			break;
 
-				/* update the task mask, and propagate it to existing threads */
-				pmc_internal_update_task_flag(resv->task, TRUE);
-				break;
+		/* Thread-switched counter */
+		case PMC_FLAG_SCOPE_THREAD:
+			assert(resv->thread);
 
-			/* Thread-switched counter */
-			case PMC_FLAG_SCOPE_THREAD:
-				assert(resv->thread);
+			/*
+			 * Works the same as a task-switched counter, only at
+			 * thread-scope
+			 */
 
-				/*
-				 * Works the same as a task-switched counter, only at
-				 * thread-scope
-				 */
+			pmc_internal_reservation_enqueue(thread_reservations, resv);
+			thread_reservation_count++;
 
-				pmc_internal_reservation_enqueue(thread_reservations, resv);
-				thread_reservation_count++;
-
-				lck_spin_unlock(&reservations_spin);
-				
-				pmc_internal_update_thread_flag(resv->thread, TRUE);
-				break;
-			}
+			lck_spin_unlock(&reservations_spin);
+			
+			pmc_internal_update_thread_flag(resv->thread, TRUE);
+			break;
+		}
+		
+		ret = TRUE;
 	} else {
 		lck_spin_unlock(&reservations_spin);
 	}			
@@ -993,8 +1037,6 @@ static void pmc_internal_reservation_broadcast(pmc_reservation_t reservation, vo
 				/* core_cnt = 0 really means all cpus */
 				mask = CPUMASK_ALL;
 			}
-			
-			/* Have each core run pmc_internal_reservation_stop_cpu asynchronously. */
 			mp_cpus_call(mask, ASYNC, action_func, reservation);
 #else
 #error pmc_reservation_interrupt needs an inter-processor method invocation mechanism for this architecture
@@ -1021,20 +1063,20 @@ static void pmc_internal_reservation_remove(pmc_reservation_t resv) {
 	 * using the reservation's scope flags.
 	 */
 
+	/* Lock the global spin lock */
+	lck_spin_lock(&reservations_spin);
+
 	switch(PMC_FLAG_SCOPE(resv->flags)) {
 
 		case PMC_FLAG_SCOPE_SYSTEM:
-			lck_spin_lock(&reservations_spin);
 			pmc_internal_reservation_dequeue(system_reservations, resv);
 			system_reservation_count--;
+			
 			lck_spin_unlock(&reservations_spin);
+			
 			break;
 
 		case PMC_FLAG_SCOPE_TASK:
-			
-			/* Lock the global spin lock */
-			lck_spin_lock(&reservations_spin);
-
 			/* remove from the global queue */
 			pmc_internal_reservation_dequeue(task_reservations, resv);
 			task_reservation_count--;
@@ -1044,11 +1086,10 @@ static void pmc_internal_reservation_remove(pmc_reservation_t resv) {
 
 			/* Recalculate task's counter mask */
 			pmc_internal_update_task_flag(resv->task, FALSE);
+			
 			break;
 
 		case PMC_FLAG_SCOPE_THREAD:
-			lck_spin_lock(&reservations_spin);
-
 			pmc_internal_reservation_dequeue(thread_reservations, resv);
 			thread_reservation_count--;
 
@@ -1489,11 +1530,6 @@ static void pmc_internal_reservation_store(pmc_reservation_t reservation) {
 		COUNTER_DEBUG("  [error] disable: 0x%x\n", ret);
 	}
 
-	/*
-	 * At this point, we're off the hardware, so we don't have to
-	 * set_on_hardare(TRUE) if anything fails from here on.
-	 */
-
 	/* store the counter value into the reservation's stored count */
 	ret = store_pmc->methods.get_count(store_pmc_obj, &reservation->value);
 	if(KERN_SUCCESS != ret) {
@@ -1576,11 +1612,28 @@ static void pmc_internal_reservation_load(pmc_reservation_t reservation) {
 	
 }
 
+/*
+ * pmc_accessible_from_core will return TRUE if the given @pmc is directly
+ * (e.g., hardware) readable from the given logical core.
+ *
+ * NOTE: This method is interrupt safe.
+ */
+static inline boolean_t pmc_accessible_from_core(pmc_t pmc, uint32_t logicalCore) {
+	boolean_t ret = FALSE;
+
+	assert(pmc);
+
+	ret = pmc->methods.accessible_from_core(pmc->object, logicalCore);
+
+	return ret;
+}
+
 static void pmc_internal_reservation_start_cpu(void * arg) {
 	pmc_reservation_t reservation = (pmc_reservation_t)arg;
 	
 	assert(reservation);
 	
+
 	if (pmc_internal_reservation_matches_context(reservation)) {
 		/* We are in context, but the reservation may have already had the context_in method run.  Attempt
 		 * to set this cpu's bit in the active_last_context_in mask.  If we set it, call context_in.
@@ -1599,6 +1652,7 @@ static void pmc_internal_reservation_stop_cpu(void * arg) {
 	pmc_reservation_t reservation = (pmc_reservation_t)arg;
 	
 	assert(reservation);
+	
 	
 	if (pmc_internal_reservation_matches_context(reservation)) {
 		COUNTER_DEBUG("Stopping in-context reservation %p for cpu %d\n", reservation, cpu_number());
@@ -1703,6 +1757,7 @@ static void pmc_reservation_interrupt(void *target, void *refCon) {
  */
 kern_return_t perf_monitor_register(perf_monitor_object_t monitor,
 	perf_monitor_methods_t *methods) {
+	int cpu = -1;
 
 	COUNTER_DEBUG("registering perf monitor %p\n", monitor);
 
@@ -1715,9 +1770,30 @@ kern_return_t perf_monitor_register(perf_monitor_object_t monitor,
 		return KERN_INVALID_ARGUMENT;
 	}
 
+	/* If the monitor requires idle notifications, ensure that it is 
+	 * accessible from a single core only.
+	 */
+	if (methods->flags & PERFMON_FLAG_REQUIRES_IDLE_NOTIFICATIONS) {
+		uint32_t *cores;
+		size_t core_cnt;
+	    
+		if (KERN_SUCCESS == methods->accessible_cores(monitor, &cores, &core_cnt)) {
+			/* 
+			 * Guard against disabled cores - monitors will always match and
+			 * attempt registration, irrespective of 'cpus=x' boot-arg.
+			 */
+			if ((core_cnt == 1) && (cores[0] < (uint32_t)ml_get_max_cpus())) {
+				cpu = cores[0];
+			} else {
+				return KERN_INVALID_ARGUMENT;
+			}
+		}	    
+	}
+
 	/* All methods are required */
-	if(!methods->supports_context_switching || !methods->enable_counters ||
-		!methods->disable_counters) {
+	if(!methods->accessible_cores |
+	   !methods->enable_counters || !methods->disable_counters ||
+	   !methods->on_idle || !methods->on_idle_exit) {
 		return KERN_INVALID_ARGUMENT;
 	}
 
@@ -1735,13 +1811,13 @@ kern_return_t perf_monitor_register(perf_monitor_object_t monitor,
 	}
 
 	/* initialize the object */
-	perf_monitor_init(pm);
+	perf_monitor_init(pm, cpu);
 
 	/* copy in the registration info */
 	pm->object = monitor;
 	memcpy(&(pm->methods), methods, sizeof(perf_monitor_methods_t));
 
-	/* place it in the tracking queue */
+	/* place it in the tracking queues */
 	perf_monitor_enqueue(pm);
 
 	/* debug it */
@@ -1766,7 +1842,7 @@ kern_return_t perf_monitor_unregister(perf_monitor_object_t monitor) {
 
 	perf_monitor_t pm = perf_monitor_find(monitor);
 	if(pm) {
-		/* Remove it from the queue. */
+		/* Remove it from the queues. */
 		perf_monitor_dequeue(pm);
 
 		/* drop extra retain from find */
@@ -1901,6 +1977,16 @@ kern_return_t pmc_unregister(perf_monitor_object_t monitor, pmc_object_t pmc_obj
 	pmc_deallocate(pmc);
 
 	return KERN_SUCCESS;
+}
+
+static void perf_monitor_reservation_add(perf_monitor_t monitor) {
+    assert(monitor);
+    OSIncrementAtomic(&(monitor->reservedCounters));
+}
+
+static void perf_monitor_reservation_remove(perf_monitor_t monitor) {
+    assert(monitor);
+    OSDecrementAtomic(&(monitor->reservedCounters));    
 }
 
 #if 0
@@ -2089,10 +2175,8 @@ kern_return_t pmc_get_pmc_list(pmc_t **pmcs, size_t *pmcCount) {
 
 	/* copy the bits out */
 	queue_iterate(perf_counters_queue, pmc, pmc_t, link) {
-		if(pmc) {
-			/* copy out the pointer */
-			array[count++] = pmc;
-		}
+		/* copy out the pointer */
+		array[count++] = pmc;
 	}
 
 	lck_spin_unlock(&perf_counters_queue_spin);
@@ -2227,22 +2311,6 @@ kern_return_t pmc_get_accessible_core_list(pmc_t pmc, uint32_t **logicalCores,
 	return ret;
 }
 
-/*
- * pmc_accessible_from_core will return TRUE if the given @pmc is directly
- * (e.g., hardware) readable from the given logical core.
- *
- * NOTE: This method is interrupt safe.
- */
-boolean_t pmc_accessible_from_core(pmc_t pmc, uint32_t logicalCore) {
-	boolean_t ret = FALSE;
-
-	assert(pmc);
-
-	ret = pmc->methods.accessible_from_core(pmc->object, logicalCore);
-
-	return ret;
-}
-
 static boolean_t pmc_reservation_setup_pmi(pmc_reservation_t resv, pmc_config_t config) {
 	assert(resv);
 	assert(resv->pmc);
@@ -2318,7 +2386,7 @@ kern_return_t pmc_reserve(pmc_t pmc, pmc_config_t config,
 		return KERN_FAILURE;
 	}
 
-	/* Here's where we setup the PMI method (if needed) */
+	perf_monitor_reservation_add(pmc->monitor);
 	
 	*reservation = resv;
 
@@ -2346,7 +2414,7 @@ kern_return_t pmc_reserve_task(pmc_t pmc, pmc_config_t config,
 		return KERN_INVALID_ARGUMENT;
 	}
 
-	if(!pmc->monitor->methods.supports_context_switching(pmc->monitor->object)) {
+	if (!(pmc->monitor->methods.flags & PERFMON_FLAG_SUPPORTS_CONTEXT_SWITCHING)) {
 		COUNTER_DEBUG("pmc %p cannot be context switched!\n", pmc);
 		return KERN_INVALID_ARGUMENT;
 	}
@@ -2377,6 +2445,8 @@ kern_return_t pmc_reserve_task(pmc_t pmc, pmc_config_t config,
 		return KERN_FAILURE;
 	}
 
+	perf_monitor_reservation_add(pmc->monitor);
+
 	*reservation = resv;
 
 	return KERN_SUCCESS;
@@ -2402,7 +2472,7 @@ kern_return_t pmc_reserve_thread(pmc_t pmc, pmc_config_t config,
 		return KERN_INVALID_ARGUMENT;
 	}
 
-	if(!pmc->monitor->methods.supports_context_switching(pmc->monitor->object)) {
+	if (!(pmc->monitor->methods.flags & PERFMON_FLAG_SUPPORTS_CONTEXT_SWITCHING)) {
 		COUNTER_DEBUG("pmc %p cannot be context switched!\n", pmc);
 		return KERN_INVALID_ARGUMENT;
 	}
@@ -2432,6 +2502,8 @@ kern_return_t pmc_reserve_thread(pmc_t pmc, pmc_config_t config,
 		reservation_free(resv);
 		return KERN_FAILURE;
 	}
+
+	perf_monitor_reservation_add(pmc->monitor);
 
 	*reservation = resv;
 
@@ -2632,6 +2704,8 @@ kern_return_t pmc_reservation_free(pmc_reservation_t reservation) {
 		return KERN_INVALID_ARGUMENT;
 	}
 	
+	perf_monitor_reservation_remove(reservation->pmc->monitor);
+	
 	/* Move the state machine */
 	if (PMC_STATE_INVALID == (newState = pmc_internal_reservation_move_for_event(reservation, PMC_STATE_EVENT_FREE, NULL))) {
 		return KERN_FAILURE;
@@ -2662,6 +2736,56 @@ kern_return_t pmc_reservation_free(pmc_reservation_t reservation) {
 }
 
 /*
+ * pmc_idle notifies eligible monitors of impending per-CPU idle, and can be used to save state.
+ */
+boolean_t pmc_idle(void) {
+	perf_monitor_t monitor = NULL;
+	queue_head_t *cpu_queue;
+
+	lck_spin_lock(&perf_monitor_queue_spin);
+	
+	if (cpu_monitor_queues) {
+		cpu_queue = cpu_monitor_queues[cpu_number()];
+	
+		queue_iterate(cpu_queue, monitor, perf_monitor_t, cpu_link) {
+			perf_monitor_methods_t *methods = &(monitor->methods);
+			if ((methods->flags & PERFMON_FLAG_ALWAYS_ACTIVE) || (monitor->reservedCounters)) {		    
+				methods->on_idle(monitor->object);
+			}
+		}
+	}
+
+	lck_spin_unlock(&perf_monitor_queue_spin);
+
+	return TRUE;
+}
+
+/*
+ * pmc_idle_exit notifies eligible monitors of wake from idle; it can be used to restore state.
+ */
+boolean_t pmc_idle_exit(void) {
+	perf_monitor_t monitor = NULL;
+	queue_head_t *cpu_queue;
+
+	lck_spin_lock(&perf_monitor_queue_spin);
+	
+	if (cpu_monitor_queues) {
+		cpu_queue = cpu_monitor_queues[cpu_number()];
+	
+		queue_iterate(cpu_queue, monitor, perf_monitor_t, cpu_link) {
+			perf_monitor_methods_t *methods = &(monitor->methods);
+			if ((methods->flags & PERFMON_FLAG_ALWAYS_ACTIVE) || (monitor->reservedCounters)) {		    
+				methods->on_idle_exit(monitor->object);
+			}
+		}
+	}
+
+	lck_spin_unlock(&perf_monitor_queue_spin);
+
+	return TRUE;
+}
+
+/*
  * pmc_context_switch performs all context switching necessary to save all pmc
  * state associated with @oldThread (and the task to which @oldThread belongs),
  * as well as to restore all pmc state associated with @newThread (and the task
@@ -2673,43 +2797,37 @@ boolean_t pmc_context_switch(thread_t oldThread, thread_t newThread) {
 	pmc_reservation_t resv = NULL;
 	uint32_t cpuNum = cpu_number();
 
-	/* Out going thread: save pmc state */
 	lck_spin_lock(&reservations_spin);
 
-	/* interate over any reservations */
-	queue_iterate(thread_reservations, resv, pmc_reservation_t, link) {
-		if(resv && oldThread == resv->thread) {
-
-			/* check if we can read the associated pmc from this core. */
-			if(pmc_accessible_from_core(resv->pmc, cpuNum)) {
-				/* save the state At this point, if it fails, it fails. */
+	/* Save pmc states */
+	if (thread_reservation_count) {
+ 		queue_iterate(thread_reservations, resv, pmc_reservation_t, link) {
+			if ((oldThread == resv->thread) && pmc_accessible_from_core(resv->pmc, cpuNum)) {
 				(void)pmc_internal_reservation_context_out(resv);
 			}
 		}
 	}
 	
-	queue_iterate(task_reservations, resv, pmc_reservation_t, link) {
-		if(resv && resv->task == oldThread->task) {
-			if(pmc_accessible_from_core(resv->pmc, cpuNum)) {
-				(void)pmc_internal_reservation_context_out(resv);
+	if (task_reservation_count) {
+		queue_iterate(task_reservations, resv, pmc_reservation_t, link) {
+			if ((resv->task == oldThread->task) && pmc_accessible_from_core(resv->pmc, cpuNum)) {
+    			(void)pmc_internal_reservation_context_out(resv);
 			}
 		}
 	}
 	
-	/* Incoming task: restore */
-
-	queue_iterate(thread_reservations, resv, pmc_reservation_t, link) {
-		if(resv && resv->thread == newThread) {
-			if(pmc_accessible_from_core(resv->pmc, cpuNum)) {
+	/* Restore */
+	if (thread_reservation_count) {
+		queue_iterate(thread_reservations, resv, pmc_reservation_t, link) {
+			if ((resv->thread == newThread) && pmc_accessible_from_core(resv->pmc, cpuNum)) {
 				(void)pmc_internal_reservation_context_in(resv);
 			}
 		}
 	}
-	
 
-	queue_iterate(task_reservations, resv, pmc_reservation_t, link) {
-		if(resv && resv->task == newThread->task) {
-			if(pmc_accessible_from_core(resv->pmc, cpuNum)) {
+	if (task_reservation_count) {
+		queue_iterate(task_reservations, resv, pmc_reservation_t, link) {
+			if ((resv->task == newThread->task) && pmc_accessible_from_core(resv->pmc, cpuNum)) {
 				(void)pmc_internal_reservation_context_in(resv);
 			}
 		}
@@ -2790,11 +2908,6 @@ const char *pmc_get_name(pmc_t pmc __unused) {
 kern_return_t pmc_get_accessible_core_list(pmc_t pmc __unused, 
 	uint32_t **logicalCores __unused, size_t *logicalCoreCt __unused) {
 	return KERN_FAILURE;
-}
-
-boolean_t pmc_accessible_from_core(pmc_t pmc __unused, 
-	uint32_t logicalCore __unused) {
-	return FALSE;
 }
 
 kern_return_t pmc_reserve(pmc_t pmc __unused, 

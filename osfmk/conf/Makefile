@@ -48,9 +48,11 @@ $(COMPOBJROOT)/$(OSFMK_KERNEL_CONFIG)/platforms.h: $(COMPOBJROOT)/$(OSFMK_KERNEL
 do_all: $(COMPOBJROOT)/$(OSFMK_KERNEL_CONFIG)/Makefile \
 		$(COMPOBJROOT)/$(OSFMK_KERNEL_CONFIG)/platforms.h 
 	$(_v)next_source=$(subst conf/,,$(SOURCE));			\
+	next_relsource=$(subst conf/,,$(RELATIVE_SOURCE_PATH));		\
 	${MAKE} -C $(COMPOBJROOT)/$(OSFMK_KERNEL_CONFIG)	\
 		MAKEFILES=$(TARGET)/$(OSFMK_KERNEL_CONFIG)/Makefile	\
 		SOURCE=$${next_source}			\
+		RELATIVE_SOURCE_PATH=$${next_relsource}			\
 		TARGET=$(TARGET)					\
 		INCL_MAKEDEP=FALSE	\
 		KERNEL_CONFIG=$(OSFMK_KERNEL_CONFIG)	\

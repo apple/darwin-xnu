@@ -139,6 +139,8 @@ extern kern_return_t semaphore_timedwait_signal_trap(
 				unsigned int sec,
 				clock_res_t nsec);
 
+#endif	/* PRIVATE */
+
 extern kern_return_t clock_sleep_trap(
 				mach_port_name_t clock_name,
 				sleep_type_t sleep_type,
@@ -146,7 +148,74 @@ extern kern_return_t clock_sleep_trap(
 				int sleep_nsec,
 				mach_timespec_t	*wakeup_time);
 
-#endif	/* PRIVATE */
+extern kern_return_t _kernelrpc_mach_vm_allocate_trap(
+				mach_port_name_t target,
+				mach_vm_offset_t *addr,
+				mach_vm_size_t size,
+				int flags);
+
+extern kern_return_t _kernelrpc_mach_vm_deallocate_trap(
+				mach_port_name_t target,
+				mach_vm_address_t address,
+				mach_vm_size_t size
+);
+
+extern kern_return_t _kernelrpc_mach_vm_protect_trap(
+				mach_port_name_t target,
+				mach_vm_address_t address,
+				mach_vm_size_t size,
+				boolean_t set_maximum,
+				vm_prot_t new_protection
+);
+
+extern kern_return_t _kernelrpc_mach_port_allocate_trap(
+				mach_port_name_t target,
+				mach_port_right_t right,
+				mach_port_name_t *name
+);
+
+
+extern kern_return_t _kernelrpc_mach_port_destroy_trap(
+				mach_port_name_t target,
+				mach_port_name_t name
+);
+
+extern kern_return_t _kernelrpc_mach_port_deallocate_trap(
+				mach_port_name_t target,
+				mach_port_name_t name
+);
+
+extern kern_return_t _kernelrpc_mach_port_mod_refs_trap(
+				mach_port_name_t target,
+				mach_port_name_t name,
+				mach_port_right_t right,
+				mach_port_delta_t delta
+);
+
+extern kern_return_t _kernelrpc_mach_port_move_member_trap(
+				mach_port_name_t target,
+				mach_port_name_t member,
+				mach_port_name_t after
+);
+
+extern kern_return_t _kernelrpc_mach_port_insert_right_trap(
+				mach_port_name_t target,
+				mach_port_name_t name,
+				mach_port_name_t poly,
+				mach_msg_type_name_t polyPoly
+);
+
+extern kern_return_t _kernelrpc_mach_port_insert_member_trap(
+				mach_port_name_t target,
+				mach_port_name_t name,
+				mach_port_name_t pset
+);
+
+extern kern_return_t _kernelrpc_mach_port_extract_member_trap(
+				mach_port_name_t target,
+				mach_port_name_t name,
+				mach_port_name_t pset
+);
 
 extern kern_return_t macx_swapon(
 				uint64_t filename,
@@ -300,7 +369,7 @@ extern mach_port_name_t host_self_trap(
 				struct host_self_trap_args *args);
 
 struct mach_msg_overwrite_trap_args {
-	PAD_ARG_(mach_vm_address_t, msg);
+	PAD_ARG_(user_addr_t, msg);
 	PAD_ARG_(mach_msg_option_t, option);
 	PAD_ARG_(mach_msg_size_t, send_size);
 	PAD_ARG_(mach_msg_size_t, rcv_size);
@@ -308,7 +377,7 @@ struct mach_msg_overwrite_trap_args {
 	PAD_ARG_(mach_msg_timeout_t, timeout);
 	PAD_ARG_(mach_port_name_t, notify);
 	PAD_ARG_8
-	PAD_ARG_(mach_vm_address_t, rcv_msg);  /* Unused on mach_msg_trap */
+	PAD_ARG_(user_addr_t, rcv_msg);  /* Unused on mach_msg_trap */
 };
 extern mach_msg_return_t mach_msg_trap(
 				struct mach_msg_overwrite_trap_args *args);
@@ -459,7 +528,7 @@ struct clock_sleep_trap_args{
 	PAD_ARG_(sleep_type_t, sleep_type);
 	PAD_ARG_(int, sleep_sec);
 	PAD_ARG_(int, sleep_nsec);
-	PAD_ARG_(mach_vm_address_t, wakeup_time);
+	PAD_ARG_(user_addr_t, wakeup_time);
 };
 extern kern_return_t clock_sleep_trap(
 				struct clock_sleep_trap_args *args);
@@ -473,7 +542,7 @@ extern kern_return_t thread_switch(
 				struct thread_switch_args *args);
 
 struct mach_timebase_info_trap_args {
-	PAD_ARG_(mach_vm_address_t, info);
+	PAD_ARG_(user_addr_t, info);
 };
 extern kern_return_t mach_timebase_info_trap(
 				struct mach_timebase_info_trap_args *args);
@@ -505,10 +574,103 @@ extern kern_return_t mk_timer_arm_trap(
 
 struct mk_timer_cancel_trap_args {
     PAD_ARG_(mach_port_name_t, name);
-    PAD_ARG_(mach_vm_address_t, result_time);
+    PAD_ARG_(user_addr_t, result_time);
 };
 extern kern_return_t mk_timer_cancel_trap(
 				struct mk_timer_cancel_trap_args *args);
+
+struct _kernelrpc_mach_vm_allocate_trap_args {
+	PAD_ARG_(mach_port_name_t, target);	/* 1 word */
+	PAD_ARG_(user_addr_t, addr);		/* 1 word */
+	PAD_ARG_(mach_vm_size_t, size);		/* 2 words */
+	PAD_ARG_(int, flags);			/* 1 word */
+};						/* Total: 5 */
+
+extern kern_return_t _kernelrpc_mach_vm_allocate_trap(
+				struct _kernelrpc_mach_vm_allocate_trap_args *args);
+
+struct _kernelrpc_mach_vm_deallocate_args {
+	PAD_ARG_(mach_port_name_t, target);	/* 1 word */
+	PAD_ARG_(mach_vm_address_t, address);	/* 2 words */
+	PAD_ARG_(mach_vm_size_t, size);		/* 2 words */
+};						/* Total: 5 */
+extern kern_return_t _kernelrpc_mach_vm_deallocate_trap(
+				struct _kernelrpc_mach_vm_deallocate_args *args);
+
+struct _kernelrpc_mach_vm_protect_args {
+	PAD_ARG_(mach_port_name_t, target);	/* 1 word */
+	PAD_ARG_(mach_vm_address_t, address);	/* 2 words */
+	PAD_ARG_(mach_vm_size_t, size);		/* 2 words */
+	PAD_ARG_(boolean_t, set_maximum);	/* 1 word */
+	PAD_ARG_(vm_prot_t, new_protection);	/* 1 word */
+};						/* Total: 7 */
+extern kern_return_t _kernelrpc_mach_vm_protect_trap(
+				struct _kernelrpc_mach_vm_protect_args *args);
+
+struct _kernelrpc_mach_port_allocate_args {
+	PAD_ARG_(mach_port_name_t, target);
+	PAD_ARG_(mach_port_right_t, right);
+	PAD_ARG_(user_addr_t, name);
+};
+extern kern_return_t _kernelrpc_mach_port_allocate_trap(
+				struct _kernelrpc_mach_port_allocate_args *args);
+
+
+struct _kernelrpc_mach_port_destroy_args {
+	PAD_ARG_(mach_port_name_t, target);
+	PAD_ARG_(mach_port_name_t, name);
+};
+extern kern_return_t _kernelrpc_mach_port_destroy_trap(
+				struct _kernelrpc_mach_port_destroy_args *args);
+
+struct _kernelrpc_mach_port_deallocate_args {
+	PAD_ARG_(mach_port_name_t, target);
+	PAD_ARG_(mach_port_name_t, name);
+};
+extern kern_return_t _kernelrpc_mach_port_deallocate_trap(
+				struct _kernelrpc_mach_port_deallocate_args *args);
+
+struct _kernelrpc_mach_port_mod_refs_args {
+	PAD_ARG_(mach_port_name_t, target);
+	PAD_ARG_(mach_port_name_t, name);
+	PAD_ARG_(mach_port_right_t, right);
+	PAD_ARG_(mach_port_delta_t, delta);
+};
+extern kern_return_t _kernelrpc_mach_port_mod_refs_trap(
+				struct _kernelrpc_mach_port_mod_refs_args *args);
+
+struct _kernelrpc_mach_port_move_member_args {
+	PAD_ARG_(mach_port_name_t, target);
+	PAD_ARG_(mach_port_name_t, member);
+	PAD_ARG_(mach_port_name_t, after);
+};
+extern kern_return_t _kernelrpc_mach_port_move_member_trap(
+				struct _kernelrpc_mach_port_move_member_args *args);
+
+struct _kernelrpc_mach_port_insert_right_args {
+	PAD_ARG_(mach_port_name_t, target);
+	PAD_ARG_(mach_port_name_t, name);
+	PAD_ARG_(mach_port_name_t, poly);
+	PAD_ARG_(mach_msg_type_name_t, polyPoly);
+};
+extern kern_return_t _kernelrpc_mach_port_insert_right_trap(
+				struct _kernelrpc_mach_port_insert_right_args *args);
+
+struct _kernelrpc_mach_port_insert_member_args {
+	PAD_ARG_(mach_port_name_t, target);
+	PAD_ARG_(mach_port_name_t, name);
+	PAD_ARG_(mach_port_name_t, pset);
+};
+extern kern_return_t _kernelrpc_mach_port_insert_member_trap(
+				struct _kernelrpc_mach_port_insert_member_args *args);
+
+struct _kernelrpc_mach_port_extract_member_args {
+	PAD_ARG_(mach_port_name_t, target);
+	PAD_ARG_(mach_port_name_t, name);
+	PAD_ARG_(mach_port_name_t, pset);
+};
+extern kern_return_t _kernelrpc_mach_port_extract_member_trap(
+				struct _kernelrpc_mach_port_extract_member_args *args);
 
 /* not published to LP64 clients yet */
 struct iokit_user_client_trap_args {

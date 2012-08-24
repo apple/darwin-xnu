@@ -44,6 +44,8 @@
 #define	CPUID_VID_INTEL		"GenuineIntel"
 #define	CPUID_VID_AMD		"AuthenticAMD"
 
+#define CPUID_VMM_ID_VMWARE	"VMwareVMware"
+
 #define CPUID_STRING_UNKNOWN    "Unknown CPU Typ"
 
 #define _Bit(n)			(1ULL << n)
@@ -112,8 +114,12 @@
 #define CPUID_FEATURE_OSXSAVE   _HBit(27) /* XGETBV/XSETBV instructions */
 #define CPUID_FEATURE_AVX1_0	_HBit(28) /* AVX 1.0 instructions */
 #define CPUID_FEATURE_VMM       _HBit(31) /* VMM (Hypervisor) present */
-#define CPUID_FEATURE_RDRAND	_HBit(29) /* RDRAND instruction */
-#define CPUID_FEATURE_F16C	_HBit(30) /* Float16 convert instructions */
+#define CPUID_FEATURE_SEGLIM64  _HBit(11) /* 64-bit segment limit checking */
+#define CPUID_FEATURE_PCID      _HBit(17) /* ASID-PCID support */
+#define CPUID_FEATURE_TSCTMR    _HBit(24) /* TSC deadline timer */
+#define CPUID_FEATURE_AVX1_0	_HBit(28) /* AVX 1.0 instructions */
+#define CPUID_FEATURE_F16C	_HBit(29) /* Float16 convert instructions */
+#define CPUID_FEATURE_RDRAND	_HBit(30) /* RDRAND instruction */
 
 /*
  * Leaf 7, subleaf 0 additional features.
@@ -161,6 +167,9 @@
 #define CPUID_MODEL_JAKETOWN	0x2D
 #define CPUID_MODEL_IVYBRIDGE	0x3A
 
+
+#define CPUID_VMM_FAMILY_UNKNOWN	0x0
+#define CPUID_VMM_FAMILY_VMWARE		0x1
 
 #ifndef ASSEMBLER
 #include <stdint.h>
@@ -337,6 +346,15 @@ typedef struct {
 	uint32_t		cpuid_leaf7_features;
 } i386_cpu_info_t;
 
+#ifdef MACH_KERNEL_PRIVATE
+typedef struct {
+	char		cpuid_vmm_vendor[16];
+	uint32_t	cpuid_vmm_family;
+	uint32_t	cpuid_vmm_bus_frequency;
+	uint32_t	cpuid_vmm_tsc_frequency;
+} i386_vmm_info_t;
+#endif
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -363,6 +381,12 @@ extern void		cpuid_get_info(i386_cpu_info_t *info_p);
 extern i386_cpu_info_t	*cpuid_info(void);
 
 extern void		cpuid_set_info(void);
+
+#ifdef MACH_KERNEL_PRIVATE
+extern boolean_t	cpuid_vmm_present(void);
+extern i386_vmm_info_t	*cpuid_vmm_info(void);
+extern uint32_t		cpuid_vmm_family(void);
+#endif
 
 #ifdef __cplusplus
 }

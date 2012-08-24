@@ -72,8 +72,10 @@
 #include <sys/proc_internal.h>
 #include <sys/kauth.h>
 #include <sys/imgact.h>
+#include <mach/mach_types.h>
 
 #include <security/mac_internal.h>
+#include <security/mac_mach_internal.h>
 
 #include <bsd/security/audit/audit.h>
 
@@ -100,6 +102,12 @@ mac_cred_label_free(struct label *label)
 {
 	MAC_PERFORM(cred_label_destroy, label);
 	mac_labelzone_free(label);
+}
+
+int
+mac_cred_label_compare(struct label *a, struct label *b)
+{
+	return (bcmp(a, b, sizeof (*a)) == 0);
 }
 
 int
@@ -589,4 +597,76 @@ mac_proc_check_suspend_resume(proc_t curp, int sr)
 	kauth_cred_unref(&cred);
 
 	return (error);
+}
+
+int
+mac_proc_check_ledger(proc_t curp, proc_t proc, int ledger_op)
+{
+	kauth_cred_t cred;
+	int error = 0;
+
+	if (!mac_proc_enforce ||
+	    !mac_proc_check_enforce(curp, MAC_PROC_ENFORCE))
+		return (0);
+
+	cred = kauth_cred_proc_ref(curp);
+	MAC_CHECK(proc_check_ledger, cred, proc, ledger_op);
+	kauth_cred_unref(&cred);
+
+	return (error);
+}
+
+struct label *
+mac_thread_label_alloc(void)
+{
+	struct label *label;
+
+	label = mac_labelzone_alloc(MAC_WAITOK);
+	if (label == NULL)
+		return (NULL);
+	MAC_PERFORM(thread_label_init, label);
+	return (label);
+}
+
+void
+mac_thread_label_init(struct uthread *uthread)
+{
+	uthread->uu_label = mac_thread_label_alloc();
+}
+
+void
+mac_thread_label_free(struct label *label)
+{
+	MAC_PERFORM(thread_label_destroy, label);
+	mac_labelzone_free(label);
+}
+
+void
+mac_thread_label_destroy(struct uthread *uthread)
+{
+
+	mac_thread_label_free(uthread->uu_label);
+	uthread->uu_label = NULL;
+}
+
+void
+mac_thread_userret(struct thread *td)
+{
+
+	MAC_PERFORM(thread_userret, td);
+}
+
+struct label *
+mac_thread_get_uthreadlabel(struct uthread *uthread)
+{
+
+	return (uthread->uu_label);
+}
+
+struct label *
+mac_thread_get_threadlabel(struct thread *thread)
+{
+	struct uthread *uthread = get_bsdthread_info(thread);
+
+	return (mac_thread_get_uthreadlabel(uthread));
 }

@@ -113,7 +113,7 @@ static int 				mdevrw(dev_t dev, struct uio *uio, int ioflag);
 
 static char *			nonspace(char *pos, char *end);
 static char *			getspace(char *pos, char *end);
-static char *			cvtnum(char *pos, char *end, unsigned int *num);
+static char *			cvtnum(char *pos, char *end, uint64_t *num);
 
 #endif /* CONFIG_MEMDEV_INSECURE */
 
@@ -436,8 +436,8 @@ void mdevinit(__unused int the_cnt) {
 #ifdef CONFIG_MEMDEV_INSECURE
 
 	int devid, phys;
-	ppnum_t base;
-	unsigned int size;
+	uint64_t base;
+	uint64_t size;
 	char *ba, *lp;
 	dev_t dev;
 	
@@ -476,7 +476,7 @@ void mdevinit(__unused int the_cnt) {
 			if((ba[0] != ' ') && (ba[0] != 0)) continue;	/* End must be null or space */
 		}
 		
-		dev = mdevadd(devid, base >> 12, size >> 12, phys);	/* Go add the device */ 
+		dev = mdevadd(devid, base >> 12, (unsigned)size >> 12, phys);	/* Go add the device */ 
 	}
 
 #endif /* CONFIG_MEMDEV_INSECURE */
@@ -509,7 +509,7 @@ char *getspace(char *pos, char *end) {					/* Find next non-space in string */
 	}
 }
 
-char *cvtnum(char *pos, char *end, unsigned int *num) {		/* Convert to a number */
+char *cvtnum(char *pos, char *end, uint64_t *num) {		/* Convert to a number */
 
 	int rad, dig;
 	

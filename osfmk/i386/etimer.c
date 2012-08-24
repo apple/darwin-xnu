@@ -91,9 +91,11 @@ etimer_intr(int		user_mode,
 		 */
 		latency = (int32_t) (abstime - MAX(mytimer->deadline,
 						   mytimer->when_set));
-		KERNEL_DEBUG_CONSTANT(
+		KERNEL_DEBUG_CONSTANT_IST(KDEBUG_TRACE,
 			DECR_TRAP_LATENCY | DBG_FUNC_NONE,
-			-latency, rip, user_mode, 0, 0);
+			-latency,
+			((user_mode != 0) ? rip : VM_KERNEL_UNSLIDE(rip)),
+			user_mode, 0, 0);
 
 		mytimer->has_expired = TRUE;	/* Remember that we popped */
 		mytimer->deadline = timer_queue_expire(&mytimer->queue, abstime);
@@ -106,11 +108,11 @@ etimer_intr(int		user_mode,
 
 	/* is it time for power management state change? */
 	if ((pmdeadline = pmCPUGetDeadline(pp)) && (pmdeadline <= abstime)) {
-	        KERNEL_DEBUG_CONSTANT(
+		KERNEL_DEBUG_CONSTANT_IST(KDEBUG_TRACE,
 			DECR_PM_DEADLINE | DBG_FUNC_START,
 			0, 0, 0, 0, 0);
 		pmCPUDeadline(pp);
-	        KERNEL_DEBUG_CONSTANT(
+		KERNEL_DEBUG_CONSTANT_IST(KDEBUG_TRACE,
 			DECR_PM_DEADLINE | DBG_FUNC_END,
 			0, 0, 0, 0, 0);
 	}
@@ -180,7 +182,7 @@ etimer_resync_deadlines(void)
 
 	/* Record non-PM deadline for latency tool */
 	if (deadline != pmdeadline) {
-		KERNEL_DEBUG_CONSTANT(
+		KERNEL_DEBUG_CONSTANT_IST(KDEBUG_TRACE,
 			DECR_SET_DEADLINE | DBG_FUNC_NONE,
 			decr, 2,
 			deadline, (uint32_t)(deadline >> 32), 0);
@@ -227,7 +229,7 @@ mpqueue_head_t *
 timer_queue_assign(
     uint64_t        deadline)
 {
-	cpu_data_t		*cdp = current_cpu_datap();
+	cpu_data_t			*cdp = current_cpu_datap();
 	mpqueue_head_t		*queue;
 
 	if (cdp->cpu_running) {
@@ -239,7 +241,7 @@ timer_queue_assign(
 	else
 		queue = &cpu_datap(master_cpu)->rtclock_timer.queue;
 
-    return queue;
+    return (queue);
 }
 
 void
@@ -260,7 +262,7 @@ timer_queue_cancel(
  * deadline so that it's timer queue can be moved to another processor.
  * This target processor should be the least idle (most busy) --
  * currently this is the primary processor for the calling thread's package.
- * Locking restrictions demand that the target cpu must be the boot cpu. 
+ * Locking restrictions demand that the target cpu must be the boot cpu.
  */
 uint32_t
 etimer_queue_migrate(int target_cpu)
@@ -273,7 +275,7 @@ etimer_queue_migrate(int target_cpu)
 	assert(target_cpu != cdp->cpu_number);
 	assert(target_cpu == master_cpu);
 
-	KERNEL_DEBUG_CONSTANT(
+	KERNEL_DEBUG_CONSTANT_IST(KDEBUG_TRACE,
 		DECR_TIMER_MIGRATE | DBG_FUNC_START,
 		target_cpu,
 		cdp->rtclock_timer.deadline, (cdp->rtclock_timer.deadline >>32),
@@ -297,7 +299,7 @@ etimer_queue_migrate(int target_cpu)
 		setPop(EndOfAllTime);
 	}
  
-	KERNEL_DEBUG_CONSTANT(
+	KERNEL_DEBUG_CONSTANT_IST(KDEBUG_TRACE,
 		DECR_TIMER_MIGRATE | DBG_FUNC_END,
 		target_cpu, ntimers_moved, 0, 0, 0);
 

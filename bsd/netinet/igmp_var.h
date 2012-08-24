@@ -310,6 +310,7 @@ extern void igmp_leavegroup(struct in_multi *);
 extern void igmp_slowtimo(void);
 extern void igi_addref(struct igmp_ifinfo *, int);
 extern void igi_remref(struct igmp_ifinfo *);
+__private_extern__ void igmp_initsilent(struct ifnet *, struct igmp_ifinfo *);
 
 SYSCTL_DECL(_net_inet_igmp);
 

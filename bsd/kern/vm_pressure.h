@@ -31,11 +31,16 @@
 
 #include <sys/queue.h>
 
-static lck_mtx_t vm_pressure_klist_mutex;
+void vm_pressure_init(lck_grp_t *grp, lck_attr_t *attr);
 
 int vm_knote_register(struct knote *);
 void vm_knote_unregister(struct knote *);
 
-void consider_pressure_events(void);
+void consider_vm_pressure_events(void);
+void vm_pressure_proc_cleanup(proc_t);
+
+#if CONFIG_MEMORYSTATUS && (DEVELOPMENT || DEBUG)
+boolean_t vm_dispatch_pressure_note_to_pid(pid_t pid);
+#endif
 
 #endif /* VM_PRESSURE_H */

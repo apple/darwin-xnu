@@ -166,7 +166,7 @@ struct	unpcb {
 	_UNPCB_LIST_ENTRY(unpcb_compat)	unp_link;	/* glue on list of all PCBs */
 	_UNPCB_PTR(struct socket *)	unp_socket;	/* pointer back to socket */
 	_UNPCB_PTR(struct vnode *)	unp_vnode;	/* if associated with file */
-	ino_t				unp_ino;	/* fake inode number */
+	u_int32_t			unp_ino;	/* fake inode number */
 	_UNPCB_PTR(struct unpcb_compat *) unp_conn;	/* control block of connected socket */
 #if defined(KERNEL)
 	u_int32_t			unp_refs;

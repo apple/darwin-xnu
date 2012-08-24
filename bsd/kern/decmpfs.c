@@ -168,13 +168,27 @@ vfs_context_t decmpfs_ctx;
 #define offsetof_func(func) ((uintptr_t)(&(((decmpfs_registration*)NULL)->func)))
 
 static void *
-_func_from_offset(uint32_t type, int offset)
+_func_from_offset(uint32_t type, uintptr_t offset)
 {
     /* get the function at the given offset in the registration for the given type */
     decmpfs_registration *reg = decompressors[type];
     char *regChar = (char*)reg;
     char *func = &regChar[offset];
     void **funcPtr = (void**)func;
+
+    switch (reg->decmpfs_registration) {
+        case DECMPFS_REGISTRATION_VERSION_V1:
+            if (offset > offsetof_func(free_data))
+                return NULL;
+            break;
+        case DECMPFS_REGISTRATION_VERSION_V3:
+            if (offset > offsetof_func(get_flags))
+                return NULL;
+            break;
+        default:
+            return NULL;
+    }
+
     return funcPtr[0];
 }
 
@@ -183,7 +197,7 @@ extern boolean_t IOServiceWaitForMatchingResource( const char * property, uint64
 extern boolean_t IOCatalogueMatchingDriversPresent( const char * property );
 
 static void *
-_decmp_get_func(uint32_t type, int offset)
+_decmp_get_func(uint32_t type, uintptr_t offset)
 {
 	/*
 	 this function should be called while holding a shared lock to decompressorsLock,
@@ -208,13 +222,15 @@ _decmp_get_func(uint32_t type, int offset)
         snprintf(resourceName, sizeof(resourceName), "com.apple.AppleFSCompression.Type%u", type);
         printf("waiting for %s\n", resourceName);
         while(decompressors[type] == NULL) {
-            lck_rw_done(decompressorsLock); // we have to unlock to allow the kext to register
+            lck_rw_unlock_shared(decompressorsLock); // we have to unlock to allow the kext to register
             if (IOServiceWaitForMatchingResource(resourceName, delay)) {
+                lck_rw_lock_shared(decompressorsLock);
                 break;
             }
             if (!IOCatalogueMatchingDriversPresent(providesName)) {
                 // 
                 printf("the kext with %s is no longer present\n", providesName);
+                lck_rw_lock_shared(decompressorsLock);
                 break;
             }
             printf("still waiting for %s\n", resourceName);
@@ -273,18 +289,12 @@ decmpfs_cnode_init(decmpfs_cnode *cp)
 {
     memset(cp, 0, sizeof(*cp));
 	lck_rw_init(&cp->compressed_data_lock, decmpfs_lockgrp, NULL);
-#if !DECMPFS_SUPPORTS_SWAP64
-    lck_mtx_init(&cp->uncompressed_size_mtx, decmpfs_lockgrp, NULL);
-#endif
 }
 
 void
 decmpfs_cnode_destroy(decmpfs_cnode *cp)
 {
 	lck_rw_destroy(&cp->compressed_data_lock, decmpfs_lockgrp);
-#if !DECMPFS_SUPPORTS_SWAP64
-    lck_mtx_destroy(&cp->uncompressed_size_mtx, decmpfs_lockgrp);
-#endif
 }
 
 boolean_t
@@ -382,25 +392,12 @@ decmpfs_cnode_set_vnode_minimal_xattr(decmpfs_cnode *cp, int minimal_xattr, int 
 uint64_t
 decmpfs_cnode_get_vnode_cached_size(decmpfs_cnode *cp)
 {
-#if DECMPFS_SUPPORTS_SWAP64
     return cp->uncompressed_size;
-#else
-    /*
-     since this is a 64-bit field, we may not be able to access it atomically
-     so lock access
-     */
-    
-    lck_mtx_lock(&(cp->uncompressed_size_mtx));
-    uint64_t ret = cp->uncompressed_size;
-    lck_mtx_unlock(&(cp->uncompressed_size_mtx));
-    return ret;
-#endif
 }
 
 static void
 decmpfs_cnode_set_vnode_cached_size(decmpfs_cnode *cp, uint64_t size)
 {
-#if DECMPFS_SUPPORTS_SWAP64
     while(1) {
         uint64_t old = cp->uncompressed_size;
         if (OSCompareAndSwap64(old, size, (UInt64*)&cp->uncompressed_size)) {
@@ -409,16 +406,25 @@ decmpfs_cnode_set_vnode_cached_size(decmpfs_cnode *cp, uint64_t size)
             /* failed to write our value, so loop */
         }
     }
-#else
-    /*
-     since this is a 64-bit field, we may not be able to access it atomically
-     so lock access
-     */
-    
-    lck_mtx_lock(&(cp->uncompressed_size_mtx));
-    cp->uncompressed_size = size;
-    lck_mtx_unlock(&(cp->uncompressed_size_mtx));
-#endif
+}
+
+static uint64_t
+decmpfs_cnode_get_decompression_flags(decmpfs_cnode *cp)
+{
+    return cp->decompression_flags;
+}
+
+static void
+decmpfs_cnode_set_decompression_flags(decmpfs_cnode *cp, uint64_t flags)
+{
+    while(1) {
+        uint64_t old = cp->decompression_flags;
+        if (OSCompareAndSwap64(old, flags, (UInt64*)&cp->decompression_flags)) {
+            return;
+        } else {
+            /* failed to write our value, so loop */
+        }
+    }
 }
 
 #pragma mark --- decmpfs state routines ---
@@ -602,7 +608,7 @@ decmpfs_validate_compressed_file(vnode_t vp, decmpfs_cnode *cp)
         /* no validate registered, so nothing to do */
         err = 0;
     }
-    lck_rw_done(decompressorsLock);
+    lck_rw_unlock_shared(decompressorsLock);
 out:
     if (hdr) FREE(hdr, M_TEMP);
 #if COMPRESSION_DEBUG
@@ -632,6 +638,7 @@ decmpfs_file_is_compressed(vnode_t vp, decmpfs_cnode *cp)
     mount_t mp = NULL;
 	int cnode_locked = 0;
     int saveInvalid = 0; // save the header data even though the type was out of range
+    uint64_t decompression_flags = 0;
 	
     if (vnode_isnamedstream(vp)) {
         /*
@@ -738,6 +745,15 @@ done:
         if (ret == FILE_IS_COMPRESSED) {
             /* update the ubc's size for this file */
             ubc_setsize(vp, hdr->uncompressed_size);
+            
+            /* update the decompression flags in the decmpfs cnode */
+            lck_rw_lock_shared(decompressorsLock);
+            decmpfs_get_decompression_flags_func get_flags = decmp_get_func(hdr->compression_type, get_flags);
+            if (get_flags) {
+                decompression_flags = get_flags(vp, decmpfs_ctx, hdr);
+            }
+            lck_rw_unlock_shared(decompressorsLock);
+            decmpfs_cnode_set_decompression_flags(cp, decompression_flags);
         }
 	} else {
 		/* we might have already taken the lock above; if so, skip taking it again by passing cnode_locked as the skiplock parameter */
@@ -885,6 +901,11 @@ decmpfs_hides_xattr(vfs_context_t ctx, decmpfs_cnode *cp, const char *xattr)
 
 #pragma mark --- registration/validation routines ---
 
+static inline int registration_valid(decmpfs_registration *registration)
+{
+    return registration && ((registration->decmpfs_registration == DECMPFS_REGISTRATION_VERSION_V1) || (registration->decmpfs_registration == DECMPFS_REGISTRATION_VERSION_V3));
+}
+
 errno_t
 register_decmpfs_decompressor(uint32_t compression_type, decmpfs_registration *registration)
 {
@@ -894,9 +915,7 @@ register_decmpfs_decompressor(uint32_t compression_type, decmpfs_registration *r
     int locked = 0;
     char resourceName[80];
     
-    if ((compression_type >= CMP_MAX) ||
-        (!registration) ||
-        (registration->decmpfs_registration != DECMPFS_REGISTRATION_VERSION)) {
+    if ((compression_type >= CMP_MAX) || !registration_valid(registration)) {
         ret = EINVAL;
         goto out;
     }
@@ -911,10 +930,9 @@ register_decmpfs_decompressor(uint32_t compression_type, decmpfs_registration *r
     decompressors[compression_type] = registration;
     snprintf(resourceName, sizeof(resourceName), "com.apple.AppleFSCompression.Type%u", compression_type);
     IOServicePublishResource(resourceName, TRUE);
-    wakeup((caddr_t)&decompressors);
     
 out:
-    if (locked) lck_rw_done(decompressorsLock);
+    if (locked) lck_rw_unlock_exclusive(decompressorsLock);
     return ret;
 }
 
@@ -927,9 +945,7 @@ unregister_decmpfs_decompressor(uint32_t compression_type, decmpfs_registration 
     int locked = 0;
     char resourceName[80];
 
-    if ((compression_type >= CMP_MAX) ||
-        (!registration) ||
-        (registration->decmpfs_registration != DECMPFS_REGISTRATION_VERSION)) {
+    if ((compression_type >= CMP_MAX) || !registration_valid(registration)) {
         ret = EINVAL;
         goto out;
     }
@@ -942,10 +958,9 @@ unregister_decmpfs_decompressor(uint32_t compression_type, decmpfs_registration 
     decompressors[compression_type] = NULL;
     snprintf(resourceName, sizeof(resourceName), "com.apple.AppleFSCompression.Type%u", compression_type);
     IOServicePublishResource(resourceName, FALSE);
-    wakeup((caddr_t)&decompressors);
     
 out:
-    if (locked) lck_rw_done(decompressorsLock);
+    if (locked) lck_rw_unlock_exclusive(decompressorsLock);
     return ret;
 }
 
@@ -960,7 +975,7 @@ compression_type_valid(decmpfs_header *hdr)
     if (decmp_get_func(hdr->compression_type, fetch) != NULL) {
         ret = 1;
     }
-    lck_rw_done(decompressorsLock);
+    lck_rw_unlock_shared(decompressorsLock);
 	
     return ret;
 }
@@ -968,7 +983,7 @@ compression_type_valid(decmpfs_header *hdr)
 #pragma mark --- compression/decompression routines ---
 
 static int
-decmpfs_fetch_uncompressed_data(vnode_t vp, decmpfs_header *hdr, off_t offset, user_ssize_t size, int nvec, decmpfs_vector *vec, uint64_t *bytes_read)
+decmpfs_fetch_uncompressed_data(vnode_t vp, decmpfs_cnode *cp, decmpfs_header *hdr, off_t offset, user_ssize_t size, int nvec, decmpfs_vector *vec, uint64_t *bytes_read)
 {
     /* get the uncompressed bytes for the specified region of vp by calling out to the registered compressor */
     
@@ -1000,10 +1015,22 @@ decmpfs_fetch_uncompressed_data(vnode_t vp, decmpfs_header *hdr, off_t offset, u
     decmpfs_fetch_uncompressed_data_func fetch = decmp_get_func(hdr->compression_type, fetch);
     if (fetch) {
 		err = fetch(vp, decmpfs_ctx, hdr, offset, size, nvec, vec, bytes_read);
+		lck_rw_unlock_shared(decompressorsLock);
+        if (err == 0) {
+            uint64_t decompression_flags = decmpfs_cnode_get_decompression_flags(cp);
+            if (decompression_flags & DECMPFS_FLAGS_FORCE_FLUSH_ON_DECOMPRESS) {
+#if	!defined(__i386__) && !defined(__x86_64__)
+                int i;
+                for (i = 0; i < nvec; i++) {
+                    flush_dcache64((addr64_t)(uintptr_t)vec[i].buf, vec[i].size, FALSE);
+                }
+#endif
+            }
+        }
     } else {
         err = ENOTSUP;
+        lck_rw_unlock_shared(decompressorsLock);
     }
-    lck_rw_done(decompressorsLock);
     
 out:
     return err;
@@ -1105,7 +1132,7 @@ decompress:
 		err = 0;
 		did_read = 0;
 	} else {
-        err = decmpfs_fetch_uncompressed_data(vp, hdr, uplPos, uplSize, 1, &vec, &did_read);
+        err = decmpfs_fetch_uncompressed_data(vp, cp, hdr, uplPos, uplSize, 1, &vec, &did_read);
 	}
     if (err) {
         DebugLog("decmpfs_fetch_uncompressed_data err %d\n", err);
@@ -1234,7 +1261,7 @@ decmpfs_read_compressed(struct vnop_read_args *ap, int *is_compressed, decmpfs_c
 		adjust_fetch(vp, decmpfs_ctx, hdr, &uplPos, &uplSize);
         VerboseLog("adjusted uplPos %lld uplSize %lld\n", (uint64_t)uplPos, (uint64_t)uplSize);
     }
-    lck_rw_done(decompressorsLock);
+    lck_rw_unlock_shared(decompressorsLock);
     
     /* clip the adjusted size to the size of the file */
     if ((uint64_t)uplPos + uplSize > cachedSize) {
@@ -1304,7 +1331,7 @@ decmpfs_read_compressed(struct vnop_read_args *ap, int *is_compressed, decmpfs_c
         decmpfs_vector vec;
     decompress:
         vec = (decmpfs_vector){ .buf = data, .size = curUplSize };
-        err = decmpfs_fetch_uncompressed_data(vp, hdr, curUplPos, curUplSize, 1, &vec, &did_read);
+        err = decmpfs_fetch_uncompressed_data(vp, cp, hdr, curUplPos, curUplSize, 1, &vec, &did_read);
         if (err) {
             ErrorLog("decmpfs_fetch_uncompressed_data err %d\n", err);
             
@@ -1409,7 +1436,7 @@ decmpfs_free_compressed_data(vnode_t vp, decmpfs_cnode *cp)
             /* nothing to do, so no error */
             err = 0;
         }
-        lck_rw_done(decompressorsLock);
+        lck_rw_unlock_shared(decompressorsLock);
         
         if (err != 0) {
             ErrorLog("decompressor err %d\n", err);
@@ -1559,7 +1586,7 @@ decompress:
 		
 		uint64_t bytes_read = 0;
 		decmpfs_vector vec = { .buf = data, .size = MIN(allocSize, remaining) };
-		err = decmpfs_fetch_uncompressed_data(vp, hdr, offset, vec.size, 1, &vec, &bytes_read);
+		err = decmpfs_fetch_uncompressed_data(vp, cp, hdr, offset, vec.size, 1, &vec, &bytes_read);
 		if (err != 0) {
 			ErrorLog("decmpfs_fetch_uncompressed_data err %d\n", err);
 			goto out;
@@ -1733,7 +1760,8 @@ static decmpfs_registration Type1Reg =
     .validate          = decmpfs_validate_compressed_file_Type1,
     .adjust_fetch      = NULL, /* no adjust necessary */
     .fetch             = decmpfs_fetch_uncompressed_data_Type1,
-    .free_data         = NULL  /* no free necessary */
+    .free_data         = NULL, /* no free necessary */
+    .get_flags         = NULL  /* no flags */
 };
 
 #pragma mark --- decmpfs initialization ---

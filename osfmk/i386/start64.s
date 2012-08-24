@@ -27,12 +27,11 @@
  */
 
 #include <platforms.h>
-#include <mach_kdb.h>
-
 #include <i386/asm.h>
 #include <i386/asm64.h>
 #include <i386/proc_reg.h>
 #include <i386/postcode.h>
+#include <i386/vmx/vmx_asm.h>
 #include <assym.s>
 
 	.data
@@ -213,3 +212,45 @@ Entry(xrstor64o)
 	.byte	0x29
 	ENTER_COMPAT_MODE()
 	ret
+
+#if CONFIG_VMX
+
+/*
+ *	__vmxon -- Enter VMX Operation
+ *	int __vmxon(addr64_t v);
+ */
+Entry(__vmxon)
+	FRAME
+	
+	ENTER_64BIT_MODE()
+	mov	$(VMX_FAIL_INVALID), %ecx
+	mov	$(VMX_FAIL_VALID), %edx
+	mov	$(VMX_SUCCEED), %eax
+	vmxon	8(%rbp)		/* physical addr passed on stack */
+	cmovcl 	%ecx, %eax	/* CF = 1, ZF = 0 */
+	cmovzl	%edx, %eax	/* CF = 0, ZF = 1 */
+	ENTER_COMPAT_MODE()
+
+	EMARF
+	ret
+
+/*
+ *	__vmxoff -- Leave VMX Operation
+ *	int __vmxoff(void);
+ */
+Entry(__vmxoff)
+	FRAME
+	
+	ENTER_64BIT_MODE()
+	mov	$(VMX_FAIL_INVALID), %ecx
+	mov	$(VMX_FAIL_VALID), %edx
+	mov	$(VMX_SUCCEED), %eax
+	vmxoff
+	cmovcl 	%ecx, %eax	/* CF = 1, ZF = 0 */
+	cmovzl	%edx, %eax	/* CF = 0, ZF = 1 */
+	ENTER_COMPAT_MODE()
+
+	EMARF
+	ret
+
+#endif /* CONFIG_VMX */

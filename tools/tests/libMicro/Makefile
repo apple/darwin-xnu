@@ -72,16 +72,21 @@ BINS=		$(ALL:%=bin-$(ARCH)/%) bin-$(ARCH)/tattle
 	wrapper.sh	\
 	README
 
+ifeq "$(Embedded)" "YES"
+SEMOP_FLAG= 
+endif
+
 default $(ALL) run cstyle lint tattle: $(BINS)
 	@cp bench.sh bench
 	@cp coreos_bench.sh coreos_bench
+	@cp embd_bench.sh embd_bench
 	@cp multiview.sh multiview
 	@cp wrapper.sh wrapper
 	@cp create_stuff.sh create_stuff
 	@cp benchDS.sh benchDS
 	@cp od_account_create.sh od_account_create
 	@cp od_account_delete.sh od_account_delete
-	@chmod +x bench coreos_bench create_stuff multiview wrapper benchDS od_account_create od_account_delete
+	@chmod +x bench coreos_bench embd_bench create_stuff multiview wrapper benchDS od_account_create od_account_delete
 	@mkdir -p bin-$(ARCH); cd bin-$(ARCH); MACH=$(ARCH) $(MAKE) -f ../Makefile.`uname -s` ARCH=$(ARCH) UNAME_RELEASE=`uname -r | sed 's/\./_/g'` $@
 	@echo "code signing all the binaries under bin-$(ARCH) and apple/bin-$(ARCH)"
 	@for file in $(abspath bin-$(ARCH)/*) $(abspath apple/bin-$(ARCH)/*);do        \
@@ -94,7 +99,7 @@ default $(ALL) run cstyle lint tattle: $(BINS)
 .PHONY: clean clean_subdirs clean_$(SUBDIRS)
 
 clean: clean_subdirs
-	rm -rf bin bin-* wrapper multiview create_stuff bench tattle benchDS od_account_create od_account_delete coreos_bench
+	rm -rf bin bin-* wrapper multiview create_stuff bench tattle benchDS od_account_create od_account_delete coreos_bench embd_bench
 
 clean_subdirs:
 	for dir in $(SUBDIRS); do $(MAKE) -C $$dir clean; done
