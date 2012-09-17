@@ -180,12 +180,12 @@
 
 #include <pexpert/pexpert.h>
 #include <machine/pal_routines.h>
+#include <console/video_console.h>
 
 void * get_user_regs(thread_t);		/* XXX kludge for <machine/thread.h> */
 void IOKitInitializeTime(void);		/* XXX */
 void IOSleep(unsigned int);		/* XXX */
 void loopattach(void);			/* XXX */
-void vc_progress_set(boolean_t, uint32_t); /* XXX */
 
 const char    copyright[] =
 "Copyright (c) 1982, 1986, 1989, 1991, 1993\n\t"

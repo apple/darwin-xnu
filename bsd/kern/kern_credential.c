@@ -2278,10 +2278,16 @@ kauth_cred_cache_lookup(int from, int to, void *src, void *dst)
 			return(error);
 		}
 	} else {
-		/* do we have a translation? */
-		if (ki.ki_valid & to) {
-			/* found a valid cached entry, check expiry */
-			switch(to) {
+		/* found a valid cached entry, check expiry */
+		switch(to) {
+		case KI_VALID_GUID:
+			expired = kauth_identity_guid_expired;
+			break;
+		case KI_VALID_NTSID:
+			expired = kauth_identity_ntsid_expired;
+			break;
+		default:
+			switch(from) {
 			case KI_VALID_GUID:
 				expired = kauth_identity_guid_expired;
 				break;
@@ -2289,52 +2295,64 @@ kauth_cred_cache_lookup(int from, int to, void *src, void *dst)
 				expired = kauth_identity_ntsid_expired;
 				break;
 			default:
-				switch(from) {
-				case KI_VALID_GUID:
-					expired = kauth_identity_guid_expired;
-					break;
-				case KI_VALID_NTSID:
-					expired = kauth_identity_ntsid_expired;
-					break;
-				default:
-					expired = NULL;
-				}
+				expired = NULL;
 			}
-			KAUTH_DEBUG("CACHE - found matching entry with valid 0x%08x", ki.ki_valid);
-			/*
-			 * If no expiry function, or not expired, we have found
-			 * a hit.
-			 */
-			if (!expired) {
-				KAUTH_DEBUG("CACHE - no expiry function");
-				goto found;
-			}
+		}
+
+		/*
+		 * If no expiry function, or not expired, we have found
+		 * a hit.
+		 */
+		if (expired) {
 			if (!expired(&ki)) {
 				KAUTH_DEBUG("CACHE - entry valid, unexpired");
-				goto found;
+				expired = NULL; /* must clear it is used as a flag */
+			} else {
+				/*
+				 * We leave ki_valid set here; it contains a
+				 * translation but the TTL has expired.  If we can't
+				 * get a result from the resolver, we will use it as
+				 * a better-than nothing alternative.
+				 */
+				
+				KAUTH_DEBUG("CACHE - expired entry found");
 			}
-			/*
-			 * We leave ki_valid set here; it contains a
-			 * translation but the TTL has expired.  If we can't
-			 * get a result from the resolver, we will use it as
-			 * a better-than nothing alternative.
-			 */
-			KAUTH_DEBUG("CACHE - expired entry found");
 		} else {
-			/*
-			 * A guid can't both match a uid and a gid, so if we
-			 * found a cache entry while looking for one or the
-			 * other from a guid, the 'from' is KI_VALID_GUID,
-			 * and the 'to' is one, and the other one is valid,
-			 * then we immediately return ENOENT without calling
-			 * the resolver again.
-			 */
-			if (from == KI_VALID_GUID &&
-			    (((ki.ki_valid & KI_VALID_UID) &&
-			      to == KI_VALID_GID) ||
-			     ((ki.ki_valid & KI_VALID_GID) &&
-			      to == KI_VALID_UID))) {
-				return (ENOENT);
+			KAUTH_DEBUG("CACHE - no expiry function");
+		}
+		
+		if (!expired) {
+			/* do we have a translation? */
+			if (ki.ki_valid & to) {
+				KAUTH_DEBUG("CACHE - found matching entry with valid 0x%08x", ki.ki_valid);
+				goto found;
+			} else {
+				/*
+				 * GUIDs and NTSIDs map to either a UID or a GID, but not both. 
+				 * If we went looking for a translation from GUID or NTSID and 
+				 * found a translation that wasn't for our desired type, then 
+				 * don't bother calling the resolver. We know that this 
+				 * GUID/NTSID can't translate to our desired type.
+				 */
+				switch(from) {
+				case KI_VALID_GUID:
+				case KI_VALID_NTSID:
+					switch(to) {
+					case KI_VALID_GID:
+						if ((ki.ki_valid & KI_VALID_UID)) {
+							KAUTH_DEBUG("CACHE - unexpected entry 0x%08x & %x", ki.ki_valid, KI_VALID_GID);
+							return (ENOENT);
+						}
+						break;
+					case KI_VALID_UID:
+						if ((ki.ki_valid & KI_VALID_GID)) {
+							KAUTH_DEBUG("CACHE - unexpected entry 0x%08x & %x", ki.ki_valid, KI_VALID_UID);
+							return (ENOENT);
+						}
+						break;
+					}
+					break;
+				}
 			}
 		}
 	}

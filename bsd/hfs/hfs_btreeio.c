@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2010 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2011 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -54,6 +54,28 @@ static int ClearBTNodes(struct vnode *vp, long blksize, off_t offset, off_t amou
 static int btree_journal_modify_block_end(struct hfsmount *hfsmp, struct buf *bp);
 
 void btree_swap_node(struct buf *bp, __unused void *arg);
+
+/* 
+ * Return btree node size for given vnode.
+ *
+ * Returns: 
+ * 	For btree vnode, returns btree node size. 
+ * 	For non-btree vnodes, returns 0.
+ */
+u_int16_t get_btree_nodesize(struct vnode *vp)
+{
+	BTreeControlBlockPtr btree;
+	u_int16_t node_size = 0; 
+
+	if (vnode_issystem(vp)) {
+		btree = (BTreeControlBlockPtr) VTOF(vp)->fcbBTCBPtr;
+		if (btree) {
+			node_size = btree->nodeSize;
+		}
+	}
+
+	return node_size;
+}
 
 OSStatus SetBTreeBlockSize(FileReference vp, ByteCount blockSize, __unused ItemCount minBlockCount)
 {

@@ -458,6 +458,7 @@ proc_exit(proc_t p)
 	
 	proc_refdrain(p);
 
+	workqueue_mark_exiting(p);
 	workqueue_exit(p);
 
 	_aio_exit( p );

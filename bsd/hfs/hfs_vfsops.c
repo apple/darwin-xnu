@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1999-2010 Apple Inc. All rights reserved.
+ * Copyright (c) 1999-2012 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -106,6 +106,7 @@
 #include "hfs_endian.h"
 #include "hfs_hotfiles.h"
 #include "hfs_quota.h"
+#include "hfs_btreeio.h"
 
 #include "hfscommon/headers/FileMgrInternal.h"
 #include "hfscommon/headers/BTreesInternal.h"
@@ -4909,7 +4910,7 @@ hfs_split_extent(struct hfs_reclaim_extent_info *extent_info, uint32_t newBlockC
 	int error = 0;
 	int index = extent_info->extent_index;
 	int i;
-	HFSPlusExtentDescriptor shift_extent;
+	HFSPlusExtentDescriptor shift_extent; /* Extent entry that should be shifted into next extent record */
 	HFSPlusExtentDescriptor last_extent;
 	HFSPlusExtentDescriptor *extents; /* Pointer to current extent record being manipulated */
 	HFSPlusExtentRecord *extents_rec = NULL;
@@ -4923,12 +4924,23 @@ hfs_split_extent(struct hfs_reclaim_extent_info *extent_info, uint32_t newBlockC
 	uint32_t write_recStartBlock;	/* Starting allocation block number to insert newly updated extent record */
 	Boolean create_record = false;
 	Boolean is_xattr;
+	struct cnode *cp;
        
 	is_xattr = extent_info->is_xattr;
 	extents = extent_info->extents;
+	cp = VTOC(extent_info->vp);
 
 	if (hfs_resize_debug) {
 		printf ("hfs_split_extent: Split record:%u recStartBlock=%u %u:(%u,%u) for %u blocks\n", extent_info->overflow_count, extent_info->recStartBlock, index, extents[index].startBlock, extents[index].blockCount, newBlockCount);
+	}
+
+	/* Extents overflow btree can not have more than 8 extents.  
+	 * No split allowed if the 8th extent is already used. 
+	 */
+	if ((extent_info->fileID == kHFSExtentsFileID) && (extents[kHFSPlusExtentDensity - 1].blockCount != 0)) {
+		printf ("hfs_split_extent: Maximum 8 extents allowed for extents overflow btree, cannot split further.\n");
+		error = ENOSPC;
+		goto out;
 	}
 
 	/* Determine the starting allocation block number for the following
@@ -4956,6 +4968,9 @@ hfs_split_extent(struct hfs_reclaim_extent_info *extent_info, uint32_t newBlockC
 		 * record.  So, store the last extent entry for later. 
 		 */
 		shift_extent = extents[kHFSPlusExtentDensity-1];
+		if ((hfs_resize_debug) && (shift_extent.blockCount != 0)) {
+			printf ("hfs_split_extent: Save 7:(%u,%u) to shift into overflow record\n", shift_extent.startBlock, shift_extent.blockCount);
+		}
 
 		/* Start shifting extent information from the end of the extent 
 		 * record to the index where we want to insert the new extent.
@@ -5001,11 +5016,21 @@ hfs_split_extent(struct hfs_reclaim_extent_info *extent_info, uint32_t newBlockC
 		}
 	}
 
-	/* If the newly split extent is for large EAs or in overflow extent 
-	 * record, so update it directly in the btree using the iterator 
-	 * information from the shared extent_info structure
-	 */
-	if (extent_info->catalog_fp == NULL) {
+	/* Write out information about the newly split extent to the disk */
+	if (extent_info->catalog_fp) {
+		/* (extent_info->catalog_fp != NULL) means the newly split 
+		 * extent exists in the catalog record.  This means that 
+		 * the cnode was updated.  Therefore, to write out the changes,
+		 * mark the cnode as modified.   We cannot call hfs_update()
+		 * in this function because the caller hfs_reclaim_extent() 
+		 * is holding the catalog lock currently.
+		 */
+		cp->c_flag |= C_MODIFIED;
+	} else {
+		/* The newly split extent is for large EAs or is in overflow 
+		 * extent record, so update it directly in the btree using the 
+		 * iterator information from the shared extent_info structure
+	 	 */
 		error = BTReplaceRecord(extent_info->fcb, extent_info->iterator, 
 				&(extent_info->btdata), extent_info->recordlen);
 		if (error) {
@@ -5024,18 +5049,18 @@ hfs_split_extent(struct hfs_reclaim_extent_info *extent_info, uint32_t newBlockC
 	}
 
 	/* The overflow extent entry has to be shifted into an extent 
-	 * overflow record.  This would mean that we have to shift 
-	 * extent entries from all overflow records by one.  We will 
-	 * start iteration from the first record to the last record, 
+	 * overflow record.  This means that we might have to shift 
+	 * extent entries from all subsequent overflow records by one. 
+	 * We start iteration from the first record to the last record, 
 	 * and shift the extent entry from one record to another.  
-	 * We might have to create a new record for the last extent 
-	 * entry for the file. 
+	 * We might have to create a new extent record for the last 
+	 * extent entry for the file. 
 	 */
 	
 	/* Initialize iterator to search the next record */
 	bzero(&iterator, sizeof(iterator));
 	if (is_xattr) {
-		/* Copy the key from the iterator that was to update the modified attribute record. */
+		/* Copy the key from the iterator that was used to update the modified attribute record. */
 		xattr_key = (HFSPlusAttrKey *)&(iterator.key);
 		bcopy((HFSPlusAttrKey *)&(extent_info->iterator->key), xattr_key, sizeof(HFSPlusAttrKey));
 		/* Note: xattr_key->startBlock will be initialized later in the iteration loop */
@@ -5051,6 +5076,7 @@ hfs_split_extent(struct hfs_reclaim_extent_info *extent_info, uint32_t newBlockC
 		btdata.itemCount = 1;
 		extents = xattr_rec->overflowExtents.extents;
 	} else {
+		/* Initialize the extent key for the current file */
 		extents_key = (HFSPlusExtentKey *) &(iterator.key);
 		extents_key->keyLength = kHFSPlusExtentKeyMaximumLength;
 		extents_key->forkType = extent_info->forkType;
@@ -5069,19 +5095,34 @@ hfs_split_extent(struct hfs_reclaim_extent_info *extent_info, uint32_t newBlockC
 		extents = extents_rec[0];
 	}
 
-	/* An extent entry still needs to be shifted into following overflow 
-	 * extent record.  This will result in the starting allocation block
-	 * number of the extent record being changed which is part of the key
-	 * for the extent record.  Since the extent record key is changing,
-	 * the record can not be updated, instead has to be deleted and 
-	 * inserted again.
+	/* The overflow extent entry has to be shifted into an extent 
+	 * overflow record.  This means that we might have to shift 
+	 * extent entries from all subsequent overflow records by one. 
+	 * We start iteration from the first record to the last record, 
+	 * examine one extent record in each iteration and shift one 
+	 * extent entry from one record to another.  We might have to 
+	 * create a new extent record for the last extent entry for the 
+	 * file. 
+	 *
+	 * If shift_extent.blockCount is non-zero, it means that there is 
+	 * an extent entry that needs to be shifted into the next 
+	 * overflow extent record.  We keep on going till there are no such 
+	 * entries left to be shifted.  This will also change the starting 
+	 * allocation block number of the extent record which is part of 
+	 * the key for the extent record in each iteration.  Note that 
+	 * because the extent record key is changing while we are searching, 
+	 * the record can not be updated directly, instead it has to be 
+	 * deleted and inserted again.
 	 */
 	while (shift_extent.blockCount) {
 		if (hfs_resize_debug) {
-			printf ("hfs_split_extent: Will shift (%u,%u) into record with startBlock=%u\n", shift_extent.startBlock, shift_extent.blockCount, read_recStartBlock);
+			printf ("hfs_split_extent: Will shift (%u,%u) into overflow record with startBlock=%u\n", shift_extent.startBlock, shift_extent.blockCount, read_recStartBlock);
 		}
 
-		/* Search if there is any existing overflow extent record.
+		/* Search if there is any existing overflow extent record
+		 * that matches the current file and the logical start block 
+		 * number.
+		 *
 		 * For this, the logical start block number in the key is 
 		 * the value calculated based on the logical start block 
 		 * number of the current extent record and the total number 
@@ -5098,6 +5139,11 @@ hfs_split_extent(struct hfs_reclaim_extent_info *extent_info, uint32_t newBlockC
 				printf ("hfs_split_extent: fileID=%u startBlock=%u BTSearchRecord error=%d\n", extent_info->fileID, read_recStartBlock, error);
 				goto out;
 			}
+			/* No matching record was found, so create a new extent record.
+			 * Note:  Since no record was found, we can't rely on the 
+			 * btree key in the iterator any longer.  This will be initialized
+			 * later before we insert the record.
+			 */
 			create_record = true;
 		}
 	
@@ -5138,10 +5184,31 @@ hfs_split_extent(struct hfs_reclaim_extent_info *extent_info, uint32_t newBlockC
 			shift_extent.startBlock = shift_extent.blockCount = 0;
 
 			if (is_xattr) {
+				/* BTSearchRecord above returned btNotFound,
+				 * but since the attribute btree is never empty
+				 * if we are trying to insert new overflow 
+				 * record for the xattrs, the extents_key will
+				 * contain correct data.  So we don't need to 
+				 * re-initialize it again like below. 
+				 */
+
+				/* Initialize the new xattr record */
 				xattr_rec->recordType = kHFSPlusAttrExtents; 
 				xattr_rec->overflowExtents.reserved = 0;
 				reclen = sizeof(HFSPlusAttrExtents);
 			} else {
+				/* BTSearchRecord above returned btNotFound, 
+				 * which means that extents_key content might 
+				 * not correspond to the record that we are 
+				 * trying to create, especially when the extents 
+				 * overflow btree is empty.  So we reinitialize 
+				 * the extents_key again always. 
+				 */
+				extents_key->keyLength = kHFSPlusExtentKeyMaximumLength;
+				extents_key->forkType = extent_info->forkType;
+				extents_key->fileID = extent_info->fileID;
+
+				/* Initialize the new extent record */
 				reclen = sizeof(HFSPlusExtentRecord);
 			}
 		} else {
@@ -5251,6 +5318,9 @@ hfs_reclaim_extent(struct hfsmount *hfsmp, const u_long allocLimit, struct hfs_r
 	u_int32_t oldBlockCount;
 	u_int32_t newStartBlock;
 	u_int32_t newBlockCount;
+	u_int32_t roundedBlockCount;
+	uint16_t node_size;
+	uint32_t remainder_blocks;
 	u_int32_t alloc_flags;
 	int blocks_allocated = false;
 
@@ -5264,7 +5334,9 @@ hfs_reclaim_extent(struct hfsmount *hfsmp, const u_long allocLimit, struct hfs_r
 		printf ("hfs_reclaim_extent: Examine record:%u recStartBlock=%u, %u:(%u,%u)\n", extent_info->overflow_count, extent_info->recStartBlock, index, oldStartBlock, oldBlockCount);
 	}
 
-	/* Check if the current extent lies completely within allocLimit */
+	/* If the current extent lies completely within allocLimit, 
+	 * it does not require any relocation. 
+	 */
 	if ((oldStartBlock + oldBlockCount) <= allocLimit) {
 		extent_info->cur_blockCount += oldBlockCount;
 		return error;
@@ -5288,16 +5360,59 @@ hfs_reclaim_extent(struct hfsmount *hfsmp, const u_long allocLimit, struct hfs_r
 	 */
 	if (oldStartBlock < allocLimit) {
 		newBlockCount = allocLimit - oldStartBlock;
+		
+		/* If the extent belongs to a btree, check and trim 
+		 * it to be multiple of the node size. 
+		 */
+		if (extent_info->is_sysfile) {
+			node_size = get_btree_nodesize(extent_info->vp);
+			/* If the btree node size is less than the block size, 
+			 * splitting this extent will not split a node across 
+			 * different extents.  So we only check and trim if 
+			 * node size is more than the allocation block size. 
+			 */ 
+			if (node_size > hfsmp->blockSize) {
+				remainder_blocks = newBlockCount % (node_size / hfsmp->blockSize);
+				if (remainder_blocks) {
+					newBlockCount -= remainder_blocks;
+					if (hfs_resize_debug) {
+						printf ("hfs_reclaim_extent: Fixing extent block count, node_blks=%u, old=%u, new=%u\n", node_size/hfsmp->blockSize, newBlockCount + remainder_blocks, newBlockCount);
+					}
+				}
+			}
+		}
+
+		if (hfs_resize_debug) {
+			int idx = extent_info->extent_index;
+			printf ("hfs_reclaim_extent: Split straddling extent %u:(%u,%u) for %u blocks\n", idx, extent_info->extents[idx].startBlock, extent_info->extents[idx].blockCount, newBlockCount);
+		}
+
+		/* Split the extents into two parts --- the first extent lies
+		 * completely within allocLimit and therefore does not require
+		 * relocation.  The second extent will require relocation which
+		 * will be handled when the caller calls this function again 
+		 * for the next extent. 
+		 */
 		error = hfs_split_extent(extent_info, newBlockCount);
 		if (error == 0) {
-			/* After successful split, the current extent does not 
-			 * need relocation, so just return back.  
-			 */
+			/* Split success, no relocation required */
 			goto out;
 		}
-		/* Ignore error and try relocating the entire extent instead */
+		/* Split failed, so try to relocate entire extent */
+		if (hfs_resize_debug) {
+			printf ("hfs_reclaim_extent: Split straddling extent failed, reclocate full extent\n");
+		}
 	}
 
+	/* At this point, the current extent requires relocation.  
+	 * We will try to allocate space equal to the size of the extent 
+	 * being relocated first to try to relocate it without splitting.  
+	 * If the allocation fails, we will try to allocate contiguous 
+	 * blocks out of metadata zone.  If that allocation also fails, 
+	 * then we will take a whatever contiguous block run is returned 
+	 * by the allocation, split the extent into two parts, and then 
+	 * relocate the first splitted extent. 
+	 */
 	alloc_flags = HFS_ALLOC_FORCECONTIG | HFS_ALLOC_SKIPFREEBLKS; 
 	if (extent_info->is_sysfile) {
 		alloc_flags |= HFS_ALLOC_METAZONE;
@@ -5326,6 +5441,39 @@ hfs_reclaim_extent(struct hfsmount *hfsmp, const u_long allocLimit, struct hfs_r
 		}
 		blocks_allocated = true;
 
+		/* The number of blocks allocated is less than the requested 
+		 * number of blocks.  For btree extents, check and trim the 
+		 * extent to be multiple of the node size. 
+		 */
+		if (extent_info->is_sysfile) {
+			node_size = get_btree_nodesize(extent_info->vp);
+			if (node_size > hfsmp->blockSize) {
+				remainder_blocks = newBlockCount % (node_size / hfsmp->blockSize);
+				if (remainder_blocks) {
+					roundedBlockCount = newBlockCount - remainder_blocks;
+					/* Free tail-end blocks of the newly allocated extent */
+					BlockDeallocate(hfsmp, newStartBlock + roundedBlockCount,
+							       newBlockCount - roundedBlockCount,
+							       HFS_ALLOC_SKIPFREEBLKS);
+					newBlockCount = roundedBlockCount;
+					if (hfs_resize_debug) {
+						printf ("hfs_reclaim_extent: Fixing extent block count, node_blks=%u, old=%u, new=%u\n", node_size/hfsmp->blockSize, newBlockCount + remainder_blocks, newBlockCount);
+					}
+					if (newBlockCount == 0) {
+						printf ("hfs_reclaim_extent: Not enough contiguous blocks available to relocate fileID=%d\n", extent_info->fileID);
+						error = ENOSPC;
+						goto out;
+					}
+				}
+			}
+		}
+
+		/* The number of blocks allocated is less than the number of 
+		 * blocks requested, so split this extent --- the first extent 
+		 * will be relocated as part of this function call and the caller
+		 * will handle relocating the second extent by calling this 
+		 * function again for the second extent. 
+		 */
 		error = hfs_split_extent(extent_info, newBlockCount);
 		if (error) {
 			printf ("hfs_reclaim_extent: fileID=%u start=%u, %u:(%u,%u) split error=%d\n", extent_info->fileID, extent_info->recStartBlock, index, oldStartBlock, oldBlockCount, error);
@@ -5402,9 +5550,8 @@ out:
 	 * was modified, sync the in-memory changes to the catalog record
 	 * on disk before ending the transaction.
 	 */
-	if ((error == 0) && 
-	    (extent_info->overflow_count < kHFSPlusExtentDensity) &&
-	    (extent_info->is_sysfile == false)) {
+	 if ((extent_info->catalog_fp) && 
+	     (extent_info->is_sysfile == false)) {
 		(void) hfs_update(extent_info->vp, MNT_WAIT);
 	}
 
@@ -6501,19 +6648,46 @@ hfs_reclaimspace(struct hfsmount *hfsmp, u_int32_t allocLimit, u_int32_t reclaim
 		printf ("hfs_reclaimspace: Total number of blocks to reclaim = %u\n", hfsmp->hfs_resize_totalblocks);
 	}
 
+	/* Just to be safe, sync the content of the journal to the disk before we proceed */
+	hfs_journal_flush(hfsmp, TRUE);
+
+	/* First, relocate journal file blocks if they're in the way.  
+	 * Doing this first will make sure that journal relocate code 
+	 * gets access to contiguous blocks on disk first.  The journal
+	 * file has to be contiguous on the disk, otherwise resize will 
+	 * fail. 
+	 */
+	error = hfs_reclaim_journal_file(hfsmp, allocLimit, context);
+	if (error) {
+		printf("hfs_reclaimspace: hfs_reclaim_journal_file failed (%d)\n", error);
+		return error;
+	}
+	
+	/* Relocate journal info block blocks if they're in the way. */
+	error = hfs_reclaim_journal_info_block(hfsmp, allocLimit, context);
+	if (error) {
+		printf("hfs_reclaimspace: hfs_reclaim_journal_info_block failed (%d)\n", error);
+		return error;
+	}
+
+	/* Relocate extents of the Extents B-tree if they're in the way.
+	 * Relocating extents btree before other btrees is important as 
+	 * this will provide access to largest contiguous block range on 
+	 * the disk for relocating extents btree.  Note that extents btree 
+	 * can only have maximum of 8 extents.
+	 */
+	error = hfs_reclaim_file(hfsmp, hfsmp->hfs_extents_vp, kHFSExtentsFileID, 
+			kHFSDataForkType, allocLimit, context);
+	if (error) {
+		printf("hfs_reclaimspace: reclaim extents b-tree returned %d\n", error);
+		return error;
+	}
+
 	/* Relocate extents of the Allocation file if they're in the way. */
 	error = hfs_reclaim_file(hfsmp, hfsmp->hfs_allocation_vp, kHFSAllocationFileID, 
 			kHFSDataForkType, allocLimit, context);
 	if (error) {
 		printf("hfs_reclaimspace: reclaim allocation file returned %d\n", error);
-		return error;
-	}
-
-	/* Relocate extents of the Extents B-tree if they're in the way. */
-	error = hfs_reclaim_file(hfsmp, hfsmp->hfs_extents_vp, kHFSExtentsFileID, 
-			kHFSDataForkType, allocLimit, context);
-	if (error) {
-		printf("hfs_reclaimspace: reclaim extents b-tree returned %d\n", error);
 		return error;
 	}
 
@@ -6552,21 +6726,7 @@ hfs_reclaimspace(struct hfsmount *hfsmp, u_int32_t allocLimit, u_int32_t reclaim
 	 * strictly required, but shouldn't hurt.
 	 */
 	if (hfsmp->hfs_resize_blocksmoved) {
-		hfs_journal_flush(hfsmp, FALSE);
-	}
-
-	/* Relocate journal file blocks if they're in the way. */
-	error = hfs_reclaim_journal_file(hfsmp, allocLimit, context);
-	if (error) {
-		printf("hfs_reclaimspace: hfs_reclaim_journal_file failed (%d)\n", error);
-		return error;
-	}
-	
-	/* Relocate journal info block blocks if they're in the way. */
-	error = hfs_reclaim_journal_info_block(hfsmp, allocLimit, context);
-	if (error) {
-		printf("hfs_reclaimspace: hfs_reclaim_journal_info_block failed (%d)\n", error);
-		return error;
+		hfs_journal_flush(hfsmp, TRUE);
 	}
 
 	/* Reclaim extents from catalog file records */

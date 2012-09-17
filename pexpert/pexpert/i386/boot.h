@@ -121,13 +121,16 @@ typedef struct boot_icon_element boot_icon_element;
 #define kBootArgsEfiMode32              32
 #define kBootArgsEfiMode64              64
 
+#define kBootArgsFlagRebootOnPanic	1
+#define kBootArgsFlagHiDPI		2
+
 typedef struct boot_args {
     uint16_t    Revision;	/* Revision of boot_args structure */
     uint16_t    Version;	/* Version of boot_args structure */
 
     uint8_t     efiMode;    /* 32 = 32-bit, 64 = 64-bit */
     uint8_t     debugMode;  /* Bit field with behavior changes */
-    uint8_t     __reserved1[2];
+    uint16_t    flags;
 
     char        CommandLine[BOOT_LINE_LENGTH];	/* Passed in command line */
 

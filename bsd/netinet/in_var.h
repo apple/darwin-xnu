@@ -317,6 +317,7 @@ struct in_multi {
 
 	/* New fields for IGMPv3 follow. */
 	struct igmp_ifinfo	*inm_igi;	/* IGMP info */
+	SLIST_ENTRY(in_multi)	 inm_dtle;	/* detached waiting for rele */
 	SLIST_ENTRY(in_multi)	 inm_nrele;	/* to-be-released by IGMP */
 	u_int32_t		 inm_nrelecnt;	/* deferred release count */
 	struct ip_msource_tree	 inm_srcs;	/* tree of sources */

@@ -297,6 +297,8 @@ extern  vm_offset_t		sdata;
 
 extern void			*KPTphys;
 
+boolean_t pmap_smep_enabled = FALSE;
+
 void
 pmap_cpu_init(void)
 {
@@ -315,6 +317,13 @@ pmap_cpu_init(void)
 	current_cpu_datap()->cpu_tlb_invalid = FALSE;
 	current_cpu_datap()->cpu_task_map = TASK_MAP_64BIT;
 	pmap_pcid_configure();
+	if (cpuid_leaf7_features() & CPUID_LEAF7_FEATURE_SMEP) {
+		boolean_t nsmep;
+		if (!PE_parse_boot_argn("-pmap_smep_disable", &nsmep, sizeof(nsmep))) {
+			set_cr4(get_cr4() | CR4_SMEP);
+			pmap_smep_enabled = TRUE;
+		}
+	}
 }
 
 
@@ -423,6 +432,8 @@ pmap_bootstrap(
 	if (pmap_pcid_ncpus)
 		printf("PMAP: PCID enabled\n");
 
+	if (pmap_smep_enabled)
+		printf("PMAP: Supervisor Mode Execute Protection enabled\n");
 
 	boot_args *args = (boot_args *)PE_state.bootArgs;
 	if (args->efiMode == kBootArgsEfiMode32) {

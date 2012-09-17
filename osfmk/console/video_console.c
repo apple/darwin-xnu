@@ -127,12 +127,6 @@ boolean_t panicDialogDesired;
 
 void noroot_icon_test(void);
 
-int
-vc_display_lzss_icon(uint32_t dst_x,       uint32_t dst_y,
-                     uint32_t image_width, uint32_t image_height,
-                     const uint8_t *compressed_image,
-                     uint32_t       compressed_size, 
-                     const uint8_t *clut);
 
 extern int       disableConsoleOutput;
 static boolean_t gc_enabled     = FALSE;
@@ -237,12 +231,6 @@ static unsigned int gc_par[MAXPARS], gc_numpars, gc_hanging_cursor, gc_attr, gc_
 /* VT100 scroll region */
 static unsigned int gc_scrreg_top, gc_scrreg_bottom;
 
-#ifdef CONFIG_VC_PROGRESS_WHITE
-enum { kProgressAcquireDelay = 0 /* secs */ };
-#else
-enum { kProgressAcquireDelay = 5 /* secs */ };
-#endif
-
 enum vt100state_e {
 	ESnormal,		/* Nothing yet                             */
 	ESesc,			/* Got ESC                                 */
@@ -257,6 +245,24 @@ enum vt100state_e {
 	EScharsize,
 	ESignore		/* Ignore this sequence                    */
 } gc_vt100state = ESnormal;
+
+
+#ifdef CONFIG_VC_PROGRESS_WHITE
+enum { kProgressAcquireDelay = 0 /* secs */ };
+#else
+enum { kProgressAcquireDelay = 5 /* secs */ };
+#endif
+
+static int8_t vc_rotate_matr[4][2][2] = {
+  { {  1,  0 },
+    {  0,  1 } },
+  { {  0,  1 },
+    { -1,  0 } },
+  { { -1,  0 },
+    {  0, -1 } },
+  { {  0, -1 },
+    {  1,  0 } }
+};
 
 static int gc_wrap_mode = 1, gc_relative_origin = 0;
 static int gc_charset_select = 0, gc_save_charset_s = 0;
@@ -1398,15 +1404,6 @@ vc_clear_screen(unsigned int xx, unsigned int yy, unsigned int scrreg_top,
 }
 
 static void
-vc_initialize(__unused struct vc_info * vinfo_p)
-{
-
-	vinfo.v_rows = vinfo.v_height / ISO_CHAR_HEIGHT;
-	vinfo.v_columns = vinfo.v_width / ISO_CHAR_WIDTH;
-	vinfo.v_rowscanbytes = ((vinfo.v_depth + 7) / 8) * vinfo.v_width;
-}
-
-static void
 vc_render_char(unsigned char ch, unsigned char *renderptr, short newdepth)
 {
 	union {
@@ -1820,24 +1817,8 @@ vc_update_color(int color, boolean_t fore)
  * --------------------------------------
  */
 
-struct vc_progress_element {
-    unsigned int	version;
-    unsigned int	flags;
-    unsigned int	time;
-    unsigned char	count;
-    unsigned char	res[3];
-    int			width;
-    int			height;
-    int			dx;
-    int			dy;
-    int			transparent;
-    unsigned int	res2[3];
-    unsigned char	data[0];
-};
-typedef struct vc_progress_element vc_progress_element;
-
 static vc_progress_element *	vc_progress;
-static const unsigned char *    vc_progress_data;
+static const unsigned char *    vc_progress_data[2];
 static const unsigned char *    vc_progress_alpha;
 static boolean_t		vc_progress_enable;
 static const unsigned char *    vc_clut;
@@ -1845,18 +1826,25 @@ static const unsigned char *    vc_clut8;
 static unsigned char            vc_revclut8[256];
 static uint32_t            	vc_progress_interval;
 static uint32_t            	vc_progress_count;
+static uint32_t            	vc_progress_angle;
 static uint64_t			vc_progress_deadline;
 static thread_call_data_t	vc_progress_call;
 static boolean_t		vc_needsave;
 static void *			vc_saveunder;
 static vm_size_t		vc_saveunder_len;
+static int8_t			vc_uiselect = 0;
 decl_simple_lock_data(,vc_progress_lock)
 
 enum {
-    kSave = 0x01,
-    kDataIndexed = 0x02,
-    kDataAlpha = 0x04,
-    kDataBack = 0x08,
+    kSave          = 0x10,
+    kDataIndexed   = 0x20,
+    kDataAlpha     = 0x40,
+    kDataBack      = 0x80,
+    kDataRotate    = 0x03,
+    kDataRotate0   = 0,
+    kDataRotate90  = 1,
+    kDataRotate180 = 2,
+    kDataRotate270 = 3
 };
 
 static void vc_blit_rect(int x, int y, int bx,
@@ -1889,9 +1877,6 @@ static void vc_blit_rect_30(int x, int y, int bx,
 			    const unsigned char * dataPtr,
 			    unsigned int * backBuffer,
 			    unsigned int flags);
-extern void vc_display_icon( vc_progress_element * desc, const unsigned char * data );
-extern void vc_progress_initialize( vc_progress_element * desc, const unsigned char * data, const unsigned char * clut );
-void vc_progress_set(boolean_t enable, uint32_t vc_delay);
 static void vc_progress_task( void * arg0, void * arg );
 
 static void vc_blit_rect(int x, int y, int bx,
@@ -1932,9 +1917,19 @@ vc_blit_rect_8(int x, int y, __unused int bx,
     volatile unsigned short * dst;
     int line, col;
     unsigned int data = 0, out = 0;
+    int sx, sy, a, b, c, d;
+    int scale = 0x10000;
 
-    if (!sourceRow)
-	data = (unsigned int)(uintptr_t)dataPtr;
+    a = vc_rotate_matr[kDataRotate & flags][0][0] * scale;
+    b = vc_rotate_matr[kDataRotate & flags][0][1] * scale;
+    c = vc_rotate_matr[kDataRotate & flags][1][0] * scale;
+    d = vc_rotate_matr[kDataRotate & flags][1][1] * scale;
+    sx = ((a + b) < 0) ? ((width * scale)  - 0x8000) : 0;
+    sy = ((c + d) < 0) ? ((height * scale) - 0x8000) : 0;
+
+    if (!sourceRow) data = (unsigned int)(uintptr_t)dataPtr;
+    else if (1 == sourceRow) a = 0;
+
     dst = (volatile unsigned short *) (vinfo.v_baseaddr +
                                     (y * vinfo.v_rowbytes) +
                                     (x * 4));
@@ -1943,8 +1938,8 @@ vc_blit_rect_8(int x, int y, __unused int bx,
     {
         for( col = 0; col < width; col++)
 	{
-	    if (col < sourceRow)
-		data = *dataPtr++;
+	    if (sourceRow) data = dataPtr[((sx + (col * a) + (line * b)) >> 16)
+				+ sourceRow * (((sy + (col * c) + (line * d)) >> 16))];
 	    if (kDataAlpha & flags)
 		out = vc_revclut8[data];
             else
@@ -1952,8 +1947,6 @@ vc_blit_rect_8(int x, int y, __unused int bx,
             *(dst + col) = out;
 	}
         dst = (volatile unsigned short *) (((volatile char*)dst) + vinfo.v_rowbytes);
-	if (sourceRow > width)
-	    dataPtr += sourceRow - width;
     }
 }
 
@@ -1982,11 +1975,21 @@ static void vc_blit_rect_16( int x, int y, int bx,
     volatile unsigned short * dst;
     int line, col;
     unsigned int data = 0, out = 0, back = 0;
+    int sx, sy, a, b, c, d;
+    int scale = 0x10000;
+
+    a = vc_rotate_matr[kDataRotate & flags][0][0] * scale;
+    b = vc_rotate_matr[kDataRotate & flags][0][1] * scale;
+    c = vc_rotate_matr[kDataRotate & flags][1][0] * scale;
+    d = vc_rotate_matr[kDataRotate & flags][1][1] * scale;
+    sx = ((a + b) < 0) ? ((width * scale)  - 0x8000) : 0;
+    sy = ((c + d) < 0) ? ((height * scale) - 0x8000) : 0;
+
+    if (!sourceRow) data = (unsigned int)(uintptr_t)dataPtr;
+    else if (1 == sourceRow) a = 0;
 
     if (backPtr)
 	backPtr += bx;
-    if (!sourceRow)
-	data = (unsigned int)(uintptr_t)dataPtr;
     dst = (volatile unsigned short *) (vinfo.v_baseaddr +
                                     (y * vinfo.v_rowbytes) +
                                     (x * 2));
@@ -1995,9 +1998,8 @@ static void vc_blit_rect_16( int x, int y, int bx,
     {
         for( col = 0; col < width; col++)
 	{
-	    if (col < sourceRow)
-		data = *dataPtr++;
-
+	    if (sourceRow) data = dataPtr[((sx + (col * a) + (line * b)) >> 16)
+				+ sourceRow * (((sy + (col * c) + (line * d)) >> 16))];
 	    if (backPtr) {
 		if (kSave & flags) {
 		    back = *(dst + col);
@@ -2025,10 +2027,9 @@ static void vc_blit_rect_16( int x, int y, int bx,
         dst = (volatile unsigned short *) (((volatile char*)dst) + vinfo.v_rowbytes);
 	if (backPtr)
 	    backPtr += backRow - width;
-	if (sourceRow > width)
-	    dataPtr += sourceRow - width;
     }
 }
+
 
 static void vc_blit_rect_32(int x, int y, int bx, 
                             int width, int height,
@@ -2040,11 +2041,21 @@ static void vc_blit_rect_32(int x, int y, int bx,
     volatile unsigned int * dst;
     int line, col;
     unsigned int data = 0, out = 0, back = 0;
+    int sx, sy, a, b, c, d;
+    int scale = 0x10000;
 
+    a = vc_rotate_matr[kDataRotate & flags][0][0] * scale;
+    b = vc_rotate_matr[kDataRotate & flags][0][1] * scale;
+    c = vc_rotate_matr[kDataRotate & flags][1][0] * scale;
+    d = vc_rotate_matr[kDataRotate & flags][1][1] * scale;
+    sx = ((a + b) < 0) ? ((width * scale)  - 0x8000) : 0;
+    sy = ((c + d) < 0) ? ((height * scale) - 0x8000) : 0;
+
+    if (!sourceRow) data = (unsigned int)(uintptr_t)dataPtr;
+    else if (1 == sourceRow) a = 0;
+        
     if (backPtr)
 	backPtr += bx;
-    if (!sourceRow)
-	data = (unsigned int)(uintptr_t)dataPtr;
     dst = (volatile unsigned int *) (vinfo.v_baseaddr +
                                     (y * vinfo.v_rowbytes) +
                                     (x * 4));
@@ -2053,9 +2064,8 @@ static void vc_blit_rect_32(int x, int y, int bx,
     {
         for( col = 0; col < width; col++)
 	{
-	    if (col < sourceRow)
-		data = *dataPtr++;
-
+	    if (sourceRow) data = dataPtr[((sx + (col * a) + (line * b)) >> 16)
+				+ sourceRow * (((sy + (col * c) + (line * d)) >> 16))];
 	    if (backPtr) {
 		if (kSave & flags) {
 		    back = *(dst + col);
@@ -2082,8 +2092,6 @@ static void vc_blit_rect_32(int x, int y, int bx,
         dst = (volatile unsigned int *) (((volatile char*)dst) + vinfo.v_rowbytes);
 	if (backPtr)
 	    backPtr += backRow - width;
-	if (sourceRow > width)
-	    dataPtr += sourceRow - width;
     }
 }
 
@@ -2098,11 +2106,21 @@ static void vc_blit_rect_30(int x, int y, int bx,
     int line, col;
     unsigned int data = 0, out = 0, back = 0;
     unsigned long long exp;
+    int sx, sy, a, b, c, d;
+    int scale = 0x10000;
 
+    a = vc_rotate_matr[kDataRotate & flags][0][0] * scale;
+    b = vc_rotate_matr[kDataRotate & flags][0][1] * scale;
+    c = vc_rotate_matr[kDataRotate & flags][1][0] * scale;
+    d = vc_rotate_matr[kDataRotate & flags][1][1] * scale;
+    sx = ((a + b) < 0) ? ((width * scale)  - 0x8000) : 0;
+    sy = ((c + d) < 0) ? ((height * scale) - 0x8000) : 0;
+
+    if (!sourceRow) data = (unsigned int)(uintptr_t)dataPtr;
+    else if (1 == sourceRow) a = 0;
+        
     if (backPtr)
 	backPtr += bx;
-    if (!sourceRow)
-	data = (unsigned int)(uintptr_t)dataPtr;
     dst = (volatile unsigned int *) (vinfo.v_baseaddr +
                                     (y * vinfo.v_rowbytes) +
                                     (x * 4));
@@ -2142,8 +2160,6 @@ static void vc_blit_rect_30(int x, int y, int bx,
         dst = (volatile unsigned int *) (((volatile char*)dst) + vinfo.v_rowbytes);
 	if (backPtr)
 	    backPtr += backRow - width;
-	if (sourceRow > width)
-	    dataPtr += sourceRow - width;
     }
 }
 
@@ -2312,12 +2328,13 @@ void vc_display_icon( vc_progress_element * desc,
 
 void
 vc_progress_initialize( vc_progress_element * desc,
-			const unsigned char * data,
+			const unsigned char * data1x,
+			const unsigned char * data2x,
 			const unsigned char * clut )
 {
 	uint64_t	abstime;
 
-    if( (!clut) || (!desc) || (!data))
+    if( (!clut) || (!desc) || (!data1x))
 	return;
     vc_clut = clut;
     vc_clut8 = clut;
@@ -2325,9 +2342,10 @@ vc_progress_initialize( vc_progress_element * desc,
     simple_lock_init(&vc_progress_lock, 0);
 
     vc_progress = desc;
-    vc_progress_data = data;
+    vc_progress_data[0] = data1x;
+    vc_progress_data[1] = data2x;
     if( 2 & vc_progress->flags)
-        vc_progress_alpha = vc_progress_data
+        vc_progress_alpha = data1x
                             + vc_progress->count * vc_progress->width * vc_progress->height;
     else
         vc_progress_alpha = NULL;
@@ -2356,7 +2374,7 @@ vc_progress_set(boolean_t enable, uint32_t vc_delay)
 	return;
 
     if( enable) {
-        saveLen = vc_progress->width * vc_progress->height * vinfo.v_depth / 8;
+        saveLen = (vc_progress->width << vc_uiselect) * (vc_progress->height << vc_uiselect) * vinfo.v_depth / 8;
         saveBuf = kalloc( saveLen );
 
 	switch( vinfo.v_depth) {
@@ -2408,6 +2426,7 @@ vc_progress_set(boolean_t enable, uint32_t vc_delay)
             saveBuf	          = NULL;
             saveLen 	      = 0;
             vc_progress_count = 0;
+	    vc_progress_angle = 0;
 
             clock_interval_to_deadline(vc_delay,
 				       1000 * 1000 * 1000 /*second scale*/,
@@ -2449,14 +2468,16 @@ vc_progress_task(__unused void *arg0, __unused void *arg)
 	KERNEL_DEBUG_CONSTANT(0x7020008, vc_progress_count, 0, 0, 0, 0);
 
         vc_progress_count++;
-        if( vc_progress_count >= vc_progress->count)
+        if( vc_progress_count >= vc_progress->count) {
             vc_progress_count = 0;
+	    vc_progress_angle++;
+        }
 
-	width = vc_progress->width;
-	height = vc_progress->height;
-	x = vc_progress->dx;
-	y = vc_progress->dy;
-	data = vc_progress_data;
+	width  = (vc_progress->width << vc_uiselect);
+	height = (vc_progress->height << vc_uiselect);
+	x = (vc_progress->dx << vc_uiselect);
+	y = (vc_progress->dy << vc_uiselect);
+	data = vc_progress_data[vc_uiselect];
 	data += vc_progress_count * width * height;
 	if( 1 & vc_progress->flags) {
 	    x += ((vinfo.v_width - width) / 2);
@@ -2465,7 +2486,9 @@ vc_progress_task(__unused void *arg0, __unused void *arg)
 	vc_blit_rect( x, y, 0, 
 		      width, height, width, width,
 		      data, vc_saveunder,
-		      kDataAlpha | (vc_needsave ? kSave : 0) );
+		      kDataAlpha 
+		      | (vc_progress_angle & kDataRotate) 
+		      | (vc_needsave ? kSave : 0) );
         vc_needsave = FALSE;
 
         clock_deadline_for_periodic_event(vc_progress_interval, mach_absolute_time(), &vc_progress_deadline);
@@ -2516,6 +2539,16 @@ gc_pause( boolean_t pause, boolean_t graphics_now )
     splx(s);
 }
 
+static void
+vc_initialize(__unused struct vc_info * vinfo_p)
+{
+
+	vinfo.v_rows = vinfo.v_height / ISO_CHAR_HEIGHT;
+	vinfo.v_columns = vinfo.v_width / ISO_CHAR_WIDTH;
+	vinfo.v_rowscanbytes = ((vinfo.v_depth + 7) / 8) * vinfo.v_width;
+	vc_uiselect = (2 == vinfo.v_scale) ? 1 : 0;
+}
+
 void
 initialize_screen(PE_Video * boot_vinfo, unsigned int op)
 {
@@ -2537,15 +2570,16 @@ initialize_screen(PE_Video * boot_vinfo, unsigned int op)
 #endif
 		if (kPEBaseAddressChange != op)
 		{
-            new_vinfo.v_width    = (unsigned int)boot_vinfo->v_width;
-            new_vinfo.v_height   = (unsigned int)boot_vinfo->v_height;
-            new_vinfo.v_depth    = (unsigned int)boot_vinfo->v_depth;
-            new_vinfo.v_rowbytes = (unsigned int)boot_vinfo->v_rowBytes;
+		    new_vinfo.v_width    = (unsigned int)boot_vinfo->v_width;
+		    new_vinfo.v_height   = (unsigned int)boot_vinfo->v_height;
+		    new_vinfo.v_depth    = (unsigned int)boot_vinfo->v_depth;
+		    new_vinfo.v_rowbytes = (unsigned int)boot_vinfo->v_rowBytes;
 #if defined(__i386__) || defined(__x86_64__)
-            new_vinfo.v_type     = (unsigned int)boot_vinfo->v_display;
+		    new_vinfo.v_type     = (unsigned int)boot_vinfo->v_display;
 #else
-            new_vinfo.v_type = 0;
+		    new_vinfo.v_type = 0;
 #endif
+		    new_vinfo.v_scale = boot_vinfo->v_scale;
 		}
      
 		if (!lastVideoMapped)
@@ -2813,50 +2847,56 @@ vc_draw_progress_meter(int select, unsigned int flags, int x1, int x2)
     int x, w;
     int ox, oy;
 
-    ox = ((vinfo.v_width - kProgressBarWidth) / 2);
-    oy = vinfo.v_height - (((vinfo.v_height / 2) - vc_progress->dy + kProgressBarHeight) / 2);
+    ox = ((vinfo.v_width - (kProgressBarWidth << vc_uiselect)) / 2);
+    oy = vinfo.v_height - (((vinfo.v_height / 2) - ((vc_progress->dy + kProgressBarHeight) << vc_uiselect)) / 2);
 
     if (kDataBack == flags)
     {
 	// restore back bits
 	vc_blit_rect(ox + x1, oy, x1,
-		    x2, kProgressBarHeight, 0, kProgressBarWidth,
+		    x2, (kProgressBarHeight << vc_uiselect), 0, (kProgressBarWidth << vc_uiselect),
 		    NULL, vc_progress_meter_backbuffer, flags);
 	return;
     }
 
     for (x = x1; x < x2; x += w)
     {
-	if (x < kProgressBarCapWidth)
+	if (x < (kProgressBarCapWidth << vc_uiselect))
 	{
-	    if (x2 < kProgressBarCapWidth)
+	    if (x2 < (kProgressBarCapWidth << vc_uiselect))
 		w = x2 - x;
 	    else
-		w = kProgressBarCapWidth - x;
-	    data = &progressmeter_leftcap[select & 1][0];
+		w = (kProgressBarCapWidth << vc_uiselect) - x;
+	    data = progressmeter_leftcap[vc_uiselect & 1][select & 1];
 	    data += x;
-	    vc_blit_rect(ox + x, oy, x, 
-			    w, kProgressBarHeight, kProgressBarCapWidth, kProgressBarWidth,
+	    vc_blit_rect(ox + x, oy, x, w,
+			    (kProgressBarHeight << vc_uiselect), 
+			    (kProgressBarCapWidth << vc_uiselect), 
+			    (kProgressBarWidth << vc_uiselect),
 			    data, vc_progress_meter_backbuffer, flags);
 	}
-	else if (x < (kProgressBarWidth - kProgressBarCapWidth))
+	else if (x < ((kProgressBarWidth - kProgressBarCapWidth) << vc_uiselect))
 	{
-	    if (x2 < (kProgressBarWidth - kProgressBarCapWidth))
+	    if (x2 < ((kProgressBarWidth - kProgressBarCapWidth) << vc_uiselect))
 		w = x2 - x;
 	    else
-		w = (kProgressBarWidth - kProgressBarCapWidth) - x;
-	    data = &progressmeter_middle[select & 1][0];
-	    vc_blit_rect(ox + x, oy, x, 
-			    w, kProgressBarHeight, 1, kProgressBarWidth,
+		w = ((kProgressBarWidth - kProgressBarCapWidth) << vc_uiselect) - x;
+	    data = progressmeter_middle[vc_uiselect & 1][select & 1];
+	    vc_blit_rect(ox + x, oy, x, w,
+			    (kProgressBarHeight << vc_uiselect),
+			    1,
+			    (kProgressBarWidth << vc_uiselect),
 			    data, vc_progress_meter_backbuffer, flags);
 	}
 	else
 	{
 	    w = x2 - x;
-	    data =  &progressmeter_rightcap[select & 1][0];
-	    data += x - (kProgressBarWidth - kProgressBarCapWidth);
-	    vc_blit_rect(ox + x, oy, x,
-			    w,  kProgressBarHeight,  kProgressBarCapWidth, kProgressBarWidth,
+	    data =  progressmeter_rightcap[vc_uiselect & 1][select & 1];
+	    data += x - ((kProgressBarWidth - kProgressBarCapWidth) << vc_uiselect);
+	    vc_blit_rect(ox + x, oy, x, w,
+			    (kProgressBarHeight << vc_uiselect), 
+			    (kProgressBarCapWidth << vc_uiselect), 
+			    (kProgressBarWidth << vc_uiselect),
 			    data, vc_progress_meter_backbuffer, flags);
 	}
     }
@@ -2869,7 +2909,8 @@ vc_enable_progressmeter(int new_value)
     void * new_buffer = NULL;
 
     if (new_value)
-	new_buffer = kalloc(kProgressBarWidth * kProgressBarHeight * sizeof(int));
+	new_buffer = kalloc((kProgressBarWidth << vc_uiselect) 
+		            * (kProgressBarHeight << vc_uiselect) * sizeof(int));
 
     s = splhigh();
     simple_lock(&vc_progress_lock);
@@ -2882,18 +2923,17 @@ vc_enable_progressmeter(int new_value)
 	if (new_value)
 	{
 	    vc_progress_meter_backbuffer = new_buffer;
-	    vc_draw_progress_meter(FALSE, kDataAlpha | kSave, 0, kProgressBarWidth);
+	    vc_draw_progress_meter(FALSE, kDataAlpha | kSave, 0, (kProgressBarWidth << vc_uiselect));
 	    vc_progress_meter_enable = TRUE;
 	    new_buffer = NULL;
 	    vc_progress_meter_drawn = 0;
 	}
 	else if (vc_progress_meter_backbuffer)
 	{
-	    vc_draw_progress_meter(0, kDataBack, 0, kProgressBarWidth);
+	    vc_draw_progress_meter(0, kDataBack, 0, (kProgressBarWidth << vc_uiselect));
 	    new_buffer = vc_progress_meter_backbuffer;
 	    vc_progress_meter_backbuffer = NULL;
 	    vc_progress_meter_enable = FALSE;
- 
 	}
     }
 
@@ -2901,7 +2941,8 @@ vc_enable_progressmeter(int new_value)
     splx(s);
 
     if (new_buffer)
-	kfree(new_buffer, kProgressBarWidth * kProgressBarHeight * sizeof(int));
+	kfree(new_buffer, (kProgressBarWidth << vc_uiselect) 
+			* (kProgressBarHeight << vc_uiselect) * sizeof(int));
 }
 
 void
@@ -2919,7 +2960,7 @@ vc_set_progressmeter(int new_value)
     if (vc_progress_meter_enable)
     {
 	vc_progress_meter_value = new_value;
-	x2 = ((kProgressBarWidth - 1) * new_value) / 100;
+	x2 = ((kProgressBarWidth << vc_uiselect) * new_value) / 100;
 	if (x2 > vc_progress_meter_drawn)
 	    vc_draw_progress_meter(TRUE, kDataAlpha, vc_progress_meter_drawn, x2);
 	else

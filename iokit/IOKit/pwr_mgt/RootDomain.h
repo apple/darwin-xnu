@@ -569,19 +569,20 @@ private:
     unsigned int            darkWakeToSleepASAP     :1;
     unsigned int            darkWakeMaintenance     :1;
     unsigned int            darkWakeSleepService    :1;
-    unsigned int            darkWakePostTickle      :1;
 
+    unsigned int            darkWakePostTickle      :1;
     unsigned int            sleepTimerMaintenance   :1;
     unsigned int            lowBatteryCondition     :1;
     unsigned int            hibernateDisabled       :1;
     unsigned int            hibernateNoDefeat       :1;
-    unsigned int            hibernateAborted        :1;
     unsigned int            rejectWranglerTickle    :1;
+    unsigned int            wranglerTickleLatched   :1;
 
     uint32_t                hibernateMode;
     uint32_t                userActivityCount;
     uint32_t                userActivityAtSleep;
     uint32_t                lastSleepReason;
+    uint32_t                hibernateAborted;
 
     // Info for communicating system state changes to PMCPU
     int32_t                 idxPMCPUClamshell;
@@ -614,6 +615,7 @@ private:
     IOReturn    privateSleepSystem( uint32_t sleepReason );
     void        reportUserInput( void );
     bool        checkSystemCanSleep( IOOptionBits options = 0 );
+    bool        checkSystemCanSustainFullWake( void );
 
     void        adjustPowerState( bool sleepASAP = false );
     void        setQuickSpinDownTimeout( void );
@@ -667,6 +669,8 @@ private:
     void        evaluateSystemSleepPolicyEarly( void );
     void        evaluateSystemSleepPolicyFinal( void );
 #endif /* HIBERNATION */
+
+    bool        latchDisplayWranglerTickle( bool latch );
 #endif /* XNU_KERNEL_PRIVATE */
 };
 

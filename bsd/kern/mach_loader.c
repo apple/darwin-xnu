@@ -292,6 +292,7 @@ load_machfile(
 	boolean_t create_map = FALSE;
 	int spawn = (imgp->ip_flags & IMGPF_SPAWN);
 	task_t task = current_task();
+	proc_t p = current_proc();
 	mach_vm_offset_t	aslr_offset = 0;
 	kern_return_t 		kret;
 
@@ -392,15 +393,26 @@ load_machfile(
 			 * this transition, and then finally complete the
 			 * task halting (wait for threads and then cleanup
 			 * task resources).
-			 */
-			kret = task_start_halt(task);
-			if (kret != KERN_SUCCESS) {
-				return(kret);		
-			}
-			proc_transcommit(current_proc(), 0);
-			task_complete_halt(task);
-			workqueue_exit(current_proc());
-		}
+			 *
+			 * NOTE: task_start_halt() makes sure that no new
+			 * threads are created in the task during the transition.
+ 			 * We need to mark the workqueue as exiting before we
+ 			 * wait for threads to terminate (at the end of which
+ 			 * we no longer have a prohibition on thread creation).
+ 			 * 
+ 			 * Finally, clean up any lingering workqueue data structures
+ 			 * that may have been left behind by the workqueue threads
+ 			 * as they exited (and then clean up the work queue itself).
+  			 */
+  			kret = task_start_halt(task);
+  			if (kret != KERN_SUCCESS) {
+  				return(kret);		
+  			}
+ 			proc_transcommit(p, 0);
+ 			workqueue_mark_exiting(p);
+  			task_complete_halt(task);
+ 			workqueue_exit(p);
+  		}
 		old_map = swap_task_map(old_task, thread, map, !spawn);
 		vm_map_clear_4GB_pagezero(old_map);
 		vm_map_deallocate(old_map);

@@ -26,24 +26,8 @@
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 
+#include <console/video_console.h>
 #include <pexpert/GearImage.h>
-
-
-// XXX #warning shared video_console.c
-struct vc_progress_element {
-    unsigned int	version;
-    unsigned int	flags;
-    unsigned int	time;
-    unsigned char	count;
-    unsigned char	res[3];
-    int			width;
-    int			height;
-    int			dx;
-    int			dy;
-    int			transparent;
-    unsigned int	res2[3];
-};
-typedef struct vc_progress_element vc_progress_element;
 
 struct boot_progress_element {
     unsigned int	width;
@@ -54,9 +38,10 @@ struct boot_progress_element {
 };
 typedef struct boot_progress_element boot_progress_element;
 
-
-static const unsigned char * default_progress_data = gGearPict;
 static const unsigned char * default_noroot_data;
+
+static const unsigned char * default_progress_data1x = gGearPict;
+static const unsigned char * default_progress_data2x = gGearPict2x;
 
 static vc_progress_element default_progress = 
 	{   0, 4|1, 1000 / kGearFPS, kGearFrames, {0, 0, 0}, 

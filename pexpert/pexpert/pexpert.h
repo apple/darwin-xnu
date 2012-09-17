@@ -220,17 +220,6 @@ extern int PE_initialize_console(
 extern void PE_display_icon( unsigned int flags,
 			     const char * name );
 
-#if !CONFIG_EMBEDDED
-
-extern void
-vc_enable_progressmeter(int new_value);
-extern void
-vc_set_progressmeter(int new_value);
-extern int vc_progress_meter_enable;
-extern int vc_progress_meter_value;
-
-#endif /* !CONFIG_EMBEDDED */
-
 typedef struct PE_state {
 	boolean_t	initialized;
 	PE_Video	video;

@@ -975,6 +975,9 @@ workqueue_addnewthread(struct workqueue *wq, boolean_t oc_thread)
 	void 	 	*sright;
 	mach_vm_offset_t stackaddr;
 
+	if ((wq->wq_flags & WQ_EXITING) == WQ_EXITING)
+		return (FALSE);
+
 	if (wq->wq_nthreads >= wq_max_threads || wq->wq_nthreads >= (CONFIG_THREAD_MAX - 20)) {
 		wq->wq_lflags |= WQL_EXCEEDED_TOTAL_THREAD_LIMIT;
 		return (FALSE);
@@ -1312,31 +1315,25 @@ workq_kernreturn(struct proc *p, struct workq_kernreturn_args  *uap, __unused in
 
 }
 
+/*
+ * Routine:	workqueue_mark_exiting
+ *
+ * Function:	Mark the work queue such that new threads will not be added to the
+ *		work queue after we return.  
+ *
+ * Conditions:	Called against the current process.
+ */
 void
-workqueue_exit(struct proc *p)
+workqueue_mark_exiting(struct proc *p)
 {
 	struct workqueue  * wq;
-	struct threadlist  * tl, *tlist;
-	struct uthread	*uth;
-	int wq_size = 0;
 
-	if (p->p_wqptr != NULL) {
+	wq = p->p_wqptr;
+	if (wq != NULL) {
 
-		KERNEL_DEBUG(0x900808c | DBG_FUNC_START, p->p_wqptr, 0, 0, 0, 0);
+		KERNEL_DEBUG(0x9008088 | DBG_FUNC_START, p->p_wqptr, 0, 0, 0, 0);
 
 	        workqueue_lock_spin(p);
-
-	        wq = (struct workqueue *)p->p_wqptr;
-
-		if (wq == NULL) {
-			workqueue_unlock(p);
-
-			KERNEL_DEBUG(0x900808c | DBG_FUNC_END, 0, 0, 0, -1, 0);
-		        return;
-		}
-		wq_size = p->p_wqsize;
-		p->p_wqptr = NULL;
-		p->p_wqsize = 0;
 
 		/*
 		 * we now arm the timer in the callback function w/o holding the workq lock...
@@ -1367,6 +1364,40 @@ workqueue_exit(struct proc *p)
 		}
 		workqueue_unlock(p);
 
+		KERNEL_DEBUG(0x9008088 | DBG_FUNC_END, 0, 0, 0, 0, 0);
+	}
+}
+
+/*
+ * Routine:	workqueue_exit
+ *
+ * Function:	clean up the work queue structure(s) now that there are no threads
+ *		left running inside the work queue (except possibly current_thread).
+ *
+ * Conditions:	Called by the last thread in the process.
+ *		Called against current process.
+ */
+void
+workqueue_exit(struct proc *p)
+{
+	struct workqueue  * wq;
+	struct threadlist  * tl, *tlist;
+	struct uthread	*uth;
+	int wq_size = 0;
+
+	wq = (struct workqueue *)p->p_wqptr;
+	if (wq != NULL) {
+
+		KERNEL_DEBUG(0x900808c | DBG_FUNC_START, p->p_wqptr, 0, 0, 0, 0);
+
+		wq_size = p->p_wqsize;
+		p->p_wqptr = NULL;
+		p->p_wqsize = 0;
+
+		/*
+		 * Clean up workqueue data structures for threads that exited and
+		 * didn't get a chance to clean up after themselves.
+		 */
 		TAILQ_FOREACH_SAFE(tl, &wq->wq_thrunlist, th_entry, tlist) {
 
 		        thread_sched_call(tl->th_thread, NULL);

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2007-2010 Apple Inc. All rights reserved.
+ * Copyright (c) 2007-2012 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -2276,6 +2276,10 @@ __private_extern__ void pf_tag_ref(u_int16_t);
 __private_extern__ void pf_tag_unref(u_int16_t);
 __private_extern__ int pf_tag_packet(struct mbuf *, struct pf_mtag *,
     int, unsigned int);
+__private_extern__ void pf_step_into_anchor(int *, struct pf_ruleset **, int,
+    struct pf_rule **, struct pf_rule **,  int *);
+__private_extern__ int pf_step_out_of_anchor(int *, struct pf_ruleset **, int,
+    struct pf_rule **, struct pf_rule **, int *);
 __private_extern__ u_int32_t pf_qname2qid(char *);
 __private_extern__ void pf_qid2qname(u_int32_t, char *);
 __private_extern__ void pf_qid_unref(u_int32_t);

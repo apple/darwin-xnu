@@ -34,3 +34,4 @@ _xts_done
 _xts_encrypt
 _xts_start
 _aes_decrypt
+_PE_reboot_on_panic

@@ -880,6 +880,8 @@ pf_normalize_ip(struct mbuf **m0, int dir, struct pfi_kif *kif, u_short *reason,
 	u_int16_t		 fr_max;
 	int			 ip_len;
 	int			 ip_off;
+	int			 asd = 0;
+	struct pf_ruleset	*ruleset = NULL;
 
 	r = TAILQ_FIRST(pf_main_ruleset.rules[PF_RULESET_SCRUB].active.ptr);
 	while (r != NULL) {
@@ -900,7 +902,15 @@ pf_normalize_ip(struct mbuf **m0, int dir, struct pfi_kif *kif, u_short *reason,
 		    (struct pf_addr *)&h->ip_dst.s_addr, AF_INET,
 		    r->dst.neg, NULL))
 			r = r->skip[PF_SKIP_DST_ADDR].ptr;
-		else
+		else {
+			if (r->anchor == NULL)
+				break;
+			else
+				pf_step_into_anchor(&asd, &ruleset,
+				    PF_RULESET_SCRUB, &r, NULL, NULL);
+		}
+		if (r == NULL && pf_step_out_of_anchor(&asd, &ruleset,
+		    PF_RULESET_SCRUB, &r, NULL, NULL))
 			break;
 	}
 
@@ -1142,6 +1152,8 @@ pf_normalize_ip6(struct mbuf **m0, int dir, struct pfi_kif *kif,
 	u_int16_t		 fragoff = 0;
 	u_int8_t		 proto;
 	int			 terminal;
+	int			 asd = 0;
+	struct pf_ruleset	*ruleset = NULL;
 
 	r = TAILQ_FIRST(pf_main_ruleset.rules[PF_RULESET_SCRUB].active.ptr);
 	while (r != NULL) {
@@ -1164,7 +1176,15 @@ pf_normalize_ip6(struct mbuf **m0, int dir, struct pfi_kif *kif,
 		    (struct pf_addr *)&h->ip6_dst, AF_INET6,
 		    r->dst.neg, NULL))
 			r = r->skip[PF_SKIP_DST_ADDR].ptr;
-		else
+		else {
+			if (r->anchor == NULL)
+				break;
+			else
+				pf_step_into_anchor(&asd, &ruleset,
+				    PF_RULESET_SCRUB, &r, NULL, NULL);
+		}
+		if (r == NULL && pf_step_out_of_anchor(&asd, &ruleset,
+		    PF_RULESET_SCRUB, &r, NULL, NULL))
 			break;
 	}
 
@@ -1329,9 +1349,11 @@ pf_normalize_tcp(int dir, struct pfi_kif *kif, struct mbuf *m, int ipoff,
 	struct pf_rule	*r, *rm = NULL;
 	struct tcphdr	*th = pd->hdr.tcp;
 	int		 rewrite = 0;
+	int		 asd = 0;
 	u_short		 reason;
 	u_int8_t	 flags;
 	sa_family_t	 af = pd->af;
+	struct pf_ruleset *ruleset = NULL;
 #ifndef NO_APPLE_EXTENSIONS
 	union pf_state_xport sxport, dxport;
 
@@ -1379,9 +1401,17 @@ pf_normalize_tcp(int dir, struct pfi_kif *kif, struct mbuf *m, int ipoff,
 		    r->os_fingerprint))
 			r = TAILQ_NEXT(r, entries);
 		else {
-			rm = r;
-			break;
+			if (r->anchor == NULL) {
+				rm = r;
+				break;
+			} else {
+				pf_step_into_anchor(&asd, &ruleset,
+				    PF_RULESET_SCRUB, &r, NULL, NULL);
+			}
 		}
+		if (r == NULL && pf_step_out_of_anchor(&asd, &ruleset,
+		    PF_RULESET_SCRUB, &r, NULL, NULL))
+			break;
 	}
 
 	if (rm == NULL || rm->action == PF_NOSCRUB)

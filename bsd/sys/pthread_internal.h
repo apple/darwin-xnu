@@ -160,6 +160,7 @@ extern lck_grp_attr_t   *pthread_lck_grp_attr;
 extern lck_grp_t    *pthread_lck_grp;
 extern lck_attr_t   *pthread_lck_attr;
 
+void workqueue_mark_exiting(struct proc *);
 void workqueue_exit(struct proc *);
 void pthread_init(void);
 void psynch_zoneinit(void);

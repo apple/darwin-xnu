@@ -44,12 +44,6 @@
 
 /* extern references */
 extern void pe_identify_machine(void * args);
-extern int
-vc_display_lzss_icon(uint32_t dst_x,       uint32_t dst_y,
-                     uint32_t image_width, uint32_t image_height,
-                     const uint8_t *compressed_image,
-                     uint32_t       compressed_size, 
-                     const uint8_t *clut);
 
 /* private globals */
 PE_state_t  PE_state;
@@ -182,7 +176,7 @@ void PE_init_iokit(void)
     /*
      * Initialize the spinning wheel (progress indicator).
      */
-    vc_progress_initialize( &default_progress, default_progress_data,
+    vc_progress_initialize( &default_progress, default_progress_data1x, default_progress_data2x,
                             (unsigned char *) appleClut8 );
 
     (void) StartIOKit( PE_state.deviceTreeHead, PE_state.bootArgs, gPEEFIRuntimeServices, NULL);
@@ -204,6 +198,7 @@ void PE_init_platform(boolean_t vm_initialized, void * _args)
         PE_state.video.v_height	    = args->Video.v_height;
         PE_state.video.v_depth	    = args->Video.v_depth;
         PE_state.video.v_display    = args->Video.v_display;
+        PE_state.video.v_scale      = (kBootArgsFlagHiDPI & args->flags) ? 2 : 1;
         strlcpy(PE_state.video.v_pixelFormat, "PPPPPPPP",
 		sizeof(PE_state.video.v_pixelFormat));
     }
@@ -317,5 +312,10 @@ int (*PE_poll_input)(unsigned int options, char * c)
 boolean_t
 PE_reboot_on_panic(void)
 {
-	return FALSE;
+	boot_args *args = (boot_args *)PE_state.bootArgs;
+
+	if (args->flags & kBootArgsFlagRebootOnPanic)
+		return TRUE;
+	else
+		return FALSE;
 }

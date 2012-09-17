@@ -145,6 +145,7 @@ perfCallback tempDTraceTrapHook = NULL; /* Pointer to DTrace fbt trap hook routi
 extern boolean_t dtrace_tally_fault(user_addr_t);
 #endif
 
+extern boolean_t pmap_smep_enabled;
 
 void
 thread_syscall_return(
@@ -685,6 +686,17 @@ kernel_trap(
 				map = thread->map;
 				is_user = -1;
 
+				/* Intercept a potential Supervisor Mode Execute
+				 * Protection fault. These criteria identify
+				 * both NX faults and SMEP faults, but both
+				 * are fatal. We avoid checking PTEs (racy).
+				 * (The VM could just redrive a SMEP fault, hence
+				 * the intercept).
+				 */
+				if (__improbable((code == (T_PF_PROT | T_PF_EXECUTE)) && (pmap_smep_enabled) && (saved_state->isf.rip == vaddr))) {
+					goto debugger_entry;
+				}
+
 				/*
 				 * If we're not sharing cr3 with the user
 				 * and we faulted in copyio,
@@ -960,6 +972,7 @@ panic_trap(x86_saved_state64_t *regs)
 {
 	const char	*trapname = "Unknown";
 	pal_cr_t	cr0, cr2, cr3, cr4;
+	boolean_t	potential_smep_fault = FALSE;
 
 	pal_get_control_registers( &cr0, &cr2, &cr3, &cr4 );
 	assert(ml_get_interrupts_enabled() == FALSE);
@@ -978,6 +991,10 @@ panic_trap(x86_saved_state64_t *regs)
 	if (regs->isf.trapno < TRAP_TYPES)
 	        trapname = trap_type[regs->isf.trapno];
 
+	if ((regs->isf.trapno == T_PAGE_FAULT) && (regs->isf.err == (T_PF_PROT | T_PF_EXECUTE)) && (pmap_smep_enabled) && (regs->isf.rip == regs->cr2) && (regs->isf.rip < VM_MAX_USER_PAGE_ADDRESS)) {
+		potential_smep_fault = TRUE;
+	}
+
 #undef panic
 	panic("Kernel trap at 0x%016llx, type %d=%s, registers:\n"
 	      "CR0: 0x%016llx, CR2: 0x%016llx, CR3: 0x%016llx, CR4: 0x%016llx\n"
@@ -995,7 +1012,7 @@ panic_trap(x86_saved_state64_t *regs)
 	      regs->r12, regs->r13, regs->r14, regs->r15,
 	      regs->isf.rflags, regs->isf.rip, regs->isf.cs & 0xFFFF,
 	      regs->isf.ss & 0xFFFF,regs->cr2, regs->isf.err, regs->isf.cpu,
-	      "");
+	      potential_smep_fault ? " SMEP/NX fault" : "");
 	/*
 	 * This next statement is not executed,
 	 * but it's needed to stop the compiler using tail call optimization

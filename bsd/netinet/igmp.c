@@ -127,10 +127,12 @@ inet_ntoa(struct in_addr ina)
 }
 #endif
 
+SLIST_HEAD(igmp_inm_relhead, in_multi);
+
 static void	igi_initvar(struct igmp_ifinfo *, struct ifnet *, int);
 static struct igmp_ifinfo *igi_alloc(int);
 static void	igi_free(struct igmp_ifinfo *);
-static void	igi_delete(const struct ifnet *);
+static void	igi_delete(const struct ifnet *, struct igmp_inm_relhead *);
 static void	igmp_dispatch_queue(struct igmp_ifinfo *, struct ifqueue *,
     int, const int, struct ifnet *);
 static void	igmp_final_leave(struct in_multi *, struct igmp_ifinfo *);
@@ -157,7 +159,8 @@ static struct mbuf *
 static const char *	igmp_rec_type_to_str(const int);
 #endif
 static void	igmp_set_version(struct igmp_ifinfo *, const int);
-static void	igmp_flush_relq(struct igmp_ifinfo *);
+static void	igmp_flush_relq(struct igmp_ifinfo *,
+    struct igmp_inm_relhead *);
 static int	igmp_v1v2_queue_report(struct in_multi *, const int);
 static void	igmp_v1v2_process_group_timer(struct in_multi *, const int);
 static void	igmp_v1v2_process_querier_timers(struct igmp_ifinfo *);
@@ -282,6 +285,19 @@ static lck_grp_attr_t	*igmp_mtx_grp_attr;
  */
 static decl_lck_mtx_data(, igmp_mtx);
 static int igmp_timers_are_running;
+
+#define	IGMP_ADD_DETACHED_INM(_head, _inm) {				\
+	SLIST_INSERT_HEAD(_head, _inm, inm_dtle);			\
+}
+
+#define	IGMP_REMOVE_DETACHED_INM(_head) {				\
+	struct in_multi *_inm, *_inm_tmp;				\
+	SLIST_FOREACH_SAFE(_inm, _head, inm_dtle, _inm_tmp) {		\
+		SLIST_REMOVE(_head, _inm, in_multi, inm_dtle);		\
+		INM_REMREF(_inm);					\
+	}								\
+	VERIFY(SLIST_EMPTY(_head));					\
+}
 
 #define	IGI_ZONE_MAX		64		/* maximum elements in zone */
 #define	IGI_ZONE_NAME		"igmp_ifinfo"	/* zone name */
@@ -585,12 +601,19 @@ igmp_domifreattach(struct igmp_ifinfo *igi)
 void
 igmp_domifdetach(struct ifnet *ifp)
 {
+	SLIST_HEAD(, in_multi) inm_dthead;
+
+	SLIST_INIT(&inm_dthead);
+
 	IGMP_PRINTF(("%s: called for ifp %p(%s%d)\n",
 	    __func__, ifp, ifp->if_name, ifp->if_unit));
 
 	lck_mtx_lock(&igmp_mtx);
-	igi_delete(ifp);
+	igi_delete(ifp, (struct igmp_inm_relhead *)&inm_dthead);
 	lck_mtx_unlock(&igmp_mtx);
+
+	/* Now that we're dropped all locks, release detached records */
+	IGMP_REMOVE_DETACHED_INM(&inm_dthead);
 }
 
 /*
@@ -600,7 +623,7 @@ igmp_domifdetach(struct ifnet *ifp)
  * the reattach case.
  */
 static void
-igi_delete(const struct ifnet *ifp)
+igi_delete(const struct ifnet *ifp, struct igmp_inm_relhead *inm_dthead)
 {
 	struct igmp_ifinfo *igi, *tigi;
 
@@ -614,7 +637,7 @@ igi_delete(const struct ifnet *ifp)
 			 */
 			IF_DRAIN(&igi->igi_gq);
 			IF_DRAIN(&igi->igi_v2q);
-			igmp_flush_relq(igi);
+			igmp_flush_relq(igi, inm_dthead);
 			VERIFY(SLIST_EMPTY(&igi->igi_relinmhead));
 			igi->igi_debug &= ~IFD_ATTACHED;
 			IGI_UNLOCK(igi);
@@ -712,6 +735,7 @@ igi_addref(struct igmp_ifinfo *igi, int locked)
 void
 igi_remref(struct igmp_ifinfo *igi)
 {
+	SLIST_HEAD(, in_multi) inm_dthead;
 	struct ifnet *ifp;
 
 	IGI_LOCK_SPIN(igi);
@@ -731,9 +755,13 @@ igi_remref(struct igmp_ifinfo *igi)
 	igi->igi_ifp = NULL;
 	IF_DRAIN(&igi->igi_gq);
 	IF_DRAIN(&igi->igi_v2q);
-	igmp_flush_relq(igi);
+	SLIST_INIT(&inm_dthead);
+	igmp_flush_relq(igi, (struct igmp_inm_relhead *)&inm_dthead);
 	VERIFY(SLIST_EMPTY(&igi->igi_relinmhead));
 	IGI_UNLOCK(igi);
+
+	/* Now that we're dropped all locks, release detached records */
+	IGMP_REMOVE_DETACHED_INM(&inm_dthead);
 
 	IGMP_PRINTF(("%s: freeing igmp_ifinfo for ifp %p(%s%d)\n",
 	    __func__, ifp, ifp->if_name, ifp->if_unit));
@@ -1718,6 +1746,9 @@ igmp_slowtimo(void)
 	struct igmp_ifinfo	*igi;
 	struct in_multi		*inm;
 	int			 loop = 0, uri_fasthz = 0;
+	SLIST_HEAD(, in_multi)	inm_dthead;
+
+	SLIST_INIT(&inm_dthead);
 
 	lck_mtx_lock(&igmp_mtx);
 
@@ -1833,7 +1864,7 @@ next:
 		 * for the link is no longer IGMPv3, in order to handle the
 		 * version change case.
 		 */
-		igmp_flush_relq(igi);
+		igmp_flush_relq(igi, (struct igmp_inm_relhead *)&inm_dthead);
 		VERIFY(SLIST_EMPTY(&igi->igi_relinmhead));
 		IGI_UNLOCK(igi);
 
@@ -1843,6 +1874,9 @@ next:
 
 out_locked:
 	lck_mtx_unlock(&igmp_mtx);
+
+	/* Now that we're dropped all locks, release detached records */
+	IGMP_REMOVE_DETACHED_INM(&inm_dthead);
 }
 
 /*
@@ -1851,7 +1885,7 @@ out_locked:
  * Caller must be holding igi_lock.
  */
 static void
-igmp_flush_relq(struct igmp_ifinfo *igi)
+igmp_flush_relq(struct igmp_ifinfo *igi, struct igmp_inm_relhead *inm_dthead)
 {
 	struct in_multi *inm;
 
@@ -1876,9 +1910,17 @@ again:
 		/* from igi_relinmhead */
 		INM_REMREF(inm);
 		/* from in_multihead list */
-		if (lastref)
-			INM_REMREF(inm);
-
+		if (lastref) {
+			/*
+			 * Defer releasing our final reference, as we
+			 * are holding the IGMP lock at this point, and
+			 * we could end up with locking issues later on
+			 * (while issuing SIOCDELMULTI) when this is the
+			 * final reference count.  Let the caller do it
+			 * when it is safe.
+			 */
+			IGMP_ADD_DETACHED_INM(inm_dthead, inm);
+		}
 		IGI_LOCK(igi);
 		goto again;
 	}

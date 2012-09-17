@@ -748,6 +748,7 @@ struct	in6_multi {
 	u_int	in6m_timer;		/* MLD6 listener report timer */
 	/* New fields for MLDv2 follow. */
 	struct mld_ifinfo	*in6m_mli;	/* MLD info */
+	SLIST_ENTRY(in6_multi)	 in6m_dtle;	/* detached waiting for rele  */
 	SLIST_ENTRY(in6_multi)	 in6m_nrele;	/* to-be-released by MLD */
 	u_int32_t		 in6m_nrelecnt;	/* deferred release count */
 	struct ip6_msource_tree	 in6m_srcs;	/* tree of sources */

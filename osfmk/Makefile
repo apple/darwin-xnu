@@ -49,6 +49,7 @@ EXPINC_SUBDIRS = \
 	vm \
 	libsa \
 	kdp \
+	console \
 	pmc
 
 EXPINC_SUBDIRS_I386 = \

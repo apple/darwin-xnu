@@ -148,6 +148,24 @@ cpu_extfeatures SYSCTL_HANDLER_ARGS
 }
 
 static int
+cpu_leaf7_features SYSCTL_HANDLER_ARGS
+{
+    __unused struct sysctl_oid *unused_oidp = oidp;
+    __unused void *unused_arg1 = arg1;
+    __unused int unused_arg2 = arg2; 
+    char buf[512];
+
+    uint32_t	leaf7_features = cpuid_info()->cpuid_leaf7_features;
+    if (leaf7_features == 0)
+        return ENOENT;
+
+    buf[0] = '\0';
+    cpuid_get_leaf7_feature_names(leaf7_features, buf, sizeof(buf));
+
+    return SYSCTL_OUT(req, buf, strlen(buf) + 1);
+}
+
+static int
 cpu_logical_per_package SYSCTL_HANDLER_ARGS
 {
 	__unused struct sysctl_oid *unused_oidp = oidp;
@@ -305,6 +323,12 @@ SYSCTL_PROC(_machdep_cpu, OID_AUTO, feature_bits, CTLTYPE_QUAD | CTLFLAG_RD | CT
 	    (void *)offsetof(i386_cpu_info_t, cpuid_features), sizeof(uint64_t),
 	    i386_cpu_info, "IU", "CPU features");
 
+SYSCTL_PROC(_machdep_cpu, OID_AUTO, leaf7_feature_bits,
+	    CTLTYPE_INT | CTLFLAG_RD | CTLFLAG_LOCKED, 
+	    (void *)offsetof(i386_cpu_info_t, cpuid_leaf7_features),
+	    sizeof(uint32_t),
+	    i386_cpu_info_nonzero, "IU", "CPU Leaf7 features");
+
 SYSCTL_PROC(_machdep_cpu, OID_AUTO, extfeature_bits, CTLTYPE_QUAD | CTLFLAG_RD | CTLFLAG_LOCKED, 
 	    (void *)offsetof(i386_cpu_info_t, cpuid_extfeatures), sizeof(uint64_t),
 	    i386_cpu_info, "IU", "CPU extended features");
@@ -320,6 +344,11 @@ SYSCTL_PROC(_machdep_cpu, OID_AUTO, brand, CTLTYPE_INT | CTLFLAG_RD | CTLFLAG_LO
 SYSCTL_PROC(_machdep_cpu, OID_AUTO, features, CTLTYPE_STRING | CTLFLAG_RD | CTLFLAG_LOCKED, 
 	    0, 0,
 	    cpu_features, "A", "CPU feature names");
+
+SYSCTL_PROC(_machdep_cpu, OID_AUTO, leaf7_features,
+	    CTLTYPE_STRING | CTLFLAG_RD | CTLFLAG_LOCKED, 
+	    0, 0,
+	    cpu_leaf7_features, "A", "CPU Leaf7 feature names");
 
 SYSCTL_PROC(_machdep_cpu, OID_AUTO, extfeatures, CTLTYPE_STRING | CTLFLAG_RD | CTLFLAG_LOCKED, 
 	    0, 0,

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2005 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2005-2011 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -51,6 +51,8 @@ extern OSStatus ExtendBTreeFile(FileReference vp, FSSize minEOF, FSSize maxEOF);
 extern void ModifyBlockStart(FileReference vp, BlockDescPtr blockPtr);
 
 int hfs_create_attr_btree(struct hfsmount *hfsmp, u_int32_t nodesize, u_int32_t nodecnt);
+
+u_int16_t get_btree_nodesize(struct vnode *vp);
 
 #endif /* __APPLE_API_PRIVATE */
 #endif /* KERNEL */

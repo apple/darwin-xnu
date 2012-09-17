@@ -76,15 +76,6 @@ extern int  sprintf(char * str, const char * format, ...);
 // from osfmk/console/panic_dialog.c
 extern void panic_ui_initialize(const unsigned char * clut);
 
-//------------------------------------------------------------------------
-// from osfmk/i386/AT386/video_console.c
-
-extern void vc_progress_initialize( void * desc,
-                                    const unsigned char * data,
-                                    const unsigned char * clut );
-
-extern void vc_display_icon( void * desc, const unsigned char * data );
-
 /* ------------------------------------------------------------------------
  * from osfmk/i386/serial_io.h
  */

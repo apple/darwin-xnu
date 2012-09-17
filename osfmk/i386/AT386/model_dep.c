@@ -778,23 +778,36 @@ panic_io_port_read(void) {
 
 uint64_t panic_restart_timeout = ~(0ULL);
 
+#define PANIC_RESTART_TIMEOUT (3ULL * NSEC_PER_SEC)
+
 static void
 machine_halt_cpu(void) {
+	uint64_t deadline;
+
 	panic_io_port_read();
 
-	if (panic_restart_timeout != ~(0ULL)) {
-		uint64_t deadline = mach_absolute_time() + panic_restart_timeout;
-		while (mach_absolute_time() < deadline) {
-			cpu_pause();
-		}
-		kprintf("Invoking PE_halt_restart\n");
-		/* Attempt restart via ACPI RESET_REG; at the time of this
-		 * writing, this is routine is chained through AppleSMC->
-		 * AppleACPIPlatform
-		 */
-		if (PE_halt_restart)
-			(*PE_halt_restart)(kPERestartCPU);
+	/* Halt here forever if we're not rebooting */
+	if (!PE_reboot_on_panic() && panic_restart_timeout == ~(0ULL)) {
+		pmCPUHalt(PM_HALT_DEBUG);
+		return;
 	}
+
+	if (PE_reboot_on_panic())
+		deadline = mach_absolute_time() + PANIC_RESTART_TIMEOUT;
+	else
+		deadline = mach_absolute_time() + panic_restart_timeout;
+
+	while (mach_absolute_time() < deadline)
+		cpu_pause();
+
+	kprintf("Invoking PE_halt_restart\n");
+	/* Attempt restart via ACPI RESET_REG; at the time of this
+	 * writing, this is routine is chained through AppleSMC->
+	 * AppleACPIPlatform
+	 */
+
+	if (PE_halt_restart)
+		(*PE_halt_restart)(kPERestartCPU);
 	pmCPUHalt(PM_HALT_DEBUG);
 }
 
@@ -910,10 +923,6 @@ Debugger(
 			 * that a panic occurred while in that codepath.
 			 */
 			mp_rendezvous_break_lock();
-			if (PE_reboot_on_panic()) {
-				if (PE_halt_restart)
-					(*PE_halt_restart)(kPERestartCPU);
-			}
 
 			/* Non-maskably interrupt all other processors
 			 * If a restart timeout is specified, this processor

@@ -737,6 +737,17 @@ cpuid_set_generic_info(i386_cpu_info_t *info_p)
 		DBG("  EDX           : 0x%x\n", xsp->extended_state[edx]);
 	}
 
+	if (info_p->cpuid_model == CPUID_MODEL_IVYBRIDGE) {
+		/*
+		 * XSAVE Features:
+		 */
+		cpuid_fn(0x7, reg);
+		info_p->cpuid_leaf7_features = reg[ebx];
+
+		DBG(" Feature Leaf7:\n");
+		DBG("  EBX           : 0x%x\n", reg[ebx]);
+	}
+
 	return;
 }
 
@@ -773,6 +784,9 @@ cpuid_set_cpufamily(i386_cpu_info_t *info_p)
 		case CPUID_MODEL_SANDYBRIDGE:
 		case CPUID_MODEL_JAKETOWN:
 			cpufamily = CPUFAMILY_INTEL_SANDYBRIDGE;
+			break;
+		case CPUID_MODEL_IVYBRIDGE:
+			cpufamily = CPUFAMILY_INTEL_IVYBRIDGE;
 			break;
 		}
 		break;
@@ -820,6 +834,7 @@ cpuid_set_info(void)
 		info_p->thread_count = bitfield32((uint32_t)msr, 15,  0);
 		break;
 		}
+	case CPUFAMILY_INTEL_IVYBRIDGE:
 	case CPUFAMILY_INTEL_SANDYBRIDGE:
 	case CPUFAMILY_INTEL_NEHALEM: {
 		uint64_t msr = rdmsr64(MSR_CORE_THREAD_COUNT);
@@ -899,6 +914,8 @@ static struct table {
 	{CPUID_FEATURE_SEGLIM64,  "SEGLIM64"},
 	{CPUID_FEATURE_TSCTMR,    "TSCTMR"},
 	{CPUID_FEATURE_AVX1_0,    "AVX1.0"},
+	{CPUID_FEATURE_RDRAND,    "RDRAND"},
+	{CPUID_FEATURE_F16C,      "F16C"},
 	{0, 0}
 },
 extfeature_map[] = {
@@ -909,6 +926,13 @@ extfeature_map[] = {
 	{CPUID_EXTFEATURE_LAHF,    "LAHF"},
 	{CPUID_EXTFEATURE_RDTSCP,  "RDTSCP"},
 	{CPUID_EXTFEATURE_TSCI,    "TSCI"},
+	{0, 0}
+
+},
+leaf7_feature_map[] = {
+	{CPUID_LEAF7_FEATURE_RDWRFSGS, "RDWRFSGS"},
+	{CPUID_LEAF7_FEATURE_SMEP,     "SMEP"},
+	{CPUID_LEAF7_FEATURE_ENFSTRG,  "ENFSTRG"},
 	{0, 0}
 };
 
@@ -957,6 +981,12 @@ cpuid_get_extfeature_names(uint64_t extfeatures, char *buf, unsigned buf_len)
 	return cpuid_get_names(extfeature_map, extfeatures, buf, buf_len); 
 }
 
+char *
+cpuid_get_leaf7_feature_names(uint64_t features, char *buf, unsigned buf_len)
+{
+	return cpuid_get_names(leaf7_feature_map, features, buf, buf_len); 
+}
+
 void
 cpuid_feature_display(
 	const char	*header)
@@ -965,6 +995,9 @@ cpuid_feature_display(
 
 	kprintf("%s: %s", header,
 		 cpuid_get_feature_names(cpuid_features(), buf, sizeof(buf)));
+	if (cpuid_leaf7_features())
+		kprintf(" %s", cpuid_get_leaf7_feature_names(
+				cpuid_leaf7_features(), buf, sizeof(buf)));
 	kprintf("\n");
 	if (cpuid_features() & CPUID_FEATURE_HTT) {
 #define s_if_plural(n)	((n > 1) ? "s" : "")
@@ -1051,7 +1084,13 @@ cpuid_extfeatures(void)
 	return cpuid_info()->cpuid_extfeatures;
 }
  
+uint64_t
+cpuid_leaf7_features(void)
+{
+	return cpuid_info()->cpuid_leaf7_features;
+}
  
+
 #if MACH_KDB
 
 /*

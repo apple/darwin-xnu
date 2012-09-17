@@ -3204,15 +3204,15 @@ ifnet_detach(ifnet_t ifp)
 	 if (!(ifp->if_refflags & IFRF_ATTACHED)) {
 		lck_mtx_unlock(&ifp->if_ref_lock);
 		ifnet_lock_done(ifp);
-		lck_mtx_unlock(rnh_lock);
 		ifnet_head_done();
+		lck_mtx_unlock(rnh_lock);
 		return (EINVAL);
 	} else if (ifp->if_refflags & IFRF_DETACHING) {
 		/* Interface has already been detached */
 		lck_mtx_unlock(&ifp->if_ref_lock);
 		ifnet_lock_done(ifp);
-		lck_mtx_unlock(rnh_lock);
 		ifnet_head_done();
+		lck_mtx_unlock(rnh_lock);
 		return (ENXIO);
 	}
 	/* Indicate this interface is being detached */
@@ -3237,8 +3237,8 @@ ifnet_detach(ifnet_t ifp)
 	ctrace_record(&((struct dlil_ifnet *)ifp)->dl_if_detach);
 
 	ifnet_lock_done(ifp);
-	lck_mtx_unlock(rnh_lock);
 	ifnet_head_done();
+	lck_mtx_unlock(rnh_lock);
 
 	/* Let BPF know we're detaching */
 	bpfdetach(ifp);

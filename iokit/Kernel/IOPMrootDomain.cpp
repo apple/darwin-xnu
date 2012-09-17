@@ -47,6 +47,7 @@
 #if HIBERNATION
 #include <IOKit/IOHibernatePrivate.h>
 #endif
+#include <console/video_console.h>
 #include <sys/syslog.h>
 #include <sys/sysctl.h>
 #include <sys/time.h>
@@ -2075,6 +2076,7 @@ void IOPMrootDomain::powerChangeDone( unsigned long previousPowerState )
             logGraphicsClamp   = true;
             logWranglerTickle  = true;
             sleepTimerMaintenance = false;
+            wranglerTickleLatched = false;
 
             OSString * wakeType = OSDynamicCast(
                 OSString, getProperty(kIOPMRootDomainWakeTypeKey));
@@ -2755,7 +2757,7 @@ bool IOPMrootDomain::abortHibernation(void)
 {
     bool ret = activitySinceSleep();
 
-    if (ret && !hibernateAborted)
+    if (ret && !hibernateAborted && checkSystemCanSustainFullWake())
     {
         DLOG("activitySinceSleep ABORT [%d, %d]\n", userActivityCount, userActivityAtSleep);
         hibernateAborted = true;
@@ -4620,7 +4622,7 @@ void IOPMrootDomain::handleActivityTickleForDisplayWrangler(
         }
     }
 
-    if (!wranglerTickled && !lowBatteryCondition &&
+    if (!wranglerTickled &&
         ((_pendingCapability & kIOPMSystemCapabilityGraphics) == 0))
     {
         DLOG("display wrangler tickled\n");
@@ -4951,7 +4953,7 @@ IOReturn IOPMrootDomain::displayWranglerNotification(
     return kIOReturnUnsupported;
 }
 
-//*********************************************************************************
+//******************************************************************************
 // displayWranglerMatchPublished
 //
 // Receives a notification when the IODisplayWrangler is published.
@@ -4997,6 +4999,42 @@ void IOPMrootDomain::reportUserInput( void )
 
     if(wrangler)
         wrangler->activityTickle(0,0);
+#endif
+}
+
+//******************************************************************************
+// blockDisplayWranglerTickle
+//******************************************************************************
+
+bool IOPMrootDomain::latchDisplayWranglerTickle( bool latch )
+{
+#if !NO_KERNEL_HID
+    if (latch)
+    {
+        // Not too late to prevent the display from lighting up
+        if (!(_currentCapability & kIOPMSystemCapabilityGraphics) &&
+            !(_pendingCapability & kIOPMSystemCapabilityGraphics) &&
+            !checkSystemCanSustainFullWake())
+        {
+            wranglerTickleLatched = true;
+        }
+        else
+        {
+            wranglerTickleLatched = false;
+        }
+    }
+    else if (wranglerTickleLatched && checkSystemCanSustainFullWake())
+    {
+        wranglerTickleLatched = false;
+
+        pmPowerStateQueue->submitPowerEvent(
+            kPowerEventPolicyStimulus,
+            (void *) kStimulusDarkWakeActivityTickle );
+    }
+
+    return wranglerTickleLatched;
+#else
+    return false;
 #endif
 }
 
@@ -5114,6 +5152,29 @@ bool IOPMrootDomain::checkSystemCanSleep( IOOptionBits options )
         DLOG("System sleep prevented by %d\n", err);
         return false;
     }
+    return true;
+}
+
+//******************************************************************************
+// checkSystemCanSustainFullWake
+//******************************************************************************
+
+bool IOPMrootDomain::checkSystemCanSustainFullWake( void )
+{
+#if !NO_KERNEL_HID
+    if (lowBatteryCondition)
+    {
+        // Low battery wake, or received a low battery notification
+        // while system is awake.
+        return false;
+    }
+
+    if (clamshellExists && clamshellClosed && !acAdaptorConnected)
+    {
+        // Lid closed on battery power
+        return false;
+    }
+#endif
     return true;
 }
 
@@ -5413,6 +5474,7 @@ void IOPMrootDomain::handlePowerNotification( UInt32 msg )
         clamshellClosed = false;
         clamshellExists = true;
 
+        // Don't issue a hid tickle when lid is open and polled on wake
         if (msg & kIOPMSetValue)
         {
             reportUserInput();
@@ -5429,7 +5491,7 @@ void IOPMrootDomain::handlePowerNotification( UInt32 msg )
                        || (lastSleepReason == kIOPMSleepReasonMaintenance));
         if (aborting) userActivityCount++;
         DLOG("clamshell tickled %d lastSleepReason %d\n", userActivityCount, lastSleepReason);
-    } 
+    }
 
     /* 
      * Clamshell CLOSED
@@ -5495,6 +5557,11 @@ void IOPMrootDomain::handlePowerNotification( UInt32 msg )
         {
             eval_clamshell = true;
         }
+
+        // Lack of AC may have latched a display wrangler tickle.
+        // This mirrors the hardware's USB wake event latch, where a latched
+        // USB wake event followed by an AC attach will trigger a full wake.
+        latchDisplayWranglerTickle( false );
     }
     
     /*
@@ -5536,12 +5603,11 @@ void IOPMrootDomain::handlePowerNotification( UInt32 msg )
     {
 
 
-        // SLEEP!
         privateSleepSystem (kIOPMSleepReasonClamshell);
     }
     else if ( eval_clamshell )
     {
-        evaluatePolicy(kStimulusDarkWakeEvaluate);
+        evaluatePolicy( kStimulusDarkWakeEvaluate );
     }
 
     /*
@@ -5670,6 +5736,12 @@ void IOPMrootDomain::evaluatePolicy( int stimulus, uint32_t arg )
                     DLOG("rejected tickle, type %u capability %x:%x\n",
                         _systemTransitionType,
                         _currentCapability, _pendingCapability);
+                    break;
+                }
+
+                if (latchDisplayWranglerTickle(true))
+                {
+                    DLOG("latched tickle\n");
                     break;
                 }
 
@@ -5949,8 +6021,6 @@ void IOPMrootDomain::evaluateAssertions(IOPMDriverAssertionType newAssertions, I
     }
     if (changedBits & kIOPMDriverAssertionCPUBit)
         evaluatePolicy(kStimulusDarkWakeEvaluate);
-
-
 }
 
 // MARK: -

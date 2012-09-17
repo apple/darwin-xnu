@@ -37,6 +37,10 @@
 
 #include <device/device_types.h>
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 void vcputc(int, int, int);
 
 int vcgetc(	int		l,
@@ -54,18 +58,62 @@ void video_scroll_down(	void	*start,  /* HIGH addr */
 
 struct vc_info
 {
-	unsigned int	v_height;	/* pixels */
-	unsigned int	v_width;	/* pixels */
-	unsigned int	v_depth;
-	unsigned int	v_rowbytes;
-	unsigned long	v_baseaddr;
-	unsigned int	v_type;
-	char		v_name[32];
-	uint64_t	v_physaddr;
-	unsigned int	v_rows;		/* characters */
-	unsigned int	v_columns;	/* characters */
-	unsigned int	v_rowscanbytes;	/* Actualy number of bytes used for display per row*/
-	unsigned int	v_reserved[5];
+    unsigned int	v_height;	/* pixels */
+    unsigned int	v_width;	/* pixels */
+    unsigned int	v_depth;
+    unsigned int	v_rowbytes;
+    unsigned long	v_baseaddr;
+    unsigned int	v_type;
+    char		v_name[32];
+    uint64_t		v_physaddr;
+    unsigned int	v_rows;		/* characters */
+    unsigned int	v_columns;	/* characters */
+    unsigned int	v_rowscanbytes;	/* Actualy number of bytes used for display per row*/
+    unsigned int	v_scale;
+    unsigned int	v_reserved[4];
 };
+
+struct vc_progress_element {
+    unsigned int	version;
+    unsigned int	flags;
+    unsigned int	time;
+    unsigned char	count;
+    unsigned char	res[3];
+    int			width;
+    int			height;
+    int			dx;
+    int			dy;
+    int			transparent;
+    unsigned int	res2[3];
+};
+typedef struct vc_progress_element vc_progress_element;
+
+void vc_progress_initialize( vc_progress_element * desc,
+                                    const unsigned char * data1x,
+                                    const unsigned char * data2x,
+                                    const unsigned char * clut );
+
+void vc_progress_set(boolean_t enable, uint32_t vc_delay);
+
+void vc_display_icon( vc_progress_element * desc, const unsigned char * data );
+
+int vc_display_lzss_icon(uint32_t dst_x,       uint32_t dst_y,
+                     uint32_t image_width, uint32_t image_height,
+                     const uint8_t *compressed_image,
+                     uint32_t       compressed_size, 
+                     const uint8_t *clut);
+
+#if !CONFIG_EMBEDDED
+
+extern void vc_enable_progressmeter(int new_value);
+extern void vc_set_progressmeter(int new_value);
+extern int vc_progress_meter_enable;
+extern int vc_progress_meter_value;
+
+#endif /* !CONFIG_EMBEDDED */
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif /* _VIDEO_CONSOLE_H_ */

@@ -286,11 +286,6 @@ static int		 pf_test_state_other(struct pf_state **, int,
 			    struct pfi_kif *, struct pf_pdesc *);
 static int		 pf_match_tag(struct mbuf *, struct pf_rule *,
 			    struct pf_mtag *, int *);
-static void		 pf_step_into_anchor(int *, struct pf_ruleset **, int,
-			    struct pf_rule **, struct pf_rule **,  int *);
-static int		 pf_step_out_of_anchor(int *, struct pf_ruleset **,
-			    int, struct pf_rule **, struct pf_rule **,
-			    int *);
 static void		 pf_hash(struct pf_addr *, struct pf_addr *,
 			    struct pf_poolhashkey *, sa_family_t);
 static int		 pf_map_addr(u_int8_t, struct pf_rule *,
@@ -2999,7 +2994,7 @@ pf_tag_packet(struct mbuf *m, struct pf_mtag *pf_mtag, int tag,
 	return (0);
 }
 
-static void
+void
 pf_step_into_anchor(int *depth, struct pf_ruleset **rs, int n,
     struct pf_rule **r, struct pf_rule **a,  int *match)
 {
@@ -3034,7 +3029,7 @@ pf_step_into_anchor(int *depth, struct pf_ruleset **rs, int n,
 	*r = TAILQ_FIRST((*rs)->rules[n].active.ptr);
 }
 
-static int
+int
 pf_step_out_of_anchor(int *depth, struct pf_ruleset **rs, int n,
     struct pf_rule **r, struct pf_rule **a, int *match)
 {
