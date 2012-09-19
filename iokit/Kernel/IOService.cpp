@@ -465,6 +465,8 @@ bool IOService::attach( IOService * provider )
 	ok = attachToParent( getRegistryRoot(), gIOServicePlane);
     }
 
+    if (ok && !__provider) (void) getProvider();
+
     return( ok );
 }
 
@@ -767,10 +769,9 @@ IOService * IOService::getProvider( void ) const
     IOService *	parent;
     SInt32	generation;
 
-    parent = __provider;
     generation = getGenerationCount();
     if( __providerGeneration == generation)
-	return( parent );
+	return( __provider );
 
     parent = (IOService *) getParentEntry( gIOServicePlane);
     if( parent == IORegistryEntry::getRegistryRoot())
@@ -778,7 +779,8 @@ IOService * IOService::getProvider( void ) const
 	parent = 0;
 
     self->__provider = parent;
-    // save the count before getParentEntry()
+    OSMemoryBarrier();
+    // save the count from before call to getParentEntry()
     self->__providerGeneration = generation;
 
     return( parent );

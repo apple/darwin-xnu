@@ -107,10 +107,11 @@ ipc_pset_alloc(
 			      &name, (ipc_object_t *) &pset);
 	if (kr != KERN_SUCCESS)
 		return kr;
-	/* pset is locked */
+	/* pset and space are locked */
 
 	pset->ips_local_name = name;
 	ipc_mqueue_init(&pset->ips_messages, TRUE /* set */);
+	is_write_unlock(space);
 
 	*namep = name;
 	*psetp = pset;

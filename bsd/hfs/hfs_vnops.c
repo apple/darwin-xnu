@@ -4167,6 +4167,41 @@ skip_rm:
 
 	tdcp->c_flag |= C_FORCEUPDATE;  // XXXdbg - force it out!
 	(void) hfs_update(tdvp, 0);
+
+	/* Update the vnode's name now that the rename has completed. */
+	vnode_update_identity(fvp, tdvp, tcnp->cn_nameptr, tcnp->cn_namelen, 
+			tcnp->cn_hash, (VNODE_UPDATE_PARENT | VNODE_UPDATE_NAME));
+
+	/* 
+	 * At this point, we may have a resource fork vnode attached to the 
+	 * 'from' vnode.  If it exists, we will want to update its name, because
+	 * it contains the old name + _PATH_RSRCFORKSPEC. ("/..namedfork/rsrc").
+	 *
+	 * Note that the only thing we need to update here is the name attached to
+	 * the vnode, since a resource fork vnode does not have a separate resource
+	 * cnode -- it's still 'fcp'.
+	 */
+	if (fcp->c_rsrc_vp) {
+		char* rsrc_path = NULL;
+		int len;
+
+		/* Create a new temporary buffer that's going to hold the new name */
+		MALLOC_ZONE (rsrc_path, caddr_t, MAXPATHLEN, M_NAMEI, M_WAITOK);
+		len = snprintf (rsrc_path, MAXPATHLEN, "%s%s", tcnp->cn_nameptr, _PATH_RSRCFORKSPEC);
+		len = MIN(len, MAXPATHLEN);
+
+		/* 
+		 * vnode_update_identity will do the following for us:
+		 * 1) release reference on the existing rsrc vnode's name.
+		 * 2) copy/insert new name into the name cache
+		 * 3) attach the new name to the resource vnode
+		 * 4) update the vnode's vid
+		 */
+		vnode_update_identity (fcp->c_rsrc_vp, fvp, rsrc_path, len, 0, (VNODE_UPDATE_NAME | VNODE_UPDATE_CACHE));
+
+		/* Free the memory associated with the resource fork's name */
+		FREE_ZONE (rsrc_path, MAXPATHLEN, M_NAMEI);	
+	}
 out:
 	if (got_cookie) {
 		cat_postflight(hfsmp, &cookie, p);

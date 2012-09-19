@@ -8,6 +8,7 @@ _KUNCUserNotificationDisplayNotice
 _NDR_record
 _PE_kputc
 __Z22OSFlushObjectTrackListv
+__ZN11IOMemoryMap9wireRangeEjyy
 __ZN15IOWatchDogTimer10gMetaClassE
 __ZN15IOWatchDogTimer10superClassE
 __ZN15IOWatchDogTimer13setPropertiesEP8OSObject
@@ -128,7 +129,15 @@ _mig_user_allocate
 _mig_user_deallocate
 _ml_io_map
 _ml_phys_read
+_ml_phys_read_byte_64
+_ml_phys_read_double_64
+_ml_phys_read_half_64
+_ml_phys_read_word_64
 _ml_phys_write
+_ml_phys_write_byte_64
+_ml_phys_write_double_64
+_ml_phys_write_half_64
+_ml_phys_write_word_64
 _ml_probe_read
 _ml_processor_register
 _ml_thread_policy

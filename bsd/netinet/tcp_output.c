@@ -299,7 +299,7 @@ tcp_output(struct tcpcb *tp)
 	u_int16_t	socket_id = get_socket_id(so);
 	int so_options = so->so_options;
 	struct rtentry *rt;
-	u_int32_t basertt, svc_flags = 0;
+	u_int32_t basertt, svc_flags = 0, allocated_len;
 	u_int32_t lro_ackmore = (tp->t_lropktlen != 0) ? 1 : 0;
 	struct mbuf *mnext = NULL;
 	int sackoptlen = 0;
@@ -825,7 +825,10 @@ after_sack_rexmit:
 			goto send;
 		}
 		if (SEQ_LT(tp->snd_nxt, tp->snd_max)) {
-			tp->t_flags &= ~TF_MAXSEGSNT;
+			if (len >= tp->t_maxseg)
+				tp->t_flags |= TF_MAXSEGSNT;
+			else
+				tp->t_flags &= ~TF_MAXSEGSNT;
 			goto send;
 		}
 		if (sack_rxmit)
@@ -1275,15 +1278,8 @@ send:
 		}
 	}
 
-/*#ifdef DIAGNOSTIC*/
-#if INET6
  	if (max_linkhdr + hdrlen > MCLBYTES)
 		panic("tcphdr too big");
-#else
- 	if (max_linkhdr + hdrlen > MHLEN)
-		panic("tcphdr too big");
-#endif
-/*#endif*/
 
 	/* Check if there is enough data in the send socket
 	 * buffer to start measuring bw 
@@ -1314,7 +1310,8 @@ send:
 			tcpstat.tcps_sndrexmitpack++;
 			tcpstat.tcps_sndrexmitbyte += len;
 			if (nstat_collect) {
-				nstat_route_tx(tp->t_inpcb->inp_route.ro_rt, 1, len, NSTAT_TX_FLAG_RETRANSMIT);
+				nstat_route_tx(tp->t_inpcb->inp_route.ro_rt, 1, 
+					len, NSTAT_TX_FLAG_RETRANSMIT);
 				locked_add_64(&tp->t_inpcb->inp_stat->txpackets, 1);
 				locked_add_64(&tp->t_inpcb->inp_stat->txbytes, len);
 				tp->t_stat.txretransmitbytes += len;
@@ -1327,18 +1324,6 @@ send:
 				locked_add_64(&tp->t_inpcb->inp_stat->txbytes, len);
 			}
 		}
-#ifdef notyet
-		if ((m = m_copypack(so->so_snd.sb_mb, off,
-		    (int)len, max_linkhdr + hdrlen)) == 0) {
-			error = ENOBUFS;
-			goto out;
-		}
-		/*
-		 * m_copypack left space for our hdr; use it.
-		 */
-		m->m_len += hdrlen;
-		m->m_data -= hdrlen;
-#else
 		/*
 		 * try to use the new interface that allocates all 
 		 * the necessary mbuf hdrs under 1 mbuf lock and 
@@ -1352,11 +1337,13 @@ send:
 		 * data area (no cluster attached)
 		 */
 		m = NULL;
-#if INET6
+
+		/* minimum length we are going to allocate */
+		allocated_len = MHLEN;
  		if (MHLEN < hdrlen + max_linkhdr) {
-		        MGETHDR(m, M_DONTWAIT, MT_HEADER);	/* MAC-OK */
+			MGETHDR(m, M_DONTWAIT, MT_HEADER);
 			if (m == NULL) {
-			        error = ENOBUFS;
+				error = ENOBUFS;
 				goto out;
 			}
  			MCLGET(m, M_DONTWAIT);
@@ -1367,13 +1354,14 @@ send:
  			}
 			m->m_data += max_linkhdr;
 			m->m_len = hdrlen;
+			allocated_len = MCLBYTES;
 		}
-#endif
-		if (len <= MHLEN - hdrlen - max_linkhdr) {
+		if (len <= allocated_len - hdrlen - max_linkhdr) {
 		        if (m == NULL) {
-			        MGETHDR(m, M_DONTWAIT, MT_HEADER);	/* MAC-OK */
+				VERIFY(allocated_len <= MHLEN);
+				MGETHDR(m, M_DONTWAIT, MT_HEADER);
 				if (m == NULL) {
-				        error = ENOBUFS;
+					error = ENOBUFS;
 					goto out;
 				}
 				m->m_data += max_linkhdr;
@@ -1430,7 +1418,6 @@ send:
 				m->m_len = hdrlen;
 			}
 		}
-#endif
 		/*
 		 * If we're sending everything we've got, set PUSH.
 		 * (This will keep happy those implementations which only
@@ -1454,13 +1441,15 @@ send:
 			error = ENOBUFS;
 			goto out;
 		}
-#if INET6
-		if (isipv6 && (MHLEN < hdrlen + max_linkhdr) &&
-		    MHLEN >= hdrlen) {
-			MH_ALIGN(m, hdrlen);
-		} else
-#endif
-			m->m_data += max_linkhdr;
+		if (MHLEN < (hdrlen + max_linkhdr)) {
+ 			MCLGET(m, M_DONTWAIT);
+ 			if ((m->m_flags & M_EXT) == 0) {
+ 				m_freem(m);
+ 				error = ENOBUFS;
+ 				goto out;
+ 			}
+		}
+		m->m_data += max_linkhdr;
 		m->m_len = hdrlen;
 	}
 	m->m_pkthdr.rcvif = 0;

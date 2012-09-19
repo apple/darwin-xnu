@@ -7,6 +7,7 @@ OPTIONS/config_dtrace					optional config_dtrace
 OPTIONS/hibernation					optional hibernation
 OPTIONS/networking					optional networking
 OPTIONS/crypto						optional crypto
+OPTIONS/allcrypto					optional allcrypto
 OPTIONS/zlib						optional zlib
 
 # libkern

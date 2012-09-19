@@ -631,7 +631,7 @@ private:
     IONotifier *            systemCapabilityNotifier;
 
     IOPMTimeline            *timeline;
-    
+
     typedef struct {
         uint32_t            pid;
         uint32_t            refcount;
@@ -643,6 +643,8 @@ private:
 
     OSSet *                 preventIdleSleepList;
     OSSet *                 preventSystemSleepList;
+
+    UInt32                  _scheduledAlarms;
 
 #if HIBERNATION
     clock_sec_t             _standbyTimerResetSeconds;
@@ -704,7 +706,7 @@ private:
 
 #if HIBERNATION
     bool        getSleepOption( const char * key, uint32_t * option );
-    bool        evaluateSystemSleepPolicy( IOPMSystemSleepParameters * p, int sleepPhase );
+    bool        evaluateSystemSleepPolicy( IOPMSystemSleepParameters * p, int phase );
     void        evaluateSystemSleepPolicyEarly( void );
     void        evaluateSystemSleepPolicyFinal( void );
 #endif /* HIBERNATION */

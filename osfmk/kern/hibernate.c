@@ -107,7 +107,8 @@ hibernate_setup(IOHibernateImageHeader * header,
 
 kern_return_t 
 hibernate_teardown(hibernate_page_list_t * page_list,
-                    hibernate_page_list_t * page_list_wired)
+                    hibernate_page_list_t * page_list_wired,
+		    hibernate_page_list_t * page_list_pal)
 {
     hibernate_free_gobble_pages();
 
@@ -115,6 +116,8 @@ hibernate_teardown(hibernate_page_list_t * page_list,
         kfree(page_list, page_list->list_size);
     if (page_list_wired)
         kfree(page_list_wired, page_list_wired->list_size);
+    if (page_list_pal)
+        kfree(page_list_pal, page_list_pal->list_size);
 
     return (KERN_SUCCESS);
 }

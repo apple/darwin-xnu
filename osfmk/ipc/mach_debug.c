@@ -249,7 +249,7 @@ mach_port_space_info(
 		}
 
 		iin->iin_urefs = IE_BITS_UREFS(bits);
-		iin->iin_object = (natural_t)(uintptr_t)entry->ie_object;
+		iin->iin_object = (natural_t)VM_KERNEL_ADDRPERM((uintptr_t)entry->ie_object);
 		iin->iin_next = entry->ie_next;
 		iin->iin_hash = entry->ie_index;
 	}

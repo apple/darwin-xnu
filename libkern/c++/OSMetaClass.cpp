@@ -46,8 +46,6 @@
 #include <libkern/c++/OSLib.h>
 #include <libkern/OSAtomic.h>
 
-#include <IOKit/pwr_mgt/RootDomain.h>
-#include <IOKit/IOMessage.h>
 #include <IOKit/IOLib.h>
 
 __BEGIN_DECLS

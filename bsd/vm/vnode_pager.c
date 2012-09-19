@@ -502,7 +502,6 @@ vnode_pagein(
 	int           		flags,
 	int 			*errorp)
 {
-        struct uthread	*ut;
         upl_page_info_t *pl;
 	int	        result = PAGER_SUCCESS;
 	int		error = 0;
@@ -690,18 +689,6 @@ out:
 	if (errorp)
 		*errorp = result;
 
-	ut = get_bsdthread_info(current_thread());
-
-	if (ut->uu_lowpri_window) {
-	        /*
-		 * task is marked as a low priority I/O type
-		 * and the I/O we issued while in this page fault
-		 * collided with normal I/O operations... we'll
-		 * delay in order to mitigate the impact of this
-		 * task on the normal operation of the system
-		 */
-		throttle_lowpri_io(TRUE);
-	}
 	return (error);
 }
 

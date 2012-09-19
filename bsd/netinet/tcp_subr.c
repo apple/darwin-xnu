@@ -414,7 +414,7 @@ tcp_init()
 		_max_protohdr = TCP_MINPROTOHDR;
 		_max_protohdr = max_protohdr;	/* round it up */
 	}
-	if (max_linkhdr + max_protohdr > MHLEN)
+	if (max_linkhdr + max_protohdr > MCLBYTES)
 		panic("tcp_init");
 #undef TCP_MINPROTOHDR
 

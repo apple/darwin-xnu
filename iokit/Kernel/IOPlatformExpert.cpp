@@ -105,7 +105,9 @@ bool IOPlatformExpert::start( IOService * provider )
     // Override the mapper present flag is requested by boot arguments.
     if (PE_parse_boot_argn("dart", &debugFlags, sizeof (debugFlags)) && (debugFlags == 0))
       removeProperty(kIOPlatformMapperPresentKey);
-    
+    if (PE_parse_boot_argn("-x", &debugFlags, sizeof (debugFlags)))
+      removeProperty(kIOPlatformMapperPresentKey);
+
     // Register the presence or lack thereof a system 
     // PCI address mapper with the IOMapper class
     IOMapper::setMapperRequired(0 != getProperty(kIOPlatformMapperPresentKey));

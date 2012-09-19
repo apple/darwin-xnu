@@ -513,7 +513,7 @@ tcp_lro_process_pkt(struct mbuf *lro_mb, struct ip *ip_hdr,
 
 	case TCP_LRO_COALESCE:
 		if ((payload_len != 0) && (unknown_tcpopts == 0) && 
-			(tcpflags == 0) && (ecn == 0) && (to.to_flags & TOF_TS)) { 
+			(tcpflags == 0) && (ecn != IPTOS_ECN_CE) && (to.to_flags & TOF_TS)) { 
 			tcp_lro_coalesce(flow_id, lro_mb, tcp_hdr, payload_len,
 				drop_hdrlen, &to, 
 				(to.to_flags & TOF_TS) ? (u_int32_t *)(void *)(optp + 4) : NULL,

@@ -167,19 +167,20 @@ void IOInterruptEventSource::disable()
 
 void IOInterruptEventSource::setWorkLoop(IOWorkLoop *inWorkLoop)
 {
-    super::setWorkLoop(inWorkLoop);
+    if (inWorkLoop) super::setWorkLoop(inWorkLoop);
 
-    if (!provider)
-    	return;
-
-    if ( !inWorkLoop ) {
-	if (intIndex >= 0) {
-	    provider->unregisterInterrupt(intIndex);
+    if (provider) {
+	if (!inWorkLoop) {
+	    if (intIndex >= 0) {
+		provider->unregisterInterrupt(intIndex);
+		intIndex = ~intIndex;
+	    }
+	} else if ((intIndex < 0) && (kIOReturnSuccess == registerInterruptHandler(provider, ~intIndex))) {
 	    intIndex = ~intIndex;
 	}
-    } else if ((intIndex < 0) && (kIOReturnSuccess == registerInterruptHandler(provider, ~intIndex))) {
-	intIndex = ~intIndex;
     }
+
+    if (!inWorkLoop) super::setWorkLoop(inWorkLoop);
 }
 
 const IOService *IOInterruptEventSource::getProvider() const

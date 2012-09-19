@@ -4788,7 +4788,7 @@ static unsigned long vm_object_collapse_calls = 0;
 static unsigned long vm_object_collapse_objects = 0;
 static unsigned long vm_object_collapse_do_collapse = 0;
 static unsigned long vm_object_collapse_do_bypass = 0;
-static unsigned long vm_object_collapse_delays = 0;
+
 __private_extern__ void
 vm_object_collapse(
 	register vm_object_t			object,
@@ -5003,11 +5003,11 @@ retry:
 		 */
 		size = atop(object->vo_size);
 		rcount = object->resident_page_count;
+
 		if (rcount != size) {
 			vm_object_offset_t	offset;
 			vm_object_offset_t	backing_offset;
 			unsigned int     	backing_rcount;
-			unsigned int		lookups = 0;
 
 			/*
 			 *	If the backing object has a pager but no pagemap,
@@ -5047,6 +5047,24 @@ retry:
 				continue;
 			}
 
+			backing_offset = object->vo_shadow_offset;
+			backing_rcount = backing_object->resident_page_count;
+
+			if ( (int)backing_rcount - (int)(atop(backing_object->vo_size) - size) > (int)rcount) {
+				/*
+				 * we have enough pages in the backing object to guarantee that
+				 * at least 1 of them must be 'uncovered' by a resident page
+				 * in the object we're evaluating, so move on and
+				 * try to collapse the rest of the shadow chain
+				 */
+                                if (object != original_object) {
+                                        vm_object_unlock(object);
+                                }
+                                object = backing_object;
+                                object_lock_type = backing_object_lock_type;
+                                continue;
+			}
+
 			/*
 			 *	If all of the pages in the backing object are
 			 *	shadowed by the parent object, the parent
@@ -5060,17 +5078,14 @@ retry:
 			 *
 			 */
 
-			backing_offset = object->vo_shadow_offset;
-			backing_rcount = backing_object->resident_page_count;
-
 #if	MACH_PAGEMAP
 #define EXISTS_IN_OBJECT(obj, off, rc) \
 	(vm_external_state_get((obj)->existence_map, \
 	 (vm_offset_t)(off)) == VM_EXTERNAL_STATE_EXISTS || \
-	 ((rc) && ++lookups && vm_page_lookup((obj), (off)) != VM_PAGE_NULL && (rc)--))
+	 ((rc) && vm_page_lookup((obj), (off)) != VM_PAGE_NULL && (rc)--))
 #else
 #define EXISTS_IN_OBJECT(obj, off, rc) \
-	(((rc) && ++lookups && vm_page_lookup((obj), (off)) != VM_PAGE_NULL && (rc)--))
+	(((rc) && vm_page_lookup((obj), (off)) != VM_PAGE_NULL && (rc)--))
 #endif	/* MACH_PAGEMAP */
 
 			/*
@@ -5103,36 +5118,23 @@ retry:
 			 * pages in the backing object, it makes sense to
 			 * walk the backing_object's resident pages first.
 			 *
-			 * NOTE: Pages may be in both the existence map and 
-			 * resident.  So, we can't permanently decrement
-			 * the rcount here because the second loop may
-			 * find the same pages in the backing object'
-			 * existence map that we found here and we would
-			 * double-decrement the rcount.  We also may or
-			 * may not have found the 
+			 * NOTE: Pages may be in both the existence map and/or
+                         * resident, so if we don't find a dependency while
+			 * walking the backing object's resident page list
+			 * directly, and there is an existence map, we'll have
+			 * to run the offset based 2nd pass.  Because we may
+			 * have to run both passes, we need to be careful
+			 * not to decrement 'rcount' in the 1st pass
 			 */
-			if (backing_rcount && 
-#if	MACH_PAGEMAP
-			    size > ((backing_object->existence_map) ?
-			     backing_rcount : (backing_rcount >> 1))
-#else
-			    size > (backing_rcount >> 1)
-#endif	/* MACH_PAGEMAP */
-				) {
+			if (backing_rcount && backing_rcount < (size / 8)) {
 				unsigned int rc = rcount;
 				vm_page_t p;
 
 				backing_rcount = backing_object->resident_page_count;
 				p = (vm_page_t)queue_first(&backing_object->memq);
 				do {
-					/* Until we get more than one lookup lock */
-					if (lookups > 256) {
-						vm_object_collapse_delays++;
-						lookups = 0;
-						mutex_pause(0);
-					}
-
 					offset = (p->offset - backing_offset);
+
 					if (offset < object->vo_size &&
 					    offset != hint_offset &&
 					    !EXISTS_IN_OBJECT(object, offset, rc)) {
@@ -5144,6 +5146,7 @@ retry:
 					p = (vm_page_t) queue_next(&p->listq);
 
 				} while (--backing_rcount);
+
 				if (backing_rcount != 0 ) {
 					/* try and collapse the rest of the shadow chain */
 					if (object != original_object) {
@@ -5169,13 +5172,6 @@ retry:
 				while((offset =
 				      (offset + PAGE_SIZE_64 < object->vo_size) ?
 				      (offset + PAGE_SIZE_64) : 0) != hint_offset) {
-
-					/* Until we get more than one lookup lock */
-					if (lookups > 256) {
-						vm_object_collapse_delays++;
-						lookups = 0;
-						mutex_pause(0);
-					}
 
 					if (EXISTS_IN_OBJECT(backing_object, offset +
 				            backing_offset, backing_rcount) &&

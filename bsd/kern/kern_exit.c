@@ -439,6 +439,7 @@ proc_exit(proc_t p)
 	struct uthread * uth;
 	pid_t pid;
 	int exitval;
+	int knote_hint;
 
 	uth = (struct uthread *)get_bsdthread_info(current_thread());
 
@@ -792,8 +793,12 @@ proc_exit(proc_t p)
 	p->task = TASK_NULL;
 	set_bsdtask_info(task, NULL);
 
-	/* exit status will be seen  by parent process */
-	proc_knote(p, NOTE_EXIT | (p->p_xstat & 0xffff));
+	knote_hint = NOTE_EXIT | (p->p_xstat & 0xffff);
+	if (p->p_oppid != 0) {
+		knote_hint |= NOTE_EXIT_REPARENTED;
+	}
+
+	proc_knote(p, knote_hint);
 
 	/* mark the thread as the one that is doing proc_exit
 	 * no need to hold proc lock in uthread_free

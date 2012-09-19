@@ -262,6 +262,11 @@ struct kevent64_s {
 #define	NOTE_PCTRLMASK	(~NOTE_PDATAMASK)
 
 /*
+ * If NOTE_EXITSTATUS is present, provide additional info about exiting process.
+ */
+#define NOTE_EXIT_REPARENTED	0x00080000	/* exited while reparented */
+
+/*
  * data/hint fflags for EVFILT_VM, shared with userspace.
  */
 #define NOTE_VM_PRESSURE			0x80000000              /* will react on memory pressure */

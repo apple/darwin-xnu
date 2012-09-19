@@ -8758,12 +8758,11 @@ submap_recurse:
 			if (!mapped_needs_copy) {
 				if (vm_map_lock_read_to_write(map)) {
 					vm_map_lock_read(map);
-					/* XXX FBDP: entry still valid ? */
-					if(*real_map == entry->object.sub_map)
-						*real_map = map;
+					*real_map = map;
 					goto RetryLookup;
 				}
 				vm_map_lock_read(entry->object.sub_map);
+				*var_map = entry->object.sub_map;
 				cow_sub_map_parent = map;
 				/* reset base to map before cow object */
 				/* this is the map which will accept   */
@@ -8774,12 +8773,14 @@ submap_recurse:
 				mapped_needs_copy = TRUE;
 			} else {
 				vm_map_lock_read(entry->object.sub_map);
+				*var_map = entry->object.sub_map;
 				if((cow_sub_map_parent != map) &&
 				   (*real_map != map))
 					vm_map_unlock(map);
 			}
 		} else {
 			vm_map_lock_read(entry->object.sub_map);
+			*var_map = entry->object.sub_map;	
 			/* leave map locked if it is a target */
 			/* cow sub_map above otherwise, just  */
 			/* follow the maps down to the object */
@@ -8789,8 +8790,7 @@ submap_recurse:
 				vm_map_unlock_read(map);
 		}
 
-		/* XXX FBDP: map has been unlocked, what protects "entry" !? */
-		*var_map = map = entry->object.sub_map;
+		map = *var_map;
 
 		/* calculate the offset in the submap for vaddr */
 		local_vaddr = (local_vaddr - entry->vme_start) + entry->offset;

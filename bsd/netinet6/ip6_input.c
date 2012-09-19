@@ -307,6 +307,9 @@ ip6_init()
 	int i;
 	struct timeval tv;
 
+	_CASSERT((sizeof(struct ip6_hdr) + sizeof(struct icmp6_hdr)) <= 
+		_MHLEN);
+
 	PE_parse_boot_argn("net.inet6.ip6.scopedroute", &ip6_doscopedroute,
 	    sizeof (ip6_doscopedroute));
 

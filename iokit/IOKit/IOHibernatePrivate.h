@@ -264,6 +264,7 @@ IOReturn IOHibernateSystemWake(void);
 IOReturn IOHibernateSystemPostWake(void);
 bool     IOHibernateWasScreenLocked(void);
 void     IOHibernateSetScreenLocked(uint32_t lockState);
+void     IOHibernateSystemRestart(void);
 
 #endif /* __cplusplus */
 
@@ -302,7 +303,8 @@ hibernate_setup(IOHibernateImageHeader * header,
                         boolean_t * encryptedswap);
 kern_return_t 
 hibernate_teardown(hibernate_page_list_t * page_list,
-                    hibernate_page_list_t * page_list_wired);
+                    hibernate_page_list_t * page_list_wired,
+                    hibernate_page_list_t * page_list_pal);
 
 kern_return_t 
 hibernate_processor_setup(IOHibernateImageHeader * header);
@@ -464,7 +466,10 @@ enum {
 #define kIOHibernateRTCVariablesKey	"IOHibernateRTCVariables"
 #define kIOHibernateSMCVariablesKey	"IOHibernateSMCVariables"
 
-#define kIOHibernateBootSwitchVarsKey			"boot-switch-vars"
+#define kIOHibernateBootSwitchVarsKey	"boot-switch-vars"
+
+#define kIOHibernateBootNoteKey		"boot-note"
+
 
 #define kIOHibernateUseKernelInterpreter    0x80000000
 

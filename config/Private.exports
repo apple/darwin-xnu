@@ -114,7 +114,7 @@ _net_add_proto
 _net_del_domain
 _net_del_proto
 _netboot_root
-_perf_monitor_register
+_perf_monitor_register_*
 _perf_monitor_unregister
 _pffinddomain
 _pffindproto

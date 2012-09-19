@@ -34,6 +34,8 @@ extern "C" {
 #include <mach/mach_time.h>
 #include <mach/mach_types.h>
 
+#include <libkern/version.h>
+
 /****************************************************************************
  * The four main object types
  *
@@ -343,6 +345,14 @@ typedef struct pmc_methods {
  * KERN_RESOURCE_SHORTAGE if the kernel lacks the resources to register another performance monitor
  * driver, KERN_INVALID_ARGUMENT if one or both of the arguments is null
  */
+
+/* Prevent older AppleProfileFamily kexts from loading on newer kernels.
+ * Alas, C doesn't necessarily have a cleaner way to do the version number concatenation
+ */
+#define PERF_REG_NAME1(a, b) a ## b
+#define PERF_REG_NAME(a, b) PERF_REG_NAME1(a, b)
+#define perf_monitor_register PERF_REG_NAME(perf_monitor_register_, VERSION_MAJOR)
+
 kern_return_t perf_monitor_register(perf_monitor_object_t monitor, perf_monitor_methods_t *methods);
 
 /*!fn

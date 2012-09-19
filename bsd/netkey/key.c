@@ -583,7 +583,9 @@ key_init(void)
 {
 
 	int i;
-	
+
+	_CASSERT(PFKEY_ALIGN8(sizeof(struct sadb_msg)) <= _MHLEN);
+
 	sadb_mutex_grp_attr = lck_grp_attr_alloc_init();
 	sadb_mutex_grp = lck_grp_alloc_init("sadb", sadb_mutex_grp_attr);
 	sadb_mutex_attr = lck_attr_alloc_init();

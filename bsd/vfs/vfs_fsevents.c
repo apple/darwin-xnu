@@ -112,6 +112,8 @@ typedef struct fs_event_watcher {
     uint32_t     num_dropped;
     uint64_t     max_event_id;
     struct fsevent_handle *fseh;
+    pid_t        pid;
+    char         proc_name[(2 * MAXCOMLEN) + 1];
 } fs_event_watcher;
 
 // fs_event_watcher flags
@@ -119,7 +121,7 @@ typedef struct fs_event_watcher {
 #define WATCHER_CLOSING                0x0002
 #define WATCHER_WANTS_COMPACT_EVENTS   0x0004
 #define WATCHER_WANTS_EXTENDED_INFO    0x0008
-
+#define WATCHER_APPLE_SYSTEM_SERVICE   0x0010   // fseventsd, coreservicesd, mds
 
 #define MAX_WATCHERS  8
 static fs_event_watcher *watcher_table[MAX_WATCHERS];
@@ -163,6 +165,47 @@ __private_extern__ void qsort(
     size_t member_size,
     int (*)(const void *, const void *));
 
+
+
+/* From kdp_udp.c + user mode Libc - this ought to be in a library */
+static char *
+strnstr(char *s, const char *find, size_t slen)
+{
+  char c, sc;
+  size_t len;
+  
+  if ((c = *find++) != '\0') {
+    len = strlen(find);
+    do {
+      do {
+        if ((sc = *s++) == '\0' || slen-- < 1)
+          return (NULL);
+      } while (sc != c);
+      if (len > slen)
+        return (NULL);
+    } while (strncmp(s, find, len) != 0);
+    s--;
+  }
+  return (s);
+}
+
+static int
+is_ignored_directory(const char *path) {
+
+    if (!path) {
+      return 0;
+    }
+
+#define IS_TLD(x) strnstr((char *) path, x, MAXPATHLEN) 
+    if (IS_TLD("/.Spotlight-V100/") ||
+        IS_TLD("/.MobileBackups/") || 
+        IS_TLD("/Backups.backupdb/")) {
+        return 1;
+    }
+#undef IS_TLD
+    
+    return 0;
+}
 
 static void
 fsevents_internal_init(void)
@@ -278,40 +321,6 @@ need_fsevent(int type, vnode_t vp)
     return 1;
 }
 
-static int
-prefix_match_len(const char *str1, const char *str2)
-{
-    int len=0;
-
-    while(*str1 && *str2 && *str1 == *str2) {
-	len++;
-	str1++;
-	str2++;
-    }
-
-    if (*str1 == '\0' && *str2 == '\0') {
-	len++;
-    }
-
-    return len;
-}
-
-
-struct history_item {
-    kfs_event *kfse;
-    kfs_event *oldest_kfse;
-    int        counter;
-};
-
-static int
-compare_history_items(const void *_a, const void *_b)
-{
-    const struct history_item *a = (const struct history_item *)_a;
-    const struct history_item *b = (const struct history_item *)_b;
-
-    // we want a descending order
-    return (b->counter - a->counter);
-}
 
 #define is_throw_away(x)  ((x) == FSE_STAT_CHANGED || (x) == FSE_CONTENT_MODIFIED)
 
@@ -340,119 +349,8 @@ compare_history_items(const void *_a, const void *_b)
 #define KFSE_RECYCLED   0x0004
 
 int num_dropped         = 0;
-int num_combined_events = 0;
-int num_added_to_parent = 0;
 int num_parent_switch   = 0;
 int num_recycled_rename = 0;
-
-//
-// NOTE: you must call lock_fs_event_list() before calling
-//       this function.
-//
-static kfs_event *
-find_an_event(const char *str, int len, kfs_event *do_not_reuse, int *reuse_type, int *longest_match_len)
-{
-    kfs_event *kfse, *best_kfse=NULL;
-
-// this seems to be enough to find most duplicate events for the same vnode
-#define MAX_HISTORY  12 
-    struct history_item history[MAX_HISTORY];
-    int           i;
-
-    *longest_match_len = 0;
-    *reuse_type = 0;
-    
-    memset(history, 0, sizeof(history));
-
-    //
-    // now walk the list of events and try to find the best match
-    // for this event.  if we have a vnode, we look for an event
-    // that already references the vnode.  if we don't find one
-    // we'll also take the parent of this vnode (in which case it
-    // will be marked as having dropped events within it).
-    //
-    // if we have a string we look for the longest match on the
-    // path we have.
-    //
-
-    LIST_FOREACH(kfse, &kfse_list_head, kevent_list) {
-	int match_len;
-
-	//
-	// don't look at events that are still in the process of being
-	// created, have a null vnode ptr or rename/exchange events.
-	//
-	if (   (kfse->flags & KFSE_BEING_CREATED) || kfse->type == FSE_RENAME || kfse->type == FSE_EXCHANGE) {
-
-	    continue;
-	}
-	
-	if (str != NULL) {
-	    if (kfse->len != 0 && kfse->str != NULL) {
-		match_len = prefix_match_len(str, kfse->str);
-		if (match_len > *longest_match_len) {
-		    best_kfse = kfse;
-		    *longest_match_len = match_len;
-		}
-	    }
-	}
-
-	if (kfse == do_not_reuse) {
-	    continue;
-	}
-
-	for(i=0; i < MAX_HISTORY; i++) {
-	    if (history[i].kfse == NULL) {
-		break;
-	    }
-
-	    //
-	    // do a quick check to see if we've got two simple events
-	    // that we can cheaply combine.  if the event we're looking
-	    // at and one of the events in the history table are for the
-	    // same path then we'll just mark the newer event as combined
-	    // and recyle the older event.
-	    //
-	    if (history[i].kfse->str == kfse->str) {
-
-		OSBitOrAtomic16(KFSE_COMBINED_EVENTS, &kfse->flags);
-		*reuse_type = KFSE_RECYCLED;
-		history[i].kfse->flags |= KFSE_RECYCLED_EVENT;
-		return history[i].kfse;
-	    }
-	}
-
-	if (i < MAX_HISTORY && history[i].kfse == NULL) {
-	    history[i].kfse = kfse;
-	    history[i].counter = 1;
-	} else if (i >= MAX_HISTORY) {
-	    qsort(history, MAX_HISTORY, sizeof(struct history_item), compare_history_items);
-
-	    // pluck off the lowest guy if he's only got a count of 1
-	    if (history[MAX_HISTORY-1].counter == 1) {
-		history[MAX_HISTORY-1].kfse = kfse;
-	    }
-	}
-    }
-
-    
-    if (str != NULL && best_kfse) {
-	if (*longest_match_len <= 1) {
-	    // if the best match we had was "/" then basically we're toast...
-	    *longest_match_len = 0;
-	    best_kfse = NULL;
-	} else if (*longest_match_len != len) {
-	    OSBitOrAtomic16(KFSE_CONTAINS_DROPPED_EVENTS, &best_kfse->flags);
-	    *reuse_type = KFSE_COLLAPSED;
-	} else {
-	    OSBitOrAtomic16(KFSE_COMBINED_EVENTS, &best_kfse->flags);
-	    *reuse_type = KFSE_COMBINED;
-	}
-    }
-
-    return best_kfse;
-}
-
 
 static struct timeval last_print;
 
@@ -480,14 +378,13 @@ int
 add_fsevent(int type, vfs_context_t ctx, ...) 
 {
     struct proc	     *p = vfs_context_proc(ctx);
-    int               i, arg_type, skip_init=0, longest_match_len, ret;
+    int               i, arg_type, ret;
     kfs_event        *kfse, *kfse_dest=NULL, *cur;
     fs_event_watcher *watcher;
     va_list           ap;
     int 	      error = 0, did_alloc=0, need_event_unlock = 0;
     dev_t             dev = 0;
     uint64_t          now, elapsed;
-    int               reuse_type = 0;
     char             *pathbuff=NULL;
     int               pathbuff_len;
 
@@ -598,55 +495,6 @@ add_fsevent(int type, vfs_context_t ctx, ...)
 
 
     if (kfse == NULL) {        // yikes! no free events
-	int len=0;
-	char *str;
-	
-	//
-	// Figure out what kind of reference we have to the
-	// file in this event.  This helps us find an event
-	// to combine/collapse into to make room.
-	//
-	// If we have a rename or exchange event then we
-	// don't want to go through the normal path, we
-	// want to "steal" an event instead (which is what
-	// find_an_event() will do if str is null).
-	//
-	arg_type = va_arg(ap, int32_t);
-	if (type == FSE_RENAME || type == FSE_EXCHANGE) {
-	    str = NULL;
-	} else if (arg_type == FSE_ARG_STRING) {
-	    len = va_arg(ap, int32_t);
-	    str = va_arg(ap, char *);
-	} else if (arg_type == FSE_ARG_VNODE) {
-	    struct vnode *vp;
-
-	    vp  = va_arg(ap, struct vnode *);
-	    pathbuff = get_pathbuff();
-	    pathbuff_len = MAXPATHLEN;
-	    if (vn_getpath(vp, pathbuff, &pathbuff_len) != 0 || pathbuff[0] == '\0') {
-		release_pathbuff(pathbuff);
-		pathbuff = NULL;
-	    }
-	    str = pathbuff;
-	} else {
-	    str = NULL;
-	}
-
-	//
-	// This will go through all events and find one that we
-        // can combine with (hopefully), or "collapse" into (i.e
-	// it has the same parent) or in the worst case we have
-	// to "recycle" an event which means that it will combine
-	// two other events and return us the now unused event.
-	// failing all that, find_an_event() could still return
-	// null and if it does then we have a catastrophic dropped
-	// events scenario.
-	//
-	kfse = find_an_event(str, len, NULL, &reuse_type, &longest_match_len);
-
-	if (kfse == NULL) {
-	  bail_early:
-	    
 	    unlock_fs_event_list();
 	    lock_watch_table();
 
@@ -681,10 +529,11 @@ add_fsevent(int type, vfs_context_t ctx, ...)
 			    continue;
 			}
 			
-			printf("add_fsevent: watcher %p: num dropped %d rd %4d wr %4d q_size %4d flags 0x%x\n",
-			    watcher_table[ii], watcher_table[ii]->num_dropped,
-			    watcher_table[ii]->rd, watcher_table[ii]->wr,
-			    watcher_table[ii]->eventq_size, watcher_table[ii]->flags);
+			printf("add_fsevent: watcher %s %p: rd %4d wr %4d q_size %4d flags 0x%x\n",
+			       watcher_table[ii]->proc_name,
+			       watcher_table[ii],
+			       watcher_table[ii]->rd, watcher_table[ii]->wr,
+			       watcher_table[ii]->eventq_size, watcher_table[ii]->flags);
 		    }
 
 		    last_print = current_tv;
@@ -698,223 +547,13 @@ add_fsevent(int type, vfs_context_t ctx, ...)
 		release_pathbuff(pathbuff);
 		pathbuff = NULL;
 	    }
-
 	    return ENOSPC;
 	}
 
-	if ((type == FSE_RENAME || type == FSE_EXCHANGE) && reuse_type != KFSE_RECYCLED) {
-	    panic("add_fsevent: type == %d but reuse type == %d!\n", type, reuse_type);
-	} else if ((kfse->type == FSE_RENAME || kfse->type == FSE_EXCHANGE) && kfse->dest == NULL) {
-	    panic("add_fsevent: bogus kfse %p (type %d, but dest is NULL)\n", kfse, kfse->type);
-	} else if (kfse->type == FSE_RENAME || kfse->type == FSE_EXCHANGE) {
-	    panic("add_fsevent: we should never re-use rename events (kfse %p reuse type %d)!\n", kfse, reuse_type);
-	}
-
-	if (reuse_type == KFSE_COLLAPSED) {
-	    if (str) {
-		const char *tmp_ptr, *new_str;
-		
-		//
-		// if we collapsed and have a string we have to chop off the
-		// tail component of the pathname to get the parent.
-		//
-		// NOTE: it is VERY IMPORTANT that we leave the trailing slash
-		//       on the pathname.  user-level code depends on this.
-		//
-		if (str[0] == '\0' || longest_match_len <= 1) {
-		    printf("add_fsevent: strange state (str %s / longest_match_len %d)\n", str, longest_match_len);
-		    if (longest_match_len < 0) {
-			panic("add_fsevent: longest_match_len %d\n", longest_match_len);
-		    }
-		}
-		// chop off the tail component if it's not the
-		// first character...
-		if (longest_match_len > 1) {
-		    str[longest_match_len] = '\0';
-		} else if (longest_match_len == 0) {
-		    longest_match_len = 1;
-		}
-
-		new_str = vfs_addname(str, longest_match_len, 0, 0);
-		if (new_str == NULL || new_str[0] == '\0') {
-		    panic("add_fsevent: longest match is strange (new_str %p).\n", new_str);
-		}
-		
-		lck_rw_lock_exclusive(&event_handling_lock);
-
-		kfse->len      = longest_match_len;
-		tmp_ptr        = kfse->str;
-		kfse->str = new_str;
-		kfse->ino      = 0;
-		kfse->mode     = 0;
-		kfse->uid      = 0;
-		kfse->gid      = 0;
-		
-		lck_rw_unlock_exclusive(&event_handling_lock);
-		
-		vfs_removename(tmp_ptr);
-	    } else {
-		panic("add_fsevent: don't have a vnode or a string pointer (kfse %p)\n", kfse);
-	    }
-	}
-
-	if (reuse_type == KFSE_RECYCLED && (type == FSE_RENAME || type == FSE_EXCHANGE)) {
-	    
-	    // if we're recycling this kfse and we have a rename or
-	    // exchange event then we need to also get an event for
-	    // kfse_dest. 
-	    //
-	    if (did_alloc) {
-		// only happens if we allocated one but then failed
-		// for kfse_dest (and thus free'd the first one we
-		// allocated)
-		kfse_dest = zalloc_noblock(event_zone);
-		if (kfse_dest != NULL) {
-		    memset(kfse_dest, 0, sizeof(kfs_event));
-		    kfse_dest->refcount = 1;
-		    OSBitOrAtomic16(KFSE_BEING_CREATED, &kfse_dest->flags);
-		} else {
-		    did_alloc = 0;
-		}
-	    }
-
-	    if (kfse_dest == NULL) {
-		int dest_reuse_type, dest_match_len;
-		
-		kfse_dest = find_an_event(NULL, 0, kfse, &dest_reuse_type, &dest_match_len);
-		
-		if (kfse_dest == NULL) {
-		    // nothing we can do... gotta bail out
-		    goto bail_early;
-		}
-
-		if (dest_reuse_type != KFSE_RECYCLED) {
-		    panic("add_fsevent: type == %d but dest_reuse type == %d!\n", type, dest_reuse_type);
-		}
-	    }
-	}
-
-
-	//
-	// Here we check for some fast-path cases so that we can
-	// jump over the normal initialization and just get on
-	// with delivering the event.  These cases are when we're
-	// combining/collapsing an event and so basically there is
-	// no more work to do (aside from a little book-keeping)
-	//
-	if (str && kfse->len != 0) {
-	    kfse->abstime = now;
-	    OSAddAtomic(1, &kfse->refcount);
-	    skip_init = 1;
-
-	    if (reuse_type == KFSE_COMBINED) {
-		num_combined_events++;
-	    } else if (reuse_type == KFSE_COLLAPSED) {
-		num_added_to_parent++;
-	    }
-	} else if (reuse_type != KFSE_RECYCLED) {
-	    panic("add_fsevent: I'm so confused! (reuse_type %d str %p kfse->len %d)\n",
-		  reuse_type, str, kfse->len);
-	}
-
-	va_end(ap);
-
-
-	if (skip_init) {
-	    if (kfse->refcount < 1) {
-		panic("add_fsevent: line %d: kfse recount %d but should be at least 1\n", __LINE__, kfse->refcount);
-	    }
-
-	    last_event_ptr = kfse;
-	    unlock_fs_event_list();
-	    goto normal_delivery;
-	    
-	} else if (reuse_type == KFSE_RECYCLED || reuse_type == KFSE_COMBINED) {
-
-	    //
-	    // If we're here we have to clear out the kfs_event(s)
-	    // that we were given by find_an_event() and set it
-	    // up to be re-filled in by the normal code path.
-	    //
-	    va_start(ap, ctx);
-
-	    need_event_unlock = 1;
-	    lck_rw_lock_exclusive(&event_handling_lock);
-
-	    OSAddAtomic(1, &kfse->refcount);
-
-	    if (kfse->refcount < 1) {
-		panic("add_fsevent: line %d: kfse recount %d but should be at least 1\n", __LINE__, kfse->refcount);
-	    }
-
-	    if (kfse->len == 0) {
-		panic("%s:%d: no more fref.vp\n", __FILE__, __LINE__);
-		// vnode_rele_ext(kfse->fref.vp, O_EVTONLY, 0);
-	    } else {
-		vfs_removename(kfse->str);
-		kfse->len = 0;
-	    }
-	    kfse->str = NULL;
-
-	    if (kfse->kevent_list.le_prev != NULL) {
-		num_events_outstanding--;
-		if (kfse->type == FSE_RENAME) {
-		    num_pending_rename--;
-		}
-		LIST_REMOVE(kfse, kevent_list);
-		memset(&kfse->kevent_list, 0, sizeof(kfse->kevent_list));
-	    }
-
-	    kfse->flags = 0 | KFSE_RECYCLED_EVENT;
-	    
-	    if (kfse_dest) {
-		OSAddAtomic(1, &kfse_dest->refcount);
-		kfse_dest->flags = 0 | KFSE_RECYCLED_EVENT;
-
-		if (did_alloc == 0) {
-		    if (kfse_dest->len == 0) {
-			panic("%s:%d: no more fref.vp\n", __FILE__, __LINE__);
-			// vnode_rele_ext(kfse_dest->fref.vp, O_EVTONLY, 0);
-		    } else {
-			vfs_removename(kfse_dest->str);
-			kfse_dest->len = 0;
-		    }
-		    kfse_dest->str = NULL;
-
-		    if (kfse_dest->kevent_list.le_prev != NULL) {
-			num_events_outstanding--;
-			LIST_REMOVE(kfse_dest, kevent_list);
-			memset(&kfse_dest->kevent_list, 0, sizeof(kfse_dest->kevent_list));
-		    }
-
-		    if (kfse_dest->dest) {
-			panic("add_fsevent: should never recycle a rename event! kfse %p\n", kfse);
-		    }
-		}
-	    }
-
-	    OSBitOrAtomic16(KFSE_BEING_CREATED, &kfse->flags);
-	    if (kfse_dest) {
-		OSBitOrAtomic16(KFSE_BEING_CREATED, &kfse_dest->flags);
-	    }
-
-	    goto process_normally;
-	}
-    }
-
-    if (reuse_type != 0) {
-	panic("fsevents: we have a reuse_type (%d) but are about to clear out kfse %p\n", reuse_type, kfse);
-    }
-
-    //
-    // we only want to do this for brand new events, not
-    // events which have been recycled.
-    //
     memset(kfse, 0, sizeof(kfs_event));
     kfse->refcount = 1;
     OSBitOrAtomic16(KFSE_BEING_CREATED, &kfse->flags);
 
-  process_normally:
     last_event_ptr = kfse;
     kfse->type     = type;
     kfse->abstime  = now;
@@ -1103,7 +742,6 @@ add_fsevent(int type, vfs_context_t ctx, ...)
 	lck_rw_unlock_shared(&event_handling_lock);
     }
     
-  normal_delivery:
     // unlock this here so we don't hold it across the
     // event delivery loop.
     if (need_event_unlock) {
@@ -1270,7 +908,6 @@ release_event_ref(kfs_event *kfse)
     }
 }
 
-
 static int
 add_watcher(int8_t *event_list, int32_t num_events, int32_t eventq_size, fs_event_watcher **watcher_out, void *fseh)
 {
@@ -1304,8 +941,16 @@ add_watcher(int8_t *event_list, int32_t num_events, int32_t eventq_size, fs_even
     watcher->num_readers  = 0;
     watcher->max_event_id = 0;
     watcher->fseh         = fseh;
+    watcher->pid          = proc_selfpid();
+    proc_selfname(watcher->proc_name, sizeof(watcher->proc_name));
 
     watcher->num_dropped  = 0;      // XXXdbg - debugging
+
+    if (!strncmp(watcher->proc_name, "fseventsd", sizeof(watcher->proc_name)) ||
+	!strncmp(watcher->proc_name, "coreservicesd", sizeof(watcher->proc_name)) ||
+	!strncmp(watcher->proc_name, "mds", sizeof(watcher->proc_name))) {
+	watcher->flags |= WATCHER_APPLE_SYSTEM_SERVICE;
+    }
 
     lock_watch_table();
 
@@ -1375,7 +1020,9 @@ remove_watcher(fs_event_watcher *target)
 	unlock_watch_table();
 	    
 	while (watcher->num_readers > 1 && counter++ < 5000) {
+	    lock_watch_table();
 	    fsevents_wakeup(watcher);      // in case they're asleep
+	    unlock_watch_table();
 	    
 	    tsleep(watcher, PRIBIO, "fsevents-close", 1);
 	}
@@ -1385,22 +1032,23 @@ remove_watcher(fs_event_watcher *target)
 	}
 
 	// drain the event_queue 
+
 	while(watcher->rd != watcher->wr) {
-	    lck_rw_lock_shared(&event_handling_lock);
-
+	    lck_rw_lock_exclusive(&event_handling_lock);
 	    kfse = watcher->event_queue[watcher->rd];
-	    if (kfse->type == FSE_INVALID || kfse->refcount < 1) {
-		panic("remove_watcher: bogus kfse %p during cleanup (type %d refcount %d rd %d wr %d)\n", kfse, kfse->type, kfse->refcount, watcher->rd, watcher->wr);
+	    if (!kfse || kfse->type == FSE_INVALID || kfse->refcount < 1) {
+		lck_rw_unlock_exclusive(&event_handling_lock);
+		break;
 	    }
-
-	    lck_rw_unlock_shared(&event_handling_lock);
-	    
+	    watcher->event_queue[watcher->rd] = NULL;
 	    watcher->rd = (watcher->rd+1) % watcher->eventq_size;
-
+	    OSSynchronizeIO();
 	    if (kfse != NULL) {
 		release_event_ref(kfse);
 	    }
+	    lck_rw_unlock_exclusive(&event_handling_lock);
 	}
+
 	    
 	if (watcher->event_list) {
 	    FREE(watcher->event_list, M_TEMP);
@@ -1493,17 +1141,47 @@ watcher_add_event(fs_event_watcher *watcher, kfs_event *kfse)
     // send any pending events if no more are received in the next 
     // EVENT_DELAY_IN_MS milli-seconds.
     //
-    if (   (watcher->rd < watcher->wr && (watcher->wr - watcher->rd) > MAX_NUM_PENDING)
-	|| (watcher->rd > watcher->wr && (watcher->wr + watcher->eventq_size - watcher->rd) > MAX_NUM_PENDING)) {
+	int32_t num_pending = 0;
+	if (watcher->rd < watcher->wr) {
+		num_pending = watcher->wr - watcher->rd;
+	}
 
-	fsevents_wakeup(watcher);
+	if (watcher->rd > watcher->wr) {
+		num_pending = watcher->wr + watcher->eventq_size - watcher->rd;
+	}
 
-    } else if (timer_set == 0) {
+	if (num_pending > (watcher->eventq_size*3/4) && !(watcher->flags & WATCHER_APPLE_SYSTEM_SERVICE)) {
+	    /* Non-Apple Service is falling behind, start dropping events for this process */
 
-	schedule_event_wakeup();
-    }
-
-    return 0;
+	    lck_rw_lock_exclusive(&event_handling_lock);	    
+	    while (watcher->rd != watcher->wr) {
+	      kfse = watcher->event_queue[watcher->rd];
+	      if (!kfse || kfse->type == FSE_INVALID || kfse->refcount < 1) {
+		  lck_rw_unlock_exclusive(&event_handling_lock);
+		  break;
+	      }
+	      watcher->event_queue[watcher->rd] = NULL;		
+	      watcher->rd = (watcher->rd+1) % watcher->eventq_size;
+	      OSSynchronizeIO();
+	      if (kfse != NULL) {
+		release_event_ref(kfse);
+	      }
+	    }
+	    lck_rw_unlock_exclusive(&event_handling_lock);
+	    
+	    printf("fsevents: watcher failing behind: %s (pid: %d) rd: %4d wr: %4d q_size: %4d flags: 0x%x\n",
+		   watcher->proc_name, watcher->pid, watcher->rd, watcher->wr,
+		   watcher->eventq_size, watcher->flags);
+	    
+	    watcher->flags |= WATCHER_DROPPED_EVENTS;
+	    fsevents_wakeup(watcher);
+	} else if (num_pending > MAX_NUM_PENDING) {
+	    fsevents_wakeup(watcher);
+	} else if (timer_set == 0) {
+	    schedule_event_wakeup();
+	}
+	
+	return 0;
 }
 
 static int
@@ -1740,6 +1418,7 @@ fmod_watch(fs_event_watcher *watcher, struct uio *uio)
     user_ssize_t      last_full_event_resid;
     kfs_event        *kfse;
     uint16_t          tmp16;
+    int               skipped;
 
     last_full_event_resid = uio_resid(uio);
 
@@ -1758,6 +1437,7 @@ fmod_watch(fs_event_watcher *watcher, struct uio *uio)
 	return EAGAIN;
     }
 
+ restart_watch:
     if (watcher->rd == watcher->wr) {
 	if (watcher->flags & WATCHER_CLOSING) {
 	    OSAddAtomic(-1, &watcher->num_readers);
@@ -1799,6 +1479,7 @@ fmod_watch(fs_event_watcher *watcher, struct uio *uio)
 	watcher->flags &= ~WATCHER_DROPPED_EVENTS;
     }
 
+    skipped = 0;
     while (uio_resid(uio) > 0 && watcher->rd != watcher->wr) {
 	if (watcher->flags & WATCHER_CLOSING) {
 	    break;
@@ -1812,12 +1493,21 @@ fmod_watch(fs_event_watcher *watcher, struct uio *uio)
 	lck_rw_lock_shared(&event_handling_lock);
 
 	kfse = watcher->event_queue[watcher->rd];
-	if (kfse->type == FSE_INVALID || kfse->refcount < 1) {
-	    panic("fmod_watch: someone left me a bogus kfse %p (type %d refcount %d rd %d wr %d)\n", kfse, kfse->type, kfse->refcount, watcher->rd, watcher->wr);
+	if (!kfse || kfse->type == FSE_INVALID || kfse->refcount < 1) {
+	  lck_rw_unlock_shared(&event_handling_lock);
+	  break;
 	}
 
 	if (watcher->event_list[kfse->type] == FSE_REPORT && watcher_cares_about_dev(watcher, kfse->dev)) {
 
+	  if (!(watcher->flags & WATCHER_APPLE_SYSTEM_SERVICE) & is_ignored_directory(kfse->str)) {
+	    // If this is not an Apple System Service, skip specified directories
+	    // radar://12034844
+	    error = 0;
+	    skipped = 1;
+	  } else {
+
+	    skipped = 0;
 	    if (last_event_ptr == kfse) {
 		last_event_ptr = NULL;
 		last_event_type = -1;
@@ -1839,18 +1529,18 @@ fmod_watch(fs_event_watcher *watcher, struct uio *uio)
 	    }
 
 	    last_full_event_resid = uio_resid(uio);
+	  }
 	}
-
-	lck_rw_unlock_shared(&event_handling_lock);
 
 	watcher->rd = (watcher->rd + 1) % watcher->eventq_size;
 	OSSynchronizeIO();
-	    
-	if (kfse->type == FSE_INVALID || kfse->refcount < 1) {
-	    panic("fmod_watch:2: my kfse became bogus! kfse %p (type %d refcount %d rd %d wr %d)\n", kfse, kfse->type, kfse->refcount, watcher->rd, watcher->wr);
-	}
-
 	release_event_ref(kfse);
+
+	lck_rw_unlock_shared(&event_handling_lock);
+    }
+
+    if (skipped && error == 0) {
+      goto restart_watch;
     }
 
   get_out:
@@ -2224,7 +1914,9 @@ fseventsf_drain(struct fileproc *fp, __unused vfs_context_t ctx)
         // and decision to tsleep in fmod_watch... this bit of 
         // latency is a decent tradeoff against not having to
         // take and drop a lock in fmod_watch
+	lock_watch_table();
 	fsevents_wakeup(fseh->watcher);
+	unlock_watch_table();
 
 	tsleep((caddr_t)fseh->watcher, PRIBIO, "watcher-close", 1);
     }

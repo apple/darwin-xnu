@@ -245,7 +245,7 @@ enum {
  *  false       == Retain FV key when going to standby mode
  *  not present == Retain FV key when going to standby mode
  */
-#define kIOPMDestroyFVKeyOnStandbyKey            "DestroyFVKeyOnStandby"
+#define kIOPMDestroyFVKeyOnStandbyKey       "DestroyFVKeyOnStandby"
 
 /*******************************************************************************
  *
@@ -288,7 +288,15 @@ enum {
      */
     kIOPMDriverAssertionPreventDisplaySleepBit      = 0x40,
 
-    kIOPMDriverAssertionReservedBit7                = 0x80
+    /*! kIOPMDriverAssertionReservedBit7
+     * Reserved for storage family.
+     */
+    kIOPMDriverAssertionReservedBit7                = 0x80,
+
+    /*! kIOPMDriverAssertionMagicPacketWakeEnabledBit
+     * When set, driver is informing PM that magic packet wake is enabled.
+     */
+    kIOPMDriverAssertionMagicPacketWakeEnabledBit   = 0x100
 };
 
  /* kIOPMAssertionsDriverKey

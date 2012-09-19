@@ -5113,12 +5113,14 @@ struct hfs_reclaim_extent_info {
  *                                        FABN = old FABN - E.blockCount
  *
  * Inputs: 
- *	extent_info - This is the structure that contains state about 
- *	              the current file, extent, and extent record that 
- *	              is being relocated.  This structure is shared 
- *	              among code that traverses through all the extents 
- *	              of the file, code that relocates extents, and 
- *	              code that splits the extent. 
+ *	extent_info -   This is the structure that contains state about 
+ *	                the current file, extent, and extent record that 
+ *	                is being relocated.  This structure is shared 
+ *	                among code that traverses through all the extents 
+ *	                of the file, code that relocates extents, and 
+ *	                code that splits the extent. 
+ *	newBlockCount - The blockCount of the extent to be split after 
+ *	                successfully split operation.
  * Output:
  * 	Zero on success, non-zero on failure.
  */
@@ -5147,6 +5149,13 @@ hfs_split_extent(struct hfs_reclaim_extent_info *extent_info, uint32_t newBlockC
 	is_xattr = extent_info->is_xattr;
 	extents = extent_info->extents;
 	cp = VTOC(extent_info->vp);
+
+	if (newBlockCount == 0) {
+		if (hfs_resize_debug) {
+			printf ("hfs_split_extent: No splitting required for newBlockCount=0\n");
+		}
+		return error;
+	}
 
 	if (hfs_resize_debug) {
 		printf ("hfs_split_extent: Split record:%u recStartBlock=%u %u:(%u,%u) for %u blocks\n", extent_info->overflow_count, extent_info->recStartBlock, index, extents[index].startBlock, extents[index].blockCount, newBlockCount);
@@ -5468,7 +5477,7 @@ hfs_split_extent(struct hfs_reclaim_extent_info *extent_info, uint32_t newBlockC
 				goto out;
 			}
 			if (hfs_resize_debug) {
-				printf ("hfs_split_extent: Deleted record with startBlock=%u\n", (is_xattr ? xattr_key->startBlock : extents_key->startBlock));
+				printf ("hfs_split_extent: Deleted extent record with startBlock=%u\n", (is_xattr ? xattr_key->startBlock : extents_key->startBlock));
 			}
 		}
 
@@ -5488,8 +5497,18 @@ hfs_split_extent(struct hfs_reclaim_extent_info *extent_info, uint32_t newBlockC
 			printf ("hfs_split_extent: Inserted extent record with startBlock=%u\n", write_recStartBlock);
 		}
 	}
-	BTFlushPath(extent_info->fcb);
+
 out:
+	/* 
+	 * Extents overflow btree or attributes btree headers might have 
+	 * been modified during the split/shift operation, so flush the 
+	 * changes to the disk while we are inside journal transaction.  
+	 * We should only be able to generate I/O that modifies the B-Tree 
+	 * header nodes while we're in the middle of a journal transaction.  
+	 * Otherwise it might result in panic during unmount.
+	 */
+	BTFlushPath(extent_info->fcb);
+
 	if (extents_rec) {
 		FREE (extents_rec, M_TEMP);
 	}
@@ -5578,7 +5597,12 @@ hfs_reclaim_extent(struct hfsmount *hfsmp, const u_long allocLimit, struct hfs_r
 	 */
 	if (oldStartBlock < allocLimit) {
 		newBlockCount = allocLimit - oldStartBlock;
-		
+
+		if (hfs_resize_debug) {
+			int idx = extent_info->extent_index;
+			printf ("hfs_reclaim_extent: Split straddling extent %u:(%u,%u) for %u blocks\n", idx, extent_info->extents[idx].startBlock, extent_info->extents[idx].blockCount, newBlockCount);
+		}
+
 		/* If the extent belongs to a btree, check and trim 
 		 * it to be multiple of the node size. 
 		 */
@@ -5594,15 +5618,21 @@ hfs_reclaim_extent(struct hfsmount *hfsmp, const u_long allocLimit, struct hfs_r
 				if (remainder_blocks) {
 					newBlockCount -= remainder_blocks;
 					if (hfs_resize_debug) {
-						printf ("hfs_reclaim_extent: Fixing extent block count, node_blks=%u, old=%u, new=%u\n", node_size/hfsmp->blockSize, newBlockCount + remainder_blocks, newBlockCount);
+						printf ("hfs_reclaim_extent: Round-down newBlockCount to be multiple of nodeSize, node_allocblks=%u, old=%u, new=%u\n", node_size/hfsmp->blockSize, newBlockCount + remainder_blocks, newBlockCount);
 					}
 				}
 			}
-		}
-
-		if (hfs_resize_debug) {
-			int idx = extent_info->extent_index;
-			printf ("hfs_reclaim_extent: Split straddling extent %u:(%u,%u) for %u blocks\n", idx, extent_info->extents[idx].startBlock, extent_info->extents[idx].blockCount, newBlockCount);
+			/* The newBlockCount is zero because of rounding-down so that
+			 * btree nodes are not split across extents.  Therefore this
+			 * straddling extent across resize-boundary does not require 
+			 * splitting.  Skip over to relocating of complete extent.
+			 */
+			if (newBlockCount == 0) {
+				if (hfs_resize_debug) {
+					printf ("hfs_reclaim_extent: After round-down newBlockCount=0, skip split, relocate full extent\n");
+				}
+				goto relocate_full_extent;
+			}
 		}
 
 		/* Split the extents into two parts --- the first extent lies
@@ -5618,10 +5648,12 @@ hfs_reclaim_extent(struct hfsmount *hfsmp, const u_long allocLimit, struct hfs_r
 		}
 		/* Split failed, so try to relocate entire extent */
 		if (hfs_resize_debug) {
-			printf ("hfs_reclaim_extent: Split straddling extent failed, reclocate full extent\n");
+			int idx = extent_info->extent_index;
+			printf ("hfs_reclaim_extent: Split straddling extent %u:(%u,%u) for %u blocks failed, relocate full extent\n", idx, extent_info->extents[idx].startBlock, extent_info->extents[idx].blockCount, newBlockCount);
 		}
 	}
 
+relocate_full_extent:
 	/* At this point, the current extent requires relocation.  
 	 * We will try to allocate space equal to the size of the extent 
 	 * being relocated first to try to relocate it without splitting.  

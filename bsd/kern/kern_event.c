@@ -471,7 +471,6 @@ static int
 filt_procattach(struct knote *kn)
 {
 	struct proc *p;
-	pid_t selfpid = (pid_t)0;
 
 	assert(PID_MAX < NOTE_PDATAMASK);
 	
@@ -483,15 +482,22 @@ filt_procattach(struct knote *kn)
 		return (ESRCH);
 	}
 
-	if ((kn->kn_sfflags & NOTE_EXIT) != 0) {
-		selfpid = proc_selfpid();
-		/* check for validity of NOTE_EXISTATUS */
-		if (((kn->kn_sfflags & NOTE_EXITSTATUS) != 0) && 
-			((p->p_ppid != selfpid) && (((p->p_lflag & P_LTRACED) == 0) || (p->p_oppid != selfpid)))) {
+	const int NoteExitStatusBits = NOTE_EXIT | NOTE_EXITSTATUS;
+
+	if ((kn->kn_sfflags & NoteExitStatusBits) == NoteExitStatusBits)
+		do {
+			pid_t selfpid = proc_selfpid();
+
+			if (p->p_ppid == selfpid)
+				break;	/* parent => ok */
+
+			if ((p->p_lflag & P_LTRACED) != 0 &&
+			    (p->p_oppid == selfpid))
+				break;	/* parent-in-waiting => ok */
+
 			proc_rele(p);
-			return(EACCES);
-		}
-	}
+			return (EACCES);
+		} while (0);
 
 	proc_klist_lock();
 

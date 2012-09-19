@@ -579,35 +579,44 @@ lf_setlock(struct lockf *lock)
 #endif /* LOCKF_DEBUGGING */
 		error = msleep(lock, &vp->v_lock, priority, lockstr, 0);
 
-		if (!TAILQ_EMPTY(&lock->lf_blkhd)) {
-		        if ((block = lf_getblock(lock, -1))) {
-				lf_move_blocked(block, lock);
-			}
-		}
-
 		if (error == 0 && (lock->lf_flags & F_ABORT) != 0)
 			error = EBADF;
 
-		if (error) {	/* XXX */
+		if (lock->lf_next) {
 			/*
-			 * We may have been awakened by a signal and/or by a
-			 * debugger continuing us (in which cases we must remove
-			 * ourselves from the blocked list) and/or by another
-			 * process releasing a lock (in which case we have
-			 * already been removed from the blocked list and our
-			 * lf_next field set to NOLOCKF).
+			 * lf_wakelock() always sets wakelock->lf_next to
+			 * NULL before a wakeup; so we've been woken early
+			 * - perhaps by a debugger, signal or other event.
+			 *
+			 * Remove 'lock' from the block list (avoids double-add
+			 * in the spurious case, which would create a cycle)
 			 */
-			if (lock->lf_next) {
-				TAILQ_REMOVE(&lock->lf_next->lf_blkhd, lock, lf_block);
-				lock->lf_next = NOLOCKF;
+			TAILQ_REMOVE(&lock->lf_next->lf_blkhd, lock, lf_block);
+			lock->lf_next = NULL;
+
+			if (error == 0) {
+				/*
+				 * If this was a spurious wakeup, retry
+				 */
+				printf("%s: spurious wakeup, retrying lock\n",
+				    __func__);
+				continue;
 			}
+		}
+
+		if (!TAILQ_EMPTY(&lock->lf_blkhd)) {
+		        if ((block = lf_getblock(lock, -1)) != NULL)
+				lf_move_blocked(block, lock);
+		}
+
+		if (error) {
 			if (!TAILQ_EMPTY(&lock->lf_blkhd))
 			        lf_wakelock(lock, TRUE);
-			  
 			FREE(lock, M_LOCKF);
 			return (error);
-		}	/* XXX */
+		}
 	}
+
 	/*
 	 * No blocks!!  Add the lock.  Note that we will
 	 * downgrade or upgrade any overlapping locks this
@@ -1189,6 +1198,10 @@ lf_wakelock(struct lockf *listhead, boolean_t force_all)
 			        struct lockf *tlock;
 
 			        TAILQ_FOREACH(tlock, &wakelock->lf_blkhd, lf_block) {
+					if (TAILQ_NEXT(tlock, lf_block) == tlock) {
+						/* See rdar://10887303 */
+						panic("cycle in wakelock list");
+					}
 				        tlock->lf_next = wakelock;
 				}
 			}

@@ -68,6 +68,8 @@
 extern void	acpi_sleep_cpu(acpi_sleep_callback, void * refcon);
 extern void acpi_wake_prot(void);
 #endif
+extern kern_return_t IOCPURunPlatformQuiesceActions(void);
+extern kern_return_t IOCPURunPlatformActiveActions(void);
 
 extern void 	fpinit(void);
 
@@ -91,7 +93,6 @@ typedef struct acpi_hibernate_callback_data acpi_hibernate_callback_data_t;
 
 unsigned int		save_kdebug_enable = 0;
 static uint64_t		acpi_sleep_abstime;
-
 
 #if CONFIG_SLEEP
 static void
@@ -138,6 +139,8 @@ acpi_hibernate(void *refcon)
 #endif
 	}
 	kdebug_enable = 0;
+
+	IOCPURunPlatformQuiesceActions();
 
 	acpi_sleep_abstime = mach_absolute_time();
 
@@ -303,6 +306,8 @@ acpi_sleep_kernel(acpi_sleep_callback func, void *refcon)
 	rtc_sleep_wakeup(acpi_sleep_abstime);
 
 	kdebug_enable = save_kdebug_enable;
+
+	IOCPURunPlatformActiveActions();
 
 	if (did_hibernate) {
 		

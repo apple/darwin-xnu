@@ -593,13 +593,15 @@ ipc_port_alloc(
 	if (kr != KERN_SUCCESS)
 		return kr;
 
-	/* port is locked */
-
+	/* port and space are locked */
 	ipc_port_init(port, space, name);
 
 #if     MACH_ASSERT
 	ipc_port_init_debug(port, &buf[0], IP_CALLSTACK_MAX);
 #endif  /* MACH_ASSERT */
+
+	/* unlock space after init */
+	is_write_unlock(space);
 
 #if CONFIG_MACF_MACH
 	task_t issuer = current_task();

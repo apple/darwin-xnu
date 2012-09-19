@@ -29,6 +29,7 @@
 #include <IOKit/IOMapper.h>
 #include <IOKit/IODMACommand.h>
 #include <libkern/c++/OSData.h>
+#include <libkern/OSDebug.h>
 
 __BEGIN_DECLS
 extern ppnum_t pmap_find_phys(pmap_t pmap, addr64_t va);
@@ -40,7 +41,7 @@ OSDefineMetaClassAndAbstractStructors(IOMapper, IOService);
 OSMetaClassDefineReservedUsed(IOMapper, 0);
 OSMetaClassDefineReservedUsed(IOMapper, 1);
 OSMetaClassDefineReservedUsed(IOMapper, 2);
-OSMetaClassDefineReservedUnused(IOMapper, 3);
+OSMetaClassDefineReservedUsed(IOMapper, 3);
 OSMetaClassDefineReservedUnused(IOMapper, 4);
 OSMetaClassDefineReservedUnused(IOMapper, 5);
 OSMetaClassDefineReservedUnused(IOMapper, 6);
@@ -132,7 +133,10 @@ void IOMapper::waitForSystemMapper()
 {
     sMapperLock.lock();
     while ((uintptr_t) IOMapper::gSystem & kWaitMask)
+    {
+		OSReportWithBacktrace("waitForSystemMapper");
         sMapperLock.sleep(&IOMapper::gSystem);
+    }
     sMapperLock.unlock();
 }
 
@@ -165,12 +169,23 @@ IOMapper * IOMapper::copyMapperForDevice(IOService * device)
 
 ppnum_t IOMapper::iovmAllocDMACommand(IODMACommand * command, IOItemCount pageCount)
 {
-	return (0);
+    return (0);
 }
 
 void IOMapper::iovmFreeDMACommand(IODMACommand * command,
 				  ppnum_t addr, IOItemCount pageCount)
 {
+}
+
+ppnum_t IOMapper::iovmMapMemory(
+    			  OSObject                    * memory,   // dma command or iomd
+			  ppnum_t                       offsetPage,
+			  ppnum_t                       pageCount,
+			  uint32_t                      options,
+			  upl_page_info_t             * pageList,
+			  const IODMAMapSpecification * mapSpecification)
+{
+    return (0);
 }
 
 void IOMapper::iovmInsert(ppnum_t addr, IOItemCount offset,
@@ -249,6 +264,7 @@ void IOMapperIOVMFree(ppnum_t addr, unsigned pages)
 ppnum_t IOMapperInsertPage(ppnum_t addr, unsigned offset, ppnum_t page)
 {
     if (IOMapper::gSystem) {
+		if (!addr) panic("!addr");
         IOMapper::gSystem->iovmInsert(addr, (IOItemCount) offset, page);
         return addr + offset;
     }

@@ -173,6 +173,7 @@ to restrict I/O ops.
 #include <machine/pal_hibernate.h>
 
 extern "C" addr64_t		kvtophys(vm_offset_t va);
+extern "C" ppnum_t		pmap_find_phys(pmap_t pmap, addr64_t va);
 
 /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
 
@@ -1109,7 +1110,7 @@ if (vars->position & (vars->blockSize - 1)) HIBLOG("misaligned file pos %qx\n", 
 }
 
 /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
-		
+
 IOReturn
 IOHibernateSystemSleep(void)
 {
@@ -1727,7 +1728,7 @@ IOHibernateSystemWake(void)
 static IOReturn
 IOHibernateDone(IOHibernateVars * vars)
 {
-    hibernate_teardown(vars->page_list, vars->page_list_wired);
+    hibernate_teardown(vars->page_list, vars->page_list_wired, vars->page_list_pal);
 
     if (vars->videoMapping)
     {
@@ -1811,43 +1812,46 @@ IOHibernateDone(IOHibernateVars * vars)
     if (vars->ioBuffer)
 	vars->ioBuffer->release();
     bzero(&gIOHibernateHandoffPages[0], gIOHibernateHandoffPageCount * sizeof(gIOHibernateHandoffPages[0]));
-    if (vars->handoffBuffer && (kIOHibernateStateWakingFromHibernate == gIOHibernateState))
+    if (vars->handoffBuffer)
     {
-	IOHibernateHandoff * handoff;
-	bool done = false;
-	for (handoff = (IOHibernateHandoff *) vars->handoffBuffer->getBytesNoCopy();
-	     !done;
-	     handoff = (IOHibernateHandoff *) &handoff->data[handoff->bytecount])
+	if (kIOHibernateStateWakingFromHibernate == gIOHibernateState)
 	{
-	    HIBPRINT("handoff %p, %x, %x\n", handoff, handoff->type, handoff->bytecount);
-	    uint8_t * data = &handoff->data[0];
-	    switch (handoff->type)
+	    IOHibernateHandoff * handoff;
+	    bool done = false;
+	    for (handoff = (IOHibernateHandoff *) vars->handoffBuffer->getBytesNoCopy();
+		 !done;
+		 handoff = (IOHibernateHandoff *) &handoff->data[handoff->bytecount])
 	    {
-		case kIOHibernateHandoffTypeEnd:
-		    done = true;
-		    break;
+		HIBPRINT("handoff %p, %x, %x\n", handoff, handoff->type, handoff->bytecount);
+		uint8_t * data = &handoff->data[0];
+		switch (handoff->type)
+		{
+		    case kIOHibernateHandoffTypeEnd:
+			done = true;
+			break;
 
-	    case kIOHibernateHandoffTypeDeviceTree:
-		    MergeDeviceTree((DeviceTreeNode *) data, IOService::getServiceRoot());
-		    break;
-    
-		case kIOHibernateHandoffTypeKeyStore:
+		    case kIOHibernateHandoffTypeDeviceTree:
+			MergeDeviceTree((DeviceTreeNode *) data, IOService::getServiceRoot());
+			break;
+	
+		    case kIOHibernateHandoffTypeKeyStore:
 #if defined(__i386__) || defined(__x86_64__)
-		    {
-			IOBufferMemoryDescriptor *
-			md = IOBufferMemoryDescriptor::withBytes(data, handoff->bytecount, kIODirectionOutIn);
-			if (md)
 			{
-			    IOSetKeyStoreData(md);
+			    IOBufferMemoryDescriptor *
+			    md = IOBufferMemoryDescriptor::withBytes(data, handoff->bytecount, kIODirectionOutIn);
+			    if (md)
+			    {
+				IOSetKeyStoreData(md);
+			    }
 			}
-		    }
 #endif
-		    break;
-    
-		default:
-		    done = (kIOHibernateHandoffType != (handoff->type & 0xFFFF0000));
-		    break;
-	    }    
+			break;
+	
+		    default:
+			done = (kIOHibernateHandoffType != (handoff->type & 0xFFFF0000));
+			break;
+		}    
+	    }
 	}
 	vars->handoffBuffer->release();
     }
@@ -2889,3 +2893,51 @@ hibernate_machine_init(void)
 }
 
 /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
+
+void IOHibernateSystemRestart(void)
+{
+    static uint8_t    noteStore[32] __attribute__((aligned(32)));
+    IORegistryEntry * regEntry;
+    const OSSymbol *  sym;
+    OSData *          noteProp;
+    OSData *          data;
+    uintptr_t *       smcVars;
+    uint8_t *         smcBytes;
+    size_t            len;
+    addr64_t          element;
+
+    data = OSDynamicCast(OSData, IOService::getPMRootDomain()->getProperty(kIOHibernateSMCVariablesKey));
+    if (!data) return;
+
+    smcVars = (typeof(smcVars)) data->getBytesNoCopy();
+    smcBytes = (typeof(smcBytes)) smcVars[1];
+    len = smcVars[0];
+    if (len > sizeof(noteStore)) len = sizeof(noteStore);
+    noteProp = OSData::withCapacity(3 * sizeof(element));
+    if (!noteProp) return;
+    element = len;
+    noteProp->appendBytes(&element, sizeof(element));
+    element = crc32(0, smcBytes, len);
+    noteProp->appendBytes(&element, sizeof(element));
+
+    bcopy(smcBytes, noteStore, len);
+    element = (addr64_t) &noteStore[0];
+    element = (element & page_mask) | ptoa_64(pmap_find_phys(kernel_pmap, element));
+    noteProp->appendBytes(&element, sizeof(element));
+
+    if (!gIOOptionsEntry)
+    {
+	regEntry = IORegistryEntry::fromPath("/options", gIODTPlane);
+	gIOOptionsEntry = OSDynamicCast(IODTNVRAM, regEntry);
+	if (regEntry && !gIOOptionsEntry)
+	    regEntry->release();
+    }
+
+    sym = OSSymbol::withCStringNoCopy(kIOHibernateBootNoteKey);
+    if (gIOOptionsEntry && sym) gIOOptionsEntry->setProperty(sym, noteProp);
+    if (noteProp)               noteProp->release();
+    if (sym)                    sym->release();
+}
+
+
+

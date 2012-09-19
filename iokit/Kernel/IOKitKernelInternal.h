@@ -98,6 +98,9 @@ extern ppnum_t IOGetLastPageNumber(void);
 
 extern ppnum_t gIOLastPage;
 
+extern IOSimpleLock * gIOPageAllocLock;
+extern queue_head_t   gIOPageAllocList;
+
 /* Physical to physical copy (ints must be disabled) */
 extern void bcopy_phys(addr64_t from, addr64_t to, vm_size_t size);
 
@@ -105,12 +108,16 @@ __END_DECLS
 
 // Used for dedicated communications for IODMACommand
 enum  {
-    kIOMDWalkSegments         = 0x00000001,
-    kIOMDFirstSegment	      = 0x00000002 | kIOMDWalkSegments,
-    kIOMDGetCharacteristics   = 0x00000004,
-    kIOMDSetDMAActive         = 0x00000005,
-    kIOMDSetDMAInactive       = 0x00000006,
-    kIOMDLastDMACommandOperation
+    kIOMDWalkSegments             = 0x01000000,
+    kIOMDFirstSegment	          = 1 | kIOMDWalkSegments,
+    kIOMDGetCharacteristics       = 0x02000000,
+    kIOMDGetCharacteristicsMapped = 1 | kIOMDGetCharacteristics,
+    kIOMDDMAActive                = 0x03000000,
+    kIOMDSetDMAActive             = 1 | kIOMDDMAActive,
+    kIOMDSetDMAInactive           = kIOMDDMAActive,
+    kIOMDAddDMAMapSpec            = 0x04000000,
+    kIOMDDMAMap                   = 0x05000000,
+    kIOMDDMACommandOperationMask  = 0xFF000000,
 };
 struct IOMDDMACharacteristics {
     UInt64 fLength;
@@ -119,7 +126,7 @@ struct IOMDDMACharacteristics {
     UInt32 fPageAlign;
     ppnum_t fHighestPage;
     IODirection fDirection;
-    UInt8 fIsMapped, fIsPrepared;
+    UInt8 fIsPrepared;
 };
 struct IOMDDMAWalkSegmentArgs {
     UInt64 fOffset;			// Input/Output offset
@@ -127,6 +134,15 @@ struct IOMDDMAWalkSegmentArgs {
     UInt8 fMapped;			// Input Variable, Require mapped IOVMA
 };
 typedef UInt8 IOMDDMAWalkSegmentState[128];
+
+struct IOMDDMAMapArgs {
+    IOMapper *            fMapper;
+    IODMAMapSpecification fMapSpec;
+    uint64_t              fOffset;
+    uint64_t              fLength;
+    uint64_t              fAlloc;
+    ppnum_t               fAllocCount;
+};
 
 struct IODMACommandInternal
 {
@@ -154,10 +170,12 @@ struct IODMACommandInternal
 
     ppnum_t  fCopyPageCount;
 
-    ppnum_t  fLocalMapperPageAlloc;
+    addr64_t  fLocalMapperPageAlloc;
     ppnum_t  fLocalMapperPageCount;
 
     class IOBufferMemoryDescriptor * fCopyMD;
+
+    IOService * fDevice;
 
     // IODMAEventSource use
     IOReturn fStatus;

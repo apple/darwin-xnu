@@ -306,6 +306,7 @@ ipc_object_alloc_dead_name(
  *		Allocate an object.
  *	Conditions:
  *		Nothing locked.  If successful, the object is returned locked.
+ *		The space is write locked on successful return. 
  *		The caller doesn't get a reference for the object.
  *	Returns:
  *		KERN_SUCCESS		The object is allocated.
@@ -363,7 +364,6 @@ ipc_object_alloc(
 	ipc_entry_modified(space, *namep, entry);
 
 	io_lock(object);
-	is_write_unlock(space);
 
 	object->io_references = 1; /* for entry, not caller */
 	object->io_bits = io_makebits(TRUE, otype, 0);

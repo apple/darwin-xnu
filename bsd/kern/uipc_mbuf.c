@@ -2708,8 +2708,7 @@ m_clalloc(const u_int32_t num, const int wait, const u_int32_t bufsize)
 
 	for (i = 0; i < numpages; i++, page += NBPG) {
 		ppnum_t offset = ((char *)page - (char *)mbutl) / NBPG;
-		ppnum_t new_page = pmap_find_phys(kernel_pmap,
-		    (vm_offset_t)page);
+		ppnum_t new_page = pmap_find_phys(kernel_pmap, page);
 
 		/*
 		 * In the case of no mapper being available the following
@@ -2717,7 +2716,10 @@ m_clalloc(const u_int32_t num, const int wait, const u_int32_t bufsize)
 		 * mapper the appropriate I/O page is returned.
 		 */
 		VERIFY(offset < mcl_pages);
-		new_page = IOMapperInsertPage(mcl_paddr_base, offset, new_page);
+		if (mcl_paddr_base) {
+		    bzero((void *)(uintptr_t) page, page_size);
+		    new_page = IOMapperInsertPage(mcl_paddr_base, offset, new_page);
+		}
 		mcl_paddr[offset] = new_page << PGSHIFT;
 
 		/* Pattern-fill this fresh page */

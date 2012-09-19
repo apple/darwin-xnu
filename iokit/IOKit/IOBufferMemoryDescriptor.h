@@ -34,6 +34,7 @@ enum {
     kIOMemoryPhysicallyContiguous	= 0x00000010,
     kIOMemoryPageable	      		= 0x00000020,
     kIOMemoryPurgeable	      		= 0x00000040,
+    kIOMemoryHostPhysicallyContiguous  	= 0x00000080,
     kIOMemorySharingTypeMask		= 0x000f0000,
     kIOMemoryUnshared			= 0x00000000,
     kIOMemoryKernelUserShared		= 0x00010000,
@@ -44,9 +45,11 @@ enum {
 #endif
 					| kIOMemoryThreadSafe
 					| kIOMemoryClearEncrypt
+					| kIOMemoryMapperNone
 };
 
-#define _IOBUFFERMEMORYDESCRIPTOR_INTASKWITHOPTIONS_	1
+#define _IOBUFFERMEMORYDESCRIPTOR_INTASKWITHOPTIONS_		1
+#define _IOBUFFERMEMORYDESCRIPTOR_HOSTPHYSICALLYCONTIGUOUS_	1
 /*!
     @class IOBufferMemoryDescriptor
     @abstract Provides a simple memory descriptor that allocates its own buffer memory.
