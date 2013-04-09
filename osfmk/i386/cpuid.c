@@ -587,7 +587,7 @@ cpuid_set_generic_info(i386_cpu_info_t *info_p)
 	info_p->cpuid_features  = quad(reg[ecx], reg[edx]);
 
 	/* Get "processor flag"; necessary for microcode update matching */
-	info_p->cpuid_processor_flag = (rdmsr64(MSR_IA32_PLATFORM_ID)>> 50) & 3;
+	info_p->cpuid_processor_flag = (rdmsr64(MSR_IA32_PLATFORM_ID)>> 50) & 0x7;
 
 	/* Fold extensions into family/model */
 	if (info_p->cpuid_family == 0x0f)

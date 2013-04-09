@@ -241,6 +241,8 @@ private:
     unsigned int            DriverCallBusy:1;
     unsigned int            PCDFunctionOverride:1;
     unsigned int            IdleTimerIgnored:1;
+    unsigned int            HasAdvisoryDesire:1;
+    unsigned int            AdvisoryTickleUsed:1;
 
     // Time of last device activity.
     AbsoluteTime            DeviceActiveTimestamp;
@@ -299,7 +301,6 @@ private:
 
     AbsoluteTime            DriverCallStartTime;
     IOPMPowerFlags          CurrentCapabilityFlags;
-    long                    ActivityTicklePowerState;
     unsigned long           CurrentPowerConsumption;
     IOPMPowerStateIndex     TempClampPowerState;
     OSArray *               NotifyChildArray;
@@ -312,10 +313,14 @@ private:
     uint32_t                OutOfBandMessage;
     uint32_t                TempClampCount;
     uint32_t                OverrideMaxPowerState;
+    uint32_t                DeviceUsablePowerState;
 
     // Protected by ActivityLock - BEGIN
+    int                     ActivityTicklePowerState;
+    int                     AdvisoryTicklePowerState;
     uint32_t                ActivityTickleCount;
-    uint32_t                DeviceWasActive;
+    uint32_t                DeviceWasActive     : 1;
+    uint32_t                AdvisoryTickled     : 1;
     // Protected by ActivityLock - END
 
     uint32_t                WaitReason;
@@ -364,7 +369,6 @@ private:
 #define fInitialPowerChange         pwrMgt->InitialPowerChange
 #define fInitialSetPowerState       pwrMgt->InitialSetPowerState
 #define fDeviceOverrideEnabled      pwrMgt->DeviceOverrideEnabled
-#define fDeviceWasActive            pwrMgt->DeviceWasActive
 #define fDoNotPowerDown             pwrMgt->DoNotPowerDown
 #define fParentsKnowState           pwrMgt->ParentsKnowState
 #define fStrictTreeOrder            pwrMgt->StrictTreeOrder
@@ -374,6 +378,8 @@ private:
 #define fDriverCallBusy             pwrMgt->DriverCallBusy
 #define fPCDFunctionOverride        pwrMgt->PCDFunctionOverride
 #define fIdleTimerIgnored           pwrMgt->IdleTimerIgnored
+#define fHasAdvisoryDesire          pwrMgt->HasAdvisoryDesire
+#define fAdvisoryTickleUsed         pwrMgt->AdvisoryTickleUsed
 #define fDeviceActiveTimestamp      pwrMgt->DeviceActiveTimestamp
 #define fActivityLock               pwrMgt->ActivityLock
 #define fIdleTimerPeriod            pwrMgt->IdleTimerPeriod
@@ -396,7 +402,6 @@ private:
 #define fOutOfBandParameter         pwrMgt->OutOfBandParameter
 #define fDriverCallStartTime        pwrMgt->DriverCallStartTime
 #define fCurrentCapabilityFlags     pwrMgt->CurrentCapabilityFlags
-#define fActivityTicklePowerState   pwrMgt->ActivityTicklePowerState
 #define fCurrentPowerConsumption    pwrMgt->CurrentPowerConsumption
 #define fTempClampPowerState        pwrMgt->TempClampPowerState
 #define fNotifyChildArray           pwrMgt->NotifyChildArray
@@ -409,7 +414,12 @@ private:
 #define fOutOfBandMessage           pwrMgt->OutOfBandMessage
 #define fTempClampCount             pwrMgt->TempClampCount
 #define fOverrideMaxPowerState      pwrMgt->OverrideMaxPowerState
+#define fDeviceUsablePowerState     pwrMgt->DeviceUsablePowerState
+#define fActivityTicklePowerState   pwrMgt->ActivityTicklePowerState
+#define fAdvisoryTicklePowerState   pwrMgt->AdvisoryTicklePowerState
 #define fActivityTickleCount        pwrMgt->ActivityTickleCount
+#define fDeviceWasActive            pwrMgt->DeviceWasActive
+#define fAdvisoryTickled            pwrMgt->AdvisoryTickled
 #define fWaitReason                 pwrMgt->WaitReason
 #define fSavedMachineState          pwrMgt->SavedMachineState
 #define fRootDomainState            pwrMgt->RootDomainState

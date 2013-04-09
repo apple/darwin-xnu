@@ -155,7 +155,6 @@ options		SYSV_SEM	# SVID semaphores			# <sysv_sem>
 options		SYSV_MSG	# SVID messages				# <sysv_msg>
 options		SYSV_SHM	# SVID shared mem			# <sysv_shm>
 options		PSYNCH		# pthread synch				# <psynch>
-options		PANIC_INFO	# want kernel panic info	# <panic_info>
 options		DEVELOPMENT	# dev kernel				# <development>
 
 # secure_kernel - secure kernel from user programs

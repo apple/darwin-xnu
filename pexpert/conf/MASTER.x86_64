@@ -3,11 +3,11 @@
 #  Standard Apple Mac OS Configurations:
 #  -------- ----- ------ ---------------
 #
-#  RELEASE	= [ intel mach mach_pe panic_info config_dtrace ]
+#  RELEASE	= [ intel mach mach_pe config_dtrace ]
 #  PROFILE	= [ RELEASE profile ]
 #  DEBUG	= [ RELEASE debug mach_assert ]
 #
-#  EMBEDDED	= [ intel mach mach_pe panic_info ]
+#  EMBEDDED	= [ intel mach mach_pe ]
 #  DEVELOPMENT	= [ EMBEDDED ]
 #
 ######################################################################

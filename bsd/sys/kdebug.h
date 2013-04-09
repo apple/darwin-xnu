@@ -313,8 +313,9 @@ __BEGIN_DECLS
 #define DKIO_PASSIVE	0x40
 #define DKIO_NOCACHE	0x80
 
-/* Codes for Application Sub Classes */
-#define DBG_APP_SAMBA	128
+/* Kernel Debug Sub Classes for Applications (DBG_APPS) */
+#define DBG_APP_LOGINWINDOW     0x03
+#define DBG_APP_SAMBA           0x80
 
 
 /**********************************************************************/

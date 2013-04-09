@@ -626,6 +626,11 @@ enum {
  *
  *****************************************************************************/
 
+/* kIOPMFeatureAutoPowerOffKey
+ * Feature published if Auto Power Off is supported
+ */
+#define kIOPMFeatureAutoPowerOffKey         "AutoPowerOff"
+
 /* kIOPMAutoPowerOffEnabledKey
  * Indicates if Auto Power Off is enabled.
  * It has a boolean value.
@@ -641,6 +646,19 @@ enum {
  * Power Off is unsupported.
  */
 #define kIOPMAutoPowerOffDelayKey           "AutoPowerOff Delay"
+
+/* kIOPMAutoPowerOffTimerKey
+ * Key refers to a CFNumberRef that indicates the time in seconds until the
+ * expiration of the Auto Power Off delay period. This value should be used
+ * to program a wake alarm before system sleep.
+ */
+#define kIOPMAutoPowerOffTimerKey           "AutoPowerOff Timer"
+
+/* kIOPMUserWakeAlarmScheduledKey
+ * Key refers to a boolean value that indicates if an user alarm was scheduled
+ * or pending.
+ */
+#define kIOPMUserWakeAlarmScheduledKey      "UserWakeAlarmScheduled"
 
 /*****************************************************************************
  *
@@ -677,8 +695,9 @@ struct IOPMSystemSleepPolicyVariables
     uint32_t    standbyDelay;               // standby delay in seconds
     uint32_t    poweroffDelay;              // auto-poweroff delay in seconds
     uint32_t    scheduledAlarms;            // bitmask of scheduled alarm types
+    uint32_t    poweroffTimer;              // auto-poweroff timer in seconds
 
-    uint32_t    reserved[50];               // pad sizeof 256 bytes
+    uint32_t    reserved[49];               // pad sizeof 256 bytes
 };
 
 enum {
@@ -689,7 +708,8 @@ enum {
 };
 
 enum {
-    kIOPMSleepPhase1 = 1,
+    kIOPMSleepPhase0 = 0,
+    kIOPMSleepPhase1,
     kIOPMSleepPhase2
 };
 

@@ -169,11 +169,6 @@ void PE_init_iokit(void)
     }
     
     /*
-     * Initialize the panic UI
-     */
-    panic_ui_initialize( (unsigned char *) appleClut8 );
-
-    /*
      * Initialize the spinning wheel (progress indicator).
      */
     vc_progress_initialize( &default_progress, default_progress_data1x, default_progress_data2x,

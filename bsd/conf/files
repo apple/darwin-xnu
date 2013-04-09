@@ -69,7 +69,6 @@ OPTIONS/development			optional development
 OPTIONS/sysv_sem			optional sysv_sem
 OPTIONS/sysv_msg			optional sysv_msg
 OPTIONS/sysv_shm			optional sysv_shm
-OPTIONS/panic_info			optional panic_info
 OPTIONS/no_bsd_inlines		optional no_bsd_inlines
 
 #
@@ -529,7 +528,6 @@ bsd/kern/kern_lockf.c			standard
 bsd/kern/kern_fork.c			standard
 bsd/kern/kern_malloc.c			standard
 bsd/kern/kern_mman.c			standard
-bsd/kern/kern_panicinfo.c		optional panic_info
 bsd/kern/kern_physio.c			standard
 bsd/kern/kern_priv.c			standard
 bsd/kern/kern_proc.c			standard

@@ -100,8 +100,9 @@ struct IOHibernateImageHeader
     uint32_t	debugFlags;
     uint32_t	options;
     uint32_t	sleepTime;
+    uint32_t    compression;
 
-    uint32_t	reserved[69];		// make sizeof == 512
+    uint32_t	reserved[68];		// make sizeof == 512
 
     uint64_t	encryptEnd __attribute__ ((packed));
     uint64_t	deviceBase __attribute__ ((packed));
@@ -275,14 +276,18 @@ struct kern_direct_file_io_ref_t *
 kern_open_file_for_direct_io(const char * name, 
 			     kern_get_file_extents_callback_t callback, 
 			     void * callback_ref,
+
+                             off_t set_file_size,
+
+                             off_t write_file_offset,
+                             caddr_t write_file_addr,
+                             vm_size_t write_file_len,
+
 			     dev_t * partition_device_result,
 			     dev_t * image_device_result,
                              uint64_t * partitionbase_result,
                              uint64_t * maxiocount_result,
-                             uint32_t * oflags,
-                             off_t offset,
-                             caddr_t addr,
-                             vm_size_t len);
+                             uint32_t * oflags);
 void
 kern_close_file_for_direct_io(struct kern_direct_file_io_ref_t * ref,
 			      off_t write_offset, caddr_t addr, vm_size_t write_length,
@@ -290,7 +295,7 @@ kern_close_file_for_direct_io(struct kern_direct_file_io_ref_t * ref,
 #endif /* _SYS_CONF_H_ */
 
 hibernate_page_list_t *
-hibernate_page_list_allocate(void);
+hibernate_page_list_allocate(boolean_t log);
 
 kern_return_t 
 hibernate_setup(IOHibernateImageHeader * header,
@@ -299,8 +304,7 @@ hibernate_setup(IOHibernateImageHeader * header,
                         boolean_t vmflush,
 			hibernate_page_list_t ** page_list_ret,
 			hibernate_page_list_t ** page_list_wired_ret,
-			hibernate_page_list_t ** page_list_pal_ret,
-                        boolean_t * encryptedswap);
+			hibernate_page_list_t ** page_list_pal_ret);
 kern_return_t 
 hibernate_teardown(hibernate_page_list_t * page_list,
                     hibernate_page_list_t * page_list_wired,
@@ -315,6 +319,11 @@ void
 hibernate_free_gobble_pages(void);
 
 void
+hibernate_vm_lock_queues(void);
+void
+hibernate_vm_unlock_queues(void);
+
+void
 hibernate_vm_lock(void);
 void
 hibernate_vm_unlock(void);
@@ -324,6 +333,7 @@ void
 hibernate_page_list_setall(hibernate_page_list_t * page_list,
 			   hibernate_page_list_t * page_list_wired,
 			   hibernate_page_list_t * page_list_pal,
+			   boolean_t preflight,
 			   uint32_t * pagesOut);
 
 // mark pages to be saved, or pages not to be saved but available 
@@ -331,6 +341,7 @@ hibernate_page_list_setall(hibernate_page_list_t * page_list,
 void
 hibernate_page_list_setall_machine(hibernate_page_list_t * page_list,
                                     hibernate_page_list_t * page_list_wired,
+                                    boolean_t preflight,
                                     uint32_t * pagesOut);
 
 // mark pages not to be saved and not for scratch usage during restore
@@ -414,6 +425,7 @@ enum
     kIOHibernateModeSwitch	= 0x00000020,
     kIOHibernateModeRestart	= 0x00000040,
     kIOHibernateModeSSDInvert	= 0x00000080,
+    kIOHibernateModeFileResize	= 0x00000100,
 };
 
 // IOHibernateImageHeader.signature
@@ -433,6 +445,8 @@ enum
 
 #define kIOHibernateModeKey		"Hibernate Mode"
 #define kIOHibernateFileKey		"Hibernate File"
+#define kIOHibernateFileMinSizeKey	"Hibernate File Min"
+#define kIOHibernateFileMaxSizeKey	"Hibernate File Max"
 #define kIOHibernateFreeRatioKey	"Hibernate Free Ratio"
 #define kIOHibernateFreeTimeKey		"Hibernate Free Time"
 

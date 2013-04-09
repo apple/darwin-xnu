@@ -177,7 +177,8 @@ nd6_llreach_alloc(struct rtentry *rt, struct ifnet *ifp, void *addr,
 	struct llinfo_nd6 *ln = rt->rt_llinfo;
 
 	if (nd6_llreach_base != 0 &&
-	    ln->ln_expire != 0 && rt->rt_ifp != lo_ifp &&
+	    (ln->ln_expire != 0 || (ifp->if_eflags & IFEF_IPV6_ND6ALT) != 0) &&
+	    rt->rt_ifp != lo_ifp &&
 	    ifp->if_addrlen == IF_LLREACH_MAXLEN &&	/* Ethernet */
 	    alen == ifp->if_addrlen) {
 		struct if_llreach *lr;
@@ -266,6 +267,11 @@ nd6_ns_input(
 	union nd_opts ndopts;
 	struct sockaddr_dl proxydl;
 	boolean_t advrouter;
+
+	if ((ifp->if_eflags & IFEF_IPV6_ND6ALT) != 0) {
+		nd6log((LOG_INFO, "nd6_ns_input: on ND6ALT interface!\n"));
+		return;
+	}
 
 	/* Expect 32-bit aligned data pointer on strict-align platforms */
 	MBUF_STRICT_DATA_ALIGNMENT_CHECK_32(m);
@@ -852,6 +858,11 @@ nd6_na_input(
 	struct sockaddr_dl *sdl;
 	union nd_opts ndopts;
 	struct timeval timenow;
+
+	if ((ifp->if_eflags & IFEF_IPV6_ND6ALT) != 0) {
+		nd6log((LOG_INFO, "nd6_na_input: on ND6ALT interface!\n"));
+		return;
+	}
 
 	/* Expect 32-bit aligned data pointer on strict-align platforms */
 	MBUF_STRICT_DATA_ALIGNMENT_CHECK_32(m);
@@ -2283,12 +2294,19 @@ nd6_alt_node_present(struct ifnet *ifp, struct sockaddr_in6 *sin6,
 		log(LOG_ERR, "%s: failed to add/update host route to %s.\n",
 		    __func__, ip6_sprintf(&sin6->sin6_addr));
 	}
+	else {
+		nd6log((LOG_DEBUG, "%s: host route to %s [lr=%p]\n", __func__,
+			ip6_sprintf(&sin6->sin6_addr), lr));
+	}
 }
 
 void
 nd6_alt_node_absent(struct ifnet *ifp, struct sockaddr_in6 *sin6)
 {
 	struct rtentry *rt;
+
+	nd6log((LOG_DEBUG, "%s: host route to %s\n", __func__,
+	    ip6_sprintf(&sin6->sin6_addr)));
 
 	lck_mtx_assert(rnh_lock, LCK_MTX_ASSERT_NOTOWNED);
 	lck_mtx_lock(rnh_lock);

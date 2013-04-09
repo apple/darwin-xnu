@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1999-2010 Apple Inc. All rights reserved.
+ * Copyright (c) 1999-2013 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -539,7 +539,7 @@ hfs_vnop_link(struct vnop_link_args *ap)
 		struct cat_attr cattr;
 
 		/* If inode is missing then we lost a race with unlink. */
-		if ((cat_idlookup(hfsmp, cp->c_fileid, 0, NULL, &cattr, NULL) != 0) ||
+		if ((cat_idlookup(hfsmp, cp->c_fileid, 0, 0, NULL, &cattr, NULL) != 0) ||
 		    (cattr.ca_fileid != cp->c_fileid)) {
 			error = ENOENT;
 			goto out;

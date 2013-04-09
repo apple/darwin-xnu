@@ -477,7 +477,7 @@ SYSCTL_PROC(_machdep_cpu_thermal, OID_AUTO, package_thermal_intr,
 	    CTLTYPE_INT | CTLFLAG_RD | CTLFLAG_LOCKED, 
 	    (void *)offsetof(cpuid_thermal_leaf_t, package_thermal_intr),
 	    sizeof(boolean_t),
-	    cpu_thermal, "I", "Packge Thermal interrupt and Status");
+	    cpu_thermal, "I", "Package Thermal interrupt and Status");
 
 SYSCTL_PROC(_machdep_cpu_thermal, OID_AUTO, hardware_feedback,
 	    CTLTYPE_INT | CTLFLAG_RD | CTLFLAG_LOCKED, 

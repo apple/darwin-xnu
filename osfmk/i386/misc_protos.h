@@ -69,7 +69,6 @@ extern void		panic_io_port_read(void);
 
 extern void		remote_kdb(void);
 extern void		clear_kdb_intr(void);
-extern void             draw_panic_dialog(void);
 extern void		cpu_init(void);
 #ifdef __i386__
 extern void		cpu_shutdown(void);

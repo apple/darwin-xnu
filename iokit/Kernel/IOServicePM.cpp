@@ -99,6 +99,9 @@ static const OSSymbol *      gIOPMPowerClientDriver     = 0;
 static const OSSymbol *      gIOPMPowerClientChildProxy = 0;
 static const OSSymbol *      gIOPMPowerClientChildren   = 0;
 
+static const OSSymbol *      gIOPMPowerClientAdvisoryTickle = 0;
+static bool                  gIOPMAdvisoryTickleEnabled = true;
+
 static uint32_t getPMRequestType( void )
 {
     uint32_t type = kIOPMRequestTypeInvalid;
@@ -161,6 +164,9 @@ do {                                  \
 #endif
 
 #define kIOPMPowerStateMax          0xFFFFFFFF  
+#define kInvalidTicklePowerState    (-1)
+
+#define kNoTickleCancelWindow       (60ULL * 1000ULL * 1000ULL * 1000ULL)
 
 #define IS_PM_ROOT                  (this == gIOPMRootNode)
 #define IS_ROOT_DOMAIN              (getPMRootDomain() == this)
@@ -206,7 +212,6 @@ static void logClientIDForNotification(
     OSObject *object,
     IOPMInterestContext *context, 
     const char *logString);
-         
 
 //*********************************************************************************
 // PM machine states
@@ -490,6 +495,9 @@ void IOService::PMinit ( void )
 
                 gIOPMPowerClientChildren =
                     OSSymbol::withCStringNoCopy( "ChildrenPowerState" );
+
+                gIOPMPowerClientAdvisoryTickle =
+                    OSSymbol::withCStringNoCopy( "AdvisoryTicklePowerState" );
             }
 
             if (gIOPMRequestQueue && gIOPMReplyQueue && gIOPMFreeQueue)
@@ -521,7 +529,8 @@ void IOService::PMinit ( void )
         fIdleTimerMinPowerState     = 0;
         fActivityLock               = IOLockAlloc();
         fStrictTreeOrder            = false;
-        fActivityTicklePowerState   = -1;
+        fActivityTicklePowerState   = kInvalidTicklePowerState;
+        fAdvisoryTicklePowerState   = kInvalidTicklePowerState;
         fControllingDriver          = NULL;
         fPowerStates                = NULL;
         fNumberOfPowerStates        = 0;
@@ -1253,6 +1262,12 @@ void IOService::handleRegisterPowerDriver ( IOPMRequest * request )
 		fOutputPowerCharacterFlags = 0;
 		for ( i = 0; i < numberOfStates; i++ ) {
 			fOutputPowerCharacterFlags |= fPowerStates[i].outputPowerFlags;
+            if (!fDeviceUsablePowerState &&
+                (fPowerStates[i].capabilityFlags & IOPMDeviceUsable))
+            {
+                // The minimum power state that the device is usable
+                fDeviceUsablePowerState = i;
+            }
 		}
 
 		// Register powerDriver as interested, unless already done.
@@ -1913,6 +1928,12 @@ void IOService::handlePowerDomainDidChangeTo ( IOPMRequest * request )
                             fParentsCurrentPowerFlags);
             computeDesiredState(initialDesire);
         }
+        else if (fAdvisoryTickleUsed && (newPowerState > 0) &&
+                 ((parentChangeFlags & kIOPMSynchronize) == 0))
+        {
+            // re-compute desired state in case advisory tickle was enabled
+            computeDesiredState();
+        }
 
         // Absorb parent's kIOPMSynchronize flag.
         myChangeFlags = kIOPMParentInitiated | kIOPMDomainDidChange |
@@ -2572,6 +2593,10 @@ void IOService::computeDesiredState ( unsigned long localClamp )
             if (hasChildren && (client == gIOPMPowerClientChildProxy))
                 continue;
 
+            if (client == gIOPMPowerClientAdvisoryTickle &&
+                !gIOPMAdvisoryTickleEnabled)
+                continue;
+
             desiredState = getPowerStateForClient(client);
             assert(desiredState < fNumberOfPowerStates);			
 			PM_LOG1("  %u %s\n",
@@ -2605,29 +2630,38 @@ void IOService::computeDesiredState ( unsigned long localClamp )
         (uint32_t) localClamp, (uint32_t) fTempClampPowerState,
 		(uint32_t) fCurrentPowerState, newPowerState);
 
-	// Restart idle timer if stopped and device desire has increased.
+    // Restart idle timer if stopped and device desire has increased.
+    // Or if advisory desire exists.
+    
+    if (fIdleTimerStopped)
+    {
+        if (fDeviceDesire > 0)
+        {
+            fIdleTimerStopped = false;
+            fActivityTickleCount = 0;
+            clock_get_uptime(&fIdleTimerStartTime);
+            start_PM_idle_timer();
+        }
+        else if (fHasAdvisoryDesire)
+        {
+            fIdleTimerStopped = false;
+            start_PM_idle_timer();
+        }
+    }
 
-	if (fDeviceDesire && fIdleTimerStopped)
-	{
-		fIdleTimerStopped = false;
-        fActivityTickleCount = 0;
-		clock_get_uptime(&fIdleTimerStartTime);
-		start_PM_idle_timer();
-	}
+    // Invalidate cached tickle power state when desires change, and not
+    // due to a tickle request.  This invalidation must occur before the
+    // power state change to minimize races.  We want to err on the side
+    // of servicing more activity tickles rather than dropping one when
+    // the device is in a low power state.
 
-	// Invalidate cached tickle power state when desires change, and not
-	// due to a tickle request.  This invalidation must occur before the
-	// power state change to minimize races.  We want to err on the side
-	// of servicing more activity tickles rather than dropping one when
-	// the device is in a low power state.
-
-	if ((getPMRequestType() != kIOPMRequestTypeActivityTickle) &&
-		(fActivityTicklePowerState != -1))
-	{
-		IOLockLock(fActivityLock);
-		fActivityTicklePowerState = -1;
-		IOLockUnlock(fActivityLock);
-	}
+    if ((getPMRequestType() != kIOPMRequestTypeActivityTickle) &&
+        (fActivityTicklePowerState != kInvalidTicklePowerState))
+    {
+        IOLockLock(fActivityLock);
+        fActivityTicklePowerState = kInvalidTicklePowerState;
+        IOLockUnlock(fActivityLock);
+    }
 }
 
 //*********************************************************************************
@@ -2732,6 +2766,11 @@ applyToPowerParent(
 // MARK: -
 // MARK: Activity Tickle & Idle Timer
 
+void IOService::setAdvisoryTickleEnable( bool enable )
+{
+    gIOPMAdvisoryTickleEnabled = enable;
+}
+
 //*********************************************************************************
 // [public] activityTickle
 //
@@ -2747,7 +2786,10 @@ bool IOService::activityTickle ( unsigned long type, unsigned long stateNumber )
 	IOPMRequest *	request;
 	bool			noPowerChange = true;
 
-    if ( initialized && stateNumber && (type == kIOPMSuperclassPolicy1) )
+    if (!initialized)
+        return true;    // no power change
+
+    if ((type == kIOPMSuperclassPolicy1) && stateNumber)
 	{
         IOLockLock(fActivityLock);
 
@@ -2763,7 +2805,7 @@ bool IOService::activityTickle ( unsigned long type, unsigned long stateNumber )
 		// This helps to filter out redundant tickles as
 		// this function may be called from the data path.
 
-		if (fActivityTicklePowerState < (long)stateNumber)
+		if (fActivityTicklePowerState < (int)stateNumber)
 		{
 			fActivityTicklePowerState = stateNumber;
 			noPowerChange = false;
@@ -2771,14 +2813,40 @@ bool IOService::activityTickle ( unsigned long type, unsigned long stateNumber )
 			request = acquirePMRequest( this, kIOPMRequestTypeActivityTickle );
 			if (request)
 			{
-				request->fArg0 = (void *) stateNumber;	// power state
-				request->fArg1 = (void *) (uintptr_t) true;	// power rise
+				request->fArg0 = (void *) stateNumber;  // power state
+				request->fArg1 = (void *) true;         // power rise
+                request->fArg2 = (void *) false;        // regular tickle
 				submitPMRequest(request);
 			}
 		}
 
 		IOLockUnlock(fActivityLock);
 	}
+
+    else if ((type == kIOPMActivityTickleTypeAdvisory) &&
+             ((stateNumber = fDeviceUsablePowerState)))
+    {
+        IOLockLock(fActivityLock);
+
+        fAdvisoryTickled = true;
+
+		if (fAdvisoryTicklePowerState != (int)stateNumber)
+		{
+			fAdvisoryTicklePowerState = stateNumber;
+			noPowerChange = false;
+
+			request = acquirePMRequest( this, kIOPMRequestTypeActivityTickle );
+			if (request)
+			{
+				request->fArg0 = (void *) stateNumber;  // power state
+				request->fArg1 = (void *) true;         // power rise
+                request->fArg2 = (void *) true;         // advisory tickle
+				submitPMRequest(request);
+			}
+		}
+
+		IOLockUnlock(fActivityLock);
+    }
 
 	// Returns false if the activityTickle might cause a transition to a
 	// higher powered state, true otherwise.
@@ -2792,31 +2860,67 @@ bool IOService::activityTickle ( unsigned long type, unsigned long stateNumber )
 
 void IOService::handleActivityTickle ( IOPMRequest * request )
 {
-	uint32_t ticklePowerState = (uint32_t)(uintptr_t) request->fArg0;
-	bool	 adjustPower = false;
-
+	uint32_t ticklePowerState   = (uint32_t)(uintptr_t) request->fArg0;
+    bool     deviceWasActive    = (request->fArg1 == (void *) true);
+    bool     isRegularTickle    = (request->fArg2 == (void *) false);
+    bool     adjustPower        = false;
+    
 	PM_ASSERT_IN_GATE();
-	if (request->fArg1)
-	{
-		// Power rise from activity tickle.
-		if ((ticklePowerState > fDeviceDesire) &&
-			(ticklePowerState < fNumberOfPowerStates))
-		{
-			fIdleTimerMinPowerState = ticklePowerState;
-			adjustPower = true;
-		}
-	}
-	else if (fDeviceDesire > fIdleTimerMinPowerState)
-	{
-		// Power drop due to idle timer expiration.
-		// Do not allow idle timer to reduce power below tickle power.		
-		ticklePowerState = fDeviceDesire - 1;
-		adjustPower = true;
-	}
+    if (isRegularTickle)
+    {
+        if (deviceWasActive)
+        {
+            if ((ticklePowerState > fDeviceDesire) &&
+                (ticklePowerState < fNumberOfPowerStates))
+            {
+                fIdleTimerMinPowerState = ticklePowerState;
+                updatePowerClient(gIOPMPowerClientDevice, ticklePowerState);
+                adjustPower = true;
+            }
+        }
+        else if (fDeviceDesire > fIdleTimerMinPowerState)
+        {
+            // Power drop due to idle timer expiration.
+            // Do not allow idle timer to reduce power below tickle power.
+            // This prevents the idle timer from decreasing the device desire
+            // to zero and cancelling the effect of a pre-sleep tickle when
+            // system wakes up to doze state, while the device is unable to
+            // raise its power state to satisfy the tickle.
+
+            ticklePowerState = fDeviceDesire - 1;
+            updatePowerClient(gIOPMPowerClientDevice, ticklePowerState);
+            adjustPower = true;
+        }
+    }
+    else    // advisory tickle
+    {
+        if (deviceWasActive)
+        {
+            if ((ticklePowerState == fDeviceUsablePowerState) &&
+                (ticklePowerState < fNumberOfPowerStates))
+            {
+                updatePowerClient(gIOPMPowerClientAdvisoryTickle, ticklePowerState);
+                fHasAdvisoryDesire = true;
+                fAdvisoryTickleUsed = true;
+                adjustPower = true;
+            }
+            else
+            {
+                IOLockLock(fActivityLock);
+                fAdvisoryTicklePowerState = kInvalidTicklePowerState;
+                IOLockUnlock(fActivityLock);
+            }
+        }
+        else if (fHasAdvisoryDesire)
+        {
+            removePowerClient(gIOPMPowerClientAdvisoryTickle);
+            fHasAdvisoryDesire = false;
+            adjustPower = true;
+        }
+    }
 
 	if (adjustPower)
 	{
-		updatePowerClient(gIOPMPowerClientDevice, ticklePowerState);
 		adjustPowerState();
 	}
 }
@@ -2992,15 +3096,14 @@ void IOService::idleTimerExpired( void )
 		// but the power drop request must be issued regardless.
 
 		if (fActivityTicklePowerState > 0)
-		{
 			fActivityTicklePowerState--;
-		}
 
 		request = acquirePMRequest( this, kIOPMRequestTypeActivityTickle );
 		if (request)
 		{
 			request->fArg0 = (void *) 0;		// power state (irrelevant)
-			request->fArg1 = (void *) (uintptr_t) false;	// power drop
+			request->fArg1 = (void *) false;	// timer expiration (not tickle)
+            request->fArg2 = (void *) false;    // regular tickle
 			submitPMRequest( request );
 
 			// Do not restart timer until after the tickle request has been
@@ -3008,6 +3111,30 @@ void IOService::idleTimerExpired( void )
 
 			restartTimer = false;
 		}
+    }
+
+    if (fAdvisoryTickled)
+    {
+        fAdvisoryTickled = false;
+    }
+    else if (fHasAdvisoryDesire)
+    {
+        // Want new tickles to turn into pm request after we drop the lock
+        fAdvisoryTicklePowerState = kInvalidTicklePowerState;
+
+		request = acquirePMRequest( this, kIOPMRequestTypeActivityTickle );
+		if (request)
+		{
+			request->fArg0 = (void *) 0;		// power state (irrelevant)
+			request->fArg1 = (void *) false;	// timer expiration (not tickle)
+            request->fArg2 = (void *) true;     // advisory tickle
+			submitPMRequest( request );
+
+			// Do not restart timer until after the tickle request has been
+			// processed.
+
+			restartTimer = false;
+		} 
     }
 
 	IOLockUnlock(fActivityLock);
@@ -3959,6 +4086,22 @@ void IOService::all_done ( void )
         {
             powerChangeDone(fCurrentPowerState);
         }
+        else if (fAdvisoryTickleUsed)
+        {
+            // Not root domain and advisory tickle target
+            // Re-adjust power after power tree sync at the 'did' pass
+            if (!fAdjustPowerScheduled &&
+                (fHeadNoteChangeFlags & kIOPMDomainDidChange))
+            {
+                IOPMRequest * request;
+                request = acquirePMRequest( this, kIOPMRequestTypeAdjustPowerState );
+                if (request)
+                {
+                    submitPMRequest( request );
+                    fAdjustPowerScheduled = true;
+                }
+            }
+        }
 
         return;
     }
@@ -4450,6 +4593,10 @@ IOReturn IOService::ParentChangeStart ( void )
     // Power domain is lowering power
     if ( fHeadNotePowerState < fCurrentPowerState )
     {
+        // Piggy-back idle timer cancellation on a parent down
+        if (0 == fHeadNotePowerState)
+            ParentChangeCancelIdleTimer(fHeadNotePowerState);
+    
 		// TODO: redundant? See handlePowerDomainWillChangeTo()
 		setParentInfo( fHeadNoteParentFlags, fHeadNoteParentConnection, true );
 
@@ -4626,6 +4773,72 @@ void IOService::ParentChangeAcknowledgePowerChange ( void )
         parent->release();
     }
     nub->release();
+}
+
+void IOService::ParentChangeCancelIdleTimer( IOPMPowerStateIndex newPowerState )
+{
+    AbsoluteTime    now;
+    uint64_t        nsec;
+    bool            cancel = false;
+
+    // No ready or idle timer not in use
+    if (!initialized || !fIdleTimerPeriod || fLockedFlags.PMStop ||
+        !fAdvisoryTickleUsed)
+        return;
+
+    // Not allowed to induce artifical idle timeout
+    if (fIdleTimerIgnored || fIdleTimerMinPowerState)
+        goto done;
+
+    // Idle timer already has no influence
+    if (!fDesiredPowerState || fIdleTimerStopped)
+        goto done;
+
+	IOLockLock(fActivityLock);
+
+    if (!fDeviceWasActive)
+    {
+        // No tickles since the last idle timer expiration.
+        // Safe to drop the device desire to zero.
+        cancel = true;
+    }
+    else
+    {
+        // Was tickled since the last idle timer expiration,
+        // but not in the last minute.
+        clock_get_uptime(&now);
+        SUB_ABSOLUTETIME(&now, &fDeviceActiveTimestamp);
+        absolutetime_to_nanoseconds(now, &nsec);
+        if (nsec >= kNoTickleCancelWindow)
+        {
+            cancel = true;
+        }
+    }
+
+    if (cancel)
+    {
+        // Force the next tickle to raise power state
+		fActivityTicklePowerState = kInvalidTicklePowerState;
+        fDeviceWasActive = false;
+    }
+
+	IOLockUnlock(fActivityLock);
+
+    if (cancel)
+    {
+        // cancel idle timer
+        if (fIdleTimer && thread_call_cancel(fIdleTimer))
+            release();
+
+        updatePowerClient(gIOPMPowerClientDevice, 0);
+        computeDesiredState();
+
+        fIdleTimerStopped = true;
+    }
+
+done:
+    OUR_PMLog( kPMLogStartParentChange, fHeadNotePowerState, fCurrentPowerState );
+    PM_LOG("%s::%s cancel=%d\n", fName, __FUNCTION__, cancel);
 }
 
 // MARK: -
@@ -6383,11 +6596,11 @@ bool IOService::retirePMRequest( IOPMRequest * request, IOPMWorkQueue * queue )
 	// Catch requests created by idleTimerExpired().
 
 	if ((request->getType() == kIOPMRequestTypeActivityTickle) &&
-	    (request->fArg1 == (void *) (uintptr_t) false))
+	    (request->fArg1     == (void *) false))
 	{
-		// Idle timer power drop request completed.
+		// Idle timer expiration - power drop request completed.
 		// Restart the idle timer if deviceDesire can go lower, otherwise set
-		// a flag so we know to restart idle timer when deviceDesire goes up.
+		// a flag so we know to restart idle timer when fDeviceDesire > 0.
 
 		if (fDeviceDesire > 0)
 		{
@@ -6395,9 +6608,15 @@ bool IOService::retirePMRequest( IOPMRequest * request, IOPMWorkQueue * queue )
 			clock_get_uptime(&fIdleTimerStartTime);
 			start_PM_idle_timer();
 		}
+        else if (fHasAdvisoryDesire)
+        {
+			start_PM_idle_timer();
+        }
 		else
+        {
 			fIdleTimerStopped = true;
-	}
+        }
+    }
 
     // If the request is linked, then Work queue has already incremented its
     // producer count.
@@ -6815,7 +7034,6 @@ void IOService::executePMRequest( IOPMRequest * request )
 			break;
 
 		case kIOPMRequestTypePowerDomainDidChange:
-            
 			handlePowerDomainDidChangeTo( request );
 			break;
 
@@ -7741,6 +7959,12 @@ IOReturn IOServicePM::gatedSerialize( OSSerialize * s  )
                 gIOPMWorkQueue->fStatNoWorkDone);
         }
 #endif
+
+        if (HasAdvisoryDesire && !gIOPMAdvisoryTickleEnabled)
+        {
+            // Don't report advisory tickle when it has no influence
+            dict->removeObject(gIOPMPowerClientAdvisoryTickle);
+        }
 
 		ok = dict->serialize(s);
 		dict->release();

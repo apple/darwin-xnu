@@ -188,7 +188,7 @@ typedef struct task_thread_times_info	*task_thread_times_info_t;
 #define TASK_ABSOLUTETIME_INFO	1
 
 struct task_absolutetime_info {
-	uint64_t		total_user;		/* total time */
+	uint64_t		total_user;
 	uint64_t		total_system;
 	uint64_t		threads_user;	/* existing threads only */
 	uint64_t		threads_system;

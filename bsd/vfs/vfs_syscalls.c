@@ -7347,6 +7347,15 @@ exchangedata (__unused proc_t p, struct exchangedata_args *uap, __unused int32_t
 		goto out;
 	}
 
+	/*
+	 * if the two vnodes are not files, return an error.
+	 */
+	if ( (vnode_isreg(svp) == 0) || (vnode_isreg(fvp) == 0) ) {
+		error = EINVAL;
+		goto out;
+	}
+
+
 #if CONFIG_MACF
 	error = mac_vnode_check_exchangedata(ctx,
 	    fvp, svp);

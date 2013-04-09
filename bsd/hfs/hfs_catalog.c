@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2011 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2013 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -481,7 +481,7 @@ exit:
  * catalog descriptor (when supplied outdescp is non-null).
  */
 int
-cat_idlookup(struct hfsmount *hfsmp, cnid_t cnid, int allow_system_files,
+cat_idlookup(struct hfsmount *hfsmp, cnid_t cnid, int allow_system_files, int wantrsrc,
     struct cat_desc *outdescp, struct cat_attr *attrp, struct cat_fork *forkp)
 {
 	struct BTreeIterator * iterator;
@@ -542,7 +542,7 @@ cat_idlookup(struct hfsmount *hfsmp, cnid_t cnid, int allow_system_files,
 
 	result = cat_lookupbykey(hfsmp, keyp, 
 			((allow_system_files != 0) ? HFS_LOOKUP_SYSFILE : 0), 
-			0, 0, outdescp, attrp, forkp, NULL);
+			0, wantrsrc, outdescp, attrp, forkp, NULL);
 	/* No corresponding file/folder record found for a thread record,
 	 * mark the volume inconsistent.
 	 */
@@ -594,7 +594,7 @@ cat_lookupmangled(struct hfsmount *hfsmp, struct cat_desc *descp, int wantrsrc,
 		return (ENOENT);
 	}
 
-	result = cat_idlookup(hfsmp, fileID, 0, outdescp, attrp, forkp);
+	result = cat_idlookup(hfsmp, fileID, 0,0,  outdescp, attrp, forkp);
 	if (result)
 		return (ENOENT);
 	/* It must be in the correct directory */
@@ -1850,7 +1850,7 @@ cat_set_childlinkbit(struct hfsmount *hfsmp, cnid_t cnid)
 		lockflags = hfs_systemfile_lock(hfsmp, SFL_CATALOG, HFS_EXCLUSIVE_LOCK);
 
 		/* Look up our catalog folder record */
-		retval = cat_idlookup(hfsmp, cnid, 0, &desc, &attr, NULL);
+		retval = cat_idlookup(hfsmp, cnid, 0, 0, &desc, &attr, NULL);
 		if (retval) {
 			hfs_systemfile_unlock(hfsmp, lockflags);
 			hfs_end_transaction(hfsmp);

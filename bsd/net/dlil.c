@@ -2289,8 +2289,10 @@ ifnet_poll_thread_fn(void *v, wait_result_t w)
 			 * else hold an IO refcnt to prevent the interface
 			 * from being detached (will be released below.)
 			 */
-			if (!ifnet_is_attached(ifp, 1))
+			if (!ifnet_is_attached(ifp, 1)) {
+				lck_mtx_lock_spin(&ifp->if_poll_lock);
 				break;
+			}
 
 			m_lim = (if_rxpoll_max != 0) ? if_rxpoll_max :
 			    MAX((qlimit(&inp->rcvq_pkts)),

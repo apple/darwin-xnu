@@ -68,7 +68,6 @@ int diagCall64(x86_saved_state_t *regs);
 #define dgMapPage 16
 #define dgGzallocTest 17
 #define dgBind 18
-#define dgPproc 19
 #define dgAcntg 20
 #define dgKlra 21
 #define dgKfree 22

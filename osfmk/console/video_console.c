@@ -121,9 +121,6 @@
  */
 
 struct vc_info vinfo;
-/* if panicDialogDesired is true then we use the panic dialog when its */
-/* allowed otherwise we won't use the panic dialog even if it is allowed */
-boolean_t panicDialogDesired;
 
 void noroot_icon_test(void);
 
@@ -2700,13 +2697,11 @@ initialize_screen(PE_Video * boot_vinfo, unsigned int op)
 	switch ( op )
 	{
 		case kPEGraphicsMode:
-			panicDialogDesired = TRUE;
 			gc_graphics_boot = TRUE;
 			gc_desire_text = FALSE;
 			break;
 
 		case kPETextMode:
-			panicDialogDesired = FALSE;
 			disable_debug_output = FALSE;
 			gc_graphics_boot = FALSE;
 			break;
@@ -2736,7 +2731,6 @@ initialize_screen(PE_Video * boot_vinfo, unsigned int op)
 		case kPETextScreen:
 			if ( console_is_serial() ) break;
 
-			panicDialogDesired = FALSE;
 			disable_debug_output = FALSE;
 			if ( gc_acquired == FALSE )
 			{

@@ -51,7 +51,7 @@ extern ppnum_t max_ppnum;
 /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
 
 hibernate_page_list_t *
-hibernate_page_list_allocate(void)
+hibernate_page_list_allocate(boolean_t log)
 {
     ppnum_t		    base, num;
     vm_size_t               size;
@@ -167,9 +167,8 @@ hibernate_page_list_allocate(void)
         bitmap->last_page  = dram_ranges[bank].last_page;
         bitmap->bitmapwords = (bitmap->last_page + 1
                                - bitmap->first_page + 31) >> 5;
-        kprintf("hib bank[%d]: 0x%x000 end 0x%xfff\n", bank,
-                bitmap->first_page,
-                bitmap->last_page);
+        if (log) kprintf("hib bank[%d]: 0x%x000 end 0x%xfff\n",
+        		  bank, bitmap->first_page, bitmap->last_page);
 	bitmap = (hibernate_bitmap_t *) &bitmap->bitmap[bitmap->bitmapwords];
     }
 
@@ -181,6 +180,7 @@ hibernate_page_list_allocate(void)
 void
 hibernate_page_list_setall_machine( __unused hibernate_page_list_t * page_list,
                                     __unused hibernate_page_list_t * page_list_wired,
+                                    __unused boolean_t preflight,
                                     __unused uint32_t * pagesOut)
 {
 }
@@ -229,42 +229,11 @@ hibernate_processor_setup(IOHibernateImageHeader * header)
 void
 hibernate_vm_lock(void)
 {
-    if (current_cpu_datap()->cpu_hibernate)
-    {
-        vm_page_lock_queues();
-        lck_mtx_lock(&vm_page_queue_free_lock);
-
-	if (vm_page_local_q) {
-		uint32_t  i;
-
-		for (i = 0; i < vm_page_local_q_count; i++) {
-			struct vpl	*lq;
-
-			lq = &vm_page_local_q[i].vpl_un.vpl;
-
-			VPL_LOCK(&lq->vpl_lock);
-		}
-	}
-    }
+    if (current_cpu_datap()->cpu_hibernate) hibernate_vm_lock_queues();
 }
 
 void
 hibernate_vm_unlock(void)
 {
-    if (current_cpu_datap()->cpu_hibernate)
-    {
-	if (vm_page_local_q) {
-		uint32_t  i;
-
-		for (i = 0; i < vm_page_local_q_count; i++) {
-			struct vpl	*lq;
-
-			lq = &vm_page_local_q[i].vpl_un.vpl;
-
-			VPL_UNLOCK(&lq->vpl_lock);
-		}
-	}
-        lck_mtx_unlock(&vm_page_queue_free_lock);
-        vm_page_unlock_queues();
-    }
+    if (current_cpu_datap()->cpu_hibernate)  hibernate_vm_unlock_queues();
 }

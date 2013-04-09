@@ -387,6 +387,8 @@ public:
     IOReturn    setMaintenanceWakeCalendar(
                     const IOPMCalendarStruct * calendar );
 
+    IOReturn    getSystemSleepType( uint32_t * sleepType );
+
     // Handle callbacks from IOService::systemWillShutdown()
 	void        acknowledgeSystemWillShutdown( IOService * from );
 
@@ -454,7 +456,6 @@ public:
     @result     true if the process has been suspended
 */
     bool        pmNotificationIsSuspended( uint32_t pid );
-
 
 #if HIBERNATION
     bool        getHibernateSettings(
@@ -575,6 +576,7 @@ private:
     unsigned int            clamshellDisabled       :1;
     unsigned int            desktopMode             :1;
     unsigned int            acAdaptorConnected      :1;
+    unsigned int            clamshellSleepDisabled  :1;
 
     unsigned int            idleSleepTimerPending   :1;
     unsigned int            userDisabledAllSleep    :1;
@@ -645,6 +647,7 @@ private:
     OSSet *                 preventSystemSleepList;
 
     UInt32                  _scheduledAlarms;
+    UInt32                  _userScheduledAlarm;
 
 #if HIBERNATION
     clock_sec_t             _standbyTimerResetSeconds;
@@ -655,6 +658,7 @@ private:
 	// IOPMrootDomain internal sleep call
     IOReturn    privateSleepSystem( uint32_t sleepReason );
     void        reportUserInput( void );
+    void        setDisableClamShellSleep( bool );
     bool        checkSystemCanSleep( IOOptionBits options = 0 );
     bool        checkSystemCanSustainFullWake( void );
 
@@ -706,7 +710,8 @@ private:
 
 #if HIBERNATION
     bool        getSleepOption( const char * key, uint32_t * option );
-    bool        evaluateSystemSleepPolicy( IOPMSystemSleepParameters * p, int phase );
+    bool        evaluateSystemSleepPolicy( IOPMSystemSleepParameters * p,
+                                           int phase, uint32_t * hibMode );
     void        evaluateSystemSleepPolicyEarly( void );
     void        evaluateSystemSleepPolicyFinal( void );
 #endif /* HIBERNATION */

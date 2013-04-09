@@ -221,10 +221,6 @@ user_page_fault_continue(
 		vaddr = uregs->cr2;
 	}
 
-	if (__probable((kr == KERN_SUCCESS) || (kr == KERN_ABORTED))) {
-		thread_exception_return();
-		/*NOTREACHED*/
-	}
 
 	/* PAL debug hook */
 	pal_dbg_page_fault( thread, vaddr, kr );
@@ -1110,6 +1106,7 @@ user_trap(
 		break;
 
 	    case T_PAGE_FAULT:
+	    {
 		prot = VM_PROT_READ;
 
 		if (err & T_PF_WRITE)
@@ -1122,9 +1119,13 @@ user_trap(
 				 prot, FALSE,
 				 THREAD_ABORTSAFE, NULL, 0);
 
-	        user_page_fault_continue(kret);
-	
+		if (__probable((kret == KERN_SUCCESS) || (kret == KERN_ABORTED))) {
+			thread_exception_return();
 		/* NOTREACHED */
+		}
+
+	        user_page_fault_continue(kret);
+	    }	/* NOTREACHED */
 		break;
 
 	    case T_SSE_FLOAT_ERROR:

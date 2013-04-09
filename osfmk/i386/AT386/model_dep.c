@@ -890,12 +890,6 @@ Debugger(
                     }
                 }
 
-		/* If the user won't be able to read the dialog,
-		 * don't bother trying to show it
-		 */
-		if (!PE_reboot_on_panic())
-			draw_panic_dialog();
-
 		if (!panicDebugging) {
 			unsigned cnum;
 			/* Clear the MP rendezvous function lock, in the event

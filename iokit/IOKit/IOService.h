@@ -1735,6 +1735,7 @@ public:
     IOReturn changePowerStateWithOverrideTo( unsigned long ordinal );
     static const char * getIOMessageString( uint32_t msg );
     IOReturn setIgnoreIdleTimer( bool ignore );
+    static void setAdvisoryTickleEnable( bool enable );
 
 #ifdef __LP64__
     static IOWorkLoop * getPMworkloop( void );
@@ -1783,7 +1784,8 @@ private:
     void ParentChangeNotifyInterestedDriversDidChange ( void );
     void ParentChangeTellCapabilityDidChange ( void );
     void ParentChangeAcknowledgePowerChange ( void );
-    
+    void ParentChangeCancelIdleTimer( IOPMPowerStateIndex );
+
     void all_done ( void );
     void start_ack_timer ( void );
     void stop_ack_timer ( void );

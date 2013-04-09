@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2002-2007 Apple Inc. All rights reserved.
+ * Copyright (c) 2002-2013 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -296,6 +296,7 @@ extern int cat_lookup (	struct hfsmount *hfsmp,
 extern int cat_idlookup (struct hfsmount *hfsmp,
 			cnid_t cnid,
 			int allow_system_files,
+			int wantrsrc,
 			struct cat_desc *outdescp,
 			struct cat_attr *attrp,
 			struct cat_fork *forkp);

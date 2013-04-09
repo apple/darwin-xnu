@@ -495,6 +495,8 @@ task_create_internal(
 	new_task->watchapplying  = 0;
 #endif /* CONFIG_EMBEDDED */
 
+	new_task->uexc_range_start = new_task->uexc_range_size = new_task->uexc_handler = 0;
+
 	if (parent_task != TASK_NULL) {
 		new_task->sec_token = parent_task->sec_token;
 		new_task->audit_token = parent_task->audit_token;

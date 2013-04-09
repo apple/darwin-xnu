@@ -382,7 +382,7 @@ add_fsevent(int type, vfs_context_t ctx, ...)
     kfs_event        *kfse, *kfse_dest=NULL, *cur;
     fs_event_watcher *watcher;
     va_list           ap;
-    int 	      error = 0, did_alloc=0, need_event_unlock = 0;
+    int 	      error = 0, did_alloc=0;
     dev_t             dev = 0;
     uint64_t          now, elapsed;
     char             *pathbuff=NULL;
@@ -559,11 +559,9 @@ add_fsevent(int type, vfs_context_t ctx, ...)
     kfse->abstime  = now;
     kfse->pid      = p->p_pid;
     if (type == FSE_RENAME || type == FSE_EXCHANGE) {
-	if (need_event_unlock == 0) {
-	    memset(kfse_dest, 0, sizeof(kfs_event));
-	    kfse_dest->refcount = 1;
-	    OSBitOrAtomic16(KFSE_BEING_CREATED, &kfse_dest->flags);
-	}
+	memset(kfse_dest, 0, sizeof(kfs_event));
+	kfse_dest->refcount = 1;
+	OSBitOrAtomic16(KFSE_BEING_CREATED, &kfse_dest->flags);
 	kfse_dest->type     = type;
 	kfse_dest->pid      = p->p_pid;
 	kfse_dest->abstime  = now;
@@ -587,9 +585,6 @@ add_fsevent(int type, vfs_context_t ctx, ...)
     // now process the arguments passed in and copy them into
     // the kfse
     //
-    if (need_event_unlock == 0) {
-	lck_rw_lock_shared(&event_handling_lock);
-    }
     
     cur = kfse;
     for(arg_type=va_arg(ap, int32_t); arg_type != FSE_ARG_DONE; arg_type=va_arg(ap, int32_t))
@@ -620,10 +615,6 @@ add_fsevent(int type, vfs_context_t ctx, ...)
 		    // printf("add_fsevent: failed to getattr on vp %p (%d)\n", cur->fref.vp, ret);
 		    cur->str = NULL;
 		    error = EINVAL;
-		    if (need_event_unlock == 0) {
-			// then we only grabbed it shared 
-			lck_rw_unlock_shared(&event_handling_lock);
-		    }
 		    goto clean_up;
 		}
 
@@ -663,10 +654,6 @@ add_fsevent(int type, vfs_context_t ctx, ...)
 				
 			if (ret != 0 || vp == NULL) {
 				error = ENOENT;
-				if (need_event_unlock == 0) {
-					// then we only grabbed it shared 
-					lck_rw_unlock_shared(&event_handling_lock);
-				}
 				goto clean_up;
 			}
 		    }
@@ -737,18 +724,6 @@ add_fsevent(int type, vfs_context_t ctx, ...)
 	OSBitAndAtomic16(~KFSE_BEING_CREATED, &kfse_dest->flags);
     }
 
-    if (need_event_unlock == 0) {
-	// then we only grabbed it shared 
-	lck_rw_unlock_shared(&event_handling_lock);
-    }
-    
-    // unlock this here so we don't hold it across the
-    // event delivery loop.
-    if (need_event_unlock) {
-	lck_rw_unlock_exclusive(&event_handling_lock);
-	need_event_unlock = 0;
-    }
-
     //
     // now we have to go and let everyone know that
     // is interested in this type of event
@@ -766,23 +741,18 @@ add_fsevent(int type, vfs_context_t ctx, ...)
 	    
 	    if (watcher_add_event(watcher, kfse) != 0) {
 		watcher->num_dropped++;
+		continue;
 	    }
 	}
 
-	if (kfse->refcount < 1) {
-	    panic("add_fsevent: line %d: kfse recount %d but should be at least 1\n", __LINE__, kfse->refcount);
-	}
+	// if (kfse->refcount < 1) {
+	//    panic("add_fsevent: line %d: kfse recount %d but should be at least 1\n", __LINE__, kfse->refcount);
+	// }
     }
 
     unlock_watch_table();
 
   clean_up:
-    // have to check if this needs to be unlocked (in
-    // case we came here from an error handling path)
-    if (need_event_unlock) {
-	lck_rw_unlock_exclusive(&event_handling_lock);
-	need_event_unlock = 0;
-    }
 
     if (pathbuff) {
 	release_pathbuff(pathbuff);
@@ -950,6 +920,9 @@ add_watcher(int8_t *event_list, int32_t num_events, int32_t eventq_size, fs_even
 	!strncmp(watcher->proc_name, "coreservicesd", sizeof(watcher->proc_name)) ||
 	!strncmp(watcher->proc_name, "mds", sizeof(watcher->proc_name))) {
 	watcher->flags |= WATCHER_APPLE_SYSTEM_SERVICE;
+    } else {
+      printf("fsevents: watcher %s (pid: %d) - Using /dev/fsevents directly is unsupported.  Migrate to FSEventsFramework\n",
+	     watcher->proc_name, watcher->pid);
     }
 
     lock_watch_table();
@@ -1033,22 +1006,17 @@ remove_watcher(fs_event_watcher *target)
 
 	// drain the event_queue 
 
+	lck_rw_lock_exclusive(&event_handling_lock);
 	while(watcher->rd != watcher->wr) {
-	    lck_rw_lock_exclusive(&event_handling_lock);
 	    kfse = watcher->event_queue[watcher->rd];
-	    if (!kfse || kfse->type == FSE_INVALID || kfse->refcount < 1) {
-		lck_rw_unlock_exclusive(&event_handling_lock);
-		break;
-	    }
 	    watcher->event_queue[watcher->rd] = NULL;
 	    watcher->rd = (watcher->rd+1) % watcher->eventq_size;
 	    OSSynchronizeIO();
-	    if (kfse != NULL) {
+	    if (kfse != NULL && kfse->type != FSE_INVALID && kfse->refcount >= 1) {
 		release_event_ref(kfse);
 	    }
-	    lck_rw_unlock_exclusive(&event_handling_lock);
 	}
-
+	lck_rw_unlock_exclusive(&event_handling_lock);
 	    
 	if (watcher->event_list) {
 	    FREE(watcher->event_list, M_TEMP);
@@ -1134,54 +1102,49 @@ watcher_add_event(fs_event_watcher *watcher, kfs_event *kfse)
     watcher->event_queue[watcher->wr] = kfse;
     OSSynchronizeIO();
     watcher->wr = (watcher->wr + 1) % watcher->eventq_size;
-    
+
     //
     // wake up the watcher if there are more than MAX_NUM_PENDING events.
     // otherwise schedule a timer (if one isn't already set) which will 
     // send any pending events if no more are received in the next 
     // EVENT_DELAY_IN_MS milli-seconds.
     //
-	int32_t num_pending = 0;
-	if (watcher->rd < watcher->wr) {
-		num_pending = watcher->wr - watcher->rd;
+    int32_t num_pending = 0;
+    if (watcher->rd < watcher->wr) {
+      num_pending = watcher->wr - watcher->rd;
+    }
+    
+    if (watcher->rd > watcher->wr) {
+      num_pending = watcher->wr + watcher->eventq_size - watcher->rd;
+    }
+    
+    if (num_pending > (watcher->eventq_size*3/4) && !(watcher->flags & WATCHER_APPLE_SYSTEM_SERVICE)) {
+      /* Non-Apple Service is falling behind, start dropping events for this process */
+      lck_rw_lock_exclusive(&event_handling_lock);	        
+      while (watcher->rd != watcher->wr) {
+	kfse = watcher->event_queue[watcher->rd];
+	watcher->event_queue[watcher->rd] = NULL;		
+	watcher->rd = (watcher->rd+1) % watcher->eventq_size;
+	OSSynchronizeIO();
+	if (kfse != NULL && kfse->type != FSE_INVALID && kfse->refcount >= 1) {
+	  release_event_ref(kfse);
 	}
+      }
+      watcher->flags |= WATCHER_DROPPED_EVENTS;
+      lck_rw_unlock_exclusive(&event_handling_lock);
 
-	if (watcher->rd > watcher->wr) {
-		num_pending = watcher->wr + watcher->eventq_size - watcher->rd;
-	}
+      printf("fsevents: watcher falling behind: %s (pid: %d) rd: %4d wr: %4d q_size: %4d flags: 0x%x\n",
+	     watcher->proc_name, watcher->pid, watcher->rd, watcher->wr,
+	     watcher->eventq_size, watcher->flags);
 
-	if (num_pending > (watcher->eventq_size*3/4) && !(watcher->flags & WATCHER_APPLE_SYSTEM_SERVICE)) {
-	    /* Non-Apple Service is falling behind, start dropping events for this process */
+      fsevents_wakeup(watcher);
+    } else if (num_pending > MAX_NUM_PENDING) {
+      fsevents_wakeup(watcher);
+    } else if (timer_set == 0) {
+      schedule_event_wakeup();
+    } 
 
-	    lck_rw_lock_exclusive(&event_handling_lock);	    
-	    while (watcher->rd != watcher->wr) {
-	      kfse = watcher->event_queue[watcher->rd];
-	      if (!kfse || kfse->type == FSE_INVALID || kfse->refcount < 1) {
-		  lck_rw_unlock_exclusive(&event_handling_lock);
-		  break;
-	      }
-	      watcher->event_queue[watcher->rd] = NULL;		
-	      watcher->rd = (watcher->rd+1) % watcher->eventq_size;
-	      OSSynchronizeIO();
-	      if (kfse != NULL) {
-		release_event_ref(kfse);
-	      }
-	    }
-	    lck_rw_unlock_exclusive(&event_handling_lock);
-	    
-	    printf("fsevents: watcher failing behind: %s (pid: %d) rd: %4d wr: %4d q_size: %4d flags: 0x%x\n",
-		   watcher->proc_name, watcher->pid, watcher->rd, watcher->wr,
-		   watcher->eventq_size, watcher->flags);
-	    
-	    watcher->flags |= WATCHER_DROPPED_EVENTS;
-	    fsevents_wakeup(watcher);
-	} else if (num_pending > MAX_NUM_PENDING) {
-	    fsevents_wakeup(watcher);
-	} else if (timer_set == 0) {
-	    schedule_event_wakeup();
-	}
-	
-	return 0;
+    return 0;
 }
 
 static int
@@ -1480,6 +1443,8 @@ fmod_watch(fs_event_watcher *watcher, struct uio *uio)
     }
 
     skipped = 0;
+
+    lck_rw_lock_shared(&event_handling_lock);
     while (uio_resid(uio) > 0 && watcher->rd != watcher->wr) {
 	if (watcher->flags & WATCHER_CLOSING) {
 	    break;
@@ -1490,11 +1455,8 @@ fmod_watch(fs_event_watcher *watcher, struct uio *uio)
 	// (since it may have been recycled/reused and changed
 	// its type or which device it is for)
 	//
-	lck_rw_lock_shared(&event_handling_lock);
-
 	kfse = watcher->event_queue[watcher->rd];
 	if (!kfse || kfse->type == FSE_INVALID || kfse->refcount < 1) {
-	  lck_rw_unlock_shared(&event_handling_lock);
 	  break;
 	}
 
@@ -1532,12 +1494,12 @@ fmod_watch(fs_event_watcher *watcher, struct uio *uio)
 	  }
 	}
 
+	watcher->event_queue[watcher->rd] = NULL;
 	watcher->rd = (watcher->rd + 1) % watcher->eventq_size;
 	OSSynchronizeIO();
 	release_event_ref(kfse);
-
-	lck_rw_unlock_shared(&event_handling_lock);
     }
+    lck_rw_unlock_shared(&event_handling_lock);
 
     if (skipped && error == 0) {
       goto restart_watch;

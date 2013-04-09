@@ -51,8 +51,7 @@ hibernate_setup(IOHibernateImageHeader * header,
                         boolean_t vmflush,
 			hibernate_page_list_t ** page_list_ret,
 			hibernate_page_list_t ** page_list_wired_ret,
-			hibernate_page_list_t ** page_list_pal_ret,
-                        boolean_t * encryptedswap)
+			hibernate_page_list_t ** page_list_pal_ret)
 {
     hibernate_page_list_t * page_list = NULL;
     hibernate_page_list_t * page_list_wired = NULL;
@@ -63,27 +62,25 @@ hibernate_setup(IOHibernateImageHeader * header,
     *page_list_wired_ret = NULL;
 	*page_list_pal_ret    = NULL;
     
-    if (vmflush)
+    if (vmflush && dp_isssd)
         hibernate_flush_memory();
 
-    page_list = hibernate_page_list_allocate();
+    page_list = hibernate_page_list_allocate(TRUE);
     if (!page_list)
         return (KERN_RESOURCE_SHORTAGE);
-    page_list_wired = hibernate_page_list_allocate();
+    page_list_wired = hibernate_page_list_allocate(FALSE);
     if (!page_list_wired)
     {
         kfree(page_list, page_list->list_size);
         return (KERN_RESOURCE_SHORTAGE);
     }
-    page_list_pal = hibernate_page_list_allocate();
+    page_list_pal = hibernate_page_list_allocate(FALSE);
     if (!page_list_pal)
     {
         kfree(page_list, page_list->list_size);
         kfree(page_list_wired, page_list_wired->list_size);
         return (KERN_RESOURCE_SHORTAGE);
     }
-
-    *encryptedswap = dp_encryption;
 
     // pages we could force out to reduce hibernate image size
     gobble_count = (uint32_t)((((uint64_t) page_list->page_count) * ((uint64_t) free_page_ratio)) / 100);
@@ -92,14 +89,16 @@ hibernate_setup(IOHibernateImageHeader * header,
 
     hibernate_processor_setup(header);
 
-    HIBLOG("hibernate_alloc_pages flags %08x, gobbling %d pages\n", 
-	    header->processorFlags, gobble_count);
-
     if (gobble_count)
 	hibernate_gobble_pages(gobble_count, free_page_time);
 
-    *page_list_ret       = page_list;
-    *page_list_wired_ret = page_list_wired;
+    HIBLOG("hibernate_alloc_pages act %d, inact %d, anon %d, throt %d, spec %d, wire %d, wireinit %d\n",
+    	    vm_page_active_count, vm_page_inactive_count, 
+	    vm_page_anonymous_count,  vm_page_throttled_count, vm_page_speculative_count,
+	    vm_page_wire_count, vm_page_wire_count_initial);
+
+    *page_list_ret        = page_list;
+    *page_list_wired_ret  = page_list_wired;
     *page_list_pal_ret    = page_list_pal;
 
     return (KERN_SUCCESS);

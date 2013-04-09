@@ -2353,8 +2353,11 @@ close_internal_locked(proc_t p, int fd, struct fileproc *fp, int flags)
 	if ((fp->f_flags & FP_INCHRREAD) == 0)
 		fileproc_drain(p, fp);
 
-	if (resvfd == 0)
+	if (resvfd == 0) {
 		_fdrelse(p, fd);
+	} else {
+		procfdtbl_reservefd(p, fd);
+	}
 
 	error = closef_locked(fp, fp->f_fglob, p);
 	if ((fp->f_flags & FP_WAITCLOSE) == FP_WAITCLOSE)

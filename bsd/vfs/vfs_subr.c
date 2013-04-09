@@ -4486,6 +4486,11 @@ vnode_create(uint32_t flavor, uint32_t size, void *data, vnode_t *vpp)
 	if (param == NULL)
 		return (EINVAL);
 
+	/* Do quick sanity check on the parameters */
+	if (param->vnfs_vtype == VBAD) {
+		return (EINVAL);
+	}
+
 #if CONFIG_TRIGGERS
 	if ((flavor == VNCREATE_TRIGGER) && (size == VNCREATE_TRIGGER_SIZE)) {
 		tinfo = (struct vnode_trigger_param *)data;

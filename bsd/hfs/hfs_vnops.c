@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2012 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2013 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -1618,7 +1618,8 @@ hfs_vnop_exchange(ap)
 	const unsigned char *to_nameptr;
 	char from_iname[32];
 	char to_iname[32];
-	u_int32_t tempflag;
+	uint32_t to_flag_special;
+	uint32_t from_flag_special;
 	cnid_t  from_parid;
 	cnid_t  to_parid;
 	int lockflags;
@@ -1711,9 +1712,8 @@ hfs_vnop_exchange(ap)
 	to_cp = VTOC(to_vp);
 	hfsmp = VTOHFS(from_vp);
 
-	/* Only normal files can be exchanged. */
-	if (!vnode_isreg(from_vp) || !vnode_isreg(to_vp) ||
-	    VNODE_IS_RSRC(from_vp) || VNODE_IS_RSRC(to_vp)) {
+	/* Resource forks cannot be exchanged. */
+	if (VNODE_IS_RSRC(from_vp) || VNODE_IS_RSRC(to_vp)) {
 		error = EINVAL;
 		goto exit;
 	}
@@ -1800,7 +1800,14 @@ hfs_vnop_exchange(ap)
 	/* Save a copy of from attributes before swapping. */
 	bcopy(&from_cp->c_desc, &tempdesc, sizeof(struct cat_desc));
 	bcopy(&from_cp->c_attr, &tempattr, sizeof(struct cat_attr));
-	tempflag = from_cp->c_flag & (C_HARDLINK | C_HASXATTRS);
+	
+	/* Save whether or not each cnode is a hardlink or has EAs */
+	from_flag_special = from_cp->c_flag & (C_HARDLINK | C_HASXATTRS);
+	to_flag_special = to_cp->c_flag & (C_HARDLINK | C_HASXATTRS);
+
+	/* Drop the special bits from each cnode */
+	from_cp->c_flag &= ~(C_HARDLINK | C_HASXATTRS);
+	to_cp->c_flag &= ~(C_HARDLINK | C_HASXATTRS);
 
 	/*
 	 * Swap the descriptors and all non-fork related attributes.
@@ -1809,7 +1816,16 @@ hfs_vnop_exchange(ap)
 	bcopy(&to_cp->c_desc, &from_cp->c_desc, sizeof(struct cat_desc));
 
 	from_cp->c_hint = 0;
-	from_cp->c_fileid = from_cp->c_cnid;
+	/*
+	 * If 'to' was a hardlink, then we copied over its link ID/CNID/(namespace ID) 
+	 * when we bcopy'd the descriptor above.  However, we need to be careful
+	 * when setting up the fileID below, because we cannot assume that the
+	 * file ID is the same as the CNID if either one was a hardlink.  
+	 * The file ID is stored in the c_attr as the ca_fileid. So it needs 
+	 * to be pulled explicitly; we cannot just use the CNID.
+	 */ 
+	from_cp->c_fileid = to_cp->c_attr.ca_fileid;
+	
 	from_cp->c_itime = to_cp->c_itime;
 	from_cp->c_btime = to_cp->c_btime;
 	from_cp->c_atime = to_cp->c_atime;
@@ -1819,13 +1835,42 @@ hfs_vnop_exchange(ap)
 	from_cp->c_bsdflags = to_cp->c_bsdflags;
 	from_cp->c_mode = to_cp->c_mode;
 	from_cp->c_linkcount = to_cp->c_linkcount;
-	from_cp->c_flag = to_cp->c_flag & (C_HARDLINK | C_HASXATTRS);
+	from_cp->c_attr.ca_linkref = to_cp->c_attr.ca_linkref;
+	from_cp->c_attr.ca_firstlink = to_cp->c_attr.ca_firstlink;
+
+	/* 
+	 * The cnode flags need to stay with the cnode and not get transferred
+	 * over along with everything else because they describe the content; they are
+	 * not attributes that reflect changes specific to the file ID.  In general, 
+	 * fields that are tied to the file ID are the ones that will move.
+	 * 
+	 * This reflects the fact that the file may have borrowed blocks, dirty metadata, 
+	 * or other extents, which may not yet have been written to the catalog.  If 
+	 * they were, they would have been transferred above in the ExchangeFileIDs call above...
+	 *
+	 * The flags that are special are:
+	 * C_HARDLINK, C_HASXATTRS
+	 * 
+	 * These flags move with the item and file ID in the namespace since their
+	 * state is tied to that of the file ID.
+	 * 
+	 * So to transfer the flags, we have to take the following steps
+	 * 1) Store in a localvar whether or not the special bits are set.
+	 * 2) Drop the special bits from the current flags
+	 * 3) swap the special flag bits to their destination
+	 */	 
+	from_cp->c_flag |= to_flag_special;
+	
 	from_cp->c_attr.ca_recflags = to_cp->c_attr.ca_recflags;
 	bcopy(to_cp->c_finderinfo, from_cp->c_finderinfo, 32);
 
 	bcopy(&tempdesc, &to_cp->c_desc, sizeof(struct cat_desc));
 	to_cp->c_hint = 0;
-	to_cp->c_fileid = to_cp->c_cnid;
+	/* 
+	 * Pull the file ID from the tempattr we copied above. We can't assume 
+	 * it is the same as the CNID.
+	 */
+	to_cp->c_fileid = tempattr.ca_fileid;
 	to_cp->c_itime = tempattr.ca_itime;
 	to_cp->c_btime = tempattr.ca_btime;
 	to_cp->c_atime = tempattr.ca_atime;
@@ -1835,7 +1880,15 @@ hfs_vnop_exchange(ap)
 	to_cp->c_bsdflags = tempattr.ca_flags;
 	to_cp->c_mode = tempattr.ca_mode;
 	to_cp->c_linkcount = tempattr.ca_linkcount;
-	to_cp->c_flag = tempflag;
+	to_cp->c_attr.ca_linkref = tempattr.ca_linkref;
+	to_cp->c_attr.ca_firstlink = tempattr.ca_firstlink;
+
+	/* 
+	 * Only OR in the "from" flags into our cnode flags below. 
+	 * Leave the rest of the flags alone.
+	 */
+	to_cp->c_flag |= from_flag_special;
+
 	to_cp->c_attr.ca_recflags = tempattr.ca_recflags;
 	bcopy(tempattr.ca_finderinfo, to_cp->c_finderinfo, 32);
 
@@ -5551,14 +5604,43 @@ restart:
 
 		lockflags = hfs_systemfile_lock(hfsmp, SFL_CATALOG, HFS_SHARED_LOCK);
 
-		/* Get resource fork data */
-		error = cat_lookup(hfsmp, descptr, 1, (struct cat_desc *)0,
-				(struct cat_attr *)0, &rsrcfork, NULL);
+		/* 
+		 * Get resource fork data
+		 *
+		 * We call cat_idlookup (instead of cat_lookup) below because we can't
+		 * trust the descriptor in the provided cnode for lookups at this point.  
+		 * Between the time of the original lookup of this vnode and now, the 
+		 * descriptor could have gotten swapped or replaced.  If this occurred, 
+		 * the parent/name combo originally desired may not necessarily be provided
+		 * if we use the descriptor.  Even worse, if the vnode represents
+		 * a hardlink, we could have removed one of the links from the namespace
+		 * but left the descriptor alone, since hfs_unlink does not invalidate
+		 * the descriptor in the cnode if other links still point to the inode.
+		 * 
+		 * Consider the following (slightly contrived) scenario:
+		 * /tmp/a <--> /tmp/b (hardlinks).
+		 * 1. Thread A: open rsrc fork on /tmp/b.
+		 * 1a. Thread A: does lookup, goes out to lunch right before calling getnamedstream.
+		 * 2. Thread B does 'mv /foo/b /tmp/b'
+		 * 2. Thread B succeeds.
+		 * 3. Thread A comes back and wants rsrc fork info for /tmp/b.  
+		 * 
+		 * Even though the hardlink backing /tmp/b is now eliminated, the descriptor
+		 * is not removed/updated during the unlink process.  So, if you were to
+		 * do a lookup on /tmp/b, you'd acquire an entirely different record's resource
+		 * fork.
+		 * 
+		 * As a result, we use the fileid, which should be invariant for the lifetime
+		 * of the cnode (possibly barring calls to exchangedata).
+		 */
+
+		error = cat_idlookup (hfsmp, cp->c_attr.ca_fileid, 0, 1, NULL, NULL, &rsrcfork);
 
 		hfs_systemfile_unlock(hfsmp, lockflags);
 		if (error) {
 			return (error);
 		}
+
 		/*
 		 * Supply hfs_getnewvnode with a component name. 
 		 */

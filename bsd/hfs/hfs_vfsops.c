@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1999-2012 Apple Inc. All rights reserved.
+ * Copyright (c) 1999-2013 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -824,7 +824,7 @@ hfs_reload_callback(struct vnode *vp, void *cargs)
 
 		/* lookup by fileID since name could have changed */
 		lockflags = hfs_systemfile_lock(args->hfsmp, SFL_CATALOG, HFS_SHARED_LOCK);
-		args->error = cat_idlookup(args->hfsmp, cp->c_fileid, 0, &desc, &cp->c_attr, datafork);
+		args->error = cat_idlookup(args->hfsmp, cp->c_fileid, 0, 0, &desc, &cp->c_attr, datafork);
 		hfs_systemfile_unlock(args->hfsmp, lockflags);
 		if (args->error) {
 		        return (VNODE_RETURNED_DONE);
@@ -1005,7 +1005,7 @@ hfs_reload(struct mount *mountp)
 	}
 
 	/* Reload the volume name */
-	if ((error = cat_idlookup(hfsmp, kHFSRootFolderID, 0, &cndesc, NULL, NULL)))
+	if ((error = cat_idlookup(hfsmp, kHFSRootFolderID, 0, 0, &cndesc, NULL, NULL)))
 		return (error);
 	vcb->volumeNameEncodingHint = cndesc.cd_encoding;
 	bcopy(cndesc.cd_nameptr, vcb->vcbVN, min(255, cndesc.cd_namelen));
@@ -3279,7 +3279,7 @@ hfs_vget(struct hfsmount *hfsmp, cnid_t cnid, struct vnode **vpp, int skiplock, 
 		const char *nameptr;
 
 		lockflags = hfs_systemfile_lock(hfsmp, SFL_CATALOG, HFS_SHARED_LOCK);
-		error = cat_idlookup(hfsmp, cnid, 0, &cndesc, &cnattr, &cnfork);
+		error = cat_idlookup(hfsmp, cnid, 0, 0, &cndesc, &cnattr, &cnfork);
 		hfs_systemfile_unlock(hfsmp, lockflags);
 
 		if (error) {
@@ -6272,7 +6272,7 @@ hfs_relocate_journal_file(struct hfsmount *hfsmp, u_int32_t jnl_size, int resize
 		goto free_fail;
 	}
 	
-	error = cat_idlookup(hfsmp, hfsmp->hfs_jnlfileid, 1, &journal_desc, &journal_attr, &journal_fork);
+	error = cat_idlookup(hfsmp, hfsmp->hfs_jnlfileid, 1, 0, &journal_desc, &journal_attr, &journal_fork);
 	if (error) {
 		printf("hfs_relocate_journal_file: cat_idlookup returned %d\n", error);
 		goto free_fail;
@@ -6489,7 +6489,7 @@ hfs_reclaim_journal_info_block(struct hfsmount *hfsmp, u_int32_t allocLimit, vfs
 	}
 	
 	/* Update the catalog record for .journal_info_block */
-	error = cat_idlookup(hfsmp, hfsmp->hfs_jnlinfoblkid, 1, &jib_desc, &jib_attr, &jib_fork);
+	error = cat_idlookup(hfsmp, hfsmp->hfs_jnlinfoblkid, 1, 0, &jib_desc, &jib_attr, &jib_fork);
 	if (error) {
 		printf("hfs_reclaim_journal_info_block: cat_idlookup returned %d\n", error);
 		goto fail;

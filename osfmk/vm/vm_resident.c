@@ -4940,7 +4940,7 @@ hibernate_free_gobble_pages(void)
 }
 
 static boolean_t 
-hibernate_consider_discard(vm_page_t m)
+hibernate_consider_discard(vm_page_t m, boolean_t preflight)
 {
     vm_object_t object = NULL;
     int                  refmod_state;
@@ -4952,39 +4952,39 @@ hibernate_consider_discard(vm_page_t m)
             panic("hibernate_consider_discard: private");
 
         if (!vm_object_lock_try(m->object)) {
-	    hibernate_stats.cd_lock_failed++;
+	    if (!preflight) hibernate_stats.cd_lock_failed++;
             break;
 	}
         object = m->object;
 
 	if (VM_PAGE_WIRED(m)) {
-	    hibernate_stats.cd_found_wired++;
+	    if (!preflight) hibernate_stats.cd_found_wired++;
             break;
 	}
         if (m->precious) {
-	    hibernate_stats.cd_found_precious++;
+	    if (!preflight) hibernate_stats.cd_found_precious++;
             break;
 	}
         if (m->busy || !object->alive) {
            /*
             *	Somebody is playing with this page.
             */
-	    hibernate_stats.cd_found_busy++;
+	    if (!preflight) hibernate_stats.cd_found_busy++;
             break;
 	}
         if (m->absent || m->unusual || m->error) {
            /*
             * If it's unusual in anyway, ignore it
             */
-	    hibernate_stats.cd_found_unusual++;
+	    if (!preflight) hibernate_stats.cd_found_unusual++;
             break;
 	}
         if (m->cleaning) {
-	    hibernate_stats.cd_found_cleaning++;
+	    if (!preflight) hibernate_stats.cd_found_cleaning++;
             break;
 	}
 	if (m->laundry) {
-	    hibernate_stats.cd_found_laundry++;
+	    if (!preflight) hibernate_stats.cd_found_laundry++;
             break;
 	}
         if (!m->dirty)
@@ -5005,8 +5005,9 @@ hibernate_consider_discard(vm_page_t m)
 		    || (VM_PURGABLE_VOLATILE == object->purgable)
 		    || (VM_PURGABLE_EMPTY    == object->purgable);
 
-	if (discard == FALSE)
-	    hibernate_stats.cd_found_dirty++;
+	if (discard == FALSE) {
+	    if (!preflight) hibernate_stats.cd_found_dirty++;
+	}
     }
     while (FALSE);
 
@@ -5065,6 +5066,40 @@ hibernate_discard_page(vm_page_t m)
 }
 
 /*
+ Grab locks for hibernate_page_list_setall()
+*/
+void
+hibernate_vm_lock_queues(void)
+{
+    vm_page_lock_queues();
+    lck_mtx_lock(&vm_page_queue_free_lock);
+
+    if (vm_page_local_q) {
+	uint32_t  i;
+	for (i = 0; i < vm_page_local_q_count; i++) {
+	    struct vpl	*lq;
+	    lq = &vm_page_local_q[i].vpl_un.vpl;
+	    VPL_LOCK(&lq->vpl_lock);
+	}
+    }
+}
+
+void
+hibernate_vm_unlock_queues(void)
+{
+    if (vm_page_local_q) {
+	uint32_t  i;
+	for (i = 0; i < vm_page_local_q_count; i++) {
+	    struct vpl	*lq;
+	    lq = &vm_page_local_q[i].vpl_un.vpl;
+	    VPL_UNLOCK(&lq->vpl_lock);
+	}
+    }
+    lck_mtx_unlock(&vm_page_queue_free_lock);
+    vm_page_unlock_queues();
+}
+
+/*
  Bits zero in the bitmaps => page needs to be saved. All pages default to be saved,
  pages known to VM to not need saving are subtracted.
  Wired pages to be saved are present in page_list_wired, pageable in page_list.
@@ -5074,6 +5109,7 @@ void
 hibernate_page_list_setall(hibernate_page_list_t * page_list,
 			   hibernate_page_list_t * page_list_wired,
 			   hibernate_page_list_t * page_list_pal,
+			   boolean_t preflight,
 			   uint32_t * pagesOut)
 {
     uint64_t start, end, nsec;
@@ -5092,8 +5128,13 @@ hibernate_page_list_setall(hibernate_page_list_t * page_list,
     hibernate_bitmap_t * bitmap;
     hibernate_bitmap_t * bitmap_wired;
 
+    HIBLOG("hibernate_page_list_setall(preflight %d) start %p, %p\n", preflight, page_list, page_list_wired);
 
-    HIBLOG("hibernate_page_list_setall start %p, %p\n", page_list, page_list_wired);
+    if (preflight) {
+        page_list       = NULL;
+        page_list_wired = NULL;
+        page_list_pal   = NULL;
+    }
 
 #if DEBUG
         vm_page_lock_queues();
@@ -5111,16 +5152,23 @@ hibernate_page_list_setall(hibernate_page_list_t * page_list,
 
     clock_get_uptime(&start);
 
-    hibernate_page_list_zero(page_list);
-    hibernate_page_list_zero(page_list_wired);
-    hibernate_page_list_zero(page_list_pal);
-
-    hibernate_stats.cd_vm_page_wire_count = vm_page_wire_count;
-    hibernate_stats.cd_pages = pages;
+    if (!preflight) {
+	hibernate_page_list_zero(page_list);
+	hibernate_page_list_zero(page_list_wired);
+	hibernate_page_list_zero(page_list_pal);
+    
+	hibernate_stats.cd_vm_page_wire_count = vm_page_wire_count;
+	hibernate_stats.cd_pages = pages;
+    }
 
     if (vm_page_local_q) {
 	    for (i = 0; i < vm_page_local_q_count; i++)
-		    vm_page_reactivate_local(i, TRUE, TRUE);
+		    vm_page_reactivate_local(i, TRUE, !preflight);
+    }
+
+    if (preflight) {
+	vm_page_lock_queues();
+	lck_mtx_lock(&vm_page_queue_free_lock);
     }
 
     m = (vm_page_t) hibernate_gobble_queue;
@@ -5128,12 +5176,14 @@ hibernate_page_list_setall(hibernate_page_list_t * page_list,
     {
 	pages--;
 	count_wire--;
-	hibernate_page_bitset(page_list,       TRUE, m->phys_page);
-	hibernate_page_bitset(page_list_wired, TRUE, m->phys_page);
+	if (!preflight) {
+	    hibernate_page_bitset(page_list,       TRUE, m->phys_page);
+	    hibernate_page_bitset(page_list_wired, TRUE, m->phys_page);
+	}
 	m = (vm_page_t) m->pageq.next;
     }
 
-    for( i = 0; i < real_ncpus; i++ )
+    if (!preflight) for( i = 0; i < real_ncpus; i++ )
     {
 	if (cpu_data_ptr[i] && cpu_data_ptr[i]->cpu_processor)
 	{
@@ -5159,10 +5209,12 @@ hibernate_page_list_setall(hibernate_page_list_t * page_list,
 	{
 	    pages--;
 	    count_wire--;
-	    hibernate_page_bitset(page_list,       TRUE, m->phys_page);
-	    hibernate_page_bitset(page_list_wired, TRUE, m->phys_page);
-
-	    hibernate_stats.cd_total_free++;
+	    if (!preflight) {
+		hibernate_page_bitset(page_list,       TRUE, m->phys_page);
+		hibernate_page_bitset(page_list_wired, TRUE, m->phys_page);
+    
+		hibernate_stats.cd_total_free++;
+	    }
 	}
     }
 
@@ -5173,10 +5225,12 @@ hibernate_page_list_setall(hibernate_page_list_t * page_list,
     {
 	pages--;
 	count_wire--;
-	hibernate_page_bitset(page_list,       TRUE, m->phys_page);
-	hibernate_page_bitset(page_list_wired, TRUE, m->phys_page);
-
-	hibernate_stats.cd_total_free++;
+	if (!preflight) {
+	    hibernate_page_bitset(page_list,       TRUE, m->phys_page);
+	    hibernate_page_bitset(page_list_wired, TRUE, m->phys_page);
+    
+	    hibernate_stats.cd_total_free++;
+	}
     }
 
     queue_iterate( &vm_page_queue_throttled,
@@ -5185,15 +5239,15 @@ hibernate_page_list_setall(hibernate_page_list_t * page_list,
                     pageq )
     {
         if ((kIOHibernateModeDiscardCleanInactive & gIOHibernateMode) 
-         && hibernate_consider_discard(m))
+         && hibernate_consider_discard(m, preflight))
         {
-            hibernate_page_bitset(page_list, TRUE, m->phys_page);
+            if (!preflight) hibernate_page_bitset(page_list, TRUE, m->phys_page);
             count_discard_inactive++;
         }
         else
             count_throttled++;
 	count_wire--;
-	hibernate_page_bitset(page_list_wired, TRUE, m->phys_page);
+	if (!preflight) hibernate_page_bitset(page_list_wired, TRUE, m->phys_page);
     }
 
     queue_iterate( &vm_page_queue_anonymous,
@@ -5202,9 +5256,9 @@ hibernate_page_list_setall(hibernate_page_list_t * page_list,
                    pageq )
     {
         if ((kIOHibernateModeDiscardCleanInactive & gIOHibernateMode) 
-         && hibernate_consider_discard(m))
+         && hibernate_consider_discard(m, preflight))
         {
-            hibernate_page_bitset(page_list, TRUE, m->phys_page);
+            if (!preflight) hibernate_page_bitset(page_list, TRUE, m->phys_page);
 	    if (m->dirty)
 		count_discard_purgeable++;
 	    else
@@ -5213,7 +5267,7 @@ hibernate_page_list_setall(hibernate_page_list_t * page_list,
         else
             count_zf++;
 	count_wire--;
-	hibernate_page_bitset(page_list_wired, TRUE, m->phys_page);
+	if (!preflight) hibernate_page_bitset(page_list_wired, TRUE, m->phys_page);
     }
 
     queue_iterate( &vm_page_queue_inactive,
@@ -5222,9 +5276,9 @@ hibernate_page_list_setall(hibernate_page_list_t * page_list,
                     pageq )
     {
         if ((kIOHibernateModeDiscardCleanInactive & gIOHibernateMode) 
-         && hibernate_consider_discard(m))
+         && hibernate_consider_discard(m, preflight))
         {
-            hibernate_page_bitset(page_list, TRUE, m->phys_page);
+            if (!preflight) hibernate_page_bitset(page_list, TRUE, m->phys_page);
 	    if (m->dirty)
 		count_discard_purgeable++;
 	    else
@@ -5233,7 +5287,7 @@ hibernate_page_list_setall(hibernate_page_list_t * page_list,
         else
             count_inactive++;
 	count_wire--;
-	hibernate_page_bitset(page_list_wired, TRUE, m->phys_page);
+	if (!preflight) hibernate_page_bitset(page_list_wired, TRUE, m->phys_page);
     }
 
     queue_iterate( &vm_page_queue_cleaned,
@@ -5242,9 +5296,9 @@ hibernate_page_list_setall(hibernate_page_list_t * page_list,
                     pageq )
     {
         if ((kIOHibernateModeDiscardCleanInactive & gIOHibernateMode) 
-         && hibernate_consider_discard(m))
+         && hibernate_consider_discard(m, preflight))
         {
-            hibernate_page_bitset(page_list, TRUE, m->phys_page);
+            if (!preflight) hibernate_page_bitset(page_list, TRUE, m->phys_page);
 	    if (m->dirty)
 		count_discard_purgeable++;
 	    else
@@ -5253,7 +5307,7 @@ hibernate_page_list_setall(hibernate_page_list_t * page_list,
         else
             count_cleaned++;
 	count_wire--;
-	hibernate_page_bitset(page_list_wired, TRUE, m->phys_page);
+	if (!preflight) hibernate_page_bitset(page_list_wired, TRUE, m->phys_page);
     }
 
     for( i = 0; i <= VM_PAGE_MAX_SPECULATIVE_AGE_Q; i++ )
@@ -5264,15 +5318,15 @@ hibernate_page_list_setall(hibernate_page_list_t * page_list,
                      pageq)
        {
            if ((kIOHibernateModeDiscardCleanInactive & gIOHibernateMode) 
-            && hibernate_consider_discard(m))
+            && hibernate_consider_discard(m, preflight))
            {
-               hibernate_page_bitset(page_list, TRUE, m->phys_page);
+               if (!preflight) hibernate_page_bitset(page_list, TRUE, m->phys_page);
                count_discard_speculative++;
            }
            else
                count_speculative++;
            count_wire--;
-           hibernate_page_bitset(page_list_wired, TRUE, m->phys_page);
+           if (!preflight) hibernate_page_bitset(page_list_wired, TRUE, m->phys_page);
        }
     }
 
@@ -5282,9 +5336,9 @@ hibernate_page_list_setall(hibernate_page_list_t * page_list,
                     pageq )
     {
         if ((kIOHibernateModeDiscardCleanActive & gIOHibernateMode) 
-         && hibernate_consider_discard(m))
+         && hibernate_consider_discard(m, preflight))
         {
-            hibernate_page_bitset(page_list, TRUE, m->phys_page);
+            if (!preflight) hibernate_page_bitset(page_list, TRUE, m->phys_page);
 	    if (m->dirty)
 		count_discard_purgeable++;
 	    else
@@ -5293,26 +5347,29 @@ hibernate_page_list_setall(hibernate_page_list_t * page_list,
         else
             count_active++;
 	count_wire--;
-	hibernate_page_bitset(page_list_wired, TRUE, m->phys_page);
+	if (!preflight) hibernate_page_bitset(page_list_wired, TRUE, m->phys_page);
     }
 
-    // pull wired from hibernate_bitmap
-
-    bitmap = &page_list->bank_bitmap[0];
-    bitmap_wired = &page_list_wired->bank_bitmap[0];
-    for (bank = 0; bank < page_list->bank_count; bank++)
-    {
-	for (i = 0; i < bitmap->bitmapwords; i++)
-	    bitmap->bitmap[i] = bitmap->bitmap[i] | ~bitmap_wired->bitmap[i];
-	bitmap       = (hibernate_bitmap_t *) &bitmap->bitmap      [bitmap->bitmapwords];
-	bitmap_wired = (hibernate_bitmap_t *) &bitmap_wired->bitmap[bitmap_wired->bitmapwords];
+    if (!preflight) {
+	// pull wired from hibernate_bitmap
+	bitmap = &page_list->bank_bitmap[0];
+	bitmap_wired = &page_list_wired->bank_bitmap[0];
+	for (bank = 0; bank < page_list->bank_count; bank++)
+	{
+	    for (i = 0; i < bitmap->bitmapwords; i++)
+		bitmap->bitmap[i] = bitmap->bitmap[i] | ~bitmap_wired->bitmap[i];
+	    bitmap       = (hibernate_bitmap_t *) &bitmap->bitmap      [bitmap->bitmapwords];
+	    bitmap_wired = (hibernate_bitmap_t *) &bitmap_wired->bitmap[bitmap_wired->bitmapwords];
+	}
     }
 
     // machine dependent adjustments
-    hibernate_page_list_setall_machine(page_list, page_list_wired, &pages);
+    hibernate_page_list_setall_machine(page_list, page_list_wired, preflight, &pages);
 
-    hibernate_stats.cd_count_wire = count_wire;
-    hibernate_stats.cd_discarded = count_discard_active + count_discard_inactive + count_discard_purgeable + count_discard_speculative + count_discard_cleaned;
+    if (!preflight) {
+	hibernate_stats.cd_count_wire = count_wire;
+	hibernate_stats.cd_discarded = count_discard_active + count_discard_inactive + count_discard_purgeable + count_discard_speculative + count_discard_cleaned;
+    }
 
     clock_get_uptime(&end);
     absolutetime_to_nanoseconds(end - start, &nsec);
@@ -5334,6 +5391,11 @@ hibernate_page_list_setall(hibernate_page_list_t * page_list,
 	}
         vm_page_unlock_queues();
 #endif	/* DEBUG */
+
+    if (preflight) {
+	lck_mtx_unlock(&vm_page_queue_free_lock);
+	vm_page_unlock_queues();
+    }
 
     KERNEL_DEBUG_CONSTANT(IOKDBG_CODE(DBG_HIBERNATE, 8) | DBG_FUNC_END, count_wire, *pagesOut, 0, 0, 0);
 }

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2010 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2013 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -270,7 +270,7 @@ OSErr hfs_MountHFSVolume(struct hfsmount *hfsmp, HFSMasterDirectoryBlock *mdb,
 	vcb->vcbAtrb &=	~kHFSVolumeUnmountedMask;
 
     if (error == noErr) {
-		error = cat_idlookup(hfsmp, kHFSRootFolderID, 0, NULL, NULL, NULL);
+		error = cat_idlookup(hfsmp, kHFSRootFolderID, 0, 0, NULL, NULL, NULL);
 		if (HFS_MOUNT_DEBUG) {
 			printf("hfs_mounthfs (std): error looking up root folder (%d) \n", error);
 		}
@@ -663,7 +663,7 @@ OSErr hfs_MountHFSPlusVolume(struct hfsmount *hfsmp, HFSPlusVolumeHeader *vhp,
 	}
 	
 	/* Pick up volume name and create date */
-	retval = cat_idlookup(hfsmp, kHFSRootFolderID, 0, &cndesc, &cnattr, NULL);
+	retval = cat_idlookup(hfsmp, kHFSRootFolderID, 0, 0, &cndesc, &cnattr, NULL);
 	if (retval) {
 		if (HFS_MOUNT_DEBUG) {
 			printf("hfs_mounthfsplus: cat_idlookup returned (%d) getting rootfolder \n", retval);

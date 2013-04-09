@@ -96,7 +96,6 @@ osfmk/i386/mtrr.c		optional    config_mtrr
 
 osfmk/console/i386/serial_console.c  optional  com device-driver
 
-osfmk/console/panic_dialog.c	     optional  vc device-driver
 osfmk/console/video_console.c        optional  vc device-driver
 osfmk/console/i386/video_scroll.c    optional  vc device-driver
 

@@ -785,4 +785,6 @@ extern boolean_t	dp_encryption_inited;
 /* Should we encrypt data before writing to swap ? */
 extern boolean_t	dp_encryption;
 
+extern boolean_t	dp_isssd;
+
 #endif	/* _DEFAULT_PAGER_INTERNAL_H_ */

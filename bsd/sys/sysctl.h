@@ -455,7 +455,7 @@ SYSCTL_DECL(_user);
 #define KERN_PROCARGS		38
                              /* 39 was KERN_PCSAMPLES... now deprecated */
 #define KERN_NETBOOT		40	/* int: are we netbooted? 1=yes,0=no */
-#define	KERN_PANICINFO		41	/* node: panic UI information */
+#define	KERN_PANICINFO		41	/* node: panic UI information (deprecated) */
 #define	KERN_SYSV		42	/* node: System V IPC information */
 #define KERN_AFFINITY		43	/* xxx */
 #define KERN_TRANSLATE	   	44	/* xxx */
@@ -548,7 +548,7 @@ SYSCTL_DECL(_user);
 #define KERN_KDDISABLE_BG_TRACE	20
 #define KERN_KDSET_TYPEFILTER   22
 
-/* KERN_PANICINFO types */
+/* KERN_PANICINFO types (deprecated) */
 #define	KERN_PANICINFO_MAXSIZE	1	/* quad: panic UI image size limit */
 #define	KERN_PANICINFO_IMAGE	2	/* panic UI in 8-bit kraw format */
 #define KERN_PANICINFO_TEST 	4	/* Allow the panic UI to be tested by root without causing a panic */
@@ -596,7 +596,7 @@ SYSCTL_DECL(_user);
 	{ "procargs",CTLTYPE_STRUCT },\
         { "dummy", CTLTYPE_INT },		/* deprecated pcsamples */ \
 	{ "netboot", CTLTYPE_INT }, \
-	{ "panicinfo", CTLTYPE_NODE }, \
+	{ "panicinfo", CTLTYPE_NODE }, /* deprecated: panicinfo */	\
 	{ "sysv", CTLTYPE_NODE }, \
 	{ "dummy", CTLTYPE_INT }, \
 	{ "dummy", CTLTYPE_INT }, \

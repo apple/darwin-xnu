@@ -62,5 +62,9 @@
 
 #define MACHINE_TASK \
 	struct user_ldt *       i386_ldt; \
-	void* 			task_debug;
+	void* 			task_debug; \
+	uint64_t	uexc_range_start; \
+	uint64_t	uexc_range_size; \
+	uint64_t	uexc_handler;
+
 

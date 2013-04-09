@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2002-2012 Apple Inc. All rights reserved.
+ * Copyright (c) 2002-2013 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -999,6 +999,13 @@ hfs_getnewvnode(
 	issystemfile = (descp->cd_flags & CD_ISMETA) && (vtype == VREG);
 	wantrsrc = flags & GNV_WANTRSRC;
 
+	/* Sanity check the vtype and mode */
+	if (vtype == VBAD) {
+		/* Mark the FS as corrupt and bail out */
+		hfs_mark_volume_inconsistent(hfsmp);
+		return (EINVAL);
+	}
+
 	/* Zero out the out_flags */
 	*out_flags = 0;
 
@@ -1543,7 +1550,7 @@ hfs_valid_cnode(struct hfsmount *hfsmp, struct vnode *dvp, struct componentname 
 			}
 		}
 	} else {
-		if (cat_idlookup(hfsmp, cnid, 0, NULL, NULL, NULL) == 0) {
+		if (cat_idlookup(hfsmp, cnid, 0, 0, NULL, NULL, NULL) == 0) {
 			stillvalid = 1;
 			*error = 0;
 		}

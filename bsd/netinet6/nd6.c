@@ -1870,7 +1870,9 @@ nd6_rtrequest(
 				 * has elapsed.
 				 */
 				if (ln != NULL)
-					ln->ln_expire = MAX(timenow.tv_sec, 1);
+					ln->ln_expire =
+					    (ifp->if_eflags & IFEF_IPV6_ND6ALT)
+					    ? 0 : MAX(timenow.tv_sec, 1);
 			}
 			if ((rt->rt_flags & RTF_CLONING))
 				break;
@@ -1948,8 +1950,10 @@ nd6_rtrequest(
 			 * initialized in rtrequest(), so rt_expire is 0.
 			 */
 			ln->ln_state = ND6_LLINFO_NOSTATE;
+			
 			/* In case we're called before 1.0 sec. has elapsed */
-			ln->ln_expire = MAX(timenow.tv_sec, 1);
+			ln->ln_expire = (ifp->if_eflags & IFEF_IPV6_ND6ALT)
+				? 0 : MAX(timenow.tv_sec, 1);
 		}
 		rt->rt_flags |= RTF_LLINFO;
 		LN_INSERTHEAD(ln);

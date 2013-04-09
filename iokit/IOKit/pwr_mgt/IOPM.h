@@ -769,6 +769,9 @@ enum {
 enum {
     kIOPMSubclassPolicy,
     kIOPMSuperclassPolicy1
+#ifdef KERNEL_PRIVATE
+    , kIOPMActivityTickleTypeAdvisory = 128
+#endif
 };
 
 struct stateChangeNote {

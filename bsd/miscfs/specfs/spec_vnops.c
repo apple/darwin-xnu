@@ -867,7 +867,7 @@ static uint32_t
 throttle_timer_start(struct _throttle_io_info_t *info, boolean_t update_io_count)
 {	
 	struct timeval  elapsed;
-	int		elapsed_msecs;
+	uint64_t	elapsed_msecs;
 	int		throttle_level;
 	uint64_t	deadline;
 
@@ -881,9 +881,9 @@ throttle_timer_start(struct _throttle_io_info_t *info, boolean_t update_io_count
 
 		microuptime(&elapsed);
 		timevalsub(&elapsed, &info->throttle_last_IO_timestamp[throttle_level]);
-		elapsed_msecs = elapsed.tv_sec * 1000 + elapsed.tv_usec / 1000;
+		elapsed_msecs = (uint64_t)elapsed.tv_sec * (uint64_t)1000 + (elapsed.tv_usec / 1000);
 
-		if (elapsed_msecs < THROTTLE_WINDOW) {
+		if (elapsed_msecs < (uint64_t)THROTTLE_WINDOW) {
 			/*
 			 * we had an I/O occur in this level within
 			 * our throttle window, so we need to
@@ -922,7 +922,7 @@ throttle_timer(struct _throttle_io_info_t *info)
 {
 	uthread_t       ut, utlist;
 	struct timeval	elapsed;
-	int		elapsed_msecs;
+	uint64_t	elapsed_msecs;
 	int		throttle_level;
         boolean_t	update_io_count = FALSE;
 	boolean_t	need_wakeup = FALSE;
@@ -932,9 +932,9 @@ throttle_timer(struct _throttle_io_info_t *info)
 	
 	microuptime(&elapsed);
 	timevalsub(&elapsed, &info->throttle_start_IO_period_timestamp);
-	elapsed_msecs = elapsed.tv_sec * 1000 + elapsed.tv_usec / 1000;
+	elapsed_msecs = (uint64_t)elapsed.tv_sec * (uint64_t)1000 + (elapsed.tv_usec / 1000);
 
-	if (elapsed_msecs >= info->throttle_io_period) {
+	if (elapsed_msecs >= (uint64_t)info->throttle_io_period) {
 		/*
 		 * we're closing out the current IO period...
 		 * if we have a waiting thread, wake it up
@@ -1246,7 +1246,7 @@ throttle_io_will_be_throttled_internal(void * throttle_info)
 {
     	struct _throttle_io_info_t *info = throttle_info;
 	struct timeval elapsed;
-	int	elapsed_msecs;
+	uint64_t elapsed_msecs;
 	int	thread_throttle_level;
 	int	throttle_level;
 
@@ -1257,9 +1257,9 @@ throttle_io_will_be_throttled_internal(void * throttle_info)
 
 		microuptime(&elapsed);
 		timevalsub(&elapsed, &info->throttle_last_IO_timestamp[throttle_level]);
-		elapsed_msecs = elapsed.tv_sec * 1000 + elapsed.tv_usec / 1000;
+		elapsed_msecs = (uint64_t)elapsed.tv_sec * (uint64_t)1000 + (elapsed.tv_usec / 1000);
 
-		if (elapsed_msecs < THROTTLE_WINDOW)
+		if (elapsed_msecs < (uint64_t)THROTTLE_WINDOW)
 			break;
 	}
 	if (throttle_level >= thread_throttle_level) {
@@ -1566,7 +1566,7 @@ int throttle_info_io_will_be_throttled(void * throttle_info, int policy)
 {
     	struct _throttle_io_info_t *info = throttle_info;
 	struct timeval elapsed;
-	int	elapsed_msecs;
+	uint64_t elapsed_msecs;
 	int	throttle_level;
 	int	thread_throttle_level;
 
@@ -1586,9 +1586,9 @@ int throttle_info_io_will_be_throttled(void * throttle_info, int policy)
 
 		microuptime(&elapsed);
 		timevalsub(&elapsed, &info->throttle_last_IO_timestamp[throttle_level]);
-		elapsed_msecs = elapsed.tv_sec * 1000 + elapsed.tv_usec / 1000;
+		elapsed_msecs = (uint64_t)elapsed.tv_sec * (uint64_t)1000 + (elapsed.tv_usec / 1000);
 
-		if (elapsed_msecs < THROTTLE_WINDOW)
+		if (elapsed_msecs < (uint64_t)THROTTLE_WINDOW)
 			break;
 	}
 	if (throttle_level >= thread_throttle_level) {

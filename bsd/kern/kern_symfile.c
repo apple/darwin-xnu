@@ -179,14 +179,15 @@ struct kern_direct_file_io_ref_t *
 kern_open_file_for_direct_io(const char * name, 
 			     kern_get_file_extents_callback_t callback, 
 			     void * callback_ref,
+                             off_t set_file_size,
+                             off_t write_file_offset,
+                             caddr_t write_file_addr,
+                             vm_size_t write_file_len,
 			     dev_t * partition_device_result,
 			     dev_t * image_device_result,
                              uint64_t * partitionbase_result,
                              uint64_t * maxiocount_result,
-                             uint32_t * oflags,
-                             off_t offset,
-                             caddr_t addr,
-                             vm_size_t len)
+                             uint32_t * oflags)
 {
     struct kern_direct_file_io_ref_t * ref;
 
@@ -225,9 +226,9 @@ kern_open_file_for_direct_io(const char * name,
     if ((error = vnode_open(name, (O_CREAT | FWRITE), (0), 0, &ref->vp, ref->ctx)))
         goto out;
 
-    if (addr && len)
+    if (write_file_addr && write_file_len)
     {
-	if ((error = kern_write_file(ref, offset, addr, len)))
+	if ((error = kern_write_file(ref, write_file_offset, write_file_addr, write_file_len)))
 	    goto out;
     }
 
@@ -251,9 +252,24 @@ kern_open_file_for_direct_io(const char * name,
 	    goto out;
 
         device = va.va_fsid;
+        ref->filelength = va.va_data_size;
+
         p1 = &device;
         p2 = p;
         do_ioctl = &file_ioctl;
+
+	if (set_file_size)
+	{
+	    off_t     bytesallocated = 0;
+	    u_int32_t alloc_flags = PREALLOCATE | ALLOCATEFROMPEOF | ALLOCATEALL;
+	    error = VNOP_ALLOCATE(ref->vp, set_file_size, alloc_flags,
+				  &bytesallocated, 0 /*fst_offset*/,
+				  ref->ctx);
+	    // F_SETSIZE:
+	    if (!error) error = vnode_setsize(ref->vp, set_file_size, IO_NOZEROFILL, ref->ctx);
+	    kprintf("vnode_setsize(%d) %qd\n", error, set_file_size);
+	    ref->filelength = bytesallocated;
+	}
     }
     else if ((ref->vp->v_type == VBLK) || (ref->vp->v_type == VCHR))
     {
@@ -278,9 +294,7 @@ kern_open_file_for_direct_io(const char * name,
     if (error)
         goto out;
 
-    if (ref->vp->v_type == VREG)
-        ref->filelength = va.va_data_size;
-    else
+    if (ref->vp->v_type != VREG)
     {
         error = do_ioctl(p1, p2, DKIOCGETBLOCKCOUNT, (caddr_t) &fileblk);
         if (error)
@@ -438,6 +452,7 @@ out:
 	kfree(ref, sizeof(struct kern_direct_file_io_ref_t));
 	ref = NULL;
     }
+
     return(ref);
 }
 

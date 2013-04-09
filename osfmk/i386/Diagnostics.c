@@ -70,9 +70,11 @@
 #include <i386/tsc.h>
 #include <mach/i386/syscall_sw.h>
 #include <kern/kalloc.h>
+#include <sys/kdebug.h>
 
 diagWork        dgWork;
 uint64_t        lastRuptClear = 0ULL;
+
 
 int 
 diagCall64(x86_saved_state_t * state)
@@ -81,18 +83,18 @@ diagCall64(x86_saved_state_t * state)
 	uint64_t        selector, data;
 	uint64_t        currNap, durNap;
 	x86_saved_state64_t	*regs;
+	boolean_t 	diagflag;
 
 	assert(is_saved_state64(state));
 	regs = saved_state64(state);
-
-	if (!(dgWork.dgFlags & enaDiagSCs))
-		return 0;	/* If not enabled, cause an exception */
-
+	diagflag = ((dgWork.dgFlags & enaDiagSCs) != 0);
 	selector = regs->rdi;
 
 	switch (selector) {	/* Select the routine */
 	case dgRuptStat:	/* Suck Interruption statistics */
 		(void) ml_set_interrupts_enabled(TRUE);
+		if (diagflag == 0)
+			break;
 		data = regs->rsi; /* Get the number of processors */
 
 		if (data == 0) { /* If no location is specified for data, clear all
@@ -136,6 +138,9 @@ diagCall64(x86_saved_state_t * state)
 	case dgGzallocTest:
 	{
 		(void) ml_set_interrupts_enabled(TRUE);
+		if (diagflag == 0)
+			break;
+
 		unsigned *ptr = (unsigned *)kalloc(1024);
 		kfree(ptr, 1024);
 		*ptr = 0x42;
@@ -147,6 +152,9 @@ diagCall64(x86_saved_state_t * state)
 	case	dgPermCheck:
 	{
 		(void) ml_set_interrupts_enabled(TRUE);
+		if (diagflag == 0)
+			break;
+
 		return pmap_permissions_verify(kernel_pmap, kernel_map, 0, ~0ULL);
 	}
  		break;
