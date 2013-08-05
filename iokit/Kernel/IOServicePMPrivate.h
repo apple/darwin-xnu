@@ -347,6 +347,10 @@ private:
     // Serialize IOServicePM state for debug output.
     IOReturn gatedSerialize( OSSerialize * s );
     virtual bool serialize( OSSerialize * s ) const;
+    
+    // PM log and trace
+    void pmPrint( uint32_t event, uintptr_t param1, uintptr_t param2 ) const;
+    void pmTrace( uint32_t event, uintptr_t param1, uintptr_t param2 ) const;
 };
 
 #define fOwner                      pwrMgt->Owner

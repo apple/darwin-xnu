@@ -362,6 +362,10 @@ struct task {
 
 	vm_extmod_statistics_data_t	extmod_statistics;
 	natural_t	proc_terminate;	/* the process is marked for proc_terminate */
+
+	/* Statistics accumulated for terminated threads from this task */
+	uint32_t	task_timer_wakeups_bin_1;
+	uint32_t	task_timer_wakeups_bin_2;
 };
 
 #define task_lock(task)		lck_mtx_lock(&(task)->lock)
@@ -555,6 +559,8 @@ struct _task_ledger_indices {
 	int tkm_shared;
 	int phys_mem;
 	int wired_mem;
+	int platform_idle_wakeups;
+	int interrupt_wakeups;
 };
 extern struct _task_ledger_indices task_ledgers;
 

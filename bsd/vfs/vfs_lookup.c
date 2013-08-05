@@ -645,7 +645,19 @@ lookup_handle_found_vnode(struct nameidata *ndp, struct componentname *cnp, int 
 		}
 		ndp->ni_flag &= ~(NAMEI_TRAILINGSLASH);
 	} 
-	
+
+#if NAMEDSTREAMS
+	/* 
+	 * Deny namei/lookup requests to resolve paths that point to shadow files.
+	 * Access to shadow files must be conducted by explicit calls to VNOP_LOOKUP
+	 * directly, and not use lookup/namei
+	 */
+	if (vnode_isshadow (dp)) {
+		error = ENOENT;
+		goto out;
+	}
+#endif
+
 nextname:
 	/*
 	 * Not a symbolic link.  If more pathname,

@@ -108,15 +108,15 @@ SYSCTL_INT(_net_inet_tcp, OID_AUTO, bg_target_qdelay, CTLFLAG_RW | CTLFLAG_LOCKE
  * max_allowed_cwnd = allowed_increase + (tether * flight_size)
  * cwnd = min(cwnd, max_allowed_cwnd)
  *
- * 'Allowed_increase' parameter is set to 2. If the flight size is zero, then
- * we want the congestion window to be at least 2 packets to reduce the
- * delay induced by delayed ack. This helps when the receiver is acking every
- * other packet.
+ * 'Allowed_increase' parameter is set to 8. If the flight size is zero, then
+ * we want the congestion window to be at least 8 packets to reduce the
+ * delay induced by delayed ack. This helps when the receiver is acking 
+ * more than 2 packets at a time (stretching acks for better performance).
  * 
  * 'Tether' is also set to 2. We do not want this to limit the growth of cwnd
  * during slow-start.
  */ 
-int allowed_increase = 2;
+int allowed_increase = 8;
 SYSCTL_INT(_net_inet_tcp, OID_AUTO, bg_allowed_increase, CTLFLAG_RW | CTLFLAG_LOCKED, 
 	&allowed_increase, 1, "Additive constant used to calculate max allowed congestion window");
 

@@ -228,6 +228,8 @@ struct thread_call {
 
 	uint32_t			tc_flags;
 	int32_t				tc_refs;
+
+	uint64_t			ttd; /* Time to deadline at creation */
 }; 
 
 #define THREAD_CALL_ALLOC		0x01

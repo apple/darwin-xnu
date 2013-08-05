@@ -549,6 +549,24 @@ filt_proc(struct knote *kn, long hint)
 		event = (u_int)hint & NOTE_PCTRLMASK;
 
 		/*
+		 * termination lifecycle events can happen while a debugger
+		 * has reparented a process, in which case notifications
+		 * should be quashed except to the tracing parent. When
+		 * the debugger reaps the child (either via wait4(2) or
+		 * process exit), the child will be reparented to the original
+		 * parent and these knotes re-fired.
+		 */
+		if (event & NOTE_EXIT) {
+			if ((kn->kn_ptr.p_proc->p_oppid != 0)
+				&& (kn->kn_kq->kq_p->p_pid != kn->kn_ptr.p_proc->p_ppid)) {
+				/*
+				 * This knote is not for the current ptrace(2) parent, ignore.
+				 */
+				return 0;
+			}
+		}					
+
+		/*
 		 * if the user is interested in this event, record it.
 		 */
 		if (kn->kn_sfflags & event)

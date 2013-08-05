@@ -312,6 +312,7 @@ boolean_t ml_fpu_avx_enabled(void);
 void interrupt_latency_tracker_setup(void);
 void interrupt_reset_latency_stats(void);
 void interrupt_populate_latency_stats(char *, unsigned);
+void ml_get_power_state(boolean_t *, boolean_t *);
 
 #endif /* XNU_KERNEL_PRIVATE */
 #endif /* _I386_MACHINE_ROUTINES_H_ */

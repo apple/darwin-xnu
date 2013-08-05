@@ -5630,11 +5630,29 @@ restart:
 		 * do a lookup on /tmp/b, you'd acquire an entirely different record's resource
 		 * fork.
 		 * 
-		 * As a result, we use the fileid, which should be invariant for the lifetime
-		 * of the cnode (possibly barring calls to exchangedata).
+ 		 * As a result, we use the fileid, which should be invariant for the lifetime
+ 		 * of the cnode (possibly barring calls to exchangedata).
+		 *
+		 * Addendum: We can't do the above for HFS standard since we aren't guaranteed to
+		 * have thread records for files.  They were only required for directories.  So
+		 * we need to do the lookup with the catalog name. This is OK since hardlinks were
+		 * never allowed on HFS standard.
 		 */
 
-		error = cat_idlookup (hfsmp, cp->c_attr.ca_fileid, 0, 1, NULL, NULL, &rsrcfork);
+		if (hfsmp->hfs_flags & HFS_STANDARD) {
+			/* 
+			 * HFS standard only:
+			 * 
+			 * Get the resource fork for this item via catalog lookup
+			 * since HFS standard was case-insensitive only. We don't want the 
+			 * descriptor; just the fork data here.
+			 */
+			error = cat_lookup (hfsmp, descptr, 1, (struct cat_desc*)NULL, 
+					(struct cat_attr*)NULL, &rsrcfork, NULL);
+		}
+		else {
+			error = cat_idlookup (hfsmp, cp->c_fileid, 0, 1, NULL, NULL, &rsrcfork);
+		}
 
 		hfs_systemfile_unlock(hfsmp, lockflags);
 		if (error) {

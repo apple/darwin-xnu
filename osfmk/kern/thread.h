@@ -149,6 +149,7 @@ struct thread {
 #define TH_OPT_SYSTEM_CRITICAL	0x10		/* Thread must always be allowed to run - even under heavy load */
 #define TH_OPT_PROC_CPULIMIT	0x20		/* Thread has a task-wide CPU limit applied to it */
 #define TH_OPT_PRVT_CPULIMIT	0x40		/* Thread has a thread-private CPU limit applied to it */
+#define TH_OPT_IDLE_THREAD		0x0080		/* Thread is a per-processor idle thread */
 
 	/* Data updated during assert_wait/thread_wakeup */
 	decl_simple_lock_data(,sched_lock)	/* scheduling lock (thread_lock()) */
@@ -427,6 +428,15 @@ struct thread {
 	task_watch_t *	taskwatch;		/* task watch */
 	integer_t		saved_importance;		/* saved task-relative importance */
 #endif /* CONFIG_EMBEDDED */
+	uint32_t			thread_callout_interrupt_wakeups;
+	uint32_t			thread_callout_platform_idle_wakeups;
+	uint32_t			thread_timer_wakeups_bin_1;
+	uint32_t			thread_timer_wakeups_bin_2;
+	uint16_t			thread_tag;
+	uint16_t			callout_woken_from_icontext:1,
+					callout_woken_from_platform_idle:1,
+					thread_bitfield_unused:14;
+
 };
 
 #define ith_state		saved.receive.state
@@ -645,6 +655,13 @@ extern void 		funnel_lock(
 extern void 		funnel_unlock(
 						struct funnel_lock	*lock);
 
+static inline uint16_t thread_set_tag_internal(thread_t thread, uint16_t tag) {
+	return __sync_fetch_and_or(&thread->thread_tag, tag);
+}
+static inline uint16_t thread_get_tag_internal(thread_t thread) {
+	return thread->thread_tag;
+}
+
 #else	/* MACH_KERNEL_PRIVATE */
 
 __BEGIN_DECLS
@@ -686,6 +703,16 @@ __END_DECLS
 __BEGIN_DECLS
 
 #ifdef	XNU_KERNEL_PRIVATE
+
+/*
+ * Thread tags; for easy identification.
+ */
+#define	THREAD_TAG_MAINTHREAD 0x1
+#define	THREAD_TAG_CALLOUT 0x2
+#define	THREAD_TAG_IOWORKLOOP 0x4
+
+uint16_t	thread_set_tag(thread_t, uint16_t);
+uint16_t	thread_get_tag(thread_t);
 
 extern kern_return_t    thread_state_initialize(
 							thread_t				thread);

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2003-2012 Apple Inc. All rights reserved.
+ * Copyright (c) 2003-2013 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -1401,9 +1401,6 @@ vlan_config(struct ifnet * ifp, struct ifnet * p, int tag)
 	    vlan_lock();
 	    goto signal_done;
 	}
-	/* mark the parent interface up */
-	ifnet_set_flags(p, IFF_UP, IFF_UP);
-	(void)ifnet_ioctl(p, 0, SIOCSIFFLAGS, (caddr_t)NULL);
     }
 
     /* configure parent to receive our multicast addresses */
@@ -1461,6 +1458,11 @@ vlan_config(struct ifnet * ifp, struct ifnet * p, int tag)
     }
     if (ifv != NULL) {
 	ifvlan_release(ifv);
+    }
+    if (first_vlan) {
+	/* mark the parent interface up */
+	ifnet_set_flags(p, IFF_UP, IFF_UP);
+	(void)ifnet_ioctl(p, 0, SIOCSIFFLAGS, (caddr_t)NULL);
     }
     return 0;
 

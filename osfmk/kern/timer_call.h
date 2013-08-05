@@ -49,6 +49,7 @@ typedef struct timer_call {
 	uint32_t		flags;
 	boolean_t		async_dequeue;	/* this field is protected by
 						   call_entry queue's lock */
+	uint64_t		ttd; /* Time to deadline at creation */
 } *timer_call_t;
 
 typedef void				*timer_call_param_t;

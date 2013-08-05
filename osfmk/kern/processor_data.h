@@ -87,6 +87,7 @@ struct processor_data {
 	void					*free_pages;
 
 	struct processor_sched_statistics sched_stats;
+	uint64_t        timer_call_ttd; /* current timer call time-to-deadline */
 };
 
 typedef struct processor_data	processor_data_t;

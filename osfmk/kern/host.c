@@ -438,6 +438,26 @@ MACRO_END
 		return (KERN_SUCCESS);
 	}
 
+	case HOST_EXPIRED_TASK_INFO:
+	{
+		if (*count < TASK_POWER_INFO_COUNT) {
+			return (KERN_FAILURE);
+		}
+
+		task_power_info_t tinfo = (task_power_info_t)info;
+
+		tinfo->task_interrupt_wakeups = dead_task_statistics.task_interrupt_wakeups;
+		tinfo->task_platform_idle_wakeups = dead_task_statistics.task_platform_idle_wakeups;
+
+		tinfo->task_timer_wakeups_bin_1 = dead_task_statistics.task_timer_wakeups_bin_1;
+		tinfo->task_timer_wakeups_bin_2 = dead_task_statistics.task_timer_wakeups_bin_2;
+
+		tinfo->total_user = dead_task_statistics.total_user_time;
+		tinfo->total_system = dead_task_statistics.total_system_time;
+
+		return (KERN_SUCCESS);
+	}
+
 	default:
 		return (KERN_INVALID_ARGUMENT);
 	}

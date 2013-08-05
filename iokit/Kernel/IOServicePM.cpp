@@ -38,6 +38,7 @@
 #include <IOKit/IOEventSource.h>
 #include <IOKit/IOWorkLoop.h>
 #include <IOKit/IOCommand.h>
+#include <IOKit/IOTimeStamp.h>
 
 #include <IOKit/pwr_mgt/IOPMlog.h>
 #include <IOKit/pwr_mgt/IOPMinformee.h>
@@ -153,8 +154,12 @@ do {                                  \
 #define kIOPMTardyAckPSCKey         "IOPMTardyAckPowerStateChange"
 #define kPwrMgtKey                  "IOPowerManagement"
 
-#define OUR_PMLog(t, a, b) \
-    do { gPlatform->PMLog( fName, t, a, b); } while(0)
+#define OUR_PMLog(t, a, b) do {          \
+    if (gIOKitDebug & kIOLogPower)       \
+        pwrMgt->pmPrint(t, a, b);        \
+    if (gIOKitTrace & kIOTracePowerMgmt) \
+        pwrMgt->pmTrace(t, a, b);        \
+    } while(0)
 
 #define NS_TO_MS(nsec)              ((int)((nsec) / 1000000ULL))
 #define NS_TO_US(nsec)              ((int)((nsec) / 1000ULL))
@@ -673,6 +678,11 @@ void IOService::PMfree ( void )
         pwrMgt->release();
         pwrMgt = 0;
     }
+}
+
+void IOService::PMDebug( uint32_t event, uintptr_t param1, uintptr_t param2 )
+{
+    OUR_PMLog(event, param1, param2);
 }
 
 //*********************************************************************************
@@ -4130,7 +4140,7 @@ void IOService::all_done ( void )
 #if PM_VARS_SUPPORT
             fPMVars->myCurrentState = fCurrentPowerState;
 #endif
-            OUR_PMLog(kPMLogChangeDone, fCurrentPowerState, 0);
+            OUR_PMLog(kPMLogChangeDone, fCurrentPowerState, prevPowerState);
             PM_ACTION_2(actionPowerChangeDone,
                 fHeadNotePowerState, fHeadNoteChangeFlags);
             callAction = true;
@@ -4180,7 +4190,7 @@ void IOService::all_done ( void )
 #endif
             fMaxPowerState = fControllingDriver->maxCapabilityForDomainState(fHeadNoteDomainFlags);
 
-            OUR_PMLog(kPMLogChangeDone, fCurrentPowerState, 0);
+            OUR_PMLog(kPMLogChangeDone, fCurrentPowerState, prevPowerState);
             PM_ACTION_2(actionPowerChangeDone,
                 fHeadNotePowerState, fHeadNoteChangeFlags);
             callAction = true;
@@ -7985,6 +7995,51 @@ bool IOServicePM::serialize( OSSerialize * s ) const
 	}
 
     return (kIOReturnSuccess == ret);
+}
+
+void IOServicePM::pmPrint(
+    uint32_t        event,
+    uintptr_t       param1,
+    uintptr_t       param2 ) const
+{
+    gPlatform->PMLog(Name, event, param1, param2);
+}
+
+void IOServicePM::pmTrace(
+    uint32_t        event,
+    uintptr_t       param1,
+    uintptr_t       param2 ) const
+{
+    const char *  who = Name;
+    uint64_t    regId = Owner->getRegistryEntryID();
+    uintptr_t    name = 0;
+
+    static const uint32_t sStartStopBitField[] =
+    { 0x00000000, 0x00000040 }; // Only Program Hardware so far
+
+    // Arcane formula from Hacker's Delight by Warren
+    // abs(x)  = ((int) x >> 31) ^ (x + ((int) x >> 31))
+    uint32_t sgnevent = ((int) event >> 31);
+    uint32_t absevent = sgnevent ^ (event + sgnevent);
+    uint32_t code     = IODBG_POWER(absevent);
+
+    uint32_t bit = 1 << (absevent & 0x1f);
+    if ((absevent < (sizeof(sStartStopBitField) * 8)) &&
+        (sStartStopBitField[absevent >> 5] & bit))
+    {
+        // Or in the START or END bits, Start = 1 & END = 2
+        //      If sgnevent ==  0 then START -  0 => START
+        // else if sgnevent == -1 then START - -1 => END
+        code |= DBG_FUNC_START - sgnevent;
+    }
+
+    // Copy the first characters of the name into an uintptr_t
+    for (uint32_t i = 0; (i < sizeof(uintptr_t) && who[i] != 0); i++)
+    {
+        ((char *) &name)[sizeof(uintptr_t) - i - 1] = who[i];
+    }
+
+    IOTimeStampConstant(code, name, (uintptr_t) regId, param1, param2);
 }
 
 PMEventDetails* PMEventDetails::eventDetails(uint32_t   type,

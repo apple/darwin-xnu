@@ -463,7 +463,7 @@ static struct mac_policy_ops policy_ops = {
 	CHECK_SET_VOID_HOOK(thread_label_init)
 	CHECK_SET_VOID_HOOK(thread_label_destroy)
 	.mpo_reserved18 = common_void_hook,
-	.mpo_reserved19 = common_void_hook,
+	CHECK_SET_VOID_HOOK(vnode_notify_open)
 	.mpo_reserved20 = common_void_hook,
 	.mpo_reserved21 = common_void_hook,
 	.mpo_reserved22 = common_void_hook,

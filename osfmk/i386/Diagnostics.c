@@ -75,6 +75,26 @@
 diagWork        dgWork;
 uint64_t        lastRuptClear = 0ULL;
 
+void cpu_powerstats(void *);
+
+typedef struct {
+	uint64_t caperf;
+	uint64_t cmperf;
+	uint64_t ccres[3];
+	uint64_t crtimes[4];
+	uint64_t citimes[4];
+	uint64_t crtime_total;
+	uint64_t citime_total;
+} core_energy_stat_t;
+
+typedef struct {
+	uint64_t pkg_cres[2][4];
+	uint64_t pkg_power_unit;
+	uint64_t pkg_energy;
+	uint32_t ncpus;
+	core_energy_stat_t cest[];
+} pkg_energy_statistics_t;
+
 
 int 
 diagCall64(x86_saved_state_t * state)
@@ -84,6 +104,7 @@ diagCall64(x86_saved_state_t * state)
 	uint64_t        currNap, durNap;
 	x86_saved_state64_t	*regs;
 	boolean_t 	diagflag;
+	uint32_t	rval = 0;
 
 	assert(is_saved_state64(state));
 	regs = saved_state64(state);
@@ -93,8 +114,6 @@ diagCall64(x86_saved_state_t * state)
 	switch (selector) {	/* Select the routine */
 	case dgRuptStat:	/* Suck Interruption statistics */
 		(void) ml_set_interrupts_enabled(TRUE);
-		if (diagflag == 0)
-			break;
 		data = regs->rsi; /* Get the number of processors */
 
 		if (data == 0) { /* If no location is specified for data, clear all
@@ -107,7 +126,8 @@ diagCall64(x86_saved_state_t * state)
 			}
 
 			lastRuptClear = mach_absolute_time();	/* Get the time of clear */
-			return 1;	/* Normal return */
+			rval = 1;	/* Normal return */
+			break;
 		}
 
 		(void) copyout((char *) &real_ncpus, data, sizeof(real_ncpus));	/* Copy out number of
@@ -132,8 +152,63 @@ diagCall64(x86_saved_state_t * state)
 			curpos = curpos + (256 * sizeof(uint32_t) + 8);	/* Point to next out put
 									 * slot */
 		}
-		return 1;
+		rval = 1;
 		break;
+	case dgPowerStat:
+	{
+		uint32_t c2l = 0, c2h = 0, c3l = 0, c3h = 0, c6l = 0, c6h = 0, c7l = 0, c7h = 0;
+		uint32_t pkg_unit_l = 0, pkg_unit_h = 0, pkg_ecl = 0, pkg_ech = 0;
+
+		pkg_energy_statistics_t pkes;
+		core_energy_stat_t cest;
+
+		bzero(&pkes, sizeof(pkes));
+		bzero(&cest, sizeof(cest));
+
+		rdmsr_carefully(MSR_IA32_PKG_C2_RESIDENCY, &c2l, &c2h);
+		rdmsr_carefully(MSR_IA32_PKG_C3_RESIDENCY, &c3l, &c3h);
+		rdmsr_carefully(MSR_IA32_PKG_C6_RESIDENCY, &c6l, &c6h);
+		rdmsr_carefully(MSR_IA32_PKG_C7_RESIDENCY, &c7l, &c7h);
+
+		pkes.pkg_cres[0][0] = ((uint64_t)c2h << 32) | c2l;
+		pkes.pkg_cres[0][1] = ((uint64_t)c3h << 32) | c3l;
+		pkes.pkg_cres[0][2] = ((uint64_t)c6h << 32) | c6l;
+		pkes.pkg_cres[0][3] = ((uint64_t)c7h << 32) | c7l;
+
+		rdmsr_carefully(MSR_IA32_PKG_POWER_SKU_UNIT, &pkg_unit_l, &pkg_unit_h);
+		rdmsr_carefully(MSR_IA32_PKG_ENERGY_STATUS, &pkg_ecl, &pkg_ech);
+
+		pkes.pkg_power_unit = ((uint64_t)pkg_unit_h << 32) | pkg_unit_l;
+		pkes.pkg_energy = ((uint64_t)pkg_ech << 32) | pkg_ecl;
+
+		pkes.ncpus = real_ncpus;
+
+		(void) ml_set_interrupts_enabled(TRUE);
+
+		copyout(&pkes, regs->rsi, sizeof(pkes));
+		curpos = regs->rsi + sizeof(pkes);
+
+		mp_cpus_call(CPUMASK_ALL, ASYNC, cpu_powerstats, NULL);
+		
+		for (i = 0; i < real_ncpus; i++) {
+			cest.caperf = cpu_data_ptr[i]->cpu_aperf;
+			cest.cmperf = cpu_data_ptr[i]->cpu_mperf;
+			cest.ccres[0] = cpu_data_ptr[i]->cpu_c3res;
+			cest.ccres[1] = cpu_data_ptr[i]->cpu_c6res;
+			cest.ccres[2] = cpu_data_ptr[i]->cpu_c7res;
+
+			bcopy(&cpu_data_ptr[i]->cpu_rtimes[0], &cest.crtimes[0], sizeof(cest.crtimes));
+			bcopy(&cpu_data_ptr[i]->cpu_itimes[0], &cest.citimes[0], sizeof(cest.citimes));
+			cest.citime_total = cpu_data_ptr[i]->cpu_itime_total;
+			cest.crtime_total = cpu_data_ptr[i]->cpu_rtime_total;
+
+			copyout(&cest, curpos, sizeof(cest));
+			curpos += sizeof(cest);
+		}
+		rval = 1;
+	}
+		break;
+
 #if	DEBUG
 	case dgGzallocTest:
 	{
@@ -155,14 +230,40 @@ diagCall64(x86_saved_state_t * state)
 		if (diagflag == 0)
 			break;
 
-		return pmap_permissions_verify(kernel_pmap, kernel_map, 0, ~0ULL);
+		rval = pmap_permissions_verify(kernel_pmap, kernel_map, 0, ~0ULL);
 	}
  		break;
 #endif /* __x86_64__*/
 
 	default:		/* Handle invalid ones */
-		return 0;	/* Return an exception */
+		rval = 0;	/* Return an exception */
 	}
 
-	return 1;		/* Normal non-ast check return */
+	regs->rax = rval;
+
+	return rval;		/* Normal non-ast check return */
+}
+
+void cpu_powerstats(__unused void *arg) {
+	cpu_data_t *cdp = current_cpu_datap();
+	int cnum = cdp->cpu_number;
+	uint32_t cl = 0, ch = 0, mpl = 0, mph = 0, apl = 0, aph = 0;
+
+	rdmsr_carefully(MSR_IA32_MPERF, &mpl, &mph);
+	rdmsr_carefully(MSR_IA32_APERF, &apl, &aph);
+
+	cdp->cpu_mperf = ((uint64_t)mph << 32) | mpl;
+	cdp->cpu_aperf = ((uint64_t)aph << 32) | apl;
+
+	if (cnum & 1)
+		return;
+
+	rdmsr_carefully(MSR_IA32_CORE_C3_RESIDENCY, &cl, &ch);
+	cdp->cpu_c3res = ((uint64_t)ch << 32) | cl;
+
+	rdmsr_carefully(MSR_IA32_CORE_C6_RESIDENCY, &cl, &ch);
+	cdp->cpu_c6res = ((uint64_t)ch << 32) | cl;
+
+	rdmsr_carefully(MSR_IA32_CORE_C7_RESIDENCY, &cl, &ch);
+	cdp->cpu_c7res = ((uint64_t)ch << 32) | cl;
 }

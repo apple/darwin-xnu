@@ -59,14 +59,14 @@ int diagCall64(x86_saved_state_t *regs);
 #define dgBootScreen 7
 #define dgFlush 8
 #define dgAlign 9
-#define dgprw 10
+#define dgGzallocTest 10
 #define dgmck 11
 #define dg64 12
 #define dgProbeRead 13
 #define dgCPNull 14
 #define dgPerfMon 15
 #define dgMapPage 16
-#define dgGzallocTest 17
+#define dgPowerStat 17
 #define dgBind 18
 #define dgAcntg 20
 #define dgKlra 21

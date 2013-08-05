@@ -90,6 +90,8 @@ extern thread_t		machine_processor_shutdown(
 
 extern void machine_idle(void);
 
+extern void machine_track_platform_idle(boolean_t);
+
 extern void machine_signal_idle(
 					processor_t         processor);
 

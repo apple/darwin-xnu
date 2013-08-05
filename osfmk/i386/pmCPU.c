@@ -76,6 +76,14 @@ power_management_init(void)
 	(*pmDispatch->cstateInit)();
 }
 
+#define CPU_ACTIVE_STAT_BIN_1 (500000)
+#define CPU_ACTIVE_STAT_BIN_2 (2000000)
+#define CPU_ACTIVE_STAT_BIN_3 (5000000)
+
+#define CPU_IDLE_STAT_BIN_1 (500000)
+#define CPU_IDLE_STAT_BIN_2 (2000000)
+#define CPU_IDLE_STAT_BIN_3 (5000000)
+
 /*
  * Called when the CPU is idle.  It calls into the power management kext
  * to determine the best way to idle the CPU.
@@ -84,13 +92,30 @@ void
 machine_idle(void)
 {
     cpu_data_t		*my_cpu		= current_cpu_datap();
+    uint64_t		ctime, rtime, itime;
 
     if (my_cpu == NULL)
 	goto out;
 
+	ctime = mach_absolute_time();
+
     my_cpu->lcpu.state = LCPU_IDLE;
     DBGLOG(cpu_handle, cpu_number(), MP_IDLE);
     MARK_CPU_IDLE(cpu_number());
+
+	rtime = ctime - my_cpu->cpu_ixtime;
+
+	my_cpu->cpu_rtime_total += rtime;
+
+	if (rtime < CPU_ACTIVE_STAT_BIN_1)
+		my_cpu->cpu_rtimes[0]++;
+	else if (rtime < CPU_ACTIVE_STAT_BIN_2)
+		my_cpu->cpu_rtimes[1]++;
+	else if (rtime < CPU_ACTIVE_STAT_BIN_3)
+		my_cpu->cpu_rtimes[2]++;
+	else
+		my_cpu->cpu_rtimes[3]++;
+
 
     if (pmInitDone) {
 	/*
@@ -129,7 +154,23 @@ machine_idle(void)
      */
     MARK_CPU_ACTIVE(cpu_number());
     DBGLOG(cpu_handle, cpu_number(), MP_UNIDLE);
+
+	uint64_t ixtime = my_cpu->cpu_ixtime = mach_absolute_time();
+	itime = ixtime - ctime;
+
     my_cpu->lcpu.state = LCPU_RUN;
+
+	if (itime < CPU_IDLE_STAT_BIN_1)
+		my_cpu->cpu_itimes[0]++;
+	else if (itime < CPU_IDLE_STAT_BIN_2)
+		my_cpu->cpu_itimes[1]++;
+	else if (itime < CPU_IDLE_STAT_BIN_3)
+		my_cpu->cpu_itimes[2]++;
+	else
+		my_cpu->cpu_itimes[3]++;
+
+	my_cpu->cpu_itime_total += itime;
+
 
     /*
      * Re-enable interrupts.
@@ -362,7 +403,7 @@ pmCPUExitHalt(int cpu)
 kern_return_t
 pmCPUExitHaltToOff(int cpu)
 {
-    kern_return_t	rc	= KERN_INVALID_ARGUMENT;
+    kern_return_t	rc	= KERN_SUCCESS;
 
     if (pmInitDone
 	&& pmDispatch != NULL
@@ -889,4 +930,15 @@ pmsBuild(__unused pmsDef *pd, __unused uint32_t pdsize,
 	 __unused uint32_t platformData, __unused pmsQueryFunc_t queryFunc)
 {
     return(KERN_SUCCESS);
+}
+
+void machine_track_platform_idle(boolean_t entry) {
+	cpu_data_t		*my_cpu		= current_cpu_datap();
+
+	if (entry) {
+		(void)__sync_fetch_and_add(&my_cpu->lcpu.package->num_idle, 1);
+	}
+	else {
+		(void)__sync_fetch_and_sub(&my_cpu->lcpu.package->num_idle, 1);
+	}
 }

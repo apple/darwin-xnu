@@ -506,6 +506,8 @@ thread_terminate_daemon(void)
 		task->syscalls_unix += thread->syscalls_unix;
 		task->syscalls_mach += thread->syscalls_mach;
 
+		task->task_timer_wakeups_bin_1 += thread->thread_timer_wakeups_bin_1;
+		task->task_timer_wakeups_bin_2 += thread->thread_timer_wakeups_bin_2;
 		queue_remove(&task->threads, thread, thread_t, task_threads);
 		task->thread_count--;
 
@@ -1699,6 +1701,15 @@ thread_tid(
 	thread_t	thread)
 {
 	return (thread != THREAD_NULL? thread->thread_id: 0);
+}
+
+uint16_t
+thread_set_tag(thread_t th, uint16_t tag) {
+	return thread_set_tag_internal(th, tag);
+}
+uint16_t
+thread_get_tag(thread_t th) {
+	return thread_get_tag_internal(th);
 }
 
 uint64_t

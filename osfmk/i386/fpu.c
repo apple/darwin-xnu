@@ -562,7 +562,7 @@ fpu_set_fxstate(
 		iavx->fp_save_layout = thread_is_64bit(thr_act) ? XSAVE64 : XSAVE32;
 		/* Sanitize XSAVE header */
 		bzero(&iavx->_xh.xhrsvd[0], sizeof(iavx->_xh.xhrsvd));
-		if (state_size == sizeof(struct x86_avx_thread_state))
+		if (fpu_nyreg)
 			iavx->_xh.xsbv = (XFEM_YMM | XFEM_SSE | XFEM_X87);
 		else
 			iavx->_xh.xsbv = (XFEM_SSE | XFEM_X87);

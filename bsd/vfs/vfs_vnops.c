@@ -177,9 +177,12 @@ vn_open_auth_finish(vnode_t vp, int fmode, vfs_context_t ctx)
 		goto bad;
 	}
 
-	/* call out to allow 3rd party notification of open. 
+	/* Call out to allow 3rd party notification of open. 
 	 * Ignore result of kauth_authorize_fileop call.
 	 */
+#if CONFIG_MACF
+	mac_vnode_notify_open(ctx, vp, fmode);
+#endif
 	kauth_authorize_fileop(vfs_context_ucred(ctx), KAUTH_FILEOP_OPEN, 
 						   (uintptr_t)vp, 0);
 

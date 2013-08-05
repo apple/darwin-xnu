@@ -5105,7 +5105,6 @@ pf_test_dummynet(struct pf_rule **rm, int direction, struct pfi_kif *kif,
 	int			 asd = 0;
 	int			 match = 0;
 	u_int8_t		 icmptype = 0, icmpcode = 0;
-	union pf_state_xport	nxport, sxport, dxport;
 	struct ip_fw_args	dnflow;
 	struct pf_rule		*prev_matching_rule = fwa ? fwa->fwa_pf_rule : NULL;
 	int			found_prev_rule = (prev_matching_rule) ? 0 : 1;
@@ -5115,39 +5114,31 @@ pf_test_dummynet(struct pf_rule **rm, int direction, struct pfi_kif *kif,
 	if (!DUMMYNET_LOADED)
 		return (PF_PASS);
 	
-	if (TAILQ_EMPTY(pf_main_ruleset.rules[PF_RULESET_DUMMYNET].active.ptr)) {
+	if (TAILQ_EMPTY(pf_main_ruleset.rules[PF_RULESET_DUMMYNET].active.ptr))
 		return (PF_PASS);
-	}
+	
 	bzero(&dnflow, sizeof(dnflow));
 
 	hdrlen = 0;
-	sxport.spi = 0;
-	dxport.spi = 0;
-	nxport.spi = 0;
 
 	/* Fragments don't gave protocol headers */
 	if (!(pd->flags & PFDESC_IP_FRAG))	
 		switch (pd->proto) {
 		case IPPROTO_TCP:
 			dnflow.fwa_id.flags = pd->hdr.tcp->th_flags;
-			dnflow.fwa_id.dst_port = pd->hdr.tcp->th_dport;
-			dnflow.fwa_id.src_port = pd->hdr.tcp->th_sport;
-			sxport.port = pd->hdr.tcp->th_sport;
-			dxport.port = pd->hdr.tcp->th_dport;
+			dnflow.fwa_id.dst_port = ntohs(pd->hdr.tcp->th_dport);
+			dnflow.fwa_id.src_port = ntohs(pd->hdr.tcp->th_sport);
 			hdrlen = sizeof (*th);
 			break;
 		case IPPROTO_UDP:
-			dnflow.fwa_id.dst_port = pd->hdr.udp->uh_dport;
-			dnflow.fwa_id.src_port = pd->hdr.udp->uh_sport;
-			sxport.port = pd->hdr.udp->uh_sport;
-			dxport.port = pd->hdr.udp->uh_dport;
+			dnflow.fwa_id.dst_port = ntohs(pd->hdr.udp->uh_dport);
+			dnflow.fwa_id.src_port = ntohs(pd->hdr.udp->uh_sport);
 			hdrlen = sizeof (*pd->hdr.udp);
 			break;
 #if INET
 		case IPPROTO_ICMP:
-			if (pd->af != AF_INET)
+			if (af != AF_INET)
 				break;
-			sxport.port = dxport.port = pd->hdr.icmp->icmp_id;
 			hdrlen = ICMP_MINLEN;
 			icmptype = pd->hdr.icmp->icmp_type;
 			icmpcode = pd->hdr.icmp->icmp_code;
@@ -5155,24 +5146,18 @@ pf_test_dummynet(struct pf_rule **rm, int direction, struct pfi_kif *kif,
 #endif /* INET */
 #if INET6
 		case IPPROTO_ICMPV6:
-			if (pd->af != AF_INET6)
+			if (af != AF_INET6)
 				break;
-			sxport.port = dxport.port = pd->hdr.icmp6->icmp6_id;
 			hdrlen = sizeof (*pd->hdr.icmp6);
 			icmptype = pd->hdr.icmp6->icmp6_type;
 			icmpcode = pd->hdr.icmp6->icmp6_code;
 			break;
 #endif /* INET6 */
 		case IPPROTO_GRE:
-			if (pd->proto_variant == PF_GRE_PPTP_VARIANT) {
-				sxport.call_id = dxport.call_id =
-				    pd->hdr.grev1->call_id;
+			if (pd->proto_variant == PF_GRE_PPTP_VARIANT)
 				hdrlen = sizeof (*pd->hdr.grev1);
-			}
 			break;
 		case IPPROTO_ESP:
-			sxport.spi = 0;
-			dxport.spi = pd->hdr.esp->spi;
 			hdrlen = sizeof (*pd->hdr.esp);
 			break;
 		}
@@ -5298,10 +5283,21 @@ pf_test_dummynet(struct pf_rule **rm, int direction, struct pfi_kif *kif,
 		
 		dnflow.fwa_cookie = r->dnpipe;
 		dnflow.fwa_pf_rule = r;
-		dnflow.fwa_id.addr_type = (af == AF_INET) ? 4 : 6;
 		dnflow.fwa_id.proto = pd->proto;
 		dnflow.fwa_flags = r->dntype;
-		
+		switch (af) {
+			case AF_INET:
+				dnflow.fwa_id.addr_type = 4;
+				dnflow.fwa_id.src_ip = ntohl(saddr->v4.s_addr);
+				dnflow.fwa_id.dst_ip = ntohl(daddr->v4.s_addr);
+				break;
+			case AF_INET6:
+				dnflow.fwa_id.addr_type = 6;
+				dnflow.fwa_id.src_ip6 = saddr->v6;
+				dnflow.fwa_id.dst_ip6 = saddr->v6;
+				break;
+			}
+
 		if (fwa != NULL) {
 			dnflow.fwa_oif = fwa->fwa_oif;
 			dnflow.fwa_oflags = fwa->fwa_oflags;

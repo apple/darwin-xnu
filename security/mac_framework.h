@@ -548,6 +548,7 @@ int	mac_vnode_notify_create(vfs_context_t ctx, struct mount *mp,
 	    struct vnode *dvp, struct vnode *vp, struct componentname *cnp);
 void	mac_vnode_notify_rename(vfs_context_t ctx, struct vnode *vp,
 	    struct vnode *dvp, struct componentname *cnp);
+void	mac_vnode_notify_open(vfs_context_t ctx, struct vnode *vp, int acc_flags);
 int	vnode_label(struct mount *mp, struct vnode *dvp, struct vnode *vp,
 	    struct componentname *cnp, int flags, vfs_context_t ctx);
 void	vnode_relabel(struct vnode *vp);

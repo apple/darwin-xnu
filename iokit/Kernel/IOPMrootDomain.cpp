@@ -2229,7 +2229,7 @@ void IOPMrootDomain::powerChangeDone( unsigned long previousPowerState )
 #endif
 
             // log system wake
-            getPlatform()->PMLog(kIOPMrootDomainClass, kPMLogSystemWake, 0, 0);
+            PMDebug(kPMLogSystemWake, 0, 0);
             lowBatteryCondition = false;
             lastSleepReason = 0;
             
@@ -6654,6 +6654,7 @@ void IOPMrootDomain::tracePoint( uint8_t point )
 {
     if (systemBooting) return;
 
+    PMDebug(kPMLogSleepWakeTracePoint, point, 0);
     pmTracer->tracePoint(point);
 
 #if	HIBERNATION
@@ -6663,8 +6664,10 @@ void IOPMrootDomain::tracePoint( uint8_t point )
 
 void IOPMrootDomain::tracePoint( uint8_t point, uint8_t data )
 {
-    if (!systemBooting)
-        pmTracer->tracePoint(point, data);
+    if (systemBooting) return;
+
+    PMDebug(kPMLogSleepWakeTracePoint, point, data);
+    pmTracer->tracePoint(point, data);
 }
 
 void IOPMrootDomain::traceDetail( uint32_t detail )

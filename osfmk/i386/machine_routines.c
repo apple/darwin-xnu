@@ -248,6 +248,15 @@ boolean_t ml_at_interrupt_context(void)
 	return get_interrupt_level() != 0;
 }
 
+void ml_get_power_state(boolean_t *icp, boolean_t *pidlep) {
+	*icp = (get_interrupt_level() != 0);
+	/* These will be technically inaccurate for interrupts that occur
+	 * successively within a single "idle exit" event, but shouldn't
+	 * matter statistically.
+	 */
+	*pidlep = (current_cpu_datap()->lcpu.package->num_idle == topoParms.nLThreadsPerPackage);
+}
+
 /* Generate a fake interrupt */
 void ml_cause_interrupt(void)
 {

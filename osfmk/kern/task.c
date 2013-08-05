@@ -157,8 +157,12 @@ lck_mtx_t	task_watch_mtx;
 zinfo_usage_store_t tasks_tkm_private;
 zinfo_usage_store_t tasks_tkm_shared;
 
+/* A container to accumulate statistics for expired tasks */
+expired_task_statistics_t                dead_task_statistics;
+lck_spin_t                dead_task_statistics_lock;
+
 static ledger_template_t task_ledger_template = NULL;
-struct _task_ledger_indices task_ledgers = {-1, -1, -1, -1, -1};
+struct _task_ledger_indices task_ledgers = {-1, -1, -1, -1, -1, -1, -1};
 void init_task_ledgers(void);
 
 
@@ -292,7 +296,7 @@ task_init(void)
 
 	vm_map_deallocate(kernel_task->map);
 	kernel_task->map = kernel_map;
-
+	lck_spin_init(&dead_task_statistics_lock, &task_lck_grp, &task_lck_attr);
 }
 
 /*
@@ -371,10 +375,15 @@ init_task_ledgers(void)
 	    "bytes");
 	task_ledgers.wired_mem = ledger_entry_add(t, "wired_mem", "physmem",
 	    "bytes");
+	task_ledgers.platform_idle_wakeups = ledger_entry_add(t, "platform_idle_wakeups", "power",
+	    "count");
+	task_ledgers.interrupt_wakeups = ledger_entry_add(t, "interrupt_wakeups", "power",
+	    "count");
 
 	if ((task_ledgers.cpu_time < 0) || (task_ledgers.tkm_private < 0) ||
 	    (task_ledgers.tkm_shared < 0) || (task_ledgers.phys_mem < 0) ||
-	    (task_ledgers.wired_mem < 0)) {
+	    (task_ledgers.wired_mem < 0) || (task_ledgers.platform_idle_wakeups < 0) ||
+	    (task_ledgers.interrupt_wakeups < 0)) {
 		panic("couldn't create entries for task ledger template");
 	}
 
@@ -556,6 +565,7 @@ task_create_internal(
 	}
 
 	bzero(&new_task->extmod_statistics, sizeof(new_task->extmod_statistics));
+	new_task->task_timer_wakeups_bin_1 = new_task->task_timer_wakeups_bin_2 = 0;
 	
 	lck_mtx_lock(&tasks_threads_lock);
 	queue_enter(&tasks, new_task, task_t, tasks);
@@ -580,7 +590,7 @@ void
 task_deallocate(
 	task_t		task)
 {
-	ledger_amount_t credit, debit;
+	ledger_amount_t credit, debit, interrupt_wakeups, platform_idle_wakeups;
 
 	if (task == TASK_NULL)
 	    return;
@@ -607,6 +617,23 @@ task_deallocate(
 	vm_map_deallocate(task->map);
 	is_release(task->itk_space);
 
+	ledger_get_entries(task->ledger, task_ledgers.interrupt_wakeups,
+	                   &interrupt_wakeups, &debit);
+	ledger_get_entries(task->ledger, task_ledgers.platform_idle_wakeups,
+	                   &platform_idle_wakeups, &debit);
+
+	/* Accumulate statistics for dead tasks */
+	lck_spin_lock(&dead_task_statistics_lock);
+	dead_task_statistics.total_user_time += task->total_user_time;
+	dead_task_statistics.total_system_time += task->total_system_time;
+
+	dead_task_statistics.task_interrupt_wakeups += interrupt_wakeups;
+	dead_task_statistics.task_platform_idle_wakeups += platform_idle_wakeups;
+
+	dead_task_statistics.task_timer_wakeups_bin_1 += task->task_timer_wakeups_bin_1;
+	dead_task_statistics.task_timer_wakeups_bin_2 += task->task_timer_wakeups_bin_2;
+
+	lck_spin_unlock(&dead_task_statistics_lock);
 	lck_mtx_destroy(&task->lock, &task_lck_grp);
 
 #if CONFIG_MACF_MACH
@@ -2030,6 +2057,60 @@ task_info(
 		error = task_affinity_info(task, task_info_out, task_info_count);
 		break;
 	}
+
+	case TASK_POWER_INFO:
+	{
+		task_power_info_t	info;
+		thread_t			thread;
+		ledger_amount_t		tmp;
+
+		if (*task_info_count < TASK_POWER_INFO_COUNT) {
+			error = KERN_INVALID_ARGUMENT;
+			break;
+		}
+
+		info = (task_power_info_t)task_info_out;
+
+		ledger_get_entries(task->ledger, task_ledgers.interrupt_wakeups,
+			(ledger_amount_t *)&info->task_interrupt_wakeups, &tmp);
+		ledger_get_entries(task->ledger, task_ledgers.platform_idle_wakeups,
+			(ledger_amount_t *)&info->task_platform_idle_wakeups, &tmp);
+
+		info->task_timer_wakeups_bin_1 = task->task_timer_wakeups_bin_1;
+		info->task_timer_wakeups_bin_2 = task->task_timer_wakeups_bin_2;
+
+		info->total_user = task->total_user_time;
+		info->total_system = task->total_system_time;
+
+		queue_iterate(&task->threads, thread, thread_t, task_threads) {
+			uint64_t	tval;
+			spl_t 		x;
+
+			if ((task == kernel_task) && (thread->priority == IDLEPRI) && (thread->sched_pri == IDLEPRI))
+				continue;
+			x = splsched();
+			thread_lock(thread);
+
+			info->task_timer_wakeups_bin_1 += thread->thread_timer_wakeups_bin_1;
+			info->task_timer_wakeups_bin_2 += thread->thread_timer_wakeups_bin_2;
+
+			tval = timer_grab(&thread->user_timer);
+			info->total_user += tval;
+
+			tval = timer_grab(&thread->system_timer);
+			if (thread->precise_user_kernel_time) {
+				info->total_system += tval;
+			} else {
+				/* system_timer may represent either sys or user */
+				info->total_user += tval;
+			}
+
+			thread_unlock(thread);
+			splx(x);
+		}
+		break;
+	}
+
 	default:
 		error = KERN_INVALID_ARGUMENT;
 	}

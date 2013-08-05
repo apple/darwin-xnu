@@ -91,6 +91,17 @@ extern host_data_t	realhost;
 
 extern vm_extmod_statistics_data_t host_extmod_statistics;
 
+typedef struct {
+	uint64_t total_user_time;
+	uint64_t total_system_time;
+	uint64_t task_interrupt_wakeups;
+	uint64_t task_platform_idle_wakeups;
+	uint64_t task_timer_wakeups_bin_1;
+	uint64_t task_timer_wakeups_bin_2;
+} expired_task_statistics_t;
+
+extern expired_task_statistics_t dead_task_statistics;
+
 #endif	/* MACH_KERNEL_PRIVATE */
 
 /*

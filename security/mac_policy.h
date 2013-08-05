@@ -6009,6 +6009,23 @@ typedef int mpo_vnode_notify_create_t(
 );
 
 /**
+  @brief Inform MAC policies that a vnode has been opened
+  @param cred User credential for the creating process
+  @param vp vnode opened
+  @param label Policy label for the vp
+  @param acc_mode open(2) access mode used
+
+  Inform Mac policies that a vnode have been successfully opened
+  (passing all MAC polices and DAC).
+*/
+typedef void mpo_vnode_notify_open_t(
+	kauth_cred_t cred,
+	struct vnode *vp,
+	struct label *label,
+	int acc_mode
+);
+
+/**
   @brief Inform MAC policies that a vnode has been renamed
   @param cred User credential for the renaming process
   @param vp Vnode that's being renamed
@@ -6362,7 +6379,7 @@ struct mac_policy_ops {
 	mpo_thread_label_destroy_t		*mpo_thread_label_destroy;
 	mpo_system_check_kas_info_t	*mpo_system_check_kas_info;
 	mpo_reserved_hook_t			*mpo_reserved18;
-	mpo_reserved_hook_t			*mpo_reserved19;
+ 	mpo_vnode_notify_open_t			*mpo_vnode_notify_open;
 	mpo_reserved_hook_t			*mpo_reserved20;
 	mpo_reserved_hook_t			*mpo_reserved21;
 	mpo_reserved_hook_t			*mpo_reserved22;

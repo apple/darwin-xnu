@@ -109,6 +109,7 @@ extern void dtrace_lazy_dofs_duplicate(proc_t, proc_t);
 #include <kern/kalloc.h>
 #include <kern/mach_param.h>
 #include <kern/task.h>
+#include <kern/thread.h>
 #include <kern/thread_call.h>
 #include <kern/zalloc.h>
 
@@ -812,6 +813,12 @@ fork_create_child(task_t parent_task, proc_t child_proc, int inherit_memory, int
 		task_deallocate(child_task);
 		child_task = NULL;
 	}
+
+	/*
+	 * Tag thread as being the first thread in its task.
+	 */
+	thread_set_tag(child_thread, THREAD_TAG_MAINTHREAD);
+
 bad:
 	thread_yield_internal(1);
 

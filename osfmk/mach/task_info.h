@@ -264,6 +264,20 @@ typedef struct task_extmod_info	*task_extmod_info_t;
 /* Always 64-bit in user and kernel */
 #define MACH_TASK_BASIC_INFO     20         /* always 64-bit basic info */
 
+#define TASK_POWER_INFO        21
+struct task_power_info {
+        uint64_t                total_user;
+        uint64_t                total_system;
+        uint64_t                task_interrupt_wakeups;
+        uint64_t                task_platform_idle_wakeups;
+        uint64_t                task_timer_wakeups_bin_1;
+        uint64_t                task_timer_wakeups_bin_2;
+};
+typedef struct task_power_info        task_power_info_data_t;
+typedef struct task_power_info        *task_power_info_t;
+#define TASK_POWER_INFO_COUNT        ((mach_msg_type_number_t) \
+                (sizeof (task_power_info_data_t) / sizeof (natural_t)))
+
 struct mach_task_basic_info {
         mach_vm_size_t  virtual_size;       /* virtual memory size (bytes) */
         mach_vm_size_t  resident_size;      /* resident memory size (bytes) */

@@ -239,6 +239,16 @@ typedef struct cpu_data
 	uint64_t		cpu_pmap_pcid_preserves;
 #endif
 #endif /* x86_64 */
+	uint64_t		cpu_aperf;
+	uint64_t		cpu_mperf;
+	uint64_t		cpu_c3res;
+	uint64_t		cpu_c6res;
+	uint64_t		cpu_c7res;
+	uint64_t		cpu_itime_total;
+	uint64_t		cpu_rtime_total;
+	uint64_t		cpu_rtimes[4];
+	uint64_t		cpu_itimes[4];
+	uint64_t		cpu_ixtime;
 	uint64_t                cpu_max_observed_int_latency;
 	int                     cpu_max_observed_int_latency_vector;
 	uint64_t		debugger_entry_time;

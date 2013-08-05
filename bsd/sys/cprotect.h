@@ -65,9 +65,6 @@ extern "C" {
 #define CP_READ_ACCESS 	0x1
 #define CP_WRITE_ACCESS 0x2
 
-/* 
- * Check for this version when deciding to enable features
- */
 #define CONTENT_PROTECTION_XATTR_NAME	"com.apple.system.cprotect"
 #define CP_NEW_MAJOR_VERS 4
 #define CP_PREV_MAJOR_VERS 2

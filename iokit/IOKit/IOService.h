@@ -1744,6 +1744,7 @@ public:
 protected:
     bool tellClientsWithResponse( int messageType );
     void tellClients( int messageType );
+    void PMDebug( uint32_t event, uintptr_t param1, uintptr_t param2 );
 
 private:
 #ifndef __LP64__

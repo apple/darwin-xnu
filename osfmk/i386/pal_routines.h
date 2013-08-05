@@ -1,3 +1,4 @@
+
 /*
  * Copyright (c) 2009 Apple Inc. All rights reserved.
  *
@@ -154,14 +155,18 @@ void pal_efi_hibernate_prepare(void);
 /* Include a PAL-specific header, too, for xnu-internal overrides */
 #include <i386/pal_native.h>
 
+extern boolean_t virtualized;
+#define PAL_VIRTUALIZED_PROPERTY_VALUE 4
 
 /* Allow for tricky IOKit property matching */
 #define PAL_AICPM_PROPERTY_NAME "intel_cpupm_matching"
 static inline void 
 pal_get_resource_property(const char **property_name, int *property_value)
 {
-	*property_name = PAL_AICPM_PROPERTY_NAME;
-	*property_value = PAL_AICPM_PROPERTY_VALUE;
+        *property_name = PAL_AICPM_PROPERTY_NAME;
+        *property_value = PAL_AICPM_PROPERTY_VALUE;
+        if (virtualized)
+                *property_value = PAL_VIRTUALIZED_PROPERTY_VALUE;
 }
 
 /* assembly function to update TSC / timebase info */

@@ -456,6 +456,7 @@ errno_t  vnode_makenamedstream(vnode_t, vnode_t *, const char *, int, vfs_contex
 errno_t  vnode_removenamedstream(vnode_t, vnode_t, const char *, int, vfs_context_t);
 errno_t  vnode_flushnamedstream(vnode_t vp, vnode_t svp, vfs_context_t context);
 errno_t  vnode_relenamedstream(vnode_t vp, vnode_t svp, vfs_context_t context);
+errno_t  vnode_verifynamedstream (vnode_t vp, vfs_context_t ctx);
 #endif
 
 

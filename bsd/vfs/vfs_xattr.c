@@ -627,6 +627,54 @@ out:
 	return (error);
 }
 
+/* 
+ * Verify that the vnode 'vp' is a vnode that lives in the shadow
+ * directory.  We can't just query the parent pointer directly since
+ * the shadowfile is hooked up to the actual file it's a stream for.
+ */
+errno_t vnode_verifynamedstream(vnode_t vp, vfs_context_t context) {
+	int error;
+	struct vnode *shadow_dvp = NULL;
+	struct vnode *shadowfile = NULL;
+	struct componentname cn;
+	char tmpname[80];
+
+
+	/* Get the shadow directory vnode */
+	error = get_shadow_dir(&shadow_dvp, context);
+	if (error) {
+		return error;
+	}
+
+	/* Re-generate the shadow name in the buffer */
+	MAKE_SHADOW_NAME (vp, tmpname);
+
+	/* Look up item in shadow dir */
+	bzero(&cn, sizeof(cn));
+	cn.cn_nameiop = LOOKUP;
+	cn.cn_flags = ISLASTCN | CN_ALLOWRSRCFORK;
+	cn.cn_context = context;
+	cn.cn_pnbuf = tmpname;
+	cn.cn_pnlen = sizeof(tmpname);
+	cn.cn_nameptr = cn.cn_pnbuf;
+	cn.cn_namelen = strlen(tmpname);
+
+	if (VNOP_LOOKUP (shadow_dvp, &shadowfile, &cn, context) == 0) {
+		/* is the pointer the same? */
+		if (shadowfile == vp) {
+			error = 0;	
+		}
+		else {
+			error = EPERM;
+		}
+		/* drop the iocount acquired */
+		vnode_put (shadowfile);
+	}	
+
+	/* Drop iocount on shadow dir */
+	vnode_put (shadow_dvp);
+	return error;
+}	
 
 static int
 getshadowfile(vnode_t vp, vnode_t *svpp, int makestream, size_t *rsrcsize,

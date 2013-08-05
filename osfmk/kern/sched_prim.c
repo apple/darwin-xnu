@@ -165,6 +165,14 @@ uint32_t	sched_fixed_shift;
 
 static boolean_t sched_traditional_use_pset_runqueue = FALSE;
 
+/* Defaults for timer deadline profiling */
+#define TIMER_DEADLINE_TRACKING_BIN_1_DEFAULT 2000000 /* Timers with deadlines <=
+                                                        * 2ms */
+#define TIMER_DEADLINE_TRACKING_BIN_2_DEFAULT 5000000 /* Timers with deadlines
+                                                          <= 5ms */
+uint64_t timer_deadline_tracking_bin_1;
+uint64_t timer_deadline_tracking_bin_2;
+
 __attribute__((always_inline))
 static inline run_queue_t runq_for_processor(processor_t processor)
 {
@@ -308,6 +316,9 @@ sched_realtime_init(void)  __attribute__((section("__TEXT, initcode")));
 
 static void
 sched_realtime_timebase_init(void);
+
+static void
+sched_timer_deadline_tracking_init(void);
 
 #if defined(CONFIG_SCHED_TRADITIONAL)
 static void
@@ -563,6 +574,7 @@ sched_init(void)
 	SCHED(fairshare_init)();
 	sched_realtime_init();
 	ast_init();
+	sched_timer_deadline_tracking_init();
 	
 	SCHED(pset_init)(&pset0);
 	SCHED(processor_init)(master_processor);
@@ -858,6 +870,7 @@ thread_unblock(
 	wait_result_t	wresult)
 {
 	boolean_t		result = FALSE;
+	thread_t		cthread = current_thread();
 
 	/*
 	 *	Set wait_result.
@@ -923,6 +936,43 @@ thread_unblock(
 	thread->current_quantum = 0;
 	thread->computation_metered = 0;
 	thread->reason = AST_NONE;
+
+	/* Obtain power-relevant interrupt and "platform-idle exit" statistics.
+	 * We also account for "double hop" thread signaling via
+	 * the thread callout infrastructure.
+	 * DRK: consider removing the callout wakeup counters in the future
+	 * they're present for verification at the moment.
+	 */
+	boolean_t aticontext, pidle;
+	ml_get_power_state(&aticontext, &pidle);
+	if (__improbable(aticontext)) {
+		ledger_credit(thread->t_ledger, task_ledgers.interrupt_wakeups, 1);
+		uint64_t ttd = PROCESSOR_DATA(current_processor(), timer_call_ttd);
+		if (ttd) {
+			if (ttd <= timer_deadline_tracking_bin_1)
+				thread->thread_timer_wakeups_bin_1++;
+			else
+				if (ttd <= timer_deadline_tracking_bin_2)
+					thread->thread_timer_wakeups_bin_2++;
+		}
+		if (pidle) {
+			ledger_credit(thread->t_ledger, task_ledgers.platform_idle_wakeups, 1);
+		}
+	} else if (thread_get_tag_internal(cthread) & THREAD_TAG_CALLOUT) {
+		if (cthread->callout_woken_from_icontext) {
+			ledger_credit(thread->t_ledger, task_ledgers.interrupt_wakeups, 1);
+			thread->thread_callout_interrupt_wakeups++;
+			if (cthread->callout_woken_from_platform_idle) {
+				ledger_credit(thread->t_ledger, task_ledgers.platform_idle_wakeups, 1);
+				thread->thread_callout_platform_idle_wakeups++;
+			}
+		}
+	}
+	
+	if (thread_get_tag_internal(thread) & THREAD_TAG_CALLOUT) {
+			thread->callout_woken_from_icontext = aticontext;
+			thread->callout_woken_from_platform_idle = pidle;
+	}
 
 	/* Event should only be triggered if thread is not already running */
 	if (result == FALSE) {
@@ -4039,7 +4089,11 @@ processor_idle(
 		IDLE_KERNEL_DEBUG_CONSTANT(
 			MACHDBG_CODE(DBG_MACH_SCHED,MACH_IDLE) | DBG_FUNC_NONE, (uintptr_t)thread_tid(thread), rt_runq.count, SCHED(processor_runq_count)(processor), -1, 0);
 
+		machine_track_platform_idle(TRUE);
+
 		machine_idle();
+
+		machine_track_platform_idle(FALSE);
 
 		(void)splsched();
 
@@ -4506,3 +4560,9 @@ thread_runnable(
 	return ((thread->state & (TH_RUN|TH_WAIT)) == TH_RUN);
 }
 #endif	/* DEBUG */
+
+static void
+sched_timer_deadline_tracking_init(void) {
+	nanoseconds_to_absolutetime(TIMER_DEADLINE_TRACKING_BIN_1_DEFAULT, &timer_deadline_tracking_bin_1);
+	nanoseconds_to_absolutetime(TIMER_DEADLINE_TRACKING_BIN_2_DEFAULT, &timer_deadline_tracking_bin_2);
+}

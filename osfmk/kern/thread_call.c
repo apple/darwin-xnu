@@ -46,7 +46,9 @@
 #include <libkern/OSAtomic.h>
 
 #include <sys/kdebug.h>
-
+#if CONFIG_DTRACE
+#include <mach/sdt.h>
+#endif
 
 static zone_t			thread_call_zone;
 static struct wait_queue	daemon_wqueue;
@@ -889,11 +891,13 @@ thread_call_enter1_delayed(
 	boolean_t		result = TRUE;
 	thread_call_group_t	group;
 	spl_t			s;
+	uint64_t		abstime;
 
 	group = thread_call_get_group(call);
 
 	s = splsched();
 	thread_call_lock_spin();
+	abstime =  mach_absolute_time();
 
 	result = _delayed_call_enqueue(call, group, deadline);
 
@@ -902,6 +906,10 @@ thread_call_enter1_delayed(
 
 	call->tc_call.param1 = param1;
 
+	call->ttd = (deadline > abstime) ? (deadline - abstime) : 0;
+#if CONFIG_DTRACE
+	DTRACE_TMR4(thread_callout__create, thread_call_func_t, call->tc_call.func, 0, (call->ttd >> 32), (unsigned) (call->ttd & 0xFFFFFFFF));
+#endif
 	thread_call_unlock();
 	splx(s);
 
@@ -933,6 +941,9 @@ thread_call_cancel(
 
 	thread_call_unlock();
 	splx(s);
+#if CONFIG_DTRACE
+	DTRACE_TMR4(thread_callout__cancel, thread_call_func_t, call->tc_call.func, 0, (call->ttd >> 32), (unsigned) (call->ttd & 0xFFFFFFFF));
+#endif
 
 	return (result);
 }
@@ -1134,6 +1145,9 @@ thread_call_thread(
 {
 	thread_t	self = current_thread();
 	boolean_t	canwait;
+
+	if ((thread_get_tag_internal(self) & THREAD_TAG_CALLOUT) == 0)
+		(void)thread_set_tag_internal(self, THREAD_TAG_CALLOUT);
 
 	/*
 	 * A wakeup with THREAD_INTERRUPTED indicates that 

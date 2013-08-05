@@ -392,6 +392,19 @@ mac_vnode_notify_rename(vfs_context_t ctx, struct vnode *vp,
 	    dvp, dvp->v_label, cnp);
 }
 
+void
+mac_vnode_notify_open(vfs_context_t ctx, struct vnode *vp, int acc_flags)
+{
+	kauth_cred_t cred;
+
+	if (!mac_vnode_enforce || 
+		!mac_context_check_enforce(ctx, MAC_VNODE_ENFORCE))
+		return;
+
+	cred = vfs_context_ucred(ctx);
+	MAC_PERFORM(vnode_notify_open, cred, vp, vp->v_label, acc_flags);
+}
+
 /*
  * Extended attribute 'name' was updated via
  * vn_setxattr() or vn_removexattr().  Allow the

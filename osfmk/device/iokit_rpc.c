@@ -436,6 +436,8 @@ iokit_no_senders( mach_no_senders_notification_t * notification )
 			/* port unlocked */
 			if ( notify != IP_NULL)
 				ipc_port_release_sonce(notify);
+		} else {
+			ip_unlock(port);
 		}
 	    }
             iokit_remove_reference( obj );
