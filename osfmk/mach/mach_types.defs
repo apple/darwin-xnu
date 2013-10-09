@@ -217,6 +217,7 @@ type thread_policy_t		= array[*:16] of integer_t;
 		 * task_extmod_info_t (8 64-bit ints)
 		 * task_basic_info_64_2_t
 		 * mach_task_basic_info_t (12 ints)
+		 * task_power_info_t (18 ints)
 		 * If other task_info flavors are added, this
 		 * definition may need to be changed. (See
 		 * mach/task_info.h and mach/policy.h) */
@@ -303,12 +304,13 @@ type host_security_t = mach_port_t
 		 * 	kernel_resource_sizes_t (5 ints)
 		 * 	host_load_info_t (6 ints)
 		 * 	vm_statistics32_t (15 ints)
+		 *	host_expired_task_info uses a task_power_info (18 ints)
 		 * 
 		 * If other host_info flavors are added, this definition may
 		 * need to be changed. (See mach/{host_info,vm_statistics}.h)
 		 */
 type host_flavor_t		= int;
-type host_info_t 		= array[*:15] of integer_t;
+type host_info_t 		= array[*:18] of integer_t;
 
 
 		/* 

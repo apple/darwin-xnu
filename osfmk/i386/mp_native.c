@@ -68,12 +68,10 @@ i386_smp_init(int nmi_vector, i386_intr_func_t nmi_handler, int ipi_vector, i386
 void
 i386_start_cpu(int lapic_id, __unused int cpu_num )
 {
-	LAPIC_WRITE(ICRD, lapic_id << LAPIC_ICRD_DEST_SHIFT);
-	LAPIC_WRITE(ICR, LAPIC_ICR_DM_INIT);
+	LAPIC_WRITE_ICR(lapic_id, LAPIC_ICR_DM_INIT);
 	delay(100);
-
-	LAPIC_WRITE(ICRD, lapic_id << LAPIC_ICRD_DEST_SHIFT);
-	LAPIC_WRITE(ICR, LAPIC_ICR_DM_STARTUP|(REAL_MODE_BOOTSTRAP_OFFSET>>12));
+	LAPIC_WRITE_ICR(lapic_id,
+			LAPIC_ICR_DM_STARTUP|(REAL_MODE_BOOTSTRAP_OFFSET>>12));
 }
 
 void
@@ -81,11 +79,11 @@ i386_send_NMI(int cpu)
 {
 	boolean_t state = ml_set_interrupts_enabled(FALSE);
 	/* Program the interrupt command register */
-	LAPIC_WRITE(ICRD, cpu_to_lapic[cpu] << LAPIC_ICRD_DEST_SHIFT);
 	/* The vector is ignored in this case--the target CPU will enter on the
 	 * NMI vector.
 	 */
-	LAPIC_WRITE(ICR, LAPIC_VECTOR(INTERPROCESSOR)|LAPIC_ICR_DM_NMI);
+	LAPIC_WRITE_ICR(cpu_to_lapic[cpu],
+			LAPIC_VECTOR(INTERPROCESSOR)|LAPIC_ICR_DM_NMI);
 	(void) ml_set_interrupts_enabled(state);
 }
 

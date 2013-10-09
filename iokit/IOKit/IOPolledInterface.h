@@ -32,6 +32,7 @@
 #include <libkern/c++/OSObject.h>
 
 #define kIOPolledInterfaceSupportKey "IOPolledInterface"
+#define kIOPolledInterfaceActiveKey  "IOPolledInterfaceActive"
 
 enum
 {

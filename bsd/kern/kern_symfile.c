@@ -203,7 +203,7 @@ kern_open_file_for_direct_io(const char * name,
     int			        isssd = 0;
     uint32_t                    flags = 0;
     uint32_t			blksize;
-    off_t 			maxiocount, count;
+    off_t 			maxiocount, count, segcount;
     boolean_t                   locked = FALSE;
 
     int (*do_ioctl)(void * p1, void * p2, u_long theIoctl, caddr_t result);
@@ -406,14 +406,20 @@ kern_open_file_for_direct_io(const char * name,
         maxiocount = count;
 
     error = do_ioctl(p1, p2, DKIOCGETMAXSEGMENTBYTECOUNTREAD, (caddr_t) &count);
+    if (!error)
+	error = do_ioctl(p1, p2, DKIOCGETMAXSEGMENTCOUNTREAD, (caddr_t) &segcount);
     if (error)
-        count = 0;
+        count = segcount = 0;
+    count *= segcount;
     if (count && (count < maxiocount))
         maxiocount = count;
 
     error = do_ioctl(p1, p2, DKIOCGETMAXSEGMENTBYTECOUNTWRITE, (caddr_t) &count);
+    if (!error)
+	error = do_ioctl(p1, p2, DKIOCGETMAXSEGMENTCOUNTWRITE, (caddr_t) &segcount);
     if (error)
-        count = 0;
+        count = segcount = 0;
+    count *= segcount;
     if (count && (count < maxiocount))
         maxiocount = count;
 

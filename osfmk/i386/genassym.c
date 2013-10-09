@@ -419,8 +419,6 @@ main(
 		offsetof(cpu_data_t *,cpu_number));
         DECLARE("CPU_RUNNING",
 		offsetof(cpu_data_t *,cpu_running));
-        DECLARE("CPU_MCOUNT_OFF",
-		offsetof(cpu_data_t *,cpu_mcount_off));
 	DECLARE("CPU_PENDING_AST",
 		offsetof(cpu_data_t *,cpu_pending_ast));
 	DECLARE("CPU_DESC_TABLEP",

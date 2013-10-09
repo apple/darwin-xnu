@@ -103,7 +103,7 @@
 #include <mach/i386/syscall_sw.h>
 
 #include <libkern/OSDebug.h>
-
+#include <i386/cpu_threads.h>
 #include <machine/pal_routines.h>
 
 extern void throttle_lowpri_io(int);
@@ -350,7 +350,7 @@ interrupt(x86_saved_state_t *state)
 	int		ipl;
 	int		cnum = cpu_number();
 	int		itype = 0;
-	
+
 	if (is_saved_state64(state) == TRUE) {
 	        x86_saved_state64_t	*state64;
 
@@ -372,6 +372,9 @@ interrupt(x86_saved_state_t *state)
 		rsp = state32->uesp;
 		interrupt_num = state32->trapno;
 	}
+
+	if (cpu_data_ptr[cnum]->lcpu.package->num_idle == topoParms.nLThreadsPerPackage)
+		cpu_data_ptr[cnum]->cpu_hwIntpexits[interrupt_num]++;
 
 	if (interrupt_num == (LAPIC_DEFAULT_INTERRUPT_BASE + LAPIC_INTERPROCESSOR_INTERRUPT))
 		itype = 1;

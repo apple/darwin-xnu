@@ -102,7 +102,11 @@ struct IOHibernateImageHeader
     uint32_t	sleepTime;
     uint32_t    compression;
 
-    uint32_t	reserved[68];		// make sizeof == 512
+    uint32_t	reserved[62];		// make sizeof == 512
+
+    uint64_t	restoreTime1 __attribute__ ((packed));
+    uint64_t	restoreTime2 __attribute__ ((packed));
+    uint64_t	restoreTime3 __attribute__ ((packed));
 
     uint64_t	encryptEnd __attribute__ ((packed));
     uint64_t	deviceBase __attribute__ ((packed));

@@ -162,6 +162,7 @@ static cpuid_cache_descriptor_t intel_cpuid_leaf2_descriptor_table[] = {
 	{ 0x70,	CACHE,	TRACE,		8,	12*K,	NA  },
 	{ 0x71,	CACHE,	TRACE,		8,	16*K,	NA  },
 	{ 0x72,	CACHE,	TRACE,		8,	32*K,	NA  },
+	{ 0x76,	TLB,	INST,		NA,	BOTH,	8   },
 	{ 0x78,	CACHE,	L2,		4,	1*M,	64  },
 	{ 0x79,	CACHE,	L2_2LINESECTOR,	8,	128*K,	64  },
 	{ 0x7A,	CACHE,	L2_2LINESECTOR,	8,	256*K,	64  },
@@ -181,8 +182,11 @@ static cpuid_cache_descriptor_t intel_cpuid_leaf2_descriptor_table[] = {
 	{ 0xB2,	TLB,	INST,		4,	SMALL,	64  },	
 	{ 0xB3,	TLB,	DATA,		4,	SMALL,	128 },	
 	{ 0xB4,	TLB,	DATA1,		4,	SMALL,	256 },	
+	{ 0xB5,	TLB,	DATA1,		8,	SMALL,	64  },	
+	{ 0xB6,	TLB,	DATA1,		8,	SMALL,	128 },	
 	{ 0xBA,	TLB,	DATA1,		4,	BOTH,	64  },	
-	{ 0xCA,	STLB,	DATA1,		4,	BOTH,	512 },	
+	{ 0xC1,	STLB,	DATA1,		8,	SMALL,	1024},	
+	{ 0xCA,	STLB,	DATA1,		4,	SMALL,	512 },	
 	{ 0xD0,	CACHE,	L3,		4,	512*K,	64  },	
 	{ 0xD1,	CACHE,	L3,		4,	1*M,	64  },	
 	{ 0xD2,	CACHE,	L3,		4,	2*M,	64  },	
@@ -663,13 +667,13 @@ cpuid_set_generic_info(i386_cpu_info_t *info_p)
 		ctp->sensor 		  = bitfield32(reg[eax], 0, 0);
 		ctp->dynamic_acceleration = bitfield32(reg[eax], 1, 1);
 		ctp->invariant_APIC_timer = bitfield32(reg[eax], 2, 2);
-		ctp->core_power_limits    = bitfield32(reg[eax], 3, 3);
-		ctp->fine_grain_clock_mod = bitfield32(reg[eax], 4, 4);
-		ctp->package_thermal_intr = bitfield32(reg[eax], 5, 5);
+		ctp->core_power_limits    = bitfield32(reg[eax], 4, 4);
+		ctp->fine_grain_clock_mod = bitfield32(reg[eax], 5, 5);
+		ctp->package_thermal_intr = bitfield32(reg[eax], 6, 6);
 		ctp->thresholds		  = bitfield32(reg[ebx], 3, 0);
 		ctp->ACNT_MCNT		  = bitfield32(reg[ecx], 0, 0);
 		ctp->hardware_feedback	  = bitfield32(reg[ecx], 1, 1);
-		ctp->energy_policy	  = bitfield32(reg[ecx], 2, 2);
+		ctp->energy_policy	  = bitfield32(reg[ecx], 3, 3);
 		info_p->cpuid_thermal_leafp = ctp;
 
 		DBG(" Thermal/Power Leaf:\n");
@@ -681,7 +685,7 @@ cpuid_set_generic_info(i386_cpu_info_t *info_p)
 		DBG("  package_thermal_intr : %d\n", ctp->package_thermal_intr);
 		DBG("  thresholds           : %d\n", ctp->thresholds);
 		DBG("  ACNT_MCNT            : %d\n", ctp->ACNT_MCNT);
-		DBG("  hardware_feedback    : %d\n", ctp->hardware_feedback);
+		DBG("  ACNT2                : %d\n", ctp->hardware_feedback);
 		DBG("  energy_policy        : %d\n", ctp->energy_policy);
 	}
 
@@ -726,9 +730,9 @@ cpuid_set_generic_info(i386_cpu_info_t *info_p)
 		DBG("  EDX           : 0x%x\n", xsp->extended_state[edx]);
 	}
 
-	if (info_p->cpuid_model == CPUID_MODEL_IVYBRIDGE) {
+	if (info_p->cpuid_model >= CPUID_MODEL_IVYBRIDGE) {
 		/*
-		 * XSAVE Features:
+		 * Leaf7 Features:
 		 */
 		cpuid_fn(0x7, reg);
 		info_p->cpuid_leaf7_features = reg[ebx];
@@ -777,6 +781,11 @@ cpuid_set_cpufamily(i386_cpu_info_t *info_p)
 		case CPUID_MODEL_IVYBRIDGE:
 			cpufamily = CPUFAMILY_INTEL_IVYBRIDGE;
 			break;
+		case CPUID_MODEL_HASWELL:
+		case CPUID_MODEL_HASWELL_ULT:
+		case CPUID_MODEL_CRYSTALWELL:
+			cpufamily = CPUFAMILY_INTEL_HASWELL;
+			break;
 		}
 		break;
 	}
@@ -823,6 +832,7 @@ cpuid_set_info(void)
 		info_p->thread_count = bitfield32((uint32_t)msr, 15,  0);
 		break;
 		}
+	case CPUFAMILY_INTEL_HASWELL:
 	case CPUFAMILY_INTEL_IVYBRIDGE:
 	case CPUFAMILY_INTEL_SANDYBRIDGE:
 	case CPUFAMILY_INTEL_NEHALEM: {
@@ -887,12 +897,13 @@ static struct table {
 	{CPUID_FEATURE_TM2,       "TM2"},
 	{CPUID_FEATURE_SSSE3,     "SSSE3"},
 	{CPUID_FEATURE_CID,       "CID"},
+	{CPUID_FEATURE_FMA,       "FMA"},
 	{CPUID_FEATURE_CX16,      "CX16"},
 	{CPUID_FEATURE_xTPR,      "TPR"},
 	{CPUID_FEATURE_PDCM,      "PDCM"},
 	{CPUID_FEATURE_SSE4_1,    "SSE4.1"},
 	{CPUID_FEATURE_SSE4_2,    "SSE4.2"},
-	{CPUID_FEATURE_xAPIC,     "xAPIC"},
+	{CPUID_FEATURE_x2APIC,    "x2APIC"},
 	{CPUID_FEATURE_MOVBE,     "MOVBE"},
 	{CPUID_FEATURE_POPCNT,    "POPCNT"},
 	{CPUID_FEATURE_AES,       "AES"},
@@ -920,8 +931,15 @@ extfeature_map[] = {
 },
 leaf7_feature_map[] = {
 	{CPUID_LEAF7_FEATURE_RDWRFSGS, "RDWRFSGS"},
+	{CPUID_LEAF7_FEATURE_TSCOFF,   "TSC_THREAD_OFFSET"},
+	{CPUID_LEAF7_FEATURE_BMI1,     "BMI1"},
+	{CPUID_LEAF7_FEATURE_HLE,      "HLE"},
 	{CPUID_LEAF7_FEATURE_SMEP,     "SMEP"},
+	{CPUID_LEAF7_FEATURE_AVX2,     "AVX2"},
+	{CPUID_LEAF7_FEATURE_BMI2,     "BMI2"},
 	{CPUID_LEAF7_FEATURE_ENFSTRG,  "ENFSTRG"},
+	{CPUID_LEAF7_FEATURE_INVPCID,  "INVPCID"},
+	{CPUID_LEAF7_FEATURE_RTM,      "RTM"},
 	{0, 0}
 };
 

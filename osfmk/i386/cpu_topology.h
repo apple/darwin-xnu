@@ -207,6 +207,7 @@ typedef struct x86_pkg
     void		*pmStats;	/* Power Management stats for package*/
     void		*pmState;	/* Power Management state for package*/
     struct mca_state	*mca_state;	/* MCA state for memory errors */
+    uint64_t		package_idle_exits;
     uint32_t		num_idle;
 } x86_pkg_t;
 

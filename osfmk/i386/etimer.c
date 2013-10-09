@@ -150,7 +150,7 @@ void etimer_set_deadline(uint64_t deadline)
 void
 etimer_resync_deadlines(void)
 {
-	uint64_t		deadline;
+	uint64_t		deadline = EndOfAllTime;
 	uint64_t		pmdeadline;
 	rtclock_timer_t		*mytimer;
 	spl_t			s = splclock();
@@ -158,7 +158,9 @@ etimer_resync_deadlines(void)
 	uint32_t		decr;
 
 	pp = current_cpu_datap();
-	deadline = EndOfAllTime;
+	if (!pp->cpu_running)
+		/* There's really nothing to do if this procesor is down */
+		return;
 
 	/*
 	 * If we have a clock timer set, pick that.

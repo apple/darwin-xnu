@@ -93,6 +93,9 @@
 #define	TRACE_MP_CPUS_CALL_LOCAL	MACHDBG_CODE(DBG_MACH_MP, 2)
 #define	TRACE_MP_CPUS_CALL_ACTION	MACHDBG_CODE(DBG_MACH_MP, 3)
 #define	TRACE_MP_CPUS_CALL_NOBUF	MACHDBG_CODE(DBG_MACH_MP, 4)
+#define	TRACE_MP_CPU_FAST_START		MACHDBG_CODE(DBG_MACH_MP, 5)
+#define	TRACE_MP_CPU_START		MACHDBG_CODE(DBG_MACH_MP, 6)
+#define	TRACE_MP_CPU_DEACTIVATE		MACHDBG_CODE(DBG_MACH_MP, 7)
 
 #define ABS(v)		(((v) > 0)?(v):-(v))
 
@@ -287,6 +290,10 @@ intel_startCPU_fast(int slot_num)
 		 */
 		return(rc);
 
+	KERNEL_DEBUG_CONSTANT(
+		TRACE_MP_CPU_FAST_START | DBG_FUNC_START,
+		slot_num, 0, 0, 0, 0);
+
 	/*
 	 * Wait until the CPU is back online.
 	 */
@@ -300,6 +307,10 @@ intel_startCPU_fast(int slot_num)
 
 	mp_wait_for_cpu_up(slot_num, 30000, 1);
 	mp_enable_preemption();
+
+	KERNEL_DEBUG_CONSTANT(
+		TRACE_MP_CPU_FAST_START | DBG_FUNC_END,
+		slot_num, cpu_datap(slot_num)->cpu_running, 0, 0, 0);
 
 	/*
 	 * Check to make sure that the CPU is really running.  If not,
@@ -341,13 +352,30 @@ start_cpu(void *arg)
 	if (cpu_number() != psip->starter_cpu)
 		return;
 
+	DBG("start_cpu(%p) about to start cpu %d, lapic %d\n",
+		arg, psip->target_cpu, psip->target_lapic);
+
+	KERNEL_DEBUG_CONSTANT(
+		TRACE_MP_CPU_START | DBG_FUNC_START,
+		psip->target_cpu,
+		psip->target_lapic, 0, 0, 0);
+
 	i386_start_cpu(psip->target_lapic, psip->target_cpu);
 
 #ifdef	POSTCODE_DELAY
 	/* Wait much longer if postcodes are displayed for a delay period. */
 	i *= 10000;
 #endif
+	DBG("start_cpu(%p) about to wait for cpu %d\n",
+		arg, psip->target_cpu);
+
 	mp_wait_for_cpu_up(psip->target_cpu, i*100, 100);
+
+	KERNEL_DEBUG_CONSTANT(
+		TRACE_MP_CPU_START | DBG_FUNC_END,
+		psip->target_cpu,
+		cpu_datap(psip->target_cpu)->cpu_running, 0, 0, 0);
+
 	if (TSC_sync_margin &&
 	    cpu_datap(psip->target_cpu)->cpu_running) {
 		/*
@@ -1293,26 +1321,43 @@ i386_deactivate_cpu(void)
 	cpu_data_t	*cdp = current_cpu_datap();
 
 	assert(!ml_get_interrupts_enabled());
+ 
+	KERNEL_DEBUG_CONSTANT(
+		TRACE_MP_CPU_DEACTIVATE | DBG_FUNC_START,
+		0, 0, 0, 0, 0);
 
 	simple_lock(&x86_topo_lock);
 	cdp->cpu_running = FALSE;
 	simple_unlock(&x86_topo_lock);
 
+	/*
+	 * Move all of this cpu's timers to the master/boot cpu,
+	 * and poke it in case there's a sooner deadline for it to schedule.
+	 */
 	timer_queue_shutdown(&cdp->rtclock_timer.queue);
-	cdp->rtclock_timer.deadline = EndOfAllTime;
 	mp_cpus_call(cpu_to_cpumask(master_cpu), ASYNC, etimer_timer_expire, NULL);
 
 	/*
-	 * In case a rendezvous/braodcast/call was initiated to this cpu
-	 * before we cleared cpu_running, we must perform any actions due.
+	 * Open an interrupt window
+	 * and ensure any pending IPI or timer is serviced
 	 */
-	if (i_bit(MP_RENDEZVOUS, &cdp->cpu_signals))
-		mp_rendezvous_action();
-	if (i_bit(MP_BROADCAST, &cdp->cpu_signals))
-		mp_broadcast_action();
-	if (i_bit(MP_CALL, &cdp->cpu_signals))
-		mp_cpus_call_action();
-	cdp->cpu_signals = 0;			/* all clear */
+	mp_disable_preemption();
+	ml_set_interrupts_enabled(TRUE);
+
+	while (cdp->cpu_signals && x86_lcpu()->rtcDeadline != EndOfAllTime)
+		cpu_pause();
+	/*
+	 * Ensure there's no remaining timer deadline set
+	 * - AICPM may have left one active.
+	 */
+	setPop(0);
+
+	ml_set_interrupts_enabled(FALSE);
+	mp_enable_preemption();
+
+	KERNEL_DEBUG_CONSTANT(
+		TRACE_MP_CPU_DEACTIVATE | DBG_FUNC_END,
+		0, 0, 0, 0, 0);
 }
 
 int	pmsafe_debug	= 1;
@@ -1424,7 +1469,7 @@ mp_kdp_enter(void)
 			cpu_NMI_interrupt(cpu);
 		}
 
-	DBG("mp_kdp_enter() %u processors done %s\n",
+	DBG("mp_kdp_enter() %d processors done %s\n",
 	    (int)mp_kdp_ncpus, (mp_kdp_ncpus == ncpus) ? "OK" : "timed out");
 	
 	postcode(MP_KDP_ENTER);
@@ -1479,7 +1524,7 @@ mp_kdp_wait(boolean_t flush, boolean_t isNMI)
 	DBG("mp_kdp_wait()\n");
 	/* If an I/O port has been specified as a debugging aid, issue a read */
 	panic_io_port_read();
-
+	current_cpu_datap()->debugger_ipi_time = mach_absolute_time();
 #if CONFIG_MCA
 	/* If we've trapped due to a machine-check, save MCA registers */
 	mca_check_save();
@@ -1581,6 +1626,8 @@ slave_machine_init(void *param)
 		clock_init();
 		cpu_machine_init();	/* Interrupts enabled hereafter */
 		mp_cpus_call_cpu_init();
+	} else {
+		cpu_machine_init();	/* Interrupts enabled hereafter */
 	}
 }
 

@@ -233,7 +233,7 @@ kernel_memory_allocate(
 	vm_object_t 		object;
 	vm_object_offset_t 	offset;
 	vm_object_offset_t 	pg_offset;
-	vm_map_entry_t 		entry;
+	vm_map_entry_t 		entry = NULL;
 	vm_map_offset_t 	map_addr, fill_start;
 	vm_map_offset_t		map_mask;
 	vm_map_size_t		map_size, fill_size;

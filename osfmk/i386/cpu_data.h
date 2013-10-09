@@ -125,6 +125,10 @@ typedef struct {
 
 typedef	uint16_t	pcid_t;
 typedef	uint8_t		pcid_ref_t;
+
+#define CPU_RTIME_BINS (12)
+#define CPU_ITIME_BINS (CPU_RTIME_BINS)
+
 /*
  * Per-cpu data.
  *
@@ -157,12 +161,9 @@ typedef struct cpu_data
 	int			cpu_prior_signals;	/* Last set of events,
 							 * debugging
 							 */
-	int			cpu_mcount_off;		/* mcount recursion */
 	ast_t			cpu_pending_ast;
-	int			cpu_type;
-	int			cpu_subtype;
-	int			cpu_threadtype;
-	int			cpu_running;
+	volatile int		cpu_running;
+	boolean_t		cpu_fixed_pmcs_enabled;
 	rtclock_timer_t		rtclock_timer;
 	boolean_t		cpu_is64bit;
 	volatile addr64_t	cpu_active_cr3 __attribute((aligned(64)));
@@ -188,9 +189,6 @@ typedef struct cpu_data
 	struct fake_descriptor	*cpu_ldtp;
 	cpu_desc_index_t	cpu_desc_index;
 	int			cpu_ldt;
-	boolean_t		cpu_iflag;
-	boolean_t		cpu_boot_complete;
-	int			cpu_hibernate;
 #if NCOPY_WINDOWS > 0
 	vm_offset_t		cpu_copywindow_base;
 	uint64_t		*cpu_copywindow_pdp;
@@ -198,18 +196,13 @@ typedef struct cpu_data
 	vm_offset_t		cpu_physwindow_base;
 	uint64_t		*cpu_physwindow_ptep;
 #endif
-	void 			*cpu_hi_iss;
 
 #define HWINTCNT_SIZE 256
 	uint32_t		cpu_hwIntCnt[HWINTCNT_SIZE];	/* Interrupt counts */
+ 	uint64_t		cpu_hwIntpexits[HWINTCNT_SIZE];
+	uint64_t		cpu_hwIntcexits[HWINTCNT_SIZE];
 	uint64_t		cpu_dr7; /* debug control register */
 	uint64_t		cpu_int_event_time;	/* intr entry/exit time */
-#if CONFIG_VMX
-	vmx_cpu_t		cpu_vmx;		/* wonderful world of virtualization */
-#endif
-#if CONFIG_MCA
-	struct mca_state	*cpu_mca_state;		/* State at MC fault */
-#endif
 	uint64_t		cpu_uber_arg_store;	/* Double mapped address
 							 * of current thread's
 							 * uu_arg array.
@@ -246,12 +239,17 @@ typedef struct cpu_data
 	uint64_t		cpu_c7res;
 	uint64_t		cpu_itime_total;
 	uint64_t		cpu_rtime_total;
-	uint64_t		cpu_rtimes[4];
-	uint64_t		cpu_itimes[4];
 	uint64_t		cpu_ixtime;
+	uint64_t                cpu_idle_exits;
+ 	uint64_t		cpu_rtimes[CPU_RTIME_BINS];
+ 	uint64_t		cpu_itimes[CPU_ITIME_BINS];
+ 	uint64_t		cpu_cur_insns;
+ 	uint64_t		cpu_cur_ucc;
+ 	uint64_t		cpu_cur_urc;
 	uint64_t                cpu_max_observed_int_latency;
 	int                     cpu_max_observed_int_latency_vector;
 	uint64_t		debugger_entry_time;
+	uint64_t		debugger_ipi_time;
 	volatile boolean_t	cpu_NMI_acknowledged;
 	/* A separate nested interrupt stack flag, to account
 	 * for non-nested interrupts arriving while on the interrupt stack
@@ -262,6 +260,18 @@ typedef struct cpu_data
 	uint32_t		cpu_nested_istack_events;
 	x86_saved_state64_t	*cpu_fatal_trap_state;
 	x86_saved_state64_t	*cpu_post_fatal_trap_state;
+#if CONFIG_VMX
+	vmx_cpu_t		cpu_vmx;		/* wonderful world of virtualization */
+#endif
+#if CONFIG_MCA
+	struct mca_state	*cpu_mca_state;		/* State at MC fault */
+#endif
+ 	int			cpu_type;
+ 	int			cpu_subtype;
+ 	int			cpu_threadtype;
+ 	boolean_t		cpu_iflag;
+ 	boolean_t		cpu_boot_complete;
+ 	int			cpu_hibernate;
 } cpu_data_t;
 
 extern cpu_data_t	*cpu_data_ptr[];  

@@ -774,6 +774,14 @@ IOPolledFileOpen( const char * filename, uint64_t setFileSize,
 	if (kIOReturnSuccess != err)
 	    break;
 
+	vars->media = part;
+        next = part;
+	while (next)
+	{
+	    next->setProperty(kIOPolledInterfaceActiveKey, kOSBooleanTrue);
+	    next = next->getParentEntry(gIOServicePlane);
+	}
+
 	*fileVars    = vars;
 	*fileExtents = extentsData;
     
@@ -1781,6 +1789,8 @@ IOHibernateSystemWake(void)
 static IOReturn
 IOHibernateDone(IOHibernateVars * vars)
 {
+    IORegistryEntry * next;
+
     hibernate_teardown(vars->page_list, vars->page_list_wired, vars->page_list_pal);
 
     if (vars->videoMapping)
@@ -1821,9 +1831,14 @@ IOHibernateDone(IOHibernateVars * vars)
         IOService::getPMRootDomain()->removeProperty(kIOHibernateGfxStatusKey);
     }
 
-
     if (vars->fileVars)
     {
+	if ((next = vars->fileVars->media)) do
+	{
+	    next->removeProperty(kIOPolledInterfaceActiveKey);
+	    next = next->getParentEntry(gIOServicePlane);
+	}
+	while (next);
 	IOPolledFileClose(vars->fileVars);
     }
 
@@ -2716,6 +2731,12 @@ hibernate_machine_init(void)
 	    gIOHibernateCurrentHeader->diag[0], gIOHibernateCurrentHeader->diag[1], 
 	    gIOHibernateCurrentHeader->diag[2], gIOHibernateCurrentHeader->diag[3]);
 
+    HIBLOG("restore times %qd, %qd, %qd ms, tsc 0x%qx scale 0x%x\n", 
+    	(((gIOHibernateCurrentHeader->restoreTime1 * pal_rtc_nanotime_info.scale) >> 32) / 1000000),
+    	(((gIOHibernateCurrentHeader->restoreTime2 * pal_rtc_nanotime_info.scale) >> 32) / 1000000),
+    	(((gIOHibernateCurrentHeader->restoreTime3 * pal_rtc_nanotime_info.scale) >> 32) / 1000000),
+	gIOHibernateCurrentHeader->restoreTime1, pal_rtc_nanotime_info.scale);
+
     if ((kIOHibernateModeDiscardCleanActive | kIOHibernateModeDiscardCleanInactive) & gIOHibernateMode)
         hibernate_page_list_discard(vars->page_list);
 
@@ -2756,8 +2777,19 @@ hibernate_machine_init(void)
 		break;
 
 	    case kIOHibernateHandoffTypeMemoryMap:
+
+		clock_get_uptime(&allTime);
+
 		hibernate_newruntime_map(data, handoff->bytecount, 
 					 gIOHibernateCurrentHeader->systemTableOffset);
+
+		clock_get_uptime(&endTime);
+	    
+		SUB_ABSOLUTETIME(&endTime, &allTime);
+		absolutetime_to_nanoseconds(endTime, &nsec);
+	    
+		HIBLOG("hibernate_newruntime_map time: %qd ms, ", nsec / 1000000ULL);
+
 	    	break;
 
 	    case kIOHibernateHandoffTypeDeviceTree:

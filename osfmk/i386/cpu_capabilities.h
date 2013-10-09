@@ -57,23 +57,31 @@
 #define	kSlow				0x00004000	/* tsc < nanosecond */
 #define	kUP				0x00008000	/* set if (kNumCPUs == 1) */
 #define	kNumCPUs			0x00FF0000	/* number of CPUs (see _NumCPUs() below) */
+#define	kNumCPUsShift			16
 #define	kHasAVX1_0			0x01000000
 #define	kHasRDRAND			0x02000000
 #define	kHasF16C			0x04000000
 #define	kHasENFSTRG			0x08000000
-#define	kNumCPUsShift			16		/* see _NumCPUs() below */
+#define	kHasFMA				0x10000000
+#define	kHasAVX2_0			0x20000000
+#define	kHasBMI1			0x40000000
+#define	kHasBMI2			0x80000000
+/* Extending into 64-bits from here: */ 
+#define	kHasRTM			0x0000000100000000ULL
+#define	kHasHLE			0x0000000200000000ULL
+
 
 #ifndef	__ASSEMBLER__
 #include <sys/cdefs.h>
 
 __BEGIN_DECLS
-extern int  _get_cpu_capabilities( void );
+extern uint64_t  _get_cpu_capabilities( void );
 __END_DECLS
 
 inline static
 int _NumCPUs( void )
 {
-	return (_get_cpu_capabilities() & kNumCPUs) >> kNumCPUsShift;
+	return (int) (_get_cpu_capabilities() & kNumCPUs) >> kNumCPUsShift;
 }
 
 #endif /* __ASSEMBLER__ */
@@ -151,13 +159,16 @@ int _NumCPUs( void )
 
 /* data in the comm page */
  
-#define _COMM_PAGE_SIGNATURE		(_COMM_PAGE_START_ADDRESS+0x000)	/* first few bytes are a signature */
+#define _COMM_PAGE_SIGNATURE		(_COMM_PAGE_START_ADDRESS+0x000)	/* first 16 bytes are a signature */
+#define _COMM_PAGE_SIGNATURELEN		(0x10)
+#define _COMM_PAGE_CPU_CAPABILITIES64	(_COMM_PAGE_START_ADDRESS+0x010)	/* uint64_t _cpu_capabilities */
+#define _COMM_PAGE_UNUSED		(_COMM_PAGE_START_ADDRESS+0x018)	/* 6 unused bytes */
 #define _COMM_PAGE_VERSION		(_COMM_PAGE_START_ADDRESS+0x01E)	/* 16-bit version# */
-#define _COMM_PAGE_THIS_VERSION		12					/* version of the commarea format */
+#define _COMM_PAGE_THIS_VERSION		13					/* in ver 13, _COMM_PAGE_NT_SHIFT defaults to 0 (was 32) */
   
-#define _COMM_PAGE_CPU_CAPABILITIES	(_COMM_PAGE_START_ADDRESS+0x020)	/* uint32_t _cpu_capabilities */
+#define _COMM_PAGE_CPU_CAPABILITIES	(_COMM_PAGE_START_ADDRESS+0x020)	/* uint32_t _cpu_capabilities (retained for compatibility) */
 #define _COMM_PAGE_NCPUS		(_COMM_PAGE_START_ADDRESS+0x022)	/* uint8_t number of configured CPUs (hw.logicalcpu at boot time) */
-#define _COMM_PAGE_UNUSED0			(_COMM_PAGE_START_ADDRESS+0x024)	/* 2 unused bytes, reserved for future expansion of cpu_capabilities */
+#define _COMM_PAGE_UNUSED0		(_COMM_PAGE_START_ADDRESS+0x024)	/* 2 unused bytes, previouly reserved for expansion of cpu_capabilities */
 #define _COMM_PAGE_CACHE_LINESIZE	(_COMM_PAGE_START_ADDRESS+0x026)	/* uint16_t cache line size */
 
 #define _COMM_PAGE_SCHED_GEN		(_COMM_PAGE_START_ADDRESS+0x028)	/* uint32_t scheduler generation number (count of pre-emptions) */

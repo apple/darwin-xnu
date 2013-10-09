@@ -5,6 +5,7 @@ _SHA256_Update
 __ZN22IOInterruptEventSource7warmCPUEy
 _acpi_install_wake_handler
 _acpi_sleep_kernel
+_acpi_idle_kernel
 _add_fsevent
 _apic_table
 _apply_func_phys

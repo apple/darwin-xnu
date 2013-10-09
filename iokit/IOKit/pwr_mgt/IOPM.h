@@ -90,6 +90,13 @@ enum {
 
     @constant kIOPMInitialDeviceState
     Indicates the initial power state for the device. If <code>initialPowerStateForDomainState()</code> returns a power state with this flag set in the capability field, then the initial power change is performed without calling the driver's <code>setPowerState()</code>.
+
+    @constant kIOPMRootDomainState
+    An indication that the power flags represent the state of the root power
+    domain. This bit must not be set in the IOPMPowerState structure.
+    Power Management may pass this bit to initialPowerStateForDomainState()
+    or powerStateForDomainState() to map from a global system state to the
+    desired device state.
 */
 typedef unsigned long IOPMPowerFlags;
 enum {
@@ -101,7 +108,8 @@ enum {
     kIOPMRestartCapability          = 0x00000080,
     kIOPMSleep                      = 0x00000001,
     kIOPMRestart                    = 0x00000080,
-    kIOPMInitialDeviceState         = 0x00000100
+    kIOPMInitialDeviceState         = 0x00000100,
+    kIOPMRootDomainState            = 0x00000200
 };
 
 /*
@@ -246,6 +254,30 @@ enum {
  *  not present == Retain FV key when going to standby mode
  */
 #define kIOPMDestroyFVKeyOnStandbyKey       "DestroyFVKeyOnStandby"
+
+/*******************************************************************************
+ *
+ * Properties that can control power management behavior
+ *
+ ******************************************************************************/
+
+/* kIOPMResetPowerStateOnWakeKey
+ * If an IOService publishes this key with the value of kOSBooleanTrue,
+ * then PM will disregard the influence from changePowerStateToPriv() or
+ * any activity tickles that occurred before system sleep when resolving
+ * the initial device power state on wake. Influences from power children
+ * and changePowerStateTo() are not eliminated. At the earliest opportunity
+ * upon system wake, PM will query the driver for a new power state to be
+ * installed as the initial changePowerStateToPriv() influence, by calling
+ * initialPowerStateForDomainState() with both kIOPMRootDomainState and
+ * kIOPMPowerOn flags set. The default implementation will always return
+ * the lowest power state. Drivers can override this default behavior to
+ * immediately raise the power state when there are work blocked on the
+ * power change, and cannot afford to wait until the next activity tickle.
+ * This property should be statically added to a driver's plist or set at
+ * runtime before calling PMinit().
+ */
+#define kIOPMResetPowerStateOnWakeKey       "IOPMResetPowerStateOnWake"
 
 /*******************************************************************************
  *

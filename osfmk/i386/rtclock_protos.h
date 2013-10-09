@@ -48,8 +48,11 @@ extern void	_rtc_nanotime_adjust(
 		        pal_rtc_nanotime_t	*dst);
 
 extern uint64_t	_rtc_nanotime_read(
-			pal_rtc_nanotime_t	*rntp,
-			int			slow);
+			pal_rtc_nanotime_t	*rntp);
+
+extern uint64_t _rtc_tsc_to_nanoseconds(
+			uint64_t    value,
+			pal_rtc_nanotime_t	*rntp);
 
 extern void	rtclock_intr(x86_saved_state_t *regs);
 

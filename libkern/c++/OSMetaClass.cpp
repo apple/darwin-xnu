@@ -813,8 +813,10 @@ OSMetaClass::removeInstance(const OSObject * instance, bool super) const
 	    if (superClassLink) {
 		superClassLink->removeInstance(reserved->instances, true);
 	    }
+	    IOLockLock(sAllClassesLock);
 	    reserved->instances->release();
 	    reserved->instances = 0;
+	    IOLockUnlock(sAllClassesLock);
 	}
     }
 

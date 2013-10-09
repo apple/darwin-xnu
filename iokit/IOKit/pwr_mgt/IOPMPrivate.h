@@ -660,6 +660,12 @@ enum {
  */
 #define kIOPMUserWakeAlarmScheduledKey      "UserWakeAlarmScheduled"
 
+/* kIOPMDeepIdleSupportedKey
+ * Presence of this key indicates Deep Idle is supported on this platform.
+ * Key will always refer to a value of kOSBooleanTrue.
+ */
+#define kIOPMDeepIdleSupportedKey           "IOPMDeepIdleSupported"
+
 /*****************************************************************************
  *
  * System Sleep Policy
@@ -743,7 +749,8 @@ enum {
     kIOPMSleepTypeHibernate                 = 4,
     kIOPMSleepTypeStandby                   = 5,
     kIOPMSleepTypePowerOff                  = 6,
-    kIOPMSleepTypeLast                      = 7
+    kIOPMSleepTypeDeepIdle                  = 7,
+    kIOPMSleepTypeLast                      = 8
 };
 
 // System Sleep Flags

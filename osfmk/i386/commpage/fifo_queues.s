@@ -83,7 +83,7 @@ COMMPAGE_FUNCTION_START(preempt, 32, 4)
 	movl	$(-58),%eax	/* 58 = pfz_exit */
 	xorl	%ebx,%ebx	// clear "preemption pending" flag
 	sysenter
-COMMPAGE_DESCRIPTOR(preempt,_COMM_PAGE_PREEMPT,0,0)
+COMMPAGE_DESCRIPTOR(preempt,_COMM_PAGE_PREEMPT)
 
 
 /* Subroutine to back off if we cannot get the spinlock.  Called
@@ -107,7 +107,7 @@ COMMPAGE_FUNCTION_START(backoff, 32, 4)
 	cmpl	$0,8(%edi)	// sniff the lockword
 	jnz	1b		// loop if still taken
 	ret			// lockword is free, so reenter PFZ
-COMMPAGE_DESCRIPTOR(backoff,_COMM_PAGE_BACKOFF,0,0)
+COMMPAGE_DESCRIPTOR(backoff,_COMM_PAGE_BACKOFF)
 
 
 /* Preemption-free-zone routine to FIFO Enqueue:
@@ -152,7 +152,7 @@ COMMPAGE_FUNCTION_START(pfz_enqueue, 32, 4)
 	movl	    %esi,4(%edi)    // new element becomes last in q
 	movl	    $0,8(%edi)	    // unlock spinlock
 	ret
-COMMPAGE_DESCRIPTOR(pfz_enqueue,_COMM_PAGE_PFZ_ENQUEUE,0,0)
+COMMPAGE_DESCRIPTOR(pfz_enqueue,_COMM_PAGE_PFZ_ENQUEUE)
 
 
 /* Preemption-free-zone routine to FIFO Dequeue:
@@ -198,7 +198,7 @@ COMMPAGE_FUNCTION_START(pfz_dequeue, 32, 4)
 4:
 	movl	    $0,8(%edi)	    // unlock spinlock
 	ret
-COMMPAGE_DESCRIPTOR(pfz_dequeue,_COMM_PAGE_PFZ_DEQUEUE,0,0)
+COMMPAGE_DESCRIPTOR(pfz_dequeue,_COMM_PAGE_PFZ_DEQUEUE)
 
 
 
@@ -233,7 +233,7 @@ COMMPAGE_FUNCTION_START(preempt_64, 64, 4)
 	popq	%rcx
 	popq	%rax
 	ret
-COMMPAGE_DESCRIPTOR(preempt_64,_COMM_PAGE_PREEMPT,0,0)
+COMMPAGE_DESCRIPTOR(preempt_64,_COMM_PAGE_PREEMPT)
 
 
 /* Subroutine to back off if we cannot get the spinlock.  Called
@@ -252,7 +252,7 @@ COMMPAGE_FUNCTION_START(backoff_64, 64, 4)
 	cmpl	$0,16(%rdi)	// sniff the lockword
 	jnz	1b		// loop if still taken
 	ret			// lockword is free, so reenter PFZ
-COMMPAGE_DESCRIPTOR(backoff_64,_COMM_PAGE_BACKOFF,0,0)
+COMMPAGE_DESCRIPTOR(backoff_64,_COMM_PAGE_BACKOFF)
 
 
 /* Preemption-free-zone routine to FIFO Enqueue:
@@ -297,7 +297,7 @@ COMMPAGE_FUNCTION_START(pfz_enqueue_64, 64, 4)
 	movq	    %rsi,8(%rdi)    // new element becomes last in q
 	movl	    $0,16(%rdi)	    // unlock spinlock
 	ret
-COMMPAGE_DESCRIPTOR(pfz_enqueue_64,_COMM_PAGE_PFZ_ENQUEUE,0,0)
+COMMPAGE_DESCRIPTOR(pfz_enqueue_64,_COMM_PAGE_PFZ_ENQUEUE)
 
 
 
@@ -344,4 +344,4 @@ COMMPAGE_FUNCTION_START(pfz_dequeue_64, 64, 4)
 4:
 	movl	    $0,16(%rdi)	    // unlock spinlock
 	ret
-COMMPAGE_DESCRIPTOR(pfz_dequeue_64,_COMM_PAGE_PFZ_DEQUEUE,0,0)
+COMMPAGE_DESCRIPTOR(pfz_dequeue_64,_COMM_PAGE_PFZ_DEQUEUE)

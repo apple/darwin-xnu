@@ -81,7 +81,7 @@
 .align alignment, 0x90						;\
 L ## label ## :
 
-#define	COMMPAGE_DESCRIPTOR(label,address,must,cant)	\
+#define	COMMPAGE_DESCRIPTOR(label,address)			\
 L ## label ## _end:						;\
 .set L ## label ## _size, L ## label ## _end - L ## label	;\
 .const_data							;\
@@ -90,8 +90,6 @@ COMMPAGE_DESCRIPTOR_NAME(label) ## :				;\
     COMMPAGE_DESCRIPTOR_FIELD_POINTER	L ## label 		;\
     .long				L ## label ## _size	;\
     .long				address			;\
-    .long				must			;\
-    .long				cant			;\
 .text
 
 
@@ -131,8 +129,6 @@ typedef	struct	commpage_descriptor	{
     void		*code_address;				// address of code
     uint32_t	 	code_length;				// length in bytes
     uint32_t		commpage_address;			// put at this address (_COMM_PAGE_BCOPY etc)
-    uint32_t		musthave;				// _cpu_capability bits we must have
-    uint32_t		canthave;				// _cpu_capability bits we can't have
 } commpage_descriptor;
 
 

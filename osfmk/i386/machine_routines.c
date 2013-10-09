@@ -567,9 +567,9 @@ ml_init_lock_timeout(void)
  * instead of spinning for clock_delay_until().
  */
 void
-ml_init_delay_spin_threshold(void)
+ml_init_delay_spin_threshold(int threshold_us)
 {
-	nanoseconds_to_absolutetime(10ULL * NSEC_PER_USEC, &delay_spin_threshold);
+	nanoseconds_to_absolutetime(threshold_us * NSEC_PER_USEC, &delay_spin_threshold);
 }
 
 boolean_t
@@ -579,7 +579,7 @@ ml_delay_should_spin(uint64_t interval)
 }
 
 /*
- * This is called from the machine-independent routine cpu_up()
+ * This is called from the machine-independent layer
  * to perform machine-dependent info updates. Defer to cpu_thread_init().
  */
 void
@@ -589,12 +589,14 @@ ml_cpu_up(void)
 }
 
 /*
- * This is called from the machine-independent routine cpu_down()
+ * This is called from the machine-independent layer
  * to perform machine-dependent info updates.
  */
 void
 ml_cpu_down(void)
 {
+	i386_deactivate_cpu();
+
 	return;
 }
 

@@ -827,7 +827,7 @@ _clock_delay_until_deadline(
 	if (	ml_delay_should_spin(interval)	||
 			get_preemption_level() != 0				||
 			ml_get_interrupts_enabled() == FALSE	) {
-		machine_delay_until(deadline);
+		machine_delay_until(interval, deadline);
 	} else {
 		assert_wait_deadline((event_t)clock_delay_until, THREAD_UNINT, deadline);
 

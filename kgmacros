@@ -807,7 +807,7 @@ define showactint
 		set $kgm_actint_framecount = 0
 	    	while ($mysp != 0) && (($mysp & $stkmask) == 0) \
 		      && ($mysp != $prevsp) \
-		      && ((((unsigned long) $mysp ^ (unsigned long) $prevsp) < 0x2000) \
+		      && ((((unsigned long) $mysp - (unsigned long) $prevsp) < 0x4000) \
 		      || (((unsigned long)$mysp < ((unsigned long) ($kgm_thread->kernel_stack+kernel_stack_size))) \
 		      && ((unsigned long)$mysp > (unsigned long) ($kgm_thread->kernel_stack)))) \
 		      && ($kgm_actint_framecount < 128)

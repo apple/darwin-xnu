@@ -89,12 +89,19 @@ static void
 mca_get_availability(void)
 {
 	uint64_t	features = cpuid_info()->cpuid_features;
-	uint32_t	family =  cpuid_info()->cpuid_family;
+	uint32_t	family =   cpuid_info()->cpuid_family;
+	uint32_t	model =    cpuid_info()->cpuid_model;
+	uint32_t	stepping = cpuid_info()->cpuid_stepping;
 
 	mca_MCE_present = (features & CPUID_FEATURE_MCE) != 0;
 	mca_MCA_present = (features & CPUID_FEATURE_MCA) != 0;
 	mca_family = family;
-	
+
+	if ((model == CPUID_MODEL_HASWELL     && stepping < 3) ||
+	    (model == CPUID_MODEL_HASWELL_ULT && stepping < 1) ||
+	    (model == CPUID_MODEL_CRYSTALWELL && stepping < 1))
+		panic("Haswell pre-C0 steppings are not supported");
+
 	/*
 	 * If MCA, the number of banks etc is reported by the IA32_MCG_CAP MSR.
 	 */

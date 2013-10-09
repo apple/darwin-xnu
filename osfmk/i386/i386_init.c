@@ -578,7 +578,6 @@ i386_init(void)
 
 	tsc_init();
 	power_management_init();
-
 	processor_bootstrap();
 	thread_bootstrap();
 
@@ -608,6 +607,7 @@ do_init_slave(boolean_t fast_restart)
 		mca_cpu_init();
 #endif
   
+		LAPIC_INIT();
 		lapic_configure();
 		LAPIC_DUMP();
 		LAPIC_CPU_MAP_DUMP();
@@ -617,11 +617,10 @@ do_init_slave(boolean_t fast_restart)
 #if CONFIG_MTRR
 		mtrr_update_cpu();
 #endif
+		/* update CPU microcode */
+		ucode_update_wake();
 	} else
 	    init_param = FAST_SLAVE_INIT;
-
-	/* update CPU microcode */
-	ucode_update_wake();
 
 #if CONFIG_VMX
 	/* resume VT operation */

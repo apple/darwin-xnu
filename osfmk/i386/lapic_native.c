@@ -116,33 +116,42 @@ legacy_init(void)
 	vm_map_offset_t lapic_vbase64;
 	/* Establish a map to the local apic */
 
-	lapic_vbase64 = (vm_offset_t)vm_map_min(kernel_map);
-	result = vm_map_find_space(kernel_map,
-				   &lapic_vbase64,
-				   round_page(LAPIC_SIZE), 0,
-				   VM_MAKE_TAG(VM_MEMORY_IOKIT), &entry);
-	/* Convert 64-bit vm_map_offset_t to "pointer sized" vm_offset_t
-	 */
-	lapic_vbase = (vm_offset_t) lapic_vbase64;
-	if (result != KERN_SUCCESS) {
-		panic("legacy_init: vm_map_find_entry FAILED (err=%d)", result);
+	if (lapic_vbase == 0) {
+		lapic_vbase64 = (vm_offset_t)vm_map_min(kernel_map);
+		result = vm_map_find_space(kernel_map,
+					   &lapic_vbase64,
+					   round_page(LAPIC_SIZE), 0,
+					   VM_MAKE_TAG(VM_MEMORY_IOKIT), &entry);
+		/* Convert 64-bit vm_map_offset_t to "pointer sized" vm_offset_t
+		 */
+		lapic_vbase = (vm_offset_t) lapic_vbase64;
+		if (result != KERN_SUCCESS) {
+			panic("legacy_init: vm_map_find_entry FAILED (err=%d)", result);
+		}
+		vm_map_unlock(kernel_map);
+
+		/*
+		 * Map in the local APIC non-cacheable, as recommended by Intel
+		 * in section 8.4.1 of the "System Programming Guide".
+		 * In fact, this is redundant because EFI will have assigned an
+		 * MTRR physical range containing the local APIC's MMIO space as
+		 * UC and this will override the default PAT setting.
+		 */
+		pmap_enter(pmap_kernel(),
+				lapic_vbase,
+				(ppnum_t) i386_btop(lapic_pbase),
+				VM_PROT_READ|VM_PROT_WRITE,
+				VM_PROT_NONE,
+				VM_WIMG_IO,
+				TRUE);
 	}
-	vm_map_unlock(kernel_map);
 
 	/*
-	 * Map in the local APIC non-cacheable, as recommended by Intel
-	 * in section 8.4.1 of the "System Programming Guide".
-	 * In fact, this is redundant because EFI will have assigned an
-	 * MTRR physical range containing the local APIC's MMIO space as
-	 * UC and this will override the default PAT setting.
+	 * Set flat delivery model, logical processor id
+	 * This should already be the default set.
 	 */
-	pmap_enter(pmap_kernel(),
-			lapic_vbase,
-			(ppnum_t) i386_btop(lapic_pbase),
-			VM_PROT_READ|VM_PROT_WRITE,
-			VM_PROT_NONE,
-			VM_WIMG_IO,
-			TRUE);
+	LAPIC_WRITE(DFR, LAPIC_DFR_FLAT);
+	LAPIC_WRITE(LDR, (get_cpu_number()) << LAPIC_LDR_SHIFT);
 }
 
 
@@ -158,15 +167,41 @@ legacy_write(lapic_register_t reg, uint32_t value)
 	*LAPIC_MMIO(reg) = value;
 }
 
+static uint64_t
+legacy_read_icr(void)
+{
+	return (((uint64_t)*LAPIC_MMIO(ICRD)) << 32) | ((uint64_t)*LAPIC_MMIO(ICR));
+}
+
+static void
+legacy_write_icr(uint32_t dst, uint32_t cmd)
+{
+	*LAPIC_MMIO(ICRD) = dst << LAPIC_ICRD_DEST_SHIFT;
+	*LAPIC_MMIO(ICR) = cmd;
+}
+
 static lapic_ops_table_t legacy_ops = {
 	legacy_init,
 	legacy_read,
-	legacy_write
+	legacy_write,
+	legacy_read_icr,
+	legacy_write_icr
 };
+
+static	boolean_t is_x2apic = FALSE;
 
 static void
 x2apic_init(void)
 {
+	uint32_t	lo;
+	uint32_t	hi;
+
+	rdmsr(MSR_IA32_APIC_BASE, lo, hi);
+	if ((lo & MSR_IA32_APIC_BASE_EXTENDED) == 0)  {
+		lo |= MSR_IA32_APIC_BASE_EXTENDED;
+		wrmsr(MSR_IA32_APIC_BASE, lo, hi);
+		kprintf("x2APIC mode enabled\n");
+	}
 }
 
 static uint32_t
@@ -185,12 +220,25 @@ x2apic_write(lapic_register_t reg, uint32_t value)
 	wrmsr(LAPIC_MSR(reg), value, 0);
 }
 
+static uint64_t
+x2apic_read_icr(void)
+{
+	return rdmsr64(LAPIC_MSR(ICR));;
+}
+
+static void
+x2apic_write_icr(uint32_t dst, uint32_t cmd)
+{
+	  wrmsr(LAPIC_MSR(ICR), cmd, dst);
+}
+
 static lapic_ops_table_t x2apic_ops = {
 	x2apic_init,
 	x2apic_read,
-	x2apic_write
+	x2apic_write,
+	x2apic_read_icr,
+	x2apic_write_icr
 };
-
 
 void
 lapic_init(void)
@@ -199,7 +247,6 @@ lapic_init(void)
 	uint32_t	hi;
 	boolean_t	is_boot_processor;
 	boolean_t	is_lapic_enabled;
-	boolean_t	is_x2apic;
 
 	/* Examine the local APIC state */
 	rdmsr(MSR_IA32_APIC_BASE, lo, hi);
@@ -214,10 +261,21 @@ lapic_init(void)
 	if (!is_boot_processor || !is_lapic_enabled)
 		panic("Unexpected local APIC state\n");
 
+	/*
+	 * If x2APIC is available and not already enabled, enable it.
+	 * Unless overriden by boot-arg.
+	 */
+	if (!is_x2apic && (cpuid_features() & CPUID_FEATURE_x2APIC)) {
+		PE_parse_boot_argn("-x2apic", &is_x2apic, sizeof(is_x2apic));
+		kprintf("x2APIC supported %s be enabled\n",
+			is_x2apic ? "and will" : "but will not");
+	}
+
 	lapic_ops = is_x2apic ? &x2apic_ops : &legacy_ops;
 
-	lapic_ops->init();
+	LAPIC_INIT();
 
+	kprintf("ID: 0x%x LDR: 0x%x\n", LAPIC_READ(ID), LAPIC_READ(LDR));
 	if ((LAPIC_READ(VERSION)&LAPIC_VERSION_MASK) < 0x14) {
 		panic("Local APIC version 0x%x, 0x14 or more expected\n",
 			(LAPIC_READ(VERSION)&LAPIC_VERSION_MASK));
@@ -290,7 +348,7 @@ lapic_dump(void)
 		LAPIC_READ(APR)&LAPIC_APR_MASK,
 		LAPIC_READ(PPR)&LAPIC_PPR_MASK);
 	kprintf("Destination Format 0x%x Logical Destination 0x%x\n",
-		LAPIC_READ(DFR)>>LAPIC_DFR_SHIFT,
+		is_x2apic ? 0 : LAPIC_READ(DFR)>>LAPIC_DFR_SHIFT,
 		LAPIC_READ(LDR)>>LAPIC_LDR_SHIFT);
 	kprintf("%cEnabled %cFocusChecking SV 0x%x\n",
 		BOOL(LAPIC_READ(SVR)&LAPIC_SVR_ENABLE),
@@ -448,10 +506,6 @@ lapic_configure(void)
 			lapic_dont_panic = FALSE;
 		}
 	}
-
-	/* Set flat delivery model, logical processor id */
-	LAPIC_WRITE(DFR, LAPIC_DFR_FLAT);
-	LAPIC_WRITE(LDR, (get_cpu_number()) << LAPIC_LDR_SHIFT);
 
 	/* Accept all */
 	LAPIC_WRITE(TPR, 0);
@@ -801,12 +855,11 @@ lapic_send_ipi(int cpu, int vector)
 	state = ml_set_interrupts_enabled(FALSE);
 
 	/* Wait for pending outgoing send to complete */
-	while (LAPIC_READ(ICR) & LAPIC_ICR_DS_PENDING) {
+	while (LAPIC_READ_ICR() & LAPIC_ICR_DS_PENDING) {
 		cpu_pause();
 	}
 
-	LAPIC_WRITE(ICRD, cpu_to_lapic[cpu] << LAPIC_ICRD_DEST_SHIFT);
-	LAPIC_WRITE(ICR, vector | LAPIC_ICR_DM_FIXED);
+	LAPIC_WRITE_ICR(cpu_to_lapic[cpu], vector | LAPIC_ICR_DM_FIXED);
 
 	(void) ml_set_interrupts_enabled(state);
 }

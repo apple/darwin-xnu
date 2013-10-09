@@ -991,6 +991,31 @@ machine_thread_set_state(
 		return fpu_set_fxstate(thr_act, tstate, flavor);
 	}
 
+	case x86_AVX_STATE:
+	{   
+		x86_avx_state_t       *state;
+
+		if (count != x86_AVX_STATE_COUNT)
+			return(KERN_INVALID_ARGUMENT);
+
+		state = (x86_avx_state_t *)tstate;
+		if (state->ash.flavor == x86_AVX_STATE64 &&
+		    state->ash.count  == x86_FLOAT_STATE64_COUNT &&
+		    thread_is_64bit(thr_act)) {
+			return fpu_set_fxstate(thr_act,
+					       (thread_state_t)&state->ufs.as64,
+					       x86_FLOAT_STATE64);
+		}
+		if (state->ash.flavor == x86_FLOAT_STATE32 &&
+		    state->ash.count  == x86_FLOAT_STATE32_COUNT &&
+		    !thread_is_64bit(thr_act)) {
+			return fpu_set_fxstate(thr_act,
+					       (thread_state_t)&state->ufs.as32,
+					       x86_FLOAT_STATE32); 
+		}
+		return(KERN_INVALID_ARGUMENT);
+	}
+
 	case x86_THREAD_STATE32: 
 	{
 		if (count != x86_THREAD_STATE32_COUNT)
@@ -1137,6 +1162,21 @@ machine_thread_get_state(
 		break;
 	    }
 
+	    case THREAD_STATE_FLAVOR_LIST_10_9:
+	    {
+		if (*count < 5)
+		        return (KERN_INVALID_ARGUMENT);
+
+	        tstate[0] = x86_THREAD_STATE;
+		tstate[1] = x86_FLOAT_STATE;
+		tstate[2] = x86_EXCEPTION_STATE;
+		tstate[3] = x86_DEBUG_STATE;
+		tstate[4] = x86_AVX_STATE;
+
+		*count = 5;
+		break;
+	    }
+
 	    case x86_SAVED_STATE32:
 	    {
 		x86_saved_state32_t	*state;
@@ -1245,8 +1285,8 @@ machine_thread_get_state(
 		return(kret);
 	    }
 
-	case x86_AVX_STATE32:
-	{
+	    case x86_AVX_STATE32:
+	    {
 		if (*count != x86_AVX_STATE32_COUNT)
 			return(KERN_INVALID_ARGUMENT);
 
@@ -1256,10 +1296,10 @@ machine_thread_get_state(
 		*count = x86_AVX_STATE32_COUNT;
 
 		return fpu_get_fxstate(thr_act, tstate, flavor);
-	}
+	    }
 
-	case x86_AVX_STATE64:
-	{
+	    case x86_AVX_STATE64:
+	    {
 		if (*count != x86_AVX_STATE64_COUNT)
 			return(KERN_INVALID_ARGUMENT);
 
@@ -1269,7 +1309,36 @@ machine_thread_get_state(
 		*count = x86_AVX_STATE64_COUNT;
 
 		return fpu_get_fxstate(thr_act, tstate, flavor);
-	}
+	    }
+
+	    case x86_AVX_STATE:
+	    {
+	        x86_avx_state_t		*state;
+		kern_return_t		kret;
+
+		if (*count < x86_AVX_STATE_COUNT)
+			return(KERN_INVALID_ARGUMENT);
+
+		state = (x86_avx_state_t *)tstate;
+
+		bzero((char *)state, sizeof(x86_avx_state_t));
+		if (thread_is_64bit(thr_act)) {
+		        state->ash.flavor = x86_AVX_STATE64;
+		        state->ash.count  = x86_AVX_STATE64_COUNT;
+			kret = fpu_get_fxstate(thr_act,
+					       (thread_state_t)&state->ufs.as64,
+					       x86_AVX_STATE64);
+		} else {
+		        state->ash.flavor = x86_AVX_STATE32;
+			state->ash.count  = x86_AVX_STATE32_COUNT;
+			kret = fpu_get_fxstate(thr_act,
+					       (thread_state_t)&state->ufs.as32,
+					       x86_AVX_STATE32);
+		}
+		*count = x86_AVX_STATE_COUNT;
+
+		return(kret);
+	    }
 
 	    case x86_THREAD_STATE32: 
 	    {

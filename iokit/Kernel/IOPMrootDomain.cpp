@@ -2535,12 +2535,6 @@ bool IOPMrootDomain::tellChangeDown( unsigned long stateNum )
 
         IOService::updateConsoleUsers(NULL, kIOMessageSystemWillSleep);
 
-        // Notify platform that sleep has begun
-        getPlatform()->callPlatformFunction(
-                        sleepMessagePEFunction, false,
-                        (void *)(uintptr_t) kIOMessageSystemWillSleep,
-                        NULL, NULL, NULL);
-
         // Two change downs are sent by IOServicePM. Ignore the 2nd.
         // But tellClientsWithResponse() must be called for both.
         ignoreTellChangeDown = true;
@@ -2745,6 +2739,13 @@ IOReturn IOPMrootDomain::sysPowerDownHandler(
             }
             DLOG("sysPowerDownHandler timeout %d s\n", (int) (params->maxWaitForReply / 1000 / 1000));
 #endif
+
+            // Notify platform that sleep has begun, after the early
+            // sleep policy evaluation.
+            getPlatform()->callPlatformFunction(
+                            sleepMessagePEFunction, false,
+                            (void *)(uintptr_t) kIOMessageSystemWillSleep,
+                            NULL, NULL, NULL);
 
             if ( !OSCompareAndSwap( 0, 1, &gSleepOrShutdownPending ) )
             {
@@ -3683,6 +3684,32 @@ struct IOPMSystemSleepPolicyTable
     IOPMSystemSleepPolicyEntry  entries[];
 } __attribute__((packed));
 
+enum {
+    kIOPMSleepAttributeHibernateSetup   = 0x00000001,
+    kIOPMSleepAttributeHibernateSleep   = 0x00000002
+};
+
+static uint32_t
+getSleepTypeAttributes( uint32_t sleepType )
+{
+    static const uint32_t sleepTypeAttributes[ kIOPMSleepTypeLast ] =
+    {
+    /* invalid   */ 0,
+    /* abort     */ 0,
+    /* normal    */ 0,
+    /* safesleep */ kIOPMSleepAttributeHibernateSetup,
+    /* hibernate */ kIOPMSleepAttributeHibernateSetup | kIOPMSleepAttributeHibernateSleep,
+    /* standby   */ kIOPMSleepAttributeHibernateSetup | kIOPMSleepAttributeHibernateSleep,
+    /* poweroff  */ kIOPMSleepAttributeHibernateSetup | kIOPMSleepAttributeHibernateSleep,
+    /* deepidle  */ 0
+    };
+
+    if (sleepType >= kIOPMSleepTypeLast)
+        return 0;
+
+    return sleepTypeAttributes[sleepType];
+}
+
 bool IOPMrootDomain::evaluateSystemSleepPolicy(
     IOPMSystemSleepParameters * params, int sleepPhase, uint32_t * hibMode )
 {
@@ -3829,7 +3856,8 @@ bool IOPMrootDomain::evaluateSystemSleepPolicy(
             goto done;
         }
 
-        if ((params->sleepType >= kIOPMSleepTypeSafeSleep) &&
+        if ((getSleepTypeAttributes(params->sleepType) &
+             kIOPMSleepAttributeHibernateSetup) &&
             ((*hibMode & kIOHibernateModeOn) == 0))
         {
             *hibMode |= (kIOHibernateModeOn | kIOHibernateModeSleep);
@@ -3951,9 +3979,10 @@ void IOPMrootDomain::evaluateSystemSleepPolicyEarly( void )
                                   &hibernateMode))
     {
         if (!hibernateNoDefeat &&
-            (gEarlySystemSleepParams.sleepType == kIOPMSleepTypeNormalSleep))
+            ((getSleepTypeAttributes(gEarlySystemSleepParams.sleepType) &
+              kIOPMSleepAttributeHibernateSetup) == 0))
         {
-            // Disable hibernate setup for normal sleep
+            // skip hibernate setup
             hibernateDisabled = true;
         }
     }
@@ -3991,7 +4020,8 @@ void IOPMrootDomain::evaluateSystemSleepPolicyFinal( void )
     if (evaluateSystemSleepPolicy(&params, kIOPMSleepPhase2, &hibernateMode))
     {
         if ((hibernateDisabled || hibernateAborted) &&
-            (params.sleepType != kIOPMSleepTypeNormalSleep))
+            (getSleepTypeAttributes(params.sleepType) &
+             kIOPMSleepAttributeHibernateSetup))
         {
             // Final evaluation picked a state requiring hibernation,
             // but hibernate setup was skipped. Retry using the early
@@ -4016,9 +4046,10 @@ void IOPMrootDomain::evaluateSystemSleepPolicyFinal( void )
             paramsData->release();
         }
 
-        if (params.sleepType >= kIOPMSleepTypeHibernate)
+        if (getSleepTypeAttributes(params.sleepType) &
+            kIOPMSleepAttributeHibernateSleep)
         {
-            // Disable safe sleep to force the hibernate path
+            // Disable sleep to force hibernation
             gIOHibernateMode &= ~kIOHibernateModeSleep;
         }
     }
@@ -4410,8 +4441,7 @@ void IOPMrootDomain::overrideOurPowerChange(
     uint32_t    changeFlags = *inOutChangeFlags;
     uint32_t    currentPowerState = (uint32_t) getPowerState();
 
-    if ((currentPowerState == powerState) ||
-        (changeFlags & kIOPMParentInitiated))
+    if (changeFlags & kIOPMParentInitiated)
     {
         // FIXME: cancel any parent change (unexpected)
         // Root parent is permanently pegged at max power,
@@ -4452,6 +4482,20 @@ void IOPMrootDomain::overrideOurPowerChange(
 
             // Revert device desire from SLEEP->ON.
             changePowerStateToPriv(ON_STATE);
+        }
+        else
+        {
+            // Broadcast power down
+            *inOutChangeFlags |= kIOPMRootChangeDown;
+        }
+    }
+    else if (powerState > currentPowerState)
+    {
+        if ((_currentCapability & kIOPMSystemCapabilityCPU) == 0)
+        {
+            // Broadcast power up when waking from sleep, but not for the
+            // initial power change at boot by checking for cpu capability.
+            *inOutChangeFlags |= kIOPMRootChangeUp;
         }
     }
 }
@@ -6079,7 +6123,7 @@ void IOPMrootDomain::evaluatePolicy( int stimulus, uint32_t arg )
 
             if ( minutesToIdleSleep > minutesToDisplayDim )
                 minutesDelta = minutesToIdleSleep - minutesToDisplayDim;
-            else if( minutesToIdleSleep == minutesToDisplayDim )
+            else if( minutesToIdleSleep <= minutesToDisplayDim )
                 minutesDelta = 1;
 
             if ((sleepSlider == 0) && (minutesToIdleSleep != 0))

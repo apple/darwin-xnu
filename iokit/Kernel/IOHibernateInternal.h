@@ -64,6 +64,7 @@ typedef struct IOHibernateVars IOHibernateVars;
 struct IOPolledFileIOVars
 {
     struct kern_direct_file_io_ref_t *	fileRef;
+    IORegistryEntry *                   media;
     class OSArray *			pollers;
     IOByteCount				blockSize;
     uint8_t *  				buffer;

@@ -3108,9 +3108,11 @@ void IOService::doServiceMatch( IOOptionBits options )
         if( matches) {
 
             lockForArbitration();
-            if( 0 == (__state[0] & kIOServiceFirstPublishState))
+            if( 0 == (__state[0] & kIOServiceFirstPublishState)) {
+		getMetaClass()->addInstance(this);
                 deliverNotification( gIOFirstPublishNotification,
                                      kIOServiceFirstPublishState, 0xffffffff );
+            }
 	    LOCKREADNOTIFY();
             __state[1] &= ~kIOServiceNeedConfigState;
             __state[1] |= kIOServiceConfigState;
@@ -3134,9 +3136,6 @@ void IOService::doServiceMatch( IOOptionBits options )
             }
 
 	    UNLOCKNOTIFY();
-	    if (didRegister) {
-		getMetaClass()->addInstance(this);
-	    }
             unlockForArbitration();
 
             if (keepGuessing && matches->getCount() && (kIOReturnSuccess == getResources()))

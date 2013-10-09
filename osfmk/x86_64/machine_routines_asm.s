@@ -104,28 +104,36 @@ ENTRY(_rtc_nanotime_adjust)
 	ret
 
 /*
- * unint64_t _rtc_nanotime_read(rtc_nanotime_t *rntp, int slow);
+ * uint64_t _rtc_nanotime_read(rtc_nanotime_t *rntp);
  *
  * This is the same as the commpage nanotime routine, except that it uses the
  * kernel internal "rtc_nanotime_info" data instead of the commpage data.
  * These two copies of data are kept in sync by rtc_clock_napped().
  *
- * Warning!  There is another copy of this code in osfmk/x86_64/idt64.s.
- * These are kept in sync by both using the RTC_NANOTIME_READ() macro.
+ * Warning!  There are several copies of this code in the trampolines found in
+ * osfmk/x86_64/idt64.s, coming from the various TIMER macros in rtclock_asm.h.
+ * They're all kept in sync by using the RTC_NANOTIME_READ() macro.
  *
- * There are two versions of this algorithm, for "slow" and "fast" processors.
- * The more common "fast" algorithm is:
+ * The algorithm we use is:
  *
- *	ns = (((rdtsc - rnt_tsc_base)*rnt_tsc_scale) / 2**32) + rnt_ns_base;
+ *	ns = ((((rdtsc - rnt_tsc_base)<<rnt_shift)*rnt_tsc_scale) / 2**32) + rnt_ns_base;
  *
- * Of course, the divide by 2**32 is a nop.  rnt_tsc_scale is a constant
- * computed during initialization:
+ * rnt_shift, a constant computed during initialization, is the smallest value for which:
  *
- *	rnt_tsc_scale = (10e9 * 2**32) / tscFreq;
+ *	(tscFreq << rnt_shift) > SLOW_TSC_THRESHOLD
  *
- * The "slow" algorithm uses long division:
+ * Where SLOW_TSC_THRESHOLD is about 10e9.  Since most processor's tscFreqs are greater
+ * than 1GHz, rnt_shift is usually 0.  rnt_tsc_scale is also a 32-bit constant:
  *
- *	ns = (((rdtsc - rnt_tsc_base) * 10e9) / tscFreq) + rnt_ns_base;
+ *	rnt_tsc_scale = (10e9 * 2**32) / (tscFreq << rnt_shift);
+ *
+ * On 64-bit processors this algorithm could be simplified by doing a 64x64 bit
+ * multiply of rdtsc by tscFCvtt2n:
+ *
+ *	ns = (((rdtsc - rnt_tsc_base) * tscFCvtt2n) / 2**32) + rnt_ns_base;
+ *
+ * We don't do so in order to use the same algorithm in 32- and 64-bit mode.
+ * When U32 goes away, we should reconsider.
  *
  * Since this routine is not synchronized and can be called in any context, 
  * we use a generation count to guard against seeing partially updated data.
@@ -136,33 +144,36 @@ ENTRY(_rtc_nanotime_adjust)
  * the generation is zero.
  *
  * unint64_t _rtc_nanotime_read(
- *			rtc_nanotime_t *rntp,		// %rdi
- *			int            slow);		// %rsi
+ *			rtc_nanotime_t *rntp);		// %rdi
  *
  */
 ENTRY(_rtc_nanotime_read)
-	test		%rsi,%rsi
-	jnz		Lslow
-		
-	/*
-	 * Processor whose TSC frequency is faster than SLOW_TSC_THRESHOLD
-	 */
+
 	PAL_RTC_NANOTIME_READ_FAST()
 
 	ret
+    
+/*
+ * extern uint64_t _rtc_tsc_to_nanoseconds(
+ *          uint64_t    value,              // %rdi
+ *          pal_rtc_nanotime_t	*rntp);     // %rsi
+ *
+ * Converts TSC units to nanoseconds, using an abbreviated form of the above
+ * algorithm.  Note that while we could have simply used tmrCvt(value,tscFCvtt2n),
+ * which would avoid the need for this asm, doing so is a bit more risky since
+ * we'd be using a different algorithm with possibly different rounding etc.
+ */
 
-	/*
-	 * Processor whose TSC frequency is not faster than SLOW_TSC_THRESHOLD
-	 * But K64 doesn't support this...
-	 */
-Lslow:
-	lea	1f(%rip),%rdi
-	xorb	%al,%al
-	call	EXT(panic)
-	hlt
-	.data
-1: 	String	"_rtc_nanotime_read() - slow algorithm not supported"
-	.text
+ENTRY(_rtc_tsc_to_nanoseconds)
+	movq    %rdi,%rax			/* copy value (in TSC units) to convert */
+	movl    RNT_SHIFT(%rsi),%ecx
+	movl    RNT_SCALE(%rsi),%edx
+	shlq    %cl,%rax			/* tscUnits << shift */
+	mulq    %rdx				/* (tscUnits << shift) * scale */
+	shrdq   $32,%rdx,%rax			/* %rdx:%rax >>= 32 */
+	ret
+    
+    
 
 Entry(call_continuation)
 	movq	%rdi,%rcx			/* get continuation */

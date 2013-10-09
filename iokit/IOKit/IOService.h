@@ -1785,7 +1785,7 @@ private:
     void ParentChangeNotifyInterestedDriversDidChange ( void );
     void ParentChangeTellCapabilityDidChange ( void );
     void ParentChangeAcknowledgePowerChange ( void );
-    void ParentChangeCancelIdleTimer( IOPMPowerStateIndex );
+    void ParentChangeRootChangeDown( void );
 
     void all_done ( void );
     void start_ack_timer ( void );
@@ -1793,9 +1793,10 @@ private:
     void startSettleTimer( void );
     bool checkForDone ( void );
     bool responseValid ( uint32_t x, int pid );
-    void computeDesiredState ( unsigned long tempDesire = 0 );
+    void computeDesiredState( unsigned long tempDesire, bool computeOnly );
     void trackSystemSleepPreventers( IOPMPowerStateIndex, IOPMPowerStateIndex, IOPMPowerChangeFlags );
     void tellSystemCapabilityChange( uint32_t nextMS );
+    void restartIdleTimer( void );
 
 	static void ack_timer_expired( thread_call_param_t, thread_call_param_t );
 	static IOReturn actionAckTimerExpired(OSObject *, void *, void *, void *, void * );

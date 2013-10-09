@@ -80,17 +80,14 @@ extern vm_map_t	commpage_text64_map;	// the shared submap, set up in vm init
 
 char	*commPagePtr32 = NULL;		// virtual addr in kernel map of 32-bit commpage
 char	*commPagePtr64 = NULL;		// ...and of 64-bit commpage
-char	*commPageTextPtr32 = NULL;		// virtual addr in kernel map of 32-bit commpage
-char	*commPageTextPtr64 = NULL;		// ...and of 64-bit commpage
-uint32_t     _cpu_capabilities = 0;          // define the capability vector
+char	*commPageTextPtr32 = NULL;	// virtual addr in kernel map of 32-bit commpage
+char	*commPageTextPtr64 = NULL;	// ...and of 64-bit commpage
 
-int	noVMX = 0;		/* if true, do not set kHasAltivec in ppc _cpu_capabilities */
+uint64_t     _cpu_capabilities = 0;     // define the capability vector
 
 typedef uint32_t commpage_address_t;
 
-static commpage_address_t	next;			// next available address in comm page
-static commpage_address_t	cur_routine;		// comm page address of "current" routine
-static boolean_t		matched;		// true if we've found a match for "current" routine
+static commpage_address_t	next;	// next available address in comm page
 
 static char    *commPagePtr;		// virtual addr in kernel map of commpage we are working on
 static commpage_address_t	commPageBaseOffset; // subtract from 32-bit runtime address to get offset in virtual commpage in kernel map
@@ -205,7 +202,7 @@ commpage_cpus( void )
 static void
 commpage_init_cpu_capabilities( void )
 {
-	uint32_t bits;
+	uint64_t bits;
 	int cpus;
 	ml_cpu_info_t cpu_info;
 
@@ -254,30 +251,46 @@ commpage_init_cpu_capabilities( void )
 	}
 	cpus = commpage_cpus();			// how many CPUs do we have
 
-	if (cpus == 1)
-		bits |= kUP;
-
 	bits |= (cpus << kNumCPUsShift);
 
 	bits |= kFastThreadLocalStorage;	// we use %gs for TLS
 
-	if (cpu_mode_is64bit())			// k64Bit means processor is 64-bit capable
-		bits |= k64Bit;
+#define setif(_bits, _bit, _condition) \
+	if (_condition) _bits |= _bit
 
-	if (tscFreq <= SLOW_TSC_THRESHOLD)	/* is TSC too slow for _commpage_nanotime?  */
-		bits |= kSlow;
+	setif(bits, kUP,         cpus == 1);
+	setif(bits, k64Bit,      cpu_mode_is64bit());
+	setif(bits, kSlow,       tscFreq <= SLOW_TSC_THRESHOLD);
 
-	bits |= (cpuid_features() & CPUID_FEATURE_AES) ? kHasAES : 0;
+	setif(bits, kHasAES,     cpuid_features() &
+					CPUID_FEATURE_AES);
+	setif(bits, kHasF16C,    cpuid_features() &
+					CPUID_FEATURE_F16C);
+	setif(bits, kHasRDRAND,  cpuid_features() &
+					CPUID_FEATURE_RDRAND);
+	setif(bits, kHasFMA,     cpuid_features() &
+					CPUID_FEATURE_FMA);
 
-	bits |= (cpuid_features() & CPUID_FEATURE_F16C) ? kHasF16C : 0;
-	bits |= (cpuid_features() & CPUID_FEATURE_RDRAND) ? kHasRDRAND : 0;
-	bits |= ((cpuid_leaf7_features() & CPUID_LEAF7_FEATURE_ENFSTRG) &&
-		 (rdmsr64(MSR_IA32_MISC_ENABLE) & 1ULL )) ? kHasENFSTRG : 0;
-
+	setif(bits, kHasBMI1,    cpuid_leaf7_features() &
+					CPUID_LEAF7_FEATURE_BMI1);
+	setif(bits, kHasBMI2,    cpuid_leaf7_features() &
+					CPUID_LEAF7_FEATURE_BMI2);
+	setif(bits, kHasRTM,     cpuid_leaf7_features() &
+					CPUID_LEAF7_FEATURE_RTM);
+	setif(bits, kHasHLE,     cpuid_leaf7_features() &
+					CPUID_LEAF7_FEATURE_HLE);
+	setif(bits, kHasAVX2_0,  cpuid_leaf7_features() &
+					CPUID_LEAF7_FEATURE_AVX2);
+	
+	uint64_t misc_enable = rdmsr64(MSR_IA32_MISC_ENABLE);
+	setif(bits, kHasENFSTRG, (misc_enable & 1ULL) &&
+				 (cpuid_leaf7_features() &
+					CPUID_LEAF7_FEATURE_ENFSTRG));
+	
 	_cpu_capabilities = bits;		// set kernel version for use by drivers etc
 }
 
-int
+uint64_t
 _get_cpu_capabilities(void)
 {
 	return _cpu_capabilities;
@@ -305,27 +318,9 @@ commpage_stuff(
  */
 static void
 commpage_stuff_routine(
-    commpage_descriptor	*rd	)
+    commpage_descriptor *rd     )
 {
-    uint32_t		must,cant;
-    
-    if (rd->commpage_address != cur_routine) {
-        if ((cur_routine!=0) && (matched==0))
-            panic("commpage no match for last, next address %08x", rd->commpage_address);
-        cur_routine = rd->commpage_address;
-        matched = 0;
-    }
-    
-    must = _cpu_capabilities & rd->musthave;
-    cant = _cpu_capabilities & rd->canthave;
-    
-    if ((must == rd->musthave) && (cant == 0)) {
-        if (matched)
-            panic("commpage multiple matches for address %08x", rd->commpage_address);
-        matched = 1;
-        
-        commpage_stuff(rd->commpage_address,rd->code_address,rd->code_length);
-	}
+	commpage_stuff(rd->commpage_address,rd->code_address,rd->code_length);
 }
 
 /* Fill in the 32- or 64-bit commpage.  Called once for each.
@@ -341,15 +336,14 @@ commpage_populate_one(
 	const char*	signature,	// "commpage 32-bit" or "commpage 64-bit"
 	vm_prot_t	uperm)
 {
-	uint8_t	c1;
-   	short   c2;
-	int	    c4;
-	uint64_t c8;
+	uint8_t		c1;
+	uint16_t	c2;
+	int		c4;
+	uint64_t	c8;
 	uint32_t	cfamily;
 	short   version = _COMM_PAGE_THIS_VERSION;
 
 	next = 0;
-	cur_routine = 0;
 	commPagePtr = (char *)commpage_allocate( submap, (vm_size_t) area_used, uperm );
 	*kernAddressPtr = commPagePtr;				// save address either in commPagePtr32 or 64
 	commPageBaseOffset = base_offset;
@@ -358,10 +352,13 @@ commpage_populate_one(
 
 	/* Stuff in the constants.  We move things into the comm page in strictly
 	* ascending order, so we can check for overlap and panic if so.
+	* Note: the 32-bit cpu_capabilities vector is retained in addition to
+	* the expanded 64-bit vector.
 	*/
-	commpage_stuff(_COMM_PAGE_SIGNATURE,signature,(int)strlen(signature));
+	commpage_stuff(_COMM_PAGE_SIGNATURE,signature,(int)MIN(_COMM_PAGE_SIGNATURELEN, strlen(signature)));
+	commpage_stuff(_COMM_PAGE_CPU_CAPABILITIES64,&_cpu_capabilities,sizeof(_cpu_capabilities));
 	commpage_stuff(_COMM_PAGE_VERSION,&version,sizeof(short));
-	commpage_stuff(_COMM_PAGE_CPU_CAPABILITIES,&_cpu_capabilities,sizeof(int));
+	commpage_stuff(_COMM_PAGE_CPU_CAPABILITIES,&_cpu_capabilities,sizeof(uint32_t));
 
 	c2 = 32;  // default
 	if (_cpu_capabilities & kCache64)
@@ -369,7 +366,7 @@ commpage_populate_one(
 	else if (_cpu_capabilities & kCache128)
 		c2 = 128;
 	commpage_stuff(_COMM_PAGE_CACHE_LINESIZE,&c2,2);
-	
+
 	c4 = MP_SPIN_TRIES;
 	commpage_stuff(_COMM_PAGE_SPIN_COUNT,&c4,4);
 
@@ -442,8 +439,7 @@ commpage_populate( void )
 void commpage_text_populate( void ){
 	commpage_descriptor **rd;
 	
-	next =0;
-	cur_routine=0;
+	next = 0;
 	commPagePtr = (char *) commpage_allocate(commpage_text32_map, (vm_size_t) _COMM_PAGE_TEXT_AREA_USED, VM_PROT_READ | VM_PROT_EXECUTE);
 	commPageTextPtr32 = commPagePtr;
 	
@@ -457,8 +453,6 @@ void commpage_text_populate( void ){
 	for (rd = commpage_32_routines; *rd != NULL; rd++) {
 		commpage_stuff_routine(*rd);
 	}
-	if (!matched)
-		panic(" commpage_text no match for last routine ");
 
 #ifndef __LP64__
 	pmap_commpage32_init((vm_offset_t) commPageTextPtr32, _COMM_PAGE_TEXT_START, 
@@ -466,8 +460,7 @@ void commpage_text_populate( void ){
 #endif	
 
 	if (_cpu_capabilities & k64Bit) {
-		next =0;
-		cur_routine=0;
+		next = 0;
 		commPagePtr = (char *) commpage_allocate(commpage_text64_map, (vm_size_t) _COMM_PAGE_TEXT_AREA_USED, VM_PROT_READ | VM_PROT_EXECUTE);
 		commPageTextPtr64 = commPagePtr;
 
@@ -486,17 +479,12 @@ void commpage_text_populate( void ){
 #endif	
 	}
 
-	if (!matched)
-		panic(" commpage_text no match for last routine ");
-
 	if (next > _COMM_PAGE_TEXT_END) 
 		panic("commpage text overflow: next=0x%08x, commPagePtr=%p", next, commPagePtr); 
 
 }
 
-/* Update commpage nanotime information.  Note that we interleave
- * setting the 32- and 64-bit commpages, in order to keep nanotime more
- * nearly in sync between the two environments.
+/* Update commpage nanotime information.
  *
  * This routine must be serialized by some external means, ie a lock.
  */
@@ -520,7 +508,7 @@ commpage_set_nanotime(
 		panic("nanotime trouble 1");	/* possibly not serialized */
 	if ( ns_base < p32->nt_ns_base )
 		panic("nanotime trouble 2");
-	if ((shift != 32) && ((_cpu_capabilities & kSlow)==0) )
+	if ((shift != 0) && ((_cpu_capabilities & kSlow)==0) )
 		panic("nanotime trouble 3");
 		
 	next_gen = ++generation;
@@ -604,14 +592,14 @@ commpage_set_memory_pressure(
 	cp = commPagePtr32;
 	if ( cp ) {
 		cp += (_COMM_PAGE_MEMORY_PRESSURE - _COMM_PAGE32_BASE_ADDRESS);
-		ip = (uint32_t*) cp;
+		ip = (uint32_t*) (void *) cp;
 		*ip = (uint32_t) pressure;
 	}
 	
 	cp = commPagePtr64;
 	if ( cp ) {
 		cp += (_COMM_PAGE_MEMORY_PRESSURE - _COMM_PAGE32_START_ADDRESS);
-		ip = (uint32_t*) cp;
+		ip = (uint32_t*) (void *) cp;
 		*ip = (uint32_t) pressure;
 	}
 
@@ -633,14 +621,14 @@ commpage_set_spin_count(
 	cp = commPagePtr32;
 	if ( cp ) {
 		cp += (_COMM_PAGE_SPIN_COUNT - _COMM_PAGE32_BASE_ADDRESS);
-		ip = (uint32_t*) cp;
+		ip = (uint32_t*) (void *) cp;
 		*ip = (uint32_t) count;
 	}
 	
 	cp = commPagePtr64;
 	if ( cp ) {
 		cp += (_COMM_PAGE_SPIN_COUNT - _COMM_PAGE32_START_ADDRESS);
-		ip = (uint32_t*) cp;
+		ip = (uint32_t*) (void *) cp;
 		*ip = (uint32_t) count;
 	}
 

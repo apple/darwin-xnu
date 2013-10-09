@@ -488,6 +488,10 @@ fpu_set_fxstate(
 	if (fp_kind == FP_NO)
 	    return KERN_FAILURE;
 
+	if ((f == x86_AVX_STATE32 || f == x86_AVX_STATE64) &&
+	    !ml_fpu_avx_enabled())
+	    return KERN_FAILURE;
+
 	state = (x86_float_state64_t *)tstate;
 
 	assert(thr_act != THREAD_NULL);
@@ -605,6 +609,10 @@ fpu_get_fxstate(
 	size_t	state_size = sizeof(struct x86_fx_thread_state);
 
 	if (fp_kind == FP_NO)
+		return KERN_FAILURE;
+
+	if ((f == x86_AVX_STATE32 || f == x86_AVX_STATE64) &&
+	    !ml_fpu_avx_enabled())
 		return KERN_FAILURE;
 
 	state = (x86_float_state64_t *)tstate;

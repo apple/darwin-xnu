@@ -1,4 +1,3 @@
-
 /*
  * Copyright (c) 2009 Apple Inc. All rights reserved.
  *
@@ -154,6 +153,7 @@ void pal_efi_hibernate_prepare(void);
 
 /* Include a PAL-specific header, too, for xnu-internal overrides */
 #include <i386/pal_native.h>
+
 
 extern boolean_t virtualized;
 #define PAL_VIRTUALIZED_PROPERTY_VALUE 4

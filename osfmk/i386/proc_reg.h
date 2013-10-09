@@ -397,6 +397,8 @@ static inline void flush_tlb_raw(void)
 	set_cr3_raw(get_cr3_raw());
 }
 #endif
+extern int rdmsr64_carefully(uint32_t msr, uint64_t *val);
+extern int wrmsr64_carefully(uint32_t msr, uint64_t val);
 #endif	/* MACH_KERNEL_PRIVATE */
 
 static inline void wbinvd(void)
@@ -501,7 +503,6 @@ static inline uint64_t rdtscp64(uint32_t *aux)
  * The implementation is in locore.s.
  */
 extern int rdmsr_carefully(uint32_t msr, uint32_t *lo, uint32_t *hi);
-
 __END_DECLS
 
 #endif	/* ASSEMBLER */
@@ -538,8 +539,6 @@ __END_DECLS
 #define MSR_IA32_MPERF				0xE7
 #define MSR_IA32_APERF				0xE8
 
-#define MSR_PMG_CST_CONFIG_CONTROL		0xe2
-
 #define MSR_IA32_BBL_CR_CTL			0x119
 
 #define MSR_IA32_SYSENTER_CS			0x174
@@ -560,7 +559,6 @@ __END_DECLS
 
 #define MSR_IA32_MISC_ENABLE			0x1a0
 
-#define MSR_IA32_ENERGY_PERFORMANCE_BIAS	0x1b0
 #define MSR_IA32_PACKAGE_THERM_STATUS		0x1b1
 #define MSR_IA32_PACKAGE_THERM_INTERRUPT	0x1b2
 
@@ -618,8 +616,20 @@ __END_DECLS
 #define MSR_IA32_PKG_POWER_SKU_UNIT		0x606
 #define MSR_IA32_PKG_C2_RESIDENCY		0x60D
 #define MSR_IA32_PKG_ENERGY_STATUS		0x611
-#define MSR_IA32_PRIMARY_PLANE_ENERY_STATUS	0x639
-#define MSR_IA32_SECONDARY_PLANE_ENERY_STATUS	0x641
+
+#define MSR_IA32_DDR_ENERGY_STATUS		0x619
+#define MSR_IA32_LLC_FLUSHED_RESIDENCY_TIMER	0x61D
+#define MSR_IA32_RING_PERF_STATUS		0x621
+
+#define MSR_IA32_PKG_C8_RESIDENCY		0x630
+#define MSR_IA32_PKG_C9_RESIDENCY		0x631
+#define MSR_IA32_PKG_C10_RESIDENCY		0x632
+
+#define MSR_IA32_PP0_ENERGY_STATUS		0x639
+#define MSR_IA32_PP1_ENERGY_STATUS		0x641
+#define MSR_IA32_IA_PERF_LIMIT_REASONS		0x690
+#define MSR_IA32_GT_PERF_LIMIT_REASONS		0x6B0
+
 #define MSR_IA32_TSC_DEADLINE			0x6e0
 
 #define	MSR_IA32_EFER				0xC0000080

@@ -82,6 +82,7 @@ pal_hib_map(uintptr_t virt, uint64_t phys)
     index = (virt >> I386_LPGSHIFT);
     virt += (uintptr_t)(phys & I386_LPGMASK);
     phys  = ((phys & ~((uint64_t)I386_LPGMASK)) | INTEL_PTE_PS  | INTEL_PTE_VALID | INTEL_PTE_WRITE);
+    if (phys == BootPTD[index]) return (virt);
     BootPTD[index] = phys;
     invlpg(virt);
     BootPTD[index + 1] = (phys + I386_LPGBYTES);

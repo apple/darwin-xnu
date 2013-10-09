@@ -295,6 +295,7 @@ boolean_t pmap_smep_enabled = FALSE;
 void
 pmap_cpu_init(void)
 {
+	cpu_data_t	*cdp = current_cpu_datap();
 	/*
 	 * Here early in the life of a processor (from cpu_mode_init()).
 	 * Ensure global page feature is disabled at this point.
@@ -305,10 +306,10 @@ pmap_cpu_init(void)
 	/*
 	 * Initialize the per-cpu, TLB-related fields.
 	 */
-	current_cpu_datap()->cpu_kernel_cr3 = kernel_pmap->pm_cr3;
-	current_cpu_datap()->cpu_active_cr3 = kernel_pmap->pm_cr3;
-	current_cpu_datap()->cpu_tlb_invalid = FALSE;
-	current_cpu_datap()->cpu_task_map = TASK_MAP_64BIT;
+	cdp->cpu_kernel_cr3 = kernel_pmap->pm_cr3;
+	cdp->cpu_active_cr3 = kernel_pmap->pm_cr3;
+	cdp->cpu_tlb_invalid = FALSE;
+	cdp->cpu_task_map = TASK_MAP_64BIT;
 	pmap_pcid_configure();
 	if (cpuid_leaf7_features() & CPUID_LEAF7_FEATURE_SMEP) {
 		boolean_t nsmep;
@@ -316,6 +317,11 @@ pmap_cpu_init(void)
 			set_cr4(get_cr4() | CR4_SMEP);
 			pmap_smep_enabled = TRUE;
 		}
+	}
+
+	if (cdp->cpu_fixed_pmcs_enabled) {
+		boolean_t enable = TRUE;
+		cpu_pmc_control(&enable);
 	}
 }
 

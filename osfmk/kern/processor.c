@@ -143,6 +143,8 @@ processor_init(
 	int					cpu_id,
 	processor_set_t		pset)
 {
+	spl_t		s;
+
 	if (processor != master_processor) {
 		/* Scheduler state deferred until sched_init() */
 		SCHED(processor_init)(processor);
@@ -162,6 +164,7 @@ processor_init(
 	processor_data_init(processor);
 	processor->processor_list = NULL;
 
+	s = splsched();
 	pset_lock(pset);
 	if (pset->cpu_set_count++ == 0)
 		pset->cpu_set_low = pset->cpu_set_hi = cpu_id;
@@ -170,6 +173,7 @@ processor_init(
 		pset->cpu_set_hi = (cpu_id > pset->cpu_set_hi)? cpu_id: pset->cpu_set_hi;
 	}
 	pset_unlock(pset);
+	splx(s);
 
 	simple_lock(&processor_list_lock);
 	if (processor_list == NULL)

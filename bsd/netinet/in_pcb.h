@@ -124,15 +124,6 @@ struct	label;
 #endif
 struct ifnet;
 
-#ifdef BSD_KERNEL_PRIVATE
-/* Flow control entry per socket */
-struct inp_fc_entry {
-	RB_ENTRY(inp_fc_entry) infc_link;
-	u_int32_t infc_flowhash;
-	struct inpcb *infc_inp;
-};
-#endif /* BSD_KERNEL_PRIVATE */
-
 struct inp_stat {
 	u_int64_t	rxpackets;
 	u_int64_t	rxbytes;
@@ -153,9 +144,11 @@ struct inpcb {
 	struct	socket *inp_socket;	/* back pointer to socket */
 	u_int32_t nat_cookie;		/* Cookie stored and returned to NAT */
 	LIST_ENTRY(inpcb) inp_portlist;	/* list for this PCB's local port */
+	RB_ENTRY(inpcb) infc_link;	/* link for flowhash RB tree */
 	struct	inpcbport *inp_phd;	/* head of this list */
 	inp_gen_t inp_gencnt;		/* generation count of this instance */
 	u_int32_t inp_flags;		/* generic IP/datagram flags */
+	u_int32_t inp_flags2;		/* generic IP/datagram flags #2 */
 	u_int32_t inp_flow;
 
 	u_char	inp_sndinprog_cnt;	/* outstanding send operations */
@@ -611,6 +604,9 @@ struct inpcbinfo {		/* XXX documentation, prefixes */
 #define	IN6P_RECV_ANYIF		INP_RECV_ANYIF
 #define	IN6P_CONTROLOPTS INP_CONTROLOPTS
 #define	IN6P_NO_IFT_CELLULAR	INP_NO_IFT_CELLULAR
+
+/* Overflowed INP flags; use INP2 prefix to avoid misuse */
+#define INP2_IN_FCTREE		0x2	/* in inp_fc_tree */
 	/*
 	 * socket AF version is {newer than,or include}
 	 * actual datagram AF version
@@ -702,9 +698,11 @@ extern int	inp_bindif(struct inpcb *, unsigned int);
 extern int	inp_nocellular(struct inpcb *, unsigned int);
 extern u_int32_t inp_calc_flowhash(struct inpcb *);
 extern void	socket_flowadv_init(void);
-extern int	inp_fc_addinp(struct inpcb *);
-extern struct inp_fc_entry *inp_fc_getinp(u_int32_t);
-extern void	inp_fc_entry_free(struct inp_fc_entry *);
+
+/* Flags used by inp_fc_getinp */
+#define INPFC_SOLOCKED	0x1
+#define INPFC_REMOVE	0x2
+extern struct inpcb *inp_fc_getinp(u_int32_t, u_int32_t);
 extern void	inp_fc_feedback(struct inpcb *);
 extern void	inp_reset_fc_state(struct inpcb *);
 extern int	inp_set_fc_state(struct inpcb *, int advcode);

@@ -141,6 +141,7 @@ void pmTimerSave(void);
 void pmTimerRestore(void);
 kern_return_t pmCPUExitHalt(int cpu);
 kern_return_t pmCPUExitHaltToOff(int cpu);
+uint32_t pmTimerQueueMigrate(int);
 
 #define PM_HALT_NORMAL		0		/* normal halt path */
 #define PM_HALT_DEBUG		1		/* debug code wants to halt */
@@ -158,6 +159,16 @@ extern int pmsafe_debug;
 /* Default urgency timing threshold for the DEBUG build */
 #define		URGENCY_NOTIFICATION_ASSERT_NS (5 * 1000 * 1000)
 extern uint64_t	urgency_notification_assert_abstime_threshold;
+
+x86_lcpu_t *
+pmGetLogicalCPU(int cpu);
+x86_lcpu_t *
+pmGetMyLogicalCPU(void);
+processor_t
+pmLCPUtoProcessor(int lcpu);
+x86_pkg_t *
+pmGetPkgRoot(void);
+
 
 /******************************************************************************
  *

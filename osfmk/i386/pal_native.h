@@ -72,10 +72,8 @@ struct pal_rtc_nanotime {
 	volatile uint64_t	tsc_base;	/* timestamp */
 	volatile uint64_t	ns_base;	/* nanoseconds */
 	uint32_t		scale;		/* tsc -> nanosec multiplier */
-	uint32_t		shift;		/* tsc -> nanosec shift/div */
-						/* shift is overloaded with
-						 * lower 32bits of tsc_freq
-						 * on slower machines (SLOW_TSC_THRESHOLD) */
+	uint32_t		shift;		/* shift is nonzero only on "slow" machines, */
+						/* ie where tscFreq <= SLOW_TSC_THRESHOLD */
 	volatile uint32_t	generation;	/* 0 == being updated */
 	uint32_t		spare1;
 };

@@ -5797,7 +5797,7 @@ ifnet_fc_thread_cont(int err)
 {
 #pragma unused(err)
 	struct sfb_bin_fcentry *fce;
-	struct inp_fc_entry *infc;
+	struct inpcb *inp;
 
 	for (;;) {
 		lck_mtx_assert(&ifnet_fclist_lock, LCK_MTX_ASSERT_OWNED);
@@ -5813,17 +5813,14 @@ ifnet_fc_thread_cont(int err)
 		SLIST_NEXT(fce, fce_link) = NULL;
 		lck_mtx_unlock(&ifnet_fclist_lock);
 
-		infc = inp_fc_getinp(fce->fce_flowhash);
-		if (infc == NULL) {
+		inp = inp_fc_getinp(fce->fce_flowhash, 0);
+		if (inp == NULL) {
 			ifnet_fce_free(fce);
 			lck_mtx_lock_spin(&ifnet_fclist_lock);
 			continue;
 		}
-		VERIFY(infc->infc_inp != NULL);
+		inp_fc_feedback(inp);
 
-		inp_fc_feedback(infc->infc_inp);
-
-		inp_fc_entry_free(infc);
 		ifnet_fce_free(fce);
 		lck_mtx_lock_spin(&ifnet_fclist_lock);
 	}

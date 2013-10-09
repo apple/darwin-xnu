@@ -42,7 +42,7 @@
 
 #define BASE_NHM_CLOCK_SOURCE 	133333333ULL
 #define IA32_PERF_STS		0x198
-#define	SLOW_TSC_THRESHOLD	1000067800	/* TSC is too slow for regular nanotime() algorithm */
+#define	SLOW_TSC_THRESHOLD	1000067800	/* if slower, nonzero shift required in nanotime() algorithm */
 
 #ifndef ASSEMBLER
 extern uint64_t	busFCvtt2n;

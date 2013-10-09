@@ -117,7 +117,7 @@ extern void			clock_gettimeofday_set_commpage(
 						clock_sec_t				*secs,
 						clock_usec_t			*microsecs);
 
-extern void			machine_delay_until(
+extern void			machine_delay_until(uint64_t interval,
 						uint64_t		deadline);
 
 extern uint32_t		hz_tick_interval;

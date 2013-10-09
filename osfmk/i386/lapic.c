@@ -48,7 +48,6 @@
 /* Base vector for local APIC interrupt sources */
 int lapic_interrupt_base = LAPIC_DEFAULT_INTERRUPT_BASE;
 
-#define		MAX_LAPICIDS	(LAPIC_ID_MAX+1)
 int		lapic_to_cpu[MAX_LAPICIDS];
 int		cpu_to_lapic[MAX_CPUS];
 

@@ -906,14 +906,21 @@ void IOGeneralMemoryDescriptor::free()
 	reserved->dp.memory = 0;
 	UNLOCK;
     }
-
-    if ((kIOMemoryTypePhysical != type) && (kIOMemoryTypePhysical64 != type))
+    if ((kIOMemoryTypePhysical == type) || (kIOMemoryTypePhysical64 == type))
     {
-	while (_wireCount)
-	    complete();
+	ioGMDData * dataP;
+	if (_memoryEntries && (dataP = getDataP(_memoryEntries)) && dataP->fMappedBase)
+	{
+	    dataP->fMapper->iovmFree(atop_64(dataP->fMappedBase), _pages);
+	    dataP->fMappedBase = 0;
+	}
     }
-    if (_memoryEntries)
-        _memoryEntries->release();
+    else
+    {
+	while (_wireCount) complete();
+    }
+
+    if (_memoryEntries) _memoryEntries->release();
 
     if (_ranges.v && !(kIOMemoryAsReference & _flags))
     {

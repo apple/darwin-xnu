@@ -80,7 +80,7 @@ void ml_install_interrupt_handler(
 
 void ml_get_timebase(unsigned long long *timestamp);
 void ml_init_lock_timeout(void); 
-void ml_init_delay_spin_threshold(void);
+void ml_init_delay_spin_threshold(int);
 
 boolean_t ml_delay_should_spin(uint64_t interval);
 

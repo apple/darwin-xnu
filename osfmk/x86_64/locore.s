@@ -128,6 +128,40 @@ rdmsr_fail:
 	movq	$1, %rax
 	ret
 
+/*
+ * int rdmsr64_carefully(uint32_t msr, uint64_t *val);
+ */
+
+ENTRY(rdmsr64_carefully)
+	movl	%edi, %ecx
+	RECOVERY_SECTION
+	RECOVER(rdmsr64_carefully_fail)
+	rdmsr
+	movl	%eax, (%rsi)
+	movl	%edx, 4(%rsi)
+	xorl	%eax, %eax
+	ret
+rdmsr64_carefully_fail:
+	movl	$1, %eax
+	ret
+/*
+ * int wrmsr64_carefully(uint32_t msr, uint64_t val);
+ */
+
+ENTRY(wrmsr_carefully)
+	movl	%edi, %ecx
+	movl	%esi, %eax
+	shr	$32, %rsi
+	movl	%esi, %edx
+	RECOVERY_SECTION
+	RECOVER(wrmsr_fail)
+	wrmsr
+	xorl	%eax, %eax
+	ret
+wrmsr_fail:
+	movl	$1, %eax
+	ret
+
 .globl	EXT(thread_exception_return)
 .globl	EXT(thread_bootstrap_return)
 LEXT(thread_bootstrap_return)

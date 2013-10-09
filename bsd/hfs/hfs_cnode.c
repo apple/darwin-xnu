@@ -312,20 +312,31 @@ int hfs_cnode_teardown (struct vnode *vp, vfs_context_t ctx, int reclaim) {
 		(cp->c_flag & C_DELETED) &&
 		((forkcount == 1) || (!VNODE_IS_RSRC(vp)))) {
 
-		/* Start a transaction here.  We're about to change file sizes */
-		if (started_tr == 0) {
-			if (hfs_start_transaction(hfsmp) != 0) {
-				error = EINVAL;
-				goto out;
-			}
-			else {
-				started_tr = 1;
-			}
-		}
-	
 		/* Truncate away our own fork data. (Case A, B, C above) */
 		if (VTOF(vp)->ff_blocks != 0) {
-			
+
+			/* 
+			 * SYMLINKS only:
+			 *
+			 * Encapsulate the entire change (including truncating the link) in 
+			 * nested transactions if we are modifying a symlink, because we know that its
+			 * file length will be at most 4k, and we can fit both the truncation and 
+			 * any relevant bitmap changes into a single journal transaction.  We also want
+			 * the kill_block code to execute in the same transaction so that any dirty symlink
+			 * blocks will not be written. Otherwise, rely on
+			 * hfs_truncate doing its own transactions to ensure that we don't blow up
+			 * the journal.
+			 */ 
+			if ((started_tr == 0) && (v_type == VLNK)) {
+				if (hfs_start_transaction(hfsmp) != 0) {
+					error = EINVAL;
+					goto out;
+				}
+				else {
+					started_tr = 1;
+				}
+			}
+
  			/*
 			 * At this point, we have decided that this cnode is
 			 * suitable for full removal.  We are about to deallocate
@@ -348,20 +359,23 @@ int hfs_cnode_teardown (struct vnode *vp, vfs_context_t ctx, int reclaim) {
 			if (hfsmp->jnl && vnode_islnk(vp)) {
 				buf_iterate(vp, hfs_removefile_callback, BUF_SKIP_NONLOCKED, (void *)hfsmp);
 			}
-
+	
 			/*
-			 * Since we're already inside a transaction,
-			 * tell hfs_truncate to skip the ubc_setsize.
-			 *
 			 * This truncate call (and the one below) is fine from VNOP_RECLAIM's 
 			 * context because we're only removing blocks, not zero-filling new 
 			 * ones.  The C_DELETED check above makes things much simpler. 
 			 */
-			error = hfs_truncate(vp, (off_t)0, IO_NDELAY, 1, 0, ctx);
+			error = hfs_truncate(vp, (off_t)0, IO_NDELAY, 0, 0, ctx);
 			if (error) {
 				goto out;
 			}
 			truncated = 1;
+
+			/* (SYMLINKS ONLY): Close/End our transaction after truncating the file record */
+			if (started_tr) {
+				hfs_end_transaction(hfsmp);
+				started_tr = 0;
+			}
 		}
 		
 		/* 
@@ -369,7 +383,9 @@ int hfs_cnode_teardown (struct vnode *vp, vfs_context_t ctx, int reclaim) {
 		 * it is the last fork.  That means, by definition, the rsrc fork is not in 
 		 * core.  To avoid bringing a vnode into core for the sole purpose of deleting the
 		 * data in the resource fork, we call cat_lookup directly, then hfs_release_storage
-		 * to get rid of the resource fork's data. 
+		 * to get rid of the resource fork's data. Note that because we are holding the 
+		 * cnode lock, it is impossible for a competing thread to create the resource fork
+		 * vnode from underneath us while we do this.
 		 * 
 		 * This is invoked via case A above only.
 		 */
@@ -440,12 +456,6 @@ int hfs_cnode_teardown (struct vnode *vp, vfs_context_t ctx, int reclaim) {
 			 * zero out cp->c_blocks to indicate there is no data left in this file.
 			 */
 			cp->c_blocks = 0;
-		}
-
-		/* End the transaction from the start of the file truncation segment */
-		if (started_tr) {
-			hfs_end_transaction(hfsmp);
-			started_tr = 0;
 		}
 	}
 	

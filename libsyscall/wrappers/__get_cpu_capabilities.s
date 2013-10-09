@@ -33,8 +33,8 @@
 	.align 2, 0x90
 	.globl __get_cpu_capabilities
 __get_cpu_capabilities:
-	movq	$(_COMM_PAGE_CPU_CAPABILITIES), %rax
-	movl	(%rax), %eax
+	movq	$(_COMM_PAGE_CPU_CAPABILITIES64), %rax
+	movq	(%rax), %rax
 	ret
 
 #elif defined(__i386__)
@@ -43,7 +43,8 @@ __get_cpu_capabilities:
 	.align 2, 0x90
 	.globl __get_cpu_capabilities
 __get_cpu_capabilities:
-	movl	_COMM_PAGE_CPU_CAPABILITIES, %eax
+	movl	_COMM_PAGE_CPU_CAPABILITIES64, %eax
+	movl	_COMM_PAGE_CPU_CAPABILITIES64+4, %edx
 	ret
 
 #else

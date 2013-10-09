@@ -155,7 +155,7 @@ COMMPAGE_FUNCTION_START(pfz_mutex_lock, 32, 4)
 	orl	$0x00180000,%eax	    // copy 24 bytes of arguments in trampoline
 	xorl	%ebx,%ebx		    // clear preemption flag
 	sysenter
-COMMPAGE_DESCRIPTOR(pfz_mutex_lock,_COMM_PAGE_PFZ_MUTEX_LOCK,0,0)
+COMMPAGE_DESCRIPTOR(pfz_mutex_lock,_COMM_PAGE_PFZ_MUTEX_LOCK)
 
 
 
@@ -224,5 +224,5 @@ COMMPAGE_FUNCTION_START(pfz_mutex_lock_64, 64, 4)
 	movl	$PTHRW_STATUS_SYSCALL,%eax  // we made syscall
 	popq	%rbp
 	ret
-COMMPAGE_DESCRIPTOR(pfz_mutex_lock_64,_COMM_PAGE_PFZ_MUTEX_LOCK,0,0)
+COMMPAGE_DESCRIPTOR(pfz_mutex_lock_64,_COMM_PAGE_PFZ_MUTEX_LOCK)
 

@@ -70,7 +70,7 @@ int diagCall64(x86_saved_state_t *regs);
 #define dgBind 18
 #define dgAcntg 20
 #define dgKlra 21
-#define dgKfree 22
+#define dgEnaPMC 22
 #define	dgWar 23
 #define dgNapStat 24
 #define dgRuptStat 25
@@ -100,7 +100,17 @@ typedef struct diagWork {			/* Diagnostic work area */
 
 extern diagWork dgWork;
 
-
+#define FIXED_PMC (1 << 30)
+#define FIXED_PMC0 (FIXED_PMC)
+#define FIXED_PMC1 (FIXED_PMC | 1)
+#define FIXED_PMC2 (FIXED_PMC | 2)
+ 
+static inline uint64_t read_pmc(uint32_t counter)
+{
+	uint32_t lo = 0, hi = 0;
+	__asm__ volatile("rdpmc" : "=a" (lo), "=d" (hi) : "c" (counter));
+	return ((((uint64_t)hi) << 32) | ((uint64_t)lo));
+}
 #endif /* _DIAGNOSTICS_H_ */
 
 #endif /* KERNEL_PRIVATE */
