@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2012 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -58,9 +58,7 @@
 
 #ifndef _NETINET_IP_ENCAP_H_
 #define _NETINET_IP_ENCAP_H_
-#include <sys/appleapiopts.h>
-
-#ifdef KERNEL_PRIVATE
+#ifdef BSD_KERNEL_PRIVATE
 
 struct encaptab {
 	LIST_ENTRY(encaptab) chain;
@@ -75,7 +73,13 @@ struct encaptab {
 	void *arg;			/* passed via m->m_pkthdr.aux */
 };
 
-void	encap_init(void) __attribute__((section("__TEXT, initcode")));
+struct protosw;
+struct ip6protosw;
+struct domain;
+
+__BEGIN_DECLS
+void	encap4_init(struct protosw *, struct domain *);
+void	encap6_init(struct ip6protosw *, struct domain *);
 void	encap4_input(struct mbuf *, int);
 int	encap6_input(struct mbuf **, int *, int);
 const struct encaptab *encap_attach(int, int, const struct sockaddr *,
@@ -86,6 +90,7 @@ const struct encaptab *encap_attach_func(int, int,
 	const struct protosw *, void *);
 int	encap_detach(const struct encaptab *);
 void	*encap_getarg(struct mbuf *);
-#endif /* KERNEL_PRIVATE */
+__END_DECLS
 
+#endif /* BSD_KERNEL_PRIVATE */
 #endif /*_NETINET_IP_ENCAP_H_*/

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2010 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2012 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -334,54 +334,15 @@ static void fpu_load_registers(void *fstate) {
 	}
 #endif	/* DEBUG */
 
-#if defined(__i386__)
-	if (layout == FXSAVE32) {
-		/* Restore the compatibility/legacy mode XMM+x87 state */
-		fxrstor(ifps);
-	}
-	else if (layout == FXSAVE64) {
-		fxrstor64(ifps);
-	}
-	else if (layout == XSAVE32) {
-		xrstor(ifps);
-	}
-	else if (layout == XSAVE64) {
-		xrstor64(ifps);
-	}
-#elif defined(__x86_64__)
 	if ((layout == XSAVE64) || (layout == XSAVE32))
 		xrstor(ifps);
 	else
 		fxrstor(ifps);
-#endif
 }
 
 static void fpu_store_registers(void *fstate, boolean_t is64) {
 	struct x86_fx_thread_state *ifps = fstate;
 	assert(ALIGNED(ifps, 64));
-#if defined(__i386__)
-	if (!is64) {
-		if (fpu_YMM_present) {
-			xsave(ifps);
-			ifps->fp_save_layout = XSAVE32;
-		}
-		else {
-			/* save the compatibility/legacy mode XMM+x87 state */
-			fxsave(ifps);
-			ifps->fp_save_layout = FXSAVE32;
-		}
-	}
-	else {
-		if (fpu_YMM_present) {
-			xsave64(ifps);
-			ifps->fp_save_layout = XSAVE64;
-		}
-		else {
-			fxsave64(ifps);
-			ifps->fp_save_layout = FXSAVE64;
-		}
-	}
-#elif defined(__x86_64__)
 	if (fpu_YMM_present) {
 		xsave(ifps);
 		ifps->fp_save_layout = is64 ? XSAVE64 : XSAVE32;
@@ -390,7 +351,6 @@ static void fpu_store_registers(void *fstate, boolean_t is64) {
 		fxsave(ifps);
 		ifps->fp_save_layout = is64 ? FXSAVE64 : FXSAVE32;
 	}
-#endif
 }
 
 /*
@@ -957,7 +917,12 @@ fp_load(
 	struct x86_fx_thread_state *ifps = pcb->ifps;
 
 	assert(ifps);
-	assert(ifps->fp_valid == FALSE || ifps->fp_valid == TRUE);
+#if	DEBUG
+	if (ifps->fp_valid != FALSE && ifps->fp_valid != TRUE) {
+		panic("fp_load() invalid fp_valid: %u, fp_save_layout: %u\n",
+		      ifps->fp_valid, ifps->fp_save_layout);
+	}
+#endif
 
 	if (ifps->fp_valid == FALSE) {
 		fpinit();

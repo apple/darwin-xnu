@@ -46,22 +46,6 @@ mkext_adler32(uint8_t *buf, int32_t len)
     unsigned long s2 = 0; // (adler >> 16) & 0xffff;
     int k;
 
-#if defined _ARM_ARCH_6
-
-	/* align buf to 16-byte boundary */
-    while ((((uintptr_t)buf)&15)&&(len>0)) { /* not on a 16-byte boundary */
-        len--;
-        s1 += *buf++;
-        s2 += s1;
-        if (s1 >= BASE) s1 -= BASE;
-    }
-	s2 %= BASE;
-
-	if (len>=16) {
-		return adler32_vec(s1, s2, buf, len);
-	}
-
-#endif
 
     while (len > 0) {
         k = len < NMAX ? len : NMAX;

@@ -276,7 +276,7 @@ sched_proto_maintenance_continuation(void)
 	/*
 	 *  Compute various averages.
 	 */
-	compute_averages();
+	compute_averages(1);
 	
 	if (sched_proto_tick_deadline == 0)
 		sched_proto_tick_deadline = abstime;

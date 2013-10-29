@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008-2012 Apple Inc. All rights reserved.
+ * Copyright (c) 2008-2013 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -237,13 +237,15 @@ SYSCTL_INT(_net_inet6_ipsec6, IPSECCTL_ESP_RANDPAD,
 	esp_randpad, CTLFLAG_RW | CTLFLAG_LOCKED,	&ip6_esp_randpad,	0, "");
 #endif /* INET6 */
 
+static int ipsec_setspidx_interface(struct secpolicyindex *, u_int, struct mbuf *,
+                         int, int, int);
 static int ipsec_setspidx_mbuf(struct secpolicyindex *, u_int, u_int,
 	struct mbuf *, int);
 static int ipsec4_setspidx_inpcb(struct mbuf *, struct inpcb *pcb);
 #if INET6
 static int ipsec6_setspidx_in6pcb(struct mbuf *, struct in6pcb *pcb);
 #endif
-static int ipsec_setspidx(struct mbuf *, struct secpolicyindex *, int);
+static int ipsec_setspidx(struct mbuf *, struct secpolicyindex *, int, int);
 static void ipsec4_get_ulp(struct mbuf *m, struct secpolicyindex *, int);
 static int ipsec4_setspidx_ipaddr(struct mbuf *, struct secpolicyindex *);
 #if INET6
@@ -320,12 +322,12 @@ ipsec4_getpolicybysock(m, dir, so, error)
 		return ipsec4_getpolicybyaddr(m, dir, 0, error);
 	}
 	
-	switch (so->so_proto->pr_domain->dom_family) {
-	case AF_INET:
+	switch (SOCK_DOM(so)) {
+	case PF_INET:
 		pcbsp = sotoinpcb(so)->inp_sp;
 		break;
 #if INET6
-	case AF_INET6:
+	case PF_INET6:
 		pcbsp = sotoin6pcb(so)->in6p_sp;
 		break;
 #endif
@@ -338,13 +340,13 @@ ipsec4_getpolicybysock(m, dir, so, error)
 
 	KERNEL_DEBUG(DBG_FNC_GETPOL_SOCK | DBG_FUNC_START, 0,0,0,0,0);
 
-	switch (so->so_proto->pr_domain->dom_family) {
-	case AF_INET:
+	switch (SOCK_DOM(so)) {
+	case PF_INET:
 		/* set spidx in pcb */
 		*error = ipsec4_setspidx_inpcb(m, sotoinpcb(so));
 		break;
 #if INET6
-	case AF_INET6:
+	case PF_INET6:
 		/* set spidx in pcb */
 		*error = ipsec6_setspidx_in6pcb(m, sotoin6pcb(so));
 		break;
@@ -394,8 +396,9 @@ ipsec4_getpolicybysock(m, dir, so, error)
 			/* SP found */
 			if (kernsp != NULL) {
 				KEYDEBUG(KEYDEBUG_IPSEC_STAMP,
-					printf("DP ipsec4_getpolicybysock called "
-					       "to allocate SP:%p\n", kernsp));
+				    printf("DP ipsec4_getpolicybysock called "
+				    "to allocate SP:0x%llx\n",
+				    (uint64_t)VM_KERNEL_ADDRPERM(kernsp)));
 				*error = 0;
 				KERNEL_DEBUG(DBG_FNC_GETPOL_SOCK | DBG_FUNC_END, 3,*error,0,0,0);
 				return kernsp;
@@ -441,8 +444,9 @@ ipsec4_getpolicybysock(m, dir, so, error)
 	/* SP found */
 	if (kernsp != NULL) {
 		KEYDEBUG(KEYDEBUG_IPSEC_STAMP,
-			printf("DP ipsec4_getpolicybysock called "
-			       "to allocate SP:%p\n", kernsp));
+		    printf("DP ipsec4_getpolicybysock called "
+		    "to allocate SP:0x%llx\n",
+		    (uint64_t)VM_KERNEL_ADDRPERM(kernsp)));
 		*error = 0;
 		KERNEL_DEBUG(DBG_FNC_GETPOL_SOCK | DBG_FUNC_END, 7,*error,0,0,0);
 		return kernsp;
@@ -502,14 +506,13 @@ ipsec4_getpolicybysock(m, dir, so, error)
  *		others	: error occurred.
  */
 struct secpolicy *
-ipsec4_getpolicybyaddr(m, dir, flag, error)
-	struct mbuf *m;
-	u_int dir;
-	int flag;
-	int *error;
+ipsec4_getpolicybyaddr(struct mbuf *m,
+                       u_int dir,
+                       int flag,
+                       int *error)
 {
 	struct secpolicy *sp = NULL;
-
+    
 	if (ipsec_bypass != 0)
 		return 0;
 
@@ -518,30 +521,30 @@ ipsec4_getpolicybyaddr(m, dir, flag, error)
 	/* sanity check */
 	if (m == NULL || error == NULL)
 		panic("ipsec4_getpolicybyaddr: NULL pointer was passed.\n");
+	{
+		struct secpolicyindex spidx;
 
-    {
-	struct secpolicyindex spidx;
+		KERNEL_DEBUG(DBG_FNC_GETPOL_ADDR | DBG_FUNC_START, 0,0,0,0,0);
+		bzero(&spidx, sizeof(spidx));
 
-	KERNEL_DEBUG(DBG_FNC_GETPOL_ADDR | DBG_FUNC_START, 0,0,0,0,0);
-	bzero(&spidx, sizeof(spidx));
+		/* make a index to look for a policy */
+		*error = ipsec_setspidx_mbuf(&spidx, dir, AF_INET, m,
+			(flag & IP_FORWARDING) ? 0 : 1);
 
-	/* make a index to look for a policy */
-	*error = ipsec_setspidx_mbuf(&spidx, dir, AF_INET, m,
-	    (flag & IP_FORWARDING) ? 0 : 1);
+		if (*error != 0) {
+			KERNEL_DEBUG(DBG_FNC_GETPOL_ADDR | DBG_FUNC_END, 1,*error,0,0,0);
+			return NULL;
+		}
 
-	if (*error != 0) {
-		KERNEL_DEBUG(DBG_FNC_GETPOL_ADDR | DBG_FUNC_END, 1,*error,0,0,0);
-		return NULL;
+		sp = key_allocsp(&spidx, dir);
 	}
-
-	sp = key_allocsp(&spidx, dir);
-    }
 
 	/* SP found */
 	if (sp != NULL) {
 		KEYDEBUG(KEYDEBUG_IPSEC_STAMP,
-			printf("DP ipsec4_getpolicybyaddr called "
-			       "to allocate SP:%p\n", sp));
+		    printf("DP ipsec4_getpolicybyaddr called "
+		    "to allocate SP:0x%llx\n",
+		    (uint64_t)VM_KERNEL_ADDRPERM(sp)));
 		*error = 0;
 		KERNEL_DEBUG(DBG_FNC_GETPOL_ADDR | DBG_FUNC_END, 2,*error,0,0,0);
 		return sp;
@@ -562,6 +565,69 @@ ipsec4_getpolicybyaddr(m, dir, flag, error)
 	KERNEL_DEBUG(DBG_FNC_GETPOL_ADDR | DBG_FUNC_END, 3,*error,0,0,0);
 	return &ip4_def_policy;
 }
+
+/* Match with bound interface rather than src addr.
+ * Unlike getpolicybyaddr, do not set the default policy.
+ * Return 0 if should continue processing, or -1 if packet
+ * should be dropped.
+ */
+int
+ipsec4_getpolicybyinterface(struct mbuf *m,
+                            u_int dir,
+                            int *flags,
+                            struct ip_out_args *ipoa,
+                            struct secpolicy **sp)
+{
+	struct secpolicyindex spidx;
+	int error = 0;
+
+	if (ipsec_bypass != 0)
+		return 0;
+    
+	/* Sanity check */
+	if (m == NULL || ipoa == NULL || sp == NULL)
+		panic("ipsec4_getpolicybyinterface: NULL pointer was passed.\n");
+    
+	if (ipoa->ipoa_boundif == IFSCOPE_NONE)
+		return 0;
+ 
+	KERNEL_DEBUG(DBG_FNC_GETPOL_ADDR | DBG_FUNC_START, 0,0,0,0,0);
+	bzero(&spidx, sizeof(spidx));
+    
+	/* make a index to look for a policy */
+	error = ipsec_setspidx_interface(&spidx, dir, m, (*flags & IP_FORWARDING) ? 0 : 1,
+					ipoa->ipoa_boundif, 4);
+    
+	if (error != 0) {
+		KERNEL_DEBUG(DBG_FNC_GETPOL_ADDR | DBG_FUNC_END, 1,error,0,0,0);
+		return 0;
+	}
+    
+	*sp = key_allocsp(&spidx, dir);
+
+	/* Return SP, whether NULL or not */
+	if (*sp != NULL && (*sp)->policy == IPSEC_POLICY_IPSEC) {
+		if ((*sp)->ipsec_if == NULL) {
+			/* Invalid to capture on an interface without redirect */
+			key_freesp(*sp, KEY_SADB_UNLOCKED);
+			*sp = NULL;
+			return -1;
+		} else if ((*sp)->disabled) {
+			/* Disabled policies go in the clear */
+			key_freesp(*sp, KEY_SADB_UNLOCKED);
+			*sp = NULL;
+			*flags |= IP_NOIPSEC; /* Avoid later IPSec check */
+		} else {
+			/* If policy is enabled, redirect to ipsec interface */
+			ipoa->ipoa_boundif = (*sp)->ipsec_if->if_index;
+		}
+	}
+    
+	KERNEL_DEBUG(DBG_FNC_GETPOL_ADDR | DBG_FUNC_END, 2,error,0,0,0);
+    
+	return 0;
+}
+
 
 #if INET6
 /*
@@ -592,7 +658,7 @@ ipsec6_getpolicybysock(m, dir, so, error)
 		panic("ipsec6_getpolicybysock: NULL pointer was passed.\n");
 
 #if DIAGNOSTIC
-	if (so->so_proto->pr_domain->dom_family != AF_INET6)
+	if (SOCK_DOM(so) != PF_INET6)
 		panic("ipsec6_getpolicybysock: socket domain != inet6\n");
 #endif
 
@@ -641,8 +707,9 @@ ipsec6_getpolicybysock(m, dir, so, error)
 			/* SP found */
 			if (kernsp != NULL) {
 				KEYDEBUG(KEYDEBUG_IPSEC_STAMP,
-					printf("DP ipsec6_getpolicybysock called "
-					       "to allocate SP:%p\n", kernsp));
+				    printf("DP ipsec6_getpolicybysock called "
+				    "to allocate SP:0x%llx\n",
+				    (uint64_t)VM_KERNEL_ADDRPERM(kernsp)));
 				*error = 0;
 				return kernsp;
 			}
@@ -684,8 +751,9 @@ ipsec6_getpolicybysock(m, dir, so, error)
 	/* SP found */
 	if (kernsp != NULL) {
 		KEYDEBUG(KEYDEBUG_IPSEC_STAMP,
-			printf("DP ipsec6_getpolicybysock called "
-			       "to allocate SP:%p\n", kernsp));
+		    printf("DP ipsec6_getpolicybysock called "
+		    "to allocate SP:0x%llx\n",
+		    (uint64_t)VM_KERNEL_ADDRPERM(kernsp)));
 		*error = 0;
 		return kernsp;
 	}
@@ -747,11 +815,10 @@ ipsec6_getpolicybysock(m, dir, so, error)
 #endif
 
 struct secpolicy *
-ipsec6_getpolicybyaddr(m, dir, flag, error)
-	struct mbuf *m;
-	u_int dir;
-	int flag;
-	int *error;
+ipsec6_getpolicybyaddr(struct mbuf *m,
+                        u_int dir,
+                        int flag,
+                        int *error)
 {
 	struct secpolicy *sp = NULL;
 
@@ -779,8 +846,9 @@ ipsec6_getpolicybyaddr(m, dir, flag, error)
 	/* SP found */
 	if (sp != NULL) {
 		KEYDEBUG(KEYDEBUG_IPSEC_STAMP,
-			printf("DP ipsec6_getpolicybyaddr called "
-			       "to allocate SP:%p\n", sp));
+		    printf("DP ipsec6_getpolicybyaddr called "
+		    "to allocate SP:0x%llx\n",
+		    (uint64_t)VM_KERNEL_ADDRPERM(sp)));
 		*error = 0;
 		return sp;
 	}
@@ -798,6 +866,71 @@ ipsec6_getpolicybyaddr(m, dir, flag, error)
 	*error = 0;
 	return &ip6_def_policy;
 }
+
+/* Match with bound interface rather than src addr.
+ * Unlike getpolicybyaddr, do not set the default policy.
+ * Return 0 if should continue processing, or -1 if packet
+ * should be dropped.
+ */
+int
+ipsec6_getpolicybyinterface(struct mbuf *m,
+                            u_int dir,
+                            int flag,
+                            struct ip6_out_args *ip6oap,
+                            int *noipsec,
+                            struct secpolicy **sp)
+{
+	struct secpolicyindex spidx;
+	int error = 0;
+    
+	if (ipsec_bypass != 0)
+		return 0;
+    
+	/* Sanity check */
+	if (m == NULL || sp == NULL || noipsec == NULL || ip6oap == NULL)
+		panic("ipsec6_getpolicybyinterface: NULL pointer was passed.\n");
+    
+	*noipsec = 0;
+    
+	if (ip6oap->ip6oa_boundif == IFSCOPE_NONE)
+		return 0;
+    
+	KERNEL_DEBUG(DBG_FNC_GETPOL_ADDR | DBG_FUNC_START, 0,0,0,0,0);
+	bzero(&spidx, sizeof(spidx));
+    
+	/* make a index to look for a policy */
+	error = ipsec_setspidx_interface(&spidx, dir, m, (flag & IP_FORWARDING) ? 0 : 1,
+					ip6oap->ip6oa_boundif, 6);
+    
+	if (error != 0) {
+		KERNEL_DEBUG(DBG_FNC_GETPOL_ADDR | DBG_FUNC_END, 1,error,0,0,0);
+		return 0;
+	}
+    
+	*sp = key_allocsp(&spidx, dir);
+    
+	/* Return SP, whether NULL or not */
+	if (*sp != NULL && (*sp)->policy == IPSEC_POLICY_IPSEC) {
+		if ((*sp)->ipsec_if == NULL) {
+			/* Invalid to capture on an interface without redirect */
+			key_freesp(*sp, KEY_SADB_UNLOCKED);
+			*sp = NULL;
+			return -1;
+		} else if ((*sp)->disabled) {
+			/* Disabled policies go in the clear */
+			key_freesp(*sp, KEY_SADB_UNLOCKED);
+			*sp = NULL;
+			*noipsec = 1; /* Avoid later IPSec check */
+		} else {
+			/* If policy is enabled, redirect to ipsec interface */
+			ip6oap->ip6oa_boundif = (*sp)->ipsec_if->if_index;
+		}
+	}
+    
+	KERNEL_DEBUG(DBG_FNC_GETPOL_ADDR | DBG_FUNC_END, 2,*error,0,0,0);
+    
+	return 0;
+}
 #endif /* INET6 */
 
 /*
@@ -810,7 +943,7 @@ ipsec6_getpolicybyaddr(m, dir, flag, error)
  *	0:	success.
  *	other:	failure, and set errno.
  */
-int
+static int
 ipsec_setspidx_mbuf(
 	struct secpolicyindex *spidx,
 	u_int dir,
@@ -826,7 +959,7 @@ ipsec_setspidx_mbuf(
 
 	bzero(spidx, sizeof(*spidx));
 
-	error = ipsec_setspidx(m, spidx, needport);
+	error = ipsec_setspidx(m, spidx, needport, 0);
 	if (error)
 		goto bad;
 	spidx->dir = dir;
@@ -836,6 +969,42 @@ ipsec_setspidx_mbuf(
     bad:
 	/* XXX initialize */
 	bzero(spidx, sizeof(*spidx));
+	return EINVAL;
+}
+
+static int
+ipsec_setspidx_interface(
+                    struct secpolicyindex *spidx,
+                    u_int dir,
+                    struct mbuf *m,
+                    int needport,
+                    int ifindex,
+                    int ip_version)
+{
+	int error;
+    
+	/* sanity check */
+	if (spidx == NULL || m == NULL)
+		panic("ipsec_setspidx_interface: NULL pointer was passed.\n");
+    
+	bzero(spidx, sizeof(*spidx));
+    
+	error = ipsec_setspidx(m, spidx, needport, ip_version);
+	if (error)
+		goto bad;
+	spidx->dir = dir;
+    
+	if (ifindex != 0) {
+		ifnet_head_lock_shared();
+		spidx->internal_if = ifindex2ifnet[ifindex];
+		ifnet_head_done();
+	} else {
+		spidx->internal_if = NULL;
+	}
+    
+	return 0;
+    
+bad:
 	return EINVAL;
 }
 
@@ -862,13 +1031,13 @@ ipsec4_setspidx_inpcb(m, pcb)
 	bzero(&pcb->inp_sp->sp_out->spidx, sizeof(*spidx));
 
 	spidx = &pcb->inp_sp->sp_in->spidx;
-	error = ipsec_setspidx(m, spidx, 1);
+	error = ipsec_setspidx(m, spidx, 1, 0);
 	if (error)
 		goto bad;
 	spidx->dir = IPSEC_DIR_INBOUND;
 
 	spidx = &pcb->inp_sp->sp_out->spidx;
-	error = ipsec_setspidx(m, spidx, 1);
+	error = ipsec_setspidx(m, spidx, 1, 0);
 	if (error)
 		goto bad;
 	spidx->dir = IPSEC_DIR_OUTBOUND;
@@ -902,13 +1071,13 @@ ipsec6_setspidx_in6pcb(m, pcb)
 	bzero(&pcb->in6p_sp->sp_out->spidx, sizeof(*spidx));
 
 	spidx = &pcb->in6p_sp->sp_in->spidx;
-	error = ipsec_setspidx(m, spidx, 1);
+	error = ipsec_setspidx(m, spidx, 1, 0);
 	if (error)
 		goto bad;
 	spidx->dir = IPSEC_DIR_INBOUND;
 
 	spidx = &pcb->in6p_sp->sp_out->spidx;
-	error = ipsec_setspidx(m, spidx, 1);
+	error = ipsec_setspidx(m, spidx, 1, 0);
 	if (error)
 		goto bad;
 	spidx->dir = IPSEC_DIR_OUTBOUND;
@@ -928,10 +1097,10 @@ bad:
  * the caller is responsible for error recovery (like clearing up spidx).
  */
 static int
-ipsec_setspidx(m, spidx, needport)
-	struct mbuf *m;
-	struct secpolicyindex *spidx;
-	int needport;
+ipsec_setspidx(struct mbuf *m,
+               struct secpolicyindex *spidx,
+               int needport,
+               int force_ip_version)
 {
 	struct ip *ip = NULL;
 	struct ip ipbuf;
@@ -939,10 +1108,10 @@ ipsec_setspidx(m, spidx, needport)
 	struct mbuf *n;
 	int len;
 	int error;
-
+    
 	if (m == NULL)
 		panic("ipsec_setspidx: m == 0 passed.\n");
-
+    
 	/*
 	 * validate m->m_pkthdr.len.  we see incorrect length if we
 	 * mistakenly call this function with inconsistent mbuf chain
@@ -974,11 +1143,16 @@ ipsec_setspidx(m, spidx, needport)
 		m_copydata(m, 0, sizeof(ipbuf), (caddr_t)&ipbuf);
 		ip = &ipbuf;
 	}
+    
+	if (force_ip_version) {
+		v = force_ip_version;
+	} else {
 #ifdef _IP_VHL
-	v = _IP_VHL_V(ip->ip_vhl);
+		v = _IP_VHL_V(ip->ip_vhl);
 #else
-	v = ip->ip_v;
+		v = ip->ip_v;
 #endif
+	}
 	switch (v) {
 	case 4:
 		error = ipsec4_setspidx_ipaddr(m, spidx);
@@ -1116,6 +1290,7 @@ ipsec4_setspidx_ipaddr(m, spidx)
 	sin->sin_len = sizeof(struct sockaddr_in);
 	bcopy(&ip->ip_dst, &sin->sin_addr, sizeof(ip->ip_dst));
 	spidx->prefd = sizeof(struct in_addr) << 3;
+    
 	return 0;
 }
 
@@ -1959,7 +2134,8 @@ ipsec4_in_reject_so(m, so)
 
 	result = ipsec_in_reject(sp, m);
 	KEYDEBUG(KEYDEBUG_IPSEC_STAMP,
-		printf("DP ipsec4_in_reject_so call free SP:%p\n", sp));
+	    printf("DP ipsec4_in_reject_so call free SP:0x%llx\n",
+	    (uint64_t)VM_KERNEL_ADDRPERM(sp)));
 	key_freesp(sp, KEY_SADB_UNLOCKED);
 
 	return result;
@@ -2017,7 +2193,8 @@ ipsec6_in_reject_so(m, so)
 
 	result = ipsec_in_reject(sp, m);
 	KEYDEBUG(KEYDEBUG_IPSEC_STAMP,
-		printf("DP ipsec6_in_reject_so call free SP:%p\n", sp));
+	    printf("DP ipsec6_in_reject_so call free SP:0x%llx\n",
+	    (uint64_t)VM_KERNEL_ADDRPERM(sp)));
 	key_freesp(sp, KEY_SADB_UNLOCKED);
 
 	return result;
@@ -2152,7 +2329,8 @@ ipsec4_hdrsiz(m, dir, inp)
 
 	size = ipsec_hdrsiz(sp);
 	KEYDEBUG(KEYDEBUG_IPSEC_STAMP,
-		printf("DP ipsec4_hdrsiz call free SP:%p\n", sp));
+	    printf("DP ipsec4_hdrsiz call free SP:0x%llx\n",
+	    (uint64_t)VM_KERNEL_ADDRPERM(sp)));
 	KEYDEBUG(KEYDEBUG_IPSEC_DATA,
 		printf("ipsec4_hdrsiz: size:%lu.\n", (u_int32_t)size));
 	key_freesp(sp, KEY_SADB_UNLOCKED);
@@ -2192,7 +2370,8 @@ ipsec6_hdrsiz(m, dir, in6p)
 		return 0;
 	size = ipsec_hdrsiz(sp);
 	KEYDEBUG(KEYDEBUG_IPSEC_STAMP,
-		printf("DP ipsec6_hdrsiz call free SP:%p\n", sp));
+	    printf("DP ipsec6_hdrsiz call free SP:0x%llx\n",
+	    (uint64_t)VM_KERNEL_ADDRPERM(sp)));
 	KEYDEBUG(KEYDEBUG_IPSEC_DATA,
 		printf("ipsec6_hdrsiz: size:%lu.\n", (u_int32_t)size));
 	key_freesp(sp, KEY_SADB_UNLOCKED);
@@ -2308,11 +2487,7 @@ ipsec4_encapsulate(m, sav)
 		ipseclog((LOG_ERR, "IPv4 ipsec: size exceeds limit: "
 			"leave ip_len as is (invalid packet)\n"));
 	}
-#ifdef RANDOM_IP_ID
 	ip->ip_id = ip_randomid();
-#else
-	ip->ip_id = htons(ip_id++);
-#endif
 	bcopy(&((struct sockaddr_in *)&sav->sah->saidx.src)->sin_addr,
 		&ip->ip_src, sizeof(ip->ip_src));
 	bcopy(&((struct sockaddr_in *)&sav->sah->saidx.dst)->sin_addr,
@@ -2401,11 +2576,7 @@ ipsec4_encapsulate_utun_esp_keepalive(m_ptr, sav)
 		ipseclog((LOG_ERR, "IPv4 ipsec: size exceeds limit: "
 			"leave ip_len as is (invalid packet)\n"));
 	}
-#ifdef RANDOM_IP_ID
 	ip->ip_id = ip_randomid();
-#else
-	ip->ip_id = htons(ip_id++);
-#endif
 	bcopy(&((struct sockaddr_in *)&sav->sah->saidx.src)->sin_addr,
 		&ip->ip_src, sizeof(ip->ip_src));
 	bcopy(&((struct sockaddr_in *)&sav->sah->saidx.dst)->sin_addr,
@@ -3158,13 +3329,11 @@ ipsec4_output(
 			if (ro4->ro_rt != NULL) {
 				RT_LOCK(ro4->ro_rt);
 			}
-			if (ro4->ro_rt != NULL &&
-			    (ro4->ro_rt->generation_id != route_generation ||
-			    !(ro4->ro_rt->rt_flags & RTF_UP) ||
-			    dst4->sin_addr.s_addr != ip->ip_dst.s_addr)) {
-				RT_UNLOCK(ro4->ro_rt);
-				rtfree(ro4->ro_rt);
-				ro4->ro_rt = NULL;
+			if (ROUTE_UNUSABLE(ro4) ||
+			    dst4->sin_addr.s_addr != ip->ip_dst.s_addr) {
+				if (ro4->ro_rt != NULL)
+					RT_UNLOCK(ro4->ro_rt);
+				ROUTE_RELEASE(ro4);
 			}
 			if (ro4->ro_rt == 0) {
 				dst4->sin_family = AF_INET;
@@ -3193,10 +3362,7 @@ ipsec4_output(
 			if (ro4->ro_rt->rt_flags & RTF_GATEWAY)
 				dst4 = (struct sockaddr_in *)(void *)ro4->ro_rt->rt_gateway;
 			RT_UNLOCK(ro4->ro_rt);
-			if (state->ro.ro_rt != NULL) {
-				rtfree(state->ro.ro_rt);
-				state->ro.ro_rt = NULL;
-			}
+			ROUTE_RELEASE(&state->ro);
 			route_copyout(&state->ro, ro4, sizeof(state->ro));
 			state->dst = (struct sockaddr *)dst4;
 			state->tunneled = 4;
@@ -3590,7 +3756,7 @@ ipsec6_output_tunnel(
 				struct route *ro4 = NULL;
 				struct route  ro4_copy;
 				struct ip_out_args ipoa = { IFSCOPE_NONE, { 0 },
-				    IPOAF_SELECT_SRCIF };
+				    IPOAF_SELECT_SRCIF, 0 };
 
 				/*
 				 * must be last isr because encapsulated IPv6 packet
@@ -3619,13 +3785,11 @@ ipsec6_output_tunnel(
 				if (ro4->ro_rt) {
 					RT_LOCK(ro4->ro_rt);
 				}
-				if (ro4->ro_rt != NULL &&
-				    (ro4->ro_rt->generation_id != route_generation ||
-				    !(ro4->ro_rt->rt_flags & RTF_UP) ||
-				    dst4->sin_addr.s_addr != ip->ip_dst.s_addr)) {
-					RT_UNLOCK(ro4->ro_rt);
-					rtfree(ro4->ro_rt);
-					ro4->ro_rt = NULL;
+				if (ROUTE_UNUSABLE(ro4) ||
+				    dst4->sin_addr.s_addr != ip->ip_dst.s_addr) {
+					if (ro4->ro_rt != NULL)
+						RT_UNLOCK(ro4->ro_rt);
+					ROUTE_RELEASE(ro4);
 				}
 				if (ro4->ro_rt == NULL) {
 					dst4->sin_family = AF_INET;
@@ -3640,9 +3804,7 @@ ipsec6_output_tunnel(
 				state->m = ipsec4_splithdr(state->m);
 				if (!state->m) {
 					error = ENOMEM;
-					if (ro4_copy.ro_rt != NULL) {
-						rtfree(ro4_copy.ro_rt);
-					}
+					ROUTE_RELEASE(&ro4_copy);
 					goto bad;
 				}
 				switch (isr->saidx.proto) {
@@ -3650,9 +3812,7 @@ ipsec6_output_tunnel(
 #if IPSEC_ESP
 					if ((error = esp4_output(state->m, sav)) != 0) {
 						state->m = NULL;
-						if (ro4_copy.ro_rt != NULL) {
-							rtfree(ro4_copy.ro_rt);
-						}
+						ROUTE_RELEASE(&ro4_copy);
 						goto bad;
 					}
 					break;
@@ -3661,26 +3821,20 @@ ipsec6_output_tunnel(
 					m_freem(state->m);
 					state->m = NULL;
 					error = EINVAL;
-					if (ro4_copy.ro_rt != NULL) {
-						rtfree(ro4_copy.ro_rt);
-					}
+					ROUTE_RELEASE(&ro4_copy);
 					goto bad;
 #endif
 				case IPPROTO_AH:
 					if ((error = ah4_output(state->m, sav)) != 0) {
 						state->m = NULL;
-						if (ro4_copy.ro_rt != NULL) {
-							rtfree(ro4_copy.ro_rt);
-						}
+						ROUTE_RELEASE(&ro4_copy);
 						goto bad;
 					}
 					break;
 				case IPPROTO_IPCOMP:
 					if ((error = ipcomp4_output(state->m, sav)) != 0) {
 						state->m = NULL;
-						if (ro4_copy.ro_rt != NULL) {
-							rtfree(ro4_copy.ro_rt);
-						}
+						ROUTE_RELEASE(&ro4_copy);
 						goto bad;
 					}
 					break;
@@ -3691,17 +3845,13 @@ ipsec6_output_tunnel(
 					m_freem(state->m);
 					state->m = NULL;
 					error = EINVAL;
-					if (ro4_copy.ro_rt != NULL) {
-						rtfree(ro4_copy.ro_rt);
-					}
+					ROUTE_RELEASE(&ro4_copy);
 					goto bad;
 				}
 		
 				if (state->m == 0) {
 					error = ENOMEM;
-					if (ro4_copy.ro_rt != NULL) {
-						rtfree(ro4_copy.ro_rt);
-					}
+					ROUTE_RELEASE(&ro4_copy);
 					goto bad;
 				}
 				ip = mtod(state->m, struct ip *);
@@ -3731,13 +3881,11 @@ ipsec6_output_tunnel(
 			if (ro6->ro_rt) {
 				RT_LOCK(ro6->ro_rt);
 			}
-			if (ro6->ro_rt != NULL &&
-			    (ro6->ro_rt->generation_id != route_generation ||
-			    !(ro6->ro_rt->rt_flags & RTF_UP) ||
-			    !IN6_ARE_ADDR_EQUAL(&dst6->sin6_addr, &ip6->ip6_dst))) {
-				RT_UNLOCK(ro6->ro_rt);
-				rtfree(ro6->ro_rt);
-				ro6->ro_rt = NULL;
+			if (ROUTE_UNUSABLE(ro6) ||
+			    !IN6_ARE_ADDR_EQUAL(&dst6->sin6_addr, &ip6->ip6_dst)) {
+				if (ro6->ro_rt != NULL)
+					RT_UNLOCK(ro6->ro_rt);
+				ROUTE_RELEASE(ro6);
 			}
 			if (ro6->ro_rt == 0) {
 				bzero(dst6, sizeof(*dst6));
@@ -3770,10 +3918,7 @@ ipsec6_output_tunnel(
 			if (ro6->ro_rt->rt_flags & RTF_GATEWAY)
 				dst6 = (struct sockaddr_in6 *)(void *)ro6->ro_rt->rt_gateway;
 			RT_UNLOCK(ro6->ro_rt);
-			if (state->ro.ro_rt != NULL) {
-				rtfree(state->ro.ro_rt);
-				state->ro.ro_rt = NULL;
-			}
+			ROUTE_RELEASE(&state->ro);
 			route_copyout(&state->ro, ro6, sizeof(state->ro));
 			state->dst = (struct sockaddr *)dst6;
 			state->tunneled = 6;
@@ -4404,7 +4549,8 @@ ipsec_send_natt_keepalive(
 	struct mbuf	       *m;
 	struct ip          *ip;
 	int                 error;
-	struct ip_out_args  ipoa = { IFSCOPE_NONE, { 0 }, IPOAF_SELECT_SRCIF };
+	struct ip_out_args  ipoa =
+	    { IFSCOPE_NONE, { 0 }, IPOAF_SELECT_SRCIF, 0 };
 	struct route        ro;
 
 	lck_mtx_assert(sadb_mutex, LCK_MTX_ASSERT_NOTOWNED);
@@ -4456,11 +4602,10 @@ ipsec_send_natt_keepalive(
 
 	// grab sadb_mutex, to get a local copy of sah's route cache
 	lck_mtx_lock(sadb_mutex);
-	if (sav->sah->sa_route.ro_rt != NULL &&
-	    rt_key(sav->sah->sa_route.ro_rt)->sa_family != AF_INET) {
-		rtfree(sav->sah->sa_route.ro_rt);
-		sav->sah->sa_route.ro_rt = NULL;
-	}
+	if (ROUTE_UNUSABLE(&sav->sah->sa_route) ||
+	    rt_key(sav->sah->sa_route.ro_rt)->sa_family != AF_INET)
+		ROUTE_RELEASE(&sav->sah->sa_route);
+
 	route_copyout(&ro, &sav->sah->sa_route, sizeof(ro));
 	lck_mtx_unlock(sadb_mutex);
 

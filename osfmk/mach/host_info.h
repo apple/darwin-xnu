@@ -99,6 +99,7 @@ typedef	integer_t	host_flavor_t;
 #define HOST_PRIORITY_INFO	5	/* priority information */
 #define HOST_SEMAPHORE_TRAPS	7	/* Has semaphore traps */
 #define HOST_MACH_MSG_TRAP	8	/* Has mach_msg_trap */
+#define HOST_VM_PURGABLE	9	/* purg'e'able memory info */
 
 #ifdef MACH_KERNEL_PRIVATE
 struct host_basic_info_old {
@@ -185,7 +186,8 @@ typedef struct host_priority_info	*host_priority_info_t;
 /* host_statistics64() */
 #define HOST_VM_INFO64		4	/* 64-bit virtual memory stats */
 #define HOST_EXTMOD_INFO64	5	/* External modification stats */
-#define HOST_EXPIRED_TASK_INFO        6        /* Statistics for expired tasks */
+#define HOST_EXPIRED_TASK_INFO	6	/* Statistics for expired tasks */
+
 
 struct host_load_info {
 	integer_t	avenrun[3];	/* scaled by LOAD_SCALE */
@@ -197,6 +199,11 @@ typedef struct host_load_info	*host_load_info_t;
 #define	HOST_LOAD_INFO_COUNT ((mach_msg_type_number_t) \
 		(sizeof(host_load_info_data_t)/sizeof(integer_t)))
 
+typedef struct vm_purgeable_info	host_purgable_info_data_t;
+typedef struct vm_purgeable_info	*host_purgable_info_t;
+#define HOST_VM_PURGABLE_COUNT ((mach_msg_type_number_t) \
+		(sizeof(host_purgable_info_data_t)/sizeof(integer_t)))
+
 /* in <mach/vm_statistics.h> */
 /* vm_statistics64 */
 #define	HOST_VM_INFO64_COUNT ((mach_msg_type_number_t) \
@@ -204,6 +211,11 @@ typedef struct host_load_info	*host_load_info_t;
 
 /* size of the latest version of the structure */
 #define HOST_VM_INFO64_LATEST_COUNT HOST_VM_INFO64_COUNT
+#define	HOST_VM_INFO64_REV1_COUNT HOST_VM_INFO64_LATEST_COUNT
+/* previous versions: adjust the size according to what was added each time */
+#define HOST_VM_INFO64_REV0_COUNT /* added compression and swapper info (14 ints) */\
+	((mach_msg_type_number_t) \
+	 (HOST_VM_INFO64_REV1_COUNT - 14))
 
 /* in <mach/vm_statistics.h> */
 /* vm_extmod_statistics */

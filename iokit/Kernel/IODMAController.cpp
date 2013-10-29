@@ -91,9 +91,9 @@ void IODMAController::completeDMACommand(IODMAEventSource *dmaES, IODMACommand *
   dmaES->completeDMACommand(dmaCommand);
 }
 
-void IODMAController::notifyDMACommand(IODMAEventSource *dmaES, IODMACommand *dmaCommand, IOReturn status, IOByteCount actualByteCount)
+void IODMAController::notifyDMACommand(IODMAEventSource *dmaES, IODMACommand *dmaCommand, IOReturn status, IOByteCount actualByteCount, AbsoluteTime timeStamp)
 {
-  dmaES->notifyDMACommand(dmaCommand, status, actualByteCount);
+  dmaES->notifyDMACommand(dmaCommand, status, actualByteCount, timeStamp);
 }
 
 

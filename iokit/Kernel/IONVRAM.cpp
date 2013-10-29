@@ -1,5 +1,6 @@
 /*
  * Copyright (c) 1998-2006 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2007-2012 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -63,22 +64,61 @@ bool IODTNVRAM::init(IORegistryEntry *old, const IORegistryPlane *plane)
   _registryPropertiesKey = OSSymbol::withCStringNoCopy("aapl,pci");
   if (_registryPropertiesKey == 0) return false;
   
+  // <rdar://problem/9529235> race condition possible between
+  // IODTNVRAM and IONVRAMController (restore loses boot-args)
+  initProxyData();
+  
   return true;
 }
 
+void IODTNVRAM::initProxyData(void)
+{
+  IORegistryEntry *entry;
+  const char *key = "nvram-proxy-data";
+  OSObject *prop;
+  OSData *data;
+  const void *bytes;
+  
+  entry = IORegistryEntry::fromPath("/chosen", gIODTPlane);
+  if (entry != 0) {
+    prop = entry->getProperty(key);
+    if (prop != 0) {
+      data = OSDynamicCast(OSData, prop);
+      if (data != 0) {
+        bytes = data->getBytesNoCopy();
+        if (bytes != 0) {
+          bcopy(bytes, _nvramImage, data->getLength());
+          initNVRAMImage();
+          _isProxied = true;
+        }
+      }
+    }
+    entry->removeProperty(key);
+    entry->release();
+  }
+}
+
 void IODTNVRAM::registerNVRAMController(IONVRAMController *nvram)
+{
+  if (_nvramController != 0) return;
+  
+  _nvramController = nvram;
+  
+  // <rdar://problem/9529235> race condition possible between
+  // IODTNVRAM and IONVRAMController (restore loses boot-args)
+  if (!_isProxied) {
+    _nvramController->read(0, _nvramImage, kIODTNVRAMImageSize);
+    initNVRAMImage();
+  }
+}
+
+void IODTNVRAM::initNVRAMImage(void)
 {
   char   partitionID[18];
   UInt32 partitionOffset, partitionLength;
   UInt32 freePartitionOffset, freePartitionSize;
   UInt32 currentLength, currentOffset = 0;
   OSNumber *partitionOffsetNumber, *partitionLengthNumber;
-  
-  if (_nvramController != 0) return;
-  
-  _nvramController = nvram;
-  
-  _nvramController->read(0, _nvramImage, kIODTNVRAMImageSize);
   
   // Find the offsets for the OF, XPRAM, NameRegistry and PanicInfo partitions.
   _ofPartitionOffset = 0xFFFFFFFF;
@@ -216,6 +256,9 @@ void IODTNVRAM::sync(void)
   
   // Don't try to sync OF Variables if the system has already paniced.
   if (!_systemPaniced) syncOFVariables();
+  
+  // Don't try to perform controller operations if none has been registered.  
+  if (_nvramController == 0) return;
   
   _nvramController->write(0, _nvramImage, kIODTNVRAMImageSize);
   _nvramController->sync();
@@ -948,9 +991,6 @@ OFVariable gOFVariables[] = {
   {"security-password", kOFVariableTypeData, kOFVariablePermRootOnly, -1},
   {"boot-image", kOFVariableTypeData, kOFVariablePermUserWrite, -1},
   {"com.apple.System.fp-state", kOFVariableTypeData, kOFVariablePermKernelOnly, -1},
-#if CONFIG_EMBEDDED
-  {"backlight-level", kOFVariableTypeData, kOFVariablePermUserWrite, -1},
-#endif
   {0, kOFVariableTypeData, kOFVariablePermUserRead, -1}
 };
 

@@ -72,7 +72,7 @@ LEAF(___vfork, 0)
 	lock
 	incl		__current_pid
 	pushl		%ecx
-	BRANCH_EXTERN(cerror)
+	BRANCH_EXTERN(tramp_cerror)
 
 L1:
 	testl		%edx, %edx		// CF=OF=0,  ZF set if zero result
@@ -108,13 +108,13 @@ LEAF(___vfork, 0)
 	popq		%rdi			// return address in %rdi
 	movq		$ SYSCALL_CONSTRUCT_UNIX(SYS_vfork), %rax	// code for vfork -> rax
 	UNIX_SYSCALL_TRAP			// do the system call
-	jnb		L1					// jump if CF==0
+	jnb		L1			// jump if CF==0
 	pushq		%rdi			// put return address back on stack for cerror
 	movq		__current_pid@GOTPCREL(%rip), %rcx
 	lock
 	addq		$1, (%rcx)
-	movq		(%rcx), %rdi
-	BRANCH_EXTERN(cerror)
+	movq		%rax, %rdi
+	BRANCH_EXTERN(_cerror)
 
 L1:
 	testl		%edx, %edx		// CF=OF=0,  ZF set if zero result

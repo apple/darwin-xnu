@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2012 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -63,6 +63,7 @@
 
 #ifndef _NET_IF_ARP_H_
 #define	_NET_IF_ARP_H_
+#include <stdint.h>
 #include <sys/appleapiopts.h>
 #include <netinet/in.h>
 
@@ -119,5 +120,33 @@ struct arpreq {
 #define	ATF_PERM	0x04	/* permanent entry */
 #define	ATF_PUBL	0x08	/* publish entry (respond for other host) */
 #define	ATF_USETRAILERS	0x10	/* has requested trailers */
+
+struct arpstat {
+	/* Normal things that happen: */
+	uint32_t txrequests;	/* # of ARP requests sent by this host. */
+	uint32_t txreplies;	/* # of ARP replies sent by this host. */
+	uint32_t txannounces;	/* # of ARP announcements sent by this host. */
+	uint32_t rxrequests;	/* # of ARP requests received by this host. */
+	uint32_t rxreplies;	/* # of ARP replies received by this host. */
+	uint32_t received;	/* # of ARP packets received by this host. */
+
+	/* Abnormal event and error counting: */
+	uint32_t txconflicts;	/* # of ARP conflict probes sent */
+	uint32_t invalidreqs;	/* # of invalid ARP resolve requests */
+	uint32_t reqnobufs;	/* # of failed requests due to no memory */
+	uint32_t dropped;	/* # of packets dropped waiting for a reply. */
+	uint32_t purged;	/* # of packets purged while removing entries */
+	uint32_t timeouts;	/* # of times with entries removed */
+				/* due to timeout. */
+	uint32_t dupips;	/* # of duplicate IPs detected. */
+
+	/* General statistics */
+	uint32_t inuse;		/* # of ARP entries in routing table */
+	uint32_t txurequests;	/* # of ARP requests sent (unicast) */
+};
+
+#ifdef BSD_KERNEL_PRIVATE
+extern struct arpstat arpstat;
+#endif /* BSD_KERNEL_PRIVATE */
 
 #endif /* !_NET_IF_ARP_H_ */

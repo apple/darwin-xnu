@@ -99,92 +99,32 @@ typedef	quad_t *		qaddr_t;
 typedef	char *			caddr_t;	/* core address */
 typedef	int32_t			daddr_t;	/* disk address */
 
-#ifndef _DEV_T
-typedef	__darwin_dev_t		dev_t;		/* device number */
-#define _DEV_T
-#endif
+#include <sys/_types/_dev_t.h>   		/* device number */
 
 typedef	u_int32_t		fixpt_t;	/* fixed point number */
 
-#ifndef _BLKCNT_T
-typedef	__darwin_blkcnt_t	blkcnt_t;
-#define	_BLKCNT_T
-#endif
-
-#ifndef _BLKSIZE_T
-typedef	__darwin_blksize_t	blksize_t;
-#define	_BLKSIZE_T
-#endif
-
-#ifndef _GID_T
-typedef __darwin_gid_t		gid_t;
-#define _GID_T
-#endif
-
-#ifndef _IN_ADDR_T
-#define _IN_ADDR_T
-typedef	__uint32_t		in_addr_t;	/* base type for internet address */
-#endif
-
-#ifndef _IN_PORT_T
-#define _IN_PORT_T
-typedef	__uint16_t		in_port_t;
-#endif
-
-#ifndef	_INO_T
-typedef	__darwin_ino_t		ino_t;		/* inode number */
-#define _INO_T
-#endif
+#include <sys/_types/_blkcnt_t.h>
+#include <sys/_types/_blksize_t.h>
+#include <sys/_types/_gid_t.h>
+#include <sys/_types/_in_addr_t.h>
+#include <sys/_types/_in_port_t.h>
+#include <sys/_types/_ino_t.h>
 
 #if !defined(_POSIX_C_SOURCE) || defined(_DARWIN_C_SOURCE)
-#ifndef	_INO64_T
-typedef	__darwin_ino64_t	ino64_t;	/* 64bit inode number */
-#define _INO64_T
-#endif
+#include <sys/_types/_ino64_t.h>			/* 64bit inode number */
 #endif /* !defined(_POSIX_C_SOURCE) || defined(_DARWIN_C_SOURCE) */
 
-#ifndef _KEY_T
-#define _KEY_T
-typedef	__int32_t		key_t;		/* IPC key (for Sys V IPC) */
-#endif
-
-#ifndef	_MODE_T
-typedef	__darwin_mode_t		mode_t;
-#define _MODE_T
-#endif
-
-#ifndef _NLINK_T
-typedef	__uint16_t		nlink_t;	/* link count */
-#define	_NLINK_T
-#endif
-
-#ifndef _ID_T
-#define _ID_T
-typedef __darwin_id_t		id_t;		/* can hold pid_t, gid_t, or uid_t */
-#endif
-
-#ifndef _PID_T
-typedef __darwin_pid_t		pid_t;
-#define _PID_T
-#endif
-
-#ifndef _OFF_T
-typedef __darwin_off_t		off_t;
-#define _OFF_T
-#endif
+#include <sys/_types/_key_t.h>
+#include <sys/_types/_mode_t.h>
+#include <sys/_types/_nlink_t.h>
+#include <sys/_types/_id_t.h>
+#include <sys/_types/_pid_t.h>
+#include <sys/_types/_off_t.h>
 
 typedef	int32_t			segsz_t;	/* segment size */
 typedef	int32_t			swblk_t;	/* swap offset */
 
-#ifndef _UID_T
-typedef __darwin_uid_t		uid_t;		/* user id */
-#define _UID_T
-#endif
-
-#ifndef _ID_T
-typedef __darwin_id_t		id_t;
-#define _ID_T
-#endif
+#include <sys/_types/_uid_t.h>
 
 #if !defined(_POSIX_C_SOURCE) || defined(_DARWIN_C_SOURCE)
 /* Major, minor numbers, dev_t's. */
@@ -218,36 +158,17 @@ static inline dev_t  makedev(__uint32_t _major, __uint32_t _minor)
 #endif	/* !__cplusplus */
 #endif	/* !_POSIX_C_SOURCE */
 
-#ifndef	_CLOCK_T
-#define	_CLOCK_T
-typedef	__darwin_clock_t	clock_t;
-#endif
+#include <sys/_types/_clock_t.h>
+#include <sys/_types/_size_t.h>
+#include <sys/_types/_ssize_t.h>
+#include <sys/_types/_time_t.h>
 
-#ifndef _SIZE_T
-#define _SIZE_T
-/* DO NOT REMOVE THIS COMMENT: fixincludes needs to see
- * _GCC_SIZE_T */
-typedef __darwin_size_t		size_t;
-#endif
+#include <sys/_types/_useconds_t.h>
+#include <sys/_types/_suseconds_t.h>
 
-#ifndef	_SSIZE_T
-#define	_SSIZE_T
-typedef	__darwin_ssize_t	ssize_t;
-#endif
-
-#ifndef	_TIME_T
-#define	_TIME_T
-typedef	__darwin_time_t		time_t;
-#endif
-
-#ifndef _USECONDS_T
-#define _USECONDS_T
-typedef __darwin_useconds_t	useconds_t;
-#endif
-
-#ifndef _SUSECONDS_T
-#define _SUSECONDS_T
-typedef __darwin_suseconds_t	suseconds_t;
+#if !defined(_POSIX_C_SOURCE) || defined(_DARWIN_C_SOURCE)
+#include <sys/_types/_rsize_t.h>
+#include <sys/_types/_errno_t.h>
 #endif
 
 #if !defined(_POSIX_C_SOURCE) || defined(_DARWIN_C_SOURCE)
@@ -256,8 +177,7 @@ typedef __darwin_suseconds_t	suseconds_t;
  * compatability, and is intended to be removed at some point in the
  * future; please include <sys/select.h> instead.
  */
-#define __need_fd_set
-#include <sys/_structs.h>
+#include <sys/_types/_fd_def.h>
 
 #define	NBBY		__DARWIN_NBBY		/* bits in a byte */
 #define NFDBITS		__DARWIN_NFDBITS	/* bits per mask */
@@ -270,25 +190,14 @@ typedef __int32_t	fd_mask;
  * extra protection here is to permit application redefinition above
  * the default size.
  */
-#ifndef	FD_SETSIZE
-#define	FD_SETSIZE	__DARWIN_FD_SETSIZE
-#endif /* FD_SETSIZE */
-#ifndef FD_SET
-#define	FD_SET(n, p)	__DARWIN_FD_SET(n, p)
-#endif /* FD_SET */
-#ifndef FD_CLR
-#define	FD_CLR(n, p)	__DARWIN_FD_CLR(n, p)
-#endif /* FD_CLR */
-#ifndef FD_ISSET
-#define	FD_ISSET(n, p)	__DARWIN_FD_ISSET(n, p)
-#endif /* FD_ISSET */
-#ifndef FD_ZERO
-#define	FD_ZERO(p)	__DARWIN_FD_ZERO(p)
-#endif /* FD_ZERO */
+#include <sys/_types/_fd_setsize.h>
+#include <sys/_types/_fd_set.h>
+#include <sys/_types/_fd_clr.h>
+#include <sys/_types/_fd_zero.h>
+#include <sys/_types/_fd_isset.h>
+
 #if !defined(_POSIX_C_SOURCE) || defined(_DARWIN_C_SOURCE)
-#ifndef FD_COPY
-#define	FD_COPY(f, t)	__DARWIN_FD_COPY(f, t)
-#endif /* FD_COPY */
+#include <sys/_types/_fd_copy.h>
 #endif	/* (!_POSIX_C_SOURCE || _DARWIN_C_SOURCE) */
 
 
@@ -313,60 +222,23 @@ struct	uio;
 
 #ifndef __POSIX_LIB__
 
-#ifndef _PTHREAD_ATTR_T
-#define _PTHREAD_ATTR_T
-typedef __darwin_pthread_attr_t		pthread_attr_t;
-#endif
-#ifndef _PTHREAD_COND_T
-#define _PTHREAD_COND_T
-typedef __darwin_pthread_cond_t		pthread_cond_t;
-#endif
-#ifndef _PTHREAD_CONDATTR_T
-#define _PTHREAD_CONDATTR_T
-typedef __darwin_pthread_condattr_t	pthread_condattr_t;
-#endif
-#ifndef _PTHREAD_MUTEX_T
-#define _PTHREAD_MUTEX_T
-typedef __darwin_pthread_mutex_t	pthread_mutex_t;
-#endif
-#ifndef _PTHREAD_MUTEXATTR_T
-#define _PTHREAD_MUTEXATTR_T
-typedef __darwin_pthread_mutexattr_t	pthread_mutexattr_t;
-#endif
-#ifndef _PTHREAD_ONCE_T
-#define _PTHREAD_ONCE_T
-typedef __darwin_pthread_once_t		pthread_once_t;
-#endif
-#ifndef _PTHREAD_RWLOCK_T
-#define _PTHREAD_RWLOCK_T
-typedef __darwin_pthread_rwlock_t	pthread_rwlock_t;
-#endif
-#ifndef _PTHREAD_RWLOCKATTR_T
-#define _PTHREAD_RWLOCKATTR_T
-typedef __darwin_pthread_rwlockattr_t	pthread_rwlockattr_t;
-#endif
-#ifndef _PTHREAD_T
-#define _PTHREAD_T
-typedef __darwin_pthread_t		pthread_t;
-#endif
+#include <sys/_types/_pthread_attr_t.h>
+#include <sys/_types/_pthread_cond_t.h>
+#include <sys/_types/_pthread_condattr_t.h>
+#include <sys/_types/_pthread_mutex_t.h>
+#include <sys/_types/_pthread_mutexattr_t.h>
+#include <sys/_types/_pthread_once_t.h>
+#include <sys/_types/_pthread_rwlock_t.h>
+#include <sys/_types/_pthread_rwlockattr_t.h>
+#include <sys/_types/_pthread_t.h>
 
 #endif /* __POSIX_LIB__ */
 
-#ifndef _PTHREAD_KEY_T
-#define _PTHREAD_KEY_T
-typedef __darwin_pthread_key_t		pthread_key_t;
-#endif
+#include <sys/_types/_pthread_key_t.h>
 
 /* statvfs and fstatvfs */
-#ifndef _FSBLKCNT_T
-#define _FSBLKCNT_T
-typedef __darwin_fsblkcnt_t		fsblkcnt_t;
-#endif
 
-#ifndef _FSFILCNT_T
-#define _FSFILCNT_T
-typedef __darwin_fsfilcnt_t		fsfilcnt_t;
-#endif
-
+#include <sys/_types/_fsblkcnt_t.h>
+#include <sys/_types/_fsfilcnt_t.h>
 
 #endif /* !_SYS_TYPES_H_ */

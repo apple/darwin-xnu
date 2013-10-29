@@ -65,6 +65,7 @@
 #ifndef _NET_PFKEYV2_H_
 #define _NET_PFKEYV2_H_
 #include <sys/appleapiopts.h>
+#include <net/if.h>
 
 /*
 This file defines structures and symbols for the PF_KEY Version 2
@@ -103,7 +104,9 @@ you leave this credit intact on any copies of this file.
 #define SADB_X_SPDEXPIRE  21
 #define SADB_X_SPDDELETE2 22	/* by policy id */
 #define SADB_GETSASTAT    23
-#define SADB_MAX          23
+#define SADB_X_SPDENABLE  24	/* by policy id */
+#define SADB_X_SPDDISABLE 25	/* by policy id */
+#define SADB_MAX          25
 
 struct sadb_msg {
   u_int8_t sadb_msg_version;
@@ -248,7 +251,12 @@ struct sadb_x_sa2 {
   u_int16_t sadb_x_sa2_len;
   u_int16_t sadb_x_sa2_exttype;
   u_int8_t sadb_x_sa2_mode;
-  u_int8_t sadb_x_sa2_reserved1;
+  union {
+    u_int8_t sadb_x_sa2_reserved1;
+#ifdef PRIVATE
+    u_int8_t sadb_x_sa2_alwaysexpire;
+#endif
+  };
   u_int16_t sadb_x_sa2_reserved2;
   u_int32_t sadb_x_sa2_sequence;
   u_int32_t sadb_x_sa2_reqid;
@@ -271,7 +279,22 @@ struct sadb_x_policy {
  * [total length of ipsec policy requests]
  *	= (sadb_x_policy_len * sizeof(uint64_t) - sizeof(struct sadb_x_policy))
  */
-
+#ifdef PRIVATE
+/* IPSec Interface Extension:
+ * IPSec interface can be specified alone, or all three
+ * of internal, outgoing, and IPSec interfaces must be
+ * specified.
+ */
+struct sadb_x_ipsecif {
+	u_int16_t sadb_x_ipsecif_len;
+	u_int16_t sadb_x_ipsecif_exttype;
+	char sadb_x_ipsecif_internal_if[IFXNAMSIZ]; /* Steal packets from this interface */
+	char sadb_x_ipsecif_outgoing_if[IFXNAMSIZ]; /* Send packets out on this interface */
+	char sadb_x_ipsecif_ipsec_if[IFXNAMSIZ];  /* Direct packets through ipsec interface */
+	u_int16_t sadb_x_ipsecif_init_disabled; /* 0 or 1, flag to ignore policy */
+	u_int16_t reserved;
+};
+#endif
 /* XXX IPsec Policy Request Extension */
 /*
  * This structure is aligned 8 bytes.
@@ -340,7 +363,12 @@ struct sadb_sastat {
 #define SADB_X_EXT_SA2                19
 #define SADB_EXT_SESSION_ID           20
 #define SADB_EXT_SASTAT               21
-#define SADB_EXT_MAX                  21
+#define SADB_X_EXT_IPSECIF            22
+#define SADB_X_EXT_ADDR_RANGE_SRC_START 23
+#define SADB_X_EXT_ADDR_RANGE_SRC_END   24
+#define SADB_X_EXT_ADDR_RANGE_DST_START 25
+#define SADB_X_EXT_ADDR_RANGE_DST_END   26
+#define SADB_EXT_MAX                  26
 
 #define SADB_SATYPE_UNSPEC	0
 #define SADB_SATYPE_AH		2

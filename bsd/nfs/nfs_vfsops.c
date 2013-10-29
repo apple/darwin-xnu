@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2011 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2013 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -2700,6 +2700,9 @@ mountnfs(
 		nmp->nm_deadtimeout = 0;
 		nmp->nm_curdeadtimeout = 0;
 		NFS_BITMAP_SET(nmp->nm_flags, NFS_MFLAG_NOACL);
+		nmp->nm_realm = NULL;
+		nmp->nm_principal = NULL;
+		nmp->nm_sprinc = NULL;
 	}
 
 	mattrs = nmp->nm_mattrs;
@@ -3040,6 +3043,50 @@ mountnfs(
 	}
 	nfsmerr_if(error);
 
+	if (NFS_BITMAP_ISSET(mattrs, NFS_MATTR_REALM)) {
+		xb_get_32(error, &xb, len);
+		if (!error && ((len < 1) || (len > MAXPATHLEN)))
+			error=EINVAL;
+		nfsmerr_if(error);
+		/* allocate an extra byte for a leading '@' if its not already prepended to the realm */
+		MALLOC(nmp->nm_realm, char *, len+2, M_TEMP, M_WAITOK|M_ZERO);
+		if (!nmp->nm_realm)
+			error = ENOMEM;
+		nfsmerr_if(error);
+		error = xb_get_bytes(&xb, nmp->nm_realm, len, 0);
+		if (error == 0 && *nmp->nm_realm != '@') {
+			bcopy(nmp->nm_realm, &nmp->nm_realm[1], len);
+			nmp->nm_realm[0] = '@';
+		}
+	}
+	nfsmerr_if(error);
+
+	if (NFS_BITMAP_ISSET(mattrs, NFS_MATTR_PRINCIPAL)) {
+		xb_get_32(error, &xb, len);
+		if (!error && ((len < 1) || (len > MAXPATHLEN)))
+			error=EINVAL;
+		nfsmerr_if(error);
+		MALLOC(nmp->nm_principal, char *, len+1, M_TEMP, M_WAITOK|M_ZERO);
+		if (!nmp->nm_principal)
+			error = ENOMEM;
+		nfsmerr_if(error);
+		error = xb_get_bytes(&xb, nmp->nm_principal, len, 0);
+	}
+	nfsmerr_if(error);
+
+	if (NFS_BITMAP_ISSET(mattrs, NFS_MATTR_SVCPRINCIPAL)) {
+		xb_get_32(error, &xb, len);
+		if (!error && ((len < 1) || (len > MAXPATHLEN)))
+			error=EINVAL;
+		nfsmerr_if(error);
+		MALLOC(nmp->nm_sprinc, char *, len+1, M_TEMP, M_WAITOK|M_ZERO);
+		if (!nmp->nm_sprinc)
+			error = ENOMEM;
+		nfsmerr_if(error);
+		error = xb_get_bytes(&xb, nmp->nm_sprinc, len, 0);
+	}
+	nfsmerr_if(error);
+
 	/*
 	 * Sanity check/finalize settings.
 	 */
@@ -3109,8 +3156,6 @@ mountnfs(
 		NFS_BITMAP_CLR(nmp->nm_flags, NFS_MFLAG_NONAMEDATTR);
 		NFS_BITMAP_CLR(nmp->nm_flags, NFS_MFLAG_NOACL);
 		NFS_BITMAP_CLR(nmp->nm_flags, NFS_MFLAG_ACLONLY);
-		if (IS_VALID_CRED(nmp->nm_mcred))
-			kauth_cred_unref(&nmp->nm_mcred);
 	}
 	nfsmerr_if(error);
 
@@ -4355,6 +4400,13 @@ nfs_mount_cleanup(struct nfsmount *nmp)
 
 	nfs_fs_locations_cleanup(&nmp->nm_locations);
 
+	if (nmp->nm_realm)
+		FREE(nmp->nm_realm, M_TEMP);
+	if (nmp->nm_principal)
+		FREE(nmp->nm_principal, M_TEMP);
+	if (nmp->nm_sprinc)
+		FREE(nmp->nm_sprinc, M_TEMP);
+	
 	if (nmp->nm_args)
 		xb_free(nmp->nm_args);
 	lck_mtx_destroy(&nmp->nm_lock, nfs_mount_grp);
@@ -4839,7 +4891,13 @@ nfs_mountinfo_assemble(struct nfsmount *nmp, struct xdrbuf *xb)
 	NFS_BITMAP_SET(mattrs, NFS_MATTR_MNTFLAGS);
 	if (origargsvers < NFS_ARGSVERSION_XDR)
 		NFS_BITMAP_SET(mattrs, NFS_MATTR_MNTFROM);
-
+	if (nmp->nm_realm)
+		NFS_BITMAP_SET(mattrs, NFS_MATTR_REALM);
+	if (nmp->nm_principal)
+		NFS_BITMAP_SET(mattrs, NFS_MATTR_PRINCIPAL);
+	if (nmp->nm_sprinc)
+		NFS_BITMAP_SET(mattrs, NFS_MATTR_SVCPRINCIPAL);
+	
 	/* set up current mount flags bitmap */
 	/* first set the flags that we will be setting - either on OR off */
 	NFS_BITMAP_ZERO(mflags_mask, NFS_MFLAG_BITMAP_LEN);
@@ -5007,6 +5065,13 @@ nfs_mountinfo_assemble(struct nfsmount *nmp, struct xdrbuf *xb)
 	if (origargsvers < NFS_ARGSVERSION_XDR)
 		xb_add_string(error, &xbinfo, vfs_statfs(nmp->nm_mountp)->f_mntfromname,
 			strlen(vfs_statfs(nmp->nm_mountp)->f_mntfromname));	/* MNTFROM */
+	if (NFS_BITMAP_ISSET(mattrs, NFS_MATTR_REALM))
+		xb_add_string(error, &xbinfo, nmp->nm_realm, strlen(nmp->nm_realm));
+	if (NFS_BITMAP_ISSET(mattrs, NFS_MATTR_PRINCIPAL))
+		xb_add_string(error, &xbinfo, nmp->nm_principal, strlen(nmp->nm_principal));
+	if (NFS_BITMAP_ISSET(mattrs, NFS_MATTR_SVCPRINCIPAL))
+		xb_add_string(error, &xbinfo, nmp->nm_sprinc, strlen(nmp->nm_sprinc));
+
 	curargs_end_offset = xb_offset(&xbinfo);
 
 	/* NFS_MIATTR_CUR_LOC_INDEX */

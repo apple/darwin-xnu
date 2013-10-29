@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2006 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2013 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -418,6 +418,68 @@ int32_t FastUnicodeCompare ( register ConstUniCharArrayPtr str1, register ItemCo
 		return -1;
 	else
 		return 1;
+}
+
+/*
+ * UnicodeBinaryCompare
+ * Compare two UTF-16 strings and perform case-sensitive (binary) matching against them.
+ * 
+ * Results are emitted like FastUnicodeCompare:
+ * 
+ * 
+ *	    IF				RESULT
+ *	--------------------------
+ *	str1 < str2		=>	-1
+ *	str1 = str2		=>	 0
+ *	str1 > str2		=>	+1
+ *
+ * The case matching source code is greatly simplified due to the lack of case-folding
+ * in this comparison routine. We compare, in order: the lengths, then do character-by-
+ * character comparisons.
+ * 
+ */
+int32_t UnicodeBinaryCompare (register ConstUniCharArrayPtr str1, register ItemCount len1,
+							register ConstUniCharArrayPtr str2, register ItemCount len2) {
+	uint16_t c1;
+	uint16_t c2;
+	int string_length;
+	int32_t result = 0;
+	
+	/* Set default values for the two character pointers */
+	c1 = 0;
+	c2 = 0;
+
+	/* First generate the string length (for comparison purposes) */
+	if (len1 < len2) {
+		string_length = len1;
+		--result;
+	}
+	else if (len1 > len2) {
+		string_length = len2;
+		++result;
+	}
+	else {
+		string_length = len1;
+	}
+
+	/* now compare the two string pointers */
+	while (string_length--) {
+		c1 = *(str1++);
+		c2 = *(str2++);
+
+		if (c1 > c2) {
+			result = 1;
+			break;
+		}
+		
+		if (c1 < c2) {
+			result = -1;
+			break;
+		}
+		/* If equal, iterate to the next two respective chars */		
+	}
+
+	return result;
 }
 
 

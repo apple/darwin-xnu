@@ -117,6 +117,7 @@ public:
         { if ((uintptr_t) gSystem & kWaitMask) waitForSystemMapper(); };
 
     static IOMapper * copyMapperForDevice(IOService * device);
+    static IOMapper * copyMapperForDeviceWithIndex(IOService * device, unsigned int index);
 
 	
     // Function will panic if the given address is not found in a valid

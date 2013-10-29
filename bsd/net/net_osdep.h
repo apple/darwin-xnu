@@ -260,7 +260,6 @@
 #ifdef KERNEL_PRIVATE
 
 struct ifnet;
-extern const char *if_name(struct ifnet *);
 
 #define HAVE_OLD_BPF
 

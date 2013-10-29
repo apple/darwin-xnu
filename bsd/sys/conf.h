@@ -93,12 +93,6 @@ struct vnode;
 #define	D_TTY	3
 
 #ifdef KERNEL
-/*
- * Flags for d_type (squeezed into the top half of d_type).
- */
-#define	D_TYPEMASK	0xffff
-#define	D_TRACKCLOSE	0x00010000	/* track all closes */
-
 /* 
  * Device switch function types.
  */

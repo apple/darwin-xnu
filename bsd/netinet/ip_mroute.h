@@ -93,9 +93,9 @@
 #define MRT_ASSERT      107     /* enable PIM assert processing */
 
 
-#ifdef KERNEL_PRIVATE
+#ifdef BSD_KERNEL_PRIVATE
 #define GET_TIME(t)	microtime(&t)
-#endif /* KERNEL_PRIVATE */
+#endif /* BSD_KERNEL_PRIVATE */
 
 #ifndef CONFIG_MAXVIFS
 #define CONFIG_MAXVIFS 32  /* 4635538 temp workaround */
@@ -189,8 +189,11 @@ struct sioc_vif_req {
 };
 
 #ifdef PRIVATE
+#ifndef KERNEL
 /*
  * The kernel's virtual-interface structure.
+ *
+ * XXX: This is unused and is currently exposed for netstat.
  */
 struct tbf;
 struct ifnet;
@@ -211,12 +214,13 @@ struct vif {
     u_int		v_rsvp_on;	/* RSVP listening on this vif */
     struct socket      *v_rsvpd;	/* RSVP daemon socket */
 };
-#endif
 
 /*
  * The kernel's multicast forwarding cache entry structure 
  * (A field for the type of service (mfc_tos) is to be added 
  * at a future point)
+ *
+ * XXX: This is unused and is currently exposed for netstat.
  */
 struct mfc {
     struct in_addr  mfc_origin;	 		/* IP origin of mcasts   */
@@ -231,6 +235,8 @@ struct mfc {
     struct rtdetq  *mfc_stall;			/* q of packets awaiting mfc */
     struct mfc     *mfc_next;			/* next mfc entry            */
 };
+#endif /* !KERNEL */
+#endif /* PRIVATE */
 
 /*
  * Struct used to communicate from kernel to multicast router
@@ -250,7 +256,7 @@ struct igmpmsg {
 
 #define MFCTBLSIZ       CONFIG_MFCTBLSIZ
 
-#ifdef KERNEL_PRIVATE
+#ifdef BSD_KERNEL_PRIVATE
 /*
  * Argument structure used for pkt info. while upcall is made
  */
@@ -303,5 +309,5 @@ extern int	(*mrt_ioctl)(u_long, caddr_t);
 extern int	(*mrt_ioctl)(u_long, caddr_t, struct proc *);
 #endif
 
-#endif /* KERNEL_PRIVATE */
+#endif /* BSD_KERNEL_PRIVATE */
 #endif /* _NETINET_IP_MROUTE_H_ */

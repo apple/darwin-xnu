@@ -79,9 +79,6 @@
 
 #define VOPFUNC int (*)(void *)
 
-extern int	soo_ioctl(struct fileproc *fp, u_long cmd, caddr_t data, vfs_context_t ctx);
-extern int	soo_select(struct fileproc *fp, int which, void * wql, vfs_context_t ctx);
-
 int (**fifo_vnodeop_p)(void *);
 struct vnodeopv_entry_desc fifo_vnodeop_entries[] = {
 	{ &vnop_default_desc, (VOPFUNC)vn_default_error },

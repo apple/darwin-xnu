@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2006 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2006-2012 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -28,40 +28,6 @@
 
 /* Helper macros for 64-bit mode switching */
 
-#if __i386__
-/*
- * Long jump to 64-bit space from 32-bit compatibility mode.
- */
-#define	ENTER_64BIT_MODE()			\
-	.code32					;\
-	.byte   0xea	/* far jump longmode */	;\
-	.long   1f				;\
-	.word   KERNEL64_CS			;\
-        .code64					;\
-1:
-
-/*
- * Here in long mode but still running below 4G.
- * "Near" jump into uber-space.
- */
-#define	ENTER_UBERSPACE()			\
-        mov     2f,%rax				;\
-        jmp     *%rax				;\
-2:      .long   3f				;\
-        .long   KERNEL_UBER_BASE_HI32		;\
-3:     
-
-/*
- * Long jump to 32-bit compatibility mode from 64-bit space.
- */
-#define ENTER_COMPAT_MODE()			\
-	ljmp	*(%rip)				;\
-	.long	4f				;\
-	.word	KERNEL32_CS			;\
-	.code32					;\
-4:
-
-#else
 
 /*
  * Long jump to 64-bit space from 32-bit compatibility mode.
@@ -89,4 +55,3 @@
 	lret					;\
 4:	.code32
 
-#endif

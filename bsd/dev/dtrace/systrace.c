@@ -43,17 +43,15 @@
 #endif
 #endif
 
-#define MACH__POSIX_C_SOURCE_PRIVATE 1 /* pulls in suitable savearea from mach/ppc/thread_status.h */
 #include <kern/thread.h>
 #include <mach/thread_status.h>
+
 /* XXX All of these should really be derived from syscall_sw.h */
-#if defined(__i386__) || defined (__x86_64__)
+#if defined (__x86_64__)
 #define SYSCALL_CLASS_SHIFT 24
 #define SYSCALL_CLASS_MASK  (0xFF << SYSCALL_CLASS_SHIFT)
 #define SYSCALL_NUMBER_MASK (~SYSCALL_CLASS_MASK)
 #define I386_SYSCALL_NUMBER_MASK (0xFFFF)
-
-typedef x86_saved_state_t savearea_t;
 #endif
 
 #include <sys/param.h>
@@ -75,7 +73,7 @@ typedef x86_saved_state_t savearea_t;
 
 #include <machine/pal_routines.h>
 
-#if defined(__i386__) || defined (__x86_64__)
+#if defined (__x86_64__)
 #define	SYSTRACE_ARTIFICIAL_FRAMES	2
 #define MACHTRACE_ARTIFICIAL_FRAMES 3
 #else
@@ -114,8 +112,7 @@ systrace_stub(dtrace_id_t id, uint64_t arg0, uint64_t arg1,
 int32_t
 dtrace_systrace_syscall(struct proc *pp, void *uap, int *rv)
 {
-	boolean_t           flavor;
-	unsigned short      code;
+	unsigned short      code;	/* The system call number */
 
 	systrace_sysent_t *sy;
 	dtrace_id_t id;
@@ -125,8 +122,7 @@ dtrace_systrace_syscall(struct proc *pp, void *uap, int *rv)
 #endif
 	syscall_arg_t *ip = (syscall_arg_t *)uap;
 
-#if defined(__i386__) || defined (__x86_64__)
-#pragma unused(flavor)
+#if defined (__x86_64__)
 	{
 		pal_register_cache_state(current_thread(), VALID);
 		x86_saved_state_t   *tagged_regs = (x86_saved_state_t *)find_user_regs(current_thread());
@@ -742,16 +738,16 @@ typedef void    mach_munge_t(const void *, void *);
 typedef struct {
 	int			mach_trap_arg_count;
 	kern_return_t		(*mach_trap_function)(void *);
-#if 0 /* no active architectures use mungers for mach traps */
+#if defined(__x86_64__)
 	mach_munge_t		*mach_trap_arg_munge32; /* system call arguments for 32-bit */
-	mach_munge_t		*mach_trap_arg_munge64; /* system call arguments for 64-bit */
 #endif
+	int			mach_trap_u32_words;
 #if	MACH_ASSERT
 	const char*		mach_trap_name;
 #endif /* MACH_ASSERT */
 } mach_trap_t;
 
-extern mach_trap_t              mach_trap_table[];
+extern const mach_trap_t              mach_trap_table[]; /* syscall_sw.h now declares this as const */
 extern int                      mach_trap_count;
 
 extern const char *mach_syscall_name_table[];
@@ -796,8 +792,7 @@ static dtrace_provider_id_t machtrace_id;
 static kern_return_t
 dtrace_machtrace_syscall(struct mach_call_args *args)
 {
-	boolean_t           flavor;
-	unsigned short      code;
+	int code;	/* The mach call number */
 
 	machtrace_sysent_t *sy;
 	dtrace_id_t id;
@@ -808,8 +803,7 @@ dtrace_machtrace_syscall(struct mach_call_args *args)
 	syscall_arg_t *ip = (syscall_arg_t *)args;
 	mach_call_t mach_call;
 
-#if defined(__i386__) || defined (__x86_64__)
-#pragma unused(flavor)
+#if defined (__x86_64__)
 	{
 		pal_register_cache_state(current_thread(), VALID);
 		x86_saved_state_t   *tagged_regs = (x86_saved_state_t *)find_user_regs(current_thread());
@@ -862,7 +856,7 @@ dtrace_machtrace_syscall(struct mach_call_args *args)
 }
 
 static void
-machtrace_init(mach_trap_t *actual, machtrace_sysent_t **interposed)
+machtrace_init(const mach_trap_t *actual, machtrace_sysent_t **interposed)
 {
 	machtrace_sysent_t *msysent = *interposed;
 	int i;
@@ -873,7 +867,7 @@ machtrace_init(mach_trap_t *actual, machtrace_sysent_t **interposed)
 	}
 
 	for (i = 0; i < NSYSCALL; i++) {
-		mach_trap_t *a = &actual[i];
+		const mach_trap_t *a = &actual[i];
 		machtrace_sysent_t *s = &msysent[i];
 
 		if (LOADABLE_SYSCALL(a) && !LOADED_SYSCALL(a))

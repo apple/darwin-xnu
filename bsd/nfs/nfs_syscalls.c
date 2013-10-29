@@ -168,6 +168,8 @@ SYSCTL_INT(_vfs_generic_nfs_client, OID_AUTO, idmap_ctrl, CTLFLAG_RW | CTLFLAG_L
 SYSCTL_INT(_vfs_generic_nfs_client, OID_AUTO, callback_port, CTLFLAG_RW | CTLFLAG_LOCKED, &nfs_callback_port, 0, "");
 SYSCTL_INT(_vfs_generic_nfs_client, OID_AUTO, is_mobile, CTLFLAG_RW | CTLFLAG_LOCKED, &nfs_is_mobile, 0, "");
 SYSCTL_INT(_vfs_generic_nfs_client, OID_AUTO, squishy_flags, CTLFLAG_RW | CTLFLAG_LOCKED, &nfs_squishy_flags, 0, "");
+SYSCTL_UINT(_vfs_generic_nfs_client, OID_AUTO, debug_ctl, CTLFLAG_RW | CTLFLAG_LOCKED, &nfs_debug_ctl, 0, "");
+
 
 #endif /* NFSCLIENT */
 
@@ -496,7 +498,7 @@ out:
 	return (error);
 }
 
-extern struct fileops vnops;
+extern const struct fileops vnops;
 
 /*
  * syscall for the rpc.lockd to use to translate a NFS file handle into
@@ -606,7 +608,6 @@ fhopen( proc_t p,
 	fp = nfp;
 
 	fp->f_fglob->fg_flag = fmode & FMASK;
-	fp->f_fglob->fg_type = DTYPE_VNODE;
 	fp->f_fglob->fg_ops = &vnops;
 	fp->f_fglob->fg_data = (caddr_t)vp;
 
@@ -622,7 +623,7 @@ fhopen( proc_t p,
 		type = F_FLOCK;
 		if ((fmode & FNONBLOCK) == 0)
 			type |= F_WAIT;
-		if ((error = VNOP_ADVLOCK(vp, (caddr_t)fp->f_fglob, F_SETLK, &lf, type, ctx))) {
+		if ((error = VNOP_ADVLOCK(vp, (caddr_t)fp->f_fglob, F_SETLK, &lf, type, ctx, NULL))) {
 			struct vfs_context context = *vfs_context_current();
 			/* Modify local copy (to not damage thread copy) */
 			context.vc_ucred = fp->f_fglob->fg_cred;

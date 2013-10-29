@@ -637,7 +637,9 @@ semaphore_wait_internal(
 		(void)wait_queue_assert_wait64_locked(
 					&wait_semaphore->wait_queue,
 					SEMAPHORE_EVENT,
-					THREAD_ABORTSAFE, deadline,
+					THREAD_ABORTSAFE,
+					TIMEOUT_URGENCY_USER_NORMAL,
+					deadline, 0,
 					self);
 		thread_unlock(self);
 	}

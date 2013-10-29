@@ -7,14 +7,6 @@ export MakeInc_dir=${SRCROOT}/makedefs/MakeInc.dir
 include $(MakeInc_cmd)
 include $(MakeInc_def)
 
-INSTINC_SUBDIRS = \
-
-INSTINC_SUBDIRS_I386 = \
-
-EXPINC_SUBDIRS = \
-
-EXPINC_SUBDIRS_I386 = \
-
 DATAFILES = \
 	keysock.h
 

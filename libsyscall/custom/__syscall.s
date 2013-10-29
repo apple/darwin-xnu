@@ -39,7 +39,7 @@ LEAF(___syscall, 0)
 	movl	(%esp),%edx	// add one element to stack so
 	pushl	%ecx		// caller "pop" will work
 	jnb	2f
-	BRANCH_EXTERN(cerror)
+	BRANCH_EXTERN(tramp_cerror)
 2:
 END(___syscall)
 

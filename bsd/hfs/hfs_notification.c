@@ -58,16 +58,14 @@ void hfs_generate_volume_notifications(struct hfsmount *hfsmp)
 {
 	fsid_t fsid;
 	u_int32_t freeblks, state=999;
-	char *volname = NULL;
 
-	if (hfsmp->vcbVN) {
-		if (strlen((char*)hfsmp->vcbVN) < 256) {
-			volname = (char*) hfsmp->vcbVN;	
-		}
+	/* Do not generate low disk notifications for read-only volumes */
+	if (hfsmp->hfs_flags & HFS_READ_ONLY) {
+		return;
 	}
 
-	fsid.val[0] = (long)hfsmp->hfs_raw_dev;
-	fsid.val[1] = (long)vfs_typenum(HFSTOVFS(hfsmp));
+	fsid.val[0] = hfsmp->hfs_raw_dev;
+	fsid.val[1] = vfs_typenum(HFSTOVFS(hfsmp));
 	
 	freeblks = hfs_freeblks(hfsmp, 1);
 
@@ -79,14 +77,10 @@ void hfs_generate_volume_notifications(struct hfsmount *hfsmp)
 		state = 0;
 	}
 
+	/* Free blocks are less than dangerlimit for the first time */
 	if (state == 2 && !(hfsmp->hfs_notification_conditions & VQ_VERYLOWDISK)) {
 		/* Dump some logging to track down intermittent issues */
-		if (volname) {
-			printf("HFS: Vol: %s Very Low Disk: freeblks: %d, dangerlimit: %d\n", volname, freeblks, hfsmp->hfs_freespace_notify_dangerlimit);
-		}
-		else {
-			printf("HFS: Very Low Disk: freeblks: %d, dangerlimit: %d\n", freeblks, hfsmp->hfs_freespace_notify_dangerlimit);
-		}
+		printf("hfs: set VeryLowDisk: vol:%s, freeblks:%d, dangerlimit:%d\n", hfsmp->vcbVN, freeblks, hfsmp->hfs_freespace_notify_dangerlimit);
 
 #if HFS_SPARSE_DEV
 		if (hfsmp->hfs_flags & HFS_HAS_SPARSE_DEVICE) {
@@ -94,12 +88,7 @@ void hfs_generate_volume_notifications(struct hfsmount *hfsmp)
 				struct mount *mp = vnode_mount (hfsmp->hfs_backingfs_rootvp);
 				/* If we're a sparse device, dump some info about the backing store... */
 				if (mp) {					
-					if (volname) {
-						printf("HFS: Vol: %s Very Low Disk: backingstore b_avail %lld, tag %d\n", volname, mp->mnt_vfsstat.f_bavail, hfsmp->hfs_backingfs_rootvp->v_tag);
-					}
-					else {
-						printf("HFS: Very Low Disk: backingstore b_avail %lld, tag %d\n", mp->mnt_vfsstat.f_bavail, hfsmp->hfs_backingfs_rootvp->v_tag);
-					}
+					printf("hfs: set VeryLowDisk: vol:%s, backingstore b_avail:%lld, tag:%d\n", hfsmp->vcbVN, mp->mnt_vfsstat.f_bavail, hfsmp->hfs_backingfs_rootvp->v_tag);
 				}
 			}
 		}
@@ -107,21 +96,26 @@ void hfs_generate_volume_notifications(struct hfsmount *hfsmp)
 		hfsmp->hfs_notification_conditions |= (VQ_VERYLOWDISK|VQ_LOWDISK);
 		vfs_event_signal(&fsid, hfsmp->hfs_notification_conditions, (intptr_t)NULL);
 	} else if (state == 1) {
+		/* Free blocks are less than warning limit for the first time */
 		if (!(hfsmp->hfs_notification_conditions & VQ_LOWDISK)) {
-			if (volname) {
-				printf("HFS: Low Disk: Vol: %s freeblks: %d, warninglimit: %d\n", volname, freeblks, hfsmp->hfs_freespace_notify_warninglimit);
-			}
-			else {
-				printf("HFS: Low Disk: freeblks: %d, warninglimit: %d\n", freeblks, hfsmp->hfs_freespace_notify_warninglimit);
-			}
+			printf("hfs: set LowDisk: vol:%s, freeblks:%d, warninglimit:%d\n", hfsmp->vcbVN, freeblks, hfsmp->hfs_freespace_notify_warninglimit);
 			hfsmp->hfs_notification_conditions |= VQ_LOWDISK;
 			vfs_event_signal(&fsid, hfsmp->hfs_notification_conditions, (intptr_t)NULL);
 		} else if (hfsmp->hfs_notification_conditions & VQ_VERYLOWDISK) {
+			/* Free blocks count has increased from danger limit to warning limit, so just clear VERYLOWDISK warning */
+			printf("hfs: clear VeryLowDisk: vol:%s, freeblks:%d, dangerlimit:%d\n", hfsmp->vcbVN, freeblks, hfsmp->hfs_freespace_notify_dangerlimit);
 			hfsmp->hfs_notification_conditions &= ~VQ_VERYLOWDISK;
 			vfs_event_signal(&fsid, hfsmp->hfs_notification_conditions, (intptr_t)NULL);
 		}
 	} else if (state == 0) {
+		/* Free blocks count has increased to desirable level, so clear all conditions */
 		if (hfsmp->hfs_notification_conditions & (VQ_LOWDISK|VQ_VERYLOWDISK)) {
+			if (hfsmp->hfs_notification_conditions & VQ_LOWDISK) {
+				printf("hfs: clear LowDisk: vol:%s, freeblks:%d, warninglimit:%d, desiredlevel:%d\n", hfsmp->vcbVN, freeblks, hfsmp->hfs_freespace_notify_warninglimit, hfsmp->hfs_freespace_notify_desiredlevel);
+			}
+			if (hfsmp->hfs_notification_conditions & VQ_VERYLOWDISK) {
+				printf("hfs: clear VeryLowDisk: vol:%s, freeblks:%d, dangerlimit:%d\n", hfsmp->vcbVN, freeblks, hfsmp->hfs_freespace_notify_warninglimit);
+			} 
 			hfsmp->hfs_notification_conditions &= ~(VQ_VERYLOWDISK|VQ_LOWDISK);
 			if (hfsmp->hfs_notification_conditions == 0) {
 				vfs_event_signal(&fsid, VQ_UPDATE, (intptr_t)NULL);

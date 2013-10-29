@@ -174,20 +174,49 @@ struct qm_trace {
 #endif	/* QUEUE_MACRO_DEBUG */
 
 /*
+ * Horrible macros to enable use of code that was meant to be C-specific
+ *   (and which push struct onto type) in C++; without these, C++ code
+ *   that uses these macros in the context of a class will blow up
+ *   due to "struct" being preprended to "type" by the macros, causing
+ *   inconsistent use of tags.
+ *
+ * This approach is necessary because these are macros; we have to use
+ *   these on a per-macro basis (because the queues are implemented as
+ *   macros, disabling this warning in the scope of the header file is
+ *   insufficient), whuch means we can't use #pragma, and have to use
+ *   _Pragma.  We only need to use these for the queue macros that
+ *   prepend "struct" to "type" and will cause C++ to blow up.
+ */
+#if defined(__clang__) && defined(__cplusplus)
+#define __MISMATCH_TAGS_PUSH						\
+	_Pragma("clang diagnostic push")				\
+	_Pragma("clang diagnostic ignored \"-Wmismatched-tags\"")
+#define __MISMATCH_TAGS_POP						\
+	_Pragma("clang diagnostic pop")
+#else
+#define __MISMATCH_TAGS_PUSH
+#define __MISMATCH_TAGS_POP
+#endif
+
+/*
  * Singly-linked List declarations.
  */
 #define	SLIST_HEAD(name, type)						\
+__MISMATCH_TAGS_PUSH							\
 struct name {								\
 	struct type *slh_first;	/* first element */			\
-}
+}									\
+__MISMATCH_TAGS_POP
 
 #define	SLIST_HEAD_INITIALIZER(head)					\
 	{ NULL }
 
 #define	SLIST_ENTRY(type)						\
+__MISMATCH_TAGS_PUSH							\
 struct {								\
 	struct type *sle_next;	/* next element */			\
-}
+}									\
+__MISMATCH_TAGS_POP
 
 /*
  * Singly-linked List functions.
@@ -227,7 +256,9 @@ struct {								\
 
 #define	SLIST_NEXT(elm, field)	((elm)->field.sle_next)
 
-#define	SLIST_REMOVE(head, elm, type, field) do {			\
+#define	SLIST_REMOVE(head, elm, type, field)				\
+__MISMATCH_TAGS_PUSH							\
+do {									\
 	if (SLIST_FIRST((head)) == (elm)) {				\
 		SLIST_REMOVE_HEAD((head), field);			\
 	}								\
@@ -238,7 +269,8 @@ struct {								\
 		SLIST_REMOVE_AFTER(curelm, field);			\
 	}								\
 	TRASHIT((elm)->field.sle_next);					\
-} while (0)
+} while (0)								\
+__MISMATCH_TAGS_POP
 
 #define SLIST_REMOVE_AFTER(elm, field) do {				\
 	SLIST_NEXT(elm, field) =					\
@@ -253,18 +285,22 @@ struct {								\
  * Singly-linked Tail queue declarations.
  */
 #define	STAILQ_HEAD(name, type)						\
+__MISMATCH_TAGS_PUSH							\
 struct name {								\
 	struct type *stqh_first;/* first element */			\
 	struct type **stqh_last;/* addr of last next element */		\
-}
+}									\
+__MISMATCH_TAGS_POP
 
 #define	STAILQ_HEAD_INITIALIZER(head)					\
 	{ NULL, &(head).stqh_first }
 
 #define	STAILQ_ENTRY(type)						\
+__MISMATCH_TAGS_PUSH							\
 struct {								\
 	struct type *stqe_next;	/* next element */			\
-}
+}									\
+__MISMATCH_TAGS_POP
 
 /*
  * Singly-linked Tail queue functions.
@@ -316,14 +352,18 @@ struct {								\
 } while (0)
 
 #define	STAILQ_LAST(head, type, field)					\
+__MISMATCH_TAGS_PUSH							\
 	(STAILQ_EMPTY((head)) ?						\
 		NULL :							\
 	        ((struct type *)(void *)				\
-		((char *)((head)->stqh_last) - __offsetof(struct type, field))))
+		((char *)((head)->stqh_last) - __offsetof(struct type, field))))\
+__MISMATCH_TAGS_POP
 
 #define	STAILQ_NEXT(elm, field)	((elm)->field.stqe_next)
 
-#define	STAILQ_REMOVE(head, elm, type, field) do {			\
+#define	STAILQ_REMOVE(head, elm, type, field)				\
+__MISMATCH_TAGS_PUSH							\
+do {									\
 	if (STAILQ_FIRST((head)) == (elm)) {				\
 		STAILQ_REMOVE_HEAD((head), field);			\
 	}								\
@@ -334,7 +374,8 @@ struct {								\
 		STAILQ_REMOVE_AFTER(head, curelm, field);		\
 	}								\
 	TRASHIT((elm)->field.stqe_next);				\
-} while (0)
+} while (0)								\
+__MISMATCH_TAGS_POP
 
 #define	STAILQ_REMOVE_HEAD(head, field) do {				\
 	if ((STAILQ_FIRST((head)) =					\
@@ -353,7 +394,9 @@ struct {								\
 		(head)->stqh_last = &STAILQ_NEXT((elm), field);		\
 } while (0)
 
-#define STAILQ_SWAP(head1, head2, type) do {				\
+#define STAILQ_SWAP(head1, head2, type)					\
+__MISMATCH_TAGS_PUSH							\
+do {									\
 	struct type *swap_first = STAILQ_FIRST(head1);			\
 	struct type **swap_last = (head1)->stqh_last;			\
 	STAILQ_FIRST(head1) = STAILQ_FIRST(head2);			\
@@ -364,25 +407,30 @@ struct {								\
 		(head1)->stqh_last = &STAILQ_FIRST(head1);		\
 	if (STAILQ_EMPTY(head2))					\
 		(head2)->stqh_last = &STAILQ_FIRST(head2);		\
-} while (0)
+} while (0)								\
+__MISMATCH_TAGS_POP
 
 
 /*
  * List declarations.
  */
 #define	LIST_HEAD(name, type)						\
+__MISMATCH_TAGS_PUSH							\
 struct name {								\
 	struct type *lh_first;	/* first element */			\
-}
+}									\
+__MISMATCH_TAGS_POP
 
 #define	LIST_HEAD_INITIALIZER(head)					\
 	{ NULL }
 
 #define	LIST_ENTRY(type)						\
+__MISMATCH_TAGS_PUSH							\
 struct {								\
 	struct type *le_next;	/* next element */			\
 	struct type **le_prev;	/* address of previous next element */	\
-}
+}									\
+__MISMATCH_TAGS_POP
 
 /*
  * List functions.
@@ -469,7 +517,9 @@ struct {								\
 	TRASHIT((elm)->field.le_prev);					\
 } while (0)
 
-#define LIST_SWAP(head1, head2, type, field) do {			\
+#define LIST_SWAP(head1, head2, type, field)				\
+__MISMATCH_TAGS_PUSH							\
+do {									\
 	struct type *swap_tmp = LIST_FIRST((head1));			\
 	LIST_FIRST((head1)) = LIST_FIRST((head2));			\
 	LIST_FIRST((head2)) = swap_tmp;					\
@@ -477,27 +527,32 @@ struct {								\
 		swap_tmp->field.le_prev = &LIST_FIRST((head1));		\
 	if ((swap_tmp = LIST_FIRST((head2))) != NULL)			\
 		swap_tmp->field.le_prev = &LIST_FIRST((head2));		\
-} while (0)
+} while (0)								\
+__MISMATCH_TAGS_POP
 
 /*
  * Tail queue declarations.
  */
 #define	TAILQ_HEAD(name, type)						\
+__MISMATCH_TAGS_PUSH							\
 struct name {								\
 	struct type *tqh_first;	/* first element */			\
 	struct type **tqh_last;	/* addr of last next element */		\
 	TRACEBUF							\
-}
+}									\
+__MISMATCH_TAGS_POP
 
 #define	TAILQ_HEAD_INITIALIZER(head)					\
 	{ NULL, &(head).tqh_first }
 
 #define	TAILQ_ENTRY(type)						\
+__MISMATCH_TAGS_PUSH							\
 struct {								\
 	struct type *tqe_next;	/* next element */			\
 	struct type **tqe_prev;	/* address of previous next element */	\
 	TRACEBUF							\
-}
+}									\
+__MISMATCH_TAGS_POP
 
 /*
  * Tail queue functions.
@@ -588,12 +643,16 @@ struct {								\
 } while (0)
 
 #define	TAILQ_LAST(head, headname)					\
-	(*(((struct headname *)((head)->tqh_last))->tqh_last))
+__MISMATCH_TAGS_PUSH							\
+	(*(((struct headname *)((head)->tqh_last))->tqh_last))		\
+__MISMATCH_TAGS_POP
 
 #define	TAILQ_NEXT(elm, field) ((elm)->field.tqe_next)
 
 #define	TAILQ_PREV(elm, headname, field)				\
-	(*(((struct headname *)((elm)->field.tqe_prev))->tqh_last))
+__MISMATCH_TAGS_PUSH							\
+	(*(((struct headname *)((elm)->field.tqe_prev))->tqh_last))	\
+__MISMATCH_TAGS_POP
 
 #define	TAILQ_REMOVE(head, elm, field) do {				\
 	if ((TAILQ_NEXT((elm), field)) != NULL)				\
@@ -609,7 +668,12 @@ struct {								\
 	QMD_TRACE_ELEM(&(elm)->field);					\
 } while (0)
 
-#define TAILQ_SWAP(head1, head2, type, field) do {                      \
+/*
+ * Why did they switch to spaces for this one macro?
+ */
+#define TAILQ_SWAP(head1, head2, type, field)                           \
+__MISMATCH_TAGS_PUSH                                                    \
+do {                                                                    \
 	struct type *swap_first = (head1)->tqh_first;                   \
 	struct type **swap_last = (head1)->tqh_last;                    \
 	(head1)->tqh_first = (head2)->tqh_first;                        \
@@ -624,22 +688,27 @@ struct {								\
 		swap_first->field.tqe_prev = &(head2)->tqh_first;       \
 	else                                                            \
 		(head2)->tqh_last = &(head2)->tqh_first;                \
-} while (0)
+} while (0)                                                             \
+__MISMATCH_TAGS_POP
 
 /*
  * Circular queue definitions.
  */
 #define CIRCLEQ_HEAD(name, type)					\
+__MISMATCH_TAGS_PUSH							\
 struct name {								\
 	struct type *cqh_first;		/* first element */		\
 	struct type *cqh_last;		/* last element */		\
-}
+}									\
+__MISMATCH_TAGS_POP
 
 #define CIRCLEQ_ENTRY(type)						\
+__MISMATCH_TAGS_PUSH							\
 struct {								\
 	struct type *cqe_next;		/* next element */		\
 	struct type *cqe_prev;		/* previous element */		\
-}
+}									\
+__MISMATCH_TAGS_POP
 
 /*
  * Circular queue functions.

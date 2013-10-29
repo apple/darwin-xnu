@@ -358,9 +358,9 @@ typedef enum { NFNON=0, NFREG=1, NFDIR=2, NFBLK=3, NFCHR=4, NFLNK=5,
 			((uint32_t*)(B))[__i] = 0; \
 	} while (0)
 
-__private_extern__ uint32_t nfs_fs_attr_bitmap[NFS_ATTR_BITMAP_LEN];
-__private_extern__ uint32_t nfs_object_attr_bitmap[NFS_ATTR_BITMAP_LEN];
-__private_extern__ uint32_t nfs_getattr_bitmap[NFS_ATTR_BITMAP_LEN];
+extern uint32_t nfs_fs_attr_bitmap[NFS_ATTR_BITMAP_LEN];
+extern uint32_t nfs_object_attr_bitmap[NFS_ATTR_BITMAP_LEN];
+extern uint32_t nfs_getattr_bitmap[NFS_ATTR_BITMAP_LEN];
 
 #define NFS_CLEAR_ATTRIBUTES(A)	NFS_BITMAP_ZERO((A), NFS_ATTR_BITMAP_LEN)
 #define NFS_COPY_ATTRIBUTES(SRC, DST) \

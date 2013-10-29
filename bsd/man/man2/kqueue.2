@@ -450,7 +450,7 @@ or similar call.
 .It NOTE_REAP
 The process was reaped by the parent via
 .Xr wait 2
-or similar call.
+or similar call. Deprecated, use NOTE_EXIT.
 .El
 .Pp
 On return,
@@ -499,6 +499,12 @@ data is in microseconds
 data is in nanoseconds
 .It NOTE_ABSOLUTE
 data is an absolute timeout
+.It NOTE_CRITICAL
+system makes a best effort to fire this timer as scheduled.
+.It NOTE_BACKGROUND
+system has extra leeway to coalesce this timer.
+.It NOTE_LEEWAY
+ext[1] holds user-supplied slop in deadline for timer coalescing.
 .El
 .Pp
 If fflags is not set, the default is milliseconds. The timer will be periodic unless EV_ONESHOT is specified.

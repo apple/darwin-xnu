@@ -2480,7 +2480,7 @@ restart:
 	if (now.tv_sec == nmp->nm_recover_start) {
 		printf("nfs recovery throttled for %s, 0x%x\n", vfs_statfs(nmp->nm_mountp)->f_mntfromname, nmp->nm_stategenid);
 		lck_mtx_unlock(&nmp->nm_lock);
-		tsleep(&lbolt, (PZERO-1), "nfsrecoverrestart", hz);
+		tsleep(nfs_recover, (PZERO-1), "nfsrecoverrestart", hz);
 		goto restart;
 	}
 	nmp->nm_recover_start = now.tv_sec;
@@ -2570,7 +2570,7 @@ restart:
 				if ((error == ETIMEDOUT) || nfs_mount_state_error_should_restart(error)) {
 					if (error == ETIMEDOUT)
 						nfs_need_reconnect(nmp);
-					tsleep(&lbolt, (PZERO-1), "nfsrecoverrestart", 0);
+					tsleep(nfs_recover, (PZERO-1), "nfsrecoverrestart", hz);
 					printf("nfs recovery restarting for %s, 0x%x, error %d\n",
 						vfs_statfs(nmp->nm_mountp)->f_mntfromname, nmp->nm_stategenid, error);
 					goto restart;
@@ -2626,7 +2626,7 @@ reclaim_locks:
 					if ((error == ETIMEDOUT) || nfs_mount_state_error_should_restart(error)) {
 						if (error == ETIMEDOUT)
 							nfs_need_reconnect(nmp);
-						tsleep(&lbolt, (PZERO-1), "nfsrecoverrestart", 0);
+						tsleep(nfs_recover, (PZERO-1), "nfsrecoverrestart", hz);
 						printf("nfs recovery restarting for %s, 0x%x, error %d\n",
 							vfs_statfs(nmp->nm_mountp)->f_mntfromname, nmp->nm_stategenid, error);
 						goto restart;
@@ -2651,7 +2651,7 @@ reclaim_locks:
 				nfs4_delegation_return(nofp->nof_np, R_RECOVER, thd, noop->noo_cred);
 				if (!(nmp->nm_sockflags & NMSOCK_READY)) {
 					/* looks like we need a reconnect */
-					tsleep(&lbolt, (PZERO-1), "nfsrecoverrestart", 0);
+					tsleep(nfs_recover, (PZERO-1), "nfsrecoverrestart", hz);
 					printf("nfs recovery restarting for %s, 0x%x, error %d\n",
 						vfs_statfs(nmp->nm_mountp)->f_mntfromname, nmp->nm_stategenid, error);
 					goto restart;

@@ -197,11 +197,11 @@ TAILQ_HEAD(nfsbuffreehead, nfsbuf);
 
 #define NFSNOLIST ((void*)0xdeadbeef)
 
-__private_extern__ lck_mtx_t *nfs_buf_mutex;
-__private_extern__ int nfsbufcnt, nfsbufmin, nfsbufmax, nfsbufmetacnt, nfsbufmetamax;
-__private_extern__ int nfsbuffreecnt, nfsbuffreemetacnt, nfsbufdelwricnt, nfsneedbuffer;
-__private_extern__ int nfs_nbdwrite;
-__private_extern__ struct nfsbuffreehead nfsbuffree, nfsbufdelwri;
+extern lck_mtx_t *nfs_buf_mutex;
+extern int nfsbufcnt, nfsbufmin, nfsbufmax, nfsbufmetacnt, nfsbufmetamax;
+extern int nfsbuffreecnt, nfsbuffreemetacnt, nfsbufdelwricnt, nfsneedbuffer;
+extern int nfs_nbdwrite;
+extern struct nfsbuffreehead nfsbuffree, nfsbufdelwri;
 
 #ifdef NFSBUFDEBUG
 #define NFSBUFCNTCHK() \
@@ -398,8 +398,8 @@ struct nfs_vattr {
 	} while (0)
 
 
-__private_extern__ lck_grp_t *nfs_open_grp;
-__private_extern__ uint32_t nfs_open_owner_seqnum, nfs_lock_owner_seqnum;
+extern lck_grp_t *nfs_open_grp;
+extern uint32_t nfs_open_owner_seqnum, nfs_lock_owner_seqnum;
 
 /*
  * NFSv4 open owner structure - one per cred per mount
@@ -759,7 +759,7 @@ struct nfsnode {
 #define NFSTOV(np)	((np)->n_vnode)
 
 /* nfsnode hash table mutex */
-__private_extern__ lck_mtx_t *nfs_node_hash_mutex;
+extern lck_mtx_t *nfs_node_hash_mutex;
 
 /*
  * printf-like helper macro that also outputs node name.
@@ -780,9 +780,9 @@ struct nfsiod {
 };
 TAILQ_HEAD(nfsiodlist, nfsiod);
 TAILQ_HEAD(nfsiodmountlist, nfsmount);
-__private_extern__ struct nfsiodlist nfsiodfree, nfsiodwork;
-__private_extern__ struct nfsiodmountlist nfsiodmounts;
-__private_extern__ lck_mtx_t *nfsiod_mutex;
+extern struct nfsiodlist nfsiodfree, nfsiodwork;
+extern struct nfsiodmountlist nfsiodmounts;
+extern lck_mtx_t *nfsiod_mutex;
 
 #if defined(KERNEL)
 

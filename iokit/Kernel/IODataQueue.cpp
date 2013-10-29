@@ -217,10 +217,11 @@ void IODataQueue::sendDataAvailableNotification()
 
     msgh = (mach_msg_header_t *)notifyMsg;
     if (msgh && msgh->msgh_remote_port) {
-        kr = mach_msg_send_from_kernel_proper(msgh, msgh->msgh_size);
+        kr = mach_msg_send_from_kernel_with_options(msgh, msgh->msgh_size, MACH_SEND_TIMEOUT, MACH_MSG_TIMEOUT_NONE);
         switch(kr) {
             case MACH_SEND_TIMED_OUT:	// Notification already sent
             case MACH_MSG_SUCCESS:
+            case MACH_SEND_NO_BUFFER:
                 break;
             default:
                 IOLog("%s: dataAvailableNotification failed - msg_send returned: %d\n", /*getName()*/"IODataQueue", kr);

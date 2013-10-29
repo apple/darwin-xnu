@@ -75,6 +75,7 @@
 #include <mach/mach_host_server.h>
 #include <mach/host_priv_server.h>
 #include <mach/vm_map.h>
+#include <mach/task_info.h>
 
 #include <kern/kern_types.h>
 #include <kern/assert.h>
@@ -87,6 +88,8 @@
 #include <kern/processor.h>
 
 #include <vm/vm_map.h>
+#include <vm/vm_purgeable_internal.h>
+#include <vm/vm_pageout.h>
 
 host_data_t	realhost;
 
@@ -258,6 +261,17 @@ host_info(
 		return (KERN_SUCCESS);
 	}
 
+	case HOST_VM_PURGABLE:
+	{
+		if (*count < HOST_VM_PURGABLE_COUNT)
+			return (KERN_FAILURE);
+
+		vm_purgeable_stats((vm_purgeable_info_t) info, NULL);
+
+		*count = HOST_VM_PURGABLE_COUNT;
+		return (KERN_SUCCESS);
+	}
+
 	default:
 		return (KERN_INVALID_ARGUMENT);
 	}
@@ -344,11 +358,7 @@ host_statistics(
 			}
 		}
 		stat32->inactive_count = VM_STATISTICS_TRUNCATE_TO_32_BIT(vm_page_inactive_count);
-#if CONFIG_EMBEDDED
-		stat32->wire_count = VM_STATISTICS_TRUNCATE_TO_32_BIT(vm_page_wire_count);
-#else
 		stat32->wire_count = VM_STATISTICS_TRUNCATE_TO_32_BIT(vm_page_wire_count + vm_page_throttled_count + vm_lopage_free_count);
-#endif
 		stat32->zero_fill_count = VM_STATISTICS_TRUNCATE_TO_32_BIT(host_vm_stat.zero_fill_count);
 		stat32->reactivations = VM_STATISTICS_TRUNCATE_TO_32_BIT(host_vm_stat.reactivations);
 		stat32->pageins = VM_STATISTICS_TRUNCATE_TO_32_BIT(host_vm_stat.pageins);
@@ -391,11 +401,14 @@ host_statistics(
 		if (*count < HOST_CPU_LOAD_INFO_COUNT)
 			return (KERN_FAILURE);
 
-#define GET_TICKS_VALUE(processor, state, timer)			 \
+#define GET_TICKS_VALUE(state, ticks)			 \
 MACRO_BEGIN								 \
 	cpu_load_info->cpu_ticks[(state)] +=				 \
-		(uint32_t)(timer_grab(&PROCESSOR_DATA(processor, timer)) \
-				/ hz_tick_interval);			 \
+		(uint32_t)(ticks / hz_tick_interval);			 \
+MACRO_END
+#define GET_TICKS_VALUE_FROM_TIMER(processor, state, timer)			 \
+MACRO_BEGIN								 \
+	GET_TICKS_VALUE(state, timer_grab(&PROCESSOR_DATA(processor, timer))); \
 MACRO_END
 
 		cpu_load_info = (host_cpu_load_info_t)info;
@@ -407,28 +420,39 @@ MACRO_END
 		simple_lock(&processor_list_lock);
 
 		for (processor = processor_list; processor != NULL; processor = processor->processor_list) {
-			timer_data_t	idle_temp;
-			timer_t		idle_state;
+			timer_t			idle_state;
+			uint64_t		idle_time_snapshot1, idle_time_snapshot2;
+			uint64_t		idle_time_tstamp1, idle_time_tstamp2;
+			
+			/* See discussion in processor_info(PROCESSOR_CPU_LOAD_INFO) */
 
-			GET_TICKS_VALUE(processor, CPU_STATE_USER, user_state);
+			GET_TICKS_VALUE_FROM_TIMER(processor, CPU_STATE_USER, user_state);
 			if (precise_user_kernel_time) {
-				GET_TICKS_VALUE(processor, CPU_STATE_SYSTEM, system_state);
+				GET_TICKS_VALUE_FROM_TIMER(processor, CPU_STATE_SYSTEM, system_state);
 			} else {
 				/* system_state may represent either sys or user */
-				GET_TICKS_VALUE(processor, CPU_STATE_USER, system_state);
+				GET_TICKS_VALUE_FROM_TIMER(processor, CPU_STATE_USER, system_state);
 			}
 
 			idle_state = &PROCESSOR_DATA(processor, idle_state);
-			idle_temp = *idle_state;
-
-			if (PROCESSOR_DATA(processor, current_state) != idle_state ||
-			    timer_grab(&idle_temp) != timer_grab(idle_state))
-				GET_TICKS_VALUE(processor, CPU_STATE_IDLE, idle_state);
-			else {
-				timer_advance(&idle_temp, mach_absolute_time() - idle_temp.tstamp);
-
-				cpu_load_info->cpu_ticks[CPU_STATE_IDLE] +=
-					(uint32_t)(timer_grab(&idle_temp) / hz_tick_interval);
+			idle_time_snapshot1 = timer_grab(idle_state);
+			idle_time_tstamp1 = idle_state->tstamp;
+			
+			if (PROCESSOR_DATA(processor, current_state) != idle_state) {
+				/* Processor is non-idle, so idle timer should be accurate */
+				GET_TICKS_VALUE_FROM_TIMER(processor, CPU_STATE_IDLE, idle_state);
+			} else if ((idle_time_snapshot1 != (idle_time_snapshot2 = timer_grab(idle_state))) ||
+					   (idle_time_tstamp1 != (idle_time_tstamp2 = idle_state->tstamp))){
+				/* Idle timer is being updated concurrently, second stamp is good enough */
+				GET_TICKS_VALUE(CPU_STATE_IDLE, idle_time_snapshot2);
+			} else {
+				/*
+				 * Idle timer may be very stale. Fortunately we have established
+				 * that idle_time_snapshot1 and idle_time_tstamp1 are unchanging
+				 */
+				idle_time_snapshot1 += mach_absolute_time() - idle_time_tstamp1;
+				
+				GET_TICKS_VALUE(CPU_STATE_IDLE, idle_time_snapshot1);
 			}
 		}
 		simple_unlock(&processor_list_lock);
@@ -450,19 +474,21 @@ MACRO_END
 		tinfo->task_platform_idle_wakeups = dead_task_statistics.task_platform_idle_wakeups;
 
 		tinfo->task_timer_wakeups_bin_1 = dead_task_statistics.task_timer_wakeups_bin_1;
+
 		tinfo->task_timer_wakeups_bin_2 = dead_task_statistics.task_timer_wakeups_bin_2;
 
 		tinfo->total_user = dead_task_statistics.total_user_time;
 		tinfo->total_system = dead_task_statistics.total_system_time;
 
 		return (KERN_SUCCESS);
-	}
 
+	}
 	default:
 		return (KERN_INVALID_ARGUMENT);
 	}
 }
 
+extern uint32_t        c_segment_pages_compressed;
 
 kern_return_t
 host_statistics64(
@@ -483,8 +509,11 @@ host_statistics64(
 			register processor_t		processor;
 			register vm_statistics64_t	stat;
 			vm_statistics64_data_t		host_vm_stat;
+			mach_msg_type_number_t          original_count;
+			unsigned int			local_q_internal_count;
+			unsigned int			local_q_external_count;
 
-			if (*count < HOST_VM_INFO64_COUNT)
+			if (*count < HOST_VM_INFO64_REV0_COUNT)
 				return (KERN_FAILURE);
 
 			processor = processor_list;
@@ -505,6 +534,10 @@ host_statistics64(
 					host_vm_stat.cow_faults += stat->cow_faults;
 					host_vm_stat.lookups += stat->lookups;
 					host_vm_stat.hits += stat->hits;
+					host_vm_stat.compressions += stat->compressions;
+					host_vm_stat.decompressions += stat->decompressions;
+					host_vm_stat.swapins += stat->swapins;
+					host_vm_stat.swapouts += stat->swapouts;
 				}
 
 				simple_unlock(&processor_list_lock);
@@ -515,6 +548,8 @@ host_statistics64(
 			stat->free_count = vm_page_free_count + vm_page_speculative_count;
 			stat->active_count = vm_page_active_count;
 
+			local_q_internal_count = 0;
+			local_q_external_count = 0;
 			if (vm_page_local_q) {
 				for (i = 0; i < vm_page_local_q_count; i++) {
 					struct vpl	*lq;
@@ -522,14 +557,14 @@ host_statistics64(
 					lq = &vm_page_local_q[i].vpl_un.vpl;
 
 					stat->active_count += lq->vpl_count;
+					local_q_internal_count +=
+						lq->vpl_internal_count;
+					local_q_external_count +=
+						lq->vpl_external_count;
 				}
 			}
 			stat->inactive_count = vm_page_inactive_count;
-#if CONFIG_EMBEDDED
-			stat->wire_count = vm_page_wire_count;
-#else
 			stat->wire_count = vm_page_wire_count + vm_page_throttled_count + vm_lopage_free_count;
-#endif
 			stat->zero_fill_count = host_vm_stat.zero_fill_count;
 			stat->reactivations = host_vm_stat.reactivations;
 			stat->pageins = host_vm_stat.pageins;
@@ -539,14 +574,41 @@ host_statistics64(
 			stat->lookups = host_vm_stat.lookups;
 			stat->hits = host_vm_stat.hits;
 		
-			/* rev1 added "purgable" info */
 			stat->purgeable_count = vm_page_purgeable_count;
 			stat->purges = vm_page_purged_count;
 		
-			/* rev2 added "speculative" info */
 			stat->speculative_count = vm_page_speculative_count;
 
-			*count = HOST_VM_INFO64_COUNT;	
+			/*
+			 * Fill in extra info added in later revisions of the
+			 * vm_statistics data structure.  Fill in only what can fit
+			 * in the data structure the caller gave us !
+			 */
+			original_count = *count;
+			*count = HOST_VM_INFO64_REV0_COUNT; /* rev0 already filled in */
+			if (original_count >= HOST_VM_INFO64_REV1_COUNT) {
+				/* rev1 added "throttled count" */
+				stat->throttled_count = vm_page_throttled_count;
+				/* rev1 added "compression" info */
+				stat->compressor_page_count = VM_PAGE_COMPRESSOR_COUNT;
+				stat->compressions = host_vm_stat.compressions;
+				stat->decompressions = host_vm_stat.decompressions;
+				stat->swapins = host_vm_stat.swapins;
+				stat->swapouts = host_vm_stat.swapouts;
+				/* rev1 added:
+				 * "external page count"
+				 * "anonymous page count"
+				 * "total # of pages (uncompressed) held in the compressor"
+				 */
+				stat->external_page_count =
+					(vm_page_pageable_external_count +
+					 local_q_external_count);
+				stat->internal_page_count =
+					(vm_page_pageable_internal_count +
+					 local_q_internal_count);
+				stat->total_uncompressed_pages_in_compressor = c_segment_pages_compressed;
+				*count = HOST_VM_INFO64_REV1_COUNT;
+			}
 
 			return(KERN_SUCCESS);
 		}
@@ -662,7 +724,8 @@ host_page_size(
 	if (host == HOST_NULL)
 		return(KERN_INVALID_ARGUMENT);
 
-        *out_page_size = PAGE_SIZE;
+	vm_map_t map = get_task_map(current_task());
+	*out_page_size = vm_map_page_size(map);
 
 	return(KERN_SUCCESS);
 }
@@ -779,7 +842,8 @@ host_processor_info(
 	assert(pcount != 0);
 
 	needed = pcount * icount * sizeof(natural_t);
-	size = round_page(needed);
+	size = vm_map_round_page(needed,
+				 VM_MAP_PAGE_MASK(ipc_kernel_map));
 	result = kmem_alloc(ipc_kernel_map, &addr, size);
 	if (result != KERN_SUCCESS)
 		return (KERN_RESOURCE_SHORTAGE);
@@ -813,8 +877,13 @@ host_processor_info(
 	if (size != needed) 
 		bzero((char *) addr + needed, size - needed);
 
-	result = vm_map_unwire(ipc_kernel_map, vm_map_trunc_page(addr),
-			       vm_map_round_page(addr + size), FALSE);
+	result = vm_map_unwire(
+		ipc_kernel_map,
+		vm_map_trunc_page(addr,
+				  VM_MAP_PAGE_MASK(ipc_kernel_map)),
+		vm_map_round_page(addr + size,
+				  VM_MAP_PAGE_MASK(ipc_kernel_map)),
+		FALSE);
 	assert(result == KERN_SUCCESS);
 	result = vm_map_copyin(ipc_kernel_map, (vm_map_address_t)addr,
 			       (vm_map_size_t)size, TRUE, &copy);

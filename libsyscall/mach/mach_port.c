@@ -164,6 +164,26 @@ mach_port_mod_refs(
 }
 
 kern_return_t
+mach_port_peek(
+	ipc_space_t		task,
+	mach_port_name_t	name,
+	mach_msg_trailer_type_t trailer_type,
+	mach_port_seqno_t	*seqnop,
+	mach_msg_size_t		*msg_sizep,
+	mach_msg_id_t		*msg_idp,
+	mach_msg_trailer_info_t trailer_infop,
+	mach_msg_type_number_t	*trailer_sizep)
+{
+	kern_return_t rv;
+
+	rv = _kernelrpc_mach_port_peek(task, name, trailer_type, 
+				       seqnop, msg_sizep, msg_idp,
+				       trailer_infop, trailer_sizep);
+
+	return (rv);
+}
+
+kern_return_t
 mach_port_set_mscount(
 	ipc_space_t task,
 	mach_port_name_t name,
@@ -481,3 +501,74 @@ mach_port_kobject(
 
 	return (rv);
 }
+
+kern_return_t
+mach_port_construct(
+	ipc_space_t		task,
+	mach_port_options_t	*options,
+	mach_port_context_t	context,
+	mach_port_name_t	*name)
+{
+	kern_return_t rv;
+
+	rv = _kernelrpc_mach_port_construct_trap(task, options, (uint64_t) context, name);
+
+	if (rv == MACH_SEND_INVALID_DEST)
+		rv = _kernelrpc_mach_port_construct(task, options, (uint64_t) context, name);
+
+	return (rv);
+}
+
+kern_return_t
+mach_port_destruct(
+	ipc_space_t		task,
+	mach_port_name_t	name,
+	mach_port_delta_t	srdelta,
+	mach_port_context_t	guard)
+{
+	kern_return_t rv;
+
+	rv = _kernelrpc_mach_port_destruct_trap(task, name, srdelta, (uint64_t) guard);
+
+	if (rv == MACH_SEND_INVALID_DEST)
+		rv = _kernelrpc_mach_port_destruct(task, name, srdelta, (uint64_t) guard);
+
+	return (rv);
+
+}
+
+kern_return_t
+mach_port_guard(
+	ipc_space_t		task,
+	mach_port_name_t	name,
+	mach_port_context_t	guard,
+	boolean_t		strict)
+{
+	kern_return_t rv;
+
+	rv = _kernelrpc_mach_port_guard_trap(task, name, (uint64_t) guard, strict);
+
+	if (rv == MACH_SEND_INVALID_DEST)
+		rv = _kernelrpc_mach_port_guard(task, name, (uint64_t) guard, strict);
+
+	return (rv);
+
+}
+
+kern_return_t
+mach_port_unguard(
+	ipc_space_t		task,
+	mach_port_name_t	name,
+	mach_port_context_t	guard)
+{
+	kern_return_t rv;
+
+	rv = _kernelrpc_mach_port_unguard_trap(task, name, (uint64_t) guard);
+
+	if (rv == MACH_SEND_INVALID_DEST)
+		rv = _kernelrpc_mach_port_unguard(task, name, (uint64_t) guard);
+
+	return (rv);
+
+}
+

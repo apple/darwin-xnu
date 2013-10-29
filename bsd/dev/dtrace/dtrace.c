@@ -20,6 +20,10 @@
  */
 
 /*
+ * Portions copyright (c) 2011, Joyent, Inc. All rights reserved.
+ */
+
+/*
  * Copyright 2009 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
  */
@@ -179,8 +183,8 @@ dtrace_optval_t	dtrace_helper_actions_max = 32;
 dtrace_optval_t	dtrace_helper_providers_max = 64;
 dtrace_optval_t	dtrace_dstate_defsize = (1 * 1024 * 1024);
 size_t		dtrace_strsize_default = 256;
-dtrace_optval_t	dtrace_cleanrate_default = 9900990;		/* 101 hz */
-dtrace_optval_t	dtrace_cleanrate_min = 200000;			/* 5000 hz */
+dtrace_optval_t	dtrace_cleanrate_default = 990099000;		/* 1.1 hz */
+dtrace_optval_t	dtrace_cleanrate_min = 20000000;			/* 50 hz */
 dtrace_optval_t	dtrace_cleanrate_max = (uint64_t)60 * NANOSEC;	/* 1/minute */
 dtrace_optval_t	dtrace_aggrate_default = NANOSEC;		/* 1 hz */
 dtrace_optval_t	dtrace_statusrate_default = NANOSEC;		/* 1 hz */
@@ -211,7 +215,7 @@ hrtime_t	dtrace_deadman_user = (hrtime_t)30 * NANOSEC;
  * it is used by some translators as an implementation detail.
  */
 const char	dtrace_zero[256] = { 0 };	/* zero-filled memory */
-
+unsigned int	dtrace_max_cpus = 0;		/* number of enabled cpus */
 /*
  * DTrace Internal Variables
  */
@@ -450,7 +454,7 @@ static lck_mtx_t dtrace_errlock;
 	    (((uint64_t)1 << 61) - 1)) | ((uint64_t)intr << 61); \
 }
 #else
-#if defined(__x86_64__)
+#if defined (__x86_64__)
 /* FIXME: two function calls!! */
 #define	DTRACE_TLS_THRKEY(where) { \
 	uint_t intr = ml_at_interrupt_context(); /* Note: just one measly bit */ \
@@ -460,15 +464,7 @@ static lck_mtx_t dtrace_errlock;
 	    (((uint64_t)1 << 61) - 1)) | ((uint64_t)intr << 61); \
 }
 #else
-/* FIXME: three function calls!!! */
-#define	DTRACE_TLS_THRKEY(where) { \
-	uint_t intr = ml_at_interrupt_context(); /* Note: just one measly bit */ \
-	uint64_t thr = (uintptr_t)current_thread(); \
-	uint_t pid = (uint_t)proc_selfpid(); \
-	ASSERT(intr < (1 << 3)); \
-	(where) = (((thr << 32 | pid) + DIF_VARIABLE_MAX) & \
-	    (((uint64_t)1 << 61) - 1)) | ((uint64_t)intr << 61); \
-}
+#error Unknown architecture
 #endif
 #endif /* __APPLE__ */
 
@@ -482,25 +478,13 @@ static lck_mtx_t dtrace_errlock;
 #define	DTRACE_STORE(type, tomax, offset, what) \
 	*((type *)((uintptr_t)(tomax) + (uintptr_t)offset)) = (type)(what);
 
-#if !defined(__APPLE__)
-#ifndef __i386
-#define	DTRACE_ALIGNCHECK(addr, size, flags)				\
-	if (addr & (size - 1)) {					\
-		*flags |= CPU_DTRACE_BADALIGN;				\
-		cpu_core[CPU->cpu_id].cpuc_dtrace_illval = addr;	\
-		return (0);						\
-	}
-#else
-#define	DTRACE_ALIGNCHECK(addr, size, flags)
-#endif
-#else /* __APPLE__ */
+
 #define	DTRACE_ALIGNCHECK(addr, size, flags)				\
 	if (addr & (MIN(size,4) - 1)) {					\
 		*flags |= CPU_DTRACE_BADALIGN;				\
 		cpu_core[CPU->cpu_id].cpuc_dtrace_illval = addr;	\
 		return (0);						\
 	}
-#endif /* __APPLE__ */
 
 /*
  * Test whether a range of memory starting at testaddr of size testsz falls
@@ -564,7 +548,7 @@ dtrace_load##bits(uintptr_t addr)					\
 #else /* __APPLE__ */
 #define RECOVER_LABEL(bits) dtraceLoadRecover##bits:
 
-#if (defined(__i386__) || defined (__x86_64__))
+#if defined (__x86_64__)
 #define	DTRACE_LOADFUNC(bits)						\
 /*CSTYLED*/								\
 uint##bits##_t dtrace_load##bits(uintptr_t addr);			\
@@ -615,50 +599,7 @@ dtrace_load##bits(uintptr_t addr)					\
 	return (rval);							\
 }
 #else /* all other architectures */
-#define	DTRACE_LOADFUNC(bits)						\
-/*CSTYLED*/								\
-uint##bits##_t dtrace_load##bits(uintptr_t addr);			\
-									\
-uint##bits##_t								\
-dtrace_load##bits(uintptr_t addr)					\
-{									\
-	size_t size = bits / NBBY;					\
-	/*CSTYLED*/							\
-	uint##bits##_t rval = 0;					\
-	int i;								\
-	volatile uint16_t *flags = (volatile uint16_t *)		\
-	    &cpu_core[CPU->cpu_id].cpuc_dtrace_flags;			\
-									\
-	DTRACE_ALIGNCHECK(addr, size, flags);				\
-									\
-	for (i = 0; i < dtrace_toxranges; i++) {			\
-		if (addr >= dtrace_toxrange[i].dtt_limit)		\
-			continue;					\
-									\
-		if (addr + size <= dtrace_toxrange[i].dtt_base)		\
-			continue;					\
-									\
-		/*							\
-		 * This address falls within a toxic region; return 0.	\
-		 */							\
-		*flags |= CPU_DTRACE_BADADDR;				\
-		cpu_core[CPU->cpu_id].cpuc_dtrace_illval = addr;	\
-		return (0);						\
-	}								\
-									\
-	{								\
-	volatile vm_offset_t recover = (vm_offset_t)&&dtraceLoadRecover##bits;		\
-	*flags |= CPU_DTRACE_NOFAULT;					\
-	recover = dtrace_set_thread_recover(current_thread(), recover);	\
-	/*CSTYLED*/	\
-	rval = *((volatile uint##bits##_t *)addr);			\
-	RECOVER_LABEL(bits);						\
-	(void)dtrace_set_thread_recover(current_thread(), recover);	\
-	*flags &= ~CPU_DTRACE_NOFAULT;					\
-	}								\
-									\
-	return (rval);							\
-}
+#error Unknown Architecture
 #endif
 #endif /* __APPLE__ */
 
@@ -2123,6 +2064,74 @@ dtrace_aggregate_lquantize(uint64_t *lquanta, uint64_t nval, uint64_t incr)
 	lquanta[levels + 1] += incr;
 }
 
+static int
+dtrace_aggregate_llquantize_bucket(int16_t factor, int16_t low, int16_t high,
+                                   int16_t nsteps, int64_t value)
+{
+	int64_t this = 1, last, next;
+	int base = 1, order;
+
+	for (order = 0; order < low; ++order)
+		this *= factor;
+
+	/*
+	 * If our value is less than our factor taken to the power of the
+	 * low order of magnitude, it goes into the zeroth bucket.
+	 */
+	if (value < this)
+		return 0;
+	else
+		last = this;
+
+	for (this *= factor; order <= high; ++order) {
+		int nbuckets = this > nsteps ? nsteps : this;
+
+		/*
+		 * We should not generally get log/linear quantizations
+		 * with a high magnitude that allows 64-bits to
+		 * overflow, but we nonetheless protect against this
+		 * by explicitly checking for overflow, and clamping
+		 * our value accordingly.
+		 */
+		next = this * factor;
+		if (next < this) {
+			value = this - 1;
+		}
+
+		/*
+		 * If our value lies within this order of magnitude,
+		 * determine its position by taking the offset within
+		 * the order of magnitude, dividing by the bucket
+		 * width, and adding to our (accumulated) base.
+		 */
+		if (value < this) {
+			return (base + (value - last) / (this / nbuckets));
+		}
+
+		base += nbuckets - (nbuckets / factor);
+		last = this;
+		this = next;
+	}
+
+	/*
+	 * Our value is greater than or equal to our factor taken to the
+	 * power of one plus the high magnitude -- return the top bucket.
+	 */
+	return base;
+}
+
+static void
+dtrace_aggregate_llquantize(uint64_t *llquanta, uint64_t nval, uint64_t incr)
+{
+	uint64_t arg    = *llquanta++;
+	uint16_t factor = DTRACE_LLQUANTIZE_FACTOR(arg);
+	uint16_t low    = DTRACE_LLQUANTIZE_LOW(arg);
+	uint16_t high   = DTRACE_LLQUANTIZE_HIGH(arg);
+	uint16_t nsteps = DTRACE_LLQUANTIZE_NSTEPS(arg);
+
+	llquanta[dtrace_aggregate_llquantize_bucket(factor, low, high, nsteps, nval)] += incr;
+}
+
 /*ARGSUSED*/
 static void
 dtrace_aggregate_avg(uint64_t *data, uint64_t nval, uint64_t arg)
@@ -3254,7 +3263,7 @@ dtrace_dif_variable(dtrace_mstate_t *mstate, dtrace_state_t *state, uint64_t v,
 			/* Anchored probe that fires while on an interrupt accrues to process 0 */
 			return 0; 
 
-		return ((uint64_t)proc_selfpid());
+		return ((uint64_t)dtrace_proc_selfpid());
 #endif /* __APPLE__ */
 
 #if !defined(__APPLE__)
@@ -3286,7 +3295,7 @@ dtrace_dif_variable(dtrace_mstate_t *mstate, dtrace_state_t *state, uint64_t v,
 		if (DTRACE_ANCHORED(mstate->dtms_probe) && CPU_ON_INTR(CPU))
 			return (0);
 
-		return ((uint64_t)proc_selfppid());
+		return ((uint64_t)dtrace_proc_selfppid());
 #endif /* __APPLE__ */
 
 #if !defined(__APPLE__)
@@ -3382,11 +3391,27 @@ dtrace_dif_variable(dtrace_mstate_t *mstate, dtrace_state_t *state, uint64_t v,
 
 #else
 	case DIF_VAR_ZONENAME:
+        {
+                /* scratch_size is equal to length('global') + 1 for the null-terminator. */
+                char *zname = (char *)mstate->dtms_scratch_ptr;
+                size_t scratch_size = 6 + 1;
+
 		if (!dtrace_priv_proc(state))
 			return (0);
-		
-		/* FIXME: return e.g. "global" allocated from scratch a la execname. */
-		return ((uint64_t)(uintptr_t)NULL); /* Darwin doesn't do "zones" */
+
+                /* The scratch allocation's lifetime is that of the clause. */
+                if (!DTRACE_INSCRATCH(mstate, scratch_size)) {
+                        DTRACE_CPUFLAG_SET(CPU_DTRACE_NOSCRATCH);
+                        return 0;
+                }
+
+                mstate->dtms_scratch_ptr += scratch_size;
+
+                /* The kernel does not provide zonename, it will always return 'global'. */
+                strlcpy(zname, "global", scratch_size);
+
+                return ((uint64_t)(uintptr_t)zname);
+        }
 #endif /* __APPLE__ */
 
 #if !defined(__APPLE__)
@@ -3412,7 +3437,7 @@ dtrace_dif_variable(dtrace_mstate_t *mstate, dtrace_state_t *state, uint64_t v,
 		return ((uint64_t)curthread->t_procp->p_cred->cr_uid);
 #else
 	case DIF_VAR_UID:
-		if (!dtrace_priv_proc(state))
+		if (!dtrace_priv_proc_relaxed(state))
 			return (0);
 
 		/*
@@ -3421,14 +3446,7 @@ dtrace_dif_variable(dtrace_mstate_t *mstate, dtrace_state_t *state, uint64_t v,
 		if (DTRACE_ANCHORED(mstate->dtms_probe) && CPU_ON_INTR(CPU))
 			return (0);
 
-		if (dtrace_CRED() != NULL)
-			/* Credential does not require lazy initialization. */
-			return ((uint64_t)kauth_getuid());
-		else {
-			/* proc_lock would be taken under kauth_cred_proc_ref() in kauth_cred_get(). */
-			DTRACE_CPUFLAG_SET(CPU_DTRACE_ILLOP);
-			return -1ULL;
-		}
+		return ((uint64_t) dtrace_proc_selfruid());
 #endif /* __APPLE__ */
 
 #if !defined(__APPLE__)
@@ -6984,7 +7002,7 @@ __dtrace_probe(dtrace_id_t id, uint64_t arg0, uint64_t arg1,
 					continue;
 
 				DTRACE_STORE(uint64_t, tomax,
-				    valoffs, (uint64_t)proc_selfpid());
+				    valoffs, (uint64_t)dtrace_proc_selfpid());
 				DTRACE_STORE(uint64_t, tomax,
 				    valoffs + sizeof (uint64_t), val);
 
@@ -8160,16 +8178,7 @@ dtrace_unregister(dtrace_provider_id_t id)
 	/*
 	 * Attempt to destroy the probes associated with this provider.
 	 */
-	for (i = 0; i < dtrace_nprobes; i++) {
-		if ((probe = dtrace_probes[i]) == NULL)
-			continue;
-
-		if (probe->dtpr_provider != old)
-			continue;
-
-		if (probe->dtpr_ecb == NULL)
-			continue;
-
+	if (old->ecb_count!=0) {
 		/*
 		 * We have at least one ECB; we can't remove this provider.
 		 */
@@ -8185,7 +8194,7 @@ dtrace_unregister(dtrace_provider_id_t id)
 	 * All of the probes for this provider are disabled; we can safely
 	 * remove all of them from their hash chains and from the probe array.
 	 */
-	for (i = 0; i < dtrace_nprobes; i++) {
+	for (i = 0; i < dtrace_nprobes && old->probe_count!=0; i++) {
 		if ((probe = dtrace_probes[i]) == NULL)
 			continue;
 
@@ -8193,6 +8202,7 @@ dtrace_unregister(dtrace_provider_id_t id)
 			continue;
 
 		dtrace_probes[i] = NULL;
+		old->probe_count--;
 
 		dtrace_hash_remove(dtrace_bymod, probe);
 		dtrace_hash_remove(dtrace_byfunc, probe);
@@ -8328,6 +8338,7 @@ dtrace_condense(dtrace_provider_id_t id)
 			continue;
 
 		dtrace_probes[i] = NULL;
+		prov->probe_count--;
 
 		dtrace_hash_remove(dtrace_bymod, probe);
 		dtrace_hash_remove(dtrace_byfunc, probe);
@@ -8447,6 +8458,7 @@ dtrace_probe_create(dtrace_provider_id_t prov, const char *mod,
 
 	ASSERT(dtrace_probes[id - 1] == NULL);
 	dtrace_probes[id - 1] = probe;
+	provider->probe_count++;	
 
 	if (provider != dtrace_provider)
 		lck_mtx_unlock(&dtrace_lock);
@@ -10424,6 +10436,7 @@ dtrace_ecb_enable(dtrace_ecb_t *ecb)
 	    return(0);
 	}
 
+	probe->dtpr_provider->ecb_count++;
 	if (probe->dtpr_ecb == NULL) {
 		dtrace_provider_t *prov = probe->dtpr_provider;
 
@@ -10624,6 +10637,34 @@ dtrace_ecb_aggregation_create(dtrace_ecb_t *ecb, dtrace_actdesc_t *desc)
 		size = levels * sizeof (uint64_t) + 3 * sizeof (uint64_t);
 		break;
 	}
+
+	case DTRACEAGG_LLQUANTIZE: {
+		uint16_t factor = DTRACE_LLQUANTIZE_FACTOR(desc->dtad_arg);
+		uint16_t low    = DTRACE_LLQUANTIZE_LOW(desc->dtad_arg);
+		uint16_t high   = DTRACE_LLQUANTIZE_HIGH(desc->dtad_arg);
+		uint16_t nsteps = DTRACE_LLQUANTIZE_NSTEPS(desc->dtad_arg);
+		int64_t v;
+
+		agg->dtag_initial = desc->dtad_arg;
+		agg->dtag_aggregate = dtrace_aggregate_llquantize;
+
+		if (factor < 2 || low >= high || nsteps < factor)
+			goto err;
+
+		/*
+		 * Now check that the number of steps evenly divides a power
+		 * of the factor.  (This assures both integer bucket size and
+		 * linearity within each magnitude.)
+		 */
+		for (v = factor; v < nsteps; v *= factor)
+			continue;
+
+		if ((v % nsteps) || (nsteps % factor))
+			goto err;
+
+ 		size = (dtrace_aggregate_llquantize_bucket(factor, low, high, nsteps, INT64_MAX) + 2) * sizeof (uint64_t);
+		break;
+  }
 
 	case DTRACEAGG_AVG:
 		agg->dtag_aggregate = dtrace_aggregate_avg;
@@ -11081,6 +11122,7 @@ dtrace_ecb_disable(dtrace_ecb_t *ecb)
 		probe->dtpr_ecb_last = prev;
 	}
 
+	probe->dtpr_provider->ecb_count--;
 	/*
 	 * The ECB has been disconnected from the probe; now sync to assure
 	 * that all CPUs have seen the change before returning.
@@ -16529,6 +16571,7 @@ dtrace_module_unloaded(struct modctl *ctl)
 		ASSERT(dtrace_probes[probe->dtpr_id - 1] == probe);
 
 		dtrace_probes[probe->dtpr_id - 1] = NULL;
+		probe->dtpr_provider->probe_count--;					
 
 		next = probe->dtpr_nextmod;
 		dtrace_hash_remove(dtrace_bymod, probe);
@@ -16684,6 +16727,7 @@ syncloop:
 		ASSERT(dtrace_probes[probe->dtpr_id - 1] == probe);
 
 		dtrace_probes[probe->dtpr_id - 1] = NULL;
+		probe->dtpr_provider->probe_count--;					
 
 		next = probe->dtpr_nextmod;
 		dtrace_hash_remove(dtrace_bymod, probe);
@@ -16961,7 +17005,7 @@ dtrace_attach(dev_info_t *devi, ddi_attach_cmd_t cmd)
 	    dtrace_provider, NULL, NULL, "END", 0, NULL);
 	dtrace_probeid_error = dtrace_probe_create((dtrace_provider_id_t)
 	    dtrace_provider, NULL, NULL, "ERROR", 1, NULL);
-#elif (defined(__i386__) || defined (__x86_64__))
+#elif defined (__x86_64__)
 	dtrace_probeid_begin = dtrace_probe_create((dtrace_provider_id_t)
 	    dtrace_provider, NULL, NULL, "BEGIN", 1, NULL);
 	dtrace_probeid_end = dtrace_probe_create((dtrace_provider_id_t)
@@ -18089,7 +18133,8 @@ dtrace_ioctl_helper(u_long cmd, caddr_t arg, int *rv)
 		return KERN_SUCCESS;
 
 	switch (cmd) {
-		case DTRACEHIOC_ADDDOF: {
+	case DTRACEHIOC_ADDDOF:
+	                {
 			dof_helper_t *dhp = NULL;
 			size_t dof_ioctl_data_size;
 			dof_ioctl_data_t* multi_dof;
@@ -19640,8 +19685,16 @@ void
 dtrace_init( void )
 {
 	if (0 == gDTraceInited) {
-		int i, ncpu = NCPU;
+		int i, ncpu;
 
+		/*
+		 * DTrace allocates buffers based on the maximum number
+		 * of enabled cpus. This call avoids any race when finding
+		 * that count.
+		 */
+		ASSERT(dtrace_max_cpus == 0);
+		ncpu = dtrace_max_cpus = ml_get_max_cpus();
+		
 		gMajDevNo = cdevsw_add(DTRACE_MAJOR, &dtrace_cdevsw);
 
 		if (gMajDevNo < 0) {

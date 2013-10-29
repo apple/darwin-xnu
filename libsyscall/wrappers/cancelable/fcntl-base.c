@@ -42,6 +42,7 @@ fcntl(int fd, int cmd, ...)
 	 case F_GETLK:
 	 case F_SETLK:
 	 case F_SETLKW:
+	 case F_SETLKWTIMEOUT:
 	 case F_PREALLOCATE:
 	 case F_SETSIZE:
 	 case F_RDADVISE:
@@ -54,6 +55,7 @@ fcntl(int fd, int cmd, ...)
 	 case F_UNLINKFROM:
 	 case F_ADDSIGS:
 	 case F_ADDFILESIGS:
+	 case F_FINDSIGS:
 		arg = va_arg(ap, void *);
 		break;
 	 default:

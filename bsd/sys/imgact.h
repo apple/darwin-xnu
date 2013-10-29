@@ -111,10 +111,12 @@ struct image_params {
 
 	struct label	*ip_execlabelp;		/* label of the executable */
 	struct label	*ip_scriptlabelp;	/* label of the script */
+	struct vnode	*ip_scriptvp;		/* script */
 	unsigned int	ip_csflags;		/* code signing flags */
 	void		*ip_px_sa;
 	void		*ip_px_sfa;
 	void		*ip_px_spa;
+	void		*ip_px_smpx;		/* MAC-specific spawn attrs. */
 };
 
 /*

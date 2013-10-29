@@ -113,10 +113,11 @@ extern vm_fault_return_t vm_fault_page(
 		vm_object_offset_t first_offset,/* Offset into object */
 		vm_prot_t	fault_type,	/* What access is requested */
 		boolean_t	must_be_resident,/* Must page be resident? */
+		boolean_t	caller_lookup,	/* caller looked up page */
 		/* Modifies in place: */
 		vm_prot_t	*protection,	/* Protection for mapping */
-		/* Returns: */
 		vm_page_t	*result_page,	/* Page found, if successful */
+		/* Returns: */
 		vm_page_t	*top_page,	/* Page in top object, if
 						 * not result_page.  */
 		int             *type_of_fault, /* if non-zero, return COW, zero-filled, etc...

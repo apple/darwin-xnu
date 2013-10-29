@@ -27,7 +27,7 @@
  */
 #include <vm/vm_kern.h>
 #include <kern/kalloc.h>
-#include <kern/etimer.h>
+#include <kern/timer_queue.h>
 #include <mach/machine.h>
 #include <i386/cpu_threads.h>
 #include <i386/cpuid.h>
@@ -348,9 +348,6 @@ x86_lcpu_init(int cpu)
     lcpu->state = LCPU_OFF;
     for (i = 0; i < MAX_CACHE_DEPTH; i += 1)
 	lcpu->caches[i] = NULL;
-
-    lcpu->master = (lcpu->cpu_num == (unsigned int) master_cpu);
-    lcpu->primary = (lcpu->pnum % topoParms.nPThreadsPerPackage) == 0;
 }
 
 static x86_core_t *
@@ -468,30 +465,32 @@ x86_core_find(int cpu)
 }
  
 void
-x86_set_lcpu_numbers(x86_lcpu_t *lcpu)
+x86_set_logical_topology(x86_lcpu_t *lcpu, int pnum, int lnum)
 {
-    lcpu->lnum = lcpu->cpu_num % topoParms.nLThreadsPerCore;
-}
+    x86_core_t	*core = lcpu->core;
+    x86_die_t	*die  = lcpu->die;
+    x86_pkg_t	*pkg  = lcpu->package;
+    
+    assert(core != NULL);
+    assert(die != NULL);
+    assert(pkg != NULL);
 
-void
-x86_set_core_numbers(x86_core_t *core, x86_lcpu_t *lcpu)
-{
-    core->pcore_num = lcpu->cpu_num / topoParms.nLThreadsPerCore;
+    lcpu->cpu_num = lnum;
+    lcpu->pnum = pnum;
+    lcpu->master = (lnum == master_cpu);
+    lcpu->primary = (lnum % topoParms.nLThreadsPerPackage) == 0;
+
+    lcpu->lnum = lnum % topoParms.nLThreadsPerCore;
+
+    core->pcore_num = lnum / topoParms.nLThreadsPerCore;
     core->lcore_num = core->pcore_num % topoParms.nLCoresPerDie;
-}
 
-void
-x86_set_die_numbers(x86_die_t *die, x86_lcpu_t *lcpu)
-{
-    die->pdie_num = lcpu->cpu_num / (topoParms.nLThreadsPerCore * topoParms.nLCoresPerDie);
+    die->pdie_num = lnum / (topoParms.nLThreadsPerCore*topoParms.nLCoresPerDie);
     die->ldie_num = die->pdie_num % topoParms.nLDiesPerPackage;
-}
 
-void
-x86_set_pkg_numbers(x86_pkg_t *pkg, x86_lcpu_t *lcpu)
-{
-    pkg->ppkg_num = lcpu->cpu_num / topoParms.nLThreadsPerPackage;
+    pkg->ppkg_num = lnum / topoParms.nLThreadsPerPackage;
     pkg->lpkg_num = pkg->ppkg_num;
+
 }
 
 static x86_die_t *
@@ -964,7 +963,7 @@ cpu_thread_init(void)
     simple_unlock(&x86_topo_lock);
 
     pmCPUMarkRunning(cpup);
-    etimer_resync_deadlines();
+    timer_resync_deadlines();
 }
 
 /*
@@ -1001,7 +1000,7 @@ cpu_thread_halt(void)
  * after the complete topology is built and no other changes are being made.
  */
 void
-validate_topology(void)
+x86_validate_topology(void)
 {
     x86_pkg_t		*pkg;
     x86_die_t		*die;

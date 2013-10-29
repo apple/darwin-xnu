@@ -66,6 +66,10 @@
 #include <vm/vm_protos.h> /* last */
 
 #include <libkern/crypto/sha1.h>
+#include <libkern/libkern.h>
+
+#include <sys/kasl.h>
+#include <sys/syslog.h>
 
 #include <security/mac_framework.h>
 
@@ -75,6 +79,7 @@ extern kern_return_t memory_object_pages_resident(memory_object_control_t,
 extern kern_return_t	memory_object_signed(memory_object_control_t control,
 					     boolean_t is_signed);
 extern boolean_t	memory_object_is_slid(memory_object_control_t	control);
+extern boolean_t	memory_object_is_signed(memory_object_control_t);
 
 extern void Debugger(const char *message);
 
@@ -133,75 +138,16 @@ cs_valid_range(
 	return TRUE;
 }
 
-/*
- * Magic numbers used by Code Signing
- */
-enum {
-	CSMAGIC_REQUIREMENT = 0xfade0c00,		/* single Requirement blob */
-	CSMAGIC_REQUIREMENTS = 0xfade0c01,		/* Requirements vector (internal requirements) */
-	CSMAGIC_CODEDIRECTORY = 0xfade0c02,		/* CodeDirectory blob */
-	CSMAGIC_EMBEDDED_SIGNATURE = 0xfade0cc0, /* embedded form of signature data */
-	CSMAGIC_EMBEDDED_SIGNATURE_OLD = 0xfade0b02,	/* XXX */
-	CSMAGIC_EMBEDDED_ENTITLEMENTS = 0xfade7171,	/* embedded entitlements */
-	CSMAGIC_DETACHED_SIGNATURE = 0xfade0cc1, /* multi-arch collection of embedded signatures */
-	
-	CSSLOT_CODEDIRECTORY = 0,				/* slot index for CodeDirectory */
-	CSSLOT_ENTITLEMENTS = 5
-};
-
-static const uint32_t supportsScatter = 0x20100;	// first version to support scatter option
-
-/*
- * Structure of an embedded-signature SuperBlob
- */
-typedef struct __BlobIndex {
-	uint32_t type;					/* type of entry */
-	uint32_t offset;				/* offset of entry */
-} CS_BlobIndex;
-
-typedef struct __SuperBlob {
-	uint32_t magic;					/* magic number */
-	uint32_t length;				/* total length of SuperBlob */
-	uint32_t count;					/* number of index entries following */
-	CS_BlobIndex index[];			/* (count) entries */
-	/* followed by Blobs in no particular order as indicated by offsets in index */
-} CS_SuperBlob;
-
-typedef struct __GenericBlob {
-	uint32_t magic;				/* magic number */
-	uint32_t length;			/* total length of blob */
-	char data[];
-} CS_GenericBlob;
-
-struct Scatter {
-	uint32_t count;			// number of pages; zero for sentinel (only)
-	uint32_t base;			// first page number
-	uint64_t targetOffset;		// offset in target
-	uint64_t spare;			// reserved
-};
-
-/*
- * C form of a CodeDirectory.
- */
-typedef struct __CodeDirectory {
-	uint32_t magic;					/* magic number (CSMAGIC_CODEDIRECTORY) */
-	uint32_t length;				/* total length of CodeDirectory blob */
-	uint32_t version;				/* compatibility version */
-	uint32_t flags;					/* setup and mode flags */
-	uint32_t hashOffset;			/* offset of hash slot element at index zero */
-	uint32_t identOffset;			/* offset of identifier string */
-	uint32_t nSpecialSlots;			/* number of special hash slots */
-	uint32_t nCodeSlots;			/* number of ordinary (code) hash slots */
-	uint32_t codeLimit;				/* limit to main image signature range */
-	uint8_t hashSize;				/* size of each hash in bytes */
-	uint8_t hashType;				/* type of hash (cdHashType* constants) */
-	uint8_t spare1;					/* unused (must be zero) */
-	uint8_t	pageSize;				/* log2(page size in bytes); 0 => infinite */
-	uint32_t spare2;				/* unused (must be zero) */
-	/* Version 0x20100 */
-	uint32_t scatterOffset;				/* offset of optional scatter vector */
-	/* followed by dynamic content as located by offset fields above */
-} CS_CodeDirectory;
+static void
+hex_str(
+	const unsigned char *hash,
+	size_t len,
+	char *buf)
+{
+	unsigned int n;
+	for (n = 0; n < len; n++)
+		snprintf(buf + 2*n, 3, "%02.2x", hash[n]);
+}
 
 
 /*
@@ -278,9 +224,9 @@ hashes(
 
 	assert(cs_valid_range(cd, cd + 1, lower_bound, upper_bound));
 
-	if((ntohl(cd->version) >= supportsScatter) && (ntohl(cd->scatterOffset))) {
+	if((ntohl(cd->version) >= CS_SUPPORTSSCATTER) && (ntohl(cd->scatterOffset))) {
 		/* Get first scatter struct */
-		const struct Scatter *scatter = (const struct Scatter*)
+		const SC_Scatter *scatter = (const SC_Scatter*)
 			((const char*)cd + ntohl(cd->scatterOffset));
 		uint32_t hashindex=0, scount, sbase=0;
 		/* iterate all scatter structs */
@@ -358,6 +304,253 @@ hashes(
 
 	return hash;
 }
+
+/*
+ * cs_validate_codedirectory
+ *
+ * Validate that pointers inside the code directory to make sure that
+ * all offsets and lengths are constrained within the buffer.
+ *
+ * Parameters:	cd			Pointer to code directory buffer
+ *		length			Length of buffer
+ *
+ * Returns:	0			Success
+ *		EBADEXEC		Invalid code signature
+ */
+
+static int
+cs_validate_codedirectory(const CS_CodeDirectory *cd, size_t length)
+{
+
+	if (length < sizeof(*cd))
+		return EBADEXEC;
+	if (ntohl(cd->magic) != CSMAGIC_CODEDIRECTORY)
+		return EBADEXEC;
+	if (cd->hashSize != SHA1_RESULTLEN)
+		return EBADEXEC;
+	if (cd->pageSize != PAGE_SHIFT)
+		return EBADEXEC;
+	if (cd->hashType != CS_HASHTYPE_SHA1)
+		return EBADEXEC;
+
+	if (length < ntohl(cd->hashOffset))
+		return EBADEXEC;
+
+	/* check that nSpecialSlots fits in the buffer in front of hashOffset */
+	if (ntohl(cd->hashOffset) / SHA1_RESULTLEN < ntohl(cd->nSpecialSlots))
+		return EBADEXEC;
+
+	/* check that codeslots fits in the buffer */
+	if ((length - ntohl(cd->hashOffset)) / SHA1_RESULTLEN <  ntohl(cd->nCodeSlots))
+		return EBADEXEC;
+	
+	if (ntohl(cd->version) >= CS_SUPPORTSSCATTER && cd->scatterOffset) {
+
+		if (length < ntohl(cd->scatterOffset))
+			return EBADEXEC;
+
+		SC_Scatter *scatter = (SC_Scatter *)
+			(((uint8_t *)cd) + ntohl(cd->scatterOffset));
+		uint32_t nPages = 0;
+
+		/*
+		 * Check each scatter buffer, since we don't know the
+		 * length of the scatter buffer array, we have to
+		 * check each entry.
+		 */
+		while(1) {
+			/* check that the end of each scatter buffer in within the length */
+			if (((const uint8_t *)scatter) + sizeof(scatter[0]) > (const uint8_t *)cd + length)
+				return EBADEXEC;
+			uint32_t scount = ntohl(scatter->count);
+			if (scount == 0)
+				break;
+			if (nPages + scount < nPages)
+				return EBADEXEC;
+			nPages += scount;
+			scatter++;
+
+			/* XXX check that basees doesn't overlap */
+			/* XXX check that targetOffset doesn't overlap */
+		}
+#if 0 /* rdar://12579439 */
+		if (nPages != ntohl(cd->nCodeSlots))
+			return EBADEXEC;
+#endif
+	}
+
+	if (length < ntohl(cd->identOffset))
+		return EBADEXEC;
+
+	/* identifier is NUL terminated string */
+	if (cd->identOffset) {
+		uint8_t *ptr = (uint8_t *)cd + ntohl(cd->identOffset);
+		if (memchr(ptr, 0, length - ntohl(cd->identOffset)) == NULL)
+			return EBADEXEC;
+	}
+
+	return 0;
+}
+
+/*
+ *
+ */
+
+static int
+cs_validate_blob(const CS_GenericBlob *blob, size_t length)
+{
+	if (length < sizeof(CS_GenericBlob) || length < ntohl(blob->length))
+		return EBADEXEC;
+	return 0;
+}
+
+/*
+ * cs_validate_csblob
+ *
+ * Validate that superblob/embedded code directory to make sure that
+ * all internal pointers are valid.
+ *
+ * Will validate both a superblob csblob and a "raw" code directory.
+ *
+ *
+ * Parameters:	buffer			Pointer to code signature
+ *		length			Length of buffer
+ *		rcd			returns pointer to code directory
+ *
+ * Returns:	0			Success
+ *		EBADEXEC		Invalid code signature
+ */
+
+static int
+cs_validate_csblob(const uint8_t *addr, size_t length,
+		   const CS_CodeDirectory **rcd)
+{
+	const CS_GenericBlob *blob = (const CS_GenericBlob *)(void *)addr;
+	int error;
+
+	*rcd = NULL;
+
+	error = cs_validate_blob(blob, length);
+	if (error)
+		return error;
+
+	length = ntohl(blob->length);
+
+	if (ntohl(blob->magic) == CSMAGIC_EMBEDDED_SIGNATURE) {
+		const CS_SuperBlob *sb = (const CS_SuperBlob *)blob;
+		uint32_t n, count = ntohl(sb->count);
+
+		if (length < sizeof(CS_SuperBlob))
+			return EBADEXEC;
+
+		/* check that the array of BlobIndex fits in the rest of the data */
+		if ((length - sizeof(CS_SuperBlob)) / sizeof(CS_BlobIndex) < count)
+			return EBADEXEC;
+
+		/* now check each BlobIndex */
+		for (n = 0; n < count; n++) {
+			const CS_BlobIndex *blobIndex = &sb->index[n];
+			if (length < ntohl(blobIndex->offset))
+				return EBADEXEC;
+
+			const CS_GenericBlob *subBlob =
+				(const CS_GenericBlob *)(void *)(addr + ntohl(blobIndex->offset));
+
+			size_t subLength = length - ntohl(blobIndex->offset);
+
+			if ((error = cs_validate_blob(subBlob, subLength)) != 0)
+				return error;
+			subLength = ntohl(subBlob->length);
+
+			/* extra validation for CDs, that is also returned */
+			if (ntohl(blobIndex->type) == CSSLOT_CODEDIRECTORY) {
+				const CS_CodeDirectory *cd = (const CS_CodeDirectory *)subBlob;
+				if ((error = cs_validate_codedirectory(cd, subLength)) != 0)
+					return error;
+				*rcd = cd;
+			}
+		}
+
+	} else if (ntohl(blob->magic) == CSMAGIC_CODEDIRECTORY) {
+
+		if ((error = cs_validate_codedirectory((const CS_CodeDirectory *)(void *)addr, length)) != 0)
+			return error;
+		*rcd = (const CS_CodeDirectory *)blob;
+	} else {
+		return EBADEXEC;
+	}
+
+	if (*rcd == NULL)
+		return EBADEXEC;
+
+	return 0;
+}
+
+/*
+ * cs_find_blob_bytes
+ *
+ * Find an blob from the superblob/code directory. The blob must have
+ * been been validated by cs_validate_csblob() before calling
+ * this. Use cs_find_blob() instead.
+ * 
+ * Will also find a "raw" code directory if its stored as well as
+ * searching the superblob.
+ *
+ * Parameters:	buffer			Pointer to code signature
+ *		length			Length of buffer
+ *		type			type of blob to find
+ *		magic			the magic number for that blob
+ *
+ * Returns:	pointer			Success
+ *		NULL			Buffer not found
+ */
+
+static const CS_GenericBlob *
+cs_find_blob_bytes(const uint8_t *addr, size_t length, uint32_t type, uint32_t magic)
+{
+	const CS_GenericBlob *blob = (const CS_GenericBlob *)(void *)addr;
+
+	if (ntohl(blob->magic) == CSMAGIC_EMBEDDED_SIGNATURE) {
+		const CS_SuperBlob *sb = (const CS_SuperBlob *)blob;
+		size_t n, count = ntohl(sb->count);
+
+		for (n = 0; n < count; n++) {
+			if (ntohl(sb->index[n].type) != type)
+				continue;
+			uint32_t offset = ntohl(sb->index[n].offset);
+			if (length - sizeof(const CS_GenericBlob) < offset)
+				return NULL;
+			blob = (const CS_GenericBlob *)(void *)(addr + offset);
+			if (ntohl(blob->magic) != magic)
+				continue;
+			return blob;
+		}
+	} else if (type == CSSLOT_CODEDIRECTORY
+		   && ntohl(blob->magic) == CSMAGIC_CODEDIRECTORY
+		   && magic == CSMAGIC_CODEDIRECTORY)
+		return blob;
+	return NULL;
+}
+
+
+static const CS_GenericBlob *
+cs_find_blob(struct cs_blob *csblob, uint32_t type, uint32_t magic)
+{
+	if ((csblob->csb_flags & CS_VALID) == 0)
+		return NULL;
+	return cs_find_blob_bytes((const uint8_t *)csblob->csb_mem_kaddr, csblob->csb_mem_size, type, magic);
+}
+
+static const uint8_t *
+cs_find_special_slot(const CS_CodeDirectory *cd, uint32_t slot)
+{
+	/* there is no zero special slot since that is the first code slot */
+	if (ntohl(cd->nSpecialSlots) < slot || slot == 0)
+		return NULL;
+
+	return ((const uint8_t *)cd + ntohl(cd->hashOffset) - (SHA1_RESULTLEN * slot));
+}
+
 /*
  * CODESIGNING
  * End of routines to navigate code signing data structures in the kernel.
@@ -372,96 +565,131 @@ hashes(
  * Returns:
  *   EINVAL	no text vnode associated with the process
  *   EBADEXEC   invalid code signing data
- *   ENOMEM	you should reboot
  *   0		no error occurred
  *
  * On success, out_start and out_length will point to the
  * entitlements blob if found; or will be set to NULL/zero
  * if there were no entitlements.
  */
+
+static uint8_t sha1_zero[SHA1_RESULTLEN] = { 0 };
+
 int
 cs_entitlements_blob_get(proc_t p, void **out_start, size_t *out_length)
 {
-	SHA1_CTX context;			/* XXX hash agility */
-	int error = 0;
-	struct cs_blob *blob_list_entry;
-	CS_SuperBlob *super_blob;
-	CS_BlobIndex *blob_index;
-	CS_GenericBlob *blob;
-	CS_CodeDirectory *code_dir;
-	unsigned char *computed_hash = NULL;
-	unsigned char *embedded_hash = NULL;
-	void *start = NULL;
-	size_t length = 0;
-	size_t hash_size = 0;
-	unsigned int i, count;
+	uint8_t computed_hash[SHA1_RESULTLEN];
+	const CS_GenericBlob *entitlements;
+	const CS_CodeDirectory *code_dir;
+	struct cs_blob *csblob;
+	const uint8_t *embedded_hash;
+	SHA1_CTX context;
 
-	if (NULL == p->p_textvp) {
-		error = EINVAL;
-		goto out;
+	*out_start = NULL;
+	*out_length = 0;
+
+	if (NULL == p->p_textvp)
+		return EINVAL;
+
+	if ((csblob = ubc_cs_blob_get(p->p_textvp, -1, p->p_textoff)) == NULL)
+		return 0;
+
+	if ((code_dir = (const CS_CodeDirectory *)cs_find_blob(csblob, CSSLOT_CODEDIRECTORY, CSMAGIC_CODEDIRECTORY)) == NULL)
+		return 0;
+
+	entitlements = cs_find_blob(csblob, CSSLOT_ENTITLEMENTS, CSMAGIC_EMBEDDED_ENTITLEMENTS);
+	embedded_hash = cs_find_special_slot(code_dir, CSSLOT_ENTITLEMENTS);
+
+	if (embedded_hash == NULL) {
+		if (entitlements)
+			return EBADEXEC;
+		return 0;
+	} else if (entitlements == NULL && memcmp(embedded_hash, sha1_zero, SHA1_RESULTLEN) != 0) {
+		return EBADEXEC;
 	}
-	if (NULL == (blob_list_entry = ubc_cs_blob_get(p->p_textvp, -1,
-	    p->p_textoff)))
-		goto out;
-	super_blob = (void *)blob_list_entry->csb_mem_kaddr;
-	if (CSMAGIC_EMBEDDED_SIGNATURE != ntohl(super_blob->magic)) {
-		error = EBADEXEC;
-		goto out;
-	}
-	count = ntohl(super_blob->count);
-	for (i = 0; i < count; ++i) {
-		blob_index = &super_blob->index[i];
-		blob = (void *)((char *)super_blob + ntohl(blob_index->offset));
-		switch (ntohl(blob_index->type)) {
-		case CSSLOT_CODEDIRECTORY:
-			if (CSMAGIC_CODEDIRECTORY != ntohl(blob->magic))
-				break;
-			code_dir = (void *)blob;
-			hash_size = code_dir->hashSize;
-			if (CSSLOT_ENTITLEMENTS <=
-			    ntohl(code_dir->nSpecialSlots)) {
-				embedded_hash = (void *)((char *)code_dir +
-				    ntohl(code_dir->hashOffset) -
-				    (hash_size * CSSLOT_ENTITLEMENTS));
-			}
-			break;
-		case CSSLOT_ENTITLEMENTS:
-			if (CSMAGIC_EMBEDDED_ENTITLEMENTS != ntohl(blob->magic))
-				break;
-			start = (void *)blob;
-			length = ntohl(blob->length);
-			break;
-		default:
-			break;
-		}
-	}
-	if (NULL == start && NULL == embedded_hash) {
-		error = 0;
-		goto out;
-	} else if (NULL == start || NULL == embedded_hash) {
-		error = EBADEXEC;
-		goto out;
-	}
-	if (NULL == (computed_hash = kalloc(hash_size))) {
-		error = ENOMEM;
-		goto out;
-	}
+
 	SHA1Init(&context);
-	SHA1Update(&context, start, length);
+	SHA1Update(&context, entitlements, ntohl(entitlements->length));
 	SHA1Final(computed_hash, &context);
-	if (0 != memcmp(computed_hash, embedded_hash, hash_size)) {
-		error = EBADEXEC;
-		goto out;
-	}
-	error = 0;
-out:
-	if (NULL != computed_hash)
-		kfree(computed_hash, hash_size);
-	if (0 == error) {
-		*out_start = start;
-		*out_length = length;
-	}
-	return error;
+	if (memcmp(computed_hash, embedded_hash, SHA1_RESULTLEN) != 0)
+		return EBADEXEC;
+
+	*out_start = (void *)entitlements;
+	*out_length = ntohl(entitlements->length);
+
+	return 0;
+}
+
+/* Retrieve the codesign identity for a process.
+ * Returns:
+ *   NULL	an error occured
+ *   string	the cs_identity
+ */
+
+const char *
+cs_identity_get(proc_t p)
+{
+	const CS_CodeDirectory *code_dir;
+	struct cs_blob *csblob;
+
+	if (NULL == p->p_textvp)
+		return NULL;
+
+	if ((csblob = ubc_cs_blob_get(p->p_textvp, -1, p->p_textoff)) == NULL)
+		return NULL;
+
+	if ((code_dir = (const CS_CodeDirectory *)cs_find_blob(csblob, CSSLOT_CODEDIRECTORY, CSMAGIC_CODEDIRECTORY)) == NULL)
+		return NULL;
+
+	if (code_dir->identOffset == 0)
+		return NULL;
+
+	return ((const char *)code_dir) + ntohl(code_dir->identOffset);
+}
+
+
+
+/* Retrieve the codesign blob for a process.
+ * Returns:
+ *   EINVAL	no text vnode associated with the process
+ *   0		no error occurred
+ *
+ * On success, out_start and out_length will point to the
+ * cms blob if found; or will be set to NULL/zero
+ * if there were no blob.
+ */
+
+int
+cs_blob_get(proc_t p, void **out_start, size_t *out_length)
+{
+	struct cs_blob *csblob;
+
+	*out_start = NULL;
+	*out_length = 0;
+
+	if (NULL == p->p_textvp)
+		return EINVAL;
+
+	if ((csblob = ubc_cs_blob_get(p->p_textvp, -1, p->p_textoff)) == NULL)
+		return 0;
+
+	*out_start = (void *)csblob->csb_mem_kaddr;
+	*out_length = csblob->csb_mem_size;
+
+	return 0;
+}
+
+uint8_t *
+cs_get_cdhash(struct proc *p)
+{
+	struct cs_blob *csblob;
+
+	if (NULL == p->p_textvp)
+		return NULL;
+
+	if ((csblob = ubc_cs_blob_get(p->p_textvp, -1, p->p_textoff)) == NULL)
+		return NULL;
+
+	return csblob->csb_sha1;
 }
 
 /*
@@ -2386,6 +2614,7 @@ SYSCTL_INT(_vm, OID_AUTO, cs_blob_count_peak, CTLFLAG_RD | CTLFLAG_LOCKED, &cs_b
 SYSCTL_INT(_vm, OID_AUTO, cs_blob_size_peak, CTLFLAG_RD | CTLFLAG_LOCKED, &cs_blob_size_peak, 0, "Peak size of code signature blobs");
 SYSCTL_INT(_vm, OID_AUTO, cs_blob_size_max, CTLFLAG_RD | CTLFLAG_LOCKED, &cs_blob_size_max, 0, "Size of biggest code signature blob");
 
+
 kern_return_t
 ubc_cs_blob_allocate(
 	vm_offset_t	*blob_addr_p,
@@ -2420,11 +2649,124 @@ ubc_cs_blob_deallocate(
 }
 	
 int
+ubc_cs_sigpup_add(
+	struct vnode	*vp,
+	vm_address_t	address,
+	vm_size_t	size)
+{
+	kern_return_t		kr;
+	struct ubc_info		*uip;
+	struct cs_blob		*blob;
+	memory_object_control_t control;
+	const CS_CodeDirectory *cd;
+	int			error;
+
+	control = ubc_getobject(vp, UBC_FLAGS_NONE);
+	if (control == MEMORY_OBJECT_CONTROL_NULL)
+		return KERN_INVALID_ARGUMENT;
+
+	if (memory_object_is_signed(control))
+		return 0;
+
+	blob = (struct cs_blob *) kalloc(sizeof (struct cs_blob));
+	if (blob == NULL)
+		return ENOMEM;
+
+	/* fill in the new blob */
+	blob->csb_cpu_type = CPU_TYPE_ANY;
+	blob->csb_base_offset = 0;
+	blob->csb_mem_size = size;
+	blob->csb_mem_offset = 0;
+	blob->csb_mem_handle = IPC_PORT_NULL;
+	blob->csb_mem_kaddr = address;
+	blob->csb_sigpup = 1;
+	
+	/*
+	 * Validate the blob's contents
+	 */
+	cd = findCodeDirectory(
+		(const CS_SuperBlob *) address, 
+		(char *) address, 
+		(char *) address + blob->csb_mem_size);
+	if (cd == NULL) {
+		/* no code directory => useless blob ! */
+		error = EINVAL;
+		goto out;
+	}
+
+	blob->csb_flags = ntohl(cd->flags) | CS_VALID;
+	blob->csb_end_offset = round_page(ntohl(cd->codeLimit));
+	if((ntohl(cd->version) >= CS_SUPPORTSSCATTER) && (ntohl(cd->scatterOffset))) {
+		const SC_Scatter *scatter = (const SC_Scatter*)
+		    ((const char*)cd + ntohl(cd->scatterOffset));
+		blob->csb_start_offset = ntohl(scatter->base) * PAGE_SIZE;
+	} else {
+		blob->csb_start_offset = (blob->csb_end_offset - (ntohl(cd->nCodeSlots) * PAGE_SIZE));
+	}
+
+	/* 
+	 * We don't need to check with the policy module, since the input data is supposed to be already checked
+	 */
+	
+	vnode_lock(vp);
+	if (! UBCINFOEXISTS(vp)) {
+		vnode_unlock(vp);
+		if (cs_debug)
+			printf("out ubc object\n");
+		error = ENOENT;
+		goto out;
+	}
+	uip = vp->v_ubcinfo;
+
+	/* someone raced us to adding the code directory */
+	if (uip->cs_blobs != NULL) {
+		if (cs_debug)
+			printf("sigpup: vnode already have CD ?\n");
+		vnode_unlock(vp);
+		error = EEXIST;
+		goto out;
+	}
+
+	blob->csb_next = uip->cs_blobs;
+	uip->cs_blobs = blob;
+
+	OSAddAtomic(+1, &cs_blob_count);
+	OSAddAtomic((SInt32) +blob->csb_mem_size, &cs_blob_size);
+
+	/* mark this vnode's VM object as having "signed pages" */
+	kr = memory_object_signed(uip->ui_control, TRUE);
+	if (kr != KERN_SUCCESS) {
+		vnode_unlock(vp);
+		if (cs_debug)
+			printf("sigpup: not signable ?\n");
+		error = ENOENT;
+		goto out;
+	}
+
+	vnode_unlock(vp);
+
+	error = 0;
+out:
+	if (error) {
+		if (cs_debug)
+			printf("sigpup: not signable ?\n");
+		/* we failed; release what we allocated */
+		if (blob) {
+			kfree(blob, sizeof (*blob));
+			blob = NULL;
+		}
+	}
+
+	return error;
+}
+
+int
 ubc_cs_blob_add(
 	struct vnode	*vp,
 	cpu_type_t	cputype,
 	off_t		base_offset,
 	vm_address_t	addr,
+	off_t		blob_offset,
 	vm_size_t	size)
 {
 	kern_return_t		kr;
@@ -2472,32 +2814,36 @@ ubc_cs_blob_add(
 
 	/* fill in the new blob */
 	blob->csb_cpu_type = cputype;
+	blob->csb_sigpup = 0;
 	blob->csb_base_offset = base_offset;
+	blob->csb_blob_offset = blob_offset;
 	blob->csb_mem_size = size;
 	blob->csb_mem_offset = 0;
 	blob->csb_mem_handle = blob_handle;
 	blob->csb_mem_kaddr = addr;
+	blob->csb_flags = 0;
 	
 	/*
 	 * Validate the blob's contents
 	 */
-	cd = findCodeDirectory(
-		(const CS_SuperBlob *) addr, 
-		(char *) addr, 
-		(char *) addr + blob->csb_mem_size);
-	if (cd == NULL) {
-		/* no code directory => useless blob ! */
+
+	error = cs_validate_csblob((const uint8_t *)addr, size, &cd);
+	if (error) {
+		if (cs_debug)
+			printf("CODESIGNING: csblob invalid: %d\n", error);
 		blob->csb_flags = 0;
 		blob->csb_start_offset = 0;
 		blob->csb_end_offset = 0;
+		memset(blob->csb_sha1, 0, SHA1_RESULTLEN);
+		/* let the vnode checker determine if the signature is valid or not */
 	} else {
 		const unsigned char *sha1_base;
 		int sha1_size;
 
-		blob->csb_flags = ntohl(cd->flags) | CS_VALID;
+		blob->csb_flags = (ntohl(cd->flags) & CS_ALLOWED_MACHO) | CS_VALID;
 		blob->csb_end_offset = round_page(ntohl(cd->codeLimit));
-		if((ntohl(cd->version) >= supportsScatter) && (ntohl(cd->scatterOffset))) {
-			const struct Scatter *scatter = (const struct Scatter*)
+		if((ntohl(cd->version) >= CS_SUPPORTSSCATTER) && (ntohl(cd->scatterOffset))) {
+			const SC_Scatter *scatter = (const SC_Scatter*)
 				((const char*)cd + ntohl(cd->scatterOffset));
 			blob->csb_start_offset = ntohl(scatter->base) * PAGE_SIZE;
 		} else {
@@ -2516,7 +2862,7 @@ ubc_cs_blob_add(
 	 * Let policy module check whether the blob's signature is accepted.
 	 */
 #if CONFIG_MACF
-	error = mac_vnode_check_signature(vp, blob->csb_sha1, (void*)addr, size);
+	error = mac_vnode_check_signature(vp, base_offset, blob->csb_sha1, (void*)addr, size);
 	if (error) 
 		goto out;
 #endif	
@@ -2582,11 +2928,43 @@ ubc_cs_blob_add(
 					  */
 					 oblob->csb_cpu_type = cputype;
 				 }
+				 /* 
+				  * If the same blob moved around in the Mach-O, we
+				  * want to remember the new blob offset to avoid
+				  * coming back here again and again.
+				  */
+				 oblob->csb_blob_offset = blob_offset;
+
 				 vnode_unlock(vp);
 				 error = EAGAIN;
 				 goto out;
 			 } else {
 				 /* different blob: reject the new one */
+				 char pathbuf[MAXPATHLEN];
+				 char new_sha1_str[2*SHA1_RESULTLEN+1];
+				 char old_sha1_str[2*SHA1_RESULTLEN+1];
+				 char arch_str[20];
+				 const char *pathp = "?unknown";
+				 int pblen = sizeof(pathbuf);
+				 if (vn_getpath(vp, pathbuf, &pblen) == 0) {
+				 	/* pblen == strlen(pathbuf) + 1. Assume strlen(pathbuf) > 0 */
+					for (pathp = pathbuf + pblen - 2; pathp > pathbuf && pathp[-1] != '/'; pathp--) ;
+				 }
+				 snprintf(arch_str, sizeof(arch_str), "%x", cputype);
+				 hex_str(oblob->csb_sha1, SHA1_RESULTLEN, old_sha1_str);
+				 hex_str(blob->csb_sha1, SHA1_RESULTLEN, new_sha1_str);
+				 kern_asl_msg(LOG_NOTICE, "messagetracer",
+					6,
+					"com.apple.message.domain", "com.apple.kernel.cs.replace",
+					"com.apple.message.signature", pathp,
+					"com.apple.message.signature2", arch_str,
+					"com.apple.message.signature3", old_sha1_str,
+					"com.apple.message.result", new_sha1_str,
+					"com.apple.message.summarize", "YES",
+					NULL
+				 );
+				 printf("CODESIGNING: rejected new signature for architecture %d of file %s\n",
+					cputype, pathbuf);
 				 vnode_unlock(vp);
 				 error = EALREADY;
 				 goto out;
@@ -2594,7 +2972,6 @@ ubc_cs_blob_add(
 		 }
 
 	}
-
 
 	/* mark this vnode's VM object as having "signed pages" */
 	kr = memory_object_signed(uip->ui_control, TRUE);
@@ -2628,17 +3005,18 @@ ubc_cs_blob_add(
 
 	if (cs_debug > 1) {
 		proc_t p;
-
+		const char *name = vnode_getname_printable(vp);
 		p = current_proc();
 		printf("CODE SIGNING: proc %d(%s) "
 		       "loaded %s signatures for file (%s) "
 		       "range 0x%llx:0x%llx flags 0x%x\n",
 		       p->p_pid, p->p_comm,
 		       blob->csb_cpu_type == -1 ? "detached" : "embedded",
-		       vnode_name(vp),
+		       name,
 		       blob->csb_base_offset + blob->csb_start_offset,
 		       blob->csb_base_offset + blob->csb_end_offset,
 		       blob->csb_flags);
+		vnode_putname_printable(name);
 	}
 
 	vnode_unlock(vp);
@@ -2709,6 +3087,8 @@ ubc_cs_blob_get(
 		}
 	}
 
+	if (cs_debug && blob != NULL && blob->csb_sigpup)
+		printf("found sig pup blob\n");
 out:
 	vnode_unlock(vp);
 
@@ -2725,7 +3105,7 @@ ubc_cs_free(
 	     blob != NULL;
 	     blob = next_blob) {
 		next_blob = blob->csb_next;
-		if (blob->csb_mem_kaddr != 0) {
+		if (blob->csb_mem_kaddr != 0 && !blob->csb_sigpup) {
 			ubc_cs_blob_deallocate(blob->csb_mem_kaddr,
 					       blob->csb_mem_size);
 			blob->csb_mem_kaddr = 0;
@@ -2845,6 +3225,9 @@ cs_validate_page(
 				break;
 			}
 		}
+		if (blob->csb_sigpup && cs_debug)
+			printf("checking for a sigpup CD\n");
+
 		blob_addr = kaddr + blob->csb_mem_offset;
 		
 		lower_bound = CAST_DOWN(char *, blob_addr);
@@ -2854,9 +3237,11 @@ cs_validate_page(
 		cd = findCodeDirectory(embedded, lower_bound, upper_bound);
 		if (cd != NULL) {
 			if (cd->pageSize != PAGE_SHIFT ||
-			    cd->hashType != 0x1 ||
+			    cd->hashType != CS_HASHTYPE_SHA1 ||
 			    cd->hashSize != SHA1_RESULTLEN) {
 				/* bogus blob ? */
+				if (blob->csb_sigpup && cs_debug)
+					printf("page foo bogus sigpup CD\n");
 				continue;
 			}
 
@@ -2864,19 +3249,30 @@ cs_validate_page(
 			if (offset < blob->csb_start_offset ||
 			    offset >= blob->csb_end_offset) {
 				/* our page is not covered by this blob */
+				if (blob->csb_sigpup && cs_debug)
+					printf("OOB sigpup CD\n");
 				continue;
 			}
 
 			codeLimit = ntohl(cd->codeLimit);
-			hash = hashes(cd, atop(offset),
+			if (blob->csb_sigpup && cs_debug)
+				printf("sigpup codesize %d\n", (int)codeLimit);
+
+			hash = hashes(cd, (unsigned)atop(offset),
 				      lower_bound, upper_bound);
 			if (hash != NULL) {
 				bcopy(hash, expected_hash,
 				      sizeof (expected_hash));
 				found_hash = TRUE;
+				if (blob->csb_sigpup && cs_debug)
+					printf("sigpup hash\n");
 			}
 
 			break;
+		} else {
+			if (blob->csb_sigpup && cs_debug)
+				printf("sig pup had no valid CD\n");
+
 		}
 	}
 
@@ -2900,7 +3296,6 @@ cs_validate_page(
 	} else {
 
 		size = PAGE_SIZE;
-		const uint32_t *asha1, *esha1;
 		if ((off_t)(offset + size) > codeLimit) {
 			/* partial page at end of segment */
 			assert(offset < codeLimit);
@@ -2911,25 +3306,33 @@ cs_validate_page(
 		SHA1UpdateUsePhysicalAddress(&sha1ctxt, data, size);
 		SHA1Final(actual_hash, &sha1ctxt);
 
-		asha1 = (const uint32_t *) actual_hash;
-		esha1 = (const uint32_t *) expected_hash;
-
 		if (bcmp(expected_hash, actual_hash, SHA1_RESULTLEN) != 0) {
+			char asha1_str[2*SHA1_RESULTLEN+1];
+			char esha1_str[2*SHA1_RESULTLEN+1];
+			hex_str(actual_hash, SHA1_RESULTLEN, asha1_str);
+			hex_str(expected_hash, SHA1_RESULTLEN, esha1_str);
 			if (cs_debug) {
 				printf("CODE SIGNING: cs_validate_page: "
-				       "mobj %p off 0x%llx size 0x%lx: "
-				       "actual [0x%x 0x%x 0x%x 0x%x 0x%x] != "
-				       "expected [0x%x 0x%x 0x%x 0x%x 0x%x]\n",
-				       pager, page_offset, size,
-				       asha1[0], asha1[1], asha1[2],
-				       asha1[3], asha1[4],
-				       esha1[0], esha1[1], esha1[2],
-				       esha1[3], esha1[4]);
+				       "mobj %p off 0x%llx size 0x%lx: actual %s expected %s\n",
+				       pager, page_offset, size, asha1_str, esha1_str);
 			}
 			cs_validate_page_bad_hash++;
+			if (!*tainted) {
+				char page_offset_str[20];
+				snprintf(page_offset_str, sizeof(page_offset_str), "%llx", page_offset);
+				 kern_asl_msg(LOG_NOTICE, "messagetracer",
+					5,
+					"com.apple.message.domain", "com.apple.kernel.cs.mismatch",
+					"com.apple.message.signature", page_offset_str,
+					"com.apple.message.signature2", asha1_str,
+					"com.apple.message.signature3", esha1_str,
+					"com.apple.message.summarize", "YES",
+					NULL
+				 );
+			}
 			*tainted = TRUE;
 		} else {
-			if (cs_debug > 1) {
+			if (cs_debug > 10) {
 				printf("CODE SIGNING: cs_validate_page: "
 				       "mobj %p off 0x%llx size 0x%lx: "
 				       "SHA1 OK\n",

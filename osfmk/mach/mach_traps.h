@@ -168,6 +168,15 @@ extern kern_return_t _kernelrpc_mach_vm_protect_trap(
 				vm_prot_t new_protection
 );
 
+extern kern_return_t _kernelrpc_mach_vm_map_trap(
+				mach_port_name_t target,
+				mach_vm_offset_t *address,
+				mach_vm_size_t size,
+				mach_vm_offset_t mask,
+				int flags,
+				vm_prot_t cur_protection
+);
+
 extern kern_return_t _kernelrpc_mach_port_allocate_trap(
 				mach_port_name_t target,
 				mach_port_right_t right,
@@ -215,6 +224,33 @@ extern kern_return_t _kernelrpc_mach_port_extract_member_trap(
 				mach_port_name_t target,
 				mach_port_name_t name,
 				mach_port_name_t pset
+);
+
+extern kern_return_t _kernelrpc_mach_port_construct_trap(
+				mach_port_name_t target,
+				mach_port_options_t *options,
+				uint64_t context,
+				mach_port_name_t *name
+);
+
+extern kern_return_t _kernelrpc_mach_port_destruct_trap(
+				mach_port_name_t target,
+				mach_port_name_t name,
+				mach_port_delta_t srdelta,
+				uint64_t guard
+);
+
+extern kern_return_t _kernelrpc_mach_port_guard_trap(
+				mach_port_name_t target,
+				mach_port_name_t name,
+				uint64_t guard,
+				boolean_t strict
+);
+
+extern kern_return_t _kernelrpc_mach_port_unguard_trap(
+				mach_port_name_t target,
+				mach_port_name_t name,
+				uint64_t guard
 );
 
 extern kern_return_t macx_swapon(
@@ -433,7 +469,6 @@ struct semaphore_timedwait_signal_trap_args {
 extern kern_return_t semaphore_timedwait_signal_trap(
 				struct semaphore_timedwait_signal_trap_args *args);
 
-#if		!defined(CONFIG_EMBEDDED)
 struct map_fd_args {
 	PAD_ARG_(int, fd);
 	PAD_ARG_(vm_offset_t, offset);
@@ -443,7 +478,6 @@ struct map_fd_args {
 };
 extern kern_return_t map_fd(
 				struct map_fd_args *args);
-#endif	/* !defined(CONFIG_EMBEDDED) */
 
 struct task_for_pid_args {
 	PAD_ARG_(mach_port_name_t, target_tport);
@@ -607,6 +641,18 @@ struct _kernelrpc_mach_vm_protect_args {
 extern kern_return_t _kernelrpc_mach_vm_protect_trap(
 				struct _kernelrpc_mach_vm_protect_args *args);
 
+struct _kernelrpc_mach_vm_map_trap_args {
+	PAD_ARG_(mach_port_name_t, target);
+	PAD_ARG_(user_addr_t, addr);
+	PAD_ARG_(mach_vm_size_t, size);
+	PAD_ARG_(mach_vm_offset_t, mask);
+	PAD_ARG_(int, flags);
+	PAD_ARG_8
+	PAD_ARG_(vm_prot_t, cur_protection);
+};
+extern kern_return_t _kernelrpc_mach_vm_map_trap(
+				struct _kernelrpc_mach_vm_map_trap_args *args);
+
 struct _kernelrpc_mach_port_allocate_args {
 	PAD_ARG_(mach_port_name_t, target);
 	PAD_ARG_(mach_port_right_t, right);
@@ -671,6 +717,42 @@ struct _kernelrpc_mach_port_extract_member_args {
 };
 extern kern_return_t _kernelrpc_mach_port_extract_member_trap(
 				struct _kernelrpc_mach_port_extract_member_args *args);
+
+struct _kernelrpc_mach_port_construct_args {
+	PAD_ARG_(mach_port_name_t, target);
+	PAD_ARG_(user_addr_t, options);
+	PAD_ARG_(uint64_t, context);
+	PAD_ARG_(user_addr_t, name);
+};
+extern kern_return_t _kernelrpc_mach_port_construct_trap(
+				struct _kernelrpc_mach_port_construct_args *args);
+
+struct _kernelrpc_mach_port_destruct_args {
+	PAD_ARG_(mach_port_name_t, target);
+	PAD_ARG_(mach_port_name_t, name);
+	PAD_ARG_(mach_port_delta_t, srdelta);
+	PAD_ARG_(uint64_t, guard);
+};
+extern kern_return_t _kernelrpc_mach_port_destruct_trap(
+				struct _kernelrpc_mach_port_destruct_args *args);
+
+struct _kernelrpc_mach_port_guard_args {
+	PAD_ARG_(mach_port_name_t, target);
+	PAD_ARG_(mach_port_name_t, name);
+	PAD_ARG_(uint64_t, guard);
+	PAD_ARG_(boolean_t, strict);
+};
+extern kern_return_t _kernelrpc_mach_port_guard_trap(
+				struct _kernelrpc_mach_port_guard_args *args);
+
+struct _kernelrpc_mach_port_unguard_args {
+	PAD_ARG_(mach_port_name_t, target);
+	PAD_ARG_(mach_port_name_t, name);
+	PAD_ARG_(uint64_t, guard);
+};
+extern kern_return_t _kernelrpc_mach_port_unguard_trap(
+				struct _kernelrpc_mach_port_unguard_args *args);
+
 
 /* not published to LP64 clients yet */
 struct iokit_user_client_trap_args {

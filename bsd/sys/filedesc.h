@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2003 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2012 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -96,8 +96,6 @@ struct filedesc {
 	int	fd_lastfile;		/* high-water mark of fd_ofiles */
 	int	fd_freefile;		/* approx. next free file */
 	u_short	fd_cmask;		/* mask for file creation */
-	uint32_t	fd_refcnt;		/* reference count */
-
 	int     fd_knlistsize;          /* size of knlist */
 	struct  klist *fd_knlist;       /* list of attached knotes */
 	u_long  fd_knhashmask;          /* size of knhash */
@@ -115,15 +113,18 @@ struct filedesc {
 /*
  * Per-process open flags.
  */
-#define	UF_EXCLOSE 	0x01		/* auto-close on exec */
+#define UF_EXCLOSE	0x01		/* auto-close on exec */
+#define UF_FORKCLOSE	0x02		/* auto-close on fork */
 #define UF_RESERVED	0x04		/* open pending / in progress */
 #define UF_CLOSING	0x08		/* close in progress */
 
 #ifdef KERNEL
 #define UF_RESVWAIT	0x10		/* close in progress */
 #define	UF_INHERIT	0x20		/* "inherit-on-exec" */
+
 #define UF_VALID_FLAGS	\
-	(UF_EXCLOSE | UF_RESERVED | UF_CLOSING | UF_RESVWAIT | UF_INHERIT)
+	(UF_EXCLOSE | UF_FORKCLOSE | UF_RESERVED | UF_CLOSING |\
+	UF_RESVWAIT | UF_INHERIT)
 #endif /* KERNEL */
 
 /*
@@ -145,9 +146,13 @@ extern int	fdavail(proc_t p, int n);
 #define		fdflags(p, fd)					\
 			(&(p)->p_fd->fd_ofileflags[(fd)])
 extern int	falloc(proc_t p, struct fileproc **resultfp, int *resultfd, vfs_context_t ctx);
-extern void	ffree(struct file *fp);
 
 #ifdef __APPLE_API_PRIVATE
+typedef struct fileproc *(*fp_allocfn_t)(void *);
+extern int	falloc_withalloc(proc_t p, struct fileproc **resultfp,
+    int *resultfd, vfs_context_t ctx,
+    fp_allocfn_t fp_zalloc, void *crarg);
+
 extern struct	filedesc *fdcopy(proc_t p, struct vnode *uth_cdir);
 extern void	fdfree(proc_t p);
 extern void	fdexec(proc_t p, short flags);

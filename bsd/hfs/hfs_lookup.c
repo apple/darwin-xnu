@@ -151,7 +151,7 @@
  *	When should we lock parent_hp in here ??
  */
 static int
-hfs_lookup(struct vnode *dvp, struct vnode **vpp, struct componentname *cnp, int *cnode_locked)
+hfs_lookup(struct vnode *dvp, struct vnode **vpp, struct componentname *cnp, int *cnode_locked, int force_casesensitive_lookup)
 {
 	struct cnode *dcp;	/* cnode for directory being searched */
 	struct vnode *tvp;	/* target vnode */
@@ -190,7 +190,7 @@ hfs_lookup(struct vnode *dvp, struct vnode **vpp, struct componentname *cnp, int
 		cnp->cn_flags &= ~MAKEENTRY;
 		goto found;	/* We always know who we are */
 	} else {
-		if (hfs_lock(VTOC(dvp), HFS_EXCLUSIVE_LOCK) != 0) {
+		if (hfs_lock(VTOC(dvp), HFS_EXCLUSIVE_LOCK, HFS_LOCK_DEFAULT) != 0) {
 			retval = ENOENT;  /* The parent no longer exists ? */
 			goto exit;
 		}
@@ -207,10 +207,15 @@ hfs_lookup(struct vnode *dvp, struct vnode **vpp, struct componentname *cnp, int
 		    goto retry;
 		}
 
-		/* No need to go to catalog if there are no children */
-		if (dcp->c_entries == 0) {
-			goto notfound;
-		}
+
+		/*
+		 * We shouldn't need to go to the catalog if there are no children.
+		 * However, in the face of a minor disk corruption where the valence of
+		 * the directory is off, we could infinite loop here if we return ENOENT
+		 * even though there are actually items in the directory.  (create will
+		 * see the ENOENT, try to create something, which will return with 
+		 * EEXIST over and over again).  As a result, always check the catalog.
+		 */
 
 		bzero(&cndesc, sizeof(cndesc));
 		cndesc.cd_nameptr = (const u_int8_t *)cnp->cn_nameptr;
@@ -220,7 +225,7 @@ hfs_lookup(struct vnode *dvp, struct vnode **vpp, struct componentname *cnp, int
 
 		lockflags = hfs_systemfile_lock(hfsmp, SFL_CATALOG, HFS_SHARED_LOCK);
 
-		retval = cat_lookup(hfsmp, &cndesc, 0, &desc, &attr, &fork, NULL);
+		retval = cat_lookup(hfsmp, &cndesc, 0, force_casesensitive_lookup, &desc, &attr, &fork, NULL);
 		
 		hfs_systemfile_unlock(hfsmp, lockflags);
 
@@ -242,7 +247,7 @@ hfs_lookup(struct vnode *dvp, struct vnode **vpp, struct componentname *cnp, int
 			
 			goto found;
 		}
-notfound:
+		
 		/*
 		 * ENAMETOOLONG supersedes other errors
 		 *
@@ -255,6 +260,25 @@ notfound:
 			retval = ENAMETOOLONG;
 		} else if (retval == 0) {
 			retval = ENOENT;
+		} else if (retval == ERESERVEDNAME) {
+			/*
+			 * We found the name in the catalog, but it is unavailable
+			 * to us. The exact error to return to our caller depends
+			 * on the operation, and whether we've already reached the
+			 * last path component. In all cases, avoid a negative
+			 * cache entry, since someone else may be able to access
+			 * the name if their lookup is configured differently.
+			 */
+
+			cnp->cn_flags &= ~MAKEENTRY;
+
+			if (((flags & ISLASTCN) == 0) || ((nameiop == LOOKUP) || (nameiop == DELETE))) {
+				/* A reserved name for a pure lookup is the same as the path not being present */
+				retval = ENOENT;
+			} else {
+				/* A reserved name with intent to create must be rejected as impossible */
+				retval = EEXIST;
+			}
 		}
 		if (retval != ENOENT)
 			goto exit;
@@ -448,7 +472,9 @@ hfs_vnop_lookup(struct vnop_lookup_args *ap)
 	int error;
 	struct vnode **vpp = ap->a_vpp;
 	struct componentname *cnp = ap->a_cnp;
+	struct proc *p = vfs_context_proc(ap->a_context);
 	int flags = cnp->cn_flags;
+	int force_casesensitive_lookup = proc_is_forcing_hfs_case_sensitivity(p);
 	int cnode_locked;
 
 	*vpp = NULL;
@@ -498,15 +524,36 @@ hfs_vnop_lookup(struct vnop_lookup_args *ap)
 	 * getattrlist calls to return the correct link info.
 	 */
 
-	if ((flags & ISLASTCN) && (cp->c_flag & C_HARDLINK)) {
+	/*
+	 * Alternatively, if we are forcing a case-sensitive lookup
+	 * on a case-insensitive volume, the namecache entry
+	 * may have been for an incorrect case. Since we cannot
+	 * determine case vs. normalization, redrive the catalog
+	 * lookup based on any byte mismatch.
+	 */
+	if (((flags & ISLASTCN) && (cp->c_flag & C_HARDLINK))
+		|| (force_casesensitive_lookup && !(hfsmp->hfs_flags & HFS_CASE_SENSITIVE))) {
 		int stale_link = 0;
 
-		hfs_lock(cp, HFS_FORCE_LOCK);	
+		hfs_lock(cp, HFS_EXCLUSIVE_LOCK, HFS_LOCK_ALLOW_NOEXISTS);	
 		if ((cp->c_parentcnid != dcp->c_cnid) ||
+		    (cnp->cn_namelen != cp->c_desc.cd_namelen) ||
 		    (bcmp(cnp->cn_nameptr, cp->c_desc.cd_nameptr, cp->c_desc.cd_namelen) != 0)) {
 			struct cat_desc desc;
 			struct cat_attr lookup_attr;
 			int lockflags;
+
+			if (force_casesensitive_lookup && !(hfsmp->hfs_flags & HFS_CASE_SENSITIVE)) {
+				/*
+				 * Since the name in the cnode doesn't match our lookup
+				 * string exactly, do a full lookup.
+				 */
+				hfs_unlock (cp);
+
+				vnode_put(vp);
+				goto lookup;
+			}
+
 			/*
 			 * Get an updated descriptor
 			 */
@@ -541,7 +588,7 @@ hfs_vnop_lookup(struct vnop_lookup_args *ap)
 
 			lockflags = hfs_systemfile_lock(VTOHFS(dvp), SFL_CATALOG, HFS_SHARED_LOCK);		
 		
-			error = cat_lookup(VTOHFS(vp), &desc, 0, &desc, &lookup_attr, NULL, NULL);	
+			error = cat_lookup(VTOHFS(vp), &desc, 0, 0, &desc, &lookup_attr, NULL, NULL);	
 			
 			hfs_systemfile_unlock(VTOHFS(dvp), lockflags);
 
@@ -604,7 +651,7 @@ lookup:
 	 */
 	cnode_locked = 0;
 
-	error = hfs_lookup(dvp, vpp, cnp, &cnode_locked);
+	error = hfs_lookup(dvp, vpp, cnp, &cnode_locked, force_casesensitive_lookup);
 	
 	if (cnode_locked)
 		hfs_unlock(VTOC(*vpp));
@@ -623,7 +670,7 @@ exit:
 	 * completed and throttling at the systemcall return
 	 */
 	if (__improbable(ut->uu_lowpri_window)) {
-		throttle_lowpri_io(TRUE);
+		throttle_lowpri_io(1);
 	}
 	}
 

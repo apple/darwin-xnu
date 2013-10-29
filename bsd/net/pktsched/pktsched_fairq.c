@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2011-2012 Apple Inc. All rights reserved.
+ * Copyright (c) 2011-2013 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -666,7 +666,11 @@ fairq_enqueue(struct fairq_if *fif, struct fairq_class *cl, struct mbuf *m,
 	VERIFY(cl == NULL || cl->cl_fif == fif);
 
 	if (cl == NULL) {
+#if PF_ALTQ
 		cl = fairq_clh_to_clp(fif, t->pftag_qid);
+#else /* !PF_ALTQ */
+		cl = fairq_clh_to_clp(fif, 0);
+#endif /* !PF_ALTQ */
 		if (cl == NULL) {
 			cl = fif->fif_default;
 			if (cl == NULL) {
@@ -809,7 +813,7 @@ fairq_addq(struct fairq_class *cl, struct mbuf *m, struct pf_mtag *t)
 {
 	struct ifclassq *ifq = cl->cl_fif->fif_ifq;
 	fairq_bucket_t *b;
-	u_int32_t hash = t->pftag_flowhash;
+	u_int32_t hash = m->m_pkthdr.pkt_flowid;
 	u_int32_t hindex;
 	u_int64_t bw;
 
@@ -901,8 +905,10 @@ fairq_addq(struct fairq_class *cl, struct mbuf *m, struct pf_mtag *t)
 		return (CLASSQEQ_DROPPED);
 	}
 
+#if PF_ECN
 	if (cl->cl_flags & FARF_CLEARDSCP)
 		write_dsfield(m, t, 0);
+#endif /* PF_ECN */
 
 	_addq(&b->queue, m);
 
@@ -1013,8 +1019,9 @@ fairq_pollq(struct fairq_class *cl, u_int64_t cur_time, int *hit_limit)
 			*hit_limit = 1;
 		cl->cl_bw_current = bw;
 #if 0
-		printf("BW %6lld relative to %6u %d queue %p\n",
-		    bw, cl->cl_bandwidth, *hit_limit, b);
+		printf("BW %6lld relative to %6u %d queue 0x%llx\n",
+		    bw, cl->cl_bandwidth, *hit_limit,
+		    (uint64_t)VM_KERNEL_ADDRPERM(b));
 #endif
 	}
 	return (m);

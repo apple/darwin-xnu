@@ -5,16 +5,6 @@
 # the terms and conditions for use and redistribution.
 #
 
-#
-# Export IDENT for sub-makefiles
-#
-export IDENT
-
-#
-# XXX: INCFLAGS to include libsa prototypes
-#
-INCFLAGS_MAKEFILE= -I$(SOURCE)libsa
-
 export MakeInc_cmd=${SRCROOT}/makedefs/MakeInc.cmd
 export MakeInc_def=${SRCROOT}/makedefs/MakeInc.def
 export MakeInc_rule=${SRCROOT}/makedefs/MakeInc.rule
@@ -26,7 +16,66 @@ include $(MakeInc_def)
 #
 # XXX: CFLAGS
 #
-CFLAGS+= -include meta_features.h -DMACH_KERNEL_PRIVATE $(CFLAGS_INLINE_CONFIG)
+CFLAGS+= -include meta_features.h -DMACH_KERNEL_PRIVATE
+
+# Objects that don't want -Wcast-align warning (8474835)
+OBJS_NO_CAST_ALIGN =			\
+		model_dep.o		\
+		chud_thread.o		\
+		chud_thread_arm.o   \
+		video_console.o		\
+		kdp.o			\
+		kdp_udp.o		\
+		kdp_machdep.o		\
+		host.o			\
+		processor.o		\
+		sched_prim.o		\
+		task.o			\
+		thread.o		\
+		threadinfo.o		\
+		gssd_mach.o		\
+		UNDRequest.o		\
+		panic_dialog.o		\
+		bsd_i386.o		\
+		commpage.o		\
+		cpu_threads.o		\
+		cpuid.o			\
+		locks_i386.o		\
+		machine_task.o		\
+		mp_desc.o		\
+		pcb.o			\
+		pcb_native.o		\
+		kdp_x86_common.o	\
+		memory_object.o		\
+		vm_apple_protect.o	\
+		vm_map.o		\
+		startup64.o		\
+		affinity.o		\
+		sched_grrr.o		\
+		sched_fixedpriority.o	\
+		stack.o			\
+		task_policy.o		\
+		wait_queue.o		\
+		bsd_kern.o		\
+		pmc.o			\
+		default_freezer.o	\
+		status.o		\
+		machine_routines.o	\
+		loose_ends.o		\
+		sleh.o
+
+
+$(foreach file,$(OBJS_NO_CAST_ALIGN),$(eval $(call add_perfile_cflags,$(file),-Wno-cast-align)))
+
+#
+# Do not provide CTF symbolic these files
+#
+chud_glue.o_SKIP_CTFCONVERT = 1
+
+#
+# XXX: INCFLAGS to include libsa prototypes
+#
+INCFLAGS_MAKEFILE= -I$(SOURCE)libsa
 
 #
 # Directories for mig generated files
@@ -34,18 +83,11 @@ CFLAGS+= -include meta_features.h -DMACH_KERNEL_PRIVATE $(CFLAGS_INLINE_CONFIG)
 COMP_SUBDIRS = \
 	default_pager \
 	device \
-	mach_debug \
 	mach \
 	UserNotification \
 	gssd \
 	kextd \
 	lockd
-
-COMP_SUBDIRS_I386 = \
-	mach
-
-COMP_SUBDIRS_X86_64 = \
-	mach
 
 #
 #  Make sure we don't remove this by accident if interrupted at the wrong
@@ -65,13 +107,8 @@ COMP_SUBDIRS_X86_64 = \
 
 %CFILES
 
-%MFILES
-
 %SFILES
 
-%BFILES
-
-%ORDERED
 %MACHDEP
 
 #
@@ -81,49 +118,41 @@ COMP_SUBDIRS_X86_64 = \
 #
 ${OBJS}: ${OBJSDEPS}
 
-
-%LOAD
-
 LDOBJS = $(OBJS)
 
 $(COMPONENT).filelist: $(LDOBJS) assym.s
-	$(_v)if [ $(BUILD_MACHO_OBJ) -eq 1 ]; then \
-	for hib_file in ${HIB_FILES};		\
+	$(_v)for hib_file in ${HIB_FILES};		\
 	do	\
-                $(SEG_HACK) __HIB $${hib_file} -o $${hib_file}__; \
+                $(SEG_HACK) -n __HIB -o $${hib_file}__ $${hib_file} ; \
                 mv $${hib_file}__ $${hib_file} ; \
-	done; \
-	fi
+	done
 	@echo LDFILELIST $(COMPONENT)
 	$(_v)( for obj in ${LDOBJS}; do	\
-		 echo $(TARGET)$(COMP_OBJ_DIR)/$(KERNEL_CONFIG)/$${obj}; \
+		 echo $(TARGET)/$(CURRENT_KERNEL_CONFIG)/$${obj}; \
 	done; ) > $(COMPONENT).filelist
 
 do_all: $(COMPONENT).filelist
 
-do_depend: do_all
-	$(_v)${MD} -u Makedep -f -d `ls *.d`;
-	
-do_build_all: do_depend
+do_build_all:: do_all
 
 # genassym.o actually is an assembly file,
 # we name it genassym.o to help with the automatic
 # dependency generation
 
-GENASSYM_LOCATION = $(ARCH_CONFIG_LC)
+GENASSYM_LOCATION = $(CURRENT_ARCH_CONFIG_LC)
 
-ifeq ($(ARCH_CONFIG_LC),x86_64)
+ifeq ($(CURRENT_ARCH_CONFIG_LC),x86_64)
 GENASSYM_LOCATION = i386
 endif
 
 genassym.o: $(SOURCE_DIR)/$(COMPONENT)/$(GENASSYM_LOCATION)/genassym.c
-	$(_v)${KCC} $(subst -flto,,${CFLAGS}) -MD ${_HOST_EXTRA_CFLAGS} -S -o ${@} -c ${INCFLAGS} $<
+	@echo GENASSYM $<
+	$(_v)${KCC} $(subst -flto,,${CFLAGS}) -MD -S -o ${@} ${INCFLAGS} $<
 
 assym.s: genassym.o
-	$(_v)sed -e '/#DEFINITION#/!d' -e 's/^.*#DEFINITION#//' -e 's/\$$//' -e 'p' -e 's/#//2' -e 's/[^A-Za-z0-9_]*\([A-Za-z0-9_]*\)/ \1_NUM/2' genassym.o > ${@}
+	$(_v)sed -e '/#DEFINITION#/!d' -e 's/^.*#DEFINITION#//' -e 's/\$$//' -e 'p' -e 's/#//2' -e 's/[^A-Za-z0-9_]*\([A-Za-z0-9_]*\)/ \1_NUM/2' genassym.o > $@
 
 ${SOBJS}: assym.s
-
 
 %RULES
 

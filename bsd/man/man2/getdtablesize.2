@@ -51,9 +51,21 @@ the descriptor table are numbered with small integers starting at 0.
 The call
 .Fn getdtablesize
 returns the size of this table.
+.Sh LEGACY
+The
+.Xr getrlimit 2
+function returns a value of type 
+.Ft rlim_t .
+This interface, returning an 
+.Ft int ,
+may have problems representing appropriate values in the future.
+Applications should use the 
+.Xr getrlimit 2
+function instead.
 .Sh SEE ALSO
 .Xr close 2 ,
 .Xr dup 2 ,
+.Xr getrlimit 2 ,
 .Xr open 2 ,
 .Xr select 2
 .Sh HISTORY

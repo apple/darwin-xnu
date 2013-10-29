@@ -606,14 +606,13 @@ _aio_close(proc_t p, int fd )
 		     	 	  (int)p, fd, 0, 0, 0 );
 
 		while (aio_proc_active_requests_for_file(p, fd) > 0) {
-			msleep(&p->AIO_CLEANUP_SLEEP_CHAN, aio_proc_mutex(p), PRIBIO | PDROP, "aio_close", 0 );
+			msleep(&p->AIO_CLEANUP_SLEEP_CHAN, aio_proc_mutex(p), PRIBIO, "aio_close", 0 );
 		}
 
-	} else {
-		aio_proc_unlock(p);
 	}
-
-
+	
+	aio_proc_unlock(p);
+	
 	KERNEL_DEBUG( (BSDDBG_CODE(DBG_BSD_AIO, AIO_close)) | DBG_FUNC_END,
 		     	  (int)p, fd, 0, 0, 0 );
 
@@ -1896,7 +1895,18 @@ aio_create_queue_entry(proc_t procp, user_addr_t aiocbp, void *group_tag, int ki
 
 	/* do some more validation on the aiocb and embedded file descriptor */
 	result = aio_validate( entryp );
+	if ( result != 0 )
+		goto error_exit_with_ref;
 
+	/* get a reference on the current_thread, which is passed in vfs_context. */
+	entryp->thread = current_thread();
+	thread_reference( entryp->thread );
+	return ( entryp );
+
+error_exit_with_ref:
+	if ( VM_MAP_NULL != entryp->aio_map ) {
+		vm_map_deallocate( entryp->aio_map );
+	}
 error_exit:
 	if ( result && entryp != NULL ) {
 		zfree( aio_workq_zonep, entryp );
@@ -2056,6 +2066,11 @@ aio_free_request(aio_workq_entry *entryp)
 		vm_map_deallocate(entryp->aio_map);
 	}
 
+	/* remove our reference to thread which enqueued the request */
+	if ( NULL != entryp->thread ) {
+		thread_deallocate( entryp->thread );
+	}
+
 	entryp->aio_refcount = -1; /* A bit of poisoning in case of bad refcounting. */
 	
 	zfree( aio_workq_zonep, entryp );
@@ -2143,7 +2158,7 @@ aio_validate( aio_workq_entry *entryp )
 			/* we don't have read or write access */
 			result = EBADF;
 		}
-		else if ( fp->f_fglob->fg_type != DTYPE_VNODE ) {
+		else if ( FILEGLOB_DTYPE(fp->f_fglob) != DTYPE_VNODE ) {
 			/* this is not a file */
 			result = ESPIPE;
 		} else
@@ -2352,11 +2367,7 @@ do_aio_read( aio_workq_entry *entryp )
 		return(EBADF);
 	}
 
-	/*
-	 * <rdar://4714366>
-	 * Needs vfs_context_t from vfs_context_create() in entryp!
-	 */
-	context.vc_thread = proc_thread(entryp->procp);	/* XXX */
+	context.vc_thread = entryp->thread;	/* XXX */
 	context.vc_ucred = fp->f_fglob->fg_cred;
 
 	error = dofileread(&context, fp, 
@@ -2393,11 +2404,7 @@ do_aio_write( aio_workq_entry *entryp )
 		flags |= FOF_OFFSET;
 	}
 
-	/*
-	 * <rdar://4714366>
-	 * Needs vfs_context_t from vfs_context_create() in entryp!
-	 */
-	context.vc_thread = proc_thread(entryp->procp);	/* XXX */
+	context.vc_thread = entryp->thread;	/* XXX */
 	context.vc_ucred = fp->f_fglob->fg_cred;
 
 	/* NB: tell dofilewrite the offset, and to use the proc cred */

@@ -30,8 +30,10 @@
 
 #include <sys/cdefs.h>
 
+#ifdef KERNEL
 #include <IOKit/IOInterrupts.h>
 #include <kern/kern_types.h>
+#endif
 
 __BEGIN_DECLS
 #include <mach/boolean.h>
@@ -118,9 +120,11 @@ void PE_register_timebase_callback(timebase_callback_func callback);
 
 void PE_call_timebase_callback(void);
 
+#ifdef KERNEL
 void PE_install_interrupt_handler(
 	void *nub, int source,
         void *target, IOInterruptHandler handler, void *refCon);
+#endif
 
 #ifndef _FN_KPRINTF
 #define	_FN_KPRINTF

@@ -199,6 +199,7 @@ is_release(ipc_space_t is) {
 
         /* If we just removed the last reference count */
 	if ( 1 == (OSDecrementAtomic(&(is->is_bits)) & IS_REFS_MAX)) {
+		assert(!is_active(is));
 		is_lock_destroy(is);
 		is_free(is);
 	}

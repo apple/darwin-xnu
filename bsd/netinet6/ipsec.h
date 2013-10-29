@@ -40,8 +40,9 @@
 #include <sys/appleapiopts.h>
 
 #include <net/pfkeyv2.h>
-#ifdef KERNEL_PRIVATE
+#ifdef BSD_KERNEL_PRIVATE
 #include <netkey/keydb.h>
+#include <netinet/ip_var.h>
 
 /* lock for IPSec stats */
 extern lck_grp_t         *sadb_stat_mutex_grp;
@@ -53,6 +54,10 @@ extern lck_mtx_t         *sadb_stat_mutex;
 #define IPSEC_STAT_INCREMENT(x)	\
 	{lck_mtx_lock(sadb_stat_mutex); (x)++; lck_mtx_unlock(sadb_stat_mutex);}
 
+struct secpolicyaddrrange {
+	struct sockaddr_storage start;	/* Start (low values) of address range */
+	struct sockaddr_storage end;	/* End (high values) of address range */
+};
 
 /*
  * Security Policy Index
@@ -67,6 +72,9 @@ struct secpolicyindex {
 	u_int8_t prefs;			/* prefix length in bits for src */
 	u_int8_t prefd;			/* prefix length in bits for dst */
 	u_int16_t ul_proto;		/* upper layer Protocol */
+	ifnet_t internal_if; /* Interface a matching packet is bound to */
+	struct secpolicyaddrrange src_range;	/* IP src address range for SP */
+	struct secpolicyaddrrange dst_range;	/* IP dst address range for SP */
 #ifdef notyet
 	uid_t uids;
 	uid_t uidd;
@@ -91,6 +99,11 @@ struct secpolicy {
 				/* pointer to the ipsec request tree, */
 				/* if policy == IPSEC else this value == NULL.*/
 
+	ifnet_t ipsec_if; /* IPSec interface to use */
+	ifnet_t outgoing_if; /* Outgoing interface for encrypted traffic */
+    
+	char disabled; /* Set to ignore policy */
+    
 	/*
 	 * lifetime handler.
 	 * the policy can be used without limitiation if both lifetime and
@@ -133,7 +146,7 @@ struct secspacq {
 	int count;		/* for lifetime */
 	/* XXX: here is mbuf place holder to be sent ? */
 };
-#endif /* KERNEL_PRIVATE */
+#endif /* BSD_KERNEL_PRIVATE */
 
 /* according to IANA assignment, port 0x0000 and proto 0xff are reserved. */
 #define IPSEC_PORT_ANY		0
@@ -219,7 +232,7 @@ struct ipsecstat {
 	u_quad_t out_comphist[256];
 };
 
-#ifdef KERNEL_PRIVATE
+#ifdef BSD_KERNEL_PRIVATE
 /*
  * Definitions for IPsec & Key sysctl operations.
  */
@@ -277,13 +290,11 @@ struct ipsecstat {
 	{ "esp_randpad", CTLTYPE_INT }, \
 }
 
-#ifdef KERNEL
-
 #define IPSEC_IS_P2ALIGNED(p)        1
 #define IPSEC_GET_P2UNALIGNED_OFS(p) 0
 
 struct ipsec_output_state {
-    int tunneled;
+    	int tunneled;
 	struct mbuf *m;
 	struct route ro;
 	struct sockaddr *dst;
@@ -314,6 +325,8 @@ extern struct secpolicy *ipsec4_getpolicybysock(struct mbuf *, u_int,
 						struct socket *, int *);
 extern struct secpolicy *ipsec4_getpolicybyaddr(struct mbuf *, u_int, int,
 						int *);
+extern int ipsec4_getpolicybyinterface(struct mbuf *, u_int, int *,
+                        struct ip_out_args *, struct secpolicy **);
 
 struct inpcb;
 extern int ipsec_init_policy(struct socket *so, struct inpcbpolicy **);
@@ -362,8 +375,7 @@ extern struct socket *ipsec_getsocket(struct mbuf *);
 extern int ipsec_addhist(struct mbuf *, int, u_int32_t); 
 extern struct ipsec_history *ipsec_gethist(struct mbuf *, int *);
 extern void ipsec_clearhist(struct mbuf *);
-#endif /* KERNEL */
-#endif /* KERNEL_PRIVATE */
+#endif /* BSD_KERNEL_PRIVATE */
 
 #ifndef KERNEL
 __BEGIN_DECLS

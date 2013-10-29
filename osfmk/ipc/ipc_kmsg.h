@@ -248,14 +248,6 @@ MACRO_BEGIN								\
 	}								\
 MACRO_END
 
-/*
- *	extern void
- *	ipc_kmsg_send_always(ipc_kmsg_t);
- */
-#define	ipc_kmsg_send_always(kmsg)					\
-	ipc_kmsg_send((kmsg), MACH_SEND_ALWAYS, MACH_MSG_TIMEOUT_NONE)
-
-
 /* Allocate a kernel message */
 extern ipc_kmsg_t ipc_kmsg_alloc(
         mach_msg_size_t size);
@@ -323,14 +315,14 @@ extern void ipc_kmsg_put_to_kernel(
 extern mach_msg_return_t ipc_kmsg_copyin_header(
 	mach_msg_header_t	*msg,
 	ipc_space_t		space,
-	boolean_t		notify);
+	mach_msg_option_t	*optionp);
 
 /* Copyin port rights and out-of-line memory from a user message */
 extern mach_msg_return_t ipc_kmsg_copyin(
 	ipc_kmsg_t		kmsg,
 	ipc_space_t		space,
 	vm_map_t		map,
-	boolean_t		notify);
+	mach_msg_option_t	*optionp);
 
 /* Copyin port rights and out-of-line memory from a kernel message */
 extern mach_msg_return_t ipc_kmsg_copyin_from_kernel(

@@ -63,8 +63,10 @@ make_runmode(thread_t thread)
 	}
 	else
 #endif
+	{
 		// Today we happen to know there's a one-to-one mapping.
 		return ((mode & 0xffff) | ((~mode & 0xffff) << 16));
+	}
 }
 
 

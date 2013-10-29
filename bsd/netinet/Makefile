@@ -7,14 +7,6 @@ export MakeInc_dir=${SRCROOT}/makedefs/MakeInc.dir
 include $(MakeInc_cmd)
 include $(MakeInc_def)
 
-INSTINC_SUBDIRS = \
-
-INSTINC_SUBDIRS_I386 = \
-
-EXPINC_SUBDIRS = \
-
-EXPINC_SUBDIRS_I386 = \
-
 DATAFILES = \
 	bootp.h icmp6.h if_ether.h icmp_var.h \
 	igmp.h igmp_var.h in.h in_pcb.h \
@@ -31,10 +23,15 @@ PRIVATE_DATAFILES = \
 	ip_flowid.h \
 	ip_fw.h ip_fw2.h \
 	tcp_debug.h \
-	in_gif.h ip_compat.h 
+	in_gif.h ip_compat.h \
+	flow_divert_proto.h
+
+ifeq ($(PLATFORM),iPhoneOS)
+PRIVATE_DATAFILES += mptcp_var.h
+endif
 
 PRIVATE_KERNELFILES = ${KERNELFILES} \
-	ip_ecn.h ip_encap.h
+	ip_ecn.h ip_encap.h 
 
 INSTALL_MI_LIST	= ${DATAFILES}
 

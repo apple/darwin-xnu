@@ -407,10 +407,14 @@ bpf_filter(const struct bpf_insn *pc, u_char *p, u_int wirelen, u_int buflen)
 			continue;
 
 		case BPF_ST:
+			if (pc->k >= BPF_MEMWORDS)
+				return 0;
 			mem[pc->k] = A;
 			continue;
 
 		case BPF_STX:
+			if (pc->k >= BPF_MEMWORDS)
+				return 0;
 			mem[pc->k] = X;
 			continue;
 

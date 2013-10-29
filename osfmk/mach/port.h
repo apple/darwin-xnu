@@ -173,10 +173,8 @@ typedef ipc_port_t 		mach_port_t;
  *
  */
 
-#ifndef _MACH_PORT_T
-#define _MACH_PORT_T
-typedef mach_port_name_t 		mach_port_t;
-#endif
+#include <sys/_types.h>
+#include <sys/_types/_mach_port_t.h>
 
 #endif	/* KERNEL */
 
@@ -327,6 +325,20 @@ typedef struct mach_port_limits {
 	mach_port_msgcount_t	mpl_qlimit;	/* number of msgs */
 } mach_port_limits_t;
 
+/* Possible values for mps_flags (part of mach_port_status_t) */
+#define MACH_PORT_STATUS_FLAG_TEMPOWNER		0x01
+#define MACH_PORT_STATUS_FLAG_GUARDED		0x02
+#define MACH_PORT_STATUS_FLAG_STRICT_GUARD	0x04
+#define MACH_PORT_STATUS_FLAG_IMP_DONATION	0x08
+#define MACH_PORT_STATUS_FLAG_REVIVE		0x10
+#define MACH_PORT_STATUS_FLAG_TASKPTR		0x20
+
+typedef struct mach_port_info_ext {
+	mach_port_status_t	mpie_status;
+	mach_port_msgcount_t	mpie_boost_cnt;
+	uint32_t		reserved[6];
+} mach_port_info_ext_t;
+
 typedef integer_t *mach_port_info_t;		/* varying array of natural_t */
 
 /* Flavors for mach_port_get/set_attributes() */
@@ -334,13 +346,17 @@ typedef int	mach_port_flavor_t;
 #define MACH_PORT_LIMITS_INFO		1	/* uses mach_port_status_t */
 #define MACH_PORT_RECEIVE_STATUS	2	/* uses mach_port_limits_t */
 #define MACH_PORT_DNREQUESTS_SIZE	3	/* info is int */
+#define MACH_PORT_TEMPOWNER		4	/* indicates receive right will be reassigned to another task */
+#define MACH_PORT_IMPORTANCE_RECEIVER	5	/* indicates recieve right accepts priority donation */
+#define MACH_PORT_INFO_EXT		7	/* uses mach_port_info_ext_t */
 
 #define MACH_PORT_LIMITS_INFO_COUNT	((natural_t) \
 	(sizeof(mach_port_limits_t)/sizeof(natural_t)))
 #define MACH_PORT_RECEIVE_STATUS_COUNT	((natural_t) \
 	(sizeof(mach_port_status_t)/sizeof(natural_t)))
 #define MACH_PORT_DNREQUESTS_SIZE_COUNT 1
-
+#define MACH_PORT_INFO_EXT_COUNT	((natural_t) \
+	(sizeof(mach_port_info_ext_t)/sizeof(natural_t)))
 /*
  * Structure used to pass information about port allocation requests.
  * Must be padded to 64-bits total length.
@@ -351,6 +367,49 @@ typedef struct mach_port_qos {
 	boolean_t		pad1:30;
 	natural_t		len;
 } mach_port_qos_t;
+
+/* Mach Port Guarding definitions */
+
+/*
+ * Flags for mach_port_options (used for
+ * invocation of mach_port_construct).
+ * Indicates attributes to be set for the newly
+ * allocated port.
+ */
+#define MPO_CONTEXT_AS_GUARD	0x01	/* Add guard to the port */
+#define MPO_QLIMIT		0x02	/* Set qlimit for the port msg queue */
+#define MPO_TEMPOWNER		0x04	/* Set the tempowner bit of the port */
+#define MPO_IMPORTANCE_RECEIVER 0x08	/* Mark the port as importance receiver */
+#define MPO_INSERT_SEND_RIGHT   0x10	/* Insert a send right for the port */
+#define MPO_STRICT		0x20	/* Apply strict guarding for port */
+
+/*
+ * Structure to define optional attributes for a newly
+ * constructed port.
+ */
+typedef struct mach_port_options {
+	uint32_t		flags;		/* Flags defining attributes for port */
+	mach_port_limits_t	mpl;		/* Message queue limit for port */
+	uint64_t		reserved[2];	/* Reserved */
+}mach_port_options_t;
+
+typedef mach_port_options_t *mach_port_options_ptr_t;
+
+/*
+ * EXC_GUARD represents a guard violation for both
+ * mach ports and file descriptors. GUARD_TYPE_ is used
+ * to differentiate among them.
+ */
+#define GUARD_TYPE_MACH_PORT	0x1
+
+/* Reasons for exception for a guarded mach port */
+enum mach_port_guard_exception_codes {
+	kGUARD_EXC_DESTROY		= 1u << 0,
+	kGUARD_EXC_MOD_REFS		= 1u << 1,
+	kGUARD_EXC_SET_CONTEXT		= 1u << 2,
+	kGUARD_EXC_UNGUARDED		= 1u << 3,
+	kGUARD_EXC_INCORRECT_GUARD	= 1u << 4
+};
 
 #if	!__DARWIN_UNIX03 && !defined(_NO_PORT_T_FROM_MACH)
 /*

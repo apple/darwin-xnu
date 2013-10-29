@@ -143,4 +143,5 @@ boolean_t			vm_external_within(
 					 * fits in current map */
 					vm_object_size_t	new_size, 
 					vm_object_size_t	old_size);
+
 #endif	/* VM_VM_EXTERNAL_H_ */

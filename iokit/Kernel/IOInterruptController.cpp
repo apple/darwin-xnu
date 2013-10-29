@@ -1,5 +1,6 @@
 /*
- * Copyright (c) 1998-2010 Apple Inc. All rights reserved.
+ * Copyright (c) 2007-2012 Apple Inc. All rights reserved.
+ * Copyright (c) 1998-2006 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -290,7 +291,10 @@ IOReturn IOInterruptController::enableInterrupt(IOService *nub, int source)
   
   if (vector->interruptDisabledSoft) {
     vector->interruptDisabledSoft = 0;
-    
+#if !defined(__i386__) && !defined(__x86_64__)
+    OSMemoryBarrier();
+#endif
+
     if (!getPlatform()->atInterruptLevel()) {
       while (vector->interruptActive)
 	{}
@@ -318,6 +322,9 @@ IOReturn IOInterruptController::disableInterrupt(IOService *nub, int source)
   vector = &vectors[vectorNumber];
   
   vector->interruptDisabledSoft = 1;
+#if !defined(__i386__) && !defined(__x86_64__)
+  OSMemoryBarrier();
+#endif
   
   if (!getPlatform()->atInterruptLevel()) {
     while (vector->interruptActive)
@@ -411,6 +418,8 @@ IOReturn IOSharedInterruptController::initInterruptController(IOInterruptControl
 {
   int      cnt, interruptType;
   IOReturn error;
+
+  reserved = NULL;
   
   if (!super::init())
     return kIOReturnNoResources;
@@ -644,6 +653,10 @@ IOReturn IOSharedInterruptController::disableInterrupt(IOService *nub,
   interruptState = IOSimpleLockLockDisableInterrupt(controllerLock); 
   if (!vector->interruptDisabledSoft) {
     vector->interruptDisabledSoft = 1;
+#if !defined(__i386__) && !defined(__x86_64__)
+    OSMemoryBarrier();
+#endif
+
     vectorsEnabled--;
   }
   IOSimpleLockUnlockEnableInterrupt(controllerLock, interruptState);
@@ -673,6 +686,10 @@ IOReturn IOSharedInterruptController::handleInterrupt(void * /*refCon*/,
     vector = &vectors[vectorNumber];
     
     vector->interruptActive = 1;
+#if !defined(__i386__) && !defined(__x86_64__)
+    OSMemoryBarrier();
+#endif
+
 	if (!vector->interruptDisabledSoft) {
 	  
 	  // Call the handler if it exists.

@@ -93,20 +93,23 @@ typedef struct {
 /* XXX should be static */
 void collectth_state(thread_t th_act, void *tirp);
 
+extern int freespace_mb(vnode_t vp);
+
 /* XXX not in a Mach header anywhere */
 kern_return_t thread_getstatus(register thread_t act, int flavor,
 	thread_state_t tstate, mach_msg_type_number_t *count);
 void task_act_iterate_wth_args(task_t, void(*)(thread_t, void *), void *);
+extern kern_return_t task_suspend_internal(task_t);
 
 static cpu_type_t process_cpu_type(proc_t proc);
 static cpu_type_t process_cpu_subtype(proc_t proc);
 
 #ifdef SECURE_KERNEL
-__private_extern__ int do_coredump = 0;	/* default: don't dump cores */
+__XNU_PRIVATE_EXTERN int do_coredump = 0;	/* default: don't dump cores */
 #else
-__private_extern__ int do_coredump = 1;	/* default: dump cores */
+__XNU_PRIVATE_EXTERN int do_coredump = 1;	/* default: dump cores */
 #endif
-__private_extern__ int sugid_coredump = 0; /* default: but not SGUID binaries */
+__XNU_PRIVATE_EXTERN int sugid_coredump = 0; /* default: but not SGUID binaries */
 
 
 /* cpu_type returns only the most generic indication of the current CPU. */
@@ -187,6 +190,9 @@ collectth_state(thread_t th_act, void *tirp)
  *		indicated
  *
  * Parameters:	core_proc			Process to dump core [*]
+ *				reserve_mb			If non-zero, leave filesystem with
+ *									at least this much free space.
+ *				ignore_ulimit		If set, ignore the process's core file ulimit.	
  *
  * Returns:	0				Success
  *		EFAULT				Failed
@@ -197,7 +203,7 @@ collectth_state(thread_t th_act, void *tirp)
  */
 #define	MAX_TSTATE_FLAVORS	10
 int
-coredump(proc_t core_proc)
+coredump(proc_t core_proc, uint32_t reserve_mb, int ignore_ulimit)
 {
 /* Begin assumptions that limit us to only the current process */
 	vfs_context_t ctx = vfs_context_current();
@@ -255,9 +261,9 @@ coredump(proc_t core_proc)
 
 	mapsize = get_vmmap_size(map);
 
-	if (mapsize >=  core_proc->p_rlimit[RLIMIT_CORE].rlim_cur)
+	if ((mapsize >=  core_proc->p_rlimit[RLIMIT_CORE].rlim_cur) && (ignore_ulimit == 0))
 		return (EFAULT);
-	(void) task_suspend(task);
+	(void) task_suspend_internal(task);
 
 	MALLOC(alloced_name, char *, MAXPATHLEN, M_TEMP, M_NOWAIT | M_ZERO);
 
@@ -288,6 +294,12 @@ coredump(proc_t core_proc)
 	VATTR_SET(&va, va_data_size, 0);
 	vnode_setattr(vp, &va, ctx);
 	core_proc->p_acflag |= ACORE;
+
+	if ((reserve_mb > 0) &&
+	    ((freespace_mb(vp) - (mapsize >> 20)) < reserve_mb)) {
+		error = ENOSPC;
+		goto out;
+	}
 
 	/*
 	 *	If the task is modified while dumping the file

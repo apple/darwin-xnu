@@ -71,6 +71,7 @@
 
 #ifdef MACH_BSD
 extern void	mach_kauth_cred_uthread_update(void);
+extern void throttle_lowpri_io(int);
 #endif
 
 void * find_user_regs(thread_t);
@@ -80,8 +81,6 @@ unsigned int get_msr_exportmask(void);
 unsigned int get_msr_nbits(void);
 
 unsigned int get_msr_rbits(void);
-
-extern void throttle_lowpri_io(int);
 
 /*
  * thread_userstack:
@@ -318,7 +317,7 @@ machdep_syscall(x86_saved_state_t *state)
 
 	DEBUG_KPRINT_SYSCALL_MDEP("machdep_syscall: retval=%u\n", regs->eax);
 
-	throttle_lowpri_io(TRUE);
+	throttle_lowpri_io(1);
 
 	thread_exception_return();
 	/* NOTREACHED */
@@ -363,7 +362,7 @@ machdep_syscall64(x86_saved_state_t *state)
 
 	DEBUG_KPRINT_SYSCALL_MDEP("machdep_syscall: retval=%llu\n", regs->rax);
 
-	throttle_lowpri_io(TRUE);
+	throttle_lowpri_io(1);
 
 	thread_exception_return();
 	/* NOTREACHED */
@@ -387,50 +386,15 @@ struct mach_call_args {
 };
 
 static kern_return_t
-mach_call_arg_munger32(uint32_t sp, int nargs, int call_number, struct mach_call_args *args);
+mach_call_arg_munger32(uint32_t sp, struct mach_call_args *args, const mach_trap_t *trapp);
 
 
 static kern_return_t
-mach_call_arg_munger32(uint32_t sp, int nargs, int call_number, struct mach_call_args *args)
+mach_call_arg_munger32(uint32_t sp, struct mach_call_args *args, const mach_trap_t *trapp)
 {
-	unsigned int args32[9];
-
-	if (copyin((user_addr_t)(sp + sizeof(int)), (char *)args32, nargs * sizeof (int)))
+	if (copyin((user_addr_t)(sp + sizeof(int)), (char *)args, trapp->mach_trap_u32_words * sizeof (int)))
 		return KERN_INVALID_ARGUMENT;
-
-	switch (nargs) {
-	case 9: args->arg9 = args32[8];
-	case 8: args->arg8 = args32[7];
-	case 7: args->arg7 = args32[6];
-	case 6: args->arg6 = args32[5];
-	case 5: args->arg5 = args32[4];
-	case 4: args->arg4 = args32[3];
-	case 3: args->arg3 = args32[2];
-	case 2: args->arg2 = args32[1];
-	case 1: args->arg1 = args32[0];
-	}
-	if (call_number == 10) {
-		/* munge the mach_vm_size_t for  mach_vm_allocate() */
-		args->arg3 = (((uint64_t)(args32[2])) | ((((uint64_t)(args32[3]))<<32)));
-		args->arg4 = args32[4];
-	} else if (call_number == 12) {
-		/* munge the mach_vm_address_t and mach_vm_size_t for mach_vm_deallocate() */
-		args->arg2 = (((uint64_t)(args32[1])) | ((((uint64_t)(args32[2]))<<32)));
-		args->arg3 = (((uint64_t)(args32[3])) | ((((uint64_t)(args32[4]))<<32)));
-	} else if (call_number == 14) {
-		/* munge the mach_vm_address_t and mach_vm_size_t for  mach_vm_protect() */
-		args->arg2 = (((uint64_t)(args32[1])) | ((((uint64_t)(args32[2]))<<32)));
-		args->arg3 = (((uint64_t)(args32[3])) | ((((uint64_t)(args32[4]))<<32)));
-		args->arg4 = args32[5];
-		args->arg5 = args32[6];
-	} else if (call_number == 90) {
-		/* munge_l for mach_wait_until_trap() */
-		args->arg1 = (((uint64_t)(args32[0])) | ((((uint64_t)(args32[1]))<<32)));
-	} else if (call_number == 93) {
-		/* munge_wl for mk_timer_arm_trap() */
-		args->arg2 = (((uint64_t)(args32[1])) | ((((uint64_t)(args32[2]))<<32)));
-	}
-
+	trapp->mach_trap_arg_munge32(NULL, args);
 	return KERN_SUCCESS;
 }
 
@@ -476,7 +440,7 @@ mach_call_munger(x86_saved_state_t *state)
 
 	argc = mach_trap_table[call_number].mach_trap_arg_count;
 	if (argc) {
-		retval = mach_call_arg_munger32(regs->uesp, argc, call_number, &args);
+		retval = mach_call_arg_munger32(regs->uesp, &args,  &mach_trap_table[call_number]);
 		if (retval != KERN_SUCCESS) {
 			regs->eax = retval;
 
@@ -506,7 +470,7 @@ mach_call_munger(x86_saved_state_t *state)
 
 	regs->eax = retval;
 
-	throttle_lowpri_io(TRUE);
+	throttle_lowpri_io(1);
 
 	thread_exception_return();
 	/* NOTREACHED */
@@ -573,7 +537,7 @@ mach_call_munger64(x86_saved_state_t *state)
 		MACHDBG_CODE(DBG_MACH_EXCP_SC,(call_number)) | DBG_FUNC_END, 
 		regs->rax, 0, 0, 0, 0);
 
-	throttle_lowpri_io(TRUE);
+	throttle_lowpri_io(1);
 
 	thread_exception_return();
 	/* NOTREACHED */

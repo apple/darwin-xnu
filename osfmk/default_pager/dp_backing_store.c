@@ -600,7 +600,7 @@ default_pager_backing_store_create(
 	if(alias_struct != NULL) {
 		alias_struct->vs = (struct vstruct *)bs;
 		alias_struct->name = &default_pager_ops;
-		port->alias = (uintptr_t) alias_struct;
+		port->ip_alias = (uintptr_t) alias_struct;
 	}
 	else {
 		ipc_port_dealloc_kernel((MACH_PORT_FACE)(port));
@@ -987,8 +987,8 @@ restart:
 	/*
 	 * Disable lookups of this backing store.
 	 */
-	if((void *)bs->bs_port->alias != NULL)
-		kfree((void *) bs->bs_port->alias,
+	if((void *)bs->bs_port->ip_alias != NULL)
+		kfree((void *) bs->bs_port->ip_alias,
 		      sizeof (struct vstruct_alias));
 	ipc_port_dealloc_kernel((ipc_port_t) (bs->bs_port));
 	bs->bs_port = MACH_PORT_NULL;
@@ -1236,7 +1236,7 @@ vs_alloc_async(void)
 			if(alias_struct != NULL) {
 				alias_struct->vs = (struct vstruct *)vsa;
 				alias_struct->name = &default_pager_ops;
-				reply_port->alias = (uintptr_t) alias_struct;
+				reply_port->ip_alias = (uintptr_t) alias_struct;
 				vsa->reply_port = reply_port;
 				vs_alloc_async_count++;
 			}
@@ -1288,7 +1288,7 @@ vs_alloc_async(void)
 			if(alias_struct != NULL) {
 				alias_struct->vs = reply_port;
 				alias_struct->name = &default_pager_ops;
-				reply_port->alias = (int) vsa;
+				reply_port->defpager_importance.alias = (int) vsa;
 				vsa->reply_port = reply_port;
 				vs_alloc_async_count++;
 			}
@@ -1312,7 +1312,7 @@ vs_free_async(
 	kern_return_t	kr;
 
 	reply_port = vsa->reply_port;
-	kfree(reply_port->alias, sizeof (struct vstuct_alias));
+	kfree(reply_port->ip_alias, sizeof (struct vstuct_alias));
 	kfree(vsa, sizeof (struct vs_async));
 	ipc_port_dealloc_kernel((MACH_PORT_FACE) (reply_port));
 #if 0
@@ -1889,7 +1889,7 @@ ps_vstruct_dealloc(
 	zfree(vstruct_zone, vs);
 }
 
-void
+kern_return_t
 ps_vstruct_reclaim(
 	vstruct_t vs,
 	boolean_t return_to_vm,
@@ -1901,7 +1901,7 @@ ps_vstruct_reclaim(
 	struct vm_object_fault_info fault_info;
 	int		clmap_off;
 	unsigned int	vsmap_size;
-	kern_return_t	kr;
+	kern_return_t	kr = KERN_SUCCESS;
 
 	VS_MAP_LOCK(vs);
 
@@ -1950,10 +1950,14 @@ ps_vstruct_reclaim(
 						clmap_off,
 						(dp_size_t) -1, /* read whole cluster */
 						&fault_info);
+
 					VS_MAP_LOCK(vs); /* XXX what if it changed ? */
 					if (kr != KERN_SUCCESS) {
 						vsmap_all_clear = FALSE;
 						vsimap_all_clear = FALSE;
+
+						kr = KERN_MEMORY_ERROR;
+						goto out;
 					}
 				}
 			}
@@ -1990,9 +1994,13 @@ ps_vstruct_reclaim(
 					clmap_off,
 					(dp_size_t) -1, /* read whole cluster */
 					&fault_info);
+
 				VS_MAP_LOCK(vs); /* XXX what if it changed ? */
 				if (kr != KERN_SUCCESS) {
 					vsmap_all_clear = FALSE;
+
+					kr = KERN_MEMORY_ERROR;
+					goto out;
 				} else {
 //					VSM_CLR(vsmap[j]);
 				}
@@ -2005,6 +2013,8 @@ ps_vstruct_reclaim(
 	}
 out:
 	VS_MAP_UNLOCK(vs);
+
+	return kr;
 }
 
 int ps_map_extend(vstruct_t, unsigned int);	/* forward */
@@ -2488,7 +2498,7 @@ device_write_reply(
 	struct vs_async	*vsa;
 
 	vsa = (struct vs_async *)
-		((struct vstruct_alias *)(reply_port->alias))->vs;
+		((struct vstruct_alias *)(reply_port->ip_alias))->vs;
 
 	if (device_code == KERN_SUCCESS && bytes_written != vsa->vsa_size) {
 		device_code = KERN_FAILURE;
@@ -2538,7 +2548,7 @@ device_read_reply(
 {
 	struct vs_async	*vsa;
 	vsa = (struct vs_async *)
-		((struct vstruct_alias *)(reply_port->alias))->vs;
+		((struct vstruct_alias *)(reply_port->defpager_importance.alias))->vs;
 	vsa->vsa_addr = (vm_offset_t)data;
 	vsa->vsa_size = (vm_size_t)dataCnt;
 	vsa->vsa_error = return_code;
@@ -2855,6 +2865,9 @@ pvs_object_data_provided(
 	__unused upl_offset_t	offset,
 	upl_size_t				size)
 {
+#if	RECLAIM_SWAP
+	boolean_t	empty;
+#endif
 
 	DP_DEBUG(DEBUG_VS_INTERNAL,
 		 ("buffer=0x%x,offset=0x%x,size=0x%x\n",
@@ -2866,6 +2879,10 @@ pvs_object_data_provided(
 /* check upl iosync flag instead of using RECLAIM_SWAP*/
 #if	RECLAIM_SWAP
 	if (size != upl->size) {
+		if (size) {
+			ps_clunmap(vs, offset, size);
+			upl_commit_range(upl, 0, size, 0, NULL, 0, &empty);
+		}
 		upl_abort(upl, UPL_ABORT_ERROR);
 		upl_deallocate(upl);
 	} else {
@@ -2917,14 +2934,18 @@ pvs_cluster_read(
 	uint32_t		io_streaming;
 	int			i;
 	boolean_t		io_sync = FALSE;
+	boolean_t		reclaim_all = FALSE;
 
 	pages_in_cl = 1 << vs->vs_clshift;
 	cl_size = pages_in_cl * vm_page_size;
 	cl_mask = cl_size - 1;
 
 	request_flags = UPL_NO_SYNC | UPL_RET_ONLY_ABSENT | UPL_SET_LITE;
+	
+	if (cnt == (dp_size_t) -1)
+		reclaim_all = TRUE;
 
-	if (cnt == (dp_size_t) -1) {
+	if (reclaim_all == TRUE) {
 		/*
 		 * We've been called from ps_vstruct_reclaim() to move all
 		 * the object's swapped pages back to VM pages.
@@ -2969,7 +2990,7 @@ again:
 			 */
 			return KERN_FAILURE;
 		}
-		if (cnt == (dp_size_t) -1) {
+		if (reclaim_all == TRUE) {
 			i--;
 			if (i == 0) {
 				/* no more pages in this cluster */
@@ -3006,7 +3027,7 @@ again:
 		 */
 		return KERN_SUCCESS;
 	}
-		
+	
 	if(((vm_object_fault_info_t)fault_info)->io_sync == TRUE ) {
 		io_sync = TRUE;
 	} else {
@@ -3087,6 +3108,7 @@ again:
 
 		while (size > 0 && error == KERN_SUCCESS) {
 		        unsigned int  abort_size;
+			unsigned int  lsize;
 			int           failed_size;
 			int           beg_pseg;
 			int           beg_indx;
@@ -3240,8 +3262,7 @@ again:
 					     upl, (upl_offset_t) 0, 
 					     ps_offset[beg_pseg] + (beg_indx * vm_page_size), 
 					     xfer_size, &residual, io_flags);
-			
-			failed_size = 0;
+
 
 			/*
 			 * Adjust counts and send response to VM.  Optimize 
@@ -3261,8 +3282,10 @@ again:
 				 * supplied data is deallocated from the pager's
 				 *  address space.
 				 */
-			        pvs_object_data_provided(vs, upl, vs_offset, xfer_size);
+				lsize = xfer_size;
+				failed_size = 0;
 			} else {
+				lsize = 0;
 			        failed_size = xfer_size;
 
 				if (error == KERN_SUCCESS) {
@@ -3286,21 +3309,21 @@ again:
 						 * of the range, if any.
 						 */
 					        int fill;
-						unsigned int lsize;
 
-						fill = residual & ~vm_page_size;
+						fill = residual & (vm_page_size - 1);
 						lsize = (xfer_size - residual) + fill;
 
-						pvs_object_data_provided(vs, upl, vs_offset, lsize);
-
-						if (lsize < xfer_size) {
+						if (lsize < xfer_size)
 						        failed_size = xfer_size - lsize;
+
+						if (reclaim_all == FALSE)
 							error = KERN_FAILURE;
-						}
 					}
 				} 
 			}
-			if (error != KERN_SUCCESS) {
+			pvs_object_data_provided(vs, upl, vs_offset, lsize);
+
+			if (failed_size) {
 			        /*
 				 * There was an error in some part of the range, tell
 				 * the VM. Note that error is explicitly checked again
@@ -4416,45 +4439,17 @@ ps_write_file(
 
 static inline void ps_vnode_trim_init(struct ps_vnode_trim_data *data)
 {
-#if CONFIG_EMBEDDED
-	data->vp = NULL;
-	data->offset = 0;
-	data->length = 0;
-#else
 #pragma unused(data)
-#endif
 }
 
 static inline void ps_vnode_trim_now(struct ps_vnode_trim_data *data)
 {
-#if CONFIG_EMBEDDED
-	if ((data->vp) != NULL) {
-		vnode_trim(data->vp,
-				   data->offset,
-				   data->length);
-		ps_vnode_trim_init(data); 
-	}
-#else
 #pragma unused(data)
-#endif
 }
 
 static inline void ps_vnode_trim_more(struct ps_vnode_trim_data *data, struct vs_map *map, unsigned int shift, dp_size_t length)
 {
-#if CONFIG_EMBEDDED
-	struct vnode *vp = VSM_PS(*map)->ps_vnode;
-	dp_offset_t offset = ptoa_32(VSM_CLOFF(*map)) << shift;
-
-	if ((vp != data->vp) || (offset) != (data->offset + data->length)) {
-		ps_vnode_trim_now(data);
-		data->vp = vp;
-		data->offset = offset;
-		data->length = 0;
-	}
-	data->length += (length);
-#else
 #pragma unused(data, map, shift, length)
-#endif
 }
 
 kern_return_t

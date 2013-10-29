@@ -82,6 +82,7 @@
 
 #include <libkern/libkern.h>
 
+#if PF_ECN
 /*
  * read and write diffserv field in IPv4 or IPv6 header
  */
@@ -302,3 +303,4 @@ mark_ecn(struct mbuf *m, struct pf_mtag *t, int flags)
 	/* not marked */
 	return (0);
 }
+#endif /* PF_ECN */

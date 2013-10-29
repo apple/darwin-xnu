@@ -62,6 +62,7 @@ chomp(my $CC = `xcrun -sdk "$ENV{'SDKROOT'}" -find cc`);
 my @CFLAGS = (
 	"-x assembler-with-cpp",
 	"-c",
+	"-isysroot", $ENV{'SDKROOT'} || "/",
 	"-I".$ENV{"SDKROOT"}."/System/Library/Frameworks/System.framework/PrivateHeaders",
 );
 

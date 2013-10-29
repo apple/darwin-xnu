@@ -67,10 +67,6 @@ typedef struct _IOUCProcessToken {
 
 #define kIOKernelHasSafeSleep        1
 
-enum { kIOPrepareToPhys32 = 0x04 };
-
-#define kIODirectionPrepareToPhys32 ((IODirection) kIOPrepareToPhys32)
-
 #define kIOPlatformSleepActionKey                    "IOPlatformSleepAction"        /* value is OSNumber (priority) */
 #define kIOPlatformWakeActionKey                     "IOPlatformWakeAction"        /* value is OSNumber (priority) */
 #define kIOPlatformQuiesceActionKey                  "IOPlatformQuiesceAction"    /* value is OSNumber (priority) */
@@ -81,6 +77,11 @@ enum { kIOPrepareToPhys32 = 0x04 };
 #define kIOPlatformFunctionHandlerMaxBusDelay        "IOPlatformFunctionHandlerMaxBusDelay"
 #define kIOPlatformFunctionHandlerMaxInterruptDelay  "IOPlatformFunctionHandlerMaxInterruptDelay"
 #endif /* defined(__i386__) || defined(__x86_64__) */
+
+enum {
+    // these flags are valid for the prepare() method only
+    kIODirectionPrepareNoZeroFill = 0x00000010,
+};
 
 
 #endif /* ! _IOKIT_IOKITKEYSPRIVATE_H */

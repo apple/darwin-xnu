@@ -129,7 +129,7 @@ struct ipfw_dyn_rule_compat {
 					/* combination of TCP flags)	*/
 } ;
 
-#ifdef KERNEL
+#ifdef BSD_KERNEL_PRIVATE
 #pragma pack(4)
 
 struct ip_fw_compat_32 {
@@ -248,7 +248,7 @@ struct ipfw_dyn_rule_compat_64 {
     u_int32_t state ;			/* state of this rule (typ. a   */
 					/* combination of TCP flags)	*/
 } ;
-#endif			/* KERNEL */
+#endif /* BSD_KERNEL_PRIVATE */
 
 
 #define IP_FW_GETNSRCP_COMPAT(rule)		((rule)->fw_nports & 0x0f)

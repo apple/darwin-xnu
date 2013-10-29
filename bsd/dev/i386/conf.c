@@ -121,7 +121,6 @@ extern d_ioctl_t	volioctl;
 #endif
 
 extern d_open_t		cttyopen;
-extern d_close_t	cttyclose;
 extern d_read_t		cttyread;
 extern d_write_t	cttywrite;
 extern d_ioctl_t	cttyioctl;
@@ -202,9 +201,9 @@ struct cdevsw	cdevsw[] =
     },
     NO_CDEVICE,								/* 1*/
     {
-	cttyopen,	cttyclose,	cttyread,	cttywrite,	/* 2*/
+	cttyopen,	nullclose,	cttyread,	cttywrite,	/* 2*/
 	cttyioctl,	nullstop,	nullreset,	0,		cttyselect,
-	eno_mmap,	eno_strat,	eno_getc,	eno_putc,	D_TTY | D_TRACKCLOSE
+	eno_mmap,	eno_strat,	eno_getc,	eno_putc,	D_TTY
     },
     {
 	nullopen,	nullclose,	mmread,		mmwrite,	/* 3*/
@@ -308,7 +307,7 @@ isdisk(dev_t dev, int type)
 		}
 		/* FALL THROUGH */
 	case VBLK:
-		if ((D_TYPEMASK & bdevsw[maj].d_type) == D_DISK) {
+		if (bdevsw[maj].d_type == D_DISK) {
 			return (1);
 		}
 		break;

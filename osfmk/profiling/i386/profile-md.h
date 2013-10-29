@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2012 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -172,61 +172,14 @@ typedef unsigned char	prof_flag_t;	/* type for boolean flags */
  */
 
 /* These are 64 bit on both i386 and x86_64 */
-#ifdef __i386__
-typedef struct prof_cnt_t {
-	prof_uptrint_t	low;		/* low 32 bits of counter */
-	prof_uptrint_t	high;		/* high 32 bits of counter */
-} prof_cnt_t;
-#else
 typedef unsigned long prof_cnt_t;
-#endif
 
-#ifdef __i386__
-#if defined(__GNUC__) && !defined(lint)
-#define PROF_CNT_INC(cnt)					\
-	__asm__("addl $1,%0; adcl $0,%1"			\
-		: "=g" ((cnt).low), "=g" ((cnt).high)		\
-		: "0" ((cnt).low), "1" ((cnt).high))
-
-#define PROF_CNT_ADD(cnt,val)					\
-	__asm__("addl %2,%0; adcl $0,%1"			\
-		: "=g,r" ((cnt).low), "=g,r" ((cnt).high)	\
-		: "r,g" ((unsigned long)(val)),			\
-		"0,0" ((cnt).low), "1,1" ((cnt).high))
-
-#define PROF_CNT_LADD(cnt,val)					\
-	__asm__("addl %2,%0; adcl %3,%1"			\
-		: "=g,r" ((cnt).low), "=g,r" ((cnt).high)	\
-		: "r,g" ((val).low), "r,g" ((val).high),	\
-		"0,0" ((cnt).low), "1,1" ((cnt).high))
-
-#define PROF_CNT_SUB(cnt,val)					\
-	__asm__("subl %2,%0; sbbl $0,%1"			\
-		: "=g,r" ((cnt).low), "=g,r" ((cnt).high)	\
-		: "r,g" ((unsigned long)(val)),			\
-		"0,0" ((cnt).low), "1,1" ((cnt).high))
-
-#define PROF_CNT_LSUB(cnt,val)					\
-	__asm__("subl %2,%0; sbbl %3,%1"			\
-		: "=g,r" ((cnt).low), "=g,r" ((cnt).high)	\
-		: "r,g" ((val).low), "r,g" ((val).high),	\
-		"0,0" ((cnt).low), "1,1" ((cnt).high))
-
-#else
-#define PROF_CNT_INC(cnt)	((++((cnt).low) == 0) ? ++((cnt).high) : 0)
-#define PROF_CNT_ADD(cnt,val)	(((((cnt).low + (val)) < (val)) ? ((cnt).high++) : 0), ((cnt).low += (val)))
-#define PROF_CNT_LADD(cnt,val)	(PROF_CNT_ADD(cnt,(val).low), (cnt).high += (val).high)
-#define PROF_CNT_SUB(cnt,val)	(((((cnt).low - (val)) > (cnt).low) ? ((cnt).high--) : 0), ((cnt).low -= (val)))
-#define PROF_CNT_LSUB(cnt,val)	(PROF_CNT_SUB(cnt,(val).low), (cnt).high -= (val).high)
-#endif
-#else
 /* x86_64 */
 #define PROF_CNT_INC(cnt)	(cnt++)
 #define PROF_CNT_ADD(cnt,val)	(cnt+=val)
 #define PROF_CNT_LADD(cnt,val)	(cnt+=val)
 #define PROF_CNT_SUB(cnt,val)	(cnt-=val)
 #define PROF_CNT_LSUB(cnt,val)	(cnt-=val)
-#endif
 
 #define PROF_ULONG_TO_CNT(cnt,val)	(((cnt).high = 0), ((cnt).low = val))
 #define	PROF_CNT_OVERFLOW(cnt,high,low)	(((high) = (cnt).high), ((low) = (cnt).low))

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2008 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2012 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -85,15 +85,7 @@ extern void proc_selfname(char * buf, int size);
             __FUNCTION__, procname);  \
     } while (0)
 
-#if __i386__
-// in libkern/OSKextLib.cpp
-extern kern_return_t kext_get_kmod_info(
-    kmod_info_array_t      * kmod_list,
-    mach_msg_type_number_t * kmodCount);
-#define KMOD_MIG_UNUSED
-#else
 #define KMOD_MIG_UNUSED __unused
-#endif /* __i386__ */
 
 
 /*********************************************************************
@@ -148,14 +140,6 @@ kmod_get_info(
     kmod_info_array_t * kmod_list KMOD_MIG_UNUSED,
     mach_msg_type_number_t * kmodCount KMOD_MIG_UNUSED)
 {
-#if __i386__
-    if (current_task() != kernel_task && task_has_64BitAddr(current_task())) {
-        NOT_SUPPORTED_USER64();
-        return KERN_NOT_SUPPORTED;
-    }
-    return kext_get_kmod_info(kmod_list, kmodCount);
-#else
     NOT_SUPPORTED_KERNEL();
     return KERN_NOT_SUPPORTED;
-#endif /* __i386__ */
 }

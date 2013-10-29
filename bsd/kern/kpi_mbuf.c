@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2004-2011 Apple Inc. All rights reserved.
+ * Copyright (c) 2004-2012 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -38,15 +38,17 @@
 #include <kern/kalloc.h>
 #include <string.h>
 #include <netinet/in.h>
+#include <netinet/ip_var.h>
 
 #include "net/net_str_id.h"
 
+/* mbuf flags visible to KPI clients; do not add private flags here */
 static const mbuf_flags_t mbuf_flags_mask = (MBUF_EXT | MBUF_PKTHDR | MBUF_EOR |
     MBUF_LOOP | MBUF_BCAST | MBUF_MCAST | MBUF_FRAG | MBUF_FIRSTFRAG |
     MBUF_LASTFRAG | MBUF_PROMISC | MBUF_HASFCS);
 
-#define	MBUF_PKTAUXF_MASK	\
-	(MBUF_PKTAUXF_INET_RESOLVE_RTR | MBUF_PKTAUXF_INET6_RESOLVE_RTR)
+/* Unalterable mbuf flags */
+static const mbuf_flags_t mbuf_cflags_mask = (MBUF_EXT);
 
 void* mbuf_data(mbuf_t mbuf)
 {
@@ -91,7 +93,7 @@ errno_t mbuf_align_32(mbuf_t mbuf, size_t len)
  */
 addr64_t mbuf_data_to_physical(void* ptr)
 {
-	return (addr64_t)(uintptr_t)mcl_to_paddr(ptr);
+	return ((addr64_t)mcl_to_paddr(ptr));
 }
 
 errno_t mbuf_get(mbuf_how_t how, mbuf_type_t type, mbuf_t *mbuf)
@@ -480,27 +482,61 @@ errno_t mbuf_settype(mbuf_t mbuf, mbuf_type_t new_type)
 	return 0;
 }
 
-mbuf_flags_t mbuf_flags(const mbuf_t mbuf)
+mbuf_flags_t
+mbuf_flags(const mbuf_t mbuf)
 {
-	return mbuf->m_flags & mbuf_flags_mask;
+	return (mbuf->m_flags & mbuf_flags_mask);
 }
 
-errno_t mbuf_setflags(mbuf_t mbuf, mbuf_flags_t flags)
+errno_t
+mbuf_setflags(mbuf_t mbuf, mbuf_flags_t flags)
 {
-	if ((flags & ~mbuf_flags_mask) != 0) return EINVAL;
-	mbuf->m_flags = flags |
-		(mbuf->m_flags & ~mbuf_flags_mask);
-	
-	return 0;
+	errno_t ret = 0;
+
+	if ((flags | (mbuf->m_flags & mbuf_flags_mask)) &
+	    (~mbuf_flags_mask | mbuf_cflags_mask)) {
+		ret = EINVAL;
+	} else {
+		mbuf_flags_t oflags = mbuf->m_flags;
+		mbuf->m_flags = flags | (mbuf->m_flags & ~mbuf_flags_mask);
+		/*
+		 * If M_PKTHDR bit has changed, we have work to do;
+		 * m_reinit() will take care of setting/clearing the
+		 * bit, as well as the rest of bookkeeping.
+		 */
+		if ((oflags ^ mbuf->m_flags) & M_PKTHDR) {
+			mbuf->m_flags ^= M_PKTHDR;	/* restore */
+			ret = m_reinit(mbuf,
+			    (mbuf->m_flags & M_PKTHDR) ? 0 : 1);
+		}
+	}
+
+	return (ret);
 }
 
-errno_t mbuf_setflags_mask(mbuf_t mbuf, mbuf_flags_t flags, mbuf_flags_t mask)
+errno_t
+mbuf_setflags_mask(mbuf_t mbuf, mbuf_flags_t flags, mbuf_flags_t mask)
 {
-	if (((flags | mask) & ~mbuf_flags_mask) != 0) return EINVAL;
-	
-	mbuf->m_flags = (flags & mask) | (mbuf->m_flags & ~mask);
-	
-	return 0;
+	errno_t ret = 0;
+
+	if ((flags | mask) & (~mbuf_flags_mask | mbuf_cflags_mask)) {
+                ret = EINVAL;
+	} else {
+		mbuf_flags_t oflags = mbuf->m_flags;
+		mbuf->m_flags = (flags & mask) | (mbuf->m_flags & ~mask);
+		/*
+		 * If M_PKTHDR bit has changed, we have work to do;
+		 * m_reinit() will take care of setting/clearing the
+		 * bit, as well as the rest of bookkeeping.
+		 */
+		if ((oflags ^ mbuf->m_flags) & M_PKTHDR) {
+			mbuf->m_flags ^= M_PKTHDR;	/* restore */
+			ret = m_reinit(mbuf,
+			    (mbuf->m_flags & M_PKTHDR) ? 0 : 1);
+		}
+	}
+
+	return (ret);
 }
 
 errno_t mbuf_copy_pkthdr(mbuf_t dest, const mbuf_t src)
@@ -543,12 +579,12 @@ errno_t mbuf_pkthdr_setrcvif(mbuf_t mbuf, ifnet_t ifnet)
 
 void* mbuf_pkthdr_header(const mbuf_t mbuf)
 {
-	return mbuf->m_pkthdr.header;
+	return mbuf->m_pkthdr.pkt_hdr;
 }
 
 void mbuf_pkthdr_setheader(mbuf_t mbuf, void *header)
 {
-	mbuf->m_pkthdr.header = (void*)header;
+	mbuf->m_pkthdr.pkt_hdr = (void*)header;
 }
 
 void
@@ -558,59 +594,28 @@ mbuf_inbound_modified(mbuf_t mbuf)
 	mbuf->m_pkthdr.csum_flags = 0;
 }
 
-extern void in_cksum_offset(struct mbuf* m, size_t ip_offset);
-extern void in_delayed_cksum_offset(struct mbuf *m, int ip_offset);
-
 void
-mbuf_outbound_finalize(mbuf_t mbuf, u_int32_t protocol_family, size_t protocol_offset)
+mbuf_outbound_finalize(struct mbuf *m, u_int32_t pf, size_t o)
 {
-	if ((mbuf->m_pkthdr.csum_flags &
-		 (CSUM_DELAY_DATA | CSUM_DELAY_IP | CSUM_TCP_SUM16 | CSUM_DELAY_IPV6_DATA)) == 0)
-		return;
-	
 	/* Generate the packet in software, client needs it */
-	switch (protocol_family) {
-		case PF_INET:
-			if (mbuf->m_pkthdr.csum_flags & CSUM_TCP_SUM16) {
-				/*
-				 * If you're wondering where this lovely code comes
-				 * from, we're trying to undo what happens in ip_output.
-				 * Look for CSUM_TCP_SUM16 in ip_output.
-				 */
-				u_int16_t	first, second;
-				mbuf->m_pkthdr.csum_flags &= ~CSUM_TCP_SUM16;
-				mbuf->m_pkthdr.csum_flags |= CSUM_TCP;
-				first = mbuf->m_pkthdr.csum_data >> 16;
-				second = mbuf->m_pkthdr.csum_data & 0xffff;
-				mbuf->m_pkthdr.csum_data = first - second;
-			}
-			if (mbuf->m_pkthdr.csum_flags & CSUM_DELAY_DATA) {
-				in_delayed_cksum_offset(mbuf, protocol_offset);
-			}
-			
-			if (mbuf->m_pkthdr.csum_flags & CSUM_DELAY_IP) {
-				in_cksum_offset(mbuf, protocol_offset);
-			}
-			
-			mbuf->m_pkthdr.csum_flags &= ~(CSUM_DELAY_DATA | CSUM_DELAY_IP);
-			break;
+	switch (pf) {
+	case PF_INET:
+		(void) in_finalize_cksum(m, o, m->m_pkthdr.csum_flags);
+		break;
 
-		case PF_INET6:
+	case PF_INET6:
+#if INET6
+		/*
+		 * Checksum offload should not have been enabled when
+		 * extension headers exist; indicate that the callee
+		 * should skip such case by setting optlen to -1.
+		 */
+		(void) in6_finalize_cksum(m, o, -1, -1, m->m_pkthdr.csum_flags);
+#endif /* INET6 */
+		break;
 
-			if (mbuf->m_pkthdr.csum_flags & CSUM_DELAY_IPV6_DATA) {
-				in_delayed_cksum_offset(mbuf, protocol_offset);
-			}
-			mbuf->m_pkthdr.csum_flags &= ~CSUM_DELAY_IPV6_DATA;
-			break;
-			
-	
-		default:
-			/*
-			 * Not sure what to do here if anything.
-			 * Hardware checksum code looked pretty IPv4/IPv6 specific.
-			 */
-			if ((mbuf->m_pkthdr.csum_flags & (CSUM_DELAY_DATA | CSUM_DELAY_IP | CSUM_DELAY_IPV6_DATA)) != 0)
-				panic("mbuf_outbound_finalize - CSUM flags set for non-IPv4 or IPv6 packet (%u)!\n", protocol_family);
+	default:
+		break;
 	}
 }
 
@@ -650,7 +655,7 @@ mbuf_clear_vlan_tag(
 
 static const mbuf_csum_request_flags_t mbuf_valid_csum_request_flags = 
 	MBUF_CSUM_REQ_IP | MBUF_CSUM_REQ_TCP | MBUF_CSUM_REQ_UDP |
-       	MBUF_CSUM_REQ_SUM16 | MBUF_CSUM_REQ_TCPIPV6 | MBUF_CSUM_REQ_UDPIPV6;
+       	MBUF_CSUM_PARTIAL | MBUF_CSUM_REQ_TCPIPV6 | MBUF_CSUM_REQ_UDPIPV6;
 
 errno_t
 mbuf_set_csum_requested(
@@ -713,7 +718,7 @@ mbuf_clear_csum_requested(
 
 static const mbuf_csum_performed_flags_t mbuf_valid_csum_performed_flags = 
 	MBUF_CSUM_DID_IP | MBUF_CSUM_IP_GOOD | MBUF_CSUM_DID_DATA |
-	MBUF_CSUM_PSEUDO_HDR | MBUF_CSUM_TCP_SUM16;
+	MBUF_CSUM_PSEUDO_HDR | MBUF_CSUM_PARTIAL;
 
 errno_t
 mbuf_set_csum_performed(
@@ -930,6 +935,101 @@ mbuf_tag_free(
 	return;
 }
 
+/*
+ * Maximum length of driver auxiliary data; keep this small to
+ * fit in a single mbuf to avoid wasting memory, rounded down to
+ * the nearest 64-bit boundary.  This takes into account mbuf
+ * tag-related (m_taghdr + m_tag) as well m_drvaux_tag structs.
+ */
+#define	MBUF_DRVAUX_MAXLEN						\
+	P2ROUNDDOWN(MLEN - sizeof (struct m_taghdr) -			\
+	M_TAG_ALIGN(sizeof (struct m_drvaux_tag)), sizeof (uint64_t))
+
+errno_t
+mbuf_add_drvaux(mbuf_t mbuf, mbuf_how_t how, u_int32_t family,
+    u_int32_t subfamily, size_t length, void **data_p)
+{
+	struct m_drvaux_tag *p;
+	struct m_tag *tag;
+
+	if (mbuf == NULL || !(mbuf->m_flags & M_PKTHDR) ||
+	    length == 0 || length > MBUF_DRVAUX_MAXLEN)
+		return (EINVAL);
+
+	if (data_p != NULL)
+		*data_p = NULL;
+
+	/* Check if one is already associated */
+	if ((tag = m_tag_locate(mbuf, KERNEL_MODULE_TAG_ID,
+	    KERNEL_TAG_TYPE_DRVAUX, NULL)) != NULL)
+		return (EEXIST);
+
+	/* Tag is (m_drvaux_tag + module specific data) */
+	if ((tag = m_tag_create(KERNEL_MODULE_TAG_ID, KERNEL_TAG_TYPE_DRVAUX,
+	    sizeof (*p) + length, how, mbuf)) == NULL)
+		return ((how == MBUF_WAITOK) ? ENOMEM : EWOULDBLOCK);
+
+	p = (struct m_drvaux_tag *)(tag + 1);
+	p->da_family = family;
+	p->da_subfamily = subfamily;
+	p->da_length = length;
+
+	/* Associate the tag */
+	m_tag_prepend(mbuf, tag);
+
+	if (data_p != NULL)
+		*data_p = (p + 1);
+
+	return (0);
+}
+
+errno_t
+mbuf_find_drvaux(mbuf_t mbuf, u_int32_t *family_p, u_int32_t *subfamily_p,
+    u_int32_t *length_p, void **data_p)
+{
+	struct m_drvaux_tag *p;
+	struct m_tag *tag;
+
+	if (mbuf == NULL || !(mbuf->m_flags & M_PKTHDR) || data_p == NULL)
+		return (EINVAL);
+
+	*data_p = NULL;
+
+	if ((tag = m_tag_locate(mbuf, KERNEL_MODULE_TAG_ID,
+	    KERNEL_TAG_TYPE_DRVAUX, NULL)) == NULL)
+		return (ENOENT);
+
+	/* Must be at least size of m_drvaux_tag */
+	VERIFY(tag->m_tag_len >= sizeof (*p));
+
+	p = (struct m_drvaux_tag *)(tag + 1);
+	VERIFY(p->da_length > 0 && p->da_length <= MBUF_DRVAUX_MAXLEN);
+
+	if (family_p != NULL)
+		*family_p = p->da_family;
+	if (subfamily_p != NULL)
+		*subfamily_p = p->da_subfamily;
+	if (length_p != NULL)
+		*length_p = p->da_length;
+
+	*data_p = (p + 1);
+
+	return (0);
+}
+
+void
+mbuf_del_drvaux(mbuf_t mbuf)
+{
+	struct m_tag *tag;
+
+	if (mbuf == NULL || !(mbuf->m_flags & M_PKTHDR))
+		return;
+
+	if ((tag = m_tag_locate(mbuf, KERNEL_MODULE_TAG_ID,
+	    KERNEL_TAG_TYPE_DRVAUX, NULL)) != NULL)
+		m_tag_delete(mbuf, tag);
+}
+
 /* mbuf stats */
 void mbuf_stats(struct mbuf_stat *stats)
 {
@@ -1109,6 +1209,22 @@ mbuf_get_minclsize(void)
 	return (MHLEN + MLEN);
 }
 
+u_int32_t
+mbuf_get_traffic_class_max_count(void)
+{
+	return (MBUF_TC_MAX);
+}
+
+errno_t
+mbuf_get_traffic_class_index(mbuf_traffic_class_t tc, u_int32_t *index)
+{
+	if (index == NULL || (u_int32_t)tc >= MBUF_TC_MAX)
+		return (EINVAL);
+
+	*index = MBUF_SCIDX(m_service_class_from_val(MBUF_TC2SCVAL(tc)));
+	return (0);
+}
+
 mbuf_traffic_class_t
 mbuf_get_traffic_class(mbuf_t m)
 {
@@ -1132,10 +1248,26 @@ int
 mbuf_is_traffic_class_privileged(mbuf_t m)
 {
 	if (m == NULL || !(m->m_flags & M_PKTHDR) ||
-	    !MBUF_VALID_SC(m->m_pkthdr.svc))
+	    !MBUF_VALID_SC(m->m_pkthdr.pkt_svc))
 		return (0);
 
-	return (m->m_pkthdr.aux_flags & MAUXF_PRIO_PRIVILEGED);
+	return ((m->m_pkthdr.pkt_flags & PKTF_PRIO_PRIVILEGED) ? 1 : 0);
+}
+
+u_int32_t
+mbuf_get_service_class_max_count(void)
+{
+	return (MBUF_SC_MAX_CLASSES);
+}
+
+errno_t
+mbuf_get_service_class_index(mbuf_svc_class_t sc, u_int32_t *index)
+{
+	if (index == NULL || !MBUF_VALID_SC(sc))
+		return (EINVAL);
+
+	*index = MBUF_SCIDX(sc);
+	return (0);
 }
 
 mbuf_svc_class_t
@@ -1160,16 +1292,34 @@ errno_t
 mbuf_pkthdr_aux_flags(mbuf_t m, mbuf_pkthdr_aux_flags_t *flagsp)
 {
 	u_int32_t flags;
+
 	if (m == NULL || !(m->m_flags & M_PKTHDR) || flagsp == NULL)
 		return (EINVAL);
 
-	flags = m->m_pkthdr.aux_flags & MBUF_PKTAUXF_MASK;
+	*flagsp = 0;
+	flags = m->m_pkthdr.pkt_flags;
+	if ((flags & (PKTF_INET_RESOLVE|PKTF_RESOLVE_RTR)) ==
+	    (PKTF_INET_RESOLVE|PKTF_RESOLVE_RTR))
+		*flagsp |= MBUF_PKTAUXF_INET_RESOLVE_RTR;
+	if ((flags & (PKTF_INET6_RESOLVE|PKTF_RESOLVE_RTR)) ==
+	    (PKTF_INET6_RESOLVE|PKTF_RESOLVE_RTR))
+		*flagsp |= MBUF_PKTAUXF_INET6_RESOLVE_RTR;
 
 	/* These 2 flags are mutually exclusive */
-	VERIFY((flags &
+	VERIFY((*flagsp &
 	    (MBUF_PKTAUXF_INET_RESOLVE_RTR | MBUF_PKTAUXF_INET6_RESOLVE_RTR)) !=
 	    (MBUF_PKTAUXF_INET_RESOLVE_RTR | MBUF_PKTAUXF_INET6_RESOLVE_RTR));
 
-	*flagsp = flags;
+	return (0);
+}
+
+errno_t
+mbuf_get_driver_scratch(mbuf_t m, u_int8_t **area, size_t *area_len)
+{
+	if (m == NULL || area == NULL || area_len == NULL ||
+	    !(m->m_flags & M_PKTHDR))
+		return (EINVAL);
+
+	*area_len = m_scratch_get(m, area);
 	return (0);
 }

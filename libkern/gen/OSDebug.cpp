@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2005 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2005-2012 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -106,8 +106,11 @@ OSReportWithBacktrace(const char *str, ...)
 
     lck_mtx_lock(sOSReportLock);
     {
-        printf("%s\nBacktrace %p %p %p %p %p %p %p\n",
-            buf, bt[2], bt[3], bt[4], bt[5], bt[6], bt[7], bt[8]);
+        printf("%s\nBacktrace 0x%lx 0x%lx 0x%lx 0x%lx 0x%lx 0x%lx 0x%lx\n", buf, 
+            (unsigned long) VM_KERNEL_UNSLIDE(bt[2]), (unsigned long) VM_KERNEL_UNSLIDE(bt[3]), 
+            (unsigned long) VM_KERNEL_UNSLIDE(bt[4]), (unsigned long) VM_KERNEL_UNSLIDE(bt[5]), 
+            (unsigned long) VM_KERNEL_UNSLIDE(bt[6]), (unsigned long) VM_KERNEL_UNSLIDE(bt[7]), 
+            (unsigned long) VM_KERNEL_UNSLIDE(bt[8]));
         kmod_dump_log((vm_offset_t *) &bt[2], cnt - 2);
     }
     lck_mtx_unlock(sOSReportLock);
@@ -116,38 +119,6 @@ OSReportWithBacktrace(const char *str, ...)
 static vm_offset_t minstackaddr = min_valid_stack_address();
 static vm_offset_t maxstackaddr = max_valid_stack_address();
 
-#if __i386__
-#define i386_RETURN_OFFSET 4
-
-static unsigned int
-i386_validate_stackptr(vm_offset_t stackptr)
-{
-	/* Existence and alignment check
-	 */
-	if (!stackptr || (stackptr & 0x3))
-		return 0;
-  
-	/* Is a virtual->physical translation present?
-	 */
-	if (!kvtophys(stackptr))
-		return 0;
-  
-	/* Check if the return address lies on the same page;
-	 * If not, verify that a translation exists.
-	 */
-	if (((PAGE_SIZE - (stackptr & PAGE_MASK)) < i386_RETURN_OFFSET) &&
-	    !kvtophys(stackptr + i386_RETURN_OFFSET))
-		return 0;
-	return 1;
-}
-
-static unsigned int
-i386_validate_raddr(vm_offset_t raddr)
-{
-	return ((raddr > VM_MIN_KERNEL_AND_KEXT_ADDRESS) &&
-	    (raddr < VM_MAX_KERNEL_ADDRESS));
-}
-#endif
 
 #if __x86_64__
 #define x86_64_RETURN_OFFSET 8
@@ -196,49 +167,7 @@ unsigned OSBacktrace(void **bt, unsigned maxAddrs)
 {
     unsigned frame;
 
-#if __i386__
-#define SANE_i386_FRAME_SIZE (kernel_stack_size >> 1)
-    vm_offset_t stackptr, stackptr_prev, raddr;
-    unsigned frame_index = 0;
-/* Obtain current frame pointer */
-    __asm__ volatile("movl %%ebp, %0" : "=m" (stackptr)); 
-
-    if (!i386_validate_stackptr(stackptr))
-	    goto pad;
-
-    raddr = *((vm_offset_t *) (stackptr + i386_RETURN_OFFSET));
-
-    if (!i386_validate_raddr(raddr))
-	    goto pad;
-
-    bt[frame_index++] = (void *) raddr;
-
-    for ( ; frame_index < maxAddrs; frame_index++) {
-	    stackptr_prev = stackptr;
-	    stackptr = *((vm_offset_t *) stackptr_prev);
-
-	    if (!i386_validate_stackptr(stackptr))
-		    break;
-	/* Stack grows downwards */
-	    if (stackptr < stackptr_prev)
-		    break;
-
-	    if ((stackptr - stackptr_prev) > SANE_i386_FRAME_SIZE)
-		    break;
-
-	    raddr = *((vm_offset_t *) (stackptr + i386_RETURN_OFFSET));
-
-	    if (!i386_validate_raddr(raddr))
-		    break;
-
-	    bt[frame_index] = (void *) raddr;
-    }
-pad:
-    frame = frame_index;
-
-    for ( ; frame_index < maxAddrs; frame_index++)
-	    bt[frame_index] = (void *) 0;
-#elif __x86_64__
+#if   __x86_64__
 #define SANE_x86_64_FRAME_SIZE (kernel_stack_size >> 1)
     vm_offset_t stackptr, stackptr_prev, raddr;
     unsigned frame_index = 0;

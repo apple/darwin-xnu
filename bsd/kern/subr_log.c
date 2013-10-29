@@ -84,7 +84,6 @@
 #include <pexpert/pexpert.h>
 
 /* XXX should be in a common header somewhere */
-extern void klogwakeup(void);
 extern void logwakeup(void);
 
 #define LOG_RDPRI	(PZERO + 1)
@@ -93,6 +92,7 @@ extern void logwakeup(void);
 #define LOG_ASYNC	0x04
 #define LOG_RDWAIT	0x08
 
+#define MAX_UNREAD_CHARS (CONFIG_MSG_BSIZE/2)
 /* All globals should be accessed under LOG_LOCK() */
 
 /* logsoftc only valid while log_open=1 */
@@ -105,8 +105,7 @@ struct logsoftc {
 int	log_open;			/* also used in log() */
 char smsg_bufc[CONFIG_MSG_BSIZE]; /* static buffer */
 struct msgbuf msgbuf = {MSG_MAGIC,sizeof(smsg_bufc),0,0,smsg_bufc};
-struct msgbuf *msgbufp = &msgbuf;
-static int logentrypend = 0;
+struct msgbuf *msgbufp __attribute__((used)) = &msgbuf;
 
 /* the following are implemented in osfmk/kern/printf.c  */
 extern void bsd_log_lock(void);
@@ -189,8 +188,7 @@ logread(__unused dev_t dev, struct uio *uio, int flag)
 		logsoftc.sc_state |= LOG_RDWAIT;
 		LOG_UNLOCK();
 		/*
-		 * If the wakeup is missed the ligtening bolt will wake this up 
-		 * if there are any new characters. If that doesn't do it
+		 * If the wakeup is missed 
 		 * then wait for 5 sec and reevaluate 
 		 */
 		if ((error = tsleep((caddr_t)msgbufp, LOG_RDPRI | PCATCH,
@@ -275,18 +273,6 @@ logwakeup(void)
 	LOG_UNLOCK();
 }
 
-void
-klogwakeup(void)
-{
-	LOG_LOCK();
-	if (logentrypend && log_open) {
-		logentrypend = 0; /* only reset if someone will be reading */
-		LOG_UNLOCK();
-		logwakeup();
-	} else {
-		LOG_UNLOCK();
-	}
-}
 
 /*ARGSUSED*/
 int
@@ -364,7 +350,6 @@ log_putc_locked(char c)
 
 	mbp = msgbufp; 
 	mbp->msg_bufc[mbp->msg_bufx++] = c;
-	logentrypend = 1;
 	if (mbp->msg_bufx >= msgbufp->msg_size)
 		mbp->msg_bufx = 0;
 }
@@ -386,9 +371,16 @@ log_putc_locked(char c)
 void
 log_putc(char c)
 {
+	int unread_count = 0;
 	LOG_LOCK();
 	log_putc_locked(c);
+	unread_count = msgbufp->msg_bufx - msgbufp->msg_bufr;
 	LOG_UNLOCK();
+
+	if (unread_count < 0)
+		unread_count = 0 - unread_count;
+	if (c == '\n' || unread_count >= MAX_UNREAD_CHARS)
+		logwakeup();
 }
 
 

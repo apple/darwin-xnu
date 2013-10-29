@@ -38,7 +38,7 @@
 #define _NETINET6_AH6_H_
 #include <sys/appleapiopts.h>
 
-#ifdef KERNEL_PRIVATE
+#ifdef BSD_KERNEL_PRIVATE
 struct secasvar;
 
 extern int ah6_input(struct mbuf **, int *, int);
@@ -48,6 +48,5 @@ extern int ah6_calccksum(struct mbuf *, caddr_t, size_t,
 	const struct ah_algorithm *, struct secasvar *);
 
 extern void ah6_ctlinput(int, struct sockaddr *, void *);
-#endif /* KERNEL_PRIVATE */
-
+#endif /* BSD_KERNEL_PRIVATE */
 #endif /*_NETINET6_AH6_H_*/

@@ -82,25 +82,10 @@
 #endif
 
 /* We should not be exporting size_t here.  Temporary for gcc bootstrapping. */
-#ifndef _SIZE_T
-#define _SIZE_T
-typedef __darwin_size_t	size_t;
-#endif
-
-#ifndef	_MODE_T
-typedef	__darwin_mode_t	mode_t;
-#define _MODE_T
-#endif
-
-#ifndef _OFF_T
-typedef __darwin_off_t	off_t;
-#define _OFF_T
-#endif
-
-#ifndef _PID_T
-typedef __darwin_pid_t	pid_t;
-#define _PID_T
-#endif
+#include <sys/_types/_size_t.h>
+#include <sys/_types/_mode_t.h>
+#include <sys/_types/_off_t.h>
+#include <sys/_types/_pid_t.h>
 
 /*
  * File status flags: these are used by open(2), fcntl(2).
@@ -129,9 +114,9 @@ typedef __darwin_pid_t	pid_t;
 #endif
 #define	O_NONBLOCK	0x0004		/* no delay */
 #define	O_APPEND	0x0008		/* set append mode */
-#ifndef O_SYNC		/* allow simultaneous inclusion of <aio.h> */
-#define	O_SYNC		0x0080		/* synch I/O file integrity */
-#endif
+
+#include <sys/_types/_o_sync.h>
+
 #if !defined(_POSIX_C_SOURCE) || defined(_DARWIN_C_SOURCE)
 #define	O_SHLOCK	0x0010		/* open with shared file lock */
 #define	O_EXLOCK	0x0020		/* open with exclusive file lock */
@@ -167,9 +152,7 @@ typedef __darwin_pid_t	pid_t;
 #define O_SYMLINK	0x200000	/* allow open of a symlink */
 #endif
 
-#ifndef O_DSYNC		/* allow simultaneous inclusion of <aio.h> */
-#define		O_DSYNC	0x400000	/* synch I/O data integrity */
-#endif
+#include <sys/_types/_o_dsync.h>
 
 #ifdef KERNEL
 #define FNODIRECT	0x800000	/* fcntl(F_NODIRECT, 1) */
@@ -185,6 +168,10 @@ typedef __darwin_pid_t	pid_t;
 
 #ifdef KERNEL
 #define FSINGLE_WRITER	0x4000000       /* fcntl(F_SINGLE_WRITER, 1) */
+#endif
+
+#ifdef KERNEL
+#define O_CLOFORK	0x8000000	/* implicitly set FD_CLOFORK */
 #endif
 
 /* Data Protection Flags */
@@ -244,6 +231,9 @@ typedef __darwin_pid_t	pid_t;
 #define	F_GETLK		7		/* get record locking information */
 #define	F_SETLK		8		/* set record locking information */
 #define	F_SETLKW	9		/* F_SETLK; wait if blocked */
+#if __DARWIN_C_LEVEL >= __DARWIN_C_FULL
+#define F_SETLKWTIMEOUT 10		/* F_SETLK; wait if blocked, return on timeout */
+#endif /* __DARWIN_C_LEVEL >= __DARWIN_C_FULL */
 #if !defined(_POSIX_C_SOURCE) || defined(_DARWIN_C_SOURCE)
 #define F_FLUSH_DATA    40
 #define F_CHKCLEAN      41              /* Used for regression test */
@@ -251,8 +241,9 @@ typedef __darwin_pid_t	pid_t;
 #define F_SETSIZE       43		/* Truncate a file without zeroing space */	
 #define F_RDADVISE      44              /* Issue an advisory read async with no copy to user */
 #define F_RDAHEAD       45              /* turn read ahead off/on for this fd */
-#define F_READBOOTSTRAP 46              /* Read bootstrap from disk */
-#define F_WRITEBOOTSTRAP 47             /* Write bootstrap on disk */
+/*
+ * 46,47 used to be F_READBOOTSTRAP and F_WRITEBOOTSTRAP 
+ */
 #define F_NOCACHE       48              /* turn data caching off/on for this fd */
 #define F_LOG2PHYS	49		/* file offset to device offset */
 #define F_GETPATH       50              /* return the full path of the fd */
@@ -270,7 +261,10 @@ typedef __darwin_pid_t	pid_t;
 
 #define F_ADDSIGS	59		/* add detached signatures */
 
+#ifdef PRIVATE
+/* Deprecated/Removed in 10.9 */
 #define F_MARKDEPENDENCY 60             /* this process hosts the device supporting the fs backing this fd */
+#endif
 
 #define F_ADDFILESIGS	61		/* add signature from same file (used by dyld for shared libs) */
 
@@ -309,6 +303,18 @@ typedef __darwin_pid_t	pid_t;
 
 #define F_GETPROTECTIONLEVEL	77	/* Get the protection version number for this filesystem */
 
+#define F_FINDSIGS		78	/* Add detached code signatures (used by dyld for shared libs) */
+
+#ifdef PRIVATE
+#define F_GETDEFAULTPROTLEVEL	79 /* Get the default protection level for the filesystem */
+#define F_MAKECOMPRESSED		80 /* Make the file compressed; truncate & toggle BSD bits */
+#define F_SET_GREEDY_MODE		81	/* 
+					* indicate to the filesystem/storage driver that the content to be
+					* written should be written in greedy mode for additional speed at
+					* the cost of storage efficiency. A nonzero value enables it, 0 disables it.
+					*/
+#endif
+
 
 // FS-specific fcntl()'s numbers begin at 0x00010000 and go up
 #define FCNTL_FS_SPECIFIC_BASE  0x00010000
@@ -321,6 +327,9 @@ typedef __darwin_pid_t	pid_t;
 
 /* file descriptor flags (F_GETFD, F_SETFD) */
 #define	FD_CLOEXEC	1		/* close-on-exec flag */
+#if PRIVATE
+#define	FD_CLOFORK	2		/* close-on-fork flag */
+#endif
 
 /* record locking flags (F_GETLK, F_SETLK, F_SETLKW) */
 #define	F_RDLCK		1		/* shared or read lock */
@@ -339,58 +348,13 @@ typedef __darwin_pid_t	pid_t;
  * [XSI] The values used for l_whence shall be defined as described
  * in <unistd.h>
  */
-#ifndef SEEK_SET
-#define	SEEK_SET	0	/* set file offset to offset */
-#define	SEEK_CUR	1	/* set file offset to current plus offset */
-#define	SEEK_END	2	/* set file offset to EOF plus offset */
-#endif	/* !SEEK_SET */
+#include <sys/_types/_seek_set.h>
 
 /*
  * [XSI] The symbolic names for file modes for use as values of mode_t
  * shall be defined as described in <sys/stat.h>
  */
-#ifndef S_IFMT
-/* File type */
-#define	S_IFMT		0170000		/* [XSI] type of file mask */
-#define	S_IFIFO		0010000		/* [XSI] named pipe (fifo) */
-#define	S_IFCHR		0020000		/* [XSI] character special */
-#define	S_IFDIR		0040000		/* [XSI] directory */
-#define	S_IFBLK		0060000		/* [XSI] block special */
-#define	S_IFREG		0100000		/* [XSI] regular */
-#define	S_IFLNK		0120000		/* [XSI] symbolic link */
-#define	S_IFSOCK	0140000		/* [XSI] socket */
-#if !defined(_POSIX_C_SOURCE) || defined(_DARWIN_C_SOURCE)
-#define	S_IFWHT		0160000		/* OBSOLETE: whiteout */
-#endif
-
-/* File mode */
-/* Read, write, execute/search by owner */
-#define	S_IRWXU		0000700		/* [XSI] RWX mask for owner */
-#define	S_IRUSR		0000400		/* [XSI] R for owner */
-#define	S_IWUSR		0000200		/* [XSI] W for owner */
-#define	S_IXUSR		0000100		/* [XSI] X for owner */
-/* Read, write, execute/search by group */
-#define	S_IRWXG		0000070		/* [XSI] RWX mask for group */
-#define	S_IRGRP		0000040		/* [XSI] R for group */
-#define	S_IWGRP		0000020		/* [XSI] W for group */
-#define	S_IXGRP		0000010		/* [XSI] X for group */
-/* Read, write, execute/search by others */
-#define	S_IRWXO		0000007		/* [XSI] RWX mask for other */
-#define	S_IROTH		0000004		/* [XSI] R for other */
-#define	S_IWOTH		0000002		/* [XSI] W for other */
-#define	S_IXOTH		0000001		/* [XSI] X for other */
-
-#define	S_ISUID		0004000		/* [XSI] set user id on execution */
-#define	S_ISGID		0002000		/* [XSI] set group id on execution */
-#define	S_ISVTX		0001000		/* [XSI] directory restrcted delete */
-
-#if !defined(_POSIX_C_SOURCE) || defined(_DARWIN_C_SOURCE)
-#define	S_ISTXT		S_ISVTX		/* sticky bit: not supported */
-#define	S_IREAD		S_IRUSR		/* backward compatability */
-#define	S_IWRITE	S_IWUSR		/* backward compatability */
-#define	S_IEXEC		S_IXUSR		/* backward compatability */
-#endif
-#endif	/* !S_IFMT */
+#include <sys/_types/_s_ifmt.h>
 
 #if !defined(_POSIX_C_SOURCE) || defined(_DARWIN_C_SOURCE)
 /* allocate flags (F_PREALLOCATE) */
@@ -416,6 +380,19 @@ struct flock {
 	short	l_type;		/* lock type: read/write, etc. */
 	short	l_whence;	/* type of l_start */
 };
+
+#include <sys/_types/_timespec.h>
+
+#if __DARWIN_C_LEVEL >= __DARWIN_C_FULL
+/*
+ * Advisory file segment locking with time out -
+ * Information passed to system by user for F_SETLKWTIMEOUT
+ */
+struct flocktimeout {
+	struct flock    fl;             /* flock passed for file locking */
+	struct timespec timeout;        /* timespec struct for timeout */
+};
+#endif /* __DARWIN_C_LEVEL >= __DARWIN_C_FULL */
 
 #if !defined(_POSIX_C_SOURCE) || defined(_DARWIN_C_SOURCE)
 /*
@@ -587,11 +564,9 @@ struct user_fopenfrom {
 #ifndef KERNEL
 
 #if !defined(_POSIX_C_SOURCE) || defined(_DARWIN_C_SOURCE)
-#ifndef _FILESEC_T
-struct _filesec;
-typedef struct _filesec	*filesec_t;
-#define _FILESEC_T
-#endif
+
+#include <sys/_types/_filesec_t.h>
+
 typedef enum {
 	FILESEC_OWNER = 1,
 	FILESEC_GROUP = 2,

@@ -1,8 +1,8 @@
 /*
- * Copyright (c) 2008-2011 Apple Inc. All rights reserved.
+ * Copyright (c) 2008-2013 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
- * 
+ *
  * This file contains Original Code and/or Modifications of Original Code
  * as defined in and that are subject to the Apple Public Source License
  * Version 2.0 (the 'License'). You may not use this file except in
@@ -11,10 +11,10 @@
  * unlawful or unlicensed copies of an Apple operating system, or to
  * circumvent, violate, or enable the circumvention or violation of, any
  * terms of an Apple operating system software license agreement.
- * 
+ *
  * Please obtain a copy of the License at
  * http://www.opensource.apple.com/apsl/ and read it before using this file.
- * 
+ *
  * The Original Code and all software distributed under the License are
  * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
@@ -22,7 +22,7 @@
  * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
  * Please see the License for the specific language governing rights and
  * limitations under the License.
- * 
+ *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*!
@@ -161,7 +161,8 @@ typedef u_int32_t mbuf_tso_request_flags_t;
 
 enum {
 #ifdef KERNEL_PRIVATE
-	MBUF_CSUM_REQ_SUM16	= 0x1000, /* Weird apple hardware checksum */
+	MBUF_CSUM_PARTIAL	= 0x1000,	/* 16-bit 1's complement sum */
+	MBUF_CSUM_REQ_SUM16	= MBUF_CSUM_PARTIAL,
 #endif /* KERNEL_PRIVATE */
 	MBUF_CSUM_REQ_IP	= 0x0001,
 	MBUF_CSUM_REQ_TCP	= 0x0002,
@@ -196,7 +197,7 @@ typedef u_int32_t mbuf_csum_request_flags_t;
 */
 enum {
 #ifdef KERNEL_PRIVATE
-	MBUF_CSUM_TCP_SUM16	= MBUF_CSUM_REQ_SUM16,	/* Weird apple hardware checksum */
+	MBUF_CSUM_TCP_SUM16	= MBUF_CSUM_PARTIAL,
 #endif /* KERNEL_PRIVATE */
 	MBUF_CSUM_DID_IP	= 0x0100,
 	MBUF_CSUM_IP_GOOD	= 0x0200,
@@ -908,7 +909,8 @@ extern mbuf_flags_t mbuf_flags(const mbuf_t mbuf);
 	@function mbuf_setflags
 	@discussion Sets the set of set flags.
 	@param mbuf The mbuf.
-	@param flags The flags that should be set, all other flags will be cleared.
+	@param flags The flags that should be set, all other flags will be
+		cleared.  Certain flags such as MBUF_EXT cannot be altered.
 	@result 0 upon success otherwise the errno error.
  */
 extern errno_t mbuf_setflags(mbuf_t mbuf, mbuf_flags_t flags);
@@ -918,7 +920,8 @@ extern errno_t mbuf_setflags(mbuf_t mbuf, mbuf_flags_t flags);
 	@discussion Useful for setting or clearing individual flags. Easier
 		than calling mbuf_setflags(m, mbuf_flags(m) | M_FLAG).
 	@param mbuf The mbuf.
-	@param flags The flags that should be set or cleared.
+	@param flags The flags that should be set or cleared.  Certain flags
+		such as MBUF_EXT cannot be altered.
 	@param mask The mask controlling which flags will be modified.
 	@result 0 upon success otherwise the errno error.
  */
@@ -1339,6 +1342,63 @@ extern errno_t mbuf_tag_find(mbuf_t mbuf, mbuf_tag_id_t module_id,
 extern void mbuf_tag_free(mbuf_t mbuf, mbuf_tag_id_t module_id,
     mbuf_tag_type_t type);
 
+#ifdef KERNEL_PRIVATE
+/*
+	@function mbuf_add_drvaux
+	@discussion Allocate space for driver auxiliary data and attach it
+		to the packet (MBUF_PKTHDR is required.)  This space is freed
+		when the mbuf is freed or when mbuf_del_drvaux is called.
+		Only one instance of driver auxiliary data may be attached to
+		a packet. Any attempt to add it to a packet already associated
+		with one will yield an error, and the existing one must first
+		be removed via mbuf_del_drvaux.  The format and length of the
+		data depend largely on the family and sub-family.  The system
+		makes no attempt to define and/or interpret the contents of
+		the data, and simply acts as a conduit between its producer
+		and consumer.
+	@param mbuf The mbuf to attach the auxiliary data to.
+	@param how Indicate whether you are willing to block and wait for
+		memory, if memory is not immediately available.
+	@param family The interface family as defined in net/kpi_interface.h.
+	@param subfamily The interface sub-family as defined in
+		net/kpi_interface.h.
+	@param length The length of the auxiliary data, must be greater than 0.
+	@param data_p Upon successful return, *data_p will point to the
+		space allocated for the data.  Caller may set this to NULL.
+	@result 0 upon success otherwise the errno error.
+ */
+extern errno_t mbuf_add_drvaux(mbuf_t mbuf, mbuf_how_t how,
+    u_int32_t family, u_int32_t subfamily, size_t length, void **data_p);
+
+/*
+	@function mbuf_find_drvaux
+	@discussion Find the driver auxiliary data associated with a packet.
+	@param mbuf The mbuf the auxiliary data is attached to.
+	@param family_p Upon successful return, *family_p will contain
+		the interface family associated with the data, as defined
+		in net/kpi_interface.h.  Caller may set this to NULL.
+	@param subfamily_p Upon successful return, *subfamily_p will contain
+		the interface family associated with the data, as defined
+		in net/kpi_interface.h.  Caller may set this to NULL.
+	@param length_p Upon successful return, *length_p will contain
+		the length of the driver auxiliary data.  Caller may
+		set this to NULL.
+	@param data_p Upon successful return, *data_p will point to the
+		space allocated for the data.
+	@result 0 upon success otherwise the errno error.
+ */
+extern errno_t mbuf_find_drvaux(mbuf_t mbuf, u_int32_t *family_p,
+    u_int32_t *subfamily_p, u_int32_t *length_p, void **data_p);
+
+/*
+	@function mbuf_del_drvaux
+	@discussion Remove and free any driver auxility data associated
+		with the packet.
+	@param mbuf The mbuf the auxiliary data is attached to.
+ */
+extern void mbuf_del_drvaux(mbuf_t mbuf);
+#endif /* KERNEL_PRIVATE */
+
 /* mbuf stats */
 
 /*!
@@ -1386,7 +1446,7 @@ extern mbuf_traffic_class_t mbuf_get_traffic_class(mbuf_t mbuf);
 	@discussion Set the traffic class of an mbuf packet.
 	@param mbuf The mbuf to set the traffic class on.
 	@tc The traffic class
-	@result 0 on success, EINVAL if bad paramater is passed
+	@result 0 on success, EINVAL if bad parameter is passed
 */
 extern errno_t mbuf_set_traffic_class(mbuf_t mbuf, mbuf_traffic_class_t tc);
 
@@ -1400,6 +1460,24 @@ extern errno_t mbuf_set_traffic_class(mbuf_t mbuf, mbuf_traffic_class_t tc);
 extern int mbuf_is_traffic_class_privileged(mbuf_t mbuf);
 
 #ifdef KERNEL_PRIVATE
+
+/*!
+	@function mbuf_get_traffic_class_max_count
+	@discussion Returns the maximum number of mbuf traffic class types
+	@result The total count of mbuf traffic classes
+ */
+extern u_int32_t mbuf_get_traffic_class_max_count(void);
+
+/*!
+	@function mbuf_get_traffic_class_index
+	@discussion Returns the zero-based index of an mbuf traffic class value
+	@param tc The traffic class
+	@param index Pointer to the index value
+	@result 0 on success, EINVAL if bad parameter is passed
+ */
+extern errno_t mbuf_get_traffic_class_index(mbuf_traffic_class_t tc,
+    u_int32_t *index);
+
 /*!
 	@enum mbuf_svc_class_t
 	@abstract Service class of a packet
@@ -1459,6 +1537,23 @@ typedef enum {
 } mbuf_svc_class_t;
 
 /*!
+	@function mbuf_get_service_class_max_count
+	@discussion Returns the maximum number of mbuf service class types.
+	@result The total count of mbuf service classes.
+ */
+extern u_int32_t mbuf_get_service_class_max_count(void);
+
+/*!
+	@function mbuf_get_service_class_index
+	@discussion Returns the zero-based index of an mbuf service class value
+	@param sc The service class
+	@param index Pointer to the index value
+	@result 0 on success, EINVAL if bad parameter is passed
+ */
+extern errno_t mbuf_get_service_class_index(mbuf_svc_class_t sc,
+    u_int32_t *index);
+
+/*!
 	@function mbuf_get_service_class
 	@discussion Get the service class of an mbuf packet
 	@param mbuf The mbuf to get the service class of.
@@ -1471,7 +1566,7 @@ extern mbuf_svc_class_t mbuf_get_service_class(mbuf_t mbuf);
 	@discussion Set the service class of an mbuf packet.
 	@param mbuf The mbuf to set the service class on.
 	@sc The service class
-	@result 0 on success, EINVAL if bad paramater is passed
+	@result 0 on success, EINVAL if bad parameter is passed
 */
 extern errno_t mbuf_set_service_class(mbuf_t mbuf, mbuf_svc_class_t sc);
 
@@ -1510,6 +1605,19 @@ typedef u_int32_t mbuf_pkthdr_aux_flags_t;
 */
 extern errno_t mbuf_pkthdr_aux_flags(mbuf_t mbuf,
     mbuf_pkthdr_aux_flags_t *paux_flags);
+
+/*
+	@function mbuf_get_driver_scratch
+	@discussion Returns a pointer to a driver specific area in the mbuf
+	@param m The mbuf whose driver scratch space is to be returned
+	@param area A pointer to a location to store the address of the
+		driver scratch space.  This value is guaranteed to be 32-bit
+		aligned.
+	@param area_ln A pointer to a location to store the total length of
+		the memory location.
+*/
+extern errno_t mbuf_get_driver_scratch(mbuf_t m, u_int8_t **area,
+    size_t *area_ln);
 #endif /* KERNEL_PRIVATE */
 
 /* IF_QUEUE interaction */

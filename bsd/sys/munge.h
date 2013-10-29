@@ -39,6 +39,7 @@ void munge_wl(const void *arg0 __unused, void *args);
 void munge_wwl(const void *arg0 __unused, void *args);
 void munge_wwlw(const void *arg0 __unused, void *args);
 void munge_wwlll(const void *arg0 __unused, void *args);
+void munge_wwllww(const void *arg0 __unused, void *args);
 void munge_wlw(const void *arg0 __unused, void *args);
 void munge_wlwwwll(const void *arg0 __unused, void *args);
 void munge_wlwwwllw(const void *arg0 __unused, void *args);
@@ -64,6 +65,8 @@ void munge_wws(const void *arg0 __unused, void *args);
 void munge_wwwsw(const void *arg0 __unused, void *args);
 void munge_llllll(const void *arg0 __unused, void *args __unused);
 void munge_l(const void *arg0 __unused, void *args __unused);
+void munge_ll(const void *arg0 __unused, void *args __unused);
 void munge_lw(const void *arg0 __unused, void *args);
 void munge_lwww(const void *arg0 __unused, void *args);
+void munge_wwlwww(const void *arg0 __unused, void *args);
 #endif /* __MUNGE_H__ */

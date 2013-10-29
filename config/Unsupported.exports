@@ -83,6 +83,7 @@ _hfs_getconverter
 _hfs_pickencoding
 _hfs_relconverter
 _host_get_special_port
+_host_get_exception_ports
 _host_priv_self
 _hz
 _ipc_kernel_map
@@ -159,10 +160,13 @@ _sleep
 _stack_privilege
 _task_get_special_port
 _task_resume
+_task_resume2
 _task_suspend
+_task_suspend2
 _thread_notrigger
 _thread_tid
 _tsleep
+_ubc_cs_blob_get
 _vfs_context_current
 _vfs_update_vfsstat
 _vm_allocate

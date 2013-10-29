@@ -7,26 +7,9 @@ export MakeInc_dir=${SRCROOT}/makedefs/MakeInc.dir
 include $(MakeInc_cmd)
 include $(MakeInc_def)
 
-INSTINC_SUBDIRS = \
+EXPINC_SUBDIRS = random
 
-INSTINC_SUBDIRS_I386 = \
-
-INSTINC_SUBDIRS_X86_64 = \
-
-EXPINC_SUBDIRS = \
-
-EXPINC_SUBDIRS_I386 = \
-
-EXPINC_SUBDIRS_X86_64 = \
-
-INSTALL_MI_LIST	= 
-
-INSTALL_MI_DIR = dev
-
-EXPORT_MI_LIST	= 
-
-EXPORT_MI_DIR = dev
-
+INST_SUBDIRS = dtrace
 
 include $(MakeInc_rule)
 include $(MakeInc_dir)

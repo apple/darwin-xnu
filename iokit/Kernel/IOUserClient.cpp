@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1998-2011 Apple Inc. All rights reserved.
+ * Copyright (c) 1998-2012 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -39,6 +39,7 @@
 #include <IOKit/IOLib.h>
 #include <IOKit/IOStatisticsPrivate.h>
 #include <IOKit/IOTimeStamp.h>
+#include <IOKit/system.h>
 #include <libkern/OSDebug.h>
 #include <sys/proc.h>
 #include <sys/kauth.h>
@@ -61,7 +62,7 @@ extern "C" {
 
 #define SCALAR64(x) ((io_user_scalar_t)((unsigned int)x))
 #define SCALAR32(x) ((uint32_t )x)
-#define ARG32(x)    ((void *)SCALAR32(x))
+#define ARG32(x)    ((void *)(uintptr_t)SCALAR32(x))
 #define REF64(x)    ((io_user_reference_t)((UInt64)(x)))
 #define REF32(x)    ((int)(x))
 
@@ -674,8 +675,10 @@ bool IOServiceUserNotification::handler( void * ref,
 	else
             pingMsg->msgHdr.msgh_local_port = NULL;
 
-        kr = mach_msg_send_from_kernel_proper( &pingMsg->msgHdr,
-                                        pingMsg->msgHdr.msgh_size);
+        kr = mach_msg_send_from_kernel_with_options( &pingMsg->msgHdr,
+						     pingMsg->msgHdr.msgh_size,
+						     (MACH_SEND_MSG | MACH_SEND_ALWAYS | MACH_SEND_IMPORTANCE),
+						     0);
 	if( port)
 	    iokit_release_port( port );
 
@@ -831,8 +834,10 @@ IOReturn IOServiceMessageUserNotification::handler( void * ref,
     pingMsg->ports[0].name = providerPort;
     thisPort = iokit_port_for_object( this, IKOT_IOKIT_OBJECT );
     pingMsg->msgHdr.msgh_local_port = thisPort;
-    kr = mach_msg_send_from_kernel_proper( &pingMsg->msgHdr,
-				    pingMsg->msgHdr.msgh_size);
+    kr = mach_msg_send_from_kernel_with_options( &pingMsg->msgHdr,
+						 pingMsg->msgHdr.msgh_size,
+						 (MACH_SEND_MSG | MACH_SEND_ALWAYS | MACH_SEND_IMPORTANCE),
+						 0);
     if( thisPort)
 	iokit_release_port( thisPort );
     if( providerPort)
@@ -880,6 +885,16 @@ void IOUserClient::setAsyncReference64(OSAsyncReference64 asyncRef,
 					 | (kIOUCAsync0Flags & asyncRef[kIOAsyncReservedIndex]);
     asyncRef[kIOAsyncCalloutFuncIndex]   = (io_user_reference_t) callback;
     asyncRef[kIOAsyncCalloutRefconIndex] = refcon;
+}
+
+void IOUserClient::setAsyncReference64(OSAsyncReference64 asyncRef,
+					mach_port_t wakePort,
+					mach_vm_address_t callback, io_user_reference_t refcon, task_t task)
+{
+    setAsyncReference64(asyncRef, wakePort, callback, refcon);
+    if (vm_map_is_64bit(get_task_map(task))) {
+            asyncRef[kIOAsyncReservedIndex] |= kIOUCAsync64Flag;
+    }
 }
 
 static OSDictionary * CopyConsoleUser(UInt32 uid)
@@ -944,7 +959,7 @@ IOReturn IOUserClient::clientHasPrivilege( void * securityToken,
                 sizeof(kIOClientPrivilegeForeground)))
     {
 	/* is graphics access denied for current task? */
-	if (proc_get_task_selfgpuacc_deny() != 0) 
+	if (proc_get_effective_task_policy(current_task(), TASK_POLICY_GPU_DENY) != 0)
 		return (kIOReturnNotPrivileged);
 	else 
 		return (kIOReturnSuccess);
@@ -1064,16 +1079,16 @@ bool IOUserClient::initWithTask(task_t owningTask,
 
 bool IOUserClient::reserve()
 {		
-	if(!reserved) {
-		reserved = IONew(ExpansionData, 1);
-		if (!reserved) {
-			return false;
-		}
+    if(!reserved) {
+	reserved = IONew(ExpansionData, 1);
+	if (!reserved) {
+	    return false;
 	}
-
-	IOStatisticsRegisterCounter();
-	
-	return true;
+    }
+    setTerminateDefer(NULL, true);
+    IOStatisticsRegisterCounter();
+    
+    return true;
 }
 
 void IOUserClient::free()
@@ -1179,7 +1194,6 @@ IOReturn IOUserClient::exportObjectToClient(task_t task,
     mach_port_name_t	name;
 
     name = IOMachPort::makeSendRightForTask( task, obj, IKOT_IOKIT_OBJECT );
-    assert( name );
 
     *(mach_port_name_t *)clientObj = name;
     return kIOReturnSuccess;
@@ -1273,8 +1287,20 @@ IOReturn IOUserClient::sendAsyncResult(OSAsyncReference reference,
     return (sendAsyncResult64(reference64, result, args64, numArgs));
 }
 
+IOReturn IOUserClient::sendAsyncResult64WithOptions(OSAsyncReference64 reference,
+                                        IOReturn result, io_user_reference_t args[], UInt32 numArgs, IOOptionBits options)
+{
+	return _sendAsyncResult64(reference, result, args, numArgs, options);
+}
+
 IOReturn IOUserClient::sendAsyncResult64(OSAsyncReference64 reference,
                                         IOReturn result, io_user_reference_t args[], UInt32 numArgs)
+{
+        return _sendAsyncResult64(reference, result, args, numArgs, 0);
+}
+
+IOReturn IOUserClient::_sendAsyncResult64(OSAsyncReference64 reference,
+                                        IOReturn result, io_user_reference_t args[], UInt32 numArgs, IOOptionBits options)
 {
     struct ReplyMsg
     {
@@ -1347,9 +1373,15 @@ IOReturn IOUserClient::sendAsyncResult64(OSAsyncReference64 reference,
 	    replyMsg.m.msg32.args[idx] = REF32(args[idx]);
     }
 
-     kr = mach_msg_send_from_kernel_proper( &replyMsg.msgHdr,
-            replyMsg.msgHdr.msgh_size);
-    if( KERN_SUCCESS != kr)
+	if ((options & kIOUserNotifyOptionCanDrop) != 0) { 
+		kr = mach_msg_send_from_kernel_with_options( &replyMsg.msgHdr,
+										 replyMsg.msgHdr.msgh_size, MACH_SEND_TIMEOUT, MACH_MSG_TIMEOUT_NONE);
+	} else {
+		/* Fail on full queue. */
+		kr = mach_msg_send_from_kernel_proper( &replyMsg.msgHdr,
+										 replyMsg.msgHdr.msgh_size);
+	}
+    if ((KERN_SUCCESS != kr) && (MACH_SEND_TIMED_OUT != kr))
         IOLog("%s: mach_msg_send_from_kernel_proper {%x}\n", __FILE__, kr );
     return kr;
 }
@@ -1954,7 +1986,7 @@ kern_return_t is_io_service_acknowledge_notification(
 {
     CHECK( IOService, _service, service );
 
-    return( service->acknowledgeNotification( (IONotificationRef) notify_ref,
+    return( service->acknowledgeNotification( (IONotificationRef)(uintptr_t) notify_ref,
                                               (IOOptionBits) response ));
     
 }
@@ -2368,13 +2400,16 @@ kern_return_t is_io_registry_entry_set_properties
 
     CHECK( IORegistryEntry, registry_entry, entry );
 
+    if( propertiesCnt > sizeof(io_struct_inband_t) * 1024)
+        return( kIOReturnMessageTooLarge);
+
     err = vm_map_copyout( kernel_map, &map_data, (vm_map_copy_t) properties );
     data = CAST_DOWN(vm_offset_t, map_data);
 
     if( KERN_SUCCESS == err) {
 
         // must return success after vm_map_copyout() succeeds
-        obj = OSUnserializeXML( (const char *) data );
+        obj = OSUnserializeXML( (const char *) data, propertiesCnt );
 	vm_deallocate( kernel_map, data, propertiesCnt );
 
 	if (!obj)
@@ -2505,13 +2540,16 @@ kern_return_t is_io_service_open_extended(
 	    vm_offset_t     data;
 	    vm_map_offset_t map_data;
 
+	    if( propertiesCnt > sizeof(io_struct_inband_t))
+		return( kIOReturnMessageTooLarge);
+
 	    err = vm_map_copyout( kernel_map, &map_data, (vm_map_copy_t) properties );
 	    res = err;
 	    data = CAST_DOWN(vm_offset_t, map_data);
 	    if (KERN_SUCCESS == err)
 	    {
 		// must return success after vm_map_copyout() succeeds
-		obj = OSUnserializeXML( (const char *) data );
+		obj = OSUnserializeXML( (const char *) data, propertiesCnt );
 		vm_deallocate( kernel_map, data, propertiesCnt );
 		propertiesDict = OSDynamicCast(OSDictionary, obj);
 		if (!propertiesDict)
@@ -2572,6 +2610,7 @@ kern_return_t is_io_service_open_extended(
 		client->setProperty(kIOUserClientCreatorKey, creatorName);
 		creatorName->release();
 	    }
+	    client->setTerminateDefer(service, false);
 	}
     }
     while (false);
@@ -2675,7 +2714,6 @@ kern_return_t is_io_connect_map_memory_into_task
 	    mach_port_name_t name __unused =
 		IOMachPort::makeSendRightForTask(
                                     into_task, map, IKOT_IOKIT_OBJECT );
-            assert( name );
 
         } else {
             // keep it with the user client
@@ -3679,25 +3717,25 @@ kern_return_t shim_io_connect_method_scalarI_structureI(
 	    case 4:
 		err = (object->*func)( ARG32(input[0]), ARG32(input[1]), (void *)  input[2],
 					ARG32(input[3]),
-					inputStruct, (void *)inputStructCount );
+					inputStruct, (void *)(uintptr_t)inputStructCount );
 		break;
 	    case 3:
 		err = (object->*func)( ARG32(input[0]), ARG32(input[1]), ARG32(input[2]),
-					inputStruct, (void *)inputStructCount,
+					inputStruct, (void *)(uintptr_t)inputStructCount,
 					0 );
 		break;
 	    case 2:
 		err = (object->*func)( ARG32(input[0]), ARG32(input[1]),
-					inputStruct, (void *)inputStructCount,
+					inputStruct, (void *)(uintptr_t)inputStructCount,
 					0, 0 );
 		break;
 	    case 1:
 		err = (object->*func)( ARG32(input[0]),
-					inputStruct, (void *)inputStructCount,
+					inputStruct, (void *)(uintptr_t)inputStructCount,
 					0, 0, 0 );
 		break;
 	    case 0:
-		err = (object->*func)( inputStruct, (void *)inputStructCount,
+		err = (object->*func)( inputStruct, (void *)(uintptr_t)inputStructCount,
 					0, 0, 0, 0 );
 		break;
 
@@ -3758,29 +3796,29 @@ kern_return_t shim_io_async_method_scalarI_structureI(
                 err = (object->*func)(	reference,
                                         ARG32(input[0]), ARG32(input[1]), ARG32(input[2]),
                                         ARG32(input[3]),
-                                        inputStruct, (void *)inputStructCount );
+                                        inputStruct, (void *)(uintptr_t)inputStructCount );
                 break;
             case 3:
                 err = (object->*func)(	reference,
                                         ARG32(input[0]), ARG32(input[1]), ARG32(input[2]),
-                                        inputStruct, (void *)inputStructCount,
+                                        inputStruct, (void *)(uintptr_t)inputStructCount,
                                         0 );
                 break;
             case 2:
                 err = (object->*func)(	reference,
                                         ARG32(input[0]), ARG32(input[1]),
-                                        inputStruct, (void *)inputStructCount,
+                                        inputStruct, (void *)(uintptr_t)inputStructCount,
                                         0, 0 );
                 break;
             case 1:
                 err = (object->*func)(	reference,
                                         ARG32(input[0]),
-                                        inputStruct, (void *)inputStructCount,
+                                        inputStruct, (void *)(uintptr_t)inputStructCount,
                                         0, 0, 0 );
                 break;
             case 0:
                 err = (object->*func)(	reference,
-                                        inputStruct, (void *)inputStructCount,
+                                        inputStruct, (void *)(uintptr_t)inputStructCount,
                                         0, 0, 0, 0 );
                 break;
 
@@ -3845,12 +3883,12 @@ kern_return_t shim_io_connect_method_structureI_structureO(
 	if( method->count1) {
 	    if( method->count0) {
 		err = (object->*func)( input, output,
-					(void *)inputCount, outputCount, 0, 0 );
+					(void *)(uintptr_t)inputCount, outputCount, 0, 0 );
 	    } else {
 		err = (object->*func)( output, outputCount, 0, 0, 0, 0 );
 	    }
 	} else {
-		err = (object->*func)( input, (void *)inputCount, 0, 0, 0, 0 );
+		err = (object->*func)( input, (void *)(uintptr_t)inputCount, 0, 0, 0, 0 );
 	}
     }
     while( false);
@@ -3900,14 +3938,14 @@ kern_return_t shim_io_async_method_structureI_structureO(
             if( method->count0) {
                 err = (object->*func)( reference,
                                        input, output,
-                                        (void *)inputCount, outputCount, 0, 0 );
+                                        (void *)(uintptr_t)inputCount, outputCount, 0, 0 );
             } else {
                 err = (object->*func)( reference,
                                        output, outputCount, 0, 0, 0, 0 );
             }
         } else {
                 err = (object->*func)( reference,
-                                       input, (void *)inputCount, 0, 0, 0, 0 );
+                                       input, (void *)(uintptr_t)inputCount, 0, 0, 0, 0 );
         }
     }
     while( false);
@@ -3943,6 +3981,9 @@ kern_return_t is_io_catalog_send_data(
     if (inData) {
         vm_map_offset_t map_data;
 
+        if( inDataCount > sizeof(io_struct_inband_t) * 1024)
+            return( kIOReturnMessageTooLarge);
+
         kr = vm_map_copyout( kernel_map, &map_data, (vm_map_copy_t)inData);
 		data = CAST_DOWN(vm_offset_t, map_data);
 
@@ -3952,7 +3993,7 @@ kern_return_t is_io_catalog_send_data(
         // must return success after vm_map_copyout() succeeds
 
         if( inDataCount ) {
-            obj = (OSObject *)OSUnserializeXML((const char *)data);
+            obj = (OSObject *)OSUnserializeXML((const char *)data, inDataCount);
             vm_deallocate( kernel_map, data, inDataCount );
             if( !obj) {
                 *result = kIOReturnNoMemory;
@@ -3968,7 +4009,7 @@ kern_return_t is_io_catalog_send_data(
 
                 array = OSDynamicCast(OSArray, obj);
                 if (array) {
-                    if ( !gIOCatalogue->resetAndAddDrivers(array, 
+                   if ( !gIOCatalogue->resetAndAddDrivers(array,
                         flag == kIOCatalogResetDrivers) ) {
 
                         kr = kIOReturnError;
@@ -4327,7 +4368,7 @@ IOReturn IOUserClient::externalMethod( uint32_t selector, IOExternalMethodArgume
     if (kIOUCForegroundOnly & method->flags)
     {
 	/* is graphics access denied for current task? */
-	if (proc_get_task_selfgpuacc_deny() != 0) 
+	if (proc_get_effective_task_policy(current_task(), TASK_POLICY_GPU_DENY) != 0)
             return (kIOReturnNotPermitted);
     }
 
@@ -4377,7 +4418,7 @@ IOReturn IOUserClient::externalMethod( uint32_t selector, IOExternalMethodArgume
     if (kIOUCForegroundOnly & method->flags)
     {
 	/* is graphics access denied for current task? */
-	if (proc_get_task_selfgpuacc_deny() != 0) 
+	if (proc_get_effective_task_policy(current_task(), TASK_POLICY_GPU_DENY) != 0)
             return (kIOReturnNotPermitted);
     
     }

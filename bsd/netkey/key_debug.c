@@ -558,8 +558,9 @@ kdebug_secpolicyindex(spidx)
 	if (spidx == NULL)
 		panic("kdebug_secpolicyindex: NULL pointer was passed.\n");
 
-	printf("secpolicyindex{ dir=%u prefs=%u prefd=%u ul_proto=%u\n",
-		spidx->dir, spidx->prefs, spidx->prefd, spidx->ul_proto);
+	printf("secpolicyindex{ dir=%u prefs=%u prefd=%u ul_proto=%u internal_if=%s\n",
+		spidx->dir, spidx->prefs, spidx->prefd, spidx->ul_proto,
+           (spidx->internal_if) ? spidx->internal_if->if_xname : "N/A");
 
 	ipsec_hexdump((caddr_t)&spidx->src,
 		((struct sockaddr *)&spidx->src)->sa_len);
@@ -671,21 +672,27 @@ kdebug_mbufhdr(m)
 	if (m == NULL)
 		return;
 
-	printf("mbuf(%p){ m_next:%p m_nextpkt:%p m_data:%p "
-	       "m_len:%d m_type:0x%02x m_flags:0x%02x }\n",
-		m, m->m_next, m->m_nextpkt, m->m_data,
-		m->m_len, m->m_type, m->m_flags);
+	printf("mbuf(0x%llx){ m_next:0x%llx m_nextpkt:0x%llx m_data:0x%llx "
+	    "m_len:%d m_type:0x%02x m_flags:0x%02x }\n",
+	    (uint64_t)VM_KERNEL_ADDRPERM(m),
+	    (uint64_t)VM_KERNEL_ADDRPERM(m->m_next),
+	    (uint64_t)VM_KERNEL_ADDRPERM(m->m_nextpkt),
+	    (uint64_t)VM_KERNEL_ADDRPERM(m->m_data),
+	    m->m_len, m->m_type, m->m_flags);
 
 	if (m->m_flags & M_PKTHDR) {
-		printf("  m_pkthdr{ len:%d rcvif:%p }\n",
-		    m->m_pkthdr.len, m->m_pkthdr.rcvif);
+		printf("  m_pkthdr{ len:%d rcvif:0x%llx }\n",
+		    m->m_pkthdr.len,
+		    (uint64_t)VM_KERNEL_ADDRPERM(m->m_pkthdr.rcvif));
 	}
 
 	if (m->m_flags & M_EXT) {
-		printf("  m_ext{ ext_buf:%p ext_free:%p "
-		       "ext_size:%u ext_ref:%p }\n",
-			m->m_ext.ext_buf, m->m_ext.ext_free,
-			m->m_ext.ext_size, m->m_ext.ext_refs);
+		printf("  m_ext{ ext_buf:0x%llx ext_free:0x%llx "
+		       "ext_size:%u ext_ref:0x%llx }\n",
+			(uint64_t)VM_KERNEL_ADDRPERM(m->m_ext.ext_buf),
+			(uint64_t)VM_KERNEL_ADDRPERM(m->m_ext.ext_free),
+			m->m_ext.ext_size,
+			(uint64_t)VM_KERNEL_ADDRPERM(m->m_ext.ext_refs));
 	}
 
 	return;

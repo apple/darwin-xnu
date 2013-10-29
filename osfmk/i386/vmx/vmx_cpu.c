@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2006 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2006-2012 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -211,11 +211,6 @@ vmx_on(void *arg __unused)
 	assert(vmx_is_cr0_valid(&cpu->specs));
 	assert(vmx_is_cr4_valid(&cpu->specs));
 	
-#if defined(__i386__)
-	if (!cpu_mode_is64bit())
-		result = VMX_FAIL_INVALID; /* Not supported in legacy mode */
-	else
-#endif
 	result = __vmxon(vmxon_region_paddr);
 
 	if (result != VMX_SUCCEED) {
@@ -233,16 +228,13 @@ vmx_off(void *arg __unused)
 	int result;
 	
 	/* Tell the CPU to release the VMXON region */
-#if defined(__i386__)
-	if (!cpu_mode_is64bit())
-		result = VMX_FAIL_INVALID; /* Not supported in legacy mode */
-	else
-#endif
 	result = __vmxoff();
 
 	if (result != VMX_SUCCEED) {
 		panic("vmx_off: unexpected return %d from __vmxoff()", result);
 	}
+
+	set_cr4(get_cr4() & ~CR4_VMXE);
 }
 
 /* -----------------------------------------------------------------------------

@@ -92,6 +92,7 @@ typedef struct ipc_mqueue {
 			mach_port_seqno_t 	seqno;
 			mach_port_name_t	receiver_name;
 			boolean_t		fullwaiters;
+			natural_t		pset_count;
 		} port;
 		struct {
 			struct wait_queue_set	set_queue;
@@ -109,6 +110,7 @@ typedef struct ipc_mqueue {
 #define imq_seqno		data.port.seqno
 #define imq_receiver_name	data.port.receiver_name
 #define imq_fullwaiters		data.port.fullwaiters
+#define imq_pset_count		data.port.pset_count
 
 #define imq_set_queue		data.pset.set_queue
 #define imq_setlinks		data.pset.set_queue.wqs_setlinks
@@ -182,6 +184,13 @@ extern mach_msg_return_t ipc_mqueue_send(
 	mach_msg_timeout_t	timeout_val,
 	spl_t			s);
 
+/* check for queue send queue full of a port */
+extern mach_msg_return_t ipc_mqueue_preflight_send(
+	ipc_mqueue_t		mqueue,
+	ipc_kmsg_t		kmsg,
+	mach_msg_option_t	option,
+	mach_msg_timeout_t	timeout_val);
+
 /* Deliver message to message queue or waiting receiver */
 extern void ipc_mqueue_post(
 	ipc_mqueue_t		mqueue,
@@ -218,7 +227,22 @@ extern void ipc_mqueue_select_on_thread(
 
 /* Peek into a messaqe queue to see if there are messages */
 extern unsigned ipc_mqueue_peek(
+	ipc_mqueue_t		mqueue,
+	mach_port_seqno_t	*msg_seqnop,
+	mach_msg_size_t		*msg_sizep,
+	mach_msg_id_t		*msg_idp,
+	mach_msg_max_trailer_t	*msg_trailerp);
+
+/* Peek into a messaqe queue set to see if there are queues with messages */
+extern unsigned ipc_mqueue_set_peek(
 	ipc_mqueue_t		mqueue);
+
+/* Gather the names of member port for a given set */
+extern void ipc_mqueue_set_gather_member_names(
+	ipc_mqueue_t		mqueue,
+	ipc_entry_num_t		maxnames,
+	mach_port_name_t	*names,
+	ipc_entry_num_t		*actualp);
 
 /* Clear a message count reservation */
 extern void ipc_mqueue_release_msgcount(

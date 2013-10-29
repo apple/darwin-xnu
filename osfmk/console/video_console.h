@@ -103,14 +103,12 @@ int vc_display_lzss_icon(uint32_t dst_x,       uint32_t dst_y,
                      uint32_t       compressed_size, 
                      const uint8_t *clut);
 
-#if !CONFIG_EMBEDDED
 
 extern void vc_enable_progressmeter(int new_value);
 extern void vc_set_progressmeter(int new_value);
 extern int vc_progress_meter_enable;
 extern int vc_progress_meter_value;
 
-#endif /* !CONFIG_EMBEDDED */
 
 #ifdef __cplusplus
 }

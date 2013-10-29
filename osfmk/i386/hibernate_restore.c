@@ -43,7 +43,6 @@ hibernate_restore_phys_page(uint64_t src, uint64_t dst, uint32_t len, uint32_t p
 	(void)procFlags;
 	uint64_t * d;
 	uint64_t * s;
-	uint32_t idx;
 
 	if (src == 0)
 		return (uintptr_t)dst;
@@ -51,8 +50,7 @@ hibernate_restore_phys_page(uint64_t src, uint64_t dst, uint32_t len, uint32_t p
 	d = (uint64_t *)pal_hib_map(DEST_COPY_AREA, dst);
 	s = (uint64_t *) (uintptr_t)src;
 
-	for (idx = 0; idx < (len / (uint32_t)sizeof(uint64_t)); idx++) 
-		d[idx] = s[idx];
+	memcpy(d, s, len);
 
 	return (uintptr_t)d;
 }
@@ -74,11 +72,17 @@ pal_hib_map(uintptr_t virt, uint64_t phys)
 	case IMAGE_AREA:
 	case IMAGE2_AREA:
 	    break;
+
 	default:
 	    asm("cli;hlt;");
 	    break;
     }
-
+    if (phys < IMAGE2_AREA)
+    {
+    	// first 4Gb is all mapped,
+	// and do not expect source areas to cross 4Gb
+        return (phys);
+    }
     index = (virt >> I386_LPGSHIFT);
     virt += (uintptr_t)(phys & I386_LPGMASK);
     phys  = ((phys & ~((uint64_t)I386_LPGMASK)) | INTEL_PTE_PS  | INTEL_PTE_VALID | INTEL_PTE_WRITE);

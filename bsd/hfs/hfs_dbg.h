@@ -80,7 +80,6 @@ extern void Debugger(const char *message);
 #endif
 
 
-//#define PRINT_DELAY (void) tsleep((caddr_t)&lbolt, PPAUSE, "hfs kprintf", 0)
 #define PRINT_DELAY
 
 /*

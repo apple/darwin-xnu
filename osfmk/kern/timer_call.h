@@ -33,10 +33,18 @@
 #define _KERN_TIMER_CALL_H_
 
 #include <mach/mach_types.h>
+#include <kern/kern_types.h>
 
-#ifdef MACH_KERNEL_PRIVATE
+#ifdef XNU_KERNEL_PRIVATE
 
 #include <kern/call_entry.h>
+
+#ifdef MACH_KERNEL_PRIVATE
+#include <kern/queue.h>
+
+extern boolean_t mach_timer_coalescing_enabled;
+extern void timer_call_queue_init(mpqueue_head_t *);
+#endif
 
 /*
  * NOTE: for now, bsd/dev/dtrace/dtrace_glue.c has its own definition
@@ -50,39 +58,81 @@ typedef struct timer_call {
 	boolean_t		async_dequeue;	/* this field is protected by
 						   call_entry queue's lock */
 	uint64_t		ttd; /* Time to deadline at creation */
-} *timer_call_t;
+} timer_call_data_t, *timer_call_t;
 
-typedef void				*timer_call_param_t;
-typedef void				(*timer_call_func_t)(
-									timer_call_param_t		param0,
-									timer_call_param_t		param1);
-#define TIMER_CALL_CRITICAL	0x01
-#define TIMER_CALL_LOCAL	0x02
+#define EndOfAllTime		0xFFFFFFFFFFFFFFFFULL
+
+typedef void		*timer_call_param_t;
+typedef void		(*timer_call_func_t)(
+				timer_call_param_t	param0,
+				timer_call_param_t	param1);
+
+/*
+ * Flags to alter the default timer/timeout coalescing behavior
+ * on a per-timer_call basis.
+ *
+ * The SYS urgency classes indicate that the timer_call is not
+ * directly related to the current thread at the time the timer_call
+ * is entered, so it is ignored in the calculation entirely (only
+ * the subclass specified is used).
+ *
+ * The USER flags indicate that both the current thread scheduling and QoS
+ * attributes, in addition to the per-timer_call urgency specification,
+ * are used to establish coalescing behavior.
+ */
+#define TIMER_CALL_SYS_NORMAL		TIMEOUT_URGENCY_SYS_NORMAL
+#define TIMER_CALL_SYS_CRITICAL		TIMEOUT_URGENCY_SYS_CRITICAL
+#define TIMER_CALL_SYS_BACKGROUND	TIMEOUT_URGENCY_SYS_BACKGROUND
+
+#define TIMER_CALL_USER_MASK		TIMEOUT_URGENCY_USER_MASK
+#define TIMER_CALL_USER_NORMAL		TIMEOUT_URGENCY_USER_NORMAL
+#define TIMER_CALL_USER_CRITICAL	TIMEOUT_URGENCY_USER_CRITICAL
+#define TIMER_CALL_USER_BACKGROUND	TIMEOUT_URGENCY_USER_BACKGROUND
+
+#define TIMER_CALL_URGENCY_MASK		TIMEOUT_URGENCY_MASK
+
+/*
+ * Indicate that a specific leeway value is being provided (otherwise
+ * the leeway parameter is ignored).  This supplied value can currently
+ * only be used to extend the leeway calculated internally from the
+ * urgency class provided.
+ */
+#define TIMER_CALL_LEEWAY		TIMEOUT_URGENCY_LEEWAY
+
+/*
+ * Non-migratable timer_call
+ */
+#define TIMER_CALL_LOCAL		TIMEOUT_URGENCY_FIRST_AVAIL
+
 extern boolean_t	timer_call_enter(
-						timer_call_t	call,
-						uint64_t	deadline,
-						uint32_t	flags);
+				timer_call_t	call,
+				uint64_t	deadline,
+				uint32_t	flags);
 
 extern boolean_t	timer_call_enter1(
+				timer_call_t		call,
+				timer_call_param_t	param1,
+				uint64_t		deadline,
+				uint32_t 		flags);
+
+extern boolean_t	timer_call_enter_with_leeway(
 						timer_call_t		call,
 						timer_call_param_t	param1,
 						uint64_t		deadline,
-						uint32_t 		flags);
+						uint64_t		leeway,
+						uint32_t 		flags,
+						boolean_t		ratelimited);
 
 extern boolean_t	timer_call_cancel(
-						timer_call_t	call);
+				timer_call_t	call);
 
-typedef struct timer_call 	timer_call_data_t;
-
-extern void		timer_call_initialize(void);
-
-extern void		timer_call_initialize_queue(mpqueue_head_t *);
+extern void		timer_call_init(void);
 
 extern void		timer_call_setup(
-					timer_call_t		call,
-					timer_call_func_t	func,
-					timer_call_param_t	param0);
+				timer_call_t		call,
+				timer_call_func_t	func,
+				timer_call_param_t	param0);
 
-#endif /* MACH_KERNEL_PRIVATE */
+#endif /* XNU_KERNEL_PRIVATE */
 
 #endif /* _KERN_TIMER_CALL_H_ */

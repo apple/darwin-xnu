@@ -37,6 +37,7 @@
 #include <sys/kernel.h>
 #include <sys/sysctl.h>
 #include <sys/mbuf.h>
+#include <sys/mcache.h>
 #include <sys/malloc.h>
 #include <sys/socket.h>
 #include <sys/socketvar.h>
@@ -56,15 +57,17 @@
 #include <netkey/key_debug.h>
 
 extern lck_mtx_t *raw_mtx;
-extern void key_init(void) __attribute__((section("__TEXT, initcode")));
+extern void key_init(struct protosw *, struct domain *);
 
 struct sockaddr key_dst = { 2, PF_KEY, {0,0,0,0,0,0,0,0,0,0,0,0,0,0,} };
 struct sockaddr key_src = { 2, PF_KEY, {0,0,0,0,0,0,0,0,0,0,0,0,0,0,} };
 
+static void key_dinit(struct domain *);
 static int key_sendup0(struct rawcb *, struct mbuf *, int);
 
 struct pfkeystat pfkeystat;
 
+static struct domain *keydomain = NULL;
 
 extern lck_mtx_t *pfkey_stat_mutex;
 
@@ -492,14 +495,19 @@ key_sockaddr(struct socket *so, struct sockaddr **nam)
 	return error;
 }
 
-struct pr_usrreqs key_usrreqs = {
-	key_abort, pru_accept_notsupp, key_attach, key_bind,
-	key_connect,
-	pru_connect2_notsupp, pru_control_notsupp, key_detach,
-	key_disconnect, pru_listen_notsupp, key_peeraddr,
-	pru_rcvd_notsupp,
-	pru_rcvoob_notsupp, key_send, pru_sense_null, key_shutdown,
-	key_sockaddr, sosend, soreceive, pru_sopoll_notsupp
+static struct pr_usrreqs key_usrreqs = {
+	.pru_abort =		key_abort,
+	.pru_attach =		key_attach,
+	.pru_bind =		key_bind,
+	.pru_connect =		key_connect,
+	.pru_detach =		key_detach,
+	.pru_disconnect =	key_disconnect,
+	.pru_peeraddr =		key_peeraddr,
+	.pru_send =		key_send,
+	.pru_shutdown =		key_shutdown,
+	.pru_sockaddr =		key_sockaddr,
+	.pru_sosend =		sosend,
+	.pru_soreceive =	soreceive,
 };
 
 /* sysctl */
@@ -509,25 +517,40 @@ SYSCTL_NODE(_net, PF_KEY, key, CTLFLAG_RW|CTLFLAG_LOCKED, 0, "Key Family");
  * Definitions of protocols supported in the KEY domain.
  */
 
-extern struct domain keydomain;
+extern struct domain keydomain_s;
 
-struct protosw keysw[] = {
-{ SOCK_RAW,	&keydomain,	PF_KEY_V2,	PR_ATOMIC|PR_ADDR,
-  NULL,		key_output,	raw_ctlinput,	NULL,
-  NULL,
-  key_init,	NULL,		NULL,		NULL,
-  NULL,
-  &key_usrreqs,
-  NULL,		NULL,		NULL,
-  { NULL, NULL }, NULL, { 0 }
+static struct protosw keysw[] = {
+{
+	.pr_type =		SOCK_RAW,
+	.pr_protocol =		PF_KEY_V2,
+	.pr_flags =		PR_ATOMIC|PR_ADDR,
+	.pr_output =		key_output,
+	.pr_ctlinput =		raw_ctlinput,
+	.pr_init =		key_init,
+	.pr_usrreqs =		&key_usrreqs,
 }
 };
 
-struct domain keydomain = { PF_KEY, "key", key_domain_init, NULL, NULL,
-      keysw, NULL,
-      NULL, 0,
-      sizeof(struct key_cb), 0, 0,
-      NULL, 0, { 0, 0}
+static int key_proto_count = (sizeof (keysw) / sizeof (struct protosw));
+
+struct domain keydomain_s = {
+	.dom_family =		PF_KEY,
+	.dom_name =		"key",
+	.dom_init =		key_dinit,
+	.dom_maxrtkey =		sizeof (struct key_cb),
 };
 
-DOMAIN_SET(key);
+static void
+key_dinit(struct domain *dp)
+{
+	struct protosw *pr;
+	int i;
+
+	VERIFY(!(dp->dom_flags & DOM_INITIALIZED));
+	VERIFY(keydomain == NULL);
+
+	keydomain = dp;
+
+	for (i = 0, pr = &keysw[0]; i < key_proto_count; i++, pr++)
+		net_add_proto(pr, dp, 1);
+}

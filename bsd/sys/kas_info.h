@@ -46,7 +46,7 @@ __BEGIN_DECLS
 
 #ifndef KERNEL
 
-int kas_info(int selector, void *value, size_t *size) __OSX_AVAILABLE_STARTING(__MAC_10_8, __IPHONE_NA);
+int kas_info(int selector, void *value, size_t *size) __OSX_AVAILABLE_STARTING(__MAC_10_8, __IPHONE_6_0);
 
 #endif /* KERNEL */
 

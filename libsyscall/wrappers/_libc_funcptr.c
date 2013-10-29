@@ -26,47 +26,47 @@
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 
-#include <mach/mach.h>
-#include <mach/mach_init.h>
+#include "_libkernel_init.h"
+extern _libkernel_functions_t _libkernel_functions;
 
-extern void (*_libc_set_errno)(int);
-
-static mach_port_t (*_libc_get_reply_port)(void);
-static void (*_libc_set_reply_port)(mach_port_t);
-
-/* 
- * Called at Libsystem initialise time, sets up callbacks we
- * need to get at thread variables inside of Libc
- */
-void
-_mig_reply_port_callbacks(mach_port_t (*get)(void), void (*set)(mach_port_t))
+__attribute__((visibility("hidden")))
+void *
+malloc(size_t size)
 {
-	_libc_get_reply_port = get;
-	_libc_set_reply_port = set;
+	return _libkernel_functions->malloc(size);
 }
 
-mach_port_t _mig_get_reply_port(void) __attribute__((visibility("hidden")));
-mach_port_t
-_mig_get_reply_port()
+__attribute__((visibility("hidden")))
+void
+free(void *ptr)
 {
-	return _libc_get_reply_port();
+	return _libkernel_functions->free(ptr);
 }
 
-void _mig_set_reply_port(mach_port_t port) __attribute__((visibility("hidden")));
-void
-_mig_set_reply_port(mach_port_t port)
+__attribute__((visibility("hidden")))
+void *
+realloc(void *ptr, size_t size)
 {
-	_libc_set_reply_port(port);
+	return _libkernel_functions->realloc(ptr, size);
 }
 
-void cthread_set_errno_self(int errno) __attribute__((visibility("hidden")));
-void
-cthread_set_errno_self(int errno)
+__attribute__((visibility("hidden")))
+void *
+reallocf(void *ptr, size_t size)
 {
-	_libc_set_errno(errno);
+	void *nptr = realloc(ptr, size);
+	if (!nptr && ptr)
+		free(ptr);
+	return (nptr);
 }
 
-
-void _pthread_set_self(void* ptr) __attribute__((visibility("hidden")));
+__attribute__((visibility("hidden")))
 void
-_pthread_set_self(void* ptr) {}
+_pthread_exit_if_canceled(int error)
+{
+	return _libkernel_functions->_pthread_exit_if_canceled(error);
+}
+
+__attribute__((visibility("hidden")))
+void
+_pthread_set_self(void *ptr __attribute__((__unused__))) {}

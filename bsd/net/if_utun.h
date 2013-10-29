@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008-2011 Apple Inc. All rights reserved.
+ * Copyright (c) 2008-2013 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -30,7 +30,9 @@
 #ifndef	_NET_IF_UTUN_H_
 #define	_NET_IF_UTUN_H_
 
+#ifdef PRIVATE
 #include <net/if_utun_crypto.h>
+#endif /* PRIVATE */
 
 #ifdef KERNEL_PRIVATE
 
@@ -65,6 +67,8 @@ errno_t utun_register_control(void);
 #define UTUN_OPT_EXT_IFDATA_STATS				3	/* get|set (type int) */
 #define UTUN_OPT_INC_IFDATA_STATS_IN			4	/* set to increment stat counters (type struct utun_stats_param) */ 
 #define UTUN_OPT_INC_IFDATA_STATS_OUT			5	/* set to increment stat counters (type struct utun_stats_param) */ 
+
+#ifdef PRIVATE
 #define UTUN_OPT_ENABLE_CRYPTO					6
 #define UTUN_OPT_CONFIG_CRYPTO_KEYS				7
 #define UTUN_OPT_UNCONFIG_CRYPTO_KEYS			8
@@ -72,22 +76,22 @@ errno_t utun_register_control(void);
 #define UTUN_OPT_DISABLE_CRYPTO					10
 #define UTUN_OPT_STOP_CRYPTO_DATA_TRAFFIC		11
 #define UTUN_OPT_START_CRYPTO_DATA_TRAFFIC		12
+#define UTUN_OPT_CONFIG_CRYPTO_FRAMER			13
+#define UTUN_OPT_UNCONFIG_CRYPTO_FRAMER			14
+#endif /* PRIVATE */
+
+#define UTUN_OPT_SET_DELEGATE_INTERFACE			15      /* set the delegate interface (char[]) */
 
 /*
  * Flags for by UTUN_OPT_FLAGS 
  */
 #define	UTUN_FLAGS_NO_OUTPUT		0x0001
 #define UTUN_FLAGS_NO_INPUT			0x0002
+
+#ifdef PRIVATE
 #define UTUN_FLAGS_CRYPTO			0x0004
 #define UTUN_FLAGS_CRYPTO_STOP_DATA_TRAFFIC	0x0008
-
-/*
- * utun packet type flags
- */
-#define UTUN_PKT_TYPE_KEEPALIVE					0x0001
-#define UTUN_PKT_TYPE_IPSEC						0x0002
-#define UTUN_PKT_TYPE_DTLS						0x0004
-
+#endif /* PRIVATE */
 
 /*
  * utun stats parameter structure

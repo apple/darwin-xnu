@@ -65,6 +65,12 @@ bool IODMAEventSource::init(OSObject *inOwner,
   return true;
 }
 
+void IODMAEventSource::free()
+{
+    if (dmaCommandsCompletedLock != NULL) IOSimpleLockFree(dmaCommandsCompletedLock);
+    super::free();
+}
+
 IODMAEventSource *IODMAEventSource::dmaEventSource(OSObject *inOwner,
 						   IOService *inProvider,
 						   Action inCompletion,
@@ -119,11 +125,27 @@ IOReturn IODMAEventSource::queryDMACommand(IODMACommand **dmaCommand, IOByteCoun
 }
 
 
-IOByteCount IODMAEventSource::getFIFODepth()
+IOByteCount IODMAEventSource::getFIFODepth(IODirection direction)
+{
+  if ((dmaController == 0) || (dmaIndex == 0xFFFFFFFF)) return 0;
+  
+  return dmaController->getFIFODepth(dmaIndex, direction);
+}
+
+
+IOReturn IODMAEventSource::setFIFODepth(IOByteCount depth)
 {
   if ((dmaController == 0) || (dmaIndex == 0xFFFFFFFF)) return kIOReturnError;
   
-  return dmaController->getFIFODepth(dmaIndex);
+  return dmaController->setFIFODepth(dmaIndex, depth);
+}
+
+
+IOByteCount IODMAEventSource::validFIFODepth(IOByteCount depth, IODirection direction)
+{
+  if ((dmaController == 0) || (dmaIndex == 0xFFFFFFFF)) return kIOReturnError;
+  
+  return dmaController->validFIFODepth(dmaIndex, depth, direction);
 }
 
 
@@ -145,7 +167,7 @@ bool IODMAEventSource::checkForWork(void)
   IOSimpleLockUnlock(dmaCommandsCompletedLock);
 
   if (work) {
-    (*dmaCompletionAction)(owner, this, dmaCommand, dmaCommand->reserved->fStatus, dmaCommand->reserved->fActualByteCount);
+    (*dmaCompletionAction)(owner, this, dmaCommand, dmaCommand->reserved->fStatus, dmaCommand->reserved->fActualByteCount, dmaCommand->reserved->fTimeStamp);
   }
   
   return again;
@@ -165,10 +187,21 @@ void IODMAEventSource::completeDMACommand(IODMACommand *dmaCommand)
   }
 }
 
-void IODMAEventSource::notifyDMACommand(IODMACommand *dmaCommand, IOReturn status, IOByteCount actualByteCount)
+void IODMAEventSource::notifyDMACommand(IODMACommand *dmaCommand, IOReturn status, IOByteCount actualByteCount, AbsoluteTime timeStamp)
 {
   dmaCommand->reserved->fStatus = status;
-  dmaCommand->reserved->fActualByteCount = actualByteCount;  
+  dmaCommand->reserved->fActualByteCount = actualByteCount;
+  dmaCommand->reserved->fTimeStamp = timeStamp;
   
-  if (dmaNotificationAction != 0) (*dmaNotificationAction)(owner, this, dmaCommand, status, actualByteCount);
+  if (dmaNotificationAction != 0) (*dmaNotificationAction)(owner, this, dmaCommand, status, actualByteCount, timeStamp);
+}
+
+IOReturn IODMAEventSource::setDMAConfig(UInt32 newReqIndex)
+{
+  return dmaController->setDMAConfig(dmaIndex, dmaProvider, newReqIndex);
+}
+
+bool IODMAEventSource::validDMAConfig(UInt32 newReqIndex)
+{
+  return dmaController->validDMAConfig(dmaIndex, dmaProvider, newReqIndex);
 }

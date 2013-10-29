@@ -386,7 +386,9 @@ stack_collect(void)
 			 * back in stack_alloc().
 			 */
 
-			stack = (vm_offset_t)vm_map_trunc_page(stack);
+			stack = (vm_offset_t)vm_map_trunc_page(
+				stack,
+				VM_MAP_PAGE_MASK(kernel_map));
 			stack -= PAGE_SIZE;
 			if (vm_map_remove(
 				    kernel_map,
@@ -551,9 +553,9 @@ processor_set_stack_usage(
 
 	/* OK, have memory and list is locked */
 	thread_list = (thread_t *) addr;
-	for (i = 0, thread = (thread_t) queue_first(&threads);
+	for (i = 0, thread = (thread_t)(void *) queue_first(&threads);
 					!queue_end(&threads, (queue_entry_t) thread);
-					thread = (thread_t) queue_next(&thread->threads)) {
+					thread = (thread_t)(void *) queue_next(&thread->threads)) {
 		thread_reference_internal(thread);
 		thread_list[i++] = thread;
 	}

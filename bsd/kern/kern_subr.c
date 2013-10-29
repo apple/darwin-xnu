@@ -126,11 +126,7 @@ int
 uiomove64(const addr64_t c_cp, int n, struct uio *uio)
 {
 	addr64_t cp = c_cp;
-#if LP64KERN
 	uint64_t acnt;
-#else
-	u_int acnt;
-#endif
 	int error = 0;
 
 #if DIAGNOSTIC
@@ -911,15 +907,16 @@ int uio_getiov( uio_t a_uio,
  * uio_calculateresid - runs through all iovecs associated with this
  *	uio_t and calculates (and sets) the residual IO count.
  */
-__private_extern__ void uio_calculateresid( uio_t a_uio )
+__private_extern__ int uio_calculateresid( uio_t a_uio )
 {
 	int			i;
+	u_int64_t		resid = 0;
 	
 	if (a_uio == NULL) {
 #if LP64_DEBUG
 		panic("%s :%d - invalid uio_t\n", __FILE__, __LINE__); 
 #endif /* LP64_DEBUG */
-		return;
+		return EINVAL;
 	}
 
 	a_uio->uio_iovcnt = a_uio->uio_max_iovs;
@@ -927,9 +924,14 @@ __private_extern__ void uio_calculateresid( uio_t a_uio )
 		a_uio->uio_resid_64 = 0;
 		for ( i = 0; i < a_uio->uio_max_iovs; i++ ) {
 			if (a_uio->uio_iovs.uiovp[i].iov_len != 0 && a_uio->uio_iovs.uiovp[i].iov_base != 0) {
-				a_uio->uio_resid_64 += a_uio->uio_iovs.uiovp[i].iov_len;
+				if (a_uio->uio_iovs.uiovp[i].iov_len > LONG_MAX)
+					return EINVAL; 
+				resid += a_uio->uio_iovs.uiovp[i].iov_len;
+				if (resid > LONG_MAX)
+					return EINVAL;
 			}
 		}
+		a_uio->uio_resid_64 = resid;
 
 		/* position to first non zero length iovec (4235922) */
 		while (a_uio->uio_iovcnt > 0 && a_uio->uio_iovs.uiovp->iov_len == 0) {
@@ -943,9 +945,14 @@ __private_extern__ void uio_calculateresid( uio_t a_uio )
 		a_uio->uio_resid_64 = 0;
 		for ( i = 0; i < a_uio->uio_max_iovs; i++ ) {
 			if (a_uio->uio_iovs.kiovp[i].iov_len != 0 && a_uio->uio_iovs.kiovp[i].iov_base != 0) {
-				a_uio->uio_resid_64 += a_uio->uio_iovs.kiovp[i].iov_len;
+				if (a_uio->uio_iovs.kiovp[i].iov_len > LONG_MAX)
+					return EINVAL;
+				resid += a_uio->uio_iovs.kiovp[i].iov_len;
+				if (resid > LONG_MAX)
+					return EINVAL;
 			}
 		}
+		a_uio->uio_resid_64 = resid;
 
 		/* position to first non zero length iovec (4235922) */
 		while (a_uio->uio_iovcnt > 0 && a_uio->uio_iovs.kiovp->iov_len == 0) {
@@ -956,7 +963,7 @@ __private_extern__ void uio_calculateresid( uio_t a_uio )
 		}
 	}
 
-	return;
+	return 0;
 }
 
 /*
@@ -1143,6 +1150,10 @@ uio_t uio_duplicate( uio_t a_uio )
 	}
 
 	my_uio->uio_flags = UIO_FLAGS_WE_ALLOCED | UIO_FLAGS_INITED;
+#if DEBUG
+		(void)hw_atomic_add(&uio_t_count, 1);
+#endif
+
 
 	return(my_uio);
 }

@@ -89,6 +89,9 @@
 #include <kern/task.h>
 #include <kern/thread.h>
 #include <kern/timer.h>
+#if CONFIG_TELEMETRY
+#include <kern/telemetry.h>
+#endif
 #include <kern/wait_queue.h>
 #include <kern/xpr.h>
 #include <kern/zalloc.h>
@@ -104,6 +107,7 @@
 #include <machine/pmap.h>
 #include <machine/commpage.h>
 #include <libkern/version.h>
+#include <sys/codesign.h>
 #include <sys/kdebug.h>
 
 #if MACH_KDP
@@ -117,6 +121,15 @@
 #if CONFIG_COUNTERS
 #include <pmc/pmc.h>
 #endif
+
+#if KPC
+#include <kern/kpc.h>
+#endif
+
+#if KPERF
+#include <kperf/kperf.h>
+#endif
+
 
 #include <i386/pmCPU.h>
 static void		kernel_bootstrap_thread(void);
@@ -134,6 +147,7 @@ extern void	OSKextRemoveKextBootstrap(void);
 void scale_setup(void);
 extern void bsd_scale_setup(int);
 extern unsigned int semaphore_max;
+extern void stackshot_lock_init(void);
 
 /*
  *	Running in virtual memory, on the interrupt stack.
@@ -159,7 +173,7 @@ kernel_early_bootstrap(void)
 	/*
 	 * Initialize the timer callout world
 	 */
-	timer_call_initialize();
+	timer_call_init();
 }
 
 
@@ -190,6 +204,9 @@ kernel_bootstrap(void)
 	kernel_bootstrap_kprintf("calling vm_mem_bootstrap\n");
 	vm_mem_bootstrap();
 
+	kernel_bootstrap_kprintf("calling cs_init\n");
+	cs_init();
+
 	kernel_bootstrap_kprintf("calling vm_mem_init\n");
 	vm_mem_init();
 
@@ -197,6 +214,14 @@ kernel_bootstrap(void)
 	machine_info.max_mem = max_mem;
 	machine_info.major_version = version_major;
 	machine_info.minor_version = version_minor;
+
+#if CONFIG_TELEMETRY
+	kernel_bootstrap_kprintf("calling telemetry_init\n");
+	telemetry_init();
+#endif
+
+	kernel_bootstrap_kprintf("calling stackshot_lock_init\n");	
+	stackshot_lock_init();
 
 	kernel_bootstrap_kprintf("calling sched_init\n");
 	sched_init();
@@ -259,6 +284,7 @@ kernel_bootstrap(void)
 int kth_started = 0;
 
 vm_offset_t vm_kernel_addrperm;
+vm_offset_t buf_kernel_addrperm;
 
 /*
  * Now running in a thread.  Kick off other services,
@@ -290,7 +316,10 @@ kernel_bootstrap_thread(void)
 	 */
 	kernel_bootstrap_thread_kprintf("calling thread_daemon_init\n");
 	thread_daemon_init();
-	
+
+	/* Create kernel map entry reserve */
+	vm_kernel_reserved_entry_init();
+
 	/*
 	 * Thread callout service.
 	 */
@@ -331,15 +360,32 @@ kernel_bootstrap_thread(void)
 	cpu_physwindow_init(0);
 #endif
 
-	vm_kernel_reserved_entry_init();
+
 	
 #if MACH_KDP
 	kernel_bootstrap_kprintf("calling kdp_init\n");
 	kdp_init();
 #endif
 
+#if ALTERNATE_DEBUGGER
+	alternate_debugger_init();
+#endif
+
 #if CONFIG_COUNTERS
 	pmc_bootstrap();
+#endif
+
+#if KPC
+	kpc_init();
+#endif
+
+#if KPERF
+	kperf_bootstrap();
+#endif
+
+#if CONFIG_TELEMETRY
+	kernel_bootstrap_kprintf("calling bootprofile_init\n");
+	bootprofile_init();
 #endif
 
 #if (defined(__i386__) || defined(__x86_64__))
@@ -348,6 +394,7 @@ kernel_bootstrap_thread(void)
 	start_kern_tracing(new_nkdbufs, FALSE);
 	if (turn_on_log_leaks)
 		log_leaks = 1;
+
 #endif
 
 #ifdef	IOKIT
@@ -382,6 +429,7 @@ kernel_bootstrap_thread(void)
 	vm_commpage_init();
 	vm_commpage_text_init();
 
+
 #if CONFIG_MACF
 	mac_policy_initmach();
 #endif
@@ -394,6 +442,7 @@ kernel_bootstrap_thread(void)
 	 * word-aligned address to zero via addition.
 	 */
 	vm_kernel_addrperm = (vm_offset_t)early_random() | 1;
+	buf_kernel_addrperm = (vm_offset_t)early_random() | 1;
 
 	/*
 	 *	Start the user bootstrap.
@@ -411,7 +460,7 @@ kernel_bootstrap_thread(void)
 	serial_keyboard_init();		/* Start serial keyboard if wanted */
 
 	vm_page_init_local_q();
-
+	
 	thread_bind(PROCESSOR_NULL);
 
 	/*
@@ -503,7 +552,7 @@ load_context(
 	 * should never occur since the thread is expected
 	 * to have reserved stack.
 	 */
-	load_context_kprintf("thread %p, stack %x, stackptr %x\n", thread, 
+	load_context_kprintf("thread %p, stack %lx, stackptr %lx\n", thread,
 			     thread->kernel_stack, thread->machine.kstackptr);
 	if (!thread->kernel_stack) {
 		load_context_kprintf("calling stack_alloc_try\n");

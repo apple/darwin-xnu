@@ -52,8 +52,8 @@ enum PMLogEnum {
     kPMLogCriticalTemp,             // 24	0x05070060
     kPMLogOverrideOn,               // 25	0x05070064
     kPMLogOverrideOff,              // 26	0x05070068
-    kPMLogEnqueueErr,               // 27	0x0507006c - NOT USED
-    kPMLogCollapseQueue,            // 28	0x05070070 - NOT USED
+    kPMLogChangeStateForRootDomain, // 27	0x0507006c
+    kPMLogCSynchronizePowerTree,    // 28	0x05070070
     kPMLogChangeDone,               // 29	0x05070074
     kPMLogCtrlDriverTardy,          // 30	0x05070078 - controlling driver didn't acknowledge
     kPMLogIntDriverTardy,           // 31	0x0507007c - interested driver didn't acknowledge

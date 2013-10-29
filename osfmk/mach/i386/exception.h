@@ -63,7 +63,7 @@
  * No machine dependent types for the 80386
  */
 
-#define	EXC_TYPES_COUNT	12	/* incl. illegal exception 0 */
+#define	EXC_TYPES_COUNT	13	/* incl. illegal exception 0 */
 
 /*
  *	Codes and subcodes for 80386 exceptions.

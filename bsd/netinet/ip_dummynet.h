@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2012 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2013 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -417,7 +417,7 @@ struct dn_pipe {		/* a pipe */
 
 SLIST_HEAD(dn_pipe_head, dn_pipe);
 
-#ifdef KERNEL
+#ifdef BSD_KERNEL_PRIVATE
 
 void ip_dn_init(void); /* called from raw_ip.c:load_ipfw() */
 
@@ -695,7 +695,6 @@ ip_dn_claim_rule(struct mbuf *m)
 	} else
 		return (NULL);
 }
-#endif /* KERNEL */
-
+#endif /* BSD_KERNEL_PRIVATE */
 #endif /* PRIVATE */
 #endif /* _IP_DUMMYNET_H */

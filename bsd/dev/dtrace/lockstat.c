@@ -55,7 +55,7 @@
 /*
  * Hot patch values, x86
  */
-#if defined(__i386__) || defined(__x86_64__)
+#if defined(__x86_64__)
 #define	NOP	0x90
 #define	RET	0xc3
 #define LOCKSTAT_AFRAMES 1
@@ -72,7 +72,7 @@ typedef struct lockstat_probe {
 
 lockstat_probe_t lockstat_probes[] =
 {
-#if defined(__i386__) || defined(__x86_64__)
+#if defined(__x86_64__)
 	/* Only provide implemented probes for each architecture  */
 	{ LS_LCK_MTX_LOCK,	LSA_ACQUIRE,	LS_LCK_MTX_LOCK_ACQUIRE, DTRACE_IDNONE },
 	{ LS_LCK_MTX_LOCK,	LSA_SPIN,	LS_LCK_MTX_LOCK_SPIN, DTRACE_IDNONE },
@@ -119,21 +119,21 @@ lockstat_probe_t lockstat_probes[] =
 dtrace_id_t lockstat_probemap[LS_NPROBES];
 
 #if CONFIG_DTRACE
+#if defined(__x86_64__)
 extern void lck_mtx_lock_lockstat_patch_point(void);
 extern void lck_mtx_try_lock_lockstat_patch_point(void);
 extern void lck_mtx_try_lock_spin_lockstat_patch_point(void);
 extern void lck_mtx_unlock_lockstat_patch_point(void);
 extern void lck_mtx_lock_ext_lockstat_patch_point(void);
 extern void lck_mtx_ext_unlock_lockstat_patch_point(void);
-
-extern void lck_rw_done_release1_lockstat_patch_point(void);
-extern void lck_rw_done_release2_lockstat_patch_point(void);
 extern void lck_rw_lock_shared_lockstat_patch_point(void);
 extern void lck_rw_lock_exclusive_lockstat_patch_point(void);
 extern void lck_rw_lock_shared_to_exclusive_lockstat_patch_point(void);
 extern void lck_rw_try_lock_shared_lockstat_patch_point(void);
 extern void lck_rw_try_lock_exclusive_lockstat_patch_point(void);
 extern void lck_mtx_lock_spin_lockstat_patch_point(void);
+#endif
+
 #endif /* CONFIG_DTRACE */
 
 typedef struct lockstat_assembly_probe {
@@ -145,7 +145,7 @@ typedef struct lockstat_assembly_probe {
 	lockstat_assembly_probe_t assembly_probes[] =
 	{
 #if CONFIG_DTRACE
-#if defined(__i386__) || defined(__x86_64__)
+#if defined(__x86_64__)
 		/*
 		 * On x86 these points are better done via hot patches, which ensure
 		 * there is zero overhead when not in use.  On x86 these patch points
@@ -168,6 +168,8 @@ typedef struct lockstat_assembly_probe {
 #endif /* CONFIG_DTRACE */
 		{ LS_LCK_INVALID, NULL }
 };
+
+
 /*
  * Hot patch switches back and forth the probe points between NOP and RET.
  * The active argument indicates whether the probe point will turn on or off.
@@ -188,7 +190,7 @@ void lockstat_hot_patch(boolean_t active, int ls_probe)
 	 */
 	for (i = 0; assembly_probes[i].lsap_patch_point; i++) {
 		if (ls_probe == assembly_probes[i].lsap_probe)
-#if defined(__i386__) || defined(__x86_64__)
+#if defined(__x86_64__)
 		{			
 			uint8_t instr;
 			instr = (active ? NOP : RET );

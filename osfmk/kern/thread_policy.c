@@ -38,15 +38,8 @@ static void
 thread_recompute_priority(
 	thread_t		thread);
 
-#if CONFIG_EMBEDDED
-static void
-thread_throttle(
-	thread_t		thread,
-	integer_t		task_priority);
 
-extern int mach_do_background_thread(thread_t thread, int prio);
-#endif
-
+extern void proc_get_thread_policy(thread_t thread, thread_policy_state_t info);
 
 kern_return_t
 thread_policy_set(
@@ -107,16 +100,24 @@ thread_policy_set_internal(
 				thread->sched_mode = TH_MODE_TIMESHARE;
 
 				if (!oldmode) {
-					if ((thread->state & (TH_RUN|TH_IDLE)) == TH_RUN)
+					if ((thread->state & (TH_RUN|TH_IDLE)) == TH_RUN) {
 						sched_share_incr();
+
+						if (thread->max_priority <= MAXPRI_THROTTLE)
+							sched_background_incr();
+					}
 				}
 			}
 			else {
 				thread->sched_mode = TH_MODE_FIXED;
 
 				if (oldmode) {
-					if ((thread->state & (TH_RUN|TH_IDLE)) == TH_RUN)
+					if ((thread->state & (TH_RUN|TH_IDLE)) == TH_RUN) {
+						if (thread->max_priority <= MAXPRI_THROTTLE)
+							sched_background_decr();
+
 						sched_share_decr();
+					}
 				}
 			}
 
@@ -166,8 +167,12 @@ thread_policy_set_internal(
 		}
 		else {
 			if (thread->sched_mode == TH_MODE_TIMESHARE) {
-				if ((thread->state & (TH_RUN|TH_IDLE)) == TH_RUN)
+				if ((thread->state & (TH_RUN|TH_IDLE)) == TH_RUN) {
+					if (thread->max_priority <= MAXPRI_THROTTLE)
+						sched_background_decr();
+
 					sched_share_decr();
+				}
 			}
 			thread->sched_mode = TH_MODE_REALTIME;
 			thread_recompute_priority(thread);
@@ -226,17 +231,6 @@ thread_policy_set_internal(
 		return thread_affinity_set(thread, info->affinity_tag);
 	}
 
-#if CONFIG_EMBEDDED
-	case THREAD_BACKGROUND_POLICY:
-	{
-		thread_background_policy_t	info;
-
-		info = (thread_background_policy_t) policy_info;
-
-		thread_mtx_unlock(thread);
-		return mach_do_background_thread(thread, info->priority);
-	}
-#endif /* CONFIG_EMBEDDED */
 
 	default:
 		result = KERN_INVALID_ARGUMENT;
@@ -271,50 +265,11 @@ thread_recompute_priority(
 		else
 		if (priority < MINPRI)
 			priority = MINPRI;
-#if CONFIG_EMBEDDED
-		/* No one can have a base priority less than MAXPRI_THROTTLE */
-		if (priority < MAXPRI_THROTTLE) 
-			priority = MAXPRI_THROTTLE;
-#endif /* CONFIG_EMBEDDED */
 	}
 
 	set_priority(thread, priority);
 }
 
-#if CONFIG_EMBEDDED
-static void
-thread_throttle(
-	thread_t		thread,
-	integer_t		task_priority)
-{
-	if ((!(thread->sched_flags & TH_SFLAG_THROTTLED)
-		 || (thread->sched_flags & TH_SFLAG_PENDING_THROTTLE_PROMOTION))
-		 && (task_priority <= MAXPRI_THROTTLE)) {
-
-		/* Kill a promotion if it was in flight */
-		thread->sched_flags &= ~TH_SFLAG_PENDING_THROTTLE_PROMOTION;
-
-		if (!(thread->sched_flags & TH_SFLAG_THROTTLED)) {
-			/*
-			 * Set the pending bit so that we can switch runqueues
-			 * (potentially) at a later time safely
-			 */
-			thread->sched_flags |= TH_SFLAG_PENDING_THROTTLE_DEMOTION;
-		}
-	}
-	else if (((thread->sched_flags & TH_SFLAG_THROTTLED)
-			  || (thread->sched_flags & TH_SFLAG_PENDING_THROTTLE_DEMOTION))
-			  && (task_priority > MAXPRI_THROTTLE)) {
-
-		/* Kill a demotion if it was in flight */
-		thread->sched_flags &= ~TH_SFLAG_PENDING_THROTTLE_DEMOTION;
-
-		if (thread->sched_flags & TH_SFLAG_THROTTLED) {
-			thread->sched_flags |= TH_SFLAG_PENDING_THROTTLE_PROMOTION;
-		}
-	}	
-}
-#endif
 
 void
 thread_task_priority(
@@ -329,9 +284,15 @@ thread_task_priority(
 	s = splsched();
 	thread_lock(thread);
 
-#if CONFIG_EMBEDDED
-	thread_throttle(thread, priority);
-#endif
+
+
+	if ((thread->state & (TH_RUN|TH_IDLE)) == TH_RUN) {
+		if ((thread->max_priority <= MAXPRI_THROTTLE) && (max_priority > MAXPRI_THROTTLE)) {
+			sched_background_decr();
+		} else if ((thread->max_priority > MAXPRI_THROTTLE) && (max_priority <= MAXPRI_THROTTLE)) {
+			sched_background_incr();
+		}
+	}
 
 	thread->task_priority = priority;
 	thread->max_priority = max_priority;
@@ -358,8 +319,12 @@ thread_policy_reset(
 
 		if ((oldmode != TH_MODE_TIMESHARE) && (thread->sched_mode == TH_MODE_TIMESHARE)) {
 
-			if ((thread->state & (TH_RUN|TH_IDLE)) == TH_RUN)
+			if ((thread->state & (TH_RUN|TH_IDLE)) == TH_RUN) {
 				sched_share_incr();
+
+				if (thread->max_priority <= MAXPRI_THROTTLE)
+					sched_background_incr();
+			}
 		}
 	}
 	else {
@@ -518,6 +483,42 @@ thread_policy_get(
 
 		break;
 	}
+
+	case THREAD_POLICY_STATE:
+	{
+		thread_policy_state_t		info;
+
+		if (*count < THREAD_POLICY_STATE_COUNT) {
+			result = KERN_INVALID_ARGUMENT;
+			break;
+		}
+
+		/* Only root can get this info */
+		if (current_task()->sec_token.val[0] != 0) {
+			result = KERN_PROTECTION_FAILURE;
+			break;
+		}
+
+		info = (thread_policy_state_t)policy_info;
+
+		if (!(*get_default)) {
+			/*
+			 * Unlock the thread mutex and directly return.
+			 * This is necessary because proc_get_thread_policy()
+			 * takes the task lock.
+			 */
+			thread_mtx_unlock(thread);
+			proc_get_thread_policy(thread, info);
+			return (result);
+		} else {
+			info->requested = 0;
+			info->effective = 0;
+			info->pending = 0;
+		}
+
+		break;
+	}
+	
 
 	default:
 		result = KERN_INVALID_ARGUMENT;

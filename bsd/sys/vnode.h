@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2010 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2012 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -68,6 +68,7 @@
 #include <sys/cdefs.h>
 #ifdef KERNEL
 #include <sys/kernel_types.h>
+#include <sys/param.h>
 #include <sys/signal.h>
 #endif
 
@@ -149,7 +150,8 @@ enum vtagtype	{
 #define IO_ENCRYPTED	0x20000		/* Retrieve encrypted blocks from the filesystem */
 #define IO_RETURN_ON_THROTTLE	0x40000
 #define IO_SINGLE_WRITER	0x80000
-#define IO_SYSCALL_DISPATCH		0x100000	/* I/O origin is file table syscall */
+#define IO_SYSCALL_DISPATCH		0x100000	/* I/O was originated from a file table syscall */
+#define IO_SWAP_DISPATCH		0x200000	/* I/O was originated from the swap layer */
 
 /*
  * Component Name: this structure describes the pathname
@@ -683,8 +685,8 @@ extern int		vttoif_tab[];
 
 #define	REVOKEALL	0x0001		/* vnop_revoke: revoke all aliases */
 
-/* VNOP_REMOVE/unlink flags: */
-#define VNODE_REMOVE_NODELETEBUSY  			0x0001 /* Do not delete busy files (Carbon) */
+/* VNOP_REMOVE/unlink flags */
+#define VNODE_REMOVE_NODELETEBUSY  			0x0001 /* Don't delete busy files (Carbon) */  
 #define VNODE_REMOVE_SKIP_NAMESPACE_EVENT	0x0002 /* Do not upcall to userland handlers */
 
 /* VNOP_READDIR flags: */
@@ -1897,7 +1899,22 @@ int 	vnode_isshadow(vnode_t);
  */
 vnode_t vnode_parent(vnode_t);
 void vnode_setparent(vnode_t, vnode_t);
-const char * vnode_name(vnode_t);
+/*!
+ @function vnode_getname_printable
+ @abstract Get a non-null printable name of a vnode.
+ @Used to make sure a printable name is returned for all vnodes. If a name exists or can be artificially created, the routine creates a new entry in the VFS namecache. Otherwise, the function returns an artificially created vnode name which is safer and easier to use. vnode_putname_printable() should be used to release names obtained by this routine. 
+ @param vp The vnode whose name to grab.
+ @return The printable name.
+ */
+const char *vnode_getname_printable(vnode_t vp);
+
+/*!
+ @function vnode_putname_printable
+ @abstract Release a reference on a name from the VFS cache if it was added by the matching vnode_getname_printable() call.
+ @param name String to release.
+ @return void.
+ */
+void vnode_putname_printable(const char *name);
 void vnode_setname(vnode_t, char *);
 int vnode_isnoflush(vnode_t);
 void vnode_setnoflush(vnode_t);

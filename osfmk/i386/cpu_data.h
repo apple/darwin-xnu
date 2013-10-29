@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2008 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2012 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -71,35 +71,14 @@ typedef struct rtclock_timer {
 } rtclock_timer_t;
 
 
-#if defined(__i386__)
-
 typedef struct {
-	struct i386_tss         *cdi_ktss;
-	struct __attribute__((packed)) {
-		uint16_t size;
-		struct fake_descriptor *ptr;
-	} cdi_gdt, cdi_idt;
-	struct fake_descriptor	*cdi_ldt;
-	vm_offset_t				cdi_sstk;
-} cpu_desc_index_t;
-
-typedef enum {
-	TASK_MAP_32BIT,			/* 32-bit, compatibility mode */ 
-	TASK_MAP_64BIT,			/* 64-bit, separate address space */ 
-	TASK_MAP_64BIT_SHARED		/* 64-bit, kernel-shared addr space */
-} task_map_t;
-
-#elif defined(__x86_64__)
-
-
-typedef struct {
-	struct x86_64_tss		*cdi_ktss;
+	struct x86_64_tss	*cdi_ktss;
 	struct __attribute__((packed)) {
 		uint16_t size;
 		void *ptr;
 	} cdi_gdt, cdi_idt;
 	struct fake_descriptor	*cdi_ldt;
-	vm_offset_t				cdi_sstk;
+	vm_offset_t		cdi_sstk;
 } cpu_desc_index_t;
 
 typedef enum {
@@ -107,9 +86,6 @@ typedef enum {
 	TASK_MAP_64BIT,			/* 64-bit user thread, shared space */ 
 } task_map_t;
 
-#else
-#error Unsupported architecture
-#endif
 
 /*
  * This structure is used on entry into the (uber-)kernel on syscall from
@@ -148,7 +124,8 @@ typedef struct cpu_data
 #define				cpu_pd cpu_pal_data	/* convenience alias */
 	struct cpu_data		*cpu_this;		/* pointer to myself */
 	thread_t		cpu_active_thread;
-	int			cpu_preemption_level;
+	thread_t		cpu_nthread;
+	volatile int		cpu_preemption_level;
 	int			cpu_number;		/* Logical CPU */
 	void			*cpu_int_state;		/* interrupt state */
 	vm_offset_t		cpu_active_stack;	/* kernel stack base */
@@ -157,15 +134,14 @@ typedef struct cpu_data
 	int			cpu_interrupt_level;
 	int			cpu_phys_number;	/* Physical CPU */
 	cpu_id_t		cpu_id;			/* Platform Expert */
-	int			cpu_signals;		/* IPI events */
-	int			cpu_prior_signals;	/* Last set of events,
+	volatile int		cpu_signals;		/* IPI events */
+	volatile int		cpu_prior_signals;	/* Last set of events,
 							 * debugging
 							 */
 	ast_t			cpu_pending_ast;
 	volatile int		cpu_running;
 	boolean_t		cpu_fixed_pmcs_enabled;
 	rtclock_timer_t		rtclock_timer;
-	boolean_t		cpu_is64bit;
 	volatile addr64_t	cpu_active_cr3 __attribute((aligned(64)));
 	union {
 		volatile uint32_t cpu_tlb_invalid;
@@ -203,21 +179,18 @@ typedef struct cpu_data
 	uint64_t		cpu_hwIntcexits[HWINTCNT_SIZE];
 	uint64_t		cpu_dr7; /* debug control register */
 	uint64_t		cpu_int_event_time;	/* intr entry/exit time */
-	uint64_t		cpu_uber_arg_store;	/* Double mapped address
-							 * of current thread's
-							 * uu_arg array.
-							 */
-	uint64_t		cpu_uber_arg_store_valid; /* Double mapped
-							   * address of pcb
-							   * arg store
-							   * validity flag.
-							   */
 	pal_rtc_nanotime_t	*cpu_nanotime;		/* Nanotime info */
 #if	CONFIG_COUNTERS
 	thread_t		csw_old_thread;
 	thread_t		csw_new_thread;
 #endif /* CONFIG COUNTERS */	
-#if	defined(__x86_64__)
+#if KPC
+	/* double-buffered performance counter data */
+	uint64_t                *cpu_kpc_buf[2];
+	/* PMC shadow and reload value buffers */
+	uint64_t                *cpu_kpc_shadow;
+	uint64_t                *cpu_kpc_reload;
+#endif
 	uint32_t		cpu_pmap_pcid_enabled;
 	pcid_t			cpu_active_pcid;
 	pcid_t			cpu_last_pcid;
@@ -231,7 +204,6 @@ typedef struct cpu_data
 	uint64_t		cpu_pmap_pcid_flushes;
 	uint64_t		cpu_pmap_pcid_preserves;
 #endif
-#endif /* x86_64 */
 	uint64_t		cpu_aperf;
 	uint64_t		cpu_mperf;
 	uint64_t		cpu_c3res;
@@ -248,9 +220,9 @@ typedef struct cpu_data
  	uint64_t		cpu_cur_urc;
 	uint64_t                cpu_max_observed_int_latency;
 	int                     cpu_max_observed_int_latency_vector;
+	volatile boolean_t	cpu_NMI_acknowledged;
 	uint64_t		debugger_entry_time;
 	uint64_t		debugger_ipi_time;
-	volatile boolean_t	cpu_NMI_acknowledged;
 	/* A separate nested interrupt stack flag, to account
 	 * for non-nested interrupts arriving while on the interrupt stack
 	 * Currently only occurs when AICPM enables interrupts on the
@@ -275,9 +247,43 @@ typedef struct cpu_data
 } cpu_data_t;
 
 extern cpu_data_t	*cpu_data_ptr[];  
-extern cpu_data_t	cpu_data_master;  
 
 /* Macro to generate inline bodies to retrieve per-cpu data fields. */
+#if defined(__clang__)
+#define GS_RELATIVE volatile __attribute__((address_space(256)))
+#ifndef offsetof
+#define offsetof(TYPE,MEMBER) __builtin_offsetof(TYPE,MEMBER)
+#endif
+
+#define CPU_DATA_GET(member,type)										\
+	cpu_data_t GS_RELATIVE *cpu_data =							\
+		(cpu_data_t GS_RELATIVE *)0UL;									\
+	type ret;															\
+	ret = cpu_data->member;												\
+	return ret;
+
+#define CPU_DATA_GET_INDEX(member,index,type)							\
+	cpu_data_t GS_RELATIVE *cpu_data =							\
+		(cpu_data_t GS_RELATIVE *)0UL;									\
+	type ret;															\
+	ret = cpu_data->member[index];										\
+	return ret;
+
+#define CPU_DATA_SET(member,value)										\
+	cpu_data_t GS_RELATIVE *cpu_data =							\
+		(cpu_data_t GS_RELATIVE *)0UL;									\
+	cpu_data->member = value;
+
+#define CPU_DATA_XCHG(member,value,type)								\
+	cpu_data_t GS_RELATIVE *cpu_data =							\
+		(cpu_data_t GS_RELATIVE *)0UL;									\
+	type ret;															\
+	ret = cpu_data->member;												\
+	cpu_data->member = value;											\
+	return ret;
+
+#else /* !defined(__clang__) */
+
 #ifndef offsetof
 #define offsetof(TYPE,MEMBER) ((size_t) &((TYPE *)0)->MEMBER)
 #endif /* offsetof */
@@ -299,12 +305,15 @@ extern cpu_data_t	cpu_data_master;
 	__asm__ volatile ("mov %0,%%gs:%P1"				\
 		:							\
 		: "r" (value), "i" (offsetof(cpu_data_t,member)));
+
 #define CPU_DATA_XCHG(member,value,type)				\
 	type ret;							\
 	__asm__ volatile ("xchg %0,%%gs:%P1"				\
 		: "=r" (ret)						\
 		: "i" (offsetof(cpu_data_t,member)), "0" (value));	\
 	return ret;
+
+#endif /* !defined(__clang__) */
 
 /*
  * Everyone within the osfmk part of the kernel can use the fast
@@ -319,16 +328,7 @@ get_active_thread(void)
 #define current_thread_fast()		get_active_thread()
 #define current_thread()		current_thread_fast()
 
-static inline boolean_t
-get_is64bit(void)
-{
-	CPU_DATA_GET(cpu_is64bit, boolean_t)
-}
-#if CONFIG_YONAH
-#define cpu_mode_is64bit()		get_is64bit()
-#else
 #define cpu_mode_is64bit()		TRUE
-#endif
 
 static inline int
 get_preemption_level(void)
@@ -355,9 +355,14 @@ get_cpu_phys_number(void)
 static inline void
 disable_preemption(void)
 {
+#if defined(__clang__)
+	cpu_data_t GS_RELATIVE *cpu_data = (cpu_data_t GS_RELATIVE *)0UL;
+	cpu_data->cpu_preemption_level++;
+#else
 	__asm__ volatile ("incl %%gs:%P0"
 			:
 			: "i" (offsetof(cpu_data_t, cpu_preemption_level)));
+#endif
 }
 
 static inline void
@@ -365,6 +370,11 @@ enable_preemption(void)
 {
 	assert(get_preemption_level() > 0);
 
+#if defined(__clang__)
+	cpu_data_t GS_RELATIVE *cpu_data = (cpu_data_t GS_RELATIVE *)0UL;
+	if (0 == --cpu_data->cpu_preemption_level)
+		kernel_preempt_check();
+#else
 	__asm__ volatile ("decl %%gs:%P0		\n\t"
 			  "jne 1f			\n\t"
 			  "call _kernel_preempt_check	\n\t"
@@ -372,6 +382,7 @@ enable_preemption(void)
 			: /* no outputs */
 			: "i" (offsetof(cpu_data_t, cpu_preemption_level))
 			: "eax", "ecx", "edx", "cc", "memory");
+#endif
 }
 
 static inline void
@@ -379,10 +390,15 @@ enable_preemption_no_check(void)
 {
 	assert(get_preemption_level() > 0);
 
+#if defined(__clang__)
+	cpu_data_t GS_RELATIVE *cpu_data = (cpu_data_t GS_RELATIVE *)0UL;
+	cpu_data->cpu_preemption_level--;
+#else
 	__asm__ volatile ("decl %%gs:%P0"
 			: /* no outputs */
 			: "i" (offsetof(cpu_data_t, cpu_preemption_level))
 			: "cc", "memory");
+#endif
 }
 
 static inline void

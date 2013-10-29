@@ -40,7 +40,7 @@
 #include <machine/exec.h>
 
 /**********************************************************************
- * Routine:	fatfile_getarch2()
+ * Routine:	fatfile_getarch()
  *
  * Function:	Locate the architecture-dependant contents of a fat
  *		file that match this CPU.
@@ -57,7 +57,7 @@
  *		KERN_FAILURE:	No valid architecture found.
  **********************************************************************/
 static load_return_t
-fatfile_getarch2(
+fatfile_getarch(
 #if 0
 	struct vnode	*vp,
 #else
@@ -122,41 +122,26 @@ fatfile_getarch2(
 		return(LOAD_BADMACHO);
 
 	/*
-	 * Ignore LIB64 flag so that binary slices with the flag set
-	 * don't choke in grade_binary.
-	 */
-	mask_bits |= CPU_SUBTYPE_LIB64;
-
-	/*
 	 * Scan the fat_arch's looking for the best one.  */
 	addr = data_ptr;
 	best_arch = NULL;
 	best_grade = 0;
 	arch = (struct fat_arch *) (addr + sizeof(struct fat_header));
 	for (; nfat_arch-- > 0; arch++) {
-
-		/* 
-		 *	Collect flags from both cputype and cpusubtype 
-		 */
- 		testtype = OSSwapBigToHostInt32(arch->cputype) |
- 				(OSSwapBigToHostInt32(arch->cpusubtype) & 
- 					CPU_SUBTYPE_MASK);
- 		testsubtype = OSSwapBigToHostInt32(arch->cpusubtype) 
- 			& ~CPU_SUBTYPE_MASK;
+ 		testtype = OSSwapBigToHostInt32(arch->cputype);
+ 		testsubtype = OSSwapBigToHostInt32(arch->cpusubtype) & ~CPU_SUBTYPE_MASK;
 
 		/*
 		 *	Check to see if right cpu type.
 		 */
- 		if((testtype & ~mask_bits) != req_cpu_type) {
+ 		if((testtype & ~mask_bits) != (req_cpu_type & ~mask_bits)) {
 			continue;
 		}
 
 		/*
 		 * 	Get the grade of the cpu subtype (without feature flags)
 		 */
- 		grade = grade_binary(
-				(testtype & ~CPU_SUBTYPE_LIB64), 
-				testsubtype);
+ 		grade = grade_binary(testtype, testsubtype);
 
 		/*
 		 *	Remember it if it's the best we've seen.
@@ -200,36 +185,11 @@ fatfile_getarch_affinity(
 		struct fat_arch	*archret,
 		int 				affinity __unused)
 {
-		/*
-		 * Ignore all architectural bits when determining if an image
-		 * in a fat file should be skipped or graded.
-		 */
-		return fatfile_getarch2(vp, data_ptr, cpu_type(), 
-				CPU_ARCH_MASK, archret);
-}
-
-/**********************************************************************
- * Routine:	fatfile_getarch()
- *
- * Function:	Locate the architecture-dependant contents of a fat
- *		file that match this CPU.
- *
- * Args:	vp:		The vnode for the fat file.
- *		header:		A pointer to the fat file header.
- *		archret (out):	Pointer to fat_arch structure to hold
- *				the results.
- *
- * Returns:	KERN_SUCCESS:	Valid architecture found.
- *		KERN_FAILURE:	No valid architecture found.
- **********************************************************************/
-load_return_t
-fatfile_getarch(
-	struct vnode		*vp,
-	vm_offset_t 	data_ptr,
-	struct fat_arch		*archret)
-{
-	return fatfile_getarch2(vp, data_ptr, cpu_type(), 
-			CPU_SUBTYPE_LIB64, archret);
+	/*
+	 * Ignore all architectural bits when determining if an image
+	 * in a fat file should be skipped or graded.
+	 */
+	return fatfile_getarch(vp, data_ptr, cpu_type(), CPU_ARCH_MASK, archret);
 }
 
 /**********************************************************************
@@ -254,7 +214,6 @@ fatfile_getarch_with_bits(
 	vm_offset_t 	data_ptr,
 	struct fat_arch		*archret)
 {
-	return fatfile_getarch2(vp, data_ptr, archbits | cpu_type(), 
-			CPU_SUBTYPE_LIB64, archret);
+	return fatfile_getarch(vp, data_ptr, archbits | (cpu_type() & ~CPU_ARCH_MASK), 0, archret);
 }
 

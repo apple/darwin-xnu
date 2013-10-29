@@ -59,7 +59,7 @@ errno_t	net_init_add(net_init_func_ptr	init_func);
 
 #ifdef BSD_KERNEL_PRIVATE
 /* net_init_run is called from bsd_init */
-extern void net_init_run(void) __attribute__((section("__TEXT, initcode")));
+extern void net_init_run(void);
 #endif /* BSD_KERNEL_PRIVATE */
 
 #endif /* _NET_INIT_H_ */

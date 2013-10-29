@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2005-2006 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2005-2012 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -436,7 +436,7 @@ dtrace_getupcstack(uint64_t *pcstack, int pcstack_limit)
 	if (regs == NULL)
 		goto zero;
 		
-	*pcstack++ = (uint64_t)proc_selfpid();
+	*pcstack++ = (uint64_t)dtrace_proc_selfpid();
 	pcstack_limit--;
 
 	if (pcstack_limit <= 0)
@@ -563,7 +563,7 @@ dtrace_getufpstack(uint64_t *pcstack, uint64_t *fpstack, int pcstack_limit)
 	if (regs == NULL)
 		goto zero;
 		
-	*pcstack++ = (uint64_t)proc_selfpid();
+	*pcstack++ = (uint64_t)dtrace_proc_selfpid();
 	pcstack_limit--;
 
 	if (pcstack_limit <= 0)
@@ -679,11 +679,7 @@ dtrace_getpcstack(pc_t *pcstack, int pcstack_limit, int aframes,
 
 	while (depth < pcstack_limit) {
 		nextfp = *(struct frame **)fp;
-#if defined(__x86_64__)
 		pc = *(uintptr_t *)(((uintptr_t)fp) + RETURN_OFFSET64);
-#else
-		pc = *(uintptr_t *)(((uintptr_t)fp) + RETURN_OFFSET);
-#endif
 
 		if (nextfp <= minfp || nextfp >= stacktop) {
 			if (on_intr) {
@@ -747,13 +743,11 @@ dtrace_getarg(int arg, int aframes)
 	int i;
 
 
-#if defined(__x86_64__)
     /*
      * A total of 6 arguments are passed via registers; any argument with
      * index of 5 or lower is therefore in a register.
      */
     int inreg = 5;
-#endif
 
 	for (i = 1; i <= aframes; i++) {
 		fp = fp->backchain;
@@ -762,18 +756,6 @@ dtrace_getarg(int arg, int aframes)
 		if (dtrace_invop_callsite_pre != NULL
 			&& pc  >  (uintptr_t)dtrace_invop_callsite_pre
 			&& pc  <= (uintptr_t)dtrace_invop_callsite_post) {
-#if defined(__i386__)
-			/*
-			 * If we pass through the invalid op handler, we will
-			 * use the pointer that it passed to the stack as the
-			 * second argument to dtrace_invop() as the pointer to
-			 * the frame we're hunting for.
-			 */
-
-			stack = (uintptr_t *)&fp[1]; /* Find marshalled arguments */
-			fp = (struct frame *)stack[1]; /* Grab *second* argument */
-			stack = (uintptr_t *)&fp[1]; /* Find marshalled arguments */
-#elif defined(__x86_64__)
 			/*
 			 * In the case of x86_64, we will use the pointer to the
 			 * save area structure that was pushed when we took the
@@ -803,9 +785,6 @@ dtrace_getarg(int arg, int aframes)
 								arguments */
 				arg -= inreg + 1;
 			}
-#else
-#error Unknown arch
-#endif
 			goto load;
 		}
 	}
@@ -819,7 +798,6 @@ dtrace_getarg(int arg, int aframes)
 	 */
 	arg++; /* Advance past probeID */
 
-#if defined(__x86_64__)
 	if (arg <= inreg) {
 		/*
 		 * This shouldn't happen.  If the argument is passed in a
@@ -831,7 +809,6 @@ dtrace_getarg(int arg, int aframes)
 	}
 
 	arg -= (inreg + 1);
-#endif
 	stack = (uintptr_t *)&fp[1]; /* Find marshalled arguments */
 
 load:

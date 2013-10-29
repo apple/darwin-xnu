@@ -209,13 +209,16 @@ struct extern_proc {
 
 #define P_DIRTY_TRACK                           0x00000001      /* track dirty state */
 #define P_DIRTY_ALLOW_IDLE_EXIT                 0x00000002      /* process can be idle-exited when clean */
-#define P_DIRTY                                 0x00000004      /* process is dirty */
-#define P_DIRTY_SHUTDOWN                        0x00000008      /* process is dirty during shutdown */
-#define P_DIRTY_TERMINATED                      0x00000010      /* process has been marked for termination */
-#define P_DIRTY_BUSY                            0x00000020      /* serialization flag */
+#define P_DIRTY_DEFER                           0x00000004      /* defer initial opt-in to idle-exit */
+#define P_DIRTY                                 0x00000008      /* process is dirty */
+#define P_DIRTY_SHUTDOWN                        0x00000010      /* process is dirty during shutdown */
+#define P_DIRTY_TERMINATED                      0x00000020      /* process has been marked for termination */
+#define P_DIRTY_BUSY                            0x00000040      /* serialization flag */
+#define P_DIRTY_MARKED                          0x00000080      /* marked dirty previously */
+#define P_DIRTY_DEFER_IN_PROGRESS               0x00000100      /* deferral to idle-band in process */
 
-#define P_DIRTY_CAN_IDLE_EXIT                   (P_DIRTY_TRACK | P_DIRTY_ALLOW_IDLE_EXIT)
 #define P_DIRTY_IS_DIRTY                        (P_DIRTY | P_DIRTY_SHUTDOWN)
+#define P_DIRTY_IDLE_EXIT_ENABLED               (P_DIRTY_TRACK|P_DIRTY_ALLOW_IDLE_EXIT)
 
 #endif /* XNU_KERNEL_PRIVATE || !KERNEL */
 
@@ -302,16 +305,40 @@ extern int	msleep1(void *chan, lck_mtx_t *mtx, int pri, const char *wmesg, u_int
 task_t proc_task(proc_t);
 extern int proc_pidversion(proc_t);
 extern int proc_getcdhash(proc_t, unsigned char *);
-#endif /* KERNEL_PRIVATE */
-#ifdef XNU_KERNEL_PRIVATE
+
+/*! 
+ @function    proc_pidbackgrounded
+ @abstract    KPI to determine if a process is currently backgrounded.
+ @discussion  The process may move into or out of background state at any time, 
+              so be prepared for this value to be outdated immediately. 
+ @param pid   PID of the process to be queried.
+ @param state Pointer to a value which will be set to 1 if the process
+              is currently backgrounded, 0 otherwise. 
+ @return      ESRCH if pid cannot be found or has started exiting.
+
+              EINVAL if state is NULL.
+ */
+extern int proc_pidbackgrounded(pid_t pid, uint32_t* state);
+
 /* 
  * This returns an unique 64bit id of a given process. 
  * Caller needs to hold proper reference on the 
  * passed in process strucutre.
  */
 extern uint64_t proc_uniqueid(proc_t);
-extern uint64_t proc_selfuniqueid(void);
+
+#endif /* KERNEL_PRIVATE */
+
+#ifdef XNU_KERNEL_PRIVATE
+
+/* unique 64bit id for process's original parent */
+extern uint64_t proc_puniqueid(proc_t);
+
 extern void proc_getexecutableuuid(proc_t, unsigned char *, unsigned long);
+
+extern uint64_t proc_was_throttled(proc_t);
+extern uint64_t proc_did_throttle(proc_t);
+
 #endif /* XNU_KERNEL_PRIVATE*/
 
 __END_DECLS

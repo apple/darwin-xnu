@@ -247,16 +247,15 @@ extern vm_offset_t		vm_kernel_top;
 extern vm_offset_t		vm_kernel_slide;
 extern vm_offset_t		vm_kernel_addrperm;
 
+extern vm_offset_t		vm_kext_base;
+extern vm_offset_t		vm_kext_top;
+
 #define VM_KERNEL_IS_SLID(_o)						       \
 		(((vm_offset_t)(_o) >= vm_kernel_base) &&		       \
 		 ((vm_offset_t)(_o) <  vm_kernel_top))
-/*
- * VM_KERNEL_IS_KEXT is platform-specific, defined in <mach/machine/vm_param.h>.
- * Set default if undefined.
- */
-#ifndef	VM_KERNEL_IS_KEXT
-#define VM_KERNEL_IS_KEXT(_o)	(FALSE)
-#endif
+#define VM_KERNEL_IS_KEXT(_o)                                                  \
+                (((vm_offset_t)(_o) >= vm_kext_base) &&                        \
+                 ((vm_offset_t)(_o) <  vm_kext_top))
 #define VM_KERNEL_UNSLIDE(_v)						       \
 		((VM_KERNEL_IS_SLID(_v) ||				       \
 		  VM_KERNEL_IS_KEXT(_v)) ?				       \

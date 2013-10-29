@@ -207,7 +207,9 @@ ipc_hash_table_lookup(
 {
 	mach_port_index_t hindex, index;
 
-	assert(obj != IO_NULL);
+	if (obj == IO_NULL) {
+		return FALSE;
+	}
 
 	hindex = IH_TABLE_HASH(obj, size);
 

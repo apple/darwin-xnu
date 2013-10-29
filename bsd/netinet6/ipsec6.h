@@ -41,7 +41,7 @@
 #include <net/pfkeyv2.h>
 #include <netkey/keydb.h>
 
-#ifdef KERNEL_PRIVATE
+#ifdef BSD_KERNEL_PRIVATE
 extern struct ipsecstat ipsec6stat;
 extern struct secpolicy ip6_def_policy;
 extern int ip6_esp_trans_deflev;
@@ -51,10 +51,14 @@ extern int ip6_ah_net_deflev;
 extern int ip6_ipsec_ecn;
 extern int ip6_esp_randpad;
 
+struct ip6_out_args;
+
 extern struct secpolicy *ipsec6_getpolicybysock(struct mbuf *, u_int,
 	struct socket *, int *);
 extern struct secpolicy *ipsec6_getpolicybyaddr(struct mbuf *, u_int, int,
 	int *);
+extern int ipsec6_getpolicybyinterface(struct mbuf *,
+    u_int, int, struct ip6_out_args *, int *, struct secpolicy **);
 
 struct inpcb;
 
@@ -79,6 +83,5 @@ extern int ipsec6_output_tunnel(struct ipsec_output_state *,
 				struct secpolicy *, int);
 extern int ipsec6_tunnel_validate(struct mbuf *, int, u_int,
 	struct secasvar *);
-#endif /* KERNEL_PRIVATE */
-
+#endif /* BSD_KERNEL_PRIVATE */
 #endif /* _NETINET6_IPSEC6_H_ */

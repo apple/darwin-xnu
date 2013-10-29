@@ -508,6 +508,10 @@ ipc_object_copyin(
 	queue_t links = &links_data;
 	wait_queue_link_t wql;
 
+#if IMPORTANCE_INHERITANCE
+	int assertcnt = 0;
+#endif
+
 	queue_init(links);
 
 	/*
@@ -526,6 +530,9 @@ ipc_object_copyin(
 			      msgt_name, TRUE,
 			      objectp, &soright,
 			      &release_port,
+#if IMPORTANCE_INHERITANCE
+			      &assertcnt,
+#endif /* IMPORTANCE_INHERITANCE */
 			      links);
 	if (IE_BITS_TYPE(entry->ie_bits) == MACH_PORT_TYPE_NONE)
 		ipc_entry_dealloc(space, name, entry);
@@ -535,6 +542,12 @@ ipc_object_copyin(
 		wql = (wait_queue_link_t) dequeue(links);
 		wait_queue_link_free(wql);
 	}
+
+#if IMPORTANCE_INHERITANCE
+	if (assertcnt > 0 && current_task()->imp_receiver != 0) {
+		task_importance_drop_internal_assertion(current_task(), assertcnt);
+	}
+#endif /* IMPORTANCE_INHERITANCE */
 
 	if (release_port != IP_NULL)
 		ip_release(release_port);
@@ -616,13 +629,14 @@ ipc_object_copyin_from_kernel(
 		ipc_port_t port = (ipc_port_t) object;
 
 		ip_lock(port);
-		assert(ip_active(port));
-		assert(port->ip_receiver_name != MACH_PORT_NULL);
-		assert(port->ip_receiver == ipc_space_kernel);
+		if (ip_active(port)) {
+			assert(port->ip_receiver_name != MACH_PORT_NULL);
+			assert(port->ip_receiver == ipc_space_kernel);
+			port->ip_mscount++;
+		}
 
-		ip_reference(port);
-		port->ip_mscount++;
 		port->ip_srights++;
+		ip_reference(port);
 		ip_unlock(port);
 		break;
 	    }
@@ -637,11 +651,11 @@ ipc_object_copyin_from_kernel(
 		ipc_port_t port = (ipc_port_t) object;
 
 		ip_lock(port);
-		assert(ip_active(port));
-		assert(port->ip_receiver_name != MACH_PORT_NULL);
-
-		ip_reference(port);
+		if (ip_active(port)) {
+			assert(port->ip_receiver_name != MACH_PORT_NULL);
+		}
 		port->ip_sorights++;
+		ip_reference(port);
 		ip_unlock(port);
 		break;
 	    }
@@ -809,6 +823,7 @@ ipc_object_copyout(
 
 	kr = ipc_right_copyout(space, name, entry,
 			       msgt_name, overflow, object);
+
 	/* object is unlocked */
 	is_write_unlock(space);
 
@@ -848,6 +863,11 @@ ipc_object_copyout_name(
 	ipc_entry_t oentry;
 	ipc_entry_t entry;
 	kern_return_t kr;
+
+#if IMPORTANCE_INHERITANCE
+	int assertcnt = 0;
+	task_t task = TASK_NULL;
+#endif /* IMPORTANCE_INHERITANCE */
 
 	assert(IO_VALID(object));
 	assert(io_otype(object) == IOT_PORT);
@@ -893,10 +913,47 @@ ipc_object_copyout_name(
 
 	/* space is write-locked and active, object is locked and active */
 
+#if IMPORTANCE_INHERITANCE
+	/*
+	 * We are slamming a receive right into the space, without
+	 * first having been enqueued on a port destined there.  So,
+	 * we have to arrange to boost the task appropriately if this
+	 * port has assertions (and the task wants them).
+	 */
+	if (msgt_name == MACH_MSG_TYPE_PORT_RECEIVE) {
+		ipc_port_t port = (ipc_port_t)object;
+
+		if ((space->is_task != TASK_NULL) &&
+		    (space->is_task->imp_receiver != 0)) {
+			assertcnt = port->ip_impcount;
+			task = space->is_task;
+			task_reference(task);
+		}
+
+		/* take port out of limbo */
+		assert(port->ip_tempowner != 0);
+		port->ip_tempowner = 0;
+	}
+
+#endif /* IMPORTANCE_INHERITANCE */
+
 	kr = ipc_right_copyout(space, name, entry,
 			       msgt_name, overflow, object);
+
 	/* object is unlocked */
 	is_write_unlock(space);
+
+#if IMPORTANCE_INHERITANCE
+	/*
+	 * Add the assertions to the task that we captured before
+	 */
+	if (task != TASK_NULL) {
+		if (assertcnt > 0)
+			task_importance_hold_internal_assertion(task, assertcnt);
+		task_deallocate(task);
+	}
+#endif /* IMPORTANCE_INHERITANCE */
+
 	return kr;
 }
 

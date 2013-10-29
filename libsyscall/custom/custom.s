@@ -32,24 +32,29 @@
 
 #if defined(__i386__)
 
-	.globl	_errno
+/*
+ * i386 needs custom assembly to transform the return from syscalls
+ * into a proper stack for a function call out to cerror{,_nocancel}.
+ */
 
-LABEL(cerror)
-	movl	$0,%ecx
-	jmp		1f
-LABEL(cerror_nocancel)
-	movl	$1,%ecx
-1:	REG_TO_EXTERN(%eax, _errno)
-	mov		%esp,%edx
-	andl	$0xfffffff0,%esp
-	subl	$16,%esp
-	movl	%edx,8(%esp)
-	movl	%ecx,4(%esp)
-	movl	%eax,(%esp)
-	CALL_EXTERN(_cthread_set_errno_self)
-	movl	8(%esp),%esp
-	movl	$-1,%eax
-	movl	$-1,%edx /* in case a 64-bit value is returned */
+LABEL(tramp_cerror)
+	mov		%esp, %edx
+	andl	$0xfffffff0, %esp
+	subl	$16, %esp
+	movl	%edx, 4(%esp)
+	movl	%eax, (%esp)
+	CALL_EXTERN(_cerror)
+	movl	4(%esp), %esp
+	ret
+
+LABEL(tramp_cerror_nocancel)
+	mov		%esp, %edx
+	andl	$0xfffffff0, %esp
+	subl	$16, %esp
+	movl	%edx, 4(%esp)
+	movl	%eax, (%esp)
+	CALL_EXTERN(_cerror_nocancel)
+	movl	4(%esp), %esp
 	ret
 
 LABEL(__sysenter_trap)
@@ -57,45 +62,13 @@ LABEL(__sysenter_trap)
 	movl %esp, %ecx
 	sysenter
 
-#elif defined(__x86_64__)
-
-	.globl	_errno
-
-LABEL(cerror)
-	/* cancelable syscall, for arg1 to _cthread_set_errno_self */
-	movq	$0,%rsi
-	jmp		1f
-LABEL(cerror_nocancel)
-	/* non-cancelable, see above. */
-	movq	$1,%rsi
-1:	PICIFY(_errno) /* address -> %r11 */
-	movl	%eax,(%r11)
-	mov 	%rsp,%rdx
-	andq	$-16,%rsp
-	subq	$16,%rsp
-	// Preserve the original stack
-	movq	%rdx,(%rsp)
-	movq	%rax,%rdi
-	CALL_EXTERN(_cthread_set_errno_self)
-	// Restore the original stack
-	movq	(%rsp),%rsp
-	movq	$-1,%rax
-	movq	$-1,%rdx /* in case a 128-bit value is returned */
-	ret
-
-#else
-#error Unsupported architecture
-#endif
-
-#if defined(__i386__) || defined(__x86_64__)
-
 	.globl _i386_get_ldt
 	ALIGN
 _i386_get_ldt:
 	movl    $6,%eax
 	MACHDEP_SYSCALL_TRAP
-	jnb	2f
-	jmp	cerror
+	jnb		2f
+	jmp		tramp_cerror
 2:	ret
 
 
@@ -104,8 +77,31 @@ _i386_get_ldt:
 _i386_set_ldt:
 	movl    $5,%eax
 	MACHDEP_SYSCALL_TRAP
-	jnb	2f
-	jmp	cerror
+	jnb		2f
+	jmp		tramp_cerror
+2:	ret
+
+#elif defined(__x86_64__)
+
+	.globl _i386_get_ldt
+	ALIGN
+_i386_get_ldt:
+	movl    $6,%eax
+	MACHDEP_SYSCALL_TRAP
+	jnb		2f
+	movq	%rax, %rdi
+	jmp		_cerror
+2:	ret
+
+
+	.globl _i386_set_ldt
+	ALIGN
+_i386_set_ldt:
+	movl    $5,%eax
+	MACHDEP_SYSCALL_TRAP
+	jnb		2f
+	movq	%rax, %rdi
+	jmp		_cerror
 2:	ret
 
 #endif

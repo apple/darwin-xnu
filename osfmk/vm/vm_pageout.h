@@ -87,39 +87,56 @@
 
 #include <sys/kdebug.h>
 
-#define VM_PAGE_CLEANED_TARGET	30000		/* 25600 pages = 100 MB */
-#define VM_PAGE_CLEANED_MIN	((VM_PAGE_CLEANED_TARGET * 80) / 100)
-
 #define VM_PAGE_AVAILABLE_COUNT()		((unsigned int)(vm_page_cleaned_count))
 
 /* externally manipulated counters */
 extern unsigned int vm_pageout_cleaned_reactivated, vm_pageout_cleaned_fault_reactivated, vm_pageout_cleaned_commit_reactivated;
 
+#if CONFIG_JETSAM
+#define LATENCY_JETSAM	FALSE
+#if LATENCY_JETSAM
+#define JETSAM_LATENCY_TOKEN_AGE	3000	/* 3ms */
+#define	NUM_OF_JETSAM_LATENCY_TOKENS	1000
+
+#define JETSAM_AGE_NOTIFY_CRITICAL	1500000 /* 1.5 secs */
+
+extern boolean_t	jlp_init;
+extern uint64_t	jlp_time, jlp_current;
+extern unsigned int	latency_jetsam_wakeup;
+#endif	/* LATENCY_JETSAM */				
+#endif	/* CONFIG_JETSAM */
+
 #if CONFIG_FREEZE
 extern boolean_t memorystatus_freeze_enabled;
-#define VM_DYNAMIC_PAGING_ENABLED(port) ((memorystatus_freeze_enabled == FALSE) && IP_VALID(port))
+#define VM_DYNAMIC_PAGING_ENABLED(port) ((COMPRESSED_PAGER_IS_ACTIVE || DEFAULT_FREEZER_COMPRESSED_PAGER_IS_ACTIVE) || (memorystatus_freeze_enabled == FALSE && IP_VALID(port)))
 #else
-#define VM_DYNAMIC_PAGING_ENABLED(port) IP_VALID(port)
+#define VM_DYNAMIC_PAGING_ENABLED(port) (COMPRESSED_PAGER_IS_ACTIVE || IP_VALID(port))
 #endif
 
 
 extern int	vm_debug_events;
 
-#define VMF_CHECK_ZFDELAY	0x100
-#define VMF_COWDELAY		0x101
-#define VMF_ZFDELAY		0x102
+#define VMF_CHECK_ZFDELAY		0x100
+#define VMF_COWDELAY			0x101
+#define VMF_ZFDELAY			0x102
+#define VMF_COMPRESSORDELAY		0x103
 
-#define VM_PAGEOUT_SCAN		0x104
-#define VM_PAGEOUT_BALANCE	0x105
-#define VM_PAGEOUT_FREELIST	0x106
-#define VM_PAGEOUT_PURGEONE	0x107
-#define VM_PAGEOUT_CACHE_EVICT	0x108
-#define VM_PAGEOUT_THREAD_BLOCK	0x109
+#define VM_PAGEOUT_SCAN			0x104
+#define VM_PAGEOUT_BALANCE		0x105
+#define VM_PAGEOUT_FREELIST		0x106
+#define VM_PAGEOUT_PURGEONE		0x107
+#define VM_PAGEOUT_CACHE_EVICT		0x108
+#define VM_PAGEOUT_THREAD_BLOCK		0x109
+#define VM_PAGEOUT_JETSAM		0x10A
+#define VM_PAGEOUT_PAGE_TOKEN		0x10B
 
-#define VM_UPL_PAGE_WAIT	0x120
-#define VM_IOPL_PAGE_WAIT	0x121
+#define VM_UPL_PAGE_WAIT		0x120
+#define VM_IOPL_PAGE_WAIT		0x121
+#define VM_PAGE_WAIT_BLOCK		0x122
 
-#define VM_PRESSURE_EVENT	0x130
+#define VM_PRESSURE_EVENT		0x130
+#define VM_EXECVE			0x131
+#define VM_WAKEUP_COMPACTOR_SWAPPER	0x132
 
 #define VM_DEBUG_EVENT(name, event, control, arg1, arg2, arg3, arg4)	\
 	MACRO_BEGIN						\
@@ -128,7 +145,7 @@ extern int	vm_debug_events;
 	}							\
 	MACRO_END
 
-
+extern void inline memoryshot(unsigned int event, unsigned int control);
 
 extern kern_return_t vm_map_create_upl(
 	vm_map_t		map,
@@ -163,6 +180,8 @@ extern void               vm_page_set_offset(vm_page_t page, vm_object_offset_t 
 extern vm_object_offset_t vm_page_get_offset(vm_page_t page);
 extern ppnum_t            vm_page_get_phys_page(vm_page_t page);
 extern vm_page_t          vm_page_get_next(vm_page_t page);
+
+extern kern_return_t	mach_vm_pressure_level_monitor(boolean_t wait_for_pressure, unsigned int *pressure_level);
 
 #ifdef	MACH_KERNEL_PRIVATE
 
@@ -389,13 +408,14 @@ extern void vm_page_decrypt(
 	vm_page_t		page,
 	vm_map_offset_t		kernel_map_offset);
 extern kern_return_t vm_paging_map_object(
-	vm_map_offset_t		*address,
 	vm_page_t		page,
 	vm_object_t		object,
 	vm_object_offset_t	offset,
-	vm_map_size_t		*size,
 	vm_prot_t		protection,
-	boolean_t		can_unlock_object);
+	boolean_t		can_unlock_object,
+	vm_map_size_t		*size,		/* IN/OUT */
+	vm_map_offset_t		*address,	/* OUT */
+	boolean_t		*need_unmap);	/* OUT */
 extern void vm_paging_unmap_object(
 	vm_object_t		object,
 	vm_map_offset_t		start,
@@ -463,10 +483,33 @@ struct vm_page_stats_reusable {
 	uint64_t	reuse_pages_failure;
 	uint64_t	can_reuse_success;
 	uint64_t	can_reuse_failure;
+	uint64_t	reusable_reclaimed;
 };
 extern struct vm_page_stats_reusable vm_page_stats_reusable;
 	
 extern int hibernate_flush_memory(void);
+extern void hibernate_create_paddr_map(void);
+
+extern int vm_compressor_mode;
+extern int vm_compressor_thread_count;
+
+#define VM_PAGER_DEFAULT				0x1	/* Use default pager. */
+#define VM_PAGER_COMPRESSOR_NO_SWAP			0x2	/* In-core compressor only. */
+#define VM_PAGER_COMPRESSOR_WITH_SWAP			0x4	/* In-core compressor + swap backend. */
+#define VM_PAGER_FREEZER_DEFAULT			0x8	/* Freezer backed by default pager.*/
+#define VM_PAGER_FREEZER_COMPRESSOR_NO_SWAP		0x10	/* Freezer backed by in-core compressor only i.e. frozen data remain in-core compressed.*/
+#define VM_PAGER_FREEZER_COMPRESSOR_WITH_SWAP		0x20	/* Freezer backed by in-core compressor with swap support too.*/
+
+#define VM_PAGER_MAX_MODES				6	/* Total number of vm compressor modes supported */
+
+#define DEFAULT_PAGER_IS_ACTIVE		((vm_compressor_mode & VM_PAGER_DEFAULT) == VM_PAGER_DEFAULT)
+
+#define COMPRESSED_PAGER_IS_ACTIVE	(vm_compressor_mode & (VM_PAGER_COMPRESSOR_NO_SWAP | VM_PAGER_COMPRESSOR_WITH_SWAP))
+
+#define DEFAULT_FREEZER_IS_ACTIVE	((vm_compressor_mode & VM_PAGER_FREEZER_DEFAULT) == VM_PAGER_FREEZER_DEFAULT)
+
+#define DEFAULT_FREEZER_COMPRESSED_PAGER_IS_ACTIVE		(vm_compressor_mode & (VM_PAGER_FREEZER_COMPRESSOR_NO_SWAP | VM_PAGER_FREEZER_COMPRESSOR_WITH_SWAP))
+
 
 #endif	/* KERNEL_PRIVATE */
 

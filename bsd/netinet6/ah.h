@@ -55,7 +55,7 @@ struct newah {
 	/* variable size, 32bit bound*/	/* Authentication data */
 };
 
-#ifdef KERNEL_PRIVATE
+#ifdef BSD_KERNEL_PRIVATE
 struct secasvar;
 
 struct ah_algorithm_state {
@@ -86,6 +86,6 @@ extern void ah4_input(struct mbuf *, int);
 extern int ah4_output(struct mbuf *, struct secasvar *);
 extern int ah4_calccksum(struct mbuf *, caddr_t, size_t,
 	const struct ah_algorithm *, struct secasvar *);
-#endif /* KERNEL_PRIVATE */
+#endif /* BSD_KERNEL_PRIVATE */
 
 #endif /* _NETINET6_AH_H_ */

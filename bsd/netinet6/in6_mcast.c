@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2010-2012 Apple Inc. All rights reserved.
+ * Copyright (c) 2010-2013 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -246,9 +246,6 @@ static void ip6ms_free(struct ip6_msource *);
 static struct in6_msource *in6ms_alloc(int);
 static void in6ms_free(struct in6_msource *);
 
-#define	IM6O_CAST_TO_NONCONST(x) ((struct ip6_moptions *)(void *)(uintptr_t)x)
-#define	IN6M_CAST_TO_NONCONST(x) ((struct in6_multi *)(void *)(uintptr_t)x)
-
 /*
  * IPv6 source tree comparison function.
  *
@@ -349,7 +346,7 @@ im6o_match_group(const struct ip6_moptions *imo, const struct ifnet *ifp,
 	int		  idx;
 	int		  nmships;
 
-	IM6O_LOCK_ASSERT_HELD(IM6O_CAST_TO_NONCONST(imo));
+	IM6O_LOCK_ASSERT_HELD(__DECONST(struct ip6_moptions *, imo));
 
 	gsin6 = (struct sockaddr_in6 *)(uintptr_t)(size_t)group;
 
@@ -397,7 +394,7 @@ im6o_match_source(const struct ip6_moptions *imo, const size_t gidx,
 	struct ip6_msource	*ims;
 	const sockunion_t	*psa;
 
-	IM6O_LOCK_ASSERT_HELD(IM6O_CAST_TO_NONCONST(imo));
+	IM6O_LOCK_ASSERT_HELD(__DECONST(struct ip6_moptions *, imo));
 
 	VERIFY(src->sa_family == AF_INET6);
 	VERIFY(gidx != (size_t)-1 && gidx < imo->im6o_num_memberships);
@@ -429,7 +426,7 @@ im6o_mc_filter(const struct ip6_moptions *imo, const struct ifnet *ifp,
 	struct in6_msource *ims;
 	int mode;
 
-	IM6O_LOCK_ASSERT_HELD(IM6O_CAST_TO_NONCONST(imo));
+	IM6O_LOCK_ASSERT_HELD(__DECONST(struct ip6_moptions *, imo));
 	VERIFY(ifp != NULL);
 
 	gidx = im6o_match_group(imo, ifp, group);
@@ -795,7 +792,8 @@ im6f_rollback(struct in6_mfilter *imf)
 			lims->im6sl_st[1] = lims->im6sl_st[0];
 		} else {
 			/* revert source added t1 */
-			MLD_PRINTF(("%s: free in6ms %p\n", __func__, lims));
+			MLD_PRINTF(("%s: free in6ms 0x%llx\n", __func__,
+			    (uint64_t)VM_KERNEL_ADDRPERM(lims)));
 			RB_REMOVE(ip6_msource_tree, &imf->im6f_sources, ims);
 			in6ms_free(lims);
 			imf->im6f_nsrc--;
@@ -855,7 +853,8 @@ im6f_reap(struct in6_mfilter *imf)
 		lims = (struct in6_msource *)ims;
 		if ((lims->im6sl_st[0] == MCAST_UNDEFINED) &&
 		    (lims->im6sl_st[1] == MCAST_UNDEFINED)) {
-			MLD_PRINTF(("%s: free in6ms %p\n", __func__, lims));
+			MLD_PRINTF(("%s: free in6ms 0x%llx\n", __func__,
+			    (uint64_t)VM_KERNEL_ADDRPERM(lims)));
 			RB_REMOVE(ip6_msource_tree, &imf->im6f_sources, ims);
 			in6ms_free(lims);
 			imf->im6f_nsrc--;
@@ -876,7 +875,8 @@ im6f_purge(struct in6_mfilter *imf)
 
 	RB_FOREACH_SAFE(ims, ip6_msource_tree, &imf->im6f_sources, tims) {
 		lims = (struct in6_msource *)ims;
-		MLD_PRINTF(("%s: free in6ms %p\n", __func__, lims));
+		MLD_PRINTF(("%s: free in6ms 0x%llx\n", __func__,
+		    (uint64_t)VM_KERNEL_ADDRPERM(lims)));
 		RB_REMOVE(ip6_msource_tree, &imf->im6f_sources, ims);
 		in6ms_free(lims);
 		imf->im6f_nsrc--;
@@ -916,8 +916,8 @@ in6m_get_source(struct in6_multi *inm, const struct in6_addr *addr,
 		RB_INSERT(ip6_msource_tree, &inm->in6m_srcs, nims);
 		++inm->in6m_nsrc;
 		ims = nims;
-		MLD_PRINTF(("%s: allocated %s as %p\n", __func__,
-		    ip6_sprintf(addr), ims));
+		MLD_PRINTF(("%s: allocated %s as 0x%llx\n", __func__,
+		    ip6_sprintf(addr), (uint64_t)VM_KERNEL_ADDRPERM(ims)));
 	}
 
 	*pims = ims;
@@ -936,7 +936,7 @@ uint8_t
 im6s_get_mode(const struct in6_multi *inm, const struct ip6_msource *ims,
     uint8_t t)
 {
-	IN6M_LOCK_ASSERT_HELD(IN6M_CAST_TO_NONCONST(inm));
+	IN6M_LOCK_ASSERT_HELD(__DECONST(struct in6_multi *, inm));
 
 	t = !!t;
 	if (inm->in6m_st[t].iss_ex > 0 &&
@@ -1107,7 +1107,9 @@ in6m_merge(struct in6_multi *inm, /*const*/ struct in6_mfilter *imf)
 		inm->in6m_st[1].iss_asm++;
 	}
 
-	MLD_PRINTF(("%s: merged imf %p to inm %p\n", __func__, imf, inm));
+	MLD_PRINTF(("%s: merged imf 0x%llx to inm 0x%llx\n", __func__,
+	    (uint64_t)VM_KERNEL_ADDRPERM(imf),
+	    (uint64_t)VM_KERNEL_ADDRPERM(inm)));
 	in6m_print(inm);
 
 out_reap:
@@ -1129,7 +1131,8 @@ in6m_commit(struct in6_multi *inm)
 
 	IN6M_LOCK_ASSERT_HELD(inm);
 
-	MLD_PRINTF(("%s: commit inm %p\n", __func__, inm));
+	MLD_PRINTF(("%s: commit inm 0x%llx\n", __func__,
+	    (uint64_t)VM_KERNEL_ADDRPERM(inm)));
 	MLD_PRINTF(("%s: pre commit:\n", __func__));
 	in6m_print(inm);
 
@@ -1154,7 +1157,8 @@ in6m_reap(struct in6_multi *inm)
 		    ims->im6s_st[1].ex > 0 || ims->im6s_st[1].in > 0 ||
 		    ims->im6s_stp != 0)
 			continue;
-		MLD_PRINTF(("%s: free ims %p\n", __func__, ims));
+		MLD_PRINTF(("%s: free ims 0x%llx\n", __func__,
+		    (uint64_t)VM_KERNEL_ADDRPERM(ims)));
 		RB_REMOVE(ip6_msource_tree, &inm->in6m_srcs, ims);
 		ip6ms_free(ims);
 		inm->in6m_nsrc--;
@@ -1172,7 +1176,8 @@ in6m_purge(struct in6_multi *inm)
 	IN6M_LOCK_ASSERT_HELD(inm);
 
 	RB_FOREACH_SAFE(ims, ip6_msource_tree, &inm->in6m_srcs, tims) {
-		MLD_PRINTF(("%s: free ims %p\n", __func__, ims));
+		MLD_PRINTF(("%s: free ims 0x%llx\n", __func__,
+		    (uint64_t)VM_KERNEL_ADDRPERM(ims)));
 		RB_REMOVE(ip6_msource_tree, &inm->in6m_srcs, ims);
 		ip6ms_free(ims);
 		inm->in6m_nsrc--;
@@ -1198,8 +1203,6 @@ in6_joingroup(struct ifnet *ifp, struct in6_addr *mcaddr,
 		*errorp = ENOBUFS;
 		return (NULL);
 	}
-
-	delay = (delay * PR_SLOWHZ) / hz;
 
 	error = in6_mc_join(ifp, mcaddr, NULL, &imm->i6mm_maddr, delay);
 	if (error) {
@@ -1244,6 +1247,7 @@ in6_mc_join(struct ifnet *ifp, const struct in6_addr *mcaddr,
 	struct in6_mfilter	 timf;
 	struct in6_multi	*inm = NULL;
 	int			 error = 0;
+	struct mld_tparams	 mtp;
 
 	/*
 	 * Sanity: Check scope zone ID was set for ifp, if and
@@ -1255,9 +1259,11 @@ in6_mc_join(struct ifnet *ifp, const struct in6_addr *mcaddr,
 		VERIFY(mcaddr->s6_addr16[1] != 0);
 	}
 
-	MLD_PRINTF(("%s: join %s on %p(%s%d))\n", __func__,
-	    ip6_sprintf(mcaddr), ifp, ifp->if_name, ifp->if_unit));
+	MLD_PRINTF(("%s: join %s on 0x%llx(%s))\n", __func__,
+	    ip6_sprintf(mcaddr), (uint64_t)VM_KERNEL_ADDRPERM(ifp),
+	    if_name(ifp)));
 
+	bzero(&mtp, sizeof (mtp));
 	*pinm = NULL;
 
 	/*
@@ -1285,21 +1291,26 @@ in6_mc_join(struct ifnet *ifp, const struct in6_addr *mcaddr,
 	}
 
 	MLD_PRINTF(("%s: doing mld downcall\n", __func__));
-	error = mld_change_state(inm, delay);
+	error = mld_change_state(inm, &mtp, delay);
 	if (error) {
 		MLD_PRINTF(("%s: failed to update source\n", __func__));
+		im6f_rollback(imf);
 		goto out_in6m_release;
 	}
 
 out_in6m_release:
 	if (error) {
-		MLD_PRINTF(("%s: dropping ref on %p\n", __func__, inm));
+		MLD_PRINTF(("%s: dropping ref on 0x%llx\n", __func__,
+		    (uint64_t)VM_KERNEL_ADDRPERM(inm)));
 		IN6M_UNLOCK(inm);
 		IN6M_REMREF(inm);
 	} else {
 		IN6M_UNLOCK(inm);
 		*pinm = inm;	/* keep refcount from in6_mc_get() */
 	}
+
+	/* schedule timer now that we've dropped the lock(s) */
+	mld_set_timeout(&mtp);
 
 	return (error);
 }
@@ -1322,7 +1333,9 @@ in6_mc_leave(struct in6_multi *inm, /*const*/ struct in6_mfilter *imf)
 {
 	struct in6_mfilter	 timf;
 	int			 error, lastref;
+	struct mld_tparams	 mtp;
 
+	bzero(&mtp, sizeof (mtp));
 	error = 0;
 
 	IN6M_LOCK_ASSERT_NOTHELD(inm);
@@ -1330,10 +1343,10 @@ in6_mc_leave(struct in6_multi *inm, /*const*/ struct in6_mfilter *imf)
 	in6_multihead_lock_exclusive();
 	IN6M_LOCK(inm);
 
-	MLD_PRINTF(("%s: leave inm %p, %s/%s%d, imf %p\n", __func__,
-	    inm, ip6_sprintf(&inm->in6m_addr),
+	MLD_PRINTF(("%s: leave inm 0x%llx, %s/%s%d, imf 0x%llx\n", __func__,
+	    (uint64_t)VM_KERNEL_ADDRPERM(inm), ip6_sprintf(&inm->in6m_addr),
 	    (in6m_is_ifp_detached(inm) ? "null" : inm->in6m_ifp->if_name),
-	    inm->in6m_ifp->if_unit, imf));
+	    inm->in6m_ifp->if_unit, (uint64_t)VM_KERNEL_ADDRPERM(imf)));
 
 	/*
 	 * If no imf was specified (i.e. kernel consumer),
@@ -1357,7 +1370,7 @@ in6_mc_leave(struct in6_multi *inm, /*const*/ struct in6_mfilter *imf)
 	KASSERT(error == 0, ("%s: failed to merge inm state\n", __func__));
 
 	MLD_PRINTF(("%s: doing mld downcall\n", __func__));
-	error = mld_change_state(inm, 0);
+	error = mld_change_state(inm, &mtp, 0);
 #if MLD_DEBUG
 	if (error)
 		MLD_PRINTF(("%s: failed mld downcall\n", __func__));
@@ -1370,6 +1383,9 @@ in6_mc_leave(struct in6_multi *inm, /*const*/ struct in6_mfilter *imf)
 
 	if (lastref)
 		IN6M_REMREF(inm);	/* for in6_multihead list */
+
+	/* schedule timer now that we've dropped the lock(s) */
+	mld_set_timeout(&mtp);
 
 	return (error);
 }
@@ -1396,7 +1412,9 @@ in6p_block_unblock_source(struct inpcb *inp, struct sockopt *sopt)
 	size_t				 idx;
 	uint16_t			 fmode;
 	int				 error, doblock;
+	struct mld_tparams		 mtp;
 
+	bzero(&mtp, sizeof (mtp));
 	ifp = NULL;
 	error = 0;
 	doblock = 0;
@@ -1525,7 +1543,7 @@ in6p_block_unblock_source(struct inpcb *inp, struct sockopt *sopt)
 	}
 
 	MLD_PRINTF(("%s: doing mld downcall\n", __func__));
-	error = mld_change_state(inm, 0);
+	error = mld_change_state(inm, &mtp, 0);
 	IN6M_UNLOCK(inm);
 #if MLD_DEBUG
 	if (error)
@@ -1543,6 +1561,10 @@ out_im6f_rollback:
 out_imo_locked:
 	IM6O_UNLOCK(imo);
 	IM6O_REMREF(imo);	/* from in6p_findmoptions() */
+
+	/* schedule timer now that we've dropped the lock(s) */
+	mld_set_timeout(&mtp);
+
 	return (error);
 }
 
@@ -1664,8 +1686,8 @@ in6p_get_source_filters(struct inpcb *inp, struct sockopt *sopt)
 		return (EADDRNOTAVAIL);
 
 	if ((size_t) msfr.msfr_nsrcs >
-	    SIZE_MAX / sizeof(struct sockaddr_storage))
-		msfr.msfr_nsrcs = SIZE_MAX / sizeof(struct sockaddr_storage);
+	    UINT32_MAX / sizeof(struct sockaddr_storage))
+		msfr.msfr_nsrcs = UINT32_MAX / sizeof(struct sockaddr_storage);
 
 	if (msfr.msfr_nsrcs > in6_mcast_maxsocksrc)
 		msfr.msfr_nsrcs = in6_mcast_maxsocksrc;
@@ -1786,9 +1808,9 @@ ip6_getmoptions(struct inpcb *inp, struct sockopt *sopt)
 	 * If socket is neither of type SOCK_RAW or SOCK_DGRAM,
 	 * or is a divert socket, reject it.
 	 */
-	if (inp->inp_socket->so_proto->pr_protocol == IPPROTO_DIVERT ||
-	    (inp->inp_socket->so_proto->pr_type != SOCK_RAW &&
-	    inp->inp_socket->so_proto->pr_type != SOCK_DGRAM)) {
+	if (SOCK_PROTO(inp->inp_socket) == IPPROTO_DIVERT ||
+	    (SOCK_TYPE(inp->inp_socket) != SOCK_RAW &&
+	    SOCK_TYPE(inp->inp_socket) != SOCK_DGRAM)) {
 		return (EOPNOTSUPP);
 	}
 
@@ -1883,8 +1905,8 @@ in6p_lookup_mcast_ifp(const struct inpcb *in6p,
 	if (ro6.ro_rt != NULL) {
 		ifp = ro6.ro_rt->rt_ifp;
 		VERIFY(ifp != NULL);
-		rtfree(ro6.ro_rt);
 	}
+	ROUTE_RELEASE(&ro6);
 
 	return (ifp);
 }
@@ -1941,7 +1963,9 @@ in6p_join_group(struct inpcb *inp, struct sockopt *sopt)
 	size_t				 idx;
 	int				 error, is_new;
 	uint32_t			scopeid = 0;
+	struct mld_tparams		mtp;
 
+	bzero(&mtp, sizeof (mtp));
 	ifp = NULL;
 	imf = NULL;
 	error = 0;
@@ -2011,8 +2035,9 @@ in6p_join_group(struct inpcb *inp, struct sockopt *sopt)
 			ifp = ifindex2ifnet[mreq.ipv6mr_interface];
 			ifnet_head_done();
 		}
-		MLD_PRINTF(("%s: ipv6mr_interface = %d, ifp = %p\n",
-		    __func__, mreq.ipv6mr_interface, ifp));
+		MLD_PRINTF(("%s: ipv6mr_interface = %d, ifp = 0x%llx\n",
+		    __func__, mreq.ipv6mr_interface,
+		    (uint64_t)VM_KERNEL_ADDRPERM(ifp)));
 		break;
 	}
 
@@ -2236,7 +2261,7 @@ in6p_join_group(struct inpcb *inp, struct sockopt *sopt)
 			goto out_im6f_rollback;
 		}
 		MLD_PRINTF(("%s: doing mld downcall\n", __func__));
-		error = mld_change_state(inm, 0);
+		error = mld_change_state(inm, &mtp, 0);
 		IN6M_UNLOCK(inm);
 		if (error) {
 			MLD_PRINTF(("%s: failed mld downcall\n",
@@ -2266,6 +2291,10 @@ out_im6o_free:
 out_imo_locked:
 	IM6O_UNLOCK(imo);
 	IM6O_REMREF(imo);	/* from in6p_findmoptions() */
+
+	/* schedule timer now that we've dropped the lock(s) */
+	mld_set_timeout(&mtp);
+
 	return (error);
 }
 
@@ -2286,7 +2315,9 @@ in6p_leave_group(struct inpcb *inp, struct sockopt *sopt)
 	uint32_t			 ifindex = 0;
 	size_t				 idx;
 	int				 error, is_final;
+	struct mld_tparams		 mtp;
 
+	bzero(&mtp, sizeof (mtp));
 	ifp = NULL;
 	error = 0;
 	is_final = 1;
@@ -2440,7 +2471,8 @@ in6p_leave_group(struct inpcb *inp, struct sockopt *sopt)
 	}
 
 	VERIFY(ifp != NULL);
-	MLD_PRINTF(("%s: ifp = %p\n", __func__, ifp));
+	MLD_PRINTF(("%s: ifp = 0x%llx\n", __func__,
+	    (uint64_t)VM_KERNEL_ADDRPERM(ifp)));
 
 	/*
 	 * Find the membership in the membership array.
@@ -2478,7 +2510,7 @@ in6p_leave_group(struct inpcb *inp, struct sockopt *sopt)
 		}
 		ims = im6o_match_source(imo, idx, &ssa->sa);
 		if (ims == NULL) {
-			MLD_PRINTF(("%s: source %p %spresent\n", __func__,
+			MLD_PRINTF(("%s: source %s %spresent\n", __func__,
 			    ip6_sprintf(&ssa->sin6.sin6_addr),
 			    "not "));
 			error = EADDRNOTAVAIL;
@@ -2516,7 +2548,7 @@ in6p_leave_group(struct inpcb *inp, struct sockopt *sopt)
 		}
 
 		MLD_PRINTF(("%s: doing mld downcall\n", __func__));
-		error = mld_change_state(inm, 0);
+		error = mld_change_state(inm, &mtp, 0);
 		if (error) {
 			MLD_PRINTF(("%s: failed mld downcall\n", __func__));
 		}
@@ -2546,6 +2578,10 @@ out_im6f_rollback:
 out_locked:
 	IM6O_UNLOCK(imo);
 	IM6O_REMREF(imo);	/* from in6p_findmoptions() */
+
+	/* schedule timer now that we've dropped the lock(s) */
+	mld_set_timeout(&mtp);
+
 	return (error);
 }
 
@@ -2611,7 +2647,10 @@ in6p_set_source_filters(struct inpcb *inp, struct sockopt *sopt)
 	struct in6_multi	*inm;
 	size_t			 idx;
 	int			 error;
-	user_addr_t 		 tmp_ptr;
+	user_addr_t		 tmp_ptr;
+	struct mld_tparams	 mtp;
+
+	bzero(&mtp, sizeof (mtp));
 
 	if (IS_64BIT_PROCESS(current_proc())) {
 		error = sooptcopyin(sopt, &msfr64,
@@ -2632,8 +2671,8 @@ in6p_set_source_filters(struct inpcb *inp, struct sockopt *sopt)
 	}
 
 	if ((size_t) msfr.msfr_nsrcs >
-	    SIZE_MAX / sizeof(struct sockaddr_storage))
-		msfr.msfr_nsrcs = SIZE_MAX / sizeof(struct sockaddr_storage);
+	    UINT32_MAX / sizeof(struct sockaddr_storage))
+		msfr.msfr_nsrcs = UINT32_MAX / sizeof(struct sockaddr_storage);
 
 	if (msfr.msfr_nsrcs > in6_mcast_maxsocksrc)
 		return (ENOBUFS);
@@ -2783,7 +2822,7 @@ in6p_set_source_filters(struct inpcb *inp, struct sockopt *sopt)
 	}
 
 	MLD_PRINTF(("%s: doing mld downcall\n", __func__));
-	error = mld_change_state(inm, 0);
+	error = mld_change_state(inm, &mtp, 0);
 	IN6M_UNLOCK(inm);
 #if MLD_DEBUG
 	if (error)
@@ -2801,6 +2840,9 @@ out_im6f_rollback:
 out_imo_locked:
 	IM6O_UNLOCK(imo);
 	IM6O_REMREF(imo);	/* from in6p_findmoptions() */
+
+	/* schedule timer now that we've dropped the lock(s) */
+	mld_set_timeout(&mtp);
 
 	return (error);
 }
@@ -2827,9 +2869,9 @@ ip6_setmoptions(struct inpcb *inp, struct sockopt *sopt)
 	 * If socket is neither of type SOCK_RAW or SOCK_DGRAM,
 	 * or is a divert socket, reject it.
 	 */
-	if (inp->inp_socket->so_proto->pr_protocol == IPPROTO_DIVERT ||
-	    (inp->inp_socket->so_proto->pr_type != SOCK_RAW &&
-	     inp->inp_socket->so_proto->pr_type != SOCK_DGRAM))
+	if (SOCK_PROTO(inp->inp_socket) == IPPROTO_DIVERT ||
+	    (SOCK_TYPE(inp->inp_socket) != SOCK_RAW &&
+	     SOCK_TYPE(inp->inp_socket) != SOCK_DGRAM))
 		return (EOPNOTSUPP);
 
 	switch (sopt->sopt_name) {
@@ -3001,7 +3043,8 @@ sysctl_ip6_mcast_filters SYSCTL_HANDLER_ARGS
 			break;		/* abort */
 		}
 		RB_FOREACH(ims, ip6_msource_tree, &inm->in6m_srcs) {
-			MLD_PRINTF(("%s: visit node %p\n", __func__, ims));
+			MLD_PRINTF(("%s: visit node 0x%llx\n", __func__,
+			    (uint64_t)VM_KERNEL_ADDRPERM(ims)));
 			/*
 			 * Only copy-out sources which are in-mode.
 			 */
@@ -3430,6 +3473,7 @@ in6m_mode_str(const int mode)
 static const char *in6m_statestrs[] = {
 	"not-member\n",
 	"silent\n",
+	"reporting\n",
 	"idle\n",
 	"lazy\n",
 	"sleeping\n",
@@ -3455,25 +3499,25 @@ in6m_print(const struct in6_multi *inm)
 {
 	int t;
 
-	IN6M_LOCK_ASSERT_HELD(IN6M_CAST_TO_NONCONST(inm));
+	IN6M_LOCK_ASSERT_HELD(__DECONST(struct in6_multi *, inm));
 
 	if (mld_debug == 0)
 		return;
 
-	printf("%s: --- begin in6m %p ---\n", __func__, inm);
-	printf("addr %s ifp %p(%s%d) ifma %p\n",
+	printf("%s: --- begin in6m 0x%llx ---\n", __func__,
+	    (uint64_t)VM_KERNEL_ADDRPERM(inm));
+	printf("addr %s ifp 0x%llx(%s) ifma 0x%llx\n",
 	    ip6_sprintf(&inm->in6m_addr),
-	    inm->in6m_ifp,
-	    inm->in6m_ifp->if_name,
-	    inm->in6m_ifp->if_unit,
-	    inm->in6m_ifma);
+	    (uint64_t)VM_KERNEL_ADDRPERM(inm->in6m_ifp),
+	    if_name(inm->in6m_ifp),
+	    (uint64_t)VM_KERNEL_ADDRPERM(inm->in6m_ifma));
 	printf("timer %u state %s refcount %u scq.len %u\n",
 	    inm->in6m_timer,
 	    in6m_state_str(inm->in6m_state),
 	    inm->in6m_refcount,
 	    inm->in6m_scq.ifq_len);
-	printf("mli %p nsrc %lu sctimer %u scrv %u\n",
-	    inm->in6m_mli,
+	printf("mli 0x%llx nsrc %lu sctimer %u scrv %u\n",
+	    (uint64_t)VM_KERNEL_ADDRPERM(inm->in6m_mli),
 	    inm->in6m_nsrc,
 	    inm->in6m_sctimer,
 	    inm->in6m_scrv);
@@ -3485,7 +3529,8 @@ in6m_print(const struct in6_multi *inm)
 		    inm->in6m_st[t].iss_in,
 		    inm->in6m_st[t].iss_rec);
 	}
-	printf("%s: --- end in6m %p ---\n", __func__, inm);
+	printf("%s: --- end in6m 0x%llx ---\n", __func__,
+	    (uint64_t)VM_KERNEL_ADDRPERM(inm));
 }
 
 #else 

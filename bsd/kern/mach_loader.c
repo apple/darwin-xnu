@@ -49,6 +49,7 @@
 #include <sys/fcntl.h>
 #include <sys/ubc_internal.h>
 #include <sys/imgact.h>
+#include <sys/codesign.h>
 
 #include <mach/mach_types.h>
 #include <mach/vm_map.h>	/* vm_allocate() */
@@ -79,6 +80,7 @@
 #include <vm/vm_pager.h>
 #include <vm/vnode_pager.h>
 #include <vm/vm_protos.h> 
+#include <IOKit/IOReturn.h>	/* for kIOReturnNotPrivileged */
 
 /*
  * XXX vm/pmap.h should not treat these prototypes as MACH_KERNEL_PRIVATE
@@ -127,6 +129,7 @@ parse_machfile(
 	off_t			macho_size,
 	int			depth,
 	int64_t			slide,
+	int64_t			dyld_slide,	
 	load_result_t		*result
 );
 
@@ -140,6 +143,13 @@ load_segment(
 	struct vnode			*vp,
 	vm_map_t			map,
 	int64_t				slide,
+	load_result_t			*result
+);
+
+static load_return_t
+load_uuid(
+	struct uuid_command		*uulp,
+	char				*command_end,
 	load_result_t			*result
 );
 
@@ -159,7 +169,9 @@ set_code_unprotect(
 	caddr_t				addr,
 	vm_map_t			map,
 	int64_t				slide,
-	struct vnode			*vp);
+	struct vnode		*vp,
+	cpu_type_t			cputype,
+	cpu_subtype_t		cpusubtype);
 #endif
 
 static
@@ -297,6 +309,7 @@ load_machfile(
 	task_t task = current_task();
 	proc_t p = current_proc();
 	mach_vm_offset_t	aslr_offset = 0;
+	mach_vm_offset_t	dyld_aslr_offset = 0;
 	kern_return_t 		kret;
 
 	if (macho_size > file_size) {
@@ -327,14 +340,16 @@ load_machfile(
 				0,
 				vm_compute_max_offset((imgp->ip_flags & IMGPF_IS_64BIT)),
 				TRUE);
-
 	} else
 		map = new_map;
 
 #ifndef	CONFIG_ENFORCE_SIGNED_CODE
-	/* This turns off faulting for executable pages, which allows to 
-	 * circumvent Code Signing Enforcement */
-	if ( (header->flags & MH_ALLOW_STACK_EXECUTION) )
+	/* This turns off faulting for executable pages, which allows
+	 * to circumvent Code Signing Enforcement. The per process
+	 * flag (CS_ENFORCEMENT) is not set yet, but we can use the
+	 * global flag.
+	 */
+	if ( !cs_enforcement(NULL) && (header->flags & MH_ALLOW_STACK_EXECUTION) )
 	        vm_map_disable_NX(map);
 #endif
 
@@ -344,12 +359,20 @@ load_machfile(
 		vm_map_disallow_data_exec(map);
 	
 	/*
-	 * Compute a random offset for ASLR.
+	 * Compute a random offset for ASLR, and an independent random offset for dyld.
 	 */
 	if (!(imgp->ip_flags & IMGPF_DISABLE_ASLR)) {
+		uint64_t max_slide_pages;
+
+		max_slide_pages = vm_map_get_max_aslr_slide_pages(map);
+
 		aslr_offset = random();
-		aslr_offset %= 1 << ((imgp->ip_flags & IMGPF_IS_64BIT) ? 16 : 8);
-		aslr_offset <<= PAGE_SHIFT;
+		aslr_offset %= max_slide_pages;
+		aslr_offset <<= vm_map_page_shift(map);
+
+		dyld_aslr_offset = random();
+		dyld_aslr_offset %= max_slide_pages;
+		dyld_aslr_offset <<= vm_map_page_shift(map);
 	}
 	
 	if (!result)
@@ -358,7 +381,7 @@ load_machfile(
 	*result = load_result_null;
 
 	lret = parse_machfile(vp, map, thread, header, file_offset, macho_size,
-			      0, (int64_t)aslr_offset, result);
+	                      0, (int64_t)aslr_offset, (int64_t)dyld_aslr_offset, result);
 
 	if (lret != LOAD_SUCCESS) {
 		if (create_map) {
@@ -367,19 +390,6 @@ load_machfile(
 		return(lret);
 	}
 
-#if CONFIG_EMBEDDED
-	/*
-	 * Check to see if the page zero is enforced by the map->min_offset.
-	 */ 
-	if (vm_map_has_hard_pagezero(map, 0x1000) == FALSE) {
-		if (create_map) {
-			vm_map_deallocate(map);	/* will lose pmap reference too */
-		}
-		printf("Cannot enforce a hard page-zero for %s\n", imgp->ip_strings);
-		psignal(vfs_context_proc(imgp->ip_vfs_context), SIGKILL);
-		return (LOAD_BADMACHO);
-	}
-#else
 	/*
 	 * For 64-bit users, check for presence of a 4GB page zero
 	 * which will enable the kernel to share the user's address space
@@ -390,7 +400,6 @@ load_machfile(
 	     vm_map_has_4GB_pagezero(map)) {
 		vm_map_set_4GB_pagezero(map);
 	}
-#endif
 	/*
 	 *	Commit to new map.
 	 *
@@ -464,13 +473,13 @@ parse_machfile(
 	off_t			macho_size,
 	int			depth,
 	int64_t			aslr_offset,
+	int64_t			dyld_aslr_offset,
 	load_result_t		*result
 )
 {
 	uint32_t		ncmds;
 	struct load_command	*lcp;
 	struct dylinker_command	*dlp = 0;
-	struct uuid_command	*uulp = 0;
 	integer_t		dlarchbits = 0;
 	void *			control;
 	load_return_t		ret = LOAD_SUCCESS;
@@ -505,7 +514,7 @@ parse_machfile(
 	/*
 	 *	Check to see if right machine type.
 	 */
-	if (((cpu_type_t)(header->cputype & ~CPU_ARCH_MASK) != cpu_type()) ||
+	if (((cpu_type_t)(header->cputype & ~CPU_ARCH_MASK) != (cpu_type() & ~CPU_ARCH_MASK)) ||
 	    !grade_binary(header->cputype, 
 	    	header->cpusubtype & ~CPU_SUBTYPE_MASK))
 		return(LOAD_BADARCH);
@@ -583,9 +592,14 @@ parse_machfile(
 		slide = aslr_offset;
 	}
 
-	/*
-	 *	Scan through the commands, processing each one as necessary.
+	 /*
+	 *  Scan through the commands, processing each one as necessary.
+	 *  We parse in three passes through the headers:
+	 *  1: thread state, uuid, code signature
+	 *  2: segments
+	 *  3: dyld, encryption, check entry point
 	 */
+	
 	for (pass = 1; pass <= 3; pass++) {
 
 		/*
@@ -635,18 +649,50 @@ parse_machfile(
 			 */
 			switch(lcp->cmd) {
 			case LC_SEGMENT:
+				if (pass != 2)
+					break;
+
+				if (abi64) {
+					/*
+					 * Having an LC_SEGMENT command for the
+					 * wrong ABI is invalid <rdar://problem/11021230>
+					 */
+					ret = LOAD_BADMACHO;
+					break;
+				}
+
+				ret = load_segment(lcp,
+				                   header->filetype,
+				                   control,
+				                   file_offset,
+				                   macho_size,
+				                   vp,
+				                   map,
+				                   slide,
+				                   result);
+				break;
 			case LC_SEGMENT_64:
 				if (pass != 2)
 					break;
+
+				if (!abi64) {
+					/*
+					 * Having an LC_SEGMENT_64 command for the
+					 * wrong ABI is invalid <rdar://problem/11021230>
+					 */
+					ret = LOAD_BADMACHO;
+					break;
+				}
+
 				ret = load_segment(lcp,
-				    		   header->filetype,
-						   control,
-						   file_offset,
-						   macho_size,
-						   vp,
-						   map,
-						   slide,
-						   result);
+				                   header->filetype,
+				                   control,
+				                   file_offset,
+				                   macho_size,
+				                   vp,
+				                   map,
+				                   slide,
+				                   result);
 				break;
 			case LC_UNIXTHREAD:
 				if (pass != 1)
@@ -680,8 +726,9 @@ parse_machfile(
 				break;
 			case LC_UUID:
 				if (pass == 1 && depth == 1) {
-					uulp = (struct uuid_command *)lcp;
-					memcpy(&result->uuid[0], &uulp->uuid[0], sizeof(result->uuid));
+					ret = load_uuid((struct uuid_command *) lcp,
+							(char *)addr + mach_header_sz + header->sizeofcmds,
+							result);
 				}
 				break;
 			case LC_CODE_SIGNATURE:
@@ -710,18 +757,29 @@ parse_machfile(
 				break;
 #if CONFIG_CODE_DECRYPTION
 			case LC_ENCRYPTION_INFO:
+			case LC_ENCRYPTION_INFO_64:
 				if (pass != 3)
 					break;
 				ret = set_code_unprotect(
 					(struct encryption_info_command *) lcp,
-					addr, map, slide, vp);
+					addr, map, slide, vp,
+					header->cputype, header->cpusubtype);
 				if (ret != LOAD_SUCCESS) {
 					printf("proc %d: set_code_unprotect() error %d "
 					       "for file \"%s\"\n",
 					       p->p_pid, ret, vp->v_name);
-					/* Don't let the app run if it's 
+					/* 
+					 * Don't let the app run if it's 
 					 * encrypted but we failed to set up the
-					 * decrypter */
+					 * decrypter. If the keys are missing it will
+					 * return LOAD_DECRYPTFAIL.
+					 */
+					 if (ret == LOAD_DECRYPTFAIL) {
+						/* failed to load due to missing FP keys */
+						proc_lock(p);
+						p->p_lflag |= P_LTERM_DECRYPTFAIL;
+						proc_unlock(p);
+					}
 					 psignal(p, SIGKILL);
 				}
 				break;
@@ -754,9 +812,13 @@ parse_machfile(
 		}
 
 	    if ((ret == LOAD_SUCCESS) && (dlp != 0)) {
-		    /* load the dylinker, and always slide it by the ASLR
-		     * offset regardless of PIE */
-		    ret = load_dylinker(dlp, dlarchbits, map, thread, depth, aslr_offset, result);
+		/*
+		 * load the dylinker, and slide it by the independent DYLD ASLR
+		 * offset regardless of the PIE-ness of the main binary.
+		 */
+
+		ret = load_dylinker(dlp, dlarchbits, map, thread, depth,
+		                    dyld_aslr_offset, result);
 	    }
 
 	    if((ret == LOAD_SUCCESS) && (depth == 1)) {
@@ -910,6 +972,10 @@ load_segment(
 	seg_size = round_page_64(scp->vmsize);
 	map_size = round_page_64(scp->filesize);
 	map_addr = trunc_page_64(scp->vmaddr); /* JVXXX note that in XNU TOT this is round instead of trunc for 64 bits */
+
+	seg_size = vm_map_round_page(seg_size, vm_map_page_mask(map));
+	map_size = vm_map_round_page(map_size, vm_map_page_mask(map));
+
 	if (seg_size == 0)
 		return (KERN_SUCCESS);
 	if (map_addr == 0 &&
@@ -925,9 +991,6 @@ load_segment(
 		 */
 		seg_size += slide;
 		slide = 0;
-#if CONFIG_EMBEDDED
-		prohibit_pagezero_mapping = TRUE;
-#endif
 		/* XXX (4596982) this interferes with Rosetta, so limit to 64-bit tasks */
 		if (scp->cmd == LC_SEGMENT_64) {
 		        prohibit_pagezero_mapping = TRUE;
@@ -973,8 +1036,9 @@ load_segment(
 			        VM_FLAGS_FIXED,	control, map_offset, TRUE,
 				initprot, maxprot,
 				VM_INHERIT_DEFAULT);
-		if (ret != KERN_SUCCESS)
+		if (ret != KERN_SUCCESS) {
 			return (LOAD_NOSPACE);
+		}
 	
 		/*
 		 *	If the file didn't end on a page boundary,
@@ -1044,7 +1108,28 @@ load_segment(
 	return ret;
 }
 
+static
+load_return_t
+load_uuid(
+	struct uuid_command	*uulp,
+	char			*command_end,
+	load_result_t		*result
+)
+{
+		/*
+		 * We need to check the following for this command:
+		 * - The command size should be atleast the size of struct uuid_command
+		 * - The UUID part of the command should be completely within the mach-o header
+		 */
 
+		if ((uulp->cmdsize < sizeof(struct uuid_command)) ||
+		    (((char *)uulp + sizeof(struct uuid_command)) > command_end)) {
+			return (LOAD_BADMACHO);
+		}
+		
+		memcpy(&result->uuid[0], &uulp->uuid[0], sizeof(result->uuid));
+		return (LOAD_SUCCESS);
+}
 
 static
 load_return_t
@@ -1371,7 +1456,7 @@ load_dylinker(
 	 */
 
 	ret = parse_machfile(vp, map, thread, header, file_offset,
-	    macho_size, depth, slide, myresult);
+	                     macho_size, depth, slide, 0, myresult);
 
 	/*
 	 *	If it turned out something was in the way, then we'll take
@@ -1392,7 +1477,8 @@ load_dylinker(
 		 * subsequent map attempt (with a slide) in "myresult"
 		 */
 		ret = parse_machfile(vp, VM_MAP_NULL, THREAD_NULL, header,
-		    file_offset, macho_size, depth, 0 /* slide */, myresult);
+		                     file_offset, macho_size, depth,
+		                     0 /* slide */, 0, myresult);
 
 		if (ret != LOAD_SUCCESS) {
 			goto out;
@@ -1427,7 +1513,8 @@ load_dylinker(
 		*myresult = load_result_null;
 
 		ret = parse_machfile(vp, map, thread, header,
-		    file_offset, macho_size, depth, slide_amount, myresult);
+		                     file_offset, macho_size, depth,
+		                     slide_amount, 0, myresult);
 
 		if (ret) {
 			goto out;
@@ -1476,17 +1563,20 @@ load_code_signature(
 	}
 
 	blob = ubc_cs_blob_get(vp, cputype, -1);
-	if (blob != NULL) {
-		/* we already have a blob for this vnode and cputype */
-		if (blob->csb_cpu_type == cputype &&
-		    blob->csb_base_offset == macho_offset &&
-		    blob->csb_mem_size == lcp->datasize) {
-			/* it matches the blob we want here: we're done */
-			ret = LOAD_SUCCESS;
-		} else {
-			/* the blob has changed for this vnode: fail ! */
-			ret = LOAD_BADMACHO;
-		}
+	if (blob != NULL &&
+	    blob->csb_cpu_type == cputype &&
+	    blob->csb_base_offset == macho_offset &&
+	    blob->csb_blob_offset == lcp->dataoff &&
+	    blob->csb_mem_size == lcp->datasize) {
+		/* 
+		 * we already have a blob for this vnode and cputype
+		 * and its at the same offset in Mach-O.  Optimize to
+		 * not reload, revalidate, and compare the blob hashes.
+		 * Security will not be compromised, but we might miss
+		 * out on some messagetracer info about the differences
+		 * in blob content.
+		 */
+		ret = LOAD_SUCCESS;
 		goto out;
 	}
 
@@ -1517,6 +1607,7 @@ load_code_signature(
 			    cputype,
 			    macho_offset,
 			    addr,
+			    lcp->dataoff,
 			    lcp->datasize)) {
 		ret = LOAD_FAILURE;
 		goto out;
@@ -1553,7 +1644,9 @@ set_code_unprotect(
 		   caddr_t addr, 	
 		   vm_map_t map,
 		   int64_t slide,
-		   struct vnode	*vp)
+		   struct vnode	*vp,
+		   cpu_type_t cputype,
+		   cpu_subtype_t cpusubtype)
 {
 	int result, len;
 	pager_crypt_info_t crypt_info;
@@ -1598,13 +1691,21 @@ set_code_unprotect(
 	}
 	
 	/* set up decrypter first */
-	kr=text_crypter_create(&crypt_info, cryptname, (void*)vpath);
+	crypt_file_data_t crypt_data = {
+		.filename = vpath,
+		.cputype = cputype,
+		.cpusubtype = cpusubtype};
+	kr=text_crypter_create(&crypt_info, cryptname, (void*)&crypt_data);
 	FREE_ZONE(vpath, MAXPATHLEN, M_NAMEI);
 	
 	if(kr) {
 		printf("set_code_unprotect: unable to create decrypter %s, kr=%d\n",
 		       cryptname, kr);
-		return LOAD_RESOURCE;
+		if (kr == kIOReturnNotPrivileged) {
+			/* text encryption returned decryption failure */
+			return(LOAD_DECRYPTFAIL);
+		 }else
+			return LOAD_RESOURCE;
 	}
 	
 	/* this is terrible, but we have to rescan the load commands to find the
@@ -1737,7 +1838,7 @@ get_macho_vnode(
 	}
 
 	/* check access */
-	if ((error = vnode_authorize(vp, NULL, KAUTH_VNODE_EXECUTE, ctx)) != 0) {
+	if ((error = vnode_authorize(vp, NULL, KAUTH_VNODE_EXECUTE | KAUTH_VNODE_READ_DATA, ctx)) != 0) {
 		error = LOAD_PROTECT;
 		goto bad1;
 	}

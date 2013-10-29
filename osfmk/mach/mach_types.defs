@@ -93,15 +93,31 @@ type upl_t = mach_port_t
 #endif /* KERNEL_PRIVATE */
 
 type mach_port_status_t = struct[10] of integer_t;	/* obsolete */
+type mach_port_info_ext_t = struct[17] of integer_t;
 
 		/* mach_port_info_t: can hold either a
 		 * mach_port_status_t (9 ints) or a
-		 * mach_port_limits_t (1 int). If new flavors of
+		 * mach_port_limits_t (1 int) or a 
+		 * mach_port_info_ext_t (17 ints). If new flavors of
 		 * mach_port_{get,set}_attributes are added, the size of
 		 * this array may have to be increased. (See mach/port.h)
 		 */
 type mach_port_flavor_t 	= int;
-type mach_port_info_t		= array[*:10] of integer_t;
+type mach_port_info_t		= array[*:17] of integer_t;
+
+     		/*
+		 * mach_msg_max_trailer_t: can hold
+		 * mach_msg_trailer_type_t (1 int)
+		 * mach_msg_trailer_size_t (1 int)
+		 * mach_port_seqno_t (1 int)
+		 * security_token_t (2 ints)
+		 * audit_token_t (8 ints)
+		 * mach_port_context_t (2 ints)
+		 * msgh_ad (1 int)
+		 * msg_labels_t (1 int)
+		 */
+type mach_msg_trailer_type_t = int;
+type mach_msg_trailer_info_t	= array[*:68] of char;
 
 type task_t = mach_port_t
 #if	KERNEL_SERVER
@@ -222,7 +238,9 @@ type thread_policy_t		= array[*:16] of integer_t;
 		 * definition may need to be changed. (See
 		 * mach/task_info.h and mach/policy.h) */
 type task_flavor_t		= int;
-type task_info_t		= array[*:32] of integer_t;
+type task_info_t		= array[*:52] of integer_t;
+
+type task_purgable_info_t	= struct[68] of integer_t;
 
 type task_policy_flavor_t	= natural_t;
 type task_policy_t		= array[*:16] of integer_t;
@@ -304,15 +322,14 @@ type host_security_t = mach_port_t
 		 * 	kernel_resource_sizes_t (5 ints)
 		 * 	host_load_info_t (6 ints)
 		 * 	vm_statistics32_t (15 ints)
+		 * 	host_purgable_info_t (68 ints)
 		 *	host_expired_task_info uses a task_power_info (18 ints)
 		 * 
 		 * If other host_info flavors are added, this definition may
 		 * need to be changed. (See mach/{host_info,vm_statistics}.h)
 		 */
 type host_flavor_t		= int;
-type host_info_t 		= array[*:18] of integer_t;
-
-
+type host_info_t 		= array[*:68] of integer_t;
 		/* 
 		 * host_info64_t: variable-sized inline array that can contain:
 		 * 
@@ -386,6 +403,9 @@ type time_value_t = struct[2] of integer_t;
 
 type mach_port_qos_t = struct[2] of integer_t;
 
+type mach_port_options_t = struct[3] of uint64_t;
+type mach_port_options_ptr_t = ^ mach_port_options_t;
+
 type emulation_vector_t		= ^array[] of vm_offset_t;
 
 type inline_existence_map_t	= array[*:512] of char;
@@ -423,7 +443,6 @@ type msg_labels_t = mach_port_t;
 		 * memory_object_behave_info_t (4 ints)
 		 * memory_object_perf_info_t (2 ints)
 		 * old_memory_object_attr_info_t (3 ints)
-		 * memory_object_norma_info_t (5 ints)
 		 * If other flavors are added, this definition may
 		 * need to be changed. (see mach/memory_object.h) */
 type memory_object_flavor_t	= int;
@@ -485,6 +504,13 @@ type lock_set_t = mach_port_t
 		intran: lock_set_t convert_port_to_lock_set(mach_port_t)
 		outtran: mach_port_t convert_lock_set_to_port(lock_set_t)
 		destructor: lock_set_dereference(lock_set_t)
+#endif	/* KERNEL_SERVER */
+		;
+
+type task_suspension_token_t = mach_port_move_send_once_t
+#if	KERNEL_SERVER
+		intran: task_suspension_token_t convert_port_to_task_suspension_token(mach_port_t)
+		outtran: mach_port_t convert_task_suspension_token_to_port(task_suspension_token_t)
 #endif	/* KERNEL_SERVER */
 		;
 

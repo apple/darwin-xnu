@@ -55,6 +55,6 @@ struct aks_volume_key_t
 // aka kCSFDETargetVEKID
 #define PLATFORM_FUNCTION_GET_MEDIA_ENCRYPTION_KEY_UUID  "CSFDETargetVEKID"
 
-#define AKS_SERVICE_PATH                "/IOResources/AppleKeyStore"
+#define AKS_SERVICE_PATH                "/IOResources/AppleFDEKeyStore"
 
 #endif /* _IOKIT_APPLEKEYSTOREINTERFACE_H */

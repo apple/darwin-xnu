@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008-2009 Apple Inc. All rights reserved.
+ * Copyright (c) 2008-2012 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -97,11 +97,6 @@ kern_return_t is_io_catalog_send_data(
 
 void kmod_dump_log(vm_offset_t*, unsigned int);
 
-#if __i386__
-kern_return_t kext_get_kmod_info(
-    kmod_info_array_t      * kmod_list,
-    mach_msg_type_number_t * kmodCount);
-#endif /* __i386__ */
 
 #endif /* XNU_KERNEL_PRIVATE */
 };
@@ -183,11 +178,6 @@ class OSKext : public OSObject
     friend void kmod_dump_log(vm_offset_t*, unsigned int);
     friend void kext_dump_panic_lists(int (*printf_func)(const char * fmt, ...));
 
-#if __i386__
-    friend kern_return_t kext_get_kmod_info(
-        kmod_info_array_t      * kmod_list,
-        mach_msg_type_number_t * kmodCount);
-#endif /* __i386__ */
 
 #endif /* XNU_KERNEL_PRIVATE */
 
@@ -313,6 +303,8 @@ private:
     static OSReturn removeKext(
         OSKext * aKext,
         bool     terminateServicesAndRemovePersonalitiesFlag = false);
+
+    virtual bool isInExcludeList(void);
 
    /* Mkexts.
     */
@@ -514,13 +506,6 @@ private:
      */
     virtual void               setCPPInitialized(bool initialized=true);
 
-#if __i386__
-   /* Backward compatibility for kmod_get_info() MIG call.
-    */
-    static kern_return_t getKmodInfo(
-        kmod_info_array_t      * kmodList,
-        mach_msg_type_number_t * kmodCount);
-#endif /* __i386__ */
 
 
 #if PRAGMA_MARK
@@ -573,6 +558,10 @@ public:
     static void     setKextdActive(Boolean active = true);
     static void     setDeferredLoadSucceeded(Boolean succeeded = true);
     static void     considerRebuildOfPrelinkedKernel(void);
+    static void     createExcludeListFromBooterData(
+                                            OSDictionary * theDictionary,
+                                            OSCollectionIterator * theIterator);
+    static void     createExcludeListFromPrelinkInfo(OSArray * theInfoArray);
 
     virtual bool    setAutounloadEnabled(bool flag);
 

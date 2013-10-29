@@ -73,25 +73,14 @@
  * Basic integral types.  Omit the typedef if
  * not possible for a machine/compiler combination.
  */
-#ifndef _INT8_T
-#define _INT8_T
-typedef	__signed char		int8_t;
-#endif
+#include <sys/_types/_int8_t.h>
+#include <sys/_types/_int16_t.h>
+#include <sys/_types/_int32_t.h>
+#include <sys/_types/_int64_t.h>
+
 typedef	unsigned char		u_int8_t;
-#ifndef _INT16_T
-#define _INT16_T
-typedef	short			int16_t;
-#endif
 typedef	unsigned short		u_int16_t;
-#ifndef _INT32_T
-#define _INT32_T
-typedef	int			int32_t;
-#endif
 typedef	unsigned int		u_int32_t;
-#ifndef _INT64_T
-#define _INT64_T
-typedef	long long		int64_t;
-#endif
 typedef	unsigned long long	u_int64_t;
 
 #if __LP64__
@@ -100,14 +89,8 @@ typedef int64_t			register_t;
 typedef int32_t			register_t;
 #endif
 
-#ifndef _INTPTR_T
-#define _INTPTR_T
-typedef __darwin_intptr_t	intptr_t;
-#endif
-#ifndef _UINTPTR_T
-#define _UINTPTR_T
-typedef unsigned long		uintptr_t;
-#endif
+#include <sys/_types/_intptr_t.h>
+#include <sys/_types/_uintptr_t.h>
 
 #if !defined(_ANSI_SOURCE) && (!defined(_POSIX_C_SOURCE) || defined(_DARWIN_C_SOURCE))
 /* These types are used for reserving the largest possible size. */
@@ -162,9 +145,7 @@ typedef __int64_t		user32_off_t __attribute__((aligned(4)));
 /* This defines the size of syscall arguments after copying into the kernel: */
 typedef u_int64_t		syscall_arg_t;
 
-#ifndef __offsetof
-#define __offsetof(type, field) ((size_t)(&((type *)0)->field))
-#endif
+#include <sys/_types/___offsetof.h>
 
 #endif /* __ASSEMBLER__ */
 #endif	/* _MACHTYPES_H_ */

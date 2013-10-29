@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2010 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2012 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -82,16 +82,22 @@ lck_grp_attr_t 	*raw_mtx_grp_attr;
  * Initialize raw connection block q.
  */
 void
-raw_init(void)
+raw_init(struct protosw *pp, struct domain *dp)
 {
-	raw_mtx_grp_attr = lck_grp_attr_alloc_init();
+#pragma unused(pp, dp)
+	static int raw_initialized = 0;
 
-	raw_mtx_grp = lck_grp_alloc_init("rawcb", raw_mtx_grp_attr);
+	/* This is called by key_init as well, so do it only once */
+	if (!raw_initialized) {
+		raw_initialized = 1;
 
-	raw_mtx_attr = lck_attr_alloc_init();
+		raw_mtx_grp_attr = lck_grp_attr_alloc_init();
+		raw_mtx_grp = lck_grp_alloc_init("rawcb", raw_mtx_grp_attr);
+		raw_mtx_attr = lck_attr_alloc_init();
 
-	lck_mtx_init(raw_mtx, raw_mtx_grp, raw_mtx_attr);
-	LIST_INIT(&rawcb_list);
+		lck_mtx_init(raw_mtx, raw_mtx_grp, raw_mtx_attr);
+		LIST_INIT(&rawcb_list);
+	}
 }
 
 
@@ -364,9 +370,16 @@ raw_usockaddr(struct socket *so, struct sockaddr **nam)
 }
 
 struct pr_usrreqs raw_usrreqs = {
-	raw_uabort, pru_accept_notsupp, raw_uattach, raw_ubind, raw_uconnect,
-	pru_connect2_notsupp, pru_control_notsupp, raw_udetach, 
-	raw_udisconnect, pru_listen_notsupp, raw_upeeraddr, pru_rcvd_notsupp,
-	pru_rcvoob_notsupp, raw_usend, pru_sense_null, raw_ushutdown,
-	raw_usockaddr, sosend, soreceive, pru_sopoll_notsupp
+	.pru_abort =		raw_uabort,
+	.pru_attach =		raw_uattach,
+	.pru_bind =		raw_ubind,
+	.pru_connect =		raw_uconnect,
+	.pru_detach =		raw_udetach,
+	.pru_disconnect =	raw_udisconnect,
+	.pru_peeraddr =		raw_upeeraddr,
+	.pru_send =		raw_usend,
+	.pru_shutdown =		raw_ushutdown,
+	.pru_sockaddr =		raw_usockaddr,
+	.pru_sosend =		sosend,
+	.pru_soreceive =	soreceive,
 };

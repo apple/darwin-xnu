@@ -8,8 +8,8 @@ IOKIT_INCFRAME = $(FRAMEDIR)/IOKit.framework
 IOKIT_INCDIR = $(IOKIT_INCFRAME)/Versions/$(IOKIT_INCVERS)/Headers
 IOKIT_PINCDIR = $(IOKIT_INCFRAME)/Versions/$(IOKIT_INCVERS)/PrivateHeaders
 
-export INCDIR = $(IOKIT_INCDIR)
-export LCLDIR = $(IOKIT_PINCDIR)
+INCDIR = $(IOKIT_INCDIR)
+LCLDIR = $(IOKIT_PINCDIR)
 
 include $(MakeInc_cmd)
 include $(MakeInc_def)
@@ -22,17 +22,9 @@ INSTINC_SUBDIRS = \
 	rtc \
 	system_management
 
-INSTINC_SUBDIRS_I386 = 
-
-INSTINC_SUBDIRS_X86_64 = 
-
-
 EXPINC_SUBDIRS = ${INSTINC_SUBDIRS}
-EXPINC_SUBDIRS_I386 = ${INSTINC_SUBDIRS_I386}
-EXPINC_SUBDIRS_X86_64 = ${INSTINC_SUBDIRS_X86_64}
 
-
-NOT_EXPORT_HEADERS = 
+NOT_EXPORT_HEADERS = IOReportMacros.h
 
 NOT_KF_MI_HEADERS  = $(NOT_EXPORT_HEADERS)			\
 		     IOKitKeysPrivate.h IOCPU.h			\
@@ -48,8 +40,10 @@ ALL_HEADERS = $(shell (cd $(SOURCE); echo *.h))
 INSTALL_MI_LIST	= IOBSD.h IOKitKeys.h IOKitServer.h IOReturn.h\
 		  IOSharedLock.h IOTypes.h OSMessageNotification.h\
 		  IODataQueueShared.h IOMessage.h
-                  
-INSTALL_MI_LCL_LIST = IOKitKeysPrivate.h IOHibernatePrivate.h IOLocksPrivate.h IOStatistics.h AppleKeyStoreInterface.h
+
+INSTALL_MI_LCL_LIST = IOKitKeysPrivate.h IOHibernatePrivate.h \
+					  IOLocksPrivate.h IOStatistics.h \
+					  AppleKeyStoreInterface.h IOReportTypes.h
 
 INSTALL_MI_DIR = .
 

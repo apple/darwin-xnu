@@ -447,8 +447,8 @@ void OSData::setDeallocFunction(DeallocFunction func)
     if (!reserved)
     {
     	reserved = (typeof(reserved)) kalloc(sizeof(ExpansionData));
-	if (!reserved) return;
-	bzero(reserved, sizeof(ExpansionData));
+        if (!reserved) return;
+        bzero(reserved, sizeof(ExpansionData));
     }
     reserved->deallocFunction = func;
 }

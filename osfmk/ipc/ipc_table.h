@@ -109,7 +109,7 @@ extern ipc_table_size_t ipc_table_entries;
 extern ipc_table_size_t ipc_table_requests;
 
 /* Initialize IPC capabilities table storage */
-extern void ipc_table_init(void) __attribute__((section("__TEXT, initcode")));
+extern void ipc_table_init(void);
 
 /*
  *	Note that ipc_table_alloc and ipc_table_free

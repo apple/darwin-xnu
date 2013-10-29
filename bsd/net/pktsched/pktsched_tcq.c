@@ -70,6 +70,7 @@ static void tcq_updateq(struct tcq_if *, struct tcq_class *, cqev_t);
 static int tcq_throttle(struct tcq_if *, cqrq_throttle_t *);
 static int tcq_resumeq(struct tcq_if *, struct tcq_class *);
 static int tcq_suspendq(struct tcq_if *, struct tcq_class *);
+static int tcq_stat_sc(struct tcq_if *, cqrq_stat_sc_t *);
 static struct mbuf *tcq_dequeue_cl(struct tcq_if *, struct tcq_class *,
     mbuf_svc_class_t, cqdq_op_t);
 static inline struct tcq_class *tcq_clh_to_clp(struct tcq_if *, u_int32_t);
@@ -536,7 +537,11 @@ tcq_enqueue(struct tcq_if *tif, struct tcq_class *cl, struct mbuf *m,
 	VERIFY(cl == NULL || cl->cl_tif == tif);
 
 	if (cl == NULL) {
+#if PF_ALTQ
 		cl = tcq_clh_to_clp(tif, t->pftag_qid);
+#else /* !PF_ALTQ */
+		cl = tcq_clh_to_clp(tif, 0);
+#endif /* !PF_ALTQ */
 		if (cl == NULL) {
 			cl = tif->tif_default;
 			if (cl == NULL) {
@@ -689,8 +694,10 @@ tcq_addq(struct tcq_class *cl, struct mbuf *m, struct pf_mtag *t)
 		return (CLASSQEQ_DROPPED);
 	}
 
+#if PF_ECN
 	if (cl->cl_flags & TQCF_CLEARDSCP)
 		write_dsfield(m, t, 0);
+#endif /* PF_ECN */
 
 	_addq(&cl->cl_q, m);
 
@@ -856,6 +863,27 @@ tcq_get_class_stats(struct tcq_if *tif, u_int32_t qid,
 	return (0);
 }
 
+static int
+tcq_stat_sc(struct tcq_if *tif, cqrq_stat_sc_t *sr)
+{
+	struct ifclassq *ifq = tif->tif_ifq;
+	struct tcq_class *cl;
+	u_int32_t i;
+
+	IFCQ_LOCK_ASSERT_HELD(ifq);
+
+	VERIFY(sr->sc == MBUF_SC_UNSPEC || MBUF_VALID_SC(sr->sc));
+
+	i = MBUF_SCIDX(sr->sc);
+	VERIFY(i < IFCQ_SC_MAX);
+
+	cl = ifq->ifcq_disc_slots[i].cl;
+	sr->packets = qlen(&cl->cl_q);
+	sr->bytes = qsize(&cl->cl_q);
+
+	return (0);
+}
+
 /* convert a class handle to the corresponding class pointer */
 static inline struct tcq_class *
 tcq_clh_to_clp(struct tcq_if *tif, u_int32_t chandle)
@@ -950,6 +978,10 @@ tcq_request_ifclassq(struct ifclassq *ifq, cqrq_t req, void *arg)
 
 	case CLASSQRQ_THROTTLE:
 		err = tcq_throttle(tif, (cqrq_throttle_t *)arg);
+		break;
+
+	case CLASSQRQ_STAT_SC:
+		err = tcq_stat_sc(tif, (cqrq_stat_sc_t *)arg);
 		break;
 	}
 	return (err);
@@ -1093,7 +1125,7 @@ tcq_throttle(struct tcq_if *tif, cqrq_throttle_t *tr)
 {
 	struct ifclassq *ifq = tif->tif_ifq;
 	struct tcq_class *cl;
-	int err;
+	int err = 0;
 
 	IFCQ_LOCK_ASSERT_HELD(ifq);
 	VERIFY(!(tif->tif_flags & TCQIFF_ALTQ));

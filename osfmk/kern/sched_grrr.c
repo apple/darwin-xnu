@@ -291,7 +291,7 @@ sched_grrr_maintenance_continuation(void)
 	/*
 	 *  Compute various averages.
 	 */
-	compute_averages();
+	compute_averages(1);
 	
 	if (sched_grrr_tick_deadline == 0)
 		sched_grrr_tick_deadline = abstime;
@@ -373,13 +373,13 @@ sched_grrr_processor_queue_shutdown(
 		}
 	}
 	
-	while ((thread = (thread_t)dequeue_head(&bqueue)) != THREAD_NULL) {
+	while ((thread = (thread_t)(void *)dequeue_head(&bqueue)) != THREAD_NULL) {
 		sched_grrr_processor_enqueue(processor, thread, SCHED_TAILQ);
 	}	
 	
 	pset_unlock(pset);
 	
-	while ((thread = (thread_t)dequeue_head(&tqueue)) != THREAD_NULL) {
+	while ((thread = (thread_t)(void *)dequeue_head(&tqueue)) != THREAD_NULL) {
 		thread_lock(thread);
 		
 		thread_setrun(thread, SCHED_TAILQ);
@@ -591,13 +591,13 @@ grrr_intragroup_schedule(grrr_group_t group)
 	
 	thread = group->current_client;
 	if (thread == THREAD_NULL) {
-		thread = (thread_t)queue_first(&group->clients);
+		thread = (thread_t)(void *)queue_first(&group->clients);
 	}
 	
 	if (1 /* deficit */) {
-		group->current_client = (thread_t)queue_next((queue_entry_t)thread);
+		group->current_client = (thread_t)(void *)queue_next((queue_entry_t)thread);
 		if (queue_end(&group->clients, (queue_entry_t)group->current_client)) {
-			group->current_client = (thread_t)queue_first(&group->clients);
+			group->current_client = (thread_t)(void *)queue_first(&group->clients);
 		}
 		
 		thread = group->current_client;

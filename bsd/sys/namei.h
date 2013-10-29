@@ -175,9 +175,6 @@ struct nameidata {
 #define	AUDITVNPATH2	0x00200000 /* audit the path/vnode info */
 #define	USEDVP		0x00400000 /* start the lookup at ndp.ni_dvp */
 #define	CN_VOLFSPATH	0x00800000 /* user path was a volfs style path */
-#if CONFIG_VFS_FUNNEL
-#define FSNODELOCKHELD	0x01000000
-#endif /* CONFIG_VFS_FUNNEL */
 #define UNIONCREATED	0x02000000 /* union fs creation of vnode */
 #if NAMEDRSRCFORK
 #define CN_WANTSRSRCFORK 0x04000000
@@ -185,6 +182,9 @@ struct nameidata {
 #endif
 /* public NOTRIGGER		0x10000000    see vnode.h */
 #define CN_NBMOUNTLOOK	0x20000000 /* do not block for cross mount lookups */
+#ifdef BSD_KERNEL_PRIVATE
+#define CN_SKIPNAMECACHE	0x40000000	/* skip cache during lookup(), allow FS to handle all components */
+#endif
 
 /*
  * Initialization of an nameidata structure.
@@ -254,10 +254,10 @@ struct	namecache {
 
 int	namei(struct nameidata *ndp);
 void	nameidone(struct nameidata *);
-void	namei_unlock_fsnode(struct nameidata *ndp);
 int	lookup(struct nameidata *ndp);
 int	relookup(struct vnode *dvp, struct vnode **vpp,
 		struct componentname *cnp);
+int	lookup_traverse_union(vnode_t dvp, vnode_t *new_dvp, vfs_context_t ctx);
 void	lookup_compound_vnop_post_hook(int error, vnode_t dvp, vnode_t vp, struct nameidata *ndp, int did_create);
 
 /*

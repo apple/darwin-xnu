@@ -126,7 +126,9 @@ mach_msg_send_from_kernel(
 		return mr;
 	}		
 
-	mr = ipc_kmsg_send_always(kmsg);
+	mr = ipc_kmsg_send(kmsg, 
+			   MACH_SEND_KERNEL_DEFAULT,
+			   MACH_MSG_TIMEOUT_NONE);
 	if (mr != MACH_MSG_SUCCESS) {
 		ipc_kmsg_destroy(kmsg);
 	}
@@ -154,7 +156,9 @@ mach_msg_send_from_kernel_proper(
 		return mr;
 	}
 
-	mr = ipc_kmsg_send_always(kmsg);
+	mr = ipc_kmsg_send(kmsg, 
+			   MACH_SEND_KERNEL_DEFAULT,
+			   MACH_MSG_TIMEOUT_NONE);
 	if (mr != MACH_MSG_SUCCESS) {
 		ipc_kmsg_destroy(kmsg);
 	}
@@ -162,10 +166,50 @@ mach_msg_send_from_kernel_proper(
 	return mr;
 }
 
+mach_msg_return_t
+mach_msg_send_from_kernel_with_options(
+	mach_msg_header_t	*msg,
+	mach_msg_size_t		send_size,
+	mach_msg_option_t	option,
+	mach_msg_timeout_t	timeout_val)
+{
+	ipc_kmsg_t kmsg;
+	mach_msg_return_t mr;
+
+	mr = ipc_kmsg_get_from_kernel(msg, send_size, &kmsg);
+	if (mr != MACH_MSG_SUCCESS)
+		return mr;
+
+	mr = ipc_kmsg_copyin_from_kernel(kmsg);
+	if (mr != MACH_MSG_SUCCESS) {
+		ipc_kmsg_free(kmsg);
+		return mr;
+	}
+
+#if 11938665
+	/*
+	 * Until we are sure of its effects, we are disabling
+	 * importance donation from the kernel-side of user
+	 * threads in importance-donating tasks - unless the
+	 * option to force importance donation is passed in.
+	 */
+	if ((option & MACH_SEND_IMPORTANCE) == 0)
+		option |= MACH_SEND_NOIMPORTANCE;
+#endif
+	mr = ipc_kmsg_send(kmsg, option, timeout_val);
+
+	if (mr != MACH_MSG_SUCCESS) {
+		ipc_kmsg_destroy(kmsg);
+	}
+	
+	return mr;
+}
+
+
 #if IKM_SUPPORT_LEGACY
 
 mach_msg_return_t
-mach_msg_send_from_kernel_with_options(
+mach_msg_send_from_kernel_with_options_legacy(
 	mach_msg_header_t	*msg,
 	mach_msg_size_t		send_size,
 	mach_msg_option_t	option,
@@ -183,8 +227,17 @@ mach_msg_send_from_kernel_with_options(
 		ipc_kmsg_free(kmsg);
 		return mr;
 	}
-		
+
+#if 11938665
+	/*
+	 * Until we are sure of its effects, we are disabling
+	 * importance donation from the kernel-side of user
+	 * threads in importance-donating tasks.
+	 */
+	option |= MACH_SEND_NOIMPORTANCE;
+#endif
 	mr = ipc_kmsg_send(kmsg, option, timeout_val);
+
 	if (mr != MACH_MSG_SUCCESS) {
 		ipc_kmsg_destroy(kmsg);
 	}
@@ -277,8 +330,6 @@ mach_msg_rpc_from_kernel_body(
 	kmsg->ikm_header->msgh_bits |=
 		MACH_MSGH_BITS(0, MACH_MSG_TYPE_MAKE_SEND_ONCE);
 
-	ip_reference(reply);
-
 #if IKM_SUPPORT_LEGACY
     if(legacy)
         mr = ipc_kmsg_copyin_from_kernel_legacy(kmsg);
@@ -291,7 +342,9 @@ mach_msg_rpc_from_kernel_body(
 	    ipc_kmsg_free(kmsg);
 	    return mr;
     }
-	mr = ipc_kmsg_send_always(kmsg);
+	mr = ipc_kmsg_send(kmsg, 
+			   MACH_SEND_KERNEL_DEFAULT,
+			   MACH_MSG_TIMEOUT_NONE);
 	if (mr != MACH_MSG_SUCCESS) {
 		ipc_kmsg_destroy(kmsg);
 		return mr;
@@ -300,24 +353,19 @@ mach_msg_rpc_from_kernel_body(
 	for (;;) {
 		ipc_mqueue_t mqueue;
 
-		ip_lock(reply);
-		if ( !ip_active(reply)) {
-			ip_unlock(reply);
-			ip_release(reply);
-			return MACH_RCV_PORT_DIED;
-		}
+		assert(reply->ip_pset_count == 0);
+		assert(ip_active(reply));
+
+		/* JMM - why this check? */
 		if (!self->active) {
-			ip_unlock(reply);
-			ip_release(reply);
+			ipc_port_dealloc_reply(reply);
+			self->ith_rpc_reply = IP_NULL;
 			return MACH_RCV_INTERRUPTED;
 		}
 
-		assert(reply->ip_pset_count == 0);
-		mqueue = &reply->ip_messages;
-		ip_unlock(reply);
-
 		self->ith_continuation = (void (*)(mach_msg_return_t))0;
 
+		mqueue = &reply->ip_messages;
 		ipc_mqueue_receive(mqueue,
 				   MACH_MSG_OPTION_NONE,
 				   MACH_MSG_SIZE_MAX,
@@ -335,12 +383,14 @@ mach_msg_rpc_from_kernel_body(
 
 		assert(mr == MACH_RCV_INTERRUPTED);
 
+		assert(reply == self->ith_rpc_reply);
+
 		if (self->handlers) {
-			ip_release(reply);
+			ipc_port_dealloc_reply(reply);
+			self->ith_rpc_reply = IP_NULL;
 			return(mr);
 		}
 	}
-	ip_release(reply);
 
 	/* 
 	 * Check to see how much of the message/trailer can be received.
@@ -452,17 +502,18 @@ mach_msg_overwrite(
 		max_trailer->msgh_audit = current_thread()->task->audit_token;
 		max_trailer->msgh_trailer_type = MACH_MSG_TRAILER_FORMAT_0;
 		max_trailer->msgh_trailer_size = MACH_MSG_TRAILER_MINIMUM_SIZE;
-	
-		mr = ipc_kmsg_copyin(kmsg, space, map, FALSE);
+
+		mr = ipc_kmsg_copyin(kmsg, space, map, &option);
+
 		if (mr != MACH_MSG_SUCCESS) {
 			ipc_kmsg_free(kmsg);
 			return mr;
 		}
 
-		do
-			mr = ipc_kmsg_send(kmsg, MACH_MSG_OPTION_NONE,
-					     MACH_MSG_TIMEOUT_NONE);
-		while (mr == MACH_SEND_INTERRUPTED);
+		do {
+			mr = ipc_kmsg_send(kmsg, MACH_MSG_OPTION_NONE, MACH_MSG_TIMEOUT_NONE);
+		 } while (mr == MACH_SEND_INTERRUPTED);
+
 		assert(mr == MACH_MSG_SUCCESS);
 	}
 

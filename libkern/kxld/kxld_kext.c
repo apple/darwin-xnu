@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008 Apple Inc. All rights reserved.
+ * Copyright (c) 2008, 2013 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -738,7 +738,7 @@ resolve_symbols(KXLDKext *kext, const KXLDDict *defined_symbols,
                    kxld_log(kKxldLogLinking, kKxldLogErr, 
                       "This kext has weak references but does not test for "
                       "them. Test for weak references with "
-                      "OSKextIsSymbolResolved()."));
+                      "OSKextSymbolIsResolved(). (found in <libkern/OSKextLib.h>)"));
 
 #if KERNEL
                 /* Get the address of the default weak address.

@@ -37,9 +37,11 @@ typedef enum utun_crypto_ver {
 
 #define UTUN_CRYPTO_KEYS_IPSEC_VER_1                  UTUN_CRYPTO_VER_1
 #define UTUN_CRYPTO_IPSEC_VER_1                       UTUN_CRYPTO_VER_1
+#define UTUN_CRYPTO_DTLS_VER_1                        UTUN_CRYPTO_VER_1
 
 #define UTUN_CRYPTO_ARGS_VER_MAX                      UTUN_CRYPTO_VER_MAX
 #define UTUN_CRYPTO_KEYS_ARGS_VER_MAX                 UTUN_CRYPTO_VER_MAX
+#define UTUN_CRYPTO_FRAMER_ARGS_VER_MAX               UTUN_CRYPTO_VER_MAX
 
 typedef enum utun_crypto_dir {
 	UTUN_CRYPTO_DIR_IN = 1,
@@ -170,7 +172,7 @@ typedef struct utun_crypto_keys_ipsec_args_v1 {
 	// key_auth and key_enc will actually be stored in utun_crypto_KEYS_args_t.varargs_buf
 } __attribute__((packed)) utun_crypto_keys_ipsec_args_v1_t;
 
-typedef struct utun_crypto_ctx_dtls_mat_args_v1 {
+typedef struct utun_crypto_keys_dtls_args_v1 {
 	// stub for DTLS keying material arguments
 	u_int32_t                                     unused; // place holder
 } __attribute__((packed)) utun_crypto_keys_dtls_args_v1_t;
@@ -199,7 +201,7 @@ typedef struct utun_crypto_ipsec_args_v1 {
 
 typedef struct utun_crypto_dtls_args_v1 {
 	// stub for DTLS crypto context arguments
-	u_int32_t                                     unused; // place holder
+	int                                           kpi_handle;
 } __attribute__((packed)) utun_crypto_dtls_args_v1_t;
 
 // App's parent structure for starting/stopping crypto
@@ -218,6 +220,65 @@ typedef struct utun_crypto_args {
 	u_int8_t                                      varargs_buf[0]; // must be at the end of this struct
 } __attribute__((aligned(4), packed)) utun_crypto_args_t;
 
+typedef enum {
+  UTUN_CRYPTO_INNER_TYPE_IPv4 = 1,
+  UTUN_CRYPTO_INNER_TYPE_IPv6,
+  UTUN_CRYPTO_INNER_TYPE_MAX,
+} utun_crypto_framer_inner_type_t;
+
+typedef struct utun_crypto_framer_ipsec_args_v1 {
+	// stub for IPSec framer arguments
+	u_int32_t                                     unused; // place holder
+} __attribute__((packed)) utun_crypto_framer_ipsec_args_v1_t;
+
+typedef struct utun_crypto_framer_dtls_in_args_v1 {
+	int                                           in_pattern_len;
+	int                                           in_pattern_mask_len;
+	int                                           in_data_offset;
+	// in_pattern, in_pattern_mask will actually be stored in utun_crypto_framer_args_t.varargs_buf
+} __attribute__((packed)) utun_crypto_framer_dtls_in_args_v1_t;
+
+typedef struct utun_crypto_framer_dtls_out_args_v1 {
+	int                                           out_pattern_len;
+	u_int32_t                                     len_field_mask; // 0 means unconfigured
+	int                                           len_field_offset;
+	int                                           len_field_extra;
+	u_int32_t                                     sequence_field;
+	u_int32_t                                     sequence_field_mask; // 0 means unconfigured
+	int                                           sequence_field_offset;
+	// out_pattern will actually be stored in utun_crypto_framer_args_t.varargs_buf
+} __attribute__((packed)) utun_crypto_framer_dtls_out_args_v1_t;
+
+typedef struct utun_crypto_framer_dtls_args_v1 {
+	// the following depend on utun_crypto_framer_args_t.dir
+	union {
+		// don't change the order, number, or size of elements above this line (in this struct). otherwise UTUN_CRYPTO_KEYS_ARGS_HDR_SIZE breaks backwards compatibility
+		utun_crypto_framer_dtls_in_args_v1_t  in;
+		utun_crypto_framer_dtls_out_args_v1_t out;
+		// future (additional) versions of the arguments may be placed here
+	} u;
+} __attribute__((packed)) utun_crypto_framer_dtls_args_v1_t;
+
+// App's parent structure for sending/storing framer arguments
+typedef struct utun_crypto_framer_args {
+	utun_crypto_ver_t                             ver;
+	utun_crypto_type_t                            type;
+	utun_crypto_dir_t                             dir;
+	utun_crypto_framer_inner_type_t               inner_type;
+	u_int32_t                                     args_ulen;
+	u_int32_t                                     varargs_buflen;
+	union {
+		// don't change the order, number, or size of elements above this line (in this struct). otherwise UTUN_CRYPTO_KEYS_ARGS_HDR_SIZE breaks backwards compatibility
+		utun_crypto_framer_ipsec_args_v1_t    ipsec_v1;
+		utun_crypto_framer_dtls_args_v1_t     dtls_v1;
+		// future (additional) versions of the arguments may be placed here
+	} u;
+	u_int8_t                                      varargs_buf[0];
+} __attribute__((aligned(4), packed)) utun_crypto_framer_args_t;
+
+#define utun_crypto_framer_args_dtls_in(framer)   framer->u.dtls_v1.u.in
+#define utun_crypto_framer_args_dtls_out(framer)  framer->u.dtls_v1.u.out
+
 #ifdef KERNEL_PRIVATE
 
 #include <sys/kern_control.h>
@@ -226,6 +287,7 @@ typedef struct utun_crypto_args {
 #include <net/pfkeyv2.h>
 #include <netkey/key.h>
 #include <netkey/keydb.h>
+#include <net/bpf.h>
 
 struct utun_pcb;
 
@@ -263,12 +325,83 @@ typedef struct utun_crypto_keys {
 	LIST_ENTRY(utun_crypto_keys)                  chain;
 } __attribute__((aligned(4), packed)) utun_crypto_keys_t;
 
+// structures used for storing kernel's framer runtime state
+typedef struct utun_crypto_framer_ipsec_state {
+	// stub for kernel's IPSec framer state
+	u_int32_t                                     unused; // place holder
+} __attribute__((packed)) utun_crypto_framer_ipsec_state_t;
+
+typedef struct utun_crypto_framer_dtls_in_state {
+	u_int8_t                                     *in_pattern;
+	int                                           in_pattern_len;
+	u_int8_t                                     *in_pattern_mask;
+	u_int8_t                                     *in_pattern_masked;
+	int                                           in_data_offset;
+	struct bpf_program                            in_pattern_filter;
+} __attribute__((packed)) utun_crypto_framer_dtls_in_state_t;
+
+typedef struct utun_crypto_framer_dtls_out_state {
+	u_int8_t                                     *out_pattern;
+	int                                           out_pattern_len;
+	u_int32_t                                     len_field_mask; // 0 means unconfigured
+	int                                           len_field_offset;
+	int                                           len_field_extra;
+	u_int32_t                                     sequence_field;
+	u_int32_t                                     sequence_field_initval;
+	u_int32_t                                     sequence_field_mask; // 0 means unconfigured
+	int                                           sequence_field_offset;
+} __attribute__((packed)) utun_crypto_framer_dtls_out_state_t;
+
+typedef struct utun_crypto_framer_dtls_state {
+	union {
+		// don't change the order, number, or size of elements above this line (in this struct). otherwise UTUN_CRYPTO_KEYS_ARGS_HDR_SIZE breaks backwards compatibility
+		utun_crypto_framer_dtls_in_state_t  in;
+		utun_crypto_framer_dtls_out_state_t out;
+		// future (additional) versions of the arguments may be placed here
+	} u;
+} __attribute__((packed)) utun_crypto_framer_dtls_state_t;
+
+// kernel's parent structure for framer state
+typedef struct utun_crypto_framer_state {
+	union {
+		utun_crypto_framer_ipsec_state_t ipsec;
+		utun_crypto_framer_dtls_state_t  dtls;
+	} u;
+} __attribute__((aligned(4), packed)) utun_crypto_framer_state_t;
+
+// kernel's parent structure for the framer
+typedef struct utun_crypto_framer {
+	int                                           valid; // is valid?
+	utun_crypto_type_t                            type;
+	utun_crypto_dir_t                             dir;
+	utun_crypto_framer_inner_type_t               inner_type;
+	protocol_family_t                             inner_protocol_family;
+	utun_crypto_framer_state_t                    state; // runtime state
+	LIST_ENTRY(utun_crypto_framer)                framer_chain;
+} __attribute__((aligned(4), packed)) utun_crypto_framer_t;
+
+#define UTUN_CRYPTO_INNER_TYPE_TO_IDX(type)           (type - 1)
+#define UTUN_CRYPTO_IDX_TO_INNER_TYPE(idx)            (idx + 1)
+#define UTUN_CRYPTO_INNER_TYPE_IDX_MAX                UTUN_CRYPTO_INNER_TYPE_TO_IDX(UTUN_CRYPTO_INNER_TYPE_MAX)
+
+#define UTUN_CRYPTO_DIR_TO_IDX(dir)                   (dir - 1)
+#define UTUN_CRYPTO_IDX_TO_DIR(idx)                   (idx + 1)
+#define UTUN_CRYPTO_DIR_IDX_MAX                       UTUN_CRYPTO_DIR_TO_IDX(UTUN_CRYPTO_DIR_MAX)
+
+#define utun_crypto_framer_state_dtls_in(framer)      framer->state.u.dtls.u.in
+#define utun_crypto_framer_state_dtls_out(framer)     framer->state.u.dtls.u.out
+
 // kernel's parent structure for all crypto stuff
 typedef struct utun_crypto_ctx {
 	int                                           valid;
 	utun_crypto_type_t                            type;
 	u_int16_t                                     unused;
 	LIST_HEAD(chain, utun_crypto_keys)            keys_listhead;
+	LIST_HEAD(framer_chain, utun_crypto_framer)   framer_listheads[UTUN_CRYPTO_INNER_TYPE_IDX_MAX];
+	int                                           num_framers;
+	int                                           kpi_handle;
+	caddr_t                                       kpi_ref;
+	int                                           kpi_refcnt;
 } __attribute__((aligned(4), packed)) utun_crypto_ctx_t;
 
 #define UTUN_CRYPTO_KEYS_IDX_ARGS_HDR_SIZE            ((size_t)(&((utun_crypto_keys_idx_args_t *)0)->u))
@@ -279,12 +412,39 @@ typedef struct utun_crypto_ctx {
 #define UTUN_CRYPTO_KEYS_ARGS_VARARGS_BUF(args)       ((u_int8_t *)args + UTUN_CRYPTO_KEYS_ARGS_HDR_SIZE + args->args_ulen)
 #define UTUN_CRYPTO_KEYS_ARGS_TOTAL_SIZE(args)        ((size_t)(UTUN_CRYPTO_KEYS_ARGS_HDR_SIZE + args->args_ulen + args->varargs_buflen))
 
+#define UTUN_CRYPTO_FRAMER_ARGS_HDR_SIZE                ((size_t)(&((utun_crypto_framer_args_t *)0)->u))
+#define UTUN_CRYPTO_FRAMER_ARGS_VARARGS_BUF(args)       ((u_int8_t *)args + UTUN_CRYPTO_FRAMER_ARGS_HDR_SIZE + args->args_ulen)
+#define UTUN_CRYPTO_FRAMER_ARGS_TOTAL_SIZE(args)        ((size_t)(UTUN_CRYPTO_FRAMER_ARGS_HDR_SIZE + args->args_ulen + args->varargs_buflen))
+
 #define UTUN_CRYPTO_ARGS_HDR_SIZE                     ((size_t)(&((utun_crypto_args_t *)0)->u))
 #define UTUN_CRYPTO_ARGS_VARARGS_BUF(args)            ((u_int8_t *)args + UTUN_CRYPTO_ARGS_HDR_SIZE + args->args_ulen)
 #define UTUN_CRYPTO_ARGS_TOTAL_SIZE(args)             ((size_t)(UTUN_CRYPTO_ARGS_HDR_SIZE + args->args_ulen + args->varargs_buflen))
 
-#define UTUN_CRYPTO_DIR_TO_IDX(dir)                   (dir - 1)
-#define UTUN_CRYPTO_IDX_TO_DIR(idx)                   (idx + 1)
+typedef caddr_t (*utun_crypto_kpi_connect_func)(int kpi_handle, struct utun_pcb *utun_ref);
+
+typedef errno_t (*utun_crypto_kpi_send_func)(caddr_t ref, mbuf_t *pkt);
+
+typedef struct utun_crypto_kpi_reg {
+  /* Dispatch functions */
+  utun_crypto_type_t           crypto_kpi_type;
+  u_int32_t                    crypto_kpi_flags;
+  utun_crypto_kpi_connect_func crypto_kpi_connect;
+  utun_crypto_kpi_send_func    crypto_kpi_send;
+} utun_crypto_kpi_reg_t;
+
+typedef struct utun_crypto_kpi_reg_list {
+  utun_crypto_kpi_reg_t            reg;
+  struct utun_crypto_kpi_reg_list *next;
+} utun_crypto_kpi_reg_list_t;
+
+void
+utun_ctl_init_crypto(void);
+
+/*
+ * Summary: registers the crypto KPI's Kext routines with UTUN... so that UTUN can make calls into it (e.g. DTLS)
+ */
+errno_t
+utun_crypto_kpi_register(utun_crypto_kpi_reg_t *reg);
 
 void
 utun_cleanup_crypto(struct utun_pcb *pcb);
@@ -320,6 +480,22 @@ utun_ctl_unconfig_crypto_keys(__unused kern_ctl_ref  kctlref,
 			      __unused int           opt, 
 			      void                  *data, 
 			      size_t                 len);
+
+errno_t
+utun_ctl_config_crypto_framer(__unused kern_ctl_ref  kctlref,
+			      __unused u_int32_t	   unit, 
+			      __unused void         *unitinfo,
+			      __unused int           opt, 
+			      void                  *data, 
+			      size_t                 len);
+
+errno_t
+utun_ctl_unconfig_crypto_framer(__unused kern_ctl_ref  kctlref,
+				__unused u_int32_t     unit, 
+				__unused void         *unitinfo,
+				__unused int           opt, 
+				void                  *data, 
+				size_t                 len);
 
 errno_t
 utun_ctl_generate_crypto_keys_idx(__unused kern_ctl_ref  kctlref,

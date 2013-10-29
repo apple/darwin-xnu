@@ -1,8 +1,8 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2013 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
- * 
+ *
  * This file contains Original Code and/or Modifications of Original Code
  * as defined in and that are subject to the Apple Public Source License
  * Version 2.0 (the 'License'). You may not use this file except in
@@ -11,10 +11,10 @@
  * unlawful or unlicensed copies of an Apple operating system, or to
  * circumvent, violate, or enable the circumvention or violation of, any
  * terms of an Apple operating system software license agreement.
- * 
+ *
  * Please obtain a copy of the License at
  * http://www.opensource.apple.com/apsl/ and read it before using this file.
- * 
+ *
  * The Original Code and all software distributed under the License are
  * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
@@ -22,7 +22,7 @@
  * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
  * Please see the License for the specific language governing rights and
  * limitations under the License.
- * 
+ *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*	$KAME: if_gif.h,v 1.7 2000/02/22 14:01:46 itojun Exp $	*/
@@ -61,13 +61,16 @@
  */
 
 #ifndef _NET_IF_GIF_H_
-#define _NET_IF_GIF_H_
+#define	_NET_IF_GIF_H_
 #include <sys/appleapiopts.h>
 
 #include <netinet/in.h>
 /* xxx sigh, why route have struct route instead of pointer? */
 
-#ifdef KERNEL_PRIVATE
+#ifdef BSD_KERNEL_PRIVATE
+
+extern void gif_init(void);
+
 struct encaptab;
 
 struct gif_softc {
@@ -91,16 +94,22 @@ struct gif_softc {
 	bpf_tap_mode	tap_mode;
 	bpf_packet_func tap_callback;
 	char 	gif_ifname[IFNAMSIZ];
+	decl_lck_mtx_data(, gif_lock);	/* lock for gif softc structure */
 };
 
-#define gif_ro gifsc_gifscr.gifscr_ro
+#define	GIF_LOCK(_sc)		lck_mtx_lock(&(_sc)->gif_lock)
+#define	GIF_UNLOCK(_sc)		lck_mtx_unlock(&(_sc)->gif_lock)
+#define	GIF_LOCK_ASSERT(_sc)	lck_mtx_assert(&(_sc)->gif_lock,	\
+    LCK_MTX_ASSERT_OWNED)
+
+#define	gif_ro gifsc_gifscr.gifscr_ro
 #if INET6
-#define gif_ro6 gifsc_gifscr.gifscr_ro6
+#define	gif_ro6 gifsc_gifscr.gifscr_ro6
 #endif
 
-#endif /* KERNEL_PRIVATE */
+#endif /* BSD_KERNEL_PRIVATE */
 
-#define GIF_MTU		(1280)	/* Default MTU */
+#define	GIF_MTU		(1280)	/* Default MTU */
 #define	GIF_MTU_MIN	(1280)	/* Minimum MTU */
 #define	GIF_MTU_MAX	(8192)	/* Maximum MTU */
 

@@ -96,11 +96,14 @@ LocateCatalogNodeByKey(const ExtendedVCB *volume, u_int32_t hint, CatalogKey *ke
 	// if we got a thread record, then go look up real record
 	switch ( dataPtr->recordType )
 	{
+
+#if CONFIG_HFS_STD
 		case kHFSFileThreadRecord:
 		case kHFSFolderThreadRecord:
 			threadParentID = dataPtr->hfsThread.parentID;
 			nodeName = (CatalogName *) &dataPtr->hfsThread.nodeName;
 			break;
+#endif
 
 		case kHFSPlusFileThreadRecord:
 		case kHFSPlusFolderThreadRecord:
@@ -192,6 +195,7 @@ BuildCatalogKey(HFSCatalogNodeID parentID, const CatalogName *cName, Boolean isH
 			key->hfsPlus.keyLength += sizeof(UniChar) * cName->ustr.length;	// add CName size to key length
 		}
 	}
+#if CONFIG_HFS_STD
 	else
 	{
 		key->hfs.keyLength		= kHFSCatalogKeyMinimumLength;	// initial key length (1 + 4 + 1)
@@ -204,6 +208,8 @@ BuildCatalogKey(HFSCatalogNodeID parentID, const CatalogName *cName, Boolean isH
 			key->hfs.keyLength += key->hfs.nodeName[0];		// add CName size to key length
 		}
 	}
+#endif
+
 }
 
 OSErr
@@ -234,6 +240,7 @@ BuildCatalogKeyUTF8(ExtendedVCB *volume, HFSCatalogNodeID parentID, const unsign
 			*textEncoding = hfs_pickencoding(key->hfsPlus.nodeName.unicode,
 				key->hfsPlus.nodeName.length);
 	}
+#if CONFIG_HFS_STD
 	else {
 		key->hfs.keyLength		= kHFSCatalogKeyMinimumLength;	// initial key length (1 + 4 + 1)
 		key->hfs.reserved		= 0;				// clear unused byte
@@ -253,6 +260,7 @@ BuildCatalogKeyUTF8(ExtendedVCB *volume, HFSCatalogNodeID parentID, const unsign
 		if (textEncoding)
 			*textEncoding = 0;
 	}
+#endif
 
 	if (err) {
 		if (err == ENAMETOOLONG)
@@ -277,6 +285,7 @@ FlushCatalog(ExtendedVCB *volume)
 {
 	FCB *	fcb;
 	OSErr	result;
+	struct hfsmount *hfsmp = VCBTOHFS (volume);
 	
 	fcb = GetFileControlBlock(volume->catalogRefNum);
 	result = BTFlushPath(fcb);
@@ -287,10 +296,10 @@ FlushCatalog(ExtendedVCB *volume)
 		
 		if ( 0 /*fcb->fcbFlags & fcbModifiedMask*/ )
 		{
-			HFS_MOUNT_LOCK(volume, TRUE);
+			hfs_lock_mount (hfsmp);
 			MarkVCBDirty(volume);	// Mark the VCB dirty
 			volume->vcbLsMod = GetTimeUTC();	// update last modified date
-			HFS_MOUNT_UNLOCK(volume, TRUE);
+			hfs_unlock_mount (hfsmp);
 
 		//	result = FlushVolumeControlBlock(volume);
 		}
@@ -323,9 +332,9 @@ UpdateCatalogName(ConstStr31Param srcName, Str31 destName)
 //_______________________________________________________________________
 
 void
-CopyCatalogName(const CatalogName *srcName, CatalogName *dstName, Boolean isHFSPLus)
+CopyCatalogName(const CatalogName *srcName, CatalogName *dstName, Boolean isHFSPlus)
 {
-	u_int32_t	length;
+	u_int32_t	length = 0;
 	
 	if ( srcName == NULL )
 	{
@@ -334,10 +343,14 @@ CopyCatalogName(const CatalogName *srcName, CatalogName *dstName, Boolean isHFSP
 		return;
 	}
 	
-	if (isHFSPLus)
+	if (isHFSPlus) {
 		length = sizeof(UniChar) * (srcName->ustr.length + 1);
-	else
+	}
+#if CONFIG_HFS_STD
+	else {
 		length = sizeof(u_int8_t) + srcName->pstr[0];
+	}
+#endif
 
 	if ( length > 1 )
 		BlockMoveData(srcName, dstName, length);

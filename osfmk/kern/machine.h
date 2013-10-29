@@ -109,7 +109,7 @@ extern char *machine_boot_info(
  * levels of return pc information.
  */
 extern void machine_callstack(
-					natural_t           *buf,
+					uintptr_t           *buf,
 					vm_size_t           callstack_max);
 
 extern void consider_machine_collect(void);

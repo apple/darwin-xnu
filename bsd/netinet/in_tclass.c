@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2009-2012 Apple Inc. All rights reserved.
+ * Copyright (c) 2009-2013 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -55,6 +55,7 @@
 #include <netinet/tcp.h>
 #include <netinet/tcp_var.h>
 #include <netinet/tcp_cc.h>
+#include <netinet/lro_ext.h>
 
 extern char *proc_name_address(void *p);
 
@@ -78,7 +79,6 @@ static int set_pname_tclass(struct so_tcdbg *);
 static int flush_pid_tclass(struct so_tcdbg *);
 static int purge_tclass_for_proc(void);
 static int flush_tclass_for_proc(void);
-static void so_set_lro(struct socket*, int);
 int get_tclass_for_curr_proc(int *);
 
 static lck_grp_attr_t *tclass_lck_grp_attr = NULL; /* mutex group attributes */
@@ -86,6 +86,13 @@ static lck_grp_t *tclass_lck_grp = NULL;	/* mutex group definition */
 static lck_attr_t *tclass_lck_attr = NULL;	/* mutex attributes */
 decl_lck_mtx_data(static, tclass_lock_data);
 static lck_mtx_t *tclass_lock = &tclass_lock_data;
+
+/*
+ * If there is no foreground activity on the interface for bg_switch_time
+ * seconds, the background connections can switch to foreground TCP
+ * congestion control.
+ */ 
+#define TCP_BG_SWITCH_TIME 2
 
 /*
  * Must be called with tclass_lock held
@@ -289,21 +296,21 @@ set_pid_tclass(struct so_tcdbg *so_tcdbg)
 			fp = fdp->fd_ofiles[i];
 			if (fp == NULL ||
 			    (fdp->fd_ofileflags[i] & UF_RESERVED) != 0 ||
-			    fp->f_fglob->fg_type != DTYPE_SOCKET)
+			    FILEGLOB_DTYPE(fp->f_fglob) != DTYPE_SOCKET)
 				continue;
 
 			so = (struct socket *)fp->f_fglob->fg_data;
-			if (so->so_proto->pr_domain->dom_family != AF_INET &&
-			    so->so_proto->pr_domain->dom_family != AF_INET6)
+			if (SOCK_DOM(so) != PF_INET && SOCK_DOM(so) != PF_INET6)
 				continue;
 			socket_lock(so, 1);
 			if (tclass != -1) {
 				error = so_set_traffic_class(so, tclass);
 				if (error != 0) {
 					printf("%s: so_set_traffic_class"
-					    "(so=%p, fd=%d, tclass=%d) "
+					    "(so=0x%llx, fd=%d, tclass=%d) "
 					    "failed %d\n", __func__,
-					    so, i, tclass, error);
+					    (uint64_t)VM_KERNEL_ADDRPERM(so),
+					    i, tclass, error);
 					error = 0;
 				}
 			}
@@ -373,15 +380,16 @@ flush_pid_tclass(struct so_tcdbg *so_tcdbg)
 		fp = fdp->fd_ofiles[i];
 		if (fp == NULL ||
 		    (fdp->fd_ofileflags[i] & UF_RESERVED) != 0 ||
-		    fp->f_fglob->fg_type != DTYPE_SOCKET)
+		    FILEGLOB_DTYPE(fp->f_fglob) != DTYPE_SOCKET)
 			continue;
 
 		so = (struct socket *)fp->f_fglob->fg_data;
 		error = sock_setsockopt(so, SOL_SOCKET, SO_FLUSH, &tclass,
 		    sizeof (tclass));
 		if (error != 0) {
-			printf("%s: setsockopt(SO_FLUSH) (so=%p, fd=%d, "
-			    "tclass=%d) failed %d\n", __func__, so, i, tclass,
+			printf("%s: setsockopt(SO_FLUSH) (so=0x%llx, fd=%d, "
+			    "tclass=%d) failed %d\n", __func__,
+			    (uint64_t)VM_KERNEL_ADDRPERM(so), i, tclass,
 			    error);
 			error = 0;
 		}
@@ -652,17 +660,13 @@ so_set_traffic_class(struct socket *so, int optval)
 			VERIFY(SO_VALID_TC(optval));
 			so->so_traffic_class = optval;
 
-			if ((INP_SOCKAF(so) == AF_INET ||
-			    INP_SOCKAF(so) == AF_INET6) &&
-			    INP_SOCKTYPE(so) == SOCK_STREAM) {
+			if ((SOCK_DOM(so) == PF_INET ||
+			    SOCK_DOM(so) == PF_INET6) &&
+			    SOCK_TYPE(so) == SOCK_STREAM)
 				set_tcp_stream_priority(so);
 
-				/* Set/unset use of Large Receive Offload */
-				so_set_lro(so, optval);
-			}
-
-			if ((INP_SOCKAF(so) == AF_INET ||
-			    INP_SOCKAF(so) == AF_INET6) &&
+			if ((SOCK_DOM(so) == PF_INET ||
+			    SOCK_DOM(so) == PF_INET6) &&
 			    optval != oldval && (optval == SO_TC_BK_SYS ||
 			    oldval == SO_TC_BK_SYS)) {
 				/*
@@ -672,9 +676,10 @@ so_set_traffic_class(struct socket *so, int optval)
 				if (oldval == SO_TC_BK_SYS)
 					inp_reset_fc_state(so->so_pcb);
 
-				SOTHROTTLELOG(("throttle[%d]: so %p [%d,%d] "
-				    "opportunistic %s\n", so->last_pid,
-				    so, INP_SOCKAF(so), INP_SOCKTYPE(so),
+				SOTHROTTLELOG(("throttle[%d]: so 0x%llx "
+				    "[%d,%d] opportunistic %s\n", so->last_pid,
+				    (uint64_t)VM_KERNEL_ADDRPERM(so),
+				    SOCK_DOM(so), SOCK_TYPE(so),
 				    (optval == SO_TC_BK_SYS) ? "ON" : "OFF"));
 			}
 		}
@@ -688,7 +693,7 @@ so_set_default_traffic_class(struct socket *so)
 	int sotc = -1;
 
 	if (tfp_count > 0 &&
-	    (INP_SOCKAF(so) == AF_INET || INP_SOCKAF(so) == AF_INET6)) {
+	    (SOCK_DOM(so) == PF_INET || SOCK_DOM(so) == PF_INET6)) {
 		get_tclass_for_curr_proc(&sotc);
 	}
 
@@ -776,9 +781,21 @@ so_recv_data_stat(struct socket *so, struct mbuf *m, size_t off)
 __private_extern__ void
 set_tcp_stream_priority(struct socket *so)
 {
-	struct tcpcb *tp = intotcpcb(sotoinpcb(so));
-	int old_cc = tp->tcp_cc_index;
+	struct inpcb *inp = sotoinpcb(so);
+	struct tcpcb *tp = intotcpcb(inp);
+	struct ifnet *outifp;
+	u_char old_cc = tp->tcp_cc_index;
 	int recvbg = IS_TCP_RECV_BG(so);
+	bool is_local, fg_active = false;
+	u_int32_t uptime;
+
+	VERIFY((SOCK_CHECK_DOM(so, PF_INET) 
+	    || SOCK_CHECK_DOM(so, PF_INET6))
+	    && SOCK_CHECK_TYPE(so, SOCK_STREAM)
+	    && SOCK_CHECK_PROTO(so, IPPROTO_TCP));
+	
+	outifp = inp->inp_last_outifp;
+	uptime = net_uptime();
 
 	/*
 	 * If the socket was marked as a background socket or if the
@@ -787,8 +804,34 @@ set_tcp_stream_priority(struct socket *so)
 	 * background. The variable sotcdb which can be set with sysctl
 	 * is used to disable these settings for testing.
 	 */
-	if (soisthrottled(so) || IS_SO_TC_BACKGROUND(so->so_traffic_class)) {
-		if ((sotcdb & SOTCDB_NO_SENDTCPBG) != 0) {
+	if (soissrcbackground(so)) {
+		if (outifp == NULL || (outifp->if_flags & IFF_LOOPBACK))
+			is_local = true;
+		else
+			is_local = false;
+
+		/* Check if there has been recent foreground activity */
+		if ((outifp != NULL &&
+		    outifp->if_fg_sendts > 0 &&
+		    (int)(uptime - outifp->if_fg_sendts) <= 
+		    TCP_BG_SWITCH_TIME) ||
+		    net_io_policy_throttled)
+			fg_active = true;
+
+		/*
+		 * If the interface that the connection is using is
+		 * loopback, do not use background congestion
+		 * control algorithm.
+		 *
+		 * If there has been recent foreground activity or if 
+		 * there was an indication that a foreground application 
+		 * is going to use networking (net_io_policy_throttled),
+		 * switch the backgroung streams to use background 
+		 * congestion control algorithm. Otherwise, even background
+		 * flows can move into foreground.
+		 */
+		if ((sotcdb & SOTCDB_NO_SENDTCPBG) != 0 ||
+			is_local || !fg_active) {
 			if (old_cc == TCP_CC_ALGO_BACKGROUND_INDEX)
 				tcp_set_foreground_cc(so);
 		} else {
@@ -797,7 +840,8 @@ set_tcp_stream_priority(struct socket *so)
 		}
 
 		/* Set receive side background flags */
-		if ((sotcdb & SOTCDB_NO_RECVTCPBG) != 0)
+		if ((sotcdb & SOTCDB_NO_RECVTCPBG) != 0 ||
+			is_local || !fg_active)
 			tcp_clear_recv_bg(so);
 		else
 			tcp_set_recv_bg(so);
@@ -808,9 +852,9 @@ set_tcp_stream_priority(struct socket *so)
 	}
 
 	if (old_cc != tp->tcp_cc_index || recvbg != IS_TCP_RECV_BG(so)) {
-		SOTHROTTLELOG(("throttle[%d]: so %p [%d,%d] TCP %s send; "
-		   "%s recv\n", so->last_pid, so, INP_SOCKAF(so),
-		   INP_SOCKTYPE(so),
+		SOTHROTTLELOG(("throttle[%d]: so 0x%llx [%d,%d] TCP %s send; "
+		   "%s recv\n", so->last_pid, (uint64_t)VM_KERNEL_ADDRPERM(so),
+		   SOCK_DOM(so), SOCK_TYPE(so),
 		   (tp->tcp_cc_index == TCP_CC_ALGO_BACKGROUND_INDEX) ?
 		   "background" : "foreground",
 		   IS_TCP_RECV_BG(so) ? "background" : "foreground"));
@@ -859,6 +903,8 @@ set_packet_service_class(struct mbuf *m, struct socket *so,
 	if (soisthrottled(so) && !IS_MBUF_SC_BACKGROUND(msc))
 		msc = MBUF_SC_BK;
 
+	if (soissrcbackground(so))
+		m->m_pkthdr.pkt_flags |= PKTF_SO_BACKGROUND;
 	/*
 	 * Set the traffic class in the mbuf packet header svc field
 	 */
@@ -876,13 +922,14 @@ set_packet_service_class(struct mbuf *m, struct socket *so,
 	(void) m_set_service_class(m, msc);
 
 	/*
-	 * Set the privileged traffic auxiliary flag if applicable, or clear it.
+	 * Set the privileged traffic auxiliary flag if applicable, 
+	 * or clear it.
 	 */
 	if (!(sotcdb & SOTCDB_NO_PRIVILEGED) && soisprivilegedtraffic(so) &&
 	    msc != MBUF_SC_UNSPEC)
-		m->m_pkthdr.aux_flags |= MAUXF_PRIO_PRIVILEGED;
+		m->m_pkthdr.pkt_flags |= PKTF_PRIO_PRIVILEGED;
 	else
-		m->m_pkthdr.aux_flags &= ~MAUXF_PRIO_PRIVILEGED;
+		m->m_pkthdr.pkt_flags &= ~PKTF_PRIO_PRIVILEGED;
 
 no_mbtc:
 	/*
@@ -987,6 +1034,8 @@ so_tc_update_stats(struct mbuf *m, struct socket *so, mbuf_svc_class_t msc)
 __private_extern__ void
 socket_tclass_init(void)
 {
+        _CASSERT(_SO_TC_MAX == SO_TC_STATS_MAX);
+
 	tclass_lck_grp_attr = lck_grp_attr_alloc_init();
 	tclass_lck_grp = lck_grp_alloc_init("tclass", tclass_lck_grp_attr);
 	tclass_lck_attr = lck_attr_alloc_init();
@@ -1073,17 +1122,30 @@ so_svc2tc(mbuf_svc_class_t svc)
 }
 
 /*
- * LRO is turned on for AV streaming and background classes.
+ * LRO is turned on for AV streaming class.
  */
-static void
+void
 so_set_lro(struct socket *so, int optval)
 {
-	if ((optval == SO_TC_BK) ||
-            (optval == SO_TC_BK_SYS) ||
-	    (optval == SO_TC_AV)) {
+	if (optval == SO_TC_AV) {
 		so->so_flags |= SOF_USELRO;
 	} else {
-		so->so_flags &= ~SOF_USELRO;
+		if (so->so_flags & SOF_USELRO) {
+			/* transition to non LRO class */
+			so->so_flags &= ~SOF_USELRO;
+			struct inpcb *inp = sotoinpcb(so);
+			struct tcpcb *tp = NULL;
+			if (inp) {
+				tp = intotcpcb(inp);
+				if (tp && (tp->t_flagsext & TF_LRO_OFFLOADED)) {
+					tcp_lro_remove_state(inp->inp_laddr,
+						inp->inp_faddr,
+						inp->inp_lport, 
+						inp->inp_fport);
+					tp->t_flagsext &= ~TF_LRO_OFFLOADED;	
+				}
+			}
+		}
 	}
 }
 

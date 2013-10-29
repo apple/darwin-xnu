@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2003-2012 Apple Inc. All rights reserved.
+ * Copyright (c) 2003-2013 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -97,7 +97,6 @@
 #include <net/route.h>
 #include <net/raw_cb.h>
 #include <net/dlil.h>
-#include <net/net_osdep.h>
 
 #include <netinet/in.h>
 #include <netinet/in_var.h>
@@ -607,7 +606,7 @@ add_m6if(mifcp)
 	struct mif6 *mifp;
 	struct ifnet *ifp;
 	int error;
-#if notyet
+#ifdef notyet
 	struct tbf *m_tbf = tbftable + mifcp->mif6c_mifi;
 #endif
 
@@ -667,9 +666,9 @@ add_m6if(mifcp)
 #if MRT6DEBUG
 	if (mrt6debug)
 		log(LOG_DEBUG,
-		    "add_mif #%d, phyint %s%d\n",
+		    "add_mif #%d, phyint %s\n",
 		    mifcp->mif6c_mifi,
-		    ifp->if_name, ifp->if_unit);
+		    if_name(ifp));
 #endif
 
 	return 0;
@@ -982,7 +981,7 @@ ip6_mforward(ip6, ifp, m)
 	struct mif6 *mifp;
 	struct mbuf *mm;
 	mifi_t mifi;
-	struct timeval timenow;
+	uint64_t curtime = net_uptime();
 
 #if MRT6DEBUG
 	if (mrt6debug & DEBUG_FORWARD)
@@ -1007,11 +1006,10 @@ ip6_mforward(ip6, ifp, m)
 	 * MLD packets can be sent with the unspecified source address
 	 * (although such packets must normally set 1 to the hop limit field).
 	 */
-	getmicrotime(&timenow);
 	if (IN6_IS_ADDR_UNSPECIFIED(&ip6->ip6_src)) {
 		ip6stat.ip6s_cantforward++;
-		if (ip6_log_time + ip6_log_interval < timenow.tv_sec) {
-			ip6_log_time = timenow.tv_sec;
+		if (ip6_log_time + ip6_log_interval < curtime) {
+			ip6_log_time = curtime;
 			log(LOG_DEBUG,
 			    "cannot forward "
 			    "from %s to %s nxt %d received on %s\n",
@@ -1538,7 +1536,8 @@ phyint_send(ip6, mifp, m)
 		dst6->sin6_len = sizeof(struct sockaddr_in6);
 		dst6->sin6_family = AF_INET6;
 		dst6->sin6_addr = ip6->ip6_dst;
-		ip6_mloopback(ifp, m, (struct sockaddr_in6 *)&ro.ro_dst);
+		ip6_mloopback(NULL, ifp, m, (struct sockaddr_in6 *)&ro.ro_dst,
+		    -1, -1);
 	}
 	/*
 	 * Put the packet into the sending queue of the outgoing interface
@@ -1620,7 +1619,7 @@ register_send(ip6, mif, m)
 	MGETHDR(mm, M_DONTWAIT, MT_HEADER);
 	if (mm == NULL)
 		return ENOBUFS;
-#ifdef __darwin8_notyet
+#ifdef notyet
 #if CONFIG_MACF_NET
 	mac_create_mbuf_multicast_encap(m, mif->m6_ifp, mm);
 #endif

@@ -268,3 +268,14 @@ Entry(__vmxoff)
 	ret
 
 #endif /* CONFIG_VMX */
+
+/*
+ *	mfence -- Memory Barrier
+ *	Use out-of-line assembly to get
+ *	standard x86-64 ABI guarantees
+ *	about what the caller's codegen
+ *	has in registers vs. memory
+ */
+Entry(do_mfence)
+	mfence
+	ret

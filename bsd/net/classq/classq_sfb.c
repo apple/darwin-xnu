@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2011-2012 Apple Inc. All rights reserved.
+ * Copyright (c) 2011-2013 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -28,7 +28,6 @@
 
 #include <sys/cdefs.h>
 #include <sys/param.h>
-#include <sys/malloc.h>
 #include <sys/mbuf.h>
 #include <sys/socket.h>
 #include <sys/sockio.h>
@@ -46,6 +45,7 @@
 #include <net/if_var.h>
 #include <net/if_types.h>
 #include <net/dlil.h>
+#include <net/flowadv.h>
 
 #include <netinet/in.h>
 #include <netinet/in_systm.h>
@@ -57,6 +57,7 @@
 #include <net/classq/classq_sfb.h>
 #include <net/flowhash.h>
 #include <net/net_osdep.h>
+#include <dev/random/randomdev.h>
 
 /*
  * Stochastic Fair Blue
@@ -131,7 +132,7 @@
 
 #define	SFB_RANDOM(sp, tmin, tmax)	((sfb_random(sp) % (tmax)) + (tmin))
 
-#define	SFB_PKT_PBOX PF_TAG_QUEUE1	/* in penalty box */
+#define	SFB_PKT_PBOX	0x1		/* in penalty box */
 
 /* The following mantissa values are in SFB_FP_SHIFT Q format */
 #define	SFB_MAX_PMARK	(1 << SFB_FP_SHIFT) /* Q14 representation of 1.00 */
@@ -176,14 +177,32 @@
 
 #define	ABS(v)  (((v) > 0) ? (v) : -(v))
 
-#define	SFB_ZONE_MAX	32		/* maximum elements in zone */
-#define	SFB_ZONE_NAME	"classq_sfb"	/* zone name */
+#define	SFB_ZONE_MAX		32		/* maximum elements in zone */
+#define	SFB_ZONE_NAME		"classq_sfb"	/* zone name */
+
+#define	SFB_BINS_ZONE_MAX	32		/* maximum elements in zone */
+#define	SFB_BINS_ZONE_NAME	"classq_sfb_bins" /* zone name */
+
+#define	SFB_FCL_ZONE_MAX	32		/* maximum elements in zone */
+#define	SFB_FCL_ZONE_NAME	"classq_sfb_fcl" /* zone name */
 
 /* Place the flow control entries in current bin on level 0 */
 #define	SFB_FC_LEVEL	0
 
+/* Store SFB hash and flags in the module private scratch space */
+#define	pkt_sfb_hash8	pkt_mpriv.__mpriv_u.__mpriv32[0].__mpriv32_u.__val8
+#define	pkt_sfb_hash16	pkt_mpriv.__mpriv_u.__mpriv32[0].__mpriv32_u.__val16
+#define	pkt_sfb_hash32	pkt_mpriv.__mpriv_u.__mpriv32[0].__mpriv32_u.__val32
+#define	pkt_sfb_flags	pkt_mpriv.__mpriv_u.__mpriv32[1].__mpriv32_u.__val32
+
 static unsigned int sfb_size;		/* size of zone element */
 static struct zone *sfb_zone;		/* zone for sfb */
+
+static unsigned int sfb_bins_size;	/* size of zone element */
+static struct zone *sfb_bins_zone;	/* zone for sfb_bins */
+
+static unsigned int sfb_fcl_size;	/* size of zone element */
+static struct zone *sfb_fcl_zone;	/* zone for sfb_fc_lists */
 
 /* internal function prototypes */
 static u_int32_t sfb_random(struct sfb *);
@@ -194,21 +213,21 @@ static void sfb_calc_holdtime(struct sfb *, u_int64_t);
 static void sfb_calc_pboxtime(struct sfb *, u_int64_t);
 static void sfb_calc_hinterval(struct sfb *, u_int64_t *);
 static void sfb_swap_bins(struct sfb *, u_int32_t);
-static inline int sfb_pcheck(struct sfb *, struct pf_mtag *);
-static int sfb_penalize(struct sfb *, struct pf_mtag *, struct timespec *);
+static inline int sfb_pcheck(struct sfb *, struct pkthdr *);
+static int sfb_penalize(struct sfb *, struct pkthdr *, struct timespec *);
 static void sfb_adjust_bin(struct sfb *, struct sfbbinstats *,
     struct timespec *, struct timespec *, boolean_t);
 static void sfb_decrement_bin(struct sfb *, struct sfbbinstats *,
     struct timespec *, struct timespec *);
 static void sfb_increment_bin(struct sfb *, struct sfbbinstats *,
     struct timespec *, struct timespec *);
-static inline void sfb_dq_update_bins(struct sfb *, struct pf_mtag *,
+static inline void sfb_dq_update_bins(struct sfb *, struct pkthdr *,
     struct timespec *);
-static inline void sfb_eq_update_bins(struct sfb *, struct pf_mtag *);
-static int sfb_drop_early(struct sfb *, struct pf_mtag *, u_int16_t *,
+static inline void sfb_eq_update_bins(struct sfb *, struct pkthdr *);
+static int sfb_drop_early(struct sfb *, struct pkthdr *, u_int16_t *,
     struct timespec *);
-static boolean_t sfb_bin_addfcentry(struct sfb *, struct pf_mtag *);
-static void sfb_fclist_append(struct sfb *, struct sfb_fc_list *);
+static boolean_t sfb_bin_addfcentry(struct sfb *, struct pkthdr *);
+static void sfb_fclist_append(struct sfb *, struct sfb_fcl *);
 static void sfb_fclists_clean(struct sfb *sp);
 
 SYSCTL_NODE(_net_classq, OID_AUTO, sfb, CTLFLAG_RW|CTLFLAG_LOCKED, 0, "SFB");
@@ -275,13 +294,33 @@ sfb_init(void)
 	}
 	zone_change(sfb_zone, Z_EXPAND, TRUE);
 	zone_change(sfb_zone, Z_CALLERACCT, TRUE);
+
+	sfb_bins_size = sizeof (*((struct sfb *)0)->sfb_bins);
+	sfb_bins_zone = zinit(sfb_bins_size, SFB_BINS_ZONE_MAX * sfb_bins_size,
+	    0, SFB_BINS_ZONE_NAME);
+	if (sfb_bins_zone == NULL) {
+		panic("%s: failed allocating %s", __func__, SFB_BINS_ZONE_NAME);
+		/* NOTREACHED */
+	}
+	zone_change(sfb_bins_zone, Z_EXPAND, TRUE);
+	zone_change(sfb_bins_zone, Z_CALLERACCT, TRUE);
+
+	sfb_fcl_size = sizeof (*((struct sfb *)0)->sfb_fc_lists);
+	sfb_fcl_zone = zinit(sfb_fcl_size, SFB_FCL_ZONE_MAX * sfb_fcl_size,
+	    0, SFB_FCL_ZONE_NAME);
+	if (sfb_fcl_zone == NULL) {
+		panic("%s: failed allocating %s", __func__, SFB_FCL_ZONE_NAME);
+		/* NOTREACHED */
+	}
+	zone_change(sfb_fcl_zone, Z_EXPAND, TRUE);
+	zone_change(sfb_fcl_zone, Z_CALLERACCT, TRUE);
 }
 
 static u_int32_t
 sfb_random(struct sfb *sp)
 {
 	IFCQ_CONVERT_LOCK(&sp->sfb_ifp->if_snd);
-	return (random());
+	return (RandomULong());
 }
 
 static void
@@ -362,6 +401,7 @@ struct sfb *
 sfb_alloc(struct ifnet *ifp, u_int32_t qid, u_int32_t qlim, u_int32_t flags)
 {
 	struct sfb *sp;
+	int i;
 
 	VERIFY(ifp != NULL && qlim > 0);
 
@@ -370,27 +410,37 @@ sfb_alloc(struct ifnet *ifp, u_int32_t qid, u_int32_t qlim, u_int32_t flags)
 		log(LOG_ERR, "%s: SFB unable to allocate\n", if_name(ifp));
 		return (NULL);
 	}
-
 	bzero(sp, sfb_size);
-	if ((sp->sfb_bins = _MALLOC(sizeof (*sp->sfb_bins), M_DEVBUF,
-	    M_WAITOK|M_ZERO)) == NULL) {
+
+	if ((sp->sfb_bins = zalloc(sfb_bins_zone)) == NULL) {
 		log(LOG_ERR, "%s: SFB unable to allocate bins\n", if_name(ifp));
 		sfb_destroy(sp);
 		return (NULL);
 	}
+	bzero(sp->sfb_bins, sfb_bins_size);
 
-	if ((sp->sfb_fc_lists = _MALLOC(sizeof (*sp->sfb_fc_lists), M_DEVBUF,
-	    M_WAITOK|M_ZERO)) == NULL) {
+	if ((sp->sfb_fc_lists = zalloc(sfb_fcl_zone)) == NULL) {
 		log(LOG_ERR, "%s: SFB unable to allocate flow control lists\n",
 		    if_name(ifp));
 		sfb_destroy(sp);
 		return(NULL);
 	}
+	bzero(sp->sfb_fc_lists, sfb_fcl_size);
 
-	sp->sfb_flags = (flags & SFBF_USERFLAGS);
+	for (i = 0; i < SFB_BINS; ++i)
+		STAILQ_INIT(&SFB_FC_LIST(sp, i)->fclist);
+
 	sp->sfb_ifp = ifp;
 	sp->sfb_qlim = qlim;
 	sp->sfb_qid = qid;
+	sp->sfb_flags = (flags & SFBF_USERFLAGS);
+#if !PF_ECN
+	if (sp->sfb_flags & SFBF_ECN) {
+		sp->sfb_flags &= ~SFBF_ECN;
+		log(LOG_ERR, "%s: SFB qid=%d, ECN not available; ignoring "
+		    "SFBF_ECN flag!\n", if_name(ifp), sp->sfb_qid);
+	}
+#endif /* !PF_ECN */
 
 	sfb_resetq(sp, -1);
 
@@ -398,10 +448,16 @@ sfb_alloc(struct ifnet *ifp, u_int32_t qid, u_int32_t qlim, u_int32_t flags)
 }
 
 static void
-sfb_fclist_append(struct sfb *sp, struct sfb_fc_list *fcl)
+sfb_fclist_append(struct sfb *sp, struct sfb_fcl *fcl)
 {
 	IFCQ_CONVERT_LOCK(&sp->sfb_ifp->if_snd);
-	ifnet_fclist_append(sp, fcl);
+
+	VERIFY(STAILQ_EMPTY(&fcl->fclist) || fcl->cnt > 0);
+	sp->sfb_stats.flow_feedback += fcl->cnt;
+	fcl->cnt = 0;
+
+	flowadv_add(&fcl->fclist);
+	VERIFY(fcl->cnt == 0 && STAILQ_EMPTY(&fcl->fclist));
 }
 
 static void
@@ -409,10 +465,10 @@ sfb_fclists_clean(struct sfb *sp)
 {
 	int i;
 
-	/* Move all the flow control entries to the ifnet list */
+	/* Move all the flow control entries to the flowadv list */
 	for (i = 0; i < SFB_BINS; ++i) {
-		struct sfb_fc_list *fcl = SFB_FC_LIST(sp, i);
-		if (!SLIST_EMPTY(fcl))
+		struct sfb_fcl *fcl = SFB_FC_LIST(sp, i);
+		if (!STAILQ_EMPTY(&fcl->fclist))
 			sfb_fclist_append(sp, fcl);
 	}
 }
@@ -422,11 +478,11 @@ sfb_destroy(struct sfb *sp)
 {
 	sfb_fclists_clean(sp);
 	if (sp->sfb_bins != NULL) {
-		_FREE(sp->sfb_bins, M_DEVBUF);
+		zfree(sfb_bins_zone, sp->sfb_bins);
 		sp->sfb_bins = NULL;
 	}
 	if (sp->sfb_fc_lists != NULL) {
-		_FREE(sp->sfb_fc_lists, M_DEVBUF);
+		zfree(sfb_fcl_zone, sp->sfb_fc_lists);
 		sp->sfb_fc_lists = NULL;
 	}
 	zfree(sfb_zone, sp);
@@ -529,9 +585,9 @@ sfb_swap_bins(struct sfb *sp, u_int32_t len)
 
 	/* clear/adjust bin statistics and flow control lists */
 	for (i = 0; i < SFB_BINS; i++) {
-		struct sfb_fc_list *fcl = SFB_FC_LIST(sp, i);
+		struct sfb_fcl *fcl = SFB_FC_LIST(sp, i);
 
-		if (!SLIST_EMPTY(fcl))
+		if (!STAILQ_EMPTY(&fcl->fclist))
 			sfb_fclist_append(sp, fcl);
 
 		for (j = 0; j < SFB_LEVELS; j++) {
@@ -557,7 +613,7 @@ sfb_swap_bins(struct sfb *sp, u_int32_t len)
 }
 
 static inline int
-sfb_pcheck(struct sfb *sp, struct pf_mtag *t)
+sfb_pcheck(struct sfb *sp, struct pkthdr *pkt)
 {
 #if SFB_LEVELS != 2
 	int i, n;
@@ -576,17 +632,17 @@ sfb_pcheck(struct sfb *sp, struct pf_mtag *t)
 	 * Level 0: bin index at [0] for set 0; [2] for set 1
 	 * Level 1: bin index at [1] for set 0; [3] for set 1
 	 */
-	if (SFB_BINST(sp, 0, SFB_BINMASK(t->pftag_qpriv8[(s << 1)]),
+	if (SFB_BINST(sp, 0, SFB_BINMASK(pkt->pkt_sfb_hash8[(s << 1)]),
 	    s)->pmark < SFB_PMARK_TH ||
-	    SFB_BINST(sp, 1, SFB_BINMASK(t->pftag_qpriv8[(s << 1) + 1]),
+	    SFB_BINST(sp, 1, SFB_BINMASK(pkt->pkt_sfb_hash8[(s << 1) + 1]),
 	    s)->pmark < SFB_PMARK_TH)
 		return (0);
 #else /* SFB_LEVELS != 2 */
 	for (i = 0; i < SFB_LEVELS; i++) {
 		if (s == 0)		/* set 0, bin index [0,1] */
-			n = SFB_BINMASK(t->pftag_qpriv8[i]);
+			n = SFB_BINMASK(pkt->pkt_sfb_hash8[i]);
 		else			/* set 1, bin index [2,3] */
-			n = SFB_BINMASK(t->pftag_qpriv8[i + 2]);
+			n = SFB_BINMASK(pkt->pkt_sfb_hash8[i + 2]);
 
 		if (SFB_BINST(sp, i, n, s)->pmark < SFB_PMARK_TH)
 			return (0);
@@ -596,12 +652,12 @@ sfb_pcheck(struct sfb *sp, struct pf_mtag *t)
 }
 
 static int
-sfb_penalize(struct sfb *sp, struct pf_mtag *t, struct timespec *now)
+sfb_penalize(struct sfb *sp, struct pkthdr *pkt, struct timespec *now)
 {
 	struct timespec delta = { 0, 0 };
 
 	/* If minimum pmark of current bins is < SFB_PMARK_TH, we're done */
-	if (!sfb_ratelimit || !sfb_pcheck(sp, t))
+	if (!sfb_ratelimit || !sfb_pcheck(sp, pkt))
 		return (0);
 
 	net_timersub(now, &sp->sfb_pboxfreeze, &delta);
@@ -620,22 +676,22 @@ sfb_penalize(struct sfb *sp, struct pf_mtag *t, struct timespec *now)
 		 */
 #if SFB_LEVELS == 2
 		/* Level 0: bin index at [0] for set 0; [2] for set 1 */
-		n = SFB_BINMASK(t->pftag_qpriv8[(w << 1)]);
+		n = SFB_BINMASK(pkt->pkt_sfb_hash8[(w << 1)]);
 		bin = SFB_BINST(sp, 0, n, w);
 		if (bin->pkts >= sp->sfb_allocation)
 			sfb_increment_bin(sp, bin, SFB_BINFT(sp, 0, n, w), now);
 
 		/* Level 0: bin index at [1] for set 0; [3] for set 1 */
-		n = SFB_BINMASK(t->pftag_qpriv8[(w << 1) + 1]);
+		n = SFB_BINMASK(pkt->pkt_sfb_hash8[(w << 1) + 1]);
 		bin = SFB_BINST(sp, 1, n, w);
 		if (bin->pkts >= sp->sfb_allocation)
 			sfb_increment_bin(sp, bin, SFB_BINFT(sp, 1, n, w), now);
 #else /* SFB_LEVELS != 2 */
 		for (i = 0; i < SFB_LEVELS; i++) {
 			if (w == 0)	/* set 0, bin index [0,1] */
-				n = SFB_BINMASK(t->pftag_qpriv8[i]);
+				n = SFB_BINMASK(pkt->pkt_sfb_hash8[i]);
 			else		/* set 1, bin index [2,3] */
-				n = SFB_BINMASK(t->pftag_qpriv8[i + 2]);
+				n = SFB_BINMASK(pkt->pkt_sfb_hash8[i + 2]);
 
 			bin = SFB_BINST(sp, i, n, w);
 			if (bin->pkts >= sp->sfb_allocation) {
@@ -648,7 +704,7 @@ sfb_penalize(struct sfb *sp, struct pf_mtag *t, struct timespec *now)
 	}
 
 	/* non-conformant or else misclassified flow; queue it anyway */
-	t->pftag_flags |= SFB_PKT_PBOX;
+	pkt->pkt_sfb_flags |= SFB_PKT_PBOX;
 	*(&sp->sfb_pboxfreeze) = *now;
 
 	return (0);
@@ -694,14 +750,14 @@ sfb_increment_bin(struct sfb *sp, struct sfbbinstats *bin, struct timespec *ft,
 }
 
 static inline void
-sfb_dq_update_bins(struct sfb *sp, struct pf_mtag *t, struct timespec *now)
+sfb_dq_update_bins(struct sfb *sp, struct pkthdr *pkt, struct timespec *now)
 {
 #if SFB_LEVELS != 2 || SFB_FC_LEVEL != 0
 	int i;
 #endif /* SFB_LEVELS != 2 || SFB_FC_LEVEL != 0 */
 	struct sfbbinstats *bin;
 	int s, n;
-	struct sfb_fc_list *fcl = NULL;
+	struct sfb_fcl *fcl = NULL;
 
 	s = sp->sfb_current;
 	VERIFY((s + (s ^ 1)) == 1);
@@ -711,7 +767,7 @@ sfb_dq_update_bins(struct sfb *sp, struct pf_mtag *t, struct timespec *now)
 	 */
 #if SFB_LEVELS == 2 && SFB_FC_LEVEL == 0
 	/* Level 0: bin index at [0] for set 0; [2] for set 1 */
-	n = SFB_BINMASK(t->pftag_qpriv8[(s << 1)]);
+	n = SFB_BINMASK(pkt->pkt_sfb_hash8[(s << 1)]);
 	bin = SFB_BINST(sp, 0, n, s);
 
 	VERIFY(bin->pkts > 0);
@@ -721,12 +777,12 @@ sfb_dq_update_bins(struct sfb *sp, struct pf_mtag *t, struct timespec *now)
 	if (bin->pkts <= (sp->sfb_allocation >> 2)) {
 		/* deliver flow control feedback to the sockets */
 		fcl = SFB_FC_LIST(sp, n);
-		if (!SLIST_EMPTY(fcl))
+		if (!STAILQ_EMPTY(&fcl->fclist))
 			sfb_fclist_append(sp, fcl);
 	}
 
 	/* Level 1: bin index at [1] for set 0; [3] for set 1 */
-	n = SFB_BINMASK(t->pftag_qpriv8[(s << 1) + 1]);
+	n = SFB_BINMASK(pkt->pkt_sfb_hash8[(s << 1) + 1]);
 	bin = SFB_BINST(sp, 1, n, s);
 
 	VERIFY(bin->pkts > 0);
@@ -735,9 +791,9 @@ sfb_dq_update_bins(struct sfb *sp, struct pf_mtag *t, struct timespec *now)
 #else /* SFB_LEVELS != 2 || SFB_FC_LEVEL != 0 */
 	for (i = 0; i < SFB_LEVELS; i++) {
 		if (s == 0)		/* set 0, bin index [0,1] */
-			n = SFB_BINMASK(t->pftag_qpriv8[i]);
+			n = SFB_BINMASK(pkt->pkt_sfb_hash8[i]);
 		else			/* set 1, bin index [2,3] */
-			n = SFB_BINMASK(t->pftag_qpriv8[i + 2]);
+			n = SFB_BINMASK(pkt->pkt_sfb_hash8[i + 2]);
 
 		bin = SFB_BINST(sp, i, n, s);
 
@@ -750,7 +806,7 @@ sfb_dq_update_bins(struct sfb *sp, struct pf_mtag *t, struct timespec *now)
 			/* deliver flow control feedback to the sockets */
 			if (i == SFB_FC_LEVEL) {
 				fcl = SFB_FC_LIST(sp, n);
-				if (!SLIST_EMPTY(fcl))
+				if (!STAILQ_EMPTY(&fcl->fclist))
 					sfb_fclist_append(sp, fcl);
 			}
 		}
@@ -759,7 +815,7 @@ sfb_dq_update_bins(struct sfb *sp, struct pf_mtag *t, struct timespec *now)
 }
 
 static inline void
-sfb_eq_update_bins(struct sfb *sp, struct pf_mtag *t)
+sfb_eq_update_bins(struct sfb *sp, struct pkthdr *pkt)
 {
 #if SFB_LEVELS != 2
 	int i, n;
@@ -774,16 +830,18 @@ sfb_eq_update_bins(struct sfb *sp, struct pf_mtag *t)
 	 */
 #if SFB_LEVELS == 2
 	/* Level 0: bin index at [0] for set 0; [2] for set 1 */
-	SFB_BINST(sp, 0, SFB_BINMASK(t->pftag_qpriv8[(s << 1)]), s)->pkts++;
+	SFB_BINST(sp, 0,
+	    SFB_BINMASK(pkt->pkt_sfb_hash8[(s << 1)]), s)->pkts++;
 
 	/* Level 1: bin index at [1] for set 0; [3] for set 1 */
-	SFB_BINST(sp, 1, SFB_BINMASK(t->pftag_qpriv8[(s << 1) + 1]), s)->pkts++;
+	SFB_BINST(sp, 1,
+	    SFB_BINMASK(pkt->pkt_sfb_hash8[(s << 1) + 1]), s)->pkts++;
 #else /* SFB_LEVELS != 2 */
 	for (i = 0; i < SFB_LEVELS; i++) {
 		if (s == 0)		/* set 0, bin index [0,1] */
-			n = SFB_BINMASK(t->pftag_qpriv8[i]);
+			n = SFB_BINMASK(pkt->pkt_sfb_hash8[i]);
 		else			/* set 1, bin index [2,3] */
-			n = SFB_BINMASK(t->pftag_qpriv8[i + 2]);
+			n = SFB_BINMASK(pkt->pkt_sfb_hash8[i + 2]);
 
 		SFB_BINST(sp, i, n, s)->pkts++;
 	}
@@ -791,20 +849,21 @@ sfb_eq_update_bins(struct sfb *sp, struct pf_mtag *t)
 }
 
 static boolean_t
-sfb_bin_addfcentry(struct sfb *sp, struct pf_mtag *t)
+sfb_bin_addfcentry(struct sfb *sp, struct pkthdr *pkt)
 {
-	struct sfb_bin_fcentry *fce;
-	u_int32_t flowhash;
-	struct sfb_fc_list *fcl;
+	struct flowadv_fcentry *fce;
+	u_int32_t flowsrc, flowid;
+	struct sfb_fcl *fcl;
 	int s;
 
 	s = sp->sfb_current;
 	VERIFY((s + (s ^ 1)) == 1);
 
-	flowhash = t->pftag_flowhash;
+	flowsrc = pkt->pkt_flowsrc;
+	flowid = pkt->pkt_flowid;
 
-	if (flowhash == 0) {
-		sp->sfb_stats.null_flowhash++;
+	if (flowid == 0) {
+		sp->sfb_stats.null_flowid++;
 		return (FALSE);
 	}
 
@@ -812,19 +871,22 @@ sfb_bin_addfcentry(struct sfb *sp, struct pf_mtag *t)
 	 * Use value at index 0 for set 0 and
 	 * value at index 2 for set 1
 	 */
-	fcl = SFB_FC_LIST(sp, SFB_BINMASK(t->pftag_qpriv8[(s << 1)]));
-	SLIST_FOREACH(fce, fcl, fce_link) {
-		if (fce->fce_flowhash == flowhash) {
+	fcl = SFB_FC_LIST(sp, SFB_BINMASK(pkt->pkt_sfb_hash8[(s << 1)]));
+	STAILQ_FOREACH(fce, &fcl->fclist, fce_link) {
+		if (fce->fce_flowsrc == flowsrc &&
+		    fce->fce_flowid == flowid) {
 			/* Already on flow control list; just return */
 			return (TRUE);
 		}
 	}
 
 	IFCQ_CONVERT_LOCK(&sp->sfb_ifp->if_snd);
-	fce = ifnet_fce_alloc(M_WAITOK);
+	fce = flowadv_alloc_entry(M_WAITOK);
 	if (fce != NULL) {
-		fce->fce_flowhash = flowhash;
-		SLIST_INSERT_HEAD(fcl, fce, fce_link);
+		fce->fce_flowsrc = flowsrc;
+		fce->fce_flowid = flowid;
+		STAILQ_INSERT_TAIL(&fcl->fclist, fce, fce_link);
+		fcl->cnt++;
 		sp->sfb_stats.flow_controlled++;
 	}
 
@@ -835,7 +897,7 @@ sfb_bin_addfcentry(struct sfb *sp, struct pf_mtag *t)
  * early-drop probability is kept in pmark of each bin of the flow
  */
 static int
-sfb_drop_early(struct sfb *sp, struct pf_mtag *t, u_int16_t *pmin,
+sfb_drop_early(struct sfb *sp, struct pkthdr *pkt, u_int16_t *pmin,
     struct timespec *now)
 {
 #if SFB_LEVELS != 2
@@ -854,7 +916,7 @@ sfb_drop_early(struct sfb *sp, struct pf_mtag *t, u_int16_t *pmin,
 	 */
 #if SFB_LEVELS == 2
 	/* Level 0: bin index at [0] for set 0; [2] for set 1 */
-	n = SFB_BINMASK(t->pftag_qpriv8[(s << 1)]);
+	n = SFB_BINMASK(pkt->pkt_sfb_hash8[(s << 1)]);
 	bin = SFB_BINST(sp, 0, n, s);
 	if (*pmin > (u_int16_t)bin->pmark)
 		*pmin = (u_int16_t)bin->pmark;
@@ -866,7 +928,7 @@ sfb_drop_early(struct sfb *sp, struct pf_mtag *t, u_int16_t *pmin,
 	}
 
 	/* Level 1: bin index at [1] for set 0; [3] for set 1 */
-	n = SFB_BINMASK(t->pftag_qpriv8[(s << 1) + 1]);
+	n = SFB_BINMASK(pkt->pkt_sfb_hash8[(s << 1) + 1]);
 	bin = SFB_BINST(sp, 1, n, s);
 	if (*pmin > (u_int16_t)bin->pmark)
 		*pmin = (u_int16_t)bin->pmark;
@@ -879,9 +941,9 @@ sfb_drop_early(struct sfb *sp, struct pf_mtag *t, u_int16_t *pmin,
 #else /* SFB_LEVELS != 2 */
 	for (i = 0; i < SFB_LEVELS; i++) {
 		if (s == 0)		/* set 0, bin index [0,1] */
-			n = SFB_BINMASK(t->pftag_qpriv8[i]);
+			n = SFB_BINMASK(pkt->pkt_sfb_hash8[i]);
 		else			/* set 1, bin index [2,3] */
-			n = SFB_BINMASK(t->pftag_qpriv8[i + 2]);
+			n = SFB_BINMASK(pkt->pkt_sfb_hash8[i + 2]);
 
 		bin = SFB_BINST(sp, i, n, s);
 		if (*pmin > (u_int16_t)bin->pmark)
@@ -909,6 +971,10 @@ sfb_drop_early(struct sfb *sp, struct pf_mtag *t, u_int16_t *pmin,
 int
 sfb_addq(struct sfb *sp, class_queue_t *q, struct mbuf *m, struct pf_mtag *t)
 {
+#if !PF_ECN
+#pragma unused(t)
+#endif /* !PF_ECN */
+	struct pkthdr *pkt = &m->m_pkthdr;
 	struct timespec now;
 	int droptype, s;
 	u_int16_t pmin;
@@ -928,35 +994,39 @@ sfb_addq(struct sfb *sp, class_queue_t *q, struct mbuf *m, struct pf_mtag *t)
 		VERIFY((s + (s ^ 1)) == 1);
 	}
 
-	t->pftag_flags &= ~SFB_PKT_PBOX;
-	t->pftag_qpriv16[s] =
-	    (SFB_HASH(&t->pftag_flowhash, sizeof (t->pftag_flowhash),
+	pkt->pkt_sfb_flags = 0;
+	pkt->pkt_sfb_hash16[s] =
+	    (SFB_HASH(&pkt->pkt_flowid, sizeof (pkt->pkt_flowid),
 	    (*sp->sfb_bins)[s].fudge) & SFB_HASHMASK);
-	t->pftag_qpriv16[s ^ 1] =
-	    (SFB_HASH(&t->pftag_flowhash, sizeof (t->pftag_flowhash),
+	pkt->pkt_sfb_hash16[s ^ 1] =
+	    (SFB_HASH(&pkt->pkt_flowid, sizeof (pkt->pkt_flowid),
 	    (*sp->sfb_bins)[s ^ 1].fudge) & SFB_HASHMASK);
 
 	/* see if we drop early */
 	droptype = DTYPE_NODROP;
-	if (sfb_drop_early(sp, t, &pmin, &now)) {
+	if (sfb_drop_early(sp, pkt, &pmin, &now)) {
 		/* flow control, mark or drop by sfb */
 		if ((sp->sfb_flags & SFBF_FLOWCTL) &&
-		    (t->pftag_flags & PF_TAG_FLOWADV)) {
+		    (pkt->pkt_flags & PKTF_FLOW_ADV)) {
 			fc_adv = 1;
 			/* drop all during suspension or for non-TCP */
 			if ((sp->sfb_flags & SFBF_SUSPENDED) ||
-			    !(t->pftag_flags & PF_TAG_TCP)) {
+			    pkt->pkt_proto != IPPROTO_TCP) {
 				droptype = DTYPE_EARLY;
 				sp->sfb_stats.drop_early++;
 			}
-		} else if ((sp->sfb_flags & SFBF_ECN) &&
-		    (t->pftag_flags & PF_TAG_TCP) &&	/* only for TCP */
+		}
+#if PF_ECN
+		else if ((sp->sfb_flags & SFBF_ECN) &&
+		    (pkt->pkt_proto == IPPROTO_TCP) && /* only for TCP */
 		    ((sfb_random(sp) & SFB_MAX_PMARK) <= pmin) &&
 		    mark_ecn(m, t, sp->sfb_flags) &&
 		    !(sp->sfb_flags & SFBF_SUSPENDED)) {
 			/* successfully marked; do not drop. */
 			sp->sfb_stats.marked_packets++;
-		} else {
+		}
+#endif /* PF_ECN */
+		else {
 			/* unforced drop by sfb */
 			droptype = DTYPE_EARLY;
 			sp->sfb_stats.drop_early++;
@@ -964,7 +1034,7 @@ sfb_addq(struct sfb *sp, class_queue_t *q, struct mbuf *m, struct pf_mtag *t)
 	}
 
 	/* non-responsive flow penalty? */
-	if (droptype == DTYPE_NODROP && sfb_penalize(sp, t, &now)) {
+	if (droptype == DTYPE_NODROP && sfb_penalize(sp, pkt, &now)) {
 		droptype = DTYPE_FORCED;
 		sp->sfb_stats.drop_pbox++;
 	}
@@ -976,7 +1046,7 @@ sfb_addq(struct sfb *sp, class_queue_t *q, struct mbuf *m, struct pf_mtag *t)
 	}
 
 	if (fc_adv == 1 && droptype != DTYPE_FORCED &&
-	    sfb_bin_addfcentry(sp, t)) {
+	    sfb_bin_addfcentry(sp, pkt)) {
 		/* deliver flow control advisory error */
 		if (droptype == DTYPE_NODROP) {
 			ret = CLASSQEQ_SUCCESS_FC;
@@ -999,8 +1069,8 @@ sfb_addq(struct sfb *sp, class_queue_t *q, struct mbuf *m, struct pf_mtag *t)
 		return ((ret != CLASSQEQ_SUCCESS) ? ret : CLASSQEQ_DROPPED);
 	}
 
-	if (!(t->pftag_flags & SFB_PKT_PBOX))
-		sfb_eq_update_bins(sp, t);
+	if (!(pkt->pkt_sfb_flags & SFB_PKT_PBOX))
+		sfb_eq_update_bins(sp, pkt);
 	else
 		sp->sfb_stats.pbox_packets++;
 
@@ -1013,7 +1083,7 @@ sfb_getq_flow(struct sfb *sp, class_queue_t *q, u_int32_t flow, boolean_t purge)
 {
 	struct timespec now;
 	struct mbuf *m;
-	struct pf_mtag *t;
+	struct pkthdr *pkt;
 
 	if (!purge && (sp->sfb_flags & SFBF_SUSPENDED))
 		return (NULL);
@@ -1029,7 +1099,7 @@ sfb_getq_flow(struct sfb *sp, class_queue_t *q, u_int32_t flow, boolean_t purge)
 
 	VERIFY(m->m_flags & M_PKTHDR);
 
-	t = m_pftag(m);
+	pkt = &m->m_pkthdr;
 
 	if (!purge) {
 		/* calculate EWMA of dequeues */
@@ -1068,14 +1138,14 @@ sfb_getq_flow(struct sfb *sp, class_queue_t *q, u_int32_t flow, boolean_t purge)
 	 * this reason.  A rule of thumb is to set it to K*D, where D is
 	 * the time taken to drain queue.
 	 */
-	if (t->pftag_flags & SFB_PKT_PBOX) {
-		t->pftag_flags &= ~SFB_PKT_PBOX;
+	if (pkt->pkt_sfb_flags & SFB_PKT_PBOX) {
+		pkt->pkt_sfb_flags &= ~SFB_PKT_PBOX;
 		if (sp->sfb_clearpkts > 0)
 			sp->sfb_clearpkts--;
 	} else if (sp->sfb_clearpkts > 0) {
 		sp->sfb_clearpkts--;
 	} else {
-		sfb_dq_update_bins(sp, t, &now);
+		sfb_dq_update_bins(sp, pkt, &now);
 	}
 
 	return (m);
@@ -1116,7 +1186,7 @@ sfb_updateq(struct sfb *sp, cqev_t ev)
 	VERIFY(ifp != NULL);
 
 	switch (ev) {
-	case CLASSQ_EV_LINK_SPEED: {
+	case CLASSQ_EV_LINK_BANDWIDTH: {
 		u_int64_t eff_rate = ifnet_output_linkrate(ifp);
 
 		/* update parameters only if rate has changed */
@@ -1143,6 +1213,7 @@ sfb_updateq(struct sfb *sp, cqev_t ev)
 		sfb_resetq(sp, ev);
 		break;
 
+	case CLASSQ_EV_LINK_LATENCY:
 	case CLASSQ_EV_LINK_MTU:
 	default:
 		break;

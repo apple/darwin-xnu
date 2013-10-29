@@ -444,7 +444,8 @@ grow_sem_pool(int new_pool_size)
 	/* Update our id structures to point to the new semaphores */
 	for(i = 0; i < seminfo.semmni; i++) {
 		if (sema[i].u.sem_perm.mode & SEM_ALLOC)  /* ID in use */
-			sema[i].u.sem_base += (new_sem_pool - sem_pool);
+			sema[i].u.sem_base = new_sem_pool + 
+				(sema[i].u.sem_base - sem_pool);
 	}
 
 	sem_free = sem_pool;
@@ -774,10 +775,12 @@ semctl(struct proc *p, struct semctl_args *uap, int32_t *retval)
 
 		if (IS_64BIT_PROCESS(p)) {
 			struct user64_semid_ds semid_ds64;
+			bzero(&semid_ds64, sizeof(semid_ds64));
 			semid_ds_kernelto64(&semakptr->u, &semid_ds64);
 			eval = copyout(&semid_ds64, user_arg.buf, sizeof(semid_ds64));
 		} else {
 			struct user32_semid_ds semid_ds32;
+			bzero(&semid_ds32, sizeof(semid_ds32));
 			semid_ds_kernelto32(&semakptr->u, &semid_ds32);
 			eval = copyout(&semid_ds32, user_arg.buf, sizeof(semid_ds32));
 		}
@@ -853,12 +856,27 @@ semctl(struct proc *p, struct semctl_args *uap, int32_t *retval)
 			eval = EINVAL;
 			goto semctlout;
 		}
+		
 		/*
 		 * Cast down a pointer instead of using 'val' member directly
 		 * to avoid introducing endieness and a pad field into the
 		 * header file.  Ugly, but it works.
 		 */
-		semakptr->u.sem_base[semnum].semval = CAST_DOWN_EXPLICIT(int,user_arg.buf);
+		u_int newsemval = CAST_DOWN_EXPLICIT(u_int, user_arg.buf);
+		
+		/*
+		 * The check is being performed as unsigned values to match 
+		 * eventual destination
+		 */ 
+		if (newsemval > (u_int)seminfo.semvmx)
+		{
+#ifdef SEM_DEBUG
+			printf("Out of range sem value for set\n");
+#endif
+			eval = ERANGE;
+			goto semctlout;
+		}
+		semakptr->u.sem_base[semnum].semval = newsemval;
 		semakptr->u.sem_base[semnum].sempid = p->p_pid;
 		/* XXX scottl Should there be a MAC call here? */
 		semundo_clear(semid, semnum);
@@ -1635,9 +1653,11 @@ IPCS_sem_sysctl(__unused struct sysctl_oid *oidp, __unused void *arg1,
 		 * descriptor to a 32 bit user one.
 		 */
 		if (!IS_64BIT_PROCESS(p)) {
+			bzero(&semid_ds32, sizeof(semid_ds32));
 			semid_ds_kernelto32(semid_dsp, &semid_ds32);
 			semid_dsp = &semid_ds32;
 		} else {
+			bzero(&semid_ds64, sizeof(semid_ds64));
 			semid_ds_kernelto64(semid_dsp, &semid_ds64);
 			semid_dsp = &semid_ds64;
 		}

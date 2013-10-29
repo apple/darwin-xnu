@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2012 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2013 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -69,10 +69,13 @@
 #include <sys/sysctl.h>
 #include <sys/mbuf.h>
 
+#include <kern/debug.h>
+
 #include <net/if.h>
 #include <net/route.h>
 
 #include <netinet/in.h>
+#include <netinet/in_var.h>
 #include <netinet/in_systm.h>
 #include <netinet/ip.h>
 #include <netinet/ip_var.h>
@@ -101,210 +104,270 @@
 #include <netinet6/ipcomp.h>
 #endif /* IPSEC */
 
-#if IPXIP
-#include <netipx/ipx_ip.h>
-#endif
+static void in_dinit(struct domain *);
+static void ip_proto_input(protocol_family_t, mbuf_t);
 
-extern	struct domain inetdomain;
-static	struct pr_usrreqs nousrreqs;
-extern struct   pr_usrreqs icmp_dgram_usrreqs;
+extern struct domain inetdomain_s;
+static struct pr_usrreqs nousrreqs;
+extern struct pr_usrreqs icmp_dgram_usrreqs;
 extern int icmp_dgram_ctloutput(struct socket *, struct sockopt *);
 
+struct domain *inetdomain = NULL;
 
-struct protosw inetsw[] = {
-{ 0,		&inetdomain,	0,		0,
-  0,		0,		0,		0,
-  0,
-  ip_init,	0,		ip_slowtimo,	ip_drain,
-  0,	
-  &nousrreqs,
-  0,		0,		0,	{ 0, 0 },	0,	{ 0 }
+/* Thanks to PPP, this still needs to be exported */
+lck_mtx_t	*inet_domain_mutex;
+
+static struct protosw inetsw[] = {
+{
+	.pr_type =		0,
+	.pr_protocol =		0,
+	.pr_init =		ip_init,
+	.pr_drain =		ip_drain,
+	.pr_usrreqs =		&nousrreqs,
 },
-{ SOCK_DGRAM,	&inetdomain,	IPPROTO_UDP,	PR_ATOMIC|PR_ADDR|PR_PROTOLOCK|PR_PCBLOCK,
-  udp_input,	0,		udp_ctlinput,	udp_ctloutput,
-  0,
-  udp_init,	0,		udp_slowtimo,		0,
-  0,
-  &udp_usrreqs,
-  udp_lock,	udp_unlock,	udp_getlock,	{ 0, 0 },	0,	{ 0 }
+{
+	.pr_type =		SOCK_DGRAM,
+	.pr_protocol =		IPPROTO_UDP,
+	.pr_flags =		PR_ATOMIC|PR_ADDR|PR_PROTOLOCK|PR_PCBLOCK|
+				PR_EVCONNINFO,
+	.pr_input =		udp_input,
+	.pr_ctlinput =		udp_ctlinput,
+	.pr_ctloutput =		udp_ctloutput,
+	.pr_init =		udp_init,
+	.pr_usrreqs =		&udp_usrreqs,
+	.pr_lock =		udp_lock,
+	.pr_unlock =		udp_unlock,
+	.pr_getlock =		udp_getlock,
 },
-{ SOCK_STREAM,	&inetdomain,	IPPROTO_TCP, 
-	PR_CONNREQUIRED|PR_WANTRCVD|PR_PCBLOCK|PR_PROTOLOCK|PR_DISPOSE,
-  tcp_input,	0,		tcp_ctlinput,	tcp_ctloutput,
-  0,
-  tcp_init,	0,	tcp_slowtimo,	tcp_drain,
-  0,
-  &tcp_usrreqs,
-  tcp_lock,	tcp_unlock,	tcp_getlock,	{ 0, 0 },	0,	{ 0 }
+{
+	.pr_type =		SOCK_STREAM,
+	.pr_protocol =		IPPROTO_TCP,
+	.pr_flags =		PR_CONNREQUIRED|PR_WANTRCVD|PR_PCBLOCK|
+				PR_PROTOLOCK|PR_DISPOSE|PR_EVCONNINFO,
+	.pr_input =		tcp_input,
+	.pr_ctlinput =		tcp_ctlinput,
+	.pr_ctloutput =		tcp_ctloutput,
+	.pr_init =		tcp_init,
+	.pr_drain =		tcp_drain,
+	.pr_usrreqs =		&tcp_usrreqs,
+	.pr_lock =		tcp_lock,
+	.pr_unlock =		tcp_unlock,
+	.pr_getlock =		tcp_getlock,
 },
-{ SOCK_RAW,	&inetdomain,	IPPROTO_RAW,	PR_ATOMIC|PR_ADDR,
-  rip_input,	0,		rip_ctlinput,	rip_ctloutput,
-  0,
-  0,		0,		0,		0,
-  0,
-  &rip_usrreqs,
-  0,		rip_unlock,		0,	{ 0, 0 },	0,	{ 0 }
+{
+	.pr_type =		SOCK_RAW,
+	.pr_protocol =		IPPROTO_RAW,
+	.pr_flags =		PR_ATOMIC|PR_ADDR,
+	.pr_input =		rip_input,
+	.pr_ctlinput =		rip_ctlinput,
+	.pr_ctloutput =		rip_ctloutput,
+	.pr_usrreqs =		&rip_usrreqs,
+	.pr_unlock =		rip_unlock,
 },
-{ SOCK_RAW,	&inetdomain,	IPPROTO_ICMP,	PR_ATOMIC|PR_ADDR|PR_LASTHDR,
-  icmp_input,	0,		0,		rip_ctloutput,
-  0,
-  0,		0,		0,		0,
-  0,
-  &rip_usrreqs,
-  0,		rip_unlock,	0,	{ 0, 0 },	0,	{ 0 }
+{
+	.pr_type =		SOCK_RAW,
+	.pr_protocol =		IPPROTO_ICMP,
+	.pr_flags =		PR_ATOMIC|PR_ADDR|PR_LASTHDR,
+	.pr_input =		icmp_input,
+	.pr_ctloutput =		rip_ctloutput,
+	.pr_usrreqs =		&rip_usrreqs,
+	.pr_unlock =		rip_unlock,
 },
-{ SOCK_DGRAM, &inetdomain,	IPPROTO_ICMP,   PR_ATOMIC|PR_ADDR|PR_LASTHDR,
-  icmp_input,	0,		0,              icmp_dgram_ctloutput,
-  0,
-  0,		0,              0,              0,
-  0,	
-  &icmp_dgram_usrreqs,
-  0,		rip_unlock,	  	0,	{ 0, 0 },	0,	{ 0 }
+{
+	.pr_type =		SOCK_DGRAM,
+	.pr_protocol =		IPPROTO_ICMP,
+	.pr_flags =		PR_ATOMIC|PR_ADDR|PR_LASTHDR,
+	.pr_input =		icmp_input,
+	.pr_ctloutput =		icmp_dgram_ctloutput,
+	.pr_usrreqs =		&icmp_dgram_usrreqs,
+	.pr_unlock =		rip_unlock,
 },
-{ SOCK_RAW,	&inetdomain,	IPPROTO_IGMP,	PR_ATOMIC|PR_ADDR|PR_LASTHDR,
-  igmp_input,	0,		0,		rip_ctloutput,
-  0,
-  igmp_init,	0,		igmp_slowtimo,	0,
-  0,
-  &rip_usrreqs,
-  0,		rip_unlock,	0,	{ 0, 0 },	0,	{ 0 }
+{
+	.pr_type =		SOCK_RAW,
+	.pr_protocol =		IPPROTO_IGMP,
+	.pr_flags =		PR_ATOMIC|PR_ADDR|PR_LASTHDR,
+	.pr_input =		igmp_input,
+	.pr_ctloutput =		rip_ctloutput,
+	.pr_init =		igmp_init,
+	.pr_usrreqs =		&rip_usrreqs,
+	.pr_unlock =		rip_unlock,
 },
 #if MROUTING
-{ SOCK_RAW,	&inetdomain,	IPPROTO_RSVP,	PR_ATOMIC|PR_ADDR|PR_LASTHDR,
-  rsvp_input,	0,		0,		rip_ctloutput,
-  0,
-  0,		0,		0,		0,
-  0,
-  &rip_usrreqs,
-  0,		rip_unlock,		0,	{ 0, 0 },	0,	{ 0 }
+{
+	.pr_type =		SOCK_RAW,
+	.pr_protocol =		IPPROTO_RSVP,
+	.pr_flags =		PR_ATOMIC|PR_ADDR|PR_LASTHDR,
+	.pr_input =		rsvp_input,
+	.pr_ctloutput =		rip_ctloutput,
+	.pr_usrreqs =		&rip_usrreqs,
+	.pr_unlock =		rip_unlock,
 },
 #endif /* MROUTING */
+{
+	.pr_type =		SOCK_RAW,
+	.pr_protocol =		IPPROTO_GRE,
+	.pr_flags =		PR_ATOMIC|PR_ADDR,
+	.pr_input =		gre_input,
+	.pr_ctlinput =		rip_ctlinput,
+	.pr_ctloutput =		rip_ctloutput,
+	.pr_usrreqs =		&rip_usrreqs,
+	.pr_unlock =		rip_unlock,
+},
 #if IPSEC
-{ SOCK_RAW,	&inetdomain,	IPPROTO_AH,	PR_ATOMIC|PR_ADDR|PR_PROTOLOCK,
-  ah4_input,	0,	 	0,		0,
-  0,	  
-  0,		0,		0,		0,
-  0,
-  &nousrreqs,
-  0,		0,		0,	{ 0, 0 },	0,	{ 0 }
+{
+	.pr_type =		SOCK_RAW,
+	.pr_protocol =		IPPROTO_AH,
+	.pr_flags =		PR_ATOMIC|PR_ADDR|PR_PROTOLOCK,
+	.pr_input =		ah4_input,
+	.pr_usrreqs =		&nousrreqs,
 },
 #if IPSEC_ESP
-{ SOCK_RAW,	&inetdomain,	IPPROTO_ESP,	PR_ATOMIC|PR_ADDR|PR_PROTOLOCK,
-  esp4_input,	0,	 	0,		0,
-  0,	  
-  0,		0,		0,		0,
-  0,
-  &nousrreqs,
-  0,		0,		0,	{ 0, 0 },	0,	{ 0 }
+{
+	.pr_type =		SOCK_RAW,
+	.pr_protocol =		IPPROTO_ESP,
+	.pr_flags =		PR_ATOMIC|PR_ADDR|PR_PROTOLOCK,
+	.pr_input =		esp4_input,
+	.pr_usrreqs =		&nousrreqs,
 },
-#endif
-{ SOCK_RAW,	&inetdomain,	IPPROTO_IPCOMP,	PR_ATOMIC|PR_ADDR|PR_PROTOLOCK,
-  ipcomp4_input, 0,	 	0,		0,
-  0,	  
-  0,		0,		0,		0,
-  0,
-  &nousrreqs,
-  0,		0,		0,	{ 0, 0 },	0,	{ 0 }
+#endif /* IPSEC_ESP */
+{
+	.pr_type =		SOCK_RAW,
+	.pr_protocol =		IPPROTO_IPCOMP,
+	.pr_flags =		PR_ATOMIC|PR_ADDR|PR_PROTOLOCK,
+	.pr_input =		ipcomp4_input,
+	.pr_usrreqs =		&nousrreqs,
 },
 #endif /* IPSEC */
-{ SOCK_RAW,	&inetdomain,	IPPROTO_IPV4,	PR_ATOMIC|PR_ADDR|PR_LASTHDR,
-  encap4_input,	0,	 	0,		rip_ctloutput,
-  0,
-  encap_init,		0,		0,		0,
-  0,
-  &rip_usrreqs,
-  0,		rip_unlock,		0,	{ 0, 0 },	0,	{ 0 }
+{
+	.pr_type =		SOCK_RAW,
+	.pr_protocol =		IPPROTO_IPV4,
+	.pr_flags =		PR_ATOMIC|PR_ADDR|PR_LASTHDR,
+	.pr_input =		encap4_input,
+	.pr_ctloutput =		rip_ctloutput,
+	.pr_init =		encap4_init,
+	.pr_usrreqs =		&rip_usrreqs,
+	.pr_unlock =		rip_unlock,
 },
-# if INET6
-{ SOCK_RAW,	&inetdomain,	IPPROTO_IPV6,	PR_ATOMIC|PR_ADDR|PR_LASTHDR,
-  encap4_input,	0,	 	0,		rip_ctloutput,
-  0,
-  encap_init,	0,		0,		0,
-  0,
-  &rip_usrreqs,
-  0,		rip_unlock,		0,	{ 0, 0 },	0,	{ 0 }
+#if INET6
+{
+	.pr_type =		SOCK_RAW,
+	.pr_protocol =		IPPROTO_IPV6,
+	.pr_flags =		PR_ATOMIC|PR_ADDR|PR_LASTHDR,
+	.pr_input =		encap4_input,
+	.pr_ctloutput =		rip_ctloutput,
+	.pr_init =		encap4_init,
+	.pr_usrreqs =		&rip_usrreqs,
+	.pr_unlock =		rip_unlock,
 },
-#endif
+#endif /* INET6 */
 #if IPDIVERT
-{ SOCK_RAW,	&inetdomain,	IPPROTO_DIVERT,	PR_ATOMIC|PR_ADDR|PR_PCBLOCK,
-  div_input,	0,	 	0,		ip_ctloutput,
-  0,
-  div_init,	0,		0,		0,
-  0,
-  &div_usrreqs,
-  div_lock,		div_unlock,		div_getlock,	{ 0, 0 },	0,	{ 0 }
+{
+	.pr_type =		SOCK_RAW,
+	.pr_protocol =		IPPROTO_DIVERT,
+	.pr_flags =		PR_ATOMIC|PR_ADDR|PR_PCBLOCK,
+	.pr_input =		div_input,
+	.pr_ctloutput =		ip_ctloutput,
+	.pr_init =		div_init,
+	.pr_usrreqs =		&div_usrreqs,
+	.pr_lock =		div_lock,
+	.pr_unlock =		div_unlock,
+	.pr_getlock =		div_getlock,
 },
-#endif
-#if IPXIP
-{ SOCK_RAW,	&inetdomain,	IPPROTO_IDP,	PR_ATOMIC|PR_ADDR|PR_LASTHDR,
-  ipxip_input,	0,		ipxip_ctlinput,	0,
-  0,
-  0,		0,		0,		0,
-  0,
-  &rip_usrreqs,
-  0,		rip_unlock,		0,	{ 0, 0 },	0,	{ 0 }
-},
-#endif
-#if NSIP
-{ SOCK_RAW,	&inetdomain,	IPPROTO_IDP,	PR_ATOMIC|PR_ADDR|PR_LASTHDR,
-  idpip_input,	0,		nsip_ctlinput,	0,
-  0,
-  0,		0,		0,		0,
-  0,
-  &rip_usrreqs,
-  0,		rip_unlock,		0,	{ 0, 0 },	0,	{ 0 }
-},
-#endif
-	/* raw wildcard */
-{ SOCK_RAW,	&inetdomain,	0,		PR_ATOMIC|PR_ADDR|PR_LASTHDR,
-  rip_input,	0,		0,		rip_ctloutput,
-  0,
-  rip_init,	0,		0,		0,
-  0,
-  &rip_usrreqs,
-  0,			rip_unlock,		0,	{ 0, 0 },	0,	{ 0 }
+#endif /* IPDIVERT */
+/* raw wildcard */
+{
+	.pr_type =		SOCK_RAW,
+	.pr_flags =		PR_ATOMIC|PR_ADDR|PR_LASTHDR,
+	.pr_input =		rip_input,
+	.pr_ctloutput =		rip_ctloutput,
+	.pr_init =		rip_init,
+	.pr_usrreqs =		&rip_usrreqs,
+	.pr_unlock =		rip_unlock,
 },
 };
 
-extern int in_inithead(void **, int);
+static int in_proto_count = (sizeof (inetsw) / sizeof (struct protosw));
 
-int in_proto_count = (sizeof (inetsw) / sizeof (struct protosw));
+struct domain inetdomain_s = {
+	.dom_family =		PF_INET,
+	.dom_flags =		DOM_REENTRANT,
+	.dom_name =		"internet",
+	.dom_init =		in_dinit,
+	.dom_rtattach =		in_inithead,
+	.dom_rtoffset =		32,
+	.dom_maxrtkey =		sizeof (struct sockaddr_in),
+	.dom_protohdrlen =	sizeof (struct tcpiphdr),
+};
 
-extern void in_dinit(void) __attribute__((section("__TEXT, initcode")));
-/* A routing init function, and a header size */
-struct domain inetdomain =
-    { AF_INET, 
-      "internet", 
-      in_dinit, 
-      0, 
-      0, 
-      inetsw, 
-      0,
-      in_inithead, 
-      32, 
-      sizeof(struct sockaddr_in),
-      sizeof(struct tcpiphdr), 
-      0, 
-      0, 
-      0, 
-      { 0, 0}
-    };
+/* Initialize the PF_INET domain, and add in the pre-defined protos */
+void
+in_dinit(struct domain *dp)
+{
+	struct protosw *pr;
+	int i;
+	domain_unguard_t unguard;
 
-DOMAIN_SET(inet);
+	VERIFY(!(dp->dom_flags & DOM_INITIALIZED));
+	VERIFY(inetdomain == NULL);
 
-SYSCTL_NODE(_net,      PF_INET,		inet,	CTLFLAG_RW|CTLFLAG_LOCKED, 0,
-	"Internet Family");
+	inetdomain = dp;
 
-SYSCTL_NODE(_net_inet, IPPROTO_IP,	ip,	CTLFLAG_RW|CTLFLAG_LOCKED, 0,	"IP");
-SYSCTL_NODE(_net_inet, IPPROTO_ICMP,	icmp,	CTLFLAG_RW|CTLFLAG_LOCKED, 0,	"ICMP");
-SYSCTL_NODE(_net_inet, IPPROTO_UDP,	udp,	CTLFLAG_RW|CTLFLAG_LOCKED, 0,	"UDP");
-SYSCTL_NODE(_net_inet, IPPROTO_TCP,	tcp,	CTLFLAG_RW|CTLFLAG_LOCKED, 0,	"TCP");
-SYSCTL_NODE(_net_inet, IPPROTO_IGMP,	igmp,	CTLFLAG_RW|CTLFLAG_LOCKED, 0,	"IGMP");
+	/*
+	 * Attach first, then initialize; ip_init() needs raw IP handler.
+	 */
+	for (i = 0, pr = &inetsw[0]; i < in_proto_count; i++, pr++)
+		net_add_proto(pr, dp, 0);
+	for (i = 0, pr = &inetsw[0]; i < in_proto_count; i++, pr++)
+		net_init_proto(pr, dp);
+
+	inet_domain_mutex = dp->dom_mtx;
+
+	unguard = domain_unguard_deploy();
+	i = proto_register_input(PF_INET, ip_proto_input, NULL, 1);
+	if (i != 0) {
+		panic("%s: failed to register PF_INET protocol: %d\n",
+		    __func__, i);
+		/* NOTREACHED */
+	}
+	domain_unguard_release(unguard);
+}
+
+static void
+ip_proto_input(protocol_family_t protocol, mbuf_t packet_list)
+{
+#pragma unused(protocol)
+	mbuf_t	packet;
+	int how_many = 0 ;
+
+	/* ip_input should handle a list of packets but does not yet */
+	for (packet = packet_list; packet; packet = packet_list) {
+		how_many++;
+		packet_list = mbuf_nextpkt(packet);
+		mbuf_setnextpkt(packet, NULL);
+		ip_input(packet);
+	}
+}
+
+SYSCTL_NODE(_net, PF_INET, inet,
+	CTLFLAG_RW|CTLFLAG_LOCKED, 0, "Internet Family");
+
+SYSCTL_NODE(_net_inet, IPPROTO_IP, ip,
+	CTLFLAG_RW|CTLFLAG_LOCKED, 0, "IP");
+SYSCTL_NODE(_net_inet, IPPROTO_ICMP, icmp,
+	CTLFLAG_RW|CTLFLAG_LOCKED, 0, "ICMP");
+SYSCTL_NODE(_net_inet, IPPROTO_UDP, udp,
+	CTLFLAG_RW|CTLFLAG_LOCKED, 0, "UDP");
+SYSCTL_NODE(_net_inet, IPPROTO_TCP, tcp,
+	CTLFLAG_RW|CTLFLAG_LOCKED, 0, "TCP");
+SYSCTL_NODE(_net_inet, IPPROTO_IGMP, igmp,
+	CTLFLAG_RW|CTLFLAG_LOCKED, 0, "IGMP");
 #if IPSEC
-SYSCTL_NODE(_net_inet, IPPROTO_AH,	ipsec,	CTLFLAG_RW|CTLFLAG_LOCKED, 0,	"IPSEC");
+SYSCTL_NODE(_net_inet, IPPROTO_AH, ipsec,
+	CTLFLAG_RW|CTLFLAG_LOCKED, 0, "IPSEC");
 #endif /* IPSEC */
-SYSCTL_NODE(_net_inet, IPPROTO_RAW,	raw,	CTLFLAG_RW|CTLFLAG_LOCKED, 0,	"RAW");
+SYSCTL_NODE(_net_inet, IPPROTO_RAW, raw,
+	CTLFLAG_RW|CTLFLAG_LOCKED, 0, "RAW");
 #if IPDIVERT
-SYSCTL_NODE(_net_inet, IPPROTO_DIVERT,	div,	CTLFLAG_RW|CTLFLAG_LOCKED, 0,	"DIVERT");
-#endif
-
+SYSCTL_NODE(_net_inet, IPPROTO_DIVERT, div,
+	CTLFLAG_RW|CTLFLAG_LOCKED, 0, "DIVERT");
+#endif /* IPDIVERT */

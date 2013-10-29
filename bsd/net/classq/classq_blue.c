@@ -98,6 +98,7 @@
 #include <sys/socket.h>
 #include <sys/sockio.h>
 #include <sys/systm.h>
+#include <sys/syslog.h>
 #include <sys/proc.h>
 #include <sys/errno.h>
 #include <sys/kernel.h>
@@ -118,6 +119,7 @@
 
 #include <net/classq/classq_blue.h>
 #include <net/net_osdep.h>
+#include <dev/random/randomdev.h>
 
 /*
  * Blue is proposed and implemented by Wu-chang Feng <wuchang@eecs.umich.edu>.
@@ -172,8 +174,16 @@ blue_alloc(struct ifnet *ifp, u_int32_t max_pmark, u_int32_t hold_time,
 
 	bzero(bp, blue_size);
 	bp->blue_idle = 1;
-	bp->blue_flags = (flags & BLUEF_USERFLAGS);
 	bp->blue_ifp = ifp;
+	bp->blue_flags = (flags & BLUEF_USERFLAGS);
+#if !PF_ECN
+	if (bp->blue_flags & BLUEF_ECN) {
+		bp->blue_flags &= ~BLUEF_ECN;
+		log(LOG_ERR, "%s: BLUE ECN not available; ignoring "
+		    "BLUEF_ECN flag!\n", if_name(ifp));
+	}
+#endif /* !PF_ECN */
+
 
 	if (max_pmark == 0)
 		bp->blue_max_pmark = 1000;
@@ -213,6 +223,9 @@ int
 blue_addq(struct blue *bp, class_queue_t *q, struct mbuf *m,
     struct pf_mtag *tag)
 {
+#if !PF_ECN
+#pragma unused(tag)
+#endif /* !PF_ECN */
 	int droptype;
 
 	/*
@@ -244,12 +257,15 @@ blue_addq(struct blue *bp, class_queue_t *q, struct mbuf *m,
 	droptype = DTYPE_NODROP;
 	if (blue_drop_early(bp) && qlen(q) > 1) {
 		/* mark or drop by blue */
+#if PF_ECN
 		if ((bp->blue_flags & BLUEF_ECN) &&
-		    (tag->pftag_flags & PF_TAG_TCP) &&	/* only for TCP */
+		    (tag->pftag_proto == IPPROTO_TCP) && /* only for TCP */
 		    mark_ecn(m, tag, bp->blue_flags)) {
 			/* successfully marked.  do not drop. */
 			bp->blue_stats.marked_packets++;
-		} else {
+		} else
+#endif /* PF_ECN */
+		{
 			/* unforced drop by blue */
 			droptype = DTYPE_EARLY;
 		}
@@ -344,7 +360,7 @@ blue_purgeq(struct blue *bp, class_queue_t *q, u_int32_t flow,
 static int
 blue_drop_early(struct blue *bp)
 {
-	if ((random() % (unsigned)bp->blue_max_pmark) <
+	if ((RandomULong() % (unsigned)bp->blue_max_pmark) <
 	    (unsigned)bp->blue_pmark) {
 		/* drop or mark */
 		return (1);

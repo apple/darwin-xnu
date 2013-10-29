@@ -825,7 +825,12 @@ int
 getaudit_addr(proc_t p, struct getaudit_addr_args *uap,
     __unused int32_t *retval)
 {
+#if CONFIG_MACF
+	int error = mac_proc_check_getaudit(p);
 
+	if (error)
+		return (error);
+#endif /* CONFIG_MACF */
 	WARN_IF_AINFO_ADDR_CHANGED(uap->length, sizeof(auditinfo_addr_t),
 	    "getaudit_addr(2)", "auditinfo_addr_t");
 	

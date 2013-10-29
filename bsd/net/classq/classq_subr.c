@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2011 Apple Inc. All rights reserved.
+ * Copyright (c) 2011-2013 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -238,10 +238,24 @@ ifclassq_get_maxlen(struct ifclassq *ifq)
 	return (IFCQ_MAXLEN(ifq));
 }
 
-u_int32_t
-ifclassq_get_len(struct ifclassq *ifq)
+int
+ifclassq_get_len(struct ifclassq *ifq, mbuf_svc_class_t sc, u_int32_t *packets,
+    u_int32_t *bytes)
 {
-	return (IFCQ_LEN(ifq));
+	int err = 0;
+
+	IFCQ_LOCK(ifq);
+	if (sc == MBUF_SC_UNSPEC) {
+		VERIFY(packets != NULL);
+		*packets = IFCQ_LEN(ifq);
+	} else {
+		VERIFY(MBUF_VALID_SC(sc));
+		VERIFY(packets != NULL && bytes != NULL);
+		IFCQ_LEN_SC(ifq, sc, packets, bytes, err);
+	}
+	IFCQ_UNLOCK(ifq);
+
+	return (err);
 }
 
 errno_t
@@ -363,8 +377,10 @@ ifclassq_dequeue_common(struct ifclassq *ifq, mbuf_svc_class_t sc,
 		l += (*head)->m_pkthdr.len;
 		pktlen = (*head)->m_pkthdr.len;
 
-		(*head)->m_pkthdr.pf_mtag.pftag_pktseq =
+#if MEASURE_BW
+		(*head)->m_pkthdr.pkt_bwseq =
 		    atomic_add_64_ov(&(ifp->if_bw.cur_seq), pktlen);
+#endif /* MEASURE_BW */
 
 		head = &(*head)->m_nextpkt;
 		i++;
@@ -539,8 +555,12 @@ ifclassq_ev2str(cqev_t ev)
 	const char *c;
 
 	switch (ev) {
-	case CLASSQ_EV_LINK_SPEED:
-		c = "LINK_SPEED";
+	case CLASSQ_EV_LINK_BANDWIDTH:
+		c = "LINK_BANDWIDTH";
+		break;
+
+	case CLASSQ_EV_LINK_LATENCY:
+		c = "LINK_LATENCY";
 		break;
 
 	case CLASSQ_EV_LINK_MTU:
@@ -704,7 +724,7 @@ ifclassq_tbr_set(struct ifclassq *ifq, struct tb_profile *profile,
 		bzero(tbr, sizeof (*tbr));
 		ifnet_set_start_cycle(ifp, NULL);
 		if (update)
-			ifclassq_update(ifq, CLASSQ_EV_LINK_SPEED);
+			ifclassq_update(ifq, CLASSQ_EV_LINK_BANDWIDTH);
 		return (0);
 	}
 
@@ -788,7 +808,7 @@ ifclassq_tbr_set(struct ifclassq *ifq, struct tb_profile *profile,
 		ifnet_set_start_cycle(ifp, NULL);
 	}
 	if (update && tbr->tbr_rate_raw != old_rate)
-		ifclassq_update(ifq, CLASSQ_EV_LINK_SPEED);
+		ifclassq_update(ifq, CLASSQ_EV_LINK_BANDWIDTH);
 
 	return (0);
 }

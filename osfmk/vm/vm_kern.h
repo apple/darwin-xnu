@@ -89,6 +89,8 @@ extern kern_return_t	kernel_memory_allocate(
 #define KMA_PERMANENT	0x40
 #define KMA_NOENCRYPT	0x80
 #define KMA_KSTACK	0x100
+#define KMA_VAONLY	0x200
+#define KMA_COMPRESSOR	0x400   /* Pages belonging to the compressor are not on the paging queues, nor are they counted as wired. */
 
 extern kern_return_t kmem_alloc_contig(
 				vm_map_t	map,
@@ -140,11 +142,22 @@ extern kern_return_t	kmem_alloc_kobject(
 				vm_offset_t	*addrp,
 				vm_size_t	size);
 
+extern kern_return_t kernel_memory_populate(
+	vm_map_t	map,
+	vm_offset_t	addr,
+	vm_size_t	size,
+	int		flags);
+extern void kernel_memory_depopulate(
+	vm_map_t	map,
+	vm_offset_t	addr,
+	vm_size_t	size,
+	int		flags);
+
 #ifdef	MACH_KERNEL_PRIVATE
 
 extern void		kmem_init(
 					vm_offset_t	start,
-					vm_offset_t	end) __attribute__((section("__TEXT, initcode")));
+					vm_offset_t	end);
 
 
 extern kern_return_t	copyinmap(

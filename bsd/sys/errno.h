@@ -72,6 +72,11 @@
 #include <sys/cdefs.h>
 
 #if !defined(KERNEL) && !defined(KERNEL_PRIVATE)
+
+#if defined(__STDC_WANT_LIB_EXT1__) && __STDC_WANT_LIB_EXT1__ >= 1
+#include <sys/_types/_errno_t.h>
+#endif
+
 __BEGIN_DECLS
 extern int * __error(void);
 #define errno (*__error())
@@ -269,6 +274,7 @@ __END_DECLS
 #define ERECYCLE    (-5)		/* restart lookup under heavy vnode pressure/recycling */
 #define EREDRIVEOPEN	(-6)
 #define EKEEPLOOKING	(-7)
+#define ERESERVEDNAME	(-8)		/* path is known but not usable */
 /* used for cvwait error returns to Libc */
 #define ECVCERORR	256
 #define ECVPERORR	512

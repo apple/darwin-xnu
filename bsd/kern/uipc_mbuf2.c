@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2011 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2013 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -106,8 +106,9 @@
 #include <sys/malloc.h>
 #include <sys/mbuf.h>
 #include <sys/mcache.h>
-#if INET6
 #include <netinet/in.h>
+#include <netinet/ip_var.h>
+#if INET6
 #include <netinet/ip6.h>
 #include <netinet6/ip6_var.h>
 #endif /* INET6 */
@@ -485,13 +486,6 @@ m_tag_free(struct m_tag *t)
 	    t->m_tag_type == KERNEL_TAG_TYPE_MACLABEL)
 		mac_mbuf_tag_destroy(t);
 #endif
-#if INET6
-	if (t != NULL &&
-	    t->m_tag_id   == KERNEL_MODULE_TAG_ID &&
-	    t->m_tag_type == KERNEL_TAG_TYPE_INET6 &&
-	    t->m_tag_len  == sizeof (struct ip6aux))
-		ip6_destroyaux((struct ip6aux *)(t + 1));
-#endif /* INET6 */
 	if (t == NULL)
 		return;
 
@@ -535,8 +529,8 @@ m_tag_prepend(struct mbuf *m, struct m_tag *t)
 void
 m_tag_unlink(struct mbuf *m, struct m_tag *t)
 {
-	VERIFY(m != NULL && t != NULL);
-	VERIFY(t->m_tag_cookie == M_TAG_VALID_PATTERN);
+	VERIFY(m->m_flags & M_PKTHDR);
+	VERIFY(t != NULL && t->m_tag_cookie == M_TAG_VALID_PATTERN);
 
 	SLIST_REMOVE(&m->m_pkthdr.tags, t, m_tag, m_tag_link);
 }
@@ -545,8 +539,6 @@ m_tag_unlink(struct mbuf *m, struct m_tag *t)
 void
 m_tag_delete(struct mbuf *m, struct m_tag *t)
 {
-	VERIFY(m != NULL && t != NULL);
-
 	m_tag_unlink(m, t);
 	m_tag_free(t);
 }
@@ -557,7 +549,7 @@ m_tag_delete_chain(struct mbuf *m, struct m_tag *t)
 {
 	struct m_tag *p, *q;
 
-	VERIFY(m != NULL);
+	VERIFY(m->m_flags & M_PKTHDR);
 
 	if (t != NULL) {
 		p = t;
@@ -581,7 +573,7 @@ m_tag_locate(struct mbuf *m, u_int32_t id, u_int16_t type, struct m_tag *t)
 {
 	struct m_tag *p;
 
-	VERIFY(m != NULL);
+	VERIFY(m->m_flags & M_PKTHDR);
 
 	if (t == NULL) {
 		p = SLIST_FIRST(&m->m_pkthdr.tags);
@@ -625,14 +617,6 @@ m_tag_copy(struct m_tag *t, int how)
 		mac_mbuf_tag_copy(t, p);
 	} else
 #endif
-#if INET6
-	if (t != NULL &&
-	    t->m_tag_id   == KERNEL_MODULE_TAG_ID &&
-	    t->m_tag_type == KERNEL_TAG_TYPE_INET6 &&
-	    t->m_tag_len  == sizeof (struct ip6aux)) {
-		ip6_copyaux((struct ip6aux *)(t + 1), (struct ip6aux *)(p + 1));
-	} else
-#endif /* INET6 */
 	bcopy(t + 1, p + 1, t->m_tag_len); /* Copy the data */
 	return (p);
 }
@@ -648,7 +632,7 @@ m_tag_copy_chain(struct mbuf *to, struct mbuf *from, int how)
 {
 	struct m_tag *p, *t, *tprev = NULL;
 
-	VERIFY(to != NULL && from != NULL);
+	VERIFY((to->m_flags & M_PKTHDR) && (from->m_flags & M_PKTHDR));
 
 	m_tag_delete_chain(to, NULL);
 	SLIST_FOREACH(p, &from->m_pkthdr.tags, m_tag_link) {
@@ -668,22 +652,28 @@ m_tag_copy_chain(struct mbuf *to, struct mbuf *from, int how)
 	return (1);
 }
 
-/* Initialize tags on an mbuf. */
+/* Initialize dynamic and static tags on an mbuf. */
 void
-m_tag_init(struct mbuf *m)
+m_tag_init(struct mbuf *m, int all)
 {
-	VERIFY(m != NULL);
+	VERIFY(m->m_flags & M_PKTHDR);
 
 	SLIST_INIT(&m->m_pkthdr.tags);
-	bzero(&m->m_pkthdr.pf_mtag, sizeof (m->m_pkthdr.pf_mtag));
-	bzero(&m->m_pkthdr.tcp_mtag, sizeof (m->m_pkthdr.tcp_mtag));
+	/*
+	 * If the caller wants to preserve static mbuf tags
+	 * (e.g. m_dup_pkthdr), don't zero them out.
+	 */
+	if (all) {
+		bzero(&m->m_pkthdr.pf_mtag, sizeof (m->m_pkthdr.pf_mtag));
+		bzero(&m->m_pkthdr.proto_mtag, sizeof (m->m_pkthdr.proto_mtag));
+	}
 }
 
 /* Get first tag in chain. */
 struct m_tag *
 m_tag_first(struct mbuf *m)
 {
-	VERIFY(m != NULL);
+	VERIFY(m->m_flags & M_PKTHDR);
 
 	return (SLIST_FIRST(&m->m_pkthdr.tags));
 }
@@ -713,13 +703,6 @@ m_get_traffic_class(struct mbuf *m)
 	return (MBUF_SC2TC(m_get_service_class(m)));
 }
 
-void
-m_service_class_init(struct mbuf *m)
-{
-	if (m->m_flags & M_PKTHDR)
-		(void) m_set_service_class(m, MBUF_SC_BE);
-}
-
 int
 m_set_service_class(struct mbuf *m, mbuf_svc_class_t sc)
 {
@@ -728,7 +711,7 @@ m_set_service_class(struct mbuf *m, mbuf_svc_class_t sc)
 	VERIFY(m->m_flags & M_PKTHDR);
 
 	if (MBUF_VALID_SC(sc))
-		m->m_pkthdr.svc = sc;
+		m->m_pkthdr.pkt_svc = sc;
 	else
 		error = EINVAL;
 
@@ -742,8 +725,8 @@ m_get_service_class(struct mbuf *m)
 
 	VERIFY(m->m_flags & M_PKTHDR);
 
-	if (MBUF_VALID_SC(m->m_pkthdr.svc))
-		sc = m->m_pkthdr.svc;
+	if (MBUF_VALID_SC(m->m_pkthdr.pkt_svc))
+		sc = m->m_pkthdr.pkt_svc;
 	else
 		sc = MBUF_SC_BE;
 
@@ -838,4 +821,46 @@ m_service_class_from_val(u_int32_t v)
 	VERIFY(0);
 	/* NOTREACHED */
 	return (sc);
+}
+
+uint16_t
+m_adj_sum16(struct mbuf *m, uint32_t start, uint32_t ulpoff, uint32_t sum)
+{
+	int len = (ulpoff - start);
+
+	if (len > 0) {
+		uint32_t adj = m_sum16(m, start, len);
+		if (adj >= sum)
+			sum = ~(adj - sum) & 0xffff;
+		else
+			sum -= adj;
+	} else if (len < 0) {
+		sum += m_sum16(m, ulpoff, -len);
+	}
+
+	ADDCARRY(sum);
+
+	return (sum);
+}
+
+extern int cpu_in_cksum(struct mbuf *m, int len, int off, uint32_t initial_sum);
+
+uint16_t
+m_sum16(struct mbuf *m, uint32_t off, uint32_t len)
+{
+	int mlen;
+
+	/*
+	 * Sanity check
+	 *
+	 * Use m_length2() instead of m_length(), as we cannot rely on
+	 * the caller setting m_pkthdr.len correctly, if the mbuf is
+	 * a M_PKTHDR one.
+	 */
+	if ((mlen = m_length2(m, NULL)) < (off + len)) {
+		panic("%s: mbuf len (%d) < off+len (%d+%d)\n", __func__,
+		    mlen, off, len);
+	}
+
+	return (~cpu_in_cksum(m, len, off, 0) & 0xffff);
 }

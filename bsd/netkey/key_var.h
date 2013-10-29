@@ -50,7 +50,7 @@
 #define KEYCTL_PFKEYSTAT		14
 #define KEYCTL_MAXID			15
 
-#ifdef KERNEL_PRIVATE
+#ifdef BSD_KERNEL_PRIVATE
 #define KEYCTL_NAMES { \
 	{ 0, 0 }, \
 	{ "debug", CTLTYPE_INT }, \
@@ -85,13 +85,11 @@
 	&natt_keepalive_interval, \
 }
 
-#ifdef KERNEL
 #define _ARRAYLEN(p) (sizeof(p)/sizeof(p[0]))
 #define _KEYLEN(key) ((u_int)((key)->sadb_key_bits >> 3))
 #define _KEYBITS(key) ((u_int)((key)->sadb_key_bits))
 #define _KEYBUF(key) ((caddr_t)((caddr_t)(key) + sizeof(struct sadb_key)))
-#endif /*KERNEL*/
 
-#endif /* KERNEL_PRIVATE */
+#endif /* BSD_KERNEL_PRIVATE */
 #endif /* _NETKEY_KEY_VAR_H_ */
 

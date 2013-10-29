@@ -70,6 +70,7 @@
 #include <vm/vm_kern.h>
 #include <vm/vm_map.h>
 #include <vm/vm_protos.h>
+#include <vm/vm_pageout.h>
 
 char	my_name[] = "(default pager): ";
 
@@ -89,8 +90,6 @@ extern vm_size_t cthread_wait_stack_size;
 unsigned long long	vm_page_mask;
 int		vm_page_shift;
 #endif
-
-int 		norma_mk;
 
 boolean_t	verbose;
 
@@ -286,12 +285,6 @@ start_def_pager( __unused char *bs_device )
 
 
 
-#if NORMA_VM
-	norma_mk = 1;
-#else
-	norma_mk = 0;
-#endif
-
 
 	/* setup read buffers, etc */
 	default_pager_initialize();
@@ -300,13 +293,15 @@ start_def_pager( __unused char *bs_device )
 	default_pager();
 #endif
 
-	/* start the backing store monitor, it runs on a callout thread */
-	default_pager_backing_store_monitor_callout = 
-		thread_call_allocate(default_pager_backing_store_monitor, NULL);
-	if (!default_pager_backing_store_monitor_callout)
-		panic("can't start backing store monitor thread");
-	thread_call_enter(default_pager_backing_store_monitor_callout);
-	
+	if (DEFAULT_PAGER_IS_ACTIVE) {
+		/* start the backing store monitor, it runs on a callout thread */
+		default_pager_backing_store_monitor_callout = 
+			thread_call_allocate(default_pager_backing_store_monitor, NULL);
+		if (!default_pager_backing_store_monitor_callout)
+			panic("can't start backing store monitor thread");
+		thread_call_enter(default_pager_backing_store_monitor_callout);
+	}
+
 	return (0);
 }
 

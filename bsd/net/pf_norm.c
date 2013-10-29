@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2007-2012 Apple Inc. All rights reserved.
+ * Copyright (c) 2007-2013 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -316,12 +316,14 @@ pf_purge_expired_fragments(void)
 
 		switch (frag->fr_af) {
 		case AF_INET:
-		      DPFPRINTF(("expiring IPv4 %d(%p) from queue.\n",
-			  ntohs(frag->fr_id), frag));
+		      DPFPRINTF(("expiring IPv4 %d(0x%llx) from queue.\n",
+			  ntohs(frag->fr_id),
+			  (uint64_t)VM_KERNEL_ADDRPERM(frag)));
 		      break;
 		case AF_INET6:
-		      DPFPRINTF(("expiring IPv6 %d(%p) from queue.\n",
-			  ntohl(frag->fr_id6), frag));
+		      DPFPRINTF(("expiring IPv6 %d(0x%llx) from queue.\n",
+			  ntohl(frag->fr_id6),
+			  (uint64_t)VM_KERNEL_ADDRPERM(frag)));
 		      break;
 		default:
 		      VERIFY(0 && "only IPv4 and IPv6 supported");
@@ -337,12 +339,14 @@ pf_purge_expired_fragments(void)
 
 		switch (frag->fr_af) {
 		case AF_INET:
-		      DPFPRINTF(("expiring IPv4 %d(%p) from cache.\n",
-			  ntohs(frag->fr_id), frag));
+		      DPFPRINTF(("expiring IPv4 %d(0x%llx) from cache.\n",
+			  ntohs(frag->fr_id),
+			  (uint64_t)VM_KERNEL_ADDRPERM(frag)));
 		      break;
 		case AF_INET6:
-		      DPFPRINTF(("expiring IPv6 %d(%p) from cache.\n",
-			  ntohl(frag->fr_id6), frag));
+		      DPFPRINTF(("expiring IPv6 %d(0x%llx) from cache.\n",
+			  ntohl(frag->fr_id6),
+			  (uint64_t)VM_KERNEL_ADDRPERM(frag)));
 		      break;
 		default:
 		      VERIFY(0 && "only IPv4 and IPv6 supported");
@@ -682,7 +686,8 @@ insert:
 		m->m_pkthdr.len = plen;
 	}
 
-	DPFPRINTF(("complete: %p(%d)\n", m, ntohs(ip->ip_len)));
+	DPFPRINTF(("complete: 0x%llx(%d)\n",
+	    (uint64_t)VM_KERNEL_ADDRPERM(m), ntohs(ip->ip_len)));
 	return (m);
 
 drop_fragment:
@@ -1013,8 +1018,9 @@ pf_reassemble6(struct mbuf **m0, struct pf_fragment **frag,
 	plen = FR_IP6_PLEN(frent);
 	fr_max = off + plen - (frent->fr_ip6f_hlen - sizeof *ip6);
 
-	DPFPRINTF(("%p IPv6 frag plen %u off %u fr_ip6f_hlen %u fr_max %u m_len %u\n", m, 
-		plen, off, frent->fr_ip6f_hlen, fr_max, m->m_len));
+	DPFPRINTF(("0x%llx IPv6 frag plen %u off %u fr_ip6f_hlen %u "
+	    "fr_max %u m_len %u\n", (uint64_t)VM_KERNEL_ADDRPERM(m), plen, off,
+	    frent->fr_ip6f_hlen, fr_max, m->m_len));
 	
 	/* strip off headers up to the fragment payload */
 	m->m_data += frent->fr_ip6f_hlen;
@@ -1185,8 +1191,9 @@ pf_reassemble6(struct mbuf **m0, struct pf_fragment **frag,
 		m->m_pkthdr.len = pktlen;
 	}
 	
-	DPFPRINTF(("complete: %p ip6_plen %d m_pkthdr.len %d\n", 
-		m, ntohs(ip6->ip6_plen), m->m_pkthdr.len));
+	DPFPRINTF(("complete: 0x%llx ip6_plen %d m_pkthdr.len %d\n",
+	    (uint64_t)VM_KERNEL_ADDRPERM(m), ntohs(ip6->ip6_plen),
+	    m->m_pkthdr.len));
 
 	return m;
 	
@@ -1231,8 +1238,8 @@ pf_frag6cache(struct mbuf **m0, struct ip6_hdr *h, struct ip6_frag *fh,
 	 */
 	fr_max = off + plen;
 	
-	DPFPRINTF(("%p plen %u off %u fr_max %u\n", m, 
-		plen, off, fr_max));
+	DPFPRINTF(("0x%llx plen %u off %u fr_max %u\n",
+	    (uint64_t)VM_KERNEL_ADDRPERM(m), plen, off, fr_max));
 
 	/* Create a new range queue for this packet */
 	if (*frag == NULL) {
@@ -1650,9 +1657,11 @@ pf_normalize_ip(struct mbuf **m0, int dir, struct pfi_kif *kif, u_short *reason,
 		if (m == NULL)
 			return (PF_DROP);
 
+		VERIFY(m->m_flags & M_PKTHDR);
+
 		/* use mtag from concatenated mbuf chain */
 		pd->pf_mtag = pf_find_mtag(m);
-#ifdef DIAGNOSTIC
+#if DIAGNOSTIC
 		if (pd->pf_mtag == NULL) {
 			printf("%s: pf_find_mtag returned NULL(1)\n", __func__);
 			if ((pd->pf_mtag = pf_get_mtag(m)) == NULL) {
@@ -1697,9 +1706,11 @@ pf_normalize_ip(struct mbuf **m0, int dir, struct pfi_kif *kif, u_short *reason,
 			goto drop;
 		}
 
+		VERIFY(m->m_flags & M_PKTHDR);
+
 		/* use mtag from copied and trimmed mbuf chain */
 		pd->pf_mtag = pf_find_mtag(m);
-#ifdef DIAGNOSTIC
+#if DIAGNOSTIC
 		if (pd->pf_mtag == NULL) {
 			printf("%s: pf_find_mtag returned NULL(2)\n", __func__);
 			if ((pd->pf_mtag = pf_get_mtag(m)) == NULL) {
@@ -1733,14 +1744,12 @@ no_fragment:
 		h->ip_ttl = r->min_ttl;
 		h->ip_sum = pf_cksum_fixup(h->ip_sum, ip_ttl, h->ip_ttl, 0);
 	}
-#if RANDOM_IP_ID
 	if (r->rule_flag & PFRULE_RANDOMID) {
-		u_int16_t ip_id = h->ip_id;
+		u_int16_t oip_id = h->ip_id;
 
 		h->ip_id = ip_randomid();
-		h->ip_sum = pf_cksum_fixup(h->ip_sum, ip_id, h->ip_id, 0);
+		h->ip_sum = pf_cksum_fixup(h->ip_sum, oip_id, h->ip_id, 0);
 	}
-#endif /* RANDOM_IP_ID */
 	if ((r->rule_flag & (PFRULE_FRAGCROP|PFRULE_FRAGDROP)) == 0)
 		pd->flags |= PFDESC_IP_REAS;
 
@@ -1980,8 +1989,9 @@ fragment:
 	       goto badfrag;
 	
 	fr_max = fragoff + plen - (off - sizeof(struct ip6_hdr));
-	DPFPRINTF(("%p IPv6 frag plen %u mff %d off %u fragoff %u fr_max %u\n", m, 
-		plen, mff, off, fragoff, fr_max));
+	DPFPRINTF(("0x%llx IPv6 frag plen %u mff %d off %u fragoff %u "
+	    "fr_max %u\n", (uint64_t)VM_KERNEL_ADDRPERM(m), plen, mff, off,
+	    fragoff, fr_max));
 	
 	if ((r->rule_flag & (PFRULE_FRAGCROP|PFRULE_FRAGDROP)) == 0) {
 		/* Fully buffer all of the fragments */

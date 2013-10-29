@@ -114,33 +114,14 @@ convert_semaphore_to_port (semaphore_t semaphore)
 }
 
 lock_set_t
-convert_port_to_lock_set (ipc_port_t port)
+convert_port_to_lock_set (__unused ipc_port_t port)
 {
-	lock_set_t lock_set = LOCK_SET_NULL;
-
-	if (IP_VALID (port)) {
-		ip_lock(port);
-		if (ip_active(port) && (ip_kotype(port) == IKOT_LOCK_SET)) {
-			lock_set = (lock_set_t) port->ip_kobject;
-			lock_set_reference(lock_set);
-		}
-		ip_unlock(port);
-	}
-
-	return (lock_set);
+	return (LOCK_SET_NULL);
 }
 
 ipc_port_t
-convert_lock_set_to_port (lock_set_t lock_set)
+convert_lock_set_to_port (__unused lock_set_t lock_set)
 {
-	ipc_port_t port;
-
-	if (lock_set == LOCK_SET_NULL)
-		return IP_NULL;
-
-	/* caller is donating a reference */
-	port = ipc_port_make_send(lock_set->port);
-	lock_set_dereference(lock_set);
-	return (port);
+	return (IP_NULL);
 }
 

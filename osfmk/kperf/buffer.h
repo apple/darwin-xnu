@@ -39,7 +39,9 @@
 #define PERF_CALLSTACK  (2)
 #define PERF_TIMER      (3)
 #define PERF_PET        (4)
-#define PERF_AST        (5)  /* not confusing at all */
+#define PERF_AST        (5)
+#define PERF_KPC        (6)
+#define PERF_KDBG       (7)
 
 /* sub-class codes */
 #define PERF_GEN_CODE(code) PERF_CODE(PERF_GENERIC, code)
@@ -51,6 +53,7 @@
 #define PERF_TI_XSAMPLE    PERF_TI_CODE(2)
 #define PERF_TI_XPEND      PERF_TI_CODE(3)
 #define PERF_TI_XDATA      PERF_TI_CODE(4)
+#define PERF_TI_CSWITCH    PERF_TI_CODE(5)
 
 #define PERF_CS_CODE(code) PERF_CODE(PERF_CALLSTACK, code)
 #define PERF_CS_KSAMPLE    PERF_CS_CODE(0)
@@ -58,6 +61,9 @@
 #define PERF_CS_USAMPLE    PERF_CS_CODE(2)
 #define PERF_CS_KDATA      PERF_CS_CODE(3)
 #define PERF_CS_UDATA      PERF_CS_CODE(4)
+#define PERF_CS_KHDR       PERF_CS_CODE(5)
+#define PERF_CS_UHDR       PERF_CS_CODE(6)
+#define PERF_CS_ERROR      PERF_CS_CODE(7)
 
 #define PERF_TM_CODE(code) PERF_CODE(PERF_TIMER, code)
 #define PERF_TM_ASCHED     PERF_TM_CODE(0)
@@ -71,10 +77,25 @@
 #define PERF_PET_PAUSE      PERF_PET_CODE(3)
 #define PERF_PET_IDLE       PERF_PET_CODE(4)
 #define PERF_PET_SAMPLE     PERF_PET_CODE(5)
+#define PERF_PET_SCHED      PERF_PET_CODE(6)
+#define PERF_PET_END        PERF_PET_CODE(7)
 
 #define PERF_AST_CODE(code) PERF_CODE(PERF_AST, code)
-#define PERF_AST_HNDLR      PERF_TM_CODE(0)
-#define PERF_AST_ERROR      PERF_PET_CODE(1)
+#define PERF_AST_HNDLR      PERF_AST_CODE(0)
+#define PERF_AST_ERROR      PERF_AST_CODE(1)
+
+#define PERF_KPC_CODE(code) PERF_CODE(PERF_KPC, code)
+#define PERF_KPC_HNDLR      PERF_KPC_CODE(0)
+#define PERF_KPC_FCOUNTER   PERF_KPC_CODE(1)
+#define PERF_KPC_COUNTER    PERF_KPC_CODE(2)
+#define PERF_KPC_DATA       PERF_KPC_CODE(3)
+#define PERF_KPC_CONFIG     PERF_KPC_CODE(4)
+#define PERF_KPC_CFG_REG    PERF_KPC_CODE(5)
+#define PERF_KPC_DATA32     PERF_KPC_CODE(6)
+#define PERF_KPC_CFG_REG32  PERF_KPC_CODE(7)
+
+#define PERF_KDBG_CODE(code) PERF_CODE(PERF_KDBG, code)
+#define PERF_KDBG_HNDLR      PERF_KDBG_CODE(0)
 
 /* error sub-codes for trace data */
 enum
@@ -87,17 +108,23 @@ enum
 	ERR_NOMEM,
 };
 
+/* level of trace debug */
+#define KPERF_DEBUG_DATA    0
+#define KPERF_DEBUG_INFO    1
+#define KPERF_DEBUG_VERBOSE 2
+extern int kperf_debug_level;
+
 /* for logging information / debugging -- optional */
-#define BUF_INFO( id, a0, a1, a2, a3) KERNEL_DEBUG_CONSTANT(id,a0,a1,a2,a3,0)
+#define BUF_INFO( id, a0, a1, a2, a3) if (kperf_debug_level >= KPERF_DEBUG_INFO) KERNEL_DEBUG_CONSTANT_IST(~KDEBUG_ENABLE_PPT, id,a0,a1,a2,a3,0)
 
 #define BUF_INFO1( id, a0 )         BUF_INFO(id, a0,  0,  0,  0 )
 #define BUF_INFO2( id, a0, a1 )     BUF_INFO(id, a0, a1,  0,  0 )
 #define BUF_INFO3( id, a0, a1, a2 ) BUF_INFO(id, a0, a1, a2,  0 )
 
 /* for logging actual data -- never compiled out */
-#define BUF_DATA( id, a0, a1, a2, a3) KERNEL_DEBUG_CONSTANT(id,a0,a1,a2,a3,0)
+#define BUF_DATA( id, a0, a1, a2, a3) KERNEL_DEBUG_CONSTANT_IST(~KDEBUG_ENABLE_PPT, id,a0,a1,a2,a3,0)
 
 /* code neatness */
 #define BUF_DATA1( id, a0 )         BUF_DATA(id, a0, 0, 0, 0 )
 #define BUF_DATA2( id, a0, a1 )     BUF_DATA(id, a0, a1, 0, 0 )
-#define BUF_DATA3( id, a0, a1, a3 ) BUF_DATA(id, a0, a1, a2, a3 )
+#define BUF_DATA3( id, a0, a1, a2 ) BUF_DATA(id, a0, a1, a2, 0 )

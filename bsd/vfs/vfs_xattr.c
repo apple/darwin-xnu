@@ -56,6 +56,9 @@
 #include <security/mac_framework.h>
 #endif
 
+#if !CONFIG_APPLEDOUBLE
+#define	PANIC_ON_NOAPPLEDOUBLE	1
+#endif
 
 #if NAMEDSTREAMS
 
@@ -72,7 +75,7 @@ static int shadow_sequence;
 #define MAKE_SHADOW_NAME(VP, NAME)  \
 	snprintf((NAME), sizeof((NAME)), (SHADOW_NAME_FMT), \
 			((void*)(VM_KERNEL_ADDRPERM(VP))), \
-			((VP)->v_id), \
+			(VP)->v_id, \
 			((void*)(VM_KERNEL_ADDRPERM((VP)->v_data))))
 
 /* The full path to the shadow directory */
@@ -85,7 +88,6 @@ static int shadow_sequence;
 	snprintf((NAME), sizeof((NAME)), (SHADOW_DIR_FMT), \
 			((void*)(VM_KERNEL_ADDRPERM(VP))), shadow_sequence)
 
-
 static int  default_getnamedstream(vnode_t vp, vnode_t *svpp, const char *name, enum nsoperation op, vfs_context_t context);
 
 static int  default_makenamedstream(vnode_t vp, vnode_t *svpp, const char *name, vfs_context_t context);
@@ -94,19 +96,22 @@ static int  default_removenamedstream(vnode_t vp, const char *name, vfs_context_
 
 static int  getshadowfile(vnode_t vp, vnode_t *svpp, int makestream, size_t *rsrcsize, int *creator, vfs_context_t context);
 
-static int  get_shadow_dir(vnode_t *sdvpp, vfs_context_t context);
+static int  get_shadow_dir(vnode_t *sdvpp);
 
-#endif
-
+#endif /* NAMEDSTREAMS */
 
 /*
  * Default xattr support routines.
  */
 
+static int default_getxattr(vnode_t vp, const char *name, uio_t uio, size_t *size, int options,
+    vfs_context_t context);
+static int default_setxattr(vnode_t vp, const char *name, uio_t uio, int options,
+    vfs_context_t context);
 static int default_listxattr(vnode_t vp, uio_t uio, size_t *size, int options,
-                             vfs_context_t context);
-
-
+    vfs_context_t context);
+static int default_removexattr(vnode_t vp, const char *name, int options,
+    vfs_context_t context);
 
 /*
  *  Retrieve the data of an extended attribute.
@@ -117,7 +122,7 @@ vn_getxattr(vnode_t vp, const char *name, uio_t uio, size_t *size,
 {
 	int error;
 
-	if (!(vp->v_type == VREG || vp->v_type == VDIR || vp->v_type == VLNK)) {
+	if (!XATTR_VNODE_SUPPORTED(vp)) {
 		return (EPERM);
 	}
 #if NAMEDSTREAMS
@@ -163,7 +168,6 @@ vn_getxattr(vnode_t vp, const char *name, uio_t uio, size_t *size,
 	if (error == ENOTSUP && !(options & XATTR_NODEFAULT)) {
 		/*
 		 * A filesystem may keep some EAs natively and return ENOTSUP for others.
-		 * SMB returns ENOTSUP for finderinfo and resource forks.
 		 */
 		error = default_getxattr(vp, name, uio, size, options, context);
 	}
@@ -179,7 +183,7 @@ vn_setxattr(vnode_t vp, const char *name, uio_t uio, int options, vfs_context_t 
 {
 	int error;
 
-	if (!(vp->v_type == VREG || vp->v_type == VDIR || vp->v_type == VLNK)) {
+	if (!XATTR_VNODE_SUPPORTED(vp)) {
 		return (EPERM);
 	}
 #if NAMEDSTREAMS
@@ -249,7 +253,6 @@ vn_setxattr(vnode_t vp, const char *name, uio_t uio, int options, vfs_context_t 
 	if (error == ENOTSUP && !(options & XATTR_NODEFAULT)) {
 		/*
 		 * A filesystem may keep some EAs natively and return ENOTSUP for others.
-		 * SMB returns ENOTSUP for finderinfo and resource forks.
 		 */
 		error = default_setxattr(vp, name, uio, options, context);
 	}
@@ -270,7 +273,7 @@ vn_removexattr(vnode_t vp, const char * name, int options, vfs_context_t context
 {
 	int error;
 
-	if (!(vp->v_type == VREG || vp->v_type == VDIR || vp->v_type == VLNK)) {
+	if (!XATTR_VNODE_SUPPORTED(vp)) {
 		return (EPERM);
 	}
 #if NAMEDSTREAMS
@@ -297,7 +300,6 @@ vn_removexattr(vnode_t vp, const char * name, int options, vfs_context_t context
 	if (error == ENOTSUP && !(options & XATTR_NODEFAULT)) {
 		/*
 		 * A filesystem may keep some EAs natively and return ENOTSUP for others.
-		 * SMB returns ENOTSUP for finderinfo and resource forks.
 		 */
 		error = default_removexattr(vp, name, options, context);
 #ifdef DUAL_EAS
@@ -330,7 +332,7 @@ vn_listxattr(vnode_t vp, uio_t uio, size_t *size, int options, vfs_context_t con
 {
 	int error;
 
-	if (!(vp->v_type == VREG || vp->v_type == VDIR || vp->v_type == VLNK)) {
+	if (!XATTR_VNODE_SUPPORTED(vp)) {
 		return (EPERM);
 	}
 #if NAMEDSTREAMS
@@ -357,8 +359,7 @@ vn_listxattr(vnode_t vp, uio_t uio, size_t *size, int options, vfs_context_t con
 		/*
 		 * A filesystem may keep some but not all EAs natively, in which case
 		 * the native EA names will have been uiomove-d out (or *size updated)
-		 * and the default_listxattr here will finish the job.  Note SMB takes
-		 * advantage of this for its finder-info and resource forks.
+		 * and the default_listxattr here will finish the job.  
 		 */
 		error = default_listxattr(vp, uio, size, options, context);
 	}
@@ -396,6 +397,7 @@ xattr_protected(const char *attrname)
 
 
 #if NAMEDSTREAMS
+
 /*
  * Obtain a named stream from vnode vp.
  */
@@ -517,12 +519,20 @@ vnode_removenamedstream(vnode_t vp, vnode_t svp, const char *name, int flags, vf
  * to create and initialize the file again.
  */
 errno_t
-vnode_relenamedstream(vnode_t vp, vnode_t svp, vfs_context_t context)
-{
+vnode_relenamedstream(vnode_t vp, vnode_t svp) {
 	vnode_t dvp;
 	struct componentname cn;
 	char tmpname[80];
 	errno_t err;
+	
+	/* 
+	 * We need to use the kernel context here.  If we used the supplied
+	 * VFS context we have no clue whether or not it originated from userland
+	 * where it could be subject to a chroot jail.  We need to ensure that all
+	 * filesystem access to shadow files is done on the same FS regardless of
+	 * userland process restrictions.
+	 */
+	vfs_context_t kernelctx = vfs_context_kernel();
 
 	cache_purge(svp);
 
@@ -532,19 +542,22 @@ vnode_relenamedstream(vnode_t vp, vnode_t svp, vfs_context_t context)
 
 	cn.cn_nameiop = DELETE;
 	cn.cn_flags = ISLASTCN;
-	cn.cn_context = context;
+	cn.cn_context = kernelctx;
 	cn.cn_pnbuf = tmpname;
 	cn.cn_pnlen = sizeof(tmpname);
 	cn.cn_nameptr = cn.cn_pnbuf;
 	cn.cn_namelen = strlen(tmpname);
 
-	/* Obtain the vnode for the shadow files directory. */
-	err = get_shadow_dir(&dvp, context);
+	/* 
+	 * Obtain the vnode for the shadow files directory.  Make sure to 
+	 * use the kernel ctx as described above.
+	 */
+	err = get_shadow_dir(&dvp);
 	if (err != 0) {
 		return err;
 	}
 
-	(void) VNOP_REMOVE(dvp, svp, &cn, 0, context);
+	(void) VNOP_REMOVE(dvp, svp, &cn, 0, kernelctx);
 	vnode_put(dvp);
 
 	return (0);
@@ -552,6 +565,9 @@ vnode_relenamedstream(vnode_t vp, vnode_t svp, vfs_context_t context)
 
 /*
  * Flush a named stream shadow file.
+ * 
+ * 'vp' represents the AppleDouble file.
+ * 'svp' represents the shadow file.
  */
 errno_t 
 vnode_flushnamedstream(vnode_t vp, vnode_t svp, vfs_context_t context)
@@ -564,6 +580,13 @@ vnode_flushnamedstream(vnode_t vp, vnode_t svp, vfs_context_t context)
 	size_t  iosize;
 	size_t datasize;
 	int error;
+	/* 
+	 * The kernel context must be used for all I/O to the shadow file 
+	 * and its namespace operations
+	 */
+	vfs_context_t kernelctx = vfs_context_kernel();
+
+	/* The supplied context is used for access to the AD file itself */
 
 	VATTR_INIT(&va);
 	VATTR_WANTED(&va, va_data_size);
@@ -587,7 +610,7 @@ vnode_flushnamedstream(vnode_t vp, vnode_t svp, vfs_context_t context)
 	/*
 	 * Copy the shadow stream file data into the resource fork.
 	 */
-	error = VNOP_OPEN(svp, 0, context);
+	error = VNOP_OPEN(svp, 0, kernelctx);
 	if (error) {
 		printf("vnode_flushnamedstream: err %d opening file\n", error);
 		goto out;
@@ -597,7 +620,7 @@ vnode_flushnamedstream(vnode_t vp, vnode_t svp, vfs_context_t context)
 
 		uio_reset(auio, offset, UIO_SYSSPACE, UIO_READ);
 		uio_addiov(auio, (uintptr_t)bufptr, iosize);
-		error = VNOP_READ(svp, auio, 0, context);
+		error = VNOP_READ(svp, auio, 0, kernelctx);
 		if (error) {
 			break;
 		}
@@ -616,7 +639,9 @@ vnode_flushnamedstream(vnode_t vp, vnode_t svp, vfs_context_t context)
 		}
 		offset += iosize;
 	}
-	(void) VNOP_CLOSE(svp, 0, context);
+
+	/* close shadowfile */
+	(void) VNOP_CLOSE(svp, 0, kernelctx);
 out:
 	if (bufptr) {
 		kmem_free(kernel_map, (vm_offset_t)bufptr, bufsize);
@@ -627,21 +652,31 @@ out:
 	return (error);
 }
 
+
 /* 
  * Verify that the vnode 'vp' is a vnode that lives in the shadow
  * directory.  We can't just query the parent pointer directly since
  * the shadowfile is hooked up to the actual file it's a stream for.
  */
-errno_t vnode_verifynamedstream(vnode_t vp, vfs_context_t context) {
+errno_t vnode_verifynamedstream(vnode_t vp) {
 	int error;
 	struct vnode *shadow_dvp = NULL;
 	struct vnode *shadowfile = NULL;
 	struct componentname cn;
+	
+	/* 
+	 * We need to use the kernel context here.  If we used the supplied
+	 * VFS context we have no clue whether or not it originated from userland
+	 * where it could be subject to a chroot jail.  We need to ensure that all
+	 * filesystem access to shadow files is done on the same FS regardless of
+	 * userland process restrictions.
+	 */
+	vfs_context_t kernelctx = vfs_context_kernel();
 	char tmpname[80];
-
+	
 
 	/* Get the shadow directory vnode */
-	error = get_shadow_dir(&shadow_dvp, context);
+	error = get_shadow_dir(&shadow_dvp);
 	if (error) {
 		return error;
 	}
@@ -653,13 +688,13 @@ errno_t vnode_verifynamedstream(vnode_t vp, vfs_context_t context) {
 	bzero(&cn, sizeof(cn));
 	cn.cn_nameiop = LOOKUP;
 	cn.cn_flags = ISLASTCN | CN_ALLOWRSRCFORK;
-	cn.cn_context = context;
+	cn.cn_context = kernelctx;
 	cn.cn_pnbuf = tmpname;
 	cn.cn_pnlen = sizeof(tmpname);
 	cn.cn_nameptr = cn.cn_pnbuf;
 	cn.cn_namelen = strlen(tmpname);
 
-	if (VNOP_LOOKUP (shadow_dvp, &shadowfile, &cn, context) == 0) {
+	if (VNOP_LOOKUP (shadow_dvp, &shadowfile, &cn, kernelctx) == 0) {
 		/* is the pointer the same? */
 		if (shadowfile == vp) {
 			error = 0;	
@@ -676,6 +711,17 @@ errno_t vnode_verifynamedstream(vnode_t vp, vfs_context_t context) {
 	return error;
 }	
 
+/* 
+ * Access or create the shadow file as needed. 
+ * 
+ * 'makestream' with non-zero value means that we need to guarantee we were the
+ * creator of the shadow file.
+ *
+ * 'context' is the user supplied context for the original VFS operation that
+ * caused us to need a shadow file.
+ *
+ * int pointed to by 'creator' is nonzero if we created the shadowfile.
+ */
 static int
 getshadowfile(vnode_t vp, vnode_t *svpp, int makestream, size_t *rsrcsize,
               int *creator, vfs_context_t context)
@@ -688,6 +734,7 @@ getshadowfile(vnode_t vp, vnode_t *svpp, int makestream, size_t *rsrcsize,
 	size_t datasize = 0;
 	int  error = 0;
 	int retries = 0;
+	vfs_context_t kernelctx = vfs_context_kernel();
 
 retry_create:
 	*creator = 0;
@@ -723,13 +770,13 @@ retry_create:
 	VATTR_SET(&va, va_flags, UF_HIDDEN);
 
 	/* Obtain the vnode for the shadow files directory. */
-	if (get_shadow_dir(&dvp, context) != 0) {
+	if (get_shadow_dir(&dvp) != 0) {
 		error = ENOTDIR;
 		goto out;
 	}
 	if (!makestream) {
 		/* See if someone else already has it open. */
-		if (VNOP_LOOKUP(dvp, &svp, &cn, context) == 0) {
+		if (VNOP_LOOKUP(dvp, &svp, &cn, kernelctx) == 0) {
 			/* Double check existence by asking for size. */
 			VATTR_INIT(&va);
 			VATTR_WANTED(&va, va_data_size);
@@ -739,7 +786,10 @@ retry_create:
 			}
 		}
 		
-		/* Otherwise make sure the resource fork data exists. */
+		/* 
+		 * Otherwise make sure the resource fork data exists. 
+		 * Use the supplied context for accessing the AD file.
+		 */
 		error = vn_getxattr(vp, XATTR_RESOURCEFORK_NAME, NULL, &datasize,
 		                    XATTR_NOSECURITY, context);
 		/*
@@ -766,13 +816,13 @@ retry_create:
 		}
 	}
 	/* Create the shadow stream file. */
-	error = VNOP_CREATE(dvp, &svp, &cn, &va, context);
+	error = VNOP_CREATE(dvp, &svp, &cn, &va, kernelctx);
 	if (error == 0) {
 		vnode_recycle(svp);
 		*creator = 1;
 	} 
 	else if ((error == EEXIST) && !makestream) {
-		error = VNOP_LOOKUP(dvp, &svp, &cn, context);
+		error = VNOP_LOOKUP(dvp, &svp, &cn, kernelctx);
 	}
 	else if ((error == ENOENT) && !makestream) {
 		/*
@@ -826,6 +876,9 @@ default_getnamedstream(vnode_t vp, vnode_t *svpp, const char *name, enum nsopera
 	int  creator;
 	int  error;
 
+	/* need the kernel context for accessing the shadowfile */
+	vfs_context_t kernelctx = vfs_context_kernel();
+
 	/*
 	 * Only the "com.apple.ResourceFork" stream is supported here.
 	 */
@@ -836,6 +889,9 @@ default_getnamedstream(vnode_t vp, vnode_t *svpp, const char *name, enum nsopera
 retry:
 	/*
 	 * Obtain a shadow file for the resource fork I/O.
+	 * 
+	 * Need to pass along the supplied context so that getshadowfile
+	 * can access the AD file as needed, using it.
 	 */
 	error = getshadowfile(vp, &svp, 0, &datasize, &creator, context);
 	if (error) {
@@ -896,7 +952,8 @@ retry:
 		auio = uio_create(1, 0, UIO_SYSSPACE, UIO_READ);
 		offset = 0;
 
-		error = VNOP_OPEN(svp, 0, context);
+		/* open the shadow file */
+		error = VNOP_OPEN(svp, 0, kernelctx);
 		if (error) {
 			goto out;
 		}
@@ -907,6 +964,7 @@ retry:
 
 			uio_reset(auio, offset, UIO_SYSSPACE, UIO_READ);
 			uio_addiov(auio, (uintptr_t)bufptr, iosize);
+			/* use supplied ctx for AD file */
 			error = vn_getxattr(vp, XATTR_RESOURCEFORK_NAME, auio, &tmpsize,
 			                    XATTR_NOSECURITY, context);
 			if (error) {
@@ -915,13 +973,16 @@ retry:
 		
 			uio_reset(auio, offset, UIO_SYSSPACE, UIO_WRITE);
 			uio_addiov(auio, (uintptr_t)bufptr, iosize);
-			error = VNOP_WRITE(svp, auio, 0, context);
+			/* kernel context for writing shadowfile */
+			error = VNOP_WRITE(svp, auio, 0, kernelctx);
 			if (error) {
 				break;
 			}
 			offset += iosize;
 		}
-		(void) VNOP_CLOSE(svp, 0, context);
+
+		/* close shadow file */
+		(void) VNOP_CLOSE(svp, 0, kernelctx);
 	}
 out:
 	/* Wake up anyone waiting for svp file content */
@@ -940,7 +1001,7 @@ out:
 			 * Also add the VISSHADOW bit here to indicate we're done operating
 			 * on this vnode.
 			 */
-			(void)vnode_relenamedstream(vp, svp, context);
+			(void)vnode_relenamedstream(vp, svp);
 			vnode_lock (svp);
 			svp->v_flag |= VISSHADOW;
 			wakeup((caddr_t)&svp->v_parent);
@@ -978,6 +1039,8 @@ default_makenamedstream(vnode_t vp, vnode_t *svpp, const char *name, vfs_context
 		*svpp = NULLVP;
 		return (ENOATTR);
 	}
+
+	/* Supply the context to getshadowfile so it can manipulate the AD file */
 	error = getshadowfile(vp, svpp, 1, NULL, &creator, context);
 
 	/*
@@ -1014,8 +1077,7 @@ default_removenamedstream(vnode_t vp, const char *name, vfs_context_t context)
 }
 
 static int
-get_shadow_dir(vnode_t *sdvpp, vfs_context_t context)
-{
+get_shadow_dir(vnode_t *sdvpp) {
 	vnode_t  dvp = NULLVP;
 	vnode_t  sdvp = NULLVP;
 	struct componentname  cn;
@@ -1023,7 +1085,7 @@ get_shadow_dir(vnode_t *sdvpp, vfs_context_t context)
 	char tmpname[80];
 	uint32_t  tmp_fsid;
 	int  error;
-
+	vfs_context_t kernelctx = vfs_context_kernel();
 
 	bzero(tmpname, sizeof(tmpname));
 	MAKE_SHADOW_DIRNAME(rootvnode, tmpname);
@@ -1031,8 +1093,11 @@ get_shadow_dir(vnode_t *sdvpp, vfs_context_t context)
 	 * Look up the shadow directory to ensure that it still exists. 
 	 * By looking it up, we get an iocounted dvp to use, and avoid some coherency issues
 	 * in caching it when multiple threads may be trying to manipulate the pointers.
+	 * 
+	 * Make sure to use the kernel context.  We want a singular view of
+	 * the shadow dir regardless of chrooted processes.
 	 */
-	error = vnode_lookup(tmpname, 0, &sdvp, context);
+	error = vnode_lookup(tmpname, 0, &sdvp, kernelctx);
 	if (error == 0) {
 		/*
 		 * If we get here, then we have successfully looked up the shadow dir, 
@@ -1046,10 +1111,12 @@ get_shadow_dir(vnode_t *sdvpp, vfs_context_t context)
 	bzero (tmpname, sizeof(tmpname));
 
 	/* 
-	 * Obtain the vnode for "/var/run" directory. 
+	 * Obtain the vnode for "/var/run" directory using the kernel
+	 * context.
+	 *
 	 * This is defined in the SHADOW_DIR_CONTAINER macro
 	 */
-	if (vnode_lookup(SHADOW_DIR_CONTAINER, 0, &dvp, context) != 0) {
+	if (vnode_lookup(SHADOW_DIR_CONTAINER, 0, &dvp, kernelctx) != 0) {
 		error = ENOTSUP;
 		goto out;
 	}
@@ -1063,7 +1130,7 @@ get_shadow_dir(vnode_t *sdvpp, vfs_context_t context)
 	bzero(&cn, sizeof(cn));
 	cn.cn_nameiop = LOOKUP;
 	cn.cn_flags = ISLASTCN;
-	cn.cn_context = context;
+	cn.cn_context = kernelctx;
 	cn.cn_pnbuf = tmpname;
 	cn.cn_pnlen = sizeof(tmpname);
 	cn.cn_nameptr = cn.cn_pnbuf;
@@ -1080,23 +1147,23 @@ get_shadow_dir(vnode_t *sdvpp, vfs_context_t context)
 	VATTR_SET(&va, va_flags, UF_HIDDEN);
 	va.va_vaflags = VA_EXCLUSIVE;
 
-	error = VNOP_MKDIR(dvp, &sdvp, &cn, &va, context);
+	error = VNOP_MKDIR(dvp, &sdvp, &cn, &va, kernelctx);
 	
 	/*
 	 * There can be only one winner for an exclusive create.
 	 */
 	if (error == EEXIST) {
 		/* loser has to look up directory */
-		error = VNOP_LOOKUP(dvp, &sdvp, &cn, context);
+		error = VNOP_LOOKUP(dvp, &sdvp, &cn, kernelctx);
 		if (error == 0) {
 			/* Make sure its in fact a directory */
 			if (sdvp->v_type != VDIR) {
 				goto baddir;
 			}
-			/* Obtain the fsid for /tmp directory */
+			/* Obtain the fsid for /var/run directory */
 			VATTR_INIT(&va);
 			VATTR_WANTED(&va, va_fsid);
-			if (VNOP_GETATTR(dvp, &va, context) != 0  ||
+			if (VNOP_GETATTR(dvp, &va, kernelctx) != 0  ||
 			    !VATTR_IS_SUPPORTED(&va, va_fsid)) {
 				goto baddir;
 			}
@@ -1113,7 +1180,7 @@ get_shadow_dir(vnode_t *sdvpp, vfs_context_t context)
 			va.va_dirlinkcount = 1;
 			va.va_acl = (kauth_acl_t) KAUTH_FILESEC_NONE;
 
-			if (VNOP_GETATTR(sdvp, &va, context) != 0  ||
+			if (VNOP_GETATTR(sdvp, &va, kernelctx) != 0  ||
 			    !VATTR_IS_SUPPORTED(&va, va_uid)  ||
 			    !VATTR_IS_SUPPORTED(&va, va_gid)  ||
 			    !VATTR_IS_SUPPORTED(&va, va_mode)  ||
@@ -1124,7 +1191,7 @@ get_shadow_dir(vnode_t *sdvpp, vfs_context_t context)
 			 * Make sure its what we want: 
 			 * 	- owned by root
 			 *	- not writable by anyone
-			 *	- on same file system as /tmp
+			 *	- on same file system as /var/run
 			 *	- not a hard-linked directory
 			 *	- no ACLs (they might grant write access)
 			 */
@@ -1157,10 +1224,10 @@ baddir:
 	error = ENOTDIR;
 	goto out;
 }
-#endif
+#endif /* NAMEDSTREAMS */
 
 
-
+#if CONFIG_APPLEDOUBLE
 /*
  * Default Implementation (Non-native EA) 
  */
@@ -1517,7 +1584,7 @@ static int check_and_swap_apple_double_header(attr_info_t *ainfop)
 /*
  * Retrieve the data of an extended attribute.
  */
-int
+static int
 default_getxattr(vnode_t vp, const char *name, uio_t uio, size_t *size,
                  __unused int options, vfs_context_t context)
 {
@@ -1639,7 +1706,7 @@ out:
 /*
  * Set the data of an extended attribute.
  */
-int
+static int
 default_setxattr(vnode_t vp, const char *name, uio_t uio, int options, vfs_context_t context)
 {
 	vnode_t xvp = NULL;
@@ -1766,19 +1833,34 @@ start:
 			error = EPERM;
 			goto out;
 		}
-		if (ainfo.rsrcfork && ainfo.rsrcfork->length) {
-			/* attr exists and "create" was specified? */
-			if (options & XATTR_CREATE) {
-				error = EEXIST;
-				goto out;
+		/* Make sure we have a rsrc fork pointer.. */
+		if (ainfo.rsrcfork == NULL) {
+			error = ENOATTR;
+			goto out;
+		}
+		if (ainfo.rsrcfork) {
+			if (ainfo.rsrcfork->length != 0) {
+				if (options & XATTR_CREATE) {
+					/* attr exists, and create specified ? */
+					error = EEXIST;
+					goto out;
+				}	
 			}
-		} else {
-			/* attr doesn't exists and "replace" was specified? */
-			if (options & XATTR_REPLACE) {
-				error = ENOATTR;
-				goto out;
+			else {
+				/* Zero length AD rsrc fork */
+				if (options & XATTR_REPLACE) {
+					/* attr doesn't exist (0-length), but replace specified ? */
+					error = ENOATTR;
+					goto out;
+				}
 			}
 		}
+		else {
+			/* We can't do much if we somehow didn't get an AD rsrc pointer */
+			error = ENOATTR;
+			goto out;
+		}
+
 		endoffset = uio_resid(uio) + uio_offset(uio); /* new size */
 		uio_setoffset(uio, uio_offset(uio) + ainfo.rsrcfork->offset);
 		error = VNOP_WRITE(xvp, uio, 0, context);
@@ -2008,7 +2090,7 @@ out:
 /*
  * Remove an extended attribute.
  */
-int
+static int
 default_removexattr(vnode_t vp, const char *name, __unused int options, vfs_context_t context)
 {
 	vnode_t xvp = NULL;
@@ -2326,70 +2408,6 @@ out:
 	return (error);
 }
 
-/*
- * Check the header of a ._ file to verify that it is in fact an Apple Double
- * file. Returns 0 if the header is valid, non-zero if invalid.
- */
-int check_appledouble_header(vnode_t vp, vfs_context_t ctx)
-{
-	int error = 0;	
-	attr_info_t ainfo;
-	struct vnode_attr va;
-	uio_t auio = NULL;
-	void *buffer = NULL;
-	int iosize;
-	
-	ainfo.filevp = vp;
-	ainfo.context = ctx;
-	VATTR_INIT(&va);
-	VATTR_WANTED(&va, va_data_size);
-	if ((error = vnode_getattr(vp, &va, ctx))) {
-		goto out;
-	}
-	ainfo.filesize = va.va_data_size;
-
-	iosize = MIN(ATTR_MAX_HDR_SIZE, ainfo.filesize);
-	if (iosize == 0) {
-		error = ENOATTR;
-		goto out;
-	}
-	ainfo.iosize = iosize;
-
-	MALLOC(buffer, void *, iosize, M_TEMP, M_WAITOK);
-	if (buffer == NULL) {
-		error = ENOMEM;
-		goto out;
-	}
-	
-	auio = uio_create(1, 0, UIO_SYSSPACE, UIO_READ);
-	uio_addiov(auio, (uintptr_t)buffer, iosize);
-
-	/* Read the header */
-	error = VNOP_READ(vp, auio, 0, ctx);
-	if (error) {
-		goto out;
-	}
-	ainfo.rawsize = iosize - uio_resid(auio);
-	ainfo.rawdata = (u_int8_t *)buffer;
-
-	error = check_and_swap_apple_double_header(&ainfo);
-	if (error) {
-		goto out;
-	}
-
-	/* If we made it here, then the header is ok */
-
-out:
-	if (auio) {
-		uio_free(auio);
-	}
-	if (buffer) {
-		FREE(buffer, M_TEMP);
-	}
-
-	return error;
-}
-
 static int
 open_xattrfile(vnode_t vp, int fileflags, vnode_t *xvpp, vfs_context_t context)
 {
@@ -2584,20 +2602,17 @@ lookup:
 			error = ENOATTR;
 	}
 out:
-	if (dvp && (dvp != vp)) {
-		vnode_put(dvp);
-	}
-	if (basename) {
-		vnode_putname(basename);
-	}
-	if (filename && filename != &smallname[0]) {
-		FREE(filename, M_TEMP);
-	}
 	if (error) {
 		if (xvp != NULLVP) {
 			if (opened) {
 				(void) VNOP_CLOSE(xvp, fileflags, context);
 			}
+
+			if (fileflags & O_CREAT) {
+				/* Delete the xattr file if we encountered any errors */
+				(void) remove_xattrfile (xvp, context);	
+			}
+
 			if (referenced) {
 				(void) vnode_rele(xvp);
 			}
@@ -2608,6 +2623,17 @@ out:
 			error = EPERM;
 		}
 	}
+	/* Release resources after error-handling */
+	if (dvp && (dvp != vp)) {
+		vnode_put(dvp);
+	}
+	if (basename) {
+		vnode_putname(basename);
+	}
+	if (filename && filename != &smallname[0]) {
+		FREE(filename, M_TEMP);
+	}
+
 	*xvpp = xvp;  /* return a referenced vnode */
 	return (error);
 }
@@ -2964,7 +2990,12 @@ create_xattrfile(vnode_t xvp, u_int32_t fileid, vfs_context_t context)
 	init_empty_resource_fork(rsrcforkhdr);
 
 	/* Push it out. */
-	error = VNOP_WRITE(xvp, auio, 0, context);
+	error = VNOP_WRITE(xvp, auio, IO_UNIT, context);
+
+	/* Did we write out the full uio? */
+	if (uio_resid(auio) > 0) {
+		error = ENOSPC;
+	}
 
 	uio_free(auio);
 	FREE(buffer, M_TEMP);
@@ -3285,11 +3316,11 @@ lock_xattrfile(vnode_t xvp, short locktype, vfs_context_t context)
 	lf.l_len = 0;
 	lf.l_type = locktype; /* F_WRLCK or F_RDLCK */
 	/* Note: id is just a kernel address that's not a proc */
-	error = VNOP_ADVLOCK(xvp, (caddr_t)xvp, F_SETLK, &lf, F_FLOCK|F_WAIT, context);
+	error = VNOP_ADVLOCK(xvp, (caddr_t)xvp, F_SETLK, &lf, F_FLOCK|F_WAIT, context, NULL);
 	return (error == ENOTSUP ? 0 : error);
 }
 
-static int
+ int
 unlock_xattrfile(vnode_t xvp, vfs_context_t context)
 {
 	struct flock lf;
@@ -3300,7 +3331,55 @@ unlock_xattrfile(vnode_t xvp, vfs_context_t context)
 	lf.l_len = 0;
 	lf.l_type = F_UNLCK;
 	/* Note: id is just a kernel address that's not a proc */
-	error = VNOP_ADVLOCK(xvp, (caddr_t)xvp, F_UNLCK, &lf, F_FLOCK, context);
+	error = VNOP_ADVLOCK(xvp, (caddr_t)xvp, F_UNLCK, &lf, F_FLOCK, context, NULL);
 	return (error == ENOTSUP ? 0 : error);
 }
 
+#else /* CONFIG_APPLEDOUBLE */
+
+#undef panic
+#define	panic	printf
+
+static int
+default_getxattr(vnode_t vp, const char *name,
+    __unused uio_t uio, __unused size_t *size, __unused int options,
+    __unused vfs_context_t context)
+{
+#if PANIC_ON_NOAPPLEDOUBLE
+	panic("%s: no AppleDouble support, vp %p name %s", __func__, vp, name);
+#endif
+	return (ENOTSUP);
+}
+
+static int
+default_setxattr(vnode_t vp, const char *name,
+    __unused uio_t uio, __unused int options, __unused vfs_context_t context)
+{
+#if PANIC_ON_NOAPPLEDOUBLE
+	panic("%s: no AppleDouble support, vp %p name %s", __func__, vp, name);
+#endif
+	return (ENOTSUP);
+}
+
+static int
+default_listxattr(vnode_t vp,
+    __unused uio_t uio, __unused size_t *size, __unused int options,
+    __unused vfs_context_t context)
+{
+#if PANIC_ON_NOAPPLEDOUBLE
+	panic("%s: no AppleDouble support, vp %p name %s", __func__, vp, ".");
+#endif
+	return (ENOTSUP);
+}
+
+static int
+default_removexattr(vnode_t vp, const char *name,
+   __unused int options, __unused vfs_context_t context)
+{
+#if PANIC_ON_NOAPPLEDOUBLE
+	panic("%s: no AppleDouble support, vp %p name %s", __func__, vp, name);
+#endif
+	return (ENOTSUP);
+}
+
+#endif /* CONFIG_APPLEDOUBLE */

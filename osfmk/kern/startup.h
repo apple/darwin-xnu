@@ -42,8 +42,8 @@ __BEGIN_DECLS
  */
 
 /* Initialize kernel */
-extern void kernel_early_bootstrap(void) __attribute__((section("__TEXT, initcode")));
-extern void kernel_bootstrap(void) __attribute__((section("__TEXT, initcode")));
+extern void kernel_early_bootstrap(void);
+extern void kernel_bootstrap(void);
 
 /* Initialize machine dependent stuff */
 extern void	machine_init(void);
@@ -64,6 +64,9 @@ extern void	device_service_create(void);
 
 /* BSD subsystem initialization */
 extern void	bsd_init(void);
+
+/* codesigning subsystem initialization */
+extern void	cs_init(void);
 
 #endif	/* MACH_BSD */
 

@@ -87,6 +87,6 @@ struct	vlanreq {
 };
 
 #ifdef KERNEL_PRIVATE
-int vlan_family_init(void) __attribute__((section("__TEXT, initcode")));
+int vlan_family_init(void);
 #endif /* KERNEL_PRIVATE */
 #endif /* _NET_IF_VLAN_VAR_H_ */

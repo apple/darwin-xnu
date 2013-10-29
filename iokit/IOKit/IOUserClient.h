@@ -41,6 +41,8 @@
 #include <IOKit/IOStatisticsPrivate.h>
 #endif
 
+#define _IOUSERCLIENT_SENDASYNCRESULT64WITHOPTIONS_		1
+
 enum {
     kIOUCTypeMask	= 0x0000000f,
     kIOUCScalarIScalarO = 0,
@@ -93,6 +95,10 @@ struct IOExternalTrap {
 
 enum {
     kIOUserNotifyMaxMessageSize = 64
+};
+
+enum {
+    kIOUserNotifyOptionCanDrop = 0x1 /* Fail if queue is full, rather than infinitely queuing. */
 };
 
 // keys for clientHasPrivilege
@@ -254,9 +260,27 @@ protected:
 
     static IOReturn sendAsyncResult64(OSAsyncReference64 reference,
                                         IOReturn result, io_user_reference_t args[], UInt32 numArgs);
+
+    /*! 
+        @function sendAsyncResult64WithOptions
+        @abstract Send a notification as with sendAsyncResult, but with finite queueing.
+        @discussion IOUserClient::sendAsyncResult64() will infitely queue messages if the client
+                is not processing them in a timely fashion.  This variant will not, for simple
+                handling of situations where clients may be expected to stop processing messages.
+     */
+    static IOReturn sendAsyncResult64WithOptions(OSAsyncReference64 reference,
+                                        IOReturn result, io_user_reference_t args[], UInt32 numArgs, 
+					IOOptionBits options);
+
     static void setAsyncReference64(OSAsyncReference64 asyncRef,
 					mach_port_t wakePort,
 					mach_vm_address_t callback, io_user_reference_t refcon);
+
+    static void setAsyncReference64(OSAsyncReference64 asyncRef,
+					mach_port_t wakePort,
+					mach_vm_address_t callback, io_user_reference_t refcon,
+                    task_t task);
+
 public:
 
     static IOReturn clientHasPrivilege( void * securityToken,
@@ -318,6 +342,8 @@ private:
 									IOVirtualAddress atAddress = 0 );
 #endif
 
+    static IOReturn _sendAsyncResult64(OSAsyncReference64 reference,
+                                    IOReturn result, io_user_reference_t args[], UInt32 numArgs, IOOptionBits options);
 public:
 
     /*!

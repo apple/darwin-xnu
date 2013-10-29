@@ -36,11 +36,7 @@
 #define _UUID_UUID_H
 
 #include <sys/_types.h>
-
-#ifndef _UUID_T
-#define _UUID_T
-typedef __darwin_uuid_t	uuid_t;
-#endif /* _UUID_T */
+#include <sys/_types/_uuid_t.h>
 
 #ifndef _UUID_STRING_T
 #define _UUID_STRING_T

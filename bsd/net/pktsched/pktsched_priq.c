@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2007-2012 Apple Inc. All rights reserved.
+ * Copyright (c) 2007-2013 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -100,6 +100,7 @@ static void priq_updateq(struct priq_if *, struct priq_class *, cqev_t);
 static int priq_throttle(struct priq_if *, cqrq_throttle_t *);
 static int priq_resumeq(struct priq_if *, struct priq_class *);
 static int priq_suspendq(struct priq_if *, struct priq_class *);
+static int priq_stat_sc(struct priq_if *, cqrq_stat_sc_t *);
 static inline struct priq_class *priq_clh_to_clp(struct priq_if *, u_int32_t);
 static const char *priq_style(struct priq_if *);
 
@@ -569,7 +570,11 @@ priq_enqueue(struct priq_if *pif, struct priq_class *cl, struct mbuf *m,
 	VERIFY(cl == NULL || cl->cl_pif == pif);
 
 	if (cl == NULL) {
+#if PF_ALTQ
 		cl = priq_clh_to_clp(pif, t->pftag_qid);
+#else /* !PF_ALTQ */
+		cl = priq_clh_to_clp(pif, 0);
+#endif /* !PF_ALTQ */
 		if (cl == NULL) {
 			cl = pif->pif_default;
 			if (cl == NULL) {
@@ -728,8 +733,10 @@ priq_addq(struct priq_class *cl, struct mbuf *m, struct pf_mtag *t)
 		return (CLASSQEQ_DROPPED);
 	}
 
+#if PF_ECN
 	if (cl->cl_flags & PRCF_CLEARDSCP)
 		write_dsfield(m, t, 0);
+#endif /* PF_ECN */
 
 	_addq(&cl->cl_q, m);
 
@@ -900,6 +907,27 @@ priq_get_class_stats(struct priq_if *pif, u_int32_t qid,
 	return (0);
 }
 
+static int
+priq_stat_sc(struct priq_if *pif, cqrq_stat_sc_t *sr)
+{
+	struct ifclassq *ifq = pif->pif_ifq;
+	struct priq_class *cl;
+	u_int32_t i;
+
+	IFCQ_LOCK_ASSERT_HELD(ifq);
+
+	VERIFY(sr->sc == MBUF_SC_UNSPEC || MBUF_VALID_SC(sr->sc));
+
+	i = MBUF_SCIDX(sr->sc);
+	VERIFY(i < IFCQ_SC_MAX);
+
+	cl = ifq->ifcq_disc_slots[i].cl;
+	sr->packets = qlen(&cl->cl_q);
+	sr->bytes = qsize(&cl->cl_q);
+
+	return (0);
+}
+
 /* convert a class handle to the corresponding class pointer */
 static inline struct priq_class *
 priq_clh_to_clp(struct priq_if *pif, u_int32_t chandle)
@@ -988,6 +1016,10 @@ priq_request_ifclassq(struct ifclassq *ifq, cqrq_t req, void *arg)
 
 	case CLASSQRQ_THROTTLE:
 		err = priq_throttle(pif, (cqrq_throttle_t *)arg);
+		break;
+
+	case CLASSQRQ_STAT_SC:
+		err = priq_stat_sc(pif, (cqrq_stat_sc_t *)arg);
 		break;
 	}
 	return (err);
@@ -1152,7 +1184,7 @@ priq_throttle(struct priq_if *pif, cqrq_throttle_t *tr)
 {
 	struct ifclassq *ifq = pif->pif_ifq;
 	struct priq_class *cl;
-	int err;
+	int err = 0;
 
 	IFCQ_LOCK_ASSERT_HELD(ifq);
 	VERIFY(!(pif->pif_flags & PRIQIFF_ALTQ));

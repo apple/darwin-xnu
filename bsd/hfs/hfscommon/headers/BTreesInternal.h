@@ -148,7 +148,7 @@ enum {
 		kForceReadBlock		= 0x00000002,	//€€ how does this relate to Read/Verify? Do we need this?
 		kGetEmptyBlock		= 0x00000008
 };
-typedef OptionBits	GetBlockOptions;
+typedef u_int32_t	GetBlockOptions;
 
 /*
 	Fork Level Access Method Block release options
@@ -160,7 +160,7 @@ enum {
 		kTrashBlock			= 0x00000004,
 		kLockTransaction    = 0x00000100
 };
-typedef OptionBits	ReleaseBlockOptions;
+typedef u_int32_t	ReleaseBlockOptions;
 
 typedef	u_int64_t	FSSize;
 typedef	u_int32_t	ForkBlockNumber;

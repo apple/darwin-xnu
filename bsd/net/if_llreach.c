@@ -117,6 +117,8 @@
 #include <sys/mcache.h>
 #include <sys/protosw.h>
 
+#include <dev/random/randomdev.h>
+
 #include <net/if_dl.h>
 #include <net/if.h>
 #include <net/if_var.h>
@@ -165,7 +167,7 @@ SYSCTL_NODE(_net_link_generic_system, OID_AUTO, llreach_info,
 #define LL_MIN_RANDOM_FACTOR	512	/* 1024 * 0.5 */
 #define LL_MAX_RANDOM_FACTOR	1536	/* 1024 * 1.5 */
 #define LL_COMPUTE_RTIME(x)						\
-	(((LL_MIN_RANDOM_FACTOR * (x >> 10)) + (random() &		\
+	(((LL_MIN_RANDOM_FACTOR * (x >> 10)) + (RandomULong() &		\
 	((LL_MAX_RANDOM_FACTOR - LL_MIN_RANDOM_FACTOR) * (x >> 10)))) / 1000)
 #endif /* !INET6 */
 
@@ -290,7 +292,7 @@ ifnet_llreach_alloc(struct ifnet *ifp, u_int16_t llproto, void *addr,
     unsigned int alen, u_int64_t llreach_base)
 {
 	struct if_llreach find, *lr;
-	struct timeval now;
+	struct timeval cnow;
 
 	if (llreach_base == 0)
 		return (NULL);
@@ -337,8 +339,8 @@ found:
 	IFLR_ADDREF_LOCKED(lr);			/* for caller */
 	lr->lr_lastrcvd = net_uptime();		/* current approx. uptime */
 	lr->lr_baseup = lr->lr_lastrcvd;	/* base uptime */
-	microtime(&now);
-	lr->lr_basecal = now.tv_sec;		/* base calendar time */
+	getmicrotime(&cnow);
+	lr->lr_basecal = cnow.tv_sec;		/* base calendar time */
 	lr->lr_basereachable = llreach_base;
 	lr->lr_reachable = LL_COMPUTE_RTIME(lr->lr_basereachable * 1000);
 	lr->lr_debug |= IFD_ATTACHED;

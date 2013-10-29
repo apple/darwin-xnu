@@ -32,15 +32,11 @@
 #include <sys/cdefs.h>
 #include <sys/_types.h>
 
-#define __need_mcontext_t
-#define __need_stack_t
-#define __need_ucontext_t
-#include <sys/_structs.h>
+#include <machine/_mcontext.h>
+#include <sys/_types/_sigaltstack.h>
+#include <sys/_types/_ucontext.h>
 
-#ifndef _SIGSET_T
-#define _SIGSET_T
-typedef __darwin_sigset_t	sigset_t;
-#endif
+#include <sys/_types/_sigset_t.h>
 
 #ifdef KERNEL
 #include <machine/types.h>	/* user_addr_t, user_size_t */

@@ -97,6 +97,7 @@
 #include <mach/vm_param.h>
 #include <kern/task.h>
 #include <vm/vm_kern.h>
+#include <vm/vm_map.h>
 #include <mach/host_info.h>
 #include <kern/pms.h>
 
@@ -237,6 +238,13 @@ sysctl_hw_generic(__unused struct sysctl_oid *oidp, __unused void *arg1,
 		} else {
 			return(EINVAL);
 		}
+	case HW_PAGESIZE:
+	{
+		vm_map_t map = get_task_map(current_task());
+		val = vm_map_page_size(map);
+		qval = (long long)val;
+		break;
+	}
 	case HW_CACHELINE:
 		val = cpu_info.cache_line_size;
 		qval = (long long)val;
@@ -318,7 +326,8 @@ static int
 sysctl_pagesize
 (__unused struct sysctl_oid *oidp, __unused void *arg1, __unused int arg2, struct sysctl_req *req)
 {
-	long long l = page_size;
+	vm_map_t map = get_task_map(current_task());
+	long long l = vm_map_page_size(map);
 	return sysctl_io_number(req, l, sizeof(l), NULL, NULL);
 }
 
@@ -386,7 +395,7 @@ SYSCTL_INT(_hw_optional, OID_AUTO, floatingpoint, CTLFLAG_RD | CTLFLAG_KERN | CT
  *
  * The *_compat nodes are *NOT* visible within the kernel.
  */
-SYSCTL_COMPAT_INT (_hw, HW_PAGESIZE,     pagesize_compat, CTLFLAG_RD | CTLFLAG_MASKED | CTLFLAG_LOCKED, &page_size, 0, "");
+SYSCTL_PROC(_hw, HW_PAGESIZE,     pagesize_compat, CTLTYPE_INT | CTLFLAG_RD | CTLFLAG_MASKED | CTLFLAG_LOCKED, 0, HW_PAGESIZE, sysctl_hw_generic, "I", "");
 SYSCTL_COMPAT_INT (_hw, HW_BUS_FREQ,     busfrequency_compat, CTLFLAG_RD | CTLFLAG_MASKED | CTLFLAG_LOCKED, &gPEClockFrequencyInfo.bus_clock_rate_hz, 0, "");
 SYSCTL_COMPAT_INT (_hw, HW_CPU_FREQ,     cpufrequency_compat, CTLFLAG_RD | CTLFLAG_MASKED | CTLFLAG_LOCKED, &gPEClockFrequencyInfo.cpu_clock_rate_hz, 0, "");
 SYSCTL_PROC(_hw, HW_CACHELINE,    cachelinesize_compat, CTLTYPE_INT | CTLFLAG_RD | CTLFLAG_MASKED | CTLFLAG_LOCKED, 0, HW_CACHELINE, sysctl_hw_generic, "I", "");
@@ -442,33 +451,6 @@ SYSCTL_PROC(_hw_optional, OID_AUTO, hle,	CTLFLAG_RD | CTLFLAG_KERN | CTLFLAG_LOC
 #error Unsupported arch
 #endif /* !__i386__ && !__x86_64 && !__arm__ */
 
-/*
- * Debugging interface to the CPU power management code.
- *
- * Note:	Does not need locks because it disables interrupts over
- *		the call.
- */
-static int
-pmsSysctl(__unused struct sysctl_oid *oidp, __unused void *arg1,
-	  __unused int arg2, struct sysctl_req *req)
-{
-	pmsctl_t	ctl;
-	int		error;
-	boolean_t	intr;
-
-	if ((error = SYSCTL_IN(req, &ctl, sizeof(ctl))))
-		return(error);
-
-	intr = ml_set_interrupts_enabled(FALSE);		/* No interruptions in here */
-	error = pmsControl(ctl.request, (user_addr_t)(uintptr_t)ctl.reqaddr, ctl.reqsize);
-	(void)ml_set_interrupts_enabled(intr);			/* Restore interruptions */
-
-	return(error);
-}
-
-SYSCTL_PROC(_hw, OID_AUTO, pms, CTLTYPE_STRUCT | CTLFLAG_WR | CTLFLAG_LOCKED, 0, 0, pmsSysctl, "S", "Processor Power Management");
-
-
 
 /******************************************************************************
  * Generic MIB initialisation.
@@ -483,7 +465,7 @@ sysctl_mib_init(void)
 	cpusubtype = cpu_subtype();
 	cputhreadtype = cpu_threadtype();
 #if defined(__i386__) || defined (__x86_64__)
-    cpu64bit = (_get_cpu_capabilities() & k64Bit) == k64Bit;
+	cpu64bit = (_get_cpu_capabilities() & k64Bit) == k64Bit;
 #else
 #error Unsupported arch
 #endif

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2011-2012 Apple Inc. All rights reserved.
+ * Copyright (c) 2011-2013 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -46,6 +46,7 @@ typedef enum cqrq {
 	CLASSQRQ_PURGE_SC =	2,	/* purge service class (and flow) */
 	CLASSQRQ_EVENT =	3,	/* interface events */
 	CLASSQRQ_THROTTLE =	4,	/* throttle packets */
+	CLASSQRQ_STAT_SC =	5,	/* get service class queue stats */
 } cqrq_t;
 
 /* classq purge_sc request argument */
@@ -61,6 +62,13 @@ typedef struct cqrq_throttle {
 	u_int32_t		set;	/* set or get */
 	u_int32_t		level;	/* (in/out) throttling level */
 } cqrq_throttle_t;
+
+/* classq service class stats request argument */
+typedef struct cqrq_stat_sc {
+	mbuf_svc_class_t	sc;	/* (in) service class */
+	u_int32_t		packets; /* (out) packets enqueued */
+	u_int32_t		bytes;	/* (out) bytes enqueued */
+} cqrq_stat_sc_t;
 
 #if PF_ALTQ
 #include <net/altq/if_altq.h>
@@ -185,10 +193,11 @@ struct ifclassq {
 
 /* interface event argument for CLASSQRQ_EVENT */
 typedef enum cqev {
-	CLASSQ_EV_LINK_SPEED =	1,	/* link speed has changed */
-	CLASSQ_EV_LINK_MTU =	2,	/* link MTU has changed */
-	CLASSQ_EV_LINK_UP =	3,	/* link is now up */
-	CLASSQ_EV_LINK_DOWN =	4,	/* link is now down */
+	CLASSQ_EV_LINK_BANDWIDTH = 1,	/* link bandwidth has changed */
+	CLASSQ_EV_LINK_LATENCY = 2,	/* link latency has changed */
+	CLASSQ_EV_LINK_MTU =	3,	/* link MTU has changed */
+	CLASSQ_EV_LINK_UP =	4,	/* link is now up */
+	CLASSQ_EV_LINK_DOWN =	5,	/* link is now down */
 } cqev_t;
 #endif /* BSD_KERNEL_PRIVATE */
 
@@ -315,6 +324,15 @@ struct if_ifclassq_stats {
 	(_level) = _req.level;						\
 } while (0)
 
+#define	IFCQ_LEN_SC(_ifq, _sc, _packets, _bytes, _err) do {		\
+	cqrq_stat_sc_t _req = { _sc, 0, 0 };				\
+	(_err) = (*(ifq)->ifcq_request)(_ifq, CLASSQRQ_STAT_SC, &_req);	\
+	if ((_packets) != NULL)						\
+		(*(_packets)) = _req.packets;				\
+	if ((_bytes) != NULL)						\
+		(*(_bytes)) = _req.bytes;				\
+} while (0)
+
 #define	IFCQ_LEN(_ifcq)		((_ifcq)->ifcq_len)
 #define	IFCQ_QFULL(_ifcq)	(IFCQ_LEN(_ifcq) >= (_ifcq)->ifcq_maxlen)
 #define	IFCQ_IS_EMPTY(_ifcq)	(IFCQ_LEN(_ifcq) == 0)
@@ -336,7 +354,8 @@ extern void ifclassq_teardown(struct ifnet *);
 extern int ifclassq_pktsched_setup(struct ifclassq *);
 extern void ifclassq_set_maxlen(struct ifclassq *, u_int32_t);
 extern u_int32_t ifclassq_get_maxlen(struct ifclassq *);
-extern u_int32_t ifclassq_get_len(struct ifclassq *);
+extern int ifclassq_get_len(struct ifclassq *, mbuf_svc_class_t,
+    u_int32_t *, u_int32_t *);
 extern errno_t ifclassq_enqueue(struct ifclassq *, struct mbuf *);
 extern errno_t ifclassq_dequeue(struct ifclassq *, u_int32_t, struct mbuf **,
     struct mbuf **, u_int32_t *, u_int32_t *);

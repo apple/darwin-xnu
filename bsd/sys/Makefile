@@ -7,9 +7,11 @@ export MakeInc_dir=${SRCROOT}/makedefs/MakeInc.dir
 include $(MakeInc_cmd)
 include $(MakeInc_def)
 
-INSTINC_SUBDIRS =
+INSTINC_SUBDIRS = \
+	_types
 
-EXPINC_SUBDIRS =
+EXPINC_SUBDIRS = \
+	_types
 
 # Installs header file for user level -  
 #	  $(DSTROOT)/System/Library/Frameworks/System.framework/Headers
@@ -46,16 +48,17 @@ PRIVATE_DATAFILES = \
 	fsctl.h \
 	fsgetpath.h \
 	fslog.h \
+	guarded.h \
 	imgsrc.h \
 	ipcs.h \
 	kas_info.h \
+	kern_overrides.h \
 	shm_internal.h \
 	spawn_internal.h \
 	tree.h \
 	ux_exception.h \
-	proc_info.h \
 	process_policy.h \
-	vnioctl.h \
+	proc_uuid_policy.h \
 	priv.h
 
 # Installs header file for kernel extensions - 
@@ -100,6 +103,7 @@ PRIVATE_KERNELFILES = \
 	mach_swapon.h \
 	msgbuf.h \
 	eventvar.h \
+	pthread_shims.h \
 	quota.h \
 	sem_internal.h \
 	shm_internal.h \
@@ -122,7 +126,7 @@ INSTALL_MI_DIR = sys
 
 EXPORT_MI_LIST	= ${KERNELFILES} ${PRIVATE_KERNELFILES} linker_set.h bsdtask_info.h pthread_internal.h filedesc.h pipe.h resourcevar.h semaphore.h \
 								vnode_internal.h proc_internal.h file_internal.h mount_internal.h \
-								uio_internal.h tree.h munge.h
+								uio_internal.h tree.h munge.h kern_tests.h
 
 EXPORT_MI_GEN_LIST = syscall.h sysproto.h
 

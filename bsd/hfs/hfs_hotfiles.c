@@ -468,7 +468,7 @@ hfs_recording_suspend(struct hfsmount *hfsmp)
 	    error = EINVAL;
 	    goto out;
 	}
-	if (hfs_lock(VTOC(hfsmp->hfc_filevp), HFS_EXCLUSIVE_LOCK) != 0) {
+	if (hfs_lock(VTOC(hfsmp->hfc_filevp), HFS_EXCLUSIVE_LOCK, HFS_LOCK_DEFAULT) != 0) {
 		error = EPERM;
 		goto end_transaction;
 	}
@@ -615,7 +615,7 @@ hfs_recording_init(struct hfsmount *hfsmp)
 	    error = EINVAL;
 	    goto out1;
 	} 
-	if (hfs_lock(VTOC(hfsmp->hfc_filevp), HFS_EXCLUSIVE_LOCK) != 0) {
+	if (hfs_lock(VTOC(hfsmp->hfc_filevp), HFS_EXCLUSIVE_LOCK, HFS_LOCK_DEFAULT) != 0) {
 		error = EPERM;
 		goto out0;
 	}
@@ -792,10 +792,17 @@ hfs_addhotfile_internal(struct vnode *vp)
 	if (hfsmp->hfc_stage != HFC_RECORDING)
 		return (0);
 
-	/* Only regular files are allowed for hotfile inclusion ; symlinks disallowed */
-	if ((!vnode_isreg(vp)) || vnode_issystem(vp)) {
+	/* 
+	 * Only regular files are eligible for hotfiles addition. 
+	 * 
+	 * Symlinks were previously added to the list and may exist in 
+	 * extant hotfiles regions, but no new ones will be added, and no
+	 * symlinks will now be relocated/evicted from the hotfiles region.
+	 */
+	if (!vnode_isreg(vp) || vnode_issystem(vp)) {
 		return (0);
 	}
+
 	/* Skip resource forks for now. */
 	if (VNODE_IS_RSRC(vp)) {
 		return (0);
@@ -863,7 +870,6 @@ hfs_removehotfile(struct vnode *vp)
 	if (hfsmp->hfc_stage != HFC_RECORDING)
 		return (0);
 
-	/* Only regular files can move out of hotfiles */
 	if ((!vnode_isreg(vp)) || vnode_issystem(vp)) {
 		return (0);
 	}
@@ -987,7 +993,7 @@ hotfiles_refine(struct hfsmount *hfsmp)
 	    error = EINVAL;
 	    goto out;
 	} 
-	if (hfs_lock(VTOC(hfsmp->hfc_filevp), HFS_EXCLUSIVE_LOCK) != 0) {
+	if (hfs_lock(VTOC(hfsmp->hfc_filevp), HFS_EXCLUSIVE_LOCK, HFS_LOCK_DEFAULT) != 0) {
 		error = EPERM;
 		goto out1;
 	}
@@ -1092,7 +1098,7 @@ hotfiles_adopt(struct hfsmount *hfsmp)
 	if (hfsmp->hfc_stage != HFC_ADOPTION) {
 		return (EBUSY);
 	}
-	if (hfs_lock(VTOC(hfsmp->hfc_filevp), HFS_EXCLUSIVE_LOCK) != 0) {
+	if (hfs_lock(VTOC(hfsmp->hfc_filevp), HFS_EXCLUSIVE_LOCK, HFS_LOCK_DEFAULT) != 0) {
 		return (EPERM);
 	}
 
@@ -1140,9 +1146,8 @@ hotfiles_adopt(struct hfsmount *hfsmp)
 			}
 			break;
 		}
-
-		/* only regular files are eligible */
-		if (!vnode_isreg(vp)) { 
+		if (!vnode_isreg(vp)) {
+			/* Symlinks are ineligible for adoption into the hotfile zone.  */
 			printf("hfs: hotfiles_adopt: huh, not a file %d (%d)\n", listp->hfl_hotfile[i].hf_fileid, VTOC(vp)->c_cnid);
 			hfs_unlock(VTOC(vp));
 			vnode_put(vp);
@@ -1303,7 +1308,7 @@ hotfiles_evict(struct hfsmount *hfsmp, vfs_context_t ctx)
 	if ((listp = (hotfilelist_t  *)hfsmp->hfc_recdata) == NULL)
 		return (0);	
 
-	if (hfs_lock(VTOC(hfsmp->hfc_filevp), HFS_EXCLUSIVE_LOCK) != 0) {
+	if (hfs_lock(VTOC(hfsmp->hfc_filevp), HFS_EXCLUSIVE_LOCK, HFS_LOCK_DEFAULT) != 0) {
 		return (EPERM);
 	}
 
@@ -1366,13 +1371,17 @@ hotfiles_evict(struct hfsmount *hfsmp, vfs_context_t ctx)
 			break;
 		}
 
-		/* only regular files are eligible */
+		/* 
+		 * Symlinks that may have been inserted into the hotfile zone during a previous OS are now stuck 
+		 * here.  We do not want to move them. 
+		 */
 		if (!vnode_isreg(vp)) {
 			printf("hfs: hotfiles_evict: huh, not a file %d\n", key->fileID);
 			hfs_unlock(VTOC(vp));
 			vnode_put(vp);
 			goto delete;  /* invalid entry, go to next */
 		}
+
 		fileblocks = VTOF(vp)->ff_blocks;
 		if ((blksmoved > 0) &&
 		    (blksmoved + fileblocks) > HFC_BLKSPERSYNC) {
@@ -1527,7 +1536,7 @@ hotfiles_age(struct hfsmount *hfsmp)
 	    error = EINVAL;
 	    goto out2;
 	} 
-	if (hfs_lock(VTOC(hfsmp->hfc_filevp), HFS_EXCLUSIVE_LOCK) != 0) {
+	if (hfs_lock(VTOC(hfsmp->hfc_filevp), HFS_EXCLUSIVE_LOCK, HFS_LOCK_DEFAULT) != 0) {
 		error = EPERM;
 		goto out1;
 	}
@@ -1703,7 +1712,7 @@ hfc_btree_open(struct hfsmount *hfsmp, struct vnode **vpp)
 
 	lockflags = hfs_systemfile_lock(hfsmp, SFL_CATALOG, HFS_SHARED_LOCK);
 
-	error = cat_lookup(hfsmp, &cdesc, 0, &cdesc, &cattr, &cfork, NULL);
+	error = cat_lookup(hfsmp, &cdesc, 0, 0, &cdesc, &cattr, &cfork, NULL);
 
 	hfs_systemfile_unlock(hfsmp, lockflags);
 
@@ -1770,7 +1779,7 @@ hfc_btree_close(struct hfsmount *hfsmp, struct vnode *vp)
 	}
 
 	if (vnode_get(vp) == 0) {
-		error = hfs_lock(VTOC(vp), HFS_EXCLUSIVE_LOCK);
+		error = hfs_lock(VTOC(vp), HFS_EXCLUSIVE_LOCK, HFS_LOCK_DEFAULT);
 		if (error == 0) {
 			(void) hfs_fsync(vp, MNT_WAIT, 0, p);
 			error = BTClosePath(VTOF(vp));
@@ -1838,7 +1847,7 @@ hfc_btree_create(struct hfsmount *hfsmp, unsigned int nodesize, unsigned int ent
 		vnode_put(dvp);
 		dvp = NULL;
 	}
-	if ((error = hfs_lock(VTOC(vp), HFS_EXCLUSIVE_LOCK))) {
+	if ((error = hfs_lock(VTOC(vp), HFS_EXCLUSIVE_LOCK, HFS_LOCK_DEFAULT))) {
 		goto out;
 	}
 	cp = VTOC(vp);

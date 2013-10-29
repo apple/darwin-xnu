@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2012 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2013 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -177,11 +177,7 @@ static lck_grp_t		*bpf_mlock_grp;
 static lck_grp_attr_t	*bpf_mlock_grp_attr;
 static lck_attr_t		*bpf_mlock_attr;
 
-/*
- * Mark a descriptor free by making it point to itself.
- * This is probably cheaper than marking with a constant since
- * the address should be in a register anyway.
- */
+static mbuf_tag_id_t bpf_mtag_id;
 #endif /* __APPLE__ */
 
 static int	bpf_allocbufs(struct bpf_d *);
@@ -191,15 +187,15 @@ static void	bpf_freed(struct bpf_d *);
 static void	bpf_mcopy(const void *, void *, size_t);
 static int	bpf_movein(struct uio *, int,
 		    struct mbuf **, struct sockaddr *, int *);
-static int	bpf_setif(struct bpf_d *, ifnet_t ifp, u_int32_t dlt);
-static void bpf_timed_out(void *, void *);
-static void bpf_wakeup(struct bpf_d *);
+static int	bpf_setif(struct bpf_d *, ifnet_t ifp, u_int32_t dlt, dev_t);
+static void	bpf_timed_out(void *, void *);
+static void	bpf_wakeup(struct bpf_d *);
 static void	catchpacket(struct bpf_d *, u_char *, struct mbuf *, u_int,
 		    u_int, int, void (*)(const void *, void *, size_t));
 static void	reset_d(struct bpf_d *);
-static int bpf_setf(struct bpf_d *, u_int bf_len, user_addr_t bf_insns);
+static int	bpf_setf(struct bpf_d *, u_int , user_addr_t , dev_t, u_long);
 static int	bpf_getdltlist(struct bpf_d *, caddr_t, struct proc *);
-static int	bpf_setdlt(struct bpf_d *, u_int);
+static int	bpf_setdlt(struct bpf_d *, u_int, dev_t);
 static int	bpf_set_traffic_class(struct bpf_d *, int);
 static void	bpf_set_packet_service_class(struct mbuf *, int);
 
@@ -405,8 +401,9 @@ bpf_movein(struct uio *uio, int linktype, struct mbuf **mp, struct sockaddr *soc
 #ifdef __APPLE__
 
 /*
- * The dynamic addition of a new device node must block all processes that are opening 
- * the last device so that no process will get an unexpected ENOENT 
+ * The dynamic addition of a new device node must block all processes that
+ * are opening the last device so that no process will get an unexpected
+ * ENOENT 
  */
 static void
 bpf_make_dev_t(int maj)
@@ -576,9 +573,9 @@ bpf_start_timer(struct bpf_d *d)
 		tv.tv_sec = d->bd_rtout / hz;
 		tv.tv_usec = (d->bd_rtout % hz) * tick;
 
-		clock_interval_to_deadline((uint64_t)tv.tv_sec * USEC_PER_SEC + tv.tv_usec,
-				NSEC_PER_USEC,
-				&deadline);
+		clock_interval_to_deadline(
+		    (uint64_t)tv.tv_sec * USEC_PER_SEC + tv.tv_usec,
+		    NSEC_PER_USEC, &deadline);
 		/*
 		 * The state is BPF_IDLE, so the timer hasn't 
 		 * been started yet, and hasn't gone off yet;
@@ -780,6 +777,10 @@ bpfclose(dev_t dev, __unused int flags, __unused int fmt,
 	mac_bpfdesc_label_destroy(d);
 #endif
 	thread_call_free(d->bd_thread_call);
+
+	while (d->bd_hbuf_read)
+		msleep((caddr_t)d, bpf_mlock, PRINET, "bpf_reading", NULL);
+
 	bpf_freed(d);
 
 	/* Mark free in same context as bpfopen comes to check */
@@ -805,32 +806,14 @@ bpf_sleep(struct bpf_d *d, int pri, const char *wmesg, int timo)
 	return msleep1((caddr_t)d, bpf_mlock, pri, wmesg, abstime);
 }
 
-static struct inpcb *
-bpf_findinpcb(struct inpcbinfo *pcbinfo, uint32_t flowhash)
-{
-	struct inpcb *inp = NULL;
-
-	if (!flowhash) return (NULL);
-
-	lck_rw_lock_shared(pcbinfo->mtx);
-	LIST_FOREACH(inp, pcbinfo->listhead, inp_list) {
-		if (in_pcb_checkstate(inp, WNT_ACQUIRE, 0) != WNT_STOPUSING) {
-		    	if (inp->inp_flowhash == flowhash)
-				break;
-			in_pcb_checkstate(inp, WNT_RELEASE, 0);
-		}
-	}
-	lck_rw_done(pcbinfo->mtx);
-
-	return (inp);
-}
-
 /*
  * Rotate the packet buffers in descriptor d.  Move the store buffer
  * into the hold slot, and the free buffer into the store slot.
  * Zero the length of the new store buffer.
  */
 #define ROTATE_BUFFERS(d) \
+	if (d->bd_hbuf_read) \
+		panic("rotating bpf buffers during read"); \
 	(d)->bd_hbuf = (d)->bd_sbuf; \
 	(d)->bd_hlen = (d)->bd_slen; \
 	(d)->bd_sbuf = (d)->bd_fbuf; \
@@ -843,7 +826,8 @@ int
 bpfread(dev_t dev, struct uio *uio, int ioflag)
 {
 	struct bpf_d *d;
-	int timed_out;
+	caddr_t hbuf; 
+	int timed_out, hbuf_len;
 	int error;
 
 	lck_mtx_lock(bpf_mlock);
@@ -869,6 +853,14 @@ bpfread(dev_t dev, struct uio *uio, int ioflag)
 	timed_out = (d->bd_state == BPF_TIMED_OUT);
 	d->bd_state = BPF_IDLE;
 
+	while (d->bd_hbuf_read) 
+		msleep((caddr_t)d, bpf_mlock, PRINET, "bpf_reading", NULL);
+	
+	d = bpf_dtab[minor(dev)]; 
+	if (d == 0 || d == (void *)1) {
+		lck_mtx_unlock(bpf_mlock);
+		return (ENXIO);
+	}
 	/*
 	 * If the hold buffer is empty, then do a timed sleep, which
 	 * ends when the timeout expires or when enough packets
@@ -914,7 +906,28 @@ bpfread(dev_t dev, struct uio *uio, int ioflag)
 			lck_mtx_unlock(bpf_mlock);
 			return (ENXIO);
 		}
+
+		while (d->bd_hbuf_read)
+			msleep((caddr_t)d, bpf_mlock, PRINET, "bpf_reading", NULL);
+
+		d = bpf_dtab[minor(dev)];
+		if (d == 0 || d == (void *)1) {
+			lck_mtx_unlock(bpf_mlock);
+			return (ENXIO);
+		}
+		
 		if (error == EINTR || error == ERESTART) {
+			if (d->bd_slen) {
+				/*
+				 * Sometimes we may be interrupted often and
+				 * the sleep above will not timeout.
+				 * Regardless, we should rotate the buffers
+				 * if there's any new data pending and
+				 * return it.
+				 */
+				ROTATE_BUFFERS(d);
+				break;
+			}
 			lck_mtx_unlock(bpf_mlock);
 			return (error);
 		}
@@ -944,6 +957,7 @@ bpfread(dev_t dev, struct uio *uio, int ioflag)
 	 * At this point, we know we have something in the hold slot.
 	 */
 
+#ifdef __APPLE__
 	/*
 	 * Before we move data to userland, we fill out the extended
 	 * header fields.
@@ -954,41 +968,64 @@ bpfread(dev_t dev, struct uio *uio, int ioflag)
 		p = d->bd_hbuf;
 		while (p < d->bd_hbuf + d->bd_hlen) {
 			struct bpf_hdr_ext *ehp;
-			struct inpcb *inp;
-			uint32_t flowhash;
-			pid_t pid;
+			uint32_t flowid;
+			struct so_procinfo soprocinfo;
+			int found = 0;
 
 			ehp = (struct bpf_hdr_ext *)(void *)p;
-			if ((flowhash = ehp->bh_flowhash)) {
-				if (ehp->bh_flags & BPF_HDR_EXT_FLAGS_TCP)
-					inp = bpf_findinpcb(&tcbinfo, flowhash);
-				else
-					inp = bpf_findinpcb(&udbinfo, flowhash);
-				if (inp) {
-					socket_lock(inp->inp_socket, 0);
-					pid = inp->inp_socket->last_pid;
-					in_pcb_checkstate(inp, WNT_RELEASE, 1);
-					socket_unlock(inp->inp_socket, 0);
-					ehp->bh_pid = pid;
-					proc_name(pid, ehp->bh_comm, MAXCOMLEN);
+			if ((flowid = ehp->bh_flowid)) {
+				if (ehp->bh_proto == IPPROTO_TCP)
+					found = inp_findinpcb_procinfo(&tcbinfo,
+					    flowid, &soprocinfo);
+				else if (ehp->bh_proto == IPPROTO_UDP)
+					found = inp_findinpcb_procinfo(&udbinfo,
+					    flowid, &soprocinfo);
+				if (found != 0) {
+					ehp->bh_pid = soprocinfo.spi_pid;
+					proc_name(ehp->bh_pid, ehp->bh_comm, MAXCOMLEN);
 				}
-				ehp->bh_flowhash = 0;
+				ehp->bh_flowid = 0;
 			}
 			p += BPF_WORDALIGN(ehp->bh_hdrlen + ehp->bh_caplen);
 		}
 	}
+#endif
+	/*
+	 * Set the hold buffer read. So we do not 
+	 * rotate the buffers until the hold buffer
+	 * read is complete. Also to avoid issues resulting
+	 * from page faults during disk sleep (<rdar://problem/13436396>).
+	 */
+	d->bd_hbuf_read = 1;
+	hbuf = d->bd_hbuf;
+	hbuf_len = d->bd_hlen;
+	lck_mtx_unlock(bpf_mlock);
+
 	/*
 	 * Move data from hold buffer into user space.
 	 * We know the entire buffer is transferred since
 	 * we checked above that the read buffer is bpf_bufsize bytes.
 	 */
-	error = UIOMOVE(d->bd_hbuf, d->bd_hlen, UIO_READ, uio);
-
+	error = UIOMOVE(hbuf, hbuf_len, UIO_READ, uio);
+	
+	lck_mtx_lock(bpf_mlock);
+	/*
+	 * Make sure device is still opened
+	 */
+	d = bpf_dtab[minor(dev)];
+	if (d == 0 || d == (void *)1) {
+		lck_mtx_unlock(bpf_mlock);
+		return (ENXIO);
+	}
+	
+	d->bd_hbuf_read = 0;
 	d->bd_fbuf = d->bd_hbuf;
 	d->bd_hbuf = NULL;
 	d->bd_hlen = 0;
+	wakeup((caddr_t)d);
 	lck_mtx_unlock(bpf_mlock);
 	return (error);
+
 }
 
 
@@ -1056,8 +1093,8 @@ bpfwrite(dev_t dev, struct uio *uio, __unused int ioflag)
 	int error;
 	char 		  dst_buf[SOCKADDR_HDR_LEN + MAX_DATALINK_HDR_LEN];
 	int datlen = 0;
-    int bif_dlt;
-    int bd_hdrcmplt;
+	int bif_dlt;
+	int bd_hdrcmplt;
 
 	lck_mtx_lock(bpf_mlock);
 
@@ -1154,6 +1191,9 @@ bpfwrite(dev_t dev, struct uio *uio, __unused int ioflag)
 static void
 reset_d(struct bpf_d *d)
 {
+	if (d->bd_hbuf_read)
+		panic("resetting buffers during read");
+
 	if (d->bd_hbuf) {
 		/* Free the hold buffer. */
 		d->bd_fbuf = d->bd_hbuf;
@@ -1223,7 +1263,7 @@ bpfioctl(dev_t dev, u_long cmd, caddr_t addr, __unused int flags,
 			int n;
 
 			n = d->bd_slen;
-			if (d->bd_hbuf)
+			if (d->bd_hbuf && d->bd_hbuf_read == 0)
 				n += d->bd_hlen;
 
 			bcopy(&n, addr, sizeof (n));
@@ -1273,20 +1313,22 @@ bpfioctl(dev_t dev, u_long cmd, caddr_t addr, __unused int flags,
 	/*
 	 * Set link layer read filter.
 	 */
-	case BIOCSETF32: {		/* struct bpf_program32 */
+	case BIOCSETF32:
+	case BIOCSETFNR32: {		/* struct bpf_program32 */
 		struct bpf_program32 prg32;
 
 		bcopy(addr, &prg32, sizeof (prg32));
 		error = bpf_setf(d, prg32.bf_len,
-		    CAST_USER_ADDR_T(prg32.bf_insns));
+		    CAST_USER_ADDR_T(prg32.bf_insns), dev, cmd);
 		break;
 	}
 
-	case BIOCSETF64: {		/* struct bpf_program64 */
+	case BIOCSETF64:
+	case BIOCSETFNR64: {		/* struct bpf_program64 */
 		struct bpf_program64 prg64;
 
 		bcopy(addr, &prg64, sizeof (prg64));
-		error = bpf_setf(d, prg64.bf_len, prg64.bf_insns);
+		error = bpf_setf(d, prg64.bf_len, prg64.bf_insns, dev, cmd);
 		break;
 	}
 
@@ -1294,6 +1336,14 @@ bpfioctl(dev_t dev, u_long cmd, caddr_t addr, __unused int flags,
 	 * Flush read packet buffer.
 	 */
 	case BIOCFLUSH:
+		while (d->bd_hbuf_read) {
+			msleep((caddr_t)d, bpf_mlock, PRINET, "bpf_reading", NULL);
+		}
+		
+		d = bpf_dtab[minor(dev)];
+		if  (d == 0 || d == (void *)1)
+			return (ENXIO);
+		
 		reset_d(d);
 		break;
 
@@ -1348,7 +1398,7 @@ bpfioctl(dev_t dev, u_long cmd, caddr_t addr, __unused int flags,
 			u_int dlt;
 
 			bcopy(addr, &dlt, sizeof (dlt));
-			error = bpf_setdlt(d, dlt);
+			error = bpf_setdlt(d, dlt, dev);
 		}
 		break;
 
@@ -1362,8 +1412,7 @@ bpfioctl(dev_t dev, u_long cmd, caddr_t addr, __unused int flags,
 			struct ifnet *const ifp = d->bd_bif->bif_ifp;
 
 			snprintf(((struct ifreq *)(void *)addr)->ifr_name,
-			    sizeof (ifr.ifr_name), "%s%d", ifp->if_name,
-			    ifp->if_unit);
+			    sizeof (ifr.ifr_name), "%s", if_name(ifp));
 		}
 		break;
 
@@ -1379,14 +1428,14 @@ bpfioctl(dev_t dev, u_long cmd, caddr_t addr, __unused int flags,
 		if (ifp == NULL)
 			error = ENXIO;
 		else
-			error = bpf_setif(d, ifp, 0);
+			error = bpf_setif(d, ifp, 0, dev);
 		break;
 	}
 
 	/*
 	 * Set read timeout.
 	 */
-        case BIOCSRTIMEOUT32: {		/* struct user32_timeval */
+	case BIOCSRTIMEOUT32: {		/* struct user32_timeval */
 		struct user32_timeval _tv;
 		struct timeval tv;
 
@@ -1403,7 +1452,7 @@ bpfioctl(dev_t dev, u_long cmd, caddr_t addr, __unused int flags,
 		break;
 	}
 
-        case BIOCSRTIMEOUT64: {		/* struct user64_timeval */
+	case BIOCSRTIMEOUT64: {		/* struct user64_timeval */
 		struct user64_timeval _tv;
 		struct timeval tv;
 
@@ -1420,7 +1469,7 @@ bpfioctl(dev_t dev, u_long cmd, caddr_t addr, __unused int flags,
 		break;
 	}
 
-        /*
+	/*
 	 * Get read timeout.
 	 */
 	case BIOCGRTIMEOUT32: {		/* struct user32_timeval */
@@ -1559,9 +1608,36 @@ bpfioctl(dev_t dev, u_long cmd, caddr_t addr, __unused int flags,
 	case BIOCGRSIG:			/* u_int */
 		bcopy(&d->bd_sig, addr, sizeof (u_int));
 		break;
+#ifdef __APPLE__
 	case BIOCSEXTHDR:
 		bcopy(addr, &d->bd_extendedhdr, sizeof (u_int));
 		break;
+
+	case BIOCGIFATTACHCOUNT: { 		/* struct ifreq */
+		ifnet_t	ifp;
+		struct bpf_if *bp;
+
+		bcopy(addr, &ifr, sizeof (ifr));
+		ifr.ifr_name[IFNAMSIZ - 1] = '\0';
+		ifp = ifunit(ifr.ifr_name);
+		if (ifp == NULL) {
+			error = ENXIO;
+			break;
+		}
+		ifr.ifr_intval = 0;
+		for (bp = bpf_iflist; bp != 0; bp = bp->bif_next) {
+			struct bpf_d *bpf_d;
+			
+			if (bp->bif_ifp == NULL || bp->bif_ifp != ifp)
+				continue;
+			for (bpf_d = bp->bif_dlist; bpf_d; bpf_d = bpf_d->bd_next) {
+				ifr.ifr_intval += 1;
+			}
+		}
+		bcopy(&ifr, addr, sizeof (ifr));
+		break;
+	}
+#endif
 	}
 
 	lck_mtx_unlock(bpf_mlock);
@@ -1574,11 +1650,18 @@ bpfioctl(dev_t dev, u_long cmd, caddr_t addr, __unused int flags,
  * free it and replace it.  Returns EINVAL for bogus requests.
  */
 static int
-bpf_setf(struct bpf_d *d, u_int bf_len, user_addr_t bf_insns)
+bpf_setf(struct bpf_d *d, u_int bf_len, user_addr_t bf_insns, dev_t dev, u_long cmd)
 {
 	struct bpf_insn *fcode, *old;
 	u_int flen, size;
 
+	while (d->bd_hbuf_read) 
+		msleep((caddr_t)d, bpf_mlock, PRINET, "bpf_reading", NULL);
+
+	d = bpf_dtab[minor(dev)];
+	if  (d == 0 || d == (void *)1)
+		return (ENXIO);
+	
 	old = d->bd_filter;
 	if (bf_insns == USER_ADDR_NULL) {
 		if (bf_len != 0)
@@ -1602,7 +1685,10 @@ bpf_setf(struct bpf_d *d, u_int bf_len, user_addr_t bf_insns)
 	if (copyin(bf_insns, (caddr_t)fcode, size) == 0 &&
 	    bpf_validate(fcode, (int)flen)) {
 		d->bd_filter = fcode;
-		reset_d(d);
+	
+		if (cmd == BIOCSETF32 || cmd == BIOCSETF64)
+			reset_d(d);
+	
 		if (old != 0)
 			FREE((caddr_t)old, M_DEVBUF);
 
@@ -1618,11 +1704,18 @@ bpf_setf(struct bpf_d *d, u_int bf_len, user_addr_t bf_insns)
  * Return an errno or 0.
  */
 static int
-bpf_setif(struct bpf_d *d, ifnet_t theywant, u_int32_t dlt)
+bpf_setif(struct bpf_d *d, ifnet_t theywant, u_int32_t dlt, dev_t dev)
 {
 	struct bpf_if *bp;
 	int error;
-	
+
+	while (d->bd_hbuf_read)
+		msleep((caddr_t)d, bpf_mlock, PRINET, "bpf_reading", NULL);
+
+	d = bpf_dtab[minor(dev)];
+	if  (d == 0 || d == (void *)1)
+		return (ENXIO);
+
 	/*
 	 * Look through attached interfaces for the named one.
 	 */
@@ -1710,9 +1803,7 @@ bpf_getdltlist(struct bpf_d *d, caddr_t addr, struct proc *p)
  * Set the data link type of a BPF instance.
  */
 static int
-bpf_setdlt(struct bpf_d *d, uint32_t dlt)
-	
-
+bpf_setdlt(struct bpf_d *d, uint32_t dlt, dev_t dev)
 {
 	int error, opromisc;
 	struct ifnet *ifp;
@@ -1720,6 +1811,14 @@ bpf_setdlt(struct bpf_d *d, uint32_t dlt)
 	
 	if (d->bd_bif->bif_dlt == dlt)
 		return (0);
+	
+	while (d->bd_hbuf_read)
+		msleep((caddr_t)d, bpf_mlock, PRINET, "bpf_reading", NULL);
+
+	d = bpf_dtab[minor(dev)];
+	if  (d == 0 || d == (void *)1)
+		return (ENXIO);
+	
 	ifp = d->bd_bif->bif_ifp;
 	for (bp = bpf_iflist; bp; bp = bp->bif_next) {
 		if (bp->bif_ifp == ifp && bp->bif_dlt == dlt)
@@ -1793,6 +1892,15 @@ bpfselect(dev_t dev, int which, void * wql, struct proc *p)
 	}
 
 	if (d->bd_bif == NULL) {
+		lck_mtx_unlock(bpf_mlock);
+		return (ENXIO);
+	}
+
+	while (d->bd_hbuf_read) 
+		msleep((caddr_t)d, bpf_mlock, PRINET, "bpf_reading", NULL);
+	
+	d = bpf_dtab[minor(dev)]; 
+	if (d == 0 || d == (void *)1) {
 		lck_mtx_unlock(bpf_mlock);
 		return (ENXIO);
 	}
@@ -1892,7 +2000,7 @@ filt_bpfread(struct knote *kn, long hint)
 
 	if (hint == 0)
 		lck_mtx_lock(bpf_mlock);
-
+	
 	if (d->bd_immediate) {
 		/*
 		 * If there's data in the hold buffer, it's the 
@@ -1908,7 +2016,8 @@ filt_bpfread(struct knote *kn, long hint)
 		 * If there's no data in either buffer, we're not 
 		 * ready to read.
 		 */
-		kn->kn_data = (d->bd_hlen == 0 ? d->bd_slen : d->bd_hlen);
+		kn->kn_data = ((d->bd_hlen == 0  || d->bd_hbuf_read) 
+		    ? d->bd_slen : d->bd_hlen);
 		int64_t lowwat = 1;
 		if (kn->kn_sfflags & NOTE_LOWAT)
 		{
@@ -1934,7 +2043,7 @@ filt_bpfread(struct knote *kn, long hint)
 		 * no data in the hold buffer and the timer hasn't 
 		 * expired, we're not ready to read.
 		 */
-		kn->kn_data = (d->bd_hlen == 0 && d->bd_state == BPF_TIMED_OUT ? 
+		kn->kn_data = ((d->bd_hlen == 0 || d->bd_hbuf_read) && d->bd_state == BPF_TIMED_OUT ? 
 				d->bd_slen : d->bd_hlen);
 		ready = (kn->kn_data > 0);
 	}
@@ -2103,6 +2212,9 @@ catchpacket(struct bpf_d *d, u_char *pkt, struct mbuf *m, u_int pktlen,
 	int hdrlen, caplen;
 	int do_wakeup = 0;
 	u_char *payload;
+	struct timeval tv;
+	struct m_tag *mt = NULL;
+	struct bpf_mtag *bt = NULL;
 
 	hdrlen = d->bd_extendedhdr ? d->bd_bif->bif_exthdrlen :
 	    d->bd_bif->bif_hdrlen;
@@ -2149,7 +2261,6 @@ catchpacket(struct bpf_d *d, u_char *pkt, struct mbuf *m, u_int pktlen,
 	/*
 	 * Append the bpf header.
 	 */
-	struct timeval tv;
 	microtime(&tv);
  	if (d->bd_extendedhdr) {
  		ehp = (struct bpf_hdr_ext *)(void *)(d->bd_sbuf + curlen);
@@ -2159,14 +2270,30 @@ catchpacket(struct bpf_d *d, u_char *pkt, struct mbuf *m, u_int pktlen,
  		ehp->bh_datalen = pktlen;
  		ehp->bh_hdrlen = hdrlen;
  		ehp->bh_caplen = totlen - hdrlen;
- 		if (outbound) {
-			if (m->m_pkthdr.m_fhflags & PF_TAG_FLOWHASH)
-				ehp->bh_flowhash = m->m_pkthdr.m_flowhash;
-			ehp->bh_svc = so_svc2tc(m->m_pkthdr.svc);
+		mt = m_tag_locate(m, bpf_mtag_id, 0, NULL);
+		if (mt && mt->m_tag_len >= sizeof(*bt)) {
+			bt = (struct bpf_mtag *)(mt + 1);
+			ehp->bh_pid = bt->bt_pid;
+			strlcpy(ehp->bh_comm, bt->bt_comm,
+			    sizeof(ehp->bh_comm));
+			ehp->bh_svc = so_svc2tc(bt->bt_svc);
+			if (bt->bt_direction == BPF_MTAG_DIR_OUT)
+				ehp->bh_flags |= BPF_HDR_EXT_FLAGS_DIR_OUT;
+			else
+				ehp->bh_flags |= BPF_HDR_EXT_FLAGS_DIR_IN;
+			m_tag_delete(m, mt);
+		} else if (outbound) {
+			/* only do lookups on non-raw INPCB */
+			if ((m->m_pkthdr.pkt_flags & (PKTF_FLOW_ID|
+			    PKTF_FLOW_LOCALSRC|PKTF_FLOW_RAWSOCK)) ==
+			    (PKTF_FLOW_ID|PKTF_FLOW_LOCALSRC) &&
+			    m->m_pkthdr.pkt_flowsrc == FLOWSRC_INPCB) {
+				ehp->bh_flowid = m->m_pkthdr.pkt_flowid;
+				ehp->bh_proto = m->m_pkthdr.pkt_proto;
+			}
+			ehp->bh_svc = so_svc2tc(m->m_pkthdr.pkt_svc);
 			ehp->bh_flags |= BPF_HDR_EXT_FLAGS_DIR_OUT;
-			if (m->m_pkthdr.m_fhflags & PF_TAG_TCP)
-				ehp->bh_flags |= BPF_HDR_EXT_FLAGS_TCP;
- 		} else
+		} else
 			ehp->bh_flags |= BPF_HDR_EXT_FLAGS_DIR_IN;
  		payload = (u_char *)ehp + hdrlen;
  		caplen = ehp->bh_caplen;
@@ -2222,9 +2349,12 @@ bpf_freed(struct bpf_d *d)
 	 * been detached from its interface and it yet hasn't been marked
 	 * free.
 	 */
+	if (d->bd_hbuf_read)
+		panic("bpf buffer freed during read");
+
 	if (d->bd_sbuf != 0) {
 		FREE(d->bd_sbuf, M_DEVBUF);
-		if (d->bd_hbuf != 0)
+		if (d->bd_hbuf != 0) 
 			FREE(d->bd_hbuf, M_DEVBUF);
 		if (d->bd_fbuf != 0)
 			FREE(d->bd_fbuf, M_DEVBUF);
@@ -2273,8 +2403,8 @@ bpf_attach(
 	}
 	
 	if (bp_temp != NULL) {
-		printf("bpfattach - %s%d with dlt %d is already attached\n",
-			ifp->if_name, ifp->if_unit, dlt);
+		printf("bpfattach - %s with dlt %d is already attached\n",
+			if_name(ifp), dlt);
 		FREE(bp_new, M_DEVBUF);
 		lck_mtx_unlock(bpf_mlock);
 		return EEXIST;
@@ -2314,7 +2444,7 @@ bpf_attach(
 
 #ifndef __APPLE__
 	if (bootverbose)
-		printf("bpf: %s%d attached\n", ifp->if_name, ifp->if_unit);
+		printf("bpf: %s attached\n", if_name(ifp));
 #endif
 
 	return 0;
@@ -2377,15 +2507,10 @@ bpf_init(__unused void *unused)
 
 	if (bpf_devsw_installed == 0) {
 		bpf_devsw_installed = 1;
-
-        bpf_mlock_grp_attr = lck_grp_attr_alloc_init();
-
-        bpf_mlock_grp = lck_grp_alloc_init("bpf", bpf_mlock_grp_attr);
-
-        bpf_mlock_attr = lck_attr_alloc_init();
-
-        lck_mtx_init(bpf_mlock, bpf_mlock_grp, bpf_mlock_attr);
-
+		bpf_mlock_grp_attr = lck_grp_attr_alloc_init();
+		bpf_mlock_grp = lck_grp_alloc_init("bpf", bpf_mlock_grp_attr);
+		bpf_mlock_attr = lck_attr_alloc_init();
+		lck_mtx_init(bpf_mlock, bpf_mlock_grp, bpf_mlock_attr);
 		maj = cdevsw_add(CDEV_MAJOR, &bpf_cdevsw);
 		if (maj == -1) {
 			if (bpf_mlock_attr)
@@ -2406,6 +2531,8 @@ bpf_init(__unused void *unused)
 
 		for (i = 0 ; i < NBPFILTER; i++)
 			bpf_make_dev_t(maj);
+
+		VERIFY(mbuf_tag_id_find(BPF_CONTROL_NAME, &bpf_mtag_id) == 0);
 	}
 #else
 	cdevsw_add(&bpf_cdevsw);

@@ -132,6 +132,8 @@ extern int			speculative_age_index;
 extern unsigned int		vm_page_speculative_q_age_ms;
 
 
+#define	VM_PAGE_COMPRESSOR_COUNT	(compressor_object->resident_page_count)
+
 /*
  *	Management of resident (logical) pages.
  *
@@ -184,7 +186,7 @@ struct vm_page {
 			clean_queue:1,	/* page is in pre-cleaned list (P) */
 		        local:1,	/* page is in one of the local queues (P) */
 			speculative:1,	/* page is in speculative list (P) */
-			throttled:1,	/* pager is not responding (P) */
+			throttled:1,	/* pager is not responding or doesn't exist(P) */
 			free:1,		/* page is on free list (P) */
 			pageout_queue:1,/* page is on queue for pageout (P) */
 			laundry:1,	/* page is being cleaned now (P)*/
@@ -194,7 +196,8 @@ struct vm_page {
 					 *  the free list (P) */
 			no_cache:1,	/* page is not to be cached and should
 					 * be reused ahead of other pages (P) */
-			__unused_pageq_bits:3;	/* 3 bits available here */
+		        xpmapped:1,
+			__unused_pageq_bits:2;	/* 2 bits available here */
 
 	ppnum_t		phys_page;	/* Physical address of page, passed
 					 *  to pmap_enter (read-only) */
@@ -244,7 +247,8 @@ struct vm_page {
 		        lopage:1,
 			slid:1,
 			was_dirty:1,	/* was this page previously dirty? */
-			__unused_object_bits:8;  /* 8 bits available here */
+		        compressor:1,	/* page owned by compressor pool */
+			__unused_object_bits:7;  /* 7 bits available here */
 
 #if __LP64__
 	unsigned int __unused_padding;	/* Pad structure explicitly
@@ -363,6 +367,8 @@ vm_map_size_t	vm_global_no_user_wire_amount;
 
 struct vpl {
 	unsigned int	vpl_count;
+	unsigned int	vpl_internal_count;
+	unsigned int	vpl_external_count;
 	queue_head_t	vpl_queue;
 #ifdef	VPL_LOCK_SPIN
 	lck_spin_t	vpl_lock;
@@ -423,6 +429,12 @@ extern
 unsigned int	vm_page_throttled_count;/* How many inactives are throttled */
 extern
 unsigned int	vm_page_speculative_count;	/* How many speculative pages are unclaimed? */
+extern unsigned int	vm_page_pageable_internal_count;
+extern unsigned int	vm_page_pageable_external_count;
+extern
+unsigned int	vm_page_external_count;	/* How many pages are file-backed? */
+extern
+unsigned int	vm_page_internal_count;	/* How many pages are anonymous? */
 extern
 unsigned int	vm_page_wire_count;		/* How many pages are wired? */
 extern
@@ -475,6 +487,8 @@ extern ppnum_t	vm_page_guard_addr;
 
 extern boolean_t	vm_page_deactivate_hint;
 
+extern int		vm_compressor_mode;
+
 /*
    0 = all pages avail ( default. )
    1 = disable high mem ( cap max pages to 4G)
@@ -495,9 +509,9 @@ extern ppnum_t		max_valid_low_ppnum;
  */
 extern void		vm_page_bootstrap(
 					vm_offset_t	*startp,
-					vm_offset_t	*endp) __attribute__((section("__TEXT, initcode")));
+					vm_offset_t	*endp);
 
-extern void		vm_page_module_init(void) __attribute__((section("__TEXT, initcode")));
+extern void		vm_page_module_init(void);
 					
 extern void		vm_page_init_local_q(void);
 
@@ -652,42 +666,36 @@ extern void		vm_page_free_prepare_object(
 					boolean_t	remove_from_hash);
 
 #if CONFIG_JETSAM
-extern void memorystatus_update(unsigned int pages_avail);
+extern void memorystatus_pages_update(unsigned int pages_avail);
 
 #define VM_CHECK_MEMORYSTATUS do { \
-	memorystatus_update(		\
-      		vm_page_active_count + 		\
-      		vm_page_inactive_count + 	\
-      		vm_page_speculative_count + 	\
-      		vm_page_free_count +		\
+	memorystatus_pages_update(		\
+      		vm_page_external_count + \
+		vm_page_free_count +		\
       		(VM_DYNAMIC_PAGING_ENABLED(memory_manager_default) ? 0 : vm_page_purgeable_count) \
 		); \
 	} while(0)
-#else 
-#define VM_CHECK_MEMORYSTATUS do {} while(0)
-#endif
+
+#else /* CONFIG_JETSAM */
+
+
+extern void vm_pressure_response(void);
+
+#define VM_CHECK_MEMORYSTATUS	vm_pressure_response()
+
+
+#endif /* CONFIG_JETSAM */
 
 /*
  *	Functions implemented as macros. m->wanted and m->busy are
  *	protected by the object lock.
  */
 
-#if CONFIG_EMBEDDED
-#define SET_PAGE_DIRTY(m, set_pmap_modified)				\
-		MACRO_BEGIN						\
-		vm_page_t __page__ = (m);				\
-		if (__page__->dirty == FALSE && (set_pmap_modified)) {	\
-			pmap_set_modify(__page__->phys_page);		\
-		}							\
-		__page__->dirty = TRUE;					\
-		MACRO_END
-#else /* CONFIG_EMBEDDED */
 #define SET_PAGE_DIRTY(m, set_pmap_modified)				\
 		MACRO_BEGIN						\
 		vm_page_t __page__ = (m);				\
 		__page__->dirty = TRUE;					\
 		MACRO_END
-#endif /* CONFIG_EMBEDDED */
 
 #define PAGE_ASSERT_WAIT(m, interruptible)			\
 		(((m)->wanted = TRUE),				\
@@ -773,6 +781,8 @@ extern void vm_page_queues_assert(vm_page_t mem, int val);
 
 #define VM_PAGE_QUEUES_REMOVE(mem)				\
 	MACRO_BEGIN						\
+	boolean_t	was_pageable;				\
+								\
 	VM_PAGE_QUEUES_ASSERT(mem, 1);				\
 	assert(!mem->laundry);					\
 /*								\
@@ -785,6 +795,7 @@ extern void vm_page_queues_assert(vm_page_t mem, int val);
 	if (mem->local) {					\
 		struct vpl	*lq;				\
 		assert(mem->object != kernel_object);		\
+		assert(mem->object != compressor_object);	\
 		assert(!mem->inactive && !mem->speculative);	\
 		assert(!mem->active && !mem->throttled);	\
 		assert(!mem->clean_queue);			\
@@ -796,11 +807,18 @@ extern void vm_page_queues_assert(vm_page_t mem, int val);
 		mem->local = FALSE;				\
 		mem->local_id = 0;				\
 		lq->vpl_count--;				\
+		if (mem->object->internal) {			\
+			lq->vpl_internal_count--;		\
+		} else {					\
+			lq->vpl_external_count--;		\
+		}						\
 		VPL_UNLOCK(&lq->vpl_lock);			\
+		was_pageable = FALSE;				\
 	}							\
 								\
 	else if (mem->active) {					\
 		assert(mem->object != kernel_object);		\
+		assert(mem->object != compressor_object);	\
 		assert(!mem->inactive && !mem->speculative);	\
 		assert(!mem->clean_queue);			\
 		assert(!mem->throttled);			\
@@ -809,10 +827,12 @@ extern void vm_page_queues_assert(vm_page_t mem, int val);
 			mem, vm_page_t, pageq);			\
 		mem->active = FALSE;				\
 		vm_page_active_count--;				\
+		was_pageable = TRUE;				\
 	}							\
 								\
 	else if (mem->inactive) {				\
 		assert(mem->object != kernel_object);		\
+		assert(mem->object != compressor_object);	\
 		assert(!mem->active && !mem->speculative);	\
 		assert(!mem->throttled);			\
 		assert(!mem->fictitious);			\
@@ -834,9 +854,11 @@ extern void vm_page_queues_assert(vm_page_t mem, int val);
 			vm_purgeable_q_advance_all();		\
 		}						\
 		mem->inactive = FALSE;				\
+		was_pageable = TRUE;				\
 	}							\
 								\
 	else if (mem->throttled) {				\
+		assert(mem->object != compressor_object);	\
 		assert(!mem->active && !mem->inactive);		\
 		assert(!mem->speculative);			\
 		assert(!mem->fictitious);			\
@@ -844,22 +866,37 @@ extern void vm_page_queues_assert(vm_page_t mem, int val);
 			     mem, vm_page_t, pageq);		\
 		mem->throttled = FALSE;				\
 		vm_page_throttled_count--;			\
+		was_pageable = FALSE;				\
 	}							\
 								\
 	else if (mem->speculative) {				\
+		assert(mem->object != compressor_object);	\
 		assert(!mem->active && !mem->inactive);		\
 		assert(!mem->throttled);			\
 		assert(!mem->fictitious);			\
                 remque(&mem->pageq);				\
 		mem->speculative = FALSE;			\
 		vm_page_speculative_count--;			\
+		was_pageable = TRUE;				\
 	}							\
 								\
-	else if (mem->pageq.next || mem->pageq.prev)		\
+	else if (mem->pageq.next || mem->pageq.prev) {		\
+		was_pageable = FALSE;				\
 		panic("VM_PAGE_QUEUES_REMOVE: unmarked page on Q");	\
+	} else {						\
+		was_pageable = FALSE;				\
+	}							\
+								\
 	mem->pageq.next = NULL;					\
 	mem->pageq.prev = NULL;					\
 	VM_PAGE_QUEUES_ASSERT(mem, 0);				\
+	if (was_pageable) {					\
+		if (mem->object->internal) {			\
+			vm_page_pageable_internal_count--;	\
+		} else {					\
+			vm_page_pageable_external_count--;	\
+		}						\
+	}							\
 	MACRO_END
 
 
@@ -874,12 +911,14 @@ extern void vm_page_queues_assert(vm_page_t mem, int val);
 			queue_enter_first(&vm_page_queue_anonymous, mem, vm_page_t, pageq);	\
 		else						\
 			queue_enter(&vm_page_queue_anonymous, mem, vm_page_t, pageq);		\
-		vm_page_anonymous_count++;				\
+		vm_page_anonymous_count++;			\
+		vm_page_pageable_internal_count++;		\
 	} else {						\
 		if (first == TRUE)				\
 			queue_enter_first(&vm_page_queue_inactive, mem, vm_page_t, pageq); \
 		else						\
 			queue_enter(&vm_page_queue_inactive, mem, vm_page_t, pageq);	\
+		vm_page_pageable_external_count++;			\
 	}							\
 	mem->inactive = TRUE;					\
 	vm_page_inactive_count++;				\

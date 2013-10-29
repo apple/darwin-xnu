@@ -81,25 +81,25 @@ typedef struct mach_timespec	mach_timespec_t;
 #define CLOCK_ALARM_MINRES	4	/* minimum alarm resolution */
 #define CLOCK_ALARM_MAXRES	5	/* maximum alarm resolution */
 
-#define NSEC_PER_USEC	1000		/* nanoseconds per microsecond */
-#define USEC_PER_SEC	1000000		/* microseconds per second */
-#define NSEC_PER_SEC	1000000000	/* nanoseconds per second */
+#define NSEC_PER_USEC	1000ull		/* nanoseconds per microsecond */
+#define USEC_PER_SEC	1000000ull	/* microseconds per second */
+#define NSEC_PER_SEC	1000000000ull	/* nanoseconds per second */
 #define NSEC_PER_MSEC	1000000ull	/* nanoseconds per millisecond */
 
 #define BAD_MACH_TIMESPEC(t)						\
-	((t)->tv_nsec < 0 || (t)->tv_nsec >= NSEC_PER_SEC)
+	((t)->tv_nsec < 0 || (t)->tv_nsec >= (long)NSEC_PER_SEC)
 
 /* t1 <=> t2, also (t1 - t2) in nsec with max of +- 1 sec */
 #define CMP_MACH_TIMESPEC(t1, t2)					\
-	((t1)->tv_sec > (t2)->tv_sec ? +NSEC_PER_SEC :	\
-	((t1)->tv_sec < (t2)->tv_sec ? -NSEC_PER_SEC :	\
+	((t1)->tv_sec > (t2)->tv_sec ? (long) +NSEC_PER_SEC :	\
+	((t1)->tv_sec < (t2)->tv_sec ? (long) -NSEC_PER_SEC :	\
 			(t1)->tv_nsec - (t2)->tv_nsec))
 
 /* t1  += t2 */
 #define ADD_MACH_TIMESPEC(t1, t2)								\
   do {															\
-	if (((t1)->tv_nsec += (t2)->tv_nsec) >= NSEC_PER_SEC) {		\
-		(t1)->tv_nsec -= NSEC_PER_SEC;							\
+	if (((t1)->tv_nsec += (t2)->tv_nsec) >= (long) NSEC_PER_SEC) {		\
+		(t1)->tv_nsec -= (long) NSEC_PER_SEC;							\
 		(t1)->tv_sec  += 1;										\
 	}															\
 	(t1)->tv_sec += (t2)->tv_sec;								\
@@ -109,7 +109,7 @@ typedef struct mach_timespec	mach_timespec_t;
 #define SUB_MACH_TIMESPEC(t1, t2)								\
   do {															\
 	if (((t1)->tv_nsec -= (t2)->tv_nsec) < 0) {					\
-		(t1)->tv_nsec += NSEC_PER_SEC;							\
+		(t1)->tv_nsec += (long) NSEC_PER_SEC;							\
 		(t1)->tv_sec  -= 1;										\
 	}															\
 	(t1)->tv_sec -= (t2)->tv_sec;								\

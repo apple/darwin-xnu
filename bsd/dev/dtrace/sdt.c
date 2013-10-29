@@ -40,6 +40,7 @@
 #include <sys/fcntl.h>
 #include <miscfs/devfs/devfs.h>
 
+
 #include <sys/dtrace.h>
 #include <sys/dtrace_impl.h>
 
@@ -51,10 +52,9 @@ extern int dtrace_kernel_symbol_mode;
 struct savearea_t; /* Used anonymously */
 typedef kern_return_t (*perfCallback)(int, struct savearea_t *, uintptr_t *, int);
 
-#if defined(__i386__) || defined(__x86_64__)
+#if defined(__x86_64__)
 extern perfCallback tempDTraceTrapHook;
 extern kern_return_t fbt_perfCallback(int, struct savearea_t *, int, int);
-
 #define	SDT_PATCHVAL	0xf0
 #define	SDT_AFRAMES		6
 #else
@@ -152,6 +152,10 @@ __sdt_provide_module(void *arg, struct modctl *ctl)
 
 			mp->sdt_nprobes++;
 		}
+
+#if 0		
+		printf ("__sdt_provide_module:  sdpd=0x%p  sdp=0x%p  name=%s, id=%d\n", sdpd, sdp, nname, sdp->sdp_id);
+#endif		
 
 		sdp->sdp_hashnext =
 		    sdt_probetab[SDT_ADDR2NDX(sdpd->sdpd_offset)];
@@ -626,7 +630,12 @@ void sdt_init( void )
 					strncpy(sdpd->sdpd_func, prev_name, len); /* NUL termination is ensured. */
 					
 					sdpd->sdpd_offset = *(unsigned long *)sym[i].n_value;
-					
+
+#if 0
+					printf("sdt_init: sdpd_offset=0x%lx, n_value=0x%lx, name=%s\n",
+					    sdpd->sdpd_offset,  *(unsigned long *)sym[i].n_value, name);
+#endif
+
 					sdpd->sdpd_next = g_sdt_mach_module.sdt_probes;
 					g_sdt_mach_module.sdt_probes = sdpd;
 				} else {

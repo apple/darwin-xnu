@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2004 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2004-2012 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -64,6 +64,7 @@ hibernate_page_list_allocate(boolean_t log)
     uint32_t		    mcount, msize, i;
     hibernate_bitmap_t	    dram_ranges[MAX_BANKS];
     boot_args *		    args = (boot_args *) PE_state.bootArgs;
+    uint32_t		    non_os_pagecount;
 
     mptr = (EfiMemoryRange *)ml_static_ptovirt(args->MemoryMap);
     if (args->MemoryMapDescriptorSize == 0)
@@ -72,6 +73,7 @@ hibernate_page_list_allocate(boolean_t log)
     mcount = args->MemoryMapSize / msize;
 
     num_banks = 0;
+    non_os_pagecount = 0;
     for (i = 0; i < mcount; i++, mptr = (EfiMemoryRange *)(((vm_offset_t)mptr) + msize))
     {
 	base = (ppnum_t) (mptr->PhysicalStart >> I386_PGSHIFT);
@@ -87,13 +89,16 @@ hibernate_page_list_allocate(boolean_t log)
 	switch (mptr->Type)
 	{
 	    // any kind of dram
+	    case kEfiACPIMemoryNVS:
+	    case kEfiPalCode:
+		non_os_pagecount += num;
+
+	    // OS used dram
 	    case kEfiLoaderCode:
 	    case kEfiLoaderData:
 	    case kEfiBootServicesCode:
 	    case kEfiBootServicesData:
 	    case kEfiConventionalMemory:
-	    case kEfiACPIMemoryNVS:
-	    case kEfiPalCode:
 
 		for (bank = 0; bank < num_banks; bank++)
 		{
@@ -171,6 +176,7 @@ hibernate_page_list_allocate(boolean_t log)
         		  bank, bitmap->first_page, bitmap->last_page);
 	bitmap = (hibernate_bitmap_t *) &bitmap->bitmap[bitmap->bitmapwords];
     }
+    if (log) printf("efi pagecount %d\n", non_os_pagecount);
 
     return (list);
 }
@@ -192,13 +198,6 @@ hibernate_page_list_set_volatile( hibernate_page_list_t * page_list,
 				  uint32_t * pagesOut)
 {
     boot_args * args = (boot_args *) PE_state.bootArgs;
-
-#if !defined(x86_64)
-    hibernate_set_page_state(page_list, page_list_wired, 
-		I386_HIB_PAGETABLE, I386_HIB_PAGETABLE_COUNT, 
-		kIOHibernatePageStateFree);
-    *pagesOut -= I386_HIB_PAGETABLE_COUNT;
-#endif
 
     if (args->efiRuntimeServicesPageStart)
     {

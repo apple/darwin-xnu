@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1998-2006 Apple Inc. All rights reserved.
+ * Copyright (c) 1998-2012 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -351,7 +351,7 @@ bool IOCatalogue::addDrivers(
 		* The catalogue must be able to contain personalities that
 		* are proper supersets of others.
 		* Do not compare just the properties present in one driver
-		* pesonality or the other.
+		* personality or the other.
 		*/
 		if (personality->isEqualTo(driver)) {
 		    break;
@@ -803,17 +803,22 @@ bool IOCatalogue::resetAndAddDrivers(OSArray * drivers, bool doNubMatching)
         for (idx = 0; (thisOldPersonality = (OSDictionary *) array->getObject(idx)); idx++)
         {
             if (thisOldPersonality->getObject("KernelConfigTable")) continue;
-            if (newPersonalities) for (newIdx = 0; 
-                (thisNewPersonality = (OSDictionary *) newPersonalities->getObject(newIdx)); 
-                newIdx++)
+            if (newPersonalities)
+            for  (newIdx = 0;
+                 (thisNewPersonality = (OSDictionary *) newPersonalities->getObject(newIdx));
+                 newIdx++)
             {
 	       /* Unlike in other functions, this comparison must be exact!
             * The catalogue must be able to contain personalities that
             * are proper supersets of others.
             * Do not compare just the properties present in one driver
-            * pesonality or the other.
+            * personality or the other.
             */
-                if (thisNewPersonality->isEqualTo(thisOldPersonality))  
+                if (OSDynamicCast(OSDictionary, thisNewPersonality) == NULL) {
+                    /* skip thisNewPersonality if it is not an OSDictionary */
+                    continue;
+                }
+                if (thisNewPersonality->isEqualTo(thisOldPersonality))
                     break;
             }
             if (thisNewPersonality)
@@ -835,15 +840,20 @@ bool IOCatalogue::resetAndAddDrivers(OSArray * drivers, bool doNubMatching)
         }
     }
 
-     // add new
-     for (newIdx = 0;
-          (thisNewPersonality = (OSDictionary *) newPersonalities->getObject(newIdx)); 
-          newIdx++)
-     {
+    // add new
+    for (newIdx = 0;
+         (thisNewPersonality = (OSDictionary *) newPersonalities->getObject(newIdx));
+         newIdx++)
+    {
+         if (OSDynamicCast(OSDictionary, thisNewPersonality) == NULL) {
+             /* skip thisNewPersonality if it is not an OSDictionary */
+             continue;
+         }
+
          OSKext::uniquePersonalityProperties(thisNewPersonality);
          addPersonality(thisNewPersonality);
          matchSet->setObject(thisNewPersonality);
-     }
+    }
 
    /* Finally, start device matching on all new & removed personalities.
     */
@@ -910,15 +920,3 @@ bool IOCatalogue::serializeData(IOOptionBits kind, OSSerialize * s) const
 * These functions are no longer used are necessary for C++ binary
 * compatibility on i386.
 **********************************************************************/
-#if __i386__
-
-bool IOCatalogue::recordStartupExtensions(void)
-{  return false;  }
-
-bool IOCatalogue::addExtensionsFromArchive(OSData * mkext)
-{  return KERN_NOT_SUPPORTED;  }
-
-kern_return_t IOCatalogue::removeKernelLinker(void)
-{  return KERN_NOT_SUPPORTED;  }
-
-#endif /* __i386__ */

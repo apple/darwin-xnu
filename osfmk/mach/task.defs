@@ -242,8 +242,7 @@ routine	task_swap_exception_ports(
 	  out	old_flavors	: exception_flavor_array_t, SameCount);
 
 /*
- * Create and destroy lock_set and semaphore synchronizers on a
- * per-task basis (i.e. the task owns them).
+ * OBSOLETE interface.
  */
 routine lock_set_create(
 		task		: task_t;
@@ -251,9 +250,17 @@ routine lock_set_create(
 		n_ulocks	: int;
 		policy		: int);
 
+/*
+ * OBSOLETE interface.
+ */
 routine lock_set_destroy(
 		task		: task_t;
 		lock_set	: lock_set_t);
+
+/*
+ * Create and destroy semaphore synchronizers on a
+ * per-task basis (i.e. the task owns them).
+ */
 
 routine semaphore_create(
 		task		: task_t;
@@ -410,4 +417,23 @@ routine	task_set_state(
 		flavor		: thread_state_flavor_t;
 		new_state	: thread_state_t);
 
+/*
+ * Change the task's physical footprint limit (in MB).
+ */
+routine task_set_phys_footprint_limit(
+		task		: task_t;
+		new_limit	: int;
+	out old_limit	: int);
+
 /* vim: set ft=c : */
+
+routine task_suspend2(
+		target_task : task_t;
+	out suspend_token : task_suspension_token_t);
+
+routine task_resume2(
+		suspend_token : task_suspension_token_t);
+
+routine task_purgable_info(
+		task 		: task_t;
+	out	stats		: task_purgable_info_t);

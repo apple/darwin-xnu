@@ -1,6 +1,6 @@
 #!/usr/bin/perl
 #
-# Copyright (c) 2006 Apple Computer, Inc. All rights reserved.
+# Copyright (c) 2006-2012 Apple Inc. All rights reserved.
 #
 # @APPLE_OSREFERENCE_LICENSE_HEADER_START@
 # 
@@ -23,7 +23,7 @@
 #
 ##########################################################################
 #
-# % create-syscalls.pl syscalls.master custom-directory out-directory
+# % create-syscalls.pl syscalls.master custom-directory platforms-directory platform-name out-directory
 #
 # This script fills the the out-directory with a Makefile.inc and *.s
 # files to create the double-underbar syscall stubs.  It reads the
@@ -61,7 +61,9 @@ my $OutDir;
 # size in bytes of known types (only used for i386)
 my %TypeBytes = (
     'au_asid_t'		=> 4,
+    'associd_t'		=> 4,
     'caddr_t'		=> 4,
+    'connid_t'		=> 4,
     'gid_t'		=> 4,
     'id_t'		=> 4,
     'idtype_t'		=> 4,
@@ -89,6 +91,7 @@ my %TypeBytes = (
     'user_size_t'	=> 4,
     'user_ssize_t'	=> 4,
     'user_ulong_t'	=> 4,
+    'uuid_t'		=> 4,
 );
 
 # Moving towards storing all data in this hash, then we always know
@@ -130,14 +133,15 @@ my %Symbols = (
 # cancellable version of cerror.
 my @Cancelable = qw/
 	accept access aio_suspend
-	close connect
+	close connect connectx
+	disconnectx
 	fcntl fdatasync fpathconf fstat fsync
 	getlogin
 	ioctl
 	link lseek lstat
 	msgrcv msgsnd msync
 	open
-	pathconf poll posix_spawn pread pwrite
+	pathconf peeloff poll posix_spawn pread pwrite
 	read readv recvfrom recvmsg rename
 	__semwait_signal __sigwait
 	select sem_wait semop sendmsg sendto sigsuspend stat symlink sync
@@ -146,7 +150,7 @@ my @Cancelable = qw/
 /;
 
 sub usage {
-    die "Usage: $MyName syscalls.master custom-directory platforms-directory out-directory\n";
+    die "Usage: $MyName syscalls.master custom-directory platforms-directory platform-name out-directory\n";
 }
 
 ##########################################################################
@@ -323,6 +327,9 @@ sub writeStubForSymbol {
     print $f "#define __SYSCALL_32BIT_ARG_BYTES $$symbol{bytes}\n";
     print $f "#include \"SYS.h\"\n\n";
     if (scalar(@conditions)) {
+        printf $f "#ifndef SYS_%s\n", $$symbol{syscall};
+        printf $f "#error \"SYS_%s not defined. The header files libsyscall is building against do not match syscalls.master.\"\n", $$symbol{syscall};
+        printf $f "#endif\n\n";    
         my $nc = ($is_cancel{$$symbol{syscall}} ? "cerror" : "cerror_nocancel");
         printf $f "#if " . join(" || ", @conditions) . "\n";
         printf $f "__SYSCALL2(%s, %s, %d, %s)\n", $$symbol{asm_sym}, $$symbol{syscall}, $$symbol{nargs}, $nc;

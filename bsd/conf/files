@@ -50,11 +50,6 @@ OPTIONS/kernobjc			optional kernobjc
 OPTIONS/kernremote			optional kernremote
 OPTIONS/uxpr				optional uxpr
 OPTIONS/kernel_stack			optional kernel_stack
-OPTIONS/norma_ipc			optional norma_ipc
-OPTIONS/norma_device			optional norma_device
-OPTIONS/norma_vm			optional norma_vm
-OPTIONS/norma_task			optional norma_task
-OPTIONS/norma_ether			optional norma_ether
 OPTIONS/new_vm_code			optional new_vm_code
 OPTIONS/old_vm_code			optional old_vm_code
 OPTIONS/compat_43			optional compat_43
@@ -70,6 +65,9 @@ OPTIONS/sysv_sem			optional sysv_sem
 OPTIONS/sysv_msg			optional sysv_msg
 OPTIONS/sysv_shm			optional sysv_shm
 OPTIONS/no_bsd_inlines		optional no_bsd_inlines
+OPTIONS/importance_inheritance		optional importance_inheritance
+OPTIONS/importance_debug		optional importance_debug
+OPTIONS/in_kernel_tests			optional config_in_kernel_tests
 
 #
 # Network options
@@ -77,28 +75,14 @@ OPTIONS/no_bsd_inlines		optional no_bsd_inlines
 OPTIONS/networking			optional networking
 OPTIONS/inet				optional inet
 OPTIONS/inet6				optional inet6
+OPTIONS/ipv6send			optional ipv6send
 OPTIONS/ether				optional ether
-OPTIONS/multicast			optional multicast
 OPTIONS/mrouting			optional mrouting
-OPTIONS/routing				optional routing
-OPTIONS/eon				optional eon
-OPTIONS/tpip				optional tpip
-OPTIONS/ns				optional ns
-OPTIONS/iso				optional iso
-OPTIONS/tuba				optional tuba
-OPTIONS/gateway				optional gateway
-OPTIONS/ipx				optional ipx
-OPTIONS/tun				optional tun
 OPTIONS/vlan				optional vlan
 OPTIONS/bond				optional bond
 OPTIONS/bpfilter			optional bpfilter
-OPTIONS/sl					optional sl
-OPTIONS/ppp					optional ppp
-OPTIONS/sppp				optional sppp
-OPTIONS/ppp_deflate			optional ppp_deflate zlib
-OPTIONS/disc				optional disc
-OPTIONS/fddi				optional fddi
-
+OPTIONS/multipath			optional multipath
+OPTIONS/mptcp				optional mptcp
 OPTIONS/ipdivert			optional ipdivert
 OPTIONS/dummynet			optional dummynet
 OPTIONS/ipfw2				optional ipfw2
@@ -108,9 +92,7 @@ OPTIONS/tcpdebug			optional tcpdebug
 OPTIONS/if_bridge			optional if_bridge
 OPTIONS/bridgestp			optional bridgestp if_bridge
 OPTIONS/gif					optional gif
-OPTIONS/netat				optional netat
 OPTIONS/sendfile			optional sendfile
-OPTIONS/randomipid			optional randomipid
 OPTIONS/pf				optional pf
 OPTIONS/pflog				optional pflog pf
 OPTIONS/pf_altq				optional pf_altq pf
@@ -142,6 +124,45 @@ OPTIONS/hfs_compression		optional hfs_compression
 
 OPTIONS/config_imageboot              optional config_imageboot
 
+bsd/nfs/nfs4_subs.c			optional nfsclient
+bsd/nfs/nfs4_vnops.c			optional nfsclient
+bsd/nfs/krpc_subr.c			optional nfsclient
+bsd/nfs/nfs_bio.c			optional nfsclient
+bsd/nfs/nfs_boot.c			optional nfsclient
+bsd/nfs/nfs_gss.c			optional nfsclient
+bsd/nfs/nfs_gss.c			optional nfsserver
+bsd/nfs/nfs_gss_crypto.c		optional nfsclient
+bsd/nfs/nfs_gss_crypto.c		optional nfsserver
+bsd/nfs/nfs_lock.c			optional nfsclient
+bsd/nfs/nfs_node.c			optional nfsclient
+bsd/nfs/nfs_serv.c			optional nfsserver
+bsd/nfs/nfs_socket.c			optional nfsclient
+bsd/nfs/nfs_socket.c			optional nfsserver
+bsd/nfs/nfs_srvcache.c			optional nfsserver
+bsd/nfs/nfs_subs.c			optional nfsclient
+bsd/nfs/nfs_subs.c			optional nfsserver
+bsd/nfs/nfs_syscalls.c			optional nfsclient
+bsd/nfs/nfs_syscalls.c			optional nfsserver
+bsd/nfs/nfs_vfsops.c			optional nfsclient
+bsd/nfs/nfs_vnops.c			optional nfsclient
+bsd/nfs/nfs_upcall.c			optional nfsserver
+
+bsd/kern/netboot.c			optional nfsclient
+
+bsd/dev/dtrace/dtrace.c			optional config_dtrace
+bsd/dev/dtrace/lockstat.c		optional config_dtrace
+bsd/dev/dtrace/dtrace_ptss.c		optional config_dtrace
+bsd/dev/dtrace/dtrace_subr.c		optional config_dtrace
+bsd/dev/dtrace/dtrace_glue.c		standard
+bsd/dev/dtrace/dtrace_alloc.c		optional config_dtrace
+bsd/dev/dtrace/blist.c			optional config_dtrace
+bsd/dev/dtrace/fbt.c			optional config_dtrace
+bsd/dev/dtrace/sdt.c			optional config_dtrace
+bsd/dev/dtrace/sdt_subr.c		optional config_dtrace
+bsd/dev/dtrace/systrace.c		optional config_dtrace
+bsd/dev/dtrace/profile_prvd.c		optional config_dtrace
+bsd/dev/dtrace/fasttrap.c		optional config_dtrace
+
 bsd/dev/random/randomdev.c							standard
 bsd/dev/random/fips_sha1.c		standard
 bsd/dev/random/YarrowCoreLib/port/smf.c				standard
@@ -151,7 +172,7 @@ bsd/dev/random/YarrowCoreLib/src/sha1mod.c			standard
 bsd/dev/random/YarrowCoreLib/src/yarrowUtils.c		standard
 
 bsd/dev/memdev.c			standard
-
+bsd/dev/munge.c 			standard
 bsd/dev/unix_startup.c			standard
 
 bsd/dev/vn/vn.c				optional vndevice
@@ -162,8 +183,8 @@ bsd/libkern/random.c			standard
 bsd/libkern/scanc.c			standard
 bsd/libkern/skpc.c			standard
 bsd/libkern/strsep.c			standard
-bsd/libkern/inet_ntop.c			standard
 bsd/libkern/bcd.c			standard
+bsd/libkern/memchr.c			standard
 
 bsd/vfs/vfs_attrlist.c			standard
 bsd/vfs/vfs_bio.c			standard
@@ -194,30 +215,30 @@ bsd/miscfs/devfs/devfs_tree.c		optional devfs
 bsd/miscfs/devfs/devfs_vnops.c		optional devfs
 bsd/miscfs/devfs/devfs_vfsops.c		optional devfs
 
+bsd/miscfs/mockfs/mockfs_fsnode.c	optional mockfs
+bsd/miscfs/mockfs/mockfs_vfsops.c	optional mockfs
+bsd/miscfs/mockfs/mockfs_vnops.c	optional mockfs
+
 bsd/kern/decmpfs.c			standard
 
+bsd/net/net_stubs.c			standard
 bsd/net/bpf.c				optional bpfilter
 bsd/net/bpf_filter.c			optional bpfilter
 bsd/net/if_bridge.c			optional if_bridge
 bsd/net/bridgestp.c			optional bridgestp
-bsd/net/bsd_comp.c			optional ppp_bsdcomp
 bsd/net/if.c				optional networking
 bsd/net/init.c				optional sockets
 bsd/net/dlil.c				optional networking
 bsd/net/ether_if_module.c		optional ether
-bsd/net/ether_at_pr_module.c		optional ether netat
 bsd/net/ether_inet_pr_module.c		optional ether inet
 bsd/net/ether_inet6_pr_module.c		optional ether inet6
 bsd/net/if_loop.c			optional loop
 bsd/net/if_mib.c			optional networking
-bsd/net/if_sl.c				optional sl
-bsd/net/if_tun.c			optional tun
 bsd/net/if_vlan.c			optional vlan
 bsd/net/multicast_list.c		optional networking
 bsd/net/if_bond.c			optional bond
 bsd/net/devtimer.c			optional bond
 bsd/net/ndrv.c				optional networking
-bsd/net/ppp_deflate.c			optional ppp_deflate
 bsd/net/radix.c				optional networking
 bsd/net/raw_cb.c			optional networking
 bsd/net/raw_usrreq.c			optional networking
@@ -225,18 +246,17 @@ bsd/net/route.c				optional networking
 bsd/net/rtsock.c			optional networking
 bsd/net/netsrc.c			optional networking
 bsd/net/ntstat.c			optional networking
-bsd/net/slcompress.c			optional ppp
-bsd/net/slcompress.c			optional sl
 bsd/net/if_gif.c          		optional gif
 bsd/net/if_stf.c          		optional stf
-bsd/net/net_osdep.c			optional sockets
 bsd/net/kpi_interface.c		optional networking
 bsd/net/kpi_protocol.c		optional networking
 bsd/net/kpi_interfacefilter.c	optional networking
 bsd/net/net_str_id.c			optional networking
 bsd/net/if_utun.c          		optional networking
 bsd/net/if_utun_crypto.c		optional networking
+bsd/net/if_utun_crypto_dtls.c		optional networking
 bsd/net/if_utun_crypto_ipsec.c		optional networking
+bsd/net/if_ipsec.c          		optional ipsec
 bsd/net/if_pflog.c			optional pflog
 bsd/net/pf.c				optional pf
 bsd/net/pf_if.c				optional pf
@@ -246,8 +266,10 @@ bsd/net/pf_osfp.c			optional pf
 bsd/net/pf_ruleset.c			optional pf
 bsd/net/pf_table.c			optional pf
 bsd/net/iptap.c				optional networking
+bsd/net/pktap.c				optional networking
 bsd/net/if_llreach.c          		optional networking
 bsd/net/flowhash.c			optional networking
+bsd/net/flowadv.c			optional networking
 
 bsd/net/classq/classq.c			optional networking
 bsd/net/classq/classq_blue.c		optional classq_blue
@@ -289,7 +311,7 @@ bsd/netinet/ip_dummynet.c  		optional dummynet
 bsd/netinet/ip_fw2.c			optional ipfw2
 bsd/netinet/ip_fw2_compat.c		optional ipfw2
 bsd/netinet/ip_icmp.c			optional inet
-bsd/netinet/ip_id.c				optional randomipid inet
+bsd/netinet/ip_id.c			optional inet
 bsd/netinet/ip_input.c			optional inet
 bsd/netinet/ip_mroute.c			optional mrouting
 bsd/netinet/ip_output.c			optional inet
@@ -309,6 +331,14 @@ bsd/netinet/in_gif.c      		optional gif inet
 bsd/netinet/ip_ecn.c          		optional inet
 bsd/netinet/ip_encap.c         		optional inet 
 bsd/netinet/kpi_ipfilter.c		optional inet
+bsd/netinet/flow_divert.c		optional flow_divert
+bsd/netinet/mp_proto.c			optional multipath
+bsd/netinet/mp_pcb.c			optional multipath
+bsd/netinet/mptcp.c			optional mptcp
+bsd/netinet/mptcp_subr.c		optional mptcp
+bsd/netinet/mptcp_usrreq.c		optional mptcp
+bsd/netinet/mptcp_opt.c			optional mptcp
+bsd/netinet/mptcp_timer.c		optional mptcp
 bsd/netinet6/ah_core.c      		optional ipsec
 bsd/netinet6/ah_input.c     		optional ipsec
 bsd/netinet6/ah_output.c   		optional ipsec
@@ -321,6 +351,7 @@ bsd/netinet6/dest6.c        		optional inet6
 bsd/netinet6/frag6.c        		optional inet6
 bsd/netinet6/icmp6.c        		optional inet6
 bsd/netinet6/in6.c          		optional inet6
+bsd/netinet6/in6_cga.c			optional inet6 ipv6send
 bsd/netinet6/in6_cksum.c    		optional inet6
 bsd/netinet6/in6_gif.c      		optional gif inet6
 bsd/netinet6/ip6_fw.c      		    optional inet6 ipfw2
@@ -342,6 +373,7 @@ bsd/netinet6/nd6.c          		optional inet6
 bsd/netinet6/nd6_nbr.c      		optional inet6
 bsd/netinet6/nd6_prproxy.c     		optional inet6
 bsd/netinet6/nd6_rtr.c      		optional inet6
+bsd/netinet6/nd6_send.c			optional inet6 ipv6send
 bsd/netinet6/raw_ip6.c      		optional inet6
 bsd/netinet6/route6.c       		optional inet6
 bsd/netinet6/scope6.c       		optional inet6
@@ -370,98 +402,14 @@ bsd/crypto/rc4/rc4.c              	optional crypto
 #bsd/netpm/pm_route.c      optional pm
 #bsd/netpm/pm_usrreq.c     optional pm
 
-
-bsd/netat/at.c				optional netat
-bsd/netat/at_proto.c			optional netat
-bsd/netat/at_pcb.c			optional netat
-bsd/netat/ddp_usrreq.c			optional netat
-bsd/netat/atp_alloc.c			optional netat
-bsd/netat/atp_misc.c			optional netat
-bsd/netat/atp_open.c			optional netat
-bsd/netat/atp_read.c			optional netat
-bsd/netat/atp_write.c			optional netat
-bsd/netat/asp_proto.c			optional netat
-bsd/netat/ddp_aep.c			optional netat
-bsd/netat/ddp.c				optional netat
-bsd/netat/ddp_brt.c			optional netat
-bsd/netat/ddp_proto.c			optional netat
-bsd/netat/ddp_nbp.c			optional netat
-bsd/netat/ddp_rtmp.c			optional netat
-bsd/netat/ddp_sip.c			optional netat
-bsd/netat/ddp_rtmptable.c		optional netat
-bsd/netat/ddp_r_rtmp.c			optional netat
-bsd/netat/ddp_r_zip.c			optional netat
-bsd/netat/ddp_aarp.c			optional netat
-bsd/netat/ddp_lap.c			optional netat
-bsd/netat/adsp_CLDeny.c			optional netat
-bsd/netat/adsp_Read.c			optional netat
-bsd/netat/adsp_Timer.c			optional netat
-bsd/netat/adsp_attention.c		optional netat
-bsd/netat/adsp_CLListen.c		optional netat
-bsd/netat/adsp_NewCID.c			optional netat
-bsd/netat/adsp_TimerElem.c		optional netat
-bsd/netat/adsp_reset.c			optional netat
-bsd/netat/adsp_Close.c			optional netat
-bsd/netat/adsp_Open.c			optional netat
-bsd/netat/adsp_RxAttn.c			optional netat
-bsd/netat/adsp_Write.c			optional netat
-bsd/netat/adsp_Control.c		optional netat
-bsd/netat/adsp_RxData.c			optional netat
-bsd/netat/adsp.c			optional netat
-bsd/netat/adsp_Init.c			optional netat
-bsd/netat/adsp_Options.c		optional netat
-bsd/netat/adsp_stream.c			optional netat
-bsd/netat/adsp_InitGlobals.c		optional netat
-bsd/netat/adsp_Packet.c			optional netat
-bsd/netat/adsp_Status.c			optional netat
-bsd/netat/adsp_misc.c			optional netat
-bsd/netat/sys_glue.c			optional netat
-bsd/netat/sys_dep.c			optional netat
-bsd/netat/drv_dep.c			optional netat
-bsd/netat/aurp_aurpd.c			optional netat
-bsd/netat/aurp_cfg.c			optional netat
-bsd/netat/aurp_gdata.c			optional netat
-bsd/netat/aurp_misc.c			optional netat
-bsd/netat/aurp_open.c			optional netat
-bsd/netat/aurp_rd.c			optional netat
-bsd/netat/aurp_ri.c			optional netat
-bsd/netat/aurp_rx.c			optional netat
-bsd/netat/aurp_tickle.c			optional netat
-bsd/netat/aurp_tx.c			optional netat
-bsd/netat/aurp_zi.c			optional netat
-
-bsd/nfs/krpc_subr.c			optional nfsclient
-bsd/nfs/nfs_bio.c			optional nfsclient
-bsd/nfs/nfs_boot.c			optional nfsclient
-bsd/nfs/nfs_gss.c			optional nfsclient
-bsd/nfs/nfs_gss.c			optional nfsserver
-bsd/nfs/nfs_gss_crypto.c		optional nfsclient
-bsd/nfs/nfs_gss_crypto.c		optional nfsserver
-bsd/nfs/nfs_lock.c			optional nfsclient
-bsd/nfs/nfs_node.c			optional nfsclient
-bsd/nfs/nfs_serv.c			optional nfsserver
-bsd/nfs/nfs_socket.c			optional nfsclient
-bsd/nfs/nfs_socket.c			optional nfsserver
-bsd/nfs/nfs_srvcache.c			optional nfsserver
-bsd/nfs/nfs_subs.c			optional nfsclient
-bsd/nfs/nfs_subs.c			optional nfsserver
-bsd/nfs/nfs_syscalls.c			optional nfsclient
-bsd/nfs/nfs_syscalls.c			optional nfsserver
-bsd/nfs/nfs_vfsops.c			optional nfsclient
-bsd/nfs/nfs_vnops.c			optional nfsclient
-bsd/nfs/nfs4_subs.c			optional nfsclient
-bsd/nfs/nfs4_vnops.c			optional nfsclient
-bsd/nfs/nfs_upcall.c			optional nfsserver
-
-bsd/kern/netboot.c			optional nfsclient
-
+#Some hfs files are standard due to exported KPI if HFS is not enabled
 bsd/hfs/hfs_attrlist.c				optional hfs
 bsd/hfs/hfs_btreeio.c				optional hfs
 bsd/hfs/hfs_catalog.c				optional hfs
 bsd/hfs/hfs_chash.c				optional hfs
 bsd/hfs/hfs_cnode.c				optional hfs
-bsd/hfs/hfs_encodinghint.c			optional hfs
-bsd/hfs/hfs_encodings.c				optional hfs
+bsd/hfs/hfs_encodinghint.c			standard
+bsd/hfs/hfs_encodings.c				standard
 bsd/hfs/hfs_endian.c				optional hfs
 bsd/hfs/hfs_hotfiles.c				optional hfs
 bsd/hfs/hfs_link.c				optional hfs
@@ -475,7 +423,7 @@ bsd/hfs/hfs_vfsutils.c				optional hfs
 bsd/hfs/hfs_vnops.c				optional hfs
 bsd/hfs/hfs_xattr.c				optional hfs
 bsd/hfs/MacOSStubs.c				optional hfs
-bsd/hfs/hfs_cprotect.c				optional hfs
+bsd/hfs/hfs_cprotect.c				standard
 bsd/hfs/rangelist.c				optional hfs
 bsd/hfs/hfscommon/BTree/BTree.c			optional hfs
 bsd/hfs/hfscommon/BTree/BTreeAllocate.c		optional hfs
@@ -489,8 +437,7 @@ bsd/hfs/hfscommon/Catalog/FileIDsServices.c	optional hfs
 bsd/hfs/hfscommon/Misc/BTreeWrapper.c		optional hfs
 bsd/hfs/hfscommon/Misc/FileExtentMapping.c	optional hfs
 bsd/hfs/hfscommon/Misc/VolumeAllocation.c	optional hfs
-bsd/hfs/hfscommon/Misc/HybridAllocator.c	optional hfs
-bsd/hfs/hfscommon/Unicode/UnicodeWrappers.c	optional hfs
+bsd/hfs/hfscommon/Unicode/UnicodeWrappers.c	standard
 
 bsd/security/audit/audit.c			optional config_audit	
 bsd/security/audit/audit_arg.c			optional config_audit
@@ -518,14 +465,17 @@ bsd/kern/kern_authorization.c	standard
 bsd/kern/kern_clock.c			standard
 bsd/kern/kern_core.c			standard
 bsd/kern/kern_credential.c		standard
+bsd/kern/kern_cs.c			standard
 bsd/kern/kern_symfile.c			standard
 bsd/kern/kern_descrip.c			standard
+bsd/kern/kern_guarded.c			standard
 bsd/kern/kern_event.c			standard
 bsd/kern/kern_control.c			optional networking
 bsd/kern/kern_exec.c			standard
 bsd/kern/kern_exit.c			standard
 bsd/kern/kern_lockf.c			standard
 bsd/kern/kern_fork.c			standard
+bsd/kern/kern_asl.c			standard
 bsd/kern/kern_malloc.c			standard
 bsd/kern/kern_mman.c			standard
 bsd/kern/kern_physio.c			standard
@@ -585,16 +535,17 @@ bsd/kern/posix_shm.c			standard
 bsd/kern/qsort.c				standard
 bsd/kern/kpi_socket.c			optional sockets
 bsd/kern/kpi_socketfilter.c		optional sockets
-bsd/kern/pthread_support.c		optional psynch
-bsd/kern/pthread_synch.c		standard
+bsd/kern/pthread_shims.c		standard
 bsd/kern/proc_info.c			standard
 bsd/kern/process_policy.c		standard
+bsd/kern/kern_overrides.c 		standard
 bsd/kern/vm_pressure.c			optional vm_pressure_events
 bsd/kern/socket_info.c			optional sockets
 
 bsd/vm/vnode_pager.c			standard
 bsd/vm/vm_unix.c				standard
 bsd/vm/dp_backing_file.c		standard
+bsd/vm/vm_compressor_backing_file.c	standard
 
 bsd/uxkern/ux_exception.c		standard
 
@@ -604,23 +555,12 @@ bsd/conf/param.c			standard
 bsd/dev/chud/chud_bsd_callback.c	standard
 bsd/dev/chud/chud_process.c		standard
 
-
-
-bsd/dev/dtrace/dtrace.c			optional config_dtrace
-bsd/dev/dtrace/lockstat.c		optional config_dtrace
-bsd/dev/dtrace/dtrace_ptss.c		optional config_dtrace
-bsd/dev/dtrace/dtrace_subr.c		optional config_dtrace
-bsd/dev/dtrace/dtrace_glue.c		standard
-bsd/dev/dtrace/dtrace_alloc.c		optional config_dtrace
-bsd/dev/dtrace/blist.c			optional config_dtrace
-bsd/dev/dtrace/fbt.c			optional config_dtrace
-bsd/dev/dtrace/sdt.c			optional config_dtrace
-bsd/dev/dtrace/sdt_subr.c		optional config_dtrace
-bsd/dev/dtrace/systrace.c		optional config_dtrace
-bsd/dev/dtrace/profile_prvd.c		optional config_dtrace
-bsd/dev/dtrace/fasttrap.c		optional config_dtrace
-
-bsd/kern/imageboot.c                  optional config_imageboot
+bsd/kern/imageboot.c			optional config_imageboot
 
 osfmk/kperf/kperfbsd.c			optional kperf
+bsd/kern/kern_kpc.c			optional kpc
+
+bsd/kern/kern_tests.c			optional config_in_kernel_tests
+
+bsd/kern/proc_uuid_policy.c		optional config_proc_uuid_policy
 

@@ -64,7 +64,7 @@ typedef enum my_policy_type { MY_POLICY_REALTIME, MY_POLICY_TIMESHARE, MY_POLICY
 /* Declarations */
 void* 			child_thread_func(void *arg);
 void			print_usage();
-int			thread_setup();
+int			thread_setup(int my_id);
 my_policy_type_t	parse_thread_policy(const char *str);
 int			thread_finish_iteration();
 
@@ -79,6 +79,7 @@ uint64_t 		*g_thread_endtimes_abs;
 volatile int32_t 	g_done_threads;
 boolean_t		g_do_spin = FALSE;
 boolean_t		g_verbose = FALSE;
+boolean_t		g_do_affinity = FALSE;
 uint64_t	 	g_starttime_abs;
 #if MIMIC_DIGI_LEAD_TIME
 int			g_long_spinid;
@@ -144,7 +145,7 @@ parse_wakeup_pattern(const char *str)
  * Set policy
  */
 int
-thread_setup()
+thread_setup(int my_id)
 {
 	int res;
 
@@ -181,6 +182,15 @@ thread_setup()
 			printf("invalid policy type\n");
 			return 1;
 		}
+	}
+
+	if (g_do_affinity) {
+		thread_affinity_policy_data_t affinity;
+
+		affinity.affinity_tag = my_id % 2;
+
+		res = thread_policy_set(mach_thread_self(), THREAD_AFFINITY_POLICY, (thread_policy_t)&affinity, THREAD_AFFINITY_POLICY_COUNT);
+		assert(res == 0, fail);
 	}
 
 	return 0;
@@ -230,12 +240,14 @@ thread_finish_iteration(int id)
 		debug_log("Thread %p signalling main thread.\n", pthread_self());
 		res = semaphore_signal(g_main_sem);
 	} else {
+#ifndef MIMIC_DIGI_LEAD_TIME
 		if (g_do_spin) {
 			while (g_done_threads < g_numthreads) {
 				y = y + 1.5 + x;
 				x = sqrt(y);
 			}
 		}
+#endif
 	}
 
 	return res;
@@ -254,7 +266,7 @@ child_thread_func(void *arg)
 	int32_t new;
 
 	/* Set policy and so forth */
-	thread_setup();
+	thread_setup(my_id);
 
 	/* Tell main thread when everyone has set up */
 	new = OSAtomicIncrement32(&g_done_threads);
@@ -351,7 +363,7 @@ fail:
 void
 print_usage()
 {
-	printf("Usage: zn <num threads> <chain | broadcast-single-sem | broadcast-per-thread> <realtime | timeshare | fixed> <num iterations> [-trace  <traceworthy latency in ns>] [-spin] [-verbose]\n");
+	printf("Usage: zn <num threads> <chain | broadcast-single-sem | broadcast-per-thread> <realtime | timeshare | fixed> <num iterations> [-trace  <traceworthy latency in ns>] [-spin] [-affinity] [-verbose]\n");
 }
 
 /*
@@ -430,6 +442,8 @@ main(int argc, char **argv)
 		} else if ((strcmp(argv[i], "-trace") == 0) && 
 				(i < (argc - 1))) {
 			traceworthy_latency_ns = strtoull(argv[++i], NULL, 10);
+		} else if (strcmp(argv[i], "-affinity") == 0) {
+			g_do_affinity = TRUE;
 		} else {
 			print_usage();
 			goto fail;

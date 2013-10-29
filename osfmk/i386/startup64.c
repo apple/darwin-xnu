@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2006 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2006-2012 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -65,135 +65,13 @@
 
 #include <i386/postcode.h>
 
-#ifdef __i386__
-void
-cpu_IA32e_enable(cpu_data_t *cdp)
-{
-	assert(!ml_get_interrupts_enabled());
-
-	if (!cdp->cpu_is64bit ||
-	    (rdmsr64(MSR_IA32_EFER) & MSR_IA32_EFER_LMA) != 0)
-		return;
-
-	postcode(CPU_IA32_ENABLE_ENTRY);
-
-	/* 
-	 * The following steps are performed by inlines so that
-	 * we can be assured we don't use the stack or any other
-	 * non-identity mapped data while paging is turned off...
-	 */
-	/* Turn paging off */
-	asm volatile(
-		"mov	%%cr0, %%eax	\n\t"
-		"andl	%0, %%eax	\n\t"
-		"mov	%%eax, %%cr0	\n\t"
-		:
-		: "i" (~CR0_PG)
-		: "eax" );
-
-	/* Pop new top level phys pg addr into CR3 */
-	asm volatile(
-		"mov	%%eax, %%cr3	\n\t"
-		:
-		: "a" ((uint32_t) kernel64_cr3));
-
-	/* Turn on the 64-bit mode bit */
-	asm volatile(
-		"rdmsr			\n\t"
-		"orl	%1, %%eax	\n\t"
-		"wrmsr			\n\t"
-		:
-		: "c" (MSR_IA32_EFER), "i" (MSR_IA32_EFER_LME)
-		: "eax", "edx");
-
-	/* Turn paging on again */
-	asm volatile(
-		"mov	%%cr0, %%eax	\n\t"
-		"orl	%0, %%eax	\n\t"
-		"mov	%%eax, %%cr0	\n\t"
-		:
-		: "i" (CR0_PG)
-		: "eax" );
-	
-#if ONLY_SAFE_FOR_LINDA_SERIAL
-	kprintf("cpu_IA32e_enable(%p)\n", cdp);
-#endif
-
-	if ((rdmsr64(MSR_IA32_EFER) & MSR_IA32_EFER_LMA) == 0)
-		panic("cpu_IA32e_enable() MSR_IA32_EFER_LMA not asserted");
-
-	cdp->cpu_kernel_cr3 = kernel64_cr3;
-
-	postcode(CPU_IA32_ENABLE_EXIT);
-}
-
-void
-cpu_IA32e_disable(cpu_data_t *cdp)
-{
-	assert(!ml_get_interrupts_enabled());
-
-	postcode(CPU_IA32_DISABLE_ENTRY);
-
-	if (!cdp->cpu_is64bit ||
-	    (rdmsr64(MSR_IA32_EFER) & MSR_IA32_EFER_LMA) == 0)
-		return;
-
-	/* 
-	 * The following steps are performed by inlines so that
-	 * we can be assured we don't use the stack or any other
-	 * non-identity mapped data while paging is turned off...
-	 */
-	/* Turn paging off */
-	asm volatile(
-		"mov	%%cr0, %%eax	\n\t"
-		"andl	%0, %%eax	\n\t"
-		"mov	%%eax, %%cr0	\n\t"
-		:
-		: "i" (~CR0_PG)
-		: "eax" );
-
-	/* Pop legacy top level phys pg addr into CR3 */
-	asm volatile(
-		"mov	%%eax, %%cr3	\n\t"
-		:
-		: "a" ((uint32_t) lo_kernel_cr3));
-
-	/* Turn off the 64-bit mode bit */
-	asm volatile(
-		"rdmsr			\n\t"
-		"andl	%1, %%eax	\n\t"
-		"wrmsr			\n\t"
-		:
-		: "c" (MSR_IA32_EFER), "i" (~MSR_IA32_EFER_LME)
-		: "eax", "edx");
-
-	/* Turn paging on again */
-	asm volatile(
-		"mov	%%cr0, %%eax	\n\t"
-		"orl	%0, %%eax	\n\t"
-		"mov	%%eax, %%cr0	\n\t"
-		:
-		: "i" (CR0_PG)
-		: "eax" );
-	
-	kprintf("cpu_IA32e_disable(%p)\n", cdp);
-
-	if ((rdmsr64(MSR_IA32_EFER) & MSR_IA32_EFER_LMA) != 0)
-		panic("cpu_IA32e_disable() MSR_IA32_EFER_LMA not cleared");
-
-	cdp->cpu_kernel_cr3 = 0ULL;
-
-	postcode(CPU_IA32_DISABLE_EXIT);
-}
-#endif
-
 #if DEBUG
 extern void dump_regs64(void);
 extern void dump_gdt(void *);
 extern void dump_ldt(void *);
 extern void dump_idt(void *);
 extern void dump_tss(void *);
-extern void dump_frame32(x86_saved_state_compat32_t *scp);
+extern void dump_frame32(x86_saved_state32_t *sp);
 extern void dump_frame64(x86_saved_state64_t *sp);
 extern void dump_frame(x86_saved_state_t *sp);
 
@@ -201,7 +79,7 @@ void
 dump_frame(x86_saved_state_t *sp)
 {
 	if (is_saved_state32(sp))
-		dump_frame32((x86_saved_state_compat32_t *) sp);
+		dump_frame32(&sp->ss_32);
 	else if (is_saved_state64(sp))
 		dump_frame64(&sp->ss_64);
 	else
@@ -209,44 +87,36 @@ dump_frame(x86_saved_state_t *sp)
 }
 
 void
-dump_frame32(x86_saved_state_compat32_t *scp)
+dump_frame32(x86_saved_state32_t *sp)
 {
 	unsigned int	i;
-	uint32_t	*ip = (uint32_t *) scp;
+	uint32_t	*ip = (uint32_t *) sp;
 
-	kprintf("dump_frame32(%p):\n", scp);
+	kprintf("dump_frame32(%p):\n", sp);
 	
 	for (i = 0;
-	     i < sizeof(x86_saved_state_compat32_t)/sizeof(uint32_t);
+	     i < sizeof(x86_saved_state32_t)/sizeof(uint32_t);
 	     i++, ip++)
 		kprintf("%p: 0x%08x\n", ip, *ip);
 
-	kprintf("scp->isf64.err:    0x%016llx\n", scp->isf64.err);
-	kprintf("scp->isf64.rip:    0x%016llx\n", scp->isf64.rip);
-	kprintf("scp->isf64.cs:     0x%016llx\n", scp->isf64.cs);
-	kprintf("scp->isf64.rflags: 0x%016llx\n", scp->isf64.rflags);
-	kprintf("scp->isf64.rsp:    0x%016llx\n", scp->isf64.rsp);
-	kprintf("scp->isf64.ss:     0x%016llx\n", scp->isf64.ss);
-
-	kprintf("scp->iss32.tag:    0x%08x\n", scp->iss32.tag);
-	kprintf("scp->iss32.state.gs:     0x%08x\n", scp->iss32.state.gs);
-	kprintf("scp->iss32.state.fs:     0x%08x\n", scp->iss32.state.fs);
-	kprintf("scp->iss32.state.es:     0x%08x\n", scp->iss32.state.es);
-	kprintf("scp->iss32.state.ds:     0x%08x\n", scp->iss32.state.ds);
-	kprintf("scp->iss32.state.edi:    0x%08x\n", scp->iss32.state.edi);
-	kprintf("scp->iss32.state.esi:    0x%08x\n", scp->iss32.state.esi);
-	kprintf("scp->iss32.state.ebp:    0x%08x\n", scp->iss32.state.ebp);
-	kprintf("scp->iss32.state.cr2:    0x%08x\n", scp->iss32.state.cr2);
-	kprintf("scp->iss32.state.ebx:    0x%08x\n", scp->iss32.state.ebx);
-	kprintf("scp->iss32.state.edx:    0x%08x\n", scp->iss32.state.edx);
-	kprintf("scp->iss32.state.ecx:    0x%08x\n", scp->iss32.state.ecx);
-	kprintf("scp->iss32.state.eax:    0x%08x\n", scp->iss32.state.eax);
-	kprintf("scp->iss32.state.trapno: 0x%08x\n", scp->iss32.state.eax);
-	kprintf("scp->iss32.state.eip:    0x%08x\n", scp->iss32.state.eip);
-	kprintf("scp->iss32.state.cs:     0x%08x\n", scp->iss32.state.cs);
-	kprintf("scp->iss32.state.efl:    0x%08x\n", scp->iss32.state.efl);
-	kprintf("scp->iss32.state.uesp:   0x%08x\n", scp->iss32.state.uesp);
-	kprintf("scp->iss32.state.ss:     0x%08x\n", scp->iss32.state.ss);
+	kprintf("sp->gs:     0x%08x\n", sp->gs);
+	kprintf("sp->fs:     0x%08x\n", sp->fs);
+	kprintf("sp->es:     0x%08x\n", sp->es);
+	kprintf("sp->ds:     0x%08x\n", sp->ds);
+	kprintf("sp->edi:    0x%08x\n", sp->edi);
+	kprintf("sp->esi:    0x%08x\n", sp->esi);
+	kprintf("sp->ebp:    0x%08x\n", sp->ebp);
+	kprintf("sp->cr2:    0x%08x\n", sp->cr2);
+	kprintf("sp->ebx:    0x%08x\n", sp->ebx);
+	kprintf("sp->edx:    0x%08x\n", sp->edx);
+	kprintf("sp->ecx:    0x%08x\n", sp->ecx);
+	kprintf("sp->eax:    0x%08x\n", sp->eax);
+	kprintf("sp->trapno: 0x%08x\n", sp->eax);
+	kprintf("sp->eip:    0x%08x\n", sp->eip);
+	kprintf("sp->cs:     0x%08x\n", sp->cs);
+	kprintf("sp->efl:    0x%08x\n", sp->efl);
+	kprintf("sp->uesp:   0x%08x\n", sp->uesp);
+	kprintf("sp->ss:     0x%08x\n", sp->ss);
 
 	postcode(0x99);
 }
@@ -351,7 +221,6 @@ dump_tss(void *tssp)
 	}
 }
 
-#if defined(__x86_64__)
 void dump_regs64(void)
 {
 
@@ -394,5 +263,4 @@ void dump_regs64(void)
 	KPRINT_REG(r13);
 	KPRINT_REG(r14);
 }
-#endif /* __x86_64__ */
 #endif /* DEBUG */

@@ -78,7 +78,7 @@ struct ip_flow_id {
 
 #define IS_IP6_FLOW_ID(id)      ((id)->addr_type == 6)
 
-#ifdef KERNEL
+#ifdef BSD_KERNEL_PRIVATE
 struct route_in6;
 struct sockaddr_in6;
 struct pf_rule;
@@ -127,6 +127,6 @@ struct ip_fw_args {
 #define fwa_dst fwa_dst_._fwa_dst
 #define fwa_dst6 fwa_dst_._fwa_dst6
 
-#endif /* KERNEL */
+#endif /* BSD_KERNEL_PRIVATE */
 
 #endif /* __IP_FLOWID_H__ */

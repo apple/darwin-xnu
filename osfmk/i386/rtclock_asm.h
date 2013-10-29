@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2004-2010 Apple Inc. All rights reserved.
+ * Copyright (c) 2004-2012 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -41,134 +41,6 @@
 #define _I386_RTCLOCK_H_
 
 #include <i386/pal_rtclock_asm.h>
-
-#if defined(__i386__)
-
-/*
- * Nanotime returned in %edx:%eax.
- * Computed from tsc based on the scale factor
- * and an implicit 32 bit shift.
- *
- * Uses %eax, %ebx, %ecx, %edx, %esi, %edi.
- */
-#define NANOTIME							  \
-	mov	%gs:CPU_NANOTIME,%edi					; \
-	PAL_RTC_NANOTIME_READ_FAST()
-
-
-/*
- * Add 64-bit delta in register dreg : areg to timer pointed to by register treg.
- */
-#define TIMER_UPDATE(treg,dreg,areg,offset)				       \
-	addl	(TIMER_LOW+(offset))(treg),areg		/* add low bits */   ; \
-	adcl	dreg,(TIMER_HIGH+(offset))(treg)	/* carry high bits */; \
-	movl	areg,(TIMER_LOW+(offset))(treg)		/* updated low bit */; \
-	movl	(TIMER_HIGH+(offset))(treg),dreg	/* copy high bits */ ; \
-	movl	dreg,(TIMER_HIGHCHK+(offset))(treg)	/* to high check */
-
-/*
- * Add time delta to old timer and start new.
- */
-#define TIMER_EVENT(old,new)						       \
-	NANOTIME				/* edx:eax nanosecs */       ; \
-	movl	%eax,%esi			/* save timestamp */	     ; \
-	movl	%edx,%edi			/* save timestamp */	     ; \
-	movl	%gs:CPU_ACTIVE_THREAD,%ecx	/* get current thread */     ; \
-	subl	(old##_TIMER)+TIMER_TSTAMP(%ecx),%eax   /* elapsed */	     ; \
-	sbbl	(old##_TIMER)+TIMER_TSTAMP+4(%ecx),%edx	/* time */	     ; \
-	TIMER_UPDATE(%ecx,%edx,%eax,old##_TIMER)  /* update timer */	     ; \
-	movl	%esi,(new##_TIMER)+TIMER_TSTAMP(%ecx)   /* set timestamp */  ; \
-	movl	%edi,(new##_TIMER)+TIMER_TSTAMP+4(%ecx)	 /* set timestamp */ ; \
-	leal	(new##_TIMER)(%ecx), %ecx   /* compute new timer pointer */  ; \
-	movl	%gs:CPU_PROCESSOR,%ebx		/* get current processor */  ; \
-	movl	%ecx,THREAD_TIMER(%ebx)		/* set current timer */	     ; \
-	movl	%esi,%eax			/* restore timestamp */	     ; \
-	movl	%edi,%edx			/* restore timestamp */	     ; \
-	subl	(old##_STATE)+TIMER_TSTAMP(%ebx),%eax	 /* elapsed */	     ; \
-	sbbl	(old##_STATE)+TIMER_TSTAMP+4(%ebx),%edx	 /* time */	     ; \
-	TIMER_UPDATE(%ebx,%edx,%eax,old##_STATE)/* update timer */	     ; \
-	leal	(new##_STATE)(%ebx),%ecx	/* new state pointer */      ; \
-	movl	%ecx,CURRENT_STATE(%ebx)	/* set current state */	     ; \
-	movl	%esi,TIMER_TSTAMP(%ecx)		/* set timestamp */          ; \
-	movl	%edi,TIMER_TSTAMP+4(%ecx)	/* set timestamp */
-
-/*
- * Update time on user trap entry.
- * Uses %eax,%ebx,%ecx,%edx,%esi,%edi.
- */
-#define	TIME_TRAP_UENTRY			TIMER_EVENT(USER,SYSTEM)
-
-/*
- * update time on user trap exit.
- * Uses %eax,%ebx,%ecx,%edx,%esi,%edi.
- */
-#define	TIME_TRAP_UEXIT				TIMER_EVENT(SYSTEM,USER)
-
-/*
- * update time on interrupt entry.
- * Uses %eax,%ebx,%ecx,%edx,%esi,%edi.
- * Saves processor state info on stack.
- */
-#define	TIME_INT_ENTRY							       \
-	NANOTIME				/* edx:eax nanosecs */	     ; \
-	movl	%eax,%gs:CPU_INT_EVENT_TIME	/* save in cpu data */	     ; \
-	movl	%edx,%gs:CPU_INT_EVENT_TIME+4	/* save in cpu data */	     ; \
-	movl	%eax,%esi			/* save timestamp */	     ; \
-	movl	%edx,%edi			/* save timestamp */	     ; \
-	movl	%gs:CPU_PROCESSOR,%ebx		/* get current processor */  ; \
-	movl 	THREAD_TIMER(%ebx),%ecx		/* get current timer */	     ; \
-	subl	TIMER_TSTAMP(%ecx),%eax		/* compute elapsed time */   ; \
-	sbbl	TIMER_TSTAMP+4(%ecx),%edx	/* compute elapsed time */   ; \
-	TIMER_UPDATE(%ecx,%edx,%eax,0)		/* update timer */	     ; \
-	movl	KERNEL_TIMER(%ebx),%ecx		/* point to kernel timer */  ; \
-	movl	%esi,TIMER_TSTAMP(%ecx)		/* set timestamp */	     ; \
-	movl	%edi,TIMER_TSTAMP+4(%ecx)	/* set timestamp */	     ; \
-	movl	%esi,%eax			/* restore timestamp */	     ; \
-	movl	%edi,%edx			/* restore timestamp */	     ; \
-	movl	CURRENT_STATE(%ebx),%ecx	/* get current state */	     ; \
-	pushl	%ecx				/* save state */	     ; \
-	subl	TIMER_TSTAMP(%ecx),%eax		/* compute elapsed time */   ; \
-	sbbl	TIMER_TSTAMP+4(%ecx),%edx	/* compute elapsed time */   ; \
-	TIMER_UPDATE(%ecx,%edx,%eax,0)		/* update timer */	     ; \
-	leal	IDLE_STATE(%ebx),%eax		/* get idle state */	     ; \
-	cmpl	%eax,%ecx			/* compare current state */  ; \
-	je	0f				/* skip if equal */	     ; \
-	leal	SYSTEM_STATE(%ebx),%ecx		/* get system state */	     ; \
-	movl	%ecx,CURRENT_STATE(%ebx)	/* set current state */	     ; \
-0:	movl	%esi,TIMER_TSTAMP(%ecx)		/* set timestamp */	     ; \
-	movl	%edi,TIMER_TSTAMP+4(%ecx)	/* set timestamp */
-
-/*
- * update time on interrupt exit.
- * Uses %eax,%ebx,%ecx,%edx,%esi,%edi.
- * Restores processor state info from stack.
- */
-#define	TIME_INT_EXIT							       \
-	NANOTIME				/* edx:eax nanosecs */       ; \
-	movl	%eax,%gs:CPU_INT_EVENT_TIME	/* save in cpu data */	     ; \
-	movl	%edx,%gs:CPU_INT_EVENT_TIME+4	/* save in cpu data */	     ; \
-	movl	%eax,%esi			/* save timestamp */	     ; \
-	movl	%edx,%edi			/* save timestamp */	     ; \
-	movl	%gs:CPU_PROCESSOR,%ebx		/* get current processor */  ; \
-	movl	KERNEL_TIMER(%ebx),%ecx		/* point to kernel timer */  ; \
-	subl	TIMER_TSTAMP(%ecx),%eax		/* compute elapsed time */   ; \
-	sbbl	TIMER_TSTAMP+4(%ecx),%edx	/* compute elapsed time */   ; \
-	TIMER_UPDATE(%ecx,%edx,%eax,0)		/* update timer */	     ; \
-	movl	THREAD_TIMER(%ebx),%ecx		/* interrupted timer */	     ; \
-	movl	%esi,TIMER_TSTAMP(%ecx)		/* set timestamp */	     ; \
-	movl	%edi,TIMER_TSTAMP+4(%ecx)	/* set timestamp */	     ; \
-	movl	%esi,%eax			/* restore timestamp */	     ; \
-	movl	%edi,%edx			/* restore timestamp */	     ; \
-	movl	CURRENT_STATE(%ebx),%ecx	/* get current state */	     ; \
-	subl	TIMER_TSTAMP(%ecx),%eax		/* compute elapsed time */   ; \
-	sbbl	TIMER_TSTAMP+4(%ecx),%edx	/* compute elapsed time */   ; \
-	TIMER_UPDATE(%ecx,%edx,%eax,0)		/* update timer */	     ; \
-	popl	%ecx				/* restore state */	     ; \
-	movl	%ecx,CURRENT_STATE(%ebx)	/* set current state */	     ; \
-	movl	%esi,TIMER_TSTAMP(%ecx)		/* set timestamp */	     ; \
-	movl	%edi,TIMER_TSTAMP+4(%ecx)	/* set timestamp */
-
-#elif defined(__x86_64__)
 
 /*
  * Nanotime returned in %rax.
@@ -272,7 +144,6 @@
 	movq	%rcx,CURRENT_STATE(%rdx)	/* set current state */	     ; \
 	movq	%rsi,TIMER_TSTAMP(%rcx)		/* set timestamp */
 
-#endif
 
 /*
  * Check for vtimers for task.

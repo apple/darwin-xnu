@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2009 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2012 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -118,19 +118,11 @@
 
 /* For x86_64, the varargs ABI requires that %al indicate
  * how many SSE register contain arguments. In our case, 0 */
-#if __i386__
-#define ALIGN_STACK()		subl $8, %esp; andl	$0xFFFFFFF0, %esp ;
-#define LOAD_STRING_ARG0(label)	movl $##label, (%esp) ;
-#define LOAD_ARG1(x)		mov  x, 4(%esp)	;
-#define LOAD_PTR_ARG1(x)	mov  x, 4(%esp)	;
-#define CALL_PANIC()		call EXT(panic) ;
-#else
 #define ALIGN_STACK() 		and  $0xFFFFFFFFFFFFFFF0, %rsp ;
 #define LOAD_STRING_ARG0(label)	leaq label(%rip), %rdi ;
 #define LOAD_ARG1(x)		mov x, %esi ;
 #define LOAD_PTR_ARG1(x)	mov x, %rsi ;
 #define CALL_PANIC()		xorb %al,%al ; call EXT(panic) ;
-#endif
 
 #define	CHECK_UNLOCK(current, owner)				\
 	cmp	current, owner				;	\
@@ -262,39 +254,6 @@
  * a "nop"
  */
 
-#if defined(__i386__)
-
-#define	LOCKSTAT_LABEL(lab) \
-	.data				;\
-	.globl	lab			;\
-	lab:				;\
-	.long 9f			;\
-	.text				;\
-	9:
-
-#define	LOCKSTAT_RECORD(id, lck) \
-	push	%ebp					;	\
-	mov	%esp,%ebp				;	\
-	sub	$0x38,%esp	/* size of dtrace_probe args */ ; \
-	movl	_lockstat_probemap + (id * 4),%eax	;	\
-	test	%eax,%eax				;	\
-	je	9f					;	\
-	movl	$0,36(%esp)				;	\
-	movl	$0,40(%esp)				;	\
-	movl	$0,28(%esp)				;	\
-	movl	$0,32(%esp)				;	\
-	movl	$0,20(%esp)				;	\
-	movl	$0,24(%esp)				;	\
-	movl	$0,12(%esp)				;	\
-	movl	$0,16(%esp)				;	\
-	movl	lck,4(%esp)	/* copy lock pointer to arg 1 */ ; \
-	movl	$0,8(%esp)				;	\
-	movl	%eax,(%esp) 				; 	\
-	call	*_lockstat_probe			;	\
-9:	leave
-	/* ret - left to subsequent code, e.g. return values */
-
-#elif defined(__x86_64__)
 #define        LOCKSTAT_LABEL(lab) \
        .data                                       ;\
        .globl  lab                                 ;\
@@ -318,9 +277,7 @@
        call    *_lockstat_probe(%rip)              ;       \
 9:	leave
 	/* ret - left to subsequent code, e.g. return values */
-#else
-#error Unsupported architecture
-#endif
+
 #endif /* CONFIG_DTRACE */
 
 /*
@@ -329,23 +286,12 @@
  * word is loaded/stored to the pointer
  */
  
-#if defined(__i386__)
-#define	HW_LOCK_REGISTER	%edx
-#define	LOAD_HW_LOCK_REGISTER mov L_ARG0, HW_LOCK_REGISTER
-#define	HW_LOCK_THREAD_REGISTER	%ecx
-#define	LOAD_HW_LOCK_THREAD_REGISTER mov %gs:CPU_ACTIVE_THREAD, HW_LOCK_THREAD_REGISTER
-#define	HW_LOCK_MOV_WORD	movl
-#define	HW_LOCK_EXAM_REGISTER	%eax
-#elif defined(__x86_64__)
 #define	HW_LOCK_REGISTER	%rdi
 #define	LOAD_HW_LOCK_REGISTER
 #define	HW_LOCK_THREAD_REGISTER	%rcx
 #define	LOAD_HW_LOCK_THREAD_REGISTER mov %gs:CPU_ACTIVE_THREAD, HW_LOCK_THREAD_REGISTER
 #define	HW_LOCK_MOV_WORD	movq
 #define	HW_LOCK_EXAM_REGISTER	%rax
-#else
-#error Unsupported architecture
-#endif
 
 /*
  *	void hw_lock_init(hw_lock_t)
@@ -445,65 +391,29 @@ LEAF_ENTRY(hw_lock_to)
 	 * and then spin re-checking the lock but pausing
 	 * every so many (INNER_LOOP_COUNT) spins to check for timeout.
 	 */
-#if __i386__
-	movl	L_ARG1,%ecx		/* fetch timeout */
-	push	%edi
-	push	%ebx
-	mov	%edx,%edi
-
-	lfence
-	rdtsc				/* read cyclecount into %edx:%eax */
-	addl	%ecx,%eax		/* fetch and timeout */
-	adcl	$0,%edx			/* add carry */
-	mov	%edx,%ecx
-	mov	%eax,%ebx		/* %ecx:%ebx is the timeout expiry */
-	mov	%edi, %edx		/* load lock back into %edx */
-#else
 	push	%r9
 	lfence
 	rdtsc				/* read cyclecount into %edx:%eax */
 	shlq	$32, %rdx
 	orq	%rdx, %rax		/* load 64-bit quantity into %rax */
 	addq	%rax, %rsi		/* %rsi is the timeout expiry */
-#endif
 	
 4:
 	/*
 	 * The inner-loop spin to look for the lock being freed.
 	 */
-#if __i386__
-	mov	$(INNER_LOOP_COUNT),%edi
-#else
 	mov	$(INNER_LOOP_COUNT),%r9
-#endif
 5:
 	PAUSE				/* pause for hyper-threading */
 	mov	(HW_LOCK_REGISTER),HW_LOCK_EXAM_REGISTER		/* spin checking lock value in cache */
 	test	HW_LOCK_EXAM_REGISTER,HW_LOCK_EXAM_REGISTER
 	je	6f			/* zero => unlocked, try to grab it */
-#if __i386__
-	decl	%edi			/* decrement inner loop count */
-#else
 	decq	%r9			/* decrement inner loop count */
-#endif
 	jnz	5b			/* time to check for timeout? */
 	
 	/*
 	 * Here after spinning INNER_LOOP_COUNT times, check for timeout
 	 */
-#if __i386__
-	mov	%edx,%edi		/* Save %edx */
-	lfence
-	rdtsc				/* cyclecount into %edx:%eax */
-	xchg	%edx,%edi		/* cyclecount into %edi:%eax */
-	cmpl	%ecx,%edi		/* compare high-order 32-bits */
-	jb	4b			/* continue spinning if less, or */
-	cmpl	%ebx,%eax		/* compare low-order 32-bits */ 
-	jb	4b			/* continue if less, else bail */
-	xor	%eax,%eax		/* with 0 return value */
-	pop	%ebx
-	pop	%edi
-#else
 	lfence
 	rdtsc				/* cyclecount into %edx:%eax */
 	shlq	$32, %rdx
@@ -512,7 +422,6 @@ LEAF_ENTRY(hw_lock_to)
 	jb	4b			/* continue spinning if less, or */
 	xor	%rax,%rax		/* with 0 return value */
 	pop	%r9
-#endif
 	LEAF_RET
 
 6:
@@ -524,12 +433,7 @@ LEAF_ENTRY(hw_lock_to)
 	lock; cmpxchg	HW_LOCK_THREAD_REGISTER,(HW_LOCK_REGISTER)	/* try to acquire the HW lock */
 	jne	4b			/* no - spin again */
 	movl	$1,%eax			/* yes */
-#if __i386__
-	pop	%ebx
-	pop	%edi
-#else
 	pop	%r9
-#endif
 	LEAF_RET
 
 /*
@@ -619,19 +523,10 @@ LEAF_ENTRY(hw_lock_held)
  * register and examined
  */
  
-#if defined(__i386__)
-#define	LCK_RW_REGISTER	%edx
-#define	LOAD_LCK_RW_REGISTER mov S_ARG0, LCK_RW_REGISTER
-#define	LCK_RW_FLAGS_REGISTER	%eax
-#define	LOAD_LCK_RW_FLAGS_REGISTER mov (LCK_RW_REGISTER), LCK_RW_FLAGS_REGISTER
-#elif defined(__x86_64__)
 #define	LCK_RW_REGISTER	%rdi
 #define	LOAD_LCK_RW_REGISTER
 #define	LCK_RW_FLAGS_REGISTER	%eax
 #define	LOAD_LCK_RW_FLAGS_REGISTER mov (LCK_RW_REGISTER), LCK_RW_FLAGS_REGISTER
-#else
-#error Unsupported architecture
-#endif
 	
 #define	RW_LOCK_SHARED_MASK (LCK_RW_INTERLOCK | LCK_RW_WANT_UPGRADE | LCK_RW_WANT_WRITE)
 /*
@@ -639,6 +534,8 @@ LEAF_ENTRY(hw_lock_held)
  *
  */
 Entry(lck_rw_lock_shared)
+	mov	%gs:CPU_ACTIVE_THREAD, %rcx	/* Load thread pointer */
+	incl	TH_RWLOCK_COUNT(%rcx)		/* Increment count before atomic CAS */
 	LOAD_LCK_RW_REGISTER
 1:
 	LOAD_LCK_RW_FLAGS_REGISTER		/* Load state bitfield and interlock */
@@ -693,6 +590,10 @@ Entry(lck_rw_try_lock_shared)
 	cmpxchgl %ecx, (LCK_RW_REGISTER)			/* Attempt atomic exchange */
 	jne	2f
 
+	mov	%gs:CPU_ACTIVE_THREAD, %rcx	/* Load thread pointer */
+	incl	TH_RWLOCK_COUNT(%rcx)		/* Increment count on success. */
+	/* There is a 3 instr window where preemption may not notice rwlock_count after cmpxchg */
+
 #if	CONFIG_DTRACE
 	movl	$1, %eax
 	/*
@@ -702,8 +603,8 @@ Entry(lck_rw_try_lock_shared)
 	 */
 	LOCKSTAT_LABEL(_lck_rw_try_lock_shared_lockstat_patch_point)
 	ret
-    /* Fall thru when patched, counting on lock pointer in LCK_RW_REGISTER  */
-    LOCKSTAT_RECORD(LS_LCK_RW_TRY_LOCK_SHARED_ACQUIRE, LCK_RW_REGISTER)
+	/* Fall thru when patched, counting on lock pointer in LCK_RW_REGISTER  */
+	LOCKSTAT_RECORD(LS_LCK_RW_TRY_LOCK_SHARED_ACQUIRE, LCK_RW_REGISTER)
 #endif
 	movl	$1, %eax			/* return TRUE */
 	ret
@@ -758,6 +659,8 @@ Entry(lck_rw_grab_shared)
  *
  */
 Entry(lck_rw_lock_exclusive)
+	mov	%gs:CPU_ACTIVE_THREAD, %rcx	/* Load thread pointer */
+	incl	TH_RWLOCK_COUNT(%rcx)		/* Increment count before atomic CAS */
 	LOAD_LCK_RW_REGISTER
 1:
 	LOAD_LCK_RW_FLAGS_REGISTER		/* Load state bitfield, interlock and shared count */
@@ -778,8 +681,8 @@ Entry(lck_rw_lock_exclusive)
 	 */
 	LOCKSTAT_LABEL(_lck_rw_lock_exclusive_lockstat_patch_point)
 	ret
-    /* Fall thru when patched, counting on lock pointer in LCK_RW_REGISTER  */
-    LOCKSTAT_RECORD(LS_LCK_RW_LOCK_EXCL_ACQUIRE, LCK_RW_REGISTER)
+	/* Fall thru when patched, counting on lock pointer in LCK_RW_REGISTER  */
+	LOCKSTAT_RECORD(LS_LCK_RW_LOCK_EXCL_ACQUIRE, LCK_RW_REGISTER)
 #endif
 	ret
 2:
@@ -813,6 +716,10 @@ Entry(lck_rw_try_lock_exclusive)
 	cmpxchgl %ecx, (LCK_RW_REGISTER)			/* Attempt atomic exchange */
 	jne	2f
 
+	mov	%gs:CPU_ACTIVE_THREAD, %rcx	/* Load thread pointer */
+	incl	TH_RWLOCK_COUNT(%rcx)		/* Increment count on success. */
+	/* There is a 3 instr window where preemption may not notice rwlock_count after cmpxchg */
+
 #if	CONFIG_DTRACE
 	movl	$1, %eax
 	/*
@@ -822,8 +729,8 @@ Entry(lck_rw_try_lock_exclusive)
 	 */
 	LOCKSTAT_LABEL(_lck_rw_try_lock_exclusive_lockstat_patch_point)
 	ret
-    /* Fall thru when patched, counting on lock pointer in LCK_RW_REGISTER  */
-    LOCKSTAT_RECORD(LS_LCK_RW_TRY_LOCK_EXCL_ACQUIRE, LCK_RW_REGISTER)
+	/* Fall thru when patched, counting on lock pointer in LCK_RW_REGISTER  */
+	LOCKSTAT_RECORD(LS_LCK_RW_TRY_LOCK_EXCL_ACQUIRE, LCK_RW_REGISTER)
 #endif
 	movl	$1, %eax			/* return TRUE */
 	ret
@@ -900,16 +807,9 @@ Entry(lck_rw_lock_shared_to_exclusive)
 	cmpxchgl %ecx, (LCK_RW_REGISTER)			/* Attempt atomic exchange */
 	jne	7f
 
-#if __i386__
-	pushl	%eax				/* go check to see if we need to */
-	push	%edx				/* wakeup anyone */
-	call	EXT(lck_rw_lock_shared_to_exclusive_failure)
-	addl	$8, %esp
-#else
 	mov	%eax, %esi			/* put old flags as second arg */
 						/* lock is alread in %rdi */
 	call	EXT(lck_rw_lock_shared_to_exclusive_failure)
-#endif
 	ret					/* and pass the failure return along */	
 7:
 	PAUSE
@@ -972,16 +872,9 @@ Entry(lck_rw_done)
 	cmpxchgl %ecx, (LCK_RW_REGISTER)			/* Attempt atomic exchange */
 	jne	7f
 
-#if __i386__
-	pushl	%eax
-	push	%edx
-	call	EXT(lck_rw_done_gen)
-	addl	$8, %esp
-#else
 	mov	%eax,%esi	/* old flags in %rsi */
 				/* lock is in %rdi already */
 	call	EXT(lck_rw_done_gen)	
-#endif
 	ret
 7:
 	PAUSE
@@ -1032,15 +925,8 @@ Entry(lck_rw_lock_exclusive_to_shared)
 	cmpxchgl %ecx, (LCK_RW_REGISTER)			/* Attempt atomic exchange */
 	jne	6f
 
-#if __i386__
-	pushl	%eax
-	push	%edx
-	call	EXT(lck_rw_lock_exclusive_to_shared_gen)
-	addl	$8, %esp
-#else
 	mov	%eax,%esi
 	call	EXT(lck_rw_lock_exclusive_to_shared_gen)
-#endif
 	ret
 6:
 	PAUSE
@@ -1128,106 +1014,6 @@ Entry(lck_rw_held_read_or_upgrade)
 #define M_PTR		MUTEX_PTR
 #define M_STATE		MUTEX_STATE	
 	
-#if defined(__i386__)
-
-#define LMTX_ARG0	B_ARG0
-#define LMTX_ARG1	B_ARG1
-#define	LMTX_REG	%edx
-#define LMTX_A_REG	%eax
-#define LMTX_A_REG32	%eax
-#define LMTX_C_REG	%ecx
-#define LMTX_C_REG32	%ecx
-#define LMTX_RET_REG	%eax
-#define LMTX_RET_REG32	%eax
-#define LMTX_LGROUP_REG	%esi
-#define LMTX_SSTATE_REG	%edi	
-#define	LOAD_LMTX_REG(arg)	mov arg, LMTX_REG
-#define LMTX_CHK_EXTENDED	cmp LMTX_REG, LMTX_ARG0
-#define LMTX_ASSERT_OWNED	cmpl $(MUTEX_ASSERT_OWNED), LMTX_ARG1
-
-#define LMTX_ENTER_EXTENDED					\
-	mov	M_PTR(LMTX_REG), LMTX_REG 		;	\
-	push	LMTX_LGROUP_REG	 		 	;	\
-	push	LMTX_SSTATE_REG			     	;	\
-	xor	LMTX_SSTATE_REG, LMTX_SSTATE_REG	;	\
-	mov	MUTEX_GRP(LMTX_REG), LMTX_LGROUP_REG 	;	\
-	LOCK_IF_ATOMIC_STAT_UPDATES			;	\
-	addl	$1, GRP_MTX_STAT_UTIL(LMTX_LGROUP_REG)	;	\
-	jnc	11f			    		;	\
-	incl	GRP_MTX_STAT_UTIL+4(LMTX_LGROUP_REG)	;	\
-11:
-
-#define LMTX_EXIT_EXTENDED		\
-	pop	LMTX_SSTATE_REG	;	\
-	pop	LMTX_LGROUP_REG
-
-
-#define	LMTX_CHK_EXTENDED_EXIT			\
-	cmp 	LMTX_REG, LMTX_ARG0	;	\
-	je	12f			;	\
-	pop	LMTX_SSTATE_REG		;	\
-	pop	LMTX_LGROUP_REG		;	\
-12:	
-	
-	
-#if	LOG_FIRST_MISS_ALONE
-#define LMTX_UPDATE_MISS					\
-	test	$1, LMTX_SSTATE_REG 			;	\
-	jnz	11f					;	\
-	LOCK_IF_ATOMIC_STAT_UPDATES 			;	\
-	incl	GRP_MTX_STAT_MISS(LMTX_LGROUP_REG)	;	\
-	or	$1, LMTX_SSTATE_REG			;	\
-11:
-#else
-#define LMTX_UPDATE_MISS					\
-	LOCK_IF_ATOMIC_STAT_UPDATES 			;	\
-	incl	GRP_MTX_STAT_MISS(LMTX_LGROUP_REG)
-#endif
-
-	
-#if	LOG_FIRST_MISS_ALONE
-#define LMTX_UPDATE_WAIT					\
-	test	$2, LMTX_SSTATE_REG 			;	\
-	jnz	11f					;	\
-	LOCK_IF_ATOMIC_STAT_UPDATES 			;	\
-	incl	GRP_MTX_STAT_WAIT(LMTX_LGROUP_REG)	;	\
-	or	$2, LMTX_SSTATE_REG			;	\
-11:
-#else
-#define LMTX_UPDATE_WAIT					\
-	LOCK_IF_ATOMIC_STAT_UPDATES 			;	\
-	incl	GRP_MTX_STAT_WAIT(LMTX_LGROUP_REG)
-#endif
-
-	
-/*
- * Record the "direct wait" statistic, which indicates if a
- * miss proceeded to block directly without spinning--occurs
- * if the owner of the mutex isn't running on another processor
- * at the time of the check.
- */
-#define LMTX_UPDATE_DIRECT_WAIT					\
-	LOCK_IF_ATOMIC_STAT_UPDATES 			;	\
-	incl	GRP_MTX_STAT_DIRECT_WAIT(LMTX_LGROUP_REG)
-
-	
-#define LMTX_CALLEXT1(func_name)	\
-	push	LMTX_REG	;	\
-	push	LMTX_REG	;	\
-	call	EXT(func_name)	;	\
-	add	$4, %esp	;	\
-	pop	LMTX_REG
-	
-#define LMTX_CALLEXT2(func_name, reg)	\
-	push	LMTX_REG	;	\
-	push	reg		;	\
-	push	LMTX_REG	;	\
-	call	EXT(func_name)	;	\
-	add	$8, %esp	;	\
-	pop	LMTX_REG
-	
-#elif defined(__x86_64__)
-
 #define LMTX_ARG0	%rdi
 #define LMTX_ARG1	%rsi
 #define LMTX_REG_ORIG	%rdi
@@ -1332,10 +1118,6 @@ Entry(lck_rw_held_read_or_upgrade)
 	pop	LMTX_LGROUP_REG		;	\
 12:
 
-#else
-#error Unsupported architecture
-#endif
-
 
 #define M_WAITERS_MSK		0x0000ffff
 #define M_PRIORITY_MSK		0x00ff0000
@@ -1411,6 +1193,8 @@ mutex_interlock_destroyed_str:
  * lck_mtx_unlock()
  * lck_mtx_lock_spin()
  * lck_mtx_lock_spin_always()
+ * lck_mtx_try_lock_spin()
+ * lck_mtx_try_lock_spin_always()
  * lck_mtx_convert_spin()
  */
 NONLEAF_ENTRY(lck_mtx_lock_spin_always)
@@ -1642,10 +1426,14 @@ Llml_acquired:
 	jmp	2b
 	
 
-	
+NONLEAF_ENTRY(lck_mtx_try_lock_spin_always)
+	LOAD_LMTX_REG(B_ARG0)			/* fetch lock pointer */
+	jmp     Llmts_avoid_check
+
 NONLEAF_ENTRY(lck_mtx_try_lock_spin)
 	LOAD_LMTX_REG(B_ARG0)			/* fetch lock pointer */
 
+Llmts_avoid_check:
 	mov	M_STATE(LMTX_REG), LMTX_C_REG32
 	test	$(M_ILOCKED_MSK | M_MLOCKED_MSK), LMTX_C_REG32	/* is the interlock or mutex held */
 	jnz	Llmts_slow
@@ -1816,18 +1604,7 @@ NONLEAF_ENTRY(lck_mtx_convert_spin)
 
 	
 
-#if	defined(__i386__)
 NONLEAF_ENTRY(lck_mtx_unlock)
-	LOAD_LMTX_REG(B_ARG0)			/* fetch lock pointer */
-	mov	M_OWNER(LMTX_REG), LMTX_A_REG
-	test	LMTX_A_REG, LMTX_A_REG
-	jnz	Llmu_entry
-	leave
-	ret
-NONLEAF_ENTRY(lck_mtx_unlock_darwin10)
-#else
-NONLEAF_ENTRY(lck_mtx_unlock)
-#endif
 	LOAD_LMTX_REG(B_ARG0)			/* fetch lock pointer */
 Llmu_entry:
 	mov	M_STATE(LMTX_REG), LMTX_C_REG32
@@ -2018,11 +1795,7 @@ LEAF_ENTRY(_enable_preemption)
 #if	MACH_ASSERT
 	cmpl	$0,%gs:CPU_PREEMPTION_LEVEL
 	jg	1f
-#if __i386__
-	pushl	%gs:CPU_PREEMPTION_LEVEL
-#else
 	movl	%gs:CPU_PREEMPTION_LEVEL,%esi
-#endif
 	ALIGN_STACK()
 	LOAD_STRING_ARG0(_enable_preemption_less_than_zero)
 	CALL_PANIC()
@@ -2068,11 +1841,7 @@ LEAF_ENTRY(_mp_enable_preemption)
 #if	MACH_ASSERT
 	cmpl	$0,%gs:CPU_PREEMPTION_LEVEL
 	jg	1f
-#if __i386__
-	pushl	%gs:CPU_PREEMPTION_LEVEL
-#else
 	movl	%gs:CPU_PREEMPTION_LEVEL,%esi
-#endif
 	ALIGN_PANIC()
 	LOAD_STRING_ARG0(_mp_enable_preemption_less_than_zero)
 	CALL_PANIC()
@@ -2106,120 +1875,6 @@ _mp_enable_preemption_no_check_less_than_zero:
 #endif	/* MACH_RT */
 	LEAF_RET
 	
-#if __i386__
-	
-LEAF_ENTRY(i_bit_set)
-	movl	L_ARG0,%edx
-	movl	L_ARG1,%eax
-	lock
-	bts	%edx,(%eax)
-	LEAF_RET
-
-LEAF_ENTRY(i_bit_clear)
-	movl	L_ARG0,%edx
-	movl	L_ARG1,%eax
-	lock
-	btr	%edx,(%eax)
-	LEAF_RET
-
-
-LEAF_ENTRY(bit_lock)
-	movl	L_ARG0,%ecx
-	movl	L_ARG1,%eax
-1:
-	lock
-	bts	%ecx,(%eax)
-	jb	1b
-	LEAF_RET
-
-
-LEAF_ENTRY(bit_lock_try)
-	movl	L_ARG0,%ecx
-	movl	L_ARG1,%eax
-	lock
-	bts	%ecx,(%eax)
-	jb	bit_lock_failed
-	LEAF_RET		/* %eax better not be null ! */
-bit_lock_failed:
-	xorl	%eax,%eax
-	LEAF_RET
-
-LEAF_ENTRY(bit_unlock)
-	movl	L_ARG0,%ecx
-	movl	L_ARG1,%eax
-	lock
-	btr	%ecx,(%eax)
-	LEAF_RET
-
-/*
- * Atomic primitives, prototyped in kern/simple_lock.h
- */
-LEAF_ENTRY(hw_atomic_add)
-	movl	L_ARG0, %ecx		/* Load address of operand */
-	movl	L_ARG1, %eax		/* Load addend */
-	movl	%eax, %edx
-	lock
-	xaddl	%eax, (%ecx)		/* Atomic exchange and add */
-	addl	%edx, %eax		/* Calculate result */
-	LEAF_RET
-
-LEAF_ENTRY(hw_atomic_sub)
-	movl	L_ARG0, %ecx		/* Load address of operand */
-	movl	L_ARG1, %eax		/* Load subtrahend */
-	negl	%eax
-	movl	%eax, %edx
-	lock
-	xaddl	%eax, (%ecx)		/* Atomic exchange and add */
-	addl	%edx, %eax		/* Calculate result */
-	LEAF_RET
-
-LEAF_ENTRY(hw_atomic_or)
-	movl	L_ARG0, %ecx		/* Load address of operand */
-	movl	(%ecx), %eax
-1:
-	movl	L_ARG1, %edx		/* Load mask */
-	orl	%eax, %edx
-	lock
-	cmpxchgl	%edx, (%ecx)	/* Atomic CAS */
-	jne	1b
-	movl	%edx, %eax		/* Result */
-	LEAF_RET
-/*
- * A variant of hw_atomic_or which doesn't return a value.
- * The implementation is thus comparatively more efficient.
- */
-
-LEAF_ENTRY(hw_atomic_or_noret)
-	movl	L_ARG0, %ecx		/* Load address of operand */
-	movl	L_ARG1, %edx		/* Load mask */
-	lock
-	orl	%edx, (%ecx)		/* Atomic OR */
-	LEAF_RET
-
-LEAF_ENTRY(hw_atomic_and)
-	movl	L_ARG0, %ecx		/* Load address of operand */
-	movl	(%ecx), %eax
-1:
-	movl	L_ARG1, %edx		/* Load mask */
-	andl	%eax, %edx
-	lock
-	cmpxchgl	%edx, (%ecx)	/* Atomic CAS */
-	jne	1b
-	movl	%edx, %eax		/* Result */
-	LEAF_RET
-/*
- * A variant of hw_atomic_and which doesn't return a value.
- * The implementation is thus comparatively more efficient.
- */
-
-LEAF_ENTRY(hw_atomic_and_noret)
-	movl	L_ARG0, %ecx		/* Load address of operand */
-	movl	L_ARG1, %edx		/* Load mask */
-	lock
-	andl	%edx, (%ecx)		/* Atomic AND */
-	LEAF_RET
-
-#else /* !__i386__ */
 
 LEAF_ENTRY(i_bit_set)
 	lock
@@ -2346,4 +2001,3 @@ LEAF_ENTRY(hw_atomic_and_noret)
 	lock	andl	%esi, (%rdi)		/* Atomic OR */
 	LEAF_RET
 
-#endif /* !__i386 __ */

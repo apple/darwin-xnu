@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2010 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2013 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -716,10 +716,6 @@ add_vif(struct vifctl *vifcp)
 		 * Set interface to fake encapsulator interface
 		 */
 		ifp = &multicast_decap_if[vifcp->vifc_vifi];
-		/*
-		 * Prepare cached route entry
-		 */
-		bzero(&vifp->v_route, sizeof(vifp->v_route));
 	} else {
 	    log(LOG_ERR, "source routed tunnels not supported\n");
 	    return EOPNOTSUPP;
@@ -1107,10 +1103,10 @@ X_ip_mforward(struct ip *ip, struct ifnet *ifp, struct mbuf *m,
 		ip->ip_ttl++;	/* compensate for -1 in *_send routines */
 	if (rsvpdebug && ip->ip_p == IPPROTO_RSVP) {
 	    vifp = viftable + vifi;
-	    printf("Sending IPPROTO_RSVP from %x to %x on vif %d (%s%s%d)\n",
+	    printf("Sending IPPROTO_RSVP from %x to %x on vif %d (%s%s)\n",
 		ntohl(ip->ip_src.s_addr), ntohl(ip->ip_dst.s_addr), vifi,
 		(vifp->v_flags & VIFF_TUNNEL) ? "tunnel on " : "",
-		vifp->v_ifp->if_name, vifp->v_ifp->if_unit);
+		if_name(vifp->v_ifp));
 	}
 	return (ip_mdq(m, ifp, NULL, vifi));
     } else if (imo != NULL) {
@@ -1538,11 +1534,7 @@ encap_send(struct ip *ip, struct vif *vifp, struct mbuf *m)
      */
     ip_copy = mtod(mb_copy, struct ip *);
     *ip_copy = multicast_encap_iphdr;
-#if RANDOM_IP_ID
     ip_copy->ip_id = ip_randomid();
-#else
-    ip_copy->ip_id = htons(ip_id++);
-#endif
     ip_copy->ip_len += len;
     ip_copy->ip_src = vifp->v_lcl_addr;
     ip_copy->ip_dst = vifp->v_rmt_addr;
@@ -1813,11 +1805,12 @@ static void
 tbf_send_packet(struct vif *vifp, struct mbuf *m)
 {
     int error;
-    static struct route ro;
+    struct route ro;
 
+    bzero(&ro, sizeof (ro));
     if (vifp->v_flags & VIFF_TUNNEL) {
 	/* If tunnel options */
-	ip_output(m, (struct mbuf *)0, &vifp->v_route,
+	ip_output(m, (struct mbuf *)0, &ro,
 		  IP_FORWARDING, (struct ip_moptions *)0, NULL);
     } else {
 	struct ip_moptions *imo;
@@ -1848,6 +1841,7 @@ done:
 	    log(LOG_DEBUG, "phyint_send on vif %d err %d\n", 
 		vifp - viftable, error);
     }
+    ROUTE_RELEASE(&ro);
 }
 
 /* determine the current time and then
@@ -2124,7 +2118,6 @@ ip_mroute_mod_handle(struct lkm_table *lkmtp, int cmd)
 		static int (*old_mrt_ioctl)();
 		static void (*old_proto4_input)();
 		static int (*old_legal_vif_num)();
-		extern struct protosw inetsw[];
 
 	case LKM_E_LOAD:
 		if(lkmexists(lkmtp) || ip_mrtproto)

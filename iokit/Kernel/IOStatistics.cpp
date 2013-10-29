@@ -28,6 +28,7 @@
 
 #include <sys/sysctl.h>
 #include <kern/host.h>
+#include <kern/zalloc.h>
 
 #include <IOKit/system.h>
 #include <libkern/c++/OSKext.h>
@@ -259,10 +260,10 @@ void IOStatistics::onKextUnload(OSKext *kext)
 		IOWorkLoopCounter *wlc;
 		IOUserClientProcessEntry *uce;
 
-		/* Free up the list of counters */
+		/* Disconnect workloop counters; cleanup takes place in unregisterWorkLoop() */
 		while ((wlc = SLIST_FIRST(&found->workLoopList))) {
 			SLIST_REMOVE_HEAD(&found->workLoopList, link);
-			kfree(wlc, sizeof(IOWorkLoopCounter));
+			wlc->parentKext = NULL;
 		}
 
 		/* Free up the user client list */
@@ -520,8 +521,9 @@ void IOStatistics::unregisterWorkLoop(IOWorkLoopCounter *counter)
 	}
 	
 	IORWLockWrite(lock);
-
-	SLIST_REMOVE(&counter->parentKext->workLoopList, counter, IOWorkLoopCounter, link);
+	if (counter->parentKext) {
+		SLIST_REMOVE(&counter->parentKext->workLoopList, counter, IOWorkLoopCounter, link);
+	}
 	kfree(counter, sizeof(IOWorkLoopCounter));
 	registeredWorkloops--;
 	
@@ -1213,8 +1215,13 @@ KextNode *IOStatistics::getKextNodeFromBacktrace(boolean_t write) {
 	vm_offset_t *scanAddr = NULL;
 	uint32_t i;
 	KextNode *found = NULL, *ke = NULL;
-    
-	btCount = OSBacktrace(bt, btCount);
+
+	/*
+	 * Gathering the backtrace is a significant source of
+	 * overhead. OSBacktrace does many safety checks that
+	 * are not needed in this situation.
+	 */
+	btCount = fastbacktrace((uintptr_t*)bt, btCount);
 
 	if (write) {
 		IORWLockWrite(lock);

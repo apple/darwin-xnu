@@ -31,22 +31,37 @@
 #include <kern/kalloc.h>
 #include <sys/errno.h>
 
-#include <kperf/filter.h>
 #include <kperf/sample.h>
-#include <kperf/kperfbsd.h>
 #include <kperf/pet.h>
 #include <kperf/action.h>
 #include <kperf/kperf.h>
 #include <kperf/timetrigger.h>
 
+#include <kern/ipc_tt.h> /* port_name_to_task */
+
 /** misc functions **/
 #include <chud/chud_xnu.h> /* XXX: should bust this out */
 
+/* thread on CPUs before starting the PET thread */
+thread_t *kperf_thread_on_cpus = NULL;
+
+/* interupt sample buffers -- one wired per CPU */
 static struct kperf_sample *intr_samplev = NULL;
 static unsigned intr_samplec = 0;
-static unsigned sampling_status = KPERF_SAMPLING_OFF;
-static unsigned kperf_initted = 0;
 
+/* track recursion in the trace code */
+static struct
+{
+	int active;
+	int pad[64 / sizeof(int)];
+} *kpdbg_recursev;
+static unsigned kpdbg_recursec = 0;
+
+/* Curren sampling status */
+static unsigned sampling_status = KPERF_SAMPLING_OFF;
+
+/* Make sure we only init once */
+static unsigned kperf_initted = 0;
 
 extern void (*chudxnu_thread_ast_handler)(thread_t);
 
@@ -62,11 +77,53 @@ kperf_intr_sample_buffer(void)
 	return &intr_samplev[ncpu];
 }
 
+int
+kperf_kdbg_recurse(int step)
+{
+	unsigned ncpu = chudxnu_cpu_number();
+
+	// XXX: assert?
+	if( ncpu >= kpdbg_recursec )
+		return 1;
+
+	/* recursing in, available */
+	if( (step > 0)
+	    && (kpdbg_recursev[ncpu].active == 0) )
+	{
+		kpdbg_recursev[ncpu].active = 1;
+		return 0;
+	}
+
+	/* recursing in, unavailable */
+	if( (step > 0)
+	    && (kpdbg_recursev[ncpu].active != 0) )
+	{
+		return 1;
+	}
+
+	/* recursing out, unavailable */
+	if( (step < 0)
+	    && (kpdbg_recursev[ncpu].active != 0) )
+	{
+		kpdbg_recursev[ncpu].active = 0;
+		return 0;
+	}
+
+	/* recursing out, available */
+	if( (step < 0)
+	    && (kpdbg_recursev[ncpu].active == 0) )
+		panic( "return from non-recursed kperf kdebug call" );
+
+	panic( "unknown kperf kdebug call" );
+	return 1;
+}
+
 /* setup interrupt sample buffers */
 int
 kperf_init(void)
 {
 	unsigned ncpus = 0;
+	int err;
 
 	if( kperf_initted )
 		return 0;
@@ -74,50 +131,49 @@ kperf_init(void)
 	/* get number of cpus */
 	ncpus = machine_info.logical_cpu_max;
 
-	/* make the CPU array 
+	kperf_thread_on_cpus = kalloc( ncpus * sizeof(*kperf_thread_on_cpus) );
+	if( kperf_thread_on_cpus == NULL )
+	{
+		err = ENOMEM;
+		goto error;
+	}
+
+	/* clear it */
+	bzero( kperf_thread_on_cpus, ncpus * sizeof(*kperf_thread_on_cpus) );
+
+	/* make the CPU array
 	 * FIXME: cache alignment
 	 */
 	intr_samplev = kalloc( ncpus * sizeof(*intr_samplev));
+	intr_samplec = ncpus;
 
 	if( intr_samplev == NULL )
-		return ENOMEM;
+	{
+		err = ENOMEM;
+		goto error;
+	}
 
 	/* clear it */
 	bzero( intr_samplev, ncpus * sizeof(*intr_samplev) );
-	
-	chudxnu_thread_ast_handler = kperf_thread_ast_handler;
+
+	/* make the recursion array */
+	kpdbg_recursev = kalloc( ncpus * sizeof(*kpdbg_recursev));
+	kpdbg_recursec = ncpus;
+
+	/* clear it */
+	bzero( kpdbg_recursev, ncpus * sizeof(*kpdbg_recursev) );
 
 	/* we're done */
-	intr_samplec = ncpus;
 	kperf_initted = 1;
 
 	return 0;
+error:
+	if( intr_samplev )
+		kfree( intr_samplev, ncpus * sizeof(*intr_samplev) );
+	if( kperf_thread_on_cpus )
+		kfree( kperf_thread_on_cpus, ncpus * sizeof(*kperf_thread_on_cpus) );
+	return err;
 }
-
-
-/** kext start/stop functions **/
-kern_return_t kperf_start (kmod_info_t * ki, void * d);
-
-kern_return_t
-kperf_start (kmod_info_t * ki, void * d)
-{
-	(void) ki;
-	(void) d;
-
-	/* say hello */
-	printf( "aprof: kext starting\n" );
-
-	/* register modules */
-	// kperf_action_init();
-	kperf_filter_init();
-	kperf_pet_init();
-
-	/* register the sysctls */
-	//kperf_register_profiling();
-
-	return KERN_SUCCESS;
-}
-
 
 /* random misc-ish functions */
 uint32_t
@@ -191,4 +247,26 @@ kperf_sampling_disable(void)
 	sampling_status = KPERF_SAMPLING_OFF;
 
 	return 0;
+}
+
+int
+kperf_port_to_pid(mach_port_name_t portname)
+{
+	task_t task;
+	int pid;
+
+	if( !MACH_PORT_VALID(portname) )
+		return -1;
+
+	task = port_name_to_task(portname);
+	
+	if( task == TASK_NULL )
+		return -1;
+
+
+	pid = chudxnu_pid_for_task(task);
+
+	task_deallocate_internal(task);
+
+	return pid;
 }

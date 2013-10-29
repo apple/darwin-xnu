@@ -13,6 +13,7 @@
 #include <sys/time.h>
 #include <sys/stat.h>
 #include <sys/mman.h>
+#include <sys/xattr.h>
 
 #define DIR1 	"dir1"
 #define DOTDOT 	".."

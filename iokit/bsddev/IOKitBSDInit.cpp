@@ -264,7 +264,7 @@ static bool IORegisterNetworkInterface( IOService * netif )
 
 OSDictionary * IOOFPathMatching( const char * path, char * buf, int maxLen )
 {
-    OSDictionary *	matching;
+    OSDictionary *	matching = NULL;
     OSString *		str;
     char *		comp;
     int			len;
@@ -306,6 +306,7 @@ OSDictionary * IOOFPathMatching( const char * path, char * buf, int maxLen )
 }
 
 static int didRam = 0;
+enum { kMaxPathBuf = 512, kMaxBootVar = 128 };
 
 kern_return_t IOFindBSDRoot( char * rootName, unsigned int rootNameSize,
 				dev_t * root, u_int32_t * oflags )
@@ -322,7 +323,6 @@ kern_return_t IOFindBSDRoot( char * rootName, unsigned int rootNameSize,
     int			mnr, mjr;
     const char *        mediaProperty = 0;
     char *		rdBootVar;
-    enum {		kMaxPathBuf = 512, kMaxBootVar = 128 };
     char *		str;
     const char *	look = 0;
     int			len;
@@ -389,8 +389,8 @@ kern_return_t IOFindBSDRoot( char * rootName, unsigned int rootNameSize,
 		if((regEntry = IORegistryEntry::fromPath( "/chosen/memory-map", gIODTPlane ))) {	/* Find the map node */
 			data = (OSData *)regEntry->getProperty("RAMDisk");	/* Find the ram disk, if there */
 			if(data) {											/* We found one */
-				UInt32		*ramdParms = 0;
-				ramdParms = (UInt32 *)data->getBytesNoCopy();	/* Point to the ram disk base and size */
+				uintptr_t *ramdParms;
+				ramdParms = (uintptr_t *)data->getBytesNoCopy();	/* Point to the ram disk base and size */
 				(void)mdevadd(-1, ml_static_ptovirt(ramdParms[0]) >> 12, ramdParms[1] >> 12, 0);	/* Initialize it and pass back the device number */
 			}
 			regEntry->release();								/* Toss the entry */
@@ -582,23 +582,20 @@ iofrootx:
     return( kIOReturnSuccess );
 }
 
+bool IORamDiskBSDRoot(void)
+{
+    char rdBootVar[kMaxBootVar];
+    if (PE_parse_boot_argn("rd", rdBootVar, kMaxBootVar )
+     || PE_parse_boot_argn("rootdev", rdBootVar, kMaxBootVar )) {
+        if((rdBootVar[0] == 'm') && (rdBootVar[1] == 'd') && (rdBootVar[3] == 0)) {
+            return true;
+        }
+    }
+    return false;
+}
+
 void IOSecureBSDRoot(const char * rootName)
 {
-#if CONFIG_EMBEDDED
-    IOReturn         result;
-    IOPlatformExpert *pe;
-    const OSSymbol   *functionName = OSSymbol::withCStringNoCopy("SecureRootName");
-    
-    while ((pe = IOService::getPlatform()) == 0) IOSleep(1 * 1000);
-    
-    // Returns kIOReturnNotPrivileged is the root device is not secure.
-    // Returns kIOReturnUnsupported if "SecureRootName" is not implemented.
-    result = pe->callPlatformFunction(functionName, false, (void *)rootName, (void *)0, (void *)0, (void *)0);
-    
-    functionName->release();
-    
-    if (result == kIOReturnNotPrivileged) mdevremoveall();
-#endif
 }
 
 void *
@@ -676,47 +673,6 @@ kern_return_t IOBSDGetPlatformSerialNumber( char *serial_number_str, u_int32_t l
     
     return KERN_SUCCESS;
 }
-
-dev_t IOBSDGetMediaWithUUID( const char *uuid_cstring, char *bsd_name, int bsd_name_len, int timeout)
-{
-    dev_t dev = 0;
-    OSDictionary *dictionary;
-    OSString *uuid_string;
-
-    if (bsd_name_len < 1) {
-	return 0;
-    }
-    bsd_name[0] = '\0';
-    
-    dictionary = IOService::serviceMatching( "IOMedia" );
-    if( dictionary ) {
-	uuid_string = OSString::withCString( uuid_cstring );
-	if( uuid_string ) {
-	    IOService *service;
-	    mach_timespec_t tv = { timeout, 0 };    // wait up to "timeout" seconds for the device
-
-	    dictionary->setObject( "UUID", uuid_string );
-	    dictionary->retain();
-	    service = IOService::waitForService( dictionary, &tv );
-	    if( service ) {
-		OSNumber *dev_major = (OSNumber *) service->getProperty( kIOBSDMajorKey );
-		OSNumber *dev_minor = (OSNumber *) service->getProperty( kIOBSDMinorKey );
-		OSString *iostr = (OSString *) service->getProperty( kIOBSDNameKey );
-
-		if( iostr)
-		    strlcpy( bsd_name, iostr->getCStringNoCopy(), bsd_name_len );
-
-		if ( dev_major && dev_minor )
-		    dev = makedev( dev_major->unsigned32BitValue(), dev_minor->unsigned32BitValue() );
-	    }
-	    uuid_string->release();
-	}
-	dictionary->release();
-    }
-
-    return dev;
-}
-
 
 void IOBSDIterateMediaWithContent(const char *content_uuid_cstring, int (*func)(const char *bsd_dev_name, const char *uuid_str, void *arg), void *arg)
 {

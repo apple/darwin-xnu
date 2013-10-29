@@ -1,8 +1,8 @@
 /*
- * Copyright (c) 2009-2012 Apple Inc. All rights reserved.
+ * Copyright (c) 2009-2013 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
- * 
+ *
  * This file contains Original Code and/or Modifications of Original Code
  * as defined in and that are subject to the Apple Public Source License
  * Version 2.0 (the 'License'). You may not use this file except in
@@ -11,10 +11,10 @@
  * unlawful or unlicensed copies of an Apple operating system, or to
  * circumvent, violate, or enable the circumvention or violation of, any
  * terms of an Apple operating system software license agreement.
- * 
+ *
  * Please obtain a copy of the License at
  * http://www.opensource.apple.com/apsl/ and read it before using this file.
- * 
+ *
  * The Original Code and all software distributed under the License are
  * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
@@ -22,12 +22,12 @@
  * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
  * Please see the License for the specific language governing rights and
  * limitations under the License.
- * 
+ *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 
-/*	$FreeBSD: src/sys/netinet6/in6_gif.c,v 1.2.2.3 2001/07/03 11:01:52 ume Exp $	*/
-/*	$KAME: in6_gif.c,v 1.49 2001/05/14 14:02:17 itojun Exp $	*/
+/* $FreeBSD: src/sys/netinet6/in6_gif.c,v 1.2.2.3 2001/07/03 11:01:52 ume Exp $ */
+/* $KAME: in6_gif.c,v 1.49 2001/05/14 14:02:17 itojun Exp $ */
 
 /*
  * Copyright (C) 1995, 1996, 1997, and 1998 WIDE Project.
@@ -95,17 +95,6 @@
 
 #include <net/net_osdep.h>
 
-static __inline__ void*
-_cast_non_const(const void * ptr) {
-	union {
-		const void*		cval;
-		void*			val;
-	} ret;
-	
-	ret.cval = ptr;
-	return (ret.val);
-}
-
 int
 in6_gif_output(
 	struct ifnet *ifp,
@@ -115,17 +104,21 @@ in6_gif_output(
 {
 	struct gif_softc *sc = ifnet_softc(ifp);
 	struct sockaddr_in6 *dst = (struct sockaddr_in6 *)&sc->gif_ro6.ro_dst;
-	struct sockaddr_in6 *sin6_src = (struct sockaddr_in6 *)(void *)sc->gif_psrc;
-	struct sockaddr_in6 *sin6_dst = (struct sockaddr_in6 *)(void *)sc->gif_pdst;
+	struct sockaddr_in6 *sin6_src = (struct sockaddr_in6 *)
+	    (void *)sc->gif_psrc;
+	struct sockaddr_in6 *sin6_dst = (struct sockaddr_in6 *)
+	    (void *)sc->gif_pdst;
 	struct ip6_hdr *ip6;
 	int proto;
 	u_int8_t itos, otos;
+
+	GIF_LOCK_ASSERT(sc);
 
 	if (sin6_src == NULL || sin6_dst == NULL ||
 	    sin6_src->sin6_family != AF_INET6 ||
 	    sin6_dst->sin6_family != AF_INET6) {
 		m_freem(m);
-		return EAFNOSUPPORT;
+		return (EAFNOSUPPORT);
 	}
 
 	switch (family) {
@@ -135,10 +128,10 @@ in6_gif_output(
 		struct ip *ip;
 
 		proto = IPPROTO_IPV4;
-		if (mbuf_len(m) < sizeof(*ip)) {
-			m = m_pullup(m, sizeof(*ip));
+		if (mbuf_len(m) < sizeof (*ip)) {
+			m = m_pullup(m, sizeof (*ip));
 			if (!m)
-				return ENOBUFS;
+				return (ENOBUFS);
 		}
 		ip = mtod(m, struct ip *);
 		itos = ip->ip_tos;
@@ -149,10 +142,10 @@ in6_gif_output(
 	case AF_INET6:
 	    {
 		proto = IPPROTO_IPV6;
-		if (mbuf_len(m) < sizeof(*ip6)) {
-			m = m_pullup(m, sizeof(*ip6));
+		if (mbuf_len(m) < sizeof (*ip6)) {
+			m = m_pullup(m, sizeof (*ip6));
 			if (!m)
-				return ENOBUFS;
+				return (ENOBUFS);
 		}
 		ip6 = mtod(m, struct ip6_hdr *);
 		itos = (ntohl(ip6->ip6_flow) >> 20) & 0xff;
@@ -165,16 +158,16 @@ in6_gif_output(
 			family);
 #endif
 		m_freem(m);
-		return EAFNOSUPPORT;
+		return (EAFNOSUPPORT);
 	}
-	
+
 	/* prepend new IP header */
-	M_PREPEND(m, sizeof(struct ip6_hdr), M_DONTWAIT);
-	if (m && mbuf_len(m) < sizeof(struct ip6_hdr))
-		m = m_pullup(m, sizeof(struct ip6_hdr));
+	M_PREPEND(m, sizeof (struct ip6_hdr), M_DONTWAIT);
+	if (m && mbuf_len(m) < sizeof (struct ip6_hdr))
+		m = m_pullup(m, sizeof (struct ip6_hdr));
 	if (m == NULL) {
 		printf("ENOBUFS in in6_gif_output %d\n", __LINE__);
-		return ENOBUFS;
+		return (ENOBUFS);
 	}
 
 	ip6 = mtod(m, struct ip6_hdr *);
@@ -190,27 +183,23 @@ in6_gif_output(
 		ip6->ip6_dst = sin6_dst->sin6_addr;
 	else  {
 		m_freem(m);
-		return ENETUNREACH;
+		return (ENETUNREACH);
 	}
 	ip_ecn_ingress((ifp->if_flags & IFF_LINK1) ? ECN_ALLOWED : ECN_NOCARE,
-		       &otos, &itos);
+	    &otos, &itos);
 	ip6->ip6_flow &= ~htonl(0xff << 20);
 	ip6->ip6_flow |= htonl((u_int32_t)otos << 20);
 
-	if (dst->sin6_family != sin6_dst->sin6_family ||
+	if (ROUTE_UNUSABLE(&sc->gif_ro6) ||
+	    dst->sin6_family != sin6_dst->sin6_family ||
 	    !IN6_ARE_ADDR_EQUAL(&dst->sin6_addr, &sin6_dst->sin6_addr) ||
-	    (sc->gif_ro6.ro_rt != NULL &&
-	    (sc->gif_ro6.ro_rt->generation_id != route_generation ||
-	    sc->gif_ro6.ro_rt->rt_ifp == ifp))) {
+	    (sc->gif_ro6.ro_rt != NULL && sc->gif_ro6.ro_rt->rt_ifp == ifp)) {
 		/* cache route doesn't match or recursive route */
-		bzero(dst, sizeof(*dst));
+		bzero(dst, sizeof (*dst));
 		dst->sin6_family = sin6_dst->sin6_family;
-		dst->sin6_len = sizeof(struct sockaddr_in6);
+		dst->sin6_len = sizeof (struct sockaddr_in6);
 		dst->sin6_addr = sin6_dst->sin6_addr;
-		if (sc->gif_ro6.ro_rt) {
-			rtfree(sc->gif_ro6.ro_rt);
-			sc->gif_ro6.ro_rt = NULL;
-		}
+		ROUTE_RELEASE(&sc->gif_ro6);
 #if 0
 		sc->gif_if.if_mtu = GIF_MTU;
 #endif
@@ -220,35 +209,36 @@ in6_gif_output(
 		rtalloc((struct route *)&sc->gif_ro6);
 		if (sc->gif_ro6.ro_rt == NULL) {
 			m_freem(m);
-			return ENETUNREACH;
+			return (ENETUNREACH);
 		}
 		RT_LOCK(sc->gif_ro6.ro_rt);
 		/* if it constitutes infinite encapsulation, punt. */
 		if (sc->gif_ro6.ro_rt->rt_ifp == ifp) {
 			RT_UNLOCK(sc->gif_ro6.ro_rt);
 			m_freem(m);
-			return ENETUNREACH;	/*XXX*/
+			return (ENETUNREACH); /* XXX */
 		}
 #if 0
 		ifp->if_mtu = sc->gif_ro6.ro_rt->rt_ifp->if_mtu
-			- sizeof(struct ip6_hdr);
+			- sizeof (struct ip6_hdr);
 #endif
 		RT_UNLOCK(sc->gif_ro6.ro_rt);
 	}
-	
+
 #if IPV6_MINMTU
 	/*
 	 * force fragmentation to minimum MTU, to avoid path MTU discovery.
 	 * it is too painful to ask for resend of inner packet, to achieve
 	 * path MTU discovery for encapsulated packets.
 	 */
-	return(ip6_output(m, 0, &sc->gif_ro6, IPV6_MINMTU, 0, NULL, NULL));
+	return (ip6_output(m, 0, &sc->gif_ro6, IPV6_MINMTU, 0, NULL, NULL));
 #else
-	return(ip6_output(m, 0, &sc->gif_ro6, 0, 0, NULL, NULL));
+	return (ip6_output(m, 0, &sc->gif_ro6, 0, 0, NULL, NULL));
 #endif
 }
 
-int in6_gif_input(struct mbuf **mp, int *offp, int proto)
+int
+in6_gif_input(struct mbuf **mp, int *offp, int proto)
 {
 	struct mbuf *m = *mp;
 	struct ifnet *gifp = NULL;
@@ -258,12 +248,12 @@ int in6_gif_input(struct mbuf **mp, int *offp, int proto)
 
 	ip6 = mtod(m, struct ip6_hdr *);
 
-	gifp = ((struct gif_softc*)encap_getarg(m))->gif_if;
+	gifp = ((struct gif_softc *)encap_getarg(m))->gif_if;
 
 	if (gifp == NULL || (gifp->if_flags & IFF_UP) == 0) {
 		m_freem(m);
 		ip6stat.ip6s_nogif++;
-		return IPPROTO_DONE;
+		return (IPPROTO_DONE);
 	}
 
 	otos = ip6->ip6_flow;
@@ -277,10 +267,10 @@ int in6_gif_input(struct mbuf **mp, int *offp, int proto)
 		u_int8_t otos8;
 		af = AF_INET;
 		otos8 = (ntohl(otos) >> 20) & 0xff;
-		if (mbuf_len(m) < sizeof(*ip)) {
-			m = m_pullup(m, sizeof(*ip));
+		if (mbuf_len(m) < sizeof (*ip)) {
+			m = m_pullup(m, sizeof (*ip));
 			if (!m)
-				return IPPROTO_DONE;
+				return (IPPROTO_DONE);
 		}
 		ip = mtod(m, struct ip *);
 		if (gifp->if_flags & IFF_LINK1)
@@ -294,10 +284,10 @@ int in6_gif_input(struct mbuf **mp, int *offp, int proto)
 	case IPPROTO_IPV6:
 	    {
 		af = AF_INET6;
-		if (mbuf_len(m) < sizeof(*ip6)) {
-			m = m_pullup(m, sizeof(*ip6));
+		if (mbuf_len(m) < sizeof (*ip6)) {
+			m = m_pullup(m, sizeof (*ip6));
 			if (!m)
-				return IPPROTO_DONE;
+				return (IPPROTO_DONE);
 		}
 		ip6 = mtod(m, struct ip6_hdr *);
 		if (gifp->if_flags & IFF_LINK1)
@@ -310,14 +300,15 @@ int in6_gif_input(struct mbuf **mp, int *offp, int proto)
 	default:
 		ip6stat.ip6s_nogif++;
 		m_freem(m);
-		return IPPROTO_DONE;
+		return (IPPROTO_DONE);
 	}
 
-	if (m->m_pkthdr.rcvif)  /* replace the rcvif by gifp for ifnet_input to route it correctly */
+	/* Replace the rcvif by gifp for ifnet_input to route it correctly */
+	if (m->m_pkthdr.rcvif)
 		m->m_pkthdr.rcvif = gifp;
 
 	ifnet_input(gifp, m, NULL);
-	return IPPROTO_DONE;
+	return (IPPROTO_DONE);
 }
 
 /*
@@ -341,7 +332,7 @@ gif_validate6(
 	 */
 	if (!IN6_ARE_ADDR_EQUAL(&src->sin6_addr, &ip6->ip6_dst) ||
 	    !IN6_ARE_ADDR_EQUAL(&dst->sin6_addr, &ip6->ip6_src))
-		return 0;
+		return (0);
 
 	/* martian filters on outer source - done in ip6_input */
 
@@ -350,9 +341,9 @@ gif_validate6(
 		struct sockaddr_in6 sin6;
 		struct rtentry *rt;
 
-		bzero(&sin6, sizeof(sin6));
+		bzero(&sin6, sizeof (sin6));
 		sin6.sin6_family = AF_INET6;
-		sin6.sin6_len = sizeof(struct sockaddr_in6);
+		sin6.sin6_len = sizeof (struct sockaddr_in6);
 		sin6.sin6_addr = ip6->ip6_src;
 
 		rt = rtalloc1((struct sockaddr *)&sin6, 0, 0);
@@ -368,13 +359,13 @@ gif_validate6(
 				RT_UNLOCK(rt);
 				rtfree(rt);
 			}
-			return 0;
+			return (0);
 		}
 		RT_UNLOCK(rt);
 		rtfree(rt);
 	}
 
-	return 128 * 2;
+	return (128 * 2);
 }
 
 /*
@@ -396,8 +387,10 @@ gif_encapcheck6(
 	/* sanity check done in caller */
 	sc = (struct gif_softc *)arg;
 
-	mbuf_copydata((struct mbuf *)(size_t)m, 0, sizeof(ip6), &ip6);
+	GIF_LOCK_ASSERT(sc);
+
+	mbuf_copydata((struct mbuf *)(size_t)m, 0, sizeof (ip6), &ip6);
 	ifp = ((m->m_flags & M_PKTHDR) != 0) ? m->m_pkthdr.rcvif : NULL;
 
-	return gif_validate6(&ip6, sc, ifp);
+	return (gif_validate6(&ip6, sc, ifp));
 }

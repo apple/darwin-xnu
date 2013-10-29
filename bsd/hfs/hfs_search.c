@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1997-2012 Apple Inc. All rights reserved.
+ * Copyright (c) 1997-2013 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -115,7 +115,8 @@ static int CheckCriteria(	ExtendedVCB *vcb,
 							CatalogRecord *rec,
 							CatalogKey *key, 
 							searchinfospec_t *searchInfo1,
-							searchinfospec_t *searchInfo2 );
+							searchinfospec_t *searchInfo2,
+							struct vfs_context *ctx);
 
 static int CheckAccess(ExtendedVCB *vcb, u_long searchBits, CatalogKey *key, struct vfs_context *ctx);
 
@@ -204,8 +205,9 @@ hfs_vnop_search(ap)
 
 	*(ap->a_nummatches) = 0;
 
-	if (ap->a_options & ~SRCHFS_VALIDOPTIONSMASK)
+	if (ap->a_options & ~SRCHFS_VALIDOPTIONSMASK) {
 		return (EINVAL);
+	}
 
 	/*
 	 * Fail requests for attributes that HFS does not support for the
@@ -217,6 +219,7 @@ hfs_vnop_search(ap)
 	    (ap->a_returnattrs->dirattr & ~HFS_ATTR_DIR_VALID) ||
 	    (ap->a_returnattrs->fileattr & ~HFS_ATTR_FILE_VALID) ||
 	    (ap->a_returnattrs->forkattr != 0)) {
+
 		return (EINVAL);
 	}
 
@@ -229,10 +232,13 @@ hfs_vnop_search(ap)
 		attrgroup_t attrs;
 
 		attrs = ap->a_searchattrs->commonattr | ap->a_returnattrs->commonattr;
-		if (attrs & (ATTR_CMN_NAME | ATTR_CMN_PAROBJID))
+		if (attrs & (ATTR_CMN_NAME | ATTR_CMN_PAROBJID)) {
 			return (EINVAL);
-		if ((err = vfs_context_suser(ap->a_context)))
+		}
+
+		if ((err = vfs_context_suser(ap->a_context))) {
 			return (err);
+		}
 	}
 
 	// If both 32-bit and 64-bit parent ids or file ids are given	   
@@ -241,12 +247,13 @@ hfs_vnop_search(ap)
 	attrgroup_t test_attrs=ap->a_searchattrs->commonattr;
 
 	if (((test_attrs & ATTR_CMN_OBJID) && (test_attrs & ATTR_CMN_FILEID)) ||
-			((test_attrs & ATTR_CMN_PARENTID) && (test_attrs & ATTR_CMN_PAROBJID)))
+			((test_attrs & ATTR_CMN_PARENTID) && (test_attrs & ATTR_CMN_PAROBJID))) {
 		return (EINVAL);
+	}
 
-
-	if (uio_resid(ap->a_uio) <= 0)
+	if (uio_resid(ap->a_uio) <= 0) {
 		return (EINVAL);
+	}
 
 	isHFSPlus = (vcb->vcbSigWord == kHFSPlusSigWord);
 	hfsmp = VTOHFS(ap->a_vp);
@@ -261,11 +268,14 @@ hfs_vnop_search(ap)
 	/* UnPack the search boundries, searchInfo1, searchInfo2 */
 	err = UnpackSearchAttributeBlock(hfsmp, ap->a_searchattrs,
 				&searchInfo1, ap->a_searchparams1, 1);
-	if (err) return err;
+	if (err) { 
+		return err;
+	}
 	err = UnpackSearchAttributeBlock(hfsmp, ap->a_searchattrs,
 				&searchInfo2, ap->a_searchparams2, 0);
-	if (err) return err;
-
+	if (err) {
+		return err;
+	}
 	//shadow search bits if 64-bit file/parent ids are used	
 	if (ap->a_searchattrs->commonattr & ATTR_CMN_FILEID) 
 		ap->a_searchattrs->commonattr |= ATTR_CMN_OBJID;
@@ -364,7 +374,7 @@ hfs_vnop_search(ap)
 			ResolveHardlink(vcb, (HFSPlusCatalogFile *)myCurrentDataPtr);
 		}
 		if (CheckCriteria( vcb, ap->a_options, ap->a_searchattrs, myCurrentDataPtr,
-				myCurrentKeyPtr, &searchInfo1, &searchInfo2 )
+				myCurrentKeyPtr, &searchInfo1, &searchInfo2, ap->a_context )
 		&&  CheckAccess(vcb, ap->a_options, myCurrentKeyPtr, ap->a_context)) {
 			err = InsertMatch(hfsmp, ap->a_uio, myCurrentDataPtr, 
 					myCurrentKeyPtr, ap->a_returnattrs,
@@ -499,20 +509,29 @@ CompareMasked(const u_int32_t *thisValue, const u_int32_t *compareData,
 
 static Boolean
 ComparePartialUnicodeName (register ConstUniCharArrayPtr str, register ItemCount s_len,
-			   register ConstUniCharArrayPtr find, register ItemCount f_len )
+			   register ConstUniCharArrayPtr find, register ItemCount f_len, int caseSensitive )
 {
-	if (f_len == 0 || s_len == 0)
+	if (f_len == 0 || s_len == 0) {
 		return FALSE;
+	}
 
-	do {
-		if (s_len-- < f_len)
-			return FALSE;
-	} while (FastUnicodeCompare(str++, f_len, find, f_len) != 0);
+	if (caseSensitive) {
+		do {
+			if (s_len-- < f_len)
+				return FALSE;
+		} while (UnicodeBinaryCompare(str++, f_len, find, f_len) != 0);
+	}
+	else {
+		do {
+			if (s_len-- < f_len)
+				return FALSE;
+		} while (FastUnicodeCompare(str++, f_len, find, f_len) != 0);
+	}
 
 	return TRUE;
 }
 
-
+#if CONFIG_HFS_STD
 static Boolean
 ComparePartialPascalName ( register ConstStr31Param str, register ConstStr31Param find )
 {
@@ -536,6 +555,7 @@ ComparePartialPascalName ( register ConstStr31Param str, register ConstStr31Para
 
 	return FALSE;
 }
+#endif
 
 
 /*
@@ -564,8 +584,10 @@ CheckAccess(ExtendedVCB *theVCBPtr, u_long searchBits, CatalogKey *theKeyPtr, st
 	isHFSPlus = ( theVCBPtr->vcbSigWord == kHFSPlusSigWord );
 	if ( isHFSPlus )
 		myNodeID = theKeyPtr->hfsPlus.parentID;
+#if CONFIG_HFS_STD
 	else
 		myNodeID = theKeyPtr->hfs.parentID;
+#endif
 	
 	while ( myNodeID >= kRootDirID ) {
 		cnode_t *	cp;
@@ -647,7 +669,8 @@ CheckCriteria(	ExtendedVCB *vcb,
 				CatalogRecord *rec, 
 				CatalogKey *key,
 				searchinfospec_t  *searchInfo1, 
-				searchinfospec_t *searchInfo2 )
+				searchinfospec_t *searchInfo2,
+				struct vfs_context *ctx)
 {
 	Boolean matched, atleastone;
 	Boolean isHFSPlus;
@@ -655,57 +678,68 @@ CheckCriteria(	ExtendedVCB *vcb,
 	struct cat_attr c_attr;
 	struct cat_fork datafork;
 	struct cat_fork rsrcfork;
+	struct hfsmount *hfsmp = (struct hfsmount*)vcb;
+	int force_case_sensitivity = proc_is_forcing_hfs_case_sensitivity(vfs_context_proc(ctx));
 	
 	bzero(&c_attr, sizeof(c_attr));
 	isHFSPlus = (vcb->vcbSigWord == kHFSPlusSigWord);
 
 	switch (rec->recordType) {
-	case kHFSFolderRecord:
-	case kHFSPlusFolderRecord:
-		if ( (searchBits & SRCHFS_MATCHDIRS) == 0 ) {	/* If we are NOT searching folders */
-			matched = false;
-			goto TestDone;
-		}
-		break;
-			
-	case kHFSFileRecord:
-		if ( (searchBits & SRCHFS_MATCHFILES) == 0 ) {	/* If we are NOT searching files */
-			matched = false;
-			goto TestDone;
-		}
-		break;
 
-	case kHFSPlusFileRecord:
-		/* Check if hardlink links should be skipped. */
-		if (searchBits & SRCHFS_SKIPLINKS) {
-			cnid_t parid = key->hfsPlus.parentID;
-			HFSPlusCatalogFile *filep = (HFSPlusCatalogFile *)rec;
-
-			if ((SWAP_BE32(filep->userInfo.fdType) == kHardLinkFileType) &&
-			    (SWAP_BE32(filep->userInfo.fdCreator) == kHFSPlusCreator)) {
-				return (false);	/* skip over file link records */
-			} else if ((parid == vcb->hfs_private_desc[FILE_HARDLINKS].cd_cnid) &&
-			           (filep->bsdInfo.special.linkCount == 0)) {
-				return (false);	/* skip over unlinked files */
-			} else if ((SWAP_BE32(filep->userInfo.fdType) == kHFSAliasType) &&
-			           (SWAP_BE32(filep->userInfo.fdCreator) == kHFSAliasCreator) &&
-			           (filep->flags & kHFSHasLinkChainMask)) {
-				return (false);	/* skip over dir link records */
+#if CONFIG_HFS_STD
+		case kHFSFolderRecord:
+			if ( (searchBits & SRCHFS_MATCHDIRS) == 0 ) {	/* If we are NOT searching folders */
+				matched = false;
+				goto TestDone;
 			}
-		} else if (key->hfsPlus.parentID == vcb->hfs_private_desc[FILE_HARDLINKS].cd_cnid) {
-			return (false);	/* skip over private files */
-		} else if (key->hfsPlus.parentID == vcb->hfs_private_desc[DIR_HARDLINKS].cd_cnid) {
-			return (false);	/* skip over private files */
-		}
+			break;
 
-		if ( (searchBits & SRCHFS_MATCHFILES) == 0 ) {	/* If we are NOT searching files */
-			matched = false;
-			goto TestDone;
-		}
-		break;
+		case kHFSFileRecord:
+			if ( (searchBits & SRCHFS_MATCHFILES) == 0 ) {	/* If we are NOT searching files */
+				matched = false;
+				goto TestDone;
+			}
+			break;
+#endif
 
-	default:	/* Never match a thread record or any other type. */
-		return( false );	/* Not a file or folder record, so can't search it */
+		case kHFSPlusFolderRecord:
+			if ( (searchBits & SRCHFS_MATCHDIRS) == 0 ) {	/* If we are NOT searching folders */
+				matched = false;
+				goto TestDone;
+			}
+			break;
+
+		case kHFSPlusFileRecord:
+			/* Check if hardlink links should be skipped. */
+			if (searchBits & SRCHFS_SKIPLINKS) {
+				cnid_t parid = key->hfsPlus.parentID;
+				HFSPlusCatalogFile *filep = (HFSPlusCatalogFile *)rec;
+
+				if ((SWAP_BE32(filep->userInfo.fdType) == kHardLinkFileType) &&
+						(SWAP_BE32(filep->userInfo.fdCreator) == kHFSPlusCreator)) {
+					return (false);	/* skip over file link records */
+				} else if ((parid == vcb->hfs_private_desc[FILE_HARDLINKS].cd_cnid) &&
+						(filep->bsdInfo.special.linkCount == 0)) {
+					return (false);	/* skip over unlinked files */
+				} else if ((SWAP_BE32(filep->userInfo.fdType) == kHFSAliasType) &&
+						(SWAP_BE32(filep->userInfo.fdCreator) == kHFSAliasCreator) &&
+						(filep->flags & kHFSHasLinkChainMask)) {
+					return (false);	/* skip over dir link records */
+				}
+			} else if (key->hfsPlus.parentID == vcb->hfs_private_desc[FILE_HARDLINKS].cd_cnid) {
+				return (false);	/* skip over private files */
+			} else if (key->hfsPlus.parentID == vcb->hfs_private_desc[DIR_HARDLINKS].cd_cnid) {
+				return (false);	/* skip over private files */
+			}
+
+			if ( (searchBits & SRCHFS_MATCHFILES) == 0 ) {	/* If we are NOT searching files */
+				matched = false;
+				goto TestDone;
+			}
+			break;
+
+		default:	/* Never match a thread record or any other type. */
+			return( false );	/* Not a file or folder record, so can't search it */
 	}
 	
 	matched = true;		/* Assume we got a match */
@@ -714,20 +748,40 @@ CheckCriteria(	ExtendedVCB *vcb,
 	/* First, attempt to match the name -- either partial or complete */
 	if ( attrList->commonattr & ATTR_CMN_NAME ) {
 		if (isHFSPlus) {
+			int case_sensitive = 0;
+
+			if (hfsmp->hfs_flags & HFS_CASE_SENSITIVE) {
+				case_sensitive = 1;
+			} else if (force_case_sensitivity) {
+				case_sensitive = 1;
+			}
+
 			/* Check for partial/full HFS Plus name match */
 
 			if ( searchBits & SRCHFS_MATCHPARTIALNAMES ) {
 				matched = ComparePartialUnicodeName(key->hfsPlus.nodeName.unicode,
 								    key->hfsPlus.nodeName.length,
 								    (UniChar*)searchInfo1->name,
-								    searchInfo1->nameLength );
-			} else /* full HFS Plus name match */ { 
-				matched = (FastUnicodeCompare(key->hfsPlus.nodeName.unicode,
-							      key->hfsPlus.nodeName.length,
-							      (UniChar*)searchInfo1->name,
-							      searchInfo1->nameLength ) == 0);
+								    searchInfo1->nameLength, case_sensitive);
+			} 
+			else {
+				/* Full name match.  Are we HFSX (case sensitive) or HFS+ ? */
+				if (case_sensitive) {
+					matched = (UnicodeBinaryCompare(key->hfsPlus.nodeName.unicode,
+								key->hfsPlus.nodeName.length,
+								(UniChar*)searchInfo1->name,
+								searchInfo1->nameLength ) == 0);
+				}
+				else {
+					matched = (FastUnicodeCompare(key->hfsPlus.nodeName.unicode,
+								key->hfsPlus.nodeName.length,
+								(UniChar*)searchInfo1->name,
+								searchInfo1->nameLength ) == 0);
+				}
 			}
-		} else {
+		}
+#if CONFIG_HFS_STD
+		else {
 			/* Check for partial/full HFS name match */
 
 			if ( searchBits & SRCHFS_MATCHPARTIALNAMES )
@@ -735,6 +789,7 @@ CheckCriteria(	ExtendedVCB *vcb,
 			else /* full HFS name match */
 				matched = (FastRelString(key->hfs.nodeName, (u_char*)searchInfo1->name) == 0);
 		}
+#endif
 
 		if ( matched == false || (searchBits & ~SRCHFS_MATCHPARTIALNAMES) == 0 )
 			goto TestDone;	/* no match, or nothing more to compare */
@@ -749,41 +804,67 @@ CheckCriteria(	ExtendedVCB *vcb,
 	    int flags;
 	    
 	    switch (rec->recordType) {
-		case kHFSFolderRecord:
-		case kHFSPlusFolderRecord: {
-		    struct FndrDirInfo *finder_info;
-		    
-		    finder_info = (struct FndrDirInfo *)&c_attr.ca_finderinfo[0];
-		    flags = SWAP_BE16(finder_info->frFlags);
-		    break;
-		}
-			
-		case kHFSFileRecord:
-		case kHFSPlusFileRecord: {
-		    struct FndrFileInfo *finder_info;
-		    
-		    finder_info = (struct FndrFileInfo *)&c_attr.ca_finderinfo[0];
-		    flags = SWAP_BE16(finder_info->fdFlags);
-		    break;
+#if CONFIG_HFS_STD
+			case kHFSFolderRecord:
+				{
+					struct FndrDirInfo *finder_info;
+
+					finder_info = (struct FndrDirInfo *)&c_attr.ca_finderinfo[0];
+					flags = SWAP_BE16(finder_info->frFlags);
+					break;
+				}
+
+			case kHFSFileRecord:
+				{
+					struct FndrFileInfo *finder_info;
+
+					finder_info = (struct FndrFileInfo *)&c_attr.ca_finderinfo[0];
+					flags = SWAP_BE16(finder_info->fdFlags);
+					break;
+				}
+#endif
+
+			case kHFSPlusFolderRecord: 
+				{
+					struct FndrDirInfo *finder_info;
+
+					finder_info = (struct FndrDirInfo *)&c_attr.ca_finderinfo[0];
+					flags = SWAP_BE16(finder_info->frFlags);
+					break;
+				}
+
+			case kHFSPlusFileRecord: 
+				{
+					struct FndrFileInfo *finder_info;
+
+					finder_info = (struct FndrFileInfo *)&c_attr.ca_finderinfo[0];
+					flags = SWAP_BE16(finder_info->fdFlags);
+					break;
+				}
+
+			default: 
+				{
+					flags = kIsInvisible;
+					break;
+				}
 		}
 
-		default: {
-		    flags = kIsInvisible;
-		    break;
+		if (flags & kIsInvisible) {
+			matched = false;
+			goto TestDone;
 		}
-	    }
-		    
-	    if (flags & kIsInvisible) {
-		matched = false;
-		goto TestDone;
-	    }
 	}
 	
 		    
 
 	/* Now that we have a record worth searching, see if it matches the search attributes */
+#if CONFIG_HFS_STD
 	if (rec->recordType == kHFSFileRecord ||
 	    rec->recordType == kHFSPlusFileRecord) {
+#else
+	if (rec->recordType == kHFSPlusFileRecord) {
+#endif
+
 		if ((attrList->fileattr & ~ATTR_FILE_VALIDMASK) != 0) {	/* attr we do know about  */
 			matched = false;
 			goto TestDone;
@@ -856,8 +937,12 @@ CheckCriteria(	ExtendedVCB *vcb,
 	/*
 	 * Check the directory attributes
 	 */
+#if CONFIG_HFS_STD
 	else if (rec->recordType == kHFSFolderRecord ||
 	         rec->recordType == kHFSPlusFolderRecord) {
+#else
+	else if (rec->recordType == kHFSPlusFolderRecord) {
+#endif
 		if ((attrList->dirattr & ~ATTR_DIR_VALIDMASK) != 0) {	/* attr we do know about  */
 			matched = false;
 			goto TestDone;
@@ -899,8 +984,10 @@ CheckCriteria(	ExtendedVCB *vcb,
 			
 			if (isHFSPlus)
 				parentID = key->hfsPlus.parentID;
+#if CONFIG_HFS_STD
 			else
 				parentID = key->hfs.parentID;
+#endif
 				
 			matched = CompareRange(parentID, searchInfo1->parentDirID,
 					searchInfo2->parentDirID );
@@ -1053,13 +1140,20 @@ InsertMatch(struct hfsmount *hfsmp, uio_t a_uio, CatalogRecord *rec,
 	}
 
 	if (returnAttrList->commonattr & ATTR_CMN_NAME) {
-		cat_convertkey(hfsmp, key, rec, &c_desc);
+		err = cat_convertkey(hfsmp, key, rec, &c_desc);
+		if (err) {
+			/* This means that we probably had a CNID error */
+			goto exit;
+		}
 	} else {
 		c_desc.cd_cnid = c_attr.ca_fileid;
-		if (hfsmp->hfs_flags & HFS_STANDARD)
-			c_desc.cd_parentcnid = key->hfs.parentID;
-		else
+		if ((hfsmp->hfs_flags & HFS_STANDARD) == 0) 
 			c_desc.cd_parentcnid = key->hfsPlus.parentID;
+#if CONFIG_HFS_STD
+		else
+			c_desc.cd_parentcnid = key->hfs.parentID;
+#endif
+
 	}
 
 	attrblk.ab_attrlist = returnAttrList;
@@ -1123,18 +1217,8 @@ UnpackSearchAttributeBlock( struct hfsmount *hfsmp, struct attrlist	*alist,
 				if (len > sizeof(searchInfo->name))
 					return (EINVAL);
 
-				if (hfsmp->hfs_flags & HFS_STANDARD) {
-					/* Convert name to pascal string to match HFS B-Tree names */
 
-					if (len > 0) {
-						if (utf8_to_hfs(HFSTOVCB(hfsmp), len-1, (u_char *)s, (u_char*)searchInfo->name) != 0)
-							return (EINVAL);
-
-						searchInfo->nameLength = searchInfo->name[0];
-					} else {
-						searchInfo->name[0] = searchInfo->nameLength = 0;
-					}
-				} else {
+				if ((hfsmp->hfs_flags & HFS_STANDARD) == 0) {
 					size_t ucslen;
 					/* Convert name to Unicode to match HFS Plus B-Tree names */
 
@@ -1148,6 +1232,20 @@ UnpackSearchAttributeBlock( struct hfsmount *hfsmp, struct attrlist	*alist,
 						searchInfo->nameLength = 0;
 					}
 				}
+#if CONFIG_HFS_STD
+				else {
+					/* Convert name to pascal string to match HFS (Standard) B-Tree names */
+
+					if (len > 0) {
+						if (utf8_to_hfs(HFSTOVCB(hfsmp), len-1, (u_char *)s, (u_char*)searchInfo->name) != 0)
+							return (EINVAL);
+
+						searchInfo->nameLength = searchInfo->name[0];
+					} else {
+						searchInfo->name[0] = searchInfo->nameLength = 0;
+					}
+				}
+#endif	
 			}
 			attributeBuffer = (attrreference_t*) attributeBuffer +1;
 		}

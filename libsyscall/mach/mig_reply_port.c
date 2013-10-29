@@ -28,23 +28,21 @@
 
 #include <mach/mach.h>
 #include <mach/mach_init.h>
+#include <sys/cdefs.h>
+#include "tsd.h"
 
-//extern mach_port_t _pthread_reply_port(pthread_t);
-static mach_port_t _task_reply_port = MACH_PORT_NULL;
+__XNU_PRIVATE_EXTERN mach_port_t _task_reply_port = MACH_PORT_NULL;
 
-extern mach_port_t _mig_get_reply_port(void);
-extern void _mig_set_reply_port(mach_port_t port);
-
-/*
- * Called by mach_init with 0 before cthread_init is
- * called and again with 1 at the end of cthread_init.
- */
-void
-_mig_init(int init_done)
+static inline mach_port_t
+_mig_get_reply_port()
 {
-	if (init_done == 0) {
-		_task_reply_port = mach_reply_port();
-	}
+	return _os_tsd_get_direct(__TSD_MIG_REPLY);
+}
+
+static inline void
+_mig_set_reply_port(mach_port_t port)
+{
+	_os_tsd_set_direct(__TSD_MIG_REPLY, port);
 }
 
 /*
@@ -56,7 +54,7 @@ _mig_init(int init_done)
 mach_port_t
 mig_get_reply_port(void)
 {
-	register mach_port_t port = _mig_get_reply_port();
+	mach_port_t port = _mig_get_reply_port();
 	if (port == MACH_PORT_NULL) {
 		port = mach_reply_port();
 		_mig_set_reply_port(port);
@@ -71,9 +69,7 @@ mig_get_reply_port(void)
 void
 mig_dealloc_reply_port(mach_port_t migport)
 {
-	register mach_port_t port;
-	
-	port = _mig_get_reply_port();
+	mach_port_t port = _mig_get_reply_port();
 	if (port != MACH_PORT_NULL && port != _task_reply_port) {
 		_mig_set_reply_port(_task_reply_port);
 		(void) mach_port_mod_refs(mach_task_self(), port, MACH_PORT_RIGHT_RECEIVE, -1);
@@ -90,6 +86,6 @@ mig_dealloc_reply_port(mach_port_t migport)
  ***********************************************************/
 
 void
-mig_put_reply_port(mach_port_t reply_port)
+mig_put_reply_port(mach_port_t reply_port __unused)
 {
 }

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1998-2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 1998-2012 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -37,6 +37,7 @@
 #include "RootDomainUserClient.h"
 #include <IOKit/pwr_mgt/IOPMLibDefs.h>
 #include <IOKit/pwr_mgt/IOPMPrivate.h>
+#include <sys/proc.h>
 
 #define super IOUserClient
 
@@ -79,7 +80,7 @@ IOReturn RootDomainUserClient::secureSleepSystem( uint32_t *return_code )
 
 IOReturn RootDomainUserClient::secureSleepSystemOptions( 
     const void      *inOptions, 
-    IOByteCount     inOptionsSize __unused,
+    IOByteCount     inOptionsSize,
     uint32_t        *returnCode)
 {
 
@@ -99,7 +100,7 @@ IOReturn RootDomainUserClient::secureSleepSystemOptions(
     if (inOptions)
     {
         unserializedOptions = OSDynamicCast( OSDictionary,
-                                             OSUnserializeXML((const char *)inOptions, &unserializeErrorString));
+                                             OSUnserializeXML((const char *)inOptions, inOptionsSize, &unserializeErrorString));
     
         if (!unserializedOptions) {
             IOLog("IOPMRootDomain SleepSystem unserialization failure: %s\n", 
@@ -107,9 +108,14 @@ IOReturn RootDomainUserClient::secureSleepSystemOptions(
         }
     }
 
-    if ( (local_priv || admin_priv) 
-          && fOwner ) 
+    if ( (local_priv || admin_priv) && fOwner )
     {
+        proc_t p;
+        p = (proc_t)get_bsdtask_info(fOwningTask);
+        if (p) {
+            fOwner->setProperty("SleepRequestedByPID", proc_pid(p), 32);
+        }
+        
         if (unserializedOptions) 
         {
             // Publish Sleep Options in registry under root_domain
@@ -346,6 +352,28 @@ IOReturn RootDomainUserClient::externalMethod(
             {
                 ret = this->secureGetSystemSleepType(
                         (uint32_t *) &arguments->scalarOutput[0]);
+            }
+            break;
+
+        case kPMSleepWakeWatchdogEnable:
+            ret = clientHasPrivilege(fOwningTask, kIOClientPrivilegeAdministrator);
+            if (ret == kIOReturnSuccess)
+               fOwner->sleepWakeDebugEnableWdog();
+            break;
+
+
+        case kPMSleepWakeDebugTrig:
+            ret = clientHasPrivilege(fOwningTask, kIOClientPrivilegeAdministrator);
+            if (ret == kIOReturnSuccess)
+               fOwner->sleepWakeDebugTrig(false);
+            break;
+
+        case kPMSetDisplayPowerOn:
+            if (1 == arguments->scalarInputCount)
+            {
+                ret = clientHasPrivilege(fOwningTask, kIOClientPrivilegeAdministrator);
+                if (ret == kIOReturnSuccess)
+                    fOwner->setDisplayPowerOn((uint32_t)arguments->scalarInput[0]);
             }
             break;
 /*

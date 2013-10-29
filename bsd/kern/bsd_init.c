@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2009 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2013 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -144,6 +144,7 @@
 #include <sys/protosw.h>		/* for domaininit() */
 #include <kern/sched_prim.h>		/* for thread_wakeup() */
 #include <net/if_ether.h>		/* for ether_family_init() */
+#include <net/if_gif.h>			/* for gif_init() */
 #include <vm/vm_protos.h>		/* for vnode_pager_bootstrap() */
 #include <miscfs/devfs/devfsdefs.h>	/* for devfs_kernel_mount() */
 #include <mach/host_priv.h>		/* for host_set_exception_ports() */
@@ -152,11 +153,15 @@
 #include <sys/semaphore.h>		/* for psem_lock_init() */
 #include <sys/msgbuf.h>			/* for log_setsize() */
 #include <sys/tty.h>			/* for tty_init() */
+#include <sys/proc_uuid_policy.h>	/* proc_uuid_policy_init() */
+#include <netinet/flow_divert.h>	/* flow_divert_init() */
 #include <net/if_utun.h>		/* for utun_register_control() */
+#include <net/if_ipsec.h>       /* for ipsec_register_control() */
 #include <net/net_str_id.h>		/* for net_str_id_init() */
 #include <net/netsrc.h>			/* for netsrc_init() */
 #include <net/ntstat.h>			/* for nstat_init() */
 #include <kern/assert.h>		/* for assert() */
+#include <sys/kern_overrides.h>		/* for init_system_override() */
 
 #include <net/init.h>
 
@@ -232,16 +237,13 @@ char rootdevice[16]; 	/* hfs device names have at least 9 chars */
 struct	kmemstats kmemstats[M_LAST];
 #endif
 
-int	lbolt;				/* awoken once a second */
 struct	vnode *rootvp;
 int boothowto = RB_DEBUG;
 
-void lightning_bolt(void *);
 extern kern_return_t IOFindBSDRoot(char *, unsigned int, dev_t *, u_int32_t *);
 extern void IOSecureBSDRoot(const char * rootName);
 extern kern_return_t IOKitBSDInit(void );
 extern void kminit(void);
-extern void klogwakeup(void);
 extern void file_lock_init(void);
 extern void kmeminit(void);
 extern void bsd_bufferinit(void);
@@ -259,7 +261,7 @@ __private_extern__ int execargs_cache_size = 0;
 __private_extern__ int execargs_free_count = 0;
 __private_extern__ vm_offset_t * execargs_cache = NULL;
 
-void bsd_exec_setup(int) __attribute__((aligned(4096)));
+void bsd_exec_setup(int);
 
 __private_extern__ int bootarg_vnode_cache_defeat = 0;
 
@@ -273,9 +275,9 @@ __private_extern__ int bootarg_disable_aslr = 0;
 int	cmask = CMASK;
 extern int customnbuf;
 
-void bsd_init(void) __attribute__((section("__TEXT, initcode")));
-kern_return_t bsd_autoconf(void) __attribute__((section("__TEXT, initcode")));
-void bsd_utaskbootstrap(void) __attribute__((section("__TEXT, initcode")));
+void bsd_init(void);
+kern_return_t bsd_autoconf(void);
+void bsd_utaskbootstrap(void);
 
 static void parse_bsd_args(void);
 extern task_t bsd_init_task;
@@ -313,9 +315,6 @@ extern int check_policy_init(int);
 #endif
 #endif	/* CONFIG_MACF */
 
-extern void stackshot_lock_init(void);
-
-
 /* If we are using CONFIG_DTRACE */
 #if CONFIG_DTRACE
 	extern void dtrace_postinit(void);
@@ -352,7 +351,7 @@ struct rlimit vm_initial_limit_stack = { DFLSSIZ, MAXSSIZ - PAGE_SIZE };
 struct rlimit vm_initial_limit_data = { DFLDSIZ, MAXDSIZ };
 struct rlimit vm_initial_limit_core = { DFLCSIZ, MAXCSIZ };
 
-extern thread_t	cloneproc(task_t, proc_t, int);
+extern thread_t	cloneproc(task_t, proc_t, int, int);
 extern int 	(*mountroot)(void);
 
 lck_grp_t * proc_lck_grp;
@@ -384,7 +383,6 @@ void (*unmountroot_pre_hook)(void);
  * of the uu_context.vc_ucred field so that the uthread structure can be
  * used like any other.
  */
-extern void run_bringup_tests(void);
 
 extern void IOServicePublishResource(const char *, boolean_t);
 
@@ -500,6 +498,9 @@ bsd_init(void)
 #endif
 #endif /* MAC */
 
+	/* Initialize System Override call */
+	init_system_override();
+
 	/*
 	 * Create process 0.
 	 */
@@ -567,9 +568,10 @@ bsd_init(void)
 	bzero(&temp_cred, sizeof(temp_cred));
 	bzero(&temp_pcred, sizeof(temp_pcred));
 	temp_pcred.cr_ngroups = 1;
-
+	/* kern_proc, shouldn't call up to DS for group membership */
+	temp_pcred.cr_flags = CRF_NOMEMBERD;
 	temp_cred.cr_audit.as_aia_p = audit_default_aia_p;
-
+	
 	bsd_init_kprintf("calling kauth_cred_create\n");
 	/*
 	 * We have to label the temp cred before we create from it to
@@ -601,7 +603,6 @@ bsd_init(void)
 #endif
 
 	/* Create the file descriptor table. */
-	filedesc0.fd_refcnt = 1+1;	/* +1 so shutdown will not _FREE_ZONE */
 	kernproc->p_fd = &filedesc0;
 	filedesc0.fd_cmask = cmask;
 	filedesc0.fd_knlistsize = -1;
@@ -685,6 +686,12 @@ bsd_init(void)
 	bsd_init_kprintf("calling vfsinit\n");
 	vfsinit();
 
+#if CONFIG_PROC_UUID_POLICY
+	/* Initial proc_uuid_policy subsystem */
+	bsd_init_kprintf("calling proc_uuid_policy_init()\n");
+	proc_uuid_policy_init();
+#endif
+
 #if SOCKETS
 	/* Initialize per-CPU cache allocator */
 	mcache_init();
@@ -747,8 +754,6 @@ bsd_init(void)
 	bsd_init_kprintf("calling select_wait_queue_init\n");
 	select_wait_queue_init();
 
-	/* Stack snapshot facility lock */
-	stackshot_lock_init();
 	/*
 	 * Initialize protocols.  Block reception of incoming packets
 	 * until everything is ready.
@@ -769,6 +774,9 @@ bsd_init(void)
 	bsd_init_kprintf("calling domaininit\n");
 	domaininit();
 	iptap_init();
+#if FLOW_DIVERT
+	flow_divert_init();
+#endif	/* FLOW_DIVERT */
 #endif /* SOCKETS */
 
 	kernproc->p_fd->fd_cdir = NULL;
@@ -794,10 +802,6 @@ bsd_init(void)
 	kmstartup();
 #endif
 
-	/* kick off timeout driven events by calling first time */
-	thread_wakeup(&lbolt);
-	timeout(lightning_bolt, 0, hz);
-
 	bsd_init_kprintf("calling bsd_autoconf\n");
 	bsd_autoconf();
 
@@ -814,6 +818,10 @@ bsd_init(void)
 #if NLOOP > 0
 	bsd_init_kprintf("calling loopattach\n");
 	loopattach();			/* XXX */
+#endif
+#if NGIF
+	/* Initialize gif interface (after lo0) */
+	gif_init();
 #endif
 
 #if PFLOG
@@ -834,6 +842,9 @@ bsd_init(void)
 	
 	/* register user tunnel kernel control handler */
 	utun_register_control();
+#if IPSEC
+	ipsec_register_control();
+#endif /* IPSEC */
 	netsrc_init();
 	nstat_init();
 #endif /* NETWORKING */
@@ -932,8 +943,7 @@ bsd_init(void)
 #endif /* CONFIG_IMAGEBOOT */
   
 	/* set initial time; all other resource data is  already zero'ed */
-	microtime(&kernproc->p_start);
-	kernproc->p_stats->p_start = kernproc->p_start;	/* for compat */
+	microtime_with_abstime(&kernproc->p_start, &kernproc->p_stats->ps_start);
 
 #if DEVFS
 	{
@@ -953,7 +963,6 @@ bsd_init(void)
 
 #if defined(__LP64__)
 	kernproc->p_flag |= P_LP64;
-	printf("Kernel is LP64\n");
 #endif
 
 	pal_kernel_announce();
@@ -969,6 +978,7 @@ bsd_init(void)
 #endif
 
 	bsd_init_kprintf("done\n");
+
 }
 
 /* Called with kernel funnel held */
@@ -1001,20 +1011,6 @@ bsdinit_task(void)
 #endif
 	load_init_program(p);
 	lock_trace = 1;
-}
-
-void
-lightning_bolt(__unused void *dummy)
-{			
-	boolean_t 	funnel_state;
-
-	funnel_state = thread_funnel_set(kernel_flock, TRUE);
-
-	thread_wakeup(&lbolt);
-	timeout(lightning_bolt,0,hz);
-	klogwakeup();
-
-	(void) thread_funnel_set(kernel_flock, FALSE);
 }
 
 kern_return_t
@@ -1083,7 +1079,7 @@ bsd_utaskbootstrap(void)
 	 * Clone the bootstrap process from the kernel process, without
 	 * inheriting either task characteristics or memory from the kernel;
 	 */
-	thread = cloneproc(TASK_NULL, kernproc, FALSE);
+	thread = cloneproc(TASK_NULL, kernproc, FALSE, TRUE);
 
 	/* Hold the reference as it will be dropped during shutdown */
 	initproc = proc_find(1);				
@@ -1110,7 +1106,7 @@ parse_bsd_args(void)
 	char namep[16];
 	int msgbuf;
 
-	if (PE_parse_boot_argn("-s", namep, sizeof (namep)))
+	if ( PE_parse_boot_argn("-s", namep, sizeof (namep)))
 		boothowto |= RB_SINGLE;
 
 	if (PE_parse_boot_argn("-b", namep, sizeof (namep)))
@@ -1150,6 +1146,7 @@ parse_bsd_args(void)
 	if (PE_parse_boot_argn("-novfscache", namep, sizeof(namep))) {
 		nc_disabled = 1;
 	}
+
 }
 
 void

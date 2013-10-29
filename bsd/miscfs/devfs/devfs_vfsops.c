@@ -503,7 +503,7 @@ devfs_kernel_mount(char * mntname)
 	NDINIT(&nd, LOOKUP, OP_MOUNT, FOLLOW | LOCKLEAF, UIO_SYSSPACE,
 	    CAST_USER_ADDR_T(mntname), ctx);
 	if ((error = namei(&nd))) {
-	    printf("devfs_kernel_mount: failed to find directory '%s', %d", 
+	    printf("devfs_kernel_mount: failed to find directory '%s', %d\n", 
 		   mntname, error);
 	    return (error);
 	}
@@ -567,7 +567,7 @@ devfs_kernel_mount(char * mntname)
 	error = devfs_mount(mp, NULL, USER_ADDR_NULL, ctx);
 
 	if (error) {
-	    printf("devfs_kernel_mount: mount %s failed: %d", mntname, error);
+	    printf("devfs_kernel_mount: mount %s failed: %d\n", mntname, error);
 	    mp->mnt_vtable->vfc_refcount--;
 
 	    vfs_unbusy(mp);

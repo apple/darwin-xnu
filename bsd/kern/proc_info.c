@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2005, 2010 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2005-2013 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -72,8 +72,9 @@
 #include <sys/kdebug.h>
 #include <sys/sysproto.h>
 #include <sys/msgbuf.h>
+#include <sys/priv.h>
 
-#include <sys/msgbuf.h>
+#include <sys/guarded.h>
 
 #include <machine/machine_routines.h>
 
@@ -88,6 +89,7 @@ struct kqueue;
 struct atalk;
 
 uint64_t get_dispatchqueue_offset_from_proc(void *);
+uint64_t get_dispatchqueue_serialno_offset_from_proc(void *);
 int proc_info_internal(int callnum, int pid, int flavor, uint64_t arg, user_addr_t buffer, uint32_t buffersize, int32_t * retval);
 
 /* protos for proc_info calls */
@@ -99,6 +101,7 @@ int proc_setcontrol(int pid, int flavor, uint64_t arg, user_addr_t buffer, uint3
 int proc_pidfileportinfo(int pid, int flavor, mach_port_name_t name, user_addr_t buffer, uint32_t buffersize, int32_t *retval);
 int proc_dirtycontrol(int pid, int flavor, uint64_t arg, int32_t * retval);
 int proc_terminate(int pid, int32_t * retval);
+int proc_pid_rusage(int pid, int flavor, user_addr_t buffer, int32_t * retval);
 
 /* protos for procpidinfo calls */
 int proc_pidfdlist(proc_t p, user_addr_t buffer, uint32_t buffersize, int32_t *retval);
@@ -115,6 +118,7 @@ int proc_pidvnodepathinfo(proc_t p,  uint64_t arg, user_addr_t buffer, uint32_t 
 int proc_pidpathinfo(proc_t p, uint64_t arg, user_addr_t buffer, uint32_t buffersize, int32_t *retval);
 int proc_pidworkqueueinfo(proc_t p, struct proc_workqueueinfo *pwqinfo);
 int proc_pidfileportlist(proc_t p, user_addr_t buffer, uint32_t buffersize, int32_t *retval);
+void proc_piduniqidentifierinfo(proc_t p, struct proc_uniqidentifierinfo *p_uniqidinfo);
 
 
 /* protos for proc_pidfdinfo calls */
@@ -130,21 +134,32 @@ int pid_atalkinfo(struct atalk  * at, struct fileproc * fp,  int closeonexec, us
 
 /* protos for misc */
 
-void proc_dirty_start(struct proc *p);
-void proc_dirty_end(struct proc *p);
-
 int fill_vnodeinfo(vnode_t vp, struct vnode_info *vinfo);
 void  fill_fileinfo(struct fileproc * fp, int closeonexec, struct proc_fileinfo * finfo);
-static int proc_security_policy(proc_t p);
+int proc_security_policy(proc_t targetp, int callnum, int flavor, boolean_t check_same_user);
 static void munge_vinfo_stat(struct stat64 *sbp, struct vinfo_stat *vsbp);
 
 extern int cansignal(struct proc *, kauth_cred_t, struct proc *, int, int);
+extern int proc_get_rusage(proc_t proc, int flavor, user_addr_t buffer, int is_zombie);
+
+#define CHECK_SAME_USER         TRUE
+#define NO_CHECK_SAME_USER      FALSE
 
 uint64_t get_dispatchqueue_offset_from_proc(void *p)
 {
 	if(p != NULL) {
 		proc_t pself = (proc_t)p;
 		return (pself->p_dispatchqueue_offset);
+	} else {
+		return (uint64_t)0;
+	}
+}
+
+uint64_t get_dispatchqueue_serialno_offset_from_proc(void *p)
+{
+	if(p != NULL) {
+		proc_t pself = (proc_t)p;
+		return (pself->p_dispatchqueue_serialno_offset);
 	} else {
 		return (uint64_t)0;
 	}
@@ -164,23 +179,25 @@ proc_info_internal(int callnum, int pid, int flavor, uint64_t arg, user_addr_t b
 {
 
 	switch(callnum) {
-		case 1: /* proc_listpids */
+		case PROC_INFO_CALL_LISTPIDS:
 			/* pid contains type and flavor contains typeinfo */
 			return(proc_listpids(pid, flavor, buffer, buffersize, retval));
-		case 2: /* proc_pidinfo */
+		case PROC_INFO_CALL_PIDINFO:
 			return(proc_pidinfo(pid, flavor, arg, buffer, buffersize, retval));
-		case 3: /* proc_pidfdinfo */
+		case PROC_INFO_CALL_PIDFDINFO:
 			return(proc_pidfdinfo(pid, flavor, (int)arg, buffer, buffersize, retval));
-		case 4: /* proc_kernmsgbuf */
+		case PROC_INFO_CALL_KERNMSGBUF:
 			return(proc_kernmsgbuf(buffer, buffersize, retval));
-		case 5: /* set on self properties  proc_setcontrol */
+		case PROC_INFO_CALL_SETCONTROL:
 			return(proc_setcontrol(pid, flavor, arg, buffer, buffersize, retval));
-		case 6:	/* proc_pidfileportinfo */
+		case PROC_INFO_CALL_PIDFILEPORTINFO:
 			return(proc_pidfileportinfo(pid, flavor, (mach_port_name_t)arg, buffer, buffersize, retval));
-		case 7: /* proc_terminate */
+		case PROC_INFO_CALL_TERMINATE:
 			return(proc_terminate(pid, retval));
-		case 8: /* proc_dirtycontrol */
+		case PROC_INFO_CALL_DIRTYCONTROL:
 			return(proc_dirtycontrol(pid, flavor, arg, retval));
+		case PROC_INFO_CALL_PIDRUSAGE:
+			return (proc_pid_rusage(pid, flavor, buffer, retval));
 		default:
 				return(EINVAL);
 	}
@@ -200,6 +217,10 @@ proc_listpids(uint32_t type, uint32_t typeinfo, user_addr_t buffer, uint32_t  bu
 	struct tty * tp;
 	int error = 0;
 	struct proclist *current_list;
+
+	/* Do we have permission to look into this? */
+	if ((error = proc_security_policy(PROC_NULL, PROC_INFO_CALL_LISTPIDS, type, NO_CHECK_SAME_USER)))
+		return (error);
 
 	/* if the buffer is null, return num of procs */
 	if (buffer == (user_addr_t)0) {
@@ -347,8 +368,10 @@ proc_pidfdlist(proc_t p, user_addr_t buffer, uint32_t  buffersize, int32_t *retv
 		for (n = 0; ((n < numfds) && (n < p->p_fd->fd_nfiles)); n++) {
 			if (((fp = p->p_fd->fd_ofiles[n]) != 0) 
 			     && ((p->p_fd->fd_ofileflags[n] & UF_RESERVED) == 0)) {
+				file_type_t fdtype = FILEGLOB_DTYPE(fp->f_fglob);
 				pfd->proc_fd = n;
-				pfd->proc_fdtype = fp->f_fglob->fg_type;	
+				pfd->proc_fdtype = (fdtype != DTYPE_ATALK) ?
+					fdtype : PROX_FDTYPE_ATALK;
 				count++;
 				pfd++;
 			}
@@ -386,7 +409,10 @@ proc_fileport_fdtype(mach_port_name_t name, struct fileglob *fg, void *arg)
 	struct fileport_fdtype_args *ffa = arg;
 
 	if (ffa->ffa_pfi != ffa->ffa_pfi_end) {
-		ffa->ffa_pfi->proc_fdtype = fg->fg_type;
+		file_type_t fdtype = FILEGLOB_DTYPE(fg);
+
+		ffa->ffa_pfi->proc_fdtype = (fdtype != DTYPE_ATALK) ?
+			fdtype : PROX_FDTYPE_ATALK;
 		ffa->ffa_pfi->proc_fileport = name;
 		ffa->ffa_pfi++;
 		return (0);		/* keep walking */
@@ -536,10 +562,8 @@ proc_pidbsdinfo(proc_t p, struct proc_bsdinfo * pbsd, int zombie)
 			pbsd->pbi_flags |= PROC_FLAG_CTTY;
 	}
 
-#if !CONFIG_EMBEDDED
 	if ((p->p_flag & P_DELAYIDLESLEEP) == P_DELAYIDLESLEEP) 
 		pbsd->pbi_flags |= PROC_FLAG_DELAYIDLESLEEP;
-#endif /* !CONFIG_EMBEDDED */
 
 	switch(PROC_CONTROL_STATE(p)) {
 		case P_PCTHROTTLE:
@@ -617,10 +641,8 @@ proc_pidshortbsdinfo(proc_t p, struct proc_bsdshortinfo * pbsd_shortp, int zombi
 		pbsd_shortp->pbsi_flags |= PROC_FLAG_PSUGID;
 	if ((p->p_flag & P_EXEC) == P_EXEC) 
 		pbsd_shortp->pbsi_flags |= PROC_FLAG_EXEC;
-#if !CONFIG_EMBEDDED
 	if ((p->p_flag & P_DELAYIDLESLEEP) == P_DELAYIDLESLEEP) 
 		pbsd_shortp->pbsi_flags |= PROC_FLAG_DELAYIDLESLEEP;
-#endif /* !CONFIG_EMBEDDED */
 
 	switch(PROC_CONTROL_STATE(p)) {
 		case P_PCTHROTTLE:
@@ -945,6 +967,19 @@ proc_pidworkqueueinfo(proc_t p, struct proc_workqueueinfo *pwqinfo)
 		return(0);
 
 }
+
+
+void
+proc_piduniqidentifierinfo(proc_t p, struct proc_uniqidentifierinfo *p_uniqidinfo)
+{
+	p_uniqidinfo->p_uniqueid = proc_uniqueid(p);
+	proc_getexecutableuuid(p, (unsigned char *)&p_uniqidinfo->p_uuid, sizeof(p_uniqidinfo->p_uuid));
+	p_uniqidinfo->p_puniqueid = proc_puniqueid(p);
+	p_uniqidinfo->p_reserve2 = 0;
+	p_uniqidinfo->p_reserve3 = 0;
+	p_uniqidinfo->p_reserve4 = 0;
+}
+
 /********************************** proc_pidinfo ********************************/
 
 
@@ -955,10 +990,12 @@ proc_pidinfo(int pid, int flavor, uint64_t arg, user_addr_t buffer, uint32_t  bu
 	int error = ENOTSUP;
 	int gotref = 0;
 	int findzomb = 0;
-	int refheld = 0, shortversion = 0;
+	int shortversion = 0;
 	uint32_t size;
 	int zombie = 0;
 	int thuniqueid = 0;
+	int uniqidversion = 0;
+	boolean_t check_same_user;
 
 	switch (flavor) {
 		case PROC_PIDLISTFDS:
@@ -1014,6 +1051,12 @@ proc_pidinfo(int pid, int flavor, uint64_t arg, user_addr_t buffer, uint32_t  bu
 		case PROC_PIDTHREADID64INFO:
 			size = PROC_PIDTHREADID64INFO_SIZE;
 			break;
+		case PROC_PIDUNIQIDENTIFIERINFO:
+			size = PROC_PIDUNIQIDENTIFIERINFO_SIZE;
+			break;
+		case PROC_PIDT_BSDINFOWITHUNIQID:
+			size = PROC_PIDT_BSDINFOWITHUNIQID_SIZE;
+			break;
 		default:
 			return(EINVAL);
 	}
@@ -1025,72 +1068,88 @@ proc_pidinfo(int pid, int flavor, uint64_t arg, user_addr_t buffer, uint32_t  bu
 		return(EOVERFLOW);
 	}
 
-	if ((flavor != PROC_PIDTBSDINFO) && (flavor != PROC_PIDPATHINFO) && (flavor != PROC_PIDT_SHORTBSDINFO)) {
-		if ((p = proc_find(pid)) == PROC_NULL) {
-				error = ESRCH;
-				goto out;
-			} else {
-				gotref = 1;
-
-				/* Do we have permission to look into this ? */
-				if ((error = proc_security_policy(p)) != 0) {
-					goto out;
-				}
-			}
+	/* Check if we need to look for zombies */
+	if ((flavor == PROC_PIDTBSDINFO) || (flavor == PROC_PIDT_SHORTBSDINFO) || (flavor == PROC_PIDT_BSDINFOWITHUNIQID) 
+			|| (flavor == PROC_PIDUNIQIDENTIFIERINFO)) {
+		if (arg)
+			findzomb = 1;
 	}
+
+	if ((p = proc_find(pid)) == PROC_NULL) {
+		if (findzomb)
+			p = proc_find_zombref(pid);
+		if (p == PROC_NULL) {
+			error = ESRCH;
+			goto out;
+		}
+		zombie = 1;
+	} else {
+		gotref = 1;
+	}
+
+	/* Certain operations don't require privileges */
+	switch (flavor) {
+		case PROC_PIDT_SHORTBSDINFO:
+		case PROC_PIDUNIQIDENTIFIERINFO:
+		case PROC_PIDPATHINFO:
+			check_same_user = NO_CHECK_SAME_USER;
+			break;
+		default:
+			check_same_user = CHECK_SAME_USER;
+			break;
+	}
+
+	/* Do we have permission to look into this? */
+	if ((error = proc_security_policy(p, PROC_INFO_CALL_PIDINFO, flavor, check_same_user)))
+		goto out;
+
 	switch (flavor) {
 		case PROC_PIDLISTFDS: {
 			error = proc_pidfdlist(p, buffer, buffersize, retval);
 		}
 		break;
 
+		case PROC_PIDUNIQIDENTIFIERINFO: {
+			struct proc_uniqidentifierinfo p_uniqidinfo;
+
+			proc_piduniqidentifierinfo(p, &p_uniqidinfo);
+			error = copyout(&p_uniqidinfo, buffer, sizeof(struct proc_uniqidentifierinfo));
+			if (error == 0)
+				*retval = sizeof(struct proc_uniqidentifierinfo);
+		}
+		break;
+
 		case PROC_PIDT_SHORTBSDINFO:
 			shortversion = 1;
+		case PROC_PIDT_BSDINFOWITHUNIQID: 
 		case PROC_PIDTBSDINFO: {
 			struct proc_bsdinfo pbsd;
 			struct proc_bsdshortinfo pbsd_short;
-
-			zombie = 0;
-			if (arg)
-				findzomb = 1;
-			p = proc_find(pid);
-			if (p == PROC_NULL) {
-				if (findzomb)  
-					p = proc_find_zombref(pid);
-				if (p == NULL) {
-					error = ESRCH;
-					goto out;	
-				}
-				zombie = 1;
-			}  
-			refheld = 1;
-			/* Do we have permission to look into this ? */
-			if ((flavor != PROC_PIDT_SHORTBSDINFO) && ((error = proc_security_policy(p)) != 0)) {
-				if (refheld != 0) {
-					if (zombie != 0)
-						proc_drop_zombref(p);
-					else
-						proc_rele(p);
-				}
-				goto out;
-			}
+			struct proc_bsdinfowithuniqid pbsd_uniqid;
+		
+			if (flavor == PROC_PIDT_BSDINFOWITHUNIQID)
+				uniqidversion = 1;
+			
 			if (shortversion != 0) {
 				error = proc_pidshortbsdinfo(p, &pbsd_short, zombie);
 			} else {
 				error = proc_pidbsdinfo(p, &pbsd, zombie);
+				if (uniqidversion != 0) { 
+					proc_piduniqidentifierinfo(p, &pbsd_uniqid.p_uniqidentifier);
+					pbsd_uniqid.pbsd = pbsd;
+				}
 			}
-			if (refheld != 0) {
-				if (zombie != 0)
-					proc_drop_zombref(p);
-				else
-					proc_rele(p);
-			}
+			
 			if (error == 0) {
 				if (shortversion != 0) {
 					error = copyout(&pbsd_short, buffer, sizeof(struct proc_bsdshortinfo));
 					if (error == 0)
 						*retval = sizeof(struct proc_bsdshortinfo);
-				 } else {
+				 } else if (uniqidversion != 0) {
+					error = copyout(&pbsd_uniqid, buffer, sizeof(struct proc_bsdinfowithuniqid));
+					if (error == 0)
+						*retval = sizeof(struct proc_bsdinfowithuniqid);
+				} else {
 					error = copyout(&pbsd, buffer, sizeof(struct proc_bsdinfo));
 					if (error == 0)
 						*retval = sizeof(struct proc_bsdinfo);
@@ -1173,12 +1232,6 @@ proc_pidinfo(int pid, int flavor, uint64_t arg, user_addr_t buffer, uint32_t  bu
 		break;
 
 		case PROC_PIDPATHINFO: {
-			p = proc_find(pid);
-			if (p == PROC_NULL) {
-				error = ESRCH;
-				goto out;
-			}
-			gotref = 1;
 			error =  proc_pidpathinfo(p, arg, buffer, buffersize, retval);
 		}
 		break;
@@ -1209,6 +1262,8 @@ proc_pidinfo(int pid, int flavor, uint64_t arg, user_addr_t buffer, uint32_t  bu
 out:
 	if (gotref)
 		proc_rele(p);
+	else if (zombie)
+		proc_drop_zombref(p);
 	return(error);
 }
 
@@ -1262,14 +1317,27 @@ pid_vnodeinfopath(vnode_t vp, uint32_t vid, struct fileproc * fp, int closeonexe
 void  
 fill_fileinfo(struct fileproc * fp, int closeonexec, struct proc_fileinfo * fproc)
 {
-		fproc->fi_openflags = fp->f_fglob->fg_flag;
-		fproc->fi_status = 0;
-		fproc->fi_offset = fp->f_fglob->fg_offset;
-		fproc->fi_type = fp->f_fglob->fg_type;
-		if (fp->f_fglob->fg_count)
-			fproc->fi_status |= PROC_FP_SHARED;
-		if (closeonexec != 0)
-			fproc->fi_status |= PROC_FP_CLEXEC;
+	fproc->fi_openflags = fp->f_fglob->fg_flag;
+	fproc->fi_status = 0;
+	fproc->fi_offset = fp->f_fglob->fg_offset;
+	fproc->fi_type = FILEGLOB_DTYPE(fp->f_fglob);
+	if (fp->f_fglob->fg_count > 1)
+		fproc->fi_status |= PROC_FP_SHARED;
+	if (closeonexec != 0)
+		fproc->fi_status |= PROC_FP_CLEXEC;
+
+	if (FILEPROC_TYPE(fp) == FTYPE_GUARDED) {
+		fproc->fi_status |= PROC_FP_GUARDED;
+		fproc->fi_guardflags = 0;
+		if (fp_isguarded(fp, GUARD_CLOSE))
+			fproc->fi_guardflags |= PROC_FI_GUARD_CLOSE;
+		if (fp_isguarded(fp, GUARD_DUP))
+			fproc->fi_guardflags |= PROC_FI_GUARD_DUP;
+		if (fp_isguarded(fp, GUARD_SOCKET_IPC))
+			fproc->fi_guardflags |= PROC_FI_GUARD_SOCKET_IPC;
+		if (fp_isguarded(fp, GUARD_FILEPORT))
+			fproc->fi_guardflags |= PROC_FI_GUARD_FILEPORT;
+	}
 }
 
 
@@ -1316,6 +1384,7 @@ pid_socketinfo(socket_t so, struct fileproc *fp, int closeonexec, user_addr_t  b
 	}
 	return (error);
 #else
+#pragma unused(so, fp, closeonexec, buffer)
 	*retval = 0;
 	return (ENOTSUP);
 #endif
@@ -1445,10 +1514,10 @@ proc_pidfdinfo(int pid, int flavor,  int fd, user_addr_t buffer, uint32_t buffer
 		error = ESRCH;
 		goto out;
 	}
-	/* Do we have permission to look into this ? */
-	if ((error = proc_security_policy(p)) != 0) {
+
+	/* Do we have permission to look into this? */
+	if ((error = proc_security_policy(p, PROC_INFO_CALL_PIDFDINFO, flavor, CHECK_SAME_USER)))
 		goto out1;
-	}
 
 	switch (flavor) {
 		case PROC_PIDFDVNODEINFO: {
@@ -1538,20 +1607,6 @@ proc_pidfdinfo(int pid, int flavor,  int fd, user_addr_t buffer, uint32_t buffer
 		}
 		break;
 
-#if NETAT
-		case PROC_PIDFDATALKINFO: {
-			struct atalk * at;
-
-			if ((error = fp_getfatalk(p, fd, &fp,  &at)) !=0) {
-				goto out1;
-			}
-
-			/* no need to be under the fdlock */
-			closeonexec = p->p_fd->fd_ofileflags[fd] & UF_EXCLOSE;
-			error =  pid_atalkinfo(at, fp, closeonexec, buffer, buffersize, retval);
-		}
-		break;
-#endif /* NETAT */
 		default: {
 			error = EINVAL;
 			goto out1;
@@ -1591,7 +1646,7 @@ proc_fileport_info(__unused mach_port_name_t name,
 	case PROC_PIDFILEPORTVNODEPATHINFO: {
 		vnode_t vp;
 
-		if (fg->fg_type != DTYPE_VNODE) {
+		if (FILEGLOB_DTYPE(fg) != DTYPE_VNODE) {
 			error = ENOTSUP;
 			break;
 		}
@@ -1603,7 +1658,7 @@ proc_fileport_info(__unused mach_port_name_t name,
 	case PROC_PIDFILEPORTSOCKETINFO: {
 		socket_t so;
 
-		if (fg->fg_type != DTYPE_SOCKET) {
+		if (FILEGLOB_DTYPE(fg) != DTYPE_SOCKET) {
 			error = EOPNOTSUPP;
 			break;
 		}
@@ -1615,7 +1670,7 @@ proc_fileport_info(__unused mach_port_name_t name,
 	case PROC_PIDFILEPORTPSHMINFO: {
 		struct pshmnode *pshm;
 
-		if (fg->fg_type != DTYPE_PSXSHM) {
+		if (FILEGLOB_DTYPE(fg) != DTYPE_PSXSHM) {
 			error = EBADF;		/* ick - mirror fp_getfpshm */
 			break;
 		}
@@ -1627,7 +1682,7 @@ proc_fileport_info(__unused mach_port_name_t name,
 	case PROC_PIDFILEPORTPIPEINFO: {
 		struct pipe *cpipe;
 
-		if (fg->fg_type != DTYPE_PIPE) {
+		if (FILEGLOB_DTYPE(fg) != DTYPE_PIPE) {
 			error = EBADF;		/* ick - mirror fp_getfpipe */
 			break;
 		}
@@ -1679,9 +1734,10 @@ proc_pidfileportinfo(int pid, int flavor, mach_port_name_t name,
 		error = ESRCH;
 		goto out;
 	}
-	if ((error = proc_security_policy(p)) != 0) {
+
+	/* Do we have permission to look into this? */
+	if ((error = proc_security_policy(p, PROC_INFO_CALL_PIDFILEPORTINFO, flavor, CHECK_SAME_USER)))
 		goto out1;
-	}
 
 	fia.fia_flavor = flavor;
 	fia.fia_buffer = buffer;
@@ -1697,20 +1753,40 @@ out:
 	return (error);
 }
 
-static int
-proc_security_policy(proc_t p)
+int
+proc_security_policy(proc_t targetp, __unused int callnum, __unused int flavor, boolean_t check_same_user)
 {
-	kauth_cred_t my_cred;
-	uid_t uid;
+#if CONFIG_MACF
+	int error = 0;
 
-	my_cred = kauth_cred_proc_ref(p);
-	uid = kauth_cred_getuid(my_cred) ;
-	kauth_cred_unref(&my_cred);
-	
-	if ((uid != kauth_cred_getuid(kauth_cred_get())) 
-		&& suser(kauth_cred_get(), (u_short *)0)) {
+	if ((error = mac_proc_check_proc_info(current_proc(), targetp, callnum, flavor)))
+		return (error);
+#endif
+
+	/* The 'listpids' call doesn't have a target proc */
+	if (targetp == PROC_NULL) {
+		assert(callnum == PROC_INFO_CALL_LISTPIDS && check_same_user == NO_CHECK_SAME_USER);
+		return (0);
+	}
+
+	/*
+	 * Check for 'get information for processes owned by other users' privilege
+	 * root has this privilege by default
+	 */
+	if (priv_check_cred(kauth_cred_get(), PRIV_GLOBAL_PROC_INFO, 0) == 0)
+		check_same_user = FALSE;
+
+	if (check_same_user) {
+		kauth_cred_t target_cred;
+		uid_t        target_uid;
+
+		target_cred = kauth_cred_proc_ref(targetp);
+		target_uid  = kauth_cred_getuid(target_cred);
+		kauth_cred_unref(&target_cred);
+
+		if (kauth_getuid() != target_uid)
 			return(EPERM);
-		}
+	}
 
 	return(0);
 }
@@ -1738,6 +1814,9 @@ proc_setcontrol(int pid, int flavor, uint64_t arg, user_addr_t buffer, uint32_t 
 	if (pid != pself->p_pid)
 		return(EINVAL);
 
+	/* Do we have permission to look into this? */
+	if ((error = proc_security_policy(pself, PROC_INFO_CALL_SETCONTROL, flavor, NO_CHECK_SAME_USER)))
+		goto out;
 
 	switch (flavor) {
 		case PROC_SELFSET_PCONTROL: {
@@ -1800,42 +1879,7 @@ out:
 	return(error);
 }
 
-void
-proc_dirty_start(struct proc *p)
-{
-	proc_lock(p);
-	while (p->p_dirty & P_DIRTY_BUSY) {
-		msleep(&p->p_dirty, &p->p_mlock, 0, "proc_dirty_start", NULL);
-	}
-	p->p_dirty |= P_DIRTY_BUSY;
-	proc_unlock(p);
-}
-
-void
-proc_dirty_end(struct proc *p)
-{
-	proc_lock(p);
-	if (p->p_dirty & P_DIRTY_BUSY) {
-		p->p_dirty &= ~P_DIRTY_BUSY;
-		wakeup(&p->p_dirty);
-	}
-	proc_unlock(p);
-}
-
-static boolean_t
-proc_validate_track_flags(uint32_t pcontrol, struct proc *target_p) {
-	/* Check idle exit isn't specified independently */
-	if ((pcontrol & PROC_DIRTY_TRACK_MASK) == PROC_DIRTY_ALLOW_IDLE_EXIT) {
-		return false;		
-	}
-	
-	/* See that the process isn't marked for termination */
-	if (target_p->p_dirty & P_DIRTY_TERMINATED) {
-		return false;		
-	}
-	
-	return true;
-}
+#if CONFIG_MEMORYSTATUS
 
 int
 proc_dirtycontrol(int pid, int flavor, uint64_t arg, int32_t *retval) {
@@ -1845,16 +1889,29 @@ proc_dirtycontrol(int pid, int flavor, uint64_t arg, int32_t *retval) {
 	kauth_cred_t my_cred, target_cred;
 	boolean_t self = FALSE;
 	boolean_t child = FALSE;
+	boolean_t zombref = FALSE;
 	pid_t selfpid;
 
 	target_p = proc_find(pid);
+
 	if (target_p == PROC_NULL) {
-		return(ESRCH);
+		if (flavor == PROC_DIRTYCONTROL_GET) {
+			target_p = proc_find_zombref(pid);
+			zombref = 1;
+		}
+
+		if (target_p == PROC_NULL)
+			return(ESRCH);
+
 	}
-	
+
 	my_cred = kauth_cred_get();
 	target_cred = kauth_cred_proc_ref(target_p);
-	
+
+	/* Do we have permission to look into this? */
+	if ((error = proc_security_policy(target_p, PROC_INFO_CALL_DIRTYCONTROL, flavor, NO_CHECK_SAME_USER)))
+		goto out;
+
 	selfpid = proc_selfpid();
 	if (pid == selfpid) {
 		self = TRUE;
@@ -1869,96 +1926,26 @@ proc_dirtycontrol(int pid, int flavor, uint64_t arg, int32_t *retval) {
 				error = EPERM;
 				goto out;
 			}
-			
-			proc_dirty_start(target_p);	
 
-			if (proc_validate_track_flags(pcontrol, target_p)) {
-				/* Cumulative, as per <rdar://problem/11159924> */
-				target_p->p_dirty |= 
-					((pcontrol & PROC_DIRTY_TRACK) ? P_DIRTY_TRACK : 0) |
-					((pcontrol & PROC_DIRTY_ALLOW_IDLE_EXIT) ? P_DIRTY_ALLOW_IDLE_EXIT : 0);	
-#if CONFIG_MEMORYSTATUS
-				if ((target_p->p_dirty & P_DIRTY_CAN_IDLE_EXIT) == P_DIRTY_CAN_IDLE_EXIT) {
-					memorystatus_on_track_dirty(pid, TRUE);
-				}
-#endif
-			} else {
-				error = EINVAL;
-			}
-			
-			proc_dirty_end(target_p);
+			error = memorystatus_dirty_track(target_p, pcontrol);
 		}
 		break;
 
-		case PROC_DIRTYCONTROL_SET: {
-			boolean_t kill = false;
-			
+		case PROC_DIRTYCONTROL_SET: {			
 			/* Check privileges; use cansignal() here since the process could be terminated */
 			if (!cansignal(current_proc(), my_cred, target_p, SIGKILL, 0)) {
 				error = EPERM;
 				goto out;
 			}
 			
-			proc_dirty_start(target_p);
-			
-			if (!(target_p->p_dirty & P_DIRTY_TRACK)) {
-				/* Dirty tracking not enabled */
-				error = EINVAL;			
-			} else if (pcontrol && (target_p->p_dirty & P_DIRTY_TERMINATED)) {
-				/* 
-				 * Process is set to be terminated and we're attempting to mark it dirty.
-				 * Set for termination and marking as clean is OK - see <rdar://problem/10594349>.
-				 */
-				error = EBUSY;		
-			} else {
-				int flag = (self == TRUE) ? P_DIRTY : P_DIRTY_SHUTDOWN;
-		        if (pcontrol && !(target_p->p_dirty & flag)) {
-					target_p->p_dirty |= flag;
-				} else if ((pcontrol == 0) && (target_p->p_dirty & flag)) {
-					if ((flag == P_DIRTY_SHUTDOWN) && (!target_p->p_dirty & P_DIRTY)) {
-						/* Clearing the dirty shutdown flag, and the process is otherwise clean - kill */
-						target_p->p_dirty |= P_DIRTY_TERMINATED;
-						kill = true;
-					} else if ((flag == P_DIRTY) && (target_p->p_dirty & P_DIRTY_TERMINATED)) {
-						/* Kill previously terminated processes if set clean */
-						kill = true;						
-					}
-					target_p->p_dirty &= ~flag;
-				} else {
-					/* Already set */
-					error = EALREADY;
-				}
-			}
-#if CONFIG_MEMORYSTATUS
-			if ((error == 0) && ((target_p->p_dirty & P_DIRTY_CAN_IDLE_EXIT) == P_DIRTY_CAN_IDLE_EXIT)) {
-				memorystatus_on_dirty(pid, pcontrol ? TRUE : FALSE);
-			}
-#endif
-			proc_dirty_end(target_p);
-
-			if ((error == 0) && (kill == true)) {
-				psignal(target_p, SIGKILL);
-			}
+			error = memorystatus_dirty_set(target_p, self, pcontrol);	
 		}
 		break;
 		
 		case PROC_DIRTYCONTROL_GET: {
 			/* No permissions check - dirty state is freely available */
 			if (retval) {
-				proc_dirty_start(target_p);
-				
-				*retval = 0;
-				if (target_p->p_dirty & P_DIRTY_TRACK) {
-					*retval |= PROC_DIRTY_TRACKED;
-					if (target_p->p_dirty & P_DIRTY_ALLOW_IDLE_EXIT) {
-						*retval |= PROC_DIRTY_ALLOWS_IDLE_EXIT;
-					}
-					if (target_p->p_dirty & P_DIRTY) {
-						*retval |= PROC_DIRTY_IS_DIRTY;
-					}
-				}
-				
-				proc_dirty_end(target_p);
+				*retval = memorystatus_dirty_get(target_p);
 			} else {
 				error = EINVAL;
 			}
@@ -1967,11 +1954,23 @@ proc_dirtycontrol(int pid, int flavor, uint64_t arg, int32_t *retval) {
 	}
 
 out:
-	proc_rele(target_p);
-    kauth_cred_unref(&target_cred);
+	if (zombref)
+		proc_drop_zombref(target_p);
+	else
+		proc_rele(target_p);
+
+	kauth_cred_unref(&target_cred);
 	
 	return(error);	
 }
+#else
+
+int
+proc_dirtycontrol(__unused int pid, __unused int flavor, __unused uint64_t arg, __unused int32_t *retval) {
+        return ENOTSUP;
+}
+
+#endif /* CONFIG_MEMORYSTATUS */
 
 /*
  * proc_terminate() provides support for sudden termination.
@@ -2011,22 +2010,22 @@ proc_terminate(int pid, int32_t *retval)
 		error = EPERM;
 		goto out;
 	}
-	
-	proc_dirty_start(p);
-	
-	p->p_dirty |= P_DIRTY_TERMINATED;
-	
-	if ((p->p_dirty & (P_DIRTY_TRACK|P_DIRTY_IS_DIRTY)) == P_DIRTY_TRACK) {
-		/* Clean; mark as terminated and issue SIGKILL */
-		sig = SIGKILL;
-	} else {
-		/* Dirty, terminated, or state tracking is unsupported; issue SIGTERM to allow cleanup */
-		sig = SIGTERM;
+
+	/* Not allowed to sudden terminate yourself */
+	if (p == current_proc()) {
+		error = EPERM;
+		goto out;
 	}
 
-	proc_dirty_end(p);
+#if CONFIG_MEMORYSTATUS
+	/* Determine requisite signal to issue */
+	sig = memorystatus_on_terminate(p);
+#else
+	sig = SIGTERM;
+#endif
 
-	proc_removethrottle(p);
+	proc_set_task_policy(p->task, THREAD_NULL, TASK_POLICY_ATTRIBUTE,
+	                     TASK_POLICY_TERMINATED, TASK_POLICY_ENABLE);
 
 	psignal(p, sig);
 	*retval = sig;
@@ -2036,26 +2035,6 @@ out:
 	
 	return error;
 }
-
-void
-proc_removethrottle(proc_t p)
-
-{
-	/* remove throttled states in all threads; process is going to terminate soon */
-	proc_lock(p);
-
-	/* if already marked marked for proc_termiantion.. */
-	if ((p->p_lflag & P_LPTERMINATE) != 0) {
-		proc_unlock(p);
-		return;
-	}
-	p->p_lflag |= P_LPTERMINATE;
-	proc_unlock(p);
-
-	(void)proc_task_remove_throttle(p->task);
-
-}
-
 
 /*
  * copy stat64 structure into vinfo_stat structure.
@@ -2088,3 +2067,33 @@ munge_vinfo_stat(struct stat64 *sbp, struct vinfo_stat *vsbp)
 	vsbp->vst_qspare[0] = sbp->st_qspare[0];
 	vsbp->vst_qspare[1] = sbp->st_qspare[1];
 }
+
+int
+proc_pid_rusage(int pid, int flavor, user_addr_t buffer, __unused int32_t *retval)
+{
+	proc_t          p;
+	int             error;
+	int             zombie = 0;
+
+	if ((p = proc_find(pid)) == PROC_NULL) {
+		if ((p = proc_find_zombref(pid)) == PROC_NULL) {
+			return (ESRCH);
+		}
+		zombie = 1;
+	}
+
+	/* Do we have permission to look into this? */
+	if ((error = proc_security_policy(p, PROC_INFO_CALL_PIDRUSAGE, flavor, CHECK_SAME_USER)))
+		goto out;
+
+	error = proc_get_rusage(p, flavor, buffer, zombie);
+
+out:
+	if (zombie)
+		proc_drop_zombref(p);
+	else
+		proc_rele(p);
+
+	return (error);
+}
+

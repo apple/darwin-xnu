@@ -105,6 +105,10 @@
 #include <mach/task.h>
 #include <mach/message.h>
 
+#if CONFIG_MEMORYSTATUS
+#include <sys/kern_memorystatus.h>
+#endif
+
 #if CONFIG_MACF
 #include <security/mac_framework.h>
 #endif
@@ -158,13 +162,13 @@ lck_attr_t * lctx_lck_attr;
 static	void	lctxinit(void);
 #endif
 
-int cs_debug;	/* declared further down in this file */
+extern int cs_debug;
 
 #if DEBUG
 #define __PROC_INTERNAL_DEBUG 1
 #endif
 /* Name to give to core files */
-__private_extern__ char corefilename[MAXPATHLEN+1] = {"/cores/core.%P"};
+__XNU_PRIVATE_EXTERN char corefilename[MAXPATHLEN+1] = {"/cores/core.%P"};
 
 static void orphanpg(struct pgrp *pg);
 void 	proc_name_kdp(task_t t, char * buf, int size);
@@ -176,6 +180,7 @@ static void pgrp_replace(proc_t p, struct pgrp *pgrp);
 static void pgdelete_dropref(struct pgrp *pgrp);
 extern void pg_rele_dropref(struct pgrp * pgrp);
 static int csops_internal(pid_t pid, int ops, user_addr_t uaddr, user_size_t usersize, user_addr_t uaddittoken);
+static boolean_t proc_parent_is_currentproc(proc_t p);
 
 struct fixjob_iterargs {
 	struct pgrp * pg;
@@ -432,29 +437,32 @@ proc_rele_locked(proc_t p)
 proc_t
 proc_find_zombref(int pid)
 {
-	proc_t p1 = PROC_NULL;
-	proc_t p = PROC_NULL;
+	proc_t p;
 
 	proc_list_lock();
 
+ again:
 	p = pfind_locked(pid);
 
-	/* if process still in creation return NULL */
-	if ((p == PROC_NULL) || ((p->p_listflag & P_LIST_INCREATE) != 0)) {
+	/* should we bail? */
+	if ((p == PROC_NULL)					/* not found */
+	    || ((p->p_listflag & P_LIST_INCREATE) != 0)		/* not created yet */
+	    || ((p->p_listflag & P_LIST_EXITED) == 0)) {	/* not started exit */
+
 		proc_list_unlock();
-		return (p1);
+		return (PROC_NULL);
 	}
 
-	/* if process has not started exit or  is being reaped, return NULL */
-	if (((p->p_listflag & P_LIST_EXITED) != 0) && ((p->p_listflag & P_LIST_WAITING) == 0)) {
-		p->p_listflag |=  P_LIST_WAITING;
-		p1 = p;
-	} else 
-		p1 = PROC_NULL;
+	/* If someone else is controlling the (unreaped) zombie - wait */
+	if ((p->p_listflag & P_LIST_WAITING) != 0) {
+		(void)msleep(&p->p_stat, proc_list_mlock, PWAIT, "waitcoll", 0);
+		goto again;
+	}
+	p->p_listflag |=  P_LIST_WAITING;
 
 	proc_list_unlock();
 
-	return(p1);
+	return(p);
 }
 
 void
@@ -593,28 +601,64 @@ proc_checkdeadrefs(__unused proc_t p)
 int
 proc_pid(proc_t p)
 {
-	return(p->p_pid);
+	return (p->p_pid);
 }
 
 int 
 proc_ppid(proc_t p)
 {
-		return(p->p_ppid);
+	return (p->p_ppid);
 }
 
-int 
+int
 proc_selfpid(void)
 {
-	proc_t p = current_proc();
-	return(p->p_pid);
+	return (current_proc()->p_pid);
+}
+
+int
+proc_selfppid(void)
+{
+	return (current_proc()->p_ppid);
+}
+
+#if CONFIG_DTRACE
+static proc_t
+dtrace_current_proc_vforking(void)
+{
+	thread_t th = current_thread();
+	struct uthread *ut = get_bsdthread_info(th);
+
+	if (ut &&
+	    ((ut->uu_flag & (UT_VFORK|UT_VFORKING)) == (UT_VFORK|UT_VFORKING))) {
+		/*
+		 * Handle the narrow window where we're in the vfork syscall,
+		 * but we're not quite ready to claim (in particular, to DTrace)
+		 * that we're running as the child.
+		 */
+		return (get_bsdtask_info(get_threadtask(th)));
+	}
+	return (current_proc());
+}
+
+int
+dtrace_proc_selfpid(void)
+{
+	return (dtrace_current_proc_vforking()->p_pid);
 }
 
 int 
-proc_selfppid(void)
+dtrace_proc_selfppid(void)
 {
-	proc_t p = current_proc();
-	return(p->p_ppid);
+	return (dtrace_current_proc_vforking()->p_ppid);
 }
+
+uid_t
+dtrace_proc_selfruid(void)
+{
+	return (dtrace_current_proc_vforking()->p_ruid);
+}
+#endif /* CONFIG_DTRACE */
 
 proc_t 
 proc_parent(proc_t p)
@@ -635,6 +679,18 @@ loop:
 	return(parent);
 }
 
+static boolean_t
+proc_parent_is_currentproc(proc_t p)
+{
+	boolean_t ret = FALSE;
+	
+	proc_list_lock();
+	if (p->p_pptr == current_proc())
+		ret = TRUE;
+
+	proc_list_unlock();
+	return ret;
+}
 
 void
 proc_name(int pid, char * buf, int size)
@@ -811,10 +867,21 @@ proc_uniqueid(proc_t p)
 }
 
 uint64_t
-proc_selfuniqueid(void)
+proc_puniqueid(proc_t p)
 {
-	proc_t p = current_proc();
-	return(p->p_uniqueid);
+	return(p->p_puniqueid);
+}
+
+uint64_t
+proc_was_throttled(proc_t p)
+{
+	return (p->was_throttled);
+}
+
+uint64_t
+proc_did_throttle(proc_t p)
+{
+	return (p->did_throttle);
 }
 
 int
@@ -991,12 +1058,18 @@ pinsertchild(proc_t parent, proc_t child)
 	TAILQ_INIT(&child->p_evlist);
 	child->p_pptr = parent;
 	child->p_ppid = parent->p_pid;
+	child->p_puniqueid = parent->p_uniqueid;
 
 	pg = proc_pgrp(parent);
 	pgrp_add(pg, parent, child);
 	pg_rele(pg);
 
 	proc_list_lock();
+	
+#if CONFIG_MEMORYSTATUS
+	memorystatus_add(child, TRUE);
+#endif
+	
 	parent->p_childrencnt++;
 	LIST_INSERT_HEAD(&parent->p_children, child, p_sibling);
 
@@ -1005,7 +1078,6 @@ pinsertchild(proc_t parent, proc_t child)
 	child->p_listflag &= ~P_LIST_INCREATE;
 
 	proc_list_unlock();
-
 }
 
 /*
@@ -1294,12 +1366,24 @@ fixjobc(proc_t p, struct pgrp *pgrp, int entering)
 	struct session *mysession = pgrp->pg_session;
 	proc_t parent;
 	struct fixjob_iterargs fjarg;
+	boolean_t proc_parent_self;
 
-	parent = proc_parent(p);
+	/*
+	 * Check if p's parent is current proc, if yes then no need to take 
+	 * a ref; calling proc_parent with current proc as parent may 
+	 * deadlock if current proc is exiting.
+	 */
+	proc_parent_self = proc_parent_is_currentproc(p);
+	if (proc_parent_self)
+		parent = current_proc();
+	else 
+		parent = proc_parent(p);
+
 	if (parent != PROC_NULL) {
 		hispgrp = proc_pgrp(parent);	
 		hissess = proc_session(parent);
-		proc_rele(parent);
+		if (!proc_parent_self)
+			proc_rele(parent);
 	}
 
 
@@ -1422,6 +1506,12 @@ proc_t
 current_proc_EXTERNAL(void)
 {
 	return (current_proc());
+}
+
+int
+proc_is_forcing_hfs_case_sensitivity(proc_t p)
+{
+	return (p->p_vfs_iopolicy & P_VFS_IOPOLICY_FORCE_HFS_CASE_SENSITIVITY) ? 1 : 0;
 }
 
 /*
@@ -1720,16 +1810,34 @@ csops_audittoken(__unused proc_t p, struct csops_audittoken_args *uap, __unused 
 {
 	if (uap->uaudittoken == USER_ADDR_NULL)
 		return(EINVAL);
-	switch (uap->ops) {
-		case CS_OPS_PIDPATH:
-		case CS_OPS_ENTITLEMENTS_BLOB:
-			break;
-		default:
-			return(EINVAL);
-	};
-
 	return(csops_internal(uap->pid, uap->ops, uap->useraddr, 
 		uap->usersize, uap->uaudittoken));
+}
+
+static int
+csops_copy_token(void *start, size_t length, user_size_t usize, user_addr_t uaddr)
+{
+	char fakeheader[8] = { 0 };
+	int error;
+
+	if (usize < sizeof(fakeheader))
+		return ERANGE;
+
+	/* if no blob, fill in zero header */
+	if (NULL == start) {
+		start = fakeheader;
+		length = sizeof(fakeheader);
+	} else if (usize < length) {
+		/* ... if input too short, copy out length of entitlement */
+		uint32_t length32 = htonl((uint32_t)length);
+		memcpy(&fakeheader[4], &length32, sizeof(length32));
+		
+		error = copyout(fakeheader, uaddr, sizeof(fakeheader));
+		if (error == 0)
+			return ERANGE; /* input buffer to short, ERANGE signals that */
+		return error;
+	}
+	return copyout(start, uaddr, length);
 }
 
 static int
@@ -1737,12 +1845,10 @@ csops_internal(pid_t pid, int ops, user_addr_t uaddr, user_size_t usersize, user
 {
 	size_t usize = (size_t)CAST_DOWN(size_t, usersize);
 	proc_t pt;
-	uint32_t retflags;
-	int vid, forself;
+	int forself;
 	int error;
 	vnode_t tvp;
 	off_t toff;
-	char * buf;
 	unsigned char cdhash[SHA1_RESULTLEN];
 	audit_token_t token;
 	unsigned int upid=0, uidversion = 0;
@@ -1755,25 +1861,17 @@ csops_internal(pid_t pid, int ops, user_addr_t uaddr, user_size_t usersize, user
 		forself = 1;
 
 
-	/* Pre flight checks for CS_OPS_PIDPATH */
-	if (ops == CS_OPS_PIDPATH) {
-		/* usize is unsigned.. */
-	 	if (usize > 4 * PATH_MAX)
-			return(EOVERFLOW);
-		if (kauth_cred_issuser(kauth_cred_get()) != TRUE) 
-			return(EPERM);
-	} else {
-		switch (ops) {
+	switch (ops) {
 		case CS_OPS_STATUS:
 		case CS_OPS_CDHASH:
 		case CS_OPS_PIDOFFSET:
 		case CS_OPS_ENTITLEMENTS_BLOB:
+		case CS_OPS_BLOB:
 			break;	/* unrestricted */
 		default:
 			if (forself == 0 && kauth_cred_issuser(kauth_cred_get()) != TRUE)
 				return(EPERM);
 			break;
-		}
 	}
 
 	pt = proc_find(pid);
@@ -1796,12 +1894,19 @@ csops_internal(pid_t pid, int ops, user_addr_t uaddr, user_size_t usersize, user
 
 	switch (ops) {
 
-		case CS_OPS_STATUS:
+		case CS_OPS_STATUS: {
+			uint32_t retflags;
+
+			proc_lock(pt);
 			retflags = pt->p_csflags;
+			if (cs_enforcement(pt))
+				retflags |= CS_ENFORCEMENT;
+			proc_unlock(pt);
+
 			if (uaddr != USER_ADDR_NULL)
 				error = copyout(&retflags, uaddr, sizeof(uint32_t));
 			break;
-		
+		}
 		case CS_OPS_MARKINVALID:
 			proc_lock(pt);
 			if ((pt->p_csflags & CS_VALID) == CS_VALID) {	/* is currently valid */
@@ -1844,38 +1949,6 @@ csops_internal(pid_t pid, int ops, user_addr_t uaddr, user_size_t usersize, user
 				proc_unlock(pt);
 			break;
 
-		case CS_OPS_PIDPATH:
-			tvp = pt->p_textvp;
-			vid = vnode_vid(tvp);
-
-			if (tvp == NULLVP) {
-				proc_rele(pt);
-				return(EINVAL);
-			}
-
-			buf = (char *)kalloc(usize);
-			if (buf == NULL)  {
-				proc_rele(pt);
-				return(ENOMEM);
-			}
-			bzero(buf, usize);
-
-			error = vnode_getwithvid(tvp, vid);
-			if (error == 0) {
-				int len; 
-				len = usize;
-				error = vn_getpath(tvp, buf, &len);
-				vnode_put(tvp);
-				if (error == 0) {
-					error = copyout(buf, uaddr, usize);
-				}
-				kfree(buf, usize);
-			}
-
-			proc_rele(pt);
-
-			return(error);
-
 		case CS_OPS_PIDOFFSET:
 			toff = pt->p_textoff;
 			proc_rele(pt);
@@ -1903,43 +1976,131 @@ csops_internal(pid_t pid, int ops, user_addr_t uaddr, user_size_t usersize, user
 			return error;
 
 		case CS_OPS_ENTITLEMENTS_BLOB: {
-			char fakeheader[8] = { 0 };
 			void *start;
 			size_t length;
 
+			proc_lock(pt);
+
 			if ((pt->p_csflags & CS_VALID) == 0) {
+				proc_unlock(pt);
 				error = EINVAL;
 				break;
 			}
-			if (usize < sizeof(fakeheader)) {
-				error = ERANGE;
-				break;
-			}
-			if (0 != (error = cs_entitlements_blob_get(pt,
-			    &start, &length)))
-				break;
-			/* if no entitlement, fill in zero header */
-			if (NULL == start) {
-				start = fakeheader;
-				length = sizeof(fakeheader);
-			} else if (usize < length) {
-				/* ... if input too short, copy out length of entitlement */
-				uint32_t length32 = htonl((uint32_t)length);
-				memcpy(&fakeheader[4], &length32, sizeof(length32));
 
-				error = copyout(fakeheader, uaddr, sizeof(fakeheader));
-				if (error == 0)
-					error = ERANGE; /* input buffer to short, ERANGE signals that */
+			error = cs_entitlements_blob_get(pt, &start, &length);
+			proc_unlock(pt);
+			if (error)
 				break;
-			}
-			error = copyout(start, uaddr, length);
+
+			error = csops_copy_token(start, length, usize, uaddr);
 			break;
 		}
-
 		case CS_OPS_MARKRESTRICT:
 			proc_lock(pt);
 			pt->p_csflags |= CS_RESTRICT;
 			proc_unlock(pt);
+			break;
+
+		case CS_OPS_SET_STATUS: {
+			uint32_t flags;
+
+			if (usize < sizeof(flags)) {
+				error = ERANGE;
+				break;
+			}
+
+			error = copyin(uaddr, &flags, sizeof(flags));
+			if (error)
+				break;
+
+			/* only allow setting a subset of all code sign flags */
+			flags &=
+			    CS_HARD | CS_EXEC_SET_HARD |
+			    CS_KILL | CS_EXEC_SET_KILL |
+			    CS_RESTRICT |
+			    CS_ENFORCEMENT | CS_EXEC_SET_ENFORCEMENT;
+
+			proc_lock(pt);
+			if (pt->p_csflags & CS_VALID)
+				pt->p_csflags |= flags;
+			else
+				error = EINVAL;
+			proc_unlock(pt);
+
+			break;
+		}
+		case CS_OPS_BLOB: {
+			void *start;
+			size_t length;
+
+			proc_lock(pt);
+			if ((pt->p_csflags & CS_VALID) == 0) {
+				proc_unlock(pt);
+				error = EINVAL;
+				break;
+			}
+
+			error = cs_blob_get(pt, &start, &length);
+			proc_unlock(pt);
+			if (error)
+				break;
+
+			error = csops_copy_token(start, length, usize, uaddr);
+			break;
+		}
+		case CS_OPS_IDENTITY: {
+			const char *identity;
+			uint8_t fakeheader[8];
+			uint32_t idlen;
+			size_t length;
+
+			/*
+			 * Make identity have a blob header to make it
+			 * easier on userland to guess the identity
+			 * length.
+			 */
+			if (usize < sizeof(fakeheader)) {
+			    error = ERANGE;
+			    break;
+			}
+			memset(fakeheader, 0, sizeof(fakeheader));
+
+			proc_lock(pt);
+			if ((pt->p_csflags & CS_VALID) == 0) {
+				proc_unlock(pt);
+				error = EINVAL;
+				break;
+			}
+
+			identity = cs_identity_get(pt);
+			proc_unlock(pt);
+			if (identity == NULL) {
+				error = ENOENT;
+				break;
+			}
+			
+			length = strlen(identity) + 1; /* include NUL */
+			idlen = htonl(length + sizeof(fakeheader));
+			memcpy(&fakeheader[4], &idlen, sizeof(idlen));
+
+			error = copyout(fakeheader, uaddr, sizeof(fakeheader));
+			if (error)
+				break;
+
+			if (usize < sizeof(fakeheader) + length)
+				error = ERANGE;
+			else if (usize > sizeof(fakeheader))
+				error = copyout(identity, uaddr + sizeof(fakeheader), length);
+
+			break;
+		}
+
+		case CS_OPS_SIGPUP_INSTALL:
+			error = sigpup_install(uaddr);
+			break;
+
+		case CS_OPS_SIGPUP_DROP:
+			error = sigpup_drop();
 			break;
 
 		default:
@@ -2697,107 +2858,6 @@ proc_knote_drain(struct proc *p)
 		KNOTE_DETACH(&p->p_klist, kn);
 	}
 	proc_klist_unlock();
-}
-
-unsigned long cs_procs_killed = 0;
-unsigned long cs_procs_invalidated = 0;
-int cs_force_kill = 0;
-int cs_force_hard = 0;
-int cs_debug = 0;
-SYSCTL_INT(_vm, OID_AUTO, cs_force_kill, CTLFLAG_RW | CTLFLAG_LOCKED, &cs_force_kill, 0, "");
-SYSCTL_INT(_vm, OID_AUTO, cs_force_hard, CTLFLAG_RW | CTLFLAG_LOCKED, &cs_force_hard, 0, "");
-SYSCTL_INT(_vm, OID_AUTO, cs_debug, CTLFLAG_RW | CTLFLAG_LOCKED, &cs_debug, 0, "");
-
-int
-cs_allow_invalid(struct proc *p)
-{
-#if MACH_ASSERT
-	lck_mtx_assert(&p->p_mlock, LCK_MTX_ASSERT_NOTOWNED);
-#endif
-#if CONFIG_MACF && CONFIG_ENFORCE_SIGNED_CODE
-	/* There needs to be a MAC policy to implement this hook, or else the
-	 * kill bits will be cleared here every time. If we have 
-	 * CONFIG_ENFORCE_SIGNED_CODE, we can assume there is a policy
-	 * implementing the hook. 
-	 */
-	if( 0 != mac_proc_check_run_cs_invalid(p)) {
-		if(cs_debug) printf("CODE SIGNING: cs_allow_invalid() "
-				    "not allowed: pid %d\n", 
-				    p->p_pid);
-		return 0;
-	}
-	if(cs_debug) printf("CODE SIGNING: cs_allow_invalid() "
-			    "allowed: pid %d\n", 
-			    p->p_pid);
-	proc_lock(p);
-	p->p_csflags &= ~(CS_KILL | CS_HARD | CS_VALID);
-	proc_unlock(p);
-	vm_map_switch_protect(get_task_map(p->task), FALSE);
-#endif
-	return (p->p_csflags & (CS_KILL | CS_HARD)) == 0;
-}
-
-int
-cs_invalid_page(
-	addr64_t vaddr)
-{
-	struct proc	*p;
-	int		retval;
-
-	p = current_proc();
-
-	/*
-	 * XXX revisit locking when proc is no longer protected
-	 * by the kernel funnel...
-	 */
-
-	/* XXX for testing */
-	proc_lock(p);
-	if (cs_force_kill)
-		p->p_csflags |= CS_KILL;
-	if (cs_force_hard)
-		p->p_csflags |= CS_HARD;
-
-	/* CS_KILL triggers us to send a kill signal. Nothing else. */
-	if (p->p_csflags & CS_KILL) {
-		p->p_csflags |= CS_KILLED;
-		proc_unlock(p);
-		if (cs_debug) {
-			printf("CODE SIGNING: cs_invalid_page(0x%llx): "
-			       "p=%d[%s] honoring CS_KILL, final status 0x%x\n",
-			       vaddr, p->p_pid, p->p_comm, p->p_csflags);
-		}
-		cs_procs_killed++;
-		psignal(p, SIGKILL);
-		proc_lock(p);
-	}
-	
-	/* CS_HARD means fail the mapping operation so the process stays valid. */
-	if (p->p_csflags & CS_HARD) {
-		proc_unlock(p);
-		if (cs_debug) {
-			printf("CODE SIGNING: cs_invalid_page(0x%llx): "
-			       "p=%d[%s] honoring CS_HARD\n",
-			       vaddr, p->p_pid, p->p_comm);
-		}
-		retval = 1;
-	} else {
-		if (p->p_csflags & CS_VALID) {
-			p->p_csflags &= ~CS_VALID;
-			
-			proc_unlock(p);
-			cs_procs_invalidated++;
-			printf("CODE SIGNING: cs_invalid_page(0x%llx): "
-			       "p=%d[%s] clearing CS_VALID\n",
-			       vaddr, p->p_pid, p->p_comm);
-		} else {
-			proc_unlock(p);
-		}
-		
-		retval = 0;
-	}
-
-	return retval;
 }
 
 void 

@@ -103,6 +103,7 @@ UInt32	OSBitXorAtomic(UInt32 mask, volatile UInt32 * value)
 	return OSBitwiseAtomic((UInt32) -1, 0, mask, value);
 }
 
+#if defined(__i386__) || defined(__x86_64__)
 static Boolean OSCompareAndSwap8(UInt8 oldValue8, UInt8 newValue8, volatile UInt8 * value8)
 {
 	UInt32				mask		= 0x000000ff;
@@ -121,6 +122,7 @@ static Boolean OSCompareAndSwap8(UInt8 oldValue8, UInt8 newValue8, volatile UInt
 
 	return OSCompareAndSwap(oldValue, newValue, value32);
 }
+#endif
 
 static Boolean	OSTestAndSetClear(UInt32 bit, Boolean wantSet, volatile UInt8 * startAddress)
 {
@@ -166,6 +168,7 @@ SInt8	OSDecrementAtomic8(volatile SInt8 * value)
 	return OSAddAtomic8(-1, value);
 }
 
+#if defined(__i386__) || defined(__x86_64__)
 SInt8	OSAddAtomic8(SInt32 amount, volatile SInt8 * value)
 {
 	SInt8	oldValue;
@@ -178,6 +181,7 @@ SInt8	OSAddAtomic8(SInt32 amount, volatile SInt8 * value)
 	
 	return oldValue;
 }
+#endif
 
 static UInt8	OSBitwiseAtomic8(UInt32 and_mask, UInt32 or_mask, UInt32 xor_mask, volatile UInt8 * value)
 {
@@ -207,6 +211,7 @@ UInt8	OSBitXorAtomic8(UInt32 mask, volatile UInt8 * value)
 	return OSBitwiseAtomic8((UInt32) -1, 0, mask, value);
 }
 
+#if defined(__i386__) || defined(__x86_64__)
 static Boolean OSCompareAndSwap16(UInt16 oldValue16, UInt16 newValue16, volatile UInt16 * value16)
 {
 	UInt32				mask		= 0x0000ffff;
@@ -225,6 +230,7 @@ static Boolean OSCompareAndSwap16(UInt16 oldValue16, UInt16 newValue16, volatile
 
 	return OSCompareAndSwap(oldValue, newValue, value32);
 }
+#endif
 
 SInt16	OSIncrementAtomic16(volatile SInt16 * value)
 {
@@ -236,6 +242,7 @@ SInt16	OSDecrementAtomic16(volatile SInt16 * value)
 	return OSAddAtomic16(-1, value);
 }
 
+#if defined(__i386__) || defined(__x86_64__)
 SInt16	OSAddAtomic16(SInt32 amount, volatile SInt16 * value)
 {
 	SInt16	oldValue;
@@ -248,6 +255,7 @@ SInt16	OSAddAtomic16(SInt32 amount, volatile SInt16 * value)
 	
 	return oldValue;
 }
+#endif
 
 static UInt16	OSBitwiseAtomic16(UInt32 and_mask, UInt32 or_mask, UInt32 xor_mask, volatile UInt16 * value)
 {

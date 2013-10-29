@@ -48,4 +48,9 @@ MACRO_BEGIN											\
 	OSAddAtomic64(1, (SInt64 *) (&(PROCESSOR_DATA(current_processor(), vm_stat).event)));	\
 MACRO_END
 
+#define VM_STAT_INCR_BY(event, amount)								\
+MACRO_BEGIN											\
+	OSAddAtomic64((amount), (SInt64 *) (&(PROCESSOR_DATA(current_processor(), vm_stat).event)));	\
+MACRO_END
+
 #endif	/* _KERN_HOST_STATISTICS_H_ */

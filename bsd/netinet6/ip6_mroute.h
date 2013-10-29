@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008 Apple Inc. All rights reserved.
+ * Copyright (c) 2008-2013 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -128,7 +128,7 @@ struct mif6ctl {
 	mifi_t	    mif6c_mifi;	    	/* the index of the mif to be added  */
 	u_char	    mif6c_flags;     	/* MIFF_ flags defined below         */
 	u_short	    mif6c_pifi;		/* the index of the physical IF */
-#if notyet
+#ifdef notyet
 	u_int	    mif6c_rate_limit;    /* max rate           		     */
 #endif
 };
@@ -248,13 +248,16 @@ struct sioc_mif_req6_64 {
 #endif /* XNU_KERNEL_PRIVATE */
 
 #ifdef PRIVATE
+#ifndef KERNEL
 /*
  * The kernel's multicast-interface structure.
+ *
+ * XXX: This is unused and is currently exposed for netstat.
  */
 struct mif6 {
         u_char   	m6_flags;     	/* MIFF_ flags defined above         */
 	u_int      	m6_rate_limit; 	/* max rate			     */
-#if notyet
+#ifdef notyet
 	struct tbf      *m6_tbf;      	/* token bucket structure at intf.   */
 #endif 
 	struct in6_addr	m6_lcl_addr;   	/* local interface address           */
@@ -264,7 +267,7 @@ struct mif6 {
 	u_quad_t	m6_bytes_in;	/* # bytes in on interface	     */
 	u_quad_t	m6_bytes_out;	/* # bytes out on interface	     */
 	struct route_in6 m6_route;/* cached route if this is a tunnel */
-#if notyet
+#ifdef notyet
 	u_int		m6_rsvp_on;	/* RSVP listening on this vif */
 	struct socket   *m6_rsvpd;	/* RSVP daemon socket */
 #endif 
@@ -272,6 +275,8 @@ struct mif6 {
 
 /*
  * The kernel's multicast forwarding cache entry structure
+ *
+ * XXX: This is unused and is currently exposed for netstat.
  */
 struct mf6c {
 	struct sockaddr_in6  mf6c_origin;	/* IPv6 origin of mcasts     */
@@ -287,6 +292,7 @@ struct mf6c {
 	struct rtdetq  *mf6c_stall;		/* pkts waiting for route */
 	struct mf6c    *mf6c_next;		/* hash table linkage */
 };
+#endif /* !KERNEL */
 
 #define MF6C_INCOMPLETE_PARENT ((mifi_t)-1)
 
@@ -299,6 +305,7 @@ struct mf6c {
 
 #define MAX_UPQ6	4		/* max. no of pkts in upcall Q */
 
+#ifdef BSD_KERNEL_PRIVATE
 /*
  * Argument structure used for pkt info. while upcall is made
  */
@@ -313,16 +320,14 @@ struct rtdetq {		/* XXX: rtdetq is also defined in ip_mroute.h */
 };
 #endif /* _NETINET_IP_MROUTE_H_ */
 
-#if MROUTING
-#ifdef XNU_KERNEL_PRIVATE
 extern struct mrt6stat mrt6stat;
 
+#if MROUTING
 extern int ip6_mrouter_set(struct socket *, struct sockopt *);
 extern int ip6_mrouter_get(struct socket *, struct sockopt *);
 extern int ip6_mrouter_done(void);
 extern int mrt6_ioctl(u_long, caddr_t);
-#endif /* XNU_KERNEL_PRIVATE */
+#endif /* MROUTING */
+#endif /* BSD_KERNEL_PRIVATE */
 #endif /* PRIVATE */
-#endif
-
 #endif /* !_NETINET6_IP6_MROUTE_H_ */

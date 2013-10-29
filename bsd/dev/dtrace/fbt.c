@@ -52,10 +52,10 @@
 
 /* #include <machine/trap.h> */
 struct savearea_t; /* Used anonymously */
-typedef kern_return_t (*perfCallback)(int, struct savearea_t *, uintptr_t *, int);
 
+typedef kern_return_t (*perfCallback)(int, struct savearea_t *, uintptr_t *, __unused int);
 extern perfCallback tempDTraceTrapHook;
-extern kern_return_t fbt_perfCallback(int, struct savearea_t *, uintptr_t *);
+extern kern_return_t fbt_perfCallback(int, struct savearea_t *, uintptr_t *, __unused int);
 
 #define	FBT_ADDR2NDX(addr)	((((uintptr_t)(addr)) >> 4) & fbt_probetab_mask)
 #define	FBT_PROBETAB_SIZE	0x8000		/* 32k entries -- 128K total */
@@ -207,6 +207,8 @@ fbt_suspend(void *arg, dtrace_id_t id, void *parg)
 
 	    (void)ml_nofault_copy( (vm_offset_t)&fbt->fbtp_savedval, (vm_offset_t)fbt->fbtp_patchpoint, 
 								sizeof(fbt->fbtp_savedval));
+		
+		
 	    fbt->fbtp_currentval = fbt->fbtp_savedval;
 	}
 	
@@ -240,6 +242,8 @@ fbt_resume(void *arg, dtrace_id_t id, void *parg)
 	
 	    (void)ml_nofault_copy( (vm_offset_t)&fbt->fbtp_patchval, (vm_offset_t)fbt->fbtp_patchpoint, 
 								sizeof(fbt->fbtp_patchval));
+
+		
   	    fbt->fbtp_currentval = fbt->fbtp_patchval;
 	}
 	

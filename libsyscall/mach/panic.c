@@ -61,7 +61,7 @@
 #include "abort.h"
 #include "string.h"
 
-int write(int fd, const char* cbuf, int nbyte);
+extern int write(int fd, const char* cbuf, int nbyte);
 
 static mach_port_t master_host_port;
 

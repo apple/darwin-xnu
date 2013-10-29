@@ -2151,7 +2151,7 @@ fasttrap_meta_create_probe(void *arg, void *parg,
 		 * Unfortunately, a side effect of this is that the relocations do not point at exactly
 		 * the location we want. We need to fix up the addresses here. The fixups vary by arch and type.
 		 */
-#if defined(__i386__) || defined(__x86_64__)
+#if defined(__x86_64__)
 		/*
 		 * Both 32 & 64 bit want to go back one byte, to point at the first NOP
 		 */
@@ -2192,7 +2192,7 @@ fasttrap_meta_create_probe(void *arg, void *parg,
 		 * Unfortunately, a side effect of this is that the relocations do not point at exactly
 		 * the location we want. We need to fix up the addresses here. The fixups vary by arch and type.
 		 */
-#if defined(__i386__) || defined(__x86_64__)
+#if defined(__x86_64__)
 		/*
 		 * Both 32 & 64 bit want to go forward two bytes, to point at a single byte nop.
 		 */

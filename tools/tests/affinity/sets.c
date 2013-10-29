@@ -13,6 +13,7 @@
 #include <unistd.h>
 #include <err.h>
 #include <errno.h>
+#include <sys/sysctl.h>
 
 /*
  * Sets is a multithreaded test/benchmarking program to evaluate
@@ -286,7 +287,7 @@ manager_fn(void *arg)
 static void
 auto_config(int npages, int *nbufs, int *nsets)
 {
-	int	len;
+	size_t	len;
 	int	ncpu;
 	int	llc;
 	int64_t	cacheconfig[MAX_CACHE_DEPTH];

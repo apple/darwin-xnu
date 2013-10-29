@@ -244,12 +244,12 @@ kern_return_t
 mk_timer_arm_trap(
 	struct mk_timer_arm_trap_args *args)
 {
-	mach_port_name_t	name = args->name;
+	mach_port_name_t		name = args->name;
 	uint64_t			expire_time = args->expire_time;
 	mk_timer_t			timer;
 	ipc_space_t			myspace = current_space();
 	ipc_port_t			port;
-	kern_return_t		result;
+	kern_return_t			result;
 
 	result = ipc_port_translate_receive(myspace, name, &port);
 	if (result != KERN_SUCCESS)
@@ -258,6 +258,7 @@ mk_timer_arm_trap(
 	if (ip_kotype(port) == IKOT_TIMER) {
 		timer = (mk_timer_t)port->ip_kobject;
 		assert(timer != NULL);
+
 		simple_lock(&timer->lock);
 		assert(timer->port == port);
 		ip_unlock(port);
@@ -265,8 +266,15 @@ mk_timer_arm_trap(
 		if (!timer->is_dead) {
 			timer->is_armed = TRUE;
 
-			if (!thread_call_enter_delayed(&timer->call_entry, expire_time))
-				timer->active++;
+			if (expire_time > mach_absolute_time()) {
+				if (!thread_call_enter_delayed_with_leeway(&timer->call_entry, NULL,
+									   expire_time, 0, THREAD_CALL_DELAY_USER_NORMAL))
+					timer->active++;
+			}
+			else {
+				if (!thread_call_enter1(&timer->call_entry, NULL))
+					timer->active++;
+			}
 		}
 
 		simple_unlock(&timer->lock);

@@ -9,23 +9,23 @@ include $(MakeInc_def)
 
 OBJS = setsegname.o
 
-CFLAGS = -isysroot $(HOST_SDKROOT) -g -O0 -I$(SOURCE) -I.
+CFLAGS = -isysroot $(HOST_SDKROOT) -mmacosx-version-min=$(HOST_OS_VERSION) -g -O0 -I$(SOURCE) -I.
 
 WARNFLAGS = -Wall
 
-LDFLAGS = -isysroot $(HOST_SDKROOT)
+LDFLAGS = -isysroot $(HOST_SDKROOT) -mmacosx-version-min=$(HOST_OS_VERSION)
 
 setsegname: $(OBJS)
-	$(_v)$(HOST_CC) $(LDFLAGS) -o $@ $^
 	@echo HOST_LD $@
-	$(_v)$(HOST_CODESIGN) -s - $@
+	$(_v)$(HOST_CC) $(LDFLAGS) -o $@ $^
 	@echo HOST_CODESIGN $@
+	$(_v)env CODESIGN_ALLOCATE=$(HOST_CODESIGN_ALLOCATE) $(HOST_CODESIGN) -s - $@
 
-.c.o:
-	$(_v)$(HOST_CC) $(WARNFLAGS) $(CFLAGS) -c -o $@ $<
+%.o: %.c
 	@echo HOST_CC $@
+	$(_v)$(HOST_CC) $(WARNFLAGS) $(CFLAGS) -c -o $@ $<
 
-do_build_setup: setsegname
+do_build_setup:: setsegname
 
 include $(MakeInc_rule)
 include $(MakeInc_dir)

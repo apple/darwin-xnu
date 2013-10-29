@@ -489,11 +489,11 @@ struct user32_fssearchblock {
 
 #endif /* KERNEL */
 
-
 struct searchstate {
-	u_char				reserved[556];		//	sizeof( SearchState )
-};
-
+	uint32_t			ss_union_flags;		// for SRCHFS_START
+	uint32_t			ss_union_layer;		// 0 = top
+	u_char				ss_fsstate[548];	// fs private
+} __attribute__((packed));
 
 #define FST_EOF (-1)				/* end-of-file offset */
 

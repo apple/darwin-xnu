@@ -66,11 +66,7 @@
 #include <kern/sched_prim.h>
 #include <kern/timer.h>
 
-#if CONFIG_EMBEDDED
-int precise_user_kernel_time = 0;
-#else
 int precise_user_kernel_time = 1;
-#endif
 
 /*
  *	timer_init initializes a timer.

@@ -1,0 +1,470 @@
+# -*- mode: makefile;-*-
+#
+# Copyright (C) 2010-2012 Apple Inc. All rights reserved.
+#
+# MakeInc.top is the top-level makefile for the xnu
+# build system. All the main XBS targets
+# (like "installhdrs") are defined here, as
+# well as globals that can be overridden on 
+# the command-line by the user.
+#
+# This makefile's main purpose is to bootstrap
+# the user's intent ("build these 3 kernels")
+# into 3 single-architecture builds that each
+# invoke the recursive make build system.
+# As such, we have no knowledge of how to build
+# a kernel or perform actions other than
+# invoking a sub-make with a different
+# current directory, makefile, and target. One
+# side effect of this is that each
+# single-architecture build is responsible for
+# inserting its build products into the final
+# multi-architecture output files. To avoid
+# races, these aggregating stages for 
+# "primary" build configs are done in serial.
+# 
+
+export MakeInc_cmd=${VERSDIR}/makedefs/MakeInc.cmd
+
+include $(MakeInc_cmd)
+
+
+#
+# Architecture Configuration options
+#
+
+# Default to current kernel architecture
+ifeq ($(PLATFORM),iPhoneOS)
+     override DEFAULT_ARCH_CONFIG := ARM
+else ifeq ($(PLATFORM),iPhoneSimulator)
+     override DEFAULT_ARCH_CONFIG := X86_64
+else
+     override DEFAULT_ARCH_CONFIG := X86_64
+endif
+
+
+# Accept either explicit ARCH_CONFIGS or XBS-style RC_ARCHS
+ifndef ARCH_CONFIGS
+ifdef RC_ARCHS
+ARCH_CONFIGS 	:= $(shell printf "%s" "$(RC_ARCHS)" | $(TR) a-z A-Z | sed -E 's/ARMV[0-9][A-Z]?/ARM/g' | $(TR) " " "\n" | sort -u | $(TR) "\n" " ")
+else
+ARCH_CONFIGS	:= DEFAULT
+endif
+endif
+
+#
+# Kernel Configuration options  
+#
+
+ifeq ($(RC_ProjectName),xnu_debug)
+override DEFAULT_KERNEL_CONFIG := DEBUG
+else ifeq ($(PLATFORM),iPhoneOS)
+override DEFAULT_KERNEL_CONFIG := DEVELOPMENT
+else
+override DEFAULT_KERNEL_CONFIG := RELEASE
+endif
+
+# If KERNEL_CONFIGS is specified it should override default
+ifndef KERNEL_CONFIGS
+KERNEL_CONFIGS := DEFAULT
+endif
+
+#
+# Machine Configuration options  
+#
+
+override DEFAULT_I386_MACHINE_CONFIG := NONE
+override DEFAULT_X86_64_MACHINE_CONFIG := NONE
+
+
+# This is typically never specified (TARGET_CONFIGS is used)
+ifndef MACHINE_CONFIGS
+MACHINE_CONFIGS 	:= DEFAULT
+endif
+
+#
+# Target configuration options.  NOTE - target configurations will 
+# override ARCH_CONFIGS and KERNEL_CONFIGS and MACHINE_CONFIGS.
+#
+# Target configs come in groups of three parameters.  The first is the 
+# kernel configuration, the second is the architecture configuration,
+# and the third is the machine configuration.  You may pass in as
+# many groups of configurations as you wish.  Each item passed in is
+# seperated by whitespace.
+#
+# Example:
+#	TARGET_CONFIGS="release ppc default debug i386 default release arm MX31ADS"
+# Parameters may be in upper or lower case (they are converted to upper).
+#
+# "default" parameter is a special case.  It means use the default value for 
+# that parameter.  Here are the default values for each configuration:
+#
+# default kernel configuration = DEFAULT_KERNEL_CONFIG
+# default architecture configuration = system architecture where you are running make.
+
+
+ifndef TARGET_CONFIGS
+ifneq ($(PRODUCT_CONFIGS),)
+# generate TARGET_CONFIGS using KERNEL_CONFIGS and PRODUCT_CONFIGS
+TARGET_CONFIGS := $(foreach my_kernel_config,$(KERNEL_CONFIGS),$(foreach my_product_config,$(shell printf "%s" "$(PRODUCT_CONFIGS)" | $(TR) A-Z a-z),$(my_kernel_config) $(subst ;, ,$(call function_lookup_product,$(my_product_config)))))
+else ifneq ($(filter %_embedded,$(MAKECMDGOALS)),)
+# generate TARGET_CONFIGS for all kernel configs and products in the device map
+TARGET_CONFIGS := $(foreach my_kernel_config,$(KERNEL_CONFIGS_EMBEDDED),$(foreach my_arch_config,$(ARCH_CONFIGS_EMBEDDED),$(foreach my_product_config,$(DEVICEMAP_PRODUCTS_$(my_arch_config)),$(my_kernel_config) $(subst ;, ,$(call function_lookup_product,$(my_product_config))))))
+else
+# generate TARGET_CONFIGS using KERNEL_CONFIGS and ARCH_CONFIGS and MACHINE_CONFIGS (which defaults to "DEFAULT")
+TARGET_CONFIGS := $(foreach my_kern_config, $(KERNEL_CONFIGS), $(foreach my_arch_config, $(ARCH_CONFIGS), $(foreach my_machine_config, $(MACHINE_CONFIGS), $(my_kern_config) $(my_arch_config) $(my_machine_config))))
+endif
+endif
+
+ifeq ($(TARGET_CONFIGS),)
+$(error No TARGET_CONFIGS specified)
+endif
+
+TARGET_CONFIGS_UC := $(strip $(shell printf "%s" "$(TARGET_CONFIGS)" | $(TR) a-z A-Z))
+
+#
+# Build Configurations
+#
+# TARGET_CONFIGS is unwieldy for use in Makefiles. Convert them to
+# "build configurations" which are tuples joined by "^". For
+# example, "RELEASE I386 DEFAULT DEVELOPMENT ARM DEFAULT" becomes
+# "RELEASE^I386^NONE DEVELOPMENT^ARM^S5L8920X", which can be looped
+# over trivially. PRIMARY_BUILD_CONFIGS is the first config
+# for each architecture, used primarily for machine-dependent recursion.
+
+BUILD_CONFIGS = $(call function_create_build_configs, $(TARGET_CONFIGS_UC))
+
+PRIMARY_ARCHS = $(strip $(sort $(foreach build_config, $(BUILD_CONFIGS), $(call function_extract_arch_config_from_build_config, $(build_config)))))
+PRIMARY_BUILD_CONFIGS = $(strip $(foreach arch, $(PRIMARY_ARCHS), $(firstword $(foreach build_config, $(BUILD_CONFIGS), $(if $(filter $(arch),$(call function_extract_arch_config_from_build_config, $(build_config))), $(build_config), )))))
+NON_PRIMARY_BUILD_CONFIGS = $(strip $(filter-out $(PRIMARY_BUILD_CONFIGS), $(BUILD_CONFIGS)))
+FIRST_BUILD_CONFIG = $(firstword $(BUILD_CONFIGS))
+
+# $(warning PRIMARY_ARCHS is $(PRIMARY_ARCHS))
+# $(warning TARGET_CONFIGS is $(TARGET_CONFIGS))
+# $(warning BUILD_CONFIGS is $(BUILD_CONFIGS))
+# $(warning PRIMARY_BUILD_CONFIGS is $(PRIMARY_BUILD_CONFIGS))
+# $(warning NON_PRIMARY_BUILD_CONFIGS is $(NON_PRIMARY_BUILD_CONFIGS))
+
+MEMORY_SIZE := $(shell /usr/sbin/sysctl -n hw.memsize)
+
+# Embedded kernels use LTO by default.
+ifeq ($(PLATFORM),iPhoneOS)
+export BUILD_LTO := 1
+endif
+
+LARGE_BUILD_FOOTPRINT := $(BUILD_LTO)
+
+ifeq ($(LARGE_BUILD_FOOTPRINT),1)
+RAM_PER_KERNEL_BUILD := 8589934592
+FLOCK_SIZE := $(shell if [ $(MEMORY_SIZE) -le $$((1 * $(RAM_PER_KERNEL_BUILD))) ]; then echo 1; elif [ $(MEMORY_SIZE) -gt $$((8 * $(RAM_PER_KERNEL_BUILD))) ]; then echo 8; else expr $(MEMORY_SIZE) / $(RAM_PER_KERNEL_BUILD); fi )
+else
+RAM_PER_KERNEL_BUILD := 268435456
+FLOCK_SIZE := $(shell if [ $(MEMORY_SIZE) -le $$((2 * $(RAM_PER_KERNEL_BUILD))) ]; then echo 2; elif [ $(MEMORY_SIZE) -gt $$((8 * $(RAM_PER_KERNEL_BUILD))) ]; then echo 8; else expr $(MEMORY_SIZE) / $(RAM_PER_KERNEL_BUILD); fi )
+endif
+
+# $(warning Building $(FLOCK_SIZE) kernels in parallel)
+
+#
+# TOP_LEVEL_EACH_BUILD_CONFIG_BOOTSTRAP_template
+#
+# $(1) is the name of the makefile target to invoke for the each build config
+#      after setting up the parallel hierarchy in the TARGET directory
+# $(2) is an optional suffix on the TARGET directory, which might even be
+#      "/.."
+# $(3) are any dependencies for the bootstrap target
+# $(4) are any dependencies that are expanded per-build config to another bootstrap target
+# $(5) is how many build configurations to build in parallel
+# $(6) is which build configs to build in parallel
+#
+# Since building many configurations in parallel may overwhelm the system,
+# we try to throttle behavior into more managable "flocks" of N configurations
+# at once, by creating a dependency on all members of the previous flock.
+
+define TOP_LEVEL_EACH_BUILD_CONFIG_BOOTSTRAP_template
+
+# Create a list of synthesized targets for each build config
+$(1)_bootstrap_target_list = $$(addprefix $(1)_bootstrap_,$(6))
+
+.PHONY: $$($(1)_bootstrap_target_list)
+
+$$(eval $$(call _function_generate_flock_groupings,$(1),$$(wordlist 1,$(5),$(6)),$$(wordlist $(call increment,$(5)),$$(words $(6)),$(6)),,$(5)))
+
+$$($(1)_bootstrap_target_list): $(1)_bootstrap_% : $(1)_flock_dep_for_% $$(addsuffix _bootstrap_%,$(4)) $(3)
+	$$(_v)$$(MKDIR) $${OBJROOT}/$$(call function_convert_build_config_to_objdir,$$(patsubst $(1)_bootstrap_%,%,$$@))$(2)
+	$$(_v)$${MAKE} 													        \
+		-C $${OBJROOT}/$$(call function_convert_build_config_to_objdir,$$(patsubst $(1)_bootstrap_%,%,$$@))$(2)		\
+		-f $${SRCROOT}/Makefile												\
+		CURRENT_KERNEL_CONFIG=$$(call function_extract_kernel_config_from_build_config,$$(patsubst $(1)_bootstrap_%,%,$$@)) \
+		CURRENT_ARCH_CONFIG=$$(call function_extract_arch_config_from_build_config,$$(patsubst $(1)_bootstrap_%,%,$$@))	  \
+		CURRENT_MACHINE_CONFIG=$$(call function_extract_machine_config_from_build_config,$$(patsubst $(1)_bootstrap_%,%,$$@))	\
+		CURRENT_BUILD_CONFIG=$$(patsubst $(1)_bootstrap_%,%,$$@)							\
+		PRIMARY_BUILD_CONFIGS="$(PRIMARY_BUILD_CONFIGS)"							\
+		SOURCE=$${SRCROOT}/												\
+		RELATIVE_SOURCE_PATH=.											\
+		TARGET=$${OBJROOT}/$$(call function_convert_build_config_to_objdir,$$(patsubst $(1)_bootstrap_%,%,$$@))$(2)/	\
+		OBJPATH=$${OBJROOT}/$$(call function_convert_build_config_to_objdir,$$(patsubst $(1)_bootstrap_%,%,$$@))	\
+		$(1)
+
+.PHONY: $(1)_bootstrap
+
+$(1)_bootstrap: $$($(1)_bootstrap_target_list)
+endef
+
+#
+# TOP_LEVEL_FLOCK_DEPENDENCY_template
+#
+# $(1) is the Makefile target we are building for
+# $(2) are the members of the current flock
+# $(3) is what the flock depends on. None of the build
+#      configs in $(2) will start building until all of
+#      $(3) are done building
+
+define TOP_LEVEL_FLOCK_DEPENDENCY_template
+
+.PHONY: $(addprefix $(1)_flock_dep_for_,$(2))
+
+$(addprefix $(1)_flock_dep_for_,$(2)): $(addprefix $(1)_bootstrap_,$(3))
+
+endef
+
+# $(1) is the Makefile target we are building for
+# $(2) is the first flock (5 build configs)
+# $(3) is the rest of the build configs
+# $(4) is the build configs that the first flock depends on
+# $(5) is the flock size
+_function_generate_flock_groupings = $(if $(3), $(call _function_generate_flock_groupings,$(1),$(wordlist 1,$(5),$(3)),$(wordlist $(call increment,$(5)),$(words $(3)),$(3)),$(2),$(5))) $(call TOP_LEVEL_FLOCK_DEPENDENCY_template,$(1),$(2),$(4))
+
+#
+# Setup pass for build system tools
+#
+
+generated_top_level_build_setup = $(call TOP_LEVEL_EACH_BUILD_CONFIG_BOOTSTRAP_template,build_setup,/..,,,$(FLOCK_SIZE),$(FIRST_BUILD_CONFIG))
+ifeq ($(VERBOSE),YES)
+$(warning Generate makefile fragment: $(generated_top_level_build_setup))
+endif
+$(eval $(generated_top_level_build_setup))
+
+.PHONY: setup
+
+setup: build_setup_bootstrap
+
+#
+# Install kernel header files
+#
+.PHONY: exporthdrs exporthdrs_mi exporthdrs_md
+
+exporthdrs: exporthdrs_mi exporthdrs_md 
+
+#
+# Install machine independent kernel header files
+#
+
+generated_top_level_build_exporthdrs_mi = $(call TOP_LEVEL_EACH_BUILD_CONFIG_BOOTSTRAP_template,build_exporthdrs_mi,,setup,,1,$(FIRST_BUILD_CONFIG))
+ifeq ($(VERBOSE),YES)
+$(warning Generate makefile fragment: $(generated_top_level_build_exporthdrs_mi))
+endif
+$(eval $(generated_top_level_build_exporthdrs_mi))
+
+exporthdrs_mi: build_exporthdrs_mi_bootstrap
+
+#
+# Install machine dependent kernel header files 
+#
+
+generated_top_level_build_exporthdrs_md = $(call TOP_LEVEL_EACH_BUILD_CONFIG_BOOTSTRAP_template,build_exporthdrs_md,,setup,,$(FLOCK_SIZE),$(PRIMARY_BUILD_CONFIGS))
+ifeq ($(VERBOSE),YES)
+$(warning Generate makefile fragment: $(generated_top_level_build_exporthdrs_md))
+endif
+$(eval $(generated_top_level_build_exporthdrs_md))
+
+exporthdrs_md: build_exporthdrs_md_bootstrap
+
+#
+# Install kernel header files
+#
+
+.PHONY: installhdrs installhdrs_mi installhdrs_md
+
+ifeq ($(RC_ProjectName),xnu_debug)
+installhdrs:
+	@:
+else
+
+installhdrs: installhdrs_mi installhdrs_md
+endif
+
+.PHONY: installhdrs_embedded
+
+installhdrs_embedded: installhdrs
+
+#
+# Install machine independent header files
+#
+
+generated_top_level_build_installhdrs_mi = $(call TOP_LEVEL_EACH_BUILD_CONFIG_BOOTSTRAP_template,build_installhdrs_mi,,setup exporthdrs_mi,,1,$(FIRST_BUILD_CONFIG))
+ifeq ($(VERBOSE),YES)
+$(warning Generate makefile fragment: $(generated_top_level_build_installhdrs_mi))
+endif
+$(eval $(generated_top_level_build_installhdrs_mi))
+
+installhdrs_mi: exporthdrs_mi build_installhdrs_mi_bootstrap
+
+#
+# Install machine dependent kernel header files 
+#
+
+generated_top_level_build_installhdrs_md = $(call TOP_LEVEL_EACH_BUILD_CONFIG_BOOTSTRAP_template,build_installhdrs_md,,setup exporthdrs_md,,$(FLOCK_SIZE),$(PRIMARY_BUILD_CONFIGS))
+ifeq ($(VERBOSE),YES)
+$(warning Generate makefile fragment: $(generated_top_level_build_installhdrs_md))
+endif
+$(eval $(generated_top_level_build_installhdrs_md))
+
+installhdrs_md: exporthdrs_md build_installhdrs_md_bootstrap
+
+#
+# Build all architectures for all Configuration/Architecture options
+#
+
+generated_top_level_build_all = $(call TOP_LEVEL_EACH_BUILD_CONFIG_BOOTSTRAP_template,build_all,,setup exporthdrs,,$(FLOCK_SIZE),$(BUILD_CONFIGS))
+ifeq ($(VERBOSE),YES)
+$(warning Generate makefile fragment: $(generated_top_level_build_all))
+endif
+$(eval $(generated_top_level_build_all))
+
+.PHONY: build
+
+build: build_all_bootstrap
+
+#
+# Post-process build results
+#
+
+generated_top_level_config_all = $(call TOP_LEVEL_EACH_BUILD_CONFIG_BOOTSTRAP_template,config_all,,setup,build_all,$(FLOCK_SIZE),$(BUILD_CONFIGS))
+ifeq ($(VERBOSE),YES)
+$(warning Generate makefile fragment: $(generated_top_level_config_all))
+endif
+$(eval $(generated_top_level_config_all))
+
+.PHONY: all
+
+all: config_all_bootstrap
+
+.PHONY: all_embedded
+
+all_embedded: all
+
+#
+# Install kernel and header files
+#
+
+generated_top_level_build_install_primary = $(call TOP_LEVEL_EACH_BUILD_CONFIG_BOOTSTRAP_template,build_install_primary,,setup,config_all,1,$(PRIMARY_BUILD_CONFIGS))
+ifeq ($(VERBOSE),YES)
+$(warning Generate makefile fragment: $(generated_top_level_build_install_primary))
+endif
+$(eval $(generated_top_level_build_install_primary))
+
+generated_top_level_build_install_non_primary = $(call TOP_LEVEL_EACH_BUILD_CONFIG_BOOTSTRAP_template,build_install_non_primary,,setup,config_all,$(FLOCK_SIZE),$(NON_PRIMARY_BUILD_CONFIGS))
+ifeq ($(VERBOSE),YES)
+$(warning Generate makefile fragment: $(generated_top_level_build_install_non_primary))
+endif
+$(eval $(generated_top_level_build_install_non_primary))
+
+
+.PHONY: install
+
+ifeq ($(RC_ProjectName),xnu_debug)
+
+install: build_install_primary_bootstrap build_install_non_primary_bootstrap
+else ifeq ($(RC_ProjectName),xnu_headers_Sim)
+install: installhdrs
+else
+
+install: all installhdrs installman build_install_primary_bootstrap build_install_non_primary_bootstrap
+endif
+
+.PHONY: install_embedded
+
+install_embedded: install
+
+#
+#  Install man pages
+#
+
+generated_top_level_build_installman = $(call TOP_LEVEL_EACH_BUILD_CONFIG_BOOTSTRAP_template,build_installman,,setup,,1,$(FIRST_BUILD_CONFIG))
+ifeq ($(VERBOSE),YES)
+$(warning Generate makefile fragment: $(generated_top_level_build_installman))
+endif
+$(eval $(generated_top_level_build_installman))
+
+.PHONY: installman
+
+installman: setup build_installman_bootstrap
+
+#
+# Install source tree
+#
+.PHONY: installsrc
+
+installsrc:
+	@echo INSTALLSRC $(SRCROOT)
+	$(_v)$(MKDIR) $(SRCROOT)
+	$(_v)($(TAR) -c --mode go=r,+X --no-ignore-case --exclude .git --exclude .svn --exclude cscope.\* --exclude BUILD --exclude \*~ -f - .) | (cd $(SRCROOT) && $(TAR) --no-same-owner -xf -)
+
+
+#
+# Clean up source tree
+#
+.PHONY: clean
+
+clean:
+	@:
+
+#
+# Build source file list for cscope database and tags
+#
+cscope.files:
+	@echo "Building file list for cscope and tags"
+	@find . -name '*.h' -type f | grep -v ^..BUILD > _cscope.files 2> /dev/null
+	@find . -name '*.defs' -type f | grep -v ^..BUILD >> _cscope.files 2> /dev/null
+	@find . -name '*.c' -type f | grep -v ^..BUILD >> _cscope.files 2> /dev/null
+	@find . -name '*.cpp' -type f | grep -v ^..BUILD >> _cscope.files 2> /dev/null
+	@find . -name '*.s' -type f | grep -v ^..BUILD >> _cscope.files 2> /dev/null
+	@find . -name '*.h.template' -type f | grep -v ^..BUILD >> _cscope.files 2> /dev/null
+	@echo -k -q -c > cscope.files 2> /dev/null
+	@sort -u < _cscope.files >> cscope.files 2> /dev/null
+	@rm -f _cscope.files _cscope.files2 2> /dev/null
+
+#
+# Build cscope database
+#
+cscope: cscope.files
+	@echo "Building cscope database"
+	@cscope -bvU 2> /dev/null
+
+#
+# Build tags
+#
+tags: cscope.files
+	@echo "Building ctags"
+	@-sed 1d cscope.files | xargs ctags -dtw 2> /dev/null || \
+		echo "Phantom files detected!" 2>&1 > /dev/null
+	@-[ -f TAGS ] || ${MAKE} -f $(firstword $(MAKEFILE_LIST)) TAGS
+
+TAGS: cscope.files
+	@echo "Building etags"
+	@-cat cscope.files | etags -l auto -S - 2> /dev/null
+
+help:
+	@cat README
+
+print_exports:
+	$(_v)printenv | sort
+
+
+generated_top_level_print_exports = $(call TOP_LEVEL_EACH_BUILD_CONFIG_BOOTSTRAP_template,print_exports,,,,1,$(FIRST_BUILD_CONFIG))
+ifeq ($(VERBOSE),YES)
+$(warning Generate makefile fragment: $(generated_top_level_print_exports))
+endif
+$(eval $(generated_top_level_print_exports))
+
+print_exports_first_build_config: print_exports_bootstrap

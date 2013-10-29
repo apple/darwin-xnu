@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008 Apple Inc. All rights reserved.
+ * Copyright (c) 2008-2013 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -76,7 +76,7 @@ struct rip6stat {
 	u_quad_t rip6s_opackets;	/* total output packets */
 };
 
-#ifdef KERNEL_PRIVATE
+#ifdef BSD_KERNEL_PRIVATE
 extern struct rip6stat rip6stat;
-#endif /* KERNEL_PRIVATE */
-#endif
+#endif /* BSD_KERNEL_PRIVATE */
+#endif /* _NETINET6_RAW_IP6_H_ */

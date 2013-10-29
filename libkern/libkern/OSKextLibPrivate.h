@@ -79,6 +79,13 @@ typedef uint8_t OSKextExcludeLevel;
  */
 #define kOSBundleDeveloperOnlyKey		"OSBundleDeveloperOnly"
 
+/*!
+ * @define   kOSBundleRamDiskOnlyKey
+ * @abstract A boolean value indicating whether the kext should only load when
+ *           booted from a ram disk.
+ */
+#define kOSBundleRamDiskOnlyKey		"OSBundleRamDiskOnly"
+
 
 /*!
  * @define   kAppleSecurityExtensionKey

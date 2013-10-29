@@ -5,16 +5,6 @@
 # the terms and conditions for use and redistribution.
 #
 
-#
-# Export IDENT for sub-makefiles
-#
-export IDENT
-
-#
-# INCFLAGS 
-#
-INCFLAGS_MAKEFILE=  $(INCFLAGS_POSIX)
-
 export MakeInc_cmd=${SRCROOT}/makedefs/MakeInc.cmd
 export MakeInc_def=${SRCROOT}/makedefs/MakeInc.def
 export MakeInc_rule=${SRCROOT}/makedefs/MakeInc.rule
@@ -26,9 +16,10 @@ include $(MakeInc_def)
 #
 # CFLAGS
 #
-#
-CFLAGS+= -include meta_features.h -DPEXPERT_KERNEL_PRIVATE	\
-	$(CFLAGS_INLINE_CONFIG)
+CFLAGS+= -include meta_features.h -DPEXPERT_KERNEL_PRIVATE
+
+# Objects that don't want -Wcast-align warning (8474835)
+pe_identify_machine.o_CWARNFLAGS_ADD = -Wno-cast-align
 
 #
 # Directories for mig generated files
@@ -53,13 +44,8 @@ COMP_SUBDIRS =
 
 %CFILES
 
-%MFILES
-
 %SFILES
 
-%BFILES
-
-%ORDERED
 %MACHDEP
 
 #
@@ -69,23 +55,17 @@ COMP_SUBDIRS =
 #
 ${OBJS}: ${OBJSDEPS}
 
-
-%LOAD
-
 LDOBJS = $(OBJS)
 
 $(COMPONENT).filelist: $(LDOBJS)
 	@echo LDFILELIST $(COMPONENT)
 	$(_v)( for obj in ${LDOBJS}; do	\
-		 echo $(TARGET)$(COMP_OBJ_DIR)/$(KERNEL_CONFIG)/$${obj}; \
+		 echo $(TARGET)/$(CURRENT_KERNEL_CONFIG)/$${obj}; \
 	done; ) > $(COMPONENT).filelist
 
-do_depend: do_all
-	$(_v)${MD} -u Makedep -f -d `ls *.d`;
-	
 do_all: $(COMPONENT).filelist
 
-do_build_all: do_depend
+do_build_all:: do_all
 
 %RULES
 

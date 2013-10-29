@@ -7,19 +7,10 @@ export MakeInc_dir=${SRCROOT}/makedefs/MakeInc.dir
 include $(MakeInc_cmd)
 include $(MakeInc_def)
 
-INSTINC_SUBDIRS = \
-
-INSTINC_SUBDIRS_I386 = \
-
-EXPINC_SUBDIRS = \
-
-EXPINC_SUBDIRS_I386 = \
-
 DATAFILES = \
 	krpc.h nfs.h nfsdiskless.h nfsm_subs.h nfsmount.h nfsnode.h \
-	nfs_lock.h nfs_gss.h \
+	nfs_lock.h nfs_gss.h nfs_ioctl.h \
 	nfsproto.h nfsrvcache.h rpcv2.h xdr_subs.h
-
 
 INSTALL_MI_LIST	= ${DATAFILES}
 
@@ -28,7 +19,6 @@ INSTALL_MI_DIR = nfs
 EXPORT_MI_LIST	= 
 
 EXPORT_MI_DIR = nfs
-
 
 include $(MakeInc_rule)
 include $(MakeInc_dir)

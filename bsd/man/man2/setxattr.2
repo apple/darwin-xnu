@@ -91,13 +91,26 @@ is identical to
 except that it sets an extended attribute on an open file referenced by
 file descriptor
 .Fa fd .
-.Sh NOTE
+.Sh NOTES
 On some filesystems, such as
 .Dv HFS+ ,
 setting the extended attribute
 .Dv com.apple.ResourceFork
 will update the modification time (``mtime'') of
 the file.
+.Pp
+Due to historical reasons, the
+.Dv XATTR_FINDERINFO_NAME
+(defined to be 
+.Dq com.apple.FinderInfo )
+extended attribute must be 32 bytes; see the
+.Dv ATTR_CMN_FNDRINFO
+section in
+.Xr getattrlist 2 .
+.Pp
+The maximum supported size of extended attribute can be found out using 
+.Xr pathconf 2 
+with _PC_XATTR_SIZE_BITS option.  
 .Sh RETURN VALUES
 On success, 0 is returned.  On failure, -1 is returned and the global
 variable
@@ -174,16 +187,8 @@ Not enough space left on the file system.
 .Sh SEE ALSO
 .Xr getxattr 2 ,
 .Xr listxattr 2 ,
-.Xr removexattr 2
-.Sh NOTES
-Due to historical reasons, the
-.Dv XATTR_FINDERINFO_NAME
-(defined to be 
-.Dq com.apple.FinderInfo )
-extended attribute must be 32 bytes; see the
-.Dv ATTR_CMN_FNDRINFO
-section in
-.Xr getattrlist 2 .
+.Xr removexattr 2 ,
+.Xr pathconf 2
 .Sh HISTORY
 .Fn setxattr
 and

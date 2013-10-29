@@ -98,9 +98,9 @@
 #define __LS_VA_STRCONCAT(_x,_y)	__LS_VA_STRINGIFY(_x,_y)
 #define __LINKER_MAKE_SET(_set, _sym)					\
 	/*__unused*/ /*static*/ void const * /*const*/ __set_##_set##_sym_##_sym		\
-	__attribute__ ((section(__LS_VA_STRCONCAT(__DATA,_set)))) = (void *)&_sym
+	__attribute__ ((section(__LS_VA_STRCONCAT(__DATA,_set)),used)) = (void *)&_sym
 /* the line above is very fragile - if your compiler breaks linker sets,
-   just play around with "static", "const" etc. :-) */
+   just play around with "static", "const", "used" etc. :-) */
 
 /*
  * Public macros.

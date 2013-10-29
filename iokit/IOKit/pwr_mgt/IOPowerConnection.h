@@ -39,6 +39,13 @@
 #include <IOKit/IOService.h>
 #include <IOKit/pwr_mgt/IOPM.h>
 
+/*! @class IOPowerConnection
+ *  Do not use IOPowerConnection. This class is an implementation detail defined
+ *  for IOPM's management of the IORegistry IOPower plane.
+ *
+ *  Only Kernel IOKit power management should reference the IOPowerConnection class.
+ */
+
 class IOPowerConnection : public IOService
 {
     OSDeclareDefaultStructors(IOPowerConnection)

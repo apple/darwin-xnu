@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2009 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2013 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -63,12 +63,8 @@
 #include <i386/seg.h>
 
 struct real_descriptor master_gdt[GDTSZ]
-#if __x86_64__
 	__attribute__((section("__HIB,__desc")))
-#else
-	__attribute__((section("__INITGDT,__DATA")))
-#endif
-	__attribute__((aligned(CPU_CACHE_SIZE))) = {
+	__attribute__((aligned(PAGE_SIZE))) = {
 	[SEL_TO_INDEX(KERNEL32_CS)] = MAKE_REAL_DESCRIPTOR(	/* kernel 32-bit code */ 
 		0,
 		0xfffff,
@@ -93,7 +89,6 @@ struct real_descriptor master_gdt[GDTSZ]
 		SZ_32|SZ_G,
 		ACC_P|ACC_PL_K|ACC_DATA_W
 	),
-#ifdef __x86_64__
 	[SEL_TO_INDEX(USER_CS)] = MAKE_REAL_DESCRIPTOR(	/* 32-bit user code segment */
 		0,
 		0xfffff,
@@ -112,5 +107,4 @@ struct real_descriptor master_gdt[GDTSZ]
 		SZ_64|SZ_G,
 		ACC_P|ACC_PL_U|ACC_CODE_R
 	),
-#endif
 };

@@ -113,7 +113,10 @@
 #define kIOCFPlugInTypesKey		"IOCFPlugInTypes"
 
 // properties found in services that implement command pooling
-#define kIOCommandPoolSizeKey	       "IOCommandPoolSize"          // (OSNumber)
+#define kIOCommandPoolSizeKey		"IOCommandPoolSize"		// (OSNumber)
+
+// properties found in services that implement priority
+#define kIOMaximumPriorityCountKey	"IOMaximumPriorityCount"	// (OSNumber)
 
 // properties found in services that have transfer constraints
 #define kIOMaximumBlockCountReadKey             "IOMaximumBlockCountRead"             // (OSNumber)

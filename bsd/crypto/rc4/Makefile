@@ -7,22 +7,6 @@ export MakeInc_dir=${SRCROOT}/makedefs/MakeInc.dir
 include $(MakeInc_cmd)
 include $(MakeInc_def)
 
-INSTINC_SUBDIRS = \
-
-INSTINC_SUBDIRS_I386 = \
-
-INSTINC_SUBDIRS_X86_64 = \
-
-INSTINC_SUBDIRS_ARM = \
-
-EXPINC_SUBDIRS = \
-
-EXPINC_SUBDIRS_I386 = \
-
-EXPINC_SUBDIRS_X86_64 = \
-
-EXPINC_SUBDIRS_ARM = \
-
 PRIVATE_DATAFILES = \
 	rc4.h
 

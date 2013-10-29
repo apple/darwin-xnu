@@ -57,9 +57,6 @@
 #include <mach-o/arch.h>
 #include "tests.h"
 
-#if !TARGET_OS_EMBEDDED
-#include <XILog/XILog.h>
-#endif
 
 
 
@@ -146,7 +143,6 @@ static const char *current_arch( void );
 /* globals */
 long		g_max_failures = 0;
 int		g_skip_setuid_tests = 0;
-int		g_xilog_active = 0;
 const char *	g_cmd_namep;
 char		g_target_path[ PATH_MAX ];
 int		g_is_single_user = 0;
@@ -164,36 +160,58 @@ int main( int argc, const char * argv[] )
 	time_t			my_start_time, my_end_time;
 	struct stat		my_stat_buf;
 	char			my_buffer[64];
-	/* vars for XILog */
-#if !TARGET_OS_EMBEDDED
-	XILogRef		logRef;
-	char			*logPath = "";
-	char			*config = NULL;
-	int				echo = 0;
-	int				xml = 0;
-#endif
+	uid_t		sudo_uid = 0;
+	const char *	sudo_uid_env;
+	gid_t		sudo_gid;
+	const char *	sudo_gid_env;
 	sranddev( );				/* set up seed for our random name generator */
 	g_cmd_namep = argv[0];
-	
+
+	/* make sure SIGCHLD is not ignored, so wait4 calls work */
+	signal(SIGCHLD, SIG_DFL);
+
 	/* NOTE - code in create_target_directory will append '/' if it is necessary */
 	my_targetp = getenv("TMPDIR");
 	if ( my_targetp == NULL )
 		my_targetp = "/tmp";
 	
-	/* make sure our executable is owned by root and has set uid bit */
-	err = stat( g_cmd_namep, &my_stat_buf );
-	if ( err != 0 ) {
-		err = errno;
-		printf( "stat call on our executable failed -  \"%s\" \n", g_cmd_namep );
-		printf( " failed with error %d - \"%s\" \n", err, strerror( err) );
+	/* make sure we are running as root */
+	if ( ( getuid() != 0 ) || ( geteuid() != 0 ) ) {
+		printf( "Test must be run as root\n", g_cmd_namep );
 		exit( -1 );
 	}
-	if ( my_stat_buf.st_uid != 0 || (my_stat_buf.st_mode & S_ISUID) == 0 ) {
-		printf( "executable file -  \"%s\" \n", g_cmd_namep );
-		printf( "does not have correct owner (must be root) or setuid bit is not set \n" );
-		exit( -1 );
+
+	sudo_uid_env = getenv("SUDO_UID");
+	if ( sudo_uid_env ) {
+		sudo_uid = strtol(sudo_uid_env, NULL, 10);
+	}
+
+	/* switch real uid to a non_root user, while keeping effective uid as root */
+	if ( sudo_uid != 0 ) {
+		setreuid( sudo_uid, 0 );
+	}
+	else {
+		/* Default to 501 if no sudo uid found */
+		setreuid( 501, 0 );
+	}
+
+	/* restore the gid if run through sudo */
+	sudo_gid_env = getenv("SUDO_GID");
+	if ( sudo_gid_env ) {
+		sudo_gid = strtol(sudo_gid_env, NULL, 10);
 	}
 	
+	if ( getgid() == 0 ) {
+
+		if ( sudo_gid != 0 ) {
+			setgid( sudo_gid );
+		}
+		else {
+			/* Default to 20 if no sudo gid found */
+			setgid( 20 );
+		}
+	}
+
 	/* parse input parameters */
 	for ( i = 1; i < argc; i++ ) {
 		if ( strcmp( argv[i], "-u" ) == 0 ) {
@@ -257,13 +275,10 @@ int main( int argc, const char * argv[] )
 			g_skip_setuid_tests = 1;
 			continue;
 		}
-#if !TARGET_OS_EMBEDDED	
-		if ( strcmp( argv[i], "-x" ) == 0 ||
-			 strcmp( argv[i], "-xilog" ) == 0 ) {
-			g_xilog_active = 1;
+		if ( strcmp( argv[i], "-testbot" ) == 0 ) {
+			g_testbots_active = 1;
 			continue;
 		}
-#endif
 		printf( "invalid argument \"%s\" \n", argv[i] );
 		usage( );
 	}
@@ -290,16 +305,6 @@ g_testbots_active = 1;
 		list_all_tests( );
 		return 0;
 	}
-#if !TARGET_OS_EMBEDDED
-	if (g_xilog_active == 1) {	
-		logRef = XILogOpenLogExtended( logPath, "xnu_quick_test", "com.apple.coreos", config, xml, 
-						echo, NULL, "ResultOwner", "com.apple.coreos", NULL );
-		if( logRef == NULL )  {
-			fprintf(stderr,"Couldn't create log: %s",logPath);
-			exit(-1);
-		}
-	}
-#endif
 	
 	/* build a test target directory that we use as our path to create any test
 	 * files and directories.
@@ -324,12 +329,6 @@ g_testbots_active = 1;
 		my_testp = &g_tests[i];
 		if ( my_testp->test_run_it == 0 || my_testp->test_routine == NULL )
 			continue;
-#if !TARGET_OS_EMBEDDED	
-		if (g_xilog_active == 1) {	
-			XILogBeginTestCase( logRef, my_testp->test_infop, my_testp->test_infop );	
-			XILogMsg( "test #%d - %s \n", (i + 1), my_testp->test_infop );
-		}
-#endif
 
 		if ( g_testbots_active == 1 ) {
 			printf("[BEGIN] %s \n", my_testp->test_infop);
@@ -340,20 +339,10 @@ g_testbots_active = 1;
 		my_err = my_testp->test_routine( my_testp->test_input );
 		if ( my_err != 0 ) {
 			printf("\t--> FAILED \n");
-#if !TARGET_OS_EMBEDDED	
-			if (g_xilog_active == 1) {	
-				XILogMsg("SysCall %s failed", my_testp->test_infop);
-				XILogErr("Result %d", my_err);
-			}
-#endif
+			printf("SysCall %s failed", my_testp->test_infop);
+			printf("Result %d", my_err);
 			my_failures++;
 			if ( my_failures > g_max_failures ) {
-#if !TARGET_OS_EMBEDDED	
-				if (g_xilog_active == 1) {
-					XILogMsg("Reached the maximum number of failures - Aborting xnu_quick_test.");
-					XILogEndTestCase( logRef, kXILogTestPassOnErrorLevel );
-				}
-#endif
 				printf( "\n Reached the maximum number of failures - Aborting xnu_quick_test. \n" );
 	                        /* Code added to run xnu_quick_test under testbots */
         	                if ( g_testbots_active == 1 ) {
@@ -363,20 +352,10 @@ g_testbots_active = 1;
 			}
 			/* Code added to run xnu_quick_test under testbots */
 			if ( g_testbots_active == 1 ) {
-				printf("[FAIL] %s \n", my_testp->test_infop);
+				printf("\n[FAIL] %s \n", my_testp->test_infop);
 			}			
-#if !TARGET_OS_EMBEDDED	
-			if (g_xilog_active == 1) {
-				XILogEndTestCase( logRef, kXILogTestPassOnErrorLevel );
-			}
-#endif
 			continue;
 		}
-#if !TARGET_OS_EMBEDDED	
-		if (g_xilog_active == 1) {	
-			XILogEndTestCase(logRef, kXILogTestPassOnErrorLevel);
-		}
-#endif
 		/* Code added to run xnu_quick_test under testbots */
 		if ( g_testbots_active == 1 ) {
 			printf("[PASS] %s \n", my_testp->test_infop);
@@ -390,13 +369,8 @@ exit_this_routine:
 	/* clean up our test directory */
 	rmdir( &g_target_path[0] );	
 
-#if !TARGET_OS_EMBEDDED	
-	if (g_xilog_active == 1) {	
-		XILogCloseLog(logRef);
-	}
-#endif
-	
-    return 0;
+	/* exit non zero if there are any failures */
+	return my_failures != 0;
 } /* main */
 
 
@@ -569,9 +543,7 @@ static void usage( void )
 	printf( "\t -r[un] 1, 3, 10 - 19            # run specific tests.  enter individual test numbers and/or range of numbers.  use -list to list tests.   \n" );
 	printf( "\t -s[kip]                         # skip setuid tests   \n" );
 	printf( "\t -t[arget] TARGET_PATH           # path to directory where tool will create test files.  defaults to \"/tmp/\"   \n" );
-#if !TARGET_OS_EMBEDDED	
-	printf( "\t -x[ilog]                        # use XILog\n");
-#endif
+	printf( "\t -testbot                        # output results in CoreOS TestBot compatible format  \n" );
 	printf( "\nexamples:  \n" );
 	printf( "--- Place all test files and directories at the root of volume \"test_vol\" --- \n" );
 	printf( "%s -t /Volumes/test_vol/ \n", (my_ptr != NULL) ? my_ptr : g_cmd_namep );

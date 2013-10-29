@@ -9,26 +9,31 @@ include $(MakeInc_def)
 
 OBJS = kextsymboltool.o
 
-CFLAGS = -isysroot $(HOST_SDKROOT) -g -O0 -I$(SOURCE) -I.
+CFLAGS = -isysroot $(HOST_SDKROOT) -mmacosx-version-min=$(HOST_OS_VERSION) -g -O0 -I$(SOURCE) -I.
 
 WARNFLAGS = -Wall
 
-LDFLAGS = -isysroot $(HOST_SDKROOT) -L$(HOST_SPARSE_SDKROOT)/usr/local/lib/system -lstdc++
+LDFLAGS = -isysroot $(HOST_SDKROOT) -mmacosx-version-min=$(HOST_OS_VERSION) -L$(HOST_SPARSE_SDKROOT)/usr/local/lib/system -lstdc++
 ifneq ($(HOST_SPARSE_SDKROOT),/)
 LDFLAGS += -lmacho
 endif
 
-kextsymboltool: $(OBJS)
-	$(_v)$(HOST_CC) $(LDFLAGS) -o $@ $^
+.PHONY: force
+
+.SparseSDK: force
+	$(_v)echo '$(HOST_SPARSE_SDKROOT)' | cmp -s - $@ || echo '$(HOST_SPARSE_SDKROOT)' > $@
+
+kextsymboltool: $(OBJS) .SparseSDK
 	@echo HOST_LD $@
-	$(_v)$(HOST_CODESIGN) -s - $@
+	$(_v)$(HOST_CC) $(LDFLAGS) -o $@ $(OBJS)
 	@echo HOST_CODESIGN $@
+	$(_v)env CODESIGN_ALLOCATE=$(HOST_CODESIGN_ALLOCATE) $(HOST_CODESIGN) -s - $@
 
-.c.o:
-	$(_v)$(HOST_CC) $(WARNFLAGS) $(CFLAGS) -c -o $@ $<
+%.o: %.c
 	@echo HOST_CC $@
+	$(_v)$(HOST_CC) $(WARNFLAGS) $(CFLAGS) -c -o $@ $<
 
-do_build_setup: kextsymboltool
+do_build_setup:: kextsymboltool
 
 include $(MakeInc_rule)
 include $(MakeInc_dir)

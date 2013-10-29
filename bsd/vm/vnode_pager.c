@@ -90,7 +90,7 @@ vnode_pager_throttle()
 	ut = get_bsdthread_info(current_thread());
 
 	if (ut->uu_lowpri_window)
-		throttle_lowpri_io(TRUE);
+		throttle_lowpri_io(1);
 }
 
 
@@ -112,15 +112,14 @@ vnode_pager_isinuse(struct vnode *vp)
 }
 
 uint32_t
-vnode_pager_return_hard_throttle_limit(struct vnode *vp, uint32_t *limit, uint32_t hard_throttle)
+vnode_pager_return_throttle_io_limit(struct vnode *vp, uint32_t *limit)
 {
-	return(cluster_hard_throttle_limit(vp, limit, hard_throttle));
+	return(cluster_throttle_io_limit(vp, limit));
 }
 
 vm_object_offset_t
 vnode_pager_get_filesize(struct vnode *vp)
 {
-
 	return (vm_object_offset_t) ubc_getsize(vp);
 }
 
@@ -511,9 +510,13 @@ vnode_pagein(
 	int             first_pg;
         int             xsize;
 	int		must_commit = 1;
+	int		ignore_valid_page_check = 0;
 
 	if (flags & UPL_NOCOMMIT)
 	        must_commit = 0;
+
+	if (flags & UPL_IGNORE_VALID_PAGE_CHECK)
+		ignore_valid_page_check = 1;
 
 	if (UBCINFOEXISTS(vp) == 0) {
 		result = PAGER_ERROR;
@@ -605,13 +608,19 @@ vnode_pagein(
 		        if (upl_page_present(pl, last_pg))
 			        break;
 		}
-	        /*
-		 * skip over 'valid' pages... we don't want to issue I/O for these
-		 */
-	        for (start_pg = last_pg; last_pg < pages_in_upl; last_pg++) {
-		        if (!upl_valid_page(pl, last_pg))
-			        break;
+
+		if (ignore_valid_page_check == 1) {
+			start_pg = last_pg;
+		} else {
+	        	/*
+			 * skip over 'valid' pages... we don't want to issue I/O for these
+			 */
+	        	for (start_pg = last_pg; last_pg < pages_in_upl; last_pg++) {
+		        	if (!upl_valid_page(pl, last_pg))
+			        	break;
+			}
 		}
+
 		if (last_pg > start_pg) {
 		        /*
 			 * we've found a range of valid pages
@@ -648,7 +657,7 @@ vnode_pagein(
 		 * 'cluster_io'
 		 */
 		for (start_pg = last_pg; last_pg < pages_in_upl; last_pg++) {
-		        if (upl_valid_page(pl, last_pg) || !upl_page_present(pl, last_pg))
+		        if (( !ignore_valid_page_check && upl_valid_page(pl, last_pg)) || !upl_page_present(pl, last_pg))
 			        break;
 		}
 		if (last_pg > start_pg) {

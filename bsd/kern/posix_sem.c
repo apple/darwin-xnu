@@ -85,7 +85,7 @@
 
 
 #define f_flag f_fglob->fg_flag
-#define f_type f_fglob->fg_type
+#define f_type f_fglob->fg_ops->fo_type
 #define f_msgcount f_fglob->fg_msgcount
 #define f_cred f_fglob->fg_cred
 #define f_ops f_fglob->fg_ops
@@ -101,8 +101,9 @@ struct pseminfo {
 	gid_t		psem_gid;
 	char		psem_name[PSEMNAMLEN + 1];	/* segment name */
 	semaphore_t	psem_semobject;
-	proc_t		sem_proc;
 	struct label *	psem_label;
+	pid_t		psem_creator_pid;
+	uint64_t	psem_creator_uniqueid;
 };
 #define PSEMINFO_NULL (struct pseminfo *)0
 
@@ -177,9 +178,16 @@ static int psem_closefile (struct fileglob *fp, vfs_context_t ctx);
 
 static int psem_kqfilter (struct fileproc *fp, struct knote *kn, vfs_context_t ctx);
 
-struct 	fileops psemops =
-	{ psem_read, psem_write, psem_ioctl, psem_select, psem_closefile, psem_kqfilter, NULL };
-
+static const struct fileops psemops = {
+	DTYPE_PSXSEM,
+	psem_read,
+	psem_write,
+	psem_ioctl,
+	psem_select,
+	psem_closefile,
+	psem_kqfilter,
+	NULL
+};
 
 static lck_grp_t       *psx_sem_subsys_lck_grp;
 static lck_grp_attr_t  *psx_sem_subsys_lck_grp_attr;
@@ -530,7 +538,8 @@ sem_open(proc_t p, struct sem_open_args *uap, user_addr_t *retval)
 		pinfo->psem_name[PSEMNAMLEN]= 0;
 		pinfo->psem_flags &= ~PSEM_DEFINED;
 		pinfo->psem_flags |= PSEM_ALLOCATED;
-		pinfo->sem_proc = p;
+		pinfo->psem_creator_pid = p->p_pid;
+		pinfo->psem_creator_uniqueid = p->p_uniqueid;
 		
 #if CONFIG_MACF
 		error = mac_posixsem_check_create(kauth_cred_get(), nameptr);
@@ -593,7 +602,6 @@ sem_open(proc_t p, struct sem_open_args *uap, user_addr_t *retval)
 
 	proc_fdlock(p);
 	fp->f_flag = fmode & FMASK;
-	fp->f_type = DTYPE_PSXSEM;
 	fp->f_ops = &psemops;
 	fp->f_data = (caddr_t)new_pnode;
 	procfdtbl_releasefd(p, indx, NULL);
@@ -788,7 +796,7 @@ sem_close(proc_t p, struct sem_close_args *uap, __unused int32_t *retval)
 	fileproc_drain(p, fp);
 	fdrelse(p, fd);
 	error = closef_locked(fp, fp->f_fglob, p);
-	FREE_ZONE(fp, sizeof *fp, M_FILEPROC);
+	fileproc_free(fp);
 	proc_fdunlock(p);
 	return(error);
 }

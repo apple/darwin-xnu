@@ -75,10 +75,10 @@ __private_extern__
 kern_return_t		memory_manager_default_check(void);
 
 __private_extern__
-void			memory_manager_default_init(void) __attribute__((section("__TEXT, initcode")));
+void			memory_manager_default_init(void);
 
 __private_extern__
-void			memory_object_control_bootstrap(void) __attribute__((section("__TEXT, initcode")));
+void			memory_object_control_bootstrap(void);
 __private_extern__
 memory_object_control_t memory_object_control_allocate(
 				vm_object_t		object);
@@ -140,6 +140,9 @@ extern kern_return_t	memory_object_pages_resident(
 extern kern_return_t	memory_object_signed(
 	memory_object_control_t		control,
 	boolean_t			is_signed);
+
+extern boolean_t	memory_object_is_signed(
+	memory_object_control_t	control);
 
 extern boolean_t	memory_object_is_slid(
 	memory_object_control_t		control);

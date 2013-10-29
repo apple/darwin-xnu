@@ -36,10 +36,6 @@ OPTIONS/mach_debug		optional mach_debug
 OPTIONS/mach_machine_routines.h	optional mach_machine_routines
 OPTIONS/machine_timer_routines	optional machine_timer_routines
 #
-OPTIONS/norma_vm		optional norma_vm
-OPTIONS/norma_task		optional norma_task
-OPTIONS/norma_ether		optional norma_ether
-OPTIONS/norma_scsi		optional norma_scsi
 OPTIONS/mach_cluster_stats	optional mach_cluster_stats
 OPTIONS/mach_counters		optional mach_counters
 OPTIONS/mach_ipc_debug		optional mach_ipc_debug
@@ -65,6 +61,8 @@ OPTIONS/zone_alias_addr		optional zone_alias_addr
 OPTIONS/vm_cpm			optional vm_cpm
 OPTIONS/task_swapper		optional task_swapper
 OPTIONS/stack_usage		optional stack_usage
+OPTIONS/importance_inheritance	optional importance_inheritance
+OPTIONS/importance_debug	optional importance_debug
 
 OPTIONS/config_dtrace		optional config_dtrace
 OPTIONS/config_counters		optional config_counters
@@ -73,6 +71,8 @@ OPTIONS/no_kextd		optional no_kextd
 
 # Default pager and system pager files, to be moved to separate component
  
+osfmk/vm/vm_compressor_backing_store.c	standard
+
 osfmk/default_pager/default_pager.c	standard
 osfmk/default_pager/dp_backing_store.c	standard
 osfmk/default_pager/dp_memory_object.c	standard
@@ -125,6 +125,7 @@ osfmk/ipc/mig_log.c			optional mig_debug
 osfmk/kern/affinity.c			standard
 osfmk/kern/ast.c			standard
 osfmk/kern/audit_sessionport.c		optional config_audit
+osfmk/kern/btlog.c			standard
 osfmk/kern/clock.c			standard
 osfmk/kern/clock_oldops.c		standard
 osfmk/kern/counters.c			standard
@@ -202,6 +203,7 @@ osfmk/pmc/pmc.c				standard
 ./mach/upl_server.c			standard
 ./mach/audit_triggers_user.c		standard
 ./mach/task_access_user.c          	standard
+./mach/telemetry_notification_user.c optional config_telemetry
 #
 # For now, no external pagers
 #
@@ -216,6 +218,8 @@ osfmk/pmc/pmc.c				standard
 ./mach/security_server.c		optional config_macf
 
 osfmk/vm/bsd_vm.c			optional mach_bsd
+osfmk/vm/vm_compressor.c		standard
+osfmk/vm/vm_compressor_pager.c		standard
 osfmk/vm/default_freezer.c		optional config_freeze
 osfmk/vm/device_vm.c			standard
 osfmk/vm/memory_object.c		standard
@@ -269,9 +273,13 @@ osfmk/kperf/kperf.c                     optional kperf
 osfmk/kperf/action.c                    optional kperf
 osfmk/kperf/callstack.c                 optional kperf
 osfmk/kperf/pet.c                       optional kperf
-osfmk/kperf/filter.c                    optional kperf
 # osfmk/kperf/kperfbsd.c                    optional kperf # bsd/conf/files
 osfmk/kperf/threadinfo.c                optional kperf
 osfmk/kperf/timetrigger.c               optional kperf
+osfmk/kperf/kperf_kpc.c                 optional kperf
+osfmk/kern/kpc_thread.c                 optional kpc
+osfmk/kern/kpc_common.c                 optional kpc
 
 osfmk/console/serial_general.c	standard
+
+osfmk/kern/telemetry.c			optional config_telemetry

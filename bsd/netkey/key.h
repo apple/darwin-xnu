@@ -33,7 +33,7 @@
 #define _NETKEY_KEY_H_
 #include <sys/appleapiopts.h>
 
-#ifdef KERNEL_PRIVATE
+#ifdef BSD_KERNEL_PRIVATE
 
 #define KEY_SADB_UNLOCKED	0
 #define KEY_SADB_LOCKED		1
@@ -75,7 +75,6 @@ extern u_int32_t key_random(void);
 extern void key_randomfill(void *, size_t);
 extern void key_freereg(struct socket *);
 extern int key_parse(struct mbuf *, struct socket *);
-extern void key_domain_init(void);
 extern int key_checktunnelsanity(struct secasvar *, u_int, caddr_t, caddr_t);
 extern void key_sa_recordxfer(struct secasvar *, struct mbuf *);
 extern void key_sa_routechange(struct sockaddr *);
@@ -106,7 +105,9 @@ extern struct secasvar * key_newsav2(struct secashead     *sah,
 				     struct sadb_lifetime *lifetime_hard,
 				     struct sadb_lifetime *lifetime_soft);
 extern void key_delsav(struct secasvar *sav);
+extern struct secpolicy *key_getspbyid(u_int32_t);
+extern void key_delsp_for_ipsec_if(ifnet_t ipsec_if);
 
 
-#endif /* KERNEL_PRIVATE */
+#endif /* BSD_KERNEL_PRIVATE */
 #endif /* _NETKEY_KEY_H_ */

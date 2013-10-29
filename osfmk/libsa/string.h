@@ -81,6 +81,7 @@ extern int	strncmp(const char *,const char *, size_t);
 
 extern int	strcasecmp(const char *s1, const char *s2);
 extern int	strncasecmp(const char *s1, const char *s2, size_t n);
+extern char	*strnstr(char *s, const char *find, size_t slen);
 extern char	*strchr(const char *s, int c);
 extern char	*STRDUP(const char *, int);
 extern int	strprefix(const char *s1, const char *s2);

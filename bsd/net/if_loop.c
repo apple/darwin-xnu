@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2011 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2013 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -120,8 +120,8 @@
 #define	LO_BPF_TAP_OUT(_m) {						\
 	if (lo_statics[0].bpf_callback != NULL) {			\
 		bpf_tap_out(lo_ifp, DLT_NULL, _m,			\
-		    &((struct loopback_header *)_m->m_pkthdr.header)->protocol,\
-		    sizeof (u_int32_t));				\
+		    &((struct loopback_header *)_m->m_pkthdr.pkt_hdr)->	\
+		    protocol, sizeof (u_int32_t));			\
 	}								\
 }
 
@@ -151,15 +151,9 @@ struct	loopback_header {
 void loopattach(void);
 static errno_t lo_demux(struct ifnet *, struct mbuf *, char *,
     protocol_family_t *);
-#if !KPI_INTERFACE_EMBEDDED
-static errno_t lo_framer(struct ifnet *, struct mbuf **,
-    const struct sockaddr *,
-    const char *, const char *);
-#else
 static errno_t
 lo_framer(struct ifnet *, struct mbuf **, const struct sockaddr *,
     const char *, const char *, u_int32_t *, u_int32_t *);
-#endif
 static errno_t lo_add_proto(struct ifnet *, protocol_family_t,
     const struct ifnet_demux_desc *, u_int32_t);
 static errno_t lo_del_proto(struct ifnet *, protocol_family_t);
@@ -221,16 +215,10 @@ lo_demux(struct ifnet *ifp, struct mbuf *m, char *frame_header,
 	return (0);
 }
 
-#if !KPI_INTERFACE_EMBEDDED
-static errno_t
-lo_framer(struct ifnet *ifp, struct mbuf **m, const struct sockaddr *dest,
-    const char *dest_linkaddr, const char *frame_type)
-#else
 static errno_t
 lo_framer(struct ifnet *ifp, struct mbuf **m, const struct sockaddr *dest,
     const char *dest_linkaddr, const char *frame_type,
     u_int32_t *prepend_len, u_int32_t *postpend_len)
-#endif
 {
 #pragma unused(ifp, dest, dest_linkaddr)
 	struct loopback_header  *header;
@@ -241,10 +229,10 @@ lo_framer(struct ifnet *ifp, struct mbuf **m, const struct sockaddr *dest,
 		return (EJUSTRETURN);
 	}
 
-#if KPI_INTERFACE_EMBEDDED
-	*prepend_len = sizeof (struct loopback_header);
-	*postpend_len = 0;
-#endif /* KPI_INTERFACE_EMBEDDED */
+	if (prepend_len != NULL)
+		*prepend_len = sizeof (struct loopback_header);
+	if (postpend_len != NULL)
+		*postpend_len = 0;
 
 	header = mtod(*m, struct loopback_header *);
 	bcopy(frame_type, &header->protocol, sizeof (u_int32_t));
@@ -281,8 +269,7 @@ lo_output(struct ifnet *ifp, struct mbuf *m_list)
 	bzero(&s, sizeof(s));
 
 	for (m = m_list; m; m = m->m_nextpkt) {
-		if ((m->m_flags & M_PKTHDR) == 0)
-			panic("lo_output: no HDR");
+		VERIFY(m->m_flags & M_PKTHDR);
 		cnt++;
 		len += m->m_pkthdr.len;
 
@@ -294,14 +281,15 @@ lo_output(struct ifnet *ifp, struct mbuf *m_list)
 		if (m->m_pkthdr.rcvif == NULL)
 			m->m_pkthdr.rcvif = ifp;
 
-		m->m_pkthdr.header = mtod(m, char *);
-		if (apple_hwcksum_tx != 0) {
-			/* loopback checksums are always OK */
-			m->m_pkthdr.csum_data = 0xffff;
-			m->m_pkthdr.csum_flags =
-			    CSUM_DATA_VALID | CSUM_PSEUDO_HDR |
-			    CSUM_IP_CHECKED | CSUM_IP_VALID;
-		}
+		m->m_pkthdr.pkt_flags |= PKTF_LOOP;
+		m->m_pkthdr.pkt_hdr = mtod(m, char *);
+
+		/* loopback checksums are always OK */
+		m->m_pkthdr.csum_data = 0xffff;
+		m->m_pkthdr.csum_flags =
+		    CSUM_DATA_VALID | CSUM_PSEUDO_HDR |
+		    CSUM_IP_CHECKED | CSUM_IP_VALID;
+
 		m_adj(m, sizeof (struct loopback_header));
 
 		LO_BPF_TAP_OUT(m);
@@ -313,7 +301,7 @@ lo_output(struct ifnet *ifp, struct mbuf *m_list)
 	s.packets_in = cnt;
 	s.packets_out = cnt;
 	s.bytes_in = len;
-	s.bytes_out = len;	
+	s.bytes_out = len;
 
 	return (ifnet_input_extended(ifp, m_list, m_tail, &s));
 }
@@ -330,7 +318,7 @@ lo_pre_enqueue(struct ifnet *ifp, struct mbuf *m0)
 	int error = 0;
 
 	while (m != NULL) {
-		VERIFY((m->m_flags & M_PKTHDR));
+		VERIFY(m->m_flags & M_PKTHDR);
 
 		n = m->m_nextpkt;
 		m->m_nextpkt = NULL;
@@ -343,14 +331,15 @@ lo_pre_enqueue(struct ifnet *ifp, struct mbuf *m0)
 		if (m->m_pkthdr.rcvif == NULL)
 			m->m_pkthdr.rcvif = ifp;
 
-		m->m_pkthdr.header = mtod(m, char *);
-		if (apple_hwcksum_tx != 0) {
-			/* loopback checksums are always OK */
-			m->m_pkthdr.csum_data = 0xffff;
-			m->m_pkthdr.csum_flags =
-			    CSUM_DATA_VALID | CSUM_PSEUDO_HDR |
-			    CSUM_IP_CHECKED | CSUM_IP_VALID;
-		}
+		m->m_pkthdr.pkt_flags |= PKTF_LOOP;
+		m->m_pkthdr.pkt_hdr = mtod(m, char *);
+
+		/* loopback checksums are always OK */
+		m->m_pkthdr.csum_data = 0xffff;
+		m->m_pkthdr.csum_flags =
+		    CSUM_DATA_VALID | CSUM_PSEUDO_HDR |
+		    CSUM_IP_CHECKED | CSUM_IP_VALID;
+
 		m_adj(m, sizeof (struct loopback_header));
 
 		/*
@@ -438,10 +427,9 @@ lo_pre_output(struct ifnet *ifp, protocol_family_t protocol_family,
 #pragma unused(ifp, dst, dst_addr)
 	struct rtentry *rt = route;
 
-	(*m)->m_flags |= M_LOOP;
+	VERIFY((*m)->m_flags & M_PKTHDR);
 
-	if (((*m)->m_flags & M_PKTHDR) == 0)
-		panic("looutput no HDR");
+	(*m)->m_flags |= M_LOOP;
 
 	if (rt != NULL) {
 		u_int32_t rt_flags = rt->rt_flags;
@@ -653,7 +641,7 @@ loopattach(void)
 	lo_init.demux			= lo_demux;
 	lo_init.add_proto		= lo_add_proto;
 	lo_init.del_proto		= lo_del_proto;
-	lo_init.framer			= lo_framer;
+	lo_init.framer_extended		= lo_framer;
 	lo_init.softc			= &lo_statics[0];
 	lo_init.ioctl			= lo_ioctl;
 	lo_init.set_bpf_tap		= lo_set_bpf_tap;

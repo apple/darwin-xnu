@@ -238,7 +238,6 @@ finish:
 *
 * Kernel sections:
 * __TEXT,__text
-* __TEXT,__initcode
 * __TEXT,__const
 * __DATA,__data
 *
@@ -755,9 +754,6 @@ kxld_seg_finish_init(KXLDSeg *seg)
             }
         }
 
-        /* XXX Cross architecture linking will fail if the page size ever differs
-         * from 4096.  (As of this writing, we're fine on i386, x86_64, and arm).
-         */
         seg->vmsize = round_page(maxaddr + maxsize - seg->base_addr);
     }
 
@@ -781,7 +777,7 @@ kxld_seg_set_vm_protections(KXLDSeg *seg, boolean_t strict_protections)
     if (strict_protections) {
         if (streq_safe(seg->segname, SEG_TEXT, const_strlen(SEG_TEXT))) {
             seg->initprot = TEXT_SEG_PROT;
-            seg->maxprot = VM_PROT_ALL;
+            seg->maxprot = TEXT_SEG_PROT;
         } else {
             seg->initprot = DATA_SEG_PROT;
             seg->maxprot = DATA_SEG_PROT;

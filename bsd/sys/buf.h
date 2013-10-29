@@ -89,7 +89,7 @@
 #define	B_FUA		0x00000400	/* Write-through disk cache(if supported) */
 #define B_PASSIVE	0x00000800	/* PASSIVE I/Os are ignored by THROTTLE I/O */
 #define	B_IOSTREAMING	0x00001000	/* sequential access pattern detected */
-#define B_THROTTLED_IO	0x00002000	/* low priority I/O */
+#define B_THROTTLED_IO	0x00002000	/* low priority I/O (deprecated) */
 #define B_ENCRYPTED_IO	0x00004000	/* Encrypted I/O */
 #define B_STATICCONTENT 0x00008000	/* Buffer is likely to remain unaltered */
 
@@ -1101,6 +1101,24 @@ void bufattr_setcpoff(bufattr_t, uint64_t);
 int bufattr_rawencrypted(bufattr_t bap);
 
 /*!
+ @function bufattr_markgreedymode
+ @abstract Mark a buffer to use the greedy mode for writing.
+ @param bap Buffer attributes to mark.
+ @discussion Greedy Mode: request improved write performance from the underlying device at the expense of storage effeciency
+ @return void.
+ */
+ void bufattr_markgreedymode(bufattr_t bap);
+
+/*!
+ @function bufattr_greedymode
+ @abstract Check if a buffer is written using the Greedy Mode
+ @param bap Buffer attributes to test.
+ @discussion Greedy Mode: request improved write performance from the underlying device at the expense of storage effeciency
+ @return Nonzero if buffer uses greedy mode, 0 otherwise.
+ */
+int	bufattr_greedymode(bufattr_t bap);
+
+/*!
  @function bufattr_throttled
  @abstract Check if a buffer is throttled.
  @param bap Buffer attribute to test.
@@ -1132,6 +1150,34 @@ int bufattr_meta(bufattr_t bap);
  @return Nonzero if the buffer is marked to delay idle sleep on disk IO, 0 otherwise.
  */
 int bufattr_delayidlesleep(bufattr_t bap);
+
+/*!
+ @function buf_kernel_addrperm_addr
+ @abstract Obfuscate the buf pointers.
+ @param addr Buf_t pointer.
+ @return Obfuscated pointer if addr is non zero, 0 otherwise.
+ */
+vm_offset_t buf_kernel_addrperm_addr(void * addr);
+
+/*!
+ @function bufattr_markquickcomplete
+ @abstract Mark a buffer to hint quick completion to the driver.
+ @discussion This flag hints the storage driver that some thread is waiting for this I/O to complete.
+ It should therefore attempt to complete it as soon as possible at the cost of device efficiency.
+ @param bap Buffer attributes to mark.
+ @return void.
+ */
+void bufattr_markquickcomplete(bufattr_t bap);
+
+/*!
+ @function bufattr_quickcomplete
+ @abstract Check if a buffer is marked for quick completion
+ @discussion This flag hints the storage driver that some thread is waiting for this I/O to complete.
+ It should therefore attempt to complete it as soon as possible at the cost of device efficiency.
+ @param bap Buffer attribute to test.
+ @return Nonzero if the buffer is marked for quick completion, 0 otherwise.
+ */
+int bufattr_quickcomplete(bufattr_t bap);
 
 #endif /* KERNEL_PRIVATE */
 

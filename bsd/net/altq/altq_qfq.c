@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2011 Apple Inc. All rights reserved.
+ * Copyright (c) 2011-2013 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -195,6 +195,10 @@ altq_qfq_request(struct ifaltq *altq, enum altrq req, void *arg)
 
 	case ALTRQ_EVENT:
 		qfq_event(qif, (cqev_t)arg);
+		break;
+
+	case ALTRQ_THROTTLE:
+	default:
 		break;
 	}
 	return (0);

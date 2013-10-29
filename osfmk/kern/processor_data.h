@@ -81,13 +81,14 @@ struct processor_data {
 		ipc_kmsg_t				entries[IKM_STASH];
 		unsigned int			avail;
 	}						ikm_cache;
-
-	unsigned long			page_grab_count;
 	int						start_color;
+	unsigned long			page_grab_count;
 	void					*free_pages;
-
 	struct processor_sched_statistics sched_stats;
-	uint64_t        timer_call_ttd; /* current timer call time-to-deadline */
+	uint64_t	timer_call_ttd; /* current timer call time-to-deadline */
+	uint64_t	wakeups_issued_total; /* Count of thread wakeups issued
+					       * by this processor
+					       */
 };
 
 typedef struct processor_data	processor_data_t;

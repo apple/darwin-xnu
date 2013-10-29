@@ -38,7 +38,7 @@
 #include <sys/kernel_types.h>
 #include <kern/locks.h>
 #include <mach/memory_object_types.h>
-
+#include <sys/ucred.h>
 
 /* defns for ubc_sync_range() and ubc_msync */
 
@@ -70,7 +70,9 @@ int	ubc_setcred(struct vnode *, struct proc *) __deprecated;
 /* code signing */
 struct cs_blob;
 struct cs_blob *ubc_cs_blob_get(vnode_t, cpu_type_t, off_t);
-int cs_entitlements_blob_get(proc_t p, void **, size_t *);
+int cs_entitlements_blob_get(proc_t, void **, size_t *);
+int cs_blob_get(proc_t, void **, size_t *);
+const char *cs_identity_get(proc_t);
 #endif
 
 /* cluster IO routines */

@@ -447,10 +447,12 @@ apple_protect_pager_data_request(
 		vm_object_paging_begin(src_object);
 		error_code = 0;
 		prot = VM_PROT_READ;
+		src_page = VM_PAGE_NULL;
 		kr = vm_fault_page(src_object,
 				   offset + cur_offset,
 				   VM_PROT_READ,
 				   FALSE,
+				   FALSE, /* src_page not looked up */
 				   &prot,
 				   &src_page,
 				   &top_page,

@@ -84,11 +84,14 @@ enum {
 /* from bsd/hfs/hfs_vfsops.c */
 extern int hfs_vfs_vget (struct mount *mp, ino64_t ino, struct vnode **vpp, vfs_context_t context);
 
-static int  hfs_clonelink(struct vnode *, int, kauth_cred_t, struct proc *);
 static int  hfs_clonefile(struct vnode *, int, int, int);
 static int  hfs_clonesysfile(struct vnode *, int, int, int, kauth_cred_t, struct proc *);
 static int  hfs_minorupdate(struct vnode *vp);
 static int  do_hfs_truncate(struct vnode *vp, off_t length, int flags, int skip, vfs_context_t context);
+
+/* from bsd/hfs/hfs_vnops.c */
+extern decmpfs_cnode* hfs_lazy_init_decmpfs_cnode (struct cnode *cp);
+
 
 
 int flush_cache_on_write = 0;
@@ -136,6 +139,8 @@ hfs_vnop_read(struct vnop_read_args *ap)
 	if (offset < 0)
 		return (EINVAL);	/* cant read from a negative offset */
 	
+	
+
 #if HFS_COMPRESSION
 	if (VNODE_IS_RSRC(vp)) {
 		if (hfs_hides_rsrc(ap->a_context, VTOC(vp), 1)) { /* 1 == don't take the cnode lock */
@@ -185,9 +190,7 @@ hfs_vnop_read(struct vnop_read_args *ap)
 	/* 
 	 * If this read request originated from a syscall (as opposed to 
 	 * an in-kernel page fault or something), then set it up for 
-	 * throttle checks.  For example, large EAs may cause a VNOP_READ
-	 * to occur, and we wouldn't want to throttle I/O while holding the
-	 * EA B-Tree lock.
+	 * throttle checks
 	 */
 	if (ap->a_ioflag & IO_SYSCALL_DISPATCH) {
 		io_throttle = IO_RETURN_ON_THROTTLE;
@@ -196,7 +199,7 @@ hfs_vnop_read(struct vnop_read_args *ap)
 read_again:
 
 	/* Protect against a size change. */
-	hfs_lock_truncate(cp, HFS_SHARED_LOCK);
+	hfs_lock_truncate(cp, HFS_SHARED_LOCK, HFS_LOCK_DEFAULT);
 	took_truncate_lock = 1;
 
 	filesize = fp->ff_size;
@@ -212,7 +215,7 @@ read_again:
 	KERNEL_DEBUG((FSDBG_CODE(DBG_FSRW, 12)) | DBG_FUNC_START,
 		(int)uio_offset(uio), uio_resid(uio), (int)filesize, (int)filebytes, 0);
 
-	retval = cluster_read(vp, uio, filesize, ap->a_ioflag | (io_throttle));
+	retval = cluster_read(vp, uio, filesize, ap->a_ioflag |io_throttle);
 
 	cp->c_touch_acctime = TRUE;
 
@@ -230,7 +233,7 @@ read_again:
 
 		/* When ff_bytesread exceeds 32-bits, update it behind the cnode lock. */
 		if ((fp->ff_bytesread + bytesread) > 0x00000000ffffffff) {
-			hfs_lock(cp, HFS_FORCE_LOCK);
+			hfs_lock(cp, HFS_EXCLUSIVE_LOCK, HFS_LOCK_ALLOW_NOEXISTS);
 			took_cnode_lock = 1;
 		}
 		/*
@@ -251,7 +254,7 @@ read_again:
 	}
 exit:
 	if (took_truncate_lock) {
-		hfs_unlock_truncate(cp, 0);
+		hfs_unlock_truncate(cp, HFS_LOCK_DEFAULT);
 	}
 	if (retval == EAGAIN) {
 		throttle_lowpri_io(1);
@@ -324,7 +327,6 @@ hfs_vnop_write(struct vnop_write_args *ap)
 
 #endif
 
-	// LP64todo - fix this! uio_resid may be 64-bit value
 	resid = uio_resid(uio);
 	offset = uio_offset(uio);
 
@@ -359,10 +361,11 @@ hfs_vnop_write(struct vnop_write_args *ap)
 	}
 #endif /* HFS_SPARSE_DEV */
 
-	if ((ioflag & (IO_SINGLE_WRITER | IO_RETURN_ON_THROTTLE)) == 
-			(IO_SINGLE_WRITER | IO_RETURN_ON_THROTTLE)) { 
+	if ((ioflag & (IO_SINGLE_WRITER | IO_SYSCALL_DISPATCH)) == 
+			(IO_SINGLE_WRITER | IO_SYSCALL_DISPATCH)) {
 		io_return_on_throttle = IO_RETURN_ON_THROTTLE;
 	}
+
 again:
 	/* Protect against a size change. */
 	/*
@@ -373,10 +376,10 @@ again:
 	 * start.
 	 */
 	if (ioflag & IO_APPEND || took_truncate_lock) {
-		hfs_lock_truncate(cp, HFS_EXCLUSIVE_LOCK);
+		hfs_lock_truncate(cp, HFS_EXCLUSIVE_LOCK, HFS_LOCK_DEFAULT);
 	}	
 	else {
-		hfs_lock_truncate(cp, HFS_SHARED_LOCK);
+		hfs_lock_truncate(cp, HFS_SHARED_LOCK, HFS_LOCK_DEFAULT);
 	}
 	took_truncate_lock = 1;
 
@@ -438,11 +441,15 @@ again:
 		}
 	}
 
-	if ( (retval = hfs_lock(VTOC(vp), HFS_EXCLUSIVE_LOCK))) {
+	if ( (retval = hfs_lock(VTOC(vp), HFS_EXCLUSIVE_LOCK, HFS_LOCK_DEFAULT))) {
 		goto exit;
 	}
 	cnode_locked = 1;
 	
+	if (S_ISREG(cp->c_attr.ca_mode) || S_ISLNK(cp->c_attr.ca_mode)) {
+		hfs_incr_gencount (cp);
+	}
+
 	/*
 	 * Now that we have the cnode lock, see if there are delayed zero fill ranges
 	 * overlapping our write.  If so, we need the truncate lock exclusive (see above).
@@ -458,7 +465,7 @@ again:
 		 */
 		hfs_unlock(cp);
 		cnode_locked = 0;
-		hfs_unlock_truncate(cp, 0);
+		hfs_unlock_truncate(cp, HFS_LOCK_DEFAULT);
 		goto again;
 	}
 	
@@ -611,7 +618,7 @@ sizeok:
 							fp->ff_size, inval_start,
 							zero_off, (off_t)0,
 							lflag | IO_HEADZEROFILL | IO_NOZERODIRTY);
-					hfs_lock(cp, HFS_FORCE_LOCK);
+					hfs_lock(cp, HFS_EXCLUSIVE_LOCK, HFS_LOCK_ALLOW_NOEXISTS);
 					cnode_locked = 1;
 					if (retval) goto ioerr_exit;
 					offset = uio_offset(uio);
@@ -760,7 +767,7 @@ ioerr_exit:
 		cred = vfs_context_ucred(ap->a_context);
 		if (resid > uio_resid(uio) && cred && suser(cred, NULL)) {
 			if (!cnode_locked) {
-				hfs_lock(cp, HFS_FORCE_LOCK);
+				hfs_lock(cp, HFS_EXCLUSIVE_LOCK, HFS_LOCK_ALLOW_NOEXISTS);
 				cnode_locked = 1;
 			}
 			cp->c_mode &= ~(S_ISUID | S_ISGID);
@@ -769,19 +776,18 @@ ioerr_exit:
 	if (retval) {
 		if (ioflag & IO_UNIT) {
 			if (!cnode_locked) {
-				hfs_lock(cp, HFS_FORCE_LOCK);
+				hfs_lock(cp, HFS_EXCLUSIVE_LOCK, HFS_LOCK_ALLOW_NOEXISTS);
 				cnode_locked = 1;
 			}
 			(void)hfs_truncate(vp, origFileSize, ioflag & IO_SYNC,
 			                   0, 0, ap->a_context);
-			// LP64todo - fix this!  resid needs to by user_ssize_t
 			uio_setoffset(uio, (uio_offset(uio) - (resid - uio_resid(uio))));
 			uio_setresid(uio, resid);
 			filebytes = (off_t)fp->ff_blocks * (off_t)hfsmp->blockSize;
 		}
 	} else if ((ioflag & IO_SYNC) && (resid > uio_resid(uio))) {
 		if (!cnode_locked) {
-			hfs_lock(cp, HFS_FORCE_LOCK);
+			hfs_lock(cp, HFS_EXCLUSIVE_LOCK, HFS_LOCK_ALLOW_NOEXISTS);
 			cnode_locked = 1;
 		}
 		retval = hfs_update(vp, TRUE);
@@ -796,7 +802,7 @@ exit:
 		hfs_unlock(cp);
 	
 	if (took_truncate_lock) {
-		hfs_unlock_truncate(cp, 0);
+		hfs_unlock_truncate(cp, HFS_LOCK_DEFAULT);
 	}
 	if (retval == EAGAIN) {
 		throttle_lowpri_io(1);
@@ -946,8 +952,6 @@ lookup_bucket(struct access_cache *cache, int *indexp, cnid_t parent_id)
     }
 	
     if (cache->numcached > NUM_CACHE_ENTRIES) {
-	/*printf("hfs: EGAD! numcached is %d... cut our losses and trim to %d\n",
-	  cache->numcached, NUM_CACHE_ENTRIES);*/
 	cache->numcached = NUM_CACHE_ENTRIES;
     }
 	
@@ -995,11 +999,9 @@ add_node(struct access_cache *cache, int index, cnid_t nodeID, int access)
 
     /* if the cache is full, do a replace rather than an insert */
     if (cache->numcached >= NUM_CACHE_ENTRIES) {
-	//printf("hfs: cache is full (%d). replace at index %d\n", cache->numcached, index);
 	cache->numcached = NUM_CACHE_ENTRIES-1;
 
 	if (index > cache->numcached) {
-	    //    printf("hfs: index %d pinned to %d\n", index, cache->numcached);
 	    index = cache->numcached;
 	}
     }
@@ -1525,8 +1527,6 @@ do_bulk_access_check(struct hfsmount *hfsmp, struct vnode *vp,
 		
   err_exit_bulk_access:
 		
-    //printf("hfs: on exit (err %d), numfiles/numcached/cachehits/lookups is %d/%d/%d/%d\n", error, num_files, cache.numcached, cache.cachehits, cache.lookups);
-		
     if (file_ids) 
 	kfree(file_ids, sizeof(int) * num_files);
     if (parents) 
@@ -1622,6 +1622,7 @@ hfs_vnop_ioctl( struct vnop_ioctl_args /* {
 		int  outlen;
 		char *bufptr;
 		int error;
+		int flags = 0;
 
 		/* Caller must be owner of file system. */
 		vfsp = vfs_statfs(HFSTOVFS(hfsmp));
@@ -1635,6 +1636,9 @@ hfs_vnop_ioctl( struct vnop_ioctl_args /* {
 		}
 		bufptr = (char *)ap->a_data;
 		cnid = strtoul(bufptr, NULL, 10);
+		if (ap->a_fflag & HFS_GETPATH_VOLUME_RELATIVE) {
+			flags |= BUILDPATH_VOLUME_RELATIVE; 
+		}
 
 		/* We need to call hfs_vfs_vget to leverage the code that will
 		 * fix the origin list for us if needed, as opposed to calling
@@ -1644,10 +1648,68 @@ hfs_vnop_ioctl( struct vnop_ioctl_args /* {
 		if ((error = hfs_vfs_vget(HFSTOVFS(hfsmp), cnid, &file_vp, context))) {
 			return (error);
 		}
-		error = build_path(file_vp, bufptr, sizeof(pathname_t), &outlen, 0, context);
+		error = build_path(file_vp, bufptr, sizeof(pathname_t), &outlen, flags, context);
 		vnode_put(file_vp);
 
 		return (error);
+	}
+
+	case HFS_GET_WRITE_GEN_COUNTER:
+	{
+		struct cnode *cp = NULL;
+		int error;
+		u_int32_t *counter = (u_int32_t *)ap->a_data;
+
+		cp = VTOC(vp);
+
+		if (vnode_isdir (vp)) {
+			error = EISDIR;
+			*counter = 0;
+			return error;
+		}
+		
+		error = hfs_lock (cp, HFS_EXCLUSIVE_LOCK, HFS_LOCK_DEFAULT);
+		if (error == 0) {
+			struct ubc_info *uip;
+			int is_mapped = 0;
+			
+			if (UBCINFOEXISTS(vp)) {
+				uip = vp->v_ubcinfo;
+				if (uip->ui_flags & UI_ISMAPPED) {
+					is_mapped = 1;
+				}
+			}
+
+
+			if (S_ISREG(cp->c_attr.ca_mode) || S_ISLNK(cp->c_attr.ca_mode)) {
+				uint32_t gcount = hfs_get_gencount(cp);
+				//
+				// Even though we return EBUSY for files that are mmap'ed
+				// we also want to bump the value so that the write-gen
+				// counter will always be different once the file is unmapped
+				// (since the file may be unmapped but the pageouts have not
+				// yet happened).
+				//
+				if (is_mapped) {
+					hfs_incr_gencount (cp);
+					gcount = hfs_get_gencount(cp);
+				}
+				
+				*counter = gcount;
+
+			} 
+			else {
+				/* not a file or dir? silently return */
+				*counter = 0;
+			}
+			hfs_unlock (cp);
+
+			if (is_mapped) {
+				error = EBUSY;
+			}
+		}
+
+		return error;
 	}
 
 	case HFS_PREV_LINK:
@@ -1744,7 +1806,7 @@ hfs_vnop_ioctl( struct vnop_ioctl_args /* {
 		if (!vnode_isvroot(vp)) {
 			return (EINVAL);
 		}
-		HFS_MOUNT_LOCK(hfsmp, TRUE);
+		hfs_lock_mount(hfsmp);
 		location = *(u_int32_t *)ap->a_data;
 		if ((location >= hfsmp->allocLimit) &&
 			(location != HFS_NO_UPDATE_NEXT_ALLOCATION)) {
@@ -1768,7 +1830,7 @@ hfs_vnop_ioctl( struct vnop_ioctl_args /* {
 		}
 		MarkVCBDirty(hfsmp);
 fail_change_next_allocation:
-		HFS_MOUNT_UNLOCK(hfsmp, TRUE);
+		hfs_unlock_mount(hfsmp);
 		return (error);
 	}
 
@@ -1836,7 +1898,7 @@ fail_change_next_allocation:
 		hfsmp->hfs_sparsebandblks = bsdata->bandsize / HFSTOVCB(hfsmp)->blockSize;
 		hfsmp->hfs_sparsebandblks *= 4;
 
-		vfs_markdependency(hfsmp->hfs_mp);
+		/* We check the MNTK_VIRTUALDEV bit instead of marking the dependent process */
 
 		/*
 		 * If the sparse image is on a sparse image file (as opposed to a sparse
@@ -1907,8 +1969,8 @@ fail_change_next_allocation:
 		/* Must have catalog lock excl. to advance the CNID pointer */
 		lockflags = hfs_systemfile_lock (hfsmp, SFL_CATALOG , HFS_EXCLUSIVE_LOCK);
 
-		HFS_MOUNT_LOCK(hfsmp, TRUE);
-		
+		hfs_lock_mount(hfsmp);
+
 		/* If it is less than the current next CNID, force the wraparound bit to be set */
 		if (fileid < hfsmp->vcbNxtCNID) {
 			wraparound=1;
@@ -1924,7 +1986,7 @@ fail_change_next_allocation:
 		}
 		
 		MarkVCBDirty(hfsmp);
-		HFS_MOUNT_UNLOCK(hfsmp, TRUE);
+		hfs_unlock_mount(hfsmp);
 		hfs_systemfile_unlock (hfsmp, lockflags);
 
 		return (error);
@@ -2052,7 +2114,7 @@ fail_change_next_allocation:
 		 * are enabled by default, so any change will be transient only 
 		 * till the volume is remounted.
 		 */
-		if (!is_suser()) {
+		if (!kauth_cred_issuser(kauth_cred_get())) {
 			return (EPERM);
 		}
 		if (state == 0 || state == 1)
@@ -2086,7 +2148,7 @@ fail_change_next_allocation:
 		}
 		cp = VTOC(vp);
 
-		error = hfs_lock (cp, HFS_EXCLUSIVE_LOCK);
+		error = hfs_lock (cp, HFS_EXCLUSIVE_LOCK, HFS_LOCK_DEFAULT);
 		if (error == 0) {
 			if (enable_static) {
 				cp->c_flag |= C_SSD_STATIC;
@@ -2096,6 +2158,147 @@ fail_change_next_allocation:
 			}
 			hfs_unlock (cp);
 		}
+		return error;
+	}
+
+	case F_SET_GREEDY_MODE: {
+		int error;
+		int enable_greedy_mode = 0;
+		struct cnode *cp = NULL;
+		/* 
+		 * lock the cnode, decorate the cnode flag, and bail out.
+		 * VFS should have already authenticated the caller for us.
+		 */
+
+		if (ap->a_data) {
+			/* 
+			 * Note that even though ap->a_data is of type caddr_t,
+			 * the fcntl layer at the syscall handler will pass in NULL
+			 * or 1 depending on what the argument supplied to the fcntl
+			 * was.  So it is in fact correct to check the ap->a_data 
+			 * argument for zero or non-zero value when deciding whether or not
+			 * to enable the greedy mode bit in the cnode.
+			 */
+			enable_greedy_mode = 1;
+		}
+		if (hfsmp->hfs_flags & HFS_READ_ONLY) {
+			return EROFS;
+		}
+		cp = VTOC(vp);
+
+		error = hfs_lock (cp, HFS_EXCLUSIVE_LOCK, HFS_LOCK_DEFAULT);
+		if (error == 0) {
+			if (enable_greedy_mode) {
+				cp->c_flag |= C_SSD_GREEDY_MODE;
+			}
+			else {
+				cp->c_flag &= ~C_SSD_GREEDY_MODE;
+			}
+			hfs_unlock (cp);
+		}
+		return error;
+	}
+
+	case F_MAKECOMPRESSED: {
+		int error = 0;
+		uint32_t gen_counter;
+		struct cnode *cp = NULL;
+		int reset_decmp = 0;
+
+		if (hfsmp->hfs_flags & HFS_READ_ONLY) {
+			return EROFS;
+		}
+
+		/* 
+		 * acquire & lock the cnode.
+		 * VFS should have already authenticated the caller for us.
+		 */
+
+		if (ap->a_data) {
+			/* 
+			 * Cast the pointer into a uint32_t so we can extract the 
+			 * supplied generation counter.
+			 */
+			gen_counter = *((uint32_t*)ap->a_data);
+		}
+		else {
+			return EINVAL;
+		}
+
+#if HFS_COMPRESSION
+		cp = VTOC(vp);
+		/* Grab truncate lock first; we may truncate the file */
+		hfs_lock_truncate (cp, HFS_EXCLUSIVE_LOCK, HFS_LOCK_DEFAULT);
+
+		error = hfs_lock (cp, HFS_EXCLUSIVE_LOCK, HFS_LOCK_DEFAULT);
+		if (error) {
+			hfs_unlock_truncate(cp, HFS_LOCK_DEFAULT);
+			return error;
+		}
+	
+		/* Are there any other usecounts/FDs? */
+		if (vnode_isinuse(vp, 1)) {
+			hfs_unlock(cp);
+			hfs_unlock_truncate(cp, HFS_LOCK_DEFAULT);
+			return EBUSY;
+		}
+
+
+		/* now we have the cnode locked down; Validate arguments */
+		if (cp->c_attr.ca_flags & (UF_IMMUTABLE | UF_COMPRESSED)) {
+			/* EINVAL if you are trying to manipulate an IMMUTABLE file */
+			hfs_unlock(cp);
+			hfs_unlock_truncate (cp, HFS_LOCK_DEFAULT);
+			return EINVAL;
+		}
+
+		if ((hfs_get_gencount (cp)) == gen_counter) {
+			/* 
+			 * OK, the gen_counter matched.  Go for it:
+			 * Toggle state bits, truncate file, and suppress mtime update 
+			 */
+			reset_decmp = 1;
+			cp->c_bsdflags |= UF_COMPRESSED;				
+			
+			error = hfs_truncate(vp, 0, IO_NDELAY, 0, (HFS_TRUNCATE_SKIPTIMES), ap->a_context);	
+		}
+		else {
+			error = ESTALE;
+		}
+
+		/* Unlock cnode before executing decmpfs ; they may need to get an EA */
+		hfs_unlock(cp);
+
+		/*
+		 * Reset the decmp state while still holding the truncate lock. We need to 
+		 * serialize here against a listxattr on this node which may occur at any 
+		 * time. 
+		 * 
+		 * Even if '0/skiplock' is passed in 2nd argument to hfs_file_is_compressed,
+		 * that will still potentially require getting the com.apple.decmpfs EA. If the 
+	 	 * EA is required, then we can't hold the cnode lock, because the getxattr call is
+		 * generic(through VFS), and can't pass along any info telling it that we're already
+		 * holding it (the lock). If we don't serialize, then we risk listxattr stopping
+		 * and trying to fill in the hfs_file_is_compressed info during the callback
+		 * operation, which will result in deadlock against the b-tree node.
+		 * 
+		 * So, to serialize against listxattr (which will grab buf_t meta references on
+		 * the b-tree blocks), we hold the truncate lock as we're manipulating the 
+		 * decmpfs payload. 
+		 */
+		if ((reset_decmp) && (error == 0)) {
+			decmpfs_cnode *dp = VTOCMP (vp);
+			if (dp != NULL) {
+				decmpfs_cnode_set_vnode_state(dp, FILE_TYPE_UNKNOWN, 0);
+			}
+
+			/* Initialize the decmpfs node as needed */
+			(void) hfs_file_is_compressed (cp, 0); /* ok to take lock */
+		}
+
+		hfs_unlock_truncate (cp, HFS_LOCK_DEFAULT);
+
+#endif
 		return error;
 	}
 
@@ -2134,7 +2337,7 @@ fail_change_next_allocation:
 		if (hfsmp->hfs_flags & HFS_READ_ONLY) {
 			return (EROFS);
 		}
-		error = hfs_lock(VTOC(vp), HFS_EXCLUSIVE_LOCK);
+		error = hfs_lock(VTOC(vp), HFS_EXCLUSIVE_LOCK, HFS_LOCK_DEFAULT);
 		if (error == 0) {
 			error = hfs_fsync(vp, MNT_WAIT, TRUE, p);
 			hfs_unlock(VTOC(vp));
@@ -2150,7 +2353,7 @@ fail_change_next_allocation:
 		if (!vnode_isreg(vp))
 			return EINVAL;
  
-		error = hfs_lock(VTOC(vp), HFS_EXCLUSIVE_LOCK);
+		error = hfs_lock(VTOC(vp), HFS_EXCLUSIVE_LOCK, HFS_LOCK_DEFAULT);
 		if (error == 0) {
 			cp = VTOC(vp);
 			/*
@@ -2176,7 +2379,7 @@ fail_change_next_allocation:
 		fp = VTOF(vp);
 
 		/* Protect against a size change. */
-		hfs_lock_truncate(VTOC(vp), HFS_EXCLUSIVE_LOCK);
+		hfs_lock_truncate(VTOC(vp), HFS_EXCLUSIVE_LOCK, HFS_LOCK_DEFAULT);
 
 #if HFS_COMPRESSION
 		if (compressed && (uncompressed_size == -1)) {
@@ -2195,7 +2398,7 @@ fail_change_next_allocation:
 			error = advisory_read(vp, fp->ff_size, ra->ra_offset, ra->ra_count);
 		}
 
-		hfs_unlock_truncate(VTOC(vp), 0);
+		hfs_unlock_truncate(VTOC(vp), HFS_LOCK_DEFAULT);
 		return (error);
 	}
 
@@ -2268,18 +2471,18 @@ fail_change_next_allocation:
 		if (hfsmp->hfs_flags & HFS_READ_ONLY) {
 			return (EROFS);
 		}
-		HFS_MOUNT_LOCK(hfsmp, TRUE);
+		hfs_lock_mount (hfsmp);
 		bcopy(ap->a_data, &hfsmp->vcbFndrInfo, sizeof(hfsmp->vcbFndrInfo));
-		HFS_MOUNT_UNLOCK(hfsmp, TRUE);
+		hfs_unlock_mount (hfsmp);
 		(void) hfs_flushvolumeheader(hfsmp, MNT_WAIT, 0);
 		break;
 		
 	case HFS_GET_BOOT_INFO:
 		if (!vnode_isvroot(vp))
 			return(EINVAL);
-		HFS_MOUNT_LOCK(hfsmp, TRUE);
+		hfs_lock_mount (hfsmp);
 		bcopy(&hfsmp->vcbFndrInfo, ap->a_data, sizeof(hfsmp->vcbFndrInfo));
-		HFS_MOUNT_UNLOCK(hfsmp, TRUE);
+		hfs_unlock_mount(hfsmp);
 		break;
 
 	case HFS_MARK_BOOT_CORRUPT:
@@ -2287,7 +2490,7 @@ fail_change_next_allocation:
 		 * kHFSVolumeInconsistentBit in the volume header.  This will 
 		 * force fsck_hfs on next mount.
 		 */
-		if (!is_suser()) {
+		if (!kauth_cred_issuser(kauth_cred_get())) {
 			return EACCES;
 		}
 			
@@ -2334,7 +2537,7 @@ fail_change_next_allocation:
 
 	case HFS_DISABLE_METAZONE: {
 		/* Only root can disable metadata zone */
-		if (!is_suser()) {
+		if (!kauth_cred_issuser(kauth_cred_get())) {
 			return EACCES;
 		}
 		if (hfsmp->hfs_flags & HFS_READ_ONLY) {
@@ -2551,7 +2754,7 @@ hfs_vnop_blockmap(struct vnop_blockmap_args *ap)
 
 	if ( !vnode_issystem(vp) && !vnode_islnk(vp) && !vnode_isswap(vp)) {
 		if (VTOC(vp)->c_lockowner != current_thread()) {
-			hfs_lock(VTOC(vp), HFS_FORCE_LOCK);
+			hfs_lock(VTOC(vp), HFS_EXCLUSIVE_LOCK, HFS_LOCK_ALLOW_NOEXISTS);
 			tooklock = 1;
 		}
 	}
@@ -2614,9 +2817,9 @@ retry:
 			cp->c_blocks += loanedBlocks;
 			fp->ff_blocks += loanedBlocks;
 
-			HFS_MOUNT_LOCK(hfsmp, TRUE);
+			hfs_lock_mount (hfsmp);
 			hfsmp->loanedBlocks += loanedBlocks;
-			HFS_MOUNT_UNLOCK(hfsmp, TRUE);
+			hfs_unlock_mount (hfsmp);
 
 			hfs_systemfile_unlock(hfsmp, lockflags);
 			cp->c_flag |= C_MODIFIED;
@@ -2659,7 +2862,7 @@ retry:
 		
 		/* Validate if the start offset is within logical file size */
 		if (ap->a_foffset >= fp->ff_size) {
-		    	goto exit;
+			goto exit;
 		}
 
 		/*
@@ -2777,6 +2980,11 @@ hfs_vnop_strategy(struct vnop_strategy_args *ap)
 		buf_markstatic(bp);
 	}
 	
+	/* Mark buffer as containing static data if cnode flag set */
+	if (VTOC(vp)->c_flag & C_SSD_GREEDY_MODE) {
+		bufattr_markgreedymode((bufattr_t)(&bp->b_attr));
+	}
+	
 #if CONFIG_PROTECT
 	cnode_t *cp = NULL; 
 	
@@ -2835,7 +3043,7 @@ hfs_minorupdate(struct vnode *vp) {
 }
 
 int
-do_hfs_truncate(struct vnode *vp, off_t length, int flags, int skipupdate, vfs_context_t context)
+do_hfs_truncate(struct vnode *vp, off_t length, int flags, int truncateflags, vfs_context_t context)
 {
 	register struct cnode *cp = VTOC(vp);
     	struct filefork *fp = VTOF(vp);
@@ -2849,7 +3057,9 @@ do_hfs_truncate(struct vnode *vp, off_t length, int flags, int skipupdate, vfs_c
 	int blksize;
 	struct hfsmount *hfsmp;
 	int lockflags;
-
+	int skipupdate = (truncateflags & HFS_TRUNCATE_SKIPUPDATE);
+	int suppress_times = (truncateflags & HFS_TRUNCATE_SKIPTIMES);
+	
 	blksize = VTOVCB(vp)->blockSize;
 	fileblocks = fp->ff_blocks;
 	filebytes = (off_t)fileblocks * (off_t)blksize;
@@ -2954,7 +3164,7 @@ do_hfs_truncate(struct vnode *vp, off_t length, int flags, int skipupdate, vfs_c
 				if (skipupdate) {
 					(void) hfs_minorupdate(vp);
 				}
-				else {
+				else {	
 					(void) hfs_update(vp, TRUE);
 					(void) hfs_volupdate(hfsmp, VOL_UPDATE, 0);
 				}
@@ -2994,7 +3204,7 @@ do_hfs_truncate(struct vnode *vp, off_t length, int flags, int skipupdate, vfs_c
 						retval = cluster_write(vp, (struct uio *) 0, fp->ff_size, zero_limit,
 								fp->ff_size, (off_t)0,
 								(flags & IO_SYNC) | IO_HEADZEROFILL | IO_NOZERODIRTY);
-						hfs_lock(cp, HFS_FORCE_LOCK);
+						hfs_lock(cp, HFS_EXCLUSIVE_LOCK, HFS_LOCK_ALLOW_NOEXISTS);
 						if (retval) goto Err_Exit;
 						
 						/* Merely invalidate the remaining area, if necessary: */
@@ -3017,7 +3227,9 @@ do_hfs_truncate(struct vnode *vp, off_t length, int flags, int skipupdate, vfs_c
 					panic("hfs_truncate: invoked on non-UBC object?!");
 			};
 		}
-		cp->c_touch_modtime = TRUE;
+		if (suppress_times == 0) {
+			cp->c_touch_modtime = TRUE;
+		}
 		fp->ff_size = length;
 
 	} else { /* Shorten the size of the file */
@@ -3035,8 +3247,7 @@ do_hfs_truncate(struct vnode *vp, off_t length, int flags, int skipupdate, vfs_c
 			u_int32_t finalblks;
 			u_int32_t loanedBlocks;
 
-			HFS_MOUNT_LOCK(hfsmp, TRUE);
-
+			hfs_lock_mount(hfsmp);
 			loanedBlocks = fp->ff_unallocblocks;
 			cp->c_blocks -= loanedBlocks;
 			fp->ff_blocks -= loanedBlocks;
@@ -3054,7 +3265,7 @@ do_hfs_truncate(struct vnode *vp, off_t length, int flags, int skipupdate, vfs_c
 				cp->c_blocks += loanedBlocks;
 				fp->ff_blocks += loanedBlocks;
 			}
-			HFS_MOUNT_UNLOCK(hfsmp, TRUE);
+			hfs_unlock_mount (hfsmp);
 		}
 
 		/*
@@ -3106,9 +3317,13 @@ do_hfs_truncate(struct vnode *vp, off_t length, int flags, int skipupdate, vfs_c
 			(void) hfs_chkdq(cp, (int64_t)-(savedbytes - filebytes), NOCRED, 0);
 #endif /* QUOTA */
 		}
-		/* Only set update flag if the logical length changes */
-		if ((off_t)fp->ff_size != length)
+		/* 
+		 * Only set update flag if the logical length changes & we aren't
+		 * suppressing modtime updates.
+		 */
+		if (((off_t)fp->ff_size != length) && (suppress_times == 0)) {
 			cp->c_touch_modtime = TRUE;
+		}
 		fp->ff_size = length;
 	}
 	if (cp->c_mode & (S_ISUID | S_ISGID)) {
@@ -3122,7 +3337,18 @@ do_hfs_truncate(struct vnode *vp, off_t length, int flags, int skipupdate, vfs_c
 	}
 	else {
 		cp->c_touch_chgtime = TRUE;	/* status changed */
-		cp->c_touch_modtime = TRUE;	/* file data was modified */
+		if (suppress_times == 0) {
+			cp->c_touch_modtime = TRUE;	/* file data was modified */
+		
+			/* 
+			 * If we are not suppressing the modtime update, then
+			 * update the gen count as well.
+			 */
+			if (S_ISREG(cp->c_attr.ca_mode) || S_ISLNK (cp->c_attr.ca_mode)) {
+				hfs_incr_gencount(cp);
+			}
+		}
+
 		retval = hfs_update(vp, MNT_WAIT);
 	}
 	if (retval) {
@@ -3198,8 +3424,7 @@ hfs_prepare_release_storage (struct hfsmount *hfsmp, struct vnode *vp) {
 	if (fp->ff_unallocblocks > 0) {
 		u_int32_t loanedBlocks;
 		
-		HFS_MOUNT_LOCK(hfsmp, TRUE);
-		
+		hfs_lock_mount (hfsmp);
 		loanedBlocks = fp->ff_unallocblocks;
 		cp->c_blocks -= loanedBlocks;
 		fp->ff_blocks -= loanedBlocks;
@@ -3207,7 +3432,7 @@ hfs_prepare_release_storage (struct hfsmount *hfsmp, struct vnode *vp) {
 		
 		hfsmp->loanedBlocks -= loanedBlocks;
 		
-		HFS_MOUNT_UNLOCK(hfsmp, TRUE);
+		hfs_unlock_mount (hfsmp);
 	}
 	
 	return 0;
@@ -3343,7 +3568,7 @@ hfs_release_storage (struct hfsmount *hfsmp, struct filefork *datafork,
  */
 int
 hfs_truncate(struct vnode *vp, off_t length, int flags, int skipsetsize,
-             int skipupdate, vfs_context_t context)
+             int truncateflags, vfs_context_t context)
 {
     	struct filefork *fp = VTOF(vp);
 	off_t filebytes;
@@ -3395,7 +3620,7 @@ hfs_truncate(struct vnode *vp, off_t length, int flags, int skipsetsize,
 		    		filebytes = length;
 			}
 			cp->c_flag |= C_FORCEUPDATE;
-			error = do_hfs_truncate(vp, filebytes, flags, skipupdate, context);
+			error = do_hfs_truncate(vp, filebytes, flags, truncateflags, context);
 			if (error)
 				break;
 		}
@@ -3407,13 +3632,13 @@ hfs_truncate(struct vnode *vp, off_t length, int flags, int skipsetsize,
 				filebytes = length;
 			}
 			cp->c_flag |= C_FORCEUPDATE;
-			error = do_hfs_truncate(vp, filebytes, flags, skipupdate, context);
+			error = do_hfs_truncate(vp, filebytes, flags, truncateflags, context);
 			if (error)
 				break;
 		}
 	} else /* Same logical size */ {
 
-		error = do_hfs_truncate(vp, length, flags, skipupdate, context);
+		error = do_hfs_truncate(vp, length, flags, truncateflags, context);
 	}
 	/* Files that are changing size are not hot file candidates. */
 	if (VTOHFS(vp)->hfc_stage == HFC_RECORDING) {
@@ -3469,9 +3694,9 @@ hfs_vnop_allocate(struct vnop_allocate_args /* {
 
 	check_for_tracked_file(vp, orig_ctime, ap->a_length == 0 ? NAMESPACE_HANDLER_TRUNCATE_OP|NAMESPACE_HANDLER_DELETE_OP : NAMESPACE_HANDLER_TRUNCATE_OP, NULL);
 
-	hfs_lock_truncate(cp, HFS_EXCLUSIVE_LOCK);
+	hfs_lock_truncate(cp, HFS_EXCLUSIVE_LOCK, HFS_LOCK_DEFAULT);
 
-	if ((retval = hfs_lock(cp, HFS_EXCLUSIVE_LOCK))) {
+	if ((retval = hfs_lock(cp, HFS_EXCLUSIVE_LOCK, HFS_LOCK_DEFAULT))) {
 		goto Err_Exit;
 	}
 	
@@ -3648,7 +3873,7 @@ hfs_vnop_allocate(struct vnop_allocate_args /* {
 
 			hfs_unlock(cp);
 			ubc_setsize(vp, fp->ff_size);
-			hfs_lock(cp, HFS_FORCE_LOCK);
+			hfs_lock(cp, HFS_EXCLUSIVE_LOCK, HFS_LOCK_ALLOW_NOEXISTS);
 		}
 	}
 
@@ -3660,7 +3885,7 @@ Std_Exit:
 	if (retval == 0)
 		retval = retval2;
 Err_Exit:
-	hfs_unlock_truncate(cp, 0);
+	hfs_unlock_truncate(cp, HFS_LOCK_DEFAULT);
 	hfs_unlock(cp);
 	return (retval);
 }
@@ -3703,6 +3928,27 @@ hfs_vnop_pagein(struct vnop_pagein_args *ap)
 
 #if CONFIG_PROTECT
 	if ((error = cp_handle_vnop(vp, CP_READ_ACCESS | CP_WRITE_ACCESS, 0)) != 0) {
+		/* 
+		 * If we errored here, then this means that one of two things occurred:
+		 * 1. there was a problem with the decryption of the key.
+		 * 2. the device is locked and we are not allowed to access this particular file.
+		 * 
+		 * Either way, this means that we need to shut down this upl now.  As long as 
+		 * the pl pointer is NULL (meaning that we're supposed to create the UPL ourselves)
+		 * then we create a upl and immediately abort it.
+		 */
+		if (ap->a_pl == NULL) {
+			/* create the upl */
+			ubc_create_upl (vp, ap->a_f_offset, ap->a_size, &upl, &pl, 
+					UPL_UBC_PAGEIN | UPL_RET_ONLY_ABSENT);
+			/* mark the range as needed so it doesn't immediately get discarded upon abort */
+			ubc_upl_range_needed (upl, ap->a_pl_offset / PAGE_SIZE, 1);
+	
+			/* Abort the range */
+			ubc_upl_abort_range (upl, 0, ap->a_size, UPL_ABORT_FREE_ON_EMPTY | UPL_ABORT_ERROR);
+		}
+
+	
 		return error;
 	}
 #endif /* CONFIG_PROTECT */
@@ -3765,11 +4011,11 @@ retry_pagein:
 	if (vfs_isforce(vp->v_mount)) {
 		if (cp->c_flag & C_DELETED) {
 			/* If we don't get it, then just go ahead and operate without the lock */
-			truncate_lock_held = hfs_try_trunclock(cp, HFS_RECURSE_TRUNCLOCK);
+			truncate_lock_held = hfs_try_trunclock(cp, HFS_SHARED_LOCK, HFS_LOCK_SKIP_IF_EXCLUSIVE);
 		}
 	}
 	else {
-		hfs_lock_truncate(cp, HFS_RECURSE_TRUNCLOCK);
+		hfs_lock_truncate(cp, HFS_SHARED_LOCK, HFS_LOCK_SKIP_IF_EXCLUSIVE);
 		truncate_lock_held = TRUE;
 	}
 
@@ -3859,7 +4105,7 @@ retry_pagein:
 					 * takes the lock shared, we can deadlock if some other thread
 					 * tries to grab the lock exclusively in between.
 					 */
-					hfs_unlock_truncate(cp, 1);
+					hfs_unlock_truncate(cp, HFS_LOCK_SKIP_IF_EXCLUSIVE);
 					truncate_lock_held = FALSE;
 				}
 				ap->a_pl = upl;
@@ -3942,7 +4188,7 @@ retry_pagein:
 
 			/* When ff_bytesread exceeds 32-bits, update it behind the cnode lock. */
 			if ((fp->ff_bytesread + bytesread) > 0x00000000ffffffff && cp->c_lockowner != current_thread()) {
-				hfs_lock(cp, HFS_FORCE_LOCK);
+				hfs_lock(cp, HFS_EXCLUSIVE_LOCK, HFS_LOCK_ALLOW_NOEXISTS);
 				took_cnode_lock = 1;
 			}
 			/*
@@ -3974,7 +4220,7 @@ pagein_next_range:
 pagein_done:
 	if (truncate_lock_held == TRUE) {
 		/* Note 1 is passed to hfs_unlock_truncate in been_recursed argument */
-		hfs_unlock_truncate(cp, 1);
+		hfs_unlock_truncate(cp, HFS_LOCK_SKIP_IF_EXCLUSIVE);
 	}
 
 	return (error);
@@ -4025,6 +4271,10 @@ hfs_vnop_pageout(struct vnop_pageout_args *ap)
 	a_flags = ap->a_flags;
 	a_pl_offset = ap->a_pl_offset;
 
+	if (S_ISREG(cp->c_attr.ca_mode) || S_ISLNK(cp->c_attr.ca_mode)) {
+		hfs_incr_gencount (cp);
+	}
+
 	/*
 	 * we can tell if we're getting the new or old behavior from the UPL
 	 */
@@ -4052,7 +4302,7 @@ hfs_vnop_pageout(struct vnop_pageout_args *ap)
 		 * because we may be already holding the truncate lock exclusive to force any other
 		 * IOs to have blocked behind us. 
 		 */
-		hfs_lock_truncate(cp, HFS_RECURSE_TRUNCLOCK);
+		hfs_lock_truncate(cp, HFS_SHARED_LOCK, HFS_LOCK_SKIP_IF_EXCLUSIVE);
 
 		if (a_flags & UPL_MSYNC) {
 			request_flags = UPL_UBC_MSYNC | UPL_RET_ONLY_DIRTY;
@@ -4170,7 +4420,7 @@ hfs_vnop_pageout(struct vnop_pageout_args *ap)
 				tooklock = 0;
 
 				if (cp->c_lockowner != current_thread()) {
-					if ((retval = hfs_lock(cp, HFS_EXCLUSIVE_LOCK))) {
+					if ((retval = hfs_lock(cp, HFS_EXCLUSIVE_LOCK, HFS_LOCK_DEFAULT))) {
 						/*
 						 * we're in the v2 path, so we are the
 						 * owner of the UPL... we may have already
@@ -4220,7 +4470,7 @@ hfs_vnop_pageout(struct vnop_pageout_args *ap)
 			int tooklock = 0;
 
 			if (cp->c_lockowner != current_thread()) {
-				if ((retval = hfs_lock(cp, HFS_EXCLUSIVE_LOCK))) {
+				if ((retval = hfs_lock(cp, HFS_EXCLUSIVE_LOCK, HFS_LOCK_DEFAULT))) {
 					if (!(a_flags & UPL_NOCOMMIT)) {
 						ubc_upl_abort_range(upl,
 								    a_pl_offset,
@@ -4263,7 +4513,7 @@ hfs_vnop_pageout(struct vnop_pageout_args *ap)
 		cp->c_touch_chgtime = TRUE;
 		if ((cp->c_mode & (S_ISUID | S_ISGID)) &&
 		    (vfs_context_suser(ap->a_context) != 0)) {
-			hfs_lock(cp, HFS_FORCE_LOCK);
+			hfs_lock(cp, HFS_EXCLUSIVE_LOCK, HFS_LOCK_ALLOW_NOEXISTS);
 			cp->c_mode &= ~(S_ISUID | S_ISGID);
 			hfs_unlock(cp);
 		}
@@ -4277,7 +4527,7 @@ pageout_done:
 		 * being invoked via ubc_msync due to lockdown,
 		 * we should release it recursively, too.
 		 */
-		hfs_unlock_truncate(cp, 1);
+		hfs_unlock_truncate(cp, HFS_LOCK_SKIP_IF_EXCLUSIVE);
 	}
 	return (retval);
 }
@@ -4392,7 +4642,7 @@ hfs_relocate(struct  vnode *vp, u_int32_t  blockHint, kauth_cred_t cred,
 
 	vnodetype = vnode_vtype(vp);
 	if (vnodetype != VREG) {
-		/* Note symlinks are not allowed to be relocated */
+		/* Not allowed to move symlinks. */
 		return (EPERM);
 	}
 	
@@ -4425,7 +4675,7 @@ hfs_relocate(struct  vnode *vp, u_int32_t  blockHint, kauth_cred_t cred,
 	if (blockHint == 0)
 		blockHint = hfsmp->nextAllocation;
 
-	if ((fp->ff_size > 0x7fffffff)) {
+	if (fp->ff_size > 0x7fffffff) {
 		return (EFBIG);
 	}
 
@@ -4442,15 +4692,15 @@ hfs_relocate(struct  vnode *vp, u_int32_t  blockHint, kauth_cred_t cred,
 
 	if (!vnode_issystem(vp) && (vnodetype != VLNK)) {
 		hfs_unlock(cp);
-		hfs_lock_truncate(cp, HFS_EXCLUSIVE_LOCK);
+		hfs_lock_truncate(cp, HFS_EXCLUSIVE_LOCK, HFS_LOCK_DEFAULT);
 		/* Force lock since callers expects lock to be held. */
-		if ((retval = hfs_lock(cp, HFS_FORCE_LOCK))) {
-			hfs_unlock_truncate(cp, 0);
+		if ((retval = hfs_lock(cp, HFS_EXCLUSIVE_LOCK, HFS_LOCK_ALLOW_NOEXISTS))) {
+			hfs_unlock_truncate(cp, HFS_LOCK_DEFAULT);
 			return (retval);
 		}
 		/* No need to continue if file was removed. */
 		if (cp->c_flag & C_NOEXISTS) {
-			hfs_unlock_truncate(cp, 0);
+			hfs_unlock_truncate(cp, HFS_LOCK_DEFAULT);
 			return (ENOENT);
 		}
 		took_trunc_lock = 1;
@@ -4465,7 +4715,7 @@ hfs_relocate(struct  vnode *vp, u_int32_t  blockHint, kauth_cred_t cred,
 
 	if (hfs_start_transaction(hfsmp) != 0) {
 		if (took_trunc_lock)
-			hfs_unlock_truncate(cp, 0);
+			hfs_unlock_truncate(cp, HFS_LOCK_DEFAULT);
 	    return (EINVAL);
 	}
 	started_tr = 1;
@@ -4490,10 +4740,10 @@ hfs_relocate(struct  vnode *vp, u_int32_t  blockHint, kauth_cred_t cred,
 	nextallocsave = hfsmp->nextAllocation;
 	retval = ExtendFileC(hfsmp, (FCB*)fp, growsize, blockHint, eflags, &newbytes);
 	if (eflags & kEFMetadataMask) {
-		HFS_MOUNT_LOCK(hfsmp, TRUE);
+		hfs_lock_mount(hfsmp);
 		HFS_UPDATE_NEXT_ALLOCATION(hfsmp, nextallocsave);
 		MarkVCBDirty(hfsmp);
-		HFS_MOUNT_UNLOCK(hfsmp, TRUE);
+		hfs_unlock_mount(hfsmp);
 	}
 
 	retval = MacToVFSError(retval);
@@ -4503,7 +4753,7 @@ hfs_relocate(struct  vnode *vp, u_int32_t  blockHint, kauth_cred_t cred,
 			retval = ENOSPC;
 			goto restore;
 		} else if (fp->ff_blocks < (headblks + datablks)) {
-			printf("hfs_relocate: allocation failed");
+			printf("hfs_relocate: allocation failed id=%u, vol=%s\n", cp->c_cnid, hfsmp->vcbVN);
 			retval = ENOSPC;
 			goto restore;
 		}
@@ -4554,7 +4804,7 @@ hfs_relocate(struct  vnode *vp, u_int32_t  blockHint, kauth_cred_t cred,
 	 */
 
 	if (vnodetype == VLNK)
-		retval = hfs_clonelink(vp, blksize, cred, p);
+		retval = EPERM;
 	else if (vnode_issystem(vp))
 		retval = hfs_clonesysfile(vp, headblks, datablks, blksize, cred, p);
 	else
@@ -4585,7 +4835,7 @@ hfs_relocate(struct  vnode *vp, u_int32_t  blockHint, kauth_cred_t cred,
 		goto restore;
 out:
 	if (took_trunc_lock)
-		hfs_unlock_truncate(cp, 0);
+		hfs_unlock_truncate(cp, HFS_LOCK_DEFAULT);
 
 	if (lockflags) {
 		hfs_systemfile_unlock(hfsmp, lockflags);
@@ -4611,7 +4861,7 @@ exit:
 restore:
 	if (fp->ff_blocks == headblks) {
 		if (took_trunc_lock)
-			hfs_unlock_truncate(cp, 0);
+			hfs_unlock_truncate(cp, HFS_LOCK_DEFAULT);
 		goto exit;
 	}
 	/*
@@ -4631,43 +4881,10 @@ restore:
 	lockflags = 0;
 
 	if (took_trunc_lock)
-		hfs_unlock_truncate(cp, 0);
+		hfs_unlock_truncate(cp, HFS_LOCK_DEFAULT);
 	goto exit;
 }
 
-
-/*
- * Clone a symlink.
- *
- */
-static int
-hfs_clonelink(struct vnode *vp, int blksize, kauth_cred_t cred, __unused struct proc *p)
-{
-	struct buf *head_bp = NULL;
-	struct buf *tail_bp = NULL;
-	int error;
-
-
-	error = (int)buf_meta_bread(vp, (daddr64_t)0, blksize, cred, &head_bp);
-	if (error)
-		goto out;
-
-	tail_bp = buf_getblk(vp, (daddr64_t)1, blksize, 0, 0, BLK_META);
-	if (tail_bp == NULL) {
-		error = EIO;
-		goto out;
-	}
-	bcopy((char *)buf_dataptr(head_bp), (char *)buf_dataptr(tail_bp), blksize);
-	error = (int)buf_bwrite(tail_bp);
-out:
-	if (head_bp) {
-	        buf_markinvalid(head_bp);
-		buf_brelse(head_bp);
-	}	
-	(void) buf_invalidateblks(vp, BUF_WRITE_DATA, 0, 0);
-
-	return (error);
-}
 
 /*
  * Clone a file's data within the file.
@@ -4694,13 +4911,13 @@ hfs_clonefile(struct vnode *vp, int blkstart, int blkcnt, int blksize)
 
 #if CONFIG_PROTECT
 	if ((error = cp_handle_vnop(vp, CP_WRITE_ACCESS, 0)) != 0) {
-		hfs_lock(VTOC(vp), HFS_FORCE_LOCK);	
+		hfs_lock(VTOC(vp), HFS_EXCLUSIVE_LOCK, HFS_LOCK_ALLOW_NOEXISTS);	
 		return (error);
 	}
 #endif /* CONFIG_PROTECT */
 
 	if (kmem_alloc(kernel_map, (vm_offset_t *)&bufp, bufsize)) {
-		hfs_lock(VTOC(vp), HFS_FORCE_LOCK);
+		hfs_lock(VTOC(vp), HFS_EXCLUSIVE_LOCK, HFS_LOCK_ALLOW_NOEXISTS);
 		return (ENOMEM);
 	}
 
@@ -4763,7 +4980,7 @@ hfs_clonefile(struct vnode *vp, int blkstart, int blkcnt, int blksize)
 	}
 	kmem_free(kernel_map, (vm_offset_t)bufp, bufsize);
 
-	hfs_lock(VTOC(vp), HFS_FORCE_LOCK);	
+	hfs_lock(VTOC(vp), HFS_EXCLUSIVE_LOCK, HFS_LOCK_ALLOW_NOEXISTS);	
 	return (error);
 }
 

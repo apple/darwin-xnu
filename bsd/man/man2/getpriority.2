@@ -54,8 +54,7 @@
 .Fa "int prio"
 .Fc
 .Sh DESCRIPTION
-The scheduling
-priority of the process, process group, or user as indicated by
+The scheduling priority of the process, process group, or user as indicated by
 .Fa which
 and
 .Fa who
@@ -63,15 +62,13 @@ is obtained with the
 .Fn getpriority
 call and set with the
 .Fn setpriority
-call.  Additionally, the current thread can be set to background
-state.
+call.
 .Fa Which
 is one of
 .Dv PRIO_PROCESS ,
 .Dv PRIO_PGRP ,
-.Dv PRIO_USER ,
 or
-.Dv PRIO_DARWIN_THREAD ,
+.Dv PRIO_USER ,
 and 
 .Fa who
 is interpreted relative to 
@@ -85,30 +82,39 @@ and a user ID for
 .Dv PRIO_USER ) .
 A zero value of
 .Fa who
-denotes the current process, process group, user, thread (for PRIO_DARWIN_THREAD).
+denotes the current process, process group, or user.
 .Fa prio
 is a value in the range -20 to 20.  The default priority is 0;
 lower priorities cause more favorable scheduling.
-For PRIO_DARWIN_THREAD,
-.Fa prio
-is either 0 (to remove current thread from background status) or PRIO_DARWIN_BG
-(to set current thread into background state).
 .Pp
 The
 .Fn getpriority
 call returns the highest priority (lowest numerical value)
-enjoyed by any of the specified processes or for PRIO_DARWIN_THREAD
-returns 0 when current thread is not in background state or 1
-when the current thread is in background state.
+enjoyed by any of the specified processes.
 The
 .Fn setpriority
 call sets the priorities of all of the specified processes
-to the specified value.  When setting a thread into background
-state the scheduling priority is set to lowest value, disk and
-network IO are throttled.  Network IO will be throttled for any
-sockets the thread opens after going into background state.  Any
-previously opened sockets are not affected.
-Only the super-user may lower priorities, but any thread can set
+to the specified value.  Only the super-user may lower priorities.
+.Pp
+Additionally, the current thread or process can be placed in a background state
+by specifying PRIO_DARWIN_THREAD or PRIO_DARWIN_PROCESS for
+.Fa which .
+Only a value of zero (the current thread or process) is supported for
+.Fa who
+when setting or getting background state.
+.Fa prio
+is either 0 (to remove current thread from background status) or PRIO_DARWIN_BG
+(to set current thread into background state).
+When a thread or process is in a background state the scheduling priority is set
+to the lowest value, disk IO is throttled (with behavior similar to using
+.Xr setiopolicy_np 3
+to set a throttleable policy), and network IO is throttled for
+any sockets opened after going into background state.  Any previously opened
+sockets are not affected.
+The
+.Fn getpriority
+call returns 0 when current thread or process is not in background state or 1
+when the current thread is in background state.  Any thread or process can set
 itself into background state.
 .Sh RETURN VALUES
 Since
@@ -136,8 +142,9 @@ is not one of
 .Dv PRIO_PROCESS ,
 .Dv PRIO_PGRP ,
 .Dv PRIO_USER ,
+.Dv PRIO_DARWIN_THREAD ,
 or
-.Dv PRIO_DARWIN_THREAD .
+.Dv PRIO_DARWIN_PROCESS .
 .\" ==========
 .It Bq Er EINVAL
 .Fa Who
@@ -147,7 +154,10 @@ is not a valid process, process group, or user ID.
 .Fa Who
 is not 0 when
 .Fa which
-is PRIO_DARWIN_THREAD.
+is 
+.Dv PRIO_DARWIN_THREAD
+or
+.Dv PRIO_DARWIN_PROCESS .
 .\" ==========
 .It Bq Er ESRCH
 No process can be located using the 
@@ -199,6 +209,7 @@ has changed.
 .Sh SEE ALSO
 .Xr nice 1 ,
 .Xr fork 2 ,
+.Xr setiopolicy_np 3 ,
 .Xr compat 5 ,
 .Xr renice 8
 .Sh HISTORY

@@ -25,7 +25,7 @@
 extern int do_execve_test(char * path, char * argv[], void * envp, int killwait);
 extern int get_bits(void);
 
-
+int g_testbots_active = 0;
 int main(int argc, const char * argv[])
 {
 	int	my_err, my_status;

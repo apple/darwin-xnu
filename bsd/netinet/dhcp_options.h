@@ -181,7 +181,7 @@ typedef struct {
 
 typedef ptrlist_t dhcpol_t;
 
-#ifdef KERNEL_PRIVATE
+#ifdef BSD_KERNEL_PRIVATE
 
 void			dhcpol_init(dhcpol_t * list);
 void			dhcpol_free(dhcpol_t * list);
@@ -274,5 +274,5 @@ dhcpoa_freespace(dhcpoa_t * oa_p);
 int
 dhcpoa_size(dhcpoa_t * oa_p);
 
-#endif /* KERNEL_PRIVATE */
+#endif /* BSD_KERNEL_PRIVATE */
 #endif /* _NETINET_DHCP_OPTIONS_H */

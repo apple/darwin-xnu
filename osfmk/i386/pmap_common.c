@@ -394,7 +394,7 @@ pmap_set_modify(ppnum_t pn)
 void
 pmap_clear_modify(ppnum_t pn)
 {
-	phys_attribute_clear(pn, PHYS_MODIFIED);
+	phys_attribute_clear(pn, PHYS_MODIFIED, 0, NULL);
 }
 
 /*
@@ -422,7 +422,7 @@ pmap_is_modified(ppnum_t pn)
 void
 pmap_clear_reference(ppnum_t pn)
 {
-	phys_attribute_clear(pn, PHYS_REFERENCED);
+	phys_attribute_clear(pn, PHYS_REFERENCED, 0, NULL);
 }
 
 void
@@ -468,6 +468,18 @@ pmap_get_refmod(ppnum_t pn)
 	return (retval);
 }
 
+
+void
+pmap_clear_refmod_options(ppnum_t pn, unsigned int mask, unsigned int options, void *arg)
+{
+        unsigned int  x86Mask;
+
+        x86Mask = (   ((mask &   VM_MEM_MODIFIED)?   PHYS_MODIFIED : 0)
+		      | ((mask & VM_MEM_REFERENCED)? PHYS_REFERENCED : 0));
+
+        phys_attribute_clear(pn, x86Mask, options, arg);
+}
+
 /*
  * pmap_clear_refmod(phys, mask)
  *  clears the referenced and modified bits as specified by the mask
@@ -480,12 +492,19 @@ pmap_clear_refmod(ppnum_t pn, unsigned int mask)
 
 	x86Mask = (   ((mask &   VM_MEM_MODIFIED)?   PHYS_MODIFIED : 0)
 	            | ((mask & VM_MEM_REFERENCED)? PHYS_REFERENCED : 0));
-	phys_attribute_clear(pn, x86Mask);
+
+	phys_attribute_clear(pn, x86Mask, 0, NULL);
+}
+
+unsigned int
+pmap_disconnect(ppnum_t pa)
+{
+	return (pmap_disconnect_options(pa, 0, NULL));
 }
 
 /*
  *	Routine:
- *		pmap_disconnect
+ *		pmap_disconnect_options
  *
  *	Function:
  *		Disconnect all mappings for this page and return reference and change status
@@ -493,14 +512,14 @@ pmap_clear_refmod(ppnum_t pn, unsigned int mask)
  *
  */
 unsigned int
-pmap_disconnect(ppnum_t pa)
+pmap_disconnect_options(ppnum_t pa, unsigned int options, void *arg)
 {
 	unsigned refmod, vmrefmod = 0;
 
-	pmap_page_protect(pa, 0);		/* disconnect the page */
+	pmap_page_protect_options(pa, 0, options, arg);		/* disconnect the page */
 
 	pmap_assert(pa != vm_page_fictitious_addr);
-	if ((pa == vm_page_guard_addr) || !IS_MANAGED_PAGE(pa))
+	if ((pa == vm_page_guard_addr) || !IS_MANAGED_PAGE(pa) || (options & PMAP_OPTIONS_NOREFMOD))
 		return 0;
 	refmod = pmap_phys_attributes[pa] & (PHYS_MODIFIED | PHYS_REFERENCED);
 	

@@ -229,7 +229,6 @@ int _NumCPUs( void )
 #define _COMM_TEXT_PFZ_START_OFFSET		(0xc00)	/* offset for Preemption Free Zone */
 #define _COMM_TEXT_PFZ_ENQUEUE_OFFSET		(0xc00)	/* internal FIFO enqueue */
 #define _COMM_TEXT_PFZ_DEQUEUE_OFFSET		(0xc80)	/* internal FIFO dequeue */
-#define _COMM_TEXT_PFZ_MUTEX_LOCK_OFFSET	(0xd00)	/* internal pthread_mutex_lock() */
 #define _COMM_TEXT_UNUSED_OFFSET		(0xd80)	/* end of routines in text page */
 #define _COMM_TEXT_PFZ_END_OFFSET		(0xfff)	/* offset for end of PFZ */
 
@@ -241,7 +240,6 @@ int _NumCPUs( void )
 
 #define _COMM_PAGE_PFZ_ENQUEUE		(_COMM_PAGE_TEXT_START+_COMM_TEXT_PFZ_ENQUEUE_OFFSET)
 #define _COMM_PAGE_PFZ_DEQUEUE		(_COMM_PAGE_TEXT_START+_COMM_TEXT_PFZ_DEQUEUE_OFFSET)
-#define	_COMM_PAGE_PFZ_MUTEX_LOCK	(_COMM_PAGE_TEXT_START+_COMM_TEXT_PFZ_MUTEX_LOCK_OFFSET)
 
 #define	_COMM_PAGE_UNUSED6		(_COMM_PAGE_TEXT_START+_COMM_TEXT_UNUSED_OFFSET)	
 #define _COMM_PAGE_PFZ_END		(_COMM_PAGE_TEXT_START+_COMM_TEXT_PFZ_END_OFFSET)
@@ -266,7 +264,6 @@ symbol_name: nop
 	CREATE_COMM_PAGE_SYMBOL(___backoff, _COMM_PAGE_BACKOFF)
 	CREATE_COMM_PAGE_SYMBOL(___pfz_enqueue, _COMM_PAGE_PFZ_ENQUEUE)
 	CREATE_COMM_PAGE_SYMBOL(___pfz_dequeue, _COMM_PAGE_PFZ_DEQUEUE)
-	CREATE_COMM_PAGE_SYMBOL(___pfz_mutex_lock, _COMM_PAGE_PFZ_MUTEX_LOCK)
 	CREATE_COMM_PAGE_SYMBOL(___end_comm_page, _COMM_PAGE_END)
 
 	.data		/* Required to make a well behaved symbol file */

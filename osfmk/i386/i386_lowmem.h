@@ -37,20 +37,12 @@
  */
 #define I386_KERNEL_IMAGE_BASE_PAGE	0x100
 
-#if defined(__i386__)
-#define I386_LOWMEM_RESERVED		0x18
-
-#define I386_HIB_PAGETABLE		0x13
-#define I386_HIB_PAGETABLE_COUNT	5
-
-#elif defined(__x86_64__)
 /* For K64, only 3 pages are reserved
  * - physical page zero, a gap page, and then real-mode-bootstrap/lowGlo.
  * Note that the kernel virtual address 0xffffff8000002000 is re-mapped
  * to the low globals and that physical page, 0x2000, is used by the bootstrap.
  */
 #define I386_LOWMEM_RESERVED		3
-#endif
 
 #endif /* __APPLE_API_PRIVATE */
 

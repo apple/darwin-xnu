@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2010 Apple Inc. All rights reserved.
+ * Copyright (c) 2010-2012 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -38,37 +38,6 @@
 
 #ifndef _PAL_RTCLOCK_ASM_NATIVE_H_
 #define _PAL_RTCLOCK_ASM_NATIVE_H_
-
-
-#if defined(__i386__)
-/*
- * Assembly snippet included in exception handlers and rtc_nanotime_read()
- * %edi points to nanotime info struct
- * %edx:%eax returns nanotime
- */
-#define PAL_RTC_NANOTIME_READ_FAST()					  \
-0:	movl	RNT_GENERATION(%edi),%esi	/* being updated? */	; \
-	testl	%esi,%esi						; \
-	jz	0b				/* wait until done */	; \
-	lfence								; \
-	rdtsc								; \
-	lfence								; \
-	subl	RNT_TSC_BASE(%edi),%eax					; \
-	sbbl	RNT_TSC_BASE+4(%edi),%edx	/* tsc - tsc_base */	; \
-	movl	RNT_SCALE(%edi),%ecx		/* * scale factor */	; \
-	movl	%edx,%ebx						; \
-	mull	%ecx							; \
-	movl	%ebx,%eax						; \
-	movl	%edx,%ebx						; \
-	mull	%ecx							; \
-	addl	%ebx,%eax						; \
-	adcl	$0,%edx							; \
-	addl	RNT_NS_BASE(%edi),%eax		/* + ns_base */		; \
-	adcl	RNT_NS_BASE+4(%edi),%edx				; \
-	cmpl	RNT_GENERATION(%edi),%esi	/* check for update */	; \
-	jne	0b				/* do it all again */
-
-#elif defined(__x86_64__)
 
 /*
  * Assembly snippet included in exception handlers and rtc_nanotime_read()
@@ -112,8 +81,5 @@
 	addq	RNT_NS_BASE(%rdi),%rax		/* add ns_base */	; \
 	cmpl	RNT_GENERATION(%rdi),%esi	/* repeat if changed */ ; \
 	jne	0b
-
-#endif /* !defined(x86_64) */
-
 
 #endif /* _PAL_RTCLOCK_ASM_NATIVE_H_ */

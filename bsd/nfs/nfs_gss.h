@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2007-2010 Apple Inc. All rights reserved.
+ * Copyright (c) 2007-2013 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -31,6 +31,7 @@
 
 #include <gssd/gssd_mach.h>
 #include <sys/param.h>
+#include <nfs/nfs_ioctl.h>
 #include <libkern/crypto/des.h>
 
 #define RPCSEC_GSS			6
@@ -56,15 +57,42 @@ extern u_char krb5_mech[11];
 /*
  * GSS-API things
  */
+typedef uint32_t OM_uint32;
+
 #define GSS_S_COMPLETE			0
 #define GSS_S_CONTINUE_NEEDED		1
+
+/*
+ * Some "helper" definitions to make the status code macros obvious.
+ * From gssapi.h:
+ */
+#define GSS_C_CALLING_ERROR_OFFSET 24
+#define GSS_C_ROUTINE_ERROR_OFFSET 16
+#define GSS_C_SUPPLEMENTARY_OFFSET 0
+#define GSS_C_CALLING_ERROR_MASK ((OM_uint32) 0377ul)
+#define GSS_C_ROUTINE_ERROR_MASK ((OM_uint32) 0377ul)
+#define GSS_C_SUPPLEMENTARY_MASK ((OM_uint32) 0177777ul)
+
+/*
+ * The macros that test status codes for error conditions.  Note that the
+ * GSS_ERROR() macro has changed slightly from the V1 GSSAPI so that it now
+ * evaluates its argument only once.
+ */
+#define GSS_CALLING_ERROR(x) \
+	((x) & (GSS_C_CALLING_ERROR_MASK << GSS_C_CALLING_ERROR_OFFSET))
+#define GSS_ROUTINE_ERROR(x) \
+	((x) & (GSS_C_ROUTINE_ERROR_MASK << GSS_C_ROUTINE_ERROR_OFFSET))
+#define GSS_SUPPLEMENTARY_INFO(x) \
+	((x) & (GSS_C_SUPPLEMENTARY_MASK << GSS_C_SUPPLEMENTARY_OFFSET))
+#define GSS_ERROR(x) \
+	((x) & ((GSS_C_CALLING_ERROR_MASK << GSS_C_CALLING_ERROR_OFFSET) | \
+		(GSS_C_ROUTINE_ERROR_MASK << GSS_C_ROUTINE_ERROR_OFFSET)))
 
 #define GSS_MAXSEQ			0x80000000	// The biggest sequence number
 #define GSS_SVC_MAXCONTEXTS		500000		// Max contexts supported
 #define GSS_SVC_SEQWINDOW		256		// Server's sequence window
 #define GSS_CLNT_SEQLISTMAX		32		// Max length of req seq num list
 #define GSS_CLNT_SYS_VALID		300		// Valid time (sec) for failover ctx
-
 
 #define SKEYLEN	8			// length of DES key
 #define SKEYLEN3 24			// length of DES3 keyboard
@@ -102,21 +130,27 @@ struct nfs_gss_clnt_ctx {
 	TAILQ_ENTRY(nfs_gss_clnt_ctx)	gss_clnt_entries;
 	uint32_t		gss_clnt_flags;		// Flag bits - see below
 	uint32_t		gss_clnt_refcnt;	// Reference count
-	uid_t			gss_clnt_uid;		// Owner of this context
+	kauth_cred_t		gss_clnt_cred;		// Owner of this context
+	uint8_t			*gss_clnt_principal;	// Principal to use for this credential
+	uint32_t		gss_clnt_prinlen;	// Length of principal
+	gssd_nametype		gss_clnt_prinnt;	// Name type of principal
+	char			*gss_clnt_display;	// display name of principal
 	uint32_t		gss_clnt_proc;		// Current GSS proc for cred
 	uint32_t		gss_clnt_seqnum;	// GSS sequence number
 	uint32_t		gss_clnt_service;	// Indicates krb5, krb5i or krb5p
-	u_char			*gss_clnt_handle;	// Identifies server context
+	uint8_t			*gss_clnt_handle;	// Identifies server context
 	uint32_t		gss_clnt_handle_len;	// Size of server's ctx handle
 	time_t			gss_clnt_ctime;		// When context was created
 	uint32_t		gss_clnt_seqwin;	// Server's seq num window
 	uint32_t		*gss_clnt_seqbits;	// Bitmap to track seq numbers in use
 	mach_port_t		gss_clnt_mport;		// Mach port for gssd upcall
-	u_char			*gss_clnt_verf;		// RPC verifier from server
-	char			*gss_clnt_svcname;	// Service name e.g. "nfs/big.apple.com"
+	uint8_t			*gss_clnt_verf;		// RPC verifier from server
+	uint8_t			*gss_clnt_svcname;	// Service name e.g. "nfs/big.apple.com"
+	uint32_t		gss_clnt_svcnamlen;	// Service name length
+	gssd_nametype		gss_clnt_svcnt;		// Service name type
 	gssd_cred		gss_clnt_cred_handle;	// Opaque cred handle from gssd
 	gssd_ctx		gss_clnt_context;	// Opaque context handle from gssd
-	u_char			*gss_clnt_token;	// GSS token exchanged via gssd & server
+	uint8_t			*gss_clnt_token;	// GSS token exchanged via gssd & server
 	uint32_t		gss_clnt_tokenlen;	// Length of token
 	gss_key_info		gss_clnt_kinfo;		// GSS key info
 	uint32_t		gss_clnt_gssd_flags;	// Special flag bits to gssd
@@ -129,8 +163,9 @@ struct nfs_gss_clnt_ctx {
  */
 #define GSS_CTX_COMPLETE	0x00000001	// Context is complete
 #define GSS_CTX_INVAL		0x00000002	// Context is invalid
-#define GSS_NEEDSEQ		0x00000004	// Need a sequence number
-#define GSS_NEEDCTX		0x00000008	// Need the context
+#define GSS_CTX_INCOMPLETE	0x00000004	// Context needs to be inited
+#define GSS_NEEDSEQ		0x00000008	// Need a sequence number
+#define GSS_NEEDCTX		0x00000010	// Need the context
 
 /*
  * The server's RPCSEC_GSS context information
@@ -149,7 +184,7 @@ struct nfs_gss_svc_ctx {
 	uint32_t		gss_svc_seqwin;		// GSS sequence number window
 	uint32_t		*gss_svc_seqbits;	// Bitmap to track seq numbers
 	gssd_cred		gss_svc_cred_handle;	// Opaque cred handle from gssd
-	gssd_ctx			gss_svc_context;	// Opaque context handle from gssd
+	gssd_ctx		gss_svc_context;	// Opaque context handle from gssd
 	u_char			*gss_svc_token;		// GSS token exchanged via gssd & client
 	uint32_t		gss_svc_tokenlen;	// Length of token
 	gss_key_info		gss_svc_kinfo;		// Session key info
@@ -189,6 +224,7 @@ int	nfs_gss_clnt_ctx_renew(struct nfsreq *);
 void	nfs_gss_clnt_ctx_ref(struct nfsreq *, struct nfs_gss_clnt_ctx *);
 void	nfs_gss_clnt_ctx_unref(struct nfsreq *);
 void	nfs_gss_clnt_ctx_unmount(struct nfsmount *);
+int	nfs_gss_clnt_ctx_destroy(struct nfsmount *, kauth_cred_t cred);
 int	nfs_gss_svc_cred_get(struct nfsrv_descript *, struct nfsm_chain *);
 int	nfs_gss_svc_verf_put(struct nfsrv_descript *, struct nfsm_chain *);
 int	nfs_gss_svc_ctx_init(struct nfsrv_descript *, struct nfsrv_sock *, mbuf_t *);

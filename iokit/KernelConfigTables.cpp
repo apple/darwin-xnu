@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1998-2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 1998-2012 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -46,6 +46,3 @@ const char * gIOKernelConfigTables =
  * See libkern's OSKext.cpp for other symbols, which have been moved
  * there for sanity.
  */
-#if __i386__
-const char * gIOKernelKmods = "";
-#endif /* __i386__ */

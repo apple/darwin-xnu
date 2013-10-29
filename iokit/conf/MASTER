@@ -91,21 +91,14 @@ options   CONFIG_NO_PANIC_STRINGS		# <no_panic_str>
 options   CONFIG_NO_PRINTF_STRINGS		# <no_printf_str>
 options   CONFIG_NO_KPRINTF_STRINGS		# <no_kprintf_str>
 
-# configurable kernel - general switch to say we are building for an
-# embedded device
-#
-options   CONFIG_EMBEDDED                       # <config_embedded>
-
 # secure_kernel - secure kernel from user programs
 options   SECURE_KERNEL                       # <secure_kernel>
 
 options   MACH_ASSERT				# <mach_assert>
 
-#
-# Note: MAC/AUDIT options must be set in all the bsd/conf, osfmk/conf, and 
-# security/conf MASTER files.
-#
-options		CONFIG_MACF			# Mandatory Access Control Framework
-
 options		DEVELOPMENT			# <development>
 options		DEBUG				# <debug>
+
+options		CONFIG_MEMORYSTATUS		# <memorystatus>
+options		CONFIG_JETSAM                   # <jetsam>
+options		CONFIG_FREEZE			# <freeze>

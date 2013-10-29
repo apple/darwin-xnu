@@ -99,7 +99,6 @@
 
 
 int _shared_region_map( struct proc*, int, unsigned int, struct shared_file_mapping_np*, memory_object_control_t*, struct shared_file_mapping_np*); 
-int _shared_region_slide(uint32_t, mach_vm_offset_t, mach_vm_size_t, mach_vm_offset_t, mach_vm_size_t, memory_object_control_t);
 int shared_region_copyin_mappings(struct proc*, user_addr_t, unsigned int, struct shared_file_mapping_np *);
 
 SYSCTL_INT(_vm, OID_AUTO, vm_debug_events, CTLFLAG_RW | CTLFLAG_LOCKED, &vm_debug_events, 0, "");
@@ -178,9 +177,15 @@ useracc(
 	user_size_t	len,
 	int	prot)
 {
+	vm_map_t	map;
+
+	map = current_map();
 	return (vm_map_check_protection(
-			current_map(),
-			vm_map_trunc_page(addr), vm_map_round_page(addr+len),
+			map,
+			vm_map_trunc_page(addr,
+					  vm_map_page_mask(map)),
+			vm_map_round_page(addr+len,
+					  vm_map_page_mask(map)),
 			prot == B_READ ? VM_PROT_READ : VM_PROT_WRITE));
 }
 
@@ -189,10 +194,17 @@ vslock(
 	user_addr_t	addr,
 	user_size_t	len)
 {
-	kern_return_t kret;
-	kret = vm_map_wire(current_map(), vm_map_trunc_page(addr),
-			vm_map_round_page(addr+len), 
-			VM_PROT_READ | VM_PROT_WRITE ,FALSE);
+	kern_return_t	kret;
+	vm_map_t	map;
+
+	map = current_map();
+	kret = vm_map_wire(map,
+			   vm_map_trunc_page(addr,
+					     vm_map_page_mask(map)),
+			   vm_map_round_page(addr+len,
+					     vm_map_page_mask(map)), 
+			   VM_PROT_READ | VM_PROT_WRITE,
+			   FALSE);
 
 	switch (kret) {
 	case KERN_SUCCESS:
@@ -219,14 +231,17 @@ vsunlock(
 	vm_map_offset_t	vaddr;
 	ppnum_t		paddr;
 #endif  /* FIXME ] */
-	kern_return_t kret;
+	kern_return_t	kret;
+	vm_map_t	map;
+
+	map = current_map();
 
 #if FIXME  /* [ */
 	if (dirtied) {
 		pmap = get_task_pmap(current_task());
-		for (vaddr = vm_map_trunc_page(addr);
-		     vaddr < vm_map_round_page(addr+len);
-				vaddr += PAGE_SIZE) {
+		for (vaddr = vm_map_trunc_page(addr, PAGE_MASK);
+		     vaddr < vm_map_round_page(addr+len, PAGE_MASK);
+		     vaddr += PAGE_SIZE) {
 			paddr = pmap_extract(pmap, vaddr);
 			pg = PHYS_TO_VM_PAGE(paddr);
 			vm_page_set_modified(pg);
@@ -236,8 +251,12 @@ vsunlock(
 #ifdef	lint
 	dirtied++;
 #endif	/* lint */
-	kret = vm_map_unwire(current_map(), vm_map_trunc_page(addr),
-				vm_map_round_page(addr+len), FALSE);
+	kret = vm_map_unwire(map,
+			     vm_map_trunc_page(addr,
+					       vm_map_page_mask(map)),
+			     vm_map_round_page(addr+len,
+					       vm_map_page_mask(map)),
+			     FALSE);
 	switch (kret) {
 	case KERN_SUCCESS:
 		return (0);
@@ -759,7 +778,6 @@ pid_suspend(struct proc *p __unused, struct pid_suspend_args *args, int *ret)
 	}
 
 	target = targetproc->task;
-#ifndef CONFIG_EMBEDDED
 	if (target != TASK_NULL) {
 		mach_port_t tfpport;
 
@@ -786,7 +804,6 @@ pid_suspend(struct proc *p __unused, struct pid_suspend_args *args, int *ret)
 			}
 		}
 	}
-#endif
 
 	task_reference(target);
 	error = task_pidsuspend(target);
@@ -799,8 +816,8 @@ pid_suspend(struct proc *p __unused, struct pid_suspend_args *args, int *ret)
 	}
 #if CONFIG_MEMORYSTATUS
 	else {
-    	memorystatus_on_suspend(pid);
-    }
+		memorystatus_on_suspend(targetproc);
+	}
 #endif
 
 	task_deallocate(target);
@@ -845,7 +862,6 @@ pid_resume(struct proc *p __unused, struct pid_resume_args *args, int *ret)
 	}
 
 	target = targetproc->task;
-#ifndef CONFIG_EMBEDDED
 	if (target != TASK_NULL) {
 		mach_port_t tfpport;
 
@@ -872,12 +888,11 @@ pid_resume(struct proc *p __unused, struct pid_resume_args *args, int *ret)
 			}
 		}
 	}
-#endif
 
 	task_reference(target);
 
 #if CONFIG_MEMORYSTATUS
-	memorystatus_on_resume(pid);
+	memorystatus_on_resume(targetproc);
 #endif
 
 	error = task_pidresume(target);
@@ -885,7 +900,11 @@ pid_resume(struct proc *p __unused, struct pid_resume_args *args, int *ret)
 		if (error == KERN_INVALID_ARGUMENT) {
 			error = EINVAL;
 		} else {
-			error = EPERM;
+			if (error == KERN_MEMORY_ERROR) {
+				psignal(targetproc, SIGKILL);
+				error = EIO;
+			} else
+				error = EPERM;
 		}
 	}
 	
@@ -899,127 +918,6 @@ out:
 	return error;
 }
 
-#if CONFIG_EMBEDDED
-kern_return_t
-pid_hibernate(struct proc *p __unused, struct pid_hibernate_args *args, int *ret)
-{
-	int 	error = 0;
-	proc_t	targetproc = PROC_NULL;
-	int 	pid = args->pid;
-
-#ifndef CONFIG_FREEZE
-	#pragma unused(pid)
-#else
-
-#if CONFIG_MACF
-	error = mac_proc_check_suspend_resume(p, MAC_PROC_CHECK_HIBERNATE);
-	if (error) {
-		error = EPERM;
-		goto out;
-	}
-#endif
-
-	/*
-	 * The only accepted pid value here is currently -1, since we just kick off the freeze thread
-	 * here - individual ids aren't required. However, it's intended that that this call is to change
-	 * in the future to initiate freeze of individual processes. In anticipation, we'll obtain the
-	 * process handle for potentially valid values and call task_for_pid_posix_check(); this way, everything
-	 * is validated correctly and set for further refactoring. See <rdar://problem/7839708> for more details.
-	 */
-	if (pid >= 0) {
-		targetproc = proc_find(pid);
-		if (targetproc == PROC_NULL) {
-			error = ESRCH;
-			goto out;
-		}
-
-		if (!task_for_pid_posix_check(targetproc)) {
-			error = EPERM;
-			goto out;
-		}
-	}
-
-	if (pid == -1) {
-		memorystatus_on_inactivity(pid);
-	} else {
-		error = EPERM;
-	}
-
-out:
-
-#endif /* CONFIG_FREEZE */
-
-	if (targetproc != PROC_NULL)
-		proc_rele(targetproc);
-	*ret = error;
-	return error;
-}
-
-int
-pid_shutdown_sockets(struct proc *p __unused, struct pid_shutdown_sockets_args *args, int *ret)
-{
-	int 				error = 0;
-	proc_t				targetproc = PROC_NULL;
-	struct filedesc		*fdp;
-	struct fileproc		*fp;
-	int 				pid = args->pid;
-	int					level = args->level;
-	int					i;
-
-	if (level != SHUTDOWN_SOCKET_LEVEL_DISCONNECT_SVC &&
-		level != SHUTDOWN_SOCKET_LEVEL_DISCONNECT_ALL)
-	{
-		error = EINVAL;
-		goto out;
-	}
-
-#if CONFIG_MACF
-	error = mac_proc_check_suspend_resume(p, MAC_PROC_CHECK_SHUTDOWN_SOCKETS);
-	if (error) {
-		error = EPERM;
-		goto out;
-	}
-#endif
-
-	targetproc = proc_find(pid);
-	if (targetproc == PROC_NULL) {
-		error = ESRCH;
-		goto out;
-	}
-
-	if (!task_for_pid_posix_check(targetproc)) {
-		error = EPERM;
-		goto out;
-	}
-
-	proc_fdlock(targetproc);
-	fdp = targetproc->p_fd;
-
-	for (i = 0; i < fdp->fd_nfiles; i++) {
-		struct socket *sockp;
-
-		fp = fdp->fd_ofiles[i];
-		if (fp == NULL || (fdp->fd_ofileflags[i] & UF_RESERVED) != 0 ||
-			fp->f_fglob->fg_type != DTYPE_SOCKET)
-		{
-			continue;
-		}
-
-		sockp = (struct socket *)fp->f_fglob->fg_data;
-
-		/* Call networking stack with socket and level */
-		(void) socket_defunct(targetproc, sockp, level);
-	}
-
-	proc_fdunlock(targetproc);
-
-out:
-	if (targetproc != PROC_NULL)
-		proc_rele(targetproc);
-	*ret = error;
-	return error;
-}
-#endif /* CONFIG_EMBEDDED */
 
 static int
 sysctl_settfp_policy(__unused struct sysctl_oid *oidp, void *arg1,
@@ -1032,7 +930,7 @@ sysctl_settfp_policy(__unused struct sysctl_oid *oidp, void *arg1,
     if (error || req->newptr == USER_ADDR_NULL)
         return(error);
 
-	if (!is_suser())
+	if (!kauth_cred_issuser(kauth_cred_get()))
 		return(EPERM);
 
 	if ((error = SYSCTL_IN(req, &new_value, sizeof(int)))) {
@@ -1197,7 +1095,9 @@ _shared_region_map(
 	struct vnode_attr		va;
 	off_t				fs;
 	memory_object_size_t		file_size;
+#if CONFIG_MACF
 	vm_prot_t			maxprot = VM_PROT_ALL;
+#endif
 	memory_object_control_t		file_control;
 	struct vm_shared_region		*shared_region;
 
@@ -1220,12 +1120,12 @@ _shared_region_map(
 	}
 
 	/* make sure we're attempting to map a vnode */
-	if (fp->f_fglob->fg_type != DTYPE_VNODE) {
+	if (FILEGLOB_DTYPE(fp->f_fglob) != DTYPE_VNODE) {
 		SHARED_REGION_TRACE_ERROR(
 			("shared_region: %p [%d(%s)] map: "
 			 "fd=%d not a vnode (type=%d)\n",
 			 current_thread(), p->p_pid, p->p_comm,
-			 fd, fp->f_fglob->fg_type));
+			 fd, FILEGLOB_DTYPE(fp->f_fglob)));
 		error = EINVAL;
 		goto done;
 	}
@@ -1446,49 +1346,6 @@ done:
 }
 
 int
-_shared_region_slide(uint32_t slide,
-			mach_vm_offset_t	entry_start_address,
-			mach_vm_size_t		entry_size,
-			mach_vm_offset_t	slide_start,
-			mach_vm_size_t		slide_size,
-			memory_object_control_t	sr_file_control)
-{
-	void *slide_info_entry = NULL;
-	int			error;
-
-	if((error = vm_shared_region_slide_init(slide_size, entry_start_address, entry_size, slide, sr_file_control))) {
-		printf("slide_info initialization failed with kr=%d\n", error);
-		goto done;
-	}
-
-	slide_info_entry = vm_shared_region_get_slide_info_entry();
-	if (slide_info_entry == NULL){
-		error = EFAULT;
-	} else {	
-		error = copyin((user_addr_t)slide_start,
-			       slide_info_entry,
-			       (vm_size_t)slide_size);
-	}
-	if (error) {
-		goto done;
-	}
- 
-	if (vm_shared_region_slide_sanity_check() != KERN_SUCCESS) {
- 		error = EFAULT; 
- 		printf("Sanity Check failed for slide_info\n");
- 	} else {
-#if DEBUG
-		printf("Succesfully init slide_info with start_address: %p region_size: %ld slide_header_size: %ld\n",
- 				(void*)(uintptr_t)entry_start_address, 
- 				(unsigned long)entry_size, 
- 				(unsigned long)slide_size);
-#endif
-	}
-done:
-	return error;
-}
-
-int
 shared_region_map_and_slide_np(
 	struct proc				*p,
 	struct shared_region_map_and_slide_np_args	*uap,
@@ -1553,7 +1410,7 @@ shared_region_map_and_slide_np(
 	}
 
 	if (slide) {
-		kr = _shared_region_slide(slide, 
+		kr = vm_shared_region_slide(slide, 
 				mapping_to_slide.sfm_file_offset, 
 				mapping_to_slide.sfm_size, 
 				uap->slide_start, 
@@ -1602,6 +1459,10 @@ extern unsigned int	vm_page_purgeable_wired_count;
 SYSCTL_INT(_vm, OID_AUTO, page_purgeable_wired_count, CTLFLAG_RD | CTLFLAG_LOCKED,
 	   &vm_page_purgeable_wired_count, 0, "Wired purgeable page count");
 
+extern int madvise_free_debug;
+SYSCTL_INT(_vm, OID_AUTO, madvise_free_debug, CTLFLAG_RW | CTLFLAG_LOCKED,
+	   &madvise_free_debug, 0, "zero-fill on madvise(MADV_FREE*)");
+
 SYSCTL_INT(_vm, OID_AUTO, page_reusable_count, CTLFLAG_RD | CTLFLAG_LOCKED,
 	   &vm_page_stats_reusable.reusable_count, 0, "Reusable page count");
 SYSCTL_QUAD(_vm, OID_AUTO, reusable_success, CTLFLAG_RD | CTLFLAG_LOCKED,
@@ -1626,6 +1487,8 @@ SYSCTL_QUAD(_vm, OID_AUTO, can_reuse_success, CTLFLAG_RD | CTLFLAG_LOCKED,
 	   &vm_page_stats_reusable.can_reuse_success, "");
 SYSCTL_QUAD(_vm, OID_AUTO, can_reuse_failure, CTLFLAG_RD | CTLFLAG_LOCKED,
 	   &vm_page_stats_reusable.can_reuse_failure, "");
+SYSCTL_QUAD(_vm, OID_AUTO, reusable_reclaimed, CTLFLAG_RD | CTLFLAG_LOCKED,
+	   &vm_page_stats_reusable.reusable_reclaimed, "");
 
 
 extern unsigned int vm_page_free_count, vm_page_speculative_count;
@@ -1683,7 +1546,7 @@ void vm_pageout_io_throttle(void) {
                 */
 
 	if (uthread->uu_lowpri_window) {
-		throttle_lowpri_io(TRUE);
+		throttle_lowpri_io(1);
 	}
 
 }

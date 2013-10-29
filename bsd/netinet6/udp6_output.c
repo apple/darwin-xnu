@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2012 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2013 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -129,13 +129,11 @@
 #include <netinet/icmp6.h>
 #include <netinet6/ip6protosw.h>
 
-#ifdef IPSEC
+#if IPSEC
 #include <netinet6/ipsec.h>
-#ifdef INET6
 #include <netinet6/ipsec6.h>
-#endif
 extern int ipsec_bypass;
-#endif /*IPSEC*/
+#endif /* IPSEC */
 
 #include <net/net_osdep.h>
 
@@ -144,35 +142,12 @@ extern int ipsec_bypass;
  * Per RFC 768, August, 1980.
  */
 
-#define in6pcb		inpcb
-#define udp6stat	udpstat
-#define udp6s_opackets	udps_opackets
-
-static __inline__ u_int16_t
-get_socket_id(struct socket * s)
-{
-	u_int16_t 		val;
-
-	if (s == NULL) {
-	    return (0);
-	}
-	val = (u_int16_t)(((uintptr_t)s) / sizeof(struct socket));
-	if (val == 0) {
-		val = 0xffff;
-	}
-	return (val);
-}
-
 int
-udp6_output(in6p, m, addr6, control, p)
-	struct in6pcb *in6p;
-	struct mbuf *m;
-	struct mbuf *control;
-	struct sockaddr *addr6;
-	struct proc *p;
+udp6_output(struct in6pcb *in6p, struct mbuf *m, struct sockaddr *addr6,
+    struct mbuf *control, struct proc *p)
 {
 	u_int32_t ulen = m->m_pkthdr.len;
-	u_int32_t plen = sizeof(struct udphdr) + ulen;
+	u_int32_t plen = sizeof (struct udphdr) + ulen;
 	struct ip6_hdr *ip6;
 	struct udphdr *udp6;
 	struct in6_addr *laddr, *faddr;
@@ -180,18 +155,20 @@ udp6_output(in6p, m, addr6, control, p)
 	int error = 0;
 	struct ip6_pktopts opt, *optp = NULL;
 	struct ip6_moptions *im6o;
-	int af = AF_INET6, hlen = sizeof(struct ip6_hdr);
+	int af = AF_INET6, hlen = sizeof (struct ip6_hdr);
 	int flags;
 	struct sockaddr_in6 tmp;
 	struct	in6_addr storage;
 	mbuf_svc_class_t msc = MBUF_SC_UNSPEC;
 	struct ip6_out_args ip6oa =
-	    { IFSCOPE_NONE, { 0 }, IP6OAF_SELECT_SRCIF };
+	    { IFSCOPE_NONE, { 0 }, IP6OAF_SELECT_SRCIF, 0 };
 	struct flowadv *adv = &ip6oa.ip6oa_flowadv;
+	struct socket *so = in6p->in6p_socket;
+	struct route_in6 ro;
 	int flowadv = 0;
 
 	/* Enable flow advisory only when connected */
-	flowadv = (in6p->inp_socket->so_state & SS_ISCONNECTED) ? 1 : 0;
+	flowadv = (so->so_state & SS_ISCONNECTED) ? 1 : 0;
 
 	if (flowadv && INP_WAIT_FOR_IF_FEEDBACK(in6p)) {
 		error = ENOBUFS;
@@ -207,8 +184,8 @@ udp6_output(in6p, m, addr6, control, p)
 
 	if (control) {
 		msc = mbuf_service_class_from_control(control);
-
-		if ((error = ip6_setpktopts(control, &opt, NULL, IPPROTO_UDP)) != 0)
+		if ((error = ip6_setpktopts(control, &opt,
+		    NULL, IPPROTO_UDP)) != 0)
 			goto release;
 		optp = &opt;
 	} else
@@ -217,7 +194,8 @@ udp6_output(in6p, m, addr6, control, p)
 	if (addr6) {
 		/*
 		 * IPv4 version of udp_output calls in_pcbconnect in this case,
-		 * which needs splnet and affects performance.
+		 * which has its costs.
+		 *
 		 * Since we saw no essential reason for calling in_pcbconnect,
 		 * we get rid of such kind of logic, and call in6_selectsrc
 		 * and in6_pcbsetport in order to fill in the local address
@@ -258,8 +236,9 @@ udp6_output(in6p, m, addr6, control, p)
 				 */
 				error = EINVAL;
 				goto release;
-			} else
+			} else {
 				af = AF_INET;
+			}
 		}
 
 		/* KAME hack: embed scopeid */
@@ -311,15 +290,21 @@ udp6_output(in6p, m, addr6, control, p)
 
 	if (in6p->inp_flowhash == 0)
 		in6p->inp_flowhash = inp_calc_flowhash(in6p);
+	/* update flowinfo - RFC 6437 */
+	if (in6p->inp_flow == 0 && in6p->in6p_flags & IN6P_AUTOFLOWLABEL) {
+		in6p->inp_flow &= ~IPV6_FLOWLABEL_MASK;
+		in6p->inp_flow |=
+		    (htonl(in6p->inp_flowhash) & IPV6_FLOWLABEL_MASK);
+	}
 
 	if (af == AF_INET)
-		hlen = sizeof(struct ip);
+		hlen = sizeof (struct ip);
 
 	/*
 	 * Calculate data length and get a mbuf
 	 * for UDP and IP6 headers.
 	 */
-	M_PREPEND(m, hlen + sizeof(struct udphdr), M_DONTWAIT);
+	M_PREPEND(m, hlen + sizeof (struct udphdr), M_DONTWAIT);
 	if (m == 0) {
 		error = ENOBUFS;
 		goto release;
@@ -340,21 +325,20 @@ udp6_output(in6p, m, addr6, control, p)
 	switch (af) {
 	case AF_INET6:
 		ip6 = mtod(m, struct ip6_hdr *);
-		ip6->ip6_flow	= in6p->in6p_flowinfo & IPV6_FLOWINFO_MASK;
-		ip6->ip6_vfc 	&= ~IPV6_VERSION_MASK;
-		ip6->ip6_vfc 	|= IPV6_VERSION;
-#if 0				/* ip6_plen will be filled in ip6_output. */
+		ip6->ip6_flow	= in6p->inp_flow & IPV6_FLOWINFO_MASK;
+		ip6->ip6_vfc	&= ~IPV6_VERSION_MASK;
+		ip6->ip6_vfc	|= IPV6_VERSION;
+#if 0		/* ip6_plen will be filled in ip6_output. */
 		ip6->ip6_plen	= htons((u_short)plen);
 #endif
 		ip6->ip6_nxt	= IPPROTO_UDP;
-		ip6->ip6_hlim	= in6_selecthlim(in6p,
-						 in6p->in6p_route.ro_rt ?
-						 in6p->in6p_route.ro_rt->rt_ifp : NULL);
+		ip6->ip6_hlim	= in6_selecthlim(in6p, in6p->in6p_route.ro_rt ?
+		    in6p->in6p_route.ro_rt->rt_ifp : NULL);
 		ip6->ip6_src	= *laddr;
 		ip6->ip6_dst	= *faddr;
 
-		udp6->uh_sum = in6_cksum_phdr(laddr, faddr,
-		    htonl(plen), htonl(IPPROTO_UDP));
+		udp6->uh_sum = in6_pseudo(laddr, faddr,
+		    htonl(plen + IPPROTO_UDP));
 		m->m_pkthdr.csum_flags = CSUM_UDPIPV6;
 		m->m_pkthdr.csum_data = offsetof(struct udphdr, uh_sum);
 
@@ -364,20 +348,29 @@ udp6_output(in6p, m, addr6, control, p)
 		flags = IPV6_OUTARGS;
 
 		udp6stat.udp6s_opackets++;
-#ifdef IPSEC
-		if (ipsec_bypass == 0 && ipsec_setsocket(m, in6p->in6p_socket) != 0) {
+#if IPSEC
+		if (ipsec_bypass == 0 && ipsec_setsocket(m, so) != 0) {
 			error = ENOBUFS;
 			goto release;
 		}
-#endif /*IPSEC*/
-		m->m_pkthdr.socket_id = get_socket_id(in6p->in6p_socket);
+#endif /* IPSEC */
 
-		set_packet_service_class(m, in6p->in6p_socket, msc, PKT_SCF_IPV6);
+		/* In case of IPv4-mapped address used in previous send */
+		if (ROUTE_UNUSABLE(&in6p->in6p_route) ||
+		    rt_key(in6p->in6p_route.ro_rt)->sa_family != AF_INET6)
+			ROUTE_RELEASE(&in6p->in6p_route);
 
-		m->m_pkthdr.m_flowhash = in6p->inp_flowhash;
-		m->m_pkthdr.m_fhflags |= PF_TAG_FLOWHASH;
+		/* Copy the cached route and take an extra reference */
+		in6p_route_copyout(in6p, &ro);
+
+		set_packet_service_class(m, so, msc, PKT_SCF_IPV6);
+
+		m->m_pkthdr.pkt_flowsrc = FLOWSRC_INPCB;
+		m->m_pkthdr.pkt_flowid = in6p->inp_flowhash;
+		m->m_pkthdr.pkt_proto = IPPROTO_UDP;
+		m->m_pkthdr.pkt_flags |= (PKTF_FLOW_ID | PKTF_FLOW_LOCALSRC);
 		if (flowadv)
-			m->m_pkthdr.m_fhflags |= PF_TAG_FLOWADV;
+			m->m_pkthdr.pkt_flags |= PKTF_FLOW_ADV;
 
 		im6o = in6p->in6p_moptions;
 		if (im6o != NULL) {
@@ -385,28 +378,42 @@ udp6_output(in6p, m, addr6, control, p)
 			IM6O_ADDREF_LOCKED(im6o);
 			if (IN6_IS_ADDR_MULTICAST(&ip6->ip6_dst) &&
 			    im6o->im6o_multicast_ifp != NULL) {
-				in6p->in6p_last_outifp = im6o->im6o_multicast_ifp;
+				in6p->in6p_last_outifp =
+				    im6o->im6o_multicast_ifp;
 			}
 			IM6O_UNLOCK(im6o);
 		}
 
 		in6p->inp_sndinprog_cnt++;
 
-		error = ip6_output(m, optp, &in6p->in6p_route,
-		    flags, im6o, NULL, &ip6oa);
+		socket_unlock(so, 0);
+		error = ip6_output(m, optp, &ro, flags, im6o, NULL, &ip6oa);
+		m = NULL;
+		socket_lock(so, 0);
 
 		if (im6o != NULL)
 			IM6O_REMREF(im6o);
 
 		if (error == 0 && nstat_collect) {
-			locked_add_64(&in6p->inp_stat->txpackets, 1);
-			locked_add_64(&in6p->inp_stat->txbytes, ulen);
+			boolean_t cell, wifi;
+
+			if (in6p->in6p_route.ro_rt != NULL) {
+				cell = IFNET_IS_CELLULAR(in6p->in6p_route.
+				    ro_rt->rt_ifp);
+				wifi = (!cell && IFNET_IS_WIFI(in6p->in6p_route.
+				    ro_rt->rt_ifp));
+			} else {
+				cell = wifi = FALSE;
+			}
+			INP_ADD_STAT(in6p, cell, wifi, txpackets, 1);
+			INP_ADD_STAT(in6p, cell, wifi, txbytes, ulen);
 		}
 
 		if (flowadv && (adv->code == FADV_FLOW_CONTROLLED ||
 		    adv->code == FADV_SUSPENDED)) {
-			/* return an error to indicate
-			 * that the packet has been dropped
+			/*
+			 * Return an error to indicate
+			 * that the packet has been dropped.
 			 */
 			error = ENOBUFS;
 			inp_set_fc_state(in6p, adv->code);
@@ -416,32 +423,42 @@ udp6_output(in6p, m, addr6, control, p)
 		if ( --in6p->inp_sndinprog_cnt == 0)
 			in6p->inp_flags &= ~(INP_FC_FEEDBACK);
 
+		/* Synchronize PCB cached route */
+		in6p_route_copyin(in6p, &ro);
+
 		if (in6p->in6p_route.ro_rt != NULL) {
 			struct rtentry *rt = in6p->in6p_route.ro_rt;
 			struct ifnet *outif;
 
-			if ((rt->rt_flags & RTF_MULTICAST) ||
-			    in6p->in6p_socket == NULL ||
-			    !(in6p->in6p_socket->so_state & SS_ISCONNECTED)) {
+			if (rt->rt_flags & RTF_MULTICAST)
 				rt = NULL;	/* unusable */
-			}
+
 			/*
 			 * Always discard the cached route for unconnected
 			 * socket or if it is a multicast route.
 			 */
-			if (rt == NULL) {
-				rtfree(in6p->in6p_route.ro_rt);
-				in6p->in6p_route.ro_rt = NULL;
-			}
+			if (rt == NULL)
+				ROUTE_RELEASE(&in6p->in6p_route);
+
 			/*
-			 * If this is a connected socket and the destination
-			 * route is not multicast, update outif with that of
-			 * the route interface used by IP.
+			 * If the destination route is unicast, update outif
+			 * with that of the route interface used by IP.
 			 */
 			if (rt != NULL &&
 			    (outif = rt->rt_ifp) != in6p->in6p_last_outifp)
 				in6p->in6p_last_outifp = outif;
+		} else {
+			ROUTE_RELEASE(&in6p->in6p_route);
 		}
+
+		/*
+		 * If output interface was cellular, and this socket is
+		 * denied access to it, generate an event.
+		 */
+		if (error != 0 && (ip6oa.ip6oa_retflags & IP6OARF_IFDENIED) &&
+		    (in6p->inp_flags & INP_NO_IFT_CELLULAR))
+			soevent(in6p->inp_socket, (SO_FILT_HINT_LOCKED|
+			    SO_FILT_HINT_IFDENIED));
 		break;
 	case AF_INET:
 		error = EAFNOSUPPORT;
@@ -450,13 +467,14 @@ udp6_output(in6p, m, addr6, control, p)
 	goto releaseopt;
 
 release:
-	m_freem(m);
+	if (m != NULL)
+		m_freem(m);
 
 releaseopt:
-	if (control) {
+	if (control != NULL) {
 		if (optp == &opt)
 			ip6_clearpktopts(optp, -1);
 		m_freem(control);
 	}
-	return(error);
+	return (error);
 }

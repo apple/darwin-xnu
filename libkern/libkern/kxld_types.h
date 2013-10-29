@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2007-2008, 2012 Apple Inc. All rights reserved.
+ * Copyright (c) 2007-2012 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -68,9 +68,7 @@
 #endif
 
 /* For linking code specific to architectures that support strict patching */
-#if (!KERNEL || !__i386__)
     #define KXLD_USER_OR_STRICT_PATCHING 1
-#endif
 
 /* For linking code specific to architectures that use MH_OBJECT */
 #if (!KERNEL || __i386__)

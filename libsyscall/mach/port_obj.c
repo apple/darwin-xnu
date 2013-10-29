@@ -42,8 +42,8 @@
 struct port_obj_tentry *port_obj_table;
 int port_obj_table_size = DEFAULT_TABLE_SIZE;
 
-void port_obj_init(
-	int maxsize)
+void
+port_obj_init(int maxsize)
 {
 	kern_return_t kr;
 

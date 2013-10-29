@@ -81,9 +81,7 @@
 
 /* execution-time symbolic constants */
 				/* may disable terminal special characters */
-#ifndef _POSIX_VDISABLE
-#define	_POSIX_VDISABLE		((unsigned char)'\377')
-#endif
+#include <sys/_types/_posix_vdisable.h>
 
 #define _POSIX_THREAD_KEYS_MAX 128
 
@@ -121,11 +119,7 @@
 #endif
 
 /* whence values for lseek(2) */
-#ifndef SEEK_SET
-#define	SEEK_SET	0	/* set file offset to offset */
-#define	SEEK_CUR	1	/* set file offset to current plus offset */
-#define	SEEK_END	2	/* set file offset to EOF plus offset */
-#endif	/* !SEEK_SET */
+#include <sys/_types/_seek_set.h>
 
 #if !defined(_POSIX_C_SOURCE) || defined(_DARWIN_C_SOURCE)
 /* whence values for lseek(2); renamed by POSIX 1003.1 */

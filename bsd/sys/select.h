@@ -72,30 +72,18 @@
  * The timespec structure shall be defined as described in <time.h>
  * The <sys/select.h> header shall define the timeval structure.
  */
-#define __need_fd_set
-#define __need_struct_timespec
-#define __need_struct_timeval
-#include <sys/_structs.h>
+#include <sys/_types/_fd_def.h>
+#include <sys/_types/_timespec.h>
+#include <sys/_types/_timeval.h>
 
 /*
  * The time_t and suseconds_t types shall be defined as described in
  * <sys/types.h>
  * The sigset_t type shall be defined as described in <signal.h>
  */
-#ifndef	_TIME_T
-#define	_TIME_T
-typedef	__darwin_time_t		time_t;
-#endif
-
-#ifndef _SUSECONDS_T
-#define _SUSECONDS_T
-typedef __darwin_suseconds_t	suseconds_t;
-#endif
-
-#ifndef _SIGSET_T
-#define _SIGSET_T
-typedef __darwin_sigset_t	sigset_t;
-#endif
+#include <sys/_types/_time_t.h>
+#include <sys/_types/_suseconds_t.h>
+#include <sys/_types/_sigset_t.h>
 
 /*
  * [XSI] FD_CLR, FD_ISSET, FD_SET, FD_ZERO may be declared as a function, or
@@ -109,25 +97,14 @@ typedef __darwin_sigset_t	sigset_t;
  * extra protection here is to permit application redefinition above
  * the default size.
  */
-#ifndef	FD_SETSIZE
-#define	FD_SETSIZE	__DARWIN_FD_SETSIZE
-#endif /* FD_SETSIZE */
-#ifndef FD_SET
-#define	FD_SET(n, p)	__DARWIN_FD_SET(n, p)
-#endif /* FD_SET */
-#ifndef FD_CLR
-#define	FD_CLR(n, p)	__DARWIN_FD_CLR(n, p)
-#endif /* FD_CLR */
-#ifndef FD_ISSET
-#define	FD_ISSET(n, p)	__DARWIN_FD_ISSET(n, p)
-#endif /* FD_ISSET */
-#ifndef FD_ZERO
-#define	FD_ZERO(p)	__DARWIN_FD_ZERO(p)
-#endif /* FD_ZERO */
+#include <sys/_types/_fd_setsize.h>
+#include <sys/_types/_fd_set.h>
+#include <sys/_types/_fd_clr.h>
+#include <sys/_types/_fd_isset.h>
+#include <sys/_types/_fd_zero.h>
+
 #if !defined(_POSIX_C_SOURCE) || defined(_DARWIN_C_SOURCE)
-#ifndef FD_COPY
-#define	FD_COPY(f, t)	__DARWIN_FD_COPY(f, t)
-#endif /* FD_COPY */
+#include <sys/_types/_fd_copy.h>
 #endif	/* (!_POSIX_C_SOURCE || _DARWIN_C_SOURCE) */
 
 #ifdef KERNEL

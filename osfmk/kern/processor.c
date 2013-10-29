@@ -91,6 +91,7 @@ decl_simple_lock_data(static,pset_node_lock)
 queue_head_t			tasks;
 queue_head_t			terminated_tasks;	/* To be used ONLY for stackshot. */
 int						tasks_count;
+int						terminated_tasks_count;
 queue_head_t			threads;
 int						threads_count;
 decl_lck_mtx_data(,tasks_threads_lock)
@@ -259,6 +260,7 @@ pset_init(
 	pset_count_init_hint(pset, PROCESSOR_NULL);
 	pset->cpu_set_low = pset->cpu_set_hi = 0;
 	pset->cpu_set_count = 0;
+	pset->pending_AST_cpu_mask = 0;
 	pset_lock_init(pset);
 	pset->pset_self = IP_NULL;
 	pset->pset_name_self = IP_NULL;
@@ -337,8 +339,20 @@ processor_info(
 	case PROCESSOR_CPU_LOAD_INFO:
 	{
 		processor_cpu_load_info_t	cpu_load_info;
-		timer_data_t	idle_temp;
 		timer_t		idle_state;
+		uint64_t	idle_time_snapshot1, idle_time_snapshot2;
+		uint64_t	idle_time_tstamp1, idle_time_tstamp2;
+
+		/*
+		 * We capture the accumulated idle time twice over
+		 * the course of this function, as well as the timestamps
+		 * when each were last updated. Since these are
+		 * all done using non-atomic racy mechanisms, the
+		 * most we can infer is whether values are stable.
+		 * timer_grab() is the only function that can be
+		 * used reliably on another processor's per-processor
+		 * data.
+		 */
 
 		if (*count < PROCESSOR_CPU_LOAD_INFO_COUNT)
 			return (KERN_FAILURE);
@@ -358,17 +372,35 @@ processor_info(
 		}
 
 		idle_state = &PROCESSOR_DATA(processor, idle_state);
-		idle_temp = *idle_state;
+		idle_time_snapshot1 = timer_grab(idle_state);
+		idle_time_tstamp1 = idle_state->tstamp;
 
-		if (PROCESSOR_DATA(processor, current_state) != idle_state ||
-		    timer_grab(&idle_temp) != timer_grab(idle_state)) {
+		/*
+		 * Idle processors are not continually updating their
+		 * per-processor idle timer, so it may be extremely
+		 * out of date, resulting in an over-representation
+		 * of non-idle time between two measurement
+		 * intervals by e.g. top(1). If we are non-idle, or
+		 * have evidence that the timer is being updated
+		 * concurrently, we consider its value up-to-date.
+		 */
+		if (PROCESSOR_DATA(processor, current_state) != idle_state) {
 			cpu_load_info->cpu_ticks[CPU_STATE_IDLE] =
-							(uint32_t)(timer_grab(&PROCESSOR_DATA(processor, idle_state)) / hz_tick_interval);
+							(uint32_t)(idle_time_snapshot1 / hz_tick_interval);
+		} else if ((idle_time_snapshot1 != (idle_time_snapshot2 = timer_grab(idle_state))) ||
+				   (idle_time_tstamp1 != (idle_time_tstamp2 = idle_state->tstamp))){
+			/* Idle timer is being updated concurrently, second stamp is good enough */
+			cpu_load_info->cpu_ticks[CPU_STATE_IDLE] =
+							(uint32_t)(idle_time_snapshot2 / hz_tick_interval);
 		} else {
-			timer_advance(&idle_temp, mach_absolute_time() - idle_temp.tstamp);
+			/*
+			 * Idle timer may be very stale. Fortunately we have established
+			 * that idle_time_snapshot1 and idle_time_tstamp1 are unchanging
+			 */
+			idle_time_snapshot1 += mach_absolute_time() - idle_time_tstamp1;
 				
 			cpu_load_info->cpu_ticks[CPU_STATE_IDLE] =
-				(uint32_t)(timer_grab(&idle_temp) / hz_tick_interval);
+				(uint32_t)(idle_time_snapshot1 / hz_tick_interval);
 		}
 
 		cpu_load_info->cpu_ticks[CPU_STATE_NICE] = 0;
@@ -954,15 +986,6 @@ processor_set_threads(
 	__unused mach_msg_type_number_t	*count)
 {
     return KERN_FAILURE;
-}
-#elif defined(CONFIG_EMBEDDED)
-kern_return_t
-processor_set_threads(
-	__unused processor_set_t		pset,
-	__unused thread_array_t		*thread_list,
-	__unused mach_msg_type_number_t	*count)
-{
-    return KERN_NOT_SUPPORTED;
 }
 #else
 kern_return_t

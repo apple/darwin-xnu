@@ -1,9 +1,0 @@
-#!/unix
-*
-sys_ATsocket
-sys_ATgetmsg
-sys_ATputmsg
-sys_ATPsndreq
-sys_ATPsndrsp
-sys_ATPgetreq
-sys_ATPgetrsp

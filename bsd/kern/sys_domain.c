@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2012 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -31,25 +31,31 @@
  */
 
 #include <sys/param.h>
-#include <sys/socket.h>
 #include <sys/protosw.h>
 #include <sys/domain.h>
-#include <sys/mbuf.h>
+#include <sys/mcache.h>
 #include <sys/sys_domain.h>
 
+struct domain *systemdomain = NULL;
 
 /* domain init function */
-void systemdomain_init(void) __attribute__((section("__TEXT, initcode")));
+static void systemdomain_init(struct domain *);
 
-struct domain systemdomain =
-    { PF_SYSTEM, "system", systemdomain_init, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, { 0, 0} };
+struct domain systemdomain_s = {
+	.dom_family =		PF_SYSTEM,
+	.dom_name =		"system",
+	.dom_init =		systemdomain_init,
+};
 
-
-void
-systemdomain_init(void)
+static void
+systemdomain_init(struct domain *dp)
 {
-    /* add system domain built in protocol initializers here */
+	VERIFY(!(dp->dom_flags & DOM_INITIALIZED));
+	VERIFY(systemdomain == NULL);
 
-    kern_event_init();
-    kern_control_init();
+	systemdomain = dp;
+
+	/* add system domain built in protocol initializers here */
+	kern_event_init(dp);
+	kern_control_init(dp);
 }

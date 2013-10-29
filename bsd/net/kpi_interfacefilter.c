@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2003 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2003,2013 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -42,7 +42,7 @@ iflt_attach(
 {
 	if (interface == NULL) return ENOENT;
 		
-	return dlil_attach_filter(interface, filter, filter_ref);
+	return dlil_attach_filter(interface, filter, filter_ref, 0);
 }
 
 void

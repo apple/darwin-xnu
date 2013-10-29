@@ -63,7 +63,7 @@
 #include <kern/kern_types.h>
 
 /* Initialize IPC host services */
-extern void ipc_host_init(void) __attribute__((section("__TEXT, initcode")));
+extern void ipc_host_init(void);
 
 /* Initialize ipc access to processor by allocating a port */
 extern void ipc_processor_init(

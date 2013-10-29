@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008 Apple Inc. All rights reserved.
+ * Copyright (c) 2008-2012 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -339,10 +339,12 @@ finish:
         (void)vm_deallocate(kernel_map, (vm_offset_t)request, requestLengthIn);
     }
     if (response) {
-        kmem_free(kernel_map, (vm_offset_t)response, responseLength);
+        /* 11981737 - clear uninitialized data in last page */
+        kmem_free(kernel_map, (vm_offset_t)response, round_page(responseLength));
     }
     if (logData) {
-        kmem_free(kernel_map, (vm_offset_t)logData, logDataLength);
+        /* 11981737 - clear uninitialized data in last page */
+        kmem_free(kernel_map, (vm_offset_t)logData, round_page(logDataLength));
     }
 
     return result;
@@ -458,15 +460,6 @@ kmod_dump_log(
 * Compatibility implementation for kmod_get_info() host_priv routine.
 * Only supported on old 32-bit architectures.
 *********************************************************************/
-#if __i386__
-kern_return_t
-kext_get_kmod_info(
-    kmod_info_array_t      * kmod_list,
-    mach_msg_type_number_t * kmodCount)
-{
-    return OSKext::getKmodInfo(kmod_list, kmodCount);
-}
-#endif /* __i386__ */
 
 #if PRAGMA_MARK
 #pragma mark Loaded Kext Summary

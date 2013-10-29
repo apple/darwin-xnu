@@ -1,8 +1,8 @@
 /*
- * Copyright (c) 2000-2012 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2013 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
- * 
+ *
  * This file contains Original Code and/or Modifications of Original Code
  * as defined in and that are subject to the Apple Public Source License
  * Version 2.0 (the 'License'). You may not use this file except in
@@ -11,10 +11,10 @@
  * unlawful or unlicensed copies of an Apple operating system, or to
  * circumvent, violate, or enable the circumvention or violation of, any
  * terms of an Apple operating system software license agreement.
- * 
+ *
  * Please obtain a copy of the License at
  * http://www.opensource.apple.com/apsl/ and read it before using this file.
- * 
+ *
  * The Original Code and all software distributed under the License are
  * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
@@ -22,7 +22,7 @@
  * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
  * Please see the License for the specific language governing rights and
  * limitations under the License.
- * 
+ *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*
@@ -58,7 +58,6 @@
  * SUCH DAMAGE.
  *
  *	@(#)if.h	8.1 (Berkeley) 6/10/93
- * $FreeBSD: src/sys/net/if.h,v 1.58.2.2 2001/07/24 19:10:18 brooks Exp $
  */
 
 #ifndef _NET_IF_H_
@@ -76,34 +75,37 @@
  * events.
  */
 
-#define KEV_DL_SUBCLASS 2
+#define	KEV_DL_SUBCLASS 2
 
-#define KEV_DL_SIFFLAGS				1
-#define KEV_DL_SIFMETRICS			2
-#define KEV_DL_SIFMTU				3
-#define KEV_DL_SIFPHYS				4
-#define KEV_DL_SIFMEDIA				5
-#define KEV_DL_SIFGENERIC			6
-#define KEV_DL_ADDMULTI				7
-#define KEV_DL_DELMULTI				8
-#define KEV_DL_IF_ATTACHED			9
-#define KEV_DL_IF_DETACHING			10
-#define KEV_DL_IF_DETACHED			11
-#define KEV_DL_LINK_OFF				12
-#define KEV_DL_LINK_ON				13
-#define KEV_DL_PROTO_ATTACHED			14
-#define KEV_DL_PROTO_DETACHED			15
-#define KEV_DL_LINK_ADDRESS_CHANGED		16
-#define KEV_DL_WAKEFLAGS_CHANGED		17
-#define KEV_DL_IF_IDLE_ROUTE_REFCNT		18
-#define KEV_DL_IFCAP_CHANGED			19
-#define KEV_DL_LINK_QUALITY_METRIC_CHANGED	20
-#define KEV_DL_NODE_PRESENCE			21
-#define KEV_DL_NODE_ABSENCE			22
-#define KEV_DL_MASTER_ELECTED			23
+#define	KEV_DL_SIFFLAGS				1
+#define	KEV_DL_SIFMETRICS			2
+#define	KEV_DL_SIFMTU				3
+#define	KEV_DL_SIFPHYS				4
+#define	KEV_DL_SIFMEDIA				5
+#define	KEV_DL_SIFGENERIC			6
+#define	KEV_DL_ADDMULTI				7
+#define	KEV_DL_DELMULTI				8
+#define	KEV_DL_IF_ATTACHED			9
+#define	KEV_DL_IF_DETACHING			10
+#define	KEV_DL_IF_DETACHED			11
+#define	KEV_DL_LINK_OFF				12
+#define	KEV_DL_LINK_ON				13
+#define	KEV_DL_PROTO_ATTACHED			14
+#define	KEV_DL_PROTO_DETACHED			15
+#define	KEV_DL_LINK_ADDRESS_CHANGED		16
+#define	KEV_DL_WAKEFLAGS_CHANGED		17
+#define	KEV_DL_IF_IDLE_ROUTE_REFCNT		18
+#define	KEV_DL_IFCAP_CHANGED			19
+#define	KEV_DL_LINK_QUALITY_METRIC_CHANGED	20
+#define	KEV_DL_NODE_PRESENCE			21
+#define	KEV_DL_NODE_ABSENCE			22
+#define	KEV_DL_MASTER_ELECTED			23
+#define	KEV_DL_ISSUES				24
+#define	KEV_DL_IFDELEGATE_CHANGED		25
 
 #include <net/if_var.h>
 #include <sys/types.h>
+#include <sys/socket.h>
 
 #ifdef PRIVATE
 #include <net/if_dl.h>
@@ -111,14 +113,14 @@
 #endif
 #endif
 
-#ifdef KERNEL_PRIVATE
-#define         IF_MAXUNIT      0x7fff  /* historical value */
-
 struct if_clonereq {
 	int	ifcr_total;		/* total cloners (out) */
 	int	ifcr_count;		/* room for this many in user buffer */
 	char	*ifcr_buffer;		/* buffer for cloner names */
 };
+
+#ifdef KERNEL_PRIVATE
+#define	IF_MAXUNIT	0x7fff	/* historical value */
 
 struct if_clonereq64 {
 	int	ifcr_total;		/* total cloners (out) */
@@ -138,7 +140,7 @@ struct if_clonereq32 {
 #define	IFF_DEBUG	0x4		/* turn on debugging */
 #define	IFF_LOOPBACK	0x8		/* is a loopback net */
 #define	IFF_POINTOPOINT	0x10		/* interface is point-to-point link */
-#define IFF_NOTRAILERS 0x20		/* obsolete: avoid use of trailers */
+#define	IFF_NOTRAILERS	0x20		/* obsolete: avoid use of trailers */
 #define	IFF_RUNNING	0x40		/* resources allocated */
 #define	IFF_NOARP	0x80		/* no address resolution protocol */
 #define	IFF_PROMISC	0x100		/* receive all packets */
@@ -152,29 +154,29 @@ struct if_clonereq32 {
 #define	IFF_MULTICAST	0x8000		/* supports multicast */
 
 #ifdef PRIVATE
-/* extended flags definitions:  (all bits are reserved for internal/future use) */
-#define IFEF_AUTOCONFIGURING	0x1	/* allow BOOTP/DHCP replies to enter */
-#define _IFEF_DVR_REENTRY_OK	0x20	/* deprecated */
-#define IFEF_ACCEPT_RTADV	0x40	/* set to accept IPv6 Router Advertisement on the interface */
-#define IFEF_TXSTART		0x80	/* interface has start callback */
-#define IFEF_RXPOLL		0x100	/* interface supports opportunistic input polling */
-#define IFEF_VLAN		0x200	/* interface has one or more vlans */
-#define IFEF_BOND		0x400	/* interface is part of bond */
-#define	IFEF_ARPLL		0x800	/* ARP for IPv4LL addresses on this port */
+/* extended flags definitions:  (all bits reserved for internal/future use) */
+#define	IFEF_AUTOCONFIGURING	0x1	/* allow BOOTP/DHCP replies to enter */
+#define	IFEF_IPV6_DISABLED	0x20	/* coupled to ND6_IFF_IFDISABLED */
+#define	IFEF_ACCEPT_RTADV	0x40	/* accepts IPv6 RA on the interface */
+#define	IFEF_TXSTART		0x80	/* has start callback */
+#define	IFEF_RXPOLL		0x100	/* supports opportunistic input poll */
+#define	IFEF_VLAN		0x200	/* interface has one or more vlans */
+#define	IFEF_BOND		0x400	/* interface is part of bond */
+#define	IFEF_ARPLL		0x800	/* ARP for IPv4LL addresses */
 #define	IFEF_NOWINDOWSCALE	0x1000	/* Don't scale TCP window on iface */
-#define	IFEF_NOAUTOIPV6LL	0x2000	/* Interface IPv6 LinkLocal address not provided by kernel */
-#define	IFEF_IPV4_ROUTER	0x8000	/* set on internal-network-facing interface when in IPv4 router mode */
-#define	IFEF_IPV6_ROUTER	0x10000	/* set on internal-network-facing interface when in IPv6 router mode */
-#define IFEF_LOCALNET_PRIVATE	0x20000	/* local private network */
-#define IFEF_IPV6_ND6ALT	0x40000	/* alternative KPI for IPv6 neighbor discovery */
-#define IFEF_SERVICE_TRIGGERED	IFEF_LOCALNET_PRIVATE
-#define	IFEF_RESTRICTED_RECV	0x80000 /* interface restricts inbound pkts */
-#define	IFEF_AWDL		0x100000   /* Apple Wireless Direct Link */
-#define	IFEF_NOACKPRI		0x200000   /* Don't use TCP ACK prioritization on interface */
-#define	IFEF_SENDLIST		0x10000000 /* Interface supports sending a list of packets */
-#define _IFEF_REUSE		0x20000000 /* deprecated */
-#define _IFEF_INUSE		0x40000000 /* deprecated */
-#define IFEF_UPDOWNCHANGE	0x80000000 /* Interface's up/down state is changing */
+#define	IFEF_NOAUTOIPV6LL	0x2000	/* Need explicit IPv6 LL address */
+#define	IFEF_IPV4_ROUTER	0x8000	/* interior when in IPv4 router mode */
+#define	IFEF_IPV6_ROUTER	0x10000	/* interior when in IPv6 router mode */
+#define	IFEF_LOCALNET_PRIVATE	0x20000	/* local private network */
+#define	IFEF_SERVICE_TRIGGERED	IFEF_LOCALNET_PRIVATE
+#define	IFEF_IPV6_ND6ALT	0x40000	/* alternative. KPI for ND6 */
+#define	IFEF_RESTRICTED_RECV	0x80000	/* interface restricts inbound pkts */
+#define	IFEF_AWDL		0x100000	/* Apple Wireless Direct Link */
+#define	IFEF_NOACKPRI		0x200000	/* No TCP ACK prioritization */
+#define	IFEF_SENDLIST		0x10000000	/* Supports tx packet lists */
+#define	IFEF_DIRECTLINK		0x20000000	/* point-to-point topology */
+#define	_IFEF_INUSE		0x40000000	/* deprecated */
+#define	IFEF_UPDOWNCHANGE	0x80000000	/* up/down state is changing */
 #ifdef XNU_KERNEL_PRIVATE
 /*
  * Current requirements for an AWDL interface.  Setting/clearing IFEF_AWDL
@@ -198,7 +200,7 @@ struct if_clonereq32 {
  * the if_idle_flags field to a non-zero value will cause the networking
  * stack to aggressively purge expired objects (routes, etc.)
  */
-#define IFRF_IDLE_NOTIFY	0x1	/* Generate notifications on idle */
+#define	IFRF_IDLE_NOTIFY	0x1	/* Generate notifications on idle */
 
 /* flags set internally only: */
 #define	IFF_CANTCHANGE \
@@ -223,22 +225,23 @@ struct if_clonereq32 {
  *   field.  IFCAP_* and IFNET_* do not match one to one and IFNET_* may be
  *   more detailed or differenciated than IFCAP_*.
  *   IFNET_* hwassist flags have corresponding CSUM_* in sys/mbuf.h
- */         
-#define IFCAP_RXCSUM            0x00001 /* can offload checksum on RX */
-#define IFCAP_TXCSUM            0x00002 /* can offload checksum on TX */
-#define IFCAP_VLAN_MTU          0x00004 /* VLAN-compatible MTU */
-#define IFCAP_VLAN_HWTAGGING    0x00008 /* hardware VLAN tag support */
-#define IFCAP_JUMBO_MTU         0x00010 /* 9000 byte MTU supported */
-#define IFCAP_TSO4              0x00020 /* can do TCP Segmentation Offload */
-#define IFCAP_TSO6              0x00040 /* can do TCP6 Segmentation Offload */
-#define IFCAP_LRO               0x00080 /* can do Large Receive Offload */
-#define IFCAP_AV		0x00100 /* can do 802.1 AV Bridging */
+ */
+#define	IFCAP_RXCSUM		0x00001	/* can offload checksum on RX */
+#define	IFCAP_TXCSUM		0x00002	/* can offload checksum on TX */
+#define	IFCAP_VLAN_MTU		0x00004	/* VLAN-compatible MTU */
+#define	IFCAP_VLAN_HWTAGGING	0x00008	/* hardware VLAN tag support */
+#define	IFCAP_JUMBO_MTU		0x00010	/* 9000 byte MTU supported */
+#define	IFCAP_TSO4		0x00020	/* can do TCP Segmentation Offload */
+#define	IFCAP_TSO6		0x00040	/* can do TCP6 Segmentation Offload */
+#define	IFCAP_LRO		0x00080	/* can do Large Receive Offload */
+#define	IFCAP_AV		0x00100	/* can do 802.1 AV Bridging */
+#define	IFCAP_TXSTATUS		0x00200	/* can return linklevel xmit status */
 
-#define IFCAP_HWCSUM    (IFCAP_RXCSUM | IFCAP_TXCSUM)
-#define IFCAP_TSO       (IFCAP_TSO4 | IFCAP_TSO6)
+#define	IFCAP_HWCSUM	(IFCAP_RXCSUM | IFCAP_TXCSUM)
+#define	IFCAP_TSO	(IFCAP_TSO4 | IFCAP_TSO6)
 
-#define IFCAP_VALID (IFCAP_HWCSUM | IFCAP_TSO | IFCAP_LRO | IFCAP_VLAN_MTU | \
-	IFCAP_VLAN_HWTAGGING | IFCAP_JUMBO_MTU | IFCAP_AV)
+#define	IFCAP_VALID (IFCAP_HWCSUM | IFCAP_TSO | IFCAP_LRO | IFCAP_VLAN_MTU | \
+	IFCAP_VLAN_HWTAGGING | IFCAP_JUMBO_MTU | IFCAP_AV | IFCAP_TXSTATUS)
 
 #define	IFQ_MAXLEN	128
 #define	IFNET_SLOWHZ	1		/* granularity is 1 second */
@@ -248,7 +251,7 @@ struct if_clonereq32 {
  * from sysctl and the routing socket
  */
 struct if_msghdr {
-	unsigned short	ifm_msglen;	/* to skip over non-understood messages */
+	unsigned short	ifm_msglen;	/* to skip non-understood messages */
 	unsigned char	ifm_version;	/* future binary compatability */
 	unsigned char	ifm_type;	/* message type */
 	int		ifm_addrs;	/* like rtm_addrs */
@@ -262,7 +265,7 @@ struct if_msghdr {
  * from sysctl and the routing socket
  */
 struct ifa_msghdr {
-	unsigned short	ifam_msglen;	/* to skip over non-understood messages */
+	unsigned short	ifam_msglen;	/* to skip non-understood messages */
 	unsigned char	ifam_version;	/* future binary compatability */
 	unsigned char	ifam_type;	/* message type */
 	int		ifam_addrs;	/* like rtm_addrs */
@@ -276,7 +279,7 @@ struct ifa_msghdr {
  * from the routing socket
  */
 struct ifma_msghdr {
-	unsigned short	ifmam_msglen;	/* to skip over non-understood messages */
+	unsigned short	ifmam_msglen;	/* to skip non-understood messages */
 	unsigned char	ifmam_version;	/* future binary compatability */
 	unsigned char	ifmam_type;	/* message type */
 	int		ifmam_addrs;	/* like rtm_addrs */
@@ -286,7 +289,7 @@ struct ifma_msghdr {
 
 /*
  * Message format for use in obtaining information about interfaces
- * from sysctl 
+ * from sysctl
  */
 struct if_msghdr2 {
 	u_short	ifm_msglen;	/* to skip over non-understood messages */
@@ -299,7 +302,7 @@ struct if_msghdr2 {
 	int	ifm_snd_maxlen;	/* maximum length of send queue */
 	int	ifm_snd_drops;	/* number of drops in send queue */
 	int	ifm_timer;	/* time until if_watchdog called */
-	struct if_data64	ifm_data;	/* statistics and other data about if */
+	struct if_data64	ifm_data;	/* statistics and other data */
 };
 
 /*
@@ -337,13 +340,13 @@ struct ifdevmtu {
  	user space, a value from SIOCGKEVVENDOR ioctl on a kernel event socket.
  ifk_type - The type. Types are specific to each module id.
  ifk_data - The data. ifk_ptr may be a 64bit pointer for 64 bit processes.
- 
+
  Copying data between user space and kernel space is done using copyin
  and copyout. A process may be running in 64bit mode. In such a case,
  the pointer will be a 64bit pointer, not a 32bit pointer. The following
  sample is a safe way to copy the data in to the kernel from either a
  32bit or 64bit process:
- 
+
  user_addr_t tmp_ptr;
  if (IS_64BIT_PROCESS(current_proc())) {
  	tmp_ptr = CAST_USER_ADDR_T(ifkpi.ifk_data.ifk_ptr64);
@@ -366,10 +369,10 @@ struct ifkpi {
 	} ifk_data;
 };
 
-/* Wake capabilities of a interface */ 
-#define IF_WAKE_ON_MAGIC_PACKET 	0x01
+/* Wake capabilities of a interface */
+#define	IF_WAKE_ON_MAGIC_PACKET 	0x01
 #ifdef KERNEL_PRIVATE
-#define IF_WAKE_VALID_FLAGS IF_WAKE_ON_MAGIC_PACKET
+#define	IF_WAKE_VALID_FLAGS IF_WAKE_ON_MAGIC_PACKET
 #endif /* KERNEL_PRIVATE */
 
 
@@ -407,14 +410,54 @@ struct	ifreq {
 #ifdef PRIVATE
 		int	ifru_link_quality_metric;
 #endif /* PRIVATE */
-		int     ifru_cap[2];
+		int	ifru_cap[2];
 #ifdef PRIVATE
 		struct {
 			uint32_t	ifo_flags;
-#define IFRIFOF_BLOCK_OPPORTUNISTIC	0x00000001
+#define	IFRIFOF_BLOCK_OPPORTUNISTIC	0x00000001
 			uint32_t	ifo_inuse;
 		} ifru_opportunistic;
 		u_int64_t ifru_eflags;
+		struct {
+			int32_t		ifl_level;
+			uint32_t	ifl_flags;
+#define	IFRLOGF_DLIL			0x00000001
+#define	IFRLOGF_FAMILY			0x00010000
+#define	IFRLOGF_DRIVER			0x01000000
+#define	IFRLOGF_FIRMWARE		0x10000000
+			int32_t		ifl_category;
+#define	IFRLOGCAT_CONNECTIVITY		1
+#define	IFRLOGCAT_QUALITY		2
+#define	IFRLOGCAT_PERFORMANCE		3
+			int32_t		ifl_subcategory;
+		} ifru_log;
+		u_int32_t ifru_delegated;
+		struct {
+			uint32_t	ift_type;
+			uint32_t	ift_family;
+#define	IFRTYPE_FAMILY_ANY		0
+#define	IFRTYPE_FAMILY_LOOPBACK		1
+#define	IFRTYPE_FAMILY_ETHERNET		2
+#define	IFRTYPE_FAMILY_SLIP		3
+#define	IFRTYPE_FAMILY_TUN		4
+#define	IFRTYPE_FAMILY_VLAN		5
+#define	IFRTYPE_FAMILY_PPP		6
+#define	IFRTYPE_FAMILY_PVC		7
+#define	IFRTYPE_FAMILY_DISC		8
+#define	IFRTYPE_FAMILY_MDECAP		9
+#define	IFRTYPE_FAMILY_GIF		10
+#define	IFRTYPE_FAMILY_FAITH		11
+#define	IFRTYPE_FAMILY_STF		12
+#define	IFRTYPE_FAMILY_FIREWIRE		13
+#define	IFRTYPE_FAMILY_BOND		14
+#define	IFRTYPE_FAMILY_CELLULAR		15
+			uint32_t	ift_subfamily;
+#define	IFRTYPE_SUBFAMILY_ANY		0
+#define	IFRTYPE_SUBFAMILY_USB		1
+#define	IFRTYPE_SUBFAMILY_BLUETOOTH	2
+#define	IFRTYPE_SUBFAMILY_WIFI		3
+#define	IFRTYPE_SUBFAMILY_THUNDERBOLT	4
+		} ifru_type;
 #endif /* PRIVATE */
 	} ifr_ifru;
 #define	ifr_addr	ifr_ifru.ifru_addr	/* address */
@@ -428,32 +471,35 @@ struct	ifreq {
 #endif /* __APPLE__ */
 #define	ifr_metric	ifr_ifru.ifru_metric	/* metric */
 #define	ifr_mtu		ifr_ifru.ifru_mtu	/* mtu */
-#define ifr_phys	ifr_ifru.ifru_phys	/* physical wire */
-#define ifr_media	ifr_ifru.ifru_media	/* physical media */
+#define	ifr_phys	ifr_ifru.ifru_phys	/* physical wire */
+#define	ifr_media	ifr_ifru.ifru_media	/* physical media */
 #define	ifr_data	ifr_ifru.ifru_data	/* for use by interface */
-#define ifr_devmtu	ifr_ifru.ifru_devmtu	
-#define ifr_intval	ifr_ifru.ifru_intval	/* integer value */
+#define	ifr_devmtu	ifr_ifru.ifru_devmtu
+#define	ifr_intval	ifr_ifru.ifru_intval	/* integer value */
 #ifdef KERNEL_PRIVATE
-#define ifr_data64	ifr_ifru.ifru_data64	/* 64-bit pointer */
+#define	ifr_data64	ifr_ifru.ifru_data64	/* 64-bit pointer */
 #endif /* KERNEL_PRIVATE */
-#define ifr_kpi		ifr_ifru.ifru_kpi
-#define ifr_wake_flags	ifr_ifru.ifru_wake_flags /* wake capabilities of devive */
-#define ifr_route_refcnt ifr_ifru.ifru_route_refcnt /* route references on interface */
+#define	ifr_kpi		ifr_ifru.ifru_kpi
+#define	ifr_wake_flags	ifr_ifru.ifru_wake_flags /* wake capabilities */
+#define	ifr_route_refcnt ifr_ifru.ifru_route_refcnt /* route references count */
 #ifdef PRIVATE
-#define ifr_link_quality_metric ifr_ifru.ifru_link_quality_metric /* LQM */
+#define	ifr_link_quality_metric ifr_ifru.ifru_link_quality_metric /* LQM */
 #endif /* PRIVATE */
-#define ifr_reqcap      ifr_ifru.ifru_cap[0]    /* requested capabilities */
-#define ifr_curcap      ifr_ifru.ifru_cap[1]    /* current capabilities */
+#define	ifr_reqcap	ifr_ifru.ifru_cap[0]	/* requested capabilities */
+#define	ifr_curcap	ifr_ifru.ifru_cap[1]	/* current capabilities */
 #ifdef PRIVATE
-#define ifr_opportunistic	ifr_ifru.ifru_opportunistic    /* current capabilities */
+#define	ifr_opportunistic	ifr_ifru.ifru_opportunistic
 #define	ifr_eflags	ifr_ifru.ifru_eflags	/* extended flags  */
-#endif
+#define	ifr_log		ifr_ifru.ifru_log	/* logging level/flags */
+#define	ifr_delegated	ifr_ifru.ifru_delegated /* delegated interface index */
+#define	ifr_type	ifr_ifru.ifru_type	/* interface type */
+#endif /* PRIVATE */
 };
 
 #define	_SIZEOF_ADDR_IFREQ(ifr) \
-	((ifr).ifr_addr.sa_len > sizeof(struct sockaddr) ? \
-	 (sizeof(struct ifreq) - sizeof(struct sockaddr) + \
-	  (ifr).ifr_addr.sa_len) : sizeof(struct ifreq))
+	((ifr).ifr_addr.sa_len > sizeof (struct sockaddr) ? \
+	(sizeof (struct ifreq) - sizeof (struct sockaddr) + \
+	(ifr).ifr_addr.sa_len) : sizeof (struct ifreq))
 
 struct ifaliasreq {
 	char	ifra_name[IFNAMSIZ];		/* if name, e.g. "en0" */
@@ -463,8 +509,8 @@ struct ifaliasreq {
 };
 
 struct rslvmulti_req {
-     struct sockaddr *sa;
-     struct sockaddr **llsa;
+	struct sockaddr *sa;
+	struct sockaddr **llsa;
 };
 
 #if !defined(KERNEL) || defined(KERNEL_PRIVATE)
@@ -510,9 +556,9 @@ struct ifmediareq32 {
 
 #pragma pack(4)
 struct  ifdrv {
-	char		ifd_name[IFNAMSIZ];     /* if name, e.g. "en0" */
+	char		ifd_name[IFNAMSIZ];	/* if name, e.g. "en0" */
 	unsigned long	ifd_cmd;
-	size_t		ifd_len;
+	size_t		ifd_len;		/* length of ifd_data buffer */
 	void		*ifd_data;
 };
 #pragma pack()
@@ -520,14 +566,14 @@ struct  ifdrv {
 #ifdef KERNEL_PRIVATE
 #pragma pack(4)
 struct ifdrv32 {
-	char		ifd_name[IFNAMSIZ];     /* if name, e.g. "en0" */
+	char		ifd_name[IFNAMSIZ];	/* if name, e.g. "en0" */
 	u_int32_t	ifd_cmd;
 	u_int32_t	ifd_len;
 	user32_addr_t	ifd_data;
 };
 
 struct  ifdrv64 {
-	char		ifd_name[IFNAMSIZ];     /* if name, e.g. "en0" */
+	char		ifd_name[IFNAMSIZ];	/* if name, e.g. "en0" */
 	u_int64_t	ifd_cmd;
 	u_int64_t	ifd_len;
 	user64_addr_t	ifd_data;
@@ -535,11 +581,11 @@ struct  ifdrv64 {
 #pragma pack()
 #endif /* KERNEL_PRIVATE */
 
-/* 
+/*
  * Structure used to retrieve aux status data from interfaces.
  * Kernel suppliers to this interface should respect the formatting
  * needed by ifconfig(8): each line starts with a TAB and ends with
- * a newline.  The canonical example to copy and paste is in if_tun.c.
+ * a newline.
  */
 
 #define	IFSTATMAX	800		/* 10 lines of text */
@@ -571,14 +617,14 @@ struct	ifconf {
 #if defined(KERNEL_PRIVATE)
 #pragma pack(4)
 struct ifconf32 {
-	int     ifc_len;		/* size of associated buffer */
+	int	ifc_len;		/* size of associated buffer */
 	struct {
 		user32_addr_t ifcu_req;
 	} ifc_ifcu;
 };
 
 struct ifconf64 {
-	int     ifc_len;		/* size of associated buffer */
+	int	ifc_len;		/* size of associated buffer */
 	struct {
 		user64_addr_t ifcu_req	__attribute__((aligned(8)));
 	} ifc_ifcu;
@@ -590,9 +636,9 @@ struct ifconf64 {
  * DLIL KEV_DL_PROTO_ATTACHED/DETACHED structure
  */
 struct kev_dl_proto_data {
-     struct net_event_data   	link_data;
-     u_int32_t			proto_family;
-     u_int32_t			proto_remaining_count;
+	struct net_event_data   	link_data;
+	u_int32_t			proto_family;
+	u_int32_t			proto_remaining_count;
 };
 
 /*
@@ -602,19 +648,19 @@ struct if_laddrreq {
 	char			iflr_name[IFNAMSIZ];
 	unsigned int		flags;
 #define	IFLR_PREFIX	0x8000  /* in: prefix given  out: kernel fills id */
-	unsigned int		prefixlen;         /* in/out */
-	struct sockaddr_storage	addr;   /* in/out */
-	struct sockaddr_storage	dstaddr; /* out */
+	unsigned int		prefixlen;	/* in/out */
+	struct sockaddr_storage	addr;		/* in/out */
+	struct sockaddr_storage	dstaddr;	/* out */
 };
 
 #ifdef PRIVATE
 /*
- *	Link Quality Metrics
+ * Link Quality Metrics
  *
- *	IFNET_LQM_THRESH_OFF	Metric is not available; device is off.
- *	IFNET_LQM_THRESH_UNKNOWN Metric is not (yet) known.
- *	IFNET_LQM_THRESH_POOR	Link quality is considered poor by driver.
- *	IFNET_LQM_THRESH_GOOD	Link quality is considered good by driver.
+ *	IFNET_LQM_THRESH_OFF      Metric is not available; device is off.
+ *	IFNET_LQM_THRESH_UNKNOWN  Metric is not (yet) known.
+ *	IFNET_LQM_THRESH_POOR     Link quality is considered poor by driver.
+ *	IFNET_LQM_THRESH_GOOD     Link quality is considered good by driver.
  */
 enum {
 	IFNET_LQM_THRESH_OFF		= (-2),
@@ -685,6 +731,8 @@ struct if_linkparamsreq {
 	u_int32_t	iflpr_output_tbr_percent;
 	struct if_bandwidths iflpr_output_bw;
 	struct if_bandwidths iflpr_input_bw;
+	struct if_latencies iflpr_output_lt;
+	struct if_latencies iflpr_input_lt;
 };
 
 /*
@@ -764,6 +812,19 @@ enum {
 #ifdef XNU_KERNEL_PRIVATE
 	IFNET_THROTTLE_MAX			= 2,
 #endif /* XNU_KERNEL_PRIVATE */
+};
+
+#define	DLIL_MODIDLEN	20	/* same as IFNET_MODIDLEN */
+#define	DLIL_MODARGLEN	12	/* same as IFNET_MODARGLEN */
+
+/*
+ * DLIL KEV_DL_ISSUES event structure
+ */
+struct kev_dl_issues {
+	struct net_event_data   link_data;
+	u_int8_t		modid[DLIL_MODIDLEN];
+	u_int64_t		timestamp;
+	u_int8_t		info[DLIL_MODARGLEN];
 };
 #endif /* PRIVATE */
 

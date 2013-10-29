@@ -1,8 +1,8 @@
 /*
- * Copyright (c) 2000-2011 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2013 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
- * 
+ *
  * This file contains Original Code and/or Modifications of Original Code
  * as defined in and that are subject to the Apple Public Source License
  * Version 2.0 (the 'License'). You may not use this file except in
@@ -11,10 +11,10 @@
  * unlawful or unlicensed copies of an Apple operating system, or to
  * circumvent, violate, or enable the circumvention or violation of, any
  * terms of an Apple operating system software license agreement.
- * 
+ *
  * Please obtain a copy of the License at
  * http://www.opensource.apple.com/apsl/ and read it before using this file.
- * 
+ *
  * The Original Code and all software distributed under the License are
  * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
@@ -70,6 +70,7 @@
 #include <sys/socketvar.h>
 #include <kern/lock.h>
 
+#include <net/dlil.h>
 #include <net/if.h>
 #include <net/route.h>
 #include <net/if_llc.h>
@@ -88,10 +89,7 @@
 #if INET6
 #include <netinet6/nd6.h>
 #include <netinet6/in6_ifattach.h>
-#endif
-
-#if LLC && CCITT
-extern struct ifqueue pkintrq;
+#include <netinet6/ip6_var.h>
 #endif
 
 /* #include "vlan.h" */
@@ -100,6 +98,9 @@ extern struct ifqueue pkintrq;
 #endif /* NVLAN > 0 */
 
 #include <net/ether_if_module.h>
+
+static const u_char etherip6allnodes[ETHER_ADDR_LEN] =
+	{ 0x33, 0x33, 0, 0, 0, 1 };
 
 /*
  * Process a received Ethernet packet;
@@ -132,6 +133,18 @@ ether_inet6_input(ifnet_t ifp, protocol_family_t protocol,
 		    ETHER_ADDR_LEN) != 0) {
 			nd6_llreach_set_reachable(mifp, eh->ether_shost,
 			    ETHER_ADDR_LEN);
+		}
+
+		/* Save the Ethernet source address for all-nodes multicasts */
+		if (!bcmp(eh->ether_dhost, etherip6allnodes, ETHER_ADDR_LEN)) {
+			struct ip6aux *ip6a;
+
+			ip6a = ip6_addaux(packet);
+			if (ip6a) {
+				ip6a->ip6a_flags |= IP6A_HASEEN;
+				bcopy(eh->ether_shost, ip6a->ip6a_ehsrc,
+				    ETHER_ADDR_LEN);
+			}
 		}
 
 		if (proto_input(protocol, packet) != 0)
@@ -224,9 +237,8 @@ ether_inet6_prmod_ioctl(ifnet_t ifp, protocol_family_t protocol_family,
 
 	case SIOCGIFADDR: {		/* struct ifreq */
 		struct ifreq *ifr = (struct ifreq *)(void *)data;
-
-		(void) ifnet_lladdr_copy_bytes(ifp, ifr->ifr_addr.sa_data,
-		    ETHER_ADDR_LEN);
+		(void) ifnet_guarded_lladdr_copy_bytes(ifp,
+		    ifr->ifr_addr.sa_data, ETHER_ADDR_LEN);
 		break;
 	}
 
@@ -258,8 +270,8 @@ ether_attach_inet6(struct ifnet *ifp, protocol_family_t protocol_family)
 	proto.resolve = ether_inet6_resolve_multi;
 	error = ifnet_attach_protocol(ifp, protocol_family, &proto);
 	if (error && error != EEXIST) {
-		printf("WARNING: %s can't attach ipv6 to %s%d\n", __func__,
-		    ifp->if_name, ifp->if_unit);
+		printf("WARNING: %s can't attach ipv6 to %s\n", __func__,
+		    if_name(ifp));
 	}
 
 	return (error);

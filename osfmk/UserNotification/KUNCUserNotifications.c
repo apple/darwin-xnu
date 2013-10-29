@@ -64,6 +64,8 @@ struct UNDReply {
 #define UNDReply_lock(reply)		lck_mtx_lock(&reply->lock)
 #define UNDReply_unlock(reply)		lck_mtx_lock(&reply->lock)
 
+extern lck_grp_t LockCompatGroup;
+
 /* forward declarations */
 void UNDReply_deallocate(
 	UNDReplyRef		reply);
@@ -83,6 +85,7 @@ UNDReply_deallocate(
 	UNDReply_unlock(reply);
 
 	ipc_port_dealloc_kernel(port);
+	lck_mtx_destroy(&reply->lock, &LockCompatGroup);
 	kfree(reply, sizeof(struct UNDReply));
 	return;
 }
@@ -189,7 +192,6 @@ UNDNotificationCreated_rpc (
  * KUNC Functions
 */
 
-extern lck_grp_t LockCompatGroup;
 
 KUNCUserNotificationID
 KUNCGetNotificationID(void)

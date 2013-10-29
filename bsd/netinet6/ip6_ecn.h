@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008 Apple Inc. All rights reserved.
+ * Copyright (c) 2008-2013 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -64,7 +64,7 @@
  */
 #include <sys/appleapiopts.h>
 
-#ifdef KERNEL_PRIVATE
+#ifdef BSD_KERNEL_PRIVATE
 extern void ip6_ecn_ingress(int, u_int32_t *, const u_int32_t *);
 extern void ip6_ecn_egress(int, const u_int32_t *, u_int32_t *);
-#endif /* KERNEL_PRIVATE */
+#endif /* BSD_KERNEL_PRIVATE */

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2006 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2012 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -106,7 +106,7 @@ raw_attach(struct socket *so, int proto)
 	if (error)
 		return (error);
 	rp->rcb_socket = so;
-	rp->rcb_proto.sp_family = so->so_proto->pr_domain->dom_family;
+	rp->rcb_proto.sp_family = SOCK_DOM(so);
 	rp->rcb_proto.sp_protocol = proto;
 	lck_mtx_lock(raw_mtx);
 	LIST_INSERT_HEAD(&rawcb_list, rp, list);
@@ -148,12 +148,19 @@ raw_detach(struct rawcb *rp)
 void
 raw_disconnect(struct rawcb *rp)
 {
+	struct socket *so = rp->rcb_socket;
+
 #ifdef notdef
 	if (rp->rcb_faddr)
 		m_freem(dtom(rp->rcb_faddr));
 	rp->rcb_faddr = 0;
 #endif
-	if (rp->rcb_socket->so_state & SS_NOFDREF)
+	/*
+	 * A multipath subflow socket would have its SS_NOFDREF set by default,
+	 * so check for SOF_MP_SUBFLOW socket flag before detaching the PCB;
+	 * when the socket is closed for real, SOF_MP_SUBFLOW would be cleared.
+	 */
+	if (!(so->so_flags & SOF_MP_SUBFLOW) && (so->so_state & SS_NOFDREF))
 		raw_detach(rp);
 }
 

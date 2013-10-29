@@ -99,7 +99,10 @@ struct processor_set {
 	int					pset_runq_bound_count;
 		/* # of threads in runq bound to any processor in pset */
 #endif
-    
+   
+	/* CPUs that have been sent an unacknowledged remote AST for scheduling purposes */
+	uint32_t			pending_AST_cpu_mask;
+
 	struct ipc_port	*	pset_self;		/* port for operations */
 	struct ipc_port *	pset_name_self;	/* port for information */
 
@@ -121,7 +124,7 @@ struct pset_node {
 extern struct pset_node	pset_node0;
 
 extern queue_head_t		tasks, terminated_tasks, threads; /* Terminated tasks are ONLY for stackshot */
-extern int				tasks_count, threads_count;
+extern int				tasks_count, terminated_tasks_count, threads_count;
 decl_lck_mtx_data(extern,tasks_threads_lock)
 
 struct processor_meta {
@@ -237,12 +240,12 @@ MACRO_BEGIN												\
 MACRO_END
 
 
-extern void		processor_bootstrap(void) __attribute__((section("__TEXT, initcode")));
+extern void		processor_bootstrap(void);
 
 extern void		processor_init(
 					processor_t		processor,
 					int				cpu_id,
-					processor_set_t	processor_set) __attribute__((section("__TEXT, initcode")));
+					processor_set_t	processor_set);
 
 extern void		processor_meta_init(
 					processor_t		processor,
@@ -264,7 +267,7 @@ extern processor_set_t	pset_create(
 
 extern void		pset_init(
 					processor_set_t		pset,
-					pset_node_t			node) __attribute__((section("__TEXT, initcode")));
+					pset_node_t			node);
 
 extern kern_return_t	processor_info_count(
 							processor_flavor_t		flavor,

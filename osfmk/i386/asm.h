@@ -376,6 +376,7 @@
 
 #define CCALL2(fn, arg1, arg2)		 	 \
 	mov	arg1, %rdi 			;\
+	mov	arg2, %rsi 			;\
 	CCALL(fn)
 
 #define CCALL3(fn, arg1, arg2, arg3) 		 \

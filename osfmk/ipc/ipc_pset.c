@@ -430,7 +430,7 @@ filt_machport(
 	 * provided, just force a MACH_RCV_TOO_LARGE to detect the
 	 * name of the port and sizeof the waiting message.
 	 */
-	option = kn->kn_sfflags & (MACH_RCV_MSG|MACH_RCV_LARGE|MACH_RCV_TRAILER_MASK);
+	option = kn->kn_sfflags & (MACH_RCV_MSG|MACH_RCV_LARGE|MACH_RCV_LARGE_IDENTITY|MACH_RCV_TRAILER_MASK);
 	if (option & MACH_RCV_MSG) {
 		self->ith_msg_addr = (mach_vm_address_t) kn->kn_ext[0];
 		size = (mach_msg_size_t)kn->kn_ext[1];
@@ -454,7 +454,7 @@ filt_machport(
 	self->ith_receiver_name = MACH_PORT_NULL;
 	self->ith_continuation = NULL;
 	option |= MACH_RCV_TIMEOUT; // never wait
-	assert((self->ith_state = MACH_RCV_IN_PROGRESS) == MACH_RCV_IN_PROGRESS);
+	self->ith_state = MACH_RCV_IN_PROGRESS;
 
 	wresult = ipc_mqueue_receive_on_thread(
 			&pset->ips_messages,
@@ -493,10 +493,20 @@ filt_machport(
 	 * the results in the fflags field.
 	 */
 	assert(option & MACH_RCV_MSG);
-        kn->kn_data = MACH_PORT_NULL;
 	kn->kn_ext[1] = self->ith_msize;
+	kn->kn_data = MACH_PORT_NULL;
 	kn->kn_fflags = mach_msg_receive_results();
 	/* kmsg and pset reference consumed */
+
+	/*
+	 * if the user asked for the identity of ports containing a
+	 * a too-large message, return it in the data field (as we
+	 * do for messages we didn't try to receive).
+	 */
+        if ((kn->kn_fflags == MACH_RCV_TOO_LARGE) &&
+	    (option & MACH_RCV_LARGE_IDENTITY))
+	    kn->kn_data = self->ith_receiver_name;
+
 	return 1;
 }
 
@@ -507,6 +517,8 @@ filt_machporttouch(struct knote *kn, struct kevent64_s *kev, long type)
         case EVENT_REGISTER:
                 kn->kn_sfflags = kev->fflags;
                 kn->kn_sdata = kev->data;
+		kn->kn_ext[0] = kev->ext[0];
+		kn->kn_ext[1] = kev->ext[1];
                 break;
         case EVENT_PROCESS:
                 *kev = kn->kn_kevent;
@@ -544,5 +556,5 @@ filt_machportpeek(struct knote *kn)
         ipc_pset_t              pset = kn->kn_ptr.p_pset;
 	ipc_mqueue_t		set_mq = &pset->ips_messages;
 
-	return (ipc_mqueue_peek(set_mq));
+	return (ipc_mqueue_set_peek(set_mq));
 }

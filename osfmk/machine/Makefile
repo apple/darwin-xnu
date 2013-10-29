@@ -14,8 +14,9 @@ DATAFILES = \
 	io_map_entries.h \
 	lock.h	\
 	locks.h	\
-	machine_cpuid.h \
+	machine_cpuid.h 	\
 	machine_routines.h	\
+	machine_kpc.h 		\
 	pal_routines.h		\
 	pal_hibernate.h		\
 	simple_lock.h

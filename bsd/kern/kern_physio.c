@@ -90,11 +90,7 @@ physio( void (*f_strategy)(buf_t),
 	struct proc *p = current_proc();
 	int error, i, buf_allocated, todo, iosize;
 	int orig_bflags = 0;
-#if LP64KERN
 	int64_t done;
-#else
-	int done;
-#endif
 
 	error = 0;
 	flags &= B_READ | B_WRITE;

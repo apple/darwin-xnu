@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2012 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -31,6 +31,7 @@
 #define _OS_OSUNSERIALIZE_H
 
 #include <sys/appleapiopts.h>
+#include <sys/types.h>
 
 class OSObject;
 class OSString;
@@ -63,8 +64,35 @@ class OSString;
  * @discussion
  * <b>Not safe</b> to call in a primary interrupt handler.
  */
-extern OSObject * OSUnserializeXML(
+extern "C++" OSObject * OSUnserializeXML(
     const char  * buffer,
+    OSString   ** errorString = 0);
+
+/*!
+ * @function OSUnserializeXML
+ *
+ * @abstract
+ * Recreates an OSContainer object
+ * from its previously serialized OSContainer class instance data.
+ *
+ * @param buffer      A buffer containing nul-terminated XML data
+ *                    representing the object to be recreated.
+ * @param bufferSize  The size of the block of memory. The function
+ *                    never scans beyond the first bufferSize bytes.
+ * @param errorString If non-</code>NULL</code>, and the XML parser
+ *                    finds an error in <code>buffer</code>,
+ *                    <code>*errorString</code> indicates the line number
+ *                    and type of error encountered.
+ *
+ * @result
+ * The recreated object, or <code>NULL</code> on failure.
+ *
+ * @discussion
+ * <b>Not safe</b> to call in a primary interrupt handler.
+ */
+extern "C++" OSObject * OSUnserializeXML(
+    const char  * buffer,
+    size_t        bufferSize,
     OSString   ** errorString = 0);
 
 #ifdef __APPLE_API_OBSOLETE

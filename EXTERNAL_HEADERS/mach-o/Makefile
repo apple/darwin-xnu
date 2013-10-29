@@ -7,8 +7,6 @@ export MakeInc_dir=${SRCROOT}/makedefs/MakeInc.dir
 include $(MakeInc_cmd)
 include $(MakeInc_def)
 
-INSTINC_SUBDIRS =
-
 EXPORT_FILES = \
 	fat.h		\
 	loader.h	\

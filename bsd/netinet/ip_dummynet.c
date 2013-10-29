@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2012 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2013 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -623,7 +623,8 @@ heap_extract(struct dn_heap *h, void *obj)
     int child, father, maxelt = h->elements - 1 ;
 
     if (maxelt < 0) {
-	printf("dummynet: warning, extract from empty heap 0x%p\n", h);
+	printf("dummynet: warning, extract from empty heap 0x%llx\n",
+	    (uint64_t)VM_KERNEL_ADDRPERM(h));
 	return ;
     }
     father = 0 ; /* default: move up smallest child */
@@ -698,7 +699,8 @@ dn_tag_get(struct mbuf *m)
     if (!(mtag != NULL &&
           mtag->m_tag_id == KERNEL_MODULE_TAG_ID &&
           mtag->m_tag_type == KERNEL_TAG_TYPE_DUMMYNET))
-	panic("packet on dummynet queue w/o dummynet tag: %p", m);
+	panic("packet on dummynet queue w/o dummynet tag: 0x%llx",
+	    (uint64_t)VM_KERNEL_ADDRPERM(m));
 
     return (struct dn_pkt_tag *)(mtag+1);
 }
@@ -1104,20 +1106,22 @@ dummynet_send(struct mbuf *m)
 		n = m->m_nextpkt;
 		m->m_nextpkt = NULL;
 		pkt = dn_tag_get(m);
-		
-		DPRINTF(("dummynet_send m: %p dn_dir: %d dn_flags: 0x%x\n",
-				m, pkt->dn_dir, pkt->dn_flags));
-		
+
+		DPRINTF(("dummynet_send m: 0x%llx dn_dir: %d dn_flags: 0x%x\n",
+		    (uint64_t)VM_KERNEL_ADDRPERM(m), pkt->dn_dir,
+		    pkt->dn_flags));
+
 	switch (pkt->dn_dir) {
 		case DN_TO_IP_OUT: {
-			struct route tmp_rt = pkt->dn_ro;
+			struct route tmp_rt;
+
+			/* route is already in the packet's dn_ro */
+			bzero(&tmp_rt, sizeof (tmp_rt));
+
 			/* Force IP_RAWOUTPUT as the IP header is fully formed */
 			pkt->dn_flags |= IP_RAWOUTPUT | IP_FORWARDING;
 			(void)ip_output(m, NULL, &tmp_rt, pkt->dn_flags, NULL, NULL);
-			if (tmp_rt.ro_rt) {
-				rtfree(tmp_rt.ro_rt);
-				tmp_rt.ro_rt = NULL;
-			}
+			ROUTE_RELEASE(&tmp_rt);
 			break ;
 		}
 		case DN_TO_IP_IN :
@@ -1125,14 +1129,8 @@ dummynet_send(struct mbuf *m)
 			break ;
 #ifdef INET6
 		case DN_TO_IP6_OUT: {
-			struct route_in6 ro6;
-
-			ro6 = pkt->dn_ro6;
-
-			ip6_output(m, NULL, &ro6, IPV6_FORWARDING, NULL, NULL, NULL);
-
-			if (ro6.ro_rt)
-				rtfree(ro6.ro_rt);	
+			/* routes already in the packet's dn_{ro6,pmtu} */
+			ip6_output(m, NULL, NULL, IPV6_FORWARDING, NULL, NULL, NULL);
 			break;
 		}
 		case DN_TO_IP6_IN:
@@ -1167,7 +1165,7 @@ if_tx_rdy(struct ifnet *ifp)
 			break ;
     if (p == NULL) {
 	char buf[32];
-	snprintf(buf, sizeof(buf), "%s%d",ifp->if_name, ifp->if_unit);
+	snprintf(buf, sizeof(buf), "%s", if_name(ifp));
 	for (i = 0; i < HASHSIZE; i++)
 		SLIST_FOREACH(p, &pipehash[i], next)
 	    if (!strcmp(p->if_name, buf) ) {
@@ -1177,8 +1175,8 @@ if_tx_rdy(struct ifnet *ifp)
 	    }
     }
     if (p != NULL) {
-	DPRINTF(("dummynet: ++ tx rdy from %s%d - qlen %d\n", ifp->if_name,
-		ifp->if_unit, IFCQ_LEN(&ifp->if_snd)));
+	DPRINTF(("dummynet: ++ tx rdy from %s - qlen %d\n", if_name(ifp),
+		IFCQ_LEN(&ifp->if_snd)));
 	p->numbytes = 0 ; /* mark ready for I/O */
 	ready_event_wfq(p, &head, &tail);
     }
@@ -1532,12 +1530,12 @@ dummynet_io(struct mbuf *m, int pipe_nr, int dir, struct ip_fw_args *fwa, int cl
     struct dn_pipe *pipe ;
     u_int64_t len = m->m_pkthdr.len ;
     struct dn_flow_queue *q = NULL ;
-    int is_pipe;
+    int is_pipe = 0;
     struct timespec ts;
     struct timeval	tv;
-    
-    DPRINTF(("dummynet_io m: %p pipe: %d dir: %d client: %d\n",
-    		m, pipe_nr, dir, client));
+
+    DPRINTF(("dummynet_io m: 0x%llx pipe: %d dir: %d client: %d\n",
+        (uint64_t)VM_KERNEL_ADDRPERM(m), pipe_nr, dir, client));
 
 #if IPFIREWALL
 #if IPFW2
@@ -1646,9 +1644,7 @@ dummynet_io(struct mbuf *m, int pipe_nr, int dir, struct ip_fw_args *fwa, int cl
 		 * a pointer into *ro so it needs to be updated.
 		 */
 		if (fwa->fwa_ro) {
-			pkt->dn_ro = *(fwa->fwa_ro);
-			if (fwa->fwa_ro->ro_rt)
-				RT_ADDREF(fwa->fwa_ro->ro_rt);
+			route_copyout(&pkt->dn_ro, fwa->fwa_ro, sizeof (pkt->dn_ro));
 		}
 		if (fwa->fwa_dst) {
 			if (fwa->fwa_dst == (struct sockaddr_in *)&fwa->fwa_ro->ro_dst) /* dst points into ro */
@@ -1658,14 +1654,12 @@ dummynet_io(struct mbuf *m, int pipe_nr, int dir, struct ip_fw_args *fwa, int cl
 		}
     } else if (dir == DN_TO_IP6_OUT) {
 		if (fwa->fwa_ro6) {
-			pkt->dn_ro6 = *(fwa->fwa_ro6);
-			if (fwa->fwa_ro6->ro_rt)
-				RT_ADDREF(fwa->fwa_ro6->ro_rt);
+			route_copyout((struct route *)&pkt->dn_ro6,
+			    (struct route *)fwa->fwa_ro6, sizeof (pkt->dn_ro6));
 		}
 		if (fwa->fwa_ro6_pmtu) {
-			pkt->dn_ro6_pmtu = *(fwa->fwa_ro6_pmtu);
-			if (fwa->fwa_ro6_pmtu->ro_rt)
-				RT_ADDREF(fwa->fwa_ro6_pmtu->ro_rt);
+			route_copyout((struct route *)&pkt->dn_ro6_pmtu,
+			    (struct route *)fwa->fwa_ro6_pmtu, sizeof (pkt->dn_ro6_pmtu));
 		}
 		if (fwa->fwa_dst6) {
 			if (fwa->fwa_dst6 == (struct sockaddr_in6 *)&fwa->fwa_ro6->ro_dst) /* dst points into ro */
@@ -1796,17 +1790,14 @@ dropit:
 }
 
 /*
- * Below, the rtfree is only needed when (pkt->dn_dir == DN_TO_IP_OUT)
+ * Below, the ROUTE_RELEASE is only needed when (pkt->dn_dir == DN_TO_IP_OUT)
  * Doing this would probably save us the initial bzero of dn_pkt
  */
 #define	DN_FREE_PKT(_m) do {					\
 	struct m_tag *tag = m_tag_locate(m, KERNEL_MODULE_TAG_ID, KERNEL_TAG_TYPE_DUMMYNET, NULL); \
 	if (tag) {						\
 		struct dn_pkt_tag *n = (struct dn_pkt_tag *)(tag+1);	\
-		if (n->dn_ro.ro_rt != NULL) {			\
-			rtfree(n->dn_ro.ro_rt);			\
-			n->dn_ro.ro_rt = NULL;			\
-		}						\
+		ROUTE_RELEASE(&n->dn_ro);			\
 	}							\
 	m_tag_delete(_m, tag);					\
 	m_freem(_m);						\
@@ -2365,8 +2356,10 @@ char* dn_copy_set_32(struct dn_flow_set *set, char *bp)
 				printf("dummynet: ++ at %d: wrong slot (have %d, "
 					   "should be %d)\n", copied, q->hash_slot, i);
 			if (q->fs != set)
-				printf("dummynet: ++ at %d: wrong fs ptr (have %p, should be %p)\n",
-					   i, q->fs, set);
+				printf("dummynet: ++ at %d: wrong fs ptr "
+				    "(have 0x%llx, should be 0x%llx)\n", i,
+				    (uint64_t)VM_KERNEL_ADDRPERM(q->fs),
+				    (uint64_t)VM_KERNEL_ADDRPERM(set));
 			copied++ ;
 			cp_queue_to_32_user( q, qp );
 			/* cleanup pointers */
@@ -2395,8 +2388,10 @@ char* dn_copy_set_64(struct dn_flow_set *set, char *bp)
 				printf("dummynet: ++ at %d: wrong slot (have %d, "
 					   "should be %d)\n", copied, q->hash_slot, i);
 			if (q->fs != set)
-				printf("dummynet: ++ at %d: wrong fs ptr (have %p, should be %p)\n",
-					   i, q->fs, set);
+				printf("dummynet: ++ at %d: wrong fs ptr "
+				    "(have 0x%llx, should be 0x%llx)\n", i,
+				    (uint64_t)VM_KERNEL_ADDRPERM(q->fs),
+				    (uint64_t)VM_KERNEL_ADDRPERM(set));
 			copied++ ;
 			//bcopy(q, qp, sizeof(*q));
 			cp_queue_to_64_user( q, qp );

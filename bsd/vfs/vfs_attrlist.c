@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1995-2010 Apple Inc. All rights reserved.
+ * Copyright (c) 1995-2012 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -72,60 +72,125 @@ struct _attrlist_buf {
 
 
 /*
- * Pack (count) bytes from (source) into (buf).
+ * Attempt to pack a fixed width attribute of size (count) bytes from
+ * source to our attrlist buffer.
  */
 static void
 attrlist_pack_fixed(struct _attrlist_buf *ab, void *source, ssize_t count)
 {
+	/* 
+	 * Use ssize_t for pointer math purposes,
+	 * since a ssize_t is a signed long
+	 */
 	ssize_t	fit;
 
-	/* how much room left in the buffer? */
-	fit = imin(count, ab->allocated - (ab->fixedcursor - ab->base));
-	if (fit > 0)
+	/*
+	 * Compute the amount of remaining space in the attrlist buffer
+	 * based on how much we've used for fixed width fields vs. the
+	 * start of the attributes.  
+	 * 
+	 * If we've still got room, then 'fit' will contain the amount of 
+	 * remaining space.  
+	 * 
+	 * Note that this math is safe because, in the event that the 
+	 * fixed-width cursor has moved beyond the end of the buffer,
+	 * then, the second input into lmin() below will be negative, and 
+	 * we will fail the (fit > 0) check below. 
+	 */ 
+	fit = lmin(count, ab->allocated - (ab->fixedcursor - ab->base));
+	if (fit > 0) {
+		/* Copy in as much as we can */
 		bcopy(source, ab->fixedcursor, fit);
+	}
 
-	/* always move in increments of 4 */
+	/* always move in increments of 4, even if we didn't pack an attribute. */
 	ab->fixedcursor += roundup(count, 4);
 }
+
+/*
+ * Attempt to pack one (or two) variable width attributes into the attrlist
+ * buffer.  If we are trying to pack two variable width attributes, they are treated
+ * as a single variable-width attribute from the POV of the system call caller.
+ * 
+ * Recall that a variable-width attribute has two components: the fixed-width 
+ * attribute that tells the caller where to look, and the actual variable width data.
+ */
 static void
-attrlist_pack_variable2(struct _attrlist_buf *ab, const void *source, ssize_t count, const void *ext, ssize_t extcount)
-{
-	struct attrreference	ar;
+attrlist_pack_variable2(struct _attrlist_buf *ab, const void *source, ssize_t count, 
+		const void *ext, ssize_t extcount) {
+
+	/* Use ssize_t's for pointer math ease */
+	struct attrreference ar;
 	ssize_t fit;
 
-	/* pack the reference to the variable object */
+	/*
+	 * Pack the fixed-width component to the variable object. 
+	 * Note that we may be able to pack the fixed width attref, but not
+	 * the variable (if there's no room).
+	 */
 	ar.attr_dataoffset = ab->varcursor - ab->fixedcursor;
 	ar.attr_length = count + extcount;
 	attrlist_pack_fixed(ab, &ar, sizeof(ar));
 
-	/* calculate space and pack the variable object */
-	fit = imin(count, ab->allocated - (ab->varcursor - ab->base));
+	/* 
+	 * Use an lmin() to do a signed comparison. We use a signed comparison
+	 * to detect the 'out of memory' conditions as described above in the
+	 * fixed width check above.
+	 *
+	 * Then pack the first variable attribute as space allows.  Note that we advance
+	 * the variable cursor only if we we had some available space. 
+	 */
+	fit = lmin(count, ab->allocated - (ab->varcursor - ab->base));
 	if (fit > 0) {
-		if (source != NULL)
+		if (source != NULL) {
 			bcopy(source, ab->varcursor, fit);
+		}
 		ab->varcursor += fit;
 	}
-	fit = imin(extcount, ab->allocated - (ab->varcursor - ab->base));
+
+	/* Compute the available space for the second attribute */
+	fit = lmin(extcount, ab->allocated - (ab->varcursor - ab->base));
 	if (fit > 0) {
-		if (ext != NULL)
+		/* Copy in data for the second attribute (if needed) if there is room */
+		if (ext != NULL) {
 			bcopy(ext, ab->varcursor, fit);
+		}
 		ab->varcursor += fit;
 	}
 	/* always move in increments of 4 */
 	ab->varcursor = (char *)roundup((uintptr_t)ab->varcursor, 4);
 }
+
+/* 
+ * Packing a single variable-width attribute is the same as calling the two, but with
+ * an invalid 2nd attribute.
+ */
 static void
 attrlist_pack_variable(struct _attrlist_buf *ab, const void *source, ssize_t count)
 {
 	attrlist_pack_variable2(ab, source, count, NULL, 0);
 }
+
+/*
+ * Attempt to pack a string. This is a special case of a variable width attribute.
+ *
+ * If "source" is NULL, then an empty string ("") will be packed.  If "source" is
+ * not NULL, but "count" is zero, then "source" is assumed to be a NUL-terminated
+ * C-string.  If "source" is not NULL and "count" is not zero, then only the first
+ * "count" bytes of "source" will be copied, and a NUL terminator will be added.
+ *
+ * If the attrlist buffer doesn't have enough room to hold the entire string (including
+ * NUL terminator), then copy as much as will fit.  The attrlist buffer's "varcursor"
+ * will always be updated based on the entire length of the string (including NUL
+ * terminator); this means "varcursor" may end up pointing beyond the end of the
+ * allocated buffer space.
+ */
 static void
 attrlist_pack_string(struct _attrlist_buf *ab, const char *source, ssize_t count)
 {
-	struct attrreference	ar;
+	struct attrreference ar;
 	ssize_t fit, space;
 
-	
 	/*
 	 * Supplied count is character count of string text, excluding trailing nul
 	 * which we always supply here.
@@ -137,25 +202,49 @@ attrlist_pack_string(struct _attrlist_buf *ab, const char *source, ssize_t count
 	}
 
 	/*
-	 * Make the reference and pack it.
-	 * Note that this is entirely independent of how much we get into
-	 * the buffer.
+	 * Construct the fixed-width attribute that refers to this string. 
 	 */
 	ar.attr_dataoffset = ab->varcursor - ab->fixedcursor;
 	ar.attr_length = count + 1;
 	attrlist_pack_fixed(ab, &ar, sizeof(ar));
-	
-	/* calculate how much of the string text we can copy, and do that */
-	space = ab->allocated - (ab->varcursor - ab->base);
-	fit = imin(count, space);
-	if (fit > 0)
-		bcopy(source, ab->varcursor, fit);
-	/* is there room for our trailing nul? */
-	if (space > fit)
-		ab->varcursor[fit] = '\0';
 
-	/* always move in increments of 4 */
-	ab->varcursor += roundup(count + 1, 4);
+	/*
+	 * Now compute how much available memory we have to copy the string text.
+	 *
+	 * space = the number of bytes available in the attribute buffer to hold the
+	 *         string's value.
+	 *
+	 * fit = the number of bytes to copy from the start of the string into the
+	 *       attribute buffer, NOT including the NUL terminator.  If the attribute
+	 *       buffer is large enough, this will be the string's length; otherwise, it
+	 *       will be equal to "space".
+	 */
+	space = ab->allocated - (ab->varcursor - ab->base);
+	fit = lmin(count, space);
+	if (space > 0) {
+		/* 
+		 * If there is space remaining, copy data in, and 
+		 * accommodate the trailing NUL terminator.
+		 *
+		 * NOTE: if "space" is too small to hold the string and its NUL
+		 * terminator (space < fit + 1), then the string value in the attribute
+		 * buffer will NOT be NUL terminated!
+		 *
+		 * NOTE 2: bcopy() will do nothing if the length ("fit") is zero.
+		 * Therefore, we don't bother checking for that here.
+		 */
+		bcopy(source, ab->varcursor, fit);
+		/* is there room for our trailing nul? */
+		if (space > fit) {
+			ab->varcursor[fit++] = '\0';
+			/* 'fit' now the number of bytes AFTER adding in the NUL */
+		}
+	}
+	/* 
+	 * always move in increments of 4 (including the trailing NUL)
+	 */
+	ab->varcursor += roundup((count+1), 4);
+
 }
 
 #define ATTR_PACK4(AB, V)                                                 \
@@ -866,7 +955,7 @@ getvolattrlist(vnode_t vp, struct getattrlist_args *uap, struct attrlist *alp,
 	 * Note that since we won't ever copy out more than the caller requested,
 	 * we never need to allocate more than they offer.
 	 */
-	ab.allocated = imin(uap->bufferSize, fixedsize + varsize);
+	ab.allocated = ulmin(uap->bufferSize, fixedsize + varsize);
 	if (ab.allocated > ATTR_MAX_BUFFER) {
 		error = ENOMEM;
 		VFS_DEBUG(ctx, vp, "ATTRLIST - ERROR: buffer size too large (%d limit %d)", ab.allocated, ATTR_MAX_BUFFER);
@@ -1193,7 +1282,8 @@ out:
  */
 
 static int
-getattrlist_internal(vnode_t vp, struct getattrlist_args *uap, proc_t p, vfs_context_t ctx)
+getattrlist_internal(vnode_t vp, struct getattrlist_args *uap, 
+		__unused struct componentname *getattr_name, proc_t p, vfs_context_t ctx)
 {
 	struct attrlist	al;
 	struct vnode_attr va;
@@ -1413,10 +1503,12 @@ getattrlist_internal(vnode_t vp, struct getattrlist_args *uap, proc_t p, vfs_con
 			va.va_name[MAXPATHLEN-1] = '\0';	/* Ensure nul-termination */
 			cnp = va.va_name;
 			cnl = strlen(cnp);
-		} else {
+		} 
+		else {
+			/* Filesystem did not support getting the name */
 			if (vnode_isvroot(vp)) {
 				if (vp->v_mount->mnt_vfsstat.f_mntonname[1] == 0x00 &&
-				    vp->v_mount->mnt_vfsstat.f_mntonname[0] == '/') {
+						vp->v_mount->mnt_vfsstat.f_mntonname[0] == '/') {
 					/* special case for boot volume.  Use root name when it's
 					 * available (which is the volume name) or just the mount on
 					 * name of "/".  we must do this for binary compatibility with
@@ -1433,7 +1525,8 @@ getattrlist_internal(vnode_t vp, struct getattrlist_args *uap, proc_t p, vfs_con
 				else {
 					getattrlist_findnamecomp(vp->v_mount->mnt_vfsstat.f_mntonname, &cnp, &cnl);
 				}
-			} else {
+			} 
+			else {
 				cnp = vname = vnode_getname(vp);
 				cnl = 0;
 				if (cnp != NULL) {
@@ -1471,10 +1564,21 @@ getattrlist_internal(vnode_t vp, struct getattrlist_args *uap, proc_t p, vfs_con
 	 * user-space this is OK.
 	 */
 	if ((al.commonattr & ATTR_CMN_EXTENDED_SECURITY) &&
-	    VATTR_IS_SUPPORTED(&va, va_acl) &&
-	    (va.va_acl != NULL))
-		varsize += roundup(KAUTH_FILESEC_SIZE(va.va_acl->acl_entrycount), 4);
-	
+			VATTR_IS_SUPPORTED(&va, va_acl) &&
+			(va.va_acl != NULL)) {
+
+		/* 
+		 * Since we have a kauth_acl_t (not a kauth_filesec_t), we have to check against
+		 * KAUTH_FILESEC_NOACL ourselves
+		 */ 
+		if (va.va_acl->acl_entrycount == KAUTH_FILESEC_NOACL) {
+			varsize += roundup((KAUTH_FILESEC_SIZE(0)), 4);
+		}
+		else {
+			varsize += roundup ((KAUTH_FILESEC_SIZE(va.va_acl->acl_entrycount)), 4);
+		}
+	}
+
 	/*
 	 * Allocate a target buffer for attribute results.
 	 *
@@ -1483,7 +1587,8 @@ getattrlist_internal(vnode_t vp, struct getattrlist_args *uap, proc_t p, vfs_con
 	 * don't result in a panic if the caller's buffer is too small..
 	 */
 	ab.allocated = fixedsize + varsize;
-	if (ab.allocated > ATTR_MAX_BUFFER) {
+	/* Cast 'allocated' to an unsigned to verify allocation size */
+	if ( ((size_t)ab.allocated) > ATTR_MAX_BUFFER) {
 		error = ENOMEM;
 		VFS_DEBUG(ctx, vp, "ATTRLIST - ERROR: buffer size too large (%d limit %d)", ab.allocated, ATTR_MAX_BUFFER);
 		goto out;
@@ -2008,7 +2113,8 @@ fgetattrlist(proc_t p, struct fgetattrlist_args *uap, __unused int32_t *retval)
 	ap.bufferSize = uap->bufferSize;
 	ap.options = uap->options;
 
-	error = getattrlist_internal(vp, &ap, p, ctx);
+	/* Default to using the vnode's name. */
+	error = getattrlist_internal(vp, &ap, NULL, p, ctx);
 
 	file_drop(uap->fd);
 	if (vp)
@@ -2037,15 +2143,20 @@ getattrlist(proc_t p, struct getattrlist_args *uap, __unused int32_t *retval)
 		nameiflags |= FOLLOW;
 	NDINIT(&nd, LOOKUP, OP_GETATTR, nameiflags, UIO_USERSPACE, uap->path, ctx);
 
-	if ((error = namei(&nd)) != 0)
-		goto out;
-	vp = nd.ni_vp;
-	nameidone(&nd);
+	if ((error = namei(&nd)) != 0) {	
+		/* vp is still uninitialized */
+		return error;
+	}
 
-	error = getattrlist_internal(vp, uap, p, ctx);
-out:
+	vp = nd.ni_vp;
+	/* Pass along our componentname to getattrlist_internal */
+	error = getattrlist_internal(vp, uap, &(nd.ni_cnd), p, ctx);
+	
+	/* Retain the namei reference until the getattrlist completes. */
+	nameidone(&nd);
 	if (vp)
 		vnode_put(vp);
+
 	return error;
 }
 
@@ -2246,6 +2357,12 @@ setattrlist_internal(vnode_t vp, struct setattrlist_args *uap, proc_t p, vfs_con
 		 */
 		cp = cursor;
 		ATTR_UNPACK(ar);
+		if (ar.attr_dataoffset < 0) {
+			VFS_DEBUG(ctx, vp, "ATTRLIST - ERROR: bad offset supplied", ar.attr_dataoffset);
+			error = EINVAL;
+			goto out;
+		}
+
 		cp += ar.attr_dataoffset;
 		rfsec = (kauth_filesec_t)cp;
 		if (((((char *)rfsec) + KAUTH_FILESEC_SIZE(0)) > bufend) ||			/* no space for acl */
@@ -2291,7 +2408,14 @@ setattrlist_internal(vnode_t vp, struct setattrlist_args *uap, proc_t p, vfs_con
 	if (al.volattr & ATTR_VOL_INFO) {
 		if (al.volattr & ATTR_VOL_NAME) {
 			volname = cursor;
-			ATTR_UNPACK(ar);
+			ATTR_UNPACK(ar);	
+			/* attr_length cannot be 0! */
+			if ((ar.attr_dataoffset < 0) || (ar.attr_length == 0)) {
+				VFS_DEBUG(ctx, vp, "ATTRLIST - ERROR: bad offset supplied (2) ", ar.attr_dataoffset);
+				error = EINVAL;
+				goto out;
+			}
+
 			volname += ar.attr_dataoffset;
 			if ((volname + ar.attr_length) > bufend) {
 				error = EINVAL;

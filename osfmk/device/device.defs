@@ -68,6 +68,10 @@ subsystem
 #endif	/* KERNEL_SERVER */
 		       iokit 2800;
 
+#if IOKITSIMD || KERNEL_SERVER
+#define IOKIT_ALL_IPC 1
+#endif
+
 #include <mach/std_types.defs>
 #include <mach/mach_types.defs>
 #include <mach/clock_types.defs>
@@ -233,7 +237,7 @@ routine io_connect_get_service(
 	out service		: io_object_t
 	);
 
-#if  KERNEL_SERVER || __ILP32__
+#if  IOKIT_ALL_IPC || __ILP32__
 routine io_connect_set_notification_port(
 	    connection		: io_connect_t;
 	in  notification_type	: uint32_t;
@@ -245,7 +249,7 @@ routine io_connect_map_memory(
 	    connection		: io_connect_t;
 	in  memory_type		: uint32_t;
 	in  into_task		: task_t;
-#if  KERNEL_SERVER
+#if  IOKIT_ALL_IPC
 	inout address		: uint32_t;
 	inout size		: uint32_t;
 #else
@@ -270,7 +274,7 @@ routine io_connect_set_properties(
         out result		: kern_return_t
 	);
 
-#if  KERNEL_SERVER || (__ILP32__ && !MAP_32B_METHODS)
+#if  IOKIT_ALL_IPC || (__ILP32__ && !MAP_32B_METHODS)
 routine io_connect_method_scalarI_scalarO(
 	    connection		: io_connect_t;
 	in  selector		: uint32_t;
@@ -416,7 +420,7 @@ routine io_service_match_property_table(
 	out matches		: boolean_t
 	);
 
-#if  KERNEL_SERVER || (__ILP32__ && !MAP_32B_ASYNC_METHODS)
+#if  IOKIT_ALL_IPC || (__ILP32__ && !MAP_32B_ASYNC_METHODS)
 routine io_async_method_scalarI_scalarO(
 	    connection		: io_connect_t;
 	in  wake_port		: mach_port_make_send_t;
@@ -456,7 +460,7 @@ skip;
 skip;
 #endif
 
-#if KERNEL_SERVER || __ILP32__
+#if IOKIT_ALL_IPC || __ILP32__
 routine io_service_add_notification(
 	    master_port		: mach_port_t;
 	in  notification_type	: io_name_t;
@@ -489,12 +493,12 @@ routine io_connect_get_notification_semaphore(
 	out semaphore		: semaphore_t
 	);
 
-#if KERNEL_SERVER || __ILP32__
+#if IOKIT_ALL_IPC || __ILP32__
 routine io_connect_unmap_memory(
 	    connection		: io_connect_t;
 	in  memory_type		: uint32_t;
 	in  into_task		: task_t;
-#if KERNEL_SERVER
+#if IOKIT_ALL_IPC
 	in  address		: uint32_t
 #else
 	in  address		: vm_address_t
@@ -539,7 +543,7 @@ routine io_service_match_property_table_ool(
 	out matches		: boolean_t
 	);
 
-#if KERNEL_SERVER || __ILP32__
+#if IOKIT_ALL_IPC || __ILP32__
 routine io_service_add_notification_ool(
 	    master_port		: mach_port_t;
 	in  notification_type	: io_name_t;
@@ -627,9 +631,9 @@ routine io_connect_async_method(
 	);
 
 
-#if KERNEL_SERVER || __LP64__
+#if IOKIT_ALL_IPC || __LP64__
 
-#if KERNEL_SERVER
+#if IOKIT_ALL_IPC
 #define FUNC_NAME(name) name ## _64
 #else
 #define FUNC_NAME(name) name
@@ -676,7 +680,7 @@ routine FUNC_NAME(io_service_add_notification_ool)(
     skip;
     skip;
 
-#endif /* KERNEL_SERVER || __LP64__ */
+#endif /* IOKIT_ALL_IPC || __LP64__ */
 
 routine io_registry_entry_get_registry_entry_id(
 	    registry_entry	: io_object_t;

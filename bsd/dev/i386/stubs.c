@@ -120,17 +120,9 @@ copywithin(void *src, void *dst, size_t count)
 void *
 get_bsduthreadarg(thread_t th)
 {
-        void	*arg_ptr;
-struct uthread *ut;
-  
+	struct uthread  *ut;
 	ut = get_bsdthread_info(th);
-
-	if (ml_thread_is64bit(th) == TRUE)
-	        arg_ptr = (void *)saved_state64(find_user_regs(th));
-	else
-		arg_ptr = (void *)(ut->uu_arg);
-
-	return(arg_ptr);
+	return ut->uu_ap;
 }
 
 int *

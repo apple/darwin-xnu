@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2009 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2013 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -30,14 +30,17 @@
 
 #include <sys/types.h>
 #include <sys/appleapiopts.h>
+#include <hfs/hfs_unistr.h>
 
 /*
- * hfs_format.c
+ * hfs_format.h
  *
  * This file describes the on-disk format for HFS and HFS Plus volumes.
  * The HFS Plus volume format is desciibed in detail in Apple Technote 1150.
  *
  * http://developer.apple.com/technotes/tn/tn1150.html
+ *
+ * Note: Starting 10.9, definition of struct HFSUniStr255 exists in hfs_unitstr.h
  *
  */
 
@@ -131,17 +134,6 @@ enum {
       kSymLinkCreator   = 0x72686170  /* 'rhap' */
 };
 
-
-#ifndef _HFSUNISTR255_DEFINED_
-#define _HFSUNISTR255_DEFINED_
-/* Unicode strings are used for HFS Plus file and folder names */
-struct HFSUniStr255 {
-	u_int16_t	length;		/* number of unicode characters */
-	u_int16_t	unicode[255];	/* unicode characters */
-} __attribute__((aligned(2), packed));
-typedef struct HFSUniStr255 HFSUniStr255;
-typedef const HFSUniStr255 *ConstHFSUniStr255Param;
-#endif /* _HFSUNISTR255_DEFINED_ */
 
 enum {
 	kHFSMaxVolumeNameChars		= 27,
@@ -245,7 +237,7 @@ struct FndrExtendedFileInfo {
 	u_int32_t date_added;
 	u_int16_t extended_flags;
 	u_int16_t reserved2;
-	u_int32_t reserved3;	
+	u_int32_t write_gen_counter;
 } __attribute__((aligned(2), packed));
 
 /* HFS Plus Fork data info - 80 bytes */
@@ -477,9 +469,9 @@ typedef struct HFSPlusCatalogThread HFSPlusCatalogThread;
 
 #ifdef __APPLE_API_UNSTABLE
 /*
-  	These are the types of records in the attribute B-tree.  The values were
-  	chosen so that they wouldn't conflict with the catalog record types.
-*/
+ * 	These are the types of records in the attribute B-tree.  The values were
+ * 	chosen so that they wouldn't conflict with the catalog record types.
+ */
 enum {
 	kHFSPlusAttrInlineData	= 0x10,   /* attributes whose data fits in a b-tree node */
 	kHFSPlusAttrForkData	= 0x20,   /* extent based attributes (data lives in extents) */
@@ -488,11 +480,11 @@ enum {
 
 
 /*
-  	HFSPlusAttrForkData
-  	For larger attributes, whose value is stored in allocation blocks.
-  	If the attribute has more than 8 extents, there will be additional
-  	records (of type HFSPlusAttrExtents) for this attribute.
-*/
+ *  	HFSPlusAttrForkData
+ * 	For larger attributes, whose value is stored in allocation blocks.
+ * 	If the attribute has more than 8 extents, there will be additional
+ * 	records (of type HFSPlusAttrExtents) for this attribute.
+ */
 struct HFSPlusAttrForkData {
 	u_int32_t 	recordType;		/* == kHFSPlusAttrForkData*/
 	u_int32_t 	reserved;
@@ -501,10 +493,10 @@ struct HFSPlusAttrForkData {
 typedef struct HFSPlusAttrForkData HFSPlusAttrForkData;
 
 /*
-  	HFSPlusAttrExtents
-  	This record contains information about overflow extents for large,
-  	fragmented attributes.
-*/
+ * 	HFSPlusAttrExtents
+ * 	This record contains information about overflow extents for large,
+ * 	fragmented attributes.
+ */
 struct HFSPlusAttrExtents {
 	u_int32_t 		recordType;	/* == kHFSPlusAttrExtents*/
 	u_int32_t 		reserved;
@@ -537,7 +529,7 @@ struct HFSPlusAttrInlineData {
 typedef struct HFSPlusAttrInlineData HFSPlusAttrInlineData;
 
 
-/*	A generic Attribute Record*/
+/* A generic Attribute Record */
 union HFSPlusAttrRecord {
 	u_int32_t 		recordType;
 	HFSPlusAttrInlineData 	inlineData;   /* NOT USED */
@@ -597,18 +589,23 @@ enum {
 	kHFSUnusedNodeFixBit = 31,				/* Unused nodes in the Catalog B-tree have been zero-filled.  See Radar #6947811. */
 	kHFSContentProtectionBit = 30,			/* Volume has per-file content protection */
 
-	kHFSVolumeHardwareLockMask	= 1 << kHFSVolumeHardwareLockBit,
-	kHFSVolumeUnmountedMask		= 1 << kHFSVolumeUnmountedBit,
-	kHFSVolumeSparedBlocksMask	= 1 << kHFSVolumeSparedBlocksBit,
-	kHFSVolumeNoCacheRequiredMask = 1 << kHFSVolumeNoCacheRequiredBit,
-	kHFSBootVolumeInconsistentMask = 1 << kHFSBootVolumeInconsistentBit,
-	kHFSCatalogNodeIDsReusedMask = 1 << kHFSCatalogNodeIDsReusedBit,
-	kHFSVolumeJournaledMask	= 1 << kHFSVolumeJournaledBit,
-	kHFSVolumeInconsistentMask = 1 << kHFSVolumeInconsistentBit,
-	kHFSVolumeSoftwareLockMask	= 1 << kHFSVolumeSoftwareLockBit,
-	kHFSUnusedNodeFixMask = 1 << kHFSUnusedNodeFixBit,
-	kHFSContentProtectionMask = 1 << kHFSContentProtectionBit,
-	kHFSMDBAttributesMask		= 0x8380
+	/***  Keep these in sync with the bits above ! ****/
+	kHFSVolumeHardwareLockMask		= 0x00000080,
+	kHFSVolumeUnmountedMask			= 0x00000100,
+	kHFSVolumeSparedBlocksMask		= 0x00000200,
+	kHFSVolumeNoCacheRequiredMask 	= 0x00000400,
+	kHFSBootVolumeInconsistentMask	= 0x00000800,
+	kHFSCatalogNodeIDsReusedMask 	= 0x00001000,
+	kHFSVolumeJournaledMask			= 0x00002000,
+	kHFSVolumeInconsistentMask 		= 0x00004000,
+	kHFSVolumeSoftwareLockMask		= 0x00008000,
+	
+	/* Bits 16-31 are allocated from high to low */
+
+	kHFSContentProtectionMask 		= 0x40000000,
+	kHFSUnusedNodeFixMask 			= 0x80000000,
+	
+	kHFSMDBAttributesMask			= 0x8380
 };
 
 enum {

@@ -417,7 +417,7 @@ int content_protection_test(void * argp)
 		goto end;
 	}
 
-	fd = open(filepath, O_CREAT | O_EXCL | O_RDWR | O_CLOEXEC);
+	fd = open(filepath, O_CREAT | O_EXCL | O_RDWR | O_CLOEXEC, 0777);
 
 	if (fd == -1)
 	{
@@ -446,10 +446,34 @@ int content_protection_test(void * argp)
 		}
 	}
 
-	if (SET_PROT_CLASS(fd, PROTECTION_CLASS_D))
-	{
-		printf("%s, line %d: failed to change protection class from F to D when unlocked, errno = %s.\n",
-		  cpt_fail_header, __LINE__, strerror(errno));
+	/* Query the filesystem for the default CP level (Is it C?) */
+#ifndef F_GETDEFAULTPROTLEVEL
+#define F_GETDEFAULTPROTLEVEL 79
+#endif
+
+	old_prot_class = fcntl(fd, F_GETDEFAULTPROTLEVEL);
+	if (old_prot_class == -1) {
+		printf("%s , line %d: failed to acquire default protection level for filesystem , errno = %s \n", 
+				cpt_fail_header, __LINE__, strerror(errno));
+		goto cleanup_file;
+	}	
+
+	/* XXX: Do we want to do anything with the level? What should it be? */
+
+
+	/* 
+	 * files are allowed to move into F, but not out of it.  They can also only do so 
+	 * when they do not have content.
+	 */
+	close (fd);
+	unlink (filepath);
+
+
+	/* re-create the file */
+	fd = open (filepath, O_CREAT | O_EXCL | O_RDWR | O_CLOEXEC);
+	if (fd == -1) {
+		printf("%s, line %d: failed to create the test file, errno = %s.\n",
+					cpt_fail_header, __LINE__, strerror(errno));
 		goto cleanup_file;
 	}
 
@@ -611,6 +635,13 @@ int content_protection_test(void * argp)
 		goto cleanup_file;
 	}
 
+	if (GET_PROT_CLASS (fd) != PROTECTION_CLASS_B) {
+		printf("%s, line %d: Failed to switch to class B file \n",
+				cpt_fail_header, __LINE__ );
+		goto cleanup_file;
+	}
+	
+
 	/* We should also be able to read/write to the file descriptor while it is open. */
 	current_byte = 0;
 
@@ -675,9 +706,9 @@ int content_protection_test(void * argp)
 		goto remove_dir;
 	}
 
-	if (GET_PROT_CLASS(dir_fd) != PROTECTION_CLASS_D)
+	if ((GET_PROT_CLASS(dir_fd) != PROTECTION_CLASS_D) && (GET_PROT_CLASS(dir_fd) != PROTECTION_CLASS_DIR_NONE))
 	{
-		printf("%s, line %d: newly created directory had a non-D protection class.\n",
+		printf("%s, line %d: newly created directory had a non-D and non-NONE protection class.\n",
 		  cpt_fail_header, __LINE__);
 		goto cleanup_dir;
 	}
@@ -710,8 +741,9 @@ int content_protection_test(void * argp)
 		goto cleanup_dir;
 	}
 
-	for (new_prot_class = PROTECTION_CLASS_A; new_prot_class <= PROTECTION_CLASS_E; new_prot_class++)
+	for (new_prot_class = PROTECTION_CLASS_A; new_prot_class <= PROTECTION_CLASS_D; new_prot_class++)
 	{
+		int getclass_dir;
 		old_prot_class = GET_PROT_CLASS(dir_fd);
 		
 		if (old_prot_class == -1)
@@ -728,7 +760,15 @@ int content_protection_test(void * argp)
 			goto cleanup_dir;
 		}
 
-		fd = open(filepath, O_CREAT | O_EXCL | O_CLOEXEC);
+		getclass_dir = GET_PROT_CLASS(dir_fd);
+		if (getclass_dir != new_prot_class) {
+			printf("%s, line %d: failed to get the new protection class for the directory %d (got %d) \n", 
+					cpt_fail_header, __LINE__, new_prot_class, getclass_dir);
+			goto cleanup_dir;
+
+		}
+
+		fd = open(filepath, O_CREAT | O_EXCL | O_CLOEXEC, 0777);
 
 		if (fd == -1)
 		{
@@ -747,8 +787,9 @@ int content_protection_test(void * argp)
 		}
 		else if (local_result != new_prot_class)
 		{
-			printf("%s, line %d: new file did not inherit the directory's protection class.\n",
-			  cpt_fail_header, __LINE__, strerror(errno));
+
+			printf("%s, line %d: new file (%d) did not inherit the directory's protection class (%d) .\n",
+					cpt_fail_header, __LINE__, local_result, new_prot_class);
 			goto cleanup_file;
 		}
 
@@ -778,7 +819,7 @@ int content_protection_test(void * argp)
 		goto cleanup_dir;
 	}
 
-	fd = open(filepath, O_CREAT | O_EXCL | O_CLOEXEC);
+	fd = open(filepath, O_CREAT | O_EXCL | O_CLOEXEC, 0777);
 
 	if (fd != -1)
 	{
@@ -806,7 +847,7 @@ int content_protection_test(void * argp)
 		goto cleanup_dir;
 	}
 
-	fd = open(filepath, O_CREAT | O_EXCL | O_RDWR | O_CLOEXEC);
+	fd = open(filepath, O_CREAT | O_EXCL | O_RDWR | O_CLOEXEC, 0777);
 
 	if (fd == -1)
 	{
@@ -837,7 +878,7 @@ int content_protection_test(void * argp)
 		goto cleanup_file;
 	}
 
-	for (new_prot_class = PROTECTION_CLASS_A; new_prot_class <= PROTECTION_CLASS_E; new_prot_class++)
+	for (new_prot_class = PROTECTION_CLASS_A; new_prot_class <= PROTECTION_CLASS_D; new_prot_class++)
 	{
 		if (SET_PROT_CLASS(dir_fd, new_prot_class))
 		{

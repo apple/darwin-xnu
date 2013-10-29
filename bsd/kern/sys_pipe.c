@@ -148,7 +148,6 @@
 #include <libkern/OSAtomic.h>
 
 #define f_flag f_fglob->fg_flag
-#define f_type f_fglob->fg_type
 #define f_msgcount f_fglob->fg_msgcount
 #define f_cred f_fglob->fg_cred
 #define f_ops f_fglob->fg_ops
@@ -171,14 +170,16 @@ static int pipe_ioctl(struct fileproc *fp, u_long cmd, caddr_t data,
 		vfs_context_t ctx);
 static int pipe_drain(struct fileproc *fp,vfs_context_t ctx);
 
-struct  fileops pipeops =
-  { pipe_read,
-    pipe_write,
-    pipe_ioctl,
-    pipe_select,
-    pipe_close,
-    pipe_kqfilter,
-    pipe_drain };
+static const struct fileops pipeops = {
+	DTYPE_PIPE,
+	pipe_read,
+	pipe_write,
+	pipe_ioctl,
+	pipe_select,
+	pipe_close,
+	pipe_kqfilter,
+	pipe_drain
+};
 
 static void	filt_pipedetach(struct knote *kn);
 static int	filt_piperead(struct knote *kn, long hint);
@@ -200,7 +201,7 @@ static int nbigpipe;      /* for compatibility sake. no longer used */
 static int amountpipes;   /* total number of pipes in system */
 static int amountpipekva; /* total memory used by pipes */
 
-int maxpipekva = PIPE_KVAMAX;  /* allowing 16MB max. */
+int maxpipekva __attribute__((used)) = PIPE_KVAMAX;  /* allowing 16MB max. */
 
 #if PIPE_SYSCTLS
 SYSCTL_DECL(_kern_ipc);
@@ -432,7 +433,6 @@ pipe(proc_t p, __unused struct pipe_args *uap, int32_t *retval)
 	 * this is what we've always supported..
 	 */
 	rf->f_flag = FREAD;
-	rf->f_type = DTYPE_PIPE;
 	rf->f_data = (caddr_t)rpipe;
 	rf->f_ops = &pipeops;
 
@@ -442,7 +442,6 @@ pipe(proc_t p, __unused struct pipe_args *uap, int32_t *retval)
 	        goto freepipes;
 	}
 	wf->f_flag = FWRITE;
-	wf->f_type = DTYPE_PIPE;
 	wf->f_data = (caddr_t)wpipe;
 	wf->f_ops = &pipeops;
 
@@ -1327,17 +1326,18 @@ pipeclose(struct pipe *cpipe)
 	 * free resources
 	 */
 	if (PIPE_MTX(cpipe) != NULL) {
-	        if (ppipe != NULL) {
-		        /*
+		if (ppipe != NULL) {
+			/*
 			 * since the mutex is shared and the peer is still
 			 * alive, we need to release the mutex, not free it
 			 */
-		        PIPE_UNLOCK(cpipe);
+			PIPE_UNLOCK(cpipe);
 		} else {
-		        /*
+			/*
 			 * peer is gone, so we're the sole party left with
-			 * interest in this mutex... we can just free it
+			 * interest in this mutex... unlock and free it
 			 */
+			PIPE_UNLOCK(cpipe);
 			lck_mtx_free(PIPE_MTX(cpipe), pipe_mtx_grp);
 		}
 	}
@@ -1579,8 +1579,8 @@ fill_pipeinfo(struct pipe * cpipe, struct pipe_info * pinfo)
 	 * XXX (st_dev, st_ino) should be unique.
 	 */
 
-	pinfo->pipe_handle = (uint64_t)((uintptr_t)cpipe);
-	pinfo->pipe_peerhandle = (uint64_t)((uintptr_t)(cpipe->pipe_peer));
+	pinfo->pipe_handle = (uint64_t)VM_KERNEL_ADDRPERM((uintptr_t)cpipe);
+	pinfo->pipe_peerhandle = (uint64_t)VM_KERNEL_ADDRPERM((uintptr_t)(cpipe->pipe_peer));
 	pinfo->pipe_status = cpipe->pipe_state;
 
 	PIPE_UNLOCK(cpipe);

@@ -26,6 +26,8 @@
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 
+#include <sys/errno.h>
+
 #include <mach/mach_types.h>
 #include <mach/vm_attributes.h>
 #include <mach/vm_param.h>
@@ -54,6 +56,12 @@
 
 // #define KDP_VM_READ_DEBUG 1
 // #define KDP_VM_WRITE_DEBUG 1
+
+/*
+ * A (potentially valid) physical address is not a kernel address
+ * i.e. it'a a user address.
+ */
+#define IS_PHYS_ADDR(addr)		IS_USERADDR64_CANONICAL(addr)
 
 boolean_t kdp_read_io;
 boolean_t kdp_trans_off;
@@ -99,7 +107,7 @@ kdp_machine_vm_read( mach_vm_address_t src, caddr_t dst, mach_vm_size_t len)
 	printf("kdp_vm_read: src %llx dst %p len %llx\n", src, (void *)dst, len);
 #endif
 
-	if (kdp_trans_off) {
+	if (kdp_trans_off && IS_PHYS_ADDR(src)) {
 		kdp_readphysmem64_req_t rq;
 		mach_vm_size_t ret;
 
@@ -141,8 +149,10 @@ kdp_machine_vm_read( mach_vm_address_t src, caddr_t dst, mach_vm_size_t len)
 			cnt = resid;
 
 /* Do a physical copy */
-		ml_copy_phys(cur_phys_src, cur_phys_dst, (vm_size_t)cnt);
-
+		if (EFAULT == ml_copy_phys(cur_phys_src,
+					   cur_phys_dst,
+					   (vm_size_t)cnt))
+			goto exit;
 		cur_virt_src += cnt;
 		cur_virt_dst += cnt;
 		resid -= cnt;
@@ -193,7 +203,10 @@ kdp_machine_phys_read(kdp_readphysmem64_req_t *rq, caddr_t dst,
 	/* Do a physical copy; use ml_copy_phys() in the event this is
 	 * a short read with potential side effects.
 	 */
-		ml_copy_phys(cur_phys_src, cur_phys_dst, (vm_size_t)cnt);
+		if (EFAULT == ml_copy_phys(cur_phys_src,
+					   cur_phys_dst,
+					   (vm_size_t)cnt))
+			goto exit;
 		cur_phys_src += cnt;
 		cur_virt_dst += cnt;
 		resid -= cnt;
@@ -239,7 +252,8 @@ kdp_machine_vm_write( caddr_t src, mach_vm_address_t dst, mach_vm_size_t len)
 		if (cnt > resid) 
 			cnt = resid;
 
-		ml_copy_phys(cur_phys_src, cur_phys_dst, cnt);		/* Copy stuff over */
+		if (EFAULT == ml_copy_phys(cur_phys_src, cur_phys_dst, cnt))
+			goto exit;		/* Copy stuff over */
 
 		cur_virt_src +=cnt;
 		cur_virt_dst +=cnt;
@@ -291,7 +305,8 @@ kdp_machine_phys_write(kdp_writephysmem64_req_t *rq, caddr_t src,
 		if (cnt > resid) 
 			cnt = resid;
 
-		ml_copy_phys(cur_phys_src, cur_phys_dst, cnt);		/* Copy stuff over */
+		if (EFAULT == ml_copy_phys(cur_phys_src, cur_phys_dst, cnt))
+			goto exit;		/* Copy stuff over */
 
 		cur_virt_src +=cnt;
 		cur_phys_dst +=cnt;

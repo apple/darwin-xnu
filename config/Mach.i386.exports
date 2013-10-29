@@ -1,4 +1,0 @@
-_host_vmxon
-_host_vmxoff
-_mach_msg_send_from_kernel
-_semaphore_timedwait

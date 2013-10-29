@@ -93,14 +93,14 @@ mca_get_availability(void)
 	uint32_t	model =    cpuid_info()->cpuid_model;
 	uint32_t	stepping = cpuid_info()->cpuid_stepping;
 
-	mca_MCE_present = (features & CPUID_FEATURE_MCE) != 0;
-	mca_MCA_present = (features & CPUID_FEATURE_MCA) != 0;
-	mca_family = family;
-
 	if ((model == CPUID_MODEL_HASWELL     && stepping < 3) ||
 	    (model == CPUID_MODEL_HASWELL_ULT && stepping < 1) ||
 	    (model == CPUID_MODEL_CRYSTALWELL && stepping < 1))
 		panic("Haswell pre-C0 steppings are not supported");
+
+	mca_MCE_present = (features & CPUID_FEATURE_MCE) != 0;
+	mca_MCA_present = (features & CPUID_FEATURE_MCA) != 0;
+	mca_family = family;
 
 	/*
 	 * If MCA, the number of banks etc is reported by the IA32_MCG_CAP MSR.
@@ -268,27 +268,6 @@ static void mca_dump_64bit_state(void)
 	kdb_printf("  IA32_MCG_R13:    0x%016qx\n", rdmsr64(IA32_MCG_R13));
 	kdb_printf("  IA32_MCG_R14:    0x%016qx\n", rdmsr64(IA32_MCG_R14));
 	kdb_printf("  IA32_MCG_R15:    0x%016qx\n", rdmsr64(IA32_MCG_R15));
-}
-
-static uint32_t rdmsr32(uint32_t msr)
-{
-	return (uint32_t) rdmsr64(msr);
-}
-
-static void mca_dump_32bit_state(void)
-{
-	kdb_printf("Extended Machine Check State:\n");
-	kdb_printf("  IA32_MCG_EAX:    0x%08x\n", rdmsr32(IA32_MCG_EAX));
-	kdb_printf("  IA32_MCG_EBX:    0x%08x\n", rdmsr32(IA32_MCG_EBX));
-	kdb_printf("  IA32_MCG_ECX:    0x%08x\n", rdmsr32(IA32_MCG_ECX));
-	kdb_printf("  IA32_MCG_EDX:    0x%08x\n", rdmsr32(IA32_MCG_EDX));
-	kdb_printf("  IA32_MCG_ESI:    0x%08x\n", rdmsr32(IA32_MCG_ESI));
-	kdb_printf("  IA32_MCG_EDI:    0x%08x\n", rdmsr32(IA32_MCG_EDI));
-	kdb_printf("  IA32_MCG_EBP:    0x%08x\n", rdmsr32(IA32_MCG_EBP));
-	kdb_printf("  IA32_MCG_ESP:    0x%08x\n", rdmsr32(IA32_MCG_ESP));
-	kdb_printf("  IA32_MCG_EFLAGS: 0x%08x\n", rdmsr32(IA32_MCG_EFLAGS));
-	kdb_printf("  IA32_MCG_EIP:    0x%08x\n", rdmsr32(IA32_MCG_EIP));
-	kdb_printf("  IA32_MCG_MISC:   0x%08x\n", rdmsr32(IA32_MCG_MISC));
 }
 
 static void
@@ -561,10 +540,7 @@ mca_dump(void)
 	 * Dump any extended machine state:
 	 */
 	if (mca_extended_MSRs_present) {
-		if (cpu_mode_is64bit())
-			mca_dump_64bit_state();
-		else
-			mca_dump_32bit_state();
+		mca_dump_64bit_state();
 	}
 
 	/* Update state to release any other threads. */

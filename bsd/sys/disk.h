@@ -32,6 +32,10 @@
 #include <stdint.h>
 #include <sys/ioctl.h>
 
+#ifdef XNU_KERNEL_PRIVATE
+#include <mach/boolean.h>
+#endif /* XNU_KERNEL_PRIVATE */
+
 /*
  * Definitions
  *
@@ -172,6 +176,21 @@ typedef struct
 #define DKIOCLOCKPHYSICALEXTENTS              _IO('d', 81)
 #define DKIOCGETPHYSICALEXTENT                _IOWR('d', 82, dk_physical_extent_t)
 #define DKIOCUNLOCKPHYSICALEXTENTS            _IO('d', 83)
+#define DKIOCGETMAXPRIORITYCOUNT              _IOR('d', 84, uint32_t)
+
+#ifdef XNU_KERNEL_PRIVATE
+typedef struct
+{
+    boolean_t mi_mdev; /* Is this a memdev device? */
+    boolean_t mi_phys; /* Physical memory? */
+    uint32_t mi_base;  /* Base page number of the device? */
+    uint64_t mi_size;  /* Size of the device (in ) */
+} dk_memdev_info_t;
+
+typedef dk_memdev_info_t memdev_info_t;
+
+#define DKIOCGETMEMDEVINFO                    _IOR('d', 90, dk_memdev_info_t)
+#endif /* XNU_KERNEL_PRIVATE */
 #ifdef PRIVATE
 typedef struct _dk_cs_pin {
 	dk_extent_t	cp_extent;
@@ -181,6 +200,13 @@ typedef struct _dk_cs_pin {
 #define _DKIOCCSPINEXTENT                     _IOW('d', 199, _dk_cs_pin_t)
 #define _DKIOCCSUNPINEXTENT                   _IOW('d', 200, _dk_cs_pin_t)
 #define _DKIOCGETMIGRATIONUNITBYTESIZE        _IOR('d', 201, uint32_t)
+typedef struct _dk_cs_map {
+	dk_extent_t	cm_extent;
+	uint64_t	cm_bytes_mapped;
+} _dk_cs_map_t;
+#define _DKIOCCSMAP                           _IOWR('d', 202, _dk_cs_map_t)
+#define _DKIOCCSSETFSVNODE                    _IOW('d', 203, vnode_t)
+#define _DKIOCCSGETFREEBYTES                  _IOR('d', 204, uint64_t)
 #endif /* PRIVATE */
 #endif /* KERNEL */
 

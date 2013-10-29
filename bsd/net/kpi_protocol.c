@@ -1,8 +1,8 @@
 /*
- * Copyright (c) 2004-2012 Apple Inc. All rights reserved.
+ * Copyright (c) 2004-2013 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
- * 
+ *
  * This file contains Original Code and/or Modifications of Original Code
  * as defined in and that are subject to the Apple Public Source License
  * Version 2.0 (the 'License'). You may not use this file except in
@@ -11,10 +11,10 @@
  * unlawful or unlicensed copies of an Apple operating system, or to
  * circumvent, violate, or enable the circumvention or violation of, any
  * terms of an Apple operating system software license agreement.
- * 
+ *
  * Please obtain a copy of the License at
  * http://www.opensource.apple.com/apsl/ and read it before using this file.
- * 
+ *
  * The Original Code and all software distributed under the License are
  * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
@@ -22,7 +22,7 @@
  * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
  * Please see the License for the specific language governing rights and
  * limitations under the License.
- * 
+ *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 
@@ -71,8 +71,6 @@ struct proto_family_str {
 	proto_unplumb_handler		detach_proto;
 };
 
-#define	PROTO_HASH_SLOTS	5
-
 static struct proto_input_entry *proto_hash[PROTO_HASH_SLOTS];
 static int proto_total_waiting = 0;
 static struct proto_input_entry	*proto_input_add_list = NULL;
@@ -80,22 +78,6 @@ decl_lck_mtx_data(static, proto_family_mutex_data);
 static lck_mtx_t *proto_family_mutex = &proto_family_mutex_data;
 static TAILQ_HEAD(, proto_family_str) proto_family_head =
     TAILQ_HEAD_INITIALIZER(proto_family_head);
-
-static int
-proto_hash_value(protocol_family_t protocol)
-{
-	switch (protocol) {
-		case PF_INET:
-			return (0);
-		case PF_INET6:
-			return (1);
-		case PF_APPLETALK:
-			return (2);
-		case PF_VLAN:
-			return (3);
-	}
-	return (4);
-}
 
 __private_extern__ void
 proto_kpi_init(void)
@@ -122,11 +104,10 @@ proto_register_input(protocol_family_t protocol, proto_input_handler input,
 {
 	struct proto_input_entry *entry;
 	struct dlil_threading_info *inp = dlil_main_input_thread;
-	struct domain *dp = domains;
-	int do_unlock;
+	struct domain *dp;
+	domain_guard_t guard;
 
 	entry = _MALLOC(sizeof (*entry), M_IFADDR, M_WAITOK);
-
 	if (entry == NULL)
 		return (ENOMEM);
 
@@ -137,11 +118,16 @@ proto_register_input(protocol_family_t protocol, proto_input_handler input,
 	entry->hash = proto_hash_value(protocol);
 	entry->chain = chains;
 
-	do_unlock = domain_proto_mtx_lock();
-	while (dp && (protocol_family_t)dp->dom_family != protocol)
-		dp = dp->dom_next;
+	guard = domain_guard_deploy();
+	TAILQ_FOREACH(dp, &domains, dom_entry) {
+		if (dp->dom_family == (int)protocol)
+			break;
+	}
+	domain_guard_release(guard);
+	if (dp == NULL)
+		return (EINVAL);
+
 	entry->domain = dp;
-	domain_proto_mtx_unlock(do_unlock);
 
 	lck_mtx_lock(&inp->input_lck);
 	entry->next = proto_input_add_list;

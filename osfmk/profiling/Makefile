@@ -10,9 +10,6 @@ include $(MakeInc_def)
 INSTINC_SUBDIRS = \
 	machine
 
-INSTINC_SUBDIRS_I386 = \
-	i386
-
 INSTINC_SUBDIRS_X86_64 = \
 	x86_64
 
@@ -20,20 +17,12 @@ INSTINC_SUBDIRS_X86_64 = \
 EXPINC_SUBDIRS = \
 	machine
 
-EXPINC_SUBDIRS_I386 = \
-	i386
-
 
 EXPINC_SUBDIRS_X86_64 = \
 	x86_64
 
-MIG_DEFS =	\
-
-MIG_HDRS = \
-
 DATAFILES = \
-	profile-internal.h profile-mk.h profile-kgmon.c \
-	${MIG_DEFS}
+	profile-internal.h profile-mk.h profile-kgmon.c
 
 MIGINCLUDES = \
 

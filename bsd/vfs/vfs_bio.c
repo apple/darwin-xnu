@@ -138,8 +138,8 @@ static buf_t	buf_create_shadow_internal(buf_t bp, boolean_t force_copy,
 __private_extern__ int  bdwrite_internal(buf_t, int);
 
 /* zone allocated buffer headers */
-static void	bufzoneinit(void) __attribute__((section("__TEXT, initcode")));
-static void	bcleanbuf_thread_init(void) __attribute__((section("__TEXT, initcode")));
+static void	bufzoneinit(void);
+static void	bcleanbuf_thread_init(void);
 static void	bcleanbuf_thread(void);
 
 static zone_t	buf_hdr_zone;
@@ -461,9 +461,7 @@ bufattr_rawencrypted(bufattr_t bap) {
 
 int
 bufattr_throttled(bufattr_t bap) {
-	if ( (bap->ba_flags & BA_THROTTLED_IO) )
-		return 1;
-	return 0;
+	return (GET_BUFATTR_IO_TIER(bap));
 }
 
 int
@@ -481,16 +479,10 @@ bufattr_meta(bufattr_t bap) {
 }
 
 int
-#if !CONFIG_EMBEDDED
 bufattr_delayidlesleep(bufattr_t bap) 
-#else /* !CONFIG_EMBEDDED */
-bufattr_delayidlesleep(__unused bufattr_t bap) 
-#endif /* !CONFIG_EMBEDDED */
 {
-#if !CONFIG_EMBEDDED
 	if ( (bap->ba_flags & BA_DELAYIDLESLEEP) )
 		return 1;
-#endif /* !CONFIG_EMBEDDED */
 	return 0;
 }
 
@@ -507,6 +499,30 @@ buf_markstatic(buf_t bp __unused) {
 int
 buf_static(buf_t bp) {
     if ( (bp->b_flags & B_STATICCONTENT) )
+        return 1;
+    return 0;
+}
+
+void 
+bufattr_markgreedymode(bufattr_t bap) {
+	SET(bap->ba_flags, BA_GREEDY_MODE);
+}
+
+int
+bufattr_greedymode(bufattr_t bap) {
+    if ( (bap->ba_flags & BA_GREEDY_MODE) )
+        return 1;
+    return 0;
+}
+
+void 
+bufattr_markquickcomplete(bufattr_t bap) {
+	SET(bap->ba_flags, BA_QUICK_COMPLETE);
+}
+
+int
+bufattr_quickcomplete(bufattr_t bap) {
+    if ( (bap->ba_flags & BA_QUICK_COMPLETE) )
         return 1;
     return 0;
 }
@@ -1196,7 +1212,7 @@ buf_strategy(vnode_t devvp, void *ap)
         errno_t error;
 #if CONFIG_DTRACE
 	int dtrace_io_start_flag = 0;	 /* We only want to trip the io:::start
-					  * probe once, with the true phisical
+					  * probe once, with the true physical
 					  * block in place (b_blkno)
 					  */
 
@@ -1314,9 +1330,11 @@ buf_strategy(vnode_t devvp, void *ap)
 	 * means that the I/O is properly set
 	 * up to be a multiple of the page size, or
 	 * we were able to successfully set up the
-	 * phsyical block mapping
+	 * physical block mapping
 	 */
-	return (VOCALL(devvp->v_op, VOFFSET(vnop_strategy), ap));
+	error = VOCALL(devvp->v_op, VOFFSET(vnop_strategy), ap);
+	DTRACE_FSINFO(strategy, vnode_t, vp);
+	return (error);
 }
 
 
@@ -1983,7 +2001,7 @@ bufinit(void)
 
 #if BALANCE_QUEUES
 	{
-	static void bufq_balance_thread_init(void) __attribute__((section("__TEXT, initcode")));
+	static void bufq_balance_thread_init(void);
 	/* create a thread to do dynamic buffer queue balancing */
 	bufq_balance_thread_init();
 	}
@@ -2082,8 +2100,10 @@ bio_doread(vnode_t vp, daddr64_t blkno, int size, kauth_cred_t cred, int async, 
 		trace(TR_BREADMISS, pack(vp, size), blkno);
 
 		/* Pay for the read. */
-		if (p && p->p_stats) 
+		if (p && p->p_stats) { 
 			OSIncrementAtomicLong(&p->p_stats->p_ru.ru_inblock);		/* XXX */
+			OSAddAtomic64(size, &p->p_stats->ri_diskiobytes.ri_bytesread);
+		}
 
 		if (async) {
 		        /*
@@ -2217,9 +2237,11 @@ buf_bwrite(buf_t bp)
 		 */
 		if (wasdelayed)
 			buf_reassign(bp, vp);
-		else
-		if (p && p->p_stats) 
-			OSIncrementAtomicLong(&p->p_stats->p_ru.ru_oublock);	/* XXX */
+		else 
+			if (p && p->p_stats) {
+				OSIncrementAtomicLong(&p->p_stats->p_ru.ru_oublock);	/* XXX */
+				OSAddAtomic64(buf_count(bp), &p->p_stats->ri_diskiobytes.ri_byteswritten);
+			}
 	}
 	trace(TR_BUFWRITE, pack(vp, bp->b_bcount), bp->b_lblkno);
 
@@ -2243,8 +2265,10 @@ buf_bwrite(buf_t bp)
 		if (wasdelayed)
 			buf_reassign(bp, vp);
 		else
-		if (p && p->p_stats) 
-			OSIncrementAtomicLong(&p->p_stats->p_ru.ru_oublock);	/* XXX */
+			if (p && p->p_stats) { 
+				OSIncrementAtomicLong(&p->p_stats->p_ru.ru_oublock);	/* XXX */
+				OSAddAtomic64(buf_count(bp), &p->p_stats->ri_diskiobytes.ri_byteswritten);
+			}
 
 		/* Release the buffer. */
 		// XXXdbg - only if the unused bit is set
@@ -2299,8 +2323,10 @@ bdwrite_internal(buf_t bp, int return_error)
 	 */
 	if (!ISSET(bp->b_flags, B_DELWRI)) {
 		SET(bp->b_flags, B_DELWRI);
-		if (p && p->p_stats) 
+		if (p && p->p_stats) { 
 			OSIncrementAtomicLong(&p->p_stats->p_ru.ru_oublock);	/* XXX */
+			OSAddAtomic64(buf_count(bp), &p->p_stats->ri_diskiobytes.ri_byteswritten);
+		}
 		OSAddAtomicLong(1, &nbdwrite);
 		buf_reassign(bp, vp);
 	}
@@ -2489,10 +2515,9 @@ buf_brelse_shadow(buf_t bp)
 		}
 	}
 	lck_mtx_unlock(buf_mtxp);
-	
-	if (need_wakeup) {
+
+	if (need_wakeup)
 		wakeup(bp_head);
-	}
 
 #ifdef BUF_MAKE_PRIVATE	
 	if (bp == bp_data && data_ref == 0)
@@ -2819,6 +2844,7 @@ incore_locked(vnode_t vp, daddr64_t blkno, struct bufhashhdr *dp)
 	}
 	return (NULL);
 }
+
 
 void
 buf_wait_for_shadow_io(vnode_t vp, daddr64_t blkno)
@@ -3783,13 +3809,12 @@ buf_biowait(buf_t bp)
  * (for swap pager, that puts swap buffers on the free lists (!!!),
  * for the vn device, that puts malloc'd buffers on the free lists!)
  */
-extern struct timeval priority_IO_timestamp_for_root;
-extern int hard_throttle_on_root;
 
 void
 buf_biodone(buf_t bp)
 {
 	mount_t mp;
+	struct bufattr *bap;
 	
 	KERNEL_DEBUG((FSDBG_CODE(DBG_FSRW, 387)) | DBG_FUNC_START,
 		     bp, bp->b_datap, bp->b_flags, 0, 0);
@@ -3800,6 +3825,8 @@ buf_biodone(buf_t bp)
 	if (ISSET(bp->b_flags, B_ERROR)) {
 		fslog_io_error(bp);
 	}
+
+	bap = &bp->b_attr;
 
 	if (bp->b_vp && bp->b_vp->v_mount) {
 		mp = bp->b_vp->v_mount;
@@ -3814,8 +3841,9 @@ buf_biodone(buf_t bp)
 		INCR_PENDING_IO(-(pending_io_t)buf_count(bp), mp->mnt_pending_read_size);
 	}
 
-        if (kdebug_enable) {
-	        int    code = DKIO_DONE;
+	if (kdebug_enable) {
+		int code    = DKIO_DONE;
+		int io_tier = GET_BUFATTR_IO_TIER(bap);
 
 		if (bp->b_flags & B_READ)
 		        code |= DKIO_READ;
@@ -3827,24 +3855,20 @@ buf_biodone(buf_t bp)
 		else if (bp->b_flags & B_PAGEIO)
 		        code |= DKIO_PAGING;
 
-		if (bp->b_flags & B_THROTTLED_IO)
+		if (io_tier != 0)
 			code |= DKIO_THROTTLE;
-		else if (bp->b_flags & B_PASSIVE)
+
+		code |= ((io_tier << DKIO_TIER_SHIFT) & DKIO_TIER_MASK);
+
+		if (bp->b_flags & B_PASSIVE)
 			code |= DKIO_PASSIVE;
 
-		if (bp->b_attr.ba_flags & BA_NOCACHE)
+		if (bap->ba_flags & BA_NOCACHE)
 			code |= DKIO_NOCACHE;
 
 		KERNEL_DEBUG_CONSTANT_IST(KDEBUG_COMMON, FSDBG_CODE(DBG_DKRW, code) | DBG_FUNC_NONE,
-                              bp, (uintptr_t)bp->b_vp,
-				      bp->b_resid, bp->b_error, 0);
+		                          buf_kernel_addrperm_addr(bp), (uintptr_t)VM_KERNEL_ADDRPERM(bp->b_vp), bp->b_resid, bp->b_error, 0);
         }
-	if ((bp->b_vp != NULLVP) &&
-	    ((bp->b_flags & (B_THROTTLED_IO | B_PASSIVE | B_IOSTREAMING | B_PAGEIO | B_READ | B_THROTTLED_IO | B_PASSIVE)) == (B_PAGEIO | B_READ)) &&
-	    (bp->b_vp->v_mount->mnt_kern_flag & MNTK_ROOTDEV)) {
-	        microuptime(&priority_IO_timestamp_for_root);
-	        hard_throttle_on_root = 0;
-	}
 
 	/*
 	 * I/O was done, so don't believe
@@ -3852,13 +3876,11 @@ buf_biodone(buf_t bp)
 	 * and we need to reset the THROTTLED/PASSIVE
 	 * indicators
 	 */
-	CLR(bp->b_flags, (B_WASDIRTY | B_THROTTLED_IO | B_PASSIVE));
-	CLR(bp->b_attr.ba_flags, (BA_META | BA_NOCACHE));
-#if !CONFIG_EMBEDDED
-	CLR(bp->b_attr.ba_flags, (BA_THROTTLED_IO | BA_DELAYIDLESLEEP));
-#else
-	CLR(bp->b_attr.ba_flags, BA_THROTTLED_IO);
-#endif /* !CONFIG_EMBEDDED */
+	CLR(bp->b_flags, (B_WASDIRTY | B_PASSIVE));
+	CLR(bap->ba_flags, (BA_META | BA_NOCACHE | BA_DELAYIDLESLEEP));
+
+	SET_BUFATTR_IO_TIER(bap, 0);
+
 	DTRACE_IO1(done, buf_t, bp);
 
 	if (!ISSET(bp->b_flags, B_READ) && !ISSET(bp->b_flags, B_RAW))
@@ -3932,6 +3954,18 @@ buf_biodone(buf_t bp)
 biodone_done:
 	KERNEL_DEBUG((FSDBG_CODE(DBG_FSRW, 387)) | DBG_FUNC_END,
                  (uintptr_t)bp, (uintptr_t)bp->b_datap, bp->b_flags, 0, 0);
+}
+
+/*
+ * Obfuscate buf pointers.
+ */
+vm_offset_t
+buf_kernel_addrperm_addr(void * addr)
+{
+	if ((vm_offset_t)addr == 0)
+		return 0;
+	else
+		return ((vm_offset_t)addr + buf_kernel_addrperm);
 }
 
 /*

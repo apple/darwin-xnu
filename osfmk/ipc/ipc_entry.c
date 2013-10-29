@@ -329,7 +329,7 @@ ipc_entry_alloc_name(
 		 *      we must restart.
 		 */
                 kern_return_t kr;
-		kr = ipc_entry_grow_table(space, index);
+		kr = ipc_entry_grow_table(space, index + 1);
 		assert(kr != KERN_NO_SPACE);
 		if (kr != KERN_SUCCESS) {
 			/* space is unlocked */

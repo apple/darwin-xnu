@@ -230,6 +230,15 @@ enum {
  */
  #define kIOPMSleepWakeUUIDKey              "SleepWakeUUID"
 
+/* kIOPMBootSessionUUIDKey
+ * Key refers to a CFStringRef that will uniquely identify
+ * a boot cycle.
+ * The key becomes valid at boot time and remains valid 
+ * till shutdown. The property value will remain same across 
+ * sleep/wake/hibernate cycle.
+ */
+#define kIOPMBootSessionUUIDKey             "BootSessionUUID"
+
 /* kIOPMDeepSleepEnabledKey
  * Indicates the Deep Sleep enable state.
  * It has a boolean value.
@@ -328,7 +337,13 @@ enum {
     /*! kIOPMDriverAssertionMagicPacketWakeEnabledBit
      * When set, driver is informing PM that magic packet wake is enabled.
      */
-    kIOPMDriverAssertionMagicPacketWakeEnabledBit   = 0x100
+    kIOPMDriverAssertionMagicPacketWakeEnabledBit   = 0x100,
+
+    /*! kIOPMDriverAssertionNetworkKeepAliveActiveBit
+     * When set, driver is informing PM that it is holding the network
+     * interface up to do TCPKeepAlive
+     */
+    kIOPMDriverAssertionNetworkKeepAliveActiveBit   = 0x200
 };
 
  /* kIOPMAssertionsDriverKey
@@ -362,6 +377,7 @@ enum {
 #define kIOPMDriverAssertionModifiedTimeKey     "ModifiedTime"
 #define kIOPMDriverAssertionOwnerStringKey      "Owner"
 #define kIOPMDriverAssertionOwnerServiceKey     "ServicePtr"
+#define kIOPMDriverAssertionRegistryEntryIDKey  "RegistryEntryID"
 #define kIOPMDriverAssertionLevelKey            "Level"
 #define kIOPMDriverAssertionAssertedKey         "Assertions"
 

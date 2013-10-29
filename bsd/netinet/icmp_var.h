@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2013 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -95,7 +95,7 @@ struct	icmpstat {
 #define ICMPCTL_TIMESTAMP	4	/* allow replies to time stamp requests */
 #define ICMPCTL_MAXID		5
 
-#ifdef KERNEL_PRIVATE
+#ifdef BSD_KERNEL_PRIVATE
 #define ICMPCTL_NAMES { \
 	{ 0, 0 }, \
 	{ "maskrepl", CTLTYPE_INT }, \
@@ -117,5 +117,5 @@ extern int badport_bandlim(int);
 #define BANDLIM_MAX 4
 
 extern struct	icmpstat icmpstat;
-#endif /* KERNEL_PRIVATE */
+#endif /* BSD_KERNEL_PRIVATE */
 #endif /* _NETINET_ICMP_VAR_H_ */

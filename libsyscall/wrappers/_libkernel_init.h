@@ -29,26 +29,21 @@
 #ifndef __LIBKERNEL_INIT_H
 #define __LIBKERNEL_INIT_H
 
-#include <mach/mach.h>
+#include <sys/types.h>
 
-typedef struct _libkernel_functions {
-	/* for mach dependencies on libc */
-	mach_port_t (*get_reply_port)(void);
-	void (*set_reply_port)(mach_port_t);
-	
-	/* dlsym() for looking up catch_exception_raise */
+typedef const struct _libkernel_functions {
+	/* Structure version 1. Subsequent versions must only add pointers! */
+	unsigned long version;
 	void* (*dlsym)(void*, const char*);
+	void* (*malloc)(size_t);
+	void  (*free)(void*);
+	void* (*realloc)(void*, size_t);
+	void  (*_pthread_exit_if_canceled)(int);
+} *_libkernel_functions_t;
 
-	/* placeholders for struct layout compatibility with Libsystem */
-	void *_placeholder_1;
-	void *_placeholder_2;
-	
-	/* for setting errno in libc */
-	void (*set_errno)(int);
-	int* (*get_errno)(void);
+struct ProgramVars; /* forward reference */
 
-} _libkernel_functions_t;
-
-void _libkernel_init(_libkernel_functions_t fns);
+void __libkernel_init(_libkernel_functions_t fns, const char *envp[],
+		const char *apple[], const struct ProgramVars *vars);
 
 #endif // __LIBKERNEL_INIT_H`

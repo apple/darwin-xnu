@@ -200,8 +200,10 @@ mach_port_space_info(
 			return KERN_INVALID_TASK;
 		}
 
-		table_size_needed = round_page(space->is_table_size
-					       * sizeof(ipc_info_name_t));
+		table_size_needed =
+			vm_map_round_page((space->is_table_size
+					   * sizeof(ipc_info_name_t)),
+					  VM_MAP_PAGE_MASK(ipc_kernel_map));
 
 		if (table_size_needed == table_size)
 			break;
@@ -237,6 +239,7 @@ mach_port_space_info(
 
 		bits = entry->ie_bits;
 		iin->iin_name = MACH_PORT_MAKE(index, IE_BITS_GEN(bits));
+		iin->iin_collision = 0;
 		iin->iin_type = IE_BITS_TYPE(bits);
 		if ((entry->ie_bits & MACH_PORT_TYPE_PORT_RIGHTS) != MACH_PORT_TYPE_NONE &&
 		    entry->ie_request != IE_REQ_NONE) {
@@ -262,8 +265,13 @@ mach_port_space_info(
 			bzero((char *)&table_info[infop->iis_table_size],
 			      table_size - infop->iis_table_size * sizeof(ipc_info_name_t));
 
-		kr = vm_map_unwire(ipc_kernel_map, vm_map_trunc_page(table_addr),
-				   vm_map_round_page(table_addr + table_size), FALSE);
+		kr = vm_map_unwire(
+			ipc_kernel_map,
+			vm_map_trunc_page(table_addr,
+					  VM_MAP_PAGE_MASK(ipc_kernel_map)),
+			vm_map_round_page(table_addr + table_size,
+					  VM_MAP_PAGE_MASK(ipc_kernel_map)),
+			FALSE);
 		assert(kr == KERN_SUCCESS);
 		kr = vm_map_copyin(ipc_kernel_map, (vm_map_address_t)table_addr, 
 				   (vm_map_size_t)table_size, TRUE, &copy);

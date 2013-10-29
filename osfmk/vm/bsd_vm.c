@@ -252,7 +252,7 @@ mach_macx_triggers(
 		}
 		/* trigger_port is locked and active */
 		ipc_port_make_send_locked(trigger_port); 
-		/* now unlocked */
+		ip_unlock(trigger_port);
 		default_pager_triggers(default_pager,
 					0, 0, 
 					SWAP_FILE_CREATION_ERROR,
@@ -266,7 +266,7 @@ mach_macx_triggers(
 		}
 		/* trigger_port is locked and active */
 		ipc_port_make_send_locked(trigger_port); 
-		/* now unlocked */
+		ip_unlock(trigger_port);
 		default_pager_triggers(default_pager, 
 				       hi_water, low_water,
 				       HI_WAT_ALERT, trigger_port);
@@ -279,7 +279,7 @@ mach_macx_triggers(
 		}
 		/* trigger_port is locked and active */
 		ipc_port_make_send_locked(trigger_port);
-		/* and now its unlocked */
+		ip_unlock(trigger_port);
 		default_pager_triggers(default_pager, 
 				       hi_water, low_water,
 				       LO_WAT_ALERT, trigger_port);
@@ -665,10 +665,9 @@ vnode_pager_get_isinuse(
 }
 
 kern_return_t
-vnode_pager_check_hard_throttle(
+vnode_pager_get_throttle_io_limit(
 	memory_object_t		mem_obj,
-	uint32_t		*limit,
-	uint32_t		hard_throttle)
+	uint32_t		*limit)
 {
 	vnode_pager_t	vnode_object;
 
@@ -677,7 +676,7 @@ vnode_pager_check_hard_throttle(
 
 	vnode_object = vnode_pager_lookup(mem_obj);
 
-	(void)vnode_pager_return_hard_throttle_limit(vnode_object->vnode_handle, limit, hard_throttle);
+	(void)vnode_pager_return_throttle_io_limit(vnode_object->vnode_handle, limit);
 	return KERN_SUCCESS;
 }
 

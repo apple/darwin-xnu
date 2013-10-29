@@ -299,7 +299,7 @@ __END_DECLS
 #define SYSCTL_OID(parent, nbr, name, kind, a1, a2, handler, fmt, descr) \
 	struct sysctl_oid sysctl_##parent##_##name = {			 \
 		&sysctl_##parent##_children, { 0 },			 \
-		nbr, kind|CTLFLAG_OID2, a1, a2, #name, handler, fmt, descr, SYSCTL_OID_VERSION, 0 }; \
+		nbr, (int)(kind|CTLFLAG_OID2), a1, (int)(a2), #name, handler, fmt, descr, SYSCTL_OID_VERSION, 0 }; \
 	SYSCTL_LINKER_SET_ENTRY(__sysctl_set, sysctl_##parent##_##name)
 
 /* This constructs a node from which other oids can hang. */
@@ -455,7 +455,7 @@ SYSCTL_DECL(_user);
 #define KERN_PROCARGS		38
                              /* 39 was KERN_PCSAMPLES... now deprecated */
 #define KERN_NETBOOT		40	/* int: are we netbooted? 1=yes,0=no */
-#define	KERN_PANICINFO		41	/* node: panic UI information (deprecated) */
+                             /* 41 was KERN_PANICINFO : panic UI information (deprecated) */
 #define	KERN_SYSV		42	/* node: System V IPC information */
 #define KERN_AFFINITY		43	/* xxx */
 #define KERN_TRANSLATE	   	44	/* xxx */
@@ -536,7 +536,7 @@ SYSCTL_DECL(_user);
 #define KERN_KDSETREG		8
 #define KERN_KDGETREG		9
 #define KERN_KDREADTR		10
-#define KERN_KDPIDTR        11
+#define KERN_KDPIDTR		11
 #define KERN_KDTHRMAP           12
 /* Don't use 13 as it is overloaded with KERN_VNODE */
 #define KERN_KDPIDEX            14
@@ -546,13 +546,10 @@ SYSCTL_DECL(_user);
 #define KERN_KDWRITEMAP		18
 #define KERN_KDENABLE_BG_TRACE	19
 #define KERN_KDDISABLE_BG_TRACE	20
+#define KERN_KDREADCURTHRMAP	21
 #define KERN_KDSET_TYPEFILTER   22
-
-/* KERN_PANICINFO types (deprecated) */
-#define	KERN_PANICINFO_MAXSIZE	1	/* quad: panic UI image size limit */
-#define	KERN_PANICINFO_IMAGE	2	/* panic UI in 8-bit kraw format */
-#define KERN_PANICINFO_TEST 	4	/* Allow the panic UI to be tested by root without causing a panic */
-#define KERN_PANICINFO_NOROOT_TEST	5	/* Allow the noroot UI to be tested by root */
+#define KERN_KDBUFWAIT		23
+#define KERN_KDCPUMAP		24
 
 #define CTL_KERN_NAMES { \
 	{ 0, 0 }, \
@@ -596,7 +593,7 @@ SYSCTL_DECL(_user);
 	{ "procargs",CTLTYPE_STRUCT },\
         { "dummy", CTLTYPE_INT },		/* deprecated pcsamples */ \
 	{ "netboot", CTLTYPE_INT }, \
-	{ "panicinfo", CTLTYPE_NODE }, /* deprecated: panicinfo */	\
+	{ "dummy", CTLTYPE_INT }, 		/* deprecated: panicinfo */ \
 	{ "sysv", CTLTYPE_NODE }, \
 	{ "dummy", CTLTYPE_INT }, \
 	{ "dummy", CTLTYPE_INT }, \
@@ -1124,7 +1121,7 @@ struct linker_set;
 
 void	sysctl_register_set(const char *set);
 void	sysctl_unregister_set(const char *set);
-void	sysctl_mib_init(void) __attribute__((section("__TEXT, initcode")));
+void	sysctl_mib_init(void);
 int	kernel_sysctl(struct proc *p, int *name, u_int namelen, void *old,
 		      size_t *oldlenp, void *newp, size_t newlen);
 int	userland_sysctl(struct proc *p, int *name, u_int namelen, user_addr_t old,

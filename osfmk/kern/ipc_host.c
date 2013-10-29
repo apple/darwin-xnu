@@ -705,15 +705,15 @@ host_swap_exception_ports(
 			return KERN_INVALID_ARGUMENT;
 		}
 	}
+
 	/* Cannot easily check "new_flavor", but that just means that
 	 * the flavor in the generated exception message might be garbage:
 	 * GIGO */
 
 	host_lock(host_priv);
 
-	count = 0;
-
-	for (i = FIRST_EXCEPTION; i < EXC_TYPES_COUNT; i++) {
+	assert(EXC_TYPES_COUNT > FIRST_EXCEPTION);
+	for (count=0, i = FIRST_EXCEPTION; i < EXC_TYPES_COUNT && count < *CountCnt; i++) {
 		if (exception_mask & (1 << i)) {
 			for (j = 0; j < count; j++) {
 /*
@@ -741,9 +741,6 @@ host_swap_exception_ports(
 				ipc_port_copy_send(new_port);
 			host_priv->exc_actions[i].behavior = new_behavior;
 			host_priv->exc_actions[i].flavor = new_flavor;
-			if (count > *CountCnt) {
-				break;
-			}
 		} else
 			old_port[i] = IP_NULL;
 	}/* for */
@@ -752,9 +749,11 @@ host_swap_exception_ports(
 	/*
 	 * Consume send rights without any lock held.
 	 */
-	for (i = FIRST_EXCEPTION; i < EXC_TYPES_COUNT; i++)
+	while (--i >= FIRST_EXCEPTION) {
 		if (IP_VALID(old_port[i]))
 			ipc_port_release_send(old_port[i]);
+	}
+
 	if (IP_VALID(new_port))		 /* consume send right */
 		ipc_port_release_send(new_port);
 	*CountCnt = count;

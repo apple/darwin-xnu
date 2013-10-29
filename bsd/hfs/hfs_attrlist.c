@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2008 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2012 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -154,7 +154,7 @@ hfs_vnop_readdirattr(ap)
 	/*
 	 * Take an exclusive directory lock since we manipulate the directory hints
 	 */
-	if ((error = hfs_lock(VTOC(dvp), HFS_EXCLUSIVE_LOCK))) {
+	if ((error = hfs_lock(VTOC(dvp), HFS_EXCLUSIVE_LOCK, HFS_LOCK_DEFAULT))) {
 		return (error);
 	}
 	dcp = VTOC(dvp);
@@ -384,7 +384,7 @@ hfs_vnop_readdirattr(ap)
 		cat_releasedesc(&ce_list->entry[i].ce_desc);
 	ce_list->realentries = 0;
 
-	(void) hfs_lock(VTOC(dvp), HFS_FORCE_LOCK);
+	(void) hfs_lock(VTOC(dvp), HFS_EXCLUSIVE_LOCK, HFS_LOCK_ALLOW_NOEXISTS);
 	dcp = VTOC(dvp);
 
 exit1:
@@ -562,8 +562,8 @@ packcommonattr(
 	if (ATTR_CMN_FSID & attr) {
 		fsid_t fsid;
 		
-		fsid.val[0] = (long)hfsmp->hfs_raw_dev;
-		fsid.val[1] = (long)vfs_typenum(mp);
+		fsid.val[0] = hfsmp->hfs_raw_dev;
+		fsid.val[1] = vfs_typenum(mp);
 		*((fsid_t *)attrbufptr) = fsid;
 		attrbufptr = ((fsid_t *)attrbufptr) + 1;
 	}
@@ -682,9 +682,12 @@ packcommonattr(
 
 		/* advance 16 bytes into the attrbuf */
 		finfo = finfo + 16;
-		if (S_ISREG(cap->ca_mode)) {
+
+		/* also don't expose the date_added or write_gen_counter fields */
+		if (S_ISREG(cap->ca_mode) || S_ISLNK(cap->ca_mode)) {
 			struct FndrExtendedFileInfo *extinfo = (struct FndrExtendedFileInfo *)finfo;
 			extinfo->date_added = 0;
+			extinfo->write_gen_counter = 0;
 		}
 		else if (S_ISDIR(cap->ca_mode)) {
 			struct FndrExtendedDirInfo *extinfo = (struct FndrExtendedDirInfo *)finfo;
@@ -744,7 +747,7 @@ packcommonattr(
 			user_access = hfs_real_user_access(vp, abp->ab_context);
 		} else {
 			user_access = DerivePermissionSummary(cap->ca_uid, cap->ca_gid,
-			                  cap->ca_mode, mp, proc_ucred(current_proc()), 0);
+			                  cap->ca_mode, mp, vfs_context_ucred(ctx), 0);
 		}
 		/* Also consider READ-ONLY file system. */
 		if (vfs_flags(mp) & MNT_RDONLY) {

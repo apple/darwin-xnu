@@ -154,6 +154,7 @@ struct	session {
  */
 #define	S_DEFAULT	0x00000000	/* No flags set */
 #define	S_NOCTTY	0x00000001	/* Do not associate controlling tty */
+#define S_CTTYREF	0x00000010	/* vnode ref taken by cttyopen */
 
 
 #define S_LIST_TERM	1		/* marked for termination */
@@ -217,7 +218,8 @@ struct	proc {
 	gid_t		p_rgid;
 	uid_t		p_svuid;
 	gid_t		p_svgid;
-	uint64_t	p_uniqueid;		/* process uniqe ID */
+	uint64_t	p_uniqueid;		/* process unique ID - incremented on fork/spawn/vfork, remains same across exec. */
+	uint64_t	p_puniqueid;		/* parent's unique ID - set on fork/spawn/vfork, doesn't change if reparented. */
 
 	lck_mtx_t 	p_mlock;		/* mutex lock for proc */
 
@@ -334,11 +336,6 @@ struct	proc {
 	uint32_t	p_pcaction;	/* action  for process control on starvation */
 	uint8_t p_uuid[16];		/* from LC_UUID load command */
 
-#if !CONFIG_EMBEDDED
-#define PROC_LEGACY_BEHAVIOR_IOTHROTTLE (0x00000001)
-	 uint32_t	p_legacy_behavior;
-#endif
-
 /* End area that is copied on creation. */
 /* XXXXXXXXXXXXX End of BCOPY'ed on fork (AIOLOCK)XXXXXXXXXXXXXXXX */
 #define	p_endcopy	p_aio_total_count
@@ -349,13 +346,14 @@ struct	proc {
 
 	struct klist p_klist;  /* knote list (PL ?)*/
 
-	struct	rusage *p_ru;	/* Exit information. (PL) */
+	struct	rusage_superset *p_ru;	/* Exit information. (PL) */
 	int		p_sigwaitcnt;
 	thread_t 	p_signalholder;
 	thread_t 	p_transholder;
 
 	/* DEPRECATE following field  */
 	u_short	p_acflag;	/* Accounting flags. */
+	volatile u_short p_vfs_iopolicy;	/* VFS iopolicy flags. */
 
 	struct lctx *p_lctx;		/* Pointer to login context. */
 	LIST_ENTRY(proc) p_lclist;	/* List of processes in lctx. */
@@ -372,6 +370,9 @@ struct	proc {
 	int		p_ractive;
 	int	p_idversion;		/* version of process identity */
 	void *	p_pthhash;			/* pthread waitqueue hash */
+	volatile uint64_t was_throttled __attribute__((aligned(8))); /* Counter for number of throttled I/Os */
+	volatile uint64_t did_throttle __attribute__((aligned(8)));  /* Counter for number of I/Os this proc throttled */
+
 #if DIAGNOSTIC
 	unsigned int p_fdlock_pc[4];
 	unsigned int p_fdunlock_pc[4];
@@ -381,10 +382,27 @@ struct	proc {
 #endif /* SIGNAL_DEBUG */
 #endif /* DIAGNOSTIC */
 	uint64_t	p_dispatchqueue_offset;
+	uint64_t	p_dispatchqueue_serialno_offset;
 #if VM_PRESSURE_EVENTS
 	struct timeval	vm_pressure_last_notify_tstamp;
 #endif
-	int		p_dirty;			/* dirty state */ 
+
+#if CONFIG_MEMORYSTATUS
+	/* Fields protected by proc list lock */
+	TAILQ_ENTRY(proc) p_memstat_list;               /* priority bucket link */
+	uint32_t          p_memstat_state;              /* state */
+	int32_t           p_memstat_effectivepriority;  /* priority after transaction state accounted for */
+	int32_t           p_memstat_requestedpriority;  /* active priority */
+	uint64_t          p_memstat_userdata;           /* user state */
+	uint32_t          p_memstat_dirty;              /* dirty state */
+	uint64_t          p_memstat_idledeadline;       /* time at which process became clean */
+#if CONFIG_JETSAM
+	int32_t           p_memstat_memlimit;           /* cached memory limit */
+#endif
+#if CONFIG_FREEZE
+	uint32_t          p_memstat_suspendedfootprint; /* footprint at time of suspensions */
+#endif /* CONFIG_FREEZE */
+#endif /* CONFIG_MEMORYSTATUS */
 };
 
 #define PGRPID_DEAD 0xdeaddead
@@ -420,8 +438,8 @@ struct	proc {
 #define	P_LTRANSCOMMIT	0x00000020	/* process is committed to trans */
 #define	P_LINTRANSIT	0x00000040	/* process in exec or in creation */
 #define	P_LTRANSWAIT	0x00000080	/* waiting for trans to complete */
-#define P_LVFORK        0x00000100      /* */
-#define P_LINVFORK      0x00000200      /* */
+#define P_LVFORK        0x00000100      /* parent proc of a vfork */
+#define P_LINVFORK      0x00000200      /* child proc of a vfork */
 #define P_LTRACED       0x00000400      /* */
 #define P_LSIGEXC       0x00000800      /* */
 #define P_LNOATTACH     0x00001000      /* */
@@ -437,7 +455,16 @@ struct	proc {
 #define P_LRAGE_VNODES	0x00400000
 #define P_LREGISTER	0x00800000	/* thread start fns registered  */
 #define P_LVMRSRCOWNER	0x01000000	/* can handle the resource ownership of  */
-#define P_LPTERMINATE	0x02000000	/* can handle the resource ownership of  */
+/* old P_LPTERMINATE    0x02000000 */
+#define P_LTERM_DECRYPTFAIL	0x04000000	/* process terminating due to key failure to decrypt */
+#define	P_LTERM_JETSAM		0x08000000	/* process is being jetsam'd */
+#define P_JETSAM_VMPAGESHORTAGE	0x00000000	/* jetsam: lowest jetsam priority proc, killed due to vm page shortage */
+#define P_JETSAM_VMTHRASHING	0x10000000	/* jetsam: lowest jetsam priority proc, killed due to vm thrashing */
+#define P_JETSAM_HIWAT		0x20000000	/* jetsam: high water mark */
+#define P_JETSAM_PID		0x30000000	/* jetsam: pid */
+#define P_JETSAM_IDLEEXIT	0x40000000	/* jetsam: idle exit */
+#define P_JETSAM_VNODE		0x50000000	/* jetsam: vnode kill */
+#define P_JETSAM_MASK		0x70000000	/* jetsam type mask */
 
 /* Process control state for resource starvation */
 #define P_PCTHROTTLE	1
@@ -454,6 +481,9 @@ struct	proc {
 
 /* additional process flags */
 #define P_LADVLOCK		0x01
+
+/* p_vfs_iopolicy flags */
+#define P_VFS_IOPOLICY_FORCE_HFS_CASE_SENSITIVITY 0x0001
 
 /* defns for proc_iterate */
 #define PROC_ALLPROCLIST        1		/* walk the allproc list (procs not exited yet) */
@@ -597,7 +627,7 @@ struct user64_extern_proc {
  */
 extern int nprocs, maxproc;		/* Current and max number of procs. */
 extern int maxprocperuid;		/* Current number of procs per uid */
-__private_extern__ int hard_maxproc;	/* hard limit */
+extern int hard_maxproc;	/* hard limit */
 extern unsigned int proc_shutdown_exitcount;
 
 #define	PID_MAX		99999
@@ -649,7 +679,7 @@ LIST_HEAD(proclist, proc);
 extern struct proclist allproc;		/* List of all processes. */
 extern struct proclist zombproc;	/* List of zombie processes. */
 extern struct proc *initproc;
-extern void	procinit(void) __attribute__((section("__TEXT, initcode")));
+extern void	procinit(void);
 extern void proc_lock(struct proc *);
 extern void proc_unlock(struct proc *);
 extern void proc_spinlock(struct proc *);
@@ -690,7 +720,7 @@ extern int	tsleep1(void *chan, int pri, const char *wmesg, u_int64_t abstime, in
 extern int	msleep0(void *chan, lck_mtx_t *mtx, int pri, const char *wmesg, int timo, int (*continuation)(int));
 extern void	vfork_return(struct proc *child, int32_t *retval, int rval);
 extern int	exit1(struct proc *, int, int *);
-extern int	exit1_internal(struct proc *, int, int *, boolean_t, boolean_t);
+extern int	exit1_internal(struct proc *, int, int *, boolean_t, boolean_t, int);
 extern int	fork1(proc_t, thread_t *, int);
 extern void vfork_exit_internal(struct proc *p, int rv, int forced);
 extern void proc_reparentlocked(struct proc *child, struct proc * newparent, int cansignal, int locked);
@@ -745,7 +775,6 @@ extern int proc_pendingsignals(proc_t, sigset_t);
 int proc_getpcontrol(int pid, int * pcontrolp);
 int proc_dopcontrol(proc_t p, void *unused_arg);
 int proc_resetpcontrol(int pid);
-extern void proc_removethrottle(proc_t);
 #if PSYNCH
 void pth_proc_hashinit(proc_t);
 void pth_proc_hashdelete(proc_t);
@@ -755,4 +784,11 @@ void psynch_wq_cleanup(__unused void *  param, __unused void * param1);
 extern lck_mtx_t * pthread_list_mlock;
 #endif /* PSYNCH */
 struct uthread * current_uthread(void);
+
+/* return 1 if process is forcing case-sensitive HFS+ access, 0 for default */
+extern int proc_is_forcing_hfs_case_sensitivity(proc_t);
+
+pid_t dtrace_proc_selfpid(void);
+pid_t dtrace_proc_selfppid(void);
+uid_t dtrace_proc_selfruid(void);
 #endif	/* !_SYS_PROC_INTERNAL_H_ */

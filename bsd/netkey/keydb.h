@@ -33,8 +33,7 @@
 #define _NETKEY_KEYDB_H_
 #include <sys/appleapiopts.h>
 
-#ifdef KERNEL
-#ifdef KERNEL_PRIVATE
+#ifdef BSD_KERNEL_PRIVATE
 
 #include <netkey/key_var.h>
 #include <net/if_utun.h>
@@ -107,6 +106,8 @@ struct secasvar {
 	u_int32_t	natt_last_activity;
 	u_int16_t	remote_ike_port;
 	u_int16_t	natt_encapsulated_src_port;	/* network byte order */
+	
+	u_int8_t	always_expire; /* Send expire/delete messages even if unused */
 
 	void              *utun_pcb;
 	utun_is_keepalive_func    utun_is_keepalive_fn;
@@ -170,7 +171,6 @@ extern void keydb_delsecreplay(struct secreplay *);
 // extern struct secreg *keydb_newsecreg(void);			// not used
 // extern void keydb_delsecreg(struct secreg *);		// not used
 
-#endif /* KERNEL_PRIVATE */
-#endif /* KERNEL */
+#endif /* BSD_KERNEL_PRIVATE */
 
 #endif /* _NETKEY_KEYDB_H_ */

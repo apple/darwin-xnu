@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2010 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2012 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -91,15 +91,20 @@
 #include <i386/misc_protos.h>
 #include <i386/mp_desc.h>
 #include <i386/thread.h>
-#if defined(__i386__)
-#include <i386/fpu.h>
-#endif
 #include <i386/machine_routines.h>
 #include <i386/lapic.h> /* LAPIC_PMC_SWI_VECTOR */
 
 #if CONFIG_COUNTERS
 #include <pmc/pmc.h>
 #endif /* CONFIG_COUNTERS */
+
+#if KPC
+#include <kern/kpc.h>
+#endif
+
+#if KPERF
+#include <kperf/kperf.h>
+#endif
 
 /*
  * Maps state flavor to number of words in the state:
@@ -179,6 +184,30 @@ void ml_get_csw_threads(thread_t *old, thread_t *new) {
 
 #endif /* CONFIG_COUNTERS */
 
+#if KPC
+static inline void
+ml_kpc_cswitch(thread_t old, thread_t new)
+{
+	if(!kpc_threads_counting)
+		return;
+	
+	/* call the kpc function */
+	kpc_switch_context( old, new );
+}
+#endif
+
+#if KPERF
+static inline void
+ml_kperf_cswitch(thread_t old, thread_t new)
+{
+	if(!kperf_cswitch_hook)
+		return;
+	
+	/* call the kpc function */
+	kperf_switch_context( old, new );
+}
+#endif
+
 /*
  * Don't let an illegal value for dr7 get set.	Specifically,
  * check for undefined settings.  Setting these bit patterns
@@ -197,19 +226,6 @@ dr7_is_valid(uint32_t *dr7)
 	 */
 	if (!(get_cr4() & CR4_DE))
 		for (i = 0, mask1 = 0x3<<16, mask2 = 0x2<<16; i < 4; 
-				i++, mask1 <<= 4, mask2 <<= 4)
-			if ((*dr7 & mask1) == mask2)
-				return (FALSE);
-
-	/*
-	 * len0-3 pattern "10B" is ok for len on Merom and newer processors
-	 * (it signifies an 8-byte wide region). We use the 64bit capability
-	 * of the processor in lieu of the more laborious model/family checks
-	 * as all 64-bit capable processors so far support this.
-	 * Reject an attempt to use this on 64-bit incapable processors.
-	 */
-	if (current_cpu_datap()->cpu_is64bit == FALSE)
-		for (i = 0, mask1 = 0x3<<18, mask2 = 0x2<<18; i < 4; 
 				i++, mask1 <<= 4, mask2 <<= 4)
 			if ((*dr7 & mask1) == mask2)
 				return (FALSE);
@@ -259,8 +275,7 @@ set_live_debug_state32(cpu_data_t *cdp, x86_debug_state32_t *ds)
 	__asm__ volatile ("movl %0,%%db1" : :"r" (ds->dr1));
 	__asm__ volatile ("movl %0,%%db2" : :"r" (ds->dr2));
 	__asm__ volatile ("movl %0,%%db3" : :"r" (ds->dr3));
-	if (cpu_mode_is64bit())
-		cdp->cpu_dr7 = ds->dr7;
+	cdp->cpu_dr7 = ds->dr7;
 }
 
 extern void set_64bit_debug_regs(x86_debug_state64_t *ds);
@@ -282,27 +297,6 @@ debug_state_is_valid32(x86_debug_state32_t *ds)
 	if (!dr7_is_valid(&ds->dr7))
 		return FALSE;
 
-#if defined(__i386__)
-	/*
-	 * Only allow local breakpoints and make sure they are not
-	 * in the trampoline code.
-	 */
-	if (ds->dr7 & 0x1)
-		if (ds->dr0 >= (unsigned long)HIGH_MEM_BASE)
-			return FALSE;
-
-	if (ds->dr7 & (0x1<<2))
-		if (ds->dr1 >= (unsigned long)HIGH_MEM_BASE)
-			return FALSE;
-
-	if (ds->dr7 & (0x1<<4))
-		if (ds->dr2 >= (unsigned long)HIGH_MEM_BASE)
-			return FALSE;
-
-	if (ds->dr7 & (0x1<<6))
-		if (ds->dr3 >= (unsigned long)HIGH_MEM_BASE)
-			return FALSE;
-#endif
 
 	return TRUE;
 }
@@ -477,6 +471,12 @@ machine_switch_context(
 #if CONFIG_COUNTERS
 	machine_pmc_cswitch(old, new);
 #endif
+#if KPC
+	ml_kpc_cswitch(old, new);
+#endif
+#if KPERF
+	ml_kperf_cswitch(old, new);
+#endif
 	/*
 	 *	Save FP registers if in use.
 	 */
@@ -626,11 +626,6 @@ set_thread_state32(thread_t thread, x86_thread_state32_t *ts)
 	 * Scrub segment selector values:
 	 */
 	ts->cs = USER_CS;
-#ifdef __i386__
-	if (ts->ss == 0) ts->ss = USER_DS;
-	if (ts->ds == 0) ts->ds = USER_DS;
-	if (ts->es == 0) ts->es = USER_DS;
-#else /* __x86_64__ */
 	/*
 	 * On a 64 bit kernel, we always override the data segments,
 	 * as the actual selector numbers have changed. This also
@@ -640,7 +635,6 @@ set_thread_state32(thread_t thread, x86_thread_state32_t *ts)
 	ts->ss = USER_DS;
 	ts->ds = USER_DS;
 	ts->es = USER_DS;
-#endif
 
 	/* Check segment selectors are safe */
 	if (!valid_user_segment_selectors(ts->cs,
@@ -1707,10 +1701,6 @@ machine_thread_switch_addrmode(thread_t thread)
 	/* If we're switching ourselves, reset the pcb addresses etc. */
 	if (thread == current_thread()) {
 		boolean_t istate = ml_set_interrupts_enabled(FALSE);
-#if defined(__i386__)
-		if (current_cpu_datap()->cpu_active_cr3 != kernel_pmap->pm_cr3)
-			pmap_load_kernel_cr3();
-#endif /* defined(__i386) */
 		act_machine_switch_pcb(NULL, thread);
 		ml_set_interrupts_enabled(istate);
 	}
@@ -1736,121 +1726,20 @@ machine_set_current_thread(thread_t thread)
 void
 machine_thread_init(void)
 {
-	if (cpu_mode_is64bit()) {
-		assert(sizeof(x86_sframe_compat32_t) % 16 == 0);
-		iss_zone = zinit(sizeof(x86_sframe64_t),
-				thread_max * sizeof(x86_sframe64_t),
-				THREAD_CHUNK * sizeof(x86_sframe64_t),
-				"x86_64 saved state");
+	iss_zone = zinit(sizeof(x86_saved_state_t),
+			thread_max * sizeof(x86_saved_state_t),
+			THREAD_CHUNK * sizeof(x86_saved_state_t),
+			"x86_64 saved state");
 
-	        ids_zone = zinit(sizeof(x86_debug_state64_t),
-				 thread_max * sizeof(x86_debug_state64_t),
-				 THREAD_CHUNK * sizeof(x86_debug_state64_t),
-				 "x86_64 debug state");
+        ids_zone = zinit(sizeof(x86_debug_state64_t),
+			 thread_max * sizeof(x86_debug_state64_t),
+			 THREAD_CHUNK * sizeof(x86_debug_state64_t),
+			 "x86_64 debug state");
 
-	} else {
-		iss_zone = zinit(sizeof(x86_sframe32_t),
-				thread_max * sizeof(x86_sframe32_t),
-				THREAD_CHUNK * sizeof(x86_sframe32_t),
-				"x86 saved state");
-	        ids_zone = zinit(sizeof(x86_debug_state32_t),
-				thread_max * (sizeof(x86_debug_state32_t)),
-				THREAD_CHUNK * (sizeof(x86_debug_state32_t)),
-				"x86 debug state");
-	}
 	fpu_module_init();
 }
 
 
-#if defined(__i386__)
-/*
- * Some routines for debugging activation code
- */
-static void	dump_handlers(thread_t);
-void		dump_regs(thread_t);
-int		dump_act(thread_t thr_act);
-
-static void
-dump_handlers(thread_t thr_act)
-{
-	ReturnHandler *rhp = thr_act->handlers;
-	int	counter = 0;
-
-	printf("\t");
-	while (rhp) {
-		if (rhp == &thr_act->special_handler){
-			if (rhp->next)
-				printf("[NON-Zero next ptr(%p)]", rhp->next);
-			printf("special_handler()->");
-			break;
-		}
-		printf("hdlr_%d(%p)->", counter, rhp->handler);
-		rhp = rhp->next;
-		if (++counter > 32) {
-			printf("Aborting: HUGE handler chain\n");
-			break;
-		}
-	}
-	printf("HLDR_NULL\n");
-}
-
-void
-dump_regs(thread_t thr_act)
-{
-	if (thread_is_64bit(thr_act)) {
-		x86_saved_state64_t	*ssp;
-
-		ssp = USER_REGS64(thr_act);
-
-		panic("dump_regs: 64bit tasks not yet supported");
-
-	} else {
-		x86_saved_state32_t	*ssp;
-
-		ssp = USER_REGS32(thr_act);
-
-		/*
-		 * Print out user register state
-		 */
-		printf("\tRegs:\tedi=%x esi=%x ebp=%x ebx=%x edx=%x\n",
-			ssp->edi, ssp->esi, ssp->ebp, ssp->ebx, ssp->edx);
-
-		printf("\t\tecx=%x eax=%x eip=%x efl=%x uesp=%x\n",
-			ssp->ecx, ssp->eax, ssp->eip, ssp->efl, ssp->uesp);
-
-		printf("\t\tcs=%x ss=%x\n", ssp->cs, ssp->ss);
-	}
-}
-
-int
-dump_act(thread_t thr_act)
-{
-	if (!thr_act)
-		return(0);
-
-	printf("thread(%p)(%d): task=%p(%d)\n",
-			thr_act, thr_act->ref_count,
-			thr_act->task,
-			thr_act->task   ? thr_act->task->ref_count : 0);
-
-	printf("\tsusp=%d user_stop=%d active=%x ast=%x\n",
-			thr_act->suspend_count, thr_act->user_stop_count,
-			thr_act->active, thr_act->ast);
-	printf("\tpcb=%p\n", &thr_act->machine);
-
-	if (thr_act->kernel_stack) {
-		vm_offset_t stack = thr_act->kernel_stack;
-
-		printf("\tk_stk %lx  eip %x ebx %x esp %x iss %p\n",
-			(long)stack, STACK_IKS(stack)->k_eip, STACK_IKS(stack)->k_ebx,
-			STACK_IKS(stack)->k_esp, thr_act->machine.iss);
-	}
-
-	dump_handlers(thr_act);
-	dump_regs(thr_act);
-	return((int)thr_act);
-}
-#endif
 
 user_addr_t
 get_useraddr(void)
@@ -1939,6 +1828,12 @@ machine_stack_handoff(thread_t old,
 
 #if CONFIG_COUNTERS
 	machine_pmc_cswitch(old, new);
+#endif
+#if KPC
+	ml_kpc_cswitch(old, new);
+#endif
+#if KPERF
+	ml_kperf_cswitch(old, new);
 #endif
 
 	stack = old->kernel_stack;
@@ -2103,16 +1998,6 @@ void act_thread_cfree(__unused void *ctx)
 {
 	/* XXX - Unused */
 }
-void x86_toggle_sysenter_arg_store(thread_t thread, boolean_t valid);
-void x86_toggle_sysenter_arg_store(thread_t thread, boolean_t valid) {
-	thread->machine.arg_store_valid = valid;
-}
-
-boolean_t x86_sysenter_arg_store_isvalid(thread_t thread);
-
-boolean_t x86_sysenter_arg_store_isvalid(thread_t thread) {
-	return (thread->machine.arg_store_valid);
-}
 
 /*
  * Duplicate one x86_debug_state32_t to another.  "all" parameter
@@ -2162,12 +2047,4 @@ copy_debug_state64(
 	target->dr3 = src->dr3;
 	target->dr6 = src->dr6;
 	target->dr7 = src->dr7;
-}
-
-boolean_t is_useraddr64_canonical(uint64_t addr64);
-
-boolean_t
-is_useraddr64_canonical(uint64_t addr64)
-{
-	return IS_USERADDR64_CANONICAL(addr64);
 }

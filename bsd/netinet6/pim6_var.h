@@ -60,7 +60,7 @@ struct pim6stat {
 #define PIM6CTL_STATS		1	/* statistics (read-only) */
 #define PIM6CTL_MAXID		2
 
-#ifdef KERNEL_PRIVATE
+#ifdef BSD_KERNEL_PRIVATE
 #define PIM6CTL_NAMES { \
 	{ 0, 0 }, \
 	{ 0, 0 }, \
@@ -68,5 +68,5 @@ struct pim6stat {
 
 int pim6_input(struct mbuf **, int*);
 
-#endif /* KERNEL_PRIVATE */
+#endif /* BSD_KERNEL_PRIVATE */
 #endif /* _NETINET6_PIM6_VAR_H_ */

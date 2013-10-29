@@ -32,31 +32,31 @@
 #include "_libkernel_init.h"
 
 typedef kern_return_t (*_libkernel_exc_raise_func_t)(mach_port_t, 
-																										 mach_port_t,
-																										 mach_port_t,
-																										 exception_type_t,
-																										 exception_data_t,
-																										 mach_msg_type_number_t);
+	mach_port_t,
+	mach_port_t,
+	exception_type_t,
+	exception_data_t,
+	mach_msg_type_number_t);
 
 typedef kern_return_t (*_libkernel_exc_raise_state_func_t)(mach_port_t, 
-																													 exception_type_t,
-																													 exception_data_t,
-																													 mach_msg_type_number_t,
-																													 int *,
-																													 thread_state_t, 
-																													 mach_msg_type_number_t, 
-																													 thread_state_t, 
-																													 mach_msg_type_number_t *);
+	exception_type_t,
+	exception_data_t,
+	mach_msg_type_number_t,
+	int *,
+	thread_state_t, 
+	mach_msg_type_number_t, 
+	thread_state_t, 
+	mach_msg_type_number_t *);
 
 typedef kern_return_t (*_libkernel_exec_raise_state_identity_t)(mach_port_t, 
-																																mach_port_t, mach_port_t, 
-																																exception_type_t, 
-																																exception_data_t, 
-																																mach_msg_type_number_t, 
-																																int *, thread_state_t, 
-																																mach_msg_type_number_t, 
-																																thread_state_t, 
-																																mach_msg_type_number_t *);
+	mach_port_t, mach_port_t, 
+	exception_type_t, 
+	exception_data_t, 
+	mach_msg_type_number_t, 
+	int *, thread_state_t, 
+	mach_msg_type_number_t, 
+	thread_state_t, 
+	mach_msg_type_number_t *);
 
 #define	RTLD_DEFAULT	((void *) -2)
 extern void* (*_dlsym)(void*, const char*);

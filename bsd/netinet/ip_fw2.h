@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008-2011 Apple Inc. All rights reserved.
+ * Copyright (c) 2008-2013 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -493,7 +493,7 @@ struct _ipfw_dyn_rule {
 /*
  * Main firewall chains definitions and global var's definitions.
  */
-#ifdef KERNEL
+#ifdef BSD_KERNEL_PRIVATE
 
 #pragma pack(4)
 struct ip_fw_32{
@@ -617,10 +617,6 @@ typedef struct  _ipfw_insn_pipe_32{
 } ipfw_insn_pipe_32;
 
 
-#endif	/* KERNEL */
-
-#ifdef KERNEL
-
 #define IPFW_DEFAULT_RULE       65535
 
 #if IPFIREWALL
@@ -653,7 +649,7 @@ extern int fw_one_pass;
 extern int fw_enable;
 #define	IPFW_LOADED	(ip_fw_chk_ptr != NULL)
 #endif /* IPFIREWALL */
-#endif /* KERNEL */
+#endif /* BSD_KERNEL_PRIVATE */
 
 #endif /* __APPLE_API_OBSOLETE */
 #endif /* _IPFW2_H */

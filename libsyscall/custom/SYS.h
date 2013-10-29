@@ -70,21 +70,21 @@
 
 #define UNIX_SYSCALL_SYSENTER		call __sysenter_trap
 #define UNIX_SYSCALL(name, nargs)			\
-	.globl	cerror					;\
+	.globl	tramp_cerror				;\
 LEAF(_##name, 0)					;\
 	movl	$ SYS_##name, %eax			;\
 	UNIX_SYSCALL_SYSENTER				;\
 	jnb	2f					;\
-	BRANCH_EXTERN(cerror)  				;\
+	BRANCH_EXTERN(tramp_cerror)  			;\
 2:
 
 #define UNIX_SYSCALL_INT(name, nargs)			\
-	.globl	cerror					;\
+	.globl	tramp_cerror				;\
 LEAF(_##name, 0)					;\
 	movl	$ SYS_##name, %eax			;\
 	UNIX_SYSCALL_TRAP				;\
 	jnb	2f					;\
-	BRANCH_EXTERN(cerror)  				;\
+	BRANCH_EXTERN(tramp_cerror)  			;\
 2:
 
 #if defined(__SYSCALL_32BIT_ARG_BYTES) && ((__SYSCALL_32BIT_ARG_BYTES >= 4) && (__SYSCALL_32BIT_ARG_BYTES <= 20))
@@ -92,31 +92,30 @@ LEAF(_##name, 0)					;\
 	movl	$(SYS_##name | (__SYSCALL_32BIT_ARG_BYTES << I386_SYSCALL_ARG_BYTES_SHIFT)), %eax		;\
 	UNIX_SYSCALL_SYSENTER					;\
 	jnb	2f						;\
-	BRANCH_EXTERN(cerror)					;\
+	BRANCH_EXTERN(tramp_##cerror)				;\
 2:
 #else /* __SYSCALL_32BIT_ARG_BYTES < 4 || > 20 */
-#define UNIX_SYSCALL_NONAME(name, nargs, cerror)		\
-	.globl	cerror					;\
+#define UNIX_SYSCALL_NONAME(name, nargs, cerror)	\
 	movl	$ SYS_##name, %eax			;\
 	UNIX_SYSCALL_SYSENTER				;\
 	jnb	2f					;\
-	BRANCH_EXTERN(cerror)				;\
+	BRANCH_EXTERN(tramp_##cerror)			;\
 2:
 #endif
 
 #define UNIX_SYSCALL_INT_NONAME(name, nargs)		\
-	.globl	cerror					;\
+	.globl	tramp_cerror_nocancel			;\
 	movl	$ SYS_##name, %eax			;\
 	UNIX_SYSCALL_TRAP				;\
 	jnb	2f					;\
-	BRANCH_EXTERN(cerror_nocancel) 				;\
+	BRANCH_EXTERN(tramp_cerror_nocancel) 		;\
 2:
 
-#define PSEUDO(pseudo, name, nargs, cerror)			\
+#define PSEUDO(pseudo, name, nargs, cerror)	\
 LEAF(pseudo, 0)					;\
 	UNIX_SYSCALL_NONAME(name, nargs, cerror)
 
-#define PSEUDO_INT(pseudo, name, nargs)			\
+#define PSEUDO_INT(pseudo, name, nargs)		\
 LEAF(pseudo, 0)					;\
 	UNIX_SYSCALL_INT_NONAME(name, nargs)
 
@@ -125,7 +124,7 @@ LEAF(pseudo, 0)					;\
 	ret
 
 #define __SYSCALL(pseudo, name, nargs)			\
-	PSEUDO(pseudo, name, nargs, cerror)			;\
+	PSEUDO(pseudo, name, nargs, cerror)		;\
 	ret
 
 #define __SYSCALL_INT(pseudo, name, nargs)		\
@@ -141,21 +140,23 @@ LEAF(pseudo, 0)					;\
 	movq	%rcx, %r10		;\
 	syscall
 
-#define UNIX_SYSCALL(name, nargs)			\
-	.globl	cerror					;\
-LEAF(_##name, 0)					;\
-	movl	$ SYSCALL_CONSTRUCT_UNIX(SYS_##name), %eax	;\
-	UNIX_SYSCALL_SYSCALL				;\
-	jnb	2f					;\
-	BRANCH_EXTERN(cerror)  				;\
+#define UNIX_SYSCALL(name, nargs)						 \
+	.globl	cerror								;\
+LEAF(_##name, 0)								;\
+	movl	$ SYSCALL_CONSTRUCT_UNIX(SYS_##name), %eax			;\
+	UNIX_SYSCALL_SYSCALL							;\
+	jnb		2f							;\
+	movq	%rax, %rdi							;\
+	BRANCH_EXTERN(_cerror)							;\
 2:
 
-#define UNIX_SYSCALL_NONAME(name, nargs, cerror)		\
-	.globl	cerror					;\
-	movl	$ SYSCALL_CONSTRUCT_UNIX(SYS_##name), %eax	;\
-	UNIX_SYSCALL_SYSCALL				;\
-	jnb	2f					;\
-	BRANCH_EXTERN(cerror)  				;\
+#define UNIX_SYSCALL_NONAME(name, nargs, cerror)		 \
+	.globl	cerror								;\
+	movl	$ SYSCALL_CONSTRUCT_UNIX(SYS_##name), %eax			;\
+	UNIX_SYSCALL_SYSCALL							;\
+	jnb		2f							;\
+	movq	%rax, %rdi							;\
+	BRANCH_EXTERN(_##cerror)						;\
 2:
 
 #define PSEUDO(pseudo, name, nargs, cerror)			\

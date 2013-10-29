@@ -61,13 +61,6 @@ extern "C" {
 
 #include <sys/dtrace.h>
 
-#if !defined(__APPLE__)
-#if defined(__i386) || defined(__amd64)
-typedef uint8_t sdt_instr_t;
-#else
-typedef uint32_t sdt_instr_t;
-#endif
-#else
 struct module {
 	int sdt_nprobes;
 	sdt_probedesc_t *sdt_probes;
@@ -86,12 +79,11 @@ extern int          sdt_probetab_mask;
 #define SDT_ADDR2NDX(addr)  ((((uintptr_t)(addr)) >> 4) & sdt_probetab_mask)
 
 
-#if defined(__i386__) || defined(__x86_64__)
+#if defined(__x86_64__)
 typedef uint8_t sdt_instr_t;
 #else
 #error Unknown implementation
 #endif
-#endif /* __APPLE__ */
 
 typedef struct sdt_provider {
 	const char			*sdtp_name;	/* name of provider */

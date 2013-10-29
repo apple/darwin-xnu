@@ -43,6 +43,14 @@
 
 #include <libkern/OSAtomic.h>
 
+#if KPC
+#include <kern/kpc.h>
+#endif
+
+#if KPERF
+#include <kperf/kperf.h>
+#endif
+
 // include the correct file to find real_ncpus
 #if defined(__i386__) || defined(__x86_64__)
 #	include <i386/mp.h>	
@@ -561,6 +569,16 @@ extern void chudxnu_thread_ast(thread_t);
 void
 chudxnu_thread_ast(thread_t thread)
 {
+#if KPC
+	/* check for PMC work */
+	kpc_thread_ast_handler(thread);
+#endif
+
+#if KPERF
+	/* check for kperf work */
+	kperf_thread_ast_handler(thread);
+#endif
+
 	/* atomicness for kdebug events */
 	void (*handler)(thread_t) = chudxnu_thread_ast_handler;
 	if( handler )

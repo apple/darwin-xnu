@@ -608,7 +608,18 @@ An I/O error occurred while reading from or writing to the file system.
 .Pp
 .
 .Sh CAVEATS
-The list of searchable attributes currently includes:
+
+The list of attributes that are valid as search criteria currently includes the 
+following list of attributes.  Note that this list is substantially smaller than 
+what is available via 
+.Xr getattrlist 2
+for a particular filesystem object.  In general, a filesystem that supports 
+.Fn searchfs
+will typically supply per-item attributes for matched objects that are also 
+supported by the
+.Xr getdirentries 2
+system call.  This varies from filesystem to filesystem.
+
 .Pp
 .
 .Bl -item -compact

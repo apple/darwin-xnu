@@ -71,10 +71,10 @@ callstack_sample( struct callstack *cs,
 
 	/* collect the callstack */
 	nframes = MAX_CALLSTACK_FRAMES;
-	kr = chudxnu_thread_get_callstack64( context->cur_thread, 
-	                                     cs->frames, 
-	                                     &nframes,
-	                                     is_user );
+	kr = chudxnu_thread_get_callstack64_kperf( context->cur_thread, 
+						   cs->frames, 
+						   &nframes,
+						   is_user );
 
 	/* check for overflow */
 	if( kr == KERN_SUCCESS )
@@ -91,14 +91,14 @@ callstack_sample( struct callstack *cs,
 	}
 	else
 	{
-		BUF_INFO2(PERF_PET_ERROR, ERR_GETSTACK, kr);
+		BUF_INFO2(PERF_CS_ERROR, ERR_GETSTACK, kr);
 		cs->nframes = 0;
 	}
 
 	if( cs->nframes >= MAX_CALLSTACK_FRAMES )
 	{
 		/* necessary? */
-		BUF_INFO1(PERF_PET_ERROR, ERR_FRAMES);
+		BUF_INFO1(PERF_CS_ERROR, ERR_FRAMES);
 		cs->nframes = 0;
 	}
 
@@ -117,12 +117,12 @@ kperf_ucallstack_sample( struct callstack *cs, struct kperf_context *context )
 }
 
 static void
-callstack_log( struct callstack *cs, uint32_t code )
+callstack_log( struct callstack *cs, uint32_t hcode, uint32_t dcode )
 {
 	unsigned int i, j, n, of = 4;
 
 	/* Header on the stack */
-	BUF_DATA2( code, cs->flags, cs->nframes );
+	BUF_DATA2( hcode, cs->flags, cs->nframes );
 
 	/* look for how many batches of 4 */
 	n  = cs->nframes / 4;
@@ -135,7 +135,7 @@ callstack_log( struct callstack *cs, uint32_t code )
 	{
 #define SCRUB_FRAME(x) (((x)<cs->nframes)?cs->frames[x]:0)
 		j = i * 4;
-		BUF_DATA ( code, 
+		BUF_DATA ( dcode, 
 		           SCRUB_FRAME(j+0),
 		           SCRUB_FRAME(j+1),
 		           SCRUB_FRAME(j+2),
@@ -147,13 +147,13 @@ callstack_log( struct callstack *cs, uint32_t code )
 void
 kperf_kcallstack_log( struct callstack *cs )
 {
-	callstack_log( cs, PERF_CS_KDATA );
+	callstack_log( cs, PERF_CS_KHDR, PERF_CS_KDATA );
 }
 
 void
 kperf_ucallstack_log( struct callstack *cs )
 {
-	callstack_log( cs, PERF_CS_UDATA );
+	callstack_log( cs, PERF_CS_UHDR, PERF_CS_UDATA );
 }
 
 int

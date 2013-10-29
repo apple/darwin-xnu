@@ -386,6 +386,7 @@ affinity_space_free(affinity_space_t aspc)
 {
 	assert(queue_empty(&aspc->aspc_affinities));
 
+	lck_mtx_destroy(&aspc->aspc_lock, &task_lck_grp);
 	DBG("affinity_space_free(%p)\n", aspc);
 	kfree(aspc, sizeof(struct affinity_space));
 }

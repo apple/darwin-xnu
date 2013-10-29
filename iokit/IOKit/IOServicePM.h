@@ -47,14 +47,37 @@ class IOPMRequest;
 class IOPMRequestQueue;
 class IOPMCompletionQueue;
 
+// PM channels for IOReporting
+#ifndef kPMPowerStatesChID
+#define kPMPowerStatesChID  IOREPORT_MAKEID('P','M','S','t','H','i','s','t')
+#endif
+
+#ifndef kPMCurrStateChID
+#define kPMCurrStateChID  IOREPORT_MAKEID( 'P','M','C','u','r','S','t','\0' )
+#endif
+
+// state_id details in PM channels
+#define kPMReportPowerOn       0x01
+#define kPMReportDeviceUsable  0x02
+#define kPMReportLowPower      0x04
+
+
 typedef unsigned long       IOPMPowerStateIndex;
 typedef uint32_t            IOPMPowerChangeFlags;
+typedef uint32_t            IOPMRequestTag;
 
 struct IOPMDriverCallEntry {
     queue_chain_t   link;
     thread_t        thread;
     IOService *     target;
 };
+
+// Power clients (desires)
+extern const OSSymbol *     gIOPMPowerClientDevice;
+extern const OSSymbol *     gIOPMPowerClientDriver;
+extern const OSSymbol *     gIOPMPowerClientChildProxy;
+extern const OSSymbol *     gIOPMPowerClientChildren;
+extern const OSSymbol *     gIOPMPowerClientRootDomain;
 
 /* Binary compatibility with drivers that access pm_vars */
 #ifdef __LP64__

@@ -6,14 +6,6 @@ export MakeInc_dir=${SRCROOT}/makedefs/MakeInc.dir
 include $(MakeInc_cmd)
 include $(MakeInc_def)
 
-INSTINC_SUBDIRS =
-
-INSTINC_SUBDIRS_I386 =
-
-EXPINC_SUBDIRS =
-
-EXPINC_SUBDIRS_I386 =
-
 MIG_DEFS = lockd_mach.defs
 
 DATAFILES = lockd_mach_types.h ${MIG_DEFS}
@@ -46,13 +38,13 @@ MIG_KUSRC = lockd_mach.c lockd_mach.h
 
 COMP_FILES = ${MIG_KUSRC}
 
-${COMP_FILES} : lockd_mach.defs
+do_build_all:: $(COMP_FILES)
 
 ${MIG_KUSRC} : lockd_mach.defs
 	@echo MIG $@
 	$(_v)${MIG} ${MIGFLAGS} ${MIGKUFLAGS}	\
-		-user    $*.c			\
-		-header  $*.h			\
+		-user    lockd_mach.c		\
+		-header  lockd_mach.h		\
 		-server  /dev/null		\
 		-sheader /dev/null		\
 		$<

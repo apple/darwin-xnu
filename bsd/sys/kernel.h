@@ -91,8 +91,6 @@ extern int profhz;		/* profiling clock's frequency */
 
 
 #ifdef KERNEL_PRIVATE
-extern int lbolt;		/* once a second sleep address */
-
 extern struct timezone tz;			/* XXX */
 
 extern int tick;		/* usec per tick (1000000 / hz) */

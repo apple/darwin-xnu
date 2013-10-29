@@ -141,6 +141,31 @@ timeout(
 }
 
 /*
+ *	Set a timeout with leeway.
+ *
+ *	fcn:		function to call
+ *	param:		parameter to pass to function
+ *	interval:	timeout interval, in hz.
+ *	leeway_interval:	leeway interval, in hz.
+ */
+void
+timeout_with_leeway(
+	timeout_fcn_t			fcn,
+	void					*param,
+	int						interval,
+	int						leeway_interval)
+{
+	uint64_t		deadline;
+	uint64_t		leeway;
+
+	clock_interval_to_deadline(interval, NSEC_PER_SEC / hz, &deadline);
+
+	clock_interval_to_absolutetime_interval(leeway_interval, NSEC_PER_SEC / hz, &leeway);
+
+	thread_call_func_delayed_with_leeway((thread_call_func_t)fcn, param, deadline, leeway, THREAD_CALL_DELAY_LEEWAY);
+}
+
+/*
  * Cancel a timeout.
  */
 void

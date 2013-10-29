@@ -337,7 +337,7 @@ bool IORegistryEntry::init( IORegistryEntry * old,
     fPropertyTable->retain();
 #ifdef IOREGSPLITTABLES
     fRegistryTable = old->fRegistryTable;
-    old->fRegistryTable = OSDictionary::withDictionary( fRegistryTable );
+    old->fRegistryTable = (OSDictionary *) fRegistryTable->copyCollection();
 #endif /* IOREGSPLITTABLES */
 
     old->registryTable()->removeObject( plane->keys[ kParentSetIndex ] );
@@ -1769,8 +1769,11 @@ void IORegistryEntry::detachAbove( const IORegistryPlane * plane )
     IORegistryEntry *	parent;
 
     retain();
-    while( (parent = getParentEntry( plane )))
+    while( (parent = copyParentEntry( plane )))
+    {
 	detachFromParent( parent, plane );
+	parent->release();
+    }
     release();
 }
 

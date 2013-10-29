@@ -121,7 +121,7 @@
 
 #include "shadow.h"
 static void 
-vndevice_do_init(void) __attribute__((section("__TEXT, initcode")));
+vndevice_do_init(void);
 
 static ioctl_fcn_t		vnioctl_chr;
 static ioctl_fcn_t		vnioctl_blk;

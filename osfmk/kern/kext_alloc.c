@@ -75,9 +75,11 @@ kext_alloc_init(void)
      */
 
     text = getsegbyname(SEG_TEXT);
-    text_start = vm_map_trunc_page(text->vmaddr);
+    text_start = vm_map_trunc_page(text->vmaddr,
+				   VM_MAP_PAGE_MASK(kernel_map));
     text_start &= ~((512ULL * 1024 * 1024 * 1024) - 1);
-    text_end = vm_map_round_page(text->vmaddr + text->vmsize);
+    text_end = vm_map_round_page(text->vmaddr + text->vmsize,
+				 VM_MAP_PAGE_MASK(kernel_map));
     text_size = text_end - text_start;
 
     kext_alloc_base = KEXT_ALLOC_BASE(text_end);
@@ -91,7 +93,8 @@ kext_alloc_init(void)
          * kexts
          */
         kext_post_boot_base = 
-            vm_map_round_page(kext_alloc_base + prelinkTextSegment->vmsize);
+		vm_map_round_page(kext_alloc_base + prelinkTextSegment->vmsize,
+				  VM_MAP_PAGE_MASK(kernel_map));
     }
     else {
         kext_post_boot_base = kext_alloc_base;

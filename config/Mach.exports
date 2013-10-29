@@ -24,6 +24,7 @@ _lck_spin_sleep
 _lck_spin_sleep_deadline
 _mach_absolute_time
 _mach_msg_send_from_kernel_proper
+_mach_vm_pressure_level_monitor
 _mach_vm_pressure_monitor
 _nanoseconds_to_absolutetime
 _preemption_enabled

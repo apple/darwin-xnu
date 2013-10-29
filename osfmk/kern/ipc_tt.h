@@ -97,6 +97,12 @@ extern void ipc_task_terminate(
 extern void ipc_thread_init(
 	thread_t	thread);
 
+extern void ipc_thread_init_exc_actions(
+	thread_t	thread);
+
+extern void ipc_thread_destroy_exc_actions(
+	thread_t	thread);
+
 /* Disable IPC access to a thread */
 extern void ipc_thread_disable(
 	thread_t	thread);

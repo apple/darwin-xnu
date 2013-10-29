@@ -68,6 +68,9 @@
 #include <kern/assert.h>
 #include <kern/processor.h>
 #include <kern/thread.h>
+#if CONFIG_TELEMETRY
+#include <kern/telemetry.h>
+#endif
 	
 uint32_t	avenrun[3] = {0, 0, 0};
 uint32_t	mach_factor[3] = {0, 0, 0};
@@ -97,9 +100,9 @@ typedef void	(*sched_avg_comp_t)(
 
 static struct sched_average {
 	sched_avg_comp_t	comp;
-	void				*param;
-	int					period; /* in seconds */
-	uint64_t			deadline;			
+	void			*param;
+	int			period; /* in seconds */
+	uint64_t		deadline;
 } sched_average[] = {
 	{ compute_averunnable, &sched_nrun, 5, 0 },
 	{ compute_stack_target, NULL, 5, 1 },
@@ -107,19 +110,27 @@ static struct sched_average {
 	{ compute_zone_gc_throttle, NULL, 60, 0 },
 	{ compute_pageout_gc_throttle, NULL, 1, 0 },
 	{ compute_pmap_gc_throttle, NULL, 60, 0 },
+#if CONFIG_TELEMETRY
+	{ compute_telemetry, NULL, 1, 0 },
+#endif
 	{ NULL, NULL, 0, 0 }
 };
 
 typedef struct sched_average	*sched_average_t;
 
+/* The "stdelta" parameter represents the number of scheduler maintenance
+ * "ticks" that have elapsed since the last invocation, subject to
+ * integer division imprecision.
+ */
+
 void
-compute_averages(void)
+compute_averages(uint64_t stdelta)
 {
-	int					ncpus, nthreads, nshared;
-	uint32_t			factor_now, average_now, load_now = 0;
+	int			ncpus, nthreads, nshared, nbackground, nshared_non_bg;
+	uint32_t		factor_now, average_now, load_now = 0, background_load_now = 0, combined_fgbg_load_now = 0;
 	sched_average_t		avg;
-	uint64_t			abstime;
-	
+	uint64_t		abstime, index;
+
 	/*
 	 *	Retrieve counts, ignoring
 	 *	the current thread.
@@ -127,6 +138,7 @@ compute_averages(void)
 	ncpus = processor_avail_count;
 	nthreads = sched_run_count - 1;
 	nshared = sched_share_count;
+	nbackground = sched_background_count;
 
 	/*
 	 *	Load average and mach factor calculations for
@@ -139,24 +151,58 @@ compute_averages(void)
 	else
 		factor_now = (ncpus - nthreads) * LOAD_SCALE;
 
-	sched_mach_factor =	((sched_mach_factor << 2) + factor_now) / 5;
-	sched_load_average = ((sched_load_average << 2) + average_now) / 5;
-
-	/*
-	 *	Compute the timeshare priority
-	 *	conversion factor based on loading.
+	/* For those statistics that formerly relied on being recomputed
+	 * on timer ticks, advance by the approximate number of corresponding
+	 * elapsed intervals, thus compensating for potential idle intervals.
 	 */
+	for (index = 0; index < stdelta; index++) {
+		sched_mach_factor = ((sched_mach_factor << 2) + factor_now) / 5;
+		sched_load_average = ((sched_load_average << 2) + average_now) / 5;
+	}
+	/*
+	 * Compute the timeshare priority conversion factor based on loading.
+	 * Because our counters may be incremented and accessed
+	 * concurrently with respect to each other, we may have
+	 * windows where the invariant nthreads >= nshared >= nbackground
+	 * is broken, so truncate values in these cases.
+	 */
+
 	if (nshared > nthreads)
 		nshared = nthreads;
 
-	if (nshared > ncpus) {
+	if (nbackground > nshared)
+		nbackground = nshared;
+
+	nshared_non_bg = nshared - nbackground;
+
+	if (nshared_non_bg > ncpus) {
 		if (ncpus > 1)
-			load_now = nshared / ncpus;
+			load_now = nshared_non_bg / ncpus;
 		else
-			load_now = nshared;
+			load_now = nshared_non_bg;
 
 		if (load_now > NRQS - 1)
 			load_now = NRQS - 1;
+	}
+
+	if (nbackground > ncpus) {
+		if (ncpus > 1)
+			background_load_now = nbackground / ncpus;
+		else
+			background_load_now = nbackground;
+
+		if (background_load_now > NRQS - 1)
+			background_load_now = NRQS - 1;
+	}
+
+	if (nshared > ncpus) {
+		if (ncpus > 1)
+			combined_fgbg_load_now = nshared / ncpus;
+		else
+			combined_fgbg_load_now = nshared;
+
+		if (combined_fgbg_load_now > NRQS - 1)
+			combined_fgbg_load_now = NRQS - 1;
 	}
 
 	/*
@@ -178,11 +224,14 @@ compute_averages(void)
 	 *	are discarded.
 	 */
 	sched_pri_shift = sched_fixed_shift - sched_load_shifts[load_now];
+	sched_background_pri_shift = sched_fixed_shift - sched_load_shifts[background_load_now];
+	sched_combined_fgbg_pri_shift = sched_fixed_shift - sched_load_shifts[combined_fgbg_load_now];
 
 	/*
 	 * Compute old-style Mach load averages.
 	 */
-	{
+
+	for (index = 0; index < stdelta; index++) {
 		register int		i;
 
 		for (i = 0; i < 3; i++) {
@@ -201,8 +250,16 @@ compute_averages(void)
 	abstime = mach_absolute_time();
 	for (avg = sched_average; avg->comp != NULL; ++avg) {
 		if (abstime >= avg->deadline) {
-			(*avg->comp)(avg->param);
-			avg->deadline = abstime + avg->period * sched_one_second_interval;
+			uint64_t period_abs = (avg->period * sched_one_second_interval);
+			uint64_t ninvokes = 1;
+
+			ninvokes += (abstime - avg->deadline) / period_abs;
+			ninvokes = MIN(ninvokes, SCHED_TICK_MAX_DELTA);
+
+			for (index = 0; index < ninvokes; index++) {
+				(*avg->comp)(avg->param);
+			}
+			avg->deadline = abstime + period_abs;
 		}
 	}
 }

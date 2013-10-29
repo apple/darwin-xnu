@@ -472,6 +472,7 @@ mac_socket_check_accept(kauth_cred_t cred, struct socket *so)
 	return (error);
 }
 
+#if CONFIG_MACF_SOCKET_SUBSET
 int
 mac_socket_check_accepted(kauth_cred_t cred, struct socket *so)
 {
@@ -490,6 +491,7 @@ mac_socket_check_accepted(kauth_cred_t cred, struct socket *so)
 	}
 	return (error);
 }
+#endif
 
 int
 mac_socket_check_bind(kauth_cred_t ucred, struct socket *so,

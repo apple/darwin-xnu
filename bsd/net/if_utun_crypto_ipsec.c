@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2011-2012 Apple Inc. All rights reserved.
+ * Copyright (c) 2011-2013 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -26,7 +26,7 @@
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 
-
+#if IPSEC
 
 #include <sys/systm.h>
 #include <sys/socket.h>
@@ -703,7 +703,8 @@ utun_pkt_ipsec_output (struct utun_pcb *pcb, mbuf_t *pkt)
 	int                 err;
 	struct route       *ro = NULL;
 	struct route        ro_copy;
-	struct ip_out_args  ipoa = { IFSCOPE_NONE, { 0 }, IPOAF_SELECT_SRCIF };
+	struct ip_out_args  ipoa =
+	    { IFSCOPE_NONE, { 0 }, IPOAF_SELECT_SRCIF, 0 };
 
 	if (crypto_keys &&
 	    crypto_keys->state.u.ipsec.proto == IPPROTO_ESP &&
@@ -712,7 +713,7 @@ utun_pkt_ipsec_output (struct utun_pcb *pcb, mbuf_t *pkt)
 		// TODO: update stats to increment outgoing packets
 		// TODO: allow empty packets thru
 
-		proto = ntohl(*(mtod(*pkt, protocol_family_t *)));
+		proto = *(mtod(*pkt, protocol_family_t *));
 		m_adj(*pkt, sizeof(protocol_family_t));
 
 		bzero(&ro_copy, sizeof(ro_copy));
@@ -733,9 +734,7 @@ utun_pkt_ipsec_output (struct utun_pcb *pcb, mbuf_t *pkt)
 				new = ipsec4_splithdr(*pkt);
 				if (!new) {
 					printf("%s: ipsec4_splithdr(1) failed\n", __FUNCTION__);
-					if (ro_copy.ro_rt != NULL) {
-						rtfree(ro_copy.ro_rt);
-					}
+					ROUTE_RELEASE(&ro_copy);
 					*pkt = NULL;
 					return 0;
 				}
@@ -766,13 +765,11 @@ utun_pkt_ipsec_output (struct utun_pcb *pcb, mbuf_t *pkt)
 			if (ro->ro_rt) {
 				RT_LOCK(ro->ro_rt);
 			}
-			if (ro->ro_rt != NULL &&
-			    (ro->ro_rt->generation_id != route_generation ||
-			     !(ro->ro_rt->rt_flags & RTF_UP) ||
-			     dst4->sin_addr.s_addr != ip->ip_dst.s_addr)) {
-				RT_UNLOCK(ro->ro_rt);
-				rtfree(ro->ro_rt);
-				ro->ro_rt = NULL;
+			if (ROUTE_UNUSABLE(ro) ||
+			    dst4->sin_addr.s_addr != ip->ip_dst.s_addr) {
+				if (ro->ro_rt != NULL)
+					RT_UNLOCK(ro->ro_rt);
+				ROUTE_RELEASE(ro);
 			}
 			if (ro->ro_rt == NULL) {
 				dst4->sin_family = AF_INET;
@@ -800,9 +797,7 @@ utun_pkt_ipsec_output (struct utun_pcb *pcb, mbuf_t *pkt)
 			new = ipsec4_splithdr(*pkt);
 			if (!new) {
 				printf("%s: ipsec4_splithdr(2) failed\n", __FUNCTION__);
-				if (ro_copy.ro_rt != NULL) {
-					rtfree(ro_copy.ro_rt);
-				}
+				ROUTE_RELEASE(&ro_copy);
 				*pkt = NULL;
 				return 0;
 			}
@@ -810,9 +805,7 @@ utun_pkt_ipsec_output (struct utun_pcb *pcb, mbuf_t *pkt)
 
 			if ((err = esp4_output(new, sav))) {
 				printf("%s: esp4_output failed (%d)\n", __FUNCTION__, err);
-				if (ro_copy.ro_rt != NULL) {
-					rtfree(ro_copy.ro_rt);
-				}
+				ROUTE_RELEASE(&ro_copy);
 				*pkt = NULL;
 				return 0; // drop
 			}
@@ -829,9 +822,7 @@ utun_pkt_ipsec_output (struct utun_pcb *pcb, mbuf_t *pkt)
 				new = ipsec6_splithdr(*pkt);
 				if (!new) {
 					printf("%s: ipsec6_splithdr(1) failed\n", __FUNCTION__);
-					if (ro_copy.ro_rt != NULL) {
-						rtfree(ro_copy.ro_rt);
-					}
+					ROUTE_RELEASE(&ro_copy);
 					*pkt = NULL;
 					return 0;
 				}
@@ -862,13 +853,11 @@ utun_pkt_ipsec_output (struct utun_pcb *pcb, mbuf_t *pkt)
 			if (ro->ro_rt) {
 				RT_LOCK(ro->ro_rt);
 			}
-			if (ro->ro_rt != NULL &&
-			    (ro->ro_rt->generation_id != route_generation ||
-			     !(ro->ro_rt->rt_flags & RTF_UP) ||
-			     !IN6_ARE_ADDR_EQUAL(&dst6->sin6_addr, &ip6->ip6_dst))) {
-				RT_UNLOCK(ro->ro_rt);
-				rtfree(ro->ro_rt);
-				ro->ro_rt = NULL;
+			if (ROUTE_UNUSABLE(ro) ||
+			    !IN6_ARE_ADDR_EQUAL(&dst6->sin6_addr, &ip6->ip6_dst)) {
+				if (ro->ro_rt != NULL)
+					RT_UNLOCK(ro->ro_rt);
+				ROUTE_RELEASE(ro);
 			}
 			if (ro->ro_rt == NULL) {
 				bzero(dst6, sizeof(*dst6));
@@ -897,9 +886,7 @@ utun_pkt_ipsec_output (struct utun_pcb *pcb, mbuf_t *pkt)
 			new = ipsec6_splithdr(*pkt);
 			if (!new) {
 				printf("%s: ipsec6_splithdr failed\n", __FUNCTION__);
-				if (ro_copy.ro_rt != NULL) {
-					rtfree(ro_copy.ro_rt);
-				}
+				ROUTE_RELEASE(&ro_copy);
 				*pkt = NULL;
 				return 0;
 			}
@@ -907,9 +894,7 @@ utun_pkt_ipsec_output (struct utun_pcb *pcb, mbuf_t *pkt)
 			
 			if ((err = esp6_output(new, mtod(new, u_char *), new->m_next, sav))) {
 				printf("%s: esp6_output failed (%d)\n", __FUNCTION__, err);
-				if (ro_copy.ro_rt != NULL) {
-					rtfree(ro_copy.ro_rt);
-				}
+				ROUTE_RELEASE(&ro_copy);
 				*pkt = NULL;
 				return 0; // drop
 			}
@@ -917,9 +902,7 @@ utun_pkt_ipsec_output (struct utun_pcb *pcb, mbuf_t *pkt)
 			plen = new->m_pkthdr.len - sizeof(struct ip6_hdr);
 			if (plen > IPV6_MAXPACKET) {
 				printf("%s: esp6_output failed due to invalid len (%d)\n", __FUNCTION__, plen);
-				if (ro_copy.ro_rt != NULL) {
-					rtfree(ro_copy.ro_rt);
-				}
+				ROUTE_RELEASE(&ro_copy);
 				mbuf_freem(new);
 				*pkt = NULL;
 				return 0;
@@ -1081,8 +1064,10 @@ utun_pkt_ipsec_input (struct utun_pcb *pcb, mbuf_t *pkt, protocol_family_t famil
 		printf("%s - ifnet_output prepend failed\n", __FUNCTION__);
 		return ENOBUFS;
 	}
-	*(protocol_family_t *)mbuf_data(*pkt) = htonl(family);
+	*(protocol_family_t *)mbuf_data(*pkt) = family;
 
 	(void)utun_pkt_input(pcb, *pkt);
 	return 0;
 }
+
+#endif /* IPSEC */

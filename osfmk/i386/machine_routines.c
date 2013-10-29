@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2010 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2012 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -36,6 +36,7 @@
 #include <kern/cpu_data.h>
 #include <kern/cpu_number.h>
 #include <kern/thread.h>
+#include <kern/thread_call.h>
 #include <i386/machine_cpu.h>
 #include <i386/lapic.h>
 #include <i386/lock.h>
@@ -49,6 +50,10 @@
 #include <i386/pmap.h>
 #include <i386/pmap_internal.h>
 #include <i386/misc_protos.h>
+#include <kern/timer_queue.h>
+#if KPC
+#include <kern/kpc.h>
+#endif
 
 #if DEBUG
 #define DBG(x...)	kprintf("DBG: " x)
@@ -69,6 +74,12 @@ uint64_t	delay_spin_threshold;
 extern uint64_t panic_restart_timeout;
 
 boolean_t virtualized = FALSE;
+
+decl_simple_lock_data(static,  ml_timer_evaluation_slock);
+uint32_t ml_timer_eager_evaluations;
+uint64_t ml_timer_eager_evaluation_max;
+static boolean_t ml_timer_evaluation_in_progress = FALSE;
+
 
 #define MAX_CPUS_SET    0x1
 #define MAX_CPUS_WAIT   0x2
@@ -200,6 +211,38 @@ vm_size_t ml_nofault_copy(
 	return nbytes;
 }
 
+/*
+ *	Routine:        ml_validate_nofault
+ *	Function: Validate that ths address range has a valid translations
+ *			in the kernel pmap.  If translations are present, they are
+ *			assumed to be wired; i.e. no attempt is made to guarantee
+ *			that the translation persist after the check.
+ *  Returns: TRUE if the range is mapped and will not cause a fault,
+ *			FALSE otherwise.
+ */
+
+boolean_t ml_validate_nofault(
+	vm_offset_t virtsrc, vm_size_t size)
+{
+	addr64_t cur_phys_src;
+	uint32_t count;
+
+	while (size > 0) {
+		if (!(cur_phys_src = kvtophys(virtsrc)))
+			return FALSE;
+		if (!pmap_valid_page(i386_btop(cur_phys_src)))
+			return FALSE;
+		count = (uint32_t)(PAGE_SIZE - (cur_phys_src & PAGE_MASK));
+		if (count > size)
+			count = (uint32_t)size;
+
+		virtsrc += count;
+		size -= count;
+	}
+
+	return TRUE;
+}
+
 /* Interrupt handling */
 
 /* Initialize Interrupts */
@@ -225,6 +268,8 @@ boolean_t ml_set_interrupts_enabled(boolean_t enable)
 	boolean_t istate;
 	
 	__asm__ volatile("pushf; pop	%0" :  "=r" (flags));
+
+	assert(get_interrupt_level() ? (enable == FALSE) : TRUE);
 
 	istate = ((flags & EFL_IF) != 0);
 
@@ -340,6 +385,23 @@ register_cpu(
 	if (this_cpu_datap->cpu_chud == NULL)
 		goto failed;
 
+#if KPC
+	this_cpu_datap->cpu_kpc_buf[0] = kpc_counterbuf_alloc();
+	if(this_cpu_datap->cpu_kpc_buf[0] == NULL )
+		goto failed;
+	this_cpu_datap->cpu_kpc_buf[1] = kpc_counterbuf_alloc();
+	if(this_cpu_datap->cpu_kpc_buf[1] == NULL )
+		goto failed;
+
+	this_cpu_datap->cpu_kpc_shadow = kpc_counterbuf_alloc();
+	if(this_cpu_datap->cpu_kpc_shadow == NULL )
+		goto failed;
+
+	this_cpu_datap->cpu_kpc_reload = kpc_counterbuf_alloc();
+	if(this_cpu_datap->cpu_kpc_reload == NULL )
+		goto failed;
+#endif
+
 	if (!boot_cpu) {
 		cpu_thread_alloc(this_cpu_datap->cpu_number);
 		if (this_cpu_datap->lcpu.core == NULL)
@@ -372,6 +434,13 @@ failed:
 #endif
 	chudxnu_cpu_free(this_cpu_datap->cpu_chud);
 	console_cpu_free(this_cpu_datap->cpu_console_buf);
+#if KPC
+	kpc_counterbuf_free(this_cpu_datap->cpu_kpc_buf[0]);
+	kpc_counterbuf_free(this_cpu_datap->cpu_kpc_buf[1]);
+	kpc_counterbuf_free(this_cpu_datap->cpu_kpc_shadow);
+	kpc_counterbuf_free(this_cpu_datap->cpu_kpc_reload);
+#endif
+
 	return KERN_FAILURE;
 }
 
@@ -560,12 +629,14 @@ ml_init_lock_timeout(void)
 		nanoseconds_to_absolutetime(prt * NSEC_PER_SEC, &panic_restart_timeout);
 	virtualized = ((cpuid_features() & CPUID_FEATURE_VMM) != 0);
 	interrupt_latency_tracker_setup();
+	simple_lock_init(&ml_timer_evaluation_slock, 0);
 }
 
 /*
  * Threshold above which we should attempt to block
  * instead of spinning for clock_delay_until().
  */
+
 void
 ml_init_delay_spin_threshold(int threshold_us)
 {
@@ -647,17 +718,7 @@ void ml_cpu_set_ldt(int selector)
 	    current_cpu_datap()->cpu_ldt == KERNEL_LDT)
 		return;
 
-#if defined(__i386__)
-	/*
- 	 * If 64bit this requires a mode switch (and back). 
-	 */
-	if (cpu_mode_is64bit())
-		ml_64bit_lldt(selector);
-	else
-		lldt(selector);
-#else
 	lldt(selector);
-#endif
 	current_cpu_datap()->cpu_ldt = selector;
 }
 
@@ -709,4 +770,28 @@ kernel_preempt_check(void)
 
 boolean_t machine_timeout_suspended(void) {
 	return (virtualized || pmap_tlb_flush_timeout || spinlock_timed_out || panic_active() || mp_recent_debugger_activity());
+}
+
+/* Eagerly evaluate all pending timer and thread callouts
+ */
+void ml_timer_evaluate(void) {
+	KERNEL_DEBUG_CONSTANT(DECR_TIMER_RESCAN|DBG_FUNC_START, 0, 0, 0, 0, 0);
+
+	uint64_t te_end, te_start = mach_absolute_time();
+	simple_lock(&ml_timer_evaluation_slock);
+	ml_timer_evaluation_in_progress = TRUE;
+	thread_call_delayed_timer_rescan_all();
+	mp_cpus_call(CPUMASK_ALL, ASYNC, timer_queue_expire_rescan, NULL);
+	ml_timer_evaluation_in_progress = FALSE;
+	ml_timer_eager_evaluations++;
+	te_end = mach_absolute_time();
+	ml_timer_eager_evaluation_max = MAX(ml_timer_eager_evaluation_max, (te_end - te_start));
+	simple_unlock(&ml_timer_evaluation_slock);
+
+	KERNEL_DEBUG_CONSTANT(DECR_TIMER_RESCAN|DBG_FUNC_END, 0, 0, 0, 0, 0);
+}
+
+boolean_t
+ml_timer_forced_evaluation(void) {
+	return ml_timer_evaluation_in_progress;
 }

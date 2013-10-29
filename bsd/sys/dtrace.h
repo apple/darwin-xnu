@@ -20,6 +20,10 @@
  */
 
 /*
+ * Portions copyright (c) 2011, Joyent, Inc. All rights reserved.
+ */
+
+/*
  * Copyright 2007 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
  */
@@ -571,6 +575,7 @@ typedef struct dtrace_difv {
 #define DTRACEAGG_STDDEV                (DTRACEACT_AGGREGATION + 6)
 #define DTRACEAGG_QUANTIZE              (DTRACEACT_AGGREGATION + 7)
 #define DTRACEAGG_LQUANTIZE             (DTRACEACT_AGGREGATION + 8)
+#define DTRACEAGG_LLQUANTIZE            (DTRACEACT_AGGREGATION + 9)
 
 #define DTRACEACT_ISAGG(x)              \
         (DTRACEACT_CLASS(x) == DTRACEACT_AGGREGATION)
@@ -611,6 +616,31 @@ typedef struct dtrace_difv {
 #define DTRACE_LQUANTIZE_BASE(x)                \
         (int32_t)(((x) & DTRACE_LQUANTIZE_BASEMASK) >> \
         DTRACE_LQUANTIZE_BASESHIFT)
+
+#define  DTRACE_LLQUANTIZE_FACTORSHIFT          48
+#define  DTRACE_LLQUANTIZE_FACTORMASK           ((uint64_t)UINT16_MAX << 48)
+#define  DTRACE_LLQUANTIZE_LOWSHIFT             32
+#define  DTRACE_LLQUANTIZE_LOWMASK              ((uint64_t)UINT16_MAX << 32)
+#define  DTRACE_LLQUANTIZE_HIGHSHIFT            16
+#define  DTRACE_LLQUANTIZE_HIGHMASK             ((uint64_t)UINT16_MAX << 16)
+#define  DTRACE_LLQUANTIZE_NSTEPSHIFT           0
+#define  DTRACE_LLQUANTIZE_NSTEPMASK            UINT16_MAX
+
+#define  DTRACE_LLQUANTIZE_FACTOR(x)   \
+        (uint16_t)(((x) & DTRACE_LLQUANTIZE_FACTORMASK) >> \
+        DTRACE_LLQUANTIZE_FACTORSHIFT)
+
+#define  DTRACE_LLQUANTIZE_LOW(x)    \
+        (uint16_t)(((x) & DTRACE_LLQUANTIZE_LOWMASK) >> \
+        DTRACE_LLQUANTIZE_LOWSHIFT)
+
+#define  DTRACE_LLQUANTIZE_HIGH(x)   \
+        (uint16_t)(((x) & DTRACE_LLQUANTIZE_HIGHMASK) >> \
+        DTRACE_LLQUANTIZE_HIGHSHIFT)
+
+#define  DTRACE_LLQUANTIZE_NSTEPS(x)    \
+        (uint16_t)(((x) & DTRACE_LLQUANTIZE_NSTEPMASK) >> \
+        DTRACE_LLQUANTIZE_NSTEPSHIFT)
 
 #define DTRACE_USTACK_NFRAMES(x)        (uint32_t)((x) & UINT32_MAX)
 #define DTRACE_USTACK_STRSIZE(x)        (uint32_t)((x) >> 32)

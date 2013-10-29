@@ -13,7 +13,6 @@ bsd/dev/i386/stubs.c		standard
 bsd/dev/i386/systemcalls.c	standard
 bsd/dev/i386/sysctl.c           standard
 bsd/dev/i386/unix_signal.c	standard
-bsd/dev/x86_64/munge.s		standard
 
 
 # Lightly ifdef'd to support K64 DTrace
@@ -29,5 +28,6 @@ bsd/dev/i386/dis_tables.c	optional config_dtrace
 bsd/kern/policy_check.c			optional config_macf
 
 bsd/kern/bsd_stubs.c		standard
+bsd/netinet/cpu_in_cksum.c	standard
 bsd/netinet/in_cksum.c		optional inet
 

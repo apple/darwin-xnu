@@ -72,7 +72,7 @@
 /*
  * Definitions of the TCP timers.
  */
-#define	TCPT_NTIMERS	5
+#define	TCPT_NTIMERS	(TCPT_MAX + 1)	
 
 /* Keep the external definition the same for binary compatibility */
 #define TCPT_NTIMERS_EXT	4
@@ -82,7 +82,12 @@
 #define	TCPT_KEEP	2		/* keep alive */
 #define	TCPT_2MSL	3		/* 2*msl quiet time timer */
 #define	TCPT_DELACK	4		/* delayed ack timer */
+#if MPTCP
+#define TCPT_JACK_RXMT	5		/* retransmit timer for join ack */
+#define TCPT_MAX	5
+#else /* MPTCP */
 #define	TCPT_MAX	4
+#endif /* !MPTCP */
 #define	TCPT_NONE	(TCPT_MAX + 1)	
 
 /*
@@ -243,9 +248,18 @@ struct tcptimerlist {
 		(tv) = (tvmax); \
 } while(0)
 
-#define TCP_KEEPIDLE(tp) \
-	(tp->t_keepidle && (tp->t_inpcb->inp_socket->so_options & SO_KEEPALIVE) ? \
-		tp->t_keepidle : tcp_keepidle)
+#define TCP_CONN_KEEPIDLE(tp) \
+	((tp)->t_keepidle && \
+	((tp)->t_inpcb->inp_socket->so_options & SO_KEEPALIVE) ? \
+		(tp)->t_keepidle : tcp_keepidle)
+#define TCP_CONN_KEEPINIT(tp) \
+	(((tp)->t_keepinit > 0) ? (tp)->t_keepinit : tcp_keepinit)
+#define TCP_CONN_KEEPCNT(tp) \
+	(((tp)->t_keepcnt > 0) ? (tp)->t_keepcnt : tcp_keepcnt)
+#define TCP_CONN_KEEPINTVL(tp) \
+	(((tp)->t_keepintvl > 0) ? (tp)->t_keepintvl : tcp_keepintvl)
+#define TCP_CONN_MAXIDLE(tp) \
+	(TCP_CONN_KEEPCNT(tp) * TCP_CONN_KEEPINTVL(tp))
 
 /* Since we did not add rexmt slop for local connections, we should add
  * it to idle timeout. Otherwise local connections will reach idle state
@@ -254,10 +268,12 @@ struct tcptimerlist {
 #define TCP_IDLETIMEOUT(tp) \
 	(((TCP_ADD_REXMTSLOP(tp)) ? 0 : tcp_rexmt_slop) + tp->t_rxtcur)
 
+TAILQ_HEAD(tcptailq, tcpcb);
+
 extern int tcp_keepinit;		/* time to establish connection */
 extern int tcp_keepidle;		/* time before keepalive probes begin */
 extern int tcp_keepintvl;		/* time between keepalive probes */
-extern int tcp_maxidle;			/* time to drop after starting probes */
+extern int tcp_keepcnt;			/* number of keepalives */
 extern int tcp_delack;			/* delayed ack timer */
 extern int tcp_maxpersistidle;
 extern int tcp_msl;

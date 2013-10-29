@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2007 Apple Inc. All rights reserved.
+ * Copyright (c) 2007-2012 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -1757,7 +1757,7 @@ __mac_get_fd(proc_t p, struct __mac_get_fd_args *uap, int *ret __unused)
 		return (error);
 	}
 	
-	switch (fp->f_fglob->fg_type) {
+	switch (FILEGLOB_DTYPE(fp->f_fglob)) {
 		case DTYPE_VNODE:
 			intlabel = mac_vnode_label_alloc();
 			if (intlabel == NULL) {
@@ -1952,7 +1952,7 @@ __mac_set_fd(proc_t p, struct __mac_set_fd_args *uap, int *ret __unused)
 		return (error);
 	}
 	
-	switch (fp->f_fglob->fg_type) {
+	switch (FILEGLOB_DTYPE(fp->f_fglob)) {
 
 		case DTYPE_VNODE:
 			if (mac_label_vnodes == 0) {
@@ -2297,6 +2297,10 @@ mac_do_machexc(int64_t code, int64_t subcode, uint32_t flags)
 
 #else /* MAC */
 
+void (*load_security_extensions_function)(void) = 0;
+
+struct sysctl_oid_list sysctl__security_mac_children;
+
 int
 mac_policy_register(struct mac_policy_conf *mpc __unused, 
 	mac_policy_handle_t *handlep __unused, void *xd __unused)
@@ -2317,12 +2321,6 @@ mac_audit_text(char *text __unused, mac_policy_handle_t handle __unused)
 {
 
 	return (0);
-}
-
-int
-mac_mount_label_get(struct mount *mp __unused, user_addr_t mac_p __unused)
-{
-	return (ENOSYS);
 }
 
 int
@@ -2347,116 +2345,36 @@ mac_vnop_removexattr(struct vnode *vp __unused, const char *name __unused)
 	return (ENOENT);
 }
 
-int
-__mac_get_pid(proc_t p __unused, struct __mac_get_pid_args *uap __unused, int *ret __unused)
+intptr_t mac_label_get(struct label *l __unused, int slot __unused)
 {
-
-	return (ENOSYS);
+        return 0;
 }
 
-int
-__mac_get_proc(proc_t p __unused, struct __mac_get_proc_args *uap __unused, int *ret __unused)
+void mac_label_set(struct label *l __unused, int slot __unused, intptr_t v __unused)
 {
-
-	return (ENOSYS);
+		return;
 }
 
-int
-__mac_set_proc(proc_t p __unused, struct __mac_set_proc_args *uap __unused, int *ret __unused)
+struct label *mac_thread_get_threadlabel(struct thread *thread __unused)
 {
-
-	return (ENOSYS);
+        return NULL;
 }
 
-int
-__mac_get_file(proc_t p __unused, struct __mac_get_file_args *uap __unused, int *ret __unused)
+struct label *mac_thread_get_uthreadlabel(struct uthread *uthread __unused)
 {
-
-	return (ENOSYS);
+        return NULL;
 }
 
-int
-__mac_get_link(proc_t p __unused, struct __mac_get_link_args *uap __unused, int *ret __unused)
+void mac_proc_set_enforce(proc_t p, int enforce_flags);
+void mac_proc_set_enforce(proc_t p __unused, int enforce_flags __unused)
 {
-
-	return (ENOSYS);
+		return;
 }
 
-int
-__mac_set_file(proc_t p __unused, struct __mac_set_file_args *uap __unused, int *ret __unused)
+int mac_iokit_check_hid_control(kauth_cred_t cred __unused);
+int mac_iokit_check_hid_control(kauth_cred_t cred __unused)
 {
-
-	return (ENOSYS);
+        return 0;
 }
 
-int
-__mac_set_link(proc_t p __unused, struct __mac_set_link_args *uap __unused, int *ret __unused)
-{
-
-	return (ENOSYS);
-}
-
-int
-__mac_get_fd(proc_t p __unused, struct __mac_get_fd_args *uap __unused, int *ret __unused)
-{
-
-	return (ENOSYS);
-}
-
-int
-__mac_set_fd(proc_t p __unused, struct __mac_set_fd_args *uap __unused, int *ret __unused)
-{
-
-	return (ENOSYS);
-}
-
-int
-__mac_syscall(proc_t p __unused, struct __mac_syscall_args *uap __unused, int *ret __unused)
-{
-
-	return (ENOSYS);
-}
-
-int
-__mac_get_lcid(proc_t p __unused, struct __mac_get_lcid_args *uap __unused, int *ret __unused)
-{
-
-	return (ENOSYS);
-}
-
-int
-__mac_get_lctx(proc_t p __unused, struct __mac_get_lctx_args *uap __unused, int *ret __unused)
-{
-
-	return (ENOSYS);
-}
-
-int
-__mac_set_lctx(proc_t p __unused, struct __mac_set_lctx_args *uap __unused, int *ret __unused)
-{
-
-	return (ENOSYS);
-}
-
-int
-__mac_get_mount(proc_t p __unused,
-    struct __mac_get_mount_args *uap __unused, int *ret __unused)
-{
-
-	return (ENOSYS);
-}
-
-int
-mac_schedule_userret(void)
-{
-
-	return (1);
-}
-
-int
-mac_do_machexc(int64_t code __unused, int64_t subcode __unused, uint32_t flags __unused)
-{
-
-	return (1);
-}
 #endif /* !MAC */

@@ -94,15 +94,23 @@ thread_policy_common(
 			if (policy == POLICY_TIMESHARE && !oldmode) {
 				thread->sched_mode = TH_MODE_TIMESHARE;
 
-				if ((thread->state & (TH_RUN|TH_IDLE)) == TH_RUN)
+				if ((thread->state & (TH_RUN|TH_IDLE)) == TH_RUN) {
 					sched_share_incr();
+
+					if (thread->max_priority <= MAXPRI_THROTTLE)
+						sched_background_incr();
+				}
 			}
 			else
 			if (policy != POLICY_TIMESHARE && oldmode) {
 				thread->sched_mode = TH_MODE_FIXED;
 
-				if ((thread->state & (TH_RUN|TH_IDLE)) == TH_RUN)
+				if ((thread->state & (TH_RUN|TH_IDLE)) == TH_RUN) {
+					if (thread->max_priority <= MAXPRI_THROTTLE)
+						sched_background_decr();
+
 					sched_share_decr();
+				}
 			}
 		}
 		else {
@@ -131,21 +139,8 @@ thread_policy_common(
 		if (priority < MINPRI)
 			priority = MINPRI;
 
-#if CONFIG_EMBEDDED
-		if ((thread->task->ext_appliedstate.apptype == PROC_POLICY_IOS_APPLE_DAEMON)  &&
-			(thread->appliedstate.hw_bg == TASK_POLICY_BACKGROUND_ATTRIBUTE_ALL)) {
-			thread->saved_importance = priority - thread->task_priority;
-			priority = MAXPRI_THROTTLE;
-		} else  {
-			thread->importance = priority - thread->task_priority;
-		}
-		/* No one can have a base priority less than MAXPRI_THROTTLE */
-		if (priority < MAXPRI_THROTTLE) 
-			priority = MAXPRI_THROTTLE;
-#else	/* CONFIG_EMBEDDED */
 		thread->importance = priority - thread->task_priority;
 
-#endif /* CONFIG_EMBEDDED */
 
 		set_priority(thread, priority);
 	}

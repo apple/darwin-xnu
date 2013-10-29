@@ -53,6 +53,7 @@ struct aio_workq_entry
 	user_addr_t	uaiocbp;  	/* pointer passed in from user land */
 	struct user_aiocb	aiocb;	/* copy of aiocb from user land */
 	vm_map_t	aio_map;	/* user land map we have a reference to */
+	thread_t	thread;		/* thread that queued this request */
 
 	/* Entry lock */
 	int		aio_refcount;
@@ -100,7 +101,7 @@ __private_extern__ void
 _aio_create_worker_threads(int num);
 
 __private_extern__ void		
-aio_init(void) __attribute__((section("__TEXT, initcode")));
+aio_init(void);
 
 task_t						
 get_aiotask(void);

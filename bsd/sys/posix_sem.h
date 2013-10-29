@@ -61,8 +61,9 @@ struct pseminfo {
 	gid_t		psem_gid;
 	char		psem_name[PSEMNAMLEN + 1];	/* segment name */
 	void *		psem_semobject;
-	struct proc *	sem_proc;
 	struct label *  psem_label;
+	pid_t		psem_creator_pid;
+	uint64_t	psem_creator_uniqueid;
 };
 
 #define PSEMINFO_NULL (struct pseminfo *)0

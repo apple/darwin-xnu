@@ -6,18 +6,6 @@ export MakeInc_dir=${SRCROOT}/makedefs/MakeInc.dir
 include $(MakeInc_cmd)
 include $(MakeInc_def)
 
-INSTINC_SUBDIRS =
-
-INSTINC_SUBDIRS_I386 =
-
-INSTINC_SUBDIRS_ARM =
-
-EXPINC_SUBDIRS =
-
-EXPINC_SUBDIRS_I386 =
-
-EXPINC_SUBDIRS_ARM =
-
 MIG_TYPES = \
 	UNDTypes.defs
 
@@ -68,8 +56,10 @@ MIG_KSSRC = \
 
 COMP_FILES = ${MIG_KUSRC} ${MIG_KSSRC} 
 
+do_build_all:: $(COMP_FILES)
+
 ${COMP_FILES} : ${MIG_TYPES}
-        
+
 ${MIG_KUSRC} : \
 	%.c : %.defs
 	@echo MIG $@
@@ -89,7 +79,6 @@ ${MIG_KSSRC}: \
 		-server  $*Server.c		\
 		-sheader $*Server.h		\
 		$<
-
 
 include $(MakeInc_rule)
 include $(MakeInc_dir)

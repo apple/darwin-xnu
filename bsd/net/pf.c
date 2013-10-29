@@ -1,5 +1,5 @@
-/*
- * Copyright (c) 2007-2012 Apple Inc. All rights reserved.
+﻿/*
+ * Copyright (c) 2007-2013 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -76,6 +76,7 @@
 #include <sys/proc.h>
 #include <sys/random.h>
 #include <sys/mcache.h>
+#include <sys/protosw.h>
 
 #include <libkern/crypto/md5.h>
 #include <libkern/libkern.h>
@@ -86,6 +87,7 @@
 #include <net/if_types.h>
 #include <net/bpf.h>
 #include <net/route.h>
+#include <net/dlil.h>
 
 #include <netinet/in.h>
 #include <netinet/in_var.h>
@@ -123,6 +125,12 @@
 #if DUMMYNET
 #include <netinet/ip_dummynet.h>
 #endif /* DUMMYNET */
+
+/*
+ * For RandomULong(), to get a 32 bits random value 
+ * Note that random() returns a 31 bits value, see rdar://11159750
+ */
+#include <dev/random/randomdev.h>
 
 #define DPFPRINTF(n, x)	(pf_status.debug >= (n) ? printf x : ((void)0))
 
@@ -398,9 +406,14 @@ pf_state_lookup_aux(struct pf_state **state, struct pfi_kif *kif,
 	do {								 \
 		int action;						 \
 		*state = pf_find_state(kif, &key, direction);		 \
-		if (*state != NULL && pd != NULL && 			 \
-			pd->flowhash == 0) {				 \
+		if (*state != NULL && pd != NULL &&			 \
+		    !(pd->pktflags & PKTF_FLOW_ID)) {			 \
+			pd->flowsrc = (*state)->state_key->flowsrc;	 \
 			pd->flowhash = (*state)->state_key->flowhash;	 \
+			if (pd->flowhash != 0) {			 \
+				pd->pktflags |= PKTF_FLOW_ID;		 \
+				pd->pktflags &= ~PKTF_FLOW_ADV;		 \
+			}						 \
 		}							 \
 		if (pf_state_lookup_aux(state, kif, direction, &action)) \
 			return (action);				 \
@@ -1469,6 +1482,13 @@ pf_purge_thread_cont(int err)
 	static u_int32_t nloops = 0;
 	int t = 1;	/* 1 second */
 
+	/*
+	 * Update coarse-grained networking timestamp (in sec.); the idea
+	 * is to piggy-back on the periodic timeout callout to update
+	 * the counter returnable via net_uptime().
+	 */
+	net_update_uptime();
+
 	lck_rw_lock_shared(pf_perim_lock);
 	lck_mtx_lock(pf_lock);
 
@@ -2012,6 +2032,7 @@ u_int32_t
 pf_calc_state_key_flowhash(struct pf_state_key *sk)
 {
 	struct pf_flowhash_key fh __attribute__((aligned(8)));
+	uint32_t flowhash = 0;
 
 	bzero(&fh, sizeof (fh));
 	if (PF_ALEQ(&sk->lan.addr, &sk->ext.addr, sk->af)) {
@@ -2031,7 +2052,15 @@ pf_calc_state_key_flowhash(struct pf_state_key *sk)
 	fh.af = sk->af;
 	fh.proto = sk->proto;
 
-	return (net_flowhash(&fh, sizeof (fh), pf_hash_seed));
+try_again:
+	flowhash = net_flowhash(&fh, sizeof (fh), pf_hash_seed);
+	if (flowhash == 0) {
+		/* try to get a non-zero flowhash */
+		pf_hash_seed = RandomULong();
+		goto try_again;
+	}
+
+	return (flowhash);
 }
 
 static int
@@ -2048,7 +2077,8 @@ pf_addr_wrap_neq(struct pf_addr_wrap *aw1, struct pf_addr_wrap *aw2)
 			return (1);
 		return (0);
 	case PF_ADDR_DYNIFTL:
-		return (aw1->p.dyn->pfid_kt != aw2->p.dyn->pfid_kt);
+		return (aw1->p.dyn == NULL || aw2->p.dyn == NULL ||
+		    aw1->p.dyn->pfid_kt != aw2->p.dyn->pfid_kt);
 	case PF_ADDR_NOROUTE:
 	case PF_ADDR_URPFFAILED:
 		return (0);
@@ -2407,6 +2437,7 @@ pf_send_tcp(const struct pf_rule *r, sa_family_t af,
 		pf_mtag->pftag_qid = r->qid;
 #endif /* PF_ALTQ */
 
+#if PF_ECN
 	/* add hints for ecn */
 	pf_mtag->pftag_hdr = mtod(m, struct ip *);
 	/* record address family */
@@ -2423,8 +2454,10 @@ pf_send_tcp(const struct pf_rule *r, sa_family_t af,
 		break;
 #endif /* INET6 */
 	}
+#endif /* PF_ECN */
+
 	/* indicate this is TCP */
-	pf_mtag->pftag_flags |= PF_TAG_TCP;
+	m->m_pkthdr.pkt_proto = IPPROTO_TCP;
 
 	/* Make sure headers are 32-bit aligned */
 	m->m_data += max_linkhdr;
@@ -2502,8 +2535,7 @@ pf_send_tcp(const struct pf_rule *r, sa_family_t af,
 
 		bzero(&ro, sizeof (ro));
 		ip_output(m, NULL, &ro, 0, NULL, NULL);
-		if (ro.ro_rt != NULL)
-			rtfree(ro.ro_rt);
+		ROUTE_RELEASE(&ro);
 		break;
 	}
 #endif /* INET */
@@ -2520,8 +2552,7 @@ pf_send_tcp(const struct pf_rule *r, sa_family_t af,
 
 		bzero(&ro6, sizeof (ro6));
 		ip6_output(m, NULL, &ro6, 0, NULL, NULL, NULL);
-		if (ro6.ro_rt != NULL)
-			rtfree(ro6.ro_rt);
+		ROUTE_RELEASE(&ro6);
 		break;
 	}
 #endif /* INET6 */
@@ -2552,23 +2583,26 @@ pf_send_icmp(struct mbuf *m, u_int8_t type, u_int8_t code, sa_family_t af,
 		pf_mtag->pftag_qid = r->qid;
 #endif /* PF_ALTQ */
 
+#if PF_ECN
 	/* add hints for ecn */
 	pf_mtag->pftag_hdr = mtod(m0, struct ip *);
 	/* record address family */
-	pf_mtag->pftag_flags &=
-	    ~(PF_TAG_HDR_INET | PF_TAG_HDR_INET6 | PF_TAG_TCP);
+	pf_mtag->pftag_flags &= ~(PF_TAG_HDR_INET | PF_TAG_HDR_INET6);
 	switch (af) {
 #if INET
 	case AF_INET:
 		pf_mtag->pftag_flags |= PF_TAG_HDR_INET;
+		m0->m_pkthdr.pkt_proto = IPPROTO_ICMP;
 		break;
 #endif /* INET */
 #if INET6
 	case AF_INET6:
 		pf_mtag->pftag_flags |= PF_TAG_HDR_INET6;
+		m0->m_pkthdr.pkt_proto = IPPROTO_ICMPV6;
 		break;
 #endif /* INET6 */
 	}
+#endif /* PF_ECN */
 
 	switch (af) {
 #if INET
@@ -2772,8 +2806,8 @@ int
 pf_tag_packet(struct mbuf *m, struct pf_mtag *pf_mtag, int tag,
     unsigned int rtableid, struct pf_pdesc *pd)
 {
-	if (tag <= 0 && !PF_RTABLEID_IS_VALID(rtableid) && 
-		(pd == NULL || pd->flowhash == 0))
+	if (tag <= 0 && !PF_RTABLEID_IS_VALID(rtableid) &&
+	    (pd == NULL || !(pd->pktflags & PKTF_FLOW_ID)))
 		return (0);
 
 	if (pf_mtag == NULL && (pf_mtag = pf_get_mtag(m)) == NULL)
@@ -2783,11 +2817,11 @@ pf_tag_packet(struct mbuf *m, struct pf_mtag *pf_mtag, int tag,
 		pf_mtag->pftag_tag = tag;
 	if (PF_RTABLEID_IS_VALID(rtableid))
 		pf_mtag->pftag_rtableid = rtableid;
-	if (pd != NULL && pd->flowhash != 0) {
-		pf_mtag->pftag_flags |= PF_TAG_FLOWHASH;
-		pf_mtag->pftag_flowhash = pd->flowhash;
-		pf_mtag->pftag_flags |= (pd->flags & PFDESC_FLOW_ADV) ?
-			PF_TAG_FLOWADV : 0;
+	if (pd != NULL && (pd->pktflags & PKTF_FLOW_ID)) {
+		m->m_pkthdr.pkt_flowsrc = pd->flowsrc;
+		m->m_pkthdr.pkt_flowid = pd->flowhash;
+		m->m_pkthdr.pkt_flags |= pd->pktflags;
+		m->m_pkthdr.pkt_proto = pd->proto;
 	}
 
 	return (0);
@@ -3019,6 +3053,8 @@ pf_map_addr(sa_family_t af, struct pf_rule *r, struct pf_addr *saddr,
 	if (rpool->cur->addr.type == PF_ADDR_NOROUTE)
 		return (1);
 	if (rpool->cur->addr.type == PF_ADDR_DYNIFTL) {
+		if (rpool->cur->addr.p.dyn == NULL)
+			return (1);
 		switch (af) {
 #if INET
 		case AF_INET:
@@ -3068,22 +3104,22 @@ pf_map_addr(sa_family_t af, struct pf_rule *r, struct pf_addr *saddr,
 			case AF_INET6:
 				if (rmask->addr32[3] != 0xffffffff)
 					rpool->counter.addr32[3] =
-					    htonl(random());
+					    RandomULong();
 				else
 					break;
 				if (rmask->addr32[2] != 0xffffffff)
 					rpool->counter.addr32[2] =
-					    htonl(random());
+					    RandomULong();
 				else
 					break;
 				if (rmask->addr32[1] != 0xffffffff)
 					rpool->counter.addr32[1] =
-					    htonl(random());
+					    RandomULong();
 				else
 					break;
 				if (rmask->addr32[0] != 0xffffffff)
 					rpool->counter.addr32[0] =
-					    htonl(random());
+					    RandomULong();
 				break;
 #endif /* INET6 */
 			}
@@ -3108,7 +3144,8 @@ pf_map_addr(sa_family_t af, struct pf_rule *r, struct pf_addr *saddr,
 			    &raddr, &rmask, af))
 				goto get_addr;
 		} else if (rpool->cur->addr.type == PF_ADDR_DYNIFTL) {
-			if (!pfr_pool_get(rpool->cur->addr.p.dyn->pfid_kt,
+			if (rpool->cur->addr.p.dyn != NULL &&
+			    !pfr_pool_get(rpool->cur->addr.p.dyn->pfid_kt,
 			    &rpool->tblidx, &rpool->counter,
 			    &raddr, &rmask, af))
 				goto get_addr;
@@ -3130,6 +3167,8 @@ pf_map_addr(sa_family_t af, struct pf_rule *r, struct pf_addr *saddr,
 			}
 		} else if (rpool->cur->addr.type == PF_ADDR_DYNIFTL) {
 			rpool->tblidx = -1;
+			if (rpool->cur->addr.p.dyn == NULL)
+				return (1);
 			if (pfr_pool_get(rpool->cur->addr.p.dyn->pfid_kt,
 			    &rpool->tblidx, &rpool->counter,
 			    &raddr, &rmask, af)) {
@@ -3477,6 +3516,8 @@ pf_get_translation_aux(struct pf_pdesc *pd, struct mbuf *m, int off,
 			case PF_OUT:
 				if (r->rpool.cur->addr.type ==
 				    PF_ADDR_DYNIFTL) {
+					if (r->rpool.cur->addr.p.dyn == NULL)
+						return (NULL);
 					switch (pd->af) {
 #if INET
 					case AF_INET:
@@ -3514,6 +3555,8 @@ pf_get_translation_aux(struct pf_pdesc *pd, struct mbuf *m, int off,
 				break;
 			case PF_IN:
 				if (r->src.addr.type == PF_ADDR_DYNIFTL) {
+					if (r->src.addr.p.dyn == NULL)
+						return (NULL);
 					switch (pd->af) {
 #if INET
 					case AF_INET:
@@ -3554,6 +3597,8 @@ pf_get_translation_aux(struct pf_pdesc *pd, struct mbuf *m, int off,
 			switch (direction) {
 			case PF_OUT:
 				if (r->dst.addr.type == PF_ADDR_DYNIFTL) {
+					if (r->dst.addr.p.dyn == NULL)
+						return (NULL);
 					switch (pd->af) {
 #if INET
 					case AF_INET:
@@ -3873,7 +3918,7 @@ pf_calc_mss(struct pf_addr *addr, sa_family_t af, u_int16_t offer)
 	if (rt && rt->rt_ifp) {
 		mss = rt->rt_ifp->if_mtu - hlen - sizeof (struct tcphdr);
 		mss = max(tcp_mssdflt, mss);
-		RTFREE(rt);
+		rtfree(rt);
 	}
 	mss = min(mss, offer);
 	mss = max(mss, 64);		/* sanity - at least max opt space */
@@ -3963,6 +4008,7 @@ pf_alloc_state_key(struct pf_state *s, struct pf_state_key *psk)
 		sk->direction = psk->direction;
 		sk->proto_variant = psk->proto_variant;
 		VERIFY(psk->app_state == NULL);
+		sk->flowsrc = psk->flowsrc;
 		sk->flowhash = psk->flowhash;
 		/* don't touch tree entries, states and refcnt on sk */
 	}
@@ -4361,7 +4407,7 @@ pf_test_rule(struct pf_rule **rm, struct pf_state **sm, int direction,
 		    !pf_match_gid(r->gid.op, r->gid.gid[0], r->gid.gid[1],
 		    pd->lookup.gid))
 			r = TAILQ_NEXT(r, entries);
-		else if (r->prob && r->prob <= (random() % (UINT_MAX - 1) + 1))
+		else if (r->prob && r->prob <= (RandomULong() % (UINT_MAX - 1) + 1))
 			r = TAILQ_NEXT(r, entries);
 		else if (r->match_tag && !pf_match_tag(m, r, pd->pf_mtag, &tag))
 			r = TAILQ_NEXT(r, entries);
@@ -4699,12 +4745,18 @@ pf_test_rule(struct pf_rule **rm, struct pf_state **sm, int direction,
 			psk.gwy.xport = psk.lan.xport;
 		}
 	}
-	if (pd->flowhash != 0) {
-		/* flowhash was already computed by upper layers */
+	if (pd->pktflags & PKTF_FLOW_ID) {
+		/* flow hash was already computed outside of PF */
+		psk.flowsrc = pd->flowsrc;
 		psk.flowhash = pd->flowhash;
 	} else {
+		/* compute flow hash and store it in state key */
+		psk.flowsrc = FLOWSRC_PF;
 		psk.flowhash = pf_calc_state_key_flowhash(&psk);
+		pd->flowsrc = psk.flowsrc;
 		pd->flowhash = psk.flowhash;
+		pd->pktflags |= PKTF_FLOW_ID;
+		pd->pktflags &= ~PKTF_FLOW_ADV;
 	}
 
 	if (pf_tag_packet(m, pd->pf_mtag, tag, rtableid, pd)) {
@@ -5216,6 +5268,8 @@ pf_test_dummynet(struct pf_rule **rm, int direction, struct pfi_kif *kif,
 		    ((pd->flags & PFDESC_IP_FRAG) ||
 		    (r->flagset & th->th_flags) != r->flags))
 			r = TAILQ_NEXT(r, entries);
+		else if (r->prob && r->prob <= (RandomULong() % (UINT_MAX - 1) + 1))
+			r = TAILQ_NEXT(r, entries);
 		else if (r->match_tag && !pf_match_tag(m, r, pd->pf_mtag, &tag))
 			r = TAILQ_NEXT(r, entries);
 		else {
@@ -5399,7 +5453,7 @@ pf_test_fragment(struct pf_rule **rm, int direction, struct pfi_kif *kif,
 		    pd->proto == IPPROTO_ICMPV6) &&
 		    (r->type || r->code))
 			r = TAILQ_NEXT(r, entries);
-		else if (r->prob && r->prob <= (random() % (UINT_MAX - 1) + 1))
+		else if (r->prob && r->prob <= (RandomULong() % (UINT_MAX - 1) + 1))
 			r = TAILQ_NEXT(r, entries);
 		else if (r->match_tag && !pf_match_tag(m, r, pd->pf_mtag, &tag))
 			r = TAILQ_NEXT(r, entries);
@@ -5526,6 +5580,7 @@ pf_pptp_handler(struct pf_state *s, int direction, int off,
 		gsk->lan.xport.call_id = 0;
 		gsk->gwy.xport.call_id = 0;
 		gsk->ext.xport.call_id = 0;
+		gsk->flowsrc = FLOWSRC_PF;
 		gsk->flowhash = pf_calc_state_key_flowhash(gsk);
 		memset(gas, 0, sizeof (*gas));
 		gas->u.grev1.pptp_state = s;
@@ -5931,10 +5986,13 @@ pf_test_state_tcp(struct pf_state **state, int direction, struct pfi_kif *kif,
 		return (PF_DROP);
 	}
 
-	if (src->wscale && dst->wscale && !(th->th_flags & TH_SYN)) {
-		sws = src->wscale & PF_WSCALE_MASK;
-		dws = dst->wscale & PF_WSCALE_MASK;
-	} else
+	if ((th->th_flags & TH_SYN) == 0) {
+		sws = (src->wscale & PF_WSCALE_FLAG) ?
+		    (src->wscale & PF_WSCALE_MASK) : TCP_MAX_WINSHIFT;
+		dws = (dst->wscale & PF_WSCALE_FLAG) ?
+		    (dst->wscale & PF_WSCALE_MASK) : TCP_MAX_WINSHIFT;
+	}
+	else
 		sws = dws = 0;
 
 	/*
@@ -6247,9 +6305,10 @@ pf_test_state_tcp(struct pf_state **state, int direction, struct pfi_kif *kif,
 			printf("pf: BAD state: ");
 			pf_print_state(*state);
 			pf_print_flags(th->th_flags);
-			printf(" seq=%u (%u) ack=%u len=%u ackskew=%d "
-			    "pkts=%llu:%llu dir=%s,%s\n",
+			printf("\n   seq=%u (%u) ack=%u len=%u ackskew=%d "
+			    "sws=%u dws=%u pkts=%llu:%llu dir=%s,%s\n",
 			    seq, orig_seq, ack, pd->p_len, ackskew,
+			    (unsigned int)sws, (unsigned int)dws,
 			    (*state)->packets[0], (*state)->packets[1],
 			    direction == PF_IN ? "in" : "out",
 			    direction == (*state)->state_key->direction ?
@@ -6383,9 +6442,15 @@ pf_test_state_udp(struct pf_state **state, int direction, struct pfi_kif *kif,
 		*state = pf_find_state(kif, &key, dx);
 	}
 
-	if ((*state) != NULL && pd != NULL &&
-		pd->flowhash == 0)
+	/* similar to STATE_LOOKUP() */
+	if (*state != NULL && pd != NULL && !(pd->pktflags & PKTF_FLOW_ID)) {
+		pd->flowsrc = (*state)->state_key->flowsrc;
 		pd->flowhash = (*state)->state_key->flowhash;
+		if (pd->flowhash != 0) {
+			pd->pktflags |= PKTF_FLOW_ID;
+			pd->pktflags &= ~PKTF_FLOW_ADV;
+		}
+	}
 
 	if (pf_state_lookup_aux(state, kif, direction, &action))
 		return (action);
@@ -6754,10 +6819,10 @@ pf_test_state_icmp(struct pf_state **state, int direction, struct pfi_kif *kif,
 				dst = &(*state)->dst;
 			}
 
-			if (src->wscale && dst->wscale)
+			if (src->wscale && (dst->wscale & PF_WSCALE_FLAG))
 				dws = dst->wscale & PF_WSCALE_MASK;
 			else
-				dws = 0;
+				dws = TCP_MAX_WINSHIFT;
 
 			/* Demodulate sequence number */
 			seq = ntohl(th.th_seq) - src->seqdiff;
@@ -6899,9 +6964,16 @@ pf_test_state_icmp(struct pf_state **state, int direction, struct pfi_kif *kif,
 				*state = pf_find_state(kif, &key, dx);
 			}
 
+			/* similar to STATE_LOOKUP() */
 			if (*state != NULL && pd != NULL &&
-				pd->flowhash == 0)
+			    !(pd->pktflags & PKTF_FLOW_ID)) {
+				pd->flowsrc = (*state)->state_key->flowsrc;
 				pd->flowhash = (*state)->state_key->flowhash;
+				if (pd->flowhash != 0) {
+					pd->pktflags |= PKTF_FLOW_ID;
+					pd->pktflags &= ~PKTF_FLOW_ADV;
+				}
+			}
 
 			if (pf_state_lookup_aux(state, kif, direction, &action))
 				return (action);
@@ -7310,9 +7382,14 @@ pf_test_state_esp(struct pf_state **state, int direction, struct pfi_kif *kif,
 		}
 	}
 
-	if (*state != NULL && pd != NULL &&
-		pd->flowhash == 0) {
+	/* similar to STATE_LOOKUP() */
+	if (*state != NULL && pd != NULL && !(pd->pktflags & PKTF_FLOW_ID)) {
+		pd->flowsrc = (*state)->state_key->flowsrc;
 		pd->flowhash = (*state)->state_key->flowhash;
+		if (pd->flowhash != 0) {
+			pd->pktflags |= PKTF_FLOW_ID;
+			pd->pktflags &= ~PKTF_FLOW_ADV;
+		}
 	}
 
 	if (pf_state_lookup_aux(state, kif, direction, &action))
@@ -7556,11 +7633,11 @@ pf_routable(struct pf_addr *addr, sa_family_t af, struct pfi_kif *kif)
 	if (kif != NULL && kif->pfik_ifp->if_type == IFT_ENC)
 		goto out;
 
+	/* XXX: what is the point of this? */
 	rtalloc((struct route *)&ro);
 
 out:
-	if (ro.ro_rt != NULL)
-		RTFREE(ro.ro_rt);
+	ROUTE_RELEASE(&ro);
 	return (ret);
 }
 
@@ -7597,11 +7674,10 @@ pf_rtlabel_match(struct pf_addr *addr, sa_family_t af, struct pf_addr_wrap *aw)
 		return (0);
 	}
 
+	/* XXX: what is the point of this? */
 	rtalloc((struct route *)&ro);
 
-	if (ro.ro_rt != NULL) {
-		RTFREE(ro.ro_rt);
-	}
+	ROUTE_RELEASE(&ro);
 
 	return (ret);
 }
@@ -7614,14 +7690,16 @@ pf_route(struct mbuf **m, struct pf_rule *r, int dir, struct ifnet *oifp,
 #pragma unused(pd)
 	struct mbuf		*m0, *m1;
 	struct route		 iproute;
-	struct route		*ro = NULL;
+	struct route		*ro = &iproute;
 	struct sockaddr_in	*dst;
 	struct ip		*ip;
 	struct ifnet		*ifp = NULL;
 	struct pf_addr		 naddr;
 	struct pf_src_node	*sn = NULL;
 	int			 error = 0;
-	int			 sw_csum = 0;
+	uint32_t		 sw_csum;
+
+	bzero(&iproute, sizeof (iproute));
 
 	if (m == NULL || *m == NULL || r == NULL ||
 	    (dir != PF_IN && dir != PF_OUT) || oifp == NULL)
@@ -7650,8 +7728,6 @@ pf_route(struct mbuf **m, struct pf_rule *r, int dir, struct ifnet *oifp,
 
 	ip = mtod(m0, struct ip *);
 
-	ro = &iproute;
-	bzero((caddr_t)ro, sizeof (*ro));
 	dst = satosin((void *)&ro->ro_dst);
 	dst->sin_family = AF_INET;
 	dst->sin_len = sizeof (*dst);
@@ -7659,7 +7735,7 @@ pf_route(struct mbuf **m, struct pf_rule *r, int dir, struct ifnet *oifp,
 
 	if (r->rt == PF_FASTROUTE) {
 		rtalloc(ro);
-		if (ro->ro_rt == 0) {
+		if (ro->ro_rt == NULL) {
 			ipstat.ips_noroute++;
 			goto bad;
 		}
@@ -7707,62 +7783,19 @@ pf_route(struct mbuf **m, struct pf_rule *r, int dir, struct ifnet *oifp,
 		ip = mtod(m0, struct ip *);
 	}
 
-	/* Copied from ip_output. */
-
 	/* Catch routing changes wrt. hardware checksumming for TCP or UDP. */
-	m0->m_pkthdr.csum_flags |= CSUM_IP;
-	sw_csum = m0->m_pkthdr.csum_flags &
-	    ~IF_HWASSIST_CSUM_FLAGS(ifp->if_hwassist);
+	ip_output_checksum(ifp, m0, ((ip->ip_hl) << 2), ntohs(ip->ip_len),
+	    &sw_csum);
 
-	if (ifp->if_hwassist & CSUM_TCP_SUM16) {
-		/*
-		 * Special case code for GMACE
-		 * frames that can be checksumed by GMACE SUM16 HW:
-		 * frame >64, no fragments, no UDP
-		 */
-		if (apple_hwcksum_tx && (m0->m_pkthdr.csum_flags & CSUM_TCP) &&
-		    (ntohs(ip->ip_len) > 50) &&
-		    (ntohs(ip->ip_len) <= ifp->if_mtu)) {
-			/*
-			 * Apple GMAC HW, expects:
-			 *	STUFF_OFFSET << 16 | START_OFFSET
-			 */
-			/* IP+Enet header length */
-			u_short offset = ((ip->ip_hl) << 2) + 14;
-			u_short csumprev = m0->m_pkthdr.csum_data & 0xffff;
-			m0->m_pkthdr.csum_flags = CSUM_DATA_VALID |
-			    CSUM_TCP_SUM16; /* for GMAC */
-			m0->m_pkthdr.csum_data = (csumprev + offset)  << 16 ;
-			m0->m_pkthdr.csum_data += offset;
-			/* do IP hdr chksum in software */
-			sw_csum = CSUM_DELAY_IP;
-		} else {
-			/* let the software handle any UDP or TCP checksums */
-			sw_csum |= (CSUM_DELAY_DATA & m0->m_pkthdr.csum_flags);
-		}
-	} else if (apple_hwcksum_tx == 0) {
-		sw_csum |= (CSUM_DELAY_DATA | CSUM_DELAY_IP) &
-		    m0->m_pkthdr.csum_flags;
-	}
-
-	if (sw_csum & CSUM_DELAY_DATA) {
-		in_delayed_cksum(m0);
-		sw_csum &= ~CSUM_DELAY_DATA;
-		m0->m_pkthdr.csum_flags &= ~CSUM_DELAY_DATA;
-	}
-
-	if (apple_hwcksum_tx != 0) {
-		m0->m_pkthdr.csum_flags &=
-		    IF_HWASSIST_CSUM_FLAGS(ifp->if_hwassist);
-	} else {
-		m0->m_pkthdr.csum_flags = 0;
-	}
-
-	if (ntohs(ip->ip_len) <= ifp->if_mtu ||
-	    (ifp->if_hwassist & CSUM_FRAGMENT)) {
+	if (ntohs(ip->ip_len) <= ifp->if_mtu || TSO_IPV4_OK(ifp, m0) ||
+	    (!(ip->ip_off & htons(IP_DF)) &&
+	    (ifp->if_hwassist & CSUM_FRAGMENT))) {
 		ip->ip_sum = 0;
-		if (sw_csum & CSUM_DELAY_IP)
+		if (sw_csum & CSUM_DELAY_IP) {
 			ip->ip_sum = in_cksum(m0, ip->ip_hl << 2);
+			sw_csum &= ~CSUM_DELAY_IP;
+			m0->m_pkthdr.csum_flags &= ~CSUM_DELAY_IP;
+		}
 		error = ifnet_output(ifp, PF_INET, m0, ro->ro_rt, sintosa(dst));
 		goto done;
 	}
@@ -7770,8 +7803,10 @@ pf_route(struct mbuf **m, struct pf_rule *r, int dir, struct ifnet *oifp,
 	/*
 	 * Too large for interface; fragment if possible.
 	 * Must be able to put at least 8 bytes per fragment.
+	 * Balk when DF bit is set or the interface didn't support TSO.
 	 */
-	if (ip->ip_off & htons(IP_DF)) {
+	if ((ip->ip_off & htons(IP_DF)) ||
+	    (m0->m_pkthdr.csum_flags & CSUM_TSO_IPV4)) {
 		ipstat.ips_cantfrag++;
 		if (r->rt != PF_DUPTO) {
 			icmp_error(m0, ICMP_UNREACH, ICMP_UNREACH_NEEDFRAG, 0,
@@ -7811,8 +7846,8 @@ pf_route(struct mbuf **m, struct pf_rule *r, int dir, struct ifnet *oifp,
 done:
 	if (r->rt != PF_DUPTO)
 		*m = NULL;
-	if (ro == &iproute && ro->ro_rt)
-		RTFREE(ro->ro_rt);
+
+	ROUTE_RELEASE(&iproute);
 	return;
 
 bad:
@@ -7964,8 +7999,9 @@ pf_check_proto_cksum(struct mbuf *m, int off, int len, u_int8_t p,
 		 * is partially-computed (only 16-bit summation), do it in
 		 * software below.
 		 */
-		if (apple_hwcksum_rx && (m->m_pkthdr.csum_flags &
-		    (CSUM_DATA_VALID | CSUM_PSEUDO_HDR)) &&
+		if ((m->m_pkthdr.csum_flags &
+		    (CSUM_DATA_VALID | CSUM_PSEUDO_HDR)) ==
+		    (CSUM_DATA_VALID | CSUM_PSEUDO_HDR) &&
 		    (m->m_pkthdr.csum_data ^ 0xffff) == 0) {
 			return (0);
 		}
@@ -8086,10 +8122,7 @@ pf_test(int dir, struct ifnet *ifp, struct mbuf **m0,
 	if (kif->pfik_flags & PFI_IFLAG_SKIP)
 		return (PF_PASS);
 
-#ifdef DIAGNOSTIC
-	if ((m->m_flags & M_PKTHDR) == 0)
-		panic("non-M_PKTHDR is passed to pf_test");
-#endif /* DIAGNOSTIC */
+	VERIFY(m->m_flags & M_PKTHDR);
 
 	/* initialize enough of pd for the done label */
 	h = mtod(m, struct ip *);
@@ -8155,10 +8188,11 @@ nonormalize:
 	pd.sc = MBUF_SCIDX(mbuf_get_service_class(m));
 	pd.tot_len = ntohs(h->ip_len);
 	pd.eh = eh;
-	if (pd.pf_mtag != NULL && pd.pf_mtag->pftag_flowhash != 0) {
-		pd.flowhash = pd.pf_mtag->pftag_flowhash;
-		pd.flags |= (m->m_pkthdr.m_fhflags & PF_TAG_FLOWADV) ?
-		    PFDESC_FLOW_ADV : 0;
+
+	if (m->m_pkthdr.pkt_flags & PKTF_FLOW_ID) {
+		pd.flowsrc = m->m_pkthdr.pkt_flowsrc;
+		pd.flowhash = m->m_pkthdr.pkt_flowid;
+		pd.pktflags = (m->m_pkthdr.pkt_flags & PKTF_FLOW_MASK);
 	}
 
 	/* handle fragments that didn't get reassembled by normalization */
@@ -8218,7 +8252,7 @@ nonormalize:
 			log = s->log;
 		} else if (s == NULL)
 			action = pf_test_rule(&r, &s, dir, kif,
-			    m, off, h, &pd, &a, &ruleset, &ipintrq);
+			    m, off, h, &pd, &a, &ruleset, NULL);
 		break;
 	}
 
@@ -8260,7 +8294,7 @@ nonormalize:
 			log = s->log;
 		} else if (s == NULL)
 			action = pf_test_rule(&r, &s, dir, kif,
-			    m, off, h, &pd, &a, &ruleset, &ipintrq);
+			    m, off, h, &pd, &a, &ruleset, NULL);
 		break;
 	}
 
@@ -8295,7 +8329,7 @@ nonormalize:
 			log = s->log;
 		} else if (s == NULL)
 			action = pf_test_rule(&r, &s, dir, kif,
-			    m, off, h, &pd, &a, &ruleset, &ipintrq);
+			    m, off, h, &pd, &a, &ruleset, NULL);
 		break;
 	}
 
@@ -8329,7 +8363,7 @@ nonormalize:
 			log = s->log;
 		} else if (s == NULL)
 			action = pf_test_rule(&r, &s, dir, kif,
-			    m, off, h, &pd, &a, &ruleset, &ipintrq);
+			    m, off, h, &pd, &a, &ruleset, NULL);
 		break;
 	}
 
@@ -8371,7 +8405,7 @@ nonormalize:
 				break;
 			} else if (s == NULL) {
 				action = pf_test_rule(&r, &s, dir, kif, m, off,
-				    h, &pd, &a, &ruleset, &ipintrq);
+				    h, &pd, &a, &ruleset, NULL);
 				if (action == PF_PASS)
 					break;
 			}
@@ -8402,7 +8436,7 @@ nonormalize:
 			log = s->log;
 		} else if (s == NULL)
 			action = pf_test_rule(&r, &s, dir, kif, m, off, h,
-			    &pd, &a, &ruleset, &ipintrq);
+			    &pd, &a, &ruleset, NULL);
 		break;
 	}
 
@@ -8421,7 +8455,7 @@ done:
 	}
 
 	if ((s && s->tag) || PF_RTABLEID_IS_VALID(r->rtableid) ||
-	    pd.flowhash != 0)
+	    (pd.pktflags & PKTF_FLOW_ID))
 		(void) pf_tag_packet(m, pd.pf_mtag, s ? s->tag : 0,
 		    r->rtableid, &pd);
 
@@ -8434,16 +8468,15 @@ done:
 				pd.pf_mtag->pftag_qid = r->qid;
 		}
 #endif /* PF_ALTQ */
+#if PF_ECN
 		/* add hints for ecn */
 		pd.pf_mtag->pftag_hdr = h;
 		/* record address family */
 		pd.pf_mtag->pftag_flags &= ~PF_TAG_HDR_INET6;
 		pd.pf_mtag->pftag_flags |= PF_TAG_HDR_INET;
-		/* record TCP vs. non-TCP */
-		if (pd.proto == IPPROTO_TCP)
-			pd.pf_mtag->pftag_flags |= PF_TAG_TCP;
-		else
-			pd.pf_mtag->pftag_flags &= ~PF_TAG_TCP;
+#endif /* PF_ECN */
+		/* record protocol */
+		m->m_pkthdr.pkt_proto = pd.proto;
 	}
 
 	/*
@@ -8621,10 +8654,7 @@ pf_test6(int dir, struct ifnet *ifp, struct mbuf **m0,
 	if (kif->pfik_flags & PFI_IFLAG_SKIP)
 		return (PF_PASS);
 
-#ifdef DIAGNOSTIC
-	if ((m->m_flags & M_PKTHDR) == 0)
-		panic("non-M_PKTHDR is passed to pf_test6");
-#endif /* DIAGNOSTIC */
+	VERIFY(m->m_flags & M_PKTHDR);
 
 	h = mtod(m, struct ip6_hdr *);
 
@@ -8645,10 +8675,10 @@ pf_test6(int dir, struct ifnet *ifp, struct mbuf **m0,
 	pd.tot_len = ntohs(h->ip6_plen) + sizeof(struct ip6_hdr);
 	pd.eh = eh;
 
-	if (pd.pf_mtag->pftag_flowhash != 0) {
-		pd.flowhash = pd.pf_mtag->pftag_flowhash;
-		pd.flags |= (m->m_pkthdr.m_fhflags & PF_TAG_FLOWADV) ?
-		    PFDESC_FLOW_ADV : 0;
+	if (m->m_pkthdr.pkt_flags & PKTF_FLOW_ID) {
+		pd.flowsrc = m->m_pkthdr.pkt_flowsrc;
+		pd.flowhash = m->m_pkthdr.pkt_flowid;
+		pd.pktflags = (m->m_pkthdr.pkt_flags & PKTF_FLOW_MASK);
 	}
 
 	if (m->m_pkthdr.len < (int)sizeof (*h)) {
@@ -8708,7 +8738,7 @@ nonormalize:
 		switch (nxt) {
 		case IPPROTO_FRAGMENT: {
 			struct ip6_frag ip6f;
-			
+
 			pd.flags |= PFDESC_IP_FRAG;
 			if (!pf_pull_hdr(m, off, &ip6f, sizeof ip6f, NULL,
 			    &reason, pd.af)) {
@@ -8812,7 +8842,7 @@ nonormalize:
 			log = s->log;
 		} else if (s == NULL)
 			action = pf_test_rule(&r, &s, dir, kif,
-			    m, off, h, &pd, &a, &ruleset, &ip6intrq);
+			    m, off, h, &pd, &a, &ruleset, NULL);
 		break;
 	}
 
@@ -8854,7 +8884,7 @@ nonormalize:
 			log = s->log;
 		} else if (s == NULL)
 			action = pf_test_rule(&r, &s, dir, kif,
-			    m, off, h, &pd, &a, &ruleset, &ip6intrq);
+			    m, off, h, &pd, &a, &ruleset, NULL);
 		break;
 	}
 
@@ -8889,7 +8919,7 @@ nonormalize:
 			log = s->log;
 		} else if (s == NULL)
 			action = pf_test_rule(&r, &s, dir, kif,
-			    m, off, h, &pd, &a, &ruleset, &ip6intrq);
+			    m, off, h, &pd, &a, &ruleset, NULL);
 		break;
 	}
 
@@ -8923,7 +8953,7 @@ nonormalize:
 			log = s->log;
 		} else if (s == NULL)
 			action = pf_test_rule(&r, &s, dir, kif,
-			    m, off, h, &pd, &a, &ruleset, &ip6intrq);
+			    m, off, h, &pd, &a, &ruleset, NULL);
 		break;
 	}
 
@@ -8966,7 +8996,7 @@ nonormalize:
 				break;
 			} else if (s == NULL) {
 				action = pf_test_rule(&r, &s, dir, kif, m, off,
-				    h, &pd, &a, &ruleset, &ip6intrq);
+				    h, &pd, &a, &ruleset, NULL);
 				if (action == PF_PASS)
 					break;
 			}
@@ -8997,7 +9027,7 @@ nonormalize:
 			log = s->log;
 		} else if (s == NULL)
 			action = pf_test_rule(&r, &s, dir, kif, m, off, h,
-			    &pd, &a, &ruleset, &ip6intrq);
+			    &pd, &a, &ruleset, NULL);
 		break;
 	}
 
@@ -9020,7 +9050,8 @@ done:
 		    ("pf: dropping packet with dangerous v6 headers\n"));
 	}
 
-	if ((s && s->tag) || PF_RTABLEID_IS_VALID(r->rtableid) || pd.flowhash != 0)
+	if ((s && s->tag) || PF_RTABLEID_IS_VALID(r->rtableid) ||
+	    (pd.pktflags & PKTF_FLOW_ID))
 		(void) pf_tag_packet(m, pd.pf_mtag, s ? s->tag : 0,
 		    r->rtableid, &pd);
 
@@ -9033,16 +9064,15 @@ done:
 				pd.pf_mtag->pftag_qid = r->qid;
 		}
 #endif /* PF_ALTQ */
+#if PF_ECN
 		/* add hints for ecn */
 		pd.pf_mtag->pftag_hdr = h;
 		/* record address family */
 		pd.pf_mtag->pftag_flags &= ~PF_TAG_HDR_INET;
 		pd.pf_mtag->pftag_flags |= PF_TAG_HDR_INET6;
-		/* record TCP vs. non-TCP */
-		if (pd.proto == IPPROTO_TCP)
-			pd.pf_mtag->pftag_flags |= PF_TAG_TCP;
-		else
-			pd.pf_mtag->pftag_flags &= ~PF_TAG_TCP;
+#endif /* PF_ECN */
+		/* record protocol */
+		m->m_pkthdr.pkt_proto = pd.proto;
 	}
 
 	if (dir == PF_IN && action == PF_PASS && (pd.proto == IPPROTO_TCP ||
@@ -9279,7 +9309,7 @@ pf_calendar_time_second(void)
 {
 	struct timeval t;
 
-	microtime(&t);
+	getmicrotime(&t);
 	return (t.tv_sec);
 }
 

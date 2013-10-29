@@ -207,7 +207,7 @@ IOServicePlatformAction(void * refcon0, void * refcon1, uint32_t priority,
     kprintf("%s -> %s\n", function->getCStringNoCopy(), service_name);
 
     ret = service->callPlatformFunction(function, false, 
-					 (void *) priority, param1, param2, param3);
+					 (void *)(uintptr_t) priority, param1, param2, param3);
 
     return (ret);
 }
@@ -687,10 +687,11 @@ void IOCPUInterruptController::enableCPUInterrupt(IOCPU *cpu)
 		IOInterruptHandler, this, &IOCPUInterruptController::handleInterrupt);
 
 	ml_install_interrupt_handler(cpu, cpu->getCPUNumber(), this, handler, 0);
-  
-	enabledCPUs++;
-  
-  if (enabledCPUs == numCPUs) thread_wakeup(this);
+
+	// Ensure that the increment is seen by all processors
+	OSIncrementAtomic(&enabledCPUs);
+
+	if (enabledCPUs == numCPUs) thread_wakeup(this);
 }
 
 IOReturn IOCPUInterruptController::registerInterrupt(IOService *nub,

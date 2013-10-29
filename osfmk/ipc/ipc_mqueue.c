@@ -352,7 +352,7 @@ ipc_mqueue_changed(
  *		the message and must do something with it.  If successful,
  *		the message is queued, given to a receiver, or destroyed.
  *	Conditions:
- *		Nothing locked.
+ *		mqueue is locked.
  *	Returns:
  *		MACH_MSG_SUCCESS	The message was accepted.
  *		MACH_SEND_TIMED_OUT	Caller still has message.
@@ -409,7 +409,9 @@ ipc_mqueue_send(
 		wresult = wait_queue_assert_wait64_locked(
 						&mqueue->imq_wait_queue,
 						IPC_MQUEUE_FULL,
-						THREAD_ABORTSAFE, deadline,
+						THREAD_ABORTSAFE,
+						TIMEOUT_URGENCY_USER_NORMAL,
+						deadline, 0,
 						cur_thread);
 		thread_unlock(cur_thread);
 		imq_unlock(mqueue);
@@ -444,6 +446,7 @@ ipc_mqueue_send(
 	ipc_mqueue_post(mqueue, kmsg);
 	return MACH_MSG_SUCCESS;
 }
+
 
 /*
  *	Routine:	ipc_mqueue_release_msgcount
@@ -572,6 +575,7 @@ ipc_mqueue_post(
 		 * and handle its error without getting the message.  We
 		 * need to go back and pick another one.
 		 */
+		receiver->ith_receiver_name = mqueue->imq_receiver_name;
 		receiver->ith_kmsg = IKM_NULL;
 		receiver->ith_seqno = 0;
 		thread_unlock(receiver);
@@ -869,7 +873,9 @@ ipc_mqueue_receive_on_thread(
 
 	wresult = wait_queue_assert_wait64_locked(&mqueue->imq_wait_queue,
 						  IPC_MQUEUE_RECEIVE,
-						  interruptible, deadline,
+						  interruptible, 
+						  TIMEOUT_URGENCY_USER_NORMAL,
+						  deadline, 0,
 						  thread);
 	/* preposts should be detected above, not here */
 	if (wresult == THREAD_AWAKENED)
@@ -946,49 +952,166 @@ ipc_mqueue_select_on_thread(
 /*
  *	Routine:	ipc_mqueue_peek
  *	Purpose:
- *		Peek at a message queue to see if it has any messages
- *		(in it or contained message queues for a set).
+ *		Peek at a (non-set) message queue to see if it has a message
+ *		matching the sequence number provided (if zero, then the
+ *		first message in the queue) and return vital info about the
+ *		message.
  *
  *	Conditions:
  *		Locks may be held by callers, so this routine cannot block.
  *		Caller holds reference on the message queue.
  */
 unsigned
-ipc_mqueue_peek(ipc_mqueue_t mq)
+ipc_mqueue_peek(ipc_mqueue_t 		mq,
+		mach_port_seqno_t	*seqnop,
+		mach_msg_size_t		*msg_sizep,
+		mach_msg_id_t		*msg_idp,
+		mach_msg_max_trailer_t 	*msg_trailerp)
+{
+	ipc_kmsg_queue_t kmsgq;
+	ipc_kmsg_t kmsg; 
+	mach_port_seqno_t seqno, msgoff;
+	int res = 0;
+	spl_t s;
+
+	assert(!imq_is_set(mq));
+
+	s = splsched();
+	imq_lock(mq);
+
+	seqno = (seqnop != NULL) ? seqno = *seqnop : 0;
+
+	if (seqno == 0) {
+		seqno = mq->imq_seqno;
+		msgoff = 0;
+	} else if (seqno >= mq->imq_seqno && 
+		   seqno < mq->imq_seqno + mq->imq_msgcount) {
+		msgoff = seqno - mq->imq_seqno;
+	} else
+		goto out;
+
+	/* look for the message that would match that seqno */
+	kmsgq = &mq->imq_messages;
+	kmsg = ipc_kmsg_queue_first(kmsgq);
+	while (msgoff-- && kmsg != IKM_NULL) {
+		kmsg = ipc_kmsg_queue_next(kmsgq, kmsg);
+	}
+	if (kmsg == IKM_NULL)
+		goto out;
+
+	/* found one - return the requested info */
+	if (seqnop != NULL)
+		*seqnop = seqno;
+	if (msg_sizep != NULL)
+		*msg_sizep = kmsg->ikm_header->msgh_size;
+	if (msg_idp != NULL)
+		*msg_idp = kmsg->ikm_header->msgh_id;
+	if (msg_trailerp != NULL)
+		memcpy(msg_trailerp, 
+		       (mach_msg_max_trailer_t *)((vm_offset_t)kmsg->ikm_header +
+						  round_msg(kmsg->ikm_header->msgh_size)),
+		       sizeof(mach_msg_max_trailer_t));
+	res = 1;
+
+ out:
+	imq_unlock(mq);
+	splx(s);
+	return res;
+}
+
+/*
+ *	Routine:	ipc_mqueue_set_peek
+ *	Purpose:
+ *		Peek at a message queue set to see if it has any ports
+ *		with messages.
+ *
+ *	Conditions:
+ *		Locks may be held by callers, so this routine cannot block.
+ *		Caller holds reference on the message queue.
+ */
+unsigned
+ipc_mqueue_set_peek(ipc_mqueue_t mq)
 {
 	wait_queue_link_t	wql;
 	queue_t			q;
 	spl_t s;
+	int res;
 
-	if (!imq_is_set(mq))
-		return (ipc_kmsg_queue_first(&mq->imq_messages) != IKM_NULL);
+	assert(imq_is_set(mq));
 
-	/*
-	 * Don't block trying to get the lock.
-	 */
 	s = splsched();
 	imq_lock(mq);
 
 	/* 
 	 * peek at the contained port message queues, return as soon as
 	 * we spot a message on one of the message queues linked on the
-	 * prepost list.
+	 * prepost list.  No need to lock each message queue, as only the
+	 * head of each queue is checked. If a message wasn't there before
+	 * we entered here, no need to find it (if we do, great).
 	 */
+	res = 0;
 	q = &mq->imq_preposts;
 	queue_iterate(q, wql, wait_queue_link_t, wql_preposts) {
 		ipc_mqueue_t port_mq = (ipc_mqueue_t)wql->wql_queue;
 		ipc_kmsg_queue_t kmsgs = &port_mq->imq_messages;
 			
 		if (ipc_kmsg_queue_first(kmsgs) != IKM_NULL) {
-			imq_unlock(mq);
-			splx(s);
-			return 1;
+			res = 1;
+			break;
 		}
 	}
 	imq_unlock(mq);
 	splx(s);
-	return 0;
+	return res;
 }
+
+/*
+ *	Routine:	ipc_mqueue_set_gather_member_names
+ *	Purpose:
+ *		Iterate a message queue set to identify the member port
+ *		names. Actual returned names is limited to maxnames entries,
+ *		but we keep counting the actual number of members to let
+ *		the caller decide to retry if necessary.
+ *
+ *	Conditions:
+ *		Locks may be held by callers, so this routine cannot block.
+ *		Caller holds reference on the message queue.
+ */
+void
+ipc_mqueue_set_gather_member_names(
+	ipc_mqueue_t mq, 
+	ipc_entry_num_t maxnames, 
+	mach_port_name_t *names,
+	ipc_entry_num_t *actualp)
+{
+	wait_queue_link_t	wql;
+	queue_t			q;
+	spl_t s;
+	ipc_entry_num_t actual = 0;
+
+	assert(imq_is_set(mq));
+
+	s = splsched();
+	imq_lock(mq);
+
+	/* 
+	 * Iterate over the member ports through the mqueue set links
+	 * capturing as many names as we can.
+	 */
+	q = &mq->imq_setlinks;
+	queue_iterate(q, wql, wait_queue_link_t, wql_setlinks) {
+		ipc_mqueue_t port_mq = (ipc_mqueue_t)wql->wql_queue;
+
+		if (actual < maxnames)
+			names[actual] = port_mq->imq_receiver_name;
+		actual++;
+	}
+	imq_unlock(mq);
+	splx(s);
+
+	*actualp = actual;
+}
+
 
 /*
  *	Routine:	ipc_mqueue_destroy
@@ -1008,7 +1131,6 @@ ipc_mqueue_destroy(
 	ipc_kmsg_t kmsg;
 	boolean_t reap = FALSE;
 	spl_t s;
-
 
 	s = splsched();
 	imq_lock(mqueue);

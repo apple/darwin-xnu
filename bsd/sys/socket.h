@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2012 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2013 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -78,9 +78,10 @@
 
 #ifdef PRIVATE
 #include <sys/param.h>
+#include <uuid/uuid.h>
 #endif /* PRIVATE */
 
-#ifndef KERNEL 
+#ifndef KERNEL
 #include <Availability.h>
 #endif
 
@@ -91,53 +92,23 @@
 /*
  * Data types.
  */
-#ifndef _GID_T
-typedef __darwin_gid_t		gid_t;
-#define _GID_T
-#endif
 
-#ifndef _OFF_T
-typedef __darwin_off_t		off_t;
-#define _OFF_T
-#endif
-
-#ifndef _PID_T
-typedef __darwin_pid_t		pid_t;
-#define _PID_T
-#endif
-
-#ifndef _SA_FAMILY_T
-#define _SA_FAMILY_T
-typedef __uint8_t		sa_family_t;
-#endif
-
-#ifndef _SOCKLEN_T
-#define _SOCKLEN_T
-typedef	__darwin_socklen_t	socklen_t;
-#endif
+#include <sys/_types/_gid_t.h>
+#include <sys/_types/_off_t.h>
+#include <sys/_types/_pid_t.h>
+#include <sys/_types/_sa_family_t.h>
+#include <sys/_types/_socklen_t.h>
 
 /* XXX Not explicitly defined by POSIX, but function return types are */
-#ifndef _SIZE_T
-#define _SIZE_T
-typedef __darwin_size_t		size_t;
-#endif
+#include <sys/_types/_size_t.h>
  
 /* XXX Not explicitly defined by POSIX, but function return types are */
-#ifndef	_SSIZE_T
-#define	_SSIZE_T
-typedef	__darwin_ssize_t	ssize_t;
-#endif
+#include <sys/_types/_ssize_t.h>
 
 /*
  * [XSI] The iovec structure shall be defined as described in <sys/uio.h>.
  */
-#ifndef _STRUCT_IOVEC
-#define	_STRUCT_IOVEC
-struct iovec {
-	void *   iov_base;	/* [XSI] Base address of I/O memory region */
-	size_t	 iov_len;	/* [XSI] Size of region iov_base points to */
-};
-#endif
+#include <sys/_types/_iovec_t.h>
 
 #ifdef PRIVATE
 #define SO_TCDBG_PID		0x01	/* Set/get traffic class for PID */
@@ -228,10 +199,12 @@ struct so_tcdbg {
 #define	SO_UPCALLCLOSEWAIT	0x1027	/* APPLE: block on close until an upcall returns */
 #endif
 #define SO_LINGER_SEC	0x1080          /* linger on close if data present (in seconds) */
-#define SO_RESTRICTIONS	0x1081	/* APPLE: deny inbound/outbound/both/flag set */
-#define SO_RESTRICT_DENYIN		0x00000001	/* flag for SO_RESTRICTIONS - deny inbound */
-#define SO_RESTRICT_DENYOUT		0x00000002	/* flag for SO_RESTRICTIONS - deny outbound */
-#define SO_RESTRICT_DENYSET		0x80000000	/* flag for SO_RESTRICTIONS - deny has been set */
+#ifdef PRIVATE
+#define	SO_RESTRICTIONS	0x1081		/* APPLE: deny flag set */
+#define	 SO_RESTRICT_DENY_IN	0x1	/* deny inbound (trapdoor) */
+#define	 SO_RESTRICT_DENY_OUT	0x2	/* deny outbound (trapdoor) */
+#define	 SO_RESTRICT_DENY_CELLULAR 0x4	/* deny use of cellular (trapdoor) */
+#endif /* PRIVATE */
 #define SO_RANDOMPORT   0x1082  /* APPLE: request local port randomization */
 #define SO_NP_EXTENSIONS	0x1083	/* To turn off some POSIX behavior */
 #endif
@@ -340,6 +313,13 @@ struct so_tcdbg {
 #define	 SO_TC_ALL	(-1)
 
 #define	SO_RECV_ANYIF	0x1104		/* unrestricted inbound processing */
+#define	SO_TRAFFIC_MGT_BACKGROUND	0x1105	/* Background traffic management */
+ 
+#define	SO_FLOW_DIVERT_TOKEN	0x1106	/* flow divert token */
+
+#define	SO_DELEGATED		0x1107	/* set socket as delegate (pid_t) */
+#define	SO_DELEGATED_UUID	0x1108	/* set socket as delegate (uuid_t) */
+
 #endif /* PRIVATE */
 #endif	/* (!_POSIX_C_SOURCE || _DARWIN_C_SOURCE) */
 
@@ -420,10 +400,8 @@ struct so_np_extensions {
 #define	AF_IPX		23		/* Novell Internet Protocol */
 #define	AF_SIP		24		/* Simple Internet Protocol */
 #define pseudo_AF_PIP	25		/* Help Identify PIP packets */
-#ifdef __APPLE__
 /*define pseudo_AF_BLUE	26	   Identify packets for Blue Box - Not used */
 #define AF_NDRV		27		/* Network Driver 'raw' access */
-#endif
 #define	AF_ISDN		28		/* Integrated Services Digital Network*/
 #define	AF_E164		AF_ISDN		/* CCITT E.164 recommendation */
 #define	pseudo_AF_KEY	29		/* Internal key-management function */
@@ -431,30 +409,22 @@ struct so_np_extensions {
 #define	AF_INET6	30		/* IPv6 */
 #if !defined(_POSIX_C_SOURCE) || defined(_DARWIN_C_SOURCE)
 #define	AF_NATM		31		/* native ATM access */
-#ifdef __APPLE__
 #define AF_SYSTEM	32		/* Kernel event messages */
 #define AF_NETBIOS	33		/* NetBIOS */
 #define AF_PPP		34		/* PPP communication protocol */
-#else
-#define	AF_ATM		30		/* ATM */
-#endif
 #define pseudo_AF_HDRCMPLT 35		/* Used by BPF to not rewrite headers
-					 * in interface output routine
-					 */
+					 * in interface output routine */
 #ifdef PRIVATE
 #define AF_AFP	36			/* Used by AFP */
 #else
 #define AF_RESERVED_36	36		/* Reserved for internal usage */
 #endif
-
-#ifndef __APPLE__
-#define	AF_NETGRAPH	32		/* Netgraph sockets */
-#endif
 #define AF_IEEE80211    37              /* IEEE 802.11 protocol */
-#ifdef __APPLE__
 #define AF_UTUN		38
-#endif
-#define	AF_MAX		39
+#ifdef PRIVATE
+#define	AF_MULTIPATH	39
+#endif /* PRIVATE */
+#define	AF_MAX		40
 #endif	/* (!_POSIX_C_SOURCE || _DARWIN_C_SOURCE) */
 
 /*
@@ -501,6 +471,24 @@ struct sockaddr_storage {
 	char			__ss_pad2[_SS_PAD2SIZE];
 };
 
+#ifdef BSD_KERNEL_PRIVATE
+#include <sys/queue.h>
+
+struct sockaddr_entry {
+	TAILQ_ENTRY(sockaddr_entry)	se_link;
+	struct sockaddr			*se_addr;
+	uint32_t			se_flags;
+};
+
+#define	SEF_ATTACHED		1	/* attached to sockaddr_list */
+
+struct sockaddr_list {
+	TAILQ_HEAD(, sockaddr_entry)	sl_head;
+	uint32_t			sl_cnt;
+
+};
+#endif /* BSD_KERNEL_PRIVATE */
+
 /*
  * Protocol families, same as address families for now.
  */
@@ -532,31 +520,23 @@ struct sockaddr_storage {
 #define	PF_IPX		AF_IPX		/* same format as AF_NS */
 #define PF_RTIP		pseudo_AF_RTIP	/* same format as AF_INET */
 #define PF_PIP		pseudo_AF_PIP
-#ifdef __APPLE__
 #define PF_NDRV		AF_NDRV
-#endif
 #define	PF_ISDN		AF_ISDN
 #define	PF_KEY		pseudo_AF_KEY
 #define	PF_INET6	AF_INET6
 #define	PF_NATM		AF_NATM
-#ifdef __APPLE__
 #define PF_SYSTEM	AF_SYSTEM
 #define PF_NETBIOS	AF_NETBIOS
 #define PF_PPP		AF_PPP
 #ifdef PRIVATE
-#define PF_AFP   	AF_AFP
+#define PF_AFP		AF_AFP
 #else
 #define PF_RESERVED_36  AF_RESERVED_36
 #endif
-
-#else
-#define	PF_ATM		AF_ATM
-#define	PF_NETGRAPH	AF_NETGRAPH
-#endif
-
-#ifdef __APPLE__
 #define PF_UTUN		AF_UTUN
-#endif
+#ifdef PRIVATE
+#define	PF_MULTIPATH	AF_MULTIPATH
+#endif /* PRIVATE */
 #define	PF_MAX		AF_MAX
 
 /*
@@ -850,6 +830,11 @@ struct cmsgcred {
 #define	SCM_CREDS			0x03	/* process creds (struct cmsgcred) */
 #define	SCM_TIMESTAMP_MONOTONIC		0x04	/* timestamp (uint64_t) */ 
 
+#ifdef PRIVATE
+#define SCM_SEQNUM			0x05	/* TCP unordered recv seq no */
+#define SCM_MSG_PRIORITY		0x06	/* TCP unordered snd priority */
+#endif /* PRIVATE */
+
 #ifdef KERNEL_PRIVATE
 /*
  * 4.3 compat sockaddr (deprecated)
@@ -922,6 +907,169 @@ struct user32_sf_hdtr {
 #endif /* KERNEL */
 
 #endif	/* !_POSIX_C_SOURCE */
+
+#ifdef PRIVATE
+#if !defined(_POSIX_C_SOURCE) || defined(_DARWIN_C_SOURCE)
+typedef __uint32_t associd_t;
+#define	ASSOCID_ANY	0
+#define	ASSOCID_ALL	((associd_t)(-1ULL))
+
+typedef __uint32_t connid_t;
+#define	CONNID_ANY	0
+#define	CONNID_ALL	((connid_t)(-1ULL))
+
+/*
+ * Structure for SIOCGASSOCIDS
+ */
+struct so_aidreq {
+	__uint32_t	sar_cnt;	/* number of associations */
+	associd_t	*sar_aidp;	/* array of association IDs */
+};
+
+#ifdef BSD_KERNEL_PRIVATE
+struct so_aidreq32 {
+	__uint32_t	sar_cnt;
+	user32_addr_t	sar_aidp;
+};
+
+struct so_aidreq64 {
+	__uint32_t	sar_cnt;
+	user64_addr_t	sar_aidp __attribute__((aligned(8)));
+};
+#endif /* BSD_KERNEL_PRIVATE */
+
+/*
+ * Structure for SIOCGCONNIDS
+ */
+struct so_cidreq {
+	associd_t	scr_aid;	/* association ID */
+	__uint32_t	scr_cnt;	/* number of connections */
+	connid_t	*scr_cidp;	/* array of connection IDs */
+};
+
+#ifdef BSD_KERNEL_PRIVATE
+struct so_cidreq32 {
+	associd_t	scr_aid;
+	__uint32_t	scr_cnt;
+	user32_addr_t	scr_cidp;
+};
+
+struct so_cidreq64 {
+	associd_t	scr_aid;
+	__uint32_t	scr_cnt;
+	user64_addr_t	scr_cidp __attribute__((aligned(8)));
+};
+#endif /* BSD_KERNEL_PRIVATE */
+
+/*
+ * Structure for SIOCGCONNINFO
+ */
+struct so_cinforeq {
+	connid_t	scir_cid;		/* connection ID */
+	__uint32_t	scir_flags;		/* see flags below */
+	__uint32_t	scir_ifindex;		/* (last) outbound interface */
+	__int32_t	scir_error;		/* most recent error */
+	struct sockaddr	*scir_src;		/* source address */
+	socklen_t	scir_src_len;		/* source address len */
+	struct sockaddr *scir_dst;		/* destination address */
+	socklen_t	scir_dst_len;		/* destination address len */
+	__uint32_t	scir_aux_type;		/* aux data type (CIAUX) */
+	void		*scir_aux_data;		/* aux data */
+	__uint32_t	scir_aux_len;		/* aux data len */
+};
+
+#ifdef BSD_KERNEL_PRIVATE
+struct so_cinforeq32 {
+	connid_t	scir_cid;
+	__uint32_t	scir_flags;
+	__uint32_t	scir_ifindex;
+	__int32_t	scir_error;
+	user32_addr_t	scir_src;
+	socklen_t	scir_src_len;
+	user32_addr_t	scir_dst;
+	socklen_t	scir_dst_len;
+	__uint32_t	scir_aux_type;
+	user32_addr_t	scir_aux_data;
+	__uint32_t	scir_aux_len;
+};
+
+struct so_cinforeq64 {
+	connid_t	scir_cid;
+	__uint32_t	scir_flags;
+	__uint32_t	scir_ifindex;
+	__int32_t	scir_error;
+	user64_addr_t	scir_src	__attribute__((aligned(8)));
+	socklen_t	scir_src_len;
+	user64_addr_t	scir_dst	__attribute__((aligned(8)));
+	socklen_t	scir_dst_len;
+	__uint32_t	scir_aux_type;
+	user64_addr_t	scir_aux_data	__attribute__((aligned(8)));
+	__uint32_t	scir_aux_len;
+};
+#endif /* BSD_KERNEL_PRIVATE */
+
+/* valid connection info flags */
+#define	CIF_CONNECTING		0x1	/* connection was attempted */
+#define	CIF_CONNECTED		0x2	/* connection is established */
+#define	CIF_DISCONNECTING	0x4	/* disconnection was attempted */
+#define	CIF_DISCONNECTED	0x8	/* has been disconnected */
+#define	CIF_BOUND_IF		0x10	/* bound to an interface */
+#define	CIF_BOUND_IP		0x20	/* bound to a src address */
+#define	CIF_BOUND_PORT		0x40	/* bound to a src port */
+#define	CIF_PREFERRED		0x80	/* connection is primary/preferred */
+#define	CIF_MP_CAPABLE		0x100	/* supports multipath protocol */
+#define	CIF_MP_READY		0x200	/* multipath protocol confirmed */
+#define	CIF_MP_DEGRADED		0x400	/* has lost its multipath capability */
+#define CIF_MP_ACTIVE		0x800	/* this is the active subflow */
+
+/* valid connection info auxiliary data types */
+#define	CIAUX_TCP	0x1	/* TCP auxiliary data (conninfo_tcp_t) */
+
+/*
+ * Structure for SIOC{S,G}CONNORDER
+ */
+struct so_cordreq {
+	connid_t	sco_cid;		/* connection ID */
+	__uint32_t	sco_rank;		/* rank (0 means unspecified) */
+};
+
+/*
+ * Network policy subclass (of KEV_NETWORK_CLASS)
+ */
+#define	KEV_NETPOLICY_SUBCLASS	3
+
+#define	KEV_NETPOLICY_IFDENIED	1	/* denied access to interface */
+
+/*
+ * Common structure for KEV_NETPOLICY_SUBCLASS
+ */
+struct netpolicy_event_data {
+	__uint64_t	eupid;		/* effective unique PID */
+	pid_t		epid;		/* effective PID */
+#if !defined(__LP64__)
+	__uint32_t	pad;
+#endif /* __LP64__ */
+	uuid_t		euuid;		/* effective UUID */
+};
+
+/*
+ * NETPOLICY_IFDENIED event structure
+ */
+struct kev_netpolicy_ifdenied {
+	struct netpolicy_event_data	ev_data;
+};
+
+#ifndef	KERNEL
+__BEGIN_DECLS
+extern int connectx(int s, struct sockaddr *, socklen_t, struct sockaddr *,
+    socklen_t, __uint32_t, associd_t, connid_t *);
+extern int disconnectx(int s, associd_t, connid_t);
+extern int peeloff(int s, associd_t);
+extern int socket_delegate(int, int, int, pid_t);
+__END_DECLS
+#endif /* !KERNEL */
+#endif	/* (!_POSIX_C_SOURCE || _DARWIN_C_SOURCE) */
+#endif /* PRIVATE */
 
 #ifndef	KERNEL
 __BEGIN_DECLS

@@ -9,18 +9,15 @@ include $(MakeInc_def)
 INSTALL_SHARE_MISC_LIST =	\
 	trace.codes
 
+INSTALL_SHARE_MISC_FILES = \
+	$(addprefix $(DSTROOT)/$(INSTALL_SHARE_MISC_DIR)/, $(INSTALL_SHARE_MISC_LIST))
+
+$(INSTALL_SHARE_MISC_FILES): $(DSTROOT)/$(INSTALL_SHARE_MISC_DIR)/% : %
+	$(_v)$(MKDIR) $(DSTROOT)/$(INSTALL_SHARE_MISC_DIR)
+	@echo INSTALL $(@F)
+	$(_v)$(INSTALL) $(INSTALL_FLAGS) $< $@
+
+do_build_install_primary:: $(INSTALL_SHARE_MISC_FILES)
+
 include $(MakeInc_rule)
 include $(MakeInc_dir)
-
-SHARE_MISC_DIR = usr/share/misc
-
-INSTALL_SHARE_MISC_FILES = \
-	$(addprefix $(DSTROOT)/$(SHARE_MISC_DIR)/, $(INSTALL_SHARE_MISC_LIST))
-
-$(INSTALL_SHARE_MISC_FILES): $(DSTROOT)/$(SHARE_MISC_DIR)/% : %
-	@echo Installing $< in $(dir $@)
-	$(_v) $(MKDIR) $(DSTROOT)/$(SHARE_MISC_DIR);	\
-	$(RM) $(RMFLAGS) $@;				\
-	$(INSTALL) $(INSTALL_FLAGS) $< $(dir $@);
-
-do_build_install: $(INSTALL_SHARE_MISC_FILES)

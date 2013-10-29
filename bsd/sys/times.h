@@ -74,10 +74,7 @@
 #include <sys/_types.h>
 
 /* [XSI] The clock_t type shall be defined as described in <sys/types.h> */
-#ifndef	_CLOCK_T
-#define	_CLOCK_T
-typedef	__darwin_clock_t	clock_t;
-#endif
+#include <sys/_types/_clock_t.h>
 
 /*
  * [XSI] Structure whose address is passed as the first parameter to times()

@@ -3,7 +3,7 @@
 #  Standard Apple Mac OS Configurations:
 #  -------- ----- ------ ---------------
 #
-#  RELEASE	= [ intel mach iokitcpp hibernation medium crypto config_dtrace config_sleep iokitstats vm_pressure_events ]
+#  RELEASE	= [ intel mach iokitcpp hibernation medium crypto config_dtrace config_sleep iokitstats vm_pressure_events memorystatus ]
 #  PROFILE	= [ RELEASE profile ]
 #  DEBUG	= [ RELEASE debug mach_assert ]
 #
@@ -14,6 +14,12 @@
 
 machine		"x86_64"					# <intel>
 cpu		"x86_64"					# <intel>
+
+#
+# Note: MAC/AUDIT options must be set in all the bsd/conf, osfmk/conf, and 
+# security/conf MASTER files.
+#
+options         CONFIG_MACF                     # Mandatory Access Control Framework
 
 options		NO_KEXTD				# <no_kextd>
 

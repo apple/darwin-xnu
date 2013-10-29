@@ -34,8 +34,8 @@
 #include <machine/limits.h>
 
 #ifdef KERNEL
-/* Log file system related error in key-value format identified by Apple 
- * system log (ASL) facility.  The key-value pairs are string pointers 
+/* Log file system related error in key-value format identified by Apple
+ * system log (ASL) facility. The key-value pairs are string pointers 
  * (char *) and are provided as variable arguments list.  A NULL value 
  * indicates end of the list.
  *
@@ -74,9 +74,9 @@
 unsigned long fslog_err(unsigned long msg_id, ... );
 
 /* Reserved message IDs to determine message order */
-#define FSLOG_MSG_SINGLE	ULONG_MAX
-#define FSLOG_MSG_FIRST		0x0
-#define FSLOG_MSG_LAST		(~(ULONG_MAX >> 1)) 
+#define	FSLOG_MSG_SINGLE	ULONG_MAX
+#define	FSLOG_MSG_FIRST		0x0
+#define	FSLOG_MSG_LAST		(~(ULONG_MAX >> 1)) 
 
 #ifdef BSD_KERNEL_PRIVATE
 
@@ -109,27 +109,27 @@ void fslog_extmod_msgtracer(proc_t caller, proc_t target);
 #define FSLOG_VAL_ORDER_MIDDLE	"Middle"
 #define FSLOG_VAL_ORDER_LAST 	"Last"
 
+/* Keys for IO/FS logging using FSLog */
+#define	FSLOG_KEY_ERR_TYPE	"ErrType"	/* Type of problem (IO, FS Corruption) */
+#define	FSLOG_KEY_ERRNO		"ErrNo"		/* Error number (Integer) */
+#define	FSLOG_KEY_IOTYPE	"IOType"	/* Type of IO (Read/Write) */
+#define	FSLOG_KEY_PHYS_BLKNUM	"PBlkNum"	/* Physical block number */
+#define	FSLOG_KEY_LOG_BLKNUM	"LBlkNum"	/* Logical block number */
+#define	FSLOG_KEY_DEVNODE	"DevNode"	/* Device node (f_mntfromname) */
+#define	FSLOG_KEY_PATH		"Path"		/* File system path */
+#define	FSLOG_KEY_MNTPT		"MountPt"	/* Mount point */
+
 /* Values used by FSLog */
 #define FSLOG_VAL_FACILITY	"com.apple.system.fs" /* Facility generating messages */
 #define FSLOG_VAL_LEVEL		LOG_ERR		/* Priority level */
 #define FSLOG_VAL_READ_UID	0		/* Allow read access to root only */
 
-/* Keys for IO/FS logging using FSLog */
-#define	FSLOG_KEY_ERR_TYPE	"ErrType"	/* Type of problem (IO, FS Corruption) */
-#define	FSLOG_KEY_ERRNO		"ErrNo"		/* Error number (Integer) */
-#define FSLOG_KEY_IOTYPE	"IOType"	/* Type of IO (Read/Write) */
-#define FSLOG_KEY_PHYS_BLKNUM	"PBlkNum"	/* Physical block number */
-#define FSLOG_KEY_LOG_BLKNUM	"LBlkNum"	/* Logical block number */
-#define FSLOG_KEY_DEVNODE	"DevNode"	/* Device node (f_mntfromname) */
-#define FSLOG_KEY_PATH		"Path"		/* File system path */
-#define FSLOG_KEY_MNTPT		"MountPt"	/* Mount point */
-
 /* Values for type of error (FSLOG_KEY_ERR_TYPE) */
-#define FSLOG_VAL_ERR_TYPE_IO	"IO"		/* IO error */
-#define FSLOG_VAL_ERR_TYPE_FS	"FS"		/* FS error */
+#define	FSLOG_VAL_ERR_TYPE_IO	"IO"		/* IO error */
+#define	FSLOG_VAL_ERR_TYPE_FS	"FS"		/* FS error */
 
 /* Values for type of operation (FSLOG_KEY_IOTYPE) */
-#define FSLOG_VAL_IOTYPE_READ	"Read"
-#define FSLOG_VAL_IOTYPE_WRITE	"Write"
+#define	FSLOG_VAL_IOTYPE_READ	"Read"
+#define	FSLOG_VAL_IOTYPE_WRITE	"Write"
 
 #endif /* !_FSLOG_H_ */

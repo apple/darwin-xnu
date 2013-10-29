@@ -572,9 +572,9 @@ hfs_quotaon(p, mp, type, fnamep)
 		goto out;
 	}
 	vfs_setflags(mp, (u_int64_t)((unsigned int)MNT_QUOTA));
-	HFS_MOUNT_LOCK(hfsmp, TRUE)
+	hfs_lock_mount (hfsmp);
 	hfsmp->hfs_flags |= HFS_QUOTAS;
-	HFS_MOUNT_UNLOCK(hfsmp, TRUE);
+	hfs_unlock_mount (hfsmp);
 	vnode_setnoflush(vp);
 	/*
 	 * Save the credential of the process that turned on quotas.
@@ -704,9 +704,9 @@ hfs_quotaoff(__unused struct proc *p, struct mount *mp, register int type)
 			break;
 	if (type == MAXQUOTAS) {
 		vfs_clearflags(mp, (u_int64_t)((unsigned int)MNT_QUOTA));
-		HFS_MOUNT_LOCK(hfsmp, TRUE)
+		hfs_lock_mount (hfsmp);
 		hfsmp->hfs_flags &= ~HFS_QUOTAS;
-		HFS_MOUNT_UNLOCK(hfsmp, TRUE);
+		hfs_unlock_mount (hfsmp);
 	}
 
 	qf_put(qfp, QTF_CLOSING);

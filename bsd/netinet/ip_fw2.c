@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2004-2012 Apple Inc. All rights reserved.
+ * Copyright (c) 2004-2013 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -183,6 +183,37 @@ SYSCTL_INT(_net_inet_ip_fw, OID_AUTO, verbose_limit, CTLFLAG_RW | CTLFLAG_LOCKED
     &verbose_limit, 0, "Set upper limit of matches of ipfw rules logged");
 
 /*
+ * IP FW Stealth Logging:
+ */
+typedef enum ipfw_stealth_stats_type {
+  IPFW_STEALTH_STATS_UDP,
+  IPFW_STEALTH_STATS_TCP,
+  IPFW_STEALTH_STATS_UDPv6,
+  IPFW_STEALTH_STATS_TCPv6,
+  IPFW_STEALTH_STATS_MAX,
+} ipfw_stealth_stats_type_t;
+
+#define IPFW_STEALTH_TIMEOUT_SEC 30
+
+#define	DYN_KEEPALIVE_LEEWAY	15
+
+// Piggybagging Stealth stats with ipfw_tick().
+#define IPFW_STEALTH_TIMEOUT_FREQUENCY (30 / dyn_keepalive_period)
+
+static const char* ipfw_stealth_stats_str [IPFW_STEALTH_STATS_MAX] = {
+  "UDP", "TCP", "UDP v6", "TCP v6",
+};
+
+static uint32_t ipfw_stealth_stats_needs_flush = FALSE;
+static uint32_t ipfw_stealth_stats[IPFW_STEALTH_STATS_MAX];
+
+static void ipfw_stealth_flush_stats(void);
+void ipfw_stealth_stats_incr_udp(void);
+void ipfw_stealth_stats_incr_tcp(void);
+void ipfw_stealth_stats_incr_udpv6(void);
+void ipfw_stealth_stats_incr_tcpv6(void);
+
+/*
  * Description of dynamic rules.
  *
  * Dynamic rules are stored in lists accessed through a hash table
@@ -240,7 +271,7 @@ static u_int32_t dyn_short_lifetime = 5;
  * than dyn_keepalive_period.
  */
 
-static u_int32_t dyn_keepalive_interval = 20;
+static u_int32_t dyn_keepalive_interval = 25;
 static u_int32_t dyn_keepalive_period = 5;
 static u_int32_t dyn_keepalive = 1;	/* do send keepalives */
 
@@ -366,6 +397,52 @@ void    ipfwsyslog( int level, const char *format,...)
         ev_msg.dv[2].data_length = 0;
 
         kev_post_msg(&ev_msg);
+}
+
+static inline void ipfw_stealth_stats_incr(uint32_t type)
+{
+    if (type >= IPFW_STEALTH_STATS_MAX)
+        return;
+
+    ipfw_stealth_stats[type]++;
+
+    if (!ipfw_stealth_stats_needs_flush) {
+        ipfw_stealth_stats_needs_flush = TRUE;
+    }
+}
+
+void ipfw_stealth_stats_incr_udp(void)
+{
+    ipfw_stealth_stats_incr(IPFW_STEALTH_STATS_UDP);
+}
+
+void ipfw_stealth_stats_incr_tcp(void)
+{
+    ipfw_stealth_stats_incr(IPFW_STEALTH_STATS_TCP);
+}
+
+void ipfw_stealth_stats_incr_udpv6(void)
+{
+    ipfw_stealth_stats_incr(IPFW_STEALTH_STATS_UDPv6);
+}
+
+void ipfw_stealth_stats_incr_tcpv6(void)
+{
+    ipfw_stealth_stats_incr(IPFW_STEALTH_STATS_TCPv6);
+}
+
+static void ipfw_stealth_flush_stats(void)
+{
+    int i;
+
+    for (i = 0; i < IPFW_STEALTH_STATS_MAX; i++) {
+        if (ipfw_stealth_stats[i]) {
+           ipfwsyslog (LOG_INFO, "Stealth Mode connection attempt to %s %d times",
+                       ipfw_stealth_stats_str[i], ipfw_stealth_stats[i]);
+           ipfw_stealth_stats[i] = 0;
+       }
+    }
+    ipfw_stealth_stats_needs_flush = FALSE;
 }
 
 /*
@@ -1018,29 +1095,31 @@ verify_rev_path(struct in_addr src, struct ifnet *ifp)
 	static struct route ro;
 	struct sockaddr_in *dst;
 
+	bzero(&ro, sizeof (ro));
 	dst = (struct sockaddr_in *)&(ro.ro_dst);
 
 	/* Check if we've cached the route from the previous call. */
 	if (src.s_addr != dst->sin_addr.s_addr) {
-		ro.ro_rt = NULL;
-
-		bzero(dst, sizeof(*dst));
 		dst->sin_family = AF_INET;
 		dst->sin_len = sizeof(*dst);
 		dst->sin_addr = src;
 
 		rtalloc_ign(&ro, RTF_CLONING|RTF_PRCLONING);
 	}
-	if (ro.ro_rt != NULL)
+	if (ro.ro_rt != NULL) {
 		RT_LOCK_SPIN(ro.ro_rt);
-	else
+	} else {
+		ROUTE_RELEASE(&ro);
 		return 0;	/* No route */
+	}
 	if ((ifp == NULL) ||
-		(ro.ro_rt->rt_ifp->if_index != ifp->if_index)) {
-			RT_UNLOCK(ro.ro_rt);
-			return 0;
+	    (ro.ro_rt->rt_ifp->if_index != ifp->if_index)) {
+		RT_UNLOCK(ro.ro_rt);
+		ROUTE_RELEASE(&ro);
+		return 0;
         }
 	RT_UNLOCK(ro.ro_rt);
+	ROUTE_RELEASE(&ro);
 	return 1;
 }
 
@@ -1617,7 +1696,8 @@ lookup_dyn_parent(struct ip_flow_id *pkt, struct ip_fw *rule)
 			    pkt->src_port == q->id.src_port &&
 			    pkt->dst_port == q->id.dst_port) {
 				q->expire = timenow.tv_sec + dyn_short_lifetime;
-				DEB(printf("ipfw: lookup_dyn_parent found 0x%p\n",q);)
+				DEB(printf("ipfw: lookup_dyn_parent found "
+				    "0x%llx\n", (uint64_t)VM_KERNEL_ADDRPERM(q));)
 				return q;
 			}
 	}
@@ -1836,9 +1916,8 @@ send_reject(struct ip_fw_args *args, int code, int offset, __unused int ip_len)
 				struct route sro;	/* fake route */
 
 				bzero (&sro, sizeof (sro));
-				ip_output_list(m, 0, NULL, &sro, 0, NULL, NULL);
-				if (sro.ro_rt)
-					RTFREE(sro.ro_rt);
+				ip_output(m, NULL, &sro, 0, NULL, NULL);
+				ROUTE_RELEASE(&sro);
 			}
 		}
 		m_freem(args->fwa_m);
@@ -3888,6 +3967,14 @@ ipfw_tick(__unused void * unused)
 	int i;
 	ipfw_dyn_rule *q;
 	struct timeval timenow;
+	static int stealth_cnt = 0;
+
+	if (ipfw_stealth_stats_needs_flush) {
+	    stealth_cnt++;
+	    if (!(stealth_cnt % IPFW_STEALTH_TIMEOUT_FREQUENCY)) {
+	        ipfw_stealth_flush_stats();
+	    }
+	}
 
 	if (dyn_keepalive == 0 || ipfw_dyn_v == NULL || dyn_count == 0)
 		goto done;
@@ -3935,12 +4022,12 @@ ipfw_tick(__unused void * unused)
 		mnext = m->m_nextpkt;
 		m->m_nextpkt = NULL;
 		bzero (&sro, sizeof (sro));
-		ip_output_list(m, 0, NULL, &sro, 0, NULL, NULL);
-		if (sro.ro_rt)
-			RTFREE(sro.ro_rt);
+		ip_output(m, NULL, &sro, 0, NULL, NULL);
+		ROUTE_RELEASE(&sro);
 	}
 done:
-	timeout(ipfw_tick, NULL, dyn_keepalive_period*hz);
+	timeout_with_leeway(ipfw_tick, NULL, dyn_keepalive_period*hz,
+	    DYN_KEEPALIVE_LEEWAY*hz);
 }
 
 void

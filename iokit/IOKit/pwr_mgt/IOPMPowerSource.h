@@ -40,7 +40,7 @@ enum {
     kTenMinutesInSeconds = 600
 };
 
-/* class IOPMPowerSource
+/*! @class IOPMPowerSource
  *
  * See IOKit/pwr_mgt/IOPM.h for power source keys relevant to this class. These
  * report-type keys are required for calls to IOPMPowerSource::setReportables(),
@@ -49,18 +49,19 @@ enum {
  *
  * A subclassing driver that doesn't want to do anything fancy should:
  *   1. Subclass IOPMPowerSource
- *   3. Install its own battery change notifications or polling routine that can
+ *   2. Install its own battery change notifications or polling routine that can
  *          converse with actual battery hardware.
- *   4. When battery state changes, change the relevant member variables
+ *   3. When battery state changes, change the relevant member variables
  *          through setCurrentCapacity() style accessors.
- *   5. Call updateStatus() on itself when all such settings have been updated.
+ *   4. Call updateStatus() on itself when all such settings have been updated.
  *   
  * The subclass driver should also initially populate its settings and call
  * updateStatus() on launch.
  *
  *
- * Settings
+ * Settings:
  *
+ * <pre>
  * ExternalConnected
  * Type: bool
  * IORegistry Key: kIOPMPSExternalConnectedKey
@@ -163,6 +164,7 @@ enum {
  * Type: OSDictionary
  * IORegistry Key: kIOPMPSLegacyBatteryInfoKey
  * Dictionary conforming to the OS X 10.0-10.4 
+ * </pre>
  */
 
 class IOPMPowerSource : public IOService
@@ -173,14 +175,14 @@ class IOPMPowerSource : public IOService
 
  protected:
 
-/* bool settingsChangedSinceLastUpdate
+/*! @var settingsChangedSinceLastUpdate
  * Used by subclasses to determine if any settings have been modified via the
  * accessors below since last call to update(). true is settings have changed;
  * false otherwise.
  */
     bool settingsChangedSinceUpdate;
     
-/* OSDictionary properties
+/*! @var properties
  * Stores power source state
  */
     OSDictionary            *properties;
@@ -289,7 +291,7 @@ protected:
     void setSerial(OSSymbol *);
     void setLegacyIOBatteryInfo(OSDictionary *);
 
-/* All of these methods funnel through the generic accessor method
+/*! All of these methods funnel through the generic accessor method
    setPSProperty. Caller can pass in any arbitrary OSSymbol key, and
    that value will be stored in the PM settings dictionary, and relayed
    onto the IORegistry at update time.

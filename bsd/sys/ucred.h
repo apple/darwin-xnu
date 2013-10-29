@@ -148,8 +148,6 @@ struct xucred {
 __BEGIN_DECLS
 int		crcmp(kauth_cred_t cr1, kauth_cred_t cr2);
 int		suser(kauth_cred_t cred, u_short *acflag);
-int		is_suser(void);
-int		is_suser1(void);
 int		set_security_token(struct proc * p);
 void		cru2x(kauth_cred_t cr, struct xucred *xcr);
 __END_DECLS

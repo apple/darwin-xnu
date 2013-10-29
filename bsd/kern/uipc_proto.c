@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2006 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2012 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -67,6 +67,7 @@
 #include <sys/protosw.h>
 #include <sys/domain.h>
 #include <sys/mbuf.h>
+#include <sys/mcache.h>
 #include <sys/un.h>
 #include <net/raw_cb.h>
 #include <sys/sysctl.h>
@@ -74,60 +75,66 @@
 /*
  * Definitions of protocols supported in the UNIX domain.
  */
+struct domain *localdomain = NULL;
+static void pre_unp_init(struct domain *);
 
-int	raw_usrreq(void);
-static void pre_unp_init(void) __attribute__((section("__TEXT, initcode")));
+extern struct domain localdomain_s;
 
 static struct protosw localsw[] = {
-	{
-		.pr_type = SOCK_STREAM,
-		.pr_domain = &localdomain,
-		.pr_flags = PR_CONNREQUIRED|PR_WANTRCVD|PR_RIGHTS|PR_PCBLOCK,
-		.pr_ctloutput = uipc_ctloutput,
-		.pr_usrreqs = &uipc_usrreqs,
-		.pr_lock = unp_lock,
-		.pr_unlock = unp_unlock,
-		.pr_getlock = unp_getlock
-	},
-	{
-		.pr_type = SOCK_DGRAM,
-		.pr_domain = &localdomain,
-		.pr_flags = PR_ATOMIC|PR_ADDR|PR_RIGHTS,
-		.pr_ctloutput = uipc_ctloutput,
-		.pr_usrreqs = &uipc_usrreqs,
-		.pr_lock = unp_lock,
-		.pr_unlock = unp_unlock,
-		.pr_getlock = unp_getlock
-	},
-	{
-		.pr_ctlinput  = raw_ctlinput,
-		.pr_usrreqs = &raw_usrreqs,
-	},
+{
+	.pr_type =	SOCK_STREAM,
+	.pr_flags =	PR_CONNREQUIRED|PR_WANTRCVD|PR_RIGHTS|PR_PCBLOCK,
+	.pr_ctloutput =	uipc_ctloutput,
+	.pr_usrreqs =	&uipc_usrreqs,
+	.pr_lock =	unp_lock,
+	.pr_unlock =	unp_unlock,
+	.pr_getlock =	unp_getlock
+},
+{
+	.pr_type =	SOCK_DGRAM,
+	.pr_flags =	PR_ATOMIC|PR_ADDR|PR_RIGHTS,
+	.pr_ctloutput =	uipc_ctloutput,
+	.pr_usrreqs =	&uipc_usrreqs,
+	.pr_lock =	unp_lock,
+	.pr_unlock =	unp_unlock,
+	.pr_getlock =	unp_getlock
+},
+{
+	.pr_ctlinput =	raw_ctlinput,
+	.pr_usrreqs =	&raw_usrreqs,
+},
 };
 
-int local_proto_count = (sizeof (localsw) / sizeof (struct protosw));
+static int local_proto_count = (sizeof (localsw) / sizeof (struct protosw));
 
 static void
-pre_unp_init(void)
+pre_unp_init(struct domain *dp)
 {
-	int i;
 	struct protosw *pr;
-	struct domain *dp = &localdomain;
+	int i;
 
-	for (i=0, pr = &localsw[0]; i<local_proto_count; i++, pr++)
-		net_add_proto(pr, dp);
+	VERIFY(!(dp->dom_flags & DOM_INITIALIZED));
+	VERIFY(localdomain == NULL);
+
+	localdomain = dp;
+
+	for (i = 0, pr = &localsw[0]; i < local_proto_count; i++, pr++)
+		net_add_proto(pr, dp, 1);
+
 	unp_init();
 }
 
-struct domain localdomain = {
-	.dom_family = AF_LOCAL,
-	.dom_name = "unix",
-	.dom_init = pre_unp_init,
-	.dom_externalize = unp_externalize,
-	.dom_dispose = unp_dispose,
-	.dom_protosw = localsw
+struct domain localdomain_s = {
+	.dom_family =		PF_LOCAL,
+	.dom_name =		"unix",
+	.dom_init =		pre_unp_init,
+	.dom_externalize =	unp_externalize,
+	.dom_dispose =		unp_dispose,
 };
 
-SYSCTL_NODE(_net, PF_LOCAL, local, CTLFLAG_RW|CTLFLAG_LOCKED, NULL, "Local domain");
-SYSCTL_NODE(_net_local, SOCK_STREAM, stream, CTLFLAG_RW|CTLFLAG_LOCKED, NULL, "SOCK_STREAM");
-SYSCTL_NODE(_net_local, SOCK_DGRAM, dgram, CTLFLAG_RW|CTLFLAG_LOCKED, NULL, "SOCK_DGRAM");
+SYSCTL_NODE(_net, PF_LOCAL, local, CTLFLAG_RW|CTLFLAG_LOCKED,
+	NULL, "Local domain");
+SYSCTL_NODE(_net_local, SOCK_STREAM, stream, CTLFLAG_RW|CTLFLAG_LOCKED,
+	NULL, "SOCK_STREAM");
+SYSCTL_NODE(_net_local, SOCK_DGRAM, dgram, CTLFLAG_RW|CTLFLAG_LOCKED,
+	NULL, "SOCK_DGRAM");

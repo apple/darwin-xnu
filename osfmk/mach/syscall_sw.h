@@ -86,6 +86,7 @@
 kernel_trap(_kernelrpc_mach_vm_allocate_trap,-10,5) /* 4 args, +1 for mach_vm_size_t */
 kernel_trap(_kernelrpc_mach_vm_deallocate_trap,-12,5) /* 3 args, +2 for mach_vm_size_t and mach_vm_address_t */
 kernel_trap(_kernelrpc_mach_vm_protect_trap,-14,7) /* 5 args, +2 for mach_vm_address_t and mach_vm_size_t */
+kernel_trap(_kernelrpc_mach_vm_map_trap,-15,9)
 kernel_trap(_kernelrpc_mach_port_allocate_trap,-16,3)
 kernel_trap(_kernelrpc_mach_port_destroy_trap,-17,2)
 kernel_trap(_kernelrpc_mach_port_deallocate_trap,-18,2)
@@ -94,6 +95,8 @@ kernel_trap(_kernelrpc_mach_port_move_member_trap,-20,3)
 kernel_trap(_kernelrpc_mach_port_insert_right_trap,-21,4)
 kernel_trap(_kernelrpc_mach_port_insert_member_trap,-22,3)
 kernel_trap(_kernelrpc_mach_port_extract_member_trap,-23,3)
+kernel_trap(_kernelrpc_mach_port_construct_trap,-24,5)
+kernel_trap(_kernelrpc_mach_port_destruct_trap,-25,5)
 
 kernel_trap(mach_reply_port,-26,0)
 kernel_trap(thread_self_trap,-27,0)
@@ -110,6 +113,8 @@ kernel_trap(semaphore_wait_signal_trap,-37,2)
 kernel_trap(semaphore_timedwait_trap,-38,3)
 kernel_trap(semaphore_timedwait_signal_trap,-39,4)
 
+kernel_trap(_kernelrpc_mach_port_guard_trap,-41,5)
+kernel_trap(_kernelrpc_mach_port_unguard_trap,-42,4)
 #if		!defined(__LP64__) && !defined(__arm__)
 kernel_trap(map_fd,-43,5)
 #endif	/*!defined(__LP64__) && !defined(__arm__) */

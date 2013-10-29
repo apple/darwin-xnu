@@ -182,6 +182,11 @@ extern void			clock_get_calendar_microtime(
 						clock_sec_t			*secs,
 						clock_usec_t		*microsecs);
 
+extern void			clock_get_calendar_absolute_and_microtime(
+						clock_sec_t			*secs,
+						clock_usec_t		*microsecs,
+						uint64_t    		*abstime);
+
 extern void			clock_get_calendar_nanotime(
 						clock_sec_t			*secs,
 						clock_nsec_t		*nanosecs);
@@ -259,9 +264,9 @@ extern void             nanoseconds_to_absolutetime(
 #include <Availability.h>
 
 /* Use mach_absolute_time() */
-extern mach_timespec_t	clock_get_system_value(void) __OSX_AVAILABLE_BUT_DEPRECATED(__MAC_10_0, __MAC_10_8, __IPHONE_2_0, __IPHONE_NA);
+extern mach_timespec_t	clock_get_system_value(void) __OSX_AVAILABLE_BUT_DEPRECATED(__MAC_10_0, __MAC_10_8, __IPHONE_2_0, __IPHONE_6_0);
 
-extern mach_timespec_t	clock_get_calendar_value(void) __OSX_AVAILABLE_BUT_DEPRECATED(__MAC_10_0, __MAC_10_8, __IPHONE_2_0, __IPHONE_NA);
+extern mach_timespec_t	clock_get_calendar_value(void) __OSX_AVAILABLE_BUT_DEPRECATED(__MAC_10_0, __MAC_10_8, __IPHONE_2_0, __IPHONE_6_0);
 
 #else	/* __LP64__ */
 
@@ -276,42 +281,6 @@ extern mach_timespec_t	clock_get_calendar_value(void) __OSX_AVAILABLE_BUT_DEPREC
 extern void				delay_for_interval(
 							uint32_t		interval,
 							uint32_t		scale_factor);
-
-#ifndef	MACH_KERNEL_PRIVATE
-
-#ifndef	__LP64__
-
-#ifndef	ABSOLUTETIME_SCALAR_TYPE
-
-#define clock_get_uptime(a)		\
-	clock_get_uptime(__OSAbsoluteTimePtr(a))
-
-#define clock_interval_to_deadline(a, b, c)		\
-	clock_interval_to_deadline((a), (b), __OSAbsoluteTimePtr(c))
-
-#define clock_interval_to_absolutetime_interval(a, b, c)	\
-	clock_interval_to_absolutetime_interval((a), (b), __OSAbsoluteTimePtr(c))
-
-#define clock_absolutetime_interval_to_deadline(a, b)	\
-	clock_absolutetime_interval_to_deadline(__OSAbsoluteTime(a), __OSAbsoluteTimePtr(b))
-
-#define clock_deadline_for_periodic_event(a, b, c)	\
-	clock_deadline_for_periodic_event(__OSAbsoluteTime(a), __OSAbsoluteTime(b), __OSAbsoluteTimePtr(c))
-
-#define clock_delay_until(a)	\
-	clock_delay_until(__OSAbsoluteTime(a))
-
-#define absolutetime_to_nanoseconds(a, b)	\
-	absolutetime_to_nanoseconds(__OSAbsoluteTime(a), (b))
-
-#define nanoseconds_to_absolutetime(a, b)	\
-	nanoseconds_to_absolutetime((a), __OSAbsoluteTimePtr(b))
-
-#endif	/* ABSOLUTETIME_SCALAR_TYPE */
-
-#endif	/* __LP64__ */
-
-#endif	/* MACH_KERNEL_PRIVATE */
 
 #endif	/* KERNEL_PRIVATE */
 

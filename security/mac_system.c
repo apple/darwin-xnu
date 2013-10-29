@@ -110,6 +110,19 @@ mac_system_check_host_priv(kauth_cred_t cred)
 }
 
 int
+mac_system_check_info(kauth_cred_t cred, const char *info_type)
+{
+	int error;
+
+	if (!mac_system_enforce)
+		return (0);
+
+	MAC_CHECK(system_check_info, cred, info_type);
+
+	return (error);
+}
+
+int
 mac_system_check_nfsd(kauth_cred_t cred)
 {
 	int error;

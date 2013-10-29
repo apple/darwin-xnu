@@ -27,7 +27,3 @@
  */
 
 #include <sys/errno.h>
-
-extern int* (*_libc_get_errno)(void);
-#undef errno
-#define errno (*_libc_get_errno())

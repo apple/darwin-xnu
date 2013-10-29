@@ -1,8 +1,0 @@
-_IOSpinUnlock
-_IOTrySpinLock
-_ev_try_lock
-_ev_unlock
-_sprintf
-_strcat
-_strcpy
-_vsprintf

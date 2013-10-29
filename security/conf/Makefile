@@ -3,56 +3,37 @@ export MakeInc_def=${SRCROOT}/makedefs/MakeInc.def
 export MakeInc_rule=${SRCROOT}/makedefs/MakeInc.rule
 export MakeInc_dir=${SRCROOT}/makedefs/MakeInc.dir
 
-
 include $(MakeInc_cmd)
 include $(MakeInc_def)
 
-SETUP_SUBDIRS =
+MASTER_CPU_PER_SOC = $(SOURCE)/MASTER.$(CURRENT_ARCH_CONFIG_LC).$(CURRENT_MACHINE_CONFIG_LC)
 
-COMP_SUBDIRS = 
-
-INST_SUBDIRS = 
-
-ifndef SECURITY_KERNEL_CONFIG
-export SECURITY_KERNEL_CONFIG = $(KERNEL_CONFIG)
-endif
-
-ifneq ($(MACHINE_CONFIG), DEFAULT)
-export COMPOBJROOT=$(OBJROOT)/$(KERNEL_CONFIG)_$(ARCH_CONFIG)_$(MACHINE_CONFIG)/$(COMPONENT)
-else
-export COMPOBJROOT=$(OBJROOT)/$(KERNEL_CONFIG)_$(ARCH_CONFIG)/$(COMPONENT)
-endif
-
-MASTER_CPU_PER_SOC = $(SOURCE)/MASTER.$(ARCH_CONFIG_LC).$(MACHINE_CONFIG_LC)
-
-$(COMPOBJROOT)/$(SECURITY_KERNEL_CONFIG)/Makefile :  $(SOURCE)/MASTER  \
-	$(SOURCE)/MASTER.$(ARCH_CONFIG_LC) \
-	$(SOURCE)/Makefile.template  \
-	$(SOURCE)/Makefile.$(ARCH_CONFIG_LC)  \
-	$(SOURCE)/files \
-	$(SOURCE)/files.$(ARCH_CONFIG_LC)
-	$(_v)(doconf_target=$(addsuffix /conf, $(TARGET)); \
-	$(MKDIR) $${doconf_target}; \
-	cd $${doconf_target}; \
+$(TARGET)/$(CURRENT_KERNEL_CONFIG)/Makefile :  $(SOURCE)/MASTER  \
+		$(SOURCE)/MASTER.$(CURRENT_ARCH_CONFIG_LC) \
+		$(SOURCE)/Makefile.template  \
+		$(SOURCE)/Makefile.$(CURRENT_ARCH_CONFIG_LC)  \
+		$(SOURCE)/files \
+		$(SOURCE)/files.$(CURRENT_ARCH_CONFIG_LC)
+	$(_v)$(MKDIR) $(addsuffix /conf, $(TARGET)); \
+	cd $(addsuffix /conf, $(TARGET)); \
 	rm -f $(notdir $?); \
-	cp  $? $${doconf_target}; \
-	if [ -f $(MASTER_CPU_PER_SOC) ]; then cp $(MASTER_CPU_PER_SOC) $${doconf_target}; fi; \
-	$(SRCROOT)/SETUP/config/doconf -c -cpu $(ARCH_CONFIG_LC) -soc $(MACHINE_CONFIG_LC) -d  $(TARGET)/$(SECURITY_KERNEL_CONFIG) $(SECURITY_KERNEL_CONFIG); \
-	);
+	cp  $? .; \
+	if [ $(MASTER_CPU_PER_SOC) -nt $@ ]; then cp $(MASTER_CPU_PER_SOC) .; fi; \
+	$(SRCROOT)/SETUP/config/doconf -c -cpu $(CURRENT_ARCH_CONFIG_LC) -soc $(CURRENT_MACHINE_CONFIG_LC) -d  $(TARGET)/$(CURRENT_KERNEL_CONFIG) $(CURRENT_KERNEL_CONFIG);
 
-do_all: $(COMPOBJROOT)/$(SECURITY_KERNEL_CONFIG)/Makefile
-	$(_v)next_source=$(subst conf/,,$(SOURCE));			\
-	next_relsource=$(subst conf/,,$(RELATIVE_SOURCE_PATH));		\
-	${MAKE} -C $(COMPOBJROOT)/$(SECURITY_KERNEL_CONFIG)	\
-		MAKEFILES=$(TARGET)/$(SECURITY_KERNEL_CONFIG)/Makefile	\
-		SOURCE=$${next_source}			\
-		RELATIVE_SOURCE_PATH=$${next_relsource}			\
-		TARGET=$(TARGET)					\
-		INCL_MAKEDEP=FALSE	\
-		KERNEL_CONFIG=$(SECURITY_KERNEL_CONFIG)	\
+do_all: $(TARGET)/$(CURRENT_KERNEL_CONFIG)/Makefile
+	$(_v)${MAKE} \
+		-C $(TARGET)/$(CURRENT_KERNEL_CONFIG)			\
+		-f $(TARGET)/$(CURRENT_KERNEL_CONFIG)/Makefile		\
+		CURRENT_KERNEL_CONFIG=${CURRENT_KERNEL_CONFIG}		\
+		CURRENT_ARCH_CONFIG=${CURRENT_ARCH_CONFIG}		\
+		CURRENT_MACHINE_CONFIG=${CURRENT_MACHINE_CONFIG}	\
+		SOURCE=$(subst conf/,,$(SOURCE))			\
+		TARGET=${TARGET}					\
+		OBJPATH=${OBJPATH}					\
 		build_all;
 
-do_build_all: do_all 
+do_build_all:: do_all 
 
 include $(MakeInc_rule)
 include $(MakeInc_dir)

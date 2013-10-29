@@ -54,6 +54,10 @@
 #ifndef _SECURITY_MAC_DATA_H_
 #define	_SECURITY_MAC_DATA_H_
 
+#ifndef PRIVATE
+#warning "MAC policy is not KPI, see Technical Q&A QA1574, this header will be removed in next version"
+#endif
+
 /**
   @brief Mac policy module data
 

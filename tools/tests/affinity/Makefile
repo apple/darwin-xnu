@@ -1,18 +1,52 @@
-CFLAGS	=-g -arch i386
-CFLAGS64=-g -arch x86_64
+SDKROOT ?= /
+ifeq "$(RC_TARGET_CONFIG)" "iPhone"
+Embedded?=YES
+else
+Embedded?=$(shell echo $(SDKROOT) | grep -iq iphoneos && echo YES || echo NO)
+endif
 
-TESTS =		\
-	sets	\
-	pool	\
-	tags	\
+CC:=xcrun -sdk "$(SDKROOT)" cc
 
-TARGETS = $(TESTS) $(TESTS:=64)
+SYMROOT?=$(shell /bin/pwd)
 
-all:	$(TESTS)
+ifdef RC_ARCHS
+    ARCHS:=$(RC_ARCHS)
+  else
+    ifeq "$(Embedded)" "YES"
+      ARCHS:=armv7 armv7s
+    else
+      ARCHS:=x86_64 i386
+  endif
+endif
 
-.c:	
-	gcc $(CFLAGS) $< -o $@		# 32-bit fat 
-	gcc $(CFLAGS64) $< -o $@64 		# 64-bit fat
+ARCH_32 := $(filter-out %64, $(ARCHS))
+ARCH_32_FLAGS := $(patsubst %, -arch %, $(ARCH_32))
+ARCH_64 := $(filter %64, $(ARCHS))
+ARCH_64_FLAGS := $(patsubst %, -arch %, $(ARCH_64))
+
+CFLAGS 	:=-g
+
+DSTROOT?=$(shell /bin/pwd)
+SRCROOT?=$(shell /bin/pwd)
+
+SOURCES := sets.c pool.c tags.c
+ARCH_32_TARGETS := $(addprefix $(DSTROOT)/, sets pool tags)
+ARCH_64_TARGETS := $(addprefix $(DSTROOT)/, sets64 pool64 tags64)
+
+TARGETS := $(if $(ARCH_64), $(ARCH_64_TARGETS)) $(if $(ARCH_32), $(ARCH_32_TARGETS))
+
+
+all:	$(TARGETS)
+
+$(ARCH_32_TARGETS): $(DSTROOT)/%: $(SRCROOT)/%.c
+	$(CC) $(CFLAGS) $(ARCH_32_FLAGS) $< -o $(SYMROOT)/$(notdir $@) # 32-bit fat 
+	if [ ! -e $@ ]; then ditto $(SYMROOT)/$(notdir $@) $@; fi
+
+.SECONDEXPANSION:
+$(ARCH_64_TARGETS): $(DSTROOT)/%: $(SRCROOT)/$$(subst 64,,%).c
+	$(CC) $(CFLAGS) $(ARCH_64_FLAGS) $< -o $(SYMROOT)/$(notdir $@) # 64-bit fat
+	if [ ! -e $@ ]; then ditto $(SYMROOT)/$(notdir $@) $@; fi
 
 clean:
-	rm -rf $(TARGETS) 
+	rm -f $(TARGETS) 
+	rm -rf $(SYMROOT)/*.dSYM

@@ -78,17 +78,24 @@
  * subsystem, indicated by a subsystem name.
  */
 #define	PRIV_ADJTIME		1000	/* Set time adjustment. */
+#define PRIV_PROC_UUID_POLICY	1001	/* Change process uuid policy table. */
+#define PRIV_GLOBAL_PROC_INFO	1002	/* Query information for processes owned by other users */
+#define PRIV_SYSTEM_OVERRIDE	1003	/* Override global system settings for various subsystems for a limited duration/system-mode */
 
 /*
  * Virtual memory privileges.
  */
 #define	PRIV_VM_PRESSURE	6000	/* Check VM pressure. */
 #define	PRIV_VM_JETSAM	   	6001	/* Adjust jetsam configuration. */
+#define	PRIV_VM_FOOTPRINT_LIMIT 6002    /* Adjust physical footprint limit. */
 
 /*
  * Network stack privileges.
  */
 #define	PRIV_NET_PRIVILEGED_TRAFFIC_CLASS	10000	/* Set SO_PRIVILEGED_TRAFFIC_CLASS. */ 
+#define	PRIV_NET_PRIVILEGED_SOCKET_DELEGATE	10001	/* Set delegate on a socket */
+#define	PRIV_NET_INTERFACE_CONTROL		10002	/* Enable interface debug logging. */
+#define	PRIV_NET_PRIVILEGED_NETWORK_STATISTICS	10003	/* Access to all sockets */
 
 /*
  * IPv4 and IPv6 privileges.

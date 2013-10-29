@@ -96,18 +96,18 @@ int _devfs_setattr(void * handle, unsigned short mode, uid_t uid, gid_t gid);
 static void ptsstart(struct tty *tp);
 static void ptcwakeup(struct tty *tp, int flag);
 
-__private_extern__	d_open_t	ptsopen;
-__private_extern__	d_close_t	ptsclose;
-__private_extern__	d_read_t	ptsread;
-__private_extern__	d_write_t	ptswrite;
-__private_extern__	d_ioctl_t	ptyioctl;
-__private_extern__	d_stop_t	ptsstop;
-__private_extern__	d_devtotty_t	ptydevtotty;
-__private_extern__	d_open_t	ptcopen;
-__private_extern__	d_close_t	ptcclose;
-__private_extern__	d_read_t	ptcread;
-__private_extern__	d_write_t	ptcwrite;
-__private_extern__	d_select_t	ptcselect;
+__XNU_PRIVATE_EXTERN	d_open_t	ptsopen;
+__XNU_PRIVATE_EXTERN	d_close_t	ptsclose;
+__XNU_PRIVATE_EXTERN	d_read_t	ptsread;
+__XNU_PRIVATE_EXTERN	d_write_t	ptswrite;
+__XNU_PRIVATE_EXTERN	d_ioctl_t	ptyioctl;
+__XNU_PRIVATE_EXTERN	d_stop_t	ptsstop;
+__XNU_PRIVATE_EXTERN	d_devtotty_t	ptydevtotty;
+__XNU_PRIVATE_EXTERN	d_open_t	ptcopen;
+__XNU_PRIVATE_EXTERN	d_close_t	ptcclose;
+__XNU_PRIVATE_EXTERN	d_read_t	ptcread;
+__XNU_PRIVATE_EXTERN	d_write_t	ptcwrite;
+__XNU_PRIVATE_EXTERN	d_select_t	ptcselect;
 
 #if NPTY == 1
 #undef NPTY
@@ -310,8 +310,8 @@ again:
 			pg_rele(pg);
 			tty_lock(tp);
 
-			error = ttysleep(tp, &lbolt, TTIPRI | PCATCH | PTTYBLOCK, "ptsbg",
-					 0);
+			error = ttysleep(tp, &ptsread, TTIPRI | PCATCH | PTTYBLOCK, "ptsbg",
+					 hz);
 			if (error)
 			        goto out;
 		}

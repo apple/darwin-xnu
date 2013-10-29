@@ -97,7 +97,7 @@ struct user_iovec;
 
 #ifdef XNU_KERNEL_PRIVATE
 __private_extern__ struct user_iovec * uio_iovsaddr( uio_t a_uio );
-__private_extern__ void uio_calculateresid( uio_t a_uio );
+__private_extern__ int uio_calculateresid( uio_t a_uio );
 __private_extern__ void uio_setcurriovlen( uio_t a_uio, user_size_t a_value );
 __private_extern__ int uio_spacetype( uio_t a_uio );
 __private_extern__ uio_t  uio_createwithbuffer( int a_iovcount, off_t a_offset, int a_spacetype, int a_iodirection, void *a_buf_p, size_t a_buffer_size );

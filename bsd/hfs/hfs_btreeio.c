@@ -50,7 +50,7 @@
 /* From bsd/vfs/vfs_bio.c */
 extern int bdwrite_internal(struct buf *, int);
 
-static int ClearBTNodes(struct vnode *vp, long blksize, off_t offset, off_t amount);
+static int ClearBTNodes(struct vnode *vp, int blksize, off_t offset, off_t amount);
 static int btree_journal_modify_block_end(struct hfsmount *hfsmp, struct buf *bp);
 
 void btree_swap_node(struct buf *bp, __unused void *arg);
@@ -133,47 +133,72 @@ OSStatus GetBTreeBlock(FileReference vp, u_int32_t blockNum, GetBlockOptions opt
 		// XXXdbg 
 		block->isModified = 0;
 
-        /* Check and endian swap B-Tree node (only if it's a valid block) */
-        if (!(options & kGetEmptyBlock)) {
-            /* This happens when we first open the b-tree, we might not have all the node data on hand */
-            if ((((BTNodeDescriptor *)block->buffer)->kind == kBTHeaderNode) &&
-                (((BTHeaderRec *)((char *)block->buffer + 14))->nodeSize != buf_count(bp)) &&
-                (SWAP_BE16 (((BTHeaderRec *)((char *)block->buffer + 14))->nodeSize) != buf_count(bp))) {
+		/* Check and endian swap B-Tree node (only if it's a valid block) */
+		if (!(options & kGetEmptyBlock)) {
 
-                /*
-                 * Don't swap the node descriptor, record offsets, or other records.
-                 * This record will be invalidated and re-read with the correct node
-                 * size once the B-tree control block is set up with the node size
-                 * from the header record.
-                 */
-                retval = hfs_swap_BTNode (block, vp, kSwapBTNodeHeaderRecordOnly, allow_empty_node);
+			/* This happens when we first open the b-tree, we might not have all the node data on hand */
+			if ((((BTNodeDescriptor *)block->buffer)->kind == kBTHeaderNode) &&
+					(((BTHeaderRec *)((char *)block->buffer + 14))->nodeSize != buf_count(bp)) &&
+					(SWAP_BE16 (((BTHeaderRec *)((char *)block->buffer + 14))->nodeSize) != buf_count(bp))) {
 
-			} else if (block->blockReadFromDisk) {
-            	/*
-            	 * The node was just read from disk, so always swap/check it.
-            	 * This is necessary on big endian since the test below won't trigger.
-            	 */
-                retval = hfs_swap_BTNode (block, vp, kSwapBTNodeBigToHost, allow_empty_node);
-            } else if (*((u_int16_t *)((char *)block->buffer + (block->blockSize - sizeof (u_int16_t)))) == 0x0e00) {
 				/*
-				 * The node was left in the cache in non-native order, so swap it.
-				 * This only happens on little endian, after the node is written
-				 * back to disk.
+				 * Don't swap the node descriptor, record offsets, or other records.
+				 * This record will be invalidated and re-read with the correct node
+				 * size once the B-tree control block is set up with the node size
+				 * from the header record.
 				 */
-                retval = hfs_swap_BTNode (block, vp, kSwapBTNodeBigToHost, allow_empty_node);
-            }
-            
-    		/*
-    		 * If we got an error, then the node is only partially swapped.
-    		 * We mark the buffer invalid so that the next attempt to get the
-    		 * node will read it and attempt to swap again, and will notice
-    		 * the error again.  If we didn't do this, the next attempt to get
-    		 * the node might use the partially swapped node as-is.
-    		 */
-            if (retval)
+				retval = hfs_swap_BTNode (block, vp, kSwapBTNodeHeaderRecordOnly, allow_empty_node);
+
+			} else {
+				/*
+				 * In this case, we have enough data in-hand to do basic validation
+				 * on the B-Tree node.
+				 */
+				if (block->blockReadFromDisk) {
+					/*
+					 * The node was just read from disk, so always swap/check it.
+					 * This is necessary on big endian since the test below won't trigger.
+					 */
+					retval = hfs_swap_BTNode (block, vp, kSwapBTNodeBigToHost, allow_empty_node);
+				} 
+				else {
+					/*
+					 * Block wasn't read from disk; it was found in the cache.  
+					 */
+					if (*((u_int16_t *)((char *)block->buffer + (block->blockSize - sizeof (u_int16_t)))) == 0x0e00) {
+						/*
+						 * The node was left in the cache in non-native order, so swap it.
+						 * This only happens on little endian, after the node is written
+						 * back to disk.
+						 */
+						retval = hfs_swap_BTNode (block, vp, kSwapBTNodeBigToHost, allow_empty_node);
+					}
+					else if (*((u_int16_t *)((char *)block->buffer + (block->blockSize - sizeof (u_int16_t)))) == 0x000e) {
+						/*
+						 * The node was in-cache in native-endianness.  We don't need to do 
+						 * anything here, because the node is ready to use.  Set retval == 0.
+						 */
+						retval = 0;
+					}
+					/*
+					 * If the node doesn't have hex 14 (0xe) in the last two bytes of the buffer, 
+					 * it doesn't necessarily mean that this is a bad node.  Zeroed nodes that are
+					 * marked as unused in the b-tree map node would be OK and not have valid content.
+					 */
+				}
+			}
+
+			/*
+			 * If we got an error, then the node is only partially swapped.
+			 * We mark the buffer invalid so that the next attempt to get the
+			 * node will read it and attempt to swap again, and will notice
+			 * the error again.  If we didn't do this, the next attempt to get
+			 * the node might use the partially swapped node as-is.
+			 */
+			if (retval)
 				buf_markinvalid(bp);
-        }
-    }
+		}
+	}
     
     if (retval) {
     	if (bp)
@@ -549,7 +574,7 @@ out:
  * Clear out (zero) new b-tree nodes on disk.
  */
 static int
-ClearBTNodes(struct vnode *vp, long blksize, off_t offset, off_t amount)
+ClearBTNodes(struct vnode *vp, int blksize, off_t offset, off_t amount)
 {
 	struct hfsmount *hfsmp = VTOHFS(vp);
 	struct buf *bp = NULL;
@@ -635,7 +660,7 @@ again:
 	/*
 	 * Serialize creation using HFS_CREATING_BTREE flag.
 	 */
-	lck_mtx_lock(&hfsmp->hfs_mutex);
+	hfs_lock_mount (hfsmp);
 	if (hfsmp->hfs_flags & HFS_CREATING_BTREE) {
 			/* Someone else beat us, wait for them to finish. */
 			(void) msleep(hfsmp->hfs_attribute_cp, &hfsmp->hfs_mutex,
@@ -646,7 +671,7 @@ again:
 			goto again;
 	}
 	hfsmp->hfs_flags |= HFS_CREATING_BTREE;
-	lck_mtx_unlock(&hfsmp->hfs_mutex);
+	hfs_unlock_mount (hfsmp);
 
 	/* Check if were out of usable disk space. */
 	if ((hfs_freeblks(hfsmp, 1) == 0)) {
@@ -859,10 +884,10 @@ again:
 	}
 	
 	/* Update vp/cp for attribute btree */
-	lck_mtx_lock(&hfsmp->hfs_mutex);
+	hfs_lock_mount (hfsmp);
 	hfsmp->hfs_attribute_cp = VTOC(vp);
 	hfsmp->hfs_attribute_vp = vp;
-	lck_mtx_unlock(&hfsmp->hfs_mutex);
+	hfs_unlock_mount (hfsmp);
 
 	(void) hfs_flushvolumeheader(hfsmp, MNT_WAIT, HFS_ALTFLUSH);
 
@@ -874,7 +899,7 @@ again:
 	/* Initialize the vnode for virtual attribute data file */
 	result = init_attrdata_vnode(hfsmp);
 	if (result) {
-		printf("hfs_create_attr_btree: init_attrdata_vnode() error=%d\n", result); 
+		printf("hfs_create_attr_btree: vol=%s init_attrdata_vnode() error=%d\n", hfsmp->vcbVN, result); 
 	}
 
 exit:
@@ -897,10 +922,10 @@ exit:
 	/*
 	 * All done, clear HFS_CREATING_BTREE, and wake up any sleepers.
 	 */
-	lck_mtx_lock(&hfsmp->hfs_mutex);
+	hfs_lock_mount (hfsmp);
 	hfsmp->hfs_flags &= ~HFS_CREATING_BTREE;
 	wakeup((caddr_t)hfsmp->hfs_attribute_cp);
-	lck_mtx_unlock(&hfsmp->hfs_mutex);
+	hfs_unlock_mount (hfsmp);
 
 	return (result);
 }

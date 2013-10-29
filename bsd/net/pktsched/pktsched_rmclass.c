@@ -1718,8 +1718,11 @@ _rmc_addq(rm_class_t *cl, struct mbuf *m, struct pf_mtag *t)
 		}
 		if (cl->sfb_ != NULL)
 			return (sfb_addq(cl->sfb_, &cl->q_, m, t));
-	} else if (cl->flags_ & RMCF_CLEARDSCP)
+	}
+#if PF_ECN
+	else if (cl->flags_ & RMCF_CLEARDSCP)
 		write_dsfield(m, t, 0);
+#endif /* PF_ECN */
 
 	/* test for qlen > qlimit is done by caller */
 	_addq(&cl->q_, m);

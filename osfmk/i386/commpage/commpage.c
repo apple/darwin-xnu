@@ -134,7 +134,7 @@ commpage_allocate(
 	 *
 	 * JMM - What we really need is a way to create it like this in the first place.
 	 */
-	if (!(kr = vm_map_lookup_entry( kernel_map, vm_map_trunc_page(kernel_addr), &entry) || entry->is_sub_map))
+	if (!(kr = vm_map_lookup_entry( kernel_map, vm_map_trunc_page(kernel_addr, VM_MAP_PAGE_MASK(kernel_map)), &entry) || entry->is_sub_map))
 		panic("cannot find commpage entry %d", kr);
 	entry->object.vm_object->copy_strategy = MEMORY_OBJECT_COPY_NONE;
 

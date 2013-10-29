@@ -72,3 +72,7 @@ options		CONFIG_EXT_RESOLVER	# e.g. memberd	# <config_ext_resolver>
 options		SECURE_KERNEL				# <secure_kernel>
 options		DEBUG		# 	# <debug>
 options		MACH_ASSERT	#	# <mach_assert>
+
+options		CONFIG_MEMORYSTATUS			# <memorystatus>
+options		CONFIG_JETSAM				# <jetsam>
+options		CONFIG_FREEZE				# <freeze>

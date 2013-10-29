@@ -131,6 +131,7 @@
 #include <machine/exec.h>
 
 #include <vm/vm_protos.h>
+#include <vm/vm_pageout.h>
 #include <sys/imgsrc.h>
 
 #if defined(__i386__) || defined(__x86_64__)
@@ -139,6 +140,10 @@
 
 #if CONFIG_FREEZE
 #include <sys/kern_memorystatus.h>
+#endif
+
+#if KPERF
+#include <kperf/kperf.h>
 #endif
 
 /*
@@ -163,6 +168,8 @@ extern unsigned int preheat_pages_max;
 extern unsigned int preheat_pages_min;
 extern long numvnodes;
 
+extern uuid_string_t bootsessionuuid_string;
+
 extern unsigned int vm_max_delayed_work_limit;
 extern unsigned int vm_max_batch;
 
@@ -185,6 +192,8 @@ extern unsigned int vm_page_speculative_q_age_ms;
 #endif
 
 extern boolean_t    mach_timer_coalescing_enabled;
+
+extern uint64_t timer_deadline_tracking_bin_1, timer_deadline_tracking_bin_2;
 
 STATIC void
 fill_user32_eproc(proc_t, struct user32_eproc *__restrict);
@@ -243,9 +252,7 @@ STATIC int sysctl_doaffinity SYSCTL_HANDLER_ARGS;
 #if COUNT_SYSCALLS
 STATIC int sysctl_docountsyscalls SYSCTL_HANDLER_ARGS;
 #endif	/* COUNT_SYSCALLS */
-#if !CONFIG_EMBEDDED
 STATIC int sysctl_doprocargs SYSCTL_HANDLER_ARGS;
-#endif	/* !CONFIG_EMBEDDED */
 STATIC int sysctl_doprocargs2 SYSCTL_HANDLER_ARGS;
 STATIC int sysctl_prochandle SYSCTL_HANDLER_ARGS;
 #if DEBUG
@@ -552,12 +559,12 @@ __sysctl(proc_t p, struct __sysctl_args *uap, __unused int32_t *retval)
 /*
  * Attributes stored in the kernel.
  */
-__private_extern__ char corefilename[MAXPATHLEN+1];
-__private_extern__ int do_coredump;
-__private_extern__ int sugid_coredump;
+extern char corefilename[MAXPATHLEN+1];
+extern int do_coredump;
+extern int sugid_coredump;
 
 #if COUNT_SYSCALLS
-__private_extern__ int do_count_syscalls;
+extern int do_count_syscalls;
 #endif
 
 #ifdef INSECURE
@@ -1737,6 +1744,13 @@ sysctl_kdebug_ops SYSCTL_HANDLER_ARGS
 		return(ENOTSUP);
 	
 	ret = suser(kauth_cred_get(), &p->p_acflag);
+#if KPERF
+	/* Non-root processes may be blessed by kperf to access data
+	 * logged into trace.
+	 */
+	if (ret)
+		ret = kperf_access_check();
+#endif /* KPERF */
 	if (ret)
 		return(ret);
 	
@@ -1760,7 +1774,10 @@ sysctl_kdebug_ops SYSCTL_HANDLER_ARGS
 	case KERN_KDGETENTROPY:
 	case KERN_KDENABLE_BG_TRACE:
 	case KERN_KDDISABLE_BG_TRACE:
+	case KERN_KDREADCURTHRMAP:
 	case KERN_KDSET_TYPEFILTER:
+        case KERN_KDBUFWAIT:
+	case KERN_KDCPUMAP:
 
 	        ret = kdbg_control(name, namelen, oldp, oldlenp);
 	        break;
@@ -1783,7 +1800,6 @@ SYSCTL_PROC(_kern, KERN_KDEBUG, kdebug, CTLTYPE_NODE|CTLFLAG_RD | CTLFLAG_LOCKED
 	"");
 
 
-#if !CONFIG_EMBEDDED
 /*
  * Return the top *sizep bytes of the user stack, or the entire area of the
  * user stack down through the saved exec_path, whichever is smaller.
@@ -1814,7 +1830,6 @@ SYSCTL_PROC(_kern, KERN_PROCARGS, procargs, CTLTYPE_NODE|CTLFLAG_RD | CTLFLAG_LO
 	sysctl_doprocargs,	/* Handler function */
 	NULL,			/* Data pointer */
 	"");
-#endif	/* !CONFIG_EMBEDDED */
 
 STATIC int
 sysctl_doprocargs2 SYSCTL_HANDLER_ARGS
@@ -2193,7 +2208,7 @@ SYSCTL_STRING(_kern, KERN_VERSION, version,
 		version, 0, "");
 SYSCTL_STRING(_kern, OID_AUTO, uuid, 
 		CTLFLAG_RD | CTLFLAG_KERN | CTLFLAG_LOCKED, 
-		&kernel_uuid[0], 0, "");
+		&kernel_uuid_string[0], 0, "");
 
 #if DEBUG
 int debug_kprint_syscall = 0;
@@ -2478,6 +2493,9 @@ SYSCTL_UINT(_kern, OID_AUTO, vm_max_batch,
 		CTLFLAG_RW | CTLFLAG_KERN | CTLFLAG_LOCKED,
 		&vm_max_batch, 0, "");
 
+SYSCTL_STRING(_kern, OID_AUTO, bootsessionuuid,
+		CTLFLAG_RD | CTLFLAG_LOCKED,
+		&bootsessionuuid_string, sizeof(bootsessionuuid_string) , ""); 
 
 STATIC int
 sysctl_boottime
@@ -2638,9 +2656,82 @@ SYSCTL_PROC(_kern, OID_AUTO, imgsrcinfo,
 
 #endif /* CONFIG_IMGSRC_ACCESS */
 
-SYSCTL_INT(_kern, OID_AUTO, timer_coalescing_enabled, 
-		CTLFLAG_RW | CTLFLAG_LOCKED,
+
+SYSCTL_DECL(_kern_timer);
+SYSCTL_NODE(_kern, OID_AUTO, timer, CTLFLAG_RW | CTLFLAG_LOCKED, 0, "timer");
+
+SYSCTL_INT(_kern_timer, OID_AUTO, coalescing_enabled, 
+		CTLFLAG_KERN | CTLFLAG_RW | CTLFLAG_LOCKED,
 		&mach_timer_coalescing_enabled, 0, "");
+
+SYSCTL_QUAD(_kern_timer, OID_AUTO, deadline_tracking_bin_1,
+		CTLFLAG_RW | CTLFLAG_LOCKED,
+		&timer_deadline_tracking_bin_1, "");
+SYSCTL_QUAD(_kern_timer, OID_AUTO, deadline_tracking_bin_2,
+		CTLFLAG_RW | CTLFLAG_LOCKED,
+		&timer_deadline_tracking_bin_2, "");
+
+SYSCTL_DECL(_kern_timer_longterm);
+SYSCTL_NODE(_kern_timer, OID_AUTO, longterm, CTLFLAG_RW | CTLFLAG_LOCKED, 0, "longterm");
+
+/* Must match definition in osfmk/kern/timer_call.c */
+enum {
+	THRESHOLD, QCOUNT,
+	ENQUEUES, DEQUEUES, ESCALATES, SCANS, PREEMPTS,
+	LATENCY, LATENCY_MIN, LATENCY_MAX
+};
+extern uint64_t	timer_sysctl_get(int);
+extern int      timer_sysctl_set(int, uint64_t);
+
+STATIC int
+sysctl_timer
+(__unused struct sysctl_oid *oidp, __unused void *arg1, __unused int arg2, struct sysctl_req *req)
+{
+	int		oid = (int)arg1;
+	uint64_t	value = timer_sysctl_get(oid);
+	uint64_t	new_value;
+	int		error;
+	int		changed;
+
+	error = sysctl_io_number(req, value, sizeof(value), &new_value, &changed);
+	if (changed)
+		error = timer_sysctl_set(oid, new_value);
+
+	return error;
+}
+
+SYSCTL_PROC(_kern_timer_longterm, OID_AUTO, threshold,
+		CTLTYPE_QUAD | CTLFLAG_RW | CTLFLAG_LOCKED,
+		(void *) THRESHOLD, 0, sysctl_timer, "Q", "");
+SYSCTL_PROC(_kern_timer_longterm, OID_AUTO, qlen,
+		CTLTYPE_QUAD | CTLFLAG_RD | CTLFLAG_LOCKED,
+		(void *) QCOUNT, 0, sysctl_timer, "Q", "");
+#if DEBUG
+SYSCTL_PROC(_kern_timer_longterm, OID_AUTO, enqueues,
+		CTLTYPE_QUAD | CTLFLAG_RD | CTLFLAG_LOCKED,
+		(void *) ENQUEUES, 0, sysctl_timer, "Q", "");
+SYSCTL_PROC(_kern_timer_longterm, OID_AUTO, dequeues,
+		CTLTYPE_QUAD | CTLFLAG_RD | CTLFLAG_LOCKED,
+		(void *) DEQUEUES, 0, sysctl_timer, "Q", "");
+SYSCTL_PROC(_kern_timer_longterm, OID_AUTO, escalates,
+		CTLTYPE_QUAD | CTLFLAG_RD | CTLFLAG_LOCKED,
+		(void *) ESCALATES, 0, sysctl_timer, "Q", "");
+SYSCTL_PROC(_kern_timer_longterm, OID_AUTO, scans,
+		CTLTYPE_QUAD | CTLFLAG_RD | CTLFLAG_LOCKED,
+		(void *) SCANS, 0, sysctl_timer, "Q", "");
+SYSCTL_PROC(_kern_timer_longterm, OID_AUTO, preempts,
+		CTLTYPE_QUAD | CTLFLAG_RD | CTLFLAG_LOCKED,
+		(void *) PREEMPTS, 0, sysctl_timer, "Q", "");
+SYSCTL_PROC(_kern_timer_longterm, OID_AUTO, latency,
+		CTLTYPE_QUAD | CTLFLAG_RD | CTLFLAG_LOCKED,
+		(void *) LATENCY, 0, sysctl_timer, "Q", "");
+SYSCTL_PROC(_kern_timer_longterm, OID_AUTO, latency_min,
+		CTLTYPE_QUAD | CTLFLAG_RD | CTLFLAG_LOCKED,
+		(void *) LATENCY_MIN, 0, sysctl_timer, "Q", "");
+SYSCTL_PROC(_kern_timer_longterm, OID_AUTO, latency_max,
+		CTLTYPE_QUAD | CTLFLAG_RD | CTLFLAG_LOCKED,
+		(void *) LATENCY_MAX, 0, sysctl_timer, "Q", "");
+#endif /* DEBUG */
 
 STATIC int
 sysctl_usrstack
@@ -2795,6 +2886,9 @@ sysctl_setthread_cpupercent
 	uint8_t percent = 0;
 	int ms_refill = 0;
 
+	if (!req->newptr)
+		return (0);
+
 	old_value = 0;
 
 	if ((error = sysctl_io_number(req, old_value, sizeof(old_value), &new_value, NULL)) != 0)
@@ -2808,14 +2902,14 @@ sysctl_setthread_cpupercent
 	/*
 	 * If the caller is specifying a percentage of 0, this will unset the CPU limit, if present.
 	 */
-	if ((kret = thread_set_cpulimit(THREAD_CPULIMIT_BLOCK, percent, ms_refill * NSEC_PER_MSEC)) != 0)
+	if ((kret = thread_set_cpulimit(THREAD_CPULIMIT_BLOCK, percent, ms_refill * (int)NSEC_PER_MSEC)) != 0)
 		return (EIO);
 	
 	return (0);
 }
 
 SYSCTL_PROC(_kern, OID_AUTO, setthread_cpupercent,
-		CTLTYPE_INT | CTLFLAG_RW | CTLFLAG_ANYBODY,
+		CTLTYPE_INT | CTLFLAG_WR | CTLFLAG_ANYBODY,
 		0, 0, sysctl_setthread_cpupercent, "I", "set thread cpu percentage limit");
 
 
@@ -2975,6 +3069,12 @@ sysctl_freeze_enabled SYSCTL_HANDLER_ARGS
 	if (error || !req->newptr)
  		return (error);
 	
+	if (COMPRESSED_PAGER_IS_ACTIVE || DEFAULT_FREEZER_COMPRESSED_PAGER_IS_ACTIVE) {
+		//assert(req->newptr);
+		printf("Failed this request to set the sysctl\n");
+		return EINVAL;
+	}
+
 	/* 
 	 * If freeze is being disabled, we need to move dirty pages out from the throttle to the active queue. 
 	 */
@@ -3060,7 +3160,7 @@ fetch_process_cputype(
 	else
 #endif
 	{
-		ret = cpu_type();
+		ret = cpu_type() & ~CPU_ARCH_MASK;
 		if (IS_64BIT_PROCESS(p))
 			ret |= CPU_ARCH_ABI64;
 	}
@@ -3182,6 +3282,39 @@ SYSCTL_INT(_vm, OID_AUTO, vm_copy_src_not_symmetric, CTLFLAG_RD | CTLFLAG_LOCKED
 SYSCTL_INT(_vm, OID_AUTO, vm_copy_src_large, CTLFLAG_RD | CTLFLAG_LOCKED, &vm_map_copy_overwrite_aligned_src_large, 0, "");
 
 
+extern uint32_t	vm_page_external_count;
+extern uint32_t	vm_page_filecache_min;
+
+SYSCTL_INT(_vm, OID_AUTO, vm_page_external_count, CTLFLAG_RD | CTLFLAG_LOCKED, &vm_page_external_count, 0, "");
+SYSCTL_INT(_vm, OID_AUTO, vm_page_filecache_min, CTLFLAG_RW | CTLFLAG_LOCKED, &vm_page_filecache_min, 0, "");
+
+extern int	vm_compressor_mode;
+extern uint32_t	swapout_target_age;
+extern int64_t  compressor_bytes_used;
+extern uint32_t	compressor_eval_period_in_msecs;
+extern uint32_t	compressor_sample_min_in_msecs;
+extern uint32_t	compressor_sample_max_in_msecs;
+extern uint32_t	compressor_thrashing_threshold_per_10msecs;
+extern uint32_t	compressor_thrashing_min_per_10msecs;
+extern uint32_t	vm_compressor_minorcompact_threshold_divisor;
+extern uint32_t	vm_compressor_majorcompact_threshold_divisor;
+extern uint32_t	vm_compressor_unthrottle_threshold_divisor;
+extern uint32_t	vm_compressor_catchup_threshold_divisor;
+
+SYSCTL_INT(_vm, OID_AUTO, compressor_mode, CTLFLAG_RD | CTLFLAG_LOCKED, &vm_compressor_mode, 0, "");
+SYSCTL_QUAD(_vm, OID_AUTO, compressor_bytes_used, CTLFLAG_RD | CTLFLAG_LOCKED, &compressor_bytes_used, "");
+SYSCTL_INT(_vm, OID_AUTO, compressor_swapout_target_age, CTLFLAG_RD | CTLFLAG_LOCKED, &swapout_target_age, 0, "");
+
+SYSCTL_INT(_vm, OID_AUTO, compressor_eval_period_in_msecs, CTLFLAG_RW | CTLFLAG_LOCKED, &compressor_eval_period_in_msecs, 0, "");
+SYSCTL_INT(_vm, OID_AUTO, compressor_sample_min_in_msecs, CTLFLAG_RW | CTLFLAG_LOCKED, &compressor_sample_min_in_msecs, 0, "");
+SYSCTL_INT(_vm, OID_AUTO, compressor_sample_max_in_msecs, CTLFLAG_RW | CTLFLAG_LOCKED, &compressor_sample_max_in_msecs, 0, "");
+SYSCTL_INT(_vm, OID_AUTO, compressor_thrashing_threshold_per_10msecs, CTLFLAG_RW | CTLFLAG_LOCKED, &compressor_thrashing_threshold_per_10msecs, 0, "");
+SYSCTL_INT(_vm, OID_AUTO, compressor_thrashing_min_per_10msecs, CTLFLAG_RW | CTLFLAG_LOCKED, &compressor_thrashing_min_per_10msecs, 0, "");
+SYSCTL_INT(_vm, OID_AUTO, compressor_minorcompact_threshold_divisor, CTLFLAG_RW | CTLFLAG_LOCKED, &vm_compressor_minorcompact_threshold_divisor, 0, "");
+SYSCTL_INT(_vm, OID_AUTO, compressor_majorcompact_threshold_divisor, CTLFLAG_RW | CTLFLAG_LOCKED, &vm_compressor_majorcompact_threshold_divisor, 0, "");
+SYSCTL_INT(_vm, OID_AUTO, compressor_unthrottle_threshold_divisor, CTLFLAG_RW | CTLFLAG_LOCKED, &vm_compressor_unthrottle_threshold_divisor, 0, "");
+SYSCTL_INT(_vm, OID_AUTO, compressor_catchup_threshold_divisor, CTLFLAG_RW | CTLFLAG_LOCKED, &vm_compressor_catchup_threshold_divisor, 0, "");
+
 /*
  * enable back trace events for thread blocks
  */
@@ -3228,11 +3361,3 @@ SYSCTL_STRING(_kern, OID_AUTO, sched,
  * Only support runtime modification on embedded platforms
  * with development config enabled
  */
-#if CONFIG_EMBEDDED
-#if !SECURE_KERNEL
-extern int precise_user_kernel_time;
-SYSCTL_INT(_kern, OID_AUTO, precise_user_kernel_time, 
-		CTLFLAG_RW | CTLFLAG_LOCKED,
-		&precise_user_kernel_time, 0, "Precise accounting of kernel vs. user time");
-#endif
-#endif

@@ -2,15 +2,6 @@
 #BEGIN	Machine dependent Makefile fragment for x86_64
 ######################################################################
 
-# sha1 Files to build with -DSHA1_USE_ASSEMBLY=1
-sha1.o_CFLAGS_ADD += -DSHA1_USE_ASSEMBLY=1
- 
-# Files that must go in the __HIB segment:
-UNCONFIGURED_HIB_FILES= \
-			WKdmDecompress.o
-
-HIB_FILES=$(filter $(UNCONFIGURED_HIB_FILES),$(OBJS))
-
 ######################################################################
 #END	Machine dependent Makefile fragment for x86_64
 ######################################################################

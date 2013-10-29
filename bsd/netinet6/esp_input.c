@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008-2011 Apple Inc. All rights reserved.
+ * Copyright (c) 2008-2013 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -132,8 +132,6 @@
 extern lck_mtx_t  *sadb_mutex;
 
 #if INET
-extern struct protosw inetsw[];
-
 #define ESPMAXLEN \
 	(sizeof(struct esp) < sizeof(struct newesp) \
 		? sizeof(struct newesp) : sizeof(struct esp))
@@ -229,7 +227,8 @@ esp4_input(m, off)
 		goto bad;
 	}
 	KEYDEBUG(KEYDEBUG_IPSEC_STAMP,
-		printf("DP esp4_input called to allocate SA:%p\n", sav));
+	    printf("DP esp4_input called to allocate SA:0x%llx\n",
+	    (uint64_t)VM_KERNEL_ADDRPERM(sav)));
 	if (sav->state != SADB_SASTATE_MATURE
 	 && sav->state != SADB_SASTATE_DYING) {
 		ipseclog((LOG_DEBUG,
@@ -698,7 +697,8 @@ noreplaycheck:
 
 	if (sav) {
 		KEYDEBUG(KEYDEBUG_IPSEC_STAMP,
-			printf("DP esp4_input call free SA:%p\n", sav));
+		    printf("DP esp4_input call free SA:0x%llx\n",
+		    (uint64_t)VM_KERNEL_ADDRPERM(sav)));
 		key_freesav(sav, KEY_SADB_UNLOCKED);
 	}
 	IPSEC_STAT_INCREMENT(ipsecstat.in_success);
@@ -707,7 +707,8 @@ noreplaycheck:
 bad:
 	if (sav) {
 		KEYDEBUG(KEYDEBUG_IPSEC_STAMP,
-			printf("DP esp4_input call free SA:%p\n", sav));
+		    printf("DP esp4_input call free SA:0x%llx\n",
+		    (uint64_t)VM_KERNEL_ADDRPERM(sav)));
 		key_freesav(sav, KEY_SADB_UNLOCKED);
 	}
 	if (m)
@@ -779,7 +780,8 @@ esp6_input(struct mbuf **mp, int *offp, int proto)
 		goto bad;
 	}
 	KEYDEBUG(KEYDEBUG_IPSEC_STAMP,
-		printf("DP esp6_input called to allocate SA:%p\n", sav));
+	    printf("DP esp6_input called to allocate SA:0x%llx\n",
+	    (uint64_t)VM_KERNEL_ADDRPERM(sav)));
 	if (sav->state != SADB_SASTATE_MATURE
 	 && sav->state != SADB_SASTATE_DYING) {
 		ipseclog((LOG_DEBUG,
@@ -1166,7 +1168,8 @@ noreplaycheck:
 
 	if (sav) {
 		KEYDEBUG(KEYDEBUG_IPSEC_STAMP,
-			printf("DP esp6_input call free SA:%p\n", sav));
+		    printf("DP esp6_input call free SA:0x%llx\n",
+		    (uint64_t)VM_KERNEL_ADDRPERM(sav)));
 		key_freesav(sav, KEY_SADB_UNLOCKED);
 	}
 	IPSEC_STAT_INCREMENT(ipsec6stat.in_success);
@@ -1175,7 +1178,8 @@ noreplaycheck:
 bad:
 	if (sav) {
 		KEYDEBUG(KEYDEBUG_IPSEC_STAMP,
-			printf("DP esp6_input call free SA:%p\n", sav));
+		    printf("DP esp6_input call free SA:0x%llx\n",
+		    (uint64_t)VM_KERNEL_ADDRPERM(sav)));
 		key_freesav(sav, KEY_SADB_UNLOCKED);
 	}
 	if (m)

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2012 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2013 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -110,6 +110,8 @@
 #include <sys/malloc.h>
 #include <sys/mcache.h>
 
+#include <dev/random/randomdev.h>
+
 #include <kern/zalloc.h>
 
 #include <net/if.h>
@@ -153,7 +155,7 @@ static lck_grp_attr_t   *mld_mtx_grp_attr;
  * the state changes to MLD_LEAVING_MEMBER, and later dropped in the timeout
  * handler.  Each in6_multi holds a reference to the underlying mld_ifinfo.
  *
- * Thus, the permitted lock oder is:
+ * Thus, the permitted lock order is:
  *
  *	mld_mtx, in6_multihead_lock, inm6_lock, mli_lock
  *
@@ -169,27 +171,28 @@ static struct mld_ifinfo *mli_alloc(int);
 static void	mli_free(struct mld_ifinfo *);
 static void	mli_delete(const struct ifnet *, struct mld_in6m_relhead *);
 static void	mld_dispatch_packet(struct mbuf *);
-static void	mld_final_leave(struct in6_multi *, struct mld_ifinfo *);
-static int	mld_handle_state_change(struct in6_multi *,
-		    struct mld_ifinfo *);
+static void	mld_final_leave(struct in6_multi *, struct mld_ifinfo *,
+		    struct mld_tparams *);
+static int	mld_handle_state_change(struct in6_multi *, struct mld_ifinfo *,
+		    struct mld_tparams *);
 static int	mld_initial_join(struct in6_multi *, struct mld_ifinfo *,
-		    const int);
+		    struct mld_tparams *, const int);
 #ifdef MLD_DEBUG
 static const char *	mld_rec_type_to_str(const int);
 #endif
-static void	mld_set_version(struct mld_ifinfo *, const int);
+static uint32_t	mld_set_version(struct mld_ifinfo *, const int);
 static void	mld_flush_relq(struct mld_ifinfo *, struct mld_in6m_relhead *);
 static void	mld_dispatch_queue(struct mld_ifinfo *, struct ifqueue *, int);
 static int	mld_v1_input_query(struct ifnet *, const struct ip6_hdr *,
 		    /*const*/ struct mld_hdr *);
-static int	mld_v1_input_report(struct ifnet *, const struct ip6_hdr *,
-		    /*const*/ struct mld_hdr *);
+static int	mld_v1_input_report(struct ifnet *, struct mbuf *,
+		    const struct ip6_hdr *, /*const*/ struct mld_hdr *);
 static void	mld_v1_process_group_timer(struct in6_multi *, const int);
 static void	mld_v1_process_querier_timers(struct mld_ifinfo *);
 static int	mld_v1_transmit_report(struct in6_multi *, const int);
-static void	mld_v1_update_group(struct in6_multi *, const int);
+static uint32_t	mld_v1_update_group(struct in6_multi *, const int);
 static void	mld_v2_cancel_link_timers(struct mld_ifinfo *);
-static void	mld_v2_dispatch_general_query(struct mld_ifinfo *);
+static uint32_t	mld_v2_dispatch_general_query(struct mld_ifinfo *);
 static struct mbuf *
 		mld_v2_encap_report(struct ifnet *, struct mbuf *);
 static int	mld_v2_enqueue_filter_change(struct ifqueue *,
@@ -208,34 +211,26 @@ static int	mld_v2_process_group_query(struct in6_multi *,
 		    int, struct mbuf *, const int);
 static int	sysctl_mld_gsr SYSCTL_HANDLER_ARGS;
 static int	sysctl_mld_ifinfo SYSCTL_HANDLER_ARGS;
+static int	sysctl_mld_v2enable SYSCTL_HANDLER_ARGS;
+
+static int mld_timeout_run;		/* MLD timer is scheduled to run */
+static void mld_timeout(void *);
+static void mld_sched_timeout(void);
 
 /*
  * Normative references: RFC 2710, RFC 3590, RFC 3810.
- *
- *  XXX LOR PREVENTION
- *  A special case for IPv6 is the in6_setscope() routine. ip6_output()
- *  will not accept an ifp; it wants an embedded scope ID, unlike
- *  ip_output(), which happily takes the ifp given to it. The embedded
- *  scope ID is only used by MLD to select the outgoing interface.
- *
- *  As such, we exploit the fact that the scope ID is just the interface
- *  index, and embed it in the IPv6 destination address accordingly.
- *  This is potentially NOT VALID for MLDv1 reports, as they
- *  are always sent to the multicast group itself; as MLDv2
- *  reports are always sent to ff02::16, this is not an issue
- *  when MLDv2 is in use.
  */
-
-#define	MLD_EMBEDSCOPE(pin6, zoneid) \
-	(pin6)->s6_addr16[1] = htons((zoneid) & 0xFFFF)
-
 static struct timeval mld_gsrdelay = {10, 0};
 static LIST_HEAD(, mld_ifinfo) mli_head;
 
+static int querier_present_timers_running6;
 static int interface_timers_running6;
 static int state_change_timers_running6;
 static int current_state_timers_running6;
 
+/*
+ * Subsystem lock macros.
+ */
 #define	MLD_LOCK()			\
 	lck_mtx_lock(&mld_mtx)
 #define	MLD_LOCK_ASSERT_HELD()		\
@@ -280,6 +275,12 @@ static int	mld_v1enable = 1;
 SYSCTL_INT(_net_inet6_mld, OID_AUTO, v1enable, CTLFLAG_RW | CTLFLAG_LOCKED,
     &mld_v1enable, 0, "Enable fallback to MLDv1");
 
+static int	mld_v2enable = 1;
+SYSCTL_PROC(_net_inet6_mld, OID_AUTO, v2enable,
+    CTLTYPE_INT | CTLFLAG_RW | CTLFLAG_LOCKED,
+    &mld_v2enable, 0, sysctl_mld_v2enable, "I",
+    "Enable MLDv2 (debug purposes only)");
+
 static int	mld_use_allow = 1;
 SYSCTL_INT(_net_inet6_mld, OID_AUTO, use_allow, CTLFLAG_RW | CTLFLAG_LOCKED,
     &mld_use_allow, 0, "Use ALLOW/BLOCK for RFC 4604 SSM joins/leaves");
@@ -312,6 +313,31 @@ static struct mld_raopt mld_ra = {
 	}
 };
 static struct ip6_pktopts mld_po;
+
+/* Store MLDv2 record count in the module private scratch space */
+#define	vt_nrecs	pkt_mpriv.__mpriv_u.__mpriv32[0].__mpriv32_u.__val16[0]
+
+static __inline void
+mld_save_context(struct mbuf *m, struct ifnet *ifp)
+{
+	m->m_pkthdr.rcvif = ifp;
+}
+
+static __inline void
+mld_scrub_context(struct mbuf *m)
+{
+	m->m_pkthdr.rcvif = NULL;
+}
+
+/*
+ * Restore context from a queued output chain.
+ * Return saved ifp.
+ */
+static __inline struct ifnet *
+mld_restore_context(struct mbuf *m)
+{
+        return (m->m_pkthdr.rcvif);
+}
 
 /*
  * Retrieve or set threshold between group-source queries in seconds.
@@ -411,6 +437,52 @@ out_locked:
 	return (error);
 }
 
+static int
+sysctl_mld_v2enable SYSCTL_HANDLER_ARGS
+{
+#pragma unused(arg1, arg2)
+	int error;
+	int i;
+	struct mld_ifinfo *mli;
+	struct mld_tparams mtp = { 0, 0, 0, 0 };
+
+	MLD_LOCK();
+
+	i = mld_v2enable;
+
+	error = sysctl_handle_int(oidp, &i, 0, req);
+	if (error || !req->newptr)
+		goto out_locked;
+
+	if (i < 0 || i > 1) {
+		error = EINVAL;
+		goto out_locked;
+	}
+
+	mld_v2enable = i;
+	/*
+	 * If we enabled v2, the state transition will take care of upgrading
+	 * the MLD version back to v2. Otherwise, we have to explicitly
+	 * downgrade. Note that this functionality is to be used for debugging.
+	 */
+	if (mld_v2enable == 1)
+		goto out_locked;
+
+	LIST_FOREACH(mli, &mli_head, mli_link) {
+		MLI_LOCK(mli);
+		if (mld_set_version(mli, MLD_VERSION_1) > 0)
+			mtp.qpt = 1;
+		MLI_UNLOCK(mli);
+	}
+
+out_locked:
+	MLD_UNLOCK();
+
+	mld_set_timeout(&mtp);
+
+	return (error);
+}
+
 /*
  * Dispatch an entire queue of pending packet chains.
  *
@@ -428,7 +500,9 @@ mld_dispatch_queue(struct mld_ifinfo *mli, struct ifqueue *ifq, int limit)
 		IF_DEQUEUE(ifq, m);
 		if (m == NULL)
 			break;
-		MLD_PRINTF(("%s: dispatch %p from %p\n", __func__, ifq, m));
+		MLD_PRINTF(("%s: dispatch 0x%llx from 0x%llx\n", __func__,
+		    (uint64_t)VM_KERNEL_ADDRPERM(ifq),
+		    (uint64_t)VM_KERNEL_ADDRPERM(m)));
 		if (mli != NULL)
 			MLI_UNLOCK(mli);
 		mld_dispatch_packet(m);
@@ -481,8 +555,8 @@ mld_domifattach(struct ifnet *ifp, int how)
 {
 	struct mld_ifinfo *mli;
 
-	MLD_PRINTF(("%s: called for ifp %p(%s%d)\n",
-	    __func__, ifp, ifp->if_name, ifp->if_unit));
+	MLD_PRINTF(("%s: called for ifp 0x%llx(%s)\n", __func__,
+	    (uint64_t)VM_KERNEL_ADDRPERM(ifp), if_name(ifp)));
 
 	mli = mli_alloc(how);
 	if (mli == NULL)
@@ -504,8 +578,8 @@ mld_domifattach(struct ifnet *ifp, int how)
 
 	MLD_UNLOCK();
 
-	MLD_PRINTF(("allocate mld_ifinfo for ifp %p(%s%d)\n",
-	     ifp, ifp->if_name, ifp->if_unit));
+	MLD_PRINTF(("%s: allocate mld_ifinfo for ifp 0x%llx(%s)\n",
+	    __func__, (uint64_t)VM_KERNEL_ADDRPERM(ifp), if_name(ifp)));
 
 	return (mli);
 }
@@ -537,8 +611,8 @@ mld_domifreattach(struct mld_ifinfo *mli)
 
 	MLD_UNLOCK();
 
-	MLD_PRINTF(("reattached mld_ifinfo for ifp %p(%s%d)\n",
-	     ifp, ifp->if_name, ifp->if_unit));
+	MLD_PRINTF(("%s: reattached mld_ifinfo for ifp 0x%llx(%s)\n",
+	    __func__, (uint64_t)VM_KERNEL_ADDRPERM(ifp), if_name(ifp)));
 }
 
 /*
@@ -551,8 +625,8 @@ mld_domifdetach(struct ifnet *ifp)
 
 	SLIST_INIT(&in6m_dthead);
 
-	MLD_PRINTF(("%s: called for ifp %p(%s%d)\n",
-	    __func__, ifp, ifp->if_name, ifp->if_unit));
+	MLD_PRINTF(("%s: called for ifp 0x%llx(%s)\n", __func__,
+	    (uint64_t)VM_KERNEL_ADDRPERM(ifp), if_name(ifp)));
 
 	MLD_LOCK();
 	mli_delete(ifp, (struct mld_in6m_relhead *)&in6m_dthead);
@@ -594,7 +668,8 @@ mli_delete(const struct ifnet *ifp, struct mld_in6m_relhead *in6m_dthead)
 		}
 		MLI_UNLOCK(mli);
 	}
-	panic("%s: mld_ifinfo not found for ifp %p\n", __func__,  ifp);
+	panic("%s: mld_ifinfo not found for ifp %p(%s)\n", __func__,
+	    ifp, ifp->if_xname);
 }
 
 __private_extern__ void
@@ -618,7 +693,10 @@ mli_initvar(struct mld_ifinfo *mli, struct ifnet *ifp, int reattach)
 	MLI_LOCK_ASSERT_HELD(mli);
 
 	mli->mli_ifp = ifp;
-	mli->mli_version = MLD_VERSION_2;
+	if (mld_v2enable)
+		mli->mli_version = MLD_VERSION_2;
+	else
+		mli->mli_version = MLD_VERSION_1;
 	mli->mli_flags = 0;
 	mli->mli_rv = MLD_RV_INIT;
 	mli->mli_qi = MLD_QI_INIT;
@@ -722,8 +800,8 @@ mli_remref(struct mld_ifinfo *mli)
 	/* Now that we're dropped all locks, release detached records */
 	MLD_REMOVE_DETACHED_IN6M(&in6m_dthead);
 
-	MLD_PRINTF(("%s: freeing mld_ifinfo for ifp %p(%s%d)\n",
-	    __func__, ifp, ifp->if_name, ifp->if_unit));
+	MLD_PRINTF(("%s: freeing mld_ifinfo for ifp 0x%llx(%s)\n",
+	    __func__, (uint64_t)VM_KERNEL_ADDRPERM(ifp), if_name(ifp)));
 
 	mli_free(mli);
 }
@@ -741,16 +819,19 @@ mld_v1_input_query(struct ifnet *ifp, const struct ip6_hdr *ip6,
 {
 	struct mld_ifinfo	*mli;
 	struct in6_multi	*inm;
-	int			 is_general_query;
+	int			 err = 0, is_general_query;
 	uint16_t		 timer;
+	struct mld_tparams	 mtp = { 0, 0, 0, 0 };
+
+	MLD_LOCK_ASSERT_NOTHELD();
 
 	is_general_query = 0;
 
 	if (!mld_v1enable) {
-		MLD_PRINTF(("ignore v1 query %s on ifp %p(%s%d)\n",
-		    ip6_sprintf(&mld->mld_addr),
-		    ifp, ifp->if_name, ifp->if_unit));
-		return (0);
+		MLD_PRINTF(("%s: ignore v1 query %s on ifp 0x%llx(%s)\n",
+		    __func__, ip6_sprintf(&mld->mld_addr),
+		    (uint64_t)VM_KERNEL_ADDRPERM(ifp), if_name(ifp)));
+		goto done;
 	}
 
 	/*
@@ -758,10 +839,10 @@ mld_v1_input_query(struct ifnet *ifp, const struct ip6_hdr *ip6,
 	 * a router's link-local address.
 	 */
 	if (!IN6_IS_SCOPE_LINKLOCAL(&ip6->ip6_src)) {
-		MLD_PRINTF(("ignore v1 query src %s on ifp %p(%s%d)\n",
-		    ip6_sprintf(&ip6->ip6_src),
-		    ifp, ifp->if_name, ifp->if_unit));
-		return (0);
+		MLD_PRINTF(("%s: ignore v1 query src %s on ifp 0x%llx(%s)\n",
+		    __func__, ip6_sprintf(&ip6->ip6_src),
+		    (uint64_t)VM_KERNEL_ADDRPERM(ifp), if_name(ifp)));
+		goto done;
 	}
 
 	/*
@@ -777,8 +858,10 @@ mld_v1_input_query(struct ifnet *ifp, const struct ip6_hdr *ip6,
 
 		dst = ip6->ip6_dst;
 		in6_clearscope(&dst);
-		if (!IN6_ARE_ADDR_EQUAL(&dst, &in6addr_linklocal_allnodes))
-			return (EINVAL);
+		if (!IN6_ARE_ADDR_EQUAL(&dst, &in6addr_linklocal_allnodes)) {
+			err = EINVAL;
+			goto done;
+		}
 		is_general_query = 1;
 	} else {
 		/*
@@ -795,18 +878,18 @@ mld_v1_input_query(struct ifnet *ifp, const struct ip6_hdr *ip6,
 	VERIFY(mli != NULL);
 
 	MLI_LOCK(mli);
-	mld_set_version(mli, MLD_VERSION_1);
+	mtp.qpt = mld_set_version(mli, MLD_VERSION_1);
 	MLI_UNLOCK(mli);
 
-	timer = (ntohs(mld->mld_maxdelay) * PR_SLOWHZ) / MLD_TIMER_SCALE;
+	timer = ntohs(mld->mld_maxdelay) / MLD_TIMER_SCALE;
 	if (timer == 0)
 		timer = 1;
 
 	if (is_general_query) {
 		struct in6_multistep step;
 
-		MLD_PRINTF(("process v1 general query on ifp %p(%s%d)\n",
-		    ifp, ifp->if_name, ifp->if_unit));
+		MLD_PRINTF(("%s: process v1 general query on ifp 0x%llx(%s)\n",
+		    __func__, (uint64_t)VM_KERNEL_ADDRPERM(ifp), if_name(ifp)));
 		/*
 		 * For each reporting group joined on this
 		 * interface, kick the report timer.
@@ -816,7 +899,7 @@ mld_v1_input_query(struct ifnet *ifp, const struct ip6_hdr *ip6,
 		while (inm != NULL) {
 			IN6M_LOCK(inm);
 			if (inm->in6m_ifp == ifp)
-				mld_v1_update_group(inm, timer);
+				mtp.cst += mld_v1_update_group(inm, timer);
 			IN6M_UNLOCK(inm);
 			IN6_NEXT_MULTI(step, inm);
 		}
@@ -833,18 +916,21 @@ mld_v1_input_query(struct ifnet *ifp, const struct ip6_hdr *ip6,
 
 		if (inm != NULL) {
 			IN6M_LOCK(inm);
-			MLD_PRINTF(("process v1 query %s on ifp %p(%s%d)\n",
+			MLD_PRINTF(("%s: process v1 query %s on "
+			    "ifp 0x%llx(%s)\n", __func__,
 			    ip6_sprintf(&mld->mld_addr),
-			    ifp, ifp->if_name, ifp->if_unit));
-			mld_v1_update_group(inm, timer);
+			    (uint64_t)VM_KERNEL_ADDRPERM(ifp), if_name(ifp)));
+			mtp.cst = mld_v1_update_group(inm, timer);
 			IN6M_UNLOCK(inm);
 			IN6M_REMREF(inm); /* from IN6_LOOKUP_MULTI */
 		}
 		/* XXX Clear embedded scope ID as userland won't expect it. */
 		in6_clearscope(&mld->mld_addr);
 	}
+done:
+	mld_set_timeout(&mtp);
 
-	return (0);
+	return (err);
 }
 
 /*
@@ -862,14 +948,14 @@ mld_v1_input_query(struct ifnet *ifp, const struct ip6_hdr *ip6,
  * Unlike MLDv2, the delay per group should be jittered
  * to avoid bursts of MLDv1 reports.
  */
-static void
+static uint32_t
 mld_v1_update_group(struct in6_multi *inm, const int timer)
 {
 	IN6M_LOCK_ASSERT_HELD(inm);
 
-	MLD_PRINTF(("%s: %s/%s%d timer=%d\n", __func__,
+	MLD_PRINTF(("%s: %s/%s timer=%d\n", __func__,
 	    ip6_sprintf(&inm->in6m_addr),
-	    inm->in6m_ifp->if_name, inm->in6m_ifp->if_unit, timer));
+	    if_name(inm->in6m_ifp), timer));
 
 	switch (inm->in6m_state) {
 	case MLD_NOT_MEMBER:
@@ -891,7 +977,6 @@ mld_v1_update_group(struct in6_multi *inm, const int timer)
 		MLD_PRINTF(("%s: ->REPORTING\n", __func__));
 		inm->in6m_state = MLD_REPORTING_MEMBER;
 		inm->in6m_timer = MLD_RANDOM_DELAY(timer);
-		current_state_timers_running6 = 1;
 		break;
 	case MLD_SLEEPING_MEMBER:
 		MLD_PRINTF(("%s: ->AWAKENING\n", __func__));
@@ -900,6 +985,8 @@ mld_v1_update_group(struct in6_multi *inm, const int timer)
 	case MLD_LEAVING_MEMBER:
 		break;
 	}
+
+	return (inm->in6m_timer);
 }
 
 /*
@@ -918,34 +1005,44 @@ mld_v2_input_query(struct ifnet *ifp, const struct ip6_hdr *ip6,
 	struct mldv2_query	*mld;
 	struct in6_multi	*inm;
 	uint32_t		 maxdelay, nsrc, qqi;
-	int			 is_general_query;
+	int			 err = 0, is_general_query;
 	uint16_t		 timer;
 	uint8_t			 qrv;
+	struct mld_tparams	 mtp = { 0, 0, 0, 0 };
+
+	MLD_LOCK_ASSERT_NOTHELD();
 
 	is_general_query = 0;
+
+	if (!mld_v2enable) {
+		MLD_PRINTF(("%s: ignore v2 query %s on ifp 0x%llx(%s)\n",
+		    __func__, ip6_sprintf(&ip6->ip6_src),
+		    (uint64_t)VM_KERNEL_ADDRPERM(ifp), if_name(ifp)));
+		goto done;
+	}
 
 	/*
 	 * RFC3810 Section 6.2: MLD queries must originate from
 	 * a router's link-local address.
 	 */
 	if (!IN6_IS_SCOPE_LINKLOCAL(&ip6->ip6_src)) {
-		MLD_PRINTF(("ignore v1 query src %s on ifp %p(%s%d)\n",
-		    ip6_sprintf(&ip6->ip6_src),
-		    ifp, ifp->if_name, ifp->if_unit));
-		return (0);
+		MLD_PRINTF(("%s: ignore v1 query src %s on ifp 0x%llx(%s)\n",
+		    __func__, ip6_sprintf(&ip6->ip6_src),
+		    (uint64_t)VM_KERNEL_ADDRPERM(ifp), if_name(ifp)));
+		goto done;
 	}
 
-	MLD_PRINTF(("input v2 query on ifp %p(%s%d)\n", ifp, ifp->if_name,
-	    ifp->if_unit));
+	MLD_PRINTF(("%s: input v2 query on ifp 0x%llx(%s)\n", __func__,
+	    (uint64_t)VM_KERNEL_ADDRPERM(ifp), if_name(ifp)));
 
 	mld = (struct mldv2_query *)(mtod(m, uint8_t *) + off);
 
 	maxdelay = ntohs(mld->mld_maxdelay);	/* in 1/10ths of a second */
-	if (maxdelay >= 32678) {
+	if (maxdelay >= 32768) {
 		maxdelay = (MLD_MRC_MANT(maxdelay) | 0x1000) <<
 			   (MLD_MRC_EXP(maxdelay) + 3);
 	}
-	timer = (maxdelay * PR_SLOWHZ) / MLD_TIMER_SCALE;
+	timer = maxdelay / MLD_TIMER_SCALE;
 	if (timer == 0)
 		timer = 1;
 
@@ -963,11 +1060,15 @@ mld_v2_input_query(struct ifnet *ifp, const struct ip6_hdr *ip6,
 	}
 
 	nsrc = ntohs(mld->mld_numsrc);
-	if (nsrc > MLD_MAX_GS_SOURCES)
-		return (EMSGSIZE);
+	if (nsrc > MLD_MAX_GS_SOURCES) {
+		err = EMSGSIZE;
+		goto done;
+	}
 	if (icmp6len < sizeof(struct mldv2_query) +
-	    (nsrc * sizeof(struct in6_addr)))
-		return (EMSGSIZE);
+	    (nsrc * sizeof(struct in6_addr))) {
+		err = EMSGSIZE;
+		goto done;
+	}
 
 	/*
 	 * Do further input validation upfront to avoid resetting timers
@@ -975,17 +1076,13 @@ mld_v2_input_query(struct ifnet *ifp, const struct ip6_hdr *ip6,
 	 */
 	if (IN6_IS_ADDR_UNSPECIFIED(&mld->mld_addr)) {
 		/*
-		 * General Queries SHOULD be directed to ff02::1.
 		 * A general query with a source list has undefined
 		 * behaviour; discard it.
 		 */
-		struct in6_addr		 dst;
-
-		dst = ip6->ip6_dst;
-		in6_clearscope(&dst);
-		if (!IN6_ARE_ADDR_EQUAL(&dst, &in6addr_linklocal_allnodes) ||
-		    nsrc > 0)
-			return (EINVAL);
+		if (nsrc > 0) {
+			err = EINVAL;
+			goto done;
+		}
 		is_general_query = 1;
 	} else {
 		/*
@@ -1007,16 +1104,16 @@ mld_v2_input_query(struct ifnet *ifp, const struct ip6_hdr *ip6,
 	 */
 	if (mli->mli_version != MLD_VERSION_2) {
 		MLI_UNLOCK(mli);
-		return (0);
+		goto done;
 	}
 
-	mld_set_version(mli, MLD_VERSION_2);
+	mtp.qpt = mld_set_version(mli, MLD_VERSION_2);
 	mli->mli_rv = qrv;
 	mli->mli_qi = qqi;
-	mli->mli_qri = maxdelay;
+	mli->mli_qri = MAX(timer, MLD_QRI_MIN);
 
-	MLD_PRINTF(("%s: qrv %d qi %d maxdelay %d\n", __func__, qrv, qqi,
-	    maxdelay));
+	MLD_PRINTF(("%s: qrv %d qi %d qri %d\n", __func__, mli->mli_rv,
+	    mli->mli_qi, mli->mli_qri));
 
 	if (is_general_query) {
 		/*
@@ -1030,11 +1127,10 @@ mld_v2_input_query(struct ifnet *ifp, const struct ip6_hdr *ip6,
 		 * not schedule any other reports.
 		 * Otherwise, reset the interface timer.
 		 */
-		MLD_PRINTF(("process v2 general query on ifp %p(%s%d)\n",
-		    ifp, ifp->if_name, ifp->if_unit));
+		MLD_PRINTF(("%s: process v2 general query on ifp 0x%llx(%s)\n",
+		    __func__, (uint64_t)VM_KERNEL_ADDRPERM(ifp), if_name(ifp)));
 		if (mli->mli_v2_timer == 0 || mli->mli_v2_timer >= timer) {
-			mli->mli_v2_timer = MLD_RANDOM_DELAY(timer);
-			interface_timers_running6 = 1;
+			mtp.it = mli->mli_v2_timer = MLD_RANDOM_DELAY(timer);
 		}
 		MLI_UNLOCK(mli);
 	} else {
@@ -1051,11 +1147,9 @@ mld_v2_input_query(struct ifnet *ifp, const struct ip6_hdr *ip6,
 		IN6_LOOKUP_MULTI(&mld->mld_addr, ifp, inm);
 		in6_multihead_lock_done();
 		if (inm == NULL)
-			return (0);
+			goto done;
 
 		IN6M_LOCK(inm);
-#ifndef __APPLE__
-		/* TODO: need ratecheck equivalent */
 		if (nsrc > 0) {
 			if (!ratecheck(&inm->in6m_lastgsrtv,
 			    &mld_gsrdelay)) {
@@ -1063,12 +1157,11 @@ mld_v2_input_query(struct ifnet *ifp, const struct ip6_hdr *ip6,
 				    __func__));
 				IN6M_UNLOCK(inm);
 				IN6M_REMREF(inm); /* from IN6_LOOKUP_MULTI */
-				return (0);
+				goto done;
 			}
 		}
-#endif
-		MLD_PRINTF(("process v2 group query on ifp %p(%s%d)\n",
-		     ifp, ifp->if_name, ifp->if_unit));
+		MLD_PRINTF(("%s: process v2 group query on ifp 0x%llx(%s)\n",
+		    __func__, (uint64_t)VM_KERNEL_ADDRPERM(ifp), if_name(ifp)));
 		/*
 		 * If there is a pending General Query response
 		 * scheduled sooner than the selected delay, no
@@ -1077,19 +1170,26 @@ mld_v2_input_query(struct ifnet *ifp, const struct ip6_hdr *ip6,
 		 * group-specific or group-and-source query.
 		 */
 		MLI_LOCK(mli);
-		if (mli->mli_v2_timer == 0 || mli->mli_v2_timer >= timer) {
-			MLI_UNLOCK(mli);
-			mld_v2_process_group_query(inm, timer, m, off);
-		} else {
-			MLI_UNLOCK(mli);
+		mtp.it = mli->mli_v2_timer;
+		MLI_UNLOCK(mli);
+		if (mtp.it == 0 || mtp.it >= timer) {
+			(void) mld_v2_process_group_query(inm, timer, m, off);
+			mtp.cst = inm->in6m_timer;
 		}
 		IN6M_UNLOCK(inm);
 		IN6M_REMREF(inm); /* from IN6_LOOKUP_MULTI */
 		/* XXX Clear embedded scope ID as userland won't expect it. */
 		in6_clearscope(&mld->mld_addr);
 	}
+done:
+	if (mtp.it > 0) {
+		MLD_PRINTF(("%s: v2 general query response scheduled in "
+		    "T+%d seconds on ifp 0x%llx(%s)\n", __func__, mtp.it,
+		    (uint64_t)VM_KERNEL_ADDRPERM(ifp), if_name(ifp)));
+	}
+	mld_set_timeout(&mtp);
 
-	return (0);
+	return (err);
 }
 
 /*
@@ -1142,7 +1242,6 @@ mld_v2_process_group_query(struct in6_multi *inm, int timer, struct mbuf *m0,
 		}
 		inm->in6m_state = MLD_G_QUERY_PENDING_MEMBER;
 		inm->in6m_timer = MLD_RANDOM_DELAY(timer);
-		current_state_timers_running6 = 1;
 		return (retval);
 	}
 
@@ -1153,7 +1252,6 @@ mld_v2_process_group_query(struct in6_multi *inm, int timer, struct mbuf *m0,
 	if (inm->in6m_state == MLD_G_QUERY_PENDING_MEMBER) {
 		timer = min(inm->in6m_timer, timer);
 		inm->in6m_timer = MLD_RANDOM_DELAY(timer);
-		current_state_timers_running6 = 1;
 		return (retval);
 	}
 
@@ -1197,7 +1295,6 @@ mld_v2_process_group_query(struct in6_multi *inm, int timer, struct mbuf *m0,
 			    __func__));
 			inm->in6m_state = MLD_SG_QUERY_PENDING_MEMBER;
 			inm->in6m_timer = MLD_RANDOM_DELAY(timer);
-			current_state_timers_running6 = 1;
 		}
 	}
 
@@ -1212,21 +1309,22 @@ mld_v2_process_group_query(struct in6_multi *inm, int timer, struct mbuf *m0,
  * mld_addr. This is OK as we own the mbuf chain.
  */
 static int
-mld_v1_input_report(struct ifnet *ifp, const struct ip6_hdr *ip6,
-    /*const*/ struct mld_hdr *mld)
+mld_v1_input_report(struct ifnet *ifp, struct mbuf *m,
+    const struct ip6_hdr *ip6, /*const*/ struct mld_hdr *mld)
 {
 	struct in6_addr		 src, dst;
 	struct in6_ifaddr	*ia;
 	struct in6_multi	*inm;
 
 	if (!mld_v1enable) {
-		MLD_PRINTF(("ignore v1 report %s on ifp %p(%s%d)\n",
-		    ip6_sprintf(&mld->mld_addr),
-		    ifp, ifp->if_name, ifp->if_unit));
+		MLD_PRINTF(("%s: ignore v1 report %s on ifp 0x%llx(%s)\n",
+		    __func__, ip6_sprintf(&mld->mld_addr),
+		    (uint64_t)VM_KERNEL_ADDRPERM(ifp), if_name(ifp)));
 		return (0);
 	}
 
-	if (ifp->if_flags & IFF_LOOPBACK)
+	if ((ifp->if_flags & IFF_LOOPBACK) ||
+	    (m->m_pkthdr.pkt_flags & PKTF_LOOP))
 		return (0);
 
 	/*
@@ -1236,9 +1334,9 @@ mld_v1_input_report(struct ifnet *ifp, const struct ip6_hdr *ip6,
 	src = ip6->ip6_src;
 	in6_clearscope(&src);
 	if (!IN6_IS_SCOPE_LINKLOCAL(&src) && !IN6_IS_ADDR_UNSPECIFIED(&src)) {
-		MLD_PRINTF(("ignore v1 query src %s on ifp %p(%s%d)\n",
-		    ip6_sprintf(&ip6->ip6_src),
-		    ifp, ifp->if_name, ifp->if_unit));
+		MLD_PRINTF(("%s: ignore v1 query src %s on ifp 0x%llx(%s)\n",
+		    __func__, ip6_sprintf(&ip6->ip6_src),
+		    (uint64_t)VM_KERNEL_ADDRPERM(ifp), if_name(ifp)));
 		return (EINVAL);
 	}
 
@@ -1250,9 +1348,9 @@ mld_v1_input_report(struct ifnet *ifp, const struct ip6_hdr *ip6,
 	in6_clearscope(&dst);
 	if (!IN6_IS_ADDR_MULTICAST(&mld->mld_addr) ||
 	    !IN6_ARE_ADDR_EQUAL(&mld->mld_addr, &dst)) {
-		MLD_PRINTF(("ignore v1 query dst %s on ifp %p(%s%d)\n",
-		    ip6_sprintf(&ip6->ip6_dst),
-		    ifp, ifp->if_name, ifp->if_unit));
+		MLD_PRINTF(("%s: ignore v1 query dst %s on ifp 0x%llx(%s)\n",
+		    __func__, ip6_sprintf(&ip6->ip6_dst),
+		    (uint64_t)VM_KERNEL_ADDRPERM(ifp), if_name(ifp)));
 		return (EINVAL);
 	}
 
@@ -1280,8 +1378,9 @@ mld_v1_input_report(struct ifnet *ifp, const struct ip6_hdr *ip6,
 		return (0);
 	}
 
-	MLD_PRINTF(("process v1 report %s on ifp %p(%s%d)\n",
-	    ip6_sprintf(&mld->mld_addr), ifp, ifp->if_name, ifp->if_unit));
+	MLD_PRINTF(("%s: process v1 report %s on ifp 0x%llx(%s)\n",
+	    __func__, ip6_sprintf(&mld->mld_addr),
+	    (uint64_t)VM_KERNEL_ADDRPERM(ifp), if_name(ifp)));
 
 	/*
 	 * Embed scope ID of receiving interface in MLD query for lookup
@@ -1330,9 +1429,10 @@ mld_v1_input_report(struct ifnet *ifp, const struct ip6_hdr *ip6,
 		case MLD_REPORTING_MEMBER:
 		case MLD_IDLE_MEMBER:
 		case MLD_AWAKENING_MEMBER:
-			MLD_PRINTF(("report suppressed for %s on ifp %p(%s%d)\n",
+			MLD_PRINTF(("%s: report suppressed for %s on "
+			    "ifp 0x%llx(%s)\n", __func__,
 			    ip6_sprintf(&mld->mld_addr),
-			    ifp, ifp->if_name, ifp->if_unit));
+			    (uint64_t)VM_KERNEL_ADDRPERM(ifp), if_name(ifp)));
 		case MLD_LAZY_MEMBER:
 			inm->in6m_state = MLD_LAZY_MEMBER;
 			break;
@@ -1371,7 +1471,8 @@ mld_input(struct mbuf *m, int off, int icmp6len)
 	struct mld_hdr	*mld;
 	int		 mldlen;
 
-	MLD_PRINTF(("%s: called w/mbuf (%p,%d)\n", __func__, m, off));
+	MLD_PRINTF(("%s: called w/mbuf (0x%llx,%d)\n", __func__,
+	    (uint64_t)VM_KERNEL_ADDRPERM(m), off));
 
 	ifp = m->m_pkthdr.rcvif;
 
@@ -1409,7 +1510,7 @@ mld_input(struct mbuf *m, int off, int icmp6len)
 		break;
 	case MLD_LISTENER_REPORT:
 		icmp6_ifstat_inc(ifp, ifs6_in_mldreport);
-		if (mld_v1_input_report(ifp, ip6, mld) != 0)
+		if (mld_v1_input_report(ifp, m, ip6, mld) != 0)
 			return (0);
 		break;
 	case MLDV2_LISTENER_REPORT:
@@ -1426,56 +1527,87 @@ mld_input(struct mbuf *m, int off, int icmp6len)
 }
 
 /*
- * MLD6 slowtimo handler.
- * Combiles both the slow and fast timer into one. We loose some responsivness but
- * allows the system to avoid having a pr_fasttimo, thus allowing for power savings.
+ * Schedule MLD timer based on various parameters; caller must ensure that
+ * lock ordering is maintained as this routine acquires MLD global lock.
  */
 void
-mld_slowtimo(void)
+mld_set_timeout(struct mld_tparams *mtp)
 {
+	MLD_LOCK_ASSERT_NOTHELD();
+	VERIFY(mtp != NULL);
+
+	if (mtp->qpt != 0 || mtp->it != 0 || mtp->cst != 0 || mtp->sct != 0) {
+		MLD_LOCK();
+		if (mtp->qpt != 0)
+			querier_present_timers_running6 = 1;
+		if (mtp->it != 0)
+			interface_timers_running6 = 1;
+		if (mtp->cst != 0)
+			current_state_timers_running6 = 1;
+		if (mtp->sct != 0)
+			state_change_timers_running6 = 1;
+		mld_sched_timeout();
+		MLD_UNLOCK();
+	}
+}
+
+/*
+ * MLD6 timer handler (per 1 second).
+ */
+static void
+mld_timeout(void *arg)
+{
+#pragma unused(arg)
 	struct ifqueue		 scq;	/* State-change packets */
 	struct ifqueue		 qrq;	/* Query response packets */
 	struct ifnet		*ifp;
 	struct mld_ifinfo	*mli;
 	struct in6_multi	*inm;
-	int			 uri_fasthz = 0;
+	int			 uri_sec = 0;
 	SLIST_HEAD(, in6_multi)	in6m_dthead;
 
 	SLIST_INIT(&in6m_dthead);
 
+	/*
+	 * Update coarse-grained networking timestamp (in sec.); the idea
+	 * is to piggy-back on the timeout callout to update the counter
+	 * returnable via net_uptime().
+	 */
+	net_update_uptime();
+
 	MLD_LOCK();
 
-	LIST_FOREACH(mli, &mli_head, mli_link) {
-		MLI_LOCK(mli);
-		mld_v1_process_querier_timers(mli);
-		MLI_UNLOCK(mli);
-	}
+	MLD_PRINTF(("%s: qpt %d, it %d, cst %d, sct %d\n", __func__,
+	    querier_present_timers_running6, interface_timers_running6,
+	    current_state_timers_running6, state_change_timers_running6));
 
 	/*
-	 * Quick check to see if any work needs to be done, in order to
-	 * minimize the overhead of fasttimo processing.
+	 * MLDv1 querier present timer processing.
 	 */
-	if (!current_state_timers_running6 &&
-	    !interface_timers_running6 &&
-	    !state_change_timers_running6) {
-		MLD_UNLOCK();
-		return;
+	if (querier_present_timers_running6) {
+		querier_present_timers_running6 = 0;
+		LIST_FOREACH(mli, &mli_head, mli_link) {
+			MLI_LOCK(mli);
+			mld_v1_process_querier_timers(mli);
+			if (mli->mli_v1_timer > 0)
+				querier_present_timers_running6 = 1;
+			MLI_UNLOCK(mli);
+		}
 	}
 
 	/*
 	 * MLDv2 General Query response timer processing.
 	 */
 	if (interface_timers_running6) {
-#if 0
 		MLD_PRINTF(("%s: interface timers running\n", __func__));
-#endif
 		interface_timers_running6 = 0;
 		LIST_FOREACH(mli, &mli_head, mli_link) {
 			MLI_LOCK(mli);
 			if (mli->mli_v2_timer == 0) {
 				/* Do nothing. */
 			} else if (--mli->mli_v2_timer == 0) {
-				mld_v2_dispatch_general_query(mli);
+				if (mld_v2_dispatch_general_query(mli) > 0)
+					interface_timers_running6 = 1;
 			} else {
 				interface_timers_running6 = 1;
 			}
@@ -1489,9 +1621,8 @@ mld_slowtimo(void)
 
 	current_state_timers_running6 = 0;
 	state_change_timers_running6 = 0;
-#if 0
+
 	MLD_PRINTF(("%s: state change timers running\n", __func__));
-#endif
 
 	memset(&qrq, 0, sizeof(struct ifqueue));
 	qrq.ifq_maxlen = MLD_MAX_G_GS_PACKETS;
@@ -1508,7 +1639,7 @@ mld_slowtimo(void)
 
 		MLI_LOCK(mli);
 		ifp = mli->mli_ifp;
-		uri_fasthz = MLD_RANDOM_DELAY(mli->mli_uri * PR_SLOWHZ);
+		uri_sec = MLD_RANDOM_DELAY(mli->mli_uri);
 		MLI_UNLOCK(mli);
 
 		in6_multihead_lock_shared();
@@ -1526,7 +1657,7 @@ mld_slowtimo(void)
 				break;
 			case MLD_VERSION_2:
 				mld_v2_process_group_timers(mli, &qrq,
-				    &scq, inm, uri_fasthz);
+				    &scq, inm, uri_sec);
 				break;
 			}
 			MLI_UNLOCK(mli);
@@ -1567,10 +1698,26 @@ next:
 	}
 
 out_locked:
+	/* re-arm the timer if there's work to do */
+	mld_timeout_run = 0;
+	mld_sched_timeout();
 	MLD_UNLOCK();
 
 	/* Now that we're dropped all locks, release detached records */
 	MLD_REMOVE_DETACHED_IN6M(&in6m_dthead);
+}
+
+static void
+mld_sched_timeout(void)
+{
+	MLD_LOCK_ASSERT_HELD();
+
+	if (!mld_timeout_run &&
+	    (querier_present_timers_running6 || current_state_timers_running6 ||
+	    interface_timers_running6 || state_change_timers_running6)) {
+		mld_timeout_run = 1;
+		timeout(mld_timeout, NULL, hz);
+	}
 }
 
 /*
@@ -1630,6 +1777,7 @@ mld_v1_process_group_timer(struct in6_multi *inm, const int mld_version)
 #pragma unused(mld_version)
 	int report_timer_expired;
 
+	MLD_LOCK_ASSERT_HELD();
 	IN6M_LOCK_ASSERT_HELD(inm);
 	MLI_LOCK_ASSERT_HELD(inm->in6m_mli);
 
@@ -1639,6 +1787,7 @@ mld_v1_process_group_timer(struct in6_multi *inm, const int mld_version)
 		report_timer_expired = 1;
 	} else {
 		current_state_timers_running6 = 1;
+		/* caller will schedule timer */
 		return;
 	}
 
@@ -1674,11 +1823,12 @@ mld_v1_process_group_timer(struct in6_multi *inm, const int mld_version)
 static void
 mld_v2_process_group_timers(struct mld_ifinfo *mli,
     struct ifqueue *qrq, struct ifqueue *scq,
-    struct in6_multi *inm, const int uri_fasthz)
+    struct in6_multi *inm, const int uri_sec)
 {
 	int query_response_timer_expired;
 	int state_change_retransmit_timer_expired;
 
+	MLD_LOCK_ASSERT_HELD();
 	IN6M_LOCK_ASSERT_HELD(inm);
 	MLI_LOCK_ASSERT_HELD(mli);
 	VERIFY(mli == inm->in6m_mli);
@@ -1690,7 +1840,7 @@ mld_v2_process_group_timers(struct mld_ifinfo *mli,
 	 * During a transition from compatibility mode back to MLDv2,
 	 * a group record in REPORTING state may still have its group
 	 * timer active. This is a no-op in this function; it is easier
-	 * to deal with it here than to complicate the slow-timeout path.
+	 * to deal with it here than to complicate the timeout path.
 	 */
 	if (inm->in6m_timer == 0) {
 		query_response_timer_expired = 0;
@@ -1698,6 +1848,7 @@ mld_v2_process_group_timers(struct mld_ifinfo *mli,
 		query_response_timer_expired = 1;
 	} else {
 		current_state_timers_running6 = 1;
+		/* caller will schedule timer */
 	}
 
 	if (inm->in6m_sctimer == 0) {
@@ -1706,9 +1857,10 @@ mld_v2_process_group_timers(struct mld_ifinfo *mli,
 		state_change_retransmit_timer_expired = 1;
 	} else {
 		state_change_timers_running6 = 1;
+		/* caller will schedule timer */
 	}
 
-	/* We are in fasttimo, so be quick about it. */
+	/* We are in timer callback, so be quick about it. */
 	if (!state_change_retransmit_timer_expired &&
 	    !query_response_timer_expired)
 		return;
@@ -1751,8 +1903,9 @@ mld_v2_process_group_timers(struct mld_ifinfo *mli,
 			 * reset the timer.
 			 */
 			if (--inm->in6m_scrv > 0) {
-				inm->in6m_sctimer = uri_fasthz;
+				inm->in6m_sctimer = uri_sec;
 				state_change_timers_running6 = 1;
+				/* caller will schedule timer */
 			}
 			/*
 			 * Retransmit the previously computed state-change
@@ -1764,9 +1917,9 @@ mld_v2_process_group_timers(struct mld_ifinfo *mli,
 			(void) mld_v2_merge_state_changes(inm, scq);
 
 			in6m_commit(inm);
-			MLD_PRINTF(("%s: T1 -> T0 for %s/%s%d\n", __func__,
+			MLD_PRINTF(("%s: T1 -> T0 for %s/%s\n", __func__,
 			    ip6_sprintf(&inm->in6m_addr),
-			    inm->in6m_ifp->if_name, inm->in6m_ifp->if_unit));
+			    if_name(inm->in6m_ifp)));
 
 			/*
 			 * If we are leaving the group for good, make sure
@@ -1800,24 +1953,23 @@ mld_v2_process_group_timers(struct mld_ifinfo *mli,
  * Switch to a different version on the given interface,
  * as per Section 9.12.
  */
-static void
+static uint32_t
 mld_set_version(struct mld_ifinfo *mli, const int mld_version)
 {
 	int old_version_timer;
 
 	MLI_LOCK_ASSERT_HELD(mli);
 
-	MLD_PRINTF(("%s: switching to v%d on ifp %p(%s%d)\n", __func__,
-	    mld_version, mli->mli_ifp, mli->mli_ifp->if_name,
-	    mli->mli_ifp->if_unit));
+	MLD_PRINTF(("%s: switching to v%d on ifp 0x%llx(%s)\n", __func__,
+	    mld_version, (uint64_t)VM_KERNEL_ADDRPERM(mli->mli_ifp),
+	    if_name(mli->mli_ifp)));
 
 	if (mld_version == MLD_VERSION_1) {
 		/*
 		 * Compute the "Older Version Querier Present" timer as per
-		 * Section 9.12.
+		 * Section 9.12, in seconds.
 		 */
 		old_version_timer = (mli->mli_rv * mli->mli_qi) + mli->mli_qri;
-		old_version_timer *= PR_SLOWHZ;
 		mli->mli_v1_timer = old_version_timer;
 	}
 
@@ -1827,11 +1979,18 @@ mld_set_version(struct mld_ifinfo *mli, const int mld_version)
 	}
 
 	MLI_LOCK_ASSERT_HELD(mli);
+
+	return (mli->mli_v1_timer);
 }
 
 /*
  * Cancel pending MLDv2 timers for the given link and all groups
  * joined on it; state-change, general-query, and group-query timers.
+ *
+ * Only ever called on a transition from v2 to Compatibility mode. Kill
+ * the timers stone dead (this may be expensive for large N groups), they
+ * will be restarted if Compatibility Mode deems that they must be due to
+ * query processing.
  */
 static void
 mld_v2_cancel_link_timers(struct mld_ifinfo *mli)
@@ -1842,19 +2001,20 @@ mld_v2_cancel_link_timers(struct mld_ifinfo *mli)
 
 	MLI_LOCK_ASSERT_HELD(mli);
 
-	MLD_PRINTF(("%s: cancel v2 timers on ifp %p(%s%d)\n", __func__,
-	    mli->mli_ifp, mli->mli_ifp->if_name, mli->mli_ifp->if_unit));
+	MLD_PRINTF(("%s: cancel v2 timers on ifp 0x%llx(%s)\n", __func__,
+	    (uint64_t)VM_KERNEL_ADDRPERM(mli->mli_ifp), if_name(mli->mli_ifp)));
 
 	/*
-	 * Fast-track this potentially expensive operation
-	 * by checking all the global 'timer pending' flags.
+	 * Stop the v2 General Query Response on this link stone dead.
+	 * If timer is woken up due to interface_timers_running6,
+	 * the flag will be cleared if there are no pending link timers.
 	 */
-	if (!interface_timers_running6 &&
-	    !state_change_timers_running6 &&
-	    !current_state_timers_running6)
-		return;
-
 	mli->mli_v2_timer = 0;
+
+	/*
+	 * Now clear the current-state and state-change report timers
+	 * for all memberships scoped to this link.
+	 */
 	ifp = mli->mli_ifp;
 	MLI_UNLOCK(mli);
 
@@ -1872,6 +2032,10 @@ mld_v2_cancel_link_timers(struct mld_ifinfo *mli)
 		case MLD_LAZY_MEMBER:
 		case MLD_SLEEPING_MEMBER:
 		case MLD_AWAKENING_MEMBER:
+			/*
+			 * These states are either not relevant in v2 mode,
+			 * or are unreported. Do nothing.
+			 */
 			break;
 		case MLD_LEAVING_MEMBER:
 			/*
@@ -1894,15 +2058,16 @@ mld_v2_cancel_link_timers(struct mld_ifinfo *mli)
 			in6m_clear_recorded(inm);
 			/* FALLTHROUGH */
 		case MLD_REPORTING_MEMBER:
-			inm->in6m_sctimer = 0;
-			inm->in6m_timer = 0;
 			inm->in6m_state = MLD_REPORTING_MEMBER;
-			/*
-			 * Free any pending MLDv2 state-change records.
-			 */
-			IF_DRAIN(&inm->in6m_scq);
 			break;
 		}
+		/*
+		 * Always clear state-change and group report timers.
+		 * Free any pending MLDv2 state-change records.
+		 */
+		inm->in6m_sctimer = 0;
+		inm->in6m_timer = 0;
+		IF_DRAIN(&inm->in6m_scq);
 next:
 		IN6M_UNLOCK(inm);
 		IN6_NEXT_MULTI(step, inm);
@@ -1921,13 +2086,15 @@ mld_v1_process_querier_timers(struct mld_ifinfo *mli)
 {
 	MLI_LOCK_ASSERT_HELD(mli);
 
-	if (mli->mli_version != MLD_VERSION_2 && --mli->mli_v1_timer == 0) {
+	if (mld_v2enable && mli->mli_version != MLD_VERSION_2 &&
+	    --mli->mli_v1_timer == 0) {
 		/*
 		 * MLDv1 Querier Present timer expired; revert to MLDv2.
 		 */
-		MLD_PRINTF(("%s: transition from v%d -> v%d on %p(%s%d)\n",
+		MLD_PRINTF(("%s: transition from v%d -> v%d on 0x%llx(%s)\n",
 		    __func__, mli->mli_version, MLD_VERSION_2,
-		    mli->mli_ifp, mli->mli_ifp->if_name, mli->mli_ifp->if_unit));
+		    (uint64_t)VM_KERNEL_ADDRPERM(mli->mli_ifp),
+		    if_name(mli->mli_ifp)));
 		mli->mli_version = MLD_VERSION_2;
 	}
 }
@@ -2003,6 +2170,7 @@ mld_v1_transmit_report(struct in6_multi *in6m, const int type)
 	mld->mld_cksum = in6_cksum(mh, IPPROTO_ICMPV6,
 	    sizeof(struct ip6_hdr), sizeof(struct mld_hdr));
 
+	mld_save_context(mh, ifp);
 	mh->m_flags |= M_MLDV1;
 
 	/*
@@ -2011,15 +2179,17 @@ mld_v1_transmit_report(struct in6_multi *in6m, const int type)
 	 * mld_dispatch_packet() here since that will eventually call
 	 * ip6_output(), which will try to lock in6_multihead_lock and cause
 	 * a deadlock.
-	 * Instead we defer the work to the mld_slowtimo() thread, thus
+	 * Instead we defer the work to the mld_timeout() thread, thus
 	 * avoiding unlocking in_multihead_lock here.
 	 */
         if (IF_QFULL(&in6m->in6m_mli->mli_v1q)) {
                 MLD_PRINTF(("%s: v1 outbound queue full\n", __func__));
                 error = ENOMEM;
                 m_freem(mh);
-        } else
+        } else {
                 IF_ENQUEUE(&in6m->in6m_mli->mli_v1q, mh);
+		VERIFY(error == 0);
+	}
 
 	return (error);
 }
@@ -2040,16 +2210,20 @@ mld_v1_transmit_report(struct in6_multi *in6m, const int type)
  *
  * If delay is non-zero, and the state change is an initial multicast
  * join, the state change report will be delayed by 'delay' ticks
- * in units of PR_FASTHZ if MLDv1 is active on the link; otherwise
+ * in units of seconds if MLDv1 is active on the link; otherwise
  * the initial MLDv2 state change report will be delayed by whichever
  * is sooner, a pending state-change timer or delay itself.
  */
 int
-mld_change_state(struct in6_multi *inm, const int delay)
+mld_change_state(struct in6_multi *inm, struct mld_tparams *mtp,
+    const int delay)
 {
 	struct mld_ifinfo *mli;
 	struct ifnet *ifp;
 	int error = 0;
+
+	VERIFY(mtp != NULL);
+	bzero(mtp, sizeof (*mtp));
 
 	IN6M_LOCK_ASSERT_HELD(inm);
 	VERIFY(inm->in6m_mli != NULL);
@@ -2079,19 +2253,18 @@ mld_change_state(struct in6_multi *inm, const int delay)
 		    inm->in6m_st[0].iss_fmode, inm->in6m_st[1].iss_fmode));
 		if (inm->in6m_st[0].iss_fmode == MCAST_UNDEFINED) {
 			MLD_PRINTF(("%s: initial join\n", __func__));
-			error = mld_initial_join(inm, mli, delay);
+			error = mld_initial_join(inm, mli, mtp, delay);
 			goto out;
 		} else if (inm->in6m_st[1].iss_fmode == MCAST_UNDEFINED) {
 			MLD_PRINTF(("%s: final leave\n", __func__));
-			mld_final_leave(inm, mli);
+			mld_final_leave(inm, mli, mtp);
 			goto out;
 		}
 	} else {
 		MLD_PRINTF(("%s: filter set change\n", __func__));
 	}
 
-	error = mld_handle_state_change(inm, mli);
-
+	error = mld_handle_state_change(inm, mli, mtp);
 out:
 	return (error);
 }
@@ -2106,11 +2279,11 @@ out:
  *  initial state of the membership.
  *
  * If the delay argument is non-zero, then we must delay sending the
- * initial state change for delay ticks (in units of PR_FASTHZ).
+ * initial state change for delay ticks (in units of seconds).
  */
 static int
 mld_initial_join(struct in6_multi *inm, struct mld_ifinfo *mli,
-    const int delay)
+    struct mld_tparams *mtp, const int delay)
 {
 	struct ifnet		*ifp;
 	struct ifqueue		*ifq;
@@ -2119,10 +2292,12 @@ mld_initial_join(struct in6_multi *inm, struct mld_ifinfo *mli,
 
 	IN6M_LOCK_ASSERT_HELD(inm);
 	MLI_LOCK_ASSERT_NOTHELD(mli);
+	VERIFY(mtp != NULL);
 
-	MLD_PRINTF(("%s: initial join %s on ifp %p(%s%d)\n",
+	MLD_PRINTF(("%s: initial join %s on ifp 0x%llx(%s)\n",
 	    __func__, ip6_sprintf(&inm->in6m_addr),
-	    inm->in6m_ifp, inm->in6m_ifp->if_name, inm->in6m_ifp->if_unit));
+	    (uint64_t)VM_KERNEL_ADDRPERM(inm->in6m_ifp),
+	    if_name(inm->in6m_ifp)));
 
 	error = 0;
 	syncstates = 1;
@@ -2175,10 +2350,10 @@ mld_initial_join(struct in6_multi *inm, struct mld_ifinfo *mli,
 			 * and delay sending the initial MLDv1 report
 			 * by not transitioning to the IDLE state.
 			 */
-			odelay = MLD_RANDOM_DELAY(MLD_V1_MAX_RI * PR_SLOWHZ);
+			odelay = MLD_RANDOM_DELAY(MLD_V1_MAX_RI);
 			if (delay) {
 				inm->in6m_timer = max(delay, odelay);
-				current_state_timers_running6 = 1;
+				mtp->cst = 1;
 			} else {
 				inm->in6m_state = MLD_IDLE_MEMBER;
 				error = mld_v1_transmit_report(inm,
@@ -2189,7 +2364,7 @@ mld_initial_join(struct in6_multi *inm, struct mld_ifinfo *mli,
 
 				if (error == 0) {
 					inm->in6m_timer = odelay;
-					current_state_timers_running6 = 1;
+					mtp->cst = 1;
 				}
 			}
 			break;
@@ -2211,6 +2386,7 @@ mld_initial_join(struct in6_multi *inm, struct mld_ifinfo *mli,
 			IF_DRAIN(ifq);
 			retval = mld_v2_enqueue_group_record(ifq, inm, 1,
 			    0, 0, (mli->mli_flags & MLIF_USEALLOW));
+			mtp->cst = (ifq->ifq_len > 0);
 			MLD_PRINTF(("%s: enqueue record = %d\n",
 			    __func__, retval));
 			if (retval <= 0) {
@@ -2221,7 +2397,7 @@ mld_initial_join(struct in6_multi *inm, struct mld_ifinfo *mli,
 			/*
 			 * Schedule transmission of pending state-change
 			 * report up to RV times for this link. The timer
-			 * will fire at the next mld_fasttimo (~200ms),
+			 * will fire at the next mld_timeout (1 second)),
 			 * giving us an opportunity to merge the reports.
 			 *
 			 * If a delay was provided to this function, only
@@ -2235,10 +2411,10 @@ mld_initial_join(struct in6_multi *inm, struct mld_ifinfo *mli,
 					    min(inm->in6m_sctimer, delay);
 				} else
 					inm->in6m_sctimer = delay;
-			} else
+			} else {
 				inm->in6m_sctimer = 1;
-			state_change_timers_running6 = 1;
-
+			}
+			mtp->sct = 1;
 			error = 0;
 			break;
 		}
@@ -2252,9 +2428,9 @@ mld_initial_join(struct in6_multi *inm, struct mld_ifinfo *mli,
 	 */
 	if (syncstates) {
 		in6m_commit(inm);
-		MLD_PRINTF(("%s: T1 -> T0 for %s/%s%d\n", __func__,
+		MLD_PRINTF(("%s: T1 -> T0 for %s/%s\n", __func__,
 		    ip6_sprintf(&inm->in6m_addr),
-		    inm->in6m_ifp->if_name, ifp->if_unit));
+		    if_name(inm->in6m_ifp)));
 	}
 
 	return (error);
@@ -2264,17 +2440,20 @@ mld_initial_join(struct in6_multi *inm, struct mld_ifinfo *mli,
  * Issue an intermediate state change during the life-cycle.
  */
 static int
-mld_handle_state_change(struct in6_multi *inm, struct mld_ifinfo *mli)
+mld_handle_state_change(struct in6_multi *inm, struct mld_ifinfo *mli,
+    struct mld_tparams *mtp)
 {
 	struct ifnet		*ifp;
-	int			 retval;
+	int			 retval = 0;
 
 	IN6M_LOCK_ASSERT_HELD(inm);
 	MLI_LOCK_ASSERT_NOTHELD(mli);
+	VERIFY(mtp != NULL);
 
-	MLD_PRINTF(("%s: state change for %s on ifp %p(%s%d)\n",
+	MLD_PRINTF(("%s: state change for %s on ifp 0x%llx(%s)\n",
 	    __func__, ip6_sprintf(&inm->in6m_addr),
-	    inm->in6m_ifp, inm->in6m_ifp->if_name, inm->in6m_ifp->if_unit));
+	    (uint64_t)VM_KERNEL_ADDRPERM(inm->in6m_ifp),
+	    if_name(inm->in6m_ifp)));
 
 	ifp = inm->in6m_ifp;
 
@@ -2292,20 +2471,22 @@ mld_handle_state_change(struct in6_multi *inm, struct mld_ifinfo *mli)
 		}
 		MLD_PRINTF(("%s: nothing to do\n", __func__));
 		in6m_commit(inm);
-		MLD_PRINTF(("%s: T1 -> T0 for %s/%s%d\n", __func__,
+		MLD_PRINTF(("%s: T1 -> T0 for %s/%s\n", __func__,
 		    ip6_sprintf(&inm->in6m_addr),
-		    inm->in6m_ifp->if_name, inm->in6m_ifp->if_unit));
-		return (0);
+		    if_name(inm->in6m_ifp)));
+		goto done;
 	}
 
 	IF_DRAIN(&inm->in6m_scq);
 
 	retval = mld_v2_enqueue_group_record(&inm->in6m_scq, inm, 1, 0, 0,
 	    (mli->mli_flags & MLIF_USEALLOW));
+	mtp->cst = (inm->in6m_scq.ifq_len > 0);
 	MLD_PRINTF(("%s: enqueue record = %d\n", __func__, retval));
 	if (retval <= 0) {
 		MLI_UNLOCK(mli);
-		return (-retval);
+		retval *= -1;
+		goto done;
 	}
 	/*
 	 * If record(s) were enqueued, start the state-change
@@ -2313,10 +2494,11 @@ mld_handle_state_change(struct in6_multi *inm, struct mld_ifinfo *mli)
 	 */
 	inm->in6m_scrv = mli->mli_rv;
 	inm->in6m_sctimer = 1;
-	state_change_timers_running6 = 1;
+	mtp->sct = 1;
 	MLI_UNLOCK(mli);
 
-	return (0);
+done:
+	return (retval);
 }
 
 /*
@@ -2328,16 +2510,19 @@ mld_handle_state_change(struct in6_multi *inm, struct mld_ifinfo *mli)
  *  to INCLUDE {} for immediate transmission.
  */
 static void
-mld_final_leave(struct in6_multi *inm, struct mld_ifinfo *mli)
+mld_final_leave(struct in6_multi *inm, struct mld_ifinfo *mli,
+    struct mld_tparams *mtp)
 {
 	int syncstates = 1;
 
 	IN6M_LOCK_ASSERT_HELD(inm);
 	MLI_LOCK_ASSERT_NOTHELD(mli);
+	VERIFY(mtp != NULL);
 
-	MLD_PRINTF(("%s: final leave %s on ifp %p(%s%d)\n",
+	MLD_PRINTF(("%s: final leave %s on ifp 0x%llx(%s)\n",
 	    __func__, ip6_sprintf(&inm->in6m_addr),
-	    inm->in6m_ifp, inm->in6m_ifp->if_name, inm->in6m_ifp->if_unit));
+	    (uint64_t)VM_KERNEL_ADDRPERM(inm->in6m_ifp),
+	    if_name(inm->in6m_ifp)));
 
 	switch (inm->in6m_state) {
 	case MLD_NOT_MEMBER:
@@ -2359,7 +2544,9 @@ mld_final_leave(struct in6_multi *inm, struct mld_ifinfo *mli)
 				    "mode\n", __func__);
 				/* NOTREACHED */
 			}
-			mld_v1_transmit_report(inm, MLD_LISTENER_DONE);
+			/* scheduler timer if enqueue is successful */
+			mtp->cst = (mld_v1_transmit_report(inm,
+			    MLD_LISTENER_DONE) == 0);
 
 			IN6M_LOCK_ASSERT_HELD(inm);
 			MLI_LOCK_ASSERT_HELD(mli);
@@ -2369,16 +2556,16 @@ mld_final_leave(struct in6_multi *inm, struct mld_ifinfo *mli)
 			/*
 			 * Stop group timer and all pending reports.
 			 * Immediately enqueue a state-change report
-			 * TO_IN {} to be sent on the next fast timeout,
+			 * TO_IN {} to be sent on the next timeout,
 			 * giving us an opportunity to merge reports.
 			 */
 			IF_DRAIN(&inm->in6m_scq);
 			inm->in6m_timer = 0;
 			inm->in6m_scrv = mli->mli_rv;
-			MLD_PRINTF(("%s: Leaving %s/%s%d with %d "
+			MLD_PRINTF(("%s: Leaving %s/%s with %d "
 			    "pending retransmissions.\n", __func__,
 			    ip6_sprintf(&inm->in6m_addr),
-			    inm->in6m_ifp->if_name, inm->in6m_ifp->if_unit,
+			    if_name(inm->in6m_ifp),
 			    inm->in6m_scrv));
 			if (inm->in6m_scrv == 0) {
 				inm->in6m_state = MLD_NOT_MEMBER;
@@ -2401,13 +2588,14 @@ mld_final_leave(struct in6_multi *inm, struct mld_ifinfo *mli)
 				retval = mld_v2_enqueue_group_record(
 				    &inm->in6m_scq, inm, 1, 0, 0,
 				    (mli->mli_flags & MLIF_USEALLOW));
+				mtp->cst = (inm->in6m_scq.ifq_len > 0);
 				KASSERT(retval != 0,
 				    ("%s: enqueue record = %d\n", __func__,
 				     retval));
 
 				inm->in6m_state = MLD_LEAVING_MEMBER;
 				inm->in6m_sctimer = 1;
-				state_change_timers_running6 = 1;
+				mtp->sct = 1;
 				syncstates = 0;
 			}
 		}
@@ -2422,13 +2610,13 @@ mld_final_leave(struct in6_multi *inm, struct mld_ifinfo *mli)
 
 	if (syncstates) {
 		in6m_commit(inm);
-		MLD_PRINTF(("%s: T1 -> T0 for %s/%s%d\n", __func__,
+		MLD_PRINTF(("%s: T1 -> T0 for %s/%s\n", __func__,
 		    ip6_sprintf(&inm->in6m_addr),
-		    inm->in6m_ifp->if_name, inm->in6m_ifp->if_unit));
+		    if_name(inm->in6m_ifp)));
 		inm->in6m_st[1].iss_fmode = MCAST_UNDEFINED;
-		MLD_PRINTF(("%s: T1 now MCAST_UNDEFINED for %p/%s%d\n",
-		    __func__, &inm->in6m_addr, inm->in6m_ifp->if_name,
-		    inm->in6m_ifp->if_unit));
+		MLD_PRINTF(("%s: T1 now MCAST_UNDEFINED for 0x%llx/%s\n",
+		    __func__, (uint64_t)VM_KERNEL_ADDRPERM(&inm->in6m_addr),
+		    if_name(inm->in6m_ifp)));
 	}
 }
 
@@ -2574,9 +2762,9 @@ mld_v2_enqueue_group_record(struct ifqueue *ifq, struct in6_multi *inm,
 		return (mld_v2_enqueue_filter_change(ifq, inm));
 
 	if (type == MLD_DO_NOTHING) {
-		MLD_PRINTF(("%s: nothing to do for %s/%s%d\n",
+		MLD_PRINTF(("%s: nothing to do for %s/%s\n",
 		    __func__, ip6_sprintf(&inm->in6m_addr),
-		    inm->in6m_ifp->if_name, inm->in6m_ifp->if_unit));
+		    if_name(inm->in6m_ifp)));
 		return (0);
 	}
 
@@ -2588,10 +2776,10 @@ mld_v2_enqueue_group_record(struct ifqueue *ifq, struct in6_multi *inm,
 	minrec0len = sizeof(struct mldv2_record);
 	if (record_has_sources)
 		minrec0len += sizeof(struct in6_addr);
-	MLD_PRINTF(("%s: queueing %s for %s/%s%d\n", __func__,
+	MLD_PRINTF(("%s: queueing %s for %s/%s\n", __func__,
 	    mld_rec_type_to_str(type),
 	    ip6_sprintf(&inm->in6m_addr),
-	    inm->in6m_ifp->if_name, inm->in6m_ifp->if_unit));
+	    if_name(inm->in6m_ifp)));
 
 	/*
 	 * Check if we have a packet in the tail of the queue for this
@@ -2626,6 +2814,8 @@ mld_v2_enqueue_group_record(struct ifqueue *ifq, struct in6_multi *inm,
 			m = m_gethdr(M_DONTWAIT, MT_DATA);
 		if (m == NULL)
 			return (-ENOMEM);
+
+		mld_save_context(m, ifp);
 
 		MLD_PRINTF(("%s: allocated first packet\n", __func__));
 	}
@@ -2724,7 +2914,6 @@ mld_v2_enqueue_group_record(struct ifqueue *ifq, struct in6_multi *inm,
 	if (m != m0) {
 		MLD_PRINTF(("%s: enqueueing first packet\n", __func__));
 		m->m_pkthdr.vt_nrecs = 1;
-		m->m_pkthdr.rcvif = ifp;
 		IF_ENQUEUE(ifq, m);
 	} else {
 		m->m_pkthdr.vt_nrecs++;
@@ -2750,6 +2939,7 @@ mld_v2_enqueue_group_record(struct ifqueue *ifq, struct in6_multi *inm,
 			m = m_gethdr(M_DONTWAIT, MT_DATA);
 		if (m == NULL)
 			return (-ENOMEM);
+		mld_save_context(m, ifp);
 		md = m_getptr(m, 0, &off);
 		pmr = (struct mldv2_record *)(mtod(md, uint8_t *) + off);
 		MLD_PRINTF(("%s: allocated next packet\n", __func__));
@@ -2799,7 +2989,6 @@ mld_v2_enqueue_group_record(struct ifqueue *ifq, struct in6_multi *inm,
 		nbytes += (msrcs * sizeof(struct in6_addr));
 
 		MLD_PRINTF(("%s: enqueueing next packet\n", __func__));
-		m->m_pkthdr.rcvif = ifp;
 		IF_ENQUEUE(ifq, m);
 	}
 
@@ -2905,6 +3094,7 @@ mld_v2_enqueue_filter_change(struct ifqueue *ifq, struct in6_multi *inm)
 					return (-ENOMEM);
 				}
 				m->m_pkthdr.vt_nrecs = 0;
+				mld_save_context(m, ifp);
 				m0srcs = (ifp->if_mtu - MLD_MTUSPACE -
 				    sizeof(struct mldv2_record)) /
 				    sizeof(struct in6_addr);
@@ -3024,7 +3214,6 @@ mld_v2_enqueue_filter_change(struct ifqueue *ifq, struct in6_multi *inm)
 			 * packet if it wasn't already queued.
 			 */
 			m->m_pkthdr.vt_nrecs++;
-			m->m_pkthdr.rcvif = ifp;
 			if (m != m0)
 				IF_ENQUEUE(ifq, m);
 			nbytes += npbytes;
@@ -3066,8 +3255,8 @@ mld_v2_merge_state_changes(struct in6_multi *inm, struct ifqueue *ifscq)
 	gq = &inm->in6m_scq;
 #ifdef MLD_DEBUG
 	if (gq->ifq_head == NULL) {
-		MLD_PRINTF(("%s: WARNING: queue for inm %p is empty\n",
-		    __func__, inm));
+		MLD_PRINTF(("%s: WARNING: queue for inm 0x%llx is empty\n",
+		    __func__, (uint64_t)VM_KERNEL_ADDRPERM(inm)));
 	}
 #endif
 
@@ -3100,7 +3289,8 @@ mld_v2_merge_state_changes(struct in6_multi *inm, struct ifqueue *ifscq)
 
 		if (!domerge && IF_QFULL(gq)) {
 			MLD_PRINTF(("%s: outbound queue full, skipping whole "
-			    "packet %p\n", __func__, m));
+			    "packet 0x%llx\n", __func__,
+			    (uint64_t)VM_KERNEL_ADDRPERM(m)));
 			n = m->m_nextpkt;
 			if (!docopy) {
 				IF_REMQUEUE(gq, m);
@@ -3111,13 +3301,15 @@ mld_v2_merge_state_changes(struct in6_multi *inm, struct ifqueue *ifscq)
 		}
 
 		if (!docopy) {
-			MLD_PRINTF(("%s: dequeueing %p\n", __func__, m));
+			MLD_PRINTF(("%s: dequeueing 0x%llx\n", __func__,
+			    (uint64_t)VM_KERNEL_ADDRPERM(m)));
 			n = m->m_nextpkt;
 			IF_REMQUEUE(gq, m);
 			m0 = m;
 			m = n;
 		} else {
-			MLD_PRINTF(("%s: copying %p\n", __func__, m));
+			MLD_PRINTF(("%s: copying 0x%llx\n", __func__,
+			    (uint64_t)VM_KERNEL_ADDRPERM(m)));
 			m0 = m_dup(m, M_NOWAIT);
 			if (m0 == NULL)
 				return (ENOMEM);
@@ -3126,15 +3318,17 @@ mld_v2_merge_state_changes(struct in6_multi *inm, struct ifqueue *ifscq)
 		}
 
 		if (!domerge) {
-			MLD_PRINTF(("%s: queueing %p to ifscq %p)\n",
-			    __func__, m0, ifscq));
-			m0->m_pkthdr.rcvif = inm->in6m_ifp;
+			MLD_PRINTF(("%s: queueing 0x%llx to ifscq 0x%llx)\n",
+			    __func__, (uint64_t)VM_KERNEL_ADDRPERM(m0),
+			    (uint64_t)VM_KERNEL_ADDRPERM(ifscq)));
 			IF_ENQUEUE(ifscq, m0);
 		} else {
 			struct mbuf *mtl;	/* last mbuf of packet mt */
 
-			MLD_PRINTF(("%s: merging %p with ifscq tail %p)\n",
-			    __func__, m0, mt));
+			MLD_PRINTF(("%s: merging 0x%llx with ifscq tail "
+			    "0x%llx)\n", __func__,
+			    (uint64_t)VM_KERNEL_ADDRPERM(m0),
+			    (uint64_t)VM_KERNEL_ADDRPERM(mt)));
 
 			mtl = m_last(mt);
 			m0->m_flags &= ~M_PKTHDR;
@@ -3152,7 +3346,7 @@ mld_v2_merge_state_changes(struct in6_multi *inm, struct ifqueue *ifscq)
 /*
  * Respond to a pending MLDv2 General Query.
  */
-static void
+static uint32_t
 mld_v2_dispatch_general_query(struct mld_ifinfo *mli)
 {
 	struct ifnet		*ifp;
@@ -3207,13 +3401,14 @@ next:
 	MLI_LOCK_ASSERT_HELD(mli);
 
 	/*
-	 * Slew transmission of bursts over 500ms intervals.
+	 * Slew transmission of bursts over 1 second intervals.
 	 */
 	if (mli->mli_gq.ifq_head != NULL) {
 		mli->mli_v2_timer = 1 + MLD_RANDOM_DELAY(
 		    MLD_RESPONSE_BURST_INTERVAL);
-		interface_timers_running6 = 1;
 	}
+
+	return (mli->mli_v2_timer);
 }
 
 /*
@@ -3235,15 +3430,17 @@ mld_dispatch_packet(struct mbuf *m)
 	int			 off;
 	int			 type;
 
-	MLD_PRINTF(("%s: transmit %p\n", __func__, m));
+	MLD_PRINTF(("%s: transmit 0x%llx\n", __func__,
+	    (uint64_t)VM_KERNEL_ADDRPERM(m)));
 
 	/*
 	 * Check if the ifnet is still attached.
 	 */
-	ifp = m->m_pkthdr.rcvif;
+	ifp = mld_restore_context(m);
 	if (ifp == NULL || !ifnet_is_attached(ifp, 0)) {
-		MLD_PRINTF(("%s: dropped %p as ifindex %u went away.\n",
-		    __func__, m, (u_int)if_index));
+		MLD_PRINTF(("%s: dropped 0x%llx as ifindex %u went away.\n",
+		    __func__, (uint64_t)VM_KERNEL_ADDRPERM(m),
+		    (u_int)if_index));
 		m_freem(m);
 		ip6stat.ip6s_noroute++;
 		return;
@@ -3268,7 +3465,8 @@ mld_dispatch_packet(struct mbuf *m)
 	} else {
 		m0 = mld_v2_encap_report(ifp, m);
 		if (m0 == NULL) {
-			MLD_PRINTF(("%s: dropped %p\n", __func__, m));
+			MLD_PRINTF(("%s: dropped 0x%llx\n", __func__,
+			    (uint64_t)VM_KERNEL_ADDRPERM(m)));
 			/*
 			 * mld_v2_encap_report() has already freed our mbuf.
 			 */
@@ -3278,20 +3476,12 @@ mld_dispatch_packet(struct mbuf *m)
 		}
 	}
 
+	mld_scrub_context(m0);
 	m->m_flags &= ~(M_PROTOFLAGS);
 	m0->m_pkthdr.rcvif = lo_ifp;
 
 	ip6 = mtod(m0, struct ip6_hdr *);
-#if 0
-	(void) in6_setscope(&ip6->ip6_dst, ifp, NULL);	/* XXX LOR */
-#else
-	/*
-	 * XXX XXX Break some KPI rules to prevent an LOR which would
-	 * occur if we called in6_setscope() at transmission.
-	 * See comments at top of file.
-	 */
-	MLD_EMBEDSCOPE(&ip6->ip6_dst, ifp->if_index);
-#endif
+	(void) in6_setscope(&ip6->ip6_dst, ifp, NULL);
 
 	/*
 	 * Retrieve the ICMPv6 type before handoff to ip6_output(),
@@ -3302,7 +3492,8 @@ mld_dispatch_packet(struct mbuf *m)
 	type = mld->mld_type;
 
 	if (ifp->if_eflags & IFEF_TXSTART) {
-		/* Use control service class if the outgoing 
+		/* 
+		 * Use control service class if the outgoing 
 		 * interface supports transmit-start model.
 		 */
 		(void) m_set_service_class(m0, MBUF_SC_CTL);
@@ -3314,7 +3505,8 @@ mld_dispatch_packet(struct mbuf *m)
 	IM6O_REMREF(im6o);
 
 	if (error) {
-		MLD_PRINTF(("%s: ip6_output(%p) = %d\n", __func__, m0, error));
+		MLD_PRINTF(("%s: ip6_output(0x%llx) = %d\n", __func__,
+		    (uint64_t)VM_KERNEL_ADDRPERM(m0), error));
 		if (oifp != NULL)
 			ifnet_release(oifp);
 		return;

@@ -107,9 +107,7 @@
 #endif
 #define	NCCS		20
 
-#ifndef _POSIX_VDISABLE
-#define	_POSIX_VDISABLE	0xff
-#endif
+#include <sys/_types/_posix_vdisable.h>
 
 #if !defined(_POSIX_C_SOURCE) || defined(_DARWIN_C_SOURCE)
 #define	CCEQ(val, c)	((c) == (val) ? (val) != _POSIX_VDISABLE : 0)

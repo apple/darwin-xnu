@@ -165,30 +165,6 @@ __private_extern__ void qsort(
     size_t member_size,
     int (*)(const void *, const void *));
 
-
-
-/* From kdp_udp.c + user mode Libc - this ought to be in a library */
-static char *
-strnstr(char *s, const char *find, size_t slen)
-{
-  char c, sc;
-  size_t len;
-  
-  if ((c = *find++) != '\0') {
-    len = strlen(find);
-    do {
-      do {
-        if ((sc = *s++) == '\0' || slen-- < 1)
-          return (NULL);
-      } while (sc != c);
-      if (len > slen)
-        return (NULL);
-    } while (strncmp(s, find, len) != 0);
-    s--;
-  }
-  return (s);
-}
-
 static int
 is_ignored_directory(const char *path) {
 
@@ -1890,7 +1866,7 @@ fseventsf_drain(struct fileproc *fp, __unused vfs_context_t ctx)
 static int
 fseventsopen(__unused dev_t dev, __unused int flag, __unused int mode, __unused struct proc *p)
 {
-    if (!is_suser()) {
+    if (!kauth_cred_issuser(kauth_cred_get())) {
 	return EPERM;
     }
     
@@ -2083,7 +2059,8 @@ fseventswrite(__unused dev_t dev, struct uio *uio, __unused int ioflag)
 }
 
 
-static struct fileops fsevents_fops = {
+static const struct fileops fsevents_fops = {
+    DTYPE_FSEVENTS,
     fseventsf_read,
     fseventsf_write,
     fseventsf_ioctl,
@@ -2200,7 +2177,6 @@ fseventsioctl(__unused dev_t dev, u_long cmd, caddr_t data, __unused int flag, s
 	    }
 	    proc_fdlock(p);
 	    f->f_fglob->fg_flag = FREAD | FWRITE;
-	    f->f_fglob->fg_type = DTYPE_FSEVENTS;
 	    f->f_fglob->fg_ops = &fsevents_fops;
 	    f->f_fglob->fg_data = (caddr_t) fseh;
 	    proc_fdunlock(p);

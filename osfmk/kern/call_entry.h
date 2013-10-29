@@ -32,8 +32,10 @@
 #ifndef _KERN_CALL_ENTRY_H_
 #define _KERN_CALL_ENTRY_H_
 
-#ifdef MACH_KERNEL_PRIVATE
+#ifdef XNU_KERNEL_PRIVATE
 #include <kern/queue.h>
+
+#define TIMER_TRACE	1
 
 typedef void		*call_entry_param_t;
 typedef void		(*call_entry_func_t)(
@@ -47,16 +49,21 @@ typedef struct call_entry {
     call_entry_param_t	param0;
     call_entry_param_t	param1;
     uint64_t		deadline;
+#if TIMER_TRACE
+    uint64_t		entry_time;
+#endif
 } call_entry_data_t;
 
 typedef struct call_entry	*call_entry_t;
 
+#ifdef MACH_KERNEL_PRIVATE
 
 #define	call_entry_setup(entry, pfun, p0)			\
 MACRO_BEGIN							\
 	(entry)->func		= (call_entry_func_t)(pfun);	\
 	(entry)->param0		= (call_entry_param_t)(p0);	\
 	(entry)->queue		= NULL;				\
+	(entry)->deadline	= 0;				\
 MACRO_END
 
 #define qe(x)		((queue_entry_t)(x))
@@ -124,8 +131,7 @@ call_entry_enqueue_deadline(
 		}
 		insque(qe(entry), qe(current));
 	}
-	else
-	if (deadline < entry->deadline) {
+	else if (deadline < entry->deadline) {
 		current = CE(queue_prev(qe(entry)));
 
 		(void)remque(qe(entry));
@@ -146,5 +152,7 @@ call_entry_enqueue_deadline(
 	return (old_queue);
 }
 #endif /* MACH_KERNEL_PRIVATE */
+
+#endif /* XNU_KERNEL_PRIVATE */
 
 #endif /* _KERN_CALL_ENTRY_H_ */

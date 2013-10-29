@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2007 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2012 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -74,6 +74,7 @@
 #include <sys/cdefs.h>
 #include <sys/lock.h>
 #include <sys/file.h>
+#include <sys/filedesc.h>
 
 struct proc;
 struct uio;
@@ -99,7 +100,7 @@ struct fileproc {
 #define FP_INCREATE 	0x0001
 #define FP_INCLOSE 	0x0002
 #define FP_INSELECT	0x0004
-#define FP_INCHRREAD	0x0000	/* disable FP_INCHRREAD <rdar://6986929> */
+#define FP_UNUSED	0x0008	/* unused (was FP_INCHRREAD) */
 #define FP_WRITTEN	0x0010
 #define FP_CLOSING	0x0020
 #define FP_WAITCLOSE	0x0040
@@ -107,8 +108,24 @@ struct fileproc {
 #define FP_WAITEVENT	0x0100
 #define FP_SELCONFLICT	0x0200	/* select conflict on an individual fp */
 
-#define FP_VALID_FLAGS (FP_INCREATE | FP_INCLOSE | FP_INSELECT | FP_INCHRREAD | FP_WRITTEN | FP_CLOSING | FP_WAITCLOSE | FP_AIOISSUED | FP_WAITEVENT | FP_SELCONFLICT)
+/* squeeze a "type" value into the upper flag bits */
 
+#define	_FP_TYPESHIFT	24
+#define	FP_TYPEMASK	(0x7 << _FP_TYPESHIFT)	/* 8 "types" of fileproc */
+
+#define	FILEPROC_TYPE(fp)	((fp)->f_flags & FP_TYPEMASK)
+
+#define FP_ISGUARDED(fp, attribs)  \
+	        ((FILEPROC_TYPE(fp) == FTYPE_GUARDED) ? fp_isguarded(fp, attribs) : 0)
+
+typedef enum {
+	FTYPE_SIMPLE	= 0,
+	FTYPE_GUARDED	= (1 << _FP_TYPESHIFT)
+} fileproc_type_t;
+
+#define FP_VALID_FLAGS	(FP_INCREATE | FP_INCLOSE | FP_INSELECT |\
+		FP_WRITTEN | FP_CLOSING | FP_WAITCLOSE |\
+	       	FP_AIOISSUED | FP_WAITEVENT | FP_SELCONFLICT | _FP_TYPEMASK)
 
 #ifndef _KAUTH_CRED_T
 #define	_KAUTH_CRED_T
@@ -126,7 +143,8 @@ typedef enum {
 	DTYPE_PSXSEM,		/* POSIX Semaphores */
 	DTYPE_KQUEUE,		/* kqueue */
 	DTYPE_PIPE,		/* pipe */
-	DTYPE_FSEVENTS		/* fsevents */
+	DTYPE_FSEVENTS,		/* fsevents */
+	DTYPE_ATALK		/* (obsolete) */
 } file_type_t;
 
 /* defines for fg_lflags */
@@ -141,11 +159,12 @@ typedef enum {
 struct fileglob {
 	LIST_ENTRY(fileglob) f_msglist;/* list of active files */
 	int32_t	fg_flag;		/* see fcntl.h */
-	file_type_t fg_type;		/* descriptor type */
 	int32_t	fg_count;	/* reference count */
 	int32_t	fg_msgcount;	/* references from message queue */
+	int32_t fg_lflags;	/* file global flags */
 	kauth_cred_t fg_cred;	/* credentials associated with descriptor */
-	struct	fileops {
+	const struct fileops {
+		file_type_t	fo_type;	/* descriptor type */
 		int	(*fo_read)	(struct fileproc *fp, struct uio *uio,
 					 int flags, vfs_context_t ctx);
 		int	(*fo_write)	(struct fileproc *fp, struct uio *uio,
@@ -164,7 +183,6 @@ struct fileglob {
 	off_t	fg_offset;
 	void 	*fg_data;		/* vnode or socket or SHM or semaphore */
 	lck_mtx_t fg_lock;
-	int32_t fg_lflags;		/* file global flags */
 #if CONFIG_MACF
 	struct label *fg_label;  /* JMM - use the one in the cred? */
 #endif
@@ -176,6 +194,8 @@ extern struct fmsglist fmsghead;	/* head of list of open files */
 extern int maxfiles;			/* kernel limit on number of open files */
 extern int nfiles;			/* actual number of open files */
 extern int maxfilesperproc;
+
+#define	FILEGLOB_DTYPE(fg)		((const file_type_t)((fg)->fg_ops->fo_type))
 #endif /* __APPLE_API_PRIVATE */
 
 
@@ -188,6 +208,7 @@ int fo_select(struct fileproc *fp, int which, void *wql, vfs_context_t ctx);
 int fo_close(struct fileglob *fg, vfs_context_t ctx);
 int fo_kqfilter(struct fileproc *fp, struct knote *kn, vfs_context_t ctx);
 void fileproc_drain(proc_t, struct fileproc *);
+int fp_tryswap(proc_t, int fd, struct fileproc *nfp);
 int fp_drop(struct proc *p, int fd, struct fileproc *fp, int locked);
 int fp_drop_written(proc_t p, int fd, struct fileproc *fp);
 int fp_drop_event(proc_t p, int fd, struct fileproc *fp);
@@ -208,7 +229,16 @@ int fp_getfvpandvid(struct proc *p, int fd, struct fileproc **resultfp, struct v
 struct socket;
 int fp_getfsock(struct proc *p, int fd, struct fileproc **resultfp, struct socket  **results);
 int fp_lookup(struct proc *p, int fd, struct fileproc **resultfp, int locked);
+int fp_isguarded(struct fileproc *fp, u_int attribs);
+int fp_guard_exception(proc_t p, int fd, struct fileproc *fp, u_int attribs);
 int closef_locked(struct fileproc *fp, struct fileglob *fg, struct proc *p);
+int close_internal_locked(proc_t p, int fd, struct fileproc *fp, int flags);
+struct nameidata;
+struct vnode_attr;
+int open1(vfs_context_t ctx, struct nameidata *ndp, int uflags,
+    struct vnode_attr *vap, fp_allocfn_t fp_zalloc, void *cra,
+    int32_t *retval);
+int kqueue_body(struct proc *p, fp_allocfn_t, void *cra, int32_t *retval);
 void fg_insertuipc(struct fileglob * fg);
 void fg_removeuipc(struct fileglob * fg);
 void unp_gc_wait(void);
@@ -219,6 +249,9 @@ void procfdtbl_waitfd(struct proc * p, int fd);
 void procfdtbl_clearfd(struct proc * p, int fd);
 boolean_t filetype_issendable(file_type_t type);
 extern int fdgetf_noref(proc_t, int, struct fileproc **);
+extern struct fileproc *fileproc_alloc_init(void *crargs);
+extern void fileproc_free(struct fileproc *fp);
+extern void guarded_fileproc_free(struct fileproc *fp);
 __END_DECLS
 
 #endif /* __APPLE_API_UNSTABLE */

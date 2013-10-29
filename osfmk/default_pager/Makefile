@@ -3,7 +3,6 @@ export MakeInc_def=${SRCROOT}/makedefs/MakeInc.def
 export MakeInc_rule=${SRCROOT}/makedefs/MakeInc.rule
 export MakeInc_dir=${SRCROOT}/makedefs/MakeInc.dir
 
-
 include $(MakeInc_cmd)
 include $(MakeInc_def)
 
@@ -39,11 +38,7 @@ EXPORT_MI_GEN_LIST = \
 
 EXPORT_MI_DIR = default_pager
 
-.ORDER: ${MIG_HDRS} ${MIGINCLUDES}
-
 ${MIGINCLUDES} : ${MIG_TYPES}
-
-.ORDER: ${MIG_UUHDRS}
 
 ${MIG_UUHDRS} : \
 	%.h : %.defs
@@ -53,8 +48,6 @@ ${MIG_UUHDRS} : \
 		-user /dev/null		\
 		-header $@ 		\
 		$<
-
-.ORDER: ${MIG_USHDRS}
 
 ${MIG_USHDRS} : \
 	%_server.h : %.defs
@@ -107,10 +100,10 @@ MIG_KSSRC = \
 #
 COMP_FILES = ${MIG_KUSRC} ${MIG_KSSRC} 
 
+do_build_all:: $(COMP_FILES)
+
 ${COMP_FILES} : ${MIG_TYPES}
-        
-.ORDER: ${MIG_KUSRC}                           
-        
+
 ${MIG_KUSRC} : \
 	%_user.c : %.defs
 	@echo MIG $@
@@ -121,8 +114,6 @@ ${MIG_KUSRC} : \
 		-sheader /dev/null		\
 		$<
 
-.ORDER: ${MIG_KSSRC}                           
-        
 ${MIG_KSSRC}: \
 	%_server.c : %.defs
 	@echo MIG $@
@@ -132,7 +123,6 @@ ${MIG_KSSRC}: \
 		-server  $*_server.c		\
 		-sheader $*_server.h		\
 		$<
-        
 
 include $(MakeInc_rule)
 include $(MakeInc_dir)

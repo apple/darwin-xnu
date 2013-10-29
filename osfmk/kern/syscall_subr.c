@@ -77,6 +77,7 @@
 
 #ifdef MACH_BSD
 extern void workqueue_thread_yielded(void);
+extern sched_call_t workqueue_get_sched_callback(void);
 #endif /* MACH_BSD */
 
 
@@ -199,14 +200,47 @@ __unused	struct swtch_pri_args *args)
 	return (result);
 }
 
+static int
+thread_switch_disable_workqueue_sched_callback(void)
+{
+	sched_call_t callback = workqueue_get_sched_callback();
+	thread_t self = current_thread();
+	if (!callback || self->sched_call != callback) {
+		return FALSE;
+	}
+	spl_t s = splsched();
+	thread_lock(self);
+	thread_sched_call(self, NULL);
+	thread_unlock(self);
+	splx(s);
+	return TRUE;
+}
+
+static void
+thread_switch_enable_workqueue_sched_callback(void)
+{
+	sched_call_t callback = workqueue_get_sched_callback();
+	thread_t self = current_thread();
+	spl_t s = splsched();
+	thread_lock(self);
+	thread_sched_call(self, callback);
+	thread_unlock(self);
+	splx(s);
+}
+
 static void
 thread_switch_continue(void)
 {
 	register thread_t	self = current_thread();
 	int					option = self->saved.swtch.option;
+	boolean_t			reenable_workq_callback = self->saved.swtch.reenable_workq_callback;
 
-	if (option == SWITCH_OPTION_DEPRESS)
+
+	if (option == SWITCH_OPTION_DEPRESS || option == SWITCH_OPTION_OSLOCK_DEPRESS)
 		thread_depress_abort_internal(self);
+
+	if (reenable_workq_callback)
+		thread_switch_enable_workqueue_sched_callback();
 
 	thread_syscall_return(KERN_SUCCESS);
 	/*NOTREACHED*/
@@ -225,22 +259,46 @@ thread_switch(
 	mach_port_name_t		thread_name = args->thread_name;
 	int						option = args->option;
 	mach_msg_timeout_t		option_time = args->option_time;
+	uint32_t				scale_factor = NSEC_PER_MSEC;
+	boolean_t				reenable_workq_callback = FALSE;
+	boolean_t				depress_option = FALSE;
+	boolean_t				wait_option = FALSE;
 
     /*
-     *	Process option.
+     *	Validate and process option.
      */
     switch (option) {
 
 	case SWITCH_OPTION_NONE:
-	case SWITCH_OPTION_DEPRESS:
+		workqueue_thread_yielded();
+		break;
 	case SWITCH_OPTION_WAIT:
-	    break;
-
+		wait_option = TRUE;
+		workqueue_thread_yielded();
+		break;
+	case SWITCH_OPTION_DEPRESS:
+		depress_option = TRUE;
+		workqueue_thread_yielded();
+		break;
+	case SWITCH_OPTION_DISPATCH_CONTENTION:
+		scale_factor = NSEC_PER_USEC;
+		wait_option = TRUE;
+		if (thread_switch_disable_workqueue_sched_callback())
+			reenable_workq_callback = TRUE;
+		break;
+	case SWITCH_OPTION_OSLOCK_DEPRESS:
+		depress_option = TRUE;
+		if (thread_switch_disable_workqueue_sched_callback())
+			reenable_workq_callback = TRUE;
+		break;
+	case SWITCH_OPTION_OSLOCK_WAIT:
+		wait_option = TRUE;
+		if (thread_switch_disable_workqueue_sched_callback())
+			reenable_workq_callback = TRUE;
+		break;
 	default:
 	    return (KERN_INVALID_ARGUMENT);
     }
-
-    workqueue_thread_yielded();
 
 	/*
 	 * Translate the port name if supplied.
@@ -266,6 +324,32 @@ thread_switch(
 	}
 	else
 		thread = THREAD_NULL;
+
+
+	if (option == SWITCH_OPTION_OSLOCK_DEPRESS || option == SWITCH_OPTION_OSLOCK_WAIT) {
+		if (thread != THREAD_NULL) {
+
+			if (thread->task != self->task) {
+				/*
+				 * OSLock boosting only applies to other threads
+				 * in your same task (even if you have a port for
+				 * a thread in another task)
+				 */
+
+				(void)thread_deallocate_internal(thread);
+				thread = THREAD_NULL;
+			} else {
+				/*
+				 * Attempt to kick the lock owner up to our same IO throttling tier.
+				 * If the thread is currently blocked in throttle_lowpri_io(),
+				 * it will immediately break out.
+				 */
+				int new_policy = proc_get_effective_thread_policy(self, TASK_POLICY_IO);
+				
+				set_thread_iotier_override(thread, new_policy);
+			}
+		}
+	}
 
 	/*
 	 * Try to handoff if supplied.
@@ -298,14 +382,15 @@ thread_switch(
 
 			(void)thread_deallocate_internal(thread);
 
-			if (option == SWITCH_OPTION_WAIT)
+			if (wait_option)
 				assert_wait_timeout((event_t)assert_wait_timeout, THREAD_ABORTSAFE,
-														option_time, 1000*NSEC_PER_USEC);
+														option_time, scale_factor);
 			else
-			if (option == SWITCH_OPTION_DEPRESS)
+			if (depress_option)
 				thread_depress_ms(option_time);
 
 			self->saved.swtch.option = option;
+			self->saved.swtch.reenable_workq_callback = reenable_workq_callback;
 
 			thread_run(self, (thread_continue_t)thread_switch_continue, NULL, thread);
 			/* NOTREACHED */
@@ -317,18 +402,22 @@ thread_switch(
 		thread_deallocate(thread);
 	}
 		
-	if (option == SWITCH_OPTION_WAIT)
-		assert_wait_timeout((event_t)assert_wait_timeout, THREAD_ABORTSAFE, option_time, 1000*NSEC_PER_USEC);
+	if (wait_option)
+		assert_wait_timeout((event_t)assert_wait_timeout, THREAD_ABORTSAFE, option_time, scale_factor);
 	else
-	if (option == SWITCH_OPTION_DEPRESS)
+	if (depress_option)
 		thread_depress_ms(option_time);
 	  
 	self->saved.swtch.option = option;
+	self->saved.swtch.reenable_workq_callback = reenable_workq_callback;
 
 	thread_block_reason((thread_continue_t)thread_switch_continue, NULL, AST_YIELD);
 
-	if (option == SWITCH_OPTION_DEPRESS)
+	if (depress_option)
 		thread_depress_abort_internal(self);
+
+	if (reenable_workq_callback)
+		thread_switch_enable_workqueue_sched_callback();
 
     return (KERN_SUCCESS);
 }
@@ -356,7 +445,7 @@ thread_depress_abstime(
 
 		if (interval != 0) {
 			clock_absolutetime_interval_to_deadline(interval, &deadline);
-			if (!timer_call_enter(&self->depress_timer, deadline, TIMER_CALL_CRITICAL))
+			if (!timer_call_enter(&self->depress_timer, deadline, TIMER_CALL_USER_CRITICAL))
 				self->depress_timer_active++;
 		}
 	}
@@ -371,7 +460,7 @@ thread_depress_ms(
 	uint64_t		abstime;
 
 	clock_interval_to_absolutetime_interval(
-							interval, 1000*NSEC_PER_USEC, &abstime);
+							interval, NSEC_PER_MSEC, &abstime);
 	thread_depress_abstime(abstime);
 }
 
@@ -453,7 +542,7 @@ thread_poll_yield(
 			self->sched_flags |= TH_SFLAG_POLLDEPRESS;
 
 			abstime += (total_computation >> sched_poll_yield_shift);
-			if (!timer_call_enter(&self->depress_timer, abstime, TIMER_CALL_CRITICAL))
+			if (!timer_call_enter(&self->depress_timer, abstime, TIMER_CALL_USER_CRITICAL))
 				self->depress_timer_active++;
 			thread_unlock(self);
 

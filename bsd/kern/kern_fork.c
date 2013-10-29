@@ -141,7 +141,7 @@ void thread_set_child(thread_t child, int pid);
 void *act_thread_csave(void);
 
 
-thread_t cloneproc(task_t, proc_t, int);
+thread_t cloneproc(task_t, proc_t, int, int);
 proc_t forkproc(proc_t);
 void forkproc_free(proc_t);
 thread_t fork_create_child(task_t parent_task, proc_t child, int inherit_memory, int is64bit);
@@ -281,12 +281,8 @@ vfork(proc_t parent_proc, __unused struct vfork_args *uap, int32_t *retval)
 	if ((err = fork1(parent_proc, &child_thread, PROC_CREATE_VFORK)) != 0) {
 		retval[1] = 0;
 	} else {
-		/*
-		 * kludge: rely on uu_proc being set in the vfork case,
-		 * rather than returning the actual thread.  We can remove
-		 * this when we remove the uu_proc/current_proc() kludge.
-		 */
-		proc_t child_proc = current_proc();
+		uthread_t ut = get_bsdthread_info(current_thread());
+		proc_t child_proc = ut->uu_proc;
 
 		retval[0] = child_proc->p_pid;
 		retval[1] = 1;		/* flag child return for user space */
@@ -299,12 +295,12 @@ vfork(proc_t parent_proc, __unused struct vfork_args *uap, int32_t *retval)
 		proc_signalend(child_proc, 0);
 		proc_transend(child_proc, 0);
 
-		/* flag the fork has occurred */
 		proc_knote(parent_proc, NOTE_FORK | child_proc->p_pid);
 		DTRACE_PROC1(create, proc_t, child_proc);
+		ut->uu_flag &= ~UT_VFORKING;
 	}
 
-	return(err);
+	return (err);
 }
 
 
@@ -484,7 +480,20 @@ fork1(proc_t parent_proc, thread_t *child_threadp, int kind)
 		child_proc->p_vforkact = parent_thread;
 		child_proc->p_stat = SRUN;
 
-		parent_uthread->uu_flag |= UT_VFORK;
+		/*
+		 * Until UT_VFORKING is cleared at the end of the vfork
+		 * syscall, the process identity of this thread is slightly
+		 * murky.
+		 *
+		 * As long as UT_VFORK and it's associated field (uu_proc)
+		 * is set, current_proc() will always return the child process.
+		 *
+		 * However dtrace_proc_selfpid() returns the parent pid to
+		 * ensure that e.g. the proc:::create probe actions accrue
+		 * to the parent.  (Otherwise the child magically seems to
+		 * have created itself!)
+		 */
+		parent_uthread->uu_flag |= UT_VFORK | UT_VFORKING;
 		parent_uthread->uu_proc = child_proc;
 		parent_uthread->uu_userstate = (void *)act_thread_csave();
 		parent_uthread->uu_vforkmask = parent_uthread->uu_sigmask;
@@ -529,7 +538,7 @@ fork1(proc_t parent_proc, thread_t *child_threadp, int kind)
 		 * will, in effect, create a duplicate of it, with only minor
 		 * differences.  Contrarily, spawned processes do not inherit.
 		 */
-		if ((child_thread = cloneproc(parent_proc->task, parent_proc, spawn ? FALSE : TRUE)) == NULL) {
+		if ((child_thread = cloneproc(parent_proc->task, parent_proc, spawn ? FALSE : TRUE, FALSE)) == NULL) {
 			/* Failed to create thread */
 			err = EAGAIN;
 			goto bad;
@@ -654,12 +663,6 @@ fork1(proc_t parent_proc, thread_t *child_threadp, int kind)
 	/* return the thread pointer to the caller */
 	*child_threadp = child_thread;
 
-#if CONFIG_MEMORYSTATUS
-	if (!err) {
-		memorystatus_list_add(child_proc->p_pid, DEFAULT_JETSAM_PRIORITY, -1);
-	}
-#endif
-
 bad:
 	/*
 	 * In the error case, we return a 0 value for the returned pid (but
@@ -773,7 +776,8 @@ fork_create_child(task_t parent_task, proc_t child_proc, int inherit_memory, int
 					is64bit,
 					&child_task);
 	if (result != KERN_SUCCESS) {
-		printf("execve: task_create_internal failed.  Code: %d\n", result);
+		printf("%s: task_create_internal failed.  Code: %d\n",
+		    __func__, result);
 		goto bad;
 	}
 
@@ -809,14 +813,15 @@ fork_create_child(task_t parent_task, proc_t child_proc, int inherit_memory, int
 	/* Create a new thread for the child process */
 	result = thread_create(child_task, &child_thread);
 	if (result != KERN_SUCCESS) {
-		printf("execve: thread_create failed. Code: %d\n", result);
+		printf("%s: thread_create failed. Code: %d\n",
+		    __func__, result);
 		task_deallocate(child_task);
 		child_task = NULL;
 	}
 
 	/*
-	 * Tag thread as being the first thread in its task.
-	 */
+         * Tag thread as being the first thread in its task.
+         */
 	thread_set_tag(child_thread, THREAD_TAG_MAINTHREAD);
 
 bad:
@@ -918,6 +923,8 @@ fork(proc_t parent_proc, __unused struct fork_args *uap, int32_t *retval)
  *					memory from the parent; if this is
  *					non-NULL, then the parent_task must
  *					also be non-NULL
+ *		memstat_internal	Whether to track the process in the
+ *					jetsam priority list (if configured)
  *
  * Returns:	!NULL			pointer to new child thread
  *		NULL			Failure (unspecified)
@@ -939,8 +946,11 @@ fork(proc_t parent_proc, __unused struct fork_args *uap, int32_t *retval)
  *		live with this being somewhat awkward.
  */
 thread_t
-cloneproc(task_t parent_task, proc_t parent_proc, int inherit_memory)
+cloneproc(task_t parent_task, proc_t parent_proc, int inherit_memory, int memstat_internal)
 {
+#if !CONFIG_MEMORYSTATUS
+#pragma unused(memstat_internal)
+#endif
 	task_t child_task;
 	proc_t child_proc;
 	thread_t child_thread = NULL;
@@ -969,6 +979,14 @@ cloneproc(task_t parent_task, proc_t parent_proc, int inherit_memory)
 		task_set_64bit(child_task, FALSE);
 		OSBitAndAtomic(~((uint32_t)P_LP64), (UInt32 *)&child_proc->p_flag);
 	}
+
+#if CONFIG_MEMORYSTATUS
+	if (memstat_internal) {
+		proc_list_lock();
+		child_proc->p_memstat_state |= P_MEMSTAT_INTERNAL;
+		proc_list_unlock();
+	}
+#endif
 
 	/* make child visible */
 	pinsertchild(parent_proc, child_proc);
@@ -1026,12 +1044,6 @@ forkproc_free(proc_t p)
 
 	/* Need to undo the effects of the fdcopy(), if any */
 	fdfree(p);
-
-#if !CONFIG_EMBEDDED
-	if (p->p_legacy_behavior & PROC_LEGACY_BEHAVIOR_IOTHROTTLE) {
-		throttle_legacy_process_decr();
-	}
-#endif
 
 	/*
 	 * Drop the reference on a text vnode pointer, if any
@@ -1201,19 +1213,11 @@ retry:
 	 * Increase reference counts on shared objects.
 	 * The p_stats and p_sigacts substructs are set in vm_fork.
 	 */
-#if !CONFIG_EMBEDDED
 	child_proc->p_flag = (parent_proc->p_flag & (P_LP64 | P_TRANSLATED | P_AFFINITY | P_DISABLE_ASLR | P_DELAYIDLESLEEP));
-#else /*  !CONFIG_EMBEDDED */
-	child_proc->p_flag = (parent_proc->p_flag & (P_LP64 | P_TRANSLATED | P_AFFINITY | P_DISABLE_ASLR));
-#endif /* !CONFIG_EMBEDDED */
 	if (parent_proc->p_flag & P_PROFIL)
 		startprofclock(child_proc);
 
-#if !CONFIG_EMBEDDED
-	if (child_proc->p_legacy_behavior & PROC_LEGACY_BEHAVIOR_IOTHROTTLE) {
-		throttle_legacy_process_incr();
-	}
-#endif
+	child_proc->p_vfs_iopolicy = (parent_proc->p_vfs_iopolicy & (P_VFS_IOPOLICY_FORCE_HFS_CASE_SENSITIVITY));
 
 	/*
 	 * Note that if the current thread has an assumed identity, this
@@ -1281,12 +1285,8 @@ retry:
 
 	/* Intialize new process stats, including start time */
 	/* <rdar://6640543> non-zeroed portion contains garbage AFAICT */
-	bzero(&child_proc->p_stats->pstat_startzero,
-	    (unsigned) ((caddr_t)&child_proc->p_stats->pstat_endzero -
-	    (caddr_t)&child_proc->p_stats->pstat_startzero));
-	bzero(&child_proc->p_stats->user_p_prof, sizeof(struct user_uprof));
-	microtime(&child_proc->p_start);
-	child_proc->p_stats->p_start = child_proc->p_start;     /* for compat */
+	bzero(child_proc->p_stats, sizeof(*child_proc->p_stats));
+	microtime_with_abstime(&child_proc->p_start, &child_proc->p_stats->ps_start);
 
 	if (parent_proc->p_sigacts != NULL)
 		(void)memcpy(child_proc->p_sigacts,
@@ -1340,6 +1340,7 @@ retry:
 		child_proc->p_lflag |= P_LREGISTER;
 	}
 	child_proc->p_dispatchqueue_offset = parent_proc->p_dispatchqueue_offset;
+	child_proc->p_dispatchqueue_serialno_offset = parent_proc->p_dispatchqueue_serialno_offset;
 #if PSYNCH
 	pth_proc_hashinit(child_proc);
 #endif /* PSYNCH */
@@ -1357,8 +1358,18 @@ retry:
 	}
 #endif
 
-	/* Default to no tracking of dirty state */
-	child_proc->p_dirty = 0;
+#if CONFIG_MEMORYSTATUS
+	/* Memorystatus + jetsam init */
+	child_proc->p_memstat_state = 0;
+	child_proc->p_memstat_effectivepriority = JETSAM_PRIORITY_DEFAULT;
+	child_proc->p_memstat_requestedpriority = JETSAM_PRIORITY_DEFAULT;
+	child_proc->p_memstat_userdata = 0;
+#if CONFIG_FREEZE
+	child_proc->p_memstat_suspendedfootprint = 0;
+#endif
+	child_proc->p_memstat_dirty = 0;
+	child_proc->p_memstat_idledeadline = 0;
+#endif /* CONFIG_MEMORYSTATUS */
 
 bad:
 	return(child_proc);
@@ -1433,7 +1444,6 @@ uthread_alloc(task_t task, thread_t thread, int noinherit)
 
 	p = (proc_t) get_bsdtask_info(task);
 	uth = (uthread_t)ut;
-	uth->uu_kwe.kwe_uth = uth;
 	uth->uu_thread = thread;
 
 	/*
@@ -1520,7 +1530,7 @@ uthread_cleanup(task_t task, void *uthread, void * bsd_info)
 		 * Calling this routine will clean up any throttle info reference
 		 * still inuse by the thread.
 		 */
-		throttle_lowpri_io(FALSE);
+		throttle_lowpri_io(0);
 	}
 	/*
 	 * Per-thread audit state should never last beyond system
@@ -1545,10 +1555,8 @@ uthread_cleanup(task_t task, void *uthread, void * bsd_info)
 
 	if (uth->uu_allocsize && uth->uu_wqset){
 		kfree(uth->uu_wqset, uth->uu_allocsize);
-		sel->count = 0;
 		uth->uu_allocsize = 0;
 		uth->uu_wqset = 0;
-		sel->wql = 0;
 	}
 
 	if(uth->pth_name != NULL)

@@ -102,7 +102,7 @@
 #define DODEBUG(A)
 #endif
 
-__private_extern__ void vntblinit(void) __attribute__((section("__TEXT, initcode")));
+__private_extern__ void vntblinit(void);
 
 extern struct vnodeopv_desc *vfs_opv_descs[];
 				/* a list of lists of vnodeops defns */

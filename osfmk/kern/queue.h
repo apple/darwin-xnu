@@ -350,7 +350,8 @@ MACRO_BEGIN							\
 		(head)->next = (queue_entry_t) (elt);		\
 	}							\
 	else {							\
-		((type)__prev)->field.next = (queue_entry_t)(elt);\
+		((type)(void *)__prev)->field.next =		\
+			(queue_entry_t)(elt);			\
 	}							\
 	(elt)->field.prev = __prev;				\
 	(elt)->field.next = head;				\
@@ -377,7 +378,8 @@ MACRO_BEGIN							\
 		(head)->prev = (queue_entry_t) (elt);		\
 	}							\
 	else {							\
-		((type)__next)->field.prev = (queue_entry_t)(elt);\
+		((type)(void *)__next)->field.prev =		\
+			(queue_entry_t)(elt);			\
 	}							\
 	(elt)->field.next = __next;				\
 	(elt)->field.prev = head;				\
@@ -407,7 +409,8 @@ MACRO_BEGIN								\
 			(head)->next = (queue_entry_t)(elt);		\
 		} else {			/* last element */	\
 			__prev = (elt)->field.prev = (head)->prev;	\
-			((type)__prev)->field.next = (queue_entry_t)(elt);\
+			((type)(void *)__prev)->field.next =		\
+				(queue_entry_t)(elt);			\
 		}							\
 		(head)->prev = (queue_entry_t)(elt);			\
 	} else {							\
@@ -418,7 +421,8 @@ MACRO_BEGIN								\
 			(head)->next = (queue_entry_t)(elt);		\
 		} else {			/* middle element */	\
 			__prev = (elt)->field.prev = (cur)->field.prev;	\
-			((type)__prev)->field.next = (queue_entry_t)(elt);\
+			((type)(void *)__prev)->field.next =		\
+				(queue_entry_t)(elt);			\
 		}							\
 		(cur)->field.prev = (queue_entry_t)(elt);		\
 	}								\
@@ -447,7 +451,8 @@ MACRO_BEGIN								\
 			(head)->prev = (queue_entry_t)(elt);		\
 		} else {			/* first element */	\
 			__next = (elt)->field.next = (head)->next;	\
-			((type)__next)->field.prev = (queue_entry_t)(elt);\
+			((type)(void *)__next)->field.prev =		\
+				(queue_entry_t)(elt);			\
 		}							\
 		(head)->next = (queue_entry_t)(elt);			\
 	} else {							\
@@ -458,7 +463,8 @@ MACRO_BEGIN								\
 			(head)->prev = (queue_entry_t)(elt);		\
 		} else {			/* middle element */	\
 			__next = (elt)->field.next = (cur)->field.next;	\
-			((type)__next)->field.prev = (queue_entry_t)(elt);\
+			((type)(void *)__next)->field.prev =		\
+				(queue_entry_t)(elt);			\
 		}							\
 		(cur)->field.next = (queue_entry_t)(elt);		\
 	}								\
@@ -471,7 +477,7 @@ MACRO_END
  *		given element (thing) in the given queue (head)
  */
 #define	queue_field(head, thing, type, field)			\
-		(((head) == (thing)) ? (head) : &((type)(thing))->field)
+		(((head) == (thing)) ? (head) : &((type)(void *)(thing))->field)
 
 /*
  *	Macro:		queue_remove
@@ -491,12 +497,12 @@ MACRO_BEGIN							\
 	if ((head) == __next)					\
 		(head)->prev = __prev;				\
 	else							\
-		((type)__next)->field.prev = __prev;		\
+		((type)(void *)__next)->field.prev = __prev;	\
 								\
 	if ((head) == __prev)					\
 		(head)->next = __next;				\
 	else							\
-		((type)__prev)->field.next = __next;		\
+		((type)(void *)__prev)->field.next = __next;	\
 								\
 	(elt)->field.next = NULL;				\
 	(elt)->field.prev = NULL;				\
@@ -515,13 +521,13 @@ MACRO_END
 MACRO_BEGIN							\
 	register queue_entry_t	__next;				\
 								\
-	(entry) = (type) ((head)->next);			\
+	(entry) = (type)(void *) ((head)->next);		\
 	__next = (entry)->field.next;				\
 								\
 	if ((head) == __next)					\
 		(head)->prev = (head);				\
 	else							\
-		((type)(__next))->field.prev = (head);		\
+		((type)(void *)(__next))->field.prev = (head);	\
 	(head)->next = __next;					\
 								\
 	(entry)->field.next = NULL;				\
@@ -541,13 +547,13 @@ MACRO_END
 MACRO_BEGIN							\
 	register queue_entry_t	__prev;				\
 								\
-	(entry) = (type) ((head)->prev);			\
+	(entry) = (type)(void *) ((head)->prev);		\
 	__prev = (entry)->field.prev;				\
 								\
 	if ((head) == __prev)					\
 		(head)->next = (head);				\
 	else							\
-		((type)(__prev))->field.next = (head);		\
+		((type)(void *)(__prev))->field.next = (head);	\
 	(head)->prev = __prev;					\
 								\
 	(entry)->field.next = NULL;				\
@@ -559,8 +565,8 @@ MACRO_END
  */
 #define	queue_assign(to, from, type, field)			\
 MACRO_BEGIN							\
-	((type)((from)->prev))->field.next = (to);		\
-	((type)((from)->next))->field.prev = (to);		\
+	((type)(void *)((from)->prev))->field.next = (to);	\
+	((type)(void *)((from)->next))->field.prev = (to);	\
 	*to = *from;						\
 MACRO_END
 
@@ -579,8 +585,10 @@ MACRO_END
 MACRO_BEGIN							\
 	if (!queue_empty(old)) {				\
 		*(new) = *(old);				\
-		((type)((new)->next))->field.prev = (new);	\
-		((type)((new)->prev))->field.next = (new);	\
+		((type)(void *)((new)->next))->field.prev =	\
+			(new);					\
+		((type)(void *)((new)->prev))->field.next =	\
+			(new);					\
 	} else {						\
 		queue_init(new);				\
 	}							\
@@ -600,9 +608,9 @@ MACRO_END
  *			<field> is the chain field in (*<type>)
  */
 #define queue_iterate(head, elt, type, field)			\
-	for ((elt) = (type) queue_first(head);			\
+	for ((elt) = (type)(void *) queue_first(head);		\
 	     !queue_end((head), (queue_entry_t)(elt));		\
-	     (elt) = (type) queue_next(&(elt)->field))
+	     (elt) = (type)(void *) queue_next(&(elt)->field))
 
 #ifdef	MACH_KERNEL_PRIVATE
 
@@ -614,6 +622,8 @@ MACRO_END
  */
 struct mpqueue_head {
 	struct queue_entry	head;		/* header for queue */
+	uint64_t		earliest_soft_deadline;
+	uint64_t		count;
 #if defined(__i386__) || defined(__x86_64__)
 	lck_mtx_t		lock_data;
 	lck_mtx_ext_t		lock_data_ext;
@@ -636,6 +646,8 @@ MACRO_BEGIN						\
 			 &(q)->lock_data_ext,		\
 			 lck_grp,			\
 			 lck_attr);			\
+	(q)->earliest_soft_deadline = UINT64_MAX;	\
+	(q)->count = 0;					\
 MACRO_END
 
 #else

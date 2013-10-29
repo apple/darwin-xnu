@@ -1,8 +1,8 @@
 /*
- * Copyright (c) 2008-2011 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2008-2012 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
- * 
+ *
  * This file contains Original Code and/or Modifications of Original Code
  * as defined in and that are subject to the Apple Public Source License
  * Version 2.0 (the 'License'). You may not use this file except in
@@ -11,10 +11,10 @@
  * unlawful or unlicensed copies of an Apple operating system, or to
  * circumvent, violate, or enable the circumvention or violation of, any
  * terms of an Apple operating system software license agreement.
- * 
+ *
  * Please obtain a copy of the License at
  * http://www.opensource.apple.com/apsl/ and read it before using this file.
- * 
+ *
  * The Original Code and all software distributed under the License are
  * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
@@ -22,7 +22,7 @@
  * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
  * Please see the License for the specific language governing rights and
  * limitations under the License.
- * 
+ *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*!
@@ -56,8 +56,8 @@ struct timeval;
 		Calls to your upcall function are not serialized and may be
 		called concurrently from multiple threads in the kernel.
 
-		Your upcall function will be called: 
-		    when there is data more than the low water mark for reading, 
+		Your upcall function will be called:
+		    when there is data more than the low water mark for reading,
 		    or when there is space for a write,
 		    or when there is a connection to accept,
 		    or when a socket is connected,
@@ -68,6 +68,21 @@ struct timeval;
 	@param waitf Indicates whether or not it's safe to block.
 */
 typedef void (*sock_upcall)(socket_t so, void *cookie, int waitf);
+
+#ifdef KERNEL_PRIVATE
+/*!
+	@typedef sock_evupcall
+
+	@discussion sock_evupcall is used by a socket to notify an in kernel
+		client when an event occurs. Instead of making blocking calls in
+		the kernel, a client can specify an upcall which will be called
+		when an event status is available.
+	@param so A reference to the socket that's ready.
+	@param cookie The cookie passed in when the socket was created.
+	@param int Indicates the event as defined by SO_FILT_HINT_*
+*/
+typedef void (*sock_evupcall)(socket_t so, void *cookie, u_int32_t event);
+#endif /* KERNEL_PRIVATE */
 
 /*!
 	@function sock_accept
@@ -240,6 +255,8 @@ extern void socket_clear_traffic_mgt_flags_locked(socket_t so, u_int32_t flags);
 extern void socket_set_traffic_mgt_flags(socket_t so, u_int32_t flags);
 extern void socket_clear_traffic_mgt_flags(socket_t so, u_int32_t flags);
 extern errno_t socket_defunct(struct proc *, socket_t so, int);
+extern errno_t sock_receive_internal(socket_t, struct msghdr *, mbuf_t *,
+    int, size_t *);
 #endif /* BSD_KERNEL_PRIVATE */
 #endif /* KERNEL_PRIVATE */
 
@@ -487,18 +504,53 @@ extern void sock_freeaddr(struct sockaddr *sockname);
 /*
 	@function sock_setupcall
 	@discussion Set the notifier function to be called when an event
-		occurs on the socket. This may be set to NULL to disable 
-		further notifications. Setting the function does not 
+		occurs on the socket. This may be set to NULL to disable
+		further notifications. Setting the function does not
 		affect currently notifications about to be sent or being sent.
-		Note: When this function is used on a socket passed from userspace 
-		it is crucial to call sock_retain() on the socket otherwise a callback 
-		could be dispatched on a closed socket and cause a crash.
+		Note: When this function is used on a socket passed from
+		userspace it is crucial to call sock_retain() on the socket
+		otherwise a callback could be dispatched on a closed socket
+		and cause a crash.
 	@param sock The socket.
 	@param callback The notifier function
 	@param context A cookie passed directly to the callback
 */
-extern errno_t sock_setupcall(socket_t sock, sock_upcall callback, void* context);
+extern errno_t sock_setupcall(socket_t sock, sock_upcall callback,
+    void *context);
 
+/*
+	@function sock_setupcalls
+	@discussion Set the notifier function to be called when an event
+		occurs on the socket. This may be set to NULL to disable
+		further notifications. Setting the function does not
+		affect currently notifications about to be sent or being sent.
+		Note: When this function is used on a socket passed from
+		userspace it is crucial to call sock_retain() on the socket
+		otherwise a callback could be dispatched on a closed socket
+		and cause a crash.
+	@param sock The socket.
+	@param read_callback The read notifier function
+	@param read_context A cookie passed directly to the read callback
+	@param write_callback The write notifier function
+	@param write_context A cookie passed directly to the write callback
+*/
+extern errno_t sock_setupcalls(socket_t sock, sock_upcall read_callback,
+    void *read_context, sock_upcall write_callback, void *write_context);
+
+/*
+	@function sock_catchevents
+	@discussion Set the notifier function to be called when an event
+		occurs on the socket. This may be set to NULL to disable
+		further notifications. Setting the function does not
+		affect currently notifications about to be sent or being sent.
+	@param sock The socket.
+	@param event_callback The event notifier function
+	@param event_context A cookie passed directly to the event callback
+	@param event_mask One or more SO_FILT_HINT_* values OR'ed together,
+		indicating the registered event(s).
+*/
+extern errno_t sock_catchevents(socket_t sock, sock_evupcall event_callback,
+    void *event_context, u_int32_t event_mask);
 #endif /* KERNEL_PRIVATE */
 
 __END_DECLS

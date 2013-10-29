@@ -68,6 +68,8 @@
 #include <security/mac_framework.h>
 #endif
 
+int proc_check_footprint_priv(void);
+
 /*
  * Check a credential for privilege.  Lots of good reasons to deny privilege;
  * only a few to grant it.
@@ -75,6 +77,9 @@
 int
 priv_check_cred(kauth_cred_t cred, int priv, __unused int flags)
 {
+#if !CONFIG_MACF
+#pragma unused(priv)
+#endif
 	int error;
 
 	/*
@@ -116,4 +121,10 @@ priv_check_cred(kauth_cred_t cred, int priv, __unused int flags)
 	error = EPERM;
 out:
 	return (error);
+}
+
+int
+proc_check_footprint_priv(void) 
+{
+	return (priv_check_cred(kauth_cred_get(), PRIV_VM_FOOTPRINT_LIMIT, 0));
 }

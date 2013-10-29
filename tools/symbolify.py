@@ -4,6 +4,8 @@ import re
 import sys
 import os
 
+SLIDE = 0
+
 NM_FORMAT = "([0-9a-f]+) ([UuAaTtDdBbCcSsIi]) (.*)"
 
 nm_re = re.compile(NM_FORMAT)
@@ -34,6 +36,8 @@ class SymbolLookup:
     def __call__(self, saddr):
         addr = int(saddr.group(0), 16)
         last = (0, ' ', '<start of file>')
+        if( addr > SLIDE ):
+            addr -= SLIDE
         # stupid linear search... feel free to improve
         for s in self.symbols:
             if s[0] == addr:
@@ -56,7 +60,7 @@ def symbolify(objfile, input, *args, **kargs):
 
 def usage():
     
-    print "usage: %s [filename]" % sys.argv[0]
+    print "usage: %s [filename] [slide]" % sys.argv[0]
     print "\tor speficy a filename in your SYMBOLIFY_KERNEL environment variable"
 
     # die now
@@ -64,10 +68,13 @@ def usage():
 
 KERNEL_FILE = None
 
-if( len(sys.argv) > 2 ):
+if( len(sys.argv) > 3 ):
     usage()
 
-if( len(sys.argv) == 2 ):
+if( len(sys.argv) == 3 ):
+    SLIDE = int(sys.argv[2], 16)
+
+if( len(sys.argv) >= 2 ):
     KERNEL_FILE = sys.argv[1]
 
 if( KERNEL_FILE is None ):
@@ -76,7 +83,7 @@ if( KERNEL_FILE is None ):
 if( KERNEL_FILE is None ):
     usage()
 
-print "using kernel file '%s'" % KERNEL_FILE
+print "using kernel file '%s', slide 0x%x" % (KERNEL_FILE, SLIDE)
 
 symbolify(KERNEL_FILE, sys.stdin, min_width=40)
 

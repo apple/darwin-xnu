@@ -112,11 +112,7 @@
 
 #define	MCLOFSET	(MCLBYTES - 1)
 #ifndef NMBCLUSTERS
-#ifdef GATEWAY
 #define	NMBCLUSTERS	((1024 * 1024) / MCLBYTES)	/* cl map size: 1MB */
-#else
-#define	NMBCLUSTERS	((1024 * 512) / MCLBYTES)	/* cl map size: 0.5MB */
-#endif
 #endif
 
 /*

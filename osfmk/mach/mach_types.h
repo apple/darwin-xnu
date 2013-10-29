@@ -115,7 +115,7 @@
  * If we are in the kernel, then pick up the kernel definitions for
  * the basic mach types.
  */
-typedef struct task			*task_t, *task_name_t;
+typedef struct task			*task_t, *task_name_t, *task_suspension_token_t;
 typedef struct thread		*thread_t, *thread_act_t;
 typedef struct ipc_space		*ipc_space_t;
 typedef struct host			*host_t;
@@ -125,11 +125,16 @@ typedef struct processor		*processor_t;
 typedef struct processor_set		*processor_set_t;
 typedef struct processor_set		*processor_set_control_t;
 typedef struct semaphore 		*semaphore_t;
-typedef struct lock_set 		*lock_set_t;
 typedef struct ledger 			*ledger_t;
 typedef	struct alarm			*alarm_t;
 typedef	struct clock			*clock_serv_t;
 typedef	struct clock			*clock_ctrl_t;
+
+/*
+ * OBSOLETE: lock_set interfaces are obsolete.
+ */
+typedef struct lock_set 		*lock_set_t;
+struct lock_set ;
 
 #ifndef	MACH_KERNEL_PRIVATE
 
@@ -141,7 +146,6 @@ struct host ;
 struct processor ;
 struct processor_set ;
 struct semaphore ;
-struct lock_set ;
 struct ledger ;
 struct alarm ;
 struct clock ;
@@ -158,6 +162,7 @@ __END_DECLS
  */
 typedef mach_port_t		task_t;
 typedef mach_port_t		task_name_t;
+typedef mach_port_t		task_suspension_token_t;
 typedef mach_port_t		thread_t;
 typedef	mach_port_t		thread_act_t;
 typedef mach_port_t		ipc_space_t;
@@ -265,7 +270,7 @@ typedef natural_t	ledger_item_t;
 #define LEDGER_ITEM_INFINITY	((ledger_item_t) (~0))
 
 typedef int64_t 		ledger_amount_t;
-#define LEDGER_LIMIT_INFINITY ((ledger_amount_t)(((uint64_t)1 << 63) - 1))
+#define LEDGER_LIMIT_INFINITY   ((ledger_amount_t)((1ULL << 63) - 1))
 
 typedef mach_vm_offset_t	*emulation_vector_t;
 typedef char			*user_subsystem_t;

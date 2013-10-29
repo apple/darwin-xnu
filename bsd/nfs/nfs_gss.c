@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2007-2010 Apple Inc. All rights reserved.
+ * Copyright (c) 2007-2013 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -84,6 +84,7 @@
 #include <sys/ubc.h>
 #include <sys/malloc.h>
 #include <sys/kpi_mbuf.h>
+#include <sys/ucred.h>
 
 #include <kern/host.h>
 #include <libkern/libkern.h>
@@ -111,6 +112,9 @@
 #include "nfs_gss_crypto.h"
 
 #define NFS_GSS_MACH_MAX_RETRIES 3
+
+#define NFS_GSS_DBG(...) NFS_DBG(NFS_FAC_GSS, 7, ## __VA_ARGS__)
+#define NFS_GSS_ISDBG  (NFS_DEBUG_FACILITY &  NFS_FAC_GSS)
 
 typedef struct {
 	int type;
@@ -186,7 +190,7 @@ static int	nfs_gss_clnt_ctx_failover(struct nfsreq *);
 static int	nfs_gss_clnt_ctx_init(struct nfsreq *, struct nfs_gss_clnt_ctx *);
 static int	nfs_gss_clnt_ctx_init_retry(struct nfsreq *, struct nfs_gss_clnt_ctx *);
 static int	nfs_gss_clnt_ctx_callserver(struct nfsreq *, struct nfs_gss_clnt_ctx *);
-static char	*nfs_gss_clnt_svcname(struct nfsmount *);
+static uint8_t	*nfs_gss_clnt_svcname(struct nfsmount *, gssd_nametype *, uint32_t *);
 static int	nfs_gss_clnt_gssd_upcall(struct nfsreq *, struct nfs_gss_clnt_ctx *);
 static void	nfs_gss_clnt_ctx_remove(struct nfsmount *, struct nfs_gss_clnt_ctx *);
 #endif /* NFSCLIENT */
@@ -280,18 +284,33 @@ nfs_gss_sysok(struct nfsreq *req)
  *
  * Note that the code allows superuser (uid == 0)
  * to adopt the context of another user.
+ *
+ * We'll match on the audit session ids, since those
+ * processes will have acccess to the same credential cache.
  */
+
+#define kauth_cred_getasid(cred) ((cred)->cr_audit.as_aia_p->ai_asid)
+#define kauth_cred_getauid(cred) ((cred)->cr_audit.as_aia_p->ai_auid)
+
+static int
+nfs_gss_clnt_ctx_cred_match(kauth_cred_t cred1, kauth_cred_t cred2)
+{
+	if (kauth_cred_getasid(cred1) == kauth_cred_getasid(cred2))
+		return (1);
+	return (0);
+}
+
+			
 static int
 nfs_gss_clnt_ctx_find(struct nfsreq *req)
 {
 	struct nfsmount *nmp = req->r_nmp;
 	struct nfs_gss_clnt_ctx *cp;
-	uid_t uid = kauth_cred_getuid(req->r_cred);
 	int error = 0;
 
 	lck_mtx_lock(&nmp->nm_lock);
 	TAILQ_FOREACH(cp, &nmp->nm_gsscl, gss_clnt_entries) {
-		if (cp->gss_clnt_uid == uid) {
+		if (nfs_gss_clnt_ctx_cred_match(cp->gss_clnt_cred, req->r_cred)) {
 			if (cp->gss_clnt_flags & GSS_CTX_INVAL)
 				continue;
 			nfs_gss_clnt_ctx_ref(req, cp);
@@ -300,7 +319,7 @@ nfs_gss_clnt_ctx_find(struct nfsreq *req)
 		}
 	}
 
-	if (uid == 0) {
+	if (kauth_cred_getuid(req->r_cred) == 0) {
 		/*
 		 * If superuser is trying to get access, then co-opt
 		 * the first valid context in the list.
@@ -345,7 +364,8 @@ nfs_gss_clnt_ctx_find(struct nfsreq *req)
 		return (ENOMEM);
 	}
 
-	cp->gss_clnt_uid = uid;
+	cp->gss_clnt_cred = req->r_cred;
+	kauth_cred_ref(cp->gss_clnt_cred);
 	cp->gss_clnt_mtx = lck_mtx_alloc_init(nfs_gss_clnt_grp, LCK_ATTR_NULL);
 	cp->gss_clnt_thread = current_thread();
 	nfs_gss_clnt_ctx_ref(req, cp);
@@ -387,7 +407,6 @@ nfs_gss_clnt_ctx_failover(struct nfsreq *req)
 {
 	struct nfsmount *nmp = req->r_nmp;
 	struct nfs_gss_clnt_ctx *cp;
-	uid_t uid = kauth_cred_getuid(req->r_cred);
 	struct timeval now;
 
 	MALLOC(cp, struct nfs_gss_clnt_ctx *, sizeof(*cp), M_TEMP, M_WAITOK|M_ZERO);
@@ -395,7 +414,8 @@ nfs_gss_clnt_ctx_failover(struct nfsreq *req)
 		return (ENOMEM);
 
 	cp->gss_clnt_service = RPCSEC_GSS_SVC_SYS;
-	cp->gss_clnt_uid = uid;
+	cp->gss_clnt_cred = req->r_cred;
+	kauth_cred_ref(cp->gss_clnt_cred);
 	cp->gss_clnt_mtx = lck_mtx_alloc_init(nfs_gss_clnt_grp, LCK_ATTR_NULL);
 	microuptime(&now);
 	cp->gss_clnt_ctime = now.tv_sec;	// time stamp
@@ -984,7 +1004,7 @@ nfs_gss_clnt_ctx_init(struct nfsreq *req, struct nfs_gss_clnt_ctx *cp)
 
 	/* Initialize a new client context */
 
-	cp->gss_clnt_svcname = nfs_gss_clnt_svcname(nmp);
+	cp->gss_clnt_svcname = nfs_gss_clnt_svcname(nmp, &cp->gss_clnt_svcnt, &cp->gss_clnt_svcnamlen);
 	if (cp->gss_clnt_svcname == NULL) {
 		error = NFSERR_EAUTH;
 		goto nfsmout;
@@ -1025,8 +1045,9 @@ retry:
 		 */
 		error = nfs_gss_clnt_ctx_callserver(req, cp);
 		if (error) {
-			if (cp->gss_clnt_proc == RPCSEC_GSS_INIT &&
+			if (error == ENEEDAUTH && cp->gss_clnt_proc == RPCSEC_GSS_INIT &&
 				(cp->gss_clnt_gssd_flags & (GSSD_RESTART | GSSD_NFS_1DES)) == 0) {
+				NFS_GSS_DBG("Retrying with single DES for req %p\n", req);
 				cp->gss_clnt_gssd_flags = (GSSD_RESTART | GSSD_NFS_1DES);
 				if (cp->gss_clnt_token)
 					FREE(cp->gss_clnt_token, M_TEMP);
@@ -1157,7 +1178,7 @@ nfs_gss_clnt_ctx_init_retry(struct nfsreq *req, struct nfs_gss_clnt_ctx *cp)
 		microuptime(&now);
 		waituntil = now.tv_sec + timeo;
 		while (now.tv_sec < waituntil) {
-			tsleep(&lbolt, PSOCK | slpflag, "nfs_gss_clnt_ctx_init_retry", 0);
+			tsleep(NULL, PSOCK | slpflag, "nfs_gss_clnt_ctx_init_retry", hz);
 			slpflag = 0;
 			error = nfs_sigintr(req->r_nmp, req, current_thread(), 0);
 			if (error)
@@ -1278,7 +1299,7 @@ nfs_gss_clnt_ctx_callserver(struct nfsreq *req, struct nfs_gss_clnt_ctx *cp)
 			cp->gss_clnt_mport,
 			!req->r_nmp ? unknown :
 			vfs_statfs(req->r_nmp->nm_mountp)->f_mntfromname,
-			cp->gss_clnt_uid,
+			kauth_cred_getuid(cp->gss_clnt_cred),
 			who,
 			cp->gss_clnt_major,
 			cp->gss_clnt_minor);
@@ -1292,32 +1313,59 @@ nfsmout:
 }
 
 /*
- * Ugly hack to get the service principal from the f_mntfromname field in 
- * the statfs struct. We assume a format of server:path. We don't currently
- * support url's or other bizarre formats like path@server. A better solution
- * here might be to allow passing the service principal down in the mount args.
- * For kerberos we just use the default realm. 
+ * We construct the service principal as a gss hostbased service principal of
+ * the form nfs@<server>, unless the servers principal was passed down in the
+ * mount arguments. If the arguments don't specify the service principal, the
+ * server name is extracted the location passed in the mount argument if
+ * available.  Otherwise assume a format of <server>:<path> in the
+ * mntfromname. We don't currently support url's or other bizarre formats like
+ * path@server. Mount_url will convert the nfs url into <server>:<path> when
+ * calling mount, so this works out well in practice.
+ *
  */
-static char *
-nfs_gss_clnt_svcname(struct nfsmount *nmp)
+
+static uint8_t *
+nfs_gss_clnt_svcname(struct nfsmount *nmp, gssd_nametype *nt, uint32_t *len)
 {
-	char *svcname, *d, *mntfromhere;
-	int len;
+	char *svcname, *d, *server;
+	int lindx, sindx;
 
 	if (!nmp)
 		return (NULL);
-	mntfromhere = &vfs_statfs(nmp->nm_mountp)->f_mntfromname[0];
-	len = strlen(mntfromhere) + 5; /* "nfs/" plus null */
-	MALLOC(svcname, char *, len, M_TEMP, M_NOWAIT);
-	if (svcname == NULL)
-		return (NULL);
-	strlcpy(svcname, "nfs/", len);
-	strlcat(svcname, mntfromhere, len);
-	d = strchr(svcname, ':');
-	if (d)
-		*d = '\0';
 
-	return (svcname);
+	if (nmp->nm_sprinc) {
+		*len = strlen(nmp->nm_sprinc) + 1;
+		MALLOC(svcname, char *, *len, M_TEMP, M_WAITOK);
+		*nt = GSSD_HOSTBASED;
+		if (svcname == NULL)
+			return (NULL);
+		strlcpy(svcname, nmp->nm_sprinc, *len);
+
+		return ((uint8_t *)svcname);
+	}
+
+	*nt = GSSD_HOSTBASED;
+	if (nmp->nm_locations.nl_numlocs && !(NFS_GSS_ISDBG && (NFS_DEBUG_FLAGS & 0x1))) {
+		lindx = nmp->nm_locations.nl_current.nli_loc;
+		sindx = nmp->nm_locations.nl_current.nli_serv;
+		server = nmp->nm_locations.nl_locations[lindx]->nl_servers[sindx]->ns_name;
+		*len = (uint32_t)strlen(server);
+	} else {
+		/* Older binaries using older mount args end up here */
+		server = vfs_statfs(nmp->nm_mountp)->f_mntfromname;
+		NFS_GSS_DBG("nfs getting gss svcname from %s\n", server);
+		d = strchr(server, ':');
+		*len = (uint32_t)(d ? (d - server) : strlen(server));
+	}
+	
+	*len +=  5; /* "nfs@" plus null */
+	MALLOC(svcname, char *, *len, M_TEMP, M_WAITOK);
+	strlcpy(svcname, "nfs", *len);
+	strlcat(svcname, "@", *len);
+	strlcat(svcname, server, *len);
+	NFS_GSS_DBG("nfs svcname = %s\n", svcname);
+
+	return ((uint8_t *)svcname);
 }
 
 /*
@@ -1326,8 +1374,6 @@ nfs_gss_clnt_svcname(struct nfsmount *nmp)
  * to get a send right to talk to a new gssd instance that launchd has launched
  * based on the cred's uid and audit session id.
  */
-#define kauth_cred_getasid(cred) ((cred)->cr_audit.as_aia_p->ai_asid)
-#define kauth_cred_getauid(cred) ((cred)->cr_audit.as_aia_p->ai_auid)
 
 static mach_port_t
 nfs_gss_clnt_get_upcall_port(kauth_cred_t credp)
@@ -1376,51 +1422,95 @@ nfs_gss_clnt_gssd_upcall(struct nfsreq *req, struct nfs_gss_clnt_ctx *cp)
 	gssd_byte_buffer otoken = NULL;
 	mach_msg_type_number_t otokenlen;
 	int error = 0;
-	char uprinc[1];
+	uint8_t *principal = NULL;
+	uint32_t plen = 0;
+	int32_t nt = GSSD_STRING_NAME;
+	vm_map_copy_t pname = NULL;
+	vm_map_copy_t svcname = NULL;
+	char display_name[MAX_DISPLAY_STR] = "";
 	uint32_t ret_flags;
-
+	uint32_t nfs_1des = (cp->gss_clnt_gssd_flags & GSSD_NFS_1DES);
+	struct nfsmount *nmp;
+	
 	/*
 	 * NFS currently only supports default principals or
-	 * principals based on the uid of the caller.
-	 *
-	 * N.B. Note we define a one character array for the principal
-	 * so that we can hold an empty string required by mach, since 
-	 * the kernel is being compiled with -Wwrite-strings.
+	 * principals based on the uid of the caller, unless
+	 * the principal to use for the mounting cred was specified
+	 * in the mount argmuments. If the realm to use was specified
+	 * then will send that up as the principal since the realm is
+	 * preceed by an "@" gssd that will try and select the default
+	 * principal for that realm.
 	 */
-	uprinc[0] = '\0';
+
+	nmp = req->r_nmp;
+	if (nmp == NULL || vfs_isforce(nmp->nm_mountp) || (nmp->nm_state & (NFSSTA_FORCE | NFSSTA_DEAD)))
+		return (ENXIO);
+	
+	if (cp->gss_clnt_principal && cp->gss_clnt_prinlen) {
+		principal = cp->gss_clnt_principal;
+		plen = cp->gss_clnt_prinlen;
+		nt = cp->gss_clnt_prinnt;
+	} else if (nmp->nm_principal && IS_VALID_CRED(nmp->nm_mcred) && req->r_cred == nmp->nm_mcred) {
+		plen = (uint32_t)strlen(nmp->nm_principal);
+		MALLOC(principal, uint8_t *, plen, M_TEMP, M_WAITOK | M_ZERO);
+		if (principal == NULL)
+			return (ENOMEM);
+		bcopy(nmp->nm_principal, principal, plen);
+		cp->gss_clnt_prinnt = nt = GSSD_USER;
+	}
+	else if (nmp->nm_realm) {
+		plen = (uint32_t)strlen(nmp->nm_realm);
+		principal = (uint8_t *)nmp->nm_realm;
+		nt = GSSD_USER;
+	}
+
 	if (!IPC_PORT_VALID(cp->gss_clnt_mport)) {
 		cp->gss_clnt_mport = nfs_gss_clnt_get_upcall_port(req->r_cred);
 		if (cp->gss_clnt_mport == IPC_PORT_NULL)
 			goto out;
 	}
 
-	if (cp->gss_clnt_tokenlen > 0)
+	if (plen)
+		nfs_gss_mach_alloc_buffer(principal, plen, &pname);
+	if (cp->gss_clnt_svcnamlen)
+		nfs_gss_mach_alloc_buffer(cp->gss_clnt_svcname, cp->gss_clnt_svcnamlen, &svcname);
+	if (cp->gss_clnt_tokenlen)
 		nfs_gss_mach_alloc_buffer(cp->gss_clnt_token, cp->gss_clnt_tokenlen, &itoken);
 
 retry:
-	kr = mach_gss_init_sec_context(
+	kr = mach_gss_init_sec_context_v2(
 		cp->gss_clnt_mport,
 		GSSD_KRB5_MECH,
 		(gssd_byte_buffer) itoken, (mach_msg_type_number_t) cp->gss_clnt_tokenlen,
-		cp->gss_clnt_uid,
-		uprinc,
-		cp->gss_clnt_svcname,
+		kauth_cred_getuid(cp->gss_clnt_cred),
+		nt,
+		(gssd_byte_buffer)pname, (mach_msg_type_number_t) plen,
+		cp->gss_clnt_svcnt,
+		(gssd_byte_buffer)svcname, (mach_msg_type_number_t) cp->gss_clnt_svcnamlen,
 		GSSD_MUTUAL_FLAG,
-		cp->gss_clnt_gssd_flags,
+		&cp->gss_clnt_gssd_flags,
 		&cp->gss_clnt_context,
 		&cp->gss_clnt_cred_handle,
 		&ret_flags,
 		&okey,  (mach_msg_type_number_t *) &skeylen,
 		&otoken, &otokenlen,
+		cp->gss_clnt_display ? NULL : display_name,
 		&cp->gss_clnt_major,
 		&cp->gss_clnt_minor);
 
+	/* Should be cleared and set in gssd ? */
 	cp->gss_clnt_gssd_flags &= ~GSSD_RESTART;
-	
+	cp->gss_clnt_gssd_flags |= nfs_1des;
+
 	if (kr != KERN_SUCCESS) {
 		printf("nfs_gss_clnt_gssd_upcall: mach_gss_init_sec_context failed: %x (%d)\n", kr, kr);
 		if (kr == MIG_SERVER_DIED && cp->gss_clnt_cred_handle == 0 &&
-			retry_cnt++ < NFS_GSS_MACH_MAX_RETRIES) {
+			retry_cnt++ < NFS_GSS_MACH_MAX_RETRIES &&
+			!vfs_isforce(nmp->nm_mountp) && (nmp->nm_state & (NFSSTA_FORCE | NFSSTA_DEAD)) == 0) {
+			if (plen)
+				nfs_gss_mach_alloc_buffer(principal, plen, &pname);
+			if (cp->gss_clnt_svcnamlen)
+				nfs_gss_mach_alloc_buffer(cp->gss_clnt_svcname, cp->gss_clnt_svcnamlen, &svcname);
 			if (cp->gss_clnt_tokenlen > 0)
 				nfs_gss_mach_alloc_buffer(cp->gss_clnt_token, cp->gss_clnt_tokenlen, &itoken);
 			goto retry;
@@ -1431,22 +1521,41 @@ retry:
 		goto out;
 	}
 
+	if (cp->gss_clnt_display == NULL && *display_name != '\0') {
+		int dlen = strnlen(display_name, MAX_DISPLAY_STR) + 1;  /* Add extra byte to include '\0' */
+		
+		if (dlen < MAX_DISPLAY_STR) {
+			MALLOC(cp->gss_clnt_display, char *, dlen, M_TEMP, M_WAITOK);
+			if (cp->gss_clnt_display == NULL)
+				goto skip;
+			bcopy(display_name, cp->gss_clnt_display, dlen); 
+		} else {
+			goto skip;
+		}
+	}
+skip:
 	/*
 	 * Make sure any unusual errors are expanded and logged by gssd
+	 *
+	 * XXXX, we need to rethink this and just have gssd return a string for the major and minor codes.
 	 */
 	if (cp->gss_clnt_major != GSS_S_COMPLETE &&
 	    cp->gss_clnt_major != GSS_S_CONTINUE_NEEDED) {
+#define GETMAJERROR(x) (((x) >> GSS_C_ROUTINE_ERROR_OFFSET) & GSS_C_ROUTINE_ERROR_MASK)	
 		char who[] = "client";
-		char unknown[] = "<unknown>";
-
+		uint32_t gss_error = GETMAJERROR(cp->gss_clnt_major);
+		
 		(void) mach_gss_log_error(
 			cp->gss_clnt_mport,
-			!req->r_nmp ? unknown :
-			vfs_statfs(req->r_nmp->nm_mountp)->f_mntfromname,
-			cp->gss_clnt_uid,
+			vfs_statfs(nmp->nm_mountp)->f_mntfromname,
+			kauth_cred_getuid(cp->gss_clnt_cred),
 			who,
 			cp->gss_clnt_major,
 			cp->gss_clnt_minor);
+		gss_error = gss_error ? gss_error : cp->gss_clnt_major;
+		printf("NFS gssd auth failure mount %s for %s major = %d minor = %d\n",
+		       vfs_statfs(nmp->nm_mountp)->f_mntfromname, cp->gss_clnt_display ? cp->gss_clnt_display : who, 
+		       gss_error, (int32_t)cp->gss_clnt_minor);
 	}
 
 	if (skeylen > 0) {
@@ -1619,6 +1728,12 @@ nfs_gss_clnt_ctx_remove(struct nfsmount *nmp, struct nfs_gss_clnt_ctx *cp)
 
 	if (cp->gss_clnt_mtx)
 		lck_mtx_destroy(cp->gss_clnt_mtx, nfs_gss_clnt_grp);
+	if (IS_VALID_CRED(cp->gss_clnt_cred))
+		kauth_cred_unref(&cp->gss_clnt_cred);
+	if (cp->gss_clnt_principal)
+		FREE(cp->gss_clnt_principal, M_TEMP);
+	if (cp->gss_clnt_display)
+		FREE(cp->gss_clnt_display, M_TEMP);
 	if (cp->gss_clnt_handle)
 		FREE(cp->gss_clnt_handle, M_TEMP);
 	if (cp->gss_clnt_seqbits)
@@ -1642,7 +1757,7 @@ nfs_gss_clnt_ctx_renew(struct nfsreq *req)
 	struct nfsmount *nmp = req->r_nmp;
 	struct nfs_gss_clnt_ctx *ncp;
 	int error = 0;
-	uid_t saved_uid;
+	kauth_cred_t saved_cred;
 	mach_port_t saved_mport;
 
 	if (cp == NULL)
@@ -1654,7 +1769,8 @@ nfs_gss_clnt_ctx_renew(struct nfsreq *req)
 		nfs_gss_clnt_ctx_unref(req);
 		return (0);	// already being renewed
 	}
-	saved_uid = cp->gss_clnt_uid;
+	saved_cred = cp->gss_clnt_cred;
+	kauth_cred_ref(saved_cred);
 	saved_mport = host_copy_special_port(cp->gss_clnt_mport);
 
 	/* Remove the old context */
@@ -1680,7 +1796,8 @@ nfs_gss_clnt_ctx_renew(struct nfsreq *req)
 		goto out;
 	}
 
-	ncp->gss_clnt_uid = saved_uid;
+	ncp->gss_clnt_cred = saved_cred;
+	kauth_cred_ref(ncp->gss_clnt_cred);
 	ncp->gss_clnt_mport = host_copy_special_port(saved_mport); // re-use the gssd port
 	ncp->gss_clnt_mtx = lck_mtx_alloc_init(nfs_gss_clnt_grp, LCK_ATTR_NULL);
 	ncp->gss_clnt_thread = current_thread();
@@ -1695,6 +1812,7 @@ nfs_gss_clnt_ctx_renew(struct nfsreq *req)
 	error = nfs_gss_clnt_ctx_init_retry(req, ncp); // Initialize new context
 out:
 	host_release_special_port(saved_mport);
+	kauth_cred_unref(&saved_cred);
 	if (error)
 		nfs_gss_clnt_ctx_unref(req);
 
@@ -1718,25 +1836,22 @@ nfs_gss_clnt_ctx_unmount(struct nfsmount *nmp)
 	for (;;) {
 		lck_mtx_lock(&nmp->nm_lock);
 		cp = TAILQ_FIRST(&nmp->nm_gsscl);
+		if (cp) {
+			lck_mtx_lock(cp->gss_clnt_mtx);
+			cp->gss_clnt_refcnt++;
+			lck_mtx_unlock(cp->gss_clnt_mtx);
+			req.r_gss_ctx = cp;
+		}
 		lck_mtx_unlock(&nmp->nm_lock);
 		if (cp == NULL)
 			break;
-
-		nfs_gss_clnt_ctx_ref(&req, cp);
-
+	
 		/*
 		 * Tell the server to destroy its context.
 		 * But don't bother if it's a forced unmount
 		 * or if it's a dummy sec=sys context.
 		 */
 		if (!(nmp->nm_state & NFSSTA_FORCE) && (cp->gss_clnt_service != RPCSEC_GSS_SVC_SYS)) {
-			kauth_cred_t cred;
-			struct posix_cred temp_pcred;
-
-			bzero((caddr_t) &temp_pcred, sizeof(temp_pcred));
-			temp_pcred.cr_ngroups = 1;
-			temp_pcred.cr_uid = cp->gss_clnt_uid;
-			cred = posix_cred_create(&temp_pcred);
 			cp->gss_clnt_proc = RPCSEC_GSS_DESTROY;
 
 			error = 0;
@@ -1746,10 +1861,9 @@ nfs_gss_clnt_ctx_unmount(struct nfsmount *nmp)
 			nfsm_chain_build_done(error, &nmreq);
 			if (!error)
 				nfs_request_gss(nmp->nm_mountp, &nmreq,
-					current_thread(), cred, 0, cp, &nmrep, &status);
+					current_thread(), cp->gss_clnt_cred, 0, cp, &nmrep, &status);
 			nfsm_chain_cleanup(&nmreq);
 			nfsm_chain_cleanup(&nmrep);
-			kauth_cred_unref(&cred);
 		}
 
 		/*
@@ -1763,6 +1877,45 @@ nfs_gss_clnt_ctx_unmount(struct nfsmount *nmp)
 		nfs_gss_clnt_ctx_unref(&req);
 	}
 }
+
+/*
+ * Destroy a mounts context for a credential
+ */
+int
+nfs_gss_clnt_ctx_destroy(struct nfsmount *nmp, kauth_cred_t cred)
+{
+	struct nfs_gss_clnt_ctx *cp;
+	struct nfsreq req;
+
+	req.r_nmp = nmp;
+
+	lck_mtx_lock(&nmp->nm_lock);
+	TAILQ_FOREACH(cp, &nmp->nm_gsscl, gss_clnt_entries) {
+		if (nfs_gss_clnt_ctx_cred_match(cp->gss_clnt_cred, cred)) {
+			if (cp->gss_clnt_flags & GSS_CTX_INVAL)
+				continue;
+			lck_mtx_lock(cp->gss_clnt_mtx);
+			cp->gss_clnt_refcnt++;
+			cp->gss_clnt_flags |= GSS_CTX_INVAL;
+			lck_mtx_unlock(cp->gss_clnt_mtx);
+			req.r_gss_ctx = cp;
+			break;
+		}
+	}
+	lck_mtx_unlock(&nmp->nm_lock);
+
+	if (cp == NULL)
+		return (ENOENT);
+
+	/*
+	 * Drop the reference to remove it if its
+	 * refcount is zero.
+	 */
+	nfs_gss_clnt_ctx_unref(&req);
+
+	return (0);
+}
+
 
 #endif /* NFSCLIENT */
 
@@ -2841,15 +2994,19 @@ nfs_gss_mach_alloc_buffer(u_char *buf, uint32_t buflen, vm_map_copy_t *addr)
 	if (buf == NULL || buflen == 0)
 		return;
 
-	tbuflen = round_page(buflen);
+	tbuflen = vm_map_round_page(buflen,
+				    vm_map_page_mask(ipc_kernel_map));
 	kr = vm_allocate(ipc_kernel_map, &kmem_buf, tbuflen, VM_FLAGS_ANYWHERE);
 	if (kr != 0) {
 		printf("nfs_gss_mach_alloc_buffer: vm_allocate failed\n");
 		return;
 	}
 
-	kr = vm_map_wire(ipc_kernel_map, vm_map_trunc_page(kmem_buf),
-		vm_map_round_page(kmem_buf + tbuflen),
+	kr = vm_map_wire(ipc_kernel_map,
+			 vm_map_trunc_page(kmem_buf,
+					   vm_map_page_mask(ipc_kernel_map)),
+			 vm_map_round_page(kmem_buf + tbuflen,
+					   vm_map_page_mask(ipc_kernel_map)),
 		VM_PROT_READ|VM_PROT_WRITE, FALSE);
 	if (kr != 0) {
 		printf("nfs_gss_mach_alloc_buffer: vm_map_wire failed\n");
@@ -2860,8 +3017,12 @@ nfs_gss_mach_alloc_buffer(u_char *buf, uint32_t buflen, vm_map_copy_t *addr)
 	// Shouldn't need to bzero below since vm_allocate returns zeroed pages
 	// bzero(kmem_buf + buflen, tbuflen - buflen);
 	
-	kr = vm_map_unwire(ipc_kernel_map, vm_map_trunc_page(kmem_buf),
-		vm_map_round_page(kmem_buf + tbuflen), FALSE);
+	kr = vm_map_unwire(ipc_kernel_map,
+			   vm_map_trunc_page(kmem_buf,
+					     vm_map_page_mask(ipc_kernel_map)),
+			   vm_map_round_page(kmem_buf + tbuflen,
+					     vm_map_page_mask(ipc_kernel_map)),
+			   FALSE);
 	if (kr != 0) {
 		printf("nfs_gss_mach_alloc_buffer: vm_map_unwire failed\n");
 		return;

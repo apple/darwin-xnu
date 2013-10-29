@@ -51,6 +51,7 @@ kern_return_t chudxnu_kdebug_callback_enter(chudxnu_kdebug_callback_func_t);
 kern_return_t chudxnu_kdebug_callback_cancel(void);
 
 extern void kdbg_control_chud(int val, void *fn);
+extern void kperf_kdebug_callback(uint32_t debugid);
 
 static void chud_null_kdebug(uint32_t debugid __unused, uintptr_t arg0 __unused,
 	uintptr_t arg1 __unused, uintptr_t arg2 __unused, uintptr_t arg3 __unused, 
@@ -68,6 +69,11 @@ chudxnu_private_kdebug_callback(
 	uintptr_t arg4)
 {
     chudxnu_kdebug_callback_func_t fn = kdebug_callback_fn;
+
+#if KPERF
+    /* call out to kperf first */
+    kperf_kdebug_callback(debugid);
+#endif
     
     if(fn) {
         (fn)(debugid, arg0, arg1, arg2, arg3, arg4);

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2008 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2012 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -198,6 +198,8 @@ void lck_rw_lock_exclusive_to_shared_gen(
 lck_rw_type_t lck_rw_done_gen(
 	lck_rw_t	*lck,
 	int		prior_lock_state);
+
+void lck_rw_clear_promotions_x86(thread_t thread);
 
 /*
  *      Routine:        lck_spin_alloc_init
@@ -870,6 +872,9 @@ lck_rw_destroy(
 {
 	if (lck->lck_rw_tag == LCK_RW_TAG_DESTROYED)
 		return;
+#if MACH_LDEBUG
+	lck_rw_assert(lck, LCK_RW_ASSERT_NOTHELD);
+#endif
 	lck->lck_rw_tag = LCK_RW_TAG_DESTROYED;
 	lck_grp_lckcnt_decr(grp, LCK_TYPE_RW);
 	lck_grp_deallocate(grp);
@@ -1179,6 +1184,20 @@ lck_rw_done_gen(
 {
 	lck_rw_t	*fake_lck;
 	lck_rw_type_t	lock_type;
+	thread_t	thread = current_thread();
+	uint32_t	rwlock_count;
+
+	/* Check if dropping the lock means that we need to unpromote */
+	rwlock_count = thread->rwlock_count--;
+#if MACH_LDEBUG
+	if (rwlock_count == 0) {
+		panic("rw lock count underflow for thread %p", thread);
+	}
+#endif
+	if ((rwlock_count == 1 /* field now 0 */) && (thread->sched_flags & TH_SFLAG_RW_PROMOTED)) {
+		/* sched_flags checked without lock, but will be rechecked while clearing */
+		lck_rw_clear_promotion(thread);
+	}
 
 	/*
 	 * prior_lock state is a snapshot of the 1st word of the
@@ -1395,6 +1414,20 @@ lck_rw_lock_shared_to_exclusive_failure(
 	int		prior_lock_state)
 {
 	lck_rw_t	*fake_lck;
+	thread_t	thread = current_thread();
+	uint32_t	rwlock_count;
+
+	/* Check if dropping the lock means that we need to unpromote */
+	rwlock_count = thread->rwlock_count--;
+#if MACH_LDEBUG
+	if (rwlock_count == 0) {
+		panic("rw lock count underflow for thread %p", thread);
+	}
+#endif
+	if ((rwlock_count == 1 /* field now 0 */) && (thread->sched_flags & TH_SFLAG_RW_PROMOTED)) {
+		/* sched_flags checked without lock, but will be rechecked while clearing */
+		lck_rw_clear_promotion(thread);
+	}
 
 	/*
 	 * prior_lock state is a snapshot of the 1st word of the
@@ -1616,12 +1649,34 @@ lck_rw_assert(
 			return;
 		}
 		break;
+	case LCK_RW_ASSERT_NOTHELD:
+		if (!(lck->lck_rw_want_write ||
+			  lck->lck_rw_want_upgrade ||
+			  lck->lck_rw_shared_count != 0)) {
+			return;
+		}
+		break;
 	default:
 		break;
 	}
 
-	panic("rw lock (%p) not held (mode=%u), first word %08x\n", lck, type, *(uint32_t *)lck);
+	panic("rw lock (%p)%s held (mode=%u), first word %08x\n", lck, (type == LCK_RW_ASSERT_NOTHELD ? "" : " not"), type, *(uint32_t *)lck);
 }
+
+/* On return to userspace, this routine is called if the rwlock_count is somehow imbalanced */
+void
+lck_rw_clear_promotions_x86(thread_t thread)
+{
+#if MACH_LDEBUG
+	/* It's fatal to leave a RW lock locked and return to userspace */
+	panic("%u rw lock(s) held on return to userspace for thread %p", thread->rwlock_count, thread);
+#else
+	/* Paper over the issue */
+	thread->rwlock_count = 0;
+	lck_rw_clear_promotion(thread);
+#endif
+}
+
 
 #ifdef	MUTEX_ZONE
 extern zone_t lck_mtx_zone;
@@ -1683,9 +1738,7 @@ lck_mtx_ext_init(
 		lck->lck_mtx_attr |= LCK_MTX_ATTR_STAT;
 
 	lck->lck_mtx.lck_mtx_is_ext = 1;
-#if	defined(__x86_64__)
 	lck->lck_mtx.lck_mtx_sw.lck_mtxd.lck_mtxd_pad32 = 0xFFFFFFFF;
-#endif
 }
 
 /*
@@ -1715,9 +1768,7 @@ lck_mtx_init(
 		lck->lck_mtx_owner = 0;
 		lck->lck_mtx_state = 0;
 	}
-#if	defined(__x86_64__)
 	lck->lck_mtx_sw.lck_mtxd.lck_mtxd_pad32 = 0xFFFFFFFF;
-#endif
 	lck_grp_reference(grp);
 	lck_grp_lckcnt_incr(grp, LCK_TYPE_MTX);
 }
@@ -1747,9 +1798,7 @@ lck_mtx_init_ext(
 		lck->lck_mtx_owner = 0;
 		lck->lck_mtx_state = 0;
 	}
-#if	defined(__x86_64__)
 	lck->lck_mtx_sw.lck_mtxd.lck_mtxd_pad32 = 0xFFFFFFFF;
-#endif
 
 	lck_grp_reference(grp);
 	lck_grp_lckcnt_incr(grp, LCK_TYPE_MTX);
@@ -1767,6 +1816,9 @@ lck_mtx_destroy(
 	
 	if (lck->lck_mtx_tag == LCK_MTX_TAG_DESTROYED)
 		return;
+#if MACH_LDEBUG
+	lck_mtx_assert(lck, LCK_MTX_ASSERT_NOTOWNED);
+#endif
 	lck_is_indirect = (lck->lck_mtx_tag == LCK_MTX_TAG_INDIRECT);
 
 	lck_mtx_lock_mark_destroyed(lck);
@@ -1815,7 +1867,6 @@ lck_mtx_unlock_wakeup_x86 (
 		     mutex, fake_lck.lck_mtx_promoted, fake_lck.lck_mtx_waiters, fake_lck.lck_mtx_pri, 0);
 
 	if (__probable(fake_lck.lck_mtx_waiters)) {
-
 		if (fake_lck.lck_mtx_waiters > 1)
 			thread_wakeup_one_with_pri((event_t)(((unsigned int*)mutex)+(sizeof(lck_mtx_t)-1)/sizeof(unsigned int)), fake_lck.lck_mtx_pri);
 		else
@@ -1898,9 +1949,11 @@ lck_mtx_lock_acquire_x86(
 		s = splsched();
 		thread_lock(thread);
 
-		if (thread->sched_pri < priority)
+		if (thread->sched_pri < priority) {
+			/* Do not promote into the realtime priority band */
+			assert(priority <= MAXPRI_KERNEL);
 			set_sched_pri(thread, priority);
-
+		}
 		if (mutex->lck_mtx_promoted == 0) {
 			mutex->lck_mtx_promoted = 1;
 			
@@ -2037,13 +2090,19 @@ lck_mtx_lock_wait_x86 (
 	if (priority < BASEPRI_DEFAULT)
 		priority = BASEPRI_DEFAULT;
 
+	/* Do not promote into the realtime priority band */
+	priority = MIN(priority, MAXPRI_KERNEL);
+
 	if (mutex->lck_mtx_waiters == 0 || priority > mutex->lck_mtx_pri)
 		mutex->lck_mtx_pri = priority;
 	mutex->lck_mtx_waiters++;
 
 	if ( (holder = (thread_t)mutex->lck_mtx_owner) &&
 	     holder->sched_pri < mutex->lck_mtx_pri ) {
-
+		/* Assert that we're not altering the priority of a
+		 * MAXPRI_KERNEL or RT prio band thread
+		 */
+		assert(holder->sched_pri < MAXPRI_KERNEL);
 		s = splsched();
 		thread_lock(holder);
 

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2010-2011 Apple Inc. All rights reserved.
+ * Copyright (c) 2010-2013 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -28,12 +28,14 @@
 #ifndef __NTSTAT_H__
 #define __NTSTAT_H__
 #include <netinet/in.h>
+#include <net/if.h>
+#include <net/if_var.h>
 
 #ifdef PRIVATE
 #pragma pack(push, 4)
 #pragma mark -- Common Data Structures --
 
-#define __NSTAT_REVISION__	1
+#define __NSTAT_REVISION__	4
 
 typedef	u_int32_t	nstat_provider_id_t;
 typedef	u_int32_t	nstat_src_ref_t;
@@ -56,6 +58,11 @@ typedef struct nstat_counts
 	u_int32_t	nstat_min_rtt;
 	u_int32_t	nstat_avg_rtt;
 	u_int32_t	nstat_var_rtt;
+
+	u_int64_t	nstat_cell_rxbytes	__attribute__((aligned(8)));
+	u_int64_t	nstat_cell_txbytes	__attribute__((aligned(8)));
+	u_int64_t	nstat_wifi_rxbytes	__attribute__((aligned(8)));
+	u_int64_t	nstat_wifi_txbytes	__attribute__((aligned(8)));
 } nstat_counts;
 
 #pragma mark -- Network Statistics Providers --
@@ -63,8 +70,9 @@ typedef struct nstat_counts
 enum
 {
 	NSTAT_PROVIDER_ROUTE	= 1
-	,NSTAT_PROVIDER_TCP		= 2
-	,NSTAT_PROVIDER_UDP		= 3
+	,NSTAT_PROVIDER_TCP	= 2
+	,NSTAT_PROVIDER_UDP	= 3
+	,NSTAT_PROVIDER_IFNET	= 4
 };
 
 typedef struct nstat_route_add_param
@@ -126,6 +134,11 @@ typedef struct nstat_tcp_descriptor
 	u_int64_t	upid;
 	u_int32_t	pid;
 	char		pname[64];
+	u_int64_t	eupid;
+	u_int32_t	epid;
+
+	uint8_t		uuid[16];
+	uint8_t		euuid[16];
 } nstat_tcp_descriptor;
 
 typedef struct nstat_tcp_add_param	nstat_udp_add_param;
@@ -153,6 +166,11 @@ typedef struct nstat_udp_descriptor
 	u_int64_t	upid;
 	u_int32_t	pid;
 	char		pname[64];
+	u_int64_t	eupid;
+	u_int32_t	epid;
+
+	uint8_t		uuid[16];
+	uint8_t		euuid[16];
 } nstat_udp_descriptor;
 
 typedef struct nstat_route_descriptor
@@ -187,6 +205,24 @@ typedef struct nstat_route_descriptor
 	
 } nstat_route_descriptor;
 
+typedef struct nstat_ifnet_add_param
+{
+	u_int32_t	ifindex;
+	u_int64_t	threshold;
+} nstat_ifnet_add_param;
+
+#ifndef	IF_DESCSIZE
+#define	IF_DESCSIZE 128
+#endif
+typedef struct nstat_ifnet_descriptor
+{
+	char			name[IFNAMSIZ+1];
+	u_int32_t		ifindex;
+	u_int64_t		threshold;
+	unsigned int		type;
+	char 			description[IF_DESCSIZE];
+} nstat_ifnet_descriptor;
+
 #pragma mark -- Network Statistics User Client --
 
 #define	NET_STAT_CONTROL_NAME	"com.apple.network.statistics"
@@ -199,10 +235,11 @@ enum
 	
 	// Requests
 	,NSTAT_MSG_TYPE_ADD_SRC			= 1001
-	,NSTAT_MSG_TYPE_ADD_ALL_SRCS	= 1002
+	,NSTAT_MSG_TYPE_ADD_ALL_SRCS		= 1002
 	,NSTAT_MSG_TYPE_REM_SRC			= 1003
 	,NSTAT_MSG_TYPE_QUERY_SRC		= 1004
-	,NSTAT_MSG_TYPE_GET_SRC_DESC	= 1005
+	,NSTAT_MSG_TYPE_GET_SRC_DESC		= 1005
+	,NSTAT_MSG_TYPE_SET_FILTER 		= 1006
 	
 	// Responses/Notfications
 	,NSTAT_MSG_TYPE_SRC_ADDED		= 10001
@@ -213,8 +250,13 @@ enum
 
 enum
 {
-	NSTAT_SRC_REF_ALL		= 0xffffffff
+	NSTAT_SRC_REF_ALL	= 0xffffffff
 	,NSTAT_SRC_REF_INVALID	= 0
+};
+
+enum
+{
+	NSTAT_FILTER_NOZEROBYTES = 0x01,
 };
 
 typedef struct nstat_msg_hdr
@@ -261,6 +303,13 @@ typedef struct nstat_msg_get_src_description
 	nstat_msg_hdr		hdr;
 	nstat_src_ref_t		srcref;
 } nstat_msg_get_src_description;
+
+typedef struct nstat_msg_set_filter
+{
+	nstat_msg_hdr		hdr;
+	nstat_src_ref_t		srcref;
+	u_int32_t		filter;
+} nstat_msg_set_filter;
 
 typedef struct nstat_msg_src_description
 {
@@ -333,6 +382,9 @@ void nstat_tcp_new_pcb(struct inpcb *inp);
 void nstat_udp_new_pcb(struct inpcb *inp);
 void nstat_route_new_entry(struct rtentry *rt);
 void nstat_pcb_detach(struct inpcb *inp);
+
+
+void nstat_ifnet_threshold_reached(unsigned int ifindex);
 
 // locked_add_64 uses atomic operations on 32bit so the 64bit
 // value can be properly read. The values are only ever incremented

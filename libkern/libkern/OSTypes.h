@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 1999-2012 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -25,12 +25,10 @@
  * 
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
-/*
- * Copyright (c) 1999 Apple Computer, Inc.  All rights reserved.
- *
- * HISTORY
- *
- */
+
+#if !defined(KERNEL)
+#include <MacTypes.h>
+#endif	/* !KERNEL */
 
 #ifndef _OS_OSTYPES_H
 #define _OS_OSTYPES_H
@@ -40,8 +38,7 @@
 typedef unsigned int 	   UInt;
 typedef signed int         SInt;
 
-#ifndef __MACTYPES__	/* CF MacTypes.h */
-#ifndef __TYPES__	/* guess... Mac Types.h */
+#if defined(KERNEL)
 
 typedef unsigned char 	   UInt8;
 typedef unsigned short 	   UInt16;
@@ -55,12 +52,12 @@ typedef unsigned long long UInt64;
 typedef	struct UnsignedWide {
 			UInt32		hi;
 			UInt32		lo;
-}							UnsignedWide;
+}							UnsignedWide __attribute__((deprecated));
 #elif		defined(__LITTLE_ENDIAN__)
 typedef	struct UnsignedWide {
 			UInt32		lo;
 			UInt32		hi;
-}							UnsignedWide;
+}							UnsignedWide __attribute__((deprecated));
 #else
 #error Unknown endianess.
 #endif
@@ -73,34 +70,17 @@ typedef signed int         SInt32;
 typedef signed long        SInt32;
 #endif
 typedef signed long long   SInt64;
-#if		defined(__BIG_ENDIAN__)
-typedef	struct wide {
-			SInt32		hi;
-			UInt32		lo;
-}							wide;
-#elif		defined(__LITTLE_ENDIAN__)
-typedef	struct wide {
-			UInt32		lo;
-			SInt32		hi;
-}							wide;
-#else
-#error Unknown endianess.
-#endif
 
 typedef SInt32				OSStatus;
 
-#if (defined(__LP64__) || defined (__arm__)) && defined(KERNEL)
 #ifndef ABSOLUTETIME_SCALAR_TYPE
 #define ABSOLUTETIME_SCALAR_TYPE    1
 #endif
 typedef UInt64		AbsoluteTime;
-#else
-typedef UnsignedWide		AbsoluteTime;
-#endif
 
-typedef UInt32				OptionBits;
+typedef UInt32				OptionBits __attribute__((deprecated));
 
-#if defined(KERNEL) && defined(__LP64__)
+#if defined(__LP64__)
 /*
  * Use intrinsic boolean types for the LP64 kernel, otherwise maintain
  * source and binary backward compatibility.  This attempts to resolve
@@ -117,15 +97,12 @@ typedef _Bool Boolean;
 typedef unsigned char Boolean;
 #endif	/* !c99 */
 #endif	/* !__cplusplus */
-#else	/* !(KERNEL && __LP64__) */
+#else	/* !__LP64__ */
 typedef unsigned char Boolean;
-#endif	/* !(KERNEL && __LP64__) */
+#endif	/* !__LP64__ */
 
-#endif /* __TYPES__ */
-#endif /* __MACTYPES__ */
+#endif	/* KERNEL */
 
-#if !defined(OS_INLINE)
-#	define OS_INLINE static inline
-#endif
+#include <sys/_types/_os_inline.h>
 
 #endif /* _OS_OSTYPES_H */

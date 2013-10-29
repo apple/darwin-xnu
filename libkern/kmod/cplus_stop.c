@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000,2008-2009 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000,2008-2012 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -46,31 +46,3 @@
 /* The following preprocessor test must match exactly with the architectures
  * that define the CONFIG_STATIC_CPPINIT config option.
  */
-#if __i386__
-
-#include <mach/mach_types.h>
-
-asm(".destructors_used = 0");
-asm(".private_extern .destructors_used");
-
-// Functions defined in libkern/c++/OSRuntime.cpp
-extern kern_return_t OSRuntimeFinalizeCPP(kmod_info_t *ki, void *data);
-
-// This global symbols will be defined by CreateInfo script's info.c file.
-extern kmod_stop_func_t *_antimain;
-
-__private_extern__ kern_return_t _stop(kmod_info_t *ki, void *data)
-{
-    kern_return_t result = KERN_SUCCESS;
-
-    if (_antimain) {
-        result = (*_antimain)(ki, data);
-    }
-    
-    if (result == KERN_SUCCESS) {
-        result = OSRuntimeFinalizeCPP(ki, data);
-    }
-    
-    return result;
-}
-#endif

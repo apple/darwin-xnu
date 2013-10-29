@@ -75,6 +75,8 @@ extern boolean_t PEWriteNVRAMProperty(const char *symbol, const void *value, con
 
 extern boolean_t PEReadNVRAMProperty(const char *symbol, void *value, unsigned int *len);
 
+extern boolean_t PERemoveNVRAMProperty(const char *symbol);
+
 #ifdef __cplusplus
 } /* extern "C" */
 

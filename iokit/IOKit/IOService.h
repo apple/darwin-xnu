@@ -32,10 +32,10 @@
  *
  */
 /*!
-	@header
-	This header contains the definition of the IOService class.  IOService is the sole direct subclass of IORegistryEntry and is the base class of almost all I/O Kit family superclasses.  IOService defines methods that support the life cycle of I/O Kit drivers.  For more information on IOService, see {@linkdoc //apple_ref/doc/uid/TP0000011 I/O Kit Fundamentals}.
+    @header
+    This header contains the definition of the IOService class.  IOService is the sole direct subclass of IORegistryEntry and is the base class of almost all I/O Kit family superclasses.  IOService defines methods that support the life cycle of I/O Kit drivers.  For more information on IOService, see {@linkdoc //apple_ref/doc/uid/TP0000011 I/O Kit Fundamentals}.
 
-	@seealso //apple_ref/doc/header/IORegistryEntry.h IORegistryEntry
+    @seealso //apple_ref/doc/header/IORegistryEntry.h IORegistryEntry
 */
 
 #ifndef _IOKIT_IOSERVICE_H
@@ -52,6 +52,7 @@
 
 #include <IOKit/pwr_mgt/IOPMpowerState.h>
 #include <IOKit/IOServicePM.h>
+#include <IOKit/IOReportTypes.h>
 
 extern "C" {
 #include <kern/thread_call.h>
@@ -61,36 +62,37 @@ extern "C" {
 #define UINT64_MAX        18446744073709551615ULL
 #endif
 
+
 enum {
-    kIODefaultProbeScore 	= 0
+    kIODefaultProbeScore    = 0
 };
 
 // masks for getState()
 enum {
-    kIOServiceInactiveState	= 0x00000001,
-    kIOServiceRegisteredState	= 0x00000002,
-    kIOServiceMatchedState	= 0x00000004,
-    kIOServiceFirstPublishState	= 0x00000008,
-    kIOServiceFirstMatchState	= 0x00000010
+    kIOServiceInactiveState = 0x00000001,
+    kIOServiceRegisteredState   = 0x00000002,
+    kIOServiceMatchedState  = 0x00000004,
+    kIOServiceFirstPublishState = 0x00000008,
+    kIOServiceFirstMatchState   = 0x00000010
 };
 
 enum {
     // options for registerService()
-    kIOServiceExclusive		= 0x00000001,
+    kIOServiceExclusive     = 0x00000001,
 
     // options for terminate()
-    kIOServiceRequired		= 0x00000001,
-    kIOServiceTerminate		= 0x00000004,
+    kIOServiceRequired      = 0x00000001,
+    kIOServiceTerminate     = 0x00000004,
 
     // options for registerService() & terminate()
-    kIOServiceSynchronous	= 0x00000002,
+    kIOServiceSynchronous   = 0x00000002,
     // options for registerService()
-    kIOServiceAsynchronous	= 0x00000008
+    kIOServiceAsynchronous  = 0x00000008
 };
 
 // options for open()
 enum {
-    kIOServiceSeize		= 0x00000001,
+    kIOServiceSeize     = 0x00000001,
     kIOServiceFamilyOpenOptions = 0xffff0000
 };
 
@@ -101,49 +103,49 @@ enum {
 
 typedef void * IONotificationRef;
 
-extern const IORegistryPlane *	gIOServicePlane;
+extern const IORegistryPlane *  gIOServicePlane;
 extern const IORegistryPlane *  gIOPowerPlane;
 
-extern const OSSymbol *		gIOResourcesKey;
-extern const OSSymbol *		gIOResourceMatchKey;
-extern const OSSymbol *		gIOProviderClassKey;
-extern const OSSymbol * 	gIONameMatchKey;
-extern const OSSymbol *		gIONameMatchedKey;
-extern const OSSymbol *		gIOPropertyMatchKey;
-extern const OSSymbol *		gIOLocationMatchKey;
-extern const OSSymbol *		gIOParentMatchKey;
-extern const OSSymbol *		gIOPathMatchKey;
-extern const OSSymbol *		gIOMatchCategoryKey;
-extern const OSSymbol *		gIODefaultMatchCategoryKey;
-extern const OSSymbol *		gIOMatchedServiceCountKey;
+extern const OSSymbol *     gIOResourcesKey;
+extern const OSSymbol *     gIOResourceMatchKey;
+extern const OSSymbol *     gIOProviderClassKey;
+extern const OSSymbol *     gIONameMatchKey;
+extern const OSSymbol *     gIONameMatchedKey;
+extern const OSSymbol *     gIOPropertyMatchKey;
+extern const OSSymbol *     gIOLocationMatchKey;
+extern const OSSymbol *     gIOParentMatchKey;
+extern const OSSymbol *     gIOPathMatchKey;
+extern const OSSymbol *     gIOMatchCategoryKey;
+extern const OSSymbol *     gIODefaultMatchCategoryKey;
+extern const OSSymbol *     gIOMatchedServiceCountKey;
 
-extern const OSSymbol *		gIOUserClientClassKey;
-extern const OSSymbol *		gIOKitDebugKey;
-extern const OSSymbol *		gIOServiceKey;
+extern const OSSymbol *     gIOUserClientClassKey;
+extern const OSSymbol *     gIOKitDebugKey;
+extern const OSSymbol *     gIOServiceKey;
 
-extern const OSSymbol *		gIOCommandPoolSizeKey;
+extern const OSSymbol *     gIOCommandPoolSizeKey;
 
-extern const OSSymbol *		gIOPublishNotification;
-extern const OSSymbol *		gIOFirstPublishNotification;
-extern const OSSymbol *		gIOMatchedNotification;
-extern const OSSymbol *		gIOFirstMatchNotification;
-extern const OSSymbol *		gIOTerminatedNotification;
+extern const OSSymbol *     gIOPublishNotification;
+extern const OSSymbol *     gIOFirstPublishNotification;
+extern const OSSymbol *     gIOMatchedNotification;
+extern const OSSymbol *     gIOFirstMatchNotification;
+extern const OSSymbol *     gIOTerminatedNotification;
 
-extern const OSSymbol *		gIOGeneralInterest;
-extern const OSSymbol *		gIOBusyInterest;
-extern const OSSymbol *		gIOOpenInterest;
-extern const OSSymbol *		gIOAppPowerStateInterest;
-extern const OSSymbol *		gIOPriorityPowerStateInterest;
-extern const OSSymbol *		gIOConsoleSecurityInterest;
+extern const OSSymbol *     gIOGeneralInterest;
+extern const OSSymbol *     gIOBusyInterest;
+extern const OSSymbol *     gIOOpenInterest;
+extern const OSSymbol *     gIOAppPowerStateInterest;
+extern const OSSymbol *     gIOPriorityPowerStateInterest;
+extern const OSSymbol *     gIOConsoleSecurityInterest;
 
-extern const OSSymbol *		gIODeviceMemoryKey;
-extern const OSSymbol *		gIOInterruptControllersKey;
-extern const OSSymbol *		gIOInterruptSpecifiersKey;
+extern const OSSymbol *     gIODeviceMemoryKey;
+extern const OSSymbol *     gIOInterruptControllersKey;
+extern const OSSymbol *     gIOInterruptSpecifiersKey;
 
 extern SInt32 IOServiceOrdering( const OSMetaClassBase * inObj1, const OSMetaClassBase * inObj2, void * ref );
 
 typedef void (*IOInterruptAction)( OSObject * target, void * refCon,
-				   IOService * nub, int source );
+                   IOService * nub, int source );
 
 /*! @typedef IOServiceNotificationHandler
     @param target Reference supplied when the notification was registered.
@@ -151,11 +153,11 @@ typedef void (*IOInterruptAction)( OSObject * target, void * refCon,
     @param newService The IOService object the notification is delivering. It is retained for the duration of the handler's invocation and doesn't need to be released by the handler. */
 
 typedef bool (*IOServiceNotificationHandler)( void * target, void * refCon,
-                  IOService * newService );
+                                  IOService * newService );
 
 typedef bool (*IOServiceMatchingNotificationHandler)( void * target, void * refCon,
-                  IOService * newService,
-				  IONotifier * notifier );
+                                  IOService * newService,
+                                  IONotifier * notifier );
 
 /*! @typedef IOServiceInterestHandler
     @param target Reference supplied when the notification was registered.
@@ -205,80 +207,80 @@ After the drivers have all synchronously been started, the installed "matched" n
 
 <br><br>Properties used by IOService<br><br>
 
-	<code>kIOClassKey, extern const OSSymbol * gIOClassKey, "IOClass"</code>
+    <code>kIOClassKey, extern const OSSymbol * gIOClassKey, "IOClass"</code>
 <br>
 <br>
 Class of the driver to instantiate on matching providers.
 <br>
 <br>
-	<code>kIOProviderClassKey, extern const OSSymbol * gIOProviderClassKey, "IOProviderClass"</code>
+    <code>kIOProviderClassKey, extern const OSSymbol * gIOProviderClassKey, "IOProviderClass"</code>
 <br>
 <br>
 Class of the provider(s) to be considered for matching, checked with OSDynamicCast so subclasses will also match.
 <br>
 <br>
-	<code>kIOProbeScoreKey, extern const OSSymbol * gIOProbeScoreKey, "IOProbeScore"</code>
+    <code>kIOProbeScoreKey, extern const OSSymbol * gIOProbeScoreKey, "IOProbeScore"</code>
 <br>
 <br>
 The probe score initially used to order multiple matching drivers.
 <br>
 <br>
-	<code>kIOMatchCategoryKey, extern const OSSymbol * gIOMatchCategoryKey, "IOMatchCategory"</code>
+    <code>kIOMatchCategoryKey, extern const OSSymbol * gIOMatchCategoryKey, "IOMatchCategory"</code>
 <br>
 <br>
 A string defining the driver category for matching purposes. All drivers with no <code>IOMatchCategory</code> property are considered to be in the same default category. Only one driver in a category can be started on each provider.
 <br>
 <br>
-	<code>kIONameMatchKey, extern const OSSymbol * gIONameMatchKey, "IONameMatch"</code>
+    <code>kIONameMatchKey, extern const OSSymbol * gIONameMatchKey, "IONameMatch"</code>
 <br>
 A string or collection of strings that match the provider's name. The comparison is implemented with the @link //apple_ref/cpp/instm/IORegistryEntry/compareNames/virtualbool/(OSObject*,OSString**) IORegistryEntry::compareNames@/link method, which supports a single string, or any collection (OSArray, OSSet, OSDictionary etc.) of strings. IOService objects with device tree properties (eg. IOPCIDevice) will also be matched based on that standard's "compatible", "name", "device_type" properties. The matching name will be left in the driver's property table in the <code>kIONameMatchedKey</code> property.
 <br>
 Examples
 <pre>
 @textblock
-	<key>IONameMatch</key>
-	<string>pci106b,7</string>
+    <key>IONameMatch</key>
+    <string>pci106b,7</string>
 @/textblock
 </pre>
 
 For a list of possible matching names, a serialized array of strings should used, eg.
 <pre>
 @textblock
-	<key>IONameMatch</key>
-	<array>
-		<string>APPL,happy16</string>
-		<string>pci106b,7</string>
-	</array>
+    <key>IONameMatch</key>
+    <array>
+        <string>APPL,happy16</string>
+        <string>pci106b,7</string>
+    </array>
 @/textblock
 </pre>
 
 <br>
-	<code>kIONameMatchedKey, extern const OSSymbol * gIONameMatchedKey, "IONameMatched"</code>
+    <code>kIONameMatchedKey, extern const OSSymbol * gIONameMatchedKey, "IONameMatched"</code>
 <br>
 The name successfully matched name from the <code>kIONameMatchKey</code> property will be left in the driver's property table as the <code>kIONameMatchedKey</code> property.
 <br>
 <br>
-	<code>kIOPropertyMatchKey, extern const OSSymbol * gIOPropertyMatchKey, "IOPropertyMatch"</code>
+    <code>kIOPropertyMatchKey, extern const OSSymbol * gIOPropertyMatchKey, "IOPropertyMatch"</code>
 <br>
 A dictionary of properties that each must exist in the matching IOService and compare successfully with the <code>isEqualTo</code> method.
 
 <pre>
 @textblock
-	<key>IOPropertyMatch</key>
-	<dictionary>
-		<key>APPL,happy16</key>
-		<string>APPL,meek8</string>
-	</dictionary>
+    <key>IOPropertyMatch</key>
+    <dictionary>
+        <key>APPL,happy16</key>
+        <string>APPL,meek8</string>
+    </dictionary>
 @/textblock
 </pre>
 
 <br>
-	<code>kIOUserClientClassKey, extern const OSSymbol * gIOUserClientClassKey, "IOUserClientClass"</code>
+    <code>kIOUserClientClassKey, extern const OSSymbol * gIOUserClientClassKey, "IOUserClientClass"</code>
 <br>
 The class name that the service will attempt to allocate when a user client connection is requested.  First the device nub is queried, then the nub's provider is queried by default.
 <br>
 <br>
-	<code>kIOKitDebugKey, extern const OSSymbol * gIOKitDebugKey, "IOKitDebug"</code>
+    <code>kIOKitDebugKey, extern const OSSymbol * gIOKitDebugKey, "IOKitDebug"</code>
 <br>
 Set some debug flags for logging the driver loading process. Flags are defined in <code>IOKit/IOKitDebug.h</code>, but <code>65535</code> works well.*/
 
@@ -297,17 +299,17 @@ protected:
     ExpansionData * reserved;
 
 private:
-    IOService *		__provider;
-    SInt32		__providerGeneration;
-    IOService *		__owner;
-    IOOptionBits	__state[2];
-    uint64_t		__timeBusy;
-    uint64_t		__accumBusy;
-    IOServicePM *	pwrMgt;
+    IOService *     __provider;
+    SInt32      __providerGeneration;
+    IOService *     __owner;
+    IOOptionBits    __state[2];
+    uint64_t        __timeBusy;
+    uint64_t        __accumBusy;
+    IOServicePM *   pwrMgt;
 
 protected:
     // TRUE once PMinit has been called
-    bool			initialized;
+    bool            initialized;
 
 public:
     // DEPRECATED
@@ -370,19 +372,50 @@ public:
 /*! @function copyClientWithCategory
     @availability Mac OS X v10.6 and later
     @param category An OSSymbol corresponding to an IOMatchCategory matching property.
-	@result Returns a reference to the IOService child with the given category. The result should be released by the caller.
+    @result Returns a reference to the IOService child with the given category. The result should be released by the caller.
 */
 
     virtual IOService * copyClientWithCategory( const OSSymbol * category );
 
+public:
+/*! @function       configureReport
+    @abstract       configure IOReporting channels
+    @availability   SPI on OS X v10.9 / iOS 7 and later
+
+    @param  channels    - channels to configure
+    @param  action      - enable/disable/size, etc
+    @param  result      - action-specific returned value
+    @param  destination - action-specific default destination
+*/
+virtual IOReturn configureReport(IOReportChannelList   *channels,
+                                 IOReportConfigureAction action,
+                                 void                  *result,
+                                 void                  *destination);
+
+/*! @function       updateReport
+    @abstract       request current data for the specified channels
+    @availability   SPI on OS X 10.9 / iOS 7 and later
+
+    @param channels     - channels to be updated
+    @param action       - type/style of update
+    @param result       - returned details about what was updated
+    @param destination  - destination for this update (action-specific)
+*/
+virtual IOReturn updateReport(IOReportChannelList      *channels,
+                              IOReportUpdateAction      action,
+                              void                     *result,
+                              void                     *destination);
+
 private:
 #if __LP64__
-    OSMetaClassDeclareReservedUnused(IOService, 0);
-    OSMetaClassDeclareReservedUnused(IOService, 1);
+    OSMetaClassDeclareReservedUsed(IOService, 0);
+    OSMetaClassDeclareReservedUsed(IOService, 1);
     OSMetaClassDeclareReservedUnused(IOService, 2);
     OSMetaClassDeclareReservedUnused(IOService, 3);
     OSMetaClassDeclareReservedUnused(IOService, 4);
     OSMetaClassDeclareReservedUnused(IOService, 5);
+    OSMetaClassDeclareReservedUnused(IOService, 6);
+    OSMetaClassDeclareReservedUnused(IOService, 7);
 #else
     OSMetaClassDeclareReservedUsed(IOService, 0);
     OSMetaClassDeclareReservedUsed(IOService, 1);
@@ -390,10 +423,10 @@ private:
     OSMetaClassDeclareReservedUsed(IOService, 3);
     OSMetaClassDeclareReservedUsed(IOService, 4);
     OSMetaClassDeclareReservedUsed(IOService, 5);
+    OSMetaClassDeclareReservedUsed(IOService, 6);
+    OSMetaClassDeclareReservedUsed(IOService, 7);
 #endif
 
-    OSMetaClassDeclareReservedUnused(IOService, 6);
-    OSMetaClassDeclareReservedUnused(IOService, 7);
     OSMetaClassDeclareReservedUnused(IOService, 8);
     OSMetaClassDeclareReservedUnused(IOService, 9);
     OSMetaClassDeclareReservedUnused(IOService, 10);
@@ -465,8 +498,8 @@ public:
     @param score Pointer to the current driver's probe score, which is used to order multiple matching drivers in the same match category. It defaults to the value of the <code>IOProbeScore</code> property in the drivers property table, or <code>kIODefaultProbeScore</code> if none is specified. The <code>probe</code> method may alter the score to affect start order.
     @result An IOService instance or zero when the probe is unsuccessful. In almost all cases the value of <code>this</code> is returned on success. If another IOService object is returned, the probed instance is detached and freed, and the returned instance is used in its stead for <code>start</code>. */
     
-    virtual IOService * probe(	IOService * 	provider,
-				SInt32 	  *	score );
+    virtual IOService * probe(  IOService *     provider,
+                                SInt32    *     score );
 
 /*! @function start
     @abstract During an IOService object's instantiation, starts the IOService object that has been selected to run on the provider.
@@ -490,9 +523,9 @@ public:
     @param options Options for the open. The provider family may implement options for open; IOService defines only <code>kIOServiceSeize</code> to request the device be withdrawn from its current owner.
     @result <code>true</code> if the open was successful; <code>false</code> otherwise. */
 
-    virtual bool open( 	 IOService *	   forClient,
-                         IOOptionBits	   options = 0,
-                         void *		   arg = 0 );
+    virtual bool open(   IOService *       forClient,
+                         IOOptionBits      options = 0,
+                         void *        arg = 0 );
 
 /*! @function close
     @abstract Releases active access to a provider.
@@ -501,8 +534,8 @@ public:
     @param options Options available for the close. The provider family may implement options for close; IOService defines none.
     @param arg Family specific arguments which are ignored by IOService. */
     
-    virtual void close(  IOService *	   forClient,
-                         IOOptionBits	   options = 0 );
+    virtual void close(  IOService *       forClient,
+                         IOOptionBits      options = 0 );
                          
 /*! @function isOpen
     @abstract Determines whether a specific, or any, client has an IOService object open.
@@ -519,9 +552,9 @@ public:
     @param options Options for the open, may be interpreted by the implementor of <code>handleOpen</code>.
     @result <code>true</code>if the open was successful; <code>false</code> otherwise. */
 
-    virtual bool handleOpen( 	IOService *	  forClient,
-                                IOOptionBits	  options,
-                                void *		  arg );
+    virtual bool handleOpen(    IOService *   forClient,
+                                IOOptionBits      options,
+                                void *        arg );
                                 
 /*! @function handleClose
     @abstract Controls the open / close behavior of an IOService object (overrideable by subclasses).
@@ -529,8 +562,8 @@ public:
     @param forClient Designates the client of the provider requesting the close.
     @param options Options for the close, may be interpreted by the implementor of @link handleOpen handleOpen@/link. */
 
-    virtual void handleClose(   IOService *	  forClient,
-                                IOOptionBits	  options );
+    virtual void handleClose(   IOService *       forClient,
+                                IOOptionBits      options );
                                 
 /*! @function handleIsOpen
     @abstract Controls the open / close behavior of an IOService object (overrideable by subclasses).
@@ -601,13 +634,13 @@ public:
     virtual void adjustBusy( SInt32 delta );
 
     APPLE_KEXT_COMPATIBILITY_VIRTUAL
-	IOReturn waitQuiet(mach_timespec_t * timeout)
-	APPLE_KEXT_DEPRECATED;
+        IOReturn waitQuiet(mach_timespec_t * timeout)
+    APPLE_KEXT_DEPRECATED;
 
 /*! @function waitQuiet
     @abstract Waits for an IOService object's <code>busyState</code> to be zero.
     @discussion Blocks the caller until an IOService object is non busy.
-	@param timeout The maximum time to wait in nanoseconds. Default is to wait forever.
+    @param timeout The maximum time to wait in nanoseconds. Default is to wait forever.
     @result Returns an error code if Mach synchronization primitives fail, <code>kIOReturnTimeout</code>, or <code>kIOReturnSuccess</code>. */
     
     IOReturn waitQuiet(uint64_t timeout = UINT64_MAX);
@@ -621,8 +654,8 @@ public:
     @param score Pointer to the current driver's probe score, which is used to order multiple matching drivers in the same match category. It defaults to the value of the <code>IOProbeScore</code> property in the drivers property table, or <code>kIODefaultProbeScore</code> if none is specified.
     @result <code>false</code> if the family considers the matching dictionary does not match in properties it understands; <code>true</code> otherwise. */
 
-    virtual bool matchPropertyTable( OSDictionary *	table,
-                                     SInt32       *	score );
+    virtual bool matchPropertyTable( OSDictionary * table,
+                                     SInt32       * score );
 
     virtual bool matchPropertyTable( OSDictionary * table );
 
@@ -659,11 +692,11 @@ public:
     @abstract Deprecated use addMatchingNotification(). Adds a persistant notification handler to be notified of IOService events.
     @discussion IOService will deliver notifications of changes in state of an IOService object to registered clients. The type of notification is specified by a symbol, for example <code>gIOMatchedNotification</code> or <code>gIOTerminatedNotification</code>, and notifications will only include IOService objects that match the supplied matching dictionary. Notifications are ordered by a priority set with <code>addNotification</code>. When the notification is installed, its handler will be called with each of any currently existing IOService objects that are in the correct state (eg. registered) and match the supplied matching dictionary, avoiding races between finding preexisting and new IOService events. The notification request is identified by an instance of an IONotifier object, through which it can be enabled, disabled, or removed. <code>addNotification</code> consumes a retain count on the matching dictionary when the notification is removed.
     @param type An OSSymbol identifying the type of notification and IOService state:
-<br>	<code>gIOPublishNotification</code> Delivered when an IOService object is registered.
-<br>	<code>gIOFirstPublishNotification</code> Delivered when an IOService object is registered, but only once per IOService instance. Some IOService objects may be reregistered when their state is changed.
-<br>	<code>gIOMatchedNotification</code> Delivered when an IOService object has been matched with all client drivers, and they have been probed and started.
-<br>	<code>gIOFirstMatchNotification</code> Delivered when an IOService object has been matched with all client drivers, but only once per IOService instance. Some IOService objects may be reregistered when their state is changed.
-<br>	<code>gIOTerminatedNotification</code> Delivered after an IOService object has been terminated, during its finalize stage.
+<br>    <code>gIOPublishNotification</code> Delivered when an IOService object is registered.
+<br>    <code>gIOFirstPublishNotification</code> Delivered when an IOService object is registered, but only once per IOService instance. Some IOService objects may be reregistered when their state is changed.
+<br>    <code>gIOMatchedNotification</code> Delivered when an IOService object has been matched with all client drivers, and they have been probed and started.
+<br>    <code>gIOFirstMatchNotification</code> Delivered when an IOService object has been matched with all client drivers, but only once per IOService instance. Some IOService objects may be reregistered when their state is changed.
+<br>    <code>gIOTerminatedNotification</code> Delivered after an IOService object has been terminated, during its finalize stage.
     @param matching A matching dictionary to restrict notifications to only matching IOService objects. The dictionary will be released when the notification is removed, consuming the passed-in reference.
     @param handler A C function callback to deliver notifications.
     @param target An instance reference for the callback's use.
@@ -676,17 +709,17 @@ public:
                             IOServiceNotificationHandler handler,
                             void * target, void * ref = 0,
                             SInt32 priority = 0 )
-	APPLE_KEXT_DEPRECATED;
+    APPLE_KEXT_DEPRECATED;
 
 /*! @function addMatchingNotification
     @abstract Adds a persistant notification handler to be notified of IOService events.
     @discussion IOService will deliver notifications of changes in state of an IOService object to registered clients. The type of notification is specified by a symbol, for example <code>gIOMatchedNotification</code> or <code>gIOTerminatedNotification</code>, and notifications will only include IOService objects that match the supplied matching dictionary. Notifications are ordered by a priority set with <code>addNotification</code>. When the notification is installed, its handler will be called with each of any currently existing IOService objects that are in the correct state (eg. registered) and match the supplied matching dictionary, avoiding races between finding preexisting and new IOService events. The notification request is identified by an instance of an IONotifier object, through which it can be enabled, disabled, or removed. <code>addMatchingNotification</code> does not consume a reference on the matching dictionary when the notification is removed, unlike addNotification.
     @param type An OSSymbol identifying the type of notification and IOService state:
-<br>	<code>gIOPublishNotification</code> Delivered when an IOService object is registered.
-<br>	<code>gIOFirstPublishNotification</code> Delivered when an IOService object is registered, but only once per IOService instance. Some IOService objects may be reregistered when their state is changed.
-<br>	<code>gIOMatchedNotification</code> Delivered when an IOService object has been matched with all client drivers, and they have been probed and started.
-<br>	<code>gIOFirstMatchNotification</code> Delivered when an IOService object has been matched with all client drivers, but only once per IOService instance. Some IOService objects may be reregistered when their state is changed.
-<br>	<code>gIOTerminatedNotification</code> Delivered after an IOService object has been terminated, during its finalize stage.
+<br>    <code>gIOPublishNotification</code> Delivered when an IOService object is registered.
+<br>    <code>gIOFirstPublishNotification</code> Delivered when an IOService object is registered, but only once per IOService instance. Some IOService objects may be reregistered when their state is changed.
+<br>    <code>gIOMatchedNotification</code> Delivered when an IOService object has been matched with all client drivers, and they have been probed and started.
+<br>    <code>gIOFirstMatchNotification</code> Delivered when an IOService object has been matched with all client drivers, but only once per IOService instance. Some IOService objects may be reregistered when their state is changed.
+<br>    <code>gIOTerminatedNotification</code> Delivered after an IOService object has been terminated, during its finalize stage.
     @param matching A matching dictionary to restrict notifications to only matching IOService objects. The dictionary is retained while the notification is installed. (Differs from addNotification).
     @param handler A C function callback to deliver notifications.
     @param target An instance reference for the callback's use.
@@ -714,7 +747,7 @@ public:
     @abstract Waits for a matching to service to be published.
     @discussion Provides a method of waiting for an IOService object matching the supplied matching dictionary to be registered and fully matched. 
     @param matching The matching dictionary describing the desired IOService object. (Does not consume a reference of the matching dictionary - differs from waitForService() which does consume a reference on the matching dictionary.)
-	@param timeout The maximum time to wait in nanoseconds. Default is to wait forever.
+    @param timeout The maximum time to wait in nanoseconds. Default is to wait forever.
     @result A published IOService object matching the supplied dictionary. waitForMatchingService returns a reference to the IOService which should be released by the caller. (Differs from waitForService() which does not retain the returned object.) */
 
     static IOService * waitForMatchingService( OSDictionary * matching,
@@ -748,7 +781,7 @@ public:
     @result The matching dictionary created, or passed in, is returned on success, or zero on failure. */
 
     static OSDictionary * serviceMatching( const char * className,
-			OSDictionary * table = 0 );
+                                           OSDictionary * table = 0 );
 
 /*! @function serviceMatching
     @abstract Creates a matching dictionary, or adds matching properties to an existing dictionary, that specify an IOService class match.
@@ -758,7 +791,7 @@ public:
     @result The matching dictionary created, or passed in, is returned on success, or zero on failure. */
 
     static OSDictionary * serviceMatching( const OSString * className,
-			OSDictionary * table = 0 );
+                                           OSDictionary * table = 0 );
 
 /*! @function nameMatching
     @abstract Creates a matching dictionary, or adds matching properties to an existing dictionary, that specify an IOService name match.
@@ -768,7 +801,7 @@ public:
     @result The matching dictionary created, or passed in, is returned on success, or zero on failure. */
 
     static OSDictionary * nameMatching( const char * name,
-			OSDictionary * table = 0 );
+                                        OSDictionary * table = 0 );
 
 /*! @function nameMatching
     @abstract Creates a matching dictionary, or adds matching properties to an existing dictionary, that specify an IOService name match.
@@ -778,7 +811,7 @@ public:
     @result The matching dictionary created, or passed in, is returned on success, or zero on failure. */
 
     static OSDictionary * nameMatching( const OSString* name,
-			OSDictionary * table = 0 );
+                                        OSDictionary * table = 0 );
 
 /*! @function resourceMatching
     @abstract Creates a matching dictionary, or adds matching properties to an existing dictionary, that specify a resource service match.
@@ -788,7 +821,7 @@ public:
     @result The matching dictionary created, or passed in, is returned on success, or zero on failure. */
 
     static OSDictionary * resourceMatching( const char * name,
-			OSDictionary * table = 0 );
+                                            OSDictionary * table = 0 );
 
 /*! @function resourceMatching
     @abstract Creates a matching dictionary, or adds matching properties to an existing dictionary, that specify a resource service match.
@@ -798,7 +831,7 @@ public:
     @result The matching dictionary created, or passed in, is returned on success, or zero on failure. */
 
     static OSDictionary * resourceMatching( const OSString * name,
-			OSDictionary * table = 0 );
+                                            OSDictionary * table = 0 );
 
 
 /*! @function propertyMatching
@@ -810,7 +843,7 @@ public:
     @result The matching dictionary created, or passed in, is returned on success, or zero on failure. */
 
     static OSDictionary * propertyMatching( const OSSymbol * key, const OSObject * value,
-			OSDictionary * table = 0 );
+                                            OSDictionary * table = 0 );
 
 /*! @function registryEntryIDMatching
     @abstract Creates a matching dictionary, or adds matching properties to an existing dictionary, that specify a IORegistryEntryID match.
@@ -820,7 +853,7 @@ public:
     @result The matching dictionary created, or passed in, is returned on success, or zero on failure. */
 
     static OSDictionary * registryEntryIDMatching( uint64_t entryID,
-			OSDictionary * table = 0 );
+                                                   OSDictionary * table = 0 );
 
 
 /*! @function addLocation
@@ -936,14 +969,14 @@ public:
     @result An IOReturn code; <code>kIOReturnSuccess</code> if the function was successfully executed, <code>kIOReturnUnsupported</code> if a service to execute the function could not be found. Other return codes may be returned by the function.*/
 
     virtual IOReturn callPlatformFunction( const OSSymbol * functionName,
-					   bool waitForFunction,
-					   void *param1, void *param2,
-					   void *param3, void *param4 );
+                                           bool waitForFunction,
+                                           void *param1, void *param2,
+                                           void *param3, void *param4 );
 
     virtual IOReturn callPlatformFunction( const char * functionName,
-					   bool waitForFunction,
-					   void *param1, void *param2,
-					   void *param3, void *param4 );
+                                           bool waitForFunction,
+                                           void *param1, void *param2,
+                                           void *param3, void *param4 );
 
 
     /* Some accessors */
@@ -951,7 +984,7 @@ public:
 /*! @function getPlatform
     @abstract Returns a pointer to the platform expert instance for the computer.
     @discussion This method provides an accessor to the platform expert instance for the computer. 
-    @result A pointer to the IOPlatformExport instance. It should not be released by the caller. */
+    @result A pointer to the IOPlatformExpert instance. It should not be released by the caller. */
 
     static IOPlatformExpert * getPlatform( void );
 
@@ -1009,7 +1042,7 @@ public:
     @result An instance of IOMemoryMap, or zero if the index is beyond the count available. The mapping should be released only when access to it is no longer required. */
 
     virtual IOMemoryMap * mapDeviceMemoryWithIndex( unsigned int index,
-						IOOptionBits options = 0 );
+                                                    IOOptionBits options = 0 );
 
 /*! @function getDeviceMemory
     @abstract Returns the array of IODeviceMemory objects representing a device's memory mapped ranges.
@@ -1037,8 +1070,8 @@ public:
     @result An IOReturn code.<br><code>kIOReturnNoInterrupt</code> is returned if the source is not valid; <code>kIOReturnNoResources</code> is returned if the interrupt already has an installed handler. */
 
     virtual IOReturn registerInterrupt(int source, OSObject *target,
-				       IOInterruptAction handler,
-				       void *refCon = 0);
+                                       IOInterruptAction handler,
+                                       void *refCon = 0);
                                        
 /*! @function unregisterInterrupt
     @abstract Removes a C function interrupt handler for a device supplying hardware interrupts.
@@ -1204,7 +1237,7 @@ public:
 
 #ifdef XNU_KERNEL_PRIVATE
 public:
-	// called from other xnu components
+    // called from other xnu components
     static void initialize( void );
     static void setPlatform( IOPlatformExpert * platform);
     static void setPMRootDomain( class IOPMrootDomain * rootDomain );
@@ -1212,39 +1245,40 @@ public:
     uint64_t getAccumulatedBusyTime( void );
     static void updateConsoleUsers(OSArray * consoleUsers, IOMessage systemMessage);
     static void consoleLockTimer(thread_call_param_t p0, thread_call_param_t p1);
+    void setTerminateDefer(IOService * provider, bool defer);
 
 private:
     static IOReturn waitMatchIdle( UInt32 ms );
     static IONotifier * installNotification(
-			const OSSymbol * type, OSDictionary * matching,
-			IOServiceMatchingNotificationHandler handler,
-			void * target, void * ref,
-			SInt32 priority, OSIterator ** existing );
+                            const OSSymbol * type, OSDictionary * matching,
+                            IOServiceMatchingNotificationHandler handler,
+                            void * target, void * ref,
+                            SInt32 priority, OSIterator ** existing );
 #if !defined(__LP64__)
     static IONotifier * installNotification(
-			const OSSymbol * type, OSDictionary * matching,
-			IOServiceNotificationHandler handler,
-			void * target, void * ref,
-			SInt32 priority, OSIterator ** existing);
+                            const OSSymbol * type, OSDictionary * matching,
+                            IOServiceNotificationHandler handler,
+                            void * target, void * ref,
+                            SInt32 priority, OSIterator ** existing);
 #endif /* !defined(__LP64__) */
 #endif
 
 private:
     APPLE_KEXT_COMPATIBILITY_VIRTUAL
-	bool checkResources( void );
+        bool checkResources( void );
     APPLE_KEXT_COMPATIBILITY_VIRTUAL
-    bool checkResource( OSObject * matching );
+        bool checkResource( OSObject * matching );
 
     APPLE_KEXT_COMPATIBILITY_VIRTUAL
-    void probeCandidates( OSOrderedSet * matches );
+        void probeCandidates( OSOrderedSet * matches );
     APPLE_KEXT_COMPATIBILITY_VIRTUAL
-    bool startCandidate( IOService * candidate );
+        bool startCandidate( IOService * candidate );
 
 public:
     APPLE_KEXT_COMPATIBILITY_VIRTUAL
-    IOService * getClientWithCategory( const OSSymbol * category )
-	APPLE_KEXT_DEPRECATED;
-	// copyClientWithCategory is the public replacement
+        IOService * getClientWithCategory( const OSSymbol * category )
+    APPLE_KEXT_DEPRECATED;
+        // copyClientWithCategory is the public replacement
 
 #ifdef XNU_KERNEL_PRIVATE
     /* Callable within xnu source only - but require vtable entries to be visible */
@@ -1268,35 +1302,35 @@ private:
     static bool instanceMatch(const OSObject * entry, void * context);
 
     static OSObject * copyExistingServices( OSDictionary * matching,
-		 IOOptionBits inState, IOOptionBits options = 0 );
+                                            IOOptionBits inState, IOOptionBits options = 0 );
 
     static IONotifier * setNotification(
-			const OSSymbol * type, OSDictionary * matching,
-                    	IOServiceMatchingNotificationHandler handler,
-                        void * target, void * ref,
-                        SInt32 priority = 0 );
+                            const OSSymbol * type, OSDictionary * matching,
+                            IOServiceMatchingNotificationHandler handler,
+                            void * target, void * ref,
+                            SInt32 priority = 0 );
 
     static IONotifier * doInstallNotification(
-			const OSSymbol * type, OSDictionary * matching,
-			IOServiceMatchingNotificationHandler handler,
-			void * target, void * ref,
-			SInt32 priority, OSIterator ** existing );
+                            const OSSymbol * type, OSDictionary * matching,
+                            IOServiceMatchingNotificationHandler handler,
+                            void * target, void * ref,
+                            SInt32 priority, OSIterator ** existing );
 
     static bool syncNotificationHandler( void * target, void * ref,
-			IOService * newService, IONotifier * notifier  );
+                            IOService * newService, IONotifier * notifier  );
 
     APPLE_KEXT_COMPATIBILITY_VIRTUAL
-	void deliverNotification( const OSSymbol * type,
-                            IOOptionBits orNewState, IOOptionBits andNewState );
+    void deliverNotification( const OSSymbol * type,
+                              IOOptionBits orNewState, IOOptionBits andNewState );
 
     bool invokeNotifer( class _IOServiceNotifier * notify );
 
-	APPLE_KEXT_COMPATIBILITY_VIRTUAL
-	void unregisterAllInterest( void );
+    APPLE_KEXT_COMPATIBILITY_VIRTUAL
+        void unregisterAllInterest( void );
 
-	APPLE_KEXT_COMPATIBILITY_VIRTUAL
-    IOReturn waitForState( UInt32 mask, UInt32 value,
-				 mach_timespec_t * timeout = 0 );
+    APPLE_KEXT_COMPATIBILITY_VIRTUAL
+        IOReturn waitForState( UInt32 mask, UInt32 value,
+                               mach_timespec_t * timeout = 0 );
 
     IOReturn waitForState( UInt32 mask, UInt32 value, uint64_t timeout );
 
@@ -1317,10 +1351,10 @@ private:
     static void actionStop( IOService * client, IOService * provider,
                             void *, void *, void *);
 
-	APPLE_KEXT_COMPATIBILITY_VIRTUAL
-    IOReturn resolveInterrupt(IOService *nub, int source);
-	APPLE_KEXT_COMPATIBILITY_VIRTUAL
-    IOReturn lookupInterrupt(int source, bool resolve, IOInterruptController **interruptController);
+    APPLE_KEXT_COMPATIBILITY_VIRTUAL
+        IOReturn resolveInterrupt(IOService *nub, int source);
+    APPLE_KEXT_COMPATIBILITY_VIRTUAL
+        IOReturn lookupInterrupt(int source, bool resolve, IOInterruptController **interruptController);
 
 #ifdef XNU_KERNEL_PRIVATE
     /* end xnu internals */
@@ -1435,7 +1469,7 @@ public:
 /*! @function changePowerStateTo
     @abstract Sets a driver's power state.
     @discussion This function is one of several that are used to set a driver's power state. In most circumstances, however, you should call @link changePowerStateToPriv changePowerStateToPriv@/link instead.
-	Calls to <code>changePowerStateTo</code>, <code>changePowerStateToPriv</code>, and a driver's power children all affect the power state of a driver. For legacy design reasons, they have overlapping functionality. Although you should call <code>changePowerStateToPriv</code> to change your device's power state, you might need to call <code>changePowerStateTo</code> in the following circumstances:
+    Calls to <code>changePowerStateTo</code>, <code>changePowerStateToPriv</code>, and a driver's power children all affect the power state of a driver. For legacy design reasons, they have overlapping functionality. Although you should call <code>changePowerStateToPriv</code> to change your device's power state, you might need to call <code>changePowerStateTo</code> in the following circumstances:
     <ul><li>If a driver will be using <code>changePowerStateToPriv</code> to change its power state, it should call <code>changePowerStateTo(0)</code> in its <code>start</code> routine to eliminate the influence <code>changePowerStateTo</code> has on power state calculations.
     <li>Call <code>changePowerStateTo</code> in conjunction with @link setIdleTimerPeriod setIdleTimerPeriod@/link and @link activityTickle activityTickle@/link to idle a driver into a low power state. For a driver with 3 power states, for example, <code>changePowerStateTo(1)</code> sets a minimum level of power state 1, such that the idle timer period may not set your device's power any lower than state 1.</ul>
     @param ordinal The number of the desired power state in the power state array. 
@@ -1645,7 +1679,7 @@ public:
     @discussion Power management informs interested parties that a device is about to change to a different power state. Interested parties are those that have registered for this notification via @link registerInterestedDriver registerInterestedDriver@/link. If you have called <code>registerInterestedDriver</code> on a power managed driver, you must implement <code>powerStateWillChangeTo</code> and @link powerStateDidChangeTo powerStateDidChangeTo@/link to receive the notifications.
     <code>powerStateWillChangeTo</code> is called in a clean and separate thread context. <code>powerStateWillChangeTo</code> is called before a power state transition takes place; <code>powerStateDidChangeTo</code> is called after the transition has completed.
     @param capabilities Flags that describe the capability of the device in the new power state (they come from the <code>capabilityFlags</code> field of the new state in the power state array).
-	@param stateNumber The number of the state in the state array that the device is switching to.
+    @param stateNumber The number of the state in the state array that the device is switching to.
     @param whatDevice A pointer to the driver that is changing. It can be used by a driver that is receiving power state change notifications for multiple devices to distinguish between them.
     @result The driver returns <code>IOPMAckImplied</code> if it has prepared for the power change when it returns. If it has started preparing but not finished, it should return a number of microseconds which is an upper limit of the time it will need to finish preparing. Then, when it has completed its preparations, it should call @link acknowledgePowerChange acknowledgePowerChange@/link. */
 
@@ -1659,7 +1693,7 @@ public:
     @discussion Power management informs interested parties that a device has changed to a different power state. Interested parties are those that have registered for this notification via @link registerInterestedDriver registerInterestedDriver@/link. If you have called <code>registerInterestedDriver</code> on a power managed driver, you must implemnt @link powerStateWillChangeTo powerStateWillChangeTo@/link and <code>powerStateDidChangeTo</code> to receive the notifications.
     <code>powerStateDidChangeTo</code> is called in a clean and separate thread context. <code>powerStateWillChangeTo</code> is called before a power state transition takes place; <code>powerStateDidChangeTo</code> is called after the transition has completed.
     @param capabilities Flags that describe the capability of the device in the new power state (they come from the <code>capabilityFlags</code> field of the new state in the power state array).
-	@param stateNumber The number of the state in the state array that the device is switching to.
+    @param stateNumber The number of the state in the state array that the device is switching to.
     @param whatDevice A pointer to the driver that is changing. It can be used by a driver that is receiving power state change notifications for multiple devices to distinguish between them.
     @result The driver returns <code>IOPMAckImplied</code> if it has prepared for the power change when it returns. If it has started preparing but not finished, it should return a number of microseconds which is an upper limit of the time it will need to finish preparing. Then, when it has completed its preparations, it should call @link acknowledgePowerChange acknowledgePowerChange@/link. */
 
@@ -1732,10 +1766,15 @@ public:
     IOReturn synchronizePowerTree( IOOptionBits options = 0, IOService * notifyRoot = 0 );
     bool assertPMDriverCall( IOPMDriverCallEntry * callEntry, IOOptionBits options = 0, IOPMinformee * inform = 0 );
     void deassertPMDriverCall( IOPMDriverCallEntry * callEntry );
-    IOReturn changePowerStateWithOverrideTo( unsigned long ordinal );
-    static const char * getIOMessageString( uint32_t msg );
+    IOReturn changePowerStateWithOverrideTo( IOPMPowerStateIndex ordinal, IOPMRequestTag tag );
+    IOReturn changePowerStateForRootDomain( IOPMPowerStateIndex ordinal );
     IOReturn setIgnoreIdleTimer( bool ignore );
+    uint32_t getPowerStateForClient( const OSSymbol * client );
+    static const char * getIOMessageString( uint32_t msg );
     static void setAdvisoryTickleEnable( bool enable );
+    void reset_watchdog_timer( void );
+    void start_watchdog_timer ( void );
+    bool stop_watchdog_timer ( void );
 
 #ifdef __LP64__
     static IOWorkLoop * getPMworkloop( void );
@@ -1758,14 +1797,16 @@ private:
     bool tellChangeDown1 ( unsigned long );
     bool tellChangeDown2 ( unsigned long );
     IOReturn startPowerChange( IOPMPowerChangeFlags, IOPMPowerStateIndex, IOPMPowerFlags, IOPowerConnection *, IOPMPowerFlags );
-	void setParentInfo ( IOPMPowerFlags, IOPowerConnection *, bool );
+    void setParentInfo ( IOPMPowerFlags, IOPowerConnection *, bool );
     IOReturn notifyAll ( uint32_t nextMS );
     bool notifyChild ( IOPowerConnection * child );
+    IOPMPowerStateIndex getPowerStateForDomainFlags( IOPMPowerFlags flags );
 
     // power change initiated by driver
-	void OurChangeStart( void );
+    void OurChangeStart( void );
     void OurSyncStart ( void );
     void OurChangeTellClientsPowerDown ( void );
+    void OurChangeTellUserPMPolicyPowerDown ( void );
     void OurChangeTellPriorityClientsPowerDown ( void );
     void OurChangeTellCapabilityWillChange ( void );
     void OurChangeNotifyInterestedDriversWillChange ( void );
@@ -1776,7 +1817,7 @@ private:
     void OurChangeFinish ( void );
 
     // downward power change initiated by a power parent
-	IOReturn ParentChangeStart( void );
+    IOReturn ParentChangeStart( void );
     void ParentChangeTellPriorityClientsPowerDown ( void );
     void ParentChangeTellCapabilityWillChange ( void );
     void ParentChangeNotifyInterestedDriversWillChange ( void );
@@ -1790,6 +1831,7 @@ private:
     void all_done ( void );
     void start_ack_timer ( void );
     void stop_ack_timer ( void );
+    void start_ack_timer( UInt32 value, UInt32 scale );
     void startSettleTimer( void );
     bool checkForDone ( void );
     bool responseValid ( uint32_t x, int pid );
@@ -1798,56 +1840,63 @@ private:
     void tellSystemCapabilityChange( uint32_t nextMS );
     void restartIdleTimer( void );
 
-	static void ack_timer_expired( thread_call_param_t, thread_call_param_t );
-	static IOReturn actionAckTimerExpired(OSObject *, void *, void *, void *, void * );
- 	static IOReturn actionDriverCalloutDone(OSObject *, void *, void *, void *, void * );
-	static IOPMRequest * acquirePMRequest( IOService * target, IOOptionBits type, IOPMRequest * active = 0 );
-	static void releasePMRequest( IOPMRequest * request );
-	static void pmDriverCallout( IOService * from );
-	static void pmTellAppWithResponse( OSObject * object, void * context );
-	static void pmTellClientWithResponse( OSObject * object, void * context );
+    static void ack_timer_expired( thread_call_param_t, thread_call_param_t );
+    static void watchdog_timer_expired ( thread_call_param_t arg0, thread_call_param_t arg1 );
+    static IOReturn actionAckTimerExpired(OSObject *, void *, void *, void *, void * );
+    static IOReturn watchdog_timer_expired ( OSObject *, void *, void *, void *, void * );
+
+    static IOReturn actionDriverCalloutDone(OSObject *, void *, void *, void *, void * );
+    static IOPMRequest * acquirePMRequest( IOService * target, IOOptionBits type, IOPMRequest * active = 0 );
+    static void releasePMRequest( IOPMRequest * request );
+    static void pmDriverCallout( IOService * from );
+    static void pmTellAppWithResponse( OSObject * object, void * context );
+    static void pmTellClientWithResponse( OSObject * object, void * context );
     static void pmTellCapabilityAppWithResponse ( OSObject * object, void * arg );
     static void pmTellCapabilityClientWithResponse( OSObject * object, void * arg );
-	bool ackTimerTick( void );
-	void addPowerChild1( IOPMRequest * request );
-	void addPowerChild2( IOPMRequest * request );
-	void addPowerChild3( IOPMRequest * request );
-	void adjustPowerState( uint32_t clamp = 0 );
-	void start_ack_timer( UInt32 value, UInt32 scale );
-	void handlePMstop( IOPMRequest * request );
-	void handleRegisterPowerDriver( IOPMRequest * request );
-	bool handleAcknowledgePowerChange( IOPMRequest * request );
-	void handlePowerDomainWillChangeTo( IOPMRequest * request );
-	void handlePowerDomainDidChangeTo( IOPMRequest * request );
-	void handleRequestPowerState( IOPMRequest * request );
-	void handlePowerOverrideChanged( IOPMRequest * request );
-	void handleActivityTickle( IOPMRequest * request );
-	void handleInterestChanged( IOPMRequest * request );
+    bool ackTimerTick( void );
+    void addPowerChild1( IOPMRequest * request );
+    void addPowerChild2( IOPMRequest * request );
+    void addPowerChild3( IOPMRequest * request );
+    void adjustPowerState( uint32_t clamp = 0 );
+    void handlePMstop( IOPMRequest * request );
+    void handleRegisterPowerDriver( IOPMRequest * request );
+    bool handleAcknowledgePowerChange( IOPMRequest * request );
+    void handlePowerDomainWillChangeTo( IOPMRequest * request );
+    void handlePowerDomainDidChangeTo( IOPMRequest * request );
+    void handleRequestPowerState( IOPMRequest * request );
+    void handlePowerOverrideChanged( IOPMRequest * request );
+    void handleActivityTickle( IOPMRequest * request );
+    void handleInterestChanged( IOPMRequest * request );
     void handleSynchronizePowerTree( IOPMRequest * request );
-	void submitPMRequest( IOPMRequest * request );
-	void submitPMRequest( IOPMRequest ** request, IOItemCount count );
-	void executePMRequest( IOPMRequest * request );
-	bool servicePMRequest( IOPMRequest * request, IOPMWorkQueue * queue  );
-	bool retirePMRequest(  IOPMRequest * request, IOPMWorkQueue * queue );
-	bool servicePMRequestQueue( IOPMRequest * request, IOPMRequestQueue * queue );
-	bool servicePMReplyQueue( IOPMRequest * request, IOPMRequestQueue * queue );
-	bool servicePMFreeQueue( IOPMRequest * request, IOPMCompletionQueue * queue );
-	bool notifyInterestedDrivers( void );
-	void notifyInterestedDriversDone( void );
-	bool notifyControllingDriver( void );
-	void notifyControllingDriverDone( void );
-	void driverSetPowerState( void );
-	void driverInformPowerChange( void );
-	bool isPMBlocked( IOPMRequest * request, int count );
-	void notifyChildren( void );
-	void notifyChildrenOrdered( void );
-	void notifyChildrenDelayed( void );
+    void submitPMRequest( IOPMRequest * request );
+    void submitPMRequest( IOPMRequest ** request, IOItemCount count );
+    void executePMRequest( IOPMRequest * request );
+    bool servicePMRequest( IOPMRequest * request, IOPMWorkQueue * queue  );
+    bool retirePMRequest(  IOPMRequest * request, IOPMWorkQueue * queue );
+    bool servicePMRequestQueue( IOPMRequest * request, IOPMRequestQueue * queue );
+    bool servicePMReplyQueue( IOPMRequest * request, IOPMRequestQueue * queue );
+    bool servicePMFreeQueue( IOPMRequest * request, IOPMCompletionQueue * queue );
+    bool notifyInterestedDrivers( void );
+    void notifyInterestedDriversDone( void );
+    bool notifyControllingDriver( void );
+    void notifyControllingDriverDone( void );
+    void driverSetPowerState( void );
+    void driverInformPowerChange( void );
+    bool isPMBlocked( IOPMRequest * request, int count );
+    void notifyChildren( void );
+    void notifyChildrenOrdered( void );
+    void notifyChildrenDelayed( void );
+    void notifyRootDomain( void );
+    void notifyRootDomainDone( void );
     void cleanClientResponses ( bool logErrors );
-	void updatePowerClient( const OSSymbol * client, uint32_t powerState );
-	void removePowerClient( const OSSymbol * client );
-	uint32_t getPowerStateForClient( const OSSymbol * client );
+    void updatePowerClient( const OSSymbol * client, uint32_t powerState );
+    void removePowerClient( const OSSymbol * client );
     IOReturn requestPowerState( const OSSymbol * client, uint32_t state );
     IOReturn requestDomainPower( IOPMPowerStateIndex ourPowerState, IOOptionBits options = 0 );
+    IOReturn configurePowerStatesReport( IOReportConfigureAction action, void *result );
+    IOReturn updatePowerStatesReport( IOReportConfigureAction action, void *result, void *destination );
+    IOReturn configureSimplePowerReport(IOReportConfigureAction action, void *result );
+    IOReturn updateSimplePowerReport( IOReportConfigureAction action, void *result, void *destination );
     void waitForPMDriverCall( IOService * target = 0 );
 #endif /* XNU_KERNEL_PRIVATE */
 };

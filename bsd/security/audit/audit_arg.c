@@ -1,5 +1,5 @@
 /*-
- * Copyright (c) 1999-2009 Apple Inc.
+ * Copyright (c) 1999-2012 Apple Inc.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -594,7 +594,7 @@ audit_arg_file(struct kaudit_record *ar, __unused proc_t p,
 	struct sockaddr_in *sin;
 	struct sockaddr_in6 *sin6;
 
-	switch (fp->f_fglob->fg_type) {
+	switch (FILEGLOB_DTYPE(fp->f_fglob)) {
 	case DTYPE_VNODE:
 	/* case DTYPE_FIFO: */
 		audit_arg_vnpath_withref(ar,
@@ -603,15 +603,13 @@ audit_arg_file(struct kaudit_record *ar, __unused proc_t p,
 
 	case DTYPE_SOCKET:
 		so = (struct socket *)fp->f_fglob->fg_data;
-		if (INP_CHECK_SOCKAF(so, PF_INET)) {
+		if (SOCK_CHECK_DOM(so, PF_INET)) {
 			if (so->so_pcb == NULL)
 				break;
 			ar->k_ar.ar_arg_sockinfo.sai_type =
 			    so->so_type;
-			ar->k_ar.ar_arg_sockinfo.sai_domain =
-			    INP_SOCKAF(so);
-			ar->k_ar.ar_arg_sockinfo.sai_protocol =
-			    so->so_proto->pr_protocol;
+			ar->k_ar.ar_arg_sockinfo.sai_domain = SOCK_DOM(so);
+			ar->k_ar.ar_arg_sockinfo.sai_protocol = SOCK_PROTO(so);
 			pcb = (struct inpcb *)so->so_pcb;
 			sin = (struct sockaddr_in *)
 			    &ar->k_ar.ar_arg_sockinfo.sai_faddr;
@@ -623,15 +621,13 @@ audit_arg_file(struct kaudit_record *ar, __unused proc_t p,
 			sin->sin_port = pcb->inp_lport;
 			ARG_SET_VALID(ar, ARG_SOCKINFO);
 		}
-		if (INP_CHECK_SOCKAF(so, PF_INET6)) {
+		if (SOCK_CHECK_DOM(so, PF_INET6)) {
 			if (so->so_pcb == NULL)
 				break;
 			ar->k_ar.ar_arg_sockinfo.sai_type =
 			    so->so_type;
-			ar->k_ar.ar_arg_sockinfo.sai_domain =
-			    INP_SOCKAF(so);
-			ar->k_ar.ar_arg_sockinfo.sai_protocol =
-			    so->so_proto->pr_protocol;
+			ar->k_ar.ar_arg_sockinfo.sai_domain = SOCK_DOM(so);
+			ar->k_ar.ar_arg_sockinfo.sai_protocol = SOCK_PROTO(so);
 			pcb = (struct inpcb *)so->so_pcb;
 			sin6 = (struct sockaddr_in6 *)
 			    &ar->k_ar.ar_arg_sockinfo.sai_faddr;

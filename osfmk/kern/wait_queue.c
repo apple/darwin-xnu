@@ -82,7 +82,7 @@ static boolean_t wait_queue_member_locked(
 			wait_queue_t		wq,
 			wait_queue_set_t	wq_set);
 
-static void wait_queues_init(void) __attribute__((section("__TEXT, initcode")));
+static void wait_queues_init(void);
 
 #define WAIT_QUEUE_MAX thread_max
 #define WAIT_QUEUE_SET_MAX task_max * 3
@@ -231,6 +231,7 @@ wait_queue_init(
 
 	wq->wq_fifo = ((policy & SYNC_POLICY_REVERSED) == 0);
 	wq->wq_type = _WAIT_QUEUE_inited;
+	wq->wq_eventmask = 0;
 	queue_init(&wq->wq_queue);
 	hw_lock_init(&wq->wq_interlock);
 	return KERN_SUCCESS;
@@ -472,6 +473,22 @@ MACRO_END
 #define WAIT_QUEUE_SET_CHECK(wqs)
 
 #endif /* !_WAIT_QUEUE_DEBUG_ */
+
+/*
+ *	Routine:	wait_queue_global
+ *	Purpose:
+ *		Indicate if this wait queue is a global wait queue or not.
+ */
+static boolean_t
+wait_queue_global(
+	wait_queue_t wq)
+{
+	if ((wq >= wait_queues) && (wq <= (wait_queues + num_wait_queues))) {
+		return TRUE;
+	}
+	return FALSE;
+}
+
 
 /*
  *	Routine:	wait_queue_member_locked
@@ -1164,7 +1181,9 @@ wait_queue_assert_wait64_locked(
 	wait_queue_t wq,
 	event64_t event,
 	wait_interrupt_t interruptible,
+	wait_timeout_urgency_t urgency,
 	uint64_t deadline,
+	uint64_t leeway,
 	thread_t thread)
 {
 	wait_result_t wait_result;
@@ -1209,14 +1228,16 @@ wait_queue_assert_wait64_locked(
 		thread->wait_queue = wq;
 
 		if (deadline != 0) {
-			uint32_t flags;
 
-			flags = realtime ? TIMER_CALL_CRITICAL : 0;
-
-			if (!timer_call_enter(&thread->wait_timer, deadline, flags))
+			if (!timer_call_enter_with_leeway(&thread->wait_timer, NULL,
+				deadline, leeway, urgency, FALSE))
 				thread->wait_timer_active++;
 			thread->wait_timer_is_set = TRUE;
 		}
+		if (wait_queue_global(wq)) {
+			wq->wq_eventmask = wq->wq_eventmask | CAST_TO_EVENT_MASK(event);
+		}
+
 	}
 	return(wait_result);
 }
@@ -1249,7 +1270,50 @@ wait_queue_assert_wait(
 	wait_queue_lock(wq);
 	thread_lock(thread);
 	ret = wait_queue_assert_wait64_locked(wq, CAST_DOWN(event64_t,event),
-											interruptible, deadline, thread);
+					      interruptible, 
+					      TIMEOUT_URGENCY_SYS_NORMAL, 
+					      deadline, 0,
+					      thread);
+	thread_unlock(thread);
+	wait_queue_unlock(wq);
+	splx(s);
+	return(ret);
+}
+
+/*
+ *	Routine:	wait_queue_assert_wait_with_leeway
+ *	Purpose:
+ *		Insert the current thread into the supplied wait queue
+ *		waiting for a particular event to be posted to that queue.
+ *		Deadline values are specified with urgency and leeway.
+ *
+ *	Conditions:
+ *		nothing of interest locked.
+ */
+wait_result_t
+wait_queue_assert_wait_with_leeway(
+	wait_queue_t wq,
+	event_t event,
+	wait_interrupt_t interruptible,
+	wait_timeout_urgency_t urgency,
+	uint64_t deadline,
+	uint64_t leeway)
+{
+	spl_t s;
+	wait_result_t ret;
+	thread_t thread = current_thread();
+
+	/* If it is an invalid wait queue, you can't wait on it */
+	if (!wait_queue_is_valid(wq))
+		return (thread->wait_result = THREAD_RESTART);
+
+	s = splsched();
+	wait_queue_lock(wq);
+	thread_lock(thread);
+	ret = wait_queue_assert_wait64_locked(wq, CAST_DOWN(event64_t,event),
+					      interruptible, 
+					      urgency, deadline, leeway,
+					      thread);
 	thread_unlock(thread);
 	wait_queue_unlock(wq);
 	splx(s);
@@ -1282,7 +1346,48 @@ wait_queue_assert_wait64(
 	s = splsched();
 	wait_queue_lock(wq);
 	thread_lock(thread);
-	ret = wait_queue_assert_wait64_locked(wq, event, interruptible, deadline, thread);
+	ret = wait_queue_assert_wait64_locked(wq, event, interruptible, 
+					      TIMEOUT_URGENCY_SYS_NORMAL,
+					      deadline, 0,
+					      thread);
+	thread_unlock(thread);
+	wait_queue_unlock(wq);
+	splx(s);
+	return(ret);
+}
+
+/*
+ *	Routine:	wait_queue_assert_wait64_with_leeway
+ *	Purpose:
+ *		Insert the current thread into the supplied wait queue
+ *		waiting for a particular event to be posted to that queue.
+ *		Deadline values are specified with urgency and leeway.
+ *	Conditions:
+ *		nothing of interest locked.
+ */
+wait_result_t
+wait_queue_assert_wait64_with_leeway(
+	wait_queue_t wq,
+	event64_t event,
+	wait_interrupt_t interruptible,
+	wait_timeout_urgency_t urgency,
+	uint64_t deadline,
+	uint64_t leeway)
+{
+	spl_t s;
+	wait_result_t ret;
+	thread_t thread = current_thread();
+
+	/* If it is an invalid wait queue, you cant wait on it */
+	if (!wait_queue_is_valid(wq))
+		return (thread->wait_result = THREAD_RESTART);
+
+	s = splsched();
+	wait_queue_lock(wq);
+	thread_lock(thread);
+	ret = wait_queue_assert_wait64_locked(wq, event, interruptible, 
+					      urgency, deadline, leeway,
+					      thread);
 	thread_unlock(thread);
 	wait_queue_unlock(wq);
 	splx(s);
@@ -1310,8 +1415,18 @@ _wait_queue_select64_all(
 {
 	wait_queue_element_t wq_element;
 	wait_queue_element_t wqe_next;
+	unsigned long eventmask = 0;
+	boolean_t is_queue_global = FALSE;
 	queue_t q;
 
+	is_queue_global = wait_queue_global(wq);
+	if (is_queue_global) {
+		eventmask = CAST_TO_EVENT_MASK(event);
+		if ((wq->wq_eventmask & eventmask) != eventmask) {
+			return;
+		}
+		eventmask = 0;
+	}
 	q = &wq->wq_queue;
 
 	wq_element = (wait_queue_element_t) queue_first(q);
@@ -1348,7 +1463,7 @@ _wait_queue_select64_all(
 			 * the event we are posting to this queue, pull
 			 * it off the queue and stick it in out wake_queue.
 			 */
-			thread_t t = (thread_t)wq_element;
+			thread_t t = (thread_t)(void *)wq_element;
 
 			if (t->wait_event == event) {
 				thread_lock(t);
@@ -1358,10 +1473,20 @@ _wait_queue_select64_all(
 				t->wait_event = NO_EVENT64;
 				t->at_safe_point = FALSE;
 				/* returned locked */
+			} else {
+				if (is_queue_global) {
+					eventmask = eventmask | 
+						CAST_TO_EVENT_MASK(t->wait_event);
+				}
 			}
 		}
 		wq_element = wqe_next;
 	}
+	/* Update event mask if global wait queue */
+	if (is_queue_global) {
+		wq->wq_eventmask = eventmask;
+	}
+
 }
 
 /*
@@ -1407,7 +1532,7 @@ wait_queue_wakeup64_all_locked(
 	 */
 	res = KERN_NOT_WAITING;
 	while (!queue_empty (q)) {
-		thread_t thread = (thread_t) dequeue(q);
+		thread_t thread = (thread_t)(void *) dequeue(q);
 		res = thread_go(thread, result);
 		assert(res == KERN_SUCCESS);
 		thread_unlock(thread);
@@ -1508,7 +1633,25 @@ _wait_queue_select64_one(
 	wait_queue_element_t wq_element;
 	wait_queue_element_t wqe_next;
 	thread_t t = THREAD_NULL;
+	thread_t fifo_thread = THREAD_NULL;
+	boolean_t is_queue_fifo = TRUE;
+	boolean_t is_queue_global = FALSE;
+	boolean_t thread_imp_donor = FALSE;
+	boolean_t realtime = FALSE;
+	unsigned long eventmask = 0;
 	queue_t q;
+
+	if (wait_queue_global(wq)) {
+		eventmask = CAST_TO_EVENT_MASK(event);
+		if ((wq->wq_eventmask & eventmask) != eventmask) {
+			return THREAD_NULL;
+		}
+		eventmask = 0;
+		is_queue_global = TRUE;
+#if IMPORTANCE_INHERITANCE
+		is_queue_fifo = FALSE;
+#endif /* IMPORTANCE_INHERITANCE */
+	}
 
 	q = &wq->wq_queue;
 
@@ -1556,20 +1699,55 @@ _wait_queue_select64_one(
 			 * the event we are posting to this queue, pull
 			 * it off the queue and stick it in out wake_queue.
 			 */
-			t = (thread_t)wq_element;
+			t = (thread_t)(void *)wq_element;
 			if (t->wait_event == event) {
-				thread_lock(t);
-				remqueue((queue_entry_t) t);
-				t->wait_queue = WAIT_QUEUE_NULL;
-				t->wait_event = NO_EVENT64;
-				t->at_safe_point = FALSE;
-				return t;	/* still locked */
+				if (fifo_thread == THREAD_NULL) {
+					fifo_thread = t;
+				}
+#if IMPORTANCE_INHERITANCE
+				/* 
+				 * Checking imp donor bit does not need thread lock or
+				 * or task lock since we have the wait queue lock and
+				 * thread can not be removed from it without acquiring
+				 * wait queue lock. The imp donor bit may change
+				 * once we read its value, but it is ok to wake 
+				 * a thread while someone drops importance assertion 
+				 * on the that thread.
+				 */
+				thread_imp_donor = task_is_importance_donor(t->task);
+#endif /* IMPORTANCE_INHERITANCE */
+				realtime = (t->sched_pri >= BASEPRI_REALTIME);
+				if (is_queue_fifo || thread_imp_donor || realtime || 
+						(t->options & TH_OPT_VMPRIV)) {
+					thread_lock(t);
+					remqueue((queue_entry_t) t);
+					t->wait_queue = WAIT_QUEUE_NULL;
+					t->wait_event = NO_EVENT64;
+					t->at_safe_point = FALSE;
+					return t;	/* still locked */
+				}
 			}
-
+			if (is_queue_global) {
+				eventmask = eventmask | CAST_TO_EVENT_MASK(t->wait_event);
+			}
 			t = THREAD_NULL;
 		}
 		wq_element = wqe_next;
 	}
+
+	if (is_queue_global) {
+		wq->wq_eventmask = eventmask;
+	}
+#if IMPORTANCE_INHERITANCE
+	if (fifo_thread != THREAD_NULL) {
+		thread_lock(fifo_thread);
+		remqueue((queue_entry_t) fifo_thread);
+		fifo_thread->wait_queue = WAIT_QUEUE_NULL;
+		fifo_thread->wait_event = NO_EVENT64;
+		fifo_thread->at_safe_point = FALSE;
+		return fifo_thread;	/* still locked */
+	}
+#endif /* IMPORTANCE_INHERITANCE */
 	return THREAD_NULL;
 }
 

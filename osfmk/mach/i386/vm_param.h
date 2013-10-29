@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2006 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2012 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -95,6 +95,12 @@
 #define I386_PGBYTES		4096		/* bytes per 80386 page */
 #define I386_PGSHIFT		12		/* bitshift for pages */
 
+#ifdef PRIVATE
+#define KERNEL_PAGE_SIZE	I386_PGBYTES
+#define KERNEL_PAGE_SHIFT	I386_PGSHIFT
+#define KERNEL_PAGE_MASK	(KERNEL_PAGE_SIZE-1)
+#endif
+
 #define	PAGE_SIZE		I386_PGBYTES
 #define	PAGE_SHIFT		I386_PGSHIFT
 #define	PAGE_MASK		(PAGE_SIZE - 1)
@@ -166,12 +172,8 @@
  * Maximum physical memory supported.
  */
 #define	K32_MAXMEM	(32*GB)
-#define	K64_MAXMEM	(96*GB)
-#if defined(__i386__)
-#define KERNEL_MAXMEM	K32_MAXMEM
-#else
+#define	K64_MAXMEM	(128*GB)
 #define KERNEL_MAXMEM	K64_MAXMEM
-#endif
 
 /*
  * XXX
@@ -181,14 +183,6 @@
  * We can't let VM allocate memory from there.
  */
 
-#if defined(__i386__)
-
-#define KERNEL_IMAGE_TO_PHYS(x) (x)
-#define VM_MIN_KERNEL_ADDRESS		((vm_offset_t) 0x00001000U)
-#define VM_MIN_KERNEL_AND_KEXT_ADDRESS	VM_MIN_KERNEL_ADDRESS
-#define VM_MAX_KERNEL_ADDRESS		((vm_offset_t) 0xFE7FFFFFU)
-
-#elif defined(__x86_64__)
 
 #define KERNEL_IMAGE_TO_PHYS(x) (x)
 #define VM_MIN_KERNEL_ADDRESS		((vm_offset_t) 0xFFFFFF8000000000UL)
@@ -200,13 +194,6 @@
 #define KEXT_ALLOC_BASE(x)  ((x) - KEXT_ALLOC_MAX_OFFSET)
 #define KEXT_ALLOC_SIZE(x)  (KEXT_ALLOC_MAX_OFFSET - (x))
 
-#define VM_KERNEL_IS_KEXT(_o)						       \
-                (((vm_offset_t)(_o) >= VM_MIN_KERNEL_AND_KEXT_ADDRESS) &&      \
-                 ((vm_offset_t)(_o) <  VM_MIN_KERNEL_ADDRESS))
-
-#else
-#error unsupported architecture
-#endif
 
 #define KERNEL_STACK_SIZE	(I386_PGBYTES*4)
 
@@ -236,19 +223,6 @@
  * The common alignment for LP64 is for longs and pointers i.e. 8 bytes.
  */
 
-#if defined(__i386__)
-
-#define	KALLOC_MINSIZE		16	/* minimum allocation size */
-#define	KALLOC_LOG2_MINALIGN	4	/* log2 minimum alignment */
-
-#define LINEAR_KERNEL_ADDRESS	((vm_offset_t) 0x00000000)
-
-#define VM_MIN_KERNEL_LOADED_ADDRESS	((vm_offset_t) 0x00000000U)
-#define VM_MAX_KERNEL_LOADED_ADDRESS	((vm_offset_t) 0x1FFFFFFFU)
-
-#define NCOPY_WINDOWS 4
-
-#elif defined(__x86_64__)
 
 #define	KALLOC_MINSIZE		16	/* minimum allocation size */
 #define	KALLOC_LOG2_MINALIGN	4	/* log2 minimum alignment */
@@ -261,9 +235,6 @@
 #define NCOPY_WINDOWS 0
 
 
-#else
-#error unsupported architecture
-#endif
 
 /*
  *	Conversion between 80386 pages and VM pages

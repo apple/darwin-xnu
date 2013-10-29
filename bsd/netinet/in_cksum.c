@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2009 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2012 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -61,14 +61,14 @@
  */
 
 #include <sys/param.h>
+#include <machine/endian.h>
 #include <sys/mbuf.h>
-#include <sys/kdebug.h>
 #include <kern/debug.h>
+#include <net/dlil.h>
 #include <netinet/in.h>
+#define	_IP_VHL
 #include <netinet/ip.h>
-#include <libkern/libkern.h>
-
-#define DBG_FNC_IN_CKSUM	NETDBG_CODE(DBG_NETIP, (3 << 8))
+#include <netinet/ip_var.h>
 
 /*
  * Checksum routine for Internet Protocol family headers (Portable Version).
@@ -76,199 +76,415 @@
  * This routine is very heavily used in the network
  * code and should be modified for each CPU to be as fast as possible.
  */
-
-union s_util {
-        char    c[2];
-        u_short s;
-};
+#define REDUCE16 {							  \
+	q_util.q = sum;							  \
+	l_util.l = q_util.s[0] + q_util.s[1] + q_util.s[2] + q_util.s[3]; \
+	sum = l_util.s[0] + l_util.s[1];				  \
+	ADDCARRY(sum);							  \
+}
 
 union l_util {
-        u_int16_t s[2];
-        u_int32_t l;
+        uint16_t s[2];
+        uint32_t l;
 };
 
 union q_util {
-        u_int16_t s[4];
-        u_int32_t l[2];
-        u_int64_t q;
+        uint16_t s[4];
+        uint32_t l[2];
+        uint64_t q;
 };
 
-#define ADDCARRY(x)  do { if (x > 65535) { x -= 65535; } } while (0)
+#define	PREDICT_FALSE(_exp)	__builtin_expect((_exp), 0)
 
-#define REDUCE32                                                          \
-    {                                                                     \
-        q_util.q = sum;                                                   \
-        sum = q_util.s[0] + q_util.s[1] + q_util.s[2] + q_util.s[3];      \
-    }
-#define REDUCE16                                                          \
-    {                                                                     \
-        q_util.q = sum;                                                   \
-        l_util.l = q_util.s[0] + q_util.s[1] + q_util.s[2] + q_util.s[3]; \
-        sum = l_util.s[0] + l_util.s[1];                                  \
-        ADDCARRY(sum);                                                    \
-    }
+static uint16_t in_cksumdata(const void *buf, int len);
 
-#define REDUCE {l_util.l = sum; sum = l_util.s[0] + l_util.s[1]; ADDCARRY(sum);}
+/*
+ * Portable version of 16-bit 1's complement sum function that works
+ * on a contiguous buffer.  This is used mainly for instances where
+ * the caller is certain about the buffer requirements, e.g. for IP
+ * header checksum calculation, though it is capable of being used
+ * on any arbitrary data span.  The platform-specific cpu_in_cksum()
+ * routine might be better-optmized, so use that instead for large
+ * data span.
+ *
+ * The logic is borrowed from <bsd/netinet/cpu_in_cksum.c>
+ */
 
-u_int16_t inet_cksum_simple(struct mbuf *, int);
+#if ULONG_MAX == 0xffffffffUL
+/* 32-bit version */
+static uint16_t
+in_cksumdata(const void *buf, int mlen)
+{
+	uint32_t sum, partial;
+	unsigned int final_acc;
+	uint8_t *data = (void *)buf;
+	boolean_t needs_swap, started_on_odd;
 
-u_int16_t
+	VERIFY(mlen >= 0);
+
+	needs_swap = FALSE;
+	started_on_odd = FALSE;
+
+	sum = 0;
+	partial = 0;
+
+	if ((uintptr_t)data & 1) {
+		/* Align on word boundary */
+		started_on_odd = !started_on_odd;
+#if BYTE_ORDER == LITTLE_ENDIAN
+		partial = *data << 8;
+#else
+		partial = *data;
+#endif
+		++data;
+		--mlen;
+	}
+	needs_swap = started_on_odd;
+	while (mlen >= 32) {
+		__builtin_prefetch(data + 32);
+		partial += *(uint16_t *)(void *)data;
+		partial += *(uint16_t *)(void *)(data + 2);
+		partial += *(uint16_t *)(void *)(data + 4);
+		partial += *(uint16_t *)(void *)(data + 6);
+		partial += *(uint16_t *)(void *)(data + 8);
+		partial += *(uint16_t *)(void *)(data + 10);
+		partial += *(uint16_t *)(void *)(data + 12);
+		partial += *(uint16_t *)(void *)(data + 14);
+		partial += *(uint16_t *)(void *)(data + 16);
+		partial += *(uint16_t *)(void *)(data + 18);
+		partial += *(uint16_t *)(void *)(data + 20);
+		partial += *(uint16_t *)(void *)(data + 22);
+		partial += *(uint16_t *)(void *)(data + 24);
+		partial += *(uint16_t *)(void *)(data + 26);
+		partial += *(uint16_t *)(void *)(data + 28);
+		partial += *(uint16_t *)(void *)(data + 30);
+		data += 32;
+		mlen -= 32;
+		if (PREDICT_FALSE(partial & 0xc0000000)) {
+			if (needs_swap)
+				partial = (partial << 8) +
+				    (partial >> 24);
+			sum += (partial >> 16);
+			sum += (partial & 0xffff);
+			partial = 0;
+		}
+	}
+	if (mlen & 16) {
+		partial += *(uint16_t *)(void *)data;
+		partial += *(uint16_t *)(void *)(data + 2);
+		partial += *(uint16_t *)(void *)(data + 4);
+		partial += *(uint16_t *)(void *)(data + 6);
+		partial += *(uint16_t *)(void *)(data + 8);
+		partial += *(uint16_t *)(void *)(data + 10);
+		partial += *(uint16_t *)(void *)(data + 12);
+		partial += *(uint16_t *)(void *)(data + 14);
+		data += 16;
+		mlen -= 16;
+	}
+	/*
+	 * mlen is not updated below as the remaining tests
+	 * are using bit masks, which are not affected.
+	 */
+	if (mlen & 8) {
+		partial += *(uint16_t *)(void *)data;
+		partial += *(uint16_t *)(void *)(data + 2);
+		partial += *(uint16_t *)(void *)(data + 4);
+		partial += *(uint16_t *)(void *)(data + 6);
+		data += 8;
+	}
+	if (mlen & 4) {
+		partial += *(uint16_t *)(void *)data;
+		partial += *(uint16_t *)(void *)(data + 2);
+		data += 4;
+	}
+	if (mlen & 2) {
+		partial += *(uint16_t *)(void *)data;
+		data += 2;
+	}
+	if (mlen & 1) {
+#if BYTE_ORDER == LITTLE_ENDIAN
+		partial += *data;
+#else
+		partial += *data << 8;
+#endif
+		started_on_odd = !started_on_odd;
+	}
+
+	if (needs_swap)
+		partial = (partial << 8) + (partial >> 24);
+	sum += (partial >> 16) + (partial & 0xffff);
+	sum = (sum >> 16) + (sum & 0xffff);
+
+	final_acc = ((sum >> 16) & 0xffff) + (sum & 0xffff);
+	final_acc = (final_acc >> 16) + (final_acc & 0xffff);
+
+	return (final_acc);
+}
+
+#else
+/* 64-bit version */
+static uint16_t
+in_cksumdata(const void *buf, int mlen)
+{
+	uint64_t sum, partial;
+	unsigned int final_acc;
+	uint8_t *data = (void *)buf;
+	boolean_t needs_swap, started_on_odd;
+
+	VERIFY(mlen >= 0);
+
+	needs_swap = FALSE;
+	started_on_odd = FALSE;
+
+	sum = 0;
+	partial = 0;
+
+	if ((uintptr_t)data & 1) {
+		/* Align on word boundary */
+		started_on_odd = !started_on_odd;
+#if BYTE_ORDER == LITTLE_ENDIAN
+		partial = *data << 8;
+#else
+		partial = *data;
+#endif
+		++data;
+		--mlen;
+	}
+	needs_swap = started_on_odd;
+	if ((uintptr_t)data & 2) {
+		if (mlen < 2)
+			goto trailing_bytes;
+		partial += *(uint16_t *)(void *)data;
+		data += 2;
+		mlen -= 2;
+	}
+	while (mlen >= 64) {
+		__builtin_prefetch(data + 32);
+		__builtin_prefetch(data + 64);
+		partial += *(uint32_t *)(void *)data;
+		partial += *(uint32_t *)(void *)(data + 4);
+		partial += *(uint32_t *)(void *)(data + 8);
+		partial += *(uint32_t *)(void *)(data + 12);
+		partial += *(uint32_t *)(void *)(data + 16);
+		partial += *(uint32_t *)(void *)(data + 20);
+		partial += *(uint32_t *)(void *)(data + 24);
+		partial += *(uint32_t *)(void *)(data + 28);
+		partial += *(uint32_t *)(void *)(data + 32);
+		partial += *(uint32_t *)(void *)(data + 36);
+		partial += *(uint32_t *)(void *)(data + 40);
+		partial += *(uint32_t *)(void *)(data + 44);
+		partial += *(uint32_t *)(void *)(data + 48);
+		partial += *(uint32_t *)(void *)(data + 52);
+		partial += *(uint32_t *)(void *)(data + 56);
+		partial += *(uint32_t *)(void *)(data + 60);
+		data += 64;
+		mlen -= 64;
+		if (PREDICT_FALSE(partial & (3ULL << 62))) {
+			if (needs_swap)
+				partial = (partial << 8) +
+				    (partial >> 56);
+			sum += (partial >> 32);
+			sum += (partial & 0xffffffff);
+			partial = 0;
+		}
+	}
+	/*
+	 * mlen is not updated below as the remaining tests
+	 * are using bit masks, which are not affected.
+	 */
+	if (mlen & 32) {
+		partial += *(uint32_t *)(void *)data;
+		partial += *(uint32_t *)(void *)(data + 4);
+		partial += *(uint32_t *)(void *)(data + 8);
+		partial += *(uint32_t *)(void *)(data + 12);
+		partial += *(uint32_t *)(void *)(data + 16);
+		partial += *(uint32_t *)(void *)(data + 20);
+		partial += *(uint32_t *)(void *)(data + 24);
+		partial += *(uint32_t *)(void *)(data + 28);
+		data += 32;
+	}
+	if (mlen & 16) {
+		partial += *(uint32_t *)(void *)data;
+		partial += *(uint32_t *)(void *)(data + 4);
+		partial += *(uint32_t *)(void *)(data + 8);
+		partial += *(uint32_t *)(void *)(data + 12);
+		data += 16;
+	}
+	if (mlen & 8) {
+		partial += *(uint32_t *)(void *)data;
+		partial += *(uint32_t *)(void *)(data + 4);
+		data += 8;
+	}
+	if (mlen & 4) {
+		partial += *(uint32_t *)(void *)data;
+		data += 4;
+	}
+	if (mlen & 2) {
+		partial += *(uint16_t *)(void *)data;
+		data += 2;
+	}
+trailing_bytes:
+	if (mlen & 1) {
+#if BYTE_ORDER == LITTLE_ENDIAN
+		partial += *data;
+#else
+		partial += *data << 8;
+#endif
+		started_on_odd = !started_on_odd;
+	}
+
+	if (needs_swap)
+		partial = (partial << 8) + (partial >> 56);
+	sum += (partial >> 32) + (partial & 0xffffffff);
+	sum = (sum >> 32) + (sum & 0xffffffff);
+
+	final_acc = (sum >> 48) + ((sum >> 32) & 0xffff) +
+	    ((sum >> 16) & 0xffff) + (sum & 0xffff);
+	final_acc = (final_acc >> 16) + (final_acc & 0xffff);
+	final_acc = (final_acc >> 16) + (final_acc & 0xffff);
+
+	return (final_acc);
+}
+#endif /* ULONG_MAX != 0xffffffffUL */
+
+/*
+ * Perform 16-bit 1's complement sum on a contiguous span.
+ */
+uint16_t
+b_sum16(const void *buf, int len)
+{
+	return (in_cksumdata(buf, len));
+}
+
+uint16_t inet_cksum_simple(struct mbuf *, int);
+/*
+ * For the exported _in_cksum symbol in BSDKernel symbol set.
+ */
+uint16_t
 inet_cksum_simple(struct mbuf *m, int len)
 {
 	return (inet_cksum(m, 0, 0, len));
 }
 
-u_short
-in_addword(u_short a, u_short b)
+uint16_t
+in_addword(uint16_t a, uint16_t b)
 {
-        union l_util l_util;
-	u_int32_t sum = a + b;
+	uint64_t sum = a + b;
 
-	REDUCE;
+	ADDCARRY(sum);
 	return (sum);
 }
 
-u_short
-in_pseudo(u_int a, u_int b, u_int c)
+uint16_t
+in_pseudo(uint32_t a, uint32_t b, uint32_t c)
 {
-        u_int64_t sum;
+        uint64_t sum;
         union q_util q_util;
         union l_util l_util;
 
-        sum = (u_int64_t) a + b + c;
+        sum = (uint64_t)a + b + c;
         REDUCE16;
         return (sum);
-
 }
 
-
-u_int16_t
-inet_cksum(struct mbuf *m, unsigned int nxt, unsigned int skip,
-    unsigned int len)
+uint16_t
+in_pseudo64(uint64_t a, uint64_t b, uint64_t c)
 {
-	u_short *w;
-	u_int32_t sum = 0;
-	int mlen = 0;
-	int byte_swapped = 0;
-	union s_util s_util;
+	uint64_t sum;
+	union q_util q_util;
 	union l_util l_util;
 
-	KERNEL_DEBUG(DBG_FNC_IN_CKSUM | DBG_FUNC_START, len,0,0,0,0);
+	sum = a + b + c;
+	REDUCE16;
+	return (sum);
+}
 
-	/* sanity check */
-	if ((m->m_flags & M_PKTHDR) && m->m_pkthdr.len < skip + len) {
-		panic("inet_cksum: mbuf len (%d) < off+len (%d+%d)\n",
-		    m->m_pkthdr.len, skip, len);
+/*
+ * May be used on IP header with options.
+ */
+uint16_t
+in_cksum_hdr_opt(const struct ip *ip)
+{
+	return (~b_sum16(ip, (IP_VHL_HL(ip->ip_vhl) << 2)) & 0xffff);
+}
+
+/*
+ * A wrapper around the simple in_cksum_hdr() and the more complicated
+ * inet_cksum(); the former is chosen if the IP header is simple,
+ * contiguous and 32-bit aligned.  Also does some stats accounting.
+ */
+uint16_t
+ip_cksum_hdr_dir(struct mbuf *m, uint32_t hlen, int out)
+{
+	struct ip *ip = mtod(m, struct ip *);
+
+	if (out) {
+		ipstat.ips_snd_swcsum++;
+		ipstat.ips_snd_swcsum_bytes += hlen;
+	} else {
+		ipstat.ips_rcv_swcsum++;
+		ipstat.ips_rcv_swcsum_bytes += hlen;
 	}
+
+	if (hlen == sizeof (*ip) &&
+	    m->m_len >= sizeof (*ip) && IP_HDR_ALIGNED_P(ip))
+		return (in_cksum_hdr(ip));
+
+	return (inet_cksum(m, 0, 0, hlen));
+}
+
+/*
+ * m MUST contain at least an IP header, if nxt is specified;
+ * nxt is the upper layer protocol number;
+ * off is an offset where TCP/UDP/ICMP header starts;
+ * len is a total length of a transport segment (e.g. TCP header + TCP payload)
+ */
+uint16_t
+inet_cksum(struct mbuf *m, uint32_t nxt, uint32_t off, uint32_t len)
+{
+	uint32_t sum;
+
+	sum = m_sum16(m, off, len);
 
 	/* include pseudo header checksum? */
 	if (nxt != 0) {
-		struct ip *iph;
+		struct ip *ip;
+		unsigned char buf[sizeof ((*ip))] __attribute__((aligned(8)));
+		uint32_t mlen;
 
-		if (m->m_len < sizeof (struct ip))
-			panic("inet_cksum: bad mbuf chain");
-
-		iph = mtod(m, struct ip *);
-		sum = in_pseudo(iph->ip_src.s_addr, iph->ip_dst.s_addr,
-		    htonl(len + nxt));
-	}
-
-	if (skip != 0) {
-		for (; skip && m; m = m->m_next) {
-			if (m->m_len > skip) {
-				mlen = m->m_len - skip;
-				w = (u_short *)(void *)(m->m_data+skip);
-				goto skip_start;
-			} else {
-				skip -= m->m_len;
-			}
+		/*
+		 * Sanity check
+		 *
+		 * Use m_length2() instead of m_length(), as we cannot rely on
+		 * the caller setting m_pkthdr.len correctly, if the mbuf is
+		 * a M_PKTHDR one.
+		 */
+		if ((mlen = m_length2(m, NULL)) < sizeof (*ip)) {
+			panic("%s: mbuf %p too short (%d) for IPv4 header",
+			    __func__, m, mlen);
+			/* NOTREACHED */
 		}
-	}
-	for (;m && len; m = m->m_next) {
-		if (m->m_len == 0)
-			continue;
-		w = mtod(m, u_short *);
 
-		if (mlen == -1) {
-			/*
-			 * The first byte of this mbuf is the continuation
-			 * of a word spanning between this mbuf and the
-			 * last mbuf.
-			 *
-			 * s_util.c[0] is already saved when scanning previous
-			 * mbuf.
-			 */
-			s_util.c[1] = *(char *)w;
-			sum += s_util.s;
-			w = (u_short *)(void *)((char *)w + 1);
-			mlen = m->m_len - 1;
-			len--;
+		/*
+		 * In case the IP header is not contiguous, or not 32-bit
+		 * aligned, copy it to a local buffer.  Note here that we
+		 * expect the data pointer to point to the IP header.
+		 */
+		if ((sizeof (*ip) > m->m_len) ||
+		    !IP_HDR_ALIGNED_P(mtod(m, caddr_t))) {
+			m_copydata(m, 0, sizeof (*ip), (caddr_t)buf);
+			ip = (struct ip *)(void *)buf;
 		} else {
-			mlen = m->m_len;
+			ip = (struct ip *)(void *)(m->m_data);
 		}
-skip_start:
-		if (len < mlen)
-			mlen = len;
 
-		len -= mlen;
-		/*
-		 * Force to even boundary.
-		 */
-		if ((1 & (uintptr_t) w) && (mlen > 0)) {
-			REDUCE;
-			sum <<= 8;
-			s_util.c[0] = *(u_char *)w;
-			w = (u_short *)(void *)((char *)w + 1);
-			mlen--;
-			byte_swapped = 1;
-		}
-		/*
-		 * Unroll the loop to make overhead from
-		 * branches &c small.
-		 */
-		while ((mlen -= 32) >= 0) {
-			sum += w[0]; sum += w[1]; sum += w[2]; sum += w[3];
-			sum += w[4]; sum += w[5]; sum += w[6]; sum += w[7];
-			sum += w[8]; sum += w[9]; sum += w[10]; sum += w[11];
-			sum += w[12]; sum += w[13]; sum += w[14]; sum += w[15];
-			w += 16;
-		}
-		mlen += 32;
-		while ((mlen -= 8) >= 0) {
-			sum += w[0]; sum += w[1]; sum += w[2]; sum += w[3];
-			w += 4;
-		}
-		mlen += 8;
-		if (mlen == 0 && byte_swapped == 0)
-			continue;
-		REDUCE;
-		while ((mlen -= 2) >= 0) {
-			sum += *w++;
-		}
-		if (byte_swapped) {
-			REDUCE;
-			sum <<= 8;
-			byte_swapped = 0;
-			if (mlen == -1) {
-				s_util.c[1] = *(char *)w;
-				sum += s_util.s;
-				mlen = 0;
-			} else
-				mlen = -1;
-		} else if (mlen == -1)
-			s_util.c[0] = *(char *)w;
+		/* add pseudo header checksum */
+		sum += in_pseudo(ip->ip_src.s_addr, ip->ip_dst.s_addr,
+		    htonl(len + nxt));
+
+		/* fold in carry bits */
+		ADDCARRY(sum);
 	}
-	if (len)
-		printf("cksum: out of data by %d\n", len);
-	if (mlen == -1) {
-		/* The last mbuf has odd # of bytes. Follow the
-		   standard (the odd byte may be shifted left by 8 bits
-		   or not as determined by endian-ness of the machine) */
-		s_util.c[1] = 0;
-		sum += s_util.s;
-	}
-	REDUCE;
-	KERNEL_DEBUG(DBG_FNC_IN_CKSUM | DBG_FUNC_END, 0,0,0,0,0);
+
 	return (~sum & 0xffff);
 }
-

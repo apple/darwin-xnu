@@ -3,16 +3,9 @@ export MakeInc_def=${SRCROOT}/makedefs/MakeInc.def
 export MakeInc_rule=${SRCROOT}/makedefs/MakeInc.rule
 export MakeInc_dir=${SRCROOT}/makedefs/MakeInc.dir
 
+
 include $(MakeInc_cmd)
 include $(MakeInc_def)
-
-INSTINC_SUBDIRS =
-
-INSTINC_SUBDIRS_I386 =
-
-EXPINC_SUBDIRS =
-
-EXPINC_SUBDIRS_I386 =
 
 MIG_DEFS = kextd_mach.defs
 
@@ -46,13 +39,13 @@ MIG_KUSRC = kextd_mach.c kextd_mach.h
 
 COMP_FILES = ${MIG_KUSRC}
 
-${COMP_FILES} : kextd_mach.defs
+do_build_all:: $(COMP_FILES)
 
 ${MIG_KUSRC} : kextd_mach.defs
 	@echo MIG $@
 	$(_v)${MIG} ${MIGFLAGS} ${MIGKUFLAGS}	\
-		-user    $*.c			\
-		-header  $*.h			\
+		-user    kextd_mach.c		\
+		-header  kextd_mach.h		\
 		-server  /dev/null		\
 		-sheader /dev/null		\
 		$<

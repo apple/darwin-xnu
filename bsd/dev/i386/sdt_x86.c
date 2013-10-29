@@ -46,43 +46,6 @@
 
 extern sdt_probe_t      **sdt_probetab;
 
-#if defined(__i386__)
-/*ARGSUSED*/
-int
-sdt_invop(uintptr_t addr, uintptr_t *stack, uintptr_t eax)
-{
-#pragma unused(eax)
-	uintptr_t stack0 = 0, stack1 = 0, stack2 = 0, stack3 = 0, stack4 = 0;
-	sdt_probe_t *sdt = sdt_probetab[SDT_ADDR2NDX(addr)];
-
-	for (; sdt != NULL; sdt = sdt->sdp_hashnext) {
-		if ((uintptr_t)sdt->sdp_patchpoint == addr) {
-                        uintptr_t *stacktop;
-                        if (CPU_ON_INTR(CPU))
-                                stacktop = (uintptr_t *)dtrace_get_cpu_int_stack_top();
-                        else
-                                stacktop = (uintptr_t *)(dtrace_get_kernel_stack(current_thread()) + kernel_stack_size);
-
-            if (stack <= stacktop)
-                stack0 = *stack++;
-            if (stack <= stacktop)
-                stack1 = *stack++;
-            if (stack <= stacktop)
-                stack2 = *stack++;
-            if (stack <= stacktop)
-                stack3 = *stack++;
-            if (stack <= stacktop)
-                stack4 = *stack++;
-
-			dtrace_probe(sdt->sdp_id, stack0, stack1, stack2, stack3, stack4);
-
-			return (DTRACE_INVOP_NOP);
-		}
-	}
-
-	return (0);
-}
-#elif defined(__x86_64__)
 /*ARGSUSED*/
 int
 sdt_invop(uintptr_t addr, uintptr_t *stack, uintptr_t eax)
@@ -102,9 +65,6 @@ sdt_invop(uintptr_t addr, uintptr_t *stack, uintptr_t eax)
 
 	return (0);
 }
-#else
-#error Unknown arch
-#endif
 
 
 struct frame {
@@ -123,13 +83,11 @@ sdt_getarg(void *arg, dtrace_id_t id, void *parg, int argno, int aframes)
 	uintptr_t pc;
 	int i;
 
-#if defined(__x86_64__)
     /*
      * A total of 6 arguments are passed via registers; any argument with
      * index of 5 or lower is therefore in a register.
      */
     int inreg = 5;
-#endif
 
 	for (i = 1; i <= aframes; i++) {
 		fp = fp->backchain;
@@ -138,18 +96,6 @@ sdt_getarg(void *arg, dtrace_id_t id, void *parg, int argno, int aframes)
 		if (dtrace_invop_callsite_pre != NULL
 			&& pc  >  (uintptr_t)dtrace_invop_callsite_pre
 			&& pc  <= (uintptr_t)dtrace_invop_callsite_post) {
-#if defined(__i386__)
-			/*
-			 * If we pass through the invalid op handler, we will
-			 * use the pointer that it passed to the stack as the
-			 * second argument to dtrace_invop() as the pointer to
-			 * the frame we're hunting for.
-			 */
-
-			stack = (uintptr_t *)&fp[1]; /* Find marshalled arguments */
-			fp = (struct frame *)stack[1]; /* Grab *second* argument */
-			stack = (uintptr_t *)&fp[0]; /* Find marshalled arguments */
-#elif defined(__x86_64__)
 			/*
 			 * In the case of x86_64, we will use the pointer to the
 			 * save area structure that was pushed when we took the
@@ -179,9 +125,6 @@ sdt_getarg(void *arg, dtrace_id_t id, void *parg, int argno, int aframes)
 								arguments */
 				argno -= (inreg +1);
 			}
-#else
-#error Unknown arch
-#endif
 			goto load;
 		}
 	}
@@ -195,7 +138,6 @@ sdt_getarg(void *arg, dtrace_id_t id, void *parg, int argno, int aframes)
 	 */
 	argno++; /* Advance past probeID */
 
-#if defined(__x86_64__)
 	if (argno <= inreg) {
 		/*
 		 * This shouldn't happen.  If the argument is passed in a
@@ -207,7 +149,6 @@ sdt_getarg(void *arg, dtrace_id_t id, void *parg, int argno, int aframes)
 	}
 
 	argno -= (inreg + 1);
-#endif
 	stack = (uintptr_t *)&fp[1]; /* Find marshalled arguments */
 
 load:

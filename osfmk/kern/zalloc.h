@@ -94,51 +94,58 @@ typedef struct gzalloc_data {
  *
  */
 
+struct zone_free_element;
+struct zone_page_metadata;
+
 struct zone {
+	struct zone_free_element *free_elements;	/* free elements directly linked */
+	struct {
+		queue_head_t			any_free_foreign;	/* foreign pages crammed into zone */
+		queue_head_t			all_free;
+		queue_head_t			intermediate;
+		queue_head_t			all_used;
+	} pages;		/* list of zone_page_metadata structs, which maintain per-page free element lists */
 	int		count;		/* Number of elements used now */
-	vm_offset_t	free_elements;
+	int		countfree;	/* Number of free elements */
+	lck_attr_t      lock_attr;	/* zone lock attribute */
 	decl_lck_mtx_data(,lock)	/* zone lock */
 	lck_mtx_ext_t   lock_ext;	/* placeholder for indirect mutex */
-	lck_attr_t      lock_attr;	/* zone lock attribute */
-	lck_grp_t       lock_grp;	/* zone lock group */
-	lck_grp_attr_t  lock_grp_attr;	/* zone lock group attribute */
 	vm_size_t	cur_size;	/* current memory utilization */
 	vm_size_t	max_size;	/* how large can this zone grow */
 	vm_size_t	elem_size;	/* size of an element */
 	vm_size_t	alloc_size;	/* size used for more memory */
+	uint64_t	page_count __attribute__((aligned(8)));   /* number of pages used by this zone */
 	uint64_t	sum_count;	/* count of allocs (life of zone) */
-	unsigned int
-	/* boolean_t */ exhaustible :1,	/* (F) merely return if empty? */
-	/* boolean_t */	collectable :1,	/* (F) garbage collect empty pages */
-	/* boolean_t */	expandable :1,	/* (T) expand zone (with message)? */
-	/* boolean_t */ allows_foreign :1,/* (F) allow non-zalloc space */
-	/* boolean_t */	doing_alloc :1,	/* is zone expanding now? */
-	/* boolean_t */	waiting :1,	/* is thread waiting for expansion? */
-	/* boolean_t */	async_pending :1,	/* asynchronous allocation pending? */
-#if CONFIG_ZLEAKS
-	/* boolean_t */ zleak_on :1,	/* Are we collecting allocation information? */
-#endif	/* CONFIG_ZLEAKS */
-	/* boolean_t */	caller_acct: 1, /* do we account allocation/free to the caller? */  
-	/* boolean_t */	doing_gc :1,	/* garbage collect in progress? */
-	/* boolean_t */ noencrypt :1,
-	/* boolean_t */	no_callout:1,
-	/* boolean_t */	async_prio_refill:1,
-	/* boolean_t */	gzalloc_exempt:1,
-	/* boolean_t */	alignment_required:1;
+	uint32_t
+	/* boolean_t */ exhaustible        :1,	/* (F) merely return if empty? */
+	/* boolean_t */	collectable        :1,	/* (F) garbage collect empty pages */
+	/* boolean_t */	expandable         :1,	/* (T) expand zone (with message)? */
+	/* boolean_t */ allows_foreign     :1,  /* (F) allow non-zalloc space */
+	/* boolean_t */	doing_alloc        :1,	/* is zone expanding now? */
+	/* boolean_t */	waiting            :1,	/* is thread waiting for expansion? */
+	/* boolean_t */	async_pending      :1,	/* asynchronous allocation pending? */
+	/* boolean_t */ zleak_on           :1,	/* Are we collecting allocation information? */
+	/* boolean_t */	caller_acct        :1,  /* do we account allocation/free to the caller? */  
+	/* boolean_t */	doing_gc           :1,	/* garbage collect in progress? */
+	/* boolean_t */ noencrypt          :1,
+	/* boolean_t */	no_callout         :1,
+	/* boolean_t */	async_prio_refill  :1,
+	/* boolean_t */	gzalloc_exempt     :1,
+	/* boolean_t */	alignment_required :1,
+	/* boolean_t */	use_page_list 	   :1,
+	/* future    */ _reserved          :16;
+
 	int		index;		/* index into zone_info arrays for this zone */
-	struct zone *	next_zone;	/* Link for all-zones list */
-	thread_call_data_t call_async_alloc;	/* callout for asynchronous alloc */
+	struct zone	*next_zone;	/* Link for all-zones list */
 	const char	*zone_name;	/* a name for the zone */
 #if	ZONE_DEBUG
 	queue_head_t	active_zones;	/* active elements */
 #endif	/* ZONE_DEBUG */
 
 #if CONFIG_ZLEAKS
-	uint32_t num_allocs;		/* alloc stats for zleak benchmarks */
-	uint32_t num_frees;		/* free stats for zleak benchmarks */
 	uint32_t zleak_capture;		/* per-zone counter for capturing every N allocations */
 #endif /* CONFIG_ZLEAKS */
-	uint32_t free_check_count;	/* counter for poisoning/checking every N frees */
+	uint32_t zp_count;              /* counter for poisoning every N frees */
 	vm_size_t	prio_refill_watermark;
 	thread_t	zone_replenish_thread;
 #if	CONFIG_GZALLOC
@@ -164,11 +171,11 @@ extern void		consider_zone_gc(boolean_t);
 extern void		zone_steal_memory(void);
 
 /* Bootstrap zone module (create zone zone) */
-extern void		zone_bootstrap(void) __attribute__((section("__TEXT, initcode")));
+extern void		zone_bootstrap(void);
 
 /* Init zone module */
 extern void		zone_init(
-					vm_size_t	map_size) __attribute__((section("__TEXT, initcode")));
+					vm_size_t	map_size);
 
 /* Handle per-task zone info */
 extern void		zinfo_task_init(task_t task);
@@ -266,6 +273,7 @@ extern void		zone_prio_refill_configure(zone_t, vm_size_t);
 				 */
 #define Z_ALIGNMENT_REQUIRED 8
 #define Z_GZALLOC_EXEMPT 9	/* Not tracked in guard allocation mode */
+
 /* Preallocate space for zone from zone map */
 extern void		zprealloc(
 					zone_t		zone,

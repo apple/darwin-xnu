@@ -102,14 +102,21 @@ struct IOHibernateImageHeader
     uint32_t	sleepTime;
     uint32_t    compression;
 
-    uint32_t	reserved[62];		// make sizeof == 512
+    uint32_t	reserved[58];		// make sizeof == 512
+    uint32_t	booterTime0;
+    uint32_t	booterTime1;
+    uint32_t	booterTime2;
 
-    uint64_t	restoreTime1 __attribute__ ((packed));
-    uint64_t	restoreTime2 __attribute__ ((packed));
-    uint64_t	restoreTime3 __attribute__ ((packed));
+    uint32_t	booterStart;
+    uint32_t	smcStart;
+    uint32_t	connectDisplayTime;
+    uint32_t	splashTime;
+    uint32_t	booterTime;
+    uint32_t	trampolineTime;
 
     uint64_t	encryptEnd __attribute__ ((packed));
     uint64_t	deviceBase __attribute__ ((packed));
+    uint32_t	deviceBlockSize;
 
     uint32_t		fileExtentMapSize;
     IOPolledFileExtent	fileExtentMap[2];
@@ -256,6 +263,39 @@ struct hibernate_preview_t
 };
 typedef struct hibernate_preview_t hibernate_preview_t;
 
+struct hibernate_statistics_t
+{
+    uint64_t image1Size;
+    uint64_t imageSize;
+    uint32_t image1Pages;
+    uint32_t imagePages;
+    uint32_t booterStart;
+    uint32_t smcStart;
+    uint32_t booterDuration;
+    uint32_t booterConnectDisplayDuration;
+    uint32_t booterSplashDuration;
+    uint32_t booterDuration0;
+    uint32_t booterDuration1;
+    uint32_t booterDuration2;
+    uint32_t trampolineDuration;
+    uint32_t kernelImageReadDuration;
+
+    uint32_t graphicsReadyTime;
+    uint32_t wakeNotificationTime;
+    uint32_t lockScreenReadyTime;
+    uint32_t hidReadyTime;
+
+    uint32_t wakeCapability;
+    uint32_t resvA[15];
+};
+typedef struct hibernate_statistics_t hibernate_statistics_t;
+
+#define kIOSysctlHibernateStatistics	"kern.hibernatestatistics"
+#define kIOSysctlHibernateGraphicsReady	"kern.hibernategraphicsready"
+#define kIOSysctlHibernateWakeNotify	"kern.hibernatewakenotification"
+#define kIOSysctlHibernateScreenReady	"kern.hibernatelockscreenready"
+#define kIOSysctlHibernateHIDReady	"kern.hibernatehidready"
+
 #ifdef KERNEL
 
 #ifdef __cplusplus
@@ -269,6 +309,7 @@ IOReturn IOHibernateSystemWake(void);
 IOReturn IOHibernateSystemPostWake(void);
 bool     IOHibernateWasScreenLocked(void);
 void     IOHibernateSetScreenLocked(uint32_t lockState);
+void     IOHibernateSetWakeCapabilities(uint32_t capability);
 void     IOHibernateSystemRestart(void);
 
 #endif /* __cplusplus */
@@ -302,13 +343,20 @@ hibernate_page_list_t *
 hibernate_page_list_allocate(boolean_t log);
 
 kern_return_t 
+hibernate_alloc_page_lists(
+		hibernate_page_list_t ** page_list_ret,
+		hibernate_page_list_t ** page_list_wired_ret,
+		hibernate_page_list_t ** page_list_pal_ret);
+
+kern_return_t 
 hibernate_setup(IOHibernateImageHeader * header,
                         uint32_t  free_page_ratio,
                         uint32_t  free_page_time,
                         boolean_t vmflush,
-			hibernate_page_list_t ** page_list_ret,
-			hibernate_page_list_t ** page_list_wired_ret,
-			hibernate_page_list_t ** page_list_pal_ret);
+			hibernate_page_list_t * page_list,
+			hibernate_page_list_t * page_list_wired,
+			hibernate_page_list_t * page_list_pal);
+
 kern_return_t 
 hibernate_teardown(hibernate_page_list_t * page_list,
                     hibernate_page_list_t * page_list_wired,
@@ -337,7 +385,8 @@ void
 hibernate_page_list_setall(hibernate_page_list_t * page_list,
 			   hibernate_page_list_t * page_list_wired,
 			   hibernate_page_list_t * page_list_pal,
-			   boolean_t preflight,
+			   boolean_t preflight, 
+			   boolean_t discard_all,
 			   uint32_t * pagesOut);
 
 // mark pages to be saved, or pages not to be saved but available 

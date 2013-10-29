@@ -75,6 +75,8 @@
 #include <sys/malloc.h>
 #include <sys/fcntl.h>
 #include <sys/lockf.h>
+#include <sys/sdt.h>
+#include <kern/task.h>
 
 /*
  * This variable controls the maximum number of processes that will
@@ -129,9 +131,14 @@ static overlap_t lf_findoverlap(struct lockf *,
 	    struct lockf *, int, struct lockf ***, struct lockf **);
 static struct lockf *lf_getblock(struct lockf *, pid_t);
 static int	 lf_getlock(struct lockf *, struct flock *, pid_t);
-static int	 lf_setlock(struct lockf *);
+static int	 lf_setlock(struct lockf *, struct timespec *);
 static int	 lf_split(struct lockf *, struct lockf *);
 static void	 lf_wakelock(struct lockf *, boolean_t);
+#if IMPORTANCE_INHERITANCE
+static void	 lf_hold_assertion(task_t, struct lockf *);
+static void	 lf_jump_to_queue_head(struct lockf *, struct lockf *);
+static void	 lf_drop_assertion(struct lockf *);
+#endif /* IMPORTANCE_INHERITANCE */
 
 /*
  * lf_advlock
@@ -150,6 +157,7 @@ static void	 lf_wakelock(struct lockf *, boolean_t);
  *	lf_setlock:EDEADLK
  *	lf_setlock:EINTR
  *	lf_setlock:ENOLCK
+ *	lf_setlock:ETIMEDOUT
  *	lf_clearlock:ENOLCK
  *	vnode_size:???
  *
@@ -260,6 +268,9 @@ lf_advlock(struct vnop_advlock_args *ap)
 	lock->lf_next = (struct lockf *)0;
 	TAILQ_INIT(&lock->lf_blkhd);
 	lock->lf_flags = ap->a_flags;
+#if IMPORTANCE_INHERITANCE
+	lock->lf_boosted = LF_NOT_BOOSTED;
+#endif /* IMPORTANCE_INHERITANCE */
 
 	if (ap->a_flags & F_FLOCK)
 	        lock->lf_flags |= F_WAKE1_SAFE;
@@ -270,7 +281,7 @@ lf_advlock(struct vnop_advlock_args *ap)
 	 */
 	switch(ap->a_op) {
 	case F_SETLK:
-		error = lf_setlock(lock);
+		error = lf_setlock(lock, ap->a_timeout);
 		break;
 
 	case F_UNLCK:
@@ -283,12 +294,6 @@ lf_advlock(struct vnop_advlock_args *ap)
 		FREE(lock, M_LOCKF);
 		break;
 
-#if CONFIG_EMBEDDED
-	case F_GETLKPID:
-		error = lf_getlock(lock, fl, fl->l_pid);
-		FREE(lock, M_LOCKF);
-		break;
-#endif
 
 	default:
 		FREE(lock, M_LOCKF);
@@ -427,19 +432,23 @@ lf_coalesce_adjacent(struct lockf *lock)
  *					the set is successful, and freed if the
  *					set is unsuccessful.
  *
+ *		timeout			Timeout specified in the case of
+ * 					SETLKWTIMEOUT.
+ *
  * Returns:	0			Success
  *		EAGAIN
  *		EDEADLK
  *	lf_split:ENOLCK
  *	lf_clearlock:ENOLCK
  *	msleep:EINTR
+ *	msleep:ETIMEDOUT
  *
  * Notes:	We add the lock to the provisional lock list.  We do not
  *		coalesce at this time; this has implications for other lock
  *		requestors in the blocker search mechanism.
  */
 static int
-lf_setlock(struct lockf *lock)
+lf_setlock(struct lockf *lock, struct timespec *timeout)
 {
 	struct lockf *block;
 	struct lockf **head = lock->lf_head;
@@ -448,6 +457,9 @@ lf_setlock(struct lockf *lock)
 	int priority, needtolink, error;
 	struct vnode *vp = lock->lf_vnode;
 	overlap_t ovcase;
+#if IMPORTANCE_INHERITANCE
+	task_t boosting_task, block_task;
+#endif /* IMPORTANCE_INHERITANCE */
 
 #ifdef LOCKF_DEBUGGING
 	if (lockf_debug & 1) {
@@ -471,6 +483,7 @@ lf_setlock(struct lockf *lock)
 		 * Free the structure and return if nonblocking.
 		 */
 		if ((lock->lf_flags & F_WAIT) == 0) {
+			DTRACE_FSINFO(advlock__nowait, vnode_t, vp);
 			FREE(lock, M_LOCKF);
 			return (EAGAIN);
 		}
@@ -577,7 +590,36 @@ lf_setlock(struct lockf *lock)
 			lf_printlist("lf_setlock(block)", block);
 		}
 #endif /* LOCKF_DEBUGGING */
-		error = msleep(lock, &vp->v_lock, priority, lockstr, 0);
+		DTRACE_FSINFO(advlock__wait, vnode_t, vp);
+#if IMPORTANCE_INHERITANCE
+		/*
+		 * Posix type of locks are not inherited by child processes and 
+		 * it maintains one to one mapping between lock and its owner, while
+		 * Flock type of locks are inherited across forks and it does not
+		 * maintian any one to one mapping between the lock and the lock 
+		 * owner. Thus importance donation is done only for Posix type of 
+		 * locks.
+		 */
+		if ((lock->lf_flags & F_POSIX) && (block->lf_flags & F_POSIX)) {
+			block_task = proc_task((proc_t) block->lf_id);
+			boosting_task = proc_task((proc_t) lock->lf_id);
+
+			/* Check if current task can donate importance. The 
+			 * check of imp_donor bit is done without holding 
+			 * task lock. The value may change after you read it, 
+			 * but it is ok to boost a task while someone else is 
+			 * unboosting you.
+			 */
+			if (task_is_importance_donor(boosting_task)) {
+				if (block->lf_boosted != LF_BOOSTED && 
+				    task_is_importance_receiver(block_task)) {
+					lf_hold_assertion(block_task, block);
+				}
+				lf_jump_to_queue_head(block, lock);
+			}
+		}
+#endif /* IMPORTANCE_INHERITANCE */
+		error = msleep(lock, &vp->v_lock, priority, lockstr, timeout);
 
 		if (error == 0 && (lock->lf_flags & F_ABORT) != 0)
 			error = EBADF;
@@ -613,6 +655,10 @@ lf_setlock(struct lockf *lock)
 			if (!TAILQ_EMPTY(&lock->lf_blkhd))
 			        lf_wakelock(lock, TRUE);
 			FREE(lock, M_LOCKF);
+			/* Return ETIMEDOUT if timeout occoured. */
+			if (error == EWOULDBLOCK) {
+				error = ETIMEDOUT;
+			}
 			return (error);
 		}
 	}
@@ -796,6 +842,11 @@ lf_clearlock(struct lockf *unlock)
 		 * Wakeup the list of locks to be retried.
 		 */
 	        lf_wakelock(overlap, FALSE);
+#if IMPORTANCE_INHERITANCE
+		if (overlap->lf_boosted == LF_BOOSTED) {
+			lf_drop_assertion(overlap);
+		}
+#endif /* IMPORTANCE_INHERITANCE */
 
 		switch (ovcase) {
 		case OVERLAP_NONE:	/* satisfy compiler enum/switch */
@@ -1308,3 +1359,74 @@ lf_printlist(const char *tag, struct lockf *lock)
 	}
 }
 #endif /* LOCKF_DEBUGGING */
+
+#if IMPORTANCE_INHERITANCE
+
+/*
+ * lf_hold_assertion
+ *
+ * Call task importance hold assertion on the owner of the lock.
+ *
+ * Parameters: block_task               Owner of the lock blocking 
+ *                                      current thread.
+ *
+ *             block                    lock on which the current thread 
+ *                                      is blocking on.
+ *
+ * Returns:    <void>
+ *
+ * Notes: The task reference on block_task is not needed to be hold since 
+ *        the current thread has vnode lock and block_task has a file 
+ *        lock, thus removing file lock in exit requires block_task to 
+ *        grab the vnode lock.
+ */
+static void 
+lf_hold_assertion(task_t block_task, struct lockf *block)
+{
+	task_importance_hold_internal_assertion(block_task, 1);
+	block->lf_boosted = LF_BOOSTED;
+}
+
+
+/*
+ * lf_jump_to_queue_head
+ *
+ * Jump the lock from the tail of the block queue to the head of
+ * the queue.
+ *
+ * Parameters: block                    lockf struct containing the 
+ *                                      block queue.
+ *             lock                     lockf struct to be jumped to the
+ *                                      front.
+ *
+ * Returns:    <void>
+ */
+static void
+lf_jump_to_queue_head(struct lockf *block, struct lockf *lock) 
+{
+	/* Move the lock to the head of the block queue. */
+	TAILQ_REMOVE(&block->lf_blkhd, lock, lf_block);
+	TAILQ_INSERT_HEAD(&block->lf_blkhd, lock, lf_block);
+}
+
+
+/*
+ * lf_drop_assertion
+ *
+ * Drops the task hold assertion.
+ *
+ * Parameters: block                    lockf struct holding the assertion.
+ *
+ * Returns:    <void>
+ */
+static void 
+lf_drop_assertion(struct lockf *block)
+{
+	task_t current_task;
+
+	current_task = proc_task((proc_t) block->lf_id);
+	task_importance_drop_internal_assertion(current_task, 1);
+	block->lf_boosted = LF_NOT_BOOSTED;
+}
+
+#endif /* IMPORTANCE_INHERITANCE */

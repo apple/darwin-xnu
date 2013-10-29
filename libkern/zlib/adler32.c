@@ -40,10 +40,6 @@
     #include "zlib.h"
 #endif /* KERNEL */
 
-#if defined __x86_64__ || defined __i386__ || defined _ARM_ARCH_6
-#include <stdint.h> // For uintptr_t.
-    extern uLong adler32_vec(uLong adler, uLong sum2, const Bytef *buf, uInt len);
-#endif
 
 #define BASE 65521UL    /* largest prime smaller than 65536 */
 #define NMAX 5552
@@ -130,22 +126,6 @@ uLong ZEXPORT adler32(adler, buf, len)
         return adler | (sum2 << 16);
     }
 
-#if defined __x86_64__ || defined __i386__ || defined _ARM_ARCH_6
-
-	if (len>=32000) {	/* use vector code only if len is sufficiently large to compensate registers save/restore */
-	/* align buf to 16-byte boundary */
-    while (((uintptr_t)buf)&15) { /* not on a 16-byte boundary */
-        len--;
-        adler += *buf++;
-        sum2 += adler;
-        if (adler >= BASE) adler -= BASE;
-        MOD4(sum2);             /* only added so many BASE's */
-    }
-
-    return adler32_vec(adler, sum2, buf, len);      // x86_64 or i386 (up to SSE3) or armv6 or up
-	}
-
-#endif	// defined __x86_64__ || defined __i386__ || defined _ARM_ARCH_6
 
     /* do length NMAX blocks -- requires just one modulo operation */
     while (len >= NMAX) {

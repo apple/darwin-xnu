@@ -129,6 +129,14 @@ int bsd_shm_tests( void * the_argp )
 		printf( "shm_unlink failed with error %d - \"%s\" \n", errno, strerror( errno) );
 		goto test_failed_exit;
 	}
+
+	/* unlinking a non existent path */
+	my_err = shm_unlink ( "/tmp/anonexistent_shm_oject" );
+	my_err = errno;
+	if ( my_err != ENOENT ) {
+		printf( "shm_unlink of non existent path failed with error %d - \"%s\" \n", errno, strerror( errno) );
+		goto test_failed_exit;
+	}
 	
 	my_addr = (char *) mmap( NULL, 4096, (PROT_READ | PROT_WRITE), (MAP_FILE | MAP_SHARED), my_fd, 0 );
 	if ( my_addr == (char *) -1 ) {

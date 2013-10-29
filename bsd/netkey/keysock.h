@@ -62,12 +62,10 @@ struct pfkeystat {
 #define KEY_SENDUP_ALL		1
 #define KEY_SENDUP_REGISTERED	2
 
+#ifdef BSD_KERNEL_PRIVATE
 #define PFKEY_STAT_INCREMENT(x)	 \
 	{lck_mtx_lock(pfkey_stat_mutex); (x)++; lck_mtx_unlock(pfkey_stat_mutex);}
 
-
-#ifdef KERNEL_PRIVATE
-#ifdef KERNEL
 struct keycb {
 	struct rawcb kp_raw;	/* rawcb */
 	int kp_promisc;		/* promiscuous mode */
@@ -86,7 +84,6 @@ extern int key_usrreq(struct socket *,
 
 extern int key_sendup(struct socket *, struct sadb_msg *, u_int, int);
 extern int key_sendup_mbuf(struct socket *, struct mbuf *, int);
-#endif /* KERNEL */
-#endif /* KERNEL_PRIVATE */
+#endif /* BSD_KERNEL_PRIVATE */
 
 #endif /*_NETKEY_KEYSOCK_H_*/

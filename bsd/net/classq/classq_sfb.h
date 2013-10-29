@@ -31,9 +31,10 @@
 
 #ifdef PRIVATE
 #ifdef BSD_KERNEL_PRIVATE
-#include <net/classq/if_classq.h>
 #include <stdbool.h>
 #include <sys/time.h>
+#include <net/flowadv.h>
+#include <net/classq/if_classq.h>
 #endif /* BSD_KERNEL_PRIVATE */
 
 #ifdef __cplusplus
@@ -56,7 +57,7 @@ struct sfbstats {
 	u_int64_t		dequeue_avg;
 	u_int64_t		rehash_intval;
 	u_int64_t		num_rehash;
-	u_int64_t		null_flowhash;
+	u_int64_t		null_flowid;
 	u_int64_t		flow_controlled;
 	u_int64_t		flow_feedback;
 };
@@ -78,17 +79,15 @@ struct sfb_stats {
 };
 
 #ifdef BSD_KERNEL_PRIVATE
-struct sfb_bin_fcentry {
-	SLIST_ENTRY(sfb_bin_fcentry) fce_link;
-	u_int32_t	fce_flowhash;
-};
-
-SLIST_HEAD(sfb_fc_list, sfb_bin_fcentry);
-
 struct sfb_bins {
 	u_int32_t		fudge;
 	struct sfbbinstats	stats[SFB_LEVELS][SFB_BINS];
 	struct timespec		freezetime[SFB_LEVELS][SFB_BINS];
+};
+
+struct sfb_fcl {
+	u_int32_t		cnt;
+	struct flowadv_fclist	fclist;
 };
 
 /* SFB flags */
@@ -127,7 +126,7 @@ typedef struct sfb {
 	struct sfb_bins	(*sfb_bins)[2];
 
 	/* Flow control lists for current set */
-	struct sfb_fc_list (*sfb_fc_lists)[SFB_BINS];
+	struct sfb_fcl	(*sfb_fc_lists)[SFB_BINS];
 
 	/* statistics */
 	struct sfbstats	sfb_stats __attribute__((aligned(8)));

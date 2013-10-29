@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2001-2010 Apple Inc. All rights reserved.
+ * Copyright (c) 2001-2013 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -85,9 +85,6 @@ IOBSDRegistryEntryGetData(void * entry, const char * property_name,
 #define BOOTP_RESPONSE	"bootp-response"
 #define BSDP_RESPONSE	"bsdp-response"
 #define DHCP_RESPONSE	"dhcp-response"
-
-/* forward declarations */
-int	inet_aton(char * cp, struct in_addr * pin);
 
 #define IP_FORMAT	"%d.%d.%d.%d"
 #define IP_CH(ip)	((u_char *)ip)
@@ -628,8 +625,7 @@ netboot_mountroot(void)
 	error = ENXIO;
 	goto failed;
     }
-    snprintf(ifr.ifr_name, sizeof(ifr.ifr_name), "%s%d", ifp->if_name,
-	     ifp->if_unit);
+    snprintf(ifr.ifr_name, sizeof(ifr.ifr_name), "%s", if_name(ifp));
     printf("netboot: using network interface '%s'\n", ifr.ifr_name);
 
     /* bring it up */

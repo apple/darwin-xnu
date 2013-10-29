@@ -51,7 +51,7 @@ extern "C" {
 
 extern void OSlibkernInit (void);
 
-void iokit_post_constructor_init(void) __attribute__((section("__TEXT, initcode")));
+void iokit_post_constructor_init(void);
 
 #include <kern/clock.h>
 #include <sys/time.h>

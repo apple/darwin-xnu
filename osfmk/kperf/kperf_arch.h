@@ -37,5 +37,6 @@
 
 /* common definitions */
 extern int kperf_mp_broadcast( void (*func)(void*), void *arg );
+extern int kperf_mp_signal(void);
 
 #endif /* _KPERF_ARCH_H */

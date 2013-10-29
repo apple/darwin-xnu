@@ -484,7 +484,7 @@ vm32_purgable_control(
 		return KERN_INVALID_ARGUMENT;
 
 	return vm_map_purgable_control(map,
-				       vm_map_trunc_page(address),
+				       vm_map_trunc_page(address, PAGE_MASK),
 				       control,
 				       state);
 }
@@ -499,9 +499,11 @@ vm32_map_page_query(
 	if (VM_MAP_NULL == map)
 		return KERN_INVALID_ARGUMENT;
 
-	return vm_map_page_query_internal(map,
-					  vm_map_trunc_page(offset),
-					  disposition, ref_count);
+	return vm_map_page_query_internal(
+		map,
+		vm_map_trunc_page(offset, PAGE_MASK),
+		disposition,
+		ref_count);
 }
 
 kern_return_t

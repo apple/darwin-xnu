@@ -75,6 +75,7 @@
 #include <sys/time.h>
 #include <sys/mount_internal.h>
 #include <sys/vnode_internal.h>
+#include <miscfs/specfs/specdev.h>
 #include <sys/namei.h>
 #include <sys/errno.h>
 #include <sys/malloc.h>
@@ -159,7 +160,7 @@ lck_mtx_t strcache_mtx_locks[NUM_STRCACHE_LOCKS];
 
 static vnode_t cache_lookup_locked(vnode_t dvp, struct componentname *cnp);
 static const char *add_name_internal(const char *, uint32_t, u_int, boolean_t, u_int);
-static void init_string_table(void) __attribute__((section("__TEXT, initcode")));
+static void init_string_table(void);
 static void cache_delete(struct namecache *, int);
 static void cache_enter_locked(vnode_t dvp, vnode_t vp, struct componentname *cnp, const char *strname);
 
@@ -170,7 +171,7 @@ static void cache_enter_locked(vnode_t dvp, vnode_t vp, struct componentname *cn
 void dump_string_table(void);
 #endif	/* DUMP_STRING_TABLE */
 
-static void init_crc32(void) __attribute__((section("__TEXT, initcode")));
+static void init_crc32(void);
 static unsigned int crc32tab[256];
 
 
@@ -196,6 +197,10 @@ static unsigned int crc32tab[256];
  * we encounter ENOENT during path reconstruction.  ENOENT means that 
  * one of the parents moved while we were building the path.  The 
  * caller can special handle this case by calling build_path again.
+ *
+ * If BUILDPATH_VOLUME_RELATIVE is set in flags, we return path 
+ * that is relative to the nearest mount point, i.e. do not 
+ * cross over mount points during building the path. 
  *
  * passed in vp must have a valid io_count reference
  */
@@ -263,7 +268,17 @@ again:
 
 			goto out_unlock;
 		} else {
-		        vp = vp->v_mount->mnt_vnodecovered;
+			/* 
+			 * This the root of the volume and the caller does not 
+			 * want to cross mount points.  Therefore just return 
+			 * '/' as the relative path. 
+			 */
+			if (flags & BUILDPATH_VOLUME_RELATIVE) {
+				*--end = '/';
+				goto out_unlock;
+			} else {
+				vp = vp->v_mount->mnt_vnodecovered;
+			}
 		}
 	}
 
@@ -443,6 +458,7 @@ bad_news:
 			if (vp && !vnode_isdir(vp) && vp->v_parent)
 				vp = vp->v_parent;
 		}
+
 		/*
 		 * When a mount point is crossed switch the vp.
 		 * Continue until we find the root or we find
@@ -457,7 +473,13 @@ bad_news:
 
 			if (!(tvp->v_flag & VROOT) || !tvp->v_mount)
 				break;			/* not the root of a mounted FS */
-	        	tvp = tvp->v_mount->mnt_vnodecovered;
+
+			if (flags & BUILDPATH_VOLUME_RELATIVE) {
+				/* Do not cross over mount points */
+				tvp = NULL;
+			} else {
+				tvp = tvp->v_mount->mnt_vnodecovered;
+			}
 		}
 		if (tvp == NULLVP)
 			goto out_unlock;
@@ -561,6 +583,51 @@ vnode_putname(const char *name)
 	vfs_removename(name);
 }
 
+static const char unknown_vnodename[] = "(unknown vnode name)";
+
+const char *
+vnode_getname_printable(vnode_t vp)
+{
+	const char *name = vnode_getname(vp);
+	if (name != NULL)
+		return name;
+	
+	switch (vp->v_type) {
+		case VCHR:
+		case VBLK:
+			{
+			/*
+			 * Create an artificial dev name from
+			 * major and minor device number
+			 */
+			char dev_name[64];
+			(void) snprintf(dev_name, sizeof(dev_name),
+					"%c(%u, %u)", VCHR == vp->v_type ? 'c':'b',
+					major(vp->v_rdev), minor(vp->v_rdev));
+			/*
+			 * Add the newly created dev name to the name
+			 * cache to allow easier cleanup. Also,
+			 * vfs_addname allocates memory for the new name
+			 * and returns it.
+			 */
+			NAME_CACHE_LOCK_SHARED();
+			name = vfs_addname(dev_name, strlen(dev_name), 0, 0);
+			NAME_CACHE_UNLOCK();
+			return name;
+			}
+		default:
+			return unknown_vnodename;
+	}
+}
+
+void 
+vnode_putname_printable(const char *name)
+{
+	if (name == unknown_vnodename)
+		return;
+	vnode_putname(name);
+}
+		
 
 /*
  * if VNODE_UPDATE_PARENT, and we can take
@@ -1001,7 +1068,7 @@ cache_lookup_path(struct nameidata *ndp, struct componentname *cnp, vnode_t dp,
 		microuptime(&tv);
 	}
 	for (;;) {
-	        /*
+		/*
 		 * Search a directory.
 		 *
 		 * The cn_hash value is for use by cache_lookup
@@ -1140,6 +1207,14 @@ skiprsrcfork:
 			}
 		}
 
+		if ((cnp->cn_flags & CN_SKIPNAMECACHE)) {
+			/*
+			 * Force lookup to go to the filesystem with
+			 * all cnp fields set up.
+			 */
+			break;
+		}
+
 		/*
 		 * "." and ".." aren't supposed to be cached, so check
 		 * for them before checking the cache.
@@ -1241,7 +1316,7 @@ need_dp:
 				 * immediately w/o waiting... it always succeeds
 				 */
 				vnode_get(dp);
-			} else if ( (vnode_getwithvid_drainok(dp, vid)) ) {
+			} else if ((error = vnode_getwithvid_drainok(dp, vid))) {
 				/*
 				 * failure indicates the vnode
 				 * changed identity or is being
@@ -1251,9 +1326,18 @@ need_dp:
 				 * don't necessarily return ENOENT, though, because
 				 * we really want to go back to disk and make sure it's
 				 * there or not if someone else is changing this
-				 * vnode.
+				 * vnode. That being said, the one case where we do want
+				 * to return ENOENT is when the vnode's mount point is
+				 * in the process of unmounting and we might cause a deadlock
+				 * in our attempt to take an iocount. An ENODEV error return
+				 * is from vnode_get* is an indication this but we change that
+				 * ENOENT for upper layers.
 				 */
-				error = ERECYCLE;
+				if (error == ENODEV) {
+					error = ENOENT;
+				} else {
+					error = ERECYCLE;
+				}
 				goto errorout;
 			}
 		}
@@ -1345,11 +1429,12 @@ cache_lookup_locked(vnode_t dvp, struct componentname *cnp)
 }
 
 
+unsigned int hash_string(const char *cp, int len);
 //
 // Have to take a len argument because we may only need to
 // hash part of a componentname.
 //
-static unsigned int
+unsigned int
 hash_string(const char *cp, int len)
 {
     unsigned hash = 0;

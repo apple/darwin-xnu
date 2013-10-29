@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000, 2002, 2005-2008 Apple Inc. All rights reserved.
+ * Copyright (c) 2000, 2002, 2005-2013 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -106,20 +106,29 @@ static Boolean ValidHFSRecord(const void *record, const BTreeControlBlock *btcb,
 {
 	u_int32_t			cNodeID;
 	
-	if ( btcb->maxKeyLength == kHFSExtentKeyMaximumLength )
-	{
-		return ( recordSize == sizeof(HFSExtentRecord) );
-	}
-	else if (btcb->maxKeyLength == kHFSPlusExtentKeyMaximumLength )
+	if (btcb->maxKeyLength == kHFSPlusExtentKeyMaximumLength )
 	{
 		return ( recordSize == sizeof(HFSPlusExtentRecord) );
 	}
+#if CONFIG_HFS_STD
+	else if ( btcb->maxKeyLength == kHFSExtentKeyMaximumLength )
+	{
+		return ( recordSize == sizeof(HFSExtentRecord) );
+	}
+#endif
+
 	else // Catalog record
 	{
 		const CatalogRecord *catalogRecord = (const CatalogRecord*) record;
 
 		switch(catalogRecord->recordType)
 		{
+
+#if CONFIG_HFS_STD
+			/*
+			 * HFS standard File/folder records and File/Folder Thread records
+			 * are only valid on configs that support HFS standard.
+			 */
 			case kHFSFolderRecord:
 			{
 				if ( recordSize != sizeof(HFSCatalogFolder) )
@@ -136,25 +145,8 @@ static Boolean ValidHFSRecord(const void *record, const BTreeControlBlock *btcb,
 			}
 			break;
 
-			case kHFSPlusFolderRecord:
-			{
-				if ( recordSize != sizeof(HFSPlusCatalogFolder) )
-					return false;
-				if ( catalogRecord->hfsPlusFolder.flags != 0 )
-					return false;
-				if ( catalogRecord->hfsPlusFolder.valence > 0x7FFF )
-					return false;
-					
-				cNodeID = catalogRecord->hfsPlusFolder.folderID;
-	
-				if ( (cNodeID == 0) || (cNodeID < 16 && cNodeID > 2) )
-					return false;
-			}
-			break;
-	
 			case kHFSFileRecord:
 			{
-//				u_int16_t					i;
 				HFSExtentDescriptor	*dataExtent;
 				HFSExtentDescriptor	*rsrcExtent;
 				
@@ -193,7 +185,40 @@ static Boolean ValidHFSRecord(const void *record, const BTreeControlBlock *btcb,
 #endif
 			}
 			break;
+
+			case kHFSFileThreadRecord:
+			case kHFSFolderThreadRecord:
+			{
+				if ( recordSize != sizeof(HFSCatalogThread) )
+					return false;
 	
+				cNodeID = catalogRecord->hfsThread.parentID;
+				if ( (cNodeID == 0) || (cNodeID < 16 && cNodeID > 2) )
+					return false;
+							
+				if ( (catalogRecord->hfsThread.nodeName[0] == 0) ||
+					 (catalogRecord->hfsThread.nodeName[0] > 31) )
+					return false;
+			}
+			break;
+#endif
+
+			case kHFSPlusFolderRecord:
+			{
+				if ( recordSize != sizeof(HFSPlusCatalogFolder) )
+					return false;
+				if ( catalogRecord->hfsPlusFolder.flags != 0 )
+					return false;
+				if ( catalogRecord->hfsPlusFolder.valence > 0x7FFF )
+					return false;
+					
+				cNodeID = catalogRecord->hfsPlusFolder.folderID;
+	
+				if ( (cNodeID == 0) || (cNodeID < 16 && cNodeID > 2) )
+					return false;
+			}
+			break;
+		
 			case kHFSPlusFileRecord:
 			{
 //				u_int16_t					i;
@@ -225,26 +250,10 @@ static Boolean ValidHFSRecord(const void *record, const BTreeControlBlock *btcb,
 				}
 #endif
 			}
-			break;
+			break;		
 
-			case kHFSFolderThreadRecord:
-			case kHFSFileThreadRecord:
-			{
-				if ( recordSize != sizeof(HFSCatalogThread) )
-					return false;
-	
-				cNodeID = catalogRecord->hfsThread.parentID;
-				if ( (cNodeID == 0) || (cNodeID < 16 && cNodeID > 2) )
-					return false;
-							
-				if ( (catalogRecord->hfsThread.nodeName[0] == 0) ||
-					 (catalogRecord->hfsThread.nodeName[0] > 31) )
-					return false;
-			}
-			break;
-		
-			case kHFSPlusFolderThreadRecord:
 			case kHFSPlusFileThreadRecord:
+			case kHFSPlusFolderThreadRecord:
 			{
 				if ( recordSize > sizeof(HFSPlusCatalogThread) || recordSize < (sizeof(HFSPlusCatalogThread) - sizeof(HFSUniStr255)))
 					return false;

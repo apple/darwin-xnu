@@ -1,8 +1,8 @@
 /*
- * Copyright (c) 2000-2011 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2012 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
- * 
+ *
  * This file contains Original Code and/or Modifications of Original Code
  * as defined in and that are subject to the Apple Public Source License
  * Version 2.0 (the 'License'). You may not use this file except in
@@ -11,10 +11,10 @@
  * unlawful or unlicensed copies of an Apple operating system, or to
  * circumvent, violate, or enable the circumvention or violation of, any
  * terms of an Apple operating system software license agreement.
- * 
+ *
  * Please obtain a copy of the License at
  * http://www.opensource.apple.com/apsl/ and read it before using this file.
- * 
+ *
  * The Original Code and all software distributed under the License are
  * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
@@ -22,7 +22,7 @@
  * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
  * Please see the License for the specific language governing rights and
  * limitations under the License.
- * 
+ *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*
@@ -134,6 +134,9 @@ struct tcphdr {
     (TCPOPT_NOP<<24|TCPOPT_NOP<<16|(ccopt)<<8|TCPOLEN_CC)
 #define	TCPOPT_SIGNATURE		19	/* Keyed MD5: RFC 2385 */
 #define	   TCPOLEN_SIGNATURE		18
+#if MPTCP
+#define	TCPOPT_MULTIPATH  		30
+#endif
 
 /* Option definitions */
 #define TCPOPT_SACK_PERMIT_HDR	\
@@ -162,15 +165,6 @@ struct tcphdr {
  * Setting this to "0" disables the minmss check.
  */
 #define	TCP_MINMSS 216
-
-/*
- * TCP_MINMSSOVERLOAD is defined to be 1000 which should cover any type
- * of interactive TCP session.
- * See tcp_subr.c tcp_minmssoverload SYSCTL declaration and tcp_input.c
- * for more comments.
- * Setting this to "0" disables the minmssoverload check.
- */
-#define	TCP_MINMSSOVERLOAD 1000
 
 /*
  * Default maximum segment size for TCP6.
@@ -207,17 +201,28 @@ struct tcphdr {
 #define TCP_RXT_CONNDROPTIME	0x80	/* time after which tcp retransmissions will be 
 					 * stopped and the connection will be dropped
 					 */
-#define TCP_RXT_FINDROP	0x100	/* when this option is set, drop a connection 
+#define TCP_RXT_FINDROP		0x100	/* when this option is set, drop a connection 
 					 * after retransmitting the FIN 3 times. It will
 					 * prevent holding too many mbufs in socket 
 					 * buffer queues.
 					 */
+#define	TCP_KEEPINTVL		0x101	/* interval between keepalives */
+#define	TCP_KEEPCNT		0x102	/* number of keepalives before close */
+#define	TCP_SENDMOREACKS	0x103	/* always ack every other packet */
 #ifdef PRIVATE
 #define	TCP_INFO		0x200	/* retrieve tcp_info structure */
 #define TCP_NOTSENT_LOWAT	0x201	/* Low water mark for TCP unsent data */
 #define TCP_MEASURE_SND_BW	0x202	/* Measure sender's bandwidth for this connection */
 #define TCP_MEASURE_BW_BURST	0x203	/* Burst size to use for bandwidth measurement */
 #define TCP_PEER_PID		0x204	/* Lookup pid of the process we're connected to */
+#define TCP_ADAPTIVE_READ_TIMEOUT	0x205	/* Read timeout used as a multiple of RTT */	
+/*
+ * Enable message delivery on a socket, this feature is currently unsupported and
+ * is subjected to change in future.
+ */
+#define	TCP_ENABLE_MSGS 0x206
+#define	TCP_ADAPTIVE_WRITE_TIMEOUT	0x207	/* Write timeout used as a multiple of RTT */
+
 /*
  * The TCP_INFO socket option is a private API and is subject to change
  */
@@ -230,6 +235,10 @@ struct tcphdr {
 
 #define TCPI_FLAG_LOSSRECOVERY	0x01	/* Currently in loss recovery */
 
+/*
+ * Add new fields to this structure at the end only. This will preserve
+ * binary compatibility.
+ */
 struct tcp_info {
 	u_int8_t	tcpi_state;			/* TCP FSM state. */
 	u_int8_t	tcpi_options;		/* Options enabled on conn. */
@@ -245,6 +254,7 @@ struct tcp_info {
 	u_int32_t	tcpi_rttcur;		/* Most recent value of RTT */
 	u_int32_t	tcpi_srtt;			/* Smoothed RTT */
 	u_int32_t	tcpi_rttvar;		/* RTT variance */
+	u_int32_t	tcpi_rttbest;		/* Best RTT we've seen */
 
 	u_int32_t	tcpi_snd_ssthresh;	/* Slow start threshold. */
 	u_int32_t	tcpi_snd_cwnd;		/* Send congestion window. */
@@ -258,17 +268,32 @@ struct tcp_info {
 	int32_t		tcpi_last_outif;	/* if_index of interface used to send last */
 	u_int32_t	tcpi_snd_sbbytes;	/* bytes in snd buffer including data inflight */
 	
+	u_int64_t	tcpi_txpackets __attribute__((aligned(8)));	/* total packets sent */
 	u_int64_t	tcpi_txbytes __attribute__((aligned(8)));
 									/* total bytes sent */	
 	u_int64_t	tcpi_txretransmitbytes __attribute__((aligned(8)));
 									/* total bytes retransmitted */	
 	u_int64_t	tcpi_txunacked __attribute__((aligned(8)));
 									/* current number of bytes not acknowledged */	
+	u_int64_t	tcpi_rxpackets __attribute__((aligned(8)));	/* total packets received */
 	u_int64_t	tcpi_rxbytes __attribute__((aligned(8)));
 									/* total bytes received */
 	u_int64_t	tcpi_rxduplicatebytes __attribute__((aligned(8)));
 									/* total duplicate bytes received */
-	u_int64_t	tcpi_snd_bw __attribute__((aligned(8)));		/* measured send bandwidth in bits/sec */
+	u_int64_t	tcpi_rxoutoforderbytes __attribute__((aligned(8)));
+									/* total out of order bytes received */
+	u_int64_t	tcpi_snd_bw __attribute__((aligned(8)));	/* measured send bandwidth in bits/sec */
+	u_int8_t	tcpi_synrexmits;	/* Number of syn retransmits before connect */
+	u_int8_t	tcpi_unused1;
+	u_int16_t	tcpi_unused2;
+	u_int64_t	tcpi_cell_rxpackets __attribute((aligned(8)));	/* packets received over cellular */
+	u_int64_t	tcpi_cell_rxbytes __attribute((aligned(8)));	/* bytes received over cellular */
+	u_int64_t	tcpi_cell_txpackets __attribute((aligned(8)));	/* packets transmitted over cellular */
+	u_int64_t	tcpi_cell_txbytes __attribute((aligned(8)));	/* bytes transmitted over cellular */
+	u_int64_t	tcpi_wifi_rxpackets __attribute((aligned(8)));	/* packets received over Wi-Fi */
+	u_int64_t	tcpi_wifi_rxbytes __attribute((aligned(8)));	/* bytes received over Wi-Fi */
+	u_int64_t	tcpi_wifi_txpackets __attribute((aligned(8)));	/* packets transmitted over Wi-Fi */
+	u_int64_t	tcpi_wifi_txbytes __attribute((aligned(8)));	/* bytes transmitted over Wi-Fi */
 };
 
 struct tcp_measure_bw_burst {
@@ -300,6 +325,17 @@ struct info_tuple {
 #define itpl_remote_sa 		itpl_remoteaddr._itpl_sa
 #define itpl_remote_sin		itpl_remoteaddr._itpl_sin
 #define itpl_remote_sin6	itpl_remoteaddr._itpl_sin6
+
+/*
+ * TCP connection info auxiliary data (CIAUX_TCP)
+ *
+ * Do not add new fields to this structure, just add them to tcp_info 
+ * structure towards the end. This will preserve binary compatibility.
+ */
+typedef struct conninfo_tcp {
+	pid_t			tcpci_peer_pid;	/* loopback peer PID if > 0 */
+	struct tcp_info		tcpci_tcp_info;	/* TCP info */
+} conninfo_tcp_t;
 
 #pragma pack()
 

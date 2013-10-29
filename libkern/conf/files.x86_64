@@ -1,7 +1,2 @@
 libkern/x86_64/OSAtomic.s			standard
-libkern/zlib/intel/inffastS.s		optional zlib
-libkern/zlib/intel/adler32vec.s		optional zlib
 
-# Optimized WKdm compressor
-libkern/kxld/i386/WKdmCompress.s	optional hibernation
-libkern/kxld/i386/WKdmDecompress.s	optional hibernation

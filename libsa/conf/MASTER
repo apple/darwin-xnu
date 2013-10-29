@@ -71,11 +71,6 @@ options		CONFIG_KXLD		# kxld/runtime linking of kexts # <config_kxld>
 
 options		DEVELOPMENT		# dev kernel				# <development>
 
-# configurable kernel - general switch to say we are building for an
-# embedded device
-#
-options         CONFIG_EMBEDDED         # <config_embedded>
-
 # CONFIG_KEXT_BASEMENT - alloc post boot loaded kexts after prelinked kexts
 #
 options		CONFIG_KEXT_BASEMENT		#		# <config_kext_basement>

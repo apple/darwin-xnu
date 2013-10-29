@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2010 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2013 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -167,14 +167,21 @@ struct igmp_ifinfo_u {
 #define IGMP_VERSION_3			3 /* Default */
 #endif /* PRIVATE */
 
-#ifdef XNU_KERNEL_PRIVATE
+#ifdef BSD_KERNEL_PRIVATE
 #include <libkern/libkern.h>
 #define IGMP_DEBUG 1
 #ifdef IGMP_DEBUG
-extern char * inet_ntoa(struct in_addr);
 extern int igmp_debug;
 
 #define IGMP_PRINTF(x)	do { if (igmp_debug) printf x; } while (0)
+#define	IGMP_INET_PRINTF(addr, x) do {					\
+	if (igmp_debug) {						\
+		char _igmp_inet_buf[MAX_IPv4_STR_LEN];			\
+		inet_ntop(AF_INET, &(addr), _igmp_inet_buf,		\
+		    sizeof(_igmp_inet_buf));				\
+		printf x;						\
+	}								\
+} while (0)
 #else
 #define	IGMP_PRINTF(x)
 #endif
@@ -226,7 +233,7 @@ extern int igmp_debug;
 #define IGMP_MAX_STATE_CHANGE_PACKETS	8 /* # of packets per state change */
 #define IGMP_MAX_RESPONSE_PACKETS	16 /* # of packets for general query */
 #define IGMP_MAX_RESPONSE_BURST		4 /* # of responses to send at once */
-#define IGMP_RESPONSE_BURST_INTERVAL	(PR_SLOWHZ)	/* 500ms */
+#define IGMP_RESPONSE_BURST_INTERVAL	1 /* 1 second */
 
 /*
  * IGMP-specific mbuf flags.
@@ -299,22 +306,32 @@ struct igmp_ifinfo {
  */
 #define IGMP_IFINFO(ifp)	((ifp)->if_igi)
 
-extern void igmp_init(void) __attribute__((section("__TEXT, initcode")));
-extern int igmp_change_state(struct in_multi *);
+/*
+ * IGMP timer schedule parameters
+ */
+struct igmp_tparams {
+	int	qpt;	/* querier_present_timers_running */
+	int	it;	/* interface_timers_running */
+	int	cst;	/* current_state_timers_running */
+	int	sct;	/* state_change_timers_running */
+};
+
+extern void igmp_init(struct protosw *, struct domain *);
+extern int igmp_change_state(struct in_multi *, struct igmp_tparams *);
 extern struct igmp_ifinfo *igmp_domifattach(struct ifnet *, int);
 extern void igmp_domifreattach(struct igmp_ifinfo *);
 extern void igmp_domifdetach(struct ifnet *);
 extern void igmp_input(struct mbuf *, int);
 extern int igmp_joingroup(struct in_multi *);
 extern void igmp_leavegroup(struct in_multi *);
-extern void igmp_slowtimo(void);
+extern void igmp_set_timeout(struct igmp_tparams *);
 extern void igi_addref(struct igmp_ifinfo *, int);
 extern void igi_remref(struct igmp_ifinfo *);
 __private_extern__ void igmp_initsilent(struct ifnet *, struct igmp_ifinfo *);
 
 SYSCTL_DECL(_net_inet_igmp);
 
-#endif /* XNU_KERNEL_PRIVATE */
+#endif /* BSD_KERNEL_PRIVATE */
 
 /*
  * Names for IGMP sysctl objects
@@ -322,11 +339,11 @@ SYSCTL_DECL(_net_inet_igmp);
 #define IGMPCTL_STATS		1	/* statistics (read-only) */
 #define IGMPCTL_MAXID		2
 
-#ifdef XNU_KERNEL_PRIVATE
+#ifdef BSD_KERNEL_PRIVATE
 #define IGMPCTL_NAMES { \
 	{ 0, 0 }, \
 	{ "stats", CTLTYPE_STRUCT }, \
 }
 
-#endif /* XNU_KERNEL_PRIVATE */
+#endif /* BSD_KERNEL_PRIVATE */
 #endif

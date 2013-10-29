@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2004 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2004-2012 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -34,7 +34,7 @@
 
 __BEGIN_DECLS
 /* Not exported */
-extern int ether_family_init(void) __attribute__((section("__TEXT, initcode")));
+extern int ether_family_init(void);
 
 /*
  * These functions may be used for an interface emulating an ethernet
@@ -43,19 +43,24 @@ extern int ether_family_init(void) __attribute__((section("__TEXT, initcode")));
  * functions when filling out the ifnet_init_params structure.
  */
 errno_t	ether_demux(ifnet_t interface, mbuf_t packet, char* header,
-					protocol_family_t *protocol);
+    protocol_family_t *protocol);
 errno_t	ether_add_proto(ifnet_t interface, protocol_family_t protocol,
-						const struct ifnet_demux_desc *demux_list,
-						u_int32_t demux_count);
+    const struct ifnet_demux_desc *demux_list, u_int32_t demux_count);
 errno_t	ether_del_proto(ifnet_t interface, protocol_family_t protocol);
-errno_t ether_frameout(ifnet_t interface, mbuf_t *packet,
-					   const struct sockaddr *dest, const char *dest_lladdr,
-					   const char *frame_type
 #if KPI_INTERFACE_EMBEDDED
-					   , 
-					   u_int32_t *prepend_len, u_int32_t *postpend_len
-#endif /* KPI_INTERFACE_EMBEDDED */
-					   );
+errno_t ether_frameout(ifnet_t interface, mbuf_t *packet,
+    const struct sockaddr *dest, const char *dest_lladdr,
+    const char *frame_type, u_int32_t *prepend_len, u_int32_t *postpend_len);
+#else /* !KPI_INTERFACE_EMBEDDED */
+errno_t ether_frameout(ifnet_t interface, mbuf_t *packet,
+    const struct sockaddr *dest, const char *dest_lladdr,
+    const char *frame_type);
+#endif /* !KPI_INTERFACE_EMBEDDED */
+#ifdef KERNEL_PRIVATE
+errno_t ether_frameout_extended(ifnet_t interface, mbuf_t *packet,
+    const struct sockaddr *dest, const char *dest_lladdr,
+    const char *frame_type, u_int32_t *prepend_len, u_int32_t *postpend_len);
+#endif /* KERNEL_PRIVATE */
 errno_t	ether_ioctl(ifnet_t interface, u_int32_t command, void* data);
 errno_t	ether_check_multi(ifnet_t ifp, const struct sockaddr *multicast);
 

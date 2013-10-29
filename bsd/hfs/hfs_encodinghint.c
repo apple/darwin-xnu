@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2001-2003 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2001-2013 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -72,6 +72,9 @@ u_int8_t cjk_encoding[] = {
 	/* 1110 */  kTextEncodingMacKorean,
 	/* 1111 */  kTextEncodingMacJapanese
 };
+
+
+#if CONFIG_HFS_STD
 
 /*
  * CJK Mac Encoding Bitmap
@@ -736,6 +739,7 @@ static u_int8_t cjk_bitmap[] = {
  0x0D,0x04,0x04,0x00,0x00,0x00,0x00,0x00,
 };
 
+
 /*
  * Pick a suitable Mac encoding value for a Unicode string.
  *
@@ -896,6 +900,16 @@ hfs_pickencoding(const u_int16_t *src, int len)
 	
 	return guess;
 }
+
+#else /* HFS standard *NOT* supported */
+
+u_int32_t
+hfs_pickencoding(__unused const u_int16_t *src, __unused int len) {
+	/* Just return kTextEncodingMacRoman if HFS standard is not supported. */
+	return kTextEncodingMacRoman;
+}
+
+#endif  /* CONFIG_HFS_STD */
 
 
 __private_extern__

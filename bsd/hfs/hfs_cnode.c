@@ -62,6 +62,7 @@ static int hfs_isordered(struct cnode *, struct cnode *);
 
 extern int hfs_removefile_callback(struct buf *bp, void *hfsmp);
 
+
 __inline__ int hfs_checkdeleted (struct cnode *cp) {
 	return ((cp->c_flag & (C_DELETED | C_NOEXISTS)) ? ENOENT : 0);	
 }
@@ -84,7 +85,7 @@ int hfs_set_backingstore (struct vnode *vp, int val) {
 	}
 
 	/* lock the cnode */
-	err = hfs_lock (cp, HFS_EXCLUSIVE_LOCK);
+	err = hfs_lock (cp, HFS_EXCLUSIVE_LOCK, HFS_LOCK_DEFAULT);
 	if (err) {
 		return err;
 	}
@@ -123,7 +124,7 @@ int hfs_is_backingstore (struct vnode *vp, int *val) {
 	cp = VTOC(vp);
 
 	/* lock the cnode */
-	err = hfs_lock (cp, HFS_SHARED_LOCK);
+	err = hfs_lock (cp, HFS_SHARED_LOCK, HFS_LOCK_DEFAULT);
 	if (err) {
 		return err;
 	}
@@ -224,7 +225,7 @@ int hfs_cnode_teardown (struct vnode *vp, vfs_context_t ctx, int reclaim) {
 			hfs_unlock(cp); 
 			/* ubc_setsize just fails if we were to call this from VNOP_RECLAIM */
 			ubc_setsize(vp, 0);
-			(void) hfs_lock(cp, HFS_FORCE_LOCK);
+			(void) hfs_lock(cp, HFS_EXCLUSIVE_LOCK, HFS_LOCK_ALLOW_NOEXISTS);
 		}	
 	}
 	
@@ -256,7 +257,7 @@ int hfs_cnode_teardown (struct vnode *vp, vfs_context_t ctx, int reclaim) {
 		hfs_filedone(vp, ctx);
 	}
 
- 	/* 
+	/* 
 	 * We're holding the cnode lock now.  Stall behind any shadow BPs that may
 	 * be involved with this vnode if it is a symlink.  We don't want to allow 
 	 * the blocks that we're about to release to be put back into the pool if there
@@ -309,9 +310,9 @@ int hfs_cnode_teardown (struct vnode *vp, vfs_context_t ctx, int reclaim) {
 	 */
 	
 	if ((v_type == VREG || v_type == VLNK) && 
-		(cp->c_flag & C_DELETED) &&
-		((forkcount == 1) || (!VNODE_IS_RSRC(vp)))) {
-
+			(cp->c_flag & C_DELETED) &&
+			((forkcount == 1) || (!VNODE_IS_RSRC(vp)))) {
+			
 		/* Truncate away our own fork data. (Case A, B, C above) */
 		if (VTOF(vp)->ff_blocks != 0) {
 
@@ -337,7 +338,7 @@ int hfs_cnode_teardown (struct vnode *vp, vfs_context_t ctx, int reclaim) {
 				}
 			}
 
- 			/*
+			/*
 			 * At this point, we have decided that this cnode is
 			 * suitable for full removal.  We are about to deallocate
 			 * its blocks and remove its entry from the catalog. 
@@ -359,7 +360,8 @@ int hfs_cnode_teardown (struct vnode *vp, vfs_context_t ctx, int reclaim) {
 			if (hfsmp->jnl && vnode_islnk(vp)) {
 				buf_iterate(vp, hfs_removefile_callback, BUF_SKIP_NONLOCKED, (void *)hfsmp);
 			}
-	
+
+
 			/*
 			 * This truncate call (and the one below) is fine from VNOP_RECLAIM's 
 			 * context because we're only removing blocks, not zero-filling new 
@@ -376,6 +378,7 @@ int hfs_cnode_teardown (struct vnode *vp, vfs_context_t ctx, int reclaim) {
 				hfs_end_transaction(hfsmp);
 				started_tr = 0;
 			}
+
 		}
 		
 		/* 
@@ -421,7 +424,7 @@ int hfs_cnode_teardown (struct vnode *vp, vfs_context_t ctx, int reclaim) {
 
 			lockflags = hfs_systemfile_lock (hfsmp, SFL_CATALOG, HFS_SHARED_LOCK);
 
-			error = cat_lookup (hfsmp, desc_ptr, 1, (struct cat_desc *) NULL, 
+			error = cat_lookup (hfsmp, desc_ptr, 1, 0, (struct cat_desc *) NULL, 
 					(struct cat_attr*) NULL, &lookup_rsrc->lookup_fork.ff_data, NULL);
 
 			hfs_systemfile_unlock (hfsmp, lockflags);
@@ -536,8 +539,9 @@ int hfs_cnode_teardown (struct vnode *vp, vfs_context_t ctx, int reclaim) {
          */
         error = cat_delete(hfsmp, &cp->c_desc, &cp->c_attr);
 		
-        if (error && truncated && (error != ENXIO))
+        if (error && truncated && (error != ENXIO)) {
             printf("hfs_inactive: couldn't delete a truncated file!");
+	}
 		
         /* Update HFS Private Data dir */
         if (error == 0) {
@@ -701,11 +705,11 @@ hfs_vnop_inactive(struct vnop_inactive_args *ap)
 	}
 	
 	if ((v_type == VREG || v_type == VLNK)) {
-		hfs_lock_truncate(cp, HFS_EXCLUSIVE_LOCK);
+		hfs_lock_truncate(cp, HFS_EXCLUSIVE_LOCK, HFS_LOCK_DEFAULT);
 		took_trunc_lock = 1;
 	}
 	
-	(void) hfs_lock(cp, HFS_FORCE_LOCK);
+	(void) hfs_lock(cp, HFS_EXCLUSIVE_LOCK, HFS_LOCK_ALLOW_NOEXISTS);
 	
 	/* 
 	 * Call cnode_teardown to push out dirty blocks to disk, release open-unlinked
@@ -720,7 +724,7 @@ hfs_vnop_inactive(struct vnop_inactive_args *ap)
      * truncate lock)
      */
 	if (took_trunc_lock) {
-	    hfs_unlock_truncate(cp, 0);
+	    hfs_unlock_truncate(cp, HFS_LOCK_DEFAULT);
 	}
 	
 	hfs_unlock(cp);
@@ -787,7 +791,7 @@ hfs_filedone(struct vnode *vp, vfs_context_t context)
 
 	hfs_unlock(cp);
 	(void) cluster_push(vp, cluster_flags);
-	hfs_lock(cp, HFS_FORCE_LOCK);
+	hfs_lock(cp, HFS_EXCLUSIVE_LOCK, HFS_LOCK_ALLOW_NOEXISTS);
 
 	/*
 	 * Explicitly zero out the areas of file
@@ -806,7 +810,7 @@ hfs_filedone(struct vnode *vp, vfs_context_t context)
 		hfs_unlock(cp);
 		(void) cluster_write(vp, (struct uio *) 0,
 				     leof, end + 1, start, (off_t)0, cluster_zero_flags);
-		hfs_lock(cp, HFS_FORCE_LOCK);
+		hfs_lock(cp, HFS_EXCLUSIVE_LOCK, HFS_LOCK_ALLOW_NOEXISTS);
 		cp->c_flag |= C_MODIFIED;
 	}
 	cp->c_flag &= ~C_ZFWANTSYNC;
@@ -824,7 +828,7 @@ hfs_filedone(struct vnode *vp, vfs_context_t context)
 
 	hfs_unlock(cp);
 	(void) cluster_push(vp, cluster_flags);
-	hfs_lock(cp, HFS_FORCE_LOCK);
+	hfs_lock(cp, HFS_EXCLUSIVE_LOCK, HFS_LOCK_ALLOW_NOEXISTS);
 	
 	/*
 	 * If the hfs_truncate didn't happen to flush the vnode's
@@ -862,7 +866,7 @@ hfs_vnop_reclaim(struct vnop_reclaim_args *ap)
 	 * all dirty pages have been synced and nobody should be competing
 	 * with us for this thread.
 	 */
-	(void) hfs_lock (cp, HFS_FORCE_LOCK);
+	(void) hfs_lock(cp, HFS_EXCLUSIVE_LOCK, HFS_LOCK_ALLOW_NOEXISTS);
 
 	/* 
 	 * Sync to disk any remaining data in the cnode/vnode.  This includes
@@ -936,6 +940,7 @@ hfs_vnop_reclaim(struct vnop_reclaim_args *ap)
 	 */
 	if (reclaim_cnode) {
 		hfs_chashwakeup(hfsmp, cp, H_ALLOC | H_TRANSIT);
+		hfs_unlock(cp);
 		hfs_reclaim_cnode(cp);
 	} 
 	else  {
@@ -952,10 +957,13 @@ hfs_vnop_reclaim(struct vnop_reclaim_args *ap)
 
 
 extern int (**hfs_vnodeop_p) (void *);
-extern int (**hfs_std_vnodeop_p) (void *);
 extern int (**hfs_specop_p)  (void *);
 #if FIFO
 extern int (**hfs_fifoop_p)  (void *);
+#endif
+
+#if CONFIG_HFS_STD
+extern int (**hfs_std_vnodeop_p) (void *);
 #endif
 
 /*
@@ -1013,7 +1021,7 @@ hfs_getnewvnode(
 	if (vtype == VBAD) {
 		/* Mark the FS as corrupt and bail out */
 		hfs_mark_volume_inconsistent(hfsmp);
-		return (EINVAL);
+		return EINVAL;
 	}
 
 	/* Zero out the out_flags */
@@ -1111,6 +1119,20 @@ hfs_getnewvnode(
 				 * item.  We are not susceptible to the lookup fastpath issue at this point.
 				 */
 				replace_desc(cp, descp);
+
+				/*
+				 * This item was a hardlink, and its name needed to be updated. By replacing the 
+				 * descriptor above, we've now updated the cnode's internal representation of
+				 * its link ID/CNID, parent ID, and its name.  However, VFS must now be alerted
+				 * to the fact that this vnode now has a new parent, since we cannot guarantee
+				 * that the new link lived in the same directory as the alternative name for
+				 * this item.  
+				 */
+				if ((*vpp != NULL) && (cnp)) {
+					/* we could be requesting the rsrc of a hardlink file... */
+					vnode_update_identity (*vpp, dvp, cnp->cn_nameptr, cnp->cn_namelen, cnp->cn_hash,
+							(VNODE_UPDATE_PARENT | VNODE_UPDATE_NAME));
+				}
 			}
 		}
 	}
@@ -1134,6 +1156,9 @@ hfs_getnewvnode(
 			int error = 0;
 			if (!hfs_valid_cnode (hfsmp, dvp, (wantrsrc ? NULL : cnp), cp->c_fileid, attrp, &error)) {
 				hfs_chash_abort(hfsmp, cp);
+				if ((flags & GNV_SKIPLOCK) == 0) {
+					hfs_unlock(cp);
+				}
 				hfs_reclaim_cnode(cp);
 				*vpp = NULL;
 				/* 
@@ -1304,8 +1329,10 @@ hfs_getnewvnode(
 #endif
 	if (vtype == VBLK || vtype == VCHR)
 		vfsp.vnfs_vops = hfs_specop_p;
+#if CONFIG_HFS_STD
 	else if (hfs_standard)
 		vfsp.vnfs_vops = hfs_std_vnodeop_p;
+#endif
 	else 
 		vfsp.vnfs_vops = hfs_vnodeop_p;
 
@@ -1431,8 +1458,7 @@ hfs_reclaim_cnode(struct cnode *cp)
 	 * attempting to reclaim a cnode with only one live fork.  Because the vnode
 	 * went through reclaim, any future attempts to use this item will have to
 	 * go through lookup again, which will need to create a new vnode.  Thus,
-	 * destroying the locks below (while they were still held during our parent 
-	 * function hfs_vnop_reclaim) is safe.
+	 * destroying the locks below is safe.
 	 */	
 	
 	lck_rw_destroy(&cp->c_rwlock, hfs_rwlock_group);
@@ -1444,7 +1470,8 @@ hfs_reclaim_cnode(struct cnode *cp)
 	}
 #endif
 #if CONFIG_PROTECT
-	cp_entry_destroy(&cp->c_cpentry);
+	cp_entry_destroy(cp->c_cpentry);
+	cp->c_cpentry = NULL;
 #endif
 	
 	
@@ -1505,7 +1532,7 @@ hfs_valid_cnode(struct hfsmount *hfsmp, struct vnode *dvp, struct componentname 
 		 * summing the number of blocks in the resident extents.
 		 */
 		
-		lookup = cat_lookup (hfsmp, &cndesc, 0, NULL, &attr, &fork, NULL);
+		lookup = cat_lookup (hfsmp, &cndesc, 0, 0, NULL, &attr, &fork, NULL);
 
 		if ((lookup == 0) && (cnid == attr.ca_fileid)) {
 			stillvalid = 1;
@@ -1646,6 +1673,110 @@ u_int32_t hfs_get_dateadded (struct cnode *cp) {
 }
 
 /*
+ * Per HI and Finder requirements, HFS maintains a "write/generation count"
+ * for each file that is incremented on any write & pageout.  It should start 
+ * at 1 to reserve "0" as a special value.  If it should ever wrap around,
+ * it will skip using 0.
+ *
+ * Note that this field is also set explicitly in the hfs_vnop_setxattr code.
+ * We must ignore user attempts to set this part of the finderinfo, and
+ * so we need to save a local copy of the date added, write in the user 
+ * finderinfo, then stuff the value back in.  
+ */
+void hfs_write_gencount (struct cat_attr *attrp, uint32_t gencount) {
+	u_int8_t *finfo = NULL;
+
+	/* overlay the FinderInfo to the correct pointer, and advance */
+	finfo = (u_int8_t*)attrp->ca_finderinfo;
+	finfo = finfo + 16;
+
+	/* 
+	 * Make sure to write it out as big endian, since that's how
+	 * finder info is defined.  
+	 *
+	 * Generation count is only supported for files.
+	 */
+	if (S_ISREG(attrp->ca_mode)) {
+		struct FndrExtendedFileInfo *extinfo = (struct FndrExtendedFileInfo *)finfo;
+		extinfo->write_gen_counter = OSSwapHostToBigInt32(gencount);
+	}
+
+	/* If it were neither directory/file, then we'd bail out */
+	return;
+}
+
+/* Increase the gen count by 1; if it wraps around to 0, increment by two */
+uint32_t hfs_incr_gencount (struct cnode *cp) {
+	u_int8_t *finfo = NULL;
+	u_int32_t gcount = 0;
+
+	/* overlay the FinderInfo to the correct pointer, and advance */
+	finfo = (u_int8_t*)cp->c_finderinfo;
+	finfo = finfo + 16;
+
+	/* 
+	 * FinderInfo is written out in big endian... make sure to convert it to host
+	 * native before we use it.
+	 */
+	if (S_ISREG(cp->c_attr.ca_mode)) {
+		struct FndrExtendedFileInfo *extinfo = (struct FndrExtendedFileInfo *)finfo;
+		gcount = OSSwapBigToHostInt32 (extinfo->write_gen_counter);
+
+		/* Was it zero to begin with (file originated in 10.8 or earlier?) */
+		if (gcount == 0) {
+			gcount++;
+		}
+
+		/* now bump it */
+		gcount++;
+
+		/* Did it wrap around ? */
+		if (gcount == 0) {
+			gcount++;
+		}
+		extinfo->write_gen_counter = OSSwapHostToBigInt32 (gcount);
+	}
+	else {
+		gcount = 0;
+	}	
+
+	return gcount;
+}
+
+/* Getter for the gen count */
+u_int32_t hfs_get_gencount (struct cnode *cp) {
+	u_int8_t *finfo = NULL;
+	u_int32_t gcount = 0;
+
+	/* overlay the FinderInfo to the correct pointer, and advance */
+	finfo = (u_int8_t*)cp->c_finderinfo;
+	finfo = finfo + 16;
+
+	/* 
+	 * FinderInfo is written out in big endian... make sure to convert it to host
+	 * native before we use it.
+	 */
+	if (S_ISREG(cp->c_attr.ca_mode)) {
+		struct FndrExtendedFileInfo *extinfo = (struct FndrExtendedFileInfo *)finfo;
+		gcount = OSSwapBigToHostInt32 (extinfo->write_gen_counter);
+		
+		/* 
+		 * Is it zero?  File might originate in 10.8 or earlier. We lie and bump it to 1,
+		 * since the incrementer code is able to handle this case and will double-increment
+		 * for us.
+		 */
+		if (gcount == 0) {
+			gcount++;	
+		}
+	}
+	else {
+		gcount = 0;
+	}	
+
+	return gcount;
+}
+
+/*
  * Touch cnode times based on c_touch_xxx flags
  *
  * cnode must be locked exclusive
@@ -1663,10 +1794,12 @@ hfs_touchtimes(struct hfsmount *hfsmp, struct cnode* cp)
 		cp->c_touch_modtime = FALSE;
 		return;
 	}
+#if CONFIG_HFS_STD
 	else if (hfsmp->hfs_flags & HFS_STANDARD) {
 	/* HFS Standard doesn't support access times */
 		cp->c_touch_acctime = FALSE;
 	}
+#endif
 
 	ctx = vfs_context_current();
 	/*
@@ -1710,7 +1843,7 @@ hfs_touchtimes(struct hfsmount *hfsmp, struct cnode* cp)
 			cp->c_touch_modtime = FALSE;
 			cp->c_flag |= C_MODIFIED;
 			touchvol = 1;
-#if 1
+#if CONFIG_HFS_STD
 			/*
 			 * HFS dates that WE set must be adjusted for DST
 			 */
@@ -1746,14 +1879,12 @@ hfs_touchtimes(struct hfsmount *hfsmp, struct cnode* cp)
  * Lock a cnode.
  */
 int
-hfs_lock(struct cnode *cp, enum hfslocktype locktype)
+hfs_lock(struct cnode *cp, enum hfs_locktype locktype, enum hfs_lockflags flags)
 {
 	void * thread = current_thread();
 
 	if (cp->c_lockowner == thread) {
-		/*
-		 * Only the extents and bitmap file's support lock recursion.
-		 */
+		/* Only the extents and bitmap files support lock recursion. */
 		if ((cp->c_fileid == kHFSExtentsFileID) ||
 		    (cp->c_fileid == kHFSAllocationFileID)) {
 			cp->c_syslockcount++;
@@ -1764,13 +1895,11 @@ hfs_lock(struct cnode *cp, enum hfslocktype locktype)
 		lck_rw_lock_shared(&cp->c_rwlock);
 		cp->c_lockowner = HFS_SHARED_OWNER;
 
-	} else /* HFS_EXCLUSIVE_LOCK */ {
+	} else { /* HFS_EXCLUSIVE_LOCK */
 		lck_rw_lock_exclusive(&cp->c_rwlock);
 		cp->c_lockowner = thread;
 
-		/*
-		 * Only the extents and bitmap file's support lock recursion.
-		 */
+		/* Only the extents and bitmap files support lock recursion. */
 		if ((cp->c_fileid == kHFSExtentsFileID) ||
 		    (cp->c_fileid == kHFSAllocationFileID)) {
 			cp->c_syslockcount = 1;
@@ -1813,9 +1942,10 @@ hfs_lock(struct cnode *cp, enum hfslocktype locktype)
 #endif /* HFS_CHECK_LOCK_ORDER */
 	
 	/*
-	 * Skip cnodes that no longer exist (were deleted).
+	 * Skip cnodes for regular files that no longer exist 
+	 * (marked deleted, catalog entry gone).
 	 */
-	if ((locktype != HFS_FORCE_LOCK) &&
+	if (((flags & HFS_LOCK_ALLOW_NOEXISTS) == 0) && 
 	    ((cp->c_desc.cd_flags & CD_ISMETA) == 0) &&
 	    (cp->c_flag & C_NOEXISTS)) {
 		hfs_unlock(cp);
@@ -1828,7 +1958,7 @@ hfs_lock(struct cnode *cp, enum hfslocktype locktype)
  * Lock a pair of cnodes.
  */
 int
-hfs_lockpair(struct cnode *cp1, struct cnode *cp2, enum hfslocktype locktype)
+hfs_lockpair(struct cnode *cp1, struct cnode *cp2, enum hfs_locktype locktype)
 {
 	struct cnode *first, *last;
 	int error;
@@ -1837,7 +1967,7 @@ hfs_lockpair(struct cnode *cp1, struct cnode *cp2, enum hfslocktype locktype)
 	 * If cnodes match then just lock one.
 	 */
 	if (cp1 == cp2) {
-		return hfs_lock(cp1, locktype);
+		return hfs_lock(cp1, locktype, HFS_LOCK_DEFAULT);
 	}
 
 	/*
@@ -1851,10 +1981,10 @@ hfs_lockpair(struct cnode *cp1, struct cnode *cp2, enum hfslocktype locktype)
 		last = cp1;
 	}
 
-	if ( (error = hfs_lock(first, locktype))) {
+	if ( (error = hfs_lock(first, locktype, HFS_LOCK_DEFAULT))) {
 		return (error);
 	}
-	if ( (error = hfs_lock(last, locktype))) {
+	if ( (error = hfs_lock(last, locktype, HFS_LOCK_DEFAULT))) {
 		hfs_unlock(first);
 		return (error);
 	}
@@ -1888,7 +2018,7 @@ hfs_isordered(struct cnode *cp1, struct cnode *cp2)
  */
 int
 hfs_lockfour(struct cnode *cp1, struct cnode *cp2, struct cnode *cp3,
-             struct cnode *cp4, enum hfslocktype locktype, struct cnode **error_cnode)
+             struct cnode *cp4, enum hfs_locktype locktype, struct cnode **error_cnode)
 {
 	struct cnode * a[3];
 	struct cnode * b[3];
@@ -1928,7 +2058,7 @@ hfs_lockfour(struct cnode *cp1, struct cnode *cp2, struct cnode *cp3,
 	 */
 	for (i = 0; i < k; ++i) {
 		if (list[i])
-			if ((error = hfs_lock(list[i], locktype))) {
+			if ((error = hfs_lock(list[i], locktype, HFS_LOCK_DEFAULT))) {
 				/* Only stuff error_cnode if requested */
 				if (error_cnode) {
 					*error_cnode = list[i];
@@ -2062,13 +2192,14 @@ skip2:
  * hfs_lock.
  */
 void
-hfs_lock_truncate(struct cnode *cp, enum hfslocktype locktype)
+hfs_lock_truncate(struct cnode *cp, enum hfs_locktype locktype, enum hfs_lockflags flags)
 {
 	void * thread = current_thread();
 
 	if (cp->c_truncatelockowner == thread) {
 		/* 
-		 * Only HFS_RECURSE_TRUNCLOCK is allowed to recurse.
+		 * Ignore grabbing the lock if it the current thread already 
+		 * holds exclusive lock.
 		 * 
 		 * This is needed on the hfs_vnop_pagein path where we need to ensure
 		 * the file does not change sizes while we are paging in.  However,
@@ -2077,16 +2208,13 @@ hfs_lock_truncate(struct cnode *cp, enum hfslocktype locktype)
 		 * the truncate lock exclusive, allow it to proceed, but ONLY if 
 		 * it's in the recursive case.
 		 */
-		if (locktype != HFS_RECURSE_TRUNCLOCK) {
+		if ((flags & HFS_LOCK_SKIP_IF_EXCLUSIVE) == 0) {
 			panic("hfs_lock_truncate: cnode %p locked!", cp);
 		}
-	}
-	/* HFS_RECURSE_TRUNCLOCK takes a shared lock if it is not already locked */
-	else if ((locktype == HFS_SHARED_LOCK) || (locktype == HFS_RECURSE_TRUNCLOCK)) {
+	} else if (locktype == HFS_SHARED_LOCK) {
 		lck_rw_lock_shared(&cp->c_truncatelock);
 		cp->c_truncatelockowner = HFS_SHARED_OWNER;
-	}
-	else { /* must be an HFS_EXCLUSIVE_LOCK */
+	} else { /* HFS_EXCLUSIVE_LOCK */
 		lck_rw_lock_exclusive(&cp->c_truncatelock);
 		cp->c_truncatelockowner = thread;
 	}
@@ -2099,13 +2227,15 @@ hfs_lock_truncate(struct cnode *cp, enum hfslocktype locktype)
  * case.  To prevent deadlocks while a VM copy object is moving pages, HFS vnop pagein will
  * temporarily need to disable V2 semantics.  
  */
-int hfs_try_trunclock (struct cnode *cp, enum hfslocktype locktype) {
+int hfs_try_trunclock (struct cnode *cp, enum hfs_locktype locktype, enum hfs_lockflags flags)
+{
 	void * thread = current_thread();
 	boolean_t didlock = false;
 
 	if (cp->c_truncatelockowner == thread) {
 		/* 
-		 * Only HFS_RECURSE_TRUNCLOCK is allowed to recurse.
+		 * Ignore grabbing the lock if the current thread already 
+		 * holds exclusive lock.
 		 * 
 		 * This is needed on the hfs_vnop_pagein path where we need to ensure
 		 * the file does not change sizes while we are paging in.  However,
@@ -2114,18 +2244,15 @@ int hfs_try_trunclock (struct cnode *cp, enum hfslocktype locktype) {
 		 * the truncate lock exclusive, allow it to proceed, but ONLY if 
 		 * it's in the recursive case.
 		 */
-		if (locktype != HFS_RECURSE_TRUNCLOCK) {
+		if ((flags & HFS_LOCK_SKIP_IF_EXCLUSIVE) == 0) {
 			panic("hfs_lock_truncate: cnode %p locked!", cp);
 		}
-	}
-	/* HFS_RECURSE_TRUNCLOCK takes a shared lock if it is not already locked */
-	else if ((locktype == HFS_SHARED_LOCK) || (locktype == HFS_RECURSE_TRUNCLOCK)) {
+	} else if (locktype == HFS_SHARED_LOCK) {
 		didlock = lck_rw_try_lock(&cp->c_truncatelock, LCK_RW_TYPE_SHARED);
 		if (didlock) {
 			cp->c_truncatelockowner = HFS_SHARED_OWNER;
 		}
-	}
-	else { /* must be an HFS_EXCLUSIVE_LOCK */
+	} else { /* HFS_EXCLUSIVE_LOCK */
 		didlock = lck_rw_try_lock (&cp->c_truncatelock, LCK_RW_TYPE_EXCLUSIVE);
 		if (didlock) {
 			cp->c_truncatelockowner = thread;
@@ -2139,26 +2266,30 @@ int hfs_try_trunclock (struct cnode *cp, enum hfslocktype locktype) {
 /*
  * Unlock the truncate lock, which protects against size changes.
  * 
- * The been_recursed argument is used when we may need to return
- * from this function without actually unlocking the truncate lock.
+ * If HFS_LOCK_SKIP_IF_EXCLUSIVE flag was set, it means that a previous 
+ * hfs_lock_truncate() might have skipped grabbing a lock because 
+ * the current thread was already holding the lock exclusive and 
+ * we may need to return from this function without actually unlocking 
+ * the truncate lock.
  */
 void
-hfs_unlock_truncate(struct cnode *cp, int been_recursed)
+hfs_unlock_truncate(struct cnode *cp, enum hfs_lockflags flags)
 {
 	void *thread = current_thread();	
 
 	/*
-	 * If been_recursed is nonzero AND the current lock owner of the
-	 * truncate lock is our current thread, then we must have recursively
-	 * taken the lock earlier on.  If the lock were unlocked, 
-	 * HFS_RECURSE_TRUNCLOCK took a shared lock and it would fall through
-	 * to the SHARED case below. 
+	 * If HFS_LOCK_SKIP_IF_EXCLUSIVE is set in the flags AND the current 
+	 * lock owner of the truncate lock is our current thread, then 
+	 * we must have skipped taking the lock earlier by in 
+	 * hfs_lock_truncate() by setting HFS_LOCK_SKIP_IF_EXCLUSIVE in the 
+	 * flags (as the current thread was current lock owner).
 	 *
-	 * If been_recursed is zero (most of the time) then we check the 
-	 * lockowner field to infer whether the lock was taken exclusively or
-	 * shared in order to know what underlying lock routine to call. 
+	 * If HFS_LOCK_SKIP_IF_EXCLUSIVE is not set (most of the time) then 
+	 * we check the lockowner field to infer whether the lock was taken 
+	 * exclusively or shared in order to know what underlying lock 
+	 * routine to call. 
 	 */
-	if (been_recursed) {
+	if (flags & HFS_LOCK_SKIP_IF_EXCLUSIVE) {
 		if (cp->c_truncatelockowner == thread) {
 			return;	
 		}
@@ -2168,9 +2299,7 @@ hfs_unlock_truncate(struct cnode *cp, int been_recursed)
 	if (thread == cp->c_truncatelockowner) {
 		cp->c_truncatelockowner = NULL;
 		lck_rw_unlock_exclusive(&cp->c_truncatelock);
-	}
-	/* HFS_LOCK_SHARED */
-	else {
+	} else { /* HFS_LOCK_SHARED */
 		lck_rw_unlock_shared(&cp->c_truncatelock);
 	}
 }

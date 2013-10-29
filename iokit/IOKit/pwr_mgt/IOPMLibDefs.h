@@ -40,5 +40,8 @@
 #define kPMActivityTickle               10
 #define kPMGetSystemSleepType           11
 #define kPMSetClamshellSleepState       12
+#define kPMSleepWakeWatchdogEnable      13
+#define kPMSleepWakeDebugTrig           14
+#define kPMSetDisplayPowerOn            15
 
-#define kNumPMMethods                   13
+#define kNumPMMethods                   16

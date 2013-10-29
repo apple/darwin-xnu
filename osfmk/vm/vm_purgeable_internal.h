@@ -98,7 +98,7 @@ void vm_purgeable_q_advance_all(void);
 
 /* the object purger. purges the next eligible object from memory. */
 /* returns TRUE if an object was purged, otherwise FALSE. */
-boolean_t vm_purgeable_object_purge_one(void);
+boolean_t vm_purgeable_object_purge_one(int force_purge_below_group);
 
 /* purge all volatile objects now */
 void vm_purgeable_object_purge_all(void);
@@ -108,5 +108,10 @@ void vm_purgeable_object_add(vm_object_t object, purgeable_q_t queue, int group)
 
 /* look for object. If found, remove from purgeable queue. */
 purgeable_q_t vm_purgeable_object_remove(vm_object_t object);
+
+/* statistics for purgable objects in all queues */
+void vm_purgeable_stats(vm_purgeable_info_t info, task_t target_task);
+
+void vm_purgeable_disown(task_t task);
 
 #endif /* __VM_PURGEABLE_INTERNAL__ */

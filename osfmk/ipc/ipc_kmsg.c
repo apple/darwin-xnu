@@ -70,7 +70,6 @@
  *	Operations on kernel messages.
  */
 
-#include <norma_vm.h>
 
 #include <mach/mach_types.h>
 #include <mach/boolean.h>
@@ -125,6 +124,9 @@
 #if DEBUG
 #define DEBUG_MSGS_K64 1
 #endif
+
+#include <sys/kdebug.h>
+#include <libkern/OSAtomic.h>
 
 #pragma pack(4)
 
@@ -1351,6 +1353,8 @@ ipc_kmsg_get_from_kernel(
  *		MACH_SEND_INTERRUPTED	Caller still has message.
  *		MACH_SEND_INVALID_DEST	Caller still has message.
  */
+
+
 mach_msg_return_t
 ipc_kmsg_send(
 	ipc_kmsg_t		kmsg,
@@ -1361,9 +1365,22 @@ ipc_kmsg_send(
 	mach_msg_return_t error = MACH_MSG_SUCCESS;
 	spl_t s;
 
+#if IMPORTANCE_INHERITANCE
+	boolean_t did_importance = FALSE;
+#if IMPORTANCE_DEBUG
+	mach_msg_id_t imp_msgh_id = -1;
+	int           sender_pid  = -1;
+#endif /* IMPORTANCE_DEBUG */
+#endif /* IMPORTANCE_INHERITANCE */
+
+	/* don't allow the creation of a circular loop */
+	if (kmsg->ikm_header->msgh_bits & MACH_MSGH_BITS_CIRCULAR) {
+		ipc_kmsg_destroy(kmsg);
+		return MACH_MSG_SUCCESS;
+	}
+
 	port = (ipc_port_t) kmsg->ikm_header->msgh_remote_port;
 	assert(IP_VALID(port));
-
 	ip_lock(port);
 
 	if (port->ip_receiver == ipc_space_kernel) {
@@ -1393,6 +1410,10 @@ ipc_kmsg_send(
 		/* fall thru with reply - same options */
 	}
 
+#if IMPORTANCE_INHERITANCE
+ retry:
+#endif /* IMPORTANCE_INHERITANCE */
+
 	/*
 	 *	Can't deliver to a dead port.
 	 *	However, we can pretend it got sent
@@ -1412,14 +1433,39 @@ ipc_kmsg_send(
 		return MACH_MSG_SUCCESS;
 	}
 
-	if (kmsg->ikm_header->msgh_bits & MACH_MSGH_BITS_CIRCULAR) {
-		ip_unlock(port);
+#if IMPORTANCE_INHERITANCE
+	/*
+	 * Need to see if this message needs importance donation and/or
+	 * propagation.  That routine can drop the port lock.  If it does
+	 * we'll have to revalidate the destination.
+	 */
+	if ((did_importance == FALSE) &&
+	    (port->ip_impdonation != 0) &&
+	    ((option & MACH_SEND_NOIMPORTANCE) == 0) &&
+	    (((option & MACH_SEND_IMPORTANCE) != 0) ||
+	     (task_is_importance_donor(current_task())))) {
 
-		/* don't allow the creation of a circular loop */
+		did_importance = TRUE;
+		kmsg->ikm_header->msgh_bits |= MACH_MSGH_BITS_RAISEIMP;
+				
+#if IMPORTANCE_DEBUG
+		if (kdebug_enable) {
+			mach_msg_max_trailer_t *dbgtrailer = (mach_msg_max_trailer_t *)
+			        ((vm_offset_t)kmsg->ikm_header + round_msg(kmsg->ikm_header->msgh_size));
+			sender_pid = dbgtrailer->msgh_audit.val[5];
+			imp_msgh_id = kmsg->ikm_header->msgh_id;
 
-		ipc_kmsg_destroy(kmsg);
-		return MACH_MSG_SUCCESS;
+			KERNEL_DEBUG_CONSTANT_IST(KDEBUG_TRACE, (IMPORTANCE_CODE(IMP_MSG, IMP_MSG_SEND)) | DBG_FUNC_START,
+			                           audit_token_pid_from_task(current_task()), sender_pid, imp_msgh_id, 0, 0);
+		}
+#endif /* IMPORTANCE_DEBUG */
+
+		if (ipc_port_importance_delta(port, 1) == TRUE) {
+			ip_lock(port);
+			goto retry;
+		}
 	}
+#endif /* IMPORTANCE_INHERITANCE */
 
 	/*
 	 * We have a valid message and a valid reference on the port.
@@ -1429,8 +1475,58 @@ ipc_kmsg_send(
 	s = splsched();
 	imq_lock(&port->ip_messages);
 	ip_unlock(port);
+
 	error = ipc_mqueue_send(&port->ip_messages, kmsg, option, 
 			send_timeout, s);
+
+#if IMPORTANCE_INHERITANCE
+	if (did_importance == TRUE) {
+		__unused int importance_cleared = 0;
+		switch (error) {
+			case MACH_SEND_TIMED_OUT:
+			case MACH_SEND_NO_BUFFER:
+			case MACH_SEND_INTERRUPTED:
+				/*
+				 * We still have the kmsg and its
+				 * reference on the port.  But we
+				 * have to back out the importance
+				 * boost.
+				 *
+				 * The port could have changed hands,
+				 * be inflight to another destination,
+				 * etc...  But in those cases our
+				 * back-out will find the new owner
+				 * (and all the operations that
+				 * transferred the right should have
+				 * applied their own boost adjustments
+				 * to the old owner(s)).
+				 */
+				importance_cleared = 1;
+				ip_lock(port);
+				if (ipc_port_importance_delta(port, -1) == FALSE)
+					ip_unlock(port);
+				break;
+
+			case MACH_SEND_INVALID_DEST:
+ 				/*
+ 				 * In the case that the receive right has
+ 				 * gone away, the assertion count for the
+ 				 * message we were trying to enqueue was
+ 				 * already subtracted from the destination
+ 				 * task (as part of port destruction).
+ 				 */
+ 				break;
+
+			case MACH_MSG_SUCCESS:
+			default:
+				break;
+		}
+#if IMPORTANCE_DEBUG
+		KERNEL_DEBUG_CONSTANT_IST(KDEBUG_TRACE, (IMPORTANCE_CODE(IMP_MSG, IMP_MSG_SEND)) | DBG_FUNC_END,
+		                          audit_token_pid_from_task(current_task()), sender_pid, imp_msgh_id, importance_cleared, 0);
+#endif /* IMPORTANCE_DEBUG */
+	}
+#endif /* IMPORTANCE_INHERITANCE */
 
 	/*
 	 * If the port has been destroyed while we wait, treat the message
@@ -1574,7 +1670,7 @@ mach_msg_return_t
 ipc_kmsg_copyin_header(
 	mach_msg_header_t	*msg,
 	ipc_space_t		space,
-	boolean_t		notify)
+	mach_msg_option_t	*optionp)
 {
 	mach_msg_bits_t mbits = msg->msgh_bits & MACH_MSGH_BITS_USER;
 	mach_port_name_t dest_name = CAST_MACH_PORT_TO_NAME(msg->msgh_remote_port);
@@ -1587,6 +1683,11 @@ ipc_kmsg_copyin_header(
 	ipc_entry_t dest_entry, reply_entry;
 	ipc_port_t dest_soright, reply_soright;
 	ipc_port_t release_port = IP_NULL;
+
+#if IMPORTANCE_INHERITANCE
+	int assertcnt = 0;
+	boolean_t needboost = FALSE;
+#endif /* IMPORTANCE_INHERITANCE */
 
 	queue_head_t links_data;
 	queue_t links = &links_data;
@@ -1679,11 +1780,23 @@ ipc_kmsg_copyin_header(
 			   (dest_type == MACH_MSG_TYPE_MAKE_SEND_ONCE) ||
 			   (reply_type == MACH_MSG_TYPE_MAKE_SEND) ||
 			   (reply_type == MACH_MSG_TYPE_MAKE_SEND_ONCE)) {
+
+#if IMPORTANCE_INHERITANCE
+			kr = ipc_right_copyin(space, name, dest_entry,
+					      dest_type, FALSE,
+					      &dest_port, &dest_soright,
+					      &release_port,
+					      &assertcnt,
+					      links);
+			assert(assertcnt == 0);
+#else
 			kr = ipc_right_copyin(space, name, dest_entry,
 					      dest_type, FALSE,
 					      &dest_port, &dest_soright,
 					      &release_port,
 					      links);
+#endif /* IMPORTANCE_INHERITANCE */
+
 			if (kr != KERN_SUCCESS)
 				goto invalid_dest;
 
@@ -1700,11 +1813,21 @@ ipc_kmsg_copyin_header(
 			assert(IO_VALID(dest_port));
 			assert(dest_soright == IP_NULL);
 
+#if IMPORTANCE_INHERITANCE
+			kr = ipc_right_copyin(space, name, reply_entry,
+					      reply_type, TRUE,
+					      &reply_port, &reply_soright,
+					      &release_port,
+					      &assertcnt,
+					      links);
+			assert(assertcnt == 0);
+#else
 			kr = ipc_right_copyin(space, name, reply_entry,
 					      reply_type, TRUE,
 					      &reply_port, &reply_soright,
 					      &release_port,
 					      links);
+#endif /* IMPORTANCE_INHERITANCE */
 
 			assert(kr == KERN_SUCCESS);
 			assert(reply_port == dest_port);
@@ -1717,11 +1840,22 @@ ipc_kmsg_copyin_header(
 			 *	and dup the send right we get out.
 			 */
 
+#if IMPORTANCE_INHERITANCE
+			kr = ipc_right_copyin(space, name, dest_entry,
+					      dest_type, FALSE,
+					      &dest_port, &dest_soright,
+					      &release_port,
+					      &assertcnt,
+					      links);
+			assert(assertcnt == 0);
+#else
 			kr = ipc_right_copyin(space, name, dest_entry,
 					      dest_type, FALSE,
 					      &dest_port, &dest_soright,
 					      &release_port,
 					      links);
+#endif /* IMPORTANCE_INHERITANCE */
+
 			if (kr != KERN_SUCCESS)
 				goto invalid_dest;
 
@@ -1772,11 +1906,22 @@ ipc_kmsg_copyin_header(
 			 *	and dup the send right we get out.
 			 */
 
+#if IMPORTANCE_INHERITANCE
+			kr = ipc_right_copyin(space, name, dest_entry,
+					      MACH_MSG_TYPE_MOVE_SEND, FALSE,
+					      &dest_port, &soright,
+					      &release_port,
+					      &assertcnt,
+					      links);
+			assert(assertcnt == 0);
+#else
 			kr = ipc_right_copyin(space, name, dest_entry,
 					      MACH_MSG_TYPE_MOVE_SEND, FALSE,
 					      &dest_port, &soright,
 					      &release_port,
 					      links);
+#endif /* IMPORTANCE_INHERITANCE */
+
 			if (kr != KERN_SUCCESS)
 				goto invalid_dest;
 
@@ -1814,11 +1959,22 @@ ipc_kmsg_copyin_header(
 		if (dest_entry == IE_NULL)
 			goto invalid_dest;
 
+#if IMPORTANCE_INHERITANCE
+		kr = ipc_right_copyin(space, dest_name, dest_entry,
+				      dest_type, FALSE,
+				      &dest_port, &dest_soright,
+				      &release_port,
+				      &assertcnt,
+				      links);
+		assert(assertcnt == 0);
+#else
 		kr = ipc_right_copyin(space, dest_name, dest_entry,
 				      dest_type, FALSE,
 				      &dest_port, &dest_soright,
 				      &release_port,
 				      links);
+#endif /* IMPORTANCE_INHERITANCE */
+
 		if (kr != KERN_SUCCESS)
 			goto invalid_dest;
 
@@ -1881,21 +2037,43 @@ ipc_kmsg_copyin_header(
 					    reply_type))
 			goto invalid_reply;
 
+#if IMPORTANCE_INHERITANCE
+		kr = ipc_right_copyin(space, dest_name, dest_entry,
+				      dest_type, FALSE,
+				      &dest_port, &dest_soright,
+				      &release_port,
+				      &assertcnt,
+				      links);
+		assert(assertcnt == 0);
+#else
 		kr = ipc_right_copyin(space, dest_name, dest_entry,
 				      dest_type, FALSE,
 				      &dest_port, &dest_soright,
 				      &release_port,
 				      links);
+#endif /* IMPORTANCE_INHERITANCE */
+
 		if (kr != KERN_SUCCESS)
 			goto invalid_dest;
 
 		assert(IO_VALID(dest_port));
 
+#if IMPORTANCE_INHERITANCE
+		kr = ipc_right_copyin(space, reply_name, reply_entry,
+				      reply_type, TRUE,
+				      &reply_port, &reply_soright,
+				      &release_port,
+				      &assertcnt,
+				      links);
+		assert(assertcnt == 0);
+#else
 		kr = ipc_right_copyin(space, reply_name, reply_entry,
 				      reply_type, TRUE,
 				      &reply_port, &reply_soright,
 				      &release_port,
 				      links);
+#endif /* IMPORTANCE_INHERITANCE */
+
 		assert(kr == KERN_SUCCESS);
 
 		/* the entries might need to be deallocated */
@@ -1917,22 +2095,54 @@ ipc_kmsg_copyin_header(
 	/*
 	 * JMM - Without rdar://problem/6275821, this is the last place we can
 	 * re-arm the send-possible notifications.  It may trigger unexpectedly
-	 * early (send may NOT have failed), but better than missing.
+	 * early (send may NOT have failed), but better than missing.  We assure
+	 * we won't miss by forcing MACH_SEND_ALWAYS if we got past arming.
 	 */
-	if (notify && dest_type != MACH_MSG_TYPE_PORT_SEND_ONCE &&
+	if (((*optionp & MACH_SEND_NOTIFY) != 0) && 
+	    dest_type != MACH_MSG_TYPE_PORT_SEND_ONCE &&
 	    dest_entry != IE_NULL && dest_entry->ie_request != IE_REQ_NONE) {
 		ipc_port_t dport = (ipc_port_t)dest_port;
 
 		assert(dport != IP_NULL);
 		ip_lock(dport);
-		if (ip_active(dport) &&
-		    dport->ip_receiver != ipc_space_kernel && ip_full(dport)) {
-			ipc_port_request_sparm(dport, dest_name, dest_entry->ie_request);
+		if (ip_active(dport) && dport->ip_receiver != ipc_space_kernel) {
+			if (ip_full(dport)) {
+#if IMPORTANCE_INHERITANCE
+				needboost = ipc_port_request_sparm(dport, dest_name, 
+							dest_entry->ie_request,
+							(*optionp & MACH_SEND_NOIMPORTANCE));
+				if (needboost == FALSE)
+					ip_unlock(dport);
+#else
+
+				ipc_port_request_sparm(dport, dest_name, dest_entry->ie_request);
+				ip_unlock(dport);
+#endif /* IMPORTANCE_INHERITANCE */
+			} else {
+				*optionp |= MACH_SEND_ALWAYS;
+				ip_unlock(dport);
+			}
+		} else {
+			ip_unlock(dport);
 		}
-		ip_unlock(dport);
 	}
 
 	is_write_unlock(space);
+
+#if IMPORTANCE_INHERITANCE
+	/* 
+	 * If our request is the first boosting send-possible
+	 * notification this cycle, push the boost down the
+	 * destination port.
+	 */
+	if (needboost == TRUE) {
+		ipc_port_t dport = (ipc_port_t)dest_port;
+
+		/* dport still locked from above */
+		if (ipc_port_importance_delta(dport, 1) == FALSE)
+			ip_unlock(dport);
+	}
+#endif /* IMPORTANCE_INHERITANCE */
 
 	if (dest_soright != IP_NULL)
 		ipc_notify_port_deleted(dest_soright, dest_name);
@@ -1952,6 +2162,7 @@ ipc_kmsg_copyin_header(
 
 	if (release_port != IP_NULL)
 		ip_release(release_port);
+
 
 	return MACH_MSG_SUCCESS;
 
@@ -2409,6 +2620,13 @@ ipc_kmsg_copyin_body(
 		 * Out-of-line memory descriptor, accumulate kernel
 		 * memory requirements
 		 */
+		if (space_needed + round_page(size) <= space_needed) {
+		    /* Overflow dectected */
+		    ipc_kmsg_clean_partial(kmsg, 0, NULL, 0, 0);
+		    mr = MACH_MSG_VM_KERNEL;
+		    goto out;
+		}		    
+		    
 		space_needed += round_page(size);
 		if (space_needed > ipc_kmsg_max_vm_space) {
 		    
@@ -2526,11 +2744,14 @@ ipc_kmsg_copyin(
 	ipc_kmsg_t		kmsg,
 	ipc_space_t		space,
 	vm_map_t		map,
-	boolean_t		notify)
+	mach_msg_option_t	*optionp)
 {
     mach_msg_return_t 		mr;
-    
-    mr = ipc_kmsg_copyin_header(kmsg->ikm_header, space, notify);
+
+    kmsg->ikm_header->msgh_bits &= MACH_MSGH_BITS_USER;
+
+    mr = ipc_kmsg_copyin_header(kmsg->ikm_header, space, optionp);
+
     if (mr != MACH_MSG_SUCCESS)
 	return mr;
     
@@ -2556,6 +2777,7 @@ ipc_kmsg_copyin(
 			kprintf("%.4x\n",((uint32_t *)(kmsg->ikm_header + 1))[i]);
 		}
 	}
+
 	return mr;
 }
 
@@ -2568,9 +2790,6 @@ ipc_kmsg_copyin(
  *		Because the message comes from the kernel,
  *		the implementation assumes there are no errors
  *		or peculiarities in the message.
- *
- *		Returns TRUE if queueing the message
- *		would result in a circularity.
  *	Conditions:
  *		Nothing locked.
  */
@@ -3001,11 +3220,13 @@ ipc_kmsg_copyout_header(
 
 		kr = ipc_right_copyout(space, reply_name, entry,
 				       reply_type, TRUE, (ipc_object_t) reply);
+
 		/* reply port is unlocked */
 		assert(kr == KERN_SUCCESS);
 
 		ip_lock(dest);
 		is_write_unlock(space);
+
 	} else {
 		/*
 		 *	No reply port!  This is an easy case.
@@ -3078,6 +3299,7 @@ ipc_kmsg_copyout_header(
 		ipc_object_copyout_dest(space, (ipc_object_t) dest,
 					dest_type, &dest_name);
 		/* dest is unlocked */
+
 	} else {
 		ipc_port_timestamp_t timestamp;
 
@@ -3352,7 +3574,7 @@ ipc_kmsg_copyout_ool_ports_descriptor(mach_msg_ool_ports_descriptor_t *dsc,
         ipc_kmsg_t kmsg,
         mach_msg_return_t *mr)
 {
-    mach_vm_offset_t		rcv_addr;
+    mach_vm_offset_t		rcv_addr = 0;
     mach_msg_type_name_t		disp;
     mach_msg_type_number_t 		count, i;
     vm_size_t           		ports_length, names_length;
@@ -3708,7 +3930,7 @@ ipc_kmsg_copyout_pseudo(
 	mr = (ipc_kmsg_copyout_object(space, dest, dest_type, &dest_name) |
 	      ipc_kmsg_copyout_object(space, reply, reply_type, &reply_name));
 
-	kmsg->ikm_header->msgh_bits = mbits &~ MACH_MSGH_BITS_CIRCULAR;
+	kmsg->ikm_header->msgh_bits = mbits & MACH_MSGH_BITS_USER;
 	kmsg->ikm_header->msgh_remote_port = CAST_MACH_NAME_TO_PORT(dest_name);
 	kmsg->ikm_header->msgh_local_port = CAST_MACH_NAME_TO_PORT(reply_name);
 
@@ -4180,5 +4402,6 @@ ipc_kmsg_add_trailer(ipc_kmsg_t kmsg, ipc_space_t space,
 
 
 done:
+
 	return trailer->msgh_trailer_size;
 }

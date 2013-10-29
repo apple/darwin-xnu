@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2011 Apple Inc. All rights reserved.
+ * Copyright (c) 2011-2012 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -68,9 +68,7 @@ static inline u_int64_t mh3_fmix64(u_int64_t);
  * Intel 64-bit:	MurmurHash3_x64_128
  * ARM, et al:		JHash
  */
-#if defined(__i386__)
-net_flowhash_fn_t *net_flowhash = net_flowhash_mh3_x86_32;
-#elif defined(__x86_64__)
+#if   defined(__x86_64__)
 net_flowhash_fn_t *net_flowhash = net_flowhash_mh3_x64_128;
 #else /* !__i386__ && !__x86_64__ */
 net_flowhash_fn_t *net_flowhash = net_flowhash_jhash;

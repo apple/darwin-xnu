@@ -10,7 +10,7 @@ _cpu_number:
         sub     $16,%rsp                // space to read IDTR
 
         sidt    (%rsp)                  // store limit:base on stack
-        movw    (%rsp), %rax            // get limit
+        movw    (%rsp), %ax             // get limit
         and     $0xfff, %rax            // mask off lower 12 bits to return
 
         mov     %rbp,%rsp

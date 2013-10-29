@@ -52,6 +52,66 @@ __BEGIN_DECLS
 #include <mach/branch_predicates.h>
 #endif
 
+typedef enum
+{
+	KD_CALLBACK_KDEBUG_ENABLED,   		// Trace is now enabled. No arguments
+	KD_CALLBACK_KDEBUG_DISABLED,  		// Trace is now disabled. No arguments
+	KD_CALLBACK_SYNC_FLUSH,      		// Request the latest entries from the IOP, and block until complete. No arguments
+	KD_CALLBACK_TYPEFILTER_CHANGED,		// Typefilter is enabled. A read-only pointer to the typefilter is provided, but is only valid while in the callback.
+} kd_callback_type;
+typedef void (*kd_callback_fn) (void* context, kd_callback_type reason, void* arg);
+
+struct kd_callback {
+	kd_callback_fn	func;
+	void*		context;
+	char		iop_name[8]; // null-terminated string with name of core.
+};
+
+typedef struct kd_callback kd_callback_t;
+
+/*
+ * Registers an IOP for participation in tracing. 
+ *  
+ * The registered callback function will be called with the 
+ * supplied context as the first argument, followed by a 
+ * kd_callback_type and an associated void* argument. 
+ *  
+ * The return value is a nonzero coreid that shall be used in 
+ * kernel_debug_enter() to refer to your IOP. If the allocation 
+ * failed, then 0 will be returned. 
+ *  
+ *  
+ * Caveats: 
+ * Note that not all callback calls will indicate a change in 
+ * state (e.g. disabling trace twice would send two disable 
+ * notifications). 
+ *  
+ */
+extern int kernel_debug_register_callback(kd_callback_t callback);
+
+extern void kernel_debug_enter(
+	uint32_t	coreid,
+	uint32_t	debugid,
+	uint64_t	timestamp,
+	uintptr_t	arg1,
+	uintptr_t	arg2,
+	uintptr_t	arg3,
+	uintptr_t	arg4,
+	uintptr_t	threadid
+	);
+
+
+/*
+ * state bits for hfs_update event
+ */
+#define DBG_HFS_UPDATE_ACCTIME   0x01
+#define DBG_HFS_UPDATE_MODTIME	 0x02
+#define DBG_HFS_UPDATE_CHGTIME	 0x04
+#define DBG_HFS_UPDATE_MODIFIED	 0x08
+#define DBG_HFS_UPDATE_FORCE	 0x10
+#define DBG_HFS_UPDATE_DATEADDED 0x20
+
+
 /*
  * types of faults that vm_fault handles
  * and creates trace entries for
@@ -64,6 +124,8 @@ __BEGIN_DECLS
 #define DBG_GUARD_FAULT	      6	
 #define DBG_PAGEINV_FAULT     7
 #define DBG_PAGEIND_FAULT     8
+#define DBG_COMPRESSOR_FAULT  9
+#define DBG_COMPRESSOR_SWAPIN_FAULT  10
 
 
 /* The debug code consists of the following 
@@ -99,6 +161,7 @@ __BEGIN_DECLS
 #define DBG_APPS            	33
 #define DBG_LAUNCHD         	34
 #define DBG_PERF                37
+#define DBG_IMPORTANCE          38
 #define DBG_MIG			255
 
 /* **** The Kernel Debug Sub Classes for Mach (DBG_MACH) **** */
@@ -123,6 +186,8 @@ __BEGIN_DECLS
 #define DBG_MACH_LOCKS		0x60	/* new lock APIs */
 #define DBG_MACH_PMAP		0x70	/* pmap */
 #define DBG_MACH_MP		0x90	/* MP related */
+#define DBG_MACH_VM_PRESSURE	0xA0	/* Memory Pressure Events */
+#define DBG_MACH_STACKSHOT		0xA1	/* Stackshot/Microstackshot subsystem */
 
 /* Codes for Scheduler (DBG_MACH_SCHED) */     
 #define MACH_SCHED              0x0     /* Scheduler */
@@ -149,8 +214,16 @@ __BEGIN_DECLS
 #define	MACH_REDISPATCH		0x16	/* "next thread" thread redispatched */
 #define	MACH_REMOTE_AST		0x17	/* AST signal issued to remote processor */
 
-#define	MACH_SCHED_LPA_BROKEN	0x18	/* last_processor affinity broken in choose_processor */
+#define	MACH_SCHED_CHOOSE_PROCESSOR	0x18	/* Result of choose_processor */
 #define MACH_DEEP_IDLE          0x19	/* deep idle on master processor */
+#define MACH_SCHED_DECAY_PRIORITY	0x1a	/* timeshare thread priority decayed/restored */
+#define MACH_CPU_THROTTLE_DISABLE	0x1b	/* Global CPU Throttle Disable */
+#define MACH_RW_PROMOTE            0x1c	/* promoted due to RW lock promotion */
+#define MACH_RW_DEMOTE             0x1d	/* promotion due to RW lock undone */
+
+/* Codes for IPC (DBG_MACH_IPC) */
+#define	MACH_TASK_SUSPEND	0x0	/* Suspended a task */
+#define	MACH_TASK_RESUME   	0x1	/* Resumed a task */
 
 /* Codes for pmap (DBG_MACH_PMAP) */     
 #define PMAP__CREATE		0x0
@@ -164,6 +237,14 @@ __BEGIN_DECLS
 #define PMAP__FLUSH_TLBS	0x8
 #define PMAP__UPDATE_INTERRUPT	0x9
 #define PMAP__ATTRIBUTE_CLEAR	0xa
+#define PMAP__REUSABLE		0xb
+#define PMAP__QUERY_RESIDENT	0xc
+#define PMAP__FLUSH_KERN_TLBS	0xd
+#define PMAP__FLUSH_DELAYED_TLBS	0xe
+
+/* Codes for Stackshot/Microstackshot (DBG_MACH_STACKSHOT) */
+#define MICROSTACKSHOT_RECORD	0x0
+#define MICROSTACKSHOT_GATHER	0x1
 
 /* **** The Kernel Debug Sub Classes for Network (DBG_NETWORK) **** */
 #define DBG_NETIP	1	/* Internet Protocol */
@@ -224,6 +305,7 @@ __BEGIN_DECLS
 #define DBG_IOCPUPM		49	/* CPU Power Management */
 #define DBG_IOGRAPHICS		50	/* Graphics */
 #define DBG_HIBERNATE		51	/* hibernation related events */
+#define DBG_IOTHUNDERBOLT	52	/* Thunderbolt */
 
 
 /* Backwards compatibility */
@@ -275,9 +357,12 @@ __BEGIN_DECLS
 #define DBG_HFS       8       /* HFS-specific events; see bsd/hfs/hfs_kdebug.h */
 #define DBG_EXFAT     0xE     /* ExFAT-specific events; see the exfat project */
 #define DBG_MSDOS     0xF     /* FAT-specific events; see the msdosfs project */
+#define DBG_ACFS      0x10    /* Xsan-specific events; see the XsanFS project */
+#define DBG_THROTTLE  0x11    /* I/O Throttling events */	
 
 /* The Kernel Debug Sub Classes for BSD */
 #define DBG_BSD_PROC		0x01	/* process/signals related */
+#define DBG_BSD_MEMSTAT		0x02	/* memorystatus / jetsam operations */
 #define	DBG_BSD_EXCP_SC		0x0C	/* System Calls */
 #define	DBG_BSD_AIO		0x0D	/* aio (POSIX async IO) */
 #define DBG_BSD_SC_EXTENDED_INFO 0x0E	/* System Calls, extended info */
@@ -287,6 +372,16 @@ __BEGIN_DECLS
 /* The Codes for BSD subcode class DBG_BSD_PROC */
 #define BSD_PROC_EXIT		1	/* process exit */
 #define BSD_PROC_FRCEXIT 	2	/* Kernel force termination */
+
+/* Codes for BSD subcode class DBG_BSD_MEMSTAT */
+#define BSD_MEMSTAT_SCAN             1  /* memorystatus thread awake */
+#define BSD_MEMSTAT_JETSAM           2  /* LRU jetsam */
+#define BSD_MEMSTAT_JETSAM_HIWAT     3  /* highwater jetsam */
+#define BSD_MEMSTAT_FREEZE           4  /* freeze process */
+#define BSD_MEMSTAT_LATENCY_COALESCE 5  /* delay imposed to coalesce jetsam reports */
+#define BSD_MEMSTAT_UPDATE           6  /* priority update */	
+#define BSD_MEMSTAT_IDLE_DEMOTE      7  /* idle demotion fired */
+#define BSD_MEMSTAT_CLEAR_ERRORS     8  /* reset termination error state */
 
 /* The Kernel Debug Sub Classes for DBG_TRACE */
 #define DBG_TRACE_DATA      0
@@ -311,14 +406,49 @@ __BEGIN_DECLS
 #define DKIO_ASYNC	0x04
 #define DKIO_META	0x08
 #define DKIO_PAGING	0x10
-#define DKIO_THROTTLE	0x20
+#define DKIO_THROTTLE	0x20 /* Deprecated, still provided so fs_usage doesn't break */
 #define DKIO_PASSIVE	0x40
 #define DKIO_NOCACHE	0x80
+#define DKIO_TIER_MASK	0xF00
+#define DKIO_TIER_SHIFT	8
 
 /* Kernel Debug Sub Classes for Applications (DBG_APPS) */
 #define DBG_APP_LOGINWINDOW     0x03
+#define DBG_APP_AUDIO           0x04
 #define DBG_APP_SAMBA           0x80
 
+/* Kernel Debug codes for Throttling (DBG_THROTTLE) */
+#define OPEN_THROTTLE_WINDOW	0x1
+#define PROCESS_THROTTLED	0x2	
+#define IO_THROTTLE_DISABLE	0x3
+
+
+/* Subclasses for MACH Importance Policies (DBG_IMPORTANCE) */
+/* TODO: Split up boost and task policy? */
+#define IMP_ASSERTION           0x10    /* Task takes/drops a boost assertion */
+#define IMP_BOOST               0x11    /* Task boost level changed */
+#define IMP_MSG                 0x12    /* boosting message sent by donating task on donating port */
+#define IMP_WATCHPORT           0x13    /* port marked as watchport, and boost was transferred to the watched task */
+#define IMP_TASK_SUPPRESSION    0x17    /* Task changed suppression behaviors */
+#define IMP_TASK_APPTYPE        0x18    /* Task launched with apptype */
+#define IMP_UPDATE              0x19    /* Requested -> effective calculation */
+/* DBG_IMPORTANCE subclasses  0x20 - 0x3F reserved for task policy flavors */
+
+/* Codes for IMP_ASSERTION */
+#define IMP_HOLD                0x2     /* Task holds a boost assertion */
+#define IMP_DROP                0x4     /* Task drops a boost assertion */
+#define IMP_EXTERN              0x8     /* boost assertion moved from kernel to userspace responsibility (externalized) */
+
+/* Codes for IMP_BOOST */
+#define IMP_BOOSTED             0x1
+#define IMP_UNBOOSTED           0x2     /* Task drops a boost assertion */
+
+/* Codes for IMP_MSG */
+#define IMP_MSG_SEND            0x1     /* boosting message sent by donating task on donating port */
+#define IMP_MSG_DELV            0x2     /* boosting message delivered to task */
+
+/* Codes for IMP_UPDATE */
+#define IMP_UPDATE_TASK_CREATE  0x1
 
 /**********************************************************************/
 
@@ -352,6 +482,8 @@ __BEGIN_DECLS
 
 #define PMAP_CODE(code) MACHDBG_CODE(DBG_MACH_PMAP, code)
 
+
+#define IMPORTANCE_CODE(SubClass, code) KDBG_CODE(DBG_IMPORTANCE, (SubClass), (code))
 
 /*   Usage:
 * kernel_debug((KDBG_CODE(DBG_NETWORK, DNET_PROTOCOL, 51) | DBG_FUNC_START), 
@@ -535,7 +667,12 @@ do {									\
 
 #ifdef KERNEL_PRIVATE
 #include <mach/boolean.h>
+
+#define NUMPARMS 23
+
 struct proc;
+
+extern void kdebug_lookup_gen_events(long *dbg_parms, int dbg_namelen, void *dp, boolean_t lookup);
 extern void kdbg_trace_data(struct proc *proc, long *arg_pid);
 
 extern void kdbg_trace_string(struct proc *proc, long *arg1, long *arg2, long *arg3, long *arg4);
@@ -549,12 +686,8 @@ void enable_wrap(uint32_t old_slowcheck, boolean_t lostevents);
 void release_storage_unit(int cpu,  uint32_t storage_unit);
 int allocate_storage_unit(int cpu);
 
-void trace_handler_map_ctrl_page(uintptr_t addr, unsigned long ctrl_page_size, unsigned long storage_size, unsigned long kds_ptr_size);
-void trace_handler_map_bufinfo(uintptr_t addr, unsigned long size);
-void trace_handler_unmap_bufinfo(void);
-void trace_handler_map_buffer(int index, uintptr_t addr, unsigned long size);
-void trace_handler_unmap_buffer(int index);
-void trace_set_timebases(uint64_t tsc, uint64_t ns);
+#define KDBG_CLASS_ENCODE(Class, SubClass) (((Class & 0xff) << 24) | ((SubClass & 0xff) << 16))
+#define KDBG_CLASS_DECODE(Debugid) (Debugid & 0xFFFF0000)
 
 
 #endif  /* KERNEL_PRIVATE */
@@ -684,6 +817,71 @@ typedef struct {
 	char		command[20];
 } kd_threadmap;
 
+typedef struct {
+	uint32_t	version_no;
+	uint32_t	cpu_count;
+} kd_cpumap_header;
+
+/* cpumap flags */
+#define KDBG_CPUMAP_IS_IOP	0x1
+
+typedef struct {
+	uint32_t	cpu_id;
+	uint32_t	flags;
+	char		name[8];
+} kd_cpumap;
+
+/*
+ * TRACE file formats...
+ *
+ * RAW_VERSION0
+ *
+ * uint32_t #threadmaps
+ * kd_threadmap[]
+ * kd_buf[]
+ *
+ * RAW_VERSION1
+ *
+ * RAW_header, with version_no set to RAW_VERSION1
+ * kd_threadmap[]
+ * Empty space to pad alignment to the nearest page boundary.
+ * kd_buf[]
+ *
+ * RAW_VERSION1+
+ *
+ * RAW_header, with version_no set to RAW_VERSION1
+ * kd_threadmap[]
+ * kd_cpumap_header, with version_no set to RAW_VERSION1
+ * kd_cpumap[]
+ * Empty space to pad alignment to the nearest page boundary.
+ * kd_buf[]
+ *
+ * V1+ implementation details...
+ *
+ * It would have been nice to add the cpumap data "correctly", but there were
+ * several obstacles. Existing code attempts to parse both V1 and V0 files.
+ * Due to the fact that V0 has no versioning or header, the test looks like
+ * this:
+ *
+ * // Read header
+ * if (header.version_no != RAW_VERSION1) { // Assume V0 }
+ *
+ * If we add a VERSION2 file format, all existing code is going to treat that
+ * as a VERSION0 file when reading it, and crash terribly when trying to read
+ * RAW_VERSION2 threadmap entries.
+ *
+ * To differentiate between a V1 and V1+ file, read as V1 until you reach
+ * the padding bytes. Then:
+ *
+ * boolean_t is_v1plus = FALSE;
+ * if (padding_bytes >= sizeof(kd_cpumap_header)) {
+ *     kd_cpumap_header header = // read header;
+ *     if (header.version_no == RAW_VERSION1) {
+ *         is_v1plus = TRUE;
+ *     }
+ * }
+ *
+ */
 
 typedef struct {
 	int             version_no;
@@ -694,7 +892,6 @@ typedef struct {
 
 #define RAW_VERSION0	0x55aa0000
 #define RAW_VERSION1	0x55aa0101
-
 
 #define	KDBG_CLASSTYPE		0x10000
 #define	KDBG_SUBCLSTYPE		0x20000
@@ -708,23 +905,6 @@ typedef struct {
 #define	KDBG_TYPEFILTER_CHECK	((uint32_t) 0x400000)        /* Check class and subclass against a bitmap */ 
 
 #define	KDBG_BUFINIT	0x80000000
-
-/* Control operations */
-#define	KDBG_EFLAGS	1
-#define	KDBG_DFLAGS	2
-#define KDBG_ENABLE	3
-#define KDBG_SETNUMBUF	4
-#define KDBG_GETNUMBUF	5
-#define KDBG_SETUP	6
-#define KDBG_REMOVE	7
-#define	KDBG_SETREGCODE	8
-#define	KDBG_GETREGCODE	9
-#define	KDBG_READTRACE	10
-#define KDBG_PIDTR      11
-#define KDBG_THRMAP     12
-#define KDBG_PIDEX      14
-#define KDBG_SETRTCDEC  15
-#define KDBG_KDGETENTROPY 16
 
 /* Minimum value allowed when setting decrementer ticks */
 #define KDBG_MINRTCDEC  2500

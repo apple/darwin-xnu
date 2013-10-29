@@ -196,9 +196,9 @@ routine vm_inherit(
  *	protection on the specified range must permit reading.]
  */
 #if !defined(_MACH_VM_PUBLISH_AS_LOCAL_)
-routine mach_vm_read(
+routine PREFIX(mach_vm_read) (
 #else
-routine vm_read(
+routine PREFIX(vm_read) (
 #endif
 		target_task	: vm_map_t;
 		address		: mach_vm_address_t;
@@ -333,12 +333,12 @@ routine vm_behavior_set(
  *	for further consistency.]
  */
 #if !defined(_MACH_VM_PUBLISH_AS_LOCAL_)
-routine mach_vm_map(
+routine PREFIX(mach_vm_map) (
 #else
 #if defined(__arm__) && !LIBSYSCALL_INTERFACE
 routine _vm_map_arm(
 #else
-routine vm_map(
+routine PREFIX(vm_map) (
 #endif
 #endif
 		target_task	: vm_task_entry_t;
@@ -373,9 +373,9 @@ routine vm_machine_attribute(
  *      Map portion of a task's address space.
  */
 #if !defined(_MACH_VM_PUBLISH_AS_LOCAL_)
-routine mach_vm_remap(
+routine PREFIX(mach_vm_remap) (
 #else
-routine vm_remap(
+routine PREFIX(vm_remap) (
 #endif
 		target_task	: vm_map_t;
 	inout	target_address	: mach_vm_address_t;

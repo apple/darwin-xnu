@@ -333,10 +333,12 @@ iokit_alloc_object_port( io_object_t obj, ipc_kobject_type_t type )
 EXTERN kern_return_t
 iokit_destroy_object_port( ipc_port_t port )
 {
+
+    iokit_lock_port(port);
     ipc_kobject_set( port, IKO_NULL, IKOT_NONE);
 
 //    iokit_remove_reference( obj );
-
+    iokit_unlock_port(port);
     ipc_port_dealloc_kernel( port);
     gIOKitPortCount--;
 
@@ -358,7 +360,7 @@ iokit_make_send_right( task_t task, io_object_t obj, ipc_kobject_type_t type )
 {
     ipc_port_t		port;
     ipc_port_t		sendPort;
-    mach_port_name_t	name;
+    mach_port_name_t	name = 0;
 
     if( obj == NULL)
         return MACH_PORT_NULL;
@@ -374,8 +376,10 @@ iokit_make_send_right( task_t task, io_object_t obj, ipc_kobject_type_t type )
     	kern_return_t	kr;
     	kr = ipc_object_copyout( task->itk_space, (ipc_object_t) sendPort,
 				MACH_MSG_TYPE_PORT_SEND, TRUE, &name);
-	if ( kr != KERN_SUCCESS)
-		name = MACH_PORT_NULL;
+	if ( kr != KERN_SUCCESS) {
+	    ipc_port_release_send( sendPort );
+	    name = MACH_PORT_NULL;
+	}
     } else if ( sendPort == IP_NULL)
         name = MACH_PORT_NULL;
     else if ( sendPort == IP_DEAD)
@@ -538,6 +542,8 @@ kern_return_t IOProtectCacheMode(vm_map_t __unused map, mach_vm_address_t __unus
     vm_prot_t	   prot;
     unsigned int   flags;
     pmap_t 	   pmap = map->pmap;
+    pmap_flush_context	pmap_flush_context_storage;
+    boolean_t		delayed_pmap_flush = FALSE;
 
     prot = (options & kIOMapReadOnly)
 		? VM_PROT_READ : (VM_PROT_READ|VM_PROT_WRITE);
@@ -566,13 +572,21 @@ kern_return_t IOProtectCacheMode(vm_map_t __unused map, mach_vm_address_t __unus
 	    break;
     }
 
+    pmap_flush_context_init(&pmap_flush_context_storage);
+    delayed_pmap_flush = FALSE;
+
     //  enter each page's physical address in the target map
     for (off = 0; off < length; off += page_size)
     {
 	ppnum_t ppnum = pmap_find_phys(pmap, va + off);
-	if (ppnum)
-	    pmap_enter(pmap, va + off, ppnum, prot, VM_PROT_NONE, flags, TRUE);
+	if (ppnum) {
+		pmap_enter_options(pmap, va + off, ppnum, prot, VM_PROT_NONE, flags, TRUE, 
+				   PMAP_OPTIONS_NOFLUSH, (void *)&pmap_flush_context_storage);
+		delayed_pmap_flush = TRUE;
+	}
     }
+    if (delayed_pmap_flush == TRUE)
+	    pmap_flush(&pmap_flush_context_storage);
 
     return (KERN_SUCCESS);
 }

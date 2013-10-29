@@ -129,6 +129,64 @@ extern boolean_t	thread_call_enter1_delayed(
 						thread_call_t		call,
 						thread_call_param_t	param1,
 						uint64_t		deadline);
+#ifdef XNU_KERNEL_PRIVATE
+
+/*
+ * Flags to alter the default timer/timeout coalescing behavior
+ * on a per-thread_call basis.
+ *
+ * The SYS urgency classes indicate that the thread_call is not
+ * directly related to the current thread at the time the thread_call
+ * is entered, so it is ignored in the calculation entirely (only
+ * the subclass specified is used).
+ *
+ * The USER flags indicate that both the current thread scheduling and QoS
+ * attributes, in addition to the per-thread_call urgency specification,
+ * are used to establish coalescing behavior.
+ */
+#define THREAD_CALL_DELAY_SYS_NORMAL		TIMEOUT_URGENCY_SYS_NORMAL
+#define THREAD_CALL_DELAY_SYS_CRITICAL		TIMEOUT_URGENCY_SYS_CRITICAL
+#define THREAD_CALL_DELAY_SYS_BACKGROUND	TIMEOUT_URGENCY_SYS_BACKGROUND
+
+#define THREAD_CALL_DELAY_USER_MASK		TIMEOUT_URGENCY_USER_MASK
+#define THREAD_CALL_DELAY_USER_NORMAL		TIMEOUT_URGENCY_USER_NORMAL
+#define THREAD_CALL_DELAY_USER_CRITICAL		TIMEOUT_URGENCY_USER_CRITICAL
+#define THREAD_CALL_DELAY_USER_BACKGROUND	TIMEOUT_URGENCY_USER_BACKGROUND
+
+#define THREAD_CALL_DELAY_URGENCY_MASK		TIMEOUT_URGENCY_MASK
+
+/*
+ * Indicate that a specific leeway value is being provided (otherwise
+ * the leeway parameter is ignored).  The supplied value can currently
+ * only be used to extend the leeway calculated internally from the
+ * urgency class provided.
+ */
+#define THREAD_CALL_DELAY_LEEWAY		TIMEOUT_URGENCY_LEEWAY
+
+/*! 
+ @function thread_call_enter_delayed_with_leeway
+ @abstract Submit a thread call to be executed at some point in the future.
+ @discussion If the work item is already scheduled for delayed or immediate execution, 
+ and it has not yet begun to run, that invocation will be cancelled in favor of execution
+ at the newly specified time.  Note that if a thread call is rescheduled from its own callback, 
+ then multiple invocations of the callback may be in flight at the same time.
+ @result TRUE if the call was already pending for either delayed or immediate
+ execution, FALSE otherwise.
+ @param call The thread call to execute.
+ @param param1 Second parameter to callback.
+ @param deadline Time, in absolute time units, at which to execute callback.
+ @param leeway Time delta, in absolute time units, which sets range of time allowing kernel
+        to decide appropriate time to run.
+ @param flags configuration for timers in kernel.
+ */
+extern boolean_t	thread_call_enter_delayed_with_leeway(
+						thread_call_t		call,
+						thread_call_param_t	param1,
+						uint64_t		deadline,
+						uint64_t		leeway,
+						uint32_t		flags);
+
+#endif /* XNU_KERNEL_PRIVATE */
 
 /*!
  @function thread_call_cancel
@@ -224,16 +282,16 @@ struct thread_call {
 	struct call_entry 		tc_call;	/* Must be first */
 	uint64_t			tc_submit_count;
 	uint64_t			tc_finish_count;
-	thread_call_priority_t	tc_pri;
-
+	uint64_t			ttd; /* Time to deadline at creation */
+	uint64_t			tc_soft_deadline;
+	thread_call_priority_t		tc_pri;
 	uint32_t			tc_flags;
 	int32_t				tc_refs;
-
-	uint64_t			ttd; /* Time to deadline at creation */
 }; 
 
 #define THREAD_CALL_ALLOC		0x01
 #define THREAD_CALL_WAIT		0x02
+#define THREAD_CALL_DELAYED		0x04
 
 typedef struct thread_call thread_call_data_t;
 
@@ -244,81 +302,38 @@ extern void		thread_call_setup(
 					thread_call_func_t		func,
 					thread_call_param_t		param0);
 
+extern void 		thread_call_delayed_timer_rescan_all(void);
 #endif	/* MACH_KERNEL_PRIVATE */
 
-#ifdef	KERNEL_PRIVATE
+#ifdef	XNU_KERNEL_PRIVATE
 
 __BEGIN_DECLS
 
 /*
- * Obsolete interfaces.
+ * These routines are equivalent to their thread_call_enter_XXX
+ * variants, only the thread_call_t is allocated out of a
+ * fixed preallocated pool of memory, and will panic if the pool
+ * is exhausted.
  */
 
-#ifndef	__LP64__
-
-extern boolean_t	thread_call_is_delayed(
-						thread_call_t		call,
-						uint64_t		*deadline);
-
-extern void		thread_call_func(
-					thread_call_func_t		func,
-					thread_call_param_t		param,
-					boolean_t			unique_call);
-
 extern void		thread_call_func_delayed(
 					thread_call_func_t		func,
 					thread_call_param_t		param,
 					uint64_t			deadline);
 
-extern boolean_t	thread_call_func_cancel(
-						thread_call_func_t	func,
-						thread_call_param_t	param,
-						boolean_t		cancel_all);
-
-#else	/* __LP64__ */
-
-#ifdef	XNU_KERNEL_PRIVATE
-
-extern void		thread_call_func_delayed(
-					thread_call_func_t		func,
-					thread_call_param_t		param,
-					uint64_t			deadline);
+extern void		thread_call_func_delayed_with_leeway(
+						thread_call_func_t		func,
+						thread_call_param_t		param,
+						uint64_t		deadline,
+						uint64_t		leeway,
+						uint32_t		flags);
 
 extern boolean_t	thread_call_func_cancel(
 						thread_call_func_t	func,
 						thread_call_param_t	param,
 						boolean_t		cancel_all);
-
-#endif	/* XNU_KERNEL_PRIVATE */
-
-#endif	/* __LP64__ */
-
-#ifndef	MACH_KERNEL_PRIVATE
-
-#ifndef	__LP64__
-
-#ifndef	ABSOLUTETIME_SCALAR_TYPE
-
-#define thread_call_enter_delayed(a, b)	\
-	thread_call_enter_delayed((a), __OSAbsoluteTime(b))
-
-#define thread_call_enter1_delayed(a, b, c)	\
-	thread_call_enter1_delayed((a), (b), __OSAbsoluteTime(c))
-
-#define thread_call_is_delayed(a, b)	\
-	thread_call_is_delayed((a), __OSAbsoluteTimePtr(b))
-
-#define thread_call_func_delayed(a, b, c)	\
-	thread_call_func_delayed((a), (b), __OSAbsoluteTime(c))
-
-#endif	/* ABSOLUTETIME_SCALAR_TYPE */
-
-#endif	/* __LP64__ */
-
-#endif	/* MACH_KERNEL_PRIVATE */
-
 __END_DECLS
 
-#endif	/* KERNEL_PRIVATE */
+#endif	/* XNU_KERNEL_PRIVATE */
 
 #endif	/* _KERN_THREAD_CALL_H_ */

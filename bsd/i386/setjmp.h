@@ -56,15 +56,8 @@ typedef int sigjmp_buf[_JBLEN + 1];
  * onstack, mask = 2 ints
  */
 
-#if defined(KERNEL)
+#if !defined(KERNEL)
 
-#define __need_struct_sigcontext
-#include <i386/_structs.h>
-
-typedef struct sigcontext jmp_buf[1];
-#define _JBLEN ((sizeof(struct sigcontext)) / sizeof(int))
-typedef int sigjmp_buf[_JBLEN+1];
-#else
 #define _JBLEN (18)
 typedef int jmp_buf[_JBLEN];
 typedef int sigjmp_buf[_JBLEN + 1];

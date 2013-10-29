@@ -158,6 +158,9 @@ options		CONFIG_DTRACE	#		# <config_dtrace>
 # 
 options		MACH_COUNTERS	#		# <debug>
 
+# DEVELOPMENT define for development builds
+options		DEVELOPMENT		# dev kernel		# <development>
+
 ##########################################################
 #
 # This defines configuration options that are normally used only during
@@ -245,16 +248,6 @@ options   CONFIG_NO_PANIC_STRINGS		# <no_panic_str>
 options   CONFIG_NO_PRINTF_STRINGS		# <no_printf_str>
 options   CONFIG_NO_KPRINTF_STRINGS		# <no_kprintf_str>
 
-# configurable kernel - general switch to say we are building for an
-# embedded device
-#
-options   CONFIG_EMBEDDED                       # <config_embedded>
-
-# only execute signed code. Hang this off config_embedded since there's
-# nothing more appropriate right now
-#
-options   CONFIG_ENFORCE_SIGNED_CODE		# <config_embedded>
-
 # support dynamic signing of code
 #
 options		CONFIG_DYNAMIC_CODE_SIGNING	# <dynamic_codesigning>
@@ -264,12 +257,6 @@ options	  CONFIG_VC_PROGRESS_WHITE		# <vc_progress_white>
 
 # secure_kernel - secure kernel from user programs
 options		SECURE_KERNEL		# <secure_kernel>
-
-#
-# code decryption... used on embedded for app protection
-# must be set in all the bsd/conf and osfmk/conf MASTER files
-#
-options		CONFIG_CODE_DECRYPTION	# <config_embedded>
 
 #
 # Context switched counters 
@@ -309,7 +296,27 @@ options		CHECK_CS_VALIDATION_BITMAP	# <config_cs_validation_bitmap>
 #
 options		VM_PRESSURE_EVENTS		# <vm_pressure_events>
 
+#
+# Enable inheritance of importance through specially marked mach ports and for file locks
+# For now debug is enabled wherever inheritance is
+#
+options		IMPORTANCE_INHERITANCE		# <importance_inheritance>
+options		IMPORTANCE_DEBUG		# <importance_inheritance>
+
 # Enable allocation of contiguous physical memory through vm_map_enter_cpm()
 options		VM_CPM		# <vm_cpm>
 
 options	    CONFIG_SKIP_PRECISE_USER_KERNEL_TIME	# <config_skip_precise_user_kernel_time>
+
+options		CONFIG_TELEMETRY			# <config_telemetry>
+
+#
+# Switch to disable cpu, wakeup and high memory watermark monitors
+#
+options 	CONFIG_NOMONITORS				# <config_nomonitors>
+
+#
+# In-kernel tests
+#
+options         CONFIG_IN_KERNEL_TESTS                  # <in_kernel_tests>
+

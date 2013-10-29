@@ -300,58 +300,10 @@ typedef struct x86_avx_state x86_avx_state_t;
 #define MACHINE_THREAD_STATE		x86_THREAD_STATE
 #define MACHINE_THREAD_STATE_COUNT	x86_THREAD_STATE_COUNT
 
-/*
- * when reloading the segment registers on
- * a return out of the kernel, we may take
- * a GeneralProtection or SegmentNotPresent
- * fault if one or more of the segment
- * registers in the saved state was improperly
- * specified via an x86_THREAD_STATE32 call
- * the frame we push on top of the existing
- * save area looks like this... we need to
- * carry this as part of the save area
- * in case we get hit so that we have a big
- * enough stack
- */
-struct x86_seg_load_fault32 {
-	uint16_t	trapno;
-	uint16_t	cpu;
-	uint32_t	err;
-	uint32_t	eip;
-	uint32_t	cs;
-	uint32_t	efl;
-};
-
 #ifdef XNU_KERNEL_PRIVATE
 
 #define x86_SAVED_STATE32		THREAD_STATE_NONE + 1
 #define x86_SAVED_STATE64		THREAD_STATE_NONE + 2
-
-/*
- * Subset of saved state stored by processor on kernel-to-kernel
- * trap.  (Used by ddb to examine state guaranteed to be present
- * on all traps into debugger.)
- */
-struct x86_saved_state32_from_kernel {
-	uint32_t	gs;
-	uint32_t	fs;
-	uint32_t	es;
-	uint32_t	ds;
-	uint32_t	edi;
-	uint32_t	esi;
-	uint32_t	ebp;
-	uint32_t	cr2;	/* kernel esp stored by pusha - we save cr2 here later */
-	uint32_t	ebx;
-	uint32_t	edx;
-	uint32_t	ecx;
-	uint32_t	eax;
-	uint16_t	trapno;
-	uint16_t	cpu;
-	uint32_t	err;
-	uint32_t	eip;
-	uint32_t	cs;
-	uint32_t	efl;
-};
 
 /*
  * The format in which thread state is saved by Mach on this machine.  This
@@ -386,27 +338,6 @@ typedef struct x86_saved_state32 x86_saved_state32_t;
 	(sizeof (x86_saved_state32_t)/sizeof(unsigned int)))
 
 #pragma pack(4)
-struct x86_saved_state32_tagged {
-	uint32_t			tag;
-	struct x86_saved_state32	state;
-};
-typedef struct x86_saved_state32_tagged x86_saved_state32_tagged_t;
-/* Note: sizeof(x86_saved_state32_tagged_t) is a multiple of 16 bytes */
-
-struct x86_sframe32 {
-	/*
-	 * in case we throw a fault reloading
-	 * segment registers on a return out of
-	 * the kernel... the 'slf' state is only kept
-	 * long enough to rejigger (i.e. restore
-	 * the save area to its original state)
-	 * the save area and throw the appropriate
-	 * kernel trap pointing to the 'ssf' state
-	 */
-        struct x86_seg_load_fault32	slf;
-        struct x86_saved_state32_tagged ssf;
-};
-typedef struct x86_sframe32 x86_sframe32_t;
 
 /*
  * This is the state pushed onto the 64-bit interrupt stack
@@ -428,26 +359,6 @@ typedef struct x86_64_intr_stack_frame x86_64_intr_stack_frame_t;
 /* Note: sizeof(x86_64_intr_stack_frame_t) must be a multiple of 16 bytes */
 
 /*
- * This defines the state saved before entry into compatibility mode.
- * The machine state is pushed automatically and the compat state is
- * synthethized in the exception handling code.
- */
-struct x86_saved_state_compat32 {
-	struct x86_saved_state32_tagged	iss32;
-	struct x86_64_intr_stack_frame	isf64;
-};
-typedef struct x86_saved_state_compat32 x86_saved_state_compat32_t;
-
-struct x86_sframe_compat32 {
-	uint32_t			pad_for_16byte_alignment[2];
-	uint64_t			_register_save_slot;
-        struct x86_64_intr_stack_frame  slf;
-        struct x86_saved_state_compat32 ssf;
-};
-typedef struct x86_sframe_compat32 x86_sframe_compat32_t;
-/* Note: sizeof(x86_sframe_compat32_t) must be a multiple of 16 bytes */
-
-/*
  * thread state format for task running in 64bit long mode
  * in long mode, the same hardware frame is always pushed regardless
  * of whether there was a change in privlege level... therefore, there
@@ -467,15 +378,15 @@ struct x86_saved_state64 {
 	 * system call handlers will fill these in
 	 * via copyin if needed...
 	 */
-        uint64_t	rdi;		/* arg0 for system call */
+	uint64_t	rdi;		/* arg0 for system call */
 	uint64_t	rsi;
 	uint64_t	rdx;
-        uint64_t	r10;
-        uint64_t	r8;
-        uint64_t	r9;		/* arg5 for system call */
-        uint64_t	v_arg6;
-        uint64_t	v_arg7;
-        uint64_t	v_arg8;
+	uint64_t	r10;		/* R10 := RCX prior to syscall trap */
+	uint64_t	r8;
+	uint64_t	r9;		/* arg5 for system call */
+	uint64_t	v_arg6;
+	uint64_t	v_arg7;
+	uint64_t	v_arg8;
 
         uint64_t	cr2;
         uint64_t	r15;
@@ -491,27 +402,11 @@ struct x86_saved_state64 {
 	uint32_t	gs;
 	uint32_t	fs;
 
-	uint32_t	_pad_for_tagged_alignment[3];
-
 	struct	x86_64_intr_stack_frame	isf;
 };
 typedef struct x86_saved_state64 x86_saved_state64_t;
 #define x86_SAVED_STATE64_COUNT	((mach_msg_type_number_t) \
 	(sizeof (struct x86_saved_state64)/sizeof(unsigned int)))
-
-struct x86_saved_state64_tagged {
-	uint32_t		tag;
-	x86_saved_state64_t	state;
-};
-typedef struct x86_saved_state64_tagged x86_saved_state64_tagged_t;
-
-struct x86_sframe64 {
-	uint64_t			_register_save_slot[2];
-	struct x86_64_intr_stack_frame	slf;
-	x86_saved_state64_tagged_t	ssf;
-};
-typedef struct x86_sframe64 x86_sframe64_t;
-/* Note: sizeof(x86_sframe64_t) is a multiple of 16 bytes */
 
 extern uint32_t get_eflags_exportmask(void);
 
@@ -520,6 +415,7 @@ extern uint32_t get_eflags_exportmask(void);
  */
 typedef struct {
 	uint32_t			flavor;
+	uint32_t			_pad_for_16byte_alignment[3];
 	union {
 		x86_saved_state32_t	ss_32;
 		x86_saved_state64_t	ss_64;

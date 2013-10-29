@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1999-2010 Apple Inc. All rights reserved.
+ * Copyright (c) 1999-2012 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -60,24 +60,29 @@
 #include <mach/vm_param.h>
 #include <stdbool.h>
 #include "externs.h"
-#include "mig_reply_port.h"
 
-mach_port_t	mach_task_self_ = MACH_PORT_NULL;
+mach_port_t bootstrap_port = MACH_PORT_NULL;
+mach_port_t mach_task_self_ = MACH_PORT_NULL;
 #ifdef __i386__
-mach_port_t	mach_host_self_ = MACH_PORT_NULL;
+mach_port_t mach_host_self_ = MACH_PORT_NULL;
 #endif
+extern mach_port_t _task_reply_port;
 
-vm_size_t vm_page_size	= PAGE_SIZE;
-vm_size_t vm_page_mask	= PAGE_MASK;
-int vm_page_shift		= PAGE_SHIFT;
+vm_size_t vm_kernel_page_size = KERNEL_PAGE_SIZE;
+vm_size_t vm_kernel_page_mask = KERNEL_PAGE_MASK;
+int vm_kernel_page_shift = KERNEL_PAGE_SHIFT;
+
+vm_size_t vm_page_size = PAGE_SIZE;
+vm_size_t vm_page_mask = PAGE_MASK;
+int vm_page_shift = PAGE_SHIFT;
 
 int mach_init(void);
 int _mach_fork_child(void);
 
-static int mach_init_doit(bool forkchild);
+static void mach_init_doit(void);
 
 extern void _pthread_set_self(void *);
-extern void cthread_set_self(void *);
+extern void _init_cpu_capabilities(void);
 
 kern_return_t
 host_page_size(__unused host_t host, vm_size_t *out_page_size)
@@ -94,72 +99,28 @@ int
 mach_init(void)
 {
 	static bool mach_init_inited = false;
-
-	if (mach_init_inited) {
-		return 0;
+	if (!mach_init_inited) {
+		mach_init_doit();
+		mach_init_inited = true;
 	}
-	mach_init_inited = true;
-	
-	return mach_init_doit(false);
+	return 0;
 }
 
 // called by libSystem_atfork_child()
 int
 _mach_fork_child(void)
 {
-	return mach_init_doit(true);
+	mach_init_doit();
+	return 0;
 }
 
-int
-mach_init_doit(bool forkchild)
+void
+mach_init_doit(void)
 {
-	/*
-	 *	Get the important ports into the cached values,
-	 *	as required by "mach_init.h".
-	 */
+	// Initialize cached mach ports defined in mach_init.h
 	mach_task_self_ = task_self_trap();
-	
-	/*
-	 *	Initialize the single mig reply port
-	 */
+	_task_reply_port = mach_reply_port();
 
+	_init_cpu_capabilities();
 	_pthread_set_self(0);
-	_mig_init(0);
-
-#if WE_REALLY_NEED_THIS_GDB_HACK
-	/*
-	 * Check to see if GDB wants us to stop
-	 */
-	{
-	task_user_data_data_t	user_data;
-	mach_msg_type_number_t	user_data_count = TASK_USER_DATA_COUNT;
-	  
-	user_data.user_data = 0;
-	(void)task_info(mach_task_self_, TASK_USER_DATA,
-		(task_info_t)&user_data, &user_data_count);
-#define MACH_GDB_RUN_MAGIC_NUMBER 1
-#ifdef	MACH_GDB_RUN_MAGIC_NUMBER	
-	/* This magic number is set in mach-aware gdb 
-	 *  for RUN command to allow us to suspend user's
-	 *  executable (linked with this libmach!) 
-	 *  with the code below.
-	 * This hack should disappear when gdb improves.
-	 */
-	if ((int)user_data.user_data == MACH_GDB_RUN_MAGIC_NUMBER) {
-	    kern_return_t ret;
-	    user_data.user_data = 0;
-	    
-	    ret = task_suspend(mach_task_self_);
-	    if (ret != KERN_SUCCESS) {
-			while (1) {
-				(void)task_terminate(mach_task_self_);
-			}
-	    }
-	}
-#undef MACH_GDB_RUN_MAGIC_NUMBER  
-#endif /* MACH_GDB_RUN_MAGIC_NUMBER */
-	}
-#endif /* WE_REALLY_NEED_THIS_GDB_HACK */
-
-	return 0;
 }

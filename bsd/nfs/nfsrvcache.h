@@ -125,8 +125,8 @@ struct nfsrvcache {
 #define	RC_INETADDR	0x20
 #define	RC_NAM		0x40
 
-__private_extern__ lck_grp_t *nfsrv_reqcache_lck_grp;
-__private_extern__ lck_mtx_t *nfsrv_reqcache_mutex;
+extern lck_grp_t *nfsrv_reqcache_lck_grp;
+extern lck_mtx_t *nfsrv_reqcache_mutex;
 
 #endif /* __APPLE_API_PRIVATE */
 #endif /* _NFS_NFSRVCACHE_H_ */

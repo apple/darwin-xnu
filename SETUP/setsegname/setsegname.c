@@ -29,7 +29,7 @@
 
 #include <mach-o/swap.h>
 
-#include <IOKit/IOTypes.h>
+#include <stdbool.h>
 
 /*********************************************************************
 *********************************************************************/
@@ -105,12 +105,21 @@ readFile(const char *path, vm_offset_t * objAddr, vm_size_t * objSize)
     return error;
 }
 
+static void
+usage(void)
+{
+    fprintf(stderr, "Usage: %s [-s OLDSEGNAME] -n NEWSEGNAME input -o output\n", getprogname());
+    exit(1);
+}
+
 /*********************************************************************
 *********************************************************************/
 int main(int argc, char * argv[])
 {
     int                     error;
     const char            * output_name = NULL;
+    const char            * input_name = NULL;
+    const char            * oldseg_name = NULL;
     const char            * newseg_name = NULL;
     struct mach_header    * hdr;
     struct mach_header_64 * hdr64;
@@ -125,16 +134,36 @@ int main(int argc, char * argv[])
     uint32_t		        attr;
     typedef char            segname_t[16];
     segname_t             * names = NULL;
+    int                     ch;
 
-    if ((argc != 5) || strcmp("-o", argv[3])) {
-        fprintf(stderr, "Usage: %s NEWSEGNAME input -o output\n", argv[0]);
-        exit(1);
+
+    while ((ch = getopt(argc, argv, "s:n:o:")) != -1) {
+        switch (ch) {
+            case 's':
+                oldseg_name = optarg;
+                break;
+            case 'n':
+                newseg_name = optarg;
+                break;
+            case 'o':
+                output_name = optarg;
+                break;
+            case '?':
+            default:
+                usage();
+        }
     }
 
-    output_name = argv[4];
-    newseg_name = argv[1];
+    argc -= optind;
+    argv += optind;
 
-    error = readFile(argv[2], &input, &input_size);
+	if ((argc != 1) || !newseg_name || !output_name) {
+        usage();
+    }
+
+    input_name = argv[0];
+
+    error = readFile(input_name, &input, &input_size);
     if (error) {
         exit(1);
     }
@@ -205,7 +234,11 @@ int main(int argc, char * argv[])
             }
 
             if (!(S_ATTR_DEBUG & attr)) {
-                strncpy((char *)names, newseg_name, sizeof(*names));
+                if (!oldseg_name ||
+                    0 == strncmp(oldseg_name, (char *)names, sizeof(*names))) {
+                    memset(names, 0x0, sizeof(*names));
+                    strncpy((char *)names, newseg_name, sizeof(*names));
+                }
             }
         
             names = (typeof(names))(((uintptr_t) names) + len);

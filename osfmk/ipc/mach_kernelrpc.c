@@ -94,6 +94,31 @@ done:
 }
 
 int
+_kernelrpc_mach_vm_map_trap(struct _kernelrpc_mach_vm_map_trap_args *args)
+{
+	mach_vm_offset_t addr;
+	task_t task = port_name_to_task(args->target);
+	int rv = MACH_SEND_INVALID_DEST;
+
+	if (task != current_task())
+		goto done;
+
+	if (copyin(args->addr, (char *)&addr, sizeof (addr)))
+		goto done;
+
+	rv = mach_vm_map(task->map, &addr, args->size, args->mask, args->flags,
+			IPC_PORT_NULL, 0, FALSE, args->cur_protection, VM_PROT_ALL,
+			VM_INHERIT_DEFAULT);
+	if (rv == KERN_SUCCESS)
+		rv = copyout(&addr, args->addr, sizeof (addr));
+
+done:
+	if (task)
+		task_deallocate(task);
+	return (rv);
+}
+
+int
 _kernelrpc_mach_port_allocate_trap(struct _kernelrpc_mach_port_allocate_args *args)
 {
 	task_t task = port_name_to_task(args->target);
@@ -242,3 +267,81 @@ done:
 		task_deallocate(task);
 	return (rv);
 }
+
+int
+_kernelrpc_mach_port_construct_trap(struct _kernelrpc_mach_port_construct_args *args)
+{
+	task_t task = port_name_to_task(args->target);
+	mach_port_name_t name;
+	int rv = MACH_SEND_INVALID_DEST;
+	mach_port_options_t options;
+
+	if (copyin(args->options, (char *)&options, sizeof (options))) {
+		rv = MACH_SEND_INVALID_DATA;
+		goto done;
+	}
+
+	if (task != current_task())
+		goto done;
+
+	rv = mach_port_construct(task->itk_space, &options, args->context, &name);
+	if (rv == KERN_SUCCESS)
+		rv = copyout(&name, args->name, sizeof (name));
+
+done:
+	if (task)
+		task_deallocate(task);
+	return (rv);
+}
+
+int
+_kernelrpc_mach_port_destruct_trap(struct _kernelrpc_mach_port_destruct_args *args)
+{
+	task_t task = port_name_to_task(args->target);
+	int rv = MACH_SEND_INVALID_DEST;
+
+	if (task != current_task())
+		goto done;
+
+	rv = mach_port_destruct(task->itk_space, args->name, args->srdelta, args->guard);
+	
+done:
+	if (task)
+		task_deallocate(task);
+	return (rv);
+}
+
+int
+_kernelrpc_mach_port_guard_trap(struct _kernelrpc_mach_port_guard_args *args)
+{
+	task_t task = port_name_to_task(args->target);
+	int rv = MACH_SEND_INVALID_DEST;
+
+	if (task != current_task())
+		goto done;
+
+	rv = mach_port_guard(task->itk_space, args->name, args->guard, args->strict);
+	
+done:
+	if (task)
+		task_deallocate(task);
+	return (rv);
+}
+
+int
+_kernelrpc_mach_port_unguard_trap(struct _kernelrpc_mach_port_unguard_args *args)
+{
+	task_t task = port_name_to_task(args->target);
+	int rv = MACH_SEND_INVALID_DEST;
+
+	if (task != current_task())
+		goto done;
+
+	rv = mach_port_unguard(task->itk_space, args->name, args->guard);
+	
+done:
+	if (task)
+		task_deallocate(task);
+	return (rv);
+}
+

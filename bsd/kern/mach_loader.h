@@ -89,5 +89,6 @@ load_return_t load_machfile(
 #define LOAD_RESOURCE		7	/* resource allocation failure */
 #define	LOAD_ENOENT		8	/* resource not found */
 #define	LOAD_IOERROR		9	/* IO error */
+#define	LOAD_DECRYPTFAIL	10	/* FP decrpty failure */
 
 #endif	/* _BSD_KERN_MACH_LOADER_H_ */

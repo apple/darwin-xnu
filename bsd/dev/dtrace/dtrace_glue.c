@@ -51,6 +51,8 @@
 #include <sys/dtrace.h>
 #include <sys/dtrace_impl.h>
 #include <libkern/OSAtomic.h>
+#include <kern/kern_types.h>
+#include <kern/timer_call.h>
 #include <kern/thread_call.h>
 #include <kern/task.h>
 #include <kern/sched_prim.h>
@@ -63,6 +65,7 @@
 #include <mach/task.h>
 #include <vm/pmap.h>
 #include <vm/vm_map.h> /* All the bits we care about are guarded by MACH_KERNEL_PRIVATE :-( */
+
 
 /*
  * pid/proc
@@ -278,49 +281,6 @@ crgetuid(const cred_t *cr) { cred_t copy_cr = *cr; return kauth_cred_getuid(&cop
  * "cyclic"
  */
 
-/* osfmk/kern/timer_call.h */
-typedef void                *timer_call_param_t;
-typedef void                (*timer_call_func_t)(
-	timer_call_param_t      param0,
-	timer_call_param_t      param1);
-
-typedef struct timer_call {
-	queue_chain_t       q_link;
-	queue_t             queue;
-	timer_call_func_t   func;
-	timer_call_param_t  param0;
-	timer_call_param_t  param1;
-	decl_simple_lock_data(,lock);
-	uint64_t            deadline;
-	uint64_t            soft_deadline;
-	uint32_t            flags;
-	boolean_t	    async_dequeue;
-} timer_call_data_t;
-
-typedef struct timer_call   *timer_call_t;
-
-extern void
-timer_call_setup(
-	timer_call_t            call,
-	timer_call_func_t       func,
-	timer_call_param_t      param0);
-
-extern boolean_t
-timer_call_enter1(
-	timer_call_t            call,
-	timer_call_param_t      param1,
-	uint64_t                deadline,
-	uint32_t		flags);
-
-#ifndef TIMER_CALL_CRITICAL
-#define TIMER_CALL_CRITICAL 0x1
-#define TIMER_CALL_LOCAL    0x2
-#endif /* TIMER_CALL_CRITICAL */
-
-extern boolean_t
-timer_call_cancel(
-	timer_call_t            call);
-
 typedef struct wrap_timer_call {
 	cyc_handler_t hdlr;
 	cyc_time_t when;
@@ -340,7 +300,7 @@ _timer_call_apply_cyclic( void *ignore, void *vTChdl )
 	(*(wrapTC->hdlr.cyh_func))( wrapTC->hdlr.cyh_arg );
 
 	clock_deadline_for_periodic_event( wrapTC->when.cyt_interval, mach_absolute_time(), &(wrapTC->deadline) );
-	timer_call_enter1( &(wrapTC->call), (void *)wrapTC, wrapTC->deadline, TIMER_CALL_CRITICAL | TIMER_CALL_LOCAL );
+	timer_call_enter1( &(wrapTC->call), (void *)wrapTC, wrapTC->deadline, TIMER_CALL_SYS_CRITICAL | TIMER_CALL_LOCAL );
 
 	/* Did timer_call_remove_cyclic request a wakeup call when this timer call was re-armed? */
 	if (wrapTC->when.cyt_interval == WAKEUP_REAPER)
@@ -362,7 +322,7 @@ timer_call_add_cyclic(wrap_timer_call_t *wrapTC, cyc_handler_t *handler, cyc_tim
 	wrapTC->deadline = now;
 
 	clock_deadline_for_periodic_event( wrapTC->when.cyt_interval, now, &(wrapTC->deadline) );
-	timer_call_enter1( &(wrapTC->call), (void *)wrapTC, wrapTC->deadline, TIMER_CALL_CRITICAL | TIMER_CALL_LOCAL );
+	timer_call_enter1( &(wrapTC->call), (void *)wrapTC, wrapTC->deadline, TIMER_CALL_SYS_CRITICAL | TIMER_CALL_LOCAL );
 
 	return (cyclic_id_t)wrapTC;
 }
@@ -579,7 +539,7 @@ dtrace_timeout(void (*func)(void *, void *), void* arg, uint64_t nanos)
 	 * and clock drift on later invocations is not a worry.
 	 */
 	uint64_t deadline = mach_absolute_time() + nanos;
-
+	/* DRK: consider using a lower priority callout here */
 	thread_call_enter_delayed(call, deadline);
 
 	return call;
@@ -1189,9 +1149,7 @@ dtrace_copycheck(user_addr_t uaddr, uintptr_t kaddr, size_t size)
 
 	ASSERT(kaddr + size >= kaddr);
 
-	if (ml_at_interrupt_context() ||	/* Avoid possible copyio page fault on int stack, which panics! */ 
-		0 != recover ||					/* Avoid reentrancy into copyio facility. */
-		uaddr + size < uaddr ||			/* Avoid address wrap. */
+	if (	uaddr + size < uaddr ||		/* Avoid address wrap. */
 		KERN_FAILURE == dtrace_copyio_preflight(uaddr)) /* Machine specific setup/constraints. */
 	{
 		DTRACE_CPUFLAG_SET(CPU_DTRACE_BADADDR);

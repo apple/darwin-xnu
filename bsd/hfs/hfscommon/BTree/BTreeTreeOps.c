@@ -569,7 +569,7 @@ static OSErr	InsertNode	(BTreeControlBlockPtr	 btreePtr,
 							 Boolean				*insertParent,
 							 Boolean				*rootSplit )
 {
-	BlockDescriptor		*targetNode;
+	BlockDescriptor		*targetNode = NULL;
 	u_int32_t			 leftNodeNum;
 	u_int16_t			 recsRotated;
 	OSErr				 err;

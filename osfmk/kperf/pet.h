@@ -38,3 +38,9 @@ extern void kperf_pet_thread_wait(void);
 
 /* tell pet the timer parameters */
 extern void kperf_pet_timer_config( unsigned timerid, unsigned actionid );
+
+/* get/set rate at which PET forces threads to be sampled */
+extern int kperf_get_pet_idle_rate( void );
+extern void kperf_set_pet_idle_rate( int val );
+
+

@@ -121,5 +121,4 @@ struct	cblock *cfree;
 struct	cblock *cfreelist = NULL;
 int	cfreecount = 0;
 struct	buf *buf_headers;
-struct	domain *domains;
-
+struct domains_head domains = TAILQ_HEAD_INITIALIZER(domains);

@@ -115,6 +115,7 @@ int	ubc_setcred(struct vnode *, struct proc *);
 #include <sys/cprotect.h>
 #endif
 
+extern void	sigpup_attach_vnode(vnode_t); /* XXX */
 
 static int vn_closefile(struct fileglob *fp, vfs_context_t ctx);
 static int vn_ioctl(struct fileproc *fp, u_long com, caddr_t data,
@@ -135,8 +136,16 @@ static int vn_kqfilt_remove(struct vnode *vp, uintptr_t ident,
 			vfs_context_t ctx);
 #endif
 
-struct 	fileops vnops =
-	{ vn_read, vn_write, vn_ioctl, vn_select, vn_closefile, vn_kqfilt_add, NULL };
+const struct fileops vnops = {
+	DTYPE_VNODE,
+	vn_read,
+	vn_write,
+	vn_ioctl,
+	vn_select,
+	vn_closefile,
+	vn_kqfilt_add,
+	NULL
+};
 
 struct  filterops vnode_filtops = { 
 	.f_isfd = 1, 
@@ -185,6 +194,8 @@ vn_open_auth_finish(vnode_t vp, int fmode, vfs_context_t ctx)
 #endif
 	kauth_authorize_fileop(vfs_context_ucred(ctx), KAUTH_FILEOP_OPEN, 
 						   (uintptr_t)vp, 0);
+
+	sigpup_attach_vnode(vp);
 
 	return 0;
 
@@ -263,13 +274,7 @@ vn_open_auth_do_create(struct nameidata *ndp, struct vnode_attr *vap, int fmode,
 	}
 #endif
 
-	/* 
-	* Unlock the fsnode (if locked) here so that we are free
-	* to drop the dvp iocount and prevent deadlock in build_path().
-	* nameidone() will still do the right thing later.
-	*/
 	vp = ndp->ni_vp;
-	namei_unlock_fsnode(ndp);
 
 	if (*did_create) {
 		int	update_flags = 0;
@@ -488,7 +493,8 @@ continue_create_lookup:
 
 			/* Fall through */
 		}
-	} else {
+	}
+    else {
 		/*
 		 * Not O_CREAT
 		 */
@@ -684,6 +690,7 @@ int
 vn_close(struct vnode *vp, int flags, vfs_context_t ctx)
 {
 	int error;
+	int flusherror = 0;
 
 #if NAMEDRSRCFORK
 	/* Sync data from resource fork shadow file if needed. */
@@ -691,7 +698,7 @@ vn_close(struct vnode *vp, int flags, vfs_context_t ctx)
 	    (vp->v_parent != NULLVP) &&
 	    vnode_isshadow(vp)) {
 		if (flags & FWASWRITTEN) {
-			(void) vnode_flushnamedstream(vp->v_parent, vp, ctx);
+			flusherror = vnode_flushnamedstream(vp->v_parent, vp, ctx);
 		}
 	}
 #endif
@@ -715,6 +722,9 @@ vn_close(struct vnode *vp, int flags, vfs_context_t ctx)
 	if (!vnode_isspec(vp))
 		(void)vnode_rele_ext(vp, flags, 0);
 	
+	if (flusherror) {
+		error = flusherror;
+	}
 	return (error);
 }
 
@@ -863,7 +873,7 @@ vn_rdwr_64(
 
 	if (error == 0) {
 		if (rw == UIO_READ) {
-			if (vnode_isswap(vp)) {
+			if (vnode_isswap(vp) && ((ioflg & IO_SWAP_DISPATCH) == 0)) {
 				error = vn_read_swapfile(vp, auio);
 			} else {
 				error = VNOP_READ(vp, auio, ioflg, &context);
@@ -888,7 +898,8 @@ static int
 vn_read(struct fileproc *fp, struct uio *uio, int flags, vfs_context_t ctx)
 {
 	struct vnode *vp;
-	int error, ioflag;
+	int error;
+	int ioflag;
 	off_t count;
 
 	vp = (struct vnode *)fp->f_fglob->fg_data;
@@ -963,9 +974,9 @@ vn_write(struct fileproc *fp, struct uio *uio, int flags, vfs_context_t ctx)
 	}
 #endif
 
-	/* 
-	 * IO_SYSCALL_DISPATCH signals to VNOP handlers that this write originated 
-	 * from a file table write.
+	/*
+	 * IO_SYSCALL_DISPATCH signals to VNOP handlers that this write came from
+	 * a file table write
 	 */
 	ioflag = (IO_UNIT | IO_SYSCALL_DISPATCH);
 
@@ -1328,14 +1339,14 @@ vn_ioctl(struct fileproc *fp, u_long com, caddr_t data, vfs_context_t ctx)
 					error = ENXIO;
 					goto out;
 				}
-				*(int *)data = D_TYPEMASK & bdevsw[major(vp->v_rdev)].d_type;
+				*(int *)data = bdevsw[major(vp->v_rdev)].d_type;
 
 			} else if (vp->v_type == VCHR) {
 				if (major(vp->v_rdev) >= nchrdev) {
 					error = ENXIO;
 					goto out;
 				}
-				*(int *)data = D_TYPEMASK & cdevsw[major(vp->v_rdev)].d_type;
+				*(int *)data = cdevsw[major(vp->v_rdev)].d_type;
 			} else {
 				error = ENOTTY;
 				goto out;
@@ -1413,13 +1424,14 @@ vn_closefile(struct fileglob *fg, vfs_context_t ctx)
 
 	if ( (error = vnode_getwithref(vp)) == 0 ) {
 
-		if ((fg->fg_flag & FHASLOCK) && fg->fg_type == DTYPE_VNODE) {
+		if ((fg->fg_flag & FHASLOCK) &&
+		    FILEGLOB_DTYPE(fg) == DTYPE_VNODE) {
 			lf.l_whence = SEEK_SET;
 			lf.l_start = 0;
 			lf.l_len = 0;
 			lf.l_type = F_UNLCK;
 
-			(void)VNOP_ADVLOCK(vp, (caddr_t)fg, F_UNLCK, &lf, F_FLOCK, ctx);
+			(void)VNOP_ADVLOCK(vp, (caddr_t)fg, F_UNLCK, &lf, F_FLOCK, ctx, NULL);
 		}
 	        error = vn_close(vp, fg->fg_flag, ctx);
 
@@ -1612,11 +1624,14 @@ static intptr_t
 vnode_readable_data_count(vnode_t vp, off_t current_offset, int ispoll)
 {
 	if (vnode_isfifo(vp)) {
+#if FIFO
 		int cnt;
 		int err = fifo_charcount(vp, &cnt);
 		if (err == 0) {
 			return (intptr_t)cnt;
-		} else {
+		} else 
+#endif
+		{
 			return (intptr_t)0;
 		}
 	} else if (vnode_isreg(vp)) {
@@ -1649,11 +1664,14 @@ static intptr_t
 vnode_writable_space_count(vnode_t vp) 
 {
 	if (vnode_isfifo(vp)) {
+#if FIFO
 		long spc;
 		int err = fifo_freespace(vp, &spc);
 		if (err == 0) {
 			return (intptr_t)spc;
-		} else {
+		} else 
+#endif
+		{
 			return (intptr_t)0;
 		}
 	} else if (vnode_isreg(vp)) {

@@ -36,8 +36,6 @@
 
 load_return_t fatfile_getarch_affinity(struct vnode *vp, vm_offset_t data_ptr,
 		struct fat_arch *archret, int affinity);
-load_return_t fatfile_getarch(struct vnode *vp, vm_offset_t data_ptr,
-		struct fat_arch *archret);
 load_return_t fatfile_getarch_with_bits(struct vnode *vp, integer_t archbits,
 		vm_offset_t data_ptr, struct fat_arch *archret);
 

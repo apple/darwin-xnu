@@ -80,6 +80,10 @@
 #ifndef _SECURITY_MAC_POLICY_H_
 #define _SECURITY_MAC_POLICY_H_
 
+#ifndef PRIVATE
+#warning "MAC policy is not KPI, see Technical Q&A QA1574, this header will be removed in next version"
+#endif
+
 #include <security/_label.h>
 
 struct attrlist;
@@ -96,15 +100,21 @@ struct mac_module_data;
 struct mac_policy_conf;
 struct mbuf;
 struct mount;
+struct msg;
+struct msqid_kernel;
 struct pipe;
 struct pseminfo;
 struct pshminfo;
 struct sbuf;
 struct semid_kernel;
 struct shmid_kernel;
+struct socket;
+struct sockopt;
 struct task;
 struct thread;
+struct tty;
 struct ucred;
+struct vfs_attr;
 struct vnode;
 /** @struct dummy */
 
@@ -292,6 +302,8 @@ typedef int mpo_bpfdesc_check_receive_t(
   @param scriptvnodelabel Script vnode label
   @param execlabel Userspace provided execution label
   @param proc Object process
+  @param macpolicyattr MAC policy-specific spawn attribute data
+  @param macpolicyattrlen Length of policy-specific spawn attribute data
   @see mac_execve
   @see mpo_cred_label_update_execve_t
   @see mpo_vnode_check_exec_t
@@ -325,10 +337,13 @@ typedef int mpo_bpfdesc_check_receive_t(
 typedef int mpo_cred_check_label_update_execve_t(
 	kauth_cred_t old,
 	struct vnode *vp,
+	struct vnode *scriptvp,
 	struct label *vnodelabel,
 	struct label *scriptvnodelabel,
 	struct label *execlabel,
-	struct proc *proc
+	struct proc *p,
+	void *macpolicyattr,
+	size_t macpolicyattrlen
 );
 /**
   @brief Access control check for relabelling processes
@@ -515,10 +530,13 @@ typedef int mpo_cred_label_internalize_t(
   @brief Update credential at exec time
   @param old_cred Existing subject credential
   @param new_cred New subject credential to be labeled
+  @param p Object process.
   @param vp File being executed
   @param vnodelabel Label corresponding to vp
   @param scriptvnodelabel Script vnode label
   @param execlabel Userspace provided execution label
+  @param macpolicyattr MAC policy-specific spawn attribute data.
+  @param macpolicyattrlen Length of policy-specific spawn attribute data.
   @see mac_execve
   @see mpo_cred_check_label_update_execve_t
   @see mpo_vnode_check_exec_t
@@ -548,10 +566,14 @@ typedef int mpo_cred_label_internalize_t(
 typedef void mpo_cred_label_update_execve_t(
 	kauth_cred_t old_cred,
 	kauth_cred_t new_cred,
+	struct proc *p,
 	struct vnode *vp,
+	struct vnode *scriptvp,
 	struct label *vnodelabel,
 	struct label *scriptvnodelabel,
 	struct label *execlabel,
+	void *macpolicyattr,
+	size_t macpolicyattrlen,
 	int *disjointp
 );
 /**
@@ -3145,6 +3167,36 @@ typedef int mpo_proc_check_ledger_t(
 	int op
 );
 /**
+  @brief Access control check for escaping default CPU usage monitor parameters.
+  @param cred Subject credential
+  
+  Determine if a credential has permission to program CPU usage monitor parameters
+  that are less restrictive than the global system-wide defaults.
+
+  @return Return 0 if access is granted, otherwise an appropriate value for
+  errno should be returned.
+*/
+typedef int mpo_proc_check_cpumon_t(
+  kauth_cred_t cred
+);
+/**
+  @brief Access control check for retrieving process information.
+  @param cred Subject credential
+  @param target Target process (may be null, may be zombie)
+
+  Determine if a credential has permission to access process information as defined
+  by call number and flavor on target process
+
+  @return Return 0 if access is granted, otherwise an appropriate value for
+  errno should be returned.
+*/
+typedef int mpo_proc_check_proc_info_t(
+	kauth_cred_t cred,
+	struct proc *target,
+	int callnum,
+	int flavor
+);
+/**
   @brief Access control check for mmap MAP_ANON
   @param proc User process requesting the memory
   @param cred Subject credential
@@ -3996,6 +4048,26 @@ typedef int mpo_system_check_chud_t(
 */
 typedef int mpo_system_check_host_priv_t(
 	kauth_cred_t cred
+);
+/**
+  @brief Access control check for obtaining system information
+  @param cred Subject credential
+  @param info_type A description of the information requested
+
+  Determine whether the subject identified by the credential should be
+  allowed to obtain information about the system.
+
+  This is a generic hook that can be used in a variety of situations where
+  information is being returned that might be considered sensitive.
+  Rather than adding a new MAC hook for every such interface, this hook can
+  be called with a string identifying the type of information requested.
+
+  @return Return 0 if access is granted, otherwise an appropriate value for
+  errno should be returned.
+*/
+typedef int mpo_system_check_info_t(
+	kauth_cred_t cred,
+	const char *info_type
 );
 /**
   @brief Access control check for calling NFS services
@@ -4926,6 +4998,8 @@ typedef int mpo_vnode_check_exchangedata_t(
   @param label Policy label for vp
   @param execlabel Userspace provided execution label
   @param cnp Component name for file being executed
+  @param macpolicyattr MAC policy-specific spawn attribute data.
+  @param macpolicyattrlen Length of policy-specific spawn attribute data.
 
   Determine whether the subject identified by the credential can execute
   the passed vnode. Determination of execute privilege is made separately
@@ -4946,7 +5020,9 @@ typedef int mpo_vnode_check_exec_t(
 	struct label *label,
 	struct label *execlabel,	/* NULLOK */
 	struct componentname *cnp,
-	u_int *csflags
+	u_int *csflags,
+	void *macpolicyattr,
+	size_t macpolicyattrlen
 );
 /**
   @brief Access control check for fsgetpath
@@ -4969,7 +5045,7 @@ typedef int mpo_vnode_check_fsgetpath_t(
   @brief Access control check after determining the code directory hash
  */
 typedef int mpo_vnode_check_signature_t(struct vnode *vp,  struct label *label, 
-					unsigned char *sha1, void *signature, 
+					off_t macho_offset, unsigned char *sha1, void *signature, 
 					int size);
 
 /**
@@ -5978,6 +6054,20 @@ typedef void mpo_vnode_label_update_t(
 	struct label *label
 );
 /**
+  @brief Find deatched signatures for a shared library
+  @param p file trying to find the signature
+  @param vp The vnode to relabel
+  @param offset offset in the macho that the signature is requested for (for fat binaries)
+  @param label Existing vnode label
+
+*/
+typedef int mpo_vnode_find_sigs_t(
+	struct proc *p,
+	struct vnode *vp,
+	off_t offset,
+	struct label *label
+);
+/**
   @brief Create a new vnode, backed by extended attributes
   @param cred User credential for the creating process
   @param mp File system mount point
@@ -6045,22 +6135,111 @@ typedef void mpo_vnode_notify_rename_t(
 	struct componentname *cnp
 );
 
+/**
+  @brief Inform MAC policies that a vnode has been linked
+  @param cred User credential for the renaming process
+  @param dvp Parent directory for the destination
+  @param dlabel Policy label for dvp
+  @param vp Vnode that's being linked
+  @param vlabel Policy label for vp
+  @param cnp Component name for the destination
+
+  Inform MAC policies that a vnode has been linked.
+ */
+typedef void mpo_vnode_notify_link_t(
+	kauth_cred_t cred,
+	struct vnode *dvp,
+	struct label *dlabel,
+	struct vnode *vp,
+	struct label *vlabel,
+	struct componentname *cnp
+);
+
+/**
+  @brief Inform MAC policies that a pty slave has been granted
+  @param p Responsible process
+  @param tp tty data structure
+  @param dev Major and minor numbers of device
+  @param label Policy label for tp
+  
+  Inform MAC policies that a pty slave has been granted.
+*/
+typedef void mpo_pty_notify_grant_t(
+	proc_t p,
+	struct tty *tp,
+	dev_t dev,
+	struct label *label
+);
+
+/**
+  @brief Inform MAC policies that a pty master has been closed
+  @param p Responsible process
+  @param tp tty data structure
+  @param dev Major and minor numbers of device
+  @param label Policy label for tp
+  
+  Inform MAC policies that a pty master has been closed.
+*/
+typedef void mpo_pty_notify_close_t(
+	proc_t p,
+	struct tty *tp,
+	dev_t dev,
+	struct label *label
+);
+
+/**
+  @brief Access control check for kext loading
+  @param cred Subject credential
+  @param identifier Kext identifier
+
+  Determine whether the subject identified by the credential can load the
+  specified kext.
+
+  @return Return 0 if access is granted, otherwise an appropriate value for
+  errno should be returned. Suggested failure: EPERM for lack of privilege.
+*/
+typedef int mpo_kext_check_load_t(
+	kauth_cred_t cred,
+	const char *identifier
+);
+
+/**
+  @brief Access control check for kext unloading
+  @param cred Subject credential
+  @param identifier Kext identifier
+
+  Determine whether the subject identified by the credential can unload the
+  specified kext.
+
+  @return Return 0 if access is granted, otherwise an appropriate value for
+  errno should be returned. Suggested failure: EPERM for lack of privilege.
+*/
+typedef int mpo_kext_check_unload_t(
+	kauth_cred_t cred,
+	const char *identifier
+);
+
 /*
  * Placeholder for future events that may need mac hooks.
  */
 typedef void mpo_reserved_hook_t(void);
 
-/*!
-  \struct mac_policy_ops
-*/
-#define MAC_POLICY_OPS_VERSION 13 /* inc when new reserved slots are taken */
+/*
+ * Policy module operations.
+ *
+ * Please note that this should be kept in sync with the check assumptions
+ * policy in bsd/kern/policy_check.c (policy_ops struct).
+ */
+#define MAC_POLICY_OPS_VERSION 24 /* inc when new reserved slots are taken */
 struct mac_policy_ops {
 	mpo_audit_check_postselect_t		*mpo_audit_check_postselect;
 	mpo_audit_check_preselect_t		*mpo_audit_check_preselect;
+
 	mpo_bpfdesc_label_associate_t		*mpo_bpfdesc_label_associate;
 	mpo_bpfdesc_label_destroy_t		*mpo_bpfdesc_label_destroy;
 	mpo_bpfdesc_label_init_t		*mpo_bpfdesc_label_init;
 	mpo_bpfdesc_check_receive_t		*mpo_bpfdesc_check_receive;
+
 	mpo_cred_check_label_update_execve_t	*mpo_cred_check_label_update_execve;
 	mpo_cred_check_label_update_t		*mpo_cred_check_label_update;
 	mpo_cred_check_visible_t		*mpo_cred_check_visible;
@@ -6075,12 +6254,14 @@ struct mac_policy_ops {
 	mpo_cred_label_internalize_t		*mpo_cred_label_internalize;
 	mpo_cred_label_update_execve_t		*mpo_cred_label_update_execve;
 	mpo_cred_label_update_t			*mpo_cred_label_update;
+
 	mpo_devfs_label_associate_device_t	*mpo_devfs_label_associate_device;
 	mpo_devfs_label_associate_directory_t	*mpo_devfs_label_associate_directory;
 	mpo_devfs_label_copy_t			*mpo_devfs_label_copy;
 	mpo_devfs_label_destroy_t		*mpo_devfs_label_destroy;
 	mpo_devfs_label_init_t			*mpo_devfs_label_init;
 	mpo_devfs_label_update_t		*mpo_devfs_label_update;
+
 	mpo_file_check_change_offset_t		*mpo_file_check_change_offset;
 	mpo_file_check_create_t			*mpo_file_check_create;
 	mpo_file_check_dup_t			*mpo_file_check_dup;
@@ -6097,6 +6278,7 @@ struct mac_policy_ops {
 	mpo_file_label_init_t			*mpo_file_label_init;
 	mpo_file_label_destroy_t		*mpo_file_label_destroy;
 	mpo_file_label_associate_t		*mpo_file_label_associate;
+
 	mpo_ifnet_check_label_update_t		*mpo_ifnet_check_label_update;
 	mpo_ifnet_check_transmit_t		*mpo_ifnet_check_transmit;
 	mpo_ifnet_label_associate_t		*mpo_ifnet_label_associate;
@@ -6107,18 +6289,22 @@ struct mac_policy_ops {
 	mpo_ifnet_label_internalize_t		*mpo_ifnet_label_internalize;
 	mpo_ifnet_label_update_t		*mpo_ifnet_label_update;
 	mpo_ifnet_label_recycle_t		*mpo_ifnet_label_recycle;
+
 	mpo_inpcb_check_deliver_t		*mpo_inpcb_check_deliver;
 	mpo_inpcb_label_associate_t		*mpo_inpcb_label_associate;
 	mpo_inpcb_label_destroy_t		*mpo_inpcb_label_destroy;
 	mpo_inpcb_label_init_t			*mpo_inpcb_label_init;
 	mpo_inpcb_label_recycle_t		*mpo_inpcb_label_recycle;
 	mpo_inpcb_label_update_t		*mpo_inpcb_label_update;
+
 	mpo_iokit_check_device_t		*mpo_iokit_check_device;
+
 	mpo_ipq_label_associate_t		*mpo_ipq_label_associate;
 	mpo_ipq_label_compare_t			*mpo_ipq_label_compare;
 	mpo_ipq_label_destroy_t			*mpo_ipq_label_destroy;
 	mpo_ipq_label_init_t			*mpo_ipq_label_init;
 	mpo_ipq_label_update_t			*mpo_ipq_label_update;
+
 	mpo_lctx_check_label_update_t		*mpo_lctx_check_label_update;
 	mpo_lctx_label_destroy_t		*mpo_lctx_label_destroy;
 	mpo_lctx_label_externalize_t		*mpo_lctx_label_externalize;
@@ -6128,6 +6314,7 @@ struct mac_policy_ops {
 	mpo_lctx_notify_create_t		*mpo_lctx_notify_create;
 	mpo_lctx_notify_join_t			*mpo_lctx_notify_join;
 	mpo_lctx_notify_leave_t			*mpo_lctx_notify_leave;
+
 	mpo_mbuf_label_associate_bpfdesc_t	*mpo_mbuf_label_associate_bpfdesc;
 	mpo_mbuf_label_associate_ifnet_t	*mpo_mbuf_label_associate_ifnet;
 	mpo_mbuf_label_associate_inpcb_t	*mpo_mbuf_label_associate_inpcb;
@@ -6139,6 +6326,7 @@ struct mac_policy_ops {
 	mpo_mbuf_label_copy_t			*mpo_mbuf_label_copy;
 	mpo_mbuf_label_destroy_t		*mpo_mbuf_label_destroy;
 	mpo_mbuf_label_init_t			*mpo_mbuf_label_init;
+
 	mpo_mount_check_fsctl_t			*mpo_mount_check_fsctl;
 	mpo_mount_check_getattr_t		*mpo_mount_check_getattr;
 	mpo_mount_check_label_update_t		*mpo_mount_check_label_update;
@@ -6152,9 +6340,11 @@ struct mac_policy_ops {
 	mpo_mount_label_externalize_t		*mpo_mount_label_externalize;
 	mpo_mount_label_init_t			*mpo_mount_label_init;
 	mpo_mount_label_internalize_t		*mpo_mount_label_internalize;
+
 	mpo_netinet_fragment_t			*mpo_netinet_fragment;
 	mpo_netinet_icmp_reply_t		*mpo_netinet_icmp_reply;
 	mpo_netinet_tcp_reply_t			*mpo_netinet_tcp_reply;
+
 	mpo_pipe_check_ioctl_t			*mpo_pipe_check_ioctl;
 	mpo_pipe_check_kqfilter_t		*mpo_pipe_check_kqfilter;
 	mpo_pipe_check_label_update_t		*mpo_pipe_check_label_update;
@@ -6169,10 +6359,12 @@ struct mac_policy_ops {
 	mpo_pipe_label_init_t			*mpo_pipe_label_init;
 	mpo_pipe_label_internalize_t		*mpo_pipe_label_internalize;
 	mpo_pipe_label_update_t			*mpo_pipe_label_update;
+
 	mpo_policy_destroy_t			*mpo_policy_destroy;
 	mpo_policy_init_t			*mpo_policy_init;
 	mpo_policy_initbsd_t			*mpo_policy_initbsd;
 	mpo_policy_syscall_t			*mpo_policy_syscall;
+
 	mpo_port_check_copy_send_t		*mpo_port_check_copy_send;
 	mpo_port_check_hold_receive_t		*mpo_port_check_hold_receive;
 	mpo_port_check_hold_send_once_t		*mpo_port_check_hold_send_once;
@@ -6195,6 +6387,7 @@ struct mac_policy_ops {
 	mpo_port_label_init_t			*mpo_port_label_init;
 	mpo_port_label_update_cred_t		*mpo_port_label_update_cred;
 	mpo_port_label_update_kobject_t		*mpo_port_label_update_kobject;
+
 	mpo_posixsem_check_create_t		*mpo_posixsem_check_create;
 	mpo_posixsem_check_open_t		*mpo_posixsem_check_open;
 	mpo_posixsem_check_post_t		*mpo_posixsem_check_post;
@@ -6212,6 +6405,7 @@ struct mac_policy_ops {
 	mpo_posixshm_label_associate_t		*mpo_posixshm_label_associate;
 	mpo_posixshm_label_destroy_t		*mpo_posixshm_label_destroy;
 	mpo_posixshm_label_init_t		*mpo_posixshm_label_init;
+
 	mpo_proc_check_debug_t			*mpo_proc_check_debug;
 	mpo_proc_check_fork_t			*mpo_proc_check_fork;
 	mpo_proc_check_get_task_name_t		*mpo_proc_check_get_task_name;
@@ -6228,6 +6422,7 @@ struct mac_policy_ops {
 	mpo_proc_check_wait_t			*mpo_proc_check_wait;
 	mpo_proc_label_destroy_t		*mpo_proc_label_destroy;
 	mpo_proc_label_init_t			*mpo_proc_label_init;
+
 	mpo_socket_check_accept_t		*mpo_socket_check_accept;
 	mpo_socket_check_accepted_t		*mpo_socket_check_accepted;
 	mpo_socket_check_bind_t			*mpo_socket_check_bind;
@@ -6252,11 +6447,13 @@ struct mac_policy_ops {
 	mpo_socket_label_init_t			*mpo_socket_label_init;
 	mpo_socket_label_internalize_t		*mpo_socket_label_internalize;
 	mpo_socket_label_update_t		*mpo_socket_label_update;
+
 	mpo_socketpeer_label_associate_mbuf_t	*mpo_socketpeer_label_associate_mbuf;
 	mpo_socketpeer_label_associate_socket_t	*mpo_socketpeer_label_associate_socket;
 	mpo_socketpeer_label_destroy_t		*mpo_socketpeer_label_destroy;
 	mpo_socketpeer_label_externalize_t	*mpo_socketpeer_label_externalize;
 	mpo_socketpeer_label_init_t		*mpo_socketpeer_label_init;
+
 	mpo_system_check_acct_t			*mpo_system_check_acct;
 	mpo_system_check_audit_t		*mpo_system_check_audit;
 	mpo_system_check_auditctl_t		*mpo_system_check_auditctl;
@@ -6268,6 +6465,7 @@ struct mac_policy_ops {
 	mpo_system_check_swapoff_t		*mpo_system_check_swapoff;
 	mpo_system_check_swapon_t		*mpo_system_check_swapon;
 	mpo_system_check_sysctl_t		*mpo_system_check_sysctl;
+
 	mpo_sysvmsg_label_associate_t		*mpo_sysvmsg_label_associate;
 	mpo_sysvmsg_label_destroy_t		*mpo_sysvmsg_label_destroy;
 	mpo_sysvmsg_label_init_t		*mpo_sysvmsg_label_init;
@@ -6298,6 +6496,7 @@ struct mac_policy_ops {
 	mpo_sysvshm_label_destroy_t		*mpo_sysvshm_label_destroy;
 	mpo_sysvshm_label_init_t		*mpo_sysvshm_label_init;
 	mpo_sysvshm_label_recycle_t		*mpo_sysvshm_label_recycle;
+
 	mpo_task_label_associate_kernel_t	*mpo_task_label_associate_kernel;
 	mpo_task_label_associate_t		*mpo_task_label_associate;
 	mpo_task_label_copy_t			*mpo_task_label_copy;
@@ -6306,7 +6505,9 @@ struct mac_policy_ops {
 	mpo_task_label_init_t			*mpo_task_label_init;
 	mpo_task_label_internalize_t		*mpo_task_label_internalize;
 	mpo_task_label_update_t			*mpo_task_label_update;
-	mpo_iokit_check_hid_control_t	*mpo_iokit_check_hid_control;
+
+	mpo_iokit_check_hid_control_t		*mpo_iokit_check_hid_control;
+
 	mpo_vnode_check_access_t		*mpo_vnode_check_access;
 	mpo_vnode_check_chdir_t			*mpo_vnode_check_chdir;
 	mpo_vnode_check_chroot_t		*mpo_vnode_check_chroot;
@@ -6362,32 +6563,52 @@ struct mac_policy_ops {
 	mpo_vnode_check_signature_t		*mpo_vnode_check_signature;
 	mpo_vnode_check_uipc_bind_t		*mpo_vnode_check_uipc_bind;
 	mpo_vnode_check_uipc_connect_t		*mpo_vnode_check_uipc_connect;
+
 	mac_proc_check_run_cs_invalid_t		*mpo_proc_check_run_cs_invalid;
 	mpo_proc_check_suspend_resume_t		*mpo_proc_check_suspend_resume;
+
 	mpo_thread_userret_t			*mpo_thread_userret;
+
 	mpo_iokit_check_set_properties_t	*mpo_iokit_check_set_properties;
+
 	mpo_system_check_chud_t			*mpo_system_check_chud;
+
 	mpo_vnode_check_searchfs_t		*mpo_vnode_check_searchfs;
+
 	mpo_priv_check_t			*mpo_priv_check;
 	mpo_priv_grant_t			*mpo_priv_grant;
+
 	mpo_proc_check_map_anon_t		*mpo_proc_check_map_anon;
+
 	mpo_vnode_check_fsgetpath_t		*mpo_vnode_check_fsgetpath;
+
 	mpo_iokit_check_open_t			*mpo_iokit_check_open;
+
  	mpo_proc_check_ledger_t			*mpo_proc_check_ledger;
+
 	mpo_vnode_notify_rename_t		*mpo_vnode_notify_rename;
+
 	mpo_thread_label_init_t			*mpo_thread_label_init;
 	mpo_thread_label_destroy_t		*mpo_thread_label_destroy;
-	mpo_system_check_kas_info_t	*mpo_system_check_kas_info;
-	mpo_reserved_hook_t			*mpo_reserved18;
- 	mpo_vnode_notify_open_t			*mpo_vnode_notify_open;
-	mpo_reserved_hook_t			*mpo_reserved20;
-	mpo_reserved_hook_t			*mpo_reserved21;
-	mpo_reserved_hook_t			*mpo_reserved22;
-	mpo_reserved_hook_t			*mpo_reserved23;
-	mpo_reserved_hook_t			*mpo_reserved24;
-	mpo_reserved_hook_t			*mpo_reserved25;
-	mpo_reserved_hook_t			*mpo_reserved26;
-	mpo_reserved_hook_t			*mpo_reserved27;
+
+	mpo_system_check_kas_info_t		*mpo_system_check_kas_info;
+
+	mpo_proc_check_cpumon_t			*mpo_proc_check_cpumon;
+
+	mpo_vnode_notify_open_t			*mpo_vnode_notify_open;
+
+	mpo_system_check_info_t			*mpo_system_check_info;
+
+	mpo_pty_notify_grant_t 			*mpo_pty_notify_grant;
+	mpo_pty_notify_close_t			*mpo_pty_notify_close;
+
+	mpo_vnode_find_sigs_t			*mpo_vnode_find_sigs;
+
+	mpo_kext_check_load_t			*mpo_kext_check_load;
+	mpo_kext_check_unload_t			*mpo_kext_check_unload;
+
+	mpo_proc_check_proc_info_t		*mpo_proc_check_proc_info;
+	mpo_vnode_notify_link_t			*mpo_vnode_notify_link;
 	mpo_reserved_hook_t			*mpo_reserved28;
 	mpo_reserved_hook_t			*mpo_reserved29;
 };

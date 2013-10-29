@@ -47,6 +47,19 @@
 
 #include <machine/cpu_number.h>
 #include <machine/machine_routines.h> /* machine_timeout_suspended() */
+
+/*
+ * The event mask is of 60 bits on 64 bit architeture and 28 bits on
+ * 32 bit architecture and so we calculate its size using sizeof(long).
+ * If the bitfield for wq_type and wq_fifo is changed, then value of 
+ * EVENT_MASK_BITS will also change. 
+ */
+#define EVENT_MASK_BITS  ((sizeof(long) * 8) - 4)
+
+/*
+ * Zero out the 4 msb of the event.
+ */
+#define CAST_TO_EVENT_MASK(event)  (((CAST_DOWN(unsigned long, event)) << 4) >> 4)
 /*
  *	wait_queue_t
  *	This is the definition of the common event wait queue
@@ -63,11 +76,11 @@
  *	them.
  */
 typedef struct wait_queue {
-    unsigned int                    /* flags */
-    /* boolean_t */	wq_type:16,		/* only public field */
+    unsigned long int                    /* flags */
+    /* boolean_t */	wq_type:2,		/* only public field */
 					wq_fifo:1,		/* fifo wakeup policy? */
 					wq_prepost:1,	/* waitq supports prepost? set only */
-					:0;				/* force to long boundary */
+					wq_eventmask:EVENT_MASK_BITS; 
     hw_lock_data_t	wq_interlock;	/* interlock */
     queue_head_t	wq_queue;		/* queue of elements */
 } WaitQueue;
@@ -136,8 +149,8 @@ typedef struct _wait_queue_link {
 #define wql_type  wql_element.wqe_type
 #define wql_queue wql_element.wqe_queue
 
-#define _WAIT_QUEUE_inited			0xf1d0
-#define _WAIT_QUEUE_SET_inited		0xf1d1
+#define _WAIT_QUEUE_inited		0x2
+#define _WAIT_QUEUE_SET_inited		0x3
 
 #define wait_queue_is_queue(wq)	\
 	((wq)->wq_type == _WAIT_QUEUE_inited)
@@ -184,6 +197,7 @@ static inline void wait_queue_lock(wait_queue_t wq) {
 		if (wql_acquired == FALSE)
 			panic("wait queue deadlock - wq=%p, cpu=%d\n", wq, cpu_number());
 	}
+	assert(wait_queue_held(wq));
 }
 
 static inline void wait_queue_unlock(wait_queue_t wq) {
@@ -212,7 +226,9 @@ __private_extern__ wait_result_t wait_queue_assert_wait64_locked(
 			wait_queue_t wait_queue,
 			event64_t wait_event,
 			wait_interrupt_t interruptible,
+			wait_timeout_urgency_t urgency,
 			uint64_t deadline,
+			uint64_t leeway,
 			thread_t thread);
 
 /* pull a thread from its wait queue */
@@ -250,8 +266,8 @@ __private_extern__ kern_return_t wait_queue_wakeup64_thread_locked(
 			wait_result_t result,
 			boolean_t unlock);
 
-__private_extern__ uint32_t num_wait_queues;
-__private_extern__ struct wait_queue *wait_queues;
+extern uint32_t num_wait_queues;
+extern struct wait_queue *wait_queues;
 /* The Jenkins "one at a time" hash.
  * TBD: There may be some value to unrolling here,
  * depending on the architecture.
@@ -375,6 +391,14 @@ extern wait_result_t wait_queue_assert_wait64(
 			wait_interrupt_t interruptible,
 			uint64_t deadline);
 
+extern wait_result_t wait_queue_assert_wait64_with_leeway(
+			wait_queue_t wait_queue,
+			event64_t wait_event,
+			wait_interrupt_t interruptible,
+			wait_timeout_urgency_t urgency,
+			uint64_t deadline,
+			uint64_t leeway);
+
 /* wakeup the most appropriate thread waiting on <wait_queue,event64> pair */
 extern kern_return_t wait_queue_wakeup64_one(
 			wait_queue_t wait_queue,
@@ -405,6 +429,15 @@ extern wait_result_t wait_queue_assert_wait(
 			event_t wait_event,
 			wait_interrupt_t interruptible,
 			uint64_t deadline);
+
+/* assert intent to wait on <wait_queue,event> pair */
+extern wait_result_t wait_queue_assert_wait_with_leeway(
+			wait_queue_t wait_queue,
+			event_t wait_event,
+			wait_interrupt_t interruptible,
+			wait_timeout_urgency_t urgency,
+			uint64_t deadline,
+			uint64_t leeway);
 
 /* wakeup the most appropriate thread waiting on <wait_queue,event> pair */
 extern kern_return_t wait_queue_wakeup_one(

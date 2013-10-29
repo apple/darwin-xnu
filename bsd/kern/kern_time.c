@@ -80,6 +80,7 @@
 #include <sys/mount_internal.h>
 #include <sys/sysproto.h>
 #include <sys/signalvar.h>
+#include <sys/protosw.h> /* for net_uptime2timeval() */
 
 #include <kern/clock.h>
 #include <kern/task.h>
@@ -99,7 +100,7 @@ lck_grp_attr_t	*tz_slock_grp_attr;
 static void		setthetime(
 					struct timeval	*tv);
 
-void time_zone_slock_init(void) __attribute__((section("__TEXT, initcode")));
+void time_zone_slock_init(void);
 
 /* 
  * Time of day and interval timer support.
@@ -158,10 +159,8 @@ settimeofday(__unused struct proc *p, struct settimeofday_args  *uap, __unused i
 	if (error)
 		return (error);
 #endif
-#ifndef CONFIG_EMBEDDED
 	if ((error = suser(kauth_cred_get(), &p->p_acflag)))
 		return (error);
-#endif
 	/* Verify all parameters before changing time */
 	if (uap->tv) {
 		if (IS_64BIT_PROCESS(p)) {
@@ -432,7 +431,8 @@ setitimer(struct proc *p, struct setitimer_args *uap, int32_t *retval)
 			microuptime(&p->p_rtime);
 			timevaladd(&p->p_rtime, &aitv.it_value);
 			p->p_realtimer = aitv;
-			if (!thread_call_enter_delayed(p->p_rcall, tvtoabstime(&p->p_rtime)))
+			if (!thread_call_enter_delayed_with_leeway(p->p_rcall, NULL,
+					         tvtoabstime(&p->p_rtime), 0, THREAD_CALL_DELAY_USER_NORMAL))
 				p->p_ractive++;
 		} else  {
 			timerclear(&p->p_rtime);
@@ -655,6 +655,19 @@ microtime(
 }
 
 void
+microtime_with_abstime(
+	struct timeval	*tvp, uint64_t *abstime)
+{
+	clock_sec_t		tv_sec;
+	clock_usec_t	tv_usec;
+
+	clock_get_calendar_absolute_and_microtime(&tv_sec, &tv_usec, abstime);
+
+	tvp->tv_sec = tv_sec;
+	tvp->tv_usec = tv_usec;
+}
+
+void
 microuptime(
 	struct timeval	*tvp)
 {
@@ -709,6 +722,86 @@ tvtoabstime(
 
 	return (result + usresult);
 }
+
+#if NETWORKING
+/*
+ * ratecheck(): simple time-based rate-limit checking.
+ */
+int
+ratecheck(struct timeval *lasttime, const struct timeval *mininterval)
+{
+	struct timeval tv, delta;
+	int rv = 0;
+
+	net_uptime2timeval(&tv);
+	delta = tv;
+	timevalsub(&delta, lasttime);
+
+	/*
+	 * check for 0,0 is so that the message will be seen at least once,
+	 * even if interval is huge.
+	 */
+	if (timevalcmp(&delta, mininterval, >=) ||
+	    (lasttime->tv_sec == 0 && lasttime->tv_usec == 0)) {
+		*lasttime = tv;
+		rv = 1;
+	}
+
+	return (rv);
+}
+
+/*
+ * ppsratecheck(): packets (or events) per second limitation.
+ */
+int
+ppsratecheck(struct timeval *lasttime, int *curpps, int maxpps)
+{
+	struct timeval tv, delta;
+	int rv;
+
+	net_uptime2timeval(&tv);
+
+	timersub(&tv, lasttime, &delta);
+
+	/*
+	 * Check for 0,0 so that the message will be seen at least once.
+	 * If more than one second has passed since the last update of
+	 * lasttime, reset the counter.
+	 *
+	 * we do increment *curpps even in *curpps < maxpps case, as some may
+	 * try to use *curpps for stat purposes as well.
+	 */
+	if ((lasttime->tv_sec == 0 && lasttime->tv_usec == 0) ||
+	    delta.tv_sec >= 1) {
+		*lasttime = tv;
+		*curpps = 0;
+		rv = 1;
+	} else if (maxpps < 0)
+		rv = 1;
+	else if (*curpps < maxpps)
+		rv = 1;
+	else
+		rv = 0;
+
+#if 1 /* DIAGNOSTIC? */
+	/* be careful about wrap-around */
+	if (*curpps + 1 > 0)
+		*curpps = *curpps + 1;
+#else
+	/*
+	 * assume that there's not too many calls to this function.
+	 * not sure if the assumption holds, as it depends on *caller's*
+	 * behavior, not the behavior of this function.
+	 * IMHO it is wrong to make assumption on the caller's behavior,
+	 * so the above #if is #if 1, not #ifdef DIAGNOSTIC.
+	 */
+	*curpps = *curpps + 1;
+#endif
+
+	return (rv);
+}
+#endif /* NETWORKING */
+
 void
 time_zone_slock_init(void)
 {

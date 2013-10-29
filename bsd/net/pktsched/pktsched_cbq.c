@@ -526,7 +526,11 @@ cbq_enqueue(cbq_state_t *cbqp, struct rm_class *cl, struct mbuf *m,
 	}
 
 	if (cl == NULL) {
+#if PF_ALTQ
 		cl = cbq_clh_to_clp(cbqp, t->pftag_qid);
+#else /* !PF_ALTQ */
+		cl = cbq_clh_to_clp(cbqp, 0);
+#endif /* !PF_ALTQ */
 		if (cl == NULL) {
 			cl = cbqp->ifnp.default_;
 			if (cl == NULL) {

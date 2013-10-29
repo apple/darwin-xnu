@@ -200,7 +200,14 @@ ipc_space_create_special(
 		return KERN_RESOURCE_SHORTAGE;
 
 	is_lock_init(space);
-	space->is_bits = IS_INACTIVE | 1; /* 1 ref, not active, not growing */
+
+	space->is_bits       = IS_INACTIVE | 1; /* 1 ref, not active, not growing */
+	space->is_table      = IE_NULL;
+	space->is_task       = TASK_NULL;
+	space->is_table_next = 0;
+	space->is_low_mod    = 0;
+	space->is_high_mod   = 0;
+
 	*spacep = space;
 	return KERN_SUCCESS;
 }
@@ -250,7 +257,7 @@ ipc_space_clean(
 		if (type != MACH_PORT_TYPE_NONE) {
 			mach_port_name_t name =	MACH_PORT_MAKE(index,
 						IE_BITS_GEN(entry->ie_bits));
-			ipc_right_destroy(space, name, entry); /* unlocks space */
+			ipc_right_destroy(space, name, entry, FALSE, 0); /* unlocks space */
 			goto retry;
 		}
 	}

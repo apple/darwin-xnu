@@ -46,7 +46,6 @@
 #endif
 #endif
 
-#define MACH__POSIX_C_SOURCE_PRIVATE 1 /* pulls in suitable savearea from mach/ppc/thread_status.h */
 #include <kern/cpu_data.h>
 #include <kern/thread.h>
 #include <kern/assert.h>
@@ -68,7 +67,7 @@
 
 #include <machine/pal_routines.h>
 
-#if defined(__i386__) || defined(__x86_64__)
+#if defined(__x86_64__)
 extern x86_saved_state_t *find_kern_regs(thread_t);
 #else
 #error Unknown architecture
@@ -112,29 +111,12 @@ static dtrace_provider_id_t profile_id;
  * and the static definition doesn't seem to be overly brittle.  Still, we
  * allow for a manual override in case we get it completely wrong.
  */
-#if !defined(__APPLE__)
 
-#ifdef __x86
-#define	PROF_ARTIFICIAL_FRAMES	10
-#else
-#ifdef __sparc
-#if DEBUG
-#define	PROF_ARTIFICIAL_FRAMES	4
-#else
-#define	PROF_ARTIFICIAL_FRAMES	3
-#endif
-#endif
-#endif
-
-#else /* is Mac OS X */
-
-#if defined(__i386__) || defined(__x86_64__)
+#if defined(__x86_64__)
 #define PROF_ARTIFICIAL_FRAMES  9
 #else
 #error Unknown architecture
 #endif
-
-#endif /* __APPLE__ */
 
 #define	PROF_NAMELEN		15
 
@@ -198,18 +180,13 @@ profile_fire(void *arg)
 	dtrace_probe(prof->prof_id, CPU->cpu_profile_pc,
 	    CPU->cpu_profile_upc, late, 0, 0);
 #else
-#if defined(__i386__) || defined(__x86_64__)
+#if defined(__x86_64__)
 	x86_saved_state_t *kern_regs = find_kern_regs(current_thread());
 
 	if (NULL != kern_regs) {
 		/* Kernel was interrupted. */
-#if defined(__i386__)
-		dtrace_probe(prof->prof_id, saved_state32(kern_regs)->eip,  0x0, 0, 0, 0);
-#elif defined(__x86_64__)
 		dtrace_probe(prof->prof_id, saved_state64(kern_regs)->isf.rip,  0x0, 0, 0, 0);
-#else
-#error Unknown arch
-#endif
+
 	} else {
 		pal_register_cache_state(current_thread(), VALID);
 		/* Possibly a user interrupt */
@@ -244,18 +221,12 @@ profile_tick(void *arg)
 	dtrace_probe(prof->prof_id, CPU->cpu_profile_pc,
 	    CPU->cpu_profile_upc, 0, 0, 0);
 #else
-#if defined(__i386__) || defined(__x86_64__)
+#if defined(__x86_64__)
 	x86_saved_state_t *kern_regs = find_kern_regs(current_thread());
 
 	if (NULL != kern_regs) {
 		/* Kernel was interrupted. */
-#if defined(__i386__)
-		dtrace_probe(prof->prof_id, saved_state32(kern_regs)->eip,  0x0, 0, 0, 0);
-#elif defined(__x86_64__)
 		dtrace_probe(prof->prof_id, saved_state64(kern_regs)->isf.rip,  0x0, 0, 0, 0);
-#else
-#error Unknown arch
-#endif
 	} else {
 		pal_register_cache_state(current_thread(), VALID);
 		/* Possibly a user interrupt */

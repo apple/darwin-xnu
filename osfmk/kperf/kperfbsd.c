@@ -32,23 +32,69 @@
 #include <sys/mman.h>
 #include <sys/stat.h>
 #include <sys/sysctl.h>
+#include <sys/kauth.h>
 #include <libkern/libkern.h>
+#include <kern/debug.h>
+#include <pexpert/pexpert.h>
 
 #include <kperf/context.h>
 #include <kperf/action.h>
 #include <kperf/timetrigger.h>
 #include <kperf/pet.h>
-#include <kperf/filter.h>
 #include <kperf/kperfbsd.h>
 #include <kperf/kperf.h>
 
+
+/* a pid which is allowed to control kperf without requiring root access */
+static pid_t blessed_pid = -1;
+static boolean_t blessed_preempt = FALSE;
+
+/* IDs for dispatch from SYSCTL macros */
 #define REQ_SAMPLING        (1)
 #define REQ_ACTION_COUNT    (2)
 #define REQ_ACTION_SAMPLERS (3)
 #define REQ_TIMER_COUNT     (4)
 #define REQ_TIMER_PERIOD    (5)
 #define REQ_TIMER_PET       (6)
+#define REQ_TIMER_ACTION    (7)
+#define REQ_BLESS           (8)
+#define REQ_ACTION_USERDATA (9)
+#define REQ_ACTION_FILTER_BY_TASK (10)
+#define REQ_ACTION_FILTER_BY_PID  (11)
+#define REQ_KDBG_CALLSTACKS (12)
+#define REQ_PET_IDLE_RATE   (13)
+#define REQ_BLESS_PREEMPT   (14)
 
+/* simple state variables */
+int kperf_debug_level = 0;
+
+static lck_grp_attr_t *kperf_cfg_lckgrp_attr = NULL;
+static lck_grp_t      *kperf_cfg_lckgrp = NULL;
+static lck_mtx_t       kperf_cfg_lock;
+static boolean_t       kperf_cfg_initted = FALSE;
+
+/***************************
+ *
+ * lock init
+ *
+ ***************************/
+
+void
+kperf_bootstrap(void)
+{
+	kperf_cfg_lckgrp_attr = lck_grp_attr_alloc_init();
+	kperf_cfg_lckgrp = lck_grp_alloc_init("kperf cfg", 
+                                          kperf_cfg_lckgrp_attr);
+	lck_mtx_init(&kperf_cfg_lock, kperf_cfg_lckgrp, LCK_ATTR_NULL);
+
+	kperf_cfg_initted = TRUE;
+}
+
+/***************************
+ *
+ * sysctl handlers
+ *
+ ***************************/
 
 static int
 sysctl_timer_period( __unused struct sysctl_oid *oidp, struct sysctl_req *req )
@@ -60,22 +106,15 @@ sysctl_timer_period( __unused struct sysctl_oid *oidp, struct sysctl_req *req )
     /* get 2x 64-bit words */
     error = SYSCTL_IN( req, inputs, 2*sizeof(inputs[0]) );
     if(error)
-    {
-	    printf( "error in\n" );
 	    return (error);
-    }
 
     /* setup inputs */
     timer = (unsigned) inputs[0];
     if( inputs[1] != ~0ULL )
 	    set = 1;
 
-    printf( "%s timer: %u, inp[0] %llu\n", set ? "set" : "get", 
-            timer, inputs[0] );
-
     if( set )
     {
-	    printf( "timer set period\n" );
 	    error = kperf_timer_set_period( timer, inputs[1] );
 	    if( error )
 		    return error;
@@ -83,19 +122,49 @@ sysctl_timer_period( __unused struct sysctl_oid *oidp, struct sysctl_req *req )
 
     error = kperf_timer_get_period(timer, &retval);
     if(error)
-    {
-	    printf( "error get period\n" );
 	    return (error);
-    }
 
     inputs[1] = retval;
     
     if( error == 0 )
-    {
 	    error = SYSCTL_OUT( req, inputs, 2*sizeof(inputs[0]) );
+
+    return error;
+}
+
+static int
+sysctl_timer_action( __unused struct sysctl_oid *oidp, struct sysctl_req *req )
+{
+    int error = 0;
+    uint64_t inputs[2];
+    uint32_t retval;
+    unsigned timer, set = 0;
+    
+    /* get 2x 64-bit words */
+    error = SYSCTL_IN( req, inputs, 2*sizeof(inputs[0]) );
+    if(error)
+	    return (error);
+
+    /* setup inputs */
+    timer = (unsigned) inputs[0];
+    if( inputs[1] != ~0ULL )
+	    set = 1;
+
+    if( set )
+    {
+	    error = kperf_timer_set_action( timer, inputs[1] );
 	    if( error )
-		    printf( "error out\n" );
+		    return error;
     }
+
+    error = kperf_timer_get_action(timer, &retval);
+    if(error)
+	    return (error);
+
+    inputs[1] = retval;
+    
+    if( error == 0 )
+	    error = SYSCTL_OUT( req, inputs, 2*sizeof(inputs[0]) );
 
     return error;
 }
@@ -112,10 +181,7 @@ sysctl_action_samplers( __unused struct sysctl_oid *oidp,
     /* get 3x 64-bit words */
     error = SYSCTL_IN( req, inputs, 3*sizeof(inputs[0]) );
     if(error)
-    {
-	    printf( "error in\n" );
 	    return (error);
-    }
 
     /* setup inputs */
     set = (unsigned) inputs[0];
@@ -128,24 +194,98 @@ sysctl_action_samplers( __unused struct sysctl_oid *oidp,
 		    return error;
     }
 
-    printf("set %d actionid %u samplers val %u\n", 
-           set, actionid, (unsigned) inputs[2] );
-
     error = kperf_action_get_samplers(actionid, &retval);
     if(error)
-    {
-	    printf( "error get samplers\n" );
 	    return (error);
-    }
 
     inputs[2] = retval;
     
     if( error == 0 )
-    {
 	    error = SYSCTL_OUT( req, inputs, 3*sizeof(inputs[0]) );
+
+    return error;
+}
+
+static int
+sysctl_action_userdata( __unused struct sysctl_oid *oidp, 
+                        struct sysctl_req *req )
+{
+    int error = 0;
+    uint64_t inputs[3];
+    uint32_t retval;
+    unsigned actionid, set = 0;
+    
+    /* get 3x 64-bit words */
+    error = SYSCTL_IN( req, inputs, 3*sizeof(inputs[0]) );
+    if(error)
+	    return (error);
+
+    /* setup inputs */
+    set = (unsigned) inputs[0];
+    actionid = (unsigned) inputs[1];
+
+    if( set )
+    {
+	    error = kperf_action_set_userdata( actionid, inputs[2] );
 	    if( error )
-		    printf( "error out\n" );
+		    return error;
     }
+
+    error = kperf_action_get_userdata(actionid, &retval);
+    if(error)
+	    return (error);
+
+    inputs[2] = retval;
+    
+    if( error == 0 )
+	    error = SYSCTL_OUT( req, inputs, 3*sizeof(inputs[0]) );
+
+    return error;
+}
+
+static int
+sysctl_action_filter( __unused struct sysctl_oid *oidp,
+		      struct sysctl_req *req, int is_task_t )
+{
+    int error = 0;
+    uint64_t inputs[3];
+    int retval;
+    unsigned actionid, set = 0;
+    mach_port_name_t portname;
+    int pid;
+
+    /* get 3x 64-bit words */
+    error = SYSCTL_IN( req, inputs, 3*sizeof(inputs[0]) );
+    if(error)
+	    return (error);
+
+    /* setup inputs */
+    set = (unsigned) inputs[0];
+    actionid = (unsigned) inputs[1];
+
+    if( set )
+    {
+	    if( is_task_t )
+	    {
+		    portname = (mach_port_name_t) inputs[2];
+		    pid = kperf_port_to_pid(portname);
+	    }
+	    else
+		    pid = (int) inputs[2];
+
+	    error = kperf_action_set_filter( actionid, pid );
+	    if( error )
+		    return error;
+    }
+
+    error = kperf_action_get_filter(actionid, &retval);
+    if(error)
+	    return (error);
+
+    inputs[2] = retval;
+    
+    if( error == 0 )
+	    error = SYSCTL_OUT( req, inputs, 3*sizeof(inputs[0]) );
 
     return error;
 }
@@ -163,8 +303,6 @@ sysctl_sampling( struct sysctl_oid *oidp, struct sysctl_req *req )
     error = sysctl_handle_int(oidp, &value, 0, req);
     if (error || !req->newptr)
 	    return (error);
-
-    printf( "setting sampling to %d\n", value );
 
     /* if that worked, and we're writing... */
     if( value )
@@ -189,8 +327,6 @@ sysctl_action_count( struct sysctl_oid *oidp, struct sysctl_req *req )
     if (error || !req->newptr)
 	    return (error);
 
-    printf( "setting action count to %d\n", value );
-
     /* if that worked, and we're writing... */
     return kperf_action_set_count(value);
 }
@@ -208,8 +344,6 @@ sysctl_timer_count( struct sysctl_oid *oidp, struct sysctl_req *req )
     error = sysctl_handle_int(oidp, &value, 0, req);
     if (error || !req->newptr)
 	    return (error);
-
-    printf( "setting timer count to %d\n", value );
 
     /* if that worked, and we're writing... */
     return kperf_timer_set_count(value);
@@ -229,10 +363,89 @@ sysctl_timer_pet( struct sysctl_oid *oidp, struct sysctl_req *req )
     if (error || !req->newptr)
 	    return (error);
 
-    printf( "setting timer petid to %d\n", value );
-
     /* if that worked, and we're writing... */
     return kperf_timer_set_petid(value);
+}
+
+static int
+sysctl_bless( struct sysctl_oid *oidp, struct sysctl_req *req )
+{
+    int error = 0;
+    int value = 0;
+
+    /* get the old value and process it */
+    value = blessed_pid;
+
+    /* copy out the old value, get the new value */
+    error = sysctl_handle_int(oidp, &value, 0, req);
+    if (error || !req->newptr)
+	    return (error);
+
+    /* if that worked, and we're writing... */
+    error = kperf_bless_pid(value);
+
+    return error;
+}
+
+static int
+sysctl_bless_preempt( struct sysctl_oid *oidp, struct sysctl_req *req )
+{
+    int error = 0;
+    int value = 0;
+
+    /* get the old value and process it */
+    value = blessed_preempt;
+
+    /* copy out the old value, get the new value */
+    error = sysctl_handle_int(oidp, &value, 0, req);
+    if (error || !req->newptr)
+	    return (error);
+
+    /* if that worked, and we're writing... */
+    blessed_preempt = value ? TRUE : FALSE;
+
+    return 0;
+}
+
+
+static int
+sysctl_kdbg_callstacks( struct sysctl_oid *oidp, struct sysctl_req *req )
+{
+    int error = 0;
+    int value = 0;
+    
+    /* get the old value and process it */
+    value = kperf_kdbg_get_stacks();
+
+    /* copy out the old value, get the new value */
+    error = sysctl_handle_int(oidp, &value, 0, req);
+    if (error || !req->newptr)
+	    return (error);
+
+    /* if that worked, and we're writing... */
+    error = kperf_kdbg_set_stacks(value);
+
+    return error;
+}
+
+static int
+sysctl_pet_idle_rate( struct sysctl_oid *oidp, struct sysctl_req *req )
+{
+    int error = 0;
+    int value = 0;
+    
+    /* get the old value and process it */
+    value = kperf_get_pet_idle_rate();
+
+    /* copy out the old value, get the new value */
+    error = sysctl_handle_int(oidp, &value, 0, req);
+    if (error || !req->newptr)
+	    return (error);
+
+    /* if that worked, and we're writing... */
+    kperf_set_pet_idle_rate(value);
+
+    return error;
 }
 
 /*
@@ -243,35 +456,182 @@ sysctl_timer_pet( struct sysctl_oid *oidp, struct sysctl_req *req )
 static int
 kperf_sysctl SYSCTL_HANDLER_ARGS
 {
+	int ret;
+
 	// __unused struct sysctl_oid *unused_oidp = oidp;
 	(void)arg2;
-    
+
+	if ( !kperf_cfg_initted )
+		panic("kperf_bootstrap not called");
+
+	ret = kperf_access_check();
+	if (ret) {
+		return ret;
+	}
+
+	lck_mtx_lock(&kperf_cfg_lock);
+
 	/* which request */
 	switch( (uintptr_t) arg1 )
 	{
 	case REQ_ACTION_COUNT:
-		return sysctl_action_count( oidp, req );
+		ret = sysctl_action_count( oidp, req );
+		break;
 	case REQ_ACTION_SAMPLERS:
-		return sysctl_action_samplers( oidp, req );
+		ret = sysctl_action_samplers( oidp, req );
+		break;
+	case REQ_ACTION_USERDATA:
+		ret = sysctl_action_userdata( oidp, req );
+		break;
 	case REQ_TIMER_COUNT:
-		return sysctl_timer_count( oidp, req );
+		ret = sysctl_timer_count( oidp, req );
+		break;
 	case REQ_TIMER_PERIOD:
-		return sysctl_timer_period( oidp, req );
+		ret = sysctl_timer_period( oidp, req );
+		break;
 	case REQ_TIMER_PET:
-		return sysctl_timer_pet( oidp, req );
+		ret = sysctl_timer_pet( oidp, req );
+		break;
+	case REQ_TIMER_ACTION:
+		ret = sysctl_timer_action( oidp, req );
+		break;
 	case REQ_SAMPLING:
-		return sysctl_sampling( oidp, req );
-
-#if 0
-	case REQ_TIMER:
-		return sysctl_timer_period( req );
-	case REQ_PET:
-		return sysctl_pet_period( req );
-#endif
+		ret = sysctl_sampling( oidp, req );
+		break;
+	case REQ_KDBG_CALLSTACKS:
+		ret = sysctl_kdbg_callstacks( oidp, req );
+		break;
+	case REQ_ACTION_FILTER_BY_TASK:
+		ret = sysctl_action_filter( oidp, req, 1 );
+		break;
+	case REQ_ACTION_FILTER_BY_PID:
+		ret = sysctl_action_filter( oidp, req, 0 );
+		break;
+	case REQ_PET_IDLE_RATE:
+		ret = sysctl_pet_idle_rate( oidp, req );
+		break;
+	case REQ_BLESS_PREEMPT:
+		ret = sysctl_bless_preempt( oidp, req );
+		break;
 	default:
-		return ENOENT;
+		ret = ENOENT;
+		break;
 	}
+
+	lck_mtx_unlock(&kperf_cfg_lock);
+
+	return ret;
 }
+
+static int
+kperf_sysctl_bless_handler SYSCTL_HANDLER_ARGS
+{
+	int ret;
+	// __unused struct sysctl_oid *unused_oidp = oidp;
+	(void)arg2;
+  
+	if ( !kperf_cfg_initted )
+		panic("kperf_bootstrap not called");
+
+	lck_mtx_lock(&kperf_cfg_lock);
+
+	/* which request */
+	if ( (uintptr_t) arg1 == REQ_BLESS )
+		ret = sysctl_bless( oidp, req );
+	else
+		ret = ENOENT;
+
+	lck_mtx_unlock(&kperf_cfg_lock);
+
+	return ret;
+}
+
+
+/***************************
+ *
+ * Access control
+ *
+ ***************************/
+
+/* Validate whether the current process has priviledges to access
+ * kperf (and by extension, trace). Returns 0 if access is granted.
+ */
+int
+kperf_access_check(void)
+{
+	proc_t p = current_proc();
+	proc_t blessed_p;
+	int ret = 0;
+	boolean_t pid_gone = FALSE;
+
+	/* check if the pid that held the lock is gone */
+	blessed_p = proc_find(blessed_pid);
+
+	if ( blessed_p != NULL )
+		proc_rele(blessed_p);
+	else
+		pid_gone = TRUE;
+
+	if ( blessed_pid == -1 || pid_gone ) {
+		/* check for root */
+		ret = suser(kauth_cred_get(), &p->p_acflag);
+		if( !ret )
+			return ret;
+	}
+
+	/* check against blessed pid */
+	if( p->p_pid != blessed_pid )
+		return EACCES;
+
+	/* access granted. */
+	return 0;
+}
+
+/* specify a pid as being able to access kperf/trace, depiste not
+ * being root
+ */
+int
+kperf_bless_pid(pid_t newpid)
+{
+	proc_t p = NULL;
+	pid_t current_pid;
+
+	p = current_proc();
+	current_pid = p->p_pid;
+
+	/* are we allowed to preempt? */
+	if ( (newpid != -1) && (blessed_pid != -1) &&
+	     (blessed_pid != current_pid) && !blessed_preempt ) {
+		/* check if the pid that held the lock is gone */
+		p = proc_find(blessed_pid);
+
+		if ( p != NULL ) {
+			proc_rele(p);
+			return EACCES;
+		}
+	}
+
+	/* validate new pid */
+	if ( newpid != -1 ) {
+		p = proc_find(newpid);
+
+		if ( p == NULL )
+			return EINVAL;
+
+		proc_rele(p);
+	}
+
+	blessed_pid = newpid;
+	blessed_preempt = FALSE;
+
+	return 0;
+}
+
+/***************************
+ *
+ * sysctl hooks
+ *
+ ***************************/
 
 /* root kperf node */
 SYSCTL_NODE(, OID_AUTO, kperf, CTLFLAG_RW|CTLFLAG_LOCKED, 0,
@@ -292,6 +652,24 @@ SYSCTL_PROC(_kperf_action, OID_AUTO, samplers,
             3*sizeof(uint64_t), kperf_sysctl, "UQ", 
             "What to sample what a trigger fires an action");
 
+SYSCTL_PROC(_kperf_action, OID_AUTO, userdata,
+            CTLFLAG_RW|CTLFLAG_ANYBODY,
+            (void*)REQ_ACTION_USERDATA, 
+            3*sizeof(uint64_t), kperf_sysctl, "UQ", 
+            "User data to attribute to action");
+
+SYSCTL_PROC(_kperf_action, OID_AUTO, filter_by_task,
+            CTLFLAG_RW|CTLFLAG_ANYBODY,
+            (void*)REQ_ACTION_FILTER_BY_TASK, 
+            3*sizeof(uint64_t), kperf_sysctl, "UQ", 
+            "Apply a task filter to the action");
+
+SYSCTL_PROC(_kperf_action, OID_AUTO, filter_by_pid,
+            CTLFLAG_RW|CTLFLAG_ANYBODY,
+            (void*)REQ_ACTION_FILTER_BY_PID, 
+            3*sizeof(uint64_t), kperf_sysctl, "UQ", 
+            "Apply a pid filter to the action");
+
 /* timer sub-section */
 SYSCTL_NODE(_kperf, OID_AUTO, timer, CTLFLAG_RW|CTLFLAG_LOCKED, 0,
             "timer");
@@ -306,6 +684,11 @@ SYSCTL_PROC(_kperf_timer, OID_AUTO, period,
             (void*)REQ_TIMER_PERIOD, 
             2*sizeof(uint64_t), kperf_sysctl, "UQ", "Timer number and period");
 
+SYSCTL_PROC(_kperf_timer, OID_AUTO, action,
+            CTLFLAG_RW|CTLFLAG_ANYBODY,
+            (void*)REQ_TIMER_ACTION, 
+            2*sizeof(uint64_t), kperf_sysctl, "UQ", "Timer number and actionid");
+
 SYSCTL_PROC(_kperf_timer, OID_AUTO, pet_timer,
             CTLTYPE_INT|CTLFLAG_RW|CTLFLAG_ANYBODY,
             (void*)REQ_TIMER_PET, 
@@ -317,26 +700,32 @@ SYSCTL_PROC(_kperf, OID_AUTO, sampling,
             (void*)REQ_SAMPLING, 
             sizeof(int), kperf_sysctl, "I", "Sampling running");
 
-int legacy_mode = 1;
-SYSCTL_INT(_kperf, OID_AUTO, legacy_mode, CTLFLAG_RW, &legacy_mode, 0, "legacy_mode");
+SYSCTL_PROC(_kperf, OID_AUTO, blessed_pid,
+            CTLTYPE_INT|CTLFLAG_RW, /* must be root */
+            (void*)REQ_BLESS, 
+            sizeof(int), kperf_sysctl_bless_handler, "I", "Blessed pid");
 
-#if 0
-SYSCTL_PROC(_kperf, OID_AUTO, timer_period, 
-            CTLFLAG_RW, (void*)REQ_TIMER, 
-            sizeof(uint64_t), kperf_sysctl, "QU", "nanoseconds");
+SYSCTL_PROC(_kperf, OID_AUTO, blessed_preempt,
+            CTLTYPE_INT|CTLFLAG_RW|CTLFLAG_ANYBODY,
+            (void*)REQ_BLESS_PREEMPT, 
+            sizeof(int), kperf_sysctl, "I", "Blessed preemption");
 
-SYSCTL_PROC(_kperf, OID_AUTO, pet_period, 
-            CTLFLAG_RW, (void*)REQ_PET, 
-            sizeof(uint64_t), kperf_sysctl, "QU", "nanoseconds");
 
-/* FIXME: do real stuff */
-SYSCTL_INT(_kperf, OID_AUTO, filter_pid0, 
-           CTLFLAG_RW, &pid_list[0], 0, "");
-SYSCTL_INT(_kperf, OID_AUTO, filter_pid1, 
-           CTLFLAG_RW, &pid_list[1], 0, "");
-SYSCTL_INT(_kperf, OID_AUTO, filter_pid2, 
-           CTLFLAG_RW, &pid_list[2], 0, "");
-SYSCTL_INT(_kperf, OID_AUTO, filter_pid3, 
-           CTLFLAG_RW, &pid_list[3], 0, "");
+SYSCTL_PROC(_kperf, OID_AUTO, kdbg_callstacks,
+            CTLTYPE_INT|CTLFLAG_RW|CTLFLAG_ANYBODY,
+            (void*)REQ_KDBG_CALLSTACKS, 
+            sizeof(int), kperf_sysctl, "I", "Generate kdbg callstacks");
 
-#endif
+SYSCTL_INT(_kperf, OID_AUTO, kdbg_cswitch, 
+           CTLTYPE_INT|CTLFLAG_RW|CTLFLAG_ANYBODY, 
+           &kperf_cswitch_hook, 0, "Generate context switch info");
+
+SYSCTL_PROC(_kperf, OID_AUTO, pet_idle_rate,
+            CTLTYPE_INT|CTLFLAG_RW|CTLFLAG_ANYBODY,
+            (void*)REQ_PET_IDLE_RATE,
+            sizeof(int), kperf_sysctl, "I", "Rate at which unscheduled threads are forced to be sampled in PET mode");
+
+/* debug */
+SYSCTL_INT(_kperf, OID_AUTO, debug_level, CTLFLAG_RW, 
+           &kperf_debug_level, 0, "debug level");
+

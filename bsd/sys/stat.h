@@ -79,75 +79,32 @@
 #endif /* KERNEL */
 
 /* [XSI] The timespec structure may be defined as described in <time.h> */
-#define __need_struct_timespec
+#include <sys/_types/_timespec.h>
 #ifdef KERNEL
-#define __need_struct_user64_timespec
-#define __need_struct_user32_timespec
+#include <sys/_types/_user64_timespec.h>
+#include <sys/_types/_user32_timespec.h>
 #endif /* KERNEL */
-#include <sys/_structs.h>
 
 /*
  * [XSI] The blkcnt_t, blksize_t, dev_t, ino_t, mode_t, nlink_t, uid_t,
  * gid_t, off_t, and time_t types shall be defined as described in
  * <sys/types.h>.
  */
-#ifndef _BLKCNT_T
-typedef	__darwin_blkcnt_t	blkcnt_t;
-#define	_BLKCNT_T
-#endif
-
-#ifndef _BLKSIZE_T
-typedef	__darwin_blksize_t	blksize_t;
-#define	_BLKSIZE_T
-#endif
-
-#ifndef _DEV_T
-typedef	__darwin_dev_t		dev_t;		/* device number */
-#define _DEV_T
-#endif
-
-#ifndef	_INO_T
-typedef	__darwin_ino_t		ino_t;		/* inode number */
-#define _INO_T
-#endif
+#include <sys/_types/_blkcnt_t.h>
+#include <sys/_types/_blksize_t.h>
+#include <sys/_types/_dev_t.h>			/* device number */
+#include <sys/_types/_ino_t.h>
 
 #if !defined(_POSIX_C_SOURCE) || defined(_DARWIN_C_SOURCE)
-#ifndef	_INO64_T
-typedef	__darwin_ino64_t	ino64_t;	/* 64bit inode number */
-#define _INO64_T
-#endif
+#include <sys/_types/_ino64_t.h>
 #endif /* !defined(_POSIX_C_SOURCE) || defined(_DARWIN_C_SOURCE) */
 
-#ifndef	_MODE_T
-typedef	__darwin_mode_t		mode_t;
-#define _MODE_T
-#endif
-
-#ifndef _NLINK_T
-typedef	__uint16_t		nlink_t;	/* link count */
-#define	_NLINK_T
-#endif
-
-#ifndef _UID_T
-typedef __darwin_uid_t		uid_t;		/* user id */
-#define _UID_T
-#endif
-
-#ifndef _GID_T
-typedef __darwin_gid_t		gid_t;
-#define _GID_T
-#endif
-
-#ifndef _OFF_T
-typedef __darwin_off_t		off_t;
-#define _OFF_T
-#endif
-
-#ifndef	_TIME_T
-#define	_TIME_T
-typedef	__darwin_time_t		time_t;
-#endif
-
+#include <sys/_types/_mode_t.h>
+#include <sys/_types/_nlink_t.h>
+#include <sys/_types/_uid_t.h>
+#include <sys/_types/_gid_t.h>
+#include <sys/_types/_off_t.h>
+#include <sys/_types/_time_t.h>
 
 #if !defined(_POSIX_C_SOURCE) || defined(_DARWIN_C_SOURCE)
 /*
@@ -432,48 +389,7 @@ extern void munge_user32_stat64(struct stat64 *sbp, struct user32_stat64 *usbp);
  * [XSI] The following are symbolic names for the values of type mode_t.  They
  * are bitmap values.
  */
-#ifndef S_IFMT
-/* File type */
-#define	S_IFMT		0170000		/* [XSI] type of file mask */
-#define	S_IFIFO		0010000		/* [XSI] named pipe (fifo) */
-#define	S_IFCHR		0020000		/* [XSI] character special */
-#define	S_IFDIR		0040000		/* [XSI] directory */
-#define	S_IFBLK		0060000		/* [XSI] block special */
-#define	S_IFREG		0100000		/* [XSI] regular */
-#define	S_IFLNK		0120000		/* [XSI] symbolic link */
-#define	S_IFSOCK	0140000		/* [XSI] socket */
-#if !defined(_POSIX_C_SOURCE) || defined(_DARWIN_C_SOURCE)
-#define	S_IFWHT		0160000		/* OBSOLETE: whiteout */
-#endif
-
-/* File mode */
-/* Read, write, execute/search by owner */
-#define	S_IRWXU		0000700		/* [XSI] RWX mask for owner */
-#define	S_IRUSR		0000400		/* [XSI] R for owner */
-#define	S_IWUSR		0000200		/* [XSI] W for owner */
-#define	S_IXUSR		0000100		/* [XSI] X for owner */
-/* Read, write, execute/search by group */
-#define	S_IRWXG		0000070		/* [XSI] RWX mask for group */
-#define	S_IRGRP		0000040		/* [XSI] R for group */
-#define	S_IWGRP		0000020		/* [XSI] W for group */
-#define	S_IXGRP		0000010		/* [XSI] X for group */
-/* Read, write, execute/search by others */
-#define	S_IRWXO		0000007		/* [XSI] RWX mask for other */
-#define	S_IROTH		0000004		/* [XSI] R for other */
-#define	S_IWOTH		0000002		/* [XSI] W for other */
-#define	S_IXOTH		0000001		/* [XSI] X for other */
-
-#define	S_ISUID		0004000		/* [XSI] set user id on execution */
-#define	S_ISGID		0002000		/* [XSI] set group id on execution */
-#define	S_ISVTX		0001000		/* [XSI] directory restrcted delete */
-
-#if !defined(_POSIX_C_SOURCE) || defined(_DARWIN_C_SOURCE)
-#define	S_ISTXT		S_ISVTX		/* sticky bit: not supported */
-#define	S_IREAD		S_IRUSR		/* backward compatability */
-#define	S_IWRITE	S_IWUSR		/* backward compatability */
-#define	S_IEXEC		S_IXUSR		/* backward compatability */
-#endif
-#endif	/* !S_IFMT */
+#include <sys/_types/_s_ifmt.h>
 
 /*
  * [XSI] The following macros shall be provided to test whether a file is
@@ -598,11 +514,9 @@ int	mknod(const char *, mode_t, dev_t);
 mode_t	umask(mode_t);
 
 #if !defined(_POSIX_C_SOURCE) || defined(_DARWIN_C_SOURCE)
-#ifndef _FILESEC_T
-struct _filesec;
-typedef struct _filesec	*filesec_t;
-#define _FILESEC_T
-#endif
+
+#include <sys/_types/_filesec_t.h>
+
 int	chflags(const char *, __uint32_t);
 int	chmodx_np(const char *, filesec_t);
 int	fchflags(int, __uint32_t);

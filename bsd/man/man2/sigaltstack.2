@@ -68,7 +68,7 @@ the system arranges a switch to the signal stack for the
 duration of the signal handler's execution. 
 .Pp
 If
-.Dv SA_DISABLE
+.Dv SS_DISABLE
 is set in
 .Fa ss_flags ,
 .Fa ss_sp
@@ -94,7 +94,7 @@ The
 field will contain the value
 .Dv SA_ONSTACK
 if the process is currently on a signal stack and
-.Dv SA_DISABLE
+.Dv SS_DISABLE
 if the signal stack is currently disabled.
 .Sh NOTES
 The value

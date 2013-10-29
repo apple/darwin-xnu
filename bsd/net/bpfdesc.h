@@ -99,6 +99,7 @@ struct bpf_d {
 	int 		bd_hlen;	/* current length of hold buffer */
 
 	int		bd_bufsize;	/* absolute length of buffers */
+	int		bd_hbuf_read;	/* reading from hbuf */
 
 	struct bpf_if  *bd_bif;		/* interface descriptor */
 	u_int32_t		bd_rtout;	/* Read timeout in 'ticks' */

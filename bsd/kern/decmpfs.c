@@ -668,11 +668,11 @@ decmpfs_file_is_compressed(vnode_t vp, decmpfs_cnode *cp)
             return 0;
     }
     
-//    if (!vnode_isreg(vp)) {
-//        /* only regular files can be compressed */
-//        ret = FILE_IS_NOT_COMPRESSED;
-//        goto done;
-//    }
+    if (!vnode_isreg(vp)) {
+        /* only regular files can be compressed */
+        ret = FILE_IS_NOT_COMPRESSED;
+        goto done;
+    }
     
     mp = vnode_mount(vp); 
     if (mp == NULL) {

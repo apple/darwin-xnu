@@ -34,7 +34,7 @@
 #include <pexpert/boot.h>
 #include <libkern/libkern.h>
 
-#include <libkern/WKdm.h>
+#include <vm/WKdm_new.h>
 #include "IOHibernateInternal.h"
 
 #include <machine/pal_hibernate.h>
@@ -396,11 +396,13 @@ store_one_page(uint32_t procFlags, uint32_t * src, uint32_t compressedSize,
 		uint32_t * buffer, uint32_t ppnum)
 {
 	uint64_t dst = ptoa_64(ppnum);
+	uint8_t scratch[WKdm_SCRATCH_BUF_SIZE] __attribute__ ((aligned (16)));
 
 	if (compressedSize != PAGE_SIZE)
 	{
 		dst = pal_hib_map(DEST_COPY_AREA, dst);
-		WKdm_decompress((WK_word*) src, (WK_word*)(uintptr_t)dst, PAGE_SIZE >> 2);
+		if (compressedSize) WKdm_decompress_new((WK_word*) src, (WK_word*)(uintptr_t)dst, (WK_word*) &scratch[0], PAGE_SIZE);
+		else bzero((void *) dst, PAGE_SIZE);
 	}
 	else
 	{
@@ -408,21 +410,6 @@ store_one_page(uint32_t procFlags, uint32_t * src, uint32_t compressedSize,
 	}
 
 	return hibernate_sum_page((uint8_t *)(uintptr_t)dst, ppnum);
-}
-
-// used only for small struct copies
-static void 
-bcopy_internal(const void *src, void *dst, uint32_t len)
-{
-    const char *s = src;
-    char       *d = dst;
-    uint32_t   idx = 0;
-
-    while (idx < len)
-    {
-        d[idx] = s[idx];
-        idx++;
-    }
 }
 
 #define C_ASSERT(e) typedef char    __C_ASSERT__[(e) ? 1 : -1]
@@ -436,7 +423,6 @@ hibernate_kernel_entrypoint(uint32_t p1,
     uint64_t srcPhys;
     uint64_t imageReadPhys;
     uint64_t pageIndexPhys;
-    uint32_t idx;
     uint32_t * pageIndexSource;
     hibernate_page_list_t * map;
     uint32_t stage;
@@ -460,7 +446,7 @@ hibernate_kernel_entrypoint(uint32_t p1,
     uint32_t handoffPages;
     uint32_t handoffPageCount;
 
-    uint64_t timeStart, time;
+    uint64_t timeStart;
     timeStart = rdtsc64();
 
     C_ASSERT(sizeof(IOHibernateImageHeader) == 512);
@@ -472,9 +458,9 @@ hibernate_kernel_entrypoint(uint32_t p1,
 
     debug_code(kIOHibernateRestoreCodeImageStart, headerPhys);
 
-    bcopy_internal((void *) pal_hib_map(IMAGE_AREA, headerPhys), 
-                   gIOHibernateCurrentHeader, 
-                   sizeof(IOHibernateImageHeader));
+    memcpy(gIOHibernateCurrentHeader,
+	   (void *) pal_hib_map(IMAGE_AREA, headerPhys), 
+	   sizeof(IOHibernateImageHeader));
 
     debug_code(kIOHibernateRestoreCodeSignature, gIOHibernateCurrentHeader->signature);
 
@@ -517,6 +503,7 @@ hibernate_kernel_entrypoint(uint32_t p1,
     sum = gIOHibernateCurrentHeader->actualRestore1Sum;
     gIOHibernateCurrentHeader->diag[0] = atop_64(headerPhys);
     gIOHibernateCurrentHeader->diag[1] = sum;
+    gIOHibernateCurrentHeader->trampolineTime = 0;
 
     uncompressedPages    = 0;
     conflictCount        = 0;
@@ -625,28 +612,27 @@ hibernate_kernel_entrypoint(uint32_t p1,
 
 	    if (!conflicts)
 	    {
-//              if (compressedSize)
-		time = rdtsc64();
 		pageSum = store_one_page(gIOHibernateCurrentHeader->processorFlags,
 					 src, compressedSize, 0, ppnum);
-                gIOHibernateCurrentHeader->restoreTime2 += (rdtsc64() - time);
 		if (stage != 2)
 		    sum += pageSum;
 		uncompressedPages++;
 	    }
 	    else
 	    {
-		uint32_t   bufferPage;
+		uint32_t   bufferPage = 0;
 		uint32_t * dst;
 
 //		debug_code(kIOHibernateRestoreCodeConflictPage,   ppnum);
 //		debug_code(kIOHibernateRestoreCodeConflictSource, (uintptr_t) src);
-
 		conflictCount++;
-
-		// alloc new buffer page
-		bufferPage = hibernate_page_list_grab(map, &nextFree);
-
+		if (compressedSize)
+		{
+		    // alloc new buffer page
+		    bufferPage = hibernate_page_list_grab(map, &nextFree);
+		    dst = (uint32_t *)pal_hib_map(DEST_COPY_AREA, ptoa_64(bufferPage));
+		    memcpy(dst, src, compressedSize);
+		}
 		if (copyPageIndex > ((PAGE_SIZE >> 2) - 3))
 		{
 		    // alloc new copy list page
@@ -662,15 +648,10 @@ hibernate_kernel_entrypoint(uint32_t p1,
 		    copyPageList[1] = 0;
 		    copyPageIndex = 2;
 		}
-
 		copyPageList[copyPageIndex++] = ppnum;
 		copyPageList[copyPageIndex++] = bufferPage;
 		copyPageList[copyPageIndex++] = (compressedSize | (stage << 24));
 		copyPageList[0] = copyPageIndex;
-
-		dst = (uint32_t *)pal_hib_map(DEST_COPY_AREA, ptoa_64(bufferPage));
-		for (idx = 0; idx < ((compressedSize + 3) >> 2); idx++)
-			dst[idx] = src[idx];
 	    }
 	    srcPhys += ((compressedSize + 3) & ~3);
 	    src     += ((compressedSize + 3) >> 2);
@@ -681,8 +662,6 @@ hibernate_kernel_entrypoint(uint32_t p1,
     hibernateRestorePALState(src);
 
     // -- copy back conflicts
-
-    time = rdtsc64();
 
     pageListPage = copyPageListHeadPage;
     while (pageListPage)
@@ -707,8 +686,6 @@ hibernate_kernel_entrypoint(uint32_t p1,
 
     pal_hib_patchup();
 
-    gIOHibernateCurrentHeader->restoreTime3 = (rdtsc64() - time);
-
     // -- image has been destroyed...
 
     gIOHibernateCurrentHeader->actualImage1Sum         = sum;
@@ -718,7 +695,7 @@ hibernate_kernel_entrypoint(uint32_t p1,
 
     gIOHibernateState = kIOHibernateStateWakingFromHibernate;
 
-    gIOHibernateCurrentHeader->restoreTime1 = (rdtsc64() - timeStart);
+    gIOHibernateCurrentHeader->trampolineTime = (((rdtsc64() - timeStart)) >> 8);
 
 #if CONFIG_SLEEP
 #if defined(__i386__) || defined(__x86_64__)

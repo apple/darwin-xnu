@@ -27,24 +27,24 @@
  */
 
 #include "_libkernel_init.h"
-#include "mig_reply_port.h"
 
-void (*_libc_set_errno)(int) __attribute__((visibility("hidden")));
-int* (*_libc_get_errno)(void) __attribute__((visibility("hidden")));
+extern int mach_init(void);
 
 /* dlsym() funcptr is for legacy support in exc_catcher */
 void* (*_dlsym)(void*, const char*) __attribute__((visibility("hidden")));
 
+__attribute__((visibility("hidden")))
+_libkernel_functions_t _libkernel_functions;
+
 void
-_libkernel_init(_libkernel_functions_t fns)
+__libkernel_init(_libkernel_functions_t fns,
+		const char *envp[] __attribute__((unused)),
+		const char *apple[] __attribute__((unused)),
+		const struct ProgramVars *vars __attribute__((unused)))
 {
-	/* libc */
-	_libc_set_errno = fns.set_errno;
-	_libc_get_errno = fns.get_errno;
-	
-	/* mach */
-	_mig_reply_port_callbacks(fns.get_reply_port, fns.set_reply_port);
-	
-	/* dlsym */
-	_dlsym = fns.dlsym;
+	_libkernel_functions = fns;
+	if (fns->dlsym) {
+		_dlsym = fns->dlsym;
+	}
+	mach_init();
 }

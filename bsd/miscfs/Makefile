@@ -13,21 +13,11 @@ INSTINC_SUBDIRS = \
 	specfs \
 	union
 
-INSTINC_SUBDIRS_I386 = \
-
 EXPINC_SUBDIRS = \
 	devfs \
 	fifofs \
-	specfs
-
-EXPINC_SUBDIRS_I386 = \
-
-SETUP_SUBDIRS = 	\
-
-COMP_SUBDIRS = 	\
-
-INST_SUBDIRS =	\
-
+	specfs \
+	union
 
 include $(MakeInc_rule)
 include $(MakeInc_dir)

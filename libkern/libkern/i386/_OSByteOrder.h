@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2006 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2006-2012 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -47,7 +47,7 @@ _OSSwapInt16(
     __uint16_t        _data
 )
 {
-    return ((_data << 8) | (_data >> 8));
+    return ((__uint16_t)((_data << 8) | (_data >> 8)));
 }
 
 __DARWIN_OS_INLINE

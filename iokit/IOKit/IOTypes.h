@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1998-2006 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 1998-2012 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -56,14 +56,8 @@ extern "C" {
 /*
  * Simple data types.
  */
-#ifndef __MACTYPES__	/* CF MacTypes.h */
-#ifndef __TYPES__	/* guess... Mac Types.h */
-
 #include <stdbool.h>
 #include <libkern/OSTypes.h>
-
-#endif /* __TYPES__ */
-#endif /* __MACTYPES__ */
 
 #if KERNEL
 #include <libkern/OSBase.h>
@@ -83,13 +77,13 @@ typedef UInt64	IOPhysicalAddress64;
 typedef UInt32	IOPhysicalLength32;
 typedef UInt64	IOPhysicalLength64;
 
-#ifdef __LP64__
+#if !defined(__arm__) && !defined(__i386__)
 typedef mach_vm_address_t	IOVirtualAddress;
 #else
 typedef vm_address_t		IOVirtualAddress;
 #endif
 
-#if defined(__LP64__) && defined(KERNEL)
+#if !defined(__arm__) && !defined(__i386__) && !(defined(__x86_64__) && !defined(KERNEL))
 typedef IOByteCount64		IOByteCount;
 #else
 typedef IOByteCount32	 	IOByteCount;
@@ -97,7 +91,7 @@ typedef IOByteCount32	 	IOByteCount;
 
 typedef IOVirtualAddress    IOLogicalAddress;
 
-#if defined(__LP64__) && defined(KERNEL)
+#if !defined(__arm__) && !defined(__i386__) && !(defined(__x86_64__) && !defined(KERNEL))
 
 typedef IOPhysicalAddress64	 IOPhysicalAddress;
 typedef IOPhysicalLength64	 IOPhysicalLength;
@@ -126,15 +120,15 @@ typedef struct
     IOByteCount		length;
 } IOVirtualRange;
 
-#ifdef __LP64__
+#if !defined(__arm__) && !defined(__i386__)
 typedef IOVirtualRange	IOAddressRange;
-#else /* !__LP64__ */
+#else
 typedef struct 
 {
     mach_vm_address_t	address;
     mach_vm_size_t	length;
 } IOAddressRange;
-#endif /* !__LP64__ */
+#endif
 
 /*
  * Map between #defined or enum'd constants and text description.

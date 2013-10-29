@@ -29,12 +29,12 @@
     were first available; and, if applicable, the OS version in which they 
     became deprecated.  
      
-    The desktop Mac OS X and the iPhone OS X each have different version numbers.
+    The desktop Mac OS X and iOS each have different version numbers.
     The __OSX_AVAILABLE_STARTING() macro allows you to specify both the desktop
-    and phone OS version numbers.  For instance:
+    and iOS version numbers.  For instance:
         __OSX_AVAILABLE_STARTING(__MAC_10_2,__IPHONE_2_0)
     means the function/method was first available on Mac OS X 10.2 on the desktop
-    and first available in OS X 2.0 on the iPhone.
+    and first available in iOS 2.0 on the iPhone.
     
     If a function is available on one platform, but not the other a _NA (not
     applicable) parameter is used.  For instance:
@@ -50,15 +50,15 @@
     as well as the OS version in which it became deprecated.  For instance:
         __OSX_AVAILABLE_BUT_DEPRECATED(__MAC_10_0,__MAC_10_5,__IPHONE_NA,__IPHONE_NA)
     means that the function/method was introduced in Mac OS X 10.0, then
-    became deprecated beginning in Mac OS X 10.5.  On the iPhone the function 
+    became deprecated beginning in Mac OS X 10.5.  On iOS the function 
     has never been available.  
     
     For these macros to function properly, a program must specify the OS version range 
     it is targeting.  The min OS version is specified as an option to the compiler:
-    -mmacosx-version-min=10.x when building for Mac OS X, and -miphoneos-version-min=x.x
+    -mmacosx-version-min=10.x when building for Mac OS X, and -miphoneos-version-min=y.z
     when building for the iPhone.  The upper bound for the OS version is rarely needed,
-    but it can be set on the command line via: -D__MAC_OS_X_VERSION_MAX_ALLOWED=10xx for
-    Mac OS X and __IPHONE_OS_VERSION_MAX_ALLOWED = 1xxx for iPhone.  
+    but it can be set on the command line via: -D__MAC_OS_X_VERSION_MAX_ALLOWED=10x0 for
+    Mac OS X and __IPHONE_OS_VERSION_MAX_ALLOWED = y0z00 for iOS.  
     
     Examples:
 
@@ -125,6 +125,7 @@
 #define __MAC_10_6      1060
 #define __MAC_10_7      1070
 #define __MAC_10_8      1080
+#define __MAC_10_9      1090
 #define __MAC_NA        9999   /* not available */
 
 #define __IPHONE_2_0     20000
@@ -139,6 +140,9 @@
 #define __IPHONE_4_3     40300
 #define __IPHONE_5_0     50000
 #define __IPHONE_5_1     50100
+#define __IPHONE_6_0     60000
+#define __IPHONE_6_1     60100
+#define __IPHONE_7_0     70000
 #define __IPHONE_NA      99999  /* not available */
 
 #include <AvailabilityInternal.h>
@@ -148,15 +152,20 @@
     #define __OSX_AVAILABLE_STARTING(_osx, _ios) __AVAILABILITY_INTERNAL##_ios
     #define __OSX_AVAILABLE_BUT_DEPRECATED(_osxIntro, _osxDep, _iosIntro, _iosDep) \
                                                     __AVAILABILITY_INTERNAL##_iosIntro##_DEP##_iosDep
+    #define __OSX_AVAILABLE_BUT_DEPRECATED_MSG(_osxIntro, _osxDep, _iosIntro, _iosDep, _msg) \
+                                                    __AVAILABILITY_INTERNAL##_iosIntro##_DEP##_iosDep##_MSG(_msg)
 
 #elif defined(__MAC_OS_X_VERSION_MIN_REQUIRED)
     #define __OSX_AVAILABLE_STARTING(_osx, _ios) __AVAILABILITY_INTERNAL##_osx
     #define __OSX_AVAILABLE_BUT_DEPRECATED(_osxIntro, _osxDep, _iosIntro, _iosDep) \
                                                     __AVAILABILITY_INTERNAL##_osxIntro##_DEP##_osxDep
+    #define __OSX_AVAILABLE_BUT_DEPRECATED_MSG(_osxIntro, _osxDep, _iosIntro, _iosDep, _msg) \
+                                                    __AVAILABILITY_INTERNAL##_osxIntro##_DEP##_osxDep##_MSG(_msg)
 
 #else
     #define __OSX_AVAILABLE_STARTING(_osx, _ios)
-    #define __OSX_AVAILABLE_BUT_DEPRECATED(_osxIntro, _osxDep, _iosIntro, _iosDep) 
+    #define __OSX_AVAILABLE_BUT_DEPRECATED(_osxIntro, _osxDep, _iosIntro, _iosDep)
+    #define __OSX_AVAILABLE_BUT_DEPRECATED_MSG(_osxIntro, _osxDep, _iosIntro, _iosDep, _msg)
 #endif
 
 

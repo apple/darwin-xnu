@@ -284,6 +284,7 @@ lapic_init(void)
 	/* Set up the lapic_id <-> cpu_number map and add this boot processor */
 	lapic_cpu_map_init();
 	lapic_cpu_map((LAPIC_READ(ID)>>LAPIC_ID_SHIFT)&LAPIC_ID_MASK, 0);
+	current_cpu_datap()->cpu_phys_number = cpu_to_lapic[0];
 	kprintf("Boot cpu local APIC id 0x%x\n", cpu_to_lapic[0]);
 }
 
@@ -443,6 +444,10 @@ lapic_probe(void)
 		 * Re-initialize cpu features info and re-check.
 		 */
 		cpuid_set_info();
+		/* We expect this codepath will never be traversed
+		 * due to EFI enabling the APIC. Reducing the APIC
+		 * interrupt base dynamically is not supported.
+		 */
 		if (cpuid_features() & CPUID_FEATURE_APIC) {
 			printf("Local APIC discovered and enabled\n");
 			lapic_os_enabled = TRUE;

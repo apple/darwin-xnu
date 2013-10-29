@@ -47,7 +47,11 @@ typedef struct ExtentsRecBuffer ExtentsRecBuffer;
 static u_int32_t CheckExtents( void *extents, u_int32_t blocks, Boolean isHFSPlus );
 static OSErr  DeleteExtents( ExtendedVCB *vcb, u_int32_t fileNumber, int quitEarly, u_int8_t forkType, Boolean isHFSPlus );
 static OSErr  MoveExtents( ExtendedVCB *vcb, u_int32_t srcFileID, u_int32_t destFileID, int quitEarly, u_int8_t forkType, Boolean isHFSPlus );
+
+#if CONFIG_HFS_STD
 static void  CopyCatalogNodeInfo( CatalogRecord *src, CatalogRecord *dest );
+#endif
+
 static void  CopyBigCatalogNodeInfo( CatalogRecord *src, CatalogRecord *dest );
 static void  CopyExtentInfo( ExtentKey *key, ExtentRecord *data, ExtentsRecBuffer *buffer, u_int16_t bufferCount );
 
@@ -162,10 +166,17 @@ OSErr ExchangeFileIDs( ExtendedVCB *vcb, ConstUTF8Param srcName, ConstUTF8Param 
 			err = MoveExtents( vcb, srcData.hfsPlusFile.fileID, kHFSBogusExtentFileID, 0,0, isHFSPlus );
 			if ( err != noErr )
 			{
-				if ( err != dskFulErr )
+				if ( err != dskFulErr ) {
 					return( err );
-				else
-					goto ExUndo1a;
+                }
+				else {
+                    err = DeleteExtents( vcb, kHFSBogusExtentFileID, 0, 0, isHFSPlus );
+                    ReturnIfError( err );					//	we are doomed. Just QUIT!
+                    
+                    err = FlushCatalog( vcb );   			//	flush the catalog
+                    err = FlushExtentFile( vcb );			//	flush the extent file (unneeded for common case, but it's cheap)
+                    return( dskFulErr );
+                }
 			}
 			
 			//--	Change the destination extents file id's to the source id's
@@ -181,7 +192,13 @@ ExUndo2aPlus:	err = DeleteExtents( vcb, srcData.hfsPlusFile.fileID, 0, 0, isHFSP
                 err = MoveExtents( vcb, kHFSBogusExtentFileID, srcData.hfsPlusFile.fileID, 0, 0, isHFSPlus );	//	Move the extents back
 				ReturnIfError( err );					//	we are doomed. Just QUIT!
 					
-				goto ExUndo1a;
+                err = DeleteExtents( vcb, kHFSBogusExtentFileID, 0, 0, isHFSPlus );
+                ReturnIfError( err );					//	we are doomed. Just QUIT!
+                    
+                err = FlushCatalog( vcb );   			//	flush the catalog
+                err = FlushExtentFile( vcb );			//	flush the extent file (unneeded for common case, but it's cheap)
+                return( dskFulErr );
+
 			}
 			
 			//--	Change the bogus extents file id's to the dest id's
@@ -252,6 +269,7 @@ ExUndo2aPlus:	err = DeleteExtents( vcb, srcData.hfsPlusFile.fileID, 0, 0, isHFSP
 		err = ReplaceBTreeRecord( vcb->catalogRefNum, &destKey, destHint, &destData, sizeof(HFSPlusCatalogFile), &destHint );
 		ReturnIfError( err );
 	}
+#if CONFIG_HFS_STD
 	else		//	HFS	//
 	{
 		//--	Step 1: Check the catalog nodes for extents
@@ -395,7 +413,8 @@ ExUndo2a:		err = DeleteExtents( vcb, srcData.hfsFile.fileID, 0, 0, isHFSPlus );
 		err = ReplaceBTreeRecord( vcb->catalogRefNum, &destKey, destHint, &destData, sizeof(HFSCatalogFile), &destHint );
 		ReturnIfError( err );
 	}
-	
+#endif
+
 	err = noErr;
 
 	//--	Step 4: Error Handling section
@@ -408,6 +427,7 @@ FlushAndReturn:
 }
 
 
+#if CONFIG_HFS_STD
 static void  CopyCatalogNodeInfo( CatalogRecord *src, CatalogRecord *dest )
 {
 	dest->hfsFile.dataLogicalSize	= src->hfsFile.dataLogicalSize;
@@ -418,6 +438,7 @@ static void  CopyCatalogNodeInfo( CatalogRecord *src, CatalogRecord *dest )
 	BlockMoveData( src->hfsFile.dataExtents, dest->hfsFile.dataExtents, sizeof(HFSExtentRecord) );
 	BlockMoveData( src->hfsFile.rsrcExtents, dest->hfsFile.rsrcExtents, sizeof(HFSExtentRecord) );
 }
+#endif
 
 static void  CopyBigCatalogNodeInfo( CatalogRecord *src, CatalogRecord *dest )
 {
@@ -485,6 +506,7 @@ static OSErr  MoveExtents( ExtendedVCB *vcb, u_int32_t srcFileID, u_int32_t dest
 		extentKeyPtr->hfsPlus.fileID	 = srcFileID;
 		extentKeyPtr->hfsPlus.startBlock = 0;
 	}
+#if CONFIG_HFS_STD
 	else {
 		btRecord.itemSize = sizeof(HFSExtentRecord);
 		btKeySize = sizeof(HFSExtentKey);
@@ -494,6 +516,11 @@ static OSErr  MoveExtents( ExtendedVCB *vcb, u_int32_t srcFileID, u_int32_t dest
 		extentKeyPtr->hfs.fileID	 = srcFileID;
 		extentKeyPtr->hfs.startBlock = 0;
 	}
+#else
+    else {
+        return cmBadNews;
+    }
+#endif
 	
 	//
 	//	We do an initial BTSearchRecord to position the BTree's iterator just before any extent
@@ -534,7 +561,7 @@ static OSErr  MoveExtents( ExtendedVCB *vcb, u_int32_t srcFileID, u_int32_t dest
 
 		for ( i=0 ; i<kNumExtentsToCache ; i++ )
 		{
-			HFSCatalogNodeID	foundFileID;
+			HFSCatalogNodeID	foundFileID = 0;
 			
 			err = BTIterateRecord(fcb, kBTreeNextRecord, btIterator, &btRecord, &btRecordSize);
 			if ( err == btNotFound )		//	Did we run out of extent records in the extents tree?
@@ -544,7 +571,14 @@ static OSErr  MoveExtents( ExtendedVCB *vcb, u_int32_t srcFileID, u_int32_t dest
 				FREE (tmpIterator, M_TEMP);
 				return( err );				//	must be ioError
 			}
-			foundFileID = isHFSPlus ? extentKeyPtr->hfsPlus.fileID : extentKeyPtr->hfs.fileID;
+            if (isHFSPlus) {
+                foundFileID = extentKeyPtr->hfsPlus.fileID;
+            }
+#if CONFIG_HFS_STD
+            else {
+                foundFileID = extentKeyPtr->hfs.fileID;
+            }
+#endif
 			if ( foundFileID == srcFileID ) {
 				/* Check if we need to quit early. */
 				if (quitEarly && isHFSPlus) {
@@ -565,17 +599,21 @@ static OSErr  MoveExtents( ExtendedVCB *vcb, u_int32_t srcFileID, u_int32_t dest
 		//--	edit each extent key, and reinsert each extent record in the extent file
 		if (isHFSPlus)
 			btRecordSize = sizeof(HFSPlusExtentRecord);
+#if CONFIG_HFS_STD
 		else
 			btRecordSize = sizeof(HFSExtentRecord);
-
+#endif
+        
 		for ( j=0 ; j<i ; j++ )
 		{
 
 			if (isHFSPlus)
 				extentsBuffer[j].extentKey.hfsPlus.fileID = destFileID;	//	change only the id in the key to dest ID
+#if CONFIG_HFS_STD
 			else
 				extentsBuffer[j].extentKey.hfs.fileID = destFileID;	//	change only the id in the key to dest ID
-
+#endif
+            
 			// get iterator and buffer descriptor ready...
 			(void) BTInvalidateHint(tmpIterator);
 			BlockMoveData(&(extentsBuffer[j].extentKey), &tmpIterator->key, btKeySize);
@@ -637,6 +675,7 @@ static OSErr  DeleteExtents( ExtendedVCB *vcb, u_int32_t fileID, int quitEarly, 
 	u_int16_t			btRecordSize;
 	OSErr				err;
 
+    
 
 	MALLOC (btIterator, struct BTreeIterator*, sizeof(struct BTreeIterator), M_TEMP, M_WAITOK);
 	if (btIterator == NULL) {
@@ -672,6 +711,7 @@ static OSErr  DeleteExtents( ExtendedVCB *vcb, u_int32_t fileID, int quitEarly, 
 		extentKeyPtr->hfsPlus.fileID	 = fileID;
 		extentKeyPtr->hfsPlus.startBlock = 0;
 	}
+#if CONFIG_HFS_STD
 	else {
 		btRecord.itemSize = sizeof(HFSExtentRecord);
 
@@ -680,6 +720,9 @@ static OSErr  DeleteExtents( ExtendedVCB *vcb, u_int32_t fileID, int quitEarly, 
 		extentKeyPtr->hfs.fileID	 = fileID;
 		extentKeyPtr->hfs.startBlock = 0;
 	}
+#else 
+    else return cmBadNews;
+#endif
 
 	err = BTSearchRecord(fcb, btIterator, &btRecord, &btRecordSize, btIterator);
 	if ( err != btNotFound )
@@ -693,7 +736,7 @@ static OSErr  DeleteExtents( ExtendedVCB *vcb, u_int32_t fileID, int quitEarly, 
 
 	do
 	{
-		HFSCatalogNodeID	foundFileID;
+		HFSCatalogNodeID	foundFileID = 0;
 
 		err = BTIterateRecord(fcb, kBTreeNextRecord, btIterator, &btRecord, &btRecordSize);
 		if ( err != noErr )
@@ -703,8 +746,15 @@ static OSErr  DeleteExtents( ExtendedVCB *vcb, u_int32_t fileID, int quitEarly, 
 				
 			break;					//	We're done now.
 		}
-		
-		foundFileID = isHFSPlus ? extentKeyPtr->hfsPlus.fileID : extentKeyPtr->hfs.fileID;
+        if (isHFSPlus) {
+            foundFileID = extentKeyPtr->hfsPlus.fileID;
+        }
+#if CONFIG_HFS_STD
+        else {
+            foundFileID = extentKeyPtr->hfs.fileID;
+        }
+#endif
+        
 		if ( foundFileID != fileID ) {
 			break;					//	numbers don't match, we must be done
 		}
@@ -749,6 +799,7 @@ static u_int32_t  CheckExtents( void *extents, u_int32_t totalBlocks, Boolean is
 				return( 0 );
 		}
 	}
+#if CONFIG_HFS_STD
 	else
 	{
 		for ( i = 0 ; i < kHFSExtentDensity ; i++ )
@@ -758,6 +809,7 @@ static u_int32_t  CheckExtents( void *extents, u_int32_t totalBlocks, Boolean is
 				return( 0 );
 		}
 	}
+#endif
 	
 	return( extentAllocationBlocks );
 }

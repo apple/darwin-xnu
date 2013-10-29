@@ -60,7 +60,6 @@ typedef int (* hfs_to_unicode_func_t)(const Str31 hfs_str, UniChar *uni_str,
 typedef int (* unicode_to_hfs_func_t)(UniChar *uni_str, u_int32_t unicodeChars,
 		Str31 hfs_str);
 
-
 int hfs_addconverter(int kmod_id, u_int32_t encoding,
 		hfs_to_unicode_func_t get_unicode,
 		unicode_to_hfs_func_t get_hfsname);

@@ -34,8 +34,14 @@ first_free_is_valid_ll( vm_map_t map )
 	vm_map_entry_t	entry, next;
 	entry = vm_map_to_entry(map);
 	next = entry->vme_next;
-	while (vm_map_trunc_page(next->vme_start) == vm_map_trunc_page(entry->vme_end) ||
-	       (vm_map_trunc_page(next->vme_start) == vm_map_trunc_page(entry->vme_start) &&
+	while (vm_map_trunc_page(next->vme_start,
+				 VM_MAP_PAGE_MASK(map)) ==
+	       vm_map_trunc_page(entry->vme_end,
+				 VM_MAP_PAGE_MASK(map)) ||
+	       (vm_map_trunc_page(next->vme_start,
+				  VM_MAP_PAGE_MASK(map)) ==
+		vm_map_trunc_page(entry->vme_start,
+				  VM_MAP_PAGE_MASK(map)) &&
 		next != vm_map_to_entry(map))) {
 		entry = next;
 		next = entry->vme_next;
@@ -57,32 +63,42 @@ first_free_is_valid_ll( vm_map_t map )
  *	entry immediately before the first hole in the map.
  * 	The map should be locked.
  */
-#define UPDATE_FIRST_FREE_LL(map, new_first_free) 				\
+#define UPDATE_FIRST_FREE_LL(map, new_first_free)			\
 	MACRO_BEGIN							\
-	if( map->disable_vmentry_reuse == FALSE){		\
-		vm_map_t	UFF_map; 					\
-		vm_map_entry_t	UFF_first_free; 				\
-		vm_map_entry_t	UFF_next_entry; 				\
-		UFF_map = (map); 						\
-		UFF_first_free = (new_first_free);				\
-		UFF_next_entry = UFF_first_free->vme_next; 			\
-		while (vm_map_trunc_page(UFF_next_entry->vme_start) == 		\
-		       vm_map_trunc_page(UFF_first_free->vme_end) || 			\
-		       (vm_map_trunc_page(UFF_next_entry->vme_start) == 		\
-			vm_map_trunc_page(UFF_first_free->vme_start) &&		\
-			UFF_next_entry != vm_map_to_entry(UFF_map))) { 		\
-			UFF_first_free = UFF_next_entry; 			\
-			UFF_next_entry = UFF_first_free->vme_next; 		\
-			if (UFF_first_free == vm_map_to_entry(UFF_map)) 	\
-				break; 						\
-		} 								\
-		UFF_map->first_free = UFF_first_free; 				\
-		assert(first_free_is_valid(UFF_map));				\
-	}									\
+	if( map->disable_vmentry_reuse == FALSE){			\
+		vm_map_t	UFF_map;				\
+		vm_map_entry_t	UFF_first_free;				\
+		vm_map_entry_t	UFF_next_entry;				\
+		UFF_map = (map);					\
+		UFF_first_free = (new_first_free);			\
+		UFF_next_entry = UFF_first_free->vme_next;		\
+		while (vm_map_trunc_page(UFF_next_entry->vme_start,	\
+					 VM_MAP_PAGE_MASK(UFF_map)) ==	\
+		       vm_map_trunc_page(UFF_first_free->vme_end,	\
+					 VM_MAP_PAGE_MASK(UFF_map)) ||	\
+		       (vm_map_trunc_page(UFF_next_entry->vme_start,	\
+					  VM_MAP_PAGE_MASK(UFF_map)) ==	\
+			vm_map_trunc_page(UFF_first_free->vme_start,	\
+					  VM_MAP_PAGE_MASK(UFF_map)) &&	\
+			UFF_next_entry != vm_map_to_entry(UFF_map))) {	\
+			UFF_first_free = UFF_next_entry;		\
+			UFF_next_entry = UFF_first_free->vme_next;	\
+			if (UFF_first_free == vm_map_to_entry(UFF_map))	\
+				break;					\
+		}							\
+		UFF_map->first_free = UFF_first_free;			\
+		assert(first_free_is_valid(UFF_map));			\
+	}								\
 	MACRO_END
 
 #define _vm_map_entry_link_ll(hdr, after_where, entry)			\
 	MACRO_BEGIN							\
+	if (entry->map_aligned) {					\
+		assert(VM_MAP_PAGE_ALIGNED((entry->vme_start),		\
+					   VM_MAP_HDR_PAGE_MASK((hdr))));\
+		assert(VM_MAP_PAGE_ALIGNED((entry->vme_end),		\
+					   VM_MAP_HDR_PAGE_MASK((hdr))));\
+	}								\
 	(hdr)->nentries++;						\
 	(entry)->vme_prev = (after_where);				\
 	(entry)->vme_next = (after_where)->vme_next;			\

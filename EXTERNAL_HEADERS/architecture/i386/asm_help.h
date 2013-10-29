@@ -52,6 +52,11 @@
 #define ALIGN						\
 	.align	2, 0x90
 
+/* Note that ROUND_TO_STACK rounds to Intel's stack alignment requirement,
+ * but it is not sufficient for the Apple ABI which requires a 16-byte
+ * aligned stack.  Various parts of the OS depend on this requirement,
+ * including dyld.
+ */
 #define	ROUND_TO_STACK(len)				\
 	(((len) + STACK_INCR - 1) / STACK_INCR * STACK_INCR)
 

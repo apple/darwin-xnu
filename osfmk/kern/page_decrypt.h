@@ -31,6 +31,8 @@
 #ifndef _KERN_PAGE_DECRYPT_H
 #define _KERN_PAGE_DECRYPT_H
 
+#include <mach/machine.h>
+
 /* 
  * Interface for DSMOS 
  */
@@ -53,6 +55,13 @@ struct pager_crypt_info {
         void    *crypt_ops;
 };
 typedef struct pager_crypt_info pager_crypt_info_t;
+
+struct crypt_file_data {
+	char          *filename;
+	cpu_type_t     cputype;
+	cpu_subtype_t  cpusubtype;
+};
+typedef struct crypt_file_data crypt_file_data_t;
 
 typedef int (*text_crypter_create_hook_t)(struct pager_crypt_info *crypt_info, 
 						const char *id, void *crypt_data);

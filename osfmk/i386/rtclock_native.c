@@ -49,7 +49,7 @@
 #include <i386/tsc.h>
 #include <i386/rtclock_protos.h>
 #include <i386/pal_routines.h>
-#include <kern/etimer.h>
+#include <kern/timer_queue.h>
 
 static uint64_t	rtc_decrementer_min;
 static uint64_t	rtc_decrementer_max;

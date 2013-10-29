@@ -16,7 +16,8 @@ DATAFILES = \
 	posix_spawnattr_setpgroup.3  \
 	posix_spawnattr_setsigdefault.3  \
 	posix_spawnattr_setsigmask.3  \
-	posix_spawnattr_setspecialport_np.3 
+	posix_spawnattr_setspecialport_np.3 \
+	getiopolicy_np.3
 
 INSTALL_MAN_LIST = ${DATAFILES}
 
@@ -53,7 +54,8 @@ INSTALL_MAN_LINKS = \
 	posix_spawnattr_setpgroup.3 posix_spawnattr_getpgroup.3 \
 	posix_spawnattr_setsigdefault.3 posix_spawnattr_getsigdefault.3 \
 	posix_spawnattr_setsigmask.3 posix_spawnattr_getsigmask.3 \
-	posix_spawnattr_setspecialport_np.3 posix_spawnattr_setexceptionports_np.3
+	posix_spawnattr_setspecialport_np.3 posix_spawnattr_setexceptionports_np.3 \
+	getiopolicy_np.3 setiopolicy_np.3
 
 INSTALL_MAN_DIR = man3
 

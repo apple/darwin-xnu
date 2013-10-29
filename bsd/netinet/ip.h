@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2012 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -234,7 +234,7 @@ struct	ip_timestamp {
  */
 #define	MAXTTL		255		/* maximum time to live (seconds) */
 #define	IPDEFTTL	64		/* default ttl, from RFC 1340 */
-#define	IPFRAGTTL	60		/* time to live for frags, slowhz */
+#define	IPFRAGTTL	30		/* time to live for frags (seconds) */
 #define	IPTTLDEC	1		/* subtracted when forwarding */
 
 #define	IP_MSS		576		/* default maximum segment size */

@@ -90,7 +90,7 @@ IOGetBootKeyStoreData(void)
   ranges.address = args->keyStoreDataStart;
   ranges.length = args->keyStoreDataSize;
 
-  options = kIODirectionInOut | kIOMemoryTypePhysical64;
+  options = kIODirectionInOut | kIOMemoryTypePhysical64 | kIOMemoryMapperNone;
   
   memoryDescriptor = IOMemoryDescriptor::withOptions(&ranges,
 						     1,

@@ -141,7 +141,7 @@ struct sockaddr_inarp {
 #define	RTF_USETRAILERS	RTF_PROTO1	/* use trailers */
 #define RTF_ANNOUNCE	RTF_PROTO2	/* announce new arp entry */
 
-#ifdef KERNEL_PRIVATE
+#ifdef BSD_KERNEL_PRIVATE
 extern u_char	ether_ipmulticast_min[ETHER_ADDR_LEN];
 extern u_char	ether_ipmulticast_max[ETHER_ADDR_LEN];
 extern struct	ifqueue arpintrq;
@@ -149,6 +149,6 @@ extern struct	ifqueue arpintrq;
 int	arpresolve(struct ifnet *, struct rtentry *, struct mbuf *,
 			struct sockaddr *, u_char *, struct rtentry *);
 void	arp_ifinit(struct ifnet *, struct ifaddr *);
-#endif /* KERNEL_PRIVATE */
+#endif /* BSD_KERNEL_PRIVATE */
 
 #endif /* _NETINET_IF_ETHER_H_ */

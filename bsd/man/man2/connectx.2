@@ -1,0 +1,288 @@
+.\" 
+.\" Copyright (c) 2012 Apple Inc. All rights reserved.
+.\" 
+.\" @APPLE_OSREFERENCE_LICENSE_HEADER_START@
+.\" 
+.\" This file contains Original Code and/or Modifications of Original Code
+.\" as defined in and that are subject to the Apple Public Source License
+.\" Version 2.0 (the 'License'). You may not use this file except in
+.\" compliance with the License. The rights granted to you under the License
+.\" may not be used to create, or enable the creation or redistribution of,
+.\" unlawful or unlicensed copies of an Apple operating system, or to
+.\" circumvent, violate, or enable the circumvention or violation of, any
+.\" terms of an Apple operating system software license agreement.
+.\" 
+.\" Please obtain a copy of the License at
+.\" http://www.opensource.apple.com/apsl/ and read it before using this file.
+.\" 
+.\" The Original Code and all software distributed under the License are
+.\" distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+.\" EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
+.\" INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
+.\" FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+.\" Please see the License for the specific language governing rights and
+.\" limitations under the License.
+.\" 
+.\" @APPLE_OSREFERENCE_LICENSE_HEADER_END@
+.\"
+.Dd November 14, 2012
+.Dt CONNECTX 2
+.Os Darwin
+.Sh NAME
+.Nm connectx
+.Nd initiate one or more connections on a socket
+.Sh SYNOPSIS
+.Fd #include <sys/socket.h>
+.Ft int
+.Fo connectx
+.Fa "int socket"
+.Fa "const struct sockaddr *saddress"
+.Fa "socklen_t saddress_len"
+.Fa "const struct sockaddr *daddress"
+.Fa "socklen_t daddress_len"
+.Fa "unsigned int ifscope"
+.Fa "associd_t associd"
+.Fa "connid_t *connid"
+.Fc
+.Sh DESCRIPTION
+The parameter
+.Fa socket
+is a socket.  The communication domain of the socket determines the
+availability and behavior of
+.Fn connectx .
+In general,
+.Fn connectx
+may be used as a substitute for cases when
+.Xr bind 2
+and
+.Xr connect 2
+are issued in succession.
+.Pp
+When the source address
+.Fa saddress
+parameter is specified,
+.Fn connectx
+binds the connection to one of the addresses, as if
+.Xr bind 2
+is used.  The length of
+.Fa saddress
+buffer is specified by
+.Fa saddress_len .
+This buffer may hold more than one addresses, where each successive address
+immediately follows the previous one.  The parameter
+.Fa ifscope
+may also be specified instead of
+.Fa saddress ,
+in order to bind the connection to the interface whose interface index
+equals to
+.Fa ifscope .
+Both
+.Fa saddress
+and
+.Fa ifscope
+parameters may be specified in order to add more constraints to the connection.
+.Pp
+At least one destination address must be specified in the
+.Fa daddress
+parameter.  The
+.Fa daddress_len
+specifies the length of that buffer.  When more than one addresses
+is specified, each successive address immediately follows the previous one.
+.Pp
+Each communications domain interprets the
+.Fa saddress
+and
+.Fa daddress
+parameters in its own way.  When multiple addresses are specified, one
+of the addresses will be chosen.  The rules used in selecting the
+address vary between communicaton domains.
+.Pp
+Changes related to the connection state may be monitored by registering for the
+.Dv NOTE_CONNINFO_UPDATED
+.Xr kqueue 2
+event, using the predefined system filter
+.Dv EVFILT_SOCK .
+Details regarding the event may be retrieved by calling
+.Xr getconninfo 3 .
+.Sh MULTIPATH
+On a multipath socket,
+.Fn connectx
+may be used multiple times, in order to establish the initial session
+association with the peer socket upon the first connection, and to further
+establish additional connections related to that assocication on subsequent
+ones.
+.Pp
+The parameter
+.Fa associd
+specifies the association identifier.  When
+.Fn connectx
+is initially called to establish an associtation, the association identifier
+is not yet known, and
+.Dv ASSOCID_ANY
+must be specified.  After the initial connection is established, the
+association identifier may be retrieved using
+.Xr getassocids 3 ,
+and the value may then be used on subsequent
+.Fn connectx
+calls.
+.Pp
+If the initial connection is established without any protocol-level
+multipath association, the error
+.Er EPROTO
+will be returned, and the connection can be extracted to a new socket with
+the same properties of
+.Fa socket ,
+by calling
+.Xr peeloff 2 .
+.Pp
+An association representing one or more connections, or a single connection
+may be dissolved by calling
+.Xr disconnectx 2 .
+.Sh NON-MULTIPATH
+On non-multipath socket,
+.Fn connectx
+behaves much like a combination of
+.Xr bind 2
+and
+.Xr connect 2 .
+The parameter
+.Fa associd
+must always be set to
+.Dv ASSOCID_ANY .
+.Pp
+Generally, non-multipath stream sockets may successfully
+.Fn connectx
+only once; datagram sockets may use
+.Fn connectx
+multiple times to change their association, after first dissolving the
+existing association by calling
+.Xr disconnectx 2 .
+.Sh RETURN VALUES
+Upon successful completion, a value of 0 is returned and the connection
+identifier is returned through the
+.Fa connid
+parameter.  If the initial connection establishes an association with
+a peer socket, the association identifier may be retrieved by calling
+.Xr getassocids 2 .
+Both of these identifiers are unique
+on a per
+.Fa socket
+basis.  Upon failure, a value of -1 is returned and the global integer
+variable
+.Va errno
+is set to indicate the error.
+.Sh ERRORS
+The
+.Fn connectx
+system call will fail if:
+.Bl -tag -width Er
+.\" ==========
+.It Bq Er EACCES
+The destination address is a broadcast address and the 
+socket option 
+.Dv SO_BROADCAST 
+is not set.
+.\" ==========
+.It Bq Er EADDRINUSE
+The address is already in use.
+.\" ==========
+.It Bq Er EADDRNOTAVAIL
+The specified address is not available on this machine.
+.\" ==========
+.It Bq Er EAFNOSUPPORT
+Addresses in the specified address family cannot be used with this socket.
+.\" ==========
+.It Bq Er EALREADY
+The socket is non-blocking
+and a previous connection attempt
+has not yet been completed.
+.\" ==========
+.It Bq Er EBADF
+.Fa socket
+is not a valid descriptor.
+.\" ==========
+.It Bq Er ECONNREFUSED
+The attempt to connect was ignored
+(because the target is not listening for connections)
+or explicitly rejected.
+.\" ==========
+.It Bq Er EFAULT
+The
+.Fa address
+parameter specifies an area outside
+the process address space.
+.\" ==========
+.It Bq Er EHOSTUNREACH
+The target host cannot be reached (e.g., down, disconnected).
+.\" ==========
+.It Bq Er EINPROGRESS
+The socket is non-blocking 
+and the connection cannot
+be completed immediately.
+It is possible to
+.Xr select 2
+for completion by selecting the socket for writing.
+.\" ==========
+.It Bq Er EINTR
+Its execution was interrupted by a signal.
+.\" ==========
+.It Bq Er EINVAL
+An invalid argument was detected
+(e.g.,
+.Fa address_len
+is not valid for the address family,
+the specified address family is invalid).
+.\" ==========
+.It Bq Er EISCONN
+The socket is already connected.
+.\" ==========
+.It Bq Er ENETDOWN
+The local network interface is not functioning.
+.\" ==========
+.It Bq Er ENETUNREACH
+The network isn't reachable from this host.
+.\" ==========
+.It Bq Er ENOBUFS
+The system call was unable to allocate a needed memory buffer.
+.\" ==========
+.It Bq Er ENOTSOCK
+.Fa socket
+is not a file descriptor for a socket.
+.\" ==========
+.It Bq Er EOPNOTSUPP
+Because
+.Fa socket
+is listening, no connection is allowed.
+.\" ==========
+.It Bq Er EPROTO
+The connection was successfully established without any protocol-level
+association.  The connection can be extracted to a new socket using
+.Xr peeloff 2 .
+.\" ==========
+.It Bq Er EPROTOTYPE
+.Fa address
+has a different type than the socket
+that is bound to the specified peer address.
+.\" ==========
+.It Bq Er ETIMEDOUT
+Connection establishment timed out without establishing a connection.
+.\" ==========
+.It Bq Er ECONNRESET
+Remote host reset the connection request.
+.Sh SEE ALSO
+.Xr accept 2 ,
+.Xr bind 2 ,
+.Xr connect 2 ,
+.Xr disconnectx 2 ,
+.Xr kqueue 2 ,
+.Xr peeloff 2 ,
+.Xr select 2 ,
+.Xr socket 2 ,
+.Xr getassocids 3 ,
+.Xr getconnids 3 ,
+.Xr getconninfo 3 ,
+.Xr compat 5
+.Sh HISTORY
+The
+.Fn connectx
+function call appeared in Darwin 13.0.0

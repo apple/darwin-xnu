@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2010 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2012 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -127,27 +127,24 @@
 #define	IFT_SMDSICIP	0x34		/* SMDS InterCarrier Interface */
 #define	IFT_PROPVIRTUAL	0x35		/* Proprietary Virtual/internal */
 #define	IFT_PROPMUX	0x36		/* Proprietary Multiplexing */
-#define	IFT_GIF		0x37		/*0xf0*/
-#define	IFT_FAITH	0x38		/*0xf2*/
-#define	IFT_STF		0x39		/*0xf3*/
-#define	IFT_L2VLAN	0x87		/* Layer 2 Virtual LAN using 802.1Q */
-#define IFT_IEEE8023ADLAG 0x88		/* IEEE802.3ad Link Aggregate */
-#define	IFT_IEEE1394	0x90		/* IEEE1394 High Performance SerialBus*/
-#define IFT_BRIDGE	0xd1		/* Transparent bridge interface */
-
 /*
- * These are not based on IANA assignments:
+ * IFT_GIF, IFT_FAITH and IFT_FAITH are not based on IANA assignments.
  * Note: IFT_STF has a defined ifType: 0xd7 (215), but we use 0x39.
  */
 #define	IFT_GIF		0x37		/*0xf0*/
 #define	IFT_FAITH	0x38		/*0xf2*/
 #define	IFT_STF		0x39		/*0xf3*/
 
+#define	IFT_L2VLAN	0x87		/* Layer 2 Virtual LAN using 802.1Q */
+#define IFT_IEEE8023ADLAG 0x88		/* IEEE802.3ad Link Aggregate */
+#define	IFT_IEEE1394	0x90		/* IEEE1394 High Performance SerialBus*/
+#define IFT_BRIDGE	0xd1		/* Transparent bridge interface */
+
 #define	IFT_ENC		0xf4		/* Encapsulation */
 #define	IFT_PFLOG	0xf5		/* Packet filter logging */
 #define	IFT_PFSYNC	0xf6		/* Packet filter state syncing */
 #define	IFT_CARP	0xf8		/* Common Address Redundancy Protocol */
-
+#define IFT_PKTAP	0xfe		/* Packet tap pseudo interface */
 #define	IFT_CELLULAR	0xff		/* Packet Data over Cellular */
 #define	IFT_PDP		IFT_CELLULAR	/* deprecated; use IFT_CELLULAR */
 

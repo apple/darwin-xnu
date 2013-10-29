@@ -201,7 +201,7 @@ extern int fasttrap_tracepoint_init(proc_t *, fasttrap_tracepoint_t *,
 extern int fasttrap_tracepoint_install(proc_t *, fasttrap_tracepoint_t *);
 extern int fasttrap_tracepoint_remove(proc_t *, fasttrap_tracepoint_t *);
 
-#if defined (__i386__) || defined(__x86_64__)
+#if defined(__x86_64__)
 extern int fasttrap_pid_probe(x86_saved_state_t *regs);
 extern int fasttrap_return_probe(x86_saved_state_t* regs);
 #else

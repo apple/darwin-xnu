@@ -56,7 +56,7 @@ typedef struct mk_timer		*mk_timer_t, mk_timer_data_t;
 void		mk_timer_port_destroy(
 				ipc_port_t				port);
 
-void		mk_timer_init(void) __attribute__((section("__TEXT, initcode")));
+void		mk_timer_init(void);
 
 #endif /* MACH_KERNEL_PRIVATE */
 

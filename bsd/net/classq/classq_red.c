@@ -97,9 +97,10 @@
 #include <sys/mbuf.h>
 #include <sys/socket.h>
 #include <sys/systm.h>
+#include <sys/syslog.h>
 #include <sys/errno.h>
 #include <sys/kauth.h>
-
+#include <dev/random/randomdev.h>
 #include <kern/zalloc.h>
 
 #include <net/if.h>
@@ -112,6 +113,7 @@
 #endif
 
 #include <net/classq/classq_red.h>
+#include <net/net_osdep.h>
 
 /*
  * ALTQ/RED (Random Early Detection) implementation using 32-bit
@@ -246,8 +248,15 @@ red_alloc(struct ifnet *ifp, int weight, int inv_pmax, int th_min,
 	else
 		rp->red_thmax = th_max;
 
-	rp->red_flags = (flags & REDF_USERFLAGS);
 	rp->red_ifp = ifp;
+	rp->red_flags = (flags & REDF_USERFLAGS);
+#if !PF_ECN
+	if (rp->red_flags & REDF_ECN) {
+		rp->red_flags &= ~REDF_ECN;
+		log(LOG_ERR, "%s: RED ECN not available; ignoring "
+		    "REDF_ECN flag!\n", if_name(ifp));
+	}
+#endif /* !PF_ECN */
 
 	if (pkttime == 0)
 		/* default packet time: 1000 bytes / 10Mbps * 8 * 1000000 */
@@ -326,6 +335,9 @@ red_getstats(red_t *rp, struct red_stats *sp)
 int
 red_addq(red_t *rp, class_queue_t *q, struct mbuf *m, struct pf_mtag *tag)
 {
+#if !PF_ECN
+#pragma unused(tag)
+#endif /* !PF_ECN */
 	int avg, droptype;
 	int n;
 
@@ -382,13 +394,16 @@ red_addq(red_t *rp, class_queue_t *q, struct mbuf *m, struct pf_mtag *tag)
 		} else if (drop_early((avg - rp->red_thmin_s) >> rp->red_wshift,
 		    rp->red_probd, rp->red_count)) {
 			/* mark or drop by red */
+#if PF_ECN
 			if ((rp->red_flags & REDF_ECN) &&
-			    (tag->pftag_flags & PF_TAG_TCP) &&	/* only TCP */
+			    (tag->pftag_proto == IPPROTO_TCP) && /* only TCP */
 			    mark_ecn(m, tag, rp->red_flags)) {
 				/* successfully marked.  do not drop. */
 				rp->red_count = 0;
 				rp->red_stats.marked_packets++;
-			} else {
+			} else
+#endif /* PF_ECN */
+			{
 				/* unforced drop by red */
 				droptype = DTYPE_EARLY;
 			}
@@ -458,7 +473,7 @@ drop_early(int fp_len, int fp_probd, int count)
 	 * drop probability = (avg - TH_MIN) / d
 	 */
 
-	if ((random() % d) < (unsigned)fp_len) {
+	if ((RandomULong() % d) < (unsigned)fp_len) {
 		/* drop or mark */
 		return (1);
 	}

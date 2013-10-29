@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2010 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2012 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -139,13 +139,7 @@ uint32_t pbtcnt = 0;
 
 volatile int panic_double_fault_cpu = -1;
 
-#if defined (__i386__)
-#define PRINT_ARGS_FROM_STACK_FRAME	1
-#elif defined (__x86_64__)
 #define PRINT_ARGS_FROM_STACK_FRAME	0
-#else
-#error unsupported architecture
-#endif
 
 typedef struct _cframe_t {
     struct _cframe_t	*prev;
@@ -370,11 +364,6 @@ efi_set_tables_64(EFI_SYSTEM_TABLE_64 * system_table)
 
         gPEEFISystemTable     = system_table;
 
-        if (!cpu_mode_is64bit()) {
-            kprintf("Skipping 64-bit EFI runtime services for 32-bit legacy mode\n");			
-            break;
-        }
-
         if(system_table->RuntimeServices == 0) {
             kprintf("No runtime table present\n");
             break;
@@ -447,11 +436,7 @@ efi_set_tables_32(EFI_SYSTEM_TABLE_32 * system_table)
         // 32-bit virtual address is OK for 32-bit EFI and 32-bit kernel.
         // For a 64-bit kernel, booter provides a virtual address mod 4G
         runtime = (EFI_RUNTIME_SERVICES_32 *)
-#ifdef __x86_64__
 			(system_table->RuntimeServices | VM_MIN_KERNEL_ADDRESS);
-#else
-			system_table->RuntimeServices;
-#endif
 	DPRINTF("Runtime table addressed at %p\n", runtime);
         if (runtime->Hdr.Signature != EFI_RUNTIME_SERVICES_SIGNATURE) {
             kprintf("Bad EFI runtime table signature\n");
@@ -524,11 +509,9 @@ efi_init(void)
 	    if (((mptr->Attribute & EFI_MEMORY_RUNTIME) == EFI_MEMORY_RUNTIME) ) {
 		vm_size = (vm_offset_t)i386_ptob((uint32_t)mptr->NumberOfPages);
 		vm_addr =   (vm_offset_t) mptr->VirtualStart;
-#ifdef __x86_64__
 		/* For K64 on EFI32, shadow-map into high KVA */
 		if (vm_addr < VM_MIN_KERNEL_ADDRESS)
 			vm_addr |= VM_MIN_KERNEL_ADDRESS;
-#endif
 		phys_addr = (vm_map_offset_t) mptr->PhysicalStart;
 		DPRINTF(" Type: %x phys: %p EFIv: %p kv: %p size: %p\n",
 			mptr->Type,
@@ -592,11 +575,9 @@ hibernate_newruntime_map(void * map, vm_size_t map_size, uint32_t system_table_o
 
 		vm_size = (vm_offset_t)i386_ptob((uint32_t)mptr->NumberOfPages);
 		vm_addr =   (vm_offset_t) mptr->VirtualStart;
-#ifdef __x86_64__
 		/* K64 on EFI32 */
 		if (vm_addr < VM_MIN_KERNEL_ADDRESS)
 			vm_addr |= VM_MIN_KERNEL_ADDRESS;
-#endif
 		phys_addr = (vm_map_offset_t) mptr->PhysicalStart;
 
 		kprintf("mapping[%u] %qx @ %lx, %llu\n", mptr->Type, phys_addr, (unsigned long)vm_addr, mptr->NumberOfPages);
@@ -615,10 +596,8 @@ hibernate_newruntime_map(void * map, vm_size_t map_size, uint32_t system_table_o
 
 		vm_size = (vm_offset_t)i386_ptob((uint32_t)mptr->NumberOfPages);
 		vm_addr =   (vm_offset_t) mptr->VirtualStart;
-#ifdef __x86_64__
 		if (vm_addr < VM_MIN_KERNEL_ADDRESS)
 			vm_addr |= VM_MIN_KERNEL_ADDRESS;
-#endif
 		phys_addr = (vm_map_offset_t) mptr->PhysicalStart;
 
 		kprintf("mapping[%u] %qx @ %lx, %llu\n", mptr->Type, phys_addr, (unsigned long)vm_addr, mptr->NumberOfPages);
@@ -652,10 +631,8 @@ hibernate_newruntime_map(void * map, vm_size_t map_size, uint32_t system_table_o
 void
 machine_init(void)
 {
-#if __x86_64__
 	/* Now with VM up, switch to dynamically allocated cpu data */
 	cpu_data_realloc();
-#endif
 
         /* Ensure panic buffer is initialized. */
         debug_log_init();
@@ -819,11 +796,7 @@ Debugger(
 		panic_io_port_read();
 
 		/* Obtain current frame pointer */
-#if defined (__i386__)
-		__asm__ volatile("movl %%ebp, %0" : "=m" (stackptr));
-#elif defined (__x86_64__)
 		__asm__ volatile("movq %%rbp, %0" : "=m" (stackptr));
-#endif
 
 		/* Print backtrace - callee is internally synchronized */
 		panic_i386_backtrace(stackptr, ((panic_double_fault_cpu == cn) ? 80: 48), NULL, FALSE, NULL);
@@ -1053,7 +1026,7 @@ panic_i386_backtrace(void *_frame, int nframes, const char *msg, boolean_t regdu
 		/* Spin on print backtrace lock, which serializes output
 		 * Continue anyway if a timeout occurs.
 		 */
-		hw_lock_to(&pbtlock, LockTimeOutTSC*2);
+		hw_lock_to(&pbtlock, ~0U);
 		pbtcpu = cn;
 	}
 
@@ -1064,7 +1037,6 @@ panic_i386_backtrace(void *_frame, int nframes, const char *msg, boolean_t regdu
 	}
 
 	if ((regdump == TRUE) && (regs != NULL)) {
-#if defined(__x86_64__)
 		x86_saved_state64_t	*ss64p = saved_state64(regs);
 		kdb_printf(
 		    "RAX: 0x%016llx, RBX: 0x%016llx, RCX: 0x%016llx, RDX: 0x%016llx\n"
@@ -1079,17 +1051,6 @@ panic_i386_backtrace(void *_frame, int nframes, const char *msg, boolean_t regdu
 		    ss64p->isf.rflags, ss64p->isf.rip, ss64p->isf.cs,
 		    ss64p->isf.ss);
 		PC = ss64p->isf.rip;
-#else
-		x86_saved_state32_t	*ss32p = saved_state32(regs);
-		kdb_printf(
-		    "EAX: 0x%08x, EBX: 0x%08x, ECX: 0x%08x, EDX: 0x%08x\n"
-		    "CR2: 0x%08x, EBP: 0x%08x, ESI: 0x%08x, EDI: 0x%08x\n"
-		    "EFL: 0x%08x, EIP: 0x%08x, CS:  0x%08x, DS:  0x%08x\n",
-		    ss32p->eax,ss32p->ebx,ss32p->ecx,ss32p->edx,
-		    ss32p->cr2,ss32p->ebp,ss32p->esi,ss32p->edi,
-		    ss32p->efl,ss32p->eip,ss32p->cs, ss32p->ds);
-		PC = ss32p->eip;
-#endif
 	}
 
 	kdb_printf("Backtrace (CPU %d), "

@@ -174,7 +174,7 @@ routine vm_inherit(
  *	and must be a multiple of pages in extent.  The
  *	protection on the specified range must permit reading.]
  */
-routine vm_read(
+routine PREFIX(vm_read) (
 		target_task	: vm_map_t;
 		address		: vm_address_t;
 		size		: vm_size_t;
@@ -283,7 +283,7 @@ routine vm_behavior_set(
  *	The user-defined memory manager for this object is responsible
  *	for further consistency.]
  */
-routine vm_map(
+routine PREFIX(vm_map) (
 		target_task	: vm_task_entry_t;
 	inout	address		: vm_address_t;
 		size		: vm_size_t;
@@ -311,7 +311,7 @@ routine vm_machine_attribute(
 /*
  *      Map portion of a task's address space.
  */
-routine vm_remap(
+routine PREFIX(vm_remap) (
 		target_task	: vm_map_t;
 	inout	target_address	: vm_address_t;
 		size		: vm_size_t;

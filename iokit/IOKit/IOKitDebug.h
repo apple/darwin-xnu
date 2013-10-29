@@ -78,11 +78,15 @@ enum {
     kIOLogDriverPower1  =         0x01000000ULL,
     kIOLogDriverPower2  =         0x02000000ULL,
     kIOStatistics       =         0x04000000ULL,
+    kIOPersistentLog    =         0x08000000ULL,
+    kIOSleepWakeWdogOff =         0x40000000ULL,
+    kIOAppRespStacksOn  =         0x80000000ULL,
 
     // debug aids - change behaviour
     kIONoFreeObjects    =         0x00100000ULL,
     kIOLogSynchronous   =         0x00200000ULL,  // IOLog completes synchronously
     kOSTraceObjectAlloc =         0x00400000ULL,
+    kIOWaitQuietPanics  =         0x00800000ULL,
 
     _kIODebugTopFlag    = 0x8000000000000000ULL   // force enum to be 64 bits
 };

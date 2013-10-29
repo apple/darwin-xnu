@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2005 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2012 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -72,7 +72,6 @@ int pcsamples_reinit(void);
 int
 enable_branch_tracing(void)
 {
-#ifndef i386
   struct proc *p;
   if (-1 != pc_sample_pid) {
     p = proc_find(pc_sample_pid);
@@ -87,9 +86,6 @@ enable_branch_tracing(void)
 
   return 1;
 
-#else
-    return 0;
-#endif
 }
 
 int

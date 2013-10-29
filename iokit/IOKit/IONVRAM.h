@@ -1,5 +1,6 @@
 /*
- * Copyright (c) 1998-2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 1998-2006 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2007-2012 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -93,6 +94,7 @@ private:
   bool              _systemPaniced;
   SInt32            _lastDeviceSync;
   bool              _freshInterval;
+  bool              _isProxied;
   
   virtual UInt8 calculatePartitionChecksum(UInt8 *partitionHeader);
   virtual IOReturn initOFVariables(void);
@@ -131,6 +133,9 @@ private:
   virtual IOReturn writeNVRAMPropertyType1(IORegistryEntry *entry,
 					   const OSSymbol *name,
 					   OSData *value);
+  
+  void initNVRAMImage(void);
+  void initProxyData(void);
   
 public:
   virtual bool init(IORegistryEntry *old, const IORegistryPlane *plane);

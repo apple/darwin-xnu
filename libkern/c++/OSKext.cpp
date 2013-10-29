@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008-2009 Apple Inc. All rights reserved.
+ * Copyright (c) 2008-2012 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -45,6 +45,11 @@ extern "C" {
 #include <uuid/uuid.h>
 // 04/18/11 - gab: <rdar://problem/9236163>
 #include <sys/random.h>
+
+#if CONFIG_MACF
+#include <sys/kauth.h>
+#include <security/mac_framework.h>
+#endif
 };
 
 #include <libkern/OSKextLibPrivate.h>
@@ -226,6 +231,7 @@ static  bool                sKeepSymbols               = false;
 static IORecursiveLock    * sKextLock                  = NULL;
 
 static OSDictionary       * sKextsByID                 = NULL;
+static OSDictionary       * sExcludeListByID           = NULL;
 static OSArray            * sLoadedKexts               = NULL;
 static OSArray            * sUnloadedPrelinkedKexts    = NULL;
 
@@ -343,11 +349,16 @@ static AbsoluteTime         sLastWakeTime;                       // last time we
 *
 * gLoadedKextSummaries is accessed by other modules, but only during
 * a panic so the lock isn't needed then.
+*
+* gLoadedKextSummaries has the "used" attribute in order to ensure
+* that it remains visible even when we are performing extremely
+* aggressive optimizations, as it is needed to allow the debugger
+* to automatically parse the list of loaded kexts.
 **********/
 static IOLock                 * sKextSummariesLock                = NULL;
 
 void (*sLoadedKextSummariesUpdated)(void) = OSKextLoadedKextSummariesUpdated;
-OSKextLoadedKextSummaryHeader * gLoadedKextSummaries = NULL;
+OSKextLoadedKextSummaryHeader * gLoadedKextSummaries __attribute__((used)) = NULL;
 static size_t sLoadedKextSummariesAllocSize = 0;
 OSKextLoadedKextSummaryHeader * sPrevLoadedKextSummaries = NULL;
 static size_t sPrevLoadedKextSummariesAllocSize = 0;
@@ -362,7 +373,7 @@ static  const OSKextLogSpec kDefaultKernelLogFilter    = kOSKextLogBasicLevel |
                                                          kOSKextLogVerboseFlagsMask;
 static  OSKextLogSpec       sKernelLogFilter           = kDefaultKernelLogFilter;
 static  bool                sBootArgLogFilterFound     = false;
-SYSCTL_INT(_debug, OID_AUTO, kextlog, CTLFLAG_RW | CTLFLAG_LOCKED, &sKernelLogFilter,
+SYSCTL_UINT(_debug, OID_AUTO, kextlog, CTLFLAG_RW | CTLFLAG_LOCKED, &sKernelLogFilter,
     sKernelLogFilter, "kernel kext logging");
 
 static  OSKextLogSpec       sUserSpaceKextLogFilter    = kOSKextLogSilentFilter;
@@ -444,7 +455,6 @@ kern_allocate(
         goto finish;
     }
     linkBuffer->setDeallocFunction(osdata_kext_free);
-
     OSKextLog(theKext,
         kOSKextLogProgressLevel |
         kOSKextLogLoadFlag | kOSKextLogLinkFlag,
@@ -1474,7 +1484,6 @@ OSKext::initWithPrelinkedInfoDict(
         prelinkedExecutable->setDeallocFunction(osdata_phys_free);
 #endif
         setLinkedExecutable(prelinkedExecutable);
-
         addressNum = OSDynamicCast(OSNumber,
             anInfoDict->getObject(kPrelinkKmodInfoKey));
         if (!addressNum) {
@@ -2041,6 +2050,15 @@ OSKext::setInfoDictionaryAndPath(
                 kCFBundleVersionKey,  versionCString);
             goto finish;
         }
+    }
+    
+    /* Check to see if this kext is in exclude list */
+    if ( isInExcludeList() ) {
+        OSKextLog(this,
+                  kOSKextLogErrorLevel | kOSKextLogGeneralFlag,
+                  "Kext %s is in exclude list, not loadable",
+                  getIdentifierCString());
+        goto finish;
     }
 
    /* Set flags for later use if the infoDict gets flushed. We only
@@ -3393,7 +3411,7 @@ OSKext::serializeLogInfo(
         logInfo = serializer->text();
         logInfoLength = serializer->getLength();
 
-        kmem_result = kmem_alloc(kernel_map, (vm_offset_t *)&buffer, logInfoLength);
+        kmem_result = kmem_alloc(kernel_map, (vm_offset_t *)&buffer, round_page(logInfoLength));
         if (kmem_result != KERN_SUCCESS) {
             OSKextLog(/* kext */ NULL,
                 kOSKextLogErrorLevel |
@@ -3402,6 +3420,9 @@ OSKext::serializeLogInfo(
            /* Incidental error; we're going to (try to) allow the request
             * to succeed. */
         } else {
+            /* 11981737 - clear uninitialized data in last page */
+            bzero((void *)(buffer + logInfoLength),
+                  (round_page(logInfoLength) - logInfoLength));
             memcpy(buffer, logInfo, logInfoLength);
             *logInfoOut = buffer;
             *logInfoLengthOut = logInfoLength;
@@ -3533,6 +3554,10 @@ OSKext::removeKext(
  {
     OSReturn result    = kOSKextReturnInUse;
     OSKext * checkKext = NULL;   // do not release
+#if CONFIG_MACF
+    int macCheckResult = 0;
+    kauth_cred_t cred  = NULL;
+#endif
 
     IORecursiveLockLock(sKextLock);
 
@@ -3552,6 +3577,23 @@ OSKext::removeKext(
     }
 
     if (aKext->isLoaded()) {
+#if CONFIG_MACF
+        if (current_task() != kernel_task) {
+            cred = kauth_cred_get_with_ref();
+            macCheckResult = mac_kext_check_unload(cred, aKext->getIdentifierCString());
+            kauth_cred_unref(&cred);
+        }
+
+        if (macCheckResult != 0) {
+            result = kOSReturnError;
+            OSKextLog(aKext,
+                kOSKextLogErrorLevel |
+                kOSKextLogKextBookkeepingFlag,
+                "Failed to remove kext %s (MAC policy error 0x%x).",
+                aKext->getIdentifierCString(), macCheckResult);
+            goto finish;
+        }
+#endif
 
        /* If we are terminating, send the request to the IOCatalogue
         * (which will actually call us right back but that's ok we have
@@ -3689,7 +3731,172 @@ OSKext::copyKexts(void)
 
     return result;
 }
- 
+
+/*********************************************************************
+ *********************************************************************/
+#define BOOTER_KEXT_PREFIX   "Driver-"
+
+typedef struct _DeviceTreeBuffer {
+    uint32_t paddr;
+    uint32_t length;
+} _DeviceTreeBuffer;
+
+/*********************************************************************
+ * Create a dictionary of excluded kexts from the given booter data.
+ *********************************************************************/
+/* static */
+void
+OSKext::createExcludeListFromBooterData(
+                                        OSDictionary *          theDictionary,
+                                        OSCollectionIterator *  theIterator )
+{
+    OSString                  * deviceTreeName      = NULL;  // do not release
+    const _DeviceTreeBuffer   * deviceTreeBuffer    = NULL;  // do not release
+    char                      * booterDataPtr       = NULL;  // do not release
+    _BooterKextFileInfo       * kextFileInfo        = NULL;  // do not release
+    char                      * infoDictAddr        = NULL;  // do not release
+    OSObject                  * parsedXML           = NULL;  // must release
+    OSDictionary              * theInfoDict         = NULL;  // do not release
+    
+    theIterator->reset();
+    
+    /* look for AppleKextExcludeList.kext */
+    while ( (deviceTreeName =
+             OSDynamicCast(OSString, theIterator->getNextObject())) ) {
+        
+        const char *    devTreeNameCString;
+        OSData *        deviceTreeEntry;
+        OSString *      myBundleID;    // do not release
+        
+        OSSafeReleaseNULL(parsedXML);
+        
+        deviceTreeEntry = 
+        OSDynamicCast(OSData, theDictionary->getObject(deviceTreeName));
+        if (!deviceTreeEntry) {
+            continue;
+        }
+        
+        /* Make sure it is a kext */
+        devTreeNameCString = deviceTreeName->getCStringNoCopy();
+        if (strncmp(devTreeNameCString, BOOTER_KEXT_PREFIX,
+                    (sizeof(BOOTER_KEXT_PREFIX) - 1)) != 0) {
+            OSKextLog(NULL,
+                      kOSKextLogErrorLevel | kOSKextLogGeneralFlag, 
+                      "\"%s\" not a kext",
+                      devTreeNameCString);
+            continue;
+        }
+        
+        deviceTreeBuffer = (const _DeviceTreeBuffer *)
+        deviceTreeEntry->getBytesNoCopy(0, sizeof(deviceTreeBuffer));
+        if (!deviceTreeBuffer) {
+            continue;
+        }
+        
+        booterDataPtr = (char *)ml_static_ptovirt(deviceTreeBuffer->paddr);
+        if (!booterDataPtr) {
+            continue;
+        }
+        
+        kextFileInfo = (_BooterKextFileInfo *) booterDataPtr;
+        if (!kextFileInfo->infoDictPhysAddr || 
+            !kextFileInfo->infoDictLength)       {
+            continue;
+        }
+        
+        infoDictAddr = (char *)
+        ml_static_ptovirt(kextFileInfo->infoDictPhysAddr);
+        if (!infoDictAddr) {
+            continue;
+        }
+        
+        parsedXML = OSUnserializeXML(infoDictAddr);
+        if (!parsedXML) {
+            continue;
+        }
+        
+        theInfoDict = OSDynamicCast(OSDictionary, parsedXML);
+        if (!theInfoDict) {
+            continue;
+        }
+        
+        myBundleID = 
+        OSDynamicCast(OSString, 
+                      theInfoDict->getObject(kCFBundleIdentifierKey));
+        if ( myBundleID && 
+            strcmp( myBundleID->getCStringNoCopy(), "com.apple.driver.KextExcludeList" ) == 0 ) {
+            
+            /* get copy of exclusion list dictionary */
+            OSDictionary *      myTempDict;     // do not free
+            
+            myTempDict = OSDynamicCast(
+                                       OSDictionary,
+                                       theInfoDict->getObject("OSKextExcludeList"));
+            if ( myTempDict ) {
+                IORecursiveLockLock(sKextLock);
+                
+                /* get rid of old exclusion list */
+                if (sExcludeListByID) {
+                    sExcludeListByID->flushCollection();
+                    OSSafeRelease(sExcludeListByID);
+                }
+                sExcludeListByID = OSDictionary::withDictionary(myTempDict, 0);
+                IORecursiveLockUnlock(sKextLock);
+            }
+            break;
+        }
+        
+    } // while ( (deviceTreeName = ...) )
+    
+    OSSafeReleaseNULL(parsedXML);
+    return;
+}
+
+/*********************************************************************
+ * Create a dictionary of excluded kexts from the given prelink 
+ * info (kernelcache).
+ *********************************************************************/
+/* static */
+void
+OSKext::createExcludeListFromPrelinkInfo( OSArray * theInfoArray )
+{
+    OSDictionary *  myInfoDict = NULL;  // do not release
+    OSString *      myBundleID;         // do not release
+    u_int           i;
+    
+    /* Find com.apple.driver.KextExcludeList. */
+    for (i = 0; i < theInfoArray->getCount(); i++) {
+        myInfoDict = OSDynamicCast(OSDictionary, theInfoArray->getObject(i));
+        if (!myInfoDict) {
+            continue;
+        }
+        myBundleID = 
+        OSDynamicCast(OSString, 
+                      myInfoDict->getObject(kCFBundleIdentifierKey));
+        if ( myBundleID && 
+            strcmp( myBundleID->getCStringNoCopy(), "com.apple.driver.KextExcludeList" ) == 0 ) {
+            // get copy of exclude list dictionary
+            OSDictionary *      myTempDict;     // do not free
+            myTempDict = OSDynamicCast(OSDictionary,
+                                       myInfoDict->getObject("OSKextExcludeList"));
+            if ( myTempDict ) {
+                IORecursiveLockLock(sKextLock);
+                // get rid of old exclude list
+                if (sExcludeListByID) {
+                    sExcludeListByID->flushCollection();
+                    OSSafeRelease(sExcludeListByID);
+                }
+                
+                sExcludeListByID = OSDictionary::withDictionary(myTempDict, 0);
+                IORecursiveLockUnlock(sKextLock);
+            }
+            break;
+        }
+    } // for (i = 0; i < theInfoArray->getCount()...
+    
+    return;
+}
+
 #if PRAGMA_MARK
 #pragma mark Accessors
 #endif
@@ -4012,9 +4219,7 @@ finish:
 /*********************************************************************
 *********************************************************************/
 
-#if defined (__i386__)
-#define ARCHNAME "i386"
-#elif defined (__x86_64__)
+#if   defined (__x86_64__)
 #define ARCHNAME "x86_64"
 #else
 #error architecture not supported
@@ -4088,6 +4293,112 @@ finish:
 #if PRAGMA_MARK
 #pragma mark Load/Start/Stop/Unload
 #endif
+
+#define isWhiteSpace(c)	((c) == ' ' || (c) == '\t' || (c) == '\r' || (c) == ',' || (c) == '\n')
+
+/*********************************************************************
+ * sExcludeListByID is a dictionary with keys / values of:
+ *  key = bundleID string of kext we will not allow to load
+ *  value = version string(s) of the kext that is to be denied loading.
+ *      The version strings can be comma delimited.  For example if kext
+ *      com.foocompany.fookext has two versions that we want to deny
+ *      loading then the version strings might look like:
+ *      1.0.0, 1.0.1
+ *      If the current fookext has a version of 1.0.0 OR 1.0.1 we will
+ *      not load the kext.
+ *
+ *      Value may also be in the form of "LE 2.0.0" (version numbers
+ *      less than or equal to 2.0.0 will not load) or "LT 2.0.0" (version 
+ *      number less than 2.0.0 will not load)
+ *
+ *      NOTE - we cannot use the characters "<=" or "<" because we have code 
+ *      that serializes plists and treats '<' as a special character.
+ *********************************************************************/
+bool 
+OSKext::isInExcludeList(void)
+{
+    OSString *      versionString           = NULL;  // do not release
+    char *          versionCString          = NULL;  // do not free
+    size_t          i;
+    boolean_t       wantLessThan = false;
+    boolean_t       wantLessThanEqualTo = false;
+    char            myBuffer[32];
+    
+    if (!sExcludeListByID) {
+        return(false);
+    }
+    /* look up by bundleID in our exclude list and if found get version
+     * string (or strings) that we will not allow to load
+     */
+    versionString = OSDynamicCast(OSString, sExcludeListByID->getObject(bundleID));
+    if (!versionString) {
+        return(false);
+    }
+    
+    /* parse version strings */
+    versionCString = (char *) versionString->getCStringNoCopy();
+    
+    /* look for "LT" or "LE" form of version string, must be in first two
+     * positions.
+     */
+    if (*versionCString == 'L' && *(versionCString + 1) == 'T') {
+        wantLessThan = true;
+        versionCString +=2; 
+    }
+    else if (*versionCString == 'L' && *(versionCString + 1) == 'E') {
+        wantLessThanEqualTo = true;
+        versionCString +=2;
+    }
+
+    for (i = 0; *versionCString != 0x00; versionCString++) {
+        /* skip whitespace */
+        if (isWhiteSpace(*versionCString)) {
+            continue;
+        }
+        
+        /* peek ahead for version string separator or null terminator */
+        if (*(versionCString + 1) == ',' || *(versionCString + 1) == 0x00) {
+            
+            /* OK, we have a version string */
+            myBuffer[i++] = *versionCString;
+            myBuffer[i] = 0x00;
+
+            OSKextVersion excludeVers;
+            excludeVers = OSKextParseVersionString(myBuffer);
+                
+            if (wantLessThanEqualTo) {
+                if (version <= excludeVers) {
+                    return(true);
+                }
+            }
+            else if (wantLessThan) {
+                if (version < excludeVers) {
+                    return(true);
+                }
+            }
+            else if ( version == excludeVers )  {
+                return(true);
+            }
+            
+            /* reset for the next (if any) version string */
+            i = 0;
+            wantLessThan = false;
+            wantLessThanEqualTo = false;
+        }
+        else {
+            /* save valid version character */
+            myBuffer[i++] = *versionCString;
+            
+            /* make sure bogus version string doesn't overrun local buffer */
+            if ( i >= sizeof(myBuffer) ) {
+                break;
+            }
+        }
+    }
+    
+    return(false);
+} 
+
 /*********************************************************************
 *********************************************************************/
 /* static */
@@ -4133,6 +4444,10 @@ OSKext::loadKextWithIdentifier(
     OSKext          * theKext              = NULL;  // do not release
     OSDictionary    * loadRequest          = NULL;  // must release
     const OSSymbol  * kextIdentifierSymbol = NULL;  // must release
+#if CONFIG_MACF
+    int               macCheckResult       = 0;
+    kauth_cred_t      cred                 = NULL;
+#endif
 
     IORecursiveLockLock(sKextLock);
 
@@ -4209,6 +4524,26 @@ OSKext::loadKextWithIdentifier(
         result = kOSKextReturnDeferred;
         goto finish;
     }
+
+#if CONFIG_MACF
+    if (current_task() != kernel_task) {
+        cred = kauth_cred_get_with_ref();
+        macCheckResult = mac_kext_check_load(cred, kextIdentifier->getCStringNoCopy());
+        kauth_cred_unref(&cred);
+    }
+
+    if (macCheckResult != 0) {
+        result = kOSReturnError;
+
+        OSKextLog(theKext,
+            kOSKextLogErrorLevel |
+            kOSKextLogLoadFlag,
+            "Failed to load kext %s (MAC policy error 0x%x).",
+            kextIdentifier->getCStringNoCopy(), macCheckResult);
+
+        goto finish;
+    }
+#endif
 
     result = theKext->load(startOpt, startMatchingOpt, personalityNames);
 
@@ -4304,6 +4639,17 @@ OSKext::load(
     unsigned int         i, count;
     Boolean              alreadyLoaded                = false;
     OSKext             * lastLoadedKext               = NULL;
+
+    if (isInExcludeList()) {
+        OSKextLog(this,
+                  kOSKextLogErrorLevel | kOSKextLogGeneralFlag |
+                  kOSKextLogLoadFlag,
+                  "Kext %s is in exclude list, not loadable",
+                  getIdentifierCString());
+        
+        result = kOSKextReturnNotLoadable;
+        goto finish;
+    }
 
     if (isLoaded()) {
         alreadyLoaded = true;
@@ -4615,6 +4961,9 @@ OSKext::slidePrelinkedExecutable()
     mh = (kernel_mach_header_t *)linkedExecutable->getBytesNoCopy();
 
     for (seg = firstsegfromheader(mh); seg != NULL; seg = nextsegfromheader(mh, seg)) {
+        if (!seg->vmaddr) {
+            continue;
+        }
         seg->vmaddr += vm_kernel_slide;
                 
 #if KASLR_KEXT_DEBUG
@@ -4712,9 +5061,6 @@ OSKext::slidePrelinkedExecutable()
                 if (   reloc[i].r_extern != 0
                     || reloc[i].r_type != 0
                     || reloc[i].r_length != (sizeof(void *) == 8 ? 3 : 2)
-#if __i386__
-                    || (reloc[i].r_address & R_SCATTERED)
-#endif
                     ) {
                     OSKextLog(this,
                         kOSKextLogErrorLevel | kOSKextLogLoadFlag |
@@ -4779,6 +5125,11 @@ OSKext::slidePrelinkedExecutable()
                     /* Fix up kmod info and linkedExecutable.
                      */
                     kmod_info->size = new_kextsize;
+#if VM_MAPPED_KEXTS
+                    new_osdata->setDeallocFunction(osdata_kext_free);
+#else
+                    new_osdata->setDeallocFunction(osdata_phys_free);
+#endif
                     linkedExecutable->setDeallocFunction(NULL);
                     linkedExecutable->release();
                     linkedExecutable = new_osdata;
@@ -5200,6 +5551,12 @@ OSKext::jettisonLinkeditSegment(void)
    /* Fix the kmod info and linkedExecutable.
     */
     kmod_info->size = kextsize;
+        
+#if VM_MAPPED_KEXTS
+    data->setDeallocFunction(osdata_kext_free);
+#else
+    data->setDeallocFunction(osdata_phys_free);
+#endif
     linkedExecutable->setDeallocFunction(NULL);
     linkedExecutable->release();
     linkedExecutable = data;
@@ -7377,14 +7734,16 @@ OSKext::handleRequest(
         kOSKextLogIPCFlag,
         "Received '%s' request from user space.",
         predicate->getCStringNoCopy());
-    
+      
     result = kOSKextReturnNotPrivileged;
     if (hostPriv == HOST_PRIV_NULL) {
         if (sPrelinkBoot) {
             hideTheSlide = true;
-            
             /* must be root to use these kext requests */
-            if (predicate->isEqualTo(kKextRequestPredicateGetKernelLoadAddress) ) {
+            if (predicate->isEqualTo(kKextRequestPredicateGetKernelLoadAddress) ||
+                predicate->isEqualTo(kKextRequestPredicateUnload) ||
+                predicate->isEqualTo(kKextRequestPredicateStart) ||
+                predicate->isEqualTo(kKextRequestPredicateStop) ) {
                 OSKextLog(/* kext */ NULL,
                           kOSKextLogErrorLevel |
                           kOSKextLogIPCFlag,
@@ -7516,9 +7875,10 @@ OSKext::handleRequest(
                 "Returning loaded kext info.");
             result = kOSReturnSuccess;
         }
-
+#if !SECURE_KERNEL
     } else if (predicate->isEqualTo(kKextRequestPredicateGetKernelLoadAddress)) {
         OSNumber * addressNum = NULL;  // released as responseObject
+        unsigned long long unslid_addr = 0;
         kernel_segment_command_t * textseg = getsegbyname("__TEXT");
 
         if (!textseg) {
@@ -7530,17 +7890,19 @@ OSKext::handleRequest(
             goto finish;
         }
 
+        unslid_addr = VM_KERNEL_UNSLIDE(textseg->vmaddr);
+
         OSKextLog(/* kext */ NULL,
             kOSKextLogDebugLevel |
             kOSKextLogIPCFlag,
             "Returning kernel load address 0x%llx.",
-            (unsigned long long) textseg->vmaddr );
+            (unsigned long long) unslid_addr);
         
-        addressNum = OSNumber::withNumber((long long unsigned int)textseg->vmaddr,
+        addressNum = OSNumber::withNumber((long long unsigned int) unslid_addr,
             8 * sizeof(long long unsigned int));
         responseObject = addressNum;
         result = kOSReturnSuccess;
-
+#endif
     } else if (predicate->isEqualTo(kKextRequestPredicateGetKernelRequests)) {
 
        /* Hand the current sKernelRequests array to the caller
@@ -7565,6 +7927,14 @@ OSKext::handleRequest(
             kOSKextLogIPCFlag,
             "Returning load requests.");
         result = kOSReturnSuccess;
+    }
+    else {
+        OSKextLog(/* kext */ NULL,
+                  kOSKextLogDebugLevel |
+                  kOSKextLogIPCFlag,
+                  "Received '%s' invalid request from user space.",
+                  predicate->getCStringNoCopy());
+        goto finish;
     }
 
    /**********
@@ -7621,7 +7991,7 @@ OSKext::handleRequest(
        /* This kmem_alloc sets the return value of the function.
         */
         kmem_result = kmem_alloc(kernel_map, (vm_offset_t *)&buffer,
-            responseLength);
+            round_page(responseLength));
         if (kmem_result != KERN_SUCCESS) {
             OSKextLog(/* kext */ NULL,
                 kOSKextLogErrorLevel |
@@ -7630,6 +8000,9 @@ OSKext::handleRequest(
             result = kmem_result;
             goto finish;
         } else {
+            /* 11981737 - clear uninitialized data in last page */
+            bzero((void *)(buffer + responseLength),
+                  (round_page(responseLength) - responseLength));
             memcpy(buffer, response, responseLength);
             *responseOut = buffer;
             *responseLengthOut = responseLength;
@@ -7844,11 +8217,11 @@ OSKext::copyInfo(OSArray * infoKeys)
                                   segp->vmsize, segp->nsects);
 #endif
                         segp->vmaddr = VM_KERNEL_UNSLIDE(segp->vmaddr);
-
+                        
                         for (secp = firstsect(segp); secp != NULL; secp = nextsect(segp, secp)) {
                             secp->addr = VM_KERNEL_UNSLIDE(secp->addr);
                         }
-                    }
+                   }
                     lcp = (struct load_command *)((caddr_t)lcp + lcp->cmdsize);
                 }
                 result->setObject(kOSBundleMachOHeadersKey, headerData);
@@ -10305,6 +10678,8 @@ OSKext::updateLoadedKextSummaries(void)
 
         start = (vm_map_offset_t) summaryHeader;
         end = start + summarySize;
+        result = vm_map_protect(kernel_map, start, end, VM_PROT_DEFAULT, FALSE);
+        if (result != KERN_SUCCESS) goto finish;
     }
 
    /* Populate the summary header.
@@ -10331,6 +10706,8 @@ OSKext::updateLoadedKextSummaries(void)
 
     start = (vm_map_offset_t) summaryHeader;
     end = start + summarySize;
+    result = vm_map_protect(kernel_map, start, end, VM_PROT_READ, FALSE);
+    if (result != KERN_SUCCESS) goto finish;
 
     sPrevLoadedKextSummaries = gLoadedKextSummaries;
     sPrevLoadedKextSummariesAllocSize = sLoadedKextSummariesAllocSize;
@@ -10386,108 +10763,6 @@ OSKext::updateLoadedKextSummary(OSKextLoadedKextSummary *summary)
 
 /*********************************************************************
 *********************************************************************/
-#if __i386__
-/* static */
-kern_return_t
-OSKext::getKmodInfo(
-    kmod_info_array_t      * kmodList,
-    mach_msg_type_number_t * kmodCount)
-{
-    kern_return_t      result = KERN_FAILURE;
-    vm_offset_t        data   = 0;
-    kmod_info_t      * k, * kmod_info_scan_ptr;
-    kmod_reference_t * r, * ref_scan_ptr;
-    int                ref_count;
-    unsigned           size   = 0;
-
-    *kmodList = (kmod_info_t *)0;
-    *kmodCount = 0;
-
-    IORecursiveLockLock(sKextLock);
-
-    k = kmod;
-    while (k) {
-        size += sizeof(kmod_info_t);
-        r = k->reference_list;
-        while (r) {
-            size +=sizeof(kmod_reference_t);
-            r = r->next;
-        }
-        k = k->next;
-    }
-    if (!size) {
-        result = KERN_SUCCESS;
-        goto finish;
-    }
-
-    result = kmem_alloc(kernel_map, &data, size);
-    if (result != KERN_SUCCESS) {
-        goto finish;
-    }
-
-   /* Copy each kmod_info struct sequentially into the data buffer.
-    * Set each struct's nonzero 'next' pointer back to itself as a sentinel;
-    * the kernel space address is used to match refs, and a zero 'next' flags
-    * the end of kmod_infos in the data buffer and the beginning of references.
-    */
-    k = kmod;
-    kmod_info_scan_ptr = (kmod_info_t *)data;
-    while (k) {
-        *kmod_info_scan_ptr = *k;
-        if (k->next) {
-            kmod_info_scan_ptr->next = k;
-        }
-        kmod_info_scan_ptr++;
-        k = k->next;
-    }
-
-   /* Now add references after the kmod_info structs in the same buffer.
-    * Update each kmod_info with the ref_count so we can associate
-    * references with kmod_info structs.
-    */
-    k = kmod;
-    ref_scan_ptr = (kmod_reference_t *)kmod_info_scan_ptr;
-    kmod_info_scan_ptr = (kmod_info_t *)data;
-    while (k) {
-        r = k->reference_list;
-        ref_count = 0;
-        while (r) {
-           /* Note the last kmod_info in the data buffer has its next == 0.
-            * Since there can only be one like that, 
-            * this case is handled by the caller.
-            */
-            *ref_scan_ptr = *r;
-            ref_scan_ptr++;
-            r = r->next;
-            ref_count++;
-        }
-       /* Stuff the # of refs into the 'reference_list' field of the kmod_info
-        * struct for the client to interpret.
-        */
-        kmod_info_scan_ptr->reference_list = (kmod_reference_t *)(long)ref_count;
-        kmod_info_scan_ptr++;
-        k = k->next;
-    }
-    
-    result = vm_map_copyin(kernel_map, data, size, TRUE, (vm_map_copy_t *)kmodList);
-    if (result != KERN_SUCCESS) {
-        goto finish;
-    }
-
-    *kmodCount = size;
-    result = KERN_SUCCESS;
-
-finish:
-    IORecursiveLockUnlock(sKextLock);
-
-    if (result != KERN_SUCCESS && data) {
-        kmem_free(kernel_map, data, size);
-        *kmodList = (kmod_info_t *)0;
-        *kmodCount = 0;
-    }
-    return result;
-}
-#endif /* __i386__ */
     
 #if CONFIG_KEC_FIPS
     

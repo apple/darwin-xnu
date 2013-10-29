@@ -1,8 +1,8 @@
 /*
- * Copyright (c) 2008-2012 Apple Inc. All rights reserved.
+ * Copyright (c) 2008-2013 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
- * 
+ *
  * This file contains Original Code and/or Modifications of Original Code
  * as defined in and that are subject to the Apple Public Source License
  * Version 2.0 (the 'License'). You may not use this file except in
@@ -11,10 +11,10 @@
  * unlawful or unlicensed copies of an Apple operating system, or to
  * circumvent, violate, or enable the circumvention or violation of, any
  * terms of an Apple operating system software license agreement.
- * 
+ *
  * Please obtain a copy of the License at
  * http://www.opensource.apple.com/apsl/ and read it before using this file.
- * 
+ *
  * The Original Code and all software distributed under the License are
  * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
@@ -22,7 +22,7 @@
  * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
  * Please see the License for the specific language governing rights and
  * limitations under the License.
- * 
+ *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*
@@ -94,7 +94,7 @@
 #define	_NETINET6_IN6_PCB_H_
 #include <sys/appleapiopts.h>
 
-#ifdef KERNEL_PRIVATE
+#ifdef BSD_KERNEL_PRIVATE
 extern void in6_losing(struct inpcb *);
 extern int in6_pcbbind(struct inpcb *, struct sockaddr *, struct proc *);
 extern int in6_pcbconnect(struct inpcb *, struct sockaddr *, struct proc *);
@@ -112,10 +112,11 @@ extern void in6_pcbnotify(struct inpcbinfo *, struct sockaddr *, u_int,
     const struct sockaddr *, u_int, int, void *, void (*)(struct inpcb *, int));
 extern void in6_rtchange(struct inpcb *, int);
 extern struct sockaddr *in6_sockaddr(in_port_t port, struct in6_addr *addr_p);
-extern struct sockaddr *in6_v4mapsin6_sockaddr(in_port_t port,
-    struct in_addr *addr_p);
-extern int in6_setpeeraddr(struct socket *so, struct sockaddr **nam);
-extern int in6_setsockaddr(struct socket *so, struct sockaddr **nam);
+extern void in6_sockaddr_s(in_port_t, struct in6_addr *, struct sockaddr_in6 *);
+extern int in6_getpeeraddr(struct socket *, struct sockaddr **);
+extern int in6_getpeeraddr_s(struct socket *, struct sockaddr_storage *);
+extern int in6_getsockaddr(struct socket *, struct sockaddr **);
+extern int in6_getsockaddr_s(struct socket *, struct sockaddr_storage *);
 extern int in6_mapped_sockaddr(struct socket *so, struct sockaddr **nam);
 extern int in6_mapped_peeraddr(struct socket *so, struct sockaddr **nam);
 extern int in6_selecthlim(struct in6pcb *, struct ifnet *);
@@ -124,6 +125,5 @@ extern int in6_pcbsetport(struct in6_addr *, struct inpcb *,
 extern void init_sin6(struct sockaddr_in6 *sin6, struct mbuf *m);
 extern void in6p_route_copyout(struct inpcb *, struct route_in6 *);
 extern void in6p_route_copyin(struct inpcb *, struct route_in6 *);
-#endif /* KERNEL_PRIVATE */
-
+#endif /* BSD_KERNEL_PRIVATE */
 #endif /* !_NETINET6_IN6_PCB_H_ */

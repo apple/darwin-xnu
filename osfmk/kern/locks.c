@@ -609,7 +609,10 @@ lck_mtx_lock_wait (
 		KERNEL_DEBUG_CONSTANT(
 			MACHDBG_CODE(DBG_MACH_SCHED,MACH_PROMOTE) | DBG_FUNC_NONE,
 					holder->sched_pri, priority, holder, lck, 0);
-
+		/* This can potentially elevate the holder into the realtime
+		 * priority band; the implementation in locks_i386.c enforces a
+		 * MAXPRI_KERNEL ceiling.
+		 */
 		set_sched_pri(holder, priority);
 	}
 	thread_unlock(holder);
@@ -699,6 +702,15 @@ lck_mtx_lock_acquire(
 	else
 		mutex->lck_mtx_pri = 0;
 
+#if CONFIG_DTRACE
+	if (lockstat_probemap[LS_LCK_MTX_LOCK_ACQUIRE] || lockstat_probemap[LS_LCK_MTX_EXT_LOCK_ACQUIRE]) {
+		if (lck->lck_mtx_tag != LCK_MTX_TAG_INDIRECT) {
+			LOCKSTAT_RECORD(LS_LCK_MTX_LOCK_ACQUIRE, lck, 0);
+		} else {
+			LOCKSTAT_RECORD(LS_LCK_MTX_EXT_LOCK_ACQUIRE, lck, 0);
+		}
+	}
+#endif	
 	return (mutex->lck_mtx_waiters);
 }
 
@@ -919,6 +931,92 @@ lck_rw_sleep_deadline(
 		(void)lck_rw_done(lck);
 
 	return res;
+}
+
+/*
+ * Reader-writer lock promotion
+ *
+ * We support a limited form of reader-writer
+ * lock promotion whose effects are:
+ * 
+ *   * Qualifying threads have decay disabled
+ *   * Scheduler priority is reset to a floor of
+ *     of their statically assigned priority
+ *     or BASEPRI_BACKGROUND
+ *
+ * The rationale is that lck_rw_ts do not have
+ * a single owner, so we cannot apply a directed
+ * priority boost from all waiting threads
+ * to all holding threads without maintaining
+ * lists of all shared owners and all waiting
+ * threads for every lock.
+ *
+ * Instead (and to preserve the uncontended fast-
+ * path), acquiring (or attempting to acquire)
+ * a RW lock in shared or exclusive lock increments
+ * a per-thread counter. Only if that thread stops
+ * making forward progress (for instance blocking
+ * on a mutex, or being preempted) do we consult
+ * the counter and apply the priority floor.
+ * When the thread becomes runnable again (or in
+ * the case of preemption it never stopped being
+ * runnable), it has the priority boost and should
+ * be in a good position to run on the CPU and
+ * release all RW locks (at which point the priority
+ * boost is cleared).
+ *
+ * Care must be taken to ensure that priority
+ * boosts are not retained indefinitely, since unlike
+ * mutex priority boosts (where the boost is tied
+ * to the mutex lifecycle), the boost is tied
+ * to the thread and independent of any particular
+ * lck_rw_t. Assertions are in place on return
+ * to userspace so that the boost is not held
+ * indefinitely.
+ *
+ * The routines that increment/decrement the
+ * per-thread counter should err on the side of
+ * incrementing any time a preemption is possible
+ * and the lock would be visible to the rest of the
+ * system as held (so it should be incremented before
+ * interlocks are dropped/preemption is enabled, or
+ * before a CAS is executed to acquire the lock).
+ *
+ */
+
+/*
+ * lck_rw_clear_promotion: Undo priority promotions when the last RW
+ * lock is released by a thread (if a promotion was active)
+ */
+void lck_rw_clear_promotion(thread_t thread)
+{
+	assert(thread->rwlock_count == 0);
+
+	/* Cancel any promotions if the thread had actually blocked while holding a RW lock */
+	spl_t s = splsched();
+
+	thread_lock(thread);
+
+	if (thread->sched_flags & TH_SFLAG_RW_PROMOTED) {
+		thread->sched_flags &= ~TH_SFLAG_RW_PROMOTED;
+
+		if (thread->sched_flags & TH_SFLAG_PROMOTED) {
+			/* Thread still has a mutex promotion */
+		} else if (thread->sched_flags & TH_SFLAG_DEPRESSED_MASK) {
+			KERNEL_DEBUG_CONSTANT(MACHDBG_CODE(DBG_MACH_SCHED, MACH_RW_DEMOTE) | DBG_FUNC_NONE,
+							      thread->sched_pri, DEPRESSPRI, 0, 0, 0);
+			
+			set_sched_pri(thread, DEPRESSPRI);
+		} else {
+			KERNEL_DEBUG_CONSTANT(MACHDBG_CODE(DBG_MACH_SCHED, MACH_RW_DEMOTE) | DBG_FUNC_NONE,
+								  thread->sched_pri, thread->priority, 0, 0, 0);
+			
+			SCHED(compute_priority)(thread, FALSE);
+		}
+	}
+
+	thread_unlock(thread);
+	splx(s);
 }
 
 kern_return_t

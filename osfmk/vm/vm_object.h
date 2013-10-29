@@ -87,13 +87,12 @@
 #include <ipc/ipc_types.h>
 #include <vm/pmap.h>
 
-#if	MACH_PAGEMAP
 #include <vm/vm_external.h>
-#endif	/* MACH_PAGEMAP */
 
 #include <vm/vm_options.h>
 
 struct vm_page;
+struct vm_shared_region_slide_info;
 
 /*
  *	Types defined:
@@ -120,10 +119,12 @@ struct vm_object_fault_info {
 };
 
 
-#define	vo_size			vo_un1.vou_size
-#define vo_cache_pages_to_scan	vo_un1.vou_cache_pages_to_scan
-#define vo_shadow_offset	vo_un2.vou_shadow_offset
-#define vo_cache_ts		vo_un2.vou_cache_ts
+#define	vo_size				vo_un1.vou_size
+#define vo_cache_pages_to_scan		vo_un1.vou_cache_pages_to_scan
+#define vo_shadow_offset		vo_un2.vou_shadow_offset
+#define vo_cache_ts			vo_un2.vou_cache_ts
+#define vo_purgeable_owner		vo_un2.vou_purgeable_owner
+#define vo_slide_info			vo_un2.vou_slide_info
 
 struct vm_object {
 	queue_head_t		memq;		/* Resident memory */
@@ -157,9 +158,14 @@ struct vm_object {
 
 	union {
 		vm_object_offset_t vou_shadow_offset;	/* Offset into shadow */
-		clock_sec_t	   vou_cache_ts;	/* age of an external object
-							 * present in cache
+		clock_sec_t	vou_cache_ts;	/* age of an external object
+						 * present in cache
+						 */
+		task_t		vou_purgeable_owner;	/* If the purg'a'ble bits below are set 
+							 * to volatile/emtpy, this is the task 
+							 * that owns this purgeable object.
 							 */
+		struct vm_shared_region_slide_info *vou_slide_info;
 	} vo_un2;
 
 	memory_object_t		pager;		/* Where to get data */
@@ -222,11 +228,10 @@ struct vm_object {
 	/* boolean_t */		purgable:2,	/* Purgable state.  See
 						 * VM_PURGABLE_* 
 						 */
+	/* boolean_t */		purgeable_when_ripe:1, /* Purgeable when a token
+							* becomes ripe.
+							*/
 	/* boolean_t */		shadowed:1,	/* Shadow may exist */
-	/* boolean_t */		silent_overwrite:1,
-						/* Allow full page overwrite
-						 * without data_request if
-						 * page is absent */
 	/* boolean_t */		advisory_pageout:1,
 						/* Instead of sending page
 						 * via OOL, just notify
@@ -325,7 +330,10 @@ struct vm_object {
 		all_reusable:1,
 		blocked_access:1,
 		set_cache_attr:1,
-		__object2_unused_bits:15;	/* for expansion */
+		object_slid:1,
+		purgeable_queue_type:2,
+		purgeable_queue_group:3,
+		__object2_unused_bits:9;	/* for expansion */
 
 	uint32_t		scan_collisions;
 
@@ -381,10 +389,13 @@ struct vm_object {
 	__object->memq_hint = __page;				\
 	MACRO_END
 
-__private_extern__
+extern
 vm_object_t	kernel_object;		/* the single kernel object */
 
-__private_extern__
+extern
+vm_object_t	compressor_object;	/* the single compressor object */
+
+extern
 unsigned int	vm_object_absent_max;	/* maximum number of absent pages
 					   at a time for each object */
 
@@ -420,7 +431,10 @@ extern lck_attr_t		vm_map_lck_attr;
     MACRO_END
 
 #define msync_req_free(msr)						\
-	(kfree((msr), sizeof(struct msync_req)))
+    MACRO_BEGIN								\
+        lck_mtx_destroy(&(msr)->msync_req_lock, &vm_map_lck_grp);	\
+	kfree((msr), sizeof(struct msync_req));				\
+    MACRO_END
 
 #define msr_lock(msr)   lck_mtx_lock(&(msr)->msync_req_lock)
 #define msr_unlock(msr) lck_mtx_unlock(&(msr)->msync_req_lock)
@@ -429,7 +443,7 @@ extern lck_attr_t		vm_map_lck_attr;
  *	Declare procedures that operate on VM objects.
  */
 
-__private_extern__ void		vm_object_bootstrap(void) __attribute__((section("__TEXT, initcode")));
+__private_extern__ void		vm_object_bootstrap(void);
 
 __private_extern__ void		vm_object_init(void);
 
@@ -516,6 +530,15 @@ __private_extern__ void		vm_object_pmap_protect(
 					vm_map_offset_t		pmap_start,
 					vm_prot_t		prot);
 
+__private_extern__ void		vm_object_pmap_protect_options(
+					vm_object_t		object,
+					vm_object_offset_t	offset,
+					vm_object_size_t	size,
+					pmap_t			pmap,
+					vm_map_offset_t		pmap_start,
+					vm_prot_t		prot,
+					int			options);
+
 __private_extern__ void		vm_object_page_remove(
 					vm_object_t		object,
 					vm_object_offset_t	start,
@@ -541,6 +564,13 @@ __private_extern__ kern_return_t vm_object_purgable_control(
 	vm_object_t	object,
 	vm_purgable_t	control,
 	int		*state);
+
+__private_extern__ kern_return_t vm_object_get_page_counts(
+	vm_object_t		object,
+	vm_object_offset_t	offset,
+	vm_object_size_t	size,
+	unsigned int		*resident_page_count,
+	unsigned int		*dirty_page_count);
 
 __private_extern__ boolean_t	vm_object_coalesce(
 					vm_object_t		prev_object,
@@ -595,6 +625,9 @@ __private_extern__ kern_return_t	vm_object_destroy(
 					kern_return_t	reason);
 
 __private_extern__ void		vm_object_pager_create(
+					vm_object_t	object);
+
+__private_extern__ void		vm_object_compressor_pager_create(
 					vm_object_t	object);
 
 __private_extern__ void		vm_object_page_map(
@@ -909,6 +942,7 @@ extern lck_grp_t	vm_object_lck_grp;
 extern lck_grp_attr_t	vm_object_lck_grp_attr;
 extern lck_attr_t	vm_object_lck_attr;
 extern lck_attr_t	kernel_object_lck_attr;
+extern lck_attr_t	compressor_object_lck_attr;
 
 extern vm_object_t	vm_pageout_scan_wants_object;
 
@@ -928,7 +962,9 @@ extern boolean_t	vm_object_lock_try_shared(vm_object_t);
 		    (((object) == kernel_object ||			\
 		      (object) == vm_submap_object) ?			\
 		     &kernel_object_lck_attr :				\
-		     &vm_object_lck_attr))
+		     (((object) == compressor_object) ?			\
+		     &compressor_object_lck_attr :			\
+		      &vm_object_lck_attr)))
 #define vm_object_lock_destroy(object)	lck_rw_destroy(&(object)->Lock, &vm_object_lck_grp)
 
 #define vm_object_unlock(object)	lck_rw_done(&(object)->Lock)

@@ -116,6 +116,12 @@ extern mach_msg_return_t	mach_msg_server(boolean_t (*)
 						mach_port_t,
 						mach_msg_options_t);
 
+extern mach_msg_return_t	mach_msg_server_importance(boolean_t (*)
+						(mach_msg_header_t *,
+						 mach_msg_header_t *),
+						mach_msg_size_t,
+						mach_port_t,
+						mach_msg_options_t);
 /*
  * Prototypes for compatibility
  */

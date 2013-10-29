@@ -96,6 +96,8 @@ static lck_grp_t *nfs_node_lck_grp;
 static lck_grp_t *nfs_data_lck_grp;
 lck_mtx_t *nfs_node_hash_mutex;
 
+#define NFS_NODE_DBG(...) NFS_DBG(NFS_FAC_NODE, 7, ## __VA_ARGS__)
+
 /*
  * Initialize hash links for nfsnodes
  * and build nfsnode free list.
@@ -281,24 +283,23 @@ loop:
 			 * Update the vnode if the name/and or the parent has
 			 * changed. We need to do this so that if getattrlist is
 			 * called asking for ATTR_CMN_NAME, that the "most"
-			 * correct name is being returned if we're not making an
-			 * entry. In addition for monitored vnodes we need to
-			 * kick the vnode out of the name cache. We do this so
-			 * that if there are hard links in the same directory
-			 * the link will not be found and a lookup will get us
-			 * here to return the name of the current link. In
-			 * addition by removing the name from the name cache the
-			 * old name will not be found after a rename done on
-			 * another client or the server.  The principle reason
-			 * to do this is because Finder is asking for
-			 * notifications on a directory.  The directory changes,
-			 * Finder gets notified, reads the directory (which we
-			 * have purged) and for each entry returned calls
-			 * getattrlist with the name returned from
-			 * readdir. gettattrlist has to call namei/lookup to
-			 * resolve the name, because its not in the cache we end
-			 * up here. We need to update the name so Finder will
-			 * get the name it called us with.
+			 * correct name is being returned. In addition for
+			 * monitored vnodes we need to kick the vnode out of the
+			 * name cache. We do this so that if there are hard
+			 * links in the same directory the link will not be
+			 * found and a lookup will get us here to return the
+			 * name of the current link. In addition by removing the
+			 * name from the name cache the old name will not be
+			 * found after a rename done on another client or the
+			 * server.  The principle reason to do this is because
+			 * Finder is asking for notifications on a directory.
+			 * The directory changes, Finder gets notified, reads
+			 * the directory (which we have purged) and for each
+			 * entry returned calls getattrlist with the name
+			 * returned from readdir. gettattrlist has to call
+			 * namei/lookup to resolve the name, because its not in
+			 * the cache we end up here. We need to update the name
+			 * so Finder will get the name it called us with.
 			 *
 			 * We had an imperfect solution with respect to case
 			 * sensitivity.  There is a test that is run in
@@ -340,7 +341,7 @@ loop:
 			 * ATTR_CMN_NAME</rant>
 			 */
 			if (dnp && cnp && (vp != NFSTOV(dnp))) {
-				int update_flags = vnode_ismonitored((NFSTOV(dnp))) ? VNODE_UPDATE_CACHE : 0;
+				int update_flags = (vnode_ismonitored((NFSTOV(dnp)))) ? VNODE_UPDATE_CACHE : 0;
 				int (*cmp)(const char *s1, const char *s2, size_t n);
 
 				cmp = nfs_case_insensitive(mp) ? strncasecmp : strncmp;
@@ -351,8 +352,11 @@ loop:
 					update_flags |= VNODE_UPDATE_NAME;
 				if (vnode_parent(vp) != NFSTOV(dnp))
 					update_flags |= VNODE_UPDATE_PARENT;
-				if (update_flags)
+				if (update_flags) {
+					NFS_NODE_DBG("vnode_update_identity old name %s new name %*s\n",
+						     vp->v_name, cnp->cn_namelen, cnp->cn_nameptr ? cnp->cn_nameptr : "");
 					vnode_update_identity(vp, NFSTOV(dnp), cnp->cn_nameptr, cnp->cn_namelen, 0, update_flags);
+				}
 			}
 
 			*npp = np;
@@ -587,14 +591,23 @@ nfs_vnop_inactive(ap)
 {
 	vnode_t vp = ap->a_vp;
 	vfs_context_t ctx = ap->a_context;
-	nfsnode_t np = VTONFS(ap->a_vp);
+	nfsnode_t np;
 	struct nfs_sillyrename *nsp;
 	struct nfs_vattr nvattr;
 	int unhash, attrerr, busyerror, error, inuse, busied, force;
 	struct nfs_open_file *nofp;
 	struct componentname cn;
-	struct nfsmount *nmp = NFSTONMP(np);
-	mount_t mp = vnode_mount(vp);
+	struct nfsmount *nmp;
+	mount_t mp;
+
+	if (vp == NULL)
+		panic("nfs_vnop_inactive: vp == NULL");
+	np = VTONFS(vp);
+	if (np == NULL)
+		panic("nfs_vnop_inactive: np == NULL");
+			
+	nmp = NFSTONMP(np);
+	mp = vnode_mount(vp);
 
 restart:
 	force = (!mp || (mp->mnt_kern_flag & MNTK_FRCUNMOUNT));
@@ -603,8 +616,21 @@ restart:
 
 	/* There shouldn't be any open or lock state at this point */
 	lck_mtx_lock(&np->n_openlock);
-	if (np->n_openrefcnt && !force)
+	if (np->n_openrefcnt && !force) {
+		/*
+		 * vnode_rele and vnode_put drop the vnode lock before
+		 * calling VNOP_INACTIVE, so there is a race were the
+		 * vnode could become active again. Perhaps there are
+		 * other places where this can happen, so if we've got
+		 * here we need to get out.
+		 */
+#ifdef NFS_NODE_DEBUG
 		NP(np, "nfs_vnop_inactive: still open: %d", np->n_openrefcnt);
+#endif		
+		lck_mtx_unlock(&np->n_openlock);
+		return 0;
+	}
+
 	TAILQ_FOREACH(nofp, &np->n_opens, nof_link) {
 		lck_mtx_lock(&nofp->nof_lock);
 		if (nofp->nof_flags & NFS_OPEN_FILE_BUSY) {
@@ -1300,6 +1326,7 @@ nfs_data_update_size(nfsnode_t np, int datalocked)
 }
 
 #define DODEBUG 1
+
 int
 nfs_mount_is_dirty(mount_t mp)
 {
@@ -1326,8 +1353,8 @@ out:
 	microuptime(&then);
 	timersub(&then, &now, &diff);
 	
-	printf("nfs_mount_is_dirty took %lld mics for %ld slots and %ld nodes return %d\n",
-	       (uint64_t)diff.tv_sec * 1000000LL + diff.tv_usec, i, ncnt, (i <= nfsnodehash));
+	NFS_DBG(NFS_FAC_SOCK, 7, "mount_is_dirty for %s took %lld mics for %ld slots and %ld nodes return %d\n",
+		vfs_statfs(mp)->f_mntfromname, (uint64_t)diff.tv_sec * 1000000LL + diff.tv_usec, i, ncnt, (i <= nfsnodehash));
 #endif
 
 	return (i <=  nfsnodehash);

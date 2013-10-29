@@ -38,7 +38,6 @@
 #include <kperf/sample.h>
 #include <kperf/context.h>
 #include <kperf/action.h>
-#include <kperf/filter.h>
 #include <kperf/pet.h>
 #include <kperf/timetrigger.h>
 
@@ -59,23 +58,34 @@ static IOLock *pet_lock = NULL;
 /* where to sample data to */
 static struct kperf_sample pet_sample_buf;
 
+static int pet_idle_rate = 15;
+
 /* sample an actual, honest to god thread! */
 static void
 pet_sample_thread( thread_t thread )
 {
 	struct kperf_context ctx;
 	task_t task;
+	unsigned skip_callstack;
 
 	/* work out the context */
 	ctx.cur_thread = thread;
-	ctx.cur_pid = -1;
+	ctx.cur_pid = 0;
 
 	task = chudxnu_task_for_thread(thread);
 	if(task)
 		ctx.cur_pid = chudxnu_pid_for_task(task);
 
+	skip_callstack = (chudxnu_thread_get_dirty(thread) == TRUE) || ((thread->kperf_pet_cnt % (uint64_t)pet_idle_rate) == 0) ? 0 : SAMPLE_FLAG_EMPTY_CALLSTACK;
+
 	/* do the actual sample */
-	kperf_sample( &pet_sample_buf, &ctx, pet_actionid, false );
+	kperf_sample( &pet_sample_buf, &ctx, pet_actionid,
+	              SAMPLE_FLAG_IDLE_THREADS | skip_callstack );
+
+	if (!skip_callstack)
+		chudxnu_thread_set_dirty(thread, FALSE);
+
+	thread->kperf_pet_cnt++;
 }
 
 /* given a list of threads, preferably stopped, sample 'em! */
@@ -83,6 +93,7 @@ static void
 pet_sample_thread_list( mach_msg_type_number_t threadc, thread_array_t threadv )
 {
 	unsigned int i;
+	int ncpu;
 
 	for( i = 0; i < threadc; i++ )
 	{
@@ -92,7 +103,16 @@ pet_sample_thread_list( mach_msg_type_number_t threadc, thread_array_t threadv )
 			/* XXX? */
 			continue;
 
-		pet_sample_thread( thread );
+		for (ncpu = 0; ncpu < machine_info.logical_cpu_max; ++ncpu)
+		{
+			thread_t candidate = kperf_thread_on_cpus[ncpu];
+			if (candidate && candidate->thread_id == thread->thread_id)
+				break;
+		}
+
+		/* the thread was not on a CPU */
+		if (ncpu == machine_info.logical_cpu_max)
+			pet_sample_thread( thread );
 	}
 }
 
@@ -121,7 +141,7 @@ static void
 pet_sample_task_list( int taskc, task_array_t taskv  )
 {
 	int i;
-	
+
 	for( i = 0; i < taskc; i++ )
 	{
 		kern_return_t kr;
@@ -133,7 +153,7 @@ pet_sample_task_list( int taskc, task_array_t taskv  )
 		if(!task) {
 			continue;
 		}
-		
+
 		/* try and stop any task other than the kernel task */
 		if( task != kernel_task )
 		{
@@ -143,7 +163,7 @@ pet_sample_task_list( int taskc, task_array_t taskv  )
 			if( kr != KERN_SUCCESS )
 				continue;
 		}
-		
+
 		/* sample it */
 		pet_sample_task( task );
 
@@ -172,6 +192,7 @@ pet_sample_all_tasks(void)
 	chudxnu_free_task_list(&taskv, &taskc);
 }
 
+#if 0
 static void
 pet_sample_pid_filter(void)
 {
@@ -210,6 +231,7 @@ pet_sample_pid_filter(void)
 out:
 	kperf_filter_free_pid_list( &pidc, &pidv );
 }
+#endif
 
 /* do the pet sample */
 static void
@@ -218,14 +240,17 @@ pet_work_unit(void)
 	int pid_filter;
 
 	/* check if we're filtering on pid  */
-	pid_filter = kperf_filter_on_pid();
+	// pid_filter = kperf_filter_on_pid();
+	pid_filter = 0;  // FIXME
 
+#if 0
 	if( pid_filter )
 	{
 		BUF_INFO1(PERF_PET_SAMPLE | DBG_FUNC_START, 1);
 		pet_sample_pid_filter();
 	}
 	else
+#endif
 	{
 		/* otherwise filter everything */
 		BUF_INFO1(PERF_PET_SAMPLE | DBG_FUNC_START, 0);
@@ -240,27 +265,32 @@ pet_work_unit(void)
 static void 
 pet_idle(void)
 {
-	IOLockLock(pet_lock);
 	IOLockSleep(pet_lock, &pet_actionid, THREAD_UNINT);
-	IOLockUnlock(pet_lock);
 }
 
 /* loop between sampling and waiting */
 static void
 pet_thread_loop( __unused void *param, __unused wait_result_t wr )
 {
+	uint64_t work_unit_ticks;
+
 	BUF_INFO1(PERF_PET_THREAD, 1);
 
+	IOLockLock(pet_lock);
 	while(1)
 	{
 		BUF_INFO1(PERF_PET_IDLE, 0);
 		pet_idle();
 
 		BUF_INFO1(PERF_PET_RUN, 0);
+
+		/* measure how long the work unit takes */
+		work_unit_ticks = mach_absolute_time();
 		pet_work_unit();
+		work_unit_ticks = mach_absolute_time() - work_unit_ticks;
 
 		/* re-program the timer */
-		kperf_timer_pet_set( pet_timerid );
+		kperf_timer_pet_set( pet_timerid, work_unit_ticks );
 
 		/* FIXME: break here on a condition? */
 	}
@@ -270,6 +300,9 @@ pet_thread_loop( __unused void *param, __unused wait_result_t wr )
 void
 kperf_pet_timer_config( unsigned timerid, unsigned actionid )
 {
+	if( !pet_lock )
+		return;
+
 	/* hold the lock so pet thread doesn't run while we do this */
 	IOLockLock(pet_lock);
 
@@ -287,6 +320,9 @@ kperf_pet_timer_config( unsigned timerid, unsigned actionid )
 void
 kperf_pet_thread_go(void)
 {
+	if( !pet_lock )
+		return;
+
 	/* Make the thread go */
 	IOLockWakeup(pet_lock, &pet_actionid, FALSE);
 }
@@ -296,6 +332,9 @@ kperf_pet_thread_go(void)
 void
 kperf_pet_thread_wait(void)
 {
+	if( !pet_lock )
+		return;
+
 	/* acquire the lock to ensure the thread is parked. */
 	IOLockLock(pet_lock);
 	IOLockUnlock(pet_lock);
@@ -328,4 +367,16 @@ kperf_pet_init(void)
 
 	/* OK! */
 	return 0;
+}
+
+int
+kperf_get_pet_idle_rate( void )
+{
+	return pet_idle_rate;
+}
+
+void
+kperf_set_pet_idle_rate( int val )
+{
+	pet_idle_rate = val;
 }

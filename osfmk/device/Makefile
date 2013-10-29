@@ -3,7 +3,6 @@ export MakeInc_def=${SRCROOT}/makedefs/MakeInc.def
 export MakeInc_rule=${SRCROOT}/makedefs/MakeInc.rule
 export MakeInc_dir=${SRCROOT}/makedefs/MakeInc.dir
 
-
 include $(MakeInc_cmd)
 include $(MakeInc_def)
 
@@ -26,8 +25,6 @@ EXPORT_MI_LIST	= ${DATAFILES} ${_MIG_HDRS_} ${MIGINCLUDES}
 
 EXPORT_MI_DIR = device
 
-.ORDER: ${MIG_HDRS} ${MIGINCLUDES}
-
 #
 # Build path
 #       
@@ -40,7 +37,7 @@ DEVICE_FILES    = device_server.h device_server.c
 
 COMP_FILES	= ${DEVICE_FILES}
 
-.ORDER: ${DEVICE_FILES}
+do_build_all:: $(COMP_FILES)
 
 ${DEVICE_FILES}: device.defs
 	@echo MIG $@
@@ -50,8 +47,6 @@ ${DEVICE_FILES}: device.defs
 	-sheader device_server.h		\
 	-server device_server.c			\
 	$<
-
-
 
 include $(MakeInc_rule)
 include $(MakeInc_dir)

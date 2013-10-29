@@ -6,13 +6,26 @@ CWARNFLAGS = $(CWARNFLAGS_STD) -Wshorten-64-to-32
 
 # Files that must go in the __HIB segment:
 UNCONFIGURED_HIB_FILES=					\
+           WKdmDecompress_new.o         \
+           WKdmData_new.o               \
            hibernate_restore.o          \
-           hibernate_bootstrap.o
+           hibernate_bootstrap.o	\
+           bcopy.o			\
+           bzero.o
 
 HIB_FILES=$(filter $(UNCONFIGURED_HIB_FILES),$(OBJS))
 
-hibernate_restore.o_CFLAGS_ADD += -fno-stack-protector
-hibernate_bootstrap.o_CFLAGS_ADD += -fno-stack-protector
+# Unconfigured __HIB files must be Mach-O for "setsegname"
+WKdmDecompress_new.o_CFLAGS_ADD += -fno-stack-protector $(CFLAGS_NOLTO_FLAG)
+WKdmData_new.o_CFLAGS_ADD += -fno-stack-protector $(CFLAGS_NOLTO_FLAG)
+hibernate_restore.o_CFLAGS_ADD += -fno-stack-protector $(CFLAGS_NOLTO_FLAG)
+hibernate_bootstrap.o_CFLAGS_ADD += -fno-stack-protector $(CFLAGS_NOLTO_FLAG)
+bcopy.o_CFLAGS_ADD += -fno-stack-protector $(CFLAGS_NOLTO_FLAG)
+bzero.o_CFLAGS_ADD += -fno-stack-protector $(CFLAGS_NOLTO_FLAG)
+
+# To appear at the beginning of the __HIB segment, emit
+# as Mach-O so that the linker can enforce symbol order
+boot_pt.o_CFLAGS_ADD += $(CFLAGS_NOLTO_FLAG)
 
 ######################################################################
 #END	Machine dependent Makefile fragment for x86_64

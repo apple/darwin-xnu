@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2004, 2012 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -182,6 +182,15 @@ typedef void * kern_ctl_ref;
 */
 #define CTL_FLAG_REG_SOCK_STREAM	0x4
 
+#ifdef KERNEL_PRIVATE
+/*!
+  	@defined CTL_FLAG_REG_EXTENDED
+    @discussion This flag indicates that this kernel control utilizes the
+	the extended fields within the kern_ctl_reg structure.
+*/
+#define CTL_FLAG_REG_EXTENDED	0x8
+#endif /* KERNEL_PRIVATE */
+
 /* Data flags for controllers */
 /*!
 	@defined CTL_DATA_NOWAKEUP
@@ -299,6 +308,26 @@ typedef errno_t (*ctl_setopt_func)(kern_ctl_ref kctlref, u_int32_t unit, void *u
 typedef errno_t (*ctl_getopt_func)(kern_ctl_ref kctlref, u_int32_t unit, void *unitinfo,
 								   int opt, void *data, size_t *len);
 
+#ifdef KERNEL_PRIVATE
+/*!
+	@typedef ctl_rcvd_func
+	@discussion The ctl_rcvd_func is called when the client reads data from
+		the kernel control socket. The kernel control can use this callback
+		in combination with ctl_getenqueuespace() to avoid overflowing
+		the socket's receive buffer. When ctl_getenqueuespace() returns
+		0 or ctl_enqueuedata()/ctl_enqueuembuf() return ENOBUFS, the
+		kernel control can wait until this callback is called before
+		trying to enqueue the data again.
+	@param kctlref The control ref of the kernel control.
+	@param unit The unit number of the kernel control instance.
+	@param unitinfo The user-defined private data initialized by the
+		ctl_connect_func callback.
+	@param flags The recv flags. See the recv(2) man page.
+ */
+typedef void (*ctl_rcvd_func)(kern_ctl_ref kctlref, u_int32_t unit, void *unitinfo,
+							  int flags);
+#endif /* KERNEL_PRIVATE */
+
 /*!
 	@struct kern_ctl_reg
 	@discussion This structure defines the properties of a kernel
@@ -351,6 +380,9 @@ struct kern_ctl_reg
     ctl_send_func		ctl_send;
     ctl_setopt_func		ctl_setopt;
     ctl_getopt_func		ctl_getopt;
+#ifdef KERNEL_PRIVATE
+    ctl_rcvd_func		ctl_rcvd;	/* Only valid if CTL_FLAG_REG_EXTENDED is set */
+#endif /* KERNEL_PRIVATE */
 };
 
 /*!
@@ -393,8 +425,8 @@ ctl_deregister(kern_ctl_ref kctlref);
 	@param unit The unit number of the kernel control instance.
 	@param data A pointer to the data to send.
 	@param len The length of data to send.
-	@param flags Send flags. CTL_DATA_NOWAKEUP is currently the only
-		supported flag.
+	@param flags Send flags. CTL_DATA_NOWAKEUP and CTL_DATA_EOR are currently
+		the only supported flags.
 	@result 0 - Data was enqueued to be read by the client.
 		EINVAL - Invalid parameters.
 		EMSGSIZE - The buffer is too large.
@@ -411,8 +443,8 @@ ctl_enqueuedata(kern_ctl_ref kctlref, u_int32_t unit, void *data, size_t len, u_
 	@param kctlref The control reference of the kernel control.
 	@param unit The unit number of the kernel control instance.
 	@param m An mbuf chain containing the data to send to the client.
-	@param flags Send flags. CTL_DATA_NOWAKEUP is currently the only
-		supported flag.
+	@param flags Send flags. CTL_DATA_NOWAKEUP and CTL_DATA_EOR are currently
+		the only supported flags.
 	@result 0 - Data was enqueued to be read by the client.
 		EINVAL - Invalid parameters.
 		ENOBUFS - The queue is full.

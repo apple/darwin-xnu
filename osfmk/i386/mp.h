@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2008 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2012 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -265,27 +265,7 @@ i_bit_impl(long word, long bit) {
 
 #if	MACH_RT
 
-#if defined(__i386__)
-
-#define _DISABLE_PREEMPTION 					\
-	incl	%gs:CPU_PREEMPTION_LEVEL
-
-#define _ENABLE_PREEMPTION 					\
-	decl	%gs:CPU_PREEMPTION_LEVEL		;	\
-	jne	9f					;	\
-	pushl	%eax					;	\
-	pushl	%ecx					;	\
-	pushl	%edx					;	\
-	call	EXT(kernel_preempt_check)		;	\
-	popl	%edx					;	\
-	popl	%ecx					;	\
-	popl	%eax					;	\
-9:	
-
-#define _ENABLE_PREEMPTION_NO_CHECK				\
-	decl	%gs:CPU_PREEMPTION_LEVEL
-
-#elif defined(__x86_64__)
+#if   defined(__x86_64__)
 
 #define _DISABLE_PREEMPTION 					\
 	incl	%gs:CPU_PREEMPTION_LEVEL
@@ -304,63 +284,12 @@ i_bit_impl(long word, long bit) {
 #endif
 
 /* x86_64 just calls through to the other macro directly */
-#if	MACH_ASSERT && defined(__i386__)
-#define DISABLE_PREEMPTION					\
-	pushl	%eax;						\
-	pushl	%ecx;						\
-	pushl	%edx;						\
-	call	EXT(_disable_preemption);			\
-	popl	%edx;						\
-	popl	%ecx;						\
-	popl	%eax
-#define ENABLE_PREEMPTION					\
-	pushl	%eax;						\
-	pushl	%ecx;						\
-	pushl	%edx;						\
-	call	EXT(_enable_preemption);			\
-	popl	%edx;						\
-	popl	%ecx;						\
-	popl	%eax
-#define ENABLE_PREEMPTION_NO_CHECK				\
-	pushl	%eax;						\
-	pushl	%ecx;						\
-	pushl	%edx;						\
-	call	EXT(_enable_preemption_no_check);		\
-	popl	%edx;						\
-	popl	%ecx;						\
-	popl	%eax
-#define MP_DISABLE_PREEMPTION					\
-	pushl	%eax;						\
-	pushl	%ecx;						\
-	pushl	%edx;						\
-	call	EXT(_mp_disable_preemption);			\
-	popl	%edx;						\
-	popl	%ecx;						\
-	popl	%eax
-#define MP_ENABLE_PREEMPTION					\
-	pushl	%eax;						\
-	pushl	%ecx;						\
-	pushl	%edx;						\
-	call	EXT(_mp_enable_preemption);			\
-	popl	%edx;						\
-	popl	%ecx;						\
-	popl	%eax
-#define MP_ENABLE_PREEMPTION_NO_CHECK				\
-	pushl	%eax;						\
-	pushl	%ecx;						\
-	pushl	%edx;						\
-	call	EXT(_mp_enable_preemption_no_check);		\
-	popl	%edx;						\
-	popl	%ecx;						\
-	popl	%eax
-#else	/* MACH_ASSERT */
 #define DISABLE_PREEMPTION		_DISABLE_PREEMPTION
 #define ENABLE_PREEMPTION		_ENABLE_PREEMPTION
 #define ENABLE_PREEMPTION_NO_CHECK	_ENABLE_PREEMPTION_NO_CHECK
 #define MP_DISABLE_PREEMPTION		_DISABLE_PREEMPTION
 #define MP_ENABLE_PREEMPTION		_ENABLE_PREEMPTION
 #define MP_ENABLE_PREEMPTION_NO_CHECK 	_ENABLE_PREEMPTION_NO_CHECK
-#endif	/* MACH_ASSERT */
 
 #else	/* MACH_RT */
 #define DISABLE_PREEMPTION

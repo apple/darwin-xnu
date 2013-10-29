@@ -226,6 +226,13 @@ kern_open_file_for_direct_io(const char * name,
     if ((error = vnode_open(name, (O_CREAT | FWRITE), (0), 0, &ref->vp, ref->ctx)))
         goto out;
 
+    if (ref->vp->v_type == VREG)
+    {
+        vnode_lock_spin(ref->vp);
+        SET(ref->vp->v_flag, VSWAP);
+        vnode_unlock(ref->vp);
+    }
+
     if (write_file_addr && write_file_len)
     {
 	if ((error = kern_write_file(ref, write_file_offset, write_file_addr, write_file_len)))
@@ -236,6 +243,7 @@ kern_open_file_for_direct_io(const char * name,
     VATTR_WANTED(&va, va_rdev);
     VATTR_WANTED(&va, va_fsid);
     VATTR_WANTED(&va, va_data_size);
+    VATTR_WANTED(&va, va_data_alloc);
     VATTR_WANTED(&va, va_nlink);
     error = EFAULT;
     if (vnode_getattr(ref->vp, &va, ref->ctx))
@@ -243,7 +251,7 @@ kern_open_file_for_direct_io(const char * name,
 
     kprintf("vp va_rdev major %d minor %d\n", major(va.va_rdev), minor(va.va_rdev));
     kprintf("vp va_fsid major %d minor %d\n", major(va.va_fsid), minor(va.va_fsid));
-    kprintf("vp size %qd\n", va.va_data_size);
+    kprintf("vp size %qd alloc %qd\n", va.va_data_size, va.va_data_alloc);
 
     if (ref->vp->v_type == VREG)
     {
@@ -258,10 +266,15 @@ kern_open_file_for_direct_io(const char * name,
         p2 = p;
         do_ioctl = &file_ioctl;
 
-	if (set_file_size)
+	if (set_file_size && (set_file_size != (off_t) va.va_data_alloc))
 	{
 	    off_t     bytesallocated = 0;
 	    u_int32_t alloc_flags = PREALLOCATE | ALLOCATEFROMPEOF | ALLOCATEALL;
+
+	    vnode_lock_spin(ref->vp);
+	    CLR(ref->vp->v_flag, VSWAP);
+	    vnode_unlock(ref->vp);
+
 	    error = VNOP_ALLOCATE(ref->vp, set_file_size, alloc_flags,
 				  &bytesallocated, 0 /*fst_offset*/,
 				  ref->ctx);
@@ -269,6 +282,10 @@ kern_open_file_for_direct_io(const char * name,
 	    if (!error) error = vnode_setsize(ref->vp, set_file_size, IO_NOZEROFILL, ref->ctx);
 	    kprintf("vnode_setsize(%d) %qd\n", error, set_file_size);
 	    ref->filelength = bytesallocated;
+
+	    vnode_lock_spin(ref->vp);
+	    SET(ref->vp->v_flag, VSWAP);
+	    vnode_unlock(ref->vp);
 	}
     }
     else if ((ref->vp->v_type == VBLK) || (ref->vp->v_type == VCHR))
@@ -355,7 +372,15 @@ kern_open_file_for_direct_io(const char * name,
                 error = ENOTSUP;
                 goto out;
             }
+#if HIBFRAGMENT
+	    uint64_t rev;
+	    for (rev = 4096; rev <= getphysreq.length; rev += 4096)
+	    {
+		callback(callback_ref, getphysreq.offset + getphysreq.length - rev, 4096);
+	    }
+#else
             callback(callback_ref, getphysreq.offset, getphysreq.length);
+#endif
             physoffset += getphysreq.length;
         }
         f_offset += filechunk;
@@ -504,13 +529,13 @@ kern_close_file_for_direct_io(struct kern_direct_file_io_ref_t * ref,
         }
         (void) do_ioctl(p1, p2, DKIOCUNLOCKPHYSICALEXTENTS, NULL);
         
-        if (addr && write_length)
-        {
-            (void) kern_write_file(ref, write_offset, addr, write_length);
-        }
         if (discard_offset && discard_end && !ref->pinned)
         {
             (void) kern_ioctl_file_extents(ref, DKIOCUNMAP, discard_offset, discard_end);
+        }
+        if (addr && write_length)
+        {
+            (void) kern_write_file(ref, write_offset, addr, write_length);
         }
 
         error = vnode_close(ref->vp, FWRITE, ref->ctx);

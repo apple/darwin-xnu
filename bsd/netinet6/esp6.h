@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008 Apple Inc. All rights reserved.
+ * Copyright (c) 2008-2013 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -66,12 +66,12 @@
 #define _NETINET6_ESP6_H_
 #include <sys/appleapiopts.h>
 
-#ifdef KERNEL_PRIVATE
+#ifdef BSD_KERNEL_PRIVATE
 extern int esp6_output(struct mbuf *, u_char *, struct mbuf *,
 	struct secasvar *);
 extern int esp6_input(struct mbuf **, int *, int);
 
 extern void esp6_ctlinput(int, struct sockaddr *, void *);
-#endif /* KERNEL_PRIVATE */
+#endif /* BSD_KERNEL_PRIVATE */
 
 #endif /* _NETINET6_ESP6_H_ */

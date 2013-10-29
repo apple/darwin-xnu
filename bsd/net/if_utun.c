@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008-2011 Apple Inc. All rights reserved.
+ * Copyright (c) 2008-2013 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -71,14 +71,9 @@ static errno_t	utun_ctl_setopt(kern_ctl_ref kctlref, u_int32_t unit, void *uniti
 static errno_t	utun_output(ifnet_t interface, mbuf_t data);
 static errno_t	utun_demux(ifnet_t interface, mbuf_t data, char *frame_header,
 						   protocol_family_t *protocol);
-static errno_t	utun_framer(ifnet_t	interface, mbuf_t *packet,
-							const struct sockaddr *dest, const char *desk_linkaddr,
-							const char *frame_type
-#if KPI_INTERFACE_EMBEDDED
-							,
-							u_int32_t *prepend_len, u_int32_t *postpend_len
-#endif /* KPI_INTERFACE_EMBEDDED */
-							);
+static errno_t	utun_framer(ifnet_t interface, mbuf_t *packet,
+    const struct sockaddr *dest, const char *desk_linkaddr,
+    const char *frame_type, u_int32_t *prepend_len, u_int32_t *postpend_len);
 static errno_t	utun_add_proto(ifnet_t interface, protocol_family_t protocol,
 							   const struct ifnet_demux_desc *demux_array,
 							   u_int32_t demux_count);
@@ -142,14 +137,16 @@ utun_register_control(void)
 	strncpy(kern_ctl.ctl_name, UTUN_CONTROL_NAME, sizeof(kern_ctl.ctl_name));
 	kern_ctl.ctl_name[sizeof(kern_ctl.ctl_name) - 1] = 0;
 	kern_ctl.ctl_flags = CTL_FLAG_PRIVILEGED; /* Require root */
-	kern_ctl.ctl_sendsize = 64 * 1024;
-	kern_ctl.ctl_recvsize = 64 * 1024;
+	kern_ctl.ctl_sendsize = 512 * 1024;
+	kern_ctl.ctl_recvsize = 512 * 1024;
 	kern_ctl.ctl_connect = utun_ctl_connect;
 	kern_ctl.ctl_disconnect = utun_ctl_disconnect;
 	kern_ctl.ctl_send = utun_ctl_send;
 	kern_ctl.ctl_setopt = utun_ctl_setopt;
 	kern_ctl.ctl_getopt = utun_ctl_getopt;
-	
+
+	utun_ctl_init_crypto();
+
 	result = ctl_register(&kern_ctl, &utun_kctlref);
 	if (result != 0) {
 		printf("utun_register_control - ctl_register failed: %d\n", result);
@@ -186,7 +183,7 @@ utun_ctl_connect(
 	struct sockaddr_ctl	*sac, 
 	void				**unitinfo)
 {
-	struct ifnet_init_params	utun_init;
+	struct ifnet_init_eparams	utun_init;
 	struct utun_pcb				*pcb;
 	errno_t						result;
 	struct ifnet_stats_param 	stats;
@@ -206,20 +203,23 @@ utun_ctl_connect(
 
 	/* Create the interface */
 	bzero(&utun_init, sizeof(utun_init));
+	utun_init.ver = IFNET_INIT_CURRENT_VERSION;
+	utun_init.len = sizeof (utun_init);
+	utun_init.flags = IFNET_INIT_LEGACY;
 	utun_init.name = "utun";
 	utun_init.unit = pcb->utun_unit - 1;
 	utun_init.family = utun_family;
 	utun_init.type = IFT_OTHER;
 	utun_init.output = utun_output;
 	utun_init.demux = utun_demux;
-	utun_init.framer = utun_framer;
+	utun_init.framer_extended = utun_framer;
 	utun_init.add_proto = utun_add_proto;
 	utun_init.del_proto = utun_del_proto;
 	utun_init.softc = pcb;
 	utun_init.ioctl = utun_ioctl;
 	utun_init.detach = utun_detached;
 	
-	result = ifnet_allocate(&utun_init, &pcb->utun_ifp);
+	result = ifnet_allocate_extended(&utun_init, &pcb->utun_ifp);
 	if (result != 0) {
 		printf("utun_ctl_connect - ifnet_allocate failed: %d\n", result);
 		utun_free(pcb);
@@ -454,6 +454,15 @@ utun_ctl_send(
 	mbuf_t					m,
 	__unused int			flags)
 {
+	/*
+	 * The userland ABI requires the first four bytes have the protocol family 
+	 * in network byte order: swap them
+	 */
+	if (m_pktlen(m) >= 4)
+		*(protocol_family_t *)mbuf_data(m) = ntohl(*(protocol_family_t *)mbuf_data(m));
+	else
+		printf("%s - unexpected short mbuf pkt len %d\n", __func__, m_pktlen(m) );
+
 	return utun_pkt_input((struct utun_pcb *)unitinfo, m);
 }
 
@@ -473,6 +482,7 @@ utun_ctl_setopt(
 	switch (opt) {
 		case UTUN_OPT_FLAGS:
 		case UTUN_OPT_EXT_IFDATA_STATS:
+		case UTUN_OPT_SET_DELEGATE_INTERFACE:
 			if (kauth_cred_issuser(kauth_cred_get()) == 0) {
 				return EPERM;
 			}
@@ -511,6 +521,14 @@ utun_ctl_setopt(
 			result = utun_ctl_start_crypto_data_traffic(kctlref, unit, unitinfo, opt, data, len);
 			break;
 
+		case UTUN_OPT_CONFIG_CRYPTO_FRAMER:
+			result = utun_ctl_config_crypto_framer(kctlref, unit, unitinfo, opt, data, len);
+			break;
+
+		case UTUN_OPT_UNCONFIG_CRYPTO_FRAMER:
+			result = utun_ctl_unconfig_crypto_framer(kctlref, unit, unitinfo, opt, data, len);
+			break;
+
 		case UTUN_OPT_EXT_IFDATA_STATS:
 			if (len != sizeof(int)) {
 				result = EMSGSIZE;
@@ -539,8 +557,29 @@ utun_ctl_setopt(
 					utsp->utsp_bytes, utsp->utsp_errors);
 			break;
 		}
-		
-		default:
+
+	        case UTUN_OPT_SET_DELEGATE_INTERFACE: {
+			ifnet_t		del_ifp = NULL;
+			char            name[IFNAMSIZ];
+
+			if (len > IFNAMSIZ - 1) {
+				result = EMSGSIZE;
+				break;
+			}
+			if (len != 0) {    /* if len==0, del_ifp will be NULL causing the delegate to be removed */
+				bcopy(data, name, len);
+				name[len] = 0;
+				result = ifnet_find_by_name(name, &del_ifp);
+			}
+			if (result == 0) {
+				result = ifnet_set_delegate(pcb->utun_ifp, del_ifp);
+				if (del_ifp)
+					ifnet_release(del_ifp);            
+			}
+			break;
+		}
+            
+	        default:
 			result = ENOPROTOOPT;
 			break;
 	}
@@ -600,7 +639,9 @@ utun_output(
 	struct utun_pcb	*pcb = ifnet_softc(interface);
 	errno_t			result;
 	
-	bpf_tap_out(pcb->utun_ifp, DLT_NULL, data, 0, 0);
+	if (m_pktlen(data) >= 4) {
+		bpf_tap_out(pcb->utun_ifp, DLT_NULL, data, 0, 0);
+	}
 	
 	if (pcb->utun_flags & UTUN_FLAGS_NO_OUTPUT) {
 		/* flush data */
@@ -618,6 +659,12 @@ utun_output(
 				return 0;
 			}
 		}
+
+		/*
+		 * The ABI requires the protocol in network byte order
+		 */
+		if (m_pktlen(data) >= 4)
+			*(u_int32_t *)mbuf_data(data) = htonl(*(u_int32_t *)mbuf_data(data));
 
 		length = mbuf_pkthdr_len(data);
 		result = ctl_enqueuembuf(pcb->utun_ctlref, pcb->utun_unit, data, CTL_DATA_EOR);
@@ -654,7 +701,7 @@ utun_demux(
 	if (data == NULL)
 		return ENOENT;
 	
-	*protocol = ntohl(*(u_int32_t *)mbuf_data(data));
+	*protocol = *(u_int32_t *)mbuf_data(data);
 	return 0;
 }
 
@@ -664,13 +711,9 @@ utun_framer(
 		   mbuf_t				*packet,
 			__unused const struct sockaddr *dest, 
 			__unused const char *desk_linkaddr,
-			const char *frame_type
-#if KPI_INTERFACE_EMBEDDED
-			,
+			const char *frame_type,
 			u_int32_t *prepend_len, 
-			u_int32_t *postpend_len
-#endif /* KPI_INTERFACE_EMBEDDED */
-			)
+			u_int32_t *postpend_len)
 {
     if (mbuf_prepend(packet, sizeof(protocol_family_t), MBUF_DONTWAIT) != 0) {
 		printf("utun_framer - ifnet_output prepend failed\n");
@@ -680,13 +723,13 @@ utun_framer(
 		// just	return, because the buffer was freed in mbuf_prepend
         return EJUSTRETURN;	
     }
-#if KPI_INTERFACE_EMBEDDED
-	*prepend_len = sizeof(protocol_family_t);
-	*postpend_len = 0;
-#endif /* KPI_INTERFACE_EMBEDDED */
+	if (prepend_len != NULL)
+		*prepend_len = sizeof(protocol_family_t);
+	if (postpend_len != NULL)
+		*postpend_len = 0;
 	
     // place protocol number at the beginning of the mbuf
-    *(protocol_family_t *)mbuf_data(*packet) = htonl(*(protocol_family_t *)(uintptr_t)(size_t)frame_type);
+    *(protocol_family_t *)mbuf_data(*packet) = *(protocol_family_t *)(uintptr_t)(size_t)frame_type;
     
     return 0;
 }
@@ -812,18 +855,20 @@ errno_t
 utun_pkt_input (struct utun_pcb *pcb, mbuf_t m)
 {
 	errno_t	result;
-	protocol_family_t protocol;
+	protocol_family_t protocol = 0;
 
 	mbuf_pkthdr_setrcvif(m, pcb->utun_ifp);
 
-	bpf_tap_in(pcb->utun_ifp, DLT_NULL, m, 0, 0);
-
+	if (m_pktlen(m) >= 4)  {
+		protocol = *(u_int32_t *)mbuf_data(m);
+	
+		bpf_tap_in(pcb->utun_ifp, DLT_NULL, m, 0, 0);
+	}
 	if (pcb->utun_flags & UTUN_FLAGS_NO_INPUT) {
 		/* flush data */
 		mbuf_freem(m);
 		return 0;
 	}
-	protocol = ntohl(*(u_int32_t *)mbuf_data(m));
 
 	// quick exit for keepalive packets
 	if (protocol == AF_UTUN && pcb->utun_flags & UTUN_FLAGS_CRYPTO) {

@@ -1,8 +1,8 @@
 /*
- * Copyright (c) 2009-2011 Apple Inc. All rights reserved.
+ * Copyright (c) 2009-2013 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
- * 
+ *
  * This file contains Original Code and/or Modifications of Original Code
  * as defined in and that are subject to the Apple Public Source License
  * Version 2.0 (the 'License'). You may not use this file except in
@@ -11,10 +11,10 @@
  * unlawful or unlicensed copies of an Apple operating system, or to
  * circumvent, violate, or enable the circumvention or violation of, any
  * terms of an Apple operating system software license agreement.
- * 
+ *
  * Please obtain a copy of the License at
  * http://www.opensource.apple.com/apsl/ and read it before using this file.
- * 
+ *
  * The Original Code and all software distributed under the License are
  * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
@@ -22,17 +22,14 @@
  * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
  * Please see the License for the specific language governing rights and
  * limitations under the License.
- * 
+ *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
-
-/*	$FreeBSD: src/sys/netinet6/scope6.c,v 1.3 2002/03/25 10:12:51 ume Exp $	*/
-/*	$KAME: scope6.c,v 1.10 2000/07/24 13:29:31 itojun Exp $	*/
 
 /*
  * Copyright (C) 2000 WIDE Project.
  * All rights reserved.
- * 
+ *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
  * are met:
@@ -44,7 +41,7 @@
  * 3. Neither the name of the project nor the names of its contributors
  *    may be used to endorse or promote products derived from this software
  *    without specific prior written permission.
- * 
+ *
  * THIS SOFTWARE IS PROVIDED BY THE PROJECT AND CONTRIBUTORS ``AS IS'' AND
  * ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
  * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
@@ -75,149 +72,52 @@
 #include <netinet6/in6_var.h>
 #include <netinet6/scope6_var.h>
 
-extern lck_mtx_t *scope6_mutex;
-
 #ifdef ENABLE_DEFAULT_SCOPE
 int ip6_use_defzone = 1;
 #else
 int ip6_use_defzone = 0;
 #endif
 
-static size_t if_scope_indexlim = 8;
-struct scope6_id *scope6_ids = NULL;
+decl_lck_mtx_data(static, scope6_lock);
+static struct scope6_id sid_default;
 
-int
-scope6_ifattach(
-	struct ifnet *ifp)
+#define SID(ifp) &IN6_IFEXTRA(ifp)->scope6_id
+
+void
+scope6_init(lck_grp_t *grp, lck_attr_t *attr)
 {
-	/*
-	 * We have some arrays that should be indexed by if_index.
-	 * since if_index will grow dynamically, they should grow too.
-	 */
-	lck_mtx_lock(scope6_mutex);
-	if (scope6_ids == NULL || if_index >= if_scope_indexlim) {
-		size_t n;
-		caddr_t q;
-		int newlim = if_scope_indexlim;
+	bzero(&sid_default, sizeof(sid_default));
+	lck_mtx_init(&scope6_lock, grp, attr);
+}
 
-		while (if_index >= newlim)
-			newlim <<= 1;
+void
+scope6_ifattach(struct ifnet *ifp)
+{
+	struct scope6_id *sid;
 
-		/* grow scope index array */
-		n = newlim * sizeof(struct scope6_id);
-		/* XXX: need new malloc type? */
-		q = (caddr_t)_MALLOC(n, M_IFADDR, M_WAITOK);
-		if (q == NULL) {
-			lck_mtx_unlock(scope6_mutex);
-			return ENOBUFS;
-		}
-		if_scope_indexlim = newlim;
-		bzero(q, n);
-		if (scope6_ids) {
-			bcopy((caddr_t)scope6_ids, q, n/2);
-			FREE((caddr_t)scope6_ids, M_IFADDR);
-		}
-		scope6_ids = (struct scope6_id *)(void *)q;
-	}
-
-#define SID scope6_ids[ifp->if_index]
-
-	/* don't initialize if called twice */
-	if (SID.s6id_list[IPV6_ADDR_SCOPE_LINKLOCAL]) {
-		lck_mtx_unlock(scope6_mutex);
-		return 0;
-	}
-
+	VERIFY(IN6_IFEXTRA(ifp) != NULL);
+	if_inet6data_lock_exclusive(ifp);
+	sid = SID(ifp);
+	/* N.B.: the structure is already zero'ed */
 	/*
 	 * XXX: IPV6_ADDR_SCOPE_xxx macros are not standard.
 	 * Should we rather hardcode here?
 	 */
-	SID.s6id_list[IPV6_ADDR_SCOPE_INTFACELOCAL] = ifp->if_index;
-	SID.s6id_list[IPV6_ADDR_SCOPE_LINKLOCAL] = ifp->if_index;
+	sid->s6id_list[IPV6_ADDR_SCOPE_INTFACELOCAL] = ifp->if_index;
+	sid->s6id_list[IPV6_ADDR_SCOPE_LINKLOCAL] = ifp->if_index;
 #if MULTI_SCOPE
 	/* by default, we don't care about scope boundary for these scopes. */
-	SID.s6id_list[IPV6_ADDR_SCOPE_SITELOCAL] = 1;
-	SID.s6id_list[IPV6_ADDR_SCOPE_ORGLOCAL] = 1;
+	sid->s6id_list[IPV6_ADDR_SCOPE_SITELOCAL] = 1;
+	sid->s6id_list[IPV6_ADDR_SCOPE_ORGLOCAL] = 1;
 #endif
-#undef SID
-	lck_mtx_unlock(scope6_mutex);
-
-	return 0;
+	if_inet6data_lock_done(ifp);
 }
-
-int
-scope6_set(
-	struct ifnet *ifp,
-	u_int32_t *idlist)
-{
-	int i;
-	int error = 0;
-
-	if (scope6_ids == NULL)	/* paranoid? */
-		return(EINVAL);
-
-	/*
-	 * XXX: We need more consistency checks of the relationship among
-	 * scopes (e.g. an organization should be larger than a site).
-	 */
-
-	/*
-	 * TODO(XXX): after setting, we should reflect the changes to
-	 * interface addresses, routing table entries, PCB entries...
-	 */
-
-	lck_mtx_lock(scope6_mutex);
-	for (i = 0; i < 16; i++) {
-		if (idlist[i] &&
-		    idlist[i] != scope6_ids[ifp->if_index].s6id_list[i]) {
-			if (i == IPV6_ADDR_SCOPE_INTFACELOCAL &&
-			    idlist[i] > if_index) {
-				/*
-				 * XXX: theoretically, there should be no
-				 * relationship between link IDs and interface
-				 * IDs, but we check the consistency for
-				 * safety in later use.
-				 */
-				lck_mtx_unlock(scope6_mutex);
-				return(EINVAL);
-			}
-
-			/*
-			 * XXX: we must need lots of work in this case,
-			 * but we simply set the new value in this initial
-			 * implementation.
-			 */
-			scope6_ids[ifp->if_index].s6id_list[i] = idlist[i];
-		}
-	}
-	lck_mtx_unlock(scope6_mutex);
-
-	return(error);
-}
-
-int
-scope6_get(
-	struct ifnet *ifp,
-	u_int32_t *idlist)
-{
-	if (scope6_ids == NULL)	/* paranoid? */
-		return(EINVAL);
-
-	lck_mtx_lock(scope6_mutex);
-	bcopy(scope6_ids[ifp->if_index].s6id_list, idlist,
-	      sizeof(scope6_ids[ifp->if_index].s6id_list));
-	lck_mtx_unlock(scope6_mutex);
-
-	return(0);
-}
-
 
 /*
  * Get a scope of the address. Node-local, link-local, site-local or global.
  */
 int
-in6_addrscope(addr)
-struct in6_addr *addr;
+in6_addrscope(struct in6_addr *addr)
 {
 	int scope;
 
@@ -226,17 +126,13 @@ struct in6_addr *addr;
 
 		switch (scope) {
 		case 0x80:
-			return IPV6_ADDR_SCOPE_LINKLOCAL;
-			break;
+			return (IPV6_ADDR_SCOPE_LINKLOCAL);
 		case 0xc0:
-			return IPV6_ADDR_SCOPE_SITELOCAL;
-			break;
+			return (IPV6_ADDR_SCOPE_SITELOCAL);
 		default:
-			return IPV6_ADDR_SCOPE_GLOBAL; /* just in case */
-			break;
+			return (IPV6_ADDR_SCOPE_GLOBAL); /* just in case */
 		}
 	}
-
 
 	if (addr->s6_addr8[0] == 0xff) {
 		scope = addr->s6_addr8[1] & 0x0f;
@@ -247,17 +143,13 @@ struct in6_addr *addr;
 		 */
 		switch (scope) {
 		case IPV6_ADDR_SCOPE_INTFACELOCAL:
-			return IPV6_ADDR_SCOPE_INTFACELOCAL;
-			break;
+			return (IPV6_ADDR_SCOPE_INTFACELOCAL);
 		case IPV6_ADDR_SCOPE_LINKLOCAL:
-			return IPV6_ADDR_SCOPE_LINKLOCAL;
-			break;
+			return (IPV6_ADDR_SCOPE_LINKLOCAL);
 		case IPV6_ADDR_SCOPE_SITELOCAL:
-			return IPV6_ADDR_SCOPE_SITELOCAL;
-			break;
+			return (IPV6_ADDR_SCOPE_SITELOCAL);
 		default:
-			return IPV6_ADDR_SCOPE_GLOBAL;
-			break;
+			return (IPV6_ADDR_SCOPE_GLOBAL);
 		}
 	}
 
@@ -265,55 +157,47 @@ struct in6_addr *addr;
 	 * Regard loopback and unspecified addresses as global, since
 	 * they have no ambiguity.
 	 */
-	if (bcmp(&in6addr_loopback, addr, sizeof(*addr) - 1) == 0) {
+	if (bcmp(&in6addr_loopback, addr, sizeof (*addr) - 1) == 0) {
 		if (addr->s6_addr8[15] == 1) /* loopback */
-			return IPV6_ADDR_SCOPE_LINKLOCAL;
+			return (IPV6_ADDR_SCOPE_LINKLOCAL);
 		if (addr->s6_addr8[15] == 0) /* unspecified */
-			return IPV6_ADDR_SCOPE_GLOBAL; /* XXX: correct? */
+			return (IPV6_ADDR_SCOPE_GLOBAL); /* XXX: correct? */
 	}
 
-	return IPV6_ADDR_SCOPE_GLOBAL;
+	return (IPV6_ADDR_SCOPE_GLOBAL);
 }
 
 int
-in6_addr2scopeid(
-	struct ifnet *ifp,	/* must not be NULL */
-	struct in6_addr *addr)	/* must not be NULL */
+in6_addr2scopeid(struct ifnet *ifp, struct in6_addr *addr)
 {
 	int scope = in6_addrscope(addr);
-	int index = ifp->if_index;
 	int retid = 0;
+	struct scope6_id *sid;
 
-	if (scope6_ids == NULL)	/* paranoid? */
-		return(0);	/* XXX */
-	
-	lck_mtx_lock(scope6_mutex);
-	if (index >= if_scope_indexlim) {
-		lck_mtx_unlock(scope6_mutex);
-		return(0);	/* XXX */
-	}
-
-#define SID scope6_ids[index]
-	switch(scope) {
+	if_inet6data_lock_shared(ifp);
+	if (IN6_IFEXTRA(ifp) == NULL)
+		goto err;
+	sid = SID(ifp);
+	switch (scope) {
 	case IPV6_ADDR_SCOPE_NODELOCAL:
 		retid = -1;	/* XXX: is this an appropriate value? */
 		break;
 	case IPV6_ADDR_SCOPE_LINKLOCAL:
-		retid=SID.s6id_list[IPV6_ADDR_SCOPE_LINKLOCAL];
+		retid = sid->s6id_list[IPV6_ADDR_SCOPE_LINKLOCAL];
 		break;
 	case IPV6_ADDR_SCOPE_SITELOCAL:
-		retid=SID.s6id_list[IPV6_ADDR_SCOPE_SITELOCAL];
+		retid = sid->s6id_list[IPV6_ADDR_SCOPE_SITELOCAL];
 		break;
 	case IPV6_ADDR_SCOPE_ORGLOCAL:
-		retid=SID.s6id_list[IPV6_ADDR_SCOPE_ORGLOCAL];
+		retid = sid->s6id_list[IPV6_ADDR_SCOPE_ORGLOCAL];
 		break;
 	default:
 		break;	/* XXX: value 0, treat as global. */
 	}
-#undef SID
+err:
+	if_inet6data_lock_done(ifp);
 
-	lck_mtx_unlock(scope6_mutex);
-	return retid;
+	return (retid);
 }
 
 /*
@@ -346,7 +230,7 @@ sa6_embedscope(struct sockaddr_in6 *sin6, int defaultok)
 			return (ENXIO);
 		ifnet_head_lock_shared();
 		ifp = ifindex2ifnet[zoneid];
-		if (ifp == NULL) {/* XXX: this can happen for some OS */
+		if (ifp == NULL) {	/* XXX: this can happen for some OS */
 			ifnet_head_done();
 			return (ENXIO);
 		}
@@ -357,7 +241,7 @@ sa6_embedscope(struct sockaddr_in6 *sin6, int defaultok)
 		sin6->sin6_scope_id = 0;
 	}
 
-	return 0;
+	return (0);
 }
 
 void
@@ -426,12 +310,11 @@ sa6_recoverscope(struct sockaddr_in6 *sin6, boolean_t attachcheck)
 		}
 	}
 
-	return 0;
+	return (0);
 }
 
 void
-scope6_setdefault(
-	struct ifnet *ifp)	/* note that this might be NULL */
+scope6_setdefault(struct ifnet *ifp)
 {
 	/*
 	 * Currently, this function just set the default "link" according to
@@ -439,43 +322,37 @@ scope6_setdefault(
 	 * We might eventually have to separate the notion of "link" from
 	 * "interface" and provide a user interface to set the default.
 	 */
-	lck_mtx_lock(scope6_mutex);
-	if (ifp) {
-		scope6_ids[0].s6id_list[IPV6_ADDR_SCOPE_INTFACELOCAL] =
-			ifp->if_index;
-		scope6_ids[0].s6id_list[IPV6_ADDR_SCOPE_LINKLOCAL] =
-			ifp->if_index;
+	lck_mtx_lock(&scope6_lock);
+	if (ifp != NULL) {
+		sid_default.s6id_list[IPV6_ADDR_SCOPE_INTFACELOCAL] =
+		    ifp->if_index;
+		sid_default.s6id_list[IPV6_ADDR_SCOPE_LINKLOCAL] =
+		    ifp->if_index;
 	} else {
-		scope6_ids[0].s6id_list[IPV6_ADDR_SCOPE_INTFACELOCAL] = 0;
-		scope6_ids[0].s6id_list[IPV6_ADDR_SCOPE_LINKLOCAL] = 0;
+		sid_default.s6id_list[IPV6_ADDR_SCOPE_INTFACELOCAL] = 0;
+		sid_default.s6id_list[IPV6_ADDR_SCOPE_LINKLOCAL] = 0;
 	}
-	lck_mtx_unlock(scope6_mutex);
+	lck_mtx_unlock(&scope6_lock);
 }
 
-int
-scope6_get_default(
-	u_int32_t *idlist)
-{
-	if (scope6_ids == NULL)	/* paranoid? */
-		return(EINVAL);
-
-	lck_mtx_lock(scope6_mutex);
-	bcopy(scope6_ids[0].s6id_list, idlist,
-	      sizeof(scope6_ids[0].s6id_list));
-	lck_mtx_unlock(scope6_mutex);
-
-	return(0);
-}
 
 u_int32_t
-scope6_addr2default(
-	struct in6_addr *addr)
+scope6_addr2default(struct in6_addr *addr)
 {
 	u_int32_t id = 0;
 	int index = in6_addrscope(addr);
-	lck_mtx_lock(scope6_mutex);
-	id = scope6_ids[0].s6id_list[index];
-	lck_mtx_unlock(scope6_mutex);
+
+	/*
+	 * special case: The loopback address should be considered as
+	 * link-local, but there's no ambiguity in the syntax.
+	 */
+	if (IN6_IS_ADDR_LOOPBACK(addr))
+		return (0);
+
+	lck_mtx_lock(&scope6_lock);
+	id = sid_default.s6id_list[index];
+	lck_mtx_unlock(&scope6_lock);
+
 	return (id);
 }
 
@@ -491,14 +368,7 @@ in6_setscope(struct in6_addr *in6, struct ifnet *ifp, u_int32_t *ret_id)
 {
 	int scope;
 	u_int32_t zoneid = 0;
-	int index = ifp->if_index;
-
-#ifdef DIAGNOSTIC
-	if (scope6_ids == NULL) { /* should not happen */
-		panic("in6_setscope: scope array is NULL");
-		/* NOTREACHED */
-	}
-#endif
+	struct scope6_id *sid;
 
 	/*
 	 * special case: the loopback address can only belong to a loopback
@@ -516,36 +386,35 @@ in6_setscope(struct in6_addr *in6, struct ifnet *ifp, u_int32_t *ret_id)
 
 	scope = in6_addrscope(in6);
 
-	lck_mtx_lock(scope6_mutex);
-	if (index >= if_scope_indexlim) {
-		lck_mtx_unlock(scope6_mutex);
-		if (ret_id != NULL)
+	if_inet6data_lock_shared(ifp);
+	if (IN6_IFEXTRA(ifp) == NULL) {
+		if_inet6data_lock_done(ifp);
+		if (ret_id)
 			*ret_id = 0;
 		return (EINVAL);
 	}
-#define SID scope6_ids[index]
+	sid = SID(ifp);
 	switch (scope) {
 	case IPV6_ADDR_SCOPE_INTFACELOCAL: /* should be interface index */
-		zoneid = SID.s6id_list[IPV6_ADDR_SCOPE_INTFACELOCAL];
+		zoneid = sid->s6id_list[IPV6_ADDR_SCOPE_INTFACELOCAL];
 		break;
 
 	case IPV6_ADDR_SCOPE_LINKLOCAL:
-		zoneid = SID.s6id_list[IPV6_ADDR_SCOPE_LINKLOCAL];
+		zoneid = sid->s6id_list[IPV6_ADDR_SCOPE_LINKLOCAL];
 		break;
 
 	case IPV6_ADDR_SCOPE_SITELOCAL:
-		zoneid = SID.s6id_list[IPV6_ADDR_SCOPE_SITELOCAL];
+		zoneid = sid->s6id_list[IPV6_ADDR_SCOPE_SITELOCAL];
 		break;
 
 	case IPV6_ADDR_SCOPE_ORGLOCAL:
-		zoneid = SID.s6id_list[IPV6_ADDR_SCOPE_ORGLOCAL];
+		zoneid = sid->s6id_list[IPV6_ADDR_SCOPE_ORGLOCAL];
 		break;
-#undef SID
 	default:
 		zoneid = 0;	/* XXX: treat as global. */
 		break;
 	}
-	lck_mtx_unlock(scope6_mutex);
+	if_inet6data_lock_done(ifp);
 
 	if (ret_id != NULL)
 		*ret_id = zoneid;
@@ -573,4 +442,3 @@ in6_clearscope(struct in6_addr *in6)
 
 	return (modified);
 }
-

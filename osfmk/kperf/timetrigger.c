@@ -33,6 +33,8 @@
 #include <kern/kalloc.h>
 #include <sys/errno.h>
 
+#include <machine/machine_routines.h>
+
 #include <chud/chud_xnu.h>
 
 #include <kperf/kperf.h>
@@ -42,6 +44,10 @@
 #include <kperf/timetrigger.h>
 #include <kperf/kperf_arch.h>
 #include <kperf/pet.h>
+#include <kperf/sample.h>
+
+/* make up for arm signal deficiencies */
+void kperf_signal_handler(void);
 
 /* represents a periodic timer */
 struct time_trigger
@@ -50,6 +56,12 @@ struct time_trigger
 	uint64_t period;
 	unsigned actionid;
 	volatile unsigned active;
+
+#ifdef USE_SIMPLE_SIGNALS
+	/* firing accounting */
+	uint64_t fire_count;
+	uint64_t last_cpu_fire[MAX_CPUS];
+#endif
 };
 
 /* the list of timers */
@@ -60,8 +72,10 @@ static unsigned pet_timer = 999;
 /* maximum number of timers we can construct */
 #define TIMER_MAX 16
 
-/* minimal interval for a timer (100usec in nsec) */
-#define MIN_TIMER (100000)
+/* minimal interval for a timer (10usec in nsec) */
+#define MIN_TIMER_NS (10000)
+/* minimal interval for pet timer (2msec in nsec) */
+#define MIN_PET_TIMER_NS (2000000)
 
 static void
 kperf_timer_schedule( struct time_trigger *trigger, uint64_t now )
@@ -70,23 +84,29 @@ kperf_timer_schedule( struct time_trigger *trigger, uint64_t now )
 
 	BUF_INFO1(PERF_TM_SCHED, trigger->period);
 
+	/* if we re-programmed the timer to zero, just drop it */
+	if( !trigger->period )
+		return;
+
 	/* calculate deadline */
 	deadline = now + trigger->period;
 	
 	/* re-schedule the timer, making sure we don't apply slop */
-	timer_call_enter( &trigger->tcall, deadline, TIMER_CALL_CRITICAL);
+	timer_call_enter( &trigger->tcall, deadline, TIMER_CALL_SYS_CRITICAL);
 }
 
 static void
 kperf_ipi_handler( void *param )
 {
 	int r;
+	int ncpu;
 	struct kperf_sample *intbuf = NULL;
 	struct kperf_context ctx;
 	struct time_trigger *trigger = param;
 	task_t task = NULL;
-	
-	BUF_INFO1(PERF_TM_HNDLR | DBG_FUNC_START, 0);
+
+	/* Always cut a tracepoint to show a sample event occurred */
+	BUF_DATA1(PERF_TM_HNDLR | DBG_FUNC_START, 0);
 
 	/* In an interrupt, get the interrupt buffer for this CPU */
 	intbuf = kperf_intr_sample_buffer();
@@ -103,17 +123,67 @@ kperf_ipi_handler( void *param )
 	ctx.trigger_type = TRIGGER_TYPE_TIMER;
 	ctx.trigger_id = (unsigned)(trigger-timerv); /* computer timer number */
 
+	ncpu = chudxnu_cpu_number();
+	if (ctx.trigger_id == pet_timer && ncpu < machine_info.logical_cpu_max)
+		kperf_thread_on_cpus[ncpu] = ctx.cur_thread;
+
+	/* check samppling is on */
+	if( kperf_sampling_status() == KPERF_SAMPLING_OFF ) {
+		BUF_INFO1(PERF_TM_HNDLR | DBG_FUNC_END, SAMPLE_OFF);
+		return;
+	} else if( kperf_sampling_status() == KPERF_SAMPLING_SHUTDOWN ) {
+		BUF_INFO1(PERF_TM_HNDLR | DBG_FUNC_END, SAMPLE_SHUTDOWN);
+		return;
+	}
+
 	/* call the action -- kernel-only from interrupt, pend user */
-	r = kperf_sample( intbuf, &ctx, trigger->actionid, TRUE );
-	
+	r = kperf_sample( intbuf, &ctx, trigger->actionid, SAMPLE_FLAG_PEND_USER );
+
+	/* end tracepoint is informational */
 	BUF_INFO1(PERF_TM_HNDLR | DBG_FUNC_END, r);
 }
+
+#ifdef USE_SIMPLE_SIGNALS
+/* if we can't pass a (function, arg) pair through a signal properly,
+ * we do it the simple way. When a timer fires, we increment a counter
+ * in the time trigger and broadcast a generic signal to all cores. Cores
+ * search the time trigger list for any triggers for which their last seen
+ * firing counter is lower than the current one.
+ */
+void
+kperf_signal_handler(void)
+{
+	int i, cpu;
+	struct time_trigger *tr = NULL;
+
+	OSMemoryBarrier();
+
+	cpu = chudxnu_cpu_number();
+	for( i = 0; i < (int) timerc; i++ )
+	{
+		tr = &timerv[i];
+		if( tr->fire_count <= tr->last_cpu_fire[cpu] )
+			continue; /* this trigger hasn't fired */
+
+		/* fire the trigger! */
+		tr->last_cpu_fire[cpu] = tr->fire_count;
+		kperf_ipi_handler( tr );
+	}
+}
+#else
+void
+kperf_signal_handler(void)
+{
+	// so we can link...
+}
+#endif
 
 static void
 kperf_timer_handler( void *param0, __unused void *param1 )
 {
 	struct time_trigger *trigger = param0;
 	unsigned ntimer = (unsigned)(trigger - timerv);
+	unsigned ncpus  = machine_info.logical_cpu_max;
 
 	trigger->active = 1;
 
@@ -121,8 +191,17 @@ kperf_timer_handler( void *param0, __unused void *param1 )
 	if( kperf_sampling_status() == KPERF_SAMPLING_SHUTDOWN )
 		goto deactivate;
 
+	/* clean-up the thread-on-CPUs cache */
+	bzero(kperf_thread_on_cpus, ncpus * sizeof(*kperf_thread_on_cpus));
+
 	/* ping all CPUs */
+#ifndef USE_SIMPLE_SIGNALS
 	kperf_mp_broadcast( kperf_ipi_handler, trigger );
+#else
+	trigger->fire_count++;
+	OSMemoryBarrier();
+	kperf_mp_signal();
+#endif
 
 	/* release the pet thread? */
 	if( ntimer == pet_timer )
@@ -132,7 +211,7 @@ kperf_timer_handler( void *param0, __unused void *param1 )
 	}
 	else
 	{
-		/* re-enable the timer 
+		/* re-enable the timer
 		 * FIXME: get the current time from elsewhere
 		 */
 		uint64_t now = mach_absolute_time();
@@ -145,10 +224,18 @@ deactivate:
 
 /* program the timer from the pet thread */
 int
-kperf_timer_pet_set( unsigned timer )
+kperf_timer_pet_set( unsigned timer, uint64_t elapsed_ticks )
 {
+	static uint64_t pet_min_ticks = 0;
+
 	uint64_t now;
 	struct time_trigger *trigger = NULL;
+	uint64_t period = 0;
+	uint64_t deadline;
+
+	/* compute ns -> ticks */
+	if( pet_min_ticks == 0 )
+		nanoseconds_to_absolutetime(MIN_PET_TIMER_NS, &pet_min_ticks);
 
 	if( timer != pet_timer )
 		panic( "PET setting with bogus ID\n" );
@@ -156,14 +243,42 @@ kperf_timer_pet_set( unsigned timer )
 	if( timer >= timerc )
 		return EINVAL;
 
+	if( kperf_sampling_status() == KPERF_SAMPLING_OFF ) {
+		BUF_INFO1(PERF_PET_END, SAMPLE_OFF);
+		return 0;
+	}
+
+	// don't repgram the timer if it's been shutdown
+	if( kperf_sampling_status() == KPERF_SAMPLING_SHUTDOWN ) {
+		BUF_INFO1(PERF_PET_END, SAMPLE_SHUTDOWN);
+		return 0;
+	}
+
 	/* CHECKME: we probably took so damn long in the PET thread,
 	 * it makes sense to take the time again.
 	 */
 	now = mach_absolute_time();
 	trigger = &timerv[timer];
 
-	/* reprogram */
-	kperf_timer_schedule( trigger, now );
+	/* if we re-programmed the timer to zero, just drop it */
+	if( !trigger->period )
+		return 0;
+
+	/* subtract the time the pet sample took being careful not to underflow */
+	if ( trigger->period > elapsed_ticks )
+		period = trigger->period - elapsed_ticks;
+
+	/* make sure we don't set the next PET sample to happen too soon */
+	if ( period < pet_min_ticks )
+		period = pet_min_ticks;
+
+	/* calculate deadline */
+	deadline = now + period;
+
+	BUF_INFO(PERF_PET_SCHED, trigger->period, period, elapsed_ticks, deadline);
+
+	/* re-schedule the timer, making sure we don't apply slop */
+	timer_call_enter( &trigger->tcall, deadline, TIMER_CALL_SYS_CRITICAL);
 
 	return 0;
 }
@@ -242,8 +357,6 @@ kperf_timer_set_petid(unsigned timerid)
 int
 kperf_timer_get_period( unsigned timer, uint64_t *period )
 {
-	printf( "get timer %u / %u\n", timer, timerc );
-
 	if( timer >= timerc )
 		return EINVAL;
 
@@ -255,17 +368,44 @@ kperf_timer_get_period( unsigned timer, uint64_t *period )
 int
 kperf_timer_set_period( unsigned timer, uint64_t period )
 {
-	printf( "set timer %u\n", timer );
+	static uint64_t min_timer_ticks = 0;
 
 	if( timer >= timerc )
 		return EINVAL;
 
-	if( period < MIN_TIMER )
-		period = MIN_TIMER;
+	/* compute us -> ticks */
+	if( min_timer_ticks == 0 )
+		nanoseconds_to_absolutetime(MIN_TIMER_NS, &min_timer_ticks);
+
+	/* check actual timer */
+	if( period && (period < min_timer_ticks) )
+		period = min_timer_ticks;
 
 	timerv[timer].period = period;
 
 	/* FIXME: re-program running timers? */
+
+	return 0;
+}
+
+int
+kperf_timer_get_action( unsigned timer, uint32_t *action )
+{
+	if( timer >= timerc )
+		return EINVAL;
+
+	*action = timerv[timer].actionid;
+
+	return 0;
+}
+
+int
+kperf_timer_set_action( unsigned timer, uint32_t action )
+{
+	if( timer >= timerc )
+		return EINVAL;
+
+	timerv[timer].actionid = action;
 
 	return 0;
 }
@@ -290,10 +430,7 @@ kperf_timer_set_count(unsigned count)
 
 	/* easy no-op */
 	if( count == timerc )
-	{
-		printf( "already got %d timers\n", timerc );
 		return 0;
-	}
 
 	/* TODO: allow shrinking? */
 	if( count < timerc )
@@ -314,12 +451,18 @@ kperf_timer_set_count(unsigned count)
 		r = kperf_init();
 		if( r )
 			return r;
-		
+
 		/* get the PET thread going */
 		r = kperf_pet_init();
 		if( r )
 			return r;
 	}
+
+	/* first shut down any running timers since we will be messing
+	 * with the timer call structures
+	 */
+	if( kperf_timer_stop() )
+		return EBUSY;
 
 	/* create a new array */
 	new_timerv = kalloc( count * sizeof(*new_timerv) );
@@ -335,8 +478,8 @@ kperf_timer_set_count(unsigned count)
 	/* zero the new entries */
 	bzero( &new_timerv[timerc], (count - old_count) * sizeof(*new_timerv) );
 
-	/* setup the timer call info */
-	for( i = old_count; i < count; i++ )
+	/* (re-)setup the timer call info for all entries */
+	for( i = 0; i < count; i++ )
 		setup_timer_call( &new_timerv[i] );
 
 	timerv = new_timerv;
@@ -344,8 +487,6 @@ kperf_timer_set_count(unsigned count)
 
 	if( old_timerv != NULL )
 		kfree( old_timerv, old_count * sizeof(*timerv) );
-
-	printf( "kperf: done timer alloc, timerc %d\n", timerc );
 
 	return 0;
 }

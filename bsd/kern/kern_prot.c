@@ -1842,47 +1842,6 @@ suser(kauth_cred_t cred, u_short *acflag)
 
 
 /*
- * XXX This interface is going away; use kauth_cred_issuser() directly
- * XXX instead.
- */
-int
-is_suser(void)
-{
-	proc_t p = current_proc();
-
-	if (!p)
-		return (0);
-
-	return (proc_suser(p) == 0);
-}
-
-
-/*
- * XXX This interface is going away; use kauth_cred_issuser() directly
- * XXX instead.
- */
-int
-is_suser1(void)
-{
-	proc_t p = current_proc();
-	kauth_cred_t my_cred;
-	posix_cred_t my_pcred;
-	int err;
-
-	if (!p)
-		return (0);
-
-	my_cred = kauth_cred_proc_ref(p);
-	my_pcred = posix_cred_get(my_cred);
-
-	err =  (suser(my_cred, &p->p_acflag) == 0 ||
-			my_pcred->cr_ruid == 0 || my_pcred->cr_svuid == 0);
-	kauth_cred_unref(&my_cred);
-	return(err);
-}
-
-
-/*
  * getlogin
  *
  * Description:	Get login name, if available.
@@ -2112,7 +2071,7 @@ setlcid(proc_t p0, struct setlcid_args *uap, __unused int32_t *retval)
 	case LCID_REMOVE:
 
 		/* Only root may Leave/Orphan. */
-		if (!is_suser1()) {
+		if (!kauth_cred_issuser(kauth_cred_get())) {
 			error = EPERM;
 			goto out;
 		}
@@ -2156,7 +2115,7 @@ setlcid(proc_t p0, struct setlcid_args *uap, __unused int32_t *retval)
 	default:
 
 		/* Only root may Join/Adopt. */
-		if (!is_suser1()) {
+		if (!kauth_cred_issuser(kauth_cred_get())) {
 			error = EPERM;
 			goto out;
 		}

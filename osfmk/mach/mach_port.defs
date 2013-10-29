@@ -208,7 +208,30 @@ routine mach_port_mod_refs(
 		right		: mach_port_right_t;
 		delta		: mach_port_delta_t);
 
-skip;
+/*
+ *	Peek at the message queue for the specified receive
+ *	right and return info about the message with the
+ *	sequence number matching the input.  If zero is
+ *	specified as the seqno, the first message in the
+ *	queue will be peeked.
+ *
+ *	Only the following trailer types are currently supported:
+ *	     MACH_RCV_TRAILER_TYPE(MACH_MSG_TRAILER_FORMAT_0)
+ *
+ *		or'ed with one of these element types:
+ *	     MACH_RCV_TRAILER_ELEMENTS(MACH_RCV_TRAILER_NULL)
+ *	     MACH_RCV_TRAILER_ELEMENTS(MACH_RCV_TRAILER_SEQNO)
+ *	     MACH_RCV_TRAILER_ELEMENTS(MACH_RCV_TRAILER_SENDER)
+ *	     MACH_RCV_TRAILER_ELEMENTS(MACH_RCV_TRAILER_AUDIT)
+ */
+routine mach_port_peek(
+		task		: ipc_space_t;
+		name		: mach_port_name_t;
+		trailer_type	: mach_msg_trailer_type_t;
+ inout		request_seqnop	: mach_port_seqno_t;
+ out		msg_sizep	: mach_msg_size_t;
+ out		msg_idp		: mach_msg_id_t;
+ out		trailer_infop	: mach_msg_trailer_info_t, CountInOut);		
 
 /*
  *	Only valid for receive rights.
@@ -516,5 +539,67 @@ routine	mach_port_kobject(
 	out	object_type	: natural_t;
 	out	object_addr	: mach_vm_address_t);
 
+
+/*
+ *	Constructs a right based on the options passed
+ *	in. Also allows guarding the port as one of the
+ *	options if the requested right is a receive
+ *	right.
+ */
+routine mach_port_construct(
+		task		: ipc_space_t;
+		options		: mach_port_options_ptr_t;
+#ifdef LIBSYSCALL_INTERFACE
+		context		: mach_port_context_t;
+#else
+		context		: uint64_t;
+#endif
+	out	name		: mach_port_name_t);
+
+/*
+ *	Destroys a mach port using the guard provided
+ *	for guarded ports. Also reduces the user ref
+ *	count for send rights as specified by srdelta.
+ */
+routine mach_port_destruct(
+		task		: ipc_space_t;
+		name		: mach_port_name_t;
+		srdelta		: mach_port_delta_t;
+#ifdef LIBSYSCALL_INTERFACE
+		guard		: mach_port_context_t
+#else
+		guard		: uint64_t
+#endif		
+		);
+
+/*
+ *	Guard an already existing port. Allows guarding
+ *	receive rights only. Uses the context field in the
+ *	port structure to store the guard.
+ */
+routine mach_port_guard(
+		task		: ipc_space_t;
+		name		: mach_port_name_t;
+#ifdef LIBSYSCALL_INTERFACE
+		guard		: mach_port_context_t;
+#else
+		guard		: uint64_t;
+#endif	
+		strict		: boolean_t);
+
+/*
+ *	Unguard a port guarded previously. For unguarded ports
+ *	or incorrect guards passed in it raises an exception
+ *	indicating guarding misbehavior.
+ */
+routine mach_port_unguard(
+		task		: ipc_space_t;
+		name		: mach_port_name_t;
+#ifdef LIBSYSCALL_INTERFACE
+		guard		: mach_port_context_t
+#else
+		guard		: uint64_t
+#endif	
+		);
 
 /* vim: set ft=c : */

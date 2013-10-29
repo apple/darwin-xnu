@@ -65,7 +65,7 @@ typedef struct block_list_header {
     u_int16_t   max_blocks;          // max number of blocks in this chunk
     u_int16_t   num_blocks;          // number of valid block numbers in block_nums
     int32_t     bytes_used;          // how many bytes of this tbuffer are used
-    int32_t     checksum;            // on-disk: checksum of this header and binfo[0]
+    uint32_t     checksum;            // on-disk: checksum of this header and binfo[0]
     int32_t     flags;               // check-checksums, initial blhdr, etc
     block_info  binfo[1];            // so we can reference them by name
 } block_list_header;
@@ -99,6 +99,7 @@ typedef struct transaction {
     uint32_t            sequence_num;
 	struct jnl_trim_list trim;
     boolean_t		delayed_header_write;
+	boolean_t       flush_on_completion; //flush transaction immediately upon txn end.
 } transaction;
 
 
@@ -113,7 +114,7 @@ typedef struct journal_header {
     volatile off_t end;           // zero-based byte offset of where free space begins
     off_t          size;          // size in bytes of the entire journal
     int32_t        blhdr_size;    // size in bytes of each block_list_header in the journal
-    int32_t        checksum;
+    uint32_t        checksum;
     int32_t        jhdr_size;     // block size (in bytes) of the journal header
     uint32_t       sequence_num;  // NEW FIELD: a monotonically increasing value assigned to all txn's
 } journal_header;
@@ -146,6 +147,7 @@ typedef struct journal {
     const char         *jdev_name;
 
     struct vnode       *fsdev;             // vnode of the file system device
+    struct mount       *fsmount;           // mount of the file system
     
     void              (*flush)(void *arg); // fs callback to flush meta data blocks
     void               *flush_arg;         // arg that's passed to flush()
@@ -207,7 +209,7 @@ __BEGIN_DECLS
 /*
  * Call journal_init() to initialize the journaling code (sets up lock attributes)
  */
-void      journal_init(void) __attribute__((section("__TEXT, initcode")));
+void      journal_init(void);
 
 /*
  * Call journal_create() to create a new journal.  You only
@@ -244,7 +246,8 @@ journal *journal_create(struct vnode *jvp,
 						int32_t       flags,
 						int32_t       tbuffer_size,
 						void        (*flush)(void *arg),
-						void         *arg);
+						void         *arg,
+						struct mount *fsmount);
 
 /*
  * Call journal_open() when mounting an existing file system
@@ -264,7 +267,8 @@ journal  *journal_open(struct vnode *jvp,
 					   int32_t       flags,
 					   int32_t       tbuffer_size,
 					   void        (*flush)(void *arg),
-					   void         *arg);
+					   void         *arg,
+					   struct mount *fsmount);
 
 /*
  * Test whether the journal is clean or not.  This is intended
@@ -327,6 +331,9 @@ int   journal_kill_block(journal *jnl, struct buf *bp);
 int   journal_trim_add_extent(journal *jnl, uint64_t offset, uint64_t length);
 int   journal_trim_remove_extent(journal *jnl, uint64_t offset, uint64_t length);
 void  journal_trim_set_callback(journal *jnl, jnl_trim_callback_t callback, void *arg);
+int   journal_trim_extent_overlap (journal *jnl, uint64_t offset, uint64_t length, uint64_t *end);
+/* Mark state in the journal that requests an immediate journal flush upon txn completion */
+int		journal_request_immediate_flush (journal *jnl);
 #endif
 int   journal_end_transaction(journal *jnl);
 

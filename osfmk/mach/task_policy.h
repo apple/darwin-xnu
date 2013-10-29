@@ -103,6 +103,11 @@ kern_return_t	task_policy_get(
 
 #define TASK_CATEGORY_POLICY		1
 
+#define TASK_SUPPRESSION_POLICY		3
+#define TASK_POLICY_STATE		4
+#define TASK_BASE_QOS_POLICY		8
+#define TASK_OVERRIDE_QOS_POLICY	9
+
 enum task_role {
 	TASK_RENICED = -1,
 	TASK_UNSPECIFIED = 0,
@@ -115,7 +120,7 @@ enum task_role {
 	TASK_DEFAULT_APPLICATION
 };
 
-typedef enum task_role		task_role_t;
+typedef integer_t	task_role_t;
 
 struct task_category_policy {
 	task_role_t		role;
@@ -126,5 +131,278 @@ typedef struct task_category_policy		*task_category_policy_t;
 
 #define TASK_CATEGORY_POLICY_COUNT	((mach_msg_type_number_t) \
 	(sizeof (task_category_policy_data_t) / sizeof (integer_t)))
+
+
+enum task_latency_qos {
+	LATENCY_QOS_TIER_UNSPECIFIED = 0x0,
+	LATENCY_QOS_TIER_0 = ((0xFF<<16) | 1),
+	LATENCY_QOS_TIER_1 = ((0xFF<<16) | 2),
+	LATENCY_QOS_TIER_2 = ((0xFF<<16) | 3),
+	LATENCY_QOS_TIER_3 = ((0xFF<<16) | 4),
+	LATENCY_QOS_TIER_4 = ((0xFF<<16) | 5),
+	LATENCY_QOS_TIER_5 = ((0xFF<<16) | 6)
+};
+typedef integer_t	task_latency_qos_t;
+enum task_throughput_qos {
+	THROUGHPUT_QOS_TIER_UNSPECIFIED = 0x0,
+	THROUGHPUT_QOS_TIER_0 = ((0xFE<<16) | 1),
+	THROUGHPUT_QOS_TIER_1 = ((0xFE<<16) | 2),
+	THROUGHPUT_QOS_TIER_2 = ((0xFE<<16) | 3),
+	THROUGHPUT_QOS_TIER_3 = ((0xFE<<16) | 4),
+	THROUGHPUT_QOS_TIER_4 = ((0xFE<<16) | 5),
+	THROUGHPUT_QOS_TIER_5 = ((0xFE<<16) | 6),
+};
+
+#define LATENCY_QOS_LAUNCH_DEFAULT_TIER LATENCY_QOS_TIER_3
+#define THROUGHPUT_QOS_LAUNCH_DEFAULT_TIER THROUGHPUT_QOS_TIER_3
+
+typedef integer_t	task_throughput_qos_t;
+
+struct task_qos_policy {
+	task_latency_qos_t task_latency_qos_tier;
+	task_throughput_qos_t task_throughput_qos_tier;
+};
+
+typedef struct task_qos_policy *task_qos_policy_t;
+#define TASK_QOS_POLICY_COUNT	((mach_msg_type_number_t) \
+	(sizeof (struct task_qos_policy) / sizeof (integer_t)))
+
+#define PROC_FLAG_DARWINBG           0x8000    /* process in darwin background */
+#define PROC_FLAG_EXT_DARWINBG		 0x10000   /* process in darwin background - external enforcement */
+#define PROC_FLAG_IOS_APPLEDAEMON    0x20000   /* process is apple ios daemon */
+#define PROC_FLAG_IOS_IMPPROMOTION   0x80000   /* process is apple ios daemon */
+#define PROC_FLAG_ADAPTIVE           0x100000  /* Process is adaptive */
+#define PROC_FLAG_ADAPTIVE_IMPORTANT 0x200000  /* Process is adaptive, and is currently important */
+#define PROC_FLAG_IMPORTANCE_DONOR   0x400000  /* Process is marked as an importance donor */
+#define PROC_FLAG_SUPPRESSED         0x800000  /* Process is suppressed */
+#define PROC_FLAG_IOS_APPLICATION	 0x1000000 /* Process is an application */
+
+#ifdef MACH_KERNEL_PRIVATE
+
+struct task_requested_policy {
+	/* Task and thread policy (inherited) */
+	uint64_t        int_darwinbg        :1,     /* marked as darwinbg via setpriority */
+	                ext_darwinbg        :1,
+	                int_iotier          :2,     /* IO throttle tier */
+	                ext_iotier          :2,
+	                int_iopassive       :1,     /* should IOs cause lower tiers to be throttled */
+	                ext_iopassive       :1,
+	                bg_iotier           :2,     /* what IO throttle tier should apply to me when I'm darwinbg? (pushed to threads) */
+	                terminated          :1,     /* all throttles should be removed for quick exit or SIGTERM handling */
+
+	/* Thread only policy */
+	                th_pidbind_bg       :1,     /* thread only: task i'm bound to is marked 'watchbg' */
+	                th_workq_bg         :1,     /* thread only: currently running a background priority workqueue */
+
+	/* Task only policy */
+	                t_apptype           :3,     /* What apptype did launchd tell us this was (inherited) */
+	                t_boosted           :1,     /* Has a non-zero importance assertion count */
+	                t_int_gpu_deny      :1,     /* don't allow access to GPU */
+	                t_ext_gpu_deny      :1,
+	                t_role              :3,     /* task's system role */
+	                t_tal_enabled       :1,     /* TAL mode is enabled */
+	                t_base_latency_qos  :3,     /* Timer latency QoS */
+	                t_over_latency_qos  :3,     /* Timer latency QoS override */
+	                t_base_through_qos  :3,     /* Computation throughput QoS */
+	                t_over_through_qos  :3,     /* Computation throughput QoS override */
+
+	/* Task only: suppression policies (non-embedded only) */
+	                t_sup_active        :1,     /* Suppression is on */
+	                t_sup_lowpri_cpu    :1,     /* Wants low priority CPU (MAXPRI_THROTTLE) */
+	                t_sup_timer         :3,     /* Wanted timer throttling QoS tier */
+	                t_sup_disk          :1,     /* Wants disk throttling */
+	                t_sup_cpu_limit     :1,     /* Wants CPU limit (not hooked up yet)*/
+	                t_sup_suspend       :1,     /* Wants to be suspended */
+	                t_sup_throughput    :3,     /* Wants throughput QoS tier */
+	                t_sup_cpu           :1,     /* Wants suppressed CPU priority (MAXPRI_SUPPRESSED) */
+
+	                reserved            :17;
+};
+
+struct task_effective_policy {
+	/* Task and thread policy */
+	uint64_t        darwinbg            :1,     /* marked as 'background', and sockets are marked bg when created */
+	                lowpri_cpu          :1,     /* cpu priority == MAXPRI_THROTTLE */
+	                io_tier             :2,     /* effective throttle tier */
+	                io_passive          :1,     /* should IOs cause lower tiers to be throttled */
+	                all_sockets_bg      :1,     /* All existing sockets in process are marked as bg (thread: all created by thread) */
+	                new_sockets_bg      :1,     /* Newly created sockets should be marked as bg */
+	                bg_iotier           :2,     /* What throttle tier should I be in when darwinbg is set? */
+	                terminated          :1,     /* all throttles have been removed for quick exit or SIGTERM handling */
+
+	/* Task only policy */
+	                t_gpu_deny          :1,     /* not allowed to access GPU */
+	                t_tal_engaged       :1,     /* TAL mode is in effect */
+	                t_suspended         :1,     /* task_suspend-ed due to suppression */
+	                t_watchers_bg       :1,     /* watchers are BG-ed */
+	                t_latency_qos       :3,     /* Timer latency QoS level */
+	                t_through_qos       :3,     /* Computation throughput QoS level */
+	                t_sup_active        :1,     /* suppression behaviors are in effect */
+	                t_role              :3,     /* task's system role */
+	                t_suppressed_cpu    :1,     /* cpu priority == MAXPRI_SUPPRESSED (trumped by lowpri_cpu) */
+
+	                reserved            :39;
+};
+
+struct task_pended_policy {
+	uint64_t        t_updating_policy   :1,     /* Busy bit for task to prevent concurrent 'complete' operations */
+
+	/* Task and thread policy */
+	                update_sockets      :1,
+
+	/* Task only policy */
+	                t_update_timers     :1,
+	                t_update_watchers   :1,
+
+	                reserved            :60;
+};
+
+extern const struct task_requested_policy default_task_requested_policy;
+extern const struct task_effective_policy default_task_effective_policy;
+extern const struct task_pended_policy    default_task_pended_policy;
+
+
+#endif /* MACH_KERNEL_PRIVATE */
+
+#ifdef PRIVATE
+
+/*
+ * Control structure for applying suppression behaviors to tasks
+ */
+struct task_suppression_policy {
+	integer_t active;
+	integer_t lowpri_cpu;  /* priority MAXPRI_THROTTLE cpu */
+	integer_t timer_throttle;
+	integer_t disk_throttle;
+	integer_t cpu_limit;
+	integer_t suspend;
+	integer_t throughput_qos;
+	integer_t suppressed_cpu; /* priority MAXPRI_SUPPRESSED cpu */
+	integer_t reserved[8];
+};
+
+typedef struct task_suppression_policy *task_suppression_policy_t;
+
+#define TASK_SUPPRESSION_POLICY_COUNT	((mach_msg_type_number_t) \
+	(sizeof (struct task_suppression_policy) / sizeof (integer_t)))
+
+struct task_policy_state {
+	uint64_t requested;
+	uint64_t effective;
+	uint64_t pending;
+	uint32_t imp_assertcnt;
+	uint32_t imp_externcnt;
+	uint64_t flags;
+	uint64_t reserved[3];
+};
+
+typedef struct task_policy_state *task_policy_state_t;
+
+#define TASK_POLICY_STATE_COUNT	((mach_msg_type_number_t) \
+	(sizeof (struct task_policy_state) / sizeof (integer_t)))
+
+
+/*
+ * Definitions for munging and unmunging a policy struct
+ * Used in task_policy_state and in tracepoints
+ *
+ * Note: this is tightly bound to the implementation of task policy
+ * and the values exported through this API may change or change meaning at any time
+ *
+ * Do not rely on these values, especially apptype, to decide behaviors at runtime.
+ *
+ * All per-thread state must be in the first 32 bits of the bitfield.
+ */
+
+#define TASK_APPTYPE_NONE                0
+#define TASK_APPTYPE_DAEMON_INTERACTIVE  1
+#define TASK_APPTYPE_DAEMON_STANDARD     2
+#define TASK_APPTYPE_DAEMON_ADAPTIVE     3
+#define TASK_APPTYPE_DAEMON_BACKGROUND   4
+#define TASK_APPTYPE_APP_DEFAULT         5
+#define TASK_APPTYPE_APP_TAL             6
+
+/* task policy state flags */
+#define TASK_IMP_RECEIVER                    0x00000001
+#define TASK_IMP_DONOR                       0x00000002
+
+/* requested_policy */
+#define POLICY_REQ_INT_DARWIN_BG             0x00000001
+#define POLICY_REQ_EXT_DARWIN_BG             0x00000002
+#define POLICY_REQ_INT_IO_TIER_MASK          0x0000000c /* 2 bits */
+#define POLICY_REQ_INT_IO_TIER_SHIFT         2
+#define POLICY_REQ_EXT_IO_TIER_MASK          0x00000030 /* 2 bits */
+#define POLICY_REQ_EXT_IO_TIER_SHIFT         4
+#define POLICY_REQ_INT_PASSIVE_IO            0x00000040
+#define POLICY_REQ_EXT_PASSIVE_IO            0x00000080
+#define POLICY_REQ_BG_IOTIER_MASK            0x00000300 /* 2 bits */
+#define POLICY_REQ_BG_IOTIER_SHIFT           8
+#define POLICY_REQ_PIDBIND_BG                0x00000400
+#define POLICY_REQ_WORKQ_BG                  0x00000800
+
+/* task_requested_policy */
+#define POLICY_REQ_TERMINATED                0x00001000
+#define POLICY_REQ_BOOSTED                   0x00002000
+#define POLICY_REQ_INT_GPU_DENY              0x00004000
+#define POLICY_REQ_EXT_GPU_DENY              0x00008000
+#define POLICY_REQ_APPTYPE_MASK              0x00070000 /* 3 bits */
+#define POLICY_REQ_APPTYPE_SHIFT             16
+#define POLICY_REQ_BASE_LATENCY_QOS_MASK     0x00700000 /* 3 bits */
+#define POLICY_REQ_BASE_LATENCY_QOS_SHIFT    20
+#define POLICY_REQ_ROLE_MASK                 0x07000000 /* 3 bits */
+#define POLICY_REQ_ROLE_SHIFT                24
+#define POLICY_REQ_TAL_ENABLED               0x40000000
+
+/* requested suppression behaviors (note: clipped off in 32-bit tracepoints) */
+#define POLICY_REQ_SUP_ACTIVE                0x0000000100000000
+#define POLICY_REQ_SUP_LOWPRI_CPU            0x0000000200000000
+#define POLICY_REQ_SUP_CPU                   0x0000000400000000
+#define POLICY_REQ_SUP_DISK_THROTTLE         0x0000003000000000 /* 2 bits */
+#define POLICY_REQ_SUP_CPU_LIMIT             0x0000004000000000
+#define POLICY_REQ_SUP_SUSPEND               0x0000008000000000
+#define POLICY_REQ_OVER_LATENCY_QOS_MASK     0x0000070000000000 /* 3 bits */
+#define POLICY_REQ_OVER_LATENCY_QOS_SHIFT    40
+#define POLICY_REQ_BASE_THROUGH_QOS_MASK     0x0000700000000000 /* 3 bits */
+#define POLICY_REQ_BASE_THROUGH_QOS_SHIFT    44
+#define POLICY_REQ_OVER_THROUGH_QOS_MASK     0x0007000000000000 /* 3 bits */
+#define POLICY_REQ_OVER_THROUGH_QOS_SHIFT    48
+#define POLICY_REQ_SUP_TIMER_THROTTLE_MASK   0x0070000000000000 /* 3 bits */
+#define POLICY_REQ_SUP_TIMER_THROTTLE_SHIFT  52
+#define POLICY_REQ_SUP_THROUGHPUT_MASK       0x0700000000000000 /* 3 bits */
+#define POLICY_REQ_SUP_THROUGHPUT_SHIFT      56
+
+/* effective policy */
+#define POLICY_EFF_IO_TIER_MASK              0x00000003 /* 2 bits */
+#define POLICY_EFF_IO_TIER_SHIFT             0
+#define POLICY_EFF_IO_PASSIVE                0x00000008
+#define POLICY_EFF_DARWIN_BG                 0x00000010
+#define POLICY_EFF_LOWPRI_CPU                0x00000020
+#define POLICY_EFF_ALL_SOCKETS_BG            0x00000040
+#define POLICY_EFF_NEW_SOCKETS_BG            0x00000080
+#define POLICY_EFF_BG_IOTIER_MASK            0x00000300 /* 2 bits */
+#define POLICY_EFF_BG_IOTIER_SHIFT           8
+#define POLICY_EFF_TERMINATED                0x00000400
+
+/* task effective policy */
+#define POLICY_EFF_GPU_DENY                  0x00001000
+#define POLICY_EFF_TAL_ENGAGED               0x00002000
+#define POLICY_EFF_SUSPENDED                 0x00004000
+#define POLICY_EFF_WATCHERS_BG               0x00008000
+#define POLICY_EFF_LATENCY_QOS_MASK          0x00070000 /* 3 bits */
+#define POLICY_EFF_LATENCY_QOS_SHIFT         16
+#define POLICY_EFF_SUP_ACTIVE                0x00080000
+#define POLICY_EFF_ROLE_MASK                 0x00700000 /* 3 bits */
+#define POLICY_EFF_ROLE_SHIFT                20
+#define POLICY_EFF_SUP_CPU                   0x00800000
+#define POLICY_EFF_THROUGH_QOS_MASK          0x07000000 /* 3 bits */
+#define POLICY_EFF_THROUGH_QOS_SHIFT         24
+
+/* pending policy */
+#define POLICY_PEND_UPDATING                 0x00000001
+#define POLICY_PEND_SOCKETS                  0x00000002
+#define POLICY_PEND_TIMERS                   0x00000004
+#define POLICY_PEND_WATCHERS                 0x00000008
+
+#endif /* PRIVATE */
 
 #endif	/* _MACH_TASK_POLICY_H_ */

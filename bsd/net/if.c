@@ -1,8 +1,8 @@
 /*
- * Copyright (c) 2000-2012 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2013 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
- * 
+ *
  * This file contains Original Code and/or Modifications of Original Code
  * as defined in and that are subject to the Apple Public Source License
  * Version 2.0 (the 'License'). You may not use this file except in
@@ -11,10 +11,10 @@
  * unlawful or unlicensed copies of an Apple operating system, or to
  * circumvent, violate, or enable the circumvention or violation of, any
  * terms of an Apple operating system software license agreement.
- * 
+ *
  * Please obtain a copy of the License at
  * http://www.opensource.apple.com/apsl/ and read it before using this file.
- * 
+ *
  * The Original Code and all software distributed under the License are
  * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
@@ -22,7 +22,7 @@
  * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
  * Please see the License for the specific language governing rights and
  * limitations under the License.
- * 
+ *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*
@@ -93,17 +93,14 @@
 #include <net/if_dl.h>
 #include <net/if_types.h>
 #include <net/if_var.h>
-#include <net/net_osdep.h>
+#include <net/if_ppp.h>
 #include <net/ethernet.h>
 
 #include <net/radix.h>
 #include <net/route.h>
-#ifdef __APPLE__
 #include <net/dlil.h>
-//#include <string.h>
 #include <sys/domain.h>
 #include <libkern/OSAtomic.h>
-#endif
 
 #if INET || INET6
 /*XXX*/
@@ -120,10 +117,11 @@
 #include <netinet6/in6_var.h>
 #include <netinet6/in6_ifattach.h>
 #include <netinet6/ip6_var.h>
-#endif
-#endif
+#include <netinet6/nd6.h>
+#endif /* INET6 */
+#endif /* INET || INET6 */
 
-#if CONFIG_MACF_NET 
+#if CONFIG_MACF_NET
 #include <security/mac_framework.h>
 #endif
 
@@ -135,6 +133,8 @@
  * System initialization
  */
 
+extern char *proc_name_address(void *);
+
 /* Lock group and attribute for ifaddr lock */
 lck_attr_t	*ifa_mtx_attr;
 lck_grp_t	*ifa_mtx_grp;
@@ -142,6 +142,12 @@ static lck_grp_attr_t	*ifa_mtx_grp_attr;
 
 static int ifioctl_ifreq(struct socket *, u_long, struct ifreq *,
     struct proc *);
+static int ifioctl_ifconf(u_long, caddr_t);
+static int ifioctl_ifclone(u_long, caddr_t);
+static int ifioctl_ifdesc(struct ifnet *, u_long, caddr_t, struct proc *);
+static int ifioctl_linkparams(struct ifnet *, u_long, caddr_t, struct proc *);
+static int ifioctl_qstats(struct ifnet *, u_long, caddr_t);
+static int ifioctl_throttle(struct ifnet *, u_long, caddr_t, struct proc *);
 static int ifconf(u_long cmd, user_addr_t ifrp, int * ret_space);
 __private_extern__ void link_rtrequest(int, struct rtentry *, struct sockaddr *);
 void if_rtproto_del(struct ifnet *ifp, int protocol);
@@ -154,9 +160,7 @@ static int if_delmulti_common(struct ifmultiaddr *, struct ifnet *,
 static int if_rtmtu(struct radix_node *, void *);
 static void if_rtmtu_update(struct ifnet *);
 
-#if IF_CLONE_LIST
-static int	if_clone_list(int count, int * total, user_addr_t dst);
-#endif /* IF_CLONE_LIST */
+static int if_clone_list(int, int *, user_addr_t);
 
 MALLOC_DEFINE(M_IFADDR, "ifaddr", "interface address");
 
@@ -221,6 +225,15 @@ extern void	nd6_setmtu(struct ifnet *);
 extern lck_mtx_t *nd6_mutex;
 #endif
 
+SYSCTL_NODE(_net, PF_LINK, link, CTLFLAG_RW|CTLFLAG_LOCKED, 0, "Link layers");
+SYSCTL_NODE(_net_link, 0, generic, CTLFLAG_RW|CTLFLAG_LOCKED, 0,
+	"Generic link-management");
+
+SYSCTL_DECL(_net_link_generic_system);
+
+static uint32_t if_verbose = 0;
+SYSCTL_INT(_net_link_generic_system, OID_AUTO, if_verbose,
+    CTLFLAG_RW | CTLFLAG_LOCKED, &if_verbose, 0, "");
 
 void
 ifa_init(void)
@@ -554,7 +567,7 @@ if_clone_lookup(const char *name, u_int32_t *unitp)
 {
 	struct if_clone *ifc;
 	const char *cp;
-	size_t i;
+	u_int32_t i;
 
 	for (ifc = LIST_FIRST(&if_cloners); ifc != NULL;) {
 		for (cp = name, i = 0; i < ifc->ifc_namelen; i++, cp++) {
@@ -571,7 +584,7 @@ if_clone_lookup(const char *name, u_int32_t *unitp)
 
  found_name:
 	if (*cp == '\0') {
-		i = 0xffff;
+		i = UINT32_MAX;
 	} else {
 		for (i = 0; *cp != '\0'; cp++) {
 			if (*cp < '0' || *cp > '9') {
@@ -639,24 +652,22 @@ if_clone_attach(struct if_clone *ifc)
 void
 if_clone_detach(struct if_clone *ifc)
 {
-
 	LIST_REMOVE(ifc, ifc_list);
 	FREE(ifc->ifc_units, M_CLONE);
 	if_cloners_count--;
 }
 
-#if IF_CLONE_LIST
 /*
  * Provide list of interface cloners to userspace.
  */
 static int
-if_clone_list(int count, int * total, user_addr_t dst)
+if_clone_list(int count, int *ret_total, user_addr_t dst)
 {
 	char outbuf[IFNAMSIZ];
 	struct if_clone *ifc;
 	int error = 0;
 
-	*total = if_cloners_count;
+	*ret_total = if_cloners_count;
 	if (dst == USER_ADDR_NULL) {
 		/* Just asking how many there are. */
 		return (0);
@@ -677,7 +688,6 @@ if_clone_list(int count, int * total, user_addr_t dst)
 
 	return (error);
 }
-#endif /* IF_CLONE_LIST */
 
 /*
  * Similar to ifa_ifwithaddr, except that this is IPv4 specific
@@ -988,81 +998,52 @@ next:
 				IFA_UNLOCK(ifa);
 				continue;
 			}
-#ifndef __APPLE__
-/* This breaks tunneling application trying to install a route with
- * a specific subnet and the local address as the destination
- * It's breaks binary compatibility with previous version of MacOS X
- */
-			if (
-#if INET6 /* XXX: for maching gif tunnel dst as routing entry gateway */
-			    addr->sa_family != AF_INET6 &&
-#endif
-			    ifp->if_flags & IFF_POINTOPOINT) {
-				/*
-				 * This is a bit broken as it doesn't
-				 * take into account that the remote end may
-				 * be a single node in the network we are
-				 * looking for.
-				 * The trouble is that we don't know the
-				 * netmask for the remote end.
-				 */
-				if (ifa->ifa_dstaddr != 0 &&
-				    equal(addr, ifa->ifa_dstaddr)) {
-					IFA_ADDREF_LOCKED(ifa);
-					IFA_UNLOCK(ifa);
-					break;
-				}
+			/*
+			 * If we're looking up with a scope,
+			 * find using a matching interface.
+			 */
+			if (ifscope != IFSCOPE_NONE &&
+			    ifp->if_index != ifscope) {
 				IFA_UNLOCK(ifa);
-			} else
-#endif /* __APPLE__*/
-			{
-				/*
-				 * If we're looking up with a scope,
-				 * find using a matching interface.
-				 */
-				if (ifscope != IFSCOPE_NONE &&
-				    ifp->if_index != ifscope) {
-					IFA_UNLOCK(ifa);
-					continue;
-				}
+				continue;
+			}
 
-				/*
-				 * Scan all the bits in the ifa's address.
-				 * If a bit dissagrees with what we are
-				 * looking for, mask it with the netmask
-				 * to see if it really matters.
-				 * (A byte at a time)
-				 */
-				if (ifa->ifa_netmask == 0) {
-					IFA_UNLOCK(ifa);
-					continue;
-				}
-				cp = addr_data;
-				cp2 = ifa->ifa_addr->sa_data;
-				cp3 = ifa->ifa_netmask->sa_data;
-				cplim = ifa->ifa_netmask->sa_len
-					+ (char *)ifa->ifa_netmask;
-				while (cp3 < cplim)
-					if ((*cp++ ^ *cp2++) & *cp3++)
-						goto next; /* next address! */
-				/*
-				 * If the netmask of what we just found
-				 * is more specific than what we had before
-				 * (if we had one) then remember the new one
-				 * before continuing to search
-				 * for an even better one.
-				 */
-				if (ifa_maybe == NULL ||
-				    rn_refines((caddr_t)ifa->ifa_netmask,
-				    (caddr_t)ifa_maybe->ifa_netmask)) {
-					IFA_ADDREF_LOCKED(ifa);	/* ifa_maybe */
-					IFA_UNLOCK(ifa);
-					if (ifa_maybe != NULL)
-						IFA_REMREF(ifa_maybe);
-					ifa_maybe = ifa;
-				} else {
-					IFA_UNLOCK(ifa);
-				}
+			/*
+			 * Scan all the bits in the ifa's address.
+			 * If a bit dissagrees with what we are
+			 * looking for, mask it with the netmask
+			 * to see if it really matters.
+			 * (A byte at a time)
+			 */
+			if (ifa->ifa_netmask == 0) {
+				IFA_UNLOCK(ifa);
+				continue;
+			}
+			cp = addr_data;
+			cp2 = ifa->ifa_addr->sa_data;
+			cp3 = ifa->ifa_netmask->sa_data;
+			cplim = ifa->ifa_netmask->sa_len +
+			    (char *)ifa->ifa_netmask;
+			while (cp3 < cplim)
+				if ((*cp++ ^ *cp2++) & *cp3++)
+					goto next; /* next address! */
+			/*
+			 * If the netmask of what we just found
+			 * is more specific than what we had before
+			 * (if we had one) then remember the new one
+			 * before continuing to search
+			 * for an even better one.
+			 */
+			if (ifa_maybe == NULL ||
+			    rn_refines((caddr_t)ifa->ifa_netmask,
+			    (caddr_t)ifa_maybe->ifa_netmask)) {
+				IFA_ADDREF_LOCKED(ifa);	/* ifa_maybe */
+				IFA_UNLOCK(ifa);
+				if (ifa_maybe != NULL)
+					IFA_REMREF(ifa_maybe);
+				ifa_maybe = ifa;
+			} else {
+				IFA_UNLOCK(ifa);
 			}
 			IFA_LOCK_ASSERT_NOTHELD(ifa);
 		}
@@ -1445,23 +1426,11 @@ if_withname(struct sockaddr *sa)
 	return (ifunit(ifname));
 }
 
-
-/*
- * Interface ioctls.
- */
-int
-ifioctl(struct socket *so, u_long cmd, caddr_t data, struct proc *p)
+static __attribute__((noinline)) int
+ifioctl_ifconf(u_long cmd, caddr_t data)
 {
-	char ifname[IFNAMSIZ + 1];
-	struct ifnet *ifp = NULL;
-	struct ifstat *ifs = NULL;
 	int error = 0;
 
-	bzero(ifname, sizeof (ifname));
-
-	/*
-	 * ioctls which don't require ifp, or ifreq ioctls
-	 */
 	switch (cmd) {
 	case OSIOCGIFCONF32:			/* struct ifconf32 */
 	case SIOCGIFCONF32: {			/* struct ifconf32 */
@@ -1470,7 +1439,7 @@ ifioctl(struct socket *so, u_long cmd, caddr_t data, struct proc *p)
 		error = ifconf(cmd, CAST_USER_ADDR_T(ifc.ifc_req),
 		    &ifc.ifc_len);
 		bcopy(&ifc, data, sizeof (ifc));
-		goto done;
+		break;
 	}
 
 	case SIOCGIFCONF64:			/* struct ifconf64 */
@@ -1479,17 +1448,30 @@ ifioctl(struct socket *so, u_long cmd, caddr_t data, struct proc *p)
 		bcopy(data, &ifc, sizeof (ifc));
 		error = ifconf(cmd, ifc.ifc_req, &ifc.ifc_len);
 		bcopy(&ifc, data, sizeof (ifc));
-		goto done;
+		break;
 	}
 
-#if IF_CLONE_LIST
+	default:
+		VERIFY(0);
+		/* NOTREACHED */
+	}
+
+	return (error);
+}
+
+static __attribute__((noinline)) int
+ifioctl_ifclone(u_long cmd, caddr_t data)
+{
+	int error = 0;
+
+	switch (cmd) {
 	case SIOCIFGCLONERS32: {		/* struct if_clonereq32 */
 		struct if_clonereq32 ifcr;
 		bcopy(data, &ifcr, sizeof (ifcr));
 		error = if_clone_list(ifcr.ifcr_count, &ifcr.ifcr_total,
 		    CAST_USER_ADDR_T(ifcr.ifcru_buffer));
 		bcopy(&ifcr, data, sizeof (ifcr));
-		goto done;
+		break;
 	}
 
 	case SIOCIFGCLONERS64: {		/* struct if_clonereq64 */
@@ -1498,219 +1480,28 @@ ifioctl(struct socket *so, u_long cmd, caddr_t data, struct proc *p)
 		error = if_clone_list(ifcr.ifcr_count, &ifcr.ifcr_total,
 		    ifcr.ifcru_buffer);
 		bcopy(&ifcr, data, sizeof (ifcr));
-		goto done;
-	}
-#endif /* IF_CLONE_LIST */
-
-	case SIOCSIFDSTADDR:			/* struct ifreq */
-	case SIOCSIFADDR:			/* struct ifreq */
-	case SIOCSIFBRDADDR:			/* struct ifreq */
-	case SIOCSIFNETMASK:			/* struct ifreq */
-	case OSIOCGIFADDR:			/* struct ifreq */
-	case OSIOCGIFDSTADDR:			/* struct ifreq */
-	case OSIOCGIFBRDADDR:			/* struct ifreq */
-	case OSIOCGIFNETMASK:			/* struct ifreq */
-	case SIOCSIFKPI:			/* struct ifreq */
-		if (so->so_proto == NULL) {
-			error = EOPNOTSUPP;
-			goto done;
-		}
-		/* FALLTHRU */
-	case SIOCIFCREATE:			/* struct ifreq */
-	case SIOCIFCREATE2:			/* struct ifreq */
-	case SIOCIFDESTROY:			/* struct ifreq */
-	case SIOCGIFFLAGS:			/* struct ifreq */
-	case SIOCGIFEFLAGS:			/* struct ifreq */
-	case SIOCGIFCAP:			/* struct ifreq */
-	case SIOCGIFMAC:			/* struct ifreq */
-	case SIOCGIFMETRIC:			/* struct ifreq */
-	case SIOCGIFMTU:			/* struct ifreq */
-	case SIOCGIFPHYS:			/* struct ifreq */
-	case SIOCSIFFLAGS:			/* struct ifreq */
-	case SIOCSIFCAP:			/* struct ifreq */
-	case SIOCSIFPHYS:			/* struct ifreq */
-	case SIOCSIFMTU:			/* struct ifreq */
-	case SIOCADDMULTI:			/* struct ifreq */
-	case SIOCDELMULTI:			/* struct ifreq */
-	case SIOCDIFPHYADDR:			/* struct ifreq */
-	case SIOCSIFMEDIA:			/* struct ifreq */
-	case SIOCSIFGENERIC:			/* struct ifreq */
-	case SIOCSIFLLADDR:			/* struct ifreq */
-	case SIOCSIFALTMTU:			/* struct ifreq */
-	case SIOCSIFVLAN:			/* struct ifreq */
-	case SIOCSIFBOND:			/* struct ifreq */
-	case SIOCGIFPSRCADDR:			/* struct ifreq */
-	case SIOCGIFPDSTADDR:			/* struct ifreq */
-	case SIOCGIFGENERIC:			/* struct ifreq */
-	case SIOCGIFDEVMTU:			/* struct ifreq */
-	case SIOCGIFVLAN:			/* struct ifreq */
-	case SIOCGIFBOND:			/* struct ifreq */
-	case SIOCGIFWAKEFLAGS:			/* struct ifreq */
-	case SIOCGIFGETRTREFCNT:		/* struct ifreq */
-	case SIOCSIFOPPORTUNISTIC:		/* struct ifreq */
-	case SIOCGIFOPPORTUNISTIC:		/* struct ifreq */
-	case SIOCGIFLINKQUALITYMETRIC: {	/* struct ifreq */
-		struct ifreq ifr;
-		bcopy(data, &ifr, sizeof (ifr));
-		error = ifioctl_ifreq(so, cmd, &ifr, p);
-		bcopy(&ifr, data, sizeof (ifr));
-		goto done;
-	}
-	}
-
-	/*
-	 * ioctls which require ifp.  Note that we acquire dlil_ifnet_lock
-	 * here to ensure that the ifnet, if found, has been fully attached.
-	 */
-	dlil_if_lock();
-	switch (cmd) {
-	case SIOCSIFPHYADDR: {			/* struct ifaliasreq */
-		bcopy(((struct ifaliasreq *)(void *)data)->ifra_name,
-		    ifname, IFNAMSIZ);
-		ifp = ifunit(ifname);
 		break;
 	}
 
-#if INET6
-	case SIOCSIFPHYADDR_IN6_32: {		/* struct in6_aliasreq_32 */
-		bcopy(((struct in6_aliasreq_32 *)(void *)data)->ifra_name,
-		    ifname, IFNAMSIZ);
-		ifp = ifunit(ifname);
-		break;
+	default:
+		VERIFY(0);
+		/* NOTREACHED */
 	}
 
-	case SIOCSIFPHYADDR_IN6_64: {		/* struct in6_aliasreq_64 */
-		bcopy(((struct in6_aliasreq_64 *)(void *)data)->ifra_name,
-		    ifname, IFNAMSIZ);
-		ifp = ifunit(ifname);
-		break;
-	}
-#endif
+	return (error);
+}
 
-	case SIOCSLIFPHYADDR:			/* struct if_laddrreq */
-	case SIOCGLIFPHYADDR: {			/* struct if_laddrreq */
-		bcopy(((struct if_laddrreq *)(void *)data)->iflr_name,
-		    ifname, IFNAMSIZ);
-		ifp = ifunit(ifname);
-		break;
-	}
+static __attribute__((noinline)) int
+ifioctl_ifdesc(struct ifnet *ifp, u_long cmd, caddr_t data, struct proc *p)
+{
+	struct if_descreq *ifdr = (struct if_descreq *)(void *)data;
+	u_int32_t ifdr_len;
+	int error = 0;
 
-	case SIOCGIFSTATUS: {			/* struct ifstat */
-		ifs = _MALLOC(sizeof (*ifs), M_DEVBUF, M_WAITOK);
-		if (ifs == NULL) {
-			error = ENOMEM;
-			dlil_if_unlock();
-			goto done;
-		}
-		bcopy(data, ifs, sizeof (*ifs));
-		ifs->ifs_name[IFNAMSIZ - 1] = '\0';
-		ifp = ifunit(ifs->ifs_name);
-		break;
-	}
-
-	case SIOCGIFMEDIA32: {			/* struct ifmediareq32 */
-		bcopy(((struct ifmediareq32 *)(void *)data)->ifm_name,
-		    ifname, IFNAMSIZ);
-		ifp = ifunit(ifname);
-		break;
-	}
-
-	case SIOCGIFMEDIA64: {			/* struct ifmediareq64 */
-		bcopy(((struct ifmediareq64 *)(void *)data)->ifm_name,
-		    ifname, IFNAMSIZ);
-		ifp = ifunit(ifname);
-		break;
-	}
-
-	case SIOCSIFDESC:			/* struct if_descreq */
-	case SIOCGIFDESC: {			/* struct if_descreq */
-		bcopy(((struct if_descreq *)(void *)data)->ifdr_name,
-		    ifname, IFNAMSIZ);
-		ifp = ifunit(ifname);
-		break;
-	}
-
-	case SIOCSIFLINKPARAMS:			/* struct if_linkparamsreq */
-	case SIOCGIFLINKPARAMS: {		/* struct if_linkparamsreq */
-		bcopy(((struct if_linkparamsreq *)(void *)data)->iflpr_name,
-		    ifname, IFNAMSIZ);
-		ifp = ifunit(ifname);
-		break;
-	}
-
-	case SIOCGIFQUEUESTATS: {		/* struct if_qstatsreq */
-		bcopy(((struct if_qstatsreq *)(void *)data)->ifqr_name,
-		    ifname, IFNAMSIZ);
-		ifp = ifunit(ifname);
-		break;
-	}
-
-	case SIOCSIFTHROTTLE:			/* struct if_throttlereq */
-	case SIOCGIFTHROTTLE: {			/* struct if_throttlereq */
-		bcopy(((struct if_throttlereq *)(void *)data)->ifthr_name,
-		    ifname, IFNAMSIZ);
-		ifp = ifunit(ifname);
-		break;
-	}
-
-	default: {
-		/*
-		 * This is a bad assumption, but the code seems to
-		 * have been doing this in the past; caveat emptor.
-		 */
-		bcopy(((struct ifreq *)(void *)data)->ifr_name,
-		    ifname, IFNAMSIZ);
-		ifp = ifunit(ifname);
-		break;
-	}
-	}
-	dlil_if_unlock();
-
-	if (ifp == NULL) {
-		error = ENXIO;
-		goto done;
-	}
+	VERIFY(ifp != NULL);
 
 	switch (cmd) {
-	case SIOCSIFPHYADDR:			/* struct ifaliasreq */
-#if INET6
-	case SIOCSIFPHYADDR_IN6_32:		/* struct in6_aliasreq_32 */
-	case SIOCSIFPHYADDR_IN6_64:		/* struct in6_aliasreq_64 */
-#endif
-	case SIOCSLIFPHYADDR:			/* struct if_laddrreq */
-		error = proc_suser(p);
-		if (error != 0)
-			break;
-
-		error = ifnet_ioctl(ifp, so->so_proto->pr_domain->dom_family,
-		    cmd, data);
-		if (error != 0)
-			break;
-
-		ifnet_touch_lastchange(ifp);
-		break;
-
-	case SIOCGIFSTATUS:			/* struct ifstat */
-		VERIFY(ifs != NULL);
-		ifs->ascii[0] = '\0';
-
-		error = ifnet_ioctl(ifp, so->so_proto->pr_domain->dom_family,
-		    cmd, (caddr_t)ifs);
-
-		bcopy(ifs, data, sizeof (*ifs));
-		break;
-
-	case SIOCGLIFPHYADDR:			/* struct if_laddrreq */
-	case SIOCGIFMEDIA32:			/* struct ifmediareq32 */
-	case SIOCGIFMEDIA64:			/* struct ifmediareq64 */
-		error = ifnet_ioctl(ifp, so->so_proto->pr_domain->dom_family,
-		    cmd, data);
-		break;
-
 	case SIOCSIFDESC: {			/* struct if_descreq */
-		struct if_descreq *ifdr = (struct if_descreq *)(void *)data;
-		u_int32_t ifdr_len;
-
 		if ((error = proc_suser(p)) != 0)
                         break;
 
@@ -1733,9 +1524,6 @@ ifioctl(struct socket *so, u_long cmd, caddr_t data, struct proc *p)
 	}
 
 	case SIOCGIFDESC: {			/* struct if_descreq */
-		struct if_descreq *ifdr = (struct if_descreq *)(void *)data;
-		u_int32_t ifdr_len;
-
 		ifnet_lock_shared(ifp);
 		ifdr_len = MIN(ifp->if_desc.ifd_len, sizeof (ifdr->ifdr_desc));
 		bcopy(&ifdr_len, &ifdr->ifdr_len, sizeof (ifdr_len));
@@ -1747,10 +1535,27 @@ ifioctl(struct socket *so, u_long cmd, caddr_t data, struct proc *p)
 		break;
 	}
 
+	default:
+		VERIFY(0);
+		/* NOTREACHED */
+	}
+
+	return (error);
+}
+
+static __attribute__((noinline)) int
+ifioctl_linkparams(struct ifnet *ifp, u_long cmd, caddr_t data, struct proc *p)
+{
+	struct if_linkparamsreq *iflpr =
+	    (struct if_linkparamsreq *)(void *)data;
+	struct ifclassq *ifq;
+	int error = 0;
+
+	VERIFY(ifp != NULL);
+	ifq = &ifp->if_snd;
+
+	switch (cmd) {
 	case SIOCSIFLINKPARAMS: {		/* struct if_linkparamsreq */
-		struct if_linkparamsreq *iflpr =
-		    (struct if_linkparamsreq *)(void *)data;
-		struct ifclassq *ifq = &ifp->if_snd;
 		struct tb_profile tb = { 0, 0, 0 };
 
 		if ((error = proc_suser(p)) != 0)
@@ -1772,9 +1577,6 @@ ifioctl(struct socket *so, u_long cmd, caddr_t data, struct proc *p)
 	}
 
 	case SIOCGIFLINKPARAMS: {		/* struct if_linkparamsreq */
-		struct if_linkparamsreq *iflpr =
-		    (struct if_linkparamsreq *)(void *)data;
-		struct ifclassq *ifq = &ifp->if_snd;
 		u_int32_t sched_type = PKTSCHEDT_NONE, flags = 0;
 		u_int64_t tbr_bw = 0, tbr_pct = 0;
 
@@ -1810,13 +1612,32 @@ ifioctl(struct socket *so, u_long cmd, caddr_t data, struct proc *p)
 		    sizeof (iflpr->iflpr_output_bw));
 		bcopy(&ifp->if_input_bw, &iflpr->iflpr_input_bw,
 		    sizeof (iflpr->iflpr_input_bw));
+		bcopy(&ifp->if_output_lt, &iflpr->iflpr_output_lt,
+		    sizeof (iflpr->iflpr_output_lt));
+		bcopy(&ifp->if_input_lt, &iflpr->iflpr_input_lt,
+		    sizeof (iflpr->iflpr_input_lt));
 		break;
 	}
 
-	case SIOCGIFQUEUESTATS: {		/* struct if_qstatsreq */
-		struct if_qstatsreq *ifqr = (struct if_qstatsreq *)(void *)data;
-		u_int32_t ifqr_len, ifqr_slot;
+	default:
+		VERIFY(0);
+		/* NOTREACHED */
+	}
 
+	return (error);
+}
+
+static __attribute__((noinline)) int
+ifioctl_qstats(struct ifnet *ifp, u_long cmd, caddr_t data)
+{
+	struct if_qstatsreq *ifqr = (struct if_qstatsreq *)(void *)data;
+	u_int32_t ifqr_len, ifqr_slot;
+	int error = 0;
+
+	VERIFY(ifp != NULL);
+
+	switch (cmd) {
+	case SIOCGIFQUEUESTATS: {		/* struct if_qstatsreq */
 		bcopy(&ifqr->ifqr_slot, &ifqr_slot, sizeof (ifqr_slot));
 		bcopy(&ifqr->ifqr_len, &ifqr_len, sizeof (ifqr_len));
 		error = ifclassq_getqstats(&ifp->if_snd, ifqr_slot,
@@ -1827,11 +1648,25 @@ ifioctl(struct socket *so, u_long cmd, caddr_t data, struct proc *p)
 		break;
 	}
 
-	case SIOCSIFTHROTTLE: {			/* struct if_throttlereq */
-		struct if_throttlereq *ifthr =
-		    (struct if_throttlereq *)(void *)data;
-		u_int32_t ifthr_level;
+	default:
+		VERIFY(0);
+		/* NOTREACHED */
+	}
 
+	return (error);
+}
+
+static __attribute__((noinline)) int
+ifioctl_throttle(struct ifnet *ifp, u_long cmd, caddr_t data, struct proc *p)
+{
+	struct if_throttlereq *ifthr = (struct if_throttlereq *)(void *)data;
+	u_int32_t ifthr_level;
+	int error = 0;
+
+	VERIFY(ifp != NULL);
+
+	switch (cmd) {
+	case SIOCSIFTHROTTLE: {			/* struct if_throttlereq */
 		/*
 		 * XXX: Use priv_check_cred() instead of root check?
 		 */
@@ -1846,16 +1681,275 @@ ifioctl(struct socket *so, u_long cmd, caddr_t data, struct proc *p)
 	}
 
 	case SIOCGIFTHROTTLE: {			/* struct if_throttlereq */
-		struct if_throttlereq *ifthr =
-		    (struct if_throttlereq *)(void *)data;
-		u_int32_t ifthr_level;
-
 		if ((error = ifnet_get_throttle(ifp, &ifthr_level)) == 0) {
 			bcopy(&ifthr_level, &ifthr->ifthr_level,
 			    sizeof (ifthr_level));
 		}
 		break;
 	}
+
+	default:
+		VERIFY(0);
+		/* NOTREACHED */
+	}
+
+	return (error);
+}
+
+/*
+ * Interface ioctls.
+ *
+ * Most of the routines called to handle the ioctls would end up being
+ * tail-call optimized, which unfortunately causes this routine to
+ * consume too much stack space; this is the reason for the "noinline"
+ * attribute used on those routines.
+ */
+int
+ifioctl(struct socket *so, u_long cmd, caddr_t data, struct proc *p)
+{
+	char ifname[IFNAMSIZ + 1];
+	struct ifnet *ifp = NULL;
+	struct ifstat *ifs = NULL;
+	int error = 0;
+
+	bzero(ifname, sizeof (ifname));
+
+	/*
+	 * ioctls which don't require ifp, or ifreq ioctls
+	 */
+	switch (cmd) {
+	case OSIOCGIFCONF32:			/* struct ifconf32 */
+	case SIOCGIFCONF32:			/* struct ifconf32 */
+	case SIOCGIFCONF64:			/* struct ifconf64 */
+	case OSIOCGIFCONF64:			/* struct ifconf64 */
+		error = ifioctl_ifconf(cmd, data);
+		goto done;
+
+	case SIOCIFGCLONERS32:			/* struct if_clonereq32 */
+	case SIOCIFGCLONERS64:			/* struct if_clonereq64 */
+		error = ifioctl_ifclone(cmd, data);
+		goto done;
+
+	case SIOCSIFDSTADDR:			/* struct ifreq */
+	case SIOCSIFADDR:			/* struct ifreq */
+	case SIOCSIFBRDADDR:			/* struct ifreq */
+	case SIOCSIFNETMASK:			/* struct ifreq */
+	case OSIOCGIFADDR:			/* struct ifreq */
+	case OSIOCGIFDSTADDR:			/* struct ifreq */
+	case OSIOCGIFBRDADDR:			/* struct ifreq */
+	case OSIOCGIFNETMASK:			/* struct ifreq */
+	case SIOCSIFKPI:			/* struct ifreq */
+		if (so->so_proto == NULL) {
+			error = EOPNOTSUPP;
+			goto done;
+		}
+		/* FALLTHRU */
+	case SIOCIFCREATE:			/* struct ifreq */
+	case SIOCIFCREATE2:			/* struct ifreq */
+	case SIOCIFDESTROY:			/* struct ifreq */
+	case SIOCGIFFLAGS:			/* struct ifreq */
+	case SIOCGIFEFLAGS:			/* struct ifreq */
+	case SIOCGIFCAP:			/* struct ifreq */
+#if CONFIG_MACF_NET
+	case SIOCGIFMAC:			/* struct ifreq */
+	case SIOCSIFMAC:			/* struct ifreq */
+#endif /* CONFIG_MACF_NET */
+	case SIOCGIFMETRIC:			/* struct ifreq */
+	case SIOCGIFMTU:			/* struct ifreq */
+	case SIOCGIFPHYS:			/* struct ifreq */
+	case SIOCSIFFLAGS:			/* struct ifreq */
+	case SIOCSIFCAP:			/* struct ifreq */
+	case SIOCSIFMETRIC:			/* struct ifreq */
+	case SIOCSIFPHYS:			/* struct ifreq */
+	case SIOCSIFMTU:			/* struct ifreq */
+	case SIOCADDMULTI:			/* struct ifreq */
+	case SIOCDELMULTI:			/* struct ifreq */
+	case SIOCDIFPHYADDR:			/* struct ifreq */
+	case SIOCSIFMEDIA:			/* struct ifreq */
+	case SIOCSIFGENERIC:			/* struct ifreq */
+	case SIOCSIFLLADDR:			/* struct ifreq */
+	case SIOCSIFALTMTU:			/* struct ifreq */
+	case SIOCSIFVLAN:			/* struct ifreq */
+	case SIOCSIFBOND:			/* struct ifreq */
+	case SIOCGIFLLADDR:			/* struct ifreq */
+	case SIOCGIFTYPE:			/* struct ifreq */
+	case SIOCGIFPSRCADDR:			/* struct ifreq */
+	case SIOCGIFPDSTADDR:			/* struct ifreq */
+	case SIOCGIFGENERIC:			/* struct ifreq */
+	case SIOCGIFDEVMTU:			/* struct ifreq */
+	case SIOCGIFVLAN:			/* struct ifreq */
+	case SIOCGIFBOND:			/* struct ifreq */
+	case SIOCGIFWAKEFLAGS:			/* struct ifreq */
+	case SIOCGIFGETRTREFCNT:		/* struct ifreq */
+	case SIOCSIFOPPORTUNISTIC:		/* struct ifreq */
+	case SIOCGIFOPPORTUNISTIC:		/* struct ifreq */
+	case SIOCGIFLINKQUALITYMETRIC:		/* struct ifreq */
+	case SIOCSIFLOG:			/* struct ifreq */
+	case SIOCGIFLOG:			/* struct ifreq */
+	case SIOCGIFDELEGATE: {			/* struct ifreq */
+		struct ifreq ifr;
+		bcopy(data, &ifr, sizeof (ifr));
+		ifr.ifr_name[IFNAMSIZ - 1] = '\0';
+		bcopy(&ifr.ifr_name, ifname, IFNAMSIZ);
+		error = ifioctl_ifreq(so, cmd, &ifr, p);
+		bcopy(&ifr, data, sizeof (ifr));
+		goto done;
+	}
+	}
+
+	/*
+	 * ioctls which require ifp.  Note that we acquire dlil_ifnet_lock
+	 * here to ensure that the ifnet, if found, has been fully attached.
+	 */
+	dlil_if_lock();
+	switch (cmd) {
+	case SIOCSIFPHYADDR:			/* struct {if,in_}aliasreq */
+		bcopy(((struct in_aliasreq *)(void *)data)->ifra_name,
+		    ifname, IFNAMSIZ);
+		ifp = ifunit(ifname);
+		break;
+
+#if INET6
+	case SIOCSIFPHYADDR_IN6_32:		/* struct in6_aliasreq_32 */
+		bcopy(((struct in6_aliasreq_32 *)(void *)data)->ifra_name,
+		    ifname, IFNAMSIZ);
+		ifp = ifunit(ifname);
+		break;
+
+	case SIOCSIFPHYADDR_IN6_64:		/* struct in6_aliasreq_64 */
+		bcopy(((struct in6_aliasreq_64 *)(void *)data)->ifra_name,
+		    ifname, IFNAMSIZ);
+		ifp = ifunit(ifname);
+		break;
+#endif /* INET6 */
+
+	case SIOCSLIFPHYADDR:			/* struct if_laddrreq */
+	case SIOCGLIFPHYADDR:			/* struct if_laddrreq */
+		bcopy(((struct if_laddrreq *)(void *)data)->iflr_name,
+		    ifname, IFNAMSIZ);
+		ifp = ifunit(ifname);
+		break;
+
+	case SIOCGIFSTATUS:			/* struct ifstat */
+		ifs = _MALLOC(sizeof (*ifs), M_DEVBUF, M_WAITOK);
+		if (ifs == NULL) {
+			error = ENOMEM;
+			dlil_if_unlock();
+			goto done;
+		}
+		bcopy(data, ifs, sizeof (*ifs));
+		ifs->ifs_name[IFNAMSIZ - 1] = '\0';
+		bcopy(ifs->ifs_name, ifname, IFNAMSIZ);
+		ifp = ifunit(ifname);
+		break;
+
+	case SIOCGIFMEDIA32:			/* struct ifmediareq32 */
+		bcopy(((struct ifmediareq32 *)(void *)data)->ifm_name,
+		    ifname, IFNAMSIZ);
+		ifp = ifunit(ifname);
+		break;
+
+	case SIOCGIFMEDIA64:			/* struct ifmediareq64 */
+		bcopy(((struct ifmediareq64 *)(void *)data)->ifm_name,
+		    ifname, IFNAMSIZ);
+		ifp = ifunit(ifname);
+		break;
+
+	case SIOCSIFDESC:			/* struct if_descreq */
+	case SIOCGIFDESC:			/* struct if_descreq */
+		bcopy(((struct if_descreq *)(void *)data)->ifdr_name,
+		    ifname, IFNAMSIZ);
+		ifp = ifunit(ifname);
+		break;
+
+	case SIOCSIFLINKPARAMS:			/* struct if_linkparamsreq */
+	case SIOCGIFLINKPARAMS:			/* struct if_linkparamsreq */
+		bcopy(((struct if_linkparamsreq *)(void *)data)->iflpr_name,
+		    ifname, IFNAMSIZ);
+		ifp = ifunit(ifname);
+		break;
+
+	case SIOCGIFQUEUESTATS:			/* struct if_qstatsreq */
+		bcopy(((struct if_qstatsreq *)(void *)data)->ifqr_name,
+		    ifname, IFNAMSIZ);
+		ifp = ifunit(ifname);
+		break;
+
+	case SIOCSIFTHROTTLE:			/* struct if_throttlereq */
+	case SIOCGIFTHROTTLE:			/* struct if_throttlereq */
+		bcopy(((struct if_throttlereq *)(void *)data)->ifthr_name,
+		    ifname, IFNAMSIZ);
+		ifp = ifunit(ifname);
+		break;
+
+	default:
+		/*
+		 * This is a bad assumption, but the code seems to
+		 * have been doing this in the past; caveat emptor.
+		 */
+		bcopy(((struct ifreq *)(void *)data)->ifr_name,
+		    ifname, IFNAMSIZ);
+		ifp = ifunit(ifname);
+		break;
+	}
+	dlil_if_unlock();
+
+	if (ifp == NULL) {
+		error = ENXIO;
+		goto done;
+	}
+
+	switch (cmd) {
+	case SIOCSIFPHYADDR:			/* struct {if,in_}aliasreq */
+#if INET6
+	case SIOCSIFPHYADDR_IN6_32:		/* struct in6_aliasreq_32 */
+	case SIOCSIFPHYADDR_IN6_64:		/* struct in6_aliasreq_64 */
+#endif /* INET6 */
+	case SIOCSLIFPHYADDR:			/* struct if_laddrreq */
+		error = proc_suser(p);
+		if (error != 0)
+			break;
+
+		error = ifnet_ioctl(ifp, SOCK_DOM(so), cmd, data);
+		if (error != 0)
+			break;
+
+		ifnet_touch_lastchange(ifp);
+		break;
+
+	case SIOCGIFSTATUS:			/* struct ifstat */
+		VERIFY(ifs != NULL);
+		ifs->ascii[0] = '\0';
+
+		error = ifnet_ioctl(ifp, SOCK_DOM(so), cmd, (caddr_t)ifs);
+
+		bcopy(ifs, data, sizeof (*ifs));
+		break;
+
+	case SIOCGLIFPHYADDR:			/* struct if_laddrreq */
+	case SIOCGIFMEDIA32:			/* struct ifmediareq32 */
+	case SIOCGIFMEDIA64:			/* struct ifmediareq64 */
+		error = ifnet_ioctl(ifp, SOCK_DOM(so), cmd, data);
+		break;
+
+	case SIOCSIFDESC:			/* struct if_descreq */
+	case SIOCGIFDESC:			/* struct if_descreq */
+		error = ifioctl_ifdesc(ifp, cmd, data, p);
+		break;
+
+	case SIOCSIFLINKPARAMS:			/* struct if_linkparamsreq */
+	case SIOCGIFLINKPARAMS:			/* struct if_linkparamsreq */
+		error = ifioctl_linkparams(ifp, cmd, data, p);
+		break;
+
+	case SIOCGIFQUEUESTATS:			/* struct if_qstatsreq */
+		error = ifioctl_qstats(ifp, cmd, data);
+		break;
+
+	case SIOCSIFTHROTTLE:			/* struct if_throttlereq */
+	case SIOCGIFTHROTTLE:			/* struct if_throttlereq */
+		error = ifioctl_throttle(ifp, cmd, data, p);
+		break;
 
 	default:
 		if (so->so_proto == NULL) {
@@ -1869,8 +1963,7 @@ ifioctl(struct socket *so, u_long cmd, caddr_t data, struct proc *p)
 		socket_unlock(so, 1);
 
 		if (error == EOPNOTSUPP || error == ENOTSUP) {
-			error = ifnet_ioctl(ifp,
-			    so->so_proto->pr_domain->dom_family, cmd, data);
+			error = ifnet_ioctl(ifp, SOCK_DOM(so), cmd, data);
 		}
 		break;
 	}
@@ -1879,10 +1972,35 @@ done:
 	if (ifs != NULL)
 		_FREE(ifs, M_DEVBUF);
 
+	if (if_verbose) {
+		if (ifname[0] == '\0')
+			(void) snprintf(ifname, sizeof (ifname), "%s",
+			    "NULL");
+		else if (ifp != NULL)
+			(void) snprintf(ifname, sizeof (ifname), "%s",
+			    if_name(ifp));
+
+		if (error != 0) {
+			printf("%s[%s,%d]: ifp %s cmd 0x%08lx (%c%c [%lu] "
+			    "%c %lu) error %d\n", __func__,
+			    proc_name_address(p), proc_pid(p),
+			    ifname, cmd, (cmd & IOC_IN) ? 'I' : ' ',
+			    (cmd & IOC_OUT) ? 'O' : ' ', IOCPARM_LEN(cmd),
+			    (char)IOCGROUP(cmd), cmd & 0xff, error);
+		} else if (if_verbose > 1) {
+			printf("%s[%s,%d]: ifp %s cmd 0x%08lx (%c%c [%lu] "
+			    "%c %lu) OK\n", __func__,
+			    proc_name_address(p), proc_pid(p),
+			    ifname, cmd, (cmd & IOC_IN) ? 'I' : ' ',
+			    (cmd & IOC_OUT) ? 'O' : ' ', IOCPARM_LEN(cmd),
+			    (char)IOCGROUP(cmd), cmd & 0xff);
+		}
+	}
+
 	return (error);
 }
 
-static int
+static __attribute__((noinline)) int
 ifioctl_ifreq(struct socket *so, u_long cmd, struct ifreq *ifr, struct proc *p)
 {
 	struct ifnet *ifp;
@@ -1893,8 +2011,6 @@ ifioctl_ifreq(struct socket *so, u_long cmd, struct ifreq *ifr, struct proc *p)
 
 	bzero(&ev_data, sizeof (struct net_event_data));
 	bzero(&ev_msg, sizeof (struct kev_msg));
-
-	ifr->ifr_name[IFNAMSIZ - 1] = '\0';
 
 	switch (cmd) {
 	case SIOCIFCREATE:
@@ -1911,7 +2027,14 @@ ifioctl_ifreq(struct socket *so, u_long cmd, struct ifreq *ifr, struct proc *p)
 		return (if_clone_destroy(ifr->ifr_name));
 	}
 
+	/*
+	 * ioctls which require ifp.  Note that we acquire dlil_ifnet_lock
+	 * here to ensure that the ifnet, if found, has been fully attached.
+	 */
+	dlil_if_lock();
 	ifp = ifunit(ifr->ifr_name);
+	dlil_if_unlock();
+
 	if (ifp == NULL)
 		return (ENXIO);
 
@@ -1939,7 +2062,12 @@ ifioctl_ifreq(struct socket *so, u_long cmd, struct ifreq *ifr, struct proc *p)
 	case SIOCGIFMAC:
 		error = mac_ifnet_label_get(kauth_cred_get(), ifr, ifp);
 		break;
-#endif
+
+	case SIOCSIFMAC:
+		error = mac_ifnet_label_set(kauth_cred_get(), ifr, ifp);
+		break;
+#endif /* CONFIG_MACF_NET */
+
 	case SIOCGIFMETRIC:
 		ifnet_lock_shared(ifp);
 		ifr->ifr_metric = ifp->if_metric;
@@ -1958,24 +2086,6 @@ ifioctl_ifreq(struct socket *so, u_long cmd, struct ifreq *ifr, struct proc *p)
 		ifnet_lock_done(ifp);
 		break;
 
-	case SIOCGIFWAKEFLAGS:
-		ifnet_lock_shared(ifp);
-		ifr->ifr_wake_flags = ifnet_get_wake_flags(ifp);
-		ifnet_lock_done(ifp);
-		break;
-
-	case SIOCGIFGETRTREFCNT:
-		ifnet_lock_shared(ifp);
-		ifr->ifr_route_refcnt = ifp->if_route_refcnt;
-		ifnet_lock_done(ifp);
-		break;
-
-	case SIOCGIFLINKQUALITYMETRIC:
-		ifnet_lock_shared(ifp);
-		ifr->ifr_link_quality_metric = ifp->if_lqm;
-		ifnet_lock_done(ifp);
-		break;
-
 	case SIOCSIFFLAGS:
 		error = proc_suser(p);
 		if (error != 0)
@@ -1988,8 +2098,7 @@ ifioctl_ifreq(struct socket *so, u_long cmd, struct ifreq *ifr, struct proc *p)
 		 * Note that we intentionally ignore any error from below
 		 * for the SIOCSIFFLAGS case.
 		 */
-		(void) ifnet_ioctl(ifp, so->so_proto->pr_domain->dom_family,
-		    cmd, (caddr_t)ifr);
+		(void) ifnet_ioctl(ifp, SOCK_DOM(so), cmd, (caddr_t)ifr);
 
 		/*
 		 * Send the event even upon error from the driver because
@@ -2020,17 +2129,11 @@ ifioctl_ifreq(struct socket *so, u_long cmd, struct ifreq *ifr, struct proc *p)
 			error = EINVAL;
 			break;
 		}
-		error = ifnet_ioctl(ifp, so->so_proto->pr_domain->dom_family,
-		    cmd, (caddr_t)ifr);
+		error = ifnet_ioctl(ifp, SOCK_DOM(so), cmd, (caddr_t)ifr);
 
 		ifnet_touch_lastchange(ifp);
 		break;
 
-#if CONFIG_MACF_NET
-	case SIOCSIFMAC:
-		error = mac_ifnet_label_set(kauth_cred_get(), ifr, ifp);
-		break;
-#endif
 	case SIOCSIFMETRIC:
 		error = proc_suser(p);
 		if (error != 0)
@@ -2060,8 +2163,7 @@ ifioctl_ifreq(struct socket *so, u_long cmd, struct ifreq *ifr, struct proc *p)
 		if (error != 0)
 			break;
 
-		error = ifnet_ioctl(ifp, so->so_proto->pr_domain->dom_family,
-		    cmd, (caddr_t)ifr);
+		error = ifnet_ioctl(ifp, SOCK_DOM(so), cmd, (caddr_t)ifr);
 		if (error != 0)
 			break;
 
@@ -2097,8 +2199,7 @@ ifioctl_ifreq(struct socket *so, u_long cmd, struct ifreq *ifr, struct proc *p)
 			error = EINVAL;
 			break;
 		}
-		error = ifnet_ioctl(ifp, so->so_proto->pr_domain->dom_family,
-		    cmd, (caddr_t)ifr);
+		error = ifnet_ioctl(ifp, SOCK_DOM(so), cmd, (caddr_t)ifr);
 		if (error != 0)
 			break;
 
@@ -2127,7 +2228,7 @@ ifioctl_ifreq(struct socket *so, u_long cmd, struct ifreq *ifr, struct proc *p)
 			if_rtmtu_update(ifp);
 #if INET6
 			nd6_setmtu(ifp);
-#endif
+#endif /* INET6 */
 			/* Inform all transmit queues about the new MTU */
 			IFCQ_LOCK(ifq);
 			ifnet_update_sndq(ifq, CLASSQ_EV_LINK_MTU);
@@ -2202,12 +2303,38 @@ ifioctl_ifreq(struct socket *so, u_long cmd, struct ifreq *ifr, struct proc *p)
 		if (error != 0)
 			break;
 
-		error = ifnet_ioctl(ifp, so->so_proto->pr_domain->dom_family,
-		    cmd, (caddr_t)ifr);
+		error = ifnet_ioctl(ifp, SOCK_DOM(so), cmd, (caddr_t)ifr);
 		if (error != 0)
 			break;
 
 		ifnet_touch_lastchange(ifp);
+		break;
+
+	case SIOCGIFLLADDR: {
+		struct sockaddr_dl *sdl = SDL(ifp->if_lladdr->ifa_addr);
+
+		if (sdl->sdl_alen == 0) {
+			error = EADDRNOTAVAIL;
+			break;
+		}
+		/* If larger than 14-bytes we'll need another mechanism */
+		if (sdl->sdl_alen > sizeof (ifr->ifr_addr.sa_data)) {
+			error = EMSGSIZE;
+			break;
+		}
+		/* Follow the same convention used by SIOCSIFLLADDR */
+		bzero(&ifr->ifr_addr, sizeof (ifr->ifr_addr));
+		ifr->ifr_addr.sa_family = AF_LINK;
+		ifr->ifr_addr.sa_len = sdl->sdl_alen;
+		error = ifnet_guarded_lladdr_copy_bytes(ifp,
+		    &ifr->ifr_addr.sa_data, sdl->sdl_alen);
+		break;
+	}
+
+	case SIOCGIFTYPE:
+		ifr->ifr_type.ift_type = ifp->if_type;
+		ifr->ifr_type.ift_family = ifp->if_family;
+		ifr->ifr_type.ift_subfamily = ifp->if_subfamily;
 		break;
 
 	case SIOCGIFPSRCADDR:
@@ -2216,13 +2343,42 @@ ifioctl_ifreq(struct socket *so, u_long cmd, struct ifreq *ifr, struct proc *p)
 	case SIOCGIFDEVMTU:
 	case SIOCGIFVLAN:
 	case SIOCGIFBOND:
-		error = ifnet_ioctl(ifp, so->so_proto->pr_domain->dom_family,
-		    cmd, (caddr_t)ifr);
+		error = ifnet_ioctl(ifp, SOCK_DOM(so), cmd, (caddr_t)ifr);
+		break;
+
+	case SIOCGIFWAKEFLAGS:
+		ifnet_lock_shared(ifp);
+		ifr->ifr_wake_flags = ifnet_get_wake_flags(ifp);
+		ifnet_lock_done(ifp);
+		break;
+
+	case SIOCGIFGETRTREFCNT:
+		ifnet_lock_shared(ifp);
+		ifr->ifr_route_refcnt = ifp->if_route_refcnt;
+		ifnet_lock_done(ifp);
 		break;
 
 	case SIOCSIFOPPORTUNISTIC:
 	case SIOCGIFOPPORTUNISTIC:
 		error = ifnet_getset_opportunistic(ifp, cmd, ifr, p);
+		break;
+
+	case SIOCGIFLINKQUALITYMETRIC:
+		ifnet_lock_shared(ifp);
+		ifr->ifr_link_quality_metric = ifp->if_lqm;
+		ifnet_lock_done(ifp);
+		break;
+
+	case SIOCSIFLOG:
+	case SIOCGIFLOG:
+		error = ifnet_getset_log(ifp, cmd, ifr, p);
+		break;
+
+	case SIOCGIFDELEGATE:
+		ifnet_lock_shared(ifp);
+		ifr->ifr_delegated = ((ifp->if_delegated.ifp != NULL) ?
+		    ifp->if_delegated.ifp->if_index : 0);
+		ifnet_lock_done(ifp);
 		break;
 
 	case SIOCSIFDSTADDR:
@@ -2279,8 +2435,7 @@ ifioctl_ifreq(struct socket *so, u_long cmd, struct ifreq *ifr, struct proc *p)
 		}
 
 		if (error == EOPNOTSUPP || error == ENOTSUP) {
-			error = ifnet_ioctl(ifp,
-			    so->so_proto->pr_domain->dom_family, cmd,
+			error = ifnet_ioctl(ifp, SOCK_DOM(so), cmd,
 			    (caddr_t)ifr);
 		}
 		break;
@@ -2348,8 +2503,8 @@ ifnet_set_promiscuous(
 	}
 	
 	if (newflags != oldflags) {
-		log(LOG_INFO, "%s%d: promiscuous mode %s%s\n",
-		    ifp->if_name, ifp->if_unit,
+		log(LOG_INFO, "%s: promiscuous mode %s%s\n",
+		    if_name(ifp),
 		    (newflags & IFF_PROMISC) != 0 ? "enable" : "disable",
 		    error != 0 ? " failed" : " succeeded");
 	}
@@ -2364,30 +2519,33 @@ ifnet_set_promiscuous(
  */
 /*ARGSUSED*/
 static int
-ifconf(u_long cmd, user_addr_t ifrp, int * ret_space)
+ifconf(u_long cmd, user_addr_t ifrp, int *ret_space)
 {
 	struct ifnet *ifp = NULL;
 	struct ifaddr *ifa;
 	struct ifreq ifr;
 	int error = 0;
 	size_t space;
+	net_thread_marks_t marks;
+
+	marks = net_thread_marks_push(NET_THREAD_CKREQ_LLADDR);
 
 	/*
 	 * Zero the ifr buffer to make sure we don't
 	 * disclose the contents of the stack.
 	 */
-	bzero(&ifr, sizeof(struct ifreq));
+	bzero(&ifr, sizeof (struct ifreq));
 
 	space = *ret_space;
 	ifnet_head_lock_shared();
-	for (ifp = ifnet_head.tqh_first; space > sizeof(ifr) &&
+	for (ifp = ifnet_head.tqh_first; space > sizeof (ifr) &&
 	    ifp; ifp = ifp->if_link.tqe_next) {
 		char workbuf[64];
 		size_t ifnlen, addrs;
 
-		ifnlen = snprintf(workbuf, sizeof(workbuf),
-		    "%s%d", ifp->if_name, ifp->if_unit);
-		if(ifnlen + 1 > sizeof ifr.ifr_name) {
+		ifnlen = snprintf(workbuf, sizeof (workbuf),
+		    "%s", if_name(ifp));
+		if (ifnlen + 1 > sizeof (ifr.ifr_name)) {
 			error = ENAMETOOLONG;
 			break;
 		} else {
@@ -2398,19 +2556,35 @@ ifconf(u_long cmd, user_addr_t ifrp, int * ret_space)
 
 		addrs = 0;
 		ifa = ifp->if_addrhead.tqh_first;
-		for ( ; space > sizeof (ifr) && ifa;
+		for (; space > sizeof (ifr) && ifa;
 		    ifa = ifa->ifa_link.tqe_next) {
 			struct sockaddr *sa;
+			union {
+				struct sockaddr sa;
+				struct sockaddr_dl sdl;
+				uint8_t buf[SOCK_MAXADDRLEN + 1];
+			} u;
+
+			/*
+			 * Make sure to accomodate the largest possible
+			 * size of SA(if_lladdr)->sa_len.
+			 */
+			_CASSERT(sizeof (u) == (SOCK_MAXADDRLEN + 1));
 
 			IFA_LOCK(ifa);
 			sa = ifa->ifa_addr;
-#ifndef __APPLE__
-			if (curproc->p_prison && prison_if(curproc, sa)) {
-				IFA_UNLOCK(ifa);
-				continue;
-			}
-#endif
 			addrs++;
+
+			if (ifa == ifp->if_lladdr) {
+				VERIFY(sa->sa_family == AF_LINK);
+				bcopy(sa, &u, sa->sa_len);
+				IFA_UNLOCK(ifa);
+				ifnet_guarded_lladdr_copy_bytes(ifp,
+				    LLADDR(&u.sdl), u.sdl.sdl_alen);
+				IFA_LOCK(ifa);
+				sa = &u.sa;
+			}
+
 			if (cmd == OSIOCGIFCONF32 || cmd == OSIOCGIFCONF64) {
 				struct osockaddr *osa =
 				    (struct osockaddr *)(void *)&ifr.ifr_addr;
@@ -2418,25 +2592,25 @@ ifconf(u_long cmd, user_addr_t ifrp, int * ret_space)
 				osa->sa_family = sa->sa_family;
 				error = copyout((caddr_t)&ifr, ifrp,
 				    sizeof (ifr));
-				ifrp += sizeof(struct ifreq);
-			} else if (sa->sa_len <= sizeof(*sa)) {
+				ifrp += sizeof (struct ifreq);
+			} else if (sa->sa_len <= sizeof (*sa)) {
 				ifr.ifr_addr = *sa;
 				error = copyout((caddr_t)&ifr, ifrp,
 				    sizeof (ifr));
-				ifrp += sizeof(struct ifreq);
+				ifrp += sizeof (struct ifreq);
 			} else {
 				if (space <
-				    sizeof (ifr) + sa->sa_len - sizeof(*sa)) {
+				    sizeof (ifr) + sa->sa_len - sizeof (*sa)) {
 					IFA_UNLOCK(ifa);
 					break;
 				}
-				space -= sa->sa_len - sizeof(*sa);
+				space -= sa->sa_len - sizeof (*sa);
 				error = copyout((caddr_t)&ifr, ifrp,
 				    sizeof (ifr.ifr_name));
 				if (error == 0) {
-				    error = copyout((caddr_t)sa, (ifrp +
-				        offsetof(struct ifreq, ifr_addr)),
-					sa->sa_len);
+					error = copyout((caddr_t)sa, (ifrp +
+					    offsetof(struct ifreq, ifr_addr)),
+					    sa->sa_len);
 				}
 				ifrp += (sa->sa_len + offsetof(struct ifreq,
 				    ifr_addr));
@@ -2451,16 +2625,17 @@ ifconf(u_long cmd, user_addr_t ifrp, int * ret_space)
 		if (error)
 			break;
 		if (!addrs) {
-			bzero((caddr_t)&ifr.ifr_addr, sizeof(ifr.ifr_addr));
+			bzero((caddr_t)&ifr.ifr_addr, sizeof (ifr.ifr_addr));
 			error = copyout((caddr_t)&ifr, ifrp, sizeof (ifr));
 			if (error)
 				break;
 			space -= sizeof (ifr);
-			ifrp += sizeof(struct ifreq);
+			ifrp += sizeof (struct ifreq);
 		}
 	}
 	ifnet_head_done();
 	*ret_space -= space;
+	net_thread_marks_pop(marks);
 	return (error);
 }
 
@@ -2876,7 +3051,7 @@ if_addmulti(struct ifnet *ifp, const struct sockaddr *sa,
 /*
  * Anything other than network-layer protocol domains which hold references
  * to the underlying link-layer record must use this routine: SIOCADDMULTI
- * ioctl, ifnet_add_multicast(), AppleTalk, if_bond.
+ * ioctl, ifnet_add_multicast(), if_bond.
  */
 int
 if_addmulti_anon(struct ifnet *ifp, const struct sockaddr *sa,
@@ -3086,7 +3261,7 @@ if_delmulti_ifma(struct ifmultiaddr *ifma)
 /*
  * Anything other than network-layer protocol domains which hold references
  * to the underlying link-layer record must use this routine: SIOCDELMULTI
- * ioctl, ifnet_remove_multicast(), AppleTalk, if_bond.
+ * ioctl, ifnet_remove_multicast(), if_bond.
  */
 int
 if_delmulti_anon(struct ifnet *ifp, const struct sockaddr *sa)
@@ -3188,22 +3363,6 @@ if_delmulti_common(struct ifmultiaddr *ifma, struct ifnet *ifp,
 }
 
 /*
- * We don't use if_setlladdr, our interfaces are responsible for
- * handling the SIOCSIFLLADDR ioctl.
- */
-#ifndef __APPLE__
-int
-if_setlladdr(struct ifnet *ifp, const u_char *lladdr, int len)
-{
-	...
-}
-#endif
-
-SYSCTL_NODE(_net, PF_LINK, link, CTLFLAG_RW|CTLFLAG_LOCKED, 0, "Link layers");
-SYSCTL_NODE(_net_link, 0, generic, CTLFLAG_RW|CTLFLAG_LOCKED, 0, "Generic link-management");
-
-
-/*
  * Shutdown all network activity.  Used boot() when halting
  * system.
  */
@@ -3281,8 +3440,6 @@ if_rtproto_del(struct ifnet *ifp, int protocol)
 {
 	struct radix_node_head  *rnh;
 
-	if (use_routegenid)
-		routegenid_update();
 	if ((protocol <= AF_MAX) && (protocol >= 0) &&
 		((rnh = rt_tables[protocol]) != NULL) && (ifp != NULL)) {
 		lck_mtx_lock(rnh_lock);
@@ -3331,9 +3488,7 @@ void if_rtmtu_update(struct ifnet *ifp)
 		(void) rnh->rnh_walktree(rnh, if_rtmtu, ifp);
 		lck_mtx_unlock(rnh_lock);
 	}
-
-	if (use_routegenid)
-		routegenid_update();
+	routegenid_update();
 }
 
 __private_extern__ void
@@ -3383,9 +3538,7 @@ if_data_internal_to_if_data(struct ifnet *ifp,
 	if_data->ifi_lastchange.tv_sec = if_data_int->ifi_lastchange.tv_sec;
 	if_data->ifi_lastchange.tv_usec = if_data_int->ifi_lastchange.tv_usec;
 
-#if IF_LASTCHANGEUPTIME
 	if_data->ifi_lastchange.tv_sec += boottime_sec();
-#endif
 
 	if_data->ifi_unused2 = 0;
 	COPYFIELD(ifi_hwassist);
@@ -3441,9 +3594,7 @@ if_data_internal_to_if_data64(struct ifnet *ifp,
 	if_data64->ifi_lastchange.tv_sec = if_data_int->ifi_lastchange.tv_sec;
 	if_data64->ifi_lastchange.tv_usec = if_data_int->ifi_lastchange.tv_usec;
 
-#if IF_LASTCHANGEUPTIME
 	if_data64->ifi_lastchange.tv_sec += boottime_sec();
-#endif
 
 #undef COPYFIELD64
 }
@@ -3492,6 +3643,9 @@ if_copy_data_extended(struct ifnet *ifp, struct if_data_extended *if_de)
 
 	bzero(if_de, sizeof (*if_de));
 	COPY_IF_DE_FIELD64_ATOMIC(ifi_alignerrs);
+	COPY_IF_DE_FIELD64_ATOMIC(ifi_dt_bytes);
+	COPY_IF_DE_FIELD64_ATOMIC(ifi_fpackets);
+	COPY_IF_DE_FIELD64_ATOMIC(ifi_fbytes);
 
 #undef COPY_IF_DE_FIELD64_ATOMIC
 }
@@ -3569,10 +3723,9 @@ ifa_remref(struct ifaddr *ifa, int locked)
 			panic("ifa %p attached to ifp is being freed\n", ifa);
 		/*
 		 * Some interface addresses are allocated either statically
-		 * or carved out of a larger block; e.g. AppleTalk addresses.
-		 * Only free it if it was allocated via MALLOC or via the
-		 * corresponding per-address family allocator.  Otherwise,
-		 * leave it alone.
+		 * or carved out of a larger block.  Only free it if it was
+		 * allocated via MALLOC or via the corresponding per-address
+		 * family allocator.  Otherwise, leave it alone.
 		 */
 		if (ifa->ifa_debug & IFD_ALLOC) {
 			if (ifa->ifa_free == NULL) {
@@ -3625,4 +3778,187 @@ ifa_lock_destroy(struct ifaddr *ifa)
 {
 	IFA_LOCK_ASSERT_NOTHELD(ifa);
 	lck_mtx_destroy(&ifa->ifa_lock, ifa_mtx_grp);
+}
+
+/*
+ * 'i' group ioctls.
+ *
+ * The switch statement below does nothing at runtime, as it serves as a
+ * compile time check to ensure that all of the socket 'i' ioctls (those
+ * in the 'i' group going thru soo_ioctl) that are made available by the
+ * networking stack is unique.  This works as long as this routine gets
+ * updated each time a new interface ioctl gets added.
+ *
+ * Any failures at compile time indicates duplicated ioctl values.
+ */
+static __attribute__((unused)) void
+ifioctl_cassert(void)
+{
+	/*
+	 * This is equivalent to _CASSERT() and the compiler wouldn't
+	 * generate any instructions, thus for compile time only.
+	 */
+	switch ((u_long)0) {
+	case 0:
+
+	/* bsd/net/if_ppp.h */
+	case SIOCGPPPSTATS:
+	case SIOCGPPPCSTATS:
+
+#if INET6
+	/* bsd/netinet6/in6_var.h */
+	case SIOCSIFADDR_IN6:
+	case SIOCGIFADDR_IN6:
+	case SIOCSIFDSTADDR_IN6:
+	case SIOCSIFNETMASK_IN6:
+	case SIOCGIFDSTADDR_IN6:
+	case SIOCGIFNETMASK_IN6:
+	case SIOCDIFADDR_IN6:
+	case SIOCAIFADDR_IN6_32:
+	case SIOCAIFADDR_IN6_64:
+	case SIOCSIFPHYADDR_IN6_32:
+	case SIOCSIFPHYADDR_IN6_64:
+	case SIOCGIFPSRCADDR_IN6:
+	case SIOCGIFPDSTADDR_IN6:
+	case SIOCGIFAFLAG_IN6:
+	case SIOCGDRLST_IN6_32:
+	case SIOCGDRLST_IN6_64:
+	case SIOCGPRLST_IN6_32:
+	case SIOCGPRLST_IN6_64:
+	case OSIOCGIFINFO_IN6:
+	case SIOCGIFINFO_IN6:
+	case SIOCSNDFLUSH_IN6:
+	case SIOCGNBRINFO_IN6_32:
+	case SIOCGNBRINFO_IN6_64:
+	case SIOCSPFXFLUSH_IN6:
+	case SIOCSRTRFLUSH_IN6:
+	case SIOCGIFALIFETIME_IN6:
+	case SIOCSIFALIFETIME_IN6:
+	case SIOCGIFSTAT_IN6:
+	case SIOCGIFSTAT_ICMP6:
+	case SIOCSDEFIFACE_IN6_32:
+	case SIOCSDEFIFACE_IN6_64:
+	case SIOCGDEFIFACE_IN6_32:
+	case SIOCGDEFIFACE_IN6_64:
+	case SIOCSIFINFO_FLAGS:
+	case SIOCSSCOPE6:
+	case SIOCGSCOPE6:
+	case SIOCGSCOPE6DEF:
+	case SIOCSIFPREFIX_IN6:
+	case SIOCGIFPREFIX_IN6:
+	case SIOCDIFPREFIX_IN6:
+	case SIOCAIFPREFIX_IN6:
+	case SIOCCIFPREFIX_IN6:
+	case SIOCSGIFPREFIX_IN6:
+	case SIOCPROTOATTACH_IN6_32:
+	case SIOCPROTOATTACH_IN6_64:
+	case SIOCPROTODETACH_IN6:
+	case SIOCLL_START_32:
+	case SIOCLL_START_64:
+	case SIOCLL_STOP:
+	case SIOCAUTOCONF_START:
+	case SIOCAUTOCONF_STOP:
+	case SIOCSETROUTERMODE_IN6:
+	case SIOCLL_CGASTART_32:
+	case SIOCLL_CGASTART_64:
+#endif /* INET6 */
+
+	/* bsd/sys/sockio.h */
+	case SIOCSIFADDR:
+	case OSIOCGIFADDR:
+	case SIOCSIFDSTADDR:
+	case OSIOCGIFDSTADDR:
+	case SIOCSIFFLAGS:
+	case SIOCGIFFLAGS:
+	case OSIOCGIFBRDADDR:
+	case SIOCSIFBRDADDR:
+	case OSIOCGIFCONF32:
+	case OSIOCGIFCONF64:
+	case OSIOCGIFNETMASK:
+	case SIOCSIFNETMASK:
+	case SIOCGIFMETRIC:
+	case SIOCSIFMETRIC:
+	case SIOCDIFADDR:
+	case SIOCAIFADDR:
+	case SIOCALIFADDR:
+	case SIOCGLIFADDR:
+	case SIOCDLIFADDR:
+	case SIOCGIFADDR:
+	case SIOCGIFDSTADDR:
+	case SIOCGIFBRDADDR:
+	case SIOCGIFCONF32:
+	case SIOCGIFCONF64:
+	case SIOCGIFNETMASK:
+	case SIOCAUTOADDR:
+	case SIOCAUTONETMASK:
+	case SIOCARPIPLL:
+	case SIOCADDMULTI:
+	case SIOCDELMULTI:
+	case SIOCGIFMTU:
+	case SIOCSIFMTU:
+	case SIOCGIFPHYS:
+	case SIOCSIFPHYS:
+	case SIOCSIFMEDIA:
+	case SIOCGIFMEDIA32:
+	case SIOCGIFMEDIA64:
+	case SIOCSIFGENERIC:
+	case SIOCGIFGENERIC:
+	case SIOCRSLVMULTI:
+	case SIOCSIFLLADDR:
+	case SIOCGIFSTATUS:
+	case SIOCSIFPHYADDR:
+	case SIOCGIFPSRCADDR:
+	case SIOCGIFPDSTADDR:
+	case SIOCDIFPHYADDR:
+	case SIOCSLIFPHYADDR:
+	case SIOCGLIFPHYADDR:
+	case SIOCGIFDEVMTU:
+	case SIOCSIFALTMTU:
+	case SIOCGIFALTMTU:
+	case SIOCSIFBOND:
+	case SIOCGIFBOND:
+	case SIOCPROTOATTACH:
+	case SIOCPROTODETACH:
+	case SIOCSIFCAP:
+	case SIOCGIFCAP:
+	case SIOCIFCREATE:
+	case SIOCIFDESTROY:
+	case SIOCIFCREATE2:
+	case SIOCSDRVSPEC32:
+	case SIOCGDRVSPEC32:
+	case SIOCSDRVSPEC64:
+	case SIOCGDRVSPEC64:
+	case SIOCSIFVLAN:
+	case SIOCGIFVLAN:
+	case SIOCIFGCLONERS32:
+	case SIOCIFGCLONERS64:
+	case SIOCGIFASYNCMAP:
+	case SIOCSIFASYNCMAP:
+#if CONFIG_MACF_NET
+	case SIOCGIFMAC:
+	case SIOCSIFMAC:
+#endif /* CONFIG_MACF_NET */
+	case SIOCSIFKPI:
+	case SIOCGIFKPI:
+	case SIOCGIFWAKEFLAGS:
+	case SIOCGIFGETRTREFCNT:
+	case SIOCGIFLINKQUALITYMETRIC:
+	case SIOCSIFOPPORTUNISTIC:
+	case SIOCGIFOPPORTUNISTIC:
+	case SIOCSETROUTERMODE:
+	case SIOCGIFEFLAGS:
+	case SIOCSIFDESC:
+	case SIOCGIFDESC:
+	case SIOCSIFLINKPARAMS:
+	case SIOCGIFLINKPARAMS:
+	case SIOCGIFQUEUESTATS:
+	case SIOCSIFTHROTTLE:
+	case SIOCGIFTHROTTLE:
+	case SIOCSIFLOG:
+	case SIOCGIFLOG:
+	case SIOCGIFDELEGATE:
+	case SIOCGIFLLADDR:
+	case SIOCGIFTYPE:
+		;
+	}
 }

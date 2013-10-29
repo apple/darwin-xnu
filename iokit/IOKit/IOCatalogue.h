@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1998-2000 Apple Inc. All rights reserved.
+ * Copyright (c) 1998-2012 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -222,42 +222,6 @@ public:
 /* This stuff is no longer used at all we keep it around for i386
  * binary compatibility only. Symbols are no longer exported.
  */
-#if __i386__
-    /*!
-        @function recordStartupExtensions
-        @abstract Records extensions made available by the primary booter.
-            <p>
-            This function is for internal use by the kernel startup linker.
-            Kernel extensions should never call it.
-        @result Returns true if startup extensions were successfully recorded,
-            false if not.
-    */
-    virtual bool recordStartupExtensions(void);
-
-    /*!
-        @function addExtensionsFromArchive()
-        @abstract Records an archive of extensions, as from device ROM.
-            <p>
-            This function is currently for internal use.
-            Kernel extensions should never call it.
-        @param mkext An OSData object containing a multikext archive.
-        @result Returns true if mkext was properly unserialized and its
-                contents recorded, false if not.
-    */
-    virtual bool addExtensionsFromArchive(OSData * mkext);
-
-
-    /*!
-        @function removeKernelLinker
-        @abstract Removes from memory all code and data related to
-            boot-time loading of kernel extensions. kextd triggers
-            this when it first starts in order to pass responsibility
-            for loading extensions from the kernel itself to kextd.
-        @result Returns KERN_SUCCESS if the kernel linker is successfully
-            removed or wasn't present, KERN_FAILURE otherwise.
-    */
-    virtual kern_return_t removeKernelLinker(void);
-#endif /* __i386__ */
 
 private:
 

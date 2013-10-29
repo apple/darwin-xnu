@@ -78,10 +78,7 @@
 #include <sys/_types.h>
 #include <sys/cdefs.h>
 
-#ifndef	_INO_T
-typedef	__darwin_ino_t	ino_t;		/* inode number */
-#define _INO_T
-#endif
+#include <sys/_types/_ino_t.h>
 
 
 #define __DARWIN_MAXNAMLEN	255

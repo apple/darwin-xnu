@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2011 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2013 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -199,6 +199,7 @@ struct nfs_socket_search {
 	uint32_t		nss_protocol;		/* RPC protocol */
 	uint32_t		nss_version;		/* RPC protocol version */
 	uint32_t		nss_flags;		/* (see below) */
+	int			nss_addrcnt;		/* Number addresses to try or left */
 	int			nss_timeo;		/* how long we are willing to wait */
 	int			nss_error;		/* best error we've gotten so far */
 };
@@ -240,7 +241,7 @@ struct nfs_client_id {
 	int				nci_idlen;	/* length of client id buffer */
 };
 TAILQ_HEAD(nfsclientidlist, nfs_client_id);
-__private_extern__ struct nfsclientidlist nfsclientids;
+extern struct nfsclientidlist nfsclientids;
 
 /*
  * Mount structure.
@@ -254,10 +255,13 @@ struct nfsmount {
 	uint32_t nm_mflags_mask[NFS_MFLAG_BITMAP_LEN]; /* mount flags mask in mount args */
 	uint32_t nm_mflags[NFS_MFLAG_BITMAP_LEN]; /* mount flags in mount args */
 	uint32_t nm_flags[NFS_MFLAG_BITMAP_LEN]; /* current mount flags (soft, intr, etc...) */
+	char *  nm_realm;		/* Kerberos realm to use */
+	char *  nm_principal;		/* GSS principal to use on initial mount */
+	char *	nm_sprinc;		/* Kerberos principal of the server */
 	int	nm_state;		/* Internal state flags */
 	int	nm_vers;		/* NFS version */
 	struct nfs_funcs *nm_funcs;	/* version-specific functions */
-	kauth_cred_t nm_mcred;		/* credential used for the mount (v4) */
+	kauth_cred_t nm_mcred;		/* credential used for the mount */
 	mount_t	nm_mountp;		/* VFS structure for this filesystem */
 	nfsnode_t nm_dnp;		/* root directory nfsnode pointer */
 	struct nfs_fs_locations nm_locations; /* file system locations */

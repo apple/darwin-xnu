@@ -29,7 +29,7 @@
 #ifndef _FBT_H
 #define _FBT_H
 
-#if defined(__i386__) || defined (__x86_64__)
+#if defined (__x86_64__)
 typedef uint8_t machine_inst_t;
 #else
 #error Unknown Architecture

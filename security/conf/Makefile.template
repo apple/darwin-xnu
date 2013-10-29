@@ -5,16 +5,6 @@
 # the terms and conditions for use and redistribution.
 #
 
-#
-# Export IDENT for sub-makefiles
-#
-export IDENT
-
-#
-# INCFLAGS to include security prototypes
-#
-INCFLAGS_MAKEFILE= -I$(SOURCE) -I$(SOURCE)/..
-
 export MakeInc_cmd=${SRCROOT}/makedefs/MakeInc.cmd
 export MakeInc_def=${SRCROOT}/makedefs/MakeInc.def
 export MakeInc_rule=${SRCROOT}/makedefs/MakeInc.rule
@@ -26,14 +16,26 @@ include $(MakeInc_def)
 #
 # XXX: CFLAGS
 #
-CFLAGS+= -I. -include meta_features.h -DBSD_KERNEL_PRIVATE
+CFLAGS+= -include meta_features.h -DBSD_KERNEL_PRIVATE
+
+# Objects that don't want -Wcast-align warning (8474835)
+OBJS_NO_CAST_ALIGN =		\
+		mac_alloc.o	\
+		mac_base.o
+
+$(foreach file,$(OBJS_NO_CAST_ALIGN),$(eval $(call add_perfile_cflags,$(file),-Wno-cast-align)))
+
+#
+# INCFLAGS to include security prototypes
+#
+INCFLAGS_MAKEFILE= -I$(SOURCE)/..
 
 #
 # Directories for mig generated files
 #
-COMP_SUBDIRS =
+COMP_SUBDIRS = 
 
-
+#
 #  Make sure we don't remove this by accident if interrupted at the wrong
 #  time.
 #
@@ -59,13 +61,8 @@ COPYRIGHT_FILES = \
 
 %CFILES
 
-%MFILES
-
 %SFILES
 
-%BFILES
-
-%ORDERED
 %MACHDEP
 
 #
@@ -75,30 +72,25 @@ COPYRIGHT_FILES = \
 #
 ${OBJS}: ${OBJSDEPS}
 
-
-%LOAD
-
 LDOBJS = $(OBJS)
 
-$(COMPONENT).filelist: $(LDOBJS)
-	$(_v)$(RM) $(RMFLAGS) vers.c
-	$(_v)$(SRCROOT)/SETUP/newvers \
-	`$(CAT) ${VERSION_FILES}` ${COPYRIGHT_FILES}
-	$(_v)${KCC} $(CFLAGS) $(INCLUDES) -c vers.c
+$(COMPONENT).filelist: $(LDOBJS) vers.o
 	@echo LDFILELIST $(COMPONENT)
 	$(_v)( for obj in ${LDOBJS} vers.o; do	\
-		 echo $(TARGET)$(COMP_OBJ_DIR)/$(KERNEL_CONFIG)/$${obj}; \
+		 echo $(TARGET)/$(CURRENT_KERNEL_CONFIG)/$${obj}; \
 	done; ) > $(COMPONENT).filelist
 
 do_all: $(COMPONENT).filelist
 
-do_depend: do_all
-	$(_v)${MD} -u Makedep -f -d `ls *.d`;
-	
-do_build_all: do_depend
+do_build_all:: do_all
 
-${SOBJS}: 
+vers.o: vers.c
+	@echo CC $@
+	$(_v)${KCC} $(CFLAGS) -o ${@} -c ${INCFLAGS} $<
 
+vers.c:
+	$(_v)$(SRCROOT)/SETUP/newvers \
+		`$(CAT) ${VERSION_FILES}` ${COPYRIGHT_FILES}
 
 %RULES
 

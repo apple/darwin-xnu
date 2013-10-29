@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2012 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -62,11 +62,9 @@
 
 #ifndef _NET_RAW_CB_H_
 #define _NET_RAW_CB_H_
-#include <sys/appleapiopts.h>
-
+#ifdef BSD_KERNEL_PRIVATE
 #include <sys/queue.h>
 
-#ifdef PRIVATE
 /*
  * Raw protocol interface control block.  Used
  * to tie a socket to the generic raw interface.
@@ -87,20 +85,19 @@ struct rawcb {
  */
 #define	RAWSNDQ		8192
 #define	RAWRCVQ		8192
-#endif /* PRIVATE */
 
-#ifdef KERNEL_PRIVATE
 extern LIST_HEAD(rawcb_list_head, rawcb) rawcb_list;
 
-int	 raw_attach(struct socket *, int);
-void	 raw_ctlinput(int, struct sockaddr *, void *);
-void	 raw_detach(struct rawcb *);
-void	 raw_disconnect(struct rawcb *);
-void	 raw_init(void);
-void	 raw_input(struct mbuf *,
-	    struct sockproto *, struct sockaddr *, struct sockaddr *);
+__BEGIN_DECLS
+extern int raw_attach(struct socket *, int);
+extern void raw_ctlinput(int, struct sockaddr *, void *);
+extern void raw_detach(struct rawcb *);
+extern void raw_disconnect(struct rawcb *);
+extern void raw_init(struct protosw *, struct domain *);
+extern void raw_input(struct mbuf *, struct sockproto *, struct sockaddr *,
+    struct sockaddr *);
+__END_DECLS
 
 extern	struct pr_usrreqs raw_usrreqs;
-#endif /* KERNEL_PRIVATE */
-
-#endif
+#endif /* BSD_KERNEL_PRIVATE */
+#endif /* _NET_RAW_CB_H_ */

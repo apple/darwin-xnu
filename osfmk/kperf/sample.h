@@ -26,16 +26,27 @@
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 
-// what goes in a sample
-
 #include "threadinfo.h"
 #include "callstack.h"
+#include "kperf_kpc.h"
 
+#ifndef __KPERF_SAMPLE_H__
+#define __KPERF_SAMPLE_H__
+
+// what goes in a sample
 struct kperf_sample
 {
 	struct threadinfo threadinfo;
 	struct tinfo_ex   tinfo_ex;
 	struct callstack  kcallstack;
 	struct callstack  ucallstack;
+
+#if KPC
+	struct kpcdata    kpcdata;
+#endif
 };
 
+// cache of thread on CPUs during the IPI
+extern thread_t *kperf_thread_on_cpus;
+
+#endif /* __KPERF_SAMPLE_H__ */

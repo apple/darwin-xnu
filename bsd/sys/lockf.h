@@ -73,6 +73,11 @@ struct vnode;
 MALLOC_DECLARE(M_LOCKF);
 #endif
 
+#if IMPORTANCE_INHERITANCE
+#define LF_NOT_BOOSTED  0
+#define LF_BOOSTED      1
+#endif /* IMPORTANCE_INHERITANCE */
+
 /*
  * The lockf structure is a kernel structure which contains the information
  * associated with a byte range lock.  The lockf structures are linked into
@@ -95,6 +100,9 @@ struct lockf {
 	struct	lockf *lf_next;	    /* Pointer to the next lock on this inode */
 	struct	locklist lf_blkhd;  /* List of requests blocked on this lock */
 	TAILQ_ENTRY(lockf) lf_block;/* A request waiting for a lock */
+#if IMPORTANCE_INHERITANCE
+	int     lf_boosted;         /* Is the owner of the lock boosted */
+#endif /* IMPORTANCE_INHERITANCE */
 };
 
 #pragma pack()

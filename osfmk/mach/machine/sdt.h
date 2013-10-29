@@ -192,7 +192,7 @@
 	DTRACE_PROBE1(__io_, name, arg1);
 
 #define	DTRACE_IO2(name, type1, arg1, type2, arg2)			\
-	DTRACE_PROBE2(__io_, name, type1, arg1, type2, arg2);
+	DTRACE_PROBE2(__io_, name, arg1, arg2);
 
 #define	DTRACE_IO3(name, type1, arg1, type2, arg2, type3, arg3)		\
 	DTRACE_PROBE3(__io_, name, arg1, arg2, arg3);
@@ -216,6 +216,9 @@
 
 #define	DTRACE_TMR6(name, type1, arg1, type2, arg2, type3, arg3, arg4, arg5, arg6) \
 	DTRACE_PROBE6(__sdt_, name, arg1, arg2, arg3, arg4, arg5, arg6);
+
+#define	DTRACE_TMR7(name, type1, arg1, type2, arg2, type3, arg3, arg4, arg5, arg6, arg7) \
+	DTRACE_PROBE7(__sdt_, name, arg1, arg2, arg3, arg4, arg5, arg6, arg7);
 
 #define	DTRACE_VM(name)							\
 	DTRACE_PROBE(__vminfo_, name)
@@ -281,6 +284,66 @@
     type4, arg4, type5, arg5)                                           \
         DTRACE_PROBE5(__tcp_, name, arg1, arg2, arg3, arg4, arg5)
 
+#define	DTRACE_MPTCP(name)						\
+	DTRACE_PROBE(__mptcp_, name)
+
+#define	DTRACE_MPTCP1(name, type1, arg1)				\
+	DTRACE_PROBE1(__mptcp_, name, arg1)
+
+#define	DTRACE_MPTCP2(name, type1, arg1, type2, arg2)			\
+	DTRACE_PROBE2(__mptcp_, name, arg1, arg2)
+
+#define	DTRACE_MPTCP3(name, type1, arg1, type2, arg2, type3, arg3)	\
+	DTRACE_PROBE3(__mptcp_, name, arg1, arg2, arg3)
+
+#define	DTRACE_MPTCP4(name, type1, arg1, type2, arg2,			\
+    		     type3, arg3, type4, arg4)				\
+	DTRACE_PROBE4(__mptcp_, name, arg1, arg2, arg3, arg4)
+
+#define	DTRACE_MPTCP5(name, typ1, arg1, type2, arg2, type3, arg3,	\
+		      type4, arg4, type5, arg5)				\
+	DTRACE_PROBE5(__mptcp_, name, arg1, arg2, arg3, arg4, arg5)
+
+#define	DTRACE_MPTCP6(name, typ1, arg1, type2, arg2, type3, arg3,	\
+		      type4, arg4, type5, arg5, type6, arg6)		\
+	DTRACE_PROBE6(__mptcp_, name, arg1, arg2, arg3, arg4, arg5, arg6)
+
+#define	DTRACE_MPTCP7(name, typ1, arg1, type2, arg2, type3, arg3,	\
+		      type4, arg4, type5, arg5, type6, arg6, 		\
+		      type7, arg7)					\
+	DTRACE_PROBE7(__mptcp_, name, arg1, arg2, arg3, arg4, arg5, 	\
+	    	      arg6, arg7)
+
+#define DTRACE_FSINFO(name, type, vp)					\
+	DTRACE_PROBE1(__fsinfo_, name, vp)
+
+#define DTRACE_FSINFO_IO(name, type1, vp, type2, size)			\
+	DTRACE_PROBE2(__fsinfo_, name, vp, size)
+
+#define	DTRACE_BOOST(name)						\
+	DTRACE_PROBE(__boost_, name);
+
+#define	DTRACE_BOOST1(name, type1, arg1)				\
+	DTRACE_PROBE1(__boost_, name, arg1);
+
+#define	DTRACE_BOOST2(name, type1, arg1, type2, arg2)			\
+	DTRACE_PROBE2(__boost_, name, arg1, arg2);
+
+#define	DTRACE_BOOST3(name, type1, arg1, type2, arg2, type3, arg3)	\
+	DTRACE_PROBE3(__boost_, name, arg1, arg2, arg3);
+
+#define	DTRACE_BOOST4(name, type1, arg1, type2, arg2, 			\
+    type3, arg3, type4, arg4)						\
+	DTRACE_PROBE4(__boost_, name, arg1, arg2, arg3, arg4);
+
+#define	DTRACE_BOOST5(name, type1, arg1, type2, arg2, 			\
+    type3, arg3, type4, arg4, type5, arg5)						\
+	DTRACE_PROBE5(__boost_, name, arg1, arg2, arg3, arg4, arg5);
+
+#define	DTRACE_BOOST6(name, type1, arg1, type2, arg2, 			\
+    type3, arg3, type4, arg4, type5, arg5, type6, arg6)			\
+	DTRACE_PROBE6(__boost_, name, arg1, arg2, arg3, arg4, arg5, arg6);
+
 #else /* CONFIG_DTRACE */
 
 #define	DTRACE_SCHED(name) do {} while (0)
@@ -323,6 +386,26 @@
 #define DTRACE_TCP3(name, type1, arg1, type2, arg2, type3, arg3) do {} while(0)
 #define DTRACE_TCP4(name, type1, arg1, type2, arg2, type3, arg3, type4, arg4) do {} while(0)
 #define DTRACE_TCP5(name, type1, arg1, type2, arg2, type3, arg3, type4, arg4, type5, arg5) do {} while(0)
+
+#define DTRACE_MPTCP(name) do {} while(0)
+#define DTRACE_MPTCP1(name, type1, arg1) do {} while(0)
+#define DTRACE_MPTCP2(name, type1, arg1, type2, arg2) do {} while(0)
+#define DTRACE_MPTCP3(name, type1, arg1, type2, arg2, type3, arg3) do {} while(0)
+#define DTRACE_MPTCP4(name, type1, arg1, type2, arg2, type3, arg3, type4, arg4) do {} while(0)
+#define DTRACE_MPTCP5(name, type1, arg1, type2, arg2, type3, arg3, type4, arg4, type5, arg5) do {} while(0)
+#define DTRACE_MPTCP6(name, type1, arg1, type2, arg2, type3, arg3, type4, arg4, type5, arg5, type6, arg6) do {} while(0)
+#define DTRACE_MPTCP7(name, type1, arg1, type2, arg2, type3, arg3, type4, arg4, type5, arg5, type6, arg6, type7, arg7) do {} while(0)
+
+#define DTRACE_FSINFO(name, type, vp) do {} while(0)
+#define DTRACE_FSINFO_IO(name, type1, vp, type2, size) do {} while (0)
+
+#define DTRACE_BOOST(name) do {} while(0)
+#define DTRACE_BOOST1(name, type1, arg1) do {} while(0)
+#define DTRACE_BOOST2(name, type1, arg1, type2, arg2) do {} while(0)
+#define DTRACE_BOOST3(name, type1, arg1, type2, arg2, type3, arg3) do {} while(0)
+#define DTRACE_BOOST4(name, type1, arg1, type2, arg2, type3, arg3, type4, arg4) do {} while(0)
+#define DTRACE_BOOST5(name, type1, arg1, type2, arg2, type3, arg3, type4, arg4, type5, arg5) do {} while(0)
+#define DTRACE_BOOST6(name, type1, arg1, type2, arg2, type3, arg3, type4, arg4, type5, arg5, type6, arg6) do {} while(0)
 
 #endif /* CONFIG_DTRACE */
 

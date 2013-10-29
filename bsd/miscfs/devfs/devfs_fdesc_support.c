@@ -95,9 +95,6 @@
 #include <miscfs/devfs/devfs.h>
 #include <miscfs/devfs/devfsdefs.h>
 
-/* XXX should be prototyped in header for here, kern_descrip.c */
-extern int soo_stat(struct socket *so, void *ub, int isstat64);
-
 #define FDL_WANT	0x01
 #define FDL_LOCKED	0x02
 static int fdcache_lock;
@@ -222,8 +219,10 @@ loop:
 		        vid = vnode_vid(fd->fd_vnode);
 			fdesc_unlock();
 
-			if (vnode_getwithvid(fd->fd_vnode, vid))
+			if (vnode_getwithvid(fd->fd_vnode, vid)) {
+				fdesc_lock();
 				goto loop;
+			}
 
 			*vpp = fd->fd_vnode;
 			(*vpp)->v_type = vtype;
@@ -391,7 +390,7 @@ fdesc_attr(int fd, struct vnode_attr *vap, vfs_context_t a_context)
 
 	if ((error = fp_lookup(p, fd, &fp, 0)))
 		return (error);
-	switch (fp->f_fglob->fg_type) {
+	switch (FILEGLOB_DTYPE(fp->f_fglob)) {
 	case DTYPE_VNODE:
 		if((error = vnode_getwithref((struct vnode *) fp->f_fglob->fg_data)) != 0) {
 			break;
@@ -416,14 +415,14 @@ fdesc_attr(int fd, struct vnode_attr *vap, vfs_context_t a_context)
 	case DTYPE_SOCKET:
 	case DTYPE_PIPE:
 #if SOCKETS
-		if (fp->f_fglob->fg_type == DTYPE_SOCKET)
+		if (FILEGLOB_DTYPE(fp->f_fglob) == DTYPE_SOCKET)
 			error = soo_stat((struct socket *)fp->f_fglob->fg_data, (void *)&stb, 0);
 		else
 #endif /* SOCKETS */
 			error = pipe_stat((struct pipe *)fp->f_fglob->fg_data, (void *)&stb, 0);
 
 		if (error == 0) {
-			if (fp->f_fglob->fg_type == DTYPE_SOCKET)
+			if (FILEGLOB_DTYPE(fp->f_fglob) == DTYPE_SOCKET)
 			        VATTR_RETURN(vap, va_type, VSOCK);
                         else
 			        VATTR_RETURN(vap, va_type, VFIFO);
@@ -513,7 +512,7 @@ fdesc_setattr(struct vnop_setattr_args *ap)
 	/*
 	 * Can setattr the underlying vnode, but not sockets!
 	 */
-	switch (fp->f_fglob->fg_type) {
+	switch (FILEGLOB_DTYPE(fp->f_fglob)) {
 	case DTYPE_VNODE:
 	{
 		if ((error = vnode_getwithref((struct vnode *) fp->f_fglob->fg_data)) != 0)
@@ -529,8 +528,7 @@ fdesc_setattr(struct vnop_setattr_args *ap)
 		break;
 
 	default:
-		kprintf("fp->f_fglob->fg_type = %d\n", fp->f_fglob->fg_type);
-        error = EBADF;
+		error = EBADF;
 		break;
 	}
 

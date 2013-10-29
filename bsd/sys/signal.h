@@ -142,35 +142,15 @@
 #ifndef _ANSI_SOURCE
 #include <sys/_types.h>
 
-#define __need_mcontext_t
-#define __need_stack_t
-#define __need_ucontext_t
-#include <sys/_structs.h>
+#include <machine/_mcontext.h>
+#include <sys/_types/_sigaltstack.h>
+#include <sys/_types/_ucontext.h>
 
-#ifndef _PID_T
-#define _PID_T
-typedef __darwin_pid_t			pid_t;
-#endif
-
-#ifndef _PTHREAD_ATTR_T
-#define _PTHREAD_ATTR_T
-typedef __darwin_pthread_attr_t		pthread_attr_t;
-#endif
-
-#ifndef _SIGSET_T
-#define _SIGSET_T
-typedef __darwin_sigset_t		sigset_t;
-#endif
-
-#ifndef	_SIZE_T
-#define	_SIZE_T
-typedef	__darwin_size_t			size_t;
-#endif
-
-#ifndef _UID_T
-#define _UID_T
-typedef __darwin_uid_t			uid_t;
-#endif
+#include <sys/_types/_pid_t.h>
+#include <sys/_types/_pthread_attr_t.h>
+#include <sys/_types/_sigset_t.h>
+#include <sys/_types/_size_t.h>
+#include <sys/_types/_uid_t.h>
 
 union sigval {
 	/* Members as suggested by Annex C of POSIX 1003.1b. */
@@ -576,7 +556,7 @@ struct	sigstack {
  */
 #define sigmask(m)	(1 << ((m)-1))
 
-#ifdef	BSD_KERNEL_PRIVATE
+#ifdef	KERNEL_PRIVATE
 /*
  *	signals delivered on a per-thread basis.
  */
@@ -598,7 +578,7 @@ struct	sigstack {
 		    sigmask(SIGTTIN)|sigmask(SIGTTOU)|\
 		    sigmask(SIGUSR1)|sigmask(SIGUSR2))
 
-#endif	/* BSD_KERNEL_PRIVATE */
+#endif	/* KERNEL_PRIVATE */
 
 #define	BADSIG		SIG_ERR
 

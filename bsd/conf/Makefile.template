@@ -27,11 +27,6 @@
 # the terms and conditions for use and redistribution.
 #
 
-#
-# Export IDENT for sub-makefiles
-#
-export IDENT
-
 export MakeInc_cmd=${SRCROOT}/makedefs/MakeInc.cmd
 export MakeInc_def=${SRCROOT}/makedefs/MakeInc.def
 export MakeInc_rule=${SRCROOT}/makedefs/MakeInc.rule
@@ -43,14 +38,47 @@ include $(MakeInc_def)
 #
 # XXX: CFLAGS
 #
-CFLAGS+= -include meta_features.h -DARCH_PRIVATE -DDRIVER_PRIVATE \
+CFLAGS+= -include meta_features.h -DDRIVER_PRIVATE \
 	-D_KERNEL_BUILD -DKERNEL_BUILD -DMACH_KERNEL -DBSD_BUILD \
-	-DBSD_KERNEL_PRIVATE -DLP64KERN=1 -DLP64_DEBUG=0  -I. $(CFLAGS_INLINE_CONFIG)
+	-DBSD_KERNEL_PRIVATE -DLP64_DEBUG=0
+
+#
+# Directories for mig generated files
+#
+COMP_SUBDIRS = 
+
+#
+#  Make sure we don't remove this by accident if interrupted at the wrong
+#  time.
+#
+.PRECIOUS: Makefile
+
+#
+#  Theses macros are filled in by the config program depending on the
+#  current configuration.  The MACHDEP macro is replaced by the
+#  contents of the machine dependent makefile template and the others
+#  are replaced by the corresponding symbol definitions for the
+#  configuration.
+#
+
+%OBJS
+
+%CFILES
+
+%SFILES
+
+%MACHDEP
+
+#
+# Machine-independent per-file flags
+#
 
 dp_backing_file.o_CFLAGS_ADD	+= -Wshorten-64-to-32
 ubc_subr.o_CFLAGS_ADD			+= -Wshorten-64-to-32
 vnode_pager.o_CFLAGS_ADD		+= -Wshorten-64-to-32
 vm_unix.o_CFLAGS_ADD			+= -Wshorten-64-to-32
+pthread_synch.o_CFLAGS_ADD		+= -Wno-unused-parameter -Wno-missing-prototypes
+pthread_support.o_CFLAGS_ADD		+= -Wno-unused-parameter -Wno-missing-prototypes
 
 # Objects that don't want -Wsign-compare
 OBJS_NO_SIGN_COMPARE =		\
@@ -119,194 +147,101 @@ OBJS_NO_SIGN_COMPARE =		\
 
 $(foreach file,$(OBJS_NO_SIGN_COMPARE),$(eval $(call add_perfile_cflags,$(file),-Wno-sign-compare)))
 
-# Objects that want -Wcast-align warning treated as error
-OBJS_ERROR_CAST_ALIGN =			\
-		kern_control.o		\
-		mcache.o		\
-		sys_socket.o		\
-		uipc_mbuf.o		\
-		uipc_mbuf2.o		\
-		uipc_socket.o		\
-		uipc_socket2.o		\
-		uipc_syscalls.o		\
-		bpf.o			\
-		bpf_filter.o		\
-		bridgestp.o		\
-		bsd_comp.o		\
-		devtimer.o		\
-		dlil.o			\
-		ether_if_module.o	\
-		ether_inet_pr_module.o	\
-		ether_inet6_pr_module.o	\
-		flowhash.o		\
-		if.o			\
-		if_bridge.o		\
-		if_gif.o		\
-		if_llreach.o		\
-		if_loop.o		\
-		if_media.o		\
-		if_mib.o		\
-		if_pflog.o		\
-		if_stf.o		\
-		if_utun.o		\
-		if_utun_crypto.o	\
-		if_utun_crypto_ipsec.o	\
-		if_vlan.o		\
-		init.o			\
-		iptap.o			\
-		kext_net.o		\
-		kpi_interface.o		\
-		kpi_interfacefilter.o	\
-		kpi_protocol.o		\
-		kpi_protocol.o		\
-		ndrv.o			\
-		net_osdep.o		\
-		net_str_id.o		\
-		netsrc.o		\
-		ntstat.o		\
-		pf.o			\
-		pf_if.o			\
-		pf_ioctl.o		\
-		pf_norm.o		\
-		pf_osfp.o		\
-		pf_ruleset.o		\
-		pf_table.o		\
-		ppp_deflate.o		\
-		radix.o			\
-		raw_cb.o		\
-		raw_usrreq.o		\
-		route.o			\
-		rtsock.o		\
-		dhcp_options.o		\
-		altq_cbq.o		\
-		altq_fairq.o		\
-		altq_hfsc.o		\
-		altq_priq.o		\
-		altq_qfq.o		\
-		altq_subr.o		\
-		pktsched.o		\
-		pktsched_cbq.o		\
-		pktsched_fairq.o	\
-		pktsched_hfsc.o		\
-		pktsched_priq.o		\
-		pktsched_qfq.o		\
-		pktsched_rmclass.o	\
-		pktsched_tcq.o		\
-		classq.o		\
-		classq_blue.o		\
-		classq_red.o		\
-		classq_rio.o		\
-		classq_sfb.o		\
-		classq_subr.o		\
-		classq_util.o		\
-		igmp.o			\
-		in.o			\
-		in_arp.o		\
-		in_cksum.o		\
-		in_dhcp.o		\
-		in_gif.o		\
-		in_mcast.o		\
-		in_pcb.o		\
-		in_pcblist.o		\
-		in_proto.o		\
-		in_rmx.o		\
-		in_tclass.o		\
-		ip_divert.o		\
-		ip_ecn.o		\
-		ip_encap.o		\
-		ip_icmp.o		\
-		ip_id.o			\
-		ip_input.o		\
-		ip_mroute.o		\
-		ip_output.o		\
-		kpi_ipfilter.o		\
-		raw_ip.o		\
-		tcp_debug.o		\
-		tcp_input.o		\
-		tcp_ledbat.o		\
-		tcp_newreno.o		\
-		tcp_output.o		\
-		tcp_sack.o		\
-		tcp_subr.o		\
-		tcp_timer.o		\
-		tcp_usrreq.o		\
-		udp_usrreq.o		\
-		ah_core.o		\
-		ah_input.o		\
-		ah_output.o		\
-		dest6.o			\
-		esp_core.o		\
-		esp_input.o		\
-		esp_output.o		\
-		esp_rijndael.o		\
-		frag6.o			\
-		icmp6.o			\
-		in6.o			\
-		in6_cksum.o		\
-		in6_gif.o		\
-		in6_ifattach.o		\
-		in6_mcast.o		\
-		in6_pcb.o		\
-		in6_prefix.o		\
-		in6_proto.o		\
-		in6_rmx.o		\
-		in6_src.o		\
-		ip6_forward.o		\
-		ip6_id.o		\
-		ip6_input.o		\
-		ip6_mroute.o		\
-		ip6_output.o		\
-		ipcomp_core.o		\
-		ipcomp_input.o		\
-		ipcomp_output.o		\
-		ipsec.o			\
-		mld6.o			\
-		nd6.o			\
-		nd6_nbr.o		\
-		nd6_rtr.o		\
-		raw_ip6.o		\
-		route6.o		\
-		scope6.o		\
-		udp6_output.o		\
-		udp6_usrreq.o		\
-		key.o			\
-		key_debug.o		\
-		keydb.o			\
-		keysock.o
+# Objects that don't want -Wcast-align warning (8474835)
+OBJS_NO_CAST_ALIGN =			\
+		BTree.o			\
+		BTreeAllocate.o		\
+		BTreeMiscOps.o		\
+		BTreeNodeOps.o		\
+		BTreeScanner.o		\
+		BTreeTreeOps.o		\
+		CatalogUtilities.o	\
+		audit_bsm_token.o	\
+		audit_pipe.o		\
+		audit_session.o		\
+		bsd_i386.o		\
+		decmpfs.o		\
+		dtrace.o		\
+		fasttrap.o		\
+		fasttrap_isa.o		\
+		fbt_arm.o		\
+		fbt_x86.o		\
+		fips_sha1.o		\
+		hfs_attrlist.o		\
+		hfs_btreeio.o		\
+		hfs_catalog.o		\
+		hfs_cnode.o		\
+		hfs_endian.o		\
+		hfs_hotfiles.o		\
+		hfs_link.o		\
+		hfs_quota.o		\
+		hfs_readwrite.o		\
+		hfs_search.o		\
+		hfs_vfsops.o		\
+		hfs_vnops.o		\
+		hfs_xattr.o		\
+		if_bond.o		\
+		ip6_fw.o		\
+		ip_dummynet.o		\
+		ip_fw2.o		\
+		kern_credential.o	\
+		kern_descrip.o		\
+		kern_event.o		\
+		kern_exec.o		\
+		kern_lockf.o		\
+		kern_subr.o		\
+		km.o			\
+		lockstat.o		\
+		mach_loader.o		\
+		memdev.o		\
+		nfs4_subs.o		\
+		nfs4_vnops.o		\
+		nfs_boot.o		\
+		nfs_gss.o		\
+		nfs_serv.o		\
+		nfs_socket.o		\
+		nfs_srvcache.o		\
+		nfs_subs.o		\
+		nfs_syscalls.o		\
+		nfs_vfsops.o		\
+		nfs_vnops.o		\
+		proc_info.o		\
+		pthread_synch.o		\
+		qsort.o			\
+		randomdev.o		\
+		sdt.o			\
+                sha1mod.o               \
+		shadow.o		\
+		spec_vnops.o		\
+		subr_log.o		\
+		subr_prof.o		\
+		sys_generic.o		\
+		sys_pipe.o		\
+		systemcalls.o		\
+		systrace.o		\
+		tcp_lro.o		\
+		tty.o			\
+		tty_compat.o		\
+		tty_ptmx.o		\
+		tty_pty.o		\
+		ubc_subr.o		\
+		uipc_usrreq.o		\
+		vfs_attrlist.o		\
+		vfs_fsevents.o		\
+		vfs_journal.o		\
+		vfs_lookup.o		\
+		vfs_subr.o		\
+		vfs_syscalls.o		\
+		vfs_utfconv.o		\
+		vfs_vnops.o		\
+		vfs_xattr.o		\
+		vn.o			\
+		munge.o			\
+		aes.o			\
+		aeskey.o		\
+		sdt_arm.o
 
-$(foreach file,$(OBJS_ERROR_CAST_ALIGN),$(eval $(call add_perfile_cflags,$(file),-Werror=cast-align)))
-
-#
-# Directories for mig generated files
-#
-COMP_SUBDIRS = 
-
-#
-#  Make sure we don't remove this by accident if interrupted at the wrong
-#  time.
-#
-.PRECIOUS: Makefile
-
-#
-#  Theses macros are filled in by the config program depending on the
-#  current configuration.  The MACHDEP macro is replaced by the
-#  contents of the machine dependent makefile template and the others
-#  are replaced by the corresponding symbol definitions for the
-#  configuration.
-#
-
-%OBJS
-
-%CFILES
-
-%MFILES
-
-%SFILES
-
-%BFILES
-
-%ORDERED
-%MACHDEP
+$(foreach file,$(OBJS_NO_CAST_ALIGN),$(eval $(call add_perfile_cflags,$(file),-Wno-cast-align)))
 
 #
 # This rule insures that the subr_prof.c does NOT get compiled with
@@ -322,15 +257,12 @@ subr_prof.o_CFLAGS_RM = -pg
 #
 ${OBJS}: ${OBJSDEPS}
 
-
-%LOAD
-
 LDOBJS = $(OBJS)
 
-$(COMPONENT).filelist: $(LDOBJS)
+$(COMPONENT).filelist: $(LDOBJS) 
 	@echo LDFILELIST $(COMPONENT)
 	$(_v)( for obj in ${LDOBJS}; do	\
-		 echo $(TARGET)$(COMP_OBJ_DIR)/$(KERNEL_CONFIG)/$${obj}; \
+		 echo $(TARGET)/$(CURRENT_KERNEL_CONFIG)/$${obj}; \
 	done; ) > $(COMPONENT).filelist
 
 MAKESYSCALLS = $(SRCROOT)/bsd/kern/makesyscalls.sh
@@ -347,12 +279,9 @@ audit_kevents.c: $(SRCROOT)/bsd/kern/syscalls.master $(MAKESYSCALLS)
 	@echo "Generating $@ from $<";
 	$(_v)$(MAKESYSCALLS) $< audit > /dev/null
 
-do_depend: do_all
-	$(_v)${MD} -u Makedep -f -d `ls *.d`;
-
 do_all: $(COMPONENT).filelist
 
-do_build_all: do_depend
+do_build_all:: do_all
 
 %RULES
 

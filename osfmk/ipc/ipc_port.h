@@ -74,7 +74,6 @@
 
 #if MACH_KERNEL_PRIVATE
 
-#include <norma_vm.h>
 #include <mach_rt.h>
 #include <mach_assert.h>
 #include <mach_debug.h>
@@ -126,30 +125,33 @@ struct ipc_port {
 		ipc_port_timestamp_t timestamp;
 	} data;
 
-	ipc_kobject_t ip_kobject;
+	union {
+		ipc_kobject_t kobject;
+		task_t imp_task;
+		uintptr_t alias;
+	} kdata;
+		
+	struct ipc_port *ip_nsrequest;
+	struct ipc_port *ip_pdrequest;
+	struct ipc_port_request *ip_requests;
+	struct ipc_kmsg *ip_premsg;
 
 	mach_port_mscount_t ip_mscount;
 	mach_port_rights_t ip_srights;
 	mach_port_rights_t ip_sorights;
 
-	struct ipc_port *ip_nsrequest;
-	struct ipc_port *ip_pdrequest;
-	struct ipc_port_request *ip_requests;
-	boolean_t ip_sprequests;
+	natural_t ip_sprequests:1,	/* send-possible requests outstanding */
+		  ip_spimportant:1,	/* ... at least one is importance donating */
+		  ip_impdonation:1,	/* port supports importance donation */
+		  ip_tempowner:1,	/* dont give donations to current receiver */
+		  ip_taskptr:1,		/* ... instead give them to a specified task */
+		  ip_guarded:1,         /* port guarded (use context value as guard) */
+		  ip_strict_guard:1,	/* Strict guarding; Prevents user manipulation of context values directly */
+		  ip_reserved:1,
+		  ip_impcount:24;	/* number of importance donations in nested queue */
 
-	unsigned int ip_pset_count;
-	struct ipc_kmsg *ip_premsg;
 	mach_vm_address_t ip_context;
 
-#if	NORMA_VM
-	/*
-	 *	These fields are needed for the use of XMM.
-	 *	Few ports need this information; it should
-	 *	be kept in XMM instead (TBD).  XXX
-	 */
-	long		ip_norma_xmm_object_refs;
-	struct ipc_port	*ip_norma_xmm_object;
-#endif
 
 #if	MACH_ASSERT
 #define	IP_NSPARES		4
@@ -157,10 +159,9 @@ struct ipc_port {
 	queue_chain_t	ip_port_links;	/* all allocated ports */
 	thread_t	ip_thread;	/* who made me?  thread context */
 	unsigned long	ip_timetrack;	/* give an idea of "when" created */
-	natural_t	ip_callstack[IP_CALLSTACK_MAX]; /* stack trace */
+	uintptr_t	ip_callstack[IP_CALLSTACK_MAX]; /* stack trace */
 	unsigned long	ip_spares[IP_NSPARES]; /* for debugging */
 #endif	/* MACH_ASSERT */
-	uintptr_t		alias;
 
 #if CONFIG_MACF_MACH
         struct label    ip_label;
@@ -171,11 +172,16 @@ struct ipc_port {
 #define ip_references		ip_object.io_references
 #define ip_bits			ip_object.io_bits
 
+#define ip_receiver_name	ip_messages.imq_receiver_name
+#define	ip_pset_count		ip_messages.imq_pset_count
+
 #define	ip_receiver		data.receiver
 #define	ip_destination		data.destination
 #define	ip_timestamp		data.timestamp
 
-#define ip_receiver_name	ip_messages.imq_receiver_name
+#define ip_kobject		kdata.kobject
+#define ip_imp_task		kdata.imp_task
+#define ip_alias		kdata.alias
 
 #define IP_NULL			IPC_PORT_NULL
 #define IP_DEAD			IPC_PORT_DEAD
@@ -314,6 +320,17 @@ extern ipc_port_timestamp_t ipc_port_timestamp(void);
 				     (ipc_object_t *) (portp))
 
 /* Allocate a notification request slot */
+#if IMPORTANCE_INHERITANCE
+extern kern_return_t
+ipc_port_request_alloc(
+	ipc_port_t			port,
+	mach_port_name_t		name,
+	ipc_port_t			soright,
+	boolean_t			send_possible,
+	boolean_t			immediate,
+	ipc_port_request_index_t	*indexp,
+	boolean_t			*importantp);
+#else
 extern kern_return_t
 ipc_port_request_alloc(
 	ipc_port_t			port,
@@ -322,6 +339,7 @@ ipc_port_request_alloc(
 	boolean_t			send_possible,
 	boolean_t			immediate,
 	ipc_port_request_index_t	*indexp);
+#endif /* IMPORTANCE_INHERITANCE */
 
 /* Grow one of a port's tables of notifcation requests */
 extern kern_return_t ipc_port_request_grow(
@@ -341,10 +359,18 @@ extern ipc_port_t ipc_port_request_cancel(
 	ipc_port_request_index_t	index);
 
 /* Arm any delayed send-possible notification */
-extern void ipc_port_request_sparm(
+#if IMPORTANCE_INHERITANCE
+extern boolean_t ipc_port_request_sparm(
+	ipc_port_t			port,
+	mach_port_name_t		name,
+	ipc_port_request_index_t	index,
+	mach_msg_option_t		option);
+#else
+extern boolean_t ipc_port_request_sparm(
 	ipc_port_t			port,
 	mach_port_name_t		name,
 	ipc_port_request_index_t	index);
+#endif /* IMPORTANCE_INHERITANCE */
 
 /* Macros for manipulating a port's dead name notificaiton requests */
 #define	ipc_port_request_rename(port, index, oname, nname)		\
@@ -424,6 +450,14 @@ extern boolean_t
 ipc_port_check_circularity(
 	ipc_port_t	port,
 	ipc_port_t	dest);
+
+#if IMPORTANCE_INHERITANCE
+/* Apply an importance delta to a port */
+extern boolean_t
+ipc_port_importance_delta(
+	ipc_port_t 		port,
+	mach_port_delta_t	delta);
+#endif /* IMPORTANCE_INHERITANCE */
 
 /* Make a send-once notify port from a receive right */
 extern ipc_port_t ipc_port_lookup_notify(

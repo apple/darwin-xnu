@@ -92,6 +92,8 @@ extern vm_map_offset_t get_map_max(vm_map_t);
 extern vm_map_size_t get_vmmap_size(vm_map_t);
 extern int get_vmmap_entries(vm_map_t);
 
+int vm_map_page_mask(vm_map_t);
+
 extern boolean_t coredumpok(vm_map_t map, vm_offset_t va);
 
 /*
@@ -172,10 +174,9 @@ extern boolean_t vnode_pager_isSSD(
 	struct vnode *);
 extern void vnode_pager_throttle(
 	void);
-extern uint32_t vnode_pager_return_hard_throttle_limit(
+extern uint32_t vnode_pager_return_throttle_io_limit(
 	struct vnode *,
-	uint32_t     *,
-	uint32_t);
+	uint32_t     *);
 extern kern_return_t vnode_pager_get_pathname(
 	struct vnode	*vp,
 	char		*pathname,
@@ -195,7 +196,7 @@ extern kern_return_t vnode_pager_get_cs_blobs(
 
 #endif /* CHECK_CS_VALIDATION_BITMAP */
 
-extern void vnode_pager_bootstrap(void) __attribute__((section("__TEXT, initcode")));
+extern void vnode_pager_bootstrap(void);
 extern kern_return_t
 vnode_pager_data_unlock(
 	memory_object_t		mem_obj,
@@ -215,10 +216,9 @@ extern kern_return_t vnode_pager_get_isinuse(
 extern kern_return_t vnode_pager_get_isSSD(
 	memory_object_t,
 	boolean_t *);
-extern kern_return_t vnode_pager_check_hard_throttle(
+extern kern_return_t vnode_pager_get_throttle_io_limit(
 	memory_object_t,
-	uint32_t *,
-	uint32_t);
+	uint32_t *);
 extern kern_return_t vnode_pager_get_object_pathname(
 	memory_object_t	mem_obj,
 	char		*pathname,
@@ -357,7 +357,7 @@ default_freezer_pack(
 	boolean_t		*shared,
 	vm_object_t		src_object,
 	struct default_freezer_handle *df_handle);
-__private_extern__ void
+__private_extern__ kern_return_t
 default_freezer_unpack(
 	struct default_freezer_handle *df_handle);	
 __private_extern__ void
@@ -409,7 +409,13 @@ extern memory_object_t device_pager_setup(
 	uintptr_t,
 	vm_size_t,
 	int);
-extern void device_pager_bootstrap(void) __attribute__((section("__TEXT, initcode")));
+extern void device_pager_bootstrap(void);
+
+extern kern_return_t pager_map_to_phys_contiguous(
+	memory_object_control_t	object,
+	memory_object_offset_t	offset,
+	addr64_t		base_vaddr,
+	vm_size_t		size);
 
 extern kern_return_t memory_object_create_named(
 	memory_object_t	pager,
@@ -429,6 +435,7 @@ extern int macx_swapinfo(
 extern void log_stack_execution_failure(addr64_t vaddr, vm_prot_t prot);
 extern void log_unnest_badness(vm_map_t, vm_map_offset_t, vm_map_offset_t);
 
+struct proc;
 extern int cs_allow_invalid(struct proc *p);
 extern int cs_invalid_page(addr64_t vaddr);
 extern boolean_t cs_validate_page(void *blobs,
@@ -441,6 +448,11 @@ extern kern_return_t mach_memory_entry_purgable_control(
 	ipc_port_t	entry_port,
 	vm_purgable_t	control,
 	int		*state);
+
+extern kern_return_t mach_memory_entry_get_page_counts(
+	ipc_port_t	entry_port,
+	unsigned int	*resident_page_count,
+	unsigned int	*dirty_page_count);
 
 extern kern_return_t mach_memory_entry_page_op(
 	ipc_port_t		entry_port,
@@ -473,6 +485,28 @@ extern void no_paging_space_action(void);
 #define VM_TOGGLE_SET		1
 #define VM_TOGGLE_GETVALUE	999
 int vm_toggle_entry_reuse(int, int*);
+
+#define	SWAP_WRITE		0x00000000	/* Write buffer (pseudo flag). */
+#define	SWAP_READ		0x00000001	/* Read buffer. */
+#define	SWAP_ASYNC		0x00000002	/* Start I/O, do not wait. */
+
+extern void vm_compressor_pager_init(void);
+extern kern_return_t compressor_memory_object_create(
+	vm_size_t,
+	memory_object_t *);
+
+/* the object purger. purges the next eligible object from memory. */
+/* returns TRUE if an object was purged, otherwise FALSE. */
+boolean_t vm_purgeable_object_purge_one_unlocked(int force_purge_below_group);
+
+struct trim_list {
+	uint64_t	tl_offset;
+	uint64_t	tl_length;
+	struct trim_list *tl_next;
+};
+
+u_int32_t vnode_trim_list(struct vnode *vp, struct trim_list *tl);
+
 #endif	/* _VM_VM_PROTOS_H_ */
 
 #endif	/* XNU_KERNEL_PRIVATE */

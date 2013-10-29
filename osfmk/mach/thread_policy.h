@@ -231,4 +231,28 @@ typedef struct thread_background_policy 	*thread_background_policy_t;
 #define THREAD_BACKGROUND_POLICY_COUNT	((mach_msg_type_number_t) \
 	(sizeof (thread_background_policy_data_t) / sizeof (integer_t)))
 
+
+
+#ifdef PRIVATE
+
+/*
+ * THREAD_POLICY_STATE:
+ */
+#define THREAD_POLICY_STATE		6
+
+struct thread_policy_state {
+	integer_t requested;
+	integer_t effective;
+	integer_t pending;
+	integer_t reserved[13];
+};
+
+typedef struct thread_policy_state		thread_policy_state_data_t;
+typedef struct thread_policy_state		*thread_policy_state_t;
+
+#define THREAD_POLICY_STATE_COUNT	((mach_msg_type_number_t) \
+	(sizeof (thread_policy_state_data_t) / sizeof (integer_t)))
+
+#endif /* PRIVATE */
+
 #endif	/* _MACH_THREAD_POLICY_H_ */

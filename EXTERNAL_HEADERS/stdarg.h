@@ -26,7 +26,10 @@
 #ifndef __STDARG_H
 #define __STDARG_H
 
+#ifndef _VA_LIST
 typedef __builtin_va_list va_list;
+#define _VA_LIST
+#endif
 #define va_start(ap, param) __builtin_va_start(ap, param)
 #define va_end(ap)          __builtin_va_end(ap)
 #define va_arg(ap, type)    __builtin_va_arg(ap, type)
@@ -36,7 +39,7 @@ typedef __builtin_va_list va_list;
  */
 #define __va_copy(d,s) __builtin_va_copy(d,s)
 
-#if __STDC_VERSION__ >= 199900L || !defined(__STRICT_ANSI__)
+#if __STDC_VERSION__ >= 199900L || __cplusplus >= 201103L || !defined(__STRICT_ANSI__)
 #define va_copy(dest, src)  __builtin_va_copy(dest, src)
 #endif
 

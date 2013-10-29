@@ -438,6 +438,7 @@ dp_memory_object_data_reclaim(
 	boolean_t		reclaim_backing_store)
 {
 	vstruct_t		vs;
+	kern_return_t		retval;
 
 	vs_lookup(mem_obj, vs);
 	for (;;) {
@@ -450,13 +451,13 @@ dp_memory_object_data_reclaim(
 	vs->vs_xfer_pending = TRUE;
 	vs_unlock(vs);
 
-	ps_vstruct_reclaim(vs, TRUE, reclaim_backing_store);
+	retval = ps_vstruct_reclaim(vs, TRUE, reclaim_backing_store);
 
 	vs_lock(vs);
 	vs->vs_xfer_pending = FALSE;
 	vs_unlock(vs);
 
-	return KERN_SUCCESS;
+	return retval;
 }
 
 kern_return_t
@@ -967,7 +968,8 @@ default_pager_objects(
 	/*
 	 * Out out-of-line port arrays are simply kalloc'ed.
 	 */
-	psize = round_page(actual * sizeof (*pagers));
+	psize = vm_map_round_page(actual * sizeof (*pagers),
+				  vm_map_page_mask(ipc_kernel_map));
 	ppotential = (unsigned int) (psize / sizeof (*pagers));
 	pagers = (memory_object_t *)kalloc(psize);
 	if (0 == pagers)
@@ -979,7 +981,8 @@ default_pager_objects(
 	 * then "copied in" as if it had been sent by a
 	 * user process.
 	 */
-	osize = round_page(actual * sizeof (*objects));
+	osize = vm_map_round_page(actual * sizeof (*objects),
+				  vm_map_page_mask(ipc_kernel_map));
 	opotential = (unsigned int) (osize / sizeof (*objects));
 	kr = kmem_alloc(ipc_kernel_map, &oaddr, osize);
 	if (KERN_SUCCESS != kr) {
@@ -1065,8 +1068,12 @@ default_pager_objects(
 		pagers[--ppotential] = MEMORY_OBJECT_NULL;
 	}
 
-	kr = vm_map_unwire(ipc_kernel_map, vm_map_trunc_page(oaddr),
-			   vm_map_round_page(oaddr + osize), FALSE);
+	kr = vm_map_unwire(ipc_kernel_map,
+			   vm_map_trunc_page(oaddr,
+					     vm_map_page_mask(ipc_kernel_map)),
+			   vm_map_round_page(oaddr + osize,
+					     vm_map_page_mask(ipc_kernel_map)),
+			   FALSE);
 	assert(KERN_SUCCESS == kr);
 	kr = vm_map_copyin(ipc_kernel_map, (vm_map_address_t)oaddr,
 			   (vm_map_size_t)osize, TRUE, &pcopy);
@@ -1148,7 +1155,8 @@ default_pager_object_pages(
 		if (0 != addr)
 			kmem_free(ipc_kernel_map, addr, size);
 
-		size = round_page(actual * sizeof (*pages));
+		size = vm_map_round_page(actual * sizeof (*pages),
+					 vm_map_page_mask(ipc_kernel_map));
 		kr = kmem_alloc(ipc_kernel_map, &addr, size);
 		if (KERN_SUCCESS != kr)
 			return KERN_RESOURCE_SHORTAGE;
@@ -1163,8 +1171,12 @@ default_pager_object_pages(
 	while (actual < potential)
 		pages[--potential].dpp_offset = 0;
 
-	kr = vm_map_unwire(ipc_kernel_map, vm_map_trunc_page(addr),
-			   vm_map_round_page(addr + size), FALSE);
+	kr = vm_map_unwire(ipc_kernel_map,
+			   vm_map_trunc_page(addr,
+					     vm_map_page_mask(ipc_kernel_map)),
+			   vm_map_round_page(addr + size,
+					     vm_map_page_mask(ipc_kernel_map)),
+			   FALSE);
 	assert(KERN_SUCCESS == kr);
 	kr = vm_map_copyin(ipc_kernel_map, (vm_map_address_t)addr,
 			   (vm_map_size_t)size, TRUE, &copy);

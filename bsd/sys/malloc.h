@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2011 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2013 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -118,7 +118,7 @@
 #define	M_VNODE		25	/* Dynamically allocated vnodes */
 #define	M_CACHE		26	/* Dynamically allocated cache entries */
 #define	M_DQUOT		27	/* UFS quota entries */
-#define	M_UFSMNT	28	/* UFS mount structure */
+#define	M_PROC_UUID_POLICY	28	/* proc UUID policy entries */
 #define	M_SHM		29	/* SVID compatible shared memory segments */
 #define	M_PLIMIT	30	/* plimit  structures */
 #define	M_SIGACTS	31	/* sigacts structures */
@@ -168,8 +168,8 @@
 #define	M_HFSMNT	75	/* HFS mount structure */
 #define	M_HFSNODE	76	/* HFS catalog node */
 #define	M_HFSFORK	77	/* HFS file fork */
-#define M_ZFSMNT	78	/* ZFS mount data */
-#define	M_ZFSNODE	79	/* ZFS inode */
+/* unused	78 */
+/* unused	79 */
 #define	M_TEMP		80	/* misc temporary data buffers */
 #define	M_SECA		81	/* security associations, key management */
 #define M_DEVFS		82
@@ -192,9 +192,7 @@
 #define M_FILEGLOB	99	/* fileglobal */
 #define M_KAUTH		100	/* kauth subsystem */
 #define M_DUMMYNET	101	/* dummynet */
-#if CONFIG_VFS_FUNNEL
-#define M_UNSAFEFS	102	/* storage for vnode lock state for unsafe FS */
-#endif /* CONFIG_VFS_FUNNEL */
+/* M_UNSAFEFS 102 */
 #define M_MACPIPELABEL	103	/* MAC pipe labels */
 #define M_MACTEMP	104	/* MAC framework */
 #define M_SBUF		105	/* string buffers */
@@ -209,8 +207,11 @@
 #define	M_IN6MFILTER	112	/* IPv6 multicast PCB-layer source filter */
 #define	M_IP6MOPTS	113	/* IPv6 multicast options */
 #define	M_IP6MSOURCE	114	/* IPv6 multicast MLD-layer source filter */
+#define M_FLOW_DIVERT_PCB	115 /* flow divert control block */
+#define M_FLOW_DIVERT_GROUP	116 /* flow divert socket group */
+#define M_IP6CGA	117
 
-#define	M_LAST		115	/* Must be last type + 1 */
+#define	M_LAST		118	/* Must be last type + 1 */
 
 #else /* BSD_KERNEL_PRIVATE */
 

@@ -6031,7 +6031,7 @@ nfs_vnop_read(
 	int error;
 
 	if (vnode_vtype(ap->a_vp) != VREG)
-		return (EPERM);
+		return (vnode_vtype(vp) == VDIR) ? EISDIR : EPERM;
 
 	np = VTONFS(vp);
 	nmp = NFSTONMP(np);

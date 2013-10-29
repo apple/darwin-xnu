@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1999-2011 Apple Inc. All rights reserved.
+ * Copyright (c) 1999-2012 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -87,6 +87,7 @@ static int ctl_send(struct socket *, int, struct mbuf *,
             struct sockaddr *, struct mbuf *, struct proc *);
 static int ctl_ctloutput(struct socket *, struct sockopt *);
 static int ctl_peeraddr(struct socket *so, struct sockaddr **nam);
+static int ctl_usr_rcvd(struct socket *so, int flags);
 
 static struct kctl *ctl_find_by_name(const char *);
 static struct kctl *ctl_find_by_id_unit(u_int32_t id, u_int32_t unit);
@@ -99,103 +100,84 @@ static int ctl_lock(struct socket *, int, void *);
 static int ctl_unlock(struct socket *, int, void *);
 static lck_mtx_t * ctl_getlock(struct socket *, int);
 
-static struct pr_usrreqs ctl_usrreqs =
-{
-	pru_abort_notsupp, pru_accept_notsupp, ctl_attach, pru_bind_notsupp,
-	ctl_connect, pru_connect2_notsupp, ctl_ioctl, ctl_detach,
-	ctl_disconnect, pru_listen_notsupp, ctl_peeraddr,
-	pru_rcvd_notsupp, pru_rcvoob_notsupp, ctl_send,
-	pru_sense_null, pru_shutdown_notsupp, pru_sockaddr_notsupp,
-	sosend, soreceive, pru_sopoll_notsupp
+static struct pr_usrreqs ctl_usrreqs = {
+	.pru_attach =		ctl_attach,
+	.pru_connect =		ctl_connect,
+	.pru_control =		ctl_ioctl,
+	.pru_detach =		ctl_detach,
+	.pru_disconnect =	ctl_disconnect,
+	.pru_peeraddr =		ctl_peeraddr,
+	.pru_rcvd =		ctl_usr_rcvd,
+	.pru_send =		ctl_send,
+	.pru_sosend =		sosend,
+	.pru_soreceive =	soreceive,
 };
 
-static struct protosw kctlswk_dgram =
+static struct protosw kctlsw[] = {
 {
-	SOCK_DGRAM, &systemdomain, SYSPROTO_CONTROL, 
-	PR_ATOMIC|PR_CONNREQUIRED|PR_PCBLOCK,
-	NULL, NULL, NULL, ctl_ctloutput,
-	NULL, NULL,
-	NULL, NULL, NULL, NULL, &ctl_usrreqs,
-	ctl_lock, ctl_unlock, ctl_getlock, { 0, 0 } , 0, { 0 }
+	.pr_type =		SOCK_DGRAM,
+	.pr_protocol =		SYSPROTO_CONTROL,
+	.pr_flags =		PR_ATOMIC|PR_CONNREQUIRED|PR_PCBLOCK|PR_WANTRCVD,
+	.pr_ctloutput =		ctl_ctloutput,
+	.pr_usrreqs =		&ctl_usrreqs,
+	.pr_lock =		ctl_lock,
+	.pr_unlock =		ctl_unlock,
+	.pr_getlock =		ctl_getlock,
+},
+{
+	.pr_type =		SOCK_STREAM,
+	.pr_protocol =		SYSPROTO_CONTROL,
+	.pr_flags =		PR_CONNREQUIRED|PR_PCBLOCK|PR_WANTRCVD,
+	.pr_ctloutput =		ctl_ctloutput,
+	.pr_usrreqs =		&ctl_usrreqs,
+	.pr_lock =		ctl_lock,
+	.pr_unlock =		ctl_unlock,
+	.pr_getlock =		ctl_getlock,
+}
 };
 
-static struct protosw kctlswk_stream =
-{
-	SOCK_STREAM, &systemdomain, SYSPROTO_CONTROL, 
-	PR_CONNREQUIRED|PR_PCBLOCK,
-	NULL, NULL, NULL, ctl_ctloutput,
-	NULL, NULL,
-	NULL, NULL, NULL, NULL, &ctl_usrreqs,
-	ctl_lock, ctl_unlock, ctl_getlock, { 0, 0 } , 0, { 0 }
-};
-
+static int kctl_proto_count = (sizeof (kctlsw) / sizeof (struct protosw));
 
 /*
  * Install the protosw's for the Kernel Control manager.
  */
-__private_extern__ int
-kern_control_init(void)
+__private_extern__ void
+kern_control_init(struct domain *dp)
 {
-	int error = 0;
-	
+	struct protosw *pr;
+	int i;
+
+	VERIFY(!(dp->dom_flags & DOM_INITIALIZED));
+	VERIFY(dp == systemdomain);
+
 	ctl_lck_grp_attr = lck_grp_attr_alloc_init();
-	if (ctl_lck_grp_attr == 0) {
-			printf(": lck_grp_attr_alloc_init failed\n");
-			error = ENOMEM;
-			goto done;
+	if (ctl_lck_grp_attr == NULL) {
+		panic("%s: lck_grp_attr_alloc_init failed\n", __func__);
+		/* NOTREACHED */
 	}
-			
-	ctl_lck_grp = lck_grp_alloc_init("Kernel Control Protocol", ctl_lck_grp_attr);
-	if (ctl_lck_grp == 0) {
-			printf("kern_control_init: lck_grp_alloc_init failed\n");
-			error = ENOMEM;
-			goto done;
+
+	ctl_lck_grp = lck_grp_alloc_init("Kernel Control Protocol",
+	    ctl_lck_grp_attr);
+	if (ctl_lck_grp == NULL) {
+		panic("%s: lck_grp_alloc_init failed\n", __func__);
+		/* NOTREACHED */
 	}
-	
+
 	ctl_lck_attr = lck_attr_alloc_init();
-	if (ctl_lck_attr == 0) {
-			printf("kern_control_init: lck_attr_alloc_init failed\n");
-			error = ENOMEM;
-			goto done;
+	if (ctl_lck_attr == NULL) {
+		panic("%s: lck_attr_alloc_init failed\n", __func__);
+		/* NOTREACHED */
 	}
-	
+
 	ctl_mtx = lck_mtx_alloc_init(ctl_lck_grp, ctl_lck_attr);
-	if (ctl_mtx == 0) {
-			printf("kern_control_init: lck_mtx_alloc_init failed\n");
-			error = ENOMEM;
-			goto done;
+	if (ctl_mtx == NULL) {
+		panic("%s: lck_mtx_alloc_init failed\n", __func__);
+		/* NOTREACHED */
 	}
 	TAILQ_INIT(&ctl_head);
-	
-	error = net_add_proto(&kctlswk_dgram, &systemdomain);
-	if (error) {
-		log(LOG_WARNING, "kern_control_init: net_add_proto dgram failed (%d)\n", error);
-	}
-	error = net_add_proto(&kctlswk_stream, &systemdomain);
-	if (error) {
-		log(LOG_WARNING, "kern_control_init: net_add_proto stream failed (%d)\n", error);
-	}
-	
-	done:
-	if (error != 0) {
-		if (ctl_mtx) {
-				lck_mtx_free(ctl_mtx, ctl_lck_grp);
-				ctl_mtx = 0;
-		}
-		if (ctl_lck_grp) {
-				lck_grp_free(ctl_lck_grp);
-				ctl_lck_grp = 0;
-		}
-		if (ctl_lck_grp_attr) {
-				lck_grp_attr_free(ctl_lck_grp_attr);
-				ctl_lck_grp_attr = 0;
-		}
-		if (ctl_lck_attr) {
-				lck_attr_free(ctl_lck_attr);
-				ctl_lck_attr = 0;
-		}
-	}
-	return error;
+
+	for (i = 0, pr = &kctlsw[0]; i < kctl_proto_count; i++, pr++)
+		net_add_proto(pr, dp, 1);
 }
 
 static void
@@ -439,6 +421,25 @@ ctl_peeraddr(struct socket *so, struct sockaddr **nam)
 	
 	*nam = dup_sockaddr((struct sockaddr *)&sc, 1);
 	
+	return 0;
+}
+
+static int
+ctl_usr_rcvd(struct socket *so, int flags)
+{
+	struct ctl_cb		*kcb = (struct ctl_cb *)so->so_pcb;
+	struct kctl			*kctl;
+
+	if ((kctl = kcb->kctl) == NULL) {
+		return EINVAL;
+	}
+
+	if (kctl->rcvd) {
+		socket_unlock(so, 0);
+		(*kctl->rcvd)(kctl, kcb->unit, kcb->userdata, flags);
+		socket_lock(so, 0);
+	}
+
 	return 0;
 }
 
@@ -707,6 +708,7 @@ ctl_register(struct kern_ctl_reg *userkctl, kern_ctl_ref *kctlref)
 	struct kctl 	*kctl_next = NULL;
 	u_int32_t		id = 1;
 	size_t			name_len;
+	int				is_extended = 0;
 	
 	if (userkctl == NULL)	/* sanity check */
 		return(EINVAL);
@@ -789,6 +791,9 @@ ctl_register(struct kern_ctl_reg *userkctl, kern_ctl_ref *kctlref)
 		kctl->id = userkctl->ctl_id;
 		kctl->reg_unit = userkctl->ctl_unit;
 	}
+
+	is_extended = (userkctl->ctl_flags & CTL_FLAG_REG_EXTENDED);
+
 	strlcpy(kctl->name, userkctl->ctl_name, MAX_KCTL_NAME);
 	kctl->flags = userkctl->ctl_flags;
 
@@ -806,6 +811,9 @@ ctl_register(struct kern_ctl_reg *userkctl, kern_ctl_ref *kctlref)
 	kctl->send = userkctl->ctl_send;
 	kctl->setopt = userkctl->ctl_setopt;
 	kctl->getopt = userkctl->ctl_getopt;
+	if (is_extended) {
+		kctl->rcvd = userkctl->ctl_rcvd;
+	}
 	
 	TAILQ_INIT(&kctl->kcb_head);
 	

@@ -27,8 +27,10 @@
  */
 #include <mach/mach_types.h>
 #include <mach/machine/vm_param.h>
+#include <mach/task.h>
 
 #include <kern/kern_types.h>
+#include <kern/ledger.h>
 #include <kern/processor.h>
 #include <kern/thread.h>
 #include <kern/task.h>
@@ -41,6 +43,7 @@
 #include <vm/vm_kern.h>
 #include <vm/pmap.h>
 #include <vm/vm_protos.h> /* last */
+#include <sys/resource.h>
 
 #undef thread_should_halt
 
@@ -58,6 +61,7 @@ void task_act_iterate_wth_args(task_t, void(*)(thread_t, void *), void *);
 kern_return_t get_signalact(task_t , thread_t *, int);
 int get_vmsubmap_entries(vm_map_t, vm_object_offset_t, vm_object_offset_t);
 void syscall_exit_funnelcheck(void);
+int fill_task_rusage_v2(task_t task, struct rusage_info_v2 *ri);
 
 
 /*
@@ -109,7 +113,7 @@ int get_thread_lock_count(thread_t th)
  */
 thread_t get_firstthread(task_t task)
 {
-	thread_t	thread = (thread_t)queue_first(&task->threads);
+	thread_t	thread = (thread_t)(void *)queue_first(&task->threads);
 
 	if (queue_end(&task->threads, (queue_entry_t)thread))
 		thread = THREAD_NULL;
@@ -137,7 +141,7 @@ get_signalact(
 		return (KERN_FAILURE);
 	}
 
-	for (inc  = (thread_t)queue_first(&task->threads);
+	for (inc  = (thread_t)(void *)queue_first(&task->threads);
 			!queue_end(&task->threads, (queue_entry_t)inc); ) {
 		thread_mtx_lock(inc);
 		if (inc->active &&
@@ -147,7 +151,7 @@ get_signalact(
 		}
 		thread_mtx_unlock(inc);
 
-		inc = (thread_t)queue_next(&inc->task_threads);
+		inc = (thread_t)(void *)queue_next(&inc->task_threads);
 	}
 
 	if (result_out) 
@@ -185,7 +189,7 @@ check_actforsig(
 		return (KERN_FAILURE);
 	}
 
-	for (inc  = (thread_t)queue_first(&task->threads);
+	for (inc  = (thread_t)(void *)queue_first(&task->threads);
 			!queue_end(&task->threads, (queue_entry_t)inc); ) {
 		if (inc == thread) {
 			thread_mtx_lock(inc);
@@ -200,7 +204,7 @@ check_actforsig(
 			break;
 		}
 
-		inc = (thread_t)queue_next(&inc->task_threads);
+		inc = (thread_t)(void *)queue_next(&inc->task_threads);
 	}
 
 	if (result == KERN_SUCCESS) {
@@ -263,8 +267,8 @@ int get_task_numactivethreads(task_t task)
 	int num_active_thr=0;
 	task_lock(task);
 
-	for (inc  = (thread_t)queue_first(&task->threads);
-			!queue_end(&task->threads, (queue_entry_t)inc); inc = (thread_t)queue_next(&inc->task_threads)) 
+	for (inc  = (thread_t)(void *)queue_first(&task->threads);
+			!queue_end(&task->threads, (queue_entry_t)inc); inc = (thread_t)(void *)queue_next(&inc->task_threads)) 
 	{
 		if(inc->active)
 			num_active_thr++;
@@ -281,11 +285,11 @@ int  get_task_numacts(task_t t)
 /* does this machine need  64bit register set for signal handler */
 int is_64signalregset(void)
 {
-	task_t t = current_task();
-	if(t->taskFeatures[0] & tf64BitData)
+	if (task_has_64BitData(current_task())) {
 		return(1);
-	else
-		return(0);
+	}
+
+	return(0);
 }
 
 /*
@@ -334,6 +338,38 @@ uint64_t get_task_resident_size(task_t task)
 	
 	map = (task == kernel_task) ? kernel_map: task->map;
 	return((uint64_t)pmap_resident_count(map->pmap) * PAGE_SIZE_64);
+}
+
+/*
+ *
+ */
+uint64_t get_task_phys_footprint(task_t task) 
+{	
+	kern_return_t ret;
+	ledger_amount_t credit, debit;
+	
+	ret = ledger_get_entries(task->ledger, task_ledgers.phys_footprint, &credit, &debit);
+	if (KERN_SUCCESS == ret) {
+		return (credit - debit);
+	}
+
+	return 0;
+}
+
+/*
+ *
+ */
+uint64_t get_task_phys_footprint_max(task_t task) 
+{	
+	kern_return_t ret;
+	ledger_amount_t max;
+	
+	ret = ledger_get_maximum(task->ledger, task_ledgers.phys_footprint, &max);
+	if (KERN_SUCCESS == ret) {
+		return max;
+	}
+
+	return 0;
 }
 
 /*
@@ -533,10 +569,10 @@ task_act_iterate_wth_args(
 
 	task_lock(task);
 
-	for (inc  = (thread_t)queue_first(&task->threads);
+	for (inc  = (thread_t)(void *)queue_first(&task->threads);
 			!queue_end(&task->threads, (queue_entry_t)inc); ) {
 		(void) (*func_callback)(inc, func_arg);
-		inc = (thread_t)queue_next(&inc->task_threads);
+		inc = (thread_t)(void *)queue_next(&inc->task_threads);
 	}
 
 	task_unlock(task);
@@ -565,7 +601,7 @@ fill_taskprocinfo(task_t task, struct proc_taskinfo_internal * ptinfo)
 	uint32_t cswitch = 0, numrunning = 0;
 	uint32_t syscalls_unix = 0;
 	uint32_t syscalls_mach = 0;
-	
+
 	map = (task == kernel_task)? kernel_map: task->map;
 
 	ptinfo->pti_virtual_size  = map->size;
@@ -585,6 +621,9 @@ fill_taskprocinfo(task_t task, struct proc_taskinfo_internal * ptinfo)
 	queue_iterate(&task->threads, thread, thread_t, task_threads) {
 		uint64_t    tval;
 		spl_t x;
+
+		if (thread->options & TH_OPT_IDLE_THREAD)
+			continue;
 
 		x = splsched();
 		thread_lock(thread);
@@ -646,7 +685,7 @@ fill_taskthreadinfo(task_t task, uint64_t thaddr, int thuniqueid, struct proc_th
 
 	task_lock(task);
 
-	for (thact  = (thread_t)queue_first(&task->threads);
+	for (thact  = (thread_t)(void *)queue_first(&task->threads);
 			!queue_end(&task->threads, (queue_entry_t)thact); ) {
 		addr = (thuniqueid==0)?thact->machine.cthread_self: thact->thread_id;
 		if (addr == thaddr)
@@ -657,8 +696,8 @@ fill_taskthreadinfo(task_t task, uint64_t thaddr, int thuniqueid, struct proc_th
 				err = 1;
 				goto out;	
 			}
-			ptinfo->pth_user_time = ((basic_info.user_time.seconds * NSEC_PER_SEC) + (basic_info.user_time.microseconds * NSEC_PER_USEC));
-			ptinfo->pth_system_time = ((basic_info.system_time.seconds * NSEC_PER_SEC) + (basic_info.system_time.microseconds * NSEC_PER_USEC));
+			ptinfo->pth_user_time = ((basic_info.user_time.seconds * (integer_t)NSEC_PER_SEC) + (basic_info.user_time.microseconds * (integer_t)NSEC_PER_USEC));
+			ptinfo->pth_system_time = ((basic_info.system_time.seconds * (integer_t)NSEC_PER_SEC) + (basic_info.system_time.microseconds * (integer_t)NSEC_PER_USEC));
 
 			ptinfo->pth_cpu_usage = basic_info.cpu_usage;
 			ptinfo->pth_policy = basic_info.policy;
@@ -675,7 +714,7 @@ fill_taskthreadinfo(task_t task, uint64_t thaddr, int thuniqueid, struct proc_th
 			err = 0;
 			goto out; 
 		}
-		thact = (thread_t)queue_next(&thact->task_threads);
+		thact = (thread_t)(void *)queue_next(&thact->task_threads);
 	}
 	err = 1;
 
@@ -696,14 +735,14 @@ fill_taskthreadlist(task_t task, void * buffer, int thcount)
 
 	task_lock(task);
 
-	for (thact  = (thread_t)queue_first(&task->threads);
+	for (thact  = (thread_t)(void *)queue_first(&task->threads);
 			!queue_end(&task->threads, (queue_entry_t)thact); ) {
 		thaddr = thact->machine.cthread_self;
 		*uptr++ = thaddr;
 		numthr++;
 		if (numthr >= thcount)
 			goto out;
-		thact = (thread_t)queue_next(&thact->task_threads);
+		thact = (thread_t)(void *)queue_next(&thact->task_threads);
 	}
 
 out:
@@ -727,4 +766,36 @@ syscall_exit_funnelcheck(void)
 
         if (thread->funnel_lock)
 		panic("syscall exit with funnel held\n");
+}
+
+
+/*
+ * Gather the various pieces of info about the designated task, 
+ * and collect it all into a single rusage_info.
+ */
+int
+fill_task_rusage_v2(task_t task, struct rusage_info_v2 *ri)
+{
+	struct task_power_info powerinfo;
+
+	assert(task != TASK_NULL);
+	task_lock(task);
+
+	task_power_info_locked(task, &powerinfo);
+	ri->ri_pkg_idle_wkups = powerinfo.task_platform_idle_wakeups;
+	ri->ri_interrupt_wkups = powerinfo.task_interrupt_wakeups;
+	ri->ri_user_time = powerinfo.total_user;
+	ri->ri_system_time = powerinfo.total_system;
+
+	ledger_get_balance(task->ledger, task_ledgers.phys_footprint,
+	                   (ledger_amount_t *)&ri->ri_phys_footprint);
+	ledger_get_balance(task->ledger, task_ledgers.phys_mem,
+	                   (ledger_amount_t *)&ri->ri_resident_size);
+	ledger_get_balance(task->ledger, task_ledgers.wired_mem,
+	                   (ledger_amount_t *)&ri->ri_wired_size);
+
+	ri->ri_pageins = task->pageins;
+
+	task_unlock(task);
+	return (0);
 }

@@ -43,7 +43,6 @@
 
 extern int shared_region_version;
 extern int shared_region_persistence;
-extern boolean_t shared_region_completed_slide;
 
 #if DEBUG
 extern int shared_region_debug;
@@ -93,24 +92,6 @@ typedef struct vm_shared_region *vm_shared_region_t;
 #include <vm/vm_object.h>
 #include <vm/memory_object.h>
 
-/* address space shared region descriptor */
-struct vm_shared_region {
-	uint32_t		sr_ref_count;
-	queue_chain_t		sr_q;
-	void			*sr_root_dir;
-	cpu_type_t		sr_cpu_type;
-	boolean_t		sr_64bit;
-	boolean_t		sr_mapping_in_progress;
-	boolean_t		sr_persists;
-	ipc_port_t		sr_mem_entry;
-	mach_vm_offset_t	sr_first_mapping;
-	mach_vm_offset_t	sr_base_address;
-	mach_vm_size_t		sr_size;
-	mach_vm_offset_t	sr_pmap_nesting_start;
-	mach_vm_size_t		sr_pmap_nesting_size;
-	thread_call_t		sr_timer_call;
-};
-
 typedef struct vm_shared_region_slide_info_entry	*vm_shared_region_slide_info_entry_t;
 struct vm_shared_region_slide_info_entry {
 	uint32_t	version;
@@ -127,7 +108,7 @@ struct slide_info_entry_toc {
 	uint8_t entry[NUM_SLIDING_BITMAPS_PER_PAGE];
 };
 
-typedef struct vm_shared_region_slide_info vm_shared_region_slide_info_t;
+typedef struct vm_shared_region_slide_info *vm_shared_region_slide_info_t;
 struct vm_shared_region_slide_info {
 	mach_vm_offset_t	start;
 	mach_vm_offset_t	end;
@@ -135,11 +116,33 @@ struct vm_shared_region_slide_info {
 	vm_object_t		slide_object;
 	mach_vm_size_t		slide_info_size;
 	vm_shared_region_slide_info_entry_t	slide_info_entry;
-	vm_shared_region_t	sr;
 };
 
-extern struct vm_shared_region_slide_info	slide_info;
+/* address space shared region descriptor */
+struct vm_shared_region {
+	uint32_t		sr_ref_count;
+	queue_chain_t		sr_q;
+	void			*sr_root_dir;
+	cpu_type_t		sr_cpu_type;
+	boolean_t		sr_64bit;
+	boolean_t		sr_mapping_in_progress;
+	boolean_t		sr_slide_in_progress;
+	boolean_t		sr_persists;
+	boolean_t		sr_slid;
+	ipc_port_t		sr_mem_entry;
+	mach_vm_offset_t	sr_first_mapping;
+	mach_vm_offset_t	sr_base_address;
+	mach_vm_size_t		sr_size;
+	mach_vm_offset_t	sr_pmap_nesting_start;
+	mach_vm_size_t		sr_pmap_nesting_size;
+	thread_call_t		sr_timer_call;
+	struct vm_shared_region_slide_info sr_slide_info;
+};
 
+extern kern_return_t vm_shared_region_slide_page(vm_shared_region_slide_info_t si,
+	vm_offset_t	vaddr, 
+	uint32_t pageIndex);
+extern vm_shared_region_slide_info_t vm_shared_region_get_slide_info(vm_shared_region_t sr);
 #else  /* !MACH_KERNEL_PRIVATE */
 
 struct vm_shared_region;
@@ -168,6 +171,8 @@ extern mach_vm_size_t vm_shared_region_size(
 	struct vm_shared_region	*shared_region);
 extern ipc_port_t vm_shared_region_mem_entry(
 	struct vm_shared_region	*shared_region);
+extern uint32_t vm_shared_region_get_slide(
+	vm_shared_region_t	shared_region);
 extern void vm_shared_region_set(
 	struct task		*task,
 	struct vm_shared_region	*new_shared_region);
@@ -192,17 +197,14 @@ extern kern_return_t vm_shared_region_map_file(
 	void			*root_dir,
 	struct shared_file_mapping_np *mapping_to_slide);
 extern kern_return_t vm_shared_region_sliding_valid(uint32_t slide);
-extern kern_return_t vm_shared_region_slide_sanity_check(void);
-extern kern_return_t vm_shared_region_slide_init(mach_vm_size_t slide_info_size,
+extern kern_return_t vm_shared_region_slide_sanity_check(vm_shared_region_t sr);
+extern kern_return_t vm_shared_region_slide_init(vm_shared_region_t sr,
+		mach_vm_size_t slide_info_size,
 		mach_vm_offset_t start,
 		mach_vm_size_t size,
 		uint32_t slide,
 		memory_object_control_t);
-extern void* vm_shared_region_get_slide_info(void);
-extern void* vm_shared_region_get_slide_info_entry(void);
-extern kern_return_t vm_shared_region_slide(
-	vm_offset_t	vaddr, 
-	uint32_t pageIndex);
+extern void* vm_shared_region_get_slide_info_entry(vm_shared_region_t sr);
 extern void vm_commpage_init(void);
 extern void vm_commpage_text_init(void);
 extern kern_return_t vm_commpage_enter(
@@ -211,6 +213,12 @@ extern kern_return_t vm_commpage_enter(
 extern kern_return_t vm_commpage_remove(
 	struct _vm_map		*map,
 	struct task		*task);
+int vm_shared_region_slide(uint32_t, 
+	mach_vm_offset_t, 
+	mach_vm_size_t, 
+	mach_vm_offset_t, 
+	mach_vm_size_t, 
+	memory_object_control_t);
 
 #endif /* KERNEL_PRIVATE */
 

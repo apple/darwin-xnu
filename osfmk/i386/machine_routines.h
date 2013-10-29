@@ -103,6 +103,9 @@ vm_offset_t ml_vtophys(
 vm_size_t ml_nofault_copy(
 	vm_offset_t virtsrc, vm_offset_t virtdst, vm_size_t size);
 
+boolean_t ml_validate_nofault(
+	vm_offset_t virtsrc, vm_size_t size);
+
 /* Machine topology info */
 uint64_t ml_cpu_cache_size(unsigned int level);	
 uint64_t ml_cpu_cache_sharing(unsigned int level);	
@@ -117,6 +120,33 @@ extern void	ml_cpu_down(void);
 void bzero_phys_nc(
 				   addr64_t phys_address,
 				   uint32_t length);
+#define NUM_LATENCY_QOS_TIERS (6)
+typedef struct {
+	int32_t timer_coalesce_rt_shift;
+	int32_t timer_coalesce_bg_shift;
+	int32_t timer_coalesce_kt_shift;
+	int32_t timer_coalesce_fp_shift;
+	int32_t timer_coalesce_ts_shift;
+
+	uint64_t timer_coalesce_rt_ns_max;
+	uint64_t timer_coalesce_bg_ns_max;
+	uint64_t timer_coalesce_kt_ns_max;
+	uint64_t timer_coalesce_fp_ns_max;
+	uint64_t timer_coalesce_ts_ns_max;
+
+	uint32_t latency_qos_scale[NUM_LATENCY_QOS_TIERS];
+	uint64_t latency_qos_ns_max[NUM_LATENCY_QOS_TIERS];
+	boolean_t latency_tier_rate_limited[NUM_LATENCY_QOS_TIERS];
+} timer_coalescing_priority_params_t;
+extern timer_coalescing_priority_params_t tcoal_prio_params;
+extern uint32_t interrupt_timer_coalescing_enabled;
+extern uint32_t idle_entry_timer_processing_hdeadline_threshold;
+
+#if TCOAL_INSTRUMENT
+#define TCOAL_DEBUG KERNEL_DEBUG_CONSTANT
+#else
+#define TCOAL_DEBUG(x, a, b, c, d, e) do { } while(0)
+#endif /* TCOAL_INSTRUMENT */
 
 #if	defined(PEXPERT_KERNEL_PRIVATE) || defined(MACH_KERNEL_PRIVATE)
 /* IO memory map services */
@@ -313,6 +343,13 @@ void interrupt_latency_tracker_setup(void);
 void interrupt_reset_latency_stats(void);
 void interrupt_populate_latency_stats(char *, unsigned);
 void ml_get_power_state(boolean_t *, boolean_t *);
+
+void timer_queue_expire_local(void*);
+void timer_queue_expire_rescan(void*);
+void ml_timer_evaluate(void);
+boolean_t ml_timer_forced_evaluation(void);
+int ml_timer_get_user_idle_level(void);
+kern_return_t ml_timer_set_user_idle_level(int);
 
 #endif /* XNU_KERNEL_PRIVATE */
 #endif /* _I386_MACHINE_ROUTINES_H_ */

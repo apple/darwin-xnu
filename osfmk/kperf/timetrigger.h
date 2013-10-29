@@ -35,12 +35,15 @@ extern void kperf_timer_reprogram_all(void);
 #define TIMER_REPROGRAM (0)
 #define TIMER_STOP (1)
 
-/* blah */
+/* getters and setters on timers */
 extern unsigned kperf_timer_get_count(void);
 extern int kperf_timer_set_count(unsigned count);
 
 extern int kperf_timer_get_period( unsigned timer, uint64_t *period );
 extern int kperf_timer_set_period( unsigned timer, uint64_t period );
+
+extern int kperf_timer_get_action( unsigned timer, uint32_t *action );
+extern int kperf_timer_set_action( unsigned timer, uint32_t action );
 
 extern int kperf_timer_go(void);
 extern int kperf_timer_stop(void);
@@ -49,4 +52,4 @@ extern unsigned kperf_timer_get_petid(void);
 extern int kperf_timer_set_petid(unsigned count);
 
 /* so PET thread can re-arm the timer */
-extern int kperf_timer_pet_set( unsigned timer );
+extern int kperf_timer_pet_set( unsigned timer, uint64_t elapsed_ticks );

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2009, 2011-2012 Apple Inc. All rights reserved.
+ * Copyright (c) 2009-2012 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -327,11 +327,7 @@ get_target_machine_info(KXLDObject *object, cpu_type_t cputype __unused,
 
     check(object);
 
-#if defined(__i386__)
-    object->cputype = CPU_TYPE_I386;
-    object->cpusubtype = CPU_SUBTYPE_I386_ALL;
-    return KERN_SUCCESS;
-#elif defined(__x86_64__)
+#if   defined(__x86_64__)
     object->cputype = CPU_TYPE_X86_64;
     object->cpusubtype = CPU_SUBTYPE_X86_64_ALL;
     return KERN_SUCCESS;
@@ -380,6 +376,7 @@ get_target_machine_info(KXLDObject *object, cpu_type_t cputype __unused,
             break;
         default:
             object->cpusubtype = 0;
+            break;
         }
     }
 
@@ -656,6 +653,8 @@ init_from_final_linked_image(KXLDObject *object, u_int *filetype_out,
                 kxld_log(kKxldLogLinking, kKxldLogErr, kKxldLogMalformedMachO
                     "LC_UNIXTHREAD/LC_MAIN segment is not valid in a kext."));
             break;
+        case LC_SEGMENT_SPLIT_INFO:
+            /* To be implemented later; treat as uninteresting for now */
         case LC_CODE_SIGNATURE:
         case LC_DYLD_INFO:
         case LC_DYLD_INFO_ONLY:
@@ -1478,7 +1477,8 @@ static boolean_t
 target_supports_protected_segments(const KXLDObject *object)
 {
     return (object->is_final_image && 
-            object->cputype == CPU_TYPE_X86_64);
+            (object->cputype == CPU_TYPE_X86_64 ||
+             object->cputype == CPU_TYPE_ARM));
 }
 
 /*******************************************************************************
@@ -2333,8 +2333,6 @@ target_supports_slideable_kexts(const KXLDObject *object)
 {
     check(object);
 
-    return (   object->cputype != CPU_TYPE_I386
-            && object->include_kaslr_relocs
-           );
+    return (object->cputype != CPU_TYPE_I386 && object->include_kaslr_relocs);
 }
 #endif  /* KXLD_PIC_KEXTS */

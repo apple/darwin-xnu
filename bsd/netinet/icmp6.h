@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000,2008-2012 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2013 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -675,7 +675,7 @@ struct icmp6stat {
 #define ICMPV6CTL_ND6_OPTIMISTIC_DAD	26	/* RFC 4429 */
 #define ICMPV6CTL_MAXID			27
 
-#ifdef KERNEL_PRIVATE
+#ifdef BSD_KERNEL_PRIVATE
 #define ICMPV6CTL_NAMES { \
 	{ 0, 0 }, \
 	{ 0, 0 }, \
@@ -706,14 +706,13 @@ struct icmp6stat {
 	{ "nd6_optimistic_dad", CTLTYPE_INT }, \
 }
 
-#define RTF_PROBEMTU	RTF_PROTO1
-
 # ifdef __STDC__
 struct	rtentry;
 struct	rttimer;
 struct	in6_multi;
 # endif
-void	icmp6_init(void);
+struct ip6protosw;
+void	icmp6_init(struct ip6protosw *, struct domain *);
 void	icmp6_paramerror(struct mbuf *, int);
 void	icmp6_error(struct mbuf *, int, int, int);
 void	icmp6_error2(struct mbuf *, int, int, int, struct ifnet *);
@@ -728,68 +727,63 @@ void	icmp6_mtudisc_update(struct ip6ctlparam *, int);
 
 extern lck_rw_t icmp6_ifs_rwlock;
 /* XXX: is this the right place for these macros? */
-#define icmp6_ifstat_inc(ifp, tag) \
-do {								\
-	lck_rw_lock_shared(&icmp6_ifs_rwlock);			\
-	if ((ifp) && (ifp)->if_index <= if_index		\
-	 && (ifp)->if_index < icmp6_ifstatmax			\
-	 && icmp6_ifstat && icmp6_ifstat[(ifp)->if_index]) {	\
-		icmp6_ifstat[(ifp)->if_index]->tag++;		\
+/* N.B.: if_inet6data is never freed once set, so we don't need to lock */
+#define icmp6_ifstat_inc(_ifp, _tag) do {			\
+	if (_ifp != NULL && IN6_IFEXTRA(_ifp) != NULL) {	\
+		IN6_IFEXTRA(_ifp)->icmp6_ifstat._tag++;		\
 	}							\
-	lck_rw_done(&icmp6_ifs_rwlock);				\
 } while (0)
 
-#define icmp6_ifoutstat_inc(ifp, type, code) \
-do { \
-		icmp6_ifstat_inc(ifp, ifs6_out_msg); \
- 		if (type < ICMP6_INFOMSG_MASK) \
- 			icmp6_ifstat_inc(ifp, ifs6_out_error); \
-		switch (type) { \
-		 case ICMP6_DST_UNREACH: \
-			 icmp6_ifstat_inc(ifp, ifs6_out_dstunreach); \
-			 if (code == ICMP6_DST_UNREACH_ADMIN) \
-				 icmp6_ifstat_inc(ifp, ifs6_out_adminprohib); \
-			 break; \
-		 case ICMP6_PACKET_TOO_BIG: \
-			 icmp6_ifstat_inc(ifp, ifs6_out_pkttoobig); \
-			 break; \
-		 case ICMP6_TIME_EXCEEDED: \
-			 icmp6_ifstat_inc(ifp, ifs6_out_timeexceed); \
-			 break; \
-		 case ICMP6_PARAM_PROB: \
-			 icmp6_ifstat_inc(ifp, ifs6_out_paramprob); \
-			 break; \
-		 case ICMP6_ECHO_REQUEST: \
-			 icmp6_ifstat_inc(ifp, ifs6_out_echo); \
-			 break; \
-		 case ICMP6_ECHO_REPLY: \
-			 icmp6_ifstat_inc(ifp, ifs6_out_echoreply); \
-			 break; \
-		 case MLD_LISTENER_QUERY: \
-			 icmp6_ifstat_inc(ifp, ifs6_out_mldquery); \
-			 break; \
-		 case MLD_LISTENER_REPORT: \
-			 icmp6_ifstat_inc(ifp, ifs6_out_mldreport); \
-			 break; \
-		 case MLD_LISTENER_DONE: \
-			 icmp6_ifstat_inc(ifp, ifs6_out_mlddone); \
-			 break; \
-		 case ND_ROUTER_SOLICIT: \
-			 icmp6_ifstat_inc(ifp, ifs6_out_routersolicit); \
-			 break; \
-		 case ND_ROUTER_ADVERT: \
-			 icmp6_ifstat_inc(ifp, ifs6_out_routeradvert); \
-			 break; \
-		 case ND_NEIGHBOR_SOLICIT: \
-			 icmp6_ifstat_inc(ifp, ifs6_out_neighborsolicit); \
-			 break; \
-		 case ND_NEIGHBOR_ADVERT: \
-			 icmp6_ifstat_inc(ifp, ifs6_out_neighboradvert); \
-			 break; \
-		 case ND_REDIRECT: \
-			 icmp6_ifstat_inc(ifp, ifs6_out_redirect); \
-			 break; \
-		} \
+#define icmp6_ifoutstat_inc(ifp, type, code) do {		\
+	icmp6_ifstat_inc(ifp, ifs6_out_msg);			\
+	if (type < ICMP6_INFOMSG_MASK)				\
+ 		icmp6_ifstat_inc(ifp, ifs6_out_error);		\
+	switch (type) {						\
+	case ICMP6_DST_UNREACH:					\
+		icmp6_ifstat_inc(ifp, ifs6_out_dstunreach);	\
+		if (code == ICMP6_DST_UNREACH_ADMIN)		\
+			icmp6_ifstat_inc(ifp, ifs6_out_adminprohib);\
+		 break;						\
+	case ICMP6_PACKET_TOO_BIG:				\
+		icmp6_ifstat_inc(ifp, ifs6_out_pkttoobig);	\
+		break;						\
+	case ICMP6_TIME_EXCEEDED:				\
+		icmp6_ifstat_inc(ifp, ifs6_out_timeexceed);	\
+		break;						\
+	case ICMP6_PARAM_PROB:					\
+		icmp6_ifstat_inc(ifp, ifs6_out_paramprob);	\
+		break;						\
+	case ICMP6_ECHO_REQUEST:				\
+		icmp6_ifstat_inc(ifp, ifs6_out_echo);		\
+		break;						\
+	case ICMP6_ECHO_REPLY:					\
+		icmp6_ifstat_inc(ifp, ifs6_out_echoreply);	\
+		break;						\
+	case MLD_LISTENER_QUERY:				\
+		icmp6_ifstat_inc(ifp, ifs6_out_mldquery);	\
+		break;						\
+	case MLD_LISTENER_REPORT:				\
+		icmp6_ifstat_inc(ifp, ifs6_out_mldreport);	\
+		break;						\
+	case MLD_LISTENER_DONE:					\
+		icmp6_ifstat_inc(ifp, ifs6_out_mlddone);	\
+		break;						\
+	case ND_ROUTER_SOLICIT:					\
+		icmp6_ifstat_inc(ifp, ifs6_out_routersolicit);	\
+		break;						\
+	case ND_ROUTER_ADVERT:					\
+		icmp6_ifstat_inc(ifp, ifs6_out_routeradvert);	\
+		break;						\
+	case ND_NEIGHBOR_SOLICIT:				\
+		icmp6_ifstat_inc(ifp, ifs6_out_neighborsolicit);\
+		break;						\
+	case ND_NEIGHBOR_ADVERT:				\
+		icmp6_ifstat_inc(ifp, ifs6_out_neighboradvert);	\
+		break;						\
+	case ND_REDIRECT:					\
+		icmp6_ifstat_inc(ifp, ifs6_out_redirect);	\
+		break;						\
+	}							\
 } while (0)
 
 extern int	icmp6_rediraccept;	/* accept/process redirects */
@@ -800,6 +794,6 @@ extern int	icmp6_redirtimeout;	/* cache time for redirect routes */
 #define ICMP6_NODEINFO_TMPADDROK	0x4
 #define ICMP6_NODEINFO_GLOBALOK		0x8
 
-#endif /* KERNEL_PRIVATE */
+#endif /* BSD_KERNEL_PRIVATE */
 
 #endif /* !_NETINET_ICMP6_H_ */

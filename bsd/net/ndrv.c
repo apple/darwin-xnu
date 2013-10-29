@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1997-2008, 2012 Apple Inc. All rights reserved.
+ * Copyright (c) 1997-2012 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -95,14 +95,14 @@ static int ndrv_do_add_multicast(struct ndrv_cb *np, struct sockopt *sopt);
 static int ndrv_do_remove_multicast(struct ndrv_cb *np, struct sockopt *sopt);
 static struct ndrv_multiaddr* ndrv_have_multicast(struct ndrv_cb *np, struct sockaddr* addr);
 static void ndrv_remove_all_multicast(struct ndrv_cb *np);
-static void ndrv_dominit(void) __attribute__((section("__TEXT, initcode")));
+static void ndrv_dominit(struct domain *);
 
 u_int32_t  ndrv_sendspace = NDRVSNDQ;
 u_int32_t  ndrv_recvspace = NDRVRCVQ;
 TAILQ_HEAD(, ndrv_cb)	ndrvl = TAILQ_HEAD_INITIALIZER(ndrvl);
 
-extern struct domain ndrvdomain;
-extern struct protosw ndrvsw;
+static struct domain *ndrvdomain = NULL;
+extern struct domain ndrvdomain_s;
 
 #define NDRV_PROTODEMUX_COUNT	10
 
@@ -194,13 +194,13 @@ ndrv_input(
         return EJUSTRETURN;
     bcopy(frame_header, m->m_data, ifnet_hdrlen(ifp));
 
-	lck_mtx_assert(so->so_proto->pr_domain->dom_mtx, LCK_MTX_ASSERT_NOTOWNED);
-	lck_mtx_lock(so->so_proto->pr_domain->dom_mtx);
+	lck_mtx_assert(ndrvdomain->dom_mtx, LCK_MTX_ASSERT_NOTOWNED);
+	lck_mtx_lock(ndrvdomain->dom_mtx);
 	if (sbappendaddr(&(so->so_rcv), (struct sockaddr *)&ndrvsrc,
 			 		 m, (struct mbuf *)0, &error) != 0) {
 		sorwakeup(so);
 	}
-	lck_mtx_unlock(so->so_proto->pr_domain->dom_mtx);
+	lck_mtx_unlock(ndrvdomain->dom_mtx);
 	return 0; /* radar 4030377 - always return 0 */
 }
 
@@ -234,7 +234,7 @@ ndrv_attach(struct socket *so, int proto, __unused struct proc *p)
 	TAILQ_INIT(&np->nd_dlist);
 	np->nd_signature = NDRV_SIGNATURE;
 	np->nd_socket = so;
-	np->nd_proto.sp_family = so->so_proto->pr_domain->dom_family;
+	np->nd_proto.sp_family = SOCK_DOM(so);
 	np->nd_proto.sp_protocol = proto;
     np->nd_if = NULL;
     np->nd_proto_family = 0;
@@ -299,10 +299,10 @@ ndrv_event(struct ifnet *ifp, __unused protocol_family_t protocol,
 		event->kev_class == KEV_NETWORK_CLASS &&
 		event->kev_subclass == KEV_DL_SUBCLASS &&
 		event->event_code == KEV_DL_IF_DETACHING) {
-		lck_mtx_assert(ndrvdomain.dom_mtx, LCK_MTX_ASSERT_NOTOWNED);
-		lck_mtx_lock(ndrvdomain.dom_mtx);
+		lck_mtx_assert(ndrvdomain->dom_mtx, LCK_MTX_ASSERT_NOTOWNED);
+		lck_mtx_lock(ndrvdomain->dom_mtx);
 		ndrv_handle_ifp_detach(ifnet_family(ifp), ifnet_unit(ifp));
-		lck_mtx_unlock(ndrvdomain.dom_mtx);
+		lck_mtx_unlock(ndrvdomain->dom_mtx);
 	}
 }
 
@@ -406,7 +406,7 @@ ndrv_disconnect(struct socket *so)
 static int
 ndrv_shutdown(struct socket *so)
 {
-	lck_mtx_assert(so->so_proto->pr_domain->dom_mtx, LCK_MTX_ASSERT_OWNED);
+	lck_mtx_assert(ndrvdomain->dom_mtx, LCK_MTX_ASSERT_OWNED);
 	socantsendmore(so);
 	return 0;
 }
@@ -591,7 +591,12 @@ ndrv_do_disconnect(struct ndrv_cb *np)
         FREE(np->nd_faddr, M_IFADDR);
 		np->nd_faddr = 0;
 	}
-	if (so->so_state & SS_NOFDREF)
+	/*
+	 * A multipath subflow socket would have its SS_NOFDREF set by default,
+	 * so check for SOF_MP_SUBFLOW socket flag before detaching the PCB;
+	 * when the socket is closed for real, SOF_MP_SUBFLOW would be cleared.
+	 */
+	if (!(so->so_flags & SOF_MP_SUBFLOW) && (so->so_state & SS_NOFDREF))
 		ndrv_do_detach(np);
 	soisdisconnected(so);
 	return(0);
@@ -832,15 +837,6 @@ ndrv_find_inbound(struct ifnet *ifp, u_int32_t protocol)
 	return NULL;
 }
 
-static void ndrv_dominit(void)
-{
-        static int ndrv_dominited = 0;
-
-        if (ndrv_dominited == 0 &&
-            net_add_proto(&ndrvsw, &ndrvdomain) == 0)
-                ndrv_dominited = 1;
-}
-
 static void
 ndrv_handle_ifp_detach(u_int32_t family, short unit)
 {
@@ -870,7 +866,7 @@ ndrv_handle_ifp_detach(u_int32_t family, short unit)
 		  so = np->nd_socket; 
             /* Make sure sending returns an error */
             /* Is this safe? Will we drop the funnel? */
-		  lck_mtx_assert(so->so_proto->pr_domain->dom_mtx, LCK_MTX_ASSERT_OWNED);
+		lck_mtx_assert(ndrvdomain->dom_mtx, LCK_MTX_ASSERT_OWNED);
             socantsendmore(so);
             socantrcvmore(so);
         }
@@ -1046,39 +1042,51 @@ ndrv_remove_all_multicast(struct ndrv_cb* np)
     }
 }
 
-struct pr_usrreqs ndrv_usrreqs = {
-	ndrv_abort, pru_accept_notsupp, ndrv_attach, ndrv_bind,
-	ndrv_connect, pru_connect2_notsupp, pru_control_notsupp, ndrv_detach,
-	ndrv_disconnect, pru_listen_notsupp, ndrv_peeraddr, pru_rcvd_notsupp,
-	pru_rcvoob_notsupp, ndrv_send, pru_sense_null, ndrv_shutdown,
-	ndrv_sockaddr, sosend, soreceive, pru_sopoll_notsupp
+static struct pr_usrreqs ndrv_usrreqs = {
+	.pru_abort =		ndrv_abort,
+	.pru_attach =		ndrv_attach,
+	.pru_bind =		ndrv_bind,
+	.pru_connect =		ndrv_connect,
+	.pru_detach =		ndrv_detach,
+	.pru_disconnect =	ndrv_disconnect,
+	.pru_peeraddr =		ndrv_peeraddr,
+	.pru_send =		ndrv_send,
+	.pru_shutdown =		ndrv_shutdown,
+	.pru_sockaddr =		ndrv_sockaddr,
+	.pru_sosend =		sosend,
+	.pru_soreceive =	soreceive,
 };
 
-struct protosw ndrvsw =
-{	SOCK_RAW, &ndrvdomain, NDRVPROTO_NDRV, PR_ATOMIC|PR_ADDR,
-	NULL, ndrv_output, NULL, ndrv_ctloutput,
-	NULL,
-	NULL, NULL, NULL, NULL, NULL, 
-	&ndrv_usrreqs,
-	NULL, NULL, NULL,
-	{ NULL, NULL}, NULL,
-	{ 0 }
+static struct protosw ndrvsw[] = {
+{
+	.pr_type =		SOCK_RAW,
+	.pr_protocol =		NDRVPROTO_NDRV,
+	.pr_flags =		PR_ATOMIC|PR_ADDR,
+	.pr_output =		ndrv_output,
+	.pr_ctloutput =		ndrv_ctloutput,
+	.pr_usrreqs =		&ndrv_usrreqs,
+}
 };
 
-struct domain ndrvdomain =
-{	AF_NDRV, 
-	"NetDriver", 
-	ndrv_dominit, 
-	NULL, 
-	NULL,
-	NULL, 
-	NULL, 
-	NULL, 
-	0, 
-	0, 
-	0, 
-	0,
-	NULL,
-	0, 
-	{0, 0}
+static int ndrv_proto_count = (sizeof (ndrvsw) / sizeof (struct protosw));
+
+struct domain ndrvdomain_s = {
+	.dom_family =		PF_NDRV,
+	.dom_name =		"NetDriver",
+	.dom_init =		ndrv_dominit,
 };
+
+static void
+ndrv_dominit(struct domain *dp)
+{
+	struct protosw *pr;
+	int i;
+
+	VERIFY(!(dp->dom_flags & DOM_INITIALIZED));
+	VERIFY(ndrvdomain == NULL);
+
+	ndrvdomain = dp;
+
+	for (i = 0, pr = &ndrvsw[0]; i < ndrv_proto_count; i++, pr++)
+		net_add_proto(pr, dp, 1);
+}

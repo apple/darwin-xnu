@@ -25,6 +25,7 @@
  * 
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
+#include <mach/mach.h>
 #include <mach/message.h>
 #include <mach/mach_syscalls.h>
 #include <mach/clock_types.h>

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2010 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2012 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -51,7 +51,7 @@
 #include <kern/misc_protos.h>
 #include <kern/spl.h>
 #include <kern/assert.h>
-#include <kern/etimer.h>
+#include <kern/timer_queue.h>
 #include <mach/vm_prot.h>
 #include <vm/pmap.h>
 #include <vm/vm_kern.h>		/* for kernel_map */
@@ -70,7 +70,6 @@
 #include <sys/kdebug.h>
 #include <i386/tsc.h>
 #include <i386/rtclock_protos.h>
-
 #define UI_CPUFREQ_ROUNDING_FACTOR	10000000
 
 int		rtclock_config(void);
@@ -88,46 +87,25 @@ rtc_timer_start(void)
 	/*
 	 * Force a complete re-evaluation of timer deadlines.
 	 */
-	etimer_resync_deadlines();
+	x86_lcpu()->rtcDeadline = EndOfAllTime;
+	timer_resync_deadlines();
 }
 
 static inline uint32_t
 _absolutetime_to_microtime(uint64_t abstime, clock_sec_t *secs, clock_usec_t *microsecs)
 {
 	uint32_t remain;
-#if defined(__i386__)
-	asm volatile(
-			"divl %3"
-				: "=a" (*secs), "=d" (remain)
-				: "A" (abstime), "r" (NSEC_PER_SEC));
-	asm volatile(
-			"divl %3"
-				: "=a" (*microsecs)
-				: "0" (remain), "d" (0), "r" (NSEC_PER_USEC));
-#elif defined(__x86_64__)
 	*secs = abstime / (uint64_t)NSEC_PER_SEC;
 	remain = (uint32_t)(abstime % (uint64_t)NSEC_PER_SEC);
 	*microsecs = remain / NSEC_PER_USEC;
-#else
-#error Unsupported architecture
-#endif
 	return remain;
 }
 
 static inline void
 _absolutetime_to_nanotime(uint64_t abstime, clock_sec_t *secs, clock_usec_t *nanosecs)
 {
-#if defined(__i386__)
-	asm volatile(
-			"divl %3"
-			: "=a" (*secs), "=d" (*nanosecs)
-			: "A" (abstime), "r" (NSEC_PER_SEC));
-#elif defined(__x86_64__)
 	*secs = abstime / (uint64_t)NSEC_PER_SEC;
 	*nanosecs = (clock_usec_t)(abstime % (uint64_t)NSEC_PER_SEC);
-#else
-#error Unsupported architecture
-#endif
 }
 
 /*
@@ -245,7 +223,6 @@ rtc_clock_napped(uint64_t base, uint64_t tsc_base)
 	if (oldnsecs < newnsecs) {
 	    _pal_rtc_nanotime_store(tsc_base, base, rntp->scale, rntp->shift, rntp);
 	    rtc_nanotime_set_commpage(rntp);
-		trace_set_timebases(tsc_base, base);
 	}
 }
 
@@ -475,7 +452,7 @@ rtclock_intr(
 	}
 
 	/* call the generic etimer */
-	etimer_intr(user_mode, rip);
+	timer_intr(user_mode, rip);
 }
 
 
@@ -567,11 +544,11 @@ nanoseconds_to_absolutetime(
 
 void
 machine_delay_until(
-        uint64_t interval,
-        uint64_t                deadline)
+	uint64_t interval,
+	uint64_t		deadline)
 {
-        (void)interval;
-        while (mach_absolute_time() < deadline) {
-                cpu_pause();
-        }
+	(void)interval;
+	while (mach_absolute_time() < deadline) {
+		cpu_pause();
+	} 
 }

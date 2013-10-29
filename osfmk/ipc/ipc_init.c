@@ -219,7 +219,6 @@ ipc_bootstrap(void)
 	ipc_table_init();
 
 	semaphore_init();
-	lock_set_init();
 	mk_timer_init();
 	host_notify_init();
 }

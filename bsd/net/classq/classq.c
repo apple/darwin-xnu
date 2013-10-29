@@ -144,7 +144,7 @@ _getq_flow(class_queue_t *q, u_int32_t flow)
 
 	MBUFQ_FOREACH_SAFE(m, &q->mbufq, m_tmp) {
 		if (flow == 0 || ((m->m_flags & M_PKTHDR) &&
-		    m->m_pkthdr.m_flowhash == flow)) {
+		    m->m_pkthdr.pkt_flowid == flow)) {
 			/* remove it from the class queue */
 			MBUFQ_REMOVE(&q->mbufq, m);
 			MBUFQ_NEXT(m) = NULL;
@@ -331,7 +331,7 @@ _flushq_flow(class_queue_t *q, u_int32_t flow, u_int32_t *cnt, u_int32_t *len)
 
 	MBUFQ_FOREACH_SAFE(m, &q->mbufq, m_tmp) {
 		if (flow == 0 || ((m->m_flags & M_PKTHDR) &&
-		    m->m_pkthdr.m_flowhash == flow)) {
+		    m->m_pkthdr.pkt_flowid == flow)) {
 			/* remove it from the class queue */
 			MBUFQ_REMOVE(&q->mbufq, m);
 			MBUFQ_NEXT(m) = NULL;

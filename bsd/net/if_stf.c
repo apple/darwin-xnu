@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2012 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2013 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -175,15 +175,16 @@ static int stf_init_done;
 
 static void in_stf_input(struct mbuf *, int);
 static void stfinit(void);
-extern  struct domain inetdomain;
-struct protosw in_stf_protosw =
-{ SOCK_RAW,	&inetdomain,	IPPROTO_IPV6,	PR_ATOMIC|PR_ADDR,
-  in_stf_input, NULL,	NULL,		rip_ctloutput,
-  NULL,
-  NULL,	NULL,	NULL,	NULL,
-  NULL,
-  &rip_usrreqs,
-  NULL,		rip_unlock,	NULL, {NULL, NULL}, NULL, {0}
+
+static struct protosw in_stf_protosw =
+{
+	.pr_type =		SOCK_RAW,
+	.pr_protocol =		IPPROTO_IPV6,
+	.pr_flags =		PR_ATOMIC|PR_ADDR,
+	.pr_input =		in_stf_input,
+	.pr_ctloutput =		rip_ctloutput,
+	.pr_usrreqs =		&rip_usrreqs,
+	.pr_unlock =		rip_unlock,
 };
 
 static int stf_encapcheck(const struct mbuf *, int, int, void *);
@@ -524,7 +525,8 @@ stf_pre_output(
 	struct ip6_hdr *ip6;
 	struct in6_ifaddr *ia6;
 	struct sockaddr_in 	*dst4;
-	struct ip_out_args ipoa = { IFSCOPE_NONE, { 0 }, IPOAF_SELECT_SRCIF };
+	struct ip_out_args ipoa =
+	    { IFSCOPE_NONE, { 0 }, IPOAF_SELECT_SRCIF, 0 };
 	errno_t				result = 0;
 
 	sc = ifnet_softc(ifp);
@@ -604,20 +606,16 @@ stf_pre_output(
 
 	lck_mtx_lock(&sc->sc_ro_mtx);
 	dst4 = (struct sockaddr_in *)(void *)&sc->sc_ro.ro_dst;
-	if (dst4->sin_family != AF_INET ||
+	if (ROUTE_UNUSABLE(&sc->sc_ro) || dst4->sin_family != AF_INET ||
 	    bcmp(&dst4->sin_addr, &ip->ip_dst, sizeof(ip->ip_dst)) != 0) {
+		ROUTE_RELEASE(&sc->sc_ro);
 		/* cache route doesn't match: always the case during the first use */
 		dst4->sin_family = AF_INET;
 		dst4->sin_len = sizeof(struct sockaddr_in);
 		bcopy(&ip->ip_dst, &dst4->sin_addr, sizeof(dst4->sin_addr));
-		if (sc->sc_ro.ro_rt) {
-			rtfree(sc->sc_ro.ro_rt);
-			sc->sc_ro.ro_rt = NULL;
-		}
 	}
 
-	result = ip_output_list(m, 0, NULL, &sc->sc_ro, IP_OUTARGS, NULL,
-	    &ipoa);
+	result = ip_output(m, NULL, &sc->sc_ro, IP_OUTARGS, NULL, &ipoa);
 	lck_mtx_unlock(&sc->sc_ro_mtx);
 
 	/* Assumption: ip_output will free mbuf on errors */
@@ -893,7 +891,7 @@ stf_ioctl(
 		break;
 
 	default:
-		error = EINVAL;
+		error = EOPNOTSUPP;
 		break;
 	}
 

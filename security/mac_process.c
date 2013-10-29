@@ -616,6 +616,40 @@ mac_proc_check_ledger(proc_t curp, proc_t proc, int ledger_op)
 	return (error);
 }
 
+int
+mac_proc_check_cpumon(proc_t curp)
+{
+	kauth_cred_t cred;
+	int error = 0;
+
+	if (!mac_proc_enforce ||
+	    !mac_proc_check_enforce(curp, MAC_PROC_ENFORCE))
+		return (0);
+
+	cred = kauth_cred_proc_ref(curp);
+	MAC_CHECK(proc_check_cpumon, cred);
+	kauth_cred_unref(&cred);
+
+	return (error);
+}
+
+int
+mac_proc_check_proc_info(proc_t curp, proc_t target, int callnum, int flavor)
+{
+	kauth_cred_t cred;
+	int error = 0;
+
+	if (!mac_proc_enforce ||
+	    !mac_proc_check_enforce(curp, MAC_PROC_ENFORCE))
+		return (0);
+
+	cred = kauth_cred_proc_ref(curp);
+	MAC_CHECK(proc_check_proc_info, cred, target, callnum, flavor);
+	kauth_cred_unref(&cred);
+
+	return (error);
+}
+
 struct label *
 mac_thread_label_alloc(void)
 {

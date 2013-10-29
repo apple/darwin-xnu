@@ -5,6 +5,7 @@
 #include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <unistd.h>
 
 int kq, passed, failed;
 
@@ -185,6 +186,7 @@ test_repeating_kevent(int usec)
 	}
 }
 
+void
 test_updated_kevent(int first, int second)
 {
 	struct kevent64_s kev;

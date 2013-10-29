@@ -117,7 +117,7 @@ struct kauth_scope {
 static TAILQ_HEAD(,kauth_scope)	kauth_scopes;
 
 static int kauth_add_callback_to_scope(kauth_scope_t sp, kauth_listener_t klp);
-static void	kauth_scope_init(void) __attribute__((section("__TEXT, initcode")));
+static void	kauth_scope_init(void);
 static kauth_scope_t kauth_alloc_scope(const char *identifier, kauth_scope_callback_t callback, void *idata);
 static kauth_listener_t kauth_alloc_listener(const char *identifier, kauth_scope_callback_t callback, void *idata);
 #if 0

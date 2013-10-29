@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2007-2010 Apple Inc. All rights reserved.
+ * Copyright (c) 2007-2013 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -222,8 +222,7 @@ pflog_clone_destroy(struct ifnet *ifp)
 static errno_t
 pflogoutput(struct ifnet *ifp, struct mbuf *m)
 {
-	printf("%s: freeing data for %s%d\n", __func__, ifp->if_name,
-	    ifp->if_unit);
+	printf("%s: freeing data for %s\n", __func__, if_name(ifp));
 	m_freem(m);
 	return (ENOTSUP);
 }
@@ -253,8 +252,7 @@ static errno_t
 pflogdemux(struct ifnet *ifp, struct mbuf *m, char *h, protocol_family_t *ppf)
 {
 #pragma unused(h, ppf)
-	printf("%s: freeing data for %s%d\n", __func__, ifp->if_name,
-	    ifp->if_unit);
+	printf("%s: freeing data for %s\n", __func__, if_name(ifp));
 	m_freem(m);
 	return (EJUSTRETURN);
 }

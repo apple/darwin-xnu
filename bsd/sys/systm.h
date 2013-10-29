@@ -192,6 +192,7 @@ void update_last_io_time(mount_t mp);
 
 #ifdef KERNEL_PRIVATE
 void	timeout(void (*)(void *), void *arg, int ticks);
+void	timeout_with_leeway(void (*)(void *), void *arg, int ticks, int leeway_ticks);
 void	untimeout(void (*)(void *), void *arg);
 int  	bsd_hostname(char *, int, int*);
 #endif /* KERNEL_PRIVATE */
@@ -235,15 +236,24 @@ int	throttle_info_ref_by_mask(uint64_t throttle_mask, throttle_info_handle_t *th
 void	throttle_info_rel_by_mask(throttle_info_handle_t throttle_info_handle);
 void	throttle_info_update_by_mask(void *throttle_info_handle, int flags);
 
-void throttle_legacy_process_incr(void);
-void throttle_legacy_process_decr(void);
-
 /*
  * 'throttle_info_handle' acquired via 'throttle_info_ref_by_mask'
  * 'policy' should be specified as either IOPOL_UTILITY or IPOL_THROTTLE,
  * all other values will be treated as IOPOL_NORMAL (i.e. no throttling)
  */
 int	throttle_info_io_will_be_throttled(void *throttle_info_handle, int policy);
+
+#ifdef XNU_KERNEL_PRIVATE
+void *exec_spawnattr_getmacpolicyinfo(const void *macextensions, const char *policyname, size_t *lenp);
+#endif
+
+#ifdef BSD_KERNEL_PRIVATE
+
+#define THROTTLE_IO_ENABLE	1
+#define THROTTLE_IO_DISABLE	0
+void sys_override_io_throttle(int flag);
+
+#endif /* BSD_KERNEL_PRIVATE */
 
 __END_DECLS
 

@@ -34,6 +34,7 @@
 #include <pexpert/pexpert.h>
 #include <kern/debug.h>
 #include <kern/simple_lock.h>
+#include <i386/machine_cpu.h>
 #include <i386/mp.h>
 #include <machine/pal_routines.h>
 #include <i386/proc_reg.h>
@@ -120,18 +121,15 @@ void kprintf(const char *fmt, ...)
 		}
 
 		/*
-		 * Spin to get kprintf lock but re-enable interrupts while
-		 * failing.
-		 * This allows interrupts to be handled while waiting but
-		 * interrupts are disabled once we have the lock.
+		 * Spin to get kprintf lock but poll for incoming signals
+		 * while interrupts are masked.
 		 */
 		state = ml_set_interrupts_enabled(FALSE);
 
 		pal_preemption_assert();
 
 		while (!simple_lock_try(&kprintf_lock)) {
-			ml_set_interrupts_enabled(state);
-			ml_set_interrupts_enabled(FALSE);
+			(void) cpu_signal_handler(NULL);
 		}
 
 		if (cpu_number() != cpu_last_locked) {

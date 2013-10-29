@@ -1,8 +1,8 @@
 /*
- * Copyright (c) 2000-2011 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2013 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
- * 
+ *
  * This file contains Original Code and/or Modifications of Original Code
  * as defined in and that are subject to the Apple Public Source License
  * Version 2.0 (the 'License'). You may not use this file except in
@@ -11,10 +11,10 @@
  * unlawful or unlicensed copies of an Apple operating system, or to
  * circumvent, violate, or enable the circumvention or violation of, any
  * terms of an Apple operating system software license agreement.
- * 
+ *
  * Please obtain a copy of the License at
  * http://www.opensource.apple.com/apsl/ and read it before using this file.
- * 
+ *
  * The Original Code and all software distributed under the License are
  * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
@@ -22,7 +22,7 @@
  * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
  * Please see the License for the specific language governing rights and
  * limitations under the License.
- * 
+ *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*
@@ -97,15 +97,15 @@ static int soo_write(struct fileproc *, struct uio *, int, vfs_context_t ctx);
 static int soo_close(struct fileglob *, vfs_context_t ctx);
 static int soo_drain(struct fileproc *, vfs_context_t ctx);
 
-/* TODO: these should be in header file */
-extern int soo_ioctl(struct fileproc *, u_long, caddr_t, vfs_context_t ctx);
-extern int soo_stat(struct socket *, void *, int);
-extern int soo_select(struct fileproc *, int, void *, vfs_context_t ctx);
-extern int soo_kqfilter(struct fileproc *, struct knote *, vfs_context_t ctx);
-
-struct fileops socketops = {
-	soo_read, soo_write, soo_ioctl, soo_select, soo_close,
-	soo_kqfilter, soo_drain
+const struct fileops socketops = {
+	DTYPE_SOCKET,
+	soo_read,
+	soo_write,
+	soo_ioctl,
+	soo_select,
+	soo_close,
+	soo_kqfilter,
+	soo_drain
 };
 
 /* ARGSUSED */
@@ -137,7 +137,6 @@ soo_read(struct fileproc *fp, struct uio *uio, __unused int flags,
 		return (error);
 #endif /* CONFIG_MACF_SOCKET */
 
-//###LD will have to change
 	fsoreceive = so->so_proto->pr_usrreqs->pru_soreceive;
 
 	stat = (*fsoreceive)(so, 0, uio, 0, 0, 0);
@@ -188,20 +187,33 @@ __private_extern__ int
 soioctl(struct socket *so, u_long cmd, caddr_t data, struct proc *p)
 {
 	int error = 0;
-	int dropsockref = -1;
 	int int_arg;
 
 	socket_lock(so, 1);
 
-	/* Call the socket filter's ioctl handler for most ioctls */
+	/* call the socket filter's ioctl handler anything but ours */
 	if (IOCGROUP(cmd) != 'i' && IOCGROUP(cmd) != 'r') {
-		error = sflt_ioctl(so, cmd, data);
-		if (error != 0)
-			goto out;
+		switch (cmd) {
+		case SIOCGASSOCIDS32:
+		case SIOCGASSOCIDS64:
+		case SIOCGCONNIDS32:
+		case SIOCGCONNIDS64:
+		case SIOCGCONNINFO32:
+		case SIOCGCONNINFO64:
+		case SIOCSCONNORDER:
+		case SIOCGCONNORDER:
+			/* don't pass to filter */
+			break;
+
+		default:
+			error = sflt_ioctl(so, cmd, data);
+			if (error != 0)
+				goto out;
+			break;
+		}
 	}
 
 	switch (cmd) {
-
 	case FIONBIO:			/* int */
 		bcopy(data, &int_arg, sizeof (int_arg));
 		if (int_arg)
@@ -241,77 +253,23 @@ soioctl(struct socket *so, u_long cmd, caddr_t data, struct proc *p)
 		bcopy(&int_arg, data, sizeof (int_arg));
 		goto out;
 
-	case SIOCSETOT: {		/* int */
-		/*
-		 * Set socket level options here and then call protocol
-		 * specific routine.
-		 */
-		struct socket *cloned_so = NULL;
-		int cloned_fd;
+	case SIOCSETOT:			/* int; deprecated */
+		error = EOPNOTSUPP;
+		goto out;
 
-		bcopy(data, &cloned_fd, sizeof (cloned_fd));
-
-		/* let's make sure it's either -1 or a valid file descriptor */
-		if (cloned_fd != -1) {
-			error = file_socket(cloned_fd, &cloned_so);
-			if (error) {
-				goto out;
-			}
-			dropsockref = cloned_fd;
-		}
-
-		/* Always set socket non-blocking for OT */
-		so->so_state |= SS_NBIO;
-		so->so_options |= SO_DONTTRUNC | SO_WANTMORE;
-		so->so_flags |= SOF_NOSIGPIPE | SOF_NPX_SETOPTSHUT;
-
-		if (cloned_so && so != cloned_so) {
-			/* Flags options */
-			so->so_options |=
-			    cloned_so->so_options & ~SO_ACCEPTCONN;
-
-			/* SO_LINGER */
-			if (so->so_options & SO_LINGER)
-				so->so_linger = cloned_so->so_linger;
-
-			/* SO_SNDBUF, SO_RCVBUF */
-			if (cloned_so->so_snd.sb_hiwat > 0) {
-				if (sbreserve(&so->so_snd,
-				    cloned_so->so_snd.sb_hiwat) == 0) {
-					error = ENOBUFS;
-					goto out;
-				}
-			}
-			if (cloned_so->so_rcv.sb_hiwat > 0) {
-				if (sbreserve(&so->so_rcv,
-				    cloned_so->so_rcv.sb_hiwat) == 0) {
-					error = ENOBUFS;
-					goto out;
-				}
-			}
-
-			/* SO_SNDLOWAT, SO_RCVLOWAT */
-			so->so_snd.sb_lowat =
-			    (cloned_so->so_snd.sb_lowat > so->so_snd.sb_hiwat) ?
-			    so->so_snd.sb_hiwat : cloned_so->so_snd.sb_lowat;
-			so->so_rcv.sb_lowat =
-			    (cloned_so->so_rcv.sb_lowat > so->so_rcv.sb_hiwat) ?
-			    so->so_rcv.sb_hiwat : cloned_so->so_rcv.sb_lowat;
-
-			/* SO_SNDTIMEO, SO_RCVTIMEO */
-			so->so_snd.sb_timeo = cloned_so->so_snd.sb_timeo;
-			so->so_rcv.sb_timeo = cloned_so->so_rcv.sb_timeo;
-		}
-
-		error = (*so->so_proto->pr_usrreqs->pru_control)(so, cmd,
-		    data, 0, p);
-		/* Just ignore protocols that do not understand it */
-		if (error == EOPNOTSUPP)
-			error = 0;
-
+	case SIOCGASSOCIDS32:		/* so_aidreq32 */
+	case SIOCGASSOCIDS64:		/* so_aidreq64 */
+	case SIOCGCONNIDS32:		/* so_cidreq32 */
+	case SIOCGCONNIDS64:		/* so_cidreq64 */
+	case SIOCGCONNINFO32:		/* so_cinforeq32 */
+	case SIOCGCONNINFO64:		/* so_cinforeq64 */
+	case SIOCSCONNORDER:		/* so_cordreq */
+	case SIOCGCONNORDER:		/* so_cordreq */
+		error = (*so->so_proto->pr_usrreqs->pru_control)(so,
+		    cmd, data, NULL, p);
 		goto out;
 	}
-	}
+
 	/*
 	 * Interface/routing/protocol specific ioctls:
 	 * interface and routing ioctls should have a
@@ -324,12 +282,10 @@ soioctl(struct socket *so, u_long cmd, caddr_t data, struct proc *p)
 			error = rtioctl(cmd, data, p);
 		else
 			error = (*so->so_proto->pr_usrreqs->pru_control)(so,
-			    cmd, data, 0, p);
+			    cmd, data, NULL, p);
 	}
 
 out:
-	if (dropsockref != -1)
-		file_drop(dropsockref);
 	socket_unlock(so, 1);
 
 	if (error == EJUSTRETURN)
@@ -342,7 +298,6 @@ int
 soo_ioctl(struct fileproc *fp, u_long cmd, caddr_t data, vfs_context_t ctx)
 {
 	struct socket *so;
-	int error;
 	proc_t procp = vfs_context_proc(ctx);
 
 	if ((so = (struct socket *)fp->f_fglob->fg_data) == NULL) {
@@ -350,12 +305,7 @@ soo_ioctl(struct fileproc *fp, u_long cmd, caddr_t data, vfs_context_t ctx)
 		return (EBADF);
 	}
 
-	error = soioctl(so, cmd, data, procp);
-
-	if (error == 0 && cmd == SIOCSETOT)
-		fp->f_fglob->fg_flag |= FNONBLOCK;
-
-	return (error);
+	return (soioctl(so, cmd, data, procp));
 }
 
 int
@@ -367,11 +317,11 @@ soo_select(struct fileproc *fp, int which, void *wql, vfs_context_t ctx)
 
 	if (so == NULL || so == (struct socket *)-1)
 		return (0);
-	
+
 	procp = vfs_context_proc(ctx);
 
 #if CONFIG_MACF_SOCKET
-	if (mac_socket_check_select(vfs_context_ucred(ctx), so, which) != 0);
+	if (mac_socket_check_select(vfs_context_ucred(ctx), so, which) != 0)
 		return (0);
 #endif /* CONFIG_MACF_SOCKET */
 
@@ -501,4 +451,46 @@ soo_drain(struct fileproc *fp, __unused vfs_context_t ctx)
 	}
 
 	return (error);
+}
+
+/*
+ * 's' group ioctls.
+ *
+ * The switch statement below does nothing at runtime, as it serves as a
+ * compile time check to ensure that all of the socket 's' ioctls (those
+ * in the 's' group going thru soo_ioctl) that are made available by the
+ * networking stack is unique.  This works as long as this routine gets
+ * updated each time a new interface ioctl gets added.
+ *
+ * Any failures at compile time indicates duplicated ioctl values.
+ */
+static __attribute__((unused)) void
+soioctl_cassert(void)
+{
+	/*
+	 * This is equivalent to _CASSERT() and the compiler wouldn't
+	 * generate any instructions, thus for compile time only.
+	 */
+	switch ((u_long)0) {
+	case 0:
+
+	/* bsd/sys/sockio.h */
+	case SIOCSHIWAT:
+	case SIOCGHIWAT:
+	case SIOCSLOWAT:
+	case SIOCGLOWAT:
+	case SIOCATMARK:
+	case SIOCSPGRP:
+	case SIOCGPGRP:
+	case SIOCSETOT:
+	case SIOCGASSOCIDS32:
+	case SIOCGASSOCIDS64:
+	case SIOCGCONNIDS32:
+	case SIOCGCONNIDS64:
+	case SIOCGCONNINFO32:
+	case SIOCGCONNINFO64:
+	case SIOCSCONNORDER:
+	case SIOCGCONNORDER:
+		;
+	}
 }

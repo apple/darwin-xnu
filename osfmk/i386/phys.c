@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2012 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -156,26 +156,11 @@ pmap_copy_part_lpage(
 	__unused vm_offset_t	dst_offset,
 	__unused vm_size_t	len)
 {
-#ifdef __i386__
-        mapwindow_t *map;
-#endif
 
 	assert(pdst != vm_page_fictitious_addr);
 	assert(pdst != vm_page_guard_addr);
 	assert((dst_offset + len) <= PAGE_SIZE);
 
-#ifdef __i386__
-        mp_disable_preemption();
-
-        map = pmap_get_mapwindow(INTEL_PTE_VALID | INTEL_PTE_RW | (i386_ptob(pdst) & PG_FRAME) | 
-                                 INTEL_PTE_REF | INTEL_PTE_MOD);
-
-	memcpy((void *) (map->prv_CADDR + (dst_offset & INTEL_OFFMASK)), (void *) src, len);
-
-	pmap_put_mapwindow(map);
-
-	mp_enable_preemption();
-#endif
 }
 
 /*
@@ -189,26 +174,11 @@ pmap_copy_part_rpage(
 	__unused vm_offset_t	dst,
 	__unused vm_size_t	len)
 {
-#ifdef __i386__
-        mapwindow_t *map;
-#endif
 
 	assert(psrc != vm_page_fictitious_addr);
 	assert(psrc != vm_page_guard_addr);
 	assert((src_offset + len) <= PAGE_SIZE);
 
-#ifdef __i386__
-        mp_disable_preemption();
-
-        map = pmap_get_mapwindow(INTEL_PTE_VALID | INTEL_PTE_RW | (i386_ptob(psrc) & PG_FRAME) | 
-                                 INTEL_PTE_REF);
-
-	memcpy((void *) dst, (void *) (map->prv_CADDR + (src_offset & INTEL_OFFMASK)), len);
-
-	pmap_put_mapwindow(map);
-
-	mp_enable_preemption();
-#endif
 }
 
 /*
@@ -231,9 +201,14 @@ kvtophys(
 
 extern pt_entry_t *debugger_ptep;
 extern vm_map_offset_t debugger_window_kva;
+extern int _bcopy(const void *, void *, vm_size_t);
+extern int _bcopy2(const void *, void *);
+extern int _bcopy4(const void *, void *);
+extern int _bcopy8(const void *, void *);
 
-__private_extern__ void ml_copy_phys(addr64_t src64, addr64_t dst64, vm_size_t bytes) {
+__private_extern__ int ml_copy_phys(addr64_t src64, addr64_t dst64, vm_size_t bytes) {
 	void *src, *dst;
+	int err = 0;
 
 	mp_disable_preemption();
 #if NCOPY_WINDOWS > 0
@@ -284,27 +259,33 @@ __private_extern__ void ml_copy_phys(addr64_t src64, addr64_t dst64, vm_size_t b
 	        panic("ml_copy_phys spans pages, src: 0x%llx, dst: 0x%llx", src64, dst64);
 	}
 
+	/*
+	 * For device register access from the debugger,
+	 * 2-byte/16-bit, 4-byte/32-bit and 8-byte/64-bit copies are handled
+	 * by assembly routines ensuring the required access widths.
+	 * 1-byte and other copies are handled by the regular _bcopy.
+	 */
 	switch (bytes) {
-	case 1:
-		*((uint8_t *) dst) = *((volatile uint8_t *) src);
-		break;
 	case 2:
-		*((uint16_t *) dst) = *((volatile uint16_t *) src);
+		err = _bcopy2(src, dst);
 		break;
 	case 4:
-		*((uint32_t *) dst) = *((volatile uint32_t *) src);
+		err = _bcopy4(src, dst);
 		break;
-		/* Should perform two 32-bit reads */
 	case 8:
-		*((uint64_t *) dst) = *((volatile uint64_t *) src);
+		err = _bcopy8(src, dst);
 		break;
+	case 1:
 	default:
-		bcopy(src, dst, bytes);
+		err = _bcopy(src, dst, bytes);
 		break;
 	}
+
 #if NCOPY_WINDOWS > 0
 	pmap_put_mapwindow(src_map);
 	pmap_put_mapwindow(dst_map);
 #endif
 	mp_enable_preemption();
+
+	return err;
 }

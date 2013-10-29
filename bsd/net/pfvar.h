@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2007-2012 Apple Inc. All rights reserved.
+ * Copyright (c) 2007-2013 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -99,8 +99,8 @@ extern "C" {
 
 #define	be64toh(x)	htobe64(x)
 
-__private_extern__ lck_rw_t *pf_perim_lock;
-__private_extern__ lck_mtx_t *pf_lock;
+extern lck_rw_t *pf_perim_lock;
+extern lck_mtx_t *pf_lock;
 
 struct pool {
 	struct zone	*pool_zone;	/* pointer to backend zone */
@@ -694,7 +694,7 @@ struct pf_rule {
 	u_int64_t		 packets[2];
 	u_int64_t		 bytes[2];
 
-	u_int32_t		 ticket;
+	u_int64_t		 ticket;
 #define PF_OWNER_NAME_SIZE	 64
 	char			 owner[PF_OWNER_NAME_SIZE];
 	u_int32_t		 priority;
@@ -994,6 +994,7 @@ struct pf_state_key {
 	u_int8_t	 direction;
 	u_int8_t	 proto_variant;
 	struct pf_app_state	*app_state;
+	u_int32_t	 flowsrc;
 	u_int32_t	 flowhash;
 
 	RB_ENTRY(pf_state_key)	 entry_lan_ext;
@@ -1346,8 +1347,8 @@ RB_PROTOTYPE_SC(__private_extern__, pf_state_tree_ext_gwy, pf_state_key,
 RB_HEAD(pfi_ifhead, pfi_kif);
 
 /* state tables */
-__private_extern__ struct pf_state_tree_lan_ext	 pf_statetbl_lan_ext;
-__private_extern__ struct pf_state_tree_ext_gwy	 pf_statetbl_ext_gwy;
+extern struct pf_state_tree_lan_ext	 pf_statetbl_lan_ext;
+extern struct pf_state_tree_ext_gwy	 pf_statetbl_ext_gwy;
 
 /* keep synced with pfi_kif, used in RB_FIND */
 struct pfi_kif_cmp {
@@ -1428,13 +1429,14 @@ struct pf_pdesc {
 					/* state code. Easier than tags */
 #define PFDESC_TCP_NORM	0x0001		/* TCP shall be statefully scrubbed */
 #define PFDESC_IP_REAS	0x0002		/* IP frags would've been reassembled */
-#define	PFDESC_FLOW_ADV	0x0004		/* sender can use flow advisory */
-#define PFDESC_IP_FRAG	0x0008		/* This is a fragment */
+#define PFDESC_IP_FRAG	0x0004		/* This is a fragment */
 	sa_family_t	 af;
 	u_int8_t	 proto;
 	u_int8_t	 tos;
 	u_int8_t	 proto_variant;
-	mbuf_svc_class_t sc;
+	mbuf_svc_class_t sc;		/* mbuf service class (MBUF_SVC) */
+	u_int32_t	 pktflags;	/* mbuf packet flags (PKTF) */
+	u_int32_t	 flowsrc;	/* flow source (FLOWSRC) */
 	u_int32_t	 flowhash;	/* flow hash to identify the sender */
 };
 #endif /* KERNEL */
@@ -2135,29 +2137,29 @@ struct pf_ifspeed {
 RB_HEAD(pf_src_tree, pf_src_node);
 RB_PROTOTYPE_SC(__private_extern__, pf_src_tree, pf_src_node, entry,
     pf_src_compare);
-__private_extern__ struct pf_src_tree tree_src_tracking;
+extern struct pf_src_tree tree_src_tracking;
 
 RB_HEAD(pf_state_tree_id, pf_state);
 RB_PROTOTYPE_SC(__private_extern__, pf_state_tree_id, pf_state,
     entry_id, pf_state_compare_id);
-__private_extern__ struct pf_state_tree_id tree_id;
-__private_extern__ struct pf_state_queue state_list;
+extern struct pf_state_tree_id tree_id;
+extern struct pf_state_queue state_list;
 
 TAILQ_HEAD(pf_poolqueue, pf_pool);
-__private_extern__ struct pf_poolqueue	pf_pools[2];
-__private_extern__ struct pf_palist	pf_pabuf;
-__private_extern__ u_int32_t		ticket_pabuf;
+extern struct pf_poolqueue	pf_pools[2];
+extern struct pf_palist	pf_pabuf;
+extern u_int32_t		ticket_pabuf;
 #if PF_ALTQ
 TAILQ_HEAD(pf_altqqueue, pf_altq);
-__private_extern__ struct pf_altqqueue	pf_altqs[2];
-__private_extern__ u_int32_t		ticket_altqs_active;
-__private_extern__ u_int32_t		ticket_altqs_inactive;
-__private_extern__ int			altqs_inactive_open;
-__private_extern__ struct pf_altqqueue	*pf_altqs_active;
-__private_extern__ struct pf_altqqueue	*pf_altqs_inactive;
+extern struct pf_altqqueue	pf_altqs[2];
+extern u_int32_t		ticket_altqs_active;
+extern u_int32_t		ticket_altqs_inactive;
+extern int			altqs_inactive_open;
+extern struct pf_altqqueue	*pf_altqs_active;
+extern struct pf_altqqueue	*pf_altqs_inactive;
 #endif /* PF_ALTQ */
-__private_extern__ struct pf_poolqueue	*pf_pools_active;
-__private_extern__ struct pf_poolqueue	*pf_pools_inactive;
+extern struct pf_poolqueue	*pf_pools_active;
+extern struct pf_poolqueue	*pf_pools_inactive;
 
 __private_extern__ int pf_tbladdr_setup(struct pf_ruleset *,
     struct pf_addr_wrap *);
@@ -2166,15 +2168,15 @@ __private_extern__ void pf_tbladdr_copyout(struct pf_addr_wrap *);
 __private_extern__ void pf_calc_skip_steps(struct pf_rulequeue *);
 __private_extern__ u_int32_t pf_calc_state_key_flowhash(struct pf_state_key *);
 
-__private_extern__ struct pool pf_src_tree_pl, pf_rule_pl;
-__private_extern__ struct pool pf_state_pl, pf_state_key_pl, pf_pooladdr_pl;
-__private_extern__ struct pool pf_state_scrub_pl;
+extern struct pool pf_src_tree_pl, pf_rule_pl;
+extern struct pool pf_state_pl, pf_state_key_pl, pf_pooladdr_pl;
+extern struct pool pf_state_scrub_pl;
 #if PF_ALTQ
-__private_extern__ struct pool pf_altq_pl;
+extern struct pool pf_altq_pl;
 #endif /* PF_ALTQ */
-__private_extern__ struct pool pf_app_state_pl;
+extern struct pool pf_app_state_pl;
 
-__private_extern__ struct thread *pf_purge_thread;
+extern struct thread *pf_purge_thread;
 
 __private_extern__ void pfinit(void);
 __private_extern__ void pf_purge_thread_fn(void *, wait_result_t);
@@ -2194,8 +2196,8 @@ __private_extern__ void pf_print_flags(u_int8_t);
 __private_extern__ u_int16_t pf_cksum_fixup(u_int16_t, u_int16_t, u_int16_t,
     u_int8_t);
 
-__private_extern__ struct ifnet *sync_ifp;
-__private_extern__ struct pf_rule pf_default_rule;
+extern struct ifnet *sync_ifp;
+extern struct pf_rule pf_default_rule;
 __private_extern__ void pf_addrcpy(struct pf_addr *, struct pf_addr *,
     u_int8_t);
 __private_extern__ void pf_rm_rule(struct pf_rulequeue *, struct pf_rule *);
@@ -2306,7 +2308,7 @@ __private_extern__ int pfr_ina_commit(struct pfr_table *, u_int32_t, int *,
 __private_extern__ int pfr_ina_define(struct pfr_table *, user_addr_t,
     int, int *, int *, u_int32_t, int);
 
-__private_extern__ struct pfi_kif *pfi_all;
+extern struct pfi_kif *pfi_all;
 
 __private_extern__ void pfi_initialize(void);
 __private_extern__ struct pfi_kif *pfi_kif_get(const char *);
@@ -2339,34 +2341,34 @@ __private_extern__ u_int32_t pf_qname2qid(char *);
 __private_extern__ void pf_qid2qname(u_int32_t, char *);
 __private_extern__ void pf_qid_unref(u_int32_t);
 
-__private_extern__ struct pf_status pf_status;
-__private_extern__ struct pool pf_frent_pl, pf_frag_pl;
+extern struct pf_status pf_status;
+extern struct pool pf_frent_pl, pf_frag_pl;
 
 struct pf_pool_limit {
 	void		*pp;
 	unsigned	 limit;
 };
-__private_extern__ struct pf_pool_limit	pf_pool_limits[PF_LIMIT_MAX];
+extern struct pf_pool_limit	pf_pool_limits[PF_LIMIT_MAX];
 
 __private_extern__ int pf_af_hook(struct ifnet *, struct mbuf **,
     struct mbuf **, unsigned int, int, struct ip_fw_args *);
-__private_extern__ int pf_ifaddr_hook(struct ifnet *, unsigned long);
+__private_extern__ int pf_ifaddr_hook(struct ifnet *);
 __private_extern__ void pf_ifnet_hook(struct ifnet *, int);
 
 /*
  * The following are defined with "private extern" storage class for
  * kernel, and "extern" for user-space.
  */
-__private_extern__ struct pf_anchor_global pf_anchors;
-__private_extern__ struct pf_anchor pf_main_anchor;
+extern struct pf_anchor_global pf_anchors;
+extern struct pf_anchor pf_main_anchor;
 #define pf_main_ruleset	pf_main_anchor.ruleset
 
-__private_extern__ int pf_is_enabled;
+extern int pf_is_enabled;
 #define PF_IS_ENABLED (pf_is_enabled != 0)
-__private_extern__ u_int32_t pf_hash_seed;
+extern u_int32_t pf_hash_seed;
 
 #if PF_ALTQ
-__private_extern__ u_int32_t altq_allowed;
+extern u_int32_t altq_allowed;
 #endif /* PF_ALTQ */
 
 /* these ruleset functions can be linked into userland programs (pfctl) */

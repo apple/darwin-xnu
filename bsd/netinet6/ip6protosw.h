@@ -1,9 +1,8 @@
-/*	$FreeBSD: src/sys/netinet6/ip6protosw.h,v 1.2.2.3 2001/07/03 11:01:54 ume Exp $	*/
 /*
- * Copyright (c) 2008-2009 Apple Inc. All rights reserved.
+ * Copyright (c) 2008-2013 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
- * 
+ *
  * This file contains Original Code and/or Modifications of Original Code
  * as defined in and that are subject to the Apple Public Source License
  * Version 2.0 (the 'License'). You may not use this file except in
@@ -12,10 +11,10 @@
  * unlawful or unlicensed copies of an Apple operating system, or to
  * circumvent, violate, or enable the circumvention or violation of, any
  * terms of an Apple operating system software license agreement.
- * 
+ *
  * Please obtain a copy of the License at
  * http://www.opensource.apple.com/apsl/ and read it before using this file.
- * 
+ *
  * The Original Code and all software distributed under the License are
  * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
@@ -23,7 +22,7 @@
  * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
  * Please see the License for the specific language governing rights and
  * limitations under the License.
- * 
+ *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 
@@ -97,10 +96,10 @@
  */
 
 #ifndef _NETINET6_IP6PROTOSW_H_
-#define _NETINET6_IP6PROTOSW_H_
+#define	_NETINET6_IP6PROTOSW_H_
 #include <sys/appleapiopts.h>
 
-#ifdef KERNEL_PRIVATE
+#ifdef BSD_KERNEL_PRIVATE
 #include <kern/locks.h>
 
 /*
@@ -112,7 +111,6 @@ struct mbuf;
 struct sockaddr;
 struct socket;
 struct domain;
-struct proc;
 struct ip6_hdr;
 struct icmp6_hdr;
 struct in6_addr;
@@ -148,64 +146,54 @@ struct ip6ctlparam {
 	u_int8_t ip6c_nxt;		/* final next header field */
 };
 
-#ifdef __LP64__ // K64todo: might also make sense for the generic case
-#pragma pack(4)
-#endif
+/*
+ * TODO:
+ *
+ * This closesly resembles protosw; we should merge them one day.  Offsets
+ * must be exactly equivalent, due to casting.
+ */
 struct ip6protosw {
-	short	pr_type;		/* socket type used for */
+	TAILQ_ENTRY(ip6protosw) pr_entry; /* chain for domain */
 	struct	domain *pr_domain;	/* domain protocol a member of */
-	short	pr_protocol;		/* protocol number */
-        unsigned int pr_flags;          /* see below */
-/* protocol-protocol hooks */
-	int	(*pr_input)(struct mbuf **, int *, int);
-					/* input to protocol (from below) */
-	int	(*pr_output)(struct mbuf *m, struct socket *so,
-				     struct sockaddr_in6 *, struct mbuf *);
-					/* output to protocol (from above) */
-	void	(*pr_ctlinput)(int, struct sockaddr *, void *);
-					/* control input (from below) */
-	int	(*pr_ctloutput)(struct socket *, struct sockopt *);
-					/* control output (from above) */
-/* user-protocol hook */
-	int	(*pr_usrreq)(struct socket *, int, struct mbuf *,
-			     struct mbuf *, struct mbuf *, struct proc *);
-					/* user request: see list below */
-
-/* utility hooks */
-	void	(*pr_init)(void);	/* initialization hook */
-#if __APPLE__
-	void	(*pr_unused)(void);	/* placeholder - fasttimo is removed */
-#else
-	void	(*pr_fasttimo)(void);
-					/* fast timeout (200ms) */
-#endif
-	void	(*pr_slowtimo)(void);
-					/* slow timeout (500ms) */
-	void	(*pr_drain)(void);
-					/* flush any excess space possible */
-#ifdef __APPLE__
+	struct protosw *pr_protosw;	/* pointer to self */
+	u_int16_t pr_type;		/* socket type used for */
+	u_int16_t pr_protocol;		/* protocol number */
+	u_int32_t pr_flags;		/* see below */
+	/*
+	 * protocol-protocol hooks
+	 */
+	int	(*pr_input)		/* input to protocol (from below) */
+		    (struct mbuf **, int *, int);
+	int	(*pr_output)		/* output to protocol (from above) */
+		    (struct mbuf *m, struct socket *so,
+		    struct sockaddr_in6 *, struct mbuf *);
+	void	(*pr_ctlinput)		/* control input (from below) */
+		    (int, struct sockaddr *, void *);
+	int	(*pr_ctloutput)		/* control output (from above) */
+		    (struct socket *, struct sockopt *);
+	/*
+	 * user-protocol hook
+	 */
+	struct	pr_usrreqs *pr_usrreqs;	/* user request; see list below */
+	/*
+	 * utility hooks
+	 */
+	void	(*pr_init)		/* initialization hook */
+		    (struct ip6protosw *, struct domain *);
+	void	(*pr_drain)(void);	/* flush any excess space possible */
 	/* for compat. with IPv4 protosw */
-	int	(*pr_sysctl)(void);		/* sysctl for protocol */
-#endif
-
-	struct	pr_usrreqs *pr_usrreqs;	/* supersedes pr_usrreq() */
-#ifdef __APPLE__
-	int     	(*pr_lock)      (struct socket *so, int locktype, void *debug); /* lock function for protocol */
-	int     	(*pr_unlock)    (struct socket *so, int locktype, void *debug); /* unlock for protocol */
-#ifdef _KERN_LOCKS_H_
-	lck_mtx_t *	(*pr_getlock)   (struct socket *so, int locktype); /* unlock for protocol */
-#else
-	void *	(*pr_getlock)   (struct socket *so, int locktype); /* unlock for protocol */
-#endif
-	/* Filter hooks */
-	TAILQ_HEAD(pr6_sfilter, NFDescriptor) pr_sfilter;
-	struct ip6protosw *pr_next;	/* Chain for domain */
-	u_int32_t reserved[1];
-#endif
+	int	(*pr_sysctl)(void);	/* sysctl for protocol */
+	int	(*pr_lock)		/* lock function for protocol */
+		    (struct socket *so, int locktype, void *debug);
+	int	(*pr_unlock)		/* unlock for protocol */
+		    (struct socket *so, int locktype, void *debug);
+	lck_mtx_t *(*pr_getlock)	/* retrieve protocol lock */
+		    (struct socket *so, int locktype);
+	/*
+	 * misc
+	 */
+	TAILQ_HEAD(, socket_filter) pr_filter_head;
+	struct protosw_old *pr_old;
 };
-#ifdef __LP64__ // K64todo: might also make sense for the generic case
-#pragma pack()
-#endif
-
-#endif /* KERNEL_PRIVATE */
+#endif /* BSD_KERNEL_PRIVATE */
 #endif /* _NETINET6_IP6PROTOSW_H_ */

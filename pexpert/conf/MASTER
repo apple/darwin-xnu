@@ -85,14 +85,10 @@ ident		PEXPERT
 options		MACH_PE		# Objective-C support		# <mach_pe>
 options		MACH_KERNEL
 options		DEBUG		# general debugging code	# <debug>
+options		DEVELOPMENT		# dev kernel		# <development>
 options		MACH_ASSERT	# 	  	    		# <mach_assert>
 options		CONFIG_DTRACE 	# dtrace support		# <config_dtrace>
 
 options		CONFIG_NO_PANIC_STRINGS		# <no_panic_str>
 options		CONFIG_NO_PRINTF_STRINGS	# <no_printf_str>
 options		CONFIG_NO_KPRINTF_STRINGS	# <no_kprintf_str>
-
-# configurable kernel - general switch to say we are building for an
-# embedded device
-#
-options   CONFIG_EMBEDDED                       # <config_embedded>

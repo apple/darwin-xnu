@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2010 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2013 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -211,12 +211,10 @@ ReplaceBTreeRecord				(FileReference 				refNum,
 /* 
  * Flags for BlockAllocate() and BlockDeallocate()
  */ 
-/* Force contiguous block allocation and to force minBlocks to actually be allocated */
-#define HFS_ALLOC_FORCECONTIG	0x1	
-/* Can use metadata zone blocks */
-#define HFS_ALLOC_METAZONE	0x2	
-/* Skip checking and updating of free blocks during allocation and deallocation */
-#define HFS_ALLOC_SKIPFREEBLKS	0x4	
+#define HFS_ALLOC_FORCECONTIG		0x1	//force contiguous block allocation; minblocks must be allocated
+#define HFS_ALLOC_METAZONE			0x2	//can use metazone blocks
+#define HFS_ALLOC_SKIPFREEBLKS		0x4	//skip checking/updating freeblocks during alloc/dealloc
+#define HFS_ALLOC_FLUSHTXN			0x8	//pick best fit for allocation, even if a jnl flush is req'd
 
 EXTERN_API_C( OSErr )
 BlockAllocate					(ExtendedVCB *			vcb,
@@ -252,29 +250,20 @@ EXTERN_API_C( u_int32_t )
 UpdateAllocLimit (struct hfsmount *hfsmp, u_int32_t new_end_block);
 
 EXTERN_API_C( u_int32_t )
-UnmapBlocks(struct hfsmount *hfsmp);
+ScanUnmapBlocks(struct hfsmount *hfsmp);
 
-#if CONFIG_HFS_ALLOC_RBTREE
-EXTERN_API_C( u_int32_t )
-GenerateTree( struct hfsmount *hfsmp, u_int32_t end_block, int *flags, int initialscan);
-	
-EXTERN_API_C( void )
-DestroyTrees( struct hfsmount *hfsmp);
-	
-EXTERN_API_C( u_int32_t )
-InitTree(struct hfsmount *hfsmp);	
-#endif
-	
-	
-	
+EXTERN_API_C( int )
+hfs_init_summary (struct hfsmount *hfsmp);
 
 /*	File Extent Mapping routines*/
 EXTERN_API_C( OSErr )
 FlushExtentFile					(ExtendedVCB *			vcb);
 
+#if CONFIG_HFS_STD
 EXTERN_API_C( int32_t )
 CompareExtentKeys				(const HFSExtentKey *	searchKey,
 								 const HFSExtentKey *	trialKey);
+#endif
 
 EXTERN_API_C( int32_t )
 CompareExtentKeysPlus			(const HFSPlusExtentKey *searchKey,

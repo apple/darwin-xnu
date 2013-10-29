@@ -41,46 +41,83 @@
 #include <vm/vm_page.h>
 #include <vm/vm_pageout.h>
 #include <vm/vm_purgeable_internal.h>
+#include <vm/vm_compressor.h>
 
 /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
+
+boolean_t	need_to_unlock_decompressor = FALSE;
+
+kern_return_t 
+hibernate_alloc_page_lists(
+		hibernate_page_list_t ** page_list_ret,
+		hibernate_page_list_t ** page_list_wired_ret,
+		hibernate_page_list_t ** page_list_pal_ret)
+{
+    kern_return_t	retval = KERN_SUCCESS;
+
+    hibernate_page_list_t * page_list = NULL;
+    hibernate_page_list_t * page_list_wired = NULL;
+    hibernate_page_list_t * page_list_pal = NULL;
+
+    page_list = hibernate_page_list_allocate(TRUE);
+    if (!page_list) {
+
+	    retval = KERN_RESOURCE_SHORTAGE;
+	    goto done;
+    }
+    page_list_wired = hibernate_page_list_allocate(FALSE);
+    if (!page_list_wired)
+    {
+	    kfree(page_list, page_list->list_size);
+
+	    retval = KERN_RESOURCE_SHORTAGE;
+	    goto done;
+    }
+    page_list_pal = hibernate_page_list_allocate(FALSE);
+    if (!page_list_pal)
+    {
+	    kfree(page_list, page_list->list_size);
+	    kfree(page_list_wired, page_list_wired->list_size);
+
+	    retval = KERN_RESOURCE_SHORTAGE;
+	    goto done;
+    }
+    *page_list_ret        = page_list;
+    *page_list_wired_ret  = page_list_wired;
+    *page_list_pal_ret    = page_list_pal;
+
+done:
+    return (retval);
+
+}
+
+extern int sync_internal(void);
 
 kern_return_t 
 hibernate_setup(IOHibernateImageHeader * header,
                         uint32_t  free_page_ratio,
                         uint32_t  free_page_time,
                         boolean_t vmflush,
-			hibernate_page_list_t ** page_list_ret,
-			hibernate_page_list_t ** page_list_wired_ret,
-			hibernate_page_list_t ** page_list_pal_ret)
+			hibernate_page_list_t * page_list,
+			hibernate_page_list_t * page_list_wired __unused,
+			hibernate_page_list_t * page_list_pal __unused)
 {
-    hibernate_page_list_t * page_list = NULL;
-    hibernate_page_list_t * page_list_wired = NULL;
-    hibernate_page_list_t * page_list_pal = NULL;
     uint32_t    	    gobble_count;
+    kern_return_t	retval = KERN_SUCCESS;
 
-    *page_list_ret       = NULL;
-    *page_list_wired_ret = NULL;
-	*page_list_pal_ret    = NULL;
+    hibernate_create_paddr_map();
     
-    if (vmflush && dp_isssd)
-        hibernate_flush_memory();
+    if (vmflush && (COMPRESSED_PAGER_IS_ACTIVE || dp_isssd)) {
+	    
+	    sync_internal();
 
-    page_list = hibernate_page_list_allocate(TRUE);
-    if (!page_list)
-        return (KERN_RESOURCE_SHORTAGE);
-    page_list_wired = hibernate_page_list_allocate(FALSE);
-    if (!page_list_wired)
-    {
-        kfree(page_list, page_list->list_size);
-        return (KERN_RESOURCE_SHORTAGE);
+	    if (COMPRESSED_PAGER_IS_ACTIVE) {
+		    vm_decompressor_lock();
+		    need_to_unlock_decompressor = TRUE;
+	    }
+	    hibernate_flush_memory();
     }
-    page_list_pal = hibernate_page_list_allocate(FALSE);
-    if (!page_list_pal)
-    {
-        kfree(page_list, page_list->list_size);
-        kfree(page_list_wired, page_list_wired->list_size);
-        return (KERN_RESOURCE_SHORTAGE);
-    }
+
 
     // pages we could force out to reduce hibernate image size
     gobble_count = (uint32_t)((((uint64_t) page_list->page_count) * ((uint64_t) free_page_ratio)) / 100);
@@ -90,18 +127,18 @@ hibernate_setup(IOHibernateImageHeader * header,
     hibernate_processor_setup(header);
 
     if (gobble_count)
-	hibernate_gobble_pages(gobble_count, free_page_time);
+	    hibernate_gobble_pages(gobble_count, free_page_time);
 
     HIBLOG("hibernate_alloc_pages act %d, inact %d, anon %d, throt %d, spec %d, wire %d, wireinit %d\n",
     	    vm_page_active_count, vm_page_inactive_count, 
 	    vm_page_anonymous_count,  vm_page_throttled_count, vm_page_speculative_count,
 	    vm_page_wire_count, vm_page_wire_count_initial);
 
-    *page_list_ret        = page_list;
-    *page_list_wired_ret  = page_list_wired;
-    *page_list_pal_ret    = page_list_pal;
-
-    return (KERN_SUCCESS);
+    if (retval != KERN_SUCCESS && need_to_unlock_decompressor == TRUE) {
+	    need_to_unlock_decompressor = FALSE;
+	    vm_decompressor_unlock();
+    }
+    return (retval);
 }
 
 kern_return_t 
@@ -118,6 +155,13 @@ hibernate_teardown(hibernate_page_list_t * page_list,
     if (page_list_pal)
         kfree(page_list_pal, page_list_pal->list_size);
 
+    if (COMPRESSED_PAGER_IS_ACTIVE) {
+	    if (need_to_unlock_decompressor == TRUE) {
+		    need_to_unlock_decompressor = FALSE;
+		    vm_decompressor_unlock();
+	    }
+	    vm_compressor_do_warmup();
+    }
     return (KERN_SUCCESS);
 }
 

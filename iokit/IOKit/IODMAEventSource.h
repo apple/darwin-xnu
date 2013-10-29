@@ -43,12 +43,12 @@ class IODMAEventSource : public IOEventSource
   friend class IODMAController;
   
  public:
-  typedef void (*Action)(OSObject *owner, IODMAEventSource *dmaES, IODMACommand *dmaCommand, IOReturn status, IOByteCount actualByteCount);
+  typedef void (*Action)(OSObject *owner, IODMAEventSource *dmaES, IODMACommand *dmaCommand, IOReturn status, IOByteCount actualByteCount, AbsoluteTime timeStamp);
 #define IODMAEventAction IODMAEventSource::Action
   
  protected:
   virtual void completeDMACommand(IODMACommand *dmaCommand);
-  virtual void notifyDMACommand(IODMACommand *dmaCommand, IOReturn status, IOByteCount actualByteCount);
+  virtual void notifyDMACommand(IODMACommand *dmaCommand, IOReturn status, IOByteCount actualByteCount, AbsoluteTime timeStamp);
   
  public:
   static IODMAEventSource *dmaEventSource(OSObject *owner,
@@ -59,9 +59,15 @@ class IODMAEventSource : public IOEventSource
   
   virtual IOReturn startDMACommand(IODMACommand *dmaCommand, IODirection direction, IOByteCount byteCount = 0, IOByteCount byteOffset = 0);
   virtual IOReturn stopDMACommand(bool flush = false, uint64_t timeout = UINT64_MAX);
-  
+
   virtual IOReturn queryDMACommand(IODMACommand **dmaCommand, IOByteCount *transferCount, bool waitForIdle = false);
-  virtual IOByteCount getFIFODepth();
+
+  virtual IOByteCount getFIFODepth(IODirection direction = kIODirectionNone);
+  virtual IOReturn setFIFODepth(IOByteCount depth);
+  virtual IOByteCount validFIFODepth(IOByteCount depth, IODirection direction);
+
+  virtual IOReturn setDMAConfig(UInt32 dmaIndex);
+  virtual bool validDMAConfig(UInt32 dmaIndex);
   
  private:
   IOService       *dmaProvider;
@@ -79,6 +85,7 @@ class IODMAEventSource : public IOEventSource
 		    Action notification = 0,
 		    UInt32 dmaIndex = 0);
   virtual bool checkForWork(void);
+  virtual void free(void);
 };
 
 #endif /* _IOKIT_IODMAEVENTSOURCE_H */

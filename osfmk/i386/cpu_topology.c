@@ -106,17 +106,10 @@ cpu_topology_sort(int ncpus)
 	}
 
 	/*
-	 * Fix up logical numbers and reset the map kept by the lapic code.
+	 * Finalize logical numbers and map kept by the lapic code.
 	 */
-	for (i = 1; i < ncpus; i++) {
+	for (i = 0; i < ncpus; i++) {
 		cpu_data_t	*cpup = cpu_datap(i);
-		x86_core_t	*core = cpup->lcpu.core;
-		x86_die_t	*die  = cpup->lcpu.die;
-		x86_pkg_t	*pkg  = cpup->lcpu.package;
-
-		assert(core != NULL);
-		assert(die != NULL);
-		assert(pkg != NULL);
 
 		if (cpup->cpu_number != i) {
 			kprintf("cpu_datap(%d):%p local apic id 0x%x "
@@ -125,16 +118,11 @@ cpu_topology_sort(int ncpus)
 				cpup->cpu_number);
 		}
 		cpup->cpu_number = i;
-		cpup->lcpu.cpu_num = i;
-		cpup->lcpu.pnum = cpup->cpu_phys_number;
 		lapic_cpu_map(cpup->cpu_phys_number, i);
-		x86_set_lcpu_numbers(&cpup->lcpu);
-		x86_set_core_numbers(core, &cpup->lcpu);
-		x86_set_die_numbers(die, &cpup->lcpu);
-		x86_set_pkg_numbers(pkg, &cpup->lcpu);
+		x86_set_logical_topology(&cpup->lcpu, cpup->cpu_phys_number, i);
 	}
 
-	validate_topology();
+	x86_validate_topology();
 
 	ml_set_interrupts_enabled(istate);
 	TOPO_DBG("cpu_topology_start() LLC is L%d\n", topoParms.LLCDepth + 1);

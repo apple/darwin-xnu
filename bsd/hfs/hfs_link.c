@@ -212,8 +212,8 @@ hfs_makelink(struct hfsmount *hfsmp, struct vnode *src_vp, struct cnode *cp,
 					&to_desc, NULL);
 
 			if (retval != 0 && retval != EEXIST) {
-			    printf("hfs_makelink: cat_rename to %s failed (%d). fileid %d\n",
-				inodename, retval, cp->c_fileid);
+			    printf("hfs_makelink: cat_rename to %s failed (%d) fileid=%d, vol=%s\n",
+				inodename, retval, cp->c_fileid, hfsmp->vcbVN);
 			}
 		} while ((retval == EEXIST) && (type == FILE_HARDLINKS));
 		if (retval)
@@ -428,6 +428,7 @@ hfs_vnop_link(struct vnop_link_args *ap)
 		return (EPERM);  
 	}
 	if (v_type == VDIR) {
+#if CONFIG_HFS_DIRLINK
 		/* Make sure our private directory exists. */
 		if (hfsmp->hfs_private_desc[DIR_HARDLINKS].cd_cnid == 0) {
 			return (EPERM);
@@ -444,6 +445,10 @@ hfs_vnop_link(struct vnop_link_args *ap)
 		if ((error = hfs_vget(hfsmp, hfs_currentparent(VTOC(vp)), &fdvp, 1, 0))) {
 			return (error);
 		}
+#else
+		/* some platforms don't support directory hardlinks. */
+		return EPERM;
+#endif
 	} else {
 		/* Make sure our private directory exists. */
 		if (hfsmp->hfs_private_desc[FILE_HARDLINKS].cd_cnid == 0) {
@@ -531,7 +536,7 @@ hfs_vnop_link(struct vnop_link_args *ap)
 	lockflags = hfs_systemfile_lock(hfsmp, SFL_CATALOG, HFS_SHARED_LOCK);
 
 	/* If destination exists then we lost a race with create. */
-	if (cat_lookup(hfsmp, &todesc, 0, NULL, NULL, NULL, NULL) == 0) {
+	if (cat_lookup(hfsmp, &todesc, 0, 0, NULL, NULL, NULL, NULL) == 0) {
 		error = EEXIST;
 		goto out;
 	}
@@ -548,7 +553,7 @@ hfs_vnop_link(struct vnop_link_args *ap)
 		cnid_t fileid;
 
 		/* If source is missing then we lost a race with unlink. */
-		if ((cat_lookup(hfsmp, &cp->c_desc, 0, NULL, NULL, NULL, &fileid) != 0) ||
+		if ((cat_lookup(hfsmp, &cp->c_desc, 0, 0, NULL, NULL, NULL, &fileid) != 0) ||
 		    (fileid != cp->c_fileid)) {
 			error = ENOENT;
 			goto out;
@@ -600,7 +605,7 @@ hfs_vnop_link(struct vnop_link_args *ap)
 			/* Set kHFSHasChildLinkBit in the destination hierarchy */
 			error = cat_set_childlinkbit(hfsmp, tdcp->c_parentcnid);
 			if (error) {
-				printf ("hfs_vnop_link: error updating destination parent chain for %u\n", tdcp->c_cnid);
+				printf ("hfs_vnop_link: error updating destination parent chain for id=%u, vol=%s\n", tdcp->c_cnid, hfsmp->vcbVN);
 				error = 0;
 			}
 		}
@@ -629,7 +634,7 @@ hfs_vnop_link(struct vnop_link_args *ap)
 			/* Set kHFSHasChildLinkBit in the source hierarchy */
 			error = cat_set_childlinkbit(hfsmp, fdcp->c_parentcnid);
 			if (error) {
-				printf ("hfs_vnop_link: error updating source parent chain for %u\n", fdcp->c_cnid);
+				printf ("hfs_vnop_link: error updating source parent chain for id=%u, vol=%s\n", fdcp->c_cnid, hfsmp->vcbVN);
 				error = 0;
 			}
 		}
@@ -848,6 +853,20 @@ hfs_unlink(struct hfsmount *hfsmp, struct vnode *dvp, struct vnode *vp, struct c
 		if (nextlinkid) {
 			(void) cat_update_siblinglinks(hfsmp, nextlinkid, prevlinkid, HFS_IGNORABLE_LINK);
 		}
+
+		/*
+		 * The call to cat_releasedesc below will only release the name buffer;
+		 * it does not zero out the rest of the fields in the 'cat_desc' data structure.
+		 * 
+		 * As a result, since there are still other links at this point, we need
+		 * to make the current cnode descriptor point to the raw inode.  If a path-based
+		 * system call comes along first, it will replace the descriptor with a valid link
+		 * ID.  If a userland process already has a file descriptor open, then they will
+		 * bypass that lookup, though.  Replacing the descriptor CNID with the raw
+		 * inode will force it to generate a new full path.
+		 */
+		cp->c_cnid = cp->c_fileid;
+
 	}
 
 	/* Push new link count to disk. */
@@ -927,7 +946,7 @@ hfs_privatedir_init(struct hfsmount * hfsmp, enum privdirtype type)
 	priv_descp->cd_flags = CD_ISDIR | CD_DECOMPOSED;
 
 	lockflags = hfs_systemfile_lock(hfsmp, SFL_CATALOG, HFS_SHARED_LOCK);
-	error = cat_lookup(hfsmp, priv_descp, 0, NULL, priv_attrp, NULL, NULL);
+	error = cat_lookup(hfsmp, priv_descp, 0, 0, NULL, priv_attrp, NULL, NULL);
 	hfs_systemfile_unlock(hfsmp, lockflags);
 
 	if (error == 0) {
@@ -971,7 +990,8 @@ hfs_privatedir_init(struct hfsmount * hfsmp, enum privdirtype type)
 	}
 	trans = 1;
 
-	lockflags = hfs_systemfile_lock(hfsmp, SFL_CATALOG, HFS_EXCLUSIVE_LOCK);
+	/* Need the catalog and EA b-trees for CNID acquisition */
+	lockflags = hfs_systemfile_lock(hfsmp, SFL_CATALOG | SFL_ATTRIBUTE, HFS_EXCLUSIVE_LOCK);
 
 	/* Make sure there's space in the Catalog file. */
 	if (cat_preflight(hfsmp, CAT_CREATE, NULL, 0) != 0) {
@@ -979,8 +999,15 @@ hfs_privatedir_init(struct hfsmount * hfsmp, enum privdirtype type)
 		goto exit;
 	}
 
+	/* Get the CNID for use */
+	cnid_t new_id;
+	if ((error = cat_acquire_cnid(hfsmp, &new_id))) {
+		hfs_systemfile_unlock (hfsmp, lockflags);
+		goto exit;
+	}
+	
 	/* Create the private directory on disk. */
-	error = cat_create(hfsmp, priv_descp, priv_attrp, NULL);
+	error = cat_create(hfsmp, new_id, priv_descp, priv_attrp, NULL);
 	if (error == 0) {
 		priv_descp->cd_cnid = priv_attrp->ca_fileid;
 
@@ -1042,6 +1069,30 @@ hfs_lookup_siblinglinks(struct hfsmount *hfsmp, cnid_t linkfileid, cnid_t *prevl
 
 	return (error);
 }
+
+
+/* Find the oldest / last hardlink in the link chain */
+int 
+hfs_lookup_lastlink (struct hfsmount *hfsmp, cnid_t linkfileid, 
+		cnid_t *lastid, struct cat_desc *cdesc) {
+	int lockflags;
+	int error;
+
+	*lastid = 0;
+	
+	lockflags = hfs_systemfile_lock(hfsmp, SFL_CATALOG, HFS_SHARED_LOCK);
+
+	error = cat_lookup_lastlink(hfsmp, linkfileid, lastid, cdesc);
+	
+	hfs_systemfile_unlock(hfsmp, lockflags);
+	
+	/*
+	 * cat_lookup_lastlink will zero out the lastid/cdesc arguments as needed
+	 * upon error cases.
+	 */ 	
+	return error;
+}
+
 
 /*
  * Cache the origin of a directory or file hard link

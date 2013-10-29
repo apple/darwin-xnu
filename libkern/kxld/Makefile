@@ -31,7 +31,7 @@ endif
 ifdef RC_CFLAGS
 ARCHS=$(addprefix -arch , $(RC_ARCHS))
 else
-ARCHS=-arch i386 -arch x86_64
+ARCHS=-arch x86_64
 RC_CFLAGS=$(ARCHS) -pipe
 endif
 ifdef INSTALL_LOCATION
@@ -57,6 +57,7 @@ TESTDST=./BUILD/tests
 
 # Flags
 SDKROOT ?= /
+DEFINES = -DPRIVATE
 CFLAGS=-std=c99 -Wall -Wextra -Werror -pedantic -Wformat=2 -Wcast-align \
 	-Wwrite-strings -Wshorten-64-to-32 -Wshadow -Winit-self -Wpointer-arith \
 	-Wno-format-y2k -W -Wstrict-prototypes -Wmissing-prototypes -Wreturn-type \
@@ -65,7 +66,7 @@ CFLAGS=-std=c99 -Wall -Wextra -Werror -pedantic -Wformat=2 -Wcast-align \
 LDFLAGS=$(ARCHS) -dynamiclib -install_name $(LIBKXLD_INSTALLNAME) \
 	-compatibility_version $(COMPATIBILITY_VERSION) \
 	-current_version $(CURRENT_VERSION) -lstdc++
-INCLUDES=-I$(HDRSRC) -I$(EXTHDRSRC)
+INCLUDES=-I$(HDRSRC) -isystem $(EXTHDRSRC)
 
 ifneq ($(SDKROOT),/)
 	CFLAGS += -isysroot $(SDKROOT)
@@ -79,11 +80,11 @@ LIBTOOL = xcrun -sdk $(SDKROOT) libtool
 STRIP = xcrun -sdk $(SDKROOT) strip
 
 # Files
-HDR_NAMES=kxld.h kxld_types.h WKdm.h
+HDR_NAMES=kxld.h kxld_types.h
 OBJ_NAMES=kxld.o kxld_array.o kxld_copyright.o kxld_demangle.o kxld_dict.o \
 	kxld_kext.o kxld_object.o kxld_reloc.o kxld_sect.o kxld_seg.o	   \
 	kxld_srcversion.o kxld_sym.o kxld_symtab.o kxld_util.o kxld_uuid.o \
-    kxld_vtable.o kxld_versionmin.o WKdmCompress.o WKdmDecompress.o
+    kxld_vtable.o kxld_versionmin.o
 
 HDRS=$(addprefix $(HDRSRC)/, $(HDR_NAMES))
 OBJS=$(addprefix $(OBJROOT)/, $(OBJ_NAMES))
@@ -93,9 +94,9 @@ $(shell [ -d $(OBJROOT) ] || mkdir -p $(OBJROOT))
 # Implicit rules
 %.o : %.c
 $(OBJROOT)/%.o : $(OBJSRC)/%.c
-	$(CC) $(RC_CFLAGS) $(CFLAGS) $(OPTIM) $(INCLUDES) -c $< -o $@
+	$(CC) $(RC_CFLAGS) $(CFLAGS) $(DEFINES) $(OPTIM) $(INCLUDES) -c $< -o $@
 $(OBJROOT)/%.o : $(TESTSRC)/%.c
-	$(CC) $(RC_CFLAGS) $(CFLAGS) -O0 -DDEBUG $(INCLUDES) -I $(SRCROOT) -c $< -o $@
+	$(CC) $(RC_CFLAGS) $(CFLAGS) $(DEFINES) -O0 -DDEBUG $(INCLUDES) -I $(SRCROOT) -c $< -o $@
 
 SRCROOTESC=$(subst /,\/,$(SRCROOT))
 OBJROOTESC=$(subst /,\/,$(OBJROOT))

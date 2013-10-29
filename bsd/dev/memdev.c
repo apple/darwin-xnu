@@ -354,6 +354,7 @@ static int mdevioctl(dev_t dev, u_long cmd, caddr_t data, __unused int flag,
 	u_int32_t *f;
 	u_int64_t *o;
 	int devid;
+	dk_memdev_info_t * memdev_info;
 
 	devid = minor(dev);									/* Get minor device number */
 
@@ -364,6 +365,7 @@ static int mdevioctl(dev_t dev, u_long cmd, caddr_t data, __unused int flag,
 
 	f = (u_int32_t*)data;
 	o = (u_int64_t *)data;
+	memdev_info = (dk_memdev_info_t *) data;
 
 	switch (cmd) {
 
@@ -408,7 +410,22 @@ static int mdevioctl(dev_t dev, u_long cmd, caddr_t data, __unused int flag,
 			if(!(mdev[devid].mdFlags & mdInited)) return (ENXIO);
 			*o = ((mdev[devid].mdSize << 12) + mdev[devid].mdSecsize - 1) / mdev[devid].mdSecsize;
 			break;
-			
+
+		/*
+		 * We're interested in the following bits of information:
+		 *   Are you a memory-backed device (always yes, in this case)?
+		 *   Physical memory (mdPhys)?
+		 *   What is your base page?
+		 *   What is your size?
+		 */
+		case DKIOCGETMEMDEVINFO:
+			if (!(mdev[devid].mdFlags & mdInited)) return (ENXIO);
+			memdev_info->mi_mdev = TRUE;
+			memdev_info->mi_phys = (mdev[devid].mdFlags & mdPhys) ? TRUE : FALSE;
+			memdev_info->mi_base = mdev[devid].mdBase;
+			memdev_info->mi_size = mdev[devid].mdSize;
+			break;
+
 		default:
 			error = ENOTTY;
 			break;

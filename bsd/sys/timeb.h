@@ -74,10 +74,7 @@
 #include <sys/_types.h>
 
 /* [XSI] The time_t type shall be defined as described in <sys/types.h> */
-#ifndef	_TIME_T
-#define	_TIME_T
-typedef	__darwin_time_t	time_t;
-#endif
+#include <sys/_types/_time_t.h>
 
 /*
  * [XSI] Structure whose address is passed as the first parameter to ftime()

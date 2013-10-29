@@ -64,7 +64,7 @@ struct sadb_ext;
 extern void kdebug_sadb(struct sadb_msg *);
 extern void kdebug_sadb_x_policy(struct sadb_ext *);
 
-#ifdef KERNEL
+#ifdef BSD_KERNEL_PRIVATE
 extern u_int32_t key_debug_level;
 
 struct secpolicy;
@@ -79,7 +79,7 @@ extern void kdebug_secasindex(struct secasindex *);
 extern void kdebug_secasv(struct secasvar *);
 extern void kdebug_mbufhdr(struct mbuf *);
 extern void kdebug_mbuf(struct mbuf *);
-#endif /* KERNEL */
+#endif /* BSD_KERNEL_PRIVATE */
 
 struct sockaddr;
 extern void kdebug_sockaddr(struct sockaddr *);

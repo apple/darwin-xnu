@@ -68,6 +68,7 @@
 #include <sys/_types.h>
 #ifdef KERNEL
 #include <machine/types.h>	/* user_time_t */
+#include <stdint.h>       	/* uint64_t */
 #else /* !KERNEL */
 #include <Availability.h>
 #endif /* KERNEL */
@@ -76,30 +77,22 @@
  * [XSI] The fd_set type shall be defined as described in <sys/select.h>.
  * The timespec structure shall be defined as described in <time.h>
  */
-#define __need_fd_set
-#define __need_struct_timespec
-#define __need_struct_timeval
+#include <sys/_types/_fd_def.h>
+#include <sys/_types/_timespec.h>
+#include <sys/_types/_timeval.h>
 #ifdef KERNEL
-#define __need_struct_user_timespec
-#define __need_struct_user32_timespec
-#define __need_struct_user64_timespec
-#define __need_struct_user_timeval
-#define __need_struct_user32_timeval
-#define __need_struct_user64_timeval
-#define __need_struct_user32_itimerval
-#define __need_struct_user64_itimerval
+#include <sys/_types/_user_timespec.h>
+#include <sys/_types/_user32_timespec.h>
+#include <sys/_types/_user64_timespec.h>
+#include <sys/_types/_user_timeval.h>
+#include <sys/_types/_user32_timeval.h>
+#include <sys/_types/_user64_timeval.h>
+#include <sys/_types/_user32_itimerval.h>
+#include <sys/_types/_user64_itimerval.h>
 #endif /* KERNEL */
-#include <sys/_structs.h>
 
-#ifndef	_TIME_T
-#define	_TIME_T
-typedef	__darwin_time_t	time_t;
-#endif
-
-#ifndef _SUSECONDS_T
-#define _SUSECONDS_T
-typedef __darwin_suseconds_t	suseconds_t;
-#endif
+#include <sys/_types/_time_t.h>
+#include <sys/_types/_suseconds_t.h>
 
 /*
  * Structure used as a parameter by getitimer(2) and setitimer(2) system
@@ -124,27 +117,15 @@ struct	itimerval {
  * extra protection here is to permit application redefinition above
  * the default size.
  */
-#ifndef	FD_SETSIZE
-#define	FD_SETSIZE	__DARWIN_FD_SETSIZE
-#endif	/* FD_SETSIZE */
-#ifndef FD_SET
-#define	FD_SET(n, p)	__DARWIN_FD_SET(n, p)
-#endif	/* FD_SET */
-#ifndef	FD_CLR
-#define	FD_CLR(n,p)	__DARWIN_FD_CLR(n, p)
-#endif	/* FD_CLR */
-#ifndef FD_ISSET
-#define	FD_ISSET(n, p)	__DARWIN_FD_ISSET(n, p)
-#endif	/* FD_ISSET */
-#ifndef FD_ZERO
-#define	FD_ZERO(p)	__DARWIN_FD_ZERO(p)
-#endif	/* FD_ZERO */
+#include <sys/_types/_fd_setsize.h>
+#include <sys/_types/_fd_set.h>
+#include <sys/_types/_fd_clr.h>
+#include <sys/_types/_fd_isset.h>
+#include <sys/_types/_fd_zero.h>
 
 #if !defined(_POSIX_C_SOURCE) || defined(_DARWIN_C_SOURCE)
 
-#ifndef FD_COPY
-#define	FD_COPY(f, t)	__DARWIN_FD_COPY(f, t)
-#endif	/* FD_COPY */
+#include <sys/_types/_fd_copy.h>
 
 #define	TIMEVAL_TO_TIMESPEC(tv, ts) {					\
 	(ts)->tv_sec = (tv)->tv_sec;					\
@@ -212,6 +193,7 @@ struct clockinfo {
 #if !defined(_POSIX_C_SOURCE) || defined(_DARWIN_C_SOURCE)
 __BEGIN_DECLS
 void	microtime(struct timeval *tv);
+void	microtime_with_abstime(struct timeval *tv, uint64_t *abstime);
 void	microuptime(struct timeval *tv);
 #define getmicrotime(a)		microtime(a)
 #define getmicrouptime(a)	microuptime(a)
@@ -224,7 +206,9 @@ void	timevalsub(struct timeval *t1, struct timeval *t2);
 void	timevalfix(struct timeval *t1);
 #ifdef	BSD_KERNEL_PRIVATE
 time_t	boottime_sec(void);
-void	inittodr(time_t base) __attribute__((section("__TEXT, initcode")));
+void	inittodr(time_t base);
+int	ratecheck(struct timeval *lasttime, const struct timeval *mininterval);
+int	ppsratecheck(struct timeval *lasttime, int *curpps, int maxpps);
 #endif /* BSD_KERNEL_PRIVATE */
 
 __END_DECLS

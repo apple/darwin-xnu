@@ -75,9 +75,10 @@
 
 #ifdef PRIVATE
 #define EVFILT_SOCK		(-13)	/* Socket events */
+#define EVFILT_MEMORYSTATUS	(-14)	/* Memorystatus events */
 #endif /* PRIVATE */
 
-#define EVFILT_SYSCOUNT		13
+#define EVFILT_SYSCOUNT		14
 #define EVFILT_THREADMARKER	EVFILT_SYSCOUNT /* Internal use only */
 
 #pragma pack(4)
@@ -237,34 +238,55 @@ struct kevent64_s {
  * that hangs off the proc structure. They also both play games with the hint
  * passed to KNOTE(). If NOTE_SIGNAL is passed as a hint, then the lower bits
  * of the hint contain the signal. IF NOTE_FORK is passed, then the lower bits
- * contain the PID of the child. 
+ * contain the PID of the child (but the pid does not get passed through in
+ * the actual kevent).
  */
-#define	NOTE_EXIT	0x80000000		/* process exited */
-#define	NOTE_FORK	0x40000000		/* process forked */
-#define	NOTE_EXEC	0x20000000		/* process exec'd */
-#define	NOTE_REAP	0x10000000		/* process reaped */
-#define	NOTE_SIGNAL	0x08000000		/* shared with EVFILT_SIGNAL */
-#define	NOTE_EXITSTATUS	0x04000000		/* exit status to be returned, valid for child process only */
-#define	NOTE_RESOURCEEND 0x02000000		/* resource limit reached, resource type returned */
+enum {
+	eNoteReapDeprecated __deprecated_enum_msg("This kqueue(2) EVFILT_PROC flag is deprecated") = 0x10000000
+};
 
-#if CONFIG_EMBEDDED
-/* 0x01000000  is reserved for future use */
+#define	NOTE_EXIT		0x80000000	/* process exited */
+#define	NOTE_FORK		0x40000000	/* process forked */
+#define	NOTE_EXEC		0x20000000	/* process exec'd */
+#define	NOTE_REAP		((unsigned int)eNoteReapDeprecated /* 0x10000000 */)	/* process reaped */
+#define	NOTE_SIGNAL		0x08000000	/* shared with EVFILT_SIGNAL */
+#define	NOTE_EXITSTATUS		0x04000000	/* exit status to be returned, valid for child process only */
+#define	NOTE_EXIT_DETAIL	0x02000000	/* provide details on reasons for exit */
 
-/* App states notification */
-#define	NOTE_APPACTIVE		0x00800000	/* app went to active state */
-#define	NOTE_APPBACKGROUND	0x00400000	/* app went to background */
-#define	NOTE_APPNONUI		0x00200000	/* app went to active with no UI */
-#define	NOTE_APPINACTIVE	0x00100000	/* app went to inactive state */
-#define NOTE_APPALLSTATES	0x00f00000
-#endif /* CONFIG_EMBEDDED */
 
-#define	NOTE_PDATAMASK	0x000fffff		/* mask for pid/signal */
+#define	NOTE_PDATAMASK	0x000fffff		/* mask for signal & exit status */
 #define	NOTE_PCTRLMASK	(~NOTE_PDATAMASK)
 
 /*
  * If NOTE_EXITSTATUS is present, provide additional info about exiting process.
  */
-#define NOTE_EXIT_REPARENTED	0x00080000	/* exited while reparented */
+enum {
+	eNoteExitReparentedDeprecated __deprecated_enum_msg("This kqueue(2) EVFILT_PROC flag is no longer sent") = 0x00080000 
+};
+#define NOTE_EXIT_REPARENTED	((unsigned int)eNoteExitReparentedDeprecated)	/* exited while reparented */
+
+/*
+ * If NOTE_EXIT_DETAIL is present, these bits indicate specific reasons for exiting.
+ */
+#define NOTE_EXIT_DETAIL_MASK		0x00070000
+#define	NOTE_EXIT_DECRYPTFAIL		0x00010000 
+#define	NOTE_EXIT_MEMORY		0x00020000
+#define NOTE_EXIT_CSERROR		0x00040000
+
+#ifdef PRIVATE
+
+/*
+ * If NOTE_EXIT_MEMORY is present, these bits indicate specific jetsam condition.
+ */
+#define NOTE_EXIT_MEMORY_DETAIL_MASK	0xfc000000
+#define NOTE_EXIT_MEMORY_VMPAGESHORTAGE	0x80000000	/* jetsam condition: lowest jetsam priority proc killed due to vm page shortage */
+#define NOTE_EXIT_MEMORY_VMTHRASHING	0x40000000	/* jetsam condition: lowest jetsam priority proc killed due to vm thrashing */
+#define NOTE_EXIT_MEMORY_HIWAT		0x20000000	/* jetsam condition: process reached its high water mark */
+#define NOTE_EXIT_MEMORY_PID		0x10000000	/* jetsam condition: special pid kill requested */
+#define NOTE_EXIT_MEMORY_IDLE		0x08000000	/* jetsam condition: idle process cleaned up */
+#define NOTE_EXIT_MEMORY_VNODE		0X04000000	/* jetsam condition: virtual node kill */
+
+#endif
 
 /*
  * data/hint fflags for EVFILT_VM, shared with userspace.
@@ -273,6 +295,24 @@ struct kevent64_s {
 #define NOTE_VM_PRESSURE_TERMINATE		0x40000000              /* will quit on memory pressure, possibly after cleaning up dirty state */
 #define NOTE_VM_PRESSURE_SUDDEN_TERMINATE	0x20000000		/* will quit immediately on memory pressure */
 #define NOTE_VM_ERROR				0x10000000              /* there was an error */
+
+#ifdef PRIVATE
+
+/*
+ * data/hint fflags for EVFILT_MEMORYSTATUS, shared with userspace.
+ */
+#define NOTE_MEMORYSTATUS_PRESSURE_NORMAL	0x00000001	/* system memory pressure has returned to normal */
+#define NOTE_MEMORYSTATUS_PRESSURE_WARN		0x00000002	/* system memory pressure has changed to the warning state */
+#define NOTE_MEMORYSTATUS_PRESSURE_CRITICAL	0x00000004	/* system memory pressure has changed to the critical state */
+
+typedef enum vm_pressure_level {
+        kVMPressureNormal   = 0,
+        kVMPressureWarning  = 1,
+        kVMPressureUrgent   = 2,
+        kVMPressureCritical = 3,
+} vm_pressure_level_t;
+
+#endif
 
 /*
  * data/hint fflags for EVFILT_TIMER, shared with userspace.
@@ -286,6 +326,9 @@ struct kevent64_s {
 #define NOTE_NSECONDS	0x00000004		/* data is nanoseconds     */
 #define NOTE_ABSOLUTE	0x00000008		/* absolute timeout        */
 						/* ... implicit EV_ONESHOT */
+#define NOTE_LEEWAY	0x00000010		/* ext[1] holds leeway for power aware timers */
+#define NOTE_CRITICAL	0x00000020		/* system does minimal timer coalescing */
+#define NOTE_BACKGROUND	0x00000040		/* system does maximum timer coalescing */
 #ifdef PRIVATE
 /*
  * data/hint fflags for EVFILT_SOCK, shared with userspace.
@@ -300,6 +343,11 @@ struct kevent64_s {
 #define	NOTE_SUSPEND		0x00000040 /* output queue suspended */
 #define	NOTE_RESUME		0x00000080 /* output queue resumed */
 #define NOTE_KEEPALIVE		0x00000100 /* TCP Keepalive received */
+#define NOTE_ADAPTIVE_WTIMO	0x00000200 /* TCP adaptive write timeout */
+#define NOTE_ADAPTIVE_RTIMO	0x00000400 /* TCP adaptive read timeout */
+#define	NOTE_CONNECTED		0x00000800 /* socket is connected */
+#define	NOTE_DISCONNECTED	0x00001000 /* socket is disconnected */
+#define	NOTE_CONNINFO_UPDATED	0x00002000 /* connection info was updated */
 
 #endif /* PRIVATE */
 
@@ -345,6 +393,7 @@ SLIST_HEAD(klist, knote);
 
 #ifdef KERNEL_PRIVATE
 #include <sys/queue.h> 
+#include <kern/kern_types.h>
 
 #ifdef MALLOC_DECLARE
 MALLOC_DECLARE(M_KQUEUE);
@@ -409,7 +458,7 @@ struct proc;
 struct wait_queue;
 
 SLIST_HEAD(klist, knote);
-extern void	knote_init(void) __attribute__((section("__TEXT, initcode")));
+extern void	knote_init(void);
 extern void	klist_init(struct klist *list);
 
 #define KNOTE(list, hint)	knote(list, hint)

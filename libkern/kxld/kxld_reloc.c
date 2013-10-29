@@ -227,6 +227,7 @@ kxld_relocator_init(KXLDRelocator *relocator, u_char *file,
         relocator->may_scatter = FALSE;
         break;
 #endif /* KXLD_USER_OR_ARM */
+
     default:
         rval = KERN_FAILURE;
         kxld_log(kKxldLogLinking, kKxldLogErr,

@@ -3,27 +3,29 @@ export MakeInc_def=${SRCROOT}/makedefs/MakeInc.def
 export MakeInc_rule=${SRCROOT}/makedefs/MakeInc.rule
 export MakeInc_dir=${SRCROOT}/makedefs/MakeInc.dir
 
-
 include $(MakeInc_cmd)
 include $(MakeInc_def)
 
 DATAFILES =
 
+PRIVATE_DATAFILES = exc_resource.h
+
 EXPORT_ONLY_FILES = \
 	affinity.h \
 	assert.h \
 	audit_sessionport.h \
+	call_entry.h \
 	clock.h \
 	cpu_number.h \
 	cpu_data.h \
 	debug.h \
-	etimer.h \
 	extmod_statistics.h \
 	ipc_mig.h \
 	ipc_misc.h \
 	kalloc.h \
 	kext_alloc.h \
 	kern_types.h \
+	kpc.h \
 	ledger.h \
 	lock.h \
 	locks.h \
@@ -38,12 +40,14 @@ EXPORT_ONLY_FILES = \
 	simple_lock.h \
 	startup.h \
 	task.h \
+	telemetry.h \
 	thread.h \
 	thread_call.h \
+	timer_call.h \
 	wait_queue.h \
 	zalloc.h
 
-INSTALL_MI_LIST = ${DATAFILES}
+INSTALL_MI_LIST = ${DATAFILES} ${PRIVATE_DATAFILES}
 
 INSTALL_MI_DIR = kern
 

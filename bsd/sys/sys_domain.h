@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2005 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2005, 2012 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -86,6 +86,7 @@ struct kctl
 	ctl_send_func			send;					/* Send data to nke */
 	ctl_setopt_func			setopt;					/* set kctl configuration */
 	ctl_getopt_func			getopt;					/* get kctl configuration */
+	ctl_rcvd_func			rcvd;					/* Notify nke when client reads data */
 
 	TAILQ_HEAD(, ctl_cb)	kcb_head;
 	u_int32_t				lastunit;
@@ -101,13 +102,12 @@ struct ctl_cb {
 	u_int32_t				usecount;
 };
 
-
-extern struct domain systemdomain;
+extern struct domain *systemdomain;
 
 /* built in system domain protocols init function */
 __BEGIN_DECLS
-int kern_event_init(void) __attribute__((section("__TEXT, initcode")));
-int kern_control_init(void) __attribute__((section("__TEXT, initcode")));
+void kern_event_init(struct domain *);
+void kern_control_init(struct domain *);
 __END_DECLS
 
 #endif /* KERNEL_PRIVATE */

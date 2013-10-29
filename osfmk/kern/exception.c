@@ -145,6 +145,19 @@ exception_deliver(
 		return KERN_SUCCESS;
 
 	/*
+	 * If there are no exception actions defined for this entity,
+	 * we can't deliver here.
+	 */
+	if (excp == NULL)
+		return KERN_FAILURE;
+
+	assert(exception < EXC_TYPES_COUNT);
+	if (exception >= EXC_TYPES_COUNT)
+		return KERN_FAILURE;
+
+	excp = &excp[exception];
+
+	/*
 	 * Snapshot the exception action data under lock for consistency.
 	 * Hold a reference to the port over the exception_raise_* calls
 	 * so it can't be destroyed.  This seems like overkill, but keeps
@@ -305,9 +318,8 @@ exception_triage(
 	thread_t		thread;
 	task_t			task;
 	host_priv_t		host_priv;
-	struct exception_action *excp;
-	lck_mtx_t			*mutex;
-	kern_return_t		kr;
+	lck_mtx_t		*mutex;
+	kern_return_t	kr;
 
 	assert(exception != EXC_RPC_ALERT);
 
@@ -317,8 +329,7 @@ exception_triage(
 	 * Try to raise the exception at the activation level.
 	 */
 	mutex = &thread->mutex;
-	excp = &thread->exc_actions[exception];
-	kr = exception_deliver(thread, exception, code, codeCnt, excp, mutex);
+	kr = exception_deliver(thread, exception, code, codeCnt, thread->exc_actions, mutex);
 	if (kr == KERN_SUCCESS || kr == MACH_RCV_PORT_DIED)
 		goto out;
 
@@ -327,8 +338,7 @@ exception_triage(
 	 */
 	task = current_task();
 	mutex = &task->lock;
-	excp = &task->exc_actions[exception];
-	kr = exception_deliver(thread, exception, code, codeCnt, excp, mutex);
+	kr = exception_deliver(thread, exception, code, codeCnt, task->exc_actions, mutex);
 	if (kr == KERN_SUCCESS || kr == MACH_RCV_PORT_DIED)
 		goto out;
 
@@ -337,8 +347,7 @@ exception_triage(
 	 */
 	host_priv = host_priv_self();
 	mutex = &host_priv->lock;
-	excp = &host_priv->exc_actions[exception];
-	kr = exception_deliver(thread, exception, code, codeCnt, excp, mutex);
+	kr = exception_deliver(thread, exception, code, codeCnt, host_priv->exc_actions, mutex);
 	if (kr == KERN_SUCCESS || kr == MACH_RCV_PORT_DIED)
 		goto out;
 
@@ -349,7 +358,8 @@ exception_triage(
 	(void) task_terminate(task);
 
 out:
-	if ((exception != EXC_CRASH) && (exception != EXC_RESOURCE))
+	if ((exception != EXC_CRASH) && (exception != EXC_RESOURCE) &&
+	    (exception != EXC_GUARD))
 		thread_exception_return();
 	return;
 }
@@ -361,7 +371,6 @@ bsd_exception(
 	mach_msg_type_number_t  codeCnt)
 {
 	task_t			task;
-	struct exception_action *excp;
 	lck_mtx_t		*mutex;
 	thread_t		self = current_thread();
 	kern_return_t		kr;
@@ -371,9 +380,8 @@ bsd_exception(
 	 */
 	task = current_task();
 	mutex = &task->lock;
-	excp = &task->exc_actions[exception];
 
-	kr = exception_deliver(self, exception, code, codeCnt, excp, mutex);
+	kr = exception_deliver(self, exception, code, codeCnt, task->exc_actions, mutex);
 
 	if (kr == KERN_SUCCESS || kr == MACH_RCV_PORT_DIED)
 		return(KERN_SUCCESS);
@@ -408,7 +416,6 @@ kern_return_t task_exception_notify(exception_type_t exception,
 kern_return_t sys_perf_notify(thread_t thread, int pid) 
 {
 	host_priv_t		hostp;
-	struct exception_action *excp;
 	ipc_port_t		xport;
 	wait_interrupt_t	wsave;
 	kern_return_t		ret;
@@ -419,8 +426,7 @@ kern_return_t sys_perf_notify(thread_t thread, int pid)
 	code[1] = pid;		/* Pass out the pid */
 
 	struct task *task = thread->task;
-	excp = &hostp->exc_actions[EXC_RPC_ALERT];	
-	xport = excp->port;	
+	xport = hostp->exc_actions[EXC_RPC_ALERT].port;	
 
 	/* Make sure we're not catching our own exception */
 	if (!IP_VALID(xport) ||
@@ -436,7 +442,7 @@ kern_return_t sys_perf_notify(thread_t thread, int pid)
 			EXC_RPC_ALERT, 
 			code, 
 			2, 
-			excp,
+			hostp->exc_actions,
 			&hostp->lock);
 	(void)thread_interrupt_level(wsave);
 

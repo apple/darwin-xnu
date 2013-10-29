@@ -43,6 +43,13 @@ struct user64_dyld_uuid_info {
 	uuid_t			imageUUID;			/* UUID of image */
 };
 
+/* Re-use dyld format for kext load addresses */
+#if __LP64__
+typedef struct user64_dyld_uuid_info kernel_uuid_info;
+#else
+typedef struct user32_dyld_uuid_info kernel_uuid_info;
+#endif
+
 struct user32_dyld_image_info {
 	user32_addr_t	imageLoadAddress;	/* base address image is mapped int */
 	user32_addr_t	imageFilePath;		/* path dyld used to load the image */

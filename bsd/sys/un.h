@@ -68,10 +68,7 @@
 #include <sys/_types.h>
 
 /* [XSI] The sa_family_t type shall be defined as described in <sys/socket.h> */
-#ifndef _SA_FAMILY_T
-#define _SA_FAMILY_T
-typedef __uint8_t		sa_family_t;
-#endif
+#include <sys/_types/_sa_family_t.h>
 
 /*
  * [XSI] Definitions for UNIX IPC domain.
@@ -88,8 +85,11 @@ struct	sockaddr_un {
 #define SOL_LOCAL		0
 
 /* Socket options. */
-#define LOCAL_PEERCRED          0x001           /* retrieve peer credentails */
-#define LOCAL_PEERPID           0x002           /* retrieve peer pid */
+#define LOCAL_PEERCRED		0x001		/* retrieve peer credentails */
+#define LOCAL_PEERPID		0x002		/* retrieve peer pid */
+#define LOCAL_PEEREPID		0x003		/* retrieve eff. peer pid */
+#define LOCAL_PEERUUID		0x004		/* retrieve peer UUID */
+#define LOCAL_PEEREUUID		0x005		/* retrieve eff. peer UUID */
 
 #endif	/* (!_POSIX_C_SOURCE || _DARWIN_C_SOURCE) */
 
@@ -108,7 +108,7 @@ int	uipc_ctloutput (struct socket *so, struct sockopt *sopt);
 int	unp_connect2(struct socket *so, struct socket *so2);
 void	unp_dispose(struct mbuf *m);
 int	unp_externalize(struct mbuf *rights);
-void	unp_init(void) __attribute__((section("__TEXT, initcode")));
+void	unp_init(void);
 extern	struct pr_usrreqs uipc_usrreqs;
 int     unp_lock(struct socket *, int, void *);
 int     unp_unlock(struct socket *, int, void *);

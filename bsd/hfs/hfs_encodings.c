@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2010 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2013 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -25,6 +25,10 @@
  * 
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
+
+#include <sys/types.h>
+#include <sys/errno.h>
+
 #if HFS
 
 #include <sys/param.h>
@@ -51,8 +55,6 @@ SLIST_HEAD(encodinglst, hfs_encoding) hfs_encoding_list = {0};
 
 lck_mtx_t  encodinglst_mutex;
 
-
-
 /* hfs encoding converter entry */
 struct	hfs_encoding {
 	SLIST_ENTRY(hfs_encoding)  link;
@@ -65,7 +67,9 @@ struct	hfs_encoding {
 
 #define MAX_HFS_UNICODE_CHARS	(15*5)
 
+#if CONFIG_HFS_STD
 static int unicode_to_mac_roman(UniChar *uni_str, u_int32_t unicodeChars, Str31 hfs_str);
+#endif
 
 void
 hfs_converterinit(void)
@@ -78,14 +82,62 @@ hfs_converterinit(void)
 
 	lck_mtx_init(&encodinglst_mutex, encodinglst_lck_grp, encodinglst_lck_attr);
 
+#if CONFIG_HFS_STD
 	/*
 	 * add resident MacRoman converter and take a reference
-	 * since its always "loaded".
+	 * since its always "loaded". MacRoman is the default converter
+	 * for HFS standard volumes.
+	 *
+	 * Only do this if we are actually supporting HFS standard 
+	 * volumes. The converter is not used on configurations 
+	 * that do not support HFS standard. 
 	 */
 	hfs_addconverter(0, kTextEncodingMacRoman, mac_roman_to_unicode, unicode_to_mac_roman);
 	SLIST_FIRST(&hfs_encoding_list)->refcount++;
+#endif
+
 }
 
+#if !CONFIG_HFS_STD
+
+/* 
+ * Function stubs are needed for KPI export.  
+ * It is a little swizzly to have two separate copies of the stub functions in this file
+ * but the prototypes of these functions are different if we're using the real headers
+ * vs. the dummy prototypes at the end of the file.  (hfs_to_unicode_func_t vs. void*) 
+ * 
+ * As a result, we need our own copies in the no-HFS-Standard configuration
+ */
+int hfs_addconverter( __unused int id, 
+					  __unused u_int32_t encoding, 
+					  __unused hfs_to_unicode_func_t get_unicode, 
+					  __unused unicode_to_hfs_func_t get_hfsname )
+{
+	return(0);
+}
+
+int hfs_getconverter(	__unused u_int32_t encoding, 
+						__unused hfs_to_unicode_func_t *get_unicode, 
+						__unused unicode_to_hfs_func_t *get_hfsname)
+{
+	return(EINVAL);
+}
+
+int hfs_relconverter(__unused u_int32_t encoding)
+{
+	return(EINVAL);
+}
+
+int hfs_remconverter(__unused int id, __unused u_int32_t encoding)
+{
+	return(0);
+}
+
+#else 
+
+/* 
+ * For configurations that do support HFS standard, we need all of these..
+ */
 
 /*
  * hfs_addconverter - add an HFS encoding converter
@@ -225,7 +277,6 @@ hfs_relconverter(u_int32_t encoding)
 	return (EINVAL);
 }
 
-
 /*
  * Convert HFS encoded string into UTF-8
  *
@@ -269,7 +320,6 @@ hfs_to_utf8(ExtendedVCB *vcb, const Str31 hfs_str, ByteCount maxDstLen, ByteCoun
 	return error;
 }
 
-
 /*
  * When an HFS name cannot be encoded with the current
  * volume encoding then MacRoman is used as a fallback.
@@ -310,7 +360,6 @@ mac_roman_to_utf8(const Str31 hfs_str, ByteCount maxDstLen, ByteCount *actualDst
 	return error;
 }
 
-
 /*
  * Convert Unicode string into HFS encoding
  *
@@ -349,6 +398,7 @@ utf8_to_hfs(ExtendedVCB *vcb, ByteCount srcLen, const unsigned char* srcStr, Str
 
 	return error;
 }
+
 
 int
 utf8_to_mac_roman(ByteCount srcLen, const unsigned char* srcStr, Str31 dstStr)
@@ -688,16 +738,21 @@ mac_roman_to_unicode(const Str31 hfs_str, UniChar *uni_str,
 	return noErr;
 }
 
-#else /* not HFS - temp workaround until 4277828 is fixed */
-/* stubs for exported routines that aren't present when we build kernel without HFS */
+#endif /* CONFIG_STD_HFS */
 
-#include <sys/types.h>
-#include <sys/errno.h>
+#else /* not HFS */
 
+/*
+ * These function prototypes are here because hfs.h is not #included
+ * so its prototypes are not provided. These are needed because they are exported
+ * as KPI for the conversion subroutines during mounting of HFS standard.
+ */
 int hfs_addconverter(int id, u_int32_t encoding, void * get_unicode, void * get_hfsname);
 int hfs_getconverter(u_int32_t encoding, void *get_unicode, void *get_hfsname);
 int hfs_relconverter(u_int32_t encoding);
 int hfs_remconverter(int id, u_int32_t encoding);
+
+/* Function stubs are needed for KPI export */
 
 int hfs_addconverter( __unused int id, 
 					  __unused u_int32_t encoding, 
@@ -721,5 +776,6 @@ int hfs_remconverter(__unused int id, __unused u_int32_t encoding)
 {
 	return(0);
 }
+#endif
 
-#endif /* HFS */
+

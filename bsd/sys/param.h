@@ -77,10 +77,7 @@
 #define NeXTBSD4_0 0		/* NeXTBSD 4.0 */
 
 #include <sys/_types.h>
-
-#ifndef NULL
-#define	NULL	__DARWIN_NULL
-#endif /* ! NULL */
+#include <sys/_types/_null.h>
 
 #ifndef LOCORE
 #include <sys/types.h>
@@ -219,7 +216,8 @@
 #ifndef howmany
 #define	howmany(x, y)	((((x) % (y)) == 0) ? ((x) / (y)) : (((x) / (y)) + 1))
 #endif
-#define	roundup(x, y)	((((x)+((y)-1))/(y))*(y))
+#define	roundup(x, y)	((((x) % (y)) == 0) ? \
+			(x) : ((x) + ((y) - ((x) % (y)))))
 #define powerof2(x)	((((x)-1)&(x))==0)
 
 /* Macros for min/max. */

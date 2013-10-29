@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2006 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2012 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -134,10 +134,6 @@ extern void		user_trap(x86_saved_state_t *regs);
 
 extern void		interrupt(x86_saved_state_t *regs);
 
-#ifdef __i386__
-extern void		panic_double_fault32(int code);
-extern void		panic_machine_check32(int	code);
-#endif
 extern void		panic_double_fault64(x86_saved_state_t *regs);
 extern void		panic_machine_check64(x86_saved_state_t *regs);
 
@@ -160,11 +156,7 @@ extern void		panic_i386_backtrace(void *, int, const char *, boolean_t, x86_save
 #if MACH_KDP
 extern boolean_t	kdp_i386_trap(
 				unsigned int,
-#ifdef __i386__
-				x86_saved_state32_t *,
-#else
 				x86_saved_state64_t *,
-#endif
 				kern_return_t,
 				vm_offset_t);
 #endif /* MACH_KDP */

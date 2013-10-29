@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008-2011 Apple Inc. All rights reserved.
+ * Copyright (c) 2008-2013 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -124,8 +124,6 @@
 #define IPLEN_FLIPPED
 
 #if INET
-extern struct protosw inetsw[];
-
 void
 ah4_input(struct mbuf *m, int off)
 {
@@ -191,7 +189,8 @@ ah4_input(struct mbuf *m, int off)
 		goto fail;
 	}
 	KEYDEBUG(KEYDEBUG_IPSEC_STAMP,
-		printf("DP ah4_input called to allocate SA:%p\n", sav));
+	    printf("DP ah4_input called to allocate SA:0x%llx\n",
+	    (uint64_t)VM_KERNEL_ADDRPERM(sav)));
 	if (sav->state != SADB_SASTATE_MATURE
 	 && sav->state != SADB_SASTATE_DYING) {
 		ipseclog((LOG_DEBUG,
@@ -598,7 +597,8 @@ ah4_input(struct mbuf *m, int off)
 
 	if (sav) {
 		KEYDEBUG(KEYDEBUG_IPSEC_STAMP,
-			printf("DP ah4_input call free SA:%p\n", sav));
+		    printf("DP ah4_input call free SA:0x%llx\n",
+		    (uint64_t)VM_KERNEL_ADDRPERM(sav)));
 		key_freesav(sav, KEY_SADB_UNLOCKED);
 	}
 	IPSEC_STAT_INCREMENT(ipsecstat.in_success);
@@ -607,7 +607,8 @@ ah4_input(struct mbuf *m, int off)
 fail:
 	if (sav) {
 		KEYDEBUG(KEYDEBUG_IPSEC_STAMP,
-			printf("DP ah4_input call free SA:%p\n", sav));
+		    printf("DP ah4_input call free SA:0x%llx\n",
+		    (uint64_t)VM_KERNEL_ADDRPERM(sav)));
 		key_freesav(sav, KEY_SADB_UNLOCKED);
 	}
 	if (m)
@@ -672,7 +673,8 @@ ah6_input(struct mbuf **mp, int *offp, int proto)
 		goto fail;
 	}
 	KEYDEBUG(KEYDEBUG_IPSEC_STAMP,
-		printf("DP ah6_input called to allocate SA:%p\n", sav));
+	    printf("DP ah6_input called to allocate SA:0x%llx\n",
+	    (uint64_t)VM_KERNEL_ADDRPERM(sav)));
 	if (sav->state != SADB_SASTATE_MATURE
 	 && sav->state != SADB_SASTATE_DYING) {
 		ipseclog((LOG_DEBUG,
@@ -1004,7 +1006,8 @@ ah6_input(struct mbuf **mp, int *offp, int proto)
 
 	if (sav) {
 		KEYDEBUG(KEYDEBUG_IPSEC_STAMP,
-			printf("DP ah6_input call free SA:%p\n", sav));
+		    printf("DP ah6_input call free SA:0x%llx\n",
+		    (uint64_t)VM_KERNEL_ADDRPERM(sav)));
 		key_freesav(sav, KEY_SADB_UNLOCKED);
 	}
 	IPSEC_STAT_INCREMENT(ipsec6stat.in_success);
@@ -1013,7 +1016,8 @@ ah6_input(struct mbuf **mp, int *offp, int proto)
 fail:
 	if (sav) {
 		KEYDEBUG(KEYDEBUG_IPSEC_STAMP,
-			printf("DP ah6_input call free SA:%p\n", sav));
+		    printf("DP ah6_input call free SA:0x%llx\n",
+		    (uint64_t)VM_KERNEL_ADDRPERM(sav)));
 		key_freesav(sav, KEY_SADB_UNLOCKED);
 	}
 	if (m)

@@ -225,7 +225,7 @@ struct disklabel {
 #define	DTYPE_FLOPPY		10		/* floppy */
 
 #ifdef DKTYPENAMES
-static char *dktypenames[] = {
+static const char *dktypenames[] = {
 	"unknown",
 	"SMD",
 	"MSCP",
@@ -265,7 +265,7 @@ static char *dktypenames[] = {
 #define	FS_HFS		15		/* Macintosh HFS */
 
 #ifdef	DKTYPENAMES
-static char *fstypenames[] = {
+static const char *fstypenames[] = {
 	"unused",
 	"swap",
 	"Version 6",

@@ -301,6 +301,12 @@ static inline void	lapic_set_timer_func(i386_intr_func_t func)
 {
 	lapic_set_intr_func(LAPIC_VECTOR(TIMER), func);
 }
+/* We don't support dynamic adjustment of the LAPIC timer base vector here
+ * it's effectively incompletely supported elsewhere as well.
+ */
+static inline void	lapic_timer_swi(void) {
+	__asm__ __volatile__("int %0" :: "i"(LAPIC_DEFAULT_INTERRUPT_BASE + LAPIC_TIMER_INTERRUPT):"memory");
+}
 
 static inline void	lapic_set_thermal_func(i386_intr_func_t func)
 {

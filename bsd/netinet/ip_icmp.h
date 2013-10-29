@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2008-2013 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -227,10 +227,9 @@ struct icmp {
 	(type) == ICMP_IREQ || (type) == ICMP_IREQREPLY || \
 	(type) == ICMP_MASKREQ || (type) == ICMP_MASKREPLY)
 
-#ifdef KERNEL_PRIVATE
+#ifdef BSD_KERNEL_PRIVATE
 void	icmp_error(struct mbuf *, int, int, n_long, u_int32_t);
 void	icmp_input(struct mbuf *, int);
 int     ip_next_mtu(int, int);
-#endif /* KERNEL_PRIVATE */
-
-#endif
+#endif /* BSD_KERNEL_PRIVATE */
+#endif /* _NETINET_IP_ICMP_H_ */

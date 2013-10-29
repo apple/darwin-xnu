@@ -1,3 +1,14 @@
+# -*- mode: makefile;-*-
+#
+# Copyright (C) 1999-2012 Apple Inc. All rights reserved.
+#
+# MakeInc.rule defines the targets and rules for
+# leaf directories once MakeInc.dir has recursed
+# into them. "do_XXX" may be double-colon rules
+# to allow the Makefile in the source directory
+# to augment the actions that will be performed.
+#
+
 #
 # Generic Install rules
 #
@@ -50,461 +61,159 @@ ifndef INSTALL_KF_MD_GEN_LIST
     INSTALL_KF_MD_GEN_LIST = $(EXPORT_MD_GEN_LIST)
 endif
 
-ifneq ($(MACHINE_CONFIG), DEFAULT)
-	export OBJPATH = $(OBJROOT)/$(KERNEL_CONFIG)_$(ARCH_CONFIG)_$(MACHINE_CONFIG)
-else
-	export OBJPATH = $(OBJROOT)/$(KERNEL_CONFIG)_$(ARCH_CONFIG)
-endif
+.PHONY: ALWAYS
 
-INSTALL_MI_GEN_FILES = $(addprefix $(DSTROOT)/$(INCDIR)/$(INSTALL_MI_DIR)/, $(INSTALL_MI_GEN_LIST))
+ALWAYS:
 
-$(INSTALL_MI_GEN_FILES): $(DSTROOT)/$(INCDIR)/$(INSTALL_MI_DIR)/% : %
-	@true echo Installing $< in $(dir $@)
-	$(_v)[ -d $(DSTROOT)/$(INCDIR)/$(INSTALL_MI_DIR) ] ||$(MKDIR) $(DSTROOT)/$(INCDIR)/$(INSTALL_MI_DIR);	\
-	filename=`$(BASENAME) $<`;				\
-	filename_strip=$(addsuffix .strip,$${filename});	\
-	$(RM) $(RMFLAGS) $@;					\
-	[ -d ./incmidir ] || $(MKDIR) ./incmidir;			\
-	echo garbage > ./incmidir/$${filename_strip};		\
-	$(UNIFDEF) $(SINCFRAME_UNIFDEF)				\
-		$< > ./incmidir/$${filename} ||			\
-		$(DECOMMENT) ./incmidir/$${filename} r >		\
-		./incmidir/$${filename_strip};			\
-	if [ -s ./incmidir/$${filename_strip} ];			\
-	then (							\
-		$(INSTALL) $(INSTALL_FLAGS) ./incmidir/$${filename} $(dir $@);\
-	);							\
-	else							\
-		echo Header file $< not exported;		\
-	fi;
+# $(1) is the list of install paths
+# $(2) is "1" if it's a "GEN"-style rule that looks locally, or else $(SOURCE)
+# $(3) is the local temp directory for processing
+# $(4) is the unifdef flags
+#
+# $$$$$$$$ is a double-escaped "$$" to represent the current pid
+# of the shell process for creating uniquely named temporary files
 
-INSTALL_KF_MI_GEN_FILES = $(addprefix  $(DSTROOT)/$(KINCDIR)/$(EXPORT_MI_DIR)/, $(INSTALL_KF_MI_GEN_LIST))
+define INSTALLHDRS_RULE_template
 
-$(INSTALL_KF_MI_GEN_FILES): $(DSTROOT)/$(KINCDIR)/$(EXPORT_MI_DIR)/% : %
-	@true echo Installing $< in $(midir $@)
-	$(_v)[ -d $(DSTROOT)/$(KINCDIR)/$(EXPORT_MI_DIR) ] ||$(MKDIR) $(DSTROOT)/$(KINCDIR)/$(EXPORT_MI_DIR);	\
-	filename=`$(BASENAME) $<`;				\
-	filename_strip=$(addsuffix .strip,$${filename});	\
-	$(RM) $(RMFLAGS) $@;					\
-	[ -d ./kincmidir ] || $(MKDIR) ./kincmidir;			\
-	echo garbage > ./kincmidir/$${filename_strip};		\
-	$(UNIFDEF) $(KINCFRAME_UNIFDEF)				\
-		$< > ./kincmidir/$${filename} ||			\
-		$(DECOMMENT) ./kincmidir/$${filename} r >		\
-		./kincmidir/$${filename_strip};			\
-	if [ -s ./kincmidir/$${filename_strip} ];			\
-	then (							\
-		$(INSTALL) $(INSTALL_FLAGS) ./kincmidir/$${filename} $(dir $@);\
-	);							\
-	else							\
-		echo Header file $< not exported;		\
-	fi;
+.PHONY: $(3)_MKDIR
 
-INSTALL_MI_GEN_LCL_FILES = $(addprefix $(DSTROOT)/$(LCLDIR)/$(INSTALL_MI_DIR)/, $(INSTALL_MI_LCL_GEN_LIST))
+$(3)_MKDIR:
+	$$(_v)$$(MKDIR) ./$(3)
+	$$(_v)$$(MKDIR) $(dir $(firstword $(1)))
 
-$(INSTALL_MI_GEN_LCL_FILES): $(DSTROOT)/$(LCLDIR)/$(INSTALL_MI_DIR)/% : %
-	@true echo Installing $< in $(dir $@)
-	$(_v)[ -d $(DSTROOT)/$(LCLDIR)/$(INSTALL_MI_DIR) ] ||$(MKDIR) $(DSTROOT)/$(LCLDIR)/$(INSTALL_MI_DIR);	\
-	filename=`$(BASENAME) $<`;				\
-	filename_strip=$(addsuffix .strip,$${filename});	\
-	$(RM) $(RMFLAGS) $@;					\
-	[ -d ./pincmidir ] || $(MKDIR) ./pincmidir;			\
-	echo garbage > ./pincmidir/$${filename_strip};		\
-	$(UNIFDEF) $(SPINCFRAME_UNIFDEF)			\
-		$< > ./pincmidir/$${filename} ||			\
-		$(DECOMMENT) ./pincmidir/$${filename} r >		\
-		./pincmidir/$${filename_strip};			\
-	if [ -s ./pincmidir/$${filename_strip} ];			\
-	then (							\
-		$(INSTALL) $(INSTALL_FLAGS) ./pincmidir/$${filename} $(dir $@);\
-	);							\
-	else							\
-		echo Header file $< not exported;		\
-	fi;
+$(1): $(dir $(firstword $(1)))% : $(if $(2),%,$$(SOURCE)/%) | $(3)_MKDIR
+	@echo INSTALLHDR $$*
+	$$(_v)$$(UNIFDEF) $(4) $$< > ./$(3)/$$*.unifdef.$$$$$$$$;	\
+	if [ $$$$? -eq 2 ]; then						\
+		echo Parse failure for $$<;				\
+		exit 1;							\
+	fi;								\
+	$$(DECOMMENT) ./$(3)/$$*.unifdef.$$$$$$$$ r >			\
+		./$(3)/$$*.strip.$$$$$$$$ || exit 1;			\
+	if [ -s ./$(3)/$$*.strip.$$$$$$$$ ]; then			\
+		$$(INSTALL) $$(INSTALL_FLAGS) ./$(3)/$$*.unifdef.$$$$$$$$ $$@ || exit 1;	\
+	fi;								\
+	$$(RM) ./$(3)/$$*.unifdef.$$$$$$$$ ./$(3)/$$*.strip.$$$$$$$$
+endef
 
-INSTALL_KF_MI_LCL_GEN_FILES = $(addprefix  $(DSTROOT)/$(KPINCDIR)/$(EXPORT_MI_DIR)/, $(INSTALL_KF_MI_LCL_GEN_LIST))
+#
+# Machine-independent (public) files
+#
 
-$(INSTALL_KF_MI_LCL_GEN_FILES): $(DSTROOT)/$(KPINCDIR)/$(EXPORT_MI_DIR)/% : %
-	@true echo Installing $< in $(dir $@)
-	$(_v)[ -d $(DSTROOT)/$(KPINCDIR)/$(EXPORT_MI_DIR) ] ||$(MKDIR) $(DSTROOT)/$(KPINCDIR)/$(EXPORT_MI_DIR);	\
-	filename=`$(BASENAME) $<`;				\
-	filename_strip=$(addsuffix .strip,$${filename});	\
-	$(RM) $(RMFLAGS) $@;					\
-	[ -d ./kpincmidir ] || $(MKDIR) ./kpincmidir;			\
-	echo garbage > ./kpincmidir/$${filename_strip};		\
-	$(UNIFDEF) $(KPINCFRAME_UNIFDEF)			\
-		$< > ./kpincmidir/$${filename} ||			\
-		$(DECOMMENT) ./kpincmidir/$${filename} r >		\
-		./kpincmidir/$${filename_strip};			\
-	if [ -s ./kpincmidir/$${filename_strip} ];			\
-	then (							\
-		$(INSTALL) $(INSTALL_FLAGS) ./kpincmidir/$${filename} $(dir $@);\
-	);							\
-	else							\
-		echo Header file $< not exported;		\
-	fi;
+INSTALL_MI_INC_FILES = $(addprefix $(DSTROOT)/$(INCDIR)/$(INSTALL_MI_DIR)/, $(INSTALL_MI_LIST))
+INSTALL_MI_INC_GEN_FILES = $(addprefix $(DSTROOT)/$(INCDIR)/$(INSTALL_MI_DIR)/, $(INSTALL_MI_GEN_LIST))
 
-INSTALL_MD_GEN_INC_FILES = $(addprefix $(DSTROOT)/$(INCDIR)/$(INSTALL_MD_DIR)/, $(INSTALL_MD_GEN_LIST))
+$(eval $(call INSTALLHDRS_RULE_template,$(INSTALL_MI_INC_FILES),,incmidir,$(SINCFRAME_UNIFDEF)))
+$(eval $(call INSTALLHDRS_RULE_template,$(INSTALL_MI_INC_GEN_FILES),1,incmigendir,$(SINCFRAME_UNIFDEF)))
 
-$(INSTALL_MD_GEN_INC_FILES): $(DSTROOT)/$(INCDIR)/$(INSTALL_MD_DIR)/% : %
-	@true echo Installing $< in $(dir $@)
-	$(_v)[ -d $(DSTROOT)/$(INCDIR)/$(INSTALL_MD_DIR) ] ||$(MKDIR) $(DSTROOT)/$(INCDIR)/$(INSTALL_MD_DIR);	\
-	filename=`$(BASENAME) $<`;				\
-	filename_strip=$(addsuffix .strip,$${filename});	\
-	$(RM) $(RMFLAGS) $@;					\
-	[ -d ./incdir ] || $(MKDIR) ./incdir;			\
-	echo garbage > ./incdir/$${filename_strip};		\
-	$(UNIFDEF) $(SINCFRAME_UNIFDEF)				\
-		$< > ./incdir/$${filename} ||		\
-		$(DECOMMENT) ./incdir/$${filename} r >		\
-		./incdir/$${filename_strip};			\
-	if [ -s ./incdir/$${filename_strip} ];			\
-	then (							\
-		$(INSTALL) $(INSTALL_FLAGS) ./incdir/$${filename} $(dir $@);\
-	);							\
-	else							\
-		echo Header file $< not exported;		\
-	fi;
+INSTALL_KF_MI_FILES = $(addprefix $(DSTROOT)/$(KINCDIR)/$(EXPORT_MI_DIR)/, $(INSTALL_KF_MI_LIST))
+INSTALL_KF_MI_GEN_FILES = $(addprefix $(DSTROOT)/$(KINCDIR)/$(EXPORT_MI_DIR)/, $(INSTALL_KF_MI_GEN_LIST))
 
+$(eval $(call INSTALLHDRS_RULE_template,$(INSTALL_KF_MI_FILES),,kincmidir,$(KINCFRAME_UNIFDEF)))
+$(eval $(call INSTALLHDRS_RULE_template,$(INSTALL_KF_MI_GEN_FILES),1,kincmigendir,$(KINCFRAME_UNIFDEF)))
+
+#
+# Machine-independent local (private) files
+#
+
+INSTALL_MI_LCL_FILES = $(addprefix $(DSTROOT)/$(LCLDIR)/$(INSTALL_MI_DIR)/, $(INSTALL_MI_LCL_LIST))
+INSTALL_MI_LCL_GEN_FILES = $(addprefix $(DSTROOT)/$(LCLDIR)/$(INSTALL_MI_DIR)/, $(INSTALL_MI_LCL_GEN_LIST))
+
+$(eval $(call INSTALLHDRS_RULE_template,$(INSTALL_MI_LCL_FILES),,pincmidir,$(SPINCFRAME_UNIFDEF)))
+$(eval $(call INSTALLHDRS_RULE_template,$(INSTALL_MI_LCL_GEN_FILES),1,pincmigendir,$(SPINCFRAME_UNIFDEF)))
+
+INSTALL_KF_MI_LCL_FILES = $(addprefix $(DSTROOT)/$(KPINCDIR)/$(EXPORT_MI_DIR)/, $(INSTALL_KF_MI_LCL_LIST))
+INSTALL_KF_MI_LCL_GEN_FILES = $(addprefix $(DSTROOT)/$(KPINCDIR)/$(EXPORT_MI_DIR)/, $(INSTALL_KF_MI_LCL_GEN_LIST))
+
+$(eval $(call INSTALLHDRS_RULE_template,$(INSTALL_KF_MI_LCL_FILES),,kpincmidir,$(KPINCFRAME_UNIFDEF)))
+$(eval $(call INSTALLHDRS_RULE_template,$(INSTALL_KF_MI_LCL_GEN_FILES),1,kpincmigendir,$(KPINCFRAME_UNIFDEF)))
+
+#
+# Machine-dependent (public) files
+#
+
+INSTALL_MD_INC_FILES = $(addprefix $(DSTROOT)/$(INCDIR)/$(INSTALL_MD_DIR)/, $(INSTALL_MD_LIST))
+INSTALL_MD_INC_GEN_FILES = $(addprefix $(DSTROOT)/$(INCDIR)/$(INSTALL_MD_DIR)/, $(INSTALL_MD_GEN_LIST))
+
+$(eval $(call INSTALLHDRS_RULE_template,$(INSTALL_MD_INC_FILES),,incdir,$(SINCFRAME_UNIFDEF)))
+$(eval $(call INSTALLHDRS_RULE_template,$(INSTALL_MD_INC_GEN_FILES),1,incgendir,$(SINCFRAME_UNIFDEF)))
+
+INSTALL_KF_MD_FILES = $(addprefix $(DSTROOT)/$(KINCDIR)/$(EXPORT_MD_DIR)/, $(INSTALL_KF_MD_LIST))
 INSTALL_KF_MD_GEN_FILES = $(addprefix $(DSTROOT)/$(KINCDIR)/$(EXPORT_MD_DIR)/, $(INSTALL_KF_MD_GEN_LIST))
 
-$(INSTALL_KF_MD_GEN_FILES): $(DSTROOT)/$(KINCDIR)/$(EXPORT_MD_DIR)/% : %
-	@true echo Installing $< in $(dir $@)
-	$(_v)[ -d $(DSTROOT)/$(KINCDIR)/$(EXPORT_MD_DIR) ] ||$(MKDIR) $(DSTROOT)/$(KINCDIR)/$(EXPORT_MD_DIR);	\
-	filename=`$(BASENAME) $<`;				\
-	filename_strip=$(addsuffix .strip,$${filename});	\
-	$(RM) $(RMFLAGS) $@;					\
-	[ -d ./kincdir ] || $(MKDIR) ./kincdir;			\
-	echo garbage > ./kincdir/$${filename_strip};		\
-	$(UNIFDEF) $(KINCFRAME_UNIFDEF)				\
-		$< > ./kincdir/$${filename} ||			\
-		$(DECOMMENT) ./kincdir/$${filename} r >		\
-		./kincdir/$${filename_strip};			\
-	if [ -s ./kincdir/$${filename_strip} ];			\
-	then (							\
-		$(INSTALL) $(INSTALL_FLAGS) ./kincdir/$${filename} $(dir $@);\
-	);							\
-	else							\
-		echo Header file $< not exported;		\
-	fi;
+$(eval $(call INSTALLHDRS_RULE_template,$(INSTALL_KF_MD_FILES),,kincdir,$(KINCFRAME_UNIFDEF)))
+$(eval $(call INSTALLHDRS_RULE_template,$(INSTALL_KF_MD_GEN_FILES),1,kincgendir,$(KINCFRAME_UNIFDEF)))
 
-INSTALL_MD_LCL_FILES = $(addprefix $(SOURCE), $(INSTALL_MD_LCL_LIST))
-INSTALL_MD_GEN_LCL_FILES = $(addprefix $(DSTROOT)/$(LCLDIR)/$(INSTALL_MD_DIR)/, $(INSTALL_MD_LCL_GEN_LIST))
+#
+# Machine-dependent local (private) files
+#
 
-$(INSTALL_MD_GEN_LCL_FILES): $(DSTROOT)/$(LCLDIR)/$(INSTALL_MD_DIR)/% : %
-	@true echo Installing $< in $(dir $@)
-	$(_v)[ -d $(DSTROOT)/$(LCLDIR)/$(INSTALL_MD_DIR) ] ||$(MKDIR) $(DSTROOT)/$(LCLDIR)/$(INSTALL_MD_DIR);	\
-	filename=`$(BASENAME) $<`;				\
-	filename_strip=$(addsuffix .strip,$${filename});	\
-	$(RM) $(RMFLAGS) $@;					\
-	[ -d ./pincdir ] || $(MKDIR) ./pincdir;			\
-	echo garbage > ./pincdir/$${filename_strip};		\
-	$(UNIFDEF) $(SPINCFRAME_UNIFDEF)			\
-		$< > ./pincdir/$${filename} ||			\
-		$(DECOMMENT) ./pincdir/$${filename} r >		\
-		./pincdir/$${filename_strip};			\
-	if [ -s ./pincdir/$${filename_strip} ];			\
-	then (							\
-		$(INSTALL) $(INSTALL_FLAGS) ./pincdir/$${filename} $(dir $@);\
-	);							\
-	else							\
-		echo Header file $< not exported;		\
-	fi;
+INSTALL_MD_LCL_FILES = $(addprefix $(DSTROOT)/$(LCLDIR)/$(INSTALL_MD_DIR)/, $(INSTALL_MD_LCL_LIST))
+INSTALL_MD_LCL_GEN_FILES = $(addprefix $(DSTROOT)/$(LCLDIR)/$(INSTALL_MD_DIR)/, $(INSTALL_MD_LCL_GEN_LIST))
 
-INSTALL_KF_MD_LCL_FILES = $(addprefix $(SOURCE), $(INSTALL_KF_MD_LCL_LIST))
+$(eval $(call INSTALLHDRS_RULE_template,$(INSTALL_MD_LCL_FILES),,pincdir,$(SPINCFRAME_UNIFDEF)))
+$(eval $(call INSTALLHDRS_RULE_template,$(INSTALL_MD_LCL_GEN_FILES),1,pincgendir,$(SPINCFRAME_UNIFDEF)))
+
+INSTALL_KF_MD_LCL_FILES = $(addprefix $(DSTROOT)/$(KPINCDIR)/$(EXPORT_MD_DIR)/, $(INSTALL_KF_MD_LCL_LIST))
 INSTALL_KF_MD_LCL_GEN_FILES = $(addprefix $(DSTROOT)/$(KPINCDIR)/$(EXPORT_MD_DIR)/, $(INSTALL_KF_MD_LCL_GEN_LIST))
 
-$(INSTALL_KF_MD_LCL_GEN_FILES): $(DSTROOT)/$(KPINCDIR)/$(EXPORT_MD_DIR)/% : %
-	@true echo Installing $< in $(dir $@)
-	$(_v)[ -d $(DSTROOT)/$(KPINCDIR)/$(EXPORT_MD_DIR) ] ||$(MKDIR) $(DSTROOT)/$(KPINCDIR)/$(EXPORT_MD_DIR);	\
-	filename=`$(BASENAME) $<`;				\
-	filename_strip=$(addsuffix .strip,$${filename});	\
-	$(RM) $(RMFLAGS) $@;					\
-	[ -d ./kpincdir ] || $(MKDIR) ./kpincdir;			\
-	echo garbage > ./kpincdir/$${filename_strip};		\
-	$(UNIFDEF) $(KPINCFRAME_UNIFDEF)			\
-		$< > ./kpincdir/$${filename} ||			\
-		$(DECOMMENT) ./kpincdir/$${filename} r >		\
-		./kpincdir/$${filename_strip};			\
-	if [ -s ./kpincdir/$${filename_strip} ];			\
-	then (							\
-		$(INSTALL) $(INSTALL_FLAGS) ./kpincdir/$${filename} $(dir $@);\
-	);							\
-	else							\
-		echo Header file $< not exported;		\
-	fi;
+$(eval $(call INSTALLHDRS_RULE_template,$(INSTALL_KF_MD_LCL_FILES),,kpincdir,$(KPINCFRAME_UNIFDEF)))
+$(eval $(call INSTALLHDRS_RULE_template,$(INSTALL_KF_MD_LCL_GEN_FILES),1,kpincgendir,$(KPINCFRAME_UNIFDEF)))
 
-setup_installhdrs_mi: 
+.PHONY: do_installhdrs_mi
 
-do_installhdrs_mi: $(INSTALL_MI_GEN_FILES) $(INSTALL_MI_GEN_LCL_FILES) $(INSTALL_KF_MI_GEN_FILES) $(INSTALL_KF_MI_LCL_GEN_FILES)
-	@true echo "[ $(SOURCE) ] make do_installhdrs_mi $(KERNEL_CONFIG) $(ARCH_CONFIG) $(TARGET)"
-	$(_v)$(MKDIR) ./incmidir ./pincmidir ./kincmidir ./kpincmidir;				\
-	if [ -n "$(strip $(INSTALL_MI_LIST))" ]; then			\
-	    if [ -d $(DSTROOT)/$(INCDIR)/$(INSTALL_MI_DIR) ]; then	\
-		(cd $(DSTROOT)/$(INCDIR)/$(INSTALL_MI_DIR);$(RM) $(RMFLAGS) $(INSTALL_MI_LIST) );       \
-	    else								\
-		$(MKDIR) $(DSTROOT)/$(INCDIR)/$(INSTALL_MI_DIR);	\
-	    fi;								\
-	    for j in $(INSTALL_MI_LIST);				\
-	    do								\
-		echo garbage > ./incmidir/$$j.strip;			\
-		$(UNIFDEF) $(SINCFRAME_UNIFDEF)				\
-		    $(SOURCE)/$$j > ./incmidir/$$j ||			\
-		    $(DECOMMENT) ./incmidir/$$j r >			\
-		    ./incmidir/$$j.strip;				\
-		if [ -s ./incmidir/$$j.strip ];				\
-		then (							\
-		    $(INSTALL) $(INSTALL_FLAGS) ./incmidir/$$j $(DSTROOT)/$(INCDIR)/$(INSTALL_MI_DIR);	\
-		);							\
-		else							\
-		    echo Header file $$j not exported;		\
-		fi;							\
-	    done;							\
-	fi;								\
-	if [ -n "$(strip $(INSTALL_MI_LCL_LIST))" ]; then			\
-	    if [ -d $(DSTROOT)/$(LCLDIR)/$(INSTALL_MI_DIR) ]; then	\
-		(cd $(DSTROOT)/$(LCLDIR)/$(INSTALL_MI_DIR);$(RM) $(RMFLAGS) $(INSTALL_MI_LCL_LIST) );       \
-	    else								\
-		$(MKDIR) $(DSTROOT)/$(LCLDIR)/$(INSTALL_MI_DIR);	\
-	    fi;								\
-	    for j in $(INSTALL_MI_LCL_LIST);				\
-	    do								\
-		echo garbage > ./pincmidir/$$j.strip;			\
-		$(UNIFDEF) $(SPINCFRAME_UNIFDEF)				\
-		    $(SOURCE)/$$j > ./pincmidir/$$j ||			\
-		    $(DECOMMENT) ./pincmidir/$$j r >			\
-		    ./pincmidir/$$j.strip;				\
-		if [ -s ./pincmidir/$$j.strip ];				\
-		then (							\
-		    $(INSTALL) $(INSTALL_FLAGS) ./pincmidir/$$j $(DSTROOT)/$(LCLDIR)/$(INSTALL_MI_DIR);	\
-		);							\
-		else							\
-		    echo Header file $$j not exported;		\
-		fi;							\
-	    done;							\
-	fi;								\
-	if [ -n "$(strip $(INSTALL_KF_MI_LIST))" ]; then			\
-	    if [ -d $(DSTROOT)/$(KINCDIR)/$(EXPORT_MI_DIR) ]; then	\
-		(cd $(DSTROOT)/$(KINCDIR)/$(EXPORT_MI_DIR);$(RM) $(RMFLAGS) $(INSTALL_KF_MI_LIST) );       \
-	    else								\
-		$(MKDIR) $(DSTROOT)/$(KINCDIR)/$(EXPORT_MI_DIR);	\
-	    fi;								\
-	    for j in $(INSTALL_KF_MI_LIST);				\
-	    do								\
-		echo garbage > ./kincmidir/$$j.strip;			\
-		$(UNIFDEF) $(KINCFRAME_UNIFDEF)				\
-		    $(SOURCE)/$$j > ./kincmidir/$$j ||			\
-		    $(DECOMMENT) ./kincmidir/$$j r >			\
-		    ./kincmidir/$$j.strip;				\
-		if [ -s ./kincmidir/$$j.strip ];				\
-		then (							\
-		    $(INSTALL) $(INSTALL_FLAGS) ./kincmidir/$$j $(DSTROOT)/$(KINCDIR)/$(EXPORT_MI_DIR);	\
-		);							\
-		else							\
-		    echo Header file $$j not exported;		\
-		fi;							\
-	    done;							\
-	fi;								\
-	if [ -n "$(strip $(INSTALL_KF_MI_LCL_LIST))" ]; then			\
-	    if [ -d $(DSTROOT)/$(KPINCDIR)/$(EXPORT_MI_DIR) ]; then	\
-		(cd $(DSTROOT)/$(KPINCDIR)/$(EXPORT_MI_DIR);$(RM) $(RMFLAGS) $(INSTALL_KF_MI_LCL_LIST) );       \
-	    else								\
-		$(MKDIR) $(DSTROOT)/$(KPINCDIR)/$(EXPORT_MI_DIR);	\
-	    fi;								\
-	    for j in $(INSTALL_KF_MI_LCL_LIST);				\
-	    do								\
-		echo garbage > ./kpincmidir/$$j.strip;			\
-		$(UNIFDEF) $(KPINCFRAME_UNIFDEF)				\
-		    $(SOURCE)/$$j > ./kpincmidir/$$j ||			\
-		    $(DECOMMENT) ./kpincmidir/$$j r >			\
-		    ./kpincmidir/$$j.strip;				\
-		if [ -s ./kpincmidir/$$j.strip ];				\
-		then (							\
-		    $(INSTALL) $(INSTALL_FLAGS) ./kpincmidir/$$j $(DSTROOT)/$(KPINCDIR)/$(EXPORT_MI_DIR);	\
-		);							\
-		else							\
-		    echo Header file $$j not exported;		\
-		fi;							\
-	    done;							\
-	fi;								\
-	$(RM) -rf ./incmidir ./pincmidir ./kincmidir ./kpincmidir;
+# Double-colon rule so that MakeInc.kernel can add custom behaviors
+do_installhdrs_mi:: $(INSTALL_MI_INC_FILES) $(INSTALL_MI_INC_GEN_FILES) $(INSTALL_KF_MI_FILES) $(INSTALL_KF_MI_GEN_FILES) \
+		    $(INSTALL_MI_LCL_FILES) $(INSTALL_MI_LCL_GEN_FILES) $(INSTALL_KF_MI_LCL_FILES) $(INSTALL_KF_MI_LCL_GEN_FILES)
+	@:
 
-setup_installhdrs_md:
+.PHONY: do_installhdrs_md
 
-do_installhdrs_md: $(INSTALL_MD_GEN_INC_FILES) $(INSTALL_MD_GEN_LCL_FILES) $(INSTALL_KF_MD_GEN_FILES) $(INSTALL_KF_MD_LCL_GEN_FILES)
-	@true echo "[ $(SOURCE) ] make do_installhdrs_md $(KERNEL_CONFIG) $(ARCH_CONFIG) $(TARGET)"
-	$(_v)$(MKDIR) ./incdir ./pincdir ./kincdir ./kpincdir;				\
-	if [ -n "$(strip $(INSTALL_MD_LIST))" ]; then			\
-	    if [ -d $(DSTROOT)/$(INCDIR)/$(INSTALL_MD_DIR) ]; then	\
-		(cd $(DSTROOT)/$(INCDIR)/$(INSTALL_MD_DIR);$(RM) $(RMFLAGS) $(INSTALL_MD_LIST) );       \
-	    else							\
-		$(MKDIR) $(DSTROOT)/$(INCDIR)/$(INSTALL_MD_DIR);	\
-	    fi;								\
-	    for j in $(INSTALL_MD_LIST);				\
-	    do								\
-		echo garbage > ./incdir/$$j.strip;			\
-		$(UNIFDEF) $(SINCFRAME_UNIFDEF)				\
-		    $(SOURCE)/$$j > ./incdir/$$j ||			\
-		    $(DECOMMENT) ./incdir/$$j r >			\
-		    ./incdir/$$j.strip;				\
-		if [ -s ./incdir/$$j.strip ];				\
-		then (							\
-		    $(INSTALL) $(INSTALL_FLAGS) ./incdir/$$j $(DSTROOT)/$(INCDIR)/$(INSTALL_MD_DIR);	\
-		);							\
-		else							\
-		    echo Header file $$j not exported;		\
-		fi;							\
-	    done;							\
-	fi;								\
-	if [ -n "$(strip $(INSTALL_MD_LCL_LIST))" ]; then			\
-	    if [ -d $(DSTROOT)/$(LCLDIR)/$(INSTALL_MD_DIR) ]; then	\
-		(cd $(DSTROOT)/$(LCLDIR)/$(INSTALL_MD_DIR);$(RM) $(RMFLAGS) $(INSTALL_MD_LCL_LIST) );       \
-	    else							\
-		$(MKDIR) $(DSTROOT)/$(LCLDIR)/$(INSTALL_MD_DIR);	\
-	    fi;								\
-	    for j in $(INSTALL_MD_LCL_LIST);				\
-	    do								\
-		echo garbage > ./pincdir/$$j.strip;			\
-		$(UNIFDEF) $(SPINCFRAME_UNIFDEF)				\
-		    $(SOURCE)/$$j > ./pincdir/$$j ||			\
-		    $(DECOMMENT) ./pincdir/$$j r >			\
-		    ./pincdir/$$j.strip;				\
-		if [ -s ./pincdir/$$j.strip ];				\
-		then (							\
-		    $(INSTALL) $(INSTALL_FLAGS) ./pincdir/$$j $(DSTROOT)/$(LCLDIR)/$(INSTALL_MD_DIR);	\
-		);							\
-		else							\
-		    echo Header file $$j not exported;		\
-		fi;							\
-	    done;							\
-	fi;								\
-	if [ -n "$(strip $(INSTALL_KF_MD_LIST))" ]; then			\
-	    if [ -d $(DSTROOT)/$(KINCDIR)/$(EXPORT_MD_DIR) ]; then	\
-		(cd $(DSTROOT)/$(KINCDIR)/$(EXPORT_MD_DIR);$(RM) $(RMFLAGS) $(INSTALL_KF_MD_LIST) );       \
-	    else							\
-		$(MKDIR) $(DSTROOT)/$(KINCDIR)/$(EXPORT_MD_DIR);	\
-	    fi;								\
-	    for j in $(INSTALL_KF_MD_LIST);				\
-	    do								\
-		echo garbage > ./kincdir/$$j.strip;			\
-		$(UNIFDEF) $(KINCFRAME_UNIFDEF)				\
-		    $(SOURCE)/$$j > ./kincdir/$$j ||			\
-		    $(DECOMMENT) ./kincdir/$$j r >			\
-		    ./kincdir/$$j.strip;				\
-		if [ -s ./kincdir/$$j.strip ];				\
-		then (							\
-		    $(INSTALL) $(INSTALL_FLAGS) ./kincdir/$$j $(DSTROOT)/$(KINCDIR)/$(EXPORT_MD_DIR);	\
-		);							\
-		else							\
-		    echo Header file $$j not exported;		\
-		fi;							\
-	    done;							\
-	fi;								\
-	if [ -n "$(strip $(INSTALL_KF_MD_LCL_LIST))" ]; then			\
-	    if [ -d $(DSTROOT)/$(KPINCDIR)/$(EXPORT_MD_DIR) ]; then	\
-		(cd $(DSTROOT)/$(KPINCDIR)/$(EXPORT_MD_DIR);$(RM) $(RMFLAGS) $(INSTALL_KF_MD_LCL_LIST) );       \
-	    else							\
-		$(MKDIR) $(DSTROOT)/$(KPINCDIR)/$(EXPORT_MD_DIR);	\
-	    fi;								\
-	    for j in $(INSTALL_KF_MD_LCL_LIST);				\
-	    do								\
-		echo garbage > ./kpincdir/$$j.strip;			\
-		$(UNIFDEF) $(KPINCFRAME_UNIFDEF)				\
-		    $(SOURCE)/$$j > ./kpincdir/$$j ||			\
-		    $(DECOMMENT) ./kpincdir/$$j r >			\
-		    ./kpincdir/$$j.strip;				\
-		if [ -s ./kpincdir/$$j.strip ];				\
-		then (							\
-		    $(INSTALL) $(INSTALL_FLAGS) ./kpincdir/$$j $(DSTROOT)/$(KPINCDIR)/$(EXPORT_MD_DIR);	\
-		);							\
-		else							\
-		    echo Header file $$j not exported;		\
-		fi;							\
-	    done;							\
-	fi;								\
-	$(RM) -rf ./incdir ./pincdir ./kincdir ./kpincdir;
-
+do_installhdrs_md: $(INSTALL_MD_INC_FILES) $(INSTALL_MD_INC_GEN_FILES) $(INSTALL_KF_MD_FILES) $(INSTALL_KF_MD_GEN_FILES) \
+		   $(INSTALL_MD_LCL_FILES) $(INSTALL_MD_LCL_GEN_FILES) $(INSTALL_KF_MD_LCL_FILES) $(INSTALL_KF_MD_LCL_GEN_FILES)
+	@:
 
 #
 # Generic Export rules
 #
-ifeq ($(INCR_EXPORTHDRS), TRUE)
-
 EXPORT_MI_INC_FILES = $(addprefix $(OBJROOT)/$(EXPDIR)/$(EXPORT_MI_DIR)/, $(EXPORT_MI_LIST))
 EXPORT_MI_GEN_INC_FILES = $(addprefix $(OBJROOT)/$(EXPDIR)/$(EXPORT_MI_DIR)/, $(EXPORT_MI_GEN_LIST))
 
-$(EXPORT_MI_INC_FILES) $(EXPORT_MI_GEN_INC_FILES): $(OBJROOT)/$(EXPDIR)/$(EXPORT_MI_DIR)/% : %
-	@true echo Exporting $< in $(dir $@)
-	$(_v)[ -d $(OBJROOT)/$(EXPDIR)/$(EXPORT_MI_DIR) ] ||$(MKDIR) $(OBJROOT)/$(EXPDIR)/$(EXPORT_MI_DIR);	\
-	${CP} -p $< $(dir $@);	\
+.PHONY: EXP_MI_INC_DIR
 
+EXP_MI_INC_DIR:
+	$(_v)$(MKDIR) $(OBJROOT)/$(EXPDIR)/$(EXPORT_MI_DIR)
+
+$(EXPORT_MI_GEN_INC_FILES): $(OBJROOT)/$(EXPDIR)/$(EXPORT_MI_DIR)/% : % | EXP_MI_INC_DIR
+	$(_v)$(INSTALL) $(DATA_INSTALL_FLAGS) $< $@
+
+$(EXPORT_MI_INC_FILES): $(OBJROOT)/$(EXPDIR)/$(EXPORT_MI_DIR)/% : $(SOURCE)/% | EXP_MI_INC_DIR
+	$(_v)$(INSTALL) $(DATA_INSTALL_FLAGS) $< $@
 
 EXPORT_MD_INC_FILES = $(addprefix $(OBJROOT)/$(EXPDIR)/$(EXPORT_MD_DIR)/, $(EXPORT_MD_LIST))
 EXPORT_MD_GEN_INC_FILES = $(addprefix $(OBJROOT)/$(EXPDIR)/$(EXPORT_MD_DIR)/, $(EXPORT_MD_GEN_LIST))
 
-$(EXPORT_MD_INC_FILES) $(EXPORT_MD_GEN_INC_FILES): $(OBJROOT)/$(EXPDIR)/$(EXPORT_MD_DIR)/% : %
-	@true echo Exporting $< in $(dir $@)
-	$(_v)[ -d $(OBJROOT)/$(EXPDIR)/$(EXPORT_MD_DIR) ] ||$(MKDIR) $(OBJROOT)/$(EXPDIR)/$(EXPORT_MD_DIR);	\
-	${CP} -p $< $(dir $@);	\
+.PHONY: EXP_MD_INC_DIR
 
-setup_exporthdrs_mi:
+EXP_MD_INC_DIR:
+	$(_v)$(MKDIR) $(OBJROOT)/$(EXPDIR)/$(EXPORT_MD_DIR)
 
-do_exporthdrs_mi: $(EXPORT_MI_INC_FILES) $(EXPORT_MI_GEN_INC_FILES)
-	@true echo "[ $(SOURCE) ] make do_exporthdrs_mi $(KERNEL_CONFIG) $(ARCH_CONFIG) $(TARGET)"
+$(EXPORT_MD_GEN_INC_FILES): $(OBJROOT)/$(EXPDIR)/$(EXPORT_MD_DIR)/% : % | EXP_MD_INC_DIR
+	$(_v)$(INSTALL) $(DATA_INSTALL_FLAGS) $< $@
 
-setup_exporthdrs_md:
+$(EXPORT_MD_INC_FILES): $(OBJROOT)/$(EXPDIR)/$(EXPORT_MD_DIR)/% : $(SOURCE)/% | EXP_MD_INC_DIR
+	$(_v)$(INSTALL) $(DATA_INSTALL_FLAGS) $< $@
 
-do_exporthdrs_md: $(EXPORT_MD_INC_FILES) $(EXPORT_MD_GEN_INC_FILES)
-	@true echo "[ $(SOURCE) ] make do_exporthdrs_md $(KERNEL_CONFIG) $(ARCH_CONFIG) $(TARGET)"
+.PHONY: do_exporthdrs_mi
 
-else
+do_exporthdrs_mi: $(EXPORT_MI_GEN_INC_FILES) $(EXPORT_MI_INC_FILES)
+	@:
 
-EXPORT_MI_INC_FILES = $(addprefix $(SOURCE), $(EXPORT_MI_LIST))
-EXPORT_MI_GEN_INC_FILES = $(addprefix $(OBJROOT)/$(EXPDIR)/$(EXPORT_MI_DIR)/, $(EXPORT_MI_GEN_LIST))
+.PHONY: do_exporthdrs_md
 
-$(EXPORT_MI_GEN_INC_FILES): $(OBJROOT)/$(EXPDIR)/$(EXPORT_MI_DIR)/% : %
-	@true echo Exporting $< in $(dir $@)
-	$(_v)[ -d $(OBJROOT)/$(EXPDIR)/$(EXPORT_MI_DIR) ] ||$(MKDIR) $(OBJROOT)/$(EXPDIR)/$(EXPORT_MI_DIR);	\
-	${CP} -p $< $(dir $@);	\
+do_exporthdrs_md: $(EXPORT_MD_GEN_INC_FILES)  $(EXPORT_MD_INC_FILES)
+	@:
 
-
-EXPORT_MD_INC_FILES = $(addprefix $(SOURCE), $(EXPORT_MD_LIST))
-EXPORT_MD_GEN_INC_FILES = $(addprefix $(OBJROOT)/$(EXPDIR)/$(EXPORT_MD_DIR)/, $(EXPORT_MD_GEN_LIST))
-
-$(EXPORT_MD_GEN_INC_FILES): $(OBJROOT)/$(EXPDIR)/$(EXPORT_MD_DIR)/% : %
-	@true echo Exporting $< in $(dir $@)
-	$(_v)[ -d $(OBJROOT)/$(EXPDIR)/$(EXPORT_MD_DIR) ] ||$(MKDIR) $(OBJROOT)/$(EXPDIR)/$(EXPORT_MD_DIR);	\
-	${CP} -p $< $(dir $@);	\
-
-setup_exporthdrs_mi:
-
-do_exporthdrs_mi: $(EXPORT_MI_GEN_INC_FILES)
-	@true echo "[ $(SOURCE) ] make do_exporthdrs_mi $(KERNEL_CONFIG) $(ARCH_CONFIG) $(TARGET)"
-	$(_v)if [ -n "$(strip $(EXPORT_MI_LIST))" ]; then					\
-		if [ -d $(OBJROOT)/$(EXPDIR)/$(EXPORT_MI_DIR) ]; then			\
-			(cd $(OBJROOT)/$(EXPDIR)/$(EXPORT_MI_DIR);$(RM) $(RMFLAGS) $(EXPORT_MI_LIST) );       \
-		else								\
-			$(MKDIR) $(OBJROOT)/$(EXPDIR)/$(EXPORT_MI_DIR);	\
-		fi;								\
-		${CP} -p $(EXPORT_MI_INC_FILES) $(OBJROOT)/$(EXPDIR)/$(EXPORT_MI_DIR);		\
-	fi
-
-setup_exporthdrs_md:
-
-do_exporthdrs_md: $(EXPORT_MD_GEN_INC_FILES)
-	@true echo "[ $(SOURCE) ] make do_exporthdrs_md $(KERNEL_CONFIG) $(ARCH_CONFIG) $(TARGET)"
-	$(_v)if [ -n "$(strip $(EXPORT_MD_LIST))" ]; then					\
-		if [ -d $(OBJROOT)/$(EXPDIR)/$(EXPORT_MD_DIR) ]; then			\
-			(cd $(OBJROOT)/$(EXPDIR)/$(EXPORT_MD_DIR);$(RM) $(RMFLAGS) $(EXPORT_MD_LIST) );       \
-		else								\
-			$(MKDIR) $(OBJROOT)/$(EXPDIR)/$(EXPORT_MD_DIR);	\
-		fi;								\
-		${CP} -p $(EXPORT_MD_INC_FILES) $(OBJROOT)/$(EXPDIR)/$(EXPORT_MD_DIR);		\
-	fi
-
-
-#
-endif
 #
 # Generic Compilation rules
 #
@@ -513,290 +222,119 @@ endif
 # Compilation rules to generate .o from .s
 #
 
-S_RULE_1A=$(_v)${S_KCC} -c ${SFLAGS} -MD -DASSEMBLER ${$@_SFLAGS_ADD} ${INCFLAGS} ${$@_INCFLAGS}
-S_RULE_1B=$*.s
-S_RULE_2=@echo AS $@
-S_RULE_3=
+S_RULE_0=@echo AS $@
+S_RULE_1A=$(_v)${S_KCC} -c ${SFLAGS} -MD -MF $(@:o=d) -MP -DASSEMBLER ${$@_SFLAGS_ADD} ${INCFLAGS} ${$@_INCFLAGS}
+S_RULE_1B=$(<F)
+S_RULE_2=
 
 #
 # Compilation rules to generate .o from .c for normal files
-# 
-C_RULE_1A=$(_v)${KCC} -c ${filter-out ${$@_CFLAGS_RM}, ${CFLAGS} ${CWARNFLAGS}} -MD ${$@_CFLAGS_ADD} ${$@_CWARNFLAGS_ADD} ${INCFLAGS} ${$@_INCFLAGS} 
-C_RULE_1B=$*.c
-C_RULE_2=@echo CC $@
+#
+C_RULE_0=@echo CC $@
+C_RULE_1A=$(_v)${KCC} -c ${filter-out ${$@_CFLAGS_RM}, ${CFLAGS} ${CWARNFLAGS}} -MD -MF $(@:o=d) -MP ${$@_CFLAGS_ADD} ${$@_CWARNFLAGS_ADD} ${INCFLAGS} ${$@_INCFLAGS} 
+C_RULE_1B=$(<F)
 ifeq ($(BUILD_MACHO_OBJ),0)
-C_RULE_3=
-else ifeq ($(BUILD_STABS),1)
-C_RULE_3=
-else ifeq ($(BUILD_DWARF),1)
-C_RULE_3=$(_v)${CTFCONVERT} -l xnu -v -o $@.ctf $@ > /dev/null && $(CTFSCRUB) `cat $(SRCROOT)/config/DtraceIgnored.symbols` $@.ctf || true;
+C_RULE_2=
+else ifeq ($(DO_CTFCONVERT),1)
+C_RULE_2=$(_v)if [ -z "${$@_SKIP_CTFCONVERT}" ]; then ${CTFCONVERT} -l xnu -v -o $@.ctf $@ > /dev/null || true; fi
 else
-C_RULE_3=
+C_RULE_2=
 endif
-C_RULE_4=
-
-ifeq ($(ARCH_CONFIG),ARM)
-ifeq ($(KERNEL_CONFIG),RELEASE)
-C_RULE_3=
-endif
+ifeq ($(DO_CTFMACHO), 1)
+C_CTFRULE_1A=${C_RULE_1A} -o $@.non_lto $(CFLAGS_NOLTO_FLAG) 
+C_CTFRULE_1B=$(<F)
+C_CTFRULE_2=$(_v)if [ -z "${$@_SKIP_CTFCONVERT}" ]; then ${CTFCONVERT} -l xnu -v -o $@.non_lto.ctf $@.non_lto > /dev/null || true; fi
+else
+C_CTFRULE_1A=@true 
+C_CTFRULE_1B=
+C_CTFRULE_2=@true 
 endif
 
 #
 # Compilation rules to generate .o from .c for driver files
 #
+C_RULE_0_D=${C_RULE_0}
 C_RULE_1A_D=${C_RULE_1A}
 C_RULE_1B_D=${C_RULE_1B}
 C_RULE_2_D=${C_RULE_2}
-C_RULE_3_D=${C_RULE_3}
-C_RULE_4_D=${C_RULE_4}
+C_CTFRULE_1A_D=${C_CTFRULE_1A}
+C_CTFRULE_1B_D=${C_CTFRULE_1B}
+C_CTFRULE_2_D=${C_CTFRULE_2}
 
 #
 # Compilation rules to generate .co from .cp or .cpo from .cpp
 #   The config tool slickly changes the last source filename char to 'o'
 #   for the object filename.
-P_RULE_1A=$(_v)${KC++} -o $@ -c ${CXXFLAGS} ${filter-out ${$@_CFLAGS_RM}, ${CFLAGS} ${CXXWARNFLAGS}} -MD ${$@_CFLAGS_ADD} ${$@_CXXWARNFLAGS_ADD} ${INCFLAGS} ${$@_INCFLAGS} 
+P_RULE_0=@echo C++ $@
+P_RULE_1A=$(_v)${KC++} -o $@ -c ${CXXFLAGS} ${filter-out ${$@_CFLAGS_RM}, ${CFLAGS} ${CXXWARNFLAGS}} -MD -MF $(@:o=d) -MP ${$@_CFLAGS_ADD} ${$@_CXXWARNFLAGS_ADD} ${INCFLAGS} ${$@_INCFLAGS} 
 P_RULE_1B=$(<F)
-P_RULE_2=$(_v)sed 's/.c.o: /.cpo: /' $(@:.cpo=.d) > $(@:.cpo=.d~) && mv $(@:.cpo=.d~) $(@:.cpo=.d)
-P_RULE_3=@echo C++ $@
-ifeq ($(BUILD_MACHO_OBJ),0)
-P_RULE_4=
-else ifeq ($(BUILD_STABS),1)
-P_RULE_4=
-else ifeq ($(BUILD_DWARF),1)
-P_RULE_4=$(_v)${CTFCONVERT} -l xnu -v -o $@.ctf $@ > /dev/null && $(CTFSCRUB) `cat $(SRCROOT)/config/DtraceIgnored.symbols` $@.ctf || true;
-else
-P_RULE_4=
-endif
+P_RULE_2=
+P_CTFRULE_1A=@true 
+P_CTFRULE_1B=
+P_CTFRULE_2=@true 
 
-ifeq ($(ARCH_CONFIG),ARM)
-ifeq ($(KERNEL_CONFIG),RELEASE)
-P_RULE_4=
-endif
-endif
 
-setup_build_all: 
+.PHONY: do_build_all
 
-do_build_all: $(COMP_FILES) $(COMP_COBJ_FILES) $(COMP_SOBJ_FILES) $(COMPONENT_IMAGE_FILE)
+# Do-nothing rule, since not all levels of the recursive hierarchy might implement this
+# in their local Makefiles. Those that do will use a "::" rule to augment this.
+do_build_all::
+	@:
 
-#
-# mach_kernel building rules
-#
-ifeq ($(COMPONENT), .)
-do_build_all: do_build_mach_kernel
+.PHONY: do_build_install_primary
 
-STATIC_KMODS =  $(SRCROOT)/kmods.a
+# Do-nothing rule, since not all levels of the recursive hierarchy might implement this
+# in their local Makefiles. Those that do will use a "::" rule to augment this.
+do_build_install_primary::
+	@:
 
-do_build_mach_kernel: $(TARGET)/kgmacros $(TARGET)/mach_kernel
+.PHONY: do_build_install_non_primary
 
-$(TARGET)/mach_kernel: $(addprefix $(TARGET)/,$(foreach component,$(COMPONENT_LIST), $(addprefix $(component)/$(firstword $($(addsuffix _KERNEL_CONFIG, $(shell printf $(component) | tr a-z A-Z))) $(KERNEL_CONFIG))/, $(addsuffix .filelist, $(component))))) lastkernelconstructor.o
-	$(_v)${MAKE} version.o
-	$(_v)${MAKE} build_mach_kernel_exports
-	@echo LD mach_kernel.sys
-	$(_v)$(CAT) $(addprefix $(TARGET)/,$(foreach component,$(COMPONENT_LIST), $(addprefix $(component)/$(firstword $($(addsuffix _KERNEL_CONFIG, $(shell printf $(component) | tr a-z A-Z))) $(KERNEL_CONFIG))/, $(addsuffix .filelist, $(component))))) < /dev/null > link.filelist
-	$(_v)$(LD) $(LDFLAGS_KERNEL) -filelist link.filelist version.o lastkernelconstructor.o `if [ -e $(STATIC_KMODS) ]; then echo $(STATIC_KMODS); fi` \
-		-o $(TARGET)/mach_kernel.sys $(LD_KERNEL_LIBS)
-	$(_v)if [ $(BUILD_DWARF)  -eq  1 ]; then \
-		echo DSYMUTIL mach_kernel.sys; \
-		$(DSYMUTIL) $(DSYMUTIL_FLAGS) $(TARGET)/mach_kernel.sys -o $(TARGET)/mach_kernel.sys.dSYM > /dev/null; \
-		$(MKDIR) $(TARGET)/mach_kernel.sys.dSYM/$(DSYMRESDIR); \
-		$(INSTALL) $(INSTALL_FLAGS) $(SRCROOT)/kgmacros $(TARGET)/mach_kernel.sys.dSYM/$(DSYMRESDIR)/kgmacros; \
-	fi;
-	$(_v)if [ $(MACHINE_CONFIG) != DEFAULT ] ; then     \
-		kernel_file_name=mach.`printf "%s" "$(KERNEL_CONFIG)" | $(TR) A-Z a-z`.`printf "%s" "$(MACHINE_CONFIG)" | $(TR) A-Z a-z`; \
-		echo  kernel_file_name $${kernel_file_name}; \
-		[ -h  ${OBJROOT}/$${kernel_file_name} ] || $(LN) $(TARGET)/mach_kernel ${OBJROOT}/$${kernel_file_name};	\
-	fi;
-	@echo STRIP mach_kernel
-	$(_v)$(STRIP) $(STRIP_FLAGS) $(TARGET)/mach_kernel.sys -o $(TARGET)/mach_kernel
-
-	$(_v)kernel_config=$(KERNEL_CONFIG);				   \
-	onearch=$(ARCH_CONFIG);								   \
-	skip_ctf=FALSE;										   \
-	if [ $${kernel_config} = RELEASE ]; then          	   \
-	    if [[ $${onearch} = ARM ]]; then	\
-            skip_ctf=TRUE;                                 \
-            echo "Skipping CTF processing"; 			   \
-		fi												   \
-    fi;													   \
-    if [ $${skip_ctf} = FALSE ]; then					   \
-	if [ $(BUILD_MACHO_OBJ) -eq 1 -a $(BUILD_DWARF) -eq 1 ]; then	   \
-		echo CTFMERGE mach_kernel;   		     	\
-		$(FIND) $(OBJPATH)/ -name \*.ctf -size 0	\
-			-exec $(RM) -rf {} \;	;		\
-		$(FIND) $(OBJPATH)/ -name \*.ctf |		\
-			$(XARGS) $(CTFMERGE) -l xnu -o $(TARGET)/mach_kernel \
-			    -Z $(TARGET)/mach_kernel.ctfdata || true; 	\
-		echo CTFINSERT mach_kernel;   		     	\
-		$(CTFINSERT) $(TARGET)/mach_kernel		\
-			 $($(addsuffix $(ARCH_CONFIG),ARCH_FLAGS_)) $(TARGET)/mach_kernel.ctfdata \
-			 -o $(TARGET)/mach_kernel || true;	\
-			 $(RM) -f $(TARGET)/mach_kernel.ctfdata > /dev/null || true; \
-	fi;							\
-	fi;							\
-
-version.o: $(OBJPATH)/version.c
-	${C_RULE_1A}$<
-	${C_RULE_2}
-	${C_RULE_4}
-
-.PHONY: $(OBJPATH)/version.c
-$(OBJPATH)/version.c: $(SRCROOT)/config/version.c $(NEWVERS) $(SRCROOT)/config/MasterVersion
-	$(_v)$(CP) $< $@
-	$(_v)$(NEWVERS) $(OBJPATH)/version.c > /dev/null;
-
-# "/libsa" needed because TARGET ends in "/."
-lastkernelconstructor.o: COMP_OBJ_DIR=/libsa
-lastkernelconstructor.o: $(SRCROOT)/libsa/lastkernelconstructor.c
-	$(_v)$(MKDIR) $(TARGET)$(COMP_OBJ_DIR)/$(KERNEL_CONFIG)
-	${C_RULE_1A}$<
-	${C_RULE_2}
-	${C_RULE_3}
-	${C_RULE_4}
-
-$(TARGET)/kgmacros: $(SRCROOT)/kgmacros
-	$(_v)$(INSTALL) $(INSTALL_FLAGS) $? $@
-
-.PHONY: build_mach_kernel_exports
-build_mach_kernel_exports:
-	$(_v)${MAKE}					\
-		MAKEFILES=${SOURCE}/config/Makefile	\
-		SOURCE=${SOURCE}/config			\
-		RELATIVE_SOURCE_PATH=${RELATIVE_SOURCE_PATH}/config	\
-		TARGET=$${TARGET}			\
-	build_mach_kernel_exports;
-
-endif # mach_kernel-specific build rules
-
-#
-# Kernel Install rules
-#
-INSTALL_KERNEL_FILE_FILES = $(addprefix $(DSTROOT)$(INSTALL_KERNEL_DIR), $(INSTALL_KERNEL_FILE))
-
-force_kernel_file_install:
-
-$(INSTALL_KERNEL_FILE_FILES): $(TARGET)/mach_kernel force_kernel_file_install
-	@echo Installing $< in $@;
-	$(_v)if [ ! -e $(DSTROOT)$(INSTALL_KERNEL_DIR) ]; then		\
-		$(MKDIR) $(DSTROOT)$(INSTALL_KERNEL_DIR);		\
-	fi;								\
-	if [ "`echo $(INSTALL_ARCHS_LC) | wc -w`" -eq 1 ]; then		\
-		$(RM) $(RMFLAGS) $@;					\
-		$(INSTALL) $(FILE_INSTALL_FLAGS) $< $@;			\
-	else								\
-		if [ ! -e $@ ]; then					\
-			printf "" >empty_file_$(notdir $@);		\
-			lipo_arg="$(foreach lipo_arch,$(INSTALL_ARCHS),$(ARCH_FLAGS_$(lipo_arch)) empty_file_$(notdir $@))"; \
-			$(LIPO) $${lipo_arg} -create -output $@;	\
-			$(RM) $(RMFLAGS) empty_file_$(notdir $@);	\
-		fi;							\
-		$(LIPO) $@ -replace $(subst -arch,,$(ARCH_FLAGS_$(ARCH_CONFIG))) $< -o $@;	\
-	fi
-
-INSTALL_KERNEL_FILESYS_FILES = $(addprefix $(SYMROOT)$(INSTALL_KERNEL_DIR), $(INSTALL_KERNEL_FILE))
-ifeq ($(PLATFORM),iPhoneOS)
-INSTALL_KERNEL_FILESYS_FILES += $(addprefix $(DSTROOT)$(INSTALL_KERNEL_SYM_DIR), $(INSTALL_KERNEL_FILE))
-endif
-
-force_kernel_filesys_install:
-
-$(INSTALL_KERNEL_FILESYS_FILES): $(TARGET)/mach_kernel.sys force_kernel_filesys_install
-	@echo Installing $< in $@;
-ifeq ($(PLATFORM),iPhoneOS)
-	$(_v)if [ ! -e $(DSTROOT)$(INSTALL_KERNEL_SYM_DIR) ]; then	\
-		$(MKDIR) $(DSTROOT)$(INSTALL_KERNEL_SYM_DIR);		\
-	fi;
-endif
-	$(_v)if [ ! -e $(SYMROOT)$(INSTALL_KERNEL_DIR) ]; then	\
-		$(MKDIR) $(SYMROOT)$(INSTALL_KERNEL_DIR);		\
-	fi;							\
-	if [ "`echo $(INSTALL_ARCHS_LC) | wc -w`" -eq 1 ]; then	\
-		$(RM) $(RMFLAGS) $@;				\
-		$(INSTALL) $(INSTALL_FLAGS) $< $@;			\
-		if [ $(BUILD_DWARF) -eq 1 ]; then			\
-			$(RM) -rf $@.dSYM;				\
-			$(MKDIR) -p -m 0755 $@.dSYM/$(DSYMBUILDDIR);	\
-			$(INSTALL) $(INSTALL_FLAGS)			\
-				$<.dSYM/$(DSYMBUILDDIR)/$(notdir $<)	\
-				$@.dSYM/$(DSYMBUILDDIR)/$(notdir $@);	\
-			$(INSTALL) $(INSTALL_FLAGS)			\
-				$<.dSYM/$(DSYMRESDIR)/kgmacros		\
-				$@.dSYM/$(DSYMRESDIR)/kgmacros;		\
-		fi;							\
-	else							\
-		if [ ! -e $@ ]; then				\
-			printf "" >empty_filesys_$(notdir $@);	\
-			lipo_arg="$(foreach lipo_arch,$(INSTALL_ARCHS),$(ARCH_FLAGS_$(lipo_arch)) empty_filesys_$(notdir $@))"; \
-			$(LIPO) $${lipo_arg} -create -output $@;	\
-			$(RM) $(RMFLAGS) empty_filesys_$(notdir $@);	\
-		fi;							\
-		$(LIPO) $@ -replace $(subst -arch,,$(ARCH_FLAGS_$(ARCH_CONFIG))) $< -o $@;	\
-									\
-		if [ $(BUILD_DWARF) -eq 1 ]; then			       \
-			if [ ! -e $@.dSYM/$(DSYMBUILDDIR)/$(notdir $@) ]; then \
-				printf "" >empty_filesys_$(notdir $@);	       \
-				lipo_arg="$(foreach lipo_arch,$(INSTALL_ARCHS),$(ARCH_FLAGS_$(lipo_arch)) empty_filesys_$(notdir $@))"; \
-				$(MKDIR) -p -m 0755 $@.dSYM/$(DSYMBUILDDIR);   \
-				$(LIPO) $${lipo_arg} -create		       \
-					-output				       \
-					$@.dSYM/$(DSYMBUILDDIR)/$(notdir $@);  \
-				$(RM) $(RMFLAGS) empty_filesys_$(notdir $@);   \
-			fi;						       \
-			$(LIPO) $@.dSYM/$(DSYMBUILDDIR)/$(notdir $@)	       \
-				-replace $(subst -arch,,$(ARCH_FLAGS_$(ARCH_CONFIG)))		       \
-				$<.dSYM/$(DSYMBUILDDIR)/$(notdir $<)	       \
-				-o $@.dSYM/$(DSYMBUILDDIR)/$(notdir $@);       \
-			$(INSTALL) $(INSTALL_FLAGS)			\
-				$<.dSYM/$(DSYMRESDIR)/kgmacros		\
-				$@.dSYM/$(DSYMRESDIR)/kgmacros;		\
-		fi;							       \
-	fi
-	$(INSTALL) $(INSTALL_FLAGS) $(SOURCE)kgmacros $(SYMROOT)$(INSTALL_FILE_DIR)
-
-setup_build_install:
-	@echo "[ $(SOURCE) ] make setup_build_install $(KERNEL_CONFIG) $(ARCH_CONFIG) $(TARGET)"
-
-do_build_install: $(INSTALL_KERNEL_FILESYS_FILES) $(INSTALL_KERNEL_FILE_FILES)
-	@echo "[ $(SOURCE) ] make do_build_install $(KERNEL_CONFIG) $(ARCH_CONFIG) $(TARGET)"
+# Do-nothing rule, since not all levels of the recursive hierarchy might implement this
+# in their local Makefiles. Those that do will use a "::" rule to augment this.
+do_build_install_non_primary::
+	@:
 
 INSTALL_MAN_FILES = $(addprefix $(DSTROOT)/$(MANDIR)/$(INSTALL_MAN_DIR)/, $(INSTALL_MAN_LIST))
 
-do_installman: $(INSTALL_MAN_FILES)
-	@echo "[ $(SOURCE) ] make do_installman"
-	$(_v)if [ -n "$(strip $(INSTALL_MAN_LIST))" ]; then \
-		man_dir=$(DSTROOT)/$(MANDIR)/$(INSTALL_MAN_DIR); \
-		if [ -d $$man_dir ]; then       \
-			( cd $$man_dir;   \
-			$(RM) $(RMFLAGS) $(INSTALL_MAN_LIST) $(INSTALL_MAN_LINKS)); \
-		else                    \
-			$(MKDIR) $$man_dir;     \
-		fi;                             \
-		echo Installing $(INSTALL_MAN_LIST) in $$man_dir;	\
-		$(INSTALL) $(INSTALL_FLAGS) $(INSTALL_MAN_LIST) $$man_dir;	\
-		if [ -n "$(strip $(INSTALL_MAN_LINKS))" ]; then \
-			set `echo ${INSTALL_MAN_LINKS}`; \
-			while : ; do \
-				case $$# in \
-					0) break;; \
-					1) echo "warn: empty INSTALL_MAN_LINKS: $$1"; break;; \
-				esac; \
-				link_src=$$1; shift; link_dst=$$1; shift; \
-				echo "hard linking $${link_src} to $${link_dst}"; \
-				ln -f $${man_dir}/$${link_src} $${man_dir}/$${link_dst} ; \
-			done; \
-		fi; \
-	fi
+.PHONY: INSTALL_MAN_DIR
 
-$(INSTALL_MAN_FILES): $(DSTROOT)/$(MANDIR)/$(INSTALL_MAN_DIR)/% : %
-	@true echo Installing $< in $(dir $@)
-	$(_v)$(MKDIR) $(DSTROOT)/$(MANDIR)/$(INSTALL_MAN_DIR);       \
-	$(RM) $(RMFLAGS) $@;                                    \
-	$(INSTALL) $(INSTALL_FLAGS) $< $(dir $@);
+INSTALL_MAN_DIR:
+	$(_v)$(MKDIR) $(DSTROOT)/$(MANDIR)/$(INSTALL_MAN_DIR)
 
-ifeq    ($(INCL_MAKEDEP), TRUE)
+$(INSTALL_MAN_FILES): $(DSTROOT)/$(MANDIR)/$(INSTALL_MAN_DIR)/% : % | INSTALL_MAN_DIR
+	@echo MAN $*
+	$(_v)$(INSTALL) $(INSTALL_FLAGS) $< $@
+
+define MAN_LINKS_RULE_template
+$$(DSTROOT)/$$(MANDIR)/$$(INSTALL_MAN_DIR)/$(2): $$(DSTROOT)/$$(MANDIR)/$$(INSTALL_MAN_DIR)/$(1)
+	@echo MANLINK $(2)
+	$(_v)ln -f $$< $$@
+endef
+
+function_generate_man_links_rules = $(if $(word 1,$(1)),$(eval $(call MAN_LINKS_RULE_template,$(word 1,$(1)),$(word 2,$(1)))) $(DSTROOT)/$(MANDIR)/$(INSTALL_MAN_DIR)/$(word 2,$(1)) $(call function_generate_man_links_rules,$(wordlist 3,$(words $(1)),$(1))))
+
+INSTALL_MAN_FILES_LINKS = $(call function_generate_man_links_rules,$(INSTALL_MAN_LINKS))
+
+.PHONY: do_installman
+
+do_installman: $(INSTALL_MAN_FILES) $(INSTALL_MAN_FILES_LINKS)
+	@:
+
+.PHONY: do_build_setup
+
+# Do-nothing rule, since not all levels of the recursive hierarchy might implement this
+# in their local Makefiles. Those that do will use a "::" rule to augment this.
+do_build_setup::
+	@:
+
+.PHONY: do_config_all
+
+# Do-nothing rule, since not all levels of the recursive hierarchy might implement this
+# in their local Makefiles. Those that do will use a "::" rule to augment this.
+do_config_all::
+	@:
+
 -include Makedep
-endif
-
-help:
-	@cat README
 
 # vim: set ft=make:

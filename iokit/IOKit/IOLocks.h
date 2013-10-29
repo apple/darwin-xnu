@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1998-2009 Apple Inc. All rights reserved.
+ * Copyright (c) 1998-2012 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -79,7 +79,7 @@ IOLock * IOLockAlloc( void );
 
 /*! @function IOLockFree
     @abstract Frees a mutex.
-    @discussion Frees a lock allocated with IOLockAlloc. Any blocked waiters will not be woken.
+    @discussion Frees a lock allocated with IOLockAlloc. Mutex should be unlocked with no waiters.
     @param lock Pointer to the allocated lock. */
 
 void	IOLockFree( IOLock * lock);
@@ -122,11 +122,7 @@ boolean_t IOLockTryLock( IOLock * lock);
 #ifdef	IOLOCKS_INLINE
 #define IOLockUnlock(l)	lck_mtx_unlock(l)
 #else
-#if	defined(__i386__)
-void	IOLockUnlock( IOLock * lock) __DARWIN10_ALIAS(IOLockUnlock);
-#else	/* !__i386__ */
 void	IOLockUnlock( IOLock * lock);
-#endif	/* __i386__ */
 #endif	/* !IOLOCKS_INLINE */
 
 /*! @function IOLockSleep
@@ -176,7 +172,7 @@ IORecursiveLock * IORecursiveLockAlloc( void );
 
 /*! @function IORecursiveLockFree
     @abstract Frees a recursive lock.
-    @discussion Frees a lock allocated with IORecursiveLockAlloc. Any blocked waiters will not be woken.
+    @discussion Frees a lock allocated with IORecursiveLockAlloc. Lock should be unlocked with no waiters. 
     @param lock Pointer to the allocated lock. */
 
 void		IORecursiveLockFree( IORecursiveLock * lock);
@@ -244,7 +240,7 @@ IORWLock * IORWLockAlloc( void );
 
 /*! @function IORWLockFree
    @abstract Frees a read/write lock.
-   @discussion Frees a lock allocated with IORWLockAlloc. Any blocked waiters will not be woken.
+   @discussion Frees a lock allocated with IORWLockAlloc. Lock should be unlocked with no waiters.
     @param lock Pointer to the allocated lock. */
 
 void	IORWLockFree( IORWLock * lock);

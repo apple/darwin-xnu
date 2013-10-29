@@ -110,7 +110,7 @@
 /*
  * Debug.
  */
-__private_extern__ char	my_name[];
+extern char	my_name[];
 
 #define DEFAULT_PAGER_DEBUG	0
 
@@ -656,7 +656,7 @@ struct vstruct_list_head {
 	int		vsl_count;	/* saves code */
 };
 
-__private_extern__ struct vstruct_list_head	vstruct_list;
+extern struct vstruct_list_head	vstruct_list;
 
 __private_extern__ void vstruct_list_insert(vstruct_t vs);
 __private_extern__ void vstruct_list_delete(vstruct_t vs);
@@ -673,7 +673,7 @@ extern lck_attr_t		default_pager_lck_attr;
 #define VSL_SLEEP(e,i)		lck_mtx_sleep(&vstruct_list.vsl_lock, LCK_SLEEP_DEFAULT, (e), (i))
 
 #ifdef MACH_KERNEL
-__private_extern__ zone_t	vstruct_zone;
+extern zone_t	vstruct_zone;
 #endif
 
 /*
@@ -746,7 +746,7 @@ extern boolean_t	bs_add_device(char *,
 				      MACH_PORT_FACE);
 extern vstruct_t	ps_vstruct_create(dp_size_t);
 extern void		ps_vstruct_dealloc(vstruct_t);
-extern void		ps_vstruct_reclaim(vstruct_t,
+extern kern_return_t	ps_vstruct_reclaim(vstruct_t,
 					   boolean_t,
 					   boolean_t);
 extern kern_return_t	pvs_cluster_read(vstruct_t,

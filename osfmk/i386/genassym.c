@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2010 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2012 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -145,16 +145,6 @@ main(
 	DECLARE("MUTEX_OWNER", offsetof(lck_mtx_t *, lck_mtx_owner));
 	DECLARE("MUTEX_PTR",   offsetof(lck_mtx_t *, lck_mtx_ptr));
 	DECLARE("MUTEX_STATE", offsetof(lck_mtx_t *, lck_mtx_state));
-#ifdef __i386__
-	DECLARE("MUTEX_TYPE",	offsetof(lck_mtx_ext_t *, lck_mtx_deb.type));
-	DECLARE("MUTEX_PC",		offsetof(lck_mtx_ext_t *, lck_mtx_deb.pc));
-	DECLARE("MUTEX_ATTR",	offsetof(lck_mtx_ext_t *, lck_mtx_attr));
-	DECLARE("MUTEX_ATTR_DEBUG", LCK_MTX_ATTR_DEBUG);
-	DECLARE("MUTEX_ATTR_DEBUGb", LCK_MTX_ATTR_DEBUGb);
-	DECLARE("MUTEX_ATTR_STAT", LCK_MTX_ATTR_STAT);
-	DECLARE("MUTEX_ATTR_STATb", LCK_MTX_ATTR_STATb);
-	DECLARE("MUTEX_TAG",	MUTEX_TAG);
-#endif
 	DECLARE("MUTEX_IND",	LCK_MTX_TAG_INDIRECT);
 	DECLARE("MUTEX_PTR",	offsetof(lck_mtx_t *, lck_mtx_ptr));
 	DECLARE("MUTEX_ASSERT_OWNED",	LCK_MTX_ASSERT_OWNED);
@@ -187,6 +177,7 @@ main(
 	DECLARE("TH_KERNEL_STACK",	offsetof(thread_t, kernel_stack));
 	DECLARE("TH_MUTEX_COUNT",	offsetof(thread_t, mutex_count));
 	DECLARE("TH_WAS_PROMOTED_ON_WAKEUP", offsetof(thread_t, was_promoted_on_wakeup));
+	DECLARE("TH_IOTIER_OVERRIDE",	offsetof(thread_t, iotier_override));
 
 	DECLARE("TH_SYSCALLS_MACH",	offsetof(thread_t, syscalls_mach));
 	DECLARE("TH_SYSCALLS_UNIX",	offsetof(thread_t, syscalls_unix));
@@ -205,6 +196,7 @@ main(
 	DECLARE("TH_COPYIO_STATE", offsetof(thread_t, machine.copyio_state));
 	DECLARE("WINDOWS_CLEAN", WINDOWS_CLEAN);
 #endif
+	DECLARE("TH_RWLOCK_COUNT",	offsetof(thread_t, rwlock_count));
 
 	DECLARE("MAP_PMAP",	offsetof(vm_map_t, pmap));
 
@@ -214,14 +206,6 @@ main(
 	/*
 	 * KSS_* are offsets from the top of the kernel stack (cpu_kernel_stack)
 	 */
-#if defined(__i386__)
-	DECLARE("KSS_EBX",	offsetof(struct x86_kernel_state *, k_ebx));
-	DECLARE("KSS_ESP",	offsetof(struct x86_kernel_state *, k_esp));
-	DECLARE("KSS_EBP",	offsetof(struct x86_kernel_state *, k_ebp));
-	DECLARE("KSS_EDI",	offsetof(struct x86_kernel_state *, k_edi));
-	DECLARE("KSS_ESI",	offsetof(struct x86_kernel_state *, k_esi));
-	DECLARE("KSS_EIP",	offsetof(struct x86_kernel_state *, k_eip));
-#elif defined(__x86_64__)
 	DECLARE("KSS_RBX",	offsetof(struct x86_kernel_state *, k_rbx));
 	DECLARE("KSS_RSP",	offsetof(struct x86_kernel_state *, k_rsp));
 	DECLARE("KSS_RBP",	offsetof(struct x86_kernel_state *, k_rbp));
@@ -230,9 +214,6 @@ main(
 	DECLARE("KSS_R14",	offsetof(struct x86_kernel_state *, k_r14));
 	DECLARE("KSS_R15",	offsetof(struct x86_kernel_state *, k_r15));
 	DECLARE("KSS_RIP",	offsetof(struct x86_kernel_state *, k_rip));	
-#else
-#error Unsupported architecture
-#endif
 	
 	DECLARE("DS_DR0",	offsetof(struct x86_debug_state32 *, dr0));
 	DECLARE("DS_DR1",	offsetof(struct x86_debug_state32 *, dr1));
@@ -324,33 +305,16 @@ main(
 	DECLARE("ISF64_SS",	ISF64_(ss));
 	DECLARE("ISF64_SIZE",	sizeof(x86_64_intr_stack_frame_t));
 
-	DECLARE("ISC32_OFFSET",	offsetof(x86_saved_state_compat32_t *, isf64));
-#define ISC32_(x)  offsetof(x86_saved_state_compat32_t *, isf64.x)
-	DECLARE("ISC32_TRAPNO", ISC32_(trapno));
-	DECLARE("ISC32_TRAPFN",	ISC32_(trapfn));
-	DECLARE("ISC32_ERR",	ISC32_(err));
-	DECLARE("ISC32_RIP",	ISC32_(rip));
-	DECLARE("ISC32_CS",	ISC32_(cs));
-	DECLARE("ISC32_RFLAGS",	ISC32_(rflags));
-	DECLARE("ISC32_RSP",	ISC32_(rsp));
-	DECLARE("ISC32_SS",	ISC32_(ss));
-
 	DECLARE("NBPG",			I386_PGBYTES);
 	DECLARE("PAGE_SIZE",            I386_PGBYTES);
 	DECLARE("PAGE_MASK",            I386_PGBYTES-1);
 	DECLARE("PAGE_SHIFT",           12);
 	DECLARE("NKPT",                 NKPT);
-#ifdef __i386__
-	DECLARE("KPTDI",                KPTDI);
-#endif
 	DECLARE("VM_MIN_ADDRESS",	VM_MIN_ADDRESS);
 	DECLARE("VM_MAX_ADDRESS",	VM_MAX_ADDRESS);
 	DECLARE("KERNELBASE",		VM_MIN_KERNEL_ADDRESS);
 	DECLARE("LINEAR_KERNELBASE",	LINEAR_KERNEL_ADDRESS);
 	DECLARE("KERNEL_STACK_SIZE",	KERNEL_STACK_SIZE);
-#ifdef __i386__
-	DECLARE("KERNEL_UBER_BASE_HI32", KERNEL_UBER_BASE_HI32);
-#endif
 
 	DECLARE("ASM_COMM_PAGE32_BASE_ADDRESS",  _COMM_PAGE32_BASE_ADDRESS);
 	DECLARE("ASM_COMM_PAGE32_START_ADDRESS",  _COMM_PAGE32_START_ADDRESS);
@@ -366,9 +330,7 @@ main(
 	DECLARE("INTEL_PTE_USER",        INTEL_PTE_USER);
 	DECLARE("INTEL_PTE_INVALID",	INTEL_PTE_INVALID);
 	DECLARE("NPGPTD", NPGPTD);
-#if defined(__x86_64__)
 	DECLARE("KERNEL_PML4_INDEX",KERNEL_PML4_INDEX);
-#endif
 	DECLARE("IDTSZ",	IDTSZ);
 	DECLARE("GDTSZ",	GDTSZ);
 	DECLARE("LDTSZ",	LDTSZ);
@@ -381,19 +343,10 @@ main(
 	DECLARE("USER64_CS",	USER64_CS);
 	DECLARE("KERNEL_TSS",	KERNEL_TSS);
 	DECLARE("KERNEL_LDT",	KERNEL_LDT);
-#ifdef __i386__
-	DECLARE("DF_TSS",	DF_TSS);
-	DECLARE("MC_TSS",	MC_TSS);
-	DECLARE("CPU_DATA_GS",	CPU_DATA_GS);
-#endif /* __i386__ */
 	DECLARE("SYSENTER_CS",	SYSENTER_CS);
 	DECLARE("SYSENTER_TF_CS",SYSENTER_TF_CS);
 	DECLARE("SYSENTER_DS",	SYSENTER_DS);
 	DECLARE("SYSCALL_CS",	SYSCALL_CS);
-#ifdef __i386__
-	DECLARE("USER_WINDOW_SEL",	USER_WINDOW_SEL);
-	DECLARE("PHYS_WINDOW_SEL",	PHYS_WINDOW_SEL);
-#endif
 
         DECLARE("CPU_THIS",
 		offsetof(cpu_data_t *, cpu_this));
@@ -436,40 +389,25 @@ main(
         DECLARE("CPU_INT_EVENT_TIME",
 		offsetof(cpu_data_t *, cpu_int_event_time));
 
-#ifdef __i386__
-        DECLARE("CPU_HI_ISS",
-		offsetof(cpu_data_t *, cpu_hi_iss));
-#endif
         DECLARE("CPU_TASK_CR3",
 		offsetof(cpu_data_t *, cpu_task_cr3));
         DECLARE("CPU_ACTIVE_CR3",
 		offsetof(cpu_data_t *, cpu_active_cr3));
         DECLARE("CPU_KERNEL_CR3",
 		offsetof(cpu_data_t *, cpu_kernel_cr3));
-#ifdef __x86_64__
-		DECLARE("CPU_TLB_INVALID",
+	DECLARE("CPU_TLB_INVALID",
 		offsetof(cpu_data_t *, cpu_tlb_invalid));
-#endif
 
-	DECLARE("CPU_IS64BIT",
-		offsetof(cpu_data_t *, cpu_is64bit));
 	DECLARE("CPU_TASK_MAP",
 		offsetof(cpu_data_t *, cpu_task_map));
 	DECLARE("TASK_MAP_32BIT",		TASK_MAP_32BIT); 
 	DECLARE("TASK_MAP_64BIT",		TASK_MAP_64BIT);
-#ifdef __i386__
-	DECLARE("TASK_MAP_64BIT_SHARED",	TASK_MAP_64BIT_SHARED); 
-#endif
 	DECLARE("CPU_UBER_USER_GS_BASE",
 		offsetof(cpu_data_t *, cpu_uber.cu_user_gs_base));
 	DECLARE("CPU_UBER_ISF",
 		offsetof(cpu_data_t *, cpu_uber.cu_isf));
 	DECLARE("CPU_UBER_TMP",
 		offsetof(cpu_data_t *, cpu_uber.cu_tmp));
-	DECLARE("CPU_UBER_ARG_STORE",
-		offsetof(cpu_data_t *, cpu_uber_arg_store));
-	DECLARE("CPU_UBER_ARG_STORE_VALID",
-		offsetof(cpu_data_t *, cpu_uber_arg_store_valid));
 
 	DECLARE("CPU_NANOTIME",
 		offsetof(cpu_data_t *, cpu_nanotime));
@@ -478,7 +416,6 @@ main(
 		offsetof(cpu_data_t *, cpu_dr7));
 
 	DECLARE("hwIntCnt", 	offsetof(cpu_data_t *,cpu_hwIntCnt));
-#if	defined(__x86_64__)
 	DECLARE("CPU_ACTIVE_PCID",
 		offsetof(cpu_data_t *, cpu_active_pcid));
 	DECLARE("CPU_PCID_COHERENTP",
@@ -502,7 +439,6 @@ main(
 	    offsetof(cpu_data_t *, cpu_tlb_invalid_local));
 	DECLARE("CPU_TLB_INVALID_GLOBAL",
 		offsetof(cpu_data_t *, cpu_tlb_invalid_global));
-#endif /* x86_64 */
 	DECLARE("enaExpTrace",	enaExpTrace);
 	DECLARE("enaUsrFCall",	enaUsrFCall);
 	DECLARE("enaUsrPhyMp",	enaUsrPhyMp);
@@ -521,12 +457,6 @@ main(
 	DECLARE("PDESHIFT",     PDESHIFT);
 	DECLARE("PDESIZE",     PDESIZE);
 	DECLARE("PTESIZE",     PTESIZE);
-#ifdef __i386__
-	DECLARE("PTDPTDI",     PTDPTDI);
-	DECLARE("APTDPTDI",     APTDPTDI);
-	DECLARE("HIGH_MEM_BASE", HIGH_MEM_BASE);
-	DECLARE("HIGH_IDT_BASE", pmap_index_to_virt(HIGH_FIXED_IDT));
-#endif
 
 	DECLARE("KERNELBASEPDE",
 		(LINEAR_KERNEL_ADDRESS >> PDESHIFT) *

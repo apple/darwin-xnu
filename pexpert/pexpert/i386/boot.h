@@ -124,6 +124,7 @@ typedef struct boot_icon_element boot_icon_element;
 /* Bitfields for boot_args->flags */
 #define kBootArgsFlagRebootOnPanic	(1 << 0)
 #define kBootArgsFlagHiDPI		(1 << 1)
+#define kBootArgsFlagBlack		(1 << 2)
 
 typedef struct boot_args {
     uint16_t    Revision;	/* Revision of boot_args structure */

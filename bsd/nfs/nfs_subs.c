@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2011 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2013 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -1029,14 +1029,63 @@ nfsm_rpchead(
 			req->r_auth, req->r_cred, req, mrest, xidp, mreqp);
 }
 
+/*
+ * get_auiliary_groups:	Gets the supplementary groups from a credential.
+ *
+ * IN:		cred:	credential to get the associated groups from.
+ * OUT:		groups:	An array of gids of NGROUPS size.
+ * IN:		count:	The number of groups to get; i.e.; the number of groups the server supports
+ *
+ * returns:	The number of groups found. 
+ *
+ * Just a wrapper around kauth_cred_getgroups to handle the case of a server supporting less
+ * than NGROUPS. 
+ */
+static int
+get_auxiliary_groups(kauth_cred_t cred, gid_t groups[NGROUPS], int count)
+{
+	gid_t pgid;
+	int maxcount = count < NGROUPS ? count + 1 : NGROUPS;
+	int i;
+	
+	for (i = 0; i < NGROUPS; i++)
+		groups[i] = -2; /* Initialize to the nobody group */
+
+	(void)kauth_cred_getgroups(cred, groups, &maxcount);
+	if (maxcount < 1)
+		return (maxcount);
+	
+	/*
+	 * kauth_get_groups returns the primary group followed by the
+	 * users auxiliary groups. If the number of groups the server supports
+	 * is less than NGROUPS, then we will drop the first group so that
+	 * we can send one more group over the wire.
+	 */
+
+
+	if (count < NGROUPS) {
+		pgid = kauth_cred_getgid(cred);
+		if (pgid == groups[0]) {
+			maxcount -= 1;
+			for (i = 0;  i < maxcount; i++) {
+				groups[i] = groups[i+1];
+			}
+		}
+	}
+	
+	return (maxcount);
+}
+
 int
 nfsm_rpchead2(struct nfsmount *nmp, int sotype, int prog, int vers, int proc, int auth_type,
 	kauth_cred_t cred, struct nfsreq *req, mbuf_t mrest, u_int64_t *xidp, mbuf_t *mreqp)
 {
 	mbuf_t mreq, mb;
-	int error, i, grpsiz, auth_len = 0, authsiz, reqlen;
+	int error, i, auth_len = 0, authsiz, reqlen;
 	size_t headlen;
 	struct nfsm_chain nmreq;
+	gid_t grouplist[NGROUPS];
+	int groupcount;
 
 	/* calculate expected auth length */
 	switch (auth_type) {
@@ -1045,19 +1094,14 @@ nfsm_rpchead2(struct nfsmount *nmp, int sotype, int prog, int vers, int proc, in
 			break;
 		case RPCAUTH_SYS:
 		    {
-			gid_t grouplist[NGROUPS];
-			int groupcount = NGROUPS;
+			int count = nmp->nm_numgrps < NGROUPS ? nmp->nm_numgrps : NGROUPS;
 
 			if (!cred)
 				return (EINVAL);
-
-			(void)kauth_cred_getgroups(cred, grouplist, &groupcount);
-			if (groupcount < 1)
+  			groupcount = get_auxiliary_groups(cred, grouplist, count);
+			if (groupcount < 0)
 				return (EINVAL);
-
-			auth_len = (((((uint32_t)groupcount - 1) > nmp->nm_numgrps) ?
-				nmp->nm_numgrps : (groupcount - 1)) << 2) +
-				5 * NFSX_UNSIGNED;
+ 			auth_len = ((uint32_t)groupcount + 5) * NFSX_UNSIGNED;
 			break;
 		    }
 		case RPCAUTH_KRB5:
@@ -1129,21 +1173,14 @@ add_cred:
 			error = mbuf_setnext(nmreq.nmc_mcur, mrest);
 		break;
 	case RPCAUTH_SYS: {
-		gid_t grouplist[NGROUPS];
-		int groupcount;
-
 		nfsm_chain_add_32(error, &nmreq, RPCAUTH_SYS);
 		nfsm_chain_add_32(error, &nmreq, authsiz);
 		nfsm_chain_add_32(error, &nmreq, 0);	/* stamp */
 		nfsm_chain_add_32(error, &nmreq, 0);	/* zero-length hostname */
 		nfsm_chain_add_32(error, &nmreq, kauth_cred_getuid(cred));	/* UID */
 		nfsm_chain_add_32(error, &nmreq, kauth_cred_getgid(cred));	/* GID */
-		grpsiz = (auth_len >> 2) - 5;
-		nfsm_chain_add_32(error, &nmreq, grpsiz);/* additional GIDs */
-		memset(grouplist, 0, sizeof(grouplist));
-		groupcount = grpsiz;
-		(void)kauth_cred_getgroups(cred, grouplist, &groupcount);
-		for (i = 1; i <= grpsiz; i++)
+		nfsm_chain_add_32(error, &nmreq, groupcount);/* additional GIDs */
+		for (i = 0; i < groupcount; i++)
 			nfsm_chain_add_32(error, &nmreq, grouplist[i]);
 
 		/* And the verifier... */
@@ -1161,17 +1198,17 @@ add_cred:
 	case RPCAUTH_KRB5P:
 		error = nfs_gss_clnt_cred_put(req, &nmreq, mrest);
 		if (error == ENEEDAUTH) {
-			gid_t grouplist[NGROUPS];
-			int groupcount = NGROUPS;
+			int count = nmp->nm_numgrps < NGROUPS ? nmp->nm_numgrps : NGROUPS;
+
 			/*
 			 * Use sec=sys for this user
 			 */
 			error = 0;
 			req->r_auth = auth_type = RPCAUTH_SYS;
-			(void)kauth_cred_getgroups(cred, grouplist, &groupcount);
-			auth_len = (((((uint32_t)groupcount - 1) > nmp->nm_numgrps) ?
-				nmp->nm_numgrps : (groupcount - 1)) << 2) +
-				5 * NFSX_UNSIGNED;
+ 			groupcount = get_auxiliary_groups(cred, grouplist, count);
+			if (groupcount < 0)
+				return (EINVAL);
+ 			auth_len = ((uint32_t)groupcount + 5) * NFSX_UNSIGNED;
 			authsiz = nfsm_rndup(auth_len);
 			goto add_cred;
 		}
@@ -1939,6 +1976,27 @@ nfs_uaddr2sockaddr(const char *uaddr, struct sockaddr *addr)
 }
 
 
+/* NFS Client debugging support */
+uint32_t nfs_debug_ctl;
+
+#include <libkern/libkern.h>
+#include <stdarg.h>
+
+void
+nfs_printf(int facility, int level, const char *fmt, ...)
+{
+	va_list ap;
+	
+	if ((uint32_t)level > NFS_DEBUG_LEVEL)
+		return;
+	if (NFS_DEBUG_FACILITY && !((uint32_t)facility & NFS_DEBUG_FACILITY))
+		return;
+	
+	va_start(ap, fmt);
+	vprintf(fmt, ap);
+	va_end(ap);
+}
+
 #endif /* NFSCLIENT */
 
 /*
@@ -2100,12 +2158,6 @@ nfsrv_namei(
 
 	/* Check for encountering a symbolic link */
 	if (cnp->cn_flags & ISSYMLINK) {
-#if CONFIG_VFS_FUNNEL
-	        if ((cnp->cn_flags & FSNODELOCKHELD)) {
-		        cnp->cn_flags &= ~FSNODELOCKHELD;
-			unlock_fsnode(nip->ni_dvp, NULL);
-		}
-#endif /* CONFIG_VFS_FUNNEL */
 		if (cnp->cn_flags & (LOCKPARENT | WANTPARENT))
 			vnode_put(nip->ni_dvp);
 		if (nip->ni_vp) {
@@ -2295,7 +2347,7 @@ nfsm_chain_get_sattr(
 {
 	int error = 0;
 	uint32_t val = 0;
-	uint64_t val64;
+	uint64_t val64 = 0;
 	struct timespec now;
 
 	if (nd->nd_vers == NFS_VER2) {
@@ -2486,12 +2538,13 @@ nfsrv_hang_addrlist(struct nfs_export *nx, struct user_nfs_export_args *unxa)
 			 * Seems silly to initialize every AF when most are not
 			 * used, do so on demand here
 			 */
-			for (dom = domains; dom; dom = dom->dom_next)
+			TAILQ_FOREACH(dom, &domains, dom_entry) {
 				if (dom->dom_family == i && dom->dom_rtattach) {
 					dom->dom_rtattach((void **)&nx->nx_rtable[i],
 						dom->dom_rtoffset);
 					break;
 				}
+			}
 			if ((rnh = nx->nx_rtable[i]) == 0) {
 			        if (IS_VALID_CRED(cred))
 				        kauth_cred_unref(&cred);

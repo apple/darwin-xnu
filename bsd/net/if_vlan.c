@@ -441,7 +441,7 @@ ifvlan_get_vlan_parent_retained(ifvlan_ref ifv)
 {
     vlan_parent_ref	vlp = ifv->ifv_vlp;
 
-    if (vlan_parent_flags_detaching(vlp)) {
+    if (vlp == NULL || vlan_parent_flags_detaching(vlp)) {
 	return (NULL);
     }
     vlan_parent_retain(vlp);
@@ -942,7 +942,7 @@ vlan_clone_create(struct if_clone *ifc, u_int32_t unit, __unused void *params)
 	int							error;
 	ifvlan_ref					ifv;
 	ifnet_t						ifp;
-	struct ifnet_init_params	vlan_init;
+	struct ifnet_init_eparams	vlan_init;
 	
 	error = vlan_globals_init();
 	if (error != 0) {
@@ -965,6 +965,9 @@ vlan_clone_create(struct if_clone *ifc, u_int32_t unit, __unused void *params)
 	}
 	
 	bzero(&vlan_init, sizeof(vlan_init));
+	vlan_init.ver = IFNET_INIT_CURRENT_VERSION;
+	vlan_init.len = sizeof (vlan_init);
+	vlan_init.flags = IFNET_INIT_LEGACY;
 	vlan_init.uniqueid = ifv->ifv_name;
 	vlan_init.uniqueid_len = strlen(ifv->ifv_name);
 	vlan_init.name = ifc->ifc_name;
@@ -976,14 +979,14 @@ vlan_clone_create(struct if_clone *ifc, u_int32_t unit, __unused void *params)
 	vlan_init.add_proto = ether_add_proto;
 	vlan_init.del_proto = ether_del_proto;
 	vlan_init.check_multi = ether_check_multi;
-	vlan_init.framer = ether_frameout;
+	vlan_init.framer_extended = ether_frameout_extended;
 	vlan_init.softc = ifv;
 	vlan_init.ioctl = vlan_ioctl;
 	vlan_init.set_bpf_tap = vlan_set_bpf_tap;
 	vlan_init.detach = vlan_if_free;
 	vlan_init.broadcast_addr = etherbroadcastaddr;
 	vlan_init.broadcast_len = ETHER_ADDR_LEN;
-	error = ifnet_allocate(&vlan_init, &ifp);
+	error = ifnet_allocate_extended(&vlan_init, &ifp);
 	
 	if (error) {
 	    ifvlan_release(ifv);
@@ -1280,7 +1283,7 @@ vlan_input(ifnet_t p, __unused protocol_family_t protocol,
     }
     if (tag != 0) {
 	m->m_pkthdr.rcvif = ifp;
-	m->m_pkthdr.header = frame_header;
+	m->m_pkthdr.pkt_hdr = frame_header;
 	(void)ifnet_stat_increment_in(ifp, 1, 
 				      m->m_pkthdr.len + ETHER_HDR_LEN, 0);
 	vlan_bpf_input(ifp, m, bpf_func, frame_header, ETHER_HDR_LEN, 
@@ -1288,7 +1291,7 @@ vlan_input(ifnet_t p, __unused protocol_family_t protocol,
 	/* We found a vlan interface, inject on that interface. */
 	dlil_input_packet_list(ifp, m);
     } else {
-	m->m_pkthdr.header = frame_header;
+	m->m_pkthdr.pkt_hdr = frame_header;
 	/* Send priority-tagged packet up through the parent */
 	dlil_input_packet_list(p, m);
     }
@@ -1414,7 +1417,7 @@ vlan_config(struct ifnet * ifp, struct ifnet * p, int tag)
     }
 
     /* set our ethernet address to that of the parent */
-    ifnet_set_lladdr_and_type(ifp, ifnet_lladdr(p), ETHER_ADDR_LEN, IFT_ETHER);
+    ifnet_set_lladdr_and_type(ifp, IF_LLADDR(p), ETHER_ADDR_LEN, IFT_ETHER);
 
     /* no failures past this point */
     vlan_lock();
@@ -2154,20 +2157,6 @@ vlan_detach_inet6(struct ifnet *ifp, protocol_family_t protocol_family)
 }
 #endif /* INET6 */
 
-#if NETAT
-static errno_t
-vlan_attach_at(struct ifnet *ifp, protocol_family_t protocol_family)
-{
-    return (ether_attach_at(ifp, protocol_family));
-}
-
-static void
-vlan_detach_at(struct ifnet *ifp, protocol_family_t protocol_family)
-{
-    ether_detach_at(ifp, protocol_family);
-}
-#endif /* NETAT */
-
 __private_extern__ int
 vlan_family_init(void)
 {
@@ -2189,15 +2178,6 @@ vlan_family_init(void)
 	goto done;
     }
 #endif
-#if NETAT
-    error = proto_register_plumber(PF_APPLETALK, IFNET_FAMILY_VLAN, 
-				  vlan_attach_at, vlan_detach_at);
-    if (error != 0) {
-	printf("proto_register_plumber failed for AF_APPLETALK error=%d\n",
-	       error);
-	goto done;
-    }
-#endif /* NETAT */
     error = vlan_clone_attach();
     if (error != 0) {
         printf("proto_register_plumber failed vlan_clone_attach error=%d\n",

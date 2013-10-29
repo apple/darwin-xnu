@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2011 Apple Inc. All rights reserved.
+ * Copyright (c) 2011-2013 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -207,8 +207,7 @@ netsrc_ipv6(kern_ctl_ref kctl, uint32_t unit, struct netsrc_req *nrq)
 		return (EHOSTUNREACH);
 	in6 = in6_selectsrc(dstsin6, NULL, NULL, &ro, NULL, &storage,
 	    nrq->nrq_ifscope, &error);
-	if (ro.ro_rt)
-		rtfree(ro.ro_rt);
+	ROUTE_RELEASE(&ro);
 	if (!in6 || error)
 		return (error);
 	memset(&nrp, 0, sizeof(nrp));
@@ -229,6 +228,8 @@ netsrc_ipv6(kern_ctl_ref kctl, uint32_t unit, struct netsrc_req *nrq)
 				nrp.nrp_flags |= NETSRC_IP6_FLAG_DEPRECATED;
 			if (ia->ia6_flags & IN6_IFF_OPTIMISTIC)
 				nrp.nrp_flags |= NETSRC_IP6_FLAG_OPTIMISTIC;
+			if (ia->ia6_flags & IN6_IFF_SECURED)
+				nrp.nrp_flags |= NETSRC_IP6_FLAG_SECURED;
 			sin6.sin6_family = AF_INET6;
 			sin6.sin6_len    = sizeof(sin6);
 			memcpy(&sin6.sin6_addr, in6, sizeof(*in6));

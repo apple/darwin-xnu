@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2002-2008 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2002-2012 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -108,11 +108,7 @@ static void hfs_chash_lock_spin(struct hfsmount *hfsmp)
 	lck_mtx_lock_spin(&hfsmp->hfs_chash_mutex);
 }
 
-#ifdef i386
-static void hfs_chash_lock_convert (struct hfsmount *hfsmp)
-#else
 static void hfs_chash_lock_convert (__unused struct hfsmount *hfsmp)
-#endif
 {
 	lck_mtx_convert_spin(&hfsmp->hfs_chash_mutex);
 }
@@ -188,7 +184,7 @@ loop:
 			 */
 		        return (NULL);
 		}
-		if (!skiplock && hfs_lock(cp, HFS_EXCLUSIVE_LOCK) != 0) {
+		if (!skiplock && hfs_lock(cp, HFS_EXCLUSIVE_LOCK, HFS_LOCK_DEFAULT) != 0) {
 			vnode_put(vp);
 			return (NULL);
 		}
@@ -352,7 +348,7 @@ loop_with_lock:
 		}
 
 		if (!skiplock) {
-			hfs_lock(cp, HFS_FORCE_LOCK);
+			hfs_lock(cp, HFS_EXCLUSIVE_LOCK, HFS_LOCK_ALLOW_NOEXISTS);
 		}
 
 		/*
@@ -423,7 +419,7 @@ loop_with_lock:
 
 	lck_rw_init(&ncp->c_rwlock, hfs_rwlock_group, hfs_lock_attr);
 	if (!skiplock)
-		(void) hfs_lock(ncp, HFS_EXCLUSIVE_LOCK);
+		(void) hfs_lock(ncp, HFS_EXCLUSIVE_LOCK, HFS_LOCK_DEFAULT);
 
 	/* Insert the new cnode with it's H_ALLOC flag set */
 	LIST_INSERT_HEAD(CNODEHASH(hfsmp, inum), ncp, c_hash);

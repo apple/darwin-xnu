@@ -444,10 +444,16 @@ union union_vfsidctl { /* the fields vc_vers and vc_fsid are compatible */
 #define VFS_CTL_NOLOCKS	0x00010006	/* disable file locking */
 #define VFS_CTL_SADDR	0x00010007	/* get server address */
 #define VFS_CTL_DISC    0x00010008	/* server disconnected */
+#define VFS_CTL_SERVERINFO  0x00010009  /* information about fs server */
 
 struct vfsquery {
 	u_int32_t	vq_flags;
 	u_int32_t	vq_spare[31];
+};
+
+struct vfs_server {
+     int32_t  vs_minutes;                       /* minutes until server goes down. */
+     u_int8_t vs_server_name[MAXHOSTNAMELEN*3]; /* UTF8 server name to display (null terminated) */
 };
 
 /* vfsquery flags */
@@ -461,8 +467,8 @@ struct vfsquery {
 #define VQ_NOTRESPLOCK	0x0080	/* server lockd down */
 #define VQ_UPDATE	0x0100	/* filesystem information has changed */
 #define VQ_VERYLOWDISK	0x0200	/* file system has *very* little disk space left */
-#define VQ_SYNCEVENT	0x0400	/* a sync just happened */
-#define VQ_FLAG0800	0x0800	/* placeholder */
+#define VQ_SYNCEVENT	0x0400	/* a sync just happened (not set by kernel starting Mac OS X 10.9) */
+#define VQ_SERVEREVENT  0x0800  /* server issued notification/warning */
 #define VQ_FLAG1000	0x1000	/* placeholder */
 #define VQ_FLAG2000	0x2000	/* placeholder */
 #define VQ_FLAG4000	0x4000	/* placeholder */
@@ -490,8 +496,8 @@ struct vfsioattr {
 /*
  * Filesystem Registration information
  */
-#define VFS_TBLTHREADSAFE		0x0001
-#define VFS_TBLFSNODELOCK		0x0002
+#define VFS_TBLTHREADSAFE		0x0001	/* Only threadsafe filesystems are supported */
+#define VFS_TBLFSNODELOCK		0x0002	/* Only threadsafe filesystems are supported */
 #define VFS_TBLNOTYPENUM		0x0008
 #define VFS_TBLLOCALVOL			0x0010
 #define VFS_TBL64BITREADY		0x0020
@@ -503,6 +509,7 @@ struct vfsioattr {
 #define	VFS_TBLNOMACLABEL		0x1000
 #define VFS_TBLVNOP_PAGEINV2		0x2000
 #define VFS_TBLVNOP_PAGEOUTV2		0x4000
+#define VFS_TBLVNOP_NOUPDATEID_RENAME	0x8000	/* vfs should not call vnode_update_ident on rename */
 
 
 struct vfs_fsentry {
@@ -1176,9 +1183,9 @@ int	vfs_getattr(mount_t mp, struct vfs_attr *vfa, vfs_context_t ctx);
 int	vfs_setattr(mount_t mp, struct vfs_attr *vfa, vfs_context_t ctx);
 int	vfs_extendedsecurity(mount_t);
 mount_t	vfs_getvfs_by_mntonname(char *);
-void    vfs_markdependency(mount_t);
 vnode_t vfs_vnodecovered(mount_t mp); /* Returns vnode with an iocount that must be released with vnode_put() */
 vnode_t vfs_devvp(mount_t mp); /* Please see block comment with implementation */
+int vfs_nativexattrs (mount_t mp); /* whether or not the FS supports EAs natively */
 void *  vfs_mntlabel(mount_t mp); /* Safe to cast to "struct label*"; returns "void*" to limit dependence of mount.h on security headers.  */
 void	vfs_setunmountpreflight(mount_t mp);
 void	vfs_setcompoundopen(mount_t mp);

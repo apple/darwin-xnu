@@ -338,6 +338,9 @@ typedef	errno_t	(*sf_connect_in_func)(void *cookie, socket_t so,
 	@result Return:
 		0 - The caller will continue with normal processing of the
 			connection.
+		EJUSTRETURN - The caller will return with a value of 0 (no error)
+			from that point without further processing the connect command. The
+			protocol layer will not see the call.
 		Anything Else - The caller will rejecting the outbound
 			connection.
 */
@@ -355,6 +358,9 @@ typedef	errno_t	(*sf_connect_out_func)(void *cookie, socket_t so,
 	@param to The local address of the socket will be bound to.
 	@result Return:
 		0 - The caller will continue with normal processing of the bind.
+		EJUSTRETURN - The caller will return with a value of 0 (no error)
+			from that point without further processing the bind command. The
+			protocol layer will not see the call.
 		Anything Else - The caller will rejecting the bind.
 */
 typedef	errno_t	(*sf_bind_func)(void *cookie, socket_t so,
@@ -372,6 +378,9 @@ typedef	errno_t	(*sf_bind_func)(void *cookie, socket_t so,
 	@result Return:
 		0 - The caller will continue with normal processing of the
 			setsockopt.
+		EJUSTRETURN - The caller will return with a value of 0 (no error)
+			from that point without further propagating the set option
+			command. The socket and protocol layers will not see the call.
 		Anything Else - The caller will stop processing and return
 			this error.
 */
@@ -389,6 +398,9 @@ typedef	errno_t	(*sf_setoption_func)(void *cookie, socket_t so, sockopt_t opt);
 	@result Return:
 		0 - The caller will continue with normal processing of the
 			getsockopt.
+		EJUSTRETURN - The caller will return with a value of 0 (no error)
+			from that point without further propagating the get option
+			command. The socket and protocol layers will not see the call.
 		Anything Else - The caller will stop processing and return
 			this error.
 */
@@ -404,6 +416,9 @@ typedef	errno_t	(*sf_getoption_func)(void *cookie, socket_t so, sockopt_t opt);
 	@param so The socket the filter is attached to.
 	@result Return:
 		0 - The caller will continue with normal processing of listen.
+		EJUSTRETURN - The caller will return with a value of 0 (no error)
+		from that point without further processing the listen command. The
+		protocol will not see the call.
 		Anything Else - The caller will stop processing and return
 			this error.
 */
@@ -426,6 +441,9 @@ typedef	errno_t	(*sf_listen_func)(void *cookie, socket_t so);
 	@result Return:
 		0 - The caller will continue with normal processing of
 			this ioctl.
+		EJUSTRETURN - The caller will return with a value of 0 (no error)
+			from that point without further processing or propogating
+			the ioctl.
 		Anything Else - The caller will stop processing and return
 			this error.
 */

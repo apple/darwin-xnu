@@ -142,6 +142,7 @@ struct IOMDDMAMapArgs {
     uint64_t              fLength;
     uint64_t              fAlloc;
     ppnum_t               fAllocCount;
+    uint8_t               fMapContig;
 };
 
 struct IODMACommandInternal
@@ -180,6 +181,7 @@ struct IODMACommandInternal
     // IODMAEventSource use
     IOReturn fStatus;
     UInt64   fActualByteCount;
+    AbsoluteTime    fTimeStamp;
 };
 
 struct IOMemoryDescriptorDevicePager {
@@ -196,6 +198,35 @@ struct IOMemoryDescriptorReserved {
     uint64_t                      kernReserved[4];
 };
 
+struct iopa_t
+{
+    IOLock       * lock;
+    queue_head_t   list;
+    vm_size_t      pagecount;
+    vm_size_t      bytecount;
+};
+
+struct iopa_page_t
+{
+    queue_chain_t link;
+    uint64_t      avail;
+    uint32_t      signature;
+};
+typedef struct iopa_page_t iopa_page_t;
+
+typedef uintptr_t (*iopa_proc_t)(iopa_t * a);
+
+enum
+{
+    kIOPageAllocChunkBytes = (PAGE_SIZE / 64),
+    kIOPageAllocSignature  = 'iopa'
+};
+
+extern "C" void      iopa_init(iopa_t * a);
+extern "C" uintptr_t iopa_alloc(iopa_t * a, iopa_proc_t alloc, vm_size_t bytes, uint32_t balign);
+extern "C" uintptr_t iopa_free(iopa_t * a, uintptr_t addr, vm_size_t bytes);
+
+extern "C" iopa_t    gIOBMDPageAllocator;
 
 extern "C" struct timeval gIOLastSleepTime;
 extern "C" struct timeval gIOLastWakeTime;

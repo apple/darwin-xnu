@@ -67,6 +67,10 @@
 #ifndef _SECURITY_MAC_INTERNAL_H_
 #define _SECURITY_MAC_INTERNAL_H_
 
+#ifndef PRIVATE
+#warning "MAC policy is not KPI, see Technical Q&A QA1574, this header will be removed in next version"
+#endif
+
 #include <string.h>
 #include <sys/param.h>
 #include <sys/queue.h>
@@ -202,13 +206,14 @@ extern unsigned int mac_label_mbufs;
 
 extern unsigned int mac_label_vnodes;
 
-static int mac_proc_check_enforce(proc_t p, int enforce_flag);
+static int mac_proc_check_enforce(proc_t p, int enforce_flags);
 
 static __inline__ int mac_proc_check_enforce(proc_t p, int enforce_flags)
 {
 #if CONFIG_MACF
 	return ((p->p_mac_enforce & enforce_flags) != 0);
 #else
+#pragma unused(p,enforce_flags)
 	return 0;
 #endif
 }
@@ -228,12 +233,16 @@ static __inline__ int mac_context_check_enforce(vfs_context_t ctx, int enforce_f
 
 static __inline__ void mac_context_set_enforce(vfs_context_t ctx, int enforce_flags)
 {
+#if CONFIG_MACF
 	proc_t proc = vfs_context_proc(ctx);
 
 	if (proc == NULL)
 		return;
 
 	mac_proc_set_enforce(proc, enforce_flags);
+#else
+#pragma unused(ctx,enforce_flags)
+#endif
 }
 
 

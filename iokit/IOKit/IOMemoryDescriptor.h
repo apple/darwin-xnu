@@ -53,7 +53,12 @@ enum IODirection
     kIODirectionIn    = 0x1,	// User land 'read',  same as VM_PROT_READ
     kIODirectionOut   = 0x2,	// User land 'write', same as VM_PROT_WRITE
     kIODirectionOutIn = kIODirectionOut | kIODirectionIn,
-    kIODirectionInOut = kIODirectionIn  | kIODirectionOut
+    kIODirectionInOut = kIODirectionIn  | kIODirectionOut,
+
+    // these flags are valid for the prepare() method only
+    kIODirectionPrepareToPhys32   = 0x00000004,
+    kIODirectionPrepareNoFault    = 0x00000008,
+    kIODirectionPrepareReserved1  = 0x00000010,
 };
 #ifdef __LP64__
 typedef IOOptionBits IODirection;
@@ -103,9 +108,24 @@ enum {
 enum 
 {
     kIOMemoryPurgeableKeepCurrent = 1,
+
     kIOMemoryPurgeableNonVolatile = 2,
     kIOMemoryPurgeableVolatile    = 3,
-    kIOMemoryPurgeableEmpty       = 4
+    kIOMemoryPurgeableEmpty       = 4,
+
+    // modifiers for kIOMemoryPurgeableVolatile behavior
+    kIOMemoryPurgeableVolatileGroup0           = VM_VOLATILE_GROUP_0,
+    kIOMemoryPurgeableVolatileGroup1           = VM_VOLATILE_GROUP_1,
+    kIOMemoryPurgeableVolatileGroup2           = VM_VOLATILE_GROUP_2,
+    kIOMemoryPurgeableVolatileGroup3           = VM_VOLATILE_GROUP_3,
+    kIOMemoryPurgeableVolatileGroup4           = VM_VOLATILE_GROUP_4,
+    kIOMemoryPurgeableVolatileGroup5           = VM_VOLATILE_GROUP_5,
+    kIOMemoryPurgeableVolatileGroup6           = VM_VOLATILE_GROUP_6,
+    kIOMemoryPurgeableVolatileGroup7           = VM_VOLATILE_GROUP_7,
+    kIOMemoryPurgeableVolatileBehaviorFifo     = VM_PURGABLE_BEHAVIOR_FIFO,
+    kIOMemoryPurgeableVolatileBehaviorLifo     = VM_PURGABLE_BEHAVIOR_LIFO,
+    kIOMemoryPurgeableVolatileOrderingObsolete = VM_PURGABLE_ORDERING_OBSOLETE,
+    kIOMemoryPurgeableVolatileOrderingNormal   = VM_PURGABLE_ORDERING_NORMAL,
 };
 enum 
 {
@@ -216,6 +236,17 @@ typedef IOOptionBits DMACommandOps;
 
     virtual IOReturn setPurgeable( IOOptionBits newState,
                                     IOOptionBits * oldState );
+    
+
+/*! @function getPageCounts
+    @abstract Retrieve the number of resident and/or dirty pages encompassed by an IOMemoryDescriptor.
+    @discussion This method returns the number of resident and/or dirty pages encompassed by an IOMemoryDescriptor.
+    @param residentPageCount - If non-null, a pointer to a byte count that will return the number of resident pages encompassed by this IOMemoryDescriptor.
+    @param dirtyPageCount - If non-null, a pointer to a byte count that will return the number of dirty pages encompassed by this IOMemoryDescriptor.
+    @result An IOReturn code. */
+
+    IOReturn getPageCounts( IOByteCount * residentPageCount,
+                            IOByteCount * dirtyPageCount);
 
 /*! @function performOperation
     @abstract Perform an operation on the memory descriptor's memory.
@@ -951,7 +982,7 @@ public:
 
     virtual IOReturn setPurgeable( IOOptionBits newState,
                                     IOOptionBits * oldState );
-
+    
     virtual addr64_t getPhysicalSegment( IOByteCount   offset,
                                          IOByteCount * length,
 #ifdef __LP64__

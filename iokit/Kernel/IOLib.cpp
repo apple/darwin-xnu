@@ -92,6 +92,7 @@ __doprnt(
 extern void cons_putc_locked(char);
 extern void bsd_log_lock(void);
 extern void bsd_log_unlock(void);
+extern void logwakeup();
 
 
 /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
@@ -109,6 +110,7 @@ void *_giDebugLogDataInternal	= NULL;
 void *_giDebugReserved1		= NULL;
 void *_giDebugReserved2		= NULL;
 
+iopa_t gIOBMDPageAllocator;
 
 /*
  * Static variables for this module.
@@ -133,6 +135,8 @@ static struct {
     IOMapData	maps[ kIOMaxPageableMaps ];
     lck_mtx_t *	lock;
 } gIOKitPageableSpace;
+
+static iopa_t gIOPageablePageAllocator;
 
 /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
 
@@ -164,6 +168,9 @@ void IOLibInit(void)
 
     gIOMallocContiguousEntriesLock 	= lck_mtx_alloc_init(IOLockGroup, LCK_ATTR_NULL);
     queue_init( &gIOMallocContiguousEntries );
+
+    iopa_init(&gIOBMDPageAllocator);
+    iopa_init(&gIOPageablePageAllocator);
 
     libInitialized = true;
 }
@@ -626,7 +633,7 @@ static kern_return_t IOMallocPageableCallback(vm_map_t map, void * _ref)
     return( kr );
 }
 
-void * IOMallocPageable(vm_size_t size, vm_size_t alignment)
+static void * IOMallocPageablePages(vm_size_t size, vm_size_t alignment)
 {
     kern_return_t	       kr = kIOReturnNotReady;
     struct IOMallocPageableRef ref;
@@ -640,13 +647,6 @@ void * IOMallocPageable(vm_size_t size, vm_size_t alignment)
     kr = IOIteratePageableMaps( size, &IOMallocPageableCallback, &ref );
     if( kIOReturnSuccess != kr)
         ref.address = 0;
-
-	if( ref.address) {
-#if IOALLOCDEBUG
-       debug_iomallocpageable_size += round_page(size);
-#endif
-       IOStatisticsAlloc(kIOStatisticsMallocPageable, size);
-	}
 
     return( (void *) ref.address );
 }
@@ -669,19 +669,206 @@ vm_map_t IOPageableMapForAddress( uintptr_t address )
     return( map );
 }
 
-void IOFreePageable(void * address, vm_size_t size)
+static void IOFreePageablePages(void * address, vm_size_t size)
 {
     vm_map_t map;
     
     map = IOPageableMapForAddress( (vm_address_t) address);
     if( map)
         kmem_free( map, (vm_offset_t) address, size);
+}
 
+static uintptr_t IOMallocOnePageablePage(iopa_t * a)
+{
+    return ((uintptr_t) IOMallocPageablePages(page_size, page_size));
+}
+
+void * IOMallocPageable(vm_size_t size, vm_size_t alignment)
+{
+    void * addr;
+
+    if (size >= (page_size - 4*kIOPageAllocChunkBytes)) addr = IOMallocPageablePages(size, alignment);
+    else                   addr = ((void * ) iopa_alloc(&gIOPageablePageAllocator, &IOMallocOnePageablePage, size, alignment));
+
+    if (addr) {
 #if IOALLOCDEBUG
-    debug_iomallocpageable_size -= round_page(size);
+       debug_iomallocpageable_size += size;
+#endif
+       IOStatisticsAlloc(kIOStatisticsMallocPageable, size);
+    }
+
+    return (addr);
+}
+
+void IOFreePageable(void * address, vm_size_t size)
+{
+#if IOALLOCDEBUG
+    debug_iomallocpageable_size -= size;
+#endif
+    IOStatisticsAlloc(kIOStatisticsFreePageable, size);
+
+    if (size < (page_size - 4*kIOPageAllocChunkBytes))
+    {
+	address = (void *) iopa_free(&gIOPageablePageAllocator, (uintptr_t) address, size);
+	size = page_size;
+    }
+    if (address) IOFreePageablePages(address, size);
+}
+
+/* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
+
+#if 0
+#undef assert
+#define assert(ex)  \
+	((ex) ? (void)0 : Assert(__FILE__, __LINE__, # ex))
 #endif
 
-    IOStatisticsAlloc(kIOStatisticsFreePageable, size);
+typedef char iopa_page_t_assert[(sizeof(iopa_page_t) <= kIOPageAllocChunkBytes) ? 1 : -1];
+
+extern "C" void 
+iopa_init(iopa_t * a)
+{
+    bzero(a, sizeof(*a));
+    a->lock = IOLockAlloc();
+    queue_init(&a->list);
+}
+
+static uintptr_t
+iopa_allocinpage(iopa_page_t * pa, uint32_t count, uint64_t align)
+{
+    uint32_t n, s;
+    uint64_t avail = pa->avail;
+
+    assert(avail);
+
+    // find strings of count 1 bits in avail
+    for (n = count; n > 1; n -= s)
+    {
+    	s = n >> 1;
+    	avail = avail & (avail << s);
+    }
+    // and aligned
+    avail &= align;
+
+    if (avail)
+    {
+	n = __builtin_clzll(avail);
+	pa->avail &= ~((-1ULL << (64 - count)) >> n);
+	if (!pa->avail && pa->link.next)
+	{
+	    remque(&pa->link);
+	    pa->link.next = 0;
+	}
+	return (n * kIOPageAllocChunkBytes + trunc_page((uintptr_t) pa));
+    }
+
+    return (0);
+}
+
+static uint32_t 
+log2up(uint32_t size)
+{
+    if (size <= 1) size = 0;
+    else size = 32 - __builtin_clz(size - 1);
+    return (size);
+}
+
+uintptr_t 
+iopa_alloc(iopa_t * a, iopa_proc_t alloc, vm_size_t bytes, uint32_t balign)
+{
+    static const uint64_t align_masks[] = {
+	0xFFFFFFFFFFFFFFFF,
+	0xAAAAAAAAAAAAAAAA,
+	0x8888888888888888,
+	0x8080808080808080,
+	0x8000800080008000,
+	0x8000000080000000,
+	0x8000000000000000,
+    };
+    iopa_page_t * pa;
+    uintptr_t     addr = 0;
+    uint32_t      count;
+    uint64_t      align;
+
+    if (!bytes) bytes = 1;
+    count = (bytes + kIOPageAllocChunkBytes - 1) / kIOPageAllocChunkBytes;
+    align = align_masks[log2up((balign + kIOPageAllocChunkBytes - 1) / kIOPageAllocChunkBytes)];
+
+    IOLockLock(a->lock);
+    pa = (typeof(pa)) queue_first(&a->list);
+    while (!queue_end(&a->list, &pa->link))
+    {
+	addr = iopa_allocinpage(pa, count, align);
+	if (addr)
+	{
+	    a->bytecount += bytes;
+	    break;
+	}
+	pa = (typeof(pa)) queue_next(&pa->link);
+    }
+    IOLockUnlock(a->lock);
+
+    if (!addr)
+    {
+	addr = alloc(a);
+	if (addr)
+	{
+	    pa = (typeof(pa)) (addr + page_size - kIOPageAllocChunkBytes);
+	    pa->signature = kIOPageAllocSignature;
+	    pa->avail     = -2ULL;
+
+	    addr = iopa_allocinpage(pa, count, align);
+	    IOLockLock(a->lock);
+	    if (pa->avail) enqueue_head(&a->list, &pa->link);
+	    a->pagecount++;
+	    if (addr) a->bytecount += bytes;
+	    IOLockUnlock(a->lock);
+	}
+    }
+
+    assert((addr & ((1 << log2up(balign)) - 1)) == 0);
+    return (addr);
+}
+
+uintptr_t 
+iopa_free(iopa_t * a, uintptr_t addr, vm_size_t bytes)
+{
+    iopa_page_t * pa;
+    uint32_t      count;
+    uintptr_t     chunk;
+
+    if (!bytes) bytes = 1;
+
+    chunk = (addr & page_mask);
+    assert(0 == (chunk & (kIOPageAllocChunkBytes - 1)));
+
+    pa = (typeof(pa)) (addr | (page_size - kIOPageAllocChunkBytes));
+    assert(kIOPageAllocSignature == pa->signature);
+
+    count = (bytes + kIOPageAllocChunkBytes - 1) / kIOPageAllocChunkBytes;
+    chunk /= kIOPageAllocChunkBytes;
+
+    IOLockLock(a->lock);
+    if (!pa->avail)
+    {
+	assert(!pa->link.next);
+	enqueue_tail(&a->list, &pa->link);
+    }
+    pa->avail |= ((-1ULL << (64 - count)) >> chunk);
+    if (pa->avail != -2ULL) pa = 0;
+    else
+    {
+        remque(&pa->link);
+        pa->link.next = 0;
+        pa->signature = 0;
+	a->pagecount--;
+	// page to free
+	pa = (typeof(pa)) trunc_page(pa);
+    }
+    a->bytecount -= bytes;
+    IOLockUnlock(a->lock);
+
+    return ((uintptr_t) pa);
 }
     
 /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
@@ -797,6 +984,7 @@ void IOLogv(const char *format, va_list ap)
     bsd_log_lock();
     __doprnt(format, ap, _iolog_logputc, NULL, 16);
     bsd_log_unlock();
+    logwakeup();
 
     __doprnt(format, ap2, _iolog_consputc, NULL, 16);
 }

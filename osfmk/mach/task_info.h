@@ -261,23 +261,8 @@ typedef struct task_extmod_info	*task_extmod_info_t;
 #define TASK_EXTMOD_INFO_COUNT	\
     		(sizeof(task_extmod_info_data_t) / sizeof(natural_t))
 
-/* Always 64-bit in user and kernel */
+
 #define MACH_TASK_BASIC_INFO     20         /* always 64-bit basic info */
-
-#define TASK_POWER_INFO        21
-struct task_power_info {
-        uint64_t                total_user;
-        uint64_t                total_system;
-        uint64_t                task_interrupt_wakeups;
-        uint64_t                task_platform_idle_wakeups;
-        uint64_t                task_timer_wakeups_bin_1;
-        uint64_t                task_timer_wakeups_bin_2;
-};
-typedef struct task_power_info        task_power_info_data_t;
-typedef struct task_power_info        *task_power_info_t;
-#define TASK_POWER_INFO_COUNT        ((mach_msg_type_number_t) \
-                (sizeof (task_power_info_data_t) / sizeof (natural_t)))
-
 struct mach_task_basic_info {
         mach_vm_size_t  virtual_size;       /* virtual memory size (bytes) */
         mach_vm_size_t  resident_size;      /* resident memory size (bytes) */
@@ -293,6 +278,57 @@ typedef struct mach_task_basic_info       mach_task_basic_info_data_t;
 typedef struct mach_task_basic_info       *mach_task_basic_info_t;
 #define MACH_TASK_BASIC_INFO_COUNT   \
                 (sizeof(mach_task_basic_info_data_t) / sizeof(natural_t))
+
+
+#define TASK_POWER_INFO	21
+
+struct task_power_info {
+	uint64_t		total_user;
+	uint64_t		total_system;
+	uint64_t		task_interrupt_wakeups;
+	uint64_t		task_platform_idle_wakeups;
+	uint64_t		task_timer_wakeups_bin_1;
+	uint64_t		task_timer_wakeups_bin_2;
+};
+
+typedef struct task_power_info	task_power_info_data_t;
+typedef struct task_power_info	*task_power_info_t;
+#define TASK_POWER_INFO_COUNT	((mach_msg_type_number_t) \
+		(sizeof (task_power_info_data_t) / sizeof (natural_t)))
+
+
+
+#define TASK_VM_INFO		22
+#define TASK_VM_INFO_PURGEABLE	23
+struct task_vm_info {
+        mach_vm_size_t  virtual_size;	    /* virtual memory size (bytes) */
+	integer_t	region_count;	    /* number of memory regions */
+	integer_t	page_size;
+        mach_vm_size_t  resident_size;	    /* resident memory size (bytes) */
+        mach_vm_size_t  resident_size_peak; /* peak resident size (bytes) */
+
+	mach_vm_size_t	device;
+	mach_vm_size_t	device_peak;
+	mach_vm_size_t	internal;
+	mach_vm_size_t	internal_peak;
+	mach_vm_size_t	external;
+	mach_vm_size_t	external_peak;
+	mach_vm_size_t	reusable;
+	mach_vm_size_t	reusable_peak;
+	mach_vm_size_t	purgeable_volatile_pmap;
+	mach_vm_size_t	purgeable_volatile_resident;
+	mach_vm_size_t	purgeable_volatile_virtual;
+	mach_vm_size_t	compressed;
+	mach_vm_size_t	compressed_peak;
+	mach_vm_size_t	compressed_lifetime;
+};
+typedef struct task_vm_info	task_vm_info_data_t;
+typedef struct task_vm_info	*task_vm_info_t;
+#define TASK_VM_INFO_COUNT	((mach_msg_type_number_t) \
+		(sizeof (task_vm_info_data_t) / sizeof (natural_t)))
+
+
+typedef struct vm_purgeable_info	task_purgable_info_t;
 
 /*
  * Obsolete interfaces.

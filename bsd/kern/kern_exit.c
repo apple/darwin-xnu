@@ -167,7 +167,8 @@ kern_return_t sys_perf_notify(thread_t thread, int pid);
 kern_return_t task_exception_notify(exception_type_t exception,
 	mach_exception_data_type_t code, mach_exception_data_type_t subcode);
 void	delay(int);
-			
+void gather_rusage_info_v2(proc_t p, struct rusage_info_v2 *ru, int flavor);
+
 /*
  * NOTE: Source and target may *NOT* overlap!
  * XXX Should share code with bsd/dev/ppc/unix_signal.c
@@ -245,11 +246,12 @@ exit(proc_t p, struct exit_args *uap, int *retval)
 int
 exit1(proc_t p, int rv, int *retval)
 {
-	return exit1_internal(p, rv, retval, TRUE, TRUE);
+	return exit1_internal(p, rv, retval, TRUE, TRUE, 0);
 }
 
 int
-exit1_internal(proc_t p, int rv, int *retval, boolean_t thread_can_terminate, boolean_t perf_notify)
+exit1_internal(proc_t p, int rv, int *retval, boolean_t thread_can_terminate, boolean_t perf_notify,
+	       int jetsam_flags)
 {
 	thread_t self = current_thread();
 	struct task *task = p->task;
@@ -292,11 +294,9 @@ exit1_internal(proc_t p, int rv, int *retval, boolean_t thread_can_terminate, bo
 	DTRACE_PROC1(exit, int, CLD_EXITED);
 
 	/* mark process is going to exit and pull out of DBG/disk throttle */
-	proc_removethrottle(p);
-
-#if CONFIG_MEMORYSTATUS
-	memorystatus_list_remove(p->p_pid);
-#endif
+	/* TODO: This should be done after becoming exit thread */
+	proc_set_task_policy(p->task, THREAD_NULL, TASK_POLICY_ATTRIBUTE,
+	                     TASK_POLICY_TERMINATED, TASK_POLICY_ENABLE);
 
         proc_lock(p);
 	error = proc_transstart(p, 1);
@@ -308,6 +308,9 @@ exit1_internal(proc_t p, int rv, int *retval, boolean_t thread_can_terminate, bo
 		 */
 		proc_unlock(p);
 		if (current_proc() == p){
+			if (p->exit_thread == self)
+				printf("exit_thread failed to exit, leaving process %s[%d] in unkillable limbo\n",
+				       p->p_comm, p->p_pid);
 			thread_exception_return();
 		} else {
 			/* external termination like jetsam */
@@ -347,6 +350,7 @@ exit1_internal(proc_t p, int rv, int *retval, boolean_t thread_can_terminate, bo
 
 	p->p_lflag |= P_LEXIT;
 	p->p_xstat = rv;
+	p->p_lflag |= jetsam_flags;
 
 	proc_transend(p, 1);
 	proc_unlock(p);
@@ -366,6 +370,7 @@ proc_prepareexit(proc_t p, int rv, boolean_t perf_notify)
 	struct uthread *ut;
 	thread_t self = current_thread();
 	ut = get_bsdthread_info(self);
+	struct rusage_superset *rup;
 
  	/* If a core should be generated, notify crash reporter */
 	if (hassigprop(WTERMSIG(rv), SA_CORE) || ((p->p_csflags & CS_KILLED) != 0)) {
@@ -397,6 +402,27 @@ skipcheck:
 	}
 
 	/*
+	 * Before this process becomes a zombie, stash resource usage
+	 * stats in the proc for external observers to query
+	 * via proc_pid_rusage().
+	 *
+	 * If the zombie allocation fails, just punt the stats.
+	 */
+	MALLOC_ZONE(rup, struct rusage_superset *,
+			sizeof (*rup), M_ZOMBIE, M_WAITOK);
+	if (rup != NULL) {
+		gather_rusage_info_v2(p, &rup->ri, RUSAGE_INFO_V2);
+		rup->ri.ri_phys_footprint = 0;
+		rup->ri.ri_proc_exit_abstime = mach_absolute_time();
+
+		/*
+		 * Make the rusage_info visible to external observers
+		 * only after it has been completely filled in.
+		 */
+		p->p_ru = rup;
+	}
+
+	/*
 	 * Remove proc from allproc queue and from pidhash chain.
 	 * Need to do this before we do anything that can block.
 	 * Not doing causes things like mount() find this on allproc
@@ -404,6 +430,10 @@ skipcheck:
 	 */
 
 	proc_list_lock();
+
+#if CONFIG_MEMORYSTATUS
+	memorystatus_remove(p, TRUE);
+#endif
 
 	LIST_REMOVE(p, p_list);
 	LIST_INSERT_HEAD(&zombproc, p, p_list);	/* Place onto zombproc. */
@@ -513,10 +543,6 @@ proc_exit(proc_t p)
 	proc_unlock(p);
 #endif
 
-	/* XXX Zombie allocation may fail, in which case stats get lost */
-	MALLOC_ZONE(p->p_ru, struct rusage *,
-			sizeof (*p->p_ru), M_ZOMBIE, M_WAITOK);
-
 	nspace_proc_exit(p);
 
 #if VM_PRESSURE_EVENTS
@@ -531,7 +557,7 @@ proc_exit(proc_t p)
 	proc_refdrain(p);
 
 	/* if any pending cpu limits action, clear it */
-	task_clear_cpuusage(p->task);
+	task_clear_cpuusage(p->task, TRUE);
 
 	workqueue_mark_exiting(p);
 	workqueue_exit(p);
@@ -552,14 +578,8 @@ proc_exit(proc_t p)
 		 * no need to throttle this thread since its going away
 		 * but we do need to update our bookeeping w/r to throttled threads
 		 */
-		throttle_lowpri_io(FALSE);
+		throttle_lowpri_io(0);
 	}
-
-#if !CONFIG_EMBEDDED
-	if (p->p_legacy_behavior & PROC_LEGACY_BEHAVIOR_IOTHROTTLE) {
-		throttle_legacy_process_decr();
-	}
-#endif
 
 #if SYSV_SHM
 	/* Close ref SYSV Shared memory*/
@@ -581,6 +601,7 @@ proc_exit(proc_t p)
 		if (sessp->s_ttyvp != NULLVP) {
 			struct vnode *ttyvp;
 			int ttyvid;
+			int cttyflag = 0;
 			struct vfs_context context;
 			struct tty *tp;
 
@@ -600,6 +621,8 @@ proc_exit(proc_t p)
 				session_lock(sessp);
 				tp = SESSION_TP(sessp);
 			}
+			cttyflag = sessp->s_flags & S_CTTYREF;
+			sessp->s_flags &= ~S_CTTYREF;
 			ttyvp = sessp->s_ttyvp;
 			ttyvid = sessp->s_ttyvid;
 			sessp->s_ttyvp = NULLVP;
@@ -618,6 +641,13 @@ proc_exit(proc_t p)
 				context.vc_ucred = kauth_cred_proc_ref(p);
 				vnode_rele(ttyvp);
 				VNOP_REVOKE(ttyvp, REVOKEALL, &context);
+				if (cttyflag) {
+					/*
+					 * Release the extra usecount taken in cttyopen.
+					 * usecount should be released after VNOP_REVOKE is called.
+					 */
+					vnode_rele(ttyvp);
+				}
 				vnode_put(ttyvp);
 				kauth_cred_unref(&context.vc_ucred);
 				ttyvp = NULLVP;
@@ -653,7 +683,6 @@ proc_exit(proc_t p)
 	proc_childdrainstart(p);
 	while ((q = p->p_children.lh_first) != NULL) {
 		int reparentedtoinit = (q->p_listflag & P_LIST_DEADPARENT) ? 1 : 0;
-		q->p_listflag |= P_LIST_DEADPARENT;
 		if (q->p_stat == SZOMB) {
 			if (p != q->p_pptr)
 				panic("parent child linkage broken");
@@ -673,12 +702,13 @@ proc_exit(proc_t p)
 			 */
 			(void)reap_child_locked(p, q, 1, reparentedtoinit, 1, 0);
 		} else {
-			proc_reparentlocked(q, initproc, 0, 1);
 			/*
 		 	* Traced processes are killed
 		 	* since their existence means someone is messing up.
 		 	*/
 			if (q->p_lflag & P_LTRACED) {
+				struct proc *opp;
+
 				/*
 				 * Take a reference on the child process to
 				 * ensure it doesn't exit and disappear between
@@ -689,8 +719,26 @@ proc_exit(proc_t p)
 					continue;
 
 				proc_list_unlock();
+
+				opp = proc_find(q->p_oppid);
+				if (opp != PROC_NULL) {
+					proc_list_lock();
+					q->p_oppid = 0;
+					proc_list_unlock();
+					proc_reparentlocked(q, opp, 0, 0);
+					proc_rele(opp);
+				} else {
+					/* original parent exited while traced */
+					proc_list_lock();
+					q->p_listflag |= P_LIST_DEADPARENT;
+					q->p_oppid = 0;
+					proc_list_unlock();
+					proc_reparentlocked(q, initproc, 0, 0);
+				}
+
 				proc_lock(q);
 				q->p_lflag &= ~P_LTRACED;
+
 				if (q->sigwait_thread) {
 					thread_t thread = q->sigwait_thread;
 
@@ -712,6 +760,9 @@ proc_exit(proc_t p)
 				psignal(q, SIGKILL);
 				proc_list_lock();
 				proc_rele_locked(q);
+			} else {
+				q->p_listflag |= P_LIST_DEADPARENT;
+				proc_reparentlocked(q, initproc, 0, 1);
 			}
 		}
 	}
@@ -733,12 +784,11 @@ proc_exit(proc_t p)
 	 * info and self times.  If we were unable to allocate a zombie
 	 * structure, this information is lost.
 	 */
-	/* No need for locking here as no one than this thread can access this */
 	if (p->p_ru != NULL) {
 	    calcru(p, &p->p_stats->p_ru.ru_utime, &p->p_stats->p_ru.ru_stime, NULL);
-	    *p->p_ru = p->p_stats->p_ru;
+	    p->p_ru->ru = p->p_stats->p_ru;
 
-	    ruadd(p->p_ru, &p->p_stats->p_cru);
+	    ruadd(&(p->p_ru->ru), &p->p_stats->p_cru);
 	}
 
 	/*
@@ -807,6 +857,8 @@ proc_exit(proc_t p)
 	pp = proc_parent(p);
 	if (pp->p_flag & P_NOCLDWAIT) {
 
+		if (p->p_ru != NULL) {
+			proc_lock(pp);
 #if 3839178
 		/*
 		 * If the parent is ignoring SIGCHLD, then POSIX requires
@@ -821,13 +873,12 @@ proc_exit(proc_t p)
 		 * zombie to init.  If we were unable to allocate a
 		 * zombie structure, this information is lost.
 		 */
-		if (p->p_ru != NULL) {
-			proc_lock(pp);
-			ruadd(&pp->p_stats->p_cru, p->p_ru);
+			ruadd(&pp->p_stats->p_cru, &p->p_ru->ru);
+#endif	/* !3839178 */
+			update_rusage_info_child(&pp->p_stats->ri_child, &p->p_ru->ri);
 			proc_unlock(pp);
 		}
-#endif	/* !3839178 */
-
+		
 		/* kernel can reap this one, no need to move it to launchd */
 		proc_list_lock();
 		p->p_listflag |= P_LIST_DEADPARENT;
@@ -906,7 +957,7 @@ proc_exit(proc_t p)
 		 * no need to throttle this thread since its going away
 		 * but we do need to update our bookeeping w/r to throttled threads
 		 */
-		throttle_lowpri_io(FALSE);
+		throttle_lowpri_io(0);
 	}
 
 	proc_rele(pp);
@@ -1004,7 +1055,11 @@ reap_child_locked(proc_t parent, proc_t child, int deadparent, int reparentedtoi
 		}
 	}
 	
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
 	proc_knote(child, NOTE_REAP);
+#pragma clang diagnostic pop
+
 	proc_knote_drain(child);
 
 	child->p_xstat = 0;
@@ -1020,7 +1075,8 @@ reap_child_locked(proc_t parent, proc_t child, int deadparent, int reparentedtoi
 		 */
 		if (!(parent->p_flag & P_NOCLDWAIT))
 #endif	/* 3839178 */
-			ruadd(&parent->p_stats->p_cru, child->p_ru);
+			ruadd(&parent->p_stats->p_cru, &child->p_ru->ru);
+		update_rusage_info_child(&parent->p_stats->ri_child, &child->p_ru->ri);
 		proc_unlock(parent);
 		FREE_ZONE(child->p_ru, sizeof *child->p_ru, M_ZOMBIE);
 		child->p_ru = NULL;
@@ -1074,6 +1130,14 @@ reap_child_locked(proc_t parent, proc_t child, int deadparent, int reparentedtoi
 	child->p_listflag &= ~P_LIST_INHASH;
 	proc_checkdeadrefs(child);
 	nprocs--;
+
+	if (deadparent) {
+		/*
+		 * If a child zombie is being reaped because its parent
+		 * is exiting, make sure we update the list flag
+		 */
+		child->p_listflag |= P_LIST_DEADPARENT;
+	}
 
 	proc_list_unlock();
 
@@ -1189,14 +1253,14 @@ loop1:
 				} else {
 					if (IS_64BIT_PROCESS(q)) {
 						struct user64_rusage	my_rusage;
-						munge_user64_rusage(p->p_ru, &my_rusage);
+						munge_user64_rusage(&p->p_ru->ru, &my_rusage);
 						error = copyout((caddr_t)&my_rusage,
 							uap->rusage,
 							sizeof (my_rusage));
 					}
 					else {
 						struct user32_rusage	my_rusage;
-						munge_user32_rusage(p->p_ru, &my_rusage);
+						munge_user32_rusage(&p->p_ru->ru, &my_rusage);
 						error = copyout((caddr_t)&my_rusage,
 							uap->rusage,
 							sizeof (my_rusage));
@@ -1658,6 +1722,10 @@ vfork_exit_internal(proc_t p, int rv, int forceexit)
 
 	proc_list_lock();
 
+#if CONFIG_MEMORYSTATUS
+	memorystatus_remove(p, TRUE);
+#endif
+
 	LIST_REMOVE(p, p_list);
 	LIST_INSERT_HEAD(&zombproc, p, p_list);	/* Place onto zombproc. */
 	/* will not be visible via proc_find */
@@ -1704,11 +1772,11 @@ vproc_exit(proc_t p)
 #endif
 	struct pgrp * pg;
 	struct session *sessp;
+	struct rusage_superset *rup;
 
 	/* XXX Zombie allocation may fail, in which case stats get lost */
-	MALLOC_ZONE(p->p_ru, struct rusage *,
-			sizeof (*p->p_ru), M_ZOMBIE, M_WAITOK);
-
+	MALLOC_ZONE(rup, struct rusage_superset *,
+			sizeof (*rup), M_ZOMBIE, M_WAITOK);
 
 	proc_refdrain(p);
 
@@ -1718,18 +1786,13 @@ vproc_exit(proc_t p)
 	 */
 	fdfree(p);
 
-#if !CONFIG_EMBEDDED
-	if (p->p_legacy_behavior & PROC_LEGACY_BEHAVIOR_IOTHROTTLE) {
-		throttle_legacy_process_decr();
-	}
-#endif
-
 	sessp = proc_session(p);
 	if (SESS_LEADER(p, sessp)) {
 		
 		if (sessp->s_ttyvp != NULLVP) {
 			struct vnode *ttyvp;
 			int ttyvid;
+			int cttyflag = 0;
 			struct vfs_context context;
 			struct tty *tp;
 
@@ -1749,6 +1812,8 @@ vproc_exit(proc_t p)
 				session_lock(sessp);
 				tp = SESSION_TP(sessp);
 			}
+			cttyflag = sessp->s_flags & S_CTTYREF;
+			sessp->s_flags &= ~S_CTTYREF;
 			ttyvp = sessp->s_ttyvp;
 			ttyvid = sessp->s_ttyvid;
 			sessp->s_ttyvp = NULL;
@@ -1767,6 +1832,13 @@ vproc_exit(proc_t p)
 				context.vc_ucred = kauth_cred_proc_ref(p);
 				vnode_rele(ttyvp);
 				VNOP_REVOKE(ttyvp, REVOKEALL, &context);
+				if (cttyflag) {
+					/*
+					 * Release the extra usecount taken in cttyopen.
+					 * usecount should be released after VNOP_REVOKE is called.
+					 */
+					vnode_rele(ttyvp);
+				}
 				vnode_put(ttyvp);
 				kauth_cred_unref(&context.vc_ucred);
 				ttyvp = NULLVP;
@@ -1791,7 +1863,6 @@ vproc_exit(proc_t p)
 	proc_list_lock();
 	proc_childdrainstart(p);
 	while ((q = p->p_children.lh_first) != NULL) {
-		q->p_listflag |= P_LIST_DEADPARENT;
 		if (q->p_stat == SZOMB) {
 			if (p != q->p_pptr)
 				panic("parent child linkage broken");
@@ -1811,15 +1882,34 @@ vproc_exit(proc_t p)
 			 */
 			(void)reap_child_locked(p, q, 1, 0, 1, 0);
 		} else {
-			proc_reparentlocked(q, initproc, 0, 1);
 			/*
 		 	* Traced processes are killed
 		 	* since their existence means someone is messing up.
 		 	*/
 			if (q->p_lflag & P_LTRACED) {
+				struct proc *opp;
+
 				proc_list_unlock();
+
+				opp = proc_find(q->p_oppid);
+				if (opp != PROC_NULL) {
+					proc_list_lock();
+					q->p_oppid = 0;
+					proc_list_unlock();
+					proc_reparentlocked(q, opp, 0, 0);
+					proc_rele(opp);
+				} else {
+					/* original parent exited while traced */
+					proc_list_lock();
+					q->p_listflag |= P_LIST_DEADPARENT;
+					q->p_oppid = 0;
+					proc_list_unlock();
+					proc_reparentlocked(q, initproc, 0, 0);
+				}
+
 				proc_lock(q);
 				q->p_lflag &= ~P_LTRACED;
+
 				if (q->sigwait_thread) {
 					thread_t thread = q->sigwait_thread;
 
@@ -1840,6 +1930,9 @@ vproc_exit(proc_t p)
 
 				psignal(q, SIGKILL);
 				proc_list_lock();
+			} else {
+				q->p_listflag |= P_LIST_DEADPARENT;
+				proc_reparentlocked(q, initproc, 0, 1);
 			}
 		}
 	}
@@ -1861,11 +1954,10 @@ vproc_exit(proc_t p)
 	 * info and self times.  If we were unable to allocate a zombie
 	 * structure, this information is lost.
 	 */
-	/* No need for locking here as no one than this thread can access this */
-	if (p->p_ru != NULL) {
-	    *p->p_ru = p->p_stats->p_ru;
-	    timerclear(&p->p_ru->ru_utime);
-	    timerclear(&p->p_ru->ru_stime);
+	if (rup != NULL) {
+	    rup->ru = p->p_stats->p_ru;
+	    timerclear(&rup->ru.ru_utime);
+	    timerclear(&rup->ru.ru_stime);
 
 #ifdef  FIXME
 	    if (task) {
@@ -1877,10 +1969,10 @@ vproc_exit(proc_t p)
 		task_info_stuff	= MACH_TASK_BASIC_INFO_COUNT;
 		task_info(task, MACH_TASK_BASIC_INFO,
 			  &tinfo, &task_info_stuff);
-		p->p_ru->ru_utime.tv_sec = tinfo.user_time.seconds;
-		p->p_ru->ru_utime.tv_usec = tinfo.user_time.microseconds;
-		p->p_ru->ru_stime.tv_sec = tinfo.system_time.seconds;
-		p->p_ru->ru_stime.tv_usec = tinfo.system_time.microseconds;
+		p->p_ru->ru.ru_utime.tv_sec = tinfo.user_time.seconds;
+		p->p_ru->ru.ru_utime.tv_usec = tinfo.user_time.microseconds;
+		p->p_ru->ru.ru_stime.tv_sec = tinfo.system_time.seconds;
+		p->p_ru->ru.ru_stime.tv_usec = tinfo.system_time.microseconds;
 
 		task_ttimes_stuff = TASK_THREAD_TIMES_INFO_COUNT;
 		task_info(task, TASK_THREAD_TIMES_INFO,
@@ -1890,12 +1982,22 @@ vproc_exit(proc_t p)
 		ut.tv_usec = ttimesinfo.user_time.microseconds;
 		st.tv_sec = ttimesinfo.system_time.seconds;
 		st.tv_usec = ttimesinfo.system_time.microseconds;
-		timeradd(&ut,&p->p_ru->ru_utime,&p->p_ru->ru_utime);
-			timeradd(&st,&p->p_ru->ru_stime,&p->p_ru->ru_stime);
+		timeradd(&ut,&p->p_ru->ru.ru_utime,&p->p_ru->ru.ru_utime);
+			timeradd(&st,&p->p_ru->ru.ru_stime,&p->p_ru->ru.ru_stime);
 	    }
 #endif /* FIXME */
 
-	    ruadd(p->p_ru, &p->p_stats->p_cru);
+	    ruadd(&rup->ru, &p->p_stats->p_cru);
+
+		gather_rusage_info_v2(p, &rup->ri, RUSAGE_INFO_V2);
+		rup->ri.ri_phys_footprint = 0;
+		rup->ri.ri_proc_exit_abstime = mach_absolute_time();
+
+		/*
+		 * Now that we have filled in the rusage info, make it
+		 * visible to an external observer via proc_pid_rusage().
+		 */
+		p->p_ru = rup;
 	}
 
 	/*

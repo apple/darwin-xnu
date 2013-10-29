@@ -1,5 +1,5 @@
-/*	$FreeBSD: src/sys/netinet6/in6_gif.h,v 1.2.2.1 2000/07/15 07:14:33 kris Exp $	*/
-/*	$KAME: in6_gif.h,v 1.5 2000/04/14 08:36:03 itojun Exp $	*/
+/* $FreeBSD: src/sys/netinet6/in6_gif.h,v 1.2.2.1 2000/07/15 07:14:33 kris Exp $ */
+/* $KAME: in6_gif.h,v 1.5 2000/04/14 08:36:03 itojun Exp $ */
 
 /*
  * Copyright (C) 1995, 1996, 1997, and 1998 WIDE Project.
@@ -31,15 +31,15 @@
  */
 
 #ifndef _NETINET6_IN6_GIF_H_
-#define _NETINET6_IN6_GIF_H_
+#define	_NETINET6_IN6_GIF_H_
 #include <sys/appleapiopts.h>
 
-#ifdef KERNEL_PRIVATE
-#define GIF_HLIM	30
+#ifdef BSD_KERNEL_PRIVATE
+#define	GIF_HLIM	30
 
 int in6_gif_input(struct mbuf **, int *, int);
 int in6_gif_output(struct ifnet *, int, struct mbuf *, struct rtentry *);
 int gif_encapcheck6(const struct mbuf *, int, int, void *);
-#endif /* KERNEL_PRIVATE */
+#endif /* BSD_KERNEL_PRIVATE */
 
 #endif /* _NETINET6_IN6_GIF_H_ */

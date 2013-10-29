@@ -86,15 +86,8 @@ typedef enum {
  * [XSI] The id_t and pid_t types shall be defined as described
  * in <sys/types.h>
  */
-#ifndef _PID_T
-typedef __darwin_pid_t	pid_t;
-#define _PID_T
-#endif
-
-#ifndef _ID_T
-typedef __darwin_id_t	id_t;
-#define _ID_T
-#endif
+#include <sys/_types/_pid_t.h>
+#include <sys/_types/_id_t.h>
 
 /*
  * [XSI] The siginfo_t type shall be defined as described in <signal.h>

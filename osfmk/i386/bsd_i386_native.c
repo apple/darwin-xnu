@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2010 Apple Inc. All rights reserved.
+ * Copyright (c) 2010-2012 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -86,12 +86,9 @@ machine_thread_dup(
 	/*
 	 * Copy over the x86_saved_state registers
 	 */
-	if (cpu_mode_is64bit()) {
-		if (thread_is_64bit(parent))
-			bcopy(USER_REGS64(parent), USER_REGS64(child), sizeof(x86_saved_state64_t));
-		else
-			bcopy(USER_REGS32(parent), USER_REGS32(child), sizeof(x86_saved_state_compat32_t));
-	} else
+	if (thread_is_64bit(parent))
+		bcopy(USER_REGS64(parent), USER_REGS64(child), sizeof(x86_saved_state64_t));
+	else
 		bcopy(USER_REGS32(parent), USER_REGS32(child), sizeof(x86_saved_state32_t));
 
 	/*
@@ -206,11 +203,9 @@ thread_fast_set_cthread_self64(uint64_t self)
 	pcb->cthread_self = self;
 	mp_disable_preemption();
 	cdp = current_cpu_datap();
-#if defined(__x86_64__)
 	if ((cdp->cpu_uber.cu_user_gs_base != pcb->cthread_self) ||
 	    (pcb->cthread_self != rdmsr64(MSR_IA32_KERNEL_GS_BASE)))
 		wrmsr64(MSR_IA32_KERNEL_GS_BASE, self);
-#endif
 	cdp->cpu_uber.cu_user_gs_base = self;
 	mp_enable_preemption();
 	return (USER_CTHREAD); /* N.B.: not a kern_return_t! */

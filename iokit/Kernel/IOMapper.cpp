@@ -142,28 +142,47 @@ void IOMapper::waitForSystemMapper()
 
 IOMapper * IOMapper::copyMapperForDevice(IOService * device)
 {
+    return copyMapperForDeviceWithIndex(device, 0);
+}
+
+IOMapper * IOMapper::copyMapperForDeviceWithIndex(IOService * device, unsigned int index)
+{
+    OSData *data;
     OSObject * obj;
-    IOMapper * mapper;
+    IOMapper * mapper = NULL;
     OSDictionary * matching;
     
     obj = device->copyProperty("iommu-parent");
     if (!obj)
-	return (NULL);
+        return (NULL);
 
     if ((mapper = OSDynamicCast(IOMapper, obj)))
-	return (mapper);
+        return (mapper);
 
-    matching = IOService::propertyMatching(gIOMapperIDKey, obj);
+    if ((data = OSDynamicCast(OSData, obj)))
+    {
+        if (index >= data->getLength() / sizeof(UInt32))
+            goto done;
+        
+        data = OSData::withBytesNoCopy((UInt32 *)data->getBytesNoCopy() + index, sizeof(UInt32));
+        if (!data)
+            goto done;
+
+        matching = IOService::propertyMatching(gIOMapperIDKey, data);
+        data->release();
+    }
+    else
+        matching = IOService::propertyMatching(gIOMapperIDKey, obj);
+
     if (matching)
     {
-	mapper = OSDynamicCast(IOMapper, IOService::waitForMatchingService(matching));
-    	matching->release();
+        mapper = OSDynamicCast(IOMapper, IOService::waitForMatchingService(matching));
+            matching->release();
     }
-    if (mapper)
-	device->setProperty("iommu-parent", mapper);
-    else
-	obj->release();
-    
+
+done:
+    if (obj)
+            obj->release();
     return (mapper);
 }
 

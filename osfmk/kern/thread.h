@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2009 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2012 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -142,30 +142,30 @@ struct thread {
 	processor_t		runq;				/* run queue assignment */
 	wait_queue_t	wait_queue;			/* wait queue we are currently on */
 	event64_t		wait_event;			/* wait queue event */
-	integer_t		options;			/* options set by thread itself */
-#define TH_OPT_INTMASK		0x03		/* interrupt / abort level */
-#define TH_OPT_VMPRIV		0x04		/* may allocate reserved memory */
-#define TH_OPT_DTRACE		0x08		/* executing under dtrace_probe */
-#define TH_OPT_SYSTEM_CRITICAL	0x10		/* Thread must always be allowed to run - even under heavy load */
-#define TH_OPT_PROC_CPULIMIT	0x20		/* Thread has a task-wide CPU limit applied to it */
-#define TH_OPT_PRVT_CPULIMIT	0x40		/* Thread has a thread-private CPU limit applied to it */
-#define TH_OPT_IDLE_THREAD		0x0080		/* Thread is a per-processor idle thread */
-
 	/* Data updated during assert_wait/thread_wakeup */
 	decl_simple_lock_data(,sched_lock)	/* scheduling lock (thread_lock()) */
 	decl_simple_lock_data(,wake_lock)	/* for thread stop / wait (wake_lock()) */
+	integer_t		options;			/* options set by thread itself */
+#define TH_OPT_INTMASK		0x0003		/* interrupt / abort level */
+#define TH_OPT_VMPRIV		0x0004		/* may allocate reserved memory */
+#define TH_OPT_DTRACE		0x0008		/* executing under dtrace_probe */
+#define TH_OPT_SYSTEM_CRITICAL	0x0010		/* Thread must always be allowed to run - even under heavy load */
+#define TH_OPT_PROC_CPULIMIT	0x0020		/* Thread has a task-wide CPU limit applied to it */
+#define TH_OPT_PRVT_CPULIMIT	0x0040		/* Thread has a thread-private CPU limit applied to it */
+#define TH_OPT_IDLE_THREAD		0x0080		/* Thread is a per-processor idle thread */
+
 	boolean_t			wake_active;	/* wake event on stop */
 	int					at_safe_point;	/* thread_abort_safely allowed */
 	ast_t				reason;			/* why we blocked */
+	thread_continue_t	continuation;	/* continue here next dispatch */
+	void				*parameter;		/* continuation parameter */
 	wait_result_t		wait_result;	/* outcome of wait -
 										 * may be examined by this thread
 										 * WITHOUT locking */
-	thread_continue_t	continuation;	/* continue here next dispatch */
-	void				*parameter;		/* continuation parameter */
 
 	/* Data updated/used in thread_invoke */
-    struct funnel_lock	*funnel_lock;		/* Non-reentrancy funnel */
     int				    funnel_state;
+    struct funnel_lock	*funnel_lock;		/* Non-reentrancy funnel */
 #define TH_FN_OWNED			0x1				/* we own the funnel */
 #define TH_FN_REFUNNEL		0x2				/* re-acquire funnel on dispatch */
 
@@ -205,6 +205,10 @@ struct thread {
 #define TH_SFLAG_DEPRESSED_MASK		(TH_SFLAG_DEPRESS | TH_SFLAG_POLLDEPRESS)
 #define TH_SFLAG_PRI_UPDATE		0x0100		/* Updating priority */
 #define TH_SFLAG_EAGERPREEMPT		0x0200		/* Any preemption of this thread should be treated as if AST_URGENT applied */
+#define TH_SFLAG_RW_PROMOTED		0x0400		/* sched pri has been promoted due to blocking with RW lock held */
+#define TH_SFLAG_PROMOTED_MASK		(TH_SFLAG_PROMOTED | TH_SFLAG_RW_PROMOTED)
+
+#define TH_SFLAG_RW_PROMOTED_BIT	(10)	/* 0x400 */
 
 /*
  * A thread can either be completely unthrottled, about to be throttled,
@@ -214,30 +218,33 @@ struct thread {
 #define	TH_SFLAG_PENDING_THROTTLE_PROMOTION	0x2000	/* Pending sched_mode promition */
 #define	TH_SFLAG_PENDING_THROTTLE_MASK		(TH_SFLAG_PENDING_THROTTLE_DEMOTION | TH_SFLAG_PENDING_THROTTLE_PROMOTION)
 
-	integer_t			sched_pri;			/* scheduled (current) priority */
-	integer_t			priority;			/* base priority */
-	integer_t			max_priority;		/* max base priority */
-	integer_t			task_priority;		/* copy of task base priority */
-
+	int16_t				sched_pri;			/* scheduled (current) priority */
+	int16_t				priority;			/* base priority */
+	int16_t				max_priority;		/* max base priority */
+	int16_t				task_priority;		/* copy of task base priority */
 #if defined(CONFIG_SCHED_GRRR)
 #if 0
 	uint16_t			grrr_deficit;		/* fixed point (1/1000th quantum) fractional deficit */
 #endif
 #endif
 	
-	integer_t			promotions;			/* level of promotion */
-	integer_t			pending_promoter_index;
+	int16_t				promotions;			/* level of promotion */
+	int16_t				pending_promoter_index;
+	uint32_t			ref_count;		/* number of references to me */
 	void				*pending_promoter[2];
 
-	integer_t			importance;			/* task-relative importance */
+	uint32_t			rwlock_count;	/* Number of lck_rw_t locks held by thread */
 
-											/* real-time parameters */
+	integer_t			importance;			/* task-relative importance */
+	/* Priority depression expiration */
+	integer_t			depress_timer_active;
+	timer_call_data_t	depress_timer;
+										/* real-time parameters */
 	struct {								/* see mach/thread_policy.h */
 		uint32_t			period;
 		uint32_t			computation;
 		uint32_t			constraint;
 		boolean_t			preemptible;
-
 		uint64_t			deadline;
 	}					realtime;
 
@@ -291,9 +298,6 @@ struct thread {
 	integer_t			wait_timer_active;
 	boolean_t			wait_timer_is_set;
 
-	/* Priority depression expiration */
-	timer_call_data_t	depress_timer;
-	integer_t			depress_timer_active;
 
 	/*
 	 * Processor/cache affinity
@@ -306,6 +310,7 @@ struct thread {
 	union {
 		struct {
 		  	mach_msg_return_t	state;		/* receive state */
+			mach_port_seqno_t	seqno;		/* seqno of recvd message */
 		  	ipc_object_t		object;		/* object received on */
 		  	mach_vm_address_t	msg_addr;	/* receive buffer pointer */
 			mach_msg_size_t		msize;		/* max size for recvd msg */
@@ -313,7 +318,6 @@ struct thread {
 		  	mach_msg_size_t		slist_size;	/* scatter list size */
 			mach_port_name_t	receiver_name;	/* the receive port name */
 			struct ipc_kmsg		*kmsg;		/* received message */
-			mach_port_seqno_t	seqno;		/* seqno of recvd message */
 			mach_msg_continue_t	continuation;
 		} receive;
 		struct {
@@ -325,17 +329,28 @@ struct thread {
 		} sema;
 	  	struct {
 			int					option;		/* switch option */
+			boolean_t				reenable_workq_callback;	/* on entry, callbacks were suspended */
 		} swtch;
 		int						misc;		/* catch-all for other state */
 	} saved;
 
+	/* Structure to save information about guard exception */
+	struct {
+		unsigned				type;		/* EXC_GUARD reason/type */
+		mach_exception_data_type_t		code;		/* Exception code */
+		mach_exception_data_type_t		subcode;	/* Exception sub-code */
+	} guard_exc_info;
+
+
 	/* IPC data structures */
-	struct ipc_kmsg_queue ith_messages;
+#if IMPORTANCE_INHERITANCE
+	natural_t ith_assertions;			/* assertions pending drop */
+#endif
+	struct ipc_kmsg_queue ith_messages;		/* messages to reap */
 	mach_port_t ith_rpc_reply;			/* reply port for kernel RPCs */
 
 	/* Ast/Halt data structures */
 	vm_offset_t					recover;		/* page fault recover(copyin/out) */
-	uint32_t					ref_count;		/* number of references to me */
 
 	queue_chain_t				threads;		/* global list of all threads */
 
@@ -351,11 +366,6 @@ struct thread {
 
 		decl_lck_mtx_data(,mutex)
 
-		/* Kernel holds on this thread  */
-		int						suspend_count;
-
-		/* User level suspensions */
-		int						user_stop_count;
 
 		/* Pending thread ast(s) */
 		ast_t					ast;
@@ -378,23 +388,22 @@ struct thread {
 		/* Ports associated with this thread */
 		struct ipc_port			*ith_self;		/* not a right, doesn't hold ref */
 		struct ipc_port			*ith_sself;		/* a send right */
-		struct exception_action	exc_actions[EXC_TYPES_COUNT];
-
-		/* Owned ulocks (a lock set element) */
-		queue_head_t			held_ulocks;
+		struct exception_action	*exc_actions;
 
 #ifdef	MACH_BSD
 		void					*uthread;
 #endif
 
 #if CONFIG_DTRACE
+		uint32_t t_dtrace_flags;	/* DTrace thread states */
+#define	TH_DTRACE_EXECSUCCESS	0x01
 		uint32_t t_dtrace_predcache;/* DTrace per thread predicate value hint */
 		int64_t t_dtrace_tracing;       /* Thread time under dtrace_probe() */
 		int64_t t_dtrace_vtime;
 #endif
 
-	        uint32_t    t_page_creation_count;
 	        clock_sec_t t_page_creation_time;
+	        uint32_t    t_page_creation_count;
 
 #define T_CHUD_MARKED           0x01          /* this thread is marked by CHUD */
 #define T_IN_CHUD               0x02          /* this thread is already in a CHUD handler */
@@ -407,11 +416,22 @@ struct thread {
 					       * AST */
 #define T_NAME_DONE             0x20          /* Thread has previously
 					       * recorded its name */
+#define T_KPC_ALLOC             0x40          /* Thread needs a kpc_buf */
 
 		uint32_t t_chud;	/* CHUD flags, used for Shark */
 		uint32_t chud_c_switch; /* last dispatch detection */
 
 		integer_t mutex_count;	/* total count of locks held */
+
+#ifdef KPC
+	/* accumulated performance counters for this thread */
+	uint64_t *kpc_buf;
+#endif
+
+#ifdef KPERF
+	/* count of how many times a thread has been sampled since it was last scheduled */
+	uint64_t kperf_pet_cnt;
+#endif
 
 		uint64_t thread_id;	/*system wide unique thread-id*/
 
@@ -420,14 +440,17 @@ struct thread {
 	uint32_t		syscalls_mach;
 	ledger_t		t_ledger;
 	ledger_t		t_threadledger;	/* per thread ledger */
-	struct process_policy ext_appliedstate;	/* externally applied actions */
-	struct process_policy ext_policystate;	/* externally defined process policy states*/
-	struct process_policy appliedstate;		/* self applied acions */
-	struct process_policy policystate;		/* process wide policy states */
-#if CONFIG_EMBEDDED
-	task_watch_t *	taskwatch;		/* task watch */
+
+	/* policy is protected by the task lock */
+	struct task_requested_policy     requested_policy;
+	struct task_effective_policy     effective_policy;
+	struct task_pended_policy        pended_policy;
+
+	int	iotier_override; /* atomic operations to set, cleared on ret to user */
+
+
 	integer_t		saved_importance;		/* saved task-relative importance */
-#endif /* CONFIG_EMBEDDED */
+
 	uint32_t			thread_callout_interrupt_wakeups;
 	uint32_t			thread_callout_platform_idle_wakeups;
 	uint32_t			thread_timer_wakeups_bin_1;
@@ -435,8 +458,12 @@ struct thread {
 	uint16_t			thread_tag;
 	uint16_t			callout_woken_from_icontext:1,
 					callout_woken_from_platform_idle:1,
-					thread_bitfield_unused:14;
-
+					callout_woke_thread:1,
+					thread_bitfield_unused:13;
+	/* Kernel holds on this thread  */
+	int16_t						suspend_count;
+	/* User level suspensions */
+	int16_t						user_stop_count;
 };
 
 #define ith_state		saved.receive.state
@@ -456,9 +483,9 @@ struct thread {
 #define sth_result		saved.sema.result
 #define sth_continuation	saved.sema.continuation
 
-extern void			thread_bootstrap(void) __attribute__((section("__TEXT, initcode")));
+extern void			thread_bootstrap(void);
 
-extern void			thread_init(void) __attribute__((section("__TEXT, initcode")));
+extern void			thread_init(void);
 
 extern void			thread_daemon_init(void);
 
@@ -526,7 +553,7 @@ extern boolean_t		stack_alloc_try(
 
 extern void				stack_collect(void);
 
-extern void				stack_init(void) __attribute__((section("__TEXT, initcode")));
+extern void				stack_init(void);
 
 
 extern kern_return_t	thread_info_internal(
@@ -655,10 +682,12 @@ extern void 		funnel_lock(
 extern void 		funnel_unlock(
 						struct funnel_lock	*lock);
 
-static inline uint16_t thread_set_tag_internal(thread_t thread, uint16_t tag) {
+
+static inline uint16_t	thread_set_tag_internal(thread_t	thread, uint16_t tag) {
 	return __sync_fetch_and_or(&thread->thread_tag, tag);
 }
-static inline uint16_t thread_get_tag_internal(thread_t thread) {
+
+static inline uint16_t	thread_get_tag_internal(thread_t	thread) {
 	return thread->thread_tag;
 }
 
@@ -682,13 +711,6 @@ __END_DECLS
 
 __BEGIN_DECLS
 
-#if defined(__i386__)
-
-extern thread_t		kernel_thread(
-						task_t		task,
-						void		(*start)(void));
-
-#endif /* defined(__i386__) */
 
 extern uint64_t	 		thread_tid(
 						thread_t thread);
@@ -713,6 +735,7 @@ __BEGIN_DECLS
 
 uint16_t	thread_set_tag(thread_t, uint16_t);
 uint16_t	thread_get_tag(thread_t);
+
 
 extern kern_return_t    thread_state_initialize(
 							thread_t				thread);
@@ -742,9 +765,11 @@ extern	void	thread_yield_internal(
  * 
  * 1) Block. Prevent CPU consumption of the thread from exceeding the limit.
  * 2) Exception. Generate a resource consumption exception when the limit is exceeded.
+ * 3) Disable. Remove any existing CPU limit.
  */
 #define THREAD_CPULIMIT_BLOCK		0x1
 #define THREAD_CPULIMIT_EXCEPTION	0x2
+#define	THREAD_CPULIMIT_DISABLE		0x3
 
 struct _thread_ledger_indices {
 	int cpu_time;
@@ -752,6 +777,7 @@ struct _thread_ledger_indices {
 
 extern struct _thread_ledger_indices thread_ledgers;
 
+extern int thread_get_cpulimit(int *action, uint8_t *percentage, uint64_t *interval_ns);
 extern int thread_set_cpulimit(int action, uint8_t percentage, uint64_t interval_ns);
 
 typedef struct funnel_lock		funnel_t;
@@ -874,21 +900,27 @@ extern void dtrace_set_thread_tracing(thread_t, int64_t);
 extern void dtrace_set_thread_reentering(thread_t, boolean_t);
 extern vm_offset_t dtrace_set_thread_recover(thread_t, vm_offset_t);
 extern void dtrace_thread_bootstrap(void);
+extern void dtrace_thread_didexec(thread_t);
 
 extern int64_t dtrace_calc_thread_recent_vtime(thread_t);
 
 
-extern void		thread_set_wq_state32(
+extern kern_return_t	thread_set_wq_state32(
 					      thread_t          thread,
 					      thread_state_t    tstate);
 
-extern void		thread_set_wq_state64(
+extern kern_return_t	thread_set_wq_state64(
 					      thread_t          thread,
 					      thread_state_t    tstate);
 
 extern vm_offset_t	kernel_stack_mask;
 extern vm_offset_t	kernel_stack_size;
 extern vm_offset_t	kernel_stack_depth_max;
+
+void guard_ast(thread_t thread);
+extern void fd_guard_ast(thread_t thread);
+extern void mach_port_guard_ast(thread_t thread);
+extern void thread_guard_violation(thread_t thread, unsigned type);
 
 #endif	/* XNU_KERNEL_PRIVATE */
 

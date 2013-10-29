@@ -71,27 +71,14 @@
  * [XSI] The ssize_t and size_t types shall be defined as described
  * in <sys/types.h>.
  */
-#ifndef _SIZE_T
-#define _SIZE_T
-typedef __darwin_size_t		size_t;
-#endif
-
-#ifndef	_SSIZE_T
-#define	_SSIZE_T
-typedef	__darwin_ssize_t	ssize_t;
-#endif
+#include <sys/_types/_size_t.h>
+#include <sys/_types/_ssize_t.h>
 
 /*
  * [XSI] Structure whose address is passed as the second parameter to the
  * readv() and writev() functions.
  */
-#ifndef _STRUCT_IOVEC
-#define	_STRUCT_IOVEC
-struct iovec {
-	void *   iov_base;	/* [XSI] Base address of I/O memory region */
-	size_t	 iov_len;	/* [XSI] Size of region iov_base points to */
-};
-#endif
+#include <sys/_types/_iovec_t.h>
 
 
 #if !defined(_POSIX_C_SOURCE) || defined(_DARWIN_C_SOURCE)

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2010 Apple Inc. All rights reserved.
+ * Copyright (c) 2010-2013 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -97,7 +97,7 @@
 #define _NETINET_TCP6_VAR_H_
 #include <sys/appleapiopts.h>
 
-#ifdef KERNEL_PRIVATE
+#ifdef BSD_KERNEL_PRIVATE
 #ifdef SYSCTL_DECL
 SYSCTL_DECL(_net_inet6_tcp6);
 #endif
@@ -112,6 +112,5 @@ struct	rtentry *tcp_rtlookup6(struct inpcb *, unsigned int);
 
 extern struct	pr_usrreqs tcp6_usrreqs;
 
-#endif /* KERNEL_PRIVATE */
-
+#endif /* BSD_KERNEL_PRIVATE */
 #endif /* _NETINET_TCP6_VAR_H_ */

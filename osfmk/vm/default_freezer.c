@@ -296,7 +296,8 @@ default_freezer_pack_page(
 	df_handle->dfh_compact_offset += PAGE_SIZE;
 }
 
-void
+
+kern_return_t
 default_freezer_unpack(
 		 default_freezer_handle_t df_handle)
 {
@@ -311,6 +312,7 @@ default_freezer_unpack(
 	default_freezer_memory_object_t		fo = NULL;
 	default_freezer_mapping_table_t 	freeze_table = NULL;
 	boolean_t				should_unlock_handle = FALSE;
+	kern_return_t				kr;
 
 	assert(df_handle);
 
@@ -326,11 +328,11 @@ default_freezer_unpack(
 	assert(compact_object->pager_ready);
 	
 	/* Bring the pages back in */
-	if (vm_object_pagein(compact_object) != KERN_SUCCESS) {
+	if ((kr = vm_object_pagein(compact_object)) != KERN_SUCCESS) {
 		if (should_unlock_handle) {
 			default_freezer_handle_unlock(df_handle);
 		}
-        	return;
+        	return (kr);
 	}
 
 	vm_object_lock(compact_object);
@@ -399,6 +401,7 @@ default_freezer_unpack(
 		df_handle->dfh_compact_offset = 0;
 		default_freezer_handle_unlock(df_handle);
 	}
+	return (KERN_SUCCESS);
 }
 
 void
@@ -517,6 +520,7 @@ df_memory_object_data_request(
 	memory_object_t pager = NULL;
 	kern_return_t kr = KERN_SUCCESS;
 	boolean_t	drop_object_ref = FALSE;
+	vm_page_t compact_page, dst_page;
 
 	default_freezer_memory_object_t fo = (default_freezer_memory_object_t)mem_obj;
 	default_freezer_handle_t	df_handle = NULL;
@@ -563,7 +567,7 @@ df_memory_object_data_request(
 		upl_t        upl;
 		unsigned int page_list_count = 0;
 
-		request_flags = UPL_NO_SYNC | UPL_RET_ONLY_ABSENT | UPL_SET_LITE;
+		request_flags = UPL_NO_SYNC | UPL_RET_ONLY_ABSENT | UPL_SET_LITE | UPL_SET_INTERNAL;
 		/*
 		 * Should we decide to activate USE_PRECIOUS (from default_pager_internal.h)
 		 * here, then the request_flags will need to add these to the ones above:
@@ -588,79 +592,86 @@ df_memory_object_data_request(
 
 		return KERN_SUCCESS;
 	}
+	vm_object_lock(compact_object);
 
 	assert(compact_object->alive);
 	assert(!compact_object->terminating);
-	assert(compact_object->pager_ready);
-
-	vm_object_lock(compact_object);
-
-	vm_object_paging_wait(compact_object, THREAD_UNINT);
-	vm_object_paging_begin(compact_object);
-
-	compact_object->blocked_access = TRUE;
-	pager = (memory_object_t)compact_object->pager;
-
-	vm_object_unlock(compact_object);
-
-	((vm_object_fault_info_t) fault_info)->io_sync = TRUE;
 
 	/*
-	 * We have a reference on both the default_freezer
-	 * memory object handle and the compact object.
+	 * note that the activity_in_progress could be non-zero, but
+	 * the pager has not yet been created since the activity_in_progress
+	 * count is bumped via vm_pageout_cluster, while the pager isn't created
+	 * until the pageout thread runs and starts to process the pages
+	 * placed on the I/O queue... once the processing of the compact object
+	 * proceeds to the point where it's placed the first page on the I/O
+	 * queue, we need to wait until the entire freeze operation has completed.
 	 */
-	kr = dp_memory_object_data_request(pager,
-					compact_offset,
-					length,
-					protection_required,
-					fault_info);
-	if (kr == KERN_SUCCESS){
+	vm_object_paging_wait(compact_object, THREAD_UNINT);
 
-		vm_page_t compact_page = VM_PAGE_NULL, dst_page = VM_PAGE_NULL;
+	if (compact_object->pager_ready) {
+		vm_object_paging_begin(compact_object);
+
+		compact_object->blocked_access = TRUE;
+		pager = (memory_object_t)compact_object->pager;
+
+		vm_object_unlock(compact_object);
+
+		((vm_object_fault_info_t) fault_info)->io_sync = TRUE;
+
+		/*
+		 * We have a reference on both the default_freezer
+		 * memory object handle and the compact object.
+		 */
+		kr = dp_memory_object_data_request(pager,
+						   compact_offset,
+						   length,
+						   protection_required,
+						   fault_info);
+		if (kr != KERN_SUCCESS)
+			panic("%d: default_freezer TOC pointed us to default_pager incorrectly\n", kr);
 
 		vm_object_lock(compact_object);
 
 		compact_object->blocked_access = FALSE;
 		vm_object_paging_end(compact_object);
-
-		vm_object_lock(src_object);
-
-		if ((compact_page = vm_page_lookup(compact_object, compact_offset)) != VM_PAGE_NULL){
-			
-			dst_page = vm_page_lookup(src_object, offset - src_object->paging_offset);
-			
-			if (!dst_page->absent){
-				/*
-				 * Someone raced us here and unpacked
-				 * the object behind us.
-				 * So cleanup before we return.
-				 */
-				VM_PAGE_FREE(compact_page);
-			} else {
-				VM_PAGE_FREE(dst_page);
-				vm_page_rename(compact_page, src_object, offset - src_object->paging_offset, FALSE);
-				
-				if (default_freezer_mapping_update(fo->fo_df_handle->dfh_table,
-								mem_obj,
-								offset,
-								NULL,
-								TRUE) != KERN_SUCCESS) {
-					printf("Page for object: 0x%lx at offset: 0x%lx not found in table\n", (uintptr_t)src_object, (uintptr_t)offset);
-				}
-				
-				PAGE_WAKEUP_DONE(compact_page);
-			}
-		} else {
-			printf("%d: default_freezer: compact_object doesn't have the page for object 0x%lx at offset 0x%lx \n", kr, (uintptr_t)compact_object, (uintptr_t)compact_offset);
-			kr = KERN_SUCCESS;
-		}
-		vm_object_unlock(src_object);
-		vm_object_unlock(compact_object);
-		vm_object_deallocate(compact_object);
-	} else {
-		panic("%d: default_freezer TOC pointed us to default_pager incorrectly\n", kr);
 	}
-	
+	vm_object_lock(src_object);
+
+	if ((compact_page = vm_page_lookup(compact_object, compact_offset)) != VM_PAGE_NULL){
+			
+		dst_page = vm_page_lookup(src_object, offset - src_object->paging_offset);
+			
+		if (dst_page && !dst_page->absent){
+			/*
+			 * Someone raced us here and unpacked
+			 * the object behind us.
+			 * So cleanup before we return.
+			 */
+			VM_PAGE_FREE(compact_page);
+		} else {
+			if (dst_page != NULL) {
+				VM_PAGE_FREE(dst_page);
+			}
+			vm_page_rename(compact_page, src_object, offset - src_object->paging_offset, FALSE);
+				
+			if (default_freezer_mapping_update(fo->fo_df_handle->dfh_table,
+							   mem_obj,
+							   offset,
+							   NULL,
+							   TRUE) != KERN_SUCCESS) {
+				printf("Page for object: 0x%lx at offset: 0x%lx not found in table\n", (uintptr_t)src_object, (uintptr_t)offset);
+			}
+			
+			PAGE_WAKEUP_DONE(compact_page);
+		}
+	} else {
+		printf("%d: default_freezer: compact_object doesn't have the page for object 0x%lx at offset 0x%lx \n", kr, (uintptr_t)compact_object, (uintptr_t)compact_offset);
+		kr = KERN_SUCCESS;
+	}
+	vm_object_unlock(src_object);
+	vm_object_unlock(compact_object);
+	vm_object_deallocate(compact_object);
+
 	return kr;
 }
 

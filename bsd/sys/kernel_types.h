@@ -41,7 +41,6 @@
 #endif
 
 
-typedef int errno_t;
 typedef int64_t daddr64_t;
 
 #ifndef BSD_BUILD
@@ -130,15 +129,7 @@ typedef struct bufattr*		bufattr_t;
 
 #endif /* !BSD_BUILD */
 
-#ifndef _KAUTH_GUID
-#define _KAUTH_GUID
-/* Apple-style globally unique identifier */
-typedef struct {
-#define KAUTH_GUID_SIZE	16	/* 128-bit identifier */
-	unsigned char g_guid[KAUTH_GUID_SIZE];
-} guid_t;
-#define _GUID_T
-#endif /* _KAUTH_GUID */
+#include <sys/_types/_guid_t.h>
 
 #ifndef _KAUTH_ACE
 #define _KAUTH_ACE

@@ -85,6 +85,10 @@
 #include <miscfs/devfs/devfs.h>
 #include <miscfs/devfs/devfsdefs.h>	/* DEVFS_LOCK()/DEVFS_UNLOCK() */
 
+#if CONFIG_MACF
+#include <security/mac_framework.h>
+#endif
+
 /* XXX belongs in devfs somewhere - LATER */
 int _devfs_setattr(void *, unsigned short, uid_t, gid_t);
 
@@ -98,22 +102,23 @@ int _devfs_setattr(void *, unsigned short, uid_t, gid_t);
 int ptmx_init(int n_ptys);
 static void ptsd_start(struct tty *tp);
 static void ptmx_wakeup(struct tty *tp, int flag);
-FREE_BSDSTATIC	d_open_t	ptsd_open;
-FREE_BSDSTATIC	d_close_t	ptsd_close;
-FREE_BSDSTATIC	d_read_t	ptsd_read;
-FREE_BSDSTATIC	d_write_t	ptsd_write;
-FREE_BSDSTATIC	d_ioctl_t	cptyioctl;	/* common ioctl */
-FREE_BSDSTATIC	d_stop_t	ptsd_stop;
-FREE_BSDSTATIC	d_reset_t	ptsd_reset;
-FREE_BSDSTATIC	d_devtotty_t	ptydevtotty;
-FREE_BSDSTATIC	d_open_t	ptmx_open;
-FREE_BSDSTATIC	d_close_t	ptmx_close;
-FREE_BSDSTATIC	d_read_t	ptmx_read;
-FREE_BSDSTATIC	d_write_t	ptmx_write;
-FREE_BSDSTATIC	d_stop_t	ptmx_stop;	/* NO-OP */
-FREE_BSDSTATIC	d_reset_t	ptmx_reset;
-FREE_BSDSTATIC	d_select_t	ptmx_select;
-FREE_BSDSTATIC	d_select_t	ptsd_select;
+__XNU_PRIVATE_EXTERN	d_open_t	ptsd_open;
+__XNU_PRIVATE_EXTERN	d_close_t	ptsd_close;
+__XNU_PRIVATE_EXTERN	d_read_t	ptsd_read;
+__XNU_PRIVATE_EXTERN	d_write_t	ptsd_write;
+__XNU_PRIVATE_EXTERN	d_ioctl_t	cptyioctl;	/* common ioctl */
+__XNU_PRIVATE_EXTERN	d_stop_t	ptsd_stop;
+__XNU_PRIVATE_EXTERN	d_reset_t	ptsd_reset;
+__XNU_PRIVATE_EXTERN	d_open_t	ptmx_open;
+__XNU_PRIVATE_EXTERN	d_close_t	ptmx_close;
+__XNU_PRIVATE_EXTERN	d_read_t	ptmx_read;
+__XNU_PRIVATE_EXTERN	d_write_t	ptmx_write;
+__XNU_PRIVATE_EXTERN	d_stop_t	ptmx_stop;	/* NO-OP */
+__XNU_PRIVATE_EXTERN	d_reset_t	ptmx_reset;
+__XNU_PRIVATE_EXTERN	d_select_t	ptmx_select;
+__XNU_PRIVATE_EXTERN	d_select_t	ptsd_select;
+
+extern	d_devtotty_t	ptydevtotty;
 
 static int ptmx_major;		/* dynamically assigned major number */
 static struct cdevsw ptmx_cdev = {
@@ -693,8 +698,8 @@ again:
 			pg_rele(pg);
 			tty_lock(tp);
 
-			error = ttysleep(tp, &lbolt, TTIPRI | PCATCH | PTTYBLOCK, "ptsd_bg",
-					 0);
+			error = ttysleep(tp, &ptsd_read, TTIPRI | PCATCH | PTTYBLOCK, "ptsd_bg",
+					 hz);
 			if (error)
 			        goto out;
 		}
@@ -713,9 +718,9 @@ again:
 			int cc;
 			char buf[BUFSIZ];
 
-			cc = min(uio_resid(uio), BUFSIZ);
+			cc = MIN(uio_resid(uio), BUFSIZ);
 			// Don't copy the very last byte
-			cc = min(cc, tp->t_canq.c_cc - 1);
+			cc = MIN(cc, tp->t_canq.c_cc - 1);
 			cc = q_to_b(&tp->t_canq, (u_char *)buf, cc);
 			error = uiomove(buf, cc, uio);
 			if (error)
@@ -882,6 +887,10 @@ ptmx_close(dev_t dev, __unused int flags, __unused int fmt, __unused proc_t p)
 
 	ptmx_free_ioctl(minor(dev), PF_OPEN_M);
 
+#if CONFIG_MACF
+	mac_pty_notify_close(p, tp, dev, NULL);
+#endif
+
 	return (0);
 }
 
@@ -911,8 +920,8 @@ ptmx_read(dev_t dev, struct uio *uio, int flag)
 				if (error)
 					goto out;
 				if (pti->pt_send & TIOCPKT_IOCTL) {
-					cc = min(uio_resid(uio),
-						sizeof(tp->t_termios));
+					cc = MIN(uio_resid(uio),
+						(user_ssize_t)sizeof(tp->t_termios));
 					uiomove((caddr_t)&tp->t_termios, cc,
 						uio);
 				}
@@ -942,7 +951,7 @@ ptmx_read(dev_t dev, struct uio *uio, int flag)
 	if (pti->pt_flags & (PF_PKT|PF_UCNTL))
 		error = ureadc(0, uio);
 	while (uio_resid(uio) > 0 && error == 0) {
-		cc = q_to_b(&tp->t_outq, (u_char *)buf, min(uio_resid(uio), BUFSIZ));
+		cc = q_to_b(&tp->t_outq, (u_char *)buf, MIN(uio_resid(uio), BUFSIZ));
 		if (cc <= 0)
 			break;
 		error = uiomove(buf, cc, uio);
@@ -1187,8 +1196,8 @@ again:
 		while ((uio_resid(uio) > 0 || cc > 0) &&
 		       tp->t_canq.c_cc < TTYHOG - 1) {
 			if (cc == 0) {
-				cc = min(uio_resid(uio), BUFSIZ);
-				cc = min(cc, TTYHOG - 1 - tp->t_canq.c_cc);
+				cc = MIN(uio_resid(uio), BUFSIZ);
+				cc = MIN(cc, TTYHOG - 1 - tp->t_canq.c_cc);
 				cp = locbuf;
 				error = uiomove((caddr_t)cp, cc, uio);
 				if (error)
@@ -1224,7 +1233,7 @@ again:
 	}
 	while (uio_resid(uio) > 0 || cc > 0) {
 		if (cc == 0) {
-			cc = min(uio_resid(uio), BUFSIZ);
+			cc = MIN(uio_resid(uio), BUFSIZ);
 			cp = locbuf;
 			error = uiomove((caddr_t)cp, cc, uio);
 			if (error)
@@ -1414,6 +1423,13 @@ cptyioctl(dev_t dev, u_long cmd, caddr_t data, int flag, proc_t p)
 			 */
 			{
 				error = _devfs_setattr(pti->pt_devhandle, 0620, kauth_getuid(), GID_TTY);
+#if CONFIG_MACF
+				if (!error) {
+					tty_unlock(tp);
+					mac_pty_notify_grant(p, tp, dev, NULL);
+					tty_lock(tp);
+				}
+#endif
 				goto out;
 			}
 

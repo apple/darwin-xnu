@@ -135,12 +135,13 @@ typedef struct cpu_core {
 
 extern cpu_core_t *cpu_core;
 
+extern unsigned int dtrace_max_cpus;		/* max number of enabled cpus */
+#define NCPU	    dtrace_max_cpus
 
 extern int cpu_number(void); /* From #include <kern/cpu_number.h>. Called from probe context, must blacklist. */
 
 #define	CPU		(&(cpu_list[cpu_number()]))	/* Pointer to current CPU */
 #define	CPU_ON_INTR(cpup) ml_at_interrupt_context() /* always invoked on current cpu */
-#define NCPU	real_ncpus
 
 /*
  * Routines used to register interest in cpu's being added to or removed
@@ -497,15 +498,15 @@ extern void vmem_free(vmem_t *vmp, void *vaddr, size_t size);
  * Atomic
  */
 
-static inline void atomic_add_32( uint32_t *theValue, int32_t theAmount )
+static inline void atomic_add_32( uint32_t *theAddress, int32_t theAmount )
 {
-	(void)OSAddAtomic( theAmount, theValue );
+	(void)OSAddAtomic( theAmount, theAddress );
 }
 
 #if defined(__i386__) || defined(__x86_64__)
-static inline void atomic_add_64( uint64_t *theValue, int64_t theAmount )
+static inline void atomic_add_64( uint64_t *theAddress, int64_t theAmount )
 {
-	(void)OSAddAtomic64( theAmount, (SInt64 *)theValue );
+	(void)OSAddAtomic64( theAmount, (SInt64 *)theAddress );
 }
 #endif
 

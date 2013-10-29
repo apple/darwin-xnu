@@ -28,6 +28,7 @@
 .Nd open a shared memory object
 .Sh SYNOPSIS
 .Fd #include <sys/mman.h>
+.Fd #include <fcntl.h>
 .Ft int
 .Fo shm_open
 .Fa "const char *name"
@@ -122,7 +123,7 @@ not persist across a system reboot.
 .Pp
 The system imposes a limit on the number of file descriptors
 open simultaneously by one process.
-.Xr Getdtablesize 2
+.Xr getdtablesize 2
 returns the current system limit.
 .Sh ERRORS
 The named object is opened unless:

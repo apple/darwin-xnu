@@ -179,11 +179,20 @@ typedef enum {
 	KDPERR_ALREADY_CONNECTED,
 	KDPERR_BAD_NBYTES,
 	KDPERR_BADFLAVOR,		/* bad flavor in w/r regs */
+	KDPERR_BAD_ACCESS,		/* memory reference failure */
 
 	KDPERR_MAX_BREAKPOINTS = 100,
 	KDPERR_BREAKPOINT_NOT_FOUND = 101,
 	KDPERR_BREAKPOINT_ALREADY_SET = 102
 } kdp_error_t;
+
+#if defined(__x86_64__) 
+#define KDPERR_ACCESS(_req,_ret)  \
+	(((_req) == (uint32_t)(_ret)) ? KDPERR_NO_ERROR : KDPERR_BAD_ACCESS)
+#else
+#define KDPERR_ACCESS(req,cnt)	(KDPERR_NO_ERROR)
+#endif /* x86_64 */
+
 
 /*
  * KDP requests and reply packet formats

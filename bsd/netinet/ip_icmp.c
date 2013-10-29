@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2012 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2013 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -143,11 +143,7 @@ SYSCTL_INT(_net_inet_icmp, OID_AUTO, log_redirect, CTLFLAG_RW | CTLFLAG_LOCKED,
 
 /* Default values in case CONFIG_ICMP_BANDLIM is not defined in the MASTER file */
 #ifndef CONFIG_ICMP_BANDLIM
-#if !CONFIG_EMBEDDED
 #define CONFIG_ICMP_BANDLIM 250
-#else /* CONFIG_EMBEDDED */
-#define CONFIG_ICMP_BANDLIM 50
-#endif /* CONFIG_EMBEDDED */
 #endif /* CONFIG_ICMP_BANDLIM */
 
 /*    
@@ -183,8 +179,6 @@ int	icmpprintfs = 0;
 static void	icmp_reflect(struct mbuf *);
 static void	icmp_send(struct mbuf *, struct mbuf *);
 
-extern	struct protosw inetsw[];
-
 /*
  * Generate an error packet of type error
  * in response to bad packet ip.
@@ -210,7 +204,8 @@ icmp_error(
 
 #if ICMPPRINTFS
 	if (icmpprintfs)
-		printf("icmp_error(%p, %x, %d)\n", oip, type, code);
+		printf("icmp_error(0x%llx, %x, %d)\n",
+		    (uint64_t)VM_KERNEL_ADDRPERM(oip), type, code);
 #endif
 	if (type != ICMP_REDIRECT)
 		icmpstat.icps_error++;
@@ -309,19 +304,13 @@ freeit:
 	m_freem(n);
 }
 
-static struct sockaddr_in icmpsrc = { sizeof (struct sockaddr_in), AF_INET, 
-										0 , { 0 }, { 0,0,0,0,0,0,0,0 } };
-static struct sockaddr_in icmpdst = { sizeof (struct sockaddr_in), AF_INET, 
-										0 , { 0 }, { 0,0,0,0,0,0,0,0 } };
-static struct sockaddr_in icmpgw = { sizeof (struct sockaddr_in), AF_INET, 
-										0 , { 0 }, { 0,0,0,0,0,0,0,0 } };
-
 /*
  * Process a received ICMP message.
  */
 void
 icmp_input(struct mbuf *m, int hlen)
 {
+	struct sockaddr_in icmpsrc, icmpdst, icmpgw;
 	struct icmp *icp;
 	struct ip *ip = mtod(m, struct ip *);
 	int icmplen;
@@ -381,6 +370,18 @@ icmp_input(struct mbuf *m, int hlen)
 	 */
 	if (icp->icmp_type > ICMP_MAXTYPE)
 		goto raw;
+
+	/* Initialize */
+	bzero(&icmpsrc, sizeof (icmpsrc));
+	icmpsrc.sin_len = sizeof (struct sockaddr_in);
+	icmpsrc.sin_family = AF_INET;
+	bzero(&icmpdst, sizeof (icmpdst));
+	icmpdst.sin_len = sizeof (struct sockaddr_in);
+	icmpdst.sin_family = AF_INET;
+	bzero(&icmpgw, sizeof (icmpgw));
+	icmpgw.sin_len = sizeof (struct sockaddr_in);
+	icmpgw.sin_family = AF_INET;
+
 	icmpstat.icps_inhist[icp->icmp_type]++;
 	code = icp->icmp_code;
 	switch (icp->icmp_type) {
@@ -645,6 +646,7 @@ static void
 icmp_reflect(struct mbuf *m)
 {
 	struct ip *ip = mtod(m, struct ip *);
+	struct sockaddr_in icmpdst;
 	struct in_ifaddr *ia;
 	struct in_addr t;
 	struct mbuf *opts = NULL;
@@ -691,6 +693,11 @@ icmp_reflect(struct mbuf *m)
 	}
 match:
 	lck_rw_done(in_ifaddr_rwlock);
+
+	/* Initialize */
+	bzero(&icmpdst, sizeof (icmpdst));
+	icmpdst.sin_len = sizeof (struct sockaddr_in);
+	icmpdst.sin_family = AF_INET;
 	icmpdst.sin_addr = t;
 	if ((ia == (struct in_ifaddr *)0) && m->m_pkthdr.rcvif)
 		ia = (struct in_ifaddr *)ifaof_ifpforaddr(
@@ -812,9 +819,9 @@ icmp_send(struct mbuf *m, struct mbuf *opts)
 	struct icmp *icp;
 	struct route ro;
 	struct ip_out_args ipoa = { IFSCOPE_NONE, { 0 },
-	    IPOAF_SELECT_SRCIF | IPOAF_BOUND_SRCADDR };
+	    IPOAF_SELECT_SRCIF | IPOAF_BOUND_SRCADDR, 0 };
 
-	if ((m->m_flags & M_PKTHDR) && m->m_pkthdr.rcvif != NULL) {
+	if (!(m->m_pkthdr.pkt_flags & PKTF_LOOP) && m->m_pkthdr.rcvif != NULL) {
 		ipoa.ipoa_boundif = m->m_pkthdr.rcvif->if_index;
 		ipoa.ipoa_flags |= IPOAF_BOUND_IF;
 	}
@@ -842,8 +849,7 @@ icmp_send(struct mbuf *m, struct mbuf *opts)
 #endif
 	bzero(&ro, sizeof ro);
 	(void) ip_output(m, opts, &ro, IP_OUTARGS, NULL, &ipoa);
-	if (ro.ro_rt)
-		rtfree(ro.ro_rt);
+	ROUTE_RELEASE(&ro);
 }
 
 n_time
@@ -852,7 +858,7 @@ iptime(void)
 	struct timeval atv;
 	u_int32_t t;
 
-	microtime(&atv);
+	getmicrotime(&atv);
 	t = (atv.tv_sec % (24*60*60)) * 1000 + atv.tv_usec / 1000;
 	return (htonl(t));
 }
@@ -919,9 +925,9 @@ ip_next_mtu(int mtu, int dir)
 int
 badport_bandlim(int which)
 {
-	static struct timeval lticks[BANDLIM_MAX + 1];
+	static uint64_t lticks[BANDLIM_MAX + 1];
 	static int lpackets[BANDLIM_MAX + 1];
-	struct timeval time;
+	uint64_t time = net_uptime();
 	int secs;
 
 	const char *bandlimittype[] = {
@@ -940,15 +946,13 @@ badport_bandlim(int which)
 	if (icmplim <= 0 || which > BANDLIM_MAX || which < 0)
 		return(0);
 
-	getmicrouptime(&time);
+	secs = time - lticks[which];
 
- 	secs = time.tv_sec - lticks[which].tv_sec ;
-			
 	/*
 	 * reset stats when cumulative delta exceeds one second.
 	 */
 
-	if ((secs > 1) || (secs == 1 && (lticks[which].tv_usec > time.tv_usec))) { 
+	if (secs > 1) {
 		if (lpackets[which] > icmplim) {
 			printf("%s from %d to %d packets per second\n",
 				bandlimittype[which],
@@ -956,8 +960,7 @@ badport_bandlim(int which)
 				icmplim
 			);
 		}
-		lticks[which].tv_sec = time.tv_sec;
-		lticks[which].tv_usec = time.tv_usec;
+		lticks[which] = time;
 		lpackets[which] = 0;
 	}
 
@@ -985,7 +988,6 @@ badport_bandlim(int which)
 #include <netinet/ip_icmp.h>
 #include <netinet/in_pcb.h>
 
-extern struct domain inetdomain;
 extern u_int32_t rip_sendspace;
 extern u_int32_t rip_recvspace;
 extern struct inpcbinfo ripcbinfo;
@@ -1002,11 +1004,19 @@ __private_extern__ int icmp_dgram_attach(struct socket *so, int proto, struct pr
 __private_extern__ int icmp_dgram_ctloutput(struct socket *so, struct sockopt *sopt);
 
 __private_extern__ struct pr_usrreqs icmp_dgram_usrreqs = {
-        rip_abort, pru_accept_notsupp, icmp_dgram_attach, rip_bind, rip_connect,
-        pru_connect2_notsupp, in_control, rip_detach, rip_disconnect,
-        pru_listen_notsupp, in_setpeeraddr, pru_rcvd_notsupp,
-        pru_rcvoob_notsupp, icmp_dgram_send, pru_sense_null, rip_shutdown,
-        in_setsockaddr, sosend, soreceive, pru_sopoll_notsupp
+	.pru_abort =		rip_abort,
+	.pru_attach =		icmp_dgram_attach,
+	.pru_bind =		rip_bind,
+	.pru_connect =		rip_connect,
+	.pru_control =		in_control,
+	.pru_detach =		rip_detach,
+	.pru_disconnect =	rip_disconnect,
+	.pru_peeraddr =		in_getpeeraddr,
+	.pru_send =		icmp_dgram_send,
+	.pru_shutdown =		rip_shutdown,
+	.pru_sockaddr =		in_getsockaddr,
+	.pru_sosend =		sosend,
+	.pru_soreceive =	soreceive,
 };
 
 /* Like rip_attach but without root privilege enforcement */
@@ -1082,8 +1092,8 @@ icmp_dgram_ctloutput(struct socket *so, struct sockopt *sopt)
 }
 
 __private_extern__ int
-icmp_dgram_send(struct socket *so, int flags, struct mbuf *m, struct sockaddr *nam,
-         struct mbuf *control, struct proc *p)
+icmp_dgram_send(struct socket *so, int flags, struct mbuf *m,
+    struct sockaddr *nam, struct mbuf *control, struct proc *p)
 {
 	struct ip *ip;
 	struct inpcb *inp = sotoinpcb(so);
@@ -1091,12 +1101,20 @@ icmp_dgram_send(struct socket *so, int flags, struct mbuf *m, struct sockaddr *n
 	struct icmp *icp;
         struct in_ifaddr *ia = NULL;
 	int icmplen;
+	int error = EINVAL;
+
+	if (inp == NULL || (inp->inp_flags2 & INP2_WANT_FLOW_DIVERT)) {
+		if (inp != NULL)
+			error = EPROTOTYPE;
+		goto bad;
+	}
 
 	if ((inp->inp_flags & INP_HDRINCL) != 0) {
-		/* Expect 32-bit aligned data pointer on strict-align platforms */
+		/* Expect 32-bit aligned data ptr on strict-align platforms */
 		MBUF_STRICT_DATA_ALIGNMENT_CHECK_32(m);
 		/*
-		 * This is not raw IP, we liberal only for fields TOS, id and TTL 
+		 * This is not raw IP, we liberal only for fields TOS,
+		 * id and TTL.
 		 */
 		ip = mtod(m, struct ip *);
 
@@ -1110,13 +1128,16 @@ icmp_dgram_send(struct socket *so, int flags, struct mbuf *m, struct sockaddr *n
 			goto bad;
 		if (hlen < 20 || hlen > 40 || ip->ip_len != m->m_pkthdr.len)
 			goto bad;
-		/* Bogus fragments can tie up peer resources */ 
+		/* Bogus fragments can tie up peer resources */
 		if ((ip->ip_off & ~IP_DF) !=  0)
 			goto bad;
 		/* Allow only ICMP even for user provided IP header */
 		if (ip->ip_p != IPPROTO_ICMP)
 			goto bad;
-		/* To prevent spoofing, specified source address must be one of ours */
+		/*
+		 * To prevent spoofing, specified source address must
+		 * be one of ours.
+		 */
 		if (ip->ip_src.s_addr != INADDR_ANY) {
 			socket_unlock(so, 0);
 			lck_rw_lock_shared(in_ifaddr_rwlock);
@@ -1172,10 +1193,16 @@ ours:
 		default:
 			goto bad;
 	}
-	return rip_send(so, flags, m, nam, control, p);
+	return (rip_send(so, flags, m, nam, control, p));
 bad:
-	m_freem(m);
-	return EINVAL;
+	VERIFY(error != 0);
+
+	if (m != NULL)
+		m_freem(m);
+	if (control != NULL)
+		m_freem(control);
+
+	return (error);
 }
 
 #endif /* __APPLE__ */

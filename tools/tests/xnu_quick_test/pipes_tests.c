@@ -44,6 +44,7 @@
 #include <unistd.h>
 #include <sys/types.h>
 #include <dispatch/dispatch.h>
+#include <pthread.h>
 
 /**************************/
 /**************************/

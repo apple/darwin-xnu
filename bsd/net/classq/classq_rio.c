@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2007-2012 Apple Inc. All rights reserved.
+ * Copyright (c) 2007-2013 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -96,6 +96,7 @@
 #include <sys/mbuf.h>
 #include <sys/socket.h>
 #include <sys/systm.h>
+#include <sys/syslog.h>
 #include <sys/errno.h>
 #include <sys/kauth.h>
 #include <sys/kauth.h>
@@ -113,6 +114,7 @@
 
 #include <net/classq/classq_red.h>
 #include <net/classq/classq_rio.h>
+#include <net/net_osdep.h>
 
 /*
  * RIO: RED with IN/OUT bit
@@ -217,8 +219,20 @@ rio_alloc(struct ifnet *ifp, int weight, struct redparams *params,
 		return (NULL);
 
 	bzero(rp, rio_size);
-	rp->rio_flags = (flags & RIOF_USERFLAGS);
 	rp->rio_ifp = ifp;
+	rp->rio_flags = (flags & RIOF_USERFLAGS);
+#if !PF_ECN
+	if (rp->rio_flags & RIOF_ECN) {
+		rp->rio_flags &= ~RIOF_ECN;
+		log(LOG_ERR, "%s: RIO ECN not available; ignoring "
+		    "RIOF_ECN flag!\n", if_name(ifp));
+	}
+	if (rp->rio_flags & RIOF_CLEARDSCP) {
+		rp->rio_flags &= ~RIOF_CLEARDSCP;
+		log(LOG_ERR, "%s: RIO ECN not available; ignoring "
+		    "RIOF_CLEARDSCP flag!\n", if_name(ifp));
+	}
+#endif /* !PF_ECN */
 
 	if (pkttime == 0)
 		/* default packet time: 1000 bytes / 10Mbps * 8 * 1000000 */
@@ -341,17 +355,23 @@ dscp2index(u_int8_t dscp)
 }
 #endif
 
-#define	RIOM_SET_PRECINDEX(t, idx) do {			\
-	(t)->pftag_qpriv32 = (idx);			\
+/* Store RIO precindex in the module private scratch space */
+#define	pkt_precidx	pkt_mpriv.__mpriv_u.__mpriv32[0].__mpriv32_u.__val32
+
+#define	RIOM_SET_PRECINDEX(pkt, idx) do {		\
+	(pkt)->pkt_precidx = (idx);			\
 } while (0)
 
-#define	RIOM_GET_PRECINDEX(t)				\
-	({ u_int32_t idx; idx = (t)->pftag_qpriv32;	\
-	RIOM_SET_PRECINDEX(t, 0); idx; })
+#define	RIOM_GET_PRECINDEX(pkt)				\
+	({ u_int32_t idx; idx = (pkt)->pkt_precidx;	\
+	RIOM_SET_PRECINDEX(pkt, 0); idx; })
 
 int
 rio_addq(rio_t *rp, class_queue_t *q, struct mbuf *m, struct pf_mtag *tag)
 {
+#if !PF_ECN
+#pragma unused(tag)
+#endif /* !PF_ECN */
 #define	DSCP_MASK	0xfc
 	int			 avg, droptype;
 	u_int8_t		 dsfield, odsfield;
@@ -359,7 +379,11 @@ rio_addq(rio_t *rp, class_queue_t *q, struct mbuf *m, struct pf_mtag *tag)
 	struct timeval		 now;
 	struct dropprec_state	*prec;
 
+#if PF_ECN
 	dsfield = odsfield = read_dsfield(m, tag);
+#else
+	dsfield = odsfield = 0;
+#endif /* !PF_ECN */
 	dpindex = dscp2index(dsfield);
 
 	/*
@@ -447,13 +471,15 @@ rio_addq(rio_t *rp, class_queue_t *q, struct mbuf *m, struct pf_mtag *tag)
 		rp->rio_precstate[i].qlen++;
 
 	/* save drop precedence index in mbuf hdr */
-	RIOM_SET_PRECINDEX(tag, dpindex);
+	RIOM_SET_PRECINDEX(&m->m_pkthdr, dpindex);
 
 	if (rp->rio_flags & RIOF_CLEARDSCP)
 		dsfield &= ~DSCP_MASK;
 
+#if PF_ECN
 	if (dsfield != odsfield)
 		write_dsfield(m, tag, dsfield);
+#endif /* PF_ECN */
 
 	_addq(q, m);
 
@@ -473,7 +499,7 @@ rio_getq_flow(struct rio *rp, class_queue_t *q, u_int32_t flow, boolean_t purge)
 
 	VERIFY(m->m_flags & M_PKTHDR);
 
-	dpindex = RIOM_GET_PRECINDEX(m_pftag(m));
+	dpindex = RIOM_GET_PRECINDEX(&m->m_pkthdr);
 	for (i = dpindex; i < RIO_NDROPPREC; i++) {
 		if (--rp->rio_precstate[i].qlen == 0) {
 			if (rp->rio_precstate[i].idle == 0) {

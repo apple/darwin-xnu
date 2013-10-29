@@ -61,7 +61,7 @@ extern uint32_t   tcp_sendspace;
 extern uint32_t   tcp_recvspace;
 #endif
 
-void            bsd_bufferinit(void) __attribute__((section("__TEXT, initcode")));
+void            bsd_bufferinit(void);
 extern void     md_prepare_for_shutdown(int, int, char *);
 
 unsigned int	bsd_mbuf_cluster_reserve(boolean_t *);
@@ -90,13 +90,16 @@ SYSCTL_INT (_kern, OID_AUTO, maxnbuf, CTLFLAG_RW | CTLFLAG_LOCKED, &max_nbuf_hea
 __private_extern__ int customnbuf = 0;
 int             serverperfmode = 0;	/* Flag indicates a server boot when set */
 int             ncl = 0;
+
+#if SOCKETS
 static unsigned int mbuf_poolsz;
+#endif
 
 vm_map_t        buffer_map;
 vm_map_t        bufferhdr_map;
 static int vnodes_sized = 0;
 
-extern void     bsd_startupearly(void) __attribute__((section("__TEXT, initcode")));
+extern void     bsd_startupearly(void);
 
 void
 bsd_startupearly(void)
@@ -200,8 +203,9 @@ bsd_startupearly(void)
 void
 bsd_bufferinit(void)
 {
+#if SOCKETS
 	kern_return_t   ret;
-
+#endif
 	/*
 	 * Note: Console device initialized in kminit() from bsd_autoconf()
 	 * prior to call to us in bsd_init().
@@ -235,6 +239,7 @@ bsd_bufferinit(void)
 #endif /* !__LP64__ */
 #define	MAX_NCL		(MAX_MBUF_POOL >> MCLSHIFT)
 
+#if SOCKETS
 /*
  * this has been broken out into a separate routine that
  * can be called from the x86 early vm initialization to
@@ -296,6 +301,8 @@ done:
 
 	return (mbuf_poolsz);
 }
+#endif
+
 #if defined(__LP64__)
 extern int tcp_tcbhashsize;
 extern int max_cached_sock_count;

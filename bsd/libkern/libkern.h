@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2006 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2012 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -139,16 +139,15 @@ ulmin(u_int32_t a, u_int32_t b)
 
 /* Prototypes for non-quad routines. */
 extern int	ffs(int);
-extern int	locc(int, char *, u_int);
 extern u_int32_t	random(void);
-extern char	*rindex(const char *, int);
 extern int	scanc(u_int, u_char *, const u_char *, int);
 extern int	skpc(int, int, char *);
 extern long	strtol(const char*, char **, int);
 extern u_long	strtoul(const char *, char **, int);
 extern quad_t	strtoq(const char *, char **, int);
 extern u_quad_t strtouq(const char *, char **, int);
-extern char	*strsep(char **stringp, const char *delim);
+extern char	*strsep(char **, const char *);
+extern void	*memchr(const void *, int, size_t);
 
 int	snprintf(char *, size_t, const char *, ...) __printflike(3,4);
 
@@ -204,19 +203,7 @@ extern void flush_dcache64(addr64_t, unsigned, int);
 static __inline__ unsigned int
 clz(unsigned int num)
 {
-#if __i386__
-	unsigned int result;
-	__asm__ volatile(
-		"bsrl   %1, %0\n\t"
-		"cmovel %2, %0"
-		: "=r" (result)
-		: "rm" (num), "r" (63)
-	);
-	return 31 ^ result;
-
-#else
 	return num?__builtin_clz(num):__builtin_clz(0);
-#endif
 }
 
 

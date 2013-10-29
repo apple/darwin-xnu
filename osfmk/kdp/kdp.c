@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2007 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2012 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -48,6 +48,8 @@
 #include <vm/vm_map.h>
 #include <vm/vm_kern.h>
 #include <vm/vm_pageout.h>
+#include <vm/vm_shared_region.h>
+#include <libkern/OSKextLibPrivate.h>
 
 extern int count_busy_buffers(void);   /* must track with declaration in bsd/sys/buf_internal.h */
 
@@ -131,6 +133,13 @@ extern int
 machine_trace_thread64(thread_t thread, char *tracepos, char *tracebound, int nframes, boolean_t user_p);
 extern int
 proc_pid(void *p);
+extern uint64_t
+proc_uniqueid(void *p);
+extern uint64_t
+proc_was_throttled(void *p);
+extern uint64_t
+proc_did_throttle(void *p);
+
 extern void
 proc_name_kdp(task_t  task, char *buf, int size);
 
@@ -139,6 +148,9 @@ kdp_snapshot_postflight(void);
 
 static int
 pid_from_task(task_t task);
+
+static uint64_t
+proc_uniqueid_from_task(task_t task);
 
 kdp_error_t
 kdp_set_breakpoint_internal(
@@ -251,10 +263,10 @@ kdp_connect(
 	    rp->error = KDPERR_ALREADY_CONNECTED;
     }
     else { 
-	    kdp.reply_port     = rport;
-	    kdp.exception_port = eport;
-	    kdp.is_conn        = TRUE;
-	    kdp.conn_seq       = seq;
+	kdp.reply_port     = rport;
+	kdp.exception_port = eport;
+	kdp.is_conn        = TRUE;
+	kdp.conn_seq       = seq;
         kdp.session_key    = key;
 
 	rp->error = KDPERR_NO_ERROR;
@@ -299,7 +311,7 @@ kdp_disconnect(
     kdp.session_key = 0;
 
     if ((panicstr != NULL) && (return_on_panic == 0))
-	    reattach_wait = 1;
+	reattach_wait = 1;
 
     if (noresume_on_disconnect == 1) {
 	reattach_wait = 1;
@@ -324,13 +336,13 @@ kdp_reattach(
     unsigned short	*reply_port
 )
 {
-  kdp_reattach_req_t            *rq = &pkt->reattach_req;
+    kdp_reattach_req_t            *rq = &pkt->reattach_req;
 
-  kdp.is_conn = TRUE;
-  kdp_disconnect(pkt, len, reply_port);
-  *reply_port = rq->req_reply_port;
-  reattach_wait = 1;
-  return (TRUE);
+    kdp.is_conn = TRUE;
+    kdp_disconnect(pkt, len, reply_port);
+    *reply_port = rq->req_reply_port;
+    reattach_wait = 1;
+    return (TRUE);
 }
 
 static boolean_t
@@ -347,7 +359,7 @@ kdp_hostinfo(
     if (plen < sizeof (*rq))
 	return (FALSE);
 
-	dprintf(("kdp_hostinfo\n"));
+    dprintf(("kdp_hostinfo\n"));
 
     rp->hdr.is_reply = 1;
     rp->hdr.len = sizeof (*rp);
@@ -362,9 +374,9 @@ kdp_hostinfo(
 
 static boolean_t
 kdp_kernelversion(
-				  kdp_pkt_t		*pkt,
-				  int			*len,
-				  unsigned short	*reply_port
+    kdp_pkt_t		*pkt,
+    int			*len,
+    unsigned short	*reply_port
 )
 {
     kdp_kernelversion_req_t	*rq = &pkt->kernelversion_req;
@@ -379,9 +391,9 @@ kdp_kernelversion(
     rp->hdr.len = sizeof (*rp);
 	
     dprintf(("kdp_kernelversion\n"));
-	slen = strlcpy(rp->version, kdp_kernelversion_string, MAX_KDP_DATA_SIZE);
+    slen = strlcpy(rp->version, kdp_kernelversion_string, MAX_KDP_DATA_SIZE);
 	
-	rp->hdr.len += slen + 1; /* strlcpy returns the amount copied with NUL */
+    rp->hdr.len += slen + 1; /* strlcpy returns the amount copied with NUL */
 	
     *reply_port = kdp.reply_port;
     *len = rp->hdr.len;
@@ -453,7 +465,7 @@ kdp_writemem(
     kdp_writemem_req_t	*rq = &pkt->writemem_req;
     size_t		plen = *len;
     kdp_writemem_reply_t *rp = &pkt->writemem_reply;
-    mach_vm_size_t 		cnt;
+    mach_vm_size_t 	cnt;
 
     if (plen < sizeof (*rq))
 	return (FALSE);
@@ -462,9 +474,9 @@ kdp_writemem(
 	rp->error = KDPERR_BAD_NBYTES;
     else {
 	dprintf(("kdp_writemem addr %x size %d\n", rq->address, rq->nbytes));
-
 	cnt = kdp_machine_vm_write((caddr_t)rq->data, (mach_vm_address_t)rq->address, rq->nbytes);
-	rp->error = KDPERR_NO_ERROR;
+	rp->error = KDPERR_ACCESS(rq->nbytes, cnt);
+	dprintf(("  cnt %lld error %d\n", cnt, rp->error));
     }
 
     rp->hdr.is_reply = 1;
@@ -478,9 +490,9 @@ kdp_writemem(
 
 static boolean_t
 kdp_writemem64(
-			 kdp_pkt_t		*pkt,
-			 int			*len,
-			 unsigned short	*reply_port
+    kdp_pkt_t		*pkt,
+    int			*len,
+    unsigned short	*reply_port
 )
 {
     kdp_writemem64_req_t	*rq = &pkt->writemem64_req;
@@ -492,12 +504,12 @@ kdp_writemem64(
 		return (FALSE);
 	
     if (rq->nbytes > MAX_KDP_DATA_SIZE)
-		rp->error = KDPERR_BAD_NBYTES;
+	rp->error = KDPERR_BAD_NBYTES;
     else {
-		dprintf(("kdp_writemem64 addr %llx size %d\n", rq->address, rq->nbytes));
-		
-		cnt = kdp_machine_vm_write((caddr_t)rq->data, (mach_vm_address_t)rq->address, (mach_vm_size_t)rq->nbytes);
-		rp->error = KDPERR_NO_ERROR;
+	dprintf(("kdp_writemem64 addr %llx size %d\n", rq->address, rq->nbytes));
+	cnt = kdp_machine_vm_write((caddr_t)rq->data, (mach_vm_address_t)rq->address, (mach_vm_size_t)rq->nbytes);
+	rp->error = KDPERR_ACCESS(rq->nbytes, cnt);
+	dprintf(("  cnt %lld error %d\n", cnt, rp->error));
     }
 	
     rp->hdr.is_reply = 1;
@@ -511,24 +523,28 @@ kdp_writemem64(
 
 static boolean_t
 kdp_writephysmem64(
-			 kdp_pkt_t		*pkt,
-			 int			*len,
-			 unsigned short	*reply_port
+    kdp_pkt_t		*pkt,
+    int			*len,
+    unsigned short	*reply_port
 )
 {
     kdp_writephysmem64_req_t	*rq = &pkt->writephysmem64_req;
     size_t		plen = *len;
     kdp_writephysmem64_reply_t *rp = &pkt->writephysmem64_reply;
+    mach_vm_size_t 		cnt;
+    unsigned int		size;
 	
     if (plen < sizeof (*rq))
-		return (FALSE);
+	return (FALSE);
 	
-    if (rq->nbytes > MAX_KDP_DATA_SIZE)
-		rp->error = KDPERR_BAD_NBYTES;
+    size = rq->nbytes;
+    if (size > MAX_KDP_DATA_SIZE)
+	rp->error = KDPERR_BAD_NBYTES;
     else {
-		dprintf(("kdp_writephysmem64 addr %llx size %d\n", rq->address, rq->nbytes));
-		kdp_machine_phys_write(rq, rq->data, rq->lcpu);
-		rp->error = KDPERR_NO_ERROR;
+	dprintf(("kdp_writephysmem64 addr %llx size %d\n", rq->address, size));
+	cnt = kdp_machine_phys_write(rq, rq->data, rq->lcpu);
+	rp->error = KDPERR_ACCESS(size, cnt);
+	dprintf(("  cnt %lld error %d\n", cnt, rp->error));
     }
 	
     rp->hdr.is_reply = 1;
@@ -550,10 +566,8 @@ kdp_readmem(
     kdp_readmem_req_t	*rq = &pkt->readmem_req;
     size_t		plen = *len;
     kdp_readmem_reply_t *rp = &pkt->readmem_reply;
-    mach_vm_size_t			cnt;
-#if __i386__
-    void		*pversion = &kdp_kernelversion_string;
-#endif
+    mach_vm_size_t	cnt;
+    unsigned int	size;
 
     if (plen < sizeof (*rq))
 	return (FALSE);
@@ -561,29 +575,14 @@ kdp_readmem(
     rp->hdr.is_reply = 1;
     rp->hdr.len = sizeof (*rp);
 
-    if (rq->nbytes > MAX_KDP_DATA_SIZE)
+    size = rq->nbytes;
+    if (size > MAX_KDP_DATA_SIZE)
 	rp->error = KDPERR_BAD_NBYTES;
     else {
-	unsigned int	n = rq->nbytes;
-
-	dprintf(("kdp_readmem addr %x size %d\n", rq->address, n));
-#if __i386__
-	/* XXX This is a hack to facilitate the "showversion" macro
-	 * on i386, which is used to obtain the kernel version without
-	 * symbols - a pointer to the version string should eventually
-	 * be pinned at a fixed address when an equivalent of the
-	 * VECTORS segment (loaded at a fixed load address, and contains
-	 * a table) is implemented on these architectures, as with PPC.
-	 * N.B.: x86 now has a low global page, and the version indirection
-	 * is pinned at 0x201C. We retain the 0x501C address override
-	 * for compatibility. Future architectures should instead use
-	 * the KDP_KERNELVERSION request.
-	 */
-	if (rq->address == 0x501C)
-		rq->address = (uintptr_t)&pversion;
-#endif
-	cnt = kdp_machine_vm_read((mach_vm_address_t)rq->address, (caddr_t)rp->data, n);
-	rp->error = KDPERR_NO_ERROR;
+	dprintf(("kdp_readmem addr %x size %d\n", rq->address, size));
+	cnt = kdp_machine_vm_read((mach_vm_address_t)rq->address, (caddr_t)rp->data, rq->nbytes);
+	rp->error = KDPERR_ACCESS(size, cnt);
+	dprintf(("  cnt %lld error %d\n", cnt, rp->error));
 
 	rp->hdr.len += cnt;
     }
@@ -596,15 +595,16 @@ kdp_readmem(
 
 static boolean_t
 kdp_readmem64(
-			kdp_pkt_t		*pkt,
-			int			*len,
-			unsigned short	*reply_port
+    kdp_pkt_t		*pkt,
+    int			*len,
+    unsigned short	*reply_port
 )
 {
     kdp_readmem64_req_t	*rq = &pkt->readmem64_req;
     size_t		plen = *len;
     kdp_readmem64_reply_t *rp = &pkt->readmem64_reply;
-    mach_vm_size_t			cnt;
+    mach_vm_size_t	cnt;
+    unsigned int	size;
 
     if (plen < sizeof (*rq))
 		return (FALSE);
@@ -612,16 +612,16 @@ kdp_readmem64(
     rp->hdr.is_reply = 1;
     rp->hdr.len = sizeof (*rp);
 	
-    if (rq->nbytes > MAX_KDP_DATA_SIZE)
-		rp->error = KDPERR_BAD_NBYTES;
+    size = rq->nbytes;
+    if (size > MAX_KDP_DATA_SIZE)
+	rp->error = KDPERR_BAD_NBYTES;
     else {
-
-		dprintf(("kdp_readmem64 addr %llx size %d\n", rq->address, rq->nbytes));
-
-		cnt = kdp_machine_vm_read((mach_vm_address_t)rq->address, (caddr_t)rp->data, rq->nbytes);
-		rp->error = KDPERR_NO_ERROR;
+	dprintf(("kdp_readmem64 addr %llx size %d\n", rq->address, size));
+	cnt = kdp_machine_vm_read((mach_vm_address_t)rq->address, (caddr_t)rp->data, rq->nbytes);
+	rp->error = KDPERR_ACCESS(size, cnt);
+	dprintf(("  cnt %lld error %d\n", cnt, rp->error));
 		
-		rp->hdr.len += cnt;
+	rp->hdr.len += cnt;
     }
 	
     *reply_port = kdp.reply_port;
@@ -632,32 +632,33 @@ kdp_readmem64(
 
 static boolean_t
 kdp_readphysmem64(
-			kdp_pkt_t		*pkt,
-			int			*len,
-			unsigned short	*reply_port
+    kdp_pkt_t		*pkt,
+    int			*len,
+    unsigned short	*reply_port
 )
 {
     kdp_readphysmem64_req_t	*rq = &pkt->readphysmem64_req;
     size_t		plen = *len;
     kdp_readphysmem64_reply_t *rp = &pkt->readphysmem64_reply;
-    int			cnt;
+    mach_vm_size_t	cnt;
+    unsigned int	size;
 
     if (plen < sizeof (*rq))
-		return (FALSE);
+	return (FALSE);
 	
     rp->hdr.is_reply = 1;
     rp->hdr.len = sizeof (*rp);
 	
-    if (rq->nbytes > MAX_KDP_DATA_SIZE)
-		rp->error = KDPERR_BAD_NBYTES;
+    size = rq->nbytes;
+    if (size > MAX_KDP_DATA_SIZE)
+	rp->error = KDPERR_BAD_NBYTES;
     else {
-
-		dprintf(("kdp_readphysmem64 addr %llx size %d\n", rq->address, rq->nbytes));
-
-		cnt = (int)kdp_machine_phys_read(rq, rp->data, rq->lcpu);
-		rp->error = KDPERR_NO_ERROR;
+	dprintf(("kdp_readphysmem64 addr %llx size %d\n", rq->address, size));
+	cnt = kdp_machine_phys_read(rq, rp->data, rq->lcpu);
+	rp->error = KDPERR_ACCESS(size, cnt);
+	dprintf(("  cnt %lld error %d\n", cnt, rp->error));
 		
-		rp->hdr.len += cnt;
+	rp->hdr.len += cnt;
     }
 	
     *reply_port = kdp.reply_port;
@@ -817,9 +818,9 @@ kdp_readregs(
 
 boolean_t 
 kdp_breakpoint_set(
-				   kdp_pkt_t		*pkt,
-				   int			*len,
-				   unsigned short	*reply_port
+    kdp_pkt_t		*pkt,
+    int			*len,
+    unsigned short	*reply_port
 )
 {
 	kdp_breakpoint_req_t	*rq = &pkt->breakpoint_req;
@@ -846,9 +847,9 @@ kdp_breakpoint_set(
 
 boolean_t 
 kdp_breakpoint64_set(
-					 kdp_pkt_t		*pkt,
-					 int			*len,
-					 unsigned short	*reply_port
+    kdp_pkt_t		*pkt,
+    int			*len,
+    unsigned short	*reply_port
 )
 {
 	kdp_breakpoint64_req_t	*rq = &pkt->breakpoint64_req;
@@ -875,9 +876,9 @@ kdp_breakpoint64_set(
 
 boolean_t 
 kdp_breakpoint_remove(
-					  kdp_pkt_t		*pkt,
-					  int			*len,
-					  unsigned short	*reply_port
+    kdp_pkt_t		*pkt,
+    int			*len,
+    unsigned short	*reply_port
 )
 {
 	kdp_breakpoint_req_t	*rq = &pkt->breakpoint_req;
@@ -903,9 +904,9 @@ kdp_breakpoint_remove(
 
 boolean_t 
 kdp_breakpoint64_remove(
-						kdp_pkt_t		*pkt,
-						int			*len,
-						unsigned short	*reply_port
+    kdp_pkt_t		*pkt,
+    int			*len,
+    unsigned short	*reply_port
 )
 {
 	kdp_breakpoint64_req_t	*rq = &pkt->breakpoint64_req;
@@ -933,8 +934,8 @@ kdp_breakpoint64_remove(
 
 kdp_error_t
 kdp_set_breakpoint_internal(
-							mach_vm_address_t	address
-							)
+    mach_vm_address_t	address
+)
 {
 	
 	uint8_t		breakinstr[MAX_BREAKINSN_BYTES], oldinstr[MAX_BREAKINSN_BYTES];
@@ -975,8 +976,8 @@ kdp_set_breakpoint_internal(
 
 kdp_error_t
 kdp_remove_breakpoint_internal(
-							   mach_vm_address_t	address
-							   )
+    mach_vm_address_t	address
+)
 {
 	mach_vm_size_t	cnt;
 	int		i;
@@ -984,7 +985,7 @@ kdp_remove_breakpoint_internal(
 	for(i=0;(i < MAX_BREAKPOINTS) && (breakpoint_list[i].address != address); i++);
 	
 	if (i == MAX_BREAKPOINTS)
-    {
+	{
 		return KDPERR_BREAKPOINT_NOT_FOUND; 
 	}
 	
@@ -1001,7 +1002,7 @@ kdp_remove_all_breakpoints(void)
 	boolean_t breakpoint_found = FALSE;
 	
 	if (breakpoints_initialized)
-    {
+	{
 		for(i=0;i < MAX_BREAKPOINTS; i++)
 		{
 			if (breakpoint_list[i].address)
@@ -1014,15 +1015,15 @@ kdp_remove_all_breakpoints(void)
 		
 		if (breakpoint_found)
 			printf("kdp_remove_all_breakpoints: found extant breakpoints, removing them.\n");
-    }
+	}
 	return breakpoint_found;
 }
 
 boolean_t
 kdp_reboot(
-		   __unused kdp_pkt_t *pkt,
-		   __unused int	*len,
-		   __unused unsigned short *reply_port
+	__unused kdp_pkt_t *pkt,
+	__unused int	*len,
+	__unused unsigned short *reply_port
 )
 {
 	dprintf(("kdp_reboot\n"));
@@ -1042,6 +1043,39 @@ static int pid_from_task(task_t task)
 		pid = proc_pid(task->bsd_info);
 
 	return pid;
+}
+
+static uint64_t
+proc_uniqueid_from_task(task_t task)
+{
+	uint64_t uniqueid = ~(0ULL);
+
+	if (task->bsd_info)
+		uniqueid = proc_uniqueid(task->bsd_info);
+
+	return uniqueid;
+}
+
+static uint64_t
+proc_was_throttled_from_task(task_t task)
+{
+	uint64_t was_throttled = 0;
+
+	if (task->bsd_info)
+		was_throttled = proc_was_throttled(task->bsd_info);
+	
+	return was_throttled;
+}
+
+static uint64_t
+proc_did_throttle_from_task(task_t task)
+{
+	uint64_t did_throttle = 0;
+
+	if (task->bsd_info)
+		did_throttle = proc_did_throttle(task->bsd_info);
+	
+	return did_throttle;
 }
 
 boolean_t
@@ -1078,6 +1112,26 @@ kdp_mem_and_io_snapshot(struct mem_and_io_snapshot *memio_snap)
   unsigned int pages_wanted;
   kern_return_t kErr;
 
+  processor_t processor;
+  vm_statistics64_t stat;
+  vm_statistics64_data_t host_vm_stat;
+
+  processor = processor_list;
+  stat = &PROCESSOR_DATA(processor, vm_stat);
+  host_vm_stat = *stat;
+
+  if (processor_count > 1) {
+    simple_lock(&processor_list_lock);
+	
+    while ((processor = processor->processor_list) != NULL) {
+      stat = &PROCESSOR_DATA(processor, vm_stat);
+      host_vm_stat.compressions += stat->compressions;
+      host_vm_stat.decompressions += stat->decompressions;
+    }
+	
+    simple_unlock(&processor_list_lock);
+  }
+
   memio_snap->snapshot_magic = STACKSHOT_MEM_AND_IO_SNAPSHOT_MAGIC;
   memio_snap->free_pages = vm_page_free_count;
   memio_snap->active_pages = vm_page_active_count;
@@ -1087,6 +1141,10 @@ kdp_mem_and_io_snapshot(struct mem_and_io_snapshot *memio_snap)
   memio_snap->speculative_pages = vm_page_speculative_count;
   memio_snap->throttled_pages = vm_page_throttled_count;
   memio_snap->busy_buffer_count = count_busy_buffers();
+  memio_snap->filebacked_pages = vm_page_external_count;
+  memio_snap->compressions = (uint32_t)host_vm_stat.compressions;
+  memio_snap->decompressions = (uint32_t)host_vm_stat.decompressions;
+  memio_snap->compressor_size = VM_PAGE_COMPRESSOR_COUNT;
   kErr = mach_vm_pressure_monitor(FALSE, VM_PRESSURE_TIME_WINDOW, &pages_reclaimed, &pages_wanted);
   if ( ! kErr ) {
 	memio_snap->pages_wanted = (uint32_t)pages_wanted;
@@ -1134,16 +1192,14 @@ kdp_stackshot(int pid, void *tracebuf, uint32_t tracebuf_size, uint32_t trace_fl
 	thread_t thread = THREAD_NULL;
 	thread_snapshot_t tsnap = NULL;
 	unsigned framesize = 2 * sizeof(vm_offset_t);
-	struct task ctask;
-	struct thread cthread;
-	struct _vm_map cmap;
-	struct pmap cpmap;
 
 	queue_head_t *task_list = &tasks;
 	boolean_t is_active_list = TRUE;
 	
 	boolean_t dispatch_p = ((trace_flags & STACKSHOT_GET_DQ) != 0);
 	boolean_t save_loadinfo_p = ((trace_flags & STACKSHOT_SAVE_LOADINFO) != 0);
+	boolean_t save_kextloadinfo_p = ((trace_flags & STACKSHOT_SAVE_KEXT_LOADINFO) != 0);
+	boolean_t save_userframes_p = ((trace_flags & STACKSHOT_SAVE_KERNEL_FRAMES_ONLY) == 0);
 
 	if(trace_flags & STACKSHOT_GET_GLOBAL_MEM_STATS) {
 	  if(tracepos + sizeof(struct mem_and_io_snapshot) > tracebound) {
@@ -1156,10 +1212,11 @@ kdp_stackshot(int pid, void *tracebuf, uint32_t tracebuf_size, uint32_t trace_fl
 
 walk_list:
 	queue_iterate(task_list, task, task_t, tasks) {
-		if ((task == NULL) || (ml_nofault_copy((vm_offset_t) task, (vm_offset_t) &ctask, sizeof(struct task)) != sizeof(struct task)))
+		if ((task == NULL) || !ml_validate_nofault((vm_offset_t) task, sizeof(struct task)))
 			goto error_exit;
 
 		int task_pid = pid_from_task(task);
+		uint64_t task_uniqueid = proc_uniqueid_from_task(task);
 		boolean_t task64 = task_has_64BitAddr(task);
 
 		if (!task->active) {
@@ -1178,9 +1235,10 @@ walk_list:
 			uint32_t uuid_info_count = 0;
 			mach_vm_address_t uuid_info_addr = 0;
 			boolean_t have_map = (task->map != NULL) && 
-			  (ml_nofault_copy((vm_offset_t)(task->map), (vm_offset_t)&cmap, sizeof(struct _vm_map)) == sizeof(struct _vm_map));
-			boolean_t have_pmap = have_map && (cmap.pmap != NULL) &&
-			  (ml_nofault_copy((vm_offset_t)(cmap.pmap), (vm_offset_t)&cpmap, sizeof(struct pmap)) == sizeof(struct pmap));
+				(ml_validate_nofault((vm_offset_t)(task->map), sizeof(struct _vm_map)));
+			boolean_t have_pmap = have_map && (task->map->pmap != NULL) &&
+				(ml_validate_nofault((vm_offset_t)(task->map->pmap), sizeof(struct pmap)));
+			uint64_t shared_cache_base_address = 0;
 
 			if (have_pmap && task->active && save_loadinfo_p && task_pid > 0) {
 				// Read the dyld_all_image_infos struct from the task memory to get UUID array count and location
@@ -1206,6 +1264,12 @@ walk_list:
 				}
 			}
 
+			if (have_pmap && save_kextloadinfo_p && task_pid == 0) {
+				if (ml_validate_nofault((vm_offset_t)(gLoadedKextSummaries), sizeof(OSKextLoadedKextSummaryHeader))) {
+					uuid_info_count = gLoadedKextSummaries->numSummaries + 1; /* include main kernel UUID */
+				}
+			}
+
 			if (tracepos + sizeof(struct task_snapshot) > tracebound) {
 				error = -1;
 				goto error_exit;
@@ -1214,6 +1278,7 @@ walk_list:
 			task_snap = (task_snapshot_t) tracepos;
 			task_snap->snapshot_magic = STACKSHOT_TASK_SNAPSHOT_MAGIC;
 			task_snap->pid = task_pid;
+			task_snap->uniqueid = task_uniqueid;
 			task_snap->nloadinfos = uuid_info_count;
 			/* Add the BSD process identifiers */
 			if (task_pid != -1)
@@ -1223,19 +1288,57 @@ walk_list:
 			task_snap->ss_flags = 0;
 			if (task64)
 				task_snap->ss_flags |= kUser64_p;
+			if (task64 && task_pid == 0)
+				task_snap->ss_flags |= kKernel64_p;
 			if (!task->active) 
 				task_snap->ss_flags |= kTerminatedSnapshot;
 			if(task->pidsuspended) task_snap->ss_flags |= kPidSuspended;
 			if(task->frozen) task_snap->ss_flags |= kFrozen;
+
+			if (task->effective_policy.t_sup_active == 1)
+				task_snap->ss_flags |= kTaskIsSuppressed;
+
+			task_snap->latency_qos = (task->effective_policy.t_latency_qos == LATENCY_QOS_TIER_UNSPECIFIED) ?
+			                         LATENCY_QOS_TIER_UNSPECIFIED : ((0xFF << 16) | task->effective_policy.t_latency_qos);
 
 			task_snap->suspend_count = task->suspend_count;
 			task_snap->task_size = have_pmap ? pmap_resident_count(task->map->pmap) : 0;
 			task_snap->faults = task->faults;
 			task_snap->pageins = task->pageins;
 			task_snap->cow_faults = task->cow_faults;
-			
+
 			task_snap->user_time_in_terminated_threads = task->total_user_time;
 			task_snap->system_time_in_terminated_threads = task->total_system_time;
+			/*
+			 * The throttling counters are maintained as 64-bit counters in the proc
+			 * structure. However, we reserve 32-bits (each) for them in the task_snapshot
+			 * struct to save space and since we do not expect them to overflow 32-bits. If we
+			 * find these values overflowing in the future, the fix would be to simply 
+			 * upgrade these counters to 64-bit in the task_snapshot struct
+			 */
+			task_snap->was_throttled = (uint32_t) proc_was_throttled_from_task(task);
+			task_snap->did_throttle = (uint32_t) proc_did_throttle_from_task(task);
+
+			if (task->shared_region && ml_validate_nofault((vm_offset_t)task->shared_region,
+														   sizeof(struct vm_shared_region))) {
+				struct vm_shared_region *sr = task->shared_region;
+
+				shared_cache_base_address = sr->sr_base_address + sr->sr_first_mapping;
+			}
+			if (!shared_cache_base_address
+				|| !kdp_copyin(task->map->pmap, shared_cache_base_address, task_snap->shared_cache_identifier, sizeof(task_snap->shared_cache_identifier))) {
+				memset(task_snap->shared_cache_identifier, 0x0, sizeof(task_snap->shared_cache_identifier));
+			}
+			if (task->shared_region) {
+				/*
+				 * No refcounting here, but we are in debugger
+				 * context, so that should be safe.
+				 */
+				task_snap->shared_cache_slide = task->shared_region->sr_slide_info.slide;
+			} else {
+				task_snap->shared_cache_slide = 0;
+			}
+
 			tracepos += sizeof(struct task_snapshot);
 
 			if (task_pid > 0 && uuid_info_count > 0) {
@@ -1253,22 +1356,66 @@ walk_list:
 					task_snap->nloadinfos = 0;
 				else
 					tracepos += uuid_info_array_size;
+			} else if (task_pid == 0 && uuid_info_count > 0) {
+				uint32_t uuid_info_size = (uint32_t)sizeof(kernel_uuid_info);
+				uint32_t uuid_info_array_size = uuid_info_count * uuid_info_size;
+				kernel_uuid_info *output_uuids;
+
+				if (tracepos + uuid_info_array_size > tracebound) {
+					error = -1;
+					goto error_exit;
+				}
+
+				output_uuids = (kernel_uuid_info *)tracepos;
+
+				do {
+
+					if (!kernel_uuid || !ml_validate_nofault((vm_offset_t)kernel_uuid, sizeof(uuid_t))) {
+						/* Kernel UUID not found or inaccessible */
+						task_snap->nloadinfos = 0;
+						break;
+					}
+
+					output_uuids[0].imageLoadAddress = (uintptr_t)VM_KERNEL_UNSLIDE(vm_kernel_stext);
+					memcpy(&output_uuids[0].imageUUID, kernel_uuid, sizeof(uuid_t));
+
+					if (ml_validate_nofault((vm_offset_t)(&gLoadedKextSummaries->summaries[0]),
+											gLoadedKextSummaries->entry_size * gLoadedKextSummaries->numSummaries)) {
+						uint32_t kexti;
+
+						for (kexti=0 ; kexti < gLoadedKextSummaries->numSummaries; kexti++) {
+							output_uuids[1+kexti].imageLoadAddress = (uintptr_t)VM_KERNEL_UNSLIDE(gLoadedKextSummaries->summaries[kexti].address);
+							memcpy(&output_uuids[1+kexti].imageUUID, &gLoadedKextSummaries->summaries[kexti].uuid, sizeof(uuid_t));
+						}
+
+						tracepos += uuid_info_array_size;
+					} else {
+						/* kext summary invalid, but kernel UUID was copied */
+						task_snap->nloadinfos = 1;
+						tracepos += uuid_info_size;
+						break;
+					}
+				} while(0);
 			}
 
 			queue_iterate(&task->threads, thread, thread_t, task_threads){
 				uint64_t tval;
 
-				if ((thread == NULL) || (ml_nofault_copy((vm_offset_t) thread, (vm_offset_t) &cthread, sizeof(struct thread)) != sizeof(struct thread)))
+				if ((thread == NULL) || !ml_validate_nofault((vm_offset_t) thread, sizeof(struct thread)))
 					goto error_exit;
 
 				if (((tracepos + 4 * sizeof(struct thread_snapshot)) > tracebound)) {
 					error = -1;
 					goto error_exit;
 				}
+                if (!save_userframes_p && thread->kernel_stack == 0)
+                    continue;
+
 				/* Populate the thread snapshot header */
 				tsnap = (thread_snapshot_t) tracepos;
 				tsnap->thread_id = thread_tid(thread);
 				tsnap->state = thread->state;
+				tsnap->priority = thread->priority;
 				tsnap->sched_pri = thread->sched_pri;
 				tsnap->sched_flags = thread->sched_flags;
 				tsnap->wait_event = VM_KERNEL_UNSLIDE(thread->wait_event);
@@ -1285,6 +1432,10 @@ walk_list:
 				tsnap->snapshot_magic = STACKSHOT_THREAD_SNAPSHOT_MAGIC;
 				tracepos += sizeof(struct thread_snapshot);
 				tsnap->ss_flags = 0;
+
+				if (thread->effective_policy.darwinbg) {
+					tsnap->ss_flags |= kThreadDarwinBG;
+				}
 
 				if (dispatch_p && (task != kernel_task) && (task->active) && have_pmap) {
 					uint64_t dqkeyaddr = thread_dispatchqaddr(thread);
@@ -1319,7 +1470,7 @@ walk_list:
 				tracepos += tracebytes;
 				tracebytes = 0;
 				/* Trace user stack, if any */
-				if (task->active && thread->task->map != kernel_map) {
+				if (save_userframes_p && task->active && thread->task->map != kernel_map) {
 					/* 64-bit task? */
 					if (task_has_64BitAddr(thread->task)) {
 						tracebytes = machine_trace_thread64(thread, tracepos, tracebound, MAX_FRAMES, TRUE);
@@ -1354,7 +1505,8 @@ error_exit:
 }
 
 static boolean_t
-kdp_readioport(kdp_pkt_t		*pkt,
+kdp_readioport(
+    kdp_pkt_t		*pkt,
     int			*len,
     unsigned short	*reply_port
 	       )
@@ -1422,10 +1574,11 @@ kdp_writeioport(
 }
 
 static boolean_t
-kdp_readmsr64(kdp_pkt_t		*pkt,
-    int			*len,
-    unsigned short	*reply_port
-              )
+kdp_readmsr64(
+	kdp_pkt_t		*pkt,
+	int			*len,
+	unsigned short	*reply_port
+)
 {
 	kdp_readmsr64_req_t   *rq = &pkt->readmsr64_req;
 	kdp_readmsr64_reply_t *rp = &pkt->readmsr64_reply;

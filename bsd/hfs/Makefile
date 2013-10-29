@@ -7,20 +7,8 @@ export MakeInc_dir=${SRCROOT}/makedefs/MakeInc.dir
 include $(MakeInc_cmd)
 include $(MakeInc_def)
 
-INSTINC_SUBDIRS = \
-
-INSTINC_SUBDIRS_I386 = \
-
-INSTINC_SUBDIRS_X86_64 = \
-
-EXPINC_SUBDIRS = \
-
-EXPINC_SUBDIRS_I386 = \
-
-EXPINC_SUBDIRS_X86_64 = \
-
 DATAFILES = \
-	 hfs_encodings.h hfs_format.h hfs_mount.h
+	 hfs_encodings.h hfs_format.h hfs_mount.h hfs_unistr.h 
 
 PRIVATE_DATAFILES = \
 	hfs.h hfs_attrlist.h hfs_catalog.h hfs_cnode.h hfs_endian.h \

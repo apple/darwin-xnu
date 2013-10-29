@@ -1660,6 +1660,7 @@ audit_sdev_free(struct audit_sdev *asdev)
 	audit_sdev_flush(asdev);
 	cv_destroy(&asdev->asdev_cv);
 	AUDIT_SDEV_SX_LOCK_DESTROY(asdev);
+	AUDIT_SDEV_UNLOCK(asdev);
 	AUDIT_SDEV_LOCK_DESTROY(asdev);
 
 	TAILQ_REMOVE(&audit_sdev_list, asdev, asdev_list);
@@ -1911,7 +1912,7 @@ audit_sdev_read(dev_t dev, struct uio *uio, __unused int flag)
 
 		KASSERT(ase->ase_record_len > asdev->asdev_qoffset,
 		    ("audit_sdev_read: record_len > qoffset (1)"));
-		toread = MIN(ase->ase_record_len - asdev->asdev_qoffset,
+		toread = MIN((int)(ase->ase_record_len - asdev->asdev_qoffset),
 		    uio_resid(uio));
 		AUDIT_SDEV_UNLOCK(asdev);
 		error = uiomove((char *) ase->ase_record + asdev->asdev_qoffset,

@@ -92,6 +92,12 @@ struct hfs_journal_info {
 
 #define HFSIOC_GETPATH  _IOWR('h', 13, pathname_t)
 #define HFS_GETPATH  IOCBASECMD(HFSIOC_GETPATH)
+/* By default, the path returned by HFS_GETPATH is an absolute path, 
+ * i.e. it also contains the mount point of the volume on which the 
+ * fileID exists.  If the following bit is set, the path returned is
+ * relative to the root of the volume.
+ */
+#define HFS_GETPATH_VOLUME_RELATIVE	0x1
 
 /* Enable/disable extent-based extended attributes */
 #define HFSIOC_SET_XATTREXTENTS_STATE  _IOW('h', 14, u_int32_t)
@@ -138,6 +144,9 @@ struct hfs_journal_info {
 
 #define	HFSIOC_GET_DESIRED_DISK	_IOR('h', 29, u_int32_t)
 #define	HFS_FSCTL_GET_DESIRED_DISK	IOCBASECMD(HFSIOC_GET_DESIRED_DISK)
+
+#define HFSIOC_GET_WRITE_GEN_COUNTER  _IOR('h', 30, u_int32_t)
+#define HFS_GET_WRITE_GEN_COUNTER  IOCBASECMD(HFSIOC_GET_WRITE_GEN_COUNTER)
 
 #endif /* __APPLE_API_UNSTABLE */
 

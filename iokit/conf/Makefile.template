@@ -5,16 +5,6 @@
 # the terms and conditions for use and redistribution.
 #
 
-#
-# Export IDENT for sub-makefiles
-#
-export IDENT
-
-#
-# XXX: INCFLAGS 
-#
-INCFLAGS_MAKEFILE=  $(INCFLAGS_POSIX) -I$(SOURCE) -I$(SOURCE)include
-
 export MakeInc_cmd=${SRCROOT}/makedefs/MakeInc.cmd
 export MakeInc_def=${SRCROOT}/makedefs/MakeInc.def
 export MakeInc_rule=${SRCROOT}/makedefs/MakeInc.rule
@@ -27,17 +17,29 @@ include $(MakeInc_def)
 # XXX: CFLAGS
 #
 CFLAGS+= -include meta_features.h -DDRIVER_PRIVATE		\
-	-DIOMATCHDEBUG=1 -DIOALLOCDEBUG=1			\
-	-include meta_features.h $(CFLAGS_INLINE_CONFIG)
+	-DIOKIT_KERNEL_PRIVATE -DIOMATCHDEBUG=1 -DIOALLOCDEBUG=1
 #-DIOKITDEBUG=-1
 
 CWARNFLAGS   = $(CWARNFLAGS_STD) -Wno-unused-parameter
 CXXWARNFLAGS = $(CXXWARNFLAGS_STD) -Wno-unused-parameter -Wno-cast-qual -Wno-shadow
 
-CFLAGS_RELEASE += -DIOASSERT=0
-CFLAGS_DEBUG += -DIOASSERT=1
+# Objects that don't want -Wcast-align warning (8474835)
+IOHibernateRestoreKernel.o_CWARNFLAGS_ADD = -Wno-cast-align
+CXXOBJS_NO_CAST_ALIGN =				\
+		IODMACommand.cpo		\
+		IODataQueue.cpo			\
+		IOHibernateIO.cpo		\
+		IOMemoryDescriptor.cpo		\
+		IONVRAM.cpo			\
+		IOPMrootDomain.cpo		\
+		IOSharedDataQueue.cpo		\
+		IOUserClient.cpo
 
-SFLAGS+= -DKERNEL
+$(foreach file,$(CXXOBJS_NO_CAST_ALIGN),$(eval $(call add_perfile_cxxflags,$(file),-Wno-cast-align)))
+
+CFLAGS_RELEASE += -DIOASSERT=0
+CFLAGS_DEVELOPMENT += -DIOASSERT=1
+CFLAGS_DEBUG += -DIOASSERT=1
 
 #
 # Directories for mig generated files
@@ -62,13 +64,8 @@ COMP_SUBDIRS =
 
 %CFILES
 
-%MFILES
-
 %SFILES
 
-%BFILES
-
-%ORDERED
 %MACHDEP
 
 #
@@ -78,31 +75,22 @@ COMP_SUBDIRS =
 #
 ${OBJS}: ${OBJSDEPS}
 
-
-%LOAD
-
 LDOBJS = $(OBJS)
 
 $(COMPONENT).filelist: $(LDOBJS)
-	$(_v)if [ $(BUILD_MACHO_OBJ) -eq 1 ]; then \
-	for hib_file in ${HIB_FILES};		\
+	$(_v)for hib_file in ${HIB_FILES};		\
 	do	\
-                $(SEG_HACK) __HIB $${hib_file} -o $${hib_file}__; \
+                $(SEG_HACK) -n __HIB -o $${hib_file}__ $${hib_file} ; \
                 mv $${hib_file}__ $${hib_file} ; \
-	done; \
-	fi
+	done
 	@echo LDFILELIST $(COMPONENT)
 	$(_v)( for obj in ${LDOBJS}; do	\
-		 echo $(TARGET)$(COMP_OBJ_DIR)/$(KERNEL_CONFIG)/$${obj}; \
+		 echo $(TARGET)/$(CURRENT_KERNEL_CONFIG)/$${obj}; \
 	done; ) > $(COMPONENT).filelist
 
-do_depend: do_all
-	$(_v)${MD} -u Makedep -f -d `ls *.d`
-	
-	
 do_all: $(COMPONENT).filelist
 
-do_build_all: do_depend
+do_build_all:: do_all
 
 %RULES
 

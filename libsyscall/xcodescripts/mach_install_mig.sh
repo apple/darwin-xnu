@@ -31,7 +31,7 @@
 cd $OBJROOT
 
 # check if we're building for the simulator
-if [ "${RC_ProjectName%_Sim}" != "${RC_ProjectName}" ] ; then
+if [ "$PLATFORM_NAME" = "iphonesimulator" ] ; then
 	DSTROOT="${DSTROOT}${SDKROOT}"
 fi
 
@@ -42,8 +42,15 @@ MIG_DEFINES="-DLIBSYSCALL_INTERFACE"
 MIG_HEADER_DST="$DSTROOT/usr/include/mach"
 MIG_PRIVATE_HEADER_DST="$DSTROOT/usr/local/include/mach"
 SERVER_HEADER_DST="$DSTROOT/usr/include/servers"
+MACH_HEADER_DST="$DSTROOT/usr/include/mach"
+
 # from old Libsystem makefiles
 MACHINE_ARCH=`echo $ARCHS | cut -d' ' -f 1`
+if [[ ( "$MACHINE_ARCH" = "x86_64" ) && `echo $ARCHS | wc -w` -gt 1 ]]
+then
+	# MACHINE_ARCH needs to be a 32-bit arch to generate vm_map_internal.h correctly.
+	MACHINE_ARCH=`echo $ARCHS | cut -d' ' -f 2`
+fi
 SRC="$SRCROOT/mach"
 MIG_INTERNAL_HEADER_DST="$DERIVED_SOURCES_DIR/mach"
 MIG_PRIVATE_DEFS_INCFLAGS="-I${SDKROOT}/System/Library/Frameworks/System.framework/PrivateHeaders"
@@ -59,22 +66,20 @@ MIGS="clock.defs
 	mach_port.defs
 	processor.defs
 	processor_set.defs
+	task.defs
+	thread_act.defs
 	vm_map.defs"
 
 MIGS_PRIVATE=""
 
 MIGS_DUAL_PUBLIC_PRIVATE=""
 
-if [[ "$PLATFORM" = "iPhoneOS" || "$RC_ProjectName" = "Libsyscall_headers_Sim" ]]
+if [[ "$PLATFORM_NAME" = "iphoneos" || "$PLATFORM_NAME" = "iphonesimulator"  ]]
 then
 	MIGS_PRIVATE="mach_vm.defs"
 else
 	MIGS+=" mach_vm.defs"
 fi
-
-
-MIGS_ARCH="thread_act.defs
-	task.defs"
 
 MIGS_INTERNAL="mach_port.defs
 	mach_vm.defs
@@ -85,10 +90,24 @@ SERVER_HDRS="key_defs.h
 	netname_defs.h
 	nm_defs.h"
 
+MACH_HDRS="mach.h
+	mach_error.h
+	mach_init.h
+	mach_interface.h
+	port_obj.h
+	sync.h
+	vm_task.h"
+
 # install /usr/include/server headers 
 mkdir -p $SERVER_HEADER_DST
 for hdr in $SERVER_HDRS; do
 	install -o 0 -c -m 444 $SRC/servers/$hdr $SERVER_HEADER_DST
+done
+
+# install /usr/include/mach headers
+mkdir -p $MACH_HEADER_DST
+for hdr in $MACH_HDRS; do
+	install -o 0 -c -m 444 $SRC/mach/$hdr $MACH_HEADER_DST
 done
 
 # special case because we only have one to do here
@@ -125,14 +144,3 @@ for mig in $MIGS_INTERNAL; do
 	$MIG -arch $MACHINE_ARCH -cc $MIGCC -header "$MIG_INTERNAL_HEADER_DST/${MIG_NAME}_internal.h" $SRC/$mig
 done
  
-ARCHS=`echo $ARCHS | sed -e 's/armv./arm/g'`
-for arch in $ARCHS; do
-	MIG_ARCH_DST="$MIG_HEADER_DST/$arch"
-
-	mkdir -p $MIG_ARCH_DST
-
-	for mig in $MIGS_ARCH; do
-		MIG_NAME=`basename $mig .defs`
-		$MIG -arch $MACHINE_ARCH -cc $MIGCC -header "$MIG_ARCH_DST/$MIG_NAME.h" $MIG_DEFINES $SRC/$mig
-	done	
-done

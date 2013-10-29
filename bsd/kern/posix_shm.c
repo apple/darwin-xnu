@@ -85,7 +85,7 @@
 #include <vm/vm_protos.h>
 
 #define f_flag f_fglob->fg_flag
-#define f_type f_fglob->fg_type
+#define f_type f_fglob->fg_ops->fo_type
 #define f_msgcount f_fglob->fg_msgcount
 #define f_cred f_fglob->fg_cred
 #define f_ops f_fglob->fg_ops
@@ -192,8 +192,16 @@ static void pshm_cache_purge(void);
 static int pshm_cache_search(struct pshminfo **pshmp, struct pshmname *pnp,
 	struct pshmcache **pcache, int addref);
 
-struct 	fileops pshmops =
-	{ pshm_read, pshm_write, pshm_ioctl, pshm_select, pshm_closefile, pshm_kqfilter, 0 };
+static const struct fileops pshmops = {
+	DTYPE_PSXSHM,
+	pshm_read,
+	pshm_write,
+	pshm_ioctl,
+	pshm_select,
+	pshm_closefile,
+	pshm_kqfilter,
+	0
+};
 
 static lck_grp_t       *psx_shm_subsys_lck_grp;
 static lck_grp_attr_t  *psx_shm_subsys_lck_grp_attr;
@@ -606,7 +614,6 @@ shm_open(proc_t p, struct shm_open_args *uap, int32_t *retval)
 
 	proc_fdlock(p);
 	fp->f_flag = fmode & FMASK;
-	fp->f_type = DTYPE_PSXSHM;
 	fp->f_ops = &pshmops;
 	fp->f_data = (caddr_t)new_pnode;
 	*fdflags(p, indx) |= UF_EXCLOSE;
@@ -664,9 +671,12 @@ pshm_truncate(__unused proc_t p, struct fileproc *fp, __unused int fd,
 	mach_vm_size_t total_size, alloc_size;
 	memory_object_size_t mosize;
 	struct pshmobj *pshmobj, *pshmobj_next, **pshmobj_next_p;
+	vm_map_t	user_map;
 #if CONFIG_MACF
 	int error;
 #endif
+
+	user_map = current_map();
 
 	if (fp->f_type != DTYPE_PSXSHM) {
 		return(EINVAL);
@@ -695,7 +705,8 @@ pshm_truncate(__unused proc_t p, struct fileproc *fp, __unused int fd,
 #endif
 
 	pinfo->pshm_flags |= PSHM_ALLOCATING;
-	total_size = round_page_64(length);
+	total_size = vm_map_round_page(length,
+				       vm_map_page_mask(user_map));
 	pshmobj_next_p = &pinfo->pshm_memobjects;
 
 	for (alloc_size = 0;
@@ -898,9 +909,11 @@ pshm_mmap(__unused proc_t p, struct mmap_args *uap, user_addr_t *retval, struct 
 
 	if ((flags & MAP_FIXED) == 0) {
 		alloc_flags = VM_FLAGS_ANYWHERE;
-		user_addr = vm_map_round_page(user_addr); 
+		user_addr = vm_map_round_page(user_addr,
+					      vm_map_page_mask(user_map)); 
 	} else {
-		if (user_addr != vm_map_round_page(user_addr))
+		if (user_addr != vm_map_round_page(user_addr,
+						   vm_map_page_mask(user_map)))
 			return (EINVAL);
 		/*
 		 * We do not get rid of the existing mappings here because
@@ -1059,13 +1072,13 @@ shm_unlink(__unused proc_t p, struct shm_unlink_args *uap,
 
 	if (error == ENOENT) {
 		PSHM_SUBSYS_UNLOCK();
-		error = EINVAL;
 		goto bad;
 
 	}
+	/* During unlink lookup failure also implies ENOENT */ 
 	if (!error) {
 		PSHM_SUBSYS_UNLOCK();
-		error = EINVAL;
+		error = ENOENT;
 		goto bad;
 	} else
 		incache = 1;

@@ -101,6 +101,7 @@ struct cs_blob {
 	cpu_type_t	csb_cpu_type;
 	unsigned int	csb_flags;
 	off_t		csb_base_offset;	/* Offset of Mach-O binary in fat binary */
+	off_t		csb_blob_offset;	/* offset of blob itself, from csb_base_offset */
 	off_t		csb_start_offset;	/* Blob coverage area start, from csb_base_offset */
 	off_t		csb_end_offset;		/* Blob coverage area end, from csb_base_offset */
 	ipc_port_t	csb_mem_handle;
@@ -108,6 +109,7 @@ struct cs_blob {
 	vm_offset_t	csb_mem_offset;
 	vm_address_t	csb_mem_kaddr;
 	unsigned char	csb_sha1[SHA1_RESULTLEN];
+	unsigned int	csb_sigpup;
 };
 
 /*
@@ -150,7 +152,7 @@ struct ubc_info {
  */
 
 __BEGIN_DECLS
-__private_extern__ void ubc_init(void) __attribute__((section("__TEXT, initcode")));;
+__private_extern__ void ubc_init(void);
 __private_extern__ int	ubc_umount(mount_t mp);
 __private_extern__ void	ubc_unmountall(void);
 __private_extern__ memory_object_t ubc_getpager(vnode_t);
@@ -159,7 +161,7 @@ __private_extern__ void	ubc_destroy_named(vnode_t);
 /* internal only */
 __private_extern__ void	cluster_release(struct ubc_info *);
 __private_extern__ uint32_t cluster_max_io_size(mount_t, int);
-__private_extern__ uint32_t cluster_hard_throttle_limit(vnode_t, uint32_t *, uint32_t);
+__private_extern__ uint32_t cluster_throttle_io_limit(vnode_t, uint32_t *);
 
 
 /* Flags for ubc_getobject() */
@@ -185,7 +187,8 @@ int UBCINFOEXISTS(vnode_t);
 
 /* code signing */
 struct cs_blob;
-int	ubc_cs_blob_add(vnode_t, cpu_type_t, off_t, vm_address_t, vm_size_t);
+int	ubc_cs_blob_add(vnode_t, cpu_type_t, off_t, vm_address_t, off_t, vm_size_t);
+int	ubc_cs_sigpup_add(vnode_t, vm_address_t, vm_size_t);
 struct cs_blob *ubc_get_cs_blobs(vnode_t);
 int	ubc_cs_getcdhash(vnode_t, off_t, unsigned char *);
 kern_return_t ubc_cs_blob_allocate(vm_offset_t *, vm_size_t *);

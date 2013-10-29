@@ -45,7 +45,7 @@ After opening the device, the file descriptor must be bound to a
 specific network interface with the
 .Dv BIOCSETIF
 ioctl.
-A given interface can be shared be multiple listeners, and the filter
+A given interface can be shared by multiple listeners, and the filter
 underlying each descriptor will see an identical packet stream.
 .Pp
 A separate device file is required for each minor device.
@@ -73,14 +73,6 @@ can be set with
 .Dv BIOCSBLEN .
 Note that an individual packet larger than this size is necessarily
 truncated.
-.Pp
-The packet filter will support any link level protocol that has fixed length
-headers.  Currently, only Ethernet,
-.Tn SLIP ,
-and
-.Tn PPP
-drivers have been modified to interact with
-.Nm .
 .Pp
 A packet can be sent out on the network by writing to a
 .Nm
@@ -116,11 +108,6 @@ require
 and
 .Aq Pa net/if.h .
 .Pp
-In addition to
-.Dv FIONREAD
-the following commands may be applied to any open
-.Nm
-file.
 The (third) argument to
 .Xr ioctl 2
 should be a pointer to the type indicated.
@@ -140,7 +127,7 @@ with
 If the requested buffer size cannot be accommodated, the closest
 allowable size will be set and returned in the argument.
 A read call will result in
-.Er EIO
+.Er EINVAL
 if it is passed a buffer that is not this size.
 .It Dv BIOCGDLT
 .Pq Li u_int
@@ -151,32 +138,43 @@ The device types, prefixed with
 .Dq Li DLT_ ,
 are defined in
 .Aq Pa net/bpf.h .
+.It Dv BIOCGDLTLIST
+.Pq Li "struct bpf_dltlist"
+Returns an array of the available types of the data link layer
+underlying the attached interface:
+.Bd -literal -offset indent
+struct bpf_dltlist {
+	u_int bfl_len;
+	u_int *bfl_list;
+};
+.Ed
+.Pp
+The available types are returned in the array pointed to by the
+.Va bfl_list
+field while their length in u_int is supplied to the
+.Va bfl_len
+field.
+.Er ENOMEM
+is returned if there is not enough buffer space and
+.Er EFAULT
+is returned if a bad address is encountered.
+The
+.Va bfl_len
+field is modified on return to indicate the actual length in u_int
+of the array returned.
+If
+.Va bfl_list
+is
+.Dv NULL ,
+the
+.Va bfl_len
+field is set to indicate the required length of an array in u_int.
 .It Dv BIOCSDLT
 .Pq Li u_int
-Used to specify the type of data link layer of the interface 
-attached to the bpf descriptor. If the current interface is 
-not of the given type then the descriptor will be reattached 
-to an interface of the given type. If the descriptor has 
-promiscuous mode set, the new interface will be moved to 
-promiscuous mode.
+Changes the type of the data link layer underlying the attached interface.
 .Er EINVAL
-is returned if no interface has been specified.
-The device types, prefixed with
-.Dq Li DLT_ ,
-are defined in
-.Aq Pa net/bpf.h .
-.It Dv BIOCGDLTLIST
-.Pq Li struct bpf_dltlist
-Returns a list of data link types of the the given interface. 
-A user allocated buffer to hold the list and length of expected 
-list should be provided in struct bpf_dltlist, defined in
-.Aq Pa net/bpf.h .
-.Er EINVAL
-is returned if no interface has been specified.
-The device types, prefixed with
-.Dq Li DLT_ ,
-are defined in
-.Aq Pa net/bpf.h .
+is returned if no interface has been specified or the specified
+type is not available for the interface.
 .It Dv BIOCPROMISC
 Forces the interface into promiscuous mode.
 All packets, not just those destined for the local host, are processed.
@@ -184,6 +182,9 @@ Since more than one file can be listening on a given interface,
 a listener that opened its interface non-promiscuously may receive
 packets promiscuously.  This problem can be remedied with an
 appropriate filter.
+.Pp
+The interface remains in promiscuous mode until all files listening
+promiscuously are closed.
 .It Dv BIOCFLUSH
 Flushes the buffer of incoming packets,
 and resets the statistics that are returned by BIOCGSTATS.
@@ -197,7 +198,7 @@ structure.
 All other fields are undefined.
 .It Dv BIOCSETIF
 .Pq Li "struct ifreq"
-Sets the hardware interface associate with the file.  This
+Sets the hardware interface associated with the file.  This
 command must be performed before any packets can be read.
 The device is indicated by name using the
 .Li ifr_name
@@ -209,7 +210,7 @@ Additionally, performs the actions of
 .It Dv BIOCSRTIMEOUT
 .It Dv BIOCGRTIMEOUT
 .Pq Li "struct timeval"
-Set or get the read timeout parameter.
+Sets or gets the read timeout parameter.
 The argument
 specifies the length of time to wait before timing
 out on a read request.
@@ -239,7 +240,7 @@ kernel because of buffer overflows
 .El
 .It Dv BIOCIMMEDIATE
 .Pq Li u_int
-Enable or disable
+Enables or disables
 .Dq immediate mode ,
 based on the truth value of the argument.
 When immediate mode is enabled, reads return immediately upon packet
@@ -250,13 +251,14 @@ This is useful for programs like
 which must respond to messages in real time.
 The default for a new file is off.
 .It Dv BIOCSETF
+.It Dv BIOCSETFNR
 .Pq Li "struct bpf_program"
 Sets the filter program used by the kernel to discard uninteresting
 packets.  An array of instructions and its length is passed in using
 the following structure:
 .Bd -literal
 struct bpf_program {
-	int bf_len;
+	u_int bf_len;
 	struct bpf_insn *bf_insns;
 };
 .Ed
@@ -274,6 +276,17 @@ are performed.
 See section
 .Sx "FILTER MACHINE"
 for an explanation of the filter language.
+The only difference between
+.Dv BIOCSETF
+and
+.Dv BIOCSETFNR
+is
+.Dv BIOCSETF
+performs the actions of
+.Dv BIOCFLUSH
+while
+.Dv BIOCSETFNR
+does not.
 .It Dv BIOCVERSION
 .Pq Li "struct bpf_version"
 Returns the major and minor version numbers of the filter language currently
@@ -284,8 +297,8 @@ is less than or equal to the kernel minor.  The kernel version number is
 returned in the following structure:
 .Bd -literal
 struct bpf_version {
-        u_short bv_major;
-        u_short bv_minor;
+	u_short bv_major;
+	u_short bv_minor;
 };
 .Ed
 .Pp
@@ -302,7 +315,7 @@ or haphazard packet matching).
 .It Dv BIOCSHDRCMPLT
 .It Dv BIOCGHDRCMPLT
 .Pq Li u_int
-Set or get the status of the
+Sets or gets the status of the
 .Dq header complete
 flag.
 Set to zero if the link level source address should be filled in automatically
@@ -312,7 +325,7 @@ to zero by default.
 .It Dv BIOCSSEESENT
 .It Dv BIOCGSEESENT
 .Pq Li u_int
-Set or get the flag determining whether locally generated packets on the
+Sets or gets the flag determining whether locally generated packets on the
 interface should be returned by BPF.  Set to zero to see only incoming
 packets on the interface.  Set to one to see packets originating
 locally and remotely on the interface.  This flag is initialized to one by
@@ -324,20 +337,35 @@ Returns the signal that will be sent to a process waiting on the bpf descriptor 
 .Pq Li u_int
 Sets the signal that should be sent to a process waiting on bpf descriptor upon packet reception. The default is SIGIO.
 .El
+.Sh STANDARD IOCTLS
+.Nm
+now supports several standard
+.Xr ioctl 2 Ns 's
+which allow the user to do non-blocking I/O to an open
+.I bpf
+file descriptor.
+.Bl -tag -width SIOCGIFADDR
+.It Dv FIONREAD
+.Pq Li int
+Returns the number of bytes that are immediately available for reading.
+.It Dv SIOCGIFADDR
+.Pq Li "struct ifreq"
+Returns the address associated with the interface.
+.El
 .Sh BPF HEADER
 The following structure is prepended to each packet returned by
 .Xr read 2 :
 .Bd -literal
 struct bpf_hdr {
-        struct timeval bh_tstamp;     /* time stamp */
-        u_long bh_caplen;             /* length of captured portion */
-        u_long bh_datalen;            /* original length of packet */
-        u_short bh_hdrlen;            /* length of bpf header (this struct
+	struct BPF_TIMEVAL bh_tstamp; /* time stamp */
+	bpf_u_int32 bh_caplen;        /* length of captured portion */
+	bpf_u_int32 bh_datalen;       /* original length of packet */
+	u_short bh_hdrlen;            /* length of bpf header (this struct
 					 plus alignment padding */
 };
 .Ed
 .Pp
-The fields, whose values are stored in host order, and are:
+The fields, whose values are stored in host order, are:
 .Pp
 .Bl -tag -compact -width bh_datalen
 .It Li bh_tstamp
@@ -411,10 +439,10 @@ and implicit program counter.
 The following structure defines the instruction format:
 .Bd -literal
 struct bpf_insn {
-	u_short	code;
-	u_char 	jt;
-	u_char 	jf;
-	u_long k;
+	u_short     code;
+	u_char      jt;
+	u_char      jf;
+	bpf_u_int32 k;
 };
 .Ed
 .Pp
@@ -744,8 +772,6 @@ mode on the same hardware interface.  This could be fixed in the kernel
 with additional processing overhead.  However, we favor the model where
 all files must assume that the interface is promiscuous, and if
 so desired, must utilize a filter to reject foreign packets.
-.Pp
-Data link protocols with variable length headers are not currently supported.
 .Sh HISTORY
 The Enet packet filter was created in 1980 by Mike Accetta and
 Rick Rashid at Carnegie-Mellon University.  Jeffrey Mogul, at

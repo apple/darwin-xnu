@@ -176,7 +176,7 @@ chudxnu_cpu_timer_callback_enter(
 			 chudxnu_private_cpu_timer_callback, NULL);
 	timer_call_enter(&(chud_proc_info->cpu_timer_call),
 			 chud_proc_info->t_deadline,
-			 TIMER_CALL_CRITICAL|TIMER_CALL_LOCAL);
+			 TIMER_CALL_SYS_CRITICAL|TIMER_CALL_LOCAL);
 
 	ml_set_interrupts_enabled(oldlevel);
 	return KERN_SUCCESS;

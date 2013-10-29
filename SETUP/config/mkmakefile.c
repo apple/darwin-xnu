@@ -238,9 +238,9 @@ makefile(void)
 
 	if (machine == MACHINE_SUN || machine == MACHINE_SUN2 
 	    || machine == MACHINE_SUN3 || machine == MACHINE_SUN4)
-		fprintf(ofp, "IDENT=-D%s -D%s", machinename, allCaps(ident));
+		fprintf(ofp, "export IDENT=-D%s -D%s", machinename, allCaps(ident));
 	else
-		fprintf(ofp, "IDENT=-D%s", allCaps(ident));
+		fprintf(ofp, "export IDENT=-D%s", allCaps(ident));
 	if (profiling)
 		fprintf(ofp, " -DGPROF");
 	if (cputype == 0) {
@@ -248,6 +248,7 @@ makefile(void)
 		exit(1);
 	}
 	do_build("cputypes.h", build_cputypes);
+	do_build("platforms.h", build_cputypes);
 
 	for (op = opt; op; op = op->op_next)
 		if (op->op_value)
@@ -310,24 +311,17 @@ makefile(void)
 		} else if (eq(line, "%CFILES\n")) {
 			do_files(ofp, "CFILES=", 'c');
 			do_objs(ofp, "COBJS=", 'c');
-		} else if (eq(line, "%MFILES\n")) {
-			do_files(ofp, "MFILES=", 'm');
-			do_objs(ofp, "MOBJS=", 'm');
 		} else if (eq(line, "%SFILES\n")) {
 			do_files(ofp, "SFILES=", 's');
 			do_objs(ofp, "SOBJS=", 's');
-		} else if (eq(line, "%BFILES\n"))
-			do_files(ofp, "BFILES=", 'b');
-		else if (eq(line, "%MACHDEP\n")) {
+		} else if (eq(line, "%MACHDEP\n")) {
 			/*
 			 * Move do_machdep() after the mkopt stuff.
 			 */
 			for (op = mkopt; op; op = op->op_next)
 				fprintf(ofp, "%s=%s\n", op->op_name, op->op_value);
 			do_machdep(ofp);
-		} else if (eq(line, "%ORDERED\n"))
-			do_ordered(ofp);
-		else if (eq(line, "%RULES\n"))
+		} else if (eq(line, "%RULES\n"))
 			do_rules(ofp);
 		else if (eq(line, "%LOAD\n"))
 			do_load(ofp);
@@ -923,49 +917,20 @@ do_rules(FILE *f)
 			source_dir = "$(SOURCE_DIR)/";
 		*cp = '\0';
 		tp = tail(np);	/* dvw: init tp before 'if' */
-		if (och == 'o') {
-			fprintf(f, "%so: %so\n\t${O_RULE_1A}%s%.*s${O_RULE_1B}\n\n",
-					tp, np, source_dir, (int)(tp-np), np);
-			continue;
-		}
+		fprintf(f, "-include %sd\n", tp);
 		fprintf(f, "%so: %s%s%c\n", tp, source_dir, np, och);
 		if (och == 's') {
 			switch (machine) {
 			case MACHINE_MIPSY:
 			case MACHINE_MIPS:
-				switch (ftp->f_type) {
-				case NORMAL:
-				case DRIVER:
-					fprintf(f, "\t@${RM} %so\n", tp);
-					fprintf(f, "\t${CC} ${CCASFLAGS}%s %s%s%ss\n\n",
-						(ftp->f_extra?ftp->f_extra:""), extras, source_dir, np);
-					break;
-	
-				case PROFILING:
-					if (!profiling)
-						continue;
-					fprintf(f, "\t@${RM} %so\n", tp);
-					fprintf(f, "\t${CC} ${CCPASFLAGS}%s %s%s%ss\n\n",
-						(ftp->f_extra?ftp->f_extra:""), extras, source_dir, np);
-					break;
-	
-				default:
-					printf("Don't know rules for %s.s\n", np);
-					break;
-				}
 				break;
 			default:
+				fprintf(f, "\t${S_RULE_0}\n");
 				fprintf(f, "\t${S_RULE_1A}%s%.*s${S_RULE_1B}%s\n",
 						source_dir, (int)(tp-np), np, nl);
 				fprintf(f, "\t${S_RULE_2}%s\n", nl);
-				fprintf(f, "\t${S_RULE_3}\n\n");
 				break;
 			}
-			continue;
-		}
-		if (och == 'b') {
-			fprintf(f, "\t${B_RULE_1A}%s%.*s${B_RULE_1B}\n\n", 
-				source_dir, (int)(tp-np), np);
 			continue;
 		}
 		extras = "";
@@ -976,21 +941,7 @@ do_rules(FILE *f)
 	
 			case MACHINE_MIPSY:
 			case MACHINE_MIPS:
-				fprintf(f, "\t@${RM} %so\n", tp);
-				fprintf(f, "\t${CC} ${CCNFLAGS}%s %s%s%sc\n\n",
-					(ftp->f_extra?ftp->f_extra:""), extras, source_dir, np);
-				continue;
-	#if	0
-			case MACHINE_SQT:
-				if (ftp->f_flags & SEDIT) {
-					fprintf(f, "\t${CC} -SO ${COPTS} %s%s%sc | \\\n", extras, source_dir, np);
-					fprintf(f, "\t${SEDCMD} | ${C2} | ${AS} ${CAFLAGS} -o %so\n\n", tp);
-				} else {
-					fprintf(f, "\t${CC} -c -O ${COPTS} %s%s%sc\n\n",
-						source_dir, extras, np);
-				}
 				break;
-	#endif	/* 0 */
 			default:
 				goto common;
 			}
@@ -1049,14 +1000,25 @@ do_rules(FILE *f)
 	
 		common:
 			och_upper = och + 'A' - 'a';
+			fprintf(f, "\t${%c_RULE_0%s}\n", och_upper, extras);
 			fprintf(f, "\t${%c_RULE_1A%s}", och_upper, extras);
 			if (ftp->f_extra)
 				fprintf(f, "%s", ftp->f_extra);
 			fprintf(f, "%s%.*s${%c_RULE_1B%s}%s\n",
 					source_dir, (int)(tp-np), np, och_upper, extras, nl);
+
+			/* While we are still using CTF, any build that normally does not support CTF will
+			 * a "standard" compile done as well that we can harvest CTF information from; do
+			 * that here.
+			 */
+			fprintf(f, "\t${%c_CTFRULE_1A%s}", och_upper, extras);
+			if (ftp->f_extra)
+				fprintf(f, "%s", ftp->f_extra);
+			fprintf(f, "%s%.*s${%c_CTFRULE_1B%s}%s\n",
+					source_dir, (int)(tp-np), np, och_upper, extras, nl);
+
 			fprintf(f, "\t${%c_RULE_2%s}%s\n", och_upper, extras, nl);
-			fprintf(f, "\t${%c_RULE_3%s}%s\n", och_upper, extras, nl);
-			fprintf(f, "\t${%c_RULE_4%s}\n\n", och_upper, extras);
+			fprintf(f, "\t${%c_CTFRULE_2%s}%s\n", och_upper, extras, nl);
 			break;
 	
 		default:

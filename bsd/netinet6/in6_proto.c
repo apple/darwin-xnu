@@ -1,8 +1,8 @@
 /*
- * Copyright (c) 2008-2012 Apple Inc. All rights reserved.
+ * Copyright (c) 2008-2013 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
- * 
+ *
  * This file contains Original Code and/or Modifications of Original Code
  * as defined in and that are subject to the Apple Public Source License
  * Version 2.0 (the 'License'). You may not use this file except in
@@ -11,10 +11,10 @@
  * unlawful or unlicensed copies of an Apple operating system, or to
  * circumvent, violate, or enable the circumvention or violation of, any
  * terms of an Apple operating system software license agreement.
- * 
+ *
  * Please obtain a copy of the License at
  * http://www.opensource.apple.com/apsl/ and read it before using this file.
- * 
+ *
  * The Original Code and all software distributed under the License are
  * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
@@ -22,12 +22,9 @@
  * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
  * Please see the License for the specific language governing rights and
  * limitations under the License.
- * 
+ *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
-
-/*	$FreeBSD: src/sys/netinet6/in6_proto.c,v 1.19 2002/10/16 02:25:05 sam Exp $	*/
-/*	$KAME: in6_proto.c,v 1.91 2001/05/27 13:28:35 itojun Exp $	*/
 
 /*
  * Copyright (C) 1995, 1996, 1997, and 1998 WIDE Project.
@@ -116,6 +113,7 @@
 #include <netinet/ip_var.h>
 #include <netinet/ip6.h>
 #include <netinet6/ip6_var.h>
+#include <netinet6/in6_var.h>
 #include <netinet/icmp6.h>
 
 #include <netinet/tcp.h>
@@ -128,7 +126,6 @@
 #include <netinet6/udp6_var.h>
 #include <netinet6/pim6_var.h>
 #include <netinet6/nd6.h>
-#include <netinet6/in6_prefix.h>
 #include <netinet6/mld6_var.h>
 
 #include <netinet6/ip6_mroute.h>
@@ -162,218 +159,275 @@
  * TCP/IP protocol family: IP6, ICMP6, UDP, TCP.
  */
 
-extern	struct domain inet6domain;
+extern struct domain inet6domain_s;
+struct domain *inet6domain = NULL;
+
 static struct pr_usrreqs nousrreqs;
 lck_mtx_t *inet6_domain_mutex;
 
-#define PR_LISTEN	0
-#define PR_ABRTACPTDIS	0
-
-extern int in6_inithead(void **, int);
-void in6_dinit(void) __attribute__((section("__TEXT, initcode")));
-
-static int rip6_pr_output(struct mbuf *m, struct socket *so, struct sockaddr_in6 *, struct mbuf *);
+static void in6_dinit(struct domain *);
+static int rip6_pr_output(struct mbuf *, struct socket *,
+    struct sockaddr_in6 *, struct mbuf *);
 
 struct ip6protosw inet6sw[] = {
-{ 0,		&inet6domain,	IPPROTO_IPV6,	0,
-  0,		0,		0,		0,
-  0,
-  ip6_init,	0,		frag6_slowtimo,	frag6_drain,
-  0,
-  &nousrreqs,
-  0,		0,		0,
-  { 0, 0 }, NULL, { 0 }
+{
+	.pr_type =		0,
+	.pr_protocol =		IPPROTO_IPV6,
+	.pr_init =		ip6_init,
+	.pr_drain =		ip6_drain,
+	.pr_usrreqs =		&nousrreqs,
 },
-{ SOCK_DGRAM,	&inet6domain,	IPPROTO_UDP,	PR_ATOMIC|PR_ADDR|PR_PROTOLOCK|PR_PCBLOCK,
-  udp6_input,	0,		udp6_ctlinput,	ip6_ctloutput,
-  0,
-  0,		0,		0,		0,
-  0, 
-  &udp6_usrreqs,
-  udp_lock,	udp_unlock,	udp_getlock,
-  { 0, 0 }, NULL, { 0 }
+{
+	.pr_type =		SOCK_DGRAM,
+	.pr_protocol =		IPPROTO_UDP,
+	.pr_flags =		PR_ATOMIC|PR_ADDR|PR_PROTOLOCK|PR_PCBLOCK|
+				PR_EVCONNINFO,
+	.pr_input =		udp6_input,
+	.pr_ctlinput =		udp6_ctlinput,
+	.pr_ctloutput =		ip6_ctloutput,
+#if !INET	/* don't call initialization twice */
+	.pr_init =		udp_init,
+#endif /* !INET */
+	.pr_usrreqs =		&udp6_usrreqs,
+	.pr_lock =		udp_lock,
+	.pr_unlock =		udp_unlock,
+	.pr_getlock =		udp_getlock,
 },
-{ SOCK_STREAM,	&inet6domain,	IPPROTO_TCP,	PR_CONNREQUIRED|PR_WANTRCVD|PR_LISTEN|PR_PROTOLOCK|PR_PCBLOCK|PR_DISPOSE,
-  tcp6_input,	0,		tcp6_ctlinput,	tcp_ctloutput,
-  0,
-#if INET	/* don't call initialization and timeout routines twice */
-  0,		0,		0,		tcp_drain,
-#else
-  tcp_init,	0,	tcp_slowtimo,	tcp_drain,
-#endif
-  0,
-  &tcp6_usrreqs,
-  tcp_lock,	tcp_unlock,	tcp_getlock,
-  { 0, 0 }, NULL, { 0 }
+{
+	.pr_type =		SOCK_STREAM,
+	.pr_protocol =		IPPROTO_TCP,
+	.pr_flags =		PR_CONNREQUIRED|PR_WANTRCVD|PR_PCBLOCK|
+				PR_PROTOLOCK|PR_DISPOSE|PR_EVCONNINFO,
+	.pr_input =		tcp6_input,
+	.pr_ctlinput =		tcp6_ctlinput,
+	.pr_ctloutput =		tcp_ctloutput,
+#if !INET	/* don't call initialization and timeout routines twice */
+	.pr_init =		tcp_init,
+#endif /* !INET */
+	.pr_drain =		tcp_drain,
+	.pr_usrreqs =		&tcp6_usrreqs,
+	.pr_lock =		tcp_lock,
+	.pr_unlock =		tcp_unlock,
+	.pr_getlock =		tcp_getlock,
 },
-{ SOCK_RAW,	&inet6domain,	IPPROTO_RAW,	PR_ATOMIC|PR_ADDR,
-  rip6_input,	rip6_pr_output,	rip6_ctlinput,	rip6_ctloutput,
-  0,
-  0,		0,		0,		0,
-  0,
-  &rip6_usrreqs,
-  0,		rip_unlock,	0,
-  { 0, 0 }, NULL, { 0 }
+{
+	.pr_type =		SOCK_RAW,
+	.pr_protocol =		IPPROTO_RAW,
+	.pr_flags =		PR_ATOMIC|PR_ADDR,
+	.pr_input =		rip6_input,
+	.pr_output =		rip6_pr_output,
+	.pr_ctlinput =		rip6_ctlinput,
+	.pr_ctloutput =		rip6_ctloutput,
+#if !INET	/* don't call initialization and timeout routines twice */
+	.pr_init =		rip_init,
+#endif /* !INET */
+	.pr_usrreqs =		&rip6_usrreqs,
+	.pr_unlock =		rip_unlock,
 },
-{ SOCK_RAW,	&inet6domain,	IPPROTO_ICMPV6,	PR_ATOMIC|PR_ADDR|PR_LASTHDR,
-  icmp6_input,	rip6_pr_output,	rip6_ctlinput,	rip6_ctloutput,
-  0,
-  icmp6_init,	0,		mld_slowtimo,		0,
-  0,
-  &rip6_usrreqs,
-  0,		rip_unlock,		0,
-  { 0, 0 }, NULL, { 0 }
+{
+	.pr_type =		SOCK_RAW,
+	.pr_protocol =		IPPROTO_ICMPV6,
+	.pr_flags =		PR_ATOMIC|PR_ADDR|PR_LASTHDR,
+	.pr_input =		icmp6_input,
+	.pr_output =		rip6_pr_output,
+	.pr_ctlinput =		rip6_ctlinput,
+	.pr_ctloutput =		rip6_ctloutput,
+	.pr_init =		icmp6_init,
+	.pr_usrreqs =		&rip6_usrreqs,
+	.pr_unlock =		rip_unlock,
 },
-{ SOCK_DGRAM,     &inet6domain,   IPPROTO_ICMPV6, PR_ATOMIC|PR_ADDR|PR_LASTHDR,
-  icmp6_input,  rip6_pr_output, rip6_ctlinput,  icmp6_dgram_ctloutput,
-  0,
-  icmp6_init,   0, 		mld_slowtimo,              0,
-  0,
-  &icmp6_dgram_usrreqs,
-  0,            rip_unlock,             0,
-  { 0, 0 }, NULL, { 0 }
+{
+	.pr_type =		SOCK_DGRAM,
+	.pr_protocol =		IPPROTO_ICMPV6,
+	.pr_flags =		PR_ATOMIC|PR_ADDR|PR_LASTHDR,
+	.pr_input =		icmp6_input,
+	.pr_output =		rip6_pr_output,
+	.pr_ctlinput =		rip6_ctlinput,
+	.pr_ctloutput =		icmp6_dgram_ctloutput,
+	.pr_init =		icmp6_init,
+	.pr_usrreqs =		&icmp6_dgram_usrreqs,
+	.pr_unlock =		rip_unlock,
 },
-{ SOCK_RAW,	&inet6domain,	IPPROTO_DSTOPTS,PR_ATOMIC|PR_ADDR,
-  dest6_input,	0,	 	0,		0,
-  0,	
-  0,		0,		0,		0,
-  0,
-  &nousrreqs,
-  0,		0,		0,
-  { 0, 0 }, NULL, { 0 }
+{
+	.pr_type =		SOCK_RAW,
+	.pr_protocol =		IPPROTO_DSTOPTS,
+	.pr_flags =		PR_ATOMIC|PR_ADDR,
+	.pr_input =		dest6_input,
+	.pr_usrreqs =		&nousrreqs,
 },
-{ SOCK_RAW,	&inet6domain,	IPPROTO_ROUTING,PR_ATOMIC|PR_ADDR,
-  route6_input,	0,	 	0,		0,
-  0,	
-  0,		0,		0,		0,
-  0,
-  &nousrreqs,
-  0,		0,		0,
-  { 0, 0 }, NULL, { 0 }
+{
+	.pr_type =		SOCK_RAW,
+	.pr_protocol =		IPPROTO_ROUTING,
+	.pr_flags =		PR_ATOMIC|PR_ADDR,
+	.pr_input =		route6_input,
+	.pr_usrreqs =		&nousrreqs,
 },
-{ SOCK_RAW,	&inet6domain,	IPPROTO_FRAGMENT,PR_ATOMIC|PR_ADDR,
-  frag6_input,	0,	 	0,		0,
-  0,	
-  0,		0,		0,		0,
-  0,
-  &nousrreqs,
-  0,		0,		0,
-  { 0, 0 }, NULL, { 0 }
+{
+	.pr_type =		SOCK_RAW,
+	.pr_protocol =		IPPROTO_FRAGMENT,
+	.pr_flags =		PR_ATOMIC|PR_ADDR|PR_PROTOLOCK,
+	.pr_input =		frag6_input,
+	.pr_usrreqs =		&nousrreqs,
 },
 #if IPSEC
-{ SOCK_RAW,	&inet6domain,	IPPROTO_AH,	PR_ATOMIC|PR_ADDR|PR_PROTOLOCK,
-  ah6_input,	0,	 	0,		0,
-  0,	  
-  0,		0,		0,		0,
-  0,
-  &nousrreqs,
-  0,		0,		0,
-  { 0, 0 }, NULL, { 0 }
+{
+	.pr_type =		SOCK_RAW,
+	.pr_protocol =		IPPROTO_AH,
+	.pr_flags =		PR_ATOMIC|PR_ADDR|PR_PROTOLOCK,
+	.pr_input =		ah6_input,
+	.pr_usrreqs =		&nousrreqs,
 },
 #if IPSEC_ESP
-{ SOCK_RAW,	&inet6domain,	IPPROTO_ESP,	PR_ATOMIC|PR_ADDR|PR_PROTOLOCK,
-  esp6_input,	0,
-  esp6_ctlinput,
-  0,
-  0,
-  0,		0,		0,		0,
-  0,
-  &nousrreqs,
-  0,		0,		0,
-  { 0, 0 }, NULL, { 0 }
+{
+	.pr_type =		SOCK_RAW,
+	.pr_protocol =		IPPROTO_ESP,
+	.pr_flags =		PR_ATOMIC|PR_ADDR|PR_PROTOLOCK,
+	.pr_input =		esp6_input,
+	.pr_ctlinput =		esp6_ctlinput,
+	.pr_usrreqs =		&nousrreqs,
 },
-#endif
-{ SOCK_RAW,	&inet6domain,	IPPROTO_IPCOMP,	PR_ATOMIC|PR_ADDR|PR_PROTOLOCK,
-  ipcomp6_input, 0,	 	0,		0,
-  0,	  
-  0,		0,		0,		0,
-  0,
-  &nousrreqs,
-  0,		0,		0,
-  { 0, 0 }, NULL, { 0 }
+#endif /* IPSEC_ESP */
+{
+	.pr_type =		SOCK_RAW,
+	.pr_protocol =		IPPROTO_IPCOMP,
+	.pr_flags =		PR_ATOMIC|PR_ADDR|PR_PROTOLOCK,
+	.pr_input =		ipcomp6_input,
+	.pr_usrreqs =		&nousrreqs,
 },
 #endif /* IPSEC */
 #if INET
-{ SOCK_RAW,	&inet6domain,	IPPROTO_IPV4,	PR_ATOMIC|PR_ADDR|PR_LASTHDR,
-  encap6_input,	rip6_pr_output, 	0,		rip6_ctloutput,
-  0,
-  encap_init,	0,		0,		0,
-  0,
-  &rip6_usrreqs,
-  0,		rip_unlock,	0,
-  { 0, 0 }, NULL, { 0 }
+{
+	.pr_type =		SOCK_RAW,
+	.pr_protocol =		IPPROTO_IPV4,
+	.pr_flags =		PR_ATOMIC|PR_ADDR|PR_LASTHDR,
+	.pr_input =		encap6_input,
+	.pr_output =		rip6_pr_output,
+	.pr_ctloutput =		rip6_ctloutput,
+	.pr_init =		encap6_init,
+	.pr_usrreqs =		&rip6_usrreqs,
+	.pr_unlock =		rip_unlock,
 },
 #endif /*INET*/
-{ SOCK_RAW,	&inet6domain,	IPPROTO_IPV6,	PR_ATOMIC|PR_ADDR|PR_LASTHDR,
-  encap6_input, rip6_pr_output,	0,		rip6_ctloutput,
-  0,
-  encap_init,	0,		0,		0,
-  0,
-  &rip6_usrreqs,
-  0,		rip_unlock,	0,
-  { 0, 0 }, NULL, { 0 }
+{
+	.pr_type =		SOCK_RAW,
+	.pr_protocol =		IPPROTO_IPV6,
+	.pr_flags =		PR_ATOMIC|PR_ADDR|PR_LASTHDR,
+	.pr_input =		encap6_input,
+	.pr_output =		rip6_pr_output,
+	.pr_ctloutput =		rip6_ctloutput,
+	.pr_init =		encap6_init,
+	.pr_usrreqs =		&rip6_usrreqs,
+	.pr_unlock =		rip_unlock,
 },
 #if MROUTING
-{ SOCK_RAW,     &inet6domain,	IPPROTO_PIM,	PR_ATOMIC|PR_ADDR|PR_LASTHDR,
-  pim6_input,	rip6_pr_output,	0,              rip6_ctloutput,
-  0,
-  0,		0,		0,		0,
-  0,	
-  &rip6_usrreqs,
-  0,		rip_unlock,	0,
-  { 0, 0 }, NULL, { 0 }
+{
+	.pr_type =		SOCK_RAW,
+	.pr_protocol =		IPPROTO_PIM,
+	.pr_flags =		PR_ATOMIC|PR_ADDR|PR_LASTHDR,
+	.pr_input =		pim6_input,
+	.pr_output =		rip6_pr_output,
+	.pr_ctloutput =		rip6_ctloutput,
+	.pr_usrreqs =		&rip6_usrreqs,
+	.pr_unlock =		rip_unlock,
 },
-#endif
+#endif /* MROUTING */
 /* raw wildcard */
-{ SOCK_RAW,	&inet6domain,	0,		PR_ATOMIC|PR_ADDR|PR_LASTHDR,
-  rip6_input,	rip6_pr_output,	0,		rip6_ctloutput,
-  0,
-  0,		0,		0,		0,
-  0,
-  &rip6_usrreqs,
-  0,		rip_unlock,	0,
-  { 0, 0 }, NULL, { 0 }
+{
+	.pr_type =		SOCK_RAW,
+	.pr_protocol =		0,
+	.pr_flags =		PR_ATOMIC|PR_ADDR|PR_LASTHDR,
+	.pr_input =		rip6_input,
+	.pr_output =		rip6_pr_output,
+	.pr_ctloutput =		rip6_ctloutput,
+	.pr_usrreqs =		&rip6_usrreqs,
+	.pr_unlock =		rip_unlock,
 },
 };
 
-
 int in6_proto_count = (sizeof (inet6sw) / sizeof (struct ip6protosw));
 
-struct domain inet6domain =
-    { AF_INET6, "internet6", in6_dinit, 0, 0, 
-      (struct protosw *)inet6sw, 0,
-      in6_inithead, offsetof(struct sockaddr_in6, sin6_addr) << 3, sizeof(struct sockaddr_in6) ,
-      sizeof(struct sockaddr_in6), 0, 
-      NULL, 0, {0,0}
-    };
-
-DOMAIN_SET(inet6);
+struct domain inet6domain_s = {
+	.dom_family =		PF_INET6,
+	.dom_flags =		DOM_REENTRANT,
+	.dom_name =		"internet6",
+	.dom_init =		in6_dinit,
+	.dom_rtattach =		in6_inithead,
+	.dom_rtoffset =		offsetof(struct sockaddr_in6, sin6_addr) << 3,
+	.dom_maxrtkey =		sizeof (struct sockaddr_in6),
+	.dom_protohdrlen =	sizeof (struct sockaddr_in6),
+};
 
 /* Initialize the PF_INET6 domain, and add in the pre-defined protos */
 void
-in6_dinit(void)
+in6_dinit(struct domain *dp)
 {
-	register int i; 
-	register struct ip6protosw *pr;
-	register struct domain *dp;
-	static int inet6domain_initted = 0;
+	struct ip6protosw *pr;
+	int i;
 
-	if (!inet6domain_initted) {
-		dp = &inet6domain; 
+	VERIFY(!(dp->dom_flags & DOM_INITIALIZED));
+	VERIFY(inet6domain == NULL);
 
-		for (i=0, pr = &inet6sw[0]; i<in6_proto_count; i++, pr++)
-			net_add_proto((struct protosw*)pr, dp);
+	inet6domain = dp;
 
-		inet6_domain_mutex = dp->dom_mtx;
-		inet6domain_initted = 1;
-	}
+	_CASSERT(sizeof (struct protosw) == sizeof (struct ip6protosw));
+	_CASSERT(offsetof(struct ip6protosw, pr_entry) ==
+	    offsetof(struct protosw, pr_entry));
+	_CASSERT(offsetof(struct ip6protosw, pr_domain) ==
+	    offsetof(struct protosw, pr_domain));
+	_CASSERT(offsetof(struct ip6protosw, pr_protosw) ==
+	    offsetof(struct protosw, pr_protosw));
+	_CASSERT(offsetof(struct ip6protosw, pr_type) ==
+	    offsetof(struct protosw, pr_type));
+	_CASSERT(offsetof(struct ip6protosw, pr_protocol) ==
+	    offsetof(struct protosw, pr_protocol));
+	_CASSERT(offsetof(struct ip6protosw, pr_flags) ==
+	    offsetof(struct protosw, pr_flags));
+	_CASSERT(offsetof(struct ip6protosw, pr_input) ==
+	    offsetof(struct protosw, pr_input));
+	_CASSERT(offsetof(struct ip6protosw, pr_output) ==
+	    offsetof(struct protosw, pr_output));
+	_CASSERT(offsetof(struct ip6protosw, pr_ctlinput) ==
+	    offsetof(struct protosw, pr_ctlinput));
+	_CASSERT(offsetof(struct ip6protosw, pr_ctloutput) ==
+	    offsetof(struct protosw, pr_ctloutput));
+	_CASSERT(offsetof(struct ip6protosw, pr_usrreqs) ==
+	    offsetof(struct protosw, pr_usrreqs));
+	_CASSERT(offsetof(struct ip6protosw, pr_init) ==
+	    offsetof(struct protosw, pr_init));
+	_CASSERT(offsetof(struct ip6protosw, pr_drain) ==
+	    offsetof(struct protosw, pr_drain));
+	_CASSERT(offsetof(struct ip6protosw, pr_sysctl) ==
+	    offsetof(struct protosw, pr_sysctl));
+	_CASSERT(offsetof(struct ip6protosw, pr_lock) ==
+	    offsetof(struct protosw, pr_lock));
+	_CASSERT(offsetof(struct ip6protosw, pr_unlock) ==
+	    offsetof(struct protosw, pr_unlock));
+	_CASSERT(offsetof(struct ip6protosw, pr_getlock) ==
+	    offsetof(struct protosw, pr_getlock));
+	_CASSERT(offsetof(struct ip6protosw, pr_filter_head) ==
+	    offsetof(struct protosw, pr_filter_head));
+	_CASSERT(offsetof(struct ip6protosw, pr_old) ==
+	    offsetof(struct protosw, pr_old));
+
+	/*
+	 * Attach first, then initialize.  ip6_init() needs raw IP6 handler.
+	 */
+	for (i = 0, pr = &inet6sw[0]; i < in6_proto_count; i++, pr++)
+		net_add_proto((struct protosw *)pr, dp, 0);
+	for (i = 0, pr = &inet6sw[0]; i < in6_proto_count; i++, pr++)
+		net_init_proto((struct protosw *)pr, dp);
+
+	inet6_domain_mutex = dp->dom_mtx;
 }
 
-int rip6_pr_output(__unused struct mbuf *m, __unused struct socket *so, 
-					__unused struct sockaddr_in6 *sin6, __unused struct mbuf *m1)
+static int
+rip6_pr_output(struct mbuf *m, struct socket *so, struct sockaddr_in6 *sin6,
+    struct mbuf *m1)
 {
-	panic("rip6_pr_output\n");
-	return 0;
+#pragma unused(m, so, sin6, m1)
+	panic("%s\n", __func__);
+	/* NOTREACHED */
+	return (0);
 }
 
 /*
@@ -396,15 +450,12 @@ int	ip6_sendredirects = IPV6_SENDREDIRECTS;
 int	ip6_defhlim = IPV6_DEFHLIM;
 int	ip6_defmcasthlim = IPV6_DEFAULT_MULTICAST_HOPS;
 int	ip6_accept_rtadv = 1;	/* deprecated */
-int	ip6_maxfragpackets;	/* initialized in frag6.c:frag6_init() */
-int	ip6_maxfrags;
 int	ip6_log_interval = 5;
 int	ip6_hdrnestlimit = 15;	/* How many header options will we process? */
 int	ip6_dad_count = 1;	/* DupAddrDetectionTransmits */
-u_int32_t ip6_flow_seq;
 int	ip6_auto_flowlabel = 1;
 int	ip6_gif_hlim = 0;
-int	ip6_use_deprecated = 1;	/* allow deprecated addr (RFC2462 5.5.4) */
+int	ip6_use_deprecated = 1;	/* allow deprecated addr [RFC 4862, 5.5.4] */
 int	ip6_rr_prune = 5;	/* router renumbering prefix
 				 * walk list every 5 sec.    */
 int	ip6_mcast_pmtu = 0;	/* enable pMTU discovery for multicast? */
@@ -416,9 +467,8 @@ int	ip6_maxifdefrouters = 16;	/* Max acceptable def routers via RA */
 int	ip6_maxdynroutes = 1024;	/* Max # of routes created via redirect */
 int	ip6_only_allow_rfc4193_prefix = 0;	/* Only allow RFC4193 style Unique Local IPv6 Unicast prefixes */
 
-u_int32_t ip6_id = 0UL;
 static int ip6_keepfaith = 0;
-time_t	ip6_log_time = (time_t)0L;
+uint64_t ip6_log_time = 0;
 int	nd6_onlink_ns_rfc4861 = 0; /* allow 'on-link' nd6 NS (as in RFC 4861) */
 
 /* icmp6 */
@@ -454,16 +504,21 @@ int	udp6_recvspace = 40 * (1024 + sizeof(struct sockaddr_in6));
 /*
  * sysctl related items.
  */
-SYSCTL_NODE(_net,	PF_INET6,	inet6,	CTLFLAG_RW | CTLFLAG_LOCKED,	0,
-	"Internet6 Family");
+SYSCTL_NODE(_net, PF_INET6, inet6,
+	CTLFLAG_RW | CTLFLAG_LOCKED, 0, "Internet6 Family");
 
 /* net.inet6 */
-SYSCTL_NODE(_net_inet6,	IPPROTO_IPV6,	ip6,	CTLFLAG_RW|CTLFLAG_LOCKED, 0,	"IP6");
-SYSCTL_NODE(_net_inet6,	IPPROTO_ICMPV6,	icmp6,	CTLFLAG_RW|CTLFLAG_LOCKED, 0,	"ICMP6");
-SYSCTL_NODE(_net_inet6,	IPPROTO_UDP,	udp6,	CTLFLAG_RW|CTLFLAG_LOCKED, 0,	"UDP6");
-SYSCTL_NODE(_net_inet6,	IPPROTO_TCP,	tcp6,	CTLFLAG_RW|CTLFLAG_LOCKED, 0,	"TCP6");
+SYSCTL_NODE(_net_inet6,	IPPROTO_IPV6, ip6,
+	CTLFLAG_RW|CTLFLAG_LOCKED, 0, "IP6");
+SYSCTL_NODE(_net_inet6,	IPPROTO_ICMPV6, icmp6,
+	CTLFLAG_RW|CTLFLAG_LOCKED, 0, "ICMP6");
+SYSCTL_NODE(_net_inet6,	IPPROTO_UDP, udp6,
+	CTLFLAG_RW|CTLFLAG_LOCKED, 0, "UDP6");
+SYSCTL_NODE(_net_inet6,	IPPROTO_TCP, tcp6,
+	CTLFLAG_RW|CTLFLAG_LOCKED, 0, "TCP6");
 #if IPSEC
-SYSCTL_NODE(_net_inet6,	IPPROTO_ESP,	ipsec6,	CTLFLAG_RW|CTLFLAG_LOCKED, 0,	"IPSEC6");
+SYSCTL_NODE(_net_inet6,	IPPROTO_ESP, ipsec6,
+	CTLFLAG_RW|CTLFLAG_LOCKED, 0, "IPSEC6");
 #endif /* IPSEC */
 
 /* net.inet6.ip6 */
@@ -483,9 +538,9 @@ sysctl_ip6_temppltime SYSCTL_HANDLER_ARGS
 	    ip6_temp_preferred_lifetime <
 	    ip6_desync_factor + ip6_temp_regen_advance) {
 		ip6_temp_preferred_lifetime = old;
-		return(EINVAL);
+		return (EINVAL);
 	}
-	return(error);
+	return (error);
 }
 
 static int
@@ -502,10 +557,20 @@ sysctl_ip6_tempvltime SYSCTL_HANDLER_ARGS
 	error = SYSCTL_IN(req, arg1, sizeof(int));
 	if (ip6_temp_valid_lifetime > ND6_MAX_LIFETIME ||
 	    ip6_temp_valid_lifetime < ip6_temp_preferred_lifetime) {
-		ip6_temp_preferred_lifetime = old;
-		return(EINVAL);
+		ip6_temp_valid_lifetime = old;
+		return (EINVAL);
 	}
-	return(error);
+	return (error);
+}
+
+static int
+ip6_getstat SYSCTL_HANDLER_ARGS
+{
+#pragma unused(oidp, arg1, arg2)
+	if (req->oldptr == USER_ADDR_NULL)
+		req->oldlen = (size_t)sizeof (struct ip6stat);
+
+	return (SYSCTL_OUT(req, &ip6stat, MIN(sizeof (ip6stat), req->oldlen)));
 }
 
 SYSCTL_INT(_net_inet6_ip6, IPV6CTL_FORWARDING,
@@ -514,12 +579,8 @@ SYSCTL_INT(_net_inet6_ip6, IPV6CTL_SENDREDIRECTS,
 	redirect, CTLFLAG_RW | CTLFLAG_LOCKED,	&ip6_sendredirects,	0, "");
 SYSCTL_INT(_net_inet6_ip6, IPV6CTL_DEFHLIM,
 	hlim, CTLFLAG_RW | CTLFLAG_LOCKED,		&ip6_defhlim,	0, "");
-SYSCTL_STRUCT(_net_inet6_ip6, IPV6CTL_STATS, stats, CTLFLAG_RD | CTLFLAG_LOCKED,
-	&ip6stat, ip6stat, "");
-SYSCTL_INT(_net_inet6_ip6, IPV6CTL_MAXFRAGPACKETS,
-	maxfragpackets, CTLFLAG_RW | CTLFLAG_LOCKED,	&ip6_maxfragpackets,	0, "");
-SYSCTL_INT(_net_inet6_ip6, IPV6CTL_MAXFRAGS,
-        maxfrags, CTLFLAG_RW | CTLFLAG_LOCKED,           &ip6_maxfrags,  0, "");
+SYSCTL_PROC(_net_inet6_ip6, IPV6CTL_STATS, stats, CTLFLAG_RD | CTLFLAG_LOCKED,
+	0, 0, ip6_getstat, "S,ip6stat", "");
 SYSCTL_INT(_net_inet6_ip6, IPV6CTL_ACCEPT_RTADV,
 	accept_rtadv, CTLFLAG_RD | CTLFLAG_LOCKED,
 	&ip6_accept_rtadv,	0, "");
@@ -588,6 +649,8 @@ SYSCTL_STRUCT(_net_inet6_icmp6, ICMPV6CTL_STATS, stats, CTLFLAG_RD | CTLFLAG_LOC
 	&icmp6stat, icmp6stat, "");
 SYSCTL_INT(_net_inet6_icmp6, ICMPV6CTL_ND6_PRUNE,
 	nd6_prune, CTLFLAG_RW | CTLFLAG_LOCKED,		&nd6_prune,	0, "");
+SYSCTL_INT(_net_inet6_icmp6, OID_AUTO,
+	nd6_prune_lazy, CTLFLAG_RW | CTLFLAG_LOCKED,	&nd6_prune_lazy, 0, "");
 SYSCTL_INT(_net_inet6_icmp6, ICMPV6CTL_ND6_DELAY,
 	nd6_delay, CTLFLAG_RW | CTLFLAG_LOCKED,		&nd6_delay,	0, "");
 SYSCTL_INT(_net_inet6_icmp6, ICMPV6CTL_ND6_UMAXTRIES,
@@ -602,8 +665,6 @@ SYSCTL_INT(_net_inet6_icmp6, ICMPV6CTL_NODEINFO,
 	nodeinfo, CTLFLAG_RW | CTLFLAG_LOCKED,	&icmp6_nodeinfo,	0, "");
 SYSCTL_INT(_net_inet6_icmp6, ICMPV6CTL_ERRPPSLIMIT,
 	errppslimit, CTLFLAG_RW | CTLFLAG_LOCKED,	&icmp6errppslim,	0, "");
-SYSCTL_INT(_net_inet6_icmp6, ICMPV6CTL_ND6_MAXNUDHINT,
-	nd6_maxnudhint, CTLFLAG_RW | CTLFLAG_LOCKED,	&nd6_maxnudhint, 0, "");
 SYSCTL_INT(_net_inet6_icmp6, ICMPV6CTL_ND6_DEBUG,
 	nd6_debug, CTLFLAG_RW | CTLFLAG_LOCKED,	&nd6_debug,		0, "");
 SYSCTL_INT(_net_inet6_icmp6, ICMPV6CTL_ND6_ONLINKNSRFC4861,

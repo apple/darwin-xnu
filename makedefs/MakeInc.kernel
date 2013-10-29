@@ -1,0 +1,390 @@
+# -*- mode: makefile;-*-
+#
+# Copyright (C) 1999-2012 Apple Inc. All rights reserved.
+#
+# MakeInc.kernel augments the single-architecture
+# recursive build system with rules specific
+# to assembling and linking a kernel.
+#
+
+#
+# Validate configuration options
+#
+ifeq ($(filter $(CURRENT_ARCH_CONFIG),$(SUPPORTED_ARCH_CONFIGS)),)
+$(error Unsupported CURRENT_ARCH_CONFIG $(CURRENT_ARCH_CONFIG))
+endif
+
+ifeq ($(filter $(CURRENT_KERNEL_CONFIG),$(SUPPORTED_KERNEL_CONFIGS)),)
+$(error Unsupported CURRENT_KERNEL_CONFIG $(CURRENT_KERNEL_CONFIG))
+endif
+
+ifeq ($(filter $(CURRENT_MACHINE_CONFIG),$(SUPPORTED_$(CURRENT_ARCH_CONFIG)_MACHINE_CONFIGS)),)
+$(error Unsupported CURRENT_MACHINE_CONFIG $(CURRENT_MACHINE_CONFIG))
+endif
+
+ifeq ($(filter $(PLATFORM),$(SUPPORTED_PLATFORMS)),)
+$(error Unsupported PLATFORM $(PLATFORM))
+endif
+
+STATIC_KMODS =  $(SRCROOT)/kmods.a
+
+#
+# File names in DSTROOT
+#
+
+KERNEL_FILE_NAME_SUFFIX = 
+
+KERNEL_FILE_NAME = mach_kernel$(KERNEL_FILE_NAME_SUFFIX)
+
+ifeq ($(CURRENT_MACHINE_CONFIG),NONE)
+ALT_KERNEL_FILE_NAME = mach$(KERNEL_FILE_NAME_SUFFIX).$(CURRENT_KERNEL_CONFIG_LC)
+ALT_KERNEL_LLDBBOOTSTRAP_NAME = mach$(KERNEL_FILE_NAME_SUFFIX).py
+else
+ALT_KERNEL_FILE_NAME = mach$(KERNEL_FILE_NAME_SUFFIX).$(CURRENT_KERNEL_CONFIG_LC).$(CURRENT_MACHINE_CONFIG_LC)
+ALT_KERNEL_LLDBBOOTSTRAP_NAME = mach$(KERNEL_FILE_NAME_SUFFIX)_$(CURRENT_KERNEL_CONFIG_LC).py
+endif
+
+#
+# Rules for the highly parallel "build" phase, where each build configuration
+# writes into their own $(TARGET) independent of other build configs
+#
+
+do_build_all:: do_build_mach_kernel
+
+.PHONY: do_build_mach_kernel
+
+do_build_mach_kernel: $(TARGET)/mach_kernel $(TARGET)/mach_kernel.sys
+	$(_v)if [ $(CURRENT_MACHINE_CONFIG) != NONE ] ; then     \
+		$(LN) $(call function_convert_build_config_to_objdir,$(CURRENT_BUILD_CONFIG))/mach_kernel $(OBJROOT)/mach.$(CURRENT_KERNEL_CONFIG_LC).$(CURRENT_MACHINE_CONFIG_LC);	\
+	fi;
+
+ifeq ($(BUILD_DSYM),1)
+do_build_all:: do_build_mach_kernel_dSYM
+endif
+
+.PHONY: do_build_mach_kernel_dSYM
+
+do_build_mach_kernel_dSYM: $(TARGET)/mach_kernel.sys.dSYM 
+	@:
+
+$(TARGET)/mach_kernel: $(TARGET)/mach_kernel.sys
+	@echo STRIP mach_kernel
+	$(_v)$(STRIP) $(STRIP_FLAGS) $< -o $@
+	$(_v)$(RM) $@.ctfdata
+ifeq ($(DO_CTFMERGE),1)
+	@echo CTFMERGE mach_kernel
+	$(_v)$(FIND) $(TARGET)/ -name \*.ctf -size +0 | 		\
+		$(XARGS) $(CTFMERGE) -l xnu -o $@ -Z $@.ctfdata || true
+endif
+	$(_v)if [ -s $@.ctfdata ]; then								\
+		echo CTFINSERT mach_kernel; 	  		     				\
+		$(CTFINSERT) $@	$(ARCH_FLAGS_$(CURRENT_ARCH_CONFIG)) 				\
+			     $@.ctfdata -o $@;							\
+	fi;
+
+$(TARGET)/mach_kernel.sys.dSYM: $(TARGET)/mach_kernel.sys
+	$(_v)echo DSYMUTIL mach_kernel.sys
+	$(_v)$(DSYMUTIL) $(DSYMUTIL_FLAGS) $< -o $@
+	$(_v)$(TOUCH) $@
+
+$(TARGET)/mach_kernel.sys: $(addprefix $(TARGET)/,$(foreach component,$(COMPONENT_LIST),$(component)/$(CURRENT_KERNEL_CONFIG)/$(component).filelist)) lastkernelconstructor.o $(SRCROOT)/config/version.c $(SRCROOT)/config/MasterVersion
+	$(_v)${MAKE} -f $(firstword $(MAKEFILE_LIST)) version.o
+	@echo LD mach_kernel.sys
+	$(_v)$(CAT) $(filter %.filelist,$+) < /dev/null > link.filelist
+	$(_v)$(LD) $(LDFLAGS_KERNEL) -filelist link.filelist version.o $(filter %.o,$+) `if [ -e $(STATIC_KMODS) ]; then echo $(STATIC_KMODS); fi` \
+		-o $@ $(LD_KERNEL_LIBS)
+
+version.o: $(OBJPATH)/version.c
+	${C_RULE_1A}$<
+	${C_RULE_2}
+	${C_RULE_4}
+
+# Always recreate version.sh
+$(OBJPATH)/version.c: $(SRCROOT)/config/version.c $(NEWVERS) $(SRCROOT)/config/MasterVersion ALWAYS
+	$(_v)$(CP) $< $@
+	$(_v)$(NEWVERS) $(OBJPATH)/version.c > /dev/null;
+
+lastkernelconstructor.o: $(SRCROOT)/libsa/lastkernelconstructor.c
+	${C_RULE_1A}$< $(CFLAGS_NOLTO_FLAG)
+	${C_RULE_2}
+	${C_RULE_3}
+	${C_RULE_4}
+	$(_v)$(SEG_HACK) -s __DATA -n __LAST -o $@__ $@
+	$(_v)$(MV) $@__ $@
+
+# invalidate current kernel in $(SYMROOT)
+do_build_setup::
+	$(_v)$(TOUCH) $(OBJROOT)/.mach_kernel.timestamp
+	$(_v)$(TOUCH) $(OBJROOT)/.symbolset.timestamp
+
+#
+# Install rules. Each build config is classified as "primary" (the first
+# config for an architecture) or "non-primary". Primary build configs
+# have the semantic of competing to *combine* single-architecture
+# files into a multi-architecture output in the DSTROOT, like
+# $(DSTROOT)/mach_kernel, and consequently each primary build config
+# has its install target run serially with respect to other primary
+# build configs. Non-primary build configs will never compete for
+# files in the DSTROOT or SYMROOT, and can be installed in parallel
+# with other non-primary configs (and even primary configs)
+#
+
+do_build_install_primary:: do_install_kernel_framework
+
+ifeq ($(INSTALL_PRIMARY_KERNEL_LIKE_NON_PRIMARY),1)
+do_build_install_primary:: do_install_machine_specific_kernel
+ifeq ($(BUILD_DSYM),1)
+do_build_install_primary:: do_install_machine_specific_kernel_dSYM
+endif
+else
+do_build_install_primary:: do_install_mach_kernel
+ifeq ($(BUILD_DSYM),1)
+do_build_install_primary:: do_install_mach_kernel_dSYM
+endif
+endif
+
+do_build_install_non_primary:: do_install_machine_specific_kernel
+ifeq ($(BUILD_DSYM),1)
+do_build_install_non_primary:: do_install_machine_specific_kernel_dSYM
+endif
+
+ifeq ($(BUILD_DSYM),1)
+ifeq ($(INSTALL_KERNEL_SYM_TO_KDK),1)
+do_build_install_primary:: do_install_machine_specific_KDK_dSYM
+do_build_install_non_primary:: do_install_machine_specific_KDK_dSYM
+endif
+endif
+
+ifeq ($(INSTALL_XNU_DEBUG_FILES),1)
+do_build_install_primary:: do_install_xnu_debug_files
+ifeq ($(BUILD_DSYM),1)
+do_build_install_primary:: do_install_xnu_debug_mach_kernel_dSYM
+endif
+endif
+
+.PHONY: do_install_mach_kernel do_install_mach_kernel_dSYM do_install_xnu_debug_files do_install_xnu_debug_mach_kernel_dSYM
+
+do_install_mach_kernel: $(DSTROOT)/$(INSTALL_KERNEL_DIR)/$(KERNEL_FILE_NAME) \
+			$(SYMROOT)/$(KERNEL_FILE_NAME)
+
+do_install_mach_kernel_dSYM: \
+			$(SYMROOT)/$(KERNEL_FILE_NAME).dSYM/$(DSYMINFODIR)/Info.plist \
+			$(SYMROOT)/$(KERNEL_FILE_NAME).dSYM/$(DSYMLLDBMACROSDIR)/lldbmacros \
+			$(SYMROOT)/$(KERNEL_FILE_NAME).dSYM/$(DSYMLLDBMACROSDIR)/$(KERNEL_FILE_NAME).py \
+			$(SYMROOT)/$(KERNEL_FILE_NAME).dSYM/$(DSYMDWARFDIR)/$(KERNEL_FILE_NAME)
+	@:
+
+do_install_xnu_debug_files:	$(DSTROOT)/$(DEVELOPER_EXTRAS_DIR)/README.DEBUG-kernel.txt
+	@:
+
+do_install_xnu_debug_mach_kernel_dSYM: \
+			$(DSTROOT)/$(DEVELOPER_EXTRAS_DIR)/$(KERNEL_FILE_NAME).dSYM/$(DSYMINFODIR)/Info.plist \
+			$(DSTROOT)/$(DEVELOPER_EXTRAS_DIR)/$(KERNEL_FILE_NAME).dSYM/$(DSYMLLDBMACROSDIR)/lldbmacros \
+			$(DSTROOT)/$(DEVELOPER_EXTRAS_DIR)/$(KERNEL_FILE_NAME).dSYM/$(DSYMLLDBMACROSDIR)/$(KERNEL_FILE_NAME).py \
+			$(DSTROOT)/$(DEVELOPER_EXTRAS_DIR)/$(KERNEL_FILE_NAME).dSYM/$(DSYMDWARFDIR)/$(KERNEL_FILE_NAME)
+	@:
+
+#
+# If the timestamp indicates the DSTROOT kernel is out of
+# date, start over. Normal dependencies don't work because we can have
+# ( BUILDA, BUILDB, INSTALLB, INSTALLA ) in which case at INSTALLA time
+# the timestamps would $(DSTROOT)/mach_kernel is not out of date compared
+# to BUILDA. So we maintain a separate file at the time make(1)
+# was run and use it to determine what actions to take
+#
+
+$(DSTROOT)/$(INSTALL_KERNEL_DIR)/$(KERNEL_FILE_NAME): $(TARGET)/mach_kernel ALWAYS
+	$(_v)$(MKDIR) $(dir $@)
+	$(_v)if [ $(OBJROOT)/.mach_kernel.timestamp -nt $@ ]; then		\
+		echo INSTALL $(notdir $@) "($(CURRENT_ARCH_CONFIG_LC))";	\
+		$(INSTALL) $(EXEC_INSTALL_FLAGS) $< $@;				\
+		cmdstatus=$$?;							\
+	else									\
+		echo INSTALL $(notdir $@) "($(CURRENT_ARCH_CONFIG_LC))";	\
+		$(LIPO) -create $@ $< -output $@;				\
+		cmdstatus=$$?;							\
+	fi;					   				\
+	exit $$cmdstatus
+
+$(SYMROOT)/$(KERNEL_FILE_NAME): $(TARGET)/mach_kernel.sys ALWAYS
+	$(_v)$(MKDIR) $(dir $@)
+	$(_v)if [ $(OBJROOT)/.mach_kernel.timestamp -nt $@ ]; then		\
+		echo INSTALLSYM $(notdir $@) "($(CURRENT_ARCH_CONFIG_LC))";	\
+		$(INSTALL) $(EXEC_INSTALL_FLAGS) $< $@;				\
+		cmdstatus=$$?;							\
+	else									\
+		echo INSTALLSYM $(notdir $@) "($(CURRENT_ARCH_CONFIG_LC))";	\
+		$(LIPO) -create $@ $< -output $@;				\
+		cmdstatus=$$?;							\
+	fi;									\
+	exit $$cmdstatus
+
+$(SYMROOT)/$(KERNEL_FILE_NAME).dSYM/$(DSYMLLDBMACROSDIR)/lldbmacros $(DSTROOT)/$(DEVELOPER_EXTRAS_DIR)/$(KERNEL_FILE_NAME).dSYM/$(DSYMLLDBMACROSDIR)/lldbmacros: $(TARGET)/$(DSYMKERNELSYSDIR)/$(DSYMLLDBMACROSDIR)/lldbmacros
+	$(_v)$(MKDIR) $(dir $@)
+	@echo INSTALLMACROS $(notdir $@) "($(CURRENT_ARCH_CONFIG_LC))"
+	$(_v)$(CP) -r $< $(dir $@)
+	$(_v)$(TOUCH) $@
+
+$(SYMROOT)/$(KERNEL_FILE_NAME).dSYM/$(DSYMLLDBMACROSDIR)/$(KERNEL_FILE_NAME).py $(DSTROOT)/$(DEVELOPER_EXTRAS_DIR)/$(KERNEL_FILE_NAME).dSYM/$(DSYMLLDBMACROSDIR)/$(KERNEL_FILE_NAME).py: $(TARGET)/$(DSYMKERNELSYSDIR)/$(DSYMLLDBMACROSDIR)/lldbmacros/core/xnu_lldb_init.py
+	$(_v)$(MKDIR) $(dir $@)
+	@echo INSTALLMACROS $(notdir $@) "($(CURRENT_ARCH_CONFIG_LC))"
+	$(_v)$(INSTALL) $(INSTALL_FLAGS) $< $@
+
+$(DSTROOT)/$(DEVELOPER_EXTRAS_DIR)/README.DEBUG-kernel.txt: $(SRCROOT)/config/README.DEBUG-kernel.txt
+	$(_v)$(MKDIR) $(dir $@)
+	@echo INSTALL $(notdir $@)
+	$(_v)$(INSTALL) $(INSTALL_FLAGS) $< $@
+
+$(SYMROOT)/$(KERNEL_FILE_NAME).dSYM/$(DSYMINFODIR)/Info.plist $(DSTROOT)/$(DEVELOPER_EXTRAS_DIR)/$(KERNEL_FILE_NAME).dSYM/$(DSYMINFODIR)/Info.plist: $(TARGET)/$(DSYMKERNELSYSDIR)/$(DSYMINFODIR)/Info.plist
+	$(_v)$(MKDIR) $(dir $@)
+	@echo INSTALLSYM dSYM $(notdir $@) "($(CURRENT_ARCH_CONFIG_LC))"
+	$(_v)$(INSTALL) $(INSTALL_FLAGS) $< $@
+
+$(SYMROOT)/$(KERNEL_FILE_NAME).dSYM/$(DSYMDWARFDIR)/$(KERNEL_FILE_NAME) $(DSTROOT)/$(DEVELOPER_EXTRAS_DIR)/$(KERNEL_FILE_NAME).dSYM/$(DSYMDWARFDIR)/$(KERNEL_FILE_NAME): $(TARGET)/$(DSYMKERNELSYSDIR)/$(DSYMDWARFDIR)/mach_kernel.sys ALWAYS
+	$(_v)$(MKDIR) $(dir $@)
+	$(_v)if [ $(OBJROOT)/.mach_kernel.timestamp -nt $@ ]; then			\
+		echo INSTALLSYM dSYM $(notdir $@).dSYM "($(CURRENT_ARCH_CONFIG_LC))";	\
+		$(INSTALL) $(EXEC_INSTALL_FLAGS) $< $@; 				\
+		cmdstatus=$$?;		       	   					\
+	else										\
+		echo INSTALLSYM dSYM $(notdir $@).dSYM "($(CURRENT_ARCH_CONFIG_LC))";	\
+		$(LIPO) -create $@ $< -output $@; 					\
+		cmdstatus=$$?;		       	   					\
+	fi;										\
+	exit $$cmdstatus
+
+.PHONY: do_install_machine_specific_kernel do_install_machine_specific_kernel_dSYM
+
+do_install_machine_specific_kernel: $(DSTROOT)/$(ALT_KERNEL_FILE_NAME) \
+			$(SYMROOT)/$(ALT_KERNEL_FILE_NAME)
+	@:
+
+do_install_machine_specific_kernel_dSYM: \
+			$(SYMROOT)/$(ALT_KERNEL_FILE_NAME).dSYM/$(DSYMINFODIR)/Info.plist \
+			$(SYMROOT)/$(ALT_KERNEL_FILE_NAME).dSYM/$(DSYMLLDBMACROSDIR)/lldbmacros \
+			$(SYMROOT)/$(ALT_KERNEL_FILE_NAME).dSYM/$(DSYMLLDBMACROSDIR)/$(ALT_KERNEL_LLDBBOOTSTRAP_NAME) \
+			$(SYMROOT)/$(ALT_KERNEL_FILE_NAME).dSYM/$(DSYMDWARFDIR)/$(ALT_KERNEL_FILE_NAME)
+	@:
+
+.PHONY: do_install_machine_specific_KDK_dSYM
+
+do_install_machine_specific_KDK_dSYM: \
+			$(DSTROOT)/$(INSTALL_KERNEL_SYM_DIR)/$(ALT_KERNEL_FILE_NAME) \
+			$(DSTROOT)/$(INSTALL_KERNEL_SYM_DIR)/$(ALT_KERNEL_FILE_NAME).dSYM/$(DSYMINFODIR)/Info.plist \
+			$(DSTROOT)/$(INSTALL_KERNEL_SYM_DIR)/$(ALT_KERNEL_FILE_NAME).dSYM/$(DSYMLLDBMACROSDIR)/lldbmacros \
+			$(DSTROOT)/$(INSTALL_KERNEL_SYM_DIR)/$(ALT_KERNEL_FILE_NAME).dSYM/$(DSYMLLDBMACROSDIR)/$(ALT_KERNEL_LLDBBOOTSTRAP_NAME) \
+			$(DSTROOT)/$(INSTALL_KERNEL_SYM_DIR)/$(ALT_KERNEL_FILE_NAME).dSYM/$(DSYMDWARFDIR)/$(ALT_KERNEL_FILE_NAME)
+	@:
+
+$(DSTROOT)/$(ALT_KERNEL_FILE_NAME): $(TARGET)/mach_kernel ALWAYS
+	$(_v)$(MKDIR) $(dir $@)
+	$(_v)if [ $(OBJROOT)/.mach_kernel.timestamp -nt $@ ]; then	\
+		echo INSTALL $(notdir $@) "($(CURRENT_ARCH_CONFIG_LC) $(CURRENT_MACHINE_CONFIG_LC))"; \
+		$(INSTALL) $(EXEC_INSTALL_FLAGS) $< $@;			\
+		cmdstatus=$$?;						\
+	else								\
+		echo INSTALL $(notdir $@) "($(CURRENT_ARCH_CONFIG_LC) $(CURRENT_MACHINE_CONFIG_LC))"; \
+		$(LIPO) -create $@ $< -output $@;			\
+		cmdstatus=$$?;						\
+	fi;								\
+	exit $$cmdstatus
+
+$(SYMROOT)/$(ALT_KERNEL_FILE_NAME) $(DSTROOT)/$(INSTALL_KERNEL_SYM_DIR)/$(ALT_KERNEL_FILE_NAME): $(TARGET)/mach_kernel.sys ALWAYS
+	$(_v)$(MKDIR) $(dir $@)
+	$(_v)if [ $(OBJROOT)/.mach_kernel.timestamp -nt $@ ]; then	\
+		echo INSTALLSYM $(notdir $@) "($(CURRENT_ARCH_CONFIG_LC) $(CURRENT_MACHINE_CONFIG_LC))"; \
+		$(INSTALL) $(EXEC_INSTALL_FLAGS) $< $@;			\
+		cmdstatus=$$?;						\
+	else								\
+		echo INSTALLSYM $(notdir $@) "($(CURRENT_ARCH_CONFIG_LC) $(CURRENT_MACHINE_CONFIG_LC))"; \
+		$(LIPO) -create $@ $< -output $@;			\
+		cmdstatus=$$?;						\
+	fi;								\
+	exit $$cmdstatus
+
+$(SYMROOT)/$(ALT_KERNEL_FILE_NAME).dSYM/$(DSYMINFODIR)/Info.plist $(DSTROOT)/$(INSTALL_KERNEL_SYM_DIR)/$(ALT_KERNEL_FILE_NAME).dSYM/$(DSYMINFODIR)/Info.plist: $(TARGET)/$(DSYMKERNELSYSDIR)/$(DSYMINFODIR)/Info.plist
+	$(_v)$(MKDIR) $(dir $@)
+	@echo INSTALLSYM dSYM $(notdir $@) "($(CURRENT_ARCH_CONFIG_LC) $(CURRENT_MACHINE_CONFIG_LC))"
+ifeq ($(USE_BINARY_PLIST),1)
+	$(_v)$(PLUTIL) -convert binary1 -o $@ $<
+else
+	$(_v)$(INSTALL) $(INSTALL_FLAGS) $< $@
+endif
+
+$(SYMROOT)/$(ALT_KERNEL_FILE_NAME).dSYM/$(DSYMLLDBMACROSDIR)/lldbmacros $(DSTROOT)/$(INSTALL_KERNEL_SYM_DIR)/$(ALT_KERNEL_FILE_NAME).dSYM/$(DSYMLLDBMACROSDIR)/lldbmacros: $(TARGET)/$(DSYMKERNELSYSDIR)/$(DSYMLLDBMACROSDIR)/lldbmacros
+	$(_v)$(MKDIR) $(dir $@)
+	@echo INSTALLMACROS $(notdir $@) "($(CURRENT_ARCH_CONFIG_LC))"
+	$(_v)$(CP) -r $< $(dir $@)
+	$(_v)$(TOUCH) $@
+
+$(SYMROOT)/$(ALT_KERNEL_FILE_NAME).dSYM/$(DSYMLLDBMACROSDIR)/$(ALT_KERNEL_LLDBBOOTSTRAP_NAME) $(DSTROOT)/$(INSTALL_KERNEL_SYM_DIR)/$(ALT_KERNEL_FILE_NAME).dSYM/$(DSYMLLDBMACROSDIR)/$(ALT_KERNEL_LLDBBOOTSTRAP_NAME): $(TARGET)/$(DSYMKERNELSYSDIR)/$(DSYMLLDBMACROSDIR)/lldbmacros/core/xnu_lldb_init.py
+	$(_v)$(MKDIR) $(dir $@)
+	@echo INSTALLMACROS $(notdir $@) "($(CURRENT_ARCH_CONFIG_LC) $(CURRENT_MACHINE_CONFIG_LC))"
+	$(_v)$(INSTALL) $(INSTALL_FLAGS) $< $@
+
+$(SYMROOT)/$(ALT_KERNEL_FILE_NAME).dSYM/$(DSYMDWARFDIR)/$(ALT_KERNEL_FILE_NAME) $(DSTROOT)/$(INSTALL_KERNEL_SYM_DIR)/$(ALT_KERNEL_FILE_NAME).dSYM/$(DSYMDWARFDIR)/$(ALT_KERNEL_FILE_NAME): $(TARGET)/$(DSYMKERNELSYSDIR)/$(DSYMDWARFDIR)/mach_kernel.sys ALWAYS
+	$(_v)$(MKDIR) $(dir $@)
+	$(_v)if [ $(OBJROOT)/.mach_kernel.timestamp -nt $@ ]; then		\
+		echo INSTALLSYM dSYM $(notdir $@).dSYM "($(CURRENT_ARCH_CONFIG_LC) $(CURRENT_MACHINE_CONFIG_LC))"; \
+		$(INSTALL) $(EXEC_INSTALL_FLAGS) $< $@;				\
+		cmdstatus=$$?;							\
+	else									\
+		echo INSTALLSYM dSYM $(notdir $@).dSYM "($(CURRENT_ARCH_CONFIG_LC) $(CURRENT_MACHINE_CONFIG_LC))"; \
+		$(LIPO) -create $@ $< -output $@;				\
+		cmdstatus=$$?;							\
+	fi;									\
+	exit $$cmdstatus
+
+# The $(RM) is needed so that the $(LN) doesn't dereference an existing
+# symlink during incremental builds and create a new symlink inside
+# the target of the existing symlink
+do_installhdrs_mi::
+	$(_v)$(MKDIR) $(DSTROOT)/$(KINCFRAME)
+	$(_v)$(MKDIR) $(DSTROOT)/$(KPINCDIR)
+	$(_v)$(RM) $(DSTROOT)/$(KINCFRAME)/Versions/Current
+	$(_v)$(LN) $(KINCVERS) $(DSTROOT)/$(KINCFRAME)/Versions/Current
+	$(_v)$(RM) $(DSTROOT)/$(KINCFRAME)/Headers
+	$(_v)$(LN) Versions/Current/Headers			\
+		   $(DSTROOT)/$(KINCFRAME)/Headers
+	$(_v)$(RM) $(DSTROOT)/$(KINCFRAME)/PrivateHeaders
+	$(_v)$(LN) Versions/Current/PrivateHeaders		\
+		   $(DSTROOT)/$(KINCFRAME)/PrivateHeaders
+ifeq ($(INSTALL_SYSTEM_FRAMEWORK_SYMLINKS),1)
+	$(_v)$(MKDIR) $(DSTROOT)/$(SINCFRAME)/Versions
+	$(_v)$(RM) $(DSTROOT)/$(SINCFRAME)/Versions/Current
+	$(_v)$(LN) $(SINCVERS) $(DSTROOT)/$(SINCFRAME)/Versions/Current
+	$(_v)$(RM) $(DSTROOT)/$(SINCFRAME)/PrivateHeaders
+	$(_v)$(LN) Versions/Current/PrivateHeaders		\
+		   $(DSTROOT)/$(SINCFRAME)/PrivateHeaders
+endif
+
+$(DSTROOT)/$(KRESDIR)/Info.plist: $(SOURCE)/EXTERNAL_HEADERS/Info.plist
+	$(_v)$(MKDIR) $(DSTROOT)/$(KRESDIR)
+	$(_v)$(INSTALL) $(DATA_INSTALL_FLAGS) $< $@
+	$(_v)$(NEWVERS) $@ $(_vstdout)
+ifeq ($(USE_BINARY_PLIST),1)
+	$(_v)$(PLUTIL) -convert binary1 -o $@ $@
+endif
+
+.PHONY: do_install_kernel_framework
+
+do_install_kernel_framework: $(DSTROOT)/$(KRESDIR)/Info.plist
+	$(_v)$(MKDIR) $(DSTROOT)/$(KRESDIR)
+	$(_v)$(RM) $(DSTROOT)/$(KINCFRAME)/Resources
+	$(_v)$(LN) Versions/Current/Resources			\
+		   $(DSTROOT)/$(KINCFRAME)/Resources
+ifeq ($(DELETE_KERNEL_FRAMEWORK_AND_MISC),1)
+	$(_v)$(FIND) $(DSTROOT)/$(KINCFRAME) \
+			$(DSTROOT)/$(INSTALL_EXTENSIONS_DIR) \
+			$(DSTROOT)/$(INSTALL_SHARE_MISC_DIR) \
+		 	$(DSTROOT)/$(INSTALL_DTRACE_SCRIPTS_DIR) \
+		\( -type f -o -type l \) -exec $(RM) "{}" \;
+	$(_v)$(FIND) -d $(DSTROOT)/$(KINCFRAME) \
+			$(DSTROOT)/$(INSTALL_EXTENSIONS_DIR) \
+			$(DSTROOT)/$(INSTALL_SHARE_MISC_DIR) \
+		 	$(DSTROOT)/$(INSTALL_DTRACE_SCRIPTS_DIR) \
+		\( -type d \) -exec $(RMDIR) "{}" \;
+endif
+
+print_exports:
+	$(_v)printenv | sort

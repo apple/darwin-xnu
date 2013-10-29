@@ -844,7 +844,6 @@ kdb_printf_unbuffered(const char *fmt, ...)
 	return 0;
 }
 
-#if !CONFIG_EMBEDDED
 
 static void
 copybyte(int c, void *arg)
@@ -877,4 +876,3 @@ sprintf(char *buf, const char *fmt, ...)
 	*copybyte_str = '\0';
         return (int)strlen(buf);
 }
-#endif /* !CONFIG_EMBEDDED */

@@ -1,0 +1,4 @@
+settings set target.process.python-os-plugin-path ./core/operating_system.py
+settings set plugin.dynamic-loader.darwin-kernel.load-kexts false
+
+command script import ./xnu.py

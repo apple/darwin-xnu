@@ -134,7 +134,9 @@ struct mount {
 	uint32_t	mnt_ioflags;		/* flags for  underlying device */
 	pending_io_t	mnt_pending_write_size __attribute__((aligned(sizeof(pending_io_t))));	/* byte count of pending writes */
 	pending_io_t	mnt_pending_read_size  __attribute__((aligned(sizeof(pending_io_t))));	/* byte count of pending reads */
-
+	struct timeval	mnt_last_write_issued_timestamp;
+	struct timeval	mnt_last_write_completed_timestamp;
+	
 	lck_rw_t	mnt_rwlock;		/* mutex readwrite lock */
 	lck_mtx_t	mnt_renamelock;		/* mutex that serializes renames that change shape of tree */
 	vnode_t		mnt_devvp;		/* the device mounted on for local file systems */
@@ -187,15 +189,6 @@ struct mount {
 	 * volumes marked 'MNTK_AUTH_OPAQUE'.
 	 */
 	int		mnt_authcache_ttl;
-	/*
-	 * The proc structure pointer and process ID form a
-	 * sufficiently unique duple identifying the process
-	 * hosting this mount point. Set by vfs_markdependency()
-	 * and utilized in new_vnode() to avoid reclaiming vnodes
-	 * with this dependency (radar 5192010).
-	 */
-	pid_t		mnt_dependent_pid;
-	void		*mnt_dependent_process;
 	char		fstypename_override[MFSTYPENAMELEN];
 };
 
@@ -319,12 +312,10 @@ struct vfstable {
 #define	VFC_VFSPREFLIGHT	0x040
 #define	VFC_VFSREADDIR_EXTENDED	0x080
 #define	VFC_VFS64BITREADY	0x100
-#if CONFIG_VFS_FUNNEL
-#define	VFC_VFSTHREADSAFE	0x200
-#endif /* CONFIG_VFS_FUNNEL */
 #define	VFC_VFSNOMACLABEL	0x1000
 #define	VFC_VFSVNOP_PAGEINV2	0x2000
 #define	VFC_VFSVNOP_PAGEOUTV2	0x4000
+#define	VFC_VFSVNOP_NOUPDATEID_RENAME	0x8000
 
 
 extern int maxvfsconf;		/* highest defined filesystem type */
@@ -466,10 +457,17 @@ boolean_t vfs_iskernelmount(mount_t);
 #endif
 
 /* throttled I/O api */
+
+/* returned by throttle_io_will_be_throttled */
+#define THROTTLE_DISENGAGED	0
+#define THROTTLE_ENGAGED	1
+#define THROTTLE_NOW		2
+
 int  throttle_get_io_policy(struct uthread **ut);
+int  throttle_get_passive_io_policy(struct uthread **ut);
 int  throttle_io_will_be_throttled(int lowpri_window_msecs, mount_t mp);
-void throttle_info_update_by_mount(mount_t mp);
-void unthrottle_thread(uthread_t);
+void *throttle_info_update_by_mount(mount_t mp);
+void rethrottle_thread(uthread_t ut);
 
 /* throttled I/O helper function */
 /* convert the lowest bit to a device index */

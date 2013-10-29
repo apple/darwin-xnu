@@ -203,7 +203,6 @@ struct  xunpcb {
 	u_quad_t			xu_alignment_hack;
 };
 
-#if !CONFIG_EMBEDDED
 
 struct xunpcb64_list_entry {
     u_int64_t   le_next;
@@ -237,7 +236,6 @@ struct xunpcb64 {
 	struct xsocket64	xu_socket;
 };
 
-#endif /* !CONFIG_EMBEDDED */
 
 #pragma pack()
 

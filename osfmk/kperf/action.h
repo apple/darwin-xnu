@@ -32,16 +32,24 @@ struct kperf_context;
 
 
 /* bits for defining what to do on an action */
-#define SAMPLER_TINFO    (1<<0)
-#define SAMPLER_TINFOEX  (1<<1)
-#define SAMPLER_KSTACK   (1<<2)
-#define SAMPLER_USTACK   (1<<3)
+#define SAMPLER_TINFO      (1<<0)
+#define SAMPLER_TINFOEX    (1<<1)
+#define SAMPLER_KSTACK     (1<<2)
+#define SAMPLER_USTACK     (1<<3)
+#define SAMPLER_PMC_THREAD (1<<4) /* FIXME: not implemented */
+#define SAMPLER_PMC_CPU    (1<<5)
+#define SAMPLER_PMC_CONFIG (1<<6)
+
+/* flags for sample calls*/
+#define SAMPLE_FLAG_PEND_USER    (1<<0)
+#define SAMPLE_FLAG_IDLE_THREADS (1<<1)
+#define SAMPLE_FLAG_EMPTY_CALLSTACK (1<<2)
 
 /*  Take a sample into "sbuf" using current thread "cur_thread" */
 extern kern_return_t kperf_sample( struct kperf_sample *sbuf, 
 				   struct kperf_context*, 
                                    unsigned actionid,
-                                   boolean_t pend_user );
+                                   unsigned sample_flags );
 
 /* return codes from taking a sample
  * either keep trigger, or something went wrong (or we're shutting down)
@@ -49,6 +57,7 @@ extern kern_return_t kperf_sample( struct kperf_sample *sbuf,
  */
 #define SAMPLE_CONTINUE (0)
 #define SAMPLE_SHUTDOWN (1)
+#define SAMPLE_OFF      (2)
 
 /* Get the sample buffer to use from interrupt handler context. Only
  * valid in interrupt contexts.
@@ -64,5 +73,12 @@ extern int kperf_action_set_samplers( unsigned actionid,
 extern int kperf_action_get_samplers( unsigned actionid,
                                       uint32_t *samplers_out );
 
-extern void
-kperf_thread_ast_handler( thread_t thread );
+extern int kperf_action_set_userdata( unsigned actionid,
+                                      uint32_t userdata );
+extern int kperf_action_get_userdata( unsigned actionid,
+                                      uint32_t *userdata_out );
+
+extern int kperf_action_set_filter( unsigned actionid,
+				    int pid );
+extern int kperf_action_get_filter( unsigned actionid,
+				    int *pid_out );

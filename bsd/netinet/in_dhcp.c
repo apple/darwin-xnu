@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1988-2011 Apple Inc. All rights reserved.
+ * Copyright (c) 1988-2013 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -536,11 +536,7 @@ dhcp_select(struct dhcp_context * context)
 	    = htons((u_short)
 		    (current_time.tv_sec - context->start_time.tv_sec));
 	request->dhcp.dp_xid = htonl(context->xid);
-#ifdef RANDOM_IP_ID
 	request->ip.ip_id = ip_randomid();
-#else
-	request->ip.ip_id = htons(ip_id++);
-#endif
 	error = send_packet(context->ifp, request, request_size);
 	if (error != 0) {
 	    printf("dhcp: send_packet failed with %d\n", error);
@@ -737,11 +733,7 @@ dhcp_init(struct dhcp_context * context)
 	    = htons((u_short)(current_time.tv_sec 
 			      - context->start_time.tv_sec));
 	request->dhcp.dp_xid = htonl(context->xid);
-#ifdef RANDOM_IP_ID
 	request->ip.ip_id = ip_randomid();
-#else
-	request->ip.ip_id = htons(ip_id++);
-#endif
 	error = send_packet(context->ifp, request, request_size);
 	if (error != 0) {
 	    printf("dhcp: send_packet failed with %d\n", error);
@@ -862,8 +854,7 @@ dhcp_context_create(struct ifnet * ifp, int max_try,
 
     /* enable reception of DHCP packets before an address is assigned */
     snprintf(context->ifr.ifr_name, 
-	     sizeof(context->ifr.ifr_name), "%s%d", ifp->if_name,
-	     ifp->if_unit);
+	     sizeof(context->ifr.ifr_name), "%s", if_name(ifp));
     context->ifr.ifr_intval = 1;
 
     error = ifioctl(context->so, SIOCAUTOADDR, (caddr_t)&context->ifr, procp);
@@ -886,7 +877,7 @@ dhcp_context_create(struct ifnet * ifp, int max_try,
     sin.sin_family = AF_INET;
     sin.sin_port = htons(IPPORT_BOOTPC);
     sin.sin_addr.s_addr = INADDR_ANY;
-    error = sobind(context->so, (struct sockaddr *)&sin);
+    error = sobindlock(context->so, (struct sockaddr *)&sin, 1);
     if (error) {
 	printf("dhcp: sobind failed, %d\n", error);
 	goto failed;

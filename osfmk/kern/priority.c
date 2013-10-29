@@ -92,6 +92,7 @@ thread_quantum_expire(
 	processor_t			processor = p0;
 	thread_t			thread = p1;
 	ast_t				preempt;
+	uint64_t			ctime;
 
 	SCHED_STATS_QUANTUM_TIMER_EXPIRATION(processor);
 
@@ -117,7 +118,7 @@ thread_quantum_expire(
 	 *	Check for fail-safe trip.
 	 */
  	if ((thread->sched_mode == TH_MODE_REALTIME || thread->sched_mode == TH_MODE_FIXED) && 
- 	    !(thread->sched_flags & TH_SFLAG_PROMOTED) &&
+ 	    !(thread->sched_flags & TH_SFLAG_PROMOTED_MASK) &&
  	    !(thread->options & TH_OPT_SYSTEM_CRITICAL)) {
  		uint64_t new_computation;
   
@@ -184,9 +185,10 @@ thread_quantum_expire(
 					 PROCESSOR_DATA(processor, thread_timer));
 	}
 
-	processor->quantum_end = mach_absolute_time() + thread->current_quantum;
+	ctime = mach_absolute_time();
+	processor->quantum_end = ctime + thread->current_quantum;
 	timer_call_enter1(&processor->quantum_timer, thread,
-	    processor->quantum_end, TIMER_CALL_CRITICAL);
+	    processor->quantum_end, TIMER_CALL_SYS_CRITICAL);
 
 	/*
 	 *	Context switch check.
@@ -205,6 +207,10 @@ thread_quantum_expire(
 	}
 
 	thread_unlock(thread);
+
+#if defined(CONFIG_SCHED_TRADITIONAL)
+	sched_traditional_consider_maintenance(ctime);
+#endif /* CONFIG_SCHED_TRADITIONAL */	
 }
 
 #if defined(CONFIG_SCHED_TRADITIONAL)
@@ -241,7 +247,7 @@ lightweight_update_priority(thread_t thread)
 		 * the thread has not been promoted
 		 * and is not depressed.
 		 */
-		if (	!(thread->sched_flags & TH_SFLAG_PROMOTED)	&&
+		if (	!(thread->sched_flags & TH_SFLAG_PROMOTED_MASK)	&&
 			!(thread->sched_flags & TH_SFLAG_DEPRESSED_MASK)		)
 			compute_my_priority(thread);
 	}	
@@ -272,24 +278,6 @@ static struct shift_data	sched_decay_shifts[SCHED_DECAY_TICKS] = {
  *
  *	Calculate the timesharing priority based upon usage and load.
  */
-#ifdef CONFIG_EMBEDDED
-
-#define do_priority_computation(thread, pri)							\
-	MACRO_BEGIN															\
-	(pri) = (thread)->priority		/* start with base priority */		\
-	    - ((thread)->sched_usage >> (thread)->pri_shift);				\
-	if ((pri) < MAXPRI_THROTTLE) {										\
-		if ((thread)->task->max_priority > MAXPRI_THROTTLE)				\
-			(pri) = MAXPRI_THROTTLE;									\
-		else															\
-			if ((pri) < MINPRI_USER)									\
-				(pri) = MINPRI_USER;									\
-	} else																\
-	if ((pri) > MAXPRI_KERNEL)											\
-		(pri) = MAXPRI_KERNEL;											\
-	MACRO_END
-
-#else
 
 #define do_priority_computation(thread, pri)							\
 	MACRO_BEGIN															\
@@ -302,7 +290,6 @@ static struct shift_data	sched_decay_shifts[SCHED_DECAY_TICKS] = {
 		(pri) = MAXPRI_KERNEL;											\
 	MACRO_END
 
-#endif /* defined(CONFIG_SCHED_TRADITIONAL) */
 
 #endif
 
@@ -341,7 +328,7 @@ compute_priority(
 {
 	register int		priority;
 
-	if (	!(thread->sched_flags & TH_SFLAG_PROMOTED)			&&
+	if (	!(thread->sched_flags & TH_SFLAG_PROMOTED_MASK)			&&
 			(!(thread->sched_flags & TH_SFLAG_DEPRESSED_MASK)	||
 				 override_depress							)		) {
 		if (thread->sched_mode == TH_MODE_TIMESHARE)
@@ -409,7 +396,16 @@ update_priority(
 	ticks = sched_tick - thread->sched_stamp;
 	assert(ticks != 0);
 	thread->sched_stamp += ticks;
-	thread->pri_shift = sched_pri_shift;
+	if (sched_use_combined_fgbg_decay)
+		thread->pri_shift = sched_combined_fgbg_pri_shift;
+	else if (thread->max_priority <= MAXPRI_THROTTLE)
+		thread->pri_shift = sched_background_pri_shift;
+	else
+		thread->pri_shift = sched_pri_shift;
+
+	/* If requested, accelerate aging of sched_usage */
+	if (sched_decay_usage_age_factor > 1)
+		ticks *= sched_decay_usage_age_factor;
 
 	/*
 	 *	Gather cpu usage data.
@@ -475,55 +471,12 @@ update_priority(
 		thread->sched_flags &= ~TH_SFLAG_FAILSAFE;
 	}
 
-#if CONFIG_EMBEDDED
-	/* Check for pending throttle transitions, and safely switch queues */
-	if (thread->sched_flags & TH_SFLAG_PENDING_THROTTLE_MASK) {
-			boolean_t		removed = thread_run_queue_remove(thread);
-
-			if (thread->sched_flags & TH_SFLAG_PENDING_THROTTLE_DEMOTION) {
-				if (thread->sched_mode == TH_MODE_REALTIME) {
-					thread->saved_mode = thread->sched_mode;
-					thread->sched_mode = TH_MODE_TIMESHARE;
-
-					if ((thread->state & (TH_RUN|TH_IDLE)) == TH_RUN)
-						sched_share_incr();
-				} else {
-					/*
-					 * It's possible that this is a realtime thread that has
-					 * already tripped the failsafe, in which case saved_mode
-					 * is already set correctly.
-					 */
-					if (!(thread->sched_flags & TH_SFLAG_FAILSAFE)) {
-						thread->saved_mode = thread->sched_mode;
-					}
-					thread->sched_flags &= ~TH_SFLAG_FAILSAFE;
-				}
-				thread->sched_flags |= TH_SFLAG_THROTTLED;
-
-			} else {
-				if ((thread->sched_mode == TH_MODE_TIMESHARE)
-					&& (thread->saved_mode == TH_MODE_REALTIME)) {
-					if ((thread->state & (TH_RUN|TH_IDLE)) == TH_RUN)
-						sched_share_decr();
-				}
-
-				thread->sched_mode = thread->saved_mode;
-				thread->saved_mode = TH_MODE_NONE;
-				thread->sched_flags &= ~TH_SFLAG_THROTTLED;
-			}
-
-			thread->sched_flags &= ~(TH_SFLAG_PENDING_THROTTLE_MASK);
-
-			if (removed)
-				thread_setrun(thread, SCHED_TAILQ);
-	}
-#endif
 
 	/*
 	 *	Recompute scheduled priority if appropriate.
 	 */
 	if (	(thread->sched_mode == TH_MODE_TIMESHARE)	&&
-			!(thread->sched_flags & TH_SFLAG_PROMOTED)	&&
+			!(thread->sched_flags & TH_SFLAG_PROMOTED_MASK)	&&
 			!(thread->sched_flags & TH_SFLAG_DEPRESSED_MASK)		) {
 		register int		new_pri;
 
@@ -531,7 +484,24 @@ update_priority(
 		if (new_pri != thread->sched_pri) {
 			boolean_t		removed = thread_run_queue_remove(thread);
 
+#if 0
+			if (sched_use_combined_fgbg_decay && ((thread)->task->max_priority > MAXPRI_THROTTLE) && (new_pri == MAXPRI_THROTTLE)) {
+				/* with the alternate (new) algorithm, would we have decayed this far? */
+				int alt_pri = thread->priority - (thread->sched_usage >> sched_pri_shift);
+				if ((alt_pri > new_pri) && (sched_background_count > 0)) {
+					printf("thread %p would have decayed to only %d instead of %d\n", thread, alt_pri, new_pri);
+				}
+			}
+#endif
+
+			KERNEL_DEBUG_CONSTANT(MACHDBG_CODE(DBG_MACH_SCHED, MACH_SCHED_DECAY_PRIORITY)|DBG_FUNC_NONE,
+							  (uintptr_t)thread_tid(thread),
+							  thread->priority,
+							  thread->sched_pri,
+							  new_pri,
+							  0);
 			thread->sched_pri = new_pri;
+
 			if (removed)
 				thread_setrun(thread, SCHED_TAILQ);
 		}

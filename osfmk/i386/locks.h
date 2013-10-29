@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2004-2007 Apple Inc. All rights reserved.
+ * Copyright (c) 2004-2012 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -40,6 +40,7 @@ extern	unsigned int	LcksOpts;
 
 #define enaLkDeb		0x00000001	/* Request debug in default attribute */
 #define enaLkStat		0x00000002	/* Request statistic in default attribute */
+#define disLkRWPrio		0x00000004	/* Disable RW lock priority promotion */
 
 #endif /* MACH_KERNEL_PRIVATE */
 
@@ -85,17 +86,13 @@ typedef struct _lck_mtx_ {
 				};
 					uint32_t	lck_mtxd_state;
 			};
-#if	defined(__x86_64__)
 			/* Pad field used as a canary, initialized to ~0 */
 			uint32_t			lck_mtxd_pad32;
-#endif			
 		} lck_mtxd;
 		struct {
 			struct _lck_mtx_ext_		*lck_mtxi_ptr;
 			uint32_t			lck_mtxi_tag;
-#if	defined(__x86_64__)				
 			uint32_t			lck_mtxi_pad32;
-#endif			
 		} lck_mtxi;
 	} lck_mtx_sw;
 } lck_mtx_t;
@@ -129,9 +126,7 @@ extern void		hw_lock_byte_unlock(volatile uint8_t *lock_byte);
 
 typedef struct {
 	unsigned int		type;
-#ifdef __x86_64__
 	unsigned int		pad4;
-#endif
 	vm_offset_t		pc;
 	vm_offset_t		thread;
 } lck_mtx_deb_t;
@@ -146,14 +141,10 @@ typedef struct _lck_mtx_ext_ {
 	lck_mtx_t		lck_mtx;
 	struct _lck_grp_	*lck_mtx_grp;
 	unsigned int		lck_mtx_attr;
-#ifdef __x86_64__
 	unsigned int		lck_mtx_pad1;
-#endif
 	lck_mtx_deb_t		lck_mtx_deb;
 	uint64_t		lck_mtx_stat;
-#ifdef __x86_64__
 	unsigned int		lck_mtx_pad2[2];
-#endif
 } lck_mtx_ext_t;
 
 #define	LCK_MTX_ATTR_DEBUG	0x1
@@ -205,9 +196,7 @@ typedef struct _lck_rw_t_internal_ {
 					     * are in
 					     */
 	uint32_t		lck_rw_pad8;
-#ifdef __x86_64__
 	uint32_t		lck_rw_pad12;
-#endif
 } lck_rw_t;
 #pragma pack()
 
@@ -229,9 +218,7 @@ typedef struct _lck_rw_t_internal_ {
 #pragma pack(1)
 typedef struct {
 	uint32_t		opaque[3];
-#ifdef	__x86_64__
 	uint32_t		opaque4;
-#endif
 } lck_rw_t;
 #pragma pack()
 #else

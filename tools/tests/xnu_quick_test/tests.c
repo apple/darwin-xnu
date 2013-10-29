@@ -1186,7 +1186,7 @@ int chown_fchown_lchown_lstat_symlink_test( void * the_argp )
 			if ( my_new_gid1 == 0 ) {
 				my_new_gid1 = my_groups[ i ];
 			}
-			else {
+			else if( my_new_gid1 != my_groups[ i ] ) {
 				my_new_gid2 = my_groups[ i ];
 				break;
 			}
@@ -1758,6 +1758,7 @@ int uid_tests( void * the_argp )
 			exit( -1 );
 		}
 		
+#if !TARGET_OS_EMBEDDED
 		/*
 		 * test to make sure setaudit_addr doesn't cause audit info to get lost from 
 		 * the credential.
@@ -1784,6 +1785,7 @@ int uid_tests( void * the_argp )
 			printf("test failed - wrong audit ID was set - %d \n", my_aia.ai_auid);
 			exit( -1 );
 		}
+#endif
 		
 		/* change real uid and effective uid to current euid */
 		my_err = setuid( my_euid );
@@ -2120,20 +2122,18 @@ int execve_kill_vfork_test( void * the_argp )
 			if (do_spawn_test(CPU_TYPE_I386, 0))
 				goto test_failed_exit;
 		}
-	}else if(get_architecture() == ARM) {
-		if	(bits == 32) {
+	} else if(get_architecture() == ARM) {
 
-			/* Running on arm hardware. Check cases 2. */
-			errmsg = "execve failed: from arm forking and exec()ing 32-bit arm process.\n";
-			argvs[0] = "sleep-arm";
-			if (do_execve_test("helpers/sleep-arm", argvs, NULL, 1))
-				goto test_failed_exit;
+		errmsg = "execve failed: from arm forking and exec()ing arm process.\n";
+		argvs[0] = "sleep-arm";
+		if (do_execve_test("helpers/sleep-arm", argvs, NULL, 1))
+			goto test_failed_exit;
 
-			/* Test posix_spawn for arm (should succeed) */
-			errmsg = NULL;
-			if (do_spawn_test(CPU_TYPE_ARM, 0))
-				goto test_failed_exit;
-		}
+		/* Test posix_spawn for arm (should succeed) */
+		errmsg = NULL;
+		if (do_spawn_test(CPU_TYPE_ARM, 0))
+			goto test_failed_exit;
+
 	}
 	else {
 		/* Just in case someone decides we need more architectures in the future */
@@ -2715,7 +2715,7 @@ int signals_test( void * the_argp )
 		goto test_failed_exit;
 	}
 
-	if ( WIFEXITED( my_status ) && WEXITSTATUS( my_status ) != 0 ) {
+	if ( WIFSIGNALED( my_status ) || ( WIFEXITED( my_status ) && WEXITSTATUS( my_status ) != 0 ) ) {
 		goto test_failed_exit;
 	}
 	
@@ -2867,6 +2867,8 @@ int acct_test( void * the_argp )
 	ssize_t		my_count;
 	char		my_buffer[ (sizeof(struct acct) + 32) ];
 	kern_return_t           my_kr;
+	int		acct_record_found;
+	char *		test_bin_name = NULL;
 
 	if ( g_skip_setuid_tests != 0 ) {
 		printf("\t skipping this test \n");
@@ -2931,7 +2933,7 @@ int acct_test( void * the_argp )
 		goto test_failed_exit;
 	}
 
-	/* disable process accounting */
+	/* disable process accounting */ 
 	my_err =  acct( NULL );	
 	if ( my_err == -1 ) {
 		printf( "acct failed with error %d - \"%s\" \n", errno, strerror( errno) );
@@ -2947,27 +2949,45 @@ int acct_test( void * the_argp )
 
 	lseek( my_fd, 0, SEEK_SET );
 	bzero( (void *)&my_buffer[0], sizeof(my_buffer) );
-	my_count = read( my_fd, &my_buffer[0], sizeof(struct acct) );
-	if ( my_count == -1 ) {
-		printf( "read call failed with error %d - \"%s\" \n", errno, strerror( errno) );
-		goto test_failed_exit;
-	}
+	acct_record_found = 0;
+	test_bin_name = "true";	
 
-	my_acctp = (struct acct *) &my_buffer[0];
+	while(1) {
 
-	/* first letters in ac_comm should match the name of the executable */
-	if ( getuid( ) != my_acctp->ac_uid || getgid( ) != my_acctp->ac_gid ||
-			my_acctp->ac_comm[0] != 't' || my_acctp->ac_comm[1] != 'r' ) {
-			printf( "------------------------\n" );
-			printf( "my_acctp->ac_uid = %lu (should be: %lu)\n", (unsigned long) my_acctp->ac_uid, (unsigned long) getuid() );
-			printf( "my_acctp->ac_gid = %lu (should be: %lu)\n", (unsigned long) my_acctp->ac_gid, (unsigned long) getgid() );
+  		my_count = read( my_fd, &my_buffer[0], sizeof(struct acct) );
 
-			print_acct_debug_strings(my_acctp->ac_comm);
-		
-		goto test_failed_exit;
-	}
-	my_err = 0;
-	goto test_passed_exit;
+  		if ( my_count == -1 ) {
+    			printf( "read call failed with error %d - \"%s\" \n", errno, strerror( errno) );
+    			goto test_failed_exit;
+  		}
+
+  		if ( my_count < sizeof(struct acct)) {
+    			/* Indicates EOF or misaligned file size */
+			printf("Reached end of accounting records with last read count: %d\n", my_count);
+			break;
+  		}
+
+  		my_acctp = (struct acct *) &my_buffer[0];
+  		/* first letters in ac_comm should match the name of the executable */
+  		if ( (getuid() == my_acctp->ac_uid) && (getgid() == my_acctp->ac_gid) &&
+		     (!strncmp(my_acctp->ac_comm, test_bin_name, strlen(test_bin_name))) ) {
+    			/* Expected accounting record found */
+    			acct_record_found = 1;
+    			break;
+  		}
+
+ 	}	
+
+	if (acct_record_found) {
+  		my_err = 0;
+  		goto test_passed_exit;
+ 	} else {
+   		printf( "------------------------\n" );
+   		printf( "Expected Accounting Record for child process %s not found\n", test_bin_name );
+   		printf( "Expected uid: %lu Expected gid: %lu\n" , (unsigned long) getuid(), (unsigned long) getgid() );
+   		printf( "Account file path: %s\n",  my_pathp );
+   		goto test_failed_exit;
+ 	}
 
 test_failed_exit:
 	my_err = -1;

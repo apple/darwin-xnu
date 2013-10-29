@@ -324,10 +324,10 @@ int	setaudit_addr(const struct auditinfo_addr *, int);
 
 int	getaudit(struct auditinfo *)
 		__OSX_AVAILABLE_BUT_DEPRECATED(__MAC_10_0, __MAC_10_8,
-		    __IPHONE_2_0, __IPHONE_NA);
+		    __IPHONE_2_0, __IPHONE_6_0);
 int	setaudit(const struct auditinfo *)
 		__OSX_AVAILABLE_BUT_DEPRECATED(__MAC_10_0, __MAC_10_8,
-		    __IPHONE_2_0, __IPHONE_NA);
+		    __IPHONE_2_0, __IPHONE_6_0);
 #else
 
 int	getaudit(struct auditinfo *);

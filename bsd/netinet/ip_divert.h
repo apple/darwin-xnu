@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008 Apple Inc. All rights reserved.
+ * Copyright (c) 2008-2013 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -64,6 +64,7 @@
 #define	_NETINET_IP_DIVERT_H_
 
 #if IPDIVERT
+#ifdef BSD_KERNEL_PRIVATE
 /*
  * Divert socket definitions.
  */
@@ -107,7 +108,7 @@ divert_find_info(struct mbuf *m)
 	return mtag ? divert_info(mtag) : 0;
 }
 
-extern	void div_init(void) __attribute__((section("__TEXT, initcode")));
+extern	void div_init(struct protosw *, struct domain *);
 extern	void div_input(struct mbuf *, int);
 lck_mtx_t * 
         div_getlock(struct socket *,  int );
@@ -116,5 +117,6 @@ int     div_lock(struct socket *, int , void *);
 extern	void divert_packet(struct mbuf *m, int incoming, int port, int rule);
 extern struct pr_usrreqs div_usrreqs;
 
+#endif /* BSD_KERNEL_PRIVATE */
 #endif /* IPDIVERT */
 #endif /* _NETINET_IP_DIVERT_H_ */

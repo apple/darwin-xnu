@@ -30,7 +30,12 @@
 #define __SIGABRT 6
 #define __STDERR_FILENO 2
 
-int __getpid(void);
-int __kill(int pid, int signum, int posix);
+extern int __getpid(void);
+extern int __kill(int pid, int signum, int posix);
+extern int __exit(int) __attribute__((noreturn));
 
-#define abort()	__kill(__getpid(), __SIGABRT, 0)
+static inline void __attribute__((noreturn))
+abort(void) {
+	(void)__kill(__getpid(), __SIGABRT, 0);
+	__exit(1);
+}

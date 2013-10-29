@@ -142,12 +142,8 @@ struct vm_statistics64 {
 	uint64_t	cow_faults;		/* # of copy-on-writes */
 	uint64_t	lookups;		/* object cache lookups */
 	uint64_t	hits;			/* object cache hits */
-
-	/* added for rev1 */
 	uint64_t	purges;			/* # of pages purged */
 	natural_t	purgeable_count;	/* # of pages purgeable */
-
-	/* added for rev2 */
 	/*
 	 * NB: speculative pages are already accounted for in "free_count",
 	 * so "speculative_count" is the number of "free" pages that are
@@ -156,6 +152,16 @@ struct vm_statistics64 {
 	 */
 	natural_t	speculative_count;	/* # of pages speculative */
 
+	/* added for rev1 */
+	uint64_t	decompressions;		/* # of pages decompressed */
+	uint64_t	compressions;		/* # of pages compressed */
+	uint64_t	swapins;		/* # of pages swapped in (via compression segments) */
+	uint64_t	swapouts;		/* # of pages swapped out (via compression segments) */
+	natural_t	compressor_page_count;	/* # of pages used by the compressed pager to hold all the compressed data */
+	natural_t	throttled_count;	/* # of pages throttled */
+	natural_t	external_page_count;	/* # of pages that are file-backed (non-swap) */
+	natural_t	internal_page_count;	/* # of pages that are anonymous */
+	uint64_t	total_uncompressed_pages_in_compressor; /* # of pages (uncompressed) held within the compressor. */
 } __attribute__((aligned(8)));
 
 typedef struct vm_statistics64	*vm_statistics64_t;
@@ -191,6 +197,18 @@ struct vm_extmod_statistics {
 typedef struct vm_extmod_statistics *vm_extmod_statistics_t;
 typedef struct vm_extmod_statistics vm_extmod_statistics_data_t;
 
+typedef struct vm_purgeable_stat {
+	uint64_t	count;
+	uint64_t	size;
+}vm_purgeable_stat_t;
+
+struct vm_purgeable_info {
+	vm_purgeable_stat_t fifo_data[8];
+	vm_purgeable_stat_t obsolete_data;
+	vm_purgeable_stat_t lifo_data[8];
+};
+
+typedef struct vm_purgeable_info	*vm_purgeable_info_t;
 
 /* included for the vm_map_page_query call */
 
@@ -218,9 +236,28 @@ struct pmap_statistics {
 	integer_t	resident_count;	/* # of pages mapped (total)*/
 	integer_t	resident_max;	/* # of pages mapped (peak) */
 	integer_t	wired_count;	/* # of pages wired */
+
+	integer_t	device;
+	integer_t	device_peak;
+	integer_t	internal;
+	integer_t	internal_peak;
+	integer_t	external;
+	integer_t	external_peak;
+	integer_t	reusable;
+	integer_t	reusable_peak;
+	uint64_t	compressed;
+	uint64_t	compressed_peak;
+	uint64_t	compressed_lifetime;
 };
 
 typedef struct pmap_statistics	*pmap_statistics_t;
+
+#define PMAP_STATS_PEAK(field)			\
+	MACRO_BEGIN				\
+	if (field > field##_peak) {		\
+		field##_peak = field;		\
+	}					\
+	MACRO_END
 
 #endif	/* MACH_KERNEL_PRIVATE */
 
@@ -269,7 +306,7 @@ typedef struct pmap_statistics	*pmap_statistics_t;
 #define VM_FLAGS_NO_PMAP_CHECK	0x8000	/* do not check that pmap is empty */
 #define	VM_FLAGS_MAP_JIT	0x80000	/* Used to mark an entry as describing a JIT region */
 #endif /* KERNEL_PRIVATE */
-
+#define VM_FLAGS_RETURN_DATA_ADDR	0x100000 /* Return address of target data, rather than base of page */
 /*
  * VM_FLAGS_SUPERPAGE_MASK
  *	3 bits that specify whether large pages should be used instead of
@@ -302,10 +339,11 @@ typedef struct pmap_statistics	*pmap_statistics_t;
 				 VM_FLAGS_OVERWRITE |		\
 				 VM_FLAGS_SUPERPAGE_MASK |	\
 				 VM_FLAGS_ALIAS_MASK)
-#define VM_FLAGS_USER_MAP	VM_FLAGS_USER_ALLOCATE
+#define VM_FLAGS_USER_MAP	(VM_FLAGS_USER_ALLOCATE | VM_FLAGS_RETURN_DATA_ADDR)
 #define VM_FLAGS_USER_REMAP	(VM_FLAGS_FIXED |    \
 				 VM_FLAGS_ANYWHERE | \
-				 VM_FLAGS_OVERWRITE)
+				 VM_FLAGS_OVERWRITE| \
+				 VM_FLAGS_RETURN_DATA_ADDR)
 
 #define VM_MEMORY_MALLOC 1
 #define VM_MEMORY_MALLOC_SMALL 2
@@ -318,6 +356,8 @@ typedef struct pmap_statistics	*pmap_statistics_t;
 #define VM_MEMORY_MALLOC_LARGE_REUSED 9
 
 #define VM_MEMORY_ANALYSIS_TOOL 10
+
+#define VM_MEMORY_MALLOC_NANO 11
 
 #define VM_MEMORY_MACH_MSG 20
 #define VM_MEMORY_IOKIT	21
@@ -340,6 +380,8 @@ typedef struct pmap_statistics	*pmap_statistics_t;
 #define VM_MEMORY_CORESERVICES 43
 #define VM_MEMORY_CARBON VM_MEMORY_CORESERVICES
 #define VM_MEMORY_JAVA 44
+#define VM_MEMORY_COREDATA 45
+#define VM_MEMORY_COREDATA_OBJECTIDS 46
 #define VM_MEMORY_ATS 50
 #define VM_MEMORY_LAYERKIT 51
 #define VM_MEMORY_CGIMAGE 52
@@ -394,6 +436,18 @@ typedef struct pmap_statistics	*pmap_statistics_t;
 
 /* assetsd / MobileSlideShow memory */
 #define VM_MEMORY_ASSETSD	72
+
+/* libsystem_kernel os_once_alloc */
+#define VM_MEMORY_OS_ALLOC_ONCE 73
+
+/* libdispatch internal allocator */
+#define VM_MEMORY_LIBDISPATCH 74
+
+/* Accelerate.framework image backing stores */
+#define VM_MEMORY_ACCELERATE 75
+
+/* CoreUI image block data */
+#define VM_MEMORY_COREUI 76
 
 /* Reserve 240-255 for application */
 #define VM_MEMORY_APPLICATION_SPECIFIC_1 240

@@ -47,22 +47,14 @@
  * 
  * In our case, this is limited to struct timespec, off_t and ssize_t.
  */
-#define __need_struct_timespec
+#include <sys/_types/_timespec.h>
 #ifdef KERNEL
-#define __need_struct_user64_timespec
-#define __need_struct_user32_timespec
+#include <sys/_types/_user64_timespec.h>
+#include <sys/_types/_user32_timespec.h>
 #endif /* KERNEL */
-#include <sys/_structs.h>
 
-#ifndef _OFF_T
-typedef __darwin_off_t	off_t;
-#define _OFF_T
-#endif
-
-#ifndef	_SSIZE_T
-#define	_SSIZE_T
-typedef	__darwin_ssize_t	ssize_t;
-#endif
+#include <sys/_types/_off_t.h>
+#include <sys/_types/_ssize_t.h>
 
 /*
  * A aio_fsync() options that the calling thread is to continue execution
@@ -71,14 +63,8 @@ typedef	__darwin_ssize_t	ssize_t;
  *
  * [XSI] from <fcntl.h>
  */
-#ifndef O_SYNC		/* allow simultaneous inclusion of <fcntl.h> */
-#define	O_SYNC			0x0080		/* synch I/O file integrity */
-#endif
-
-#ifndef O_DSYNC		/* allow simultaneous inclusion of <fcntl.h> */
-#define	O_DSYNC			0x400000	/* synch I/O data integrity */
-#endif
-
+#include <sys/_types/_o_sync.h>
+#include <sys/_types/_o_dsync.h>
 
 struct aiocb {
 	int		aio_fildes;		/* File descriptor */

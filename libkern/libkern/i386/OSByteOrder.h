@@ -31,10 +31,7 @@
 
 #include <stdint.h>
 #include <libkern/i386/_OSByteOrder.h>
-
-#if !defined(OS_INLINE)
-#define OS_INLINE	__DARWIN_OS_INLINE
-#endif
+#include <sys/_types/_os_inline.h>
 
 /* Functions for byte reversed loads. */
 

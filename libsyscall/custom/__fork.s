@@ -55,7 +55,7 @@ LEAF(___fork, 0)
 	UNIX_SYSCALL_TRAP		// do the system call
 	jnc	L1			// jump if CF==0
 
-	CALL_EXTERN(cerror)
+	CALL_EXTERN(tramp_cerror)
 	movl	$-1,%eax
 	addl	$28, %esp   // restore the stack
 	ret
@@ -81,7 +81,8 @@ LEAF(___fork, 0)
 	UNIX_SYSCALL_TRAP		// do the system call
 	jnc	L1			// jump if CF==0
 
-	CALL_EXTERN(cerror)
+	movq	%rax, %rdi
+	CALL_EXTERN(_cerror)
 	movq	$-1, %rax
 	addq	$24, %rsp   // restore the stack
 	ret

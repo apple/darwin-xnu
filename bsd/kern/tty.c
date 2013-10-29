@@ -2145,7 +2145,7 @@ read:
 		char ibuf[IBUFSIZ];
 		int icc;
 
-		icc = min(uio_resid(uio), IBUFSIZ);
+		icc = MIN(uio_resid(uio), IBUFSIZ);
 		icc = q_to_b(qp, (u_char *)ibuf, icc);
 		if (icc <= 0) {
 			if (first)
@@ -2186,8 +2186,8 @@ slowcase:
 			tty_pgsignal(tp, SIGTSTP, 1);
 			tty_lock(tp);
 			if (first) {
-				error = ttysleep(tp, &lbolt, TTIPRI | PCATCH,
-						 "ttybg3", 0);
+				error = ttysleep(tp, &ttread, TTIPRI | PCATCH,
+						 "ttybg3", hz);
 				if (error)
 					break;
 				goto loop;
@@ -2366,7 +2366,7 @@ loop:
 		 * leftover from last time.
 		 */
 		if (cc == 0) {
-			cc = min(uio_resid(uio), OBUFSIZ);
+			cc = MIN(uio_resid(uio), OBUFSIZ);
 			cp = obuf;
 			error = uiomove(cp, cc, uio);
 			if (error) {

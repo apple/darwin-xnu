@@ -1,8 +1,8 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
- * 
+ *
  * This file contains Original Code and/or Modifications of Original Code
  * as defined in and that are subject to the Apple Public Source License
  * Version 2.0 (the 'License'). You may not use this file except in
@@ -11,10 +11,10 @@
  * unlawful or unlicensed copies of an Apple operating system, or to
  * circumvent, violate, or enable the circumvention or violation of, any
  * terms of an Apple operating system software license agreement.
- * 
+ *
  * Please obtain a copy of the License at
  * http://www.opensource.apple.com/apsl/ and read it before using this file.
- * 
+ *
  * The Original Code and all software distributed under the License are
  * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
@@ -22,10 +22,10 @@
  * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
  * Please see the License for the specific language governing rights and
  * limitations under the License.
- * 
+ *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
-/*	$KAME: in_gif.h,v 1.3 2000/02/22 14:01:59 itojun Exp $	*/
+/* $KAME: in_gif.h,v 1.3 2000/02/22 14:01:59 itojun Exp $ */
 
 /*
  * Copyright (C) 1995, 1996, 1997, and 1998 WIDE Project.
@@ -57,12 +57,11 @@
  */
 
 #ifndef _NETINET_IN_GIF_H_
-#define _NETINET_IN_GIF_H_
+#define	_NETINET_IN_GIF_H_
 #include <sys/appleapiopts.h>
-#ifdef KERNEL
-#ifdef KERNEL_PRIVATE
+#ifdef BSD_KERNEL_PRIVATE
 
-#define GIF_TTL		30
+#define	GIF_TTL		30
 
 extern int ip_gif_ttl;
 
@@ -70,6 +69,5 @@ void in_gif_input(struct mbuf *, int);
 int in_gif_output(struct ifnet *, int, struct mbuf *, struct rtentry *);
 int gif_encapcheck4(const struct mbuf *, int, int, void *);
 
-#endif /* KERNEL_PRIVATE */
-#endif /* KERNEL */
+#endif /* BSD_KERNEL_PRIVATE */
 #endif /* _NETINET_IN_GIF_H_ */

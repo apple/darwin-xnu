@@ -4,8 +4,6 @@
  *
  */
 
-#define ABSOLUTETIME_SCALAR_TYPE
-
 #include "testthreadcall.h"
 
 #include <kern/thread_call.h>

@@ -169,9 +169,11 @@ extern void _flushq_flow(class_queue_t *, u_int32_t, u_int32_t *, u_int32_t *);
 
 extern void classq_init(void);
 
+#if PF_ECN
 extern u_int8_t read_dsfield(struct mbuf *, struct pf_mtag *);
 extern void	write_dsfield(struct mbuf *, struct pf_mtag *, u_int8_t);
 extern int	mark_ecn(struct mbuf *, struct pf_mtag *, int);
+#endif /* PF_ECN */
 #endif /* BSD_KERNEL_PRIVATE */
 
 #ifdef __cplusplus

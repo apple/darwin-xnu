@@ -81,20 +81,9 @@
  * NOTE:	The definition of the key_t type is implicit from the
  *		inclusion of <sys/ipc.h>
  */
-#ifndef _PID_T
-typedef __darwin_pid_t	pid_t;
-#define _PID_T
-#endif
-
-#ifndef	_TIME_T
-#define	_TIME_T
-typedef	__darwin_time_t	time_t;
-#endif
-
-#ifndef _SIZE_T
-#define _SIZE_T
-typedef __darwin_size_t	size_t;
-#endif
+#include <sys/_types/_pid_t.h>
+#include <sys/_types/_time_t.h>
+#include <sys/_types/_size_t.h>
 
 /*
  * [XSI] The unsigned integer type used for the number of current attaches

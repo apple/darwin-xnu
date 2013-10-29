@@ -63,7 +63,7 @@ __END_DECLS
 
 #else	/* KERNEL */
 void psem_lock_init(void);
-void psem_cache_init(void) __attribute__((section("__TEXT, initcode")));
+void psem_cache_init(void);
 #endif	/* KERNEL */
 
 #endif	/* _SYS_SEMAPHORE_H_ */

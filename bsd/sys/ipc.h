@@ -85,25 +85,11 @@
  * [XSI] The uid_t, gid_t, mode_t, and key_t types SHALL be defined as
  * described in <sys/types.h>.
  */
-#ifndef _UID_T
-typedef __darwin_uid_t	uid_t;		/* user id */
-#define _UID_T
-#endif
+#include <sys/_types/_uid_t.h>
+#include <sys/_types/_gid_t.h>
+#include <sys/_types/_mode_t.h>
+#include <sys/_types/_key_t.h>
 
-#ifndef _GID_T
-typedef __darwin_gid_t	gid_t;
-#define _GID_T
-#endif
-
-#ifndef	_MODE_T
-typedef	__darwin_mode_t	mode_t;
-#define _MODE_T
-#endif
-
-#ifndef _KEY_T
-#define _KEY_T
-typedef	__int32_t	key_t;
-#endif
 
 #pragma pack(4)
 

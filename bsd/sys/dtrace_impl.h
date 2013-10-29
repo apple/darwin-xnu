@@ -1215,6 +1215,8 @@ struct dtrace_provider {
 	void *dtpv_arg;				/* provider argument */
 	uint_t dtpv_defunct;			/* boolean: defunct provider */
 	struct dtrace_provider *dtpv_next;	/* next provider */
+	uint64_t probe_count;			/* no. of associated probes */
+	uint64_t ecb_count;			/* no. of associated enabled ECBs */
 };
 
 struct dtrace_meta {

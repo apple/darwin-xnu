@@ -39,12 +39,16 @@
 #undef _mach_vm_user_
 #include <mach/mach_vm_internal.h>
 
+#include "stack_logging_internal.h"
+
+malloc_logger_t *__syscall_logger = NULL;   // This may get set by Libc's malloc stack logging initialization code.
+
 kern_return_t
 mach_vm_allocate(
-		mach_port_name_t target,
-		mach_vm_address_t *address,
-		mach_vm_size_t size,
-		int flags)
+	mach_port_name_t target,
+	mach_vm_address_t *address,
+	mach_vm_size_t size,
+	int flags)
 {
 	kern_return_t rv;
 
@@ -52,6 +56,11 @@ mach_vm_allocate(
 
 	if (rv == MACH_SEND_INVALID_DEST)
 		rv = _kernelrpc_mach_vm_allocate(target, address, size, flags);
+
+	if (__syscall_logger) {
+		int userTagFlags = flags & VM_FLAGS_ALIAS_MASK;
+		__syscall_logger(stack_logging_type_vm_allocate | userTagFlags, (uintptr_t)target, (uintptr_t)size, 0, (uintptr_t)*address, 0);
+	}
 
 	return (rv);
 }
@@ -68,6 +77,10 @@ mach_vm_deallocate(
 
 	if (rv == MACH_SEND_INVALID_DEST)
 		rv = _kernelrpc_mach_vm_deallocate(target, address, size);
+
+	if (__syscall_logger) {
+		__syscall_logger(stack_logging_type_vm_deallocate, (uintptr_t)target, (uintptr_t)address, size, 0, 0);
+	}
 
 	return (rv);
 }
@@ -137,6 +150,170 @@ vm_protect(
 	kern_return_t rv;
 
 	rv = mach_vm_protect(task, address, size, set_maximum, new_protection);
+
+	return (rv);
+}
+
+kern_return_t
+mach_vm_map(
+	mach_port_name_t target,
+	mach_vm_address_t *address,
+	mach_vm_size_t size,
+	mach_vm_offset_t mask,
+	int flags,
+	mem_entry_name_port_t object,
+	memory_object_offset_t offset,
+	boolean_t copy,
+	vm_prot_t cur_protection,
+	vm_prot_t max_protection,
+	vm_inherit_t inheritance)
+{
+	kern_return_t rv = MACH_SEND_INVALID_DEST;
+
+	if (object == MEMORY_OBJECT_NULL && max_protection == VM_PROT_ALL &&
+			inheritance == VM_INHERIT_DEFAULT)
+		rv = _kernelrpc_mach_vm_map_trap(target, address, size, mask, flags,
+				cur_protection);
+
+	if (rv == MACH_SEND_INVALID_DEST)
+		rv = _kernelrpc_mach_vm_map(target, address, size, mask, flags, object,
+			offset, copy, cur_protection, max_protection, inheritance);
+
+	if (__syscall_logger) {
+		int eventTypeFlags = stack_logging_type_vm_allocate | stack_logging_type_mapped_file_or_shared_mem;
+		int userTagFlags = flags & VM_FLAGS_ALIAS_MASK;
+		__syscall_logger(eventTypeFlags | userTagFlags, (uintptr_t)target, (uintptr_t)size, 0, (uintptr_t)*address, 0);
+	}
+
+	return (rv);
+}
+
+kern_return_t
+mach_vm_remap(
+	mach_port_name_t target,
+	mach_vm_address_t *address,
+	mach_vm_size_t size,
+	mach_vm_offset_t mask,
+	int flags,
+	mach_port_name_t src_task,
+	mach_vm_address_t src_address,
+	boolean_t copy,
+	vm_prot_t *cur_protection,
+	vm_prot_t *max_protection,
+        vm_inherit_t inheritance)
+{
+	kern_return_t rv;
+
+	rv = _kernelrpc_mach_vm_remap(target, address, size, mask, flags,
+		src_task, src_address, copy, cur_protection, max_protection,
+		inheritance);
+
+	if (__syscall_logger) {
+		int eventTypeFlags = stack_logging_type_vm_allocate | stack_logging_type_mapped_file_or_shared_mem;
+		int userTagFlags = flags & VM_FLAGS_ALIAS_MASK;
+		__syscall_logger(eventTypeFlags | userTagFlags, (uintptr_t)target, (uintptr_t)size, 0, (uintptr_t)*address, 0);
+	}
+
+	return (rv);
+}
+
+kern_return_t
+mach_vm_read(
+	mach_port_name_t target,
+	mach_vm_address_t address,
+	mach_vm_size_t size,
+	vm_offset_t *data,
+	mach_msg_type_number_t *dataCnt)
+{
+	kern_return_t rv;
+
+	rv = _kernelrpc_mach_vm_read(target, address, size, data, dataCnt);
+
+	if (__syscall_logger) {
+		int eventTypeFlags = stack_logging_type_vm_allocate | stack_logging_type_mapped_file_or_shared_mem;
+		// The target argument is the remote task from which data is being read,
+		// so pass mach_task_self() as the destination task receiving the allocation.
+		__syscall_logger(eventTypeFlags, (uintptr_t)mach_task_self(), (uintptr_t)*dataCnt, 0, *data, 0);
+	}
+
+	return (rv);
+}
+
+kern_return_t
+vm_map(
+	mach_port_name_t target,
+	vm_address_t *address,
+	vm_size_t size,
+	vm_offset_t mask,
+	int flags,
+	mem_entry_name_port_t object,
+	vm_offset_t offset,
+	boolean_t copy,
+	vm_prot_t cur_protection,
+	vm_prot_t max_protection,
+	vm_inherit_t inheritance)
+{
+	kern_return_t rv;
+
+	rv = _kernelrpc_vm_map(target, address, size, mask, flags, object,
+		offset, copy, cur_protection, max_protection, inheritance);
+
+	if (__syscall_logger) {
+		int eventTypeFlags = stack_logging_type_vm_allocate | stack_logging_type_mapped_file_or_shared_mem;
+		int userTagFlags = flags & VM_FLAGS_ALIAS_MASK;
+		__syscall_logger(eventTypeFlags | userTagFlags, (uintptr_t)target, (uintptr_t)size, 0, (uintptr_t)*address, 0);
+	}
+
+	return (rv);
+}
+
+kern_return_t
+vm_remap(
+	mach_port_name_t target,
+	vm_address_t *address,
+	vm_size_t size,
+	vm_offset_t mask,
+	int flags,
+	mach_port_name_t src_task,
+	vm_address_t src_address,
+	boolean_t copy,
+	vm_prot_t *cur_protection,
+	vm_prot_t *max_protection,
+        vm_inherit_t inheritance)
+{
+	kern_return_t rv;
+
+	rv = _kernelrpc_vm_remap(target, address, size, mask, flags,
+		src_task, src_address, copy, cur_protection, max_protection,
+		inheritance);
+
+	if (__syscall_logger) {
+		int eventTypeFlags = stack_logging_type_vm_allocate | stack_logging_type_mapped_file_or_shared_mem;
+		int userTagFlags = flags & VM_FLAGS_ALIAS_MASK;
+		__syscall_logger(eventTypeFlags | userTagFlags, (uintptr_t)target, (uintptr_t)size, 0, (uintptr_t)*address, 0);
+	}
+
+	return (rv);
+}
+
+kern_return_t
+vm_read(
+	mach_port_name_t target,
+	vm_address_t address,
+	vm_size_t size,
+	vm_offset_t *data,
+	mach_msg_type_number_t *dataCnt)
+{
+	kern_return_t rv;
+
+	rv = _kernelrpc_vm_read(target, address, size, data, dataCnt);
+
+	if (__syscall_logger) {
+		int eventTypeFlags = stack_logging_type_vm_allocate | stack_logging_type_mapped_file_or_shared_mem;
+		// The target argument is the remote task from which data is being read,
+		// so pass mach_task_self() as the destination task receiving the allocation.
+		__syscall_logger(eventTypeFlags, (uintptr_t)mach_task_self(), (uintptr_t)*dataCnt, 0, *data, 0);
+	}
 
 	return (rv);
 }

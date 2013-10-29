@@ -2167,7 +2167,7 @@ vclean(vnode_t vp, int flags)
 	    
 		/* Delete the shadow stream file before we reclaim its vnode */
 		if (vnode_isshadow(vp)) {
-			vnode_relenamedstream(pvp, vp, ctx);
+			vnode_relenamedstream(pvp, vp);
 		}
 		
 		/* 
@@ -3722,9 +3722,6 @@ new_vnode(vnode_t *vpp)
 	int deferred;
         struct timeval initial_tv;
         struct timeval current_tv;
-#if CONFIG_VFS_FUNNEL
-        struct unsafe_fsnode *l_unsafefs = 0;
-#endif /* CONFIG_VFS_FUNNEL */
 	proc_t  curproc = current_proc();
 
 	initial_tv.tv_sec = 0;
@@ -3890,7 +3887,7 @@ retry:
 		 * Running out of vnodes tends to make a system unusable. Start killing
 		 * processes that jetsam knows are killable.
 		 */
-		if (memorystatus_kill_top_proc(TRUE, kMemorystatusFlagsKilledVnodes) < 0) {
+		if (memorystatus_kill_on_vnode_limit() == FALSE) {
 			/*
 			 * If jetsam can't find any more processes to kill and there
 			 * still aren't any free vnodes, panic. Hopefully we'll get a
@@ -3967,13 +3964,6 @@ steal_this_vp:
 	OSAddAtomicLong(1, &num_reusedvnodes);
 
 
-#if CONFIG_VFS_FUNNEL
-	if (vp->v_unsafefs) {
-	        l_unsafefs = vp->v_unsafefs;
-		vp->v_unsafefs = (struct unsafe_fsnode *)NULL;
-	}
-#endif /* CONFIG_VFS_FUNNEL */
-
 #if CONFIG_MACF
 	/*
 	 * We should never see VL_LABELWAIT or VL_LABEL here.
@@ -4002,13 +3992,6 @@ steal_this_vp:
 	vp->v_defer_reclaimlist = (vnode_t)0;
 
 	vnode_unlock(vp);
-
-#if CONFIG_VFS_FUNNEL
-	if (l_unsafefs) {
-	        lck_mtx_destroy(&l_unsafefs->fsnodelock, vnode_lck_grp);
-		FREE_ZONE((void *)l_unsafefs, sizeof(struct unsafe_fsnode), M_UNSAFEFS);
-	}
-#endif /* CONFIG_VFS_FUNNEL */
 
 done:
 	*vpp = vp;
@@ -4286,6 +4269,7 @@ vnode_getiocount(vnode_t vp, unsigned int vid, int vflags)
 	int nosusp = vflags & VNODE_NOSUSPEND;
 	int always = vflags & VNODE_ALWAYS;
 	int beatdrain = vflags & VNODE_DRAINO;
+	int withvid = vflags & VNODE_WITHID;
 
 	for (;;) {
 		/*
@@ -4319,14 +4303,30 @@ vnode_getiocount(vnode_t vp, unsigned int vid, int vflags)
 			break;
 
 		/*
-		 * In some situations, we want to get an iocount
-		 * even if the vnode is draining to prevent deadlock,
-		 * e.g. if we're in the filesystem, potentially holding
-		 * resources that could prevent other iocounts from
-		 * being released.
+		 * If this vnode is getting drained, there are some cases where
+		 * we can't block.
 		 */
-		if (beatdrain && (vp->v_lflag & VL_DRAIN)) {
-			break;
+		if (vp->v_lflag & VL_DRAIN) {
+			/*
+			 * In some situations, we want to get an iocount
+			 * even if the vnode is draining to prevent deadlock,
+			 * e.g. if we're in the filesystem, potentially holding
+			 * resources that could prevent other iocounts from
+			 * being released.
+			 */
+			if (beatdrain)
+				break;
+			/*
+			 * Don't block if the vnode's mount point is unmounting as
+			 * we may be the thread the unmount is itself waiting on
+			 * Only callers who pass in vids (at this point, we've already
+			 * handled nosusp and nodead) are expecting error returns
+			 * from this function, so only we can only return errors for
+			 * those. ENODEV is intended to inform callers that the call
+			 * failed because an unmount is in progress.
+			 */
+			if (withvid && (vp->v_mount) && vfs_isunmount(vp->v_mount))
+				return(ENODEV);
 		}
 
 		vnode_lock_convert(vp);
@@ -4338,7 +4338,7 @@ vnode_getiocount(vnode_t vp, unsigned int vid, int vflags)
 		} else
 			msleep(&vp->v_iocount, &vp->v_lock, PVFS, "vnode_getiocount", NULL);
 	}
-	if (((vflags & VNODE_WITHID) != 0) && vid != vp->v_id) {
+	if (withvid && vid != vp->v_id) {
 		return(ENOENT);
 	}
 	if (++vp->v_references >= UNAGE_THRESHHOLD) {
@@ -4486,9 +4486,9 @@ vnode_create(uint32_t flavor, uint32_t size, void *data, vnode_t *vpp)
 	if (param == NULL)
 		return (EINVAL);
 
-	/* Do quick sanity check on the parameters */
+	/* Do quick sanity check on the parameters. */
 	if (param->vnfs_vtype == VBAD) {
-		return (EINVAL);
+		return EINVAL;
 	}
 
 #if CONFIG_TRIGGERS
@@ -4612,8 +4612,7 @@ vnode_create(uint32_t flavor, uint32_t size, void *data, vnode_t *vpp)
 		if (VCHR == vp->v_type) {
 			u_int maj = major(vp->v_rdev);
 
-			if (maj < (u_int)nchrdev &&
-			    (D_TYPEMASK & cdevsw[maj].d_type) == D_TTY)
+			if (maj < (u_int)nchrdev && cdevsw[maj].d_type == D_TTY)
 				vp->v_flag |= VISTTY;
 		}
 	}
@@ -4649,15 +4648,6 @@ vnode_create(uint32_t flavor, uint32_t size, void *data, vnode_t *vpp)
 			 */
 			insmntque(vp, param->vnfs_mp);
 		}
-#if CONFIG_VFS_FUNNEL
-		if ((param->vnfs_mp->mnt_vtable->vfc_vfsflags & VFC_VFSTHREADSAFE) == 0) {
-			MALLOC_ZONE(vp->v_unsafefs, struct unsafe_fsnode *,
-				    sizeof(struct unsafe_fsnode), M_UNSAFEFS, M_WAITOK);
-			vp->v_unsafefs->fsnode_count = 0;
-			vp->v_unsafefs->fsnodeowner  = (void *)NULL;
-			lck_mtx_init(&vp->v_unsafefs->fsnodelock, vnode_lck_grp, vnode_lck_attr);
-		}
-#endif /* CONFIG_VFS_FUNNEL */
 	}
 	if (dvp && vnode_ref(dvp) == 0) {
 		vp->v_parent = dvp;
@@ -5360,6 +5350,9 @@ vn_attribute_cleanup(struct vnode_attr *vap, uint32_t defaulted_fields)
 int
 vn_authorize_unlink(vnode_t dvp, vnode_t vp, struct componentname *cnp, vfs_context_t ctx, __unused void *reserved)
 {
+#if !CONFIG_MACF
+#pragma unused(cnp)
+#endif
 	int error = 0;
 
 	/*
@@ -5388,7 +5381,6 @@ vn_authorize_open_existing(vnode_t vp, struct componentname *cnp, int fmode, vfs
 	/* Open of existing case */
 	kauth_action_t action;
 	int error = 0;
-
 	if (cnp->cn_ndp == NULL) {
 		panic("NULL ndp");
 	}
@@ -5461,7 +5453,6 @@ vn_authorize_open_existing(vnode_t vp, struct componentname *cnp, int fmode, vfs
 		}
 	}
 	error = vnode_authorize(vp, NULL, action, ctx);
-
 #if NAMEDSTREAMS
 	if (error == EACCES) {
 		/*
@@ -5471,17 +5462,20 @@ vn_authorize_open_existing(vnode_t vp, struct componentname *cnp, int fmode, vfs
 		 * then it should be authorized.
 		 */
 		if (vnode_isshadow(vp) && vnode_isnamedstream (vp)) {
-			error = vnode_verifynamedstream(vp, ctx);
+			error = vnode_verifynamedstream(vp);
 		}
 	}
 #endif
-	
+
 	return error;
 }
 
 int
 vn_authorize_create(vnode_t dvp, struct componentname *cnp, struct vnode_attr *vap, vfs_context_t ctx, void *reserved)
 {
+#if !CONFIG_MACF
+#pragma unused(vap)
+#endif
 	/* Creation case */
 	int error;
 
@@ -5647,6 +5641,9 @@ out:
 int
 vn_authorize_mkdir(vnode_t dvp, struct componentname *cnp, struct vnode_attr *vap, vfs_context_t ctx, void *reserved)
 {
+#if !CONFIG_MACF
+#pragma unused(vap)
+#endif
 	int error;
 
 	if (reserved != NULL) {
@@ -5682,8 +5679,11 @@ out:
 int
 vn_authorize_rmdir(vnode_t dvp, vnode_t vp, struct componentname *cnp, vfs_context_t ctx, void *reserved)
 {
+#if CONFIG_MACF
 	int error;
-
+#else
+#pragma unused(cnp)
+#endif
 	if (reserved != NULL) {
 		panic("Non-NULL reserved argument to vn_authorize_rmdir()");
 	}

@@ -30,6 +30,7 @@
 #define _IOPOLLEDINTERFACE_H_
 
 #include <libkern/c++/OSObject.h>
+#include <IOKit/IOMemoryDescriptor.h>
 
 #define kIOPolledInterfaceSupportKey "IOPolledInterface"
 #define kIOPolledInterfaceActiveKey  "IOPolledInterfaceActive"

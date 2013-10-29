@@ -446,7 +446,6 @@ vprintf(const char *fmt, va_list ap)
 	return 0;
 }
 
-#if !CONFIG_EMBEDDED
 
 /*
  * Scaled down version of vsprintf(3).
@@ -469,7 +468,6 @@ vsprintf(char *buf, const char *cfmt, va_list ap)
 	}
 	return 0;
 }
-#endif	/* !CONFIG_EMBEDDED */
 
 /*
  * Scaled down version of snprintf(3).

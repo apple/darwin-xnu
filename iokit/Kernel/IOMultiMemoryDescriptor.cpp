@@ -76,7 +76,6 @@ bool IOMultiMemoryDescriptor::initWithDescriptors(
     //
 
     assert(descriptors);
-    assert(withCount);
 
     // Release existing descriptors, if any
     if ( _descriptors )
@@ -123,7 +122,8 @@ bool IOMultiMemoryDescriptor::initWithDescriptors(
         descriptors[index]->retain();
         _length += descriptors[index]->getLength();
         if ( _tag == 0 )  _tag = descriptors[index]->getTag();
-        assert(descriptors[index]->getDirection() == withDirection);
+        assert(descriptors[index]->getDirection() ==
+	       (withDirection & kIOMemoryDirectionMask));
     }
 
     return true;

@@ -26,7 +26,6 @@
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 
-#include <stdarg.h>
 #include <sys/errno.h>
 #include <sys/types.h>
 #include <sys/malloc.h>
@@ -35,158 +34,75 @@
 #include <sys/kauth.h>
 #include <sys/mount.h>
 #include <sys/vnode.h>
-#include <sys/syslog.h>		/* for vaddlog() */
+#include <sys/syslog.h>
 #include <sys/vnode_internal.h>
-#include <dev/random/randomdev.h>
-
 #include <sys/fslog.h>
 #include <sys/mount_internal.h>
+#include <sys/kasl.h>
+
+#include <dev/random/randomdev.h>
 
 #include <uuid/uuid.h>
 
-/* String to append as format modifier for each key-value pair */
-#define FSLOG_KEYVAL_FMT	"[%s %s] " 
-#define FSLOG_KEYVAL_FMT_LEN	(sizeof(FSLOG_KEYVAL_FMT) - 1)
+#include <stdarg.h>
 
-#define FSLOG_NEWLINE_CHAR	"\n"
-#define FSLOG_NEWLINE_CHAR_LEN	(sizeof(FSLOG_NEWLINE_CHAR) - 1)
-
-/* Length of entire ASL message in 10 characters.  Kernel defaults to zero */
-#define FSLOG_ASL_MSG_LEN	"         0"
-
-/* Length of default format string to be used by printf */
-#define MAX_FMT_LEN		256
-
-/* Internal function to print input values as key-value pairs in format 
- * identifiable by Apple system log (ASL) facility.   All key-value pairs
- * are assumed to be pointer to strings and are provided using two ways - 
- * (a) va_list argument which is a list of varying number of arguments 
- *     created by the caller of this function.
- * (b) variable number of arguments passed to this function. 
- * 
- * Parameters -
- * 	level 	  - Priority level for this ASL message 
- *	facility  - Facility for this ASL message.
- *	num_pairs - Number of key-value pairs provided by vargs argument.
- *	vargs 	  - List of key-value pairs.  
- *	... 	  - Additional key-value pairs (apart from vargs) as variable 
- *	      	    argument list.  A NULL value indicates the end of the 
- *	      	    variable argument list.
- * 
- * Returns - 
- *	zero	- On success, when it prints all key-values pairs provided.
- *	E2BIG	- When it cannot print all key-value pairs provided and had
- *		  to truncate the output.
+/* Log information about external modification of a process,
+ * using MessageTracer formatting. Assumes that both the caller
+ * and target are appropriately locked.
+ * Currently prints following information - 
+ * 	1. Caller process name (truncated to 16 characters)
+ *	2. Caller process Mach-O UUID
+ *  3. Target process name (truncated to 16 characters)
+ *  4. Target process Mach-O UUID
  */
-static int fslog_asl_msg(int level, const char *facility, int num_pairs, va_list vargs, ...)
+void
+fslog_extmod_msgtracer(proc_t caller, proc_t target)
 {
-	int err = 0;
-	char fmt[MAX_FMT_LEN];	/* Format string to use with vaddlog */
-	int calc_pairs = 0;
-	size_t len;
-	int i;
-	va_list ap;
-	char *ptr;
+	if ((caller != PROC_NULL) && (target != PROC_NULL)) {
 
-	/* Mask extra bits, if any, from priority level */
-	level = LOG_PRI(level);
-
-	/* Create the first part of format string consisting of ASL 
-	 * message length, level, and facility.
-	 */
-	if (facility) {
-		snprintf(fmt, MAX_FMT_LEN, "%s [%s %d] [%s %d] [%s %s] ",
-			FSLOG_ASL_MSG_LEN,
-			FSLOG_KEY_LEVEL, level,
-			FSLOG_KEY_READ_UID, FSLOG_VAL_READ_UID, 
-			FSLOG_KEY_FACILITY, facility);
-	} else {
-		snprintf(fmt, MAX_FMT_LEN, "%s [%s %d] [%s %d] ", 
-			FSLOG_ASL_MSG_LEN,
-			FSLOG_KEY_LEVEL, level,
-			FSLOG_KEY_READ_UID, FSLOG_VAL_READ_UID);
-	}
-
-	/* Determine the number of key-value format string [%s %s] that 
-	 * should be added in format string for every key-value pair provided
-	 * in va_list.  Calculate maximum number of format string that can be 
-	 * accommodated in the remaining format buffer (after saving space
-	 * for newline character).  If the caller provided pairs in va_list 
-	 * is more than calculated pairs, truncate extra pairs.
-	 */
-	len = MAX_FMT_LEN - strlen(fmt) - FSLOG_NEWLINE_CHAR_LEN - 1;
-	calc_pairs = len / FSLOG_KEYVAL_FMT_LEN;
-	if (num_pairs <= calc_pairs) {
-		calc_pairs = num_pairs;
-	} else {
-		err = E2BIG;
-	}
-
-	/* Append format strings [%s %s] for the key-value pairs in vargs */
-	len = MAX_FMT_LEN - FSLOG_NEWLINE_CHAR_LEN;
-	for (i = 0; i < calc_pairs; i++) {
-		(void) strlcat(fmt, FSLOG_KEYVAL_FMT, len);
-	}
-
-	/* Count number of variable arguments provided to this function 
-	 * and determine total number of key-value pairs.
-	 */
-	calc_pairs = 0;
-	va_start(ap, vargs);
-	ptr = va_arg(ap, char *);
-	while (ptr) {
-		calc_pairs++;
-		ptr = va_arg(ap, char *);
-	}
-	calc_pairs /= 2;
-	va_end(ap);
-
-	/* If user provided variable number of arguments, append them as
-	 * as real key-value "[k v]" into the format string.  If the format 
-	 * string is too small, ignore the key-value pair completely.
-	 */
-	if (calc_pairs) {
-		char *key, *val;
-		size_t pairlen;
-		int offset;
-
-		/* Calculate bytes available for key-value pairs after reserving 
-		 * bytes for newline character and NULL terminator
+		/*
+		 * Print into buffer large enough for "ThisIsAnApplicat(BC223DD7-B314-42E0-B6B0-C5D2E6638337)",
+		 * including space for escaping, and NUL byte included in sizeof(uuid_string_t).
 		 */
-		len = MAX_FMT_LEN - strlen(fmt) - FSLOG_NEWLINE_CHAR_LEN - 1;
-		offset = strlen(fmt);
 
-		va_start(ap, vargs);
-		for (i = 0; i < calc_pairs; i++) {
-			key = va_arg(ap, char *);
-			val = va_arg(ap, char *);
+		uuid_string_t uuidstr;
+		char c_name[2*MAXCOMLEN + 2 /* () */ + sizeof(uuid_string_t)];
+		char t_name[2*MAXCOMLEN + 2 /* () */ + sizeof(uuid_string_t)];
 
-			/* Calculate bytes required to store next key-value pair as
-			 * "[key val] " including space for '[', ']', and two spaces.
-			 */
-			pairlen = strlen(key) + strlen(val) + 4;
-			if (pairlen > len) {
-				err = E2BIG;
-				break;
-			} 
-
-			/* len + 1 because one byte has been set aside for NULL 
-			 * terminator in calculation of 'len' above
-			 */
-			snprintf((fmt + offset), len + 1, FSLOG_KEYVAL_FMT, key, val);
-			offset += pairlen;
-			len -= pairlen;
+		strlcpy(c_name, caller->p_comm, sizeof(c_name));
+		uuid_unparse_upper(caller->p_uuid, uuidstr);
+		strlcat(c_name, "(", sizeof(c_name));
+		strlcat(c_name, uuidstr, sizeof(c_name));
+		strlcat(c_name, ")", sizeof(c_name));
+		if (0 != escape_str(c_name, strlen(c_name), sizeof(c_name))) {
+			return;
 		}
-		va_end(ap);
+
+		strlcpy(t_name, target->p_comm, sizeof(t_name));
+		uuid_unparse_upper(target->p_uuid, uuidstr);
+		strlcat(t_name, "(", sizeof(t_name));
+		strlcat(t_name, uuidstr, sizeof(t_name));
+		strlcat(t_name, ")", sizeof(t_name));
+		if (0 != escape_str(t_name, strlen(t_name), sizeof(t_name))) {
+			return;
+		}
+#if DEBUG
+		printf("EXTMOD: %s(%d) -> %s(%d)\n",
+			   c_name,
+			   proc_pid(caller),
+			   t_name,
+			   proc_pid(target));
+#endif
+
+		kern_asl_msg(LOG_DEBUG, "messagetracer",
+							5,
+							"com.apple.message.domain", "com.apple.kernel.external_modification", /* 0 */
+							"com.apple.message.signature", c_name, /* 1 */
+							"com.apple.message.signature2", t_name, /* 2 */
+							"com.apple.message.result", "noop", /* 3 */
+							"com.apple.message.summarize", "YES", /* 4 */
+							NULL);
 	}
-
-	/* Append newline */
-	(void) strlcat(fmt, FSLOG_NEWLINE_CHAR, MAX_FMT_LEN);
-
-	/* Print the key-value pairs in ASL format */
-	vaddlog(fmt, vargs);
-
-	return err;
 }
 
 /* Log file system related error in key-value format identified by Apple 
@@ -248,8 +164,10 @@ unsigned long fslog_err(unsigned long msg_id, ... )
 	va_start(ap, msg_id);
 	if (msg_id == FSLOG_MSG_SINGLE) {
 		/* Single message, do not print message ID and message order */
-		(void) fslog_asl_msg(FSLOG_VAL_LEVEL, FSLOG_VAL_FACILITY, 
-				num_pairs, ap, NULL);
+		(void) kern_asl_msg_va(FSLOG_VAL_LEVEL, FSLOG_VAL_FACILITY, 
+		    num_pairs, ap,
+		    FSLOG_KEY_READ_UID, FSLOG_VAL_READ_UID,
+		    NULL);
 	} else {
 		if (msg_id == FSLOG_MSG_FIRST) {
 			/* First message, generate random message ID */
@@ -277,58 +195,14 @@ unsigned long fslog_err(unsigned long msg_id, ... )
 		}
 
 		snprintf(msg_id_str, sizeof(msg_id_str), "%lu", msg_id);
-		(void) fslog_asl_msg(FSLOG_VAL_LEVEL, FSLOG_VAL_FACILITY, 
-			 num_pairs, ap, 
-			 FSLOG_KEY_MSG_ID, msg_id_str, 
-			 FSLOG_KEY_MSG_ORDER, msg_order_ptr, NULL);
+		(void) kern_asl_msg_va(FSLOG_VAL_LEVEL, FSLOG_VAL_FACILITY, 
+		    num_pairs, ap,
+		    FSLOG_KEY_READ_UID, FSLOG_VAL_READ_UID,
+		    FSLOG_KEY_MSG_ID, msg_id_str, 
+		    FSLOG_KEY_MSG_ORDER, msg_order_ptr, NULL);
 	}
 	va_end(ap);
 	return msg_id;
-}
-
-/* Search if given string contains '[' and ']'.  If any, escape it by 
- * prefixing with a '\'.  If the length of the string is not big enough, 
- * no changes are done and error is returned.
- *
- * Parameters -
- * 	str - string that can contain '[' or ']', should be NULL terminated
- *	len - length, in bytes, of valid data, including NULL character.
- *	buflen - size of buffer that contains the string
- */
-static int escape_str(char *str, int len, int buflen)
-{
-	int count;
-	char *src, *dst;
-
-	/* Count number of characters to escape */
-	src = str;
-	count = 0;
-	do {
-		if ((*src == '[') || (*src == ']')) {
-			count++;
-		}
-	} while (*src++);
-
-	if (count) {
-		/* Check if the buffer has enough space to escape all characters */
-		if ((buflen - len) < count) {
-			return ENOSPC;	
-		}
-
-		src = str + len;
-		dst = src + count;
-		while (count) {
-			*dst-- = *src;
-			if ((*src == '[') || (*src == ']')) {
-				/* Last char copied needs to be escaped */
-				*dst-- = '\\';
-				count--;
-			}
-			src--;
-		}
-	}
-
-	return 0;
 }
 
 /* Log information about runtime file system corruption detected by
@@ -382,9 +256,9 @@ void fslog_io_error(const buf_t bp)
 
 	/* Determine type of IO operation */
 	if (buf_flags(bp) & B_READ) {
-		iotype = FSLOG_VAL_IOTYPE_READ;	
+		iotype = FSLOG_VAL_IOTYPE_READ;
 	} else {
-		iotype = FSLOG_VAL_IOTYPE_WRITE;	
+		iotype = FSLOG_VAL_IOTYPE_WRITE;
 	}
 
 	/* Convert physical block number to string */
@@ -459,72 +333,3 @@ out:
 	return;
 }
 
-static void
-_fslog_extmod_msgtracer_internal(int level, const char *facility, int num_pairs, ...)
-{
-	va_list ap;
-
-	va_start(ap, num_pairs);
-	(void) fslog_asl_msg(level, facility,
-				num_pairs, ap, NULL);
-	va_end(ap);
-}
-
-/* Log information about external modification of a process,
- * using MessageTracer formatting. Assumes that both the caller
- * and target are appropriately locked.
- * Currently prints following information - 
- * 	1. Caller process name (truncated to 16 characters)
- *	2. Caller process Mach-O UUID
- *  3. Target process name (truncated to 16 characters)
- *  4. Target process Mach-O UUID
- */
-void
-fslog_extmod_msgtracer(proc_t caller, proc_t target)
-{
-	if ((caller != PROC_NULL) && (target != PROC_NULL)) {
-
-		/*
-		 * Print into buffer large enough for "ThisIsAnApplicat(BC223DD7-B314-42E0-B6B0-C5D2E6638337)",
-		 * including space for escaping, and NUL byte included in sizeof(uuid_string_t).
-		 */
-
-		uuid_string_t uuidstr;
-		char c_name[2*MAXCOMLEN + 2 /* () */ + sizeof(uuid_string_t)];
-		char t_name[2*MAXCOMLEN + 2 /* () */ + sizeof(uuid_string_t)];
-
-		strlcpy(c_name, caller->p_comm, sizeof(c_name));
-		uuid_unparse_upper(caller->p_uuid, uuidstr);
-		strlcat(c_name, "(", sizeof(c_name));
-		strlcat(c_name, uuidstr, sizeof(c_name));
-		strlcat(c_name, ")", sizeof(c_name));
-		if (0 != escape_str(c_name, strlen(c_name), sizeof(c_name))) {
-			return;
-		}
-
-		strlcpy(t_name, target->p_comm, sizeof(t_name));
-		uuid_unparse_upper(target->p_uuid, uuidstr);
-		strlcat(t_name, "(", sizeof(t_name));
-		strlcat(t_name, uuidstr, sizeof(t_name));
-		strlcat(t_name, ")", sizeof(t_name));
-		if (0 != escape_str(t_name, strlen(t_name), sizeof(t_name))) {
-			return;
-		}
-
-#if DEBUG
-		printf("EXTMOD: %s(%d) -> %s(%d)\n",
-			   c_name,
-			   proc_pid(caller),
-			   t_name,
-			   proc_pid(target));
-#endif
-
-		_fslog_extmod_msgtracer_internal(LOG_DEBUG, "messagetracer",
-							4,
-							"com.apple.message.domain", "com.apple.kernel.external_modification", /* 0 */
-							"com.apple.message.signature", c_name, /* 1 */
-							"com.apple.message.signature2", t_name, /* 2 */
-							"com.apple.message.result", "noop", /* 3 */
-							NULL);
-	}
-}

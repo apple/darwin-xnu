@@ -82,7 +82,6 @@ options		TIMEZONE=0, PST=0
 
 options		QUOTA			# 				# <quota>
 options		INET			#				# <inet>
-options		ABSOLUTETIME_SCALAR_TYPE
 options		NEW_VM_CODE	#				# <newvm>
 options		OLD_VM_CODE	#				# <!newvm>
 options		HW_AST		# Hardware ast support		# <hw_ast>
@@ -106,11 +105,6 @@ options 	MACH_NP		# Mach IPC support		# <np>
 options		MACH_NBC	# No buffer cache		# <nbc>
 options		MACH_NET	# Fast network access		# <mach_net>
 options		MACH_XP		# external pager support	# <xp>
-options		NORMA_IPC	# NORMA IPC support		# <norma_ipc>
-options		NORMA_DEVICE	# NORMA unified device names	# <norma_device>
-options		NORMA_VM	# NORMA virtual memory support	# <norma_vm>
-options		NORMA_TASK	# NORMA task support		# <norma_task>
-options		NORMA_ETHER	# NORMA across ethernet		# <norma_ether>
 options		SIMPLE_CLOCK	# don't assume fixed tick	# <simple_clock>
 options		XPR_DEBUG	# kernel tracing		# <xpr_debug>
 options		KDEBUG		# kernel tracing		# <kdebug>
@@ -119,13 +113,8 @@ options		NO_KDEBUG       # no kernel tracing # <no_kdebug>
 options		DDM_DEBUG	# driverkit-style tracing	# <ddm_debug>
 options		MACH_OLD_VM_COPY # Old vm_copy technology	# <!newvm>
 options		NO_DIRECT_RPC	# for untyped mig servers	# 
-options		IPX		# ipx stack 			# <ipx>
-options		EON		# 				# <eon>
-options		ISO		# ISO stack			# <iso>
-options		LLC		# 802.2 support			# <llc>
 options		LOOP		# loopback support		# <loop>
 options		MROUTING	# multicast routing		# <mrouting>
-options		ROUTING		# routing			# <routing>
 options		VLAN		#				# <vlan>
 options		BOND		#				# <bond>
 options		PF		# Packet Filter			# <pf>
@@ -135,6 +124,7 @@ options		PKTSCHED_CBQ	# CBQ packet scheduler		# <pktsched_cbq>
 options		PKTSCHED_HFSC	# H-FSC packet scheduler	# <pktsched_hfsc>
 options		PKTSCHED_PRIQ	# PRIQ packet scheduler		# <pktsched_priq>
 options		PKTSCHED_FAIRQ	# FAIRQ packet scheduler	# <pktsched_fairq>
+options		MEASURE_BW	# interface bandwidth measurement # <measure_bw>
 options		CLASSQ_BLUE	# BLUE queueing algorithm	# <classq_blue>
 options		CLASSQ_RED	# RED queueing algorithm	# <classq_red>
 options		CLASSQ_RIO	# RIO queueing algorithm	# <classq_rio>
@@ -147,15 +137,17 @@ options		TRAFFIC_MGT	# traffic management support		# <traffic_mgt>
 options		IPFW2		# IP firewall (new version)	# <ipfw2>
 options		MULTICAST	# Internet Protocol Class-D	$
 options		TCPDEBUG	# TCP debug			# <tcpdebug>
-options		RANDOM_IP_ID	# random (not sequential) ip ids	# <randomipid>
 options		TCP_DROP_SYNFIN	# Drop TCP packets with SYN+FIN set	# <tcpdrop_synfin>
 options		ICMP_BANDLIM	# ICMP bandwidth limiting sysctl
 options		IFNET_INPUT_SANITY_CHK	# allow dlil/ifnet input sanity check # <ifnet_input_chk>
+options		MULTIPATH	# Multipath domain		# <multipath>
+options		MPTCP		# Multipath TCP			# <mptcp>
 options		SYSV_SEM	# SVID semaphores			# <sysv_sem>
 options		SYSV_MSG	# SVID messages				# <sysv_msg>
 options		SYSV_SHM	# SVID shared mem			# <sysv_shm>
 options		PSYNCH		# pthread synch				# <psynch>
 options		DEVELOPMENT	# dev kernel				# <development>
+options		FLOW_DIVERT								# <flow_divert>
 
 # secure_kernel - secure kernel from user programs
 options     SECURE_KERNEL       # <secure_kernel> 
@@ -165,15 +157,14 @@ options     OLD_SEMWAIT_SIGNAL  # old semwait_signal handler
 #
 #	4.4 general kernel 
 #
-options		SOCKETS		# socket support			# <inet, inet6, netat>
+options		SOCKETS		# socket support			# <inet, inet6>
 options 	DIAGNOSTIC	# diagnostics				# <diagnostic>
 options		CONFIG_DTRACE	# dtrace support			# <config_dtrace>
 options		GPROF		# build profiling			# <profile>
 options		SENDFILE	# sendfile					# <sendfile>
-options		NETWORKING	# networking layer			# <inet, inet6, netat>
+options		NETWORKING	# networking layer			# <inet, inet6>
 options		CONFIG_FSE	# file system events		# <config_fse>
 options		CONFIG_IMAGEBOOT	# local image boot	# <config_imageboot>
-options		CONFIG_SOWUPCALL	# SB_UPCALL on sowwakeup	# <config_sowupcall>
 options		CONFIG_MBUF_JUMBO	# jumbo cluster pool	# <config_mbuf_jumbo>
 options		CONFIG_FORCE_OUT_IFP	# Enable IP_FORCE_OUT_IFP # <config_force_out_ifp>
 options		CONFIG_IFEF_NOWINDOWSCALE # Scale TCP window per driver # <config_ifef_nowindowscale>
@@ -185,6 +176,7 @@ options		CONFIG_WORKQUEUE	# <config_workqueue>
 #
 options		FFS			# Fast Filesystem Support	# <ffs>
 options		HFS			# HFS/HFS+ support		# <hfs>
+options		MOCKFS			# Boot from an executable	# <mockfs>
 options		FIFO		# fifo support			# <fifo>
 options		FDESC		# fdesc_fs support		# <fdesc>
 options		DEVFS		# devfs support			# <devfs>
@@ -193,7 +185,7 @@ options		HFS_COMPRESSION	# hfs compression	# <hfs_compression>
 options		CONFIG_HFS_STD	# hfs standard support	# <config_hfs_std>
 options		CONFIG_HFS_TRIM	# hfs trims unused blocks	# <config_hfs_trim>
 options		CONFIG_HFS_MOUNT_UNMAP	#hfs trims blocks at mount	# <config_hfs_mount_unmap>
-
+options		CONFIG_HFS_DIRLINK		#allow directory hardlink creation # <config_hfs_dirlink>
 
 #
 #	file system features
@@ -201,10 +193,10 @@ options		CONFIG_HFS_MOUNT_UNMAP	#hfs trims blocks at mount	# <config_hfs_mount_u
 options		QUOTA		# file system quotas		# <quota>
 options		REV_ENDIAN_FS	# Reverse Endian FS		# <revfs>
 options		NAMEDSTREAMS	# named stream vnop support	# <namedstreams>
+options		CONFIG_APPLEDOUBLE # apple double support	# <config_appledouble>
 options		CONFIG_VOLFS	# volfs path support (legacy)	# <config_volfs>
 options		CONFIG_IMGSRC_ACCESS # source of imageboot dmg	# <config_imgsrc_access>
 options		CONFIG_TRIGGERS	# trigger vnodes		# <config_triggers>
-options		CONFIG_VFS_FUNNEL # thread unsafe vfs's	# <config_vfs_funnel>
 options		CONFIG_EXT_RESOLVER # e.g. memberd		# <config_ext_resolver>
 options		CONFIG_SEARCHFS	# searchfs syscall support	# <config_searchfs>
 
@@ -213,12 +205,6 @@ options		CONFIG_SEARCHFS	# searchfs syscall support	# <config_searchfs>
 #
 options		NFSCLIENT	# Be an NFS client		# <nfsclient>
 options		NFSSERVER	# Be an NFS server		# <nfsserver>
-
-#
-# AppleTalk Support
-#
-options		NETAT			# AppleTalk support				# <netat>
-#options		AURP_SUPPORT    # AppleTalk Update Routing      # <netat>
 
 #
 # Machine Independent Apple Features
@@ -231,15 +217,11 @@ options		OBJCTEST	# Objc internal test		# <objctest>
 options		KERNEL_STACK	# MI kernel stack support	# <kernstack>
 profile						# build a profiling kernel	# <profile>
 
-#
-#  Point-to-Point Protocol support
-#
-pseudo-device ppp 2						# <ppp>
-
 #       
 # IPv6 Support
 #       
 options         "INET6"         		# kernel IPv6 Support           # <inet6>
+options         IPV6SEND			# Secure Neighbor Discovery	# <ipv6send>
 options         IPSEC                  		# IP security            	# <ipsec>
 options         IPSEC_ESP              		# IP security            	# <ipsec>
 options         "IPV6FIREWALL"         		# IPv6 Firewall Feature   	# <ipv6firewall>
@@ -252,7 +234,6 @@ pseudo-device   stf 	1 		# <stf>
 
 options			crypto			# <ipsec,crypto>
 options			ALLCRYPTO		# <xlarge,large,medium>
-options			randomipid		# <inet,randomipid>
 
 options		ZLIB		# inflate/deflate support	# <zlib>
 
@@ -424,26 +405,9 @@ options   CONFIG_NO_KPRINTF_STRINGS		# <no_kprintf_str>
 #
 options   CONFIG_FINE_LOCK_GROUPS               # <medium,large,xlarge>
 
-#
-# configurable kernel - general switch to say we are building for an
-# embedded device
-#
-options   CONFIG_EMBEDDED			# <config_embedded>
-
-# only execute signed code. Hang this off config_embedded since there's
-# nothing more appropriate right now
-#
-options   CONFIG_ENFORCE_SIGNED_CODE		# <config_embedded>
-
 # support dynamic signing of code
 #
 options		CONFIG_DYNAMIC_CODE_SIGNING	# <dynamic_codesigning>
-
-#
-# code decryption... used on embedded for app protection
-# must be set in all the bsd/conf and osfmk/conf MASTER files
-#
-options		CONFIG_CODE_DECRYPTION	# <config_embedded>
 
 #
 # User Content Protection, used on embedded
@@ -474,13 +438,29 @@ options		CHECK_CS_VALIDATION_BITMAP			# <config_cs_validation_bitmap>
 options		VM_PRESSURE_EVENTS		# <vm_pressure_events>
 
 #
+# Enable inheritance of importance through specially marked mach ports and for file locks
+# For now debug is enabled wherever inheritance is
+#
+options		IMPORTANCE_INHERITANCE		# <importance_inheritance>
+options		IMPORTANCE_DEBUG		# <importance_inheritance>
+
+options		CONFIG_TELEMETRY			# <config_telemetry>
+
+options		CONFIG_PROC_UUID_POLICY		# <config_proc_uuid_policy>
+
+#
+# In-kernel tests
+#
+options 	CONFIG_IN_KERNEL_TESTS			# <in_kernel_tests>
+
+#
 #  Ethernet (ARP)
 #
-pseudo-device	ether			# <networking,inet,inet6,netat>
+pseudo-device	ether			# <networking,inet,inet6>
 #
 #  Network loopback device
 #
-pseudo-device	loop			# <networking,inet,inet6,netat>
+pseudo-device	loop			# <networking,inet,inet6>
 #
 #  UCB pseudo terminal service
 #
@@ -513,7 +493,7 @@ pseudo-device	mdevdevice	1	init	mdevinit
 #
 # packet filter device
 #
-pseudo-device	bpfilter	4	init	bpf_init		# <networking,inet,inet6,netat>
+pseudo-device	bpfilter	4	init	bpf_init		# <networking,inet,inet6>
 
 #
 # fsevents device

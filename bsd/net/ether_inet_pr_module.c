@@ -1,8 +1,8 @@
 /*
- * Copyright (c) 2000-2012 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2013 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
- * 
+ *
  * This file contains Original Code and/or Modifications of Original Code
  * as defined in and that are subject to the Apple Public Source License
  * Version 2.0 (the 'License'). You may not use this file except in
@@ -11,10 +11,10 @@
  * unlawful or unlicensed copies of an Apple operating system, or to
  * circumvent, violate, or enable the circumvention or violation of, any
  * terms of an Apple operating system software license agreement.
- * 
+ *
  * Please obtain a copy of the License at
  * http://www.opensource.apple.com/apsl/ and read it before using this file.
- * 
+ *
  * The Original Code and all software distributed under the License are
  * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
@@ -22,7 +22,7 @@
  * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
  * Please see the License for the specific language governing rights and
  * limitations under the License.
- * 
+ *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*
@@ -76,13 +76,13 @@
 #include <sys/sysctl.h>
 #include <kern/lock.h>
 
+#include <net/dlil.h>
 #include <net/if.h>
 #include <net/route.h>
 #include <net/if_llc.h>
 #include <net/if_dl.h>
 #include <net/if_types.h>
 #include <net/kpi_protocol.h>
-
 #include <netinet/in.h>
 #include <netinet/in_var.h>
 #include <netinet/if_ether.h>
@@ -268,7 +268,7 @@ ether_inet_pre_output(ifnet_t ifp, protocol_family_t protocol_family,
 		break;
 
 	default:
-		printf("%s%d: can't handle af%d\n", ifp->if_name, ifp->if_unit,
+		printf("%s: can't handle af%d\n", if_name(ifp),
 		    dst_netaddr->sa_family);
 
 		result = EAFNOSUPPORT;
@@ -351,14 +351,13 @@ ether_inet_prmod_ioctl(ifnet_t ifp, protocol_family_t protocol_family,
 		    kdp_get_interface() == ifp->if_softc) ||
 		    (kdp_get_interface() == 0 && ifp->if_unit == 0))
 			kdp_set_ip_and_mac_addresses(&(IA_SIN(ifa)->sin_addr),
-			    ifnet_lladdr(ifp));
+			    (struct ether_addr *)IF_LLADDR(ifp));
 		break;
 	}
 
 	case SIOCGIFADDR: {		/* struct ifreq */
 		struct ifreq *ifr = data;
-
-		ifnet_lladdr_copy_bytes(ifp, ifr->ifr_addr.sa_data,
+		ifnet_guarded_lladdr_copy_bytes(ifp, ifr->ifr_addr.sa_data,
 		    ETHER_ADDR_LEN);
 		break;
 	}
@@ -496,28 +495,38 @@ ether_inet_arp(ifnet_t ifp, u_short arpop, const struct sockaddr_dl *sender_hw,
 		bzero(ea->arp_tha, sizeof (ea->arp_tha));
 		bcopy(etherbroadcastaddr, eh->ether_dhost,
 		    sizeof (eh->ether_dhost));
+		m->m_flags |= M_BCAST;
 	} else {
 		bcopy(CONST_LLADDR(target_hw), ea->arp_tha,
 		    sizeof (ea->arp_tha));
 		bcopy(CONST_LLADDR(target_hw), eh->ether_dhost,
 		    sizeof (eh->ether_dhost));
+
+		if (bcmp(eh->ether_dhost, etherbroadcastaddr,
+		    ETHER_ADDR_LEN) == 0)
+			m->m_flags |= M_BCAST;
 	}
 
 	/* Target IP */
 	bcopy(&target_ip->sin_addr, ea->arp_tpa, sizeof (ea->arp_tpa));
 
 	/*
+	 * PKTF_{INET,INET6}_RESOLVE_RTR are mutually exclusive, so make
+	 * sure only one of them is set (just in case.)
+	 */
+	m->m_pkthdr.pkt_flags &= ~(PKTF_INET6_RESOLVE | PKTF_RESOLVE_RTR);
+	m->m_pkthdr.pkt_flags |= PKTF_INET_RESOLVE;
+	/*
 	 * If this is an ARP request for a (default) router, mark
 	 * the packet accordingly so that the driver can find out,
 	 * in case it needs to perform driver-specific action(s).
 	 */
-	if (arpop == ARPOP_REQUEST && (target_ip->sin_other & SIN_ROUTER)) {
-		m->m_pkthdr.aux_flags |= MAUXF_INET_RESOLVE_RTR;
-		VERIFY(!(m->m_pkthdr.aux_flags & MAUXF_INET6_RESOLVE_RTR));
-	}
+	if (arpop == ARPOP_REQUEST && (target_ip->sin_other & SIN_ROUTER))
+		m->m_pkthdr.pkt_flags |= PKTF_RESOLVE_RTR;
 
 	if (ifp->if_eflags & IFEF_TXSTART) {
-		/* Use control service class if the interface 
+		/*
+		 * Use control service class if the interface
 		 * supports transmit-start model
 		 */
 		(void) m_set_service_class(m, MBUF_SC_CTL);
@@ -558,8 +567,8 @@ ether_attach_inet(struct ifnet *ifp, protocol_family_t proto_family)
 
 	error = ifnet_attach_protocol_v2(ifp, proto_family, &proto);
 	if (error && error != EEXIST) {
-		printf("WARNING: %s can't attach ip to %s%d\n", __func__,
-		    ifp->if_name, ifp->if_unit);
+		printf("WARNING: %s can't attach ip to %s\n", __func__,
+		    if_name(ifp));
 	}
 	return (error);
 }

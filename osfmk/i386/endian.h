@@ -55,9 +55,7 @@ static __inline__
 unsigned short
 ntohs(unsigned short w_int)
 {
-	register unsigned short w = w_int;
-	__asm__ volatile("xchgb	%h1,%b1" : "=q" (w) : "0" (w));
-	return (w);	/* zero-extend for compat */
+	return ((w_int << 8) | (w_int >> 8));
 }
 #endif
 
@@ -72,9 +70,13 @@ static __inline__
 unsigned long
 ntohl(register unsigned long value)
 {
+#if defined(__clang__)
+	return (unsigned long)__builtin_bswap32((unsigned int)value);
+#else
 	register unsigned long l = value;
 	__asm__ volatile("bswap %0" : "=r" (l) : "0" (l));
 	return l;
+#endif
 }
 #endif
 

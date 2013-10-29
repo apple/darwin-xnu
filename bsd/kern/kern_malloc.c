@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2011 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2013 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -79,6 +79,7 @@
 #include <netinet/in_systm.h>
 #include <netinet/ip.h>
 #include <netinet/in_pcb.h>
+#include <netinet/flow_divert.h>
 
 #include <sys/event.h>
 #include <sys/eventvar.h>
@@ -112,7 +113,7 @@
 #include <kern/zalloc.h>
 #include <kern/kalloc.h>
 
-void kmeminit(void) __attribute__((section("__TEXT, initcode")));
+void kmeminit(void);
 
 /* Strings corresponding to types of memory.
  * Must be in synch with the #defines is sys/malloc.h 
@@ -162,7 +163,7 @@ const char *memname[] = {
 #else
 	"",				/* 27 M_DQUOT */ 
 #endif
-	"",				/* 28 M_UFSMNT */ 
+	"proc uuid policy",		/* 28 M_PROC_UUID_POLICY */ 
 #if (SYSV_SEM || SYSV_MSG || SYSV_SHM)
 	"shm",			/* 29 M_SHM */ 
 #else
@@ -234,8 +235,8 @@ const char *memname[] = {
 	"",				/* 76 M_HFSNODE */ 
 	"",				/* 77 M_HFSFORK */ 
 #endif
-	"ZFS mount", 	/* 78 M_ZFSFSMNT */ 
-	"ZFS node", 	/* 79 M_ZFSNODE */ 
+	"", 	/* 78 unused */
+	"", 	/* 79 unused */ 
 	"temp",			/* 80 M_TEMP */ 
 	"key mgmt",		/* 81 M_SECA */ 
 	"DEVFS",		/* 82 M_DEVFS */ 
@@ -273,11 +274,7 @@ const char *memname[] = {
 	"fileglob",		/* 99 M_FILEGLOB */ 
 	"kauth",		/* 100 M_KAUTH */ 
 	"dummynet",		/* 101 M_DUMMYNET */ 
-#if CONFIG_VFS_FUNNEL
-	"unsafe_fsnode",	/* 102 M_UNSAFEFS */ 
-#else
 	"",			/* 102 M_UNSAFEFS */ 
-#endif /* CONFIG_VFS_FUNNEL */
 	"macpipelabel", /* 103 M_MACPIPELABEL */
 	"mactemp",      /* 104 M_MACTEMP */
 	"sbuf",         /* 105 M_SBUF */
@@ -298,6 +295,14 @@ const char *memname[] = {
 	"in6mfilter", 	/* 112 M_IN6MFILTER */
 	"ip6mopts",	/* 113 M_IP6MOPTS */
 	"ip6msource",	/* 114 M_IP6MSOURCE */
+#if FLOW_DIVERT
+	"flow_divert_pcb",	/* 115 M_FLOW_DIVERT_PCB */
+	"flow_divert_group",	/* 116 M_FLOW_DIVERT_GROUP */
+#else
+	"",					/* 115 M_FLOW_DIVERT_PCB */
+	"",					/* 116 M_FLOW_DIVERT_GROUP */
+#endif
+	"ip6cga",	/* 117 M_IP6CGA */
 };
 
 /* for use with kmzones.kz_zalloczone */
@@ -352,7 +357,7 @@ struct kmzones {
 #else
 	{ 0,		KMZ_MALLOC, FALSE },		/* 27 M_DQUOT */
 #endif
-	{ 0,		KMZ_MALLOC, FALSE },		/* 28 M_UFSMNT */
+	{ 0,		KMZ_MALLOC, FALSE },		/* 28 M_PROC_UUID_POLICY */
 	{ 0,		KMZ_MALLOC, FALSE },		/* 29 M_SHM */
 	{ SOS(plimit),	KMZ_CREATEZONE, TRUE },		/* 30 M_PLIMIT */
 	{ SOS(sigacts),	KMZ_CREATEZONE_ACCT, TRUE },	/* 31 M_SIGACTS */
@@ -426,8 +431,8 @@ struct kmzones {
 	{ 0,		KMZ_MALLOC, FALSE },		/* 76 M_HFSNODE */
 	{ 0,		KMZ_MALLOC, FALSE },		/* 77 M_HFSFORK */
 #endif
-	{ 0,		KMZ_MALLOC, FALSE },		/* 78 M_ZFSMNT */
-	{ 0,		KMZ_MALLOC, FALSE },		/* 79 M_ZFSNODE */
+	{ 0,		KMZ_MALLOC, FALSE },		/* 78 unused */
+	{ 0,		KMZ_MALLOC, FALSE },		/* 79 unused */
 	{ 0,		KMZ_MALLOC, FALSE },		/* 80 M_TEMP */
 	{ 0,		KMZ_MALLOC, FALSE },		/* 81 M_SECA */
 	{ 0,		KMZ_MALLOC, FALSE },		/* 82 M_DEVFS */
@@ -459,11 +464,7 @@ struct kmzones {
 	{ SOS(fileglob),	KMZ_CREATEZONE, TRUE },	/* 99 M_FILEGLOB */
 	{ 0,		KMZ_MALLOC, FALSE },		/* 100 M_KAUTH */
 	{ 0,		KMZ_MALLOC, FALSE },		/* 101 M_DUMMYNET */
-#if CONFIG_VFS_FUNNEL
-	{ SOS(unsafe_fsnode),KMZ_CREATEZONE, TRUE },	/* 102 M_UNSAFEFS */
-#else 
 	{ 0,		KMZ_MALLOC, FALSE },		/* 102 M_UNSAFEFS */
-#endif /* CONFIG_VFS_FUNNEL */
 	{ 0,		KMZ_MALLOC, FALSE },		/* 103 M_MACPIPELABEL */
 	{ 0,		KMZ_MALLOC, FALSE },		/* 104 M_MACTEMP */
 	{ 0,		KMZ_MALLOC, FALSE },		/* 105 M_SBUF */
@@ -480,6 +481,14 @@ struct kmzones {
 	{ 0,		KMZ_MALLOC, FALSE },		/* 112 M_IN6MFILTER */
 	{ 0,		KMZ_MALLOC, FALSE },		/* 113 M_IP6MOPTS */
 	{ 0,		KMZ_MALLOC, FALSE },		/* 114 M_IP6MSOURCE */
+#if FLOW_DIVERT
+	{ SOS(flow_divert_pcb),		KMZ_CREATEZONE, TRUE },	/* 115 M_FLOW_DIVERT_PCB */
+	{ SOS(flow_divert_group),	KMZ_CREATEZONE, TRUE },	/* 116 M_FLOW_DIVERT_GROUP */
+#else
+	{ 0,		KMZ_MALLOC, FALSE },		/* 115 M_FLOW_DIVERT_PCB */
+	{ 0,		KMZ_MALLOC, FALSE },		/* 116 M_FLOW_DIVERT_GROUP */
+#endif	/* FLOW_DIVERT */
+	{ 0,		KMZ_MALLOC, FALSE },		/* 117 M_IP6CGA */
 #undef	SOS
 #undef	SOX
 };
@@ -552,7 +561,7 @@ _MALLOC(
 	int		type,
 	int		flags)
 {
-	struct _mhead	*hdr;
+	struct _mhead	*hdr = NULL;
 	size_t		memsize = sizeof (*hdr) + size;
 
 	if (type >= M_LAST)

@@ -210,7 +210,7 @@ and the reverse source route is used in responding.
 .Pp
 When a
 .Tn TCP
-socket is set non-blocking, and the connection cannot be established immediatly, 
+socket is set non-blocking, and the connection cannot be established immediately, 
 .Xr connect 2
 returns with the error
 .Dv EINPROGRESS ,
@@ -229,7 +229,7 @@ can be retrieved via the socket option
 .Dv SO_ERROR .
 .Pp
 Note that even if the socket is non-blocking, it is possible for the connection 
-to be established immediatly. In that case 
+to be established immediately. In that case 
 .Xr connect 2
 does not return with 
 .Dv EINPROGRESS .

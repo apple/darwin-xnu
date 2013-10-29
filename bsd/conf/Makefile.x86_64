@@ -6,9 +6,6 @@
 dis_tables.o_CFLAGS_ADD += -Wno-cast-qual
 fbt_x86.o_CFLAGS_ADD += -Wno-cast-qual
 
-# sha256 Files to build with -DSHA256_USE_ASSEMBLY=1
-sha2.o_CFLAGS_ADD += -DSHA256_USE_ASSEMBLY=1 
-
 # Inline assembly doesn't interact well with LTO
 fbt_x86.o_CFLAGS_ADD += $(CFLAGS_NOLTO_FLAG)
 # Taking the address of labels doesn't work with LTO (9524055)

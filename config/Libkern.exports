@@ -47,6 +47,7 @@ _SHA1Update
 _STRDUP
 __Z13OSUnserializePKcPP8OSString
 __Z16OSUnserializeXMLPKcPP8OSString
+__Z16OSUnserializeXMLPKcmPP8OSString
 __ZN10OSIterator10gMetaClassE
 __ZN10OSIterator10superClassE
 __ZN10OSIterator9MetaClassC1Ev

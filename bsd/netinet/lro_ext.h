@@ -35,6 +35,7 @@
 
 extern int sw_lro;
 extern int lrodebug;
+extern unsigned int coalesc_sz;
 
 /* flow return values */
 #define TCP_LRO_NAN		0x00	/* No flow exists */

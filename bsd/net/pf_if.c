@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2007-2011 Apple Inc. All rights reserved.
+ * Copyright (c) 2007-2013 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -230,14 +230,11 @@ void
 pfi_attach_ifnet(struct ifnet *ifp)
 {
 	struct pfi_kif *kif;
-	char if_name[IFNAMSIZ];
 
 	lck_mtx_assert(pf_lock, LCK_MTX_ASSERT_OWNED);
 
 	pfi_update++;
-	(void) snprintf(if_name, sizeof (if_name), "%s%d",
-	    ifp->if_name, ifp->if_unit);
-	if ((kif = pfi_kif_get(if_name)) == NULL)
+	if ((kif = pfi_kif_get(if_name(ifp))) == NULL)
 		panic("pfi_kif_get failed");
 
 	ifnet_lock_exclusive(ifp);

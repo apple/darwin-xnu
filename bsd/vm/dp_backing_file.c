@@ -77,6 +77,8 @@
 #include <security/mac_framework.h>
 #endif
 
+void kprintf(const char *fmt, ...);
+
 /*
  * temporary support for delayed instantiation
  * of default_pager
@@ -159,6 +161,7 @@ backing_store_suspend_return:
 }
 
 extern boolean_t backing_store_stop_compaction;
+extern boolean_t compressor_store_stop_compaction;
 
 /*
  *	Routine:	macx_backing_store_compaction
@@ -182,9 +185,15 @@ macx_backing_store_compaction(int flags)
 
 	if (flags & SWAP_COMPACT_DISABLE) {
 		backing_store_stop_compaction = TRUE;
+		compressor_store_stop_compaction = TRUE;
+
+		kprintf("backing_store_stop_compaction = TRUE\n");
 
 	} else if (flags & SWAP_COMPACT_ENABLE) {
 		backing_store_stop_compaction = FALSE;
+		compressor_store_stop_compaction = FALSE;
+
+		kprintf("backing_store_stop_compaction = FALSE\n");
 	}
 
 	return 0;
@@ -211,6 +220,33 @@ macx_triggers(
 
 
 extern boolean_t dp_isssd;
+extern void vm_swap_init(void);
+extern int vm_compressor_mode;
+
+/*
+ * In the compressed pager world, the swapfiles are created by the kernel.
+ * Well, all except the first one. That swapfile is absorbed by the kernel at
+ * the end of the macx_swapon function (if swap is enabled). That's why
+ * we allow the first invocation of macx_swapon to succeed.
+ *
+ * If the compressor pool is running low, the kernel messages the dynamic pager
+ * on the port it has registered with the kernel. That port can transport 1 of 2
+ * pieces of information to dynamic pager: create a swapfile or delete a swapfile.
+ *
+ * We choose to transmit the former. So, that message tells dynamic pager
+ * to create a swapfile and activate it by calling macx_swapon. 
+ *
+ * We deny this new macx_swapon request. That leads dynamic pager to interpret the
+ * failure as a serious error and notify all it's clients that swap is running low.
+ * That's how we get the loginwindow "Resume / Force Quit Applications" dialog to appear.
+ *
+ * NOTE: 
+ * If the kernel has already created multiple swapfiles by the time the compressor
+ * pool is running low (and it has to play this trick), dynamic pager won't be able to
+ * create a file in user-space and, that too will lead to a similar notification blast
+ * to all of it's clients. So, that behaves as desired too.
+ */
+boolean_t	macx_swapon_allowed = TRUE;
 
 /*
  *	Routine:	macx_swapon
@@ -235,6 +271,19 @@ macx_swapon(
 	struct proc		*p =  current_proc();
 	int			dp_cluster_size;
 
+	if (COMPRESSED_PAGER_IS_ACTIVE) {
+		if (macx_swapon_allowed == FALSE) {
+			return EINVAL;
+		} else {
+			if ((vm_compressor_mode == VM_PAGER_COMPRESSOR_WITH_SWAP) ||
+			    (vm_compressor_mode == VM_PAGER_FREEZER_COMPRESSOR_WITH_SWAP)) {
+				vm_swap_init();
+			}
+
+			macx_swapon_allowed = FALSE;
+			return 0;
+		}
+	}
 
 	AUDIT_MACH_SYSCALL_ENTER(AUE_SWAPON);
 	AUDIT_ARG(value32, args->priority);
@@ -319,9 +368,6 @@ macx_swapon(
 	   goto swapon_bailout;
 	}
 
-#if CONFIG_EMBEDDED
-	dp_cluster_size = 1 * PAGE_SIZE;
-#else
 	if ((dp_isssd = vnode_pager_isSSD(vp)) == TRUE) {
 		/*
 		 * keep the cluster size small since the
@@ -335,7 +381,6 @@ macx_swapon(
 		 */
 		dp_cluster_size = 0;
 	}
-#endif
 	kr = default_pager_backing_store_create(default_pager, 
 					-1, /* default priority */
 					dp_cluster_size,
@@ -423,7 +468,6 @@ macx_swapoff(
 	int			error;
 	boolean_t		funnel_state;
 	vfs_context_t ctx = vfs_context_current();
-	struct uthread	*ut;
 	int			orig_iopol_disk;
 
 	AUDIT_MACH_SYSCALL_ENTER(AUE_SWAPOFF);
@@ -470,14 +514,16 @@ macx_swapoff(
 	}
 	backing_store = (mach_port_t)bs_port_table[i].bs;
 
-	ut = get_bsdthread_info(current_thread());
+	orig_iopol_disk = proc_get_task_policy(current_task(), current_thread(),
+	                                       TASK_POLICY_INTERNAL, TASK_POLICY_IOPOL);
 
-	orig_iopol_disk = proc_get_thread_selfdiskacc();
-	proc_apply_thread_selfdiskacc(IOPOL_THROTTLE);
+	proc_set_task_policy(current_task(), current_thread(), TASK_POLICY_INTERNAL,
+	                     TASK_POLICY_IOPOL, IOPOL_THROTTLE);
 
 	kr = default_pager_backing_store_delete(backing_store);
 
-	proc_apply_thread_selfdiskacc(orig_iopol_disk);
+	proc_set_task_policy(current_task(), current_thread(), TASK_POLICY_INTERNAL,
+	                     TASK_POLICY_IOPOL, orig_iopol_disk);
 
 	switch (kr) {
 		case KERN_SUCCESS:
@@ -521,6 +567,11 @@ swapoff_bailout:
  *	Function:
  *		Syscall interface to get general swap statistics
  */
+extern uint64_t vm_swap_get_total_space(void);
+extern uint64_t vm_swap_get_used_space(void);
+extern uint64_t vm_swap_get_free_space(void);
+extern boolean_t vm_swap_up;
+
 int
 macx_swapinfo(
 	memory_object_size_t	*total_p,
@@ -534,53 +585,71 @@ macx_swapinfo(
 	kern_return_t		kr;
 
 	error = 0;
+	if (COMPRESSED_PAGER_IS_ACTIVE) {
 
-	/*
-	 * Get a handle on the default pager.
-	 */
-	default_pager = MEMORY_OBJECT_DEFAULT_NULL;
-	kr = host_default_memory_manager(host_priv_self(), &default_pager, 0);
-	if (kr != KERN_SUCCESS) {
-		error = EAGAIN;	/* XXX why EAGAIN ? */
-		goto done;
-	}
-	if (default_pager == MEMORY_OBJECT_DEFAULT_NULL) {
-		/*
-		 * The default pager has not initialized yet,
-		 * so it can't be using any swap space at all.
-		 */
-		*total_p = 0;
-		*avail_p = 0;
-		*pagesize_p = 0;
-		*encrypted_p = FALSE;
-		goto done;
-	}
-	
-	/*
-	 * Get swap usage data from default pager.
-	 */
-	kr = default_pager_info_64(default_pager, &dpi64);
-	if (kr != KERN_SUCCESS) {
-		error = ENOTSUP;
-		goto done;
-	}
+		if (vm_swap_up == TRUE) {
 
-	/*
-	 * Provide default pager info to caller.
-	 */
-	*total_p = dpi64.dpi_total_space;
-	*avail_p = dpi64.dpi_free_space;
-	*pagesize_p = dpi64.dpi_page_size;
-	if (dpi64.dpi_flags & DPI_ENCRYPTED) {
-		*encrypted_p = TRUE;
+			*total_p = vm_swap_get_total_space();
+			*avail_p = vm_swap_get_free_space();
+			*pagesize_p = PAGE_SIZE_64;
+			*encrypted_p = TRUE;
+
+		} else {
+
+			*total_p = 0;
+			*avail_p = 0;
+			*pagesize_p = 0;
+			*encrypted_p = FALSE;
+		}
 	} else {
-		*encrypted_p = FALSE;
-	}
+
+		/*
+		 * Get a handle on the default pager.
+		 */
+		default_pager = MEMORY_OBJECT_DEFAULT_NULL;
+		kr = host_default_memory_manager(host_priv_self(), &default_pager, 0);
+		if (kr != KERN_SUCCESS) {
+			error = EAGAIN;	/* XXX why EAGAIN ? */
+			goto done;
+		}
+		if (default_pager == MEMORY_OBJECT_DEFAULT_NULL) {
+			/*
+			 * The default pager has not initialized yet,
+			 * so it can't be using any swap space at all.
+			 */
+			*total_p = 0;
+			*avail_p = 0;
+			*pagesize_p = 0;
+			*encrypted_p = FALSE;
+			goto done;
+		}
+		
+		/*
+		 * Get swap usage data from default pager.
+		 */
+		kr = default_pager_info_64(default_pager, &dpi64);
+		if (kr != KERN_SUCCESS) {
+			error = ENOTSUP;
+			goto done;
+		}
+
+		/*
+		 * Provide default pager info to caller.
+		 */
+		*total_p = dpi64.dpi_total_space;
+		*avail_p = dpi64.dpi_free_space;
+		*pagesize_p = dpi64.dpi_page_size;
+		if (dpi64.dpi_flags & DPI_ENCRYPTED) {
+			*encrypted_p = TRUE;
+		} else {
+			*encrypted_p = FALSE;
+		}
 
 done:
-	if (default_pager != MEMORY_OBJECT_DEFAULT_NULL) {
-		/* release our handle on default pager */
-		memory_object_default_deallocate(default_pager);
+		if (default_pager != MEMORY_OBJECT_DEFAULT_NULL) {
+			/* release our handle on default pager */
+			memory_object_default_deallocate(default_pager);
+		}
 	}
 	return error;
 }

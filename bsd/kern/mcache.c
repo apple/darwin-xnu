@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2006-2011 Apple Inc. All rights reserved.
+ * Copyright (c) 2006-2013 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -72,7 +72,7 @@
 
 /* Allocate extra in case we need to manually align the pointer */
 #define	MCACHE_ALLOC_SIZE \
-	(sizeof (void *) + MCACHE_SIZE(ncpu) + CPU_CACHE_SIZE)
+	(sizeof (void *) + MCACHE_SIZE(ncpu) + CPU_CACHE_LINE_SIZE)
 
 #define	MCACHE_CPU(c) \
 	(mcache_cpu_t *)((void *)((char *)(c) + MCACHE_SIZE(cpu_number())))
@@ -99,6 +99,7 @@
 #define	MCACHE_LOCK_TRY(l)	lck_mtx_try_lock(l)
 
 static int ncpu;
+static unsigned int cache_line_size;
 static lck_mtx_t *mcache_llock;
 static struct thread *mcache_llock_owner;
 static lck_attr_t *mcache_llock_attr;
@@ -178,6 +179,7 @@ mcache_init(void)
 	char name[32];
 
 	ncpu = ml_get_max_cpus();
+	(void) mcache_cache_line_size();	/* prime it */
 
 	mcache_llock_grp_attr = lck_grp_attr_alloc_init();
 	mcache_llock_grp = lck_grp_alloc_init("mcache.list",
@@ -210,6 +212,9 @@ mcache_init(void)
 	mcache_reap_interval = 15 * hz;
 	mcache_applyall(mcache_cache_bkt_enable);
 	mcache_ready = 1;
+
+	printf("mcache: %d CPU(s), %d bytes CPU cache line size\n",
+	    ncpu, CPU_CACHE_LINE_SIZE);
 }
 
 /*
@@ -219,6 +224,20 @@ __private_extern__ unsigned int
 mcache_getflags(void)
 {
 	return (mcache_flags);
+}
+
+/*
+ * Return the CPU cache line size.
+ */
+__private_extern__ unsigned int
+mcache_cache_line_size(void)
+{
+	if (cache_line_size == 0) {
+		ml_cpu_info_t cpu_info;
+		ml_cpu_get_info(&cpu_info);
+		cache_line_size = cpu_info.cache_line_size;
+	}
+	return (cache_line_size);
 }
 
 /*
@@ -293,7 +312,7 @@ mcache_create_common(const char *name, size_t bufsize, size_t align,
 	 * is okay since we've allocated extra space for this.
 	 */
 	cp = (mcache_t *)
-	    P2ROUNDUP((intptr_t)buf + sizeof (void *), CPU_CACHE_SIZE);
+	    P2ROUNDUP((intptr_t)buf + sizeof (void *), CPU_CACHE_LINE_SIZE);
 	pbuf = (void **)((intptr_t)cp - sizeof (void *));
 	*pbuf = buf;
 
@@ -378,7 +397,7 @@ mcache_create_common(const char *name, size_t bufsize, size_t align,
 	for (c = 0; c < ncpu; c++) {
 		mcache_cpu_t *ccp = &cp->mc_cpu[c];
 
-		VERIFY(IS_P2ALIGNED(ccp, CPU_CACHE_SIZE));
+		VERIFY(IS_P2ALIGNED(ccp, CPU_CACHE_LINE_SIZE));
 		lck_mtx_init(&ccp->cc_lock, cp->mc_cpu_lock_grp,
 		    cp->mc_cpu_lock_attr);
 		ccp->cc_objs = -1;
@@ -1401,16 +1420,30 @@ mcache_dispatch(void (*func)(void *), void *arg)
 }
 
 __private_extern__ void
-mcache_buffer_log(mcache_audit_t *mca, void *addr, mcache_t *cp)
+mcache_buffer_log(mcache_audit_t *mca, void *addr, mcache_t *cp,
+    struct timeval *base_ts)
 {
+	struct timeval now, base = { 0, 0 };
+	void *stack[MCACHE_STACK_DEPTH + 1];
+
 	mca->mca_addr = addr;
 	mca->mca_cache = cp;
 	mca->mca_pthread = mca->mca_thread;
 	mca->mca_thread = current_thread();
 	bcopy(mca->mca_stack, mca->mca_pstack, sizeof (mca->mca_pstack));
 	mca->mca_pdepth = mca->mca_depth;
-	bzero(mca->mca_stack, sizeof (mca->mca_stack));
-	mca->mca_depth = OSBacktrace(mca->mca_stack, MCACHE_STACK_DEPTH);
+	bzero(stack, sizeof (stack));
+	mca->mca_depth = OSBacktrace(stack, MCACHE_STACK_DEPTH + 1) - 1;
+	bcopy(&stack[1], mca->mca_stack, sizeof (mca->mca_pstack));
+
+	mca->mca_ptstamp = mca->mca_tstamp;
+	microuptime(&now);
+	if (base_ts != NULL)
+		base = *base_ts;
+	/* tstamp is in ms relative to base_ts */
+	mca->mca_tstamp = ((now.tv_usec - base.tv_usec) / 1000);
+	if ((now.tv_sec - base.tv_sec) > 0)
+		mca->mca_tstamp += ((now.tv_sec - base.tv_sec) * 1000);
 }
 
 __private_extern__ void

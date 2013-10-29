@@ -1,8 +1,8 @@
 /*
- * Copyright (c) 1999-2012 Apple Inc. All rights reserved.
+ * Copyright (c) 1999-2013 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
- * 
+ *
  * This file contains Original Code and/or Modifications of Original Code
  * as defined in and that are subject to the Apple Public Source License
  * Version 2.0 (the 'License'). You may not use this file except in
@@ -11,10 +11,10 @@
  * unlawful or unlicensed copies of an Apple operating system, or to
  * circumvent, violate, or enable the circumvention or violation of, any
  * terms of an Apple operating system software license agreement.
- * 
+ *
  * Please obtain a copy of the License at
  * http://www.opensource.apple.com/apsl/ and read it before using this file.
- * 
+ *
  * The Original Code and all software distributed under the License are
  * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
@@ -22,11 +22,11 @@
  * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
  * Please see the License for the specific language governing rights and
  * limitations under the License.
- * 
+ *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 #ifndef DLIL_H
-#define DLIL_H
+#define	DLIL_H
 #ifdef KERNEL
 
 #include <sys/kernel_types.h>
@@ -55,9 +55,9 @@ enum {
  * variants.native_type_length.
  */
 /* Ethernet specific types */
-#define DLIL_DESC_ETYPE2	4
-#define DLIL_DESC_SAP		5
-#define DLIL_DESC_SNAP		6
+#define	DLIL_DESC_ETYPE2	4
+#define	DLIL_DESC_SAP		5
+#define	DLIL_DESC_SNAP		6
 
 #ifdef KERNEL_PRIVATE
 #include <net/if.h>
@@ -76,13 +76,13 @@ enum {
 
 #define	net_timercmp(tvp, uvp, cmp)					\
 	(((tvp)->tv_sec == (uvp)->tv_sec) ?				\
-	    ((tvp)->tv_nsec cmp (uvp)->tv_nsec) :			\
-	    ((tvp)->tv_sec cmp (uvp)->tv_sec))
+	((tvp)->tv_nsec cmp (uvp)->tv_nsec) :				\
+	((tvp)->tv_sec cmp (uvp)->tv_sec))
 
 #define	net_timeradd(tvp, uvp, vvp) do {				\
 	(vvp)->tv_sec = (tvp)->tv_sec + (uvp)->tv_sec;			\
 	(vvp)->tv_nsec = (tvp)->tv_nsec + (uvp)->tv_nsec;		\
-	if ((vvp)->tv_nsec >= NSEC_PER_SEC) {				\
+	if ((vvp)->tv_nsec >= (long)NSEC_PER_SEC) {			\
 		(vvp)->tv_sec++;					\
 		(vvp)->tv_nsec -= NSEC_PER_SEC;				\
 	}								\
@@ -100,7 +100,7 @@ enum {
 #define	net_timernsec(tvp, nsp) do {					\
 	*(nsp) = (tvp)->tv_nsec;					\
 	if ((tvp)->tv_sec > 0)						\
-		*(nsp) += ((tvp)->tv_sec * NSEC_PER_SEC);		\
+		*(nsp) += ((tvp)->tv_sec * (integer_t)NSEC_PER_SEC);		\
 } while (0)
 
 #define	net_nsectimer(nsp, tvp) do {					\
@@ -164,6 +164,8 @@ struct dlil_threading_info {
 #define	rxpoll_bmax	pstats.ifi_poll_bytes_max
 #define	rxpoll_blowat	pstats.ifi_poll_bytes_lowat
 #define	rxpoll_bhiwat	pstats.ifi_poll_bytes_hiwat
+#define	rxpoll_plim	pstats.ifi_poll_packets_limit
+#define	rxpoll_ival	pstats.ifi_poll_interval_time
 	struct pktcntr	sstats;		/* packets and bytes per sampling */
 	struct timespec	mode_holdtime;	/* mode holdtime in nsec */
 	struct timespec	mode_lasttime;	/* last mode change time in nsec */
@@ -196,7 +198,16 @@ struct dlil_main_threading_info {
 #define	DLIL_PROTO_WAITING	0x10000000
 #define	DLIL_INPUT_TERMINATE	0x08000000
 
-__private_extern__ struct dlil_threading_info *dlil_main_input_thread;
+/*
+ * Flags for dlil_attach_filter()
+ */
+#define DLIL_IFF_TSO            0x01    /* Interface filter supports TSO */
+
+extern int dlil_verbose;
+extern uint32_t hwcksum_dbg;
+extern uint32_t hwcksum_tx;
+extern uint32_t hwcksum_rx;
+extern struct dlil_threading_info *dlil_main_input_thread;
 
 extern void dlil_init(void);
 
@@ -212,15 +223,56 @@ extern errno_t dlil_send_arp_internal(ifnet_t, u_int16_t,
     const struct sockaddr_dl *, const struct sockaddr *);
 
 /*
- * The following flags used to check if a network thread already
- * owns the lock
+ * The following constants are used with the net_thread_mark_apply and
+ * net_thread_is_unmarked functions to control the bits in the uu_network_marks
+ * field of the uthread structure.
  */
 #define	NET_THREAD_HELD_PF	0x1	/* thread is holding PF lock */
-#define	NET_THREAD_HELD_DOMAIN	0x2     /* thread is holding domain_proto_mtx */
+#define	NET_THREAD_HELD_DOMAIN	0x2	/* thread is holding domain_proto_mtx */
+#define	NET_THREAD_CKREQ_LLADDR	0x4	/* thread reqs MACF check for LLADDR */
 
-extern errno_t net_thread_check_lock(u_int32_t);
-extern void net_thread_set_lock(u_int32_t);
-extern void net_thread_unset_lock(u_int32_t);
+/*
+ * net_thread_marks_t is a pointer to a phantom structure type used for
+ * manipulating the uthread:uu_network_marks field.  As an example...
+ *
+ *   static const u_int32_t bits = NET_THREAD_CKREQ_LLADDR;
+ *   struct uthread *uth = get_bsdthread_info(current_thread());
+ *
+ *   net_thread_marks_t marks = net_thread_marks_push(bits);
+ *   VERIFY((uth->uu_network_marks & NET_THREAD_CKREQ_LLADDR) != 0);
+ *   net_thread_marks_pop(marks);
+ *
+ * The net_thread_marks_push() function returns an encoding of the bits
+ * that were changed from zero to one in the uu_network_marks field. When
+ * the net_thread_marks_pop() function later processes that value, it
+ * resets the bits to their previous value.
+ *
+ * The net_thread_unmarks_push() and net_thread_unmarks_pop() functions
+ * are similar to net_thread_marks_push() and net_thread_marks_pop() except
+ * they clear the marks bits in the guarded section rather than set them.
+ *
+ * The net_thread_is_marked() and net_thread_is_unmarked() functions return
+ * the subset of the bits that are currently set or cleared (respectively)
+ * in the uthread:uu_network_marks field.
+ *
+ * Finally, the value of the net_thread_marks_none constant is provided for
+ * comparing for equality with the value returned when no bits in the marks
+ * field are changed by the push.
+ *
+ * It is not significant that a value of type net_thread_marks_t may
+ * compare as equal to the NULL pointer.
+ */
+struct net_thread_marks;
+typedef const struct net_thread_marks *net_thread_marks_t;
+
+extern const net_thread_marks_t net_thread_marks_none;
+
+extern net_thread_marks_t net_thread_marks_push(u_int32_t);
+extern net_thread_marks_t net_thread_unmarks_push(u_int32_t);
+extern void net_thread_marks_pop(net_thread_marks_t);
+extern void net_thread_unmarks_pop(net_thread_marks_t);
+extern u_int32_t net_thread_is_marked(u_int32_t);
+extern u_int32_t net_thread_is_unmarked(u_int32_t);
 
 extern int dlil_output(ifnet_t, protocol_family_t, mbuf_t, void *,
     const struct sockaddr *, int, struct flowadv *);
@@ -237,7 +289,7 @@ extern errno_t dlil_send_arp(ifnet_t, u_int16_t, const struct sockaddr_dl *,
     const struct sockaddr *, u_int32_t);
 
 extern int dlil_attach_filter(ifnet_t, const struct iff_filter *,
-    interface_filter_t *);
+    interface_filter_t *, u_int32_t);
 extern void dlil_detach_filter(interface_filter_t);
 
 extern void dlil_proto_unplumb_all(ifnet_t);
@@ -265,6 +317,23 @@ extern errno_t dlil_if_free(struct ifnet *);
 extern void dlil_node_present(struct ifnet *, struct sockaddr *, int32_t, int,
     int, u_int8_t[48]);
 extern void dlil_node_absent(struct ifnet *, struct sockaddr *);
+
+extern const void *dlil_ifaddr_bytes(const struct sockaddr_dl *, size_t *,
+    kauth_cred_t *);
+
+extern void dlil_report_issues(struct ifnet *, u_int8_t[DLIL_MODIDLEN],
+    u_int8_t[DLIL_MODARGLEN]);
+
+#define PROTO_HASH_SLOTS	4
+
+extern int proto_hash_value(u_int32_t);
+
+extern const char *dlil_kev_dl_code_str(u_int32_t);
+
+extern errno_t dlil_rxpoll_set_params(struct ifnet *,
+    struct ifnet_poll_params *, boolean_t);
+extern errno_t dlil_rxpoll_get_params(struct ifnet *,
+    struct ifnet_poll_params *);
 
 #endif /* BSD_KERNEL_PRIVATE */
 #endif /* KERNEL_PRIVATE */

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2004-2010 Apple Inc. All rights reserved.
+ * Copyright (c) 2004-2012 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -56,21 +56,27 @@
 
 
 #ifdef KERNEL
+
+#ifdef KERNEL_PRIVATE
+#define XATTR_VNODE_SUPPORTED(vp) \
+	((vp)->v_type == VREG || (vp)->v_type == VDIR || (vp)->v_type == VLNK || (vp)->v_type == VSOCK || (vp)->v_type == VFIFO)
+#endif
+
 __BEGIN_DECLS
 int  xattr_protected(const char *);
 int  xattr_validatename(const char *);
 
 /* Maximum extended attribute size supported by VFS */
-#define XATTR_MAXSIZE		(64 * 1024 * 1024)
+#define XATTR_MAXSIZE		INT32_MAX 
 
 #ifdef PRIVATE
 /* Maximum extended attribute size in an Apple Double file */	
-#define AD_XATTR_MAXSIZE 	(128 * 1024)  
+#define AD_XATTR_MAXSIZE 	XATTR_MAXSIZE
 
 /* Number of bits used to represent the maximum size of 
  * extended attribute stored in an Apple Double file.
  */
-#define AD_XATTR_SIZE_BITS	18
+#define AD_XATTR_SIZE_BITS	31
 #endif /* PRIVATE */
 
 __END_DECLS

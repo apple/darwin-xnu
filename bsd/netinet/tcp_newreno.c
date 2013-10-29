@@ -199,7 +199,7 @@ tcp_newreno_cwnd_init_or_reset(struct tcpcb *tp) {
 void
 tcp_newreno_inseq_ack_rcvd(struct tcpcb *tp, struct tcphdr *th) {
 	int acked = 0;
-	acked = th->th_ack - tp->snd_una;
+	acked = BYTES_ACKED(th, tp);
 	/*
 	 * Grow the congestion window, if the
 	 * connection is cwnd bound.
@@ -233,7 +233,7 @@ tcp_newreno_ack_rcvd(struct tcpcb *tp, struct tcphdr *th) {
 	register u_int incr = tp->t_maxseg;
 	int acked = 0;
 
-	acked = th->th_ack - tp->snd_una;
+	acked = BYTES_ACKED(th, tp);
 	if (tcp_do_rfc3465) {
 
 		if (cw >= tp->snd_ssthresh) {
@@ -302,9 +302,13 @@ tcp_newreno_post_fr(struct tcpcb *tp, struct tcphdr *th) {
 	 * snd_ssthresh outstanding data.  But in case we
 	 * would be inclined to send a burst, better to do
 	 * it via the slow start mechanism.
+	 *
+	 * If the flight size is zero, then make congestion 
+	 * window to be worth at least 2 segments to avoid 
+	 * delayed acknowledgement (draft-ietf-tcpm-rfc3782-bis-05).
 	 */
 	if (ss < (int32_t)tp->snd_ssthresh)
-		tp->snd_cwnd = ss + tp->t_maxseg;
+		tp->snd_cwnd = max(ss, tp->t_maxseg) + tp->t_maxseg;
 	else
 		tp->snd_cwnd = tp->snd_ssthresh;
 	tp->t_bytes_acked = 0;
@@ -343,11 +347,9 @@ tcp_newreno_after_timeout(struct tcpcb *tp) {
 		u_int win = min(tp->snd_wnd, tp->snd_cwnd) / 2 / tp->t_maxseg;
 		if (win < 2)
 			win = 2;
-		tp->snd_cwnd = tp->t_maxseg;
 		tp->snd_ssthresh = win * tp->t_maxseg;
-		tp->t_bytes_acked = 0;
-		tp->t_dupacks = 0;
 
+		tp->snd_cwnd = tp->t_maxseg;
 		tcp_cc_resize_sndbuf(tp);
 	}
 }
@@ -373,6 +375,12 @@ tcp_newreno_after_timeout(struct tcpcb *tp) {
 
 int
 tcp_newreno_delay_ack(struct tcpcb *tp, struct tcphdr *th) {
+	/* If any flags other than TH_ACK is set, set "end-of-write" bit */
+	if ((th->th_flags & ~TH_ACK))
+		tp->t_flagsext |= TF_STREAMEOW;
+	else
+		tp->t_flagsext &= ~(TF_STREAMEOW);
+
 	switch (tcp_delack_enabled) {
 	case 1:
 	case 2:

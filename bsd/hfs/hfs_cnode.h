@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2002-2008 Apple Inc. All rights reserved.
+ * Copyright (c) 2002-2012 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -233,6 +233,12 @@ typedef struct cnode cnode_t;
 #define C_BACKINGSTORE		0x40000 /* cnode is a backing store for an existing or currently-mounting filesystem */
 #define C_SWAPINPROGRESS   	0x80000	/* cnode's data is about to be swapped.  Issue synchronous cluster io */
 
+/* 
+ * For C_SSD_GREEDY_MODE: SSDs may want to write the file payload data using the greedy mode knowing
+ * that the content needs to be written out to the disk quicker than normal at the expense of storage efficiency.
+ * This is purely advisory at the HFS level, and is not maintained after the cnode goes out of core.
+ */
+#define C_SSD_GREEDY_MODE      0x100000  /* Assume future writes are recommended to be written in SLC mode */
 
 #define ZFTIMELIMIT	(5 * 60)
 
@@ -335,6 +341,11 @@ extern void hfs_touchtimes(struct hfsmount *, struct cnode *);
 extern void hfs_write_dateadded (struct cat_attr *cattrp, u_int32_t dateadded);
 extern u_int32_t hfs_get_dateadded (struct cnode *cp); 
 
+/* Gen counter methods */
+extern void hfs_write_gencount(struct cat_attr *cattrp, uint32_t gencount);
+extern uint32_t hfs_get_gencount(struct cnode *cp);
+extern uint32_t hfs_incr_gencount (struct cnode *cp);
+
 /* Zero-fill file and push regions out to disk */
 extern int  hfs_filedone(struct vnode *vp, vfs_context_t context);
 
@@ -367,6 +378,9 @@ extern int hfs_chash_set_childlinkbit(struct hfsmount *hfsmp, cnid_t cnid);
  *  HFS Locking Order:
  *
  *  1. cnode truncate lock (if needed)
+ *     hfs_vnop_pagein/out can skip grabbing of this lock by flag option by 
+ *     HFS_LOCK_SKIP_IF_EXCLUSIVE if the truncate lock is already held exclusive 
+ *     by current thread from an earlier vnop.
  *  2. cnode lock (in parent-child order if related, otherwise by address order)
  *  3. journal (if needed)
  *  4. system files (as needed)
@@ -380,22 +394,33 @@ extern int hfs_chash_set_childlinkbit(struct hfsmount *hfsmp, cnid_t cnid);
  *
  * I. HFS cnode hash lock (must not acquire any new locks while holding this lock, always taken last)
  */
-enum hfslocktype  {HFS_SHARED_LOCK = 1, HFS_EXCLUSIVE_LOCK = 2, HFS_FORCE_LOCK = 3, HFS_RECURSE_TRUNCLOCK = 4};
+
+
+enum hfs_locktype {
+	HFS_SHARED_LOCK = 1, 
+	HFS_EXCLUSIVE_LOCK = 2
+};
+
+/* Option flags for cnode and truncate lock functions */
+enum hfs_lockflags {
+	HFS_LOCK_DEFAULT           = 0x0,    /* Default flag, no options provided */
+	HFS_LOCK_ALLOW_NOEXISTS    = 0x1,    /* Allow locking of all cnodes, including cnode marked deleted with no catalog entry */
+	HFS_LOCK_SKIP_IF_EXCLUSIVE = 0x2     /* Skip locking if the current thread already holds the lock exclusive */
+};
 #define HFS_SHARED_OWNER  (void *)0xffffffff
 
-int hfs_lock(struct cnode *, enum hfslocktype);
-int hfs_lockpair(struct cnode *, struct cnode *, enum hfslocktype);
+int hfs_lock(struct cnode *, enum hfs_locktype, enum hfs_lockflags);
+int hfs_lockpair(struct cnode *, struct cnode *, enum hfs_locktype);
 int hfs_lockfour(struct cnode *, struct cnode *, struct cnode *, struct cnode *,
-                        enum hfslocktype, struct cnode **);
+                        enum hfs_locktype, struct cnode **);
 
 void hfs_unlock(struct cnode *);
 void hfs_unlockpair(struct cnode *, struct cnode *);
 void hfs_unlockfour(struct cnode *, struct cnode *, struct cnode *, struct cnode *);
 
-void hfs_lock_truncate(struct cnode *, enum hfslocktype);
-void hfs_unlock_truncate(struct cnode *, int been_recursed);
-
-int hfs_try_trunclock(struct cnode *, enum hfslocktype);
+void hfs_lock_truncate(struct cnode *, enum hfs_locktype, enum hfs_lockflags);
+void hfs_unlock_truncate(struct cnode *, enum hfs_lockflags);
+int hfs_try_trunclock(struct cnode *, enum hfs_locktype, enum hfs_lockflags);
 
 #endif /* __APPLE_API_PRIVATE */
 #endif /* KERNEL */

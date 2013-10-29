@@ -34,6 +34,16 @@
 #include <mach/mach_types.h>
 #include <kern/thread_call.h>
 
+/* Unslide the provided pointer if it's a kernel address. */
+static inline uint64_t
+chudxnu_vm_unslide( uint64_t ptr, int kaddr )
+{
+	if( !kaddr )
+		return ptr;
+
+	return VM_KERNEL_UNSLIDE(ptr);
+}
+
 #if 0
 #pragma mark **** version ****
 #endif
@@ -73,6 +83,7 @@ extern kern_return_t chudxnu_thread_get_state(thread_t thread, thread_flavor_t f
 extern kern_return_t chudxnu_thread_set_state(thread_t thread, thread_flavor_t flavor, thread_state_t tstate, mach_msg_type_number_t count, boolean_t user_only);
 
 extern kern_return_t chudxnu_thread_get_callstack64(thread_t thread, uint64_t *callStack, mach_msg_type_number_t *count, boolean_t user_only);
+extern kern_return_t chudxnu_thread_get_callstack64_kperf(thread_t thread, uint64_t *callStack, mach_msg_type_number_t *count, boolean_t user_only);
 
 extern kern_return_t chudxnu_all_tasks(task_array_t *task_list, mach_msg_type_number_t *count);
 extern kern_return_t chudxnu_free_task_list(task_array_t *task_list, mach_msg_type_number_t	*count);

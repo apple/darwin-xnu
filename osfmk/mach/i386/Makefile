@@ -6,7 +6,7 @@ export MakeInc_dir=${SRCROOT}/makedefs/MakeInc.dir
 include $(MakeInc_cmd)
 include $(MakeInc_def)
 
-VPATH+=$(SOURCE)/../../i386:
+VPATH := $(VPATH):$(SOURCE)/../../i386
 
 DATAFILES = \
 	boolean.h exception.h fp_reg.h \

@@ -127,7 +127,6 @@ ENTRY(rdmsr_carefully)
 rdmsr_fail:
 	movq	$1, %rax
 	ret
-
 /*
  * int rdmsr64_carefully(uint32_t msr, uint64_t *val);
  */
@@ -216,6 +215,54 @@ Entry(pmap_safe_read)
 _pmap_safe_read_fail:
 	xor	%eax, %eax
 	ret
+
+/*
+ * 2-byte copy used by ml_copy_phys().
+ * rdi:	source address
+ * rsi:	destination address
+ */
+Entry(_bcopy2)
+	RECOVERY_SECTION
+	RECOVER(_bcopy_fail)
+	movw	(%rdi), %cx
+	RECOVERY_SECTION
+	RECOVER(_bcopy_fail)
+	movw	%cx, (%rsi)
+
+	xorl	%eax,%eax		/* return 0 for success */
+	ret				/* and return */
+
+/*
+ * 4-byte copy used by ml_copy_phys().
+ * rdi:	source address
+ * rsi:	destination address
+ */
+Entry(_bcopy4)
+	RECOVERY_SECTION
+	RECOVER(_bcopy_fail)
+	movl	(%rdi), %ecx
+	RECOVERY_SECTION
+	RECOVER(_bcopy_fail)
+	mov	%ecx, (%rsi)
+
+	xorl	%eax,%eax		/* return 0 for success */
+	ret				/* and return */
+
+/*
+ * 8-byte copy used by ml_copy_phys().
+ * rdi:	source address
+ * rsi:	destination address
+ */
+Entry(_bcopy8)
+	RECOVERY_SECTION
+	RECOVER(_bcopy_fail)
+	movq	(%rdi), %rcx
+	RECOVERY_SECTION
+	RECOVER(_bcopy_fail)
+	mov	%rcx, (%rsi)
+
+	xorl	%eax,%eax		/* return 0 for success */
+	ret				/* and return */
 
 
 	

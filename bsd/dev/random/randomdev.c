@@ -67,6 +67,9 @@
 
 d_ioctl_t       random_ioctl;
 
+/* To generate the seed for the RNG */
+extern uint64_t early_random();
+
 /*
  * A struct describing which functions will get invoked for certain
  * actions.
@@ -340,21 +343,14 @@ PreliminarySetup(void)
 	/* clear the error flag, reads and write should then work */
     gRandomError = 0;
 
-    struct timeval tt;
+    uint64_t tt;
     char buffer [16];
 
     /* get a little non-deterministic data as an initial seed. */
 	/* On OSX, securityd will add much more entropy as soon as it */
 	/* comes up.  On iOS, entropy is added with each system interrupt. */
-    microtime(&tt);
+    tt = early_random();
 
-    /*
-	 * So how much of the system clock is entropic?
-	 * It's hard to say, but assume that at least the
-	 * least significant byte of a 64 bit structure
-	 * is entropic.  It's probably more, how can you figure
-	 * the exact time the user turned the computer on, for example.
-    */
     perr = prngInput(gPrngRef, (BYTE*) &tt, sizeof (tt), SYSTEM_SOURCE, 8);
     if (perr != 0) {
         /* an error, complain */
@@ -544,51 +540,6 @@ error_exit: /* do this to make sure the mutex unlocks. */
     return (retCode);
 }
 
-/*
- * return data to the caller.  Results unpredictable.
- */ 
-int
-random_read(__unused dev_t dev, struct uio *uio, __unused int ioflag)
-{
-    int retCode = 0;
-	
-    if (gRandomError != 0)
-        return (ENOTSUP);
-
-   /* lock down the mutex */
-    lck_mtx_lock(gYarrowMutex);
-
-
-	int bytes_remaining = uio_resid(uio);
-    while (bytes_remaining > 0 && retCode == 0) {
-        /* get the user's data */
-		int bytes_to_read = 0;
-		
-		int bytes_available = kBlockSize - g_bytes_used;
-        if (bytes_available == 0)
-		{
-			random_block(g_random_data, TRUE);
-			g_bytes_used = 0;
-			bytes_available = kBlockSize;
-		}
-		
-		bytes_to_read = min (bytes_remaining, bytes_available);
-		
-        retCode = uiomove(((caddr_t)g_random_data)+ g_bytes_used, bytes_to_read, uio);
-        g_bytes_used += bytes_to_read;
-
-        if (retCode != 0)
-            goto error_exit;
-		
-		bytes_remaining = uio_resid(uio);
-    }
-    
-    retCode = 0;
-    
-error_exit:
-    lck_mtx_unlock(gYarrowMutex);
-    return retCode;
-}
 
 /* export good random numbers to the rest of the kernel */
 void
@@ -599,6 +550,8 @@ read_random(void* buffer, u_int numbytes)
     }
     
     lck_mtx_lock(gYarrowMutex);
+
+
 	int bytes_read = 0;
 
 	int bytes_remaining = numbytes;
@@ -620,6 +573,36 @@ read_random(void* buffer, u_int numbytes)
     lck_mtx_unlock(gYarrowMutex);
 }
 
+/*
+ * return data to the caller.  Results unpredictable.
+ */ 
+int
+random_read(__unused dev_t dev, struct uio *uio, __unused int ioflag)
+{
+    int retCode = 0;
+	
+    if (gRandomError != 0)
+        return (ENOTSUP);
+
+    char buffer[64];
+
+	user_ssize_t bytes_remaining = uio_resid(uio);
+    while (bytes_remaining > 0 && retCode == 0) {
+		user_ssize_t bytesToRead = min(sizeof(buffer), bytes_remaining);
+        read_random(buffer, bytesToRead);
+        retCode = uiomove(buffer, bytesToRead, uio);
+
+        if (retCode != 0)
+            goto error_exit;
+		
+		bytes_remaining = uio_resid(uio);
+    }
+    
+    retCode = 0;
+    
+error_exit:
+    return retCode;
+}
 /*
  * Return an u_int32_t pseudo-random number.
  */

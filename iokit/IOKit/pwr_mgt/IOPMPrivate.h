@@ -78,7 +78,7 @@
  * @abstract Potential system events logged in the system event record.
  */
 enum {
-	kIOPMEventTypeUndefined                     = 0,
+    kIOPMEventTypeUndefined                     = 0,
 
     /* Event types mark driver events 
      */
@@ -92,18 +92,18 @@ enum {
     /* Start and stop event types bracket major
      * system power management events.
      */
-	kIOPMEventTypeSleep                         = 2001,
-	kIOPMEventTypeSleepDone                     = 2002,
-	kIOPMEventTypeWake                          = 3001,
-	kIOPMEventTypeWakeDone                      = 3002,
-	kIOPMEventTypeDoze                          = 4001,
-	kIOPMEventTypeDozeDone                      = 4002,
-	kIOPMEventTypeLiteWakeUp                    = 5001,
-	kIOPMEventTypeLiteWakeUpDone                = 5002,
-	kIOPMEventTypeLiteWakeDown                  = 5003,
-	kIOPMEventTypeLiteWakeDownDone              = 5004,
-	kIOPMEventTypeUUIDSet                       = 6001,
-	kIOPMEventTypeUUIDClear                     = 6002,
+    kIOPMEventTypeSleep                         = 2001,
+    kIOPMEventTypeSleepDone                     = 2002,
+    kIOPMEventTypeWake                          = 3001,
+    kIOPMEventTypeWakeDone                      = 3002,
+    kIOPMEventTypeDoze                          = 4001,
+    kIOPMEventTypeDozeDone                      = 4002,
+    kIOPMEventTypeLiteWakeUp                    = 5001,
+    kIOPMEventTypeLiteWakeUpDone                = 5002,
+    kIOPMEventTypeLiteWakeDown                  = 5003,
+    kIOPMEventTypeLiteWakeDownDone              = 5004,
+    kIOPMEventTypeUUIDSet                       = 6001,
+    kIOPMEventTypeUUIDClear                     = 6002,
 
     /* Intermediate events that may only occur within the bounds
      * of a major system event (between the event's initiation and its "done event".)
@@ -118,8 +118,28 @@ enum {
     kIOPMEventTypeCalTimeChange                 = 503 | kIOPMEventTypeIntermediateFlag
 };
 
+/*****************************************************************************
+ *
+ * Private Root Domain general interest messages
+ *
+ * Check IOPM.h when adding new messages to avoid conflict.
+ *
+ *****************************************************************************/
 
-/* @enum SystemSleepReasons 
+/* kIOPMMessageUserIsActiveChanged 
+ * User became active or inactive. Message sent after the kIOPMUserIsActiveKey
+ * property was updated with a new value.
+ */ 
+#define kIOPMMessageUserIsActiveChanged \
+                iokit_family_msg(sub_iokit_powermanagement, 0x400)
+
+/*
+ * Private IOMessage notifications shared between kernel and userspace PM policy
+ */
+#define kIOPMMessageLastCallBeforeSleep \
+                iokit_family_msg(sub_iokit_powermanagement, 0x410)
+
+/* @enum SystemSleepReasons
  * @abstract The potential causes for system sleep as logged in the system event record.
  */
 enum {
@@ -349,6 +369,7 @@ enum {
 #define kIOPMStatsTimeMSKey                     "TimeMS"
 #define kIOPMStatsApplicationResponseTypeKey    "ResponseType"
 #define kIOPMStatsMessageTypeKey                "MessageType"
+#define kIOPMStatsPowerCapabilityKey            "PowerCaps"
  
 // PM Statistics: potential values for the key kIOPMStatsApplicationResponseTypeKey
 // entry in the application results array.
@@ -619,6 +640,8 @@ enum {
 #define kIOPMSleepWakeFailureLoginKey       "LWFailurePhase"
 #define kIOPMSleepWakeFailureUUIDKey        "UUID"
 #define kIOPMSleepWakeFailureDateKey        "Date"
+#define kIOPMSleepWakeWdogRebootKey         "SWWdogTriggeredRestart"
+#define kIOPMSleepWakeWdogLogsValidKey      "SWWdogLogsValid"
 
 /*****************************************************************************
  *
@@ -665,6 +688,19 @@ enum {
  * Key will always refer to a value of kOSBooleanTrue.
  */
 #define kIOPMDeepIdleSupportedKey           "IOPMDeepIdleSupported"
+
+/* kIOPMUserTriggeredFullWakeKey
+ * Key refers to a boolean value that indicates if the first full wake since
+ * last system sleep was triggered by the local user. This property is set
+ * before the initial full wake transition, and removed after powering down
+ * drivers for system sleep.
+ */
+#define kIOPMUserTriggeredFullWakeKey       "IOPMUserTriggeredFullWake"
+
+/* kIOPMUserIsActiveKey
+ * Key refers to a boolean value that indicates if the user is active.
+ */
+#define kIOPMUserIsActiveKey                "IOPMUserIsActive"
 
 /*****************************************************************************
  *
@@ -737,7 +773,9 @@ enum {
     kIOPMSleepFactorHibernateForced         = 0x00010000ULL,
     kIOPMSleepFactorAutoPowerOffDisabled    = 0x00020000ULL,
     kIOPMSleepFactorAutoPowerOffForced      = 0x00040000ULL,
-    kIOPMSleepFactorExternalDisplay         = 0x00080000ULL
+    kIOPMSleepFactorExternalDisplay         = 0x00080000ULL,
+    kIOPMSleepFactorNetworkKeepAliveActive  = 0x00100000ULL,
+    kIOPMSleepFactorLocalUserActivity       = 0x00200000ULL
 };
 
 // System Sleep Types
@@ -757,7 +795,8 @@ enum {
 enum {
     kIOPMSleepFlagDisableHibernateAbort     = 0x00000001,
     kIOPMSleepFlagDisableUSBWakeEvents      = 0x00000002,
-    kIOPMSleepFlagDisableBatlowAssertion    = 0x00000004
+    kIOPMSleepFlagDisableBatlowAssertion    = 0x00000004,
+    kIOPMSleepFlagDisableS4WakeSources      = 0x00000008
 };
 
 // System Wake Events
@@ -799,6 +838,43 @@ struct IOPMSystemSleepParameters
     uint32_t    ecPoweroffTimer;
     uint32_t    reserved2[10];
 } __attribute__((packed));
+
+
+/*
+ * Sleep Wake debug buffer header
+ */
+typedef struct {
+   uint32_t version;
+   uint32_t alloc_size;
+   uint32_t          dlog_buf_offset; /* Offset at which root domain's logging is stored */
+   volatile uint32_t dlog_cur_pos;    /* Offset at which next trace will be copied to */
+   uint32_t          dlog_size;       /* Size reserverd  for root domain's logging */
+   uint32_t          crc;             /* CRC for spindump & following data. Doesn't cover hdr & DLOG buf */
+   uint32_t          spindump_offset; /* Offset at which spindump offset is stored */
+   uint32_t          spindump_size;
+
+   /* All members from UUID onwards are saved into log file */
+   char             UUID[44]; 
+   char             cps[9];          /* Current power state */
+   char             PMStatusCode[100];
+   char             reason[42];
+} swd_hdr; 
+
+#define SWD_BUF_SIZE            (20*PAGE_SIZE)
+#define SWD_DLOG_SIZE           ((4*PAGE_SIZE)-sizeof(swd_hdr))
+
+/* Bits in swd_flags */
+#define SWD_WDOG_ENABLED    0x1
+#define SWD_BOOT_BY_WDOG    0x2
+#define SWD_VALID_LOGS      0x4
+
+
+/* RootDomain IOReporting channels */
+#define kSleepCntChID IOREPORT_MAKEID('S','l','e','e','p','C','n','t')
+#define kDarkWkCntChID IOREPORT_MAKEID('G','U','I','W','k','C','n','t')
+#define kUserWkCntChID IOREPORT_MAKEID('D','r','k','W','k','C','n','t')
+
+
 
 #if defined(KERNEL) && defined(__cplusplus)
 

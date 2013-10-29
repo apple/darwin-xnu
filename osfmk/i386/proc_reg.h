@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2010 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2012 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -279,19 +279,6 @@ static inline void set_cr3_raw(uintptr_t value)
 	__asm__ volatile("mov %0, %%cr3" : : "r" (value));
 }
 
-#if	defined(__i386__)
-static inline uintptr_t get_cr3(void)
-{
-	register uintptr_t cr3;
-	__asm__ volatile("mov %%cr3, %0" : "=r" (cr3));
-	return(cr3);
-}
-
-static inline void set_cr3(uintptr_t value)
-{
-	__asm__ volatile("mov %0, %%cr3" : : "r" (value));
-}
-#else
 static inline uintptr_t get_cr3_base(void)
 {
 	register uintptr_t cr3;
@@ -304,7 +291,6 @@ static inline void set_cr3_composed(uintptr_t base, uint16_t pcid, uint32_t pres
 	__asm__ volatile("mov %0, %%cr3" : : "r" (base | pcid | ( ( (uint64_t)preserve) << 63) ) );
 }
 
-#endif
 static inline uintptr_t get_cr4(void)
 {
 	uintptr_t cr4;
@@ -370,33 +356,10 @@ static inline void swapgs(void)
 
 #ifdef MACH_KERNEL_PRIVATE
 
-#ifdef __i386__
-
-#include <i386/cpu_data.h>
-
-extern void cpuid64(uint32_t);
-extern void flush_tlb64(void);
-extern uint64_t get64_cr3(void);
-extern void set64_cr3(uint64_t);
-static inline void flush_tlb(void)
-{
-	if (cpu_mode_is64bit()) {
-		flush_tlb64();
-	} else {
-		set_cr3(get_cr3());
-	}
-}
-static inline void flush_tlb_raw(void)
-{
-	flush_tlb();
-}
-
-#elif defined(__x86_64__)
 static inline void flush_tlb_raw(void)
 {
 	set_cr3_raw(get_cr3_raw());
 }
-#endif
 extern int rdmsr64_carefully(uint32_t msr, uint64_t *val);
 extern int wrmsr64_carefully(uint32_t msr, uint64_t val);
 #endif	/* MACH_KERNEL_PRIVATE */
@@ -431,38 +394,17 @@ static inline void invlpg(uintptr_t addr)
 #define rdpmc(counter,lo,hi) \
 	__asm__ volatile("rdpmc" : "=a" (lo), "=d" (hi) : "c" (counter))
 
-#ifdef __i386__
+#ifdef XNU_KERNEL_PRIVATE
+extern void do_mfence(void);
+#define mfence() do_mfence()
+#endif
 
-static inline uint64_t rdmsr64(uint32_t msr)
+static inline uint64_t rdpmc64(uint32_t pmc)
 {
-	uint64_t ret;
-	__asm__ volatile("rdmsr" : "=A" (ret) : "c" (msr));
-	return ret;
+	uint32_t lo=0, hi=0;
+	rdpmc(pmc, lo, hi);
+	return (((uint64_t)hi) << 32) | ((uint64_t)lo);
 }
-
-static inline void wrmsr64(uint32_t msr, uint64_t val)
-{
-	__asm__ volatile("wrmsr" : : "c" (msr), "A" (val));
-}
-
-static inline uint64_t rdtsc64(void)
-{
-	uint64_t ret;
-	__asm__ volatile("lfence; rdtsc; lfence" : "=A" (ret));
-	return ret;
-}
-
-static inline uint64_t rdtscp64(uint32_t *aux)
-{
-	uint64_t ret;
-	__asm__ volatile("rdtscp; mov %%ecx, %1"
-				: "=A" (ret), "=m" (*aux)
-				:
-				: "ecx");
-	return ret;
-}
-
-#elif defined(__x86_64__)
 
 static inline uint64_t rdmsr64(uint32_t msr)
 {
@@ -493,9 +435,6 @@ static inline uint64_t rdtscp64(uint32_t *aux)
 	return ((hi) << 32) | (lo);
 }
 
-#else
-#error Unsupported architecture
-#endif
 
 /*
  * rdmsr_carefully() returns 0 when the MSR has been read successfully,
@@ -559,6 +498,7 @@ __END_DECLS
 
 #define MSR_IA32_MISC_ENABLE			0x1a0
 
+
 #define MSR_IA32_PACKAGE_THERM_STATUS		0x1b1
 #define MSR_IA32_PACKAGE_THERM_INTERRUPT	0x1b2
 
@@ -585,6 +525,13 @@ __END_DECLS
 #define MSR_IA32_MTRR_FIX4K_E8000		0x26d
 #define MSR_IA32_MTRR_FIX4K_F0000		0x26e
 #define MSR_IA32_MTRR_FIX4K_F8000		0x26f
+
+#define MSR_IA32_PERF_FIXED_CTR0		0x309
+
+#define MSR_IA32_PERF_FIXED_CTR_CTRL		0x38D
+#define MSR_IA32_PERF_GLOBAL_STATUS		0x38E
+#define MSR_IA32_PERF_GLOBAL_CTRL		0x38F
+#define MSR_IA32_PERF_GLOBAL_OVF_CTRL	0x390
 
 #define MSR_IA32_PKG_C3_RESIDENCY		0x3F8
 #define MSR_IA32_PKG_C6_RESIDENCY		0x3F9
@@ -616,7 +563,6 @@ __END_DECLS
 #define MSR_IA32_PKG_POWER_SKU_UNIT		0x606
 #define MSR_IA32_PKG_C2_RESIDENCY		0x60D
 #define MSR_IA32_PKG_ENERGY_STATUS		0x611
-
 #define MSR_IA32_DDR_ENERGY_STATUS		0x619
 #define MSR_IA32_LLC_FLUSHED_RESIDENCY_TIMER	0x61D
 #define MSR_IA32_RING_PERF_STATUS		0x621

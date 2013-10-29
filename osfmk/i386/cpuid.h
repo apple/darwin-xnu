@@ -127,13 +127,13 @@
  * Bits returned in %ebx to a CPUID request with {%eax,%ecx} of (0x7,0x0}:
  */
 #define CPUID_LEAF7_FEATURE_RDWRFSGS _Bit(0)	/* FS/GS base read/write */
+#define CPUID_LEAF7_FEATURE_SMEP     _Bit(7)	/* Supervisor Mode Execute Protect */
+#define CPUID_LEAF7_FEATURE_ENFSTRG  _Bit(9)	/* ENhanced Fast STRinG copy */
 #define CPUID_LEAF7_FEATURE_TSCOFF   _Bit(1)	/* TSC thread offset */
 #define CPUID_LEAF7_FEATURE_BMI1     _Bit(3)	/* Bit Manipulation Instrs, set 1 */
 #define CPUID_LEAF7_FEATURE_HLE      _Bit(4)	/* Hardware Lock Elision*/
 #define CPUID_LEAF7_FEATURE_AVX2     _Bit(5)	/* AVX2 Instructions */
-#define CPUID_LEAF7_FEATURE_SMEP     _Bit(7)	/* Supervisor Mode Execute Protect */
 #define CPUID_LEAF7_FEATURE_BMI2     _Bit(8)	/* Bit Manipulation Instrs, set 2 */
-#define CPUID_LEAF7_FEATURE_ENFSTRG  _Bit(9)	/* ENhanced Fast STRinG copy */
 #define CPUID_LEAF7_FEATURE_INVPCID  _Bit(10)	/* INVPCID intruction, TDB */
 #define CPUID_LEAF7_FEATURE_RTM      _Bit(11)	/* TBD */
 
@@ -161,24 +161,25 @@
 #define CPUID_MWAIT_EXTENSION	_Bit(0)	/* enumeration of WMAIT extensions */
 #define CPUID_MWAIT_BREAK	_Bit(1)	/* interrupts are break events	   */
 
-#define CPUID_MODEL_YONAH	0x0E
-#define CPUID_MODEL_MEROM	0x0F
-#define CPUID_MODEL_PENRYN	0x17
-#define CPUID_MODEL_NEHALEM	0x1A
-#define CPUID_MODEL_FIELDS	0x1E	/* Lynnfield, Clarksfield, Jasper */
-#define CPUID_MODEL_DALES	0x1F	/* Havendale, Auburndale */
-#define CPUID_MODEL_NEHALEM_EX	0x2E
-#define CPUID_MODEL_DALES_32NM	0x25	/* Clarkdale, Arrandale */
-#define CPUID_MODEL_WESTMERE	0x2C	/* Gulftown, Westmere-EP, Westmere-WS */
-#define CPUID_MODEL_WESTMERE_EX	0x2F
-#define CPUID_MODEL_SANDYBRIDGE	0x2A
-#define CPUID_MODEL_JAKETOWN	0x2D
-#define CPUID_MODEL_IVYBRIDGE	0x3A
-#define CPUID_MODEL_HASWELL	0x3C
-#define CPUID_MODEL_HASWELL_SVR	0x3F
-#define CPUID_MODEL_HASWELL_ULT	0x45
-#define CPUID_MODEL_CRYSTALWELL	0x46
-
+#define CPUID_MODEL_YONAH		0x0E
+#define CPUID_MODEL_MEROM		0x0F
+#define CPUID_MODEL_PENRYN		0x17
+#define CPUID_MODEL_NEHALEM		0x1A
+#define CPUID_MODEL_FIELDS		0x1E	/* Lynnfield, Clarksfield */
+#define CPUID_MODEL_DALES		0x1F	/* Havendale, Auburndale */
+#define CPUID_MODEL_NEHALEM_EX		0x2E
+#define CPUID_MODEL_DALES_32NM		0x25	/* Clarkdale, Arrandale */
+#define CPUID_MODEL_WESTMERE		0x2C	/* Gulftown, Westmere-EP/-WS */
+#define CPUID_MODEL_WESTMERE_EX		0x2F
+#define CPUID_MODEL_SANDYBRIDGE		0x2A
+#define CPUID_MODEL_JAKETOWN		0x2D
+#define CPUID_MODEL_IVYBRIDGE		0x3A
+#ifdef PRIVATE
+#define CPUID_MODEL_CRYSTALWELL		0x46
+#endif
+#define CPUID_MODEL_HASWELL		0x3C
+#define CPUID_MODEL_HASWELL_SVR		0x3F
+#define CPUID_MODEL_HASWELL_ULT		0x45
 
 #define CPUID_VMM_FAMILY_UNKNOWN	0x0
 #define CPUID_VMM_FAMILY_VMWARE		0x1
@@ -389,9 +390,7 @@ extern uint64_t		cpuid_leaf7_features(void);
 extern uint32_t		cpuid_family(void);
 extern uint32_t		cpuid_cpufamily(void);
 	
-extern void		cpuid_get_info(i386_cpu_info_t *info_p);
 extern i386_cpu_info_t	*cpuid_info(void);
-
 extern void		cpuid_set_info(void);
 
 #ifdef MACH_KERNEL_PRIVATE

@@ -73,9 +73,6 @@ OSCollectionIterator * IODTFindMatchingEntries( IORegistryEntry * from,
 typedef SInt32 (*IODTCompareAddressCellFunc)
 	(UInt32 cellCount, UInt32 left[], UInt32 right[]);
 
-typedef SInt64 (*IODTCompareAddressCell64Func)
-	(UInt32 cellCount, UInt32 left[], UInt32 right[]);
-
 typedef void (*IODTNVLocationFunc)
 	(IORegistryEntry * entry,
 	UInt8 * busNum, UInt8 * deviceNum, UInt8 * functionNum );
@@ -83,6 +80,9 @@ typedef void (*IODTNVLocationFunc)
 void IODTSetResolving( IORegistryEntry * 	regEntry,
 		IODTCompareAddressCellFunc	compareFunc,
 		IODTNVLocationFunc		locationFunc );
+
+void IODTGetCellCounts( IORegistryEntry * regEntry,
+		                            UInt32 * sizeCount, UInt32 * addressCount);
 
 bool IODTResolveAddressCell( IORegistryEntry * regEntry,
                              UInt32 cellsIn[],

@@ -27,10 +27,11 @@ security/mac_sysv_msg.c					optional config_macf
 security/mac_posix_sem.c				optional config_macf
 security/mac_posix_shm.c				optional config_macf
 security/mac_socket.c					optional config_macf
-security/mac_stub.c					standard
 security/mac_net.c					optional config_macf_net
 security/mac_pipe.c					optional config_macf
 security/mac_iokit.c					optional config_macf
 security/mac_file.c					optional config_macf
 security/mac_inet.c					optional config_macf_net
 security/mac_priv.c					optional config_macf
+security/mac_pty.c					optional config_macf
+security/mac_kext.c					optional config_macf

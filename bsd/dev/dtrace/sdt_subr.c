@@ -75,14 +75,6 @@ static dtrace_pattr_t sdt_attr = {
 { DTRACE_STABILITY_PRIVATE, DTRACE_STABILITY_PRIVATE, DTRACE_CLASS_ISA },
 };
 
-static dtrace_pattr_t xpv_attr = {
-{ DTRACE_STABILITY_EVOLVING, DTRACE_STABILITY_EVOLVING, DTRACE_CLASS_PLATFORM },
-{ DTRACE_STABILITY_PRIVATE, DTRACE_STABILITY_PRIVATE, DTRACE_CLASS_UNKNOWN },
-{ DTRACE_STABILITY_PRIVATE, DTRACE_STABILITY_PRIVATE, DTRACE_CLASS_UNKNOWN },
-{ DTRACE_STABILITY_PRIVATE, DTRACE_STABILITY_PRIVATE, DTRACE_CLASS_PLATFORM },
-{ DTRACE_STABILITY_PRIVATE, DTRACE_STABILITY_PRIVATE, DTRACE_CLASS_PLATFORM },
-};
-
 sdt_provider_t sdt_providers[] = {
 	{ "vtrace", "__vtrace____", &vtrace_attr, 0 },
 	{ "sysinfo", "__cpu_sysinfo____", &info_attr, 0 },
@@ -93,22 +85,20 @@ sdt_provider_t sdt_providers[] = {
 	{ "io", "__io____", &stab_attr, 0 },
 	{ "ip", "__ip____", &stab_attr, 0 },
 	{ "tcp", "__tcp____", &stab_attr, 0 },
+	{ "mptcp", "__mptcp____", &stab_attr, 0 },
 	{ "mib", "__mib____", &stab_attr, 0 },
 	{ "fsinfo", "__fsinfo____", &fsinfo_attr, 0 },
 	{ "nfsv3", "__nfsv3____", &stab_attr, 0 },
 	{ "nfsv4", "__nfsv4____", &stab_attr, 0 },
-	{ "xpv", "__xpv____", &xpv_attr, 0 },
 	{ "sysevent", "__sysevent____", &stab_attr, 0 },
 	{ "sdt", "__sdt____", &sdt_attr, 0 },
-#if !defined(__APPLE__)
-	{ NULL }
-#else
+	{ "boost", "__boost____", &stab_attr, 0},
 	{ NULL, NULL, NULL, 0 }
-#endif /* __APPLE__ */
 };
 
 /* Warning:  Need xnu cognate for disp_t.  */
 sdt_argdesc_t sdt_args[] = {
+	/* provider probename arg# arg-mapping native-type translated-type */
 	{ "sched", "wakeup", 0, 0, "struct thread *", "lwpsinfo_t *" },
 	{ "sched", "wakeup", 1, 1, "struct proc *", "psinfo_t *" },
 	{ "sched", "dequeue", 0, 0, "struct thread *", "lwpsinfo_t *" },
@@ -163,6 +153,11 @@ sdt_argdesc_t sdt_args[] = {
 	{ "proc", "signal-send", 0, 0, "struct thread *", "lwpsinfo_t *" },
 	{ "proc", "signal-send", 1, 1, "struct proc *", "psinfo_t *" },
 	{ "proc", "signal-send", 2, 2, "int", NULL },
+	/* proc:::spawn-success has no arguments */
+	{ "proc", "spawn-failure", 0, 0, "int", NULL },
+	{ "proc", "spawn-fd-failure", 0, 0, "int", NULL },
+	{ "proc", "spawn-open-failure", 0, 0, "string", NULL },
+	{ "proc", "spawn-port-failure", 0, 0, "int", NULL },
 	/* proc:::start has no arguments */
 
 	{ "io", "start", 0, 0, "struct buf *", "bufinfo_t *" },
@@ -187,8 +182,9 @@ sdt_argdesc_t sdt_args[] = {
 #endif /* __APPLE__ */
 
 	{ "mib", NULL, 0, 0, "int", NULL },
+
 	{ "fsinfo", NULL, 0, 0, "struct vnode *", "fileinfo_t *" },
-	{ "fsinfo", NULL, 1, 1, "int", "int" },
+	{ "fsinfo", NULL, 1, 1, "int", NULL },
 
 	{ "nfsv3", "op-getattr-start", 0, 0, "struct svc_req *",
 	    "conninfo_t *" },
@@ -871,69 +867,98 @@ sdt_argdesc_t sdt_args[] = {
 	{ "tcp", "iaj", 2, 2, "uint32_t", NULL},
 	{ "sysevent", "post", 0, 0, "evch_bind_t *", "syseventchaninfo_t *" },
 	{ "sysevent", "post", 1, 1, "sysevent_impl_t *", "syseventinfo_t *" },
-
-	{ "xpv", "add-to-physmap-end", 0, 0, "int", NULL },
-	{ "xpv", "add-to-physmap-start", 0, 0, "domid_t", NULL },
-	{ "xpv", "add-to-physmap-start", 1, 1, "uint_t", NULL },
-	{ "xpv", "add-to-physmap-start", 2, 2, "ulong_t", NULL },
-	{ "xpv", "add-to-physmap-start", 3, 3, "ulong_t", NULL },
-	{ "xpv", "decrease-reservation-end", 0, 0, "int", NULL },
-	{ "xpv", "decrease-reservation-start", 0, 0, "domid_t", NULL },
-	{ "xpv", "decrease-reservation-start", 1, 1, "ulong_t", NULL },
-	{ "xpv", "decrease-reservation-start", 2, 2, "uint_t", NULL },
-	{ "xpv", "decrease-reservation-start", 3, 3, "ulong_t *", NULL },
-	{ "xpv", "dom-create-start", 0, 0, "xen_domctl_t *", NULL },
-	{ "xpv", "dom-destroy-start", 0, 0, "domid_t", NULL },
-	{ "xpv", "dom-pause-start", 0, 0, "domid_t", NULL },
-	{ "xpv", "dom-unpause-start", 0, 0, "domid_t", NULL },
-	{ "xpv", "dom-create-end", 0, 0, "int", NULL },
-	{ "xpv", "dom-destroy-end", 0, 0, "int", NULL },
-	{ "xpv", "dom-pause-end", 0, 0, "int", NULL },
-	{ "xpv", "dom-unpause-end", 0, 0, "int", NULL },
-	{ "xpv", "evtchn-op-end", 0, 0, "int", NULL },
-	{ "xpv", "evtchn-op-start", 0, 0, "int", NULL },
-	{ "xpv", "evtchn-op-start", 1, 1, "void *", NULL },
-	{ "xpv", "increase-reservation-end", 0, 0, "int", NULL },
-	{ "xpv", "increase-reservation-start", 0, 0, "domid_t", NULL },
-	{ "xpv", "increase-reservation-start", 1, 1, "ulong_t", NULL },
-	{ "xpv", "increase-reservation-start", 2, 2, "uint_t", NULL },
-	{ "xpv", "increase-reservation-start", 3, 3, "ulong_t *", NULL },
-	{ "xpv", "mmap-end", 0, 0, "int", NULL },
-	{ "xpv", "mmap-entry", 0, 0, "ulong_t", NULL },
-	{ "xpv", "mmap-entry", 1, 1, "ulong_t", NULL },
-	{ "xpv", "mmap-entry", 2, 2, "ulong_t", NULL },
-	{ "xpv", "mmap-start", 0, 0, "domid_t", NULL },
-	{ "xpv", "mmap-start", 1, 1, "int", NULL },
-	{ "xpv", "mmap-start", 2, 2, "privcmd_mmap_entry_t *", NULL },
-	{ "xpv", "mmapbatch-end", 0, 0, "int", NULL },
-	{ "xpv", "mmapbatch-end", 1, 1, "struct seg *", NULL },
-	{ "xpv", "mmapbatch-end", 2, 2, "caddr_t", NULL },
-	{ "xpv", "mmapbatch-start", 0, 0, "domid_t", NULL },
-	{ "xpv", "mmapbatch-start", 1, 1, "int", NULL },
-	{ "xpv", "mmapbatch-start", 2, 2, "caddr_t", NULL },
-	{ "xpv", "mmu-ext-op-end", 0, 0, "int", NULL },
-	{ "xpv", "mmu-ext-op-start", 0, 0, "int", NULL },
-	{ "xpv", "mmu-ext-op-start", 1, 1, "struct mmuext_op *" , NULL},
-	{ "xpv", "mmu-update-start", 0, 0, "int", NULL },
-	{ "xpv", "mmu-update-start", 1, 1, "int", NULL },
-	{ "xpv", "mmu-update-start", 2, 2, "mmu_update_t *", NULL },
-	{ "xpv", "mmu-update-end", 0, 0, "int", NULL },
-	{ "xpv", "populate-physmap-end", 0, 0, "int" , NULL},
-	{ "xpv", "populate-physmap-start", 0, 0, "domid_t" , NULL},
-	{ "xpv", "populate-physmap-start", 1, 1, "ulong_t" , NULL},
-	{ "xpv", "populate-physmap-start", 2, 2, "ulong_t *" , NULL},
-	{ "xpv", "set-memory-map-end", 0, 0, "int" , NULL},
-	{ "xpv", "set-memory-map-start", 0, 0, "domid_t" , NULL},
-	{ "xpv", "set-memory-map-start", 1, 1, "int", NULL },
-	{ "xpv", "set-memory-map-start", 2, 2, "struct xen_memory_map *", NULL },
-	{ "xpv", "setvcpucontext-end", 0, 0, "int", NULL },
-	{ "xpv", "setvcpucontext-start", 0, 0, "domid_t", NULL },
-	{ "xpv", "setvcpucontext-start", 1, 1, "vcpu_guest_context_t *", NULL },
-#if !defined(__APPLE__)
-	{ NULL }
-#else
+	/* mptcp::input has no arguments */
+	{ "mptcp", "receive-degraded", 0, 0, "struct mbuf *", "pktinfo_t *" },
+	{ "mptcp", "receive-degraded", 1, 1, "struct socket *", "socketinfo_t *" },
+	{ "mptcp", "receive-degraded", 2, 2, "struct sockbuf *", "socketbuf_t *" },
+	{ "mptcp", "receive-degraded", 3, 3, "struct sockbuf *", "socketbuf_t *" },
+	{ "mptcp", "receive-degraded", 4, 4, "struct mptses *", "mptsesinfo_t *" },
+	{ "mptcp", "receive", 0, 0, "struct mbuf *", "pktinfo_t *" },
+	{ "mptcp", "receive", 1, 1, "struct socket *", "socketinfo_t *" },
+	{ "mptcp", "receive", 2, 2, "struct sockbuf *", "socketbuf_t *" },
+	{ "mptcp", "receive", 3, 3, "struct sockbuf *", "socketbuf_t *" },
+	{ "mptcp", "receive", 4, 4, "struct mptses *", "mptsesinfo_t *" },
+	{ "mptcp", "receive", 5, 5, "struct mptcb *", "mptsinfo_t *" },
+	{ "mptcp", "output", 0, 0, "struct mptses *", "mptsesinfo_t *" },
+	{ "mptcp", "output", 1, 1, "struct mptsub *", "mptsubinfo_t *" },
+	{ "mptcp", "output", 2, 2, "struct socket *", "socketinfo_t *" },
+	{ "mptcp", "state-change", 0, 0, "struct mptcb *", "mptsinfo_t *" },
+	{ "mptcp", "state-change", 1, 1, "uint32_t", "uint32_t" },
+	{ "mptcp", "checksum-result", 0, 0, "struct tcpcb *", "tcpsinfo_t *" },
+	{ "mptcp", "checksum-result", 1, 1, "struct mbuf *", "pktinfo_t *" },
+	{ "mptcp", "checksum-result", 2, 2, "uint32_t", "uint32_t" },
+	{ "mptcp", "session-create", 0, 0, "struct socket *", "socketinfo_t *"},
+	{ "mptcp", "session-create", 1, 1, "struct sockbuf *", "socketbuf_t *"},
+	{ "mptcp", "session-create", 2, 2, "struct sockbuf *", "socketbuf_t *"},
+	{ "mptcp", "session-create", 3, 3, "struct mppcb *", "mppsinfo_t *" },
+	{ "mptcp", "session-create", 4, 4, "int", "int" },
+	{ "mptcp", "session-destroy", 0, 0, "struct mptses *", "mptsesinfo_t *" },
+	{ "mptcp", "session-destroy", 1, 1, "struct mptcb *", "mptsinfo_t *" },
+	{ "mptcp", "subflow-create", 0, 0, "struct mptses *", "mptsesinfo_t *"},
+	{ "mptcp", "subflow-create", 1, 1, "struct mptsub *", "mptsubinfo_t *"},
+	{ "mptcp", "subflow-create", 2, 2, "int", "int" },
+	{ "mptcp", "subflow-create", 3, 3, "int", "int" },
+	{ "mptcp", "subflow-close", 0, 0, "struct mptsub *", "mptsubinfo_t *" },
+	{ "mptcp", "subflow-close", 1, 1, "struct socket *", "socketinfo_t *" },
+	{ "mptcp", "subflow-close", 2, 2, "struct sockbuf *", "socketbuf_t *" },
+	{ "mptcp", "subflow-close", 3, 3, "struct sockbuf *", "socketbuf_t *" },
+	{ "mptcp", "subflow-close", 4, 4, "struct mptses *", "mptsesinfo_t *" },
+	{ "mptcp", "subflow-connect", 0, 0, "struct mptses *", "mptsesinfo_t *" },
+	{ "mptcp", "subflow-connect", 1, 1, "struct mptsub *", "mptsubinfo_t *" },
+	{ "mptcp", "subflow-connect", 2, 2, "int", "int" },
+	{ "mptcp", "subflow-receive", 0, 0, "struct socket *", "socketinfo_t *" },
+	{ "mptcp", "subflow-receive", 1, 1, "struct sockbuf *", "socketbuf_t *" },
+	{ "mptcp", "subflow-receive", 2, 2, "struct sockbuf *", "socketbuf_t *" },
+	{ "mptcp", "subflow-peeloff", 0, 0, "struct mptses *", "mptsesinfo_t *",},
+	{ "mptcp", "subflow-peeloff", 1, 1, "struct mptsub *", "mptsubinfo_t *",},
+	{ "mptcp", "subflow-peeloff", 2, 2, "struct socket *", "socketinfo_t *",},
+	{ "mptcp", "subflow-peeloff", 3, 3, "struct sockbuf *", "socketbuf_t *" },
+	{ "mptcp", "subflow-peeloff", 4, 4, "struct sockbuf *", "socketbuf_t *" },
+	{ "mptcp", "subflow-input", 0, 0, "struct mptses *", "mptsesinfo_t *" },
+	{ "mptcp", "subflow-input", 1, 1, "struct mptsub *", "mptsubinfo_t *" },
+	{ "mptcp", "subflow-output", 0, 0, "struct mptses *", "mptsesinfo_t *"},
+	{ "mptcp", "subflow-output", 1, 1, "struct mptsub *", "mptsubinfo_t *"},
+	{ "mptcp", "subflow-events", 0, 0, "struct mptses *", "mptsesinfo_t *"},
+	{ "mptcp", "subflow-events", 1, 1, "struct mptsub *", "mptsubinfo_t *"},
+	{ "mptcp", "subflow-events", 2, 2, "uint32_t", "uint32_t"},
+	{ "mptcp", "send", 0, 0, "struct mbuf *", "pktinfo_t *" },
+	{ "mptcp", "send", 1, 1, "struct socket *", "socketinfo_t *" },
+	{ "mptcp", "send", 2, 2, "struct sockbuf *", "socketbuf_t *" },
+	{ "mptcp", "send", 3, 3, "struct sockbuf *", "socketbuf_t *" },
+	{ "mptcp", "send", 4, 4, "struct mptses *", "mptsesinfo_t *" },
+	{ "mptcp", "send", 5, 5, "struct mptsub *", "mptsubinfo_t *" },
+	{ "mptcp", "send", 6, 6, "size_t", "size_t" },
+	{ "mptcp", "dispose", 0, 0, "struct socket *", "socketinfo_t *" },
+	{ "mptcp", "dispose", 1, 1, "struct sockbuf *", "socketbuf_t *" },
+	{ "mptcp", "dispose", 2, 2, "struct sockbuf *", "socketbuf_t *" },
+	{ "mptcp", "dispose", 3, 3, "struct mppcb *", "mppsinfo_t *" },
+	{ "mptcp", "multipath-ready", 0, 0, "struct socket *", "socketinfo_t *" },
+	{ "mptcp", "multipath-ready", 1, 1, "struct sockbuf *", "socketbuf_t *" },
+	{ "mptcp", "multipath-ready", 2, 2, "struct sockbuf *", "socketbuf_t *" },
+	{ "mptcp", "multipath-ready", 3, 3, "struct tcpcb *", "tcpsinfo_t *" },
+	{ "mptcp", "multipath-failed", 0, 0, "struct socket *", "socketinfo_t *" },
+	{ "mptcp", "multipath-failed", 1, 1, "struct sockbuf *", "socketbuf_t *" },
+	{ "mptcp", "multipath-failed", 2, 2, "struct sockbuf *", "socketbuf_t *" },
+	{ "mptcp", "multipath-failed", 3, 3, "struct tcpcb *", "tcpsinfo_t *" },
+	{ "mptcp", "start-timer", 0, 0, "struct mptcb *", "mptsinfo_t *" },
+	{ "mptcp", "start-timer", 1, 1, "int", "int" },
+	{ "mptcp", "cancel-timer", 0, 0, "struct mptcb *", "mptsinfo_t *" },
+	{ "mptcp", "cancel-timer", 1, 1, "int", "int" },
+	{ "mptcp", "timer", 0, 0, "struct mptses *", "mptsesinfo_t *" },
+	{ "mptcp", "timer", 1, 1, "struct mptcb *", "mptsinfo_t *" },
+	{ "mptcp", "error", 0, 0, "struct mptcb *", "mptsinfo_t *" },
+	{ "mptcp", "connectx", 0, 0, "struct mptses *", "mptsesinfo_t *" },
+	{ "mptcp", "connectx", 1, 1, "associd_t", "associd_t" },
+	{ "mptcp", "connectx", 2, 2, "struct socket *", "socketinfo_t *" },
+	{ "mptcp", "disconnectx", 0, 0, "struct mptses *", "mptsesinfo_t *" },
+	{ "mptcp", "disconnectx", 1, 1, "associd_t", "associd_t" },
+	{ "mptcp", "disconnectx", 2, 2, "connid_t", "connid_t" },
+	{ "mptcp", "disconnectx", 3, 3, "struct socket *", "sockinfo_t *" },
+	{ "mptcp", "disconnectx", 4, 4, "struct mptcb *", "mptsinfo_t *" },
+	{ "mptcp", "peeloff", 0, 0, "struct mptses *", "mptsesinfo_t *" },
+	{ "mptcp", "peeloff", 1, 1, "associd_t", "associd_t" },
+	{ "mptcp", "peeloff", 2, 2, "struct socket *", "sockinfo_t *" },
 	{ NULL, NULL, 0, 0, NULL, NULL }
-#endif /* __APPLE__ */
 };
 
 /*ARGSUSED*/
@@ -950,23 +975,6 @@ sdt_getargdesc(void *arg, dtrace_id_t id, void *parg, dtrace_argdesc_t *desc)
 	for (i = 0; sdt_args[i].sda_provider != NULL; i++) {
 		sdt_argdesc_t *a = &sdt_args[i];
 
-#if !defined(__APPLE__)
-		if (strcmp(sdp->sdp_provider->sdtp_name, a->sda_provider) != 0)
-			continue;
-
-		if (a->sda_name != NULL &&
-		    strcmp(sdp->sdp_name, a->sda_name) != 0)
-			continue;
-
-		if (desc->dtargd_ndx != a->sda_ndx)
-			continue;
-
-		if (a->sda_native != NULL)
-			(void) strcpy(desc->dtargd_native, a->sda_native);
-
-		if (a->sda_xlate != NULL)
-			(void) strcpy(desc->dtargd_xlate, a->sda_xlate);
-#else
 		if (strncmp(sdp->sdp_provider->sdtp_name, a->sda_provider, strlen(a->sda_provider) + 1) != 0)
 			continue;
 
@@ -982,7 +990,6 @@ sdt_getargdesc(void *arg, dtrace_id_t id, void *parg, dtrace_argdesc_t *desc)
 
 		if (a->sda_xlate != NULL)
 			(void) strlcpy(desc->dtargd_xlate, a->sda_xlate, DTRACE_ARGTYPELEN);
-#endif /* __APPLE__ */
 
 		desc->dtargd_mapping = a->sda_mapping;
 		return;

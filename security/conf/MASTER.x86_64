@@ -1,6 +1,6 @@
 ######################################################################
 #
-#  RELEASE	= [ intel mach libkerncpp config_dtrace audit vm_pressure_events ]
+#  RELEASE	= [ intel mach libkerncpp config_dtrace audit vm_pressure_events memorystatus ]
 #  PROFILE	= [ RELEASE profile ]
 #  DEBUG	= [ RELEASE debug mach_assert ]
 #

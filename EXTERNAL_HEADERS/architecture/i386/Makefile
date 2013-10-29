@@ -7,10 +7,6 @@ export MakeInc_dir=${SRCROOT}/makedefs/MakeInc.dir
 include $(MakeInc_cmd)
 include $(MakeInc_def)
 
-INSTINC_SUBDIRS_I386 =
-
-INSTINC_SUBDIRS_X86_64 =
-
 EXPORT_FILES = 		\
 	asm_help.h	\
 	cpu.h		\

@@ -110,7 +110,6 @@
 
 #include <sys/kdebug.h>
 
-
 #ifndef offsetof
 #define offsetof(type, member)  ((size_t)(&((type *)0)->member))
 #endif /* offsetof */
@@ -154,9 +153,14 @@ mach_msg_format_0_trailer_t trailer_template = {
 };
 
 /*
- *	Routine:	mach_msg_send
+ *	Routine:	mach_msg_send [Kernel Internal]
  *	Purpose:
- *		Send a message.
+ *		Routine for kernel-task threads to send a message.
+ *
+ *		Unlike mach_msg_send_from_kernel(), this routine
+ *		looks port names up in the kernel's port namespace
+ *		and copies in the kernel virtual memory (instead
+ *		of taking a vm_map_copy_t pointer for OOL descriptors).
  *	Conditions:
  *		Nothing locked.
  *	Returns:
@@ -217,14 +221,16 @@ mach_msg_send(
 	trailer->msgh_audit = current_thread()->task->audit_token;
 	trailer->msgh_trailer_type = MACH_MSG_TRAILER_FORMAT_0;
 	trailer->msgh_trailer_size = MACH_MSG_TRAILER_MINIMUM_SIZE;
-	
-	mr = ipc_kmsg_copyin(kmsg, space, map, option & MACH_SEND_NOTIFY);
+
+	mr = ipc_kmsg_copyin(kmsg, space, map, &option);
+
 	if (mr != MACH_MSG_SUCCESS) {
 		ipc_kmsg_free(kmsg);
 		return mr;
 	}
 
-	mr = ipc_kmsg_send(kmsg, option & MACH_SEND_TIMEOUT, send_timeout);
+	mr = ipc_kmsg_send(kmsg, option, send_timeout);
+
 	if (mr != MACH_MSG_SUCCESS) {
 	    mr |= ipc_kmsg_copyout_pseudo(kmsg, space, map, MACH_MSG_BODY_NULL);
 	    (void) memcpy((void *) msg, (const void *) kmsg->ikm_header, 
@@ -234,6 +240,20 @@ mach_msg_send(
 
 	return mr;
 }
+
+/* 
+ * message header as seen at user-space
+ * (for MACH_RCV_LARGE/IDENTITY updating)
+ */
+typedef	struct 
+{
+  mach_msg_bits_t	msgh_bits;
+  mach_msg_size_t	msgh_size;
+  mach_port_name_t	msgh_remote_port;
+  mach_port_name_t	msgh_local_port;
+  mach_msg_size_t 	msgh_reserved;
+  mach_msg_id_t		msgh_id;
+} mach_msg_user_header_t;
 
 /*
  *	Routine:	mach_msg_receive_results
@@ -283,8 +303,14 @@ mach_msg_receive_results(void)
 	       * msize save area instead of the message (which was left on
 	       * the queue).
 	       */
+	      if (option & MACH_RCV_LARGE_IDENTITY) {
+		      if (copyout((char *) &self->ith_receiver_name,
+				  msg_addr + offsetof(mach_msg_user_header_t, msgh_local_port),
+				  sizeof(mach_port_name_t)))
+			      mr = MACH_RCV_INVALID_DATA;
+	      }
 	      if (copyout((char *) &self->ith_msize,
-			  msg_addr + offsetof(mach_msg_header_t, msgh_size),
+			  msg_addr + offsetof(mach_msg_user_header_t, msgh_size),
 			  sizeof(mach_msg_size_t)))
 		mr = MACH_RCV_INVALID_DATA;
 	      goto out;
@@ -296,6 +322,45 @@ mach_msg_receive_results(void)
 	  }
 	  goto out;
 	}
+
+#if IMPORTANCE_INHERITANCE
+	if ((kmsg->ikm_header->msgh_bits & MACH_MSGH_BITS_RAISEIMP) != 0) {
+		__unused int impresult;
+		int sender_pid = -1;
+#if IMPORTANCE_DEBUG
+		sender_pid = ((mach_msg_max_trailer_t *)
+			((vm_offset_t)kmsg->ikm_header + round_msg(kmsg->ikm_header->msgh_size)))->msgh_audit.val[5];
+#endif /* IMPORTANCE_DEBUG */
+		ipc_port_t port = kmsg->ikm_header->msgh_remote_port;
+		task_t task_self = current_task();
+
+		ip_lock(port);
+		assert(port->ip_impcount > 0);
+		port->ip_impcount--;
+		ip_unlock(port);
+
+		if (task_self->imp_receiver == 0) {
+			/*
+			 * The task was never ready to receive importance boost, remove msghbit.
+			 * This can happen when a receive right (which has donor messages) is copied
+			 * out to a non-imp_receiver task (we don't clear the bits on the messages,
+			 * but we did't transfer any boost counts either).
+			 */
+			kmsg->ikm_header->msgh_bits &= ~MACH_MSGH_BITS_RAISEIMP;
+			impresult = 0;
+		} else {
+			/* user will accept responsibility for the importance boost */
+			task_importance_externalize_assertion(task_self, 1, sender_pid);
+			impresult = 1;
+		}
+
+#if IMPORTANCE_DEBUG
+		KERNEL_DEBUG_CONSTANT_IST(KDEBUG_TRACE, (IMPORTANCE_CODE(IMP_MSG, IMP_MSG_DELV)) | DBG_FUNC_NONE,
+			sender_pid, audit_token_pid_from_task(task_self),
+			kmsg->ikm_header->msgh_id, impresult, 0);
+#endif /* IMPORTANCE_DEBUG */
+	}
+#endif  /* IMPORTANCE_INHERITANCE */
 
 	trailer_size = ipc_kmsg_add_trailer(kmsg, space, option, self, seqno, FALSE, 
 			kmsg->ikm_header->msgh_remote_port->ip_context);
@@ -337,6 +402,23 @@ mach_msg_receive_results(void)
 	return mr;
 }
 
+/*
+ *	Routine:	mach_msg_receive [Kernel Internal]
+ *	Purpose:
+ *		Routine for kernel-task threads to actively receive a message.
+ *
+ *		Unlike being dispatched to by ipc_kobject_server() or the
+ *		reply part of mach_msg_rpc_from_kernel(), this routine
+ *		looks up the receive port name in the kernel's port
+ * 		namespace and copies out received port rights to that namespace
+ *		as well.  Out-of-line memory is copied out the kernel's
+ *		address space (rather than just providing the vm_map_copy_t).
+ *	Conditions:
+ *		Nothing locked.
+ *	Returns:
+ *		MACH_MSG_SUCCESS	Received a message.
+ *		See <mach/message.h> for list of MACH_RCV_XXX errors.
+ */
 mach_msg_return_t
 mach_msg_receive(
 	mach_msg_header_t	*msg,
@@ -408,7 +490,10 @@ mach_msg_overwrite_trap(
 
 	mach_msg_return_t  mr = MACH_MSG_SUCCESS;
 	vm_map_t map = current_map();
-	
+
+	/* Only accept options allowed by the user */
+	option &= MACH_MSG_OPTION_USER;
+
 	if (option & MACH_SEND_MSG) {
 		ipc_space_t space = current_space();
 		ipc_kmsg_t kmsg;
@@ -418,13 +503,14 @@ mach_msg_overwrite_trap(
 		if (mr != MACH_MSG_SUCCESS)
 			return mr;
 
-		mr = ipc_kmsg_copyin(kmsg, space, map, option & MACH_SEND_NOTIFY);
+		mr = ipc_kmsg_copyin(kmsg, space, map, &option);
+
 		if (mr != MACH_MSG_SUCCESS) {
 			ipc_kmsg_free(kmsg);
 			return mr;
 		}
 
-		mr = ipc_kmsg_send(kmsg, option & MACH_SEND_TIMEOUT, msg_timeout);
+		mr = ipc_kmsg_send(kmsg, option, msg_timeout);
 
 		if (mr != MACH_MSG_SUCCESS) {
 			mr |= ipc_kmsg_copyout_pseudo(kmsg, space, map, MACH_MSG_BODY_NULL);

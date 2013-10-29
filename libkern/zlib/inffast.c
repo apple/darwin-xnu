@@ -31,14 +31,6 @@
  */
 
 
-#if defined __x86_64__ || defined __i386__ || defined _ARM_ARCH_6
-
-	// dummy definition, for x86_64 or i386 or armv6 or up, compile code from inffastS.s
-    typedef char DummyDefinition;
-
-#else	// architecture
-
-
 #include "zutil.h"
 #include "inftrees.h"
 #include "inflate.h"
@@ -353,4 +345,3 @@ unsigned start;         /* inflate()'s starting value for strm->avail_out */
 
 #endif /* !ASMINF */
 
-#endif 	// architecture

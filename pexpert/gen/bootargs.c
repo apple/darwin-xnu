@@ -29,9 +29,7 @@
 #include <pexpert/device_tree.h>
 
 static boolean_t isargsep( char c);
-#if !CONFIG_EMBEDDED
 static int argstrcpy(char *from, char *to);
-#endif
 static int argstrcpy2(char *from,char *to, unsigned maxlen);
 static int argnumcpy(int val, void *to, unsigned maxlen);
 static int getval(char *s, int *val);
@@ -55,10 +53,6 @@ PE_parse_boot_arg(
 {
 	int max_len = -1;
 
-#if CONFIG_EMBEDDED
-	/* Limit arg size to 4 byte when no size is given */
-	max_len = 4;
-#endif
 
 	return PE_parse_boot_argn(arg_string, arg_ptr, max_len);
 }
@@ -80,9 +74,6 @@ PE_parse_boot_argn(
 	args = PE_boot_args();
 	if (*args == '\0') return FALSE;
 
-#if CONFIG_EMBEDDED
-	if (max_len == -1) return FALSE;
-#endif
 
 	arg_found = FALSE;
 
@@ -134,10 +125,8 @@ PE_parse_boot_argn(
 				case STR:
 					if(max_len > 0) //max_len of 0 performs no copy at all
 						argstrcpy2(++cp, (char *)arg_ptr, max_len - 1);
-#if !CONFIG_EMBEDDED
 					else if(max_len == -1) // unreachable on embedded
 						argstrcpy(++cp, (char *)arg_ptr);
-#endif
 					arg_found = TRUE;
 					break;
 			}
@@ -164,7 +153,6 @@ isargsep(
 		return(FALSE);
 }
 
-#if !CONFIG_EMBEDDED
 static int
 argstrcpy(
 	char *from, 
@@ -179,7 +167,6 @@ argstrcpy(
 	*to = 0;
 	return(i);
 }
-#endif
 
 static int
 argstrcpy2(

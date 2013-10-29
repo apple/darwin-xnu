@@ -7,22 +7,16 @@ export MakeInc_dir=${SRCROOT}/makedefs/MakeInc.dir
 include $(MakeInc_cmd)
 include $(MakeInc_def)
 
-
-INSTINC_SUBDIRS = \
-
-INSTINC_SUBDIRS_I386 = \
-
-EXPINC_SUBDIRS = \
-
-EXPINC_SUBDIRS_I386 = \
-
 DATAFILES =  \
 	vnode_pager.h
+
+INSTALL_MI_LIST	= ${DATAFILES}
+
+INSTALL_MI_DIR = vm
 
 EXPORT_MI_LIST	= ${DATAFILES}
 
 EXPORT_MI_DIR = vm
-
 
 include $(MakeInc_rule)
 include $(MakeInc_dir)

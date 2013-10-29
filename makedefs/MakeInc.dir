@@ -1,820 +1,102 @@
+# -*- mode: makefile;-*-
 #
-# Install kernel header files
+# Copyright (C) 1999-2012 Apple Inc. All rights reserved.
 #
-.PHONY: installhdrs
-
-ifeq ($(findstring Libsyscall,$(RC_ProjectName)),Libsyscall)
-installhdrs:
-	cd libsyscall ; \
-		sdk="$(SDKROOT)" ;								\
-		if [ $${sdk} = / ] ; then						\
-			sdk="" ;									\
-		fi;												\
-		xcrun -sdk "$(SDKROOT)" xcodebuild installhdrs 	\
-			"SRCROOT=$(SRCROOT)/libsyscall" 				\
-			"OBJROOT=$(OBJROOT)" 						\
-			"SYMROOT=$(SYMROOT)" 						\
-			"DSTROOT=$(DSTROOT)"						\
-			"SDKROOT=$${sdk}"
-else ifeq ($(findstring libkxld,$(RC_ProjectName)),libkxld)
-installhdrs:
-	make -C libkern/kxld/ installhdrs
-else ifeq ($(RC_ProjectName),libkmod)
-installhdrs:
-# nothing to do
-else # xnu, xnu_debug, or xnu_headers_Sim
-installhdrs: exporthdrs installhdrs_mi installhdrs_md setup
-	@echo "[ $(SRCROOT) ] make installhdrs installing Kernel.framework"
-	$(_v)kincpath=$(DSTROOT)/$(KINCDIR);					\
-	krespath=$(DSTROOT)/$(KRESDIR);					\
-	kframepath=$(DSTROOT)/$(KINCFRAME);				\
-	[ -d $$krespath ] || $(MKDIR) $$krespath;			\
-	[ -d $$kincpath ] || $(MKDIR) $$kincpath;			\
-	cd $(SRCROOT)/EXTERNAL_HEADERS;					\
-		install $(FILE_INSTALL_FLAGS) Info.plist $$krespath;	\
-		$(NEWVERS) $${krespath}/Info.plist;	\
-	cd $$kframepath/Versions;					\
-	    [ -L Current ] || $(LN) $(KINCVERS) Current;		\
-	cd $$kframepath;						\
-	    [ -L Headers ] || $(LN) Versions/Current/Headers Headers;	\
-	    [ -L Resources ] || $(LN) Versions/Current/Resources Resources;	\
-	[ -d $(DSTROOT)/$(KPINCDIR) ] || $(MKDIR) $(DSTROOT)/$(KPINCDIR);	\
-	cd $$kframepath; [ -L PrivateHeaders ] ||		 	\
-	    $(LN) Versions/Current/PrivateHeaders PrivateHeaders;
-ifeq ($(RC_ProjectName),xnu_headers_Sim)
-	@echo "[ $(SRCROOT) ] make installhdrs installing System.framework"
-	$(_v)spincpath=$(DSTROOT)/$(SPINCDIR);				\
-	sframepath=$(DSTROOT)/$(SINCFRAME);				\
-	[ -d $$spincpath ] || $(MKDIR) $$spincpath;			\
-	cd $$sframepath/Versions;					\
-	    [ -L Current ] || $(LN) $(SINCVERS) Current;		\
-	cd $$sframepath; [ -L PrivateHeaders ] ||		 	\
-	    $(LN) Versions/Current/PrivateHeaders PrivateHeaders;
-endif
-ifeq (iPhoneOS,$(PLATFORM))
-	$(_v)$(IPHONEOS_OPTIMIZE) $(DSTROOT)/$(KRESDIR)/Info.plist
-endif
-endif
-
-.PHONY: installhdrs_embedded installhdrs_devicemap
-installhdrs_embedded installhdrs_devicemap: installhdrs
-
+# MakeInc.dir contains the recursion rules for the build system.
+# For instance, the "build_installhdrs_md" target is auto-generated
+# such that make(1) recurses into a specified set of subdirectories
+# (building "build_installhdrs_md" in turn at each level) before
+# building the special "do_installhdrs_md" target at the current
+# level. "do_installhdrs_md" is defined in MakeInc.rule.
 #
-# Install header files order
-#
-.ORDER: installhdrs_mi installhdrs_md
-.PHONY: installhdrs_mi installhdrs_md
 
-#
-# Install machine independent header files
-#
-installhdrs_mi: setup
-	$(_v)kernel_config=$(INSTALL_TYPE);				\
-	machine_config=$(MACHINE_CONFIG);				\
-	arch_config=$(INSTALL_ARCH_DEFAULT);				\
-	if [ $${arch_config} = ARM ] ; then				\
-		if [ $${machine_config} = DEFAULT ] ; then		\
-			machine_config=$(DEFAULT_ARM_MACHINE_CONFIG);	\
-		fi;							\
-	fi;								\
-	if [ $${arch_config} = L4_ARM ] ; then				\
-		if [ $${machine_config} = DEFAULT ] ; then		\
-			machine_config=$(DEFAULT_L4_ARM_MACHINE_CONFIG);	\
-		fi;							\
-	fi;								\
-	if [ $${machine_config} = DEFAULT ] ; then			\
-		installinc_dir=${OBJROOT}/$${kernel_config}_$${arch_config}/${RELATIVE_SOURCE_PATH};	\
-	else								\
-		installinc_dir=${OBJROOT}/$${kernel_config}_$${arch_config}_$${machine_config}/${RELATIVE_SOURCE_PATH};	\
-	fi;								\
-	[ -d $${installinc_dir} ] || $(MKDIR) $${installinc_dir};	\
-	${MAKE} ${MAKEJOBS} -C $${installinc_dir}			\
-		KERNEL_CONFIG=$${kernel_config}				\
-		ARCH_CONFIG=$${arch_config}				\
-		MACHINE_CONFIG=$${machine_config}			\
-		MAKEFILES=${SOURCE}/Makefile				\
-		SOURCE=${SOURCE}/					\
-		RELATIVE_SOURCE_PATH=.					\
-		TARGET=$${installinc_dir}/				\
-		build_installhdrs_mi;					\
+# $(1) is the name of the target to produce that will perform the
+#      recursive behavior via dependencies
+# $(2) is a list of subdirectories to recurse into
+# $(3) is the target to build with a sub-make after
+#      the subdirectories have been recursed into
+# $(4) should be "1" if TARGET should be pinned to the per-arch
+#      build COMPONENT directory, or empty if it should recurse
+#      in lockstep with the source recursion
+define RECURSIVE_BUILD_RULES_template
+$(1)_recurse_target_list = $$(addprefix $(1)_recurse_into_,$(2))
 
-#
-# Install machine dependent kernel header files 
-# Uses hack for machine_config, which is not threaded through properly.
-#
-installhdrs_md: setup
-	$(_v)kernel_config=$(INSTALL_TYPE);				\
-	machine_config=$(MACHINE_CONFIG);				\
-	for arch_config in $(INSTALL_ARCHS);				\
-	do								\
-	if [ $${arch_config} = ARM ] ; then	\
-		if [ $${machine_config} = DEFAULT ] ; then	\
-			machine_config=$(DEFAULT_ARM_MACHINE_CONFIG);		\
-		fi;		\
-	fi;		\
-	if [ $${arch_config} = L4_ARM ] ; then	\
-		if [ $${machine_config} = DEFAULT ] ; then	\
-			machine_config=$(DEFAULT_L4_ARM_MACHINE_CONFIG);		\
-		fi;		\
-	fi;		\
-	if [ $${machine_config} = DEFAULT ] ; then	\
-		installinc_dir=${OBJROOT}/$${kernel_config}_$${arch_config}/${RELATIVE_SOURCE_PATH};	\
-	else		\
-		installinc_dir=${OBJROOT}/$${kernel_config}_$${arch_config}_$${machine_config}/${RELATIVE_SOURCE_PATH};	\
-	fi;		\
-	[ -d $${installinc_dir} ] || $(MKDIR) $${installinc_dir};	\
-	${MAKE} ${MAKEJOBS} -C $${installinc_dir}			\
-		KERNEL_CONFIG=$${kernel_config}				\
-		ARCH_CONFIG=$${arch_config}				\
-		MACHINE_CONFIG=$${machine_config}			\
-		MAKEFILES=${SOURCE}/Makefile				\
-		SOURCE=${SOURCE}/					\
-		RELATIVE_SOURCE_PATH=.					\
-		TARGET=$${installinc_dir}/				\
-		build_installhdrs_md;					\
-	done;
+.PHONY: $$($(1)_recurse_target_list)
 
-#
-# Install machine independent kernel header files 
-#
-do_installhdrs_mi:
+$$($(1)_recurse_target_list):
+	$$(_v)$$(MKDIR) $$(CURDIR)/$$(patsubst $(1)_recurse_into_%,%,$$@)
+	$$(_v)$${MAKE} -C $$(CURDIR)/$$(patsubst $(1)_recurse_into_%,%,$$@)	\
+		-f $$(SOURCE)$$(patsubst $(1)_recurse_into_%,%,$$@)/Makefile	\
+		CURRENT_KERNEL_CONFIG=$${CURRENT_KERNEL_CONFIG}		\
+		CURRENT_ARCH_CONFIG=$${CURRENT_ARCH_CONFIG}		\
+		CURRENT_MACHINE_CONFIG=$${CURRENT_MACHINE_CONFIG}	\
+		CURRENT_BUILD_CONFIG=$${CURRENT_BUILD_CONFIG}		\
+		SOURCE=$$(SOURCE)$$(patsubst $(1)_recurse_into_%,%,$$@)/	\
+		RELATIVE_SOURCE_PATH=$$(RELATIVE_SOURCE_PATH)/$$(patsubst $(1)_recurse_into_%,%,$$@)	\
+		TARGET=$(if $(4),$${OBJPATH}/$$(COMPONENT),$$(TARGET)$$(patsubst $(1)_recurse_into_%,%,$$@)/)		\
+		OBJPATH=$${OBJPATH}		     			\
+		$(1);
 
-BUILD_INSTALLHDRS_MI_SUBDIRS_TARGETS = $(addprefix build_installhdrs_mi_,$(INSTINC_SUBDIRS))
+.PHONY: $(1)
 
-.PHONY: $(BUILD_INSTALLHDRS_MI_SUBDIRS_TARGETS)
-
-$(BUILD_INSTALLHDRS_MI_SUBDIRS_TARGETS):
-	$(_v)installinc_subdir="$(patsubst build_installhdrs_mi_%,%,$@)";	\
-	[ -d $${installinc_subdir} ] || $(MKDIR) $${installinc_subdir};		\
-	${MAKE} -C $${installinc_subdir}	 				\
-		MAKEFILES=$(SOURCE)$${installinc_subdir}/Makefile		\
-		SOURCE=$(SOURCE)$${installinc_subdir}/				\
-		RELATIVE_SOURCE_PATH=$(RELATIVE_SOURCE_PATH)/$${installinc_subdir}	\
-		TARGET=$(TARGET)$${installinc_subdir}/				\
-		build_installhdrs_mi;
-
-build_installhdrs_mi: $(BUILD_INSTALLHDRS_MI_SUBDIRS_TARGETS)
-	$(_v)${MAKE} do_installhdrs_mi;
-
-#
-# Install machine dependent kernel header files 
-#
-do_installhdrs_md:
-
-BUILD_INSTALLHDRS_MD_SUBDIRS_TARGETS = $(addprefix build_installhdrs_md_,$($(addprefix INSTINC_SUBDIRS_, $(ARCH_CONFIG))))
-
-.PHONY: $(BUILD_INSTALLHDRS_MD_SUBDIRS_TARGETS)
-
-$(BUILD_INSTALLHDRS_MD_SUBDIRS_TARGETS):
-	$(_v)installinc_subdir="$(patsubst build_installhdrs_md_%,%,$@)";	\
-	[ -d $${installinc_subdir} ] || $(MKDIR) $${installinc_subdir};		\
-	${MAKE} -C $${installinc_subdir}	 				\
-		MAKEFILES=$(SOURCE)$${installinc_subdir}/Makefile		\
-		SOURCE=$(SOURCE)$${installinc_subdir}/				\
-		RELATIVE_SOURCE_PATH=$(RELATIVE_SOURCE_PATH)/$${installinc_subdir}	\
-		TARGET=$(TARGET)$${installinc_subdir}/				\
-		build_installhdrs_md;
-
-build_installhdrs_md: $(BUILD_INSTALLHDRS_MD_SUBDIRS_TARGETS)
-	$(_v)${MAKE} do_installhdrs_md;
-
-#
-# Install kernel header files
-#
-.PHONY: exporthdrs
-
-exporthdrs: exporthdrs_mi exporthdrs_md 
-
-#
-# Install header files order
-#
-.ORDER: exporthdrs_mi exporthdrs_md
-.PHONY: exporthdrs_mi exporthdrs_md
-
-#
-# Install machine independent header files
-#
-do_exporthdrs_mi:
-
-exporthdrs_mi:
-	$(_v)kernel_config=$(INSTALL_TYPE);				\
-	arch_config=$(INSTALL_ARCH_DEFAULT);				\
-	machine_config=DEFAULT;						\
-	if [ $${arch_config} = ARM ] ; then				\
-		if [ $${machine_config} = DEFAULT ] ; then		\
-			machine_config=$(DEFAULT_ARM_MACHINE_CONFIG);	\
-		fi;							\
-	fi;								\
-	if [ $${arch_config} = L4_ARM ] ; then				\
-		if [ $${machine_config} = DEFAULT ] ; then		\
-			machine_config=$(DEFAULT_L4_ARM_MACHINE_CONFIG);\
-		fi;							\
-	fi;								\
-	if [ $${machine_config} = DEFAULT ] ; then			\
-		exportinc_dir=${OBJROOT}/$${kernel_config}_$${arch_config}/${RELATIVE_SOURCE_PATH};	\
-	else								\
-		exportinc_dir=${OBJROOT}/$${kernel_config}_$${arch_config}_$${machine_config}/${RELATIVE_SOURCE_PATH};	\
-	fi;								\
-	[ -d $${exportinc_dir} ] || $(MKDIR) $${exportinc_dir};		\
-	${MAKE} ${MAKEJOBS} -C $${exportinc_dir}			\
-		KERNEL_CONFIG=$${kernel_config}				\
-		ARCH_CONFIG=$${arch_config}				\
-		MACHINE_CONFIG=$${machine_config}			\
-		MAKEFILES=${SOURCE}/Makefile				\
-		SOURCE=${SOURCE}/					\
-		RELATIVE_SOURCE_PATH=.					\
-		TARGET=$${exportinc_dir}/				\
-		build_exporthdrs_mi;					\
-
-#
-# Install machine dependent kernel header files 
-#
-# Note - installation of machine dependent kernel header files only occurs for architecture
-# defined in INSTALL_TYPE.  We use skipit variable to skip over architectures that are not
-# equal to what is in the INSTALL_TYPE variable.
-# TARGET_CONFIGS_UC variable holds sets of three configuration options.  The first item in the
-# set is the kernel configuration.  The second item in the set is the architecture and the 
-# third item is the machine configuration.  There may be multiple sets to build.
-exporthdrs_md:
-	$(_v)my_counter=1;		\
-	for my_config in $(TARGET_CONFIGS_UC);				\
-	do		\
-	if [ $${my_counter} -eq 1 ] ; then	\
-		skipit=0;			\
-		my_counter=2;		\
-		kernel_config=$${my_config};		\
-		if [ $${kernel_config} = DEFAULT ] ; then	\
-			kernel_config=$(DEFAULT_KERNEL_CONFIG);		\
-		fi;		\
-		if [ $${kernel_config} != $(INSTALL_TYPE) ] ; then	\
-			skipit=1;	\
-		fi;		\
-	elif [ $${my_counter} -eq 2 ] ; then	\
-		my_counter=3;		\
-		arch_config=$${my_config};		\
-		if [ $${arch_config} = DEFAULT ] ; then	\
-			arch_config=`arch | $(TR) a-z A-Z`;		\
-		fi;		\
-	else		\
-		my_counter=1;		\
-		machine_config=$${my_config};		\
-		if [ $${skipit} -eq 0 ] ; then	\
-			if [ $${arch_config} = ARM ] ; then	\
-				if [ $${machine_config} = DEFAULT ] ; then	\
-					machine_config=$(DEFAULT_ARM_MACHINE_CONFIG);		\
-				fi;		\
-			fi;		\
-			if [ $${arch_config} = L4_ARM ] ; then	\
-				if [ $${machine_config} = DEFAULT ] ; then	\
-					machine_config=$(DEFAULT_L4_ARM_MACHINE_CONFIG);		\
-				fi;		\
-			fi;		\
-			if [ $${machine_config} = DEFAULT ] ; then	\
-				exportinc_dir=${OBJROOT}/$${kernel_config}_$${arch_config}/${RELATIVE_SOURCE_PATH};	\
-			else		\
-				exportinc_dir=${OBJROOT}/$${kernel_config}_$${arch_config}_$${machine_config}/${RELATIVE_SOURCE_PATH};	\
-			fi;		\
-			[ -d $${exportinc_dir} ] || $(MKDIR) $${exportinc_dir};					\
-			${MAKE} ${MAKEJOBS} -C $${exportinc_dir}			\
-				KERNEL_CONFIG=$${kernel_config}				\
-				ARCH_CONFIG=$${arch_config}				\
-				MACHINE_CONFIG=$${machine_config}			\
-				MAKEFILES=${SOURCE}/Makefile				\
-				SOURCE=${SOURCE}/					\
-				RELATIVE_SOURCE_PATH=.					\
-				TARGET=$${exportinc_dir}/				\
-				build_exporthdrs_md;					\
-		fi;		\
-	fi;		\
-	done;
-
-#
-# Install machine independent kernel header files 
-#
-do_exporthdrs_mi:
-
-BUILD_EXPORTHDRS_MI_SUBDIRS_TARGETS = $(addprefix build_exporthdrs_mi_,$(EXPINC_SUBDIRS))
-
-.PHONY: $(BUILD_EXPORTHDRS_MI_SUBDIRS_TARGETS)
-
-$(BUILD_EXPORTHDRS_MI_SUBDIRS_TARGETS):
-	$(_v)exportinc_subdir="$(patsubst build_exporthdrs_mi_%,%,$@)";		\
-	[ -d $${exportinc_subdir} ] || $(MKDIR) $${exportinc_subdir};		\
-	${MAKE} -C $${exportinc_subdir}						\
-		MAKEFILES=$(SOURCE)$${exportinc_subdir}/Makefile		\
-		SOURCE=$(SOURCE)$${exportinc_subdir}/				\
-		RELATIVE_SOURCE_PATH=$(RELATIVE_SOURCE_PATH)/$${exportinc_subdir}	\
-		TARGET=$(TARGET)$${exportinc_subdir}/				\
-		build_exporthdrs_mi;
-
-build_exporthdrs_mi: $(BUILD_EXPORTHDRS_MI_SUBDIRS_TARGETS)
-	$(_v)${MAKE} do_exporthdrs_mi;
-
-#
-# Install machine dependent kernel header files 
-#
-do_exporthdrs_md:
-
-BUILD_EXPORTHDRS_MD_SUBDIRS_TARGETS = $(addprefix build_exporthdrs_md_,$($(addprefix EXPINC_SUBDIRS_, $(ARCH_CONFIG))))
-
-.PHONY: $(BUILD_EXPORTHDRS_MD_SUBDIRS_TARGETS)
-
-$(BUILD_EXPORTHDRS_MD_SUBDIRS_TARGETS):
-	$(_v)exportinc_subdir="$(patsubst build_exporthdrs_md_%,%,$@)";		\
-	[ -d $${exportinc_subdir} ] || $(MKDIR) $${exportinc_subdir};		\
-	${MAKE} -C $${exportinc_subdir}						\
-		MAKEFILES=$(SOURCE)$${exportinc_subdir}/Makefile		\
-		SOURCE=$(SOURCE)$${exportinc_subdir}/				\
-		RELATIVE_SOURCE_PATH=$(RELATIVE_SOURCE_PATH)/$${exportinc_subdir}	\
-		TARGET=$(TARGET)$${exportinc_subdir}/				\
-		build_exporthdrs_md;
-
-build_exporthdrs_md: $(BUILD_EXPORTHDRS_MD_SUBDIRS_TARGETS)
-	$(_v)${MAKE} do_exporthdrs_md;
+$(1): $$($(1)_recurse_target_list)
+	$$(_v)$${MAKE} -C $$(CURDIR)						\
+		-f $$(firstword $$(MAKEFILE_LIST))				\
+		CURRENT_KERNEL_CONFIG=$${CURRENT_KERNEL_CONFIG}			\
+		CURRENT_ARCH_CONFIG=$${CURRENT_ARCH_CONFIG}			\
+		CURRENT_MACHINE_CONFIG=$${CURRENT_MACHINE_CONFIG}		\
+		CURRENT_BUILD_CONFIG=$${CURRENT_BUILD_CONFIG}			\
+		SOURCE=$$(SOURCE)						\
+		RELATIVE_SOURCE_PATH=$$(RELATIVE_SOURCE_PATH)			\
+		TARGET=$$(TARGET)						\
+		OBJPATH=$${OBJPATH}		     				\
+		$(3);
+endef
 
 #
 # Setup pass for  all architectures for all Configuration/Architecture options
 #
-.PHONY: setup
+$(eval $(call RECURSIVE_BUILD_RULES_template,build_setup,$(SETUP_SUBDIRS),do_build_setup,))
 
-setup:
-	$(_v)kernel_config=$(INSTALL_TYPE);				\
-	arch_config=$(INSTALL_ARCH_DEFAULT);				\
-	setup_subdir=${OBJROOT}/$${RELATIVE_SOURCE_PATH}; 		\
-	[ -d $${setup_subdir} ] || $(MKDIR) $${setup_subdir};		\
-	${MAKE} ${MAKEJOBS} -C $${setup_subdir}				\
-		KERNEL_CONFIG=$${kernel_config}				\
-		ARCH_CONFIG=$${arch_config}				\
-		MACHINE_CONFIG=$${machine_config}			\
-		MAKEFILES=${SOURCE}/Makefile				\
-		SOURCE=${SOURCE}/					\
-		RELATIVE_SOURCE_PATH=.					\
-		TARGET=$${setup_subdir}/				\
-	build_setup;
+#
+# Install machine independent kernel header files 
+#
+$(eval $(call RECURSIVE_BUILD_RULES_template,build_installhdrs_mi,$(INSTINC_SUBDIRS),do_installhdrs_mi,))
 
-do_build_setup:
+#
+# Install machine dependent kernel header files 
+#
+$(eval $(call RECURSIVE_BUILD_RULES_template,build_installhdrs_md,$(INSTINC_SUBDIRS_$(CURRENT_ARCH_CONFIG)),do_installhdrs_md,))
 
-BUILD_SETUP_SUBDIRS_TARGETS = $(addprefix build_setup_,$(SETUP_SUBDIRS) $($(addprefix SETUP_SUBDIRS_, $(ARCH_CONFIG))))
+#
+# Install machine independent kernel header files 
+#
+$(eval $(call RECURSIVE_BUILD_RULES_template,build_exporthdrs_mi,$(EXPINC_SUBDIRS),do_exporthdrs_mi,))
 
-.PHONY: $(BUILD_SETUP_SUBDIRS_TARGETS)
-
-$(BUILD_SETUP_SUBDIRS_TARGETS):
-	$(_v)setup_subdir="$(patsubst build_setup_%,%,$@)";	\
-	[ -d $${setup_subdir} ] || $(MKDIR) $${setup_subdir};	\
-	${MAKE} -C $${setup_subdir}				\
-		MAKEFILES=${SOURCE}/$${setup_subdir}/Makefile	\
-		SOURCE=${SOURCE}/$${setup_subdir}/		\
-		RELATIVE_SOURCE_PATH=${RELATIVE_SOURCE_PATH}/$${setup_subdir}	\
-		TARGET=${TARGET}/$${setup_subdir}/		\
-		build_setup;
-
-build_setup: $(BUILD_SETUP_SUBDIRS_TARGETS)
-	$(_v)${MAKE} do_build_setup;
-
+#
+# Install machine dependent kernel header files 
+#
+$(eval $(call RECURSIVE_BUILD_RULES_template,build_exporthdrs_md,$(EXPINC_SUBDIRS_$(CURRENT_ARCH_CONFIG)),do_exporthdrs_md,))
 
 #
 # Build all architectures for all Configuration/Architecture options
 #
-# Note - TARGET_CONFIGS_UC variable holds sets of three configuration options.  The first 
-# item in the set is the kernel configuration.  The second item in the set is the architecture  
-# and the third item is the machine configuration.  There may be multiple sets to build.
-#
-.PHONY: all
-
-ifeq ($(RC_ProjectName),Libsyscall)
-all:
-	cd libsyscall ; \
-		sdk="$(SDKROOT)" ;							\
-		if [ $${sdk} = / ] ; then						\
-			sdk="" ;							\
-		fi;									\
-		xcrun -sdk "$(SDKROOT)" xcodebuild install	 			\
-			"SRCROOT=$(SRCROOT)/libsyscall"					\
-			"OBJROOT=$(OBJROOT)" 						\
-			"SYMROOT=$(SYMROOT)" 						\
-			"DSTROOT=$(DSTROOT)"						\
-			"SDKROOT=$${sdk}"
-else ifeq ($(RC_ProjectName),libkxld)
-all:
-	make -C libkern/kxld/ install
-else ifeq ($(RC_ProjectName),libkxld_host)
-all:
-	make -C libkern/kxld/ install PRODUCT_TYPE=ARCHIVE
-else ifeq ($(RC_ProjectName),libkmod)
-all:
-	cd libkern/kmod ; \
-		sdk="$(SDKROOT)" ;							\
-		if [ $${sdk} = / ] ; then						\
-			sdk="" ;							\
-		fi;									\
-		xcrun -sdk "$(SDKROOT)" xcodebuild install	 			\
-			"SRCROOT=$(SRCROOT)/libkern/kmod"				\
-			"OBJROOT=$(OBJROOT)" 						\
-			"SYMROOT=$(SYMROOT)" 						\
-			"DSTROOT=$(DSTROOT)"						\
-			"SDKROOT=$${sdk}"
-else ifeq ($(findstring _headers_Sim,$(RC_ProjectName)),_headers_Sim) # Libsyscall/xnu _headers_Sim
-all: exporthdrs
-else # xnu or xnu_debug
-ifeq ($(COMPONENT), .)
-all: exporthdrs setup
-else
-all:
-endif
-	$(_v)my_counter=1;		\
-	for my_config in $(TARGET_CONFIGS_UC);				\
-	do		\
-	if [ $${my_counter} -eq 1 ] ; then	\
-		my_counter=2;		\
-		kernel_config=$${my_config};		\
-		if [ $${kernel_config} = DEFAULT ] ; then	\
-			kernel_config=$(DEFAULT_KERNEL_CONFIG);		\
-		fi;		\
-	elif [ $${my_counter} -eq 2 ] ; then	\
-		my_counter=3;		\
-		arch_config=$${my_config};		\
-		if [ $${arch_config} = DEFAULT ] ; then	\
-			arch_config=`arch | $(TR) a-z A-Z`;		\
-		fi;		\
-	else		\
-		my_counter=1;		\
-		machine_config=$${my_config};		\
-		if [ $${arch_config} = ARM ] ; then	\
-			if [ $${machine_config} = DEFAULT ] ; then	\
-				machine_config=$(DEFAULT_ARM_MACHINE_CONFIG);		\
-			fi;		\
-		fi;		\
-		if [ $${arch_config} = L4_ARM ] ; then	\
-			if [ $${machine_config} = DEFAULT ] ; then	\
-				machine_config=$(DEFAULT_L4_ARM_MACHINE_CONFIG);		\
-			fi;		\
-		fi;		\
-		if [ $${machine_config} = DEFAULT ] ; then	\
-			build_subdir=${OBJROOT}/$${kernel_config}_$${arch_config}/${RELATIVE_SOURCE_PATH}; \
-		else		\
-			build_subdir=${OBJROOT}/$${kernel_config}_$${arch_config}_$${machine_config}/${RELATIVE_SOURCE_PATH}; \
-		fi;		\
-		[ -d $${build_subdir} ] || $(MKDIR) $${build_subdir};					\
-			${MAKE} ${MAKEJOBS} -C $${build_subdir}				\
-				KERNEL_CONFIG=$${kernel_config}				\
-				ARCH_CONFIG=$${arch_config}				\
-				MACHINE_CONFIG=$${machine_config}			\
-				MAKEFILES=${SOURCE}/Makefile 				\
-				SOURCE=${SOURCE}/					\
-				RELATIVE_SOURCE_PATH=${RELATIVE_SOURCE_PATH}		\
-				build_all;						\
-	fi;		\
-	done;
-endif
-
-.PHONY: all_embedded all_devicemap
-all_embedded all_devicemap: all
+$(eval $(call RECURSIVE_BUILD_RULES_template,build_all,$(COMP_SUBDIRS) $(COMP_SUBDIRS_$(CURRENT_ARCH_CONFIG)),do_build_all,1))
 
 #
-# Build all architectures for all Configuration/Architecture options
+# Post-process build results
 #
-do_build_all:
-
-BUILD_ALL_SUBDIRS_TARGETS = $(addprefix build_all_,$(COMP_SUBDIRS) $($(addprefix COMP_SUBDIRS_, $(ARCH_CONFIG))))
-
-.PHONY: $(BUILD_ALL_SUBDIRS_TARGETS)
-
-$(BUILD_ALL_SUBDIRS_TARGETS):
-	$(_v)if [ $(MACHINE_CONFIG) = DEFAULT ] ; then  \
-		TARGET=$(OBJROOT)/$(KERNEL_CONFIG)_$(ARCH_CONFIG)/$(COMPONENT);	\
-	else		\
-		TARGET="$(OBJROOT)/$(KERNEL_CONFIG)_$(ARCH_CONFIG)_$(MACHINE_CONFIG)/$(COMPONENT)";	\
-	fi;		\
-	comp_subdir="$(patsubst build_all_%,%,$@)";		\
-	[ -d $${comp_subdir} ] || $(MKDIR) $${comp_subdir};	\
-	${MAKE} -C $${comp_subdir}				\
-		MAKEFILES=${SOURCE}/$${comp_subdir}/Makefile	\
-		SOURCE=${SOURCE}$${comp_subdir}/		\
-		RELATIVE_SOURCE_PATH=$(RELATIVE_SOURCE_PATH)/$${comp_subdir}	\
-		TARGET=$${TARGET}				\
-		build_all;
-
-build_all: $(BUILD_ALL_SUBDIRS_TARGETS)
-	$(_v)if [ $(MACHINE_CONFIG) = DEFAULT ] ; then  \
-		TARGET=$(OBJROOT)/$(KERNEL_CONFIG)_$(ARCH_CONFIG)/$(COMPONENT);	\
-	else		\
-		TARGET="$(OBJROOT)/$(KERNEL_CONFIG)_$(ARCH_CONFIG)_$(MACHINE_CONFIG)/$(COMPONENT)";	\
-	fi;		\
-	${MAKE} INCL_MAKEDEP=TRUE TARGET=$${TARGET} do_build_all;	\
-	_TMP_comp_subdir="$(CONFIG_SUBDIRS) $($(addprefix CONFIG_SUBDIRS_, $(ARCH_CONFIG)))";	\
-	for comp_subdir in $${_TMP_comp_subdir};			\
-	do								\
-		[ -d $${comp_subdir} ] || $(MKDIR) $${comp_subdir};				\
-		${MAKE} -C $${comp_subdir}				\
-			MAKEFILES=${SOURCE}/$${comp_subdir}/Makefile	\
-			SOURCE=${SOURCE}$${comp_subdir}/		\
-			RELATIVE_SOURCE_PATH=$(RELATIVE_SOURCE_PATH)/$${comp_subdir}	\
-			TARGET=$${TARGET}				\
-		build_all;						\
-	done;								
-	
-
-#
-# Build all architectures for all Configuration/Architecture options
-#
-# Note - TARGET_CONFIGS_UC variable holds sets of three configuration options.  The first 
-# item in the set is the kernel configuration.  The second item is the architecture  
-# and the third item is the machine configuration.  There may be multiple sets to build.
-#
-mach_kernel:
-	$(_v)my_counter=1;		\
-	for my_config in $(TARGET_CONFIGS_UC);				\
-	do		\
-	if [ $${my_counter} -eq 1 ] ; then	\
-		my_counter=2;		\
-		kernel_config=$${my_config};		\
-		if [ $${kernel_config} = DEFAULT ] ; then	\
-			kernel_config=$(DEFAULT_KERNEL_CONFIG);		\
-		fi;		\
-	elif [ $${my_counter} -eq 2 ] ; then	\
-		my_counter=3;		\
-		arch_config=$${my_config};		\
-		if [ $${arch_config} = DEFAULT ] ; then	\
-			arch_config=`arch | $(TR) a-z A-Z`;		\
-		fi;		\
-	else		\
-		my_counter=1;		\
-		machine_config=$${my_config};		\
-		if [ $${arch_config} = ARM ] ; then	\
-			if [ $${machine_config} = DEFAULT ] ; then	\
-				machine_config=$(DEFAULT_ARM_MACHINE_CONFIG);		\
-			fi;		\
-		fi;		\
-		if [ $${arch_config} = L4_ARM ] ; then	\
-			if [ $${machine_config} = DEFAULT ] ; then	\
-				machine_config=$(DEFAULT_L4_ARM_MACHINE_CONFIG);		\
-			fi;		\
-		fi;		\
-		if [ $${machine_config} = DEFAULT ] ; then	\
-			build_subdir=${OBJROOT}/$${kernel_config}_$${arch_config};	\
-		else		\
-			build_subdir=${OBJROOT}/$${kernel_config}_$${arch_config}_$${machine_config};	\
-		fi;		\
-		[ -d $${build_subdir} ] || $(MKDIR) $${build_subdir};					\
-		${MAKE} ${MAKEJOBS} -C $${build_subdir}					\
-			KERNEL_CONFIG=$${kernel_config}				\
-			ARCH_CONFIG=$${arch_config}				\
-			MACHINE_CONFIG=$${machine_config}			\
-			MAKEFILES=${SOURCE}/Makefile 				\
-			SOURCE=${SOURCE}/					\
-			TARGET=$${build_subdir}/				\
-			build_mach_kernel;					\
-	fi;		\
-	done;
-
-#
-# Build all architectures for all Configuration/Architecture options
-#
-do_build_mach_kernel:
-
-build_mach_kernel: 
-	$(_v)${MAKE} do_build_mach_kernel;
-
-
-#
-#
-# Install dependencies order
-#
-.ORDER: installhdrs exporthdrs all
-
-#
-# Install kernel based on RC_ARCHS for all INSTALL_TYPES
-# Install kernel header files based on RC_ARCHS
-#
-install: installhdrs all installman installmachinekernels
-ifeq ($(findstring Libsyscall,$(RC_ProjectName)),Libsyscall)
-# nothing to do
-else ifeq ($(findstring libkxld,$(RC_ProjectName)),libkxld)
-# nothing to do, work performed in "all" action
-else ifeq ($(RC_ProjectName),libkmod)
-# nothing to do, work performed in "all" action
-else ifeq ($(findstring _headers_Sim,$(RC_ProjectName)),_headers_Sim)
-# nothing to do
-else # xnu or xnu_debug
-# A bit of a hack for machine_config: machine configs aren't really threaded through properly.
-	$(_v)machine_config=$(MACHINE_CONFIG);		\
-	for kernel_config in $(INSTALL_TYPE);				\
-	do								\
-	for arch_config in $(INSTALL_ARCHS);				\
-	do								\
-	if [ $${arch_config} = ARM ] ; then	\
-		if [ $${machine_config} = DEFAULT ] ; then	\
-			machine_config=$(DEFAULT_ARM_MACHINE_CONFIG);		\
-		fi;		\
-	fi;		\
-	if [ $${arch_config} = L4_ARM ] ; then	\
-		if [ $${machine_config} = DEFAULT ] ; then	\
-			machine_config=$(DEFAULT_L4_ARM_MACHINE_CONFIG);		\
-		fi;		\
-	fi;		\
-	if [ $${machine_config} = DEFAULT ] ; then	\
-		install_subdir=${OBJROOT}/$${kernel_config}_$${arch_config}/${RELATIVE_SOURCE_PATH};	\
-	else		\
-		install_subdir=${OBJROOT}/$${kernel_config}_$${arch_config}_$${machine_config}/${RELATIVE_SOURCE_PATH};	\
-	fi;		\
-	[ -d $${install_subdir} ] || $(MKDIR) $${install_subdir};					\
-	${MAKE} ${MAKEJOBS} -C $${install_subdir}			\
-		KERNEL_CONFIG=$${kernel_config}				\
-		ARCH_CONFIG=$${arch_config}				\
-		MACHINE_CONFIG=$${machine_config}			\
-		MAKEFILES=${SOURCE}/Makefile 				\
-		SOURCE=${SOURCE}/					\
-		RELATIVE_SOURCE_PATH=${RELATIVE_SOURCE_PATH}		\
-		build_install;						\
-	done;								\
-	done;
-ifeq ($(RC_ProjectName),xnu_debug)
-	$(_v)$(MKDIR) $(DSTROOT)/$(DEVELOPER_EXTRAS_DIR)
-	$(_v)$(MV) $(DSTROOT)/mach_kernel* $(DSTROOT)/$(DEVELOPER_EXTRAS_DIR)
-	$(_v)$(CP) $(SYMROOT)/kgmacros $(DSTROOT)/$(DEVELOPER_EXTRAS_DIR)
-	$(_v)$(CP) -r $(SYMROOT)/System.kext $(DSTROOT)/$(DEVELOPER_EXTRAS_DIR)
-	$(_v)$(CP) -r $(SYMROOT)/mach_kernel.dSYM $(DSTROOT)/$(DEVELOPER_EXTRAS_DIR)
-	$(_v)$(CP) $(SRCROOT)/config/README.DEBUG-kernel.txt $(DSTROOT)/$(DEVELOPER_EXTRAS_DIR)
-	$(_v)$(MV) $(DSTROOT)/System $(DSTROOT)/usr $(OBJROOT)/
-endif
-endif
-
-.PHONY: install_embedded install_devicemap
-install_embedded install_devicemap: install
-
-installmachinekernels:
-	@echo "[ $(SOURCE) ] make installmachinekernels";				\
-	my_counter=1;		\
-	for my_config in $(TARGET_CONFIGS_UC);				\
-	do		\
-	if [ $${my_counter} -eq 1 ] ; then	\
-		my_counter=2;		\
-		kernel_config=$${my_config};		\
-		if [ $${kernel_config} = DEFAULT ] ; then	\
-			kernel_config=$(DEFAULT_KERNEL_CONFIG);		\
-		fi;		\
-	elif [ $${my_counter} -eq 2 ] ; then	\
-		my_counter=3;		\
-		arch_config=$${my_config};		\
-		if [ $${arch_config} = DEFAULT ] ; then	\
-			arch_config=`arch | $(TR) a-z A-Z`;		\
-		fi;		\
-	else		\
-		my_counter=1;		\
-		machine_config=$${my_config};		\
-		if [ $${machine_config} != DEFAULT ] ; then	\
-			build_subdir=${OBJROOT}/$${kernel_config}_$${arch_config}_$${machine_config};	\
-			install_kernel_file=mach.`printf "%s" "$${kernel_config}" | $(TR) A-Z a-z`.`printf "%s" "$${machine_config}" | $(TR) A-Z a-z`;	\
-			[ -d $${build_subdir} ] || $(MKDIR) $${build_subdir};					\
-			${MAKE} ${MAKEJOBS} -C $${build_subdir}					\
-				INSTALL_KERNEL_FILE=$${install_kernel_file}		\
-				KERNEL_CONFIG=$${kernel_config}				\
-				ARCH_CONFIG=$${arch_config}				\
-				MACHINE_CONFIG=$${machine_config}			\
-				MAKEFILES=${SOURCE}/Makefile 				\
-				SOURCE=${SOURCE}/					\
-				RELATIVE_SOURCE_PATH=${RELATIVE_SOURCE_PATH}		\
-				TARGET=$${build_subdir}/				\
-				do_build_install;					\
-		fi;		\
-	fi;		\
-	done;
+$(eval $(call RECURSIVE_BUILD_RULES_template,config_all,$(CONFIG_SUBDIRS),do_config_all,1))
 
 #
 # Install for all architectures for all Configuration/Architecture options
 #
-setup_build_install:
-
-do_build_install:
-
-BUILD_INSTALL_SUBDIRS_TARGETS = $(addprefix build_install_,$(INST_SUBDIRS))
-
-.PHONY: $(BUILD_INSTALL_SUBDIRS_TARGETS)
-
-$(BUILD_INSTALL_SUBDIRS_TARGETS):
-	$(_v)if [ $(MACHINE_CONFIG) = DEFAULT ] ; then  \
-		TARGET=${OBJROOT}/$(KERNEL_CONFIG)_$(ARCH_CONFIG)/$(COMPONENT);	\
-	else		\
-		TARGET="$(OBJROOT)/$(KERNEL_CONFIG)_$(ARCH_CONFIG)_$(MACHINE_CONFIG)/$(COMPONENT)";	\
-	fi;		\
-	${MAKE} TARGET=$${TARGET} setup_build_install;			\
-	kernel_config=$(KERNEL_CONFIG);					\
-	install_subdir="$(patsubst build_install_%,%,$@)";		\
-	[ -d $${install_subdir} ] || $(MKDIR) $${install_subdir};				\
-	${MAKE} -C $${install_subdir}				\
-		KERNEL_CONFIG=$${kernel_config}			\
-		MAKEFILES=${SOURCE}/$${install_subdir}/Makefile	\
-		SOURCE=${SOURCE}$${install_subdir}/		\
-		RELATIVE_SOURCE_PATH=${RELATIVE_SOURCE_PATH}/$${install_subdir}		\
-		TARGET=$${TARGET}				\
-		build_install;
-
-build_install: $(BUILD_INSTALL_SUBDIRS_TARGETS)
-	$(_v)if [ $(MACHINE_CONFIG) = DEFAULT ] ; then  \
-		TARGET=${OBJROOT}/$(KERNEL_CONFIG)_$(ARCH_CONFIG)/$(COMPONENT);	\
-	else		\
-		TARGET="$(OBJROOT)/$(KERNEL_CONFIG)_$(ARCH_CONFIG)_$(MACHINE_CONFIG)/$(COMPONENT)";	\
-	fi;		\
-	${MAKE} TARGET=$${TARGET} do_build_install;
-
-
-#
-# Install source tree
-#
-.PHONY: installsrc
-
-installsrc:
-	$(_v)($(TAR) -c --mode go=r,+X --no-ignore-case --exclude .svn --exclude .git --exclude cscope.\* --exclude BUILD --exclude \*~ -f - .) | (cd $(SRCROOT) && $(TAR) --no-same-owner -xf -)
-
-
-#
-# Clean up source tree
-#
-.PHONY: clean
-
-clean:
-
-#
-# Build source file list for cscope database and tags
-#
-cscope.files:
-	@echo "Building file list for cscope and tags"
-	@find . -name '*.h' -type f | grep -v ^..BUILD > _cscope.files 2> /dev/null
-	@find . -name '*.defs' -type f | grep -v ^..BUILD >> _cscope.files 2> /dev/null
-	@find . -name '*.c' -type f | grep -v ^..BUILD >> _cscope.files 2> /dev/null
-	@find . -name '*.cpp' -type f | grep -v ^..BUILD >> _cscope.files 2> /dev/null
-	@find . -name '*.s' -type f | grep -v ^..BUILD >> _cscope.files 2> /dev/null
-	@find . -name '*.h.template' -type f | grep -v ^..BUILD >> _cscope.files 2> /dev/null
-	@echo -k -q -c > cscope.files 2> /dev/null
-	@sort -u < _cscope.files >> cscope.files 2> /dev/null
-	@rm -f _cscope.files _cscope.files2 2> /dev/null
-
-#
-# Build cscope database
-#
-cscope: cscope.files
-	@echo "Building cscope database"
-	@cscope -bvU 2> /dev/null
-
-#
-# Build tags
-#
-
-tags: cscope.files
-	@echo "Building ctags"
-	@-sed 1d cscope.files | xargs ctags -dtw 2> /dev/null || \
-		echo "Phantom files detected!" 2>&1 > /dev/null
-	@-[ -f TAGS ] || ${MAKE} TAGS
-
-TAGS: cscope.files
-	@echo "Building etags"
-	@-cat cscope.files | etags -l auto -S - 2> /dev/null
+$(eval $(call RECURSIVE_BUILD_RULES_template,build_install_primary,$(INST_SUBDIRS),do_build_install_primary,1))
+$(eval $(call RECURSIVE_BUILD_RULES_template,build_install_non_primary,$(INST_SUBDIRS),do_build_install_non_primary,1))
 
 #
 # Install Man Pages
 #
-.PHONY: installman
-
-installman:
-ifeq ($(findstring Libsyscall,$(RC_ProjectName)),Libsyscall)
-# nothing to do
-else ifeq ($(findstring libkxld,$(RC_ProjectName)),libkxld)
-# nothing to do
-else ifeq ($(RC_ProjectName),libkmod)
-# nothing to do
-else ifeq ($(findstring xnu_,$(RC_ProjectName)),xnu_)
-installman:
-# nothing to do
-else # xnu
-	@echo "[ $(SRCROOT) ] Installing man pages"
-	$(_v)manpath=$(DSTROOT)/$(MANDIR);   \
-	[ -d $$manpath ] || $(MKDIR) $$manpath;             \
-	${MAKE} ${MAKEJOBS} MAKEFILES=${SOURCE}/Makefile \
-		SOURCE=${SOURCE}/ \
-		RELATIVE_SOURCE_PATH=${RELATIVE_SOURCE_PATH} \
-		TARGET=${DSTROOT}/ \
-		build_installman
-	${SRCROOT}/config/compress-man-pages.pl ${DSTROOT}/${MANDIR}
-endif
-
-do_installman:
-
-BUILD_INSTALLMAN_SUBDIRS_TARGETS = $(addprefix build_installman_,$(INSTMAN_SUBDIRS))
-
-.PHONY: $(BUILD_INSTALLMAN_SUBDIRS_TARGETS)
-
-$(BUILD_INSTALLMAN_SUBDIRS_TARGETS):
-	$(_v)installman_subdir="$(patsubst build_installman_%,%,$@)";	\
-	${MAKE} -C $${installman_subdir} -r 	 				\
-		MAKEFILES=$(SOURCE)$${installman_subdir}/Makefile 		\
-		SOURCE=$(SOURCE)$${installman_subdir}/ 				\
-		RELATIVE_SOURCE_PATH=$(RELATIVE_SOURCE_PATH)/$${installman_subdir}	\
-		TARGET=$(TARGET)$${installman_subdir}/ 				\
-		build_installman; 
-
-build_installman: $(BUILD_INSTALLMAN_SUBDIRS_TARGETS)
-	$(_v)if [ -n "$(strip $(INSTALL_MAN_LIST))" ]; then \
-		${MAKE} do_installman; \
-	fi
+$(eval $(call RECURSIVE_BUILD_RULES_template,build_installman,$(INSTMAN_SUBDIRS),do_installman,))
 
 # vim: set ft=make:

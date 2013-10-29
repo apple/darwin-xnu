@@ -28,7 +28,7 @@
 #ifndef _NET_IF_BOND_INTERNAL_H_
 
 #ifdef KERNEL_PRIVATE
-int bond_family_init(void) __attribute__((section("__TEXT, initcode")));
+int bond_family_init(void);
 #endif /* KERNEL_PRIVATE */
 
 #endif /* _NET_IF_BOND_INTERNAL_H_ */

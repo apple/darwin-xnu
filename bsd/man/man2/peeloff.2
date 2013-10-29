@@ -1,0 +1,99 @@
+.\" 
+.\" Copyright (c) 2012 Apple Inc. All rights reserved.
+.\" 
+.\" @APPLE_OSREFERENCE_LICENSE_HEADER_START@
+.\" 
+.\" This file contains Original Code and/or Modifications of Original Code
+.\" as defined in and that are subject to the Apple Public Source License
+.\" Version 2.0 (the 'License'). You may not use this file except in
+.\" compliance with the License. The rights granted to you under the License
+.\" may not be used to create, or enable the creation or redistribution of,
+.\" unlawful or unlicensed copies of an Apple operating system, or to
+.\" circumvent, violate, or enable the circumvention or violation of, any
+.\" terms of an Apple operating system software license agreement.
+.\" 
+.\" Please obtain a copy of the License at
+.\" http://www.opensource.apple.com/apsl/ and read it before using this file.
+.\" 
+.\" The Original Code and all software distributed under the License are
+.\" distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+.\" EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
+.\" INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
+.\" FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+.\" Please see the License for the specific language governing rights and
+.\" limitations under the License.
+.\" 
+.\" @APPLE_OSREFERENCE_LICENSE_HEADER_END@
+.\"
+.Dd November 14, 2012
+.Dt PEELOFF 2
+.Os Darwin
+.Sh NAME
+.Nm peeloff
+.Nd extracts an association from a socket
+.Sh SYNOPSIS
+.Fd #include <sys/socket.h>
+.Ft int
+.Fo peeloff
+.Fa "int socket"
+.Fa "associd_t associd"
+.Fc
+.Sh DESCRIPTION
+The parameter
+.Fa socket
+is a socket.  The communication domain of the socket determines the
+availability and behavior of
+.Fn peeloff .
+In general,
+.Fn peeloff
+attempts to extract the association specified by
+.Fa associd
+into its own separate socket.
+.Pp
+The parameter
+.Fa associd
+specifies the association identifier.  It may be set to
+.Dv ASSOCID_ANY
+when there is only one association present; or one of the identifiers
+returned from
+.Xr getassocids 3 .
+.Sh RETURN VALUES
+The
+.Fn peeloff
+function returns -1 on error and the global variable
+.Va errno
+is set to indicate the error.  If it succeeds, it returns a non-negative
+integer that is a descriptor for the extracted association.
+.Sh ERRORS
+The
+.Fn peeloff
+system call succeeds unless:
+.Bl -tag -width Er
+.\" ===========
+.It Bq Er EBADF
+.Fa Socket
+is not a valid descriptor.
+.\" ===========
+.It Bq Er EINVAL
+The
+.Fa associd
+argument is invalid; cannot be extracted; or the underlying protocol
+is no longer attached to
+.Fa socket .
+.\" ===========
+.It Bq Er ENOTSOCK
+.Fa Socket
+is a file, not a socket.
+.El
+.Sh SEE ALSO
+.Xr connectx 2 ,
+.Xr disconnectx 2 ,
+.Xr socket 2 ,
+.Xr getassocids 3 ,
+.Xr getconnids 3 ,
+.Xr getconninfo 3 ,
+.Xr compat 5
+.Sh HISTORY
+The
+.Fn peeloff
+function call appeared in Darwin 13.0.0

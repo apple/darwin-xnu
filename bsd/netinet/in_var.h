@@ -1,8 +1,8 @@
 /*
- * Copyright (c) 2000-2011 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2013 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
- * 
+ *
  * This file contains Original Code and/or Modifications of Original Code
  * as defined in and that are subject to the Apple Public Source License
  * Version 2.0 (the 'License'). You may not use this file except in
@@ -11,10 +11,10 @@
  * unlawful or unlicensed copies of an Apple operating system, or to
  * circumvent, violate, or enable the circumvention or violation of, any
  * terms of an Apple operating system software license agreement.
- * 
+ *
  * Please obtain a copy of the License at
  * http://www.opensource.apple.com/apsl/ and read it before using this file.
- * 
+ *
  * The Original Code and all software distributed under the License are
  * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
@@ -22,7 +22,7 @@
  * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
  * Please see the License for the specific language governing rights and
  * limitations under the License.
- * 
+ *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*
@@ -58,19 +58,16 @@
  * SUCH DAMAGE.
  *
  *	@(#)in_var.h	8.2 (Berkeley) 1/9/95
- * $FreeBSD: src/sys/netinet/in_var.h,v 1.33.2.2 2001/07/17 10:50:01 ru Exp $
  */
 
 #ifndef _NETINET_IN_VAR_H_
-#define _NETINET_IN_VAR_H_
+#define	_NETINET_IN_VAR_H_
 #include <sys/appleapiopts.h>
 
 #include <sys/queue.h>
-#ifdef __APPLE__
 #include <sys/kern_event.h>
-#endif
 
-#ifdef XNU_KERNEL_PRIVATE
+#ifdef BSD_KERNEL_PRIVATE
 #include <net/route.h>
 
 /*
@@ -80,84 +77,80 @@
  * of the structure and is assumed to be first.
  */
 struct in_ifaddr {
-	struct ifaddr		ia_ifa;		/* protocol-independent info */
-#define	ia_ifp			ia_ifa.ifa_ifp
-#define	ia_flags		ia_ifa.ifa_flags
-						/* ia_{,sub}net{,mask} in host order */
-	u_int32_t		ia_net;		/* network number of interface */
-	u_int32_t		ia_netmask;	/* mask of net part */
-	u_int32_t		ia_subnet;	/* subnet number, including net */
-	u_int32_t		ia_subnetmask;	/* mask of subnet part */
-	struct in_addr		ia_netbroadcast; /* to recognize net broadcasts */
-	TAILQ_ENTRY(in_ifaddr)	ia_link;	/* tailq macro glue */
-	struct sockaddr_in	ia_addr;	/* reserve space for interface name */
-	struct sockaddr_in	ia_dstaddr;	/* reserve space for broadcast addr */
-#define	ia_broadaddr		ia_dstaddr
-	struct sockaddr_in	ia_sockmask;	/* reserve space for general netmask */
-	TAILQ_ENTRY(in_ifaddr)	ia_hash;	/* hash bucket entry */
+	struct ifaddr ia_ifa;		/* protocol-independent info */
+#define	ia_ifp		ia_ifa.ifa_ifp
+#define	ia_flags	ia_ifa.ifa_flags
+					/* ia_{,sub}net{,mask} in host order */
+	u_int32_t ia_net;		/* network number of interface */
+	u_int32_t ia_netmask;		/* mask of net part */
+	u_int32_t ia_subnet;		/* subnet number, including net */
+	u_int32_t ia_subnetmask;	/* mask of subnet part */
+	struct in_addr ia_netbroadcast;	/* to recognize net broadcasts */
+	TAILQ_ENTRY(in_ifaddr) ia_link;	/* tailq macro glue */
+	struct sockaddr_in ia_addr;	/* reserve space for interface name */
+	struct sockaddr_in ia_dstaddr;	/* reserve space for broadcast addr */
+#define	ia_broadaddr	ia_dstaddr
+	struct sockaddr_in ia_sockmask;	/* reserve space for general netmask */
+	TAILQ_ENTRY(in_ifaddr) ia_hash;	/* hash bucket entry */
 };
 
 #define	ifatoia(ifa)	((struct in_ifaddr *)(void *)(ifa))
-#endif /* XNU_KERNEL_PRIVATE */
+#endif /* BSD_KERNEL_PRIVATE */
 
-struct	in_aliasreq {
-	char			ifra_name[IFNAMSIZ];	/* if name, e.g. "en0" */
-	struct sockaddr_in	ifra_addr;
-	struct sockaddr_in	ifra_broadaddr;
-#define ifra_dstaddr		ifra_broadaddr
-	struct sockaddr_in	ifra_mask;
-	u_int32_t		ifra_unused;	/* not used: used to be 'dlt' */
+struct in_aliasreq {
+	char ifra_name[IFNAMSIZ];	/* if name, e.g. "en0" */
+	struct sockaddr_in ifra_addr;
+	struct sockaddr_in ifra_broadaddr;
+#define	ifra_dstaddr	ifra_broadaddr
+	struct sockaddr_in ifra_mask;
 };
 
 /*
- * Event data, internet style.
+ * Event data, inet style.
  */
 struct kev_in_data {
-	struct net_event_data   link_data;
-	struct in_addr  	ia_addr;
-	u_int32_t		ia_net;		/* network number of interface */
-	u_int32_t		ia_netmask;	/* mask of net part */
-	u_int32_t		ia_subnet;	/* subnet number, including net */
-	u_int32_t		ia_subnetmask;	/* mask of subnet part */
-	struct in_addr		ia_netbroadcast;/* to recognize net broadcasts */
-	struct in_addr		ia_dstaddr;
+	struct net_event_data link_data;
+	struct in_addr ia_addr;		/* interface address */
+	u_int32_t ia_net;		/* network number of interface */
+	u_int32_t ia_netmask;		/* mask of net part */
+	u_int32_t ia_subnet;		/* subnet number, including net */
+	u_int32_t ia_subnetmask;	/* mask of subnet part */
+	struct in_addr ia_netbroadcast;	/* to recognize net broadcasts */
+	struct in_addr ia_dstaddr;
 };
 
 struct kev_in_collision {
-	struct net_event_data	link_data;	/* link colliding arp was received on */
-	struct in_addr		ia_ipaddr;	/* IP address we and another node are using */
-	u_char			hw_len;		/* length of hardware address */
-	u_char			hw_addr[0];	/* variable length hardware address */
+	struct net_event_data link_data; /* link where ARP was received on */
+	struct in_addr ia_ipaddr;	/* conflicting IP address */
+	u_char hw_len;			/* length of hardware address */
+	u_char hw_addr[0];		/* variable length hardware address */
 };
 
 #ifdef __APPLE_API_PRIVATE
 struct kev_in_portinuse {
-	u_int16_t		port;		/* conflicting port number in host order */
-	u_int32_t		req_pid;	/* PID port requestor */
-	u_int32_t		reserved[2];	
+	u_int16_t port;		/* conflicting port number in host order */
+	u_int32_t req_pid;	/* PID port requestor */
+	u_int32_t reserved[2];
 };
-#endif
-
+#endif /* __APPLE_API_PRIVATE */
 
 /*
  * Define inet event subclass and specific inet events.
  */
+#define	KEV_INET_SUBCLASS		1 /* inet subclass identifier */
 
-#define KEV_INET_SUBCLASS 1
-
-#define KEV_INET_NEW_ADDR     1
-#define KEV_INET_CHANGED_ADDR 2
-#define KEV_INET_ADDR_DELETED 3
-#define KEV_INET_SIFDSTADDR   4
-#define KEV_INET_SIFBRDADDR   5
-#define KEV_INET_SIFNETMASK   6
-#define KEV_INET_ARPCOLLISION 7	/* use kev_in_collision */
-
+#define	KEV_INET_NEW_ADDR		1 /* Userland configured IP address */
+#define	KEV_INET_CHANGED_ADDR		2 /* Address changed event */
+#define	KEV_INET_ADDR_DELETED		3 /* IPv6 address was deleted */
+#define	KEV_INET_SIFDSTADDR		4 /* Dest. address was set */
+#define	KEV_INET_SIFBRDADDR		5 /* Broadcast address was set */
+#define	KEV_INET_SIFNETMASK		6 /* Netmask was set */
+#define	KEV_INET_ARPCOLLISION		7 /* ARP collision detected */
 #ifdef __APPLE_API_PRIVATE
-#define KEV_INET_PORTINUSE    8	/* use ken_in_portinuse */
+#define	KEV_INET_PORTINUSE		8 /* use ken_in_portinuse */
 #endif
 
-#ifdef XNU_KERNEL_PRIVATE
+#ifdef BSD_KERNEL_PRIVATE
 #include <net/if_var.h>
 #include <kern/locks.h>
 #include <sys/tree.h>
@@ -165,33 +158,28 @@ struct kev_in_portinuse {
  * Given a pointer to an in_ifaddr (ifaddr),
  * return a pointer to the addr as a sockaddr_in.
  */
-#define IA_SIN(ia)    (&(((struct in_ifaddr *)(ia))->ia_addr))
-#define IA_DSTSIN(ia) (&(((struct in_ifaddr *)(ia))->ia_dstaddr))
+#define	IA_SIN(ia)    (&(((struct in_ifaddr *)(ia))->ia_addr))
+#define	IA_DSTSIN(ia) (&(((struct in_ifaddr *)(ia))->ia_dstaddr))
 
-#define IN_LNAOF(in, ifa) \
+#define	IN_LNAOF(in, ifa) \
 	((ntohl((in).s_addr) & ~((struct in_ifaddr *)(ifa)->ia_subnetmask))
 
 /*
  * Hash table for IPv4 addresses.
  */
-__private_extern__ TAILQ_HEAD(in_ifaddrhead, in_ifaddr) in_ifaddrhead;
-__private_extern__ TAILQ_HEAD(in_ifaddrhashhead, in_ifaddr) *in_ifaddrhashtbl;
-__private_extern__ lck_rw_t *in_ifaddr_rwlock;
+extern TAILQ_HEAD(in_ifaddrhead, in_ifaddr) in_ifaddrhead;
+extern TAILQ_HEAD(in_ifaddrhashhead, in_ifaddr) *in_ifaddrhashtbl;
+extern lck_rw_t *in_ifaddr_rwlock;
 
 #define	INADDR_HASH(x)	(&in_ifaddrhashtbl[inaddr_hashval(x)])
 
-extern	struct	ifqueue	ipintrq;		/* ip packet input queue */
-extern	struct	in_addr zeroin_addr;
 extern	u_char	inetctlerrmap[];
-
-extern int apple_hwcksum_tx;
-extern int apple_hwcksum_rx;
 
 /*
  * Macro for finding the interface (ifnet structure) corresponding to one
  * of our IP addresses.
  */
-#define INADDR_TO_IFP(addr, ifp)					\
+#define	INADDR_TO_IFP(addr, ifp)					\
 	/* struct in_addr addr; */					\
 	/* struct ifnet *ifp; */					\
 {									\
@@ -215,7 +203,7 @@ extern int apple_hwcksum_rx;
  * to a given interface (ifnet structure).  Caller is responsible for freeing
  * the reference.
  */
-#define IFP_TO_IA(ifp, ia)						\
+#define	IFP_TO_IA(ifp, ia)						\
 	/* struct ifnet *ifp; */					\
 	/* struct in_ifaddr *ia; */					\
 {									\
@@ -299,10 +287,11 @@ struct igmp_ifinfo;
  * for the group the state change record is generated and transmitted,
  * and kept if retransmissions are necessary.
  *
+ * The request count here is a count of requests for this address, not a
+ * count of pointers to this structure.
+ *
  * FUTURE: inm_link is now only used when groups are being purged
- * on a detaching ifnet. It could be demoted to a SLIST_ENTRY, but
- * because it is at the very start of the struct, we can't do this
- * w/o breaking the ABI for ifmcstat.
+ * on a detaching ifnet.  It could be demoted to a SLIST_ENTRY.
  */
 struct in_multi {
 	decl_lck_mtx_data(, inm_lock);
@@ -411,7 +400,7 @@ struct in_multistep {
  *
  * Must be called with in_multihead_lock held.
  */
-#define IN_LOOKUP_MULTI(addr, ifp, inm)					\
+#define	IN_LOOKUP_MULTI(addr, ifp, inm)					\
 	/* struct in_addr *addr; */					\
 	/* struct ifnet *ifp; */					\
 	/* struct in_multi *inm; */					\
@@ -440,7 +429,7 @@ do {									\
  *
  * Must be called with in_multihead_lock held.
  */
-#define IN_NEXT_MULTI(step, inm)					\
+#define	IN_NEXT_MULTI(step, inm)					\
 	/* struct in_multistep  step; */				\
 	/* struct in_multi *inm; */					\
 do {									\
@@ -449,7 +438,7 @@ do {									\
 		(step).i_inm = LIST_NEXT((step).i_inm, inm_link);	\
 } while (0)
 
-#define IN_FIRST_MULTI(step, inm)					\
+#define	IN_FIRST_MULTI(step, inm)					\
 	/* struct in_multistep step; */					\
 	/* struct in_multi *inm; */					\
 do {									\
@@ -458,17 +447,21 @@ do {									\
 	IN_NEXT_MULTI((step), (inm));					\
 } while (0)
 
-struct	route;
-struct	ip_moptions;
+extern lck_mtx_t *inet_domain_mutex;
+extern struct domain *inetdomain;
+
+struct ip_moptions;
 struct inpcb;
 
 /*
  * Return values for imo_multi_filter().
  */
-#define MCAST_PASS		0	/* Pass */
-#define MCAST_NOTGMEMBER	1	/* This host not a member of group */
-#define MCAST_NOTSMEMBER	2	/* This host excluded source */
-#define MCAST_MUTED		3	/* [deprecated] */
+#define	MCAST_PASS		0	/* Pass */
+#define	MCAST_NOTGMEMBER	1	/* This host not a member of group */
+#define	MCAST_NOTSMEMBER	2	/* This host excluded source */
+#define	MCAST_MUTED		3	/* [deprecated] */
+
+extern u_int32_t ipv4_ll_arp_aware;
 
 extern void in_ifaddr_init(void);
 extern int imo_multi_filter(const struct ip_moptions *, const struct ifnet *,
@@ -482,7 +475,7 @@ extern void inm_release(struct in_multi *);
 extern void in_multi_init(void);
 extern struct in_multi *in_addmulti(struct in_addr *, struct ifnet *);
 extern void in_delmulti(struct in_multi *);
-extern int in_leavegroup(struct in_multi *, /*const*/ struct in_mfilter *);
+extern int in_leavegroup(struct in_multi *, struct in_mfilter *);
 extern int in_multi_detach(struct in_multi *);
 extern void inm_addref(struct in_multi *, int);
 extern void inm_remref(struct in_multi *, int);
@@ -491,6 +484,7 @@ extern uint8_t ims_get_mode(const struct in_multi *,
     const struct ip_msource *, uint8_t);
 extern int in_control(struct socket *, u_long, caddr_t, struct ifnet *,
     struct proc *);
+extern int in_inithead(void **, int);
 extern void in_rtqdrain(void);
 extern struct radix_node *in_validate(struct radix_node *);
 extern void ip_input(struct mbuf *);
@@ -498,18 +492,19 @@ extern int in_ifadown(struct ifaddr *ifa, int);
 extern void in_ifscrub(struct ifnet *, struct in_ifaddr *, int);
 extern u_int32_t inaddr_hashval(u_int32_t);
 extern void in_purgeaddrs(struct ifnet *);
-extern void	imf_leave(struct in_mfilter *);
-extern void	imf_purge(struct in_mfilter *);
-
-__private_extern__ int inp_join_group(struct inpcb *, struct sockopt *);
-__private_extern__ int inp_leave_group(struct inpcb *, struct sockopt *);
-__private_extern__ void in_multihead_lock_exclusive(void);
-__private_extern__ void in_multihead_lock_shared(void);
-__private_extern__ void in_multihead_lock_assert(int);
-__private_extern__ void in_multihead_lock_done(void);
-#endif /* XNU_KERNEL_PRIVATE */
-
+extern int in_selectaddrs(int af, struct sockaddr_list **,
+    struct sockaddr_entry **, struct sockaddr_list **,
+    struct sockaddr_entry **);
+extern void gre_input(struct mbuf *, int);
+extern void imf_leave(struct in_mfilter *);
+extern void imf_purge(struct in_mfilter *);
+extern int inp_join_group(struct inpcb *, struct sockopt *);
+extern int inp_leave_group(struct inpcb *, struct sockopt *);
+extern void in_multihead_lock_exclusive(void);
+extern void in_multihead_lock_shared(void);
+extern void in_multihead_lock_assert(int);
+extern void in_multihead_lock_done(void);
+#endif /* BSD_KERNEL_PRIVATE */
 /* INET6 stuff */
 #include <netinet6/in6_var.h>
-
 #endif /* _NETINET_IN_VAR_H_ */

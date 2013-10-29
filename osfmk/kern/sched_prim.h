@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2010 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2012 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -77,7 +77,7 @@
 #ifdef	MACH_KERNEL_PRIVATE
 
 /* Initialization */
-extern void		sched_init(void) __attribute__((section("__TEXT, initcode")));
+extern void		sched_init(void);
 
 extern void		sched_startup(void);
 
@@ -85,7 +85,8 @@ extern void		sched_timebase_init(void);
 
 /* Force a preemption point for a thread and wait for it to stop running */
 extern boolean_t	thread_stop( 
-						thread_t	thread);
+						thread_t	thread,
+						boolean_t	until_not_runnable);
 
 /* Release a previous stop request */
 extern void			thread_unstop(
@@ -315,8 +316,9 @@ do { 								\
 #define THREAD_URGENCY_NORMAL		2	/* indicates that the thread is marked as a "normal" thread */
 #define THREAD_URGENCY_REAL_TIME	3	/* indicates that the thread is marked as a "real-time" or urgent thread */
 #define	THREAD_URGENCY_MAX		4	/* Marker */
-/* Returns the "urgency" of the currently running thread (provided by scheduler) */
+/* Returns the "urgency" of a thread (provided by scheduler) */
 extern int	thread_get_urgency(
+					thread_t	thread,
     				   	uint64_t	*rt_period,
 					uint64_t	*rt_deadline);
 
@@ -324,7 +326,8 @@ extern int	thread_get_urgency(
 extern void	thread_tell_urgency(
     					int		urgency,
 					uint64_t	rt_period,
-					uint64_t	rt_deadline);
+					uint64_t	rt_deadline,
+				    thread_t nthread);
 
 /* Tells if there are "active" RT threads in the system (provided by CPU PM) */
 extern void	active_rt_threads(
@@ -337,6 +340,11 @@ __BEGIN_DECLS
 #ifdef	XNU_KERNEL_PRIVATE
 
 extern boolean_t		assert_wait_possible(void);
+
+/* Toggles a global override to turn off CPU Throttling */
+#define CPU_THROTTLE_DISABLE	0
+#define CPU_THROTTLE_ENABLE	1
+extern void	sys_override_cpu_throttle(int flag);
 
 /*
  ****************** Only exported until BSD stops using ********************
@@ -375,10 +383,27 @@ extern wait_result_t	assert_wait_timeout(
 							uint32_t			interval,
 							uint32_t			scale_factor);
 
+/* Assert that the thread intends to wait with an urgency, timeout and leeway */
+extern wait_result_t	assert_wait_timeout_with_leeway(
+							event_t				event,
+							wait_interrupt_t	interruptible,
+							wait_timeout_urgency_t	urgency,
+							uint32_t			interval,
+							uint32_t			leeway,
+							uint32_t			scale_factor);
+
 extern wait_result_t	assert_wait_deadline(
 							event_t				event,
 							wait_interrupt_t	interruptible,
 							uint64_t			deadline);
+
+/* Assert that the thread intends to wait with an urgency, deadline, and leeway */
+extern wait_result_t	assert_wait_deadline_with_leeway(
+							event_t				event,
+							wait_interrupt_t	interruptible,
+							wait_timeout_urgency_t	urgency,
+							uint64_t			deadline,
+							uint64_t			leeway);
 
 /* Wake up thread (or threads) waiting on a particular event */
 extern kern_return_t	thread_wakeup_prim(
@@ -406,38 +431,6 @@ extern kern_return_t    thread_wakeup_prim_internal(
 #endif
 
 extern boolean_t		preemption_enabled(void);
-
-#ifdef	KERNEL_PRIVATE
-
-#ifndef	__LP64__
-
-/*
- * Obsolete interfaces.
- */
-
-extern void		thread_set_timer(
-					uint32_t		interval,
-					uint32_t		scale_factor);
-
-extern void		thread_set_timer_deadline(
-					uint64_t		deadline);
-
-extern void		thread_cancel_timer(void);
-
-#ifndef	MACH_KERNEL_PRIVATE
-
-#ifndef	ABSOLUTETIME_SCALAR_TYPE
-
-#define thread_set_timer_deadline(a)	\
-	thread_set_timer_deadline(__OSAbsoluteTime(a))
-
-#endif	/* ABSOLUTETIME_SCALAR_TYPE */
-
-#endif	/* MACH_KERNEL_PRIVATE */
-
-#endif	/* __LP64__ */
-
-#endif	/* KERNEL_PRIVATE */
 
 #ifdef MACH_KERNEL_PRIVATE
 

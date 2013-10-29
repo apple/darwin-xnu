@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2003, 2005 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2003, 2005-2013 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -106,6 +106,8 @@ extern OSErr ConvertUnicodeToUTF8Mangled ( ByteCount srcLen,
 extern int32_t FastUnicodeCompare(register ConstUniCharArrayPtr str1, register ItemCount length1,
 								 register ConstUniCharArrayPtr str2, register ItemCount length2);
 
+extern int32_t UnicodeBinaryCompare (register ConstUniCharArrayPtr str1, register ItemCount length1,
+								 register ConstUniCharArrayPtr str2, register ItemCount length2);
 
 extern int32_t FastRelString( ConstStr255Param str1, ConstStr255Param str2 );
 

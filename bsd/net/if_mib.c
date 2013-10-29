@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2011 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2013 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -125,8 +125,8 @@ make_ifmibdata(struct ifnet *ifp, int *name, struct sysctl_req *req)
 		 * Make sure the interface is in use
 		 */
 		if (ifnet_is_attached(ifp, 0)) {
-			snprintf(ifmd.ifmd_name, sizeof(ifmd.ifmd_name), "%s%d",
-				ifp->if_name, ifp->if_unit);
+			snprintf(ifmd.ifmd_name, sizeof(ifmd.ifmd_name), "%s",
+				if_name(ifp));
 
 #define COPY(fld) ifmd.ifmd_##fld = ifp->if_##fld
 			COPY(pcount);
@@ -189,7 +189,12 @@ make_ifmibdata(struct ifnet *ifp, int *name, struct sysctl_req *req)
 		if_copy_packet_stats(ifp, &ifmd_supp->ifmd_packet_stats);
 		if_copy_rxpoll_stats(ifp, &ifmd_supp->ifmd_rxpoll_stats);
 
-		error = SYSCTL_OUT(req, ifmd_supp, sizeof (*ifmd_supp));
+		if (req->oldptr == USER_ADDR_NULL)
+			req->oldlen = sizeof (*ifmd_supp);
+
+		error = SYSCTL_OUT(req, ifmd_supp, MIN(sizeof (*ifmd_supp),
+		    req->oldlen));
+
 		_FREE(ifmd_supp, M_TEMP);
 		break;
 	}

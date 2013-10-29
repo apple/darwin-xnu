@@ -41,7 +41,7 @@
 #include <kern/machine.h>
 #include <kern/pms.h>
 #include <kern/processor.h>
-#include <kern/etimer.h>
+#include <kern/timer_queue.h>
 #include <i386/cpu_threads.h>
 #include <i386/pmCPU.h>
 #include <i386/cpuid.h>
@@ -50,6 +50,7 @@
 #include <i386/lapic.h>
 #include <i386/pal_routines.h>
 #include <sys/kdebug.h>
+#include <i386/tsc.h>
 
 extern int disableConsoleOutput;
 
@@ -88,6 +89,9 @@ static inline void machine_classify_interval(uint64_t interval, uint64_t *bins, 
  	}
 }
 
+uint64_t	idle_pending_timers_processed;
+uint32_t	idle_entry_timer_processing_hdeadline_threshold = 5000000;
+
 /*
  * Called when the CPU is idle.  It calls into the power management kext
  * to determine the best way to idle the CPU.
@@ -96,21 +100,46 @@ void
 machine_idle(void)
 {
 	cpu_data_t		*my_cpu		= current_cpu_datap();
+	__unused uint32_t	cnum = my_cpu->cpu_number;
 	uint64_t		ctime, rtime, itime;
-
-	if (my_cpu == NULL)
-		goto out;
+#if CST_DEMOTION_DEBUG
+	processor_t		cproc = my_cpu->cpu_processor;
+	uint64_t		cwakeups = PROCESSOR_DATA(cproc, wakeups_issued_total);
+#endif /* CST_DEMOTION_DEBUG */
+	uint64_t esdeadline, ehdeadline;
+	boolean_t do_process_pending_timers = FALSE;
 
 	ctime = mach_absolute_time();
-
+	esdeadline = my_cpu->rtclock_timer.queue.earliest_soft_deadline;
+	ehdeadline = my_cpu->rtclock_timer.deadline;
+/* Determine if pending timers exist */    
+	if ((ctime >= esdeadline) && (ctime < ehdeadline) &&
+	    ((ehdeadline - ctime) < idle_entry_timer_processing_hdeadline_threshold)) {
+		idle_pending_timers_processed++;
+		do_process_pending_timers = TRUE;
+		goto machine_idle_exit;
+	} else {
+		TCOAL_DEBUG(0xCCCC0000, ctime, my_cpu->rtclock_timer.queue.earliest_soft_deadline, my_cpu->rtclock_timer.deadline, idle_pending_timers_processed, 0);
+	}
+    
 	my_cpu->lcpu.state = LCPU_IDLE;
 	DBGLOG(cpu_handle, cpu_number(), MP_IDLE);
-	MARK_CPU_IDLE(cpu_number());
+	MARK_CPU_IDLE(cnum);
 
 	rtime = ctime - my_cpu->cpu_ixtime;
 
 	my_cpu->cpu_rtime_total += rtime;
 	machine_classify_interval(rtime, &my_cpu->cpu_rtimes[0], &cpu_rtime_bins[0], CPU_RTIME_BINS);
+#if CST_DEMOTION_DEBUG
+	uint32_t cl = 0, ch = 0;
+	uint64_t c3res, c6res, c7res;
+	rdmsr_carefully(MSR_IA32_CORE_C3_RESIDENCY, &cl, &ch);
+	c3res = ((uint64_t)ch << 32) | cl;
+	rdmsr_carefully(MSR_IA32_CORE_C6_RESIDENCY, &cl, &ch);
+	c6res = ((uint64_t)ch << 32) | cl;
+	rdmsr_carefully(MSR_IA32_CORE_C7_RESIDENCY, &cl, &ch);
+	c7res = ((uint64_t)ch << 32) | cl;
+#endif
 
 	if (pmInitDone) {
 		/*
@@ -121,7 +150,6 @@ machine_idle(void)
 		 */
 		if (earlyMaxBusDelay != DELAY_UNSET)
 			ml_set_maxbusdelay((uint32_t)(earlyMaxBusDelay & 0xFFFFFFFF));
-
 		if (earlyMaxIntDelay != DELAY_UNSET)
 			ml_set_maxintdelay(earlyMaxIntDelay);
 	}
@@ -139,7 +167,6 @@ machine_idle(void)
 		 * stopping during a GV3 transition).
 		 */
 		pal_hlt();
-
 		/* Once woken, re-disable interrupts. */
 		pal_cli();
 	}
@@ -147,25 +174,53 @@ machine_idle(void)
 	/*
 	 * Mark the CPU as running again.
 	 */
-	MARK_CPU_ACTIVE(cpu_number());
-	DBGLOG(cpu_handle, cpu_number(), MP_UNIDLE);
-
-	uint64_t ixtime = my_cpu->cpu_ixtime = mach_absolute_time();
-	my_cpu->cpu_idle_exits++;
-
-	itime = ixtime - ctime;
-
+	MARK_CPU_ACTIVE(cnum);
+	DBGLOG(cpu_handle, cnum, MP_UNIDLE);
 	my_cpu->lcpu.state = LCPU_RUN;
+	uint64_t ixtime = my_cpu->cpu_ixtime = mach_absolute_time();
+	itime = ixtime - ctime;
+	my_cpu->cpu_idle_exits++;
+        my_cpu->cpu_itime_total += itime;
+    	machine_classify_interval(itime, &my_cpu->cpu_itimes[0], &cpu_itime_bins[0], CPU_ITIME_BINS);
+#if CST_DEMOTION_DEBUG
+	cl = ch = 0;
+	rdmsr_carefully(MSR_IA32_CORE_C3_RESIDENCY, &cl, &ch);
+	c3res = (((uint64_t)ch << 32) | cl) - c3res;
+	rdmsr_carefully(MSR_IA32_CORE_C6_RESIDENCY, &cl, &ch);
+	c6res = (((uint64_t)ch << 32) | cl) - c6res;
+	rdmsr_carefully(MSR_IA32_CORE_C7_RESIDENCY, &cl, &ch);
+	c7res = (((uint64_t)ch << 32) | cl) - c7res;
 
-	machine_classify_interval(itime, &my_cpu->cpu_itimes[0], &cpu_itime_bins[0], CPU_ITIME_BINS);
-	my_cpu->cpu_itime_total += itime;
+	uint64_t ndelta = itime - tmrCvt(c3res + c6res + c7res, tscFCvtt2n);
+	KERNEL_DEBUG_CONSTANT(0xcead0000, ndelta, itime, c7res, c6res, c3res);
+	if ((itime > 1000000) && (ndelta > 250000))
+		KERNEL_DEBUG_CONSTANT(0xceae0000, ndelta, itime, c7res, c6res, c3res);
+#endif
 
-
+	machine_idle_exit:
 	/*
 	 * Re-enable interrupts.
 	 */
-out:
+
 	pal_sti();
+
+	if (do_process_pending_timers) {
+		TCOAL_DEBUG(0xBBBB0000 | DBG_FUNC_START, ctime, esdeadline, ehdeadline, idle_pending_timers_processed, 0);
+
+		/* Adjust to reflect that this isn't truly a package idle exit */
+		__sync_fetch_and_sub(&my_cpu->lcpu.package->num_idle, 1);
+		lapic_timer_swi(); /* Trigger software timer interrupt */
+		__sync_fetch_and_add(&my_cpu->lcpu.package->num_idle, 1);
+
+		TCOAL_DEBUG(0xBBBB0000 | DBG_FUNC_END, ctime, esdeadline, idle_pending_timers_processed, 0, 0);
+	}
+#if CST_DEMOTION_DEBUG
+	uint64_t nwakeups = PROCESSOR_DATA(cproc, wakeups_issued_total);
+
+	if ((nwakeups == cwakeups) && (topoParms.nLThreadsPerPackage == my_cpu->lcpu.package->num_idle)) {
+		KERNEL_DEBUG_CONSTANT(0xceaa0000, cwakeups, 0, 0, 0, 0);
+	}
+#endif    
 }
 
 /*
@@ -246,7 +301,6 @@ pmInitComplete(void)
 	(*pmDispatch->pmCPUStateInit)();
 	earlyTopology = FALSE;
     }
-
     pmInitDone = 1;
 }
 
@@ -339,6 +393,7 @@ pmCPUGetDeadline(cpu_data_t *cpu)
  * Called to determine if the supplied deadline or the power management
  * deadline is sooner.  Returns which ever one is first.
  */
+
 uint64_t
 pmCPUSetDeadline(cpu_data_t *cpu, uint64_t deadline)
 {
@@ -679,8 +734,22 @@ machine_choose_processor(processor_set_t pset,
 static int
 pmThreadGetUrgency(uint64_t *rt_period, uint64_t *rt_deadline)
 {
+	int             urgency;
+	uint64_t        arg1, arg2;
 
-    return(thread_get_urgency(rt_period, rt_deadline));
+	urgency = thread_get_urgency(current_processor()->next_thread, &arg1, &arg2);
+
+	if (urgency == THREAD_URGENCY_REAL_TIME) {
+		if (rt_period != NULL)
+			*rt_period = arg1;
+		
+		if (rt_deadline != NULL)
+			*rt_deadline = arg2;
+	}
+
+	KERNEL_DEBUG(MACHDBG_CODE(DBG_MACH_SCHED, MACH_SCHED_GET_URGENCY), urgency, arg1, arg2, 0, 0);
+
+	return(urgency);
 }
 
 #if	DEBUG
@@ -693,7 +762,8 @@ uint64_t	urgency_notification_assert_abstime_threshold, urgency_notification_max
 void
 thread_tell_urgency(int urgency,
     uint64_t rt_period,
-    uint64_t rt_deadline)
+    uint64_t rt_deadline,
+    thread_t nthread)
 {
 	uint64_t	urgency_notification_time_start, delta;
 	boolean_t	urgency_assert = (urgency_notification_assert_abstime_threshold != 0);
@@ -706,11 +776,12 @@ thread_tell_urgency(int urgency,
 	    || pmDispatch->pmThreadTellUrgency == NULL)
 		return;
 
-	KERNEL_DEBUG_CONSTANT(MACHDBG_CODE(DBG_MACH_SCHED,MACH_URGENCY) | DBG_FUNC_START, urgency, rt_period, (rt_deadline >> 32), rt_deadline, 0);
+	KERNEL_DEBUG_CONSTANT(MACHDBG_CODE(DBG_MACH_SCHED,MACH_URGENCY) | DBG_FUNC_START, urgency, rt_period, rt_deadline, 0, 0);
 
 	if (__improbable((urgency_assert == TRUE)))
 		urgency_notification_time_start = mach_absolute_time();
 
+	current_cpu_datap()->cpu_nthread = nthread;
 	pmDispatch->pmThreadTellUrgency(urgency, rt_period, rt_deadline);
 
 	if (__improbable((urgency_assert == TRUE))) {
@@ -728,7 +799,7 @@ thread_tell_urgency(int urgency,
 		}
 	}
 
-	KERNEL_DEBUG_CONSTANT(MACHDBG_CODE(DBG_MACH_SCHED,MACH_URGENCY) | DBG_FUNC_END, urgency, rt_period, (rt_deadline >> 32), rt_deadline, 0);
+	KERNEL_DEBUG_CONSTANT(MACHDBG_CODE(DBG_MACH_SCHED,MACH_URGENCY) | DBG_FUNC_END, urgency, rt_period, rt_deadline, 0, 0);
 }
 
 void
@@ -775,12 +846,12 @@ pmReSyncDeadlines(int cpu)
     static boolean_t	registered	= FALSE;
 
     if (!registered) {
-	PM_interrupt_register(&etimer_resync_deadlines);
+	PM_interrupt_register(&timer_resync_deadlines);
 	registered = TRUE;
     }
 
     if ((uint32_t)cpu == current_cpu_datap()->lcpu.cpu_num)
-	etimer_resync_deadlines();
+	timer_resync_deadlines();
     else
 	cpu_PM_interrupt(cpu);
 }
@@ -812,7 +883,7 @@ pmTimerQueueMigrate(int target_cpu)
 {
     /* Call the etimer code to do this. */
     return (target_cpu != cpu_number())
-		? etimer_queue_migrate(target_cpu)
+		? timer_queue_migrate_cpu(target_cpu)
 		: 0;
 }
 
@@ -825,57 +896,57 @@ pmTimerQueueMigrate(int target_cpu)
  */
 void
 pmKextRegister(uint32_t version, pmDispatch_t *cpuFuncs,
-	       pmCallBacks_t *callbacks)
+    pmCallBacks_t *callbacks)
 {
-    if (callbacks != NULL && version == PM_DISPATCH_VERSION) {
-	callbacks->setRTCPop            = setPop;
-	callbacks->resyncDeadlines      = pmReSyncDeadlines;
-	callbacks->initComplete         = pmInitComplete;
-	callbacks->GetLCPU              = pmGetLogicalCPU;
-	callbacks->GetCore              = pmGetCore;
-	callbacks->GetDie               = pmGetDie;
-	callbacks->GetPackage           = pmGetPackage;
-	callbacks->GetMyLCPU            = pmGetMyLogicalCPU;
-	callbacks->GetMyCore            = pmGetMyCore;
-	callbacks->GetMyDie             = pmGetMyDie;
-	callbacks->GetMyPackage         = pmGetMyPackage;
-	callbacks->GetPkgRoot           = pmGetPkgRoot;
-	callbacks->LockCPUTopology      = pmLockCPUTopology;
-	callbacks->GetHibernate         = pmCPUGetHibernate;
-	callbacks->LCPUtoProcessor      = pmLCPUtoProcessor;
-	callbacks->ThreadBind           = thread_bind;
-	callbacks->GetSavedRunCount     = pmGetSavedRunCount;
-	callbacks->GetNanotimeInfo	= pmGetNanotimeInfo;
-	callbacks->ThreadGetUrgency	= pmThreadGetUrgency;
-	callbacks->RTCClockAdjust	= rtc_clock_adjust;
-	callbacks->timerQueueMigrate    = pmTimerQueueMigrate;
-	callbacks->topoParms            = &topoParms;
-	callbacks->pmSendIPI		= pmSendIPI;
-	callbacks->InterruptPending	= lapic_is_interrupt_pending;
-	callbacks->IsInterrupting	= lapic_is_interrupting;
-	callbacks->InterruptStats	= lapic_interrupt_counts;
-	callbacks->DisableApicTimer	= lapic_disable_timer;
-    } else {
-	panic("Version mis-match between Kernel and CPU PM");
-    }
-
-    if (cpuFuncs != NULL) {
-        if (pmDispatch) {
-            panic("Attempt to re-register power management interface--AICPM present in xcpm mode? %p->%p", pmDispatch, cpuFuncs);
-        }
-
-	pmDispatch = cpuFuncs;
-
-	if (earlyTopology
-	    && pmDispatch->pmCPUStateInit != NULL) {
-	    (*pmDispatch->pmCPUStateInit)();
-	    earlyTopology = FALSE;
+	if (callbacks != NULL && version == PM_DISPATCH_VERSION) {
+		callbacks->setRTCPop            = setPop;
+		callbacks->resyncDeadlines      = pmReSyncDeadlines;
+		callbacks->initComplete         = pmInitComplete;
+		callbacks->GetLCPU              = pmGetLogicalCPU;
+		callbacks->GetCore              = pmGetCore;
+		callbacks->GetDie               = pmGetDie;
+		callbacks->GetPackage           = pmGetPackage;
+		callbacks->GetMyLCPU            = pmGetMyLogicalCPU;
+		callbacks->GetMyCore            = pmGetMyCore;
+		callbacks->GetMyDie             = pmGetMyDie;
+		callbacks->GetMyPackage         = pmGetMyPackage;
+		callbacks->GetPkgRoot           = pmGetPkgRoot;
+		callbacks->LockCPUTopology      = pmLockCPUTopology;
+		callbacks->GetHibernate         = pmCPUGetHibernate;
+		callbacks->LCPUtoProcessor      = pmLCPUtoProcessor;
+		callbacks->ThreadBind           = thread_bind;
+		callbacks->GetSavedRunCount     = pmGetSavedRunCount;
+		callbacks->GetNanotimeInfo	= pmGetNanotimeInfo;
+		callbacks->ThreadGetUrgency	= pmThreadGetUrgency;
+		callbacks->RTCClockAdjust	= rtc_clock_adjust;
+		callbacks->timerQueueMigrate    = pmTimerQueueMigrate;
+		callbacks->topoParms            = &topoParms;
+		callbacks->pmSendIPI		= pmSendIPI;
+		callbacks->InterruptPending	= lapic_is_interrupt_pending;
+		callbacks->IsInterrupting	= lapic_is_interrupting;
+		callbacks->InterruptStats	= lapic_interrupt_counts;
+		callbacks->DisableApicTimer	= lapic_disable_timer;
+	} else {
+		panic("Version mis-match between Kernel and CPU PM");
 	}
 
-	if (pmDispatch->pmIPIHandler != NULL) {
-	    lapic_set_pm_func((i386_intr_func_t)pmDispatch->pmIPIHandler);
+	if (cpuFuncs != NULL) {
+		if (pmDispatch) {
+			panic("Attempt to re-register power management interface--AICPM present in xcpm mode? %p->%p", pmDispatch, cpuFuncs);
+		}
+
+		pmDispatch = cpuFuncs;
+
+		if (earlyTopology
+		    && pmDispatch->pmCPUStateInit != NULL) {
+			(*pmDispatch->pmCPUStateInit)();
+			earlyTopology = FALSE;
+		}
+
+		if (pmDispatch->pmIPIHandler != NULL) {
+			lapic_set_pm_func((i386_intr_func_t)pmDispatch->pmIPIHandler);
+		}
 	}
-    }
 }
 
 /*
@@ -887,46 +958,6 @@ pmUnRegister(pmDispatch_t *cpuFuncs)
     if (cpuFuncs != NULL && pmDispatch == cpuFuncs) {
 	pmDispatch = NULL;
     }
-}
-
-/******************************************************************************
- *
- * All of the following are deprecated interfaces and no longer used.
- *
- ******************************************************************************/
-kern_return_t
-pmsControl(__unused uint32_t request, __unused user_addr_t reqaddr,
-	   __unused uint32_t reqsize)
-{
-    return(KERN_SUCCESS);
-}
-
-void
-pmsInit(void)
-{
-}
-
-void
-pmsStart(void)
-{
-}
-
-void
-pmsPark(void)
-{
-}
-
-void
-pmsRun(__unused uint32_t nstep)
-{
-}
-
-kern_return_t
-pmsBuild(__unused pmsDef *pd, __unused uint32_t pdsize,
-	 __unused pmsSetFunc_t *functab,
-	 __unused uint32_t platformData, __unused pmsQueryFunc_t queryFunc)
-{
-    return(KERN_SUCCESS);
 }
 
 void machine_track_platform_idle(boolean_t entry) {

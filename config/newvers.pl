@@ -47,12 +47,12 @@ die("SRCROOT not defined") unless defined($ENV{'SRCROOT'});
 die("OBJROOT not defined") unless defined($ENV{'OBJROOT'});
 
 my $versfile = "MasterVersion";
-$versfile = "$ENV{'SRCROOT'}/config/$versfile";
+$versfile = "$ENV{'SRCROOT'}/config/$versfile" if ($ENV{'SRCROOT'});
 my $BUILD_SRCROOT=$ENV{'SRCROOT'};
 $BUILD_SRCROOT =~ s,/+$,,;
 my $BUILD_OBJROOT=$ENV{'OBJROOT'};
 $BUILD_OBJROOT =~ s,/+$,,;
-my $BUILD_OBJPATH=$ENV{'OBJPATH'} || $ENV{'OBJROOT'};
+my $BUILD_OBJPATH=$ENV{'TARGET'} || $ENV{'OBJROOT'};
 $BUILD_OBJPATH =~ s,/+$,,;
 my $BUILD_DATE = `date`;
 $BUILD_DATE =~ s/[\n\t]//g;

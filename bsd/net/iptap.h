@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1999-2010 Apple Inc. All rights reserved.
+ * Copyright (c) 1999-2012 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -28,45 +28,21 @@
 #ifndef IPTAP_H
 #define IPTAP_H
 
+#include <sys/param.h>
 #include <net/if.h>
 
-#define IPTAP_CONTROL_NAME "com.apple.net.iptap_control"
+#ifdef PRIVATE
 
-#define IPTAP_BUFFERSZ	(128 * 1024)
-#define IPTAP_VERSION_1		0x1
+#include <net/pktap.h>
 
-enum {
-	IPTAP_OUTPUT_TAG	=	0x01,
-	IPTAP_INPUT_TAG		=	0x10,
-	IPTAP_UNKNOWN_TAG	=	0x11
-};
-
-#pragma pack(push)
-#pragma pack(1)
-
-typedef struct iptap_hdr_t {
-	uint32_t	hdr_length;
-	uint8_t		version;
-	uint32_t	length;
-	uint8_t		type;
-	uint16_t	unit;
-	uint8_t		io;
-	uint32_t	protocol_family;
-	uint32_t	frame_pre_length;
-	uint32_t	frame_pst_length;
-	char		if_name[IFNAMSIZ];
-} __attribute__ ((__packed__)) iptap_hdr_t;
-
-#pragma pack(pop)
+#define	IPTAP_IFNAME			"iptap"
 
 #ifdef KERNEL_PRIVATE
 
 extern void iptap_init(void);
-extern void iptap_ipf_input(struct ifnet *, protocol_family_t, struct mbuf *, char *);
-extern void iptap_ipf_output(struct ifnet *, protocol_family_t, struct mbuf *, u_int32_t, u_int32_t);
-#if 0
-extern void iptap_destroy(void);
-#endif
 
 #endif /* KERNEL_PRIVATE */
+
+#endif /* PRIVATE */
+
 #endif /* IPTAP_H */

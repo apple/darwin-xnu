@@ -242,8 +242,9 @@ s/\$//g
 		printf "void munge_wws(const void *, void *);  \n" > sysarg
 		printf "void munge_wwwsw(const void *, void *);  \n" > sysarg
 		printf "void munge_llllll(const void *, void *); \n" > sysarg
+		printf "void munge_ll(const void *, void *); \n" > sysarg
 		printf "#else \n" > sysarg
-		printf "/* ARM does not need mungers for BSD system calls. */\n" > sysarg
+		printf "/* ARM does not need mungers for BSD system calls... */\n" > sysarg
 		printf "#define munge_w  NULL \n" > sysarg
 		printf "#define munge_ww  NULL \n" > sysarg
 		printf "#define munge_www  NULL \n" > sysarg
@@ -274,6 +275,7 @@ s/\$//g
 		printf "#define munge_wws  NULL \n" > sysarg
 		printf "#define munge_wwwsw  NULL \n" > sysarg
 		printf "#define munge_llllll  NULL \n" > sysarg
+		printf "#define munge_ll  NULL \n" > sysarg
 		printf "#endif /* __arm__ */\n" > sysarg
 		printf "\n" > sysarg
 		printf "/* Active 64-bit user ABIs do not need munging */\n" > sysarg
@@ -482,13 +484,9 @@ s/\$//g
 		add_sysnames_entry = 1
 		add_sysheader_entry = 1
 		add_sysproto_entry = 1
-		add_64bit_unsafe = 0
-		add_64bit_fakesafe = 0
-		add_resv = "0"
-		my_flags = "0"
 
 
-		if ($3 != "ALL" && $3 != "UALL") {
+		if ($3 != "ALL") {
 			files_keyword_OK = 0
 			add_sysent_entry = 0
 			add_sysnames_entry = 0
@@ -511,20 +509,11 @@ s/\$//g
 				add_sysproto_entry = 1
 				files_keyword_OK = 1
 			}
-			if (match($3, "[U]") != 0) {
-				add_64bit_unsafe = 1
-			}
-			if (match($3, "[F]") != 0) {
-				add_64bit_fakesafe = 1
-			}
 			
 			if (files_keyword_OK == 0) {
 				printf "%s: line %d: unrecognized keyword %s\n", infile, NR, $2
 				exit 1
 			}
-		}
-		else if ($3 == "UALL") {
-			add_64bit_unsafe = 1;
 		}
 		
 		
@@ -550,29 +539,25 @@ s/\$//g
 					# each argument consumes 64-bits.  
 					# see .../xnu/bsd/dev/ppc/munge.s for munge argument types.
 					if (argtype[i] == "long") {
-						if (add_64bit_unsafe == 0)
-							ext_argtype[i] = "user_long_t";
+						ext_argtype[i] = "user_long_t";
 						munge32 = munge32 "s"
 						munge64 = munge64 "d"
 						size32 += 4
 					}
 					else if (argtype[i] == "u_long") {
-						if (add_64bit_unsafe == 0)
-							ext_argtype[i] = "user_ulong_t";
+						ext_argtype[i] = "user_ulong_t";
 						munge32 = munge32 "w"
 						munge64 = munge64 "d"
 						size32 += 4
 					}
 					else if (argtype[i] == "size_t") {
-						if (add_64bit_unsafe == 0)
-							ext_argtype[i] = "user_size_t";
+						ext_argtype[i] = "user_size_t";
 						munge32 = munge32 "w"
 						munge64 = munge64 "d"
 						size32 += 4
 					}
 					else if (argtype[i] == "ssize_t") {
-						if (add_64bit_unsafe == 0)
-							ext_argtype[i] = "user_ssize_t";
+						ext_argtype[i] = "user_ssize_t";
 						munge32 = munge32 "s"
 						munge64 = munge64 "d"
 						size32 += 4
@@ -589,9 +574,8 @@ s/\$//g
 						size32 += 4
 					}
 					else if (argtype[i] == "caddr_t" || argtype[i] == "semun_t" ||
-  						match(argtype[i], "[\*]") != 0) {
-						if (add_64bit_unsafe == 0)
-							ext_argtype[i] = "user_addr_t";
+  						argtype[i] == "uuid_t" || match(argtype[i], "[\*]") != 0) {
+						ext_argtype[i] = "user_addr_t";
 						munge32 = munge32 "w"
 						munge64 = munge64 "d"
 						size32 += 4
@@ -602,7 +586,8 @@ s/\$//g
 							 argtype[i] == "socklen_t" || argtype[i] == "uint32_t" || argtype[i] == "int32_t" ||
 							 argtype[i] == "sigset_t" || argtype[i] == "gid_t" || argtype[i] == "unsigned int" ||
 							 argtype[i] == "mode_t" || argtype[i] == "key_t" ||
-							 argtype[i] == "mach_port_name_t" || argtype[i] == "au_asid_t") {
+							 argtype[i] == "mach_port_name_t" || argtype[i] == "au_asid_t" ||
+							 argtype[i] == "associd_t" || argtype[i] == "connid_t") {
 						munge32 = munge32 "w"
 						munge64 = munge64 "d"
 						size32 += 4
@@ -685,13 +670,10 @@ s/\$//g
 			}
 		}
 
-		if (add_64bit_unsafe == 1  && add_64bit_fakesafe == 0)
-			my_flags = "UNSAFE_64BIT";
-
-		printf("\t{%s, %s, %s, \(sy_call_t *\)%s, %s, %s, %s, %s},", 
-				argssize, add_resv, my_flags, tempname, munge32, munge64, munge_ret, size32) > sysent
-		linesize = length(argssize) + length(add_resv) + length(my_flags) + length(tempname) + \
-				length(munge32) + length(munge64) + length(munge_ret) + 28
+		printf("\t{ \(sy_call_t *\)%s, %s, %s, %s, %s, %s},", 
+				tempname, munge32, munge64, munge_ret, argssize, size32) > sysent
+		linesize = length(tempname) + length(munge32) + length(munge64) + \
+			length(munge_ret) + length(argssize) + length(size32) + 28
 		align_comment(linesize, 88, sysent)
 		printf("/* %d = %s%s*/\n", syscall_num, funcname, additional_comments) > sysent
 		

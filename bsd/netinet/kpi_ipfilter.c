@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2004-2012 Apple Inc. All rights reserved.
+ * Copyright (c) 2004-2013 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -136,8 +136,7 @@ ipf_add(
 
 	/* This will force TCP to re-evaluate its use of TSO */
 	OSAddAtomic(1, &kipf_count);
-	if (use_routegenid)
-		routegenid_update();
+	routegenid_update();
 
 	return 0;
 }
@@ -194,8 +193,7 @@ ipf_remove(
 
 				/* This will force TCP to re-evaluate its use of TSO */
 				OSAddAtomic(-1, &kipf_count);
-				if (use_routegenid)
-					routegenid_update();
+				routegenid_update();
 
 			}
 			return 0;
@@ -271,7 +269,7 @@ ipf_injectv4_out(mbuf_t data, ipfilter_t filter_ref, ipf_pktopts_t options)
 	errno_t error = 0;
 	struct m_tag *mtag = NULL;
 	struct ip_moptions *imo = NULL;
-	struct ip_out_args ipoa = { IFSCOPE_NONE, { 0 }, 0 };
+	struct ip_out_args ipoa = { IFSCOPE_NONE, { 0 }, 0, 0 };
 
 	/* Make the IP header contiguous in the mbuf */
 	if ((size_t)m->m_len < sizeof (struct ip)) {
@@ -327,8 +325,7 @@ ipf_injectv4_out(mbuf_t data, ipfilter_t filter_ref, ipf_pktopts_t options)
 	    IP_ALLOWBROADCAST | IP_RAWOUTPUT | IP_OUTARGS, imo, &ipoa);
 
 	/* Release the route */
-	if (ro.ro_rt)
-		rtfree(ro.ro_rt);
+	ROUTE_RELEASE(&ro);
 
 	if (imo != NULL)
 		IMO_REMREF(imo);
@@ -346,7 +343,7 @@ ipf_injectv6_out(mbuf_t data, ipfilter_t filter_ref, ipf_pktopts_t options)
 	errno_t error = 0;
 	struct m_tag *mtag = NULL;
 	struct ip6_moptions *im6o = NULL;
-	struct ip6_out_args ip6oa = { IFSCOPE_NONE, { 0 }, 0 };
+	struct ip6_out_args ip6oa = { IFSCOPE_NONE, { 0 }, 0, 0 };
 
 	/* Make the IP header contiguous in the mbuf */
 	if ((size_t)m->m_len < sizeof(struct ip6_hdr)) {
@@ -398,8 +395,7 @@ ipf_injectv6_out(mbuf_t data, ipfilter_t filter_ref, ipf_pktopts_t options)
 	error = ip6_output(m, NULL, &ro, IPV6_OUTARGS, im6o, NULL, &ip6oa);
 
 	/* Release the route */
-	if (ro.ro_rt)
-		rtfree(ro.ro_rt);
+	ROUTE_RELEASE(&ro);
 
 	if (im6o != NULL)
 		IM6O_REMREF(im6o);

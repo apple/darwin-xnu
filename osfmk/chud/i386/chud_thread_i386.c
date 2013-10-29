@@ -45,16 +45,6 @@
 #include <i386/mp_desc.h>
 #include <i386/misc_protos.h>
 
-
-static uint64_t
-chudxnu_vm_unslide( uint64_t ptr, int kaddr )
-{
-	if( !kaddr )
-		return ptr;
-
-	return VM_KERNEL_UNSLIDE(ptr);
-}
-
 #if 0
 #pragma mark **** thread state ****
 #endif
@@ -478,14 +468,13 @@ static kern_return_t do_kernel_backtrace(
 	return KERN_SUCCESS;
 }
 
-
-
-__private_extern__
-kern_return_t chudxnu_thread_get_callstack64(
+static
+kern_return_t chudxnu_thread_get_callstack64_internal(
 	thread_t		thread,
 	uint64_t		*callstack,
 	mach_msg_type_number_t	*count,
-	boolean_t		user_only)
+	boolean_t		user_only,
+	boolean_t		kern_only)
 {
 	kern_return_t kr = KERN_FAILURE;
     task_t task = thread->task;
@@ -686,7 +675,7 @@ kern_return_t chudxnu_thread_get_callstack64(
 			bufferIndex < bufferMaxIndex) {
 			callstack[bufferIndex++] = (uint64_t) esp;
 		}
-	} else if(u_regs64) {
+	} else if(u_regs64 && !kern_only) {
 		/* backtrace user land */
 		uint64_t rsp = 0ULL;
 		
@@ -698,7 +687,7 @@ kern_return_t chudxnu_thread_get_callstack64(
 			callstack[bufferIndex++] = rsp;
 		}
 
-	} else if(u_regs32) {
+	} else if(u_regs32 && !kern_only) {
 		uint32_t esp = 0UL;
 		
 		kr = do_backtrace32(task, thread, u_regs32, callstack, &bufferIndex, 
@@ -712,5 +701,25 @@ kern_return_t chudxnu_thread_get_callstack64(
 
     *count = bufferIndex;
     return kr;
+}
+
+__private_extern__
+kern_return_t chudxnu_thread_get_callstack64_kperf(
+	thread_t		thread,
+	uint64_t		*callstack,
+	mach_msg_type_number_t	*count,
+	boolean_t		is_user)
+{
+	return chudxnu_thread_get_callstack64_internal(thread, callstack, count, is_user, !is_user);
+}
+
+__private_extern__
+kern_return_t chudxnu_thread_get_callstack64(
+	thread_t		thread,
+	uint64_t		*callstack,
+	mach_msg_type_number_t	*count,
+	boolean_t		user_only)
+{
+	return chudxnu_thread_get_callstack64_internal(thread, callstack, count, user_only, 0);
 }
 

@@ -10,33 +10,33 @@ include $(MakeInc_def)
 OBJS = externs.o main.o mkglue.o mkheaders.o mkioconf.o mkmakefile.o	\
 	mkswapconf.o openp.o searchp.o lexer.yy.o parser.o
 
-CFLAGS = -isysroot $(HOST_SDKROOT) -g -O0 -I$(SOURCE) -I.
+CFLAGS = -isysroot $(HOST_SDKROOT) -mmacosx-version-min=$(HOST_OS_VERSION) -g -O0 -I$(SOURCE) -I.
 
 WARNFLAGS = -Wall
 
-LDFLAGS = -isysroot $(HOST_SDKROOT)
+LDFLAGS = -isysroot $(HOST_SDKROOT) -mmacosx-version-min=$(HOST_OS_VERSION)
 
 config: $(OBJS)
-	$(_v)$(HOST_CC) $(LDFLAGS) -o $@ $^
 	@echo HOST_LD $@
-	$(_v)$(HOST_CODESIGN) -s - $@
+	$(_v)$(HOST_CC) $(LDFLAGS) -o $@ $^
 	@echo HOST_CODESIGN $@
+	$(_v)env CODESIGN_ALLOCATE=$(HOST_CODESIGN_ALLOCATE) $(HOST_CODESIGN) -s - $@
 
-.c.o:
-	$(_v)$(HOST_CC) $(WARNFLAGS) $(CFLAGS) -c -o $@ $<
+%.o: %.c
 	@echo HOST_CC $@
+	$(_v)$(HOST_CC) $(WARNFLAGS) $(CFLAGS) -c -o $@ $<
 
 parser.c: parser.y
-	$(_v)$(HOST_BISON) -y -d -d -o $@ $<
 	@echo HOST_BISON $@
+	$(_v)$(HOST_BISON) -y -d -d -o $@ $<
 
 lexer.yy.c: lexer.l
-	$(_v)$(HOST_FLEX) --header-file=lexer.yy.h -o $@ $<
 	@echo HOST_FLEX $@
+	$(_v)env M4=$(HOST_GM4) $(HOST_FLEX) --header-file=lexer.yy.h -o $@ $<
 
 main.o mkglue.o mkheaders.o mkioconf.o mkmakefile.o lexer.yy.c: parser.c
 
-do_build_setup: config
+do_build_setup:: config
 
 include $(MakeInc_rule)
 include $(MakeInc_dir)

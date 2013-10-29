@@ -153,12 +153,28 @@ BTReserveSpace(FCB *file, int operations, void* data)
 	
 	if (rsrvNodes > availNodes) {
 		u_int32_t reqblks, freeblks, rsrvblks;
+		uint32_t bt_rsrv;
 		struct hfsmount *hfsmp;
 
-		/* Try and reserve the last 5% of the disk space for file blocks. */
+		/* 
+		 * For UNIX conformance, we try and reserve the MIN of either 5% of 
+		 * total file blocks or 10MB worth of blocks, for growing existing 
+		 * files.  On non-HFS filesystems, creating a new directory entry may
+		 * not cause additional disk space to be allocated, but on HFS, creating
+		 * a new entry could cause the b-tree to grow.  As a result, we take 
+		 * some precautions here to prevent that on configurations that try to 
+		 * satisfy conformance.
+		 */
 		hfsmp = VTOVCB(btree->fileRefNum);
 		rsrvblks = ((u_int64_t)hfsmp->allocLimit * 5) / 100;
-		rsrvblks = MIN(rsrvblks, HFS_MAXRESERVE / hfsmp->blockSize);
+		if (hfsmp->blockSize > HFS_BT_MAXRESERVE) {
+			bt_rsrv = 1;	
+		}
+		else {
+			bt_rsrv = (HFS_BT_MAXRESERVE / hfsmp->blockSize);
+		}
+		rsrvblks = MIN(rsrvblks, bt_rsrv);	
+		
 		freeblks = hfs_freeblks(hfsmp, 0);
 		if (freeblks <= rsrvblks) {
 			/* When running low, disallow adding new items. */

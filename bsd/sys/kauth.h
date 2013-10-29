@@ -39,6 +39,7 @@
 #include <sys/cdefs.h>
 #include <mach/boolean.h>
 #include <sys/_types.h>		/* __offsetof() */
+#include <sys/syslimits.h>	/* NGROUPS_MAX */
 
 #ifdef __APPLE_API_EVOLVING
 
@@ -49,15 +50,7 @@
 #define KAUTH_UID_NONE	(~(uid_t)0 - 100)	/* not a valid UID */
 #define KAUTH_GID_NONE	(~(gid_t)0 - 100)	/* not a valid GID */
 
-#ifndef _KAUTH_GUID
-#define _KAUTH_GUID
-/* Apple-style globally unique identifier */
-typedef struct {
-#define KAUTH_GUID_SIZE	16	/* 128-bit identifier */
-	unsigned char g_guid[KAUTH_GUID_SIZE];
-} guid_t;
-#define _GUID_T
-#endif /* _KAUTH_GUID */
+#include <sys/_types/_guid_t.h>
 
 /* NT Security Identifier, structure as defined by Microsoft */
 #pragma pack(1)    /* push packing of 1 byte */
@@ -110,6 +103,8 @@ struct kauth_identity_extlookup {
 #define	KAUTH_EXTLOOKUP_WANT_PWNAM	(1<<16)
 #define KAUTH_EXTLOOKUP_VALID_GRNAM	(1<<17)
 #define	KAUTH_EXTLOOKUP_WANT_GRNAM	(1<<18)
+#define	KAUTH_EXTLOOKUP_VALID_SUPGRPS	(1<<19)
+#define	KAUTH_EXTLOOKUP_WANT_SUPGRPS	(1<<20)
 
 	__darwin_pid_t	el_info_pid;		/* request on behalf of PID */
 	u_int64_t	el_extend;		/* extension field */
@@ -126,6 +121,8 @@ struct kauth_identity_extlookup {
 	ntsid_t		el_gsid;	/* group SID */
 	u_int32_t	el_gsid_valid;	/* TTL on translation result (seconds) */
 	u_int32_t	el_member_valid; /* TTL on group lookup result */
+ 	u_int32_t	el_sup_grp_cnt;  /* count of supplemental groups up to NGROUPS */
+ 	gid_t		el_sup_groups[NGROUPS_MAX];	/* supplemental group list */
 };
 
 struct kauth_cache_sizes {
@@ -299,7 +296,7 @@ extern kauth_cred_t	kauth_cred_setgroups(kauth_cred_t cred, gid_t *groups, int g
 struct uthread;
 extern void	kauth_cred_uthread_update(struct uthread *, proc_t);
 #ifdef CONFIG_MACF
-extern int kauth_proc_label_update_execve(struct proc *p, struct vfs_context *ctx, struct vnode *vp, struct label *scriptlabel, struct label *execlabel);
+extern int kauth_proc_label_update_execve(struct proc *p, struct vfs_context *ctx, struct vnode *vp, struct vnode *scriptvp, struct label *scriptlabel, struct label *execlabel, void *psattr);
 #endif
 extern int	kauth_cred_getgroups(kauth_cred_t _cred, gid_t *_groups, int *_groupcount);
 extern int	kauth_cred_assume(uid_t _uid);
@@ -779,12 +776,12 @@ void kprintf(const char *fmt, ...);
 extern lck_grp_t *kauth_lck_grp;
 #ifdef XNU_KERNEL_PRIVATE
 __BEGIN_DECLS
-extern void	kauth_init(void) __attribute__((section("__TEXT, initcode")));
-extern void	kauth_cred_init(void) __attribute__((section("__TEXT, initcode")));
+extern void	kauth_init(void);
+extern void	kauth_cred_init(void);
 #if CONFIG_EXT_RESOLVER
-extern void	kauth_identity_init(void) __attribute__((section("__TEXT, initcode")));
-extern void	kauth_groups_init(void) __attribute__((section("__TEXT, initcode")));
-extern void	kauth_resolver_init(void) __attribute__((section("__TEXT, initcode")));
+extern void	kauth_identity_init(void);
+extern void	kauth_groups_init(void);
+extern void	kauth_resolver_init(void);
 #endif
 __END_DECLS
 #endif /* XNU_KERNEL_PRIVATE */

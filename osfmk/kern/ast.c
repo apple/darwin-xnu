@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2010 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2012 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -77,6 +77,9 @@
 #include <kern/thread.h>
 #include <kern/processor.h>
 #include <kern/spl.h>
+#if CONFIG_TELEMETRY
+#include <kern/telemetry.h>
+#endif
 #include <kern/wait_queue.h>
 #include <kern/ledger.h>
 #include <mach/policy.h>
@@ -174,7 +177,12 @@ ast_taken(
 			 */
 			if (reasons & AST_APC)
 				act_execute_returnhandlers();
-
+			
+			if (reasons & AST_GUARD) {
+				thread_ast_clear(thread, AST_GUARD);
+				guard_ast(thread);
+			}
+			
 			if (reasons & AST_LEDGER) {
 				thread_ast_clear(thread, AST_LEDGER);
 				ledger_ast(thread);
@@ -183,11 +191,21 @@ ast_taken(
 			/*
 			 * Kernel Profiling Hook
 			 */
-			if (reasons & AST_KPERF)
-			{
+			if (reasons & AST_KPERF) {
 				thread_ast_clear(thread, AST_KPERF);
 				chudxnu_thread_ast(thread);
 			}
+
+#if CONFIG_TELEMETRY
+			if (reasons & AST_TELEMETRY_ALL) {
+				boolean_t interrupted_userspace;
+
+				assert((reasons & AST_TELEMETRY_ALL) != AST_TELEMETRY_ALL); /* only one is valid at a time */
+				interrupted_userspace = (reasons & AST_TELEMETRY_USER) ? TRUE : FALSE;
+				thread_ast_clear(thread, AST_TELEMETRY_ALL);
+				telemetry_ast(thread, interrupted_userspace);
+			}
+#endif
 
 			ml_set_interrupts_enabled(FALSE);
 

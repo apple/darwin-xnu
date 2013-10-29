@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2011 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2013 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -118,6 +118,8 @@
 
 #include <kern/task.h>
 #include <kern/sched_prim.h>
+
+#define NFS_VNOP_DBG(...) NFS_DBG(NFS_FAC_VNOP, 7, ## __VA_ARGS__)
 
 /*
  * NFS vnode ops
@@ -571,6 +573,21 @@ nfs_vnop_access(
 	 * in the cache.
 	 */
 
+	/*
+	 * In addition if the kernel is checking for access, KAUTH_VNODE_ACCESS
+	 * not set, just return. At this moment do not know what the state of
+	 * the server is and what ever we get back be it either yea or nay is
+	 * going to be stale.  Finder (Desktop services/FileURL) might hang when
+	 * going over the wire when just asking getattrlist for the roots FSID
+	 * since we are going to be called to see if we're authorized for
+	 * search. Since we are returning without checking the cache and/or
+	 * going over the wire, it makes no sense to update the cache.
+	 *
+	 * N.B. This is also the strategy that SMB is using.
+	 */
+	if (!(ap->a_action & KAUTH_VNODE_ACCESS))
+		return (0);
+	
 	/*
 	 * Convert KAUTH primitives to NFS access rights.
 	 */
@@ -1424,11 +1441,16 @@ nfsmout:
 			cache_purge(vp);
 			np->n_ncgen++;
 			NFS_CHANGED_UPDATE_NC(nfsvers, np, nvap);
+			NFS_VNOP_DBG("Purge directory 0x%llx\n", 
+			      (uint64_t)VM_KERNEL_ADDRPERM(vp));
 		}
 		if (NFS_CHANGED(nfsvers, np, nvap)) {
 			FSDBG(513, -1, np, -1, np);
-			if (vtype == VDIR)
+			if (vtype == VDIR) {
+				NFS_VNOP_DBG("Invalidate directory 0x%llx\n", 
+			               (uint64_t)VM_KERNEL_ADDRPERM(vp));
 				nfs_invaldir(np);
+			}
 			nfs_node_unlock(np);
 			if (wanted)
 				wakeup(np);
@@ -1467,6 +1489,28 @@ nfsmout:
 /*
  * NFS getattr call from vfs.
  */
+
+/*
+ * The attributes we support over the wire.
+ * We also get fsid but the vfs layer gets it out of the mount 
+ * structure after this calling us so there's no need to return it,
+ * and Finder expects to call getattrlist just looking for the FSID
+ * with out hanging on a non responsive server.
+ */
+#define NFS3_SUPPORTED_VATTRS \
+	(VNODE_ATTR_va_rdev |		\
+	 VNODE_ATTR_va_nlink |		\
+	 VNODE_ATTR_va_data_size |	\
+	 VNODE_ATTR_va_data_alloc |	\
+	 VNODE_ATTR_va_uid |		\
+	 VNODE_ATTR_va_gid |		\
+	 VNODE_ATTR_va_mode |		\
+	 VNODE_ATTR_va_modify_time |	\
+	 VNODE_ATTR_va_change_time |	\
+	 VNODE_ATTR_va_access_time |	\
+	 VNODE_ATTR_va_fileid |		\
+	 VNODE_ATTR_va_type)
+
 int
 nfs3_vnop_getattr(
 	struct vnop_getattr_args /* {
@@ -1481,6 +1525,19 @@ nfs3_vnop_getattr(
 	struct vnode_attr *vap = ap->a_vap;
 	dev_t rdev;
 
+	/*
+	 * Lets don't go over the wire if we don't support any of the attributes.
+	 * Just fall through at the VFS layer and let it cons up what it needs.
+	 */
+	/* Return the io size no matter what, since we don't go over the wire for this */
+	VATTR_RETURN(vap, va_iosize, nfs_iosize);
+	if ((vap->va_active & NFS3_SUPPORTED_VATTRS) == 0)
+		return (0);
+
+	if (VATTR_IS_ACTIVE(ap->a_vap, va_name))
+	    NFS_VNOP_DBG("Getting attrs for 0x%llx, vname is %s\n", 
+	          (uint64_t)VM_KERNEL_ADDRPERM(ap->a_vp),
+	          ap->a_vp->v_name ? ap->a_vp->v_name : "empty");
 	error = nfs_getattr(VTONFS(ap->a_vp), &nva, ap->a_context, NGA_CACHED);
 	if (error)
 		return (error);
@@ -1496,7 +1553,6 @@ nfs3_vnop_getattr(
 	VATTR_RETURN(vap, va_fileid, nva.nva_fileid);
 	VATTR_RETURN(vap, va_data_size, nva.nva_size);
 	VATTR_RETURN(vap, va_data_alloc, nva.nva_bytes);
-	VATTR_RETURN(vap, va_iosize, nfs_iosize);
 	vap->va_access_time.tv_sec = nva.nva_timesec[NFSTIME_ACCESS];
 	vap->va_access_time.tv_nsec = nva.nva_timensec[NFSTIME_ACCESS];
 	VATTR_SET_SUPPORTED(vap, va_access_time);
@@ -3071,11 +3127,12 @@ nfs_write_rpc2(
 {
 	struct nfsmount *nmp;
 	int error = 0, nfsvers;
-	int backup, wverfset, commit, committed;
+	int wverfset, commit, committed;
 	uint64_t wverf = 0, wverf2;
 	size_t nmwsize, totalsize, tsiz, len, rlen;
 	struct nfsreq rq, *req = &rq;
 	uint32_t stategenid = 0, vrestart = 0, restart = 0;
+	uio_t uio_save = NULL;
 
 #if DIAGNOSTIC
 	/* XXX limitation based on need to back up uio on short write */
@@ -3096,6 +3153,11 @@ nfs_write_rpc2(
 	if ((nfsvers == NFS_VER2) && ((uint64_t)(uio_offset(uio) + tsiz) > 0xffffffffULL)) {
 		FSDBG_BOT(537, np, uio_offset(uio), uio_resid(uio), EFBIG);
 		return (EFBIG);
+	}
+
+	uio_save = uio_duplicate(uio);
+	if (uio_save == NULL) {
+		return (EIO);
 	}
 
 	while (tsiz > 0) {
@@ -3139,8 +3201,9 @@ nfs_write_rpc2(
 
 		/* check for a short write */
 		if (rlen < len) {
-			backup = len - rlen;
-			uio_pushback(uio, backup);
+			/* Reset the uio to reflect the actual transfer */
+			*uio = *uio_save;
+			uio_update(uio, totalsize - (tsiz - rlen));
 			len = rlen;
 		}
 
@@ -3161,13 +3224,14 @@ nfs_write_rpc2(
 				error = EIO;
 				break;
 			}
-			backup = totalsize - tsiz;
-			uio_pushback(uio, backup);
+			*uio = *uio_save;	// Reset the uio back to the start
 			committed = NFS_WRITE_FILESYNC;
 			wverfset = 0;
 			tsiz = totalsize;
 		}
 	}
+	if (uio_save)
+		uio_free(uio_save);
 	if (wverfset && wverfp)
 		*wverfp = wverf;
 	*iomodep = committed;
@@ -3334,7 +3398,7 @@ nfs3_vnop_mknod(
 	int error = 0, lockerror = ENOENT, busyerror = ENOENT, status, wccpostattr = 0;
 	struct timespec premtime = { 0, 0 };
 	u_int32_t rdev;
-	u_int64_t xid, dxid;
+	u_int64_t xid = 0, dxid;
 	int nfsvers, gotuid, gotgid;
 	struct nfsm_chain nmreq, nmrep;
 	struct nfsreq rq, *req = &rq;
@@ -4254,7 +4318,7 @@ nfs3_vnop_symlink(
 	struct timespec premtime = { 0, 0 };
 	vnode_t newvp = NULL;
 	int nfsvers, gotuid, gotgid;
-	u_int64_t xid, dxid;
+	u_int64_t xid = 0, dxid;
 	nfsnode_t np = NULL;
 	nfsnode_t dnp = VTONFS(dvp);
 	struct nfsmount *nmp;
@@ -4412,7 +4476,7 @@ nfs3_vnop_mkdir(
 	int error = 0, lockerror = ENOENT, busyerror = ENOENT, status, wccpostattr = 0;
 	struct timespec premtime = { 0, 0 };
 	int nfsvers, gotuid, gotgid;
-	u_int64_t xid, dxid;
+	u_int64_t xid= 0, dxid;
 	fhandle_t fh;
 	struct nfsm_chain nmreq, nmrep;
 	struct nfsreq rq, *req = &rq;
@@ -6597,18 +6661,22 @@ nfs_vnop_ioctl(
 {
 	vfs_context_t ctx = ap->a_context;
 	vnode_t vp = ap->a_vp;
+	struct nfsmount *mp = VTONMP(vp);
 	int error = ENOTTY;
 
+	if (mp == NULL)
+		return (ENXIO);
+	
 	switch (ap->a_command) {
 
 	case F_FULLFSYNC:
 		if (vnode_vfsisrdonly(vp))
 			return (EROFS);
-		if (!VTONMP(vp))
-			return (ENXIO);
 		error = nfs_flush(VTONFS(vp), MNT_WAIT, vfs_context_thread(ctx), 0);
 		break;
-
+	case NFS_FSCTL_DESTROY_CRED:
+		error = nfs_gss_clnt_ctx_destroy(mp, vfs_context_ucred(ctx));
+		break;
 	}
 
 	return (error);
@@ -6829,7 +6897,7 @@ cancel:
  * erroneous.
  */
 char nfs_pageouterrorhandler(int);
-enum actiontype {NOACTION, DUMP, DUMPANDLOG, RETRY, RETRYWITHSLEEP, SEVER};
+enum actiontype {NOACTION, DUMP, DUMPANDLOG, RETRY, SEVER};
 #define NFS_ELAST 88
 static u_char errorcount[NFS_ELAST+1]; /* better be zeros when initialized */
 static const char errortooutcome[NFS_ELAST+1] = {
@@ -7371,11 +7439,6 @@ cancel:
 					break;
 				case RETRY:
 					abortflags = UPL_ABORT_FREE_ON_EMPTY;
-					break;
-				case RETRYWITHSLEEP:
-					abortflags = UPL_ABORT_FREE_ON_EMPTY;
-					/* pri unused. PSOCK for placeholder. */
-					tsleep(&lbolt, PSOCK, "nfspageout", 0);
 					break;
 				case SEVER: /* not implemented */
 				default:

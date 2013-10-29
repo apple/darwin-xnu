@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2004,2007 Apple Inc. All rights reserved.
+ * Copyright (c) 2004-2012 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -318,7 +318,8 @@ tcp_sackhole_remove(struct tcpcb *tp, struct sackhole *hole)
  * the sequence space).
  */
 void
-tcp_sack_doack(struct tcpcb *tp, struct tcpopt *to, tcp_seq th_ack)
+tcp_sack_doack(struct tcpcb *tp, struct tcpopt *to, tcp_seq th_ack, 
+	u_int32_t *newbytes_acked)
 {
 	struct sackhole *cur, *temp;
 	struct sackblk sack, sack_blocks[TCP_MAX_SACK + 1], *sblkp;
@@ -337,18 +338,18 @@ tcp_sack_doack(struct tcpcb *tp, struct tcpopt *to, tcp_seq th_ack)
 	 * Append received valid SACK blocks to sack_blocks[].
 	 * Check that the SACK block range is valid.
 	 */
-		for (i = 0; i < to->to_nsacks; i++) {
-			bcopy((to->to_sacks + i * TCPOLEN_SACK),
-			    &sack, sizeof(sack));
-			sack.start = ntohl(sack.start);
-			sack.end = ntohl(sack.end);
-			if (SEQ_GT(sack.end, sack.start) &&
-			    SEQ_GT(sack.start, tp->snd_una) &&
-			    SEQ_GT(sack.start, th_ack) &&
-			    SEQ_LT(sack.start, tp->snd_max) &&
-			    SEQ_GT(sack.end, tp->snd_una) &&
-			    SEQ_LEQ(sack.end, tp->snd_max))
-				sack_blocks[num_sack_blks++] = sack;
+	for (i = 0; i < to->to_nsacks; i++) {
+		bcopy((to->to_sacks + i * TCPOLEN_SACK),
+		    &sack, sizeof(sack));
+		sack.start = ntohl(sack.start);
+		sack.end = ntohl(sack.end);
+		if (SEQ_GT(sack.end, sack.start) &&
+		    SEQ_GT(sack.start, tp->snd_una) &&
+		    SEQ_GT(sack.start, th_ack) &&
+		    SEQ_LT(sack.start, tp->snd_max) &&
+		    SEQ_GT(sack.end, tp->snd_una) &&
+		    SEQ_LEQ(sack.end, tp->snd_max))
+			sack_blocks[num_sack_blks++] = sack;
 	}
 
 	/*
@@ -372,7 +373,7 @@ tcp_sack_doack(struct tcpcb *tp, struct tcpopt *to, tcp_seq th_ack)
 			}
 		}
 	}
-	if (TAILQ_EMPTY(&tp->snd_holes))
+	if (TAILQ_EMPTY(&tp->snd_holes)) {
 		/*
 		 * Empty scoreboard. Need to initialize snd_fack (it may be
 		 * uninitialized or have a bogus value). Scoreboard holes
@@ -380,6 +381,9 @@ tcp_sack_doack(struct tcpcb *tp, struct tcpopt *to, tcp_seq th_ack)
 		 * the logic that adds holes to the tail of the scoreboard).
 		 */
 		tp->snd_fack = SEQ_MAX(tp->snd_una, th_ack);
+		*newbytes_acked += (tp->snd_fack - tp->snd_una);
+	}
+
 	/*
 	 * In the while-loop below, incoming SACK blocks (sack_blocks[])
 	 * and SACK holes (snd_holes) are traversed from their tails with
@@ -403,6 +407,8 @@ tcp_sack_doack(struct tcpcb *tp, struct tcpopt *to, tcp_seq th_ack)
 		temp = tcp_sackhole_insert(tp, tp->snd_fack,sblkp->start,NULL);
 		if (temp != NULL) {
 			tp->snd_fack = sblkp->end;
+			*newbytes_acked += (sblkp->end - sblkp->start);
+
 			/* Go to the previous sack block. */
 			sblkp--;
 		} else {
@@ -418,12 +424,16 @@ tcp_sack_doack(struct tcpcb *tp, struct tcpopt *to, tcp_seq th_ack)
 			       SEQ_LT(tp->snd_fack, sblkp->start))
 				sblkp--;
 			if (sblkp >= sack_blocks && 
-			    SEQ_LT(tp->snd_fack, sblkp->end))
+			    SEQ_LT(tp->snd_fack, sblkp->end)) {
+				*newbytes_acked += (sblkp->end - tp->snd_fack);
 				tp->snd_fack = sblkp->end;
+			}
 		}
-	} else if (SEQ_LT(tp->snd_fack, sblkp->end))
+	} else if (SEQ_LT(tp->snd_fack, sblkp->end)) {
 		/* fack is advanced. */
+		*newbytes_acked += (sblkp->end - tp->snd_fack);
 		tp->snd_fack = sblkp->end;
+	}
 	/* We must have at least one SACK hole in scoreboard */
 	cur = TAILQ_LAST(&tp->snd_holes, sackhole_head); /* Last SACK hole */
 	/*
@@ -452,6 +462,7 @@ tcp_sack_doack(struct tcpcb *tp, struct tcpopt *to, tcp_seq th_ack)
 			/* Data acks at least the beginning of hole */
 			if (SEQ_GEQ(sblkp->end, cur->end)) {
 				/* Acks entire hole, so delete hole */
+				*newbytes_acked += (cur->end - cur->start);
 				temp = cur;
 				cur = TAILQ_PREV(cur, sackhole_head, scblink);
 				tcp_sackhole_remove(tp, temp);
@@ -462,6 +473,7 @@ tcp_sack_doack(struct tcpcb *tp, struct tcpopt *to, tcp_seq th_ack)
 				continue;
 			} else {
 				/* Move start of hole forward */
+				*newbytes_acked += (sblkp->end - cur->start);
 				cur->start = sblkp->end;
 				cur->rxmit = SEQ_MAX(cur->rxmit, cur->start);
 			}
@@ -469,6 +481,7 @@ tcp_sack_doack(struct tcpcb *tp, struct tcpopt *to, tcp_seq th_ack)
 			/* Data acks at least the end of hole */
 			if (SEQ_GEQ(sblkp->end, cur->end)) {
 				/* Move end of hole backward */
+				*newbytes_acked += (cur->end - sblkp->start);
 				cur->end = sblkp->start;
 				cur->rxmit = SEQ_MIN(cur->rxmit, cur->end);
 			} else {
@@ -476,6 +489,7 @@ tcp_sack_doack(struct tcpcb *tp, struct tcpopt *to, tcp_seq th_ack)
 				 * ACKs some data in middle of a hole; need to
 				 * split current hole
 				 */
+				*newbytes_acked += (sblkp->end - sblkp->start);
 				temp = tcp_sackhole_insert(tp, sblkp->end,
 							   cur->end, cur);
 				if (temp != NULL) {
@@ -540,7 +554,7 @@ tcp_sack_partialack(tp, th)
 	tp->t_timer[TCPT_REXMT] = 0;
 	tp->t_rtttime = 0;
 	/* send one or 2 segments based on how much new data was acked */
-	if (((th->th_ack - tp->snd_una) / tp->t_maxseg) > 2)
+	if (((BYTES_ACKED(th, tp)) / tp->t_maxseg) > 2)
 		num_segs = 2;
 	tp->snd_cwnd = (tp->sackhint.sack_bytes_rexmit +
 		(tp->snd_nxt - tp->sack_newdata) +

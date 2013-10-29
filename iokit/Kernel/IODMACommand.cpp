@@ -463,7 +463,7 @@ IODMACommand::walkAll(UInt8 op)
 	{
 	    offset = 0;
 	    numSegments = 0-1;
-	    ret = genIOVMSegments(op, segmentOp, (void *) op, &offset, state, &numSegments);
+	    ret = genIOVMSegments(op, segmentOp, (void *)(uintptr_t) op, &offset, state, &numSegments);
 	}
 
 	op &= ~kWalkPreflight;
@@ -499,7 +499,7 @@ IODMACommand::walkAll(UInt8 op)
 		state->fCopyNext = state->fCopyPageAlloc;
 		offset = 0;
 		numSegments = 0-1;
-		ret = genIOVMSegments(op, segmentOp, (void *) op, &offset, state, &numSegments);
+		ret = genIOVMSegments(op, segmentOp, (void *)(uintptr_t) op, &offset, state, &numSegments);
 		state->fPrepared = true;
 		op &= ~(kWalkSyncIn | kWalkSyncOut);
 	    }
@@ -535,7 +535,7 @@ IODMACommand::walkAll(UInt8 op)
 		state->fCopyNext = state->fCopyPageAlloc;
 		offset = 0;
 		numSegments = 0-1;
-		ret = genIOVMSegments(op, segmentOp, (void *) op, &offset, state, &numSegments);
+		ret = genIOVMSegments(op, segmentOp, (void *)(uintptr_t) op, &offset, state, &numSegments);
 	    }
 	    else if (state->fCopyMD)
 	    {
@@ -769,7 +769,7 @@ IODMACommand::prepare(UInt64 offset, UInt64 length, bool flushCache, bool synchr
 		{
 		    state->fLocalMapperPageAlloc = mapArgs.fAlloc;
 		    state->fLocalMapperPageCount = mapArgs.fAllocCount;
-		    state->fMapContig = true;
+		    state->fMapContig = mapArgs.fMapContig;
 		}
 		ret = kIOReturnSuccess;
 	    }

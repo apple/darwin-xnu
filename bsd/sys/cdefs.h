@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2009 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2012 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -146,10 +146,36 @@
 #define __used		__attribute__((used))
 
 /* __deprecated causes the compiler to produce a warning when encountering
- * code using the deprecated functionality.  This may require turning on
- * such wardning with the -Wdeprecated flag.
+ * code using the deprecated functionality.
+ * __deprecated_msg() does the same, and compilers that support it will print
+ * a message along with the deprecation warning.
+ * This may require turning on such warning with the -Wdeprecated flag.
+ * __deprecated_enum_msg() should be used on enums, and compilers that support
+ * it will print the deprecation warning.
  */
 #define __deprecated	__attribute__((deprecated))
+
+#ifdef __has_extension
+    #if __has_extension(attribute_deprecated_with_message)
+        #define __deprecated_msg(_msg) __attribute__((deprecated(_msg)))
+    #else
+        #define __deprecated_msg(_msg) __attribute__((deprecated))
+    #endif
+#elif defined(__GNUC__) && ((__GNUC__ >= 5) || ((__GNUC__ == 4) && (__GNUC_MINOR__ >= 5)))
+    #define __deprecated_msg(_msg) __attribute__((deprecated(_msg)))
+#else
+    #define __deprecated_msg(_msg) __attribute__((deprecated))
+#endif
+
+#ifdef __has_extension
+    #if __has_extension(enumerator_attributes)
+        #define __deprecated_enum_msg(_msg) __deprecated_msg(_msg)
+    #else
+        #define __deprecated_enum_msg(_msg)
+    #endif
+#else
+    #define __deprecated_enum_msg(_msg)
+#endif
 
 /* __unavailable causes the compiler to error out when encountering
  * code using the tagged function of variable.
@@ -170,6 +196,44 @@
 #define __restrict
 #else
 #define __restrict	restrict
+#endif
+
+/* Declaring inline functions within headers is error-prone due to differences
+ * across various versions of the C language and extensions.  __header_inline
+ * can be used to declare inline functions within system headers.  In cases
+ * where you want to force inlining instead of letting the compiler make
+ * the decision, you can use __header_always_inline.
+ *
+ * Be aware that using inline for functions which compilers may also provide
+ * builtins can behave differently under various compilers.  If you intend to
+ * provide an inline version of such a function, you may want to use a macro
+ * instead.
+ *
+ * The check for !__GNUC__ || __clang__ is because gcc doesn't correctly
+ * support c99 inline in some cases:
+ * http://gcc.gnu.org/bugzilla/show_bug.cgi?id=55965
+ */
+
+#if __STDC_VERSION__ >= 199901L && (!defined(__GNUC__) || defined(__clang__))
+# define __header_inline           inline
+#elif defined(__GNUC__) && defined(__GNUC_STDC_INLINE__)
+# define __header_inline           extern __inline __attribute__((__gnu_inline__))
+#elif defined(__GNUC__)
+# define __header_inline           extern __inline
+#else
+  /* If we land here, we've encountered an unsupported compiler,
+   * so hopefully it understands static __inline as a fallback.
+   */
+# define __header_inline           static __inline
+#endif
+
+#ifdef __GNUC__
+# define __header_always_inline    __header_inline __attribute__ ((__always_inline__))
+#else
+  /* Unfortunately, we're using a compiler that we don't know how to force to
+   * inline.  Oh well.
+   */
+# define __header_always_inline    __header_inline
 #endif
 
 /*
@@ -208,6 +272,17 @@
 #define __FBSDID(s) 
 #endif
 
+#ifndef	__DECONST
+#define	__DECONST(type, var)	__CAST_AWAY_QUALIFIER(var, const, type)
+#endif
+
+#ifndef	__DEVOLATILE
+#define	__DEVOLATILE(type, var)	__CAST_AWAY_QUALIFIER(var, volatile, type)
+#endif
+
+#ifndef	__DEQUALIFY
+#define	__DEQUALIFY(type, var)	__CAST_AWAY_QUALIFIER(var, const volatile, type)
+#endif
 
 /*
  * COMPILATION ENVIRONMENTS -- see compat(5) for additional detail
@@ -530,6 +605,13 @@
 #define __DARWIN_C_LEVEL        __DARWIN_C_FULL
 #endif
 
+/* If the developer has neither requested a strict language mode nor a version
+ * of POSIX, turn on functionality provided by __STDC_WANT_LIB_EXT1__ as part
+ * of __DARWIN_C_FULL.
+ */
+#if !defined(__STDC_WANT_LIB_EXT1__) && !defined(__STRICT_ANSI__) && __DARWIN_C_LEVEL >= __DARWIN_C_FULL
+#define __STDC_WANT_LIB_EXT1__ 1
+#endif
 
 /*
  * long long is not supported in c89 (__STRICT_ANSI__), but g++ -ansi and
@@ -594,6 +676,23 @@
  */
 #ifndef __CAST_AWAY_QUALIFIER
 #define __CAST_AWAY_QUALIFIER(variable, qualifier, type)  (type) (long)(variable)
+#endif
+
+/*
+ * __XNU_PRIVATE_EXTERN is a linkage decoration indicating that a symbol can be
+ * used from other compilation units, but not other libraries or executables.
+ */
+#ifndef __XNU_PRIVATE_EXTERN
+#define __XNU_PRIVATE_EXTERN __attribute__((visibility("hidden")))
+#endif
+
+/*
+ * Architecture validation for current SDK
+ */
+#if !defined(__sys_cdefs_arch_unknown__) && defined(__i386__)
+#elif !defined(__sys_cdefs_arch_unknown__) && defined(__x86_64__)
+#else
+#error Unsupported architecture
 #endif
 
 #endif /* !_CDEFS_H_ */

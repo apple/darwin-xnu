@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008-2011 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2008-2013 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -149,7 +149,7 @@ struct ip6_fw {
 					/* count of 0 means match all ports) */
 };
 
-#if defined(KERNEL_PRIVATE)
+#if defined(BSD_KERNEL_PRIVATE)
 #pragma pack(4)
 
 struct ip6_fw_32 {
@@ -217,7 +217,7 @@ struct ip6_fw_64 {
 };
 
 
-#endif	/* KERNEL_PRIVATE */
+#endif	/* BSD_KERNEL_PRIVATE */
 
 #define IPV6_FW_GETNSRCP(rule)		((rule)->fw_nports & 0x0f)
 #define IPV6_FW_SETNSRCP(rule, n)		do {				\
@@ -321,7 +321,7 @@ struct ip6_fw_chain {
 /*
  * Main firewall chains definitions and global var's definitions.
  */
-#ifdef KERNEL_PRIVATE
+#ifdef BSD_KERNEL_PRIVATE
 
 #define M_IP6FW M_IPFW
 
@@ -342,7 +342,7 @@ extern	ip6_fw_chk_t *ip6_fw_chk_ptr;
 extern	ip6_fw_ctl_t *ip6_fw_ctl_ptr;
 extern	int ip6_fw_enable;
 
-#endif /* KERNEL_PRIVATE */
+#endif /* BSD_KERNEL_PRIVATE */
 
 #endif /* __APPLE_API_OBSOLETE */
 #endif /* _IP6_FW_H */

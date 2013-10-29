@@ -346,6 +346,8 @@ _kauth_unlisten_scope
 _kdebug_enable
 _kernel_debug
 _kernel_debug1
+_kernel_debug_enter
+_kernel_debug_register_callback
 _kernproc
 _kev_msg_post
 _kev_vendor_code_find

@@ -122,6 +122,8 @@ extern int thread_enable_fpe(thread_t act, int onoff);
 extern thread_t	port_name_to_thread(mach_port_name_t port_name);
 extern kern_return_t get_signalact(task_t , thread_t *, int);
 extern unsigned int get_useraddr(void);
+extern kern_return_t task_suspend_internal(task_t);
+extern kern_return_t task_resume_internal(task_t);
 
 /*
  * ---
@@ -1935,7 +1937,7 @@ psignal_internal(proc_t p, task_t task, thread_t thread, int flavor, int signum)
 			sig_proc->p_contproc = current_proc()->p_pid;
 
 			proc_unlock(sig_proc);
-			(void) task_resume(sig_task);
+			(void) task_resume_internal(sig_task);
 			goto psigout;
 		}
 		proc_unlock(sig_proc);
@@ -1951,7 +1953,7 @@ psignal_internal(proc_t p, task_t task, thread_t thread, int flavor, int signum)
 		if (prop & SA_CONT) {
 			OSBitOrAtomic(P_CONTINUED, &sig_proc->p_flag);
 			proc_unlock(sig_proc);
-			(void) task_resume(sig_task);
+			(void) task_resume_internal(sig_task);
 			proc_lock(sig_proc);
 			sig_proc->p_stat = SRUN;
 		}  else if (sig_proc->p_stat == SSTOP) {
@@ -2090,7 +2092,7 @@ psignal_internal(proc_t p, task_t task, thread_t thread, int flavor, int signum)
 			sig_proc->p_contproc = sig_proc->p_pid;
 
 			proc_unlock(sig_proc);
-			(void) task_resume(sig_task);
+			(void) task_resume_internal(sig_task);
 			proc_lock(sig_proc);
 			/*
 			 * When processing a SIGCONT, we need to check
@@ -2297,12 +2299,9 @@ issignal_locked(proc_t p)
 				/*
 			 	*	XXX Have to really stop for debuggers;
 			 	*	XXX stop() doesn't do the right thing.
-			 	*	XXX Inline the task_suspend because we
-			 	*	XXX have to diddle Unix state in the
-			 	*	XXX middle of it.
 			 	*/
 				task = p->task;
-				task_suspend(task);
+				task_suspend_internal(task);
 
 				proc_lock(p);
 				p->sigwait = TRUE;
@@ -2642,7 +2641,7 @@ stop(proc_t p, proc_t parent)
 		wakeup((caddr_t)parent);
 		proc_list_unlock();
 	}
-	(void) task_suspend(p->task);	/*XXX*/
+	(void) task_suspend_internal(p->task);
 }
 
 /*
@@ -2693,7 +2692,7 @@ postsig_locked(int signum)
 			p->p_sigacts->ps_sig = signum;
 			proc_signalend(p, 1);
 			proc_unlock(p);
-			if (coredump(p) == 0)
+			if (coredump(p, 0, 0) == 0)
 				signum |= WCOREFLAG;
 		} else  {
 			proc_signalend(p, 1);
@@ -2945,7 +2944,7 @@ bsd_ast(thread_t thread)
 		proc_lock(p);
 		p->p_dtrace_stop = 1;
 		proc_unlock(p);
-		(void)task_suspend(p->task);
+		(void)task_suspend_internal(p->task);
 	}
 
 	if (ut->t_dtrace_resumepid) {
@@ -2957,7 +2956,7 @@ bsd_ast(thread_t thread)
 			if (resumeproc->p_dtrace_stop) {
 				resumeproc->p_dtrace_stop = 0;
 				proc_unlock(resumeproc);
-				task_resume(resumeproc->task);
+				task_resume_internal(resumeproc->task);
 			}
 			else {
 				proc_unlock(resumeproc);

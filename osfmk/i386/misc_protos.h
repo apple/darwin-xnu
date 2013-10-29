@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2010 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2012 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -46,12 +46,6 @@ extern void		i386_vm_init(
 				uint64_t,
 				boolean_t,
 				struct boot_args *);
-#ifdef __i386__
-extern void		cpu_IA32e_enable(struct cpu_data *);
-extern void		cpu_IA32e_disable(struct cpu_data *);
-extern void		ml_load_desc64(void);
-extern void		ml_64bit_lldt(int);
-#endif
 
 #if NCOPY_WINDOWS > 0
 extern void             cpu_userwindow_init(int);
@@ -70,9 +64,6 @@ extern void		panic_io_port_read(void);
 extern void		remote_kdb(void);
 extern void		clear_kdb_intr(void);
 extern void		cpu_init(void);
-#ifdef __i386__
-extern void		cpu_shutdown(void);
-#endif
 extern void		fix_desc(
 				void		* desc,
 				int		num_desc);
@@ -92,17 +83,6 @@ extern void		blkclr(
 			       const char	*from,
 			       int		nbytes);
 
-#ifdef __i386__
-extern unsigned int	div_scale(
-				unsigned int	dividend,
-				unsigned int	divisor,
-				unsigned int	*scale);
-
-extern unsigned int	mul_scale(
-				unsigned int	multiplicand,
-				unsigned int	multiplier,
-				unsigned int	*scale);
-#endif
 
 /* Move arbitrarily-aligned data from one physical address to another */
 extern void bcopy_phys(addr64_t from, addr64_t to, vm_size_t nbytes);
@@ -110,7 +90,7 @@ extern void bcopy_phys(addr64_t from, addr64_t to, vm_size_t nbytes);
 /* allow a function to get a quick virtual mapping of a physical page */
 extern int apply_func_phys(addr64_t src64, vm_size_t bytes, int (*func)(void * buffer, vm_size_t bytes, void * arg), void * arg);
 
-extern void ml_copy_phys(addr64_t, addr64_t, vm_size_t);
+extern int ml_copy_phys(addr64_t, addr64_t, vm_size_t);
 
 /* Flush all cachelines for a page. */
 extern void cache_flush_page_phys(ppnum_t pa);

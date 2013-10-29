@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2008 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2013 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -50,8 +50,11 @@
  * The kSwapBTNodeHeaderRecordOnly "direction" is not valid for these routines.
  */
 int hfs_swap_HFSPlusBTInternalNode (BlockDescriptor *src, HFSCatalogNodeID fileID, enum HFSBTSwapDirection direction);
-int hfs_swap_HFSBTInternalNode (BlockDescriptor *src, HFSCatalogNodeID fileID, enum HFSBTSwapDirection direction);
 void hfs_swap_HFSPlusForkData (HFSPlusForkData *src);
+
+#if CONFIG_HFS_STD
+int hfs_swap_HFSBTInternalNode (BlockDescriptor *src, HFSCatalogNodeID fileID, enum HFSBTSwapDirection direction);
+#endif
 
 /*
  * hfs_swap_HFSPlusForkData
@@ -229,9 +232,12 @@ hfs_swap_BTNode (
 
         if (VTOVCB(vp)->vcbSigWord == kHFSPlusSigWord) {
             error = hfs_swap_HFSPlusBTInternalNode (src, VTOC(vp)->c_fileid, direction);
-        } else {
+        } 
+#if CONFIG_HFS_STD
+		else {
             error = hfs_swap_HFSBTInternalNode (src, VTOC(vp)->c_fileid, direction);
         }
+#endif
         
         if (error) goto fail;
         
@@ -926,6 +932,7 @@ hfs_swap_HFSPlusBTInternalNode (
     return (0);
 }
 
+#if CONFIG_HFS_STD
 int
 hfs_swap_HFSBTInternalNode (
     BlockDescriptor *src,
@@ -1216,3 +1223,5 @@ hfs_swap_HFSBTInternalNode (
 
     return (0);
 }
+#endif
+

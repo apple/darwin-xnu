@@ -120,9 +120,8 @@ EXT(mc_task_stack_end):
 	movl	%cr0,%eax					;\
 	orl	$(CR0_PG|CR0_WP),%eax	/* enable paging */	;\
 	movl	%eax,%cr0					;\
-	/* "The Aussie Maneuver" ("Myria" variant) */ 		;\
-	pushl $(0xcb<<24)|KERNEL64_CS /* reload CS with 0x08 */ ;\
-	call .-1						;\
+	ljmpl	$KERNEL64_CS,$64f				;\
+64:								;\
 	.code64
 
 /*

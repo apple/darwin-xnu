@@ -73,7 +73,6 @@
 #include <mach_debug.h>
 #include <mach_ipc_test.h>
 #include <mach_machine_routines.h>
-#include <norma_task.h>
 #include <mach_rt.h>
 #include <platforms.h>
 
@@ -138,6 +137,9 @@
 #include <vm/vm_protos.h>
 
 #include <security/mac_mach_internal.h>
+
+extern char *proc_name_address(void *p);
+extern int proc_pid(void *p);
 
 /*
  *	Routine:	ipc_kobject_notify
@@ -592,6 +594,11 @@ ipc_kobject_notify(
                 return iokit_notify(request_header);
 		}
 #endif
+		case IKOT_TASK_RESUME:
+		{
+			return task_suspension_notify(request_header);
+		}
+
 		default:
                 return FALSE;
         }

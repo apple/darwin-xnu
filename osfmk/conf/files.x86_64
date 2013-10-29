@@ -41,13 +41,16 @@ osfmk/x86_64/start.s		standard
 
 osfmk/x86_64/bcopy.s		standard
 osfmk/x86_64/bzero.s		standard
+osfmk/x86_64/WKdmDecompress_new.s	standard
+osfmk/x86_64/WKdmCompress_new.s		standard
+osfmk/x86_64/WKdmData_new.s		standard
 osfmk/i386/cpu.c		standard
 osfmk/i386/cpuid.c		standard
 osfmk/i386/cpu_threads.c	standard
 osfmk/i386/cpu_topology.c	standard
-osfmk/i386/etimer.c		standard
+osfmk/i386/i386_timer.c		standard
 osfmk/i386/fpu.c		standard
-osfmk/i386/i386_lock.s	standard
+osfmk/i386/i386_lock.s		standard
 osfmk/i386/i386_init.c		standard
 osfmk/i386/i386_vm_init.c	standard
 osfmk/i386/io_map.c		standard
@@ -79,7 +82,6 @@ osfmk/i386/tsc.c		standard
 
 osfmk/i386/commpage/commpage.c	standard
 osfmk/i386/commpage/commpage_asm.s	standard
-osfmk/i386/commpage/pthreads.s	standard
 osfmk/i386/commpage/fifo_queues.s	standard
 
 osfmk/i386/AT386/conf.c		standard
@@ -131,7 +133,7 @@ osfmk/i386/vmx/vmx_shims.c			optional config_vmx
 
 # Kernel performance monitoring
 osfmk/kperf/x86_64/kperf_mp.c   optional kperf
+osfmk/x86_64/kpc_x86.c              optional kpc
 
 osfmk/i386/startup64.c		standard
 osfmk/x86_64/idt64.s		standard
-

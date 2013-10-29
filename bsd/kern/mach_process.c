@@ -83,6 +83,7 @@
 #include <sys/mount_internal.h>
 #include <sys/sysproto.h>
 #include <sys/kdebug.h>
+#include <sys/codesign.h>		/* cs_allow_invalid() */
 
 #include <security/audit/audit.h>
 
@@ -91,8 +92,6 @@
 
 #include <mach/task.h>			/* for task_resume() */
 #include <kern/sched_prim.h>		/* for thread_exception_return() */
-
-#include <vm/vm_protos.h>		/* cs_allow_invalid() */
 
 #include <pexpert/pexpert.h>
 
@@ -146,7 +145,7 @@ ptrace(struct proc *p, struct ptrace_args *uap, int32_t *retval)
 	}
 
 	if (uap->req == PT_FORCEQUOTA) {
-		if (is_suser()) {
+		if (kauth_cred_issuser(kauth_cred_get())) {
 			OSBitOrAtomic(P_FORCEQUOTA, &t->p_flag);
 			return (0);
 		} else
@@ -294,11 +293,17 @@ ptrace(struct proc *p, struct ptrace_args *uap, int32_t *retval)
 
 			proc_unlock(t);
 			pp = proc_find(t->p_oppid);
-			proc_reparentlocked(t, pp ? pp : initproc, 1, 0);
-			if (pp != PROC_NULL)
+			if (pp != PROC_NULL) {
+				proc_reparentlocked(t, pp, 1, 0);
 				proc_rele(pp);
+			} else {
+				/* original parent exited while traced */
+				proc_list_lock();
+				t->p_listflag |= P_LIST_DEADPARENT;
+				proc_list_unlock();
+				proc_reparentlocked(t, initproc, 1, 0);
+			}
 			proc_lock(t);
-			
 		}
 
 		t->p_oppid = 0;
@@ -313,7 +318,7 @@ ptrace(struct proc *p, struct ptrace_args *uap, int32_t *retval)
 		 *	is resumed by adding NSIG to p_cursig. [see issig]
 		 */
 		proc_unlock(t);
-#if NOTYET
+#if CONFIG_MACF
 		error = mac_proc_check_signal(p, t, SIGKILL);
 		if (0 != error)
 			goto resume;
@@ -350,7 +355,7 @@ ptrace(struct proc *p, struct ptrace_args *uap, int32_t *retval)
 			 * set trace bit 
 			 * we use sending SIGSTOP as a comparable security check.
 			 */
-#if NOTYET
+#if CONFIG_MACF
 			error = mac_proc_check_signal(p, t, SIGSTOP);
 			if (0 != error) {
 				goto out;
@@ -365,7 +370,7 @@ ptrace(struct proc *p, struct ptrace_args *uap, int32_t *retval)
 			 * clear trace bit if on
 			 * we use sending SIGCONT as a comparable security check.
 			 */
-#if NOTYET
+#if CONFIG_MACF
 			error = mac_proc_check_signal(p, t, SIGCONT);
 			if (0 != error) {
 				goto out;

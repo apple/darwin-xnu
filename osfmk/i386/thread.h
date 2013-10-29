@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2010 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2012 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -89,21 +89,6 @@
  *	as saved in a context-switch.  It lives at the base of the stack.
  */
 
-#ifdef __i386__
-struct x86_kernel_state {
-	uint32_t	k_ebx;	/* kernel context */
-	uint32_t	k_esp;
-	uint32_t	k_ebp;
-	uint32_t	k_edi;
-	uint32_t	k_esi;
-	uint32_t	k_eip;
-	/*
-	 * Kernel stacks are 16-byte aligned with x86_kernel_state at the top,
-	 * so we need a couple of dummy 32-bit words here.
-	 */
-	uint32_t	dummy[2];
-};
-#else
 struct x86_kernel_state {
 	uint64_t	k_rbx;	/* kernel context */
 	uint64_t	k_rsp;
@@ -114,12 +99,11 @@ struct x86_kernel_state {
 	uint64_t	k_r15;
 	uint64_t	k_rip;
 };
-#endif
 
 /*
  * Maps state flavor to number of words in the state:
  */
-__private_extern__ unsigned int _MachineStateCount[];
+extern unsigned int _MachineStateCount[];
 
 /*
  * The machine-dependent thread state - registers and all platform-dependent
@@ -128,14 +112,13 @@ __private_extern__ unsigned int _MachineStateCount[];
  * as the PCB.
  */
 struct machine_thread {
-	void			*sf;
 	x86_saved_state_t	*iss;
 	void			*ifps;
 	void			*ids;
 	decl_simple_lock_data(,lock);		/* protects ifps and ids */
 	uint64_t		iss_pte0;
 	uint64_t		iss_pte1;
-	uint32_t		arg_store_valid;
+
 #ifdef	MACH_BSD
 	uint64_t		cthread_self;	/* for use of cthread package */
         struct real_descriptor	cthread_desc;
@@ -144,7 +127,6 @@ struct machine_thread {
 #endif
 
 	struct pal_pcb		pal_pcb;
-
 	uint32_t		specFlags;
 #define		OnProc		0x1
 #define		CopyIOActive 	0x2 /* Checked to ensure DTrace actions do not re-enter copyio(). */
