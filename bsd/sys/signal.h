@@ -564,7 +564,7 @@ struct	sigstack {
 		    sigmask(SIGIOT)|sigmask(SIGEMT)|\
 		    sigmask(SIGFPE)|sigmask(SIGBUS)|\
 		    sigmask(SIGSEGV)|sigmask(SIGSYS)|\
-		    sigmask(SIGPIPE))
+		    sigmask(SIGPIPE)|sigmask(SIGKILL))
 
 #define workq_threadmask (threadmask | sigcantmask)
 

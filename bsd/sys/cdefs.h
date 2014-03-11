@@ -214,7 +214,10 @@
  * http://gcc.gnu.org/bugzilla/show_bug.cgi?id=55965
  */
 
-#if __STDC_VERSION__ >= 199901L && (!defined(__GNUC__) || defined(__clang__))
+#if defined(__cplusplus) || \
+    (__STDC_VERSION__ >= 199901L && \
+     !defined(__GNUC_GNU_INLINE__) && \
+     (!defined(__GNUC__) || defined(__clang__)))
 # define __header_inline           inline
 #elif defined(__GNUC__) && defined(__GNUC_STDC_INLINE__)
 # define __header_inline           extern __inline __attribute__((__gnu_inline__))

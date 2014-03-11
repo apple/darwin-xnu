@@ -614,6 +614,10 @@ Retry:
 		}
 		if (superpage)		/* this path can not be used */
 			template |= INTEL_PTE_PS;	/* to change the page size! */
+
+		if (old_attributes == template)
+			goto dont_update_pte;
+
 		/* Determine delta, PV locked */
 		need_tlbflush =
 		    ((old_attributes ^ template) != INTEL_PTE_WIRED);
@@ -629,6 +633,7 @@ Retry:
 			opte = *pte;
 			npte = template | (opte & (INTEL_PTE_REF | INTEL_PTE_MOD));
 		} while (!pmap_cmpx_pte(pte, opte, npte));
+dont_update_pte:
 		if (old_pa_locked) {
 			UNLOCK_PVH(pai);
 			old_pa_locked = FALSE;

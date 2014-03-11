@@ -165,6 +165,13 @@ unsigned int	vm_page_bucket_lock_count = 0;		/* How big is array of locks? */
 
 lck_spin_t	*vm_page_bucket_locks;
 
+#if VM_PAGE_BUCKETS_CHECK
+boolean_t vm_page_buckets_check_ready = FALSE;
+#if VM_PAGE_FAKE_BUCKETS
+vm_page_bucket_t *vm_page_fake_buckets;	/* decoy buckets */
+vm_map_offset_t vm_page_fake_buckets_start, vm_page_fake_buckets_end;
+#endif /* VM_PAGE_FAKE_BUCKETS */
+#endif /* VM_PAGE_BUCKETS_CHECK */
 
 #if	MACH_PAGE_HASH_STATS
 /* This routine is only for debug.  It is intended to be called by
@@ -535,6 +542,7 @@ vm_page_bootstrap(
 	m->busy = TRUE;
 	m->wanted = FALSE;
 	m->tabled = FALSE;
+	m->hashed = FALSE;
 	m->fictitious = FALSE;
 	m->pmapped = FALSE;
 	m->wpmapped = FALSE;
@@ -558,6 +566,7 @@ vm_page_bootstrap(
 	m->was_dirty = FALSE;
 	m->xpmapped = FALSE;
 	m->compressor = FALSE;
+	m->written_by_kernel = FALSE;
 	m->__unused_object_bits = 0;
 
 	/*
@@ -656,6 +665,30 @@ vm_page_bootstrap(
 	if (vm_page_hash_mask & vm_page_bucket_count)
 		printf("vm_page_bootstrap: WARNING -- strange page hash\n");
 
+#if VM_PAGE_BUCKETS_CHECK
+#if VM_PAGE_FAKE_BUCKETS
+	/*
+	 * Allocate a decoy set of page buckets, to detect
+	 * any stomping there.
+	 */
+	vm_page_fake_buckets = (vm_page_bucket_t *)
+		pmap_steal_memory(vm_page_bucket_count *
+				  sizeof(vm_page_bucket_t));
+	vm_page_fake_buckets_start = (vm_map_offset_t) vm_page_fake_buckets;
+	vm_page_fake_buckets_end =
+		vm_map_round_page((vm_page_fake_buckets_start +
+				   (vm_page_bucket_count *
+				    sizeof (vm_page_bucket_t))),
+				  PAGE_MASK);
+	char *cp;
+	for (cp = (char *)vm_page_fake_buckets_start;
+	     cp < (char *)vm_page_fake_buckets_end;
+	     cp++) {
+		*cp = 0x5a;
+	}
+#endif /* VM_PAGE_FAKE_BUCKETS */
+#endif /* VM_PAGE_BUCKETS_CHECK */
+
 	vm_page_buckets = (vm_page_bucket_t *)
 		pmap_steal_memory(vm_page_bucket_count *
 				  sizeof(vm_page_bucket_t));
@@ -676,6 +709,10 @@ vm_page_bootstrap(
 
 	for (i = 0; i < vm_page_bucket_lock_count; i++)
 	        lck_spin_init(&vm_page_bucket_locks[i], &vm_page_lck_grp_bucket, &vm_page_lck_attr);
+
+#if VM_PAGE_BUCKETS_CHECK
+	vm_page_buckets_check_ready = TRUE;
+#endif /* VM_PAGE_BUCKETS_CHECK */
 
 	/*
 	 *	Machine-dependent code allocates the resident page table.
@@ -1045,7 +1082,7 @@ vm_page_insert_internal(
 #endif	/* DEBUG */
 	
 	if (insert_in_hash == TRUE) {
-#if DEBUG
+#if DEBUG || VM_PAGE_CHECK_BUCKETS
 		if (mem->tabled || mem->object != VM_OBJECT_NULL)
 			panic("vm_page_insert: page %p for (obj=%p,off=0x%llx) "
 			      "already in (obj=%p,off=0x%llx)",
@@ -1081,7 +1118,7 @@ vm_page_insert_internal(
 		if (++bucket->cur_count > bucket->hi_count)
 			bucket->hi_count = bucket->cur_count;
 #endif /* MACH_PAGE_HASH_STATS */
-
+		mem->hashed = TRUE;
 		lck_spin_unlock(bucket_lock);
 	}
 
@@ -1184,7 +1221,7 @@ vm_page_replace(
 	VM_PAGE_CHECK(mem);
 #endif
 	vm_object_lock_assert_exclusive(object);
-#if DEBUG
+#if DEBUG || VM_PAGE_CHECK_BUCKETS
 	if (mem->tabled || mem->object != VM_OBJECT_NULL)
 		panic("vm_page_replace: page %p for (obj=%p,off=0x%llx) "
 		      "already in (obj=%p,off=0x%llx)",
@@ -1219,6 +1256,7 @@ vm_page_replace(
 				 * Remove old page from hash list
 				 */
 				*mp = m->next;
+				m->hashed = FALSE;
 
 				found_m = m;
 				break;
@@ -1234,6 +1272,7 @@ vm_page_replace(
 	 * insert new page at head of hash list
 	 */
 	bucket->pages = mem;
+	mem->hashed = TRUE;
 
 	lck_spin_unlock(bucket_lock);
 
@@ -1309,7 +1348,7 @@ vm_page_remove(
 #if     MACH_PAGE_HASH_STATS
 		bucket->cur_count--;
 #endif /* MACH_PAGE_HASH_STATS */
-
+		mem->hashed = FALSE;
 		lck_spin_unlock(bucket_lock);
 	}
 	/*
@@ -4282,6 +4321,14 @@ did_consider:
 					m2->compressor	= m1->compressor;
 
 					/*
+					 * page may need to be flushed if
+					 * it is marshalled into a UPL
+					 * that is going to be used by a device
+					 * that doesn't support coherency
+					 */
+					m2->written_by_kernel = TRUE;
+
+					/*
 					 * make sure we clear the ref/mod state
 					 * from the pmap layer... else we risk
 					 * inheriting state from the last time
@@ -6007,7 +6054,7 @@ hibernate_hash_insert_page(vm_page_t mem)
 	vm_page_bucket_t *bucket;
 	int		hash_id;
 
-	assert(mem->tabled);
+	assert(mem->hashed);
 	assert(mem->object);
 	assert(mem->offset != (vm_object_offset_t) -1);
 
@@ -6091,7 +6138,7 @@ hibernate_rebuild_vm_structs(void)
 			*tmem = *mem;
 			mem = tmem;
 		}
-		if (mem->tabled)
+		if (mem->hashed)
 			hibernate_hash_insert_page(mem);
 		/*
 		 * the 'hole' between this vm_page_t and the previous
@@ -6108,7 +6155,7 @@ hibernate_rebuild_vm_structs(void)
 	assert(vm_page_free_count == hibernate_teardown_vm_page_free_count);
 
 	/*
-	 * process the list of vm_page_t's that were tabled in the hash,
+	 * process the list of vm_page_t's that were entered in the hash,
 	 * but were not located in the vm_pages arrary... these are 
 	 * vm_page_t's that were created on the fly (i.e. fictitious)
 	 */
@@ -6161,8 +6208,7 @@ hibernate_teardown_vm_structs(hibernate_page_list_t *page_list, hibernate_page_l
 		bucket = &vm_page_buckets[i];
 
 		for (mem = bucket->pages; mem != VM_PAGE_NULL; mem = mem_next) {
-
-			assert(mem->tabled);
+			assert(mem->hashed);
 
 			mem_next = mem->next;
 
@@ -6297,3 +6343,76 @@ vm_page_info(
 	return vm_page_bucket_count;
 }
 #endif	/* MACH_VM_DEBUG */
+
+#if VM_PAGE_BUCKETS_CHECK
+void
+vm_page_buckets_check(void)
+{
+	unsigned int i;
+	vm_page_t p;
+	unsigned int p_hash;
+	vm_page_bucket_t *bucket;
+	lck_spin_t	*bucket_lock;
+
+	if (!vm_page_buckets_check_ready) {
+		return;
+	}
+
+#if HIBERNATION
+	if (hibernate_rebuild_needed ||
+	    hibernate_rebuild_hash_list) {
+		panic("BUCKET_CHECK: hibernation in progress: "
+		      "rebuild_needed=%d rebuild_hash_list=%p\n",
+		      hibernate_rebuild_needed,
+		      hibernate_rebuild_hash_list);
+	}
+#endif /* HIBERNATION */
+
+#if VM_PAGE_FAKE_BUCKETS
+	char *cp;
+	for (cp = (char *) vm_page_fake_buckets_start;
+	     cp < (char *) vm_page_fake_buckets_end;
+	     cp++) {
+		if (*cp != 0x5a) {
+			panic("BUCKET_CHECK: corruption at %p in fake buckets "
+			      "[0x%llx:0x%llx]\n",
+			      cp,
+			      vm_page_fake_buckets_start,
+			      vm_page_fake_buckets_end);
+		}
+	}
+#endif /* VM_PAGE_FAKE_BUCKETS */
+
+	for (i = 0; i < vm_page_bucket_count; i++) {
+		bucket = &vm_page_buckets[i];
+		if (bucket->pages == VM_PAGE_NULL) {
+			continue;
+		}
+
+		bucket_lock = &vm_page_bucket_locks[i / BUCKETS_PER_LOCK];
+		lck_spin_lock(bucket_lock);
+		p = bucket->pages;
+		while (p != VM_PAGE_NULL) {
+			if (!p->hashed) {
+				panic("BUCKET_CHECK: page %p (%p,0x%llx) "
+				      "hash %d in bucket %d at %p "
+				      "is not hashed\n",
+				      p, p->object, p->offset,
+				      p_hash, i, bucket);
+			}
+			p_hash = vm_page_hash(p->object, p->offset);
+			if (p_hash != i) {
+				panic("BUCKET_CHECK: corruption in bucket %d "
+				      "at %p: page %p object %p offset 0x%llx "
+				      "hash %d\n",
+				      i, bucket, p, p->object, p->offset,
+				      p_hash);
+			}
+			p = p->next;
+		}
+		lck_spin_unlock(bucket_lock);
+	}
+
+//	printf("BUCKET_CHECK: checked buckets\n");
+}
+#endif /* VM_PAGE_BUCKETS_CHECK */

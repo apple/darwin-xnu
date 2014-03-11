@@ -532,7 +532,7 @@ arptfree(struct llinfo_arp *la, void *arg)
 	if (rt->rt_expire == 0 || (rt->rt_flags & RTF_STATIC)) {
 		ap->sticky++;
 		/* ARP entry is permanent? */
-		if (!(rt->rt_flags & RTF_STATIC)) {
+		if (rt->rt_expire == 0) {
 			RT_UNLOCK(rt);
 			return;
 		}

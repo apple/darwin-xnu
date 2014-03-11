@@ -715,10 +715,13 @@ vnode_pager_get_object_size(
 }
 
 kern_return_t
-vnode_pager_get_object_pathname(
+vnode_pager_get_object_name(
 	memory_object_t		mem_obj,
 	char			*pathname,
-	vm_size_t		*length_p)
+	vm_size_t		pathname_len,
+	char			*filename,
+	vm_size_t		filename_len,
+	boolean_t		*truncated_path_p)
 {
 	vnode_pager_t	vnode_object;
 
@@ -728,15 +731,19 @@ vnode_pager_get_object_pathname(
 
 	vnode_object = vnode_pager_lookup(mem_obj);
 
-	return vnode_pager_get_pathname(vnode_object->vnode_handle,
-					pathname,
-					length_p);
+	return vnode_pager_get_name(vnode_object->vnode_handle,
+				    pathname,
+				    pathname_len,
+				    filename,
+				    filename_len,
+				    truncated_path_p);
 }
 
 kern_return_t
-vnode_pager_get_object_filename(
-	memory_object_t	mem_obj,
-	const char	**filename)
+vnode_pager_get_object_mtime(
+	memory_object_t		mem_obj,
+	struct timespec		*mtime,
+	struct timespec		*cs_mtime)
 {
 	vnode_pager_t	vnode_object;
 
@@ -746,8 +753,9 @@ vnode_pager_get_object_filename(
 
 	vnode_object = vnode_pager_lookup(mem_obj);
 
-	return vnode_pager_get_filename(vnode_object->vnode_handle,
-					filename);
+	return vnode_pager_get_mtime(vnode_object->vnode_handle,
+				     mtime,
+				     cs_mtime);
 }
 
 kern_return_t

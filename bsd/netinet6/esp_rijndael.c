@@ -81,8 +81,8 @@
 
 #include <net/net_osdep.h>
 
+#define MAX_REALIGN_LEN 2000
 #define AES_BLOCKLEN 16
-#define MAX_SBUF_LEN 2000
 
 extern lck_mtx_t *sadb_mutex;
 
@@ -152,7 +152,7 @@ esp_cbc_decrypt_aes(m, off, sav, algo, ivlen)
 	int sn, dn;	/* offset from the head of the mbuf, to meat */
 	size_t ivoff, bodyoff;
 	u_int8_t iv[AES_BLOCKLEN] __attribute__((aligned(4))), *dptr;
-	u_int8_t sbuf[MAX_SBUF_LEN] __attribute__((aligned(4))), *sp, *sp_unaligned;
+	u_int8_t sbuf[AES_BLOCKLEN] __attribute__((aligned(4))), *sp, *sp_unaligned, *sp_aligned = NULL;
 	struct mbuf *scut;
 	int scutoff;
 	int	i, len;
@@ -277,7 +277,15 @@ esp_cbc_decrypt_aes(m, off, sav, algo, ivlen)
 			sp_unaligned = NULL;
 		} else {
 			sp_unaligned = sp;
-			sp = sbuf;
+			if (len > MAX_REALIGN_LEN) {
+				return ENOBUFS;
+			}
+			if (sp_aligned == NULL) {
+				sp_aligned = (u_int8_t *)_MALLOC(MAX_REALIGN_LEN, M_SECA, M_DONTWAIT);
+				if (sp_aligned == NULL)
+					return ENOMEM;
+			}
+			sp = sp_aligned;
 			memcpy(sp, sp_unaligned, len);
 		}
 		// no need to check output pointer alignment
@@ -310,6 +318,12 @@ esp_cbc_decrypt_aes(m, off, sav, algo, ivlen)
 	scut->m_len = scutoff;
 	scut->m_next = d0;
 
+	// free memory
+	if (sp_aligned != NULL) {
+		FREE(sp_aligned, M_SECA);
+		sp_aligned = NULL;
+	}
+	
 	/* just in case */
 	bzero(iv, sizeof(iv));
 	bzero(sbuf, sizeof(sbuf));
@@ -332,7 +346,7 @@ esp_cbc_encrypt_aes(
 	int sn, dn;	/* offset from the head of the mbuf, to meat */
 	size_t ivoff, bodyoff;
 	u_int8_t *ivp, *dptr, *ivp_unaligned;
-	u_int8_t sbuf[MAX_SBUF_LEN] __attribute__((aligned(4))), *sp, *sp_unaligned;
+	u_int8_t sbuf[AES_BLOCKLEN] __attribute__((aligned(4))), *sp, *sp_unaligned, *sp_aligned = NULL;
 	u_int8_t ivp_aligned_buf[AES_BLOCKLEN] __attribute__((aligned(4)));
 	struct mbuf *scut;
 	int scutoff;
@@ -458,7 +472,15 @@ esp_cbc_encrypt_aes(
 			sp_unaligned = NULL;
 		} else {
 			sp_unaligned = sp;
-			sp = sbuf;
+			if (len > MAX_REALIGN_LEN) {
+				return ENOBUFS;
+			}
+			if (sp_aligned == NULL) {
+				sp_aligned = (u_int8_t *)_MALLOC(MAX_REALIGN_LEN, M_SECA, M_DONTWAIT);
+				if (sp_aligned == NULL)
+					return ENOMEM;
+			}
+			sp = sp_aligned;
 			memcpy(sp, sp_unaligned, len);
 		}
 		// check ivp pointer alignment and use a separate aligned buffer (if ivp is not aligned on 4-byte boundary).
@@ -467,7 +489,7 @@ esp_cbc_encrypt_aes(
 		} else {
 			ivp_unaligned = ivp;
 			ivp = ivp_aligned_buf;
-			memcpy(ivp, ivp_unaligned, len);
+			memcpy(ivp, ivp_unaligned, AES_BLOCKLEN);
 		}
 		// no need to check output pointer alignment
 		aes_encrypt_cbc(sp, ivp, len >> 4, dptr + dn, 
@@ -494,13 +516,18 @@ esp_cbc_encrypt_aes(
 			soff += s->m_len;
 			s = s->m_next;
 		}
-
 	}
 
 	/* free un-needed source mbufs and add dest mbufs to chain */
 	m_freem(scut->m_next);
 	scut->m_len = scutoff;
 	scut->m_next = d0;
+	
+	// free memory
+	if (sp_aligned != NULL) {
+		FREE(sp_aligned, M_SECA);
+		sp_aligned = NULL;
+	}
 
 	/* just in case */
 	bzero(sbuf, sizeof(sbuf));

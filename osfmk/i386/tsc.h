@@ -56,6 +56,7 @@ extern uint64_t busFreq;
 extern uint32_t	flex_ratio;
 extern uint32_t	flex_ratio_min;
 extern uint32_t	flex_ratio_max;
+extern uint64_t	tsc_at_boot;
 
 struct tscInfo
 {

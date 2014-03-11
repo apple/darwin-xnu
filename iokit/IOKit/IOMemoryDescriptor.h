@@ -56,9 +56,11 @@ enum IODirection
     kIODirectionInOut = kIODirectionIn  | kIODirectionOut,
 
     // these flags are valid for the prepare() method only
-    kIODirectionPrepareToPhys32   = 0x00000004,
-    kIODirectionPrepareNoFault    = 0x00000008,
-    kIODirectionPrepareReserved1  = 0x00000010,
+    kIODirectionPrepareToPhys32    = 0x00000004,
+    kIODirectionPrepareNoFault     = 0x00000008,
+    kIODirectionPrepareReserved1   = 0x00000010,
+#define IODIRECTIONPREPARENONCOHERENTDEFINED	1
+    kIODirectionPrepareNonCoherent = 0x00000020,
 };
 #ifdef __LP64__
 typedef IOOptionBits IODirection;

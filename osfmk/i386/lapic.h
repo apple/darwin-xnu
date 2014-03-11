@@ -326,6 +326,8 @@ extern boolean_t	lapic_is_interrupting(uint8_t vector);
 extern void		lapic_interrupt_counts(uint64_t intrs[256]);
 extern void		lapic_disable_timer(void);
 
+extern uint8_t		lapic_get_cmci_vector(void);
+
 #define	MAX_LAPICIDS	(LAPIC_ID_MAX+1)
 #ifdef MP_DEBUG
 #define LAPIC_CPU_MAP_DUMP()	lapic_cpu_map_dump()

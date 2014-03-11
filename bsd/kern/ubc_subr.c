@@ -2778,6 +2778,9 @@ ubc_cs_blob_add(
 	const CS_CodeDirectory *cd;
 	off_t			blob_start_offset, blob_end_offset;
 	SHA1_CTX		sha1ctxt;
+	boolean_t		record_mtime;
+
+	record_mtime = FALSE;
 
 	blob_handle = IPC_PORT_NULL;
 
@@ -2981,6 +2984,11 @@ ubc_cs_blob_add(
 		goto out;
 	}
 
+	if (uip->cs_blobs == NULL) {
+		/* loading 1st blob: record the file's current "modify time" */
+		record_mtime = TRUE;
+	}
+
 	/*
 	 * Add this blob to the list of blobs for this vnode.
 	 * We always add at the front of the list and we never remove a
@@ -3020,6 +3028,10 @@ ubc_cs_blob_add(
 	}
 
 	vnode_unlock(vp);
+
+	if (record_mtime) {
+		vnode_mtime(vp, &uip->cs_mtime, vfs_context_current());
+	}
 
 	error = 0;	/* success ! */
 
@@ -3156,6 +3168,24 @@ ubc_get_cs_blobs(
 
 out:
 	return blobs;
+}
+
+void
+ubc_get_cs_mtime(
+	struct vnode	*vp,
+	struct timespec	*cs_mtime)
+{
+	struct ubc_info	*uip;
+
+	if (! UBCINFOEXISTS(vp)) {
+		cs_mtime->tv_sec = 0;
+		cs_mtime->tv_nsec = 0;
+		return;
+	}
+
+	uip = vp->v_ubcinfo;
+	cs_mtime->tv_sec = uip->cs_mtime.tv_sec;
+	cs_mtime->tv_nsec = uip->cs_mtime.tv_nsec;
 }
 
 unsigned long cs_validate_page_no_hash = 0;

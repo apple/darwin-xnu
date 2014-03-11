@@ -173,7 +173,7 @@ vm_swapfile_io(vnode_t vp, uint64_t offset, uint64_t start, int npages, int flag
 	upl_size_t	upl_size = 0;
 
 	upl_create_flags = UPL_SET_INTERNAL | UPL_SET_LITE;
-	upl_control_flags = UPL_IOSYNC;
+	upl_control_flags = UPL_IOSYNC | UPL_PAGING_ENCRYPTED;
 
 	if ((flags & SWAP_READ) == FALSE) {
 		upl_create_flags |= UPL_COPYOUT_FROM;

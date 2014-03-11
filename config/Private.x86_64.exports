@@ -14,6 +14,7 @@ _cpu_to_lapic
 _cpuid_features
 _cpuid_info
 _lapic_end_of_interrupt
+_lapic_get_cmci_vector
 _lapic_unmask_perfcnt_interrupt
 _mp_broadcast
 _mp_cpus_call

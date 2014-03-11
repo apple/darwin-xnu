@@ -6904,7 +6904,7 @@ vnode_readdir64(struct vnode *vp, struct uio *uio, int flags, int *eofflag,
 		size_t bufsize;
 		void * bufptr;
 		uio_t auio;
-		struct direntry entry64;
+		struct direntry *entry64;
 		struct dirent *dep;
 		int bytesread;
 		int error;
@@ -6937,23 +6937,28 @@ vnode_readdir64(struct vnode *vp, struct uio *uio, int flags, int *eofflag,
 		dep = (struct dirent *)bufptr;
 		bytesread = bufsize - uio_resid(auio);
 
+		MALLOC(entry64, struct direntry *, sizeof(struct direntry),
+		       M_TEMP, M_WAITOK);
 		/*
 		 * Convert all the entries and copy them out to user's buffer.
 		 */
 		while (error == 0 && (char *)dep < ((char *)bufptr + bytesread)) {
+			size_t	enbufsize = DIRENT64_LEN(dep->d_namlen);
+
+			bzero(entry64, enbufsize);
 			/* Convert a dirent to a dirent64. */
-			entry64.d_ino = dep->d_ino;
-			entry64.d_seekoff = 0;
-			entry64.d_reclen = DIRENT64_LEN(dep->d_namlen);
-			entry64.d_namlen = dep->d_namlen;
-			entry64.d_type = dep->d_type;
-			bcopy(dep->d_name, entry64.d_name, dep->d_namlen + 1);
+			entry64->d_ino = dep->d_ino;
+			entry64->d_seekoff = 0;
+			entry64->d_reclen = enbufsize;
+			entry64->d_namlen = dep->d_namlen;
+			entry64->d_type = dep->d_type;
+			bcopy(dep->d_name, entry64->d_name, dep->d_namlen + 1);
 
 			/* Move to next entry. */
 			dep = (struct dirent *)((char *)dep + dep->d_reclen);
 
 			/* Copy entry64 to user's buffer. */
-			error = uiomove((caddr_t)&entry64, entry64.d_reclen, uio);
+			error = uiomove((caddr_t)entry64, entry64->d_reclen, uio);
 		}
 
 		/* Update the real offset using the offset we got from VNOP_READDIR. */
@@ -6962,6 +6967,7 @@ vnode_readdir64(struct vnode *vp, struct uio *uio, int flags, int *eofflag,
 		}
 		uio_free(auio);
 		FREE(bufptr, M_TEMP);
+		FREE(entry64, M_TEMP);
 		return (error);
 	}
 }

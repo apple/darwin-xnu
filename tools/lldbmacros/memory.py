@@ -1835,6 +1835,117 @@ def GetRWLEntry(rwlg):
                                            rwlg.lck_grp_stat.lck_grp_rw_stat.lck_grp_rw_wait_cnt, rwlg.lck_grp_name)
     return out_string
 
+#Macro: showlock
+@lldb_type_summary(['lck_mtx_t *'])
+@header("===== Mutex Lock Summary =====")
+def GetMutexLockSummary(mtx):
+    """ Summarize mutex lock with important information.
+        params:
+        mtx: value - obj representing a mutex lock in kernel
+        returns:
+        out_str - summary of the mutex lock
+    """
+    if not mtx:
+        return "Invalid lock value: 0x0"
+
+    if kern.arch == "x86_64":
+        out_str = "Lock Type\t\t: MUTEX\n"
+        mtxd = mtx.lck_mtx_sw.lck_mtxd
+        out_str += "Owner Thread\t\t: {:#x}\n".format(mtxd.lck_mtxd_owner)
+        cmd_str = "p/d ((lck_mtx_t*){:#x})->lck_mtx_sw.lck_mtxd.".format(mtx)
+        cmd_out = lldb_run_command(cmd_str + "lck_mtxd_waiters")
+        out_str += "Number of Waiters\t: {:s}\n".format(cmd_out.split()[-1])
+        cmd_out = lldb_run_command(cmd_str + "lck_mtxd_ilocked")
+        out_str += "ILocked\t\t\t: {:s}\n".format(cmd_out.split()[-1])
+        cmd_out = lldb_run_command(cmd_str + "lck_mtxd_mlocked")
+        out_str += "MLocked\t\t\t: {:s}\n".format(cmd_out.split()[-1])
+        cmd_out = lldb_run_command(cmd_str + "lck_mtxd_promoted")
+        out_str += "Promoted\t\t: {:s}\n".format(cmd_out.split()[-1])
+        cmd_out = lldb_run_command(cmd_str + "lck_mtxd_spin")
+        out_str += "Spin\t\t\t: {:s}\n".format(cmd_out.split()[-1])
+        return out_str
+
+    out_str = "Lock Type\t\t: MUTEX\n"
+    out_str += "Owner Thread\t\t: {:#x}\n".format(mtx.lck_mtx_hdr.lck_mtxd_data & ~0x3)
+    out_str += "Number of Waiters\t: {:d}\n".format(mtx.lck_mtx_sw.lck_mtxd.lck_mtxd_waiters)
+    out_str += "Flags\t\t\t: "
+    if mtx.lck_mtx_hdr.lck_mtxd_data & 0x1:
+        out_str += "[Interlock Locked] "
+    if mtx.lck_mtx_hdr.lck_mtxd_data & 0x2:
+        out_str += "[Wait Flag]"
+    if (mtx.lck_mtx_hdr.lck_mtxd_data & 0x3) == 0:
+        out_str += "None"
+    return out_str
+
+@lldb_type_summary(['lck_spin_t *'])
+@header("===== SpinLock Summary =====")
+def GetSpinLockSummary(spinlock):
+    """ Summarize spinlock with important information.
+        params:
+        spinlock: value - obj representing a spinlock in kernel
+        returns:
+        out_str - summary of the spinlock
+    """
+    if not spinlock:
+        return "Invalid lock value: 0x0"
+
+    out_str = "Lock Type\t\t: SPINLOCK\n"
+    if kern.arch == "x86_64":
+        out_str += "Interlock\t\t: {:#x}\n".format(spinlock.interlock)
+        return out_str 
+
+    out_str += "Owner Thread\t\t: {:#x}\n".format(spinlock.lck_spin_data & ~0x3)
+    out_str += "Flags\t\t\t: "
+    if spinlock.lck_spin_data & 0x1:
+        out_str += "[Interlock Locked] "
+    if spinlock.lck_spin_data & 0x2:
+        out_str += "[Wait Flag]"
+    if (spinlock.lck_spin_data & 0x3) == 0:
+        out_str += "None" 
+    return out_str
+
+@lldb_command('showlock', 'MS')
+def ShowLock(cmd_args=None, cmd_options={}):
+    """ Show info about a lock - its state and owner thread details
+        Usage: showlock <address of a lock>
+        -M : to consider <addr> as lck_mtx_t 
+        -S : to consider <addr> as lck_spin_t 
+    """
+    if not cmd_args:
+        raise ArgumentError("Please specify the address of the lock whose info you want to view.")
+        return
+
+    summary_str = ""
+    lock = kern.GetValueFromAddress(cmd_args[0], 'uintptr_t*')
+
+    if kern.arch == "x86_64" and lock:
+        if "-M" in cmd_options:
+            lock_mtx = Cast(lock, 'lck_mtx_t *')
+            summary_str = GetMutexLockSummary(lock_mtx)
+        elif "-S" in cmd_options:
+            lock_spin = Cast(lock, 'lck_spin_t *')
+            summary_str = GetSpinLockSummary(lock_spin)
+        else:
+            summary_str = "Please specify supported lock option(-M/-S)"
+
+        print summary_str
+        return
+
+    if lock:
+        lock_mtx = Cast(lock, 'lck_mtx_t*')
+        if lock_mtx.lck_mtx_type == 0x22:
+            summary_str = GetMutexLockSummary(lock_mtx)
+
+        lock_spin = Cast(lock, 'lck_spin_t*')
+        if lock_spin.lck_spin_type == 0x11:
+            summary_str = GetSpinLockSummary(lock_spin)
+
+    if summary_str == "":
+        summary_str = "Lock Type\t\t: INVALID LOCK" 
+    print summary_str
+
+#EndMacro: showlock
+
 @lldb_command('showallrwlck')
 def ShowAllRWLck(cmd_args=None):
     """ Routine to print a summary listing of all read/writer locks

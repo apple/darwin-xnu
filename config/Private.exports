@@ -12,6 +12,7 @@ __ZNK24IOCPUInterruptController*
 __ZTV24IOCPUInterruptController
 _assert_wait_timeout_with_leeway
 _assert_wait_deadline_with_leeway
+_audio_active
 _b_to_q
 _bdevsw
 _boot

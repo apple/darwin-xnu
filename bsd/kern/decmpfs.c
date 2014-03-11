@@ -1049,7 +1049,7 @@ commit_upl(upl_t upl, upl_offset_t pl_offset, size_t uplSize, int flags, int abo
             ErrorLog("ubc_upl_commit_range error %d\n", (int)kr);
     } else {
         VerboseLog("committing upl, flags 0x%08x\n", flags | UPL_COMMIT_CLEAR_DIRTY);
-		kr = ubc_upl_commit_range(upl, pl_offset, uplSize, flags | UPL_COMMIT_CLEAR_DIRTY);
+		kr = ubc_upl_commit_range(upl, pl_offset, uplSize, flags | UPL_COMMIT_CLEAR_DIRTY | UPL_COMMIT_WRITTEN_BY_KERNEL);
         if (kr != KERN_SUCCESS)
             ErrorLog("ubc_upl_commit_range error %d\n", (int)kr);
     }

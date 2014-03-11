@@ -1104,7 +1104,7 @@ done:
 	 * interface has been set as a multicast option, use the
 	 * address of that interface as our source address.
 	 */
-	if (error == 0 && IN_MULTICAST(ntohl(SIN(nam)->sin_addr.s_addr)) &&
+	if (IN_MULTICAST(ntohl(SIN(nam)->sin_addr.s_addr)) &&
 	    inp->inp_moptions != NULL) {
 		struct ip_moptions *imo;
 		struct ifnet *ifp;
@@ -1126,6 +1126,8 @@ done:
 			lck_rw_done(in_ifaddr_rwlock);
 			if (ia == NULL)
 				error = EADDRNOTAVAIL;
+			else
+				error = 0;
 		}
 		IMO_UNLOCK(imo);
 	}

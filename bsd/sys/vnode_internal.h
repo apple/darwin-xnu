@@ -482,6 +482,8 @@ errno_t	vnode_resume(vnode_t);
 errno_t	vnode_suspend(vnode_t);
 
 
+errno_t	vnode_mtime(vnode_t, struct timespec *, vfs_context_t);
+
 errno_t	vnode_size(vnode_t, off_t *, vfs_context_t);
 errno_t	vnode_setsize(vnode_t, off_t, int ioflag, vfs_context_t);
 int	vnode_setattr_fallback(vnode_t vp, struct vnode_attr *vap, vfs_context_t ctx);

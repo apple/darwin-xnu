@@ -161,6 +161,9 @@ lck_attr_t      task_lck_attr;
 lck_grp_t       task_lck_grp;
 lck_grp_attr_t  task_lck_grp_attr;
 
+/* Flag set by core audio when audio is playing. Used to stifle EXC_RESOURCE generation when active. */
+int audio_active = 0;
+
 zinfo_usage_store_t tasks_tkm_private;
 zinfo_usage_store_t tasks_tkm_shared;
 
@@ -3596,6 +3599,11 @@ THIS_PROCESS_IS_CAUSING_TOO_MANY_WAKEUPS__SENDING_EXC_RESOURCE(void)
 	if (disable_exc_resource) {
 		printf("process %s[%d] caught causing excessive wakeups. EXC_RESOURCE "
 			"supressed by a boot-arg\n", procname, pid);
+		return;
+	}
+	if (audio_active) {
+		printf("process %s[%d] caught causing excessive wakeups. EXC_RESOURCE "
+		       "supressed due to audio playback\n", procname, pid);
 		return;
 	}
 	printf("process %s[%d] caught causing excessive wakeups. Observed wakeups rate "

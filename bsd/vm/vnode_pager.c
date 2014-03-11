@@ -123,29 +123,46 @@ vnode_pager_get_filesize(struct vnode *vp)
 	return (vm_object_offset_t) ubc_getsize(vp);
 }
 
+extern int safe_getpath(struct vnode *dvp, char *leafname, char *path, int _len, int *truncated_path);
+
 kern_return_t
-vnode_pager_get_pathname(
+vnode_pager_get_name(
 	struct vnode	*vp,
 	char		*pathname,
-	vm_size_t	*length_p)
+	vm_size_t	pathname_len,
+	char 		*filename,
+	vm_size_t	filename_len,
+	boolean_t	*truncated_path_p)
 {
-	int	error, len;
-
-	len = (int) *length_p;
-	error = vn_getpath(vp, pathname, &len);
-	if (error != 0) {
-		return KERN_FAILURE;
+	*truncated_path_p = FALSE;
+	if (pathname != NULL) {
+		/* get the path name */
+		safe_getpath(vp, NULL,
+			     pathname, (int) pathname_len,
+			     truncated_path_p);
 	}
-	*length_p = (vm_size_t) len;
+	if ((pathname == NULL || *truncated_path_p) &&
+	    filename != NULL) {
+		/* get the file name */
+		const char *name;
+
+		name = vnode_getname_printable(vp);
+		strlcpy(filename, name, (size_t) filename_len);
+		vnode_putname_printable(name);
+	}
 	return KERN_SUCCESS;
 }
 
 kern_return_t
-vnode_pager_get_filename(
+vnode_pager_get_mtime(
 	struct vnode	*vp,
-	const char	**filename)
+	struct timespec	*current_mtime,
+	struct timespec	*cs_mtime)
 {
-	*filename = vp->v_name;
+	vnode_mtime(vp, current_mtime, vfs_context_current());
+	if (cs_mtime != NULL) {
+		ubc_get_cs_mtime(vp, cs_mtime);
+	}
 	return KERN_SUCCESS;
 }
 

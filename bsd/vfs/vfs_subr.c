@@ -5051,6 +5051,20 @@ vnode_close(vnode_t vp, int flags, vfs_context_t ctx)
 	return (error);
 }
 
+errno_t
+vnode_mtime(vnode_t vp, struct timespec *mtime, vfs_context_t ctx)
+{
+	struct vnode_attr	va;
+	int			error;
+
+	VATTR_INIT(&va);
+	VATTR_WANTED(&va, va_modify_time);
+	error = vnode_getattr(vp, &va, ctx);
+	if (!error)
+		*mtime = va.va_modify_time;
+	return error;
+}
+
 /*
  * Returns:	0			Success
  *	vnode_getattr:???

@@ -586,11 +586,11 @@ gif_output(
 #endif
 	default:
 		error = ENETDOWN;
-		goto end;
+		break;
 	}
 
-end:
 	GIF_UNLOCK(sc);
+end:        
 	if (error) {
 		/* the mbuf was freed either by in_gif_output or in here */
 		ifnet_stat_increment_out(ifp, 0, 0, 1);

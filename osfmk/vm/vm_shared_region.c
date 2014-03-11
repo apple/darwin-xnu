@@ -972,12 +972,6 @@ vm_shared_region_undo_mappings(
 		assert(kr2 == KERN_SUCCESS);
 	}
 
-	/*
-	 * This is how check_np() knows if the shared region
-	 * is mapped. So clear it here.
-	 */
-	shared_region->sr_first_mapping = (mach_vm_offset_t) -1;
-
 	if (reset_shared_region_state) {
 		vm_shared_region_lock();
 		assert(shared_region->sr_ref_count > 1);
@@ -1010,7 +1004,9 @@ vm_shared_region_map_file(
 	memory_object_control_t		file_control,
 	memory_object_size_t		file_size,
 	void				*root_dir,
-	struct shared_file_mapping_np	*mapping_to_slide)
+	uint32_t			slide,
+	user_addr_t			slide_start,
+	user_addr_t			slide_size)
 {
 	kern_return_t		kr;
 	vm_object_t		file_object;
@@ -1023,7 +1019,8 @@ vm_shared_region_map_file(
 	vm_map_offset_t		target_address;
 	vm_object_t		object;
 	vm_object_size_t	obj_size;
-	boolean_t		found_mapping_to_slide = FALSE;
+	struct shared_file_mapping_np	*mapping_to_slide = NULL;
+	mach_vm_offset_t	first_mapping = (mach_vm_offset_t) -1;
 
 
 	kr = KERN_SUCCESS;
@@ -1099,7 +1096,7 @@ vm_shared_region_map_file(
 			/*
 			 * This is the mapping that needs to be slid.
 			 */
-			if (found_mapping_to_slide == TRUE) {
+			if (mapping_to_slide != NULL) {
 				SHARED_REGION_TRACE_INFO(
 					("shared_region: mapping[%d]: "
 					 "address:0x%016llx size:0x%016llx "
@@ -1113,11 +1110,7 @@ vm_shared_region_map_file(
 					 mappings[i].sfm_max_prot,
 					 mappings[i].sfm_init_prot));
 			} else {
-				if (mapping_to_slide != NULL) {
-					mapping_to_slide->sfm_file_offset = mappings[i].sfm_file_offset;
-					mapping_to_slide->sfm_size = mappings[i].sfm_size;
-					found_mapping_to_slide = TRUE;
-				}
+				mapping_to_slide = &mappings[i];
 			}
 		}
 
@@ -1170,7 +1163,17 @@ vm_shared_region_map_file(
 				VM_INHERIT_DEFAULT);
 		}
 
-		if (kr != KERN_SUCCESS) {
+		if (kr == KERN_SUCCESS) {
+			/*
+			 * Record the first (chronologically) successful
+			 * mapping in this shared region.
+			 * We're protected by "sr_mapping_in_progress" here,
+			 * so no need to lock "shared_region".
+			 */
+			if (first_mapping == (mach_vm_offset_t) -1) {
+				first_mapping = target_address;
+			}
+		} else {
 			if (map_port == MACH_PORT_NULL) {
 				/*
 				 * Get rid of the VM object we just created
@@ -1224,20 +1227,41 @@ vm_shared_region_map_file(
 
 		}
 
-		/*
-		 * Record the first (chronologically) mapping in
-		 * this shared region.
-		 * We're protected by "sr_mapping_in_progress" here,
-		 * so no need to lock "shared_region".
-		 */
-		if (shared_region->sr_first_mapping == (mach_vm_offset_t) -1) {
-			shared_region->sr_first_mapping = target_address;
+	}
+
+	if (kr == KERN_SUCCESS &&
+	    slide &&
+	    mapping_to_slide != NULL) {
+		kr = vm_shared_region_slide(slide, 
+					    mapping_to_slide->sfm_file_offset, 
+					    mapping_to_slide->sfm_size, 
+					    slide_start, 
+					    slide_size, 
+					    file_control);
+		if (kr  != KERN_SUCCESS) {
+			SHARED_REGION_TRACE_ERROR(
+				("shared_region: region_slide("
+				 "slide:0x%x start:0x%016llx "
+				 "size:0x%016llx) failed 0x%x\n",
+				 slide,
+				 (long long)slide_start,
+				 (long long)slide_size,
+				 kr));
+			vm_shared_region_undo_mappings(NULL,
+						       0,
+						       mappings,
+						       mappings_count);
 		}
 	}
 
 	vm_shared_region_lock();
 	assert(shared_region->sr_ref_count > 1);
 	assert(shared_region->sr_mapping_in_progress);
+	/* set "sr_first_mapping"; dyld uses it to validate the shared cache */ 
+	if (kr == KERN_SUCCESS &&
+	    shared_region->sr_first_mapping == (mach_vm_offset_t) -1) {
+		shared_region->sr_first_mapping = first_mapping;
+	}
 	/* we're done working on that shared region */
 	shared_region->sr_mapping_in_progress = FALSE;
 	thread_wakeup((event_t) &shared_region->sr_mapping_in_progress);

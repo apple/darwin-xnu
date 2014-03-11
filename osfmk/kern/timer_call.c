@@ -1275,10 +1275,12 @@ timer_longterm_init(void)
 	DBG("timer_longterm_init() tlp: %p, queue: %p\n", tlp, &tlp->queue);
 
 	/*
-	 * Set the longterm timer threshold.
-	 * Defaults to TIMER_LONGTERM_THRESHOLD; overridden longterm boot-arg 
+	 * Set the longterm timer threshold. Defaults to TIMER_LONGTERM_THRESHOLD
+	 * or TIMER_LONGTERM_NONE (disabled) for server;
+	 * overridden longterm boot-arg 
 	 */
-	tlp->threshold.interval = TIMER_LONGTERM_THRESHOLD;
+	tlp->threshold.interval = serverperfmode ? TIMER_LONGTERM_NONE
+						 : TIMER_LONGTERM_THRESHOLD;
 	if (PE_parse_boot_argn("longterm", &longterm, sizeof (longterm))) {
 		tlp->threshold.interval = (longterm == 0) ?
 						TIMER_LONGTERM_NONE :

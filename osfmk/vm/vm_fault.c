@@ -105,6 +105,8 @@
 
 #include <sys/codesign.h>
 
+#include <libsa/sys/timers.h>	/* for struct timespec */
+
 #define VM_FAULT_CLASSIFY	0
 
 #define TRACEFAULTPAGE 0 /* (TEST/DEBUG) */
@@ -1562,7 +1564,8 @@ vm_fault_page(
 						 */
 						pmap_sync_page_attributes_phys(
 							m->phys_page);
-					}
+					} else
+						m->written_by_kernel = TRUE;
 					break;
 				case KERN_MEMORY_FAILURE:
 					m->unusual = TRUE;
@@ -2457,6 +2460,8 @@ backoff:
  * careful not to modify the VM object in any way that is not
  * legal under a shared lock...
  */
+extern int proc_selfpid(void);
+extern char *proc_name_address(void *p);
 unsigned long cs_enter_tainted_rejected = 0;
 unsigned long cs_enter_tainted_accepted = 0;
 kern_return_t
@@ -2635,8 +2640,102 @@ vm_fault_enter(vm_page_t m,
 		
 		if (reject_page) {
 			/* reject the tainted page: abort the page fault */
+			int			pid;
+			const char		*procname;
+			task_t			task;
+			vm_object_t		file_object, shadow;
+			vm_object_offset_t	file_offset;
+			char			*pathname, *filename;
+			vm_size_t		pathname_len, filename_len;
+			boolean_t		truncated_path;
+#define __PATH_MAX 1024
+			struct timespec		mtime, cs_mtime;
+
 			kr = KERN_CODESIGN_ERROR;
 			cs_enter_tainted_rejected++;
+
+			/* get process name and pid */
+			procname = "?";
+			task = current_task();
+			pid = proc_selfpid();
+			if (task->bsd_info != NULL)
+				procname = proc_name_address(task->bsd_info);
+
+			/* get file's VM object */
+			file_object = m->object;
+			file_offset = m->offset;
+			for (shadow = file_object->shadow;
+			     shadow != VM_OBJECT_NULL;
+			     shadow = file_object->shadow) {
+				vm_object_lock_shared(shadow);
+				if (file_object != m->object) {
+					vm_object_unlock(file_object);
+				}
+				file_offset += file_object->vo_shadow_offset;
+				file_object = shadow;
+			}
+
+			mtime.tv_sec = 0;
+			mtime.tv_nsec = 0;
+			cs_mtime.tv_sec = 0;
+			cs_mtime.tv_nsec = 0;
+
+			/* get file's pathname and/or filename */
+			pathname = NULL;
+			filename = NULL;
+			pathname_len = 0;
+			filename_len = 0;
+			truncated_path = FALSE;
+			if (file_object->pager == NULL) {
+				/* no pager -> no file -> no pathname */
+				pathname = (char *) "<nil>";
+			} else {
+				pathname = (char *)kalloc(__PATH_MAX * 2);
+				if (pathname) {
+					pathname_len = __PATH_MAX;
+					filename = pathname + pathname_len;
+					filename_len = __PATH_MAX;
+				}
+				vnode_pager_get_object_name(file_object->pager,
+							    pathname,
+							    pathname_len,
+							    filename,
+							    filename_len,
+							    &truncated_path);
+				vnode_pager_get_object_mtime(file_object->pager,
+							     &mtime,
+							     &cs_mtime);
+			}
+			printf("CODE SIGNING: process %d[%s]: "
+			       "rejecting invalid page at address 0x%llx "
+			       "from offset 0x%llx in file \"%s%s%s\" "
+			       "(cs_mtime:%lu.%ld %s mtime:%lu.%ld) "
+			       "(signed:%d validated:%d tainted:%d "
+			       "wpmapped:%d slid:%d)\n",
+			       pid, procname, (addr64_t) vaddr,
+			       file_offset,
+			       pathname,
+			       (truncated_path ? "/.../" : ""),
+			       (truncated_path ? filename : ""),
+			       cs_mtime.tv_sec, cs_mtime.tv_nsec,
+			       ((cs_mtime.tv_sec == mtime.tv_sec &&
+				 cs_mtime.tv_nsec == mtime.tv_nsec)
+				? "=="
+				: "!="),
+			       mtime.tv_sec, mtime.tv_nsec,
+			       m->object->code_signed,
+			       m->cs_validated,
+			       m->cs_tainted,
+			       m->wpmapped,
+			       m->slid);
+			if (file_object != m->object) {
+				vm_object_unlock(file_object);
+			}
+			if (pathname_len != 0) {
+				kfree(pathname, __PATH_MAX * 2);
+				pathname = NULL;
+				filename = NULL;
+			}
 		} else {
 			/* proceed with the tainted page */
 			kr = KERN_SUCCESS;
@@ -2647,12 +2746,14 @@ vm_fault_enter(vm_page_t m,
 			m->cs_tainted = TRUE;
 			cs_enter_tainted_accepted++;
 		}
-		if (cs_debug || kr != KERN_SUCCESS) {
-			printf("CODESIGNING: vm_fault_enter(0x%llx): "
-			       "page %p obj %p off 0x%llx *** INVALID PAGE ***\n",
-			       (long long)vaddr, m, m->object, m->offset);
+		if (kr != KERN_SUCCESS) {
+			if (cs_debug) {
+				printf("CODESIGNING: vm_fault_enter(0x%llx): "
+				       "page %p obj %p off 0x%llx *** INVALID PAGE ***\n",
+				       (long long)vaddr, m, m->object, m->offset);
+			}
 #if !SECURE_KERNEL
-			if (kr != KERN_SUCCESS && cs_enforcement_panic) {
+			if (cs_enforcement_panic) {
 				panic("CODESIGNING: panicking on invalid page\n");
 			}
 #endif
@@ -5497,6 +5598,7 @@ vm_page_validate_cs_mapped(
 	}
 }
 
+extern int panic_on_cs_killed;
 void
 vm_page_validate_cs(
 	vm_page_t	page)
@@ -5540,6 +5642,12 @@ vm_page_validate_cs(
 	if (page->cs_validated) {
 		return;
 	}
+
+	if (panic_on_cs_killed &&
+	    page->slid) {
+		panic("vm_page_validate_cs(%p): page is slid\n", page);
+	}
+	assert(!page->slid);
 
 #if CHECK_CS_VALIDATION_BITMAP	
 	if ( vnode_pager_cs_check_validation_bitmap( page->object->pager, trunc_page(page->offset + page->object->paging_offset), CS_BITMAP_CHECK ) == KERN_SUCCESS) {

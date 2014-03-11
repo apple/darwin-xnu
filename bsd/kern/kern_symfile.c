@@ -268,20 +268,30 @@ kern_open_file_for_direct_io(const char * name,
 
 	if (set_file_size && (set_file_size != (off_t) va.va_data_alloc))
 	{
-	    off_t     bytesallocated = 0;
 	    u_int32_t alloc_flags = PREALLOCATE | ALLOCATEFROMPEOF | ALLOCATEALL;
 
 	    vnode_lock_spin(ref->vp);
 	    CLR(ref->vp->v_flag, VSWAP);
 	    vnode_unlock(ref->vp);
 
-	    error = VNOP_ALLOCATE(ref->vp, set_file_size, alloc_flags,
-				  &bytesallocated, 0 /*fst_offset*/,
-				  ref->ctx);
+            if (set_file_size < (off_t) va.va_data_alloc)
+            {
+                struct vnode_attr setva;
+                VATTR_INIT(&setva);
+                VATTR_SET(&setva, va_data_size, set_file_size);
+                error = vnode_setattr(ref->vp, &setva, ref->ctx);
+            }
+            else
+            {
+                off_t bytesallocated = set_file_size - va.va_data_alloc;
+                error = VNOP_ALLOCATE(ref->vp, bytesallocated, alloc_flags,
+                                      &bytesallocated, 0 /*fst_offset*/,
+                                      ref->ctx);
+                HIBLOG("VNOP_ALLOCATE(%d) %qd\n", error, bytesallocated);
+            }
 	    // F_SETSIZE:
-	    if (!error) error = vnode_setsize(ref->vp, set_file_size, IO_NOZEROFILL, ref->ctx);
-	    kprintf("vnode_setsize(%d) %qd\n", error, set_file_size);
-	    ref->filelength = bytesallocated;
+	    (void) vnode_setsize(ref->vp, set_file_size, IO_NOZEROFILL, ref->ctx);
+	    ref->filelength = set_file_size;
 
 	    vnode_lock_spin(ref->vp);
 	    SET(ref->vp->v_flag, VSWAP);

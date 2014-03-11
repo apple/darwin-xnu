@@ -528,14 +528,11 @@ copytobuffer:
 		tsnap->ss_flags |= kTaskRsrcFlagged;
 	}
 
-	proc_get_darwinbgstate(task, &tmp);
-
-	if (tmp & PROC_FLAG_DARWINBG) {
+	if (task->effective_policy.darwinbg == 1) {
 		tsnap->ss_flags |= kTaskDarwinBG;
 	}
-	if (tmp & PROC_FLAG_EXT_DARWINBG) {
-		tsnap->ss_flags |= kTaskExtDarwinBG;
-	}
+
+	proc_get_darwinbgstate(task, &tmp);
 
 	if (task->requested_policy.t_role == TASK_FOREGROUND_APPLICATION) {
 		tsnap->ss_flags |= kTaskIsForeground;

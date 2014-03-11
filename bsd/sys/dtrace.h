@@ -638,7 +638,7 @@ typedef struct dtrace_difv {
         (uint16_t)(((x) & DTRACE_LLQUANTIZE_HIGHMASK) >> \
         DTRACE_LLQUANTIZE_HIGHSHIFT)
 
-#define  DTRACE_LLQUANTIZE_NSTEPS(x)    \
+#define  DTRACE_LLQUANTIZE_NSTEP(x)    \
         (uint16_t)(((x) & DTRACE_LLQUANTIZE_NSTEPMASK) >> \
         DTRACE_LLQUANTIZE_NSTEPSHIFT)
 

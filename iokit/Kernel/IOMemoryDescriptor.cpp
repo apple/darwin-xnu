@@ -2154,8 +2154,9 @@ IOReturn IOGeneralMemoryDescriptor::wireVirtual(IODirection forDirection)
 	if (!mapper) uplFlags |= UPL_NEED_32BIT_ADDR;
 	if (dataP->fDMAMapNumAddressBits > 32) dataP->fDMAMapNumAddressBits = 32;
     }
-    if (kIODirectionPrepareNoFault    & forDirection) uplFlags |= UPL_REQUEST_NO_FAULT;
-    if (kIODirectionPrepareNoZeroFill & forDirection) uplFlags |= UPL_NOZEROFILLIO;
+    if (kIODirectionPrepareNoFault     & forDirection) uplFlags |= UPL_REQUEST_NO_FAULT;
+    if (kIODirectionPrepareNoZeroFill  & forDirection) uplFlags |= UPL_NOZEROFILLIO;
+    if (kIODirectionPrepareNonCoherent & forDirection) uplFlags |= UPL_REQUEST_FORCE_COHERENCY;
 
     mapBase = 0;
     sharedMem = (ipc_port_t) _memEntry;

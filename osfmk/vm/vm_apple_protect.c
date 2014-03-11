@@ -637,7 +637,7 @@ done:
 		} else {
 			boolean_t empty;
 			upl_commit_range(upl, 0, upl->size, 
-					 UPL_COMMIT_CS_VALIDATED,
+					 UPL_COMMIT_CS_VALIDATED | UPL_COMMIT_WRITTEN_BY_KERNEL,
 					 upl_pl, pl_count, &empty);
 		}
 

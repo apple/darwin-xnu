@@ -127,6 +127,8 @@ struct ubc_info {
         struct	cl_readahead   *cl_rahead;	/* cluster read ahead context */
         struct	cl_writebehind *cl_wbehind;	/* cluster write behind context */
 
+	struct timespec		cs_mtime;	/* modify time of file when
+						   first cs_blob was loaded */
 	struct	cs_blob		*cs_blobs; 	/* for CODE SIGNING */
 #if CHECK_CS_VALIDATION_BITMAP
 	void			*cs_valid_bitmap;     /* right now: used only for signed files on the read-only root volume */
@@ -190,6 +192,7 @@ struct cs_blob;
 int	ubc_cs_blob_add(vnode_t, cpu_type_t, off_t, vm_address_t, off_t, vm_size_t);
 int	ubc_cs_sigpup_add(vnode_t, vm_address_t, vm_size_t);
 struct cs_blob *ubc_get_cs_blobs(vnode_t);
+void	ubc_get_cs_mtime(vnode_t, struct timespec *);
 int	ubc_cs_getcdhash(vnode_t, off_t, unsigned char *);
 kern_return_t ubc_cs_blob_allocate(vm_offset_t *, vm_size_t *);
 void ubc_cs_blob_deallocate(vm_offset_t, vm_size_t);

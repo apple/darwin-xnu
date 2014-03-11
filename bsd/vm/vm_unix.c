@@ -98,7 +98,7 @@
 #include <sys/kern_memorystatus.h>
 
 
-int _shared_region_map( struct proc*, int, unsigned int, struct shared_file_mapping_np*, memory_object_control_t*, struct shared_file_mapping_np*); 
+int _shared_region_map_and_slide(struct proc*, int, unsigned int, struct shared_file_mapping_np*, uint32_t, user_addr_t, user_addr_t);
 int shared_region_copyin_mappings(struct proc*, user_addr_t, unsigned int, struct shared_file_mapping_np *);
 
 SYSCTL_INT(_vm, OID_AUTO, vm_debug_events, CTLFLAG_RW | CTLFLAG_LOCKED, &vm_debug_events, 0, "");
@@ -1080,13 +1080,14 @@ shared_region_copyin_mappings(
  * requiring any further setup.
  */
 int
-_shared_region_map(
+_shared_region_map_and_slide(
 	struct proc				*p,
 	int					fd,
 	uint32_t				mappings_count,
 	struct shared_file_mapping_np		*mappings,
-	memory_object_control_t			*sr_file_control,
-	struct shared_file_mapping_np		*mapping_to_slide)
+	uint32_t				slide,
+	user_addr_t				slide_start,
+	user_addr_t				slide_size)
 {
 	int				error;
 	kern_return_t			kr;
@@ -1248,11 +1249,6 @@ _shared_region_map(
 		goto done;
 	}
 
-	if (sr_file_control != NULL) {
-		*sr_file_control = file_control;
-	}
-			 
-
 
 	/* get the process's shared region (setup in vm_map_exec()) */
 	shared_region = vm_shared_region_get(current_task());
@@ -1272,7 +1268,9 @@ _shared_region_map(
 				       file_control,
 				       file_size,
 				       (void *) p->p_fd->fd_rdir,
-				       mapping_to_slide);
+				       slide,
+				       slide_start,
+				       slide_size);
 	if (kr != KERN_SUCCESS) {
 		SHARED_REGION_TRACE_ERROR(
 			("shared_region: %p [%d(%s)] map(%p:'%s'): "
@@ -1351,11 +1349,8 @@ shared_region_map_and_slide_np(
 	struct shared_region_map_and_slide_np_args	*uap,
 	__unused int					*retvalp)
 {
-	struct shared_file_mapping_np	mapping_to_slide;
 	struct shared_file_mapping_np	*mappings;
-	unsigned int mappings_count = uap->count;
-
-	memory_object_control_t		sr_file_control;
+	unsigned int			mappings_count = uap->count;
 	kern_return_t			kr = KERN_SUCCESS;
 	uint32_t			slide = uap->slide;
 	
@@ -1404,23 +1399,13 @@ shared_region_map_and_slide_np(
 	}
 
 
-	kr = _shared_region_map(p, uap->fd, mappings_count, mappings, &sr_file_control, &mapping_to_slide);
+	kr = _shared_region_map_and_slide(p, uap->fd, mappings_count, mappings,
+					  slide,
+					  uap->slide_start, uap->slide_size);
 	if (kr != KERN_SUCCESS) {
 		return kr;
 	}
 
-	if (slide) {
-		kr = vm_shared_region_slide(slide, 
-				mapping_to_slide.sfm_file_offset, 
-				mapping_to_slide.sfm_size, 
-				uap->slide_start, 
-				uap->slide_size, 
-				sr_file_control);
-		if (kr  != KERN_SUCCESS) {
-			vm_shared_region_undo_mappings(NULL, 0, mappings, mappings_count);
-			return kr;
-		}
-	}
 done:
 	return kr;
 }

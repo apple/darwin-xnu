@@ -528,6 +528,19 @@ nfsmout:
 }
 
 /*
+ * See if our mount is in trouble. Note this is inherently racey.
+ */
+static int
+nfs_notresponding(struct nfsmount *nmp)
+{
+	int timeoutmask = NFSSTA_TIMEO | NFSSTA_LOCKTIMEO | NFSSTA_JUKEBOXTIMEO;
+	if (NMFLAG(nmp, MUTEJUKEBOX)) /* jukebox timeouts don't count as unresponsive if muted */
+		   timeoutmask &= ~NFSSTA_JUKEBOXTIMEO;
+
+	return ((nmp->nm_state & timeoutmask) || !(nmp->nm_sockflags & NMSOCK_READY));
+}
+
+/*
  * NFS access vnode op.
  * For NFS version 2, just return ok. File accesses may fail later.
  * For NFS version 3+, use the access RPC to check accessibility. If file
@@ -573,21 +586,6 @@ nfs_vnop_access(
 	 * in the cache.
 	 */
 
-	/*
-	 * In addition if the kernel is checking for access, KAUTH_VNODE_ACCESS
-	 * not set, just return. At this moment do not know what the state of
-	 * the server is and what ever we get back be it either yea or nay is
-	 * going to be stale.  Finder (Desktop services/FileURL) might hang when
-	 * going over the wire when just asking getattrlist for the roots FSID
-	 * since we are going to be called to see if we're authorized for
-	 * search. Since we are returning without checking the cache and/or
-	 * going over the wire, it makes no sense to update the cache.
-	 *
-	 * N.B. This is also the strategy that SMB is using.
-	 */
-	if (!(ap->a_action & KAUTH_VNODE_ACCESS))
-		return (0);
-	
 	/*
 	 * Convert KAUTH primitives to NFS access rights.
 	 */
@@ -656,12 +654,39 @@ nfs_vnop_access(
 		dorpc = 0;
 		waccess = 0;
 	} else if (NACCESSVALID(np, slot)) {
-		microuptime(&now);
-		if ((now.tv_sec < (np->n_accessstamp[slot] + nfs_access_cache_timeout)) &&
-		    ((np->n_access[slot] & access) == access)) {
+		/*
+		 * In addition if the kernel is checking for access, i.e.,
+		 * KAUTH_VNODE_ACCESS is not set, and the server does not seem
+		 * to be responding just return if we have something in the
+		 * cache even if its stale for the user. If were granted access
+		 * by the cache and we're a kernel access, then call it good
+		 * enough. We want to avoid having this particular request going
+		 * over the wire causing a hang. This is because at this moment
+		 * we do not know what the state of the server is and what ever
+		 * we get back be it either yea or nay is going to be stale.
+		 * Finder (Desktop services/FileURL) might hang when going over
+		 * the wire when just asking getattrlist for the roots FSID
+		 * since we are going to be called to see if we're authorized
+		 * for search. 
+		 *
+		 * N.B. This is also the strategy that SMB is using.
+		 */
+		int granted = ((np->n_access[slot] & access) == access);
+
+		if (!(ap->a_action & KAUTH_VNODE_ACCESS)) {
+			if (granted || nfs_notresponding(nmp)) {
+				dorpc = 0;
+				waccess = np->n_access[slot];
+			}
+		} else {
+			int stale;
+			microuptime(&now);
+			stale = (now.tv_sec >= (np->n_accessstamp[slot] + nfs_access_cache_timeout));
+			if (granted && !stale) {
 			/* OSAddAtomic(1, &nfsstats.accesscache_hits); */
-			dorpc = 0;
-			waccess = np->n_access[slot];
+				dorpc = 0;
+				waccess = np->n_access[slot];
+			}
 		}
 	}
 	nfs_node_unlock(np);

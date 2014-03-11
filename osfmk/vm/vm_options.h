@@ -30,5 +30,11 @@
 #define __VM_VM_OPTIONS_H__
 
 #define UPL_DEBUG DEBUG
+// #define VM_PIP_DEBUG
+
+#define VM_PAGE_BUCKETS_CHECK DEBUG
+#if VM_PAGE_BUCKETS_CHECK
+#define VM_PAGE_FAKE_BUCKETS 1
+#endif /* VM_PAGE_BUCKETS_CHECK */
 
 #endif /* __VM_VM_OPTIONS_H__ */

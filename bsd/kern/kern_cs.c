@@ -70,6 +70,8 @@
 
 #include <pexpert/pexpert.h>
 
+#include <mach/shared_region.h>
+
 unsigned long cs_procs_killed = 0;
 unsigned long cs_procs_invalidated = 0;
 
@@ -102,9 +104,15 @@ SYSCTL_INT(_vm, OID_AUTO, cs_enforcement, CTLFLAG_RW | CTLFLAG_LOCKED, &cs_enfor
 SYSCTL_INT(_vm, OID_AUTO, cs_enforcement_panic, CTLFLAG_RW | CTLFLAG_LOCKED, &cs_enforcement_panic, 0, "");
 #endif
 
+int panic_on_cs_killed = 0;
 void
 cs_init(void)
 {
+#if MACH_ASSERT
+	panic_on_cs_killed = 1;
+#endif
+	PE_parse_boot_argn("panic_on_cs_killed", &panic_on_cs_killed,
+			   sizeof (panic_on_cs_killed));
 #if !SECURE_KERNEL
 	int disable_cs_enforcement = 0;
 	PE_parse_boot_argn("cs_enforcement_disable", &disable_cs_enforcement, 
@@ -182,12 +190,25 @@ cs_invalid_page(
 
 	/* CS_KILL triggers a kill signal, and no you can't have the page. Nothing else. */
 	if (p->p_csflags & CS_KILL) {
+		if (panic_on_cs_killed &&
+		    vaddr >= SHARED_REGION_BASE &&
+		    vaddr < SHARED_REGION_BASE + SHARED_REGION_SIZE) {
+			panic("<rdar://14393620> cs_invalid_page(va=0x%llx): killing p=%p\n", (uint64_t) vaddr, p);
+		}
 		p->p_csflags |= CS_KILLED;
 		cs_procs_killed++;
 		send_kill = 1;
 		retval = 1;
 	}
 	
+#if __x86_64__
+	if (panic_on_cs_killed &&
+	    vaddr >= SHARED_REGION_BASE &&
+	    vaddr < SHARED_REGION_BASE + SHARED_REGION_SIZE) {
+		panic("<rdar://14393620> cs_invalid_page(va=0x%llx): cs error p=%p\n", (uint64_t) vaddr, p);
+	}
+#endif /* __x86_64__ */
+
 	/* CS_HARD means fail the mapping operation so the process stays valid. */
 	if (p->p_csflags & CS_HARD) {
 		retval = 1;
@@ -214,14 +235,14 @@ cs_invalid_page(
 			NULL
 		);
 		printf("CODE SIGNING: cs_invalid_page(0x%llx): "
-		       "p=%d[%s] final status 0x%x, %sing page%s\n",
+		       "p=%d[%s] final status 0x%x, %s page%s\n",
 		       vaddr, p->p_pid, p->p_comm, p->p_csflags,
-		       retval ? "deny" : "allow (remove VALID)",
+		       retval ? "denying" : "allowing (remove VALID)",
 		       send_kill ? " sending SIGKILL" : "");
 	}
 
 	if (send_kill)
-		psignal(p, SIGKILL);
+		threadsignal(current_thread(), SIGKILL, EXC_BAD_ACCESS);
 
 
 	return retval;

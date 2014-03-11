@@ -164,6 +164,7 @@ extern char *   proc_name_address(void *p);
 #endif /* MACH_BSD */
 
 extern int disable_exc_resource;
+extern int audio_active;
 extern int debug_task;
 int thread_max = CONFIG_THREAD_MAX;	/* Max number of threads */
 int task_threadmax = CONFIG_THREAD_MAX;
@@ -1584,6 +1585,11 @@ THIS_THREAD_IS_CONSUMING_TOO_MUCH_CPU__SENDING_EXC_RESOURCE(void)
 		return;
 	}
 
+	if (audio_active) {
+		printf("process %s[%d] thread %llu caught burning CPU!; EXC_RESOURCE "
+		       "supressed due to audio playback\n", procname, pid, tid);
+		return;
+	}
 	printf("process %s[%d] thread %llu caught burning CPU! "
 	       "It used more than %d%% CPU (Actual recent usage: %d%%) over %d seconds. "
 	       "thread lifetime cpu usage %d.%06d seconds, (%d.%06d user, %d.%06d system) "

@@ -1295,6 +1295,10 @@ walk_list:
 			if(task->pidsuspended) task_snap->ss_flags |= kPidSuspended;
 			if(task->frozen) task_snap->ss_flags |= kFrozen;
 
+			if (task->effective_policy.darwinbg ==  1) {
+				task_snap->ss_flags |= kTaskDarwinBG;
+			}
+
 			if (task->effective_policy.t_sup_active == 1)
 				task_snap->ss_flags |= kTaskIsSuppressed;
 

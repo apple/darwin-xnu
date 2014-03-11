@@ -29,6 +29,13 @@
 #ifndef	_I386_POSTCODE_H_
 #define	_I386_POSTCODE_H_
 
+/*
+ * Postcodes are no longer enabled by default in the DEBUG kernel
+ * because platforms may not have builtin port 0x80 support.
+ * To re-enable postcode outpout, uncomment the following define:
+ */
+//#define DEBUG_POSTCODE 1
+
 /* Define this to delay about 1 sec after posting each code */
 //#define POSTCODE_DELAY 1
 
@@ -38,7 +45,7 @@
 #define	SPINCOUNT	300000000
 #define CPU_PAUSE()	rep; nop
 
-#if DEBUG
+#if DEBUG_POSTCODE
 /*
  * Macro to output byte value to postcode, destoying register al.
  * Additionally, if POSTCODE_DELAY, spin for about a second.
@@ -101,14 +108,14 @@
 	movl	%ebx, %eax;		\
 	POSTCODE_AL
 
-#else	/* DEBUG */
+#else	/* DEBUG_POSTCODE */
 #define POSTCODE_AL
 #define POSTCODE_AX
 #define POSTCODE(X)
 #define POSTCODE2(X)
 #define POSTCODE_SAVE_EAX(X)
 #define POSTCODE32_EBX
-#endif	/* DEBUG */
+#endif	/* DEBUG_POSTCODE */
 
 /*
  * The following postcodes are defined for stages of early startup:
@@ -174,7 +181,7 @@ _postcode2(uint16_t	xxxx)
 {
 	asm volatile("outw %0, %1" : : "a" (xxxx), "N" (POSTPORT));
 }
-#if	DEBUG
+#if	DEBUG_POSTCODE
 inline static void
 postcode(uint8_t	xx)
 {

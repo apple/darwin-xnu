@@ -520,12 +520,15 @@ tcp_gc(struct inpcbinfo *ipi)
 		 * socket lock for better performance. If there are
 		 * any pcbs in time-wait, the timer will get rescheduled.
 		 * Hence some error in this check can be tolerated.
+		 *
+		 * Sometimes a socket on time-wait queue can be closed if
+		 * 2MSL timer expired but the application still has a
+		 * usecount on it. 
 		 */
-		if (TSTMP_GEQ(tcp_now, tw_tp->t_timer[TCPT_2MSL])) {
+		if (tw_tp->t_state == TCPS_CLOSED ||  
+		    TSTMP_GEQ(tcp_now, tw_tp->t_timer[TCPT_2MSL])) {
 			if (tcp_garbage_collect(tw_tp->t_inpcb, 1))
 				atomic_add_32(&ipi->ipi_gc_req.intimer_lazy, 1);
-		} else {
-			break;
 		}
 	}
 

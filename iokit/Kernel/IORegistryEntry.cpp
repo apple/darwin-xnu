@@ -886,7 +886,7 @@ bool IORegistryEntry::getPath(	char * path, int * length,
     OSArray *		stack;
     IORegistryEntry *	root;
     const IORegistryEntry * entry;
-    IORegistryEntry *	parent;
+    const IORegistryEntry * parent;
     const OSSymbol *	alias;
     int			index;
     int			len, maxLength, compLen, aliasLen;
@@ -917,67 +917,62 @@ bool IORegistryEntry::getPath(	char * path, int * length,
 	return( ok );
     }
 
-    entry = this;
-    parent = entry->getParentEntry( plane );
-    if( !parent)
-	// Error if not attached in plane
-	return( false);
-
     stack = OSArray::withCapacity( getDepth( plane ));
-    if( !stack)
-	return( false);
+    if (!stack) return( false);
 
     RLOCK;
 
+    parent = entry = this;
     root = gRegistryRoot->getChildEntry( plane );
-    while( parent && (entry != root)) {
+    while (parent && (parent != root))
+    {
 	// stop below root
-	stack->setObject( (OSObject *) entry );
 	entry = parent;
 	parent = entry->getParentEntry( plane );
+	stack->setObject( (OSObject *) entry );
     }
 
-    index = stack->getCount();
-    ok = true;
+    ok = (0 != parent);
+    if (ok)
+    {
+        index = stack->getCount();
+        if( 0 == index) {
 
-    if( 0 == index) {
+            *nextComp++ = '/';
+            *nextComp = 0;
+            len++;
 
-        *nextComp++ = '/';
-        *nextComp = 0;
-        len++;
+        } else while( ok && ((--index) >= 0)) {
 
-    } else while( ok && ((--index) >= 0)) {
+            entry = (IORegistryEntry *) stack->getObject((unsigned int) index );
+            assert( entry );
 
-        entry = (IORegistryEntry *) stack->getObject((unsigned int) index );
-        assert( entry );
+            if( (alias = entry->hasAlias( plane ))) {
+                len = plane->nameKey->getLength() + 1;
+                nextComp = path + len;
 
-        if( (alias = entry->hasAlias( plane ))) {
-            len = plane->nameKey->getLength() + 1;
-            nextComp = path + len;
+                compLen = alias->getLength();
+                ok = (maxLength > (len + compLen));
+                if( ok)
+                    strlcpy( nextComp, alias->getCStringNoCopy(), compLen + 1);
+            } else {
+                compLen = maxLength - len;
+                ok = entry->getPathComponent( nextComp + 1, &compLen, plane );
 
-            compLen = alias->getLength();
-            ok = (maxLength > (len + compLen));
-            if( ok)
-                strlcpy( nextComp, alias->getCStringNoCopy(), compLen + 1);
-        } else {
-            compLen = maxLength - len;
-            ok = entry->getPathComponent( nextComp + 1, &compLen, plane );
+                if( ok && compLen) {
+                    compLen++;
+                    *nextComp = '/';
+                }
+            }
 
-            if( ok && compLen) {
-                compLen++;
-                *nextComp = '/';
+            if( ok) {
+                len += compLen;
+                nextComp += compLen;
             }
         }
-
-        if( ok) {
-            len += compLen;
-            nextComp += compLen;
-        }
+        *length = len;
     }
-    *length = len;
-
     UNLOCK;
-
     stack->release();
 
     return( ok );

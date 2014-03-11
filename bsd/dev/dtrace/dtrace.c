@@ -2127,7 +2127,7 @@ dtrace_aggregate_llquantize(uint64_t *llquanta, uint64_t nval, uint64_t incr)
 	uint16_t factor = DTRACE_LLQUANTIZE_FACTOR(arg);
 	uint16_t low    = DTRACE_LLQUANTIZE_LOW(arg);
 	uint16_t high   = DTRACE_LLQUANTIZE_HIGH(arg);
-	uint16_t nsteps = DTRACE_LLQUANTIZE_NSTEPS(arg);
+	uint16_t nsteps = DTRACE_LLQUANTIZE_NSTEP(arg);
 
 	llquanta[dtrace_aggregate_llquantize_bucket(factor, low, high, nsteps, nval)] += incr;
 }
@@ -10642,7 +10642,7 @@ dtrace_ecb_aggregation_create(dtrace_ecb_t *ecb, dtrace_actdesc_t *desc)
 		uint16_t factor = DTRACE_LLQUANTIZE_FACTOR(desc->dtad_arg);
 		uint16_t low    = DTRACE_LLQUANTIZE_LOW(desc->dtad_arg);
 		uint16_t high   = DTRACE_LLQUANTIZE_HIGH(desc->dtad_arg);
-		uint16_t nsteps = DTRACE_LLQUANTIZE_NSTEPS(desc->dtad_arg);
+		uint16_t nsteps = DTRACE_LLQUANTIZE_NSTEP(desc->dtad_arg);
 		int64_t v;
 
 		agg->dtag_initial = desc->dtad_arg;

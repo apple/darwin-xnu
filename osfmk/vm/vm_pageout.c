@@ -996,6 +996,10 @@ unsigned int vm_memory_pressure = 0;
 #define VM_PAGEOUT_STAT_AFTER(i) \
 	(((i) == VM_PAGEOUT_STAT_SIZE - 1) ? 0 : (i) + 1)
 
+#if VM_PAGE_BUCKETS_CHECK
+int vm_page_buckets_check_interval = 10; /* in seconds */
+#endif /* VM_PAGE_BUCKETS_CHECK */
+
 /*
  * Called from compute_averages().
  */
@@ -1004,6 +1008,14 @@ compute_memory_pressure(
 	__unused void *arg)
 {
 	unsigned int vm_pageout_next;
+
+#if VM_PAGE_BUCKETS_CHECK
+	/* check the consistency of VM page buckets at regular interval */
+	static int counter = 0;
+	if ((++counter % vm_page_buckets_check_interval) == 0) {
+		vm_page_buckets_check();
+	}
+#endif /* VM_PAGE_BUCKETS_CHECK */
 
 	vm_memory_pressure =
 		vm_pageout_stats[VM_PAGEOUT_STAT_BEFORE(vm_pageout_stat_now)].reclaimed;
@@ -3726,6 +3738,11 @@ vm_pageout_garbage_collect(int collect)
 }
 
 
+#if VM_PAGE_BUCKETS_CHECK
+#if VM_PAGE_FAKE_BUCKETS
+extern vm_map_offset_t vm_page_fake_buckets_start, vm_page_fake_buckets_end;
+#endif /* VM_PAGE_FAKE_BUCKETS */
+#endif /* VM_PAGE_BUCKETS_CHECK */
 
 void
 vm_pageout(void)
@@ -3866,6 +3883,18 @@ vm_pageout(void)
 	
 	if (COMPRESSED_PAGER_IS_ACTIVE || DEFAULT_FREEZER_COMPRESSED_PAGER_IS_ACTIVE)
 		vm_compressor_pager_init();
+
+#if VM_PAGE_BUCKETS_CHECK
+#if VM_PAGE_FAKE_BUCKETS
+	printf("**** DEBUG: protecting fake buckets [0x%llx:0x%llx]\n",
+	       vm_page_fake_buckets_start, vm_page_fake_buckets_end);
+	pmap_protect(kernel_pmap,
+		     vm_page_fake_buckets_start,
+		     vm_page_fake_buckets_end,
+		     VM_PROT_READ);
+//	*(char *) vm_page_fake_buckets_start = 'x';	/* panic! */
+#endif /* VM_PAGE_FAKE_BUCKETS */
+#endif /* VM_PAGE_BUCKETS_CHECK */
 
 	vm_pageout_continue();
 
@@ -5609,7 +5638,7 @@ process_upl_to_remove:
 	return KERN_FAILURE;
 }
 
-
+extern int panic_on_cs_killed;
 kern_return_t
 upl_commit_range(
 	upl_t			upl, 
@@ -5801,6 +5830,9 @@ process_upl_to_commit:
 			m->cs_validated = page_list[entry].cs_validated;
 			m->cs_tainted = page_list[entry].cs_tainted;
 		}
+		if (flags & UPL_COMMIT_WRITTEN_BY_KERNEL)
+		        m->written_by_kernel = TRUE;
+
 		if (upl->flags & UPL_IO_WIRE) {
 
 			if (page_list)
@@ -5820,6 +5852,12 @@ process_upl_to_commit:
 					 * so it will need to be
 					 * re-validated.
 					 */
+					if (panic_on_cs_killed &&
+					    m->slid) {
+						panic("upl_commit_range(%p): page %p was slid\n",
+						      upl, m);
+					}
+					assert(!m->slid);
 					m->cs_validated = FALSE;
 #if DEVELOPMENT || DEBUG
 					vm_cs_validated_resets++;
@@ -5887,6 +5925,12 @@ process_upl_to_commit:
 			 * so it will need to be
 			 * re-validated.
 			 */
+			if (panic_on_cs_killed &&
+			    m->slid) {
+				panic("upl_commit_range(%p): page %p was slid\n",
+				      upl, m);
+			}
+			assert(!m->slid);
 			m->cs_validated = FALSE;
 #if DEVELOPMENT || DEBUG
 			vm_cs_validated_resets++;
@@ -6033,6 +6077,7 @@ process_upl_to_commit:
 			 */
 			dwp->dw_mask |= DW_clear_busy;
 		}
+
 		/*
 		 * Wakeup any thread waiting for the page to be un-cleaning.
 		 */
@@ -7098,6 +7143,11 @@ vm_object_iopl_request(
    		if (!(cntrl_flags & UPL_COPYOUT_FROM)) {
 			SET_PAGE_DIRTY(dst_page, TRUE);	
 		}
+		if ((cntrl_flags & UPL_REQUEST_FORCE_COHERENCY) && dst_page->written_by_kernel == TRUE) {
+			pmap_sync_page_attributes_phys(dst_page->phys_page);
+			dst_page->written_by_kernel = FALSE;
+		}
+
 record_phys_addr:
 		if (dst_page->busy)
 			upl->flags |= UPL_HAS_BUSY;

@@ -167,6 +167,10 @@ int turn_on_log_leaks = 0;
 void
 kernel_early_bootstrap(void)
 {
+	/* serverperfmode is needed by timer setup */
+        if (PE_parse_boot_argn("serverperfmode", &serverperfmode, sizeof (serverperfmode))) {
+                serverperfmode = 1;
+        }
 
 	lck_mod_init();
 
@@ -195,10 +199,6 @@ kernel_bootstrap(void)
 
 	PE_parse_boot_argn("trace_wake", &wake_nkdbufs, sizeof (wake_nkdbufs));
 
-	/* i386_vm_init already checks for this ; do it aagin anyway */
-        if (PE_parse_boot_argn("serverperfmode", &serverperfmode, sizeof (serverperfmode))) {
-                serverperfmode = 1;
-        }
 	scale_setup();
 
 	kernel_bootstrap_kprintf("calling vm_mem_bootstrap\n");

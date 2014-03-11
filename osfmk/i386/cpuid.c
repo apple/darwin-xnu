@@ -753,6 +753,7 @@ cpuid_set_cpufamily(i386_cpu_info_t *info_p)
 			cpufamily = CPUFAMILY_INTEL_SANDYBRIDGE;
 			break;
 		case CPUID_MODEL_IVYBRIDGE:
+		case CPUID_MODEL_IVYBRIDGE_EP:
 			cpufamily = CPUFAMILY_INTEL_IVYBRIDGE;
 			break;
 		case CPUID_MODEL_HASWELL:

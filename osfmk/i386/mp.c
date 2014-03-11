@@ -593,6 +593,7 @@ NMIInterruptHandler(x86_saved_state_t *regs)
 	if (pmsafe_debug && !kdp_snapshot)
 		pmSafeMode(&current_cpu_datap()->lcpu, PM_SAFE_FL_SAFE);
 	current_cpu_datap()->cpu_NMI_acknowledged = TRUE;
+	i_bit_clear(MP_KDP, &current_cpu_datap()->cpu_signals);
 	mp_kdp_wait(FALSE, pmap_tlb_flush_timeout || spinlock_timed_out || panic_active());
 	if (pmsafe_debug && !kdp_snapshot)
 		pmSafeMode(&current_cpu_datap()->lcpu, PM_SAFE_FL_NORMAL);

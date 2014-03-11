@@ -474,9 +474,10 @@ typedef uint32_t	upl_size_t;	/* page-aligned byte size */
 #define UPL_REQUEST_SET_DIRTY	0x10000000
 #define UPL_REQUEST_NO_FAULT	0x20000000 /* fail if pages not all resident */
 #define UPL_NOZEROFILLIO	0x40000000 /* allow non zerofill pages present */
+#define UPL_REQUEST_FORCE_COHERENCY	0x80000000
 
 /* UPL flags known by this kernel */
-#define UPL_VALID_FLAGS		0x7FFFFFFF
+#define UPL_VALID_FLAGS		0xFFFFFFFF
 
 
 /* upl abort error flags */
@@ -580,6 +581,7 @@ typedef uint32_t	upl_size_t;	/* page-aligned byte size */
 #define UPL_COMMIT_CLEAR_PRECIOUS	0x80
 #define UPL_COMMIT_SPECULATE		0x100
 #define UPL_COMMIT_FREE_ABSENT		0x200
+#define UPL_COMMIT_WRITTEN_BY_KERNEL	0x400
 
 #define UPL_COMMIT_KERNEL_ONLY_FLAGS	(UPL_COMMIT_CS_VALIDATED | UPL_COMMIT_FREE_ABSENT)
 

@@ -177,13 +177,18 @@ extern void vnode_pager_throttle(
 extern uint32_t vnode_pager_return_throttle_io_limit(
 	struct vnode *,
 	uint32_t     *);
-extern kern_return_t vnode_pager_get_pathname(
+extern kern_return_t vnode_pager_get_name(
 	struct vnode	*vp,
 	char		*pathname,
-	vm_size_t	*length_p);
-extern kern_return_t vnode_pager_get_filename(
+	vm_size_t	pathname_len,
+	char		*filename,
+	vm_size_t	filename_len,
+	boolean_t	*truncated_path_p);
+struct timespec;
+extern kern_return_t vnode_pager_get_mtime(
 	struct vnode	*vp,
-	const char	**filename);
+	struct timespec	*mtime,
+	struct timespec	*cs_mtime);
 extern kern_return_t vnode_pager_get_cs_blobs(
 	struct vnode	*vp,
 	void		**blobs);
@@ -219,13 +224,17 @@ extern kern_return_t vnode_pager_get_isSSD(
 extern kern_return_t vnode_pager_get_throttle_io_limit(
 	memory_object_t,
 	uint32_t *);
-extern kern_return_t vnode_pager_get_object_pathname(
+extern kern_return_t vnode_pager_get_object_name(
 	memory_object_t	mem_obj,
 	char		*pathname,
-	vm_size_t	*length_p);
-extern kern_return_t vnode_pager_get_object_filename(
+	vm_size_t	pathname_len,
+	char		*filename,
+	vm_size_t	filename_len,
+	boolean_t	*truncated_path_p);
+extern kern_return_t vnode_pager_get_object_mtime(
 	memory_object_t	mem_obj,
-	const char	**filename);
+	struct timespec *mtime,
+	struct timespec	*cs_mtime);
 extern kern_return_t vnode_pager_get_object_cs_blobs(
 	memory_object_t	mem_obj,
 	void		**blobs);

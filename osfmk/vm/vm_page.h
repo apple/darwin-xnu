@@ -67,6 +67,7 @@
 #define _VM_VM_PAGE_H_
 
 #include <debug.h>
+#include <vm/vm_options.h>
 
 #include <mach/boolean.h>
 #include <mach/vm_prot.h>
@@ -210,6 +211,8 @@ struct vm_page {
 	/* boolean_t */	busy:1,		/* page is in transit (O) */
 			wanted:1,	/* someone is waiting for page (O) */
 			tabled:1,	/* page is in VP table (O) */
+			hashed:1,	/* page is in vm_page_buckets[]
+					   (O) + the bucket lock */
 			fictitious:1,	/* Physical page doesn't exist (O) */
 	/*
 	 * IMPORTANT: the "pmapped" bit can be turned on while holding the
@@ -248,7 +251,8 @@ struct vm_page {
 			slid:1,
 			was_dirty:1,	/* was this page previously dirty? */
 		        compressor:1,	/* page owned by compressor pool */
-			__unused_object_bits:7;  /* 7 bits available here */
+		        written_by_kernel:1,	/* page was written by kernel (i.e. decompressed) */
+			__unused_object_bits:5;	/* 5 bits available here */
 
 #if __LP64__
 	unsigned int __unused_padding;	/* Pad structure explicitly
@@ -1000,5 +1004,8 @@ extern unsigned int vm_max_delayed_work_limit;
 
 extern vm_page_t vm_object_page_grab(vm_object_t);
 
+#if VM_PAGE_BUCKETS_CHECK
+extern void vm_page_buckets_check(void);
+#endif /* VM_PAGE_BUCKETS_CHECK */
 
 #endif	/* _VM_VM_PAGE_H_ */

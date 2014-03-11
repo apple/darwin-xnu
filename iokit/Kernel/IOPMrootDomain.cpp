@@ -3872,7 +3872,7 @@ bool IOPMrootDomain::evaluateSystemSleepPolicy(
     // Current factors based on environment and assertions
     if (sleepTimerMaintenance)
         currentFactors |= kIOPMSleepFactorSleepTimerWake;
-    if (standbyEnabled && sleepToStandby)
+    if (standbyEnabled && sleepToStandby && !gSleepPolicyHandler)
         currentFactors |= kIOPMSleepFactorSleepTimerWake;
     if (!clamshellClosed)
         currentFactors |= kIOPMSleepFactorLidOpen;
