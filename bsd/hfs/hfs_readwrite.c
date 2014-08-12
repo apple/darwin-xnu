@@ -54,6 +54,7 @@
 #include <sys/sysctl.h>
 #include <sys/fsctl.h>
 #include <sys/mount_internal.h>
+#include <sys/file_internal.h>
 
 #include <miscfs/specfs/specdev.h>
 
@@ -1662,8 +1663,9 @@ hfs_vnop_ioctl( struct vnop_ioctl_args /* {
 
 		cp = VTOC(vp);
 
-		if (vnode_isdir (vp)) {
-			error = EISDIR;
+		if (!vnode_isdir(vp) && !(vnode_isreg(vp)) &&
+				!(vnode_islnk(vp))) {
+			error = EBADF;
 			*counter = 0;
 			return error;
 		}
@@ -1671,12 +1673,12 @@ hfs_vnop_ioctl( struct vnop_ioctl_args /* {
 		error = hfs_lock (cp, HFS_EXCLUSIVE_LOCK, HFS_LOCK_DEFAULT);
 		if (error == 0) {
 			struct ubc_info *uip;
-			int is_mapped = 0;
+			int is_mapped_writable = 0;
 			
 			if (UBCINFOEXISTS(vp)) {
 				uip = vp->v_ubcinfo;
-				if (uip->ui_flags & UI_ISMAPPED) {
-					is_mapped = 1;
+				if ((uip->ui_flags & UI_ISMAPPED) && (uip->ui_flags & UI_MAPPEDWRITE)) {
+					is_mapped_writable = 1;
 				}
 			}
 
@@ -1690,24 +1692,253 @@ hfs_vnop_ioctl( struct vnop_ioctl_args /* {
 				// (since the file may be unmapped but the pageouts have not
 				// yet happened).
 				//
-				if (is_mapped) {
+				if (is_mapped_writable) {
 					hfs_incr_gencount (cp);
 					gcount = hfs_get_gencount(cp);
 				}
-				
-				*counter = gcount;
 
-			} 
-			else {
+				*counter = gcount;
+			} else if (S_ISDIR(cp->c_attr.ca_mode)) {
+				*counter = hfs_get_gencount(cp);
+			} else {
 				/* not a file or dir? silently return */
 				*counter = 0;
 			}
 			hfs_unlock (cp);
 
-			if (is_mapped) {
+			if (is_mapped_writable) {
 				error = EBUSY;
 			}
 		}
+
+		return error;
+	}
+
+	case HFS_GET_DOCUMENT_ID:
+	{
+		struct cnode *cp = NULL;
+		int error=0;
+		u_int32_t *document_id = (u_int32_t *)ap->a_data;
+
+		cp = VTOC(vp);
+
+		if (cp->c_desc.cd_cnid == kHFSRootFolderID) {
+			// the root-dir always has document id '2' (aka kHFSRootFolderID)
+			*document_id = kHFSRootFolderID;
+
+		} else if ((S_ISDIR(cp->c_attr.ca_mode) || S_ISREG(cp->c_attr.ca_mode) || S_ISLNK(cp->c_attr.ca_mode))) {
+			int mark_it = 0;
+			uint32_t tmp_doc_id;
+
+			//
+			// we can use the FndrExtendedFileInfo because the doc-id is the first
+			// thing in both it and the FndrExtendedDirInfo struct which is fixed 
+			// in format and can not change layout
+			//
+			struct FndrExtendedFileInfo *extinfo = (struct FndrExtendedFileInfo *)((u_int8_t*)cp->c_finderinfo + 16);
+
+			hfs_lock(cp, HFS_SHARED_LOCK, HFS_LOCK_DEFAULT);
+
+			//
+			// if the cnode isn't UF_TRACKED and the doc-id-allocate flag isn't set
+			// then just return a zero for the doc-id
+			//
+			if (!(cp->c_bsdflags & UF_TRACKED) && !(ap->a_fflag & HFS_DOCUMENT_ID_ALLOCATE)) {
+				*document_id = 0;
+				hfs_unlock(cp);
+				return 0;
+			}
+
+			//
+			// if the cnode isn't UF_TRACKED and the doc-id-allocate flag IS set,
+			// then set mark_it so we know to set the UF_TRACKED flag once the
+			// cnode is locked.
+			//
+			if (!(cp->c_bsdflags & UF_TRACKED) && (ap->a_fflag & HFS_DOCUMENT_ID_ALLOCATE)) {
+				mark_it = 1;
+			}
+			
+			tmp_doc_id = extinfo->document_id;   // get a copy of this
+			
+			hfs_unlock(cp);   // in case we have to call hfs_generate_document_id() 
+
+			//
+			// If the document_id isn't set, get a new one and then set it.
+			// Note: we first get the document id, then lock the cnode to
+			// avoid any deadlock potential between cp and the root vnode.
+			//
+			uint32_t new_id;
+			if (tmp_doc_id == 0 && (error = hfs_generate_document_id(hfsmp, &new_id)) == 0) {
+
+				if ((error = hfs_lock (cp, HFS_EXCLUSIVE_LOCK, HFS_LOCK_DEFAULT)) == 0) {
+					extinfo->document_id = tmp_doc_id = new_id;
+					//printf("ASSIGNING: doc-id %d to ino %d\n", extinfo->document_id, cp->c_fileid);
+						
+					if (mark_it) {
+						cp->c_bsdflags |= UF_TRACKED;
+					}
+
+					// mark the cnode dirty
+					cp->c_flag |= C_MODIFIED | C_FORCEUPDATE;
+
+					int lockflags;
+					if ((error = hfs_start_transaction(hfsmp)) == 0) {
+						lockflags = hfs_systemfile_lock(hfsmp, SFL_CATALOG, HFS_EXCLUSIVE_LOCK);
+
+						(void) cat_update(hfsmp, &cp->c_desc, &cp->c_attr, NULL, NULL);
+
+						hfs_systemfile_unlock (hfsmp, lockflags);
+						(void) hfs_end_transaction(hfsmp);
+					}
+
+#if CONFIG_FSE
+					add_fsevent(FSE_DOCID_CHANGED, context,
+						    FSE_ARG_DEV,   hfsmp->hfs_raw_dev,
+						    FSE_ARG_INO,   (ino64_t)0,             // src inode #
+						    FSE_ARG_INO,   (ino64_t)cp->c_fileid,  // dst inode #
+						    FSE_ARG_INT32, extinfo->document_id,
+						    FSE_ARG_DONE);
+
+					hfs_unlock (cp);    // so we can send the STAT_CHANGED event without deadlocking
+
+					if (need_fsevent(FSE_STAT_CHANGED, vp)) {
+						add_fsevent(FSE_STAT_CHANGED, context, FSE_ARG_VNODE, vp, FSE_ARG_DONE);
+					}
+#else
+					hfs_unlock (cp);
+#endif
+				}
+			}
+
+			*document_id = tmp_doc_id;
+		} else {
+			*document_id = 0;
+		}
+
+		return error;
+	}
+
+	case HFS_TRANSFER_DOCUMENT_ID:
+	{
+		struct cnode *cp = NULL;
+		int error;
+		u_int32_t to_fd = *(u_int32_t *)ap->a_data;
+		struct fileproc *to_fp;
+		struct vnode *to_vp;
+		struct cnode *to_cp;
+
+		cp = VTOC(vp);
+
+		if ((error = fp_getfvp(p, to_fd, &to_fp, &to_vp)) != 0) {
+			//printf("could not get the vnode for fd %d (err %d)\n", to_fd, error);
+			return error;
+		}
+		if ( (error = vnode_getwithref(to_vp)) ) {
+			file_drop(to_fd);
+			return error;
+		}
+
+		if (VTOHFS(to_vp) != hfsmp) {
+			error = EXDEV;
+			goto transfer_cleanup;
+		}
+
+		int need_unlock = 1;
+		to_cp = VTOC(to_vp);
+		error = hfs_lockpair(cp, to_cp, HFS_EXCLUSIVE_LOCK);
+		if (error != 0) {
+			//printf("could not lock the pair of cnodes (error %d)\n", error);
+			goto transfer_cleanup;
+		}
+			
+		if (!(cp->c_bsdflags & UF_TRACKED)) {
+			error = EINVAL;
+		} else if (to_cp->c_bsdflags & UF_TRACKED) {
+			//
+			// if the destination is already tracked, return an error
+			// as otherwise it's a silent deletion of the target's
+			// document-id
+			//
+			error = EEXIST;
+		} else if (S_ISDIR(cp->c_attr.ca_mode) || S_ISREG(cp->c_attr.ca_mode) || S_ISLNK(cp->c_attr.ca_mode)) {
+			//
+			// we can use the FndrExtendedFileInfo because the doc-id is the first
+			// thing in both it and the ExtendedDirInfo struct which is fixed in
+			// format and can not change layout
+			//
+			struct FndrExtendedFileInfo *f_extinfo = (struct FndrExtendedFileInfo *)((u_int8_t*)cp->c_finderinfo + 16);
+			struct FndrExtendedFileInfo *to_extinfo = (struct FndrExtendedFileInfo *)((u_int8_t*)to_cp->c_finderinfo + 16);
+
+			if (f_extinfo->document_id == 0) {
+				uint32_t new_id;
+
+				hfs_unlockpair(cp, to_cp);  // have to unlock to be able to get a new-id
+				
+				if ((error = hfs_generate_document_id(hfsmp, &new_id)) == 0) {
+					//
+					// re-lock the pair now that we have the document-id
+					//
+					hfs_lockpair(cp, to_cp, HFS_EXCLUSIVE_LOCK);
+					f_extinfo->document_id = new_id;
+				} else {
+					goto transfer_cleanup;
+				}
+			}
+					
+			to_extinfo->document_id = f_extinfo->document_id;
+			f_extinfo->document_id = 0;
+			//printf("TRANSFERRING: doc-id %d from ino %d to ino %d\n", to_extinfo->document_id, cp->c_fileid, to_cp->c_fileid);
+
+			// make sure the destination is also UF_TRACKED
+			to_cp->c_bsdflags |= UF_TRACKED;
+			cp->c_bsdflags &= ~UF_TRACKED;
+
+			// mark the cnodes dirty
+			cp->c_flag |= C_MODIFIED | C_FORCEUPDATE;
+			to_cp->c_flag |= C_MODIFIED | C_FORCEUPDATE;
+
+			int lockflags;
+			if ((error = hfs_start_transaction(hfsmp)) == 0) {
+
+				lockflags = hfs_systemfile_lock(hfsmp, SFL_CATALOG, HFS_EXCLUSIVE_LOCK);
+
+				(void) cat_update(hfsmp, &cp->c_desc, &cp->c_attr, NULL, NULL);
+				(void) cat_update(hfsmp, &to_cp->c_desc, &to_cp->c_attr, NULL, NULL);
+
+				hfs_systemfile_unlock (hfsmp, lockflags);
+				(void) hfs_end_transaction(hfsmp);
+			}
+
+#if CONFIG_FSE
+			add_fsevent(FSE_DOCID_CHANGED, context,
+				    FSE_ARG_DEV,   hfsmp->hfs_raw_dev,
+				    FSE_ARG_INO,   (ino64_t)cp->c_fileid,       // src inode #
+				    FSE_ARG_INO,   (ino64_t)to_cp->c_fileid,    // dst inode #
+				    FSE_ARG_INT32, to_extinfo->document_id,
+				    FSE_ARG_DONE);
+
+			hfs_unlockpair(cp, to_cp);    // unlock this so we can send the fsevents
+			need_unlock = 0;
+
+			if (need_fsevent(FSE_STAT_CHANGED, vp)) {
+				add_fsevent(FSE_STAT_CHANGED, context, FSE_ARG_VNODE, vp, FSE_ARG_DONE);
+			}
+			if (need_fsevent(FSE_STAT_CHANGED, to_vp)) {
+				add_fsevent(FSE_STAT_CHANGED, context, FSE_ARG_VNODE, to_vp, FSE_ARG_DONE);
+			}
+#else
+			hfs_unlockpair(cp, to_cp);    // unlock this so we can send the fsevents
+			need_unlock = 0;
+#endif
+		}
+		
+		if (need_unlock) {
+			hfs_unlockpair(cp, to_cp);
+		}
+
+	transfer_cleanup:
+		vnode_put(to_vp);
+		file_drop(to_fd);
 
 		return error;
 	}

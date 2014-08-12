@@ -3578,6 +3578,8 @@ void IOService::notifyRootDomain( void )
     MS_PUSH(fMachineState);  // push notifyAll() machine state
     fMachineState = kIOPM_DriverThreadCallDone;
 
+    // Call IOPMrootDomain::willNotifyPowerChildren() on a thread call
+    // to avoid a deadlock.
     fDriverCallReason = kRootDomainInformPreChange;
     fDriverCallBusy   = true;
     thread_call_enter( fDriverCallEntry );
@@ -3639,7 +3641,7 @@ void IOService::notifyChildren( void )
                 // Cannot be used together with strict tree ordering.
 
                 if (!fIsPreChange &&
-                    (connection->delayChildNotification) &&
+                    connection->delayChildNotification &&
                     getPMRootDomain()->shouldDelayChildNotification(this))
                 {
                     if (!children)
@@ -3677,15 +3679,23 @@ void IOService::notifyChildren( void )
 
         if (delayNotify)
         {
-            // Wait for exiting child notifications to complete,
-            // before notifying the children in the array.
+            // Block until all non-delayed children have acked their
+            // notification. Then notify the remaining delayed child
+            // in the array. This is used to hold off graphics child
+            // notification while the rest of the system powers up.
+            // If a hid tickle arrives during this time, the delayed
+            // children are immediately notified and root domain will
+            // not clamp power for dark wake.
+
             fMachineState = kIOPM_NotifyChildrenDelayed;
             PM_LOG2("%s: %d children in delayed array\n",
                 getName(), children->getCount());
         }
         else
         {
+            // Child array created to support strict notification order.
             // Notify children in the array one at a time.
+
             fMachineState = kIOPM_NotifyChildrenOrdered;
         }
 	}
@@ -3739,8 +3749,9 @@ void IOService::notifyChildrenDelayed( void )
 	assert(fMachineState == kIOPM_NotifyChildrenDelayed);
 
     // Wait after all non-delayed children and interested drivers have ack'ed,
-    // then notify all delayed children. When explicitly cancelled, interest
-    // acks (and ack timer) may still be outstanding.
+    // then notify all delayed children. If notify delay is canceled, child
+    // acks may be outstanding with PM blocked on fHeadNotePendingAcks != 0.
+    // But the handling for either case is identical.
 
     for (int i = 0; ; i++)
     {

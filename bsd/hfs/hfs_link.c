@@ -610,6 +610,7 @@ hfs_vnop_link(struct vnop_link_args *ap)
 			}
 		}
 		tdcp->c_dirchangecnt++;
+		hfs_incr_gencount(tdcp);
 		tdcp->c_touch_chgtime = TRUE;
 		tdcp->c_touch_modtime = TRUE;
 		tdcp->c_flag |= C_FORCEUPDATE;
@@ -758,6 +759,7 @@ hfs_unlink(struct hfsmount *hfsmp, struct vnode *dvp, struct vnode *vp, struct c
 		DEC_FOLDERCOUNT(hfsmp, dcp->c_attr);
 	}
 	dcp->c_dirchangecnt++;
+	hfs_incr_gencount(dcp);
 	microtime(&tv);
 	dcp->c_ctime = tv.tv_sec;
 	dcp->c_mtime = tv.tv_sec;
@@ -1015,6 +1017,7 @@ hfs_privatedir_init(struct hfsmount * hfsmp, enum privdirtype type)
 		dcp->c_entries++;
 		INC_FOLDERCOUNT(hfsmp, dcp->c_attr);
 		dcp->c_dirchangecnt++;
+		hfs_incr_gencount(dcp);
 		microtime(&tv);
 		dcp->c_ctime = tv.tv_sec;
 		dcp->c_mtime = tv.tv_sec;

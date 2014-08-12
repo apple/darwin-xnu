@@ -678,7 +678,6 @@ CheckCriteria(	ExtendedVCB *vcb,
 	struct cat_attr c_attr;
 	struct cat_fork datafork;
 	struct cat_fork rsrcfork;
-	struct hfsmount *hfsmp = (struct hfsmount*)vcb;
 	int force_case_sensitivity = proc_is_forcing_hfs_case_sensitivity(vfs_context_proc(ctx));
 	
 	bzero(&c_attr, sizeof(c_attr));
@@ -750,19 +749,29 @@ CheckCriteria(	ExtendedVCB *vcb,
 		if (isHFSPlus) {
 			int case_sensitive = 0;
 
-			if (hfsmp->hfs_flags & HFS_CASE_SENSITIVE) {
-				case_sensitive = 1;
-			} else if (force_case_sensitivity) {
+			/*
+			 * Longstanding default behavior here is to use a non-case-sensitive 
+			 * search, even on case-sensitive filesystems. 
+			 * 
+			 * We only force case sensitivity if the controlling process has explicitly
+			 * asked for it in the proc flags, and only if they are not doing
+			 * a partial name match.  Consider that if you are doing a partial
+			 * name match ("all files that begin with 'image'"), the likelihood is 
+			 * high that you would want to see all matches, even those that do not
+			 * explicitly match the case.
+			 */
+			if (force_case_sensitivity) {
 				case_sensitive = 1;
 			}
 
 			/* Check for partial/full HFS Plus name match */
 
 			if ( searchBits & SRCHFS_MATCHPARTIALNAMES ) {
+				/* always use a case-INSENSITIVE search here */
 				matched = ComparePartialUnicodeName(key->hfsPlus.nodeName.unicode,
 								    key->hfsPlus.nodeName.length,
 								    (UniChar*)searchInfo1->name,
-								    searchInfo1->nameLength, case_sensitive);
+								    searchInfo1->nameLength, 0);
 			} 
 			else {
 				/* Full name match.  Are we HFSX (case sensitive) or HFS+ ? */

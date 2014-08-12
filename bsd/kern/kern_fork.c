@@ -1610,6 +1610,13 @@ uthread_cred_free(void *uthread)
 void
 uthread_zone_free(void *uthread)
 {
+	uthread_t uth = (uthread_t)uthread;
+
+	if (uth->t_tombstone) {
+		kfree(uth->t_tombstone, sizeof(struct doc_tombstone));
+		uth->t_tombstone = NULL;
+	}
+
 	/* and free the uthread itself */
 	zfree(uthread_zone, uthread);
 }

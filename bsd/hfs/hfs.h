@@ -325,39 +325,33 @@ typedef struct hfsmount {
 	u_long hfs_idhash; /* size of cnid/fileid hash table -1 */
 	LIST_HEAD(idhashhead, cat_preflightid) *hfs_idhashtbl; /* base of ID hash */
 
-	/*
-	 * About the sync counters:
-	 * hfs_sync_scheduled  keeps track whether a timer was scheduled but we
-	 *                     haven't started processing the callback (i.e. we
-	 *                     haven't begun the flush).  This will be non-zero
-	 *                     even if the callback has been invoked, before we
-	 *                    start the flush.
-	 * hfs_sync_incomplete keeps track of the number of callbacks that have
-	 *                     not completed yet (including callbacks not yet
-	 *                     invoked).  We cannot safely unmount until this
-	 *                     drops to zero.
-	 *
-	 * In both cases, we use counters, not flags, so that we can avoid
-	 * taking locks.
-	 */
-	int32_t		hfs_sync_scheduled;
-	int32_t		hfs_sync_incomplete;
-	u_int64_t       hfs_last_sync_request_time;
-	u_int32_t       hfs_active_threads;
-	u_int64_t       hfs_max_pending_io;
-					
-	thread_call_t   hfs_syncer;	      // removeable devices get sync'ed by this guy
+    // Records the oldest outstanding sync request
+    struct timeval	hfs_sync_req_oldest;
 
+    // Records whether a sync has been queued or is in progress
+	boolean_t		hfs_sync_incomplete;
+
+	thread_call_t   hfs_syncer;	       // removeable devices get sync'ed by this guy
+
+    /* Records the syncer thread so that we can avoid the syncer
+       queing more syncs. */
+    thread_t		hfs_syncer_thread;
+
+    // Not currently used except for debugging purposes
+	uint32_t        hfs_active_threads;
 } hfsmount_t;
 
 /*
- * HFS_META_DELAY is a duration (0.1 seconds, expressed in microseconds)
- * used for triggering the hfs_syncer() routine.  It is used in two ways:
- * as the delay between ending a transaction and firing hfs_syncer(), and
- * the delay in re-firing hfs_syncer() when it decides to back off (for
- * example, due to in-progress writes).
+ * HFS_META_DELAY is a duration (in usecs) used for triggering the 
+ * hfs_syncer() routine. We will back off if writes are in 
+ * progress, but...
+ * HFS_MAX_META_DELAY is the maximum time we will allow the
+ * syncer to be delayed.
  */
-enum { HFS_META_DELAY = 100 * 1000ULL };
+enum {
+    HFS_META_DELAY     = 100  * 1000,	// 0.1 secs
+    HFS_MAX_META_DELAY = 5000 * 1000	// 5 secs
+};
 
 typedef hfsmount_t  ExtendedVCB;
 
@@ -743,6 +737,8 @@ extern int hfs_owner_rights(struct hfsmount *hfsmp, uid_t cnode_uid, kauth_cred_
 
 extern int check_for_tracked_file(struct vnode *vp, time_t ctime, uint64_t op_type, void *arg);
 extern int check_for_dataless_file(struct vnode *vp, uint64_t op_type);
+extern int hfs_generate_document_id(struct hfsmount *hfsmp, uint32_t *docid);
+
 
 /*
  * Journal lock function prototypes
@@ -796,12 +792,19 @@ extern int  hfs_virtualmetafile(struct cnode *);
 extern int hfs_start_transaction(struct hfsmount *hfsmp);
 extern int hfs_end_transaction(struct hfsmount *hfsmp);
 extern int hfs_journal_flush(struct hfsmount *hfsmp, boolean_t wait_for_IO);
+extern void hfs_syncer_lock(struct hfsmount *hfsmp);
+extern void hfs_syncer_unlock(struct hfsmount *hfsmp);
+extern void hfs_syncer_wait(struct hfsmount *hfsmp);
+extern void hfs_syncer_wakeup(struct hfsmount *hfsmp);
+extern void hfs_syncer_queue(thread_call_t syncer);
 extern void hfs_sync_ejectable(struct hfsmount *hfsmp);
 
 extern void hfs_trim_callback(void *arg, uint32_t extent_count, const dk_extent_t *extents);
 
 /* Erase unused Catalog nodes due to <rdar://problem/6947811>. */
 extern int hfs_erase_unused_nodes(struct hfsmount *hfsmp);
+
+extern uint64_t hfs_usecs_to_deadline(uint64_t usecs);
 
 
 /*****************************************************************************

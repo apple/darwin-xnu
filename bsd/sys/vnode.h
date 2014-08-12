@@ -521,9 +521,10 @@ struct vnode_trigger_param {
 #define VNODE_ATTR_va_guuid		(1LL<<27)	/* 08000000 */
 #define VNODE_ATTR_va_nchildren		(1LL<<28)       /* 10000000 */
 #define VNODE_ATTR_va_dirlinkcount	(1LL<<29)       /* 20000000 */
-#define VNODE_ATTR_va_addedtime		(1LL<<30)		/* 40000000 */
-#define VNODE_ATTR_va_dataprotect_class		(1LL<<31)		/* 80000000 */
-#define VNODE_ATTR_va_dataprotect_flags		(1LL<<32)		/* 100000000 */
+#define VNODE_ATTR_va_addedtime		(1LL<<30)	/* 40000000 */
+#define VNODE_ATTR_va_dataprotect_class	(1LL<<31)	/* 80000000 */
+#define VNODE_ATTR_va_dataprotect_flags	(1LL<<32)	/* 100000000 */
+#define VNODE_ATTR_va_document_id	(1LL<<33)	/* 200000000 */
 
 #define VNODE_ATTR_BIT(n)	(VNODE_ATTR_ ## n)
 /*
@@ -563,7 +564,8 @@ struct vnode_trigger_param {
 				VNODE_ATTR_BIT(va_uuuid) |		\
 				VNODE_ATTR_BIT(va_guuid) |		\
 				VNODE_ATTR_BIT(va_dataprotect_class) |	\
-				VNODE_ATTR_BIT(va_dataprotect_flags))
+				VNODE_ATTR_BIT(va_dataprotect_flags) |	\
+				VNODE_ATTR_BIT(va_document_id))
 
 
 struct vnode_attr {
@@ -631,6 +633,7 @@ struct vnode_attr {
 	/* Data Protection fields */
 	uint32_t va_dataprotect_class;	/* class specified for this file if it didn't exist */
 	uint32_t va_dataprotect_flags;	/* flags from NP open(2) to the filesystem */
+	uint32_t va_document_id;
 };
 
 #ifdef BSD_KERNEL_PRIVATE

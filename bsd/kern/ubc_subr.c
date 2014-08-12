@@ -1744,6 +1744,9 @@ ubc_map(vnode_t vp, int flags)
 			if ( !ISSET(uip->ui_flags, UI_ISMAPPED))
 			        need_ref = 1;
 			SET(uip->ui_flags, (UI_WASMAPPED | UI_ISMAPPED));
+			if (flags & PROT_WRITE) {
+				SET(uip->ui_flags, UI_MAPPEDWRITE);
+			}
 		}
 		CLR(uip->ui_flags, UI_MAPBUSY);
 

@@ -1743,20 +1743,25 @@ uint32_t hfs_incr_gencount (struct cnode *cp) {
 	return gcount;
 }
 
-/* Getter for the gen count */
-u_int32_t hfs_get_gencount (struct cnode *cp) {
+static u_int32_t
+hfs_get_gencount_internal(const uint8_t *finderinfo, mode_t mode)
+{
 	u_int8_t *finfo = NULL;
 	u_int32_t gcount = 0;
 
 	/* overlay the FinderInfo to the correct pointer, and advance */
-	finfo = (u_int8_t*)cp->c_finderinfo;
+	finfo = (u_int8_t*)finderinfo;
 	finfo = finfo + 16;
 
 	/* 
 	 * FinderInfo is written out in big endian... make sure to convert it to host
 	 * native before we use it.
+	 *
+	 * NOTE: the write_gen_counter is stored in the same location in both the
+	 *       FndrExtendedFileInfo and FndrExtendedDirInfo structs (it's the
+	 *       last 32-bit word) so it is safe to have one code path here.
 	 */
-	if (S_ISREG(cp->c_attr.ca_mode)) {
+	if (S_ISDIR(mode) || S_ISREG(mode)) {
 		struct FndrExtendedFileInfo *extinfo = (struct FndrExtendedFileInfo *)finfo;
 		gcount = OSSwapBigToHostInt32 (extinfo->write_gen_counter);
 		
@@ -1768,12 +1773,28 @@ u_int32_t hfs_get_gencount (struct cnode *cp) {
 		if (gcount == 0) {
 			gcount++;	
 		}
-	}
-	else {
+	} else if (S_ISDIR(mode)) {
+		struct FndrExtendedDirInfo *extinfo = (struct FndrExtendedDirInfo *)((u_int8_t*)finderinfo + 16);
+		gcount = OSSwapBigToHostInt32 (extinfo->write_gen_counter);
+
+		if (gcount == 0) {
+			gcount++;	
+		}
+	} else {
 		gcount = 0;
 	}	
 
 	return gcount;
+}
+
+/* Getter for the gen count */
+u_int32_t hfs_get_gencount (struct cnode *cp) {
+	return hfs_get_gencount_internal(cp->c_finderinfo, cp->c_attr.ca_mode);
+}
+
+/* Getter for the gen count from a buffer (currently pointer to finderinfo)*/
+u_int32_t hfs_get_gencount_from_blob (const uint8_t *finfoblob, mode_t mode) {
+	return hfs_get_gencount_internal(finfoblob, mode);
 }
 
 /*

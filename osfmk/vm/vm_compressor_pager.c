@@ -192,7 +192,7 @@ void compressor_pager_slots_chunk_free(compressor_slot_t *chunk, int num_slots);
 void compressor_pager_slot_lookup(
 	compressor_pager_t	pager,
 	boolean_t		do_alloc,
-	uint32_t		offset,
+	memory_object_offset_t	offset,
 	compressor_slot_t	**slot_pp);
 
 kern_return_t
@@ -402,7 +402,11 @@ compressor_memory_object_data_request(
 	if ((offset & PAGE_MASK) != 0 || (length & PAGE_MASK) != 0)
 		panic("compressor_memory_object_data_request(): bad alignment");
 
-	assert((uint32_t) offset == offset);
+	if ((uint32_t)(offset/PAGE_SIZE) != (offset/PAGE_SIZE)) {
+		panic("%s: offset 0x%llx overflow\n",
+		      __FUNCTION__, (uint64_t) offset);
+		return KERN_FAILURE;
+	}
 
 	compressor_pager_lookup(mem_obj, pager);
 
@@ -413,7 +417,7 @@ compressor_memory_object_data_request(
 	}
 
 	/* find the compressor slot for that page */
-	compressor_pager_slot_lookup(pager, FALSE, (uint32_t) offset, &slot_p);
+	compressor_pager_slot_lookup(pager, FALSE, offset, &slot_p);
 
 	if (offset / PAGE_SIZE > pager->cpgr_num_slots) {
 		/* out of range */
@@ -503,14 +507,16 @@ compressor_memory_object_data_return(
  */
 kern_return_t
 compressor_memory_object_create(
-	vm_size_t		new_size,
+	memory_object_size_t	new_size,
 	memory_object_t		*new_mem_obj)
 {
 	compressor_pager_t	pager;
 	int			num_chunks;
 
-	if ((uint32_t) new_size != new_size) {
-		/* 32-bit overflow */
+	if ((uint32_t)(new_size/PAGE_SIZE) != (new_size/PAGE_SIZE)) {
+		/* 32-bit overflow for number of pages */
+		panic("%s: size 0x%llx overflow\n",
+		      __FUNCTION__, (uint64_t) new_size);
 		return KERN_INVALID_ARGUMENT;
 	}
 
@@ -522,7 +528,7 @@ compressor_memory_object_create(
 	compressor_pager_lock_init(pager);
 	pager->cpgr_control = MEMORY_OBJECT_CONTROL_NULL;
 	pager->cpgr_references = 1;
-	pager->cpgr_num_slots = (uint32_t) (new_size / PAGE_SIZE);
+	pager->cpgr_num_slots = (uint32_t)(new_size/PAGE_SIZE);
 
 	num_chunks = (pager->cpgr_num_slots + COMPRESSOR_SLOTS_PER_CHUNK - 1) / COMPRESSOR_SLOTS_PER_CHUNK;
 	if (num_chunks > 1) {
@@ -567,7 +573,7 @@ void
 compressor_pager_slot_lookup(
 	compressor_pager_t	pager,
 	boolean_t		do_alloc,
-	uint32_t		offset,
+	memory_object_offset_t	offset,
 	compressor_slot_t	**slot_pp)
 {
 	int			num_chunks;
@@ -577,7 +583,14 @@ compressor_pager_slot_lookup(
 	compressor_slot_t	*chunk;
 	compressor_slot_t	*t_chunk;
 
-	page_num = offset / PAGE_SIZE;
+	page_num = (uint32_t)(offset/PAGE_SIZE);
+	if (page_num != (offset/PAGE_SIZE)) {
+		/* overflow */
+		panic("%s: offset 0x%llx overflow\n",
+		      __FUNCTION__, (uint64_t) offset);
+		*slot_pp = NULL;
+		return;
+	}
 	if (page_num > pager->cpgr_num_slots) {
 		/* out of range */
 		*slot_pp = NULL;
@@ -655,9 +668,14 @@ vm_compressor_pager_put(
 
 	compressor_pager_lookup(mem_obj, pager);
 
-	assert((upl_offset_t) offset == offset);
+	if ((uint32_t)(offset/PAGE_SIZE) != (offset/PAGE_SIZE)) {
+		/* overflow */
+		panic("%s: offset 0x%llx overflow\n",
+		      __FUNCTION__, (uint64_t) offset);
+		return KERN_RESOURCE_SHORTAGE;
+	}
 
-	compressor_pager_slot_lookup(pager, TRUE, (uint32_t) offset, &slot_p);
+	compressor_pager_slot_lookup(pager, TRUE, offset, &slot_p);
 
 	if (slot_p == NULL) {
 		/* out of range ? */
@@ -694,12 +712,16 @@ vm_compressor_pager_get(
 	
 	compressor_pager_stats.data_requests++;
 
-	assert((uint32_t) offset == offset);
+	if ((uint32_t)(offset/PAGE_SIZE) != (offset/PAGE_SIZE)) {
+		panic("%s: offset 0x%llx overflow\n",
+		      __FUNCTION__, (uint64_t) offset);
+		return KERN_MEMORY_ERROR;
+	}
 
 	compressor_pager_lookup(mem_obj, pager);
 
 	/* find the compressor slot for that page */
-	compressor_pager_slot_lookup(pager, FALSE, (uint32_t) offset, &slot_p);
+	compressor_pager_slot_lookup(pager, FALSE, offset, &slot_p);
 
 	if (offset / PAGE_SIZE > pager->cpgr_num_slots) {
 		/* out of range */
@@ -739,12 +761,17 @@ vm_compressor_pager_state_clr(
 	
 	compressor_pager_stats.state_clr++;
 
-	assert((uint32_t) offset == offset);
+	if ((uint32_t)(offset/PAGE_SIZE) != (offset/PAGE_SIZE)) {
+		/* overflow */
+		panic("%s: offset 0x%llx overflow\n",
+		      __FUNCTION__, (uint64_t) offset);
+		return;
+	}
 
 	compressor_pager_lookup(mem_obj, pager);
 
 	/* find the compressor slot for that page */
-	compressor_pager_slot_lookup(pager, FALSE, (uint32_t) offset, &slot_p);
+	compressor_pager_slot_lookup(pager, FALSE, offset, &slot_p);
 
 	if (slot_p && *slot_p != 0) {
 		vm_compressor_free(slot_p);
@@ -761,12 +788,17 @@ vm_compressor_pager_state_get(
 	
 	compressor_pager_stats.state_get++;
 
-	assert((uint32_t) offset == offset);
+	if ((uint32_t)(offset/PAGE_SIZE) != (offset/PAGE_SIZE)) {
+		/* overflow */
+		panic("%s: offset 0x%llx overflow\n",
+		      __FUNCTION__, (uint64_t) offset);
+		return VM_EXTERNAL_STATE_ABSENT;
+	}
 
 	compressor_pager_lookup(mem_obj, pager);
 
 	/* find the compressor slot for that page */
-	compressor_pager_slot_lookup(pager, FALSE, (uint32_t) offset, &slot_p);
+	compressor_pager_slot_lookup(pager, FALSE, offset, &slot_p);
 
 	if (offset / PAGE_SIZE > pager->cpgr_num_slots) {
 		/* out of range */

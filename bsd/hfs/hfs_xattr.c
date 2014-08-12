@@ -241,11 +241,14 @@ static int hfs_zero_hidden_fields (struct cnode *cp, u_int8_t *finderinfo)
 	
 	if (S_ISREG(cp->c_attr.ca_mode) || S_ISLNK(cp->c_attr.ca_mode)) {
 		struct FndrExtendedFileInfo *extinfo = (struct FndrExtendedFileInfo *)finfo;
+		extinfo->document_id = 0;
 		extinfo->date_added = 0;
 		extinfo->write_gen_counter = 0;
 	} else if (S_ISDIR(cp->c_attr.ca_mode)) {
 		struct FndrExtendedDirInfo *extinfo = (struct FndrExtendedDirInfo *)finfo;
+		extinfo->document_id = 0;
 		extinfo->date_added = 0;
+		extinfo->write_gen_counter = 0;
 	} else {
 		/* Return an error */
 		return -1;
@@ -724,6 +727,7 @@ hfs_vnop_setxattr(struct vnop_setxattr_args *ap)
 		u_int16_t fdFlags;
 		u_int32_t dateadded = 0;
 		u_int32_t write_gen_counter = 0;
+		u_int32_t document_id = 0;
 
 		attrsize = sizeof(VTOC(vp)->c_finderinfo);
 
@@ -761,7 +765,13 @@ hfs_vnop_setxattr(struct vnop_setxattr_args *ap)
 		/* Grab the current date added from the cnode */
 		dateadded = hfs_get_dateadded (cp);
 		if (S_ISREG(cp->c_attr.ca_mode) || S_ISLNK(cp->c_attr.ca_mode)) {
-			write_gen_counter = hfs_get_gencount(cp);
+			struct FndrExtendedFileInfo *extinfo = (struct FndrExtendedFileInfo *)((u_int8_t*)cp->c_finderinfo + 16);
+			write_gen_counter = extinfo->write_gen_counter;
+			document_id = extinfo->document_id;
+		} else if (S_ISDIR(cp->c_attr.ca_mode)) {
+			struct FndrExtendedDirInfo *extinfo = (struct FndrExtendedDirInfo *)((u_int8_t*)cp->c_finderinfo + 16);
+			write_gen_counter = extinfo->write_gen_counter;
+			document_id = extinfo->document_id;
 		}
 
 		/* Zero out the date added field to ignore user's attempts to set it */
@@ -796,9 +806,12 @@ hfs_vnop_setxattr(struct vnop_setxattr_args *ap)
 			struct FndrExtendedFileInfo *extinfo = (struct FndrExtendedFileInfo *)finfo;
 			extinfo->date_added = OSSwapHostToBigInt32(dateadded);
 			extinfo->write_gen_counter = write_gen_counter;
+			extinfo->document_id = document_id;
 		} else if (S_ISDIR(cp->c_attr.ca_mode)) {
 			struct FndrExtendedDirInfo *extinfo = (struct FndrExtendedDirInfo *)finfo;
 			extinfo->date_added = OSSwapHostToBigInt32(dateadded);
+			extinfo->write_gen_counter = write_gen_counter;
+			extinfo->document_id = document_id;
 		}
 
 		/* Set the cnode's Finder Info. */
@@ -1372,7 +1385,7 @@ hfs_vnop_removexattr(struct vnop_removexattr_args *ap)
 		void * finderinfo_start;
 		int finderinfo_size;
 		u_int8_t finderinfo[32];
-		u_int32_t date_added, write_gen_counter;
+		u_int32_t date_added, write_gen_counter, document_id;
 		u_int8_t *finfo = NULL;
         
 		if ((result = hfs_lock(cp, HFS_EXCLUSIVE_LOCK, HFS_LOCK_DEFAULT))) {
@@ -1411,9 +1424,12 @@ hfs_vnop_removexattr(struct vnop_removexattr_args *ap)
 			struct FndrExtendedFileInfo *extinfo = (struct FndrExtendedFileInfo *)finfo;
 			date_added = extinfo->date_added;
 			write_gen_counter = extinfo->write_gen_counter;
+			document_id = extinfo->document_id;
 		} else if (S_ISDIR(cp->c_attr.ca_mode)) {
 			struct FndrExtendedDirInfo *extinfo = (struct FndrExtendedDirInfo *)finfo;
 			date_added = extinfo->date_added;
+			write_gen_counter = extinfo->write_gen_counter;
+			document_id = extinfo->document_id;
 		}
 		
 		if (vnode_islnk(vp)) {
@@ -1432,9 +1448,12 @@ hfs_vnop_removexattr(struct vnop_removexattr_args *ap)
 			struct FndrExtendedFileInfo *extinfo = (struct FndrExtendedFileInfo *)finfo;
 			extinfo->date_added = date_added;
 			extinfo->write_gen_counter = write_gen_counter;
+			extinfo->document_id = document_id;
 		} else if (S_ISDIR(cp->c_attr.ca_mode)) {
 			struct FndrExtendedDirInfo *extinfo = (struct FndrExtendedDirInfo *)finfo;
 			extinfo->date_added = date_added;
+			extinfo->write_gen_counter = write_gen_counter;
+			extinfo->document_id = document_id;
 		}
         
 		/* Updating finderInfo updates change time and modified time */

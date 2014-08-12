@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1995-2012 Apple Inc. All rights reserved.
+ * Copyright (c) 1995-2014 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -56,6 +56,17 @@
 #endif
 
 #define ATTR_TIME_SIZE	-1
+
+/*
+ * SPI.
+ */
+#define FSOPT_ATTRLIST_EXTENDED	0x00000020
+
+/* Valid only if FSOPT_ATTRLIST_EXTENDED is set */
+#define ATTR_CMN_GEN_COUNT	0x00080000 /* same as ATTR_CMN_NAMEDATTRCOUNT */
+#define ATTR_CMN_DOCUMENT_ID	0x00100000 /* same as ATTR_CMN_NAMEDATTRLIST */
+
+#define ATTR_CMN_ERROR		0x20000000
 
 /*
  * Structure describing the state of an in-progress attrlist operation.
@@ -117,7 +128,8 @@ attrlist_pack_fixed(struct _attrlist_buf *ab, void *source, ssize_t count)
  */
 static void
 attrlist_pack_variable2(struct _attrlist_buf *ab, const void *source, ssize_t count, 
-		const void *ext, ssize_t extcount) {
+			const void *ext, ssize_t extcount)
+{
 
 	/* Use ssize_t's for pointer math ease */
 	struct attrreference ar;
@@ -318,6 +330,7 @@ static struct getvolattrlist_attrtab getvolattrlist_common_tab[] = {
 	{ATTR_CMN_FILEID,	0, 				sizeof(uint64_t)},
 	{ATTR_CMN_PARENTID,	0,				sizeof(uint64_t)},
 	{ATTR_CMN_RETURNED_ATTRS, 0,				sizeof(attribute_set_t)},
+	{ATTR_CMN_ERROR,	0,				sizeof(uint32_t)},
 	{0, 0, 0}
 };
 #define ATTR_CMN_VOL_INVALID \
@@ -338,7 +351,7 @@ static struct getvolattrlist_attrtab getvolattrlist_vol_tab[] = {
 	{ATTR_VOL_DIRCOUNT,		VFSATTR_BIT(f_dircount),			sizeof(uint32_t)},
 	{ATTR_VOL_MAXOBJCOUNT,		VFSATTR_BIT(f_maxobjcount),			sizeof(uint32_t)},
 	{ATTR_VOL_MOUNTPOINT,		0,						sizeof(struct attrreference)},
-	{ATTR_VOL_NAME,			VFSATTR_BIT(f_vol_name),				sizeof(struct attrreference)},
+	{ATTR_VOL_NAME,			VFSATTR_BIT(f_vol_name),			sizeof(struct attrreference)},
 	{ATTR_VOL_MOUNTFLAGS,		0,						sizeof(uint32_t)},
 	{ATTR_VOL_MOUNTEDDEVICE,	0,						sizeof(struct attrreference)},
 	{ATTR_VOL_ENCODINGSUSED,	0,						sizeof(uint64_t)},
@@ -478,14 +491,50 @@ static struct getattrlist_attrtab getattrlist_common_tab[] = {
 	{ATTR_CMN_ACCESSMASK,	VATTR_BIT(va_mode),		sizeof(uint32_t),		KAUTH_VNODE_READ_ATTRIBUTES},
 	{ATTR_CMN_FLAGS,	VATTR_BIT(va_flags),		sizeof(uint32_t),		KAUTH_VNODE_READ_ATTRIBUTES},
 	{ATTR_CMN_USERACCESS,	0,				sizeof(uint32_t),		KAUTH_VNODE_READ_ATTRIBUTES},
-	{ATTR_CMN_EXTENDED_SECURITY, VATTR_BIT(va_acl),	sizeof(struct attrreference),		KAUTH_VNODE_READ_SECURITY},
+	{ATTR_CMN_EXTENDED_SECURITY, VATTR_BIT(va_acl),		sizeof(struct attrreference),	KAUTH_VNODE_READ_SECURITY},
 	{ATTR_CMN_UUID,		VATTR_BIT(va_uuuid),		sizeof(guid_t),			KAUTH_VNODE_READ_ATTRIBUTES},
 	{ATTR_CMN_GRPUUID,	VATTR_BIT(va_guuid),		sizeof(guid_t),			KAUTH_VNODE_READ_ATTRIBUTES},
 	{ATTR_CMN_FILEID,	VATTR_BIT(va_fileid), 		sizeof(uint64_t),		KAUTH_VNODE_READ_ATTRIBUTES},
 	{ATTR_CMN_PARENTID,	VATTR_BIT(va_parentid),		sizeof(uint64_t),		KAUTH_VNODE_READ_ATTRIBUTES},
-	{ATTR_CMN_FULLPATH, 0, 	sizeof(struct attrreference),	KAUTH_VNODE_READ_ATTRIBUTES	},
-	{ATTR_CMN_ADDEDTIME, VATTR_BIT(va_addedtime), ATTR_TIME_SIZE,	KAUTH_VNODE_READ_ATTRIBUTES}, 
+	{ATTR_CMN_FULLPATH, 	0, 				sizeof(struct attrreference),	KAUTH_VNODE_READ_ATTRIBUTES},
+	{ATTR_CMN_ADDEDTIME, 	VATTR_BIT(va_addedtime), 	ATTR_TIME_SIZE,			KAUTH_VNODE_READ_ATTRIBUTES},
 	{ATTR_CMN_RETURNED_ATTRS, 0,				sizeof(attribute_set_t),	0},
+	{ATTR_CMN_ERROR, 	0,				sizeof(uint32_t),		0},
+	{0, 0, 0, 0}
+};
+
+static struct getattrlist_attrtab getattrlist_common_tab_extended[] = {
+	{ATTR_CMN_NAME,		VATTR_BIT(va_name),		sizeof(struct attrreference),	KAUTH_VNODE_READ_ATTRIBUTES},
+	{ATTR_CMN_DEVID,	0,				sizeof(dev_t),			KAUTH_VNODE_READ_ATTRIBUTES},
+	{ATTR_CMN_FSID,		VATTR_BIT(va_fsid),		sizeof(fsid_t),			KAUTH_VNODE_READ_ATTRIBUTES},
+	{ATTR_CMN_OBJTYPE,	0,				sizeof(fsobj_type_t),		KAUTH_VNODE_READ_ATTRIBUTES},
+	{ATTR_CMN_OBJTAG,	0,				sizeof(fsobj_tag_t),		KAUTH_VNODE_READ_ATTRIBUTES},
+	{ATTR_CMN_OBJID,	VATTR_BIT(va_fileid) | VATTR_BIT(va_linkid), sizeof(fsobj_id_t), KAUTH_VNODE_READ_ATTRIBUTES},
+	{ATTR_CMN_OBJPERMANENTID, VATTR_BIT(va_fileid) | VATTR_BIT(va_linkid), sizeof(fsobj_id_t), KAUTH_VNODE_READ_ATTRIBUTES},
+	{ATTR_CMN_PAROBJID,	VATTR_BIT(va_parentid),		sizeof(fsobj_id_t),		KAUTH_VNODE_READ_ATTRIBUTES},
+	{ATTR_CMN_SCRIPT,	VATTR_BIT(va_encoding),		sizeof(text_encoding_t),	KAUTH_VNODE_READ_ATTRIBUTES},
+	{ATTR_CMN_CRTIME,	VATTR_BIT(va_create_time),	ATTR_TIME_SIZE,			KAUTH_VNODE_READ_ATTRIBUTES},
+	{ATTR_CMN_MODTIME,	VATTR_BIT(va_modify_time),	ATTR_TIME_SIZE,			KAUTH_VNODE_READ_ATTRIBUTES},
+	{ATTR_CMN_CHGTIME,	VATTR_BIT(va_change_time),	ATTR_TIME_SIZE,			KAUTH_VNODE_READ_ATTRIBUTES},
+	{ATTR_CMN_ACCTIME,	VATTR_BIT(va_access_time),	ATTR_TIME_SIZE,			KAUTH_VNODE_READ_ATTRIBUTES},
+	{ATTR_CMN_BKUPTIME,	VATTR_BIT(va_backup_time),	ATTR_TIME_SIZE,			KAUTH_VNODE_READ_ATTRIBUTES},
+	{ATTR_CMN_FNDRINFO,	0,				32,				KAUTH_VNODE_READ_ATTRIBUTES},
+	{ATTR_CMN_OWNERID,	VATTR_BIT(va_uid),		sizeof(uid_t),			KAUTH_VNODE_READ_ATTRIBUTES},
+	{ATTR_CMN_GRPID,	VATTR_BIT(va_gid),		sizeof(gid_t),			KAUTH_VNODE_READ_ATTRIBUTES},
+	{ATTR_CMN_ACCESSMASK,	VATTR_BIT(va_mode),		sizeof(uint32_t),		KAUTH_VNODE_READ_ATTRIBUTES},
+	{ATTR_CMN_FLAGS,	VATTR_BIT(va_flags),		sizeof(uint32_t),		KAUTH_VNODE_READ_ATTRIBUTES},
+	{ATTR_CMN_GEN_COUNT,	VATTR_BIT(va_gen),		sizeof(uint32_t),		KAUTH_VNODE_READ_ATTRIBUTES},
+	{ATTR_CMN_DOCUMENT_ID,	VATTR_BIT(va_document_id),	sizeof(uint32_t),		KAUTH_VNODE_READ_ATTRIBUTES},
+	{ATTR_CMN_USERACCESS,	0,				sizeof(uint32_t),		KAUTH_VNODE_READ_ATTRIBUTES},
+	{ATTR_CMN_EXTENDED_SECURITY, VATTR_BIT(va_acl),		sizeof(struct attrreference),	KAUTH_VNODE_READ_SECURITY},
+	{ATTR_CMN_UUID,		VATTR_BIT(va_uuuid),		sizeof(guid_t),			KAUTH_VNODE_READ_ATTRIBUTES},
+	{ATTR_CMN_GRPUUID,	VATTR_BIT(va_guuid),		sizeof(guid_t),			KAUTH_VNODE_READ_ATTRIBUTES},
+	{ATTR_CMN_FILEID,	VATTR_BIT(va_fileid), 		sizeof(uint64_t),		KAUTH_VNODE_READ_ATTRIBUTES},
+	{ATTR_CMN_PARENTID,	VATTR_BIT(va_parentid),		sizeof(uint64_t),		KAUTH_VNODE_READ_ATTRIBUTES},
+	{ATTR_CMN_FULLPATH, 	0, 				sizeof(struct attrreference),	KAUTH_VNODE_READ_ATTRIBUTES},
+	{ATTR_CMN_ADDEDTIME, 	VATTR_BIT(va_addedtime), 	ATTR_TIME_SIZE,			KAUTH_VNODE_READ_ATTRIBUTES}, 
+	{ATTR_CMN_RETURNED_ATTRS, 0,				sizeof(attribute_set_t),	0},
+	{ATTR_CMN_ERROR, 	0,				sizeof(uint32_t),		0},
 	{0, 0, 0, 0}
 };
 
@@ -530,7 +579,10 @@ static struct getattrlist_attrtab getattrlist_file_tab[] = {
 				 ATTR_CMN_OWNERID  | ATTR_CMN_GRPID |  \
 				 ATTR_CMN_ACCESSMASK | ATTR_CMN_FLAGS |  \
 				 ATTR_CMN_USERACCESS | ATTR_CMN_FILEID | \
-				 ATTR_CMN_PARENTID | ATTR_CMN_RETURNED_ATTRS)
+				 ATTR_CMN_PARENTID | ATTR_CMN_RETURNED_ATTRS | \
+				 ATTR_CMN_DOCUMENT_ID | ATTR_CMN_GEN_COUNT)
+
+#define VFS_DFLT_ATTR_CMN_EXT	(ATTR_CMN_EXT_GEN_COUNT | ATTR_CMN_EXT_DOCUMENT_ID)
 
 #define VFS_DFLT_ATTR_DIR	(ATTR_DIR_LINKCOUNT | ATTR_DIR_MOUNTSTATUS)
 
@@ -578,17 +630,23 @@ getattrlist_parsetab(struct getattrlist_attrtab *tab, attrgroup_t attrs, struct 
  * the data from a filesystem.
  */
 static int
-getattrlist_setupvattr(struct attrlist *alp, struct vnode_attr *vap, ssize_t *sizep, kauth_action_t *actionp, int is_64bit, int isdir)
+getattrlist_setupvattr(struct attrlist *alp, int attr_cmn_extended, struct vnode_attr *vap, ssize_t *sizep, kauth_action_t *actionp, int is_64bit, int isdir)
 {
 	int	error;
+	struct getattrlist_attrtab *cmn_tab;
 
+
+	if (attr_cmn_extended)
+		cmn_tab = getattrlist_common_tab_extended;
+	else
+		cmn_tab = getattrlist_common_tab;
 	/*
 	 * Parse the above tables.
 	 */
 	*sizep = sizeof(uint32_t);	/* length count */
 	*actionp = 0;
 	if (alp->commonattr &&
-	    (error = getattrlist_parsetab(getattrlist_common_tab, alp->commonattr, vap, sizep, actionp, is_64bit)) != 0)
+	    (error = getattrlist_parsetab(cmn_tab, alp->commonattr, vap, sizep, actionp, is_64bit)) != 0)
 		return(error);
 	if (isdir && alp->dirattr &&
 	    (error = getattrlist_parsetab(getattrlist_dir_tab, alp->dirattr, vap, sizep, actionp, is_64bit)) != 0)
@@ -984,6 +1042,11 @@ getvolattrlist(vnode_t vp, struct getattrlist_args *uap, struct attrlist *alp,
 		attrlist_pack_string(&ab, cnp, cnl);
 		ab.actual.commonattr |= ATTR_CMN_NAME;
 	}
+	if ((alp->commonattr & ATTR_CMN_ERROR) &&
+	    (!return_valid || pack_invalid)) {
+		ATTR_PACK4(ab, 0);
+		ab.actual.commonattr |= ATTR_CMN_ERROR;
+	}
 	if (alp->commonattr & ATTR_CMN_DEVID) {
 		ATTR_PACK4(ab, mnt->mnt_vfsstat.f_fsid.val[0]);
 		ab.actual.commonattr |= ATTR_CMN_DEVID;
@@ -1292,13 +1355,14 @@ getattrlist_internal(vnode_t vp, struct getattrlist_args *uap,
 	ssize_t		fixedsize, varsize;
 	const char	*cnp;
 	const char	*vname = NULL;
-	char 	*fullpathptr;
+	char 		*fullpathptr;
 	ssize_t		fullpathlen;
 	ssize_t		cnl;
 	int		proc_is64;
 	int		error;
 	int		return_valid;
 	int		pack_invalid;
+	int		attr_extended;
 	int		vtype = 0;
 	uint32_t	perms = 0;
 
@@ -1347,8 +1411,9 @@ getattrlist_internal(vnode_t vp, struct getattrlist_args *uap,
 	}
 
 	/* Check for special packing semantics */
-	return_valid = (al.commonattr & ATTR_CMN_RETURNED_ATTRS);
-	pack_invalid = (uap->options & FSOPT_PACK_INVAL_ATTRS);
+	return_valid = (al.commonattr & ATTR_CMN_RETURNED_ATTRS) ? 1 : 0;
+	pack_invalid = (uap->options & FSOPT_PACK_INVAL_ATTRS) ? 1 : 0;
+	attr_extended = (uap->options & FSOPT_ATTRLIST_EXTENDED) ? 1 : 0;
 	if (pack_invalid) {
 		/* FSOPT_PACK_INVAL_ATTRS requires ATTR_CMN_RETURNED_ATTRS */
 		if (!return_valid || al.forkattr) {
@@ -1370,7 +1435,7 @@ getattrlist_internal(vnode_t vp, struct getattrlist_args *uap,
 	/*
 	 * Set up the vnode_attr structure and authorise.
 	 */
-	if ((error = getattrlist_setupvattr(&al, &va, &fixedsize, &action, proc_is64, (vtype == VDIR))) != 0) {
+	if ((error = getattrlist_setupvattr(&al, attr_extended, &va, &fixedsize, &action, proc_is64, (vtype == VDIR))) != 0) {
 		VFS_DEBUG(ctx, vp, "ATTRLIST - ERROR: setup for request failed");
 		goto out;
 	}
@@ -1646,6 +1711,11 @@ getattrlist_internal(vnode_t vp, struct getattrlist_args *uap,
 		attrlist_pack_string(&ab, cnp, cnl);
 		ab.actual.commonattr |= ATTR_CMN_NAME;
 	}
+	if ((al.commonattr & ATTR_CMN_ERROR) &&
+	    (!return_valid || pack_invalid)) {
+		ATTR_PACK4(ab, 0);
+		ab.actual.commonattr |= ATTR_CMN_ERROR;
+	}
 	if (al.commonattr & ATTR_CMN_DEVID) {
 		ATTR_PACK4(ab, vp->v_mount->mnt_vfsstat.f_fsid.val[0]);
 		ab.actual.commonattr |= ATTR_CMN_DEVID;
@@ -1805,6 +1875,25 @@ getattrlist_internal(vnode_t vp, struct getattrlist_args *uap,
 	if (al.commonattr & ATTR_CMN_FLAGS) {
 		ATTR_PACK4(ab, va.va_flags);
 		ab.actual.commonattr |= ATTR_CMN_FLAGS;
+	}
+	if (attr_extended) {
+		if (al.commonattr & ATTR_CMN_GEN_COUNT) {
+			if (VATTR_IS_SUPPORTED(&va, va_gen)) {
+				ATTR_PACK4(ab, va.va_gen);
+				ab.actual.commonattr |= ATTR_CMN_GEN_COUNT;
+			} else if (!return_valid || pack_invalid) {
+				ATTR_PACK4(ab, 0);
+			}
+		}
+
+		if (al.commonattr & ATTR_CMN_DOCUMENT_ID) {
+			if (VATTR_IS_SUPPORTED(&va, va_document_id)) {
+				ATTR_PACK4(ab, va.va_document_id);
+				ab.actual.commonattr |= ATTR_CMN_DOCUMENT_ID;
+			} else if (!return_valid || pack_invalid) {
+				ATTR_PACK4(ab, 0);
+			}
+		}
 	}
 	/* We already obtain the user access, so just fill in the buffer here */
 	if (al.commonattr & ATTR_CMN_USERACCESS) {

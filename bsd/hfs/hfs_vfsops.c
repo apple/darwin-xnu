@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1999-2013 Apple Inc. All rights reserved.
+ * Copyright (c) 1999-2014 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -1001,10 +1001,20 @@ hfs_reload(struct mount *mountp)
 	return (0);
 }
 
-
-static uint64_t timeval_to_microseconds(struct timeval *tv)
+__unused
+static uint64_t tv_to_usecs(struct timeval *tv)
 {
 	return tv->tv_sec * 1000000ULL + tv->tv_usec;
+}
+
+// Returns TRUE if b - a >= usecs
+static boolean_t hfs_has_elapsed (const struct timeval *a, 
+                                  const struct timeval *b,
+                                  uint64_t usecs)
+{
+    struct timeval diff;
+    timersub(b, a, &diff);
+    return diff.tv_sec * 1000000ULL + diff.tv_usec >= usecs;
 }
 
 static void
@@ -1013,88 +1023,124 @@ hfs_syncer(void *arg0, void *unused)
 #pragma unused(unused)
     
     struct hfsmount *hfsmp = arg0;
-    clock_sec_t secs;
-    clock_usec_t usecs;
-    uint64_t deadline = 0;
-    uint64_t now;
-    
-    clock_get_system_microtime(&secs, &usecs);
-    now = ((uint64_t)secs * USEC_PER_SEC) + (uint64_t)usecs;
-    KERNEL_DEBUG_CONSTANT(HFSDBG_SYNCER | DBG_FUNC_START, hfsmp, now, timeval_to_microseconds(&hfsmp->hfs_mp->mnt_last_write_completed_timestamp), hfsmp->hfs_mp->mnt_pending_write_size, 0);
-    
-    /*
-     * Flush the journal if there have been no writes (or outstanding writes) for 0.1 seconds.
-     *
-     * WARNING!  last_write_completed >= last_write_issued isn't sufficient to test whether
-     * there are still outstanding writes.  We could have issued a whole bunch of writes,
-     * and then stopped issuing new writes, then one or more of those writes complete.
-     *
-     * NOTE: This routine uses clock_get_system_microtime (i.e. uptime) instead of
-     * clock_get_calendar_microtime (i.e. wall time) because mnt_last_write_completed_timestamp
-     * and mnt_last_write_issued_timestamp are also stored as system (uptime) times.
-     * Trying to compute durations from a mix of system and calendar times is meaningless
-     * since they are relative to different points in time. 
-     */
-    hfs_start_transaction(hfsmp);   // so we hold off any new writes
-    uint64_t last_write_completed = timeval_to_microseconds(&hfsmp->hfs_mp->mnt_last_write_completed_timestamp);
-    if (hfsmp->hfs_mp->mnt_pending_write_size == 0 && (now - last_write_completed) >= HFS_META_DELAY) {
-	/*
-	 * Time to flush the journal.
-	 */
-	KERNEL_DEBUG_CONSTANT(HFSDBG_SYNCER_TIMED | DBG_FUNC_START, now, last_write_completed, timeval_to_microseconds(&hfsmp->hfs_mp->mnt_last_write_issued_timestamp), hfsmp->hfs_mp->mnt_pending_write_size, 0);
-	
-	/*
-	 * We intentionally do a synchronous flush (of the journal or entire volume) here.
-	 * For journaled volumes, this means we wait until the metadata blocks are written
-	 * to both the journal and their final locations (in the B-trees, etc.).
-	 *
-	 * This tends to avoid interleaving the metadata writes with other writes (for
-	 * example, user data, or to the journal when a later transaction notices that
-	 * an earlier transaction has finished its async writes, and then updates the
-	 * journal start in the journal header).  Avoiding interleaving of writes is
-	 * very good for performance on simple flash devices like SD cards, thumb drives;
-	 * and on devices like floppies.  Since removable devices tend to be this kind of
-	 * simple device, doing a synchronous flush actually improves performance in
-	 * practice.
-	 *
-	 * NOTE: For non-journaled volumes, the call to hfs_sync will also cause dirty
-	 * user data to be written.
-	 */
-	if (hfsmp->jnl) {
-	    hfs_journal_flush(hfsmp, TRUE);
-	} else {
-	    hfs_sync(hfsmp->hfs_mp, MNT_WAIT, vfs_context_kernel());
-	}
-	
-	clock_get_system_microtime(&secs, &usecs);
-	now = ((uint64_t)secs * USEC_PER_SEC) + (uint64_t)usecs;
-	
-	KERNEL_DEBUG_CONSTANT(HFSDBG_SYNCER_TIMED | DBG_FUNC_END, now, timeval_to_microseconds(&hfsmp->hfs_mp->mnt_last_write_completed_timestamp), timeval_to_microseconds(&hfsmp->hfs_mp->mnt_last_write_issued_timestamp), hfsmp->hfs_mp->mnt_pending_write_size, 0);
-	hfs_end_transaction(hfsmp);
-	
-	//
-	// NOTE: we decrement these *after* we've done the journal_flush() since
-	// it can take a significant amount of time and so we don't want more
-	// callbacks scheduled until we've done this one.
-	//
-	OSDecrementAtomic((volatile SInt32 *)&hfsmp->hfs_sync_scheduled);
-	OSDecrementAtomic((volatile SInt32 *)&hfsmp->hfs_sync_incomplete);
-	wakeup((caddr_t)&hfsmp->hfs_sync_incomplete);
-    } else {
-	/*
-	 * Defer the journal flush by rescheduling the timer.
-	 */
-	
-	clock_interval_to_deadline(HFS_META_DELAY, NSEC_PER_USEC, &deadline);
-	thread_call_enter_delayed(hfsmp->hfs_syncer, deadline);
-	
-	// note: we intentionally return early here and do not
-	// decrement the sync_scheduled and sync_incomplete
-	// variables because we rescheduled the timer.
-	
-	hfs_end_transaction(hfsmp);
+    struct timeval   now;
+
+    microuptime(&now);
+
+    KERNEL_DEBUG_CONSTANT(HFSDBG_SYNCER | DBG_FUNC_START, hfsmp, 
+                          tv_to_usecs(&now),
+                          tv_to_usecs(&hfsmp->hfs_mp->mnt_last_write_completed_timestamp), 
+                          hfsmp->hfs_mp->mnt_pending_write_size, 0);
+
+    hfs_syncer_lock(hfsmp);
+
+    if (!hfsmp->hfs_syncer) {
+        // hfs_unmount is waiting for us leave now and let it do the sync
+        hfsmp->hfs_sync_incomplete = FALSE;
+        hfs_syncer_unlock(hfsmp);
+        hfs_syncer_wakeup(hfsmp);
+        return;
     }
-    KERNEL_DEBUG_CONSTANT(HFSDBG_SYNCER| DBG_FUNC_END, deadline ? EAGAIN : 0, deadline, 0, 0, 0);
+
+    /* Check to see whether we should flush now: either the oldest is
+       > HFS_MAX_META_DELAY or HFS_META_DELAY has elapsed since the
+       request and there are no pending writes. */
+
+    boolean_t flush_now = FALSE;
+
+    if (hfs_has_elapsed(&hfsmp->hfs_sync_req_oldest, &now, HFS_MAX_META_DELAY))
+        flush_now = TRUE;
+    else if (!hfsmp->hfs_mp->mnt_pending_write_size) {
+        /* N.B. accessing mnt_last_write_completed_timestamp is not thread safe, but
+           it won't matter for what we're using it for. */
+        if (hfs_has_elapsed(&hfsmp->hfs_mp->mnt_last_write_completed_timestamp,
+                            &now,
+                            HFS_META_DELAY)) {
+            flush_now = TRUE;
+        }
+    }
+
+    if (!flush_now) {
+        thread_call_t syncer = hfsmp->hfs_syncer;
+
+        hfs_syncer_unlock(hfsmp);
+
+        hfs_syncer_queue(syncer);
+
+        return;
+    }
+
+    timerclear(&hfsmp->hfs_sync_req_oldest);
+
+    hfs_syncer_unlock(hfsmp);
+
+    KERNEL_DEBUG_CONSTANT(HFSDBG_SYNCER_TIMED | DBG_FUNC_START, 
+                          tv_to_usecs(&now),
+                          tv_to_usecs(&hfsmp->hfs_mp->mnt_last_write_completed_timestamp),
+                          tv_to_usecs(&hfsmp->hfs_mp->mnt_last_write_issued_timestamp), 
+                          hfsmp->hfs_mp->mnt_pending_write_size, 0);
+
+    if (hfsmp->hfs_syncer_thread) {
+        printf("hfs: syncer already running!");
+		return;
+	}
+
+    hfsmp->hfs_syncer_thread = current_thread();
+
+    hfs_start_transaction(hfsmp);   // so we hold off any new writes
+
+    /*
+     * We intentionally do a synchronous flush (of the journal or entire volume) here.
+     * For journaled volumes, this means we wait until the metadata blocks are written
+     * to both the journal and their final locations (in the B-trees, etc.).
+     *
+     * This tends to avoid interleaving the metadata writes with other writes (for
+     * example, user data, or to the journal when a later transaction notices that
+     * an earlier transaction has finished its async writes, and then updates the
+     * journal start in the journal header).  Avoiding interleaving of writes is
+     * very good for performance on simple flash devices like SD cards, thumb drives;
+     * and on devices like floppies.  Since removable devices tend to be this kind of
+     * simple device, doing a synchronous flush actually improves performance in
+     * practice.
+     *
+     * NOTE: For non-journaled volumes, the call to hfs_sync will also cause dirty
+     * user data to be written.
+     */
+    if (hfsmp->jnl) {
+        hfs_journal_flush(hfsmp, TRUE);
+    } else {
+        hfs_sync(hfsmp->hfs_mp, MNT_WAIT, vfs_context_kernel());
+    }
+
+    KERNEL_DEBUG_CONSTANT(HFSDBG_SYNCER_TIMED | DBG_FUNC_END, 
+                          (microuptime(&now), tv_to_usecs(&now)),
+                          tv_to_usecs(&hfsmp->hfs_mp->mnt_last_write_completed_timestamp), 
+                          tv_to_usecs(&hfsmp->hfs_mp->mnt_last_write_issued_timestamp), 
+                          hfsmp->hfs_mp->mnt_pending_write_size, 0);
+
+    hfs_end_transaction(hfsmp);
+
+    hfsmp->hfs_syncer_thread = NULL;
+
+    hfs_syncer_lock(hfsmp);
+
+    // If hfs_unmount lets us and we missed a sync, schedule again
+    if (hfsmp->hfs_syncer && timerisset(&hfsmp->hfs_sync_req_oldest)) {
+        thread_call_t syncer = hfsmp->hfs_syncer;
+
+        hfs_syncer_unlock(hfsmp);
+
+        hfs_syncer_queue(syncer);
+    } else {
+        hfsmp->hfs_sync_incomplete = FALSE;
+        hfs_syncer_unlock(hfsmp);
+        hfs_syncer_wakeup(hfsmp);
+    }
+
+    /* BE CAREFUL WHAT YOU ADD HERE: at this point hfs_unmount is free
+       to continue and therefore hfsmp might be invalid. */
+
+    KERNEL_DEBUG_CONSTANT(HFSDBG_SYNCER | DBG_FUNC_END, 0, 0, 0, 0, 0);
 }
 
 
@@ -1904,7 +1950,6 @@ hfs_mountfs(struct vnode *devvp, struct mount *mp, struct hfs_mount_args *args,
 	if (isroot == 0) {
 		if ((hfsmp->hfs_flags & HFS_VIRTUAL_DEVICE) == 0 && 
 				IOBSDIsMediaEjectable(mp->mnt_vfsstat.f_mntfromname)) {
-			hfsmp->hfs_max_pending_io = 4096*1024;   // a reasonable value to start with.
 			hfsmp->hfs_syncer = thread_call_allocate(hfs_syncer, hfsmp);
 			if (hfsmp->hfs_syncer == NULL) {
 				printf("hfs: failed to allocate syncer thread callback for %s (%s)\n",
@@ -1997,36 +2042,34 @@ hfs_unmount(struct mount *mp, int mntflags, vfs_context_t context)
 	if (hfsmp->hfs_flags & HFS_METADATA_ZONE)
 		(void) hfs_recording_suspend(hfsmp);
 
-	/*
-	 * Cancel any pending timers for this volume.  Then wait for any timers
-	 * which have fired, but whose callbacks have not yet completed.
-	 */
+    // Tidy up the syncer
 	if (hfsmp->hfs_syncer)
 	{
-		struct timespec ts = {0, 100000000};	/* 0.1 seconds */
-		
-		/*
-		 * Cancel any timers that have been scheduled, but have not
-		 * fired yet.  NOTE: The kernel considers a timer complete as
-		 * soon as it starts your callback, so the kernel does not
-		 * keep track of the number of callbacks in progress.
-		 */
-		if (thread_call_cancel(hfsmp->hfs_syncer))
-			OSDecrementAtomic((volatile SInt32 *)&hfsmp->hfs_sync_incomplete);
-		thread_call_free(hfsmp->hfs_syncer);
-		hfsmp->hfs_syncer = NULL;
-		
-		/*
-		 * This waits for all of the callbacks that were entered before
-		 * we did thread_call_cancel above, but have not completed yet.
-		 */
-		while(hfsmp->hfs_sync_incomplete > 0)
-		{
-			msleep((caddr_t)&hfsmp->hfs_sync_incomplete, NULL, PWAIT, "hfs_unmount", &ts);
-		}
-		
-		if (hfsmp->hfs_sync_incomplete < 0)
-			panic("hfs_unmount: pm_sync_incomplete underflow!\n");
+        hfs_syncer_lock(hfsmp);
+
+        /* First, make sure everything else knows we don't want any more
+           requests queued. */
+        thread_call_t syncer = hfsmp->hfs_syncer;
+        hfsmp->hfs_syncer = NULL;
+
+        hfs_syncer_unlock(hfsmp);
+
+        // Now deal with requests that are outstanding
+        if (hfsmp->hfs_sync_incomplete) {
+            if (thread_call_cancel(syncer)) {
+                // We managed to cancel the timer so we're done
+                hfsmp->hfs_sync_incomplete = FALSE;
+            } else {
+                // Syncer must be running right now so we have to wait
+                hfs_syncer_lock(hfsmp);
+                while (hfsmp->hfs_sync_incomplete)
+                    hfs_syncer_wait(hfsmp);
+                hfs_syncer_unlock(hfsmp);
+            }
+        }
+
+        // Now we're safe to free the syncer
+		thread_call_free(syncer);
 	}
 
 	if (hfsmp->hfs_flags & HFS_SUMMARY_TABLE) {
@@ -7414,9 +7457,9 @@ hfs_getvoluuid(struct hfsmount *hfsmp, uuid_t result)
 static int
 hfs_vfs_getattr(struct mount *mp, struct vfs_attr *fsap, __unused vfs_context_t context)
 {
-#define HFS_ATTR_CMN_VALIDMASK (ATTR_CMN_VALIDMASK & ~(ATTR_CMN_NAMEDATTRCOUNT | ATTR_CMN_NAMEDATTRLIST))
+#define HFS_ATTR_CMN_VALIDMASK ATTR_CMN_VALIDMASK
 #define HFS_ATTR_FILE_VALIDMASK (ATTR_FILE_VALIDMASK & ~(ATTR_FILE_FILETYPE | ATTR_FILE_FORKCOUNT | ATTR_FILE_FORKLIST))
-#define HFS_ATTR_CMN_VOL_VALIDMASK (ATTR_CMN_VALIDMASK & ~(ATTR_CMN_NAMEDATTRCOUNT | ATTR_CMN_NAMEDATTRLIST | ATTR_CMN_ACCTIME))
+#define HFS_ATTR_CMN_VOL_VALIDMASK (ATTR_CMN_VALIDMASK & ~(ATTR_CMN_ACCTIME))
 
 	ExtendedVCB *vcb = VFSTOVCB(mp);
 	struct hfsmount *hfsmp = VFSTOHFS(mp);

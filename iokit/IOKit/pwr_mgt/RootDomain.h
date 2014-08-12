@@ -617,7 +617,7 @@ private:
     unsigned int            ignoreTellChangeDown    :1;
     unsigned int            wranglerAsleep          :1;
     unsigned int            wranglerTickled         :1;
-    unsigned int            ignoreIdleSleepTimer    :1;
+    unsigned int            _preventUserActive      :1;
     unsigned int            graphicsSuppressed      :1;
 
     unsigned int            capabilityLoss          :1;
@@ -780,6 +780,8 @@ private:
 
     bool        latchDisplayWranglerTickle( bool latch );
     void        setDisplayPowerOn( uint32_t options );
+    void        systemDidNotSleep( void );
+    void        preventTransitionToUserActive( bool prevent );
 #endif /* XNU_KERNEL_PRIVATE */
 };
 

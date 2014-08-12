@@ -501,7 +501,7 @@ int vm_toggle_entry_reuse(int, int*);
 
 extern void vm_compressor_pager_init(void);
 extern kern_return_t compressor_memory_object_create(
-	vm_size_t,
+	memory_object_size_t,
 	memory_object_t *);
 
 /* the object purger. purges the next eligible object from memory. */

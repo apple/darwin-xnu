@@ -41,8 +41,10 @@
 #define FSE_CHOWN                8
 #define FSE_XATTR_MODIFIED       9
 #define FSE_XATTR_REMOVED       10
+#define FSE_DOCID_CREATED       11
+#define FSE_DOCID_CHANGED       12
 
-#define FSE_MAX_EVENTS          11
+#define FSE_MAX_EVENTS          13
 #define FSE_ALL_EVENTS         998
 
 #define FSE_EVENTS_DROPPED     999

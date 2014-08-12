@@ -50,6 +50,8 @@
 #include <sys/cprotect.h>
 #include <sys/xattr.h>
 #include <string.h>
+#include <sys/fsevents.h>
+#include <kern/kalloc.h>
 
 #include <miscfs/specfs/specdev.h>
 #include <miscfs/fifofs/fifo.h>
@@ -131,7 +133,6 @@ int hfsspec_close(struct vnop_close_args *);
 
 /* Options for hfs_removedir and hfs_removefile */
 #define HFSRM_SKIP_RESERVE  0x01
-
 
 
 
@@ -448,6 +449,195 @@ hfs_hides_xattr(vfs_context_t ctx, struct cnode *cp, const char *name, int skipl
 }
 #endif /* HFS_COMPRESSION */
 		
+
+//
+// This function gets the doc_tombstone structure for the
+// current thread.  If the thread doesn't have one, the
+// structure is allocated.
+//
+static struct doc_tombstone *
+get_uthread_doc_tombstone(void)
+{
+	struct  uthread *ut;
+	ut = get_bsdthread_info(current_thread());
+
+	if (ut->t_tombstone == NULL) {
+		ut->t_tombstone = kalloc(sizeof(struct doc_tombstone));
+		if (ut->t_tombstone) {
+			memset(ut->t_tombstone, 0, sizeof(struct doc_tombstone));
+		}
+	}
+	
+	return ut->t_tombstone;
+}
+
+//
+// This routine clears out the current tombstone for the
+// current thread and if necessary passes the doc-id of
+// the tombstone on to the dst_cnode.
+//
+// If the doc-id transfers to dst_cnode, we also generate
+// a doc-id changed fsevent.  Unlike all the other fsevents,
+// doc-id changed events can only be generated here in HFS
+// where we have the necessary info.
+// 
+static void
+clear_tombstone_docid(struct  doc_tombstone *ut, struct hfsmount *hfsmp, struct cnode *dst_cnode)
+{
+	uint32_t old_id = ut->t_lastop_document_id;
+
+	ut->t_lastop_document_id = 0;
+	ut->t_lastop_parent = NULL;
+	ut->t_lastop_parent_vid = 0;
+	ut->t_lastop_filename[0] = '\0';
+
+	//
+	// If the lastop item is still the same and needs to be cleared,
+	// clear it.
+	//
+	if (dst_cnode && old_id && ut->t_lastop_item && vnode_vid(ut->t_lastop_item) == ut->t_lastop_item_vid) {
+		//
+		// clear the document_id from the file that used to have it.
+		// XXXdbg - we need to lock the other vnode and make sure to
+		// update it on disk.
+		//
+		struct cnode *ocp = VTOC(ut->t_lastop_item);
+		struct FndrExtendedFileInfo *ofip = (struct FndrExtendedFileInfo *)((char *)&ocp->c_attr.ca_finderinfo + 16);
+
+		// printf("clearing doc-id from ino %d\n", ocp->c_desc.cd_cnid);
+		ofip->document_id = 0;
+		ocp->c_bsdflags &= ~UF_TRACKED;
+		ocp->c_flag |= C_MODIFIED | C_FORCEUPDATE;   // mark it dirty
+		/* cat_update(hfsmp, &ocp->c_desc, &ocp->c_attr, NULL, NULL); */
+
+	}
+
+#if CONFIG_FSE
+	if (dst_cnode && old_id) {
+		struct FndrExtendedFileInfo *fip = (struct FndrExtendedFileInfo *)((char *)&dst_cnode->c_attr.ca_finderinfo + 16);
+
+		add_fsevent(FSE_DOCID_CHANGED, vfs_context_current(),
+			    FSE_ARG_DEV, hfsmp->hfs_raw_dev,
+			    FSE_ARG_INO, (ino64_t)ut->t_lastop_fileid,    // src inode #
+			    FSE_ARG_INO, (ino64_t)dst_cnode->c_fileid,    // dst inode #
+			    FSE_ARG_INT32, (uint32_t)fip->document_id,
+			    FSE_ARG_DONE);
+	}
+#endif
+	// last, clear these now that we're all done
+	ut->t_lastop_item     = NULL;
+	ut->t_lastop_fileid   = 0;
+	ut->t_lastop_item_vid = 0;
+}
+
+
+//
+// This function is used to filter out operations on temp
+// filenames.  We have to filter out operations on certain
+// temp filenames to work-around questionable application
+// behavior from apps like Autocad that perform unusual
+// sequences of file system operations for a "safe save".
+static int
+is_ignorable_temp_name(const char *nameptr, int len)
+{
+	if (len == 0) {
+		len = strlen(nameptr);
+	}
+	
+	if (   strncmp(nameptr, "atmp", 4) == 0
+	   || (len > 4 && strncmp(nameptr+len-4, ".bak", 4) == 0)
+	   || (len > 4 && strncmp(nameptr+len-4, ".tmp", 4) == 0)) {
+		return 1;
+	}
+
+	return 0;
+}
+
+//
+// Decide if we need to save a tombstone or not.  Normally we always
+// save a tombstone - but if there already is one and the name we're
+// given is an ignorable name, then we will not save a tombstone.
+// 
+static int
+should_save_docid_tombstone(struct doc_tombstone *ut, struct vnode *vp, struct componentname *cnp)
+{
+	if (cnp->cn_nameptr == NULL) {
+		return 0;
+	}
+
+	if (ut->t_lastop_document_id && ut->t_lastop_item == vp && is_ignorable_temp_name(cnp->cn_nameptr, cnp->cn_namelen)) {
+		return 0;
+	}
+
+	return 1;
+}
+
+
+//
+// This function saves a tombstone for the given vnode and name.  The
+// tombstone represents the parent directory and name where the document
+// used to live and the document-id of that file.  This info is recorded
+// in the doc_tombstone structure hanging off the uthread (which assumes
+// that all safe-save operations happen on the same thread).
+//
+// If later on the same parent/name combo comes back into existence then
+// we'll preserve the doc-id from this vnode onto the new vnode.
+//
+static void
+save_tombstone(struct hfsmount *hfsmp, struct vnode *dvp, struct vnode *vp, struct componentname *cnp, int for_unlink)
+{
+	struct cnode *cp = VTOC(vp);
+	struct  doc_tombstone *ut;
+	ut = get_uthread_doc_tombstone();
+				
+	if (for_unlink && vp->v_type == VREG && cp->c_linkcount > 1) {
+		//
+		// a regular file that is being unlinked and that is also
+		// hardlinked should not clear the UF_TRACKED state or
+		// mess with the tombstone because somewhere else in the
+		// file system the file is still alive.
+		// 
+		return;
+	}
+
+	ut->t_lastop_parent     = dvp;
+	ut->t_lastop_parent_vid = vnode_vid(dvp);
+	ut->t_lastop_fileid     = cp->c_fileid;
+	if (for_unlink) {
+		ut->t_lastop_item      = NULL;
+		ut->t_lastop_item_vid  = 0;
+	} else {
+		ut->t_lastop_item      = vp;
+		ut->t_lastop_item_vid  = vnode_vid(vp);
+	}
+		
+	strlcpy((char *)&ut->t_lastop_filename[0], cnp->cn_nameptr, sizeof(ut->t_lastop_filename));
+		
+	struct FndrExtendedFileInfo *fip = (struct FndrExtendedFileInfo *)((char *)&cp->c_attr.ca_finderinfo + 16);
+	ut->t_lastop_document_id = fip->document_id;
+
+	if (for_unlink) {
+		// clear this so it's never returned again
+		fip->document_id = 0;
+		cp->c_bsdflags &= ~UF_TRACKED;
+
+		if (ut->t_lastop_document_id) {
+			(void) cat_update(hfsmp, &cp->c_desc, &cp->c_attr, NULL, NULL);
+
+#if CONFIG_FSE
+			// this event is more of a "pending-delete" 
+			add_fsevent(FSE_DOCID_CHANGED, vfs_context_current(),
+				    FSE_ARG_DEV, hfsmp->hfs_raw_dev,
+				    FSE_ARG_INO, (ino64_t)cp->c_fileid,       // src inode #
+				    FSE_ARG_INO, (ino64_t)0,                  // dst inode #
+				    FSE_ARG_INT32, ut->t_lastop_document_id,  // document id
+				    FSE_ARG_DONE);
+#endif
+		}
+	}
+}
+
+
 /*
  * Open a file/directory.
  */
@@ -1012,7 +1202,29 @@ hfs_vnop_getattr(struct vnop_getattr_args *ap)
 	vap->va_data_size = data_size;
 	vap->va_supported |= VNODE_ATTR_va_data_size;
 #endif
-    
+
+	if (VATTR_IS_ACTIVE(vap, va_gen)) {
+		if (UBCINFOEXISTS(vp) && (vp->v_ubcinfo->ui_flags & UI_ISMAPPED)) {
+			/* While file is mmapped the generation count is invalid. 
+		 	 * However, bump the value so that the write-gen counter 
+		 	 * will be different once the file is unmapped (since,
+		 	 * when unmapped the pageouts may not yet have happened)
+		 	 */
+			if (vp->v_ubcinfo->ui_flags & UI_MAPPEDWRITE) {
+			     	hfs_incr_gencount (cp);
+			}
+			vap->va_gen = 0;
+		} else {
+			vap->va_gen = hfs_get_gencount(cp);
+		}
+			
+		VATTR_SET_SUPPORTED(vap, va_gen);
+	}
+	if (VATTR_IS_ACTIVE(vap, va_document_id)) {
+		vap->va_document_id = hfs_get_document_id(cp);
+		VATTR_SET_SUPPORTED(vap, va_document_id);
+	}
+
 	/* Mark them all at once instead of individual VATTR_SET_SUPPORTED calls. */
 	vap->va_supported |= VNODE_ATTR_va_create_time | VNODE_ATTR_va_modify_time |
 	                     VNODE_ATTR_va_change_time| VNODE_ATTR_va_backup_time |
@@ -1159,6 +1371,26 @@ hfs_vnop_setattr(ap)
 		return (EPERM);
 	}
 
+	//
+	// Check if we'll need a document_id and if so, get it before we lock the
+	// the cnode to avoid any possible deadlock with the root vnode which has
+	// to get locked to get the document id
+	//
+	u_int32_t document_id=0;
+	if (VATTR_IS_ACTIVE(vap, va_flags) && (vap->va_flags & UF_TRACKED) && !(VTOC(vp)->c_bsdflags & UF_TRACKED)) {
+		struct FndrExtendedDirInfo *fip = (struct FndrExtendedDirInfo *)((char *)&(VTOC(vp)->c_attr.ca_finderinfo) + 16);
+		//
+		// If the document_id is not set, get a new one.  It will be set
+		// on the file down below once we hold the cnode lock.
+		//
+		if (fip->document_id == 0) {
+			if (hfs_generate_document_id(hfsmp, &document_id) != 0) {
+				document_id = 0;
+			}
+		}
+	}
+
+
 	/*
 	 * File size change request.
 	 * We are guaranteed that this is not a directory, and that
@@ -1283,9 +1515,53 @@ hfs_vnop_setattr(ap)
 			decmpfs_reset_state = 1;
 		}
 #endif
+		if ((vap->va_flags & UF_TRACKED) && !(cp->c_bsdflags & UF_TRACKED)) {
+			struct FndrExtendedDirInfo *fip = (struct FndrExtendedDirInfo *)((char *)&cp->c_attr.ca_finderinfo + 16);
+
+			//
+			// we're marking this item UF_TRACKED.  if the document_id is
+			// not set, get a new one and put it on the file.
+			//
+			if (fip->document_id == 0) {
+				if (document_id != 0) {
+					// printf("SETATTR: assigning doc-id %d to %s (ino %d)\n", document_id, vp->v_name, cp->c_desc.cd_cnid);
+					fip->document_id = (uint32_t)document_id;
+#if CONFIG_FSE
+					add_fsevent(FSE_DOCID_CHANGED, ap->a_context,
+						    FSE_ARG_DEV, hfsmp->hfs_raw_dev,
+						    FSE_ARG_INO, (ino64_t)0,                // src inode #
+						    FSE_ARG_INO, (ino64_t)cp->c_fileid,     // dst inode #
+						    FSE_ARG_INT32, document_id,
+						    FSE_ARG_DONE);
+#endif
+				} else {
+					// printf("hfs: could not acquire a new document_id for %s (ino %d)\n", vp->v_name, cp->c_desc.cd_cnid);
+				}
+			}
+
+		} else if (!(vap->va_flags & UF_TRACKED) && (cp->c_bsdflags & UF_TRACKED)) {
+			//
+			// UF_TRACKED is being cleared so clear the document_id
+			//
+			struct FndrExtendedDirInfo *fip = (struct FndrExtendedDirInfo *)((char *)&cp->c_attr.ca_finderinfo + 16);
+			if (fip->document_id) {
+				// printf("SETATTR: clearing doc-id %d from %s (ino %d)\n", fip->document_id, vp->v_name, cp->c_desc.cd_cnid);
+#if CONFIG_FSE
+				add_fsevent(FSE_DOCID_CHANGED, ap->a_context,
+					    FSE_ARG_DEV, hfsmp->hfs_raw_dev,
+					    FSE_ARG_INO, (ino64_t)cp->c_fileid,          // src inode #
+					    FSE_ARG_INO, (ino64_t)0,                     // dst inode #
+					    FSE_ARG_INT32, fip->document_id,             // document id
+					    FSE_ARG_DONE);
+#endif
+				fip->document_id = 0;
+				cp->c_bsdflags &= ~UF_TRACKED;
+			}
+		}
 
 		cp->c_bsdflags = vap->va_flags;
 		cp->c_touch_chgtime = TRUE;
+
 		
 		/*
 		 * Mirror the UF_HIDDEN flag to the invisible bit of the Finder Info.
@@ -2691,6 +2967,32 @@ hfs_vnop_rmdir(ap)
 		hfs_unlockpair (dcp, cp);
 		return ENOENT;
 	}
+
+	//
+	// if the item is tracked but doesn't have a document_id, assign one and generate an fsevent for it
+	//
+	if ((cp->c_bsdflags & UF_TRACKED) && ((struct FndrExtendedDirInfo *)((char *)&cp->c_attr.ca_finderinfo + 16))->document_id == 0) {
+		uint32_t newid;
+
+		hfs_unlockpair(dcp, cp);
+
+		if (hfs_generate_document_id(VTOHFS(vp), &newid) == 0) {
+			hfs_lockpair(dcp, cp, HFS_EXCLUSIVE_LOCK);
+			((struct FndrExtendedDirInfo *)((char *)&cp->c_attr.ca_finderinfo + 16))->document_id = newid;
+#if CONFIG_FSE
+			add_fsevent(FSE_DOCID_CHANGED, vfs_context_current(),
+				    FSE_ARG_DEV,   VTOHFS(vp)->hfs_raw_dev,
+				    FSE_ARG_INO,   (ino64_t)0,             // src inode #
+				    FSE_ARG_INO,   (ino64_t)cp->c_fileid,  // dst inode #
+				    FSE_ARG_INT32, newid,
+				    FSE_ARG_DONE);
+#endif
+		} else {
+			// XXXdbg - couldn't get a new docid... what to do?  can't really fail the rm...
+			hfs_lockpair(dcp, cp, HFS_EXCLUSIVE_LOCK);
+		}
+	}
+
 	error = hfs_removedir(dvp, vp, ap->a_cnp, 0, 0);
 
 	hfs_unlockpair(dcp, cp);
@@ -2858,12 +3160,34 @@ hfs_removedir(struct vnode *dvp, struct vnode *vp, struct componentname *cnp,
 	}
 
 	error = cat_delete(hfsmp, &desc, &cp->c_attr);
-	if (error == 0) {
+
+	if (!error) {
+		//
+		// if skip_reserve == 1 then we're being called from hfs_vnop_rename() and thus
+		// we don't need to touch the document_id as it's handled by the rename code.
+		// otherwise it's a normal remove and we need to save the document id in the
+		// per thread struct and clear it from the cnode.
+		//
+		struct  doc_tombstone *ut;
+		ut = get_uthread_doc_tombstone();
+		if (!skip_reserve && (cp->c_bsdflags & UF_TRACKED) && should_save_docid_tombstone(ut, vp, cnp)) {
+		
+			if (ut->t_lastop_document_id) {
+				clear_tombstone_docid(ut, hfsmp, NULL);
+			}
+			save_tombstone(hfsmp, dvp, vp, cnp, 1);
+
+		}
+
 		/* The parent lost a child */
 		if (dcp->c_entries > 0)
 			dcp->c_entries--;
 		DEC_FOLDERCOUNT(hfsmp, dcp->c_attr);
 		dcp->c_dirchangecnt++;
+		{
+			struct FndrExtendedDirInfo *extinfo = (struct FndrExtendedDirInfo *)((u_int8_t*)dcp->c_finderinfo + 16);
+			extinfo->write_gen_counter = OSSwapHostToBigInt32(OSSwapBigToHostInt32(extinfo->write_gen_counter) + 1);
+		}
 		dcp->c_touch_chgtime = TRUE;
 		dcp->c_touch_modtime = TRUE;
 		hfs_touchtimes(hfsmp, cp);
@@ -2946,6 +3270,30 @@ relock:
 			vnode_put (rvp);
 		}	
 		return (error);
+	}
+	//
+	// if the item is tracked but doesn't have a document_id, assign one and generate an fsevent for it
+	//
+	if ((cp->c_bsdflags & UF_TRACKED) && ((struct FndrExtendedDirInfo *)((char *)&cp->c_attr.ca_finderinfo + 16))->document_id == 0) {
+		uint32_t newid;
+
+		hfs_unlockpair(dcp, cp);
+
+		if (hfs_generate_document_id(VTOHFS(vp), &newid) == 0) {
+			hfs_lockpair(dcp, cp, HFS_EXCLUSIVE_LOCK);
+			((struct FndrExtendedDirInfo *)((char *)&cp->c_attr.ca_finderinfo + 16))->document_id = newid;
+#if CONFIG_FSE
+			add_fsevent(FSE_DOCID_CHANGED, vfs_context_current(),
+				    FSE_ARG_DEV,   VTOHFS(vp)->hfs_raw_dev,
+				    FSE_ARG_INO,   (ino64_t)0,             // src inode #
+				    FSE_ARG_INO,   (ino64_t)cp->c_fileid,  // dst inode #
+				    FSE_ARG_INT32, newid,
+				    FSE_ARG_DONE);
+#endif
+		} else {
+			// XXXdbg - couldn't get a new docid... what to do?  can't really fail the rm...
+			hfs_lockpair(dcp, cp, HFS_EXCLUSIVE_LOCK);
+		}
 	}
 	
 	/*
@@ -3415,6 +3763,10 @@ hfs_removefile(struct vnode *dvp, struct vnode *vp, struct componentname *cnp,
 				DEC_FOLDERCOUNT(hfsmp, dcp->c_attr);
 			}
 			dcp->c_dirchangecnt++;
+			{
+				struct FndrExtendedDirInfo *extinfo = (struct FndrExtendedDirInfo *)((u_int8_t*)dcp->c_finderinfo + 16);
+				extinfo->write_gen_counter = OSSwapHostToBigInt32(OSSwapBigToHostInt32(extinfo->write_gen_counter) + 1);
+			}
 			dcp->c_ctime = tv.tv_sec;
 			dcp->c_mtime = tv.tv_sec;
 			(void) cat_update(hfsmp, &dcp->c_desc, &dcp->c_attr, NULL, NULL);
@@ -3496,6 +3848,10 @@ hfs_removefile(struct vnode *dvp, struct vnode *vp, struct componentname *cnp,
 			if (dcp->c_entries > 0)
 				dcp->c_entries--;
 			dcp->c_dirchangecnt++;
+			{
+				struct FndrExtendedDirInfo *extinfo = (struct FndrExtendedDirInfo *)((u_int8_t*)dcp->c_finderinfo + 16);
+				extinfo->write_gen_counter = OSSwapHostToBigInt32(OSSwapBigToHostInt32(extinfo->write_gen_counter) + 1);
+			}
 			dcp->c_ctime = tv.tv_sec;
 			dcp->c_mtime = tv.tv_sec;
 			(void) cat_update(hfsmp, &dcp->c_desc, &dcp->c_attr, NULL, NULL);
@@ -3588,6 +3944,24 @@ hfs_removefile(struct vnode *dvp, struct vnode *vp, struct componentname *cnp,
 		hfs_volupdate(hfsmp, VOL_RMFILE, (dcp->c_cnid == kHFSRootFolderID));
 		
 	}
+
+	//
+	// if skip_reserve == 1 then we're being called from hfs_vnop_rename() and thus
+	// we don't need to touch the document_id as it's handled by the rename code.
+	// otherwise it's a normal remove and we need to save the document id in the
+	// per thread struct and clear it from the cnode.
+	//
+	struct  doc_tombstone *ut;
+	ut = get_uthread_doc_tombstone();
+	if (!error && !skip_reserve && (cp->c_bsdflags & UF_TRACKED) && should_save_docid_tombstone(ut, vp, cnp)) {
+
+		if (ut->t_lastop_document_id) {
+			clear_tombstone_docid(ut, hfsmp, NULL);
+		}
+		save_tombstone(hfsmp, dvp, vp, cnp, 1);
+
+	}
+
 
 	/*
 	 * All done with this cnode's descriptor...
@@ -3717,6 +4091,7 @@ hfs_vnop_rename(ap)
 	int emit_rename = 1;
 	int emit_delete = 1;
 	int is_tracked = 0;
+	int unlocked;
 
 	orig_from_ctime = VTOC(fvp)->c_ctime;
 	if (tvp && VTOC(tvp)) {
@@ -3790,6 +4165,7 @@ retry:
 		took_trunc_lock = 1;
 	}
 
+relock:
 	error = hfs_lockfour(VTOC(fdvp), VTOC(fvp), VTOC(tdvp), tvp ? VTOC(tvp) : NULL,
 	                     HFS_EXCLUSIVE_LOCK, &error_cnode);
 	if (error) {
@@ -3834,6 +4210,75 @@ retry:
 	fcp = VTOC(fvp);
 	tdcp = VTOC(tdvp);
 	tcp = tvp ? VTOC(tvp) : NULL;
+
+	//
+	// if the item is tracked but doesn't have a document_id, assign one and generate an fsevent for it
+	//
+	unlocked = 0;
+	if ((fcp->c_bsdflags & UF_TRACKED) && ((struct FndrExtendedDirInfo *)((char *)&fcp->c_attr.ca_finderinfo + 16))->document_id == 0) {
+		uint32_t newid;
+
+		hfs_unlockfour(VTOC(fdvp), VTOC(fvp), VTOC(tdvp), tvp ? VTOC(tvp) : NULL);
+		unlocked = 1;
+
+		if (hfs_generate_document_id(hfsmp, &newid) == 0) {
+			hfs_lock(fcp, HFS_EXCLUSIVE_LOCK, HFS_LOCK_DEFAULT);
+			((struct FndrExtendedDirInfo *)((char *)&fcp->c_attr.ca_finderinfo + 16))->document_id = newid;
+#if CONFIG_FSE
+			add_fsevent(FSE_DOCID_CHANGED, vfs_context_current(),
+				    FSE_ARG_DEV,   hfsmp->hfs_raw_dev,
+				    FSE_ARG_INO,   (ino64_t)0,             // src inode #
+				    FSE_ARG_INO,   (ino64_t)fcp->c_fileid,  // dst inode #
+				    FSE_ARG_INT32, newid,
+				    FSE_ARG_DONE);
+#endif
+			hfs_unlock(fcp);
+		} else {
+			// XXXdbg - couldn't get a new docid... what to do?  can't really fail the rename...
+		}
+
+		//
+		// check if we're going to need to fix tcp as well.  if we aren't, go back relock
+		// everything.  otherwise continue on and fix up tcp as well before relocking.
+		//
+		if (tcp == NULL || !(tcp->c_bsdflags & UF_TRACKED) || ((struct FndrExtendedDirInfo *)((char *)&tcp->c_attr.ca_finderinfo + 16))->document_id != 0) {
+			goto relock;
+		}
+	}
+
+	//
+	// same thing for tcp if it's set
+	//
+	if (tcp && (tcp->c_bsdflags & UF_TRACKED) && ((struct FndrExtendedDirInfo *)((char *)&tcp->c_attr.ca_finderinfo + 16))->document_id == 0) {
+		uint32_t newid;
+
+		if (!unlocked) {
+			hfs_unlockfour(VTOC(fdvp), VTOC(fvp), VTOC(tdvp), tvp ? VTOC(tvp) : NULL);
+			unlocked = 1;
+		}
+
+		if (hfs_generate_document_id(hfsmp, &newid) == 0) {
+			hfs_lock(tcp, HFS_EXCLUSIVE_LOCK, HFS_LOCK_DEFAULT);
+			((struct FndrExtendedDirInfo *)((char *)&tcp->c_attr.ca_finderinfo + 16))->document_id = newid;
+#if CONFIG_FSE
+			add_fsevent(FSE_DOCID_CHANGED, vfs_context_current(),
+				    FSE_ARG_DEV,   hfsmp->hfs_raw_dev,
+				    FSE_ARG_INO,   (ino64_t)0,             // src inode #
+				    FSE_ARG_INO,   (ino64_t)tcp->c_fileid,  // dst inode #
+				    FSE_ARG_INT32, newid,
+				    FSE_ARG_DONE);
+#endif
+			hfs_unlock(tcp);
+		} else {
+			// XXXdbg - couldn't get a new docid... what to do?  can't really fail the rename...
+		}
+
+		// go back up and relock everything.  next time through the if statement won't be true
+		// and we'll skip over this block of code.
+		goto relock;
+	}
+
+
 
 	/* 
 	 * Acquire iocounts on the destination's resource fork vnode 
@@ -4133,6 +4578,57 @@ retry:
 	 * capable of clearing out unused blocks for an open-unlinked file or dir.
 	 */
 	if (tvp) {
+		//
+		// if the destination has a document id, we need to preserve it
+		//
+		if (fvp != tvp) {
+			uint32_t document_id;
+			struct FndrExtendedDirInfo *ffip = (struct FndrExtendedDirInfo *)((char *)&fcp->c_attr.ca_finderinfo + 16);
+			struct FndrExtendedDirInfo *tfip = (struct FndrExtendedDirInfo *)((char *)&tcp->c_attr.ca_finderinfo + 16);
+			
+			if (ffip->document_id && tfip->document_id) {
+				// both documents are tracked.  only save a tombstone from tcp and do nothing else.
+				save_tombstone(hfsmp, tdvp, tvp, tcnp, 0);
+			} else {
+				struct  doc_tombstone *ut;
+				ut = get_uthread_doc_tombstone();
+				
+				document_id = tfip->document_id;
+				tfip->document_id = 0;
+			
+				if (document_id != 0) {
+					// clear UF_TRACKED as well since tcp is now no longer tracked
+					tcp->c_bsdflags &= ~UF_TRACKED;
+					(void) cat_update(hfsmp, &tcp->c_desc, &tcp->c_attr, NULL, NULL);
+				}
+
+				if (ffip->document_id == 0 && document_id != 0) {
+					// printf("RENAME: preserving doc-id %d onto %s (from ino %d, to ino %d)\n", document_id, tcp->c_desc.cd_nameptr, tcp->c_desc.cd_cnid, fcp->c_desc.cd_cnid);
+					fcp->c_bsdflags |= UF_TRACKED;
+					ffip->document_id = document_id;
+					
+					(void) cat_update(hfsmp, &fcp->c_desc, &fcp->c_attr, NULL, NULL);
+#if CONFIG_FSE
+					add_fsevent(FSE_DOCID_CHANGED, vfs_context_current(),
+						    FSE_ARG_DEV, hfsmp->hfs_raw_dev,
+						    FSE_ARG_INO, (ino64_t)tcp->c_fileid,           // src inode #
+						    FSE_ARG_INO, (ino64_t)fcp->c_fileid,           // dst inode #
+						    FSE_ARG_INT32, (uint32_t)ffip->document_id,
+						    FSE_ARG_DONE);
+#endif
+				} else if ((fcp->c_bsdflags & UF_TRACKED) && should_save_docid_tombstone(ut, fvp, fcnp)) {
+
+					if (ut->t_lastop_document_id) {
+						clear_tombstone_docid(ut, hfsmp, NULL);
+					}
+					save_tombstone(hfsmp, fdvp, fvp, fcnp, 0);
+
+					//printf("RENAME: (dest-exists): saving tombstone doc-id %lld @ %s (ino %d)\n",
+					//       ut->t_lastop_document_id, ut->t_lastop_filename, fcp->c_desc.cd_cnid);
+				}
+			}
+		}
+
 		/*
 		 * When fvp matches tvp they could be case variants
 		 * or matching hard links.
@@ -4235,6 +4731,47 @@ retry:
 		 * as quickly as possible.
 		 */
 		vnode_recycle(tvp);
+	} else {
+		struct  doc_tombstone *ut;
+		ut = get_uthread_doc_tombstone();
+		
+		//
+		// There is nothing at the destination.  If the file being renamed is
+		// tracked, save a "tombstone" of the document_id.  If the file is
+		// not a tracked file, then see if it needs to inherit a tombstone.
+		//
+		// NOTE: we do not save a tombstone if the file being renamed begins
+		//       with "atmp" which is done to work-around AutoCad's bizarre
+		//       5-step un-safe save behavior
+		//
+		if (fcp->c_bsdflags & UF_TRACKED) {
+			if (should_save_docid_tombstone(ut, fvp, fcnp)) {
+				save_tombstone(hfsmp, fdvp, fvp, fcnp, 0);
+				
+				//printf("RENAME: (no dest): saving tombstone doc-id %lld @ %s (ino %d)\n",
+				//       ut->t_lastop_document_id, ut->t_lastop_filename, fcp->c_desc.cd_cnid);
+			} else {
+				// intentionally do nothing
+			}
+		} else if (   ut->t_lastop_document_id != 0
+			   && tdvp == ut->t_lastop_parent
+			   && vnode_vid(tdvp) == ut->t_lastop_parent_vid
+			   && strcmp((char *)ut->t_lastop_filename, (char *)tcnp->cn_nameptr) == 0) {
+
+			//printf("RENAME: %s (ino %d) inheriting doc-id %lld\n", tcnp->cn_nameptr, fcp->c_desc.cd_cnid, ut->t_lastop_document_id);
+			struct FndrExtendedFileInfo *fip = (struct FndrExtendedFileInfo *)((char *)&fcp->c_attr.ca_finderinfo + 16);
+			fcp->c_bsdflags |= UF_TRACKED;
+			fip->document_id = ut->t_lastop_document_id;
+			cat_update(hfsmp, &fcp->c_desc, &fcp->c_attr, NULL, NULL);
+			
+			clear_tombstone_docid(ut, hfsmp, fcp);    // will send the docid-changed fsevent
+
+		} else if (ut->t_lastop_document_id && should_save_docid_tombstone(ut, fvp, fcnp) && should_save_docid_tombstone(ut, tvp, tcnp)) {
+			// no match, clear the tombstone
+			//printf("RENAME: clearing the tombstone %lld @ %s\n", ut->t_lastop_document_id, ut->t_lastop_filename);
+			clear_tombstone_docid(ut, hfsmp, NULL);
+		}
+			   
 	}
 skip_rm:
 	/*
@@ -4306,6 +4843,10 @@ skip_rm:
 		}
 		tdcp->c_entries++;
 		tdcp->c_dirchangecnt++;
+		{
+			struct FndrExtendedDirInfo *extinfo = (struct FndrExtendedDirInfo *)((u_int8_t*)tdcp->c_finderinfo + 16);
+			extinfo->write_gen_counter = OSSwapHostToBigInt32(OSSwapBigToHostInt32(extinfo->write_gen_counter) + 1);
+		}
 		if (fdcp->c_entries > 0)
 			fdcp->c_entries--;
 		fdcp->c_dirchangecnt++;
@@ -4315,6 +4856,11 @@ skip_rm:
 		fdcp->c_flag |= C_FORCEUPDATE;  // XXXdbg - force it out!
 		(void) hfs_update(fdvp, 0);
 	}
+	{	
+		struct FndrExtendedDirInfo *extinfo = (struct FndrExtendedDirInfo *)((u_int8_t*)fdcp->c_finderinfo + 16);
+		extinfo->write_gen_counter = OSSwapHostToBigInt32(OSSwapBigToHostInt32(extinfo->write_gen_counter) + 1);
+	}
+		
 	tdcp->c_childhint = out_desc.cd_hint;	/* Cache directory's location */
 	tdcp->c_touch_chgtime = TRUE;
 	tdcp->c_touch_modtime = TRUE;
@@ -4586,7 +5132,7 @@ typedef union {
  *
  *  In fact, the offset used by HFS is essentially an index (26 bits)
  *  with a tag (6 bits).  The tag is for associating the next request
- *  with the current request.  This enables us to have multiple threads
+  *  with the current request.  This enables us to have multiple threads
  *  reading the directory while the directory is also being modified.
  *
  *  Each tag/index pair is tied to a unique directory hint.  The hint
@@ -5443,10 +5989,18 @@ hfs_makenode(struct vnode *dvp, struct vnode **vpp, struct componentname *cnp,
 		/* Update the parent directory */
 		dcp->c_childhint = out_desc.cd_hint;	/* Cache directory's location */
 		dcp->c_entries++;
+		{
+			struct FndrExtendedDirInfo *extinfo = (struct FndrExtendedDirInfo *)((u_int8_t*)dcp->c_finderinfo + 16);
+			extinfo->write_gen_counter = OSSwapHostToBigInt32(OSSwapBigToHostInt32(extinfo->write_gen_counter) + 1);
+		}
 		if (vnodetype == VDIR) {
 			INC_FOLDERCOUNT(hfsmp, dcp->c_attr);
 		}
 		dcp->c_dirchangecnt++;
+		{	
+			struct FndrExtendedDirInfo *extinfo = (struct FndrExtendedDirInfo *)((u_int8_t*)dcp->c_finderinfo + 16);
+			extinfo->write_gen_counter = OSSwapHostToBigInt32(OSSwapBigToHostInt32(extinfo->write_gen_counter) + 1);
+		}
 		dcp->c_ctime = tv.tv_sec;
 		dcp->c_mtime = tv.tv_sec;
 		(void) cat_update(hfsmp, &dcp->c_desc, &dcp->c_attr, NULL, NULL);
@@ -5559,6 +6113,47 @@ hfs_makenode(struct vnode *dvp, struct vnode **vpp, struct componentname *cnp,
 		goto exit;
 
 	cp = VTOC(tvp);
+
+	struct  doc_tombstone *ut;
+	ut = get_uthread_doc_tombstone();
+	if (   ut->t_lastop_document_id != 0 
+	    && ut->t_lastop_parent == dvp
+	    && ut->t_lastop_parent_vid == vnode_vid(dvp)
+	    && strcmp((char *)ut->t_lastop_filename, (char *)cp->c_desc.cd_nameptr) == 0) {
+		struct FndrExtendedDirInfo *fip = (struct FndrExtendedDirInfo *)((char *)&cp->c_attr.ca_finderinfo + 16);
+
+		//printf("CREATE: preserving doc-id %lld on %s\n", ut->t_lastop_document_id, ut->t_lastop_filename);
+		fip->document_id = (uint32_t)(ut->t_lastop_document_id & 0xffffffff);
+
+		cp->c_bsdflags |= UF_TRACKED;
+		// mark the cnode dirty
+		cp->c_flag |= C_MODIFIED | C_FORCEUPDATE;
+
+		if ((error = hfs_start_transaction(hfsmp)) == 0) {
+			lockflags = hfs_systemfile_lock(hfsmp, SFL_CATALOG, HFS_EXCLUSIVE_LOCK);
+
+			(void) cat_update(hfsmp, &cp->c_desc, &cp->c_attr, NULL, NULL);
+
+			hfs_systemfile_unlock (hfsmp, lockflags);
+			(void) hfs_end_transaction(hfsmp);
+		}
+
+		clear_tombstone_docid(ut, hfsmp, cp);       // will send the docid-changed fsevent
+	} else if (ut->t_lastop_document_id != 0) {
+		int len = cnp->cn_namelen;
+		if (len == 0) {
+			len = strlen(cnp->cn_nameptr);
+		}
+
+		if (is_ignorable_temp_name(cnp->cn_nameptr, cnp->cn_namelen)) {
+			// printf("CREATE: not clearing tombstone because %s is a temp name.\n", cnp->cn_nameptr);
+		} else {
+			// Clear the tombstone because the thread is not recreating the same path
+			// printf("CREATE: clearing tombstone because %s is NOT a temp name.\n", cnp->cn_nameptr);
+			clear_tombstone_docid(ut, hfsmp, NULL);
+		}
+	}
+
 	*vpp = tvp;
 
 #if CONFIG_PROTECT
@@ -6077,6 +6672,46 @@ hfsfifo_close(ap)
 
 
 #endif /* FIFO */
+
+/* 
+ * Getter for the document_id 
+ * the document_id is stored in FndrExtendedFileInfo/FndrExtendedDirInfo
+ */
+static u_int32_t 
+hfs_get_document_id_internal(const uint8_t *finderinfo, mode_t mode)
+{
+	u_int8_t *finfo = NULL;
+	u_int32_t doc_id = 0;
+	
+	/* overlay the FinderInfo to the correct pointer, and advance */
+	finfo = ((uint8_t *)finderinfo) + 16;
+
+	if (S_ISDIR(mode) || S_ISREG(mode)) {
+		struct FndrExtendedFileInfo *extinfo = (struct FndrExtendedFileInfo *)finfo;
+		doc_id = extinfo->document_id;
+	} else if (S_ISDIR(mode)) {
+		struct FndrExtendedDirInfo *extinfo = (struct FndrExtendedDirInfo *)((u_int8_t*)finderinfo + 16);
+		doc_id = extinfo->document_id;
+	}	
+
+	return doc_id;
+}
+
+
+/* getter(s) for document id */
+u_int32_t
+hfs_get_document_id(struct cnode *cp)
+{
+	return (hfs_get_document_id_internal((u_int8_t*)cp->c_finderinfo,
+	    cp->c_attr.ca_mode));
+}
+
+/* If you have finderinfo and mode, you can use this */
+u_int32_t
+hfs_get_document_id_from_blob(const uint8_t *finderinfo, mode_t mode)
+{
+	return (hfs_get_document_id_internal(finderinfo, mode));
+}
 
 /*
  * Synchronize a file's in-core state with that on disk.

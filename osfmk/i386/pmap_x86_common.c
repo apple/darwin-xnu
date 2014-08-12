@@ -454,7 +454,7 @@ pmap_enter_options(
 	/* 2MiB mappings are confined to x86_64 by VM */
 	boolean_t		superpage = flags & VM_MEM_SUPERPAGE;
 	vm_object_t		delpage_pm_obj = NULL;
-	int			delpage_pde_index = 0;
+	uint64_t		delpage_pde_index = 0;
 	pt_entry_t		old_pte;
 	kern_return_t		kr_expand;
 
@@ -538,7 +538,7 @@ Retry:
 		 * Remember the PDE and the PDE index, so that we
 		 * can free the page at the end of this function.
 		 */
-		delpage_pde_index = (int)pdeidx(pmap, vaddr);
+		delpage_pde_index = pdeidx(pmap, vaddr);
 		delpage_pm_obj = pmap->pm_obj;
 		*pte = 0;
 	}
@@ -906,7 +906,7 @@ Done:
 		vm_page_t m;
 
 		vm_object_lock(delpage_pm_obj);
-		m = vm_page_lookup(delpage_pm_obj, delpage_pde_index);
+		m = vm_page_lookup(delpage_pm_obj, (delpage_pde_index * PAGE_SIZE));
 		if (m == VM_PAGE_NULL)
 		    panic("pmap_enter: pte page not in object");
 		vm_object_unlock(delpage_pm_obj);

@@ -148,6 +148,7 @@ struct ubc_info {
 #define	UI_ISMAPPED	0x00000010	/* vnode is currently mapped */
 #define UI_MAPBUSY	0x00000020	/* vnode is being mapped or unmapped */
 #define UI_MAPWAITING	0x00000040	/* someone waiting for UI_MAPBUSY */
+#define UI_MAPPEDWRITE	0x00000080	/* it's mapped with PROT_WRITE */
 
 /*
  * exported primitives for loadable file systems.

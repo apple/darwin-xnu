@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2012 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2014 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -686,12 +686,15 @@ packcommonattr(
 		/* also don't expose the date_added or write_gen_counter fields */
 		if (S_ISREG(cap->ca_mode) || S_ISLNK(cap->ca_mode)) {
 			struct FndrExtendedFileInfo *extinfo = (struct FndrExtendedFileInfo *)finfo;
+			extinfo->document_id = 0;
 			extinfo->date_added = 0;
 			extinfo->write_gen_counter = 0;
 		}
 		else if (S_ISDIR(cap->ca_mode)) {
 			struct FndrExtendedDirInfo *extinfo = (struct FndrExtendedDirInfo *)finfo;
+			extinfo->document_id = 0;
 			extinfo->date_added = 0;
+			extinfo->write_gen_counter = 0;
 		}
 
 		attrbufptr = (char *)attrbufptr + sizeof(u_int8_t) * 32;
@@ -739,6 +742,7 @@ packcommonattr(
 		*((u_int32_t *)attrbufptr) = cap->ca_flags;
 		attrbufptr = ((u_int32_t *)attrbufptr) + 1;
 	}
+
 	if (ATTR_CMN_USERACCESS & attr) {
 		u_int32_t user_access;
 

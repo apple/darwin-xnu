@@ -585,10 +585,20 @@ shmctl(__unused struct proc *p, struct shmctl_args *uap, int32_t *retval)
 		}
 
 		if (IS_64BIT_PROCESS(p)) {
-			error = copyout((caddr_t)&shmseg->u, uap->buf, sizeof(struct user_shmid_ds));
+			struct user_shmid_ds shmid_ds;
+			memcpy(&shmid_ds, &shmseg->u, sizeof(struct user_shmid_ds));
+			
+			/* Clear kernel reserved pointer before copying to user space */
+			shmid_ds.shm_internal = USER_ADDR_NULL;
+			
+			error = copyout(&shmid_ds, uap->buf, sizeof(shmid_ds));
 		} else {
 			struct user32_shmid_ds shmid_ds32;
 			shmid_ds_64to32(&shmseg->u, &shmid_ds32);
+			
+			/* Clear kernel reserved pointer before copying to user space */
+			shmid_ds32.shm_internal = (user32_addr_t)0;
+			
 			error = copyout(&shmid_ds32, uap->buf, sizeof(shmid_ds32));
 		}
 		if (error) {
@@ -1071,6 +1081,7 @@ IPCS_shm_sysctl(__unused struct sysctl_oid *oidp, __unused void *arg1,
 		struct user_IPCS_command u64;
 	} ipcs;
 	struct user32_shmid_ds shmid_ds32;	/* post conversion, 32 bit version */
+	struct user_shmid_ds   shmid_ds;	/* 64 bit version */
 	void *shmid_dsp;
 	size_t ipcs_sz = sizeof(struct user_IPCS_command);
 	size_t shmid_ds_sz = sizeof(struct user_shmid_ds);
@@ -1142,7 +1153,18 @@ IPCS_shm_sysctl(__unused struct sysctl_oid *oidp, __unused void *arg1,
 		 */
 		if (!IS_64BIT_PROCESS(p)) {
 			shmid_ds_64to32(shmid_dsp, &shmid_ds32);
+			
+			/* Clear kernel reserved pointer before copying to user space */
+			shmid_ds32.shm_internal = (user32_addr_t)0;
+			
 			shmid_dsp = &shmid_ds32;
+		} else {
+			memcpy(&shmid_ds, shmid_dsp, sizeof(shmid_ds));
+
+			/* Clear kernel reserved pointer before copying to user space */
+			shmid_ds.shm_internal = USER_ADDR_NULL;
+			
+			shmid_dsp = &shmid_ds;
 		}
 		error = copyout(shmid_dsp, ipcs.u64.ipcs_data, ipcs.u64.ipcs_datalen);
 		if (!error) {

@@ -2423,6 +2423,10 @@ vm_map_enter_mem_object(
 		if ((named_entry->protection & cur_protection) !=
 		    cur_protection)
 			return KERN_INVALID_RIGHT;
+		if (offset + size < offset) {
+			/* overflow */
+			return KERN_INVALID_ARGUMENT;
+		}
 		if (named_entry->size < (offset + size))
 			return KERN_INVALID_ARGUMENT;
 

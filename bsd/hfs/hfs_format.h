@@ -225,15 +225,15 @@ struct FndrOpaqueInfo {
 typedef struct FndrOpaqueInfo FndrOpaqueInfo;
 
 struct FndrExtendedDirInfo {
-	u_int32_t point;
+	u_int32_t document_id;
 	u_int32_t date_added;
 	u_int16_t extended_flags;
 	u_int16_t reserved3;
-	u_int32_t reserved4;
+	u_int32_t write_gen_counter;
 } __attribute__((aligned(2), packed));
 
 struct FndrExtendedFileInfo {
-	u_int32_t reserved1;
+	u_int32_t document_id;
 	u_int32_t date_added;
 	u_int16_t extended_flags;
 	u_int16_t reserved2;

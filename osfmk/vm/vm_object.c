@@ -4565,9 +4565,13 @@ vm_object_compressor_pager_create(
 		
 	vm_object_unlock(object);
 
-	if ((uint32_t) object->vo_size != object->vo_size) {
-		panic("vm_object_compressor_pager_create(): object size 0x%llx >= 4GB\n",
-		      (uint64_t) object->vo_size);
+	if ((uint32_t) (object->vo_size/PAGE_SIZE) !=
+	    (object->vo_size/PAGE_SIZE)) {
+		panic("vm_object_compressor_pager_create(%p): "
+		      "object size 0x%llx >= 0x%llx\n",
+		      object,
+		      (uint64_t) object->vo_size,
+		      0x0FFFFFFFFULL*PAGE_SIZE);
 	}
 
 	/*
@@ -4581,10 +4585,16 @@ vm_object_compressor_pager_create(
 		assert(object->temporary);
 
 		/* create our new memory object */
-		assert((vm_size_t) object->vo_size == object->vo_size);
+		assert((uint32_t) (object->vo_size/PAGE_SIZE) ==
+		       (object->vo_size/PAGE_SIZE));
 		(void) compressor_memory_object_create(
-			(vm_size_t) object->vo_size,
+			(memory_object_size_t) object->vo_size,
 			&pager);
+		if (pager == NULL) {
+			panic("vm_object_compressor_pager_create(): "
+			      "no pager for object %p size 0x%llx\n",
+			      object, (uint64_t) object->vo_size);
+		}
        }
 
 	entry = vm_object_hash_entry_alloc(pager);

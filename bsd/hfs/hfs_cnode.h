@@ -344,7 +344,12 @@ extern u_int32_t hfs_get_dateadded (struct cnode *cp);
 /* Gen counter methods */
 extern void hfs_write_gencount(struct cat_attr *cattrp, uint32_t gencount);
 extern uint32_t hfs_get_gencount(struct cnode *cp);
+extern uint32_t hfs_get_gencount_from_blob (const uint8_t *finfoblob, mode_t mode);
 extern uint32_t hfs_incr_gencount (struct cnode *cp);
+
+/* Document id methods */
+extern uint32_t hfs_get_document_id(struct cnode * /* cp */);
+extern uint32_t hfs_get_document_id_from_blob(const uint8_t * /* finderinfo */, mode_t /* mode */);
 
 /* Zero-fill file and push regions out to disk */
 extern int  hfs_filedone(struct vnode *vp, vfs_context_t context);

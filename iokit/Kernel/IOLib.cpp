@@ -119,9 +119,15 @@ iopa_t gIOBMDPageAllocator;
 static queue_head_t gIOMallocContiguousEntries;
 static lck_mtx_t *  gIOMallocContiguousEntriesLock;
 
-enum { kIOMaxPageableMaps = 16 };
-enum { kIOPageableMapSize = 96 * 1024 * 1024 };
+#if __x86_64__
+enum { kIOMaxPageableMaps    = 8 };
+enum { kIOPageableMapSize    = 512 * 1024 * 1024 };
+enum { kIOPageableMaxMapSize = 512 * 1024 * 1024 };
+#else
+enum { kIOMaxPageableMaps    = 16 };
+enum { kIOPageableMapSize    = 96 * 1024 * 1024 };
 enum { kIOPageableMaxMapSize = 96 * 1024 * 1024 };
+#endif
 
 typedef struct {
     vm_map_t		map;

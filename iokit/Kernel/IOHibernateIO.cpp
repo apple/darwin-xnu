@@ -227,7 +227,7 @@ static IOReturn IOHibernateDone(IOHibernateVars * vars);
 
 enum { kXPRamAudioVolume = 8 };
 enum { kDefaultIOSize = 128 * 1024 };
-enum { kVideoMapSize  = 32 * 1024 * 1024 };
+enum { kVideoMapSize  = 80 * 1024 * 1024 };
 
 #ifndef kIOMediaPreferredBlockSizeKey
 #define kIOMediaPreferredBlockSizeKey	"Preferred Block Size"
@@ -2927,9 +2927,13 @@ hibernate_machine_init(void)
     {
         vars->videoMapSize = round_page(gIOHibernateGraphicsInfo->height 
                                         * gIOHibernateGraphicsInfo->rowBytes);
-        IOMapPages(kernel_map, 
-                    vars->videoMapping, gIOHibernateGraphicsInfo->physicalAddress,
-                    vars->videoMapSize, kIOMapInhibitCache );
+	if (vars->videoMapSize > vars->videoAllocSize) vars->videoMapSize = 0;
+	else
+	{
+	    IOMapPages(kernel_map, 
+			vars->videoMapping, gIOHibernateGraphicsInfo->physicalAddress,
+			vars->videoMapSize, kIOMapInhibitCache );
+	}
     }
 
     if (vars->videoMapSize)

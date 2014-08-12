@@ -3008,6 +3008,50 @@ hfs_virtualmetafile(struct cnode *cp)
 	return (0);
 }
 
+__private_extern__
+void hfs_syncer_lock(struct hfsmount *hfsmp)
+{
+    hfs_lock_mount(hfsmp);
+}
+
+__private_extern__ 
+void hfs_syncer_unlock(struct hfsmount *hfsmp)
+{
+    hfs_unlock_mount(hfsmp);
+}
+
+__private_extern__
+void hfs_syncer_wait(struct hfsmount *hfsmp)
+{
+    msleep(&hfsmp->hfs_sync_incomplete, &hfsmp->hfs_mutex, PWAIT, 
+           "hfs_syncer_wait", NULL);
+}
+
+__private_extern__
+void hfs_syncer_wakeup(struct hfsmount *hfsmp)
+{
+    wakeup(&hfsmp->hfs_sync_incomplete);
+}
+
+__private_extern__
+uint64_t hfs_usecs_to_deadline(uint64_t usecs)
+{
+    uint64_t deadline;
+    clock_interval_to_deadline(usecs, NSEC_PER_USEC, &deadline);
+    return deadline;
+}
+
+__private_extern__
+void hfs_syncer_queue(thread_call_t syncer)
+{
+    if (thread_call_enter_delayed_with_leeway(syncer,
+                                              NULL,
+                                              hfs_usecs_to_deadline(HFS_META_DELAY),
+                                              0,
+                                              THREAD_CALL_DELAY_SYS_BACKGROUND)) {
+        printf ("hfs: syncer already scheduled!");
+    }
+}
 
 //
 // Fire off a timed callback to sync the disk if the
@@ -3017,44 +3061,30 @@ hfs_virtualmetafile(struct cnode *cp)
 void
 hfs_sync_ejectable(struct hfsmount *hfsmp)
 {
-	if (hfsmp->hfs_syncer)	{
-		clock_sec_t secs;
-		clock_usec_t usecs;
-		uint64_t now;
+    // If we don't have a syncer or we get called by the syncer, just return
+    if (!hfsmp->hfs_syncer || current_thread() == hfsmp->hfs_syncer_thread)
+        return;
 
-		clock_get_calendar_microtime(&secs, &usecs);
-		now = ((uint64_t)secs * 1000000ULL) + (uint64_t)usecs;
+    hfs_syncer_lock(hfsmp);
 
-		if (hfsmp->hfs_sync_incomplete && hfsmp->hfs_mp->mnt_pending_write_size >= hfsmp->hfs_max_pending_io) {
-			// if we have a sync scheduled but i/o is starting to pile up,
-			// don't call thread_call_enter_delayed() again because that
-			// will defer the sync.
-			return;
-		}
+    if (!timerisset(&hfsmp->hfs_sync_req_oldest))
+        microuptime(&hfsmp->hfs_sync_req_oldest);
 
-		if (hfsmp->hfs_sync_scheduled == 0) {
-			uint64_t deadline;
+    /* If hfs_unmount is running, it will set hfs_syncer to NULL. Also we
+       don't want to queue again if there is a sync outstanding. */
+    if (!hfsmp->hfs_syncer || hfsmp->hfs_sync_incomplete) {
+        hfs_syncer_unlock(hfsmp);
+        return;
+    }
 
-			hfsmp->hfs_last_sync_request_time = now;
+    hfsmp->hfs_sync_incomplete = TRUE;
 
-			clock_interval_to_deadline(HFS_META_DELAY, NSEC_PER_USEC, &deadline);
+    thread_call_t syncer = hfsmp->hfs_syncer;
 
-			/*
-			 * Increment hfs_sync_scheduled on the assumption that we're the
-			 * first thread to schedule the timer.  If some other thread beat
-			 * us, then we'll decrement it.  If we *were* the first to
-			 * schedule the timer, then we need to keep track that the
-			 * callback is waiting to complete.
-			 */
-			OSIncrementAtomic((volatile SInt32 *)&hfsmp->hfs_sync_scheduled);
-			if (thread_call_enter_delayed(hfsmp->hfs_syncer, deadline))
-				OSDecrementAtomic((volatile SInt32 *)&hfsmp->hfs_sync_scheduled);
-			else
-				OSIncrementAtomic((volatile SInt32 *)&hfsmp->hfs_sync_incomplete);
-		}		
-	}
+    hfs_syncer_unlock(hfsmp);
+
+    hfs_syncer_queue(syncer);
 }
-
 
 int
 hfs_start_transaction(struct hfsmount *hfsmp)
@@ -3353,4 +3383,60 @@ check_for_dataless_file(struct vnode *vp, uint64_t op_type)
 	}				
 
 	return error;
+}
+
+
+//
+// NOTE: this function takes care of starting a transaction and
+//       acquiring the systemfile lock so that it can call
+//       cat_update().
+//
+// NOTE: do NOT hold and cnode locks while calling this function
+//       to avoid deadlocks (because we take a lock on the root
+//       cnode)
+//
+int
+hfs_generate_document_id(struct hfsmount *hfsmp, uint32_t *docid)
+{
+	struct vnode *rvp;
+	struct cnode *cp;
+	int error;
+	
+	error = VFS_ROOT(HFSTOVFS(hfsmp), &rvp, vfs_context_kernel());
+	if (error) {
+		return error;
+	}
+
+	cp = VTOC(rvp);
+	if ((error = hfs_lock(cp, HFS_EXCLUSIVE_LOCK, HFS_LOCK_DEFAULT)) != 0) {
+		return error;
+	}
+	struct FndrExtendedDirInfo *extinfo = (struct FndrExtendedDirInfo *)((void *)((char *)&cp->c_attr.ca_finderinfo + 16));
+	
+	int lockflags;
+	if (hfs_start_transaction(hfsmp) != 0) {
+		return error;
+	}
+	lockflags = hfs_systemfile_lock(hfsmp, SFL_CATALOG, HFS_EXCLUSIVE_LOCK);
+					
+	if (extinfo->document_id == 0) {
+		// initialize this to start at 3 (one greater than the root-dir id)
+		extinfo->document_id = 3;
+	}
+
+	*docid = extinfo->document_id++;
+
+	// mark the root cnode dirty
+	cp->c_flag |= C_MODIFIED | C_FORCEUPDATE;
+	(void) cat_update(hfsmp, &cp->c_desc, &cp->c_attr, NULL, NULL);
+
+	hfs_systemfile_unlock (hfsmp, lockflags);
+	(void) hfs_end_transaction(hfsmp);
+		
+	(void) hfs_unlock(cp);
+
+	vnode_put(rvp);
+	rvp = NULL;
+
+	return 0;
 }
