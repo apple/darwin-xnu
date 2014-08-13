@@ -148,6 +148,7 @@ struct hfs_journal_info {
 #define HFSIOC_GET_WRITE_GEN_COUNTER  _IOR('h', 30, u_int32_t)
 #define HFS_GET_WRITE_GEN_COUNTER  IOCBASECMD(HFSIOC_GET_WRITE_GEN_COUNTER)
 
+/* revisiond uses this to allocate a doc-id for files from Cab and earlier systems that are marked tracked but don't have a doc-id */
 #define HFS_DOCUMENT_ID_ALLOCATE	0x1
 
 #define HFSIOC_GET_DOCUMENT_ID  _IOR('h', 31, u_int32_t)

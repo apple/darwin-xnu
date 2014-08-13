@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2010 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2014 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -208,6 +208,7 @@ struct tcptimerlist {
 
 	/* Set desired mode when timer list running */
 	boolean_t running;		/* Set when timer list is being processed */
+	boolean_t scheduled;		/* Set when timer is scheduled */
 #define TCP_TIMERLIST_FASTMODE 0x1
 #define TCP_TIMERLIST_SLOWMODE 0x2
 	uint32_t mode;			/* Current mode, fast or slow */

@@ -339,6 +339,9 @@ kern_close_file_for_direct_io(struct kern_direct_file_io_ref_t * ref,
 			      off_t discard_offset, off_t discard_end);
 #endif /* _SYS_CONF_H_ */
 
+void
+vm_compressor_do_warmup(void);
+
 hibernate_page_list_t *
 hibernate_page_list_allocate(boolean_t log);
 

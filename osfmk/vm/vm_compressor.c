@@ -775,7 +775,8 @@ c_seg_free_locked(c_segment_t c_seg)
 	lck_mtx_unlock_always(&c_seg->c_lock);
 
 	if (c_buffer) {
-		kernel_memory_depopulate(kernel_map, (vm_offset_t) c_buffer, pages_populated * PAGE_SIZE, KMA_COMPRESSOR);
+		if (pages_populated)
+			kernel_memory_depopulate(kernel_map, (vm_offset_t) c_buffer, pages_populated * PAGE_SIZE, KMA_COMPRESSOR);
 
 		kmem_free(kernel_map, (vm_offset_t) c_buffer, C_SEG_ALLOCSIZE);
 	} else if (c_swap_handle)
@@ -1450,6 +1451,15 @@ vm_compressor_do_delayed_compactions(boolean_t flush_all)
 		c_seg = (c_segment_t)queue_first(&c_minor_list_head);
 		
 		lck_mtx_lock_spin_always(&c_seg->c_lock);
+
+                if (c_seg->c_busy) {
+
+                        lck_mtx_unlock_always(c_list_lock);
+                        c_seg_wait_on_busy(c_seg);
+                        lck_mtx_lock_spin_always(c_list_lock);
+
+                        continue;
+                }
 		c_seg->c_busy = 1;
 
 		c_seg_do_minor_compaction_and_unlock(c_seg, TRUE, FALSE, TRUE);
@@ -1604,16 +1614,17 @@ vm_compressor_record_warmup_start(void)
 
 	lck_mtx_lock_spin_always(c_list_lock);
 
-	if (!queue_empty(&c_age_list_head)) {
+	if (first_c_segment_to_warm_generation_id == 0) {
+		if (!queue_empty(&c_age_list_head)) {
 
-		c_seg = (c_segment_t)queue_last(&c_age_list_head);
+			c_seg = (c_segment_t)queue_last(&c_age_list_head);
 
-		first_c_segment_to_warm_generation_id = c_seg->c_generation_id;
-	} else
-		first_c_segment_to_warm_generation_id = 0;
+			first_c_segment_to_warm_generation_id = c_seg->c_generation_id;
+		} else
+			first_c_segment_to_warm_generation_id = 0;
 
-	fastwake_recording_in_progress = TRUE;
-
+		fastwake_recording_in_progress = TRUE;
+	}
 	lck_mtx_unlock_always(c_list_lock);
 }
 
@@ -1625,16 +1636,20 @@ vm_compressor_record_warmup_end(void)
 
 	lck_mtx_lock_spin_always(c_list_lock);
 
-	if (!queue_empty(&c_age_list_head)) {
+	if (fastwake_recording_in_progress == TRUE) {
 
-		c_seg = (c_segment_t)queue_last(&c_age_list_head);
+		if (!queue_empty(&c_age_list_head)) {
 
-		last_c_segment_to_warm_generation_id = c_seg->c_generation_id;
-	} else
-		last_c_segment_to_warm_generation_id = first_c_segment_to_warm_generation_id;
+			c_seg = (c_segment_t)queue_last(&c_age_list_head);
 
-	fastwake_recording_in_progress = FALSE;
+			last_c_segment_to_warm_generation_id = c_seg->c_generation_id;
+		} else
+			last_c_segment_to_warm_generation_id = first_c_segment_to_warm_generation_id;
 
+		fastwake_recording_in_progress = FALSE;
+
+		HIBLOG("vm_compressor_record_warmup (%qd - %qd)\n", first_c_segment_to_warm_generation_id, last_c_segment_to_warm_generation_id);
+	}
 	lck_mtx_unlock_always(c_list_lock);
 }
 
@@ -1642,19 +1657,28 @@ vm_compressor_record_warmup_end(void)
 #define DELAY_TRIM_ON_WAKE_SECS		4
 
 void
-vm_compressor_do_warmup(void)
+vm_compressor_delay_trim(void)
 {
-	clock_sec_t	sec;
+        clock_sec_t	sec;
 	clock_nsec_t	nsec;
 
 	clock_get_system_nanotime(&sec, &nsec);
 	dont_trim_until_ts = sec + DELAY_TRIM_ON_WAKE_SECS;
+}
 
-	if (first_c_segment_to_warm_generation_id == last_c_segment_to_warm_generation_id)
-		return;
 
+void
+vm_compressor_do_warmup(void)
+{
 	lck_mtx_lock_spin_always(c_list_lock);
 	
+	if (first_c_segment_to_warm_generation_id == last_c_segment_to_warm_generation_id) {
+		first_c_segment_to_warm_generation_id = last_c_segment_to_warm_generation_id = 0;
+
+		lck_mtx_unlock_always(c_list_lock);
+		return;
+	}
+
 	if (compaction_swapper_running == 0) {
 
 		fastwake_warmup = TRUE;
@@ -1670,6 +1694,13 @@ do_fastwake_warmup(void)
 {
 	uint64_t	my_thread_id;
 	c_segment_t	c_seg = NULL;
+	AbsoluteTime	startTime, endTime;
+	uint64_t	nsec;
+
+
+	HIBLOG("vm_compressor_fastwake_warmup (%qd - %qd) - starting\n", first_c_segment_to_warm_generation_id, last_c_segment_to_warm_generation_id);
+
+	clock_get_uptime(&startTime);
 
 	lck_mtx_unlock_always(c_list_lock);
 
@@ -1692,15 +1723,19 @@ do_fastwake_warmup(void)
 		lck_mtx_lock_spin_always(&c_seg->c_lock);
 		lck_mtx_unlock_always(c_list_lock);
 		
-		if (c_seg->c_busy)
+		if (c_seg->c_busy) {
+			PAGE_REPLACEMENT_DISALLOWED(FALSE);
 			c_seg_wait_on_busy(c_seg);
-		else {
+			PAGE_REPLACEMENT_DISALLOWED(TRUE);
+		} else {
 			c_seg_swapin(c_seg, TRUE);
 
 			lck_mtx_unlock_always(&c_seg->c_lock);
-
 			c_segment_warmup_count++;
+
+			PAGE_REPLACEMENT_DISALLOWED(FALSE);
 			vm_pageout_io_throttle();
+			PAGE_REPLACEMENT_DISALLOWED(TRUE);
 		}
 		lck_mtx_lock_spin_always(c_list_lock);
 	}
@@ -1711,7 +1746,15 @@ do_fastwake_warmup(void)
 	proc_set_task_policy_thread(kernel_task, my_thread_id,
 				    TASK_POLICY_INTERNAL, TASK_POLICY_IO, THROTTLE_LEVEL_COMPRESSOR_TIER0);
 
+        clock_get_uptime(&endTime);
+        SUB_ABSOLUTETIME(&endTime, &startTime);
+        absolutetime_to_nanoseconds(endTime, &nsec);
+
+	HIBLOG("vm_compressor_fastwake_warmup completed - took %qd msecs\n", nsec / 1000000ULL);
+
 	lck_mtx_lock_spin_always(c_list_lock);
+
+	first_c_segment_to_warm_generation_id = last_c_segment_to_warm_generation_id = 0;
 }
 
 
@@ -1734,6 +1777,18 @@ vm_compressor_compact_and_swap(boolean_t flush_all)
 
 		fastwake_warmup = FALSE;
 	}
+
+	/*
+	 * it's possible for the c_age_list_head to be empty if we
+	 * hit our limits for growing the compressor pool and we subsequently
+	 * hibernated... on the next hibernation we could see the queue as
+	 * empty and not proceeed even though we have a bunch of segments on
+	 * the swapped in queue that need to be dealt with.
+	 */
+	vm_compressor_do_delayed_compactions(flush_all);
+
+	vm_compressor_age_swapped_in_segments(flush_all);
+
 
 	while (!queue_empty(&c_age_list_head) && compaction_swapper_abort == 0) {
 
@@ -2485,13 +2540,28 @@ c_seg_invalid_data:
 	}
 	if (!c_seg->c_filling) {
 		if (c_seg->c_bytes_used == 0) {
-			if (c_seg->c_on_minorcompact_q || c_seg->c_on_swappedout_sparse_q) {
-				if (c_seg_try_free(c_seg) == TRUE)
-					need_unlock = FALSE;
-			} else {
-				c_seg_free(c_seg);
-				need_unlock = FALSE;
-			}
+			if (!c_seg->c_ondisk) {
+				int	pages_populated;
+
+				pages_populated = (round_page_32(C_SEG_OFFSET_TO_BYTES(c_seg->c_populated_offset))) / PAGE_SIZE;
+				c_seg->c_populated_offset = C_SEG_BYTES_TO_OFFSET(0);
+
+				if (pages_populated) {
+					assert(c_seg->c_store.c_buffer != NULL);
+
+					c_seg->c_busy = 1;
+					lck_mtx_unlock_always(&c_seg->c_lock);
+
+					kernel_memory_depopulate(kernel_map, (vm_offset_t) c_seg->c_store.c_buffer, pages_populated * PAGE_SIZE, KMA_COMPRESSOR);
+
+					lck_mtx_lock_spin_always(&c_seg->c_lock);
+					C_SEG_WAKEUP_DONE(c_seg);
+				}
+				if (!c_seg->c_on_minorcompact_q && !c_seg->c_on_swapout_q)
+					c_seg_need_delayed_compaction(c_seg);
+			} else
+				assert(c_seg->c_on_swappedout_sparse_q);
+
 		} else if (c_seg->c_on_minorcompact_q) {
 
 			if (C_SEG_INCORE_IS_SPARSE(c_seg)) {

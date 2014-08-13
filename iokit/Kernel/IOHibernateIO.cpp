@@ -1262,11 +1262,13 @@ IOHibernateSystemSleep(void)
 	    bzero(&consoleInfo, sizeof(consoleInfo));
 	    IOService::getPlatform()->getConsoleInfo(&consoleInfo);
 
-	    // estimate: 5% increase in pages compressed
+	    // estimate: 6% increase in pages compressed
 	    // screen preview 2 images compressed 50%
-	    setFileSize = ((ptoa_64((105 * pageCount) / 100) * gIOHibernateCompression) >> 8)
+	    setFileSize = ((ptoa_64((106 * pageCount) / 100) * gIOHibernateCompression) >> 8)
 				+ vars->page_list->list_size
-	 			+ (consoleInfo.v_width * consoleInfo.v_height * 4);
+	 			+ (consoleInfo.v_width * consoleInfo.v_height * 8);
+	    enum { setFileRound = 1024*1024ULL };
+	    setFileSize = ((setFileSize + setFileRound) & ~(setFileRound - 1));
 
 	    HIBLOG("hibernate_page_list_setall preflight pageCount %d est comp %qd setfile %qd min %qd\n", 
 		    pageCount, (100ULL * gIOHibernateCompression) >> 8,
@@ -1284,6 +1286,7 @@ IOHibernateSystemSleep(void)
         err = IOPolledFileOpen(gIOHibernateFilename, setFileSize, vars->ioBuffer,
                                 &vars->fileVars, &vars->fileExtents, &data, 
                                 &vars->volumeCryptKey[0]);
+
         if (KERN_SUCCESS != err)
         {
 	    HIBLOG("IOPolledFileOpen(%x)\n", err);
@@ -2658,7 +2661,14 @@ hibernate_write_image(void)
             }
         }
         if (kIOReturnSuccess != err)
+        {
+            if (kIOReturnOverrun == err)
+            {
+		// update actual compression ratio on not enough space
+                gIOHibernateCompression = (compressedSize << 8) / uncompressedSize;
+            }
             break;
+        }
 
         // Header:
     
@@ -3113,6 +3123,12 @@ void IOHibernateSetWakeCapabilities(uint32_t capability)
     if (kIOHibernateStateWakingFromHibernate == gIOHibernateState)
     {
 	gIOHibernateStats->wakeCapability = capability;
+
+	if (kIOPMSystemCapabilityGraphics & capability)
+	{
+		vm_compressor_do_warmup();
+	}
+
     }
 }
 

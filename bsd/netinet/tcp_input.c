@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2013 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2014 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -3367,6 +3367,19 @@ trimthenstep6:
 		 */ 
 		if (SEQ_LEQ(th->th_ack, tp->snd_una)) {
 			if (tlen == 0 && tiwin == tp->snd_wnd) {
+				/*
+				 * If both ends send FIN at the same time,
+				 * then the ack will be a duplicate ack
+				 * but we have to process the FIN. Check
+				 * for this condition and process the FIN
+				 * instead of the dupack
+				 */ 
+				if ((thflags & TH_FIN) &&
+					(tp->t_flags & TF_SENTFIN) &&
+					!TCPS_HAVERCVDFIN(tp->t_state) &&
+					(th->th_ack + 1) == tp->snd_max) {
+					break;
+				}
 process_dupack:
 #if MPTCP
 				/*

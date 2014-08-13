@@ -1285,6 +1285,7 @@ kqueue_body(struct proc *p, fp_allocfn_t fp_zalloc, void *cra, int32_t *retval)
 	fp->f_data = kq;
 
 	proc_fdlock(p);
+	*fdflags(p, fd) |= UF_EXCLOSE;
 	procfdtbl_releasefd(p, fd, NULL);
 	fp_drop(p, fd, fp, 1);
 	proc_fdunlock(p);

@@ -4809,6 +4809,7 @@ struct hibernate_statistics {
 	int cd_found_laundry;
 	int cd_found_dirty;
 	int cd_found_xpmapped;
+	int cd_skipped_xpmapped;
 	int cd_local_free;
 	int cd_total_free;
 	int cd_vm_page_wire_count;
@@ -4818,6 +4819,13 @@ struct hibernate_statistics {
 	int cd_count_wire;
 } hibernate_stats;
 
+
+/*
+ * clamp the number of 'xpmapped' pages we'll sweep into the hibernation image
+ * so that we don't overrun the estimated image size, which would
+ * result in a hibernation failure.
+ */
+#define	HIBERNATE_XPMAPPED_LIMIT	40000
 
 
 static int
@@ -5360,10 +5368,15 @@ hibernate_consider_discard(vm_page_t m, boolean_t preflight)
         if (discard == FALSE) {
 		if (!preflight)
 			hibernate_stats.cd_found_dirty++;
-        } else if (m->xpmapped && m->reference) {
-                if (!preflight)
-                        hibernate_stats.cd_found_xpmapped++;
-                discard = FALSE;
+        } else if (m->xpmapped && m->reference && !object->internal) {
+		if (hibernate_stats.cd_found_xpmapped < HIBERNATE_XPMAPPED_LIMIT) {
+			if (!preflight)
+				hibernate_stats.cd_found_xpmapped++;
+			discard = FALSE;
+		} else {
+			if (!preflight)
+				hibernate_stats.cd_skipped_xpmapped++;
+		}
         }
     }
     while (FALSE);
@@ -5650,29 +5663,6 @@ hibernate_page_list_setall(hibernate_page_list_t * page_list,
 	m = next;
     }
 
-    m = (vm_page_t) queue_first(&vm_page_queue_inactive);
-    while (m && !queue_end(&vm_page_queue_inactive, (queue_entry_t)m))
-    {
-        next = (vm_page_t) m->pageq.next;
-	discard = FALSE;
-        if ((kIOHibernateModeDiscardCleanInactive & gIOHibernateMode) 
-         && hibernate_consider_discard(m, preflight))
-        {
-            if (!preflight) hibernate_page_bitset(page_list, TRUE, m->phys_page);
-	    if (m->dirty)
-		count_discard_purgeable++;
-	    else
-		count_discard_inactive++;
-            discard = discard_all;
-        }
-        else
-            count_inactive++;
-	count_wire--;
-	if (!preflight) hibernate_page_bitset(page_list_wired, TRUE, m->phys_page);
-        if (discard)    hibernate_discard_page(m);
-	m = next;
-    }
-
     m = (vm_page_t) queue_first(&vm_page_queue_cleaned);
     while (m && !queue_end(&vm_page_queue_cleaned, (queue_entry_t)m))
     {
@@ -5690,6 +5680,52 @@ hibernate_page_list_setall(hibernate_page_list_t * page_list,
         }
         else
             count_cleaned++;
+	count_wire--;
+	if (!preflight) hibernate_page_bitset(page_list_wired, TRUE, m->phys_page);
+        if (discard)    hibernate_discard_page(m);
+	m = next;
+    }
+
+    m = (vm_page_t) queue_first(&vm_page_queue_active);
+    while (m && !queue_end(&vm_page_queue_active, (queue_entry_t)m))
+    {
+        next = (vm_page_t) m->pageq.next;
+	discard = FALSE;
+        if ((kIOHibernateModeDiscardCleanActive & gIOHibernateMode) 
+         && hibernate_consider_discard(m, preflight))
+        {
+            if (!preflight) hibernate_page_bitset(page_list, TRUE, m->phys_page);
+	    if (m->dirty)
+		count_discard_purgeable++;
+	    else
+		count_discard_active++;
+            discard = discard_all;
+        }
+        else
+            count_active++;
+	count_wire--;
+	if (!preflight) hibernate_page_bitset(page_list_wired, TRUE, m->phys_page);
+        if (discard)    hibernate_discard_page(m);
+	m = next;
+    }
+
+    m = (vm_page_t) queue_first(&vm_page_queue_inactive);
+    while (m && !queue_end(&vm_page_queue_inactive, (queue_entry_t)m))
+    {
+        next = (vm_page_t) m->pageq.next;
+	discard = FALSE;
+        if ((kIOHibernateModeDiscardCleanInactive & gIOHibernateMode) 
+         && hibernate_consider_discard(m, preflight))
+        {
+            if (!preflight) hibernate_page_bitset(page_list, TRUE, m->phys_page);
+	    if (m->dirty)
+		count_discard_purgeable++;
+	    else
+		count_discard_inactive++;
+            discard = discard_all;
+        }
+        else
+            count_inactive++;
 	count_wire--;
 	if (!preflight) hibernate_page_bitset(page_list_wired, TRUE, m->phys_page);
         if (discard)    hibernate_discard_page(m);
@@ -5717,29 +5753,6 @@ hibernate_page_list_setall(hibernate_page_list_t * page_list,
 	    if (discard)    hibernate_discard_page(m);
 	    m = next;
 	}
-    }
-
-    m = (vm_page_t) queue_first(&vm_page_queue_active);
-    while (m && !queue_end(&vm_page_queue_active, (queue_entry_t)m))
-    {
-        next = (vm_page_t) m->pageq.next;
-	discard = FALSE;
-        if ((kIOHibernateModeDiscardCleanActive & gIOHibernateMode) 
-         && hibernate_consider_discard(m, preflight))
-        {
-            if (!preflight) hibernate_page_bitset(page_list, TRUE, m->phys_page);
-	    if (m->dirty)
-		count_discard_purgeable++;
-	    else
-		count_discard_active++;
-            discard = discard_all;
-        }
-        else
-            count_active++;
-	count_wire--;
-	if (!preflight) hibernate_page_bitset(page_list_wired, TRUE, m->phys_page);
-        if (discard)    hibernate_discard_page(m);
-	m = next;
     }
 
     queue_iterate(&compressor_object->memq, m, vm_page_t, listq)
@@ -5794,6 +5807,9 @@ hibernate_page_list_setall(hibernate_page_list_t * page_list,
 	   pages, count_wire, count_active, count_inactive, count_cleaned, count_speculative, count_anonymous, count_throttled, count_compressor, hibernate_stats.cd_found_xpmapped,
 	        discard_all ? "did" : "could",
 	        count_discard_active, count_discard_inactive, count_discard_purgeable, count_discard_speculative, count_discard_cleaned);
+
+    if (hibernate_stats.cd_skipped_xpmapped)
+	    HIBLOG("WARNING: hibernate_page_list_setall skipped %d xpmapped pages\n", hibernate_stats.cd_skipped_xpmapped);
 
     *pagesOut = pages - count_discard_active - count_discard_inactive - count_discard_purgeable - count_discard_speculative - count_discard_cleaned;
 

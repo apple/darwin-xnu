@@ -720,10 +720,9 @@ vm_swapout_thread(void)
 		assert(c_seg->c_on_swapout_q);
 
 		if (c_seg->c_busy) {
-			lck_mtx_unlock_always(&c_seg->c_lock);
 			lck_mtx_unlock_always(c_list_lock);
 
-			mutex_pause(2);
+			c_seg_wait_on_busy(c_seg);
 
 			lck_mtx_lock_spin_always(c_list_lock);
 
@@ -733,19 +732,23 @@ vm_swapout_thread(void)
 		c_seg->c_on_swapout_q = 0;
 		c_swapout_count--;
 
-		c_seg->c_busy = 1;
-		c_seg->c_busy_swapping = 1;
-
 		vm_swapout_thread_processed_segments++;
 
 		thread_wakeup((event_t)&compaction_swapper_running);
+
+		size = round_page_32(C_SEG_OFFSET_TO_BYTES(c_seg->c_populated_offset));
+		
+		if (size == 0) {
+			c_seg_free_locked(c_seg);
+			goto c_seg_was_freed;
+		}
+		c_seg->c_busy = 1;
+		c_seg->c_busy_swapping = 1;
 
 		lck_mtx_unlock_always(c_list_lock);
 
 		addr = (vm_offset_t) c_seg->c_store.c_buffer;
 
-		size = round_page_32(C_SEG_OFFSET_TO_BYTES(c_seg->c_populated_offset));
-		
 		lck_mtx_unlock_always(&c_seg->c_lock);
 
 #if CHECKSUM_THE_SWAP	
@@ -820,7 +823,7 @@ vm_swapout_thread(void)
 			kmem_free(kernel_map, (vm_offset_t) addr, C_SEG_ALLOCSIZE);
 
 		vm_pageout_io_throttle();
-
+c_seg_was_freed:
 		if (c_swapout_count == 0)
 			vm_swap_consider_defragmenting();
 

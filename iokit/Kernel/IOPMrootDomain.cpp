@@ -6880,6 +6880,9 @@ void IOPMrootDomain::willEnterFullWake( void )
             (kFullWakeReasonLocalUser == fullWakeReason) ?
                 kOSBooleanTrue : kOSBooleanFalse);
     }
+#if HIBERNATION
+    IOHibernateSetWakeCapabilities(_pendingCapability);
+#endif
 
     IOService::setAdvisoryTickleEnable( true );
     tellClients(kIOMessageSystemWillPowerOn);
