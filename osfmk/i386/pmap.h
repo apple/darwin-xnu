@@ -375,14 +375,13 @@ static	inline void * PHYSMAP_PTOV_check(void *paddr) {
 /*
  * For KASLR, we alias the master processor's IDT and GDT at fixed
  * virtual addresses to defeat SIDT/SGDT address leakage.
+ * And non-boot processor's GDT aliases likewise (skipping LOWGLOBAL_ALIAS)
+ * The low global vector page is mapped at a fixed alias also.
  */
 #define MASTER_IDT_ALIAS	(VM_MIN_KERNEL_ADDRESS + 0x0000)
 #define MASTER_GDT_ALIAS	(VM_MIN_KERNEL_ADDRESS + 0x1000)
-
-/*
- * The low global vector page is mapped at a fixed alias also.
- */
 #define LOWGLOBAL_ALIAS		(VM_MIN_KERNEL_ADDRESS + 0x2000)
+#define CPU_GDT_ALIAS(_cpu)	(LOWGLOBAL_ALIAS + (0x1000*(_cpu)))
 
 #endif /*__x86_64__ */
 

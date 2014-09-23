@@ -72,7 +72,7 @@
 #include <i386/misc_protos.h>
 #include <i386/mp.h>
 #include <i386/pmap.h>
-#if defined(__i386__)
+#if defined(__i386__) || defined(__x86_64__)
 #include <i386/pmap_internal.h>
 #endif /* i386 */
 #if CONFIG_MCA
@@ -389,6 +389,26 @@ fix_desc64(void *descp, int count)
 	}
 }
 
+static void
+cpu_gdt_alias(vm_map_offset_t gdt, vm_map_offset_t alias)
+{
+	pt_entry_t *pte = NULL;
+
+	/* Require page alignment */
+	assert(page_aligned(gdt));
+	assert(page_aligned(alias));
+
+	pte = pmap_pte(kernel_pmap, alias);
+	pmap_store_pte(pte, kvtophys(gdt) | INTEL_PTE_REF
+					  | INTEL_PTE_MOD
+					  | INTEL_PTE_WIRED
+					  | INTEL_PTE_VALID
+					  | INTEL_PTE_WRITE
+					  | INTEL_PTE_NX);
+
+	/* TLB flush unneccessry because target processor isn't running yet */
+}
+
 
 void
 cpu_desc_init64(cpu_data_t *cdp)
@@ -430,18 +450,24 @@ cpu_desc_init64(cpu_data_t *cdp)
 		master_ktss64.ist1 = (uintptr_t) low_eintstack
 					- sizeof(x86_64_intr_stack_frame_t);
 
-	} else {
+	} else if (cdi->cdi_ktss == NULL) {	/* Skipping re-init on wake */
 		cpu_desc_table64_t	*cdt = (cpu_desc_table64_t *) cdp->cpu_desc_tablep;
+
 		/*
 		 * Per-cpu GDT, IDT, KTSS descriptors are allocated in kernel 
 		 * heap (cpu_desc_table). 
 		 * LDT descriptors are mapped into a separate area.
+		 * GDT descriptors are addressed by alias to avoid sgdt leaks to user-space.
 		 */
 		cdi->cdi_idt.ptr  = (void *)MASTER_IDT_ALIAS;
-		cdi->cdi_gdt.ptr  = (struct fake_descriptor *)cdt->gdt;
+		cdi->cdi_gdt.ptr  = (void *)CPU_GDT_ALIAS(cdp->cpu_number);
 		cdi->cdi_ktss = (void *)&cdt->ktss;
 		cdi->cdi_sstk = (vm_offset_t)&cdt->sstk.top;
 		cdi->cdi_ldt  = cdp->cpu_ldtp;
+
+		/* Make the virtual alias address for the GDT */
+		cpu_gdt_alias((vm_map_offset_t) &cdt->gdt,
+			      (vm_map_offset_t) cdi->cdi_gdt.ptr);
 
 		/*
 		 * Copy the tables
@@ -487,6 +513,17 @@ cpu_desc_load64(cpu_data_t *cdp)
 {
 	cpu_desc_index_t	*cdi = &cdp->cpu_desc_index;
 
+	/* Stuff the kernel per-cpu data area address into the MSRs */
+	wrmsr64(MSR_IA32_GS_BASE, (uintptr_t) cdp);
+	wrmsr64(MSR_IA32_KERNEL_GS_BASE, (uintptr_t) cdp);
+
+	/*
+	 * Ensure the TSS segment's busy bit is clear. This is required
+	 * for the case of reloading descriptors at wake to avoid
+	 * their complete re-initialization.
+	 */
+	gdt_desc_p(KERNEL_TSS)->access &= ~ACC_TSS_BUSY;
+
 	/* Load the GDT, LDT, IDT and TSS */
 	cdi->cdi_gdt.size = sizeof(struct real_descriptor)*GDTSZ - 1;
 	cdi->cdi_idt.size = 0x1000 + cdp->cpu_number;
@@ -494,10 +531,6 @@ cpu_desc_load64(cpu_data_t *cdp)
 	lidt((uintptr_t *) &cdi->cdi_idt);
 	lldt(KERNEL_LDT);
 	set_tr(KERNEL_TSS);
-
-	/* Stuff the kernel per-cpu data area address into the MSRs */
-	wrmsr64(MSR_IA32_GS_BASE, (uintptr_t) cdp);
-	wrmsr64(MSR_IA32_KERNEL_GS_BASE, (uintptr_t) cdp);
 
 #if GPROF // Hack to enable mcount to work on K64
 	__asm__ volatile("mov %0, %%gs" : : "rm" ((unsigned short)(KERNEL_DS)));

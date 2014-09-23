@@ -9,11 +9,8 @@
 
 #import <Foundation/Foundation.h>
 
-//#include "/Volumes/ws/10864999/Sundance10A273/Libc-849/BUILD_arm/Libc_Libc-849.roots/Libc_Libc-849~hdrDst/usr/local/include/libproc_internal.h"
 #include <mach/message.h>
 #include <libproc_internal.h>
-
-//#include "/Volumes/ws/10864999/Sundance10A273/Libc-849/BUILD_arm/Libc_Libc-849.roots/Libc_Libc-849~hdrDst/usr/local/include/libproc_internal.h"
 
 #define	MAX_THREADS 1000
 

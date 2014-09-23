@@ -95,7 +95,7 @@ typedef struct acpi_hibernate_callback_data acpi_hibernate_callback_data_t;
 unsigned int		save_kdebug_enable = 0;
 static uint64_t		acpi_sleep_abstime;
 static uint64_t		acpi_idle_abstime;
-static uint64_t		acpi_wake_abstime;
+static uint64_t		acpi_wake_abstime, acpi_wake_postrebase_abstime;
 boolean_t		deep_idle_rebase = TRUE;
 
 #if CONFIG_SLEEP
@@ -292,7 +292,7 @@ acpi_sleep_kernel(acpi_sleep_callback func, void *refcon)
 
 	/* let the realtime clock reset */
 	rtc_sleep_wakeup(acpi_sleep_abstime);
-
+	acpi_wake_postrebase_abstime = mach_absolute_time();
 	kdebug_enable = save_kdebug_enable;
 
 	if (kdebug_enable == 0) {
@@ -419,7 +419,7 @@ acpi_idle_kernel(acpi_sleep_callback func, void *refcon)
 		rtc_sleep_wakeup(acpi_idle_abstime);
 		kdebug_enable = save_kdebug_enable;
 	}
-
+	acpi_wake_postrebase_abstime = mach_absolute_time();
 	cpu_datap(master_cpu)->cpu_running = TRUE;
 
 	KERNEL_DEBUG_CONSTANT(
@@ -467,3 +467,9 @@ install_real_mode_bootstrap(void *prot_entry)
 	__asm__("wbinvd");
 }
 
+boolean_t
+ml_recent_wake(void) {
+	uint64_t ctime = mach_absolute_time();
+	assert(ctime > acpi_wake_postrebase_abstime);
+	return ((ctime - acpi_wake_postrebase_abstime) < 5 * NSEC_PER_SEC);
+}

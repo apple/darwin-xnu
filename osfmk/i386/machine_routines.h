@@ -351,5 +351,6 @@ boolean_t ml_timer_forced_evaluation(void);
 int ml_timer_get_user_idle_level(void);
 kern_return_t ml_timer_set_user_idle_level(int);
 
+boolean_t ml_recent_wake(void);
 #endif /* XNU_KERNEL_PRIVATE */
 #endif /* _I386_MACHINE_ROUTINES_H_ */

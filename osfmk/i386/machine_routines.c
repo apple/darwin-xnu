@@ -603,7 +603,11 @@ ml_init_lock_timeout(void)
 {
 	uint64_t	abstime;
 	uint32_t	mtxspin;
+#if DEVELOPMENT || DEBUG
 	uint64_t	default_timeout_ns = NSEC_PER_SEC>>2;
+#else
+	uint64_t	default_timeout_ns = NSEC_PER_SEC>>1;
+#endif
 	uint32_t	slto;
 	uint32_t	prt;
 
@@ -769,7 +773,7 @@ kernel_preempt_check(void)
 }
 
 boolean_t machine_timeout_suspended(void) {
-	return (virtualized || pmap_tlb_flush_timeout || spinlock_timed_out || panic_active() || mp_recent_debugger_activity());
+	return (virtualized || pmap_tlb_flush_timeout || spinlock_timed_out || panic_active() || mp_recent_debugger_activity() || ml_recent_wake());
 }
 
 /* Eagerly evaluate all pending timer and thread callouts
