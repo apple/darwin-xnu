@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2014 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -275,15 +275,14 @@ typedef struct package_ext_info {
 #define FSIOC_NAMESPACE_ALLOW_DMG_SNAPSHOT_EVENTS _IOW('A', 11, int32_t)
 #define	FSCTL_NAMESPACE_ALLOW_DMG_SNAPSHOT_EVENTS IOCBASECMD(FSIOC_NAMESPACE_ALLOW_DMG_SNAPSHOT_EVENTS)
 
-#define FSIOC_TRACKED_HANDLER_GET		  _IOW('A', 12, struct namespace_handler_info)
-#define FSCTL_TRACKED_HANDLER_GET		  IOCBASECMD(FSIOC_TRACKED_HANDLER_GET)
+/* 12 was used for TRACKED_HANDLER_GET which has now been removed
+   as it is no longer used. */
 
 #define FSIOC_SNAPSHOT_HANDLER_GET_EXT		  _IOW('A', 13, struct namespace_handler_info_ext)
 #define FSCTL_SNAPSHOT_HANDLER_GET_EXT		  IOCBASECMD(FSIOC_SNAPSHOT_HANDLER_GET_EXT)
 
-#define FSIOC_NAMESPACE_HANDLER_GETDATA		  _IOW('A', 14, struct namespace_handler_data)
-#define FSCTL_NAMESPACE_HANDLER_GETDATA		  IOCBASECMD(FSIOC_NAMESPACE_HANDLER_GETDATA)
-
+/* 14 was used for NAMESPACE_HANDLER_GETDATA which has now been
+   removed as it is no longer used. */
 
 //
 // IO commands 15, 16, and 17 are currently unused

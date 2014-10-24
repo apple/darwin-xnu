@@ -83,7 +83,9 @@
 #include <sys/time.h>
 #include <sys/ucred.h>
 #else
+#ifndef XNU_KERNEL_PRIVATE
 #include <libkern/sysctl.h>
+#endif
 #endif
 #include <sys/proc.h>
 #include <sys/vm.h>
@@ -110,14 +112,12 @@
  * type given below. Each sysctl level defines a set of name/type
  * pairs to be used by sysctl(1) in manipulating the subsystem.
  *
- * When declaring new sysctl names, unless your sysctl is callable
- * from the paging path, please use the CTLFLAG_LOCKED flag in the
+ * When declaring new sysctl names, use the CTLFLAG_LOCKED flag in the
  * type to indicate that all necessary locking will be handled
  * within the sysctl.
  *
  * Any sysctl defined without CTLFLAG_LOCKED is considered legacy
- * and will be protected by both wiring the user process pages and,
- * if it is a 32 bit legacy KEXT, by the obsolete kernel funnel.
+ * and will be protected by a global mutex.
  *
  * Note:	This is not optimal, so it is best to handle locking
  *		yourself, if you are able to do so.  A simple design
@@ -295,11 +295,43 @@ __END_DECLS
 #else
 #define SYSCTL_LINKER_SET_ENTRY(a, b)
 #endif
+/*
+ * Macros to define sysctl entries.  Which to use?  Pure data that are 
+ * returned without modification, SYSCTL_<data type> is for you, like
+ * SYSCTL_QUAD for a 64-bit value.  When you want to run a handler of your
+ * own, SYSCTL_PROC. 
+ *
+ * parent:	parent in name hierarchy (e.g. _kern for "kern")
+ * nbr:		ID.  Almost certainly OID_AUTO ("pick one for me") for you.
+ * name:	name for this particular item (e.g. "thesysctl" for "kern.thesysctl")
+ * kind/access: Control flags (CTLFLAG_*).  Some notable options include:
+ * 			CTLFLAG_ANYBODY: 	non-root users allowed
+ * 			CTLFLAG_MASKED:	 	don't show in sysctl listing in userland
+ * 			CTLFLAG_LOCKED:		does own locking (no additional protection needed)
+ * 			CTLFLAG_KERN:		valid inside kernel (best avoided generally)
+ * 			CTLFLAG_WR:		"new" value accepted
+ * a1, a2:	entry-data, passed to handler (see specific macros)
+ * Format String: Tells "sysctl" tool how to print data from this entry.
+ *	 		"A" - string
+ *	 		"I" - list of integers. "IU" - list of unsigned integers. space-separated.
+ *	 		"-" - do not print
+ *	 		"L" - longs, as ints with I
+ *			"P" - pointer
+ * 			"Q" - quads
+ * 			"S","T" - clock info, see sysctl.c in system_cmds (you probably don't need this)
+ * Description: unused
+ */
+
+
 /* This constructs a "raw" MIB oid. */
+#define SYSCTL_STRUCT_INIT(parent, nbr, name, kind, a1, a2, handler, fmt, descr) \
+	{												\
+		&sysctl_##parent##_children, { 0 },			\
+		nbr, (int)(kind|CTLFLAG_OID2), a1, (int)(a2), #name, handler, fmt, descr, SYSCTL_OID_VERSION, 0 \
+	}
+
 #define SYSCTL_OID(parent, nbr, name, kind, a1, a2, handler, fmt, descr) \
-	struct sysctl_oid sysctl_##parent##_##name = {			 \
-		&sysctl_##parent##_children, { 0 },			 \
-		nbr, (int)(kind|CTLFLAG_OID2), a1, (int)(a2), #name, handler, fmt, descr, SYSCTL_OID_VERSION, 0 }; \
+	struct sysctl_oid sysctl_##parent##_##name = SYSCTL_STRUCT_INIT(parent, nbr, name, kind, a1, a2, handler, fmt, descr); \
 	SYSCTL_LINKER_SET_ENTRY(__sysctl_set, sysctl_##parent##_##name)
 
 /* This constructs a node from which other oids can hang. */
@@ -357,7 +389,11 @@ __END_DECLS
 		ptr, sizeof(struct type), sysctl_handle_opaque, \
 		"S," #type, descr)
 
-/* Oid for a procedure.  Specified by a pointer and an arg. */
+/* 
+ * Oid for a procedure.  Specified by a pointer and an arg.
+ * CTLTYPE_* macros can determine how the "sysctl" tool deals with
+ * input (e.g. converting to int).
+ */
 #define SYSCTL_PROC(parent, nbr, name, access, ptr, arg, handler, fmt, descr) \
 	SYSCTL_OID(parent, nbr, name, access, \
 		ptr, arg, handler, fmt, descr)
@@ -541,7 +577,7 @@ SYSCTL_DECL(_user);
 /* Don't use 13 as it is overloaded with KERN_VNODE */
 #define KERN_KDPIDEX            14
 #define KERN_KDSETRTCDEC        15
-#define KERN_KDGETENTROPY       16
+#define KERN_KDGETENTROPY       16		/* Obsolescent */
 #define KERN_KDWRITETR		17
 #define KERN_KDWRITEMAP		18
 #define KERN_KDENABLE_BG_TRACE	19
@@ -1088,28 +1124,6 @@ struct user64_loadavg {
 
 
 #ifdef	KERNEL
-#if DEBUG
-/*
- * CTL_DEBUG variables.
- *
- * These are declared as separate variables so that they can be
- * individually initialized at the location of their associated
- * variable. The loader prevents multiple use by issuing errors
- * if a variable is initialized in more than one place. They are
- * aggregated into an array in debug_sysctl(), so that it can
- * conveniently locate them when querried. If more debugging
- * variables are added, they must also be declared here and also
- * entered into the array.
- */
-struct ctldebug {
-	char	*debugname;	/* name of debugging variable */
-	int	*debugvar;	/* pointer to debugging variable */
-};
-extern struct ctldebug debug0, debug1, debug2, debug3, debug4;
-extern struct ctldebug debug5, debug6, debug7, debug8, debug9;
-extern struct ctldebug debug10, debug11, debug12, debug13, debug14;
-extern struct ctldebug debug15, debug16, debug17, debug18, debug19;
-#endif	/* DEBUG */
 
 #ifdef BSD_KERNEL_PRIVATE
 extern char	machine[];
@@ -1122,36 +1136,9 @@ struct linker_set;
 void	sysctl_register_set(const char *set);
 void	sysctl_unregister_set(const char *set);
 void	sysctl_mib_init(void);
-int	kernel_sysctl(struct proc *p, int *name, u_int namelen, void *old,
-		      size_t *oldlenp, void *newp, size_t newlen);
-int	userland_sysctl(struct proc *p, int *name, u_int namelen, user_addr_t old,
-			size_t *oldlenp, user_addr_t newp, size_t newlen,
-			size_t *retval);
-
-/*
- * Internal sysctl function calling convention:
- *
- *	(*sysctlfn)(name, namelen, oldval, oldlenp, newval, newlen);
- *
- * The name parameter points at the next component of the name to be
- * interpreted.  The namelen parameter is the number of integers in
- * the name.
- */
-typedef int (sysctlfn)
-   (int *, u_int, user_addr_t, size_t *, user_addr_t, size_t, struct proc *);
 
 int sysctl_int(user_addr_t, size_t *, user_addr_t, size_t, int *);
-int sysctl_rdint(user_addr_t, size_t *, user_addr_t, int);
 int sysctl_quad(user_addr_t, size_t *, user_addr_t, size_t, quad_t *);
-int sysctl_rdquad(user_addr_t, size_t *, user_addr_t, quad_t);
-int sysctl_string(user_addr_t, size_t *, user_addr_t, size_t, char *, int);
-int sysctl_trstring(user_addr_t, size_t *, user_addr_t, size_t, char *, int);
-int sysctl_rdstring(user_addr_t, size_t *, user_addr_t, char *);
-int sysctl_rdstruct(user_addr_t, size_t *, user_addr_t, void *, int);
-
-/* XXX should be in <sys/sysproto.h>, but not a real system call */
-struct sysctl_args;
-int new_sysctl(struct proc *, struct sysctl_args *);
 
 void sysctl_register_all(void);
 

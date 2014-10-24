@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2002-2012 Apple Inc. All rights reserved.
+ * Copyright (c) 2002-2014 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -32,6 +32,7 @@
 
 #ifdef KERNEL
 #ifdef __APPLE_API_PRIVATE
+#include <stdbool.h>
 #include <sys/types.h>
 #include <sys/queue.h>
 #include <sys/stat.h>
@@ -132,9 +133,9 @@ typedef struct linkorigin linkorigin_t;
  */
 struct cnode {
 	lck_rw_t                c_rwlock;       /* cnode's lock */
-	void *                  c_lockowner;    /* cnode's lock owner (exclusive case only) */
+	thread_t                c_lockowner;    /* cnode's lock owner (exclusive case only) */
 	lck_rw_t                c_truncatelock; /* protects file from truncation during read/write */
-	void *                  c_truncatelockowner;    /* truncate lock owner (exclusive case only) */
+	thread_t                c_truncatelockowner;    /* truncate lock owner (exclusive case only) */
 	LIST_ENTRY(cnode)	c_hash;		/* cnode's hash chain */
 	u_int32_t		c_flag;		/* cnode's runtime flags */
 	u_int32_t		c_hflag;	/* cnode's flags for maintaining hash - protected by global hash lock */
@@ -158,6 +159,19 @@ struct cnode {
 	atomicflag_t	c_touch_acctime;
 	atomicflag_t	c_touch_chgtime;
 	atomicflag_t	c_touch_modtime;
+
+	// The following flags are protected by the truncate lock
+	union {
+		struct {
+			bool	c_need_dvnode_put_after_truncate_unlock : 1;
+			bool	c_need_rvnode_put_after_truncate_unlock : 1;
+#if HFS_COMPRESSION
+			bool	c_need_decmpfs_reset 					: 1;
+#endif
+		};
+		uint8_t c_tflags;
+	};
+
 #if HFS_COMPRESSION
 	decmpfs_cnode  *c_decmp;
 #endif /* HFS_COMPRESSION */
@@ -202,43 +216,55 @@ typedef struct cnode cnode_t;
 #define H_WAITING	0x00008	/* CNode is being waited for */
 
 
-/* Runtime cnode flags (kept in c_flag) */
-#define C_NEED_RVNODE_PUT  0x00001  /* Need to do a vnode_put on c_rsrc_vp after the unlock */
-#define C_NEED_DVNODE_PUT  0x00002  /* Need to do a vnode_put on c_vp after the unlock */
-#define C_ZFWANTSYNC	   0x00004  /* fsync requested and file has holes */
-#define C_FROMSYNC         0x00008  /* fsync was called from sync */ 
+/* 
+ * Runtime cnode flags (kept in c_flag) 
+ */
+#define C_NEED_RVNODE_PUT   0x0000001  /* Need to do a vnode_put on c_rsrc_vp after the unlock */
+#define C_NEED_DVNODE_PUT   0x0000002  /* Need to do a vnode_put on c_vp after the unlock */
+#define C_ZFWANTSYNC	    0x0000004  /* fsync requested and file has holes */
+#define C_FROMSYNC          0x0000008  /* fsync was called from sync */ 
 
-#define C_MODIFIED         0x00010  /* CNode has been modified */
-#define C_NOEXISTS         0x00020  /* CNode has been deleted, catalog entry is gone */
-#define C_DELETED          0x00040  /* CNode has been marked to be deleted */
-#define C_HARDLINK         0x00080  /* CNode is a hard link (file or dir) */
+#define C_MODIFIED          0x0000010  /* CNode has been modified */
+#define C_NOEXISTS          0x0000020  /* CNode has been deleted, catalog entry is gone */
+#define C_DELETED           0x0000040  /* CNode has been marked to be deleted */
+#define C_HARDLINK          0x0000080  /* CNode is a hard link (file or dir) */
 
-#define C_FORCEUPDATE      0x00100  /* force the catalog entry update */
-#define C_HASXATTRS        0x00200  /* cnode has extended attributes */
-#define C_NEG_ENTRIES      0x00400  /* directory has negative name entries */
+#define C_FORCEUPDATE       0x0000100  /* force the catalog entry update */
+#define C_HASXATTRS         0x0000200  /* cnode has extended attributes */
+#define C_NEG_ENTRIES       0x0000400  /* directory has negative name entries */
 /* 
  * For C_SSD_STATIC: SSDs may want to deal with the file payload data in a 
  * different manner knowing that the content is not likely to be modified. This is
  * purely advisory at the HFS level, and is not maintained after the cnode goes out of core.
  */
-#define C_SSD_STATIC       0x00800  /* Assume future writes contain static content */
+#define C_SSD_STATIC        0x0000800  /* Assume future writes contain static content */
 
-#define C_NEED_DATA_SETSIZE  0x01000  /* Do a ubc_setsize(0) on c_rsrc_vp after the unlock */
-#define C_NEED_RSRC_SETSIZE  0x02000  /* Do a ubc_setsize(0) on c_vp after the unlock */
-#define C_DIR_MODIFICATION   0x04000  /* Directory is being modified, wait for lookups */
-#define C_ALWAYS_ZEROFILL    0x08000  /* Always zero-fill the file on an fsync */
+#define C_NEED_DATA_SETSIZE 0x0001000  /* Do a ubc_setsize(0) on c_rsrc_vp after the unlock */
+#define C_NEED_RSRC_SETSIZE 0x0002000  /* Do a ubc_setsize(0) on c_vp after the unlock */
+#define C_DIR_MODIFICATION  0x0004000  /* Directory is being modified, wait for lookups */
+#define C_ALWAYS_ZEROFILL   0x0008000  /* Always zero-fill the file on an fsync */
 
-#define C_RENAMED			0x10000	/* cnode was deleted as part of rename; C_DELETED should also be set */
-#define C_NEEDS_DATEADDED	0x20000 /* cnode needs date-added written to the finderinfo bit */
-#define C_BACKINGSTORE		0x40000 /* cnode is a backing store for an existing or currently-mounting filesystem */
-#define C_SWAPINPROGRESS   	0x80000	/* cnode's data is about to be swapped.  Issue synchronous cluster io */
+#define C_RENAMED           0x0010000  /* cnode was deleted as part of rename; C_DELETED should also be set */
+#define C_NEEDS_DATEADDED   0x0020000  /* cnode needs date-added written to the finderinfo bit */
+#define C_BACKINGSTORE      0x0040000  /* cnode is a backing store for an existing or currently-mounting filesystem */
+
+/*
+ * This flag indicates the cnode might be dirty because it
+ * was mapped writable so if we get any page-outs, update
+ * the modification and change times.
+ */
+#define C_MIGHT_BE_DIRTY_FROM_MAPPING   0x0080000
 
 /* 
  * For C_SSD_GREEDY_MODE: SSDs may want to write the file payload data using the greedy mode knowing
  * that the content needs to be written out to the disk quicker than normal at the expense of storage efficiency.
  * This is purely advisory at the HFS level, and is not maintained after the cnode goes out of core.
  */
-#define C_SSD_GREEDY_MODE      0x100000  /* Assume future writes are recommended to be written in SLC mode */
+#define C_SSD_GREEDY_MODE   0x0100000  /* Assume future writes are recommended to be written in SLC mode */
+
+/* 0x0200000  is currently unused */ 
+
+#define C_IO_ISOCHRONOUS    0x0400000  /* device-specific isochronous throughput I/O */
 
 #define ZFTIMELIMIT	(5 * 60)
 
@@ -340,19 +366,26 @@ extern int hfs_getnewvnode(struct hfsmount *hfsmp, struct vnode *dvp, struct com
 extern void hfs_touchtimes(struct hfsmount *, struct cnode *);
 extern void hfs_write_dateadded (struct cat_attr *cattrp, u_int32_t dateadded);
 extern u_int32_t hfs_get_dateadded (struct cnode *cp); 
+extern u_int32_t hfs_get_dateadded_from_blob(const uint8_t * /* finderinfo */, mode_t /* mode */);
 
 /* Gen counter methods */
 extern void hfs_write_gencount(struct cat_attr *cattrp, uint32_t gencount);
 extern uint32_t hfs_get_gencount(struct cnode *cp);
-extern uint32_t hfs_get_gencount_from_blob (const uint8_t *finfoblob, mode_t mode);
 extern uint32_t hfs_incr_gencount (struct cnode *cp);
+extern uint32_t hfs_get_gencount_from_blob(const uint8_t * /* finderinfo */, mode_t /* mode */);
 
 /* Document id methods */
 extern uint32_t hfs_get_document_id(struct cnode * /* cp */);
 extern uint32_t hfs_get_document_id_from_blob(const uint8_t * /* finderinfo */, mode_t /* mode */);
 
 /* Zero-fill file and push regions out to disk */
-extern int  hfs_filedone(struct vnode *vp, vfs_context_t context);
+enum {
+	// Use this flag if you're going to sync later
+	HFS_FILE_DONE_NO_SYNC 	= 1,
+};
+typedef uint32_t hfs_file_done_opts_t;
+extern int  hfs_filedone(struct vnode *vp, vfs_context_t context, 
+						 hfs_file_done_opts_t opts);
 
 /*
  * HFS cnode hash functions.
@@ -370,11 +403,10 @@ extern struct vnode * hfs_chash_getvnode(struct hfsmount *hfsmp, ino_t inum, int
 										int skiplock, int allow_deleted);
 extern struct cnode * hfs_chash_getcnode(struct hfsmount *hfsmp, ino_t inum, struct vnode **vpp, 
 										 int wantrsrc, int skiplock, int *out_flags, int *hflags);
-extern int hfs_chash_snoop(struct hfsmount *, ino_t, int, int (*)(const struct cat_desc *,
-                            const struct cat_attr *, void *), void *);
+extern int hfs_chash_snoop(struct hfsmount *, ino_t, int, int (*)(const cnode_t *, void *), void *);
 extern int hfs_valid_cnode(struct hfsmount *hfsmp, struct vnode *dvp, struct componentname *cnp, 
 							cnid_t cnid, struct cat_attr *cattr, int *error);
-				
+
 extern int hfs_chash_set_childlinkbit(struct hfsmount *hfsmp, cnid_t cnid);
 
 /*
@@ -382,24 +414,97 @@ extern int hfs_chash_set_childlinkbit(struct hfsmount *hfsmp, cnid_t cnid);
  *
  *  HFS Locking Order:
  *
- *  1. cnode truncate lock (if needed)
- *     hfs_vnop_pagein/out can skip grabbing of this lock by flag option by 
- *     HFS_LOCK_SKIP_IF_EXCLUSIVE if the truncate lock is already held exclusive 
- *     by current thread from an earlier vnop.
+ *  1. cnode truncate lock (if needed) -- see below for more on this
+ *
+ *     + hfs_vnop_pagein/out handles recursive use of this lock (by
+ *       using flag option HFS_LOCK_SKIP_IF_EXCLUSIVE) although there
+ *       are issues with this (see #16620278).
+ *
+ *	   + If locking multiple cnodes then the truncate lock must be taken on
+ *       both (in address order), before taking the cnode locks.
+ *
  *  2. cnode lock (in parent-child order if related, otherwise by address order)
+ *
  *  3. journal (if needed)
+ *
  *  4. system files (as needed)
+ *
  *       A. Catalog B-tree file
  *       B. Attributes B-tree file
  *       C. Startup file (if there is one)
  *       D. Allocation Bitmap file (always exclusive, supports recursion)
  *       E. Overflow Extents B-tree file (always exclusive, supports recursion)
+ *
  *  5. hfs mount point (always last)
  *
  *
  * I. HFS cnode hash lock (must not acquire any new locks while holding this lock, always taken last)
  */
 
+/*
+ * -- The Truncate Lock --
+ *
+ * The truncate lock is used for a few purposes (more than its name
+ * might suggest).  The first thing to note is that the cnode lock
+ * cannot be held whilst issuing any I/O other than metadata changes,
+ * so the truncate lock, in either shared or exclusive form, must
+ * usually be held in these cases.  This includes calls to ubc_setsize
+ * where the new size is less than the current size known to the VM
+ * subsystem (for two reasons: a) because reaping pages can block
+ * (e.g. on pages that are busy or being cleaned); b) reaping pages
+ * might require page-in for tasks that have that region mapped
+ * privately).  The same applies to other calls into the VM subsystem.
+ *
+ * Here are some (but not necessarily all) cases that the truncate
+ * lock protects for:
+ *
+ *  + When reading and writing a file, we hold the truncate lock
+ *    shared to ensure that the underlying blocks cannot be deleted
+ *    and on systems that use content protection, this also ensures
+ *    the keys remain valid (which might be being used by the
+ *    underlying layers).
+ *
+ *  + We need to protect against the following sequence of events:
+ *
+ *      A file is initially size X.  A thread issues an append to that
+ *      file.  Another thread truncates the file and then extends it
+ *      to a a new size Y.  Now the append can be applied at offset X
+ *      and then the data is lost when the file is truncated; or it
+ *      could be applied after the truncate, i.e. at offset 0; or it
+ *      can be applied at offset Y.  What we *cannot* do is apply the
+ *      append at offset X and for the data to be visible at the end.
+ *      (Note that we are free to choose when we apply the append
+ *      operation.)
+ *
+ *    To solve this, we keep things simple and take the truncate lock
+ *    exclusively in order to sequence the append with other size
+ *    changes.  Therefore any size change must take the truncate lock
+ *    exclusively.
+ *
+ *    (N.B. we could do better and allow readers to run concurrently
+ *    during the append and other size changes.)
+ *
+ * So here are the rules:
+ *
+ *  + If you plan to change ff_size, you must take the truncate lock
+ *    exclusively, *but* be careful what I/O you do whilst you have
+ *    the truncate lock exclusively and try and avoid it if you can:
+ *    if the VM subsystem tries to do something with some pages on a
+ *    different thread and you try and do some I/O with those same
+ *    pages, we will deadlock.  (See #16620278.)
+ *
+ *  + If you do anything that requires blocks to not be deleted or
+ *    encrpytion keys to remain valid, you must take the truncate lock
+ *    shared.
+ *
+ *  + And it follows therefore, that if you want to delete blocks or
+ *    delete keys, you must take the truncate lock exclusively.
+ *
+ * N.B. ff_size is actually protected by the cnode lock and so you
+ * must hold the cnode lock exclusively to change it and shared to
+ * read it.
+ *
+ */
 
 enum hfs_locktype {
 	HFS_SHARED_LOCK = 1, 
@@ -410,10 +515,14 @@ enum hfs_locktype {
 enum hfs_lockflags {
 	HFS_LOCK_DEFAULT           = 0x0,    /* Default flag, no options provided */
 	HFS_LOCK_ALLOW_NOEXISTS    = 0x1,    /* Allow locking of all cnodes, including cnode marked deleted with no catalog entry */
-	HFS_LOCK_SKIP_IF_EXCLUSIVE = 0x2     /* Skip locking if the current thread already holds the lock exclusive */
+	HFS_LOCK_SKIP_IF_EXCLUSIVE = 0x2,    /* Skip locking if the current thread already holds the lock exclusive */
+
+	// Used when you do not want to check return from hfs_lock
+	HFS_LOCK_ALWAYS			   = HFS_LOCK_ALLOW_NOEXISTS, 
 };
 #define HFS_SHARED_OWNER  (void *)0xffffffff
 
+void hfs_lock_always(cnode_t *cnode, enum hfs_locktype);
 int hfs_lock(struct cnode *, enum hfs_locktype, enum hfs_lockflags);
 int hfs_lockpair(struct cnode *, struct cnode *, enum hfs_locktype);
 int hfs_lockfour(struct cnode *, struct cnode *, struct cnode *, struct cnode *,
@@ -426,6 +535,18 @@ void hfs_unlockfour(struct cnode *, struct cnode *, struct cnode *, struct cnode
 void hfs_lock_truncate(struct cnode *, enum hfs_locktype, enum hfs_lockflags);
 void hfs_unlock_truncate(struct cnode *, enum hfs_lockflags);
 int hfs_try_trunclock(struct cnode *, enum hfs_locktype, enum hfs_lockflags);
+
+void hfs_clear_might_be_dirty_flag(cnode_t *cp);
+
+// cnode must be locked
+static inline __attribute__((pure))
+bool hfs_has_rsrc(const cnode_t *cp)
+{
+	if (cp->c_rsrcfork)
+		return cp->c_rsrcfork->ff_blocks > 0;
+	else
+		return cp->c_datafork && cp->c_blocks > cp->c_datafork->ff_blocks;
+}
 
 #endif /* __APPLE_API_PRIVATE */
 #endif /* KERNEL */

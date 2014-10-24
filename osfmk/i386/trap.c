@@ -93,6 +93,7 @@
 #include <kern/telemetry.h>
 #endif
 #include <sys/kdebug.h>
+#include <prng/random.h>
 
 #include <string.h>
 
@@ -128,6 +129,7 @@ extern boolean_t dtrace_tally_fault(user_addr_t);
 #endif
 
 extern boolean_t pmap_smep_enabled;
+extern boolean_t pmap_smap_enabled;
 
 void
 thread_syscall_return(
@@ -256,9 +258,6 @@ kprint_state(x86_saved_state64_t	*saved_state)
 	kprintf("      r10    0x%llx\n", saved_state->r10);
 	kprintf("      r8     0x%llx\n", saved_state->r8);
 	kprintf("      r9     0x%llx\n", saved_state->r9);     
-	kprintf("      v_arg6 0x%llx\n", saved_state->v_arg6);
-	kprintf("      v_arg7 0x%llx\n", saved_state->v_arg7);
-	kprintf("      v_arg8 0x%llx\n", saved_state->v_arg8);
 
 	kprintf("      cr2    0x%llx\n", saved_state->cr2);
 	kprintf("real  cr2    0x%lx\n", get_cr2());
@@ -408,8 +407,9 @@ interrupt(x86_saved_state_t *state)
 	 * Handle local APIC interrupts
 	 * else call platform expert for devices.
 	 */
-	if (!lapic_interrupt(interrupt_num, state))
+	if (!lapic_interrupt(interrupt_num, state)) {
 		PE_incoming_interrupt(interrupt_num);
+	}
 
 	if (__improbable(get_preemption_level() != ipl)) {
 		panic("Preemption level altered by interrupt vector 0x%x: initial 0x%x, final: 0x%x\n", interrupt_num, ipl, get_preemption_level());
@@ -469,6 +469,9 @@ interrupt(x86_saved_state_t *state)
 		}
 	}
 	
+	if (cnum == master_cpu)
+		ml_entropy_collect();
+
 	KERNEL_DEBUG_CONSTANT_IST(KDEBUG_TRACE, 
 		MACHDBG_CODE(DBG_MACH_EXCP_INTR, 0) | DBG_FUNC_END,
 		interrupt_num, 0, 0, 0, 0);
@@ -539,20 +542,11 @@ kernel_trap(
 	} else
 		*myast &= ~AST_CHUD_ALL;
 
-	/*
-	 * Is there a hook?
-	 */
-	perfCallback fn = perfTrapHook;
-	if (__improbable(fn != NULL)) {
-	        if (fn(type, NULL, 0, 0) == KERN_SUCCESS) {
-		        /*
-			 * If it succeeds, we are done...
-			 */
-			return;
-		}
-	}
 
 #if CONFIG_DTRACE
+	/*
+	 * Is there a DTrace hook?
+	 */	
 	if (__improbable(tempDTraceTrapHook != NULL)) {
 		if (tempDTraceTrapHook(type, state, lo_spp, 0) == KERN_SUCCESS) {
 			/*
@@ -642,6 +636,7 @@ kernel_trap(
 					set_cr3_raw(map->pmap->pm_cr3);
 					return;
 				}
+
 			}
 #endif
 		}
@@ -707,10 +702,8 @@ kernel_trap(
 
 		if (code & T_PF_WRITE)
 		        prot |= VM_PROT_WRITE;
-#if     PAE
 		if (code & T_PF_EXECUTE)
 		        prot |= VM_PROT_EXECUTE;
-#endif
 
 		result = vm_fault(map,
 				  vm_map_trunc_page(vaddr,
@@ -843,7 +836,7 @@ panic_trap(x86_saved_state64_t *regs)
 	      "R8:  0x%016llx, R9:  0x%016llx, R10: 0x%016llx, R11: 0x%016llx\n"
 	      "R12: 0x%016llx, R13: 0x%016llx, R14: 0x%016llx, R15: 0x%016llx\n"
 	      "RFL: 0x%016llx, RIP: 0x%016llx, CS:  0x%016llx, SS:  0x%016llx\n"
-	      "Fault CR2: 0x%016llx, Error code: 0x%016llx, Fault CPU: 0x%x%s%s%s\n",
+	      "Fault CR2: 0x%016llx, Error code: 0x%016llx, Fault CPU: 0x%x%s%s%s%s\n",
 	      regs->isf.rip, regs->isf.trapno, trapname,
 	      cr0, cr2, cr3, cr4,
 	      regs->rax, regs->rbx, regs->rcx, regs->rdx,
@@ -854,7 +847,8 @@ panic_trap(x86_saved_state64_t *regs)
 	      regs->isf.ss & 0xFFFF,regs->cr2, regs->isf.err, regs->isf.cpu,
 	      virtualized ? " VMM" : "",
 	      potential_kernel_NX_fault ? " Kernel NX fault" : "",
-	      potential_smep_fault ? " SMEP/User NX fault" : "");
+	      potential_smep_fault ? " SMEP/User NX fault" : "",
+	      "");
 	/*
 	 * This next statement is not executed,
 	 * but it's needed to stop the compiler using tail call optimization
@@ -956,11 +950,14 @@ user_trap(
 			return;	/* If it succeeds, we are done... */
 	}
 
+#if CONFIG_DTRACE
 	/*
 	 * DTrace does not consume all user traps, only INT_3's for now.
 	 * Avoid needlessly calling tempDTraceTrapHook here, and let the
 	 * INT_3 case handle them.
 	 */
+#endif
+	
 	DEBUG_KPRINT_SYSCALL_MASK(1,
 		"user_trap: type=0x%x(%s) err=0x%x cr2=%p rip=%p\n",
 		type, trap_type[type], err, (void *)(long) vaddr, (void *)(long) rip);
@@ -1075,10 +1072,8 @@ user_trap(
 
 		if (err & T_PF_WRITE)
 		        prot |= VM_PROT_WRITE;
-#if     PAE
 		if (__improbable(err & T_PF_EXECUTE))
 		        prot |= VM_PROT_EXECUTE;
-#endif
 		kret = vm_fault(thread->map,
 				vm_map_trunc_page(vaddr,
 						  PAGE_MASK),
@@ -1177,10 +1172,11 @@ i386_exception(
 }
 
 
-/* Synchronize a thread's i386_kernel_state (if any) with the given
- * i386_saved_state_t obtained from the trap/IPI handler; called in
+/* Synchronize a thread's x86_kernel_state (if any) with the given
+ * x86_saved_state_t obtained from the trap/IPI handler; called in
  * kernel_trap() prior to entering the debugger, and when receiving
- * an "MP_KDP" IPI.
+ * an "MP_KDP" IPI. Called with null saved_state if an incoming IPI
+ * was detected from the kernel while spinning with interrupts masked.
  */
   
 void
@@ -1191,7 +1187,7 @@ sync_iss_to_iks(x86_saved_state_t *saved_state)
 	boolean_t record_active_regs = FALSE;
 
 	/* The PAL may have a special way to sync registers */
-	if( saved_state->flavor == THREAD_STATE_NONE )
+	if (saved_state && saved_state->flavor == THREAD_STATE_NONE)
 		pal_get_kern_regs( saved_state );
 
 	if ((kstack = current_thread()->kernel_stack) != 0) {
@@ -1200,7 +1196,8 @@ sync_iss_to_iks(x86_saved_state_t *saved_state)
 		iks = STACK_IKS(kstack);
 
 		/* Did we take the trap/interrupt in kernel mode? */
-		if (regs == USER_REGS64(current_thread()))
+		if (saved_state == NULL || /* NULL => polling in kernel */
+		    regs == USER_REGS64(current_thread()))
 		        record_active_regs = TRUE;
 		else {
 			iks->k_rbx = regs->rbx;

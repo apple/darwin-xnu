@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 1998-2014 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -274,7 +274,7 @@ routine io_connect_set_properties(
         out result		: kern_return_t
 	);
 
-#if  IOKIT_ALL_IPC || (__ILP32__ && !MAP_32B_METHODS)
+#if  IOKIT_ALL_IPC || __ILP32__
 routine io_connect_method_scalarI_scalarO(
 	    connection		: io_connect_t;
 	in  selector		: uint32_t;
@@ -420,7 +420,7 @@ routine io_service_match_property_table(
 	out matches		: boolean_t
 	);
 
-#if  IOKIT_ALL_IPC || (__ILP32__ && !MAP_32B_ASYNC_METHODS)
+#if  IOKIT_ALL_IPC || __ILP32__
 routine io_async_method_scalarI_scalarO(
 	    connection		: io_connect_t;
 	in  wake_port		: mach_port_make_send_t;
@@ -714,6 +714,79 @@ routine io_service_get_matching_service_ool(
 	out service		: io_object_t
 	);
 
+routine io_service_get_authorization_id(
+	    service		: io_object_t;
+	out authorization_id	: uint64_t
+	);
+
+routine io_service_set_authorization_id(
+	    service		: io_object_t;
+	in  authorization_id	: uint64_t
+	);
+
+/* */
+
+routine io_server_version(
+	    master_port		: mach_port_t;
+	out version		: uint64_t
+	);
+
+routine io_registry_entry_get_properties_bin(
+	    registry_entry	: io_object_t;
+	out properties		: io_buf_ptr_t, physicalcopy
+	);
+
+routine io_registry_entry_get_property_bin(
+	    registry_entry	: io_object_t;
+	in  plane		: io_name_t;
+	in  property_name	: io_name_t;
+	in  options		: uint32_t;
+	out properties		: io_buf_ptr_t, physicalcopy
+	);
+
+routine io_service_get_matching_service_bin(
+	    master_port		: mach_port_t;
+	in  matching		: io_struct_inband_t;
+	out service		: io_object_t
+	);
+
+routine io_service_get_matching_services_bin(
+	    master_port		: mach_port_t;
+	in  matching		: io_struct_inband_t;
+	out existing		: io_object_t
+	);
+
+routine io_service_match_property_table_bin(
+	    service		: io_object_t;
+	in  matching		: io_struct_inband_t;
+	out matches		: boolean_t
+	);
+
+#if IOKIT_ALL_IPC || __ILP32__
+routine io_service_add_notification_bin(
+	    master_port		: mach_port_t;
+	in  notification_type	: io_name_t;
+	in  matching		: io_struct_inband_t;
+	in  wake_port		: mach_port_make_send_t;
+	in  reference		: io_async_ref_t;
+	out notification	: io_object_t
+	);
+#else
+skip;
+#endif
+
+#if IOKIT_ALL_IPC || __LP64__
+routine FUNC_NAME(io_service_add_notification_bin)(
+	    master_port		: mach_port_t;
+	in  notification_type	: io_name_t;
+	in  matching		: io_struct_inband_t;
+	in  wake_port		: mach_port_make_send_t;
+	in  reference		: io_async_ref64_t;
+	out notification	: io_object_t
+	);
+#else
+skip;
+#endif
 
 #endif /* IOKIT */
 

@@ -60,7 +60,7 @@
 .Dt OPEN 2
 .Os BSD 4
 .Sh NAME
-.Nm open
+.Nm open , openat
 .Nd open or create a file for reading or writing
 .Sh SYNOPSIS
 .\" OH??? .Fd #include <sys/stat.h>
@@ -71,6 +71,8 @@
 .Fa "int oflag"
 .Fa "..."
 .Fc
+.Ft int
+.Fn openat "int fd" "const char *path" "int oflag" "..."
 .Sh DESCRIPTION
 The file name specified by
 .Fa path
@@ -86,8 +88,10 @@ argument may indicate that the file is to be
 created if it does not exist (by specifying the
 .Dv O_CREAT
 flag).  In this case,
-.Nm
-requires a third argument
+.Fn open
+and
+.Fn openat
+require an additional argument
 .Fa "mode_t mode" ;
 the file is created with mode
 .Fa mode
@@ -96,7 +100,36 @@ as described in
 and modified by the process' umask value (see
 .Xr umask 2 ) .
 .Pp
-The flags specified are formed by
+The
+.Fn openat
+function is equivalent to the
+.Fn open
+function except in the case where the
+.Fa path
+specifies a relative path.
+In this case the file to be opened is determined relative to the directory
+associated with the file descriptor
+.Fa fd
+instead of the current working directory.
+The
+.Fa oflag
+argument and the optional fourth argument correspond exactly to
+the arguments for
+.Fn open .
+If
+.Fn openat
+is passed the special value
+.Dv AT_FDCWD
+in the
+.Fa fd
+argument, the current working directory is used
+and the behavior is identical to a call to
+.Fn open .
+.Pp
+The flags specified
+for the
+.Fa oflag
+argument are formed by
 .Em or Ns 'ing
 the following values:
 .Pp
@@ -371,6 +404,23 @@ The file is a pure procedure (shared text) file that is being
 executed and the
 .Fn open
 call requests write access.
+.It Bq Eq EBADF
+The
+.Fa path
+argument does not specify an absolute path and the
+.Fa fd
+argument is
+neither
+.Dv AT_FDCWD
+nor a valid file descriptor open for searching.
+.It Bq Eq ENOTDIR
+The
+.Fa path
+argument is not an absolute path and
+.Fa fd
+is neither
+.Dv AT_FDCWD
+nor a file descriptor associated with a directory.
 .El
 .Sh COMPATIBILITY
 .Fn open
@@ -392,3 +442,6 @@ An
 .Fn open
 function call appeared in 
 .At v6 .
+The
+.Fn openat
+function was introduced in OS X 10.10

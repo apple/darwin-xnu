@@ -101,6 +101,10 @@
 #include <netkey/key.h>
 #endif
 
+#if NECP
+#include <net/necp.h>
+#endif /* NECP */
+
  /* XXX This one should go in sys/mbuf.h. It is used to avoid that
  * a firewall-generated packet loops forever through the firewall.
  */
@@ -1103,7 +1107,11 @@ icmp_dgram_send(struct socket *so, int flags, struct mbuf *m,
 	int icmplen;
 	int error = EINVAL;
 
-	if (inp == NULL || (inp->inp_flags2 & INP2_WANT_FLOW_DIVERT)) {
+	if (inp == NULL
+#if NECP
+		|| (necp_socket_should_use_flow_divert(inp))
+#endif /* NECP */
+		) {
 		if (inp != NULL)
 			error = EPROTOTYPE;
 		goto bad;

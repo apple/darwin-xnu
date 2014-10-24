@@ -68,7 +68,9 @@ extern UInt32 PESavePanicInfo(UInt8 *buffer, UInt32 length);
 
 extern long PEGetGMTTimeOfDay( void );
 extern void PESetGMTTimeOfDay( long secs );
-  
+extern void PEGetUTCTimeOfDay( clock_sec_t * secs, clock_usec_t * usecs );
+extern void PESetUTCTimeOfDay( clock_sec_t secs, clock_usec_t usecs );
+
 /* unless it's a "well-known" property, these will read/write out the value as raw data */
 
 extern boolean_t PEWriteNVRAMProperty(const char *symbol, const void *value, const unsigned int len);
@@ -89,6 +91,7 @@ extern const OSSymbol *		gIOPlatformSleepActionKey;
 extern const OSSymbol *		gIOPlatformWakeActionKey;
 extern const OSSymbol *		gIOPlatformQuiesceActionKey;
 extern const OSSymbol *		gIOPlatformActiveActionKey;
+extern const OSSymbol *		gIOPlatformHaltRestartActionKey;
 
 class IORangeAllocator;
 class IONVRAMController;
@@ -178,12 +181,17 @@ public:
     virtual IOByteCount savePanicInfo(UInt8 *buffer, IOByteCount length);
 
     virtual OSString* createSystemSerialNumberString(OSData* myProperty);
-    
+
+    virtual IOReturn deregisterInterruptController(OSSymbol *name);
+
+    virtual void getUTCTimeOfDay( clock_sec_t * secs, clock_nsec_t * nsecs );
+    virtual void setUTCTimeOfDay( clock_sec_t secs, clock_nsec_t nsecs );
+
     OSMetaClassDeclareReservedUsed(IOPlatformExpert,  0);
     OSMetaClassDeclareReservedUsed(IOPlatformExpert,  1);
-    OSMetaClassDeclareReservedUnused(IOPlatformExpert,  2);
-    OSMetaClassDeclareReservedUnused(IOPlatformExpert,  3);
-    OSMetaClassDeclareReservedUnused(IOPlatformExpert,  4);
+    OSMetaClassDeclareReservedUsed(IOPlatformExpert,  2);
+    OSMetaClassDeclareReservedUsed(IOPlatformExpert,  3);
+    OSMetaClassDeclareReservedUsed(IOPlatformExpert,  4);
     OSMetaClassDeclareReservedUnused(IOPlatformExpert,  5);
     OSMetaClassDeclareReservedUnused(IOPlatformExpert,  6);
     OSMetaClassDeclareReservedUnused(IOPlatformExpert,  7);

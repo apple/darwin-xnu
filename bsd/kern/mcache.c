@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2006-2013 Apple Inc. All rights reserved.
+ * Copyright (c) 2006-2014 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -54,6 +54,7 @@
 #include <kern/zalloc.h>
 #include <kern/cpu_number.h>
 #include <kern/locks.h>
+#include <kern/thread_call.h>
 
 #include <libkern/libkern.h>
 #include <libkern/OSAtomic.h>
@@ -106,7 +107,8 @@ static lck_attr_t *mcache_llock_attr;
 static lck_grp_t *mcache_llock_grp;
 static lck_grp_attr_t *mcache_llock_grp_attr;
 static struct zone *mcache_zone;
-static unsigned int mcache_reap_interval;
+static const uint32_t mcache_reap_interval = 15;
+static const uint32_t mcache_reap_interval_leeway = 2;
 static UInt32 mcache_reaping;
 static int mcache_ready;
 static int mcache_updating;
@@ -117,6 +119,8 @@ static unsigned int mcache_flags = MCF_DEBUG;
 #else
 static unsigned int mcache_flags = 0;
 #endif
+
+int mca_trn_max = MCA_TRN_MAX;
 
 #define	DUMP_MCA_BUF_SIZE	512
 static char *mca_dump_buf;
@@ -156,17 +160,20 @@ static void mcache_cache_reap(mcache_t *);
 static void mcache_cache_update(mcache_t *);
 static void mcache_cache_bkt_resize(void *);
 static void mcache_cache_enable(void *);
-static void mcache_update(void *);
+static void mcache_update(thread_call_param_t __unused, thread_call_param_t __unused);
 static void mcache_update_timeout(void *);
 static void mcache_applyall(void (*)(mcache_t *));
 static void mcache_reap_start(void *);
 static void mcache_reap_done(void *);
-static void mcache_reap_timeout(void *);
+static void mcache_reap_timeout(thread_call_param_t __unused, thread_call_param_t);
 static void mcache_notify(mcache_t *, u_int32_t);
 static void mcache_purge(void *);
 
 static LIST_HEAD(, mcache) mcache_head;
 mcache_t *mcache_audit_cache;
+
+static thread_call_t mcache_reap_tcall;
+static thread_call_t mcache_update_tcall;
 
 /*
  * Initialize the framework; this is currently called as part of BSD init.
@@ -178,6 +185,8 @@ mcache_init(void)
 	unsigned int i;
 	char name[32];
 
+	VERIFY(mca_trn_max >= 2);
+
 	ncpu = ml_get_max_cpus();
 	(void) mcache_cache_line_size();	/* prime it */
 
@@ -186,6 +195,11 @@ mcache_init(void)
 	    mcache_llock_grp_attr);
 	mcache_llock_attr = lck_attr_alloc_init();
 	mcache_llock = lck_mtx_alloc_init(mcache_llock_grp, mcache_llock_attr);
+
+	mcache_reap_tcall = thread_call_allocate(mcache_reap_timeout, NULL);
+	mcache_update_tcall = thread_call_allocate(mcache_update, NULL);
+	if (mcache_reap_tcall == NULL || mcache_update_tcall == NULL)
+		panic("mcache_init: thread_call_allocate failed");
 
 	mcache_zone = zinit(MCACHE_ALLOC_SIZE, 256 * MCACHE_ALLOC_SIZE,
 	    PAGE_SIZE, "mcache");
@@ -203,13 +217,12 @@ mcache_init(void)
 		    (btp->bt_bktsize + 1) * sizeof (void *), 0, 0, MCR_SLEEP);
 	}
 
-	PE_parse_boot_argn("mcache_flags", &mcache_flags, sizeof (mcache_flags));
+	PE_parse_boot_argn("mcache_flags", &mcache_flags, sizeof(mcache_flags));
 	mcache_flags &= MCF_FLAGS_MASK;
 
 	mcache_audit_cache = mcache_create("audit", sizeof (mcache_audit_t),
 	    0, 0, MCR_SLEEP);
 
-	mcache_reap_interval = 15 * hz;
 	mcache_applyall(mcache_cache_bkt_enable);
 	mcache_ready = 1;
 
@@ -659,11 +672,10 @@ mcache_purge(void *arg)
 	lck_mtx_lock_spin(&cp->mc_sync_lock);
 	cp->mc_enable_cnt++;
 	lck_mtx_unlock(&cp->mc_sync_lock);
-
 }
 
 __private_extern__ boolean_t
-mcache_purge_cache(mcache_t *cp)
+mcache_purge_cache(mcache_t *cp, boolean_t async)
 {
 	/*
 	 * Purging a cache that has no per-CPU caches or is already
@@ -680,7 +692,10 @@ mcache_purge_cache(mcache_t *cp)
 	cp->mc_purge_cnt++;
 	lck_mtx_unlock(&cp->mc_sync_lock);
 
-	mcache_dispatch(mcache_purge, cp);
+	if (async)
+		mcache_dispatch(mcache_purge, cp);
+	else
+		mcache_purge(cp);
 
 	return (TRUE);
 }
@@ -1253,7 +1268,8 @@ mcache_bkt_ws_reap(mcache_t *cp)
 }
 
 static void
-mcache_reap_timeout(void *arg)
+mcache_reap_timeout(thread_call_param_t dummy __unused,
+    thread_call_param_t arg)
 {
 	volatile UInt32 *flag = arg;
 
@@ -1265,7 +1281,14 @@ mcache_reap_timeout(void *arg)
 static void
 mcache_reap_done(void *flag)
 {
-	timeout(mcache_reap_timeout, flag, mcache_reap_interval);
+	uint64_t deadline, leeway;
+
+	clock_interval_to_deadline(mcache_reap_interval, NSEC_PER_SEC,
+	    &deadline);
+	clock_interval_to_absolutetime_interval(mcache_reap_interval_leeway,
+	    NSEC_PER_SEC, &leeway);
+	thread_call_enter_delayed_with_leeway(mcache_reap_tcall, flag,
+	    deadline, leeway, THREAD_CALL_DELAY_LEEWAY);
 }
 
 static void
@@ -1390,14 +1413,22 @@ mcache_cache_enable(void *arg)
 static void
 mcache_update_timeout(__unused void *arg)
 {
-	timeout(mcache_update, NULL, mcache_reap_interval);
+	uint64_t deadline, leeway;
+
+	clock_interval_to_deadline(mcache_reap_interval, NSEC_PER_SEC,
+	    &deadline);
+	clock_interval_to_absolutetime_interval(mcache_reap_interval_leeway,
+	    NSEC_PER_SEC, &leeway);
+	thread_call_enter_delayed_with_leeway(mcache_update_tcall, NULL,
+	    deadline, leeway, THREAD_CALL_DELAY_LEEWAY);
 }
 
 static void
-mcache_update(__unused void *arg)
+mcache_update(thread_call_param_t arg __unused,
+    thread_call_param_t dummy __unused)
 {
 	mcache_applyall(mcache_cache_update);
-	mcache_dispatch(mcache_update_timeout, NULL);
+	mcache_update_timeout(NULL);
 }
 
 static void
@@ -1425,25 +1456,30 @@ mcache_buffer_log(mcache_audit_t *mca, void *addr, mcache_t *cp,
 {
 	struct timeval now, base = { 0, 0 };
 	void *stack[MCACHE_STACK_DEPTH + 1];
+	struct mca_trn *transaction;
+
+	transaction = &mca->mca_trns[mca->mca_next_trn];
 
 	mca->mca_addr = addr;
 	mca->mca_cache = cp;
-	mca->mca_pthread = mca->mca_thread;
-	mca->mca_thread = current_thread();
-	bcopy(mca->mca_stack, mca->mca_pstack, sizeof (mca->mca_pstack));
-	mca->mca_pdepth = mca->mca_depth;
-	bzero(stack, sizeof (stack));
-	mca->mca_depth = OSBacktrace(stack, MCACHE_STACK_DEPTH + 1) - 1;
-	bcopy(&stack[1], mca->mca_stack, sizeof (mca->mca_pstack));
 
-	mca->mca_ptstamp = mca->mca_tstamp;
+	transaction->mca_thread = current_thread();
+
+	bzero(stack, sizeof (stack));
+	transaction->mca_depth = OSBacktrace(stack, MCACHE_STACK_DEPTH + 1) - 1;
+	bcopy(&stack[1], transaction->mca_stack,
+		sizeof (transaction->mca_stack));
+
 	microuptime(&now);
 	if (base_ts != NULL)
 		base = *base_ts;
 	/* tstamp is in ms relative to base_ts */
-	mca->mca_tstamp = ((now.tv_usec - base.tv_usec) / 1000);
+	transaction->mca_tstamp = ((now.tv_usec - base.tv_usec) / 1000);
 	if ((now.tv_sec - base.tv_sec) > 0)
-		mca->mca_tstamp += ((now.tv_sec - base.tv_sec) * 1000);
+		transaction->mca_tstamp += ((now.tv_sec - base.tv_sec) * 1000);
+
+	mca->mca_next_trn =
+		(mca->mca_next_trn + 1) % mca_trn_max;
 }
 
 __private_extern__ void
@@ -1546,6 +1582,26 @@ mcache_audit_free_verify_set(mcache_audit_t *mca, void *base, size_t offset,
 
 #undef panic
 
+#define	DUMP_TRN_FMT() \
+	    "%s transaction thread %p saved PC stack (%d deep):\n" \
+	    "\t%p, %p, %p, %p, %p, %p, %p, %p\n" \
+	    "\t%p, %p, %p, %p, %p, %p, %p, %p\n"
+
+#define	DUMP_TRN_FIELDS(s, x) \
+	    s, \
+	    mca->mca_trns[x].mca_thread, mca->mca_trns[x].mca_depth, \
+	    mca->mca_trns[x].mca_stack[0], mca->mca_trns[x].mca_stack[1], \
+	    mca->mca_trns[x].mca_stack[2], mca->mca_trns[x].mca_stack[3], \
+	    mca->mca_trns[x].mca_stack[4], mca->mca_trns[x].mca_stack[5], \
+	    mca->mca_trns[x].mca_stack[6], mca->mca_trns[x].mca_stack[7], \
+	    mca->mca_trns[x].mca_stack[8], mca->mca_trns[x].mca_stack[9], \
+	    mca->mca_trns[x].mca_stack[10], mca->mca_trns[x].mca_stack[11], \
+	    mca->mca_trns[x].mca_stack[12], mca->mca_trns[x].mca_stack[13], \
+	    mca->mca_trns[x].mca_stack[14], mca->mca_trns[x].mca_stack[15]
+
+#define	MCA_TRN_LAST ((mca->mca_next_trn + mca_trn_max) % mca_trn_max)
+#define	MCA_TRN_PREV ((mca->mca_next_trn + mca_trn_max - 1) % mca_trn_max)
+
 __private_extern__ char *
 mcache_dump_mca(mcache_audit_t *mca)
 {
@@ -1553,29 +1609,16 @@ mcache_dump_mca(mcache_audit_t *mca)
 		return (NULL);
 
 	snprintf(mca_dump_buf, DUMP_MCA_BUF_SIZE,
-	    "mca %p: addr %p, cache %p (%s)\n"
-	    "last transaction; thread %p, saved PC stack (%d deep):\n"
-	    "\t%p, %p, %p, %p, %p, %p, %p, %p\n"
-	    "\t%p, %p, %p, %p, %p, %p, %p, %p\n"
-	    "previous transaction; thread %p, saved PC stack (%d deep):\n"
-	    "\t%p, %p, %p, %p, %p, %p, %p, %p\n"
-	    "\t%p, %p, %p, %p, %p, %p, %p, %p\n",
+	    "mca %p: addr %p, cache %p (%s) nxttrn %d\n"
+	    DUMP_TRN_FMT()
+	    DUMP_TRN_FMT(),
+
 	    mca, mca->mca_addr, mca->mca_cache,
 	    mca->mca_cache ? mca->mca_cache->mc_name : "?",
-	    mca->mca_thread, mca->mca_depth,
-	    mca->mca_stack[0], mca->mca_stack[1], mca->mca_stack[2],
-	    mca->mca_stack[3], mca->mca_stack[4], mca->mca_stack[5],
-	    mca->mca_stack[6], mca->mca_stack[7], mca->mca_stack[8],
-	    mca->mca_stack[9], mca->mca_stack[10], mca->mca_stack[11],
-	    mca->mca_stack[12], mca->mca_stack[13], mca->mca_stack[14],
-	    mca->mca_stack[15],
-	    mca->mca_pthread, mca->mca_pdepth,
-	    mca->mca_pstack[0], mca->mca_pstack[1], mca->mca_pstack[2],
-	    mca->mca_pstack[3], mca->mca_pstack[4], mca->mca_pstack[5],
-	    mca->mca_pstack[6], mca->mca_pstack[7], mca->mca_pstack[8],
-	    mca->mca_pstack[9], mca->mca_pstack[10], mca->mca_pstack[11],
-	    mca->mca_pstack[12], mca->mca_pstack[13], mca->mca_pstack[14],
-	    mca->mca_pstack[15]);
+	    mca->mca_next_trn,
+
+	    DUMP_TRN_FIELDS("last", MCA_TRN_LAST),
+	    DUMP_TRN_FIELDS("previous", MCA_TRN_PREV));
 
 	return (mca_dump_buf);
 }

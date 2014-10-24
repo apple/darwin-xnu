@@ -1,36 +1,22 @@
 SDKROOT ?= /
-Product ?= $(shell xcodebuild -sdk $(SDKROOT) -version PlatformPath | head -1 | sed 's,^.*/\([^/]*\)\.platform$$,\1,')
 
-# This should not be a long term solution to <rdar://problem/11230738>; this
-# makefile needs to be changed to identify its targets appropriately in the
-# absence of tconf, but we'll go with the quick change for now.
-
-ifeq "$(RC_TARGET_CONFIG)" "iPhone"
-Embedded?=YES
-else
-Embedded?=$(shell echo $(SDKROOT) | grep -iq iphoneos && echo YES || echo NO)
-endif
-
-ifeq "$(Embedded)" "YES"
-Product?=iPhone
-else
-Product?=MacOSX
-endif
-
+PLATFORMPATH := $(shell xcrun -sdk $(SDKROOT) -show-sdk-platform-path)
+PLATFORM := $(shell echo $(PLATFORMPATH) | sed 's,^.*/\([^/]*\)\.platform$$,\1,')
 SDKVERSION:=$(shell xcodebuild -sdk $(SDKROOT) -version SDKVersion | head -1)
-
-ifeq "$(Product)" "iPhoneOS"
 SDKPATH := $(shell xcodebuild -sdk $(SDKROOT) -version Path)
+
+ifneq ($(filter iPhoneOS iPhoneOSNano,$(PLATFORM)),)
 CFLAGS += -isysroot $(SDKPATH) -miphoneos-version-min=$(SDKVERSION)
 LIBFLAGS += -isysroot $(SDKPATH) -miphoneos-version-min=$(SDKVERSION)
 else
 CFLAGS += -mmacosx-version-min=$(SDKVERSION)
 LIBFLAGS += -mmacosx-version-min=$(SDKVERSION)
-Product ?= MacOSX
 endif
 
-CC := xcrun -sdk $(SDKROOT) cc
+CC := $(shell xcrun -sdk "$(SDKROOT)" -find cc)
 HOSTCC := cc
+
+CODESIGN := $(shell xcrun -sdk "$(SDKROOT)" -find codesign)
 
 SRCROOT?=$(shell /bin/pwd)
 OBJROOT?=$(SRCROOT)/BUILD/obj
@@ -43,12 +29,10 @@ OBJSUBPATH := $(OBJROOT)
 ifdef RC_ARCHS
   ARCH:=$(RC_ARCHS)
 else
-  ifeq "$(Product)" "MacOSX"
+  ifeq ($(PLATFORM),MacOSX)
     ARCH:=i386 x86_64
-  else ifeq "$(Product)" "iPhoneOS"
-    ARCH:=armv7s armv7
-  else ifeq "$(Product)" "AppleTV"
-    ARCH:=i386
+  else ifneq ($(filter iPhoneOS iPhoneOSNano,$(PLATFORM)),)
+    ARCH:=arm64 armv7s armv7
 endif
 endif
 
@@ -63,7 +47,7 @@ CFLAGS += -g -I $(SDKPATH)/System/Library/Frameworks/System.framework/Versions/B
 LIBFLAGS += -I $(SDKPATH)/System/Library/Frameworks/System.framework/Versions/B/PrivateHeaders  -F/AppleInternal/Library/Frameworks/ 
 
 # The current implementation of the content protection test requires IOKit.
-ifeq "$(Product)" "iPhoneOS"
+ifneq ($(filter iPhoneOS iPhoneOSNano,$(PLATFORM)),)
 LIBFLAGS += -framework IOKit
 endif
 
@@ -75,9 +59,11 @@ MY_OBJECTS := $(OBJSUBPATH)/main.o $(OBJSUBPATH)/memory_tests.o $(OBJSUBPATH)/mi
 			 $(OBJSUBPATH)/atomic_fifo_queue_test.o $(OBJSUBPATH)/sched_tests.o \
 			 $(OBJSUBPATH)/pipes_tests.o
 
-ifneq "$(Product)" "iPhoneOS"
+ifeq ($(PLATFORM),MacOSX)
 MY_OBJECTS += $(OBJSUBPATH)/32bit_inode_tests.o
-else
+endif
+
+ifneq ($(filter iPhoneOS iPhoneOSNano,$(PLATFORM)),)
 MY_OBJECTS += $(OBJSUBPATH)/content_protection_test.o
 endif
 
@@ -88,6 +74,9 @@ ifndef RC_ProjectName
 endif
 	$(CC) -g $(MY_ARCH) $(LIBFLAGS) -o $(SYMROOT)/xnu_quick_test $(MY_OBJECTS)
 	/usr/bin/dsymutil $(SYMROOT)/xnu_quick_test
+ifneq ($(filter iPhoneOS iPhoneOSNano,$(PLATFORM)),)
+	$(CODESIGN) -f -s - --entitlements $(SRCSUBPATH)/xnu_quick_test.entitlements $(SYMROOT)/xnu_quick_test
+endif
 	/usr/bin/ditto $(SYMROOT)/xnu_quick_test $(DSTROOT)/xnu_quick_test
 
 # This target is defined for testbots. 
@@ -103,13 +92,13 @@ testbots: xnu_quick_test
 # helper processes for the 64-bit version of xnu_quick_test to test the conversion
 # from a 32-bit process to a 64-bit process.
 helpers : $(SRCSUBPATH)/helpers/sleep.c $(SRCSUBPATH)/helpers/launch.c $(SRCSUBPATH)/helpers/arch.c $(SRCSUBPATH)/helpers/data_exec.c helperdir $(OBJSUBPATH)/misc.o
-ifneq "$(Product)" "iPhoneOS"
+ifeq ($(PLATFORM),MacOSX)
 ifneq "$(ARCH_32)" ""
 	$(CC) -g $(ARCH_32_FLAGS)                              $(SRCSUBPATH)/helpers/sleep.c -o $(SYMROOT)/sleep-i386
 	/usr/bin/ditto $(SYMROOT)/sleep-i386 $(DSTROOT)/helpers/
 endif
 endif
-ifeq "$(Product)" "MacOSX"
+ifeq ($(PLATFORM),MacOSX)
 ifneq "$(ARCH_32)" ""
 	$(CC) -g $(LIBFLAGS) $(ARCH_32_FLAGS)	$(OBJSUBPATH)/misc.o $(SRCSUBPATH)/helpers/launch.c -o $(SYMROOT)/launch-i386
 	$(CC) -g $(ARCH_32_FLAGS) 	-DNXDATA32TESTNONX $(SRCSUBPATH)/helpers/data_exec.c -o $(SYMROOT)/data_exec32nonxspawn
@@ -124,22 +113,26 @@ endif
 	$(CC) -g $(MY_ARCH) 	$(SRCSUBPATH)/helpers/data_exec.c -o $(SYMROOT)/data_exec
 	/usr/bin/ditto $(SYMROOT)/data_exec $(DSTROOT)/helpers/
 endif
-ifeq "$(Product)" "iPhoneOS"
+ifneq ($(filter iPhoneOS iPhoneOSNano,$(PLATFORM)),)
 ifneq "$(ARCH_32)" ""
 	$(CC) $(CFLAGS) $(ARCH_32_FLAGS) $(SRCSUBPATH)/helpers/sleep.c -o $(SYMROOT)/sleep-arm
 	$(CC) $(LIBFLAGS) $(CFLAGS) $(ARCH_32_FLAGS) $(OBJSUBPATH)/misc.o $(SRCSUBPATH)/helpers/launch.c -o $(SYMROOT)/launch-arm
 	/usr/bin/ditto $(SYMROOT)/sleep-arm $(SYMROOT)/launch-arm $(DSTROOT)/helpers/
 endif
+ifneq "$(ARCH_64)" ""
+	$(CC) $(CFLAGS) $(ARCH_64_FLAGS) $(SRCSUBPATH)/helpers/sleep.c -o $(SYMROOT)/sleep-arm64
+	/usr/bin/ditto $(SYMROOT)/sleep-arm64 $(DSTROOT)/helpers/
+endif
 endif
 	$(CC) -g $(MY_ARCH) $(CFLAGS) $(SRCSUBPATH)/helpers/arch.c -o $(SYMROOT)/arch
 	/usr/bin/ditto $(SYMROOT)/arch $(DSTROOT)/helpers/
-	
+
 helperdir :
 	mkdir -p $(DSTROOT)/helpers
 
 $(OBJSUBPATH) :
 	mkdir -p $(OBJSUBPATH);
-	
+
 $(DSTROOT) :
 	mkdir -p $(DSTROOT);
 
@@ -148,21 +141,21 @@ $(SYMROOT) :
 
 $(OBJSUBPATH)/main.o : $(SRCSUBPATH)/main.c $(SRCSUBPATH)/tests.h
 	$(CC) $(CFLAGS) $(MY_ARCH) -c $(SRCSUBPATH)/main.c  -o $@
-	
+
 $(OBJSUBPATH)/memory_tests.o : $(SRCSUBPATH)/memory_tests.c $(SRCSUBPATH)/tests.h
 	$(CC) $(CFLAGS) $(MY_ARCH) -c $(SRCSUBPATH)/memory_tests.c  -o $@
 
 # misc.o has to be built 3-way for the helpers to link
 $(OBJSUBPATH)/misc.o : $(SRCSUBPATH)/misc.c $(SRCSUBPATH)/tests.h
-ifeq "$(Product)" "iPhoneOS"
+ifneq ($(filter iPhoneOS iPhoneOSNano,$(PLATFORM)),)
 	$(CC) $(CFLAGS) $(MY_ARCH) -c $(SRCSUBPATH)/misc.c   -o $@
 else
 	$(CC) -arch i386 -arch x86_64 $(CFLAGS) $(MY_ARCH) -c $(SRCSUBPATH)/misc.c   -o $@
 endif
-	
+
 $(OBJSUBPATH)/sema_tests.o : $(SRCSUBPATH)/sema_tests.c $(SRCSUBPATH)/tests.h
 	$(CC) $(CFLAGS) $(MY_ARCH) -c $(SRCSUBPATH)/sema_tests.c   -o $@
-	
+
 $(OBJSUBPATH)/shared_memory_tests.o : $(SRCSUBPATH)/shared_memory_tests.c $(SRCSUBPATH)/tests.h
 	$(CC) $(CFLAGS) $(MY_ARCH) -c $(SRCSUBPATH)/shared_memory_tests.c   -o $@
 
@@ -189,7 +182,7 @@ $(OBJSUBPATH)/32bit_inode_tests.o : $(SRCSUBPATH)/32bit_inode_tests.c $(SRCSUBPA
 
 $(OBJSUBPATH)/commpage_tests.o : $(SRCSUBPATH)/commpage_tests.c $(SRCSUBPATH)/tests.h
 	$(CC) $(CFLAGS) $(MY_ARCH) -c $(SRCSUBPATH)/commpage_tests.c    -o $@
-	
+
 $(OBJSUBPATH)/atomic_fifo_queue_test.o : $(SRCSUBPATH)/atomic_fifo_queue_test.c $(SRCSUBPATH)/tests.h
 	$(CC) $(CFLAGS) $(MY_ARCH) -c $(SRCSUBPATH)/atomic_fifo_queue_test.c    -o $@
 

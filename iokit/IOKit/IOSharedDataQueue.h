@@ -33,7 +33,11 @@
 #undef dequeue
 #endif
 
+#define DISABLE_DATAQUEUE_WARNING /* IODataQueue is deprecated, please use IOSharedDataQueue instead */
+
 #include <IOKit/IODataQueue.h>
+
+#undef DISABLE_DATAQUEUE_WARNING
 
 typedef struct _IODataQueueEntry IODataQueueEntry;
 
@@ -62,7 +66,21 @@ class IOSharedDataQueue : public IODataQueue
 protected:
     virtual void free();
 
+    /*!
+     * @function getQueueSize
+     * @abstract Returns the size of the data queue.
+     * @discussion Use this method to access the size of the data queue. Do not access the value of size directly, as it can get modified from userspace and is not reliable. 
+     * @result Returns the size of the data queue, or zero in case of failure.
+     */
     UInt32 getQueueSize();
+
+    /*!
+     * @function setQueueSize
+     * @abstract Stores the value of the size of the data queue.
+     * @discussion Use this method to store the value of the size of the data queue. Do not access the value of size directly, as it can get modified from userspace and is not reliable.
+     * @param size The size of the data queue.  
+     * @result Returns true in case of success, false otherwise.
+     */
     Boolean setQueueSize(UInt32 size);
 
 public:

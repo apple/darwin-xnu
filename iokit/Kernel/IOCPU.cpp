@@ -96,6 +96,8 @@ static queue_head_t gIOWakeActionQueue;
 static queue_head_t iocpu_quiesce_queue;
 static queue_head_t iocpu_active_queue;
 
+static queue_head_t gIOHaltRestartActionQueue;
+
 /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
 
 void 
@@ -241,6 +243,45 @@ IOInstallServicePlatformAction(IOService * service,
     gIOAllActionsQueue = entry;
 }
 
+extern "C" kern_return_t 
+IOCPURunPlatformHaltRestartActions(uint32_t message)
+{
+    kern_return_t	 ret;
+    IORegistryIterator * iter;
+    OSOrderedSet *       all;
+    IOService *          service;
+
+    if (!gIOHaltRestartActionQueue.next)
+    {
+	queue_init(&gIOHaltRestartActionQueue);
+	iter = IORegistryIterator::iterateOver(gIOServicePlane,
+						kIORegistryIterateRecursively);
+	if (iter)
+	{
+	    all = 0;
+	    do 
+	    {
+		if (all) all->release();
+		all = iter->iterateAll();
+	    }
+	    while (!iter->isValid());
+	    iter->release();
+	    if (all)
+	    {
+		while((service = (IOService *) all->getFirstObject()))
+		{
+		    IOInstallServicePlatformAction(service, gIOPlatformHaltRestartActionKey, &gIOHaltRestartActionQueue, false);
+		    all->removeObject(service);
+		}
+		all->release();
+	    }	
+	}
+    }
+    ret = iocpu_run_platform_actions(&gIOHaltRestartActionQueue, 0, 0U-1,
+				     (void *)(uintptr_t) message, NULL, NULL);
+    return (ret);
+}
+
 /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
 
 kern_return_t PE_cpu_start(cpu_id_t target,
@@ -319,6 +360,7 @@ void IOCPUSleepKernel(void)
 
     queue_init(&gIOSleepActionQueue);
     queue_init(&gIOWakeActionQueue);
+    queue_init(&gIOHaltRestartActionQueue);
 
     iter = IORegistryIterator::iterateOver( gIOServicePlane,
 					    kIORegistryIterateRecursively );
@@ -342,6 +384,7 @@ void IOCPUSleepKernel(void)
 		IOInstallServicePlatformAction(service, gIOPlatformWakeActionKey,    &gIOWakeActionQueue,		 true);
 		IOInstallServicePlatformAction(service, gIOPlatformQuiesceActionKey, iocpu_get_platform_quiesce_queue(), false);
 		IOInstallServicePlatformAction(service, gIOPlatformActiveActionKey,  iocpu_get_platform_active_queue(),  true);
+		IOInstallServicePlatformAction(service, gIOPlatformHaltRestartActionKey, &gIOHaltRestartActionQueue,     false);
 		all->removeObject(service);
 	    }
 	    all->release();
@@ -391,10 +434,10 @@ void IOCPUSleepKernel(void)
 	IODelete(entry, iocpu_platform_action_entry_t, 1);
     }
 
-    if (!queue_empty(&gIOSleepActionQueue))
-	panic("gIOSleepActionQueue");
-    if (!queue_empty(&gIOWakeActionQueue))
-	panic("gIOWakeActionQueue");
+    if (!queue_empty(&gIOSleepActionQueue))       panic("gIOSleepActionQueue");
+    if (!queue_empty(&gIOWakeActionQueue))  	  panic("gIOWakeActionQueue");
+    if (!queue_empty(&gIOHaltRestartActionQueue)) panic("gIOHaltRestartActionQueue");
+    gIOHaltRestartActionQueue.next = 0;
   
     rootDomain->tracePoint( kIOPMTracePointWakeCPUs );
 
@@ -464,7 +507,7 @@ bool IOCPU::start(IOService *provider)
   provider->setProperty("timebase-frequency", timebaseFrequency);
   timebaseFrequency->release();
   
-  super::setProperty("IOCPUID", (uintptr_t)this, sizeof(uintptr_t)*8);
+  super::setProperty("IOCPUID", getRegistryEntryID(), sizeof(uint64_t)*8);
   
   setCPUNumber(0);
   setCPUState(kIOCPUStateUnregistered);

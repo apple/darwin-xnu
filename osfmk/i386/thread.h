@@ -71,7 +71,7 @@
 #include <mach/i386/fp_reg.h>
 #include <mach/thread_status.h>
 
-#include <kern/lock.h>
+#include <kern/simple_lock.h>
 
 #include <i386/iopb.h>
 #include <i386/seg.h>
@@ -130,7 +130,7 @@ struct machine_thread {
 	uint32_t		specFlags;
 #define		OnProc		0x1
 #define		CopyIOActive 	0x2 /* Checked to ensure DTrace actions do not re-enter copyio(). */
-  
+	uint64_t		thread_gpu_ns;
 #if NCOPY_WINDOWS > 0
         struct {
 	        user_addr_t	user_base;

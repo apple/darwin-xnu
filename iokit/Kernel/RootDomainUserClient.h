@@ -48,23 +48,23 @@ class RootDomainUserClient : public IOUserClient
 
     friend class IOPMrootDomain;
 private:
-    IOPMrootDomain *	fOwner;
+    IOPMrootDomain *    fOwner;
     task_t              fOwningTask;
 
     IOReturn            secureSleepSystem( uint32_t *return_code );
-    
-    IOReturn            secureSleepSystemOptions( const void  *inOptions, 
+
+    IOReturn            secureSleepSystemOptions( const void  *inOptions,
                                                   IOByteCount  inOptionsSize,
                                                   uint32_t  *returnCode);
 
-    IOReturn            secureSetAggressiveness( unsigned long type, 
-                                                 unsigned long newLevel, 
+    IOReturn            secureSetAggressiveness( unsigned long type,
+                                                 unsigned long newLevel,
                                                  int *return_code );
 
     IOReturn            secureSetMaintenanceWakeCalendar(
                                                 IOPMCalendarStruct  *inCalendar,
                                                 uint32_t            *returnCode);
-                                                
+
     IOReturn            secureSetUserAssertionLevels(uint32_t    assertionBitfield);
 
     IOReturn            secureGetSystemSleepType( uint32_t *sleepType );
@@ -72,19 +72,17 @@ private:
 public:
 
     virtual IOReturn clientClose( void );
-    
-    virtual IOReturn clientMemoryForType( UInt32 type, IOOptionBits *options, IOMemoryDescriptor **memory);
-    
-    virtual IOReturn externalMethod( uint32_t selector, 
+
+    virtual IOReturn externalMethod( uint32_t selector,
                     IOExternalMethodArguments * arguments,
-					IOExternalMethodDispatch * dispatch, 
-					OSObject * target, 
-					void * reference );
+                    IOExternalMethodDispatch * dispatch,
+                    OSObject * target,
+                    void * reference );
 
     virtual bool start( IOService * provider );
 
-    virtual bool initWithTask(task_t owningTask, void *security_id, 
-					UInt32 type, OSDictionary * properties);
+    virtual bool initWithTask(task_t owningTask, void *security_id,
+                    UInt32 type, OSDictionary * properties);
 
     // Unused - retained for symbol compatibility
     void setPreventative(UInt32 on_off, UInt32 types_of_sleep);

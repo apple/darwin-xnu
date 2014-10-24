@@ -66,7 +66,7 @@
 boolean_t kdp_read_io;
 boolean_t kdp_trans_off;
 
-static addr64_t kdp_vtophys(pmap_t pmap, addr64_t va);
+addr64_t kdp_vtophys(pmap_t pmap, addr64_t va);
 
 int kern_dump_pmap_traverse_preflight_callback(vm_map_offset_t start,
 											   vm_map_offset_t end,
@@ -77,7 +77,7 @@ int kern_dump_pmap_traverse_send_callback(vm_map_offset_t start,
 
 pmap_t kdp_pmap = 0;
 
-static addr64_t
+addr64_t
 kdp_vtophys(
 	pmap_t pmap,
 	addr64_t va)
@@ -88,7 +88,7 @@ kdp_vtophys(
 	pp = pmap_find_phys(pmap, va);
 	if(!pp) return 0;
         
-	pa = ((addr64_t)pp << 12) | (va & 0x0000000000000FFFULL);
+	pa = ((addr64_t)pp << PAGE_SHIFT) | (va & PAGE_MASK);
 
 	return(pa);
 }

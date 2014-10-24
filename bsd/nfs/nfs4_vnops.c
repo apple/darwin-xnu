@@ -80,7 +80,7 @@
 #include <kern/sched_prim.h>
 
 int
-nfs4_access_rpc(nfsnode_t np, u_int32_t *access, vfs_context_t ctx)
+nfs4_access_rpc(nfsnode_t np, u_int32_t *access, int rpcflags, vfs_context_t ctx)
 {
 	int error = 0, lockerror = ENOENT, status, numops, slot;
 	u_int64_t xid;
@@ -115,7 +115,9 @@ nfs4_access_rpc(nfsnode_t np, u_int32_t *access, vfs_context_t ctx)
 	nfsm_chain_build_done(error, &nmreq);
 	nfsm_assert(error, (numops == 0), EPROTO);
 	nfsmout_if(error);
-	error = nfs_request(np, NULL, &nmreq, NFSPROC4_COMPOUND, ctx, &si, &nmrep, &xid, &status);
+	error = nfs_request2(np, NULL, &nmreq, NFSPROC4_COMPOUND,
+		vfs_context_thread(ctx), vfs_context_ucred(ctx),
+		&si, rpcflags, &nmrep, &xid, &status);
 
 	if ((lockerror = nfs_node_lock(np)))
 		error = lockerror;
@@ -189,7 +191,7 @@ nfs4_getattr_rpc(
 	struct nfsm_chain nmreq, nmrep;
 	struct nfsreq_secinfo_args si;
 
-	if (!nmp)
+	if (nfs_mount_gone(nmp))
 		return (ENXIO);
 	nfsvers = nmp->nm_vers;
 	acls = (nmp->nm_fsattr.nfsa_flags & NFS_FSFLAG_ACL);
@@ -201,6 +203,9 @@ nfs4_getattr_rpc(
 
 	if (flags & NGA_MONITOR) /* vnode monitor requests should be soft */
 		rpcflags = R_RECOVER;
+
+	if (flags & NGA_SOFT) /* Return ETIMEDOUT if server not responding */
+		rpcflags |= R_SOFT;
 
 	NFSREQ_SECINFO_SET(&si, np, NULL, 0, NULL, 0);
 	nfsm_chain_null(&nmreq);
@@ -255,7 +260,7 @@ nfs4_readlink_rpc(nfsnode_t np, char *buf, uint32_t *buflenp, vfs_context_t ctx)
 	struct nfsreq_secinfo_args si;
 
 	nmp = NFSTONMP(np);
-	if (!nmp)
+	if (nfs_mount_gone(nmp))
 		return (ENXIO);
 	if (np->n_vattr.nva_flags & NFS_FFLAG_TRIGGER_REFERRAL)
 		return (EINVAL);
@@ -324,7 +329,7 @@ nfs4_read_rpc_async(
 	struct nfsreq_secinfo_args si;
 
 	nmp = NFSTONMP(np);
-	if (!nmp)
+	if (nfs_mount_gone(nmp))
 		return (ENXIO);
 	nfsvers = nmp->nm_vers;
 	if (np->n_vattr.nva_flags & NFS_FFLAG_TRIGGER_REFERRAL)
@@ -373,7 +378,7 @@ nfs4_read_rpc_async_finish(
 	struct nfsm_chain nmrep;
 
 	nmp = NFSTONMP(np);
-	if (!nmp) {
+	if (nfs_mount_gone(nmp)) {
 		nfs_request_async_cancel(req);
 		return (ENXIO);
 	}
@@ -431,7 +436,7 @@ nfs4_write_rpc_async(
 	struct nfsreq_secinfo_args si;
 
 	nmp = NFSTONMP(np);
-	if (!nmp)
+	if (nfs_mount_gone(nmp))
 		return (ENXIO);
 	nfsvers = nmp->nm_vers;
 	if (np->n_vattr.nva_flags & NFS_FFLAG_TRIGGER_REFERRAL)
@@ -491,7 +496,7 @@ nfs4_write_rpc_async_finish(
 	struct nfsm_chain nmrep;
 
 	nmp = NFSTONMP(np);
-	if (!nmp) {
+	if (nfs_mount_gone(nmp)) {
 		nfs_request_async_cancel(req);
 		return (ENXIO);
 	}
@@ -503,7 +508,7 @@ nfs4_write_rpc_async_finish(
 	if (error == EINPROGRESS) /* async request restarted */
 		return (error);
 	nmp = NFSTONMP(np);
-	if (!nmp)
+	if (nfs_mount_gone(nmp))
 		error = ENXIO;
 	if (!error && (lockerror = nfs_node_lock(np)))
 		error = lockerror;
@@ -560,7 +565,7 @@ nfs4_remove_rpc(
 	struct nfsreq_secinfo_args si;
 
 	nmp = NFSTONMP(dnp);
-	if (!nmp)
+	if (nfs_mount_gone(nmp))
 		return (ENXIO);
 	nfsvers = nmp->nm_vers;
 	if (dnp->n_vattr.nva_flags & NFS_FFLAG_TRIGGER_REFERRAL)
@@ -634,7 +639,7 @@ nfs4_rename_rpc(
 	struct nfsreq_secinfo_args si;
 
 	nmp = NFSTONMP(fdnp);
-	if (!nmp)
+	if (nfs_mount_gone(nmp))
 		return (ENXIO);
 	nfsvers = nmp->nm_vers;
 	if (fdnp->n_vattr.nva_flags & NFS_FFLAG_TRIGGER_REFERRAL)
@@ -733,7 +738,7 @@ nfs4_readdir_rpc(nfsnode_t dnp, struct nfsbuf *bp, vfs_context_t ctx)
 	struct nfsreq_secinfo_args si;
 
 	nmp = NFSTONMP(dnp);
-	if (!nmp)
+	if (nfs_mount_gone(nmp))
 		return (ENXIO);
 	nfsvers = nmp->nm_vers;
 	nmreaddirsize = nmp->nm_readdirsize;
@@ -1081,7 +1086,7 @@ nfs4_lookup_rpc_async(
 	struct nfsreq_secinfo_args si;
 
 	nmp = NFSTONMP(dnp);
-	if (!nmp)
+	if (nfs_mount_gone(nmp))
 		return (ENXIO);
 	nfsvers = nmp->nm_vers;
 	if (dnp->n_vattr.nva_flags & NFS_FFLAG_TRIGGER_REFERRAL)
@@ -1230,7 +1235,7 @@ nfs4_commit_rpc(
 
 	nmp = NFSTONMP(np);
 	FSDBG(521, np, offset, count, nmp ? nmp->nm_state : 0);
-	if (!nmp)
+	if (nfs_mount_gone(nmp))
 		return (ENXIO);
 	if (np->n_vattr.nva_flags & NFS_FFLAG_TRIGGER_REFERRAL)
 		return (EINVAL);
@@ -1305,7 +1310,7 @@ nfs4_pathconf_rpc(
 	struct nfs_vattr nvattr;
 	struct nfsreq_secinfo_args si;
 
-	if (!nmp)
+	if (nfs_mount_gone(nmp))
 		return (ENXIO);
 	nfsvers = nmp->nm_vers;
 	if (np->n_vattr.nva_flags & NFS_FFLAG_TRIGGER_REFERRAL)
@@ -1373,7 +1378,8 @@ nfs4_vnop_getattr(
 	struct nfs_vattr nva;
 	int error, acls, ngaflags;
 
-	if (!(nmp = VTONMP(ap->a_vp)))
+	nmp = VTONMP(ap->a_vp);
+	if (nfs_mount_gone(nmp))
 		return (ENXIO);
 	acls = (nmp->nm_fsattr.nfsa_flags & NFS_FSFLAG_ACL);
 
@@ -1484,7 +1490,7 @@ nfs4_setattr_rpc(
 	nfs_stateid stateid;
 	struct nfsreq_secinfo_args si;
 
-	if (!nmp)
+	if (nfs_mount_gone(nmp))
 		return (ENXIO);
 	nfsvers = nmp->nm_vers;
 	if (np->n_vattr.nva_flags & NFS_FFLAG_TRIGGER_REFERRAL)
@@ -1647,7 +1653,7 @@ nfs_mount_state_in_use_start(struct nfsmount *nmp, thread_t thd)
 	struct timespec ts = { 1, 0 };
 	int error = 0, slpflag = (NMFLAG(nmp, INTR) && thd) ? PCATCH : 0;
 
-	if (!nmp)
+	if (nfs_mount_gone(nmp))
 		return (ENXIO);
 	lck_mtx_lock(&nmp->nm_lock);
 	if (nmp->nm_state & (NFSSTA_FORCE|NFSSTA_DEAD)) {
@@ -1678,7 +1684,7 @@ nfs_mount_state_in_use_end(struct nfsmount *nmp, int error)
 {
 	int restart = nfs_mount_state_error_should_restart(error);
 
-	if (!nmp)
+	if (nfs_mount_gone(nmp))
 		return (restart);
 	lck_mtx_lock(&nmp->nm_lock);
 	if (restart && (error != NFSERR_OLD_STATEID) && (error != NFSERR_GRACE)) {
@@ -1759,7 +1765,7 @@ nfs_open_state_set_busy(nfsnode_t np, thread_t thd)
 	int error = 0, slpflag;
 
 	nmp = NFSTONMP(np);
-	if (!nmp)
+	if (nfs_mount_gone(nmp))
 		return (ENXIO);
 	slpflag = (NMFLAG(nmp, INTR) && thd) ? PCATCH : 0;
 
@@ -1902,7 +1908,7 @@ nfs_open_owner_set_busy(struct nfs_open_owner *noop, thread_t thd)
 	int error = 0, slpflag;
 
 	nmp = noop->noo_mount;
-	if (!nmp)
+	if (nfs_mount_gone(nmp))
 		return (ENXIO);
 	slpflag = (NMFLAG(nmp, INTR) && thd) ? PCATCH : 0;
 
@@ -2083,7 +2089,7 @@ nfs_open_file_set_busy(struct nfs_open_file *nofp, thread_t thd)
 	int error = 0, slpflag;
 
 	nmp = nofp->nof_owner->noo_mount;
-	if (!nmp)
+	if (nfs_mount_gone(nmp))
 		return (ENXIO);
 	slpflag = (NMFLAG(nmp, INTR) && thd) ? PCATCH : 0;
 
@@ -2669,7 +2675,7 @@ nfs_vnop_mmap(
 	struct nfs_open_file *nofp = NULL;
 
 	nmp = VTONMP(vp);
-	if (!nmp)
+	if (nfs_mount_gone(nmp))
 		return (ENXIO);
 
 	if (!vnode_isreg(vp) || !(ap->a_fflags & (PROT_READ|PROT_WRITE)))
@@ -2872,7 +2878,7 @@ nfs_vnop_mnomap(
 	int is_mapped_flag = 0;
 	
 	nmp = VTONMP(vp);
-	if (!nmp)
+	if (nfs_mount_gone(nmp))
 		return (ENXIO);
 
 	nfs_node_lock_force(np);
@@ -3055,7 +3061,7 @@ nfs_lock_owner_set_busy(struct nfs_lock_owner *nlop, thread_t thd)
 	int error = 0, slpflag;
 
 	nmp = nlop->nlo_open_owner->noo_mount;
-	if (!nmp)
+	if (nfs_mount_gone(nmp))
 		return (ENXIO);
 	slpflag = (NMFLAG(nmp, INTR) && thd) ? PCATCH : 0;
 
@@ -3215,7 +3221,7 @@ nfs4_setlock_rpc(
 	struct nfsreq_secinfo_args si;
 
 	nmp = NFSTONMP(np);
-	if (!nmp)
+	if (nfs_mount_gone(nmp))
 		return (ENXIO);
 	if (np->n_vattr.nva_flags & NFS_FFLAG_TRIGGER_REFERRAL)
 		return (EINVAL);
@@ -3338,7 +3344,7 @@ nfs4_unlock_rpc(
 	struct nfsreq_secinfo_args si;
 
 	nmp = NFSTONMP(np);
-	if (!nmp)
+	if (nfs_mount_gone(nmp))
 		return (ENXIO);
 	if (np->n_vattr.nva_flags & NFS_FFLAG_TRIGGER_REFERRAL)
 		return (EINVAL);
@@ -3415,7 +3421,7 @@ nfs4_getlock_rpc(
 	struct nfsreq_secinfo_args si;
 
 	nmp = NFSTONMP(np);
-	if (!nmp)
+	if (nfs_mount_gone(nmp))
 		return (ENXIO);
 	if (np->n_vattr.nva_flags & NFS_FFLAG_TRIGGER_REFERRAL)
 		return (EINVAL);
@@ -3499,7 +3505,7 @@ nfs_advlock_getlock(
 	int error = 0, answered = 0;
 
 	nmp = NFSTONMP(np);
-	if (!nmp)
+	if (nfs_mount_gone(nmp))
 		return (ENXIO);
 
 restart:
@@ -3575,7 +3581,7 @@ nfs_advlock_setlock(
 	struct timespec ts = {1, 0};
 
 	nmp = NFSTONMP(np);
-	if (!nmp)
+	if (nfs_mount_gone(nmp))
 		return (ENXIO);
 	slpflag = NMFLAG(nmp, INTR) ? PCATCH : 0;
 
@@ -3987,7 +3993,7 @@ nfs_advlock_unlock(
 	int error = 0, willsplit = 0, send_unlock_rpcs = 1;
 
 	nmp = NFSTONMP(np);
-	if (!nmp)
+	if (nfs_mount_gone(nmp))
 		return (ENXIO);
 
 restart:
@@ -4242,7 +4248,7 @@ nfs_vnop_advlock(
 #define OFF_MAX QUAD_MAX
 
 	nmp = VTONMP(ap->a_vp);
-	if (!nmp)
+	if (nfs_mount_gone(nmp))
 		return (ENXIO);
 	lck_mtx_lock(&nmp->nm_lock);
 	if ((nmp->nm_vers <= NFS_VER3) && (nmp->nm_lockmode == NFS_LOCK_MODE_DISABLED)) {
@@ -4653,7 +4659,7 @@ nfs4_open_rpc_internal(
 		return (EINVAL);
 
 	nmp = VTONMP(dvp);
-	if (!nmp)
+	if (nfs_mount_gone(nmp))
 		return (ENXIO);
 	nfsvers = nmp->nm_vers;
 	namedattrs = (nmp->nm_fsattr.nfsa_flags & NFS_FSFLAG_NAMED_ATTR);
@@ -4990,7 +4996,7 @@ nfs4_claim_delegated_open_rpc(
 	struct nfsreq_secinfo_args si;
 
 	nmp = NFSTONMP(np);
-	if (!nmp)
+	if (nfs_mount_gone(nmp))
 		return (ENXIO);
 	nfsvers = nmp->nm_vers;
 
@@ -5242,7 +5248,7 @@ nfs4_open_reclaim_rpc(
 	struct nfsreq_secinfo_args si;
 
 	nmp = NFSTONMP(np);
-	if (!nmp)
+	if (nfs_mount_gone(nmp))
 		return (ENXIO);
 	nfsvers = nmp->nm_vers;
 
@@ -5429,7 +5435,7 @@ nfs4_open_downgrade_rpc(
 	struct nfsreq_secinfo_args si;
 
 	nmp = NFSTONMP(np);
-	if (!nmp)
+	if (nfs_mount_gone(nmp))
 		return (ENXIO);
 	nfsvers = nmp->nm_vers;
 
@@ -5499,7 +5505,7 @@ nfs4_close_rpc(
 	struct nfsreq_secinfo_args si;
 
 	nmp = NFSTONMP(np);
-	if (!nmp)
+	if (nfs_mount_gone(nmp))
 		return (ENXIO);
 	nfsvers = nmp->nm_vers;
 
@@ -5874,7 +5880,7 @@ nfs4_delegation_return_enqueue(nfsnode_t np)
 	struct nfsmount *nmp;
 
 	nmp = NFSTONMP(np);
-	if (!nmp)
+	if (nfs_mount_gone(nmp))
 		return;
 
 	lck_mtx_lock(&np->n_openlock);
@@ -5900,7 +5906,7 @@ nfs4_delegation_return(nfsnode_t np, int flags, thread_t thd, kauth_cred_t cred)
 	int error;
 
 	nmp = NFSTONMP(np);
-	if (!nmp)
+	if (nfs_mount_gone(nmp))
 		return (ENXIO);
 
 	/* first, make sure the node's marked for delegation return */
@@ -6035,7 +6041,7 @@ nfs_vnop_read(
 
 	np = VTONFS(vp);
 	nmp = NFSTONMP(np);
-	if (!nmp)
+	if (nfs_mount_gone(nmp))
 		return (ENXIO);
 	if (np->n_flag & NREVOKE)
 		return (EIO);
@@ -6126,7 +6132,7 @@ nfs4_vnop_create(
 	struct nfs_open_file *newnofp = NULL, *nofp = NULL;
 
 	nmp = VTONMP(dvp);
-	if (!nmp)
+	if (nfs_mount_gone(nmp))
 		return (ENXIO);
 
 	if (vap)
@@ -6296,7 +6302,7 @@ nfs4_create_rpc(
 	struct nfsreq_secinfo_args si;
 
 	nmp = NFSTONMP(dnp);
-	if (!nmp)
+	if (nfs_mount_gone(nmp))
 		return (ENXIO);
 	nfsvers = nmp->nm_vers;
 	namedattrs = (nmp->nm_fsattr.nfsa_flags & NFS_FSFLAG_NAMED_ATTR);
@@ -6483,7 +6489,7 @@ nfs4_vnop_mknod(
 	int error;
 
 	nmp = VTONMP(ap->a_dvp);
-	if (!nmp)
+	if (nfs_mount_gone(nmp))
 		return (ENXIO);
 
 	if (!VATTR_IS_ACTIVE(ap->a_vap, va_type))
@@ -6575,7 +6581,7 @@ nfs4_vnop_link(
 		return (EXDEV);
 
 	nmp = VTONMP(vp);
-	if (!nmp)
+	if (nfs_mount_gone(nmp))
 		return (ENXIO);
 	nfsvers = nmp->nm_vers;
 	if (np->n_vattr.nva_flags & NFS_FFLAG_TRIGGER_REFERRAL)
@@ -6691,7 +6697,7 @@ nfs4_vnop_rmdir(
 		return (EINVAL);
 
 	nmp = NFSTONMP(dnp);
-	if (!nmp)
+	if (nfs_mount_gone(nmp))
 		return (ENXIO);
 	namedattrs = (nmp->nm_fsattr.nfsa_flags & NFS_FSFLAG_NAMED_ATTR);
 
@@ -6775,7 +6781,7 @@ nfs4_named_attr_dir_get(nfsnode_t np, int fetch, vfs_context_t ctx)
 	struct nfsreq_secinfo_args si;
 
 	nmp = NFSTONMP(np);
-	if (!nmp)
+	if (nfs_mount_gone(nmp))
 		return (NULL);
 	if (np->n_vattr.nva_flags & NFS_FFLAG_TRIGGER_REFERRAL)
 		return (NULL);
@@ -6943,7 +6949,7 @@ nfs4_named_attr_get(
 	slen = sizeof(sbuf);
 
 	nmp = NFSTONMP(np);
-	if (!nmp)
+	if (nfs_mount_gone(nmp))
 		return (ENXIO);
 	NVATTR_INIT(&nvattr);
 	negnamecache = !NMFLAG(nmp, NONEGNAMECACHE);
@@ -7628,7 +7634,7 @@ nfs4_named_attr_remove(nfsnode_t np, nfsnode_t anp, const char *name, vfs_contex
 	int error, putanp = 0;
 
 	nmp = NFSTONMP(np);
-	if (!nmp)
+	if (nfs_mount_gone(nmp))
 		return (ENXIO);
 
 	bzero(&cn, sizeof(cn));
@@ -7696,7 +7702,7 @@ nfs4_vnop_getxattr(
 	int error = 0, isrsrcfork;
 
 	nmp = VTONMP(ap->a_vp);
-	if (!nmp)
+	if (nfs_mount_gone(nmp))
 		return (ENXIO);
 
 	if (!(nmp->nm_fsattr.nfsa_flags & NFS_FSFLAG_NAMED_ATTR))
@@ -7760,7 +7766,7 @@ nfs4_vnop_setxattr(
 	struct vnop_write_args vwa;
 
 	nmp = VTONMP(ap->a_vp);
-	if (!nmp)
+	if (nfs_mount_gone(nmp))
 		return (ENXIO);
 
 	if (!(nmp->nm_fsattr.nfsa_flags & NFS_FSFLAG_NAMED_ATTR))
@@ -7898,7 +7904,7 @@ nfs4_vnop_removexattr(
 	struct nfsmount *nmp = VTONMP(ap->a_vp);
 	int error;
 
-	if (!nmp)
+	if (nfs_mount_gone(nmp))
 		return (ENXIO);
 	if (!(nmp->nm_fsattr.nfsa_flags & NFS_FSFLAG_NAMED_ATTR))
 		return (ENOTSUP);
@@ -7933,7 +7939,7 @@ nfs4_vnop_listxattr(
 	struct direntry *dp;
 
 	nmp = VTONMP(ap->a_vp);
-	if (!nmp)
+	if (nfs_mount_gone(nmp))
 		return (ENXIO);
 
 	if (!(nmp->nm_fsattr.nfsa_flags & NFS_FSFLAG_NAMED_ATTR))
@@ -8079,7 +8085,7 @@ nfs4_vnop_getnamedstream(
 	int error = 0;
 
 	nmp = VTONMP(ap->a_vp);
-	if (!nmp)
+	if (nfs_mount_gone(nmp))
 		return (ENXIO);
 
 	if (!(nmp->nm_fsattr.nfsa_flags & NFS_FSFLAG_NAMED_ATTR))
@@ -8126,7 +8132,7 @@ nfs4_vnop_makenamedstream(
 	int error = 0;
 
 	nmp = VTONMP(ap->a_vp);
-	if (!nmp)
+	if (nfs_mount_gone(nmp))
 		return (ENXIO);
 
 	if (!(nmp->nm_fsattr.nfsa_flags & NFS_FSFLAG_NAMED_ATTR))
@@ -8164,7 +8170,7 @@ nfs4_vnop_removenamedstream(
 	nfsnode_t np = ap->a_vp ? VTONFS(ap->a_vp) : NULL;
 	nfsnode_t anp = ap->a_svp ? VTONFS(ap->a_svp) : NULL;
 
-	if (!nmp)
+	if (nfs_mount_gone(nmp))
 		return (ENXIO);
 
 	/*

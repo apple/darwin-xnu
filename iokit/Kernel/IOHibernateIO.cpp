@@ -160,6 +160,7 @@ to restrict I/O ops.
 #include <sys/fcntl.h>                       // (FWRITE, ...)
 #include <sys/sysctl.h>
 #include <sys/kdebug.h>
+#include <stdint.h>
 
 #include <IOKit/IOHibernatePrivate.h>
 #include <IOKit/IOPolledInterface.h>
@@ -200,6 +201,7 @@ static const OSSymbol *         gIOHibernateBootNextKey;
 static OSData *	                gIOHibernateBoot0082Data;
 static OSData *	                gIOHibernateBootNextData;
 static OSObject *		gIOHibernateBootNextSave;
+static struct kern_direct_file_io_ref_t * gDebugImageFileRef;
 #endif
 
 static IOLock *                           gFSLock;
@@ -608,6 +610,105 @@ IOCopyMediaForDev(dev_t device)
     return (result);
 }
 
+/* 
+ * Writes header to disk with signature, block size and file extents data.
+ * If there are more than 2 extents, then they are written on second block.
+ */
+static IOReturn
+WriteExtentsToFile(struct kern_direct_file_io_ref_t * fileRef,
+                   uint32_t signature, uint32_t blockSize,
+                   IOPolledFileExtent *fileExtents,
+                   IOByteCount size)
+{
+    IOHibernateImageHeader  hdr;
+    IOItemCount  count;
+    IOReturn     err = kIOReturnSuccess;
+    int         rc;
+
+    memset(&hdr, 0, sizeof(IOHibernateImageHeader));
+    count = size;
+    if (count > sizeof(hdr.fileExtentMap))
+    {
+        hdr.fileExtentMapSize = count;
+        count = sizeof(hdr.fileExtentMap);
+    }
+    else
+        hdr.fileExtentMapSize = sizeof(hdr.fileExtentMap);
+
+    bcopy(fileExtents, &hdr.fileExtentMap[0], count);
+
+    // copy file block extent list if larger than header
+    if (hdr.fileExtentMapSize > sizeof(hdr.fileExtentMap))
+    {
+            count = hdr.fileExtentMapSize - sizeof(hdr.fileExtentMap);
+            rc = kern_write_file(fileRef, blockSize, 
+                                 (caddr_t)(((uint8_t *)fileExtents) + sizeof(hdr.fileExtentMap)), 
+                                 count, IO_SKIP_ENCRYPTION);
+            if (rc != 0) {
+                HIBLOG("kern_write_file returned %d\n", rc);
+                err = kIOReturnIOError;
+                goto exit;
+            }    
+    }
+    hdr.signature = signature;
+    hdr.deviceBlockSize = blockSize;
+
+    rc = kern_write_file(fileRef, 0, (char *)&hdr, sizeof(hdr), IO_SKIP_ENCRYPTION);
+    if (rc != 0) {
+        HIBLOG("kern_write_file returned %d\n", rc);
+        err = kIOReturnIOError;
+        goto exit;
+    }
+
+exit:
+    return err;
+}
+
+static IOReturn
+GetImageBlockSize(IOService *part, OSArray *pollers, IOByteCount *blockSize)
+{
+    IOService       * service;
+    IORegistryEntry * next;
+    IORegistryEntry * child;
+
+    IOReturn        err = kIOReturnSuccess;
+
+
+    next = part;
+    do
+    {
+        IOPolledInterface * poller;
+        OSObject *          obj;
+        OSNumber        * num;
+
+        obj = next->getProperty(kIOPolledInterfaceSupportKey);
+        if (kOSBooleanFalse == obj)
+        {
+            pollers->flushCollection();
+            break;
+        }
+        else if ((poller = OSDynamicCast(IOPolledInterface, obj)))
+            pollers->setObject(poller);
+
+        if ((service = OSDynamicCast(IOService, next)) 
+            && service->getDeviceMemory()
+            && !pollers->getCount())	break;
+
+        if ((num = OSDynamicCast(OSNumber, next->getProperty(kIOMediaPreferredBlockSizeKey))))
+            *blockSize = num->unsigned32BitValue();
+        child = next;
+    }
+    while ((next = child->getParentEntry(gIOServicePlane)) 
+           && child->isParent(next, gIOServicePlane, true));
+
+    if (*blockSize < 4096) *blockSize = 4096;
+
+    if (!pollers->getCount())
+        err = kIOReturnUnsupported;
+
+    return err;
+}
+
 IOReturn
 IOPolledFileOpen( const char * filename, uint64_t setFileSize,
 		  IOBufferMemoryDescriptor * ioBuffer, 
@@ -618,7 +719,6 @@ IOPolledFileOpen( const char * filename, uint64_t setFileSize,
     IOPolledFileIOVars *	vars;
     _OpenFileContext		ctx;
     OSData *			extentsData;
-    OSNumber *			num;
     IOService *                 part = 0;
     OSString *                  keyUUID = 0;
     OSString *                  keyStoreUUID = 0;
@@ -627,6 +727,8 @@ IOPolledFileOpen( const char * filename, uint64_t setFileSize,
     uint64_t			maxiobytes;
     AbsoluteTime                startTime, endTime;
     uint64_t                    nsec;
+    caddr_t         write_file_addr = NULL;
+    vm_size_t       write_file_len = 0;
 
     vars = IONew(IOPolledFileIOVars, 1);
     if (!vars) return (kIOReturnNoMemory);
@@ -644,12 +746,20 @@ IOPolledFileOpen( const char * filename, uint64_t setFileSize,
    	ctx.extents = extentsData;
 	ctx.size    = 0;
 	clock_get_uptime(&startTime);
+    if (!gDebugImageFileRef) 
+    {
+        // Avoid writing the header if it is written when file is prep'd for debug data
+        // Image is locked during prep for debug data. So, write may fail.
+        write_file_addr = (caddr_t)gIOHibernateCurrentHeader;
+        write_file_len = sizeof(IOHibernateImageHeader);
+    }
 	vars->fileRef = kern_open_file_for_direct_io(filename, 
+                                                 true,
 						    &file_extent_callback, &ctx, 
 						    setFileSize,
 						    // write file:
-                                                    0, (caddr_t) gIOHibernateCurrentHeader, 
-                                                    sizeof(IOHibernateImageHeader),
+                                                    0, write_file_addr,
+                                                    write_file_len,
                                                     // results
 						    &block_dev,
 						    &hibernate_image_dev,
@@ -736,56 +846,24 @@ IOPolledFileOpen( const char * filename, uint64_t setFileSize,
             break;
 	}
 
-	IORegistryEntry * next;
-	IORegistryEntry * child;
-	IOService       * service;
-	OSData          * data;
-
         vars->pollers = OSArray::withCapacity(4);
-	if (!vars->pollers)
+        if (!vars->pollers)
         {
             err = kIOReturnNoMemory;
             break;
-	}
+        }
 
-	vars->blockSize = 512;
-	next = part;
-	do
-	{
-            IOPolledInterface * poller;
-	    OSObject *          obj;
+        err = GetImageBlockSize(part, vars->pollers, &vars->blockSize);
 
-	    obj = next->getProperty(kIOPolledInterfaceSupportKey);
-	    if (kOSBooleanFalse == obj)
-	    {
-		vars->pollers->flushCollection();
-		break;
-	    }
-            else if ((poller = OSDynamicCast(IOPolledInterface, obj)))
-                vars->pollers->setObject(poller);
+        HIBLOG("hibernate image major %d, minor %d, blocksize %ld, pollers %d\n",
+               major(hibernate_image_dev), minor(hibernate_image_dev), (long)vars->blockSize, 
+               vars->pollers->getCount());
 
-	    if ((service = OSDynamicCast(IOService, next)) 
-		&& service->getDeviceMemory()
-		&& !vars->pollers->getCount())	break;
+        if (err != kIOReturnSuccess)
+            break;
 
-	    if ((num = OSDynamicCast(OSNumber, next->getProperty(kIOMediaPreferredBlockSizeKey))))
-		vars->blockSize = num->unsigned32BitValue();
-            child = next;
-	}
-	while ((next = child->getParentEntry(gIOServicePlane)) 
-                && child->isParent(next, gIOServicePlane, true));
-
-	if (vars->blockSize < 4096) vars->blockSize = 4096;
-
-	HIBLOG("hibernate image major %d, minor %d, blocksize %ld, pollers %d\n",
-		    major(hibernate_image_dev), minor(hibernate_image_dev), (long)vars->blockSize, 
-		    vars->pollers->getCount());
-
-	if (!vars->pollers->getCount())
-	{
-            err = kIOReturnUnsupported;
-	    continue;
-	}
+	IORegistryEntry * next;
+    OSData          * data;
 	if (vars->blockSize < sizeof(IOHibernateImageHeader))
 	{
 	    err = kIOReturnError;
@@ -862,6 +940,12 @@ IOPolledFileOpen( const char * filename, uint64_t setFileSize,
 	    kern_close_file_for_direct_io(vars->fileRef, 0, 0, 0, 0, 0);
 	    vars->fileRef = NULL;
 	}
+    }
+    else
+    {
+        WriteExtentsToFile(vars->fileRef, kIOHibernateHeaderOpenSignature, vars->blockSize, 
+                           (IOPolledFileExtent *)extentsData->getBytesNoCopy(),
+                           extentsData->getLength());
     }
 
     if (part)
@@ -1149,6 +1233,148 @@ if (vars->position & (vars->blockSize - 1)) HIBLOG("misaligned file pos %qx\n", 
 
 /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
 
+#if HIBERNATION
+IOReturn
+IOHibernateOpenForDebugData( )
+{
+    dev_t       image_dev;
+    OSData      *extentsData = NULL;
+    OSObject    *obj;
+    OSString    *str;
+    IOByteCount blockSize = 0;
+    IOByteCount size;
+    IOService *                 part = 0;
+    OSData *   data = NULL;
+
+    IOPolledFileExtent *     fileExtents;
+    IOReturn            err = kIOReturnSuccess;
+    IORegistryEntry * regEntry;
+    OSArray     * pollers = NULL;
+
+    _OpenFileContext		            ctx;
+
+    if (gDebugImageFileRef != NULL)
+        return kIOReturnError;
+
+    if ((obj = IOService::getPMRootDomain()->copyProperty(kIOHibernateFileKey)))
+    {
+        if ((str = OSDynamicCast(OSString, obj)))
+            strlcpy(gIOHibernateFilename, str->getCStringNoCopy(),
+                    sizeof(gIOHibernateFilename));
+        obj->release();
+    }
+
+    if (!gIOHibernateFilename[0]) {
+        HIBLOG("Failed to get hibernate image filename\n");
+        return (kIOReturnUnsupported);
+    }
+
+    extentsData = OSData::withCapacity(32);
+    ctx.extents = extentsData;
+    ctx.size    = 0;
+
+	bzero(gIOHibernateCurrentHeader, sizeof(IOHibernateImageHeader));
+	gIOHibernateCurrentHeader->debugFlags = gIOHibernateDebugFlags;
+	gIOHibernateCurrentHeader->signature = kIOHibernateHeaderInvalidSignature;
+
+    gDebugImageFileRef = kern_open_file_for_direct_io(gIOHibernateFilename, 
+                                                      false,
+                                                      &file_extent_callback, &ctx, 
+                                                      0, 0, 
+                                                      (caddr_t)gIOHibernateCurrentHeader, 
+                                                      sizeof(IOHibernateImageHeader),
+                                                      NULL, &image_dev, NULL, NULL, NULL);
+
+    if (gDebugImageFileRef == NULL) 
+    {
+        HIBLOG("Failed to open the file \n");
+        err = kIOReturnError;
+        goto exit;
+    }
+    fileExtents = (IOPolledFileExtent *)extentsData->getBytesNoCopy();
+    size = extentsData->getLength();
+
+    part = IOCopyMediaForDev(image_dev);
+    if (!part)
+    {
+        HIBLOG("Failed to get the media device\n");
+        err = kIOReturnNotFound;
+        goto exit;
+    }
+
+
+    pollers = OSArray::withCapacity(4);
+    if (!pollers)
+    {
+        err = kIOReturnNoMemory;
+        goto exit;
+    }
+
+    err = GetImageBlockSize(part, pollers, &blockSize);
+    if (err != kIOReturnSuccess)
+    {
+        HIBLOG("Failed to get block size\n");
+        goto exit;
+    }
+    if (blockSize < sizeof(IOHibernateImageHeader))
+    {
+        HIBLOG("block size %llu is less than the size of the header\n", blockSize);
+        err = kIOReturnError;
+        goto exit;
+    }
+
+    WriteExtentsToFile(gDebugImageFileRef, kIOHibernateHeaderOpenSignature,
+                       blockSize, fileExtents, size);
+
+    char str2[24 + sizeof(uuid_string_t) + 2];
+
+    if (!gIOCreateEFIDevicePathSymbol)
+        gIOCreateEFIDevicePathSymbol = OSSymbol::withCString("CreateEFIDevicePath");
+
+    snprintf(str2, sizeof(str2), "%qx", fileExtents[0].start);
+
+    err = IOService::getPlatform()->callPlatformFunction(
+                                                         gIOCreateEFIDevicePathSymbol, false,
+                                                         (void *) part, (void *) str2,
+                                                         (void *) (uintptr_t) true, (void *) &data);
+
+    if (!gIOOptionsEntry)
+    {
+        regEntry = IORegistryEntry::fromPath("/options", gIODTPlane);
+        gIOOptionsEntry = OSDynamicCast(IODTNVRAM, regEntry);
+        if (regEntry && !gIOOptionsEntry)
+            regEntry->release();
+    }
+    if (gIOOptionsEntry)
+    {
+        const OSSymbol *  sym;
+
+        sym = OSSymbol::withCStringNoCopy(kIOHibernateBootImageKey);
+        if (sym)
+        {
+            gIOOptionsEntry->setProperty(sym, data);
+            sym->release();
+        }
+    }
+
+
+exit:
+
+    if ( (err != kIOReturnSuccess) && gDebugImageFileRef) {
+        kern_close_file_for_direct_io(gDebugImageFileRef, 0, 0, 0, 0, 0);
+        gDebugImageFileRef = NULL;
+    }
+    if (extentsData) extentsData->release();
+    if (part) part->release();
+    if (pollers) pollers->release();
+    if (data) data->release();
+
+    return err;
+}
+#endif
+
+/* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
+
 IOReturn
 IOHibernateSystemSleep(void)
 {
@@ -1263,13 +1489,13 @@ IOHibernateSystemSleep(void)
 	    IOService::getPlatform()->getConsoleInfo(&consoleInfo);
 
 	    // estimate: 6% increase in pages compressed
-	    // screen preview 2 images compressed 50%
+	    // screen preview 2 images compressed 0%
 	    setFileSize = ((ptoa_64((106 * pageCount) / 100) * gIOHibernateCompression) >> 8)
 				+ vars->page_list->list_size
 	 			+ (consoleInfo.v_width * consoleInfo.v_height * 8);
 	    enum { setFileRound = 1024*1024ULL };
 	    setFileSize = ((setFileSize + setFileRound) & ~(setFileRound - 1));
-
+	
 	    HIBLOG("hibernate_page_list_setall preflight pageCount %d est comp %qd setfile %qd min %qd\n", 
 		    pageCount, (100ULL * gIOHibernateCompression) >> 8,
 		    setFileSize, vars->fileMinSize);
@@ -1282,6 +1508,11 @@ IOHibernateSystemSleep(void)
 	}
     
 	// open & invalidate the image file
+
+	if (gDebugImageFileRef) {
+	    kern_close_file_for_direct_io(gDebugImageFileRef, 0, 0, 0, 0, 0);
+	    gDebugImageFileRef = NULL;
+	}
 
         err = IOPolledFileOpen(gIOHibernateFilename, setFileSize, vars->ioBuffer,
                                 &vars->fileVars, &vars->fileExtents, &data, 
@@ -1991,6 +2222,33 @@ IOHibernateSystemPostWake(void)
 	}
 	gFSState = kFSIdle;
     }
+
+    if (gDebugImageFileRef) {
+        kern_close_file_for_direct_io(gDebugImageFileRef, 0, 0, 0, 0, 0);
+        gDebugImageFileRef = NULL;
+    }
+
+    if (!gIOOptionsEntry)
+    {
+        IORegistryEntry * regEntry;
+        regEntry = IORegistryEntry::fromPath("/options", gIODTPlane);
+        gIOOptionsEntry = OSDynamicCast(IODTNVRAM, regEntry);
+        if (regEntry && !gIOOptionsEntry)
+            regEntry->release();
+    }
+    if (gIOOptionsEntry)
+    {
+        const OSSymbol *  sym;
+
+        sym = OSSymbol::withCStringNoCopy(kIOHibernateBootImageKey);
+        if (sym)
+        {
+            gIOOptionsEntry->removeProperty(sym);
+            gIOOptionsEntry->sync();
+            sym->release();
+        }
+    }
+
     return (kIOReturnSuccess);
 }
 
@@ -3128,7 +3386,6 @@ void IOHibernateSetWakeCapabilities(uint32_t capability)
 	{
 		vm_compressor_do_warmup();
 	}
-
     }
 }
 

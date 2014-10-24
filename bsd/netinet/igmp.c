@@ -1887,6 +1887,10 @@ igmp_timeout(void *arg)
 		interface_timers_running = 0;
 		LIST_FOREACH(igi, &igi_head, igi_link) {
 			IGI_LOCK(igi);
+			if (igi->igi_version != IGMP_VERSION_3) {
+				IGI_UNLOCK(igi);
+				continue;
+			}
 			if (igi->igi_v3_timer == 0) {
 				/* Do nothing. */
 			} else if (--igi->igi_v3_timer == 0) {
@@ -3812,11 +3816,7 @@ igmp_sendpkt(struct mbuf *m)
 
 	imo->imo_multicast_ttl  = 1;
 	imo->imo_multicast_vif  = -1;
-#if MROUTING
-	imo->imo_multicast_loop = (ip_mrouter != NULL);
-#else
 	imo->imo_multicast_loop = 0;
-#endif
 
 	/*
 	 * If the user requested that IGMP traffic be explicitly

@@ -65,9 +65,6 @@
  *
  */
 
-#include <cputypes.h>
-#include <platforms.h>
-
 #include <kern/ast.h>
 #include <kern/counters.h>
 #include <kern/cpu_number.h>
@@ -77,6 +74,7 @@
 #include <kern/thread.h>
 #include <kern/processor.h>
 #include <kern/spl.h>
+#include <kern/sfi.h>
 #if CONFIG_TELEMETRY
 #include <kern/telemetry.h>
 #endif
@@ -141,7 +139,7 @@ ast_taken(
 			if (reasons & AST_PREEMPT) {
 				counter(c_ast_taken_block++);
 				thread_block_reason(THREAD_CONTINUE_NULL, NULL,
-										AST_PREEMPT | AST_URGENT);
+										reasons & AST_PREEMPTION);
 			}
 
 			reasons &= ~AST_PREEMPTION;
@@ -198,27 +196,35 @@ ast_taken(
 
 #if CONFIG_TELEMETRY
 			if (reasons & AST_TELEMETRY_ALL) {
-				boolean_t interrupted_userspace;
+				boolean_t interrupted_userspace = FALSE;
+				boolean_t is_windowed = FALSE;
 
 				assert((reasons & AST_TELEMETRY_ALL) != AST_TELEMETRY_ALL); /* only one is valid at a time */
 				interrupted_userspace = (reasons & AST_TELEMETRY_USER) ? TRUE : FALSE;
+				is_windowed = ((reasons & AST_TELEMETRY_WINDOWED) ? TRUE : FALSE);
 				thread_ast_clear(thread, AST_TELEMETRY_ALL);
-				telemetry_ast(thread, interrupted_userspace);
+				telemetry_ast(thread, interrupted_userspace, is_windowed);
 			}
 #endif
 
 			ml_set_interrupts_enabled(FALSE);
 
+			if (reasons & AST_SFI) {
+				sfi_ast(thread);
+			}
+
 			/* 
-			 * Check for preemption.
+			 * Check for preemption. Conditions may have changed from when the AST_PREEMPT was originally set.
 			 */
+			thread_lock(thread);
 			if (reasons & AST_PREEMPT)
-				reasons = csw_check(current_processor());
+				reasons = csw_check(current_processor(), reasons & AST_QUANTUM);
+			thread_unlock(thread);
 
 			if (	(reasons & AST_PREEMPT)				&&
 					wait_queue_assert_possible(thread)		) {		
 				counter(c_ast_taken_block++);
-				thread_block_reason((thread_continue_t)thread_exception_return, NULL, AST_PREEMPT);
+				thread_block_reason((thread_continue_t)thread_exception_return, NULL, reasons & AST_PREEMPTION);
 			}
 		}
 	}
@@ -235,8 +241,6 @@ ast_check(
 {
 	thread_t			thread = processor->active_thread;
 
-	processor->current_pri = thread->sched_pri;
-	processor->current_thmode = thread->sched_mode;
 	if (	processor->state == PROCESSOR_RUNNING		||
 			processor->state == PROCESSOR_SHUTDOWN		) {
 		ast_t			preempt;
@@ -251,7 +255,14 @@ ast_check(
 		/*
 		 *	Context switch check.
 		 */
-		if ((preempt = csw_check(processor)) != AST_NONE)
+		thread_lock(thread);
+
+		processor->current_pri = thread->sched_pri;
+		processor->current_thmode = thread->sched_mode;
+		processor->current_sfi_class = thread->sfi_class = sfi_thread_classify(thread);
+
+		if ((preempt = csw_check(processor, AST_NONE)) != AST_NONE)
 			ast_on(preempt);
+		thread_unlock(thread);
 	}
 }

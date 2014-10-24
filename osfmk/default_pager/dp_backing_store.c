@@ -101,7 +101,7 @@
 int physical_transfer_cluster_count = 0;
 
 #define VM_SUPER_CLUSTER	0x40000
-#define VM_SUPER_PAGES          (VM_SUPER_CLUSTER / PAGE_SIZE)
+#define VM_SUPER_PAGES          (VM_SUPER_CLUSTER / PAGE_MIN_SIZE)
 
 /*
  * 0 means no shift to pages, so == 1 page/cluster. 1 would mean
@@ -1908,6 +1908,7 @@ ps_vstruct_reclaim(
 	fault_info.cluster_size = VM_SUPER_CLUSTER;
 	fault_info.behavior = VM_BEHAVIOR_SEQUENTIAL;
 	fault_info.user_tag = 0;
+	fault_info.pmap_options = 0;
 	fault_info.lo_offset = 0;
 	fault_info.hi_offset = ptoa_32(vs->vs_size << vs->vs_clshift);
 	fault_info.io_sync = reclaim_backing_store;
@@ -2924,7 +2925,7 @@ pvs_cluster_read(
 	int			cl_index;
 	unsigned int		xfer_size;
 	dp_offset_t		orig_vs_offset;
-	dp_offset_t       ps_offset[(VM_SUPER_CLUSTER / PAGE_SIZE) >> VSTRUCT_MIN_CLSHIFT];
+	dp_offset_t		ps_offset[(VM_SUPER_CLUSTER / PAGE_SIZE) >> VSTRUCT_MIN_CLSHIFT];
 	paging_segment_t        psp[(VM_SUPER_CLUSTER / PAGE_SIZE) >> VSTRUCT_MIN_CLSHIFT];
 	struct clmap		clmap;
 	upl_t			upl;

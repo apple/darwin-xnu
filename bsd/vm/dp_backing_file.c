@@ -60,6 +60,7 @@
 #include <mach/boolean.h>
 
 #include <kern/kern_types.h>
+#include <kern/locks.h>
 #include <kern/host.h>
 #include <kern/task.h>
 #include <kern/zalloc.h>
@@ -77,7 +78,12 @@
 #include <security/mac_framework.h>
 #endif
 
-void kprintf(const char *fmt, ...);
+#include <pexpert/pexpert.h>
+
+void macx_init(void);
+
+static lck_grp_t *macx_lock_group;
+static lck_mtx_t *macx_lock;
 
 /*
  * temporary support for delayed instantiation
@@ -99,6 +105,18 @@ struct bs_map		bs_port_table[MAX_BACKING_STORE] = {
 
 /* ###################################################### */
 
+/*
+ *	Routine:	macx_init
+ *	Function:
+ *		Initialize locks so that only one caller can change
+ *      state at a time.
+ */
+void
+macx_init(void)
+{
+	macx_lock_group = lck_grp_alloc_init("macx", NULL);
+	macx_lock = lck_mtx_alloc_init(macx_lock_group, NULL);
+}
 
 /*
  *	Routine:	macx_backing_store_recovery
@@ -114,9 +132,7 @@ macx_backing_store_recovery(
 	int		pid = args->pid;
 	int		error;
 	struct proc	*p =  current_proc();
-	boolean_t	funnel_state;
 
-	funnel_state = thread_funnel_set(kernel_flock, TRUE);
 	if ((error = suser(kauth_cred_get(), 0)))
 		goto backing_store_recovery_return;
 
@@ -130,7 +146,6 @@ macx_backing_store_recovery(
 	task_backing_store_privileged(p->task);
 
 backing_store_recovery_return:
-	(void) thread_funnel_set(kernel_flock, FALSE);
 	return(error);
 }
 
@@ -147,16 +162,16 @@ macx_backing_store_suspend(
 {
 	boolean_t	suspend = args->suspend;
 	int		error;
-	boolean_t	funnel_state;
 
-	funnel_state = thread_funnel_set(kernel_flock, TRUE);
+	lck_mtx_lock(macx_lock);
 	if ((error = suser(kauth_cred_get(), 0)))
 		goto backing_store_suspend_return;
 
+	/* Multiple writers protected by macx_lock */
 	vm_backing_store_disable(suspend);
 
 backing_store_suspend_return:
-	(void) thread_funnel_set(kernel_flock, FALSE);
+	lck_mtx_unlock(macx_lock);
 	return(error);
 }
 
@@ -173,6 +188,9 @@ extern boolean_t compressor_store_stop_compaction;
  *		on by default when the system comes up and is turned 
  *		off when a shutdown/restart is requested.  It is 
  *		re-enabled if the shutdown/restart is aborted for any reason.
+ *
+ *  This routine assumes macx_lock has been locked by macx_triggers ->
+ *      mach_macx_triggers -> macx_backing_store_compaction
  */
 
 int
@@ -180,6 +198,7 @@ macx_backing_store_compaction(int flags)
 {
 	int error;
 
+	lck_mtx_assert(macx_lock, LCK_MTX_ASSERT_OWNED);
 	if ((error = suser(kauth_cred_get(), 0)))
 		return error;
 
@@ -211,17 +230,19 @@ macx_triggers(
 {
 	int	error;
 
+	lck_mtx_lock(macx_lock);
 	error = suser(kauth_cred_get(), 0);
 	if (error)
 		return error;
 
-	return mach_macx_triggers(args);
+	error = mach_macx_triggers(args);
+	
+	lck_mtx_unlock(macx_lock);
+	return error;
 }
 
 
 extern boolean_t dp_isssd;
-extern void vm_swap_init(void);
-extern int vm_compressor_mode;
 
 /*
  * In the compressed pager world, the swapfiles are created by the kernel.
@@ -265,30 +286,27 @@ macx_swapon(
 	mach_port_t		backing_store;
 	memory_object_default_t	default_pager;
 	int			i;
-	boolean_t		funnel_state;
 	off_t			file_size;
 	vfs_context_t		ctx = vfs_context_current();
 	struct proc		*p =  current_proc();
 	int			dp_cluster_size;
 
+	AUDIT_MACH_SYSCALL_ENTER(AUE_SWAPON);
+	AUDIT_ARG(value32, args->priority);
+	
+	lck_mtx_lock(macx_lock);
+
 	if (COMPRESSED_PAGER_IS_ACTIVE) {
 		if (macx_swapon_allowed == FALSE) {
-			return EINVAL;
+			error = EINVAL;
+			goto swapon_bailout;
 		} else {
-			if ((vm_compressor_mode == VM_PAGER_COMPRESSOR_WITH_SWAP) ||
-			    (vm_compressor_mode == VM_PAGER_FREEZER_COMPRESSOR_WITH_SWAP)) {
-				vm_swap_init();
-			}
-
 			macx_swapon_allowed = FALSE;
-			return 0;
+			error = 0;
+			goto swapon_bailout;
 		}
 	}
 
-	AUDIT_MACH_SYSCALL_ENTER(AUE_SWAPON);
-	AUDIT_ARG(value32, args->priority);
-
-	funnel_state = thread_funnel_set(kernel_flock, TRUE);
 	ndp = &nd;
 
 	if ((error = suser(kauth_cred_get(), 0)))
@@ -437,7 +455,7 @@ swapon_bailout:
 	if (vp) {
 		vnode_put(vp);
 	}
-	(void) thread_funnel_set(kernel_flock, FALSE);
+	lck_mtx_unlock(macx_lock);
 	AUDIT_MACH_SYSCALL_EXIT(error);
 
 	if (error)
@@ -466,13 +484,13 @@ macx_swapoff(
 	struct proc		*p =  current_proc();
 	int			i;
 	int			error;
-	boolean_t		funnel_state;
 	vfs_context_t ctx = vfs_context_current();
 	int			orig_iopol_disk;
 
 	AUDIT_MACH_SYSCALL_ENTER(AUE_SWAPOFF);
 
-	funnel_state = thread_funnel_set(kernel_flock, TRUE);
+	lck_mtx_lock(macx_lock);
+	
 	backing_store = NULL;
 	ndp = &nd;
 
@@ -550,8 +568,7 @@ swapoff_bailout:
 	/* get rid of macx_swapoff() namei() reference */
 	if (vp)
 		vnode_put(vp);
-
-	(void) thread_funnel_set(kernel_flock, FALSE);
+	lck_mtx_unlock(macx_lock);
 	AUDIT_MACH_SYSCALL_EXIT(error);
 
 	if (error)
@@ -591,7 +608,7 @@ macx_swapinfo(
 
 			*total_p = vm_swap_get_total_space();
 			*avail_p = vm_swap_get_free_space();
-			*pagesize_p = PAGE_SIZE_64;
+			*pagesize_p = (vm_size_t)PAGE_SIZE_64;
 			*encrypted_p = TRUE;
 
 		} else {

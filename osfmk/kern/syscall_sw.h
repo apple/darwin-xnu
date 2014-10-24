@@ -66,12 +66,14 @@
  *	its kernel stack.  Some architectures may need
  *	to save more state in the pcb for these traps.
  */
-typedef	void	mach_munge_t(const void *, void *);
+#if CONFIG_REQUIRES_U32_MUNGING
+typedef	void	mach_munge_t(void *);
+#endif
 
 typedef struct {
 	int			mach_trap_arg_count; /* Number of trap arguments (Arch independant) */
 	kern_return_t		(*mach_trap_function)(void *);
-#if defined(__x86_64__)
+#if CONFIG_REQUIRES_U32_MUNGING
 	mach_munge_t		*mach_trap_arg_munge32; /* system call argument munger routine for 32-bit */
 #endif
 	int			mach_trap_u32_words; /* number of 32-bit words to copyin for U32 */
@@ -86,7 +88,7 @@ typedef struct {
 extern const mach_trap_t	mach_trap_table[];
 extern int			mach_trap_count;
 
-#if defined(__x86_64__)
+#if CONFIG_REQUIRES_U32_MUNGING
 
 #if	!MACH_ASSERT
 #define	MACH_TRAP(name, arg_count, u32_arg_words, munge32)	\
@@ -97,9 +99,7 @@ extern int			mach_trap_count;
 #endif /* !MACH_ASSERT */
 
 
-
-
-#elif defined(__i386__) || defined(__arm__)
+#else /* !CONFIG_REQUIRES_U32_MUNGING */
 
 #if	!MACH_ASSERT
 #define	MACH_TRAP(name, arg_count, u32_arg_words, munge32)	\
@@ -109,12 +109,6 @@ extern int			mach_trap_count;
 	{ (arg_count), (kern_return_t (*)(void *)) (name), (u32_arg_words), #name  }
 #endif /* !MACH_ASSERT */
 
-
-
-
-
-#else  /* !defined(__i386__) && !defined(__x86_64__) && !defined(__arm__) */
-#error Unsupported architecture
-#endif /* !defined(__i386__) && !defined(__x86_64__) && !defined(__arm__) */
+#endif /* !CONFIG_REQUIRES_U32_MUNGING */
 
 #endif	/* _KERN_SYSCALL_SW_H_ */

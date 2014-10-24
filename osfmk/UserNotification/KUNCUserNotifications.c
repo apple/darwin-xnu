@@ -62,7 +62,7 @@ struct UNDReply {
 };
 
 #define UNDReply_lock(reply)		lck_mtx_lock(&reply->lock)
-#define UNDReply_unlock(reply)		lck_mtx_lock(&reply->lock)
+#define UNDReply_unlock(reply)		lck_mtx_unlock(&reply->lock)
 
 extern lck_grp_t LockCompatGroup;
 

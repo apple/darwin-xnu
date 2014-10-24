@@ -21,6 +21,6 @@ _sbuf_new
 _sbuf_printf
 _sbuf_putc
 _strsep
-
+_sysctl__security_mac_children
 _VNOP_SETXATTR
 _VNOP_GETXATTR

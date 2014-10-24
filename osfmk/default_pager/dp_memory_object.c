@@ -777,6 +777,9 @@ dp_memory_object_data_return(
 	vs_lookup(mem_obj, vs);
 
         default_pager_total++;
+
+	/* might be unreachable if VS_TRY_LOCK is, by definition, always true */
+	__unreachable_ok_push
 	if(!VS_TRY_LOCK(vs)) {
 		/* the call below will not be done by caller when we have */
 		/* a synchronous interface */
@@ -793,6 +796,7 @@ dp_memory_object_data_return(
 		upl_deallocate(upl);
 		return KERN_SUCCESS;
 	}
+	__unreachable_ok_pop
 
 	if ((vs->vs_seqno != vs->vs_next_seqno++)
 			|| (vs->vs_readers)

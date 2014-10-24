@@ -59,6 +59,7 @@
 #define	_MACH_INIT_	1
 
 #include <mach/mach_types.h>
+#include <mach/vm_page_size.h>
 #include <stdarg.h>
 
 #include <sys/cdefs.h>
@@ -96,24 +97,6 @@ extern	mach_port_t	bootstrap_port;
 #define SERVICE_SLOT		2
 
 #define	MACH_PORTS_SLOTS_USED	3
-
-/*
- *	Globally interesting numbers.
- *	These macros assume vm_page_size is a power-of-2.
- */
-
-extern	vm_size_t	vm_page_size;
-extern	vm_size_t	vm_page_mask;
-extern	int		vm_page_shift;
-
-#define trunc_page(x)	((x) & (~(vm_page_size - 1)))
-#define round_page(x)	trunc_page((x) + (vm_page_size - 1))
-
-/*
- *	Page-size rounding macros for the fixed-width VM types.
- */
-#define mach_vm_trunc_page(x) ((mach_vm_offset_t)(x) & ~((signed)PAGE_MASK))
-#define mach_vm_round_page(x) (((mach_vm_offset_t)(x) + PAGE_MASK) & ~((signed)PAGE_MASK))
 
 /*
  *	fprintf_stderr uses vprintf_stderr_func to produce

@@ -139,7 +139,10 @@ struct sadb_sa {
 struct sadb_sa_2 {
 	struct sadb_sa	sa;
 	u_int16_t		sadb_sa_natt_port;
-	u_int16_t		sadb_reserved0;
+	union {
+		u_int16_t		sadb_reserved0;
+		u_int16_t		sadb_sa_natt_interval;
+	};
 	u_int32_t		sadb_reserved1;
 };
 #endif /* PRIVATE */
@@ -257,7 +260,12 @@ struct sadb_x_sa2 {
     u_int8_t sadb_x_sa2_alwaysexpire;
 #endif
   };
-  u_int16_t sadb_x_sa2_reserved2;
+  union {
+    u_int16_t sadb_x_sa2_reserved2;
+#ifdef PRIVATE
+    u_int16_t sadb_x_sa2_flags;
+#endif
+  };
   u_int32_t sadb_x_sa2_sequence;
   u_int32_t sadb_x_sa2_reqid;
 };
@@ -457,13 +465,18 @@ struct sadb_sastat {
 #define SADB_X_EXT_NATT_DETECTED_PEER 0x1000
 #define SADB_X_EXT_ESP_KEEPALIVE      0x2000
 #define SADB_X_EXT_PUNT_RX_KEEPALIVE  0x4000
+#define SADB_X_EXT_NATT_KEEPALIVE_OFFLOAD  0x8000
 #endif /* PRIVATE */	
 
 #if 1
 #define SADB_X_EXT_RAWCPI	0x0080	/* use well known CPI (IPComp) */
 #endif
 
-#define SADB_KEY_FLAGS_MAX	0x0fff
+#define SADB_KEY_FLAGS_MAX	0x7fff
+
+#ifdef PRIVATE
+#define SADB_X_EXT_SA2_DELETE_ON_DETACH   0x0001
+#endif
 
 /* SPI size for PF_KEYv2 */
 #define PFKEY_SPI_SIZE	sizeof(u_int32_t)

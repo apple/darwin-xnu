@@ -4053,7 +4053,7 @@ ipfw_init(void)
 	default_rule.cmd[0].len = 1;
 	default_rule.cmd[0].opcode =
 #ifdef IPFIREWALL_DEFAULT_TO_ACCEPT
-				1 ? O_ACCEPT :
+				(1) ? O_ACCEPT :
 #endif
 				O_DENY;
 

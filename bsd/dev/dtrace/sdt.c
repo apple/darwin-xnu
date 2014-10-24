@@ -49,12 +49,13 @@
 #include <sys/sdt_impl.h>
 extern int dtrace_kernel_symbol_mode;
 
+/* #include <machine/trap.h */
 struct savearea_t; /* Used anonymously */
-typedef kern_return_t (*perfCallback)(int, struct savearea_t *, uintptr_t *, int);
 
-#if defined(__x86_64__)
+#if   defined(__x86_64__)
+typedef kern_return_t (*perfCallback)(int, struct savearea_t *, uintptr_t *, int);
 extern perfCallback tempDTraceTrapHook;
-extern kern_return_t fbt_perfCallback(int, struct savearea_t *, int, int);
+extern kern_return_t fbt_perfCallback(int, struct savearea_t *, uintptr_t *, int);
 #define	SDT_PATCHVAL	0xf0
 #define	SDT_AFRAMES		6
 #else
@@ -174,7 +175,11 @@ sdt_destroy(void *arg, dtrace_id_t id, void *parg)
 #pragma unused(arg,id)
 	sdt_probe_t *sdp = parg, *old, *last, *hash;
 	int ndx;
+
 #if !defined(__APPLE__)
+	/*
+	 * APPLE NOTE:  sdt probes for kexts not yet implemented
+	 */
 	struct modctl *ctl = sdp->sdp_ctl;
 
 	if (ctl != NULL && ctl->mod_loadcnt == sdp->sdp_loadcnt) {
@@ -343,6 +348,9 @@ sdt_attach(dev_info_t *devi, ddi_attach_cmd_t cmd)
 	return (DDI_SUCCESS);
 }
 
+/*
+ * APPLE NOTE:  sdt_detach not implemented
+ */
 #if !defined(__APPLE__)
 /*ARGSUSED*/
 static int
@@ -375,100 +383,8 @@ sdt_detach(dev_info_t *dip, ddi_detach_cmd_t cmd)
 
 	return (DDI_SUCCESS);
 }
+#endif /* __APPLE__ */
 
-/*ARGSUSED*/
-static int
-sdt_info(dev_info_t *dip, ddi_info_cmd_t infocmd, void *arg, void **result)
-{
-	int error;
-
-	switch (infocmd) {
-	case DDI_INFO_DEVT2DEVINFO:
-		*result = (void *)sdt_devi;
-		error = DDI_SUCCESS;
-		break;
-	case DDI_INFO_DEVT2INSTANCE:
-		*result = (void *)0;
-		error = DDI_SUCCESS;
-		break;
-	default:
-		error = DDI_FAILURE;
-	}
-	return (error);
-}
-
-/*ARGSUSED*/
-static int
-sdt_open(dev_t *devp, int flag, int otyp, cred_t *cred_p)
-{
-	return (0);
-}
-
-static struct cb_ops sdt_cb_ops = {
-	sdt_open,		/* open */
-	nodev,			/* close */
-	nulldev,		/* strategy */
-	nulldev,		/* print */
-	nodev,			/* dump */
-	nodev,			/* read */
-	nodev,			/* write */
-	nodev,			/* ioctl */
-	nodev,			/* devmap */
-	nodev,			/* mmap */
-	nodev,			/* segmap */
-	nochpoll,		/* poll */
-	ddi_prop_op,		/* cb_prop_op */
-	0,			/* streamtab  */
-	D_NEW | D_MP		/* Driver compatibility flag */
-};
-
-static struct dev_ops sdt_ops = {
-	DEVO_REV,		/* devo_rev, */
-	0,			/* refcnt  */
-	sdt_info,		/* get_dev_info */
-	nulldev,		/* identify */
-	nulldev,		/* probe */
-	sdt_attach,		/* attach */
-	sdt_detach,		/* detach */
-	nodev,			/* reset */
-	&sdt_cb_ops,		/* driver operations */
-	NULL,			/* bus operations */
-	nodev			/* dev power */
-};
-
-/*
- * Module linkage information for the kernel.
- */
-static struct modldrv modldrv = {
-	&mod_driverops,		/* module type (this is a pseudo driver) */
-	"Statically Defined Tracing",	/* name of module */
-	&sdt_ops,		/* driver ops */
-};
-
-static struct modlinkage modlinkage = {
-	MODREV_1,
-	(void *)&modldrv,
-	NULL
-};
-
-int
-_init(void)
-{
-	return (mod_install(&modlinkage));
-}
-
-int
-_info(struct modinfo *modinfop)
-{
-	return (mod_info(&modlinkage, modinfop));
-}
-
-int
-_fini(void)
-{
-	return (mod_remove(&modlinkage));
-}
-#else
 d_open_t _sdt_open;
 
 int _sdt_open(dev_t dev, int flags, int devtype, struct proc *p)
@@ -678,11 +594,11 @@ sdt_provide_module(void *arg, struct modctl *ctl)
 		}
 		g_sdt_mach_module.sdt_probes = NULL;
 	} else {
-		/* FIXME -- sdt in kext not yet supported */
+		/*
+		 * APPLE NOTE:  sdt probes for kexts not yet implemented
+		 */
 	}
 	
 	/* Need to mark this module as completed */
 	ctl->mod_flags |= MODCTL_SDT_PROBES_PROVIDED;
 }
-
-#endif /* __APPLE__ */

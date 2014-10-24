@@ -64,7 +64,6 @@ static char sccsid[] __attribute__((used)) = "@(#)mkheaders.c	5.5 (Berkeley) 6/1
 
 static void	do_count(const char *dev, const char *hname, int search);
 static void	do_header(const char *dev, const char *hname, int count);
-static int	file_needed(const char *name);
 static char 	*toheader(const char *dev);
 static char	*tomacro(const char *dev);
 
@@ -85,20 +84,11 @@ headers(void)
 void
 do_count(const char *dev, const char *hname, int search)
 {
-	struct device *dp, *mp;
+	struct device *dp;
 	int count;
 
 	for (count = 0,dp = dtab; dp != 0; dp = dp->d_next)
-		if (dp->d_unit != -1 && eq(dp->d_name, dev)) {
-			/*
-			 * Avoid making .h files for bus types on sun machines
-			 */
-			if ((machine == MACHINE_SUN2 ||
-			     machine == MACHINE_SUN3 ||
-			     machine == MACHINE_SUN4)
-			    && dp->d_conn == TO_NEXUS){
-				return;
-			}
+		if (eq(dp->d_name, dev)) {
 			if (dp->d_type == PSEUDO_DEVICE) {
 				count =
 				    dp->d_slave != UNKNOWN ? dp->d_slave : 1;
@@ -106,52 +96,8 @@ do_count(const char *dev, const char *hname, int search)
 					dev = NULL;
 				break;
 			}
-                        if (machine != MACHINE_SUN2 && machine != MACHINE_SUN3
-			    && machine != MACHINE_SUN4)
-				/* avoid ie0,ie0,ie1 setting NIE to 3 */
-			count++;
-			/*
-			 * Allow holes in unit numbering,
-			 * assumption is unit numbering starts
-			 * at zero.
-			 */
-			if (dp->d_unit + 1 > count)
-				count = dp->d_unit + 1;
-			if (search) {
-				mp = dp->d_conn;
-                                if (mp != 0 && mp != TO_NEXUS &&
-				    mp->d_conn != TO_NEXUS) {
-                                        /*
-					 * Check for the case of the
-					 * controller that the device
-					 * is attached to is in a separate
-					 * file (e.g. "sd" and "sc").
-					 * In this case, do NOT define
-					 * the number of controllers
-					 * in the hname .h file.
-					 */
-					if (!file_needed(mp->d_name))
-					    do_count(mp->d_name, hname, 0);
-					search = 0;
-				}
-			}
 		}
 	do_header(dev, hname, count);
-}
-
-/*
- * Scan the file list to see if name is needed to bring in a file.
- */
-static int
-file_needed(const char *name)
-{
-	struct file_list *fl;
-
-	for (fl = ftab; fl != 0; fl = fl->f_next) {
-		if (fl->f_needs && strcmp(fl->f_needs, name) == 0)
-			return (1);
-	}
-	return (0);
 }
 
 static void

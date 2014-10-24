@@ -101,7 +101,6 @@ struct cs_blob {
 	cpu_type_t	csb_cpu_type;
 	unsigned int	csb_flags;
 	off_t		csb_base_offset;	/* Offset of Mach-O binary in fat binary */
-	off_t		csb_blob_offset;	/* offset of blob itself, from csb_base_offset */
 	off_t		csb_start_offset;	/* Blob coverage area start, from csb_base_offset */
 	off_t		csb_end_offset;		/* Blob coverage area end, from csb_base_offset */
 	ipc_port_t	csb_mem_handle;
@@ -110,6 +109,8 @@ struct cs_blob {
 	vm_address_t	csb_mem_kaddr;
 	unsigned char	csb_sha1[SHA1_RESULTLEN];
 	unsigned int	csb_sigpup;
+	const char 	*csb_teamid;
+	unsigned int	csb_platform_binary; 
 };
 
 /*
@@ -119,10 +120,11 @@ struct cs_blob {
 struct ubc_info {
 	memory_object_t		ui_pager;	/* pager */
 	memory_object_control_t	ui_control;	/* VM control for the pager */
-	uint32_t		ui_flags;	/* flags */
 	vnode_t 		ui_vnode;	/* vnode for this ubc_info */
 	kauth_cred_t	 	ui_ucred;	/* holds credentials for NFS paging */
 	off_t			ui_size;	/* file size for the vnode */
+	uint32_t		ui_flags;	/* flags */
+	uint32_t		cs_add_gen;	/* generation count when csblob was validated */
 
         struct	cl_readahead   *cl_rahead;	/* cluster read ahead context */
         struct	cl_writebehind *cl_wbehind;	/* cluster write behind context */
@@ -184,13 +186,16 @@ int	ubc_isinuse_locked(vnode_t, int, int);
 
 int	ubc_getcdhash(vnode_t, off_t, unsigned char *);
 
+__attribute__((pure)) boolean_t ubc_is_mapped(const struct vnode *, boolean_t *writable);
+__attribute__((pure)) boolean_t ubc_is_mapped_writable(const struct vnode *);
+
 #ifdef XNU_KERNEL_PRIVATE
-int UBCINFOEXISTS(vnode_t);
+int UBCINFOEXISTS(const struct vnode *);
 #endif /* XNU_KERNEL_PRIVATE */
 
 /* code signing */
 struct cs_blob;
-int	ubc_cs_blob_add(vnode_t, cpu_type_t, off_t, vm_address_t, off_t, vm_size_t);
+int	ubc_cs_blob_add(vnode_t, cpu_type_t, off_t, vm_address_t, vm_size_t);
 int	ubc_cs_sigpup_add(vnode_t, vm_address_t, vm_size_t);
 struct cs_blob *ubc_get_cs_blobs(vnode_t);
 void	ubc_get_cs_mtime(vnode_t, struct timespec *);

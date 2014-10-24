@@ -74,7 +74,6 @@
 #include <sys/socket.h>
 #include <sys/sockio.h>
 #include <sys/sysctl.h>
-#include <kern/lock.h>
 
 #include <net/dlil.h>
 #include <net/if.h>

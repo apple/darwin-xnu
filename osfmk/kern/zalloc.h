@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2010 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2014 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -74,7 +74,6 @@
 #ifdef	MACH_KERNEL_PRIVATE
 
 #include <zone_debug.h>
-#include <kern/lock.h>
 #include <kern/locks.h>
 #include <kern/queue.h>
 #include <kern/thread_call.h>
@@ -214,6 +213,10 @@ __BEGIN_DECLS
 
 #ifdef	XNU_KERNEL_PRIVATE
 
+extern vm_offset_t     zone_map_min_address;
+extern vm_offset_t     zone_map_max_address;
+
+
 /* Allocate from zone */
 extern void *	zalloc(
 					zone_t		zone);
@@ -231,11 +234,15 @@ extern zone_t	zinit(
 					const char	*name);		/* a name for the zone */
 
 
+/* Non-waiting for memory version of zalloc */
+extern void *	zalloc_nopagewait(
+					zone_t		zone);
+
 /* Non-blocking version of zalloc */
 extern void *	zalloc_noblock(
 					zone_t		zone);
 
-/* direct (non-wrappered) interface */
+/* selective version of zalloc */
 extern void *	zalloc_canblock(
 					zone_t		zone,
 					boolean_t	canblock);

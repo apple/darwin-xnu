@@ -232,6 +232,31 @@ typedef struct thread_background_policy 	*thread_background_policy_t;
 	(sizeof (thread_background_policy_data_t) / sizeof (integer_t)))
 
 
+#define THREAD_LATENCY_QOS_POLICY	7
+typedef integer_t	thread_latency_qos_t;
+
+struct thread_latency_qos_policy {
+	thread_latency_qos_t thread_latency_qos_tier;
+};
+
+typedef struct thread_latency_qos_policy	thread_latency_qos_policy_data_t;
+typedef struct thread_latency_qos_policy 	*thread_latency_qos_policy_t;
+
+#define THREAD_LATENCY_QOS_POLICY_COUNT	((mach_msg_type_number_t)	\
+	    (sizeof (thread_latency_qos_policy_data_t) / sizeof (integer_t)))
+
+#define THREAD_THROUGHPUT_QOS_POLICY	8
+typedef integer_t	thread_throughput_qos_t;
+
+struct thread_throughput_qos_policy {
+	thread_throughput_qos_t thread_throughput_qos_tier;
+};
+
+typedef struct thread_throughput_qos_policy	thread_throughput_qos_policy_data_t;
+typedef struct thread_throughput_qos_policy 	*thread_throughput_qos_policy_t;
+
+#define THREAD_THROUGHPUT_QOS_POLICY_COUNT	((mach_msg_type_number_t) \
+	    (sizeof (thread_throughput_qos_policy_data_t) / sizeof (integer_t)))
 
 #ifdef PRIVATE
 
@@ -240,11 +265,14 @@ typedef struct thread_background_policy 	*thread_background_policy_t;
  */
 #define THREAD_POLICY_STATE		6
 
+#define THREAD_POLICY_STATE_FLAG_STATIC_PARAM   0x1
+
 struct thread_policy_state {
 	integer_t requested;
 	integer_t effective;
 	integer_t pending;
-	integer_t reserved[13];
+	integer_t flags;
+	integer_t reserved[12];
 };
 
 typedef struct thread_policy_state		thread_policy_state_data_t;
@@ -252,6 +280,36 @@ typedef struct thread_policy_state		*thread_policy_state_t;
 
 #define THREAD_POLICY_STATE_COUNT	((mach_msg_type_number_t) \
 	(sizeof (thread_policy_state_data_t) / sizeof (integer_t)))
+
+/*
+ * THREAD_QOS_POLICY:
+ */
+#define THREAD_QOS_POLICY               9
+#define THREAD_QOS_POLICY_OVERRIDE      10
+
+#define THREAD_QOS_UNSPECIFIED          0
+#define THREAD_QOS_DEFAULT              THREAD_QOS_UNSPECIFIED  /* Temporary rename */
+#define THREAD_QOS_MAINTENANCE          1
+#define THREAD_QOS_BACKGROUND           2
+#define THREAD_QOS_UTILITY              3
+#define THREAD_QOS_LEGACY               4       /* i.e. default workq threads */
+#define THREAD_QOS_USER_INITIATED       5
+#define THREAD_QOS_USER_INTERACTIVE     6
+
+#define THREAD_QOS_LAST                 7
+
+#define THREAD_QOS_MIN_TIER_IMPORTANCE	(-15)
+
+struct thread_qos_policy {
+	integer_t qos_tier;
+	integer_t tier_importance;
+};
+
+typedef struct thread_qos_policy       thread_qos_policy_data_t;
+typedef struct thread_qos_policy      *thread_qos_policy_t;
+
+#define THREAD_QOS_POLICY_COUNT    ((mach_msg_type_number_t) \
+        (sizeof (thread_qos_policy_data_t) / sizeof (integer_t)))
 
 #endif /* PRIVATE */
 

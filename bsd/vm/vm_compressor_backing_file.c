@@ -53,7 +53,7 @@ vm_swapfile_open(const char *path, vnode_t *vp)
 	int error = 0;
 	vfs_context_t	ctx = vfs_context_current();
 
-	if ((error = vnode_open(path, (O_CREAT | FREAD | FWRITE), S_IRUSR | S_IWUSR, 0, vp, ctx))) {
+	if ((error = vnode_open(path, (O_CREAT | O_TRUNC | FREAD | FWRITE), S_IRUSR | S_IWUSR, 0, vp, ctx))) {
 		printf("Failed to open swap file %d\n", error);
 		*vp = NULL;
 		return;
@@ -124,35 +124,21 @@ vm_swapfile_preallocate(vnode_t vp, uint64_t *size)
 	}
 #endif
 
-	/*
-  	 * This check exists because dynamic_pager creates the 1st swapfile,
-	 * swapfile0, for us from user-space in a supported manner (with IO_NOZEROFILL etc).
-	 * 
-	 * If dynamic_pager, in the future, discontinues creating that file,
-	 * then we need to change this check to a panic / assert or return an error.
-	 * That's because we can't be sure if the file has been created correctly.
-	 */
+	error = vnode_setsize(vp, *size, IO_NOZEROFILL, ctx);
 
-	if ((error = vnode_size(vp, (off_t*) &file_size, ctx)) != 0) {
-
-		printf("vnode_size (existing files) for swap files failed: %d\n", error);
+	if (error) {
+		printf("vnode_setsize for swap files failed: %d\n", error);
 		goto done;
-	} else {
-	
-		if (file_size == 0) {
-
-			error = vnode_setsize(vp, *size, IO_NOZEROFILL, ctx);
-		
-			if (error) {
-				printf("vnode_setsize for swap files failed: %d\n", error);
-				goto done;
-			}
-		} else {
-
-			*size = file_size;
-		}
 	}
 
+	error = vnode_size(vp, (off_t*) &file_size, ctx);
+
+	if (error) {
+		printf("vnode_size (new file) for swap file failed: %d\n", error);
+	}	
+
+	assert(file_size == *size);
+	
 	vnode_lock_spin(vp);
 	SET(vp->v_flag, VSWAP);
 	vnode_unlock(vp);
@@ -173,8 +159,12 @@ vm_swapfile_io(vnode_t vp, uint64_t offset, uint64_t start, int npages, int flag
 	upl_size_t	upl_size = 0;
 
 	upl_create_flags = UPL_SET_INTERNAL | UPL_SET_LITE;
-	upl_control_flags = UPL_IOSYNC | UPL_PAGING_ENCRYPTED;
 
+#if ENCRYPTED_SWAP
+	upl_control_flags = UPL_IOSYNC | UPL_PAGING_ENCRYPTED;
+#else
+	upl_control_flags = UPL_IOSYNC;
+#endif
 	if ((flags & SWAP_READ) == FALSE) {
 		upl_create_flags |= UPL_COPYOUT_FROM;
 	}
@@ -243,7 +233,12 @@ vm_swapfile_io(vnode_t vp, uint64_t offset, uint64_t start, int npages, int flag
 
 #define MAX_BATCH_TO_TRIM	256
 
-u_int32_t vnode_trim_list (vnode_t vp, struct trim_list *tl)
+#define ROUTE_ONLY		0x10		/* if corestorage is present, tell it to just pass */
+                                                /* the DKIOUNMAP command through w/o acting on it */
+                                                /* this is used by the compressed swap system to reclaim empty space */
+
+
+u_int32_t vnode_trim_list (vnode_t vp, struct trim_list *tl, boolean_t route_only)
 {
 	int		error = 0;
 	int		trim_index = 0;
@@ -251,6 +246,7 @@ u_int32_t vnode_trim_list (vnode_t vp, struct trim_list *tl)
 	struct vnode	*devvp;
 	dk_extent_t	*extents;
 	dk_unmap_t	unmap;
+	_dk_cs_unmap_t	cs_unmap;
 
 	if ( !(vp->v_mount->mnt_ioflags & MNT_IOFLAGS_UNMAP_SUPPORTED))
 		return (ENOTSUP);
@@ -266,8 +262,16 @@ u_int32_t vnode_trim_list (vnode_t vp, struct trim_list *tl)
 
 	extents = kalloc(sizeof(dk_extent_t) * MAX_BATCH_TO_TRIM);
 
-	memset (&unmap, 0, sizeof(dk_unmap_t));
-	unmap.extents = extents;
+	if (vp->v_mount->mnt_ioflags & MNT_IOFLAGS_CSUNMAP_SUPPORTED) {
+		memset (&cs_unmap, 0, sizeof(_dk_cs_unmap_t));
+		cs_unmap.extents = extents;
+
+		if (route_only == TRUE)
+			cs_unmap.options = ROUTE_ONLY;
+	} else {
+		memset (&unmap, 0, sizeof(dk_unmap_t));
+		unmap.extents = extents;
+	}
 
 	while (tl) {
 		daddr64_t	io_blockno;	/* Block number corresponding to the start of the extent */
@@ -306,9 +310,13 @@ u_int32_t vnode_trim_list (vnode_t vp, struct trim_list *tl)
 
 			if (trim_index == MAX_BATCH_TO_TRIM) {
 
-				unmap.extentsCount = trim_index;
-				error = VNOP_IOCTL(devvp, DKIOCUNMAP, (caddr_t)&unmap, 0, vfs_context_kernel());
-
+				if (vp->v_mount->mnt_ioflags & MNT_IOFLAGS_CSUNMAP_SUPPORTED) {
+					cs_unmap.extentsCount = trim_index;
+					error = VNOP_IOCTL(devvp, _DKIOCCSUNMAP, (caddr_t)&cs_unmap, 0, vfs_context_kernel());
+				} else {
+					unmap.extentsCount = trim_index;
+					error = VNOP_IOCTL(devvp, DKIOCUNMAP, (caddr_t)&unmap, 0, vfs_context_kernel());
+				}
 				if (error) {
 					goto trim_exit;
 				}
@@ -321,9 +329,13 @@ u_int32_t vnode_trim_list (vnode_t vp, struct trim_list *tl)
 		tl = tl->tl_next;
 	}
 	if (trim_index) {
-
-		unmap.extentsCount = trim_index;
-		error = VNOP_IOCTL(devvp, DKIOCUNMAP, (caddr_t)&unmap, 0, vfs_context_kernel());
+		if (vp->v_mount->mnt_ioflags & MNT_IOFLAGS_CSUNMAP_SUPPORTED) {
+			cs_unmap.extentsCount = trim_index;
+			error = VNOP_IOCTL(devvp, _DKIOCCSUNMAP, (caddr_t)&cs_unmap, 0, vfs_context_kernel());
+		} else {
+			unmap.extentsCount = trim_index;
+			error = VNOP_IOCTL(devvp, DKIOCUNMAP, (caddr_t)&unmap, 0, vfs_context_kernel());
+		}
 	}
 trim_exit:
 	kfree(extents, sizeof(dk_extent_t) * MAX_BATCH_TO_TRIM);

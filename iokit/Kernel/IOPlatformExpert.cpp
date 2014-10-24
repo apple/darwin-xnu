@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1998-2010 Apple Inc. All rights reserved.
+ * Copyright (c) 1998-2014 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -62,11 +62,11 @@ static void getCStringForObject(OSObject *inObj, char *outStr, size_t outStrLen)
 OSDefineMetaClassAndStructors(IOPlatformExpert, IOService)
 
 OSMetaClassDefineReservedUsed(IOPlatformExpert,  0);
-
 OSMetaClassDefineReservedUsed(IOPlatformExpert,  1);
-OSMetaClassDefineReservedUnused(IOPlatformExpert,  2);
-OSMetaClassDefineReservedUnused(IOPlatformExpert,  3);
-OSMetaClassDefineReservedUnused(IOPlatformExpert,  4);
+OSMetaClassDefineReservedUsed(IOPlatformExpert,  2);
+OSMetaClassDefineReservedUsed(IOPlatformExpert,  3);
+OSMetaClassDefineReservedUsed(IOPlatformExpert,  4);
+
 OSMetaClassDefineReservedUnused(IOPlatformExpert,  5);
 OSMetaClassDefineReservedUnused(IOPlatformExpert,  6);
 OSMetaClassDefineReservedUnused(IOPlatformExpert,  7);
@@ -324,6 +324,17 @@ IOReturn IOPlatformExpert::registerInterruptController(OSSymbol *name, IOInterru
   return kIOReturnSuccess;
 }
 
+IOReturn IOPlatformExpert::deregisterInterruptController(OSSymbol *name)
+{
+  IOLockLock(gIOInterruptControllersLock);
+  
+  gIOInterruptControllers->removeObject(name);
+  
+  IOLockUnlock(gIOInterruptControllersLock);
+  
+  return kIOReturnSuccess;
+}
+
 IOInterruptController *IOPlatformExpert::lookUpInterruptController(OSSymbol *name)
 {
   OSObject              *object;
@@ -363,6 +374,17 @@ bool IOPlatformExpert::platformAdjustService(IOService */*service*/)
   return true;
 }
 
+void IOPlatformExpert::getUTCTimeOfDay(clock_sec_t * secs, clock_nsec_t * nsecs)
+{
+  *secs = getGMTTimeOfDay();
+  *nsecs = 0;
+}
+
+void IOPlatformExpert::setUTCTimeOfDay(clock_sec_t secs, __unused clock_nsec_t nsecs)
+{
+  setGMTTimeOfDay(secs);
+}
+
 
 //*********************************************************************************
 // PMLog
@@ -379,8 +401,8 @@ PMLog(const char *who, unsigned long event,
 	nowus += (nows % 1000) * 1000000;
 
     kprintf("pm%u %p %.30s %d %lx %lx\n",
-		nowus, current_thread(), who,	// Identity
-		(int) event, (long) param1, (long) param2);			// Args
+		nowus, OBFUSCATE(current_thread()), who,	// Identity
+		(int) event, (long)OBFUSCATE(param1), (long)OBFUSCATE(param2));			// Args
 }
 
 
@@ -757,6 +779,9 @@ int PEHaltRestart(unsigned int type)
   IOPMrootDomain    *pmRootDomain;
   AbsoluteTime      deadline;
   thread_call_t     shutdown_hang;
+  IORegistryEntry   *node;
+  OSData            *data;
+  uint32_t          timeout = 30;
   
   if(type == kPEHaltCPU || type == kPERestartCPU || type == kPEUPSDelayHaltCPU)
   {
@@ -768,11 +793,20 @@ int PEHaltRestart(unsigned int type)
     
     /* Spawn a thread that will panic in 30 seconds. 
        If all goes well the machine will be off by the time
-       the timer expires.
+       the timer expires. If the device wants a different
+       timeout, use that value instead of 30 seconds.
      */
+#define RESTART_NODE_PATH    "/chosen"
+    node = IORegistryEntry::fromPath( RESTART_NODE_PATH, gIODTPlane );
+    if ( node ) {
+      data = OSDynamicCast( OSData, node->getProperty( "halt-restart-timeout" ) );
+      if ( data && data->getLength() == 4 )
+        timeout = *((uint32_t *) data->getBytesNoCopy());
+    }
+
     shutdown_hang = thread_call_allocate( &IOShutdownNotificationsTimedOut, 
                         (thread_call_param_t)(uintptr_t) type);
-    clock_interval_to_deadline( 30, kSecondScale, &deadline );
+    clock_interval_to_deadline( timeout, kSecondScale, &deadline );
     thread_call_enter1_delayed( shutdown_hang, 0, deadline );
 
     pmRootDomain->handlePlatformHaltRestart(type); 
@@ -933,16 +967,35 @@ err:
 
 long PEGetGMTTimeOfDay(void)
 {
-	long	result = 0;
+    clock_sec_t     secs;
+    clock_usec_t    usecs;
 
-	if( gIOPlatform)		result = gIOPlatform->getGMTTimeOfDay();
-
-	return (result);
+    PEGetUTCTimeOfDay(&secs, &usecs);
+    return secs;
 }
 
 void PESetGMTTimeOfDay(long secs)
 {
-    if( gIOPlatform)		gIOPlatform->setGMTTimeOfDay(secs);
+    PESetUTCTimeOfDay(secs, 0);
+}
+
+void PEGetUTCTimeOfDay(clock_sec_t * secs, clock_usec_t * usecs)
+{
+    clock_nsec_t    nsecs = 0;
+
+    *secs = 0;
+	if (gIOPlatform)
+        gIOPlatform->getUTCTimeOfDay(secs, &nsecs);
+
+    assert(nsecs < NSEC_PER_SEC);
+    *usecs = nsecs / NSEC_PER_USEC;
+}
+
+void PESetUTCTimeOfDay(clock_sec_t secs, clock_usec_t usecs)
+{
+    assert(usecs < USEC_PER_SEC);
+	if (gIOPlatform)
+        gIOPlatform->setUTCTimeOfDay(secs, usecs * NSEC_PER_USEC);
 }
 
 } /* extern "C" */

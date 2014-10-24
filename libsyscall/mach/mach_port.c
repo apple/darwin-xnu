@@ -396,6 +396,18 @@ mach_port_space_info(
 }
 
 kern_return_t
+mach_port_space_basic_info(
+	ipc_space_t task,
+	ipc_info_space_basic_t *space_basic_info)
+{
+	kern_return_t rv;
+
+	rv = _kernelrpc_mach_port_space_basic_info(task, space_basic_info);
+
+	return (rv);
+}
+
+kern_return_t
 mach_port_dnrequest_info(
 	ipc_space_t task,
 	mach_port_name_t name,

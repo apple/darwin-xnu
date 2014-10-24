@@ -63,7 +63,8 @@
 #define	RESOURCE_TYPE_MEMORY	3
 
 /* RESOURCE_TYPE_CPU flavors */
-#define FLAVOR_CPU_MONITOR	1
+#define FLAVOR_CPU_MONITOR		1
+#define FLAVOR_CPU_MONITOR_FATAL	2
 
 /*
  * RESOURCE_TYPE_CPU exception code & subcode.
@@ -74,7 +75,7 @@
  * code:
  * +-----------------------------------------------+
  * |[63:61] RESOURCE |[60:58] FLAVOR_CPU_ |[57:32] |
- * |_TYPE_CPU        |MONITOR             |Unused  |
+ * |_TYPE_CPU        |MONITOR[_FATAL]     |Unused  |
  * +-----------------------------------------------+
  * |[31:7]  Interval (sec)    | [6:0] CPU limit (%)|
  * +-----------------------------------------------+

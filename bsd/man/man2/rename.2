@@ -37,7 +37,8 @@
 .Dt RENAME 2
 .Os BSD 4.2
 .Sh NAME
-.Nm rename
+.Nm rename ,
+.Nm renameat
 .Nd change the name of a file
 .Sh SYNOPSIS
 .Fd #include <stdio.h>
@@ -46,6 +47,8 @@
 .Fa "const char *old"
 .Fa "const char *new"
 .Fc
+.Ft int
+.Fn renameat "int fromfd" "const char *from" "int tofd" "const char *to"
 .Sh DESCRIPTION
 The
 .Fn rename
@@ -76,6 +79,37 @@ If the final component of
 is a symbolic link,
 the symbolic link is renamed,
 not the file or directory to which it points.
+.Pp
+The
+.Fn renameat
+system call is equivalent to
+.Fn rename
+except in the case where either
+.Fa from
+or
+.Fa to
+specifies a relative path.
+If
+.Fa from
+is a relative path, the file to be renamed is located
+relative to the directory associated with the file descriptor
+.Fa fromfd
+instead of the current working directory.
+If the
+.Fa to
+is a relative path, the same happens only relative to the directory associated
+with
+.Fa tofd .
+If the
+.Fn renameat
+is passed the special value
+.Dv AT_FDCWD
+in the
+.Fa fromfd
+or
+.Fa tofd
+parameter, the current working directory is used in the determination
+of the file for the respective path parameter.
 .Sh CAVEATS
 The system can deadlock if a loop is present in the file system graph.
 This loop takes the form of an entry in directory
@@ -232,6 +266,41 @@ are on different logical devices (file systems).
 Note that this error code will not be returned
 if the implementation permits cross-device links.
 .El
+.Pp
+In addition to the errors returned by the
+.Fn rename ,
+the
+.Fn renameat
+may fail if:
+.Bl -tag -width Er
+.It Bq Er EBADF
+The
+.Fa from
+argument does not specify an absolute path and the
+.Fa fromfd
+argument is neither
+.Dv AT_FDCWD
+nor a valid file descriptor open for searching, or the
+.Fa to
+argument does not specify an absolute path and the
+.Fa tofd
+argument is neither
+.Dv AT_FDCWD
+nor a valid file descriptor open for searching.
+.It Bq Er ENOTDIR
+The
+.Fa from
+argument is not an absolute path and
+.Fa fromfd
+is neither
+.Dv AT_FDCWD
+nor a file descriptor associated with a directory, or the
+.Fa to
+argument is not an absolute path and
+.Fa tofd
+is neither
+.Dv AT_FDCWD
+nor a file descriptor associated with a directory.
 .Sh CONFORMANCE
 The restriction on renaming a directory whose permissions disallow writing
 is based on the fact that UFS directories contain a ".." entry.
@@ -250,3 +319,6 @@ The
 .Fn rename
 function conforms to 
 .St -p1003.1-88 .
+The
+.Fn renameat
+system call is expected to conform to POSIX.1-2008 .

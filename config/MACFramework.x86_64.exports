@@ -8,4 +8,3 @@ _mac_mbuf_free
 _mac_schedule_userret
 _mac_unwire
 _mac_wire
-_sysctl__security_mac_children

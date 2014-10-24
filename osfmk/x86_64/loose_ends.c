@@ -251,13 +251,13 @@ static inline unsigned int
 ml_phys_read_data(pmap_paddr_t paddr, int size)
 {
 	unsigned int result = 0;
+	unsigned char s1;
+	unsigned short s2;
 
 	if (!physmap_enclosed(paddr))
 		panic("%s: 0x%llx out of bounds\n", __FUNCTION__, paddr);
 
         switch (size) {
-		unsigned char s1;
-		unsigned short s2;
         case 1:
 		s1 = *(volatile unsigned char *)PHYSMAP_PTOV(paddr);
 		result = s1;
@@ -491,6 +491,13 @@ memcmp(const void *s1, const void *s2, size_t n)
 	return (0);
 }
 
+void *
+memmove(void *dst, const void *src, size_t ulen)
+{
+	bcopy(src, dst, ulen);
+	return dst;
+}
+
 /*
  * Abstract:
  * strlen returns the number of characters in "string" preceeding
@@ -645,20 +652,6 @@ kdp_register_callout(kdp_callout_fn_t fn, void *arg)
 #pragma unused(fn,arg)
 }
 #endif
-
-/*
- * Return a uniformly distributed 64-bit random number.
- *
- * This interface should have minimal dependencies on kernel
- * services, and thus be available very early in the life
- * of the kernel.  But as a result, it may not be very random
- * on all platforms.
- */
-uint64_t
-early_random(void)
-{
-	return (ml_early_random());
-}
 
 #if !CONFIG_VMX
 int host_vmxon(boolean_t exclusive __unused)

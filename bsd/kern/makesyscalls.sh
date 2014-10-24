@@ -195,7 +195,7 @@ s/\$//g
 		printf " * argument structures with elements large enough for any of them.\n" > sysarg
 		printf "*/\n" > sysarg
 		printf "\n" > sysarg
-		printf "#ifndef __arm__\n" > sysarg
+		printf "#if CONFIG_REQUIRES_U32_MUNGING\n" > sysarg
 		printf "#define\tPAD_(t)\t(sizeof(uint64_t) <= sizeof(t) \\\n " > sysarg
 		printf "\t\t? 0 : sizeof(uint64_t) - sizeof(t))\n" > sysarg
 		printf "#else\n" > sysarg
@@ -210,83 +210,7 @@ s/\$//g
 		printf "#define\tPADR_(t)\t0\n" > sysarg
 		printf "#endif\n" > sysarg
 		printf "\n__BEGIN_DECLS\n" > sysarg
-		printf "#if !defined(__arm__)\n" > sysarg
-		printf "void munge_w(const void *, void *);  \n" > sysarg
-		printf "void munge_ww(const void *, void *);  \n" > sysarg
-		printf "void munge_www(const void *, void *);  \n" > sysarg
-		printf "void munge_wwww(const void *, void *);  \n" > sysarg
-		printf "void munge_wwwww(const void *, void *);  \n" > sysarg
-		printf "void munge_wwwwww(const void *, void *);  \n" > sysarg
-		printf "void munge_wwwwwww(const void *, void *);  \n" > sysarg
-		printf "void munge_wwwwwwww(const void *, void *);  \n" > sysarg
-		printf "void munge_wl(const void *, void *);  \n" > sysarg
-		printf "void munge_wlw(const void *, void *);  \n" > sysarg
-		printf "void munge_wlwwwll(const void *, void *);  \n" > sysarg
-		printf "void munge_wlwwwllw(const void *, void *);  \n" > sysarg
-		printf "void munge_wlwwlwlw(const void *, void *);  \n" > sysarg
-		printf "void munge_wllwwll(const void *, void *);  \n" > sysarg
-		printf "void munge_wwwl(const void *, void *);  \n" > sysarg
-		printf "void munge_wwwlw(const void *, void *);  \n" > sysarg
-		printf "void munge_wwwlww(const void *, void *);  \n" > sysarg
-		printf "void munge_wwlwww(const void *, void *);  \n" > sysarg
-		printf "void munge_wwwwlw(const void *, void *);  \n" > sysarg
-		printf "void munge_wwwwl(const void *, void *);  \n" > sysarg
-		printf "void munge_wwwwwl(const void *, void *);  \n" > sysarg
-		printf "void munge_wwwwwlww(const void *, void *);  \n" > sysarg
-		printf "void munge_wwwwwllw(const void *, void *);  \n" > sysarg
-		printf "void munge_wwwwwlll(const void *, void *);  \n" > sysarg
-		printf "void munge_wwwwwwll(const void *, void *);  \n" > sysarg
-		printf "void munge_wwwwwwl(const void *, void *);  \n" > sysarg
-		printf "void munge_wwwwwwlw(const void *, void *);  \n" > sysarg
-		printf "void munge_wsw(const void *, void *);  \n" > sysarg
-		printf "void munge_wws(const void *, void *);  \n" > sysarg
-		printf "void munge_wwwsw(const void *, void *);  \n" > sysarg
-		printf "void munge_llllll(const void *, void *); \n" > sysarg
-		printf "void munge_ll(const void *, void *); \n" > sysarg
-		printf "#else \n" > sysarg
-		printf "/* ARM does not need mungers for BSD system calls... */\n" > sysarg
-		printf "#define munge_w  NULL \n" > sysarg
-		printf "#define munge_ww  NULL \n" > sysarg
-		printf "#define munge_www  NULL \n" > sysarg
-		printf "#define munge_wwww  NULL \n" > sysarg
-		printf "#define munge_wwwww  NULL \n" > sysarg
-		printf "#define munge_wwwwww  NULL \n" > sysarg
-		printf "#define munge_wwwwwww  NULL \n" > sysarg
-		printf "#define munge_wwwwwwww  NULL \n" > sysarg
-		printf "#define munge_wl  NULL \n" > sysarg
-		printf "#define munge_wlw  NULL \n" > sysarg
-		printf "#define munge_wlwwwll  NULL \n" > sysarg
-		printf "#define munge_wlwwwllw  NULL \n" > sysarg
-		printf "#define munge_wlwwlwlw  NULL \n" > sysarg
-		printf "#define munge_wllwwll  NULL \n" > sysarg
-		printf "#define munge_wwwl  NULL \n" > sysarg
-		printf "#define munge_wwwlw  NULL \n" > sysarg
-		printf "#define munge_wwwlww  NULL\n" > sysarg
-		printf "#define munge_wwlwww  NULL \n" > sysarg
-		printf "#define munge_wwwwl  NULL \n" > sysarg
-		printf "#define munge_wwwwlw  NULL \n" > sysarg
-		printf "#define munge_wwwwwl  NULL \n" > sysarg
-		printf "#define munge_wwwwwlww  NULL \n" > sysarg
-		printf "#define munge_wwwwwllw  NULL \n" > sysarg
-		printf "#define munge_wwwwwlll  NULL \n" > sysarg
-		printf "#define munge_wwwwwwl  NULL \n" > sysarg
-		printf "#define munge_wwwwwwlw  NULL \n" > sysarg
-		printf "#define munge_wsw  NULL \n" > sysarg
-		printf "#define munge_wws  NULL \n" > sysarg
-		printf "#define munge_wwwsw  NULL \n" > sysarg
-		printf "#define munge_llllll  NULL \n" > sysarg
-		printf "#define munge_ll  NULL \n" > sysarg
-		printf "#endif /* __arm__ */\n" > sysarg
-		printf "\n" > sysarg
-		printf "/* Active 64-bit user ABIs do not need munging */\n" > sysarg
-		printf "#define munge_d  NULL \n" > sysarg
-		printf "#define munge_dd  NULL \n" > sysarg
-		printf "#define munge_ddd  NULL \n" > sysarg
-		printf "#define munge_dddd  NULL \n" > sysarg
-		printf "#define munge_ddddd  NULL \n" > sysarg
-		printf "#define munge_dddddd  NULL \n" > sysarg
-		printf "#define munge_ddddddd  NULL \n" > sysarg
-		printf "#define munge_dddddddd  NULL \n" > sysarg
+		printf "#include <sys/munge.h>\n" > sysarg
 		
 		printf "\n" > sysarg
 
@@ -522,7 +446,6 @@ s/\$//g
 		# output function argument structures to sysproto.h and build the
 		# name of the appropriate argument mungers
 		munge32 = "NULL"
-		munge64 = "NULL"
 		size32 = 0
 
 		if ((funcname != "nosys" && funcname != "enosys") || (syscall_num == 0 && funcname == "nosys")) {
@@ -531,53 +454,45 @@ s/\$//g
 					printf("struct %s {\n", argalias) > sysarg
 				}
 				munge32 = "munge_"
-				munge64 = "munge_"
 				for (i = 1; i <= argc; i++) {
 					# Build name of argument munger.
 					# We account for all sys call argument types here.
 					# This is where you add any new types.  With LP64 support
 					# each argument consumes 64-bits.  
-					# see .../xnu/bsd/dev/ppc/munge.s for munge argument types.
+					# see .../xnu/bsd/dev/munge.c for munge argument types.
 					if (argtype[i] == "long") {
 						ext_argtype[i] = "user_long_t";
 						munge32 = munge32 "s"
-						munge64 = munge64 "d"
 						size32 += 4
 					}
 					else if (argtype[i] == "u_long") {
 						ext_argtype[i] = "user_ulong_t";
 						munge32 = munge32 "w"
-						munge64 = munge64 "d"
 						size32 += 4
 					}
 					else if (argtype[i] == "size_t") {
 						ext_argtype[i] = "user_size_t";
 						munge32 = munge32 "w"
-						munge64 = munge64 "d"
 						size32 += 4
 					}
 					else if (argtype[i] == "ssize_t") {
 						ext_argtype[i] = "user_ssize_t";
 						munge32 = munge32 "s"
-						munge64 = munge64 "d"
 						size32 += 4
 					}
 					else if (argtype[i] == "user_ssize_t" || argtype[i] == "user_long_t") {
 						munge32 = munge32 "s"
-						munge64 = munge64 "d"
 						size32 += 4
 					}
 					else if (argtype[i] == "user_addr_t" || argtype[i] == "user_size_t" ||
 						argtype[i] == "user_ulong_t") {
 						munge32 = munge32 "w"
-						munge64 = munge64 "d"
 						size32 += 4
 					}
 					else if (argtype[i] == "caddr_t" || argtype[i] == "semun_t" ||
   						argtype[i] == "uuid_t" || match(argtype[i], "[\*]") != 0) {
 						ext_argtype[i] = "user_addr_t";
 						munge32 = munge32 "w"
-						munge64 = munge64 "d"
 						size32 += 4
 					}
 					else if (argtype[i] == "int" || argtype[i] == "u_int" ||
@@ -589,12 +504,10 @@ s/\$//g
 							 argtype[i] == "mach_port_name_t" || argtype[i] == "au_asid_t" ||
 							 argtype[i] == "associd_t" || argtype[i] == "connid_t") {
 						munge32 = munge32 "w"
-						munge64 = munge64 "d"
 						size32 += 4
 					}
 					else if (argtype[i] == "off_t" || argtype[i] == "int64_t" || argtype[i] == "uint64_t") {
 						munge32 = munge32 "l"
-						munge64 = munge64 "d"
 						size32 += 8
 					}
 					else {
@@ -626,7 +539,6 @@ s/\$//g
 		if (add_sysent_entry == 0) {
 			argssize = "0"
 			munge32 = "NULL"
-			munge64 = "NULL"
 			munge_ret = "_SYSCALL_RET_NONE"
 			if (tempname != "enosys") {
 				tempname = "nosys"
@@ -670,12 +582,17 @@ s/\$//g
 			}
 		}
 
-		printf("\t{ \(sy_call_t *\)%s, %s, %s, %s, %s, %s},", 
-				tempname, munge32, munge64, munge_ret, argssize, size32) > sysent
-		linesize = length(tempname) + length(munge32) + length(munge64) + \
+		printf("#if CONFIG_REQUIRES_U32_MUNGING\n") > sysent
+		printf("\t{ \(sy_call_t *\)%s, %s, %s, %s, %s},", 
+				tempname, munge32, munge_ret, argssize, size32) > sysent
+		linesize = length(tempname) + length(munge32) + \
 			length(munge_ret) + length(argssize) + length(size32) + 28
 		align_comment(linesize, 88, sysent)
 		printf("/* %d = %s%s*/\n", syscall_num, funcname, additional_comments) > sysent
+		printf("#else\n") > sysent
+		printf("\t{ \(sy_call_t *\)%s, %s, %s, %s},\n", 
+				tempname, munge_ret, argssize, size32) > sysent
+		printf("#endif\n") > sysent
 		
 		# output to syscalls.c
 		if (add_sysnames_entry == 1) {

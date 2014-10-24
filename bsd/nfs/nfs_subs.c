@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2013 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2014 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -1624,7 +1624,8 @@ nfs_attrcachetimeout(nfsnode_t np)
 	int isdir;
 	uint32_t timeo;
 
-	if (!(nmp = NFSTONMP(np)))
+	nmp = NFSTONMP(np);
+	if (nfs_mount_gone(nmp))
 		return (0);
 
 	isdir = vnode_isdir(NFSTOV(np));
@@ -1669,6 +1670,7 @@ nfs_getattrcache(nfsnode_t np, struct nfs_vattr *nvaper, int flags)
 	struct nfs_vattr *nvap;
 	struct timeval nowup;
 	int32_t timeo;
+	struct nfsmount *nmp;
 
 	/* Check if the attributes are valid. */
 	if (!NATTRVALID(np) || ((flags & NGA_ACL) && !NACLVALID(np))) {
@@ -1677,18 +1679,27 @@ nfs_getattrcache(nfsnode_t np, struct nfs_vattr *nvaper, int flags)
 		return (ENOENT);
 	}
 
-	/* Verify the cached attributes haven't timed out. */
-	timeo = nfs_attrcachetimeout(np);
-	microuptime(&nowup);
-	if ((nowup.tv_sec - np->n_attrstamp) >= timeo) {
-		FSDBG(528, np, 0, 0xffffff02, ENOENT);
-		OSAddAtomic64(1, &nfsstats.attrcache_misses);
-		return (ENOENT);
-	}
-	if ((flags & NGA_ACL) && ((nowup.tv_sec - np->n_aclstamp) >= timeo)) {
-		FSDBG(528, np, 0, 0xffffff02, ENOENT);
-		OSAddAtomic64(1, &nfsstats.attrcache_misses);
-		return (ENOENT);
+	nmp = NFSTONMP(np);
+	if (nfs_mount_gone(nmp))
+		return (ENXIO);
+	/*
+	 * Verify the cached attributes haven't timed out.
+	 * If the server isn't responding, skip the check
+	 * and return cached attributes.
+	 */
+	if (!nfs_use_cache(nmp)) {
+		timeo = nfs_attrcachetimeout(np);
+		microuptime(&nowup);
+		if ((nowup.tv_sec - np->n_attrstamp) >= timeo) {
+			FSDBG(528, np, 0, 0xffffff02, ENOENT);
+			OSAddAtomic64(1, &nfsstats.attrcache_misses);
+			return (ENOENT);
+		}
+		if ((flags & NGA_ACL) && ((nowup.tv_sec - np->n_aclstamp) >= timeo)) {
+			FSDBG(528, np, 0, 0xffffff02, ENOENT);
+			OSAddAtomic64(1, &nfsstats.attrcache_misses);
+			return (ENOENT);
+		}
 	}
 
 	nvap = &np->n_vattr;
@@ -1995,6 +2006,40 @@ nfs_printf(int facility, int level, const char *fmt, ...)
 	va_start(ap, fmt);
 	vprintf(fmt, ap);
 	va_end(ap);
+}
+
+/* Is a mount gone away? */
+int
+nfs_mount_gone(struct nfsmount *nmp)
+{
+	return (!nmp || vfs_isforce(nmp->nm_mountp) || (nmp->nm_state & (NFSSTA_FORCE | NFSSTA_DEAD)));
+}
+
+/*
+ * Return some of the more significant mount options
+ * as a string, e.g. "'ro,hard,intr,tcp,vers=3,sec=krb5,deadtimeout=0'
+ */
+int
+nfs_mountopts(struct nfsmount *nmp, char *buf, int buflen)
+{
+	int c;
+
+	c = snprintf(buf, buflen, "%s,%s,%s,%s,vers=%d,sec=%s,%sdeadtimeout=%d",
+		(vfs_flags(nmp->nm_mountp) & MNT_RDONLY) ? "ro" : "rw",
+		NMFLAG(nmp, SOFT) ? "soft" : "hard",
+		NMFLAG(nmp, INTR) ? "intr" : "nointr",
+		nmp->nm_sotype == SOCK_STREAM ? "tcp" : "udp",
+		nmp->nm_vers,
+		nmp->nm_auth == RPCAUTH_KRB5  ? "krb5" :
+		nmp->nm_auth == RPCAUTH_KRB5I ? "krb5i" :
+		nmp->nm_auth == RPCAUTH_KRB5P ? "krb5p" :
+		nmp->nm_auth == RPCAUTH_SYS   ? "sys" : "none",
+		nmp->nm_lockmode == NFS_LOCK_MODE_ENABLED ?  "locks," :
+		nmp->nm_lockmode == NFS_LOCK_MODE_DISABLED ? "nolocks," :
+		nmp->nm_lockmode == NFS_LOCK_MODE_LOCAL ? "locallocks," : "",
+		nmp->nm_deadtimeout);
+
+	return (c > buflen ? ENOMEM : 0);
 }
 
 #endif /* NFSCLIENT */

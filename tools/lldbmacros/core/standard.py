@@ -107,6 +107,7 @@ class CommandOutput(object):
                 self.fname=os.path.normpath(os.path.expanduser(a.strip()))
                 self.fhandle=open(self.fname,"w")
                 print "saving results in file ",str(a)
+                self.fhandle.write("(lldb)%s \n" % " ".join(cmdargs))
             elif o == "-s" and len(a) > 0:
                 self.reg = re.compile(a.strip(),re.MULTILINE|re.DOTALL)
                 self.FILTER=True

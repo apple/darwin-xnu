@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2011 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2014 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -84,6 +84,7 @@
 #include <sys/vfs_context.h>		/* XXX for AF_MAX */
 #include <sys/mount.h>
 #include <sys/cdefs.h>
+#include <sys/sysctl.h>
 
 struct label;
 
@@ -203,6 +204,8 @@ struct mount {
  */
 #define MNT_IOFLAGS_FUA_SUPPORTED	0x00000001
 #define MNT_IOFLAGS_UNMAP_SUPPORTED	0x00000002
+#define MNT_IOFLAGS_IOSCHED_SUPPORTED	0x00000004
+#define MNT_IOFLAGS_CSUNMAP_SUPPORTED	0x00000008
 
 /*
  * ioqueue depth for devices that don't report one
@@ -228,6 +231,7 @@ extern struct mount * dead_mountp;
  *		because the bits here were broken out from the high bits
  *		of the mount flags.
  */
+#define MNTK_SWAP_MOUNT		0x00000100	/* we are swapping to this mount */
 #define MNTK_DENY_READDIREXT 0x00000200 /* Deny Extended-style readdir's for this volume */
 #define MNTK_PERMIT_UNMOUNT	0x00000400	/* Allow (non-forced) unmounts by UIDs other than the one that mounted the volume */
 #ifdef NFSCLIENT
@@ -253,7 +257,6 @@ extern struct mount * dead_mountp;
 #if REV_ENDIAN_FS
 #define MNT_REVEND		0x08000000	/* Reverse endian FS */
 #endif /* REV_ENDIAN_FS */
-#define MNTK_FRCUNMOUNT		0x10000000	/* Forced unmount wanted. */
 #define MNTK_AUTH_OPAQUE        0x20000000      /* authorisation decisions are not made locally */
 #define MNTK_AUTH_OPAQUE_ACCESS 0x40000000      /* VNOP_ACCESS is reliable for remote auth */
 #define MNTK_EXTENDED_SECURITY	0x80000000	/* extended security supported */
@@ -267,6 +270,7 @@ extern struct mount * dead_mountp;
 #define MNT_LWAIT		0x00000040	/* wait for unmount op */
 #define MNT_LITERWAIT		0x00000080	/* mount in iteration */
 #define MNT_LDEAD		0x00000100	/* mount already unmounted*/
+#define MNT_LNOSUB		0x00000200	/* submount - no recursion */
 
 
 /*
@@ -302,6 +306,7 @@ struct vfstable {
 	int 		vfc_vfsflags;	/* for optional types */
 	void *		vfc_descptr;	/* desc table allocated address */
 	int			vfc_descsize;	/* size allocated for desc table */
+	struct sysctl_oid	*vfc_sysctl;	/* dynamically registered sysctl node */
 };
 
 /* vfc_vfsflags: */
@@ -316,12 +321,16 @@ struct vfstable {
 #define	VFC_VFSVNOP_PAGEINV2	0x2000
 #define	VFC_VFSVNOP_PAGEOUTV2	0x4000
 #define	VFC_VFSVNOP_NOUPDATEID_RENAME	0x8000
+#if CONFIG_SECLUDED_RENAME
+#define VFC_VFSVNOP_SECLUDE_RENAME 	0x10000
+#endif
 
 
-extern int maxvfsconf;		/* highest defined filesystem type */
+extern int maxvfstypenum;		/* highest defined filesystem type */
 extern struct vfstable  *vfsconf;	/* head of list of filesystem types */
-extern int maxvfsslots;		/* Maximum slots available to be used */
-extern int numused_vfsslots;	/* number of slots already used */
+extern const int maxvfsslots;		/* Maximum statically allocated slots available to be used */
+extern int numused_vfsslots;	/* number of statically allocated slots already used */
+extern int numregistered_fses;	/* number of total registered filesystems */
 
 /* the following two are xnu private */
 struct vfstable *	vfstable_add(struct	vfstable *);
@@ -426,6 +435,7 @@ int	vfs_mountroot(void);
 void	vfs_unmountall(void);
 int	safedounmount(struct mount *, int, vfs_context_t);
 int	dounmount(struct mount *, int, int, vfs_context_t);
+void	dounmount_submounts(struct mount *, int, vfs_context_t);
 
 /* xnu internal api */
 void  mount_dropcrossref(mount_t, vnode_t, int);
@@ -447,7 +457,7 @@ void mount_set_noreaddirext (mount_t);
 /* Private NFS spi */
 #define KERNEL_MOUNT_NOAUTH		0x01 /* Don't check the UID of the directory we are mounting on */
 #define KERNEL_MOUNT_PERMIT_UNMOUNT	0x02 /* Allow (non-forced) unmounts by users other the one who mounted the volume */
-#if NFSCLIENT
+#if NFSCLIENT || DEVFS
 /*
  * NOTE: kernel_mount() does not force MNT_NOSUID, MNT_NOEXEC, or MNT_NODEC for non-privileged
  * mounting credentials, as the mount(2) system call does.
@@ -468,10 +478,17 @@ int  throttle_get_passive_io_policy(struct uthread **ut);
 int  throttle_io_will_be_throttled(int lowpri_window_msecs, mount_t mp);
 void *throttle_info_update_by_mount(mount_t mp);
 void rethrottle_thread(uthread_t ut);
+void throttle_info_reset_window(uthread_t ut);
+
 
 /* throttled I/O helper function */
 /* convert the lowest bit to a device index */
 extern int num_trailing_0(uint64_t n);
+
+/* sync lock */
+extern lck_mtx_t * sync_mtx_lck;
+
+extern int sync_timeout;
 
 __END_DECLS
 

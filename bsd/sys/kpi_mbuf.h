@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008-2013 Apple Inc. All rights reserved.
+ * Copyright (c) 2008-2014 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -209,10 +209,7 @@ typedef u_int32_t mbuf_csum_performed_flags_t;
 /*!
 	@enum mbuf_how_t
 	@abstract Method of allocating an mbuf.
-	@discussion Blocking will cause the funnel to be dropped. If the
-		funnel is dropped, other threads may make changes to networking
-		data structures. This can lead to very bad things happening.
-		Blocking on the input our output path can also impact
+	@discussion Blocking on the input or output path can impact
 		performance. There are some cases where making a blocking call
 		is acceptable. When in doubt, use MBUF_DONTWAIT.
 	@constant MBUF_WAITOK Allow a call to allocate an mbuf to block.
@@ -954,6 +951,19 @@ extern size_t mbuf_pkthdr_len(const mbuf_t mbuf);
  */
 extern void mbuf_pkthdr_setlen(mbuf_t mbuf, size_t len);
 
+#ifdef XNU_KERNEL_PRIVATE
+/*!
+	@function mbuf_pkthdr_maxlen
+	@discussion Retrieves the maximum length of data that may be stored
+		in this mbuf packet. This value assumes that the data pointer
+		 was set to the start of the possible range for that pointer
+		for each mbuf in the packet chain
+	@param mbuf The mbuf.
+	@result The maximum lenght of data for this mbuf.
+ */
+extern size_t mbuf_pkthdr_maxlen(const mbuf_t mbuf);
+#endif /* XNU_KERNEL_PRIVATE */
+
 /*!
 	@function mbuf_pkthdr_adjustlen
 	@discussion Adjusts the length of the packet in the packet header.
@@ -1619,6 +1629,27 @@ extern errno_t mbuf_pkthdr_aux_flags(mbuf_t mbuf,
 extern errno_t mbuf_get_driver_scratch(mbuf_t m, u_int8_t **area,
     size_t *area_ln);
 #endif /* KERNEL_PRIVATE */
+
+#ifdef XNU_KERNEL_PRIVATE
+/*!
+	@function mbuf_pkt_list_len
+	@discussion Retrieves the length of the list of mbuf packets.
+	@param mbuf The mbuf.
+	@result The length of the mbuf packet list.
+ */
+extern size_t mbuf_pkt_list_len(const mbuf_t mbuf);
+
+/*!
+	@function mbuf_pkt_list_maxlen
+	@discussion Retrieves the maximum length of data that may be stored
+		in the list of mbuf packet. This value assumes that the data pointer
+		was set to the start of the possible range for that pointer
+		for each mbuf in the packet chain
+	@param mbuf The mbuf.
+	@result The maximum length of data for this mbuf.
+ */
+extern size_t mbuf_pkt_list_maxlen(const mbuf_t mbuf);
+#endif /* XNU_KERNEL_PRIVATE */
 
 /* IF_QUEUE interaction */
 

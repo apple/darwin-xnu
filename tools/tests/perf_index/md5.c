@@ -1,11 +1,13 @@
 /*
- *  ccmd5_ltc.c
- *  corecrypto
+ *  md5.c
+ *  Adapted for perf_index from ccmd5_ltc.c in corecrypto
  *
  *  Created by Fabrice Gautier on 12/3/10.
  *  Copyright 2010,2011 Apple Inc. All rights reserved.
  *
  */
+
+#include "md5.h"
 
 #include <stdint.h>
 #include <string.h>

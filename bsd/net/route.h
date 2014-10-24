@@ -92,12 +92,7 @@ struct rt_metrics {
 #define	RTM_RTTUNIT	1000000	/* units for rtt, rttvar, as units per sec */
 
 #ifdef PRIVATE
-#ifndef KERNEL
-/* Private declaration for user-space (needed by ip_mroute.h) */
-struct route {
-#else /* KERNEL */
 struct route_old {
-#endif /* KERNEL */
 	void		*ro_rt;
 	uint32_t	ro_flags;
 	struct sockaddr	ro_dst;

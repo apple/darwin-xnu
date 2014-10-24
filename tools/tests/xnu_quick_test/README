@@ -33,10 +33,28 @@ for "todo" in the source files for this project to locate which tests have
 known failures.   And please tag any new exceptions you find with "todo"
 in the comment and the radar number of the bug.
 
-To build a fat binary, export ARCH="i386 x86_64". This will work
-for any architectures that Apple gcc recognizes.
+Building:
+xnu_quick_test is built automatically by BNI for both Mac (10.9 and later), and
+iOS (7 and later) trains, and is delivered on AppleInternal builds in
+/AppleInternal/CoreOS/xnu_quick_test. It is built as part of the xnu_quick_test
+build alias, so you can also find a copy on ~rc at:
+~rc/Software/$RELEASE/Updates/$RELEASEVERSION/Roots/xnu_quick_test/AppleInternal/CoreOS/xnu_quick_test.
 
-Added four defines which you can use at the compile line to build variants.
+Alternatively you can build it yourself using make like so:
+SDKROOT=/path/to/sdk make
+
+For example:
+# build for Mac, current OS
+SDKROOT=/ make 
+# build for iOS
+SDKROOT=`xcodebuild -sdk iphoneos.internal -version Path` make
+
+By default xnu builds all-way fat, but you can restrict this by explicitly
+specifying architectures like so:
+# build for only armv7 and armv7s
+SDKROOT=`xcodebuild -sdk iphoneos.internal -version Path` make ARCH="armv7 armv7s"
+
+There are four defines which you can use at the compile line to build variants.
 DEBUG
        turn on additional printfs
 CONFORMANCE_TESTS_IN_XNU 

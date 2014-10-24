@@ -66,7 +66,6 @@
  *	Basic initialization for I386 - ISA bus machines.
  */
 
-#include <platforms.h>
 
 #include <mach/i386/vm_param.h>
 
@@ -99,6 +98,8 @@
 #endif
 #include <i386/ucode.h>
 #include <i386/pmCPU.h>
+#include <i386/panic_hooks.h>
+
 #include <architecture/i386/pio.h> /* inb() */
 #include <pexpert/i386/boot.h>
 
@@ -210,6 +211,8 @@ machine_startup(void)
 	}
 
 	machine_conf();
+
+	panic_hooks_init();
 
 	/*
 	 * Start the system.
@@ -1029,6 +1032,8 @@ panic_i386_backtrace(void *_frame, int nframes, const char *msg, boolean_t regdu
 		hw_lock_to(&pbtlock, ~0U);
 		pbtcpu = cn;
 	}
+
+	panic_check_hook();
 
 	PE_parse_boot_argn("keepsyms", &keepsyms, sizeof (keepsyms));
 

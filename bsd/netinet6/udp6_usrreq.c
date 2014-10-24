@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2013 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2014 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -132,8 +132,11 @@
 #if IPSEC
 #include <netinet6/ipsec.h>
 #include <netinet6/ipsec6.h>
-extern int ipsec_bypass;
 #endif /* IPSEC */
+
+#if NECP
+#include <net/necp.h>
+#endif /* NECP */
 
 /*
  * UDP protocol inplementation.
@@ -204,6 +207,7 @@ udp6_append(struct inpcb *last, struct ip6_hdr *ip6,
 	int ret = 0;
 	boolean_t cell = IFNET_IS_CELLULAR(ifp);
 	boolean_t wifi = (!cell && IFNET_IS_WIFI(ifp));
+	boolean_t wired = (!wifi && IFNET_IS_WIRED(ifp));
 
 #if CONFIG_MACF_NET
 	if (mac_inpcb_check_deliver(last, n, AF_INET6, SOCK_DGRAM) != 0) {
@@ -223,8 +227,8 @@ udp6_append(struct inpcb *last, struct ip6_hdr *ip6,
 	}
 	m_adj(n, off);
 	if (nstat_collect) {
-		INP_ADD_STAT(last, cell, wifi, rxpackets, 1);
-		INP_ADD_STAT(last, cell, wifi, rxbytes, n->m_pkthdr.len);
+		INP_ADD_STAT(last, cell, wifi, wired, rxpackets, 1);
+		INP_ADD_STAT(last, cell, wifi, wired, rxbytes, n->m_pkthdr.len);
 	}
 	so_recv_data_stat(last->in6p_socket, n, 0);
 	if (sbappendaddr(&last->in6p_socket->so_rcv,
@@ -246,7 +250,7 @@ udp6_input(struct mbuf **mp, int *offp, int proto)
 	struct  mbuf *opts = NULL;
 	int off = *offp;
 	int plen, ulen, ret = 0;
-	boolean_t cell, wifi;
+	boolean_t cell, wifi, wired;
 	struct sockaddr_in6 udp_in6;
 	struct inpcbinfo *pcbinfo = &udbinfo;
 	struct sockaddr_in6 fromsa;
@@ -260,6 +264,7 @@ udp6_input(struct mbuf **mp, int *offp, int proto)
 	ip6 = mtod(m, struct ip6_hdr *);
 	cell = IFNET_IS_CELLULAR(ifp);
 	wifi = (!cell && IFNET_IS_WIFI(ifp));
+	wired = (!wifi && IFNET_IS_WIRED(ifp));
 
 	udpstat.udps_ipackets++;
 
@@ -294,7 +299,6 @@ udp6_input(struct mbuf **mp, int *offp, int proto)
 	if (IN6_IS_ADDR_MULTICAST(&ip6->ip6_dst)) {
 		int reuse_sock = 0, mcast_delivered = 0;
 		struct ip6_moptions *imo;
-		struct mbuf *n = NULL;
 
 		/*
 		 * Deliver a multicast datagram to all sockets
@@ -346,11 +350,7 @@ udp6_input(struct mbuf **mp, int *offp, int proto)
 			if ((in6p->inp_vflag & INP_IPV6) == 0)
 				continue;
 
-			if (inp_restricted(in6p, ifp))
-				continue;
-
-			if (IFNET_IS_CELLULAR(ifp) &&
-			    (in6p->in6p_flags & INP_NO_IFT_CELLULAR))
+			if (inp_restricted_recv(in6p, ifp))
 				continue;
 
 			if (in_pcb_checkstate(in6p, WNT_ACQUIRE, 0) ==
@@ -407,18 +407,18 @@ udp6_input(struct mbuf **mp, int *offp, int proto)
 			reuse_sock = in6p->inp_socket->so_options &
 			    (SO_REUSEPORT | SO_REUSEADDR);
 
-#if IPSEC
+#if NECP
 			skipit = 0;
-			/* Check AH/ESP integrity. */
-			if (ipsec_bypass == 0 &&
-			    ipsec6_in_reject_so(m, in6p->inp_socket)) {
-				IPSEC_STAT_INCREMENT(ipsec6stat.in_polvio);
+			if (!necp_socket_is_allowed_to_send_recv_v6(in6p,
+			    uh->uh_dport, uh->uh_sport, &ip6->ip6_dst,
+			    &ip6->ip6_src, ifp, NULL)) {
 				/* do not inject data to pcb */
 				skipit = 1;
 			}
 			if (skipit == 0)
-#endif /* IPSEC */
+#endif /* NECP */
 			{
+				struct mbuf *n = NULL;
 				/*
 				 * KAME NOTE: do not
 				 * m_copy(m, offset, ...) below.
@@ -431,6 +431,7 @@ udp6_input(struct mbuf **mp, int *offp, int proto)
 				udp6_append(in6p, ip6, &udp_in6, m,
 				    off + sizeof (struct udphdr), ifp);
 				mcast_delivered++;
+				m = n;
 			}
 			udp_unlock(in6p->in6p_socket, 1, 0);
 
@@ -442,7 +443,7 @@ udp6_input(struct mbuf **mp, int *offp, int proto)
 			 * port.  It assumes that an application will never
 			 * clear these options after setting them.
 			 */
-			if (reuse_sock == 0 || ((m = n) == NULL))
+			if (reuse_sock == 0 || m == NULL)
 				break;
 
 			/*
@@ -471,7 +472,8 @@ udp6_input(struct mbuf **mp, int *offp, int proto)
 			goto bad;
 		}
 
-		if (reuse_sock != 0)	/* free the extra copy of mbuf */
+		/* free the extra copy of mbuf or skipped by NECP */
+		if (m != NULL)
 			m_freem(m);
 		return (IPPROTO_DONE);
 	}
@@ -512,19 +514,14 @@ udp6_input(struct mbuf **mp, int *offp, int proto)
 		icmp6_error(m, ICMP6_DST_UNREACH, ICMP6_DST_UNREACH_NOPORT, 0);
 		return (IPPROTO_DONE);
 	}
-#if IPSEC
-	/*
-	 * Check AH/ESP integrity.
-	 */
-	if (ipsec_bypass == 0) {
-		if (ipsec6_in_reject_so(m, in6p->in6p_socket)) {
-			IPSEC_STAT_INCREMENT(ipsec6stat.in_polvio);
-			in_pcb_checkstate(in6p, WNT_RELEASE, 0);
-			IF_UDP_STATINC(ifp, badipsec);
-			goto bad;
-		}
+#if NECP
+	if (!necp_socket_is_allowed_to_send_recv_v6(in6p, uh->uh_dport,
+	    uh->uh_sport, &ip6->ip6_dst, &ip6->ip6_src, ifp, NULL)) {
+		in_pcb_checkstate(in6p, WNT_RELEASE, 0);
+		IF_UDP_STATINC(ifp, badipsec);
+		goto bad;
 	}
-#endif /* IPSEC */
+#endif /* NECP */
 
 	/*
 	 * Construct sockaddr format source address.
@@ -551,8 +548,8 @@ udp6_input(struct mbuf **mp, int *offp, int proto)
 	}
 	m_adj(m, off + sizeof (struct udphdr));
 	if (nstat_collect) {
-		INP_ADD_STAT(in6p, cell, wifi, rxpackets, 1);
-		INP_ADD_STAT(in6p, cell, wifi, rxbytes, m->m_pkthdr.len);
+		INP_ADD_STAT(in6p, cell, wifi, wired, rxpackets, 1);
+		INP_ADD_STAT(in6p, cell, wifi, wired, rxbytes, m->m_pkthdr.len);
 	}
 	so_recv_data_stat(in6p->in6p_socket, m, 0);
 	if (sbappendaddr(&in6p->in6p_socket->so_rcv,
@@ -697,7 +694,11 @@ udp6_bind(struct socket *so, struct sockaddr *nam, struct proc *p)
 	int error;
 
 	inp = sotoinpcb(so);
-	if (inp == NULL || (inp->inp_flags2 & INP2_WANT_FLOW_DIVERT))
+	if (inp == NULL
+#if NECP
+		|| (necp_socket_should_use_flow_divert(inp))
+#endif /* NECP */
+		)
 		return (inp == NULL ? EINVAL : EPROTOTYPE);
 
 	inp->inp_vflag &= ~INP_IPV4;
@@ -731,7 +732,11 @@ udp6_connect(struct socket *so, struct sockaddr *nam, struct proc *p)
 	int error;
 
 	inp = sotoinpcb(so);
-	if (inp == NULL || (inp->inp_flags2 & INP2_WANT_FLOW_DIVERT))
+	if (inp == NULL
+#if NECP
+		|| (necp_socket_should_use_flow_divert(inp))
+#endif /* NECP */
+		)
 		return (inp == NULL ? EINVAL : EPROTOTYPE);
 
 	if ((inp->inp_flags & IN6P_IPV6_V6ONLY) == 0) {
@@ -807,7 +812,11 @@ udp6_disconnect(struct socket *so)
 	struct inpcb *inp;
 
 	inp = sotoinpcb(so);
-	if (inp == NULL || (inp->inp_flags2 & INP2_WANT_FLOW_DIVERT))
+	if (inp == NULL
+#if NECP
+		|| (necp_socket_should_use_flow_divert(inp))
+#endif /* NECP */
+		)
 		return (inp == NULL ? EINVAL : EPROTOTYPE);
 
 	if (inp->inp_vflag & INP_IPV4) {
@@ -849,8 +858,15 @@ udp6_send(struct socket *so, int flags, struct mbuf *m, struct sockaddr *addr,
 	int error = 0;
 
 	inp = sotoinpcb(so);
-	if (inp == NULL || (inp->inp_flags2 & INP2_WANT_FLOW_DIVERT)) {
-		error = (inp == NULL ? EINVAL : EPROTOTYPE);
+	if (inp == NULL
+#if NECP
+		|| (necp_socket_should_use_flow_divert(inp))
+#endif /* NECP */
+		) {
+		if (inp == NULL)
+			error = EINVAL;
+		else
+			error = EPROTOTYPE;
 		goto bad;
 	}
 

@@ -106,6 +106,10 @@
 #include <kperf/kperf.h>
 #endif
 
+#if HYPERVISOR
+#include <kern/hv_support.h>
+#endif
+
 /*
  * Maps state flavor to number of words in the state:
  */
@@ -208,6 +212,18 @@ ml_kperf_cswitch(thread_t old, thread_t new)
 }
 #endif
 
+#if HYPERVISOR
+static inline void
+ml_hv_cswitch(thread_t old, thread_t new)
+{
+	if (old->hv_thread_target)
+		hv_callbacks.preempt(old->hv_thread_target);
+
+	if (new->hv_thread_target)
+		hv_callbacks.dispatch(new->hv_thread_target);	
+}
+#endif
+
 /*
  * Don't let an illegal value for dr7 get set.	Specifically,
  * check for undefined settings.  Setting these bit patterns
@@ -268,28 +284,7 @@ dr7_is_valid(uint32_t *dr7)
 	return (TRUE);
 }
 
-static inline void
-set_live_debug_state32(cpu_data_t *cdp, x86_debug_state32_t *ds)
-{
-	__asm__ volatile ("movl %0,%%db0" : :"r" (ds->dr0));
-	__asm__ volatile ("movl %0,%%db1" : :"r" (ds->dr1));
-	__asm__ volatile ("movl %0,%%db2" : :"r" (ds->dr2));
-	__asm__ volatile ("movl %0,%%db3" : :"r" (ds->dr3));
-	cdp->cpu_dr7 = ds->dr7;
-}
-
 extern void set_64bit_debug_regs(x86_debug_state64_t *ds);
-
-static inline void
-set_live_debug_state64(cpu_data_t *cdp, x86_debug_state64_t *ds)
-{
-	/*
-	 * We need to enter 64-bit mode in order to set the full
-	 * width of these registers
-	 */
-	set_64bit_debug_regs(ds);
-	cdp->cpu_dr7 = ds->dr7;
-}
 
 boolean_t
 debug_state_is_valid32(x86_debug_state32_t *ds) 
@@ -381,6 +376,13 @@ set_debug_state64(thread_t thread, x86_debug_state64_t *ds)
 	if (ids == NULL) {
 		ids = zalloc(ids_zone);
 		bzero(ids, sizeof *ids);
+
+#if HYPERVISOR
+		if (thread->hv_thread_target) {
+			hv_callbacks.volatile_state(thread->hv_thread_target,
+				HV_DEBUG_STATE);
+		}
+#endif
 
 		simple_lock(&pcb->lock);
 		/* make sure it wasn't already alloc()'d elsewhere */
@@ -507,6 +509,10 @@ machine_switch_context(
 	 *	Load the rest of the user state for the new thread
 	 */
 	act_machine_switch_pcb(old, new);
+
+#if HYPERVISOR
+	ml_hv_cswitch(old, new);
+#endif
 
 	return(Switch_context(old, continuation, new));
 }
@@ -636,6 +642,9 @@ set_thread_state32(thread_t thread, x86_thread_state32_t *ts)
 	ts->ds = USER_DS;
 	ts->es = USER_DS;
 
+	/* Set GS to CTHREAD only if's been established */
+	ts->gs = thread->machine.cthread_self ? USER_CTHREAD : NULL_SEG;
+ 
 	/* Check segment selectors are safe */
 	if (!valid_user_segment_selectors(ts->cs,
 					  ts->ss,
@@ -1856,6 +1865,10 @@ machine_stack_handoff(thread_t old,
 
 	PMAP_SWITCH_CONTEXT(old, new, cpu_number());
 	act_machine_switch_pcb(old, new);
+
+#if HYPERVISOR
+	ml_hv_cswitch(old, new);
+#endif
 
 	machine_set_current_thread(new);
 

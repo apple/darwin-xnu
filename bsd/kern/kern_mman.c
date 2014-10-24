@@ -101,6 +101,7 @@
 
 #include <sys/syscall.h>
 #include <sys/kdebug.h>
+#include <sys/bsdtask_info.h>
 
 #include <security/audit/audit.h>
 #include <bsm/audit_kevents.h>
@@ -120,15 +121,14 @@
 #include <kern/cpu_number.h>
 #include <kern/host.h>
 #include <kern/task.h>
+#include <kern/page_decrypt.h>
+
+#include <IOKit/IOReturn.h>
 
 #include <vm/vm_map.h>
 #include <vm/vm_kern.h>
 #include <vm/vm_pager.h>
 #include <vm/vm_protos.h>
-
-/* XXX the following function should probably be static */
-kern_return_t map_fd_funneled(int, vm_object_offset_t, vm_offset_t *,
-				boolean_t, vm_size_t);
 
 /*
  * XXX Internally, we use VM_PROT_* somewhat interchangeably, but the correct
@@ -1103,211 +1103,119 @@ munlockall(__unused proc_t p, __unused struct munlockall_args *uap, __unused int
 	return(ENOSYS);
 }
 
-/* USV: No! need to obsolete map_fd()! mmap() already supports 64 bits */
-kern_return_t
-map_fd(struct map_fd_args *args)
+#if CONFIG_CODE_DECRYPTION
+int
+mremap_encrypted(__unused struct proc *p, struct mremap_encrypted_args *uap, __unused int32_t *retval)
 {
-	int		fd = args->fd;
-	vm_offset_t	offset = args->offset;
-	vm_offset_t	*va = args->va;
-	boolean_t	findspace = args->findspace;
-	vm_size_t	size = args->size;
-	kern_return_t ret;
+    mach_vm_offset_t	user_addr;
+    mach_vm_size_t	user_size;
+    kern_return_t	result;
+    vm_map_t	user_map;
+    uint32_t	cryptid;
+    cpu_type_t	cputype;
+    cpu_subtype_t	cpusubtype;
+    pager_crypt_info_t crypt_info;
+    const char * cryptname = 0;
+    char *vpath;
+    int len, ret;
+    struct proc_regioninfo_internal pinfo;
+    vnode_t vp;
+    uintptr_t vnodeaddr;
+    uint32_t vid;
+    
+    AUDIT_ARG(addr, uap->addr);
+    AUDIT_ARG(len, uap->len);
+    
+    user_map = current_map();
+    user_addr = (mach_vm_offset_t) uap->addr;
+    user_size = (mach_vm_size_t) uap->len;
+    
+    cryptid = uap->cryptid;
+    cputype = uap->cputype;
+    cpusubtype = uap->cpusubtype;
+    
+    if (user_addr & vm_map_page_mask(user_map)) {
+        /* UNIX SPEC: user address is not page-aligned, return EINVAL */
+        return EINVAL;
+    }
+    
+    switch(cryptid) {
+        case 0:
+            /* not encrypted, just an empty load command */
+            return 0;
+        case 1:
+            cryptname="com.apple.unfree";
+            break;
+        case 0x10:
+            /* some random cryptid that you could manually put into
+             * your binary if you want NULL */
+            cryptname="com.apple.null";
+            break;
+        default:
+            return EINVAL;
+    }
+    
+    if (NULL == text_crypter_create) return ENOTSUP;
+    
+    ret = fill_procregioninfo_onlymappedvnodes( proc_task(p), user_addr, &pinfo, &vnodeaddr, &vid);
+    if (ret == 0 || !vnodeaddr) {
+        /* No really, this returns 0 if the memory address is not backed by a file */
+        return (EINVAL);
+    }
+    
+    vp = (vnode_t)vnodeaddr;
+    if ((vnode_getwithvid(vp, vid)) == 0) {
+        MALLOC_ZONE(vpath, char *, MAXPATHLEN, M_NAMEI, M_WAITOK);
+        if(vpath == NULL) {
+            vnode_put(vp);
+            return (ENOMEM);
+        }
+        
+        len = MAXPATHLEN;
+        ret = vn_getpath(vp, vpath, &len);
+        if(ret) {
+            FREE_ZONE(vpath, MAXPATHLEN, M_NAMEI);
+            vnode_put(vp);
+            return (ret);
+        }
+        
+        vnode_put(vp);
+    } else {
+        return (EINVAL);
+    }
 
-	AUDIT_MACH_SYSCALL_ENTER(AUE_MAPFD);
-	AUDIT_ARG(addr, CAST_DOWN(user_addr_t, args->va));
-	AUDIT_ARG(fd, fd);
-
-	ret = map_fd_funneled( fd, (vm_object_offset_t)offset, va, findspace, size);
-
-	AUDIT_MACH_SYSCALL_EXIT(ret);
-	return ret;
+#if 0
+    kprintf("%s vpath %s cryptid 0x%08x cputype 0x%08x cpusubtype 0x%08x range 0x%016llx size 0x%016llx\n",
+            __FUNCTION__, vpath, cryptid, cputype, cpusubtype, (uint64_t)user_addr, (uint64_t)user_size);
+#endif
+    
+    /* set up decrypter first */
+    crypt_file_data_t crypt_data = {
+        .filename = vpath,
+        .cputype = cputype,
+        .cpusubtype = cpusubtype };
+    result = text_crypter_create(&crypt_info, cryptname, (void*)&crypt_data);
+    FREE_ZONE(vpath, MAXPATHLEN, M_NAMEI);
+    
+    if(result) {
+        printf("%s: unable to create decrypter %s, kr=%d\n",
+               __FUNCTION__, cryptname, result);
+        if (result == kIOReturnNotPrivileged) {
+            /* text encryption returned decryption failure */
+            return (EPERM);
+        } else {
+            return (ENOMEM);
+        }
+    }
+    
+    /* now remap using the decrypter */
+    result = vm_map_apple_protected(user_map, user_addr, user_addr+user_size, &crypt_info);
+    if (result) {
+        printf("%s: mapping failed with %d\n", __FUNCTION__, result);
+        crypt_info.crypt_end(crypt_info.crypt_ops);
+        return (EPERM);
+    }
+    
+    return 0;
 }
-
-kern_return_t
-map_fd_funneled(
-	int			fd,
-	vm_object_offset_t	offset,
-	vm_offset_t		*va,
-	boolean_t		findspace,
-	vm_size_t		size)
-{
-	kern_return_t	result;
-	struct fileproc	*fp;
-	struct vnode	*vp;
-	void *	pager;
-	vm_offset_t	map_addr=0;
-	vm_size_t	map_size;
-	int		err=0;
-	vm_prot_t	maxprot = VM_PROT_ALL;
-	vm_map_t	my_map;
-	proc_t		p = current_proc();
-	struct vnode_attr vattr;
-
-	my_map = current_map();
-
-	/*
-	 *	Find the inode; verify that it's a regular file.
-	 */
-
-	err = fp_lookup(p, fd, &fp, 0);
-	if (err)
-		return(err);
-	
-	if (FILEGLOB_DTYPE(fp->f_fglob) != DTYPE_VNODE) {
-		err = KERN_INVALID_ARGUMENT;
-		goto bad;
-	}
-
-	if (!(fp->f_fglob->fg_flag & FREAD)) {
-		err = KERN_PROTECTION_FAILURE;
-		goto bad;
-	}
-
-	vp = (struct vnode *)fp->f_fglob->fg_data;
-	err = vnode_getwithref(vp);
-	if(err != 0) 
-		goto bad;
-
-	if (vp->v_type != VREG) {
-		(void)vnode_put(vp);
-		err = KERN_INVALID_ARGUMENT;
-		goto bad;
-	}
-
-#if CONFIG_MACF
-	err = mac_file_check_mmap(vfs_context_ucred(vfs_context_current()),
-			fp->f_fglob, VM_PROT_DEFAULT, MAP_FILE, &maxprot);
-	if (err) {
-		(void)vnode_put(vp);
-		goto bad;
-	}
-#endif /* MAC */
-
-#if CONFIG_PROTECT
-	/* check for content protection access */
-	{
-		err = cp_handle_vnop(vp, CP_READ_ACCESS | CP_WRITE_ACCESS, 0);
-	 	if (err != 0) { 
- 			(void) vnode_put(vp);
- 			goto bad;
- 		}
-	}
-#endif /* CONFIG_PROTECT */
-
-	AUDIT_ARG(vnpath, vp, ARG_VNODE1);
-
-	/*
-	 * POSIX: mmap needs to update access time for mapped files
-	 */
-	if ((vnode_vfsvisflags(vp) & MNT_NOATIME) == 0) {
-		VATTR_INIT(&vattr);
-		nanotime(&vattr.va_access_time);
-		VATTR_SET_ACTIVE(&vattr, va_access_time);
-		vnode_setattr(vp, &vattr, vfs_context_current());
-	}
-	
-	if (offset & vm_map_page_mask(my_map)) {
-		printf("map_fd: file offset not page aligned(%d : %s)\n",p->p_pid, p->p_comm);
-		(void)vnode_put(vp);
-		err = KERN_INVALID_ARGUMENT;
-		goto bad;
-	}
-	map_size = vm_map_round_page(size, vm_map_page_mask(my_map));
-
-	/*
-	 * Allow user to map in a zero length file.
-	 */
-	if (size == 0) {
-		(void)vnode_put(vp);
-		err = KERN_SUCCESS;
-		goto bad;
-	}
-	/*
-	 *	Map in the file.
-	 */
-	pager = (void *)ubc_getpager(vp);
-	if (pager == NULL) {
-		(void)vnode_put(vp);
-		err = KERN_FAILURE;
-		goto bad;
-	}
-
-	result = vm_map_64(
-			my_map,
-			&map_addr, map_size, (vm_offset_t)0, 
-			VM_FLAGS_ANYWHERE, pager, offset, TRUE,
-			VM_PROT_DEFAULT, maxprot,
-			VM_INHERIT_DEFAULT);
-	if (result != KERN_SUCCESS) {
-		(void)vnode_put(vp);
-		err = result;
-		goto bad;
-	}
-
-
-	if (!findspace) {
-		//K64todo fix for 64bit user?
-		uint32_t	dst_addr;
-		vm_map_copy_t	tmp;
-
-		if (copyin(CAST_USER_ADDR_T(va), &dst_addr, sizeof (dst_addr))	||
-		    trunc_page(dst_addr) != dst_addr) {
-			(void) vm_map_remove(
-					my_map,
-					map_addr, map_addr + map_size,
-					VM_MAP_NO_FLAGS);
-			(void)vnode_put(vp);
-			err = KERN_INVALID_ADDRESS;
-			goto bad;
-		}
-
-		result = vm_map_copyin(my_map, (vm_map_address_t)map_addr,
-				       (vm_map_size_t)map_size, TRUE, &tmp);
-		if (result != KERN_SUCCESS) {
-			
-			(void) vm_map_remove(
-				my_map,
-				vm_map_trunc_page(map_addr,
-						  vm_map_page_mask(my_map)),
-				vm_map_round_page(map_addr + map_size,
-						  vm_map_page_mask(my_map)),
-				VM_MAP_NO_FLAGS);
-			(void)vnode_put(vp);
-			err = result;
-			goto bad;
-		}
-
-		result = vm_map_copy_overwrite(my_map,
-					(vm_map_address_t)dst_addr, tmp, FALSE);
-		if (result != KERN_SUCCESS) {
-			vm_map_copy_discard(tmp);
-			(void)vnode_put(vp);
-			err = result;
-			goto bad;
-		}
-	} else {
-		// K64todo bug compatible now, should fix for 64bit user
-		uint32_t user_map_addr = CAST_DOWN_EXPLICIT(uint32_t, map_addr);
-		if (copyout(&user_map_addr, CAST_USER_ADDR_T(va), sizeof (user_map_addr))) {
-			(void) vm_map_remove(
-				my_map,
-				vm_map_trunc_page(map_addr,
-						  vm_map_page_mask(my_map)),
-				vm_map_round_page(map_addr + map_size,
-						  vm_map_page_mask(my_map)),
-				VM_MAP_NO_FLAGS);
-			(void)vnode_put(vp);
-			err = KERN_INVALID_ADDRESS;
-			goto bad;
-		}
-	}
-
-	ubc_setthreadcred(vp, current_proc(), current_thread());
-	(void)vnode_put(vp);
-	err = 0;
-bad:
-	fp_drop(p, fd, fp, 0);
-	return (err);
-}
-
+#endif /* CONFIG_CODE_DECRYPTION */

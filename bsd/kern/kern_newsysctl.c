@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2008 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2013 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -73,18 +73,15 @@
 #include <sys/sysctl.h>
 #include <sys/malloc.h>
 #include <sys/proc_internal.h>
+#include <sys/kauth.h>
 #include <sys/systm.h>
+#include <sys/sysproto.h>
 
 #include <security/audit/audit.h>
 
-/*
-struct sysctl_oid_list sysctl__debug_children;
-struct sysctl_oid_list sysctl__kern_children;
-struct sysctl_oid_list sysctl__net_children;
-struct sysctl_oid_list sysctl__sysctl_children;
-*/
-
+lck_grp_t * sysctl_lock_group = NULL;
 lck_rw_t * sysctl_geometry_lock = NULL;
+lck_mtx_t * sysctl_unlocked_node_lock = NULL;
 
 /*
  * Conditionally allow dtrace to see these functions for debugging purposes.
@@ -99,7 +96,6 @@ lck_rw_t * sysctl_geometry_lock = NULL;
 #endif
 
 /* forward declarations  of static functions */
-STATIC funnel_t *spl_kernel_funnel(void);
 STATIC void sysctl_sysctl_debug_dump_node(struct sysctl_oid_list *l, int i);
 STATIC int sysctl_sysctl_debug(struct sysctl_oid *oidp, void *arg1,
 	int arg2, struct sysctl_req *req);
@@ -110,51 +106,24 @@ STATIC int sysctl_sysctl_next_ls (struct sysctl_oid_list *lsp,
 	struct sysctl_oid **oidpp);
 STATIC int sysctl_old_kernel(struct sysctl_req *req, const void *p, size_t l);
 STATIC int sysctl_new_kernel(struct sysctl_req *req, void *p, size_t l);
-STATIC int name2oid (char *name, int *oid, int *len);
+STATIC int name2oid (char *name, int *oid, u_int *len);
 STATIC int sysctl_sysctl_name2oid(struct sysctl_oid *oidp, void *arg1, int arg2, struct sysctl_req *req);
 STATIC int sysctl_sysctl_next(struct sysctl_oid *oidp, void *arg1, int arg2,
         struct sysctl_req *req);
 STATIC int sysctl_sysctl_oidfmt(struct sysctl_oid *oidp, void *arg1, int arg2, struct sysctl_req *req);
-STATIC void splx_kernel_funnel(funnel_t *saved);
 STATIC int sysctl_old_user(struct sysctl_req *req, const void *p, size_t l);
 STATIC int sysctl_new_user(struct sysctl_req *req, void *p, size_t l);
-STATIC int sysctl(int *name, u_int namelen, void *oldp, size_t *oldlenp, void *newp, size_t newlen);
-STATIC int sysctlnametomib(const char *name, int *mibp, size_t *sizep);
 
+STATIC void sysctl_create_user_req(struct sysctl_req *req, struct proc *p, user_addr_t oldp,
+								   size_t oldlen, user_addr_t newp, size_t newlen);
+STATIC int sysctl_root(boolean_t from_kernel, boolean_t string_is_canonical, char *namestring, size_t namestringlen, int *name, u_int namelen, struct sysctl_req *req);
 
-
-/*
- * Locking and stats
- */
-
-/*
- * XXX this does not belong here
- */
-STATIC funnel_t *
-spl_kernel_funnel(void)
-{
-	funnel_t *cfunnel;
-
-	cfunnel = thread_funnel_get();
-	if (cfunnel != kernel_flock) {
-		if (cfunnel != NULL)
-			thread_funnel_set(cfunnel, FALSE);
-		thread_funnel_set(kernel_flock, TRUE);
-	}
-	return(cfunnel);
-}
-
-STATIC void
-splx_kernel_funnel(funnel_t *saved)
-{
-	if (saved != kernel_flock) {
-		thread_funnel_set(kernel_flock, FALSE);
-		if (saved != NULL) 
-			thread_funnel_set(saved, TRUE);
-	}
-}
-
-STATIC int sysctl_root SYSCTL_HANDLER_ARGS;
+int	kernel_sysctl(struct proc *p, int *name, u_int namelen, void *old, size_t *oldlenp, void *new, size_t newlen);
+int	kernel_sysctlbyname(const char *name, void *oldp, size_t *oldlenp, void *newp, size_t newlen);
+int	userland_sysctl(boolean_t string_is_canonical,
+					char *namestring, size_t namestringlen,
+					int *name, u_int namelen, struct sysctl_req *req,
+					size_t *retval);
 
 struct sysctl_oid_list sysctl__children; /* root list */
 
@@ -172,7 +141,6 @@ sysctl_register_oid(struct sysctl_oid *new_oidp)
 	struct sysctl_oid *p;
 	struct sysctl_oid *q;
 	int n;
-	funnel_t *fnl = NULL;	/* compiler doesn't notice CTLFLAG_LOCKED */
 
 	/*
 	 * The OID can be old-style (needs copy), new style without an earlier
@@ -209,13 +177,6 @@ sysctl_register_oid(struct sysctl_oid *new_oidp)
 		}
 	}
 
-	/*
-	 * If it's a locked OID being registered, we can assume that the
-	 * caller is doing their own reentrancy locking before calling us.
-	 */
-	if (!(oidp->oid_kind & CTLFLAG_LOCKED))
-		fnl = spl_kernel_funnel();
-
 	if(sysctl_geometry_lock == NULL)
 	{
 		/*
@@ -225,8 +186,9 @@ sysctl_register_oid(struct sysctl_oid *new_oidp)
 		 * sysctl_register_fixed().
 		 */
 
-		lck_grp_t* lck_grp  = lck_grp_alloc_init("sysctl", NULL);
-		sysctl_geometry_lock = lck_rw_alloc_init(lck_grp, NULL);
+		sysctl_lock_group  = lck_grp_alloc_init("sysctl", NULL);
+		sysctl_geometry_lock = lck_rw_alloc_init(sysctl_lock_group, NULL);
+		sysctl_unlocked_node_lock = lck_mtx_alloc_init(sysctl_lock_group, NULL);
 	}
 	/* Get the write lock to modify the geometry */
 	lck_rw_lock_exclusive(sysctl_geometry_lock);
@@ -268,9 +230,6 @@ sysctl_register_oid(struct sysctl_oid *new_oidp)
 
 	/* Release the write lock */
 	lck_rw_unlock_exclusive(sysctl_geometry_lock);
-
-	if (!(oidp->oid_kind & CTLFLAG_LOCKED))
-		splx_kernel_funnel(fnl);
 }
 
 void
@@ -278,10 +237,6 @@ sysctl_unregister_oid(struct sysctl_oid *oidp)
 {
 	struct sysctl_oid *removed_oidp = NULL;	/* OID removed from tree */
 	struct sysctl_oid *old_oidp = NULL;	/* OID compatibility copy */
-	funnel_t *fnl = NULL;	/* compiler doesn't notice CTLFLAG_LOCKED */
-
-	if (!(oidp->oid_kind & CTLFLAG_LOCKED))
-		fnl = spl_kernel_funnel();
 
 	/* Get the write lock to modify the geometry */
 	lck_rw_lock_exclusive(sysctl_geometry_lock);
@@ -335,10 +290,6 @@ sysctl_unregister_oid(struct sysctl_oid *oidp)
 	if (old_oidp != NULL) {
 		FREE(old_oidp, M_TEMP);
 	}
-
-	/* And drop the funnel interlock, if needed */
-	if (!(oidp->oid_kind & CTLFLAG_LOCKED))
-		splx_kernel_funnel(fnl);
 }
 
 /*
@@ -910,7 +861,7 @@ SYSCTL_NODE(_sysctl, 2, next, CTLFLAG_RD | CTLFLAG_LOCKED, sysctl_sysctl_next, "
  * Locks:	Assumes sysctl_geometry_lock is held prior to calling
  */
 STATIC int
-name2oid (char *name, int *oid, int *len)
+name2oid (char *name, int *oid, u_int *len)
 {
 	int i;
 	struct sysctl_oid *oidp;
@@ -954,6 +905,7 @@ name2oid (char *name, int *oid, int *len)
 
 		lsp = (struct sysctl_oid_list *)oidp->oid_arg1;
 		oidp = SLIST_FIRST(lsp);
+		*p = i; /* restore */
 		name = p+1;
 		for (p = name; *p && *p != '.'; p++) 
 				;
@@ -1009,7 +961,7 @@ sysctl_sysctl_name2oid(__unused struct sysctl_oid *oidp, __unused void *arg1,
 {
 	char *p;
 	int error, oid[CTL_MAXNAME];
-	int len = 0;		/* set by name2oid() */
+	u_int len = 0;		/* set by name2oid() */
 
 	if (req->newlen < 1) 
 		return ENOENT;
@@ -1306,11 +1258,7 @@ kernel_sysctl(struct proc *p, int *name, u_int namelen, void *old, size_t *oldle
 	req.lock = 1;
 
 	/* make the request */
-	error = sysctl_root(0, name, namelen, &req);
-
-	/* unlock memory if required */
-	if (req.lock == 2)
-		vsunlock(req.oldptr, (user_size_t)req.oldlen, B_WRITE);
+	error = sysctl_root(TRUE, FALSE, NULL, 0, name, namelen, &req);
 
 	if (error && error != ENOMEM)
 		return (error);
@@ -1367,37 +1315,52 @@ sysctl_new_user(struct sysctl_req *req, void *p, size_t l)
  */
 
 int
-sysctl_root(__unused struct sysctl_oid *oidp, void *arg1, int arg2,
-        struct sysctl_req *req)
+sysctl_root(boolean_t from_kernel, boolean_t string_is_canonical, char *namestring, size_t namestringlen, int *name, u_int namelen, struct sysctl_req *req)
 {
-	int *name = (int *) arg1;
-	u_int namelen = arg2;
 	u_int indx;
 	int i;
 	struct sysctl_oid *oid;
 	struct sysctl_oid_list *lsp = &sysctl__children;
 	int error;
-	funnel_t *fnl = NULL;
-	boolean_t funnel_held = FALSE;
+	boolean_t unlocked_node_found = FALSE;
+	boolean_t namestring_started = FALSE;
 
 	/* Get the read lock on the geometry */
 	lck_rw_lock_shared(sysctl_geometry_lock);
 
+	if (string_is_canonical) {
+		/* namestring is actually canonical, name/namelen needs to be populated */
+		error = name2oid(namestring, name, &namelen);
+		if (error) {
+			goto err;
+		}
+	}
+	
 	oid = SLIST_FIRST(lsp);
 
 	indx = 0;
 	while (oid && indx < CTL_MAXNAME) {
 		if (oid->oid_number == name[indx]) {
+			
+			if (!from_kernel && !string_is_canonical) {
+				if (namestring_started) {
+					if (strlcat(namestring, ".", namestringlen) >= namestringlen) {
+						error = ENAMETOOLONG;
+						goto err;
+					}
+				}
+
+				if (strlcat(namestring, oid->oid_name, namestringlen) >= namestringlen) {
+					error = ENAMETOOLONG;
+					goto err;
+				}
+				namestring_started = TRUE;
+			}
+			
 			indx++;
 			if (!(oid->oid_kind & CTLFLAG_LOCKED))
 			{
-/*
-printf("sysctl_root: missing CTLFLAG_LOCKED: ");
-for(i = 0; i < (int)(indx - 1); i++)
-printf("oid[%d] = %d ", i, name[i]);
-printf("\n");
-*/
-				funnel_held = TRUE;
+				unlocked_node_found = TRUE;
 			}
 			if (oid->oid_kind & CTLFLAG_NOLOCK)
 				req->lock = 0;
@@ -1439,6 +1402,33 @@ printf("\n");
 	error = ENOENT;
 	goto err;
 found:
+	
+	/*
+	 * indx is the index of the first remaining OID name,
+	 * for sysctls that take them as arguments
+	 */
+	if (!from_kernel && !string_is_canonical && (indx < namelen)) {
+		char tempbuf[10];
+		u_int indx2;
+		
+		for (indx2 = indx; indx2 < namelen; indx2++) {
+			snprintf(tempbuf, sizeof(tempbuf), "%d",name[indx2]);
+			
+			if (namestring_started) {
+				if (strlcat(namestring, ".", namestringlen) >= namestringlen) {
+					error = ENAMETOOLONG;
+					goto err;
+				}
+			}
+			
+			if (strlcat(namestring, tempbuf, namestringlen) >= namestringlen) {
+				error = ENAMETOOLONG;
+				goto err;
+			}
+			namestring_started = TRUE;
+		}
+	}
+	
 	/* If writing isn't allowed */
 	if (req->newptr && (!(oid->oid_kind & CTLFLAG_WR) ||
 			    ((oid->oid_kind & CTLFLAG_SECURE) && securelevel > 0))) {
@@ -1448,9 +1438,8 @@ found:
 
 	/*
 	 * If we're inside the kernel, the OID must be marked as kernel-valid.
-	 * XXX This mechanism for testing is bad.
 	 */
-	if ((req->oldfunc == sysctl_old_kernel) && !(oid->oid_kind & CTLFLAG_KERN))
+	if (from_kernel && !(oid->oid_kind & CTLFLAG_KERN))
 	{
 		error = (EPERM);
 		goto err;
@@ -1484,14 +1473,28 @@ found:
 
 	lck_rw_done(sysctl_geometry_lock);
 
+#if CONFIG_MACF
+	if (!from_kernel) {
+		error = mac_system_check_sysctlbyname(kauth_cred_get(),
+						      namestring,
+						      name,
+						      namelen,
+						      req->oldptr,
+						      req->oldlen,
+						      req->newptr,
+						      req->newlen);
+		if (error)
+			goto dropref;
+	}
+#endif
+	
 	/*
-	 * ...however, we still have to grab the funnel for those calls which
-	 * may be into code whose reentrancy is protected by the funnel; a
-	 * blocking operation should not prevent reentrancy, at this point.
+	 * ...however, we still have to grab the mutex for those calls which
+	 * may be into code whose reentrancy is protected by it.
 	 */
-	if (funnel_held)
+	if (unlocked_node_found)
 	{
-		fnl = spl_kernel_funnel();
+		lck_mtx_lock(sysctl_unlocked_node_lock);
 	}
 
 	if ((oid->oid_kind & CTLTYPE) == CTLTYPE_NODE) {
@@ -1505,10 +1508,15 @@ found:
 	}
 	error = i;
 
-	if (funnel_held)
+	if (unlocked_node_found)
 	{
-		splx_kernel_funnel(fnl);
+		lck_mtx_unlock(sysctl_unlocked_node_lock);
 	}
+
+#if CONFIG_MACF
+	/* only used from another CONFIG_MACF block */
+dropref:
+#endif
 
 	/*
 	 * This is tricky... we re-grab the geometry lock in order to drop
@@ -1533,41 +1541,155 @@ err:
 	return (error);
 }
 
-#ifndef _SYS_SYSPROTO_H_
-struct sysctl_args {
-	int	*name;
-	u_int	namelen;
-	void	*old;
-	size_t	*oldlenp;
-	void	*new;
-	size_t	newlen;
-};
-#endif
+void sysctl_create_user_req(struct sysctl_req *req, struct proc *p, user_addr_t oldp,
+							size_t oldlen, user_addr_t newp, size_t newlen)
+{
+	bzero(req, sizeof(*req));
+	
+	req->p = p;
+	
+	req->oldlen = oldlen;
+	req->oldptr = oldp;
+	
+	if (newlen) {
+		req->newlen = newlen;
+		req->newptr = newp;
+	}
+	
+	req->oldfunc = sysctl_old_user;
+	req->newfunc = sysctl_new_user;
+	req->lock = 1;
+
+	return;
+}
 
 int
-/* __sysctl(struct proc *p, struct sysctl_args *uap) */
-new_sysctl(struct proc *p, struct sysctl_args *uap)
+sysctl(proc_t p, struct sysctl_args *uap, __unused int32_t *retval)
 {
-	int error, i, name[CTL_MAXNAME];
-	size_t j;
-
+	int error;
+	size_t oldlen = 0, newlen;
+	int name[CTL_MAXNAME];
+	struct sysctl_req req;
+	char *namestring;
+	size_t namestringlen = MAXPATHLEN;
+	
+	/*
+	 * all top-level sysctl names are non-terminal
+	 */
 	if (uap->namelen > CTL_MAXNAME || uap->namelen < 2)
 		return (EINVAL);
-
- 	error = copyin(CAST_USER_ADDR_T(uap->name), &name, uap->namelen * sizeof(int));
- 	if (error)
+	error = copyin(uap->name, &name[0], uap->namelen * sizeof(int));
+	if (error)
 		return (error);
+	
+	AUDIT_ARG(ctlname, name, uap->namelen);
+	
+	if (uap->newlen > SIZE_T_MAX)
+		return (EINVAL);
+	newlen = (size_t)uap->newlen;
+	
+	if (uap->oldlenp != USER_ADDR_NULL) {
+		uint64_t	oldlen64 = fuulong(uap->oldlenp);
 
-	error = userland_sysctl(p, name, uap->namelen,
-		                    CAST_USER_ADDR_T(uap->old), uap->oldlenp,
-		                    CAST_USER_ADDR_T(uap->new), uap->newlen, &j);
-	if (error && error != ENOMEM)
-		return (error);
-	if (uap->oldlenp) {
-		i = copyout(&j, CAST_USER_ADDR_T(uap->oldlenp), sizeof(j));
-		if (i)
-			return (i);
+		/*
+		 * If more than 4G, clamp to 4G
+		 */
+		if (oldlen64 > SIZE_T_MAX)
+			oldlen = SIZE_T_MAX;
+		else
+			oldlen = (size_t)oldlen64;
 	}
+	
+	sysctl_create_user_req(&req, p, uap->old, oldlen, uap->new, newlen);
+
+	/* Guess that longest length for the passed-in MIB, if we can be more aggressive than MAXPATHLEN */
+	if (uap->namelen == 2) {
+		if (name[0] == CTL_KERN && name[1] < KERN_MAXID) {
+			namestringlen = 32; /* "kern.speculative_reads_disabled" */
+		} else if (name[0] == CTL_HW && name[1] < HW_MAXID) {
+			namestringlen = 32; /* "hw.cachelinesize_compat" */
+		}
+	}			
+
+	MALLOC(namestring, char *, namestringlen, M_TEMP, M_WAITOK);
+	if (!namestring) {
+	    oldlen = 0;
+	    goto err;
+	}
+
+	error = userland_sysctl(FALSE, namestring, namestringlen, name, uap->namelen, &req, &oldlen);
+	
+	FREE(namestring, M_TEMP);
+	
+	if ((error) && (error != ENOMEM))
+		return (error);
+	
+err:
+	if (uap->oldlenp != USER_ADDR_NULL)
+		error = suulong(uap->oldlenp, oldlen);
+	
+	return (error);
+}
+
+int
+sysctlbyname(proc_t p, struct sysctlbyname_args *uap, __unused int32_t *retval)
+{
+	int error;
+	size_t oldlen = 0, newlen;
+	char *name;
+	size_t namelen = 0;
+	struct sysctl_req req;
+	int oid[CTL_MAXNAME];
+
+	if (uap->namelen >= MAXPATHLEN)	/* XXX arbitrary, undocumented */
+		return (ENAMETOOLONG);
+	namelen = (size_t)uap->namelen;
+	
+	MALLOC(name, char *, namelen+1, M_TEMP, M_WAITOK);
+	if (!name)
+	    return ENOMEM;
+
+	error = copyin(uap->name, name, namelen);
+	if (error) {
+		FREE(name, M_TEMP);
+		return (error);
+	}
+	name[namelen] = '\0';
+
+	/* XXX
+	 * AUDIT_ARG(ctlname, name, uap->namelen);
+	 */
+	
+	if (uap->newlen > SIZE_T_MAX) {
+		FREE(name, M_TEMP);
+		return (EINVAL);
+	}
+	newlen = (size_t)uap->newlen;
+	
+	if (uap->oldlenp != USER_ADDR_NULL) {
+		uint64_t	oldlen64 = fuulong(uap->oldlenp);
+		
+		/*
+		 * If more than 4G, clamp to 4G
+		 */
+		if (oldlen64 > SIZE_T_MAX)
+			oldlen = SIZE_T_MAX;
+		else
+			oldlen = (size_t)oldlen64;
+	}
+	
+	sysctl_create_user_req(&req, p, uap->old, oldlen, uap->new, newlen);
+
+	error = userland_sysctl(TRUE, name, namelen+1, oid, CTL_MAXNAME, &req, &oldlen);
+	
+	FREE(name, M_TEMP);
+
+	if ((error) && (error != ENOMEM))
+		return (error);
+	
+	if (uap->oldlenp != USER_ADDR_NULL)
+		error = suulong(uap->oldlenp, oldlen);
+	
 	return (error);
 }
 
@@ -1576,55 +1698,34 @@ new_sysctl(struct proc *p, struct sysctl_args *uap)
  * must be in kernel space.
  */
 int
-userland_sysctl(struct proc *p, int *name, u_int namelen, user_addr_t oldp, 
-                size_t *oldlenp, user_addr_t newp, size_t newlen, 
+userland_sysctl(boolean_t string_is_canonical,
+				char *namestring, size_t namestringlen,
+				int *name, u_int namelen, struct sysctl_req *req,
                 size_t *retval)
 {
 	int error = 0;
-	struct sysctl_req req, req2;
-
-	bzero(&req, sizeof req);
-
-	req.p = p;
-
-	if (oldlenp) {
-		req.oldlen = *oldlenp;
-	}
-
-	if (oldp) {
-		req.oldptr = oldp;
-	}
-
-	if (newlen) {
-		req.newlen = newlen;
-		req.newptr = newp;
-	}
-
-	req.oldfunc = sysctl_old_user;
-	req.newfunc = sysctl_new_user;
-	req.lock = 1;
+	struct sysctl_req req2;
 
 	do {
-	    req2 = req;
-	    error = sysctl_root(0, name, namelen, &req2);
-	} while (error == EAGAIN);
+	    /* if EAGAIN, reset output cursor */
+	    req2 = *req;
+	    if (!string_is_canonical)
+	        namestring[0] = '\0';
 
-	req = req2;
+	    error = sysctl_root(FALSE, string_is_canonical, namestring, namestringlen, name, namelen, &req2);
+	} while (error == EAGAIN);
 
 	if (error && error != ENOMEM)
 		return (error);
 
 	if (retval) {
-		if (req.oldptr && req.oldidx > req.oldlen)
-			*retval = req.oldlen;
+		if (req2.oldptr && req2.oldidx > req2.oldlen)
+			*retval = req2.oldlen;
 		else
-			*retval = req.oldidx;
+			*retval = req2.oldidx;
 	}
 	return (error);
 }
-
-/* Non-standard BSDI extension - only present on their 4.3 net-2 releases */
-#define	KINFO_BSDI_SYSINFO	(101<<8)
 
 /*
  * Kernel versions of the userland sysctl helper functions.
@@ -1634,54 +1735,29 @@ userland_sysctl(struct proc *p, int *name, u_int namelen, user_addr_t oldp,
  *
  * Note that some sysctl handlers use copyin/copyout, which
  * may not work correctly.
+ *
+ * The "sysctlbyname" KPI for use by kexts is aliased to this function.
  */
 
-STATIC int
-sysctl(int *name, u_int namelen, void *oldp, size_t *oldlenp, void *newp, size_t newlen)
-{
-
-	return(kernel_sysctl(current_proc(), name, namelen, oldp, oldlenp, newp, newlen));
-}
-
-STATIC int
-sysctlnametomib(const char *name, int *mibp, size_t *sizep)
-{
-	int oid[2];
-	int error;
-	char *non_const_name;
-
-	/*
-	 * NOTE: This cast is safe because the service node does not modify
-	 * the contents of the string as part of its operation.
-	 */
-	non_const_name = __CAST_AWAY_QUALIFIER(name, const, char *);
-
-	/* magic service node */
-	oid[0] = 0;
-	oid[1] = 3;
-
-	/* look up OID for name */
-	*sizep *= sizeof(int);
-	error = sysctl(oid, 2, mibp, sizep, non_const_name, strlen(name));
-	*sizep /= sizeof(int);
-
-	return(error);
-}
-
 int
-sysctlbyname(const char *name, void *oldp, size_t *oldlenp, void *newp, size_t newlen)
+kernel_sysctlbyname(const char *name, void *oldp, size_t *oldlenp, void *newp, size_t newlen)
 {
-	int oid[CTL_MAXNAME + 2];
+	int oid[CTL_MAXNAME];
+	int name2mib_oid[2];
 	int error;
 	size_t oidlen;
 
-	/* look up the OID */
-	oidlen = CTL_MAXNAME;
-	error = sysctlnametomib(name, oid, &oidlen);
+	/* look up the OID with magic service node */
+	name2mib_oid[0] = 0;
+	name2mib_oid[1] = 3;
 
+	oidlen = sizeof(oid);
+	error = kernel_sysctl(current_proc(), name2mib_oid, 2, oid, &oidlen, (void *)name, strlen(name));
+	oidlen /= sizeof(int);
+	
 	/* now use the OID */
 	if (error == 0)
-		error = sysctl(oid, oidlen, oldp, oldlenp, newp, newlen);
+		error = kernel_sysctl(current_proc(), oid, oidlen, oldp, oldlenp, newp, newlen);
 	return(error);
 }
 

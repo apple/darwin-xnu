@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2012-2013 Apple Inc. All rights reserved.
+ * Copyright (c) 2012-2014 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -65,8 +65,9 @@ struct mptses {
 	uint32_t	mpte_thread_active;	/* thread is running */
 	uint32_t	mpte_thread_reqs;	/* # of requests for thread */
 	struct mptsub	*mpte_active_sub;	/* ptr to last active subf */
-	u_int8_t	mpte_flags;		/* per mptcp session flags */
-	u_int8_t	mpte_lost_aid;		/* storing lost address id */
+	uint8_t	mpte_flags;		/* per mptcp session flags */
+	uint8_t	mpte_lost_aid;		/* storing lost address id */
+	uint8_t	mpte_addrid_last;	/* storing address id parm */
 };
 
 /*
@@ -207,12 +208,16 @@ struct mptsub {
 #define	MPTSF_FAILINGOVER	0x20000	/* subflow not used for output */
 #define	MPTSF_ACTIVE		0x40000	/* subflow currently in use */
 #define	MPTSF_MPCAP_CTRSET	0x80000	/* mpcap counter */
+#define MPTSF_FASTJ_SEND	0x100000 /* send data after SYN in MP_JOIN */
+#define MPTSF_FASTJ_REQD	0x200000 /* fastjoin required */
+#define MPTSF_USER_DISCONNECT	0x400000 /* User triggered disconnect */
 
 #define	MPTSF_BITS \
 	"\020\1ATTACHED\2CONNECTING\3PENDING\4CONNECTED\5DISCONNECTING" \
 	"\6DISCONNECTED\7MP_CAPABLE\10MP_READY\11MP_DEGRADED\12SUSPENDED" \
 	"\13BOUND_IF\14BOUND_IP\15BOUND_PORT\16PREFERRED\17SOPT_OLDVAL" \
-	"\20SOPT_INPROG\21NOLINGER\22FAILINGOVER\23ACTIVE\24MPCAP_CTRSET"
+	"\20SOPT_INPROG\21NOLINGER\22FAILINGOVER\23ACTIVE\24MPCAP_CTRSET" \
+	"\25FASTJ_SEND\26FASTJ_REQD\27USER_DISCONNECT"
 
 #define	MPTS_LOCK_ASSERT_HELD(_mpts)					\
 	lck_mtx_assert(&(_mpts)->mpts_lock, LCK_MTX_ASSERT_OWNED)
@@ -222,14 +227,6 @@ struct mptsub {
 
 #define	MPTS_LOCK(_mpts)						\
 	lck_mtx_lock(&(_mpts)->mpts_lock)
-
-#define	MPTS_LOCK_SPIN(_mpts)						\
-	lck_mtx_lock_spin(&(_mpts)->mpts_lock)
-
-#define	MPTS_CONVERT_LOCK(_mpts) do {					\
-	MPTS_LOCK_ASSERT_HELD(_mpts);					\
-	lck_mtx_convert_spin(&(_mpts)->mpts_lock);			\
-} while (0)
 
 #define	MPTS_UNLOCK(_mpts)						\
 	lck_mtx_unlock(&(_mpts)->mpts_lock)
@@ -258,6 +255,7 @@ typedef enum mptcp_state {
 	MPTCPS_FIN_WAIT_2	= 7,	/* have closed, DFIN is acked */
 	MPTCPS_TIME_WAIT	= 8,	/* in 2*MSL quiet wait after close */
 	MPTCPS_FASTCLOSE_WAIT	= 9,	/* sent MP_FASTCLOSE */
+	MPTCPS_TERMINATE	= 10,	/* terminal state */
 } mptcp_state_t;
 
 typedef u_int64_t	mptcp_key_t;
@@ -325,11 +323,14 @@ struct mptcb {
 	 * Fastclose
 	 */
 	u_int64_t	mpt_dsn_at_csum_fail;   /* MPFail Opt DSN */
+	u_int32_t	mpt_ssn_at_csum_fail;	/* MPFail Subflow Seq */
 	/*
 	 * Zombie handling
 	 */
 #define	MPT_GC_TICKS	(60)
 	int32_t		mpt_gc_ticks;		/* Used for zombie deletion */
+
+	u_int32_t	mpt_notsent_lowat;	/* TCP_NOTSENT_LOWAT support */
 };
 
 /* valid values for mpt_flags (see also notes on mpts_flags above) */
@@ -341,10 +342,11 @@ struct mptcb {
 #define	MPTCPF_SND_64BITDSN	0x20	/* Send full 64-bit DSN */
 #define	MPTCPF_SND_64BITACK	0x40	/* Send 64-bit ACK response */
 #define	MPTCPF_RCVD_64BITACK	0x80	/* Received 64-bit Data ACK */
+#define MPTCPF_POST_FALLBACK_SYNC	0x100	/* Post fallback resend data */
 
 #define	MPTCPF_BITS \
 	"\020\1CHECKSUM\2FALLBACK_TO_TCP\3JOIN_READY\4RECVD_MPFAIL\5PEEL_OFF" \
-	"\6SND_64BITDSN\7SND_64BITACK\10RCVD_64BITACK"
+	"\6SND_64BITDSN\7SND_64BITACK\10RCVD_64BITACK\11POST_FALLBACK_SYNC"
 
 /* valid values for mpt_timer_vals */
 #define	MPTT_REXMT	0x01	/* Starting Retransmit Timer */
@@ -501,9 +503,13 @@ extern int mptcp_fail_thresh;	/* Multipath failover thresh of retransmits */
 extern int mptcp_subflow_keeptime; /* Multipath subflow TCP_KEEPALIVE opt */
 extern int mptcp_mpprio_enable;	/* MP_PRIO option enable/disable */
 extern int mptcp_remaddr_enable;/* REMOVE_ADDR option enable/disable */
+extern int mptcp_fastjoin;	/* Enable FastJoin */
+extern int mptcp_zerortt_fastjoin; /* Enable Data after SYN Fast Join */
+extern int mptcp_rwnotify;	/* Enable RW notification on resume */
 extern uint32_t mptcp_verbose;	/* verbose and mptcp_dbg must be unified */
 #define MPPCB_LIMIT	16
 extern uint32_t mptcp_socket_limit; /* max number of mptcp sockets allowed */
+extern uint32_t mptcp_delayed_subf_start; /* delayed cellular subflow start */	
 extern int tcp_jack_rxmt;	/* Join ACK retransmission value in msecs */
 
 __BEGIN_DECLS
@@ -575,12 +581,19 @@ extern void  mptcp_output_getm_dsnmap64(struct socket *, int, uint32_t,
 extern void mptcp_send_dfin(struct socket *);
 extern void mptcp_act_on_txfail(struct socket *);
 extern struct mptsub *mptcp_get_subflow(struct mptses *, struct mptsub *);
+extern struct mptsub *mptcp_get_pending_subflow(struct mptses *,
+    struct mptsub *);
 extern int mptcp_get_map_for_dsn(struct socket *, u_int64_t, u_int32_t *);
 extern int32_t mptcp_adj_sendlen(struct socket *so, int32_t off, int32_t len);
 extern int32_t mptcp_sbspace(struct mptcb *);
 extern void mptcp_notify_mpready(struct socket *);
 extern void mptcp_notify_mpfail(struct socket *);
 extern void mptcp_notify_close(struct socket *);
+extern boolean_t mptcp_no_rto_spike(struct socket*);
+extern int mptcp_set_notsent_lowat(struct mptses *mpte, int optval);
+extern u_int32_t mptcp_get_notsent_lowat(struct mptses *mpte);
+extern int mptcp_notsent_lowat_check(struct socket *so);
+
 __END_DECLS
 
 #endif /* BSD_KERNEL_PRIVATE */

@@ -37,6 +37,11 @@
 extern "C" {
 #include <kern/locks.h>
 
+#if defined(__x86_64__)
+/* Synthetic event if none is specified, for backwards compatibility only. */
+static bool IOLockSleep_NO_EVENT __attribute__((used)) = 0;
+#endif
+
 void	IOLockInitWithState( IOLock * lock, IOLockState state)
 {
     if( state == kIOLockStateLocked)
@@ -60,13 +65,13 @@ lck_mtx_t * IOLockGetMachLock( IOLock * lock)
 
 int	IOLockSleep( IOLock * lock, void *event, UInt32 interType)
 {
-    return (int) lck_mtx_sleep(lock, LCK_SLEEP_DEFAULT, (event_t) event, (wait_interrupt_t) interType);
+    return (int) lck_mtx_sleep(lock, LCK_SLEEP_PROMOTED_PRI, (event_t) event, (wait_interrupt_t) interType);
 }
 
 int	IOLockSleepDeadline( IOLock * lock, void *event,
                                 AbsoluteTime deadline, UInt32 interType)
 {
-    return (int) lck_mtx_sleep_deadline(lock, LCK_SLEEP_DEFAULT, (event_t) event,
+    return (int) lck_mtx_sleep_deadline(lock, LCK_SLEEP_PROMOTED_PRI, (event_t) event,
     					(wait_interrupt_t) interType, __OSAbsoluteTime(deadline));
 }
 
@@ -74,6 +79,42 @@ void	IOLockWakeup(IOLock * lock, void *event, bool oneThread)
 {   
 	thread_wakeup_prim((event_t) event, oneThread, THREAD_AWAKENED);
 }   
+
+#if defined(__x86_64__)
+/*
+ * For backwards compatibility, kexts built against pre-Darwin 14 headers will bind at runtime to this function,
+ * which supports a NULL event,
+ */
+int	IOLockSleep_legacy_x86_64( IOLock * lock, void *event, UInt32 interType) __asm("_IOLockSleep");
+int	IOLockSleepDeadline_legacy_x86_64( IOLock * lock, void *event,
+					   AbsoluteTime deadline, UInt32 interType) __asm("_IOLockSleepDeadline");
+void	IOLockWakeup_legacy_x86_64(IOLock * lock, void *event, bool oneThread) __asm("_IOLockWakeup");
+
+int	IOLockSleep_legacy_x86_64( IOLock * lock, void *event, UInt32 interType)
+{
+    if (event == NULL)
+        event = (void *)&IOLockSleep_NO_EVENT;
+
+    return IOLockSleep(lock, event, interType);
+}
+
+int	IOLockSleepDeadline_legacy_x86_64( IOLock * lock, void *event,
+			     AbsoluteTime deadline, UInt32 interType)
+{
+    if (event == NULL)
+        event = (void *)&IOLockSleep_NO_EVENT;
+
+    return IOLockSleepDeadline(lock, event, deadline, interType);
+}
+
+void	IOLockWakeup_legacy_x86_64(IOLock * lock, void *event, bool oneThread)
+{   
+    if (event == NULL)
+        event = (void *)&IOLockSleep_NO_EVENT;
+
+    IOLockWakeup(lock, event, oneThread);
+}   
+#endif /* defined(__x86_64__) */
 
 
 struct _IORecursiveLock {
@@ -189,7 +230,7 @@ int IORecursiveLockSleep(IORecursiveLock *_lock, void *event, UInt32 interType)
     
     lock->count = 0;
     lock->thread = 0;
-    res = lck_mtx_sleep(lock->mutex, LCK_SLEEP_DEFAULT, (event_t) event, (wait_interrupt_t) interType);
+    res = lck_mtx_sleep(lock->mutex, LCK_SLEEP_PROMOTED_PRI, (event_t) event, (wait_interrupt_t) interType);
 
     // Must re-establish the recursive lock no matter why we woke up
     // otherwise we would potentially leave the return path corrupted.
@@ -211,8 +252,8 @@ int	IORecursiveLockSleepDeadline( IORecursiveLock * _lock, void *event,
     
     lock->count = 0;
     lock->thread = 0;
-    res = lck_mtx_sleep_deadline(lock->mutex, LCK_SLEEP_DEFAULT, (event_t) event, 
-								 (wait_interrupt_t) interType, __OSAbsoluteTime(deadline));
+    res = lck_mtx_sleep_deadline(lock->mutex, LCK_SLEEP_PROMOTED_PRI, (event_t) event, 
+								      (wait_interrupt_t) interType, __OSAbsoluteTime(deadline));
 
     // Must re-establish the recursive lock no matter why we woke up
     // otherwise we would potentially leave the return path corrupted.

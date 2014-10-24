@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2002-2013 Apple Inc. All rights reserved.
+ * Copyright (c) 2002-2014 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -49,6 +49,7 @@
 #include <hfs/hfs_cnode.h>
 #include <hfs/hfs_quota.h>
 #include <hfs/hfs_format.h>
+#include <hfs/hfs_kdebug.h>
 
 extern int prtactive;
 
@@ -175,8 +176,8 @@ int hfs_is_backingstore (struct vnode *vp, int *val) {
  * Assumes that both truncate and cnode locks for 'cp' are held.
  */
 static 
-int hfs_cnode_teardown (struct vnode *vp, vfs_context_t ctx, int reclaim) {
-	
+int hfs_cnode_teardown (struct vnode *vp, vfs_context_t ctx, int reclaim) 
+{
 	int forkcount = 0;
 	enum vtype v_type;
 	struct cnode *cp;
@@ -254,7 +255,7 @@ int hfs_cnode_teardown (struct vnode *vp, vfs_context_t ctx, int reclaim) {
 		 * and we entered hfs_vnop_inactive.  As a result, the only time we can guarantee
 		 * that there aren't any references is during vnop_reclaim.
 		 */
-		hfs_filedone(vp, ctx);
+		hfs_filedone(vp, ctx, 0);
 	}
 
 	/* 
@@ -367,7 +368,7 @@ int hfs_cnode_teardown (struct vnode *vp, vfs_context_t ctx, int reclaim) {
 			 * context because we're only removing blocks, not zero-filling new 
 			 * ones.  The C_DELETED check above makes things much simpler. 
 			 */
-			error = hfs_truncate(vp, (off_t)0, IO_NDELAY, 0, 0, ctx);
+			error = hfs_truncate(vp, (off_t)0, IO_NDELAY, 0, ctx);
 			if (error) {
 				goto out;
 			}
@@ -592,7 +593,22 @@ int hfs_cnode_teardown (struct vnode *vp, vfs_context_t ctx, int reclaim) {
 			}
 			hfs_update(vp, 0);
 		}
-	
+
+	/*
+	 * Since we are about to finish what might be an inactive call, propagate
+	 * any remaining modified or touch bits from the cnode to the vnode.  This
+	 * serves as a hint to vnode recycling that we shouldn't recycle this vnode
+	 * synchronously.
+	 */
+	if (ISSET(cp->c_flag, C_MODIFIED) || ISSET(cp->c_flag, C_FORCEUPDATE) ||
+		cp->c_touch_acctime || cp->c_touch_chgtime ||
+		cp->c_touch_modtime || ISSET(cp->c_flag, C_NEEDS_DATEADDED) ||
+		ISSET(cp->c_flag, C_DELETED)) {
+		vnode_setdirty(vp);
+	} else {
+		vnode_cleardirty(vp);
+	}
+        
 out:
     if (cat_reserve)
         cat_postflight(hfsmp, &cookie, p);
@@ -625,7 +641,7 @@ out:
 	 */
 	if (forkcount == 1) {
 		struct cprotect *entry = cp->c_cpentry;
-		if ((entry) && (entry->cp_pclass != PROTECTION_CLASS_F)) {
+		if ((entry) && ( CP_CLASS(entry->cp_pclass) != PROTECTION_CLASS_F)) {
 			if ((cp->c_cpentry->cp_flags & CP_KEY_FLUSHED) == 0) {
 				cp->c_cpentry->cp_flags |= CP_KEY_FLUSHED;
 				bzero (cp->c_cpentry->cp_cache_key, cp->c_cpentry->cp_cache_key_len);
@@ -726,7 +742,7 @@ hfs_vnop_inactive(struct vnop_inactive_args *ap)
 	if (took_trunc_lock) {
 	    hfs_unlock_truncate(cp, HFS_LOCK_DEFAULT);
 	}
-	
+
 	hfs_unlock(cp);
 	
 inactive_done: 
@@ -740,7 +756,8 @@ inactive_done:
  */
 
 int
-hfs_filedone(struct vnode *vp, vfs_context_t context)
+hfs_filedone(struct vnode *vp, vfs_context_t context,
+			 hfs_file_done_opts_t opts)
 {
 	struct cnode *cp;
 	struct filefork *fp;
@@ -760,38 +777,30 @@ hfs_filedone(struct vnode *vp, vfs_context_t context)
 	if ((hfsmp->hfs_flags & HFS_READ_ONLY) || (fp->ff_blocks == 0))
 		return (0);
 
+	if (!ISSET(opts, HFS_FILE_DONE_NO_SYNC)) {
 #if CONFIG_PROTECT
-	/* 
-	 * Figure out if we need to do synchronous IO. 
-	 * 
-	 * If the file represents a content-protected file, we may need
-	 * to issue synchronous IO when we dispatch to the cluster layer.
-	 * If we didn't, then the IO would go out to the disk asynchronously.
-	 * If the vnode hits the end of inactive before getting reclaimed, the
-	 * content protection keys would be wiped/bzeroed out, and we'd end up
-	 * trying to issue the IO with an invalid key.  This will lead to file 
-	 * corruption.  IO_SYNC will force the cluster_push to wait until all IOs
-	 * have completed (though they may be in the track cache).
-	 */
-	if (cp_fs_protected(VTOVFS(vp))) {
-		cluster_flags |= IO_SYNC;
-		cluster_zero_flags |= IO_SYNC;
-	}
+		/* 
+		 * Figure out if we need to do synchronous IO. 
+		 * 
+		 * If the file represents a content-protected file, we may need
+		 * to issue synchronous IO when we dispatch to the cluster layer.
+		 * If we didn't, then the IO would go out to the disk asynchronously.
+		 * If the vnode hits the end of inactive before getting reclaimed, the
+		 * content protection keys would be wiped/bzeroed out, and we'd end up
+		 * trying to issue the IO with an invalid key.  This will lead to file 
+		 * corruption.  IO_SYNC will force the cluster_push to wait until all IOs
+		 * have completed (though they may be in the track cache).
+		 */
+		if (cp_fs_protected(VTOVFS(vp))) {
+			cluster_flags |= IO_SYNC;
+			cluster_zero_flags |= IO_SYNC;
+		}
 #endif
 
-	/* 
-	 * If we are being invoked from F_SWAPDATAEXTENTS, then we 
-	 * need to issue synchronous IO; Unless we are sure that all 
-	 * of the data has been written to the disk, we won't know 
-	 * that all of the blocks have been allocated properly.
-	 */
-	if (cp->c_flag & C_SWAPINPROGRESS) {
-		cluster_flags |= IO_SYNC;
+		hfs_unlock(cp);
+		(void) cluster_push(vp, cluster_flags);
+		hfs_lock(cp, HFS_EXCLUSIVE_LOCK, HFS_LOCK_ALLOW_NOEXISTS);
 	}
-
-	hfs_unlock(cp);
-	(void) cluster_push(vp, cluster_flags);
-	hfs_lock(cp, HFS_EXCLUSIVE_LOCK, HFS_LOCK_ALLOW_NOEXISTS);
 
 	/*
 	 * Explicitly zero out the areas of file
@@ -823,21 +832,24 @@ hfs_filedone(struct vnode *vp, vfs_context_t context)
 	 * Shrink the peof to the smallest size neccessary to contain the leof.
 	 */
 	if (blks < fp->ff_blocks) {
-		(void) hfs_truncate(vp, leof, IO_NDELAY, 0, 0, context);
+		(void) hfs_truncate(vp, leof, IO_NDELAY, HFS_TRUNCATE_SKIPTIMES, context);
 	}
 
-	hfs_unlock(cp);
-	(void) cluster_push(vp, cluster_flags);
-	hfs_lock(cp, HFS_EXCLUSIVE_LOCK, HFS_LOCK_ALLOW_NOEXISTS);
+	if (!ISSET(opts, HFS_FILE_DONE_NO_SYNC)) {
+		hfs_unlock(cp);
+		(void) cluster_push(vp, cluster_flags);
+		hfs_lock(cp, HFS_EXCLUSIVE_LOCK, HFS_LOCK_ALLOW_NOEXISTS);
 	
-	/*
-	 * If the hfs_truncate didn't happen to flush the vnode's
-	 * information out to disk, force it to be updated now that
-	 * all invalid ranges have been zero-filled and validated:
-	 */
-	if (cp->c_flag & C_MODIFIED) {
-		hfs_update(vp, 0);
+		/*
+		 * If the hfs_truncate didn't happen to flush the vnode's
+		 * information out to disk, force it to be updated now that
+		 * all invalid ranges have been zero-filled and validated:
+		 */
+		if (cp->c_flag & C_MODIFIED) {
+			hfs_update(vp, 0);
+		}
 	}
+
 	return (0);
 }
 
@@ -1020,7 +1032,7 @@ hfs_getnewvnode(
 	/* Sanity check the vtype and mode */
 	if (vtype == VBAD) {
 		/* Mark the FS as corrupt and bail out */
-		hfs_mark_volume_inconsistent(hfsmp);
+		hfs_mark_inconsistent(hfsmp, HFS_INCONSISTENCY_DETECTED);
 		return EINVAL;
 	}
 
@@ -1397,7 +1409,8 @@ hfs_getnewvnode(
 	 */
 	if (VNODE_IS_RSRC(vp)) {
 		int err;
-		KERNEL_DEBUG_CONSTANT((FSDBG_CODE(DBG_FSRW, 37)), cp->c_vp, cp->c_rsrc_vp, 0, 0, 0);
+
+		KERNEL_DEBUG_CONSTANT(HFSDBG_GETNEWVNODE, VM_KERNEL_ADDRPERM(cp->c_vp), VM_KERNEL_ADDRPERM(cp->c_rsrc_vp), 0, 0, 0);
 
 		/* Force VL_NEEDINACTIVE on this vnode */
 		err = vnode_ref(vp);
@@ -1641,30 +1654,26 @@ void hfs_write_dateadded (struct cat_attr *attrp, u_int32_t dateadded) {
 	return;
 }
 
-
-u_int32_t hfs_get_dateadded (struct cnode *cp) {
+static u_int32_t
+hfs_get_dateadded_internal(const uint8_t *finderinfo, mode_t mode)
+{
 	u_int8_t *finfo = NULL;
 	u_int32_t dateadded = 0;
 
-	if ((cp->c_attr.ca_recflags & kHFSHasDateAddedMask) == 0) {
-		/* Date added was never set.  Return 0. */
-		return dateadded;
-	}
 
 
 	/* overlay the FinderInfo to the correct pointer, and advance */
-	finfo = (u_int8_t*)cp->c_finderinfo;
-	finfo = finfo + 16;
+	finfo = (u_int8_t*)finderinfo + 16;
 
 	/* 
 	 * FinderInfo is written out in big endian... make sure to convert it to host
 	 * native before we use it.
 	 */
-	if (S_ISREG(cp->c_attr.ca_mode)) {
+	if (S_ISREG(mode)) {
 		struct FndrExtendedFileInfo *extinfo = (struct FndrExtendedFileInfo *)finfo;
 		dateadded = OSSwapBigToHostInt32 (extinfo->date_added);
 	}
-	else if (S_ISDIR(cp->c_attr.ca_mode)) {
+	else if (S_ISDIR(mode)) {
 		struct FndrExtendedDirInfo *extinfo = (struct FndrExtendedDirInfo *)finfo;
 		dateadded = OSSwapBigToHostInt32 (extinfo->date_added);
 	}
@@ -1672,16 +1681,64 @@ u_int32_t hfs_get_dateadded (struct cnode *cp) {
 	return dateadded;
 }
 
+u_int32_t
+hfs_get_dateadded(struct cnode *cp)
+{
+	if ((cp->c_attr.ca_recflags & kHFSHasDateAddedMask) == 0) {
+		/* Date added was never set.  Return 0. */
+		return (0);
+	}
+
+	return (hfs_get_dateadded_internal((u_int8_t*)cp->c_finderinfo,
+	    cp->c_attr.ca_mode));
+}
+
+u_int32_t
+hfs_get_dateadded_from_blob(const uint8_t *finderinfo, mode_t mode)
+{
+	return (hfs_get_dateadded_internal(finderinfo, mode));
+}
+
 /*
- * Per HI and Finder requirements, HFS maintains a "write/generation count"
- * for each file that is incremented on any write & pageout.  It should start 
- * at 1 to reserve "0" as a special value.  If it should ever wrap around,
- * it will skip using 0.
+ * Per HI and Finder requirements, HFS maintains a "write/generation
+ * count" for each file that is incremented on any write & pageout.
+ * It should start at 1 to reserve "0" as a special value.  If it
+ * should ever wrap around, it will skip using 0.
  *
- * Note that this field is also set explicitly in the hfs_vnop_setxattr code.
- * We must ignore user attempts to set this part of the finderinfo, and
- * so we need to save a local copy of the date added, write in the user 
- * finderinfo, then stuff the value back in.  
+ * Note that finderinfo is manipulated in hfs_vnop_setxattr and care
+ * is and should be taken to ignore user attempts to set the part of
+ * the finderinfo that records the generation counter.
+ *
+ * Any change to the generation counter *must* not be visible before
+ * the change that caused it (for obvious reasons), and given the
+ * limitations of our current architecture, the change to the
+ * generation counter may occur some time afterwards (particularly in
+ * the case where a file is mapped writable---more on that below).
+ *
+ * We make no guarantees about the consistency of a file.  In other
+ * words, a reader that is operating concurrently with a writer might
+ * see some, but not all of writer's changes, and the generation
+ * counter will *not* necessarily tell you this has happened.  To
+ * enforce consistency, clients must make their own arrangements
+ * e.g. use file locking.
+ *
+ * We treat files that are mapped writable as a special case: when
+ * that happens, clients requesting the generation count will be told
+ * it has a generation count of zero and they use that knowledge as a
+ * hint that the file is changing and it therefore might be prudent to
+ * wait until it is no longer mapped writable.  Clients should *not*
+ * rely on this behaviour however; we might decide that it's better
+ * for us to publish the fact that a file is mapped writable via
+ * alternate means and return the generation counter when it is mapped
+ * writable as it still has some, albeit limited, use.  We reserve the
+ * right to make this change.
+ *
+ * Lastly, it's important to realise that because data and metadata
+ * take different paths through the system, it's possible upon crash
+ * or sudden power loss and after a restart, that a change may be
+ * visible to the rest of the system without a corresponding change to
+ * the generation counter.  The reverse may also be true, but for all
+ * practical applications this shouldn't be an issue.
  */
 void hfs_write_gencount (struct cat_attr *attrp, uint32_t gencount) {
 	u_int8_t *finfo = NULL;
@@ -1705,7 +1762,22 @@ void hfs_write_gencount (struct cat_attr *attrp, uint32_t gencount) {
 	return;
 }
 
-/* Increase the gen count by 1; if it wraps around to 0, increment by two */
+/*
+ * Increase the gen count by 1; if it wraps around to 0, increment by
+ * two.  The cnode *must* be locked exclusively by the caller.  
+ *
+ * You may think holding the lock is unnecessary because we only need
+ * to change the counter, but consider this sequence of events: thread
+ * A calls hfs_incr_gencount and the generation counter is 2 upon
+ * entry.  A context switch occurs and thread B increments the counter
+ * to 3, thread C now gets the generation counter (for whatever
+ * purpose), and then another thread makes another change and the
+ * generation counter is incremented again---it's now 4.  Now thread A
+ * continues and it sets the generation counter back to 3.  So you can
+ * see, thread C would miss the change that caused the generation
+ * counter to increment to 4 and for this reason the cnode *must*
+ * always be locked exclusively.
+ */
 uint32_t hfs_incr_gencount (struct cnode *cp) {
 	u_int8_t *finfo = NULL;
 	u_int32_t gcount = 0;
@@ -1717,8 +1789,12 @@ uint32_t hfs_incr_gencount (struct cnode *cp) {
 	/* 
 	 * FinderInfo is written out in big endian... make sure to convert it to host
 	 * native before we use it.
+	 *
+	 * NOTE: the write_gen_counter is stored in the same location in both the
+	 *       FndrExtendedFileInfo and FndrExtendedDirInfo structs (it's the
+	 *       last 32-bit word) so it is safe to have one code path here.
 	 */
-	if (S_ISREG(cp->c_attr.ca_mode)) {
+	if (S_ISDIR(cp->c_attr.ca_mode) || S_ISREG(cp->c_attr.ca_mode)) {
 		struct FndrExtendedFileInfo *extinfo = (struct FndrExtendedFileInfo *)finfo;
 		gcount = OSSwapBigToHostInt32 (extinfo->write_gen_counter);
 
@@ -1735,6 +1811,8 @@ uint32_t hfs_incr_gencount (struct cnode *cp) {
 			gcount++;
 		}
 		extinfo->write_gen_counter = OSSwapHostToBigInt32 (gcount);
+
+		SET(cp->c_flag, C_MODIFIED);
 	}
 	else {
 		gcount = 0;
@@ -1743,6 +1821,11 @@ uint32_t hfs_incr_gencount (struct cnode *cp) {
 	return gcount;
 }
 
+/*
+ * There is no need for any locks here (other than an iocount on an
+ * associated vnode) because reading and writing an aligned 32 bit
+ * integer should be atomic on all platforms we support.
+ */
 static u_int32_t
 hfs_get_gencount_internal(const uint8_t *finderinfo, mode_t mode)
 {
@@ -1773,16 +1856,7 @@ hfs_get_gencount_internal(const uint8_t *finderinfo, mode_t mode)
 		if (gcount == 0) {
 			gcount++;	
 		}
-	} else if (S_ISDIR(mode)) {
-		struct FndrExtendedDirInfo *extinfo = (struct FndrExtendedDirInfo *)((u_int8_t*)finderinfo + 16);
-		gcount = OSSwapBigToHostInt32 (extinfo->write_gen_counter);
-
-		if (gcount == 0) {
-			gcount++;	
-		}
-	} else {
-		gcount = 0;
-	}	
+	}
 
 	return gcount;
 }
@@ -1795,6 +1869,17 @@ u_int32_t hfs_get_gencount (struct cnode *cp) {
 /* Getter for the gen count from a buffer (currently pointer to finderinfo)*/
 u_int32_t hfs_get_gencount_from_blob (const uint8_t *finfoblob, mode_t mode) {
 	return hfs_get_gencount_internal(finfoblob, mode);
+}
+
+void hfs_clear_might_be_dirty_flag(cnode_t *cp)
+{
+	/*
+	 * If we're about to touch both mtime and ctime, we can clear the
+	 * C_MIGHT_BE_DIRTY_FROM_MAPPING since we can guarantee that
+	 * subsequent page-outs can only be for data made dirty before
+	 * now.
+	 */
+	CLR(cp->c_flag, C_MIGHT_BE_DIRTY_FROM_MAPPING);
 }
 
 /*
@@ -1832,7 +1917,7 @@ hfs_touchtimes(struct hfsmount *hfsmp, struct cnode* cp)
 	 */
 	if (cp->c_touch_acctime) {
 		if ((vfs_flags(hfsmp->hfs_mp) & MNT_NOATIME) ||
-		    (hfsmp->hfs_freezing_proc != NULL) ||
+		    hfsmp->hfs_freeze_state != HFS_THAWED ||
 		    (hfsmp->hfs_flags & HFS_RESIZE_IN_PROGRESS) ||
 		    (cp->c_vp && ((vnode_israge(cp->c_vp) || (vfs_ctx_skipatime(ctx)))))) {
 				
@@ -1843,6 +1928,9 @@ hfs_touchtimes(struct hfsmount *hfsmp, struct cnode* cp)
 		cp->c_touch_modtime || (cp->c_flag & C_NEEDS_DATEADDED)) {
 		struct timeval tv;
 		int touchvol = 0;
+
+		if (cp->c_touch_modtime && cp->c_touch_chgtime)
+			hfs_clear_might_be_dirty_flag(cp);
 
 		microtime(&tv);
 		    
@@ -1896,13 +1984,20 @@ hfs_touchtimes(struct hfsmount *hfsmp, struct cnode* cp)
 	}
 }
 
+// Use this if you don't want to check the return code
+void hfs_lock_always(cnode_t *cp, enum hfs_locktype locktype)
+{
+	hfs_lock(cp, locktype, HFS_LOCK_ALWAYS);
+}
+
 /*
  * Lock a cnode.
+ * N.B. If you add any failure cases, *make* sure hfs_lock_always works
  */
 int
 hfs_lock(struct cnode *cp, enum hfs_locktype locktype, enum hfs_lockflags flags)
 {
-	void * thread = current_thread();
+	thread_t thread = current_thread();
 
 	if (cp->c_lockowner == thread) {
 		/* Only the extents and bitmap files support lock recursion. */
@@ -2102,10 +2197,9 @@ hfs_lockfour(struct cnode *cp1, struct cnode *cp2, struct cnode *cp3,
 void
 hfs_unlock(struct cnode *cp)
 {
-        vnode_t rvp = NULLVP;
-        vnode_t vp = NULLVP;
-        u_int32_t c_flag;
-	void *lockowner;
+	vnode_t rvp = NULLVP;
+	vnode_t vp = NULLVP;
+	u_int32_t c_flag;
 
 	/*
 	 * Only the extents and bitmap file's support lock recursion.
@@ -2116,18 +2210,36 @@ hfs_unlock(struct cnode *cp)
 			return;
 		}
 	}
-	c_flag = cp->c_flag;
-	cp->c_flag &= ~(C_NEED_DVNODE_PUT | C_NEED_RVNODE_PUT | C_NEED_DATA_SETSIZE | C_NEED_RSRC_SETSIZE);
 
-	if (c_flag & (C_NEED_DVNODE_PUT | C_NEED_DATA_SETSIZE)) {
+	const thread_t thread = current_thread();
+
+	if (cp->c_lockowner == thread) {
+		c_flag = cp->c_flag;
+
+		// If we have the truncate lock, we must defer the puts
+		if (cp->c_truncatelockowner == thread) {
+			if (ISSET(c_flag, C_NEED_DVNODE_PUT)
+				&& !cp->c_need_dvnode_put_after_truncate_unlock) {
+				CLR(c_flag, C_NEED_DVNODE_PUT);
+				cp->c_need_dvnode_put_after_truncate_unlock = true;
+			}
+			if (ISSET(c_flag, C_NEED_RVNODE_PUT)
+				&& !cp->c_need_rvnode_put_after_truncate_unlock) {
+				CLR(c_flag, C_NEED_RVNODE_PUT);
+				cp->c_need_rvnode_put_after_truncate_unlock = true;
+			}
+		}
+
+		CLR(cp->c_flag, (C_NEED_DATA_SETSIZE | C_NEED_RSRC_SETSIZE
+						 | C_NEED_DVNODE_PUT | C_NEED_RVNODE_PUT));
+
+		if (c_flag & (C_NEED_DVNODE_PUT | C_NEED_DATA_SETSIZE)) {
 	        vp = cp->c_vp;
-	}
-	if (c_flag & (C_NEED_RVNODE_PUT | C_NEED_RSRC_SETSIZE)) {
+		}
+		if (c_flag & (C_NEED_RVNODE_PUT | C_NEED_RSRC_SETSIZE)) {
 	        rvp = cp->c_rsrc_vp;
-	}
+		}
 
-	lockowner = cp->c_lockowner;
-	if (lockowner == current_thread()) {
 	    cp->c_lockowner = NULL;
 	    lck_rw_unlock_exclusive(&cp->c_rwlock);
 	} else {
@@ -2136,14 +2248,29 @@ hfs_unlock(struct cnode *cp)
 
 	/* Perform any vnode post processing after cnode lock is dropped. */
 	if (vp) {
-		if (c_flag & C_NEED_DATA_SETSIZE)
-			ubc_setsize(vp, 0);
+		if (c_flag & C_NEED_DATA_SETSIZE) {
+			ubc_setsize(vp, VTOF(vp)->ff_size);
+#if HFS_COMPRESSION
+			/*
+			 * If this is a compressed file, we need to reset the
+			 * compression state.  We will have set the size to zero
+			 * above and it will get fixed up later (in exactly the
+			 * same way that new vnodes are fixed up).  Note that we
+			 * should only be able to get here if the truncate lock is
+			 * held exclusively and so we do the reset when that's
+			 * unlocked.
+			 */
+			decmpfs_cnode *dp = VTOCMP(vp);
+			if (dp && decmpfs_cnode_get_vnode_state(dp) != FILE_TYPE_UNKNOWN)
+				cp->c_need_decmpfs_reset = true;
+#endif
+		}
 		if (c_flag & C_NEED_DVNODE_PUT)
 			vnode_put(vp);
 	}
 	if (rvp) {
 		if (c_flag & C_NEED_RSRC_SETSIZE)
-			ubc_setsize(rvp, 0);
+			ubc_setsize(rvp, VTOF(rvp)->ff_size);
 		if (c_flag & C_NEED_RVNODE_PUT)
 	        	vnode_put(rvp);
 	}
@@ -2215,7 +2342,7 @@ skip2:
 void
 hfs_lock_truncate(struct cnode *cp, enum hfs_locktype locktype, enum hfs_lockflags flags)
 {
-	void * thread = current_thread();
+	thread_t thread = current_thread();
 
 	if (cp->c_truncatelockowner == thread) {
 		/* 
@@ -2250,7 +2377,7 @@ hfs_lock_truncate(struct cnode *cp, enum hfs_locktype locktype, enum hfs_lockfla
  */
 int hfs_try_trunclock (struct cnode *cp, enum hfs_locktype locktype, enum hfs_lockflags flags)
 {
-	void * thread = current_thread();
+	thread_t thread = current_thread();
 	boolean_t didlock = false;
 
 	if (cp->c_truncatelockowner == thread) {
@@ -2296,7 +2423,7 @@ int hfs_try_trunclock (struct cnode *cp, enum hfs_locktype locktype, enum hfs_lo
 void
 hfs_unlock_truncate(struct cnode *cp, enum hfs_lockflags flags)
 {
-	void *thread = current_thread();	
+	thread_t thread = current_thread();	
 
 	/*
 	 * If HFS_LOCK_SKIP_IF_EXCLUSIVE is set in the flags AND the current 
@@ -2318,8 +2445,51 @@ hfs_unlock_truncate(struct cnode *cp, enum hfs_lockflags flags)
 
 	/* HFS_LOCK_EXCLUSIVE */
 	if (thread == cp->c_truncatelockowner) {
+		vnode_t vp = NULL, rvp = NULL;
+
+		/*
+		 * Deal with any pending set sizes.  We need to call
+		 * ubc_setsize before we drop the exclusive lock.  Ideally,
+		 * hfs_unlock should be called before hfs_unlock_truncate but
+		 * that's a lot to ask people to remember :-)
+		 */
+		if (cp->c_lockowner == thread
+			&& ISSET(cp->c_flag, C_NEED_DATA_SETSIZE | C_NEED_RSRC_SETSIZE)) {
+			// hfs_unlock will do the setsize calls for us
+			hfs_unlock(cp);
+			hfs_lock_always(cp, HFS_EXCLUSIVE_LOCK);
+		}
+ 
+		if (cp->c_need_dvnode_put_after_truncate_unlock) {
+			vp = cp->c_vp;
+			cp->c_need_dvnode_put_after_truncate_unlock = false;
+		}
+		if (cp->c_need_rvnode_put_after_truncate_unlock) {
+			rvp = cp->c_rsrc_vp;
+			cp->c_need_rvnode_put_after_truncate_unlock = false;
+		}
+
+#if HFS_COMPRESSION
+		bool reset_decmpfs = cp->c_need_decmpfs_reset;
+		cp->c_need_decmpfs_reset = false;
+#endif
+
 		cp->c_truncatelockowner = NULL;
 		lck_rw_unlock_exclusive(&cp->c_truncatelock);
+
+#if HFS_COMPRESSION
+		if (reset_decmpfs) {
+			decmpfs_cnode *dp = cp->c_decmp;
+			if (dp && decmpfs_cnode_get_vnode_state(dp) != FILE_TYPE_UNKNOWN)
+				decmpfs_cnode_set_vnode_state(dp, FILE_TYPE_UNKNOWN, 0);
+		}
+#endif
+
+		// Do the puts now
+		if (vp)
+			vnode_put(vp);
+		if (rvp)
+			vnode_put(rvp);
 	} else { /* HFS_LOCK_SHARED */
 		lck_rw_unlock_shared(&cp->c_truncatelock);
 	}

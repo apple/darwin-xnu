@@ -67,6 +67,8 @@ struct purgeable_q {
 typedef struct purgeable_q * purgeable_q_t;
 
 extern struct purgeable_q purgeable_queues[PURGEABLE_Q_TYPE_MAX];
+extern queue_head_t purgeable_nonvolatile_queue;
+extern int purgeable_nonvolatile_count;
 extern int32_t token_new_pagecount;
 #define TOKEN_NEW_PAGECOUNT_MAX INT32_MAX
 extern int available_for_purge;
@@ -98,7 +100,7 @@ void vm_purgeable_q_advance_all(void);
 
 /* the object purger. purges the next eligible object from memory. */
 /* returns TRUE if an object was purged, otherwise FALSE. */
-boolean_t vm_purgeable_object_purge_one(int force_purge_below_group);
+boolean_t vm_purgeable_object_purge_one(int force_purge_below_group, int flags);
 
 /* purge all volatile objects now */
 void vm_purgeable_object_purge_all(void);
@@ -112,6 +114,13 @@ purgeable_q_t vm_purgeable_object_remove(vm_object_t object);
 /* statistics for purgable objects in all queues */
 void vm_purgeable_stats(vm_purgeable_info_t info, task_t target_task);
 
-void vm_purgeable_disown(task_t task);
+int vm_purgeable_purge_task_owned(task_t task);
+void vm_purgeable_nonvolatile_enqueue(vm_object_t object, task_t task);
+void vm_purgeable_nonvolatile_dequeue(vm_object_t object);
+void vm_purgeable_accounting(vm_object_t	object,
+			     vm_purgable_t	old_state,
+			     boolean_t		disown);
+void vm_purgeable_compressed_update(vm_object_t	object,
+				    int		delta);
 
 #endif /* __VM_PURGEABLE_INTERNAL__ */

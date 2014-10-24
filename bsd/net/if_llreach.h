@@ -58,7 +58,7 @@ struct if_llreach_info {
 
 #ifdef XNU_KERNEL_PRIVATE
 #include <sys/tree.h>
-#include <kern/lock.h>
+#include <kern/locks.h>
 #include <net/ethernet.h>
 #include <netinet/in.h>
 #if INET6

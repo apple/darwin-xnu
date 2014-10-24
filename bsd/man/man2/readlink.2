@@ -37,7 +37,8 @@
 .Dt READLINK 2
 .Os BSD 4.2
 .Sh NAME
-.Nm readlink
+.Nm readlink ,
+.Nm readlinkat
 .Nd read value of a symbolic link
 .Sh SYNOPSIS
 .Fd #include <unistd.h>
@@ -46,6 +47,10 @@
 .Fa "const char *restrict path"
 .Fa "char *restrict buf"
 .Fa "size_t bufsize"
+.Fc
+.Ft ssize_t
+.Fo readlinkat
+.Fa "int fd" "const char *restrict path" "char *restrict buf" "size_t bufsize"
 .Fc
 .Sh DESCRIPTION
 .Fn Readlink
@@ -60,6 +65,26 @@ does not append a
 .Dv NUL
 character to
 .Fa buf .
+.Pp
+The
+.Fn readlinkat
+system call is equivalent to
+.Fn readlink
+except in the case where
+.Fa path
+specifies a relative path.
+In this case the symbolic link whose content is read relative to the
+directory associated with the file descriptor
+.Fa fd
+instead of the current working directory.
+If
+.Fn readlinkat
+is passed the special value
+.Dv AT_FDCWD
+in the
+.Fa fd
+parameter, the current working directory is used and the behavior is
+identical to a call to
 .Sh RETURN VALUES
 The call returns the count of characters placed in the buffer
 if it succeeds, or a -1 if an error occurs, placing the error
@@ -101,6 +126,30 @@ The named file does not exist.
 .It Bq Er ENOTDIR
 A component of the path prefix is not a directory.
 .El
+.Pp
+In addition to the errors returned by the
+.Fn readlink ,
+the
+.Fn readlinkat
+may fail if:
+.Bl -tag -width Er
+.It Bq Er EBADF
+The
+.Fa path
+argument does not specify an absolute path and the
+.Fa fd
+argument is neither
+.Dv AT_FDCWD
+nor a valid file descriptor open for searching.
+.It Bq Er ENOTDIR
+The
+.Fa path
+argument is not an absolute path and
+.Fa fd
+is neither
+.Dv AT_FDCWD
+nor a file descriptor associated with a directory.
+.El
 .Sh LEGACY SYNOPSIS
 .Fd #include <unistd.h>
 .Pp
@@ -121,8 +170,15 @@ have changed.
 .Xr symlink 2 ,
 .Xr compat 5 ,
 .Xr symlink 7
+.Sh STANDARDS
+The
+.Fn readlinkat
+system call is expected to conform to POSIX.1-2008 .
 .Sh HISTORY
 The
 .Fn readlink
 function call appeared in
 .Bx 4.2 .
+The
+.Fn readlinkat
+system call appeared in OS X 10.10

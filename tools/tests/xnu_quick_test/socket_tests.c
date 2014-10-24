@@ -210,7 +210,6 @@ int socket_tests( void * the_argp )
 		}
 #endif
 		
-#if !TARGET_OS_EMBEDDED
 		/* sendfile test. Open libsystem, set up some headers, and send it */
 		struct sf_hdtr		my_sf_hdtr;
 		int					my_libsys_fd;
@@ -255,7 +254,6 @@ int socket_tests( void * the_argp )
 			close ( my_child_fd );
 			exit ( -1 );
 		}
-#endif
 
 		/* tell parent we're done */
 		my_result = write( my_child_fd, "all done", 8 );
@@ -328,7 +326,6 @@ int socket_tests( void * the_argp )
 		}
 #endif
 
-#if !TARGET_OS_EMBEDDED
 		size_t neededBytes = 11;
 			
 		/* Check for sendfile output */
@@ -354,7 +351,6 @@ int socket_tests( void * the_argp )
 			goto test_failed_exit;
 		}
 		
-#endif
 
 		/* see if child is done. bzero so that string is NUL terminated */
 		bzero( (void *)&my_parent_buffer[0], sizeof(my_parent_buffer) );

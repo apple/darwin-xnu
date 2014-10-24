@@ -102,6 +102,33 @@ vnode_pager_isSSD(vnode_t vp)
 	return (FALSE);
 }
 
+#if CONFIG_IOSCHED
+void
+vnode_pager_issue_reprioritize_io(struct vnode *devvp, uint64_t blkno, uint32_t len, int priority)
+{
+	u_int32_t blocksize = 0;
+	dk_extent_t extent;
+        dk_set_tier_t set_tier;
+	int error = 0;
+
+	error = VNOP_IOCTL(devvp, DKIOCGETBLOCKSIZE, (caddr_t)&blocksize, 0, vfs_context_kernel());
+	if (error)
+		return;
+
+	memset(&extent, 0, sizeof(dk_extent_t));
+	memset(&set_tier, 0, sizeof(dk_set_tier_t));
+	
+	extent.offset = blkno * (u_int64_t) blocksize;
+	extent.length = len;
+
+	set_tier.extents = &extent; 
+	set_tier.extentsCount = 1;
+	set_tier.tier = priority;
+		
+	error = VNOP_IOCTL(devvp, DKIOCSETTIER, (caddr_t)&set_tier, 0, vfs_context_kernel());
+	return;
+}
+#endif
 
 uint32_t
 vnode_pager_isinuse(struct vnode *vp)
@@ -350,12 +377,37 @@ vnode_pageout(struct vnode *vp,
 		pl = ubc_upl_pageinfo(upl);
 
 	/*
+	 * Ignore any non-present pages at the end of the
+	 * UPL so that we aren't looking at a upl that 
+	 * may already have been freed by the preceeding
+	 * aborts/completions.
+	 */
+	base_index = upl_offset / PAGE_SIZE;
+
+	for (pg_index = (upl_offset + isize) / PAGE_SIZE; pg_index > base_index;) {
+	        if (upl_page_present(pl, --pg_index))
+		        break;
+		if (pg_index == base_index) {
+		        /*
+			 * no pages were returned, so release
+			 * our hold on the upl and leave
+			 */
+		        if ( !(flags & UPL_NOCOMMIT))
+			        ubc_upl_abort_range(upl, upl_offset, isize, UPL_ABORT_FREE_ON_EMPTY);
+
+			goto out;
+		}
+	}
+	isize = ((pg_index + 1) - base_index) * PAGE_SIZE;
+
+	/*
 	 * we come here for pageouts to 'real' files and
 	 * for msyncs...  the upl may not contain any
 	 * dirty pages.. it's our responsibility to sort
 	 * through it and find the 'runs' of dirty pages
 	 * to call VNOP_PAGEOUT on...
 	 */
+
 	if (ubc_getsize(vp) == 0) {
 	        /*
 		 * if the file has been effectively deleted, then
@@ -388,29 +440,6 @@ vnode_pageout(struct vnode *vp,
 		}
 		goto out;
 	}
-	/*
-	 * Ignore any non-present pages at the end of the
-	 * UPL so that we aren't looking at a upl that 
-	 * may already have been freed by the preceeding
-	 * aborts/completions.
-	 */
-	base_index = upl_offset / PAGE_SIZE;
-
-	for (pg_index = (upl_offset + isize) / PAGE_SIZE; pg_index > base_index;) {
-	        if (upl_page_present(pl, --pg_index))
-		        break;
-		if (pg_index == base_index) {
-		        /*
-			 * no pages were returned, so release
-			 * our hold on the upl and leave
-			 */
-		        if ( !(flags & UPL_NOCOMMIT))
-			        ubc_upl_abort_range(upl, upl_offset, isize, UPL_ABORT_FREE_ON_EMPTY);
-
-			goto out;
-		}
-	}
-	isize = ((pg_index + 1) - base_index) * PAGE_SIZE;
 
 	offset = upl_offset;
 	pg_index = base_index;
@@ -547,7 +576,7 @@ vnode_pagein(
 	if (upl == (upl_t)NULL) {
 		flags &= ~UPL_NOCOMMIT;
 
-	        if (size > (MAX_UPL_SIZE * PAGE_SIZE)) {
+	        if (size > MAX_UPL_SIZE_BYTES) {
 		        result = PAGER_ERROR;
 			error  = PAGER_ERROR;
 			goto out;

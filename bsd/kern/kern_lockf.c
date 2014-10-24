@@ -606,13 +606,15 @@ lf_setlock(struct lockf *lock, struct timespec *timeout)
 
 			/* Check if current task can donate importance. The 
 			 * check of imp_donor bit is done without holding 
-			 * task lock. The value may change after you read it, 
+			 * any lock. The value may change after you read it, 
 			 * but it is ok to boost a task while someone else is 
 			 * unboosting you.
+			 *
+			 * TODO: Support live inheritance on file locks.
 			 */
 			if (task_is_importance_donor(boosting_task)) {
 				if (block->lf_boosted != LF_BOOSTED && 
-				    task_is_importance_receiver(block_task)) {
+				    task_is_importance_receiver_type(block_task)) {
 					lf_hold_assertion(block_task, block);
 				}
 				lf_jump_to_queue_head(block, lock);
@@ -1383,8 +1385,9 @@ lf_printlist(const char *tag, struct lockf *lock)
 static void 
 lf_hold_assertion(task_t block_task, struct lockf *block)
 {
-	task_importance_hold_internal_assertion(block_task, 1);
-	block->lf_boosted = LF_BOOSTED;
+	if (task_importance_hold_file_lock_assertion(block_task, 1)) {
+		block->lf_boosted = LF_BOOSTED;
+	}
 }
 
 
@@ -1425,7 +1428,7 @@ lf_drop_assertion(struct lockf *block)
 	task_t current_task;
 
 	current_task = proc_task((proc_t) block->lf_id);
-	task_importance_drop_internal_assertion(current_task, 1);
+	task_importance_drop_file_lock_assertion(current_task, 1);
 	block->lf_boosted = LF_NOT_BOOSTED;
 }
 

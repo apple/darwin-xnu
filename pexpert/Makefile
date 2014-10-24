@@ -9,11 +9,13 @@ include $(MakeInc_def)
 
 INSTINC_SUBDIRS = pexpert
 INSTINC_SUBDIRS_X86_64 = pexpert
+INSTINC_SUBDIRS_X86_64H = pexpert
 INSTINC_SUBDIRS_ARM = pexpert
 
 
 EXPINC_SUBDIRS = pexpert
 EXPINC_SUBDIRS_X86_64 = pexpert
+EXPINC_SUBDIRS_X86_64H = pexpert
 EXPINC_SUBDIRS_ARM = pexpert
 
 COMP_SUBDIRS = 	\

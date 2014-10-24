@@ -156,10 +156,8 @@
 
 #include <debug.h>
 #include <mach_kdp.h>
-#include <platforms.h>
 #include <mach/boolean.h>
 #include <kern/cpu_number.h>
-#include <kern/lock.h>
 #include <kern/thread.h>
 #include <kern/sched_prim.h>
 #include <kern/misc_protos.h>

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2013 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2014 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -93,9 +93,10 @@
 #include <sys/resourcevar.h>
 #include <sys/aio_kern.h>
 #include <sys/ev.h>
-#include <kern/lock.h>
+#include <kern/locks.h>
 #include <sys/uio_internal.h>
 #include <sys/codesign.h>
+#include <sys/codedir_internal.h>
 
 #include <security/audit/audit.h>
 
@@ -114,6 +115,7 @@
 #include <vm/vm_protos.h>
 
 #include <mach/mach_port.h>
+#include <stdbool.h>
 
 #if CONFIG_PROTECT
 #include <sys/cprotect.h>
@@ -148,7 +150,6 @@ static void _fdrelse(struct proc * p, int fd);
 
 
 extern void file_lock_init(void);
-extern int kqueue_stat(struct fileproc *fp, void *ub, int isstat4, proc_t p);
 
 extern kauth_scope_t	kauth_scope_fileop;
 
@@ -442,6 +443,7 @@ fd_rdwr(
 	uio_t auio = NULL;
 	char uio_buf[ UIO_SIZEOF(1) ];
 	struct vfs_context context = *(vfs_context_current());
+	bool wrote_some = false;
 
 	p = current_proc();
 
@@ -477,9 +479,11 @@ fd_rdwr(
 	if ( !(io_flg & IO_APPEND))
 		flags = FOF_OFFSET;
 
-	if (rw == UIO_WRITE)
+	if (rw == UIO_WRITE) {
+		user_ssize_t orig_resid = uio_resid(auio);
 		error = fo_write(fp, auio, flags, &context);
-	else
+		wrote_some = uio_resid(auio) < orig_resid;
+	} else
 		error = fo_read(fp, auio, flags, &context);
 
 	if (aresid)
@@ -489,7 +493,7 @@ fd_rdwr(
 			error = EIO;
 	}
 out:
-        if (rw == UIO_WRITE && error == 0)
+        if (wrote_some)
                 fp_drop_written(p, fd, fp);
         else
                 fp_drop(p, fd, fp, 0);
@@ -1623,7 +1627,6 @@ fcntl_nocancel(proc_t p, struct fcntl_nocancel_args *uap, int32_t *retval)
 	{
 		struct user_fsignatures fs;
 		kern_return_t kr;
-		off_t kernel_blob_offset;
 		vm_offset_t kernel_blob_addr;
 		vm_size_t kernel_blob_size;
 
@@ -1658,11 +1661,16 @@ fcntl_nocancel(proc_t p, struct fcntl_nocancel_args *uap, int32_t *retval)
 			vnode_put(vp);
 			goto outdrop;
 		}
-#if defined(__LP64__)
-#define CS_MAX_BLOB_SIZE (2560ULL * 1024ULL) /* max shared cache file XXX ? */
-#else	   
-#define CS_MAX_BLOB_SIZE (1600ULL * 1024ULL) /* max shared cache file XXX ? */
-#endif
+/*
+ * An arbitrary limit, to prevent someone from mapping in a 20GB blob.  This should cover
+ * our use cases for the immediate future, but note that at the time of this commit, some
+ * platforms are nearing 2MB blob sizes (with a prior soft limit of 2.5MB).
+ *
+ * We should consider how we can manage this more effectively; the above means that some
+ * platforms are using megabytes of memory for signing data; it merely hasn't crossed the
+ * threshold considered ridiculous at the time of this change.
+ */
+#define CS_MAX_BLOB_SIZE (10ULL * 1024ULL * 1024ULL)
 		if (fs.fs_blob_size > CS_MAX_BLOB_SIZE) {
 			error = E2BIG;
 			vnode_put(vp);
@@ -1678,12 +1686,10 @@ fcntl_nocancel(proc_t p, struct fcntl_nocancel_args *uap, int32_t *retval)
 		}
 
 		if(uap->cmd == F_ADDSIGS) {
-			kernel_blob_offset = 0;
 			error = copyin(fs.fs_blob_start,
 				       (void *) kernel_blob_addr,
 				       kernel_blob_size);
 		} else /* F_ADDFILESIGS */ {
-			kernel_blob_offset = fs.fs_blob_start;
 			error = vn_rdwr(UIO_READ,
 					vp,
 					(caddr_t) kernel_blob_addr,
@@ -1708,7 +1714,6 @@ fcntl_nocancel(proc_t p, struct fcntl_nocancel_args *uap, int32_t *retval)
 			CPU_TYPE_ANY,	/* not for a specific architecture */
 			fs.fs_file_start,
 			kernel_blob_addr,
-			kernel_blob_offset,
 			kernel_blob_size);
 		if (error) {
 			ubc_cs_blob_deallocate(kernel_blob_addr,
@@ -1813,6 +1818,9 @@ fcntl_nocancel(proc_t p, struct fcntl_nocancel_args *uap, int32_t *retval)
 	}	
 
 	case F_TRANSCODEKEY: {
+		
+		char *backup_keyp = NULL;
+		unsigned backup_key_len = CP_MAX_WRAPPEDKEYSIZE;
 
 		if (fp->f_type != DTYPE_VNODE) {
 			error = EBADF;
@@ -1826,9 +1834,23 @@ fcntl_nocancel(proc_t p, struct fcntl_nocancel_args *uap, int32_t *retval)
 			error = ENOENT;
 			goto outdrop;
 		}	
-		
-		error = cp_vnode_transcode (vp);
+
+		MALLOC(backup_keyp, char *, backup_key_len, M_TEMP, M_WAITOK);
+		if (backup_keyp == NULL) {
+			error = ENOMEM;
+			goto outdrop;
+		}
+
+		error = cp_vnode_transcode (vp, backup_keyp, &backup_key_len);
 		vnode_put(vp);
+
+		if (error == 0) {
+			error = copyout((caddr_t)backup_keyp, argp, backup_key_len);
+			*retval = backup_key_len;
+		}
+
+		FREE(backup_keyp, M_TEMP);
+
 		break;
 	}	
 
@@ -2103,7 +2125,187 @@ fcntl_nocancel(proc_t p, struct fcntl_nocancel_args *uap, int32_t *retval)
 
 		error = VNOP_IOCTL(vp, uap->cmd, ioctl_arg, 0, &context);
 		(void)vnode_put(vp);
+	
+		break;
+	}
+
+	/*
+	 * SPI (private) for indicating to the lower level storage driver that the
+	 * subsequent writes should be of a particular IO type (burst, greedy, static),
+	 * or other flavors that may be necessary.
+	 */
+	case F_SETIOTYPE: {
+		caddr_t param_ptr; 
+		uint32_t param;
+
+		if (uap->arg) {
+			/* extract 32 bits of flags from userland */
+			param_ptr = (caddr_t) uap->arg;
+			param = (uint32_t) param_ptr;
+		}
+		else {
+			/* If no argument is specified, error out */
+			error = EINVAL;
+			goto out;
+		}
 		
+		/* 
+		 * Validate the different types of flags that can be specified: 
+		 * all of them are mutually exclusive for now.
+		 */
+		switch (param) {
+			case F_IOTYPE_ISOCHRONOUS:
+				break;
+
+			default:
+				error = EINVAL;
+				goto out;
+		}
+
+
+		if (fp->f_type != DTYPE_VNODE) {
+			error = EBADF;
+			goto out;
+		}
+		vp = (struct vnode *)fp->f_data;
+		proc_fdunlock(p);
+
+		error = vnode_getwithref(vp);
+		if (error) {
+			error = ENOENT;
+			goto outdrop;
+		}
+
+		/* Only go forward if you have write access */
+		vfs_context_t ctx = vfs_context_current();
+		if(vnode_authorize(vp, NULLVP, (KAUTH_VNODE_ACCESS | KAUTH_VNODE_WRITE_DATA), ctx) != 0) {
+			vnode_put(vp);
+			error = EBADF;
+			goto outdrop;
+		}
+
+		error = VNOP_IOCTL(vp, uap->cmd, param_ptr, 0, &context);
+		(void)vnode_put(vp);
+
+		break;
+	}
+
+	
+	/*
+	 * Extract the CodeDirectory of the vnode associated with
+	 * the file descriptor and copy it back to user space
+	 */
+	case F_GETCODEDIR: {
+		struct user_fcodeblobs args;
+
+		if (fp->f_type != DTYPE_VNODE) {
+			error = EBADF;
+			goto out;
+		}
+
+		vp = (struct vnode *)fp->f_data;
+		proc_fdunlock(p);
+
+		if ((fp->f_flag & FREAD) == 0) {
+			error = EBADF;
+			goto outdrop;
+		}
+
+		if (IS_64BIT_PROCESS(p)) {
+			struct user64_fcodeblobs args64;
+
+			error = copyin(argp, &args64, sizeof(args64));
+			if (error) 
+				goto outdrop;
+
+			args.f_cd_hash = args64.f_cd_hash;
+			args.f_hash_size = args64.f_hash_size;
+			args.f_cd_buffer = args64.f_cd_buffer;
+			args.f_cd_size = args64.f_cd_size;
+			args.f_out_size = args64.f_out_size;
+			args.f_arch = args64.f_arch;
+		} else {
+			struct user32_fcodeblobs args32;
+
+			error = copyin(argp, &args32, sizeof(args32));
+			if (error)
+				goto outdrop;
+
+			args.f_cd_hash = CAST_USER_ADDR_T(args32.f_cd_hash);
+			args.f_hash_size = args32.f_hash_size;
+			args.f_cd_buffer = CAST_USER_ADDR_T(args32.f_cd_buffer);
+			args.f_cd_size = args32.f_cd_size;
+			args.f_out_size = CAST_USER_ADDR_T(args32.f_out_size);
+			args.f_arch = args32.f_arch;
+		}
+
+		if (vp->v_ubcinfo == NULL) {
+			error = EINVAL;
+			goto outdrop;
+		}
+
+		struct cs_blob *t_blob = vp->v_ubcinfo->cs_blobs;
+
+		/*
+		 * This call fails if there is no cs_blob corresponding to the
+		 * vnode, or if there are multiple cs_blobs present, and the caller
+		 * did not specify which cpu_type they want the cs_blob for
+		 */
+		if (t_blob == NULL) {
+			error = ENOENT; /* there is no codesigning blob for this process */
+			goto outdrop;
+		} else if (args.f_arch == 0 && t_blob->csb_next != NULL) {
+			error = ENOENT; /* too many architectures and none specified */
+			goto outdrop;
+		}
+
+		/* If the user specified an architecture, find the right blob */
+		if (args.f_arch != 0) {
+			while (t_blob) {
+				if (t_blob->csb_cpu_type == args.f_arch)
+					break;
+				t_blob = t_blob->csb_next;
+			}
+			/* The cpu_type the user requested could not be found */
+			if (t_blob == NULL) {
+				error = ENOENT;
+				goto outdrop;
+			}
+		}
+
+		const CS_SuperBlob *super_blob = (void *)t_blob->csb_mem_kaddr;
+		const CS_CodeDirectory *cd = findCodeDirectory(super_blob,
+	 						 (char *) super_blob,
+							 (char *) super_blob + t_blob->csb_mem_size);
+		if (cd == NULL) {
+			error = ENOENT;
+			goto outdrop;
+		}
+
+		uint64_t buffer_size = ntohl(cd->length);
+
+		if (buffer_size > UINT_MAX) {
+			error = ERANGE;
+			goto outdrop;
+		}
+
+		error = copyout(&buffer_size, args.f_out_size, sizeof(unsigned int));
+		if (error) 
+			goto outdrop;
+
+		if (sizeof(t_blob->csb_sha1) > args.f_hash_size ||
+					buffer_size > args.f_cd_size) {
+			error = ERANGE;
+			goto outdrop;
+		}
+
+		error = copyout(t_blob->csb_sha1, args.f_cd_hash, sizeof(t_blob->csb_sha1));
+		if (error) 
+			goto outdrop;
+		error = copyout(cd, args.f_cd_buffer, buffer_size);
+		if (error) 
+			goto outdrop;
+
 		break;
 	}
 	
@@ -2628,7 +2830,6 @@ fstat1(proc_t p, int fd, user_addr_t ub, user_addr_t xsecurity, user_addr_t xsec
 		struct user32_stat64 user32_sb64;
 	} dest;
 	int error, my_size;
-	int funnel_state;
 	file_type_t type;
 	caddr_t data;
 	kauth_filesec_t fsec;
@@ -2683,9 +2884,7 @@ fstat1(proc_t p, int fd, user_addr_t ub, user_addr_t xsecurity, user_addr_t xsec
 		break;
 
 	case DTYPE_KQUEUE:
-	        funnel_state = thread_funnel_set(kernel_flock, TRUE);
-		error = kqueue_stat(fp, sbptr, isstat64, p);
-		thread_funnel_set(kernel_flock, funnel_state);
+		error = kqueue_stat((void *)data, sbptr, isstat64, p);
 		break;
 
 	default:
@@ -4297,6 +4496,11 @@ fg_free(struct fileglob *fg)
 {
 	OSAddAtomic(-1, &nfiles);
 
+	if (fg->fg_vn_data) {
+		fg_vn_data_free(fg->fg_vn_data);
+		fg->fg_vn_data = NULL;
+	}
+
 	if (IS_VALID_CRED(fg->fg_cred)) {
 		kauth_cred_unref(&fg->fg_cred);
 	}
@@ -4327,18 +4531,6 @@ fg_free(struct fileglob *fg)
  *
  * Locks:	This function internally takes and drops proc_fdlock()
  *
- * Notes:	This function drops and retakes the kernel funnel; this is
- *		inherently unsafe, since another thread may have the
- *		proc_fdlock.
- *
- * XXX:		We should likely reverse the lock and funnel drop/acquire
- *		order to avoid the small race window; it's also possible that
- *		if the program doing the exec has an outstanding listen socket
- *		and a network connection is completed asynchronously that we
- *		will end up with a "ghost" socket reference in the new process.
- *
- *		This needs reworking to make it safe to remove the funnel from
- *		the execve and posix_spawn system calls.
  */
 void
 fdexec(proc_t p, short flags)

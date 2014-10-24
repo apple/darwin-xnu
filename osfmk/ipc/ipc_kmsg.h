@@ -93,15 +93,15 @@
  *	of the message.
  */
 
-struct ipc_labelh;
-
 struct ipc_kmsg {
-	struct ipc_kmsg *ikm_next;
-	struct ipc_kmsg *ikm_prev;
-	ipc_port_t ikm_prealloc;	/* port we were preallocated from */
-	mach_msg_size_t ikm_size;
-	struct ipc_labelh *ikm_sender;
-	mach_msg_header_t *ikm_header;
+	mach_msg_size_t			 	ikm_size;
+	struct ipc_kmsg				*ikm_next;	/* next message on port/discard queue */
+	struct ipc_kmsg 			*ikm_prev;	/* prev message on port/discard queue */
+	mach_msg_header_t 			*ikm_header;
+	ipc_port_t				ikm_prealloc;	/* port we were preallocated from */
+	ipc_port_t				ikm_voucher;	/* voucher port carried */
+	struct ipc_importance_elem		*ikm_importance;/* inherited from */
+	queue_chain_t				ikm_inheritance;/* inherited from link */
 };
 
 #if defined(__i386__) || defined(__arm__)
@@ -150,7 +150,8 @@ MACRO_END
 MACRO_BEGIN								\
 	(kmsg)->ikm_size = (size);					\
 	(kmsg)->ikm_prealloc = IP_NULL;					\
-        (kmsg)->ikm_sender = NULL;					\
+        (kmsg)->ikm_voucher = IP_NULL;					\
+	(kmsg)->ikm_importance = IIE_NULL;				\
 	assert((kmsg)->ikm_prev = (kmsg)->ikm_next = IKM_BOGUS);	\
 MACRO_END
 
@@ -313,7 +314,7 @@ extern void ipc_kmsg_put_to_kernel(
 
 /* Copyin port rights in the header of a message */
 extern mach_msg_return_t ipc_kmsg_copyin_header(
-	mach_msg_header_t	*msg,
+	ipc_kmsg_t              kmsg,
 	ipc_space_t		space,
 	mach_msg_option_t	*optionp);
 
@@ -335,8 +336,9 @@ extern mach_msg_return_t ipc_kmsg_copyin_from_kernel_legacy(
 
 /* Copyout port rights in the header of a message */
 extern mach_msg_return_t ipc_kmsg_copyout_header(
-	mach_msg_header_t	*msg,
-	ipc_space_t		space);
+	ipc_kmsg_t              kmsg,
+	ipc_space_t		space,
+	mach_msg_option_t	option);
 
 /* Copyout a port right returning a name */
 extern mach_msg_return_t ipc_kmsg_copyout_object(
@@ -350,7 +352,8 @@ extern mach_msg_return_t ipc_kmsg_copyout(
 	ipc_kmsg_t		kmsg,
 	ipc_space_t		space,
 	vm_map_t		map,
-	mach_msg_body_t		*slist);
+	mach_msg_body_t		*slist,
+	mach_msg_option_t	option);
 
 /* Copyout port rights and out-of-line memory from the body of a message */
 extern mach_msg_return_t ipc_kmsg_copyout_body(

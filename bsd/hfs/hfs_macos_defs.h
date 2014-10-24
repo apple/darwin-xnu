@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2005 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2014 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -149,7 +149,7 @@ typedef const UniChar *		ConstUniCharArrayPtr;
 	"Boolean" will remain an unsigned char for compatibility with source
 	code written before "bool" existed.
 */
-#if !TYPE_BOOL
+#if !TYPE_BOOL && !__bool_true_false_are_defined
 
 enum {
 	false						= 0,

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1999-2013 Apple Inc. All rights reserved.
+ * Copyright (c) 1999-2014 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -238,8 +238,15 @@ hfs_makelink(struct hfsmount *hfsmp, struct vnode *src_vp, struct cnode *cp,
 
 			/* Put the original file back. */
 			err = cat_rename(hfsmp, &to_desc, &dcp->c_desc, &cp->c_desc, NULL);
-			if (err && err != EIO && err != ENXIO)
-				panic("hfs_makelink: error %d from cat_rename backout 1", err);
+			if (err) {
+				if (err != EIO && err != ENXIO)
+					printf("hfs_makelink: error %d from cat_rename backout 1", err);
+				hfs_mark_inconsistent(hfsmp, HFS_ROLLBACK_FAILED);
+			}
+			if (retval != EIO && retval != ENXIO) {
+				printf("hfs_makelink: createindirectlink (1) failed: %d\n", retval);
+				retval = EIO;
+			}
 			goto out;
 		}
 		cp->c_attr.ca_linkref = indnodeno;
@@ -287,10 +294,18 @@ hfs_makelink(struct hfsmount *hfsmp, struct vnode *src_vp, struct cnode *cp,
 		
 		/* Put the original file back. */
 		err = cat_rename(hfsmp, &to_desc, &dcp->c_desc, &cp->c_desc, NULL);
-		if (err && err != EIO && err != ENXIO)
-			panic("hfs_makelink: error %d from cat_rename backout 2", err);
+		if (err) {
+			if (err != EIO && err != ENXIO)
+				printf("hfs_makelink: error %d from cat_rename backout 2", err);
+			hfs_mark_inconsistent(hfsmp, HFS_ROLLBACK_FAILED);
+		}
 
 		cp->c_attr.ca_linkref = 0;
+
+		if (retval != EIO && retval != ENXIO) {
+			printf("hfs_makelink: createindirectlink (2) failed: %d\n", retval);
+			retval = EIO;
+		}
 		goto out;
 	} else if (retval == 0) {
 
@@ -314,10 +329,6 @@ hfs_makelink(struct hfsmount *hfsmp, struct vnode *src_vp, struct cnode *cp,
 	    if (newlink) {
 		vnode_t vp;
 		
-		if (retval != 0) {
-		    panic("hfs_makelink: retval %d but newlink = 1!\n", retval);
-		}
-
 		hfsmp->hfs_private_attr[type].ca_entries++;
 		/* From application perspective, directory hard link is a 
 		 * normal directory.  Therefore count the new directory 
@@ -328,8 +339,12 @@ hfs_makelink(struct hfsmount *hfsmp, struct vnode *src_vp, struct cnode *cp,
 		}
 		retval = cat_update(hfsmp, &hfsmp->hfs_private_desc[type],
 		    &hfsmp->hfs_private_attr[type], NULL, NULL);
-		if (retval != 0 && retval != EIO && retval != ENXIO) {
-		    panic("hfs_makelink: cat_update of privdir failed! (%d)\n", retval);
+		if (retval) {
+			if (retval != EIO && retval != ENXIO) {
+				printf("hfs_makelink: cat_update of privdir failed! (%d)\n", retval);
+				retval = EIO;
+			}
+			hfs_mark_inconsistent(hfsmp, HFS_OP_INCOMPLETE);
 		}
 		cp->c_flag |= C_HARDLINK;
 
@@ -427,6 +442,14 @@ hfs_vnop_link(struct vnop_link_args *ap)
 	if (v_type == VBLK || v_type == VCHR) {
 		return (EPERM);  
 	}
+
+	/*
+	 * For now, return ENOTSUP for a symlink target. This can happen
+	 * for linkat(2) when called without AT_SYMLINK_FOLLOW.
+	 */
+	if (v_type == VLNK)
+		return (ENOTSUP);
+
 	if (v_type == VDIR) {
 #if CONFIG_HFS_DIRLINK
 		/* Make sure our private directory exists. */
@@ -616,10 +639,14 @@ hfs_vnop_link(struct vnop_link_args *ap)
 		tdcp->c_flag |= C_FORCEUPDATE;
 
 		error = hfs_update(tdvp, 0);
-		if (error && error != EIO && error != ENXIO) {
-			panic("hfs_vnop_link: error %d updating tdvp %p\n", error, tdvp);
+		if (error) {
+			if (error != EIO && error != ENXIO) {
+				printf("hfs_vnop_link: error %d updating tdvp %p\n", error, tdvp);
+				error = EIO;
+			}
+			hfs_mark_inconsistent(hfsmp, HFS_OP_INCOMPLETE);
 		}
-		
+
 		if ((v_type == VDIR) && 
 		    (fdcp != NULL) && 
 		    ((fdcp->c_attr.ca_recflags & kHFSHasChildLinkMask) == 0)) {
@@ -628,8 +655,12 @@ hfs_vnop_link(struct vnop_link_args *ap)
 			fdcp->c_touch_chgtime = TRUE;
 			fdcp->c_flag |= C_FORCEUPDATE;
 			error = hfs_update(fdvp, 0);
-			if (error && error != EIO && error != ENXIO) {
-				panic("hfs_vnop_link: error %d updating fdvp %p\n", error, fdvp);
+			if (error) {
+				if (error != EIO && error != ENXIO) {
+					printf("hfs_vnop_link: error %d updating fdvp %p\n", error, fdvp);
+					// No point changing error as it's set immediate below
+				}
+				hfs_mark_inconsistent(hfsmp, HFS_OP_INCOMPLETE);
 			}
 
 			/* Set kHFSHasChildLinkBit in the source hierarchy */
@@ -645,8 +676,10 @@ hfs_vnop_link(struct vnop_link_args *ap)
 	/* Make sure update occurs inside transaction */
 	cp->c_flag |= C_FORCEUPDATE;  
 
-	if ((error == 0) && (ret = hfs_update(vp, TRUE)) != 0 && ret != EIO && ret != ENXIO) {
-		panic("hfs_vnop_link: error %d updating vp @ %p\n", ret, vp);
+	if (error == 0 && (ret = hfs_update(vp, TRUE)) != 0) {
+		if (ret != EIO && ret != ENXIO)
+			printf("hfs_vnop_link: error %d updating vp @ %p\n", ret, vp);
+		hfs_mark_inconsistent(hfsmp, HFS_OP_INCOMPLETE);
 	}
 
 out:
@@ -1107,7 +1140,7 @@ void
 hfs_savelinkorigin(cnode_t *cp, cnid_t parentcnid)
 {
 	linkorigin_t *origin = NULL;
-	void * thread = current_thread();
+	thread_t thread = current_thread();
 	int count = 0;
 	int maxorigins = (S_ISDIR(cp->c_mode)) ? MAX_CACHED_ORIGINS : MAX_CACHED_FILE_ORIGINS;
 	/*
@@ -1162,7 +1195,7 @@ void
 hfs_relorigin(struct cnode *cp, cnid_t parentcnid)
 {
 	linkorigin_t *origin, *prev;
-	void * thread = current_thread();
+	thread_t thread = current_thread();
 
 	TAILQ_FOREACH_SAFE(origin, &cp->c_originlist, lo_link, prev) {
 		if ((origin->lo_thread == thread) ||
@@ -1185,7 +1218,7 @@ hfs_haslinkorigin(cnode_t *cp)
 {
 	if (cp->c_flag & C_HARDLINK) {
 		linkorigin_t *origin;
-		void * thread = current_thread();
+		thread_t thread = current_thread();
 	
 		TAILQ_FOREACH(origin, &cp->c_originlist, lo_link) {
 			if (origin->lo_thread == thread) {
@@ -1207,7 +1240,7 @@ hfs_currentparent(cnode_t *cp)
 {
 	if (cp->c_flag & C_HARDLINK) {
 		linkorigin_t *origin;
-		void * thread = current_thread();
+		thread_t thread = current_thread();
 	
 		TAILQ_FOREACH(origin, &cp->c_originlist, lo_link) {
 			if (origin->lo_thread == thread) {
@@ -1229,7 +1262,7 @@ hfs_currentcnid(cnode_t *cp)
 {
 	if (cp->c_flag & C_HARDLINK) {
 		linkorigin_t *origin;
-		void * thread = current_thread();
+		thread_t thread = current_thread();
 	
 		TAILQ_FOREACH(origin, &cp->c_originlist, lo_link) {
 			if (origin->lo_thread == thread) {

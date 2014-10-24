@@ -27,6 +27,11 @@
  */
 
 #include <vm/vm_compressor.h>
+
+#if CONFIG_PHANTOM_CACHE
+#include <vm/vm_phantom_cache.h>
+#endif
+
 #include <vm/vm_map.h>
 #include <vm/vm_pageout.h>
 #include <vm/memory_object.h>
@@ -64,6 +69,7 @@ extern void	vm_pageout_io_throttle(void);
 extern unsigned int hash_string(char *cp, int len);
 #endif
 
+
 struct c_slot {
 	uint64_t	c_offset:C_SEG_OFFSET_BITS,
 		        c_size:12,
@@ -77,7 +83,7 @@ struct c_slot {
 
 };
 
-#define UNPACK_C_SIZE(cs)	((cs->c_size == (PAGE_SIZE-1)) ? 4096 : cs->c_size)
+#define UNPACK_C_SIZE(cs)	((cs->c_size == (PAGE_SIZE-1)) ? PAGE_SIZE : cs->c_size)
 #define PACK_C_SIZE(cs, size)	(cs->c_size = ((size == PAGE_SIZE) ? PAGE_SIZE - 1 : size))
 
 
@@ -137,8 +143,10 @@ caddr_t		c_segments_next_page;
 boolean_t	c_segments_busy;
 uint32_t	c_segments_available;
 uint32_t	c_segments_limit;
+uint32_t	c_segments_nearing_limit;
 uint32_t	c_segment_pages_compressed;
 uint32_t	c_segment_pages_compressed_limit;
+uint32_t	c_segment_pages_compressed_nearing_limit;
 uint32_t	c_free_segno_head = (uint32_t)-1;
 
 uint32_t	vm_compressor_minorcompact_threshold_divisor = 10;
@@ -161,7 +169,7 @@ lck_spin_t	*c_list_lock;
 #endif /* __i386__ || __x86_64__ */
 
 lck_rw_t	c_master_lock;
-lck_rw_t	c_decompressor_lock;
+boolean_t	decompressions_blocked = FALSE;
 
 zone_t		compressor_segment_zone;
 int		c_compressor_swap_trigger = 0;
@@ -195,16 +203,17 @@ uint64_t	first_c_segment_to_warm_generation_id = 0;
 uint64_t	last_c_segment_to_warm_generation_id = 0;
 boolean_t	hibernate_flushing = FALSE;
 
-int64_t		c_segment_input_bytes = 0;
-int64_t		c_segment_compressed_bytes = 0;
-int64_t		compressor_bytes_used = 0;
+int64_t		c_segment_input_bytes __attribute__((aligned(8))) = 0;
+int64_t		c_segment_compressed_bytes __attribute__((aligned(8))) = 0;
+int64_t		compressor_bytes_used __attribute__((aligned(8))) = 0;
+uint64_t	compressor_kvspace_used __attribute__((aligned(8))) = 0;
+uint64_t	compressor_kvwaste_limit = 0;
 
 static boolean_t compressor_needs_to_swap(void);
 static void vm_compressor_swap_trigger_thread(void);
 static void vm_compressor_do_delayed_compactions(boolean_t);
 static void vm_compressor_compact_and_swap(boolean_t);
 static void vm_compressor_age_swapped_in_segments(boolean_t);
-static uint64_t compute_elapsed_msecs(clock_sec_t, clock_nsec_t, clock_sec_t, clock_nsec_t);
 
 boolean_t vm_compressor_low_on_space(void);
 
@@ -227,6 +236,7 @@ void	  c_seg_free_locked(c_segment_t);
 
 
 uint64_t vm_available_memory(void);
+uint64_t vm_compressor_pages_compressed(void);
 
 extern unsigned int dp_pages_free, dp_pages_reserve;
 
@@ -234,6 +244,13 @@ uint64_t
 vm_available_memory(void)
 {
 	return (((uint64_t)AVAILABLE_NON_COMPRESSED_MEMORY) * PAGE_SIZE_64);
+}
+
+
+uint64_t
+vm_compressor_pages_compressed(void)
+{
+	return (c_segment_pages_compressed * PAGE_SIZE_64);
 }
 
 
@@ -253,8 +270,8 @@ vm_compression_available(void)
 boolean_t
 vm_compressor_low_on_space(void)
 {
-	if ((c_segment_pages_compressed > (c_segment_pages_compressed_limit - 20000)) ||
-	    (c_segment_count > (c_segments_limit - 250)))
+	if ((c_segment_pages_compressed > c_segment_pages_compressed_nearing_limit) ||
+	    (c_segment_count > c_segments_nearing_limit))
 		return (TRUE);
 
 	return (FALSE);
@@ -262,13 +279,18 @@ vm_compressor_low_on_space(void)
 	    
 
 int
-vm_low_on_space(void)
+vm_wants_task_throttled(task_t task)
 {
+	if (task == kernel_task)
+		return (0);
+
 	if (vm_compressor_mode == COMPRESSED_PAGER_IS_ACTIVE || vm_compressor_mode == DEFAULT_FREEZER_COMPRESSED_PAGER_IS_ACTIVE) {
-		if (vm_compressor_low_on_space() || HARD_THROTTLE_LIMIT_REACHED())
+		if ((vm_compressor_low_on_space() || HARD_THROTTLE_LIMIT_REACHED()) &&
+		    (unsigned int)pmap_compressed(task->map->pmap) > (c_segment_pages_compressed / 4))
 			return (1);
 	} else {
-		if (((dp_pages_free + dp_pages_reserve < 2000) && VM_DYNAMIC_PAGING_ENABLED(memory_manager_default)))
+		if (((dp_pages_free + dp_pages_reserve < 2000) && VM_DYNAMIC_PAGING_ENABLED(memory_manager_default)) &&
+		    get_task_resident_size(task) > (((AVAILABLE_NON_COMPRESSED_MEMORY) * PAGE_SIZE) / 5))
 			return (1);
 	}
 	return (0);
@@ -283,21 +305,29 @@ vm_compressor_init_locks(void)
 	lck_attr_setdefault(&vm_compressor_lck_attr);
 
 	lck_rw_init(&c_master_lock, &vm_compressor_lck_grp, &vm_compressor_lck_attr);
-	lck_rw_init(&c_decompressor_lock, &vm_compressor_lck_grp, &vm_compressor_lck_attr);
 }
 
 
 void
 vm_decompressor_lock(void)
 {
-	lck_rw_lock_exclusive(&c_decompressor_lock);
+	PAGE_REPLACEMENT_ALLOWED(TRUE);
+
+	decompressions_blocked = TRUE;
+	
+	PAGE_REPLACEMENT_ALLOWED(FALSE);
 }
 
 void
 vm_decompressor_unlock(void)
 {
-	lck_rw_done(&c_decompressor_lock);
+	PAGE_REPLACEMENT_ALLOWED(TRUE);
 
+	decompressions_blocked = FALSE;
+
+	PAGE_REPLACEMENT_ALLOWED(FALSE);
+
+	thread_wakeup((event_t)&decompressions_blocked);
 }
 
 
@@ -306,6 +336,23 @@ void
 vm_compressor_init(void)
 {
 	thread_t	thread;
+	struct c_slot	cs_dummy;
+	c_slot_t cs  = &cs_dummy;
+
+	/*
+	 * ensure that any pointer that gets created from
+	 * the vm_page zone can be packed properly
+	 */
+	cs->c_packed_ptr = C_SLOT_PACK_PTR(zone_map_min_address);
+
+	if (C_SLOT_UNPACK_PTR(cs) != (uintptr_t)zone_map_min_address)
+		panic("C_SLOT_UNPACK_PTR failed on zone_map_min_address - %p", (void *)zone_map_min_address);
+
+	cs->c_packed_ptr = C_SLOT_PACK_PTR(zone_map_max_address);
+
+	if (C_SLOT_UNPACK_PTR(cs) != (uintptr_t)zone_map_max_address)
+		panic("C_SLOT_UNPACK_PTR failed on zone_map_max_address - %p", (void *)zone_map_max_address);
+
 
 	assert((C_SEGMENTS_PER_PAGE * sizeof(union c_segu)) == PAGE_SIZE);
 
@@ -374,6 +421,11 @@ vm_compressor_init(void)
 	if ((c_segments_limit = c_segment_pages_compressed_limit / (C_SEG_BUFSIZE / PAGE_SIZE)) > C_SEG_MAX_LIMIT)
 		c_segments_limit = C_SEG_MAX_LIMIT;
 
+	c_segment_pages_compressed_nearing_limit = (c_segment_pages_compressed_limit * 98) / 100;
+	c_segments_nearing_limit = (c_segments_limit * 98) / 100;
+
+	compressor_kvwaste_limit = (vm_map_max(kernel_map) - vm_map_min(kernel_map)) / 16;
+
 	c_segments_busy = FALSE;
 
 	if (kernel_memory_allocate(kernel_map, (vm_offset_t *)(&c_segments), (sizeof(union c_segu) * c_segments_limit), 0, KMA_KOBJECT | KMA_VAONLY) != KERN_SUCCESS)
@@ -405,6 +457,11 @@ vm_compressor_init(void)
 		
 	if (vm_pageout_internal_start() != KERN_SUCCESS) {
 		panic("vm_compressor_init: Failed to start the internal pageout thread.\n");
+	}
+
+	if ((vm_compressor_mode == VM_PAGER_COMPRESSOR_WITH_SWAP) ||
+	    (vm_compressor_mode == VM_PAGER_FREEZER_COMPRESSOR_WITH_SWAP)) {
+		vm_compressor_swap_init();
 	}
 
 #if CONFIG_FREEZE
@@ -481,7 +538,7 @@ c_seg_need_delayed_compaction(c_segment_t c_seg)
 	boolean_t	clear_busy = FALSE;
 
 	if ( !lck_mtx_try_lock_spin_always(c_list_lock)) {
-		c_seg->c_busy = 1;
+		C_SEG_BUSY(c_seg);
 		
 		lck_mtx_unlock_always(&c_seg->c_lock);
 		lck_mtx_lock_spin_always(c_list_lock);
@@ -509,7 +566,7 @@ c_seg_move_to_sparse_list(c_segment_t c_seg)
 	boolean_t	clear_busy = FALSE;
 
 	if ( !lck_mtx_try_lock_spin_always(c_list_lock)) {
-		c_seg->c_busy = 1;
+		C_SEG_BUSY(c_seg);
 
 		lck_mtx_unlock_always(&c_seg->c_lock);
 		lck_mtx_lock_spin_always(c_list_lock);
@@ -590,7 +647,7 @@ c_seg_try_minor_compaction_and_unlock(c_segment_t c_seg)
 	} else {
 		try_minor_compaction_succeeded++;
 
-		c_seg->c_busy = 1;
+		C_SEG_BUSY(c_seg);
 		c_seg_do_minor_compaction_and_unlock(c_seg, TRUE, FALSE, FALSE);
 	}
 }
@@ -680,7 +737,7 @@ c_seg_try_free(c_segment_t c_seg)
 		 */
 	}
 	if (!c_seg->c_busy_swapping)
-		c_seg->c_busy = 1;
+		C_SEG_BUSY(c_seg);
 
 	c_seg_free_locked(c_seg);
 
@@ -693,8 +750,7 @@ c_seg_try_free(c_segment_t c_seg)
 void
 c_seg_free(c_segment_t c_seg)
 {
-	if (!c_seg->c_busy_swapping)
-		c_seg->c_busy = 1;
+	assert(c_seg->c_busy);
 
 	lck_mtx_unlock_always(&c_seg->c_lock);
 	lck_mtx_lock_spin_always(c_list_lock);
@@ -779,6 +835,8 @@ c_seg_free_locked(c_segment_t c_seg)
 			kernel_memory_depopulate(kernel_map, (vm_offset_t) c_buffer, pages_populated * PAGE_SIZE, KMA_COMPRESSOR);
 
 		kmem_free(kernel_map, (vm_offset_t) c_buffer, C_SEG_ALLOCSIZE);
+		OSAddAtomic64(-C_SEG_ALLOCSIZE, &compressor_kvspace_used);
+
 	} else if (c_swap_handle)
 		vm_swap_free(c_swap_handle);
 
@@ -1122,8 +1180,8 @@ c_seg_major_compact(
 }
 
 
-static uint64_t
-compute_elapsed_msecs(clock_sec_t end_sec, clock_nsec_t end_nsec, clock_sec_t start_sec, clock_nsec_t start_nsec)
+uint64_t
+vm_compressor_compute_elapsed_msecs(clock_sec_t end_sec, clock_nsec_t end_nsec, clock_sec_t start_sec, clock_nsec_t start_nsec)
 {
         uint64_t end_msecs;
         uint64_t start_msecs;
@@ -1142,6 +1200,9 @@ uint32_t compressor_sample_max_in_msecs = 10000;
 uint32_t compressor_thrashing_threshold_per_10msecs = 50;
 uint32_t compressor_thrashing_min_per_10msecs = 20;
 
+/* When true, reset sample data next chance we get. */
+static boolean_t	compressor_need_sample_reset = FALSE;
+
 extern uint32_t vm_page_filecache_min;
 
 
@@ -1153,19 +1214,19 @@ compute_swapout_target_age(void)
 	uint32_t	min_operations_needed_in_this_sample;
 	uint64_t	elapsed_msecs_in_eval;
 	uint64_t	elapsed_msecs_in_sample;
-	boolean_t	need_sample_reset = FALSE;
 	boolean_t	need_eval_reset = FALSE;
 
 	clock_get_system_nanotime(&cur_ts_sec, &cur_ts_nsec);
 
-	elapsed_msecs_in_sample = compute_elapsed_msecs(cur_ts_sec, cur_ts_nsec, start_of_sample_period_sec, start_of_sample_period_nsec);
+	elapsed_msecs_in_sample = vm_compressor_compute_elapsed_msecs(cur_ts_sec, cur_ts_nsec, start_of_sample_period_sec, start_of_sample_period_nsec);
 
-	if (elapsed_msecs_in_sample >= compressor_sample_max_in_msecs) {
-		need_sample_reset = TRUE;
+	if (compressor_need_sample_reset ||
+	    elapsed_msecs_in_sample >= compressor_sample_max_in_msecs) {
+		compressor_need_sample_reset = TRUE;
 		need_eval_reset = TRUE;
 		goto done;
 	}
-	elapsed_msecs_in_eval = compute_elapsed_msecs(cur_ts_sec, cur_ts_nsec, start_of_eval_period_sec, start_of_eval_period_nsec);
+	elapsed_msecs_in_eval = vm_compressor_compute_elapsed_msecs(cur_ts_sec, cur_ts_nsec, start_of_eval_period_sec, start_of_eval_period_nsec);
 	
 	if (elapsed_msecs_in_eval < compressor_eval_period_in_msecs)
 		goto done;
@@ -1183,7 +1244,7 @@ compute_swapout_target_age(void)
 
 		swapout_target_age = 0;
 
-		need_sample_reset = TRUE;
+		compressor_need_sample_reset = TRUE;
 		need_eval_reset = TRUE;
 		goto done;
 	}
@@ -1241,12 +1302,12 @@ compute_swapout_target_age(void)
 		} else
 			KERNEL_DEBUG(0xe0400020 | DBG_FUNC_END, working_target, running_total, 0, 4, 0);
 
-		need_sample_reset = TRUE;
+		compressor_need_sample_reset = TRUE;
 		need_eval_reset = TRUE;
 	} else
 		KERNEL_DEBUG(0xe0400020 | DBG_FUNC_END, sample_period_decompression_count, (compressor_thrashing_threshold_per_10msecs * elapsed_msecs_in_sample) / 10, 0, 6, 0);
 done:
-	if (need_sample_reset == TRUE) {
+	if (compressor_need_sample_reset == TRUE) {
 		bzero(age_of_decompressions_during_sample_period, sizeof(age_of_decompressions_during_sample_period));
 		overage_decompressions_during_sample_period = 0;
 
@@ -1256,6 +1317,7 @@ done:
 		sample_period_compression_count = 0;
 		last_eval_decompression_count = 0;
 		last_eval_compression_count = 0;
+		compressor_need_sample_reset = FALSE;
 	}
 	if (need_eval_reset == TRUE) {
 		start_of_eval_period_sec = cur_ts_sec;
@@ -1264,16 +1326,18 @@ done:
 }
 
 
-
-int		calls_since_last_considered = 0;
+int		compaction_swapper_inited = 0;
+int		compaction_swapper_init_now = 0;
 int		compaction_swapper_running = 0;
 int		compaction_swapper_abort = 0;
 
 
 #if CONFIG_JETSAM
 boolean_t	memorystatus_kill_on_VM_thrashing(boolean_t);
+boolean_t	memorystatus_kill_on_FC_thrashing(boolean_t);
 int		compressor_thrashing_induced_jetsam = 0;
-boolean_t	vm_compressor_thrashing_detected = FALSE;
+int		filecache_thrashing_induced_jetsam = 0;
+static boolean_t	vm_compressor_thrashing_detected = FALSE;
 #endif /* CONFIG_JETSAM */
 
 static boolean_t
@@ -1302,21 +1366,32 @@ compressor_needs_to_swap(void)
 
 			c_seg = (c_segment_t) queue_first(&c_age_list_head);
 
-			if (c_seg->c_creation_ts <= swapout_target_age)
-				should_swap = TRUE;
-			else
+			if (c_seg->c_creation_ts > swapout_target_age)
 				swapout_target_age = 0;
 		}
 		lck_mtx_unlock_always(c_list_lock);
 	}
+#if CONFIG_PHANTOM_CACHE
+	if (vm_phantom_cache_check_pressure())
+		should_swap = TRUE;
+#endif
+	if (swapout_target_age)
+		should_swap = TRUE;
 
 	if (vm_swap_up == FALSE) {
-#if CONFIG_JETSAM
+
 		if (should_swap) {
+#if CONFIG_JETSAM
 			if (vm_compressor_thrashing_detected == FALSE) {
 				vm_compressor_thrashing_detected = TRUE;
-				memorystatus_kill_on_VM_thrashing(TRUE /* async */);
-				compressor_thrashing_induced_jetsam++;
+				
+				if (swapout_target_age) {
+					memorystatus_kill_on_VM_thrashing(TRUE /* async */);
+					compressor_thrashing_induced_jetsam++;
+				} else {
+					memorystatus_kill_on_FC_thrashing(TRUE /* async */);
+					filecache_thrashing_induced_jetsam++;
+				}
 				/*
 				 * let the jetsam take precedence over
 				 * any major compactions we might have
@@ -1327,11 +1402,11 @@ compressor_needs_to_swap(void)
 				 */
 				should_swap = FALSE;
 			}
-		} else
 #endif /* CONFIG_JETSAM */
-			if (COMPRESSOR_NEEDS_TO_MAJOR_COMPACT())
-				should_swap = TRUE;
+		} else
+			should_swap = COMPRESSOR_NEEDS_TO_MAJOR_COMPACT();
 	}
+
 	/*
 	 * returning TRUE when swap_supported == FALSE
 	 * will cause the major compaction engine to
@@ -1343,37 +1418,44 @@ compressor_needs_to_swap(void)
 	return (should_swap);
 }
 
-uint64_t
-vm_compressor_total_compressions(void)
+#if CONFIG_JETSAM
+/*
+ * This function is called from the jetsam thread after killing something to
+ * mitigate thrashing.
+ *
+ * We need to restart our thrashing detection heuristics since memory pressure
+ * has potentially changed significantly, and we don't want to detect on old
+ * data from before the jetsam.
+ */
+void
+vm_thrashing_jetsam_done(void)
 {
-	processor_t processor = processor_list;
-	vm_statistics64_t stat = &PROCESSOR_DATA(processor, vm_stat);
+	vm_compressor_thrashing_detected = FALSE;
 
-	uint64_t compressions = stat->compressions;
-
-	if (processor_count > 1) {
-		simple_lock(&processor_list_lock);
-
-		while ((processor = processor->processor_list) != NULL) {
-			stat = &PROCESSOR_DATA(processor, vm_stat);
-			compressions += stat->compressions;
-		}
-
-		simple_unlock(&processor_list_lock);
+	/* Were we compressor-thrashing or filecache-thrashing? */
+	if (swapout_target_age) {
+		swapout_target_age = 0;
+		compressor_need_sample_reset = TRUE;
 	}
-
-	return compressions;
+#if CONFIG_PHANTOM_CACHE
+	else {
+		vm_phantom_cache_restart_sample();
+	}
+#endif
 }
+#endif /* CONFIG_JETSAM */
 
 uint32_t vm_wake_compactor_swapper_calls = 0;
 
 void
 vm_wake_compactor_swapper(void)
 {
+	boolean_t need_major_compaction = FALSE;
+
 	if (compaction_swapper_running)
 		return;
 
-	if (c_minor_count == 0)
+	if (c_minor_count == 0 && need_major_compaction == FALSE)
 		return;
 
 	lck_mtx_lock_spin_always(c_list_lock);
@@ -1390,14 +1472,19 @@ vm_wake_compactor_swapper(void)
 	lck_mtx_unlock_always(c_list_lock);
 }
 
+
 void
 vm_consider_waking_compactor_swapper(void)
 {
 	boolean_t	need_wakeup = FALSE;
 
-	if (calls_since_last_considered++ < 1000 || compaction_swapper_running)
+	if (compaction_swapper_running)
 		return;
-	calls_since_last_considered = 0;
+
+	if (!compaction_swapper_inited && !compaction_swapper_init_now) {
+		compaction_swapper_init_now = 1;
+		need_wakeup = TRUE;
+	}
 
 	if (c_minor_count && (COMPRESSOR_NEEDS_TO_MINOR_COMPACT())) {
 
@@ -1452,15 +1539,15 @@ vm_compressor_do_delayed_compactions(boolean_t flush_all)
 		
 		lck_mtx_lock_spin_always(&c_seg->c_lock);
 
-                if (c_seg->c_busy) {
+		if (c_seg->c_busy) {
 
-                        lck_mtx_unlock_always(c_list_lock);
-                        c_seg_wait_on_busy(c_seg);
-                        lck_mtx_lock_spin_always(c_list_lock);
+			lck_mtx_unlock_always(c_list_lock);
+			c_seg_wait_on_busy(c_seg);
+			lck_mtx_lock_spin_always(c_list_lock);
 
-                        continue;
-                }
-		c_seg->c_busy = 1;
+			continue;
+		}
+		C_SEG_BUSY(c_seg);
 
 		c_seg_do_minor_compaction_and_unlock(c_seg, TRUE, FALSE, TRUE);
 
@@ -1581,13 +1668,29 @@ vm_compressor_flush(void)
 }
 
 
-
+extern void	vm_swap_file_set_tuneables(void);
 int		compaction_swap_trigger_thread_awakened = 0;
+
 
 static void
 vm_compressor_swap_trigger_thread(void)
 {
+	/*
+	 * compaction_swapper_init_now is set when the first call to
+	 * vm_consider_waking_compactor_swapper is made from 
+	 * vm_pageout_scan... since this function is called upon 
+	 * thread creation, we want to make sure to delay adjusting
+	 * the tuneables until we are awakened via vm_pageout_scan
+	 * so that we are at a point where the vm_swapfile_open will
+	 * be operating on the correct directory (in case the default
+	 * of /var/vm/  is overridden by the dymanic_pager 
+	 */
+	if (compaction_swapper_init_now && !compaction_swapper_inited) {
+		if (vm_compressor_mode == VM_PAGER_COMPRESSOR_WITH_SWAP)
+			vm_swap_file_set_tuneables();
 
+		compaction_swapper_inited = 1;
+	}
 	lck_mtx_lock_spin_always(c_list_lock);
 
 	compaction_swap_trigger_thread_awakened++;
@@ -1877,7 +1980,7 @@ vm_compressor_compact_and_swap(boolean_t flush_all)
 
 			continue;
 		}
-		c_seg->c_busy = 1;
+		C_SEG_BUSY(c_seg);
 
 		if (c_seg_do_minor_compaction_and_unlock(c_seg, FALSE, TRUE, TRUE)) {
 			/*
@@ -1916,7 +2019,7 @@ vm_compressor_compact_and_swap(boolean_t flush_all)
 				continue;
 			}
 			/* grab that segment */
-			c_seg_next->c_busy = 1;
+			C_SEG_BUSY(c_seg_next);
 
 			if (c_seg_do_minor_compaction_and_unlock(c_seg_next, FALSE, TRUE, TRUE)) {
 				/*
@@ -1992,6 +2095,10 @@ vm_compressor_compact_and_swap(boolean_t flush_all)
 }
 
 
+static uint32_t	no_paging_space_action_in_progress = 0;
+extern void memorystatus_send_low_swap_note(void);
+
+
 static c_segment_t
 c_seg_allocate(c_segment_t *current_chead)
 {
@@ -2003,6 +2110,20 @@ c_seg_allocate(c_segment_t *current_chead)
 	if ( (c_seg = *current_chead) == NULL ) {
 		uint32_t	c_segno;
 
+		if (vm_compressor_low_on_space() || vm_swap_low_on_space()) {
+
+			if (no_paging_space_action_in_progress == 0) {
+
+				if (OSCompareAndSwap(0, 1, (UInt32 *)&no_paging_space_action_in_progress)) {
+
+					if (no_paging_space_action()) {
+						memorystatus_send_low_swap_note();
+					}
+
+					no_paging_space_action_in_progress = 0;
+				}
+			}
+		}
 		KERNEL_DEBUG(0xe0400004 | DBG_FUNC_START, 0, 0, 0, 0, 0);
 
 		lck_mtx_lock_spin_always(c_list_lock);
@@ -2064,6 +2185,7 @@ c_seg_allocate(c_segment_t *current_chead)
 
 			return (NULL);
 		}
+		OSAddAtomic64(C_SEG_ALLOCSIZE, &compressor_kvspace_used);
 
 #if __i386__ || __x86_64__
 		lck_mtx_init(&c_seg->c_lock, &vm_compressor_lck_grp, &vm_compressor_lck_attr);
@@ -2219,8 +2341,8 @@ c_seg_swapin(c_segment_t c_seg, boolean_t force_minor_compaction)
 #endif
 	io_size = round_page_32(C_SEG_OFFSET_TO_BYTES(c_seg->c_populated_offset));
 	f_offset = c_seg->c_store.c_swap_handle;
-		
-	c_seg->c_busy = 1;
+
+	C_SEG_BUSY(c_seg);
 	lck_mtx_unlock_always(&c_seg->c_lock);
 	
 	if (c_seg->c_ondisk) {
@@ -2239,11 +2361,12 @@ c_seg_swapin(c_segment_t c_seg, boolean_t force_minor_compaction)
 			kmem_free(kernel_map, addr, C_SEG_ALLOCSIZE);
 
 			c_seg->c_store.c_buffer = (int32_t*) NULL;
+			c_seg->c_populated_offset = C_SEG_BYTES_TO_OFFSET(0);
 		} else {
 			c_seg->c_store.c_buffer = (int32_t*) addr;
-#if CRYPTO
+#if ENCRYPTED_SWAP
 			vm_swap_decrypt(c_seg);
-#endif /* CRYPTO */
+#endif /* ENCRYPTED_SWAP */
 
 #if CHECKSUM_THE_SWAP
 			if (c_seg->cseg_swap_size != io_size)
@@ -2262,6 +2385,7 @@ c_seg_swapin(c_segment_t c_seg, boolean_t force_minor_compaction)
 				c_seg_minor_compaction_and_unlock(c_seg, FALSE);
 			}
 			OSAddAtomic64(c_seg->c_bytes_used, &compressor_bytes_used);
+			OSAddAtomic64(C_SEG_ALLOCSIZE, &compressor_kvspace_used);
 		}
 	}
 	c_seg_swapin_requeue(c_seg);
@@ -2290,6 +2414,8 @@ retry:
 	cs = C_SEG_SLOT_FROM_INDEX(c_seg, c_seg->c_nextslot);
 
 	cs->c_packed_ptr = C_SLOT_PACK_PTR(slot_ptr);
+	assert(slot_ptr == (c_slot_mapping_t)C_SLOT_UNPACK_PTR(cs));
+
 	cs->c_offset = c_seg->c_nextoffset;
 
 	max_csize = C_SEG_BUFSIZE - C_SEG_OFFSET_TO_BYTES((int32_t)cs->c_offset);
@@ -2317,9 +2443,9 @@ retry:
 #if CHECKSUM_THE_DATA
 	cs->c_hash_data = hash_string(src, PAGE_SIZE);
 #endif
-	c_size = WKdm_compress_new((WK_word *)(uintptr_t)src, (WK_word *)(uintptr_t)&c_seg->c_store.c_buffer[cs->c_offset],
-				   (WK_word *)(uintptr_t)scratch_buf, max_csize - 4);
 
+	c_size = WKdm_compress_new((WK_word *)(uintptr_t)src, (WK_word *)(uintptr_t)&c_seg->c_store.c_buffer[cs->c_offset],
+				  (WK_word *)(uintptr_t)scratch_buf, max_csize - 4);
 	assert(c_size <= (max_csize - 4) && c_size >= -1);
 
 	if (c_size == -1) {
@@ -2364,22 +2490,6 @@ retry:
 
 	KERNEL_DEBUG(0xe0400000 | DBG_FUNC_END, *current_chead, c_size, c_segment_input_bytes, c_segment_compressed_bytes, 0);
 
-	if (vm_compressor_low_on_space()) {
-		ipc_port_t      trigger = IP_NULL;
-
-		PSL_LOCK();
-		if (IP_VALID(min_pages_trigger_port)) {
-			trigger = min_pages_trigger_port;
-			min_pages_trigger_port = IP_NULL;
-		}
-		PSL_UNLOCK();
-
-		if (IP_VALID(trigger)) {
-			no_paging_space_action();
-			default_pager_space_alert(trigger, HI_WAT_ALERT);
-			ipc_port_release_send(trigger);
-		}
-	}
 	return (0);
 }
 
@@ -2399,26 +2509,48 @@ c_decompress_page(char *dst, volatile c_slot_mapping_t slot_ptr, int flags, int 
 	boolean_t	consider_defragmenting = FALSE;
 
 ReTry:
-#if HIBERNATION
-	if (dst) {
-		if (lck_rw_try_lock_shared(&c_decompressor_lock) == 0) {
-			if (flags & C_DONT_BLOCK) {
-				*zeroslot = 0;
-				return (-2);
-			}
-			lck_rw_lock_shared(&c_decompressor_lock);
-		}
-	}
-#endif
 	PAGE_REPLACEMENT_DISALLOWED(TRUE);
 
+#if HIBERNATION
+	/*
+	 * if hibernation is enabled, it indicates (via a call
+	 * to 'vm_decompressor_lock' that no further
+	 * decompressions are allowed once it reaches
+	 * the point of flushing all of the currently dirty
+	 * anonymous memory through the compressor and out
+	 * to disk... in this state we allow freeing of compressed
+	 * pages and must honor the C_DONT_BLOCK case
+	 */
+	if (dst && decompressions_blocked == TRUE) {
+		if (flags & C_DONT_BLOCK) {
+
+			PAGE_REPLACEMENT_DISALLOWED(FALSE);
+
+			*zeroslot = 0;
+			return (-2);
+		}
+		/*
+		 * it's safe to atomically assert and block behind the
+		 * lock held in shared mode because "decompressions_blocked" is
+		 * only set and cleared and the thread_wakeup done when the lock
+		 * is held exclusively
+		 */
+		assert_wait((event_t)&decompressions_blocked, THREAD_UNINT);
+
+		PAGE_REPLACEMENT_DISALLOWED(FALSE);
+
+		thread_block(THREAD_CONTINUE_NULL);
+
+		goto ReTry;
+	}
+#endif
 	/* s_cseg is actually "segno+1" */
 	c_seg = c_segments[slot_ptr->s_cseg - 1].c_seg;
 
 	lck_mtx_lock_spin_always(&c_seg->c_lock);
 
 	if (flags & C_DONT_BLOCK) {
-		if (c_seg->c_busy || c_seg->c_ondisk) {
+		if (c_seg->c_busy || (c_seg->c_ondisk && dst)) {
 
 			retval = -2;
 			*zeroslot = 0;
@@ -2429,10 +2561,7 @@ ReTry:
 	if (c_seg->c_busy) {
 
 		PAGE_REPLACEMENT_DISALLOWED(FALSE);
-#if HIBERNATION
-		if (dst)
-			lck_rw_done(&c_decompressor_lock);
-#endif
+
 		c_seg_wait_on_busy(c_seg);
 
 		goto ReTry;
@@ -2482,7 +2611,6 @@ ReTry:
 			assert(my_cpu_no < compressor_cpus);
 
 			scratch_buf = &compressor_scratch_bufs[my_cpu_no * WKdm_SCRATCH_BUF_SIZE];
-
 			WKdm_decompress_new((WK_word *)(uintptr_t)&c_seg->c_store.c_buffer[cs->c_offset],
 					    (WK_word *)(uintptr_t)dst, (WK_word *)(uintptr_t)scratch_buf, c_size);
 		}
@@ -2549,7 +2677,7 @@ c_seg_invalid_data:
 				if (pages_populated) {
 					assert(c_seg->c_store.c_buffer != NULL);
 
-					c_seg->c_busy = 1;
+					C_SEG_BUSY(c_seg);
 					lck_mtx_unlock_always(&c_seg->c_lock);
 
 					kernel_memory_depopulate(kernel_map, (vm_offset_t) c_seg->c_store.c_buffer, pages_populated * PAGE_SIZE, KMA_COMPRESSOR);
@@ -2587,10 +2715,8 @@ done:
 
 	if (consider_defragmenting == TRUE)
 		vm_swap_consider_defragmenting();
-#if HIBERNATION
-	if (dst)
-		lck_rw_done(&c_decompressor_lock);
-#endif
+
+
 	return (retval);
 }
 
@@ -2615,17 +2741,6 @@ vm_compressor_get(ppnum_t pn, int *slot, int flags)
 	 * or (flags & C_DONT_BLOCK) and we found 'c_busy' or 'c_ondisk' set
 	 */
 	if (zeroslot) {
-		/*
-		 * We've just decompressed a page, and are about to hand that back to VM for
-		 * re-entry into some pmap. This is a decompression operation which must have no
-		 * impact on the pmap's physical footprint. However, when VM goes to re-enter
-		 * this page into the pmap, it doesn't know that it came from the compressor,
-		 * which means the pmap's physical footprint will be incremented. To compensate
-		 * for that, we decrement the physical footprint here, so that the total net effect
-		 * on the physical footprint statistic is zero.
-		 */
-		pmap_ledger_debit(current_task()->map->pmap, task_ledgers.phys_footprint, PAGE_SIZE);
-
 		*slot = 0;
 	}
 	/*
@@ -2638,14 +2753,24 @@ vm_compressor_get(ppnum_t pn, int *slot, int flags)
 }
 
 
-void
-vm_compressor_free(int *slot)
+int
+vm_compressor_free(int *slot, int flags)
 {
 	int	zeroslot = 1;
+	int	retval;
 
-	(void)c_decompress_page(NULL, (c_slot_mapping_t)slot, 0, &zeroslot);
+	assert(flags == 0 || flags == C_DONT_BLOCK);
 
-	*slot = 0;
+	retval = c_decompress_page(NULL, (c_slot_mapping_t)slot, flags, &zeroslot);
+	/*
+	 * returns 0 if we successfully freed the specified compressed page
+	 * returns -2 if (flags & C_DONT_BLOCK) and we found 'c_busy' set
+	 */
+
+	if (retval == 0)
+		*slot = 0;
+
+	return (retval);
 }
 
 
@@ -2655,12 +2780,6 @@ vm_compressor_put(ppnum_t pn, int *slot, void  **current_chead, char *scratch_bu
 	char	*src;
 	int	retval;
 
-	if ((vm_offset_t)slot < VM_MIN_KERNEL_AND_KEXT_ADDRESS || (vm_offset_t)slot >= VM_MAX_KERNEL_ADDRESS)
-		panic("vm_compressor_put: slot 0x%llx address out of range [0x%llx:0x%llx]",
-		      (uint64_t)(vm_offset_t) slot,
-		      (uint64_t) VM_MIN_KERNEL_AND_KEXT_ADDRESS,
-		      (uint64_t) VM_MAX_KERNEL_ADDRESS);
-
 #if __x86_64__
 	src = PHYSMAP_PTOV((uint64_t)pn << (uint64_t)PAGE_SHIFT);
 #else
@@ -2669,4 +2788,41 @@ vm_compressor_put(ppnum_t pn, int *slot, void  **current_chead, char *scratch_bu
 	retval = c_compress_page(src, (c_slot_mapping_t)slot, (c_segment_t *)current_chead, scratch_buf);
 
 	return (retval);
+}
+
+void
+vm_compressor_transfer(
+	int	*dst_slot_p,
+	int	*src_slot_p)
+{
+	c_slot_mapping_t	dst_slot, src_slot;
+	c_segment_t		c_seg;
+	int			c_indx;
+	c_slot_t		cs;
+
+	dst_slot = (c_slot_mapping_t) dst_slot_p;
+	src_slot = (c_slot_mapping_t) src_slot_p;
+
+Retry:
+	PAGE_REPLACEMENT_DISALLOWED(TRUE);
+	/* get segment for src_slot */
+	c_seg = c_segments[src_slot->s_cseg -1].c_seg;
+	/* lock segment */
+	lck_mtx_lock_spin_always(&c_seg->c_lock);
+	/* wait if it's busy */
+	if (c_seg->c_busy) {
+		PAGE_REPLACEMENT_DISALLOWED(FALSE);
+		c_seg_wait_on_busy(c_seg);
+		goto Retry;
+	}
+	/* find the c_slot */
+	c_indx = src_slot->s_cindx;
+	cs = C_SEG_SLOT_FROM_INDEX(c_seg, c_indx);
+	/* point the c_slot back to dst_slot instead of src_slot */
+	cs->c_packed_ptr = C_SLOT_PACK_PTR(dst_slot);
+	/* transfer */
+	*dst_slot_p = *src_slot_p;
+	*src_slot_p = 0;
+	lck_mtx_unlock_always(&c_seg->c_lock);
+	PAGE_REPLACEMENT_DISALLOWED(FALSE);
 }

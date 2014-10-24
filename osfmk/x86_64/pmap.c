@@ -102,7 +102,6 @@
 #include <kern/ledger.h>
 #include <kern/mach_param.h>
 
-#include <kern/lock.h>
 #include <kern/kalloc.h>
 #include <kern/spl.h>
 
@@ -174,13 +173,15 @@ uint64_t max_preemption_latency_tsc = 0;
 
 pv_hashed_entry_t     *pv_hash_table;  /* hash lists */
 
-uint32_t npvhash = 0;
+uint32_t npvhashmask = 0, npvhashbuckets = 0;
 
 pv_hashed_entry_t	pv_hashed_free_list = PV_HASHED_ENTRY_NULL;
 pv_hashed_entry_t	pv_hashed_kern_free_list = PV_HASHED_ENTRY_NULL;
 decl_simple_lock_data(,pv_hashed_free_list_lock)
 decl_simple_lock_data(,pv_hashed_kern_free_list_lock)
 decl_simple_lock_data(,pv_hash_table_lock)
+
+decl_simple_lock_data(,phys_backup_lock)
 
 zone_t		pv_hashed_list_zone;	/* zone of pv_hashed_entry structures */
 
@@ -291,6 +292,7 @@ extern  vm_offset_t		sconstdata, econstdata;
 extern void			*KPTphys;
 
 boolean_t pmap_smep_enabled = FALSE;
+boolean_t pmap_smap_enabled = FALSE;
 
 void
 pmap_cpu_init(void)
@@ -325,7 +327,18 @@ pmap_cpu_init(void)
 	}
 }
 
+static uint32_t pmap_scale_shift(void) {
+	uint32_t scale = 0;
 
+	if (sane_size <= 8*GB) {
+		scale = (uint32_t)(sane_size / (2 * GB));
+	} else if (sane_size <= 32*GB) {
+		scale = 4 + (uint32_t)((sane_size - (8 * GB))/ (4 * GB)); 
+	} else {
+		scale = 10 + (uint32_t)MIN(4, ((sane_size - (32 * GB))/ (8 * GB))); 
+	}
+	return scale;
+}
 
 /*
  *	Bootstrap the system enough to run with virtual memory.
@@ -410,21 +423,23 @@ pmap_bootstrap(
 
 	virtual_avail = va;
 #endif
+	if (!PE_parse_boot_argn("npvhash", &npvhashmask, sizeof (npvhashmask))) {
+		npvhashmask = ((NPVHASHBUCKETS) << pmap_scale_shift()) - 1;
 
-	if (PE_parse_boot_argn("npvhash", &npvhash, sizeof (npvhash))) {
-		if (0 != ((npvhash + 1) & npvhash)) {
-			kprintf("invalid hash %d, must be ((2^N)-1), "
-				"using default %d\n", npvhash, NPVHASH);
-			npvhash = NPVHASH;
-		}
-	} else {
-		npvhash = NPVHASH;
+	}
+
+	npvhashbuckets = npvhashmask + 1;
+
+	if (0 != ((npvhashbuckets) & npvhashmask)) {
+		panic("invalid hash %d, must be ((2^N)-1), "
+		    "using default %d\n", npvhashmask, NPVHASHMASK);
 	}
 
 	simple_lock_init(&kernel_pmap->lock, 0);
 	simple_lock_init(&pv_hashed_free_list_lock, 0);
 	simple_lock_init(&pv_hashed_kern_free_list_lock, 0);
 	simple_lock_init(&pv_hash_table_lock,0);
+	simple_lock_init(&phys_backup_lock, 0);
 
 	pmap_cpu_init();
 
@@ -436,7 +451,7 @@ pmap_bootstrap(
 
 #if	DEBUG
 	printf("Stack canary: 0x%lx\n", __stack_chk_guard[0]);
-	printf("ml_early_random(): 0x%qx\n", ml_early_random());
+	printf("early_random(): 0x%qx\n", early_random());
 #endif
 	boolean_t ptmp;
 	/* Check if the user has requested disabling stack or heap no-execute
@@ -657,9 +672,9 @@ pmap_init(void)
 	pmap_npages = (uint32_t)npages;
 #endif	
 	s = (vm_size_t) (sizeof(struct pv_rooted_entry) * npages
-			 + (sizeof (struct pv_hashed_entry_t *) * (npvhash+1))
+			 + (sizeof (struct pv_hashed_entry_t *) * (npvhashbuckets))
 			 + pv_lock_table_size(npages)
-			 + pv_hash_lock_table_size((npvhash+1))
+			 + pv_hash_lock_table_size((npvhashbuckets))
 				+ npages);
 
 	s = round_page(s);
@@ -674,7 +689,7 @@ pmap_init(void)
 	vsize = s;
 
 #if PV_DEBUG
-	if (0 == npvhash) panic("npvhash not initialized");
+	if (0 == npvhashmask) panic("npvhashmask not initialized");
 #endif
 
 	/*
@@ -684,13 +699,13 @@ pmap_init(void)
 	addr = (vm_offset_t) (pv_head_table + npages);
 
 	pv_hash_table = (pv_hashed_entry_t *)addr;
-	addr = (vm_offset_t) (pv_hash_table + (npvhash + 1));
+	addr = (vm_offset_t) (pv_hash_table + (npvhashbuckets));
 
 	pv_lock_table = (char *) addr;
 	addr = (vm_offset_t) (pv_lock_table + pv_lock_table_size(npages));
 
 	pv_hash_lock_table = (char *) addr;
-	addr = (vm_offset_t) (pv_hash_lock_table + pv_hash_lock_table_size((npvhash+1)));
+	addr = (vm_offset_t) (pv_hash_lock_table + pv_hash_lock_table_size((npvhashbuckets)));
 
 	pmap_phys_attributes = (char *) addr;
 
@@ -2125,7 +2140,7 @@ pmap_switch(pmap_t tpmap)
         spl_t	s;
 
 	s = splhigh();		/* Make sure interruptions are disabled */
-	set_dirbase(tpmap, current_thread());
+	set_dirbase(tpmap, current_thread(), cpu_number());
 	splx(s);
 }
 
@@ -2173,20 +2188,6 @@ pt_fake_zone_info(
 	*caller_acct = 1;
 }
 
-static inline void
-pmap_cpuset_NMIPI(cpu_set cpu_mask) {
-	unsigned int cpu, cpu_bit;
-	uint64_t deadline;
-
-	for (cpu = 0, cpu_bit = 1; cpu < real_ncpus; cpu++, cpu_bit <<= 1) {
-		if (cpu_mask & cpu_bit)
-			cpu_NMI_interrupt(cpu);
-	}
-	deadline = mach_absolute_time() + (LockTimeOut);
-	while (mach_absolute_time() < deadline)
-		cpu_pause();
-}
-
 
 void
 pmap_flush_context_init(pmap_flush_context *pfc)
@@ -2195,6 +2196,7 @@ pmap_flush_context_init(pmap_flush_context *pfc)
 	pfc->pfc_invalid_global = 0;
 }
 
+extern unsigned TLBTimeOut;
 void
 pmap_flush(
 	pmap_flush_context *pfc)
@@ -2202,9 +2204,9 @@ pmap_flush(
 	unsigned int	my_cpu;
 	unsigned int	cpu;
 	unsigned int	cpu_bit;
-	cpu_set		cpus_to_respond = 0;
-	cpu_set		cpus_to_signal = 0;
-	cpu_set		cpus_signaled = 0;
+	cpumask_t	cpus_to_respond = 0;
+	cpumask_t	cpus_to_signal = 0;
+	cpumask_t	cpus_signaled = 0;
 	boolean_t	flush_self = FALSE;
 	uint64_t	deadline;
 
@@ -2252,7 +2254,10 @@ pmap_flush(
 
 	if (cpus_to_respond) {
 
-		deadline = mach_absolute_time() + LockTimeOut;
+		deadline = mach_absolute_time() +
+				(TLBTimeOut ? TLBTimeOut : LockTimeOut);
+		boolean_t is_timeout_traced = FALSE;
+		
 		/*
 		 * Wait for those other cpus to acknowledge
 		 */
@@ -2277,9 +2282,17 @@ pmap_flush(
 			if (cpus_to_respond && (mach_absolute_time() > deadline)) {
 				if (machine_timeout_suspended())
 					continue;
+				if (TLBTimeOut == 0) {
+					if (is_timeout_traced)
+						continue;
+					PMAP_TRACE_CONSTANT(PMAP_CODE(PMAP__FLUSH_TLBS_TO),
+			    			NULL, cpus_to_signal, cpus_to_respond, 0, 0);
+					is_timeout_traced = TRUE;
+					continue;
+				}
 				pmap_tlb_flush_timeout = TRUE;
 				orig_acks = NMIPI_acks;
-				pmap_cpuset_NMIPI(cpus_to_respond);
+				mp_cpus_NMIPI(cpus_to_respond);
 
 				panic("TLB invalidation IPI timeout: "
 				    "CPU(s) failed to respond to interrupts, unresponsive CPU bitmap: 0x%lx, NMIPI acks: orig: 0x%lx, now: 0x%lx",
@@ -2309,16 +2322,22 @@ pmap_flush_tlbs(pmap_t	pmap, vm_map_offset_t startv, vm_map_offset_t endv, int o
 {
 	unsigned int	cpu;
 	unsigned int	cpu_bit;
-	cpu_set		cpus_to_signal;
+	cpumask_t	cpus_to_signal;
 	unsigned int	my_cpu = cpu_number();
 	pmap_paddr_t	pmap_cr3 = pmap->pm_cr3;
 	boolean_t	flush_self = FALSE;
 	uint64_t	deadline;
 	boolean_t	pmap_is_shared = (pmap->pm_shared || (pmap == kernel_pmap));
 	boolean_t	need_global_flush = FALSE;
+	uint32_t	event_code;
 
 	assert((processor_avail_count < 2) ||
 	       (ml_get_interrupts_enabled() && get_preemption_level() != 0));
+
+	event_code = (pmap == kernel_pmap) ? PMAP_CODE(PMAP__FLUSH_KERN_TLBS)
+					   : PMAP_CODE(PMAP__FLUSH_TLBS);
+	PMAP_TRACE_CONSTANT(event_code | DBG_FUNC_START,
+			    pmap, options, startv, endv, 0);
 
 	/*
 	 * Scan other cpus for matching active or task CR3.
@@ -2384,15 +2403,8 @@ pmap_flush_tlbs(pmap_t	pmap, vm_map_offset_t startv, vm_map_offset_t endv, int o
 		}
 	}
 	if ((options & PMAP_DELAY_TLB_FLUSH))
-		return;
+		goto out;
 
-	if (pmap == kernel_pmap) {
-		PMAP_TRACE_CONSTANT(PMAP_CODE(PMAP__FLUSH_KERN_TLBS) | DBG_FUNC_START,
-				    pmap, cpus_to_signal, flush_self, startv, endv);
-	} else {
-		PMAP_TRACE_CONSTANT(PMAP_CODE(PMAP__FLUSH_TLBS) | DBG_FUNC_START,
-				    pmap, cpus_to_signal, flush_self, startv, endv);
-	}
 	/*
 	 * Flush local tlb if required.
 	 * Do this now to overlap with other processors responding.
@@ -2410,9 +2422,12 @@ pmap_flush_tlbs(pmap_t	pmap, vm_map_offset_t startv, vm_map_offset_t endv, int o
 	}
 
 	if (cpus_to_signal) {
-		cpu_set	cpus_to_respond = cpus_to_signal;
+		cpumask_t	cpus_to_respond = cpus_to_signal;
 
-		deadline = mach_absolute_time() + LockTimeOut;
+		deadline = mach_absolute_time() +
+				(TLBTimeOut ? TLBTimeOut : LockTimeOut);
+		boolean_t is_timeout_traced = FALSE;
+
 		/*
 		 * Wait for those other cpus to acknowledge
 		 */
@@ -2437,9 +2452,19 @@ pmap_flush_tlbs(pmap_t	pmap, vm_map_offset_t startv, vm_map_offset_t endv, int o
 			if (cpus_to_respond && (mach_absolute_time() > deadline)) {
 				if (machine_timeout_suspended())
 					continue;
+				if (TLBTimeOut == 0) {
+					/* cut tracepoint but don't panic */
+					if (is_timeout_traced)
+						continue;
+					PMAP_TRACE_CONSTANT(
+						PMAP_CODE(PMAP__FLUSH_TLBS_TO),
+				    		pmap, cpus_to_signal, cpus_to_respond, 0, 0);
+					is_timeout_traced = TRUE;
+					continue;
+				}
 				pmap_tlb_flush_timeout = TRUE;
 				orig_acks = NMIPI_acks;
-				pmap_cpuset_NMIPI(cpus_to_respond);
+				mp_cpus_NMIPI(cpus_to_respond);
 
 				panic("TLB invalidation IPI timeout: "
 				    "CPU(s) failed to respond to interrupts, unresponsive CPU bitmap: 0x%lx, NMIPI acks: orig: 0x%lx, now: 0x%lx",
@@ -2452,13 +2477,9 @@ pmap_flush_tlbs(pmap_t	pmap, vm_map_offset_t startv, vm_map_offset_t endv, int o
 		panic("pmap_flush_tlbs: pmap == kernel_pmap && flush_self != TRUE; kernel CR3: 0x%llX, pmap_cr3: 0x%llx, CPU active CR3: 0x%llX, CPU Task Map: %d", kernel_pmap->pm_cr3, pmap_cr3, current_cpu_datap()->cpu_active_cr3, current_cpu_datap()->cpu_task_map);
 	}
 
-	if (pmap == kernel_pmap) {
-		PMAP_TRACE_CONSTANT(PMAP_CODE(PMAP__FLUSH_KERN_TLBS) | DBG_FUNC_END,
-				    pmap, cpus_to_signal, startv, endv, 0);
-	} else {
-		PMAP_TRACE_CONSTANT(PMAP_CODE(PMAP__FLUSH_TLBS) | DBG_FUNC_END,
-				    pmap, cpus_to_signal, startv, endv, 0);
-	}
+out:
+	PMAP_TRACE_CONSTANT(event_code | DBG_FUNC_END,
+			    pmap, cpus_to_signal, startv, endv, 0);
 
 }
 

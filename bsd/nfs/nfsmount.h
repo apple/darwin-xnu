@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2013 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2014 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -214,7 +214,7 @@ struct nfs_funcs {
 	int	(*nf_mount)(struct nfsmount *, vfs_context_t, nfsnode_t *);
 	int	(*nf_update_statfs)(struct nfsmount *, vfs_context_t);
 	int	(*nf_getquota)(struct nfsmount *, vfs_context_t, uid_t, int, struct dqblk *);
-	int	(*nf_access_rpc)(nfsnode_t, u_int32_t *, vfs_context_t);
+	int	(*nf_access_rpc)(nfsnode_t, u_int32_t *, int, vfs_context_t);
 	int	(*nf_getattr_rpc)(nfsnode_t, mount_t, u_char *, size_t, int, vfs_context_t, struct nfs_vattr *, u_int64_t *);
 	int	(*nf_setattr_rpc)(nfsnode_t, struct vnode_attr *, vfs_context_t);
 	int	(*nf_read_rpc_async)(nfsnode_t, off_t, size_t, thread_t, kauth_cred_t, struct nfsreq_cbinfo *, struct nfsreq **);
@@ -258,6 +258,7 @@ struct nfsmount {
 	char *  nm_realm;		/* Kerberos realm to use */
 	char *  nm_principal;		/* GSS principal to use on initial mount */
 	char *	nm_sprinc;		/* Kerberos principal of the server */
+	int	nm_ref;			/* Reference count on this mount */
 	int	nm_state;		/* Internal state flags */
 	int	nm_vers;		/* NFS version */
 	struct nfs_funcs *nm_funcs;	/* version-specific functions */
@@ -266,7 +267,9 @@ struct nfsmount {
 	nfsnode_t nm_dnp;		/* root directory nfsnode pointer */
 	struct nfs_fs_locations nm_locations; /* file system locations */
 	uint32_t nm_numgrps;		/* Max. size of groupslist */
-	TAILQ_HEAD(, nfs_gss_clnt_ctx) nm_gsscl; /* GSS user contexts */
+	TAILQ_HEAD(, nfs_gss_clnt_ctx) nm_gsscl;	/* GSS user contexts */
+	TAILQ_HEAD(, nfs_gss_clnt_ctx) nm_gssnccl;	/* GSS neg cache contexts */
+	uint32_t nm_ncentries;		/* GSS expired negative cache entries */
 	int	nm_timeo;		/* Init timer for NFSMNT_DUMBTIMR */
 	int	nm_retry;		/* Max retries */
 	uint32_t nm_rsize;		/* Max size of read rpc */
@@ -380,6 +383,7 @@ struct nfsmount {
 #define NFSSTA_RECOVER_EXPIRED	0x10000000  /* mount state expired */
 #define NFSSTA_REVOKE		0x20000000  /* need to scan for revoked nodes */
 #define	NFSSTA_SQUISHY		0x40000000  /* we can ask to be forcibly unmounted */
+#define NFSSTA_MOUNT_DRAIN	0x80000000  /* mount is draining references */
 
 /* flags for nm_sockflags */
 #define NMSOCK_READY		0x0001	/* socket is ready for use */

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2004-2012 Apple Inc. All rights reserved.
+ * Copyright (c) 2004-2014 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -492,12 +492,22 @@ errno_t
 mbuf_setflags(mbuf_t mbuf, mbuf_flags_t flags)
 {
 	errno_t ret = 0;
+	mbuf_flags_t oflags = mbuf->m_flags;
 
-	if ((flags | (mbuf->m_flags & mbuf_flags_mask)) &
-	    (~mbuf_flags_mask | mbuf_cflags_mask)) {
+	/*
+	 * 1. Return error if public but un-alterable flags are changed
+	 *    in flags argument.
+	 * 2. Return error if bits other than public flags are set in passed
+	 *    flags argument.
+	 *    Please note that private flag bits must be passed as reset by kexts,
+	 *    as they must use mbuf_flags KPI to get current set of mbuf flags
+	 *    and mbuf_flags KPI does not expose private flags.
+	 */
+	if ((flags ^ oflags) & mbuf_cflags_mask) {
+		ret = EINVAL;
+	} else if (flags & ~mbuf_flags_mask) {
 		ret = EINVAL;
 	} else {
-		mbuf_flags_t oflags = mbuf->m_flags;
 		mbuf->m_flags = flags | (mbuf->m_flags & ~mbuf_flags_mask);
 		/*
 		 * If M_PKTHDR bit has changed, we have work to do;
@@ -519,7 +529,7 @@ mbuf_setflags_mask(mbuf_t mbuf, mbuf_flags_t flags, mbuf_flags_t mask)
 {
 	errno_t ret = 0;
 
-	if ((flags | mask) & (~mbuf_flags_mask | mbuf_cflags_mask)) {
+	if (mask & (~mbuf_flags_mask | mbuf_cflags_mask)) {
                 ret = EINVAL;
 	} else {
 		mbuf_flags_t oflags = mbuf->m_flags;
@@ -552,6 +562,18 @@ errno_t mbuf_copy_pkthdr(mbuf_t dest, const mbuf_t src)
 size_t mbuf_pkthdr_len(const mbuf_t mbuf)
 {
 	return mbuf->m_pkthdr.len;
+}
+
+__private_extern__ size_t mbuf_pkthdr_maxlen(mbuf_t m)
+{
+	size_t maxlen = 0;
+	mbuf_t n = m;
+
+	while (n) {
+		maxlen += mbuf_maxlen(n);
+		n = mbuf_next(n);
+	}
+	return (maxlen);
 }
 
 void mbuf_pkthdr_setlen(mbuf_t mbuf, size_t len)
@@ -1111,7 +1133,31 @@ out:
 	return error;
 }
 
+__private_extern__ size_t
+mbuf_pkt_list_len(mbuf_t m)
+{
+	size_t len = 0;
+	mbuf_t n = m;
 
+	while (n) {
+		len += mbuf_pkthdr_len(n);
+		n = mbuf_nextpkt(n);
+	}
+	return (len);
+}
+
+__private_extern__ size_t
+mbuf_pkt_list_maxlen(mbuf_t m)
+{
+	size_t maxlen = 0;
+	mbuf_t n = m;
+
+	while (n) {
+		maxlen += mbuf_pkthdr_maxlen(n);
+		n = mbuf_nextpkt(n);
+	}
+	return (maxlen);
+}
 
 /*
  * mbuf_copyback differs from m_copyback in a few ways:

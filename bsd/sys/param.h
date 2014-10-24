@@ -185,7 +185,7 @@
  * primarily determines the size of buffers in the buffer pool.  It may be
  * made larger than MAXPHYS without any effect on existing file systems;
  * however making it smaller may make some file systems unmountable.
- * We set this to track the value of (MAX_UPL_TRANSFER*PAGE_SIZE) from
+ * We set this to track the value of MAX_UPL_TRANSFER_BYTES from
  * osfmk/mach/memory_object_types.h to bound it at the maximum UPL size.
  */
 #define	MAXBSIZE	(256 * 4096)

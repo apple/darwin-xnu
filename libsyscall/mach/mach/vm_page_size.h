@@ -31,15 +31,37 @@
 
 #include <Availability.h>
 #include <mach/mach_types.h>
+#include <sys/cdefs.h>
 
 __BEGIN_DECLS
+
+ /*
+  *	Globally interesting numbers.
+  *	These macros assume vm_page_size is a power-of-2.
+  */
+extern	vm_size_t	vm_page_size;
+extern	vm_size_t	vm_page_mask;
+extern	int		vm_page_shift;
+
+/*
+ *	These macros assume vm_page_size is a power-of-2.
+ */
+#define trunc_page(x)	((x) & (~(vm_page_size - 1)))
+#define round_page(x)	trunc_page((x) + (vm_page_size - 1))
+
+/*
+ *	Page-size rounding macros for the fixed-width VM types.
+ */
+#define mach_vm_trunc_page(x) ((mach_vm_offset_t)(x) & ~((signed)vm_page_mask))
+#define mach_vm_round_page(x) (((mach_vm_offset_t)(x) + vm_page_mask) & ~((signed)vm_page_mask))
+
 
 extern	vm_size_t	vm_kernel_page_size	__OSX_AVAILABLE_STARTING(__MAC_10_9, __IPHONE_7_0);
 extern	vm_size_t	vm_kernel_page_mask	__OSX_AVAILABLE_STARTING(__MAC_10_9, __IPHONE_7_0);
 extern	int		vm_kernel_page_shift	__OSX_AVAILABLE_STARTING(__MAC_10_9, __IPHONE_7_0);
 
 #define trunc_page_kernel(x)   ((x) & (~vm_kernel_page_mask))
-#define round_page_kernel(x)   trunc_kernel_page((x) + vm_kernel_page_mask)
+#define round_page_kernel(x)   trunc_page_kernel((x) + vm_kernel_page_mask)
 
 __END_DECLS
 

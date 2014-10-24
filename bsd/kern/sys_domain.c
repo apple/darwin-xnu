@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2012 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2014 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -35,6 +35,7 @@
 #include <sys/domain.h>
 #include <sys/mcache.h>
 #include <sys/sys_domain.h>
+#include <sys/sysctl.h>
 
 struct domain *systemdomain = NULL;
 
@@ -46,6 +47,10 @@ struct domain systemdomain_s = {
 	.dom_name =		"system",
 	.dom_init =		systemdomain_init,
 };
+
+SYSCTL_NODE(_net, PF_SYSTEM, systm,
+	CTLFLAG_RW|CTLFLAG_LOCKED, 0, "System domain");
+
 
 static void
 systemdomain_init(struct domain *dp)

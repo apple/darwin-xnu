@@ -57,13 +57,13 @@ extern struct secpolicy *key_allocsp(struct secpolicyindex *, u_int);
 extern struct secasvar *key_allocsa_policy(struct secasindex *);
 extern struct secpolicy *key_gettunnel(struct sockaddr *,
 	struct sockaddr *, struct sockaddr *, struct sockaddr *);
+extern struct secasvar *key_alloc_outbound_sav_for_interface(ifnet_t, int);
 extern int key_checkrequest(struct ipsecrequest *isr, struct secasindex *,
 	struct secasvar **sav);
 extern struct secasvar *key_allocsa(u_int, caddr_t, caddr_t,
 					u_int, u_int32_t);
 extern u_int16_t key_natt_get_translated_port(struct secasvar *);
 extern void key_freesp(struct secpolicy *, int);
-extern void key_freeso(struct socket *);
 extern void key_freesav(struct secasvar *, int);
 extern struct secpolicy *key_newsp(void);
 extern struct secpolicy *key_msg2sp(struct sadb_x_policy *, size_t, int *);

@@ -75,18 +75,15 @@ enum {
     kOSRegistryModsMode =         0x00040000ULL,  // Change default registry modification handling - panic vs. log
 //    kIOTraceIOService   =         0x00080000ULL,  // Obsolete: Use iotrace=0x00080000ULL to enable now
     kIOLogHibernate     =         0x00100000ULL,
-    kIOLogDriverPower1  =         0x01000000ULL,
-    kIOLogDriverPower2  =         0x02000000ULL,
     kIOStatistics       =         0x04000000ULL,
-    kIOPersistentLog    =         0x08000000ULL,
     kIOSleepWakeWdogOff =         0x40000000ULL,
-    kIOAppRespStacksOn  =         0x80000000ULL,
 
     // debug aids - change behaviour
     kIONoFreeObjects    =         0x00100000ULL,
     kIOLogSynchronous   =         0x00200000ULL,  // IOLog completes synchronously
     kOSTraceObjectAlloc =         0x00400000ULL,
     kIOWaitQuietPanics  =         0x00800000ULL,
+    kIOWaitQuietBeforeRoot  =     0x01000000ULL,
 
     _kIODebugTopFlag    = 0x8000000000000000ULL   // force enum to be 64 bits
 };
@@ -97,7 +94,7 @@ enum {
 	kIOTraceEventSources	=		0x00000004ULL,	// Trace non-passive event sources
 	kIOTraceIntEventSource	=		0x00000008ULL,	// Trace IOIES and IOFIES sources
 	kIOTraceCommandGates	=		0x00000010ULL,	// Trace command gate activity
-	kIOTraceTimers			= 		0x00000008ULL,	// Trace timer event source activity
+	kIOTraceTimers			= 		0x00000020ULL,	// Trace timer event source activity
 	
 	kIOTracePowerMgmt		=		0x00000400ULL,	// Trace power management changes
 	

@@ -26,13 +26,15 @@ _v = @
 _vstdout = > /dev/null
 endif
 
+VERBOSE_GENERATED_MAKE_FRAGMENTS = NO
+
 ifeq ($(VERBOSE),YES)
 	XCRUN = /usr/bin/xcrun -verbose
 else
 	XCRUN = /usr/bin/xcrun
 endif
 
-SDKROOT ?= /
+SDKROOT ?= macosx.internal
 HOST_SDKROOT ?= macosx
 HOST_SPARSE_SDKROOT ?= /
 
@@ -64,7 +66,7 @@ ifeq ($(SDKVERSION),)
      export SDKVERSION := $(shell $(XCRUN) -sdk $(SDKROOT) -show-sdk-version)
 endif
 
-ifeq ($(PLATFORM),iPhoneOS)
+ifneq ($(filter iPhoneOS iPhoneOSNano,$(PLATFORM)),)
 	ifeq ($(HOST_SPARSE_SDKROOT),/)
 		export HOST_SPARSE_SDKROOT := $(shell $(XCRUN) -sdk iphonehost.internal -show-sdk-path)
 	endif
@@ -119,7 +121,7 @@ ifeq ($(NMEDIT),)
 endif
 
 # Platform-specific tools
-ifeq (iPhoneOS,$(PLATFORM))
+ifneq ($(filter iPhoneOS iPhoneOSNano,$(PLATFORM)),)
 ifeq ($(EMBEDDED_DEVICE_MAP),)
 	export EMBEDDED_DEVICE_MAP := $(shell $(XCRUN) -sdk $(SDKROOT) -find embedded_device_map)
 endif
@@ -127,11 +129,21 @@ EDM_DBPATH = $(PLATFORMPATH)/usr/local/standalone/firmware/device_map.db
 endif
 
 # Scripts or tools we build ourselves
+#
+# setsegname - Rename segments in a Mach-O object file
+# kextsymboltool - Create kext pseudo-kext Mach-O kexts binaries
+# decomment - Strip out comments to detect whether a file is comments-only
+# installfile - Atomically copy files, esp. when multiple architectures
+#               are trying to install the same target header
+# replacecontents - Write contents to a file and update modtime *only* if
+#               contents differ
+#
 SEG_HACK = $(OBJROOT)/SETUP/setsegname/setsegname
 KEXT_CREATE_SYMBOL_SET = $(OBJROOT)/SETUP/kextsymboltool/kextsymboltool
 DECOMMENT = $(OBJROOT)/SETUP/decomment/decomment
 NEWVERS = $(SRCROOT)/config/newvers.pl
 INSTALL = $(OBJROOT)/SETUP/installfile/installfile
+REPLACECONTENTS = $(OBJROOT)/SETUP/replacecontents/replacecontents
 
 # Standard BSD tools
 RM = /bin/rm -f
@@ -141,13 +153,15 @@ MV = /bin/mv
 LN = /bin/ln -fs
 CAT = /bin/cat
 MKDIR = /bin/mkdir -p
+CHMOD = /bin/chmod
 FIND = /usr/bin/find
 XARGS = /usr/bin/xargs
-TAR = /usr/bin/gnutar
+PAX = /bin/pax
 BASENAME = /usr/bin/basename
 DIRNAME = /usr/bin/dirname
 TR = /usr/bin/tr
 TOUCH = /usr/bin/touch
+SLEEP = /bin/sleep
 AWK = /usr/bin/awk
 SED = /usr/bin/sed
 ECHO = /bin/echo
@@ -263,7 +277,15 @@ space := $(empty) $(empty)
 
 # Arithmetic
 # $(1) is the number to increment
-NUM16 = x x x x x x x x x x x x x x x x 
-increment = $(words x $(wordlist 1,$(1),$(NUM16)))
+NUM32 = x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x 
+increment = $(words x $(wordlist 1,$(1),$(NUM32)))
+decrement = $(words $(wordlist 2,$(1),$(NUM32)))
+
+# Create a sequence from 1 to $(1)
+# F(N) = if N > 0: return F(N-1) + "N" else: return ""
+sequence = $(if $(wordlist 1,$(1),$(NUM32)),$(call sequence,$(call decrement,$(1))) $(1),)
+
+# Reverse a list of words in $(1)
+reverse = $(if $(word 2,$(1)),$(call reverse,$(wordlist 2,$(words $(1)),$(1)))) $(word 1,$(1))
 
 # vim: set ft=make:

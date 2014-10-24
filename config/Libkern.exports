@@ -703,7 +703,7 @@ _strtol
 _strtoq
 _strtoul
 _strtouq
-_sysctlbyname
+_sysctlbyname:_kernel_sysctlbyname
 _uuid_clear
 _uuid_compare
 _uuid_copy

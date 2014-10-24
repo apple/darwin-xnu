@@ -64,7 +64,7 @@ The following are not defined yet... define them if needed.
 
  CC_H2BE64 : convert a 64 bits value between host and big endian order
  CC_H2LE64 : convert a 64 bits value between host and little endian order
- 
+
 */
 
 /* TODO: optimized versions */
@@ -74,11 +74,11 @@ The following are not defined yet... define them if needed.
 #define CC_BZERO(D,L) memset((D),0,(L))
 
 
-#pragma mark - Loads and Store
+// MARK: - Loads and Store
 
-#pragma mark -- 32 bits - little endian
+// MARK: -- 32 bits - little endian
 
-#pragma mark --- Default version
+// MARK: --- Default version
 
 #define	CC_STORE32_LE(x, y) do {                                    \
     ((unsigned char *)(y))[3] = (unsigned char)(((x)>>24)&255);		\
@@ -94,7 +94,7 @@ x = ((uint32_t)(((unsigned char *)(y))[3] & 255)<<24) |			    \
     ((uint32_t)(((unsigned char *)(y))[0] & 255));				    \
 } while(0)
 
-#pragma mark -- 64 bits - little endian
+// MARK: -- 64 bits - little endian
 
 #define	CC_STORE64_LE(x, y) do {                                    \
     ((unsigned char *)(y))[7] = (unsigned char)(((x)>>56)&255);     \
@@ -118,8 +118,8 @@ x = (((uint64_t)(((unsigned char *)(y))[7] & 255))<<56) |           \
     (((uint64_t)(((unsigned char *)(y))[0] & 255)));                \
 } while(0)
 
-#pragma mark -- 32 bits - big endian
-#pragma mark --- intel version
+// MARK: -- 32 bits - big endian
+// MARK: --- intel version
 
 #if (defined(__i386__) || defined(__x86_64__))
 
@@ -137,7 +137,7 @@ x = (((uint64_t)(((unsigned char *)(y))[7] & 255))<<56) |           \
     :"=r"(x): "r"(y))
 
 #else
-#pragma mark --- default version
+// MARK: --- default version
 #define	CC_STORE32_BE(x, y) do {                                \
     ((unsigned char *)(y))[0] = (unsigned char)(((x)>>24)&255);	\
     ((unsigned char *)(y))[1] = (unsigned char)(((x)>>16)&255);	\
@@ -154,9 +154,9 @@ x = ((uint32_t)(((unsigned char *)(y))[0] & 255)<<24) |	    \
 
 #endif
 
-#pragma mark -- 64 bits - big endian
+// MARK: -- 64 bits - big endian
 
-#pragma mark --- intel 64 bits version
+// MARK: --- intel 64 bits version
 
 #if defined(__x86_64__)
 
@@ -175,7 +175,7 @@ __asm__ __volatile__ (        \
 
 #else
 
-#pragma mark --- default version
+// MARK: --- default version
 
 #define CC_STORE64_BE(x, y) do {                                    \
     ((unsigned char *)(y))[0] = (unsigned char)(((x)>>56)&255);		\
@@ -201,10 +201,10 @@ x = (((uint64_t)(((unsigned char *)(y))[0] & 255))<<56) |           \
 
 #endif
 
-#pragma mark - 32-bit Rotates
+// MARK: - 32-bit Rotates
 
 #if defined(_MSC_VER)
-#pragma mark -- MSVC version
+// MARK: -- MSVC version
 
 #include <stdlib.h>
 #pragma intrinsic(_lrotr,_lrotl)
@@ -214,7 +214,7 @@ x = (((uint64_t)(((unsigned char *)(y))[0] & 255))<<56) |           \
 #define	CC_ROLc(x,n) _lrotl(x,n)
 
 #elif (defined(__i386__) || defined(__x86_64__))
-#pragma mark -- intel asm version
+// MARK: -- intel asm version
 
 static inline uint32_t CC_ROL(uint32_t word, int i)
 {
@@ -252,7 +252,7 @@ static inline uint32_t CC_ROR(uint32_t word, int i)
 
 #else
 
-#pragma mark -- default version
+// MARK: -- default version
 
 static inline uint32_t CC_ROL(uint32_t word, int i)
 {
@@ -269,10 +269,10 @@ static inline uint32_t CC_ROR(uint32_t word, int i)
 
 #endif
 
-#pragma mark - 64 bits rotates
+// MARK: - 64 bits rotates
 
 #if defined(__x86_64__)
-#pragma mark -- intel 64 asm version
+// MARK: -- intel 64 asm version
 
 static inline uint64_t CC_ROL64(uint64_t word, int i)
 {
@@ -312,7 +312,7 @@ static inline uint64_t CC_ROR64(uint64_t word, int i)
 
 #else /* Not x86_64  */
 
-#pragma mark -- default C version
+// MARK: -- default C version
 
 static inline uint64_t CC_ROL64(uint64_t word, int i)
 {
@@ -330,7 +330,7 @@ static inline uint64_t CC_ROR64(uint64_t word, int i)
 #endif
 
 
-#pragma mark - Byte Swaps
+// MARK: - Byte Swaps
 
 static inline uint32_t CC_BSWAP(uint32_t x)
 {
@@ -342,11 +342,20 @@ static inline uint32_t CC_BSWAP(uint32_t x)
     );
 }
 
+#define CC_BSWAP64(x) \
+((uint64_t)((((uint64_t)(x) & 0xff00000000000000ULL) >> 56) | \
+(((uint64_t)(x) & 0x00ff000000000000ULL) >> 40) | \
+(((uint64_t)(x) & 0x0000ff0000000000ULL) >> 24) | \
+(((uint64_t)(x) & 0x000000ff00000000ULL) >>  8) | \
+(((uint64_t)(x) & 0x00000000ff000000ULL) <<  8) | \
+(((uint64_t)(x) & 0x0000000000ff0000ULL) << 24) | \
+(((uint64_t)(x) & 0x000000000000ff00ULL) << 40) | \
+(((uint64_t)(x) & 0x00000000000000ffULL) << 56)))
+
 #ifdef __LITTLE_ENDIAN__
 #define CC_H2BE32(x) CC_BSWAP(x)
 #define CC_H2LE32(x) (x)
 #else
-#error not good.
 #define CC_H2BE32(x) (x)
 #define CC_H2LE32(x) CC_BSWAP(x)
 #endif
@@ -358,5 +367,58 @@ static inline uint32_t CC_BSWAP(uint32_t x)
 #else
 #define cc_byte(x, n) (((x) >> (8 * (n))) & 255)
 #endif
+
+/* HEAVISIDE_STEP (shifted by one)
+   function f(x): x->0, when x=0 
+                  x->1, when x>0
+   Can also be seen as a bitwise operation: 
+      f(x): x -> y
+        y[0]=(OR x[i]) for all i (all bits)
+        y[i]=0 for all i>0
+   Run in constant time (log2(<bitsize of x>))  
+   Useful to run constant time checks
+*/
+#define HEAVISIDE_STEP_UINT64(x) {unsigned long t; \
+    t=(((uint64_t)x>>32) | (unsigned long)x); \
+    t=((t>>16) | t); \
+    t=((t>>8) | t); \
+    t=((t>>4) | t); \
+    t=((t>>2) | t); \
+    t=((t>>1) | t); \
+    x=t & 0x1;}
+
+#define HEAVISIDE_STEP_UINT32(x) {uint16_t t; \
+    t=(((unsigned long)x>>16) | (uint16_t)x); \
+    t=((t>>8) | t); \
+    t=((t>>4) | t); \
+    t=((t>>2) | t); \
+    t=((t>>1) | t); \
+    x=t & 0x1;}
+
+#define HEAVISIDE_STEP_UINT16(x) {uint8_t t; \
+    t=(((uint16_t)x>>8) | (uint8_t)x); \
+    t=((t>>4) | t); \
+    t=((t>>2) | t); \
+    t=((t>>1) | t); \
+    x=t & 0x1;}
+
+#define HEAVISIDE_STEP_UINT8(x) {uint8_t t; \
+    t=(((uint8_t)x>>4) | (uint8_t)x); \
+    t=((t>>2) | t); \
+    t=((t>>1) | t); \
+    x=t & 0x1;}
+
+#define CC_HEAVISIDE_STEP(x) { \
+    if (sizeof(x) == 1) {HEAVISIDE_STEP_UINT8(x);}  \
+    else if (sizeof(x) == 2) {HEAVISIDE_STEP_UINT16(x);} \
+    else if (sizeof(x) == 4) {HEAVISIDE_STEP_UINT32(x);} \
+    else if (sizeof(x) == 8) {HEAVISIDE_STEP_UINT64(x);} \
+    else {x=((x==0)?0:1);} \
+    }
+
+
+/* Set a variable to the biggest power of 2 which can be represented */ 
+#define MAX_POWER_OF_2(x)   ((__typeof__(x))1<<(8*sizeof(x)-1))
+ 
 
 #endif /* _CORECRYPTO_CC_PRIV_H_ */

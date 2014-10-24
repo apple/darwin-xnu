@@ -104,9 +104,9 @@ struct	sigacts {
  * values should be non-intersecting with values defined in signal.h, e.g.:
  * SIG_IGN, SIG_DFL, SIG_ERR, SIG_IGN.
  */
-#define	KERN_SIG_CATCH	(void (*)(int))2
-#define	KERN_SIG_HOLD	(void (*)(int))3
-#define	KERN_SIG_WAIT	(void (*)(int))4
+#define	KERN_SIG_CATCH	CAST_USER_ADDR_T(2)
+#define	KERN_SIG_HOLD	CAST_USER_ADDR_T(3)
+#define	KERN_SIG_WAIT	CAST_USER_ADDR_T(4)
 
 /*
  * get signal action for process and signal; currently only for current process

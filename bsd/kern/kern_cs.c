@@ -38,6 +38,7 @@
 
 #include <sys/fcntl.h>
 #include <sys/file.h>
+#include <sys/file_internal.h>
 #include <sys/kauth.h>
 #include <sys/mount.h>
 #include <sys/msg.h>
@@ -63,8 +64,6 @@
 #include <vm/vm_map.h>
 #include <vm/vm_kern.h>
 
-#include <sys/kasl.h>
-#include <sys/syslog.h>
 
 #include <kern/assert.h>
 
@@ -80,14 +79,22 @@ int cs_force_hard = 0;
 int cs_debug = 0;
 #if SECURE_KERNEL
 const int cs_enforcement_enable=1;
+const int cs_library_val_enable=1;
 #else
 #if CONFIG_ENFORCE_SIGNED_CODE
 int cs_enforcement_enable=1;
 #else
 int cs_enforcement_enable=0;
-#endif
+#endif /* CONFIG_ENFORCE_SIGNED_CODE */
+
+#if CONFIG_ENFORCE_LIBRARY_VALIDATION
+int cs_library_val_enable = 1;
+#else
+int cs_library_val_enable = 0;
+#endif /* CONFIG_ENFORCE_LIBRARY_VALIDATION */
+
 int cs_enforcement_panic=0;
-#endif
+#endif /* SECURE_KERNEL */
 int cs_all_vnodes = 0;
 
 static lck_grp_t *cs_lockgrp;
@@ -108,9 +115,9 @@ int panic_on_cs_killed = 0;
 void
 cs_init(void)
 {
-#if MACH_ASSERT
+#if MACH_ASSERT && __x86_64__
 	panic_on_cs_killed = 1;
-#endif
+#endif /* MACH_ASSERT && __x86_64__ */
 	PE_parse_boot_argn("panic_on_cs_killed", &panic_on_cs_killed,
 			   sizeof (panic_on_cs_killed));
 #if !SECURE_KERNEL
@@ -171,11 +178,6 @@ cs_invalid_page(
 
 	p = current_proc();
 
-	/*
-	 * XXX revisit locking when proc is no longer protected
-	 * by the kernel funnel...
-	 */
-
 	if (verbose)
 		printf("CODE SIGNING: cs_invalid_page(0x%llx): p=%d[%s]\n",
 		    vaddr, p->p_pid, p->p_comm);
@@ -222,24 +224,12 @@ cs_invalid_page(
 	csflags = p->p_csflags;
 	proc_unlock(p);
 
-	if (verbose) {
-		char pid_str[10];
-		snprintf(pid_str, sizeof(pid_str), "%d", p->p_pid);
-		kern_asl_msg(LOG_NOTICE, "messagetracer",
-			5,
-			"com.apple.message.domain", "com.apple.kernel.cs.invalidate",
-			"com.apple.message.signature", send_kill ? "kill" : retval ? "deny" : "invalidate",
-			"com.apple.message.signature4", pid_str,
-			"com.apple.message.signature3", p->p_comm,
-			"com.apple.message.summarize", "YES",
-			NULL
-		);
+	if (verbose)
 		printf("CODE SIGNING: cs_invalid_page(0x%llx): "
 		       "p=%d[%s] final status 0x%x, %s page%s\n",
 		       vaddr, p->p_pid, p->p_comm, p->p_csflags,
 		       retval ? "denying" : "allowing (remove VALID)",
 		       send_kill ? " sending SIGKILL" : "");
-	}
 
 	if (send_kill)
 		threadsignal(current_thread(), SIGKILL, EXC_BAD_ACCESS);
@@ -492,4 +482,238 @@ cs_register_cscsr(struct cscsr_functions *funcs)
 	if (csr_state.funcs || funcs->csr_version < CSCSR_VERSION)
 		return;
 	csr_state.funcs = funcs;
+}
+
+/*
+ * Library validation functions 
+ */
+int
+cs_require_lv(struct proc *p)
+{
+	
+	if (cs_library_val_enable)
+		return 1;
+
+	if (p == NULL)
+		p = current_proc();
+	
+	if (p != NULL && (p->p_csflags & CS_REQUIRE_LV))
+		return 1;
+	
+	return 0;
+}
+
+/*
+ * Function: csblob_get_teamid
+ *
+ * Description: This function returns a pointer to the team id
+ 		stored within the codedirectory of the csblob.
+		If the codedirectory predates team-ids, it returns
+		NULL.
+		This does not copy the name but returns a pointer to
+		it within the CD. Subsequently, the CD must be 
+		available when this is used.
+*/
+const char *
+csblob_get_teamid(struct cs_blob *csblob)
+{
+	const CS_CodeDirectory *cd;
+
+	if ((cd = (const CS_CodeDirectory *)cs_find_blob(
+						csblob, CSSLOT_CODEDIRECTORY, CSMAGIC_CODEDIRECTORY)) == NULL)
+		return NULL;
+	
+	if (ntohl(cd->version) < CS_SUPPORTSTEAMID)
+		return NULL;
+
+	if (ntohl(cd->teamOffset) == 0)
+		return NULL;
+	
+	const char *name = ((const char *)cd) + ntohl(cd->teamOffset);
+	if (cs_debug > 1)
+		printf("found team-id %s in cdblob\n", name);
+
+	return name;
+}
+
+/*
+ * Function: csproc_get_blob
+ *
+ * Description: This function returns the cs_blob
+ *		for the process p
+ */
+static struct cs_blob *
+csproc_get_blob(struct proc *p)
+{
+	if (NULL == p)
+		return NULL;
+
+	if (NULL == p->p_textvp)
+		return NULL;
+
+	return ubc_cs_blob_get(p->p_textvp, -1, p->p_textoff);
+}
+
+/*
+ * Function: csproc_get_teamid 
+ *
+ * Description: This function returns a pointer to the
+ *		team id of the process p
+*/
+const char *
+csproc_get_teamid(struct proc *p)
+{
+	struct cs_blob *csblob;
+
+	csblob = csproc_get_blob(p);
+
+	return (csblob == NULL) ? NULL : csblob->csb_teamid;
+}
+
+/*
+ * Function: csvnode_get_teamid 
+ *
+ * Description: This function returns a pointer to the
+ *		team id of the binary at the given offset in vnode vp
+*/
+const char *
+csvnode_get_teamid(struct vnode *vp, off_t offset)
+{
+	struct cs_blob *csblob;
+
+	if (vp == NULL)
+		return NULL;
+
+	csblob = ubc_cs_blob_get(vp, -1, offset);
+
+	return (csblob == NULL) ? NULL : csblob->csb_teamid;
+}
+
+/*
+ * Function: csproc_get_platform_binary
+ *
+ * Description: This function returns the value
+ *		of the platform_binary field for proc p
+ */
+int
+csproc_get_platform_binary(struct proc *p)
+{
+	struct cs_blob *csblob;
+
+	csblob = csproc_get_blob(p);
+
+	/* If there is no csblob this returns 0 because
+	   it is true that it is not a platform binary */
+	return (csblob == NULL) ? 0 : csblob->csb_platform_binary;
+}
+
+/*
+ * Function: csfg_get_platform_binary
+ *
+ * Description: This function returns the 
+ *		platform binary field for the 
+ * 		fileglob fg
+ */
+int 
+csfg_get_platform_binary(struct fileglob *fg)
+{
+	int platform_binary = 0;
+	struct ubc_info *uip;
+	vnode_t vp;
+
+	if (FILEGLOB_DTYPE(fg) != DTYPE_VNODE)
+		return 0;
+	
+	vp = (struct vnode *)fg->fg_data;
+	if (vp == NULL)
+		return 0;
+
+	vnode_lock(vp);
+	if (!UBCINFOEXISTS(vp))
+		goto out;
+	
+	uip = vp->v_ubcinfo;
+	if (uip == NULL)
+		goto out;
+	
+	if (uip->cs_blobs == NULL)
+		goto out;
+
+	/* It is OK to extract the teamid from the first blob
+	   because all blobs of a vnode must have the same teamid */	
+	platform_binary = uip->cs_blobs->csb_platform_binary;
+out:
+	vnode_unlock(vp);
+
+	return platform_binary;
+}
+
+/*
+ * Function: csfg_get_teamid
+ *
+ * Description: This returns a pointer to
+ * 		the teamid for the fileglob fg
+ */
+const char *
+csfg_get_teamid(struct fileglob *fg)
+{
+	struct ubc_info *uip;
+	const char *str = NULL;
+	vnode_t vp;
+
+	if (FILEGLOB_DTYPE(fg) != DTYPE_VNODE)
+		return NULL;
+	
+	vp = (struct vnode *)fg->fg_data;
+	if (vp == NULL)
+		return NULL;
+
+	vnode_lock(vp);
+	if (!UBCINFOEXISTS(vp))
+		goto out;
+	
+	uip = vp->v_ubcinfo;
+	if (uip == NULL)
+		goto out;
+	
+	if (uip->cs_blobs == NULL)
+		goto out;
+
+	/* It is OK to extract the teamid from the first blob
+	   because all blobs of a vnode must have the same teamid */	
+	str = uip->cs_blobs->csb_teamid;
+out:
+	vnode_unlock(vp);
+
+	return str;
+}
+
+uint32_t
+cs_entitlement_flags(struct proc *p)
+{
+	return (p->p_csflags & CS_ENTITLEMENT_FLAGS);
+}
+
+/*
+ * Function: csfg_get_path
+ *
+ * Description: This populates the buffer passed in
+ *		with the path of the vnode
+ *		When calling this, the fileglob
+ *		cannot go away. The caller must have a
+ *		a reference on the fileglob or fileproc
+ */
+int
+csfg_get_path(struct fileglob *fg, char *path, int *len)
+{
+	vnode_t vp = NULL;
+
+	if (FILEGLOB_DTYPE(fg) != DTYPE_VNODE)
+		return -1;
+	
+	vp = (struct vnode *)fg->fg_data;
+
+	/* vn_getpath returns 0 for success,
+	   or an error code */
+	return vn_getpath(vp, path, len);
 }

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008-2012 Apple Inc. All rights reserved.
+ * Copyright (c) 2008-2014 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -57,6 +57,7 @@ struct ipf_pktopts {
 #define IPPOF_SELECT_SRCIF	0x8
 #define IPPOF_BOUND_SRCADDR	0x10
 #define IPPOF_SHIFT_IFSCOPE	16
+#define IPPOF_NO_IFF_EXPENSIVE	0x20
 #endif /* PRIVATE */
 
 typedef struct ipf_pktopts *ipf_pktopts_t;

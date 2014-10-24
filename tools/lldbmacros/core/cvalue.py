@@ -280,6 +280,20 @@ class value(object):
     def GetSBValue(self):
         return self._sbval19k84obscure747
     
+    def __getstate__(self):
+        err = lldb.SBError()
+        if self._sbval19k84obscure747_is_ptr:
+            addr = self._sbval19k84obscure747.GetValueAsUnsigned()
+            size = self._sbval19k84obscure747_type.GetPointeeType().GetByteSize()
+        else:
+            addr = self._sbval19k84obscure747.AddressOf().GetValueAsUnsigned()
+            size = self._sbval19k84obscure747_type.GetByteSize()
+        
+        content = LazyTarget.GetProcess().ReadMemory(addr, size, err)
+        if err.fail:
+            content = ''
+        return content
+
     def _GetValueAsSigned(self):
         serr = lldb.SBError()
         retval = self._sbval19k84obscure747.GetValueAsSigned(serr)
@@ -414,9 +428,6 @@ def gettype(target_type):
             NameError  - Incase the type is not identified
     """
     global _value_types_cache
-    # LLDB Somehow does not support finding types for 'struct pmap' while 'pmap' works fine
-    # <rdar://problem/12473003> 
-    target_type = target_type.replace('struct', '') 
     target_type = str(target_type).strip()
     if target_type not in _value_types_cache:
         tmp_type = None
@@ -461,3 +472,13 @@ def islong(x):
         except ValueError:
             return False
     return True
+
+def readmemory(val):
+    """ Returns a string of hex data that is referenced by the value.
+        params: val - a value object. 
+        return: str - string of hex bytes. 
+        raises: TypeError if val is not a valid type
+    """
+    if not type(val) is value:
+        raise TypeError('%s is not of type value' % str(type(val)))
+    return val.__getstate__()

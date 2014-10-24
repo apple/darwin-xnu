@@ -1,6 +1,6 @@
 
 """ Please make sure you read the README COMPLETELY BEFORE reading anything below.
-    It is very critical that you read coding guidelines in Section E in README file. 
+    It is very critical that you read coding guidelines in Section E in README file.
 """
 
 from xnu import *
@@ -12,7 +12,7 @@ import xnudefines
 # Macro: mbuf_stat
 @lldb_command('mbuf_stat')
 def MBufStat(cmd_args=None):
-    """ Print extended mbuf allocator statistics. 
+    """ Print extended mbuf allocator statistics.
     """
     hdr_format = "{0: <16s} {1: >8s} {2: >8s} {3: ^16s} {4: >8s} {5: >12s} {6: >8s} {7: >8s} {8: >8s}"
     print hdr_format.format('class', 'total', 'cached', 'uncached', 'inuse', 'failed', 'waiter', 'notified', 'purge')
@@ -22,7 +22,7 @@ def MBufStat(cmd_args=None):
     num_items = sizeof(kern.globals.mbuf_table) / sizeof(kern.globals.mbuf_table[0])
     ncpus = int(kern.globals.ncpu)
     for i in range(num_items):
-        mbuf = kern.globals.mbuf_table[i]        
+        mbuf = kern.globals.mbuf_table[i]
         mcs = Cast(mbuf.mtbl_stats, 'mb_class_stat_t *')
         mc = mbuf.mtbl_cache
         total = 0
@@ -41,15 +41,41 @@ def MBufStat(cmd_args=None):
                                   mcs.mbcl_notified, mcs.mbcl_purge_cnt
                                   )
 # EndMacro: mbuf_stat
-        
+
+# Macro: mbuf_walk_mleak_traces
+@lldb_command('mbuf_walk_mleak_traces')
+def MbufWalkMleakTraces(cmd_args=None):
+    """ Print mleak_traces
+    """
+    i = 0
+    while (i<256):
+        trace = kern.globals.mleak_traces[i]
+        out_string = ""
+        if (trace.allocs != 0):
+            print "Index: " + str(i)
+            out_string += ":" + str(trace.allocs) + " outstanding allocs\n"
+            out_string += str(trace.hitcount) + " hitcount\n"
+            out_string += str(trace.collisions) + " collisions\n"
+            out_string += "Backtrace saved " + str(trace.depth) + " deep\n"
+            if (trace.depth != 0):
+                cnt = 0
+                while (cnt < trace.depth):
+                    out_string += str(cnt + 1) + ": "
+                    out_string += GetPc(trace.addr[cnt])
+                    out_string += "\n"
+                    cnt += 1
+            print out_string
+        i +=1
+# EndMacro: mbuf_walk_mleak_traces
+
 # Macro: mbuf_walkpkt
 @lldb_command('mbuf_walkpkt')
 def MbufWalkPacket(cmd_args=None):
     """ Walk the mbuf packet chain (m_nextpkt)
     """
-    if (cmd_args == None or len(cmd_args) == 0):
-            print "Missing argument 0 in user function."
-            return
+    if not cmd_args:
+        raise ArgumentError("Missing argument 0 in user function.")
+
     mp = kern.GetValueFromAddress(cmd_args[0], 'mbuf *')
     cnt = 1
     tot = 0
@@ -92,9 +118,9 @@ def MbufWalk(cmd_args=None):
 def MbufBuf2Slab(cmd_args=None):
     """ Given an mbuf object, find its corresponding slab address
     """
-    if (cmd_args == None or len(cmd_args) == 0):
-            print "Missing argument 0 in user function."
-            return
+    if not cmd_args:
+        raise ArgumentError("Missing argument 0 in user function.")
+
     m = kern.GetValueFromAddress(cmd_args[0], 'mbuf *')
     gix = (m - Cast(kern.globals.mbutl, 'char *')) >> MBSHIFT
     slabstbl = kern.globals.slabstbl
@@ -123,7 +149,11 @@ def MbufBuf2Mca(cmd_args=None):
 def MbufSlabs(cmd_args=None):
     """ Print all slabs in the group
     """
+
     out_string = ""
+    if not cmd_args:
+        raise ArgumentError("Invalid arguments passed.")
+
     slg = kern.GetValueFromAddress(cmd_args[0], 'mcl_slabg_t *')
     x = 0
 
@@ -146,9 +176,10 @@ def MbufSlabs(cmd_args=None):
         if (kern.globals.mclaudit != 0):
             ix = (obj - Cast(kern.globals.mbutl, 'char *')) >> 12
             clbase = mbutl + (sizeof(dereference(mbutl)) * ix)
-            mclidx = (obj  - clbase) >> 8
+            mclidx = (obj - clbase) >> 8
             mca = kern.globals.mclaudit[int(ix)].cl_audit[int(mclidx)]
-            ts = mca.mca_tstamp
+            trn = (mca.mca_next_trn + kern.globals.mca_trn_max - 1) % kern.globals.mca_trn_max
+            ts = mca.mca_trns[trn].mca_tstamp
 
         out_string += slabs_string_format.format((x + 1), sl, sl.sl_next, obj, hex(mca), int(ts), int(sl.sl_class), int(sl.sl_refcnt), int(sl.sl_chunks), int(sl.sl_len), hex(sl.sl_flags))
 
@@ -175,9 +206,10 @@ def MbufSlabs(cmd_args=None):
                 if (kern.globals.mclaudit != 0):
                     ix = (obj - Cast(kern.globals.mbutl, 'char *')) >> 12
                     clbase = mbutl + (sizeof(dereference(mbutl)) * ix)
-                    mclidx = (obj  - clbase) >> 8
+                    mclidx = (obj - clbase) >> 8
                     mca = kern.globals.mclaudit[int(ix)].cl_audit[int(mclidx)]
-                    ts = mca.mca_tstamp
+                    trn = (mca.mca_next_trn + kern.globals.mca_trn_max - 1) % kern.globals.mca_trn_max
+                    ts = mca.mca_trns[trn].mca_tstamp
 
                 if (kern.ptrsize == 8):
                     out_string += "                                            " + hex(obj) + " " + hex(mca) + "                    " + str(unsigned(ts)) + "\n"
@@ -228,7 +260,7 @@ def GetMbufBuf2Mca(m):
     #mbutl = Cast(kern.globals.mbutl, 'union mbigcluster *')
     mbutl = cast(kern.globals.mbutl, 'union mbigcluster *')
     clbase = mbutl + (sizeof(dereference(mbutl)) * ix)
-    mclidx = (m  - clbase) >> 8
+    mclidx = (m - clbase) >> 8
     mca = kern.globals.mclaudit[int(ix)].cl_audit[int(mclidx)]
     return str(mca)
 
@@ -236,7 +268,7 @@ def GetMbufWalkAllSlabs(show_a, show_f, show_tr):
     out_string = ""
 
     kern.globals.slabstbl[0]
-    
+
     x = 0
     total = 0
     total_a = 0
@@ -266,13 +298,13 @@ def GetMbufWalkAllSlabs(show_a, show_f, show_tr):
             mbutl = cast(kern.globals.mbutl, 'union mbigcluster *')
             ix = (base - mbutl) >> 12
             clbase = mbutl + (sizeof(dereference(mbutl)) * ix)
-            mclidx = (base  - clbase) >> 8
+            mclidx = (base - clbase) >> 8
             mca = kern.globals.mclaudit[int(ix)].cl_audit[int(mclidx)]
             first = 1
 
             while ((Cast(mca, 'int') != 0) and (unsigned(mca.mca_addr) != 0)):
                 printmca = 0
-                if (mca.mca_uflags & (MB_INUSE|MB_COMP_INUSE)):
+                if (mca.mca_uflags & (MB_INUSE | MB_COMP_INUSE)):
                     total_a = total_a + 1
                     printmca = show_a
                 else:
@@ -302,7 +334,7 @@ def GetMbufWalkAllSlabs(show_a, show_f, show_tr):
 
                     out_string += GetMbufMcaCtype(mca, 0)
 
-                    if (mca.mca_uflags & (MB_INUSE|MB_COMP_INUSE)):
+                    if (mca.mca_uflags & (MB_INUSE | MB_COMP_INUSE)):
                         out_string += "active        "
                     else:
                         out_string += "       freed "
@@ -312,14 +344,18 @@ def GetMbufWalkAllSlabs(show_a, show_f, show_tr):
                     total = total + 1
 
                     if (show_tr != 0):
-                        out_string += "Recent transaction for this buffer (thread: 0x" + hex(mca.mca_thread) + "):\n"
+                        idx = int(show_tr)
+                        trn = (mca.mca_next_trn + idx - 1) % unsigned(kern.globals.mca_trn_max)
+                        out_string += "Transaction " + str(int(trn)) + " at " + str(int(mca.mca_trns[int(trn)].mca_tstamp)) + " by thread: 0x" + str(hex(mca.mca_trns[int(trn)].mca_thread)) + ":\n"
                         cnt = 0
-                        while (cnt < mca.mca_depth):
-                            kgm_pc = mca.mca_stack[int(cnt)]
+                        while (cnt < mca.mca_trns[int(trn)].mca_depth):
+                            kgm_pc = mca.mca_trns[int(trn)].mca_stack[int(cnt)]
                             out_string += str(int(cnt) + 1) + " "
-                            out_string += GetPc(kgm_pc) 
+                            out_string += GetPc(kgm_pc)
                             cnt += 1
 
+                    print out_string
+                    out_string = ""
                 mca = mca.mca_next
 
             y += 1
@@ -337,7 +373,7 @@ def GetMbufWalkAllSlabs(show_a, show_f, show_tr):
 def GetMbufMcaCtype(mca, vopt):
     cp = mca.mca_cache
     mca_class = unsigned(cp.mc_private)
-    csize = kern.globals.mbuf_table[mca_class].mtbl_stats.mbcl_size
+    csize = unsigned(kern.globals.mbuf_table[mca_class].mtbl_stats.mbcl_size)
     done = 0
     out_string = "    "
     if (csize == MSIZE):
@@ -394,7 +430,7 @@ def GetMbufMcaCtype(mca, vopt):
                     out_string += "(paired mbuf, 4K cluster) "
             else:
                 out_string += "M-BCL  "
-                if vopt:                                       
+                if vopt:
                     out_string += "(unpaired mbuf, 4K cluster) "
         else:
             if (mca.mca_uptr):
@@ -430,7 +466,7 @@ def GetMbufMcaCtype(mca, vopt):
 
     out_string += "unknown: " + cp.mc_name
     return out_string
-                  
+
 kgm_pkmod = 0
 kgm_pkmodst = 0
 kgm_pkmoden = 0
@@ -473,8 +509,7 @@ def GetKmodAddrIntAsString(kgm_pc):
 def GetPc(kgm_pc):
     out_string = ""
     mh_execute_addr = int(lldb_run_command('p/x (uintptr_t *)&_mh_execute_header').split('=')[-1].strip(), 16)
-    if (unsigned(kgm_pc) < unsigned(mh_execute_addr) or
-        unsigned(kgm_pc) >= unsigned(kern.globals.vm_kernel_top)):
+    if (unsigned(kgm_pc) < unsigned(mh_execute_addr) or unsigned(kgm_pc) >= unsigned(kern.globals.vm_kernel_top)):
         out_string += GetKmodAddrIntAsString(kgm_pc)
     else:
         out_string += GetSourceInformationForAddress(int(kgm_pc))
@@ -486,7 +521,7 @@ def GetPc(kgm_pc):
 def MbufShowActive(cmd_args=None):
     """ Print all active/in-use mbuf objects
     """
-    if cmd_args != None and len(cmd_args) > 0 :
+    if cmd_args:
         print GetMbufWalkAllSlabs(1, 0, cmd_args[0])
     else:
         print GetMbufWalkAllSlabs(1, 0, 0)
@@ -508,7 +543,7 @@ def MbufShowMca(cmd_args=None):
     """ Print the contents of an mbuf mcache audit structure
     """
     out_string = ""
-    if cmd_args != None and len(cmd_args) > 0 :
+    if cmd_args:
         mca = kern.GetValueFromAddress(cmd_args[0], 'mcache_audit_t *')
         cp = mca.mca_cache
         out_string += "object type:\t"
@@ -530,30 +565,22 @@ def MbufShowMca(cmd_args=None):
             if (mca.mca_uptr != 0):
                 peer_mca = cast(mca.mca_uptr, 'mcache_audit_t *')
                 out_string += "paired mbuf obj :\t" + hex(peer_mca.mca_addr) + " (mca " + hex(peer_mca) + ")\n"
-        
-        out_string += "Recent transaction (tstamp " + str(unsigned(mca.mca_tstamp)) + ", thread " + hex(mca.mca_thread) + ") :\n"
-        cnt = 0
-        while (cnt < mca.mca_depth):
-            kgm_pc = mca.mca_stack[cnt]
-            out_string += "  " + str(cnt + 1) + ".  "
-            out_string += GetPc(kgm_pc)
-            cnt += 1
 
-        if (mca.mca_pdepth > 0):
-            out_string += "previous transaction (tstamp " + str(unsigned(mca.mca_ptstamp)) + ", thread " + hex(mca.mca_pthread) + "):\n"
-        cnt = 0
+        for idx in range(kern.globals.mca_trn_max, 0, -1):
+                trn = (mca.mca_next_trn + idx - 1) % unsigned(kern.globals.mca_trn_max)
+                out_string += "transaction {:d} (tstamp {:d}, thread 0x{:x}):\n".format(trn, mca.mca_trns[trn].mca_tstamp, mca.mca_trns[trn].mca_thread)
+                cnt = 0
+                while (cnt < mca.mca_trns[trn].mca_depth):
+                    kgm_pc = mca.mca_trns[trn].mca_stack[cnt]
+                    out_string += "  " + str(cnt + 1) + ".  "
+                    out_string += GetPc(kgm_pc)
+                    cnt += 1
 
-        while (cnt < mca.mca_pdepth):
-            kgm_pc = mca.mca_pstack[cnt]
-            out_string += "  " + str(cnt + 1) + ".  "
-            out_string += GetPc(kgm_pc)
-            cnt += 1
-
+        msc = cast(mca.mca_contents, 'mcl_saved_contents_t *')
+        msa = addressof(msc.sc_scratch)
         if (mca.mca_uflags & MB_SCVALID):
-            msc = cast(mca.mca_contents, 'mcl_saved_contents_t *')
-            msa = addressof(msc.sc_scratch)
             if (msa.msa_depth > 0):
-                out_string += "Recent scratch transaction (tstamp " + str(unsigned(msa.msa_tstamp)) + ", thread " + hex(msa.msa_thread) + ") :\n"
+                out_string += "Recent scratch transaction (tstamp {:d}, thread 0x{:x}):\n".format(msa.msa_tstamp, msa.msa_thread)
                 cnt = 0
                 while (cnt < msa.msa_depth):
                     kgm_pc = msa.msa_stack[cnt]
@@ -562,14 +589,15 @@ def MbufShowMca(cmd_args=None):
                     cnt += 1
 
             if (msa.msa_pdepth > 0):
-                out_string += "previous scratch transaction (tstamp " + msa.msa_ptstamp + ", thread " + msa.msa_pthread + "):\n"
-        cnt = 0
-        while (cnt < msa.msa_pdepth):
-            kgm_pc = msa.msa_pstack[cnt]
-            out_string += "  " + str(cnt + 1) + ".  "
-            out_string += GetPc(kgm_pc)
-            cnt += 1
-    else :
+                out_string += "previous scratch transaction (tstamp {:d}, thread 0x{:x}):\n".format(msa.msa_ptstamp, msa.msa_pthread)
+        if (msa):
+            cnt = 0
+            while (cnt < msa.msa_pdepth):
+                kgm_pc = msa.msa_pstack[cnt]
+                out_string += "  " + str(cnt + 1) + ".  "
+                out_string += GetPc(kgm_pc)
+                cnt += 1
+    else:
         out_string += "Missing argument 0 in user function."
 
     print out_string
@@ -581,7 +609,7 @@ def MbufShowMca(cmd_args=None):
 def MbufShowAll(cmd_args=None):
     """ Print all mbuf objects
     """
-    print GetMbufWalkAllSlabs(1, 1, 0) 
+    print GetMbufWalkAllSlabs(1, 1, 0)
 # EndMacro: mbuf_showall
 
 # Macro: mbuf_countchain
@@ -589,14 +617,14 @@ def MbufShowAll(cmd_args=None):
 def MbufCountChain(cmd_args=None):
     """ Count the length of an mbuf chain
     """
-    if (cmd_args == None or len(cmd_args) == 0):
-            print "Missing argument 0 in user function."
-            return
+    if not cmd_args:
+        raise ArgumentError("Missing argument 0 in user function.")
+
     mp = kern.GetValueFromAddress(cmd_args[0], 'mbuf *')
 
     pkt = 0
     nxt = 0
-    
+
     while (mp):
         pkt = pkt + 1
         mn = mp.m_hdr.mh_next
@@ -653,9 +681,9 @@ def MbufTraceLeak(cmd_args=None):
         stored information with that trace
         syntax: (lldb) mbuf_traceleak <addr>
     """
-    if (cmd_args == None or len(cmd_args) == 0):
-            print "Missing argument 0 in user function."
-            return
+    if not cmd_args:
+        raise ArgumentError("Missing argument 0 in user function.")
+
     trace = kern.GetValueFromAddress(cmd_args[0], 'mtrace *')
     print GetMbufTraceLeak(trace)
 # EndMacro: mbuf_traceleak
@@ -666,9 +694,9 @@ def MbufTraceLeak(cmd_args=None):
 def McacheWalkObject(cmd_args=None):
     """ Given a mcache object address, walk its obj_next pointer
     """
-    if (cmd_args == None or len(cmd_args) == 0):
-            print "Missing argument 0 in user function."
-            return
+    if not cmd_args:
+        raise ArgumentError("Missing argument 0 in user function.")
+
     out_string = ""
     p = kern.GetValueFromAddress(cmd_args[0], 'mcache_obj_t *')
     cnt = 1
@@ -693,15 +721,15 @@ def McacheStat(cmd_args=None):
         mcache_stat_format_string = "{0:<24s} {1:>8s} {2:>20s} {3:>5s} {4:>5s} {5:>20s} {6:>30s} {7:>18s}"
     else:
         mcache_stat_format_string = "{0:<24s} {1:>8s} {2:>12s} {3:>5s} {4:>5s} {5:>12s} {6:>30s} {7:>18s}"
-    
+
     if (kern.ptrsize == 8):
         mcache_stat_data_format_string = "{0:<24s} {1:>12s} {2:>20s} {3:>5s} {4:>5s} {5:>22s} {6:>12d} {7:>8d} {8:>8d} {9:>18d}"
     else:
         mcache_stat_data_format_string = "{0:<24s} {1:>12s} {2:>12s} {3:>5s} {4:>5s} {5:>14s} {6:>12d} {7:>8d} {8:>8d} {9:>18d}"
-    
-    out_string += mcache_stat_format_string.format("cache name", "cache state" , "cache addr", "buf size", "buf align", "backing zone", "wait     nowait     failed", "bufs incache")
+
+    out_string += mcache_stat_format_string.format("cache name", "cache state", "cache addr", "buf size", "buf align", "backing zone", "wait     nowait     failed", "bufs incache")
     out_string += "\n"
-   
+
     ncpu = int(kern.globals.ncpu)
     while mc != 0:
         bktsize = mc.mc_cpu[0].cc_bktsize
@@ -720,7 +748,7 @@ def McacheStat(cmd_args=None):
                 backing_zone = "            custom"
             else:
                 backing_zone = "    custom"
-        
+
         total = 0
         total += mc.mc_full.bl_total * bktsize
         n = 0
@@ -772,7 +800,7 @@ def McacheShowCache(cmd_args=None):
     out_string += "                           " + str(total) + "\n\n"
     total += cp.mc_full.bl_total * bktsize
 
-    out_string += "Total # of full buckets (" + str(int(bktsize)) + " objs/bkt):\t" + str(int(cp.mc_full.bl_total)) +"\n"
+    out_string += "Total # of full buckets (" + str(int(bktsize)) + " objs/bkt):\t" + str(int(cp.mc_full.bl_total)) + "\n"
     out_string += "Total # of objects cached:\t\t" + str(total) + "\n"
     print out_string
 # EndMacro: mcache_showcache

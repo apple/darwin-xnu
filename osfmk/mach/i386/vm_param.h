@@ -95,15 +95,17 @@
 #define I386_PGBYTES		4096		/* bytes per 80386 page */
 #define I386_PGSHIFT		12		/* bitshift for pages */
 
-#ifdef PRIVATE
-#define KERNEL_PAGE_SIZE	I386_PGBYTES
-#define KERNEL_PAGE_SHIFT	I386_PGSHIFT
-#define KERNEL_PAGE_MASK	(KERNEL_PAGE_SIZE-1)
-#endif
-
 #define	PAGE_SIZE		I386_PGBYTES
 #define	PAGE_SHIFT		I386_PGSHIFT
 #define	PAGE_MASK		(PAGE_SIZE - 1)
+
+#define PAGE_MAX_SHIFT          PAGE_SHIFT
+#define PAGE_MAX_SIZE           PAGE_SIZE
+#define PAGE_MAX_MASK           PAGE_MASK
+
+#define PAGE_MIN_SHIFT          PAGE_SHIFT
+#define PAGE_MIN_SIZE           PAGE_SIZE
+#define PAGE_MIN_MASK           PAGE_MASK
 
 #define I386_LPGBYTES		2*1024*1024	/* bytes per large page */
 #define I386_LPGSHIFT		21		/* bitshift for large pages */
@@ -162,6 +164,9 @@
 
 #ifdef	KERNEL_PRIVATE 
 
+#define TEST_PAGE_SIZE_16K      FALSE
+#define TEST_PAGE_SIZE_4K       TRUE
+
 /* Kernel-wide values */
 
 #define KB		(1024ULL)		
@@ -172,7 +177,7 @@
  * Maximum physical memory supported.
  */
 #define	K32_MAXMEM	(32*GB)
-#define	K64_MAXMEM	(128*GB)
+#define	K64_MAXMEM	(252*GB)
 #define KERNEL_MAXMEM	K64_MAXMEM
 
 /*

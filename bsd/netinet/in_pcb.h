@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2013 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2014 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -81,6 +81,13 @@
 #endif /* BSD_KERNEL_PRIVATE */
 
 #include <netinet6/ipsec.h> /* for IPSEC */
+#if NECP
+#include <net/necp.h>
+#endif
+
+#if IPSEC
+#include <netinet6/ipsec.h> /* for IPSEC */
+#endif
 
 #ifdef BSD_KERNEL_PRIVATE
 /*
@@ -206,20 +213,33 @@ struct inpcb {
 #if IPSEC
 	struct inpcbpolicy *inp_sp;	/* for IPSec */
 #endif /* IPSEC */
+#if NECP
+	struct {
+		char *inp_domain;
+		char *inp_account;
+	} inp_necp_attributes;
+	struct necp_inpcb_result inp_policyresult;
+#endif
 	struct inp_stat	*inp_stat;
 	struct inp_stat	*inp_cstat;	/* cellular data */
 	struct inp_stat	*inp_wstat;	/* Wi-Fi data */
+	struct inp_stat	*inp_Wstat;	/* Wired data */
 	u_int8_t inp_stat_store[sizeof (struct inp_stat) + sizeof (u_int64_t)];
 	u_int8_t inp_cstat_store[sizeof (struct inp_stat) + sizeof (u_int64_t)];
 	u_int8_t inp_wstat_store[sizeof (struct inp_stat) + sizeof (u_int64_t)];
+	u_int8_t inp_Wstat_store[sizeof (struct inp_stat) + sizeof (u_int64_t)];
+	uint32_t inp_nstat_refcnt __attribute__((aligned(4)));
 };
 
-#define	INP_ADD_STAT(_inp, _cnt_cellular, _cnt_wifi, _a, _n) do {	\
+#define	INP_ADD_STAT(_inp, _cnt_cellular, _cnt_wifi, _cnt_wired, _a, _n)\
+do {									\
 	locked_add_64(&((_inp)->inp_stat->_a), (_n));			\
 	if (_cnt_cellular)						\
 		locked_add_64(&((_inp)->inp_cstat->_a), (_n));		\
 	if (_cnt_wifi)							\
 		locked_add_64(&((_inp)->inp_wstat->_a), (_n));		\
+	if (_cnt_wired)							\
+		locked_add_64(&((_inp)->inp_Wstat->_a), (_n));		\
 } while (0);
 #endif /* BSD_KERNEL_PRIVATE */
 
@@ -422,6 +442,7 @@ struct	xinpcb_n {
 		short	inp6_hops;
 	} inp_depend6;
 	u_int32_t		inp_flowhash;
+	u_int32_t	inp_flags2;
 };
 #endif /* PRIVATE */
 
@@ -575,6 +596,13 @@ struct inpcbinfo {
 #define	INP_WAIT_FOR_IF_FEEDBACK(_inp_) \
 	(((_inp_)->inp_flags & (INP_FLOW_CONTROLLED | INP_FLOW_SUSPENDED)) != 0)
 
+#define INP_NO_CELLULAR(_inp) \
+	((_inp)->inp_flags & INP_NO_IFT_CELLULAR)
+#define INP_NO_EXPENSIVE(_inp) \
+	((_inp)->inp_flags2 & INP2_NO_IFF_EXPENSIVE)
+#define	INP_AWDL_UNRESTRICTED(_inp) \
+	((_inp)->inp_flags2 & INP2_AWDL_UNRESTRICTED)
+
 #endif /* BSD_KERNEL_PRIVATE */
 
 /*
@@ -646,7 +674,10 @@ struct inpcbinfo {
  */
 #define	INP2_TIMEWAIT		0x00000001 /* in TIMEWAIT */
 #define	INP2_IN_FCTREE		0x00000002 /* in inp_fc_tree */
-#define	INP2_WANT_FLOW_DIVERT	0x00000004 /* flow divert is desired */
+#define	INP2_WANT_APP_POLICY	0x00000004 /* necp app policy check is desired */
+#define	INP2_NO_IFF_EXPENSIVE	0x00000008 /* do not use expensive interface */
+#define	INP2_INHASHLIST		0x00000010 /* pcb is in inp_hash list */
+#define	INP2_AWDL_UNRESTRICTED	0x00000020 /* AWDL restricted mode allowed */
 
 /*
  * Flags passed to in_pcblookup*() functions.
@@ -724,6 +755,8 @@ extern void in_pcbremlists(struct inpcb *);
 extern void inpcb_to_compat(struct inpcb *, struct inpcb_compat *);
 extern void inpcb_to_xinpcb64(struct inpcb *, struct xinpcb64 *);
 extern int get_pcblist_n(short, struct sysctl_req *, struct inpcbinfo *);
+#define	INPCB_GET_PORTS_USED_WILDCARDOK	0x1
+#define	INPCB_GET_PORTS_USED_NOWAKEUPOK	0x2
 extern void inpcb_get_ports_used(u_int32_t, int, u_int32_t, bitstr_t *,
     struct inpcbinfo *);
 #define	INPCB_OPPORTUNISTIC_THROTTLEON	0x0001
@@ -736,10 +769,15 @@ extern void inp_route_copyin(struct inpcb *, struct route *);
 extern int inp_bindif(struct inpcb *, unsigned int, struct ifnet **);
 extern void inp_set_nocellular(struct inpcb *);
 extern void inp_clear_nocellular(struct inpcb *);
-#if FLOW_DIVERT
-extern void inp_set_flow_divert(struct inpcb *);
-extern void inp_clear_flow_divert(struct inpcb *);
-#endif /* FLOW_DIVERT */
+extern void inp_set_noexpensive(struct inpcb *);
+extern void inp_set_awdl_unrestricted(struct inpcb *);
+extern boolean_t inp_get_awdl_unrestricted(struct inpcb *);
+extern void inp_clear_awdl_unrestricted(struct inpcb *);
+#if NECP
+extern void inp_update_necp_policy(struct inpcb *, struct sockaddr *, struct sockaddr *, u_int);
+extern void inp_set_want_app_policy(struct inpcb *);
+extern void inp_clear_want_app_policy(struct inpcb *);
+#endif /* NECP */
 extern u_int32_t inp_calc_flowhash(struct inpcb *);
 extern void inp_reset_fc_state(struct inpcb *);
 extern int inp_set_fc_state(struct inpcb *, int advcode);
@@ -749,7 +787,8 @@ extern int inp_flush(struct inpcb *, int);
 extern int inp_findinpcb_procinfo(struct inpcbinfo *, uint32_t, struct so_procinfo *);
 extern void inp_get_soprocinfo(struct inpcb *, struct so_procinfo *);
 extern int inp_update_policy(struct inpcb *);
-extern boolean_t inp_restricted(struct inpcb *, struct ifnet *);
+extern boolean_t inp_restricted_recv(struct inpcb *, struct ifnet *);
+extern boolean_t inp_restricted_send(struct inpcb *, struct ifnet *);
 #endif /* BSD_KERNEL_PRIVATE */
 #ifdef KERNEL_PRIVATE
 /* exported for PPP */

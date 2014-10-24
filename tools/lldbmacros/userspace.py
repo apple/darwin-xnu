@@ -2,26 +2,12 @@ from xnu import *
 from utils import *
 from process import *
 from pmap import *
-
-def _GetIntegerDataFromTask(u_ptr, task_abi):
-    """
-        params:
-            u_ptr : int - pointer in user memory
-            task_abi : int - what kind of user program is running
-        returns:
-            int - value stored at specified u_ptr.
-    """
-    if kern.arch != "x86_64":
-        raise ValueError("This function does not work for non x86_64 arch")
-    if task_abi == 0xf :
-        return unsigned(dereference(kern.GetValueFromAddress(u_ptr, 'uint64_t *')))
-    else:
-        return unsigned(dereference(kern.GetValueFromAddress(u_ptr, 'uint32_t *')))
+import struct
 
 def GetBinaryNameForPC(pc_val, user_lib_info = None):
     """ find the binary in user_lib_info that the passed pc_val falls in range of.
         params:
-            pc_val : int - integer form of the pc address 
+            pc_val : int - integer form of the pc address
             user_lib_info: [] of [] which hold start, end, binary name
         returns:
             str - Name of binary or "unknown" if not found.
@@ -55,12 +41,14 @@ def ShowX86UserStack(thread, user_lib_info = None):
         user_ip = iss.uss.ss_64.isf.rip
         user_frame = iss.uss.ss_64.rbp
         user_abi_ret_offset = 8
+        user_abi_type = "uint64_t"
     else:
         debuglog("user process is 32 bit")
         user_ip = iss.uss.ss_32.eip
         user_frame = iss.uss.ss_32.ebp
         user_abi_ret_offset = 4
-    
+        user_abi_type = "uint32_t"
+
     if user_ip == 0:
         print "This activation does not appear to have a valid user context."
         return False
@@ -68,11 +56,6 @@ def ShowX86UserStack(thread, user_lib_info = None):
     cur_ip = user_ip
     cur_frame = user_frame
     debuglog("ip= 0x%x , fr = 0x%x " % (cur_ip, cur_frame))
-    kdp_pmap_addr = unsigned(addressof(kern.globals.kdp_pmap))
-    if not WriteInt64ToMemoryAddress(unsigned(thread.task.map.pmap), kdp_pmap_addr):
-        print "Failed to write in kdp_pmap = 0x{0:0>16x} value.".format(thread.task.map.pmap)
-        return False
-    debuglog("newpmap = 0x{:x}".format(kern.globals.kdp_pmap))
 
     frameformat = "{0:d} FP: 0x{1:x} PC: 0x{2:x}"
     if user_lib_info is not None:
@@ -80,19 +63,17 @@ def ShowX86UserStack(thread, user_lib_info = None):
     print frameformat.format(0, cur_frame, cur_ip, GetBinaryNameForPC(cur_ip, user_lib_info))
 
     print kern.Symbolicate(cur_ip)
-    tmp_frame = unsigned(cur_frame)
-    prev_frame = _GetIntegerDataFromTask(tmp_frame, abi)
-    prev_ip = _GetIntegerDataFromTask(tmp_frame + user_abi_ret_offset, abi)
-    frameno = 1
-    while prev_frame and prev_frame != 0x0000000800000008:
-        print frameformat.format(frameno, prev_frame, prev_ip, GetBinaryNameForPC(prev_ip, user_lib_info))
-        print kern.Symbolicate(prev_ip)
-        prev_ip = _GetIntegerDataFromTask(prev_frame + user_abi_ret_offset, abi)
-        prev_frame = _GetIntegerDataFromTask(prev_frame, abi)
-        frameno +=1
-    if not WriteInt64ToMemoryAddress(0, kdp_pmap_addr):
-        print "Failed to write in kdp_pmap = 0"
-        return False
+
+    frameno = 0
+    while True:
+        frameno = frameno + 1
+        frame = GetUserDataAsString(thread.task, unsigned(cur_frame), user_abi_ret_offset*2)
+        cur_ip = _ExtractDataFromString(frame, user_abi_ret_offset, user_abi_type)
+        cur_frame = _ExtractDataFromString(frame, 0, user_abi_type)
+        if not cur_frame or cur_frame == 0x0000000800000008:
+            break
+        print frameformat.format(frameno, cur_frame, cur_ip, GetBinaryNameForPC(cur_ip, user_lib_info))
+        print kern.Symbolicate(cur_ip)
     return
 
 def _PrintARMUserStack(task, cur_pc, cur_fp, framesize, frametype, frameformat, user_lib_info=None):
@@ -120,6 +101,31 @@ def ShowARMUserStack(thread, user_lib_info = None):
     frametype = "uint32_t"
     _PrintARMUserStack(thread.task, cur_pc, cur_fp, framesize, frametype, frameformat, user_lib_info=user_lib_info)
 
+def ShowARM64UserStack(thread, user_lib_info = None):
+    SAVED_STATE_FLAVOR_ARM=20
+    SAVED_STATE_FLAVOR_ARM64=21
+    upcb = thread.machine.upcb
+    flavor = upcb.ash.flavor
+    frameformat = "{0:>2d} FP: 0x{1:x}  PC: 0x{2:x}"
+    if flavor == SAVED_STATE_FLAVOR_ARM64:
+        cur_pc = unsigned(upcb.uss.ss_64.pc)
+        cur_fp = unsigned(upcb.uss.ss_64.fp)
+        if user_lib_info is not None:
+            frameformat = "{0:>2d} {3: <30s}  0x{2:x}"
+        framesize = 16
+        frametype = "uint64_t"
+    elif flavor == SAVED_STATE_FLAVOR_ARM:
+        cur_pc = unsigned(upcb.uss.ss_32.pc)
+        cur_fp = unsigned(upcb.uss.ss_32.r[7])
+        if user_lib_info is not None:
+            frameformat = "{0:>2d}: {3: <30s}  0x{2:x}"
+        framesize = 8
+        frametype = "uint32_t"
+    else:
+        raise RuntimeError("Thread {0} has an invalid flavor {1}".format(unsigned(thread), flavor))
+
+    _PrintARMUserStack(thread.task, cur_pc, cur_fp, framesize, frametype, frameformat, user_lib_info=user_lib_info)
+
 
 @lldb_command('showthreaduserstack')
 def ShowThreadUserStack(cmd_args=None):
@@ -134,6 +140,45 @@ def ShowThreadUserStack(cmd_args=None):
         ShowX86UserStack(thread)
     elif kern.arch == "arm":
         ShowARMUserStack(thread)
+    elif kern.arch == "arm64":
+        ShowARM64UserStack(thread)
+    return True
+
+@lldb_command('printuserdata','X')
+def PrintUserspaceData(cmd_args=None, cmd_options={}):
+    """ Read userspace data for given task and print based on format provided.
+        Syntax: (lldb) printuserdata <task_t> <uspace_address> <format_specifier>
+        params:
+            <task_t> : pointer to task
+            <uspace_address> : address to user space memory
+            <format_specifier> : String representation for processing the data and printing it.
+                                 e.g Q -> unsigned long long, q-> long long, I-> unsigned int, i->int
+        options:
+            -X : print all values in hex.
+    """
+
+    if not cmd_args or len(cmd_args) < 3:
+        raise ArgumentError("Insufficient arguments")
+    task = kern.GetValueFromAddress(cmd_args[0], 'task *')
+    uspace_addr = ArgumentStringToInt(cmd_args[1])
+    format_specifier_str = cmd_args[2]
+    user_data_len = 0
+    try:
+        user_data_len = struct.calcsize(format_specifier_str)
+    except Exception, e:
+        raise ArgumentError("Invalid format specifier provided.")
+
+    user_data_string = GetUserDataAsString(task, uspace_addr, user_data_len)
+    if not user_data_string:
+        print "Could not read any data from userspace address."
+        return False
+    upacked_data = struct.unpack(format_specifier_str, user_data_string)
+    for i in range(len(upacked_data)):
+        if "-X" in cmd_options:
+            print "%d: " % i + hex(upacked_data[i])
+        else:
+            print "%d: " % i + str(upacked_data[i])
+
     return True
 
 @lldb_command('showtaskuserstacks')
@@ -142,7 +187,7 @@ def ShowTaskUserStacks(cmd_args=None):
         Syntax: (lldb) showtaskuserstacks <task_t>
         The format is compatible with CrashTracer. You can also use the speedtracer plugin as follows
         (lldb) showtaskuserstacks <task_t> -p speedtracer
-        
+
         Note: the address ranges are approximations. Also the list may not be completely accurate. This command expects memory read failures
         and hence will skip a library if unable to read information. Please use your good judgement and not take the output as accurate
     """
@@ -156,7 +201,7 @@ def ShowTaskUserStacks(cmd_args=None):
     crash_report_format_string = """\
 Process:         {pid: <10d}
 Path:            {path: <50s}
-Identifier:      {pname: <30s}                       
+Identifier:      {pname: <30s}
 Version:         ??? (???)
 Code Type:       {parch: <20s}
 Parent Process:  {ppname: >20s}[{ppid:d}]
@@ -180,7 +225,7 @@ Synthetic crash log generated from Kernel userstacks
     is_64 = False
     if pval.p_flag & 0x4 :
         is_64 = True
-    
+
     parch_s = ""
     if kern.arch == "x86_64" or kern.arch == "i386":
         osversion = "Mac OS X 10.8"
@@ -215,7 +260,9 @@ Synthetic crash log generated from Kernel userstacks
     printthread_user_stack_ptr = ShowX86UserStack
     if kern.arch == "arm":
         printthread_user_stack_ptr = ShowARMUserStack
-    
+    elif kern.arch =="arm64":
+        printthread_user_stack_ptr = ShowARM64UserStack
+
     counter = 0
     for thval in IterateQueue(task.threads, 'thread *', 'task_threads'):
         print "\nThread {0:d} name:0x{1:x}\nThread {0:d}:".format(counter, thval)
@@ -253,7 +300,7 @@ def GetUserDataAsString(task, addr, size):
         if not WriteInt64ToMemoryAddress(0, kdp_pmap_addr):
             debuglog("Failed to reset in kdp_pmap from GetUserDataAsString.")
             return ""
-    elif kern.arch in ['arm'] and long(size) < (2 * kern.globals.page_size):
+    elif kern.arch in ['arm', 'arm64', 'x86_64'] and long(size) < (2 * kern.globals.page_size):
         # Without the benefit of a KDP stub on the target, try to
         # find the user task's physical mapping and memcpy the data.
         # If it straddles a page boundary, copy in two passes
@@ -284,7 +331,7 @@ def GetUserDataAsString(task, addr, size):
                 debuglog("Not mapped task 0x{:x} address 0x{:x}".format(task, addr))
                 return ""
             range2_in_kva = kern.PhysToKernelVirt(paddr_range2)
-            content += LazyTarget.GetProcess().ReadMemory(range1_in_kva, range1_size, err)
+            content += LazyTarget.GetProcess().ReadMemory(range2_in_kva, range2_size, err)
             if not err.Success():
                 raise RuntimeError("Failed to read process memory. Error: " + err.description)
     else:
@@ -321,7 +368,7 @@ def _ExtractDataFromString(strdata, offset, data_type, length=0):
     return struct.unpack(unpack_str, strdata[offset:(offset + length)])[0]
 
 def GetPathForImage(task, path_address):
-    """ Maps 32 bytes at a time and packs as string 
+    """ Maps 32 bytes at a time and packs as string
         params:
             task: obj - referencing task to read data from
             path_address: int - address where the image path is stored
@@ -394,7 +441,7 @@ def GetImageInfo(task, mh_image_address, mh_path_address, approx_end_address=Non
     retval = None
     while lc_idx < mh_ncmds:
         # 24 bytes is the size of uuid_command
-        lcmd_data = GetUserDataAsString(task, lc_address, 24) 
+        lcmd_data = GetUserDataAsString(task, lc_address, 24)
         lc_cmd = _ExtractDataFromString(lcmd_data, 4 * 0, "uint32_t")
         lc_cmd_size = _ExtractDataFromString(lcmd_data, 4 * 1, "uint32_t")
         lc_data = _ExtractDataFromString(lcmd_data, 4*2, "string", 16)
@@ -406,13 +453,14 @@ def GetImageInfo(task, mh_image_address, mh_path_address, approx_end_address=Non
             # need to print the uuid now.
             uuid_data = [ord(x) for x in lc_data]
             found_uuid_data = True
-            uuid_out_string = "{a[0]:02X}{a[1]:02X}{a[2]:02X}{a[3]:02X}-{a[4]:02X}{a[5]:02X}-{a[6]:02X}{a[7]:02X}-{a[8]:02X}{a[9]:02X}-{a[10]:02X}{a[11]:02X}{a[12]:02X}{a[13]:02X}{a[14]:02X}{a[15]:02X}".format(a=uuid_data)            
+            uuid_out_string = "{a[0]:02X}{a[1]:02X}{a[2]:02X}{a[3]:02X}-{a[4]:02X}{a[5]:02X}-{a[6]:02X}{a[7]:02X}-{a[8]:02X}{a[9]:02X}-{a[10]:02X}{a[11]:02X}{a[12]:02X}{a[13]:02X}{a[14]:02X}{a[15]:02X}".format(a=uuid_data)
             #also print image path
             path_out_string = GetPathForImage(task, mh_path_address)
             path_base_name = path_out_string.split("/")[-1]
             retval = print_format.format(mh_image_address, image_end_load_address, path_base_name, uuid_out_string, path_out_string)
         elif lc_cmd == 0xe:
             ShowTaskUserLibraries.exec_load_path = lc_address + _ExtractDataFromString(lcmd_data, 4*2, "uint32_t")
+            debuglog("Found load command to be 0xe for address %s" % hex(ShowTaskUserLibraries.exec_load_path))
         lc_address = lc_address + lc_cmd_size
         lc_idx += 1
 
@@ -443,16 +491,22 @@ def ShowTaskUserLibraries(cmd_args=None):
     task = kern.GetValueFromAddress(cmd_args[0], 'task_t')
     is_task_64 = int(task.t_flags) & 0x1
     dyld_all_image_infos_address = unsigned(task.all_image_info_addr)
+    debuglog("dyld_all_image_infos_address = %s" % hex(dyld_all_image_infos_address))
+
     cur_data_offset = 0
     if dyld_all_image_infos_address == 0:
         print "No dyld shared library information available for task"
         return False
+    
+    debuglog("Extracting version information.")
     vers_info_data = GetUserDataAsString(task, dyld_all_image_infos_address, 112)
     version = _ExtractDataFromString(vers_info_data, cur_data_offset, "uint32_t")
     cur_data_offset += 4
-    if version > 12:
+    if version > 14:
         print "Unknown dyld all_image_infos version number %d" % version
     image_info_count = _ExtractDataFromString(vers_info_data, cur_data_offset, "uint32_t")
+    debuglog("version = %d count = %d is_task_64 = %s" % (version, image_info_count, repr(is_task_64)))
+
     ShowTaskUserLibraries.exec_load_path = 0
     if is_task_64:
         image_info_size = 24
@@ -471,6 +525,7 @@ def ShowTaskUserLibraries(cmd_args=None):
     image_info_list = []
     while i < image_info_count:
         image_info_address = image_info_array_address + i * image_info_size
+        debuglog("i = %d, image_info_address = %s, image_info_size = %d" % (i, hex(image_info_address), image_info_size))
         n_im_info_addr = None
         img_data = ""
         try:
@@ -478,20 +533,22 @@ def ShowTaskUserLibraries(cmd_args=None):
         except Exception, e:
             debuglog("Failed to read user data for task 0x{:x} addr 0x{:x}, exception {:s}".format(task, image_info_address, str(e)))
             pass
+
         if is_task_64:
             image_info_addr = _ExtractDataFromString(img_data, 0, "uint64_t")
             image_info_path = _ExtractDataFromString(img_data, 8, "uint64_t")
         else:
             image_info_addr = _ExtractDataFromString(img_data, 0, "uint32_t")
             image_info_path = _ExtractDataFromString(img_data, 4, "uint32_t")
-        
+
         if image_info_addr :
+            debuglog("Found image: image_info_addr = %s, image_info_path= %s" % (hex(image_info_addr), hex(image_info_path)))
             image_info_list.append((image_info_addr, image_info_path))
         i += 1
-    
+
     image_info_list.sort()
-    num_images_found = len(image_info_list)    
-    
+    num_images_found = len(image_info_list)
+
     for ii in range(num_images_found):
         n_im_info_addr = dyld_load_address
         if ii + 1 < num_images_found:
@@ -509,9 +566,10 @@ def ShowTaskUserLibraries(cmd_args=None):
         except Exception,e:
             if config['debug']:
                 raise e
-    
-    # load_path might get set when the main executable is processed. 
-    if ShowTaskUserLibraries.exec_load_path != 0: 
+
+    # load_path might get set when the main executable is processed.
+    if ShowTaskUserLibraries.exec_load_path != 0:
+        debuglog("main executable load_path is set.")
         image_print_s = GetImageInfo(task, dyld_load_address, ShowTaskUserLibraries.exec_load_path)
         if len(image_print_s) > 0:
             print image_print_s
@@ -519,7 +577,197 @@ def ShowTaskUserLibraries(cmd_args=None):
                     ShowTaskUserLibraries.exec_load_path, image_print_s))
         else:
             debuglog("Failed to print image for main executable for task 0x{:x} dyld_load_addr 0x{:x}".format(task, dyld_load_address))
+    else:
+        debuglog("Falling back to vm entry method for finding executable load address")
+        print "# NOTE: Failed to find executable using all_image_infos. Using fuzzy match to find best possible load address for executable."
+        ShowTaskLoadInfo([cmd_args[0]])
     return
+
+@lldb_command("showtaskuserdyldinfo")
+def ShowTaskUserDyldInfo(cmd_args=None):
+    """ Inspect the dyld global info for the given user task & print out all fields including error messages
+        Syntax: (lldb)showtaskuserdyldinfo <task_t>
+    """
+    if cmd_args == None or len(cmd_args) < 1:
+        print "No arguments passed"
+        print ShowTaskUserDyldInfo.__doc__.strip()
+        return
+
+    out_str = ""
+    task = kern.GetValueFromAddress(cmd_args[0], 'task_t')
+    is_task_64 = int(task.t_flags) & 0x1
+    dyld_all_image_infos_address = unsigned(task.all_image_info_addr)
+    if dyld_all_image_infos_address == 0:
+        print "No dyld shared library information available for task"
+        return False
+    vers_info_data = GetUserDataAsString(task, dyld_all_image_infos_address, 112)
+    dyld_all_image_infos_version = _ExtractDataFromString(vers_info_data, 0, "uint32_t")
+    if dyld_all_image_infos_version > 14:
+        out_str += "Unknown dyld all_image_infos version number %d" % dyld_all_image_infos_version
+
+    # Find fields by byte offset. We assume at least version 9 is supported
+    if is_task_64:
+        dyld_all_image_infos_infoArrayCount = _ExtractDataFromString(vers_info_data, 4, "uint32_t")
+        dyld_all_image_infos_infoArray = _ExtractDataFromString(vers_info_data, 8, "uint64_t")
+        dyld_all_image_infos_notification = _ExtractDataFromString(vers_info_data, 16, "uint64_t")
+        dyld_all_image_infos_processDetachedFromSharedRegion = _ExtractDataFromString(vers_info_data, 24, "string")
+        dyld_all_image_infos_libSystemInitialized = _ExtractDataFromString(vers_info_data, 25, "string")
+        dyld_all_image_infos_dyldImageLoadAddress = _ExtractDataFromString(vers_info_data, 32, "uint64_t")
+        dyld_all_image_infos_jitInfo = _ExtractDataFromString(vers_info_data, 40, "uint64_t")
+        dyld_all_image_infos_dyldVersion = _ExtractDataFromString(vers_info_data, 48, "uint64_t")
+        dyld_all_image_infos_errorMessage = _ExtractDataFromString(vers_info_data, 56, "uint64_t")
+        dyld_all_image_infos_terminationFlags = _ExtractDataFromString(vers_info_data, 64, "uint64_t")
+        dyld_all_image_infos_coreSymbolicationShmPage = _ExtractDataFromString(vers_info_data, 72, "uint64_t")
+        dyld_all_image_infos_systemOrderFlag = _ExtractDataFromString(vers_info_data, 80, "uint64_t")
+        dyld_all_image_infos_uuidArrayCount = _ExtractDataFromString(vers_info_data, 88, "uint64_t")
+        dyld_all_image_infos_uuidArray = _ExtractDataFromString(vers_info_data, 96, "uint64_t")
+        dyld_all_image_infos_dyldAllImageInfosAddress = _ExtractDataFromString(vers_info_data, 104, "uint64_t")
+    else:
+        dyld_all_image_infos_infoArrayCount = _ExtractDataFromString(vers_info_data, 4, "uint32_t")
+        dyld_all_image_infos_infoArray = _ExtractDataFromString(vers_info_data, 8, "uint32_t")
+        dyld_all_image_infos_notification = _ExtractDataFromString(vers_info_data, 12, "uint32_t")
+        dyld_all_image_infos_processDetachedFromSharedRegion = _ExtractDataFromString(vers_info_data, 16, "string")
+        dyld_all_image_infos_libSystemInitialized = _ExtractDataFromString(vers_info_data, 17, "string")
+        dyld_all_image_infos_dyldImageLoadAddress = _ExtractDataFromString(vers_info_data, 20, "uint32_t")
+        dyld_all_image_infos_jitInfo = _ExtractDataFromString(vers_info_data, 24, "uint32_t")
+        dyld_all_image_infos_dyldVersion = _ExtractDataFromString(vers_info_data, 28, "uint32_t")
+        dyld_all_image_infos_errorMessage = _ExtractDataFromString(vers_info_data, 32, "uint32_t")
+        dyld_all_image_infos_terminationFlags = _ExtractDataFromString(vers_info_data, 36, "uint32_t")
+        dyld_all_image_infos_coreSymbolicationShmPage = _ExtractDataFromString(vers_info_data, 40, "uint32_t")
+        dyld_all_image_infos_systemOrderFlag = _ExtractDataFromString(vers_info_data, 44, "uint32_t")
+        dyld_all_image_infos_uuidArrayCount = _ExtractDataFromString(vers_info_data, 48, "uint32_t")
+        dyld_all_image_infos_uuidArray = _ExtractDataFromString(vers_info_data, 52, "uint32_t")
+        dyld_all_image_infos_dyldAllImageInfosAddress = _ExtractDataFromString(vers_info_data, 56, "uint32_t")
+
+    dyld_all_imfo_infos_slide = (dyld_all_image_infos_address - dyld_all_image_infos_dyldAllImageInfosAddress)
+    dyld_all_image_infos_dyldVersion_postslide = (dyld_all_image_infos_dyldVersion + dyld_all_imfo_infos_slide)
+
+    path_out = GetPathForImage(task, dyld_all_image_infos_dyldVersion_postslide)
+    out_str += "[dyld-{:s}]\n".format(path_out)
+    out_str += "version \t\t\t\t: {:d}\n".format(dyld_all_image_infos_version)
+    out_str += "infoArrayCount \t\t\t\t: {:d}\n".format(dyld_all_image_infos_infoArrayCount)
+    out_str += "infoArray \t\t\t\t: {:#x}\n".format(dyld_all_image_infos_infoArray)
+    out_str += "notification \t\t\t\t: {:#x}\n".format(dyld_all_image_infos_notification)
+    
+    out_str += "processDetachedFromSharedRegion \t: "
+    if dyld_all_image_infos_processDetachedFromSharedRegion != "":
+        out_str += "TRUE\n".format(dyld_all_image_infos_processDetachedFromSharedRegion)
+    else:
+        out_str += "FALSE\n"
+    
+    out_str += "libSystemInitialized \t\t\t: "
+    if dyld_all_image_infos_libSystemInitialized != "":
+        out_str += "TRUE\n".format(dyld_all_image_infos_libSystemInitialized)
+    else:
+        out_str += "FALSE\n"
+        
+    out_str += "dyldImageLoadAddress \t\t\t: {:#x}\n".format(dyld_all_image_infos_dyldImageLoadAddress)
+    out_str += "jitInfo \t\t\t\t: {:#x}\n".format(dyld_all_image_infos_jitInfo)
+    out_str += "\ndyldVersion \t\t\t\t: {:#x}".format(dyld_all_image_infos_dyldVersion)
+    if (dyld_all_imfo_infos_slide != 0):
+        out_str += " (currently {:#x})\n".format(dyld_all_image_infos_dyldVersion_postslide)
+    else:
+        out_str += "\n"
+
+    out_str += "errorMessage \t\t\t\t: {:#x}\n".format(dyld_all_image_infos_errorMessage)
+    if dyld_all_image_infos_errorMessage != 0:
+        out_str += GetPathForImage(task, dyld_all_image_infos_errorMessage)
+
+    out_str += "terminationFlags \t\t\t: {:#x}\n".format(dyld_all_image_infos_terminationFlags)
+    out_str += "coreSymbolicationShmPage \t\t: {:#x}\n".format(dyld_all_image_infos_coreSymbolicationShmPage)
+    out_str += "systemOrderFlag \t\t\t: {:#x}\n".format(dyld_all_image_infos_systemOrderFlag)
+    out_str += "uuidArrayCount \t\t\t\t: {:#x}\n".format(dyld_all_image_infos_uuidArrayCount)
+    out_str += "uuidArray \t\t\t\t: {:#x}\n".format(dyld_all_image_infos_uuidArray)
+    out_str += "dyldAllImageInfosAddress \t\t: {:#x}".format(dyld_all_image_infos_dyldAllImageInfosAddress)
+    if (dyld_all_imfo_infos_slide != 0):
+        out_str += " (currently {:#x})\n".format(dyld_all_image_infos_address)
+    else:
+        out_str += "\n"
+
+    if is_task_64:
+        dyld_all_image_infos_address = dyld_all_image_infos_address + 112
+        dyld_all_image_infos_v10 = GetUserDataAsString(task, dyld_all_image_infos_address, 64)
+        dyld_all_image_infos_initialImageCount = _ExtractDataFromString(dyld_all_image_infos_v10, 112-112, "uint64_t")
+        dyld_all_image_infos_errorKind = _ExtractDataFromString(dyld_all_image_infos_v10, 120-112, "uint64_t")
+        dyld_all_image_infos_errorClientOfDylibPath = _ExtractDataFromString(dyld_all_image_infos_v10, 128-112, "uint64_t")
+        dyld_all_image_infos_errorTargetDylibPath = _ExtractDataFromString(dyld_all_image_infos_v10, 136-112, "uint64_t")
+        dyld_all_image_infos_errorSymbol = _ExtractDataFromString(dyld_all_image_infos_v10, 144-112, "uint64_t")
+        dyld_all_image_infos_sharedCacheSlide = _ExtractDataFromString(dyld_all_image_infos_v10, 152-112, "uint64_t")
+        dyld_all_image_infos_sharedCacheUUID = _ExtractDataFromString(dyld_all_image_infos_v10, 160-112, "string")
+    else:
+        dyld_all_image_infos_address = dyld_all_image_infos_address + 60
+        dyld_all_image_infos_v10 = GetUserDataAsString(task, dyld_all_image_infos_address, 40)
+        dyld_all_image_infos_initialImageCount = _ExtractDataFromString(dyld_all_image_infos_v10, 60-60, "uint32_t")
+        dyld_all_image_infos_errorKind = _ExtractDataFromString(dyld_all_image_infos_v10, 64-60, "uint32_t")
+        dyld_all_image_infos_errorClientOfDylibPath = _ExtractDataFromString(dyld_all_image_infos_v10, 68-60, "uint32_t")
+        dyld_all_image_infos_errorTargetDylibPath = _ExtractDataFromString(dyld_all_image_infos_v10, 72-60, "uint32_t")
+        dyld_all_image_infos_errorSymbol = _ExtractDataFromString(dyld_all_image_infos_v10, 76-60, "uint32_t")
+        dyld_all_image_infos_sharedCacheSlide = _ExtractDataFromString(dyld_all_image_infos_v10, 80-60, "uint32_t")
+        dyld_all_image_infos_sharedCacheUUID = _ExtractDataFromString(dyld_all_image_infos_v10, 84-60, "string")
+
+    if dyld_all_image_infos_version >= 10:
+        out_str += "\ninitialImageCount \t\t\t: {:#x}\n".format(dyld_all_image_infos_initialImageCount)
+
+    if dyld_all_image_infos_version >= 11:
+        out_str += "errorKind \t\t\t\t: {:#x}\n".format(dyld_all_image_infos_errorKind)
+        out_str += "errorClientOfDylibPath \t\t\t: {:#x}\n".format(dyld_all_image_infos_errorClientOfDylibPath)
+        if dyld_all_image_infos_errorClientOfDylibPath != 0:
+            out_str += "\t\t\t\t"
+            out_str += GetPathForImage(task, dyld_all_image_infos_errorClientOfDylibPath)
+            out_str += "\n"
+        out_str += "errorTargetDylibPath \t\t\t: {:#x}\n".format(dyld_all_image_infos_errorTargetDylibPath)
+        if dyld_all_image_infos_errorTargetDylibPath != 0:
+            out_str += "\t\t\t\t"
+            out_str += GetPathForImage(task, dyld_all_image_infos_errorTargetDylibPath)
+            out_str += "\n"
+        out_str += "errorSymbol \t\t\t\t: {:#x}\n".format(dyld_all_image_infos_errorSymbol)
+        if dyld_all_image_infos_errorSymbol != 0:
+            out_str += "\t\t\t\t"
+            out_str += GetPathForImage(task, dyld_all_image_infos_errorSymbol)
+            out_str += "\n"
+
+        if dyld_all_image_infos_version >= 12:
+            out_str += "sharedCacheSlide \t\t\t: {:#x}\n".format(dyld_all_image_infos_sharedCacheSlide)
+        if dyld_all_image_infos_version >= 13 and dyld_all_image_infos_sharedCacheUUID != "":
+            out_str += "sharedCacheUUID \t\t\t: {:s}\n".format(dyld_all_image_infos_sharedCacheUUID)
+    else:
+        out_str += "No dyld information available for task\n"
+    print out_str
+
+# Macro: showosmalloc
+@lldb_type_summary(['OSMallocTag'])
+@header("{0: <20s} {1: >5s} {2: ^16s} {3: <5s} {4: <40s}".format("TAG", "COUNT", "STATE", "ATTR", "NAME"))
+def GetOSMallocTagSummary(malloc_tag):
+    """ Summarize the given OSMalloc tag.
+        params:
+          malloc_tag : value - value representing a _OSMallocTag_ * in kernel
+        returns:
+          out_str - string summary of the OSMalloc tag.
+    """
+    if not malloc_tag:
+        return "Invalid malloc tag value: 0x0"
+
+    out_str = "{: <#20x} {: >5d} {: ^#16x} {: <5d} {: <40s}\n".format(malloc_tag,
+        malloc_tag.OSMT_refcnt, malloc_tag.OSMT_state, malloc_tag.OSMT_attr, malloc_tag.OSMT_name)
+    return out_str
+
+@lldb_command('showosmalloc')
+def ShowOSMalloc(cmd_args=None):
+    """ Print the outstanding allocation count of OSMalloc tags
+        Usage: showosmalloc
+    """
+    summary_str = ""
+    tag_headp = Cast(addressof(kern.globals.OSMalloc_tag_list), 'struct _OSMallocTag_ *')
+    tagp = Cast(tag_headp.OSMT_link.next, 'struct _OSMallocTag_ *')
+    summary_str += GetOSMallocTagSummary.header + "\n"
+    while tagp != tag_headp:
+        summary_str += GetOSMallocTagSummary(tagp)
+        tagp = Cast(tagp.OSMT_link.next, 'struct _OSMallocTag_ *')
+
+    print summary_str
+
+# EndMacro: showosmalloc
+
 
 
 

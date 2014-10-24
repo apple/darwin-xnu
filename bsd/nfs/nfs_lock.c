@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2002-2010 Apple Inc. All rights reserved.
+ * Copyright (c) 2002-2014 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -155,7 +155,14 @@ nfs_lockd_mount_unregister(struct nfsmount *nmp)
 	kern_return_t kr;
 
 	lck_mtx_lock(nfs_lock_mutex);
+	if (nmp->nm_ldlink.tqe_next == NFSNOLIST) {
+		lck_mtx_unlock(nfs_lock_mutex);
+		return;
+	}
+	
 	TAILQ_REMOVE(&nfs_lockd_mount_list, nmp, nm_ldlink);
+	nmp->nm_ldlink.tqe_next = NFSNOLIST;
+
 	nfs_lockd_mounts--;
 
 	/* send a shutdown request if there are no more lockd mounts */
@@ -602,7 +609,7 @@ wait_for_granted:
 			    ((lastmsg + nmp->nm_tprintf_delay) < now.tv_sec)) {
 				lck_mtx_unlock(&nmp->nm_lock);
 				lastmsg = now.tv_sec;
-				nfs_down(nmp, thd, 0, NFSSTA_LOCKTIMEO, "lockd not responding");
+				nfs_down(nmp, thd, 0, NFSSTA_LOCKTIMEO, "lockd not responding", 0);
 				wentdown = 1;
 			} else
 				lck_mtx_unlock(&nmp->nm_lock);
@@ -751,7 +758,7 @@ nfs3_setlock_rpc(
 	LOCKD_MSG *msg;
 
 	nmp = NFSTONMP(np);
-	if (!nmp)
+	if (nfs_mount_gone(nmp))
 		return (ENXIO);
 
 	if (!nlop->nlo_open_owner) {
@@ -842,7 +849,7 @@ nfs3_getlock_rpc(
 	LOCKD_MSG *msg;
 
 	nmp = NFSTONMP(np);
-	if (!nmp)
+	if (nfs_mount_gone(nmp))
 		return (ENXIO);
 
 	/* set up lock message request structure */

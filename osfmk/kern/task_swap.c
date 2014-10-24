@@ -37,7 +37,6 @@
 #include <task_swapper.h>
 
 #include <kern/spl.h>
-#include <kern/lock.h>
 #include <kern/queue.h>
 #include <kern/host.h>
 #include <kern/task.h>

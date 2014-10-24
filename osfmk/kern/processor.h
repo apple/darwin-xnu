@@ -74,9 +74,11 @@
 #include <mach/mach_types.h>
 #include <kern/ast.h>
 #include <kern/cpu_number.h>
-#include <kern/lock.h>
+#include <kern/simple_lock.h>
+#include <kern/locks.h>
 #include <kern/queue.h>
 #include <kern/sched.h>
+#include <mach/sfi_class.h>
 #include <kern/processor_data.h>
 
 #include <machine/ast_types.h>
@@ -84,8 +86,7 @@
 struct processor_set {
 	queue_head_t		active_queue;	/* active processors */
 	queue_head_t		idle_queue;		/* idle processors */
-
-	processor_t			low_pri, low_count;
+	queue_head_t		idle_secondary_queue;		/* idle secondary processors */
 
 	int					online_processor_count;
 
@@ -94,12 +95,15 @@ struct processor_set {
 
 	decl_simple_lock_data(,sched_lock)	/* lock for above */
 
-#if defined(CONFIG_SCHED_TRADITIONAL) || defined(CONFIG_SCHED_FIXEDPRIORITY)
+#if defined(CONFIG_SCHED_TRADITIONAL) || defined(CONFIG_SCHED_MULTIQ)
 	struct run_queue	pset_runq;      /* runq for this processor set */
+#endif
+
+#if defined(CONFIG_SCHED_TRADITIONAL)
 	int					pset_runq_bound_count;
 		/* # of threads in runq bound to any processor in pset */
 #endif
-   
+
 	/* CPUs that have been sent an unacknowledged remote AST for scheduling purposes */
 	uint32_t			pending_AST_cpu_mask;
 
@@ -127,18 +131,11 @@ extern queue_head_t		tasks, terminated_tasks, threads; /* Terminated tasks are O
 extern int				tasks_count, terminated_tasks_count, threads_count;
 decl_lck_mtx_data(extern,tasks_threads_lock)
 
-struct processor_meta {
-	queue_head_t		idle_queue;
-	processor_t			primary;
-};
-
-typedef struct processor_meta	*processor_meta_t;
-#define PROCESSOR_META_NULL		((processor_meta_t) 0)
-
 struct processor {
 	queue_chain_t		processor_queue;/* idle/active queue link,
 										 * MUST remain the first element */
 	int					state;			/* See below */
+	boolean_t		is_SMT;
 	struct thread
 						*active_thread,	/* thread running on processor */
 						*next_thread,	/* next thread when dispatched */
@@ -148,6 +145,7 @@ struct processor {
 
 	int					current_pri;	/* priority of current thread */
 	sched_mode_t		current_thmode;	/* sched mode of current thread */
+	sfi_class_id_t		current_sfi_class;	/* SFI class of current thread */
 	int					cpu_id;			/* platform numeric id */
 
 	timer_call_data_t	quantum_timer;	/* timer for quantum expiration */
@@ -157,15 +155,21 @@ struct processor {
 	uint64_t			deadline;		/* current deadline */
 	int					timeslice;		/* quanta before timeslice ends */
 
-#if defined(CONFIG_SCHED_TRADITIONAL) || defined(CONFIG_SCHED_FIXEDPRIORITY)
+#if defined(CONFIG_SCHED_TRADITIONAL) || defined(CONFIG_SCHED_MULTIQ)
 	struct run_queue	runq;			/* runq for this processor */
+#endif
+
+#if defined(CONFIG_SCHED_TRADITIONAL)
 	int					runq_bound_count; /* # of threads bound to this processor */
 #endif
 #if defined(CONFIG_SCHED_GRRR)
 	struct grrr_run_queue	grrr_runq;      /* Group Ratio Round-Robin runq */
 #endif
-	processor_meta_t	processor_meta;
 
+	processor_t			processor_primary;	/* pointer to primary processor for
+											 * secondary SMT processors, or a pointer
+											 * to ourselves for primaries or non-SMT */
+	processor_t		processor_secondary;
 	struct ipc_port *	processor_self;	/* port for operations */
 
 	processor_t			processor_list;	/* all existing processors */
@@ -185,60 +189,44 @@ extern boolean_t		sched_stats_active;
 /*
  *	Processor state is accessed by locking the scheduling lock
  *	for the assigned processor set.
- */
+ *
+ *           -------------------- SHUTDOWN
+ *          /                     ^     ^
+ *        _/                      |      \
+ *  OFF_LINE ---> START ---> RUNNING ---> IDLE ---> DISPATCHING
+ *         \_________________^   ^ ^______/           /
+ *                                \__________________/
+ *
+ *  Most of these state transitions are externally driven as a
+ *  a directive (for instance telling an IDLE processor to start
+ *  coming out of the idle state to run a thread). However these
+ *  are typically paired with a handshake by the processor itself
+ *  to indicate that it has completed a transition of indeterminate
+ *  length (for example, the DISPATCHING->RUNNING or START->RUNNING
+ *  transitions must occur on the processor itself).
+ *
+ *  The boot processor has some special cases, and skips the START state,
+ *  since it has already bootstrapped and is ready to context switch threads.
+ *
+ *  When a processor is in DISPATCHING or RUNNING state, the current_pri,
+ *  current_thmode, and deadline fields should be set, so that other
+ *  processors can evaluate if it is an appropriate candidate for preemption.
+*/
 #define PROCESSOR_OFF_LINE		0	/* Not available */
 #define PROCESSOR_SHUTDOWN		1	/* Going off-line */
 #define PROCESSOR_START			2	/* Being started */
-#define PROCESSOR_INACTIVE		3	/* Inactive (unavailable) */
+/*                     			3	   Formerly Inactive (unavailable) */
 #define	PROCESSOR_IDLE			4	/* Idle (available) */
 #define PROCESSOR_DISPATCHING	5	/* Dispatching (idle -> active) */
 #define	PROCESSOR_RUNNING		6	/* Normal execution */
 
 extern processor_t	current_processor(void);
 
-extern processor_t	cpu_to_processor(
-						int			cpu);
-
 /* Lock macros */
 
 #define pset_lock(p)			simple_lock(&(p)->sched_lock)
 #define pset_unlock(p)			simple_unlock(&(p)->sched_lock)
 #define pset_lock_init(p)		simple_lock_init(&(p)->sched_lock, 0)
-
-/* Update hints */
-
-#define pset_pri_hint(ps, p, pri)		\
-MACRO_BEGIN												\
-	if ((p) != (ps)->low_pri) {							\
-		if ((pri) < (ps)->low_pri->current_pri)			\
-			(ps)->low_pri = (p);						\
-		else											\
-		if ((ps)->low_pri->state < PROCESSOR_IDLE)		\
-			(ps)->low_pri = (p);						\
-	}													\
-MACRO_END
-
-#define pset_count_hint(ps, p, cnt)		\
-MACRO_BEGIN												\
-	if ((p) != (ps)->low_count) {						\
-		if ((cnt) < SCHED(processor_runq_count)((ps)->low_count))		\
-			(ps)->low_count = (p);						\
-		else											\
-		if ((ps)->low_count->state < PROCESSOR_IDLE)	\
-			(ps)->low_count = (p);						\
-	}													\
-MACRO_END
-
-#define pset_pri_init_hint(ps, p)		\
-MACRO_BEGIN												\
-	(ps)->low_pri = (p);								\
-MACRO_END
-
-#define pset_count_init_hint(ps, p)		\
-MACRO_BEGIN												\
-	(ps)->low_count = (p);								\
-MACRO_END
-
 
 extern void		processor_bootstrap(void);
 
@@ -247,7 +235,7 @@ extern void		processor_init(
 					int				cpu_id,
 					processor_set_t	processor_set);
 
-extern void		processor_meta_init(
+extern void		processor_set_primary(
 					processor_t		processor,
 					processor_t		primary);
 
@@ -279,12 +267,11 @@ extern kern_return_t	processor_info_count(
 extern void				machine_run_count(
 							uint32_t	count);
 
-extern boolean_t		machine_processor_is_inactive(
-							processor_t			processor);
-
 extern processor_t		machine_choose_processor(
 							processor_set_t		pset,
 							processor_t			processor);
+
+#define next_pset(p)	(((p)->pset_list != PROCESSOR_SET_NULL)? (p)->pset_list: (p)->node->psets)
 
 #else	/* MACH_KERNEL_PRIVATE */
 
@@ -299,5 +286,12 @@ extern void		pset_reference(
 __END_DECLS
 
 #endif	/* MACH_KERNEL_PRIVATE */
+
+#ifdef KERNEL_PRIVATE
+__BEGIN_DECLS
+extern processor_t	cpu_to_processor(int cpu);
+__END_DECLS
+
+#endif /* KERNEL_PRIVATE */
 
 #endif	/* _KERN_PROCESSOR_H_ */

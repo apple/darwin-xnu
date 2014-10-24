@@ -32,8 +32,9 @@ extern const struct ccdigest_info ccsha1_ltc_di;
 extern const struct ccdigest_info ccsha1_eay_di;
 
 #if CCSHA1_VNG_INTEL
-extern const struct ccdigest_info ccsha1_vng_intel_SSE3_di;
-extern const struct ccdigest_info ccsha1_vng_intel_NOSSE3_di;
+//extern const struct ccdigest_info ccsha1_vng_intel_di;
+extern const struct ccdigest_info ccsha1_vng_intel_SupplementalSSE3_di;
+extern const struct ccdigest_info ccsha1_vng_intel_NOSupplementalSSE3_di;
 #endif
 
 #if CCSHA1_VNG_ARMV7NEON

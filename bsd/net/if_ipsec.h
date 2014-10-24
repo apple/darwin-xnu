@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2012 Apple Inc. All rights reserved.
+ * Copyright (c) 2012-2014 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -37,17 +37,22 @@
 
 /* Control block allocated for each kernel control connection */
 struct ipsec_pcb {
-	kern_ctl_ref	ipsec_ctlref;
-	ifnet_t			ipsec_ifp;
-	u_int32_t		ipsec_unit;
-	u_int32_t		ipsec_flags;
-	int				ipsec_ext_ifdata_stats;
+	kern_ctl_ref		ipsec_ctlref;
+	ifnet_t				ipsec_ifp;
+	u_int32_t			ipsec_unit;
+	u_int32_t			ipsec_flags;
+	int					ipsec_ext_ifdata_stats;
+	mbuf_svc_class_t	ipsec_output_service_class;
 };
 
 errno_t ipsec_register_control(void);
 
 /* Helpers */
 int ipsec_interface_isvalid (ifnet_t interface);
+
+errno_t ipsec_inject_inbound_packet(ifnet_t	interface, mbuf_t packet);
+
+void ipsec_set_pkthdr_for_interface(ifnet_t interface, mbuf_t packet, int family);
 
 #endif
 
@@ -65,6 +70,7 @@ int ipsec_interface_isvalid (ifnet_t interface);
 #define IPSEC_OPT_INC_IFDATA_STATS_IN			4	/* set to increment stat counters (type struct ipsec_stats_param) */
 #define IPSEC_OPT_INC_IFDATA_STATS_OUT			5	/* set to increment stat counters (type struct ipsec_stats_param) */
 #define IPSEC_OPT_SET_DELEGATE_INTERFACE		6	/* set the delegate interface (char[]) */
+#define IPSEC_OPT_OUTPUT_TRAFFIC_CLASS			7	/* set the traffic class for packets leaving the interface, see sys/socket.h */
 /*
  * ipsec stats parameter structure
  */

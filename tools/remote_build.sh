@@ -136,6 +136,16 @@ else
     else
 	RSYNC_ARGS=""
     fi
+    if [ ! -e "${SYMROOT}/" ]; then
+	RSYNC_DELETE_SYMROOT=1
+    else
+	RSYNC_DELETE_SYMROOT=0
+    fi
+    if [ ! -e "${DSTROOT}/" ]; then
+	RSYNC_DELETE_DSTROOT=1
+    else
+	RSYNC_DELETE_DSTROOT=0
+    fi
     TARBUILDDIRS=0
 fi
 
@@ -175,6 +185,8 @@ chmod a+x "${BUILDSCRIPTDIR}/${BUILDSCRIPTNAME}"
 #echo "Build script is:"
 #cat "${BUILDSCRIPTDIR}/${BUILDSCRIPTNAME}"
 
+mkdir -p "${BUILDTOOLSDIR}/empty"
+
 if [ "$REMOTEBUILD" = "$SPECIALREMOTEBUILD" ]; then
     :
 else
@@ -198,7 +210,7 @@ else
     REMOTEBUILDPATH="${REMOTEBUILDPATH}/$st_ino/${SRCNAME}/"
     echo "Remote path is ${REMOTEBUILD}:${REMOTEBUILDPATH}" 1>&2
 
-    ssh $REMOTEBUILD "mkdir -p \"${REMOTEBUILDPATH}/BUILD/obj\"" || die "Could not make remote build directory"
+    ssh $REMOTEBUILD "mkdir -p \"${REMOTEBUILDPATH}/BUILD/\"{obj,sym,dst}" || die "Could not make remote build directory"
 
     # Copy source only
     rsync -azv --delete --exclude=\*~ --exclude=.svn --exclude=.git --exclude=/BUILD . $REMOTEBUILD:"${REMOTEBUILDPATH}" || die "Could not rsync source tree"
@@ -206,9 +218,19 @@ else
     # Copy partial OBJROOT (just build tools and build script), and optionally delete everything else
     rsync -azv --delete $RSYNC_ARGS --include=/build.sh --include=/BuildTools --include=/BuildTools/\*\* --exclude=\* "${OBJROOT}/" $REMOTEBUILD:"${REMOTEBUILDPATH}/BUILD/obj/" || die "Could not rsync build tree"
 
+    # Delete remote SYMROOT if it has been deleted locally
+    if [ "$RSYNC_DELETE_SYMROOT" -eq 1 ]; then
+	rsync -azv --delete "${BUILDTOOLSDIR}/empty/" $REMOTEBUILD:"${REMOTEBUILDPATH}/BUILD/sym/" || die "Could not rsync delete SYMROOT"
+    fi
+
+    # Delete remote DSTROOT if it has been deleted locally
+    if [ "$RSYNC_DELETE_DSTROOT" -eq 1 ]; then
+	rsync -azv --delete "${BUILDTOOLSDIR}/empty/" $REMOTEBUILD:"${REMOTEBUILDPATH}/BUILD/dst/" || die "Could not rsync delete DSTROOT"
+    fi
+
     # Start the build
-    echo ssh $REMOTEBUILD "cd \"${REMOTEBUILDPATH}\" && ${REMOTE_BUILDSCRIPTREL}/${BUILDSCRIPTNAME}" 1>&2
-    ssh $REMOTEBUILD "cd \"${REMOTEBUILDPATH}\" && ${REMOTE_BUILDSCRIPTREL}/${BUILDSCRIPTNAME}" || die "Could not complete remote build"
+    echo ssh $REMOTEBUILD "/bin/bash -c 'cd \"${REMOTEBUILDPATH}\" && ${REMOTE_BUILDSCRIPTREL}/${BUILDSCRIPTNAME}'" 1>&2
+    ssh $REMOTEBUILD "/bin/bash -c 'cd \"${REMOTEBUILDPATH}\" && ${REMOTE_BUILDSCRIPTREL}/${BUILDSCRIPTNAME}'" || die "Could not complete remote build"
 
     # Copy back build results except for object files (which might be several GB)
     echo "Copying results back..."

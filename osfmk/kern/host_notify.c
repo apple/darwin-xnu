@@ -100,7 +100,7 @@ host_request_notification(
 	lck_mtx_lock(&host_notify_lock);
 
 	ip_lock(port);
-	if (!ip_active(port) || ip_kotype(port) != IKOT_NONE) {
+	if (!ip_active(port) || port->ip_tempowner || ip_kotype(port) != IKOT_NONE) {
 		ip_unlock(port);
 
 		lck_mtx_unlock(&host_notify_lock);
@@ -167,10 +167,11 @@ host_notify_all(
 		send_queue.next->prev = &send_queue;
 		send_queue.prev->next = &send_queue;
 
-		msg->msgh_bits = MACH_MSGH_BITS(MACH_MSG_TYPE_MOVE_SEND_ONCE, 0);
+		msg->msgh_bits =
+		    MACH_MSGH_BITS_SET(MACH_MSG_TYPE_MOVE_SEND_ONCE, 0, 0, 0);
 		msg->msgh_local_port = MACH_PORT_NULL;
+		msg->msgh_voucher_port = MACH_PORT_NULL;
 		msg->msgh_id = host_notify_replyid[notify_type];
-		msg->msgh_reserved = 0;
 
 		while ((entry = (host_notify_t)dequeue(&send_queue)) != NULL) {
 			ipc_port_t		port;

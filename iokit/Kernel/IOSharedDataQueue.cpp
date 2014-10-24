@@ -75,26 +75,26 @@ Boolean IOSharedDataQueue::initWithCapacity(UInt32 size)
 {
     IODataQueueAppendix *   appendix;
     vm_size_t               allocSize;
-    
+
     if (!super::init()) {
         return false;
     }
-    
+
     _reserved = (ExpansionData *)IOMalloc(sizeof(struct ExpansionData));
     if (!_reserved) {
         return false;
     }
-    
+
     if (size > UINT32_MAX - DATA_QUEUE_MEMORY_HEADER_SIZE - DATA_QUEUE_MEMORY_APPENDIX_SIZE) {
         return false;
     }
     
     allocSize = round_page(size + DATA_QUEUE_MEMORY_HEADER_SIZE + DATA_QUEUE_MEMORY_APPENDIX_SIZE);
-    
+
     if (allocSize < size) {
         return false;
     }
-    
+
     dataQueue = (IODataQueueMemory *)IOMallocAligned(allocSize, PAGE_SIZE);
     if (dataQueue == 0) {
         return false;
@@ -103,7 +103,7 @@ Boolean IOSharedDataQueue::initWithCapacity(UInt32 size)
     dataQueue->queueSize    = size;
     dataQueue->head         = 0;
     dataQueue->tail         = 0;
-    
+
     if (!setQueueSize(size)) {
         return false;
     }
@@ -126,7 +126,7 @@ void IOSharedDataQueue::free()
     if (_reserved) {
         IOFree (_reserved, sizeof(struct ExpansionData));
         _reserved = NULL;
-    }
+    } 
     
     super::free();
 }
@@ -148,22 +148,22 @@ IODataQueueEntry * IOSharedDataQueue::peek()
     IODataQueueEntry *entry = 0;
 
     if (dataQueue && (dataQueue->head != dataQueue->tail)) {
-        IODataQueueEntry *  head		= 0;
+        IODataQueueEntry *  head        = 0;
         UInt32              headSize    = 0;
         UInt32              headOffset  = dataQueue->head;
         UInt32              queueSize   = getQueueSize();
-
+        
         if (headOffset >= queueSize) {
             return NULL;
         }
         
-        head 		= (IODataQueueEntry *)((char *)dataQueue->queue + headOffset);
-        headSize 	= head->size;
+        head         = (IODataQueueEntry *)((char *)dataQueue->queue + headOffset);
+        headSize     = head->size;
         
-		// Check if there's enough room before the end of the queue for a header.
+        // Check if there's enough room before the end of the queue for a header.
         // If there is room, check if there's enough room to hold the header and
         // the data.
-
+        
         if ((headOffset > UINT32_MAX - DATA_QUEUE_ENTRY_HEADER_SIZE) ||
             (headOffset + DATA_QUEUE_ENTRY_HEADER_SIZE > queueSize) ||
             (headOffset + DATA_QUEUE_ENTRY_HEADER_SIZE > UINT32_MAX - headSize) ||
@@ -276,17 +276,17 @@ Boolean IOSharedDataQueue::dequeue(void *data, UInt32 *dataSize)
 
     if (dataQueue) {
         if (dataQueue->head != dataQueue->tail) {
-            IODataQueueEntry *  head		= 0;
+            IODataQueueEntry *  head        = 0;
             UInt32              headSize    = 0;
             UInt32              headOffset  = dataQueue->head;
             UInt32              queueSize   = getQueueSize();
-
+            
             if (headOffset > queueSize) {
                 return false;
             }
             
-            head 		= (IODataQueueEntry *)((char *)dataQueue->queue + headOffset);
-            headSize 	= head->size;
+            head         = (IODataQueueEntry *)((char *)dataQueue->queue + headOffset);
+            headSize     = head->size;
             
             // we wrapped around to beginning, so read from there
             // either there was not even room for the header
@@ -316,7 +316,7 @@ Boolean IOSharedDataQueue::dequeue(void *data, UInt32 *dataSize)
                 newHeadOffset   = headOffset + entrySize + DATA_QUEUE_ENTRY_HEADER_SIZE;
             }
         }
-
+        
         if (entry) {
             if (data) {
                 if (dataSize) {

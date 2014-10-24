@@ -79,6 +79,10 @@ static affinity_set_t affinity_set_remove(affinity_set_t aset, thread_t thread);
  *   kern.affinity_sets_enabled	- disables hinting if cleared
  *   kern.affinity_sets_mapping	- controls cache distribution policy
  * See bsd/kern_sysctl.c
+ *
+ * Affinity sets are not used on embedded, which typically only
+ * has a single pset, and last-processor affinity is
+ * more important than pset affinity.
  */
 boolean_t	affinity_sets_enabled = TRUE;
 int		affinity_sets_mapping = 1;

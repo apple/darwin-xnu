@@ -32,7 +32,6 @@
  * @APPLE_FREE_COPYRIGHT@
  */
 
-#include <platforms.h>
 #include <kern/spl.h>
 #include <mach/std_types.h>
 #include <types.h>

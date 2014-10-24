@@ -199,23 +199,11 @@ diagCall64(x86_saved_state_t * state)
 		pkes.pkg_cres[0][2] = ((uint64_t)c6h << 32) | c6l;
 		pkes.pkg_cres[0][3] = ((uint64_t)c7h << 32) | c7l;
 
-		uint32_t cpumodel = cpuid_info()->cpuid_model;
-		boolean_t c8avail;
-		switch (cpumodel) {
-		case CPUID_MODEL_HASWELL_ULT:
-			c8avail = TRUE;
-			break;
-		default:
-			c8avail = FALSE;
-			break;
-		}
 		uint64_t c8r = ~0ULL, c9r = ~0ULL, c10r = ~0ULL;
 
-		if (c8avail) {
-			rdmsr64_carefully(MSR_IA32_PKG_C8_RESIDENCY, &c8r);
-			rdmsr64_carefully(MSR_IA32_PKG_C9_RESIDENCY, &c9r);
-			rdmsr64_carefully(MSR_IA32_PKG_C10_RESIDENCY, &c10r);
-		}
+		rdmsr64_carefully(MSR_IA32_PKG_C8_RESIDENCY, &c8r);
+		rdmsr64_carefully(MSR_IA32_PKG_C9_RESIDENCY, &c9r);
+		rdmsr64_carefully(MSR_IA32_PKG_C10_RESIDENCY, &c10r);
 
 		pkes.pkg_cres[0][4] = c8r;
 		pkes.pkg_cres[0][5] = c9r;

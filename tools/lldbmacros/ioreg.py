@@ -771,3 +771,100 @@ def WriteIOPortInt(addr, numbytes, value, lcpu):
     else:
         print "error writing 0x{0: x} to port 0x{1: <4x}".format(value, addr)
 
+@lldb_command('showinterruptcounts')
+def showinterruptcounts(cmd_args=None):
+    """ Shows event source based interrupt counts by nub name and interrupt index.
+        Does not cover interrupts that are not event source based.  Will report 0
+        if interrupt accounting is disabled.
+    """
+
+    header_format = "{0: <20s} {1: >5s} {2: >20s}"
+    content_format = "{0: <20s} {1: >5d} {2: >20d}"
+
+    print header_format.format("Name", "Index", "Count")
+    
+    for i in kern.interrupt_stats:
+        owner = Cast(i.owner, 'IOInterruptEventSource *')
+        nub = Cast(owner.provider, 'IORegistryEntry *') 
+        name = None
+
+        # To uniquely identify an interrupt, we need the nub name and the index.  The index
+        # is stored with the stats object, but we need to retrieve the name.
+
+        registryTable = nub.fRegistryTable
+        propertyTable = nub.fPropertyTable
+    
+        name = LookupKeyInOSDict(registryTable, kern.globals.gIOServicePlane.nameKey)
+        if name is None:
+            name = LookupKeyInOSDict(registryTable, kern.globals.gIONameKey)
+        if name is None:
+            name = LookupKeyInOSDict(propertyTable, kern.globals.gIOClassKey)
+
+        if name is None:
+            nub_name = "Unknown"
+        else:
+            nub_name = GetString(Cast(name, 'OSString *'))
+
+        # We now have everything we need; spew the requested data.
+
+        interrupt_index = i.interruptIndex
+        first_level_count = i.interruptStatistics[0]
+
+        print content_format.format(nub_name, interrupt_index, first_level_count)
+    
+    return True
+
+@lldb_command('showinterruptstats')
+def showinterruptstats(cmd_args=None):
+    """ Shows event source based interrupt statistics by nub name and interrupt index.
+        Does not cover interrupts that are not event source based.  Will report 0
+        if interrupt accounting is disabled, or if specific statistics are disabled.
+        Time is reported in ticks of mach_absolute_time.  Statistics are:
+        
+        Interrupt Count: Number of times the interrupt context handler was run
+        Interrupt Time: Total time spent in the interrupt context handler (if any)
+        Workloop Count: Number of times the kernel context handler was run
+        Workloop CPU Time: Total CPU time spent running the kernel context handler
+        Workloop Time: Total time spent running the kernel context handler
+    """
+
+    header_format = "{0: <20s} {1: >5s} {2: >20s} {3: >20s} {4: >20s} {5: >20s} {6: >20s}"
+    content_format = "{0: <20s} {1: >5d} {2: >20d} {3: >20d} {4: >20d} {5: >20d} {6: >20d}"
+
+    print header_format.format("Name", "Index", "Interrupt Count", "Interrupt Time", "Workloop Count", "Workloop CPU Time", "Workloop Time")
+    
+    for i in kern.interrupt_stats:
+        owner = Cast(i.owner, 'IOInterruptEventSource *')
+        nub = Cast(owner.provider, 'IORegistryEntry *') 
+        name = None
+
+        # To uniquely identify an interrupt, we need the nub name and the index.  The index
+        # is stored with the stats object, but we need to retrieve the name.
+
+        registryTable = nub.fRegistryTable
+        propertyTable = nub.fPropertyTable
+    
+        name = LookupKeyInOSDict(registryTable, kern.globals.gIOServicePlane.nameKey)
+        if name is None:
+            name = LookupKeyInOSDict(registryTable, kern.globals.gIONameKey)
+        if name is None:
+            name = LookupKeyInOSDict(propertyTable, kern.globals.gIOClassKey)
+
+        if name is None:
+            nub_name = "Unknown"
+        else:
+            nub_name = GetString(Cast(name, 'OSString *'))
+
+        # We now have everything we need; spew the requested data.
+
+        interrupt_index = i.interruptIndex
+        first_level_count = i.interruptStatistics[0]
+        second_level_count = i.interruptStatistics[1]
+        first_level_time = i.interruptStatistics[2]
+        second_level_cpu_time = i.interruptStatistics[3]
+        second_level_system_time = i.interruptStatistics[4]
+
+        print content_format.format(nub_name, interrupt_index, first_level_count, first_level_time, second_level_count, second_level_cpu_time, second_level_system_time)
+    
+    return True
+

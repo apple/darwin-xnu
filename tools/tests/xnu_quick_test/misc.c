@@ -179,6 +179,7 @@ int do_execve_test(char * path, char * argv[], void * envp, int killwait)
 	printf("CWD= %s\n", getwd(NULL));
 	fflush(stdout);
 #endif
+
 	/* vfork then execve sleep system command (which we will kill from the parent process) */
 	my_pid = vfork();
 	if (my_pid == -1) {
@@ -331,6 +332,9 @@ int get_architecture()
 		rval = INTEL;
 		break;
 	case CPU_TYPE_ARM:
+#ifdef CPU_TYPE_ARM64
+	case CPU_TYPE_ARM64:
+#endif
 		rval = ARM;
 		break;
 	}

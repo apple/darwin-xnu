@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2010 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2014 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -152,16 +152,21 @@ extern void kernel_debug_enter(
 #define DBG_DRIVERS		6
 #define DBG_TRACE           	7
 #define DBG_DLIL	        8
-#define DBG_SECURITY		9
+#define DBG_WORKQUEUE		9
 #define DBG_CORESTORAGE		10
 #define DBG_CG         		11
 #define DBG_MISC		20
+#define DBG_SECURITY		30
 #define DBG_DYLD           	31
 #define DBG_QT              	32
 #define DBG_APPS            	33
 #define DBG_LAUNCHD         	34
 #define DBG_PERF                37
 #define DBG_IMPORTANCE          38
+#define DBG_BANK                40
+#define DBG_XPC                 41
+#define DBG_ATM                 42
+
 #define DBG_MIG			255
 
 /* **** The Kernel Debug Sub Classes for Mach (DBG_MACH) **** */
@@ -185,9 +190,12 @@ extern void kernel_debug_enter(
 #define	DBG_MACH_MSGID_INVALID	0x50	/* Messages - invalid */
 #define DBG_MACH_LOCKS		0x60	/* new lock APIs */
 #define DBG_MACH_PMAP		0x70	/* pmap */
+/* #define unused		0x80    */
 #define DBG_MACH_MP		0x90	/* MP related */
 #define DBG_MACH_VM_PRESSURE	0xA0	/* Memory Pressure Events */
 #define DBG_MACH_STACKSHOT		0xA1	/* Stackshot/Microstackshot subsystem */
+#define DBG_MACH_SFI			0xA2	/* Selective Forced Idle (SFI) */
+#define DBG_MACH_ENERGY_PERF	0xA3 /* Energy/performance resource stats */
 
 /* Codes for Scheduler (DBG_MACH_SCHED) */     
 #define MACH_SCHED              0x0     /* Scheduler */
@@ -220,10 +228,29 @@ extern void kernel_debug_enter(
 #define MACH_CPU_THROTTLE_DISABLE	0x1b	/* Global CPU Throttle Disable */
 #define MACH_RW_PROMOTE            0x1c	/* promoted due to RW lock promotion */
 #define MACH_RW_DEMOTE             0x1d	/* promotion due to RW lock undone */
+#define MACH_SCHED_MAINTENANCE     0x1f /* periodic maintenance thread */
+#define MACH_DISPATCH              0x20 /* context switch completed */
+#define MACH_QUANTUM_HANDOFF       0x21 /* quantum handoff occurred */
+#define MACH_MULTIQ_DEQUEUE        0x22 /* Result of multiq dequeue */
+#define MACH_SCHED_THREAD_SWITCH   0x23 /* attempt direct context switch to hinted thread */
+#define MACH_SCHED_SMT_BALANCE     0x24 /* SMT load balancing ASTs */
+
+/* Variants for MACH_MULTIQ_DEQUEUE */
+#define MACH_MULTIQ_BOUND     1
+#define MACH_MULTIQ_GROUP     2
+#define MACH_MULTIQ_GLOBAL    3
 
 /* Codes for IPC (DBG_MACH_IPC) */
-#define	MACH_TASK_SUSPEND	0x0	/* Suspended a task */
-#define	MACH_TASK_RESUME   	0x1	/* Resumed a task */
+#define	MACH_TASK_SUSPEND			0x0	/* Suspended a task */
+#define	MACH_TASK_RESUME 		  	0x1	/* Resumed a task */
+#define MACH_THREAD_SET_VOUCHER 		0x2
+#define MACH_IPC_MSG_SEND			0x3	/* mach msg send, uniq msg info */
+#define MACH_IPC_MSG_RECV			0x4	/* mach_msg receive */
+#define MACH_IPC_MSG_RECV_VOUCHER_REFUSED	0x5	/* mach_msg receive, voucher refused */
+#define MACH_IPC_KMSG_FREE			0x6	/* kernel free of kmsg data */
+#define MACH_IPC_VOUCHER_CREATE			0x7	/* Voucher added to global voucher hashtable */
+#define MACH_IPC_VOUCHER_CREATE_ATTR_DATA	0x8	/* Attr data for newly created voucher */
+#define MACH_IPC_VOUCHER_DESTROY		0x9	/* Voucher removed from global voucher hashtable */
 
 /* Codes for pmap (DBG_MACH_PMAP) */     
 #define PMAP__CREATE		0x0
@@ -241,10 +268,23 @@ extern void kernel_debug_enter(
 #define PMAP__QUERY_RESIDENT	0xc
 #define PMAP__FLUSH_KERN_TLBS	0xd
 #define PMAP__FLUSH_DELAYED_TLBS	0xe
+#define PMAP__FLUSH_TLBS_TO	0xf
 
 /* Codes for Stackshot/Microstackshot (DBG_MACH_STACKSHOT) */
 #define MICROSTACKSHOT_RECORD	0x0
 #define MICROSTACKSHOT_GATHER	0x1
+
+/* Codes for Selective Forced Idle (DBG_MACH_SFI) */
+#define SFI_SET_WINDOW			0x0
+#define SFI_CANCEL_WINDOW		0x1
+#define SFI_SET_CLASS_OFFTIME	0x2
+#define SFI_CANCEL_CLASS_OFFTIME	0x3
+#define SFI_THREAD_DEFER		0x4
+#define SFI_OFF_TIMER			0x5
+#define SFI_ON_TIMER			0x6
+#define SFI_WAIT_CANCELED		0x7
+#define SFI_PID_SET_MANAGED		0x8
+#define SFI_PID_CLEAR_MANAGED	0x9
 
 /* **** The Kernel Debug Sub Classes for Network (DBG_NETWORK) **** */
 #define DBG_NETIP	1	/* Internet Protocol */
@@ -270,7 +310,9 @@ extern void kernel_debug_enter(
 #define	DBG_NETAFP	107	/* Apple Filing Protocol */
 #define	DBG_NETRTMP	108	/* Routing Table Maintenance Protocol */
 #define	DBG_NETAURP	109	/* Apple Update Routing Protocol */
+
 #define	DBG_NETIPSEC	128	/* IPsec Protocol  */
+#define	DBG_NETVMNET	129	/* VMNet */
 
 /* **** The Kernel Debug Sub Classes for IOKIT (DBG_IOKIT) **** */
 #define DBG_IOINTC			0	/* Interrupt controller */
@@ -359,6 +401,7 @@ extern void kernel_debug_enter(
 #define DBG_MSDOS     0xF     /* FAT-specific events; see the msdosfs project */
 #define DBG_ACFS      0x10    /* Xsan-specific events; see the XsanFS project */
 #define DBG_THROTTLE  0x11    /* I/O Throttling events */	
+#define DBG_CONTENT_PROT 0xCF /* Content Protection Events: see bsd/sys/cprotect.h */
 
 /* The Kernel Debug Sub Classes for BSD */
 #define DBG_BSD_PROC		0x01	/* process/signals related */
@@ -382,14 +425,30 @@ extern void kernel_debug_enter(
 #define BSD_MEMSTAT_UPDATE           6  /* priority update */	
 #define BSD_MEMSTAT_IDLE_DEMOTE      7  /* idle demotion fired */
 #define BSD_MEMSTAT_CLEAR_ERRORS     8  /* reset termination error state */
+#define BSD_MEMSTAT_DIRTY_TRACK      9  /* track the process state */
+#define BSD_MEMSTAT_DIRTY_SET       10  /* set the process state */
+#define BSD_MEMSTAT_DIRTY_CLEAR     11  /* clear the process state */
+#ifdef  PRIVATE
+#define BSD_MEMSTAT_GRP_SET_PROP    12  /* set group properties */
+#define BSD_MEMSTAT_DO_KILL         13  /* memorystatus kills */
+#endif /* PRIVATE */
 
 /* The Kernel Debug Sub Classes for DBG_TRACE */
 #define DBG_TRACE_DATA      0
 #define DBG_TRACE_STRING    1
 #define	DBG_TRACE_INFO	    2
 
+/*
+ * TRACE_DATA_NEWTHREAD			0x1
+ * TRACE_DATA_EXEC			0x2
+ */
+#define TRACE_DATA_THREAD_TERMINATE	0x3	/* thread has been queued for deallocation and can no longer run */
+
 /* The Kernel Debug Sub Classes for DBG_CORESTORAGE */
 #define DBG_CS_IO	0
+
+/* The Kernel Debug Sub Classes for DBG_SECURITY */
+#define	DBG_SEC_KERNEL	0	/* raw entropy collected by the kernel */
 
 /* Sub-class codes for CoreGraphics (DBG_CG) are defined in its component. */
 
@@ -432,6 +491,9 @@ extern void kernel_debug_enter(
 #define IMP_TASK_SUPPRESSION    0x17    /* Task changed suppression behaviors */
 #define IMP_TASK_APPTYPE        0x18    /* Task launched with apptype */
 #define IMP_UPDATE              0x19    /* Requested -> effective calculation */
+#define IMP_USYNCH_QOS_OVERRIDE 0x1A    /* Userspace synchronization applied QoS override to resource owning thread */
+#define IMP_DONOR_CHANGE        0x1B    /* The iit_donor bit changed */
+#define IMP_MAIN_THREAD_QOS     0x1C    /* The task's main thread QoS was set */
 /* DBG_IMPORTANCE subclasses  0x20 - 0x3F reserved for task policy flavors */
 
 /* Codes for IMP_ASSERTION */
@@ -449,6 +511,38 @@ extern void kernel_debug_enter(
 
 /* Codes for IMP_UPDATE */
 #define IMP_UPDATE_TASK_CREATE  0x1
+
+/* Codes for IMP_USYNCH_QOS_OVERRIDE */
+#define IMP_USYNCH_ADD_OVERRIDE		0x0		/* add override for a contended resource */
+#define IMP_USYNCH_REMOVE_OVERRIDE	0x1		/* remove override for a contended resource */
+
+/* Codes for IMP_DONOR_CHANGE */
+#define IMP_DONOR_UPDATE_LIVE_DONOR_STATE	0x0
+#define IMP_DONOR_INIT_DONOR_STATE		0x1
+
+/* Subclasses for MACH Bank Voucher Attribute Manager (DBG_BANK) */
+#define BANK_ACCOUNT_INFO		0x10	/* Trace points related to bank account struct */
+#define BANK_TASK_INFO			0x11	/* Trace points related to bank task struct */
+
+/* Subclasses for MACH ATM Voucher Attribute Manager (ATM) */
+#define ATM_SUBAID_INFO			0x10	
+#define ATM_GETVALUE_INFO		0x20	
+#define ATM_UNREGISTER_INFO		0x30	
+
+/* Codes for BANK_ACCOUNT_INFO */
+#define BANK_SETTLE_CPU_TIME		0x1	/* Bank ledger(chit) rolled up to tasks. */
+
+/* Codes for ATM_SUBAID_INFO */
+#define ATM_MIN_CALLED				0x1
+#define ATM_MIN_LINK_LIST			0x2
+
+/* Codes for ATM_GETVALUE_INFO */
+#define ATM_VALUE_REPLACED			0x1
+#define ATM_VALUE_ADDED 			0x2
+
+/* Codes for ATM_UNREGISTER_INFO */
+#define ATM_VALUE_UNREGISTERED			0x1
+#define ATM_VALUE_DIFF_MAILBOX			0x2
 
 /**********************************************************************/
 
@@ -484,6 +578,8 @@ extern void kernel_debug_enter(
 
 
 #define IMPORTANCE_CODE(SubClass, code) KDBG_CODE(DBG_IMPORTANCE, (SubClass), (code))
+#define BANK_CODE(SubClass, code) KDBG_CODE(DBG_BANK, (SubClass), (code))
+#define ATM_CODE(SubClass, code) KDBG_CODE(DBG_ATM, (SubClass), (code))
 
 /*   Usage:
 * kernel_debug((KDBG_CODE(DBG_NETWORK, DNET_PROTOCOL, 51) | DBG_FUNC_START), 
@@ -514,7 +610,7 @@ extern void kernel_debug_enter(
 
 extern unsigned int kdebug_enable;
 #define KDEBUG_ENABLE_TRACE   0x1
-#define KDEBUG_ENABLE_ENTROPY 0x2
+#define KDEBUG_ENABLE_ENTROPY 0x2		/* Obsolescent */
 #define KDEBUG_ENABLE_CHUD    0x4
 #define KDEBUG_ENABLE_PPT     0x8
 
@@ -553,6 +649,12 @@ do {									\
         kernel_debug1(x,(uintptr_t)a,(uintptr_t)b,(uintptr_t)c,		\
 			(uintptr_t)d,(uintptr_t)e);			\
 } while(0)
+
+#define KERNEL_DEBUG_EARLY(x,a,b,c,d)					\
+do {									\
+        kernel_debug_early((uint32_t)x,  (uintptr_t)a, (uintptr_t)b,	\
+		           (uintptr_t)c, (uintptr_t)d);			\
+} while(0)
 #else	/* XNU_KERNEL_PRIVATE */
 #define KERNEL_DEBUG_CONSTANT(x,a,b,c,d,e)				\
 do {									\
@@ -567,18 +669,25 @@ do {									\
         kernel_debug1(x,(uintptr_t)a,(uintptr_t)b,(uintptr_t)c,		\
 			(uintptr_t)d,(uintptr_t)e);			\
 } while(0)
+
+#define KERNEL_DEBUG_EARLY(x,a,b,c,d)					\
+do {									\
+        kernel_debug_early((uint32_t)x,  (uintptr_t)a, (uintptr_t)b,	\
+		           (uintptr_t)c, (uintptr_t)d);			\
+} while(0)
 #endif /* XNU_KERNEL_PRIVATE */
 #else /* (KDEBUG_LEVEL >= KDEBUG_LEVEL_STANDARD) */
 #define KERNEL_DEBUG_CONSTANT(x,a,b,c,d,e) do { } while(0)
 #define KERNEL_DEBUG_CONSTANT1(x,a,b,c,d,e) do { } while(0)
+#define KERNEL_DEBUG_EARLY(x,a,b,c,d) do { } while(0)
 #endif /* (KDEBUG_LEVEL >= KDEBUG_LEVEL_STANDARD) */
 
 /* 
  * Specify KDEBUG_PPT to indicate that the event belongs to the
  * limited PPT set.
  */
-#define KDEBUG_COMMON (KDEBUG_ENABLE_TRACE|KDEBUG_ENABLE_ENTROPY|KDEBUG_ENABLE_CHUD|KDEBUG_ENABLE_PPT)
-#define KDEBUG_TRACE  (KDEBUG_ENABLE_TRACE|KDEBUG_ENABLE_ENTROPY|KDEBUG_ENABLE_CHUD)
+#define KDEBUG_COMMON (KDEBUG_ENABLE_TRACE|KDEBUG_ENABLE_CHUD|KDEBUG_ENABLE_PPT)
+#define KDEBUG_TRACE  (KDEBUG_ENABLE_TRACE|KDEBUG_ENABLE_CHUD)
 #define KDEBUG_PPT    (KDEBUG_ENABLE_PPT)
 
 /*
@@ -625,6 +734,15 @@ extern void kernel_debug1(
 		uintptr_t arg4,
 		uintptr_t arg5);
 
+extern void kernel_debug_early(
+		uint32_t  debugid,
+		uintptr_t arg1,
+		uintptr_t arg2,
+		uintptr_t arg3,
+		uintptr_t arg4);
+
+extern void kernel_debug_string(
+		const char *message);
 
 #if (KDEBUG_LEVEL >= KDEBUG_LEVEL_FULL)
 #ifdef	XNU_KERNEL_PRIVATE
@@ -679,6 +797,7 @@ extern void kdbg_trace_string(struct proc *proc, long *arg1, long *arg2, long *a
 
 extern void kdbg_dump_trace_to_file(const char *);
 void start_kern_tracing(unsigned int, boolean_t);
+void start_kern_tracing_with_typefilter(unsigned int, boolean_t, unsigned int);
 struct task;
 extern void kdbg_get_task_name(char*, int, struct task *task);
 void disable_wrap(uint32_t *old_slowcheck, uint32_t *old_flags);

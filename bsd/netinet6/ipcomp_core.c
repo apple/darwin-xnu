@@ -50,7 +50,7 @@
 
 #include <net/if.h>
 #include <net/route.h>
-#if ZLIB
+#if IPCOMP_ZLIB
 #include <libkern/zlib.h>
 #endif
 #include <kern/cpu_number.h>
@@ -66,7 +66,7 @@
 
 #include <net/net_osdep.h>
 
-#if ZLIB
+#if IPCOMP_ZLIB
 static void *deflate_alloc(void *, u_int, u_int);
 static void deflate_free(void *, void *);
 static int deflate_common(struct mbuf *, struct mbuf *, size_t *, int);
@@ -86,24 +86,26 @@ static int deflate_memlevel = MAX_MEM_LEVEL;
 
 static z_stream	deflate_stream;
 static z_stream	inflate_stream;
-#endif /* ZLIB */
+#endif /* IPCOMP_ZLIB */
 
+#if IPCOMP_ZLIB
 static const struct ipcomp_algorithm ipcomp_algorithms[] = {
-#if ZLIB
 	{ deflate_compress, deflate_decompress, 90 },
-#endif /* ZLIB */
 };
+#else
+static const struct ipcomp_algorithm ipcomp_algorithms[] __unused = {};
+#endif
 
 const struct ipcomp_algorithm *
 ipcomp_algorithm_lookup(
-#if ZLIB
+#if IPCOMP_ZLIB
 		int idx
 #else
 		__unused int idx
 #endif
 		)
 {
-#if ZLIB
+#if IPCOMP_ZLIB
  	if (idx == SADB_X_CALG_DEFLATE) {
 		/*
 		 * Avert your gaze, ugly hack follows!
@@ -140,11 +142,11 @@ ipcomp_algorithm_lookup(
 
 		return &ipcomp_algorithms[0];
 	}
-#endif /* ZLIB */
+#endif /* IPCOMP_ZLIB */
 	return NULL;
 }
 
-#if ZLIB
+#if IPCOMP_ZLIB
 static void *
 deflate_alloc(
 	__unused void *aux,
@@ -410,4 +412,4 @@ deflate_decompress(m, md, lenp)
 
 	return deflate_common(m, md, lenp, 1);
 }
-#endif /* ZLIB */
+#endif /* IPCOMP_ZLIB */

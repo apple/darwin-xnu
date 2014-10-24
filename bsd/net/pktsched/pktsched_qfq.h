@@ -76,6 +76,7 @@ extern "C" {
 #define	QFCF_SFB		0x0200	/* use SFB */
 #define	QFCF_FLOWCTL		0x0400	/* enable flow control advisories */
 #define	QFCF_DEFAULTCLASS	0x1000	/* default class */
+#define	QFCF_DELAYBASED		0x2000	/* queue sizing is delay based */
 #ifdef BSD_KERNEL_PRIVATE
 #define	QFCF_LAZY		0x10000000 /* on-demand resource allocation */
 #endif /* BSD_KERNEL_PRIVATE */

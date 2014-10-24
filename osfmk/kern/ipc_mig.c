@@ -557,7 +557,7 @@ mach_msg_overwrite(
 			return MACH_RCV_TOO_LARGE;
 		}
 
-		mr = ipc_kmsg_copyout(kmsg, space, map, MACH_MSG_BODY_NULL);
+		mr = ipc_kmsg_copyout(kmsg, space, map, MACH_MSG_BODY_NULL, option);
 		if (mr != MACH_MSG_SUCCESS) {
 			if ((mr &~ MACH_MSG_MASK) == MACH_RCV_BODY_ERROR) {
 				ipc_kmsg_put_to_kernel(msg, kmsg,

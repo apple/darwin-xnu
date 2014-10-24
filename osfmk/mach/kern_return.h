@@ -315,6 +315,10 @@
 		 * as a result of a signature check.
 		 */
 
+#define KERN_POLICY_STATIC		51
+		/* The requested property cannot be changed at this time.
+		 */
+
 #define	KERN_RETURN_MAX			0x100
 		/* Maximum return value allowable
 		 */

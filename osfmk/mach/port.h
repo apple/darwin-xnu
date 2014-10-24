@@ -348,6 +348,7 @@ typedef int	mach_port_flavor_t;
 #define MACH_PORT_DNREQUESTS_SIZE	3	/* info is int */
 #define MACH_PORT_TEMPOWNER		4	/* indicates receive right will be reassigned to another task */
 #define MACH_PORT_IMPORTANCE_RECEIVER	5	/* indicates recieve right accepts priority donation */
+#define MACH_PORT_DENAP_RECEIVER	6	/* indicates receive right accepts de-nap donation */
 #define MACH_PORT_INFO_EXT		7	/* uses mach_port_info_ext_t */
 
 #define MACH_PORT_LIMITS_INFO_COUNT	((natural_t) \
@@ -382,7 +383,7 @@ typedef struct mach_port_qos {
 #define MPO_IMPORTANCE_RECEIVER 0x08	/* Mark the port as importance receiver */
 #define MPO_INSERT_SEND_RIGHT   0x10	/* Insert a send right for the port */
 #define MPO_STRICT		0x20	/* Apply strict guarding for port */
-
+#define MPO_DENAP_RECEIVER	0x40	/* Mark the port as App de-nap receiver */
 /*
  * Structure to define optional attributes for a newly
  * constructed port.

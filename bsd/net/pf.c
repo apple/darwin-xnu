@@ -1567,8 +1567,7 @@ pf_state_expires(const struct pf_state *state)
 	/* handle all PFTM_* > PFTM_MAX here */
 	if (state->timeout == PFTM_PURGE)
 		return (pf_time_second());
-	if (state->timeout == PFTM_UNTIL_PACKET)
-		return (0);
+
 	VERIFY(state->timeout != PFTM_UNLINKED);
 	VERIFY(state->timeout < PFTM_MAX);
 	t = state->rule.ptr->timeout[state->timeout];

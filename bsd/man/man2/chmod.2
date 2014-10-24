@@ -38,7 +38,8 @@
 .Os BSD 4
 .Sh NAME
 .Nm chmod ,
-.Nm fchmod
+.Nm fchmod ,
+.Nm fchmodat
 .Nd change mode of file
 .Sh SYNOPSIS
 .Fd #include <sys/types.h>
@@ -53,6 +54,8 @@
 .Fa "int fildes"
 .Fa "mode_t mode"
 .Fc
+.Ft int
+.Fn fchmodat "int fd" "const char *path" "mode_t mode" "int flag"
 .Sh DESCRIPTION
 The function
 .Fn chmod
@@ -62,11 +65,11 @@ specified by the pathname
 .Fa path
 to
 .Fa mode .
-.Fn Fchmod
+.Fn fchmod
 sets the permission bits of the specified
 file descriptor
 .Fa fildes .
-.Fn Chmod
+.Fn chmod
 verifies that the process owner (user) either owns
 the file specified by
 .Fa path
@@ -74,6 +77,41 @@ the file specified by
 .Fa fildes ) ,
 or
 is the super-user.
+.Pp
+The
+.Fn fchmodat
+is equivalent to
+.Fn chmod
+except in the case where
+.Fa path
+specifies a relative path.
+In this case the file to be changed is determined relative to the directory
+associated with the file descriptor
+.Fa fd
+instead of the current working directory.
+The values for the
+.Fa flag
+are constructed by a bitwise-inclusive OR of flags from the following list, defined
+in
+.In fcntl.h :
+.Bl -tag -width indent
+.It Dv AT_SYMLINK_NOFOLLOW
+If
+.Fa path
+names a symbolic link, then the mode of the symbolic link is changed.
+.El
+.Pp
+If
+.Fn fchmodat
+is passed the special value
+.Dv AT_FDCWD
+in the
+.Fa fd
+parameter, the current working directory is used.
+If also
+.Fa flag
+is zero, the behavior is identical to a call to
+.Fn chmod .
 A mode is created from
 .Em or'd
 permission bit masks
@@ -204,6 +242,34 @@ the effective user ID is not the super-user.
 .It Bq Er EROFS
 The file resides on a read-only file system.
 .El
+.Pp
+In addition to the
+.Fn chmod
+errors,
+.Fn fchmodat
+fails if:
+.Bl -tag -width Er
+.It Bq Er EBADF
+The
+.Fa path
+argument does not specify an absolute path and the
+.Fa fd
+argument is neither
+.Fa AT_FDCWD
+nor a valid file descriptor open for searching.
+.It Bq Er EINVAL
+The value of the
+.Fa flag
+argument is not valid.
+.It Bq Er ENOTDIR
+The
+.Fa path
+argument is not an absolute path and
+.Fa fd
+is neither
+.Dv AT_FDCWD
+nor a file descriptor associated with a directory.
+.El
 .Sh LEGACY SYNOPSIS
 .Fd #include <sys/types.h>
 .Fd #include <sys/stat.h>
@@ -223,9 +289,15 @@ The
 .Fn chmod
 function is expected to conform to 
 .St -p1003.1-88 .
+The
+.Fn fchmodat
+function is expected to conform to POSIX.1-2008 . 
 .Sh HISTORY
 The
 .Fn fchmod
 function call
 appeared in
 .Bx 4.2 .
+The
+.Fn fchmodat
+system call appeared in OS X 10.10

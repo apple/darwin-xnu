@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2013 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2014 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -67,8 +67,8 @@ struct btobj {
 struct update_state {
 	struct cat_desc *	s_desc;	
 	struct cat_attr *	s_attr;
-	struct cat_fork *	s_datafork;
-	struct cat_fork *	s_rsrcfork;
+	const struct cat_fork *	s_datafork;
+	const struct cat_fork *	s_rsrcfork;
 	struct hfsmount *	s_hfsmp;
 };
 
@@ -139,7 +139,7 @@ static int buildthread(void *keyp, void *recp, int std_hfs, int directory);
 static int cat_makealias(struct hfsmount *hfsmp, u_int32_t inode_num, struct HFSPlusCatalogFile *crp);
 
 static int cat_update_internal(struct hfsmount *hfsmp, int update_hardlink, struct cat_desc *descp, struct cat_attr *attrp,
-	struct cat_fork *dataforkp, struct cat_fork *rsrcforkp);
+	const struct cat_fork *dataforkp, const struct cat_fork *rsrcforkp);
 
 
 
@@ -233,8 +233,8 @@ int cat_remove_idhash (cat_preflightid_t *preflight) {
  * catalog by checking the ID hash table. 
  */
 int 
-cat_acquire_cnid (struct hfsmount *hfsmp, cnid_t *new_cnid) {
-
+cat_acquire_cnid (struct hfsmount *hfsmp, cnid_t *new_cnid) 
+{
 	uint32_t nextCNID;
 	struct BTreeIterator *iterator;
 	FSBufferDescriptor btdata;
@@ -466,7 +466,7 @@ cat_convertkey(
 	cnid = getcnid(recp);
 	if (cnid == 0) {
 		/* If ths CNID == 0, it's invalid. Mark as corrupt */
-		hfs_mark_volume_inconsistent (hfsmp);
+		hfs_mark_inconsistent (hfsmp, HFS_INCONSISTENCY_DETECTED);
 		err = EINVAL;
 	}
 	else {
@@ -898,7 +898,7 @@ cat_lookupbykey(struct hfsmount *hfsmp, CatalogKey *keyp, int flags, u_int32_t h
 	cnid = getcnid(recp);
 	if (cnid == 0) {
 		/* CNID of 0 is invalid.  Mark as corrupt */
-		hfs_mark_volume_inconsistent (hfsmp);
+		hfs_mark_inconsistent (hfsmp, HFS_INCONSISTENCY_DETECTED);
 		result = EINVAL;
 		goto exit;
 	}
@@ -1088,7 +1088,7 @@ cat_lookupbykey(struct hfsmount *hfsmp, CatalogKey *keyp, int flags, u_int32_t h
 				 * than that which is in its extent records.
 				 */
 
-				(void) hfs_mark_volume_inconsistent (hfsmp);
+				(void) hfs_mark_inconsistent (hfsmp, HFS_INCONSISTENCY_DETECTED);
 
 				forkp->cf_blocks = validblks;
 				if (attrp != NULL) {
@@ -1225,7 +1225,7 @@ cat_create(struct hfsmount *hfsmp, cnid_t new_fileid, struct cat_desc *descp, st
 				 * volume inconsistent 
 				 */
 				printf ("hfs: cat_create() failed to delete thread record id=%u on vol=%s\n", new_fileid, hfsmp->vcbVN);
-				hfs_mark_volume_inconsistent(hfsmp);
+				hfs_mark_inconsistent(hfsmp, HFS_ROLLBACK_FAILED);
 			}
 		}
 		goto exit;
@@ -1466,7 +1466,7 @@ cat_rename (
 		/* Get the CNID after calling searchrecord */
 		cnid  = getcnid (recp);
 		if (cnid == 0) {
-			hfs_mark_volume_inconsistent(hfsmp);
+			hfs_mark_inconsistent(hfsmp, HFS_INCONSISTENCY_DETECTED);
 			result = EINVAL;
 			goto exit;
 		}
@@ -1492,7 +1492,7 @@ cat_rename (
 			err = BTInsertRecord(fcb, from_iterator, &btdata, datasize);
 			if (err) {
 				printf("hfs: cat_create: could not undo (BTInsert = %d)\n", err);
-				hfs_mark_volume_inconsistent(hfsmp);
+				hfs_mark_inconsistent(hfsmp, HFS_ROLLBACK_FAILED);
 				result = err;
 				goto exit;
 			}
@@ -1519,7 +1519,7 @@ cat_rename (
 			err = BTDeleteRecord(fcb, to_iterator);
 			if (err) {
 				printf("hfs: cat_create: could not undo (BTDelete = %d)\n", err);
-				hfs_mark_volume_inconsistent(hfsmp);
+				hfs_mark_inconsistent(hfsmp, HFS_ROLLBACK_FAILED);
 				result = err;
 				goto exit;
 			}
@@ -1685,7 +1685,7 @@ cat_delete(struct hfsmount *hfsmp, struct cat_desc *descp, struct cat_attr *attr
 	if (BTDeleteRecord(fcb, iterator)) {
 		if (!std_hfs) {
 			printf ("hfs: cat_delete() failed to delete thread record id=%u on vol=%s\n", cnid, hfsmp->vcbVN);
-			hfs_mark_volume_inconsistent(hfsmp);
+			hfs_mark_inconsistent(hfsmp, HFS_OP_INCOMPLETE);
 		}
 	}
 
@@ -1704,7 +1704,7 @@ exit:
  */
 static int
 cat_update_internal(struct hfsmount *hfsmp, int update_hardlink, struct cat_desc *descp, struct cat_attr *attrp,
-	struct cat_fork *dataforkp, struct cat_fork *rsrcforkp)
+	const struct cat_fork *dataforkp, const struct cat_fork *rsrcforkp)
 {
 	FCB * fcb;
 	BTreeIterator * iterator;
@@ -1764,7 +1764,7 @@ exit:
  */
 int
 cat_update(struct hfsmount *hfsmp, struct cat_desc *descp, struct cat_attr *attrp,
-	struct cat_fork *dataforkp, struct cat_fork *rsrcforkp)
+	const struct cat_fork *dataforkp, const struct cat_fork *rsrcforkp)
 {
 	return cat_update_internal(hfsmp, false, descp, attrp, dataforkp, rsrcforkp);
 }
@@ -1778,7 +1778,7 @@ catrec_update(const CatalogKey *ckp, CatalogRecord *crp, struct update_state *st
 {
 	struct cat_desc *descp;
 	struct cat_attr *attrp;
-	struct cat_fork *forkp;
+	const struct cat_fork *forkp;
 	struct hfsmount *hfsmp;
 	long blksize;
 
@@ -2460,18 +2460,12 @@ cat_createlink(struct hfsmount *hfsmp, struct cat_desc *descp, struct cat_attr *
 	fcb = hfsmp->hfs_catalog_cp->c_datafork;
 
 	/*
-	 * Get the next CNID. We can change it since we hold the catalog lock.
+	 * Get the next CNID.  Note that we are currently holding catalog lock.
 	 */
-	nextCNID = hfsmp->vcbNxtCNID;
-	if (nextCNID == 0xFFFFFFFF) {
-		hfs_lock_mount (hfsmp);
-		hfsmp->vcbNxtCNID = kHFSFirstUserCatalogNodeID;
-		hfsmp->vcbAtrb |= kHFSCatalogNodeIDsReusedMask;
-		hfs_unlock_mount(hfsmp);
-	} else {
-		hfsmp->vcbNxtCNID++;
+	result = cat_acquire_cnid(hfsmp, &nextCNID);
+	if (result) {
+		return result;
 	}
-	MarkVCBDirty(hfsmp);
 
 	/* Get space for iterator, key and data */	
 	MALLOC(bto, struct btobj *, sizeof(struct btobj), M_TEMP, M_WAITOK);
@@ -2487,59 +2481,20 @@ cat_createlink(struct hfsmount *hfsmp, struct cat_desc *descp, struct cat_attr *
 	/* This is our only chance to set the encoding (other than a rename). */
 	encoding = hfs_pickencoding(bto->key.nodeName.unicode, bto->key.nodeName.length);
 
-	/* Insert the thread record first. */
+	/* 
+	 * Insert the thread record first.
+	 */
 	datalen = buildthread((void*)&bto->key, &bto->data, 0, 0);
 	btdata.bufferAddress = &bto->data;
 	btdata.itemSize = datalen;
 	btdata.itemCount = 1;
-	
-	for (;;) {
-		buildthreadkey(nextCNID, 0, (CatalogKey *) &bto->iterator.key);
-	
-		/*
-		 * If the CNID wraparound bit is set, then we need to validate if there
-		 * is a cnode in the hash already with this ID (even if it no longer exists
-		 * on disk).  If so, then just skip this ID and move on to the next one. 
-		 */
-		if (!std_hfs && (hfsmp->vcbAtrb & kHFSCatalogNodeIDsReusedMask)) {
-			/* Verify that the CNID does not already exist in the cnode hash... */
-			if (hfs_chash_snoop (hfsmp, nextCNID, 1, NULL, NULL) == 0) {
-				/* It was found in the cnode hash!*/
-				result = btExists;
-			}	
-		}
 
-		if (result == 0) {
-			result = BTInsertRecord(fcb, &bto->iterator, &btdata, datalen);
-		}
-
-		if ((result == btExists) && (hfsmp->vcbAtrb & kHFSCatalogNodeIDsReusedMask)) {
-			/*
-			 * Allow CNIDs on HFS Plus volumes to wrap around
-			 */
-			if (++nextCNID < kHFSFirstUserCatalogNodeID) {
-				nextCNID = kHFSFirstUserCatalogNodeID;
-			}
-			continue;
-		}
-		if (result == 0) {
-			thread_inserted = 1;
-		}
-		break;
-	}
-	if (result)
+	buildthreadkey(nextCNID, 0, (CatalogKey *) &bto->iterator.key);
+	result = BTInsertRecord(fcb, &bto->iterator, &btdata, datalen);
+	if (result) {
 		goto exit;
-	
-	/*
-	 * CNID is now established. If we have wrapped then
-	 * update the vcbNxtCNID.
-	 */
-	if ((hfsmp->vcbAtrb & kHFSCatalogNodeIDsReusedMask)) {
-		hfsmp->vcbNxtCNID = nextCNID + 1;
-		if (hfsmp->vcbNxtCNID < kHFSFirstUserCatalogNodeID) {
-			hfsmp->vcbNxtCNID = kHFSFirstUserCatalogNodeID;
-		}
 	}
+	thread_inserted = 1;
 
 	/*
 	 * Now insert the link record.
@@ -2579,8 +2534,8 @@ exit:
 
 			buildthreadkey(nextCNID, 0, (CatalogKey *)&bto->iterator.key);
 			if (BTDeleteRecord(fcb, &bto->iterator)) {
-	    			printf("hfs: cat_createlink() failed to delete thread record on volume %s\n", hfsmp->vcbVN);
-				hfs_mark_volume_inconsistent(hfsmp);
+				printf("hfs: cat_createlink() failed to delete thread record on volume %s\n", hfsmp->vcbVN);
+				hfs_mark_inconsistent(hfsmp, HFS_ROLLBACK_FAILED);
 			}
 		}
 		if (alias_allocated && rsrcforkp->extents[0].startBlock != 0) {
@@ -2832,6 +2787,7 @@ struct readattr_state {
 	cnid_t	dir_cnid;
 	int stdhfs;
 	int error;
+	int reached_eof;
 };
 
 static int
@@ -2857,6 +2813,7 @@ getentriesattr_callback(const CatalogKey *key, const CatalogRecord *rec,
 #endif
 		if (parentcnid != state->dir_cnid) {
 			state->error = ENOENT;
+			state->reached_eof = 1;
 			return (0);	/* stop */
 		}
 		break;
@@ -2941,7 +2898,7 @@ getentriesattr_callback(const CatalogKey *key, const CatalogRecord *rec,
  * Note: index is zero relative
  */
 int
-cat_getentriesattr(struct hfsmount *hfsmp, directoryhint_t *dirhint, struct cat_entrylist *ce_list)
+cat_getentriesattr(struct hfsmount *hfsmp, directoryhint_t *dirhint, struct cat_entrylist *ce_list, int *reachedeof)
 {
 	FCB* fcb;
 	CatalogKey * key;
@@ -2953,12 +2910,15 @@ cat_getentriesattr(struct hfsmount *hfsmp, directoryhint_t *dirhint, struct cat_
 	int index;
 	int have_key;
 	int result = 0;
+	int reached_eof = 0;
 
 	ce_list->realentries = 0;
 
 	fcb = GetFileControlBlock(HFSTOVCB(hfsmp)->catalogRefNum);
 	std_hfs = (HFSTOVCB(hfsmp)->vcbSigWord == kHFSSigWord);
 	parentcnid = dirhint->dh_desc.cd_parentcnid;
+
+	bzero (&state, sizeof(struct readattr_state));
 
 	state.hfsmp = hfsmp;
 	state.list = ce_list;
@@ -3016,7 +2976,15 @@ cat_getentriesattr(struct hfsmount *hfsmp, directoryhint_t *dirhint, struct cat_
 				result = ps.error;
 			else
 				result = MacToVFSError(result);
+			
 			if (result) {
+				/*
+				* Note: the index may now point to EOF if the directory
+				* was modified in between system calls. We will return
+				* ENOENT from cat_findposition if this is the case, and
+				* when we bail out with an error, our caller (hfs_readdirattr_internal)
+				* will suppress the error and indicate EOF to its caller.
+				*/
 				result = MacToVFSError(result);
 				goto exit;
 			}
@@ -3027,12 +2995,17 @@ cat_getentriesattr(struct hfsmount *hfsmp, directoryhint_t *dirhint, struct cat_
 	result = BTIterateRecords(fcb, kBTreeNextRecord, iterator,
 			(IterateCallBackProcPtr)getentriesattr_callback, &state);
 
-	if (state.error)
+	if (state.error) {
 		result = state.error;
-	else if (ce_list->realentries == 0)
+		reached_eof = state.reached_eof;
+	}
+	else if (ce_list->realentries == 0) {
 		result = ENOENT;
-	else
+		reached_eof = 1;
+	}
+	else {
 		result = MacToVFSError(result);
+	}
 
 	if (std_hfs)
 		goto exit;
@@ -3076,9 +3049,10 @@ cat_getentriesattr(struct hfsmount *hfsmp, directoryhint_t *dirhint, struct cat_
 			cep->ce_rsrcblks = filerec.resourceFork.totalBlocks;
 		}
 	}
+
 exit:
 	FREE(iterator, M_TEMP);
-	
+	*reachedeof = reached_eof;
 	return MacToVFSError(result);
 }
 
@@ -3653,6 +3627,15 @@ cat_getdirentries(struct hfsmount *hfsmp, u_int32_t entrycnt, directoryhint_t *d
 				result = MacToVFSError(result);
 			if (result) {
 				result = MacToVFSError(result);
+				if (result == ENOENT) {
+					/*
+					 * ENOENT means we've hit the EOF.
+					 * suppress the error, and set the eof flag.
+					 */
+					result = 0;
+					dirhint->dh_desc.cd_flags |= CD_EOF;
+					*eofflag = 1;
+				}
 				goto cleanup;
 			}
 		}
@@ -3814,7 +3797,11 @@ cat_findposition(const CatalogKey *ckp, const CatalogRecord *crp,
 
 	/* Make sure parent directory didn't change */
 	if (state->parentID != curID) {
-		state->error = EINVAL;
+		/*
+		 * The parent ID is different from curID this means we've hit
+		 * the EOF for the directory.
+		 */
+		state->error = ENOENT;
 		return (0);  /* stop */
 	}
 
@@ -4791,13 +4778,13 @@ cat_lookup_dirlink(struct hfsmount *hfsmp, cnid_t dirlink_id,
 	}
 	if (error) {
 		printf ("hfs: cat_lookup_dirlink(): Error looking up file record for id=%u (error=%d)\n", dirlink_id, error);
-		hfs_mark_volume_inconsistent(hfsmp);
+		hfs_mark_inconsistent(hfsmp, HFS_INCONSISTENCY_DETECTED);
 		goto out;
 	}
 	/* Just for sanity, make sure that id in catalog record and thread record match */
 	if ((outdescp != NULL) && (dirlink_id != outdescp->cd_cnid)) {
 		printf ("hfs: cat_lookup_dirlink(): Requested cnid=%u != found_cnid=%u\n", dirlink_id, outdescp->cd_cnid);
-		hfs_mark_volume_inconsistent(hfsmp);
+		hfs_mark_inconsistent(hfsmp, HFS_INCONSISTENCY_DETECTED);
 		error = ENOENT;
 	}
 

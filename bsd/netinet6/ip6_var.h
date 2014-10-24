@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2013 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2014 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -327,6 +327,12 @@ struct	ip6stat {
 	u_quad_t ip6s_dad_collide;
 };
 
+enum ip6s_sources_rule_index {
+	IP6S_SRCRULE_0, IP6S_SRCRULE_1, IP6S_SRCRULE_2, IP6S_SRCRULE_3, IP6S_SRCRULE_4,
+	IP6S_SRCRULE_5, IP6S_SRCRULE_5_5, IP6S_SRCRULE_6, IP6S_SRCRULE_7,
+	IP6S_SRCRULE_7x, IP6S_SRCRULE_8
+};
+
 #ifdef BSD_KERNEL_PRIVATE
 /*
  * IPv6 onion peeling state.
@@ -397,6 +403,8 @@ struct ip6_out_args {
 #define	IP6OAF_BOUND_IF		0x00000002	/* boundif value is valid */
 #define	IP6OAF_BOUND_SRCADDR	0x00000004	/* bound to src address */
 #define	IP6OAF_NO_CELLULAR	0x00000010	/* skip IFT_CELLULAR */
+#define	IP6OAF_NO_EXPENSIVE	0x00000020	/* skip IFEF_EXPENSIVE */
+#define	IP6OAF_AWDL_UNRESTRICTED 0x00000040	/* privileged AWDL */
 	u_int32_t	ip6oa_retflags;	/* IP6OARF return flags (see below) */
 #define	IP6OARF_IFDENIED	0x00000001	/* denied access to interface */
 };
@@ -417,9 +425,6 @@ extern int ip6_neighborgcthresh; /* Threshold # of NDP entries for GC */
 extern int ip6_maxifprefixes;	/* Max acceptable prefixes via RA per IF */
 extern int ip6_maxifdefrouters;	/* Max acceptable def routers via RA */
 extern int ip6_maxdynroutes;	/* Max # of routes created via redirect */
-#if MROUTING
-extern struct socket *ip6_mrouter; /* multicast routing daemon */
-#endif /* MROUTING */
 extern int ip6_sendredirects;	/* send IP redirects when forwarding? */
 extern int ip6_accept_rtadv;	/* deprecated */
 extern int ip6_log_interval;
@@ -484,9 +489,6 @@ extern struct ip6aux *ip6_addaux(struct mbuf *);
 extern struct ip6aux *ip6_findaux(struct mbuf *);
 extern void ip6_delaux(struct mbuf *);
 
-#if MROUTING
-extern int ip6_mforward(struct ip6_hdr *, struct ifnet *, struct mbuf *);
-#endif /* MROUTING */
 extern int ip6_process_hopopts(struct mbuf *, u_int8_t *, int, u_int32_t *,
     u_int32_t *);
 extern struct mbuf **ip6_savecontrol_v4(struct inpcb *, struct mbuf *,

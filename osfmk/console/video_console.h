@@ -91,6 +91,7 @@ typedef struct vc_progress_element vc_progress_element;
 void vc_progress_initialize( vc_progress_element * desc,
                                     const unsigned char * data1x,
                                     const unsigned char * data2x,
+                                    const unsigned char * data3x,
                                     const unsigned char * clut );
 
 void vc_progress_set(boolean_t enable, uint32_t vc_delay);
@@ -106,8 +107,9 @@ int vc_display_lzss_icon(uint32_t dst_x,       uint32_t dst_y,
 
 extern void vc_enable_progressmeter(int new_value);
 extern void vc_set_progressmeter(int new_value);
-extern int vc_progress_meter_enable;
-extern int vc_progress_meter_value;
+extern int vc_progressmeter_enable;
+extern int vc_progressmeter_value;
+extern void vc_progress_setdiskspeed(uint32_t speed);
 
 
 #ifdef __cplusplus

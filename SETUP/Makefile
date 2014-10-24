@@ -11,7 +11,8 @@ SETUP_SUBDIRS = 	\
 	kextsymboltool	\
 	setsegname	\
 	decomment	\
-	installfile
+	installfile	\
+	replacecontents
 
 include $(MakeInc_rule)
 include $(MakeInc_dir)

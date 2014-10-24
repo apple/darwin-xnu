@@ -12,7 +12,10 @@
 
 #include <corecrypto/cc.h>
 #include <corecrypto/ccn.h>
-
+#ifdef USE_SUPER_COOL_NEW_CCOID_T
+#include <corecrypto/ccasn1.h>
+#endif /* USE_SUPER_COOL_NEW_CCOID_T */
+ 
 /* To malloc a digest context for a given di, use malloc(ccdigest_di_size(di))
    and assign the result to a pointer to a struct ccdigest_ctx. */
 struct ccdigest_ctx {
@@ -48,7 +51,11 @@ struct ccdigest_info {
     unsigned long state_size;
     unsigned long block_size;
     unsigned long oid_size;
+#ifdef USE_SUPER_COOL_NEW_CCOID_T
+    ccoid_t oid;
+#else
     unsigned char *oid;
+#endif
     const void *initial_state;
     void(*compress)(ccdigest_state_t state, unsigned long nblocks,
                     const void *data);
@@ -66,19 +73,21 @@ struct ccdigest_info {
    size_t _block_size_, named _name_.  Can be used in structs or on the
    stack. */
 #define ccdigest_ctx_decl(_state_size_, _block_size_, _name_)  cc_ctx_decl(struct ccdigest_ctx, ccdigest_ctx_size(_state_size_, _block_size_), _name_)
-#define ccdigest_ctx_clear(_state_size_, _block_size_, _name_) cc_ctx_clear(struct ccdigest_ctx, ccdigest_ctx_size(_state_size_, _block_size_), _name_)
+#define ccdigest_ctx_clear(_state_size_, _block_size_, _name_) cc_zero(ccdigest_ctx_size(_state_size_, _block_size_), _name_)
 /* Declare a ccdigest_ctx for a given size_t _state_size_ and
    size_t _block_size_, named _name_.  Can be used on the stack. */
 #define ccdigest_di_decl(_di_, _name_)  cc_ctx_decl(struct ccdigest_ctx, ccdigest_di_size(_di_), _name_)
-#define ccdigest_di_clear(_di_, _name_) cc_ctx_clear(struct ccdigest_ctx, ccdigest_di_size(_di_), _name_)
+#define ccdigest_di_clear(_di_, _name_) cc_zero(ccdigest_di_size(_di_), _name_)
 
 /* Digest context field accessors.  Consider the implementation private. */
-#define ccdigest_state(_di_, _ctx_)      ((ccdigest_state_t)(_ctx_))
-#define ccdigest_state_u8(_di_, _ctx_)   (&((ccdigest_ctx_t)(_ctx_)).hdr->state.u8)
-#define ccdigest_state_u32(_di_, _ctx_)  (&((ccdigest_ctx_t)(_ctx_)).hdr->state.u32)
-#define ccdigest_state_u64(_di_, _ctx_)  (&((ccdigest_ctx_t)(_ctx_)).hdr->state.u64)
-#define ccdigest_state_ccn(_di_, _ctx_)  (&((ccdigest_ctx_t)(_ctx_)).hdr->state.ccn)
-#define ccdigest_nbits(_di_, _ctx_)      (((uint64_t *)(&((ccdigest_ctx_t)(_ctx_)).hdr->state.u8 + (_di_)->state_size))[0])
+
+#define ccdigest_state(_di_, _ctx_)      ((struct ccdigest_state *)(&((ccdigest_ctx_t)(_ctx_)).hdr->state.u8 + sizeof(uint64_t)))
+#define ccdigest_state_u8(_di_, _ctx_)   ccdigest_u8(ccdigest_state((_di_), (_ctx_)))
+#define ccdigest_state_u32(_di_, _ctx_)  ccdigest_u32(ccdigest_state((_di_), (_ctx_)))
+#define ccdigest_state_u64(_di_, _ctx_)  ccdigest_u64(ccdigest_state((_di_), (_ctx_)))
+#define ccdigest_state_ccn(_di_, _ctx_)  ccdigest_ccn(ccdigest_state((_di_), (_ctx_)))
+#define ccdigest_nbits(_di_, _ctx_)      (((uint64_t *)(&((ccdigest_ctx_t)(_ctx_)).hdr->state.u8))[0])
+
 #define ccdigest_data(_di_, _ctx_)       (&((ccdigest_ctx_t)(_ctx_)).hdr->state.u8 + (_di_)->state_size + sizeof(uint64_t))
 #define ccdigest_num(_di_, _ctx_)        (((unsigned int *)(&((ccdigest_ctx_t)(_ctx_)).hdr->state.u8 + (_di_)->state_size + sizeof(uint64_t) + (_di_)->block_size))[0])
 
@@ -126,4 +135,45 @@ struct ccdigest_vector {
 int ccdigest_test_vector(const struct ccdigest_info *di, const struct ccdigest_vector *v);
 int ccdigest_test_chunk_vector(const struct ccdigest_info *di, const struct ccdigest_vector *v, unsigned long chunk);
 
+#ifdef USE_SUPER_COOL_NEW_CCOID_T
+#define OID_DEF(_NAME_, _VALUE_) _NAME_ {((unsigned char *) _VALUE_)}
+#define CC_DIGEST_OID_MD2 {((unsigned char *)"\x06\x08\x2A\x86\x48\x86\xF7\x0D\x02\x02")}
+#define CC_DIGEST_OID_MD4 {((unsigned char *)"\x06\x08\x2A\x86\x48\x86\xF7\x0D\x02\x04")}
+#define CC_DIGEST_OID_MD5 {((unsigned char *)"\x06\x08\x2A\x86\x48\x86\xF7\x0D\x02\x05")}
+#define CC_DIGEST_OID_SHA1 {((unsigned char *)"\x06\x05\x2b\x0e\x03\x02\x1a")}
+#define CC_DIGEST_OID_SHA224 {((unsigned char *)"\x06\x09\x60\x86\x48\x01\x65\x03\x04\x02\x04")}
+#define CC_DIGEST_OID_SHA256 {((unsigned char *)"\x06\x09\x60\x86\x48\x01\x65\x03\x04\x02\x01")}
+#define CC_DIGEST_OID_SHA384 {((unsigned char *)"\x06\x09\x60\x86\x48\x01\x65\x03\x04\x02\x02")}
+#define CC_DIGEST_OID_SHA512 {((unsigned char *)"\x06\x09\x60\x86\x48\x01\x65\x03\x04\x02\x03")}
+#define CC_DIGEST_OID_RMD128 {((unsigned char *)"\x06\x06\x28\xCF\x06\x03\x00\x32")}
+#define CC_DIGEST_OID_RMD160 {((unsigned char *)"\x06\x05\x2B\x24\x03\x02\x01")}
+#define CC_DIGEST_OID_RMD256 {((unsigned char *)"\x06\x05\x2B\x24\x03\x02\x03")}
+#define CC_DIGEST_OID_RMD320 {((unsigned char *)NULL)}
+#else
+#define CC_DIGEST_OID_MD2    "\x06\x08\x2A\x86\x48\x86\xF7\x0D\x02\x02"
+#define CC_DIGEST_OID_MD4    "\x06\x08\x2A\x86\x48\x86\xF7\x0D\x02\x04"
+#define CC_DIGEST_OID_MD5    "\x06\x08\x2A\x86\x48\x86\xF7\x0D\x02\x05"
+#define CC_DIGEST_OID_SHA1   "\x06\x05\x2b\x0e\x03\x02\x1a"
+#define CC_DIGEST_OID_SHA224 "\x06\x09\x60\x86\x48\x01\x65\x03\x04\x02\x04"
+#define CC_DIGEST_OID_SHA256 "\x06\x09\x60\x86\x48\x01\x65\x03\x04\x02\x01"
+#define CC_DIGEST_OID_SHA384 "\x06\x09\x60\x86\x48\x01\x65\x03\x04\x02\x02"
+#define CC_DIGEST_OID_SHA512 "\x06\x09\x60\x86\x48\x01\x65\x03\x04\x02\x03"
+#define CC_DIGEST_OID_RMD128 "\x06\x06\x28\xCF\x06\x03\x00\x32"
+#define CC_DIGEST_OID_RMD160 "\x06\x05\x2B\x24\x03\x02\x01"
+#define CC_DIGEST_OID_RMD256 "\x06\x05\x2B\x24\x03\x02\x03"
+#define CC_DIGEST_OID_RMD320 NULL
+#endif
+
+#ifdef USE_SUPER_COOL_NEW_CCOID_T
+CC_INLINE CC_NONNULL_TU((1)) CC_NONNULL_TU((2))
+bool ccdigest_oid_equal(const struct ccdigest_info *di, ccoid_t oid) {
+    if(di->oid.oid == NULL && oid.oid == NULL) return true;
+    return ccoid_equal(di->oid, oid);
+}
+
+typedef const struct ccdigest_info *(ccdigest_lookup)(ccoid_t oid);
+
+#include <stdarg.h>
+const struct ccdigest_info *ccdigest_oid_lookup(ccoid_t oid, ...);
+#endif /* USE_SUPER_COOL_NEW_CCOID_T*/
 #endif /* _CORECRYPTO_CCDIGEST_H_ */

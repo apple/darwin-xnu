@@ -72,6 +72,16 @@ typedef struct ipc_kmsg *ipc_kmsg_t;
 typedef	void (*mach_msg_continue_t)(mach_msg_return_t);	/* after wakeup */
 #define	MACH_MSG_CONTINUE_NULL	((mach_msg_continue_t) 0)
 
+typedef struct ipc_importance_elem *ipc_importance_elem_t;
+#define IIE_NULL	((ipc_importance_elem_t)0)
+
+typedef struct ipc_importance_task *ipc_importance_task_t;
+#define IIT_NULL	((ipc_importance_task_t)0)
+
+typedef struct ipc_importance_inherit *ipc_importance_inherit_t;
+#define III_NULL	((ipc_importance_inherit_t)0)
+
+
 #else	/* MACH_KERNEL_PRIVATE */
 
 struct ipc_object ;

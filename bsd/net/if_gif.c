@@ -684,7 +684,6 @@ gif_ioctl(
 	case SIOCSIFPHYADDR_IN6_32:
 	case SIOCSIFPHYADDR_IN6_64:
 #endif /* INET6 */
-	case SIOCSLIFPHYADDR:
 		switch (cmd) {
 #if INET
 		case SIOCSIFPHYADDR:
@@ -713,11 +712,6 @@ gif_ioctl(
 			break;
 		}
 #endif
-		case SIOCSLIFPHYADDR:
-			src = (struct sockaddr *)
-				&(((struct if_laddrreq *)data)->addr);
-			dst = (struct sockaddr *)
-				&(((struct if_laddrreq *)data)->dstaddr);
 		}
 
 		/* sa_family must be equal */
@@ -771,9 +765,6 @@ gif_ioctl(
 				break;
 			return (EAFNOSUPPORT);
 #endif /* INET6 */
-		case SIOCSLIFPHYADDR:
-			/* checks done in the above */
-			break;
 		}
 
 #define	GIF_ORDERED_LOCK(sc, sc2)	\
@@ -967,38 +958,6 @@ gif_ioctl(
 			GIF_UNLOCK(sc);
 			goto bad;
 		}
-		if (src->sa_len > size) {
-			GIF_UNLOCK(sc);
-			return (EINVAL);
-		}
-		bcopy((caddr_t)src, (caddr_t)dst, src->sa_len);
-		GIF_UNLOCK(sc);
-		break;
-
-	case SIOCGLIFPHYADDR:
-		GIF_LOCK(sc);
-		if (sc->gif_psrc == NULL || sc->gif_pdst == NULL) {
-			GIF_UNLOCK(sc);
-			error = EADDRNOTAVAIL;
-			goto bad;
-		}
-
-		/* copy src */
-		src = sc->gif_psrc;
-		dst = (struct sockaddr *)
-			&(((struct if_laddrreq *)data)->addr);
-		size = sizeof (((struct if_laddrreq *)data)->addr);
-		if (src->sa_len > size) {
-			GIF_UNLOCK(sc);
-			return (EINVAL);
-		}
-		bcopy((caddr_t)src, (caddr_t)dst, src->sa_len);
-
-		/* copy dst */
-		src = sc->gif_pdst;
-		dst = (struct sockaddr *)
-			&(((struct if_laddrreq *)data)->dstaddr);
-		size = sizeof (((struct if_laddrreq *)data)->dstaddr);
 		if (src->sa_len > size) {
 			GIF_UNLOCK(sc);
 			return (EINVAL);

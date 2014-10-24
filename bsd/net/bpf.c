@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2013 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2014 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -122,6 +122,7 @@
 
 #include <miscfs/devfs/devfs.h>
 #include <net/dlil.h>
+#include <net/pktap.h>
 
 #include <kern/locks.h>
 #include <kern/thread_call.h>
@@ -150,6 +151,14 @@ SYSCTL_INT(_debug, OID_AUTO, bpf_maxbufsize, CTLFLAG_RW | CTLFLAG_LOCKED,
 static unsigned int bpf_maxdevices = 256;
 SYSCTL_UINT(_debug, OID_AUTO, bpf_maxdevices, CTLFLAG_RW | CTLFLAG_LOCKED,
 	&bpf_maxdevices, 0, "");
+/*
+ * bpf_wantpktap controls the defaul visibility of DLT_PKTAP
+ * For OS X is off by default so process need to use the ioctl BPF_WANT_PKTAP
+ * explicitly to be able to use DLT_PKTAP.
+ */
+static unsigned int bpf_wantpktap = 0;
+SYSCTL_UINT(_debug, OID_AUTO, bpf_wantpktap, CTLFLAG_RW | CTLFLAG_LOCKED,
+	&bpf_wantpktap, 0, "");
 
 /*
  *  bpf_iflist is the list of interfaces; each corresponds to an ifnet
@@ -480,12 +489,21 @@ bpf_attachd(struct bpf_d *d, struct bpf_if *bp)
 	if (first) {
 		/* Find the default bpf entry for this ifp */
 		if (bp->bif_ifp->if_bpf == NULL) {
-			struct bpf_if	*primary;
+			struct bpf_if	*tmp, *primary = NULL;
 			
-			for (primary = bpf_iflist; primary && primary->bif_ifp != bp->bif_ifp;
-				 primary = primary->bif_next)
-				;
-		
+			for (tmp = bpf_iflist; tmp; tmp = tmp->bif_next) {
+				if (tmp->bif_ifp != bp->bif_ifp)
+					continue;
+				primary = tmp;
+				/*
+				 * Make DLT_PKTAP only if process knows how
+				 * to deal with it, otherwise find another one
+				 */
+				if (tmp->bif_dlt == DLT_PKTAP &&
+					!(d->bd_flags & BPF_WANT_PKTAP))
+					continue;
+				break;
+			}
 			bp->bif_ifp->if_bpf = primary;
 		}
 		
@@ -496,6 +514,12 @@ bpf_attachd(struct bpf_d *d, struct bpf_if *bp)
 		if (bp->bif_tap)
 			error = bp->bif_tap(bp->bif_ifp, bp->bif_dlt, BPF_TAP_INPUT_OUTPUT);
 	}
+
+	if (bp->bif_ifp->if_bpf != NULL &&
+		bp->bif_ifp->if_bpf->bif_dlt == DLT_PKTAP)
+		d->bd_flags |= BPF_FINALIZE_PKTAP;
+	else
+		d->bd_flags &= ~BPF_FINALIZE_PKTAP;
 
 	return error;
 }
@@ -677,6 +701,10 @@ bpfopen(dev_t dev, int flags, __unused int fmt,
 	d->bd_state = BPF_IDLE;
 	d->bd_thread_call = thread_call_allocate(bpf_timed_out, d);
 	d->bd_traffic_class = SO_TC_BE;
+	if (bpf_wantpktap)
+		d->bd_flags |= BPF_WANT_PKTAP;
+	else
+		d->bd_flags &= ~BPF_WANT_PKTAP;
 
 	if (d->bd_thread_call == NULL) {
 		printf("bpfopen: malloc thread call failed\n");
@@ -829,6 +857,7 @@ bpfread(dev_t dev, struct uio *uio, int ioflag)
 	caddr_t hbuf; 
 	int timed_out, hbuf_len;
 	int error;
+	int flags;
 
 	lck_mtx_lock(bpf_mlock);
 
@@ -915,8 +944,16 @@ bpfread(dev_t dev, struct uio *uio, int ioflag)
 			lck_mtx_unlock(bpf_mlock);
 			return (ENXIO);
 		}
-		
+
 		if (error == EINTR || error == ERESTART) {
+			if (d->bd_hbuf) {
+				/*
+				 * Because we msleep, the hold buffer might
+				 * be filled when we wake up.  Avoid rotating
+				 * in this case.
+				 */
+				break;
+			}
 			if (d->bd_slen) {
 				/*
 				 * Sometimes we may be interrupted often and
@@ -957,16 +994,28 @@ bpfread(dev_t dev, struct uio *uio, int ioflag)
 	 * At this point, we know we have something in the hold slot.
 	 */
 
+	/*
+	 * Set the hold buffer read. So we do not 
+	 * rotate the buffers until the hold buffer
+	 * read is complete. Also to avoid issues resulting
+	 * from page faults during disk sleep (<rdar://problem/13436396>).
+	 */
+	d->bd_hbuf_read = 1;
+	hbuf = d->bd_hbuf;
+	hbuf_len = d->bd_hlen;
+	flags = d->bd_flags;
+	lck_mtx_unlock(bpf_mlock);
+
 #ifdef __APPLE__
 	/*
 	 * Before we move data to userland, we fill out the extended
 	 * header fields.
 	 */
-	if (d->bd_extendedhdr) {
+	if (flags & BPF_EXTENDED_HDR) {
 		char *p;
 
-		p = d->bd_hbuf;
-		while (p < d->bd_hbuf + d->bd_hlen) {
+		p = hbuf;
+		while (p < hbuf + hbuf_len) {
 			struct bpf_hdr_ext *ehp;
 			uint32_t flowid;
 			struct so_procinfo soprocinfo;
@@ -980,26 +1029,56 @@ bpfread(dev_t dev, struct uio *uio, int ioflag)
 				else if (ehp->bh_proto == IPPROTO_UDP)
 					found = inp_findinpcb_procinfo(&udbinfo,
 					    flowid, &soprocinfo);
-				if (found != 0) {
+				if (found == 1) {
 					ehp->bh_pid = soprocinfo.spi_pid;
 					proc_name(ehp->bh_pid, ehp->bh_comm, MAXCOMLEN);
 				}
 				ehp->bh_flowid = 0;
 			}
+			if (flags & BPF_FINALIZE_PKTAP) {
+				struct pktap_header *pktaphdr;
+				
+				pktaphdr = (struct pktap_header *)(void *)
+				    (p + BPF_WORDALIGN(ehp->bh_hdrlen));
+
+				if (pktaphdr->pth_flags & PTH_FLAG_DELAY_PKTAP)
+					pktap_finalize_proc_info(pktaphdr);
+
+				if (pktaphdr->pth_flags & PTH_FLAG_TSTAMP) {
+					ehp->bh_tstamp.tv_sec =
+						pktaphdr->pth_tstamp.tv_sec;
+					ehp->bh_tstamp.tv_usec =
+						pktaphdr->pth_tstamp.tv_usec;
+				}
+			}
 			p += BPF_WORDALIGN(ehp->bh_hdrlen + ehp->bh_caplen);
+		}
+	} else if (flags & BPF_FINALIZE_PKTAP) {
+		char *p;
+
+		p = hbuf;
+		while (p < hbuf + hbuf_len) {
+			struct bpf_hdr *hp;
+			struct pktap_header *pktaphdr;
+			
+			hp = (struct bpf_hdr *)(void *)p;
+			pktaphdr = (struct pktap_header *)(void *)
+			    (p + BPF_WORDALIGN(hp->bh_hdrlen));
+
+			if (pktaphdr->pth_flags & PTH_FLAG_DELAY_PKTAP)
+				pktap_finalize_proc_info(pktaphdr);
+
+			if (pktaphdr->pth_flags & PTH_FLAG_TSTAMP) {
+				hp->bh_tstamp.tv_sec =
+					pktaphdr->pth_tstamp.tv_sec;
+				hp->bh_tstamp.tv_usec =
+					pktaphdr->pth_tstamp.tv_usec;
+			}
+
+			p += BPF_WORDALIGN(hp->bh_hdrlen + hp->bh_caplen);
 		}
 	}
 #endif
-	/*
-	 * Set the hold buffer read. So we do not 
-	 * rotate the buffers until the hold buffer
-	 * read is complete. Also to avoid issues resulting
-	 * from page faults during disk sleep (<rdar://problem/13436396>).
-	 */
-	d->bd_hbuf_read = 1;
-	hbuf = d->bd_hbuf;
-	hbuf_len = d->bd_hlen;
-	lck_mtx_unlock(bpf_mlock);
 
 	/*
 	 * Move data from hold buffer into user space.
@@ -1234,7 +1313,8 @@ bpfioctl(dev_t dev, u_long cmd, caddr_t addr, __unused int flags,
     struct proc *p)
 {
 	struct bpf_d *d;
-	int error = 0, int_arg;
+	int error = 0;
+	u_int int_arg;
 	struct ifreq ifr;
 
 	lck_mtx_lock(bpf_mlock);
@@ -1609,8 +1689,12 @@ bpfioctl(dev_t dev, u_long cmd, caddr_t addr, __unused int flags,
 		bcopy(&d->bd_sig, addr, sizeof (u_int));
 		break;
 #ifdef __APPLE__
-	case BIOCSEXTHDR:
-		bcopy(addr, &d->bd_extendedhdr, sizeof (u_int));
+	case BIOCSEXTHDR:		/* u_int */
+		bcopy(addr, &int_arg, sizeof (int_arg));
+		if (int_arg)
+			d->bd_flags |= BPF_EXTENDED_HDR;
+		else
+			d->bd_flags &= ~BPF_EXTENDED_HDR;
 		break;
 
 	case BIOCGIFATTACHCOUNT: { 		/* struct ifreq */
@@ -1637,6 +1721,18 @@ bpfioctl(dev_t dev, u_long cmd, caddr_t addr, __unused int flags,
 		bcopy(&ifr, addr, sizeof (ifr));
 		break;
 	}
+	case BIOCGWANTPKTAP:			/* u_int */
+		int_arg = d->bd_flags & BPF_WANT_PKTAP ? 1 : 0;
+		bcopy(&int_arg, addr, sizeof (int_arg));
+		break;
+
+	case BIOCSWANTPKTAP:			/* u_int */
+                bcopy(addr, &int_arg, sizeof (int_arg));
+                if (int_arg)
+                        d->bd_flags |= BPF_WANT_PKTAP;
+                else
+                        d->bd_flags &= ~BPF_WANT_PKTAP;
+		break;
 #endif
 	}
 
@@ -1725,6 +1821,13 @@ bpf_setif(struct bpf_d *d, ifnet_t theywant, u_int32_t dlt, dev_t dev)
 		if (ifp == 0 || ifp != theywant || (dlt != 0 && dlt != bp->bif_dlt))
 			continue;
 		/*
+		 * If the process knows how to deal with DLT_PKTAP, use it
+		 * by default
+		 */
+		if (dlt == 0 && bp->bif_dlt == DLT_PKTAP &&
+			!(d->bd_flags & BPF_WANT_PKTAP))
+			continue;
+		/*
 		 * We found the requested interface.
 		 * Allocate the packet buffers if we need to.
 		 * If we're already attached to requested interface,
@@ -1778,8 +1881,14 @@ bpf_getdltlist(struct bpf_d *d, caddr_t addr, struct proc *p)
 	ifp = d->bd_bif->bif_ifp;
 	n = 0;
 	error = 0;
+
 	for (bp = bpf_iflist; bp; bp = bp->bif_next) {
 		if (bp->bif_ifp != ifp)
+			continue;
+		/* 
+		 * Return DLT_PKTAP only to processes that know how to handle it
+		 */
+		if (bp->bif_dlt == DLT_PKTAP && !(d->bd_flags & BPF_WANT_PKTAP))
 			continue;
 		if (dlist != USER_ADDR_NULL) {
 			if (n >= bfl.bfl_len) {
@@ -1818,7 +1927,7 @@ bpf_setdlt(struct bpf_d *d, uint32_t dlt, dev_t dev)
 	d = bpf_dtab[minor(dev)];
 	if  (d == 0 || d == (void *)1)
 		return (ENXIO);
-	
+
 	ifp = d->bd_bif->bif_ifp;
 	for (bp = bpf_iflist; bp; bp = bp->bif_next) {
 		if (bp->bif_ifp == ifp && bp->bif_dlt == dlt)
@@ -2216,7 +2325,7 @@ catchpacket(struct bpf_d *d, u_char *pkt, struct mbuf *m, u_int pktlen,
 	struct m_tag *mt = NULL;
 	struct bpf_mtag *bt = NULL;
 
-	hdrlen = d->bd_extendedhdr ? d->bd_bif->bif_exthdrlen :
+	hdrlen = (d->bd_flags & BPF_EXTENDED_HDR) ? d->bd_bif->bif_exthdrlen :
 	    d->bd_bif->bif_hdrlen;
 	/*
 	 * Figure out how many bytes to move.  If the packet is
@@ -2262,7 +2371,7 @@ catchpacket(struct bpf_d *d, u_char *pkt, struct mbuf *m, u_int pktlen,
 	 * Append the bpf header.
 	 */
 	microtime(&tv);
- 	if (d->bd_extendedhdr) {
+ 	if (d->bd_flags & BPF_EXTENDED_HDR) {
  		ehp = (struct bpf_hdr_ext *)(void *)(d->bd_sbuf + curlen);
  		memset(ehp, 0, sizeof(*ehp));
  		ehp->bh_tstamp.tv_sec = tv.tv_sec;
@@ -2460,42 +2569,56 @@ void
 bpfdetach(struct ifnet *ifp)
 {
 	struct bpf_if	*bp, *bp_prev, *bp_next;
-	struct bpf_if	*bp_free = NULL;
+	struct bpf_if	*bp_free_list = NULL;
 	struct bpf_d	*d;
 
-	
 	lck_mtx_lock(bpf_mlock);
 
-	/* Locate BPF interface information */
+	/*
+	 * Build the list of devices attached to that interface
+	 * that we need to free while keeping the lock to maintain
+	 * the integrity of the interface list
+	 */
 	bp_prev = NULL;
 	for (bp = bpf_iflist; bp != NULL; bp = bp_next) {
 		bp_next = bp->bif_next;
+
 		if (ifp != bp->bif_ifp) {
 			bp_prev = bp;
 			continue;
 		}
-		
+		/* Unlink from the interface list */
+		if (bp_prev)
+			bp_prev->bif_next = bp->bif_next;
+		else
+			bpf_iflist = bp->bif_next;
+
+		/* Add to the list to be freed */
+		bp->bif_next = bp_free_list;
+		bp_free_list = bp;
+	}
+	
+	/*
+	 * Detach the bpf devices attached to the interface
+	 * Now we do not care if we lose the bpf_mlock in bpf_detachd
+	 */
+	for (bp = bp_free_list; bp != NULL; bp = bp->bif_next) {
 		while ((d = bp->bif_dlist) != NULL) {
 			bpf_detachd(d);
 			bpf_wakeup(d);
 		}
-	
-		if (bp_prev) {
-			bp_prev->bif_next = bp->bif_next;
-		} else {
-			bpf_iflist = bp->bif_next;
-		}
-		
-		bp->bif_next = bp_free;
-		bp_free = bp;
-		
 		ifnet_release(ifp);
 	}
 
 	lck_mtx_unlock(bpf_mlock);
 
-	FREE(bp, M_DEVBUF);
-
+	/*
+	 * Free the list
+	 */
+	while ((bp = bp_free_list) != NULL) {
+		bp_free_list = bp->bif_next;
+		FREE(bp, M_DEVBUF);
+	}
 }
 
 void

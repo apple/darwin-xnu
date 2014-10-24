@@ -36,6 +36,8 @@
 
 #define JETSAM_PRIORITY_REVISION                  2
 
+#define JETSAM_PRIORITY_IDLE_HEAD                -2
+/* The value -1 is an alias to JETSAM_PRIORITY_DEFAULT */
 #define JETSAM_PRIORITY_IDLE                      0
 #define JETSAM_PRIORITY_IDLE_DEFERRED             1
 #define JETSAM_PRIORITY_BACKGROUND_OPPORTUNISTIC  2
@@ -120,6 +122,9 @@ typedef struct jetsam_snapshot_entry {
 	uint64_t user_data;
 	uint8_t  uuid[16];
 	uint32_t fds;
+	uint32_t max_pages_lifetime;
+	uint32_t purgeable_pages;
+	struct timeval cpu_time;
 } memorystatus_jetsam_snapshot_entry_t;
 
 typedef struct jetsam_snapshot {
@@ -154,6 +159,7 @@ enum {
  	kMemorystatusKilledVnodes,
   	kMemorystatusKilledVMPageShortage,
   	kMemorystatusKilledVMThrashing,
+  	kMemorystatusKilledFCThrashing,
   	kMemorystatusKilledPerProcessLimit,
 	kMemorystatusKilledDiagnostic,
 	kMemorystatusKilledIdleExit
@@ -178,7 +184,11 @@ int memorystatus_control(uint32_t command, int32_t pid, uint32_t flags, void *bu
 #define MEMORYSTATUS_CMD_SET_PRIORITY_PROPERTIES      2
 #define MEMORYSTATUS_CMD_GET_JETSAM_SNAPSHOT          3
 #define MEMORYSTATUS_CMD_GET_PRESSURE_STATUS          4
-#define MEMORYSTATUS_CMD_SET_JETSAM_HIGH_WATER_MARK   5 /* TODO: deprecate */
+#define MEMORYSTATUS_CMD_SET_JETSAM_HIGH_WATER_MARK   5
+#define MEMORYSTATUS_CMD_SET_JETSAM_TASK_LIMIT	      6
+
+/* Group Commands */
+#define MEMORYSTATUS_CMD_GRP_SET_PROPERTIES           7
 
 #if PRIVATE
 /* Test commands */
@@ -215,18 +225,20 @@ typedef struct memorystatus_priority_properties {
 #define P_MEMSTAT_FOREGROUND           0x00000100
 #define P_MEMSTAT_DIAG_SUSPENDED       0x00000200
 #define P_MEMSTAT_PRIOR_THAW           0x00000400
-#define P_MEMSTAT_MEMLIMIT_BACKGROUND  0x00000800
+#define P_MEMSTAT_MEMLIMIT_BACKGROUND  0x00000800 /* Task has a memory limit for when it's in the background. Used for a process' "high water mark".*/
 #define P_MEMSTAT_INTERNAL             0x00001000
+#define P_MEMSTAT_FATAL_MEMLIMIT       0x00002000 /* cross this limit and the process is killed. Types: system-wide default task memory limit and per-task custom memory limit. */
 
 extern void memorystatus_init(void) __attribute__((section("__TEXT, initcode")));
 
 extern int memorystatus_add(proc_t p, boolean_t locked);
-extern int memorystatus_update(proc_t p, int priority, uint64_t user_data, boolean_t effective, boolean_t update_memlimit, int32_t memlimit, boolean_t memlimit_background);
+extern int memorystatus_update(proc_t p, int priority, uint64_t user_data, boolean_t effective, boolean_t update_memlimit, int32_t memlimit, boolean_t memlimit_background, boolean_t is_fatal_limit);
 extern int memorystatus_remove(proc_t p, boolean_t locked);
 
 extern int memorystatus_dirty_track(proc_t p, uint32_t pcontrol);
 extern int memorystatus_dirty_set(proc_t p, boolean_t self, uint32_t pcontrol);
 extern int memorystatus_dirty_get(proc_t p);
+extern int memorystatus_dirty_clear(proc_t p, uint32_t pcontrol);
 
 extern int memorystatus_on_terminate(proc_t p);
 
@@ -258,13 +270,13 @@ extern unsigned int memorystatus_jetsam_running;
 
 boolean_t memorystatus_kill_on_VM_page_shortage(boolean_t async);
 boolean_t memorystatus_kill_on_VM_thrashing(boolean_t async);
+boolean_t memorystatus_kill_on_FC_thrashing(boolean_t async);
 boolean_t memorystatus_kill_on_vnode_limit(void);
 
 void memorystatus_on_ledger_footprint_exceeded(int warning, const int max_footprint_mb);
+void jetsam_on_ledger_cpulimit_exceeded(void);
 
 void memorystatus_pages_update(unsigned int pages_avail);
-
-extern boolean_t memorystatus_is_foreground_locked(proc_t p);
 
 #else /* CONFIG_JETSAM */
 
@@ -301,14 +313,13 @@ extern void memorystatus_freeze_init(void) __attribute__((section("__TEXT, initc
 
 #if VM_PRESSURE_EVENTS
 
-#define MEMORYSTATUS_SUSPENDED_THRESHOLD  4
-
 extern kern_return_t memorystatus_update_vm_pressure(boolean_t);
 
-#if CONFIG_JETSAM
+#if CONFIG_MEMORYSTATUS
 extern int memorystatus_send_pressure_note(int pid);
+extern boolean_t memorystatus_is_foreground_locked(proc_t p);
 extern boolean_t memorystatus_bg_pressure_eligible(proc_t p);
-#endif
+#endif /* CONFIG_MEMORYSTATUS */
 
 #endif /* VM_PRESSURE_EVENTS */
 

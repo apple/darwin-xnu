@@ -36,7 +36,7 @@ _mach_strlen(const char *str)
 	const char *p;
 	for (p = str; p; p++) {
 		if (*p == '\0') {
-			return (p - str);
+			return (int)(p - str);
 		}
 	}
 	/* NOTREACHED */

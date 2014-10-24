@@ -303,6 +303,7 @@ typedef struct hibernate_statistics_t hibernate_statistics_t;
 void     IOHibernateSystemInit(IOPMrootDomain * rootDomain);
 
 IOReturn IOHibernateSystemSleep(void);
+IOReturn IOHibernateOpenForDebugData(void);
 IOReturn IOHibernateIOKitSleep(void);
 IOReturn IOHibernateSystemHasSlept(void);
 IOReturn IOHibernateSystemWake(void);
@@ -318,7 +319,7 @@ void     IOHibernateSystemRestart(void);
 typedef void (*kern_get_file_extents_callback_t)(void * ref, uint64_t start, uint64_t size);
 
 struct kern_direct_file_io_ref_t *
-kern_open_file_for_direct_io(const char * name, 
+kern_open_file_for_direct_io(const char * name, boolean_t create_file,
 			     kern_get_file_extents_callback_t callback, 
 			     void * callback_ref,
 
@@ -333,14 +334,18 @@ kern_open_file_for_direct_io(const char * name,
                              uint64_t * partitionbase_result,
                              uint64_t * maxiocount_result,
                              uint32_t * oflags);
+int
+kern_write_file(struct kern_direct_file_io_ref_t * ref, off_t offset, caddr_t addr, vm_size_t len, int ioflag);
 void
 kern_close_file_for_direct_io(struct kern_direct_file_io_ref_t * ref,
 			      off_t write_offset, caddr_t addr, vm_size_t write_length,
 			      off_t discard_offset, off_t discard_end);
 #endif /* _SYS_CONF_H_ */
 
+
 void
 vm_compressor_do_warmup(void);
+
 
 hibernate_page_list_t *
 hibernate_page_list_allocate(boolean_t log);
@@ -488,7 +493,9 @@ enum
 enum
 {
     kIOHibernateHeaderSignature        = 0x73696d65,
-    kIOHibernateHeaderInvalidSignature = 0x7a7a7a7a
+    kIOHibernateHeaderInvalidSignature = 0x7a7a7a7a,
+    kIOHibernateHeaderOpenSignature    = 0xf1e0be9d,
+    kIOHibernateHeaderDebugDataSignature = 0xfcddfcdd
 };
 
 // kind for hibernate_set_page_state()

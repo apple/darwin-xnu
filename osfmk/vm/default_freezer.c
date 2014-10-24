@@ -845,9 +845,23 @@ default_freezer_handle_deallocate_locked(
 	assert(df_handle);
 	df_handle->dfh_ref_count--;
 	if (df_handle->dfh_ref_count == 0) {
+
+		if (df_handle->dfh_compact_object) {
+			vm_object_deallocate(df_handle->dfh_compact_object);
+			df_handle->dfh_compact_object = NULL;
+			df_handle->dfh_compact_offset = 0;
+		}
+			
+		if (df_handle->dfh_table) {
+			default_freezer_mapping_free(&df_handle->dfh_table, TRUE);
+			df_handle->dfh_table = NULL;
+		}
+	
+		lck_rw_done(&df_handle->dfh_lck);
 		lck_rw_destroy(&df_handle->dfh_lck, &default_freezer_handle_lck_grp);
-		kfree(df_handle, sizeof(struct default_freezer_handle));
 		should_unlock = FALSE;
+
+		kfree(df_handle, sizeof(struct default_freezer_handle));
 	}
 	return should_unlock;
 }

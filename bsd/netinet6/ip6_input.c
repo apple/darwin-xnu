@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2003-2013 Apple Inc. All rights reserved.
+ * Copyright (c) 2003-2014 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -206,9 +206,6 @@ extern void addrsel_policy_init(void);
 
 static void ip6_init_delayed(void);
 static int ip6_hopopts_input(u_int32_t *, u_int32_t *, struct mbuf **, int *);
-#if PULLDOWN_TEST
-static struct mbuf *ip6_pullexthdr(struct mbuf *, size_t, int);
-#endif
 
 #if NSTF
 extern void stfattach(void);
@@ -563,7 +560,6 @@ ip6_input(struct mbuf *m)
 	in6_ifstat_inc_na(inifp, ifs6_in_receive);
 	ip6stat.ip6s_total++;
 
-#ifndef PULLDOWN_TEST
 	/*
 	 * L2 bridge code and some other code can return mbuf chain
 	 * that does not conform to KAME requirement.  too bad.
@@ -591,7 +587,6 @@ ip6_input(struct mbuf *m)
 		m = n;
 	}
 	IP6_EXTHDR_CHECK(m, 0, sizeof (struct ip6_hdr), { goto done; });
-#endif
 
 	if (m->m_len < sizeof (struct ip6_hdr)) {
 		if ((m = m_pullup(m, sizeof (struct ip6_hdr))) == 0) {
@@ -743,7 +738,7 @@ check_with_pf:
 			ip6stat.ip6s_badscope++;
 			goto bad;
 		}
-		if (IN6_IS_SCOPE_LINKLOCAL(&ip6->ip6_dst) &&
+		if (IN6_IS_SCOPE_EMBED(&ip6->ip6_dst) &&
 		    ip6->ip6_dst.s6_addr16[1]) {
 			ip6stat.ip6s_badscope++;
 			goto bad;
@@ -754,13 +749,13 @@ check_with_pf:
 		if (IN6_IS_SCOPE_LINKLOCAL(&ip6->ip6_src))
 			ip6->ip6_src.s6_addr16[1] =
 			    htons(m->m_pkthdr.src_ifindex);
-		if (IN6_IS_SCOPE_LINKLOCAL(&ip6->ip6_dst))
+		if (IN6_IS_SCOPE_EMBED(&ip6->ip6_dst))
 			ip6->ip6_dst.s6_addr16[1] =
 			    htons(m->m_pkthdr.dst_ifindex);
 	} else {
 		if (IN6_IS_SCOPE_LINKLOCAL(&ip6->ip6_src))
 			ip6->ip6_src.s6_addr16[1] = htons(inifp->if_index);
-		if (IN6_IS_SCOPE_LINKLOCAL(&ip6->ip6_dst))
+		if (IN6_IS_SCOPE_EMBED(&ip6->ip6_dst))
 			ip6->ip6_dst.s6_addr16[1] = htons(inifp->if_index);
 	}
 
@@ -781,11 +776,7 @@ check_with_pf:
 		if (in6m != NULL) {
 			IN6M_REMREF(in6m);
 			ours = 1;
-		} else if (!nd6_prproxy
-#if MROUTING
-		    && !ip6_mrouter
-#endif /* MROUTING */
-		    ) {
+		} else if (!nd6_prproxy) {
 			ip6stat.ip6s_notmember++;
 			ip6stat.ip6s_cantforward++;
 			in6_ifstat_inc(inifp, ifs6_in_discard);
@@ -972,17 +963,8 @@ hbhcheck:
 			    (caddr_t)&ip6->ip6_plen - (caddr_t)ip6);
 			goto done;
 		}
-#ifndef PULLDOWN_TEST
 		/* ip6_hopopts_input() ensures that mbuf is contiguous */
 		hbh = (struct ip6_hbh *)(ip6 + 1);
-#else
-		IP6_EXTHDR_GET(hbh, struct ip6_hbh *, m,
-		    sizeof (struct ip6_hdr), sizeof (struct ip6_hbh));
-		if (hbh == NULL) {
-			ip6stat.ip6s_tooshort++;
-			goto done;
-		}
-#endif
 		nxt = hbh->ip6h_nxt;
 
 		/*
@@ -1049,20 +1031,6 @@ hbhcheck:
 	 * Forward if desirable.
 	 */
 	if (IN6_IS_ADDR_MULTICAST(&ip6->ip6_dst)) {
-		/*
-		 * If we are acting as a multicast router, all
-		 * incoming multicast packets are passed to the
-		 * kernel-level multicast forwarding function.
-		 * The packet is returned (relatively) intact; if
-		 * ip6_mforward() returns a non-zero value, the packet
-		 * must be discarded, else it may be accepted below.
-		 */
-#if MROUTING
-		if (ip6_mrouter && ip6_mforward(ip6, inifp, m)) {
-			ip6stat.ip6s_cantforward++;
-			goto bad;
-		}
-#endif /* MROUTING */
 		if (!ours && nd6_prproxy) {
 			/*
 			 * If this isn't for us, this might be a Neighbor
@@ -1316,28 +1284,12 @@ ip6_hopopts_input(uint32_t *plenp, uint32_t *rtalertp, struct mbuf **mp,
 	u_int8_t *opt;
 
 	/* validation of the length of the header */
-#ifndef PULLDOWN_TEST
 	IP6_EXTHDR_CHECK(m, off, sizeof (*hbh), return (-1));
 	hbh = (struct ip6_hbh *)(mtod(m, caddr_t) + off);
 	hbhlen = (hbh->ip6h_len + 1) << 3;
 
 	IP6_EXTHDR_CHECK(m, off, hbhlen, return (-1));
 	hbh = (struct ip6_hbh *)(mtod(m, caddr_t) + off);
-#else
-	IP6_EXTHDR_GET(hbh, struct ip6_hbh *, m, sizeof (struct ip6_hdr),
-	    sizeof (struct ip6_hbh));
-	if (hbh == NULL) {
-		ip6stat.ip6s_tooshort++;
-		return (-1);
-	}
-	hbhlen = (hbh->ip6h_len + 1) << 3;
-	IP6_EXTHDR_GET(hbh, struct ip6_hbh *, m, sizeof (struct ip6_hdr),
-	    hbhlen);
-	if (hbh == NULL) {
-		ip6stat.ip6s_tooshort++;
-		return (-1);
-	}
-#endif
 	off += hbhlen;
 	hbhlen -= sizeof (struct ip6_hbh);
 	opt = (u_int8_t *)hbh + sizeof (struct ip6_hbh);
@@ -1670,28 +1622,8 @@ ip6_savecontrol(struct inpcb *in6p, struct mbuf *m, struct mbuf **mp)
 		if (ip6->ip6_nxt == IPPROTO_HOPOPTS) {
 			struct ip6_hbh *hbh;
 			int hbhlen = 0;
-#if PULLDOWN_TEST
-			struct mbuf *ext;
-#endif
-
-#ifndef PULLDOWN_TEST
 			hbh = (struct ip6_hbh *)(ip6 + 1);
 			hbhlen = (hbh->ip6h_len + 1) << 3;
-#else
-			ext = ip6_pullexthdr(m, sizeof (struct ip6_hdr),
-			    ip6->ip6_nxt);
-			if (ext == NULL) {
-				ip6stat.ip6s_tooshort++;
-				return (0);
-			}
-			hbh = mtod(ext, struct ip6_hbh *);
-			hbhlen = (hbh->ip6h_len + 1) << 3;
-			if (hbhlen != ext->m_len) {
-				m_freem(ext);
-				ip6stat.ip6s_tooshort++;
-				return (0);
-			}
-#endif
 
 			/*
 			 * XXX: We copy the whole header even if a
@@ -1704,9 +1636,6 @@ ip6_savecontrol(struct inpcb *in6p, struct mbuf *m, struct mbuf **mp)
 			    IS2292(in6p, IPV6_2292HOPOPTS, IPV6_HOPOPTS),
 			    IPPROTO_IPV6, mp);
 
-#if PULLDOWN_TEST
-			m_freem(ext);
-#endif
 			if (*mp == NULL) {
 				goto no_mbufs;
 			}
@@ -1726,9 +1655,6 @@ ip6_savecontrol(struct inpcb *in6p, struct mbuf *m, struct mbuf **mp)
 		while (1) {	/* is explicit loop prevention necessary? */
 			struct ip6_ext *ip6e = NULL;
 			int elen;
-#if PULLDOWN_TEST
-			struct mbuf *ext = NULL;
-#endif
 
 			/*
 			 * if it is not an extension header, don't try to
@@ -1744,7 +1670,6 @@ ip6_savecontrol(struct inpcb *in6p, struct mbuf *m, struct mbuf **mp)
 				goto loopend;
 			}
 
-#ifndef PULLDOWN_TEST
 			if (off + sizeof (*ip6e) > m->m_len)
 				goto loopend;
 			ip6e = (struct ip6_ext *)(mtod(m, caddr_t) + off);
@@ -1754,23 +1679,6 @@ ip6_savecontrol(struct inpcb *in6p, struct mbuf *m, struct mbuf **mp)
 				elen = (ip6e->ip6e_len + 1) << 3;
 			if (off + elen > m->m_len)
 				goto loopend;
-#else
-			ext = ip6_pullexthdr(m, off, nxt);
-			if (ext == NULL) {
-				ip6stat.ip6s_tooshort++;
-				return (0);
-			}
-			ip6e = mtod(ext, struct ip6_ext *);
-			if (nxt == IPPROTO_AH)
-				elen = (ip6e->ip6e_len + 2) << 2;
-			else
-				elen = (ip6e->ip6e_len + 1) << 3;
-			if (elen != ext->m_len) {
-				m_freem(ext);
-				ip6stat.ip6s_tooshort++;
-				return (0);
-			}
-#endif
 
 			switch (nxt) {
 			case IPPROTO_DSTOPTS:
@@ -1781,9 +1689,6 @@ ip6_savecontrol(struct inpcb *in6p, struct mbuf *m, struct mbuf **mp)
 				    IS2292(in6p, IPV6_2292DSTOPTS,
 				    IPV6_DSTOPTS), IPPROTO_IPV6, mp);
 				if (*mp == NULL) {
-#if PULLDOWN_TEST
-					m_freem(ext);
-#endif
 					goto no_mbufs;
 				}
 				break;
@@ -1795,9 +1700,6 @@ ip6_savecontrol(struct inpcb *in6p, struct mbuf *m, struct mbuf **mp)
 				    IS2292(in6p, IPV6_2292RTHDR, IPV6_RTHDR),
 				    IPPROTO_IPV6, mp);
 				if (*mp == NULL) {
-#if PULLDOWN_TEST
-					m_freem(ext);
-#endif
 					goto no_mbufs;
 				}
 				break;
@@ -1812,9 +1714,6 @@ ip6_savecontrol(struct inpcb *in6p, struct mbuf *m, struct mbuf **mp)
 				 * the code just in case (nxt overwritten or
 				 * other cases).
 				 */
-#if PULLDOWN_TEST
-				m_freem(ext);
-#endif
 				goto loopend;
 
 			}
@@ -1823,10 +1722,6 @@ ip6_savecontrol(struct inpcb *in6p, struct mbuf *m, struct mbuf **mp)
 			off += elen;
 			nxt = ip6e->ip6e_nxt;
 			ip6e = NULL;
-#if PULLDOWN_TEST
-			m_freem(ext);
-			ext = NULL;
-#endif
 		}
 loopend:
 		;
@@ -1875,62 +1770,6 @@ ip6_notify_pmtu(struct inpcb *in6p, struct sockaddr_in6 *dst, u_int32_t *mtu)
 		sorwakeup(so);
 	}
 }
-
-#if PULLDOWN_TEST
-/*
- * pull single extension header from mbuf chain.  returns single mbuf that
- * contains the result, or NULL on error.
- */
-static struct mbuf *
-ip6_pullexthdr(m, off, nxt)
-	struct mbuf *m;
-	size_t off;
-	int nxt;
-{
-	struct ip6_ext ip6e;
-	size_t elen;
-	struct mbuf *n;
-
-#if DIAGNOSTIC
-	switch (nxt) {
-	case IPPROTO_DSTOPTS:
-	case IPPROTO_ROUTING:
-	case IPPROTO_HOPOPTS:
-	case IPPROTO_AH: /* is it possible? */
-		break;
-	default:
-		printf("ip6_pullexthdr: invalid nxt=%d\n", nxt);
-	}
-#endif
-
-	m_copydata(m, off, sizeof (ip6e), (caddr_t)&ip6e);
-	if (nxt == IPPROTO_AH)
-		elen = (ip6e.ip6e_len + 2) << 2;
-	else
-		elen = (ip6e.ip6e_len + 1) << 3;
-
-	MGET(n, M_DONTWAIT, MT_DATA);
-	if (n && elen >= MLEN) {
-		MCLGET(n, M_DONTWAIT);
-		if ((n->m_flags & M_EXT) == 0) {
-			m_free(n);
-			n = NULL;
-		}
-	}
-	if (!n)
-		return (NULL);
-
-	n->m_len = 0;
-	if (elen >= M_TRAILINGSPACE(n)) {
-		m_free(n);
-		return (NULL);
-	}
-
-	m_copydata(m, off, elen, mtod(n, caddr_t));
-	n->m_len = elen;
-	return (n);
-}
-#endif
 
 /*
  * Get pointer to the previous header followed by the header

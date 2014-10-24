@@ -294,10 +294,11 @@ struct ipsecstat {
 #define IPSEC_GET_P2UNALIGNED_OFS(p) 0
 
 struct ipsec_output_state {
-    	int tunneled;
+	int tunneled;
 	struct mbuf *m;
 	struct route ro;
 	struct sockaddr *dst;
+	u_int outgoing_if;
 };
 
 struct ipsec_history {
@@ -328,15 +329,15 @@ extern struct secpolicy *ipsec4_getpolicybyaddr(struct mbuf *, u_int, int,
 extern int ipsec4_getpolicybyinterface(struct mbuf *, u_int, int *,
                         struct ip_out_args *, struct secpolicy **);
 
+extern u_int ipsec_get_reqlevel(struct ipsecrequest *);
+
 struct inpcb;
 extern int ipsec_init_policy(struct socket *so, struct inpcbpolicy **);
 extern int ipsec_copy_policy(struct inpcbpolicy *, struct inpcbpolicy *);
 extern u_int ipsec_get_reqlevel(struct ipsecrequest *);
 
 extern int ipsec4_set_policy(struct inpcb *inp, int optname,
-	caddr_t request, size_t len, int priv);
-extern int ipsec4_get_policy(struct inpcb *inpcb, caddr_t request,
-	size_t len, struct mbuf **mp);
+						caddr_t request, size_t len, int priv);
 extern int ipsec4_delete_pcbpolicy(struct inpcb *);
 extern int ipsec4_in_reject_so(struct mbuf *, struct socket *);
 extern int ipsec4_in_reject(struct mbuf *, struct inpcb *);
@@ -356,6 +357,7 @@ extern const char *ipsec_logsastr(struct secasvar *);
 
 extern void ipsec_dumpmbuf(struct mbuf *);
 
+extern int ipsec4_interface_output(struct ipsec_output_state *state, ifnet_t interface);
 extern int ipsec4_output(struct ipsec_output_state *, struct secpolicy *, int);
 #if INET
 extern struct mbuf * ipsec4_splithdr(struct mbuf *);

@@ -459,7 +459,7 @@ nfs4_secinfo_rpc(struct nfsmount *nmp, struct nfsreq_secinfo_args *siap, kauth_c
 	struct nfsm_chain nmreq, nmrep;
 
 	*seccountp = 0;
-	if (!nmp)
+	if (nfs_mount_gone(nmp))
 		return (ENXIO);
 	nfsvers = nmp->nm_vers;
 	np = siap->rsia_np;
@@ -2458,7 +2458,7 @@ restart:
 			break;
 		if (!(nmp->nm_sockflags & NMSOCK_READY))
 			error = EPIPE;
-		if (nmp->nm_state & NFSSTA_FORCE)
+		if (nmp->nm_state & (NFSSTA_FORCE|NFSSTA_DEAD))
 			error = ENXIO;
 		if (nmp->nm_sockflags & NMSOCK_UNMOUNT)
 			error = ENXIO;

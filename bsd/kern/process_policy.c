@@ -49,7 +49,6 @@
 #include <mach/mach_types.h>
 #include <mach/vm_param.h>
 #include <kern/task.h>
-#include <kern/lock.h>
 #include <kern/kalloc.h>
 #include <kern/assert.h>
 #include <vm/vm_kern.h>
@@ -206,6 +205,7 @@ handle_resourceuse(__unused int scope, __unused int action, __unused int policy,
 	int				entitled = TRUE;
 	uint64_t			interval = -1ULL;	
 	int				error = 0;
+	uint8_t				percentage;
 
 	switch(policy_subtype) {
 		case PROC_POLICY_RUSAGE_NONE:
@@ -238,8 +238,6 @@ handle_resourceuse(__unused int scope, __unused int action, __unused int policy,
 #endif
 
 	switch (action) {
-		uint8_t percentage;
-
 		case PROC_POLICY_ACTION_GET: 
 			error = proc_get_task_ruse_cpu(proc->task, &cpuattr.ppattr_cpu_attr,
                                         &percentage,
@@ -325,7 +323,7 @@ handle_apptype(         int scope,
 				return (EINVAL);
 
 			/* PROCESS ENABLE APPTYPE HOLDIMP */
-			error = task_importance_hold_external_assertion(current_task(), 1);
+			error = task_importance_hold_legacy_external_assertion(current_task(), 1);
 
 			return(error);
 
@@ -336,7 +334,7 @@ handle_apptype(         int scope,
 				return (EINVAL);
 
 			/* PROCESS ENABLE APPTYPE DROPIMP */
-			error = task_importance_drop_external_assertion(current_task(), 1);
+			error = task_importance_drop_legacy_external_assertion(current_task(), 1);
 
 			return(error);
 
@@ -397,17 +395,17 @@ handle_boost(int scope,
 
 	switch(policy_subtype) {
 		case PROC_POLICY_IMP_IMPORTANT:
-			if (task_is_importance_receiver(target_proc->task) == FALSE)
+			if (task_is_importance_receiver_type(target_proc->task) == FALSE)
 				return (EINVAL);
 
 			switch (action) {
 				case PROC_POLICY_ACTION_HOLD:
 					/* PROCESS HOLD BOOST IMPORTANT */
-					error = task_importance_hold_external_assertion(current_task(), 1);
+					error = task_importance_hold_legacy_external_assertion(current_task(), 1);
 					break;
 				case PROC_POLICY_ACTION_DROP:
 					/* PROCESS DROP BOOST IMPORTANT */
-					error = task_importance_drop_external_assertion(current_task(), 1);
+					error = task_importance_drop_legacy_external_assertion(current_task(), 1);
 					break;
 				default:
 					error = (EINVAL);
@@ -469,6 +467,56 @@ proc_pidbackgrounded(pid_t pid, uint32_t* state)
 	return (0);
 }
 
+/*
+ * Get the darwin background state of the originator. If the current
+ * process app type is App, then it is the originator, else if it is
+ * a Daemon, then creator of the Resource Accounting attribute of
+ * the current thread voucher is the originator of the work.
+ */
+int
+proc_get_originatorbgstate(uint32_t *is_backgrounded)
+{
+	uint32_t bgstate;
+	proc_t p = current_proc();
+	uint32_t flagsp;
+	kern_return_t kr;
+	pid_t pid;
+	int ret;
+	thread_t thread = current_thread();
+
+	bgstate = proc_get_effective_thread_policy(thread, TASK_POLICY_DARWIN_BG);
+	
+	/* If current thread or task backgrounded, return background */
+	if (bgstate) {
+		*is_backgrounded = 1;
+		return 0;
+	}
+
+	/* Check if current process app type is App, then return foreground */
+	proc_get_darwinbgstate(p->task, &flagsp);
+	if ((flagsp & PROC_FLAG_APPLICATION) == PROC_FLAG_APPLICATION) {
+		*is_backgrounded = 0;
+		return 0;
+	}
+
+	/*
+	 * Get the current voucher origin pid and it's bgstate.The pid
+	 * returned here might not be valid or may have been recycled.
+	 */
+	kr = thread_get_current_voucher_origin_pid(&pid);
+	if (kr != KERN_SUCCESS) {
+		if (kr == KERN_INVALID_TASK)
+			return ESRCH;
+		else if (kr == KERN_INVALID_VALUE)
+			return ENOATTR;
+		else
+			return EINVAL;
+	}
+
+	ret = proc_pidbackgrounded(pid, is_backgrounded);
+	return ret;
+}
+
 int
 proc_apply_resource_actions(void * bsdinfo, __unused int type, int action)
 {
@@ -498,7 +546,6 @@ proc_apply_resource_actions(void * bsdinfo, __unused int type, int action)
 
 	return(0);
 }
-
 
 int
 proc_restore_resource_actions(void * bsdinfo, __unused int type, int action)

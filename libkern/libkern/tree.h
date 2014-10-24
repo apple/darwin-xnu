@@ -334,9 +334,9 @@ struct name {								\
 #define RB_PLACEHOLDER	NULL
 #define RB_ENTRY(type)							\
 struct {								\
-	struct type *rbe_parent;	/* parent element */		\
 	struct type *rbe_left;		/* left element */		\
 	struct type *rbe_right;		/* right element */		\
+	struct type *rbe_parent;	/* parent element */		\
 }
 
 #define RB_COLOR_MASK			(uintptr_t)0x1

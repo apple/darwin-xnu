@@ -71,6 +71,9 @@
 #if KXLD_USER_OR_ARM
 #include <mach-o/arm/reloc.h>
 #endif
+#if KXLD_USER_OR_ARM64
+#include <mach-o/arm64/reloc.h>
+#endif
 
 #define KXLD_TARGET_NONE        (u_int) 0x0
 #define KXLD_TARGET_VALUE       (u_int) 0x1
@@ -147,6 +150,19 @@ static kern_return_t arm_process_reloc(const KXLDRelocator *relocator,
     kxld_addr_t link_pc, kxld_addr_t link_disp, u_int type, kxld_addr_t target, 
     kxld_addr_t pair_target, boolean_t swap);
 #endif /* KXLD_USER_OR_ARM */
+
+#if KXLD_USER_OR_ARM64
+static boolean_t arm64_reloc_has_pair(u_int _type) 
+    __attribute__((const));
+static u_int arm64_reloc_get_pair_type(u_int _prev_type) 
+    __attribute__((const));
+static boolean_t arm64_reloc_has_got(u_int _type)
+    __attribute__((const));
+static kern_return_t arm64_process_reloc(const KXLDRelocator *relocator, 
+    u_char *instruction, u_int length, u_int pcrel, kxld_addr_t base_pc, 
+    kxld_addr_t link_pc, kxld_addr_t link_disp, u_int type, kxld_addr_t target, 
+    kxld_addr_t pair_target, boolean_t swap);
+#endif /* KXLD_USER_OR_ARM64 */
 
 #if KXLD_USER_OR_ILP32
 static kxld_addr_t get_pointer_at_addr_32(const KXLDRelocator *relocator, 
@@ -227,6 +243,17 @@ kxld_relocator_init(KXLDRelocator *relocator, u_char *file,
         relocator->may_scatter = FALSE;
         break;
 #endif /* KXLD_USER_OR_ARM */
+#if KXLD_USER_OR_ARM64
+    case CPU_TYPE_ARM64:
+        relocator->reloc_has_pair = arm64_reloc_has_pair;
+        relocator->reloc_get_pair_type = arm64_reloc_get_pair_type;
+        relocator->reloc_has_got = arm64_reloc_has_got;
+        relocator->process_reloc = arm64_process_reloc;
+        relocator->function_align = 0;
+        relocator->is_32_bit = FALSE;
+        relocator->may_scatter = FALSE;
+        break;
+#endif /* KXLD_USER_OR_ARM64 */
 
     default:
         rval = KERN_FAILURE;
@@ -1533,3 +1560,116 @@ finish:
 }
 
 #endif /* KXLD_USER_OR_ARM */
+
+#if KXLD_USER_OR_ARM64
+/*******************************************************************************
+*******************************************************************************/
+boolean_t
+arm64_reloc_has_pair(u_int _type)
+{
+    return (_type == ARM64_RELOC_SUBTRACTOR);
+}
+
+/*******************************************************************************
+*******************************************************************************/
+u_int
+arm64_reloc_get_pair_type(u_int _prev_type __unused)
+{
+    if (_prev_type == ARM64_RELOC_SUBTRACTOR) {
+        return ARM64_RELOC_UNSIGNED;
+    } else {
+        return -1u;
+    }
+}
+
+/*******************************************************************************
+*******************************************************************************/
+boolean_t
+arm64_reloc_has_got(u_int _type)
+{
+    return (_type == ARM64_RELOC_GOT_LOAD_PAGE21 ||
+            _type == ARM64_RELOC_GOT_LOAD_PAGEOFF12);
+}
+
+/*******************************************************************************
+*******************************************************************************/
+kern_return_t
+arm64_process_reloc(const KXLDRelocator *relocator __unused, u_char *instruction,
+    u_int length, u_int pcrel, kxld_addr_t _base_pc __unused, kxld_addr_t _link_pc,
+    kxld_addr_t _link_disp __unused, u_int _type, kxld_addr_t _target,
+    kxld_addr_t _pair_target __unused, boolean_t swap)
+{
+    kern_return_t rval = KERN_FAILURE;
+    enum reloc_type_arm64 type = _type;
+    uint64_t target = _target;
+    uint64_t link_pc = (uint64_t) _link_pc;
+    uint64_t difference = 0;
+    int64_t displacement = 0;
+    uint32_t addend = 0;
+
+    check(instruction);
+    require_action((length == 2 || length == 3), finish, rval=KERN_FAILURE);
+
+    if (length == 2) {
+        uint32_t *instr32p = (uint32_t *) (void *) instruction;
+        uint32_t instr32 = *instr32p;
+
+#if !KERNEL
+        if (swap) instr32 = OSSwapInt32(instr32);
+#endif
+
+        switch (type) {
+        case ARM64_RELOC_BRANCH26:
+            require_action(pcrel, finish, rval=KERN_FAILURE);
+            addend = (instr32 & 0x03FFFFFF) << 2;
+            addend = SIGN_EXTEND(addend, 27);
+            displacement = (target - link_pc + addend);
+            difference = ABSOLUTE_VALUE(displacement);
+            displacement = (displacement >> 2);
+            require_action(difference < (128 * 1024 * 1024), finish,
+                           rval = KERN_FAILURE;
+                           kxld_log(kKxldLogLinking, kKxldLogErr, kKxldLogRelocationOverflow));
+            instr32 = (instr32 & 0xFC000000) | (displacement & 0x03FFFFFF);
+            break;
+
+        default:
+            rval = KERN_FAILURE;
+            goto finish;
+        }
+
+#if !KERNEL
+        if (swap) instr32 = OSSwapInt32(instr32);
+#endif
+
+        *instr32p = instr32;
+    } else { /* length == 3 */
+        uint64_t *instr64p = (uint64_t *) (void *) instruction;
+        uint64_t instr64 = *instr64p;
+
+#if !KERNEL
+        if (swap) instr64 = OSSwapInt64(instr64);
+#endif
+
+        switch (type) {
+        case ARM64_RELOC_UNSIGNED:
+            require_action(!pcrel, finish, rval=KERN_FAILURE);
+            instr64 += target;
+            break;
+        default:
+            rval = KERN_FAILURE;
+            goto finish;
+        }
+
+#if !KERNEL
+        if (swap) instr64 = OSSwapInt64(instr64);
+#endif
+
+        *instr64p = instr64;
+    }
+
+    rval = KERN_SUCCESS;
+finish:
+    return rval;
+}
+
+#endif /* KXLD_USER_OR_ARM64 */

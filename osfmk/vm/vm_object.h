@@ -79,7 +79,6 @@
 #include <mach/vm_param.h>
 #include <mach/machine/vm_types.h>
 #include <kern/queue.h>
-#include <kern/lock.h>
 #include <kern/locks.h>
 #include <kern/assert.h>
 #include <kern/misc_protos.h>
@@ -90,6 +89,18 @@
 #include <vm/vm_external.h>
 
 #include <vm/vm_options.h>
+
+#if VM_OBJECT_TRACKING
+#include <libkern/OSDebug.h>
+#include <kern/btlog.h>
+extern void vm_object_tracking_init(void);
+extern boolean_t vm_object_tracking_inited;
+extern btlog_t *vm_object_tracking_btlog;
+#define VM_OBJECT_TRACKING_BTDEPTH 7
+#define VM_OBJECT_TRACKING_OP_CREATED	1
+#define VM_OBJECT_TRACKING_OP_MODIFIED	2
+#define VM_OBJECT_TRACKING_OP_TRUESHARE	3
+#endif /* VM_OBJECT_TRACKING */
 
 struct vm_page;
 struct vm_shared_region_slide_info;
@@ -116,6 +127,7 @@ struct vm_object_fault_info {
 	/* boolean_t */	mark_zf_absent:1,
 	/* boolean_t */ batch_pmap_op:1,
 		__vm_object_fault_info_unused_bits:26;
+	int		pmap_options;
 };
 
 
@@ -175,7 +187,27 @@ struct vm_object {
 	memory_object_copy_strategy_t
 				copy_strategy;	/* How to handle data copy */
 
-	short			paging_in_progress;
+#if __LP64__
+	/*
+	 * Some user processes (mostly VirtualMachine software) take a large
+	 * number of UPLs (via IOMemoryDescriptors) to wire pages in large
+	 * VM objects and overflow the 16-bit "activity_in_progress" counter.
+	 * Since we never enforced any limit there, let's give them 32 bits
+	 * for backwards compatibility's sake.
+	 */
+	unsigned int		paging_in_progress:16,
+				__object1_unused_bits:16;
+	unsigned int		activity_in_progress;
+#else /* __LP64__ */
+	/*
+	 * On 32-bit platforms, enlarging "activity_in_progress" would increase
+	 * the size of "struct vm_object".  Since we don't know of any actual
+	 * overflow of these counters on these platforms, let's keep the
+	 * counters as 16-bit integers.
+	 */
+	unsigned short		paging_in_progress;
+	unsigned short		activity_in_progress;
+#endif /* __LP64__ */
 						/* The memory object ports are
 						 * being used (e.g., for pagein
 						 * or pageout) -- don't change
@@ -183,7 +215,6 @@ struct vm_object {
 						 * don't collapse, destroy or
 						 * terminate)
 						 */
-	short			activity_in_progress;
 
 	unsigned int
 	/* boolean_t array */	all_wanted:11,	/* Bit array of "want to be
@@ -325,6 +356,7 @@ struct vm_object {
 		hashed:1,		/* object/pager entered in hash */
 		transposed:1,		/* object was transposed with another */
 		mapping_in_progress:1,	/* pager being mapped/unmapped */
+		phantom_isssd:1,
 		volatile_empty:1,
 		volatile_fault:1,
 		all_reusable:1,
@@ -333,13 +365,16 @@ struct vm_object {
 		object_slid:1,
 		purgeable_queue_type:2,
 		purgeable_queue_group:3,
-		__object2_unused_bits:9;	/* for expansion */
+		io_tracking:1,
+		__object2_unused_bits:7;	/* for expansion */
 
 	uint32_t		scan_collisions;
-
-#if	UPL_DEBUG
+#if CONFIG_PHANTOM_CACHE
+	uint32_t		phantom_object_id;
+#endif
+#if CONFIG_IOSCHED || UPL_DEBUG
 	queue_head_t		uplq;		/* List of outstanding upls */
-#endif /* UPL_DEBUG */
+#endif
 
 #ifdef	VM_PIP_DEBUG
 /*
@@ -354,6 +389,12 @@ struct vm_object {
 #endif	/* VM_PIP_DEBUG  */
 
         queue_chain_t		objq;      /* object queue - currently used for purgable queues */
+
+#if DEBUG
+	void *purgeable_owner_bt[16];
+	task_t vo_purgeable_volatilizer; /* who made it volatile? */
+	void *purgeable_volatilizer_bt[16];
+#endif /* DEBUG */
 };
 
 #define VM_OBJECT_PURGEABLE_FAULT_ERROR(object)				\
@@ -558,7 +599,8 @@ __private_extern__ void	vm_object_reuse_pages(
 	boolean_t		allow_partial_reuse);
 
 __private_extern__ void		vm_object_purge(
-					vm_object_t		object);
+	                               vm_object_t		object,
+				       int			flags);
 
 __private_extern__ kern_return_t vm_object_purgable_control(
 	vm_object_t	object,
@@ -764,6 +806,19 @@ vm_object_pagein(
 	vm_object_t     object);
 #endif /* CONFIG_FREEZE */
 
+#if CONFIG_IOSCHED
+struct io_reprioritize_req {
+	uint64_t 	blkno;
+	uint32_t 	len;
+	int 		priority;
+	struct vnode 	*devvp;
+	queue_chain_t 	io_reprioritize_list;
+};
+typedef struct io_reprioritize_req *io_reprioritize_req_t;
+
+extern void vm_io_reprioritize_init(void);
+#endif
+
 /*
  *	Event waiting handling
  */
@@ -789,7 +844,7 @@ vm_object_pagein(
 	thread_block(THREAD_CONTINUE_NULL))				\
 
 #define thread_sleep_vm_object(object, event, interruptible)		\
-        lck_rw_sleep(&(object)->Lock, LCK_SLEEP_DEFAULT, (event_t)(event), (interruptible))
+        lck_rw_sleep(&(object)->Lock, LCK_SLEEP_PROMOTED_PRI, (event_t)(event), (interruptible))
 
 #define vm_object_sleep(object, event, interruptible)			\
 	(((object)->all_wanted |= 1 << (event)),			\
@@ -832,15 +887,19 @@ vm_object_pagein(
 #define		vm_object_activity_begin(object)			\
 	MACRO_BEGIN							\
 	vm_object_lock_assert_exclusive((object));			\
-	assert((object)->paging_in_progress >= 0);			\
 	VM_PIP_DEBUG_BEGIN((object));					\
 	(object)->activity_in_progress++;				\
+	if ((object)->activity_in_progress == 0) {			\
+		panic("vm_object_activity_begin(%p): overflow\n", (object));\
+	}								\
 	MACRO_END
 
 #define		vm_object_activity_end(object)				\
 	MACRO_BEGIN							\
 	vm_object_lock_assert_exclusive((object));			\
-	assert((object)->activity_in_progress > 0);			\
+	if ((object)->activity_in_progress == 0) {			\
+		panic("vm_object_activity_end(%p): underflow\n", (object));\
+	}								\
 	(object)->activity_in_progress--;				\
 	if ((object)->paging_in_progress == 0 &&			\
 	    (object)->activity_in_progress == 0)			\
@@ -851,15 +910,19 @@ vm_object_pagein(
 #define		vm_object_paging_begin(object)				\
 	MACRO_BEGIN							\
 	vm_object_lock_assert_exclusive((object));			\
-	assert((object)->paging_in_progress >= 0);			\
 	VM_PIP_DEBUG_BEGIN((object));					\
 	(object)->paging_in_progress++;					\
+	if ((object)->paging_in_progress == 0) {			\
+		panic("vm_object_paging_begin(%p): overflow\n", (object));\
+	}								\
 	MACRO_END
 
 #define		vm_object_paging_end(object)				\
 	MACRO_BEGIN							\
 	vm_object_lock_assert_exclusive((object));			\
-	assert((object)->paging_in_progress > 0);			\
+	if ((object)->paging_in_progress == 0) {			\
+		panic("vm_object_paging_end(%p): underflow\n", (object));\
+	}								\
 	(object)->paging_in_progress--;					\
 	if ((object)->paging_in_progress == 0) {			\
 		vm_object_wakeup((object),				\

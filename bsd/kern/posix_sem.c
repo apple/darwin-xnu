@@ -992,24 +992,6 @@ out:
 	return(error);
 }
 
-int
-sem_init(__unused proc_t p, __unused struct sem_init_args *uap, __unused int32_t *retval)
-{
-	return(ENOSYS);
-}
-
-int
-sem_destroy(__unused proc_t p, __unused struct sem_destroy_args *uap, __unused int32_t *retval)
-{
-	return(ENOSYS);
-}
-
-int
-sem_getvalue(__unused proc_t p, __unused struct sem_getvalue_args *uap, __unused int32_t *retval)
-{
-	return(ENOSYS);
-}
-
 static int
 psem_close(struct psemnode *pnode, __unused int flags)
 {

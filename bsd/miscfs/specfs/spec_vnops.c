@@ -91,7 +91,7 @@
 
 /* XXX following three prototypes should be in a header file somewhere */
 extern dev_t	chrtoblk(dev_t dev);
-extern int	iskmemdev(dev_t dev);
+extern boolean_t	iskmemdev(dev_t dev);
 extern int	bpfkqfilter(dev_t dev, struct knote *kn);
 extern int	ptsd_kqfilter(dev_t dev, struct knote *kn);
 
@@ -217,6 +217,7 @@ struct _throttle_io_info_t {
 
 	int32_t throttle_refcnt;
 	int32_t throttle_alloc;
+	int32_t throttle_disabled;
 };
 
 struct _throttle_io_info_t _throttle_io_info[LOWPRI_MAX_NUM_DEV];
@@ -307,17 +308,18 @@ spec_open(struct vnop_open_args *ap)
 			 */
 			if (securelevel >= 2 && isdisk(dev, VCHR))
 				return (EPERM);
+
+			/* Never allow writing to /dev/mem or /dev/kmem */
+			if (iskmemdev(dev))
+				return (EPERM);
 			/*
-			 * When running in secure mode, do not allow opens
-			 * for writing of /dev/mem, /dev/kmem, or character
-			 * devices whose corresponding block devices are
-			 * currently mounted.
+			 * When running in secure mode, do not allow opens for
+			 * writing of character devices whose corresponding block
+			 * devices are currently mounted.
 			 */
 			if (securelevel >= 1) {
 				if ((bdev = chrtoblk(dev)) != NODEV && check_mountedon(bdev, VBLK, &error))
 					return (error);
-				if (iskmemdev(dev))
-					return (EPERM);
 			}
 		}
 
@@ -464,7 +466,6 @@ spec_read(struct vnop_read_args *ap)
 			struct _throttle_io_info_t *throttle_info;
 
 			throttle_info = &_throttle_io_info[vp->v_un.vu_specinfo->si_devbsdunit];
-
 			throttle_info_update_internal(throttle_info, NULL, 0, vp->v_un.vu_specinfo->si_isssd);
                 }
 		error = (*cdevsw[major(vp->v_rdev)].d_read)
@@ -1233,13 +1234,20 @@ throttle_init_throttle_period(struct _throttle_io_info_t *info, boolean_t isssd)
 
 }
 
+#if CONFIG_IOSCHED
+extern	void vm_io_reprioritize_init(void);
+int	iosched_enabled = 1;
+#endif
+
 void
 throttle_init(void)
 {
         struct _throttle_io_info_t *info;
         int	i;
 	int	level;
-
+#if CONFIG_IOSCHED
+	int 	iosched;
+#endif
 	/*                                                                                                                                    
          * allocate lock group attribute and group                                                                                            
          */
@@ -1265,7 +1273,17 @@ throttle_init(void)
 			info->throttle_last_IO_pid[level] = 0;
 		}
 		info->throttle_next_wake_level = THROTTLE_LEVEL_END;
+		info->throttle_disabled = 0;
 	}
+#if CONFIG_IOSCHED
+	if (PE_parse_boot_argn("iosched", &iosched, sizeof(iosched))) {
+		iosched_enabled = iosched;
+	}
+	if (iosched_enabled) {
+		/* Initialize I/O Reprioritization mechanism */
+		vm_io_reprioritize_init();
+	}
+#endif
 }
 
 void
@@ -1273,6 +1291,7 @@ sys_override_io_throttle(int flag)
 {
 	if (flag == THROTTLE_IO_ENABLE)
 		lowpri_throttle_enabled = 1;
+
 	if (flag == THROTTLE_IO_DISABLE)
 		lowpri_throttle_enabled = 0;
 }
@@ -1579,7 +1598,7 @@ throttle_io_will_be_throttled_internal(void * throttle_info, int * mylevel, int 
 int
 throttle_io_will_be_throttled(__unused int lowpri_window_msecs, mount_t mp)
 {
-    	void	*info;
+    	struct _throttle_io_info_t	*info;
 
 	/*
 	 * Should we just return zero if no mount point
@@ -1591,7 +1610,10 @@ throttle_io_will_be_throttled(__unused int lowpri_window_msecs, mount_t mp)
 	else
 	        info = mp->mnt_throttle_info;
 
-	return throttle_io_will_be_throttled_internal(info, NULL, NULL);
+	if (info->throttle_disabled)
+		return (THROTTLE_DISENGAGED);
+	else
+		return throttle_io_will_be_throttled_internal(info, NULL, NULL);
 }
 
 /* 
@@ -1599,18 +1621,18 @@ throttle_io_will_be_throttled(__unused int lowpri_window_msecs, mount_t mp)
  */
 
 static void 
-throttle_update_proc_stats(pid_t throttling_pid)
+throttle_update_proc_stats(pid_t throttling_pid, int count)
 {
 	proc_t throttling_proc;
 	proc_t throttled_proc = current_proc();
 
 	/* The throttled_proc is always the current proc; so we are not concerned with refs */
-	OSAddAtomic64(1, &(throttled_proc->was_throttled));
+	OSAddAtomic64(count, &(throttled_proc->was_throttled));
 	
 	/* The throttling pid might have exited by now */
 	throttling_proc = proc_find(throttling_pid);
 	if (throttling_proc != PROC_NULL) {
-		OSAddAtomic64(1, &(throttling_proc->did_throttle));
+		OSAddAtomic64(count, &(throttling_proc->did_throttle));
 		proc_rele(throttling_proc);
 	}
 }
@@ -1670,7 +1692,6 @@ throttle_lowpri_io(int sleep_amount)
 				goto done;
 		}
 		assert(throttling_level >= THROTTLE_LEVEL_START && throttling_level <= THROTTLE_LEVEL_END);
-		throttle_update_proc_stats(info->throttle_last_IO_pid[throttling_level]);
 		KERNEL_DEBUG_CONSTANT((FSDBG_CODE(DBG_THROTTLE, PROCESS_THROTTLED)) | DBG_FUNC_NONE,
 				info->throttle_last_IO_pid[throttling_level], throttling_level, proc_selfpid(), mylevel, 0);
 
@@ -1703,6 +1724,13 @@ done:
 	if (sleep_cnt) {
 		KERNEL_DEBUG_CONSTANT((FSDBG_CODE(DBG_FSRW, 97)) | DBG_FUNC_END,
 				      throttle_windows_msecs[mylevel], info->throttle_io_periods[mylevel], info->throttle_io_count, 0, 0);
+		/*
+		 * We update the stats for the last pid which opened a throttle window for the throttled thread.
+		 * This might not be completely accurate since the multiple throttles seen by the lower tier pid
+		 * might have been caused by various higher prio pids. However, updating these stats accurately 
+		 * means doing a proc_find while holding the throttle lock which leads to deadlock.
+		 */
+		throttle_update_proc_stats(info->throttle_last_IO_pid[throttling_level], sleep_cnt);
 	}
 
 	throttle_info_rel(info);
@@ -1730,7 +1758,6 @@ void throttle_set_thread_io_policy(int policy)
 }
 
 
-static
 void throttle_info_reset_window(uthread_t ut)
 {
 	struct _throttle_io_info_t *info;
@@ -1747,7 +1774,7 @@ void throttle_info_reset_window(uthread_t ut)
 static
 void throttle_info_set_initial_window(uthread_t ut, struct _throttle_io_info_t *info, boolean_t BC_throttle, boolean_t isssd)
 {
-	if (lowpri_throttle_enabled == 0)
+	if (lowpri_throttle_enabled == 0 || info->throttle_disabled)
 		return;
 
 	if (info->throttle_io_periods == 0) {
@@ -1770,7 +1797,7 @@ void throttle_info_update_internal(struct _throttle_io_info_t *info, uthread_t u
 {
 	int	thread_throttle_level;
 
-	if (lowpri_throttle_enabled == 0)
+	if (lowpri_throttle_enabled == 0 || info->throttle_disabled)
 		return;
 
 	if (ut == NULL)
@@ -1858,6 +1885,25 @@ void throttle_info_update_by_mask(void *throttle_info_handle, int flags)
 	 */
 	throttle_info_update(throttle_info, flags);
 }
+/*
+ * KPI routine
+ * 
+ * This routine marks the throttle info as disabled. Used for mount points which 
+ * support I/O scheduling.
+ */
+
+void throttle_info_disable_throttle(int devno)
+{
+	struct _throttle_io_info_t *info;
+
+	if (devno < 0 || devno >= LOWPRI_MAX_NUM_DEV) 
+		panic("Illegal devno (%d) passed into throttle_info_disable_throttle()", devno);
+
+	info = &_throttle_io_info[devno];
+	info->throttle_disabled = 1;
+	return;
+} 
+
 
 /*
  * KPI routine (private)
@@ -1922,6 +1968,8 @@ spec_strategy(struct vnop_strategy_args *ap)
 	int	strategy_ret;
 	struct _throttle_io_info_t *throttle_info;
 	boolean_t isssd = FALSE;
+	int code = 0;
+
 	proc_t curproc = current_proc();
 
         bp = ap->a_bp;
@@ -1935,10 +1983,34 @@ spec_strategy(struct vnop_strategy_args *ap)
 	if (bp->b_flags & B_META)
 		bap->ba_flags |= BA_META;
 
+#if CONFIG_IOSCHED
+	/* 
+	 * For I/O Scheduling, we currently do not have a way to track and expedite metadata I/Os.
+	 * To ensure we dont get into priority inversions due to metadata I/Os, we use the following rules:
+	 * For metadata reads, ceil all I/Os to IOSCHED_METADATA_TIER & mark them passive if the I/O tier was upgraded
+	 * For metadata writes, unconditionally mark them as IOSCHED_METADATA_TIER and passive
+	 */
+	if (bap->ba_flags & BA_META) {
+		if (mp && (mp->mnt_ioflags & MNT_IOFLAGS_IOSCHED_SUPPORTED)) {
+			if (bp->b_flags & B_READ) {
+				if (io_tier > IOSCHED_METADATA_TIER) {
+					io_tier = IOSCHED_METADATA_TIER;
+					passive = 1;
+				}
+			} else {
+				io_tier = IOSCHED_METADATA_TIER;
+				passive = 1;
+			}
+		}
+	}
+#endif /* CONFIG_IOSCHED */
+			
 	SET_BUFATTR_IO_TIER(bap, io_tier);
 
-	if (passive)
+	if (passive) {
 		bp->b_flags |= B_PASSIVE;
+		bap->ba_flags |= BA_PASSIVE;
+	}
 
 	if ((curproc != NULL) && ((curproc->p_flag & P_DELAYIDLESLEEP) == P_DELAYIDLESLEEP))
 		bap->ba_flags |= BA_DELAYIDLESLEEP;
@@ -1948,38 +2020,38 @@ spec_strategy(struct vnop_strategy_args *ap)
 	if (((bflags & B_READ) == 0) && ((bflags & B_ASYNC) == 0))
 		bufattr_markquickcomplete(bap);
 
-        if (kdebug_enable) {
-	        int    code = 0;
+	if (bflags & B_READ)
+	        code |= DKIO_READ;
+	if (bflags & B_ASYNC)
+	        code |= DKIO_ASYNC;
+	if (bflags & B_META)
+	        code |= DKIO_META;
+	else if (bflags & B_PAGEIO)
+	        code |= DKIO_PAGING;
 
-		if (bflags & B_READ)
-		        code |= DKIO_READ;
-		if (bflags & B_ASYNC)
-		        code |= DKIO_ASYNC;
+	if (io_tier != 0)
+		code |= DKIO_THROTTLE;
 
-		if (bflags & B_META)
-		        code |= DKIO_META;
-		else if (bflags & B_PAGEIO)
-		        code |= DKIO_PAGING;
+	code |= ((io_tier << DKIO_TIER_SHIFT) & DKIO_TIER_MASK);
 
-		if (io_tier != 0)
-			code |= DKIO_THROTTLE;
+	if (bflags & B_PASSIVE)
+		code |= DKIO_PASSIVE;
 
-		code |= ((io_tier << DKIO_TIER_SHIFT) & DKIO_TIER_MASK);
+	if (bap->ba_flags & BA_NOCACHE)
+		code |= DKIO_NOCACHE;
 
-		if (bflags & B_PASSIVE)
-			code |= DKIO_PASSIVE;
-
-		if (bap->ba_flags & BA_NOCACHE)
-			code |= DKIO_NOCACHE;
-
+	if (kdebug_enable) {
 		KERNEL_DEBUG_CONSTANT_IST(KDEBUG_COMMON, FSDBG_CODE(DBG_DKRW, code) | DBG_FUNC_NONE,
 					  buf_kernel_addrperm_addr(bp), bdev, (int)buf_blkno(bp), buf_count(bp), 0);
         }
+
+	thread_update_io_stats(current_thread(), buf_count(bp), code);
+
 	if (mp != NULL) {
 		if ((mp->mnt_kern_flag & MNTK_SSD) && !ignore_is_ssd)
 			isssd = TRUE;
 		throttle_info = &_throttle_io_info[mp->mnt_devbsdunit];
-	} else
+	} else 
 		throttle_info = &_throttle_io_info[LOWPRI_MAX_NUM_DEV - 1];
 
 	throttle_info_update_internal(throttle_info, ut, bflags, isssd);
@@ -2060,7 +2132,6 @@ spec_close(struct vnop_close_args *ap)
 	int flags = ap->a_fflag;
 	struct proc *p = vfs_context_proc(ap->a_context);
 	struct session *sessp;
-	int do_rele = 0;
 
 	switch (vp->v_type) {
 
@@ -2078,7 +2149,7 @@ spec_close(struct vnop_close_args *ap)
 		devsw_lock(dev, S_IFCHR);
 		if (sessp != SESSION_NULL) {
 			if (vp == sessp->s_ttyvp && vcount(vp) == 1) {
-				struct tty *tp;
+				struct tty *tp = TTY_NULL;
 
 				devsw_unlock(dev, S_IFCHR);
 				session_lock(sessp);
@@ -2088,14 +2159,20 @@ spec_close(struct vnop_close_args *ap)
 					sessp->s_ttyvid = 0;
 					sessp->s_ttyp = TTY_NULL;
 					sessp->s_ttypgrpid = NO_PID;
-					do_rele = 1;
 				} 
 				session_unlock(sessp);
 
-				if (do_rele) {
-					vnode_rele(vp);
-					if (NULL != tp)
-						ttyfree(tp);
+				if (tp != TTY_NULL) {
+					/*
+					 * We may have won a race with a proc_exit
+					 * of the session leader, the winner
+					 * clears the flag (even if not set)
+					 */
+					tty_lock(tp);
+					ttyclrpgrphup(tp);
+					tty_unlock(tp);
+
+					ttyfree(tp);
 				}
 				devsw_lock(dev, S_IFCHR);
 			}

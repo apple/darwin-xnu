@@ -425,8 +425,6 @@ routine task_set_phys_footprint_limit(
 		new_limit	: int;
 	out old_limit	: int);
 
-/* vim: set ft=c : */
-
 routine task_suspend2(
 		target_task : task_t;
 	out suspend_token : task_suspension_token_t);
@@ -437,3 +435,20 @@ routine task_resume2(
 routine task_purgable_info(
 		task 		: task_t;
 	out	stats		: task_purgable_info_t);
+
+routine task_get_mach_voucher(
+		task		: task_t;
+		which		: mach_voucher_selector_t;
+	out	voucher		: ipc_voucher_t);
+
+routine task_set_mach_voucher(
+		task		: task_t;
+		voucher		: ipc_voucher_t);
+
+routine task_swap_mach_voucher(
+		task		: task_t;
+		new_voucher	: ipc_voucher_t;
+	inout	old_voucher	: ipc_voucher_t);
+
+/* vim: set ft=c : */
+

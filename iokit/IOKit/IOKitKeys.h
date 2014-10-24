@@ -155,6 +155,7 @@
 // IODTNVRAM property keys
 #define kIONVRAMDeletePropertyKey	"IONVRAM-DELETE-PROPERTY"
 #define kIONVRAMSyncNowPropertyKey	"IONVRAM-SYNCNOW-PROPERTY"
+#define kIONVRAMActivateCSRConfigPropertyKey	"IONVRAM-ARMCSR-PROPERTY"
 #define kIODTNVRAMPanicInfoKey		"aapl,panic-info"
 
 // keys for complex boot information

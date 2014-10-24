@@ -50,7 +50,7 @@ extern vm_offset_t min_valid_stack_address(void);
 extern vm_offset_t max_valid_stack_address(void);
 
 // From osfmk/kmod.c
-extern void kmod_dump_log(vm_offset_t *addr, unsigned int cnt);
+extern void kmod_dump_log(vm_offset_t *addr, unsigned int cnt, boolean_t doUnslide);
 
 extern addr64_t kvtophys(vm_offset_t va);
 
@@ -111,7 +111,7 @@ OSReportWithBacktrace(const char *str, ...)
             (unsigned long) VM_KERNEL_UNSLIDE(bt[4]), (unsigned long) VM_KERNEL_UNSLIDE(bt[5]), 
             (unsigned long) VM_KERNEL_UNSLIDE(bt[6]), (unsigned long) VM_KERNEL_UNSLIDE(bt[7]), 
             (unsigned long) VM_KERNEL_UNSLIDE(bt[8]));
-        kmod_dump_log((vm_offset_t *) &bt[2], cnt - 2);
+        kmod_dump_log((vm_offset_t *) &bt[2], cnt - 2, TRUE);
     }
     lck_mtx_unlock(sOSReportLock);
 }

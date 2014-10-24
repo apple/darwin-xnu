@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2012 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2014 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -67,6 +67,7 @@
 #include <hfs/hfs_macos_defs.h>
 #include <hfs/hfs_encodings.h>
 #include <hfs/hfs_hotfiles.h>
+#include <hfs/hfs_fsctl.h>
 
 #if CONFIG_PROTECT
 /* Forward declare the cprotect struct */
@@ -145,9 +146,20 @@ typedef struct hfsmount {
 
 	/* Physical Description */
 	u_int32_t     hfs_logical_block_size;	/* Logical block size of the disk as reported by ioctl(DKIOCGETBLOCKSIZE), always a multiple of 512 */
-	daddr64_t     hfs_logical_block_count;  /* Number of logical blocks on the disk */
+	daddr64_t     hfs_logical_block_count;  /* Number of logical blocks on the disk, as reported by ioctl(DKIOCGETBLOCKCOUNT) */
 	u_int64_t     hfs_logical_bytes;	/* Number of bytes on the disk device this HFS is mounted on (blockcount * blocksize) */
-	daddr64_t     hfs_alt_id_sector;      	/* location of alternate VH/MDB */
+	/*
+	 * Regarding the two AVH sector fields below: 
+	 * Under normal circumstances, the filesystem's notion of the "right" location for the AVH is such that
+	 * the partition and filesystem's are in sync.  However, during a filesystem resize, HFS proactively
+	 * writes a new AVH at the end of the filesystem, assuming that the partition will be resized accordingly.
+	 *
+	 * However, it is not technically a corruption if the partition size is never modified.  As a result, we need
+	 * to keep two copies of the AVH around "just in case" the partition size is not modified.
+	 */
+	daddr64_t	hfs_partition_avh_sector;	/* location of Alt VH w.r.t partition size */
+	daddr64_t	hfs_fs_avh_sector;	/* location of Alt VH w.r.t filesystem size */
+
 	u_int32_t     hfs_physical_block_size;	/* Physical block size of the disk as reported by ioctl(DKIOCGETPHYSICALBLOCKSIZE) */ 
 	u_int32_t     hfs_log_per_phys;		/* Number of logical blocks per physical block size */
 
@@ -250,16 +262,16 @@ typedef struct hfsmount {
 	struct quotafile	hfs_qfiles[MAXQUOTAS];    /* quota files */
 
 	/* Journaling variables: */
-	void                *jnl;           // the journal for this volume (if one exists)
+	struct journal      *jnl;           // the journal for this volume (if one exists)
 	struct vnode        *jvp;           // device where the journal lives (may be equal to devvp)
 	u_int32_t            jnl_start;     // start block of the journal file (so we don't delete it)
 	u_int32_t            jnl_size;
 	u_int32_t            hfs_jnlfileid;
 	u_int32_t            hfs_jnlinfoblkid;
-	lck_rw_t	     	hfs_global_lock;
+	lck_rw_t	     	 hfs_global_lock;
 	u_int32_t            hfs_global_lock_nesting;
-	void*				hfs_global_lockowner;
-	
+	thread_t			 hfs_global_lockowner;
+
 	/* Notification variables: */
 	u_int32_t		hfs_notification_conditions;
 	u_int32_t		hfs_freespace_notify_dangerlimit;
@@ -295,24 +307,50 @@ typedef struct hfsmount {
 	/* Sparse device variables: */
 	struct vnode * hfs_backingfs_rootvp;
 	u_int32_t      hfs_last_backingstatfs;
-	int            hfs_sparsebandblks;
+	u_int32_t      hfs_sparsebandblks;
 	u_int64_t      hfs_backingfs_maxblocks;
 #endif
 	size_t         hfs_max_inline_attrsize;
 
 	lck_mtx_t      hfs_mutex;      /* protects access to hfsmount data */
-	void          *hfs_freezing_proc;  /* who froze the fs */
-	void          *hfs_downgrading_proc; /* process who's downgrading to rdonly */
-	lck_rw_t       hfs_insync;     /* protects sync/freeze interaction */
+
+	uint32_t       hfs_syncers;	// Count of the number of syncers running
+	enum {
+		HFS_THAWED,
+		HFS_WANT_TO_FREEZE,	// This state stops hfs_sync from starting
+		HFS_FREEZING,		// We're in this state whilst we're flushing
+		HFS_FROZEN			// Everything gets blocked in hfs_lock_global
+	} hfs_freeze_state;
+	union {
+		/*
+		 * When we're freezing (HFS_FREEZING) but not yet
+		 * frozen (HFS_FROZEN), we record the freezing thread
+		 * so that we stop other threads from taking locks,
+		 * but allow the freezing thread. 
+		 */
+		const struct thread *hfs_freezing_thread;
+		/*
+		 * Once we have frozen (HFS_FROZEN), we record the
+		 * process so that if it dies, we can automatically
+		 * unfreeze. 
+		 */
+		proc_t hfs_freezing_proc;
+	};
+
+	thread_t		hfs_downgrading_thread; /* thread who's downgrading to rdonly */
 
 	/* Resize variables: */
 	u_int32_t		hfs_resize_blocksmoved;
 	u_int32_t		hfs_resize_totalblocks;
 	u_int32_t		hfs_resize_progress;
 #if CONFIG_PROTECT
+	/* Data Protection fields */
 	struct cprotect *hfs_resize_cpentry;
 	u_int16_t		hfs_running_cp_major_vers;
-	uint32_t		default_cp_class;
+	uint32_t		default_cp_class; /* default effective class value */
+	uint64_t		cproot_flags;
+	uint8_t			cp_crypto_generation; 
+	uint8_t			hfs_cp_lock_state;  /* per-mount device lock state info */ 
 #endif
 
 
@@ -397,6 +435,7 @@ static __inline__ Boolean IsVCBDirty(ExtendedVCB *vcb)
 enum privdirtype {FILE_HARDLINKS, DIR_HARDLINKS};
 
 #define HFS_ALLOCATOR_SCAN_INFLIGHT	0x0001  	/* scan started */
+#define HFS_ALLOCATOR_SCAN_COMPLETED 0x0002		/* initial scan was completed */
 
 /* HFS mount point flags */
 #define HFS_READ_ONLY             0x00001
@@ -428,9 +467,9 @@ enum privdirtype {FILE_HARDLINKS, DIR_HARDLINKS};
 #define HFS_RDONLY_DOWNGRADE      0x80000
 #define HFS_DID_CONTIG_SCAN      0x100000
 #define HFS_UNMAP                0x200000
-#define HFS_SSD					 0x400000
-#define HFS_SUMMARY_TABLE		 0x800000
-#define HFS_CS		 0x1000000
+#define HFS_SSD                  0x400000
+#define HFS_SUMMARY_TABLE        0x800000
+#define HFS_CS                  0x1000000
 
 
 /* Macro to update next allocation block in the HFS mount structure.  If 
@@ -554,6 +593,11 @@ enum { kHFSPlusMaxFileNameBytes = kHFSPlusMaxFileNameChars * 3 };
  */
 #define MAC_GMT_FACTOR		2082844800UL
 
+static inline __attribute__((const))
+uint64_t hfs_blk_to_bytes(uint32_t blk, uint32_t blk_size)
+{
+	return (uint64_t)blk * blk_size; 		// Avoid the overflow
+}
 
 /*****************************************************************************
 	FUNCTION PROTOTYPES 
@@ -563,6 +607,7 @@ enum { kHFSPlusMaxFileNameBytes = kHFSPlusMaxFileNameChars * 3 };
 	hfs_vnop_xxx functions from different files 
 ******************************************************************************/
 int hfs_vnop_readdirattr(struct vnop_readdirattr_args *);  /* in hfs_attrlist.c */
+int hfs_vnop_getattrlistbulk(struct vnop_getattrlistbulk_args *);  /* in hfs_attrlist.c */
 
 int hfs_vnop_inactive(struct vnop_inactive_args *);        /* in hfs_cnode.c */
 int hfs_vnop_reclaim(struct vnop_reclaim_args *);          /* in hfs_cnode.c */
@@ -657,10 +702,11 @@ void hfs_generate_volume_notifications(struct hfsmount *hfsmp);
 extern int  hfs_relocate(struct  vnode *, u_int32_t, kauth_cred_t, struct  proc *);
 
 /* Flags for HFS truncate */
-#define HFS_TRUNCATE_SKIPUPDATE 0x00000001
-#define HFS_TRUNCATE_SKIPTIMES 0x00000002 /* implied by skipupdate; it is a subset */
+#define HFS_TRUNCATE_SKIPUPDATE 	0x00000001
+#define HFS_TRUNCATE_SKIPTIMES  	0x00000002 /* implied by skipupdate; it is a subset */
+											
 
-extern int hfs_truncate(struct vnode *, off_t, int, int, int, vfs_context_t);
+extern int hfs_truncate(struct vnode *, off_t, int, int, vfs_context_t);
 
 extern int hfs_release_storage (struct hfsmount *hfsmp, struct filefork *datafork, 
 								struct filefork *rsrcfork,  u_int32_t fileid);
@@ -683,6 +729,14 @@ extern int hfs_count_allocated(struct hfsmount *hfsmp, u_int32_t startBlock,
 		u_int32_t numBlocks, u_int32_t *alloc_count);
 
 extern int hfs_isrbtree_active (struct hfsmount *hfsmp);
+extern errno_t hfs_ubc_setsize(vnode_t vp, off_t len, bool have_cnode_lock);
+
+
+/*****************************************************************************
+	Functions from hfs_resize.c 
+******************************************************************************/
+int hfs_extendfs(struct hfsmount *hfsmp, u_int64_t newsize, vfs_context_t context);
+int hfs_truncatefs(struct hfsmount *hfsmp, u_int64_t newsize, vfs_context_t context);
 
 
 /*****************************************************************************
@@ -710,7 +764,22 @@ extern int  hfs_resize_progress(struct hfsmount *, u_int32_t *);
 /* If a runtime corruption is detected, mark the volume inconsistent 
  * bit in the volume attributes.
  */
-void hfs_mark_volume_inconsistent(struct hfsmount *hfsmp);
+
+typedef enum {
+	HFS_INCONSISTENCY_DETECTED,
+
+	// Used when unable to rollback an operation that failed
+	HFS_ROLLBACK_FAILED,
+
+	// Used when the latter part of an operation failed, but we chose not to roll back
+	HFS_OP_INCOMPLETE,
+
+	// Used when someone told us to force an fsck on next mount
+	HFS_FSCK_FORCED,
+} hfs_inconsistency_reason_t;
+
+void hfs_mark_inconsistent(struct hfsmount *hfsmp,
+						   hfs_inconsistency_reason_t reason);
 
 void hfs_scan_blocks (struct hfsmount *hfsmp);
 
@@ -730,7 +799,7 @@ OSErr	hfs_MountHFSPlusVolume(struct hfsmount *hfsmp, HFSPlusVolumeHeader *vhp,
 
 extern int hfsUnmount(struct hfsmount *hfsmp, struct proc *p);
 
-extern int overflow_extents(struct filefork *fp);
+extern bool overflow_extents(struct filefork *fp);
 
 extern int hfs_owner_rights(struct hfsmount *hfsmp, uid_t cnode_uid, kauth_cred_t cred,
 		struct proc *p, int invokesuperuserstatus);
@@ -739,6 +808,8 @@ extern int check_for_tracked_file(struct vnode *vp, time_t ctime, uint64_t op_ty
 extern int check_for_dataless_file(struct vnode *vp, uint64_t op_type);
 extern int hfs_generate_document_id(struct hfsmount *hfsmp, uint32_t *docid);
 
+/* Return information about number of metadata blocks for volume */
+extern int hfs_getinfo_metadata_blocks(struct hfsmount *hfsmp, struct hfsinfo_metadata *hinfo);
 
 /*
  * Journal lock function prototypes
@@ -757,7 +828,8 @@ void hfs_unlock_mount (struct hfsmount *hfsmp);
 #define SFL_BITMAP      0x0004
 #define SFL_ATTRIBUTE   0x0008
 #define SFL_STARTUP	0x0010
-#define SFL_VALIDMASK   (SFL_CATALOG | SFL_EXTENTS | SFL_BITMAP | SFL_ATTRIBUTE | SFL_STARTUP)
+#define SFL_VM_PRIV	0x0020
+#define SFL_VALIDMASK   (SFL_CATALOG | SFL_EXTENTS | SFL_BITMAP | SFL_ATTRIBUTE | SFL_STARTUP | SFL_VM_PRIV)
 
 extern int  hfs_systemfile_lock(struct hfsmount *, int, enum hfs_locktype);
 extern void hfs_systemfile_unlock(struct hfsmount *, int);
@@ -791,6 +863,8 @@ extern int  hfs_virtualmetafile(struct cnode *);
 
 extern int hfs_start_transaction(struct hfsmount *hfsmp);
 extern int hfs_end_transaction(struct hfsmount *hfsmp);
+extern void hfs_journal_lock(struct hfsmount *hfsmp);
+extern void hfs_journal_unlock(struct hfsmount *hfsmp);
 extern int hfs_journal_flush(struct hfsmount *hfsmp, boolean_t wait_for_IO);
 extern void hfs_syncer_lock(struct hfsmount *hfsmp);
 extern void hfs_syncer_unlock(struct hfsmount *hfsmp);
@@ -805,6 +879,9 @@ extern void hfs_trim_callback(void *arg, uint32_t extent_count, const dk_extent_
 extern int hfs_erase_unused_nodes(struct hfsmount *hfsmp);
 
 extern uint64_t hfs_usecs_to_deadline(uint64_t usecs);
+
+extern int hfs_freeze(struct hfsmount *hfsmp);
+extern int hfs_thaw(struct hfsmount *hfsmp, const struct proc *process);
 
 
 /*****************************************************************************
@@ -823,7 +900,7 @@ extern int hfs_btsync(struct vnode *vp, int sync_transaction);
 extern void replace_desc(struct cnode *cp, struct cat_desc *cdp);
 
 extern int hfs_vgetrsrc(struct hfsmount *hfsmp, struct vnode *vp,
-			struct vnode **rvpp, int can_drop_lock, int error_on_unlink);
+						struct vnode **rvpp);
 
 extern int hfs_update(struct vnode *, int);
 
@@ -846,11 +923,12 @@ int  hfs_buildattrkey(u_int32_t fileID, const char *attrname, HFSPlusAttrKey *ke
 void hfs_xattr_init(struct hfsmount * hfsmp);
 int file_attribute_exist(struct hfsmount *hfsmp, uint32_t fileID);
 int init_attrdata_vnode(struct hfsmount *hfsmp);
-int hfs_getxattr_internal(struct cnode *, struct vnop_getxattr_args *,
-							struct hfsmount *, u_int32_t);
-int hfs_setxattr_internal(struct cnode *, caddr_t, size_t, 
-						  struct vnop_setxattr_args *, struct hfsmount *, u_int32_t);
-
+int hfs_xattr_read(vnode_t vp, const char *name, void *data, size_t *size);
+int hfs_getxattr_internal(cnode_t *, struct vnop_getxattr_args *,
+                          struct hfsmount *, u_int32_t);
+int hfs_xattr_write(vnode_t vp, const char *name, const void *data, size_t size);
+int hfs_setxattr_internal(struct cnode *, const void *, size_t, 
+                          struct vnop_setxattr_args *, struct hfsmount *, u_int32_t);
 
 
 /*****************************************************************************

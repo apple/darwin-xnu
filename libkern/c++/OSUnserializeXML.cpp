@@ -2788,9 +2788,10 @@ OSObject*
 OSUnserializeXML(const char *buffer, OSString **errorString)
 {
 	OSObject *object;
-	parser_state_t *state = (parser_state_t *)malloc(sizeof(parser_state_t));
 
-	if ((!state) || (!buffer)) return 0;
+	if (!buffer) return 0;
+	parser_state_t *state = (parser_state_t *)malloc(sizeof(parser_state_t));
+	if (!state) return 0;
 
 	// just in case
 	if (errorString) *errorString = NULL;
@@ -2816,13 +2817,18 @@ OSUnserializeXML(const char *buffer, OSString **errorString)
 	return object;
 }
 
+#include <libkern/OSSerializeBinary.h>
+
 OSObject*
 OSUnserializeXML(const char *buffer, size_t bufferSize, OSString **errorString)
 {
-	if ((!buffer) || (!bufferSize)) return 0;
+	if (!buffer) return (0);
+    if (bufferSize < sizeof(kOSSerializeBinarySignature)) return (0);
+
+	if (!strcmp(kOSSerializeBinarySignature, buffer)) return OSUnserializeBinary(buffer, bufferSize, errorString);
 
 	// XML must be null terminated
-	if (buffer[bufferSize - 1] || strnlen(buffer, bufferSize) == bufferSize) return 0;
+	if (buffer[bufferSize - 1]) return 0;
 
 	return OSUnserializeXML(buffer, errorString);
 }

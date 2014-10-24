@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2012-2013 Apple Inc. All rights reserved.
+ * Copyright (c) 2012-2014 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -70,6 +70,7 @@ static int mptcp_getconninfo(struct mptses *, connid_t *, uint32_t *,
 static int mptcp_usr_control(struct socket *, u_long, caddr_t, struct ifnet *,
     struct proc *);
 static int mptcp_disconnectx(struct mptses *, associd_t, connid_t);
+static int mptcp_usr_disconnect(struct socket *);
 static int mptcp_usr_disconnectx(struct socket *, associd_t, connid_t);
 static struct mptses *mptcp_usrclosed(struct mptses *);
 static int mptcp_usr_peeloff(struct socket *, associd_t, struct socket **);
@@ -93,6 +94,7 @@ struct pr_usrreqs mptcp_usrreqs = {
 	.pru_connectx =		mptcp_usr_connectx,
 	.pru_control =		mptcp_usr_control,
 	.pru_detach =		mptcp_usr_detach,
+	.pru_disconnect =	mptcp_usr_disconnect,
 	.pru_disconnectx =	mptcp_usr_disconnectx,
 	.pru_peeloff =		mptcp_usr_peeloff,
 	.pru_rcvd =		mptcp_usr_rcvd,
@@ -264,6 +266,7 @@ mptcp_connectx(struct mptses *mpte, struct sockaddr_list **src_sl,
 
 	mptcplog((LOG_DEBUG, "%s: mp_so 0x%llx\n", __func__,
 	    (u_int64_t)VM_KERNEL_ADDRPERM(mp_so)));
+
 	DTRACE_MPTCP3(connectx, struct mptses *, mpte, associd_t, aid,
 	    struct socket *, mp_so);
 
@@ -481,6 +484,8 @@ mptcp_getconninfo(struct mptses *mpte, connid_t *cid, uint32_t *flags,
 				goto out;
 		}
 	}
+	mptcplog2((LOG_INFO, "%s: cid %d flags %x \n",
+	    __func__, mpts->mpts_connid, mpts->mpts_flags));
 out:
 	MPTS_UNLOCK(mpts);
 	return (error);
@@ -551,7 +556,7 @@ mptcp_setconnorder(struct mptses *mpte, connid_t cid, uint32_t rank)
 			if (mpts1 != mpts &&
 			    (mpts1->mpts_flags & MPTSF_PREFERRED)) {
 				mpts1->mpts_flags &= ~MPTSF_PREFERRED;
-				if (mpte->mpte_nummpcapflows > 1) 
+				if (mpte->mpte_nummpcapflows > 1)
 					mptcp_connorder_helper(mpts1);
 			} else if (mpts1 == mpts) {
 				mpts1->mpts_rank = 1;
@@ -755,8 +760,8 @@ mptcp_disconnectx(struct mptses *mpte, associd_t aid, connid_t cid)
 	mp_so = mpte->mpte_mppcb->mpp_socket;
 	mp_tp = mpte->mpte_mptcb;
 
-	mptcplog((LOG_DEBUG, "%s: mp_so 0x%llx aid %d cid %d\n", __func__,
-	    (u_int64_t)VM_KERNEL_ADDRPERM(mp_so), aid, cid));
+	mptcplog((LOG_DEBUG, "%s: mp_so 0x%llx aid %d cid %d %d\n", __func__,
+	    (u_int64_t)VM_KERNEL_ADDRPERM(mp_so), aid, cid, mp_so->so_error));
 	DTRACE_MPTCP5(disconnectx, struct mptses *, mpte, associd_t, aid,
 	    connid_t, cid, struct socket *, mp_so, struct mptcb *, mp_tp);
 
@@ -798,6 +803,7 @@ mptcp_disconnectx(struct mptses *mpte, associd_t aid, connid_t cid)
 			if (mpts->mpts_connid != cid)
 				continue;
 			MPTS_LOCK(mpts);
+			mpts->mpts_flags |= MPTSF_USER_DISCONNECT;
 			mptcp_subflow_disconnect(mpte, mpts, FALSE);
 			MPTS_UNLOCK(mpts);
 			break;
@@ -819,6 +825,18 @@ mptcp_disconnectx(struct mptses *mpte, associd_t aid, connid_t cid)
 	}
 
 out:
+	return (error);
+}
+
+/*
+ * Wrapper function to support disconnect on socket 
+ */
+static int
+mptcp_usr_disconnect(struct socket *mp_so)
+{
+	int error = 0;
+
+	error = mptcp_usr_disconnectx(mp_so, ASSOCID_ALL, CONNID_ALL);
 	return (error);
 }
 
@@ -868,31 +886,27 @@ mptcp_usrclosed(struct mptses *mpte)
 	MPT_LOCK(mp_tp);
 	mptcp_close_fsm(mp_tp, MPCE_CLOSE);
 
-	if (mp_tp->mpt_state == TCPS_CLOSED) {
+	if (mp_tp->mpt_state == MPTCPS_CLOSED) {
 		mpte = mptcp_close(mpte, mp_tp);
 		MPT_UNLOCK(mp_tp);
 	} else if (mp_tp->mpt_state >= MPTCPS_FIN_WAIT_2) {
 		MPT_UNLOCK(mp_tp);
 		soisdisconnected(mp_so);
+		TAILQ_FOREACH(mpts, &mpte->mpte_subflows, mpts_entry) {
+			MPTS_LOCK(mpts);
+			mpts->mpts_flags |= MPTSF_USER_DISCONNECT;
+			MPTS_UNLOCK(mpts);
+		}
 	} else {
-		mp_tp->mpt_sndmax += 1; /* adjust for Data FIN */
 		MPT_UNLOCK(mp_tp);
 
 		TAILQ_FOREACH(mpts, &mpte->mpte_subflows, mpts_entry) {
 			MPTS_LOCK(mpts);
+			mpts->mpts_flags |= MPTSF_USER_DISCONNECT;
 			mptcp_subflow_disconnect(mpte, mpts, FALSE);
 			MPTS_UNLOCK(mpts);
 		}
 	}
-	/*
-	 * XXX: adi@apple.com
-	 *
-	 * Do we need to handle time wait specially here?  We need to handle
-	 * the case where MPTCP has been established, but we have not usable
-	 * subflow to use.  Do we want to wait a while before forcibly
-	 * tearing this MPTCP down, in case we have one or more subflows
-	 * that are flow controlled?
-	 */
 
 	return (mpte);
 }
@@ -1398,6 +1412,8 @@ mptcp_usr_socheckopt(struct socket *mp_so, struct sockopt *sopt)
 	case SO_RECV_ANYIF:			/* MP + subflow */
 	case SO_RESTRICTIONS:			/* MP + subflow */
 	case SO_FLUSH:				/* MP + subflow */
+	case SO_MPTCP_FASTJOIN:			/* MP + subflow */
+	case SO_NOWAKEFROMSLEEP:
 		/*
 		 * Tell the caller that these options are to be processed;
 		 * these will also be recorded later by mptcp_setopt().
@@ -1574,6 +1590,8 @@ mptcp_setopt(struct mptses *mpte, struct sockopt *sopt)
 		case SO_PRIVILEGED_TRAFFIC_CLASS:
 		case SO_RECV_ANYIF:
 		case SO_RESTRICTIONS:
+		case SO_NOWAKEFROMSLEEP:
+		case SO_MPTCP_FASTJOIN:
 			/* record it */
 			break;
 		case SO_FLUSH:
@@ -1596,6 +1614,26 @@ mptcp_setopt(struct mptses *mpte, struct sockopt *sopt)
 		case PERSIST_TIMEOUT:
 			/* eligible; record it */
 			break;
+		case TCP_NOTSENT_LOWAT:
+			/* record at MPTCP level */
+			error = sooptcopyin(sopt, &optval, sizeof(optval),
+			    sizeof(optval));
+			if (error)
+				goto out;
+			if (optval < 0) {
+				error = EINVAL;
+				goto out;
+			} else {
+				if (optval == 0) {
+					mp_so->so_flags &= ~SOF_NOTSENT_LOWAT;
+					error = mptcp_set_notsent_lowat(mpte,0);
+				} else {
+					mp_so->so_flags |= SOF_NOTSENT_LOWAT;
+					error = mptcp_set_notsent_lowat(mpte,
+					    optval);
+				}
+			}
+			goto out;
 		default:
 			/* not eligible */
 			error = ENOPROTOOPT;
@@ -1701,6 +1739,7 @@ mptcp_getopt(struct mptses *mpte, struct sockopt *sopt)
 	case TCP_CONNECTIONTIMEOUT:
 	case TCP_RXT_CONNDROPTIME:
 	case PERSIST_TIMEOUT:
+	case TCP_NOTSENT_LOWAT:
 		/* eligible; get the default value just in case */
 		error = mptcp_default_tcp_optval(mpte, sopt, &optval);
 		break;
@@ -1708,6 +1747,15 @@ mptcp_getopt(struct mptses *mpte, struct sockopt *sopt)
 		/* not eligible */
 		error = ENOPROTOOPT;
 		break;
+	}
+
+	switch (sopt->sopt_name) {
+	case TCP_NOTSENT_LOWAT:
+		if (mpte->mpte_mppcb->mpp_socket->so_flags & SOF_NOTSENT_LOWAT)
+			optval = mptcp_get_notsent_lowat(mpte);
+		else
+			optval = 0;
+		goto out;
 	}
 
 	/*
@@ -1752,6 +1800,7 @@ mptcp_default_tcp_optval(struct mptses *mpte, struct sockopt *sopt, int *optval)
 	case TCP_KEEPCNT:
 	case TCP_CONNECTIONTIMEOUT:
 	case TCP_RXT_CONNDROPTIME:
+	case TCP_NOTSENT_LOWAT:
 		*optval = 0;
 		break;
 
@@ -1921,6 +1970,12 @@ mptcp_sopt2str(int level, int optname, char *dst, int size)
 			break;
 		case SO_RECV_ANYIF:
 			o = "SO_RECV_ANYIF";
+			break;
+		case SO_NOWAKEFROMSLEEP:
+			o = "SO_NOWAKEFROMSLEEP";
+			break;
+		case SO_MPTCP_FASTJOIN:
+			o = "SO_MPTCP_FASTJOIN";
 			break;
 		}
 		break;

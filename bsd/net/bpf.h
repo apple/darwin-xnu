@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2013 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2014 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -206,7 +206,10 @@ struct bpf_version {
 #define	BIOCSETFNR64	_IOW('B',126, struct bpf_program64)
 #define	BIOCSETFNR32	_IOW('B',126, struct bpf_program32)
 #endif /* KERNEL_PRIVATE */
-
+#ifdef PRIVATE
+#define	BIOCGWANTPKTAP	_IOR('B', 127, u_int)
+#define	BIOCSWANTPKTAP	_IOWR('B', 127, u_int)
+#endif /* PRIVATE */
 /*
  * Structure prepended to each packet.
  */

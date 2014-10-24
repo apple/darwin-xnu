@@ -14,7 +14,6 @@ EXPINC_SUBDIRS = \
 	_types
 
 # Installs header file for user level -  
-#	  $(DSTROOT)/System/Library/Frameworks/System.framework/Headers
 #	  $(DSTROOT)/System/Library/Frameworks/System.framework/PrivateHeaders
 #	  $(DSTROOT)/usr/include/
 DATAFILES = \
@@ -24,11 +23,11 @@ DATAFILES = \
 	errno.h ev.h event.h fasttrap.h fasttrap_isa.h fcntl.h file.h filedesc.h filio.h gmon.h \
 	ioccom.h ioctl.h \
 	ioctl_compat.h ipc.h kernel.h kernel_types.h kern_event.h loadable_fs.h lock.h lockf.h \
-	kauth.h kdebug.h kern_control.h kern_memorystatus.h lctx.h malloc.h \
+	kauth.h kdebug.h kern_control.h lctx.h lockstat.h malloc.h \
 	mbuf.h mman.h mount.h msg.h msgbuf.h netport.h param.h paths.h pipe.h poll.h \
 	proc.h  proc_info.h ptrace.h queue.h quota.h random.h reboot.h resource.h resourcevar.h \
 	sbuf.h posix_sem.h posix_shm.h sdt.h \
-	select.h sem.h semaphore.h shm.h signal.h signalvar.h socket.h socketvar.h sockio.h stat.h \
+	select.h sem.h semaphore.h shm.h signal.h signalvar.h socket.h socketvar.h sockio.h stat.h stdio.h \
 	sysctl.h syslimits.h syslog.h sys_domain.h termios.h  time.h \
 	timeb.h times.h tprintf.h trace.h tty.h  ttychars.h ttycom.h \
 	ttydefaults.h ttydev.h  types.h ubc.h ucontext.h ucred.h uio.h un.h unistd.h unpcb.h \
@@ -40,8 +39,10 @@ DATAFILES = \
 # Installs header file for Apple internal use in user level - 
 #	  $(DSTROOT)/System/Library/Frameworks/System.framework/PrivateHeaders
 PRIVATE_DATAFILES = \
+	coalition.h \
 	codesign.h \
 	content_protection.h \
+	csr.h \
 	decmpfs.h \
 	disklabel.h \
 	fileport.h \
@@ -52,7 +53,9 @@ PRIVATE_DATAFILES = \
 	imgsrc.h \
 	ipcs.h \
 	kas_info.h \
+	kern_memorystatus.h \
 	kern_overrides.h \
+	sfi.h \
 	shm_internal.h \
 	spawn_internal.h \
 	tree.h \
@@ -71,11 +74,11 @@ KERNELFILES = \
 	errno.h ev.h event.h fcntl.h file.h filio.h \
 	ioccom.h ioctl.h ipc.h \
 	ioctl_compat.h  kernel.h kernel_types.h kern_event.h lctx.h lock.h lockf.h \
-	kauth.h kdebug.h  md5.h kern_control.h kern_memorystatus.h imgact.h malloc.h namei.h \
+	kauth.h kdebug.h  md5.h kern_control.h imgact.h malloc.h namei.h \
 	mman.h mbuf.h mount.h netport.h param.h paths.h \
 	proc.h  queue.h random.h resource.h \
 	sbuf.h posix_sem.h posix_shm.h sem.h shm.h \
-	select.h signal.h socket.h socketvar.h sockio.h stat.h \
+	select.h signal.h socket.h socketvar.h sockio.h stat.h stdio.h \
 	sysctl.h syslimits.h syslog.h systm.h sys_domain.h  time.h \
 	types.h ubc.h ucontext.h ucred.h uio.h un.h unistd.h unpcb.h \
 	utfconv.h vm.h vmparam.h vnode.h vnode_if.h xattr.h \
@@ -94,15 +97,19 @@ PRIVATE_KERNELFILES = \
 	codesign.h \
 	cprotect.h \
 	content_protection.h \
+	csr.h \
 	decmpfs.h \
 	disktab.h \
 	fbt.h \
 	fileport.h \
 	fsctl.h \
 	fslog.h \
+	kasl.h \
+	kern_memorystatus.h \
 	mach_swapon.h \
 	msgbuf.h \
 	eventvar.h \
+	proc_info.h \
 	pthread_shims.h \
 	quota.h \
 	sem_internal.h \
@@ -147,12 +154,17 @@ INSTALL_KF_MI_GEN_LIST =
 
 MAKESYSCALLS = $(SRCROOT)/bsd/kern/makesyscalls.sh
 
-syscall.h: $(SRCROOT)/bsd/kern/syscalls.master $(MAKESYSCALLS)
+$(OBJROOT)/cscope.genhdrs:
+	$(_v)mkdir -p $(OBJROOT)/cscope.genhdrs
+
+syscall.h: $(SRCROOT)/bsd/kern/syscalls.master $(MAKESYSCALLS) $(OBJROOT)/cscope.genhdrs
 	@echo "Generating bsd/sys/$@ from $<";
+	@echo "$(OBJPATH)/bsd/sys/$@" > $(OBJROOT)/cscope.genhdrs/$@.path
 	$(_v)$(MAKESYSCALLS) $< header > /dev/null
 
-sysproto.h: $(SRCROOT)/bsd/kern/syscalls.master $(MAKESYSCALLS)
+sysproto.h: $(SRCROOT)/bsd/kern/syscalls.master $(MAKESYSCALLS) $(OBJROOT)/cscope.genhdrs
 	@echo "Generating bsd/sys/$@ from $<";
+	@echo "$(OBJPATH)/bsd/sys/$@" > $(OBJROOT)/cscope.genhdrs/$@.path
 	$(_v)$(MAKESYSCALLS) $< proto > /dev/null
 
 MAKE_POSIX_AVAILABILITY = $(SRCROOT)/bsd/sys/make_posix_availability.sh

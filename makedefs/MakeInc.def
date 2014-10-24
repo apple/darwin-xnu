@@ -1,6 +1,6 @@
 # -*- mode: makefile;-*-
 #
-# Copyright (C) 1999-2012 Apple Inc. All rights reserved.
+# Copyright (C) 1999-2013 Apple Inc. All rights reserved.
 #
 # MakeInc.def contains global definitions for building,
 # linking, and installing files.
@@ -9,7 +9,7 @@
 #
 # Architecture Configuration options
 #
-SUPPORTED_ARCH_CONFIGS := X86_64
+SUPPORTED_ARCH_CONFIGS := X86_64 X86_64H
 
 #
 # Kernel Configuration options  
@@ -21,12 +21,13 @@ SUPPORTED_KERNEL_CONFIGS = RELEASE DEVELOPMENT DEBUG PROFILE
 #
 
 SUPPORTED_X86_64_MACHINE_CONFIGS = NONE
+SUPPORTED_X86_64H_MACHINE_CONFIGS = NONE
 
 
 #
 # Platform options
 #
-SUPPORTED_PLATFORMS = MacOSX iPhoneOS iPhoneSimulator
+SUPPORTED_PLATFORMS = MacOSX iPhoneOS iPhoneSimulator iPhoneOSNano iPhoneNanoSimulator
 
 #
 # Setup up *_LC variables during recursive invocations
@@ -58,9 +59,9 @@ COMPONENT_IMPORT_LIST = $(filter-out $(COMPONENT),$(COMPONENT_LIST))
 #
 ifeq ($(PLATFORM),MacOSX)
     DEPLOYMENT_TARGET_FLAGS = -mmacosx-version-min=$(SDKVERSION)
-else ifeq ($(PLATFORM),iPhoneOS)
+else ifneq ($(filter iPhoneOS iPhoneOSNano,$(PLATFORM)),)
     DEPLOYMENT_TARGET_FLAGS = -miphoneos-version-min=$(SDKVERSION)
-else ifeq ($(PLATFORM),iPhoneSimulator)
+else ifneq ($(filter iPhoneSimulator iPhoneNanoSimulator,$(PLATFORM)),)
     DEPLOYMENT_TARGET_FLAGS =
 else
     DEPLOYMENT_TARGET_FLAGS =
@@ -71,7 +72,7 @@ endif
 # Standard defines list
 #
 DEFINES = -DAPPLE -DKERNEL -DKERNEL_PRIVATE -DXNU_KERNEL_PRIVATE \
-	-DPRIVATE -D__MACHO__=1 -Dvolatile=__volatile $(IDENT) \
+	-DPRIVATE -D__MACHO__=1 -Dvolatile=__volatile $(CONFIG_DEFINES) \
 	$(SEED_DEFINES)
 
 #
@@ -88,7 +89,8 @@ CWARNFLAGS_STD = \
 	-Wall -Werror -Wno-format-y2k -Wextra -Wstrict-prototypes \
 	-Wmissing-prototypes -Wpointer-arith -Wreturn-type -Wcast-qual \
 	-Wwrite-strings -Wswitch -Wshadow -Wcast-align -Wchar-subscripts \
-	-Winline -Wnested-externs -Wredundant-decls -Wextra-tokens
+	-Winline -Wnested-externs -Wredundant-decls -Wextra-tokens \
+	-Wunreachable-code
 
 # Can be overridden in Makefile.template or Makefile.$arch
 export CWARNFLAGS ?= $(CWARNFLAGS_STD)
@@ -100,7 +102,8 @@ endef
 CXXWARNFLAGS_STD = \
 	-Wall -Werror -Wno-format-y2k -Wextra -Wpointer-arith -Wreturn-type \
 	-Wcast-qual -Wwrite-strings -Wswitch -Wcast-align -Wchar-subscripts \
-	-Wredundant-decls -Wextra-tokens
+	-Wredundant-decls -Wextra-tokens \
+	-Wunreachable-code
 
 # overloaded-virtual warnings are non-fatal (9000888)
 CXXWARNFLAGS_STD += -Wno-error=overloaded-virtual
@@ -116,6 +119,7 @@ endef
 # Default ARCH_FLAGS, for use with compiler/linker/assembler/mig drivers
 
 ARCH_FLAGS_X86_64	  = -arch x86_64
+ARCH_FLAGS_X86_64H	  = -arch x86_64h
 
 
 #
@@ -128,7 +132,6 @@ endif
 #
 # Debug info
 #
-DSYMKERNELSYSDIR = mach_kernel.sys.dSYM
 DSYMINFODIR	= Contents
 DSYMKGMACROSDIR	= Contents/Resources
 DSYMLLDBMACROSDIR = Contents/Resources/Python
@@ -151,8 +154,9 @@ CFLAGS_DEBUG 	=
 CFLAGS_PROFILE 	=  -pg
 
 CFLAGS_X86_64	= -Dx86_64 -DX86_64 -D__X86_64__ -DLP64 \
-				-DPAGE_SIZE_FIXED -mkernel -msoft-float \
-				-fno-limit-debug-info # Workaround for 11076603
+				-DPAGE_SIZE_FIXED -mkernel -msoft-float 
+
+CFLAGS_X86_64H = $(CFLAGS_X86_64)
 
 
 CFLAGS_RELEASEX86_64 = -O2
@@ -161,10 +165,17 @@ CFLAGS_DEVELOPMENTX86_64 = -O2
 CFLAGS_DEBUGX86_64 = -O0
 CFLAGS_PROFILEX86_64 = -O2
 
+CFLAGS_RELEASEX86_64H = -O2
+CFLAGS_DEVELOPMENTX86_64H = -O2
+# No space optimization for the DEBUG kernel for the benefit of gdb:
+CFLAGS_DEBUGX86_64H = -O0
+CFLAGS_PROFILEX86_64H = -O2
+
 CFLAGS_RELEASEARM = -O2
 CFLAGS_DEVELOPMENTARM = -O2
 CFLAGS_DEBUGARM = -O0
 CFLAGS_PROFILEARM = -O2
+
 
 CFLAGS 	= $(CFLAGS_GEN) \
 		  $($(addsuffix $(CURRENT_MACHINE_CONFIG),MACHINE_FLAGS_$(CURRENT_ARCH_CONFIG)_)) \
@@ -186,6 +197,7 @@ CXXFLAGS_GEN  = -fapple-kext $(OTHER_CXXFLAGS)
 # For the moment, do not use gnu++11
 #CXXFLAGS_ARM = -std=gnu++11
 
+
 CXXFLAGS      = $(CXXFLAGS_GEN) \
 		  $($(addsuffix $(CURRENT_ARCH_CONFIG),CXXFLAGS_)) \
 		  $($(addsuffix $(CURRENT_KERNEL_CONFIG),CXXFLAGS_))
@@ -200,7 +212,7 @@ S_KCC	= $(CC)
 #
 # Default SFLAGS
 #
-SFLAGS_GEN = -D__ASSEMBLER__ $(OTHER_CFLAGS)
+SFLAGS_GEN = -D__ASSEMBLER__ -DASSEMBLER $(OTHER_CFLAGS)
 
 SFLAGS_RELEASE 	= 
 SFLAGS_DEVELOPMENT 	= 
@@ -208,6 +220,7 @@ SFLAGS_DEBUG 	=
 SFLAGS_PROFILE 	= 
 
 SFLAGS_X86_64 	= $(CFLAGS_X86_64)
+SFLAGS_X86_64H 	= $(CFLAGS_X86_64H)
 
 SFLAGS 	= $(SFLAGS_GEN) \
 		  $($(addsuffix $(CURRENT_MACHINE_CONFIG),MACHINE_FLAGS_$(CURRENT_ARCH_CONFIG)_)) \
@@ -284,10 +297,16 @@ LDFLAGS_KERNEL_RELEASEX86_64 = \
 
 # Define KERNEL_BASE_OFFSET so known at compile time:
 CFLAGS_X86_64 += -DKERNEL_BASE_OFFSET=$(KERNEL_BASE_OFFSET)
+CFLAGS_X86_64H += -DKERNEL_BASE_OFFSET=$(KERNEL_BASE_OFFSET)
 
 LDFLAGS_KERNEL_DEBUGX86_64 = $(LDFLAGS_KERNEL_RELEASEX86_64)
 LDFLAGS_KERNEL_DEVELOPMENTX86_64 = $(LDFLAGS_KERNEL_RELEASEX86_64)
 LDFLAGS_KERNEL_PROFILEX86_64 = $(LDFLAGS_KERNEL_RELEASEX86_64)
+
+LDFLAGS_KERNEL_RELEASEX86_64H = $(LDFLAGS_KERNEL_RELEASEX86_64)
+LDFLAGS_KERNEL_DEBUGX86_64H = $(LDFLAGS_KERNEL_RELEASEX86_64H)
+LDFLAGS_KERNEL_DEVELOPMENTX86_64H = $(LDFLAGS_KERNEL_RELEASEX86_64H)
+LDFLAGS_KERNEL_PROFILEX86_64H = $(LDFLAGS_KERNEL_RELEASEX86_64H)
 
 
 LDFLAGS_KERNEL	= $(LDFLAGS_KERNEL_GEN) \
@@ -334,11 +353,14 @@ INCFLAGS 	= $(INCFLAGS_LOCAL) $(INCFLAGS_GEN) $(INCFLAGS_IMPORT) $(INCFLAGS_EXTE
 #
 # Default MIGFLAGS
 #
-MIGFLAGS	= $(DEFINES) $(INCFLAGS) $($(addsuffix $(CURRENT_ARCH_CONFIG),CFLAGS_)) $($(addsuffix $(CURRENT_ARCH_CONFIG),ARCH_FLAGS_)) \
+MIGFLAGS	= $(DEFINES) $(INCFLAGS) -novouchers $($(addsuffix $(CURRENT_ARCH_CONFIG),CFLAGS_)) $($(addsuffix $(CURRENT_ARCH_CONFIG),ARCH_FLAGS_)) \
 		$(DEPLOYMENT_TARGET_FLAGS)
 
 #
 # Support for LLVM Link Time Optimization (LTO)
+#
+# LTO can be explicitly enabled or disabled with BUILD_LTO=1|0
+# and defaults to enabled except for DEBUG kernels
 #
 # CFLAGS_NOLTO_FLAG is needed on a per-file basis (for files
 # that deal poorly with LTO, or files that must be machine
@@ -349,10 +371,20 @@ MIGFLAGS	= $(DEFINES) $(INCFLAGS) $($(addsuffix $(CURRENT_ARCH_CONFIG),CFLAGS_))
 # do not utilize an export list.  For these configs to build,
 # we need to prevent the LTO logic from dead stripping them.
 
-ifeq ($(BUILD_LTO),1)
+LTO_ENABLED_RELEASE = 1
+LTO_ENABLED_DEVELOPMENT = 1
+LTO_ENABLED_DEBUG = 0
+
+ifneq ($(BUILD_LTO),)
+USE_LTO = $(BUILD_LTO)
+else
+USE_LTO = $(LTO_ENABLED_$(CURRENT_KERNEL_CONFIG))
+endif
+
+ifeq ($(USE_LTO),1)
 CFLAGS_GEN	+= -flto
 CXXFLAGS_GEN	+= -flto
-LDFLAGS_KERNEL_GEN	+= -Wl,-mllvm,-disable-simplify-libcalls -Wl,-object_path_lto,$(TARGET)/lto.o # -Wl,-mllvm -Wl,-disable-fp-elim
+LDFLAGS_KERNEL_GEN	+= -Wl,-mllvm,-inline-threshold=125 -Wl,-object_path_lto,$(TARGET)/lto.o # -Wl,-mllvm -Wl,-disable-fp-elim 
 LDFLAGS_NOSTRIP_FLAG = -rdynamic
 CFLAGS_NOLTO_FLAG = -fno-lto
 SUPPORTS_CTFCONVERT	= 0
@@ -382,7 +414,8 @@ EXEC_INSTALL_FLAGS = -c -S -m 0755
 # Header file destinations
 #
 ifeq ($(RC_ProjectName),xnu_headers_Sim)
-	HEADER_INSTALL_PREFIX = $(SDKROOT)
+	include $(MAKEFILEPATH)/../AppleInternal/Makefiles/Makefile.indigo_prefix
+	HEADER_INSTALL_PREFIX = $(INDIGO_PREFIX)
 else
 	HEADER_INSTALL_PREFIX = 
 endif
@@ -418,7 +451,6 @@ SINCFRAME_UNIFDEF  = $(PLATFORM_UNIFDEF) $(XNU_PRIVATE_UNIFDEF) $(SEED_DEFINES) 
 KPINCFRAME_UNIFDEF = $(PLATFORM_UNIFDEF) $(XNU_PRIVATE_UNIFDEF) $(SEED_DEFINES) -DKERNEL_PRIVATE -DPRIVATE -DKERNEL -U_OPEN_SOURCE_ -U__OPEN_SOURCE__
 KINCFRAME_UNIFDEF  = $(PLATFORM_UNIFDEF) $(XNU_PRIVATE_UNIFDEF) $(SEED_DEFINES) -UKERNEL_PRIVATE -UPRIVATE -DKERNEL -D_OPEN_SOURCE_ -D__OPEN_SOURCE__
 
-
 #
 # Compononent Header file destinations
 #
@@ -428,7 +460,7 @@ EXPDIR = EXPORT_HDRS/$(COMPONENT)
 # Strip Flags
 #
 STRIP_FLAGS_RELEASE	= -S -x 
-STRIP_FLAGS_DEVELOPMENT	= -S -x 
+STRIP_FLAGS_DEVELOPMENT	= -S 
 STRIP_FLAGS_DEBUG	= -S 
 STRIP_FLAGS_PROFILE	= -S -x
 
@@ -437,9 +469,13 @@ STRIP_FLAGS 	= $($(addsuffix $(CURRENT_KERNEL_CONFIG),STRIP_FLAGS_))
 #
 # dsymutil flags
 #
-DSYMUTIL_FLAGS_X86_64 = --arch=x86_64
+DSYMUTIL_FLAGS_GEN	= --minimize
 
-DSYMUTIL_FLAGS = $($(addsuffix $(CURRENT_ARCH_CONFIG),DSYMUTIL_FLAGS_))
+DSYMUTIL_FLAGS_X86_64	= --arch=x86_64
+DSYMUTIL_FLAGS_X86_64H	= --arch=x86_64h
+
+DSYMUTIL_FLAGS = $(DSYMUTIL_FLAGS_GEN) \
+	$($(addsuffix $(CURRENT_ARCH_CONFIG),DSYMUTIL_FLAGS_))
 
 #
 # Man Page destination
@@ -457,12 +493,40 @@ DEVELOPER_EXTRAS_DIR = /AppleInternal/CoreOS/xnu_debug
 INSTALL_KERNEL_DIR = /
 
 #
+# new OS X install location
+#
+SYSTEM_LIBRARY_KERNELS_DIR = /System/Library/Kernels
+
+#
+# File names in DSTROOT
+#
+
+ifeq ($(PLATFORM),MacOSX)
+KERNEL_FILE_NAME_PREFIX = kernel
+else
+KERNEL_FILE_NAME_PREFIX = mach
+endif
+
+ifeq ($(CURRENT_MACHINE_CONFIG),NONE)
+ifeq ($(CURRENT_KERNEL_CONFIG),RELEASE)
+KERNEL_FILE_NAME = $(KERNEL_FILE_NAME_PREFIX)
+KERNEL_LLDBBOOTSTRAP_NAME = $(KERNEL_FILE_NAME_PREFIX).py
+else
+KERNEL_FILE_NAME = $(KERNEL_FILE_NAME_PREFIX).$(CURRENT_KERNEL_CONFIG_LC)
+KERNEL_LLDBBOOTSTRAP_NAME = $(KERNEL_FILE_NAME_PREFIX).py
+endif
+else
+KERNEL_FILE_NAME = $(KERNEL_FILE_NAME_PREFIX).$(CURRENT_KERNEL_CONFIG_LC).$(CURRENT_MACHINE_CONFIG_LC)
+KERNEL_LLDBBOOTSTRAP_NAME = $(KERNEL_FILE_NAME_PREFIX)_$(CURRENT_KERNEL_CONFIG_LC).py
+endif
+
+#
 # System.kext pseudo-kext install location
 #
 INSTALL_EXTENSIONS_DIR = /System/Library/Extensions
 
 #
-# KDK location for iOS
+# KDK location
 #
 INSTALL_KERNEL_SYM_DIR = /System/Library/Extensions/KDK
 
@@ -477,16 +541,18 @@ INSTALL_DTRACE_SCRIPTS_DIR = /usr/lib/dtrace
 #
 ifeq ($(RC_ProjectName),xnu_debug)
 INSTALL_KERNEL_DIR := $(DEVELOPER_EXTRAS_DIR)
-DELETE_KERNEL_FRAMEWORK_AND_MISC = 1
+INSTALL_KERNEL_SYM_DIR := $(DEVELOPER_EXTRAS_DIR)
+INSTALL_KERNEL_SYM_TO_KDK = 1
 INSTALL_XNU_DEBUG_FILES = 1
-endif
-ifeq ($(PLATFORM),iPhoneOS)
-INSTALL_PRIMARY_KERNEL_LIKE_NON_PRIMARY = 1
+else ifneq ($(filter iPhoneOS iPhoneOSNano,$(PLATFORM)),)
 INSTALL_KERNEL_SYM_TO_KDK = 1
 USE_BINARY_PLIST = 1
-else ifeq ($(PLATFORM),iPhoneSimulator)
-INSTALL_SYSTEM_FRAMEWORK_SYMLINKS = 1
+else ifneq ($(filter iPhoneSimulator iPhoneNanoSimulator,$(PLATFORM)),)
 USE_BINARY_PLIST = 1
+else ifeq ($(PLATFORM),MacOSX)
+INSTALL_KERNEL_DIR := $(SYSTEM_LIBRARY_KERNELS_DIR)
+INSTALL_KERNEL_SYM_DIR := $(SYSTEM_LIBRARY_KERNELS_DIR)
+INSTALL_KERNEL_SYM_TO_KDK = $(if $(filter YES,$(DWARF_DSYM_FILE_SHOULD_ACCOMPANY_PRODUCT)),1,0)
 endif
 
 # vim: set ft=make:

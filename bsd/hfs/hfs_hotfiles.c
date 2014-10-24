@@ -1931,7 +1931,7 @@ hfc_btree_create(struct hfsmount *hfsmp, unsigned int nodesize, unsigned int ent
 		index[(nodesize / 2) - 4] = SWAP_BE16 (offset);
 
 		vnode_setnoflush(vp);
-		error = hfs_truncate(vp, (off_t)filesize, IO_NDELAY, 0, 0, ctx);
+		error = hfs_truncate(vp, (off_t)filesize, IO_NDELAY, 0, ctx);
 		if (error) {
 			printf("hfs: error %d growing HFBT on %s\n", error, HFSTOVCB(hfsmp)->vcbVN);
 			goto out;

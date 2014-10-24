@@ -37,7 +37,8 @@
 .Dt LINK 2
 .Os BSD 4
 .Sh NAME
-.Nm link
+.Nm link ,
+.Nm linkat
 .Nd make a hard file link
 .Sh SYNOPSIS
 .Fd #include <unistd.h>
@@ -45,6 +46,10 @@
 .Fo link
 .Fa "const char *path1"
 .Fa "const char *path2"
+.Fc
+.Ft int
+.Fo linkat
+.Fa "int fd1" "const char *name1" "int fd2" "const char *name2" "int flag"
 .Fc
 .Sh DESCRIPTION
 The
@@ -96,6 +101,69 @@ will point the hard link,
 to the underlying object pointed to by
 .Fa path1 ,
 not to the symbolic link itself.
+.Pp
+The
+.Fn linkat
+system call is equivalent to
+.Fa link
+except in the case where either
+.Fa name1
+or
+.Fa name2
+or both are relative paths.
+In this case a relative path
+.Fa name1
+is interpreted relative to
+the directory associated with the file descriptor
+.Fa fd1
+instead of the current working directory and similarly for
+.Fa name2
+and the file descriptor
+.Fa fd2 .
+.Pp
+Values for
+.Fa flag
+are constructed by a bitwise-inclusive OR of flags from the following
+list, defined in
+.In fcntl.h :
+.Bl -tag -width indent
+.It Dv AT_SYMLINK_FOLLOW
+If
+.Fa name1
+names a symbolic link, a new link for the target of the symbolic link is
+created.
+.El
+.Pp
+If
+.Fn linkat
+is passed the special value
+.Dv AT_FDCWD
+in the
+.Fa fd1
+or
+.Fa fd2
+parameter, the current working directory is used for the respective
+.Fa name
+argument.
+If both
+.Fa fd1
+and
+.Fa fd2
+have value
+.Dv AT_FDCWD ,
+the behavior is identical to a call to
+.Fn link .
+Unless
+.Fa flag
+contains the
+.Dv AT_SYMLINK_FOLLOW
+flag, if
+.Fa name1
+names a symbolic link, a new link is created for the symbolic link
+.Fa name1
+and not its target. On OS X, not assigning AT_SYMLINK_FOLLOW to
+.Fa flag
+may result in some filesystems returning an error.
 .Sh RETURN VALUES
 Upon successful completion, a value of 0 is returned.  Otherwise,
 a value of -1 is returned and
@@ -181,6 +249,46 @@ and the file named by
 .Fa path1
 are on different file systems.
 .El
+.Pp
+In addition to the errors returned by the
+.Fn link ,
+the
+.Fn linkat
+system call may fail if:
+.Bl -tag -width Er
+.It Bq Er EBADF
+The
+.Fa name1
+or
+.Fa name2
+argument does not specify an absolute path and the
+.Fa fd1
+or
+.Fa fd2
+argument, respectively, is neither
+.Dv AT_FDCWD
+nor a valid file descriptor open for searching.
+.It Bq Er EINVAL
+The value of the
+.Fa flag
+argument is not valid.
+.It Bq Er ENOTSUP
+.Fa flag
+was not set to
+.Dv AT_SYMLINK_FOLLOW (some filesystems only)
+.It Bq Er ENOTDIR
+The
+.Fa name1
+or
+.Fa name2
+argument is not an absolute path and
+.Fa fd1
+or
+.Fa fd2 ,
+respectively, is neither
+.Dv AT_FDCWD
+nor a file descriptor associated with a directory.
+.El
 .Sh SEE ALSO
 .Xr symlink 2 ,
 .Xr unlink 2
@@ -189,3 +297,6 @@ The
 .Fn link
 function is expected to conform to 
 .St -p1003.1-88 .
+The
+.Fn linkat
+system call is expected to conform to POSIX.1-2008 .

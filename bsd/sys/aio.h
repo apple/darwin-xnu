@@ -66,6 +66,7 @@
 #include <sys/_types/_o_sync.h>
 #include <sys/_types/_o_dsync.h>
 
+#ifndef KERNEL
 struct aiocb {
 	int		aio_fildes;		/* File descriptor */
 	off_t		aio_offset;		/* File offset */
@@ -75,6 +76,7 @@ struct aiocb {
 	struct sigevent	aio_sigevent;		/* Signal number and value */
 	int		aio_lio_opcode;		/* Operation to be performed */
 };
+#endif /* KERNEL */
 
 #ifdef KERNEL
 

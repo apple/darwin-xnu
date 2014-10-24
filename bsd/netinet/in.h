@@ -791,6 +791,18 @@ struct in_pktinfo {
 #include <netinet6/in6.h>
 #undef __KAME_NETINET_IN_H_INCLUDED_
 
+#ifdef PRIVATE
+/* 
+ * Minimal sized structure to hold an IPv4 or IPv6 socket address
+ * as sockaddr_storage can waste memory
+ */
+union sockaddr_in_4_6 {
+	struct sockaddr         sa;
+	struct sockaddr_in      sin;
+	struct sockaddr_in6     sin6;
+};
+#endif /* PRIVATE */
+
 #ifdef KERNEL
 #ifdef BSD_KERNEL_PRIVATE
 #include <mach/boolean.h>

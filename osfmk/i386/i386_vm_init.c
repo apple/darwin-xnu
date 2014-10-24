@@ -54,7 +54,6 @@
  * the rights to redistribute these changes.
  */
 
-#include <platforms.h>
 
 #include <mach/i386/vm_param.h>
 
@@ -101,6 +100,7 @@ vm_offset_t	vm_kernel_top;
 vm_offset_t	vm_kernel_stext;
 vm_offset_t	vm_kernel_etext;
 vm_offset_t	vm_kernel_slide;
+vm_offset_t     vm_hib_base;
 vm_offset_t	vm_kext_base = VM_MIN_KERNEL_AND_KEXT_ADDRESS;
 vm_offset_t	vm_kext_top = VM_MIN_KERNEL_ADDRESS;
 
@@ -259,6 +259,7 @@ i386_vm_init(uint64_t	maxmem,
 
 	sHIB  = segHIBB;
 	eHIB  = segHIBB + segSizeHIB;
+	vm_hib_base = sHIB;
 	/* Zero-padded from ehib to stext if text is 2M-aligned */
 	stext = segTEXTB;
 	lowGlo.lgStext = stext;

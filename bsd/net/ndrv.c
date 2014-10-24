@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1997-2012 Apple Inc. All rights reserved.
+ * Copyright (c) 1997-2014 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -614,7 +614,7 @@ sprint_d(u_int n, char *buf, int buflen)
                 *cp = "0123456789"[n % 10];
                 n /= 10;
         } while (n != 0 && buflen > 0);
-	strncpy(buf, cp, IFNAMSIZ-buflen);
+	strlcpy(buf, cp, IFNAMSIZ-buflen);
         return;
 }
 
@@ -629,7 +629,7 @@ static int name_cmp(struct ifnet *ifp, char *q)
 
 	r = buf;
 	len = strlen(ifnet_name(ifp));
-	strncpy(r, ifnet_name(ifp), IFNAMSIZ);
+	strlcpy(r, ifnet_name(ifp), IFNAMSIZ);
 	r += len;
 	sprint_d(ifnet_unit(ifp), r, IFNAMSIZ-(r-buf));
 #if NDRV_DEBUG
@@ -865,7 +865,6 @@ ndrv_handle_ifp_detach(u_int32_t family, short unit)
            
 		  so = np->nd_socket; 
             /* Make sure sending returns an error */
-            /* Is this safe? Will we drop the funnel? */
 		lck_mtx_assert(ndrvdomain->dom_mtx, LCK_MTX_ASSERT_OWNED);
             socantsendmore(so);
             socantrcvmore(so);

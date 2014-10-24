@@ -128,6 +128,7 @@ struct ifclassq {
 	u_int32_t	ifcq_type;	/* scheduler type */
 	u_int32_t	ifcq_flags;	/* flags */
 	u_int32_t	ifcq_sflags;	/* scheduler flags */
+	u_int32_t	ifcq_target_qdelay; /* target queue delay */
 	void		*ifcq_disc;	/* for scheduler-specific use */
 	/*
 	 * ifcq_disc_slots[] represents the leaf classes configured for the
@@ -340,6 +341,7 @@ struct if_ifclassq_stats {
 #define	IFCQ_DEC_LEN(_ifcq)	(IFCQ_LEN(_ifcq)--)
 #define	IFCQ_MAXLEN(_ifcq)	((_ifcq)->ifcq_maxlen)
 #define	IFCQ_SET_MAXLEN(_ifcq, _len) ((_ifcq)->ifcq_maxlen = (_len))
+#define IFCQ_TARGET_QDELAY(_ifcq)	((_ifcq)->ifcq_target_qdelay)
 
 #define	IFCQ_XMIT_ADD(_ifcq, _pkt, _len) do {				\
 	PKTCNTR_ADD(&(_ifcq)->ifcq_xmitcnt, _pkt, _len);		\

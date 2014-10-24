@@ -97,8 +97,8 @@
 #define ARGS6_EXTENT	6
 #define ARGS7_EXTENT	7
 #define ARGS8_EXTENT	8
-#define ARGS9_EXTENT	10	
-#define ARGS10_EXTENT	10	
+#define ARGS9_EXTENT	9
+#define ARGS10_EXTENT	10
 
 #define DTRACE_CALL0ARGS(provider, name)							\
 	asm volatile (										\

@@ -35,7 +35,6 @@
  *			factors needed by other parts of the system.
  */
 
-#include <platforms.h>
 
 #include <mach/mach_types.h>
 
@@ -180,11 +179,7 @@ tsc_init(void)
 	busFreq = EFI_FSB_frequency();
 
 	switch (cpuid_cpufamily()) {
-	case CPUFAMILY_INTEL_HASWELL:
-	case CPUFAMILY_INTEL_IVYBRIDGE:
-	case CPUFAMILY_INTEL_SANDYBRIDGE:
-	case CPUFAMILY_INTEL_WESTMERE:
-	case CPUFAMILY_INTEL_NEHALEM: {
+	default: {
 		uint64_t msr_flex_ratio;
 		uint64_t msr_platform_info;
 
@@ -210,7 +205,8 @@ tsc_init(void)
 
 		break;
             }
-	default: {
+	case CPUFAMILY_INTEL_MEROM:
+	case CPUFAMILY_INTEL_PENRYN: {
 		uint64_t	prfsts;
 
 		prfsts = rdmsr64(IA32_PERF_STS);

@@ -150,12 +150,6 @@ decl_lck_mtx_data(, sadb_stat_mutex_data);
 lck_mtx_t	*sadb_stat_mutex = &sadb_stat_mutex_data;
 #endif /* IPSEC */
 
-#if MROUTING
-int rsvp_on = 0;
-static int ip_rsvp_on;
-struct socket *ip_rsvpd;
-#endif /* MROUTING */
-
 MBUFQ_HEAD(fq_head);
 
 static int frag_timeout_run;		/* frag timer is scheduled to run */
@@ -279,7 +273,8 @@ static u_int32_t inaddr_hashp;			/* next largest prime */
 
 static int ip_getstat SYSCTL_HANDLER_ARGS;
 struct ipstat ipstat;
-SYSCTL_PROC(_net_inet_ip, IPCTL_STATS, stats, CTLFLAG_RD | CTLFLAG_LOCKED,
+SYSCTL_PROC(_net_inet_ip, IPCTL_STATS, stats,
+	CTLTYPE_STRUCT | CTLFLAG_RD | CTLFLAG_LOCKED,
 	0, 0, ip_getstat, "S,ipstat",
 	"IP statistics (struct ipstat, netinet/ip_var.h)");
 
@@ -1019,20 +1014,6 @@ pass:
 		return;
 	}
 
-#if MROUTING
-	/*
-	 * greedy RSVP, snatches any PATH packet of the RSVP protocol and no
-	 * matter if it is destined to another node, or whether it is
-	 * a multicast one, RSVP wants it! and prevents it from being forwarded
-	 * anywhere else. Also checks if the rsvp daemon is running before
-	 * grabbing the packet.
-	 */
-	if (rsvp_on && ip->ip_p == IPPROTO_RSVP) {
-		ip_setdstifaddr_info(m, inifp->if_index, NULL);
-		goto ours;
-	}
-#endif /* MROUTING */
-
 	/*
 	 * Check our list of addresses, to see if the packet is for us.
 	 * If we don't have any addresses, assume any unicast packet
@@ -1127,34 +1108,6 @@ pass:
 
 	if (IN_MULTICAST(ntohl(ip->ip_dst.s_addr))) {
 		struct in_multi *inm;
-#if MROUTING
-		if (ip_mrouter) {
-			/*
-			 * If we are acting as a multicast router, all
-			 * incoming multicast packets are passed to the
-			 * kernel-level multicast forwarding function.
-			 * The packet is returned (relatively) intact; if
-			 * ip_mforward() returns a non-zero value, the packet
-			 * must be discarded, else it may be accepted below.
-			 */
-			if (ip_mforward && ip_mforward(ip, inifp, m, 0) != 0) {
-				OSAddAtomic(1, &ipstat.ips_cantforward);
-				m_freem(m);
-				return;
-			}
-
-			/*
-			 * The process-level routing daemon needs to receive
-			 * all multicast IGMP packets, whether or not this
-			 * host belongs to their destination groups.
-			 */
-			if (ip->ip_p == IPPROTO_IGMP) {
-				ip_setdstifaddr_info(m, inifp->if_index, NULL);
-				goto ours;
-			}
-			OSAddAtomic(1, &ipstat.ips_forward);
-		}
-#endif /* MROUTING */
 		/*
 		 * See if we belong to the destination multicast group on the
 		 * arrival interface.
@@ -3149,45 +3102,6 @@ no_mbufs:
 	ipstat.ips_pktdropcntrl++;
 	return (ENOBUFS);
 }
-
-#if MROUTING
-int
-ip_rsvp_init(struct socket *so)
-{
-	if (so->so_type != SOCK_RAW || SOCK_PROTO(so) != IPPROTO_RSVP)
-		return (EOPNOTSUPP);
-
-	if (ip_rsvpd != NULL)
-		return (EADDRINUSE);
-
-	ip_rsvpd = so;
-	/*
-	 * This may seem silly, but we need to be sure we don't over-increment
-	 * the RSVP counter, in case something slips up.
-	 */
-	if (!ip_rsvp_on) {
-		ip_rsvp_on = 1;
-		rsvp_on++;
-	}
-
-	return (0);
-}
-
-int
-ip_rsvp_done(void)
-{
-	ip_rsvpd = NULL;
-	/*
-	 * This may seem silly, but we need to be sure we don't over-decrement
-	 * the RSVP counter, in case something slips up.
-	 */
-	if (ip_rsvp_on) {
-		ip_rsvp_on = 0;
-		rsvp_on--;
-	}
-	return (0);
-}
-#endif /* MROUTING */
 
 static inline u_short
 ip_cksum(struct mbuf *m, int hlen)

@@ -45,6 +45,7 @@
 #include <sys/types.h>
 #include <dispatch/dispatch.h>
 #include <pthread.h>
+#include <mach/vm_param.h>
 
 /**************************/
 /**************************/
@@ -498,7 +499,7 @@ void clear_data(int *ptr, int len);
 #define BUFMAX 20000
 #define BUFMAXLEN (BUFMAX * sizeof(int))
 
-const unsigned int pipesize_blocks[] = {128,256,1024,2048,PAGE_SIZE,PAGE_SIZE*2,PAGE_SIZE*4};
+const unsigned int pipesize_blocks[] = {128,256,1024,2048,4096,8192,16384};
 static const int bufsizes[] = { 128, 512, 1024, 2048, 4096, 16384  };
 
 int data[BUFMAX],readbuf[BUFMAX];

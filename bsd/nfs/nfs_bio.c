@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2010 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2014 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -346,7 +346,7 @@ nfs_buf_page_inval(vnode_t vp, off_t offset)
 	struct nfsbuf *bp;
 	int error = 0;
 
-	if (!nmp)
+	if (nfs_mount_gone(nmp))
 		return (ENXIO);
 
 	lck_mtx_lock(nfs_buf_mutex);
@@ -658,7 +658,7 @@ nfs_buf_get(
 	if (bufsize > NFS_MAXBSIZE)
 		panic("nfs_buf_get: buffer larger than NFS_MAXBSIZE requested");
 
-	if (!nmp) {
+	if (nfs_mount_gone(nmp)) {
 		FSDBG_BOT(541, np, blkno, 0, ENXIO);
 		return (ENXIO);
 	}
@@ -1291,7 +1291,7 @@ nfs_buf_check_write_verifier(nfsnode_t np, struct nfsbuf *bp)
 		return;
 
 	nmp = NFSTONMP(np);
-	if (!nmp)
+	if (nfs_mount_gone(nmp))
 		return;
 	if (!ISSET(bp->nb_flags, NB_STALEWVERF) && (bp->nb_verf == nmp->nm_verf))
 		return;
@@ -1546,7 +1546,7 @@ nfs_buf_read_rpc(struct nfsbuf *bp, thread_t thd, kauth_cred_t cred)
 	struct nfsreq_cbinfo cb;
 
 	nmp = NFSTONMP(np);
-	if (!nmp) {
+	if (nfs_mount_gone(nmp)) {
 		bp->nb_error = error = ENXIO;
 		SET(bp->nb_flags, NB_ERROR);
 		nfs_buf_iodone(bp);
@@ -1669,7 +1669,7 @@ finish:
 		nfs_request_ref(req, 0);
 
 	nmp = NFSTONMP(np);
-	if (!nmp) {
+	if (nfs_mount_gone(nmp)) {
 		SET(bp->nb_flags, NB_ERROR);
 		bp->nb_error = error = ENXIO;
 	}
@@ -1842,7 +1842,7 @@ nfs_buf_readahead(nfsnode_t np, int ioflag, daddr64_t *rabnp, daddr64_t lastrabn
 	int error = 0;
 	uint32_t nra;
 
-	if (!nmp)
+	if (nfs_mount_gone(nmp))
 		return (ENXIO);
 	if (nmp->nm_readahead <= 0)
 		return (0);
@@ -2327,17 +2327,26 @@ nfs_buf_write(struct nfsbuf *bp)
 	thd = async ? NULL : current_thread();
 
 	/* We need to make sure the pages are locked before doing I/O.  */
-	if (!ISSET(bp->nb_flags, NB_META) && UBCINFOEXISTS(NFSTOV(np))) {
-		if (!ISSET(bp->nb_flags, NB_PAGELIST)) {
-			error = nfs_buf_upl_setup(bp);
-			if (error) {
-				printf("nfs_buf_write: upl create failed %d\n", error);
-				SET(bp->nb_flags, NB_ERROR);
-				bp->nb_error = error = EIO;
-				nfs_buf_iodone(bp);
-				goto out;
+	if (!ISSET(bp->nb_flags, NB_META)) {
+		if (UBCINFOEXISTS(NFSTOV(np))) {
+			if (!ISSET(bp->nb_flags, NB_PAGELIST)) {
+				error = nfs_buf_upl_setup(bp);
+				if (error) {
+					printf("nfs_buf_write: upl create failed %d\n", error);
+					SET(bp->nb_flags, NB_ERROR);
+					bp->nb_error = error = EIO;
+					nfs_buf_iodone(bp);
+					goto out;
+				}
+				nfs_buf_upl_check(bp);
 			}
-			nfs_buf_upl_check(bp);
+		} else {
+			/* We should never be in nfs_buf_write() with no UBCINFO. */
+			printf("nfs_buf_write: ubcinfo already gone\n");
+			SET(bp->nb_flags, NB_ERROR);
+			bp->nb_error = error = EIO;
+			nfs_buf_iodone(bp);
+			goto out;
 		}
 	}
 
@@ -2346,7 +2355,7 @@ nfs_buf_write(struct nfsbuf *bp)
 		nfs_buf_check_write_verifier(np, bp);
 	if (ISSET(bp->nb_flags, NB_NEEDCOMMIT)) {
 		struct nfsmount *nmp = NFSTONMP(np);
-		if (!nmp) {
+		if (nfs_mount_gone(nmp)) {
 			SET(bp->nb_flags, NB_ERROR);
 			bp->nb_error = error = EIO;
 			nfs_buf_iodone(bp);
@@ -2696,7 +2705,7 @@ nfs_buf_write_rpc(struct nfsbuf *bp, int iomode, thread_t thd, kauth_cred_t cred
 	char uio_buf [ UIO_SIZEOF(1) ];
 
 	nmp = NFSTONMP(np);
-	if (!nmp) {
+	if (nfs_mount_gone(nmp)) {
 		bp->nb_error = error = ENXIO;
 		SET(bp->nb_flags, NB_ERROR);
 		nfs_buf_iodone(bp);
@@ -2825,7 +2834,7 @@ finish:
 		nfs_request_ref(req, 0);
 
 	nmp = NFSTONMP(np);
-	if (!nmp) {
+	if (nfs_mount_gone(nmp)) {
 		SET(bp->nb_flags, NB_ERROR);
 		bp->nb_error = error = ENXIO;
 	}
@@ -3037,7 +3046,7 @@ nfs_flushcommits(nfsnode_t np, int nowait)
 	LIST_INIT(&commitlist);
 
 	nmp = NFSTONMP(np);
-	if (!nmp) {
+	if (nfs_mount_gone(nmp)) {
 		error = ENXIO;
 		goto done;
 	}
@@ -3251,7 +3260,7 @@ nfs_flush(nfsnode_t np, int waitfor, thread_t thd, int ignore_writeerr)
 
 	FSDBG_TOP(517, np, waitfor, ignore_writeerr, 0);
 
-	if (!nmp) {
+	if (nfs_mount_gone(nmp)) {
 		error = ENXIO;
 		goto out;
 	}
@@ -3620,11 +3629,21 @@ nfs_vinvalbuf2(vnode_t vp, int flags, thread_t thd, kauth_cred_t cred, int intrf
 	nfsnode_t np = VTONFS(vp);
 	struct nfsmount *nmp = VTONMP(vp);
 	int error, slpflag, slptimeo, nflags, retry = 0;
+	int ubcflags = UBC_PUSHALL | UBC_SYNC | UBC_INVALIDATE;
 	struct timespec ts = { 2, 0 };
 	off_t size;
 
 	FSDBG_TOP(554, np, flags, intrflg, 0);
 
+	/*
+	 * If the mount is gone no sense to try and write anything.
+	 * and hang trying to do IO.
+	 */
+	if (nfs_mount_gone(nmp)) {
+		flags &= ~V_SAVE;
+		ubcflags &= ~UBC_PUSHALL;
+	}
+	
 	if (nmp && !NMFLAG(nmp, INTR))
 		intrflg = 0;
 	if (intrflg) {
@@ -3662,14 +3681,16 @@ again:
 
 	/* get the pages out of vm also */
 	if (UBCINFOEXISTS(vp) && (size = ubc_getsize(vp)))
-		if ((error = ubc_msync(vp, 0, size, NULL, UBC_PUSHALL | UBC_SYNC | UBC_INVALIDATE))) {
+		if ((error = ubc_msync(vp, 0, size, NULL, ubcflags))) {
 			if (error == EINVAL)
 				panic("nfs_vinvalbuf(): ubc_msync failed!, error %d", error);
-			if (retry++ < 10) /* retry invalidating a few times */
+			if (retry++ < 10) { /* retry invalidating a few times */
+				if (retry > 1 || error == ENXIO)
+					ubcflags &= ~UBC_PUSHALL;
 				goto again;
+			}
 			/* give up */
-			printf("nfs_vinvalbuf(): ubc_msync failed!, error %d", error);
-
+			printf("nfs_vinvalbuf(): ubc_msync failed!, error %d\n", error);
 		}
 done:
 	lck_mtx_lock(nfs_buf_mutex);
@@ -3747,8 +3768,11 @@ nfs_asyncio_finish(struct nfsreq *req)
 
 	FSDBG_TOP(552, nmp, 0, 0, 0);
 again:
-	if (((nmp = req->r_nmp)) == NULL)
+	nmp = req->r_nmp;
+
+	if (nmp == NULL)
 		return;
+
 	lck_mtx_lock(nfsiod_mutex);
 	niod = nmp->nm_niod;
 
@@ -3783,8 +3807,9 @@ again:
 			lck_mtx_unlock(nfsiod_mutex);
 			wakeup(niod);
 		} else if (nfsiod_thread_count > 0) {
-			/* just queue it up on nfsiod mounts queue */
-			TAILQ_INSERT_TAIL(&nfsiodmounts, nmp, nm_iodlink);
+			/* just queue it up on nfsiod mounts queue if needed */
+			if (nmp->nm_iodlink.tqe_next == NFSNOLIST)
+				TAILQ_INSERT_TAIL(&nfsiodmounts, nmp, nm_iodlink);
 			lck_mtx_unlock(nfsiod_mutex);
 		} else {
 			printf("nfs_asyncio(): no nfsiods? %d %d (%d)\n", nfsiod_thread_count, NFSIOD_MAX, started);
@@ -3808,7 +3833,7 @@ nfs_asyncio_resend(struct nfsreq *req)
 {
 	struct nfsmount *nmp = req->r_nmp;
 
-	if (!nmp)
+	if (nfs_mount_gone(nmp))
 		return;
 	nfs_gss_clnt_rpcdone(req);
 	lck_mtx_lock(&nmp->nm_lock);
@@ -3833,7 +3858,7 @@ nfs_buf_readdir(struct nfsbuf *bp, vfs_context_t ctx)
 	struct nfsmount *nmp = NFSTONMP(np);
 	int error = 0;
 
-	if (!nmp)
+	if (nfs_mount_gone(nmp))
 		return (ENXIO);
 
 	if (nmp->nm_vers < NFS_VER4)

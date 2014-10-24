@@ -6,20 +6,24 @@ export MakeInc_dir=${SRCROOT}/makedefs/MakeInc.dir
 include $(MakeInc_cmd)
 include $(MakeInc_def)
 
-MASTER_CPU_PER_SOC = $(SOURCE)/MASTER.$(CURRENT_ARCH_CONFIG_LC).$(CURRENT_MACHINE_CONFIG_LC)
+# Special handling for x86_64h which shares a MASTER config file with x86_64:
+ifeq ($(CURRENT_ARCH_CONFIG_LC),x86_64h)
+DOCONF_ARCH_CONFIG_LC = x86_64
+else
+DOCONF_ARCH_CONFIG_LC = $(CURRENT_ARCH_CONFIG_LC)
+endif
 
-$(TARGET)/$(CURRENT_KERNEL_CONFIG)/Makefile :  $(SOURCE)/MASTER  \
-		$(SOURCE)/MASTER.$(CURRENT_ARCH_CONFIG_LC) \
-		$(SOURCE)/Makefile.template  \
-		$(SOURCE)/Makefile.$(CURRENT_ARCH_CONFIG_LC)  \
-		$(SOURCE)/files \
-		$(SOURCE)/files.$(CURRENT_ARCH_CONFIG_LC)
-	$(_v)$(MKDIR) $(addsuffix /conf, $(TARGET)); \
-	cd $(addsuffix /conf, $(TARGET)); \
-	rm -f $(notdir $?); \
-	cp  $? .; \
-	if [ $(MASTER_CPU_PER_SOC) -nt $@ ]; then cp $(MASTER_CPU_PER_SOC) .; fi; \
-	$(SRCROOT)/SETUP/config/doconf -c -cpu $(CURRENT_ARCH_CONFIG_LC) -soc $(CURRENT_MACHINE_CONFIG_LC) -d  $(TARGET)/$(CURRENT_KERNEL_CONFIG) $(CURRENT_KERNEL_CONFIG);
+MASTERCONFDIR = $(SRCROOT)/config
+DOCONFDEPS = $(addprefix $(MASTERCONFDIR)/, MASTER MASTER.$(DOCONF_ARCH_CONFIG_LC)) \
+	$(addprefix $(SOURCE)/, Makefile.template Makefile.$(DOCONF_ARCH_CONFIG_LC) files files.$(DOCONF_ARCH_CONFIG_LC))
+
+ifneq (,$(wildcard $(MASTERCONFDIR)/MASTER.$(DOCONF_ARCH_CONFIG_LC).$(CURRENT_MACHINE_CONFIG_LC)))
+DOCONFDEPS += $(MASTERCONFDIR)/MASTER.$(DOCONF_ARCH_CONFIG_LC).$(CURRENT_MACHINE_CONFIG_LC)
+endif
+
+$(TARGET)/$(CURRENT_KERNEL_CONFIG)/Makefile: $(SRCROOT)/SETUP/config/doconf $(OBJROOT)/SETUP/config $(DOCONFDEPS)
+	$(_v)$(MKDIR) $(TARGET)/$(CURRENT_KERNEL_CONFIG)
+	$(_v)$(SRCROOT)/SETUP/config/doconf -c -cpu $(DOCONF_ARCH_CONFIG_LC) -soc $(CURRENT_MACHINE_CONFIG_LC) -d $(TARGET)/$(CURRENT_KERNEL_CONFIG) -s $(SOURCE) -m $(MASTERCONFDIR) $(CURRENT_KERNEL_CONFIG);
 
 do_all: $(TARGET)/$(CURRENT_KERNEL_CONFIG)/Makefile
 	$(_v)${MAKE} \

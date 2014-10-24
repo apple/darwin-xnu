@@ -35,7 +35,7 @@ IOTimeStampStartConstant(unsigned int csc,
 			 uintptr_t a = 0, uintptr_t b = 0,
 			 uintptr_t c = 0, uintptr_t d = 0)
 {
-    KERNEL_DEBUG_CONSTANT(csc | DBG_FUNC_START, a, b, c, d, 0);
+    KERNEL_DEBUG_CONSTANT(((uint32_t)csc) | DBG_FUNC_START, a, b, c, d, 0);
 }
 
 static inline void
@@ -43,7 +43,7 @@ IOTimeStampEndConstant(uintptr_t csc,
 		       uintptr_t a = 0, uintptr_t b = 0,
 		       uintptr_t c = 0, uintptr_t d = 0)
 {
-    KERNEL_DEBUG_CONSTANT(csc | DBG_FUNC_END, a, b, c, d, 0);
+    KERNEL_DEBUG_CONSTANT(((uint32_t)csc) | DBG_FUNC_END, a, b, c, d, 0);
 }
 
 static inline void
@@ -51,7 +51,7 @@ IOTimeStampConstant(uintptr_t csc,
 		    uintptr_t a = 0, uintptr_t b = 0,
 		    uintptr_t c = 0, uintptr_t d = 0)
 {
-    KERNEL_DEBUG_CONSTANT(csc | DBG_FUNC_NONE, a, b, c, d, 0);
+    KERNEL_DEBUG_CONSTANT(((uint32_t)csc) | DBG_FUNC_NONE, a, b, c, d, 0);
 }
 
 #if KDEBUG
@@ -61,7 +61,7 @@ IOTimeStampStart(uintptr_t csc,
                  uintptr_t a = 0, uintptr_t b = 0,
                  uintptr_t c = 0, uintptr_t d = 0)
 {
-    KERNEL_DEBUG(csc | DBG_FUNC_START, a, b, c, d, 0);
+    KERNEL_DEBUG(((uint32_t)csc) | DBG_FUNC_START, a, b, c, d, 0);
 }
 
 static inline void
@@ -69,7 +69,7 @@ IOTimeStampEnd(uintptr_t csc,
                uintptr_t a = 0, uintptr_t b = 0,
                uintptr_t c = 0, uintptr_t d = 0)
 {
-    KERNEL_DEBUG(csc | DBG_FUNC_END, a, b, c, d, 0);
+    KERNEL_DEBUG(((uint32_t)csc) | DBG_FUNC_END, a, b, c, d, 0);
 }
 
 static inline void
@@ -77,7 +77,7 @@ IOTimeStamp(uintptr_t csc,
             uintptr_t a = 0, uintptr_t b = 0,
             uintptr_t c = 0, uintptr_t d = 0)
 {
-    KERNEL_DEBUG(csc | DBG_FUNC_NONE, a, b, c, d, 0);
+    KERNEL_DEBUG(((uint32_t)csc) | DBG_FUNC_NONE, a, b, c, d, 0);
 }
 
 #endif /* KDEBUG */

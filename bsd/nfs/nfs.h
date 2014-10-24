@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2013 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2014 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -744,7 +744,19 @@ struct nfsstats {
  */
 #define NFSCLNT_LOCKDANS	0x200
 #define NFSCLNT_LOCKDNOTIFY	0x400
+#define NFSCLNT_TESTIDMAP	0x001
 
+#include <sys/_types/_guid_t.h> /* for guid_t below */
+#define MAXIDNAMELEN		1024
+struct nfs_testmapid {
+	uint32_t		ntm_name2id;	/* lookup name 2 id or id 2 name */
+	uint32_t		ntm_grpflag;	/* Is this a group or user maping */
+	uint32_t		ntm_id;		/* id to map or return */
+	uint32_t		pad;	
+	guid_t			ntm_guid;	/* intermidiate guid used in conversion */
+	char			ntm_name[MAXIDNAMELEN]; /* name to map or return */
+};
+	
 /*
  * fs.nfs sysctl(3) identifiers
  */
@@ -917,7 +929,10 @@ extern lck_grp_t *nfs_request_grp;
 
 #define R_XID32(x)	((x) & 0xffffffff)
 
-#define NFSREQNOLIST ((struct nfsreq *)0xdeadbeef)	/* sentinel value for nfsreq lists */
+#define NFSNOLIST	((void *)0x0badcafe)	/* sentinel value for nfs lists */
+#define NFSREQNOLIST	NFSNOLIST		/* sentinel value for nfsreq lists */
+#define NFSIODCOMPLETING	((void *)0x10d)	/* sentinel value for iod processing
+						   async I/O w/callback being completed */
 
 /* Flag values for r_flags */
 #define R_TIMING	0x00000001	/* timing request (in mntp) */
@@ -936,6 +951,7 @@ extern lck_grp_t *nfs_request_grp;
 #define R_ASYNCWAIT	0x00002000	/* async request now being waited on */
 #define R_RESENDQ	0x00004000	/* async request currently on resendq */
 #define R_SENDING	0x00008000	/* request currently being sent */
+#define R_SOFT		0x00010000	/* request is soft - don't retry or reconnect */
 
 #define R_NOINTR	0x20000000	/* request should not be interupted by a signal */
 #define R_RECOVER	0x40000000	/* a state recovery RPC - during NFSSTA_RECOVER */
@@ -954,7 +970,7 @@ extern int nfs_lockd_mounts, nfs_lockd_request_sent, nfs_single_des;
 extern int nfs_tprintf_initial_delay, nfs_tprintf_delay;
 extern int nfsiod_thread_count, nfsiod_thread_max, nfs_max_async_writes;
 extern int nfs_idmap_ctrl, nfs_callback_port;
-extern int nfs_is_mobile;
+extern int nfs_is_mobile, nfs_readlink_nocache;
 extern uint32_t nfs_squishy_flags;
 extern uint32_t nfs_debug_ctl;
 
@@ -1143,7 +1159,12 @@ int	nfs_connect(struct nfsmount *, int, int);
 void	nfs_disconnect(struct nfsmount *);
 void	nfs_need_reconnect(struct nfsmount *);
 void	nfs_mount_sock_thread_wake(struct nfsmount *);
-void	nfs_mount_check_dead_timeout(struct nfsmount *);
+int	nfs_mount_check_dead_timeout(struct nfsmount *);
+int	nfs_mount_gone(struct nfsmount *);
+void	nfs_mount_rele(struct nfsmount *);
+void	nfs_mount_zombie(struct nfsmount *, int);
+void	nfs_mount_make_zombie(struct nfsmount *);
+
 void	nfs_rpc_record_state_init(struct nfs_rpc_record_state *);
 void	nfs_rpc_record_state_cleanup(struct nfs_rpc_record_state *);
 int	nfs_rpc_record_read(socket_t, struct nfs_rpc_record_state *, int, int *, mbuf_t *);
@@ -1329,8 +1350,8 @@ int	nfs_read_rpc(nfsnode_t, uio_t, vfs_context_t);
 int	nfs_write_rpc(nfsnode_t, uio_t, vfs_context_t, int *, uint64_t *);
 int	nfs_write_rpc2(nfsnode_t, uio_t, thread_t, kauth_cred_t, int *, uint64_t *);
 
-int	nfs3_access_rpc(nfsnode_t, u_int32_t *, vfs_context_t);
-int	nfs4_access_rpc(nfsnode_t, u_int32_t *, vfs_context_t);
+int	nfs3_access_rpc(nfsnode_t, u_int32_t *, int, vfs_context_t);
+int	nfs4_access_rpc(nfsnode_t, u_int32_t *, int, vfs_context_t);
 int	nfs3_getattr_rpc(nfsnode_t, mount_t, u_char *, size_t, int, vfs_context_t, struct nfs_vattr *, u_int64_t *);
 int	nfs4_getattr_rpc(nfsnode_t, mount_t, u_char *, size_t, int, vfs_context_t, struct nfs_vattr *, u_int64_t *);
 int	nfs3_setattr_rpc(nfsnode_t, struct vnode_attr *, vfs_context_t);
@@ -1427,8 +1448,9 @@ int	nfsrv_symlink(struct nfsrv_descript *, struct nfsrv_sock *, vfs_context_t, m
 int	nfsrv_write(struct nfsrv_descript *, struct nfsrv_sock *, vfs_context_t, mbuf_t *);
 
 void	nfs_interval_timer_start(thread_call_t, int);
+int	nfs_use_cache(struct nfsmount *);
 void	nfs_up(struct nfsmount *, thread_t, int, const char *);
-void	nfs_down(struct nfsmount *, thread_t, int, int, const char *);
+void	nfs_down(struct nfsmount *, thread_t, int, int, const char *, int);
 int	nfs_msg(thread_t, const char *, const char *, int);
 
 int	nfs_mountroot(void);
@@ -1462,11 +1484,13 @@ void nfsrv_uc_dequeue(struct nfsrv_sock *);
 #define NFS_FAC_VNOP	0x08
 #define NFS_FAC_BIO	0x10
 #define NFS_FAC_GSS	0x20
+#define NFS_FAC_VFS	0x40
 
 #define NFS_DBG(fac, lev, fmt, ...) \
 	if (__builtin_expect(NFS_DEBUG_LEVEL, 0)) nfs_printf(fac, lev, "%s: %d: " fmt, __func__, __LINE__, ## __VA_ARGS__)
 
 void nfs_printf(int, int, const char *, ...) __printflike(3,4);
+int  nfs_mountopts(struct nfsmount *, char *, int);
 
 __END_DECLS
 

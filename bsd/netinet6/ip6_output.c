@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2013 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2014 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -139,6 +139,10 @@
 #include <netkey/key.h>
 extern int ipsec_bypass;
 #endif /* IPSEC */
+
+#if NECP
+#include <net/necp.h>
+#endif /* NECP */
 
 #if CONFIG_MACF_NET
 #include <security/mac.h>
@@ -294,6 +298,11 @@ ip6_output(struct mbuf *m0, struct ip6_pktopts *opt, struct route_in6 *ro,
 	struct route_in6 *ipsec_saved_route = NULL;
 	boolean_t needipsectun = FALSE;
 #endif /* IPSEC */
+#if NECP
+	necp_kernel_policy_result necp_result = 0;
+	necp_kernel_policy_result_parameter necp_result_parameter;
+	necp_kernel_policy_id necp_matched_policy_id = 0;
+#endif /* NECP */
 	struct {
 		struct ipf_pktopts ipf_pktopts;
 		struct ip6_exthdrs exthdrs;
@@ -301,6 +310,9 @@ ip6_output(struct mbuf *m0, struct ip6_pktopts *opt, struct route_in6 *ro,
 #if IPSEC
 		struct ipsec_output_state ipsec_state;
 #endif /* IPSEC */
+#if NECP
+		struct route_in6 necp_route;
+#endif /* NECP */
 #if DUMMYNET
 		struct route_in6 saved_route;
 		struct route_in6 saved_ro_pmtu;
@@ -311,6 +323,7 @@ ip6_output(struct mbuf *m0, struct ip6_pktopts *opt, struct route_in6 *ro,
 #define	exthdrs		ip6obz.exthdrs
 #define	ip6route	ip6obz.ip6route
 #define	ipsec_state	ip6obz.ipsec_state
+#define	necp_route	ip6obz.necp_route
 #define	saved_route	ip6obz.saved_route
 #define	saved_ro_pmtu	ip6obz.saved_ro_pmtu
 #define	args		ip6obz.args
@@ -378,27 +391,27 @@ tags_done:
 	m->m_pkthdr.pkt_flags &= ~(PKTF_LOOP|PKTF_IFAINFO);
 
 #if IPSEC
-	/* for AH processing. stupid to have "socket" variable in IP layer... */
 	if (ipsec_bypass == 0) {
 		so = ipsec_getsocket(m);
-		(void) ipsec_setsocket(m, NULL);
-
+		if (so != NULL) {
+			(void) ipsec_setsocket(m, NULL);
+		}
 		/* If packet is bound to an interface, check bound policies */
 		if ((flags & IPV6_OUTARGS) &&
-		    (ip6oa->ip6oa_flags & IPOAF_BOUND_IF) &&
-		    ip6oa->ip6oa_boundif != IFSCOPE_NONE) {
+			(ip6oa->ip6oa_flags & IPOAF_BOUND_IF) &&
+			ip6oa->ip6oa_boundif != IFSCOPE_NONE) {
 			/* ip6obf.noipsec is a bitfield, use temp integer */
 			int noipsec = 0;
 
 			if (ipsec6_getpolicybyinterface(m, IPSEC_DIR_OUTBOUND,
-			    flags, ip6oa, &noipsec, &sp) != 0)
+				flags, ip6oa, &noipsec, &sp) != 0)
 				goto bad;
 
 			ip6obf.noipsec = (noipsec != 0);
 		}
 	}
 #endif /* IPSEC */
-
+	
 	ip6 = mtod(m, struct ip6_hdr *);
 	nxt0 = ip6->ip6_nxt;
 	finaldst = ip6->ip6_dst;
@@ -432,10 +445,11 @@ tags_done:
 		}
 	}
 
-	if ((flags & IPV6_OUTARGS) && (ip6oa->ip6oa_flags & IP6OAF_NO_CELLULAR))
-		ipf_pktopts.ippo_flags |= IPPOF_NO_IFT_CELLULAR;
-
 	if (flags & IPV6_OUTARGS) {
+		if (ip6oa->ip6oa_flags & IP6OAF_NO_CELLULAR)
+			ipf_pktopts.ippo_flags |= IPPOF_NO_IFT_CELLULAR;
+		if (ip6oa->ip6oa_flags & IP6OAF_NO_EXPENSIVE)
+			ipf_pktopts.ippo_flags |= IPPOF_NO_IFF_EXPENSIVE;
 		adv = &ip6oa->ip6oa_flowadv;
 		adv->code = FADV_SUCCESS;
 		ip6oa->ip6oa_retflags = 0;
@@ -484,19 +498,63 @@ tags_done:
 
 #undef MAKE_EXTHDR
 
+#if NECP
+	necp_matched_policy_id = necp_ip6_output_find_policy_match (m, flags, (flags & IPV6_OUTARGS) ? ip6oa : NULL,
+										   &necp_result, &necp_result_parameter);
+	if (necp_matched_policy_id) {
+		necp_mark_packet_from_ip(m, necp_matched_policy_id);
+		switch (necp_result) {
+			case NECP_KERNEL_POLICY_RESULT_PASS:
+				goto skip_ipsec;
+			case NECP_KERNEL_POLICY_RESULT_DROP:
+			case NECP_KERNEL_POLICY_RESULT_SOCKET_DIVERT:
+				/* Flow divert packets should be blocked at the IP layer */
+				error = EHOSTUNREACH;
+				goto bad;
+			case NECP_KERNEL_POLICY_RESULT_IP_TUNNEL: {
+				/* Verify that the packet is being routed to the tunnel */
+				struct ifnet *policy_ifp = necp_get_ifnet_from_result_parameter(&necp_result_parameter);
+				if (policy_ifp == ifp) {
+					goto skip_ipsec;
+				} else {
+					if (necp_packet_can_rebind_to_ifnet(m, policy_ifp, (struct route *)&necp_route, AF_INET6)) {
+						/* Set scoped index to the tunnel interface, since it is compatible with the packet */
+						/* This will only work for callers who pass IPV6_OUTARGS, but that covers all of the
+						   clients we care about today */
+						if (flags & IPV6_OUTARGS) {
+							ip6oa->ip6oa_boundif = policy_ifp->if_index;
+							ip6oa->ip6oa_flags |= IP6OAF_BOUND_IF;
+						}
+						if (opt != NULL && opt->ip6po_pktinfo != NULL) {
+							opt->ip6po_pktinfo->ipi6_ifindex = policy_ifp->if_index;
+						}
+						ro = &necp_route;
+						goto skip_ipsec;
+					} else {
+						error = ENETUNREACH;
+						goto bad;
+					}
+				}
+				break;
+			}
+			default:
+				break;
+		}
+	}
+#endif /* NECP */
+	
 #if IPSEC
 	if (ipsec_bypass != 0 || ip6obf.noipsec)
 		goto skip_ipsec;
 
-	/* May have been set above if packet was bound */
 	if (sp == NULL) {
 		/* get a security policy for this packet */
-		if (so == NULL) {
-			sp = ipsec6_getpolicybyaddr(m, IPSEC_DIR_OUTBOUND,
-			    0, &error);
-		} else {
+		if (so != NULL) {
 			sp = ipsec6_getpolicybysock(m, IPSEC_DIR_OUTBOUND,
-			    so, &error);
+				so, &error);
+		} else {
+			sp = ipsec6_getpolicybyaddr(m, IPSEC_DIR_OUTBOUND,
+				0, &error);
 		}
 		if (sp == NULL) {
 			IPSEC_STAT_INCREMENT(ipsec6stat.out_inval);
@@ -529,13 +587,7 @@ tags_done:
 			goto freehdrs;
 		}
 		if (sp->ipsec_if) {
-			/* Verify the redirect to ipsec interface */
-			if (sp->ipsec_if == ifp) {
-				/* Set policy for mbuf */
-				m->m_pkthdr.ipsec_policy = sp->id;
-				goto skip_ipsec;
-			}
-			goto bad;
+			goto skip_ipsec;
 		} else {
 			ip6obf.needipsec = TRUE;
 		}
@@ -1028,7 +1080,6 @@ skip_ipsec:
 	 * then rt (for unicast) and ifp must be non-NULL valid values.
 	 */
 	if (!(flags & IPV6_FORWARDING)) {
-		/* XXX: the FORWARDING flag can be set for mrouting. */
 		in6_ifstat_inc_na(ifp, ifs6_out_request);
 	}
 	if (rt != NULL) {
@@ -1164,40 +1215,8 @@ routefound:
 			 * forbid loopback, loop back a copy.
 			 */
 			ip6_mloopback(NULL, ifp, m, dst, optlen, nxt0);
-		} else {
-			if (im6o != NULL)
-				IM6O_UNLOCK(im6o);
-			/*
-			 * If we are acting as a multicast router, perform
-			 * multicast forwarding as if the packet had just
-			 * arrived on the interface to which we are about
-			 * to send.  The multicast forwarding function
-			 * recursively calls this function, using the
-			 * IPV6_FORWARDING flag to prevent infinite recursion.
-			 *
-			 * Multicasts that are looped back by ip6_mloopback(),
-			 * above, will be forwarded by the ip6_input() routine,
-			 * if necessary.
-			 */
-#if MROUTING
-			if (ip6_mrouter && !(flags & IPV6_FORWARDING)) {
-				/*
-				 * XXX: ip6_mforward expects that rcvif is NULL
-				 * when it is called from the originating path.
-				 * However, it is not always the case, since
-				 * some versions of MGETHDR() does not
-				 * initialize the field.
-				 */
-				m->m_pkthdr.rcvif = NULL;
-				if (ip6_mforward(ip6, ifp, m) != 0) {
-					m_freem(m);
-					if (in6m != NULL)
-						IN6M_REMREF(in6m);
-					goto done;
-				}
-			}
-#endif /* MROUTING */
-		}
+		} else if (im6o != NULL) 
+			IM6O_UNLOCK(im6o);
 		if (in6m != NULL)
 			IN6M_REMREF(in6m);
 		/*
@@ -1593,6 +1612,9 @@ done:
 	if (sp != NULL)
 		key_freesp(sp, KEY_SADB_UNLOCKED);
 #endif /* IPSEC */
+#if NECP
+	ROUTE_RELEASE(&necp_route);
+#endif /* NECP */
 #if DUMMYNET
 	ROUTE_RELEASE(&saved_route);
 	ROUTE_RELEASE(&saved_ro_pmtu);
@@ -1986,6 +2008,8 @@ ip6_getpmtu(struct route_in6 *ro_pmtu, struct route_in6 *ro,
 	if (ro_pmtu->ro_rt != NULL) {
 		u_int32_t ifmtu;
 
+		if (ifp == NULL)
+			ifp = ro_pmtu->ro_rt->rt_ifp;
 		lck_rw_lock_shared(nd_if_rwlock);
 		/* Access without acquiring nd_ifinfo lock for performance */
 		ifmtu = IN6_LINKMTU(ifp);
@@ -2404,16 +2428,16 @@ ip6_ctloutput(struct socket *so, struct sockopt *sopt)
 				caddr_t req = NULL;
 				size_t len = 0;
 				struct mbuf *m;
-
+				
 				if ((error = soopt_getm(sopt, &m)) != 0)
 					break;
 				if ((error = soopt_mcopyin(sopt, m)) != 0)
 					break;
-
+				
 				req = mtod(m, caddr_t);
 				len = m->m_len;
 				error = ipsec6_set_policy(in6p, optname, req,
-				    len, privileged);
+					len, privileged);
 				m_freem(m);
 				break;
 			}
@@ -2466,8 +2490,7 @@ ip6_ctloutput(struct socket *so, struct sockopt *sopt)
 					break;
 
 				/* once set, it cannot be unset */
-				if (!optval &&
-				    (in6p->inp_flags & INP_NO_IFT_CELLULAR)) {
+				if (!optval && INP_NO_CELLULAR(in6p)) {
 					error = EINVAL;
 					break;
 				}
@@ -2658,26 +2681,7 @@ ip6_ctloutput(struct socket *so, struct sockopt *sopt)
 				break;
 #if IPSEC
 			case IPV6_IPSEC_POLICY: {
-				caddr_t req = NULL;
-				size_t len = 0;
-				struct mbuf *m = NULL;
-				struct mbuf *mp = NULL;
-
-				error = soopt_getm(sopt, &m);
-				if (error != 0)
-					break;
-				error = soopt_mcopyin(sopt, m);
-				if (error != 0)
-					break;
-
-				req = mtod(m, caddr_t);
-				len = m->m_len;
-				error = ipsec6_get_policy(in6p, req, len, &mp);
-				if (error == 0)
-					error = soopt_mcopyout(sopt, mp);
-				if (mp != NULL)
-					m_freem(mp);
-				m_freem(m);
+				error = 0; /* This option is no longer supported */
 				break;
 			}
 #endif /* IPSEC */
@@ -2700,8 +2704,7 @@ ip6_ctloutput(struct socket *so, struct sockopt *sopt)
 				break;
 
 			case IPV6_NO_IFT_CELLULAR:
-				optval = (in6p->inp_flags & INP_NO_IFT_CELLULAR)
-				    ? 1 : 0;
+				optval = INP_NO_CELLULAR(in6p) ? 1 : 0;
 				error = sooptcopyout(sopt, &optval,
 				    sizeof (optval));
 				break;

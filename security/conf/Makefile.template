@@ -41,14 +41,6 @@ COMP_SUBDIRS =
 #
 .PRECIOUS: Makefile
 
-VERSION_FILES= \
-	$(SOURCE_DIR)/$(COMPONENT)/conf/version.major  \
-	$(SOURCE_DIR)/$(COMPONENT)/conf/version.minor   \
-	$(SOURCE_DIR)/$(COMPONENT)/conf/version.variant
-
-COPYRIGHT_FILES = \
-	$(SOURCE_DIR)/$(COMPONENT)/conf/copyright.nai
-
 #
 #  Theses macros are filled in by the config program depending on the
 #  current configuration.  The MACHDEP macro is replaced by the
@@ -61,36 +53,35 @@ COPYRIGHT_FILES = \
 
 %CFILES
 
+%CXXFILES
+
 %SFILES
 
 %MACHDEP
 
-#
-#  OBJSDEPS is the set of files (defined in the machine dependent
-#  template if necessary) which all objects depend on (such as an
-#  in-line assembler expansion filter)
-#
-${OBJS}: ${OBJSDEPS}
+# Rebuild if per-file overrides change
+${OBJS}: $(firstword $(MAKEFILE_LIST))
 
-LDOBJS = $(OBJS)
+# Rebuild if global compile flags change
+$(COBJS): .CFLAGS
+.CFLAGS: ALWAYS
+	$(_v)$(REPLACECONTENTS) $@ $(KCC) $(CFLAGS) $(INCFLAGS)
+$(CXXOBJS): .CXXFLAGS
+.CXXFLAGS: ALWAYS
+	$(_v)$(REPLACECONTENTS) $@ $(KC++) $(CXXFLAGS) $(INCFLAGS)
+$(SOBJS): .SFLAGS
+.SFLAGS: ALWAYS
+	$(_v)$(REPLACECONTENTS) $@ $(S_KCC) $(SFLAGS) $(INCFLAGS)
 
-$(COMPONENT).filelist: $(LDOBJS) vers.o
+$(COMPONENT).filelist: $(OBJS)
 	@echo LDFILELIST $(COMPONENT)
-	$(_v)( for obj in ${LDOBJS} vers.o; do	\
+	$(_v)( for obj in ${OBJS}; do	\
 		 echo $(TARGET)/$(CURRENT_KERNEL_CONFIG)/$${obj}; \
 	done; ) > $(COMPONENT).filelist
 
 do_all: $(COMPONENT).filelist
 
 do_build_all:: do_all
-
-vers.o: vers.c
-	@echo CC $@
-	$(_v)${KCC} $(CFLAGS) -o ${@} -c ${INCFLAGS} $<
-
-vers.c:
-	$(_v)$(SRCROOT)/SETUP/newvers \
-		`$(CAT) ${VERSION_FILES}` ${COPYRIGHT_FILES}
 
 %RULES
 

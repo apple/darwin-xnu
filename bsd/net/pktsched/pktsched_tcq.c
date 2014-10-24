@@ -398,6 +398,10 @@ tcq_class_create(struct tcq_if *tif, int pri, u_int32_t qlimit,
 			if (flags & TQCF_SFB)
 				cl->cl_qflags |= SFBF_FLOWCTL;
 		}
+		if (flags & TQCF_DELAYBASED) {
+			if (flags & TQCF_SFB)
+				cl->cl_qflags |= SFBF_DELAYBASED;
+		}
 		if (flags & TQCF_CLEARDSCP) {
 			if (flags & TQCF_RIO)
 				cl->cl_qflags |= RIOF_CLEARDSCP;
@@ -1012,6 +1016,8 @@ tcq_setup_ifclassq(struct ifclassq *ifq, u_int32_t flags)
 		qflags |= TQCF_ECN;
 	if (flags & PKTSCHEDF_QALG_FLOWCTL)
 		qflags |= TQCF_FLOWCTL;
+	if (flags & PKTSCHEDF_QALG_DELAYBASED)
+		qflags |= TQCF_DELAYBASED;
 
 	tif = tcq_alloc(ifp, M_WAITOK, FALSE);
 	if (tif == NULL)

@@ -1,0 +1,65 @@
+#
+# Mach Operating System
+# Copyright (c) 1986 Carnegie-Mellon University
+# Copyright 2001-2013 Apple Inc.
+#
+# All rights reserved.  The CMU software License Agreement
+# specifies the terms and conditions for use and redistribution.
+#  
+######################################################################
+#
+#  Master Apple configuration file (see the master machine independent
+#  configuration file for a description of the file format).
+#
+######################################################################
+#  
+#  Standard Apple OS Configurations:
+#  -------- ----- -- ---------------
+#
+#  KERNEL_BASE =    [ intel medium config_requires_u32_munging ]
+#  KERNEL_RELEASE = [ KERNEL_BASE ]
+#  KERNEL_DEV =     [ KERNEL_BASE development mach_assert ]
+#  KERNEL_DEBUG =   [ KERNEL_BASE debug mach_assert ]
+#  BSD =            [ mach_bsd sysv_sem sysv_msg sysv_shm config_imageboot config_workqueue psynch config_proc_uuid_policy ]
+#  FILESYS =        [ devfs hfs journaling fdesc config_dev_kmem config_fse quota namedstreams fifo config_volfs hfs_compression config_hfs_std config_hfs_alloc_rbtree config_hfs_trim config_imgsrc_access config_triggers config_ext_resolver config_searchfs config_hfs_dirlink config_appledouble ]
+#  NFS =            [ nfsclient nfsserver ]
+#  NETWORKING =     [ inet inet6 ipv6send tcpdrop_synfin bpfilter ipdivert ipfirewall ipv6firewall ipfw2 dummynet traffic_mgt sendfile ah_all_crypto bond vlan gif stf ifnet_input_chk config_mbuf_jumbo if_bridge ipcomp_zlib MULTIPATH packet_mangler ]
+#  VPN =            [ ipsec flow_divert necp content_filter ]
+#  PF =             [ pf pflog ]
+#  PKTSCHED =       [ pktsched_cbq pktsched_fairq pktsched_hfsc pktsched_priq ]
+#  CLASSQ =         [ classq_blue classq_red classq_rio ]
+#  MULTIPATH =      [ multipath mptcp ]
+#  IOKIT =          [ iokit iokitcpp hibernation config_sleep iokitstats hypervisor ]
+#  LIBKERN =        [ libkerncpp config_kxld config_kec_fips zlib crypto_sha2 ]
+#  PERF_DBG =       [ config_dtrace mach_kdp config_serial_kdp kdp_interactive_debugging kperf kpc config_counters zleaks config_gzalloc ]
+#  MACH_BASE =      [ mach config_kext_basement mdebug ipc_debug config_mca config_vmx config_mtrr config_lapic   config_telemetry importance_inheritance config_atm config_bank config_coalitions hypervisor config_iosched ]
+#  MACH_RELEASE =   [ MACH_BASE ]
+#  MACH_DEV =       [ MACH_BASE task_zone_info ]
+#  MACH_DEBUG =     [ MACH_BASE task_zone_info ]
+#  SCHED_BASE =     [ config_sched_traditional config_sched_multiq ]
+#  SCHED_RELEASE =  [ SCHED_BASE ]
+#  SCHED_DEV =      [ SCHED_BASE ]
+#  SCHED_DEBUG =    [ SCHED_BASE config_sched_grrr config_sched_proto ]
+#  VM =             [ vm_pressure_events memorystatus dynamic_codesigning config_code_decryption encrypted_swap phantom_cache]
+#  SECURITY =       [ config_macf config_audit config_csr ]
+#  RELEASE =        [ KERNEL_RELEASE BSD FILESYS NFS NETWORKING PF VPN IOKIT LIBKERN PERF_DBG MACH_RELEASE SCHED_RELEASE VM SECURITY ]
+#  DEVELOPMENT =    [ KERNEL_DEV     BSD FILESYS NFS NETWORKING PF VPN IOKIT LIBKERN PERF_DBG MACH_DEV     SCHED_DEV     VM SECURITY ]
+#  DEBUG =          [ KERNEL_DEBUG   BSD FILESYS NFS NETWORKING PF VPN IOKIT LIBKERN PERF_DBG MACH_DEBUG   SCHED_DEBUG   VM SECURITY ]
+#
+######################################################################
+#
+machine		"x86_64"						# <intel>
+
+makeoptions	OSFMK_MACHINE = "x86_64"				# <mach>
+
+options		PAL_I386
+
+options	    CONFIG_MCA			    # Machine Check Architecture	# <config_mca>
+options	    CONFIG_VMX			    # Virtual Machine Extensions	# <config_vmx>
+options	    CONFIG_MTRR			    # Memory Type Range Registers	# <config_mtrr>
+
+options     NO_NESTED_PMAP                  # <no_nested_pmap>
+
+options		HYPERVISOR				# Apple hypervisor kext support	# <hypervisor>
+
+options     CONFIG_MACH_APPROXIMATE_TIME

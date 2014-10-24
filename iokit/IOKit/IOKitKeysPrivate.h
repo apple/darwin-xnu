@@ -50,6 +50,10 @@
 // IOResources property
 #define kIOConsoleUsersSeedKey                  "IOConsoleUsersSeed"           /* value is OSNumber */
 
+// IODeviceTree:chosen properties
+#define kIOProgressBackbufferKey                "IOProgressBackbuffer"           /* value is OSData   */
+#define kIOProgressColorThemeKey                "IOProgressColorTheme"           /* value is OSNumber */
+
 // interest type
 #define kIOConsoleSecurityInterest		"IOConsoleSecurityInterest"
 
@@ -68,14 +72,19 @@ typedef struct _IOUCProcessToken {
 #define kIOKernelHasSafeSleep        1
 
 #define kIOPlatformSleepActionKey                    "IOPlatformSleepAction"        /* value is OSNumber (priority) */
-#define kIOPlatformWakeActionKey                     "IOPlatformWakeAction"        /* value is OSNumber (priority) */
-#define kIOPlatformQuiesceActionKey                  "IOPlatformQuiesceAction"    /* value is OSNumber (priority) */
-#define kIOPlatformActiveActionKey                   "IOPlatformActiveAction"    /* value is OSNumber (priority) */
+#define kIOPlatformWakeActionKey                     "IOPlatformWakeAction"         /* value is OSNumber (priority) */
+#define kIOPlatformQuiesceActionKey                  "IOPlatformQuiesceAction"      /* value is OSNumber (priority) */
+#define kIOPlatformActiveActionKey                   "IOPlatformActiveAction"       /* value is OSNumber (priority) */
+#define kIOPlatformHaltRestartActionKey              "IOPlatformHaltRestartAction"  /* value is OSNumber (priority) */
 
 #define kIOPlatformFunctionHandlerSet                "IOPlatformFunctionHandlerSet"
 #if defined(__i386__) || defined(__x86_64__)
 #define kIOPlatformFunctionHandlerMaxBusDelay        "IOPlatformFunctionHandlerMaxBusDelay"
 #define kIOPlatformFunctionHandlerMaxInterruptDelay  "IOPlatformFunctionHandlerMaxInterruptDelay"
+
+#define kIOPlatformMaxBusDelay        "IOPlatformMaxBusDelay"
+#define kIOPlatformMaxInterruptDelay  "IOPlatformMaxInterruptDelay"
+
 #endif /* defined(__i386__) || defined(__x86_64__) */
 
 enum {
@@ -83,5 +92,8 @@ enum {
     kIODirectionPrepareNoZeroFill = 0x00000010,
 };
 
+enum {
+    kIOServiceTerminateNeedWillTerminate = 0x00000100,
+};
 
 #endif /* ! _IOKIT_IOKITKEYSPRIVATE_H */

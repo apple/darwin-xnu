@@ -36,6 +36,7 @@
 #include <sys/conf.h>
 #include <sys/systm.h>
 #include <sys/kauth.h>
+#include <sys/utfconv.h>
 
 #include <sys/fasttrap.h>
 #include <sys/fasttrap_impl.h>
@@ -147,16 +148,12 @@ static uint_t fasttrap_cleanup_work;
  */
 static volatile uint64_t fasttrap_mod_gen;
 
-#if !defined(__APPLE__)
 /*
- * When the fasttrap provider is loaded, fasttrap_max is set to either
- * FASTTRAP_MAX_DEFAULT or the value for fasttrap-max-probes in the
- * fasttrap.conf file. Each time a probe is created, fasttrap_total is
+ * APPLE NOTE: When the fasttrap provider is loaded, fasttrap_max is computed
+ * base on system memory.  Each time a probe is created, fasttrap_total is
  * incremented by the number of tracepoints that may be associated with that
  * probe; fasttrap_total is capped at fasttrap_max.
  */
-#define	FASTTRAP_MAX_DEFAULT		2500000
-#endif
 
 static uint32_t fasttrap_max;
 static uint32_t fasttrap_total;
@@ -179,10 +176,8 @@ static lck_mtx_t       		fasttrap_count_mtx;	/* lock on ref count */
 static int fasttrap_tracepoint_enable(proc_t *, fasttrap_probe_t *, uint_t);
 static void fasttrap_tracepoint_disable(proc_t *, fasttrap_probe_t *, uint_t);
 
-#if defined(__APPLE__)
 static fasttrap_provider_t *fasttrap_provider_lookup(pid_t, fasttrap_provider_type_t, const char *,
     const dtrace_pattr_t *);
-#endif
 static void fasttrap_provider_retire(pid_t, const char *, int);
 static void fasttrap_provider_free(fasttrap_provider_t *);
 
@@ -194,11 +189,9 @@ static void fasttrap_proc_release(fasttrap_proc_t *);
 
 #define	FASTTRAP_PROCS_INDEX(pid) ((pid) & fasttrap_procs.fth_mask)
 
-#if defined(__APPLE__)
-
 /*
- * To save memory, some common memory allocations are given a
- * unique zone. In example, dtrace_probe_t is 72 bytes in size,
+ * APPLE NOTE: To save memory, some common memory allocations are given
+ * a unique zone. For example, dtrace_probe_t is 72 bytes in size,
  * which means it would fall into the kalloc.128 bucket. With
  * 20k elements allocated, the space saved is substantial.
  */
@@ -206,7 +199,7 @@ static void fasttrap_proc_release(fasttrap_proc_t *);
 struct zone *fasttrap_tracepoint_t_zone;
 
 /*
- * fasttrap_probe_t's are variable in size. Some quick profiling has shown
+ * APPLE NOTE: fasttrap_probe_t's are variable in size. Some quick profiling has shown
  * that the sweet spot for reducing memory footprint is covering the first
  * three sizes. Everything larger goes into the common pool.
  */
@@ -222,12 +215,11 @@ static const char *fasttrap_probe_t_zone_names[FASTTRAP_PROBE_T_ZONE_MAX_TRACEPO
 };
 
 /*
- * We have to manage locks explicitly
+ * APPLE NOTE:  We have to manage locks explicitly
  */
 lck_grp_t*			fasttrap_lck_grp;
 lck_grp_attr_t*			fasttrap_lck_grp_attr;
 lck_attr_t*			fasttrap_lck_attr;
-#endif
 
 static int
 fasttrap_highbit(ulong_t i)
@@ -275,14 +267,14 @@ fasttrap_hash_str(const char *p)
 }
 
 /*
- * FIXME - needs implementation
+ * APPLE NOTE: fasttrap_sigtrap not implemented
  */
 void
 fasttrap_sigtrap(proc_t *p, uthread_t t, user_addr_t pc)
 {
 #pragma unused(p, t, pc)
 
-#if 0
+#if !defined(__APPLE__)
 	sigqueue_t *sqp = kmem_zalloc(sizeof (sigqueue_t), KM_SLEEP);
 
 	sqp->sq_info.si_signo = SIGTRAP;
@@ -295,7 +287,7 @@ fasttrap_sigtrap(proc_t *p, uthread_t t, user_addr_t pc)
 
 	if (t != NULL)
 		aston(t);
-#endif
+#endif /* __APPLE__ */
 
 	printf("fasttrap_sigtrap called with no implementation.\n");
 }
@@ -556,15 +548,14 @@ fasttrap_exec_exit(proc_t *p)
 	 * static probes are handled by the meta-provider remove entry point.
 	 */
 	fasttrap_provider_retire(p->p_pid, FASTTRAP_PID_NAME, 0);
-#if defined(__APPLE__)
+
 	/*
-	 * We also need to remove any aliased providers.
+	 * APPLE NOTE: We also need to remove any aliased providers.
 	 * XXX optimization: track which provider types are instantiated
 	 * and only retire as needed.
 	 */
 	fasttrap_provider_retire(p->p_pid, FASTTRAP_OBJC_NAME, 0);
 	fasttrap_provider_retire(p->p_pid, FASTTRAP_ONESHOT_NAME, 0);
-#endif /* __APPLE__ */
 
 	/*
 	 * This should be called after it is no longer possible for a user
@@ -1024,34 +1015,12 @@ fasttrap_pid_enable(void *arg, dtrace_id_t id, void *parg)
 	 * USDT probes. Otherwise, the process is gone so bail.
 	 */
 	if ((p = sprlock(probe->ftp_pid)) == PROC_NULL) {
-#if defined(__APPLE__)
 		/*
 		 * APPLE NOTE: We should never end up here. The Solaris sprlock()
 		 * does not return process's with SIDL set, but we always return
 		 * the child process.
 		 */
 	    return(0);
-#else
-
-		if ((curproc->p_flag & SFORKING) == 0)
-		    return(0);
-
-		lck_mtx_lock(&pidlock);
-		p = prfind(probe->ftp_pid);
-
-		/*
-		 * Confirm that curproc is indeed forking the process in which
-		 * we're trying to enable probes.
-		 */
-		ASSERT(p != NULL);
-		//ASSERT(p->p_parent == curproc);
-		ASSERT(p->p_stat == SIDL);
-
-		lck_mtx_lock(&p->p_lock);
-		lck_mtx_unlock(&pidlock);
-
-		sprlock_proc(p);
-#endif
 	}
 
 	/*
@@ -1244,31 +1213,20 @@ fasttrap_pid_destroy(void *arg, dtrace_id_t id, void *parg)
 	ASSERT(fasttrap_total >= probe->ftp_ntps);
 
 	atomic_add_32(&fasttrap_total, -probe->ftp_ntps);
-#if !defined(__APPLE__)
-	size_t size = offsetof(fasttrap_probe_t, ftp_tps[probe->ftp_ntps]);
-#endif
 
 	if (probe->ftp_gen + 1 >= fasttrap_mod_gen)
 		fasttrap_mod_barrier(probe->ftp_gen);
 
 	for (i = 0; i < probe->ftp_ntps; i++) {
-#if !defined(__APPLE__)
-		kmem_free(probe->ftp_tps[i].fit_tp, sizeof (fasttrap_tracepoint_t));
-#else
 		zfree(fasttrap_tracepoint_t_zone, probe->ftp_tps[i].fit_tp);
-#endif
 	}
 
-#if !defined(__APPLE__)
-	kmem_free(probe, size);
-#else
 	if (probe->ftp_ntps < FASTTRAP_PROBE_T_ZONE_MAX_TRACEPOINTS) {
 		zfree(fasttrap_probe_t_zones[probe->ftp_ntps], probe);
 	} else {
 		size_t size = offsetof(fasttrap_probe_t, ftp_tps[probe->ftp_ntps]);
 		kmem_free(probe, size);
 	}
-#endif
 }
 
 
@@ -1361,12 +1319,10 @@ fasttrap_proc_lookup(pid_t pid)
 		}
 	}
 
-#if defined(__APPLE__)
 	/*
-	 * We have to initialize all locks explicitly
+	 * APPLE NOTE: We have to initialize all locks explicitly
 	 */
 	lck_mtx_init(&new_fprc->ftpc_mtx, fasttrap_lck_grp, fasttrap_lck_attr);
-#endif
 
 	new_fprc->ftpc_next = bucket->ftb_data;
 	bucket->ftb_data = new_fprc;
@@ -1421,13 +1377,11 @@ fasttrap_proc_release(fasttrap_proc_t *proc)
 
 	lck_mtx_unlock(&bucket->ftb_mtx);
 
-#if defined(__APPLE__)
 	/*
-	 * Apple explicit lock management. Not 100% certain we need this, the
+	 * APPLE NOTE: explicit lock management. Not 100% certain we need this, the
 	 * memory is freed even without the destroy. Maybe accounting cleanup?
 	 */
 	lck_mtx_destroy(&fprc->ftpc_mtx, fasttrap_lck_grp);
-#endif
 
 	kmem_free(fprc, sizeof (fasttrap_proc_t));
 }
@@ -1438,11 +1392,9 @@ fasttrap_proc_release(fasttrap_proc_t *proc)
  * if it doesn't exist otherwise it returns NULL. The provider is returned
  * with its lock held.
  */
-#if defined(__APPLE__)
 static fasttrap_provider_t *
 fasttrap_provider_lookup(pid_t pid, fasttrap_provider_type_t provider_type, const char *name,
     const dtrace_pattr_t *pattr)
-#endif /* __APPLE__ */
 {
 	fasttrap_provider_t *fp, *new_fp = NULL;
 	fasttrap_bucket_t *bucket;
@@ -1461,9 +1413,7 @@ fasttrap_provider_lookup(pid_t pid, fasttrap_provider_type_t provider_type, cons
 	 */
 	for (fp = bucket->ftb_data; fp != NULL; fp = fp->ftp_next) {
 		if (fp->ftp_pid == pid &&
-#if defined(__APPLE__)
 		    fp->ftp_provider_type == provider_type &&
-#endif /* __APPLE__ */
 		    strncmp(fp->ftp_name, name, sizeof(fp->ftp_name)) == 0 &&
 		    !fp->ftp_retired) {
 			lck_mtx_lock(&fp->ftp_mtx);
@@ -1502,36 +1452,27 @@ fasttrap_provider_lookup(pid_t pid, fasttrap_provider_type_t provider_type, cons
 	/*
 	 * Grab the credentials for this process so we have
 	 * something to pass to dtrace_register().
+	 * APPLE NOTE:  We have no equivalent to crhold,
+	 * even though there is a cr_ref filed in ucred.
 	 */
-#if !defined(__APPLE__)
-	mutex_enter(&p->p_crlock);
-	crhold(p->p_cred);
-	cred = p->p_cred;
-	mutex_exit(&p->p_crlock);
-	mutex_exit(&p->p_lock);
-#else
-	// lck_mtx_lock(&p->p_crlock);
-	// Seems like OS X has no equivalent to crhold, even though it has a cr_ref field in ucred
+	// lck_mtx_lock(&p->p_crlock;
 	crhold(p->p_ucred);
 	cred = p->p_ucred;
 	// lck_mtx_unlock(&p->p_crlock);
 	proc_unlock(p);
 	proc_rele(p);
-#endif /* __APPLE__ */
 
 	new_fp = kmem_zalloc(sizeof (fasttrap_provider_t), KM_SLEEP);
 	ASSERT(new_fp != NULL);
 	new_fp->ftp_pid = pid;
 	new_fp->ftp_proc = fasttrap_proc_lookup(pid);
-#if defined(__APPLE__)
 	new_fp->ftp_provider_type = provider_type;
 
 	/*
-	 * Apple locks require explicit init.
+	 * APPLE NOTE:  locks require explicit init
 	 */
 	lck_mtx_init(&new_fp->ftp_mtx, fasttrap_lck_grp, fasttrap_lck_attr);
 	lck_mtx_init(&new_fp->ftp_cmtx, fasttrap_lck_grp, fasttrap_lck_attr);
-#endif /* __APPLE__ */
 
 	ASSERT(new_fp->ftp_proc != NULL);
 
@@ -1609,14 +1550,12 @@ fasttrap_provider_free(fasttrap_provider_t *provider)
 
 	fasttrap_proc_release(provider->ftp_proc);
 
-#if defined(__APPLE__)
 	/*
-	 * Apple explicit lock management. Not 100% certain we need this, the
+	 * APPLE NOTE:  explicit lock management. Not 100% certain we need this, the
 	 * memory is freed even without the destroy. Maybe accounting cleanup?
 	 */
 	lck_mtx_destroy(&provider->ftp_mtx, fasttrap_lck_grp);
 	lck_mtx_destroy(&provider->ftp_cmtx, fasttrap_lck_grp);
-#endif
 
 	kmem_free(provider, sizeof (fasttrap_provider_t));
 
@@ -1731,9 +1670,7 @@ fasttrap_add_probe(fasttrap_probe_spec_t *pdata)
 	 if (pdata->ftps_noffs == 0)
 		return (EINVAL);
 
-#if defined(__APPLE__)
 	switch (pdata->ftps_probe_type) {
-#endif
 	case DTFTP_ENTRY:
 		name = "entry";
 		aframes = FASTTRAP_ENTRY_AFRAMES;
@@ -1750,7 +1687,6 @@ fasttrap_add_probe(fasttrap_probe_spec_t *pdata)
 		return (EINVAL);
 	}
 
-#if defined(__APPLE__)
 	const char* provider_name;
 	switch (pdata->ftps_provider_type) {
 		case DTFTP_PROVIDER_PID:
@@ -1769,7 +1705,6 @@ fasttrap_add_probe(fasttrap_probe_spec_t *pdata)
 	if ((provider = fasttrap_provider_lookup(pdata->ftps_pid, pdata->ftps_provider_type,
 						 provider_name, &pid_attr)) == NULL)
 		return (ESRCH);
-#endif /* __APPLE__ */
 
 	/*
 	 * Increment this reference count to indicate that a consumer is
@@ -1807,13 +1742,8 @@ fasttrap_add_probe(fasttrap_probe_spec_t *pdata)
 				goto no_mem;
 			}
 
-#if !defined(__APPLE__)
-			pp = kmem_zalloc(sizeof (fasttrap_probe_t), KM_SLEEP);
-			ASSERT(pp != NULL);
-#else
 			pp = zalloc(fasttrap_probe_t_zones[1]);
 			bzero(pp, sizeof (fasttrap_probe_t));
-#endif
 
 			pp->ftp_prov = provider;
 			pp->ftp_faddr = pdata->ftps_pc;
@@ -1821,12 +1751,8 @@ fasttrap_add_probe(fasttrap_probe_spec_t *pdata)
 			pp->ftp_pid = pdata->ftps_pid;
 			pp->ftp_ntps = 1;
 
-#if !defined(__APPLE__)
-			tp = kmem_zalloc(sizeof (fasttrap_tracepoint_t), KM_SLEEP);
-#else
 			tp = zalloc(fasttrap_tracepoint_t_zone);			
 			bzero(tp, sizeof (fasttrap_tracepoint_t));
-#endif
 
 			tp->ftt_proc = provider->ftp_proc;
 			tp->ftt_pc = pdata->ftps_offs[i] + pdata->ftps_pc;
@@ -1835,9 +1761,7 @@ fasttrap_add_probe(fasttrap_probe_spec_t *pdata)
 
 			pp->ftp_tps[0].fit_tp = tp;
 			pp->ftp_tps[0].fit_id.fti_probe = pp;
-#if defined(__APPLE__)
 			pp->ftp_tps[0].fit_id.fti_ptype = pdata->ftps_probe_type;
-#endif
 			pp->ftp_id = dtrace_probe_create(provider->ftp_provid,
 			    pdata->ftps_mod, pdata->ftps_func, name_str,
 			    FASTTRAP_OFFSET_AFRAMES, pp);
@@ -1868,18 +1792,12 @@ fasttrap_add_probe(fasttrap_probe_spec_t *pdata)
 		}
 
 		ASSERT(pdata->ftps_noffs > 0);
-#if !defined(__APPLE__)
-		pp = kmem_zalloc(offsetof(fasttrap_probe_t,
-					  ftp_tps[pdata->ftps_noffs]), KM_SLEEP);
-		ASSERT(pp != NULL);
-#else
 		if (pdata->ftps_noffs < FASTTRAP_PROBE_T_ZONE_MAX_TRACEPOINTS) {
 			pp = zalloc(fasttrap_probe_t_zones[pdata->ftps_noffs]);
 			bzero(pp, offsetof(fasttrap_probe_t, ftp_tps[pdata->ftps_noffs]));
 		} else {
 			pp = kmem_zalloc(offsetof(fasttrap_probe_t, ftp_tps[pdata->ftps_noffs]), KM_SLEEP);
 		}
-#endif
 
 		pp->ftp_prov = provider;
 		pp->ftp_faddr = pdata->ftps_pc;
@@ -1888,22 +1806,15 @@ fasttrap_add_probe(fasttrap_probe_spec_t *pdata)
 		pp->ftp_ntps = pdata->ftps_noffs;
 
 		for (i = 0; i < pdata->ftps_noffs; i++) {
-#if !defined(__APPLE__)
-			tp = kmem_zalloc(sizeof (fasttrap_tracepoint_t), KM_SLEEP);
-#else
 			tp = zalloc(fasttrap_tracepoint_t_zone);
 			bzero(tp, sizeof (fasttrap_tracepoint_t));
-#endif
-
 			tp->ftt_proc = provider->ftp_proc;
 			tp->ftt_pc = pdata->ftps_offs[i] + pdata->ftps_pc;
 			tp->ftt_pid = pdata->ftps_pid;
 
 			pp->ftp_tps[i].fit_tp = tp;
 			pp->ftp_tps[i].fit_id.fti_probe = pp;
-#if defined(__APPLE__)
 			pp->ftp_tps[i].fit_id.fti_ptype = pdata->ftps_probe_type;
-#endif
 		}
 
 		pp->ftp_id = dtrace_probe_create(provider->ftp_provid,
@@ -1974,9 +1885,9 @@ fasttrap_meta_provide(void *arg, dtrace_helper_provdesc_t *dhpv, pid_t pid)
 		    FASTTRAP_PID_NAME);
 		return (NULL);
 	}
-#if defined(__APPLE__)
+
 	/*
-	 * We also need to check the other pid provider types
+	 * APPLE NOTE: We also need to check the objc and oneshot pid provider types
 	 */
 	if (strncmp(dhpv->dthpv_provname, FASTTRAP_OBJC_NAME, sizeof(FASTTRAP_OBJC_NAME)) == 0) {
 		cmn_err(CE_WARN, "failed to instantiate provider %s: "
@@ -1990,7 +1901,6 @@ fasttrap_meta_provide(void *arg, dtrace_helper_provdesc_t *dhpv, pid_t pid)
 		    FASTTRAP_ONESHOT_NAME);
 		return (NULL);
 	}
-#endif /* __APPLE__ */
 
 	/*
 	 * The highest stability class that fasttrap supports is ISA; cap
@@ -2007,7 +1917,6 @@ fasttrap_meta_provide(void *arg, dtrace_helper_provdesc_t *dhpv, pid_t pid)
 	if (dhpv->dthpv_pattr.dtpa_args.dtat_class > DTRACE_CLASS_ISA)
 		dhpv->dthpv_pattr.dtpa_args.dtat_class = DTRACE_CLASS_ISA;
 
-#if defined(__APPLE__)
 	if ((provider = fasttrap_provider_lookup(pid, DTFTP_PROVIDER_USDT, dhpv->dthpv_provname,
 	    &dhpv->dthpv_pattr)) == NULL) {
 		cmn_err(CE_WARN, "failed to instantiate provider %s for "
@@ -2031,9 +1940,9 @@ fasttrap_meta_provide(void *arg, dtrace_helper_provdesc_t *dhpv, pid_t pid)
 	 * for that case.
 	 *
 	 * UPDATE: It turns out there are several use cases that require adding
-	 * probes to existing providers. Disabling this optimization for now...
+	 * probes to existing providers. Disabling the dtrace_probe_lookup()
+	 * optimization for now. See APPLE NOTE in fasttrap_meta_create_probe.
 	 */
-#endif /* __APPLE__ */
 
 	/*
 	 * Up the meta provider count so this provider isn't removed until
@@ -2090,7 +1999,7 @@ fasttrap_meta_create_probe(void *arg, void *parg,
 	 */
 	lck_mtx_lock(&provider->ftp_cmtx);
 
-#if !defined(__APPLE__)
+#if 0
 	/*
 	 * APPLE NOTE: This is hideously expensive. See note in 
 	 * fasttrap_meta_provide() for why we can get away without
@@ -2114,17 +2023,12 @@ fasttrap_meta_create_probe(void *arg, void *parg,
 		return;
 	}
 
-#if !defined(__APPLE__)
-	pp = kmem_zalloc(offsetof(fasttrap_probe_t, ftp_tps[ntps]), KM_SLEEP);
-	ASSERT(pp != NULL);
-#else
 	if (ntps < FASTTRAP_PROBE_T_ZONE_MAX_TRACEPOINTS) {
 		pp = zalloc(fasttrap_probe_t_zones[ntps]);
 		bzero(pp, offsetof(fasttrap_probe_t, ftp_tps[ntps]));
 	} else {
 		pp = kmem_zalloc(offsetof(fasttrap_probe_t, ftp_tps[ntps]), KM_SLEEP);
 	}
-#endif
 
 	pp->ftp_prov = provider;
 	pp->ftp_pid = provider->ftp_pid;
@@ -2137,15 +2041,11 @@ fasttrap_meta_create_probe(void *arg, void *parg,
 	 * First create a tracepoint for each actual point of interest.
 	 */
 	for (i = 0; i < dhpb->dthpb_noffs; i++) {
-#if !defined(__APPLE__)
-		tp = kmem_zalloc(sizeof (fasttrap_tracepoint_t), KM_SLEEP);
-#else
 		tp = zalloc(fasttrap_tracepoint_t_zone);
 		bzero(tp, sizeof (fasttrap_tracepoint_t));
-#endif
 
 		tp->ftt_proc = provider->ftp_proc;
-#if defined(__APPLE__)
+
 		/*
 		 * APPLE NOTE: We have linker support when creating DOF to handle all relocations for us.
 		 * Unfortunately, a side effect of this is that the relocations do not point at exactly
@@ -2160,33 +2060,22 @@ fasttrap_meta_create_probe(void *arg, void *parg,
 #error "Architecture not supported"
 #endif
 
-#else
-		tp->ftt_pc = dhpb->dthpb_base + dhpb->dthpb_offs[i];
-#endif
 		tp->ftt_pid = provider->ftp_pid;
 
 		pp->ftp_tps[i].fit_tp = tp;
 		pp->ftp_tps[i].fit_id.fti_probe = pp;
-#ifdef __sparc
-		pp->ftp_tps[i].fit_id.fti_ptype = DTFTP_POST_OFFSETS;
-#else
 		pp->ftp_tps[i].fit_id.fti_ptype = DTFTP_OFFSETS;
-#endif
 	}
 
 	/*
 	 * Then create a tracepoint for each is-enabled point.
 	 */
 	for (j = 0; i < ntps; i++, j++) {
-#if !defined(__APPLE__)
-		tp = kmem_zalloc(sizeof (fasttrap_tracepoint_t), KM_SLEEP);
-#else
 		tp = zalloc(fasttrap_tracepoint_t_zone);
 		bzero(tp, sizeof (fasttrap_tracepoint_t));
-#endif
 
 		tp->ftt_proc = provider->ftp_proc;
-#if defined(__APPLE__)
+
 		/*
 		 * APPLE NOTE: We have linker support when creating DOF to handle all relocations for us.
 		 * Unfortunately, a side effect of this is that the relocations do not point at exactly
@@ -2201,9 +2090,6 @@ fasttrap_meta_create_probe(void *arg, void *parg,
 #error "Architecture not supported"
 #endif
 
-#else
-		tp->ftt_pc = dhpb->dthpb_base + dhpb->dthpb_enoffs[j];
-#endif
 		tp->ftt_pid = provider->ftp_pid;
 
 		pp->ftp_tps[i].fit_tp = tp;
@@ -2252,6 +2138,30 @@ static dtrace_mops_t fasttrap_mops = {
 	fasttrap_meta_remove
 };
 
+/*
+ * Validate a null-terminated string. If str is not null-terminated,
+ * or not a UTF8 valid string, the function returns -1. Otherwise, 0 is
+ * returned.
+ *
+ * str: string to validate.
+ * maxlen: maximal length of the string, null-terminated byte included.
+ */
+static int
+fasttrap_validatestr(char const* str, size_t maxlen) {
+	size_t len;
+
+	assert(str);
+	assert(maxlen != 0);
+
+	/* Check if the string is null-terminated. */
+	len = strnlen(str, maxlen);
+	if (len >= maxlen)
+		return -1;
+
+	/* Finally, check for UTF8 validity. */
+	return utf8_validatestr((unsigned const char*) str, len);
+}
+
 /*ARGSUSED*/
 static int
 fasttrap_ioctl(dev_t dev, u_long cmd, user_addr_t arg, int md, cred_t *cr, int *rv)
@@ -2263,9 +2173,8 @@ fasttrap_ioctl(dev_t dev, u_long cmd, user_addr_t arg, int md, cred_t *cr, int *
 	if (cmd == FASTTRAPIOC_MAKEPROBE) {
 		fasttrap_probe_spec_t *probe;
 		uint64_t noffs;
-		size_t size, i;
+		size_t size;
 		int ret;
-		char *c;
 
 		if (copyin(arg + __offsetof(fasttrap_probe_spec_t, ftps_noffs), &noffs,
 		    sizeof (probe->ftps_noffs)))
@@ -2299,24 +2208,13 @@ fasttrap_ioctl(dev_t dev, u_long cmd, user_addr_t arg, int md, cred_t *cr, int *
 		 * Verify that the function and module strings contain no
 		 * funny characters.
 		 */
-		for (i = 0, c = &probe->ftps_func[0]; i < sizeof(probe->ftps_func) && *c != '\0'; i++, c++) {
-			if (*c < 0x20 || 0x7f <= *c) {
-				ret = EINVAL;
-				goto err;
-			}
-		}
-		if (*c != '\0') {
+
+		if (fasttrap_validatestr(probe->ftps_func, sizeof(probe->ftps_func)) != 0) {
 			ret = EINVAL;
 			goto err;
 		}
 
-		for (i = 0, c = &probe->ftps_mod[0]; i < sizeof(probe->ftps_mod) && *c != '\0'; i++, c++) {
-			if (*c < 0x20 || 0x7f <= *c) {
-				ret = EINVAL;
-				goto err;
-			}
-		}
-		if (*c != '\0') {
+		if (fasttrap_validatestr(probe->ftps_mod, sizeof(probe->ftps_mod)) != 0) {
 			ret = EINVAL;
 			goto err;
 		}
@@ -2440,18 +2338,15 @@ fasttrap_attach(dev_info_t *devi, ddi_attach_cmd_t cmd)
 	dtrace_fasttrap_exit_ptr = &fasttrap_exec_exit;
 	dtrace_fasttrap_exec_ptr = &fasttrap_exec_exit;
 
-#if !defined(__APPLE__)
-	fasttrap_max = ddi_getprop(DDI_DEV_T_ANY, devi, DDI_PROP_DONTPASS,
-	    "fasttrap-max-probes", FASTTRAP_MAX_DEFAULT);
-#else
 	/*
-	 * We're sizing based on system memory. 100k probes per 256M of system memory.
+	 * APPLE NOTE:  We size the maximum number of fasttrap probes
+	 * based on system memory. 100k probes per 256M of system memory.
 	 * Yes, this is a WAG.
 	 */
 	fasttrap_max = (sane_size >> 28) * 100000;
 	if (fasttrap_max == 0)
 		fasttrap_max = 50000;
-#endif
+
 	fasttrap_total = 0;
 
 	/*
@@ -2472,15 +2367,14 @@ fasttrap_attach(dev_info_t *devi, ddi_attach_cmd_t cmd)
 	fasttrap_tpoints.fth_table = kmem_zalloc(fasttrap_tpoints.fth_nent *
 	    sizeof (fasttrap_bucket_t), KM_SLEEP);
 	ASSERT(fasttrap_tpoints.fth_table != NULL);
-#if defined(__APPLE__)
+
 	/*
-	 * We have to explicitly initialize all locks...
+	 * APPLE NOTE:  explicitly initialize all locks...
 	 */
 	unsigned int i;
 	for (i=0; i<fasttrap_tpoints.fth_nent; i++) {
 		lck_mtx_init(&fasttrap_tpoints.fth_table[i].ftb_mtx, fasttrap_lck_grp, fasttrap_lck_attr);
 	}
-#endif
 
 	/*
 	 * ... and the providers hash table...
@@ -2495,14 +2389,13 @@ fasttrap_attach(dev_info_t *devi, ddi_attach_cmd_t cmd)
 	fasttrap_provs.fth_table = kmem_zalloc(fasttrap_provs.fth_nent *
 	    sizeof (fasttrap_bucket_t), KM_SLEEP);
 	ASSERT(fasttrap_provs.fth_table != NULL);
-#if defined(__APPLE__)
+
 	/*
-	 * We have to explicitly initialize all locks...
+	 * APPLE NOTE: explicitly initialize all locks...
 	 */
 	for (i=0; i<fasttrap_provs.fth_nent; i++) {
 		lck_mtx_init(&fasttrap_provs.fth_table[i].ftb_mtx, fasttrap_lck_grp, fasttrap_lck_attr);
 	}
-#endif
 
 	/*
 	 * ... and the procs hash table.
@@ -2517,14 +2410,13 @@ fasttrap_attach(dev_info_t *devi, ddi_attach_cmd_t cmd)
 	fasttrap_procs.fth_table = kmem_zalloc(fasttrap_procs.fth_nent *
 	    sizeof (fasttrap_bucket_t), KM_SLEEP);
 	ASSERT(fasttrap_procs.fth_table != NULL);
-#if defined(__APPLE__)
+
 	/*
-	 * We have to explicitly initialize all locks...
+	 * APPLE NOTE: explicitly initialize all locks...
 	 */
 	for (i=0; i<fasttrap_procs.fth_nent; i++) {
 		lck_mtx_init(&fasttrap_procs.fth_table[i].ftb_mtx, fasttrap_lck_grp, fasttrap_lck_attr);
 	}
-#endif
 
 	(void) dtrace_meta_register("fasttrap", &fasttrap_mops, NULL,
 	    &fasttrap_meta_id);

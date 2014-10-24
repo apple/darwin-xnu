@@ -135,23 +135,23 @@ typedef struct _posix_spawnattr {
 	int		psa_apptype;		/* app type and process spec behav */
 	uint64_t 	psa_cpumonitor_percent; /* CPU usage monitor percentage */
 	uint64_t 	psa_cpumonitor_interval; /* CPU usage monitor interval, in seconds */
-	/* 
-	 * TODO: cleanup - see <rdar://problem/12858307>. psa_ports is a pointer,
-	 * meaning that the fields following differ in alignment between 32 and 
-	 * 64-bit architectures. All pointers (existing and new) should therefore
-	 * be placed at the end; changing this now, however, would currently break 
-	 * some legacy dependencies. The radar will be used to track resolution when
-	 * appropriate.
-	 */
+	uint64_t	psa_coalitionid;	/* coalition to spawn into */
 
 	short       psa_jetsam_flags; /* jetsam flags */
 	short		short_padding;  /* Padding for alignment issues */
 	int         psa_priority;   /* jetsam relative importance */
 	int         psa_high_water_mark; /* jetsam resident page count limit */
 	int 		int_padding;	/* Padding for alignment issues */
-	/* MAC policy-specific extensions. */
+
+	uint64_t        psa_qos_clamp;          /* QoS Clamp to set on the new process */
+
+	/*
+	 * NOTE: Extensions array pointers must stay at the end so that
+	 * everything above this point stays the same size on different bitnesses
+	 * see <rdar://problem/12858307>
+	 */
 	 _posix_spawn_port_actions_t	psa_ports; /* special/exception ports */
-	_posix_spawn_mac_policy_extensions_t psa_mac_extensions;
+	_posix_spawn_mac_policy_extensions_t psa_mac_extensions; /* MAC policy-specific extensions. */
 } *_posix_spawnattr_t;
 
 /*
@@ -161,6 +161,7 @@ typedef struct _posix_spawnattr {
 
 #define	POSIX_SPAWN_JETSAM_USE_EFFECTIVE_PRIORITY   0x1
 #define	POSIX_SPAWN_JETSAM_HIWATER_BACKGROUND       0x2
+#define	POSIX_SPAWN_JETSAM_MEMLIMIT_FATAL           0x4
 
 /*
  * Deprecated posix_spawn psa_flags values
@@ -207,6 +208,12 @@ typedef struct _posix_spawnattr {
 #define POSIX_SPAWN_PROC_TYPE_DAEMON_INTERACTIVE    0x00000400
 #define POSIX_SPAWN_PROC_TYPE_DAEMON_BACKGROUND     0x00000500
 #define POSIX_SPAWN_PROC_TYPE_DAEMON_ADAPTIVE       0x00000600
+
+#define POSIX_SPAWN_PROC_CLAMP_NONE                 0x00000000
+#define POSIX_SPAWN_PROC_CLAMP_UTILITY              0x00000001
+#define POSIX_SPAWN_PROC_CLAMP_BACKGROUND           0x00000002
+#define POSIX_SPAWN_PROC_CLAMP_MAINTENANCE          0x00000003
+#define POSIX_SPAWN_PROC_CLAMP_LAST                 0x00000004
 
 /*
  * Allowable posix_spawn() file actions

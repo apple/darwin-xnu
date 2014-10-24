@@ -1094,6 +1094,7 @@ munge_dqblk(struct dqblk *dqblkp, struct user_dqblk *user_dqblkp, boolean_t to64
 		user_dqblkp->dqb_btime = dqblkp->dqb_btime;
 	}
 	else {
+		
 		/* munge user (64 bit) dqblk into kernel (32 bit) dqblk */
 		bcopy((caddr_t)user_dqblkp, (caddr_t)dqblkp, offsetof(struct dqblk, dqb_btime));
 		dqblkp->dqb_id = user_dqblkp->dqb_id;

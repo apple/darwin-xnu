@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2013 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2014 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -390,7 +390,7 @@ fail:
 		 */
 		printf("hfs: node=%lld fileID=%u volume=%s device=%s\n", src->blockNum, VTOC(vp)->c_fileid,
 			VTOVCB(vp)->vcbVN, vfs_statfs(vnode_mount(vp))->f_mntfromname);
-		hfs_mark_volume_inconsistent(VTOVCB(vp));
+		hfs_mark_inconsistent(VTOVCB(vp), HFS_INCONSISTENCY_DETECTED);
 	}
 	
     return (error);

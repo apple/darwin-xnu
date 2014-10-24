@@ -41,6 +41,7 @@ typedef union {
 	kern_return_t		(*args_1)(uint32_t);
 	kern_return_t		(*args64_1)(uint64_t);
 	kern_return_t		(*args_2)(uint32_t,uint32_t);
+	kern_return_t		(*args64_2)(uint64_t,uint64_t);
 	kern_return_t		(*args_3)(uint32_t,uint32_t,uint32_t);
 	kern_return_t		(*args_4)(uint32_t,uint32_t,uint32_t,uint32_t);
 	kern_return_t		(*args_var)(uint32_t,...);
@@ -67,6 +68,11 @@ extern const machdep_call_t		machdep_call_table[];
 extern const machdep_call_t		machdep_call_table64[];
 
 extern int			machdep_call_count;
+
+#if HYPERVISOR
+extern kern_return_t		hv_task_trap(uint64_t,uint64_t);
+extern kern_return_t		hv_thread_trap(uint64_t,uint64_t);
+#endif
 
 extern kern_return_t		thread_fast_set_cthread_self(uint32_t);
 extern kern_return_t		thread_fast_set_cthread_self64(uint64_t);

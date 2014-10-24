@@ -120,11 +120,4 @@ typedef _STRUCT_MCONTEXT32	*mcontext_t;
 #endif
 #endif /* _MCONTEXT_T */
 
-
-#if !defined(_POSIX_C_SOURCE) || defined(_DARWIN_C_SOURCE)
-#ifndef I386_MCONTEXT_SIZE
-#define I386_MCONTEXT_SIZE	sizeof(struct mcontext)	
-#endif /* I386_MCONTEXT_SIZE */
-#endif /* (!_POSIX_C_SOURCE || _DARWIN_C_SOURCE) */
-
 #endif /* __I386_MCONTEXT_H_ */

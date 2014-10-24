@@ -34,7 +34,6 @@
 #include <kern/thread.h>
 #include <kern/zalloc.h>
 
-#include <kern/lock.h>
 #include <kern/kalloc.h>
 #include <kern/spl.h>
 
@@ -155,9 +154,6 @@ dump_frame64(x86_saved_state64_t *sp)
 	kprintf("sp->r14:        0x%016llx\n", sp->r14);
 	kprintf("sp->r15:        0x%016llx\n", sp->r15);
 	kprintf("sp->cr2:        0x%016llx\n", sp->cr2);
-	kprintf("sp->v_arg8:     0x%016llx\n", sp->v_arg8);
-	kprintf("sp->v_arg7:     0x%016llx\n", sp->v_arg7);
-	kprintf("sp->v_arg6:     0x%016llx\n", sp->v_arg6);
 	kprintf("sp->r9:         0x%016llx\n", sp->r9);
 	kprintf("sp->r8:         0x%016llx\n", sp->r8);
 	kprintf("sp->r10:        0x%016llx\n", sp->r10);

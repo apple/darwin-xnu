@@ -254,21 +254,6 @@ __unused void			*arg)
 	timer_resync_deadlines();
 }
 
-/* N.B.: Max leeway values assume 1GHz timebase */
-timer_coalescing_priority_params_t tcoal_prio_params =
-{
-	/* Deadline scale values for each thread attribute */
-	0, -5, 3, 3, 3,
-	/* Maximum leeway in abstime for each thread attribute */
-	0ULL, 100*NSEC_PER_MSEC, NSEC_PER_MSEC, NSEC_PER_MSEC, NSEC_PER_MSEC,
-	/* Deadline scale values for each latency QoS tier */
-	{3, 2, 1, -2, -15, -15},
-	/* Maximum leeway in abstime for each latency QoS Tier*/
-	{1*NSEC_PER_MSEC, 5*NSEC_PER_MSEC, 20*NSEC_PER_MSEC, 75*NSEC_PER_MSEC,
-	 10*NSEC_PER_SEC, 10*NSEC_PER_SEC},
-	/* Signifies that the tier requires rate-limiting */
-	{FALSE, FALSE, FALSE, FALSE, TRUE, TRUE}
-};
 #define TIMER_RESORT_THRESHOLD_ABSTIME (50 * NSEC_PER_MSEC)
 
 #if TCOAL_PRIO_STATS
@@ -278,140 +263,12 @@ int32_t nc_tcl, rt_tcl, bg_tcl, kt_tcl, fp_tcl, ts_tcl, qos_tcl;
 #define TCOAL_PRIO_STAT(x)
 #endif
 
-/* Select timer coalescing window based on per-task quality-of-service hints */
-static boolean_t tcoal_qos_adjust(thread_t t, int32_t *tshift, uint64_t *tmax, boolean_t *pratelimited) {
-	uint32_t latency_qos;
-	boolean_t adjusted = FALSE;
-	task_t ctask = t->task;
-
-	if (ctask) {
-		latency_qos = proc_get_effective_task_policy(ctask, TASK_POLICY_LATENCY_QOS);
-
-		assert(latency_qos <= NUM_LATENCY_QOS_TIERS);
-
-		if (latency_qos) {
-			*tshift = tcoal_prio_params.latency_qos_scale[latency_qos - 1];
-			*tmax = tcoal_prio_params.latency_qos_ns_max[latency_qos - 1];
-			*pratelimited = tcoal_prio_params.latency_tier_rate_limited[latency_qos - 1];
-			adjusted = TRUE;
-		}
-	}
-	return adjusted;
-}
-
-/* Adjust timer deadlines based on priority of the thread and the
- * urgency value provided at timeout establishment. With this mechanism,
- * timers are no longer necessarily sorted in order of soft deadline
- * on a given timer queue, i.e. they may be differentially skewed.
- * In the current scheme, this could lead to fewer pending timers
- * processed than is technically possible when the HW deadline arrives.
- */
-static void
-timer_compute_leeway(thread_t cthread, int32_t urgency, int32_t *tshift, uint64_t *tmax, boolean_t *pratelimited) {
-	int16_t tpri = cthread->sched_pri;
-
-	if ((urgency & TIMER_CALL_USER_MASK) != 0) {
-		if (tpri >= BASEPRI_RTQUEUES ||
-		    urgency == TIMER_CALL_USER_CRITICAL) {
-			*tshift = tcoal_prio_params.timer_coalesce_rt_shift;
-			*tmax = tcoal_prio_params.timer_coalesce_rt_ns_max;
-			TCOAL_PRIO_STAT(rt_tcl);
-		} else if ((urgency == TIMER_CALL_USER_BACKGROUND) ||
-		    proc_get_effective_thread_policy(cthread, TASK_POLICY_DARWIN_BG)) {
-			/* Determine if timer should be subjected to a lower QoS */
-			if (tcoal_qos_adjust(cthread, tshift, tmax, pratelimited)) {
-				if (*tmax > tcoal_prio_params.timer_coalesce_bg_ns_max) {
-					return;
-				} else {
-					*pratelimited = FALSE;
-				}
-			}
-			*tshift = tcoal_prio_params.timer_coalesce_bg_shift;
-			*tmax = tcoal_prio_params.timer_coalesce_bg_ns_max;
-			TCOAL_PRIO_STAT(bg_tcl);
-		} else if (tpri >= MINPRI_KERNEL) {
-			*tshift = tcoal_prio_params.timer_coalesce_kt_shift;
-			*tmax = tcoal_prio_params.timer_coalesce_kt_ns_max;
-			TCOAL_PRIO_STAT(kt_tcl);
-		} else if (cthread->sched_mode == TH_MODE_FIXED) {
-			*tshift = tcoal_prio_params.timer_coalesce_fp_shift;
-			*tmax = tcoal_prio_params.timer_coalesce_fp_ns_max;
-			TCOAL_PRIO_STAT(fp_tcl);
-		} else if (tcoal_qos_adjust(cthread, tshift, tmax, pratelimited)) {
-			TCOAL_PRIO_STAT(qos_tcl);
-		} else if (cthread->sched_mode == TH_MODE_TIMESHARE) {
-			*tshift = tcoal_prio_params.timer_coalesce_ts_shift;
-			*tmax = tcoal_prio_params.timer_coalesce_ts_ns_max;
-			TCOAL_PRIO_STAT(ts_tcl);
-		} else {
-			TCOAL_PRIO_STAT(nc_tcl);
-		}
-	} else if (urgency == TIMER_CALL_SYS_BACKGROUND) {
-		*tshift = tcoal_prio_params.timer_coalesce_bg_shift;
-		*tmax = tcoal_prio_params.timer_coalesce_bg_ns_max;
-		TCOAL_PRIO_STAT(bg_tcl);
-	} else {
-		*tshift = tcoal_prio_params.timer_coalesce_kt_shift;
-		*tmax = tcoal_prio_params.timer_coalesce_kt_ns_max;
-		TCOAL_PRIO_STAT(kt_tcl);
-	}
-}
-
-int timer_user_idle_level;
-
-uint64_t
-timer_call_slop(uint64_t deadline, uint64_t now, uint32_t flags, thread_t cthread, boolean_t *pratelimited)
-{
-	int32_t tcs_shift = 0;
-	uint64_t tcs_ns_max = 0;
-	uint64_t adjval;
-	uint32_t urgency = (flags & TIMER_CALL_URGENCY_MASK);
-
-	if (mach_timer_coalescing_enabled && 
-	    (deadline > now) && (urgency != TIMER_CALL_SYS_CRITICAL)) {
-		timer_compute_leeway(cthread, urgency, &tcs_shift, &tcs_ns_max, pratelimited);
-	
-		if (tcs_shift >= 0)
-			adjval =  MIN((deadline - now) >> tcs_shift, tcs_ns_max);
-		else
-			adjval =  MIN((deadline - now) << (-tcs_shift), tcs_ns_max);
-		/* Apply adjustments derived from "user idle level" heuristic */
-		adjval += (adjval * timer_user_idle_level) >> 7;
-		return adjval;
- 	} else {
-		return 0;
-	}
-}
-
 boolean_t
 timer_resort_threshold(uint64_t skew) {
 	if (skew >= TIMER_RESORT_THRESHOLD_ABSTIME)
 		return TRUE;
 	else
 		return FALSE;
-}
-
-int
-ml_timer_get_user_idle_level(void) {
-	return timer_user_idle_level;
-}
-
-kern_return_t ml_timer_set_user_idle_level(int ilevel) {
-	boolean_t do_reeval = FALSE;
-
-	if ((ilevel < 0) || (ilevel > 128))
-		return KERN_INVALID_ARGUMENT;
-
-	if (ilevel < timer_user_idle_level) {
-		do_reeval = TRUE;
-	}
-
-	timer_user_idle_level = ilevel;
-
-	if (do_reeval)
-		ml_timer_evaluate();
-
-	return KERN_SUCCESS;
 }
 
 /*
@@ -518,3 +375,29 @@ timer_call_nosync_cpu(int cpu, void (*fn)(void *), void *arg)
 	mp_cpus_call(cpu_to_cpumask(cpu), NOSYNC, fn, arg);
 }
 
+
+static timer_coalescing_priority_params_ns_t tcoal_prio_params_init =
+{
+	.idle_entry_timer_processing_hdeadline_threshold_ns = 5000ULL * NSEC_PER_USEC,
+	.interrupt_timer_coalescing_ilat_threshold_ns = 30ULL * NSEC_PER_USEC,
+	.timer_resort_threshold_ns = 50 * NSEC_PER_MSEC,
+	.timer_coalesce_rt_shift = 0,
+	.timer_coalesce_bg_shift = -5,
+	.timer_coalesce_kt_shift = 3,
+	.timer_coalesce_fp_shift = 3,
+	.timer_coalesce_ts_shift = 3,
+	.timer_coalesce_rt_ns_max = 0ULL,
+	.timer_coalesce_bg_ns_max = 100 * NSEC_PER_MSEC,
+	.timer_coalesce_kt_ns_max = 1 * NSEC_PER_MSEC,
+	.timer_coalesce_fp_ns_max = 1 * NSEC_PER_MSEC,
+	.timer_coalesce_ts_ns_max = 1 * NSEC_PER_MSEC,
+	.latency_qos_scale = {3, 2, 1, -2, -15, -15},
+	.latency_qos_ns_max ={1 * NSEC_PER_MSEC, 5 * NSEC_PER_MSEC, 20 * NSEC_PER_MSEC,
+			      75 * NSEC_PER_MSEC, 10000 * NSEC_PER_MSEC, 10000 * NSEC_PER_MSEC},
+	.latency_tier_rate_limited = {FALSE, FALSE, FALSE, FALSE, TRUE, TRUE},
+};
+
+timer_coalescing_priority_params_ns_t * timer_call_get_priority_params(void)
+{
+	return &tcoal_prio_params_init;
+}

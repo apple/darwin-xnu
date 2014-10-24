@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2012 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2014 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -81,8 +81,14 @@
 /*
  * Vnode types.  VNON means no type.
  */
-enum vtype	{ VNON, VREG, VDIR, VBLK, VCHR, VLNK, VSOCK, VFIFO, VBAD, VSTR,
-			  VCPLX };
+enum vtype	{ 
+	/* 0 */
+	VNON, 
+	/* 1 - 5 */
+	VREG, VDIR, VBLK, VCHR, VLNK, 
+	/* 6 - 10 */
+	VSOCK, VFIFO, VBAD, VSTR, VCPLX 
+};
 
 /*
  * Vnode tag types.
@@ -90,10 +96,21 @@ enum vtype	{ VNON, VREG, VDIR, VBLK, VCHR, VLNK, VSOCK, VFIFO, VBAD, VSTR,
  * and should NEVER be inspected by the kernel.
  */
 enum vtagtype	{
-	VT_NON, VT_UFS, VT_NFS, VT_MFS, VT_MSDOSFS, VT_LFS, VT_LOFS, VT_FDESC,
-	VT_PORTAL, VT_NULL, VT_UMAP, VT_KERNFS, VT_PROCFS, VT_AFS, VT_ISOFS,
-	VT_UNION, VT_HFS, VT_ZFS, VT_DEVFS, VT_WEBDAV, VT_UDF, VT_AFP,
-	VT_CDDA, VT_CIFS, VT_OTHER};
+	/* 0 */
+	VT_NON,
+	/* 1 reserved, overlaps with (CTL_VFS, VFS_NUMMNTOPS) */
+	VT_UFS,
+	/* 2 - 5 */
+	VT_NFS, VT_MFS, VT_MSDOSFS, VT_LFS,
+	/* 6 - 10 */
+	VT_LOFS, VT_FDESC, VT_PORTAL, VT_NULL, VT_UMAP, 
+	/* 11 - 15 */
+	VT_KERNFS, VT_PROCFS, VT_AFS, VT_ISOFS, VT_MOCKFS,
+	/* 16 - 20 */
+	VT_HFS, VT_ZFS, VT_DEVFS, VT_WEBDAV, VT_UDF, 
+	/* 21 - 24 */
+	VT_AFP, VT_CDDA, VT_CIFS, VT_OTHER
+};
 
 
 /*
@@ -152,6 +169,7 @@ enum vtagtype	{
 #define IO_SINGLE_WRITER	0x80000
 #define IO_SYSCALL_DISPATCH		0x100000	/* I/O was originated from a file table syscall */
 #define IO_SWAP_DISPATCH		0x200000	/* I/O was originated from the swap layer */
+#define IO_SKIP_ENCRYPTION		0x400000	/* Skips en(de)cryption on the IO. Must be initiated from kernel */
 
 /*
  * Component Name: this structure describes the pathname
@@ -199,7 +217,6 @@ struct componentname {
  * component name operational modifier flags
  */
 #define	FOLLOW		0x00000040 /* follow symbolic links */
-#define NOTRIGGER	0x10000000 /* don't trigger automounts */
 
 /*
  * component name parameter descriptors.
@@ -207,9 +224,6 @@ struct componentname {
 #define	ISDOTDOT	0x00002000 /* current component name is .. */
 #define	MAKEENTRY	0x00004000 /* entry is to be added to name cache */
 #define	ISLASTCN	0x00008000 /* this is last component of pathname */
-#define	ISWHITEOUT	0x00020000 /* OBSOLETE: found whiteout */
-#define	DOWHITEOUT	0x00040000 /* OBSOLETE: do whiteouts */
-
 
 /* The following structure specifies a vnode for creation */
 struct vnode_fsparam {
@@ -279,12 +293,6 @@ enum path_operation	{
 	OP_LISTXATTR,
 	OP_MAXOP	/* anything beyond previous entry is invalid */
 };
-
-/*
- * is operation a traditional trigger (autofs)?
- * 1 if trigger, 0 if no trigger
- */
-extern int vfs_istraditionaltrigger(enum path_operation op, const struct componentname *cnp);
 
 /*!
  @enum resolver status
@@ -477,6 +485,7 @@ struct vnode_trigger_param {
 #define VATTR_IS_SUPPORTED(v, a)	((v)->va_supported & VNODE_ATTR_ ## a)
 #define VATTR_CLEAR_ACTIVE(v, a)	((v)->va_active &= ~VNODE_ATTR_ ## a)
 #define VATTR_CLEAR_SUPPORTED(v, a)	((v)->va_supported &= ~VNODE_ATTR_ ## a)
+#define VATTR_CLEAR_SUPPORTED_ALL(v)	((v)->va_supported = 0)
 #define VATTR_IS_ACTIVE(v, a)		((v)->va_active & VNODE_ATTR_ ## a)
 #define VATTR_ALL_SUPPORTED(v)		(((v)->va_active & (v)->va_supported) == (v)->va_active)
 #define VATTR_INACTIVE_SUPPORTED(v)	do {(v)->va_active &= ~(v)->va_supported; (v)->va_supported = 0;} while(0)
@@ -525,6 +534,15 @@ struct vnode_trigger_param {
 #define VNODE_ATTR_va_dataprotect_class	(1LL<<31)	/* 80000000 */
 #define VNODE_ATTR_va_dataprotect_flags	(1LL<<32)	/* 100000000 */
 #define VNODE_ATTR_va_document_id	(1LL<<33)	/* 200000000 */
+#define VNODE_ATTR_va_devid		(1LL<<34)	/* 400000000 */
+#define VNODE_ATTR_va_objtype		(1LL<<35)	/* 800000000 */
+#define VNODE_ATTR_va_objtag		(1LL<<36)	/* 1000000000 */
+#define VNODE_ATTR_va_user_access	(1LL<<37)	/* 2000000000 */
+#define VNODE_ATTR_va_finderinfo	(1LL<<38)	/* 4000000000 */
+#define VNODE_ATTR_va_rsrc_length	(1LL<<39)	/* 8000000000 */
+#define VNODE_ATTR_va_rsrc_alloc	(1LL<<40)	/* 10000000000 */
+#define VNODE_ATTR_va_fsid64		(1LL<<41)	/* 20000000000 */
+#define VNODE_ATTR_va_write_gencount    (1LL<<42)	/* 40000000000 */
 
 #define VNODE_ATTR_BIT(n)	(VNODE_ATTR_ ## n)
 /*
@@ -546,7 +564,16 @@ struct vnode_trigger_param {
 				VNODE_ATTR_BIT(va_type) |		\
 				VNODE_ATTR_BIT(va_nchildren) |		\
 				VNODE_ATTR_BIT(va_dirlinkcount) |	\
-				VNODE_ATTR_BIT(va_addedtime)) 
+				VNODE_ATTR_BIT(va_addedtime) |		\
+				VNODE_ATTR_BIT(va_devid) |		\
+				VNODE_ATTR_BIT(va_objtype) |		\
+				VNODE_ATTR_BIT(va_objtag) |		\
+				VNODE_ATTR_BIT(va_user_access) |	\
+				VNODE_ATTR_BIT(va_finderinfo) |		\
+				VNODE_ATTR_BIT(va_rsrc_length) |	\
+				VNODE_ATTR_BIT(va_rsrc_alloc) |		\
+				VNODE_ATTR_BIT(va_fsid64) |		\
+				VNODE_ATTR_BIT(va_write_gencount))
 /*
  * Attributes that can be applied to a new file object.
  */
@@ -567,6 +594,7 @@ struct vnode_trigger_param {
 				VNODE_ATTR_BIT(va_dataprotect_flags) |	\
 				VNODE_ATTR_BIT(va_document_id))
 
+#include <sys/_types/_fsid_t.h>
 
 struct vnode_attr {
 	/* bitfields */
@@ -622,7 +650,6 @@ struct vnode_attr {
 	uint64_t	va_nchildren;     /* Number of items in a directory */
 	uint64_t	va_dirlinkcount;  /* Real references to dir (i.e. excluding "." and ".." refs) */
 
-	/* add new fields here only */
 #ifdef BSD_KERNEL_PRIVATE
 	struct kauth_acl *va_base_acl;
 #else
@@ -633,7 +660,23 @@ struct vnode_attr {
 	/* Data Protection fields */
 	uint32_t va_dataprotect_class;	/* class specified for this file if it didn't exist */
 	uint32_t va_dataprotect_flags;	/* flags from NP open(2) to the filesystem */
+
+	/* Document revision tracking */
 	uint32_t va_document_id;
+
+	/* Fields for Bulk args */
+	uint32_t 	va_devid;	/* devid of filesystem */
+	uint32_t 	va_objtype;	/* type of object */
+	uint32_t 	va_objtag;	/* vnode tag of filesystem */
+	uint32_t 	va_user_access;	/* access for user */
+	uint8_t  	va_finderinfo[32];	/* Finder Info */
+	uint64_t 	va_rsrc_length;	/* Resource Fork length */
+	uint64_t 	va_rsrc_alloc;	/* Resource Fork allocation size */
+	fsid_t 		va_fsid64;	/* fsid, of the correct type  */
+
+	uint32_t va_write_gencount;     /* counter that increments each time the file changes */
+
+	/* add new fields here only */
 };
 
 #ifdef BSD_KERNEL_PRIVATE
@@ -1199,7 +1242,7 @@ proc_t	vfs_context_proc(vfs_context_t);
  @abstract Get the credential associated with a vfs_context_t.
  @discussion Succeeds if and only if the context has a thread, the thread has a task, and the task has a BSD proc.
  @param ctx Context whose associated process to find.
- @return Process if available, NULL otherwise.
+ @returns credential if process available; NULL otherwise
  */
 kauth_cred_t	vfs_context_ucred(vfs_context_t);
 
@@ -1598,7 +1641,6 @@ int vn_getpath(struct vnode *vp, char *pathbuf, int *len);
  */
 #define VNODE_LOOKUP_NOFOLLOW		0x01
 #define	VNODE_LOOKUP_NOCROSSMOUNT	0x02
-#define VNODE_LOOKUP_DOWHITEOUT		0x04	/* OBSOLETE */
 /*!
  @function vnode_lookup
  @abstract Convert a path into a vnode.
@@ -1846,6 +1888,35 @@ void	vnode_putname(const char *name);
  */
 vnode_t	vnode_getparent(vnode_t vp);
 
+/*!
+ @function vnode_setdirty
+ @abstract Mark the vnode as having data or metadata that needs to be written out during reclaim
+ @discussion The vnode should be marked as dirty anytime a file system defers flushing of data or meta-data associated with it. 
+ @param the vnode to mark as dirty
+ @return 0 if successful else an error code.
+ */
+int	vnode_setdirty(vnode_t);
+
+/*!
+ @function vnode_cleardirty
+ @abstract Mark the vnode as clean i.e. all its data or metadata has been flushed
+ @discussion The vnode should be marked as clean whenever the file system is done flushing data or meta-data associated with it.
+ @param the vnode to clear as being dirty
+ @return 0 if successful else an error code.
+ */
+int	vnode_cleardirty(vnode_t);
+
+/*!
+ @function vnode_isdirty
+ @abstract Determine if a vnode is marked dirty.
+ @discussion The vnode should be marked as clean whenever the file system is done flushing data or meta-data associated with it.
+ @param vp the vnode to test.
+ @return Non-zero if the vnode is dirty, 0 otherwise.
+ */
+int	vnode_isdirty(vnode_t);
+
+
+
 #ifdef KERNEL_PRIVATE
 /*! 
  @function vnode_lookup_continue_needed
@@ -1895,6 +1966,7 @@ int	vnode_makeimode(int, int);
 enum vtype	vnode_iftovt(int);
 int	vnode_vttoif(enum vtype);
 int 	vnode_isshadow(vnode_t);
+boolean_t vnode_on_reliable_media(vnode_t);
 /*
  * Indicate that a file has multiple hard links.  VFS will always call
  * VNOP_LOOKUP on this vnode.  Volfs will always ask for it's parent
@@ -1924,8 +1996,42 @@ void vnode_setnoflush(vnode_t);
 void vnode_clearnoflush(vnode_t);
 /* XXX temporary until we can arrive at a KPI for NFS, Seatbelt */
 thread_t vfs_context_thread(vfs_context_t);
-
+#if CONFIG_IOSCHED
+vnode_t vnode_mountdevvp(vnode_t);
+#endif
 #endif /* BSD_KERNEL_PRIVATE */
+
+/*
+ * Helper functions for implementing VNOP_GETATTRLISTBULK for a filesystem
+ */
+
+/*!
+ @function vfs_setup_vattr_from_attrlist
+ @abstract Setup a vnode_attr structure given an attrlist structure.
+ @Used by a VNOP_GETATTRLISTBULK implementation to setup a vnode_attr structure from a attribute list. It also returns the fixed size of the attribute buffer required.
+ @param alp Pointer to attribute list structure.
+ @param vap Pointer to vnode_attr structure.
+ @param obj_vtype Type of object - If VNON is passed, then the type is ignored and common, file and dir attrs are used to initialise the vattrs. If set to VDIR, only common and directory attributes are used. For all other types, only common and file attrbutes are used.
+ @param attr_fixed_sizep. Returns the fixed length required in the attrbute buffer for the object. NULL should be passed if it is not required.
+ @param ctx vfs context of caller.
+ @return error.
+ */
+errno_t vfs_setup_vattr_from_attrlist(struct attrlist * /* alp */, struct vnode_attr * /* vap */, enum vtype /* obj_vtype */, ssize_t * /* attr_fixed_sizep */, vfs_context_t /* ctx */);
+
+/*!
+ @function vfs_attr_pack
+ @abstract Pack a vnode_attr structure into a buffer in the same format as getattrlist(2).
+ @Used by a VNOP_GETATTRLISTBULK implementation to pack data provided into a vnode_attr structure into a buffer the way getattrlist(2) does.
+ @param vp If available, the vnode for which the attributes are being given, NULL if vnode is not available (which will usually be the case for a VNOP_GETATTRLISTBULK implementation.
+ @param auio - a uio_t initialised with one iovec..
+ @param alp - Pointer to an attrlist structure.
+ @param options - options for call (same as options for getattrlistbulk(2)).
+ @param vap Pointer to a filled in vnode_attr structure. Data from the vnode_attr structure will be used to copy and lay out the data in the required format for getatrlistbulk(2) by this function.
+ @param fndesc Currently unused
+ @param ctx vfs context of caller.
+ @return error.
+ */
+errno_t vfs_attr_pack(vnode_t /* vp */, uio_t /* uio */, struct attrlist * /* alp */, uint64_t /* options */, struct vnode_attr * /* vap */, void * /* fndesc */, vfs_context_t /* ctx */);
 
 __END_DECLS
 

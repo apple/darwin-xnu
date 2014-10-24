@@ -15,8 +15,6 @@ security/mac_audit.c					optional config_macf
 security/mac_base.c					standard
 security/mac_data.c					optional config_macf
 security/mac_label.c					optional config_macf
-security/mac_task.c					optional config_macf_mach
-security/mac_port.c					optional config_macf_mach
 security/mac_process.c					optional config_macf
 security/mac_vfs.c					optional config_macf
 security/mac_vfs_subr.c					optional config_macf

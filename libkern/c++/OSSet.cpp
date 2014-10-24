@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000, 2014 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -77,7 +77,7 @@ bool OSSet::initWithObjects(const OSObject *inObjects[],
 
     for ( unsigned int i = 0; i < inCount; i++ ) {
 // xx-review: no test here for failure of setObject()
-        if (members->getCount() < inCapacity)
+        if (members->getCount() < capacity)
             setObject(inObjects[i]);
         else
             return false;

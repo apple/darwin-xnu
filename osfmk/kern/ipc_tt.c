@@ -144,15 +144,8 @@ ipc_task_init(
 	task->itk_nself = nport;
 	task->itk_resume = IP_NULL; /* Lazily allocated on-demand */
 	task->itk_sself = ipc_port_make_send(kport);
+	task->itk_debug_control = IP_NULL;
 	task->itk_space = space;
-
-#if CONFIG_MACF_MACH
-	if (parent)
-		mac_task_label_associate(parent, task, &parent->maclabel,
-		    &task->maclabel, &kport->ip_label);
-	else
-		mac_task_label_associate_kernel(task, &task->maclabel, &kport->ip_label);
-#endif
 
 	if (parent == TASK_NULL) {
 		ipc_port_t port;
@@ -344,6 +337,9 @@ ipc_task_terminate(
 	if (IP_VALID(task->itk_task_access))
 		ipc_port_release_send(task->itk_task_access);
 
+	if (IP_VALID(task->itk_debug_control))
+		ipc_port_release_send(task->itk_debug_control);
+
 	for (i = 0; i < TASK_PORT_REGISTER_MAX; i++)
 		if (IP_VALID(task->itk_registered[i]))
 			ipc_port_release_send(task->itk_registered[i]);
@@ -407,7 +403,12 @@ ipc_task_reset(
 			old_exc_actions[i] = IP_NULL;
 		}
 	}/* for */
-
+	
+	if (IP_VALID(task->itk_debug_control)) {
+		ipc_port_release_send(task->itk_debug_control);
+	}
+	task->itk_debug_control = IP_NULL;
+	
 	itk_unlock(task);
 
 	/* release the naked send rights */
@@ -924,6 +925,10 @@ task_get_special_port(
 		port = ipc_port_copy_send(task->itk_task_access);
 		break;
 
+		case TASK_DEBUG_CONTROL_PORT:
+		port = ipc_port_copy_send(task->itk_debug_control);
+		break;
+
 	    default:
                itk_unlock(task);
 		return KERN_INVALID_ARGUMENT;
@@ -983,6 +988,11 @@ task_set_special_port(
 		whichp = &task->itk_task_access;
 		break;
 		
+	    case TASK_DEBUG_CONTROL_PORT: 
+		whichp = &task->itk_debug_control;
+		break;
+
+
 	    default:
 		return KERN_INVALID_ARGUMENT;
 	}/* switch */
@@ -999,13 +1009,6 @@ task_set_special_port(
 			itk_unlock(task);
 			return KERN_NO_ACCESS;
 	}
-
-#if CONFIG_MACF_MACH
-       if (mac_task_check_service(current_task(), task, "set_special_port")) {
-               itk_unlock(task);
-               return KERN_NO_ACCESS;
-       }
-#endif
 
 	old = *whichp;
 	*whichp = port;
@@ -1644,7 +1647,7 @@ thread_set_exception_ports(
 	 * VALID_THREAD_STATE_FLAVOR architecture dependent macro defined in
 	 * osfmk/mach/ARCHITECTURE/thread_status.h
 	 */
-	if (!VALID_THREAD_STATE_FLAVOR(new_flavor))
+	if (new_flavor != 0 && !VALID_THREAD_STATE_FLAVOR(new_flavor))
 		return (KERN_INVALID_ARGUMENT);
 
 	thread_mtx_lock(thread);
@@ -1712,6 +1715,14 @@ task_set_exception_ports(
 			return (KERN_INVALID_ARGUMENT);
 		}
 	}
+
+	/*
+	 * Check the validity of the thread_state_flavor by calling the
+	 * VALID_THREAD_STATE_FLAVOR architecture dependent macro defined in
+	 * osfmk/mach/ARCHITECTURE/thread_status.h
+	 */
+	if (new_flavor != 0 && !VALID_THREAD_STATE_FLAVOR(new_flavor))
+		return (KERN_INVALID_ARGUMENT);
 
 	itk_lock(task);
 
@@ -1808,6 +1819,9 @@ thread_swap_exception_ports(
 			return (KERN_INVALID_ARGUMENT);
 		}
 	}
+
+	if (new_flavor != 0 && !VALID_THREAD_STATE_FLAVOR(new_flavor))
+		return (KERN_INVALID_ARGUMENT);
 
 	thread_mtx_lock(thread);
 
@@ -1906,6 +1920,9 @@ task_swap_exception_ports(
 			return (KERN_INVALID_ARGUMENT);
 		}
 	}
+
+	if (new_flavor != 0 && !VALID_THREAD_STATE_FLAVOR(new_flavor))
+		return (KERN_INVALID_ARGUMENT);
 
 	itk_lock(task);
 

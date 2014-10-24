@@ -218,13 +218,13 @@ typedef uintptr_t (*iopa_proc_t)(iopa_t * a);
 
 enum
 {
-    kIOPageAllocChunkBytes = (PAGE_SIZE / 64),
     kIOPageAllocSignature  = 'iopa'
 };
 
 extern "C" void      iopa_init(iopa_t * a);
 extern "C" uintptr_t iopa_alloc(iopa_t * a, iopa_proc_t alloc, vm_size_t bytes, uint32_t balign);
 extern "C" uintptr_t iopa_free(iopa_t * a, uintptr_t addr, vm_size_t bytes);
+extern "C" uint32_t  gIOPageAllocChunkBytes;
 
 extern "C" iopa_t    gIOBMDPageAllocator;
 
@@ -232,6 +232,8 @@ extern "C" struct timeval gIOLastSleepTime;
 extern "C" struct timeval gIOLastWakeTime;
 
 extern clock_sec_t gIOConsoleLockTime;
+
+extern OSSet * gIORemoveOnReadProperties;
 
 extern "C" void IOKitResetTime( void );
 extern "C" void IOKitInitializeTime( void );

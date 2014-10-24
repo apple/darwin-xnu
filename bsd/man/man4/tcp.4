@@ -33,7 +33,7 @@
 .\"
 .\"     @(#)tcp.4	8.1 (Berkeley) 6/5/93
 .\"
-.Dd February 28, 2007
+.Dd April 16, 2014
 .Dt TCP 4
 .Os BSD 4.2
 .Sh NAME
@@ -185,6 +185,30 @@ connections. The default value is specified by the
 .Tn MIB
 variable
 .Va net.inet.tcp.keepinit .
+.It Dv TCP_KEEPINTVL
+When keepalive probes are enabled, this option will set the amount of time in seconds between successive keepalives sent to probe an unresponsive peer. 
+.It Dv TCP_KEEPCNT
+.Tn When keepalive probes are enabled, this option will set the number of times a keepalive probe should be repeated if the peer is not responding. After this many probes, the connection will be closed. 
+.It Dv TCP_SENDMOREACKS
+When a stream of 
+.Tn TCP
+data packets are received, OS X uses an algorithm to reduce the number of acknowlegements by generating a 
+.Tn TCP
+acknowlegement for 8 data packets instead of acknowledging every other data packet. When this socket option is enabled, the connection will always send a
+.Tn TCP
+acknowledgement for every other data packet.
+.It Dv TCP_ENABLE_ECN
+Using Explicit Congestion Notification (ECN) on
+.Tn TCP
+allows end-to-end notification of congestion without dropping packets. Conventionally TCP/IP networks signal congestion by dropping packets. When ECN is successfully negotiated, an ECN-aware router may set a mark in the IP header instead of dropping a packet in order to signal impending congestion. The 
+.Tn TCP
+receiver of the packet echoes congestion indication to the 
+.Tn TCP
+sender, which reduces it's transmission rate as if it detected a dropped packet. This will avoid unnecessary retransmissions and will improve latency by saving the time required for recovering a lost packet.
+.It Dv TCP_NOTSENT_LOWAT
+The send socket buffer of a
+.Tn TCP sender has unsent and unacknowledged data. This option allows a 
+.Tn TCP sender to control the amount of unsent data kept in the send socket buffer. The value of the option should be the maximum amount of unsent data in bytes. Kevent, poll and select will generate a write notification when the unsent data falls below the amount given by this option. This will allow an application to generate just-in-time fresh updates for real-time communication.
 .El
 .Pp
 The option level for the

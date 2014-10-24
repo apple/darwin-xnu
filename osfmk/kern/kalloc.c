@@ -72,7 +72,6 @@
 #include <kern/misc_protos.h>
 #include <kern/zalloc.h>
 #include <kern/kalloc.h>
-#include <kern/lock.h>
 #include <kern/ledger.h>
 #include <vm/vm_kern.h>
 #include <vm/vm_object.h>

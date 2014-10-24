@@ -754,6 +754,10 @@ kxld_seg_finish_init(KXLDSeg *seg)
             }
         }
 
+        /* XXX Cross architecture linking will fail if the page size ever differs
+         * from 4096.  (As of this writing, we're fine on i386, x86_64, arm, and
+         * arm64.)
+         */
         seg->vmsize = round_page(maxaddr + maxsize - seg->base_addr);
     }
 

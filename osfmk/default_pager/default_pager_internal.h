@@ -68,7 +68,7 @@
 #include <ipc/ipc_port.h>
 #include <ipc/ipc_types.h>
 #include <ipc/ipc_space.h>
-#include <kern/lock.h>
+#include <kern/locks.h>
 #include <kern/kalloc.h>
 #include <kern/thread.h>
 #include <vm/vm_kern.h>

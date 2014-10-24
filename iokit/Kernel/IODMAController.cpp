@@ -51,7 +51,14 @@ IODMAController *IODMAController::getController(IOService *provider, UInt32 dmaI
   // Find the name of the parent dma controller
   dmaParentData = OSDynamicCast(OSData, provider->getProperty("dma-parent"));
   if (dmaParentData == 0) return NULL;
-  dmaParentName = createControllerName(*(UInt32 *)dmaParentData->getBytesNoCopy());
+
+  if (dmaParentData->getLength() == sizeof(UInt32)) {
+  	dmaParentName = createControllerName(*(UInt32 *)dmaParentData->getBytesNoCopy());
+  } else {
+	if (dmaIndex >= dmaParentData->getLength() / sizeof(UInt32))
+	  panic("dmaIndex out of range");
+	dmaParentName = createControllerName(*(UInt32 *)dmaParentData->getBytesNoCopy(dmaIndex * sizeof(UInt32), sizeof(UInt32)));
+  }
   if (dmaParentName == 0) return NULL;
   
   // Wait for the parent dma controller

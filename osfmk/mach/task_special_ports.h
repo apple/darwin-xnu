@@ -88,6 +88,7 @@ typedef	int	task_special_port_t;
 
 #define TASK_ACCESS_PORT	9	/* Permission check for task_for_pid. */
 
+#define TASK_DEBUG_CONTROL_PORT 10 /* debug control port */
 
 /*
  *	Definitions for ease of use
@@ -108,6 +109,9 @@ typedef	int	task_special_port_t;
 #define task_get_bootstrap_port(task, port)	\
 		(task_get_special_port((task), TASK_BOOTSTRAP_PORT, (port)))
 
+#define task_get_debug_control_port(task, port) \
+		(task_get_special_port((task), TASK_DEBUG_CONTROL_PORT, (port)))
+
 #define task_set_bootstrap_port(task, port)	\
 		(task_set_special_port((task), TASK_BOOTSTRAP_PORT, (port)))
 
@@ -116,5 +120,8 @@ typedef	int	task_special_port_t;
 
 #define task_set_task_access_port(task, port)	\
 		(task_set_special_port((task), TASK_ACCESS_PORT, (port)))
+
+#define task_set_task_debug_control_port(task, port) \
+		(task_set_special_port((task), TASK_DEBUG_CONTROL_PORT, (port)))
 
 #endif	/* _MACH_TASK_SPECIAL_PORTS_H_ */

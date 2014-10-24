@@ -811,6 +811,10 @@ lapic_interrupt(int interrupt_num, x86_saved_state_t *state)
 #endif /* CONFIG_COUNTERS */
 		}
 		break;
+	case LAPIC_KICK_INTERRUPT:
+		_lapic_end_of_interrupt();
+		retval = 1;
+		break;
 	}
 
 	return retval;

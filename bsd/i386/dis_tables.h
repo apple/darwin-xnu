@@ -41,15 +41,9 @@
 extern "C" {
 #endif
 
-#if !defined(__APPLE__)
-#include <sys/types.h>
-#include <sys/inttypes.h>
-#include <sys/param.h>
-#else
 #include <sys/types.h>
 #include <stdint.h>
 #include <sys/param.h>
-#endif /* __APPLE__ */
 
 /*
  * values for cpu mode

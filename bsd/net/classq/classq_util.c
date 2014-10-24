@@ -259,14 +259,17 @@ mark_ecn(struct mbuf *m, struct pf_mtag *t, int flags)
 			otos = ip->ip_tos;
 			ip->ip_tos |= IPTOS_ECN_CE;
 			/*
-			 * update checksum (from RFC1624)
+			 * update checksum (from RFC1624) only if hw
+			 * checksum is not supported.
 			 *	   HC' = ~(~HC + ~m + m')
 			 */
-			sum = ~ntohs(ip->ip_sum) & 0xffff;
-			sum += (~otos & 0xffff) + ip->ip_tos;
-			sum = (sum >> 16) + (sum & 0xffff);
-			sum += (sum >> 16);  /* add carry */
-			ip->ip_sum = htons(~sum & 0xffff);
+			if (!(m->m_pkthdr.csum_flags & CSUM_DELAY_IP)) {
+				sum = ~ntohs(ip->ip_sum) & 0xffff;
+				sum += (~otos & 0xffff) + ip->ip_tos;
+				sum = (sum >> 16) + (sum & 0xffff);
+				sum += (sum >> 16);  /* add carry */
+				ip->ip_sum = htons(~sum & 0xffff);
+			}
 			return (1);
 		}
 		break;

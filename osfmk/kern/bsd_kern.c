@@ -35,7 +35,6 @@
 #include <kern/thread.h>
 #include <kern/task.h>
 #include <kern/spl.h>
-#include <kern/lock.h>
 #include <kern/ast.h>
 #include <ipc/ipc_port.h>
 #include <ipc/ipc_object.h>
@@ -60,9 +59,10 @@ boolean_t current_thread_aborted(void);
 void task_act_iterate_wth_args(task_t, void(*)(thread_t, void *), void *);
 kern_return_t get_signalact(task_t , thread_t *, int);
 int get_vmsubmap_entries(vm_map_t, vm_object_offset_t, vm_object_offset_t);
-void syscall_exit_funnelcheck(void);
-int fill_task_rusage_v2(task_t task, struct rusage_info_v2 *ri);
-
+int fill_task_rusage(task_t task, rusage_info_current *ri);
+int fill_task_io_rusage(task_t task, rusage_info_current *ri);
+int fill_task_qos_rusage(task_t task, rusage_info_current *ri);
+void fill_task_billed_usage(task_t task, rusage_info_current *ri);
 
 /*
  *
@@ -340,6 +340,34 @@ uint64_t get_task_resident_size(task_t task)
 	return((uint64_t)pmap_resident_count(map->pmap) * PAGE_SIZE_64);
 }
 
+uint64_t get_task_compressed(task_t task) 
+{
+	vm_map_t map;
+	
+	map = (task == kernel_task) ? kernel_map: task->map;
+	return((uint64_t)pmap_compressed(map->pmap) * PAGE_SIZE_64);
+}
+
+uint64_t get_task_resident_max(task_t task) 
+{
+	vm_map_t map;
+	
+	map = (task == kernel_task) ? kernel_map: task->map;
+	return((uint64_t)pmap_resident_max(map->pmap) * PAGE_SIZE_64);
+}
+
+uint64_t get_task_purgeable_size(task_t task) 
+{
+	vm_map_t map;
+    mach_vm_size_t  volatile_virtual_size;
+    mach_vm_size_t  volatile_resident_size;
+    mach_vm_size_t  volatile_pmap_size;
+	
+	map = (task == kernel_task) ? kernel_map: task->map;
+	vm_map_query_volatile(map, &volatile_virtual_size, &volatile_resident_size, &volatile_pmap_size);
+
+	return((uint64_t)volatile_resident_size);
+}
 /*
  *
  */
@@ -367,6 +395,19 @@ uint64_t get_task_phys_footprint_max(task_t task)
 	ret = ledger_get_maximum(task->ledger, task_ledgers.phys_footprint, &max);
 	if (KERN_SUCCESS == ret) {
 		return max;
+	}
+
+	return 0;
+}
+
+uint64_t get_task_cpu_time(task_t task)
+{
+	kern_return_t ret;
+	ledger_amount_t credit, debit;
+	
+	ret = ledger_get_entries(task->ledger, task_ledgers.cpu_time, &credit, &debit);
+	if (KERN_SUCCESS == ret) {
+		return (credit - debit);
 	}
 
 	return 0;
@@ -757,31 +798,19 @@ get_numthreads(task_t task)
 	return(task->thread_count);
 }
 
-void 
-syscall_exit_funnelcheck(void)
-{
-        thread_t thread;
-
-	thread = current_thread();
-
-        if (thread->funnel_lock)
-		panic("syscall exit with funnel held\n");
-}
-
-
 /*
  * Gather the various pieces of info about the designated task, 
  * and collect it all into a single rusage_info.
  */
 int
-fill_task_rusage_v2(task_t task, struct rusage_info_v2 *ri)
+fill_task_rusage(task_t task, rusage_info_current *ri)
 {
 	struct task_power_info powerinfo;
 
 	assert(task != TASK_NULL);
 	task_lock(task);
 
-	task_power_info_locked(task, &powerinfo);
+	task_power_info_locked(task, &powerinfo, NULL);
 	ri->ri_pkg_idle_wkups = powerinfo.task_platform_idle_wakeups;
 	ri->ri_interrupt_wkups = powerinfo.task_interrupt_wakeups;
 	ri->ri_user_time = powerinfo.total_user;
@@ -795,6 +824,66 @@ fill_task_rusage_v2(task_t task, struct rusage_info_v2 *ri)
 	                   (ledger_amount_t *)&ri->ri_wired_size);
 
 	ri->ri_pageins = task->pageins;
+
+	task_unlock(task);
+	return (0);
+}
+
+void
+fill_task_billed_usage(task_t task __unused, rusage_info_current *ri)
+{
+#if CONFIG_BANK
+	ri->ri_billed_system_time = bank_billed_time(task->bank_context);
+	ri->ri_serviced_system_time = bank_serviced_time(task->bank_context);
+#else
+	ri->ri_billed_system_time = 0;
+	ri->ri_serviced_system_time = 0;
+#endif
+}
+
+int
+fill_task_io_rusage(task_t task, rusage_info_current *ri)
+{
+	assert(task != TASK_NULL);
+	task_lock(task);
+
+	if (task->task_io_stats) {
+		ri->ri_diskio_bytesread = task->task_io_stats->disk_reads.size;
+		ri->ri_diskio_byteswritten = (task->task_io_stats->total_io.size - task->task_io_stats->disk_reads.size);
+	} else {
+		/* I/O Stats unavailable */
+		ri->ri_diskio_bytesread = 0;
+		ri->ri_diskio_byteswritten = 0;
+	}
+	task_unlock(task);
+	return (0);
+}
+
+int
+fill_task_qos_rusage(task_t task, rusage_info_current *ri)
+{
+	thread_t thread;
+
+	assert(task != TASK_NULL);
+	task_lock(task);
+
+	/* Rollup Qos time of all the threads to task */
+	queue_iterate(&task->threads, thread, thread_t, task_threads) {
+		if (thread->options & TH_OPT_IDLE_THREAD)
+			continue;
+
+		thread_mtx_lock(thread);
+		thread_update_qos_cpu_time(thread, TRUE);
+		thread_mtx_unlock(thread);
+		
+	}
+	ri->ri_cpu_time_qos_default = task->cpu_time_qos_stats.cpu_time_qos_default;
+	ri->ri_cpu_time_qos_maintenance = task->cpu_time_qos_stats.cpu_time_qos_maintenance;
+	ri->ri_cpu_time_qos_background = task->cpu_time_qos_stats.cpu_time_qos_background;
+	ri->ri_cpu_time_qos_utility = task->cpu_time_qos_stats.cpu_time_qos_utility;
+	ri->ri_cpu_time_qos_legacy = task->cpu_time_qos_stats.cpu_time_qos_legacy;
+	ri->ri_cpu_time_qos_user_initiated = task->cpu_time_qos_stats.cpu_time_qos_user_initiated;
+	ri->ri_cpu_time_qos_user_interactive = task->cpu_time_qos_stats.cpu_time_qos_user_interactive;
 
 	task_unlock(task);
 	return (0);

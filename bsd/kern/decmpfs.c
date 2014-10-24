@@ -1040,6 +1040,10 @@ static kern_return_t
 commit_upl(upl_t upl, upl_offset_t pl_offset, size_t uplSize, int flags, int abort)
 {
     kern_return_t kr = 0;
+
+#if CONFIG_IOSCHED
+    upl_unmark_decmp(upl);
+#endif /* CONFIG_IOSCHED */
     
     /* commit the upl pages */
     if (abort) {
@@ -1055,6 +1059,7 @@ commit_upl(upl_t upl, upl_offset_t pl_offset, size_t uplSize, int flags, int abo
     }
     return kr;
 }
+
 
 errno_t
 decmpfs_pagein_compressed(struct vnop_pagein_args *ap, int *is_compressed, decmpfs_cnode *cp)
@@ -1098,16 +1103,25 @@ decmpfs_pagein_compressed(struct vnop_pagein_args *ap, int *is_compressed, decmp
         err = ENOTSUP;
         goto out;
     }
-    
+
+#if CONFIG_IOSCHED
+	/* Mark the UPL as the requesting UPL for decompression */
+	upl_mark_decmp(pl);
+#endif /* CONFIG_IOSCHED */
+
     /* map the upl so we can fetch into it */
 	kern_return_t kr = ubc_upl_map(pl, (vm_offset_t*)&data);
 	if ((kr != KERN_SUCCESS) || (data == NULL)) {
+		err = ENOSPC;
+#if CONFIG_IOSCHED
+		upl_unmark_decmp(pl);
+#endif /* CONFIG_IOSCHED */		
 		goto out;
 	}
     
     uplPos = f_offset;
     uplSize = size;
-	
+
     /* clip the size to the size of the file */
     if ((uint64_t)uplPos + uplSize > cachedSize) {
         /* truncate the read to the size of the file */
@@ -1159,7 +1173,11 @@ decompress:
     if (did_read < total_size) {
         memset((char*)vec.buf + did_read, 0, total_size - did_read);
     }
-    
+   
+#if CONFIG_IOSCHED
+	upl_unmark_decmp(pl);
+#endif /* CONFIG_IOSCHED */	
+ 
 	kr = ubc_upl_unmap(pl); data = NULL; /* make sure to set data to NULL so we don't try to unmap again below */
     if (kr != KERN_SUCCESS)
         ErrorLog("ubc_upl_unmap error %d\n", (int)kr);
@@ -1299,8 +1317,8 @@ decmpfs_read_compressed(struct vnop_read_args *ap, int *is_compressed, decmpfs_c
         
         /* clip to max upl size */
         curUplSize = uplRemaining;
-        if (curUplSize > MAX_UPL_SIZE * PAGE_SIZE) {
-            curUplSize = MAX_UPL_SIZE * PAGE_SIZE;
+        if (curUplSize > MAX_UPL_SIZE_BYTES) {
+            curUplSize = MAX_UPL_SIZE_BYTES;
         }
         
         /* create the upl */
@@ -1311,10 +1329,18 @@ decmpfs_read_compressed(struct vnop_read_args *ap, int *is_compressed, decmpfs_c
             goto out;
         }
         VerboseLog("curUplPos %lld curUplSize %lld\n", (uint64_t)curUplPos, (uint64_t)curUplSize);
-		
+	
+#if CONFIG_IOSCHED
+	/* Mark the UPL as the requesting UPL for decompression */
+	upl_mark_decmp(upl);
+#endif /* CONFIG_IOSCHED */	
+
         /* map the upl */
         kr = ubc_upl_map(upl, (vm_offset_t*)&data);
         if (kr != KERN_SUCCESS) {
+
+	    commit_upl(upl, 0, curUplSize, UPL_ABORT_FREE_ON_EMPTY, 1);
+
             ErrorLog("ubc_upl_map error %d\n", (int)kr);
             err = EINVAL;
             goto out;
@@ -1322,6 +1348,9 @@ decmpfs_read_compressed(struct vnop_read_args *ap, int *is_compressed, decmpfs_c
         
         /* make sure the map succeeded */
         if (!data) {
+
+	    commit_upl(upl, 0, curUplSize, UPL_ABORT_FREE_ON_EMPTY, 1);
+
             ErrorLog("ubc_upl_map mapped null\n");
             err = EINVAL;
             goto out;
@@ -1395,11 +1424,12 @@ decmpfs_read_compressed(struct vnop_read_args *ap, int *is_compressed, decmpfs_c
         } else {
             ErrorLog("ubc_upl_unmap error %d\n", (int)kr);
         }
-        
+    
         uplRemaining -= curUplSize;
     }
     
 out:
+
     if (hdr) FREE(hdr, M_TEMP);
 	if (cmpdata_locked) decmpfs_unlock_compressed_data(cp, 0);
     if (err) {/* something went wrong */

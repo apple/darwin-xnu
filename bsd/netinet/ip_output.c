@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2013 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2014 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -122,6 +122,10 @@
 #define	KEYDEBUG(lev, arg)
 #endif
 #endif /* IPSEC */
+
+#if NECP
+#include <net/necp.h>
+#endif /* NECP */
 
 #if IPFIREWALL
 #include <netinet/ip_fw.h>
@@ -261,6 +265,11 @@ ip_output_list(struct mbuf *m0, int packetchain, struct mbuf *opt,
 	struct socket *so = NULL;
 	struct secpolicy *sp = NULL;
 #endif /* IPSEC */
+#if NECP
+	necp_kernel_policy_result necp_result = 0;
+	necp_kernel_policy_result_parameter necp_result_parameter;
+	necp_kernel_policy_id necp_matched_policy_id = 0;
+#endif /* NECP */
 #if IPFIREWALL
 	int ipfwoff;
 	struct sockaddr_in *next_hop_from_ipfwd_tag = NULL;
@@ -276,6 +285,9 @@ ip_output_list(struct mbuf *m0, int packetchain, struct mbuf *opt,
 #if IPSEC
 		struct ipsec_output_state ipsec_state;
 #endif /* IPSEC */
+#if NECP
+		struct route necp_route;
+#endif /* NECP */
 #if IPFIREWALL || DUMMYNET
 		struct ip_fw_args args;
 #endif /* IPFIREWALL || DUMMYNET */
@@ -288,6 +300,7 @@ ip_output_list(struct mbuf *m0, int packetchain, struct mbuf *opt,
 		struct ipf_pktopts ipf_pktopts;
 	} ipobz;
 #define	ipsec_state	ipobz.ipsec_state
+#define	necp_route	ipobz.necp_route
 #define	args		ipobz.args
 #define	sro_fwd		ipobz.sro_fwd
 #define	saved_route	ipobz.saved_route
@@ -299,12 +312,19 @@ ip_output_list(struct mbuf *m0, int packetchain, struct mbuf *opt,
 			boolean_t nocell : 1;		/* set once */
 			boolean_t isbroadcast : 1;
 			boolean_t didfilter : 1;
+			boolean_t noexpensive : 1;	/* set once */
+			boolean_t awdl_unrestricted : 1;	/* set once */
 #if IPFIREWALL_FORWARD
 			boolean_t fwd_rewrite_src : 1;
 #endif /* IPFIREWALL_FORWARD */
 		};
 		uint32_t raw;
 	} ipobf = { .raw = 0 };
+
+#define	IP_CHECK_RESTRICTIONS(_ifp, _ipobf) 				\
+	(((_ipobf).nocell && IFNET_IS_CELLULAR(_ifp)) ||		\
+	 ((_ipobf).noexpensive && IFNET_IS_EXPENSIVE(_ifp)) ||		\
+	 (!(_ipobf).awdl_unrestricted && IFNET_IS_AWDL_RESTRICTED(_ifp)))
 
 	KERNEL_DEBUG(DBG_FNC_IP_OUTPUT | DBG_FUNC_START, 0, 0, 0, 0, 0);
 
@@ -380,15 +400,15 @@ ipfw_tags_done:
 	if (ipsec_bypass == 0 && !(flags & IP_NOIPSEC)) {
 		/* If packet is bound to an interface, check bound policies */
 		if ((flags & IP_OUTARGS) && (ipoa != NULL) &&
-		    (ipoa->ipoa_flags & IPOAF_BOUND_IF) &&
-		    ipoa->ipoa_boundif != IFSCOPE_NONE) {
+			(ipoa->ipoa_flags & IPOAF_BOUND_IF) &&
+			ipoa->ipoa_boundif != IFSCOPE_NONE) {
 			if (ipsec4_getpolicybyinterface(m, IPSEC_DIR_OUTBOUND,
-			    &flags, ipoa, &sp) != 0)
+				&flags, ipoa, &sp) != 0)
 				goto bad;
 		}
 	}
 #endif /* IPSEC */
-
+	
 	VERIFY(ro != NULL);
 
 	if (ip_doscopedroute && (flags & IP_OUTARGS)) {
@@ -423,16 +443,30 @@ ipfw_tags_done:
 		}
 	}
 
-	if ((flags & IP_OUTARGS) && (ipoa->ipoa_flags & IPOAF_NO_CELLULAR)) {
-		ipobf.nocell = TRUE;
-		ipf_pktopts.ippo_flags |= IPPOF_NO_IFT_CELLULAR;
-	}
-
 	if (flags & IP_OUTARGS) {
+		if (ipoa->ipoa_flags & IPOAF_NO_CELLULAR) {
+			ipobf.nocell = TRUE;
+			ipf_pktopts.ippo_flags |= IPPOF_NO_IFT_CELLULAR;
+		}
+		if (ipoa->ipoa_flags & IPOAF_NO_EXPENSIVE) {
+			ipobf.noexpensive = TRUE;
+			ipf_pktopts.ippo_flags |= IPPOF_NO_IFF_EXPENSIVE;
+		}
+		if (ipoa->ipoa_flags & IPOAF_AWDL_UNRESTRICTED)
+			ipobf.awdl_unrestricted = TRUE;
 		adv = &ipoa->ipoa_flowadv;
 		adv->code = FADV_SUCCESS;
 		ipoa->ipoa_retflags = 0;
 	}
+	
+#if IPSEC
+	if (ipsec_bypass == 0 && !(flags & IP_NOIPSEC)) {
+		so = ipsec_getsocket(m);
+		if (so != NULL) {
+			(void) ipsec_setsocket(m, NULL);
+		}
+	}
+#endif /* IPSEC */
 
 #if DUMMYNET
 	if (args.fwa_ipfw_rule != NULL || args.fwa_pf_rule != NULL) {
@@ -450,12 +484,7 @@ ipfw_tags_done:
 			}
 			RT_UNLOCK(ro->ro_rt);
 		}
-#if IPSEC
-		if (ipsec_bypass == 0 && !(flags & IP_NOIPSEC)) {
-			so = ipsec_getsocket(m);
-			(void) ipsec_setsocket(m, NULL);
-		}
-#endif /* IPSEC */
+
 #if IPFIREWALL
 		if (args.fwa_ipfw_rule != NULL)
 			goto skip_ipsec;
@@ -464,13 +493,6 @@ ipfw_tags_done:
 			goto sendit;
 	}
 #endif /* DUMMYNET */
-
-#if IPSEC
-	if (ipsec_bypass == 0 && !(flags & IP_NOIPSEC)) {
-		so = ipsec_getsocket(m);
-		(void) ipsec_setsocket(m, NULL);
-	}
-#endif /* IPSEC */
 
 loopit:
 	ipobf.isbroadcast = FALSE;
@@ -654,12 +676,13 @@ loopit:
 			ia0 = in_selectsrcif(ip, ro, ifscope);
 
 			/*
-			 * If the source address belongs to a cellular interface
-			 * and the caller forbids our using interfaces of such
-			 * type, pretend that there is no route.
+			 * If the source address belongs to a restricted
+			 * interface and the caller forbids our using 
+			 * interfaces of such type, pretend that there is no
+			 * route.
 			 */
-			if (ipobf.nocell && ia0 != NULL &&
-			    IFNET_IS_CELLULAR(ia0->ifa_ifp)) {
+			if (ia0 != NULL && 
+			    IP_CHECK_RESTRICTIONS(ia0->ifa_ifp, ipobf)) {
 				IFA_REMREF(ia0);
 				ia0 = NULL;
 				error = EHOSTUNREACH;
@@ -751,13 +774,14 @@ loopit:
 				rtalloc_scoped_ign(ro, ign, ifscope);
 
 			/*
-			 * If the route points to a cellular interface and the
-			 * caller forbids our using interfaces of such type,
+			 * If the route points to a cellular/expensive interface 
+			 * and the caller forbids our using interfaces of such type,
 			 * pretend that there is no route.
 			 */
-			if (ipobf.nocell && ro->ro_rt != NULL) {
+			if (ro->ro_rt != NULL) {
 				RT_LOCK_SPIN(ro->ro_rt);
-				if (IFNET_IS_CELLULAR(ro->ro_rt->rt_ifp)) {
+				if (IP_CHECK_RESTRICTIONS(ro->ro_rt->rt_ifp,
+				    ipobf)) {
 					RT_UNLOCK(ro->ro_rt);
 					ROUTE_RELEASE(ro);
 					if (flags & IP_OUTARGS) {
@@ -867,11 +891,6 @@ loopit:
 			if (imo->imo_multicast_ifp != NULL)
 				ifp = imo->imo_multicast_ifp;
 			IMO_UNLOCK(imo);
-#if MROUTING
-			if (vif != -1 && (!(flags & IP_RAWOUTPUT) ||
-			    ip->ip_src.s_addr == INADDR_ANY))
-				ip->ip_src.s_addr = ip_mcast_src(vif);
-#endif /* MROUTING */
 		} else if (!(flags & IP_RAWOUTPUT)) {
 			vif = -1;
 			ip->ip_ttl = ttl;
@@ -977,39 +996,6 @@ loopit:
 			}
 			ip_mloopback(srcifp, ifp, m, dst, hlen);
 		}
-#if MROUTING
-		else {
-			/*
-			 * If we are acting as a multicast router, perform
-			 * multicast forwarding as if the packet had just
-			 * arrived on the interface to which we are about
-			 * to send.  The multicast forwarding function
-			 * recursively calls this function, using the
-			 * IP_FORWARDING flag to prevent infinite recursion.
-			 *
-			 * Multicasts that are looped back by ip_mloopback(),
-			 * above, will be forwarded by the ip_input() routine,
-			 * if necessary.
-			 */
-			if (ip_mrouter && !(flags & IP_FORWARDING)) {
-				/*
-				 * Check if rsvp daemon is running. If not,
-				 * don't set ip_moptions. This ensures that
-				 * the packet is multicast and not just sent
-				 * down one link as prescribed by rsvpd.
-				 */
-				if (!rsvp_on)
-					imo = NULL;
-				if (ip_mforward(ip, ifp, m, imo) != 0) {
-					m_freem(m);
-					if (inm != NULL)
-						INM_REMREF(inm);
-					OSAddAtomic(1, &ipstat.ips_cantforward);
-					goto done;
-				}
-			}
-		}
-#endif /* MROUTING */
 		if (inm != NULL)
 			INM_REMREF(inm);
 		/*
@@ -1178,28 +1164,63 @@ sendit:
 		ipf_unref();
 	}
 
+#if NECP
+	/* Process Network Extension Policy. Will Pass, Drop, or Rebind packet. */
+	necp_matched_policy_id = necp_ip_output_find_policy_match (m,
+		flags, (flags & IP_OUTARGS) ? ipoa : NULL, &necp_result, &necp_result_parameter);
+	if (necp_matched_policy_id) {
+		necp_mark_packet_from_ip(m, necp_matched_policy_id);
+		switch (necp_result) {
+			case NECP_KERNEL_POLICY_RESULT_PASS:
+				goto skip_ipsec;
+			case NECP_KERNEL_POLICY_RESULT_DROP:
+			case NECP_KERNEL_POLICY_RESULT_SOCKET_DIVERT:
+				/* Flow divert packets should be blocked at the IP layer */
+				error = EHOSTUNREACH;
+				goto bad;
+			case NECP_KERNEL_POLICY_RESULT_IP_TUNNEL: {
+				/* Verify that the packet is being routed to the tunnel */
+				struct ifnet *policy_ifp = necp_get_ifnet_from_result_parameter(&necp_result_parameter);
+				if (policy_ifp == ifp) {
+					goto skip_ipsec;
+				} else {
+					if (necp_packet_can_rebind_to_ifnet(m, policy_ifp, &necp_route, AF_INET)) {
+						/* Set ifp to the tunnel interface, since it is compatible with the packet */
+						ifp = policy_ifp;
+						ro = &necp_route;
+						goto skip_ipsec;
+					} else {
+						error = ENETUNREACH;
+						goto bad;
+					}
+				}
+				break;
+			}
+			default:
+				break;
+		}
+	}
+#endif /* NECP */
+	
 #if IPSEC
-	/* temporary for testing only: bypass ipsec alltogether */
-
 	if (ipsec_bypass != 0 || (flags & IP_NOIPSEC))
 		goto skip_ipsec;
 
 	KERNEL_DEBUG(DBG_FNC_IPSEC4_OUTPUT | DBG_FUNC_START, 0, 0, 0, 0, 0);
 
-	/* May have been set above if packet was bound */
 	if (sp == NULL) {
 		/* get SP for this packet */
-		if (so == NULL)
-			sp = ipsec4_getpolicybyaddr(m, IPSEC_DIR_OUTBOUND,
-			    flags, &error);
-		else
+		if (so != NULL) {
 			sp = ipsec4_getpolicybysock(m, IPSEC_DIR_OUTBOUND,
-			    so, &error);
-
+				so, &error);
+		} else {
+			sp = ipsec4_getpolicybyaddr(m, IPSEC_DIR_OUTBOUND,
+				flags, &error);
+		}
 		if (sp == NULL) {
 			IPSEC_STAT_INCREMENT(ipsecstat.out_inval);
 			KERNEL_DEBUG(DBG_FNC_IPSEC4_OUTPUT | DBG_FUNC_END,
-			    0, 0, 0, 0, 0);
+						 0, 0, 0, 0, 0);
 			goto bad;
 		}
 	}
@@ -1236,8 +1257,6 @@ sendit:
 		if (sp->ipsec_if) {
 			/* Verify the redirect to ipsec interface */
 			if (sp->ipsec_if == ifp) {
-				/* Set policy for mbuf */
-				m->m_pkthdr.ipsec_policy = sp->id;
 				goto skip_ipsec;
 			}
 			goto bad;
@@ -1697,9 +1716,8 @@ pass:
 	    ((ntohl(ip->ip_src.s_addr) >> IN_CLASSA_NSHIFT) == IN_LOOPBACKNET ||
 	    (ntohl(ip->ip_dst.s_addr) >> IN_CLASSA_NSHIFT) == IN_LOOPBACKNET)) {
 		OSAddAtomic(1, &ipstat.ips_badaddr);
-		m_freem(m);
 		error = EADDRNOTAVAIL;
-		goto done;
+		goto bad;
 	}
 
 	ip_output_checksum(ifp, m, (IP_VHL_HL(ip->ip_vhl) << 2),
@@ -1741,6 +1759,10 @@ pass:
 
 			error = dlil_output(ifp, PF_INET, m, ro->ro_rt,
 			    SA(dst), 0, adv);
+			if (dlil_verbose && error) {
+				printf("dlil_output error on interface %s: %d\n",
+					ifp->if_xname, error);
+			}
 			scnt = 0;
 			goto done;
 		} else {
@@ -1763,6 +1785,10 @@ sendchain:
 
 				error = dlil_output(ifp, PF_INET, packetlist,
 				    ro->ro_rt, SA(dst), 0, adv);
+				if (dlil_verbose && error) {
+					printf("dlil_output error on interface %s: %d\n",
+					ifp->if_xname, error);
+				}
 				pktcnt = 0;
 				scnt = 0;
 				bytecnt = 0;
@@ -1834,6 +1860,10 @@ sendchain:
 			}
 			error = dlil_output(ifp, PF_INET, m, ro->ro_rt,
 			    SA(dst), 0, adv);
+			if (dlil_verbose && error) {
+				printf("dlil_output error on interface %s: %d\n",
+					   ifp->if_xname, error);
+			}
 		} else {
 			m_freem(m);
 		}
@@ -1855,6 +1885,9 @@ done:
 		key_freesp(sp, KEY_SADB_UNLOCKED);
 	}
 #endif /* IPSEC */
+#if NECP
+	ROUTE_RELEASE(&necp_route);
+#endif /* NECP */
 #if DUMMYNET
 	ROUTE_RELEASE(&saved_route);
 #endif /* DUMMYNET */
@@ -1865,7 +1898,9 @@ done:
 	KERNEL_DEBUG(DBG_FNC_IP_OUTPUT | DBG_FUNC_END, error, 0, 0, 0, 0);
 	return (error);
 bad:
-	m_freem(m0);
+	if (pktcnt > 0)
+		m0 = packetlist;
+	m_freem_list(m0);
 	goto done;
 
 #undef ipsec_state
@@ -1873,6 +1908,7 @@ bad:
 #undef sro_fwd
 #undef saved_route
 #undef ipf_pktopts
+#undef IP_CHECK_RESTRICTIONS
 }
 
 int
@@ -2509,7 +2545,7 @@ ip_ctloutput(struct socket *so, struct sockopt *sopt)
 			int priv;
 			struct mbuf *m;
 			int optname;
-
+			
 			if ((error = soopt_getm(sopt, &m)) != 0) /* XXX */
 				break;
 			if ((error = soopt_mcopyin(sopt, m)) != 0) /* XXX */
@@ -2595,7 +2631,7 @@ ip_ctloutput(struct socket *so, struct sockopt *sopt)
 				break;
 
 			/* once set, it cannot be unset */
-			if (!optval && (inp->inp_flags & INP_NO_IFT_CELLULAR)) {
+			if (!optval && INP_NO_CELLULAR(inp)) {
 				error = EINVAL;
 				break;
 			}
@@ -2696,19 +2732,7 @@ ip_ctloutput(struct socket *so, struct sockopt *sopt)
 
 #if IPSEC
 		case IP_IPSEC_POLICY: {
-			struct mbuf *m = NULL;
-			caddr_t req = NULL;
-			size_t len = 0;
-
-			if (m != NULL) {
-				req = mtod(m, caddr_t);
-				len = m->m_len;
-			}
-			error = ipsec4_get_policy(sotoinpcb(so), req, len, &m);
-			if (error == 0)
-				error = soopt_mcopyout(sopt, m); /* XXX */
-			if (error == 0)
-				m_freem(m);
+			error = 0; /* This option is no longer supported */
 			break;
 		}
 #endif /* IPSEC */
@@ -2730,7 +2754,7 @@ ip_ctloutput(struct socket *so, struct sockopt *sopt)
 			break;
 
 		case IP_NO_IFT_CELLULAR:
-			optval = (inp->inp_flags & INP_NO_IFT_CELLULAR) ? 1 : 0;
+			optval = INP_NO_CELLULAR(inp) ? 1 : 0;
 			error = sooptcopyout(sopt, &optval, sizeof (optval));
 			break;
 

@@ -145,7 +145,5 @@ typedef __int64_t		user32_off_t __attribute__((aligned(4)));
 /* This defines the size of syscall arguments after copying into the kernel: */
 typedef u_int64_t		syscall_arg_t;
 
-#include <sys/_types/___offsetof.h>
-
 #endif /* __ASSEMBLER__ */
 #endif	/* _MACHTYPES_H_ */

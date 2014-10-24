@@ -72,9 +72,7 @@ struct test_entry   g_tests[] =
 	{1, &access_chmod_fchmod_test, NULL, "access, chmod, fchmod"},
 	{1, &chown_fchown_lchown_lstat_symlink_test, NULL, "chown, fchown, lchown, lstat, readlink, symlink"},
 	{1, &fs_stat_tests, NULL, "fstatfs, getfsstat, statfs, fstatfs64, getfsstat64, statfs64"},
-#if !TARGET_OS_EMBEDDED
 	{1, &statfs_32bit_inode_tests, NULL, "32-bit inode versions: fstatfs, getfsstat, statfs"},
-#endif
 	{1, &getpid_getppid_pipe_test, NULL, "getpid, getppid, pipe"},
 	{1, &uid_tests, NULL, "getauid, gettid, getuid, geteuid, issetugid, setaudit_addr, seteuid, settid, settid_with_pid, setuid"},
 	{1, &mkdir_rmdir_umask_test, NULL, "mkdir, rmdir, umask"},
@@ -102,10 +100,8 @@ struct test_entry   g_tests[] =
 	{1, &quotactl_test, NULL, "quotactl"},
 	{1, &limit_tests, NULL, "getrlimit, setrlimit"},
 	{1, &directory_tests, NULL, "getattrlist, getdirentriesattr, setattrlist"},
-#if !TARGET_OS_EMBEDDED
 	{1, &getdirentries_test, NULL, "getdirentries"},
 	{1, &exchangedata_test, NULL, "exchangedata"},
-#endif
 	{1, &searchfs_test, NULL, "searchfs"},
 	{1, &sema2_tests, NULL, "sem_close, sem_open, sem_post, sem_trywait, sem_unlink, sem_wait"},
 	{1, &sema_tests, NULL, "semctl, semget, semop"},
@@ -122,11 +118,16 @@ struct test_entry   g_tests[] =
 	{1, &atomic_fifo_queue_test, NULL, "OSAtomicFifoEnqueue, OSAtomicFifoDequeue"},
 #endif
 	{1, &sched_tests, NULL, "Scheduler tests"},
-#if TARGET_OS_EMBEDDED
-	{1, &content_protection_test, NULL, "Content protection tests"},
-#endif
 	{1, &pipes_test, NULL, "Pipes tests"},
 	{1, &kaslr_test, NULL, "KASLR tests"},
+	{1, &getattrlistbulk_test, NULL, "getattrlistbulk"},
+	{1, &openat_close_test, NULL, "openat, fpathconf, fstatat, close"},
+	{1, &linkat_fstatat_unlinkat_test, NULL, "linkat, statat, unlinkat"},
+	{1, &faccessat_fchmodat_fchmod_test, NULL, "faccessat, fchmodat, fchmod"},
+	{1, &fchownat_fchown_symlinkat_test, NULL, "fchownat, symlinkat, readlinkat"},
+	{1, &mkdirat_unlinkat_umask_test, NULL, "mkdirat, unlinkat, umask"},
+	{1, &renameat_test, NULL, "renameat, fstatat"},
+	{1, &set_exception_ports_test, NULL, "thread_set_exception_ports, task_set_exception_ports, host_set_exception_ports"},
 	{0, NULL, NULL, "last one"}
 };
 
@@ -135,9 +136,7 @@ static void list_all_tests( void );
 static void mark_tests_to_run( long my_start, long my_end );
 static int parse_tests_to_run( int argc, const char * argv[], int * indexp );
 static void usage( void );
-#if !TARGET_OS_EMBEDDED
 static int setgroups_if_single_user(void);
-#endif
 static const char *current_arch( void );
 
 /* globals */
@@ -295,12 +294,10 @@ g_testbots_active = 1;
 		printf("[TEST] xnu_quick_test \n");	/* Declare the beginning of test suite */
 	}
 
-#if !TARGET_OS_EMBEDDED    
 	/* Populate groups list if we're in single user mode */
 	if (setgroups_if_single_user()) {
 		return 1;
 	}
-#endif
 	if ( list_the_tests != 0 ) {
 		list_all_tests( );
 		return 0;
@@ -555,7 +552,6 @@ static void usage( void )
 
 } /* usage */
 
-#if !TARGET_OS_EMBEDDED
 /* This is a private API between Libinfo, Libc, and the DirectoryService daemon.
  * Since we are trying to determine if an external provider will back group
  * lookups, we can use this, without relying on additional APIs or tools
@@ -612,7 +608,6 @@ setgroups_if_single_user(void)
 
 	return retval;
 }
-#endif
 
 static const char *current_arch( void )
 {

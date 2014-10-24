@@ -94,10 +94,6 @@
 #include <vm/vm_map.h>
 #endif
 
-#if CONFIG_MACF_MACH
-#include <security/mac_mach_internal.h>
-#endif
-
 int ipc_mqueue_full;		/* address is event for queue space */
 int ipc_mqueue_rcv;		/* address is event for message arrival */
 
@@ -724,11 +720,6 @@ ipc_mqueue_receive_on_thread(
 	wait_result_t           wresult;
 	uint64_t		deadline;
 	spl_t                   s;
-#if CONFIG_MACF_MACH
-	ipc_labelh_t lh;
-	task_t task;
-	int rc;
-#endif
 
 	s = splsched();
 	imq_lock(mqueue);
@@ -798,21 +789,6 @@ ipc_mqueue_receive_on_thread(
 			 */
 			ipc_mqueue_select_on_thread(port_mq, option, max_size, thread);
 			imq_unlock(port_mq);
-#if CONFIG_MACF_MACH
-			if (thread->task != TASK_NULL &&
-			    thread->ith_kmsg != NULL &&
-			    thread->ith_kmsg->ikm_sender != NULL) {
-				lh = thread->ith_kmsg->ikm_sender->label;
-				tasklabel_lock(thread->task);
-				ip_lock(lh->lh_port);
-				rc = mac_port_check_receive(&thread->task->maclabel,
-                                                            &lh->lh_label);
-				ip_unlock(lh->lh_port);
-				tasklabel_unlock(thread->task);
-				if (rc)
-					thread->ith_state = MACH_RCV_INVALID_DATA;
-			}
-#endif
 			splx(s);
 			return THREAD_NOT_WAITING;
 			
@@ -827,21 +803,6 @@ ipc_mqueue_receive_on_thread(
 		if (ipc_kmsg_queue_first(kmsgs) != IKM_NULL) {
 			ipc_mqueue_select_on_thread(mqueue, option, max_size, thread);
 			imq_unlock(mqueue);
-#if CONFIG_MACF_MACH
-			if (thread->task != TASK_NULL &&
-			    thread->ith_kmsg != NULL &&
-			    thread->ith_kmsg->ikm_sender != NULL) {
-				lh = thread->ith_kmsg->ikm_sender->label;
-				tasklabel_lock(thread->task);
-				ip_lock(lh->lh_port);
-				rc = mac_port_check_receive(&thread->task->maclabel,
-                                                            &lh->lh_label);
-				ip_unlock(lh->lh_port);
-				tasklabel_unlock(thread->task);
-				if (rc)
-					thread->ith_state = MACH_RCV_INVALID_DATA;
-			}
-#endif
 			splx(s);
 			return THREAD_NOT_WAITING;
 		}

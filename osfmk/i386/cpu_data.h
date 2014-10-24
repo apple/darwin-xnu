@@ -43,6 +43,7 @@
 #include <pexpert/pexpert.h>
 #include <mach/i386/thread_status.h>
 #include <mach/i386/vm_param.h>
+#include <i386/locks.h>
 #include <i386/rtclock_protos.h>
 #include <i386/pmCPU.h>
 #include <i386/cpu_topology.h>
@@ -59,6 +60,7 @@
 struct cpu_cons_buffer;
 struct cpu_desc_table;
 struct mca_state;
+struct prngContext;
 
 /*
  * Data structures embedded in per-cpu data:
@@ -238,6 +240,7 @@ typedef struct cpu_data
 #if CONFIG_MCA
 	struct mca_state	*cpu_mca_state;		/* State at MC fault */
 #endif
+	struct prngContext	*cpu_prng;		/* PRNG's context */
  	int			cpu_type;
  	int			cpu_subtype;
  	int			cpu_threadtype;

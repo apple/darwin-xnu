@@ -278,8 +278,11 @@ L_dispatch_U32_after_fault:
 	mov	R64_TRAPFN(%r15), %rdx		/* %rdx := trapfn for later */
 
 L_common_dispatch:
-	cld		 /* Ensure the direction flag is clear in the kernel */
-
+	cld		/* Ensure the direction flag is clear in the kernel */
+	cmpl    $0, EXT(pmap_smap_enabled)(%rip)
+	je	1f
+	clac		/* Clear EFLAGS.AC if SMAP is present/enabled */
+1:
 	/*
 	 * On entering the kernel, we don't need to switch cr3
 	 * because the kernel shares the user's address space.
@@ -293,36 +296,37 @@ L_common_dispatch:
 	mov	%gs:CPU_KERNEL_CR3, %rcx
 	mov	%rcx, %gs:CPU_ACTIVE_CR3
 	test	$3, %esi			/* user/kernel? */
-	jz	1f				/* skip cr3 reload from kernel */
+	jz	2f				/* skip cr3 reload from kernel */
 	xor	%rbp, %rbp
 	cmpl	$0, EXT(no_shared_cr3)(%rip)
-	je	1f
+	je	2f
 	mov	%rcx, %cr3			/* load kernel cr3 */
-	jmp	2f				/* and skip tlb flush test */
-1:
+	jmp	4f				/* and skip tlb flush test */
+2:
 	mov	%gs:CPU_ACTIVE_CR3+4, %rcx
 	shr	$32, %rcx
 	testl	%ecx, %ecx
-	jz	2f
+	jz	4f
 	movl	$0, %gs:CPU_TLB_INVALID
 	testl	$(1<<16), %ecx			/* Global? */
-	jz	11f
+	jz	3f
 	mov	%cr4, %rcx	/* RMWW CR4, for lack of an alternative*/
 	and	$(~CR4_PGE), %rcx
 	mov	%rcx, %cr4
 	or	$(CR4_PGE), %rcx
 	mov	%rcx, %cr4
-	jmp	2f
-
-11:	mov	%cr3, %rcx
+	jmp	4f
+3:
+	mov	%cr3, %rcx
 	mov	%rcx, %cr3
-2:
+4:
 	mov	%gs:CPU_ACTIVE_THREAD, %rcx	/* Get the active thread */
+	movl	$-1, TH_IOTIER_OVERRIDE(%rcx)	/* Reset IO tier override to -1 before handling trap */
 	cmpq	$0, TH_PCB_IDS(%rcx)	/* Is there a debug register state? */
-	je	3f
+	je	5f
 	xor	%ecx, %ecx		/* If so, reset DR7 (the control) */
 	mov	%rcx, %dr7
-3:
+5:
 	incl	%gs:hwIntCnt(,%ebx,4)		// Bump the trap/intr count
 	/* Dispatch the designated handler */
 	jmp	*%rdx
@@ -393,7 +397,7 @@ L_32bit_return:
 	je	1f
 	cli
 	POSTCODE2(0x6432)
-	CCALL1(panic_idt64, %rsp)
+	CCALL1(panic_idt64, %r15)
 1:
 #endif /* DEBUG_IDT64 */
 
@@ -559,6 +563,7 @@ Entry(idt64_mdep_scall)
 	pushq	$(MACHDEP_INT)
 	jmp	L_32bit_entry_check
 
+/* Programmed into MSR_IA32_LSTAR by mp_desc.c */
 Entry(hi64_syscall)
 Entry(idt64_syscall)
 L_syscall_continue:
@@ -1014,6 +1019,7 @@ Entry(hndl_alltraps)
 
 	/* Check for active vtimers in the current task */
 	mov	%gs:CPU_ACTIVE_THREAD, %rcx
+	movl	$-1, TH_IOTIER_OVERRIDE(%rcx)	/* Reset IO tier override to -1 before handling trap/exception */
 	mov	TH_TASK(%rcx), %rbx
 	TASK_VTIMER_CHECK(%rbx, %rcx)
 
@@ -1027,7 +1033,7 @@ Entry(hndl_alltraps)
 
 Entry(return_from_trap)
 	movq	%gs:CPU_ACTIVE_THREAD,%r15	/* Get current thread */
-	movl	$-1, TH_IOTIER_OVERRIDE(%r15)	/* Clear IO tier override before returning to userspace */
+	movl	$-1, TH_IOTIER_OVERRIDE(%r15)	/* Reset IO tier override to -1 before returning to userspace */
 	cmpl	$0, TH_RWLOCK_COUNT(%r15)	/* Check if current thread has pending RW locks held */
 	jz	1f
 	xorq	%rbp, %rbp		/* clear framepointer */
@@ -1352,6 +1358,7 @@ Entry(hndl_syscall)
 	TIME_TRAP_UENTRY
 
 	movq	%gs:CPU_ACTIVE_THREAD,%rcx	/* get current thread     */
+	movl	$-1, TH_IOTIER_OVERRIDE(%rcx)	/* Reset IO tier override to -1 before handling syscall */
 	movq	TH_TASK(%rcx),%rbx		/* point to current task  */
 
 	/* Check for active vtimers in the current task */

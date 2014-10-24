@@ -56,13 +56,11 @@ make_runmode(thread_t thread)
 	 */
 	const int mode = chudxnu_thread_get_scheduler_state(thread);
 	
-#if !TARGET_OS_EMBEDDED
 	if( 0 == mode)
 	{
 		return (chudxnu_thread_get_idle(thread) ? TH_IDLE : TH_IDLE_N);
 	}
 	else
-#endif
 	{
 		// Today we happen to know there's a one-to-one mapping.
 		return ((mode & 0xffff) | ((~mode & 0xffff) << 16));
@@ -218,11 +216,9 @@ typedef enum { // Target Thread State - can be OR'd
 extern "C" AppleProfileTriggerClientThreadRunMode AppleProfileGetRunModeOfThread(thread_t thread) {	
 	const int mode = chudxnu_thread_get_scheduler_state(thread);
 	
-#if !TARGET_OS_EMBEDDED
 	if (0 == mode) {
 		return (chudxnu_thread_get_idle(thread) ? kAppleProfileTriggerClientThreadModeIdle : kAppleProfileTriggerClientThreadModeNotIdle);
 	} else
-#endif
 	return (AppleProfileTriggerClientThreadRunMode)((mode & 0xffff) | ((~mode & 0xffff) << 16)); // Today we happen to know there's a one-to-one mapping.
 }
 

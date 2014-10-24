@@ -151,4 +151,21 @@ typedef struct thread_identifier_info  *thread_identifier_info_t;
 #define THREAD_SCHED_RR_INFO		11
 #define THREAD_SCHED_FIFO_INFO		12
 
+#define IO_NUM_PRIORITIES	4
+
+struct io_stat_entry {
+	uint64_t	count;
+	uint64_t	size;
+};
+
+struct io_stat_info {
+	struct io_stat_entry    disk_reads;
+	struct io_stat_entry    io_priority[IO_NUM_PRIORITIES];
+	struct io_stat_entry    paging;
+	struct io_stat_entry    metadata;
+	struct io_stat_entry    total_io;
+};
+
+typedef struct io_stat_info *io_stat_info_t;
+
 #endif	/* _MACH_THREAD_INFO_H_ */

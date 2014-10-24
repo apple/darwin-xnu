@@ -60,11 +60,13 @@ struct sfbstats {
 	u_int64_t		null_flowid;
 	u_int64_t		flow_controlled;
 	u_int64_t		flow_feedback;
+	u_int64_t		dequeue_stall;
 };
 
 struct sfbbinstats {
 	int16_t		pmark;		/* marking probability in Q format */
 	u_int16_t	pkts;		/* number of packets */
+	u_int32_t	bytes;		/* number of bytes */
 };
 
 struct sfb_stats {
@@ -72,6 +74,11 @@ struct sfb_stats {
 	u_int32_t		dropthresh;
 	u_int32_t		clearpkts;
 	u_int32_t		current;
+	u_int64_t		target_qdelay;
+	u_int64_t		update_interval;
+	u_int64_t		min_estdelay;
+	u_int32_t		delay_fcthreshold;
+	u_int32_t		flags;
 	struct sfbstats		sfbstats;
 	struct sfbbins {
 		struct sfbbinstats stats[SFB_LEVELS][SFB_BINS];
@@ -95,10 +102,12 @@ struct sfb_fcl {
 #define	SFBF_ECN6	0x02	/* use packet marking for IPv6 packets */
 #define	SFBF_ECN	(SFBF_ECN4 | SFBF_ECN6)
 #define	SFBF_FLOWCTL	0x04	/* enable flow control advisories */
+#define	SFBF_DELAYBASED	0x08	/* queueing is delay based */
+#define	SFBF_DELAYHIGH	0x10	/* Estimated delay is greater than target */
 #define	SFBF_SUSPENDED	0x1000	/* queue is suspended */
 
 #define	SFBF_USERFLAGS							\
-	(SFBF_ECN4 | SFBF_ECN6 | SFBF_FLOWCTL)
+	(SFBF_ECN4 | SFBF_ECN6 | SFBF_FLOWCTL | SFBF_DELAYBASED)
 
 typedef struct sfb {
 	/* variables for internal use */
@@ -109,9 +118,18 @@ typedef struct sfb {
 	u_int16_t	sfb_drop_thresh;
 	u_int32_t	sfb_clearpkts;
 	u_int64_t	sfb_eff_rate;	/* last known effective rate */
-	struct timespec	sfb_getqtime;	/* last dequeue timestamp */
+	struct timespec sfb_getqtime;	/* last dequeue timestamp */
 	struct timespec	sfb_holdtime;	/* random holdtime in nsec */
 	struct ifnet	*sfb_ifp;	/* back pointer to ifnet */
+
+	/* target queue delay and interval for queue sizing */
+	u_int64_t	sfb_target_qdelay;
+	struct timespec	sfb_update_interval;
+	u_int64_t	sfb_fc_threshold; /* for flow control feedback */ 
+
+	/* variables for computing estimated delay of the queue */
+	u_int64_t	sfb_min_qdelay;
+	struct timespec	sfb_update_time;
 
 	/* moving hash function */
 	struct timespec	sfb_hinterval;	/* random reset interval in sec */

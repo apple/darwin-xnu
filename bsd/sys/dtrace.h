@@ -89,6 +89,7 @@ extern "C" {
 #endif
 
 #include <sys/types.h>
+#include <sys/param.h>
 #include <stdint.h>
 
 #ifndef NULL
@@ -335,6 +336,7 @@ typedef enum dtrace_probespec {
 #if defined(__APPLE__)
 #define DIF_VAR_PTHREAD_SELF	0x0200	/* Apple specific PTHREAD_SELF (Not currently supported!) */
 #define DIF_VAR_DISPATCHQADDR	0x0201	/* Apple specific dispatch queue addr */
+#define DIF_VAR_MACHTIMESTAMP	0x0202	/* mach_absolute_timestamp() */
 #endif /* __APPLE __ */
 
 #define	DIF_SUBR_RAND			0
@@ -381,13 +383,15 @@ typedef enum dtrace_probespec {
 #define	DIF_SUBR_INET_NTOP		41
 #define	DIF_SUBR_INET_NTOA		42
 #define	DIF_SUBR_INET_NTOA6		43
+#define	DIF_SUBR_TOUPPER		44
+#define	DIF_SUBR_TOLOWER		45
 #if !defined(__APPLE__)
 
-#define DIF_SUBR_MAX			43      /* max subroutine value */
+#define DIF_SUBR_MAX			45      /* max subroutine value */
 #else
-#define DIF_SUBR_COREPROFILE	44
+#define DIF_SUBR_COREPROFILE		46
 
-#define DIF_SUBR_MAX			44      /* max subroutine value */
+#define DIF_SUBR_MAX			46      /* max subroutine value */
 #endif /* __APPLE__ */
 
 typedef uint32_t dif_instr_t;
@@ -497,6 +501,8 @@ typedef struct dtrace_difv {
 #define DTRACEACT_PRINTF                3       /* printf() action */
 #define DTRACEACT_PRINTA                4       /* printa() action */
 #define DTRACEACT_LIBACT                5       /* library-controlled action */
+#define DTRACEACT_TRACEMEM              6       /* tracemem() action */
+#define DTRACEACT_TRACEMEM_DYNSIZE      7       /* dynamic tracemem() size */
 
 #if defined(__APPLE__)
 #define DTRACEACT_APPLEBINARY           50      /* Apple DT perf. tool action */
@@ -1138,11 +1144,14 @@ typedef struct dtrace_fmtdesc {
 #define	DTRACEOPT_AGGSORTREV	24	/* reverse-sort aggregations */
 #define	DTRACEOPT_AGGSORTPOS	25	/* agg. position to sort on */
 #define	DTRACEOPT_AGGSORTKEYPOS	26	/* agg. key position to sort on */
+#define	DTRACEOPT_AGGHIST	27 	/* histogram aggregation output */
+#define	DTRACEOPT_AGGPACK	28 	/* packed aggregation output */
+#define	DTRACEOPT_AGGZOOM	29 	/* zoomed aggregation scaling */
 #if !defined(__APPLE__)
-#define DTRACEOPT_MAX           27      /* number of options */
+#define DTRACEOPT_MAX           30      /* number of options */
 #else
-#define DTRACEOPT_STACKSYMBOLS  27      /* clear to prevent stack symbolication */
-#define DTRACEOPT_MAX           28      /* number of options */
+#define DTRACEOPT_STACKSYMBOLS  30      /* clear to prevent stack symbolication */
+#define DTRACEOPT_MAX           31      /* number of options */
 #endif /* __APPLE__ */
 
 #define	DTRACEOPT_UNSET		(dtrace_optval_t)-2	/* unset option */
@@ -1383,11 +1392,12 @@ typedef struct dtrace_providerdesc {
 #define DTRACEIOC_REPLICATE     (DTRACEIOC | 18)        /* replicate enab */
 #define DTRACEIOC_MODUUIDSLIST	(DTRACEIOC | 30)	/* APPLE ONLY, query for modules with missing symbols */
 #define DTRACEIOC_PROVMODSYMS	(DTRACEIOC | 31)	/* APPLE ONLY, provide missing symbols for a given module */
-	
+#define DTRACEIOC_PROCWAITFOR	(DTRACEIOC | 32)	/* APPLE ONLY, wait for process exec */
+
 /*
  * The following structs are used to provide symbol information to the kernel from userspace.
  */
-	
+
 typedef struct dtrace_symbol {
 	uint64_t	dtsym_addr;			/* address of the symbol */
 	uint64_t	dtsym_size;			/* size of the symbol, must be uint64_t to maintain alignment when called by 64b uproc in i386 kernel */
@@ -1399,15 +1409,20 @@ typedef struct dtrace_module_symbols {
 	uint64_t	dtmodsyms_count;
 	dtrace_symbol_t	dtmodsyms_symbols[1];
 } dtrace_module_symbols_t;
-	
+
 #define DTRACE_MODULE_SYMBOLS_SIZE(count) (sizeof(dtrace_module_symbols_t) + ((count - 1) * sizeof(dtrace_symbol_t)))
-		
+
 typedef struct dtrace_module_uuids_list {
 	uint64_t	dtmul_count;
 	UUID		dtmul_uuid[1];
 } dtrace_module_uuids_list_t;
-		
+
 #define DTRACE_MODULE_UUIDS_LIST_SIZE(count) (sizeof(dtrace_module_uuids_list_t) + ((count - 1) * sizeof(UUID)))
+
+typedef struct dtrace_procdesc {
+	char		p_comm[MAXCOMLEN+1];
+	pid_t		p_pid;
+} dtrace_procdesc_t;
 
 #endif /* __APPLE__ */
 

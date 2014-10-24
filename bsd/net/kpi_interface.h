@@ -50,11 +50,7 @@
 #ifdef XNU_KERNEL_PRIVATE
 #define	KPI_INTERFACE_EMBEDDED 0
 #else
-#if TARGET_OS_EMBEDDED
-#define	KPI_INTERFACE_EMBEDDED 1
-#else
 #define	KPI_INTERFACE_EMBEDDED 0
-#endif
 #endif
 
 struct timeval;
@@ -67,6 +63,7 @@ struct ifnet_demux_desc;
 /*!
 	@enum Interface Families
 	@abstract Constants defining interface families.
+	@discussion
 	@constant IFNET_FAMILY_ANY Match interface of any family type.
 	@constant IFNET_FAMILY_LOOPBACK A software loopback interface.
 	@constant IFNET_FAMILY_ETHERNET An Ethernet interface.
@@ -124,6 +121,7 @@ enum {
 	IFNET_SUBFAMILY_BLUETOOTH	= 2,
 	IFNET_SUBFAMILY_WIFI		= 3,
 	IFNET_SUBFAMILY_THUNDERBOLT	= 4,
+	IFNET_SUBFAMILY_RESERVED	= 5,
 };
 
 /*
@@ -138,6 +136,7 @@ typedef u_int32_t ifnet_subfamily_t;
 /*!
 	@enum BPF tap mode
 	@abstract Constants defining interface families.
+	@discussion
 	@constant BPF_MODE_DISABLED Disable bpf.
 	@constant BPF_MODE_INPUT Enable input only.
 	@constant BPF_MODE_OUTPUT Enable output only.
@@ -166,6 +165,7 @@ typedef u_int32_t protocol_family_t;
 /*!
 	@enum Interface Abilities
 	@abstract Constants defining interface offload support.
+	@discussion
 	@constant IFNET_CSUM_IP Hardware will calculate IPv4 checksums.
 	@constant IFNET_CSUM_TCP Hardware will calculate TCP checksums.
 	@constant IFNET_CSUM_UDP Hardware will calculate UDP checksums.
@@ -744,6 +744,7 @@ typedef void (*ifnet_input_poll_func)(ifnet_t interface, u_int32_t flags,
 /*
 	@enum Interface control commands
 	@abstract Constants defining control commands.
+	@discussion
 	@constant IFNET_CTL_SET_INPUT_MODEL Set input model.
 	@constant IFNET_CTL_GET_INPUT_MODEL Get input model.
 	@constant IFNET_CTL_SET_LOG Set logging level.
@@ -766,6 +767,7 @@ typedef u_int32_t ifnet_ctl_cmd_t;
 /*
 	@enum Interface model sub-commands
 	@abstract Constants defining model sub-commands.
+	@discussion
 	@constant IFNET_MODEL_INPUT_POLL_OFF Polling is inactive.  When set,
 		the network stack will no longer invoke the input_poll callback
 		until the next time polling is turned on; the driver should
@@ -810,6 +812,7 @@ struct ifnet_model_params {
 	@abstract Constants defining logging levels/priorities.  A level
 		includes all other levels below it.  It is expected that
 		verbosity increases along with the level.
+	@discussion
 	@constant IFNET_LOG_DEFAULT Revert to default logging level.
 	@constant IFNET_LOG_ALERT Log actions that must be taken immediately.
 	@constant IFNET_LOG_CRITICAL Log critical conditions.
@@ -845,6 +848,7 @@ typedef int32_t ifnet_log_level_t;
 	@enum Interface logging facilities
 	@abstract Constants defining the logging facilities which
 		are to be configured with the specified logging level.
+	@discussion
 	@constant IFNET_LOGF_DLIL The DLIL layer.
 	@constant IFNET_LOGF_FAMILY The networking family layer.
 	@constant IFNET_LOGF_DRIVER The device driver layer.
@@ -876,6 +880,7 @@ typedef u_int32_t ifnet_log_flags_t;
 /*
 	@enum Interface logging category
 	@abstract Constants defininig categories for issues experienced.
+	@discussion
 	@constant IFNET_LOGCAT_CONNECTIVITY Connectivity related issues.
 	@constant IFNET_LOGCAT_QUALITY Quality/fidelity related issues.
 	@constant IFNET_LOGCAT_PERFORMANCE Performance related issues.
@@ -968,12 +973,15 @@ typedef errno_t (*ifnet_ctl_func)(ifnet_t interface, ifnet_ctl_cmd_t cmd,
 		through this function.
 	@field pre_enqueue The pre_enqueue function for the interface, valid
 		only if IFNET_INIT_LEGACY is not set, and optional if it is set.
-	@field start The start function for the interface, valid only if
-		IFNET_INIT_LEGACY is not set, and required if it is set.
+	@field start The start function for the interface, valid and required
+		only if IFNET_INIT_LEGACY is not set.
 	@field output_ctl The output control function for the interface, valid
 		only if IFNET_INIT_LEGACY is not set.
 	@field output_sched_model The IFNET_SCHED_MODEL value for the output
 		queue, as defined in net/if.h
+	@field output_target_qdelay The target queue delay is used for
+		dynamically sizing the output queue, valid only if
+		IFNET_INIT_LEGACY is not set.
 	@field output_bw The effective output bandwidth (in bits per second.)
 	@field output_bw_max The maximum theoretical output bandwidth
 		(in bits per second.)
@@ -1037,7 +1045,7 @@ struct ifnet_init_eparams {
 	ifnet_start_func	start;			/* required only for new model */
 	ifnet_ctl_func		output_ctl;		/* optional, only for new model */
 	u_int32_t		output_sched_model;	/* optional, only for new model */
-	u_int32_t		reserved;		/* for future use */
+	u_int32_t		output_target_qdelay;	/* optional, only for new model */
 	u_int64_t		output_bw;		/* optional */
 	u_int64_t		output_bw_max;		/* optional */
 	u_int64_t		output_lt;		/* optional */
@@ -2045,6 +2053,7 @@ extern errno_t ifnet_get_tso_mtu(ifnet_t interface, sa_family_t family,
 /*!
 	@enum Interface wake properties
 	@abstract Constants defining Interface wake properties.
+	@discussion
 	@constant IFNET_WAKE_ON_MAGIC_PACKET Wake on Magic Packet.
 */
 enum {
@@ -3109,6 +3118,10 @@ extern errno_t ifnet_clone_detach(if_clone_t ifcloner);
  */
 extern errno_t ifnet_get_local_ports(ifnet_t ifp, u_int8_t *bitfield);
 
+#define	IFNET_GET_LOCAL_PORTS_WILDCARDOK	0x1
+#define	IFNET_GET_LOCAL_PORTS_NOWAKEUPOK	0x2
+#define	IFNET_GET_LOCAL_PORTS_TCPONLY		0x4
+#define	IFNET_GET_LOCAL_PORTS_UDPONLY		0x8
 /*
 	@function ifnet_get_local_ports_extended
 	@discussion Returns a bitfield indicating which local ports of the
@@ -3123,14 +3136,25 @@ extern errno_t ifnet_get_local_ports(ifnet_t ifp, u_int8_t *bitfield);
 		all interfaces.
 	@param protocol The protocol family of the sockets.  PF_UNSPEC (0)
 		means all protocols, otherwise PF_INET or PF_INET6.
-	@param wildcardok A boolean value (0 or 1) indicating whether or not
-		the list of local ports should include those that are used
-		by sockets that aren't bound to any local address.
+	@param flags A bitwise of the following flags:
+		IFNET_GET_LOCAL_PORTS_EXTENDED_WILDCARDOK: When bit is set,
+		the list of local ports should include those that are 
+		used by sockets that aren't bound to any local address.
+		IFNET_GET_LOCAL_PORTS_EXTENDED_NOWAKEUPOK: When bit is
+		set, the list of local ports should return all sockets 
+		including the ones that do not need a wakeup from sleep. 
+		Sockets that do not want to wake from sleep are marked 
+		with a socket option.
+		IFNET_GET_LOCAL_PORTS_TCPONLY: When bit is set, the list 
+		of local ports should return the ports used by TCP sockets.
+		IFNET_GET_LOCAL_PORTS_UDPONLY: When bit is set, the list 
+		of local ports should return the ports used by UDP sockets.
+		only.
 	@param bitfield A pointer to 8192 bytes.
 	@result Returns 0 on success.
  */
 extern errno_t ifnet_get_local_ports_extended(ifnet_t ifp,
-    protocol_family_t protocol, u_int32_t wildcardok, u_int8_t *bitfield);
+    protocol_family_t protocol, u_int32_t flags, u_int8_t *bitfield);
 
 /******************************************************************************/
 /* for reporting issues							      */
@@ -3164,6 +3188,7 @@ extern errno_t ifnet_report_issues(ifnet_t ifp, u_int8_t modid[IFNET_MODIDLEN],
 	@enum  Per packet phy level transmit completion status values
 	@abstract Constants defining possible completion status values
 	A driver may support all or some of these values
+	@discussion
 	@constant IFNET_TX_COMPL_SUCCESS  link transmission succeeded
 	@constant IFNET_TX_COMPL_FAIL	  link transmission failed
 	@constant IFNET_TX_COMPL_ABORTED  link transmission aborted, may retry
@@ -3277,6 +3302,38 @@ ifnet_set_delegate(ifnet_t ifp, ifnet_t delegated_ifp);
  */
 extern errno_t
 ifnet_get_delegate(ifnet_t ifp, ifnet_t *pdelegated_ifp);
+
+/******************************************************************************/
+/* for interface IPSec keepalive offload									  */
+/******************************************************************************/
+
+#define IPSEC_OFFLOAD_FRAME_DATA_SIZE 128
+struct ipsec_offload_frame {
+	u_int8_t data[IPSEC_OFFLOAD_FRAME_DATA_SIZE]; /* Frame bytes */
+	u_int16_t length; /* Number of valid bytes in data, including offset */
+	u_int16_t interval; /* Interval in seconds */
+};
+
+/*
+	@function ifnet_get_ipsec_offload_frames
+	@discussion Fills out frames_array with IP packets to send at periodic
+		intervals on behalf of IPSec.
+	@param ifp The interface to send the frames out on. This is used to
+		select which IPSec SAs should generate the packets.
+	@param frames_array An array of ipsec_offload_frame structs. This is
+		allocated by the caller, and has frames_array_count frames of valid
+		memory.
+	@param frames_array_count The number of valid frames allocated in
+		frames_array.
+	@param frame_data_offset The offset in bytes into each frame data at
+		which IPSec should write the IP header and payload.
+	@param used_frames_count The returned number of frames that were filled
+		out with valid information.
+	@result Returns 0 on success, error number otherwise.
+ */
+extern errno_t ifnet_get_ipsec_offload_frames(ifnet_t ifp,
+	struct ipsec_offload_frame *frames_array, u_int32_t frames_array_count,
+	size_t frame_data_offset, u_int32_t *used_frames_count);
 #endif /* KERNEL_PRIVATE */
 
 __END_DECLS

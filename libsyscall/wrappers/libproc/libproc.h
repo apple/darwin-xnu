@@ -122,6 +122,7 @@ int proc_setpcontrol(const int control);
 int proc_track_dirty(pid_t pid, uint32_t flags);
 int proc_set_dirty(pid_t pid, bool dirty);
 int proc_get_dirty(pid_t pid, uint32_t *flags);
+int proc_clear_dirty(pid_t pid, uint32_t flags);
 
 int proc_terminate(pid_t pid, int *sig);
 

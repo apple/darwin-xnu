@@ -37,9 +37,11 @@
 #include <sys/namei.h>
 #include <sys/kernel.h>
 #include <sys/stat.h>
+#include <sys/syslog.h>
 #include <sys/vnode_internal.h>
 #include <sys/mount_internal.h>
 #include <sys/proc_internal.h>
+#include <sys/file_internal.h>
 #include <sys/kauth.h>
 #include <sys/uio_internal.h>
 #include <sys/malloc.h>
@@ -56,17 +58,6 @@
 #endif
 
 #define ATTR_TIME_SIZE	-1
-
-/*
- * SPI.
- */
-#define FSOPT_ATTRLIST_EXTENDED	0x00000020
-
-/* Valid only if FSOPT_ATTRLIST_EXTENDED is set */
-#define ATTR_CMN_GEN_COUNT	0x00080000 /* same as ATTR_CMN_NAMEDATTRCOUNT */
-#define ATTR_CMN_DOCUMENT_ID	0x00100000 /* same as ATTR_CMN_NAMEDATTRLIST */
-
-#define ATTR_CMN_ERROR		0x20000000
 
 /*
  * Structure describing the state of an in-progress attrlist operation.
@@ -128,9 +119,8 @@ attrlist_pack_fixed(struct _attrlist_buf *ab, void *source, ssize_t count)
  */
 static void
 attrlist_pack_variable2(struct _attrlist_buf *ab, const void *source, ssize_t count, 
-			const void *ext, ssize_t extcount)
+		const void *ext, ssize_t extcount) 
 {
-
 	/* Use ssize_t's for pointer math ease */
 	struct attrreference ar;
 	ssize_t fit;
@@ -234,6 +224,8 @@ attrlist_pack_string(struct _attrlist_buf *ab, const char *source, ssize_t count
 	space = ab->allocated - (ab->varcursor - ab->base);
 	fit = lmin(count, space);
 	if (space > 0) {
+		int bytes_to_zero;
+
 		/* 
 		 * If there is space remaining, copy data in, and 
 		 * accommodate the trailing NUL terminator.
@@ -250,6 +242,14 @@ attrlist_pack_string(struct _attrlist_buf *ab, const char *source, ssize_t count
 		if (space > fit) {
 			ab->varcursor[fit++] = '\0';
 			/* 'fit' now the number of bytes AFTER adding in the NUL */
+			/*
+			 * Zero out any additional bytes we might have as a
+			 * result of rounding up.
+			 */
+			bytes_to_zero = min((roundup(fit, 4) - fit),
+			    space - fit);
+			if (bytes_to_zero)
+				bzero(&(ab->varcursor[fit]), bytes_to_zero);
 		}
 	}
 	/* 
@@ -490,6 +490,8 @@ static struct getattrlist_attrtab getattrlist_common_tab[] = {
 	{ATTR_CMN_GRPID,	VATTR_BIT(va_gid),		sizeof(gid_t),			KAUTH_VNODE_READ_ATTRIBUTES},
 	{ATTR_CMN_ACCESSMASK,	VATTR_BIT(va_mode),		sizeof(uint32_t),		KAUTH_VNODE_READ_ATTRIBUTES},
 	{ATTR_CMN_FLAGS,	VATTR_BIT(va_flags),		sizeof(uint32_t),		KAUTH_VNODE_READ_ATTRIBUTES},
+	{ATTR_CMN_GEN_COUNT,	VATTR_BIT(va_write_gencount),	sizeof(uint32_t),		KAUTH_VNODE_READ_ATTRIBUTES},
+	{ATTR_CMN_DOCUMENT_ID,	VATTR_BIT(va_document_id),	sizeof(uint32_t),		KAUTH_VNODE_READ_ATTRIBUTES},
 	{ATTR_CMN_USERACCESS,	0,				sizeof(uint32_t),		KAUTH_VNODE_READ_ATTRIBUTES},
 	{ATTR_CMN_EXTENDED_SECURITY, VATTR_BIT(va_acl),		sizeof(struct attrreference),	KAUTH_VNODE_READ_SECURITY},
 	{ATTR_CMN_UUID,		VATTR_BIT(va_uuuid),		sizeof(guid_t),			KAUTH_VNODE_READ_ATTRIBUTES},
@@ -500,41 +502,7 @@ static struct getattrlist_attrtab getattrlist_common_tab[] = {
 	{ATTR_CMN_ADDEDTIME, 	VATTR_BIT(va_addedtime), 	ATTR_TIME_SIZE,			KAUTH_VNODE_READ_ATTRIBUTES},
 	{ATTR_CMN_RETURNED_ATTRS, 0,				sizeof(attribute_set_t),	0},
 	{ATTR_CMN_ERROR, 	0,				sizeof(uint32_t),		0},
-	{0, 0, 0, 0}
-};
-
-static struct getattrlist_attrtab getattrlist_common_tab_extended[] = {
-	{ATTR_CMN_NAME,		VATTR_BIT(va_name),		sizeof(struct attrreference),	KAUTH_VNODE_READ_ATTRIBUTES},
-	{ATTR_CMN_DEVID,	0,				sizeof(dev_t),			KAUTH_VNODE_READ_ATTRIBUTES},
-	{ATTR_CMN_FSID,		VATTR_BIT(va_fsid),		sizeof(fsid_t),			KAUTH_VNODE_READ_ATTRIBUTES},
-	{ATTR_CMN_OBJTYPE,	0,				sizeof(fsobj_type_t),		KAUTH_VNODE_READ_ATTRIBUTES},
-	{ATTR_CMN_OBJTAG,	0,				sizeof(fsobj_tag_t),		KAUTH_VNODE_READ_ATTRIBUTES},
-	{ATTR_CMN_OBJID,	VATTR_BIT(va_fileid) | VATTR_BIT(va_linkid), sizeof(fsobj_id_t), KAUTH_VNODE_READ_ATTRIBUTES},
-	{ATTR_CMN_OBJPERMANENTID, VATTR_BIT(va_fileid) | VATTR_BIT(va_linkid), sizeof(fsobj_id_t), KAUTH_VNODE_READ_ATTRIBUTES},
-	{ATTR_CMN_PAROBJID,	VATTR_BIT(va_parentid),		sizeof(fsobj_id_t),		KAUTH_VNODE_READ_ATTRIBUTES},
-	{ATTR_CMN_SCRIPT,	VATTR_BIT(va_encoding),		sizeof(text_encoding_t),	KAUTH_VNODE_READ_ATTRIBUTES},
-	{ATTR_CMN_CRTIME,	VATTR_BIT(va_create_time),	ATTR_TIME_SIZE,			KAUTH_VNODE_READ_ATTRIBUTES},
-	{ATTR_CMN_MODTIME,	VATTR_BIT(va_modify_time),	ATTR_TIME_SIZE,			KAUTH_VNODE_READ_ATTRIBUTES},
-	{ATTR_CMN_CHGTIME,	VATTR_BIT(va_change_time),	ATTR_TIME_SIZE,			KAUTH_VNODE_READ_ATTRIBUTES},
-	{ATTR_CMN_ACCTIME,	VATTR_BIT(va_access_time),	ATTR_TIME_SIZE,			KAUTH_VNODE_READ_ATTRIBUTES},
-	{ATTR_CMN_BKUPTIME,	VATTR_BIT(va_backup_time),	ATTR_TIME_SIZE,			KAUTH_VNODE_READ_ATTRIBUTES},
-	{ATTR_CMN_FNDRINFO,	0,				32,				KAUTH_VNODE_READ_ATTRIBUTES},
-	{ATTR_CMN_OWNERID,	VATTR_BIT(va_uid),		sizeof(uid_t),			KAUTH_VNODE_READ_ATTRIBUTES},
-	{ATTR_CMN_GRPID,	VATTR_BIT(va_gid),		sizeof(gid_t),			KAUTH_VNODE_READ_ATTRIBUTES},
-	{ATTR_CMN_ACCESSMASK,	VATTR_BIT(va_mode),		sizeof(uint32_t),		KAUTH_VNODE_READ_ATTRIBUTES},
-	{ATTR_CMN_FLAGS,	VATTR_BIT(va_flags),		sizeof(uint32_t),		KAUTH_VNODE_READ_ATTRIBUTES},
-	{ATTR_CMN_GEN_COUNT,	VATTR_BIT(va_gen),		sizeof(uint32_t),		KAUTH_VNODE_READ_ATTRIBUTES},
-	{ATTR_CMN_DOCUMENT_ID,	VATTR_BIT(va_document_id),	sizeof(uint32_t),		KAUTH_VNODE_READ_ATTRIBUTES},
-	{ATTR_CMN_USERACCESS,	0,				sizeof(uint32_t),		KAUTH_VNODE_READ_ATTRIBUTES},
-	{ATTR_CMN_EXTENDED_SECURITY, VATTR_BIT(va_acl),		sizeof(struct attrreference),	KAUTH_VNODE_READ_SECURITY},
-	{ATTR_CMN_UUID,		VATTR_BIT(va_uuuid),		sizeof(guid_t),			KAUTH_VNODE_READ_ATTRIBUTES},
-	{ATTR_CMN_GRPUUID,	VATTR_BIT(va_guuid),		sizeof(guid_t),			KAUTH_VNODE_READ_ATTRIBUTES},
-	{ATTR_CMN_FILEID,	VATTR_BIT(va_fileid), 		sizeof(uint64_t),		KAUTH_VNODE_READ_ATTRIBUTES},
-	{ATTR_CMN_PARENTID,	VATTR_BIT(va_parentid),		sizeof(uint64_t),		KAUTH_VNODE_READ_ATTRIBUTES},
-	{ATTR_CMN_FULLPATH, 	0, 				sizeof(struct attrreference),	KAUTH_VNODE_READ_ATTRIBUTES},
-	{ATTR_CMN_ADDEDTIME, 	VATTR_BIT(va_addedtime), 	ATTR_TIME_SIZE,			KAUTH_VNODE_READ_ATTRIBUTES}, 
-	{ATTR_CMN_RETURNED_ATTRS, 0,				sizeof(attribute_set_t),	0},
-	{ATTR_CMN_ERROR, 	0,				sizeof(uint32_t),		0},
+	{ATTR_CMN_DATA_PROTECT_FLAGS, VATTR_BIT(va_dataprotect_class), sizeof(uint32_t),	KAUTH_VNODE_READ_ATTRIBUTES},
 	{0, 0, 0, 0}
 };
 
@@ -556,6 +524,31 @@ static struct getattrlist_attrtab getattrlist_file_tab[] = {
 	{ATTR_FILE_RSRCALLOCSIZE, 0,				sizeof(off_t),			KAUTH_VNODE_READ_ATTRIBUTES},
 	{0, 0, 0, 0}
 };	
+
+/*
+ * This table is for attributes which are only set from the getattrlistbulk(2)
+ * call. These attributes have already been set from the common, file and
+ * directory tables but the vattr bits have not been recorded. Since these
+ * vattr bits are only used from the bulk call, we have a seperate table for
+ * these.
+ * The sizes are not returned from here since the sizes have already been
+ * accounted from the common, file and directory tables.
+ */
+static struct getattrlist_attrtab getattrlistbulk_common_tab[] = {
+	{ATTR_CMN_DEVID,	VATTR_BIT(va_devid),		0,			KAUTH_VNODE_READ_ATTRIBUTES},
+	{ATTR_CMN_FSID,		VATTR_BIT(va_fsid64),		0,			KAUTH_VNODE_READ_ATTRIBUTES},
+	{ATTR_CMN_OBJTYPE,	VATTR_BIT(va_objtype),		0,			KAUTH_VNODE_READ_ATTRIBUTES},
+	{ATTR_CMN_OBJTAG,	VATTR_BIT(va_objtag),		0,			KAUTH_VNODE_READ_ATTRIBUTES},
+	{ATTR_CMN_USERACCESS,	VATTR_BIT(va_user_access),	0,			KAUTH_VNODE_READ_ATTRIBUTES},
+	{ATTR_CMN_FNDRINFO,	VATTR_BIT(va_finderinfo),	0,			KAUTH_VNODE_READ_ATTRIBUTES},
+	{0, 0, 0, 0}
+};
+
+static struct getattrlist_attrtab getattrlistbulk_file_tab[] = {
+	{ATTR_FILE_RSRCLENGTH,	VATTR_BIT(va_rsrc_length),	0,			KAUTH_VNODE_READ_ATTRIBUTES},
+	{ATTR_FILE_RSRCALLOCSIZE, VATTR_BIT(va_rsrc_alloc),	0,			KAUTH_VNODE_READ_ATTRIBUTES},
+	{0, 0, 0, 0}
+};
 
 /*
  * The following are attributes that VFS can derive.
@@ -580,9 +573,11 @@ static struct getattrlist_attrtab getattrlist_file_tab[] = {
 				 ATTR_CMN_ACCESSMASK | ATTR_CMN_FLAGS |  \
 				 ATTR_CMN_USERACCESS | ATTR_CMN_FILEID | \
 				 ATTR_CMN_PARENTID | ATTR_CMN_RETURNED_ATTRS | \
-				 ATTR_CMN_DOCUMENT_ID | ATTR_CMN_GEN_COUNT)
+				 ATTR_CMN_DOCUMENT_ID | ATTR_CMN_GEN_COUNT | \
+				 ATTR_CMN_DATA_PROTECT_FLAGS)
 
-#define VFS_DFLT_ATTR_CMN_EXT	(ATTR_CMN_EXT_GEN_COUNT | ATTR_CMN_EXT_DOCUMENT_ID)
+#define VFS_DFLT_ATT_CMN_EXT	(ATTR_CMN_EXT_GEN_COUNT | ATTR_CMN_EXT_DOCUMENT_ID |\
+				 ATTR_CMN_EXT_DATA_PROTECT_FLAGS)
 
 #define VFS_DFLT_ATTR_DIR	(ATTR_DIR_LINKCOUNT | ATTR_DIR_MOUNTSTATUS)
 
@@ -593,8 +588,9 @@ static struct getattrlist_attrtab getattrlist_file_tab[] = {
 				 ATTR_FILE_RSRCALLOCSIZE)
 
 static int
-getattrlist_parsetab(struct getattrlist_attrtab *tab, attrgroup_t attrs, struct vnode_attr *vap,
-    ssize_t *sizep, kauth_action_t *actionp, int is_64bit)
+getattrlist_parsetab(struct getattrlist_attrtab *tab, attrgroup_t attrs,
+    struct vnode_attr *vap, ssize_t *sizep, kauth_action_t *actionp,
+    int is_64bit)
 {
 	attrgroup_t	recognised;
 
@@ -603,17 +599,23 @@ getattrlist_parsetab(struct getattrlist_attrtab *tab, attrgroup_t attrs, struct 
 		/* is this attribute set? */
 		if (tab->attr & attrs) {
 			recognised |= tab->attr;
-			vap->va_active |= tab->bits;
-			if (tab->size == ATTR_TIME_SIZE) {
-				if (is_64bit) {
-					*sizep += sizeof(struct user64_timespec);
+			if (vap)
+				vap->va_active |= tab->bits;
+			if (sizep) {
+				if (tab->size == ATTR_TIME_SIZE) {
+					if (is_64bit) {
+						*sizep += sizeof(
+						    struct user64_timespec);
+					} else {
+						*sizep += sizeof(
+						    struct user32_timespec);
+					}
 				} else {
-					*sizep += sizeof(struct user32_timespec);
+					*sizep += tab->size;
 				}
-			} else {
-				*sizep += tab->size;
 			}
-			*actionp |= tab->action;
+			if (actionp)
+				*actionp |= tab->action;
 			if (attrs == recognised)
 				break;  /* all done, get out */
 		}
@@ -630,23 +632,17 @@ getattrlist_parsetab(struct getattrlist_attrtab *tab, attrgroup_t attrs, struct 
  * the data from a filesystem.
  */
 static int
-getattrlist_setupvattr(struct attrlist *alp, int attr_cmn_extended, struct vnode_attr *vap, ssize_t *sizep, kauth_action_t *actionp, int is_64bit, int isdir)
+getattrlist_setupvattr(struct attrlist *alp, struct vnode_attr *vap, ssize_t *sizep, kauth_action_t *actionp, int is_64bit, int isdir)
 {
 	int	error;
-	struct getattrlist_attrtab *cmn_tab;
 
-
-	if (attr_cmn_extended)
-		cmn_tab = getattrlist_common_tab_extended;
-	else
-		cmn_tab = getattrlist_common_tab;
 	/*
 	 * Parse the above tables.
 	 */
 	*sizep = sizeof(uint32_t);	/* length count */
 	*actionp = 0;
 	if (alp->commonattr &&
-	    (error = getattrlist_parsetab(cmn_tab, alp->commonattr, vap, sizep, actionp, is_64bit)) != 0)
+	    (error = getattrlist_parsetab(getattrlist_common_tab, alp->commonattr, vap, sizep, actionp, is_64bit)) != 0)
 		return(error);
 	if (isdir && alp->dirattr &&
 	    (error = getattrlist_parsetab(getattrlist_dir_tab, alp->dirattr, vap, sizep, actionp, is_64bit)) != 0)
@@ -657,6 +653,68 @@ getattrlist_setupvattr(struct attrlist *alp, int attr_cmn_extended, struct vnode
 
 	return(0);
 }
+
+/*
+ * Given the attributes listed in alp, configure vap to request
+ * the data from a filesystem.
+ */
+static int
+getattrlist_setupvattr_all(struct attrlist *alp, struct vnode_attr *vap,
+    enum vtype obj_type, ssize_t *fixedsize, int is_64bit)
+{
+	int	error = 0;
+
+	/*
+	 * Parse the above tables.
+	 */
+	if (fixedsize) {
+		*fixedsize = sizeof(uint32_t);
+	}
+	if (alp->commonattr) {
+		error = getattrlist_parsetab(getattrlist_common_tab,
+		    alp->commonattr, vap, fixedsize, NULL, is_64bit);
+
+		if (!error) {
+			/* Ignore any errrors from the bulk table */
+			(void)getattrlist_parsetab(getattrlistbulk_common_tab,
+			    alp->commonattr, vap, fixedsize, NULL, is_64bit);
+			/*
+			 * turn off va_fsid since we will be using only
+			 * va_fsid64 for ATTR_CMN_FSID.
+			 */
+			VATTR_CLEAR_ACTIVE(vap, va_fsid);
+		}
+	}
+
+	if (!error && (obj_type == VNON || obj_type == VDIR) && alp->dirattr) {
+		error = getattrlist_parsetab(getattrlist_dir_tab, alp->dirattr,
+	            vap, fixedsize, NULL, is_64bit);
+	}
+
+	if (!error && (obj_type != VDIR) && alp->fileattr) {
+		error = getattrlist_parsetab(getattrlist_file_tab,
+		    alp->fileattr, vap, fixedsize, NULL, is_64bit);
+
+		if (!error) {
+			/*Ignore any errors from the bulk table */
+			(void)getattrlist_parsetab(getattrlistbulk_file_tab,
+			    alp->fileattr, vap, fixedsize, NULL, is_64bit);
+		}
+	}
+
+	return (error);
+}
+
+int
+vfs_setup_vattr_from_attrlist(struct attrlist *alp, struct vnode_attr *vap,
+    enum vtype obj_vtype, ssize_t *attrs_fixed_sizep, vfs_context_t ctx)
+{
+	return (getattrlist_setupvattr_all(alp, vap, obj_vtype,
+	    attrs_fixed_sizep, IS_64BIT_PROCESS(vfs_context_proc(ctx))));
+}
+
+
+
 
 /*
  * Given the attributes listed in asp and those supported
@@ -783,8 +841,9 @@ getattrlist_findnamecomp(const char *mn, const char **np, ssize_t *nl)
 
 
 static int
-getvolattrlist(vnode_t vp, struct getattrlist_args *uap, struct attrlist *alp,
-               vfs_context_t ctx, int is_64bit)
+getvolattrlist(vfs_context_t ctx, vnode_t vp, struct attrlist *alp,
+               user_addr_t attributeBuffer, size_t bufferSize, uint64_t options,
+               enum uio_seg segflg, int is_64bit)
 {
 	struct vfs_attr vs;
 	struct vnode_attr va;
@@ -804,9 +863,10 @@ getvolattrlist(vnode_t vp, struct getattrlist_args *uap, struct attrlist *alp,
 	vs.f_vol_name = NULL;
 	mnt = vp->v_mount;
 
+		
 	/* Check for special packing semantics */
 	return_valid = (alp->commonattr & ATTR_CMN_RETURNED_ATTRS);
-	pack_invalid = (uap->options & FSOPT_PACK_INVAL_ATTRS);
+	pack_invalid = (options & FSOPT_PACK_INVAL_ATTRS);
 	if (pack_invalid) {
 		/* FSOPT_PACK_INVAL_ATTRS requires ATTR_CMN_RETURNED_ATTRS */
 		if (!return_valid) {
@@ -1013,13 +1073,13 @@ getvolattrlist(vnode_t vp, struct getattrlist_args *uap, struct attrlist *alp,
 	 * Note that since we won't ever copy out more than the caller requested,
 	 * we never need to allocate more than they offer.
 	 */
-	ab.allocated = ulmin(uap->bufferSize, fixedsize + varsize);
+	ab.allocated = ulmin(bufferSize, fixedsize + varsize);
 	if (ab.allocated > ATTR_MAX_BUFFER) {
 		error = ENOMEM;
 		VFS_DEBUG(ctx, vp, "ATTRLIST - ERROR: buffer size too large (%d limit %d)", ab.allocated, ATTR_MAX_BUFFER);
 		goto out;
 	}
-	MALLOC(ab.base, char *, ab.allocated, M_TEMP, M_WAITOK);
+	MALLOC(ab.base, char *, ab.allocated, M_TEMP, M_ZERO | M_WAITOK);
 	if (ab.base == NULL) {
 		error = ENOMEM;
 		VFS_DEBUG(ctx, vp, "ATTRLIST - ERROR: could not allocate %d for copy buffer", ab.allocated);
@@ -1041,11 +1101,6 @@ getvolattrlist(vnode_t vp, struct getattrlist_args *uap, struct attrlist *alp,
 	if (alp->commonattr & ATTR_CMN_NAME) {
 		attrlist_pack_string(&ab, cnp, cnl);
 		ab.actual.commonattr |= ATTR_CMN_NAME;
-	}
-	if ((alp->commonattr & ATTR_CMN_ERROR) &&
-	    (!return_valid || pack_invalid)) {
-		ATTR_PACK4(ab, 0);
-		ab.actual.commonattr |= ATTR_CMN_ERROR;
 	}
 	if (alp->commonattr & ATTR_CMN_DEVID) {
 		ATTR_PACK4(ab, mnt->mnt_vfsstat.f_fsid.val[0]);
@@ -1314,7 +1369,7 @@ getvolattrlist(vnode_t vp, struct getattrlist_args *uap, struct attrlist *alp,
 	 * of the result buffer, even if we copied less out.  The caller knows how big a buffer
 	 * they gave us, so they can always check for truncation themselves.
 	 */
-	*(uint32_t *)ab.base = (uap->options & FSOPT_REPORT_FULLSIZE) ? ab.needed : imin(ab.allocated, ab.needed);
+	*(uint32_t *)ab.base = (options & FSOPT_REPORT_FULLSIZE) ? ab.needed : imin(ab.allocated, ab.needed);
 	
 	/* Return attribute set output if requested. */
 	if (return_valid) {
@@ -1326,7 +1381,12 @@ getvolattrlist(vnode_t vp, struct getattrlist_args *uap, struct attrlist *alp,
 		}
 		bcopy(&ab.actual, ab.base + sizeof(uint32_t), sizeof (ab.actual));
 	}
-	error = copyout(ab.base, uap->attributeBuffer, ab.allocated);
+
+	if (UIO_SEG_IS_USER_SPACE(segflg))
+		error = copyout(ab.base, CAST_USER_ADDR_T(attributeBuffer),
+		                ab.allocated);
+	else
+		bcopy(ab.base, (void *)attributeBuffer, (size_t)ab.allocated);
 
 out:
 	if (vs.f_vol_name != NULL)
@@ -1341,235 +1401,718 @@ out:
 }
 
 /*
- * Obtain attribute information about a filesystem object.
+ * Pack ATTR_COMMON attributes into a user buffer.
+ * alp is a pointer to the bitmap of attributes required.
+ * abp is the state of the attribute filling operation.
+ * The attribute data (along with some other fields that are required
+ * are in ad.
  */
-
-static int
-getattrlist_internal(vnode_t vp, struct getattrlist_args *uap, 
-		__unused struct componentname *getattr_name, proc_t p, vfs_context_t ctx)
+static errno_t
+attr_pack_common(vfs_context_t ctx, struct vnode *vp,  struct attrlist *alp,
+    struct _attrlist_buf *abp, struct vnode_attr *vap, int proc_is64,
+    const char *cnp, ssize_t cnl, const char *fullpathptr,
+    ssize_t fullpathlen, int return_valid, int pack_invalid, int vtype,
+    int is_bulk)
 {
-	struct attrlist	al;
-	struct vnode_attr va;
-	struct _attrlist_buf ab;
-	kauth_action_t	action;
-	ssize_t		fixedsize, varsize;
-	const char	*cnp;
-	const char	*vname = NULL;
-	char 		*fullpathptr;
-	ssize_t		fullpathlen;
-	ssize_t		cnl;
-	int		proc_is64;
-	int		error;
-	int		return_valid;
-	int		pack_invalid;
-	int		attr_extended;
-	int		vtype = 0;
 	uint32_t	perms = 0;
+	int		error = 0;
 
-	proc_is64 = proc_is64bit(p);
-	VATTR_INIT(&va);
-	va.va_name = NULL;
-	ab.base = NULL;
-	cnp = "unknown";
-	cnl = 0;
-	fullpathptr = NULL;
-	fullpathlen = 0;
-
-	/*
-	 * Fetch the attribute request.
-	 */
-	if ((error = copyin(uap->alist, &al, sizeof(al))) != 0)
-		goto out;
-	if (al.bitmapcount != ATTR_BIT_MAP_COUNT) {
-		error = EINVAL;
-		goto out;
+	if ((alp->commonattr & ATTR_CMN_ERROR) &&
+	    (!return_valid || pack_invalid)) {
+		ATTR_PACK4((*abp), 0);
+		abp->actual.commonattr |= ATTR_CMN_ERROR;
 	}
-
-	VFS_DEBUG(ctx, vp, "%p  ATTRLIST - %s request common %08x vol %08x file %08x dir %08x fork %08x %sfollow on '%s'",
-	    vp, p->p_comm, al.commonattr, al.volattr, al.fileattr, al.dirattr, al.forkattr,
-	    (uap->options & FSOPT_NOFOLLOW) ? "no":"", vp->v_name);
-
-#if CONFIG_MACF
-	error = mac_vnode_check_getattrlist(ctx, vp, &al);
-	if (error)
-		goto out;
-#endif /* MAC */
-
-	/*
-	 * It is legal to request volume or file attributes,
-	 * but not both.
-	 */
-	if (al.volattr) {
-		if (al.fileattr || al.dirattr || al.forkattr) {
-			error = EINVAL;
-			VFS_DEBUG(ctx, vp, "ATTRLIST - ERROR: mixed volume/file/directory/fork attributes");
-			goto out;
-		}
-		/* handle volume attribute request */
-		error = getvolattrlist(vp, uap, &al, ctx, proc_is64);
-		goto out;
+	if (alp->commonattr & ATTR_CMN_NAME) {
+		attrlist_pack_string(abp, cnp, cnl);
+		abp->actual.commonattr |= ATTR_CMN_NAME;
 	}
-
-	/* Check for special packing semantics */
-	return_valid = (al.commonattr & ATTR_CMN_RETURNED_ATTRS) ? 1 : 0;
-	pack_invalid = (uap->options & FSOPT_PACK_INVAL_ATTRS) ? 1 : 0;
-	attr_extended = (uap->options & FSOPT_ATTRLIST_EXTENDED) ? 1 : 0;
-	if (pack_invalid) {
-		/* FSOPT_PACK_INVAL_ATTRS requires ATTR_CMN_RETURNED_ATTRS */
-		if (!return_valid || al.forkattr) {
-			error = EINVAL;
-			goto out;
-		}
-		/* Keep invalid attrs from being uninitialized */
-		bzero(&va, sizeof (va));
-		/* Generate a valid mask for post processing */
-		bcopy(&al.commonattr, &ab.valid, sizeof (attribute_set_t));
-	}
-
-	/* Pick up the vnode type.  If the FS is bad and changes vnode types on us, we
-	 * will have a valid snapshot that we can work from here.
-	 */
-	vtype = vp->v_type;
-
-
-	/*
-	 * Set up the vnode_attr structure and authorise.
-	 */
-	if ((error = getattrlist_setupvattr(&al, attr_extended, &va, &fixedsize, &action, proc_is64, (vtype == VDIR))) != 0) {
-		VFS_DEBUG(ctx, vp, "ATTRLIST - ERROR: setup for request failed");
-		goto out;
-	}
-	if ((error = vnode_authorize(vp, NULL, action, ctx)) != 0) {
-		VFS_DEBUG(ctx, vp, "ATTRLIST - ERROR: authorisation failed/denied");
-		goto out;
-	}
-
-	/*
-	 * If we're asking for the full path, allocate a buffer for that.
-	 */
-	if (al.commonattr & (ATTR_CMN_FULLPATH)) {
-		fullpathptr = (char*) kalloc(MAXPATHLEN);
-		if (fullpathptr == NULL) {
-			error = ENOMEM;
-			VFS_DEBUG(ctx,vp, "ATTRLIST - ERROR: cannot allocate fullpath buffer");
-			goto out;
+	if (alp->commonattr & ATTR_CMN_DEVID) {
+		if (vp) {
+			ATTR_PACK4((*abp),
+			    vp->v_mount->mnt_vfsstat.f_fsid.val[0]);
+			abp->actual.commonattr |= ATTR_CMN_DEVID;
+		} else if (VATTR_IS_SUPPORTED(vap, va_devid)) {
+			ATTR_PACK4((*abp), vap->va_devid);
+			abp->actual.commonattr |= ATTR_CMN_DEVID;
+		} else if (!return_valid || pack_invalid) {
+			ATTR_PACK4((*abp), 0);
 		}
 	}
+	if (alp->commonattr & ATTR_CMN_FSID) {
+		if (vp) {
+			ATTR_PACK8((*abp),
+			    vp->v_mount->mnt_vfsstat.f_fsid);
+			abp->actual.commonattr |= ATTR_CMN_FSID;
+		} else if (VATTR_IS_SUPPORTED(vap, va_fsid64)) {
+			ATTR_PACK8((*abp), vap->va_fsid64);
+			abp->actual.commonattr |= ATTR_CMN_FSID;
+		} else if (VATTR_IS_SUPPORTED(vap, va_fsid)) {
+			fsid_t fsid;
 
+			/* va_fsid is 32 bits */
+			fsid.val[0] = vap->va_fsid;
+			fsid.val[1] = 0;
+			ATTR_PACK8((*abp), fsid);
+			abp->actual.commonattr |= ATTR_CMN_FSID;
+		} else if (!return_valid || pack_invalid) {
+			fsid_t fsid = {{0}};
 
-	if (va.va_active != 0) {
+			ATTR_PACK8((*abp), fsid);
+		}
+	}
+	if (alp->commonattr & ATTR_CMN_OBJTYPE) {
+		if (vp) {
+			ATTR_PACK4((*abp), vtype);
+			abp->actual.commonattr |= ATTR_CMN_OBJTYPE;
+		} else if (VATTR_IS_SUPPORTED(vap, va_objtype)) {
+			ATTR_PACK4((*abp), vap->va_objtype);
+			abp->actual.commonattr |= ATTR_CMN_OBJTYPE;
+		} else if (!return_valid || pack_invalid) {
+			ATTR_PACK4((*abp), 0);
+		}
+	}
+	if (alp->commonattr & ATTR_CMN_OBJTAG) {
+		if (vp) {
+			ATTR_PACK4((*abp), vp->v_tag);
+			abp->actual.commonattr |= ATTR_CMN_OBJTAG;
+		} else if (VATTR_IS_SUPPORTED(vap, va_objtag)) {
+			ATTR_PACK4((*abp), vap->va_objtag);
+			abp->actual.commonattr |= ATTR_CMN_OBJTAG;
+		} else if (!return_valid || pack_invalid) {
+			ATTR_PACK4((*abp), 0);
+		}
+	}
+	if (alp->commonattr & ATTR_CMN_OBJID) {
+		fsobj_id_t f;
 		/*
-		 * If we're going to ask for va_name, allocate a buffer to point it at
+		 * Carbon can't deal with us reporting the target ID
+		 * for links.  So we ask the filesystem to give us the
+		 * source ID as well, and if it gives us one, we use
+		 * it instead.
 		 */
-		if (VATTR_IS_ACTIVE(&va, va_name)) {
-			va.va_name = (char *) kalloc(MAXPATHLEN);
-			if (va.va_name == NULL) {
+		if (VATTR_IS_SUPPORTED(vap, va_linkid)) {
+			f.fid_objno = vap->va_linkid;
+		} else {
+			f.fid_objno = vap->va_fileid;
+		}
+		f.fid_generation = 0;
+		ATTR_PACK8((*abp), f);
+		abp->actual.commonattr |= ATTR_CMN_OBJID;
+	}
+	if (alp->commonattr & ATTR_CMN_OBJPERMANENTID) {
+		fsobj_id_t f;
+		/*
+		 * Carbon can't deal with us reporting the target ID
+		 * for links.  So we ask the filesystem to give us the
+		 * source ID as well, and if it gives us one, we use
+		 * it instead.
+		 */
+		if (VATTR_IS_SUPPORTED(vap, va_linkid)) {
+			f.fid_objno = vap->va_linkid;
+		} else {
+			f.fid_objno = vap->va_fileid;
+		}
+		f.fid_generation = 0;
+		ATTR_PACK8((*abp), f);
+		abp->actual.commonattr |= ATTR_CMN_OBJPERMANENTID;
+	}
+	if (alp->commonattr & ATTR_CMN_PAROBJID) {
+		fsobj_id_t f;
+
+		f.fid_objno = vap->va_parentid;  /* could be lossy here! */
+		f.fid_generation = 0;
+		ATTR_PACK8((*abp), f);
+		abp->actual.commonattr |= ATTR_CMN_PAROBJID;
+	}
+	if (alp->commonattr & ATTR_CMN_SCRIPT) {
+ 		if (VATTR_IS_SUPPORTED(vap, va_encoding)) {
+			ATTR_PACK4((*abp), vap->va_encoding);
+			abp->actual.commonattr |= ATTR_CMN_SCRIPT;
+		} else if (!return_valid || pack_invalid) {
+			ATTR_PACK4((*abp), 0x7e);
+		}
+	}
+	if (alp->commonattr & ATTR_CMN_CRTIME) {
+		ATTR_PACK_TIME((*abp), vap->va_create_time, proc_is64);
+		abp->actual.commonattr |= ATTR_CMN_CRTIME;
+	}
+	if (alp->commonattr & ATTR_CMN_MODTIME) {
+		ATTR_PACK_TIME((*abp), vap->va_modify_time, proc_is64);
+		abp->actual.commonattr |= ATTR_CMN_MODTIME;
+	}
+	if (alp->commonattr & ATTR_CMN_CHGTIME) {
+		ATTR_PACK_TIME((*abp), vap->va_change_time, proc_is64);
+		abp->actual.commonattr |= ATTR_CMN_CHGTIME;
+	}
+	if (alp->commonattr & ATTR_CMN_ACCTIME) {
+		ATTR_PACK_TIME((*abp), vap->va_access_time, proc_is64);
+		abp->actual.commonattr |= ATTR_CMN_ACCTIME;
+	}
+	if (alp->commonattr & ATTR_CMN_BKUPTIME) {
+		ATTR_PACK_TIME((*abp), vap->va_backup_time, proc_is64);
+		abp->actual.commonattr |= ATTR_CMN_BKUPTIME;
+	}
+	/*
+	 * They are requesting user access, we should obtain this before getting 
+	 * the finder info. For some network file systems this is a performance
+	 * improvement.
+	 */
+	if (alp->commonattr & ATTR_CMN_USERACCESS) {	/* this is expensive */
+		if (vp && !is_bulk) {
+			if (vtype == VDIR) {
+				if (vnode_authorize(vp, NULL,
+				    KAUTH_VNODE_ACCESS | KAUTH_VNODE_ADD_FILE |
+				    KAUTH_VNODE_ADD_SUBDIRECTORY |
+				    KAUTH_VNODE_DELETE_CHILD, ctx) == 0)
+					perms |= W_OK;
+
+				if (vnode_authorize(vp, NULL,
+				    KAUTH_VNODE_ACCESS |
+				    KAUTH_VNODE_LIST_DIRECTORY, ctx) == 0)
+					perms |= R_OK;
+
+				if (vnode_authorize(vp, NULL, KAUTH_VNODE_ACCESS |
+				    KAUTH_VNODE_SEARCH, ctx) == 0)
+					perms |= X_OK;
+			} else {
+				if (vnode_authorize(vp, NULL, KAUTH_VNODE_ACCESS |
+				    KAUTH_VNODE_WRITE_DATA, ctx) == 0)
+					perms |= W_OK;
+
+				if (vnode_authorize(vp, NULL, KAUTH_VNODE_ACCESS | KAUTH_VNODE_READ_DATA, ctx) == 0)
+					perms |= R_OK;
+				if (vnode_authorize(vp, NULL, KAUTH_VNODE_ACCESS | KAUTH_VNODE_EXECUTE, ctx) == 0)
+					perms |= X_OK;
+			}
+		} else if (is_bulk &&
+		    VATTR_IS_SUPPORTED(vap, va_user_access)) {
+			perms = vap->va_user_access;
+		}
+	}
+	if (alp->commonattr & ATTR_CMN_FNDRINFO) {
+		size_t	fisize = 32;
+
+		error = 0; 
+		if (vp && !is_bulk) {
+			uio_t	auio;
+			char	uio_buf[UIO_SIZEOF(1)];
+
+			if ((auio = uio_createwithbuffer(1, 0, UIO_SYSSPACE,
+			    UIO_READ, uio_buf, sizeof(uio_buf))) == NULL) {
 				error = ENOMEM;
-				VFS_DEBUG(ctx, vp, "ATTRLIST - ERROR: cannot allocate va_name buffer");
+				goto out;
+			}
+			uio_addiov(auio, CAST_USER_ADDR_T(abp->fixedcursor),
+			    fisize);
+			/* fisize may be reset to 0 after this call */
+			error = vn_getxattr(vp, XATTR_FINDERINFO_NAME, auio,
+					    &fisize, XATTR_NOSECURITY, ctx);
+			uio_free(auio);
+
+			/*
+			 * Default to zeros if its not available,
+			 * unless ATTR_CMN_RETURNED_ATTRS was requested.
+			 */
+			if (error &&
+			    (!return_valid || pack_invalid) &&
+			    ((error == ENOATTR) || (error == ENOENT) ||
+			    (error == ENOTSUP) || (error == EPERM))) {
+				VFS_DEBUG(ctx, vp, "ATTRLIST - No system.finderinfo attribute, returning zeroes");
+				bzero(abp->fixedcursor, 32);
+				error = 0;
+			}
+
+			if (error == 0) {
+				abp->fixedcursor += 32;
+				abp->actual.commonattr |= ATTR_CMN_FNDRINFO;
+			} else if (!return_valid) {
+				goto out;
+			} else {
+				/*
+				 * If we can inform the caller that we can't
+				 * return this attribute, reset error and
+				 * continue with the rest of the attributes.
+				 */
+				error = 0;
+			}
+		} else if (VATTR_IS_SUPPORTED(vap, va_finderinfo)) {
+			bcopy(&vap->va_finderinfo[0], abp->fixedcursor, fisize);
+			abp->fixedcursor += fisize;
+			abp->actual.commonattr |= ATTR_CMN_FNDRINFO;
+		} else if (!return_valid || pack_invalid) {
+			bzero(abp->fixedcursor, fisize);
+			abp->fixedcursor += fisize;
+		}
+	}
+	if (alp->commonattr & ATTR_CMN_OWNERID) {
+		ATTR_PACK4((*abp), vap->va_uid);
+		abp->actual.commonattr |= ATTR_CMN_OWNERID;
+	}
+	if (alp->commonattr & ATTR_CMN_GRPID) {
+		ATTR_PACK4((*abp), vap->va_gid);
+		abp->actual.commonattr |= ATTR_CMN_GRPID;
+	}
+	if (alp->commonattr & ATTR_CMN_ACCESSMASK) {
+		ATTR_PACK4((*abp), vap->va_mode);
+		abp->actual.commonattr |= ATTR_CMN_ACCESSMASK;
+	}
+	if (alp->commonattr & ATTR_CMN_FLAGS) {
+		ATTR_PACK4((*abp), vap->va_flags);
+		abp->actual.commonattr |= ATTR_CMN_FLAGS;
+	}
+	if (alp->commonattr & ATTR_CMN_GEN_COUNT) {
+		if (VATTR_IS_SUPPORTED(vap, va_write_gencount)) {
+			ATTR_PACK4((*abp), vap->va_write_gencount);
+			abp->actual.commonattr |= ATTR_CMN_GEN_COUNT;
+		} else if (!return_valid || pack_invalid) {
+			ATTR_PACK4((*abp), 0);
+		}
+	}
+
+	if (alp->commonattr & ATTR_CMN_DOCUMENT_ID) {
+		if (VATTR_IS_SUPPORTED(vap, va_document_id)) {
+			ATTR_PACK4((*abp), vap->va_document_id);
+			abp->actual.commonattr |= ATTR_CMN_DOCUMENT_ID;
+		} else if (!return_valid || pack_invalid) {
+			ATTR_PACK4((*abp), 0);
+		}	
+	}
+	/* We already obtain the user access, so just fill in the buffer here */
+	if (alp->commonattr & ATTR_CMN_USERACCESS) {
+#if CONFIG_MACF
+		if (!is_bulk && vp) {
+			/*
+			 * Rather than MAC preceding DAC, in this case we want
+			 * the smallest set of permissions granted by both MAC &
+			 * DAC checks.  We won't add back any permissions.
+			 */
+			if (perms & W_OK)
+				if (mac_vnode_check_access(ctx, vp, W_OK) != 0)
+					perms &= ~W_OK;
+			if (perms & R_OK)
+				if (mac_vnode_check_access(ctx, vp, R_OK) != 0)
+					perms &= ~R_OK;
+			if (perms & X_OK)
+				if (mac_vnode_check_access(ctx, vp, X_OK) != 0)
+					perms &= ~X_OK;
+		}
+#endif /* MAC */
+		VFS_DEBUG(ctx, vp, "ATTRLIST - granting perms %d", perms);
+		if (!is_bulk && vp) {
+			ATTR_PACK4((*abp), perms);
+			abp->actual.commonattr |= ATTR_CMN_USERACCESS;
+		} else if (is_bulk && VATTR_IS_SUPPORTED(vap, va_user_access)) {
+			ATTR_PACK4((*abp), perms);
+			abp->actual.commonattr |= ATTR_CMN_USERACCESS;
+		} else if (!return_valid || pack_invalid) {
+			ATTR_PACK4((*abp), 0);
+		}
+	}
+	if (alp->commonattr & ATTR_CMN_EXTENDED_SECURITY) {
+		if (VATTR_IS_SUPPORTED(vap, va_acl) && (vap->va_acl != NULL)) {
+			struct kauth_filesec fsec;
+			/*
+			 * We want to return a kauth_filesec (for now), but all we have is a kauth_acl.
+			 */
+			fsec.fsec_magic = KAUTH_FILESEC_MAGIC;
+			fsec.fsec_owner = kauth_null_guid;
+			fsec.fsec_group = kauth_null_guid;
+			attrlist_pack_variable2(abp, &fsec, __offsetof(struct kauth_filesec, fsec_acl), vap->va_acl, KAUTH_ACL_COPYSIZE(vap->va_acl));
+			abp->actual.commonattr |= ATTR_CMN_EXTENDED_SECURITY;
+		} else if (!return_valid || pack_invalid) {
+			attrlist_pack_variable(abp, NULL, 0);
+		}
+	}
+	if (alp->commonattr & ATTR_CMN_UUID) {
+ 		if (VATTR_IS_SUPPORTED(vap, va_uuuid)) {
+			ATTR_PACK(abp, vap->va_uuuid);
+			abp->actual.commonattr |= ATTR_CMN_UUID;
+		} else if (!return_valid || pack_invalid) {
+			ATTR_PACK(abp, kauth_null_guid);
+		}
+	}
+	if (alp->commonattr & ATTR_CMN_GRPUUID) {
+		if (VATTR_IS_SUPPORTED(vap, va_guuid)) {
+			ATTR_PACK(abp, vap->va_guuid);
+			abp->actual.commonattr |= ATTR_CMN_GRPUUID;
+		} else if (!return_valid || pack_invalid) {
+			ATTR_PACK(abp, kauth_null_guid);
+		}
+	}
+	if (alp->commonattr & ATTR_CMN_FILEID) {
+		ATTR_PACK8((*abp), vap->va_fileid);
+		abp->actual.commonattr |= ATTR_CMN_FILEID;
+	}
+	if (alp->commonattr & ATTR_CMN_PARENTID) {
+		ATTR_PACK8((*abp), vap->va_parentid);
+		abp->actual.commonattr |= ATTR_CMN_PARENTID;
+	}
+	
+	if (alp->commonattr & ATTR_CMN_FULLPATH) {
+		attrlist_pack_string (abp, fullpathptr, fullpathlen);
+		abp->actual.commonattr |= ATTR_CMN_FULLPATH;
+	}
+    
+	if (alp->commonattr & ATTR_CMN_ADDEDTIME) {
+		if (VATTR_IS_SUPPORTED(vap, va_addedtime)) {
+			ATTR_PACK_TIME((*abp), vap->va_addedtime, proc_is64);
+			abp->actual.commonattr |= ATTR_CMN_ADDEDTIME;
+		} else if (!return_valid || pack_invalid) {
+			struct timespec zerotime = {0, 0};
+
+			ATTR_PACK_TIME((*abp), zerotime, proc_is64);
+		}
+	}
+	if (alp->commonattr & ATTR_CMN_DATA_PROTECT_FLAGS) {
+		if (VATTR_IS_SUPPORTED(vap, va_dataprotect_class)) {
+			ATTR_PACK4((*abp), vap->va_dataprotect_class);
+			abp->actual.commonattr |= ATTR_CMN_DATA_PROTECT_FLAGS;
+		} else if (!return_valid || pack_invalid) {
+			ATTR_PACK4((*abp), 0);
+		}
+	}
+out:
+	return (error);
+}
+
+static errno_t
+attr_pack_dir(struct vnode *vp, struct attrlist *alp, struct _attrlist_buf *abp,
+    struct vnode_attr *vap)
+{
+	if (alp->dirattr & ATTR_DIR_LINKCOUNT) {  /* full count of entries */
+		ATTR_PACK4((*abp), (uint32_t)vap->va_dirlinkcount);
+		abp->actual.dirattr |= ATTR_DIR_LINKCOUNT;
+	}
+	if (alp->dirattr & ATTR_DIR_ENTRYCOUNT) {
+		ATTR_PACK4((*abp), (uint32_t)vap->va_nchildren);
+		abp->actual.dirattr |= ATTR_DIR_ENTRYCOUNT;
+	}
+	if (alp->dirattr & ATTR_DIR_MOUNTSTATUS) {
+		uint32_t mntstat;
+
+		if (vp) {
+			/*
+			 * The vnode that is passed down may either be a
+			 * top level vnode of a mount stack or a mounted
+			 * on vnode. In either case, the directory should
+			 * be reported as a mount point.
+			 */
+			if ((vp->v_flag & VROOT) ||  vnode_mountedhere(vp)) {
+				mntstat = DIR_MNTSTATUS_MNTPOINT;
+			} else {
+				mntstat = 0;
+			}
+#if CONFIG_TRIGGERS
+			/*
+			 * Report back on active vnode triggers
+			 * that can directly trigger a mount
+			 */
+			if (vp->v_resolve &&
+			    !(vp->v_resolve->vr_flags & VNT_NO_DIRECT_MOUNT)) {
+				mntstat |= DIR_MNTSTATUS_TRIGGER;
+			}
+#endif
+		} else {
+			mntstat = 0;
+		}
+
+		ATTR_PACK4((*abp), mntstat);
+		abp->actual.dirattr |= ATTR_DIR_MOUNTSTATUS;
+	}
+
+	return 0;
+}
+
+/*
+ * The is_bulk parameter differentiates whether the function is called from
+ * getattrlist or getattrlistbulk. When coming in from getattrlistbulk,
+ * the corresponding va_* values are expected to be the values filled and no
+ * attempt is made to retrieve them by calling back into the filesystem.
+ */
+static errno_t
+attr_pack_file(vfs_context_t ctx, struct vnode *vp,  struct attrlist *alp,
+    struct _attrlist_buf *abp, struct vnode_attr *vap, int return_valid,
+    int pack_invalid, int is_bulk)
+{
+	size_t	rsize = 0;
+	uint64_t rlength = 0;
+	uint64_t ralloc = 0;
+	int error = 0;
+
+	/*
+	 * Pre-fetch the rsrc attributes now so we only get them once.
+	 * Fetch the resource fork size/allocation via xattr interface
+	 */
+	if (vp && !is_bulk &&
+	    (alp->fileattr & (ATTR_FILE_TOTALSIZE | ATTR_FILE_ALLOCSIZE |
+	    ATTR_FILE_RSRCLENGTH | ATTR_FILE_RSRCALLOCSIZE))) {
+
+		error = vn_getxattr(vp, XATTR_RESOURCEFORK_NAME, NULL,
+		    &rsize, XATTR_NOSECURITY, ctx);
+		if (error) {
+			if ((error == ENOENT) || (error == ENOATTR) ||
+			    (error == ENOTSUP) || (error == EPERM) ||
+			    (error == EACCES)) {
+				rsize = 0;
+				error = 0;
+			} else {
 				goto out;
 			}
 		}
+		rlength = rsize;
 
-		/*
-		 * Call the filesystem.
-		 */
-		if ((error = vnode_getattr(vp, &va, ctx)) != 0) {
-			VFS_DEBUG(ctx, vp, "ATTRLIST - ERROR: filesystem returned %d", error);
-			goto out;
-		}
+		if (alp->fileattr & (ATTR_FILE_RSRCALLOCSIZE |
+		    ATTR_FILE_ALLOCSIZE)) {
+			uint32_t  blksize;
 
-		/* did we ask for something the filesystem doesn't support? */
-		if (!VATTR_ALL_SUPPORTED(&va)) {
+			blksize = vp->v_mount->mnt_vfsstat.f_bsize;
 
-			/*
-			 * There are a couple of special cases.  If we are after object IDs,
-			 * we can make do with va_fileid.
-			 */
-			if ((al.commonattr & (ATTR_CMN_OBJID | ATTR_CMN_OBJPERMANENTID | ATTR_CMN_FILEID)) && !VATTR_IS_SUPPORTED(&va, va_linkid))
-				VATTR_CLEAR_ACTIVE(&va, va_linkid);	/* forget we wanted this */
-			
-			/*
-			 * Many filesystems don't know their parent object id.
-			 * If necessary, attempt to derive it from the vnode.
-			 */
-			if ((al.commonattr & (ATTR_CMN_PAROBJID | ATTR_CMN_PARENTID)) &&
-			    !VATTR_IS_SUPPORTED(&va, va_parentid)) {
-				vnode_t	dvp;
-	
-				if ((dvp = vnode_getparent(vp)) != NULLVP) {
-					struct vnode_attr lva;
-	
-					VATTR_INIT(&lva);
-					VATTR_WANTED(&lva, va_fileid);
-					if (vnode_getattr(dvp, &lva, ctx) == 0 &&
-					    VATTR_IS_SUPPORTED(&va, va_fileid)) {
-						va.va_parentid = lva.va_fileid;
-						VATTR_SET_SUPPORTED(&va, va_parentid);
-					}
-					vnode_put(dvp);
-				}
+			if (blksize == 0) {
+				blksize = 512;
 			}
-			/*
-			 * And we can report datasize/alloc from total.
-			 */
-			if ((al.fileattr & ATTR_FILE_DATALENGTH) && !VATTR_IS_SUPPORTED(&va, va_data_size))
-				VATTR_CLEAR_ACTIVE(&va, va_data_size);
-			if ((al.fileattr & ATTR_FILE_DATAALLOCSIZE) && !VATTR_IS_SUPPORTED(&va, va_data_alloc))
-				VATTR_CLEAR_ACTIVE(&va, va_data_alloc);
-
-			/*
-			 * If we don't have an encoding, go with UTF-8
-			 */
-			if ((al.commonattr & ATTR_CMN_SCRIPT) &&
-			    !VATTR_IS_SUPPORTED(&va, va_encoding) && !return_valid)
-				VATTR_RETURN(&va, va_encoding, 0x7e /* kTextEncodingMacUnicode */);
-
-			/*
-			 * If we don't have a name, we'll get one from the vnode or mount point.
-			 */
-			if ((al.commonattr & ATTR_CMN_NAME) && !VATTR_IS_SUPPORTED(&va, va_name)) {
-				VATTR_CLEAR_ACTIVE(&va, va_name);
-			}
-
-			/* If va_dirlinkcount isn't supported use a default of 1. */
-			if ((al.dirattr & ATTR_DIR_LINKCOUNT) && !VATTR_IS_SUPPORTED(&va, va_dirlinkcount)) {
-				VATTR_RETURN(&va, va_dirlinkcount, 1);
-			}
-			
-			/* check again */
-			if (!VATTR_ALL_SUPPORTED(&va)) {
-				if (return_valid) {
-					if (pack_invalid) {
-						/* Fix up valid mask for post processing */
-						getattrlist_fixupattrs(&ab.valid, &va);
-						
-						/* Force packing of everything asked for */
-						va.va_supported = va.va_active;
-					} else {
-						/* Adjust the requested attributes */
-						getattrlist_fixupattrs((attribute_set_t *)&al.commonattr, &va);
-					}
-				} else {
-					error = EINVAL;
-					goto out;
-				}
-			}
+			ralloc = roundup(rsize, blksize);
 		}
 	}
 
+	if (alp->fileattr & ATTR_FILE_LINKCOUNT) {
+		ATTR_PACK4((*abp), (uint32_t)vap->va_nlink);
+		abp->actual.fileattr |= ATTR_FILE_LINKCOUNT;
+	}
 	/*
-	 * Compute variable-space requirements.
+	 * Note the following caveats for the TOTALSIZE and ALLOCSIZE attributes:
+	 * We infer that if the filesystem does not support va_data_size or va_data_alloc
+	 * it must not know about alternate forks.  So when we need to gather
+	 * the total size or total alloc, it's OK to substitute the total size for
+	 * the data size below.  This is because it is likely a flat filesystem and we must
+	 * be using AD files to store the rsrc fork and EAs.
+	 *
+	 * Additionally, note that getattrlist is barred from being called on
+	 * resource fork paths. (Search for CN_ALLOWRSRCFORK).  So if the filesystem does
+	 * support va_data_size, it is guaranteed to represent the data fork's size.  This
+	 * is an important distinction to make because when we call vnode_getattr on
+	 * an HFS resource fork vnode, to get the size, it will vend out the resource
+	 * fork's size (it only gets the size of the passed-in vnode).
 	 */
-	varsize = 0; /* length count */
+	if (alp->fileattr & ATTR_FILE_TOTALSIZE) {
+		if (!is_bulk) {
+			uint64_t totalsize = rlength;
 
+			if (VATTR_IS_SUPPORTED(vap, va_data_size)) {
+				totalsize += vap->va_data_size;
+			} else {
+				totalsize += vap->va_total_size;
+			}
+
+			ATTR_PACK8((*abp), totalsize);
+			abp->actual.fileattr |= ATTR_FILE_TOTALSIZE;
+		} else if (VATTR_IS_SUPPORTED(vap, va_total_size)) {
+			ATTR_PACK8((*abp), vap->va_total_size);
+			abp->actual.fileattr |= ATTR_FILE_TOTALSIZE;
+		} else if (!return_valid || pack_invalid) {
+			uint64_t zero_val = 0;
+
+			ATTR_PACK8((*abp), zero_val);
+		}
+	}
+	if (alp->fileattr & ATTR_FILE_ALLOCSIZE) {
+		if (!is_bulk) {
+			uint64_t totalalloc = ralloc;
+
+			/*
+			 * If data_alloc is supported, then it must represent the
+			 * data fork size.
+			 */
+			if (VATTR_IS_SUPPORTED(vap, va_data_alloc)) {
+				totalalloc += vap->va_data_alloc;
+			} else {
+				totalalloc += vap->va_total_alloc;
+			}
+
+			ATTR_PACK8((*abp), totalalloc);
+			abp->actual.fileattr |= ATTR_FILE_ALLOCSIZE;
+		} else if (VATTR_IS_SUPPORTED(vap, va_total_alloc)) {
+			ATTR_PACK8((*abp), vap->va_total_alloc);
+			abp->actual.fileattr |= ATTR_FILE_ALLOCSIZE;
+		} else if (!return_valid || pack_invalid) {
+			uint64_t zero_val = 0;
+
+			ATTR_PACK8((*abp), zero_val);
+		}
+	}
+	if (alp->fileattr & ATTR_FILE_IOBLOCKSIZE) {
+		ATTR_PACK4((*abp), vap->va_iosize);
+		abp->actual.fileattr |= ATTR_FILE_IOBLOCKSIZE;
+	}
+	if (alp->fileattr & ATTR_FILE_CLUMPSIZE) {
+		if (!return_valid || pack_invalid) {
+			ATTR_PACK4((*abp), 0);     /* this value is deprecated */
+			abp->actual.fileattr |= ATTR_FILE_CLUMPSIZE;
+		}
+	}
+	if (alp->fileattr & ATTR_FILE_DEVTYPE) {
+		if (vp && (vp->v_type == VCHR || vp->v_type == VBLK)) {
+			uint32_t dev;
+
+			if (vp->v_specinfo != NULL) {
+				dev = vp->v_specinfo->si_rdev;
+			} else if (VATTR_IS_SUPPORTED(vap, va_rdev)) {
+				dev = vap->va_rdev;
+			} else {
+				dev = 0;
+			}
+			ATTR_PACK4((*abp), dev);
+			abp->actual.fileattr |= ATTR_FILE_DEVTYPE;
+		} else if (vp) {
+			ATTR_PACK4((*abp), 0);
+			abp->actual.fileattr |= ATTR_FILE_DEVTYPE;
+		} else if (VATTR_IS_SUPPORTED(vap, va_rdev)) {
+			ATTR_PACK4((*abp), vap->va_rdev);
+			abp->actual.fileattr |= ATTR_FILE_DEVTYPE;
+		} else if (!return_valid || pack_invalid) {
+			ATTR_PACK4((*abp), 0);
+		}
+	}
+	/*
+	 * If the filesystem does not support datalength
+	 * or dataallocsize, then we infer that totalsize and
+	 * totalalloc are substitutes.
+	 */
+	if (alp->fileattr & ATTR_FILE_DATALENGTH) {
+		if (VATTR_IS_SUPPORTED(vap, va_data_size)) {
+			ATTR_PACK8((*abp), vap->va_data_size);
+		} else {
+			ATTR_PACK8((*abp), vap->va_total_size);
+		}
+		abp->actual.fileattr |= ATTR_FILE_DATALENGTH;
+	}
+	if (alp->fileattr & ATTR_FILE_DATAALLOCSIZE) {
+		if (VATTR_IS_SUPPORTED(vap, va_data_alloc)) {
+			ATTR_PACK8((*abp), vap->va_data_alloc);
+		} else {
+			ATTR_PACK8((*abp), vap->va_total_alloc);
+		}
+		abp->actual.fileattr |= ATTR_FILE_DATAALLOCSIZE;
+	}
+	/* already got the resource fork size/allocation above */
+	if (alp->fileattr & ATTR_FILE_RSRCLENGTH) {
+		if (!is_bulk) {
+			ATTR_PACK8((*abp), rlength);
+			abp->actual.fileattr |= ATTR_FILE_RSRCLENGTH;
+		} else if (VATTR_IS_SUPPORTED(vap, va_rsrc_length)) {
+			ATTR_PACK8((*abp), vap->va_rsrc_length);
+			abp->actual.fileattr |= ATTR_FILE_RSRCLENGTH;
+		} else if (!return_valid || pack_invalid) {
+			uint64_t zero_val = 0;
+
+			ATTR_PACK8((*abp), zero_val);
+		}
+	}
+	if (alp->fileattr & ATTR_FILE_RSRCALLOCSIZE) {
+		if (!is_bulk) {
+			ATTR_PACK8((*abp), ralloc);
+			abp->actual.fileattr |= ATTR_FILE_RSRCALLOCSIZE;
+		} else if (VATTR_IS_SUPPORTED(vap, va_rsrc_alloc)) {
+			ATTR_PACK8((*abp), vap->va_rsrc_alloc);
+			abp->actual.fileattr |= ATTR_FILE_RSRCALLOCSIZE;
+		} else if (!return_valid || pack_invalid) {
+			uint64_t zero_val = 0;
+
+			ATTR_PACK8((*abp), zero_val);
+		}
+	}
+out:
+	return (error);
+}
+
+static void
+vattr_get_alt_data(vnode_t vp, struct attrlist *alp, struct vnode_attr *vap,
+    int return_valid, int is_bulk, vfs_context_t ctx)
+{
+	/*
+	 * There are a couple of special cases.
+	 * If we are after object IDs, we can make do with va_fileid.
+	 */
+	if ((alp->commonattr &
+	    (ATTR_CMN_OBJID | ATTR_CMN_OBJPERMANENTID | ATTR_CMN_FILEID)) &&
+	    !VATTR_IS_SUPPORTED(vap, va_linkid)) {
+		/* forget we wanted this */
+		VATTR_CLEAR_ACTIVE(vap, va_linkid);
+	}
+	
+	/*
+	 * Many filesystems don't know their parent object id.
+	 * If necessary, attempt to derive it from the vnode.
+	 */
+	if ((alp->commonattr & (ATTR_CMN_PAROBJID | ATTR_CMN_PARENTID)) &&
+	    !VATTR_IS_SUPPORTED(vap, va_parentid) && vp && !is_bulk) {
+		vnode_t	dvp;
+
+		if ((dvp = vnode_getparent(vp)) != NULLVP) {
+			struct vnode_attr lva;
+
+			VATTR_INIT(&lva);
+			VATTR_WANTED(&lva, va_fileid);
+			if (vnode_getattr(dvp, &lva, ctx) == 0 &&
+			    VATTR_IS_SUPPORTED(vap, va_fileid)) {
+				vap->va_parentid = lva.va_fileid;
+				VATTR_SET_SUPPORTED(vap, va_parentid);
+			}
+			vnode_put(dvp);
+		}
+	}
+	/*
+	 * And we can report datasize/alloc from total.
+	 */
+	if ((alp->fileattr & ATTR_FILE_DATALENGTH) &&
+	    !VATTR_IS_SUPPORTED(vap, va_data_size)) {
+		VATTR_CLEAR_ACTIVE(vap, va_data_size);
+	}
+
+	if ((alp->fileattr & ATTR_FILE_DATAALLOCSIZE) &&
+	    !VATTR_IS_SUPPORTED(vap, va_data_alloc)) {
+		VATTR_CLEAR_ACTIVE(vap, va_data_alloc);
+	}
+
+	/*
+	 * If we don't have an encoding, go with UTF-8
+	 */
+	if ((alp->commonattr & ATTR_CMN_SCRIPT) &&
+	    !VATTR_IS_SUPPORTED(vap, va_encoding) && !return_valid) {
+		VATTR_RETURN(vap, va_encoding,
+		    0x7e /* kTextEncodingMacUnicode */);
+	}
+
+	/*
+	 * If we don't have a name, we'll get one from the vnode or
+	 * mount point.
+	 */
+	if ((alp->commonattr & ATTR_CMN_NAME) &&
+	    !VATTR_IS_SUPPORTED(vap, va_name)) {
+		VATTR_CLEAR_ACTIVE(vap, va_name);
+	}
+
+	/* If va_dirlinkcount isn't supported use a default of 1. */
+	if ((alp->dirattr & ATTR_DIR_LINKCOUNT) &&
+	    !VATTR_IS_SUPPORTED(vap, va_dirlinkcount)) {
+		VATTR_RETURN(vap, va_dirlinkcount, 1);
+	}
+}
+
+static errno_t
+calc_varsize(vnode_t vp, struct attrlist *alp, struct vnode_attr *vap,
+   ssize_t *varsizep, char *fullpathptr, ssize_t *fullpathlenp,
+   const char **vnamep, const char **cnpp, ssize_t *cnlp)  
+{
+	int error = 0;
+
+	*varsizep = 0; /* length count */
 	/* We may need to fix up the name attribute if requested */
-	if (al.commonattr & ATTR_CMN_NAME) {
-		if (VATTR_IS_SUPPORTED(&va, va_name)) {
-			va.va_name[MAXPATHLEN-1] = '\0';	/* Ensure nul-termination */
-			cnp = va.va_name;
-			cnl = strlen(cnp);
-		} 
-		else {
+	if (alp->commonattr & ATTR_CMN_NAME) {
+		if (VATTR_IS_SUPPORTED(vap, va_name)) {
+			vap->va_name[MAXPATHLEN-1] = '\0';	/* Ensure nul-termination */
+			*cnpp = vap->va_name;
+			*cnlp = strlen(*cnpp);
+		} else if (vp) {
 			/* Filesystem did not support getting the name */
 			if (vnode_isvroot(vp)) {
 				if (vp->v_mount->mnt_vfsstat.f_mntonname[1] == 0x00 &&
@@ -1580,46 +2123,49 @@ getattrlist_internal(vnode_t vp, struct getattrlist_args *uap,
 					 * pre Tiger code.  returning nothing for the boot volume name
 					 * breaks installers - 3961058
 					 */
-					cnp = vname = vnode_getname(vp);
-					if (cnp == NULL) {
+					*cnpp = *vnamep = vnode_getname(vp);
+					if (*cnpp == NULL) {
 						/* just use "/" as name */
-						cnp = &vp->v_mount->mnt_vfsstat.f_mntonname[0];
+						*cnpp = &vp->v_mount->mnt_vfsstat.f_mntonname[0];
 					}
-					cnl = strlen(cnp);
+					*cnlp = strlen(*cnpp);
 				}
 				else {
-					getattrlist_findnamecomp(vp->v_mount->mnt_vfsstat.f_mntonname, &cnp, &cnl);
+					getattrlist_findnamecomp(vp->v_mount->mnt_vfsstat.f_mntonname, cnpp, cnlp);
 				}
 			} 
 			else {
-				cnp = vname = vnode_getname(vp);
-				cnl = 0;
-				if (cnp != NULL) {
-					cnl = strlen(cnp);
+				*cnpp = *vnamep = vnode_getname(vp);
+				*cnlp = 0;
+				if (*cnpp != NULL) {
+					*cnlp = strlen(*cnpp);
 				}
 			}
+		} else {
+			*cnlp = 0;
 		}
-		varsize += roundup(cnl + 1, 4);
+		*varsizep += roundup(*cnlp + 1, 4);
 	}
 
 	/* 
 	 * Compute the full path to this vnode, if necessary. This attribute is almost certainly
 	 * not supported by any filesystem, so build the path to this vnode at this time.
 	 */
-	if (al.commonattr & ATTR_CMN_FULLPATH) {
+	if (vp && (alp->commonattr & ATTR_CMN_FULLPATH)) {
 		int len = MAXPATHLEN;
 		int err;
+
 		/* call build_path making sure NOT to use the cache-only behavior */
 		err = build_path(vp, fullpathptr, len, &len, 0, vfs_context_current());
 		if (err) {
 			error = err;
 			goto out;
 		}
-		fullpathlen = 0;
+		*fullpathlenp = 0;
 		if (fullpathptr){
-			fullpathlen = strlen(fullpathptr);
+			*fullpathlenp = strlen(fullpathptr);
 		}
-		varsize += roundup(fullpathlen+1, 4);
+		*varsizep += roundup(((*fullpathlenp) + 1), 4);
 	}
 
 	/*
@@ -1628,21 +2174,111 @@ getattrlist_internal(vnode_t vp, struct getattrlist_args *uap,
 	 * XXX This needs to change at some point; since the blob is opaque in
 	 * user-space this is OK.
 	 */
-	if ((al.commonattr & ATTR_CMN_EXTENDED_SECURITY) &&
-			VATTR_IS_SUPPORTED(&va, va_acl) &&
-			(va.va_acl != NULL)) {
+	if ((alp->commonattr & ATTR_CMN_EXTENDED_SECURITY) &&
+			VATTR_IS_SUPPORTED(vap, va_acl) &&
+			(vap->va_acl != NULL)) {
 
 		/* 
 		 * Since we have a kauth_acl_t (not a kauth_filesec_t), we have to check against
 		 * KAUTH_FILESEC_NOACL ourselves
 		 */ 
-		if (va.va_acl->acl_entrycount == KAUTH_FILESEC_NOACL) {
-			varsize += roundup((KAUTH_FILESEC_SIZE(0)), 4);
+		if (vap->va_acl->acl_entrycount == KAUTH_FILESEC_NOACL) {
+			*varsizep += roundup((KAUTH_FILESEC_SIZE(0)), 4);
 		}
 		else {
-			varsize += roundup ((KAUTH_FILESEC_SIZE(va.va_acl->acl_entrycount)), 4);
+			*varsizep += roundup ((KAUTH_FILESEC_SIZE(vap->va_acl->acl_entrycount)), 4);
 		}
 	}
+
+out:
+	return (error);
+}
+
+static errno_t
+vfs_attr_pack_internal(vnode_t vp, uio_t auio, struct attrlist *alp,
+    uint64_t options, struct vnode_attr *vap, __unused void *fndesc,
+    vfs_context_t ctx, int is_bulk, enum vtype vtype, ssize_t fixedsize)
+{
+	struct _attrlist_buf ab;
+	ssize_t buf_size;
+	size_t copy_size;
+	ssize_t	varsize;
+	const char *vname = NULL;
+	const char *cnp;
+	ssize_t cnl;
+	char *fullpathptr;
+	ssize_t	fullpathlen;
+	int error;
+	int proc_is64;
+	int return_valid;
+	int pack_invalid;
+	int alloc_local_buf;
+
+	proc_is64 = proc_is64bit(vfs_context_proc(ctx));
+	ab.base = NULL;
+	cnp = "unknown";
+	cnl = 0;
+	fullpathptr = NULL;
+	fullpathlen = 0;
+	error = 0;
+	alloc_local_buf = 0;
+
+	buf_size = (ssize_t)uio_resid(auio);
+	if ((buf_size <= 0) || (uio_iovcnt(auio) > 1))
+		return (EINVAL);
+
+	copy_size = 0;
+	/* Check for special packing semantics */
+	return_valid = (alp->commonattr & ATTR_CMN_RETURNED_ATTRS) ? 1 : 0;
+	pack_invalid = (options & FSOPT_PACK_INVAL_ATTRS) ? 1 : 0;
+
+	if (pack_invalid) {
+		/* Generate a valid mask for post processing */
+		bcopy(&(alp->commonattr), &ab.valid, sizeof (attribute_set_t));
+	}
+
+	/* did we ask for something the filesystem doesn't support? */
+	if (vap->va_active && !VATTR_ALL_SUPPORTED(vap)) {
+		vattr_get_alt_data(vp, alp, vap, return_valid, is_bulk,
+		    ctx);
+
+		/* check again */
+		if (!VATTR_ALL_SUPPORTED(vap)) {
+			if (return_valid && pack_invalid) {
+				/* Fix up valid mask for post processing */
+				getattrlist_fixupattrs(&ab.valid, vap);
+					
+				/* Force packing of everything asked for */
+				vap->va_supported = vap->va_active;
+			} else if (return_valid) {
+				/* Adjust the requested attributes */
+				getattrlist_fixupattrs(
+				    (attribute_set_t *)&(alp->commonattr), vap);
+			} else {
+				error = EINVAL;
+			}
+		}
+
+		if (error)
+			goto out;
+	}
+
+	if (alp->commonattr & (ATTR_CMN_FULLPATH)) {
+		fullpathptr = (char*) kalloc(MAXPATHLEN);
+		if (fullpathptr == NULL) {
+			error = ENOMEM;
+			VFS_DEBUG(ctx,vp, "ATTRLIST - ERROR: cannot allocate fullpath buffer");
+			goto out;
+		}
+	}
+
+	/*
+	 * Compute variable-space requirements.
+	 */
+	error = calc_varsize(vp, alp, vap, &varsize, fullpathptr, &fullpathlen,
+	    &vname, &cnp, &cnl);
+	if (error)
+		goto out;
 
 	/*
 	 * Allocate a target buffer for attribute results.
@@ -1658,40 +2294,90 @@ getattrlist_internal(vnode_t vp, struct getattrlist_args *uap,
 		VFS_DEBUG(ctx, vp, "ATTRLIST - ERROR: buffer size too large (%d limit %d)", ab.allocated, ATTR_MAX_BUFFER);
 		goto out;
 	}
-	MALLOC(ab.base, char *, ab.allocated, M_TEMP, M_WAITOK);
+
+	/*
+	 * Special handling for bulk calls, align to 8 (and only if enough
+	 * space left.
+	 */
+	if (is_bulk) {
+		if (buf_size < ab.allocated) {
+			goto out;
+		} else {
+			uint32_t newlen;
+
+			newlen = (ab.allocated + 7) & ~0x07;
+			/* Align only if enough space for alignment */
+			if (newlen <= (uint32_t)buf_size)
+				ab.allocated = newlen;
+		}
+	}
+
+	/*
+	 * See if we can reuse buffer passed in i.e. it is a kernel buffer
+	 * and big enough.
+	 */
+	if (uio_isuserspace(auio) || (buf_size < ab.allocated)) {
+		MALLOC(ab.base, char *, ab.allocated, M_TEMP,
+		       M_ZERO | M_WAITOK);
+		alloc_local_buf = 1;
+	} else {
+		/*
+		 * In case this is a kernel buffer and sufficiently
+		 * big, this function will try to use that buffer
+		 * instead of allocating another buffer and bcopy'ing
+		 * into it.
+		 *
+		 * The calculation below figures out where to start
+		 * writing in the buffer and once all the data has been
+		 * filled in, uio_resid is updated to reflect the usage
+		 * of the buffer.
+		 *
+		 * uio_offset cannot be used here to determine the
+		 * starting location as uio_offset could be set to a
+		 * value which has nothing to do the location
+		 * in the buffer.
+		 */
+		ab.base = (char *)uio_curriovbase(auio) +
+		    ((ssize_t)uio_curriovlen(auio) - buf_size);
+		bzero(ab.base, ab.allocated);
+	}
+
 	if (ab.base == NULL) {
 		error = ENOMEM;
 		VFS_DEBUG(ctx, vp, "ATTRLIST - ERROR: could not allocate %d for copy buffer", ab.allocated);
 		goto out;
 	}
 
+
 	/* set the S_IFMT bits for the mode */
-	if (al.commonattr & ATTR_CMN_ACCESSMASK) {
-		switch (vp->v_type) {
-		case VREG:
-			va.va_mode |= S_IFREG;
-			break;
-		case VDIR:
-			va.va_mode |= S_IFDIR;
-			break;
-		case VBLK:
-			va.va_mode |= S_IFBLK;
-			break;
-		case VCHR:
-			va.va_mode |= S_IFCHR;
-			break;
-		case VLNK:
-			va.va_mode |= S_IFLNK;
-			break;
-		case VSOCK:
-			va.va_mode |= S_IFSOCK;
-			break;
-		case VFIFO:
-			va.va_mode |= S_IFIFO;
-			break;
-		default:
-			error = EBADF;
-			goto out;
+	if (alp->commonattr & ATTR_CMN_ACCESSMASK) {
+		if (vp) {
+			switch (vp->v_type) {
+			case VREG:
+				vap->va_mode |= S_IFREG;
+				break;
+			case VDIR:
+				vap->va_mode |= S_IFDIR;
+				break;
+			case VBLK:
+				vap->va_mode |= S_IFBLK;
+				break;
+			case VCHR:
+				vap->va_mode |= S_IFCHR;
+				break;
+			case VLNK:
+				vap->va_mode |= S_IFLNK;
+				break;
+			case VSOCK:
+				vap->va_mode |= S_IFSOCK;
+				break;
+			case VFIFO:
+				vap->va_mode |= S_IFIFO;
+				break;
+			default:
+				error = EBADF;
+				goto out;
+			}
 		}
 	}
 
@@ -1706,435 +2392,28 @@ getattrlist_internal(vnode_t vp, struct getattrlist_args *uap,
 	ab.varcursor = ab.base + fixedsize;
 	ab.needed = ab.allocated;
 
-	/* common attributes **************************************************/
-	if (al.commonattr & ATTR_CMN_NAME) {
-		attrlist_pack_string(&ab, cnp, cnl);
-		ab.actual.commonattr |= ATTR_CMN_NAME;
-	}
-	if ((al.commonattr & ATTR_CMN_ERROR) &&
-	    (!return_valid || pack_invalid)) {
-		ATTR_PACK4(ab, 0);
-		ab.actual.commonattr |= ATTR_CMN_ERROR;
-	}
-	if (al.commonattr & ATTR_CMN_DEVID) {
-		ATTR_PACK4(ab, vp->v_mount->mnt_vfsstat.f_fsid.val[0]);
-		ab.actual.commonattr |= ATTR_CMN_DEVID;
-	}
-	if (al.commonattr & ATTR_CMN_FSID) {
-		ATTR_PACK8(ab, vp->v_mount->mnt_vfsstat.f_fsid);
-		ab.actual.commonattr |= ATTR_CMN_FSID;
-	}
-	if (al.commonattr & ATTR_CMN_OBJTYPE) {
-		ATTR_PACK4(ab, vtype);
-		ab.actual.commonattr |= ATTR_CMN_OBJTYPE;
-	}
-	if (al.commonattr & ATTR_CMN_OBJTAG) {
-		ATTR_PACK4(ab, vp->v_tag);
-		ab.actual.commonattr |= ATTR_CMN_OBJTAG;
-	}
-	if (al.commonattr & ATTR_CMN_OBJID) {
-		fsobj_id_t f;
-		/*
-		 * Carbon can't deal with us reporting the target ID
-		 * for links.  So we ask the filesystem to give us the
-		 * source ID as well, and if it gives us one, we use
-		 * it instead.
-		 */
-		if (VATTR_IS_SUPPORTED(&va, va_linkid)) {
-			f.fid_objno = va.va_linkid;
-		} else {
-			f.fid_objno = va.va_fileid;
-		}
-		f.fid_generation = 0;
-		ATTR_PACK8(ab, f);
-		ab.actual.commonattr |= ATTR_CMN_OBJID;
-	}
-	if (al.commonattr & ATTR_CMN_OBJPERMANENTID) {
-		fsobj_id_t f;
-		/*
-		 * Carbon can't deal with us reporting the target ID
-		 * for links.  So we ask the filesystem to give us the
-		 * source ID as well, and if it gives us one, we use
-		 * it instead.
-		 */
-		if (VATTR_IS_SUPPORTED(&va, va_linkid)) {
-			f.fid_objno = va.va_linkid;
-		} else {
-			f.fid_objno = va.va_fileid;
-		}
-		f.fid_generation = 0;
-		ATTR_PACK8(ab, f);
-		ab.actual.commonattr |= ATTR_CMN_OBJPERMANENTID;
-	}
-	if (al.commonattr & ATTR_CMN_PAROBJID) {
-		fsobj_id_t f;
-
-		f.fid_objno = va.va_parentid;  /* could be lossy here! */
-		f.fid_generation = 0;
-		ATTR_PACK8(ab, f);
-		ab.actual.commonattr |= ATTR_CMN_PAROBJID;
-	}
-	if (al.commonattr & ATTR_CMN_SCRIPT) {
- 		if (VATTR_IS_SUPPORTED(&va, va_encoding)) {
-			ATTR_PACK4(ab, va.va_encoding);
-			ab.actual.commonattr |= ATTR_CMN_SCRIPT;
-		} else if (!return_valid || pack_invalid) {
-			ATTR_PACK4(ab, 0x7e);
-		}
-	}
-	if (al.commonattr & ATTR_CMN_CRTIME) {
-		ATTR_PACK_TIME(ab, va.va_create_time, proc_is64);
-		ab.actual.commonattr |= ATTR_CMN_CRTIME;
-	}
-	if (al.commonattr & ATTR_CMN_MODTIME) {
-		ATTR_PACK_TIME(ab, va.va_modify_time, proc_is64);
-		ab.actual.commonattr |= ATTR_CMN_MODTIME;
-	}
-	if (al.commonattr & ATTR_CMN_CHGTIME) {
-		ATTR_PACK_TIME(ab, va.va_change_time, proc_is64);
-		ab.actual.commonattr |= ATTR_CMN_CHGTIME;
-	}
-	if (al.commonattr & ATTR_CMN_ACCTIME) {
-		ATTR_PACK_TIME(ab, va.va_access_time, proc_is64);
-		ab.actual.commonattr |= ATTR_CMN_ACCTIME;
-	}
-	if (al.commonattr & ATTR_CMN_BKUPTIME) {
-		ATTR_PACK_TIME(ab, va.va_backup_time, proc_is64);
-		ab.actual.commonattr |= ATTR_CMN_BKUPTIME;
-	}
-	/*
-	 * They are requesting user access, we should obtain this before getting 
-	 * the finder info. For some network file systems this is a performance
-	 * improvement.
-	 */
-	if (al.commonattr & ATTR_CMN_USERACCESS) {	/* this is expensive */
-		if (vtype == VDIR) {
-			if (vnode_authorize(vp, NULL,
-								KAUTH_VNODE_ACCESS | KAUTH_VNODE_ADD_FILE | KAUTH_VNODE_ADD_SUBDIRECTORY | KAUTH_VNODE_DELETE_CHILD, ctx) == 0)
-				perms |= W_OK;
-			if (vnode_authorize(vp, NULL, KAUTH_VNODE_ACCESS | KAUTH_VNODE_LIST_DIRECTORY, ctx) == 0)
-				perms |= R_OK;
-			if (vnode_authorize(vp, NULL, KAUTH_VNODE_ACCESS | KAUTH_VNODE_SEARCH, ctx) == 0)
-				perms |= X_OK;
-		} else {
-			if (vnode_authorize(vp, NULL, KAUTH_VNODE_ACCESS | KAUTH_VNODE_WRITE_DATA, ctx) == 0)
-				perms |= W_OK;
-			if (vnode_authorize(vp, NULL, KAUTH_VNODE_ACCESS | KAUTH_VNODE_READ_DATA, ctx) == 0)
-				perms |= R_OK;
-			if (vnode_authorize(vp, NULL, KAUTH_VNODE_ACCESS | KAUTH_VNODE_EXECUTE, ctx) == 0)
-				perms |= X_OK;
-		}
-	}
-	
-	if (al.commonattr & ATTR_CMN_FNDRINFO) {
-		uio_t	auio;
-		size_t	fisize = 32;
-		char	uio_buf[UIO_SIZEOF(1)];
-
-		if ((auio = uio_createwithbuffer(1, 0, UIO_SYSSPACE, UIO_READ,
-		     uio_buf, sizeof(uio_buf))) == NULL) {
-			error = ENOMEM;
-			goto out;
-		}
-		uio_addiov(auio, CAST_USER_ADDR_T(ab.fixedcursor), fisize);
-		error = vn_getxattr(vp, XATTR_FINDERINFO_NAME, auio,
-				    &fisize, XATTR_NOSECURITY, ctx);
-		uio_free(auio);
-		/*
-		 * Default to zeros if its not available,
-		 * unless ATTR_CMN_RETURNED_ATTRS was requested.
-		 */
-		if (error &&
-		    (!return_valid || pack_invalid) &&
-		    ((error == ENOATTR) || (error == ENOENT) ||
-		     (error == ENOTSUP) || (error == EPERM))) {
-			VFS_DEBUG(ctx, vp, "ATTRLIST - No system.finderinfo attribute, returning zeroes");
-			bzero(ab.fixedcursor, 32);
-			error = 0;
-		}
-		if (error == 0) {
-			ab.fixedcursor += 32;
-			ab.actual.commonattr |= ATTR_CMN_FNDRINFO;
-		} else if (!return_valid) {
-			VFS_DEBUG(ctx, vp, "ATTRLIST - ERROR: reading system.finderinfo attribute");
-			goto out;
-		}
-	}
-	if (al.commonattr & ATTR_CMN_OWNERID) {
-		ATTR_PACK4(ab, va.va_uid);
-		ab.actual.commonattr |= ATTR_CMN_OWNERID;
-	}
-	if (al.commonattr & ATTR_CMN_GRPID) {
-		ATTR_PACK4(ab, va.va_gid);
-		ab.actual.commonattr |= ATTR_CMN_GRPID;
-	}
-	if (al.commonattr & ATTR_CMN_ACCESSMASK) {
-		ATTR_PACK4(ab, va.va_mode);
-		ab.actual.commonattr |= ATTR_CMN_ACCESSMASK;
-	}
-	if (al.commonattr & ATTR_CMN_FLAGS) {
-		ATTR_PACK4(ab, va.va_flags);
-		ab.actual.commonattr |= ATTR_CMN_FLAGS;
-	}
-	if (attr_extended) {
-		if (al.commonattr & ATTR_CMN_GEN_COUNT) {
-			if (VATTR_IS_SUPPORTED(&va, va_gen)) {
-				ATTR_PACK4(ab, va.va_gen);
-				ab.actual.commonattr |= ATTR_CMN_GEN_COUNT;
-			} else if (!return_valid || pack_invalid) {
-				ATTR_PACK4(ab, 0);
-			}
-		}
-
-		if (al.commonattr & ATTR_CMN_DOCUMENT_ID) {
-			if (VATTR_IS_SUPPORTED(&va, va_document_id)) {
-				ATTR_PACK4(ab, va.va_document_id);
-				ab.actual.commonattr |= ATTR_CMN_DOCUMENT_ID;
-			} else if (!return_valid || pack_invalid) {
-				ATTR_PACK4(ab, 0);
-			}
-		}
-	}
-	/* We already obtain the user access, so just fill in the buffer here */
-	if (al.commonattr & ATTR_CMN_USERACCESS) {
-#if CONFIG_MACF
-		/* 
-		 * Rather than MAC preceding DAC, in this case we want
-		 * the smallest set of permissions granted by both MAC & DAC
-		 * checks.  We won't add back any permissions.
-		 */
-		if (perms & W_OK)
-			if (mac_vnode_check_access(ctx, vp, W_OK) != 0)
-				perms &= ~W_OK;
-		if (perms & R_OK)
-			if (mac_vnode_check_access(ctx, vp, R_OK) != 0)
-				perms &= ~R_OK;
-		if (perms & X_OK)
-			if (mac_vnode_check_access(ctx, vp, X_OK) != 0)
-				perms &= ~X_OK;
-#endif /* MAC */
-		VFS_DEBUG(ctx, vp, "ATTRLIST - granting perms %d", perms);
-		ATTR_PACK4(ab, perms);
-		ab.actual.commonattr |= ATTR_CMN_USERACCESS;
-	}
-	if (al.commonattr & ATTR_CMN_EXTENDED_SECURITY) {
-		if (VATTR_IS_SUPPORTED(&va, va_acl) && (va.va_acl != NULL)) {
-			struct kauth_filesec fsec;
-			/*
-			 * We want to return a kauth_filesec (for now), but all we have is a kauth_acl.
-			 */
-			fsec.fsec_magic = KAUTH_FILESEC_MAGIC;
-			fsec.fsec_owner = kauth_null_guid;
-			fsec.fsec_group = kauth_null_guid;
-			attrlist_pack_variable2(&ab, &fsec, __offsetof(struct kauth_filesec, fsec_acl), va.va_acl, KAUTH_ACL_COPYSIZE(va.va_acl));
-			ab.actual.commonattr |= ATTR_CMN_EXTENDED_SECURITY;
-		} else if (!return_valid || pack_invalid) {
-			attrlist_pack_variable(&ab, NULL, 0);
-		}
-	}
-  	if (al.commonattr & ATTR_CMN_UUID) {
- 		if (VATTR_IS_SUPPORTED(&va, va_uuuid)) {
-			ATTR_PACK(&ab, va.va_uuuid);
-			ab.actual.commonattr |= ATTR_CMN_UUID;
-		} else if (!return_valid || pack_invalid) {
-			ATTR_PACK(&ab, kauth_null_guid);
-		}
-	}
-	if (al.commonattr & ATTR_CMN_GRPUUID) {
-		if (VATTR_IS_SUPPORTED(&va, va_guuid)) {
-			ATTR_PACK(&ab, va.va_guuid);
-			ab.actual.commonattr |= ATTR_CMN_GRPUUID;
-		} else if (!return_valid || pack_invalid) {
-			ATTR_PACK(&ab, kauth_null_guid);
-		}
-	}
-	if (al.commonattr & ATTR_CMN_FILEID) {
-		ATTR_PACK8(ab, va.va_fileid);
-		ab.actual.commonattr |= ATTR_CMN_FILEID;
-	}
-	if (al.commonattr & ATTR_CMN_PARENTID) {
-		ATTR_PACK8(ab, va.va_parentid);
-		ab.actual.commonattr |= ATTR_CMN_PARENTID;
-	}
-	
-	if (al.commonattr & ATTR_CMN_FULLPATH) {
-		attrlist_pack_string (&ab, fullpathptr, fullpathlen);
-		ab.actual.commonattr |= ATTR_CMN_FULLPATH;
-	}
-    
-    if (al.commonattr & ATTR_CMN_ADDEDTIME) {
-		ATTR_PACK_TIME(ab, va.va_addedtime, proc_is64);
-		ab.actual.commonattr |= ATTR_CMN_ADDEDTIME;
-	}
+	/* common attributes ************************************************/
+	error = attr_pack_common(ctx, vp, alp, &ab, vap, proc_is64, cnp, cnl,
+	    fullpathptr, fullpathlen, return_valid, pack_invalid, vtype, is_bulk); 
 
 	/* directory attributes *********************************************/
-	if (al.dirattr && (vtype == VDIR)) {
-		if (al.dirattr & ATTR_DIR_LINKCOUNT) {  /* full count of entries */
-			ATTR_PACK4(ab, (uint32_t)va.va_dirlinkcount);
-			ab.actual.dirattr |= ATTR_DIR_LINKCOUNT;
-		}
-		if (al.dirattr & ATTR_DIR_ENTRYCOUNT) {
-			ATTR_PACK4(ab, (uint32_t)va.va_nchildren);
-			ab.actual.dirattr |= ATTR_DIR_ENTRYCOUNT;
-		}
-		if (al.dirattr & ATTR_DIR_MOUNTSTATUS) {
-			uint32_t mntstat;
-
-			mntstat = (vp->v_flag & VROOT) ? DIR_MNTSTATUS_MNTPOINT : 0;
-#if CONFIG_TRIGGERS
-			/*
-			 * Report back on active vnode triggers
-			 * that can directly trigger a mount
-			 */
-			if (vp->v_resolve &&
-			    !(vp->v_resolve->vr_flags & VNT_NO_DIRECT_MOUNT)) {
-				mntstat |= DIR_MNTSTATUS_TRIGGER;
-			}
-#endif
-			ATTR_PACK4(ab, mntstat);
-			ab.actual.dirattr |= ATTR_DIR_MOUNTSTATUS;
-		}
+	if (!error && alp->dirattr && (vtype == VDIR)) {
+		error = attr_pack_dir(vp, alp, &ab, vap);
 	}
 
 	/* file attributes **************************************************/
-	if (al.fileattr && (vtype != VDIR)) {
-
-		size_t	rsize = 0;
-		uint64_t rlength = 0;
-		uint64_t ralloc = 0;
-		/* 
-		 * Pre-fetch the rsrc attributes now so we only get them once.
-		 * Fetch the resource fork size/allocation via xattr interface 
-		 */
-		if (al.fileattr & (ATTR_FILE_TOTALSIZE | ATTR_FILE_ALLOCSIZE | ATTR_FILE_RSRCLENGTH | ATTR_FILE_RSRCALLOCSIZE)) {
-			if ((error = vn_getxattr(vp, XATTR_RESOURCEFORK_NAME, NULL, &rsize, XATTR_NOSECURITY, ctx)) != 0) {
-				if ((error == ENOENT) || (error == ENOATTR) || (error == ENOTSUP) || (error == EPERM)|| (error == EACCES)) {
-					rsize = 0;
-					error = 0;
-				} else {
-					goto out;
-				}
-			}
-			rlength = rsize;
-
-			if (al.fileattr & (ATTR_FILE_RSRCALLOCSIZE | ATTR_FILE_ALLOCSIZE)) {
-				uint32_t  blksize = vp->v_mount->mnt_vfsstat.f_bsize;
-				if (blksize == 0) {
-					blksize = 512;
-				}
-				ralloc = roundup(rsize, blksize);
-			}
-		}
-
-		if (al.fileattr & ATTR_FILE_LINKCOUNT) {
-			ATTR_PACK4(ab, (uint32_t)va.va_nlink);
-			ab.actual.fileattr |= ATTR_FILE_LINKCOUNT;
-		}
-		/*
-		 * Note the following caveats for the TOTALSIZE and ALLOCSIZE attributes: 
-		 * We infer that if the filesystem does not support va_data_size or va_data_alloc
-		 * it must not know about alternate forks.  So when we need to gather
-		 * the total size or total alloc, it's OK to substitute the total size for 
-		 * the data size below.  This is because it is likely a flat filesystem and we must
-		 * be using AD files to store the rsrc fork and EAs.  
-		 * 
-		 * Additionally, note that getattrlist is barred from being called on 
-		 * resource fork paths. (Search for CN_ALLOWRSRCFORK).  So if the filesystem does 
-		 * support va_data_size, it is guaranteed to represent the data fork's size.  This 
-		 * is an important distinction to make because when we call vnode_getattr on 
-		 * an HFS resource fork vnode, to get the size, it will vend out the resource 
-		 * fork's size (it only gets the size of the passed-in vnode).  
-		 */
-		if (al.fileattr & ATTR_FILE_TOTALSIZE) {
-			uint64_t totalsize = rlength;			
-
-			if (VATTR_IS_SUPPORTED(&va, va_data_size)) {
-				totalsize += va.va_data_size;
-			} else {
-				totalsize += va.va_total_size;
-			}
-
-			ATTR_PACK8(ab, totalsize);
-			ab.actual.fileattr |= ATTR_FILE_TOTALSIZE;
-		}
-		if (al.fileattr & ATTR_FILE_ALLOCSIZE) {
-			uint64_t totalalloc = ralloc;
-		
-			/* 
-			 * If data_alloc is supported, then it must represent the 
-			 * data fork size.
-			 */
-			if (VATTR_IS_SUPPORTED(&va, va_data_alloc)) {
-				totalalloc += va.va_data_alloc;
-			}
-			else {
-				totalalloc += va.va_total_alloc;
-			}
-	
-			ATTR_PACK8(ab, totalalloc);
-			ab.actual.fileattr |= ATTR_FILE_ALLOCSIZE;
-		}
-		if (al.fileattr & ATTR_FILE_IOBLOCKSIZE) {
-			ATTR_PACK4(ab, va.va_iosize);
-			ab.actual.fileattr |= ATTR_FILE_IOBLOCKSIZE;
-		}
-		if (al.fileattr & ATTR_FILE_CLUMPSIZE) {
-			if (!return_valid || pack_invalid) {
-				ATTR_PACK4(ab, 0);     /* this value is deprecated */
-				ab.actual.fileattr |= ATTR_FILE_CLUMPSIZE;
-			}
-		}
-		if (al.fileattr & ATTR_FILE_DEVTYPE) {
-			uint32_t dev;
-
-			if ((vp->v_type == VCHR) || (vp->v_type == VBLK)) {
-				if (vp->v_specinfo != NULL)
-					dev = vp->v_specinfo->si_rdev;
-				else
-					dev = va.va_rdev;
-			} else {
-				dev = 0;
-			}
-			ATTR_PACK4(ab, dev);
-			ab.actual.fileattr |= ATTR_FILE_DEVTYPE;
-		}
-		
-		/* 
-		 * If the filesystem does not support datalength
-		 * or dataallocsize, then we infer that totalsize and 
-		 * totalalloc are substitutes.
-		 */
-		if (al.fileattr & ATTR_FILE_DATALENGTH) {
-			if (VATTR_IS_SUPPORTED(&va, va_data_size)) {
-				ATTR_PACK8(ab, va.va_data_size);
-			} else {
-				ATTR_PACK8(ab, va.va_total_size);
-			}
-			ab.actual.fileattr |= ATTR_FILE_DATALENGTH;
-		}
-		if (al.fileattr & ATTR_FILE_DATAALLOCSIZE) {
-			if (VATTR_IS_SUPPORTED(&va, va_data_alloc)) {
-				ATTR_PACK8(ab, va.va_data_alloc);
-			} else {
-				ATTR_PACK8(ab, va.va_total_alloc);
-			}
-			ab.actual.fileattr |= ATTR_FILE_DATAALLOCSIZE;
-		}
-		/* already got the resource fork size/allocation above */
-		if (al.fileattr & ATTR_FILE_RSRCLENGTH) {
-			ATTR_PACK8(ab, rlength);
-			ab.actual.fileattr |= ATTR_FILE_RSRCLENGTH;
-		}
-		if (al.fileattr & ATTR_FILE_RSRCALLOCSIZE) {
-			ATTR_PACK8(ab, ralloc);
-			ab.actual.fileattr |= ATTR_FILE_RSRCALLOCSIZE;
-		}
+	if (!error && alp->fileattr && (vtype != VDIR)) {
+		error = attr_pack_file(ctx, vp, alp, &ab, vap, return_valid,
+		    pack_invalid, is_bulk);
 	}
 
+	if (error)
+		goto out;
+	
 	/* diagnostic */
 	if (!return_valid && (ab.fixedcursor - ab.base) != fixedsize)
 		panic("packed field size mismatch; allocated %ld but packed %ld for common %08x vol %08x",
-		    fixedsize, (long) (ab.fixedcursor - ab.base), al.commonattr, al.volattr);
+		    fixedsize, (long) (ab.fixedcursor - ab.base), alp->commonattr, alp->volattr);
 	if (!return_valid && ab.varcursor != (ab.base + ab.needed))
 		panic("packed variable field size mismatch; used %ld but expected %ld", (long) (ab.varcursor - ab.base), ab.needed);
 
@@ -2144,7 +2423,7 @@ getattrlist_internal(vnode_t vp, struct getattrlist_args *uap,
 	 * of the result buffer, even if we copied less out.  The caller knows how big a buffer
 	 * they gave us, so they can always check for truncation themselves.
 	 */
-	*(uint32_t *)ab.base = (uap->options & FSOPT_REPORT_FULLSIZE) ? ab.needed : imin(ab.allocated, ab.needed);
+	*(uint32_t *)ab.base = (options & FSOPT_REPORT_FULLSIZE) ? ab.needed : imin(ab.allocated, ab.needed);
 
 	/* Return attribute set output if requested. */
 	if (return_valid) {
@@ -2157,19 +2436,254 @@ getattrlist_internal(vnode_t vp, struct getattrlist_args *uap,
 		}
 		bcopy(&ab.actual, ab.base + sizeof(uint32_t), sizeof (ab.actual));
 	}
-	
+
+	copy_size = imin(buf_size, ab.allocated);
+
 	/* Only actually copyout as much out as the user buffer can hold */
-	error = copyout(ab.base, uap->attributeBuffer, imin(uap->bufferSize, ab.allocated));
-	
+	if (alloc_local_buf) {
+		error = uiomove(ab.base, copy_size, auio);
+	} else {
+		off_t orig_offset = uio_offset(auio);
+
+		/*
+		 * The buffer in the uio struct was used directly
+		 * (i.e. it was a kernel buffer and big enough
+		 * to hold the data required) in order to avoid
+		 * un-needed allocation and copies.
+		 *
+		 * At this point, update the resid value to what it
+		 * would be if this was the result of a uiomove. The
+		 * offset is also incremented, though it may not
+		 * mean anything to the caller but that is what
+		 * uiomove does as well.
+		 */
+		uio_setresid(auio, buf_size - copy_size);
+		uio_setoffset(auio, orig_offset + (off_t)copy_size);
+	}
+
 out:
-	if (va.va_name)
-		kfree(va.va_name, MAXPATHLEN);
-	if (fullpathptr)
-		kfree(fullpathptr, MAXPATHLEN);
 	if (vname)
 		vnode_putname(vname);
-	if (ab.base != NULL)
+	if (fullpathptr)
+		kfree(fullpathptr, MAXPATHLEN);
+	if (ab.base != NULL && alloc_local_buf)
 		FREE(ab.base, M_TEMP);
+	return (error);
+}
+
+errno_t
+vfs_attr_pack(vnode_t vp, uio_t uio, struct attrlist *alp, uint64_t options,
+    struct vnode_attr *vap, __unused void *fndesc, vfs_context_t ctx)
+{
+	int error;
+	ssize_t fixedsize;
+	uint64_t orig_active;
+	struct attrlist orig_al;
+	enum vtype v_type;
+
+	if (vp)
+		v_type = vnode_vtype(vp);
+	else
+		v_type = vap->va_objtype;
+
+	orig_al = *alp;
+	orig_active = vap->va_active;
+	vap->va_active = 0;
+
+	error = getattrlist_setupvattr_all(alp, vap, v_type, &fixedsize,
+	    proc_is64bit(vfs_context_proc(ctx)));
+
+	/*
+	 * Ugly hack to correctly report fsids. vs_fsid is 32 bits and
+	 * there is va_fsid64 as well but filesystems have to say that
+	 * both are supported so that the value can be used correctly.
+	 * So we set va_fsid if the filesystem has only set va_fsid64.
+	 */
+
+	if ((alp->commonattr & ATTR_CMN_FSID) &&
+	    VATTR_IS_SUPPORTED(vap, va_fsid64))
+		VATTR_SET_SUPPORTED(vap, va_fsid);
+
+	if (error) {
+		VFS_DEBUG(ctx, vp,
+		    "ATTRLIST - ERROR: setup for request failed");
+		goto out;
+	}
+
+	error = vfs_attr_pack_internal(vp, uio, alp, 
+	    options|FSOPT_REPORT_FULLSIZE, vap, NULL, ctx, 1, v_type,
+	    fixedsize);
+
+	VATTR_CLEAR_SUPPORTED_ALL(vap);
+	vap->va_active = orig_active;
+	*alp = orig_al;
+out:
+	return (error);
+}
+
+/*
+ * Obtain attribute information about a filesystem object.
+ *
+ * Note: The alt_name parameter can be used by the caller to pass in the vnode
+ * name obtained from some authoritative source (eg. readdir vnop); where
+ * filesystems' getattr vnops do not support ATTR_CMN_NAME, the alt_name will be
+ * used as the ATTR_CMN_NAME attribute returned in vnode_attr.va_name.
+ * 
+ */
+static int
+getattrlist_internal(vfs_context_t ctx, vnode_t vp, struct attrlist  *alp,
+    user_addr_t attributeBuffer, size_t bufferSize, uint64_t options,
+    enum uio_seg segflg, char* alt_name)
+{
+	struct vnode_attr va;
+	kauth_action_t	action;
+	ssize_t		fixedsize;
+	char		*va_name;
+	int		proc_is64;
+	int		error;
+	int		return_valid;
+	int		pack_invalid;
+	int		vtype = 0;
+	uio_t		auio;
+	char uio_buf[ UIO_SIZEOF(1)];
+
+	proc_is64 = proc_is64bit(vfs_context_proc(ctx));
+
+	if (segflg == UIO_USERSPACE) {
+		if (proc_is64)
+			segflg = UIO_USERSPACE64;
+		else
+			segflg = UIO_USERSPACE32;
+	}
+	auio = uio_createwithbuffer(1, 0, segflg, UIO_READ,
+		    &uio_buf[0], sizeof(uio_buf));
+	uio_addiov(auio, attributeBuffer, bufferSize);
+
+	VATTR_INIT(&va);
+	va_name = NULL;
+
+	if (alp->bitmapcount != ATTR_BIT_MAP_COUNT) {
+		error = EINVAL;
+		goto out;
+	}
+
+	VFS_DEBUG(ctx, vp, "%p  ATTRLIST - %s request common %08x vol %08x file %08x dir %08x fork %08x %sfollow on '%s'",
+	    vp, p->p_comm, alp->commonattr, alp->volattr, alp->fileattr, alp->dirattr, alp->forkattr,
+	    (options & FSOPT_NOFOLLOW) ? "no":"", vp->v_name);
+
+#if CONFIG_MACF
+	error = mac_vnode_check_getattrlist(ctx, vp, alp);
+	if (error)
+		goto out;
+#endif /* MAC */
+
+	/*
+	 * It is legal to request volume or file attributes,
+	 * but not both.
+	 */
+	if (alp->volattr) {
+		if (alp->fileattr || alp->dirattr || alp->forkattr) {
+			error = EINVAL;
+			VFS_DEBUG(ctx, vp, "ATTRLIST - ERROR: mixed volume/file/directory/fork attributes");
+			goto out;
+		}
+		/* handle volume attribute request */
+		error = getvolattrlist(ctx, vp, alp, attributeBuffer,
+		                       bufferSize, options, segflg, proc_is64);
+		goto out;
+	}
+
+	/*
+	 * ATTR_CMN_GEN_COUNT and ATTR_CMN_DOCUMENT_ID reuse the bits
+	 * originally allocated to ATTR_CMN_NAMEDATTRCOUNT and
+	 * ATTR_CMN_NAMEDATTRLIST.
+	 */
+	if ((alp->commonattr & (ATTR_CMN_GEN_COUNT | ATTR_CMN_DOCUMENT_ID)) &&
+	    !(options & FSOPT_ATTR_CMN_EXTENDED)) {
+		error = EINVAL;
+		goto out;
+	}
+
+	/* Check for special packing semantics */
+	return_valid = (alp->commonattr & ATTR_CMN_RETURNED_ATTRS) ? 1 : 0;
+	pack_invalid = (options & FSOPT_PACK_INVAL_ATTRS) ? 1 : 0;
+	if (pack_invalid) {
+		/* FSOPT_PACK_INVAL_ATTRS requires ATTR_CMN_RETURNED_ATTRS */
+		if (!return_valid || alp->forkattr) {
+			error = EINVAL;
+			goto out;
+		}
+		/* Keep invalid attrs from being uninitialized */
+		bzero(&va, sizeof (va));
+	}
+
+	/* Pick up the vnode type.  If the FS is bad and changes vnode types on us, we
+	 * will have a valid snapshot that we can work from here.
+	 */
+	vtype = vp->v_type;
+
+	/*
+	 * Set up the vnode_attr structure and authorise.
+	 */
+	if ((error = getattrlist_setupvattr(alp, &va, &fixedsize, &action, proc_is64, (vtype == VDIR))) != 0) {
+		VFS_DEBUG(ctx, vp, "ATTRLIST - ERROR: setup for request failed");
+		goto out;
+	}
+	if ((error = vnode_authorize(vp, NULL, action, ctx)) != 0) {
+		VFS_DEBUG(ctx, vp, "ATTRLIST - ERROR: authorisation failed/denied");
+		goto out;
+	}
+
+
+
+	if (va.va_active != 0) {
+		uint64_t va_active = va.va_active;
+
+		/*
+		 * If we're going to ask for va_name, allocate a buffer to point it at
+		 */
+		if (VATTR_IS_ACTIVE(&va, va_name)) {
+			MALLOC_ZONE(va_name, char *, MAXPATHLEN, M_NAMEI,
+			    M_WAITOK);
+			if (va_name == NULL) {
+				error = ENOMEM;
+				VFS_DEBUG(ctx, vp, "ATTRLIST - ERROR: cannot allocate va_name buffer");
+				goto out;
+			}
+		}
+
+		va.va_name = va_name;
+
+		/*
+		 * Call the filesystem.
+		 */
+		if ((error = vnode_getattr(vp, &va, ctx)) != 0) {
+			VFS_DEBUG(ctx, vp, "ATTRLIST - ERROR: filesystem returned %d", error);
+			goto out;
+		}
+
+
+		/* 
+		 * If ATTR_CMN_NAME is not supported by filesystem and the
+		 * caller has provided a name, use that.
+		 * A (buggy) filesystem may change fields which belong
+		 * to us. We try to deal with that here as well.
+		 */
+		va.va_active = va_active;
+		if (alt_name  && va_name &&
+		    !(VATTR_IS_SUPPORTED(&va, va_name))) {
+			strlcpy(va_name, alt_name, MAXPATHLEN);
+			VATTR_SET_SUPPORTED(&va, va_name);
+		}
+		va.va_name = va_name;
+	}
+	
+	error = vfs_attr_pack_internal(vp, auio, alp, options, &va, NULL, ctx,
+	    0, vtype, fixedsize);
+
+out:
+	if (va_name)
+		FREE_ZONE(va_name, MAXPATHLEN, M_NAMEI);
 	if (VATTR_IS_SUPPORTED(&va, va_acl) && (va.va_acl != NULL))
 		kauth_acl_free(va.va_acl);
 
@@ -2180,10 +2694,10 @@ out:
 int
 fgetattrlist(proc_t p, struct fgetattrlist_args *uap, __unused int32_t *retval)
 {
-	struct vfs_context *ctx;
-	vnode_t		vp = NULL;
-	int		error;
-	struct getattrlist_args	ap;
+	vfs_context_t ctx;
+	vnode_t vp;
+	int error;
+	struct attrlist al;
 
 	ctx = vfs_context_current();
 	error = 0;
@@ -2196,15 +2710,20 @@ fgetattrlist(proc_t p, struct fgetattrlist_args *uap, __unused int32_t *retval)
 		return(error);
 	}
 
-	ap.path = 0;
-	ap.alist = uap->alist;
-	ap.attributeBuffer = uap->attributeBuffer;
-	ap.bufferSize = uap->bufferSize;
-	ap.options = uap->options;
+	/*
+	 * Fetch the attribute request.
+	 */
+	error = copyin(uap->alist, &al, sizeof(al));
+	if (error)
+		goto out;
 
 	/* Default to using the vnode's name. */
-	error = getattrlist_internal(vp, &ap, NULL, p, ctx);
+	error = getattrlist_internal(ctx, vp, &al, uap->attributeBuffer,
+	                             uap->bufferSize, uap->options,
+				     (IS_64BIT_PROCESS(p) ? UIO_USERSPACE64 : \
+	                             UIO_USERSPACE32), NULL);
 
+out:
 	file_drop(uap->fd);
 	if (vp)
 		vnode_put(vp);
@@ -2212,41 +2731,845 @@ fgetattrlist(proc_t p, struct fgetattrlist_args *uap, __unused int32_t *retval)
 	return error;
 }
 
-int
-getattrlist(proc_t p, struct getattrlist_args *uap, __unused int32_t *retval)
+static int
+getattrlistat_internal(vfs_context_t ctx, user_addr_t path,
+    struct attrlist *alp, user_addr_t attributeBuffer, size_t bufferSize,
+    uint64_t options, enum uio_seg segflg, enum uio_seg pathsegflg, int fd)
 {
-	struct vfs_context *ctx;
 	struct nameidata nd;
-	vnode_t		vp = NULL;
-	u_long		nameiflags;
-	int		error;
+	vnode_t vp;
+	int32_t nameiflags;
+	int error;
 
-	ctx = vfs_context_current();
-	error = 0;
-
+	nameiflags = 0;
 	/*
 	 * Look up the file.
 	 */
-	nameiflags = NOTRIGGER | AUDITVNPATH1;
-	if (!(uap->options & FSOPT_NOFOLLOW))
+	if (!(options & FSOPT_NOFOLLOW))
 		nameiflags |= FOLLOW;
-	NDINIT(&nd, LOOKUP, OP_GETATTR, nameiflags, UIO_USERSPACE, uap->path, ctx);
 
-	if ((error = namei(&nd)) != 0) {	
-		/* vp is still uninitialized */
-		return error;
-	}
+	nameiflags |= AUDITVNPATH1;
+	NDINIT(&nd, LOOKUP, OP_GETATTR, nameiflags, pathsegflg,
+	    path, ctx);
+
+	error = nameiat(&nd, fd);
+
+	if (error)
+		return (error);
 
 	vp = nd.ni_vp;
-	/* Pass along our componentname to getattrlist_internal */
-	error = getattrlist_internal(vp, uap, &(nd.ni_cnd), p, ctx);
+
+	error = getattrlist_internal(ctx, vp, alp, attributeBuffer,
+	    bufferSize, options, segflg, NULL);
 	
 	/* Retain the namei reference until the getattrlist completes. */
 	nameidone(&nd);
-	if (vp)
+	vnode_put(vp);
+	return (error);
+}
+
+int
+getattrlist(proc_t p, struct getattrlist_args *uap, __unused int32_t *retval)
+{
+	enum uio_seg segflg;
+	struct attrlist al;
+	int error;
+
+	segflg = IS_64BIT_PROCESS(p) ? UIO_USERSPACE64 : UIO_USERSPACE32;
+
+	/*
+	 * Fetch the attribute request.
+	 */
+	error = copyin(uap->alist, &al, sizeof(al));
+	if (error)
+		return error;
+
+	return (getattrlistat_internal(vfs_context_current(),
+	    CAST_USER_ADDR_T(uap->path), &al,
+	    CAST_USER_ADDR_T(uap->attributeBuffer), uap->bufferSize,
+	    (uint64_t)uap->options, segflg, segflg, AT_FDCWD));
+}
+
+int
+getattrlistat(proc_t p, struct getattrlistat_args *uap, __unused int32_t *retval)
+{
+	enum uio_seg segflg;
+	struct attrlist al;
+	int error;
+
+	segflg = IS_64BIT_PROCESS(p) ? UIO_USERSPACE64 : UIO_USERSPACE32;
+
+	/*
+	 * Fetch the attribute request.
+	 */
+	error = copyin(uap->alist, &al, sizeof(al));
+	if (error)
+		return error;
+
+	return (getattrlistat_internal(vfs_context_current(),
+	    CAST_USER_ADDR_T(uap->path), &al,
+	    CAST_USER_ADDR_T(uap->attributeBuffer), uap->bufferSize,
+	    (uint64_t)uap->options, segflg, segflg, uap->fd));
+}
+
+/*
+ * This refills the per-fd direntries cache by issuing a VNOP_READDIR.
+ * It attempts to try and find a size the filesystem responds to, so
+ * it first tries 1 direntry sized buffer and going from 1 to 2 to 4
+ * direntry sized buffers to readdir. If the filesystem does not respond
+ * to 4 * direntry it returns the error by the filesystem (if any) and sets
+ * EOF.
+ *
+ * This function also tries again if the last "refill" returned an EOF
+ * to try and get any additional entries if they were added after the last
+ * refill.
+ */
+static int
+refill_fd_direntries(vfs_context_t ctx, vnode_t dvp, struct fd_vn_data *fvd,
+    int *eofflagp)
+{
+	uio_t rdir_uio;
+	char uio_buf[UIO_SIZEOF(1)];
+	size_t rdirbufsiz;
+	size_t rdirbufused;
+	int eofflag;
+	int nentries;
+	int error;
+
+	error = 0;
+
+	/*
+	 * If there is a cached allocation size of the dirbuf that should be
+	 * allocated, use that. Otherwise start with a allocation size of
+	 * FV_DIRBUF_START_SIZ. This start size may need to be increased if the
+	 * filesystem doesn't respond to the initial size.
+	 */
+
+	if (fvd->fv_offset && fvd->fv_bufallocsiz) {
+		rdirbufsiz = fvd->fv_bufallocsiz;
+	} else {
+		rdirbufsiz = FV_DIRBUF_START_SIZ;
+	}
+
+	*eofflagp = 0;
+
+	rdir_uio = uio_createwithbuffer(1, 0, UIO_SYSSPACE, UIO_READ,
+	    &uio_buf[0], sizeof(uio_buf));
+
+retry_alloc:
+	/*
+	 * Don't explicitly zero out this buffer since this is
+	 * not copied out to user space.
+	 */
+	if (!fvd->fv_buf) {
+		MALLOC(fvd->fv_buf, caddr_t, rdirbufsiz, M_FD_DIRBUF, M_WAITOK);
+		fvd->fv_bufdone = 0;
+	}
+
+	uio_reset(rdir_uio, fvd->fv_eoff, UIO_SYSSPACE, UIO_READ);
+	uio_addiov(rdir_uio, CAST_USER_ADDR_T(fvd->fv_buf), rdirbufsiz);
+
+	/*
+	 * Some filesystems do not set nentries or eofflag...
+	 */
+	eofflag = 0;
+	nentries = 0;
+	error = vnode_readdir64(dvp, rdir_uio, VNODE_READDIR_EXTENDED,
+	    &eofflag, &nentries, ctx);
+
+	rdirbufused = rdirbufsiz - (size_t)uio_resid(rdir_uio);
+
+	if (!error && (rdirbufused > 0) && (rdirbufused <= rdirbufsiz)) {
+		/* Save offsets */
+		fvd->fv_soff = fvd->fv_eoff;
+		fvd->fv_eoff = uio_offset(rdir_uio);
+		 /* Save eofflag state but don't return EOF for this time.*/
+		fvd->fv_eofflag = eofflag;
+		eofflag = 0;
+		 /* Reset buffer parameters */
+		fvd->fv_bufsiz = rdirbufused;
+		fvd->fv_bufdone = 0;
+		bzero(fvd->fv_buf + rdirbufused, rdirbufsiz - rdirbufused);
+		/* Cache allocation size the Filesystem responded to */
+		fvd->fv_bufallocsiz = rdirbufsiz;
+	} else if (!eofflag && (rdirbufsiz < FV_DIRBUF_MAX_SIZ)) {
+		/*
+		 * Some Filesystems have higher requirements for the
+		 * smallest buffer size they will respond to for a
+		 * directory listing. Start (relatively) small but increase
+		 * it upto FV_DIRBUF_MAX_SIZ. Most should be good with
+		 * 1*direntry. Cache the size found so that this does not need
+		 * need to be done every time. This also means that an error
+		 * from VNOP_READDIR is ignored until at least FV_DIRBUF_MAX_SIZ
+		 * has been attempted.
+		 */
+		FREE(fvd->fv_buf, M_FD_DIRBUF);
+		fvd->fv_buf = NULL;
+		rdirbufsiz = 2 * rdirbufsiz;
+		fvd->fv_bufallocsiz = 0;
+		goto retry_alloc;
+	} else if (!error) {
+		/*
+		 * The Filesystem did not set eofflag but also did not
+		 * return any entries (or an error). It is presumed that
+		 * EOF has been reached.
+		 */
+		fvd->fv_eofflag = eofflag = 1;
+	}
+
+	/*
+	 * If the filesystem returned an error and it had previously returned
+	 * EOF, ignore the error and set EOF.
+	 */
+	if (error && fvd->fv_eofflag) {
+		eofflag = 1;
+		error = 0;
+	}
+
+	/*
+	 * If either the directory has either hit EOF or an error, now is a good
+	 * time to free up directory entry buffer.
+	 */
+	if ((error || eofflag) && fvd->fv_buf) {
+		FREE(fvd->fv_buf, M_FD_DIRBUF);
+		fvd->fv_buf = NULL;
+	}
+
+	*eofflagp = eofflag;
+
+	return (error);
+}
+
+/*
+ * gets the current direntry. To advance to the next direntry this has to be
+ * paired with a direntry_done.
+ *
+ * Since directories have restrictions on where directory enumeration
+ * can restart from, entries are first read into* a per fd diectory entry
+ * "cache" and entries provided from that cache.
+ */
+static int
+get_direntry(vfs_context_t ctx, vnode_t dvp, struct fd_vn_data *fvd,
+    int *eofflagp, struct direntry **dpp)
+{
+	int eofflag;
+	int error;
+
+	*eofflagp = 0;
+	*dpp = NULL;
+	error = 0;
+	if (!fvd->fv_bufsiz) {
+		error = refill_fd_direntries(ctx, dvp, fvd, &eofflag);
+		if (error) {
+			return (error);
+		}
+		if (eofflag) {
+			*eofflagp = eofflag;
+			return (error);
+		}
+	}
+
+	*dpp = (struct direntry *)(fvd->fv_buf + fvd->fv_bufdone);
+	return (error);
+}
+
+/*
+ * Advances to the next direntry.
+ */
+static void
+direntry_done(struct fd_vn_data *fvd)
+{
+	struct direntry *dp;
+
+	dp = (struct direntry *)(fvd->fv_buf + fvd->fv_bufdone);
+	if (dp->d_reclen) {
+		fvd->fv_bufdone += dp->d_reclen;
+		if (fvd->fv_bufdone > fvd->fv_bufsiz) {
+			fvd->fv_bufdone = fvd->fv_bufsiz;
+		}
+	} else {
+		fvd->fv_bufdone = fvd->fv_bufsiz;
+	}
+
+	/*
+	 * If we're at the end the fd direntries cache, reset the
+	 * cache trackers.
+	 */
+	if (fvd->fv_bufdone == fvd->fv_bufsiz) {
+		fvd->fv_bufdone = 0;
+		fvd->fv_bufsiz = 0;
+	}
+}
+
+/*
+ *  A stripped down version of getattrlist_internal to fill in only select
+ *  attributes in case of an error from getattrlist_internal.
+ *
+ *  It always returns at least ATTR_BULK_REQUIRED i.e. the name (but may also
+ *  return some other attributes which can be obtained from the vnode).
+ *
+ *  It does not change the value of the passed in attrlist.
+ *
+ *  The objective of this function is to fill in an "error entry", i.e.
+ *  an entry with ATTR_CMN_RETURNED_ATTRS & ATTR_CMN_NAME. If the caller
+ *  has also asked for ATTR_CMN_ERROR, it is filled in as well.
+ *
+ *  Input
+ *       vp - vnode pointer
+ *       alp - pointer to attrlist struct.
+ *       options - options passed to getattrlistbulk(2)
+ *       kern_attr_buf - Kernel buffer to fill data (assumes offset 0 in
+ *           buffer)
+ *       kern_attr_buf_siz - Size of buffer.
+ *       needs_error_attr - Whether the caller asked for ATTR_CMN_ERROR
+ *       error_attr - This value is used to fill ATTR_CMN_ERROR (if the user
+ *                  has requested it in the attribute list.
+ *       namebuf - This is used to fill in the name.
+ *       ctx - vfs context of caller.
+ */
+static void
+get_error_attributes(vnode_t vp, struct attrlist *alp, uint64_t options,
+    user_addr_t kern_attr_buf, size_t kern_attr_buf_siz, int error_attr,
+    caddr_t namebuf, vfs_context_t ctx)
+{
+	size_t fsiz, vsiz;
+	struct _attrlist_buf ab;
+	int namelen;
+	kauth_action_t action;
+	struct attrlist al;
+	int needs_error_attr = (alp->commonattr & ATTR_CMN_ERROR);
+
+	/*
+	 * To calculate fixed size required, in the FSOPT_PACK_INVAL_ATTRS case,
+	 * the fixedsize should include space for all the attributes asked by
+	 * the user. Only ATTR_BULK_REQUIRED (and ATTR_CMN_ERROR) will be filled
+	 * and will be valid. All other attributes are zeroed out later.
+	 *
+	 * ATTR_CMN_RETURNED_ATTRS, ATTR_CMN_ERROR and ATTR_CMN_NAME
+	 * (the only valid ones being returned from here) happen to be
+	 * the first three attributes by order as well.
+	 */
+	al = *alp;
+	if (!(options & FSOPT_PACK_INVAL_ATTRS)) {
+		/*
+		 * In this case the fixedsize only needs to be only for the
+		 * attributes being actually returned.
+		 */
+		al.commonattr = ATTR_BULK_REQUIRED;
+		if (needs_error_attr) {
+			al.commonattr |= ATTR_CMN_ERROR;
+		}
+		al.fileattr = 0;
+		al.dirattr = 0;
+	}
+
+	/*
+	 * Passing NULL for the vnode_attr pointer is valid for
+	 * getattrlist_setupvattr. All that is required is the size.
+	 */
+	fsiz = 0;
+	(void)getattrlist_setupvattr(&al, NULL, (ssize_t *)&fsiz,
+	    &action, proc_is64bit(vfs_context_proc(ctx)),
+	    (vnode_vtype(vp) == VDIR));
+
+	namelen = strlen(namebuf);
+	vsiz = namelen + 1;
+	vsiz = ((vsiz + 3) & ~0x03);
+
+	bzero(&ab, sizeof(ab));
+	ab.base = (char *)kern_attr_buf;
+	ab.needed = fsiz + vsiz;
+
+	/* Fill in the size needed */
+	*((uint32_t *)ab.base) = ab.needed;
+	if (ab.needed > (ssize_t)kern_attr_buf_siz) {
+		goto out;
+	}
+
+	/*
+	 * Setup to pack results into the destination buffer.
+	 */
+	ab.fixedcursor = ab.base + sizeof(uint32_t);
+	/*
+	 * Zero out buffer, ab.fixedbuffer starts after the first uint32_t
+	 * which gives the length. This ensures everything that we don't
+	 * fill in explicitly later is zeroed out correctly.
+	 */
+	bzero(ab.fixedcursor, fsiz);
+	/*
+	 * variable size data should start after all the fixed
+	 * size data.
+	 */
+	ab.varcursor = ab.base + fsiz;
+	/*
+	 * Initialise the value for ATTR_CMN_RETURNED_ATTRS and leave space
+	 * Leave space for filling in its value here at the end.
+	 */
+	bzero(&ab.actual, sizeof (ab.actual));
+	ab.fixedcursor += sizeof (attribute_set_t);
+
+	ab.allocated = ab.needed;
+
+	/* Fill ATTR_CMN_ERROR (if asked for) */
+	if (needs_error_attr) {
+		ATTR_PACK4(ab, error_attr);
+		ab.actual.commonattr |= ATTR_CMN_ERROR;
+	}
+
+	/*
+	 * Fill ATTR_CMN_NAME, The attrrefrence is packed at this location
+	 * but the actual string itself is packed after fixedsize which set
+	 * to different lengths based on whether FSOPT_PACK_INVAL_ATTRS
+	 * was passed.
+	 */
+	attrlist_pack_string(&ab, namebuf, namelen);
+
+	/*
+	 * Now Fill in ATTR_CMN_RETURNED_ATTR. This copies to a
+	 * location after the count i.e. before ATTR_CMN_ERROR and
+	 * ATTR_CMN_NAME.
+	 */
+	ab.actual.commonattr |= ATTR_CMN_NAME | ATTR_CMN_RETURNED_ATTRS;
+	bcopy(&ab.actual, ab.base + sizeof(uint32_t), sizeof (ab.actual));
+out:
+	return;
+}
+
+/*
+ * This is the buffer size required to return at least 1 entry. We need space
+ * for the length, for ATTR_CMN_RETURNED_ATTRS and ATTR_CMN_NAME. Assuming the
+ * smallest filename of a single byte we get
+ */
+
+#define MIN_BUF_SIZE_REQUIRED  (sizeof(uint32_t) + sizeof(attribute_set_t) +\
+    sizeof(attrreference_t))
+
+/*
+ * Read directory entries and get attributes filled in for each directory
+ */
+static int
+readdirattr(vnode_t dvp, struct fd_vn_data *fvd, uio_t auio,
+    struct attrlist *alp, uint64_t options, int *count, int *eofflagp,
+    vfs_context_t ctx)
+{
+	caddr_t kern_attr_buf;
+	size_t kern_attr_buf_siz;
+	caddr_t max_path_name_buf = NULL;
+	int error = 0;
+
+	*count = 0;
+	*eofflagp = 0;
+
+	if (uio_iovcnt(auio) > 1) {
+		return (EINVAL);
+	}
+
+	/*
+	 * We fill in a kernel buffer for the attributes and uiomove each
+	 * entry's attributes (as returned by getattrlist_internal)
+	 */
+	kern_attr_buf_siz = uio_resid(auio);
+	if (kern_attr_buf_siz > ATTR_MAX_BUFFER) {
+		kern_attr_buf_siz = ATTR_MAX_BUFFER;
+	} else if (kern_attr_buf_siz == 0) {
+		/* Nothing to do */
+		return (error);
+	}
+
+	MALLOC(kern_attr_buf, caddr_t, kern_attr_buf_siz, M_TEMP, M_WAITOK);
+
+	while (uio_resid(auio) > (user_ssize_t)MIN_BUF_SIZE_REQUIRED) {
+		struct direntry *dp;
+		user_addr_t name_buffer;
+		struct nameidata nd;
+		vnode_t vp;
+		struct attrlist al;
+		size_t entlen;
+		size_t bytes_left;
+		size_t pad_bytes;
+		ssize_t new_resid;
+
+		/*
+		 * get_direntry returns the current direntry and does not
+		 * advance. A move to the next direntry only happens if
+		 * direntry_done is called.
+		 */
+		error = get_direntry(ctx, dvp, fvd, eofflagp, &dp);
+		if (error || (*eofflagp) || !dp) {
+			break;
+		}
+
+		/*
+		 * skip "." and ".." (and a bunch of other invalid conditions.)
+		 */
+		if (!dp->d_reclen || dp->d_ino == 0 || dp->d_namlen == 0 ||
+		    (dp->d_namlen == 1 && dp->d_name[0] == '.') ||
+		    (dp->d_namlen == 2 && dp->d_name[0] == '.' &&
+		    dp->d_name[1] == '.')) {
+			direntry_done(fvd);
+			continue;
+		}
+
+		/*
+		 * try to deal with not-null terminated filenames.
+		 */
+		if (dp->d_name[dp->d_namlen] != '\0') {
+			if (!max_path_name_buf) {
+				MALLOC(max_path_name_buf, caddr_t, MAXPATHLEN,
+				    M_TEMP, M_WAITOK);
+			}
+			bcopy(dp->d_name, max_path_name_buf, dp->d_namlen);
+			max_path_name_buf[dp->d_namlen] = '\0';
+			name_buffer = CAST_USER_ADDR_T(max_path_name_buf);
+		} else {
+			name_buffer = CAST_USER_ADDR_T(&(dp->d_name));
+		}
+
+		/*
+		 * We have an iocount on the directory already
+		 */
+		NDINIT(&nd, LOOKUP, OP_GETATTR, AUDITVNPATH1 | USEDVP,
+		    UIO_SYSSPACE, CAST_USER_ADDR_T(name_buffer), ctx);
+
+		nd.ni_dvp = dvp;
+		error = namei(&nd);
+
+		if (error) {
+			direntry_done(fvd);
+			error = 0;
+			continue;
+		}
+
+		vp = nd.ni_vp;
+
+		/*
+		 * getattrlist_internal can change the values of the
+		 * the required attribute list. Copy the current values
+		 * and use that one instead.
+		 */
+		al = *alp;
+
+		error = getattrlist_internal(ctx, vp, &al,
+		    CAST_USER_ADDR_T(kern_attr_buf), kern_attr_buf_siz,
+		    options | FSOPT_REPORT_FULLSIZE, UIO_SYSSPACE, 
+		    CAST_DOWN_EXPLICIT(char *, name_buffer));
+
+		nameidone(&nd);
+
+		if (error) {
+			get_error_attributes(vp, alp, options,
+			    CAST_USER_ADDR_T(kern_attr_buf),
+			    kern_attr_buf_siz, error, (caddr_t)name_buffer,
+			    ctx);
+			error = 0;
+		}
+
+		/* Done with vnode now */
 		vnode_put(vp);
 
-	return error;
+		/*
+		 * Because FSOPT_REPORT_FULLSIZE was set, the first 4 bytes
+		 * of the buffer returned by getattrlist contains the size
+		 * (even if the provided buffer isn't sufficiently big). Use
+		 * that to check if we've run out of buffer space.
+		 *
+		 * resid is a signed type, and the size of the buffer etc
+		 * are unsigned types. It is theoretically possible for
+		 * resid to be < 0 and in which case we would be assigning
+		 * an out of bounds value to bytes_left (which is unsigned)
+		 * uiomove takes care to not ever set resid to < 0, so it
+		 * is safe to do this here.
+		 */
+		bytes_left = (size_t)((user_size_t)uio_resid(auio));
+		entlen = (size_t)(*((uint32_t *)(kern_attr_buf)));
+		if (!entlen || (entlen > bytes_left)) {
+			break;
+		}
+
+		/*
+		 * Will the pad bytes fit as well  ? If they can't be, still use
+		 * this entry but this will be the last entry returned.
+		 */
+		pad_bytes = ((entlen + 7) & ~0x07) - entlen;
+		new_resid = 0;
+		if (pad_bytes && (entlen + pad_bytes <= bytes_left)) {
+			/*
+			 * While entlen can never be > ATTR_MAX_BUFFER,
+			 * (entlen + pad_bytes) can be, handle that and
+			 * zero out the pad bytes. N.B. - Only zero
+			 * out information in the kernel buffer that is
+			 * going to be uiomove'ed out.
+			 */
+			if (entlen + pad_bytes <= kern_attr_buf_siz) {
+				/* This is the normal case. */
+				bzero(kern_attr_buf + entlen, pad_bytes);
+			} else {
+				bzero(kern_attr_buf + entlen,
+				    kern_attr_buf_siz - entlen);
+				/*
+				 * Pad bytes left over, change the resid value
+				 * manually. We only got in here because
+				 * bytes_left >= entlen + pad_bytes so
+				 * new_resid (which is a signed type) is
+				 * always positive.
+				 */
+				new_resid = (ssize_t)(bytes_left -
+				    (entlen + pad_bytes));
+			}
+			entlen += pad_bytes;
+		}
+		*((uint32_t *)kern_attr_buf) = (uint32_t)entlen;
+		error = uiomove(kern_attr_buf, min(entlen, kern_attr_buf_siz),
+		    auio);
+
+		if (error) {
+			break;
+		}
+
+		if (new_resid) {
+			uio_setresid(auio, (user_ssize_t)new_resid);
+		}
+
+		/*
+		 * At this point, the directory entry has been consumed, proceed
+		 * to the next one.
+		 */
+		(*count)++;
+		direntry_done(fvd);
+	}
+
+	if (max_path_name_buf) {
+		FREE(max_path_name_buf, M_TEMP);
+	}
+
+	/*
+	 * At this point, kern_attr_buf is always allocated
+	 */
+	FREE(kern_attr_buf, M_TEMP);
+
+	/*
+	 * Always set the offset to the last succesful offset
+	 * returned by VNOP_READDIR.
+	 */
+	uio_setoffset(auio, fvd->fv_eoff);
+
+	return (error);
+}
+
+/*
+ *int getattrlistbulk(int dirfd, struct attrlist *alist, void *attributeBuffer,
+ *    size_t bufferSize, uint64_t options)
+ *
+ * Gets directory entries alongwith their attributes in the same way
+ * getattrlist does for a single file system object.
+ *
+ * On non error returns, retval will hold the count of entries returned.
+ */
+int
+getattrlistbulk(proc_t p, struct getattrlistbulk_args *uap, int32_t *retval)
+{
+	struct attrlist al;
+	vnode_t dvp;
+	struct fileproc *fp;
+	struct fd_vn_data *fvdata;
+	vfs_context_t ctx;
+	enum uio_seg segflg;
+	int count;
+	uio_t auio = NULL;
+	char uio_buf[ UIO_SIZEOF(1) ];
+	kauth_action_t action;
+	int eofflag;
+	uint64_t options;
+	int error;
+
+	*retval = 0;
+
+	error = fp_getfvp(p, uap->dirfd, &fp, &dvp);
+	if (error)
+		return (error);
+
+	count = 0;
+	fvdata = NULL;
+	eofflag = 0;
+	ctx = vfs_context_current();
+	segflg = IS_64BIT_PROCESS(p) ? UIO_USERSPACE64 : UIO_USERSPACE32;
+
+	if ((fp->f_fglob->fg_flag & FREAD) == 0) {
+		/*
+		AUDIT_ARG(vnpath_withref, dvp, ARG_VNODE1);
+		*/
+		error = EBADF;
+		goto out;
+	}
+
+	if ((error = vnode_getwithref(dvp))) {
+		dvp = NULLVP;
+		goto out;
+	}
+
+	if (dvp->v_type != VDIR) {
+		error = ENOTDIR;
+		goto out;
+	}
+
+#if CONFIG_MACF
+	error = mac_file_check_change_offset(vfs_context_ucred(ctx),
+	                                     fp->f_fglob);
+	if (error)
+		goto out;
+#endif
+	/*
+	 * XXX : Audit Support
+	 *AUDIT_ARG(vnpath, dvp, ARG_VNODE1);
+	 */
+
+	options = uap->options | FSOPT_ATTR_CMN_EXTENDED;
+
+	if ((error = copyin(CAST_USER_ADDR_T(uap->alist), &al,
+	    sizeof(struct attrlist)))) {
+		goto out;
+	}
+
+	if (al.volattr ||
+	    ((al.commonattr & ATTR_BULK_REQUIRED) != ATTR_BULK_REQUIRED)) {
+		error = EINVAL;
+		goto out;
+	}
+
+#if CONFIG_MACF
+	error = mac_vnode_check_readdir(ctx, dvp);
+	if (error != 0) {
+		goto out;
+	}
+#endif /* MAC */
+
+	/*
+	 * If the only item requested is file names, we can let that past with
+	 * just LIST_DIRECTORY.  If they want any other attributes, that means
+	 * they need SEARCH as well.
+	 */
+	action = KAUTH_VNODE_LIST_DIRECTORY;
+	if ((al.commonattr & ~ATTR_CMN_NAME) || al.fileattr || al.dirattr)
+		action |= KAUTH_VNODE_SEARCH;
+	
+	error = vnode_authorize(dvp, NULL, action, ctx);
+	if (error) {
+		goto out;
+	}
+
+	fvdata = (struct fd_vn_data *)fp->f_fglob->fg_vn_data;
+	if (!fvdata) {
+		panic("Directory expected to have fg_vn_data");
+	}
+
+	FV_LOCK(fvdata);
+
+	/*
+	 * getattrlistbulk(2) maintains its offset in fv_offset. However
+	 * if the offset in the file glob is set (or reset) to 0, the directory
+	 * traversal needs to be restarted (Any existing state in the
+	 * directory buffer is removed as well).
+	 */
+	if (!fp->f_fglob->fg_offset) {
+		fvdata->fv_offset = 0;
+		if (fvdata->fv_buf) {
+			FV_BUF_FREE(fvdata, M_FD_DIRBUF);
+		}
+	}
+
+	auio = uio_createwithbuffer(1, fvdata->fv_offset, segflg, UIO_READ,
+	    &uio_buf[0], sizeof(uio_buf));
+	uio_addiov(auio, uap->attributeBuffer, (user_size_t)uap->bufferSize);
+
+	/*
+	 * For "expensive" operations in which the native VNOP implementations
+	 * end up having to do just as much (if not more) work than the default
+	 * implementation, fall back to the default implementation.
+	 * The VNOP helper functions depend on the filesystem providing the
+	 * object type, if the caller has not requested ATTR_CMN_OBJTYPE, fall
+	 * back to the default implementation.
+	 */
+	if ((al.commonattr &
+	    (ATTR_CMN_UUID | ATTR_CMN_GRPUUID | ATTR_CMN_EXTENDED_SECURITY)) ||
+	    !(al.commonattr & ATTR_CMN_OBJTYPE)) {
+		error = ENOTSUP;
+	 } else {
+		struct vnode_attr va;
+		char *va_name;
+
+		eofflag = 0;
+		count = 0;
+
+		VATTR_INIT(&va);
+		MALLOC(va_name, char *, MAXPATHLEN, M_TEMP, M_WAITOK|M_ZERO);
+		va.va_name = va_name;
+
+		(void)getattrlist_setupvattr_all(&al, &va, VNON, NULL,
+		    IS_64BIT_PROCESS(p));
+
+		error = VNOP_GETATTRLISTBULK(dvp, &al, &va, auio, NULL,
+		    options, &eofflag, &count, ctx);
+
+		FREE(va_name, M_TEMP);
+
+		/*
+		 * cache state of eofflag.
+		 */
+		if (!error) {
+			fvdata->fv_eofflag = eofflag;
+		}
+	}
+
+	/*
+	 * If the Filessytem does not natively support getattrlistbulk,
+	 * do the default implementation.
+	 */
+	if (error == ENOTSUP) {
+		eofflag = 0;
+		count = 0;
+
+		error = readdirattr(dvp, fvdata, auio, &al, options,
+		    &count, &eofflag, ctx);
+	}
+
+	if (error && fvdata->fv_eofflag) {
+		/*
+		 * Some filesystems return EINVAL if called again when,
+		 * for a directory, they have already returned EOF. We
+		 * have the EOF state from the last successful call to it.
+		 * If this is an error just reuse the state from the last
+		 * call and use that to return 0 to the user instead of
+		 * percolating an error to the user. We're not particular
+		 * about the error returned. If we get *any* error after
+		 * having already gotten an EOF, we ignore it.
+		 */
+		eofflag = 1;
+		error = 0;
+		count = 0;
+	}
+
+	if (count) {
+		fvdata->fv_offset = uio_offset(auio);
+		fp->f_fglob->fg_offset = fvdata->fv_offset;
+		*retval = count;
+		error = 0;
+	} else if (!error && !eofflag) {
+		/*
+		 * This just means the buffer was too small to fit even a
+		 * single entry.
+		 */
+		error = ERANGE;
+	}
+
+	FV_UNLOCK(fvdata);
+out:
+	if (dvp) {
+		vnode_put(dvp);
+	}
+
+	file_drop(uap->dirfd);
+
+	return (error);
 }
 
 static int

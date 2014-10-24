@@ -172,14 +172,14 @@ sdt_argdesc_t sdt_args[] = {
 	{ "io", "wait-done", 0, 0, "struct buf *", "bufinfo_t *" },
 	{ "io", "wait-done", 1, 0, "struct buf *", "devinfo_t *" },
 	{ "io", "wait-done", 2, 0, "struct buf *", "fileinfo_t *" },
-#if defined(__APPLE__)
+
+	/* APPLE NOTE: add vfs journaling support */
 	{ "io", "journal-start", 0, 0, "struct buf *", "bufinfo_t *" },
 	{ "io", "journal-start", 1, 0, "struct buf *", "devinfo_t *" },
 	{ "io", "journal-start", 2, 0, "struct buf *", "fileinfo_t *" },
 	{ "io", "journal-done", 0, 0, "struct buf *", "bufinfo_t *" },
 	{ "io", "journal-done", 1, 0, "struct buf *", "devinfo_t *" },
 	{ "io", "journal-done", 2, 0, "struct buf *", "fileinfo_t *" },
-#endif /* __APPLE__ */
 
 	{ "mib", NULL, 0, 0, "int", NULL },
 

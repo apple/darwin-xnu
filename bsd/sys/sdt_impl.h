@@ -42,9 +42,7 @@ extern const char *sdt_prefix;
 
 typedef struct sdt_probedesc {
 	char			*sdpd_name;	/* name of this probe */
-#if defined(__APPLE__)
-	char			*sdpd_func;	
-#endif /* __APPLE__ */
+	char			*sdpd_func;	/* APPLE NOTE: function name */
 	unsigned long		sdpd_offset;	/* offset of call in text */
 	struct sdt_probedesc	*sdpd_next;	/* next static probe */
 } sdt_probedesc_t;
@@ -67,9 +65,7 @@ struct module {
 };
 
 extern int sdt_invop(uintptr_t, uintptr_t *, uintptr_t);
-#if defined (__APPLE__)
 extern uint64_t sdt_getarg(void *, dtrace_id_t, void *, int, int);
-#endif /* __APPLE__ */    
 
 void sdt_provide_module(void *, struct modctl *);
 void sdt_init(void);

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2012-2013 Apple Inc. All rights reserved.
+ * Copyright (c) 2012-2014 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -560,6 +560,7 @@ flow_divert_add_data_statistics(struct flow_divert_pcb *fd_cb, int data_len, Boo
 	struct ifnet *ifp = NULL;
 	Boolean cell = FALSE;
 	Boolean wifi = FALSE;
+	Boolean wired = FALSE;
 	
 	inp = sotoinpcb(fd_cb->so);
 	if (inp == NULL) {
@@ -570,14 +571,15 @@ flow_divert_add_data_statistics(struct flow_divert_pcb *fd_cb, int data_len, Boo
 	if (ifp != NULL) {
 		cell = IFNET_IS_CELLULAR(ifp);
 		wifi = (!cell && IFNET_IS_WIFI(ifp));
+		wired = (!wifi && IFNET_IS_WIRED(ifp));
 	}
 	
 	if (send) {
-		INP_ADD_STAT(inp, cell, wifi, txpackets, 1);
-		INP_ADD_STAT(inp, cell, wifi, txbytes, data_len);
+		INP_ADD_STAT(inp, cell, wifi, wired, txpackets, 1);
+		INP_ADD_STAT(inp, cell, wifi, wired, txbytes, data_len);
 	} else {
-		INP_ADD_STAT(inp, cell, wifi, rxpackets, 1);
-		INP_ADD_STAT(inp, cell, wifi, rxbytes, data_len);
+		INP_ADD_STAT(inp, cell, wifi, wired, rxpackets, 1);
+		INP_ADD_STAT(inp, cell, wifi, wired, rxbytes, data_len);
 	}
 }
 
@@ -585,17 +587,24 @@ static errno_t
 flow_divert_check_no_cellular(struct flow_divert_pcb *fd_cb)
 {
 	struct inpcb *inp = NULL;
-	struct ifnet *ifp = NULL;
 
 	inp = sotoinpcb(fd_cb->so);
-	if ((inp != NULL) && (inp->inp_flags & INP_NO_IFT_CELLULAR)) {
-		ifp = inp->inp_last_outifp;
-		if (ifp != NULL) {
-			if (IFNET_IS_CELLULAR(ifp)) {
-				return EHOSTUNREACH;
-			}
-		}
-	}
+	if (inp && INP_NO_CELLULAR(inp) && inp->inp_last_outifp &&
+	    IFNET_IS_CELLULAR(inp->inp_last_outifp))
+		return EHOSTUNREACH;
+	
+	return 0;
+}
+
+static errno_t
+flow_divert_check_no_expensive(struct flow_divert_pcb *fd_cb)
+{
+	struct inpcb *inp = NULL;
+
+	inp = sotoinpcb(fd_cb->so);
+	if (inp && INP_NO_EXPENSIVE(inp) && inp->inp_last_outifp &&
+	    IFNET_IS_EXPENSIVE(inp->inp_last_outifp))
+		return EHOSTUNREACH;
 	
 	return 0;
 }
@@ -861,15 +870,9 @@ flow_divert_send_packet(struct flow_divert_pcb *fd_cb, mbuf_t packet, Boolean en
 }
 
 static int
-flow_divert_send_connect(struct flow_divert_pcb *fd_cb, struct sockaddr *to, proc_t p)
+flow_divert_send_connect(struct flow_divert_pcb *fd_cb, struct sockaddr *to, mbuf_t connect_packet)
 {
-	mbuf_t			connect_packet	= NULL;
 	int				error			= 0;
-
-	error = flow_divert_packet_init(fd_cb, FLOW_DIVERT_PKT_CONNECT, &connect_packet);
-	if (error) {
-		goto done;
-	}
 
 	error = flow_divert_packet_append_tlv(connect_packet,
 	                                      FLOW_DIVERT_TLV_TRAFFIC_CLASS,
@@ -921,7 +924,6 @@ flow_divert_send_connect(struct flow_divert_pcb *fd_cb, struct sockaddr *to, pro
 	} else {
 		uint32_t ctl_unit = htonl(fd_cb->control_group_unit);
 		int port;
-		int release_proc;
 
 		error = flow_divert_packet_append_tlv(connect_packet, FLOW_DIVERT_TLV_CTL_UNIT, sizeof(ctl_unit), &ctl_unit);
 		if (error) {
@@ -946,30 +948,6 @@ flow_divert_send_connect(struct flow_divert_pcb *fd_cb, struct sockaddr *to, pro
 		if (error) {
 			goto done;
 		}
-
-		release_proc = flow_divert_get_src_proc(fd_cb->so, &p, FALSE);
-		if (p != PROC_NULL) {
-			proc_lock(p);
-			if (p->p_csflags & CS_VALID) {
-				const char *signing_id = cs_identity_get(p);
-				if (signing_id != NULL) {
-					error = flow_divert_packet_append_tlv(connect_packet, FLOW_DIVERT_TLV_SIGNING_ID, strlen(signing_id), signing_id);
-				}
-
-				if (error == 0) {
-					unsigned char cdhash[SHA1_RESULTLEN];
-					error = proc_getcdhash(p, cdhash);
-					if (error == 0) {
-						error = flow_divert_packet_append_tlv(connect_packet, FLOW_DIVERT_TLV_CDHASH, sizeof(cdhash), cdhash);
-					}
-				}
-			}
-			proc_unlock(p);
-
-			if (release_proc) {
-				proc_rele(p);
-			}
-		}
 	}
 
 	error = flow_divert_send_packet(fd_cb, connect_packet, TRUE);
@@ -978,10 +956,6 @@ flow_divert_send_connect(struct flow_divert_pcb *fd_cb, struct sockaddr *to, pro
 	}
 
 done:
-	if (error && connect_packet != NULL) {
-		mbuf_free(connect_packet);
-	}
-
 	return error;
 }
 
@@ -1586,7 +1560,8 @@ flow_divert_handle_data(struct flow_divert_pcb *fd_cb, mbuf_t packet, size_t off
 	FDLOCK(fd_cb);
 	if (fd_cb->so != NULL) {
 		socket_lock(fd_cb->so, 0);
-		if (flow_divert_check_no_cellular(fd_cb)) {
+		if (flow_divert_check_no_cellular(fd_cb) || 
+		    flow_divert_check_no_expensive(fd_cb)) {
 			flow_divert_update_closed_state(fd_cb, SHUT_RDWR, TRUE);
 			flow_divert_send_close(fd_cb, SHUT_RDWR);
 			soisdisconnected(fd_cb->so);
@@ -1833,7 +1808,7 @@ flow_divert_handle_app_map_create(mbuf_t packet, int offset)
 			new_node_idx = flow_divert_trie_insert(&new_trie, new_trie.bytes_free_next, sid_size);
 			if (new_node_idx != NULL_TRIE_IDX) {
 				if (is_dns) {
-					FDLOG(LOG_NOTICE, &nil_pcb, "Setting group unit for %s to %d", FLOW_DIVERT_DNS_SERVICE_SIGNING_ID, DNS_SERVICE_GROUP_UNIT);
+					FDLOG(LOG_INFO, &nil_pcb, "Setting group unit for %s to %d", FLOW_DIVERT_DNS_SERVICE_SIGNING_ID, DNS_SERVICE_GROUP_UNIT);
 					TRIE_NODE(&new_trie, new_node_idx).group_unit = DNS_SERVICE_GROUP_UNIT;
 				}
 			} else {
@@ -2225,6 +2200,9 @@ flow_divert_connect_out(struct socket *so, struct sockaddr *to, proc_t p)
 	int						error	= 0;
 	struct inpcb			*inp	= sotoinpcb(so);
 	struct sockaddr_in		*sinp;
+	mbuf_t					connect_packet = NULL;
+	char					*signing_id = NULL;
+	int						free_signing_id = 0;
 
 	VERIFY((so->so_flags & SOF_FLOW_DIVERT) && so->so_fd_pcb != NULL);
 
@@ -2266,9 +2244,102 @@ flow_divert_connect_out(struct socket *so, struct sockaddr *to, proc_t p)
 		}
 	}
 
+	error = flow_divert_packet_init(fd_cb, FLOW_DIVERT_PKT_CONNECT, &connect_packet);
+	if (error) {
+		goto done;
+	}
+
+	error = EPERM;
+
+	if (fd_cb->connect_token != NULL) {
+		size_t sid_size = 0;
+		int find_error = flow_divert_packet_get_tlv(fd_cb->connect_token, 0, FLOW_DIVERT_TLV_SIGNING_ID, 0, NULL, &sid_size);
+		if (find_error == 0 && sid_size > 0) {
+			MALLOC(signing_id, char *, sid_size + 1, M_TEMP, M_WAITOK | M_ZERO);
+			if (signing_id != NULL) {
+				flow_divert_packet_get_tlv(fd_cb->connect_token, 0, FLOW_DIVERT_TLV_SIGNING_ID, sid_size, signing_id, NULL);
+				FDLOG(LOG_INFO, fd_cb, "Got %s from token", signing_id);
+				free_signing_id = 1;
+			}
+		}
+	}
+
+	socket_unlock(so, 0);
+	if (g_signing_id_trie.root != NULL_TRIE_IDX) {
+		proc_t src_proc = p;
+		int release_proc = 0;
+			
+		if (signing_id == NULL) {
+			release_proc = flow_divert_get_src_proc(so, &src_proc, FALSE);
+			if (src_proc != PROC_NULL) {
+				proc_lock(src_proc);
+				if (src_proc->p_csflags & CS_VALID) {
+					signing_id = (char *)cs_identity_get(src_proc);
+				} else {
+					FDLOG0(LOG_WARNING, fd_cb, "Signature is invalid");
+				}
+			} else {
+				FDLOG0(LOG_WARNING, fd_cb, "Failed to determine the current proc");
+			}
+		} else {
+			src_proc = PROC_NULL;
+		}
+
+		if (signing_id != NULL) {
+			uint16_t result = NULL_TRIE_IDX;
+			lck_rw_lock_shared(&g_flow_divert_group_lck);
+			result = flow_divert_trie_search(&g_signing_id_trie, (const uint8_t *)signing_id);
+			lck_rw_done(&g_flow_divert_group_lck);
+			if (result != NULL_TRIE_IDX) {
+				error = 0;
+				FDLOG(LOG_INFO, fd_cb, "%s matched", signing_id);
+
+				error = flow_divert_packet_append_tlv(connect_packet, FLOW_DIVERT_TLV_SIGNING_ID, strlen(signing_id), signing_id);
+				if (error == 0) {
+					if (src_proc != PROC_NULL) {
+						unsigned char cdhash[SHA1_RESULTLEN];
+						error = proc_getcdhash(src_proc, cdhash);
+						if (error == 0) {
+							error = flow_divert_packet_append_tlv(connect_packet, FLOW_DIVERT_TLV_CDHASH, sizeof(cdhash), cdhash);
+							if (error) {
+								FDLOG(LOG_ERR, fd_cb, "failed to append the cdhash: %d", error);
+							}
+						} else {
+							FDLOG(LOG_ERR, fd_cb, "failed to get the cdhash: %d", error);
+						}
+					}
+				} else {
+					FDLOG(LOG_ERR, fd_cb, "failed to append the signing ID: %d", error);
+				}
+			} else {
+				FDLOG(LOG_WARNING, fd_cb, "%s did not match", signing_id);
+			}
+		} else {
+			FDLOG0(LOG_WARNING, fd_cb, "Failed to get the code signing identity");
+		}
+
+		if (src_proc != PROC_NULL) {
+			proc_unlock(src_proc);
+			if (release_proc) {
+				proc_rele(src_proc);
+			}
+		}
+	} else {
+		FDLOG0(LOG_WARNING, fd_cb, "The signing ID trie is empty");
+	}
+	socket_lock(so, 0);
+
+	if (free_signing_id) {
+		FREE(signing_id, M_TEMP);
+	}
+
+	if (error) {
+		goto done;
+	}
+
 	FDLOG0(LOG_INFO, fd_cb, "Connecting");
 
-	error = flow_divert_send_connect(fd_cb, to, p);
+	error = flow_divert_send_connect(fd_cb, to, connect_packet);
 	if (error) {
 		goto done;
 	}
@@ -2278,6 +2349,9 @@ flow_divert_connect_out(struct socket *so, struct sockaddr *to, proc_t p)
 	soisconnecting(so);
 
 done:
+	if (error && connect_packet != NULL) {
+		mbuf_free(connect_packet);
+	}
 	return error;
 }
 
@@ -2513,7 +2587,8 @@ flow_divert_data_out(struct socket *so, int flags, mbuf_t data, struct sockaddr 
 		goto done; /* We don't support OOB data */
 	}
 	
-	error = flow_divert_check_no_cellular(fd_cb);
+	error = flow_divert_check_no_cellular(fd_cb) || 
+	    flow_divert_check_no_expensive(fd_cb);
 	if (error) {
 		goto done;
 	}
@@ -2548,68 +2623,6 @@ done:
 	if (control) {
 		mbuf_free(control);
 	}
-	return error;
-}
-
-boolean_t
-flow_divert_is_dns_service(struct socket *so)
-{
-	uint32_t ctl_unit = 0;
-	flow_divert_check_policy(so, NULL, TRUE, &ctl_unit);
-	FDLOG(LOG_INFO, &nil_pcb, "Check for DNS resulted in %u", ctl_unit);
-	return (ctl_unit == DNS_SERVICE_GROUP_UNIT);
-}
-
-errno_t
-flow_divert_check_policy(struct socket *so, proc_t p, boolean_t match_delegate, uint32_t *ctl_unit)
-{
-	int error = EPROTOTYPE;
-
-	if (ctl_unit != NULL) {
-		*ctl_unit = 0;
-	}
-
-	if (SOCK_DOM(so) != PF_INET
-#if INET6
-	    && SOCK_DOM(so) != PF_INET6
-#endif
-	    )
-	{
-		return error;
-	}
-
-	if (g_signing_id_trie.root != NULL_TRIE_IDX) {
-		int release_proc = flow_divert_get_src_proc(so, &p, match_delegate);
-		if (p != PROC_NULL) {
-			proc_lock(p);
-			if (p->p_csflags & CS_VALID) {
-				const char *signing_id = cs_identity_get(p);
-				if (signing_id != NULL) {
-					uint16_t result = NULL_TRIE_IDX;
-					lck_rw_lock_shared(&g_flow_divert_group_lck);
-					result = flow_divert_trie_search(&g_signing_id_trie, (const uint8_t *)signing_id);
-					if (result != NULL_TRIE_IDX) {
-						uint32_t unit = TRIE_NODE(&g_signing_id_trie, result).group_unit;
-
-						error = 0;
-
-						FDLOG(LOG_INFO, &nil_pcb, "%s matched, ctl_unit = %u", signing_id, unit);
-
-						if (ctl_unit != NULL) {
-							*ctl_unit = unit;
-						}
-					}
-					lck_rw_done(&g_flow_divert_group_lck);
-				}
-			}
-			proc_unlock(p);
-
-			if (release_proc) {
-				proc_rele(p);
-			}
-		}
-	}
-
 	return error;
 }
 
@@ -3122,7 +3135,7 @@ flow_divert_kctl_init(void)
 
 	memset(&ctl_reg, 0, sizeof(ctl_reg));
 
-	strncpy(ctl_reg.ctl_name, FLOW_DIVERT_CONTROL_NAME, sizeof(ctl_reg.ctl_name));
+	strlcpy(ctl_reg.ctl_name, FLOW_DIVERT_CONTROL_NAME, sizeof(ctl_reg.ctl_name));
 	ctl_reg.ctl_name[sizeof(ctl_reg.ctl_name)-1] = '\0';
 	ctl_reg.ctl_flags = CTL_FLAG_PRIVILEGED | CTL_FLAG_REG_EXTENDED;
 	ctl_reg.ctl_sendsize = FD_CTL_SENDBUFF_SIZE;
@@ -3147,7 +3160,7 @@ void
 flow_divert_init(void)
 {
 	memset(&nil_pcb, 0, sizeof(nil_pcb));
-	nil_pcb.log_level = LOG_INFO;
+	nil_pcb.log_level = LOG_NOTICE;
 
 	g_tcp_protosw = pffindproto(AF_INET, IPPROTO_TCP, SOCK_STREAM);
 

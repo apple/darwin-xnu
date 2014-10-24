@@ -68,7 +68,6 @@
 
 #include <kern/host.h>
 #include <kern/zalloc.h>
-#include <kern/lock.h>
 #include <kern/sched_prim.h>
 #include <kern/task.h>
 #include <kern/wait_queue.h>

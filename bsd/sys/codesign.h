@@ -32,20 +32,27 @@
 /* code signing attributes of a process */
 #define	CS_VALID		0x0000001	/* dynamically valid */
 #define CS_ADHOC		0x0000002	/* ad hoc signed */
+#define CS_GET_TASK_ALLOW	0x0000004	/* has get-task-allow entitlement */
+#define CS_INSTALLER		0x0000008	/* has installer entitlement */
 
 #define	CS_HARD			0x0000100	/* don't load invalid pages */
 #define	CS_KILL			0x0000200	/* kill process if it becomes invalid */
 #define CS_CHECK_EXPIRATION	0x0000400	/* force expiration checking */
 #define CS_RESTRICT		0x0000800	/* tell dyld to treat restricted */
 #define CS_ENFORCEMENT		0x0001000	/* require enforcement */
+#define CS_REQUIRE_LV		0x0002000	/* require library validation */
 
 #define	CS_ALLOWED_MACHO	0x00ffffe
 
 #define CS_EXEC_SET_HARD	0x0100000	/* set CS_HARD on any exec'ed process */
 #define CS_EXEC_SET_KILL	0x0200000	/* set CS_KILL on any exec'ed process */
 #define CS_EXEC_SET_ENFORCEMENT	0x0400000	/* set CS_ENFORCEMENT on any exec'ed process */
+#define CS_EXEC_SET_INSTALLER	0x0800000	/* set CS_INSTALLER on any exec'ed process */
 
 #define CS_KILLED		0x1000000	/* was killed by kernel for invalidity */
+#define CS_DYLD_PLATFORM	0x2000000	/* dyld used to load this is a platform binary */
+
+#define CS_ENTITLEMENT_FLAGS	(CS_GET_TASK_ALLOW | CS_INSTALLER)
 
 /* csops  operations */
 #define	CS_OPS_STATUS		0	/* return status */
@@ -89,6 +96,7 @@ enum {
 	CSMAGIC_BLOBWRAPPER = 0xfade0b01,	/* CMS Signature, among other things */
 	
 	CS_SUPPORTSSCATTER = 0x20100,
+	CS_SUPPORTSTEAMID = 0x20200,
 
 	CSSLOT_CODEDIRECTORY = 0,				/* slot index for CodeDirectory */
 	CSSLOT_INFOSLOT = 1,
@@ -128,6 +136,8 @@ typedef struct __CodeDirectory {
 	uint32_t spare2;				/* unused (must be zero) */
 	/* Version 0x20100 */
 	uint32_t scatterOffset;				/* offset of optional scatter vector */
+	/* Version 0x20200 */
+	uint32_t teamOffset;				/* offset of optional team identifier */
 	/* followed by dynamic content as located by offset fields above */
 } CS_CodeDirectory;
 
@@ -165,6 +175,7 @@ typedef struct __SC_Scatter {
 #ifndef KERNEL
 
 #include <sys/types.h>
+#include <mach/message.h>
 
 __BEGIN_DECLS
 /* code sign operations */
@@ -175,8 +186,11 @@ __END_DECLS
 #else /* !KERNEL */
 
 #include <sys/cdefs.h>
+#include <sys/_types/_off_t.h>
 
 struct vnode;
+struct cs_blob;
+struct fileglob;
 
 struct cscsr_functions  {
 	int		csr_version;
@@ -187,9 +201,22 @@ struct cscsr_functions  {
 
 __BEGIN_DECLS
 int	cs_enforcement(struct proc *);
-int	cs_entitlements_blob_get(struct proc *, void **out_start, size_t *out_length);
+int	cs_require_lv(struct proc *);
+uint32_t cs_entitlement_flags(struct proc *p);
+int	cs_entitlements_blob_get(struct proc *, void **, size_t *);
 uint8_t * cs_get_cdhash(struct proc *);
 void	cs_register_cscsr(struct cscsr_functions *);
+
+const 	CS_GenericBlob *
+	cs_find_blob(struct cs_blob *, uint32_t, uint32_t);
+
+const 	char * csblob_get_teamid(struct cs_blob *);
+const 	char * csproc_get_teamid(struct proc *);
+const 	char * csvnode_get_teamid(struct vnode *, off_t);
+int 	csproc_get_platform_binary(struct proc *);
+const 	char * csfg_get_teamid(struct fileglob *);
+int	csfg_get_path(struct fileglob *, char *, int *);
+int 	csfg_get_platform_binary(struct fileglob *);
 
 __END_DECLS
 

@@ -78,6 +78,9 @@ def IterateQueue(queue_head, element_ptr_type, element_field_name):
         returns:
             A generator does not return. It is used for iterating.
             value  : an object thats of type (element_type) queue_head->next. Always a pointer object
+        example usage:
+            for page_meta in IterateQueue(kern.globals.first_zone.pages.all_free, 'struct zone_page_metadata *', 'pages'):
+                print page_meta
     """
     if type(element_ptr_type) == str :
         element_ptr_type = gettype(element_ptr_type)
@@ -111,6 +114,7 @@ class KernelTarget(object):
         self._debugger = debugger # This holds an lldb.SBDebugger object for debugger state
         self._threads_list = []
         self._tasks_list = []
+        self._coalitions_list = []
         self._allproc = []
         self._terminated_tasks_list = []
         self._zones_list = []
@@ -268,12 +272,13 @@ class KernelTarget(object):
     def StraddlesPage(self, addr, size):
         if size > unsigned(self.GetGlobalVariable("page_size")):
             return True
-        return (((addr + size) & (unsigned(self.GetGlobalVariable("page_size"))-1)) < size)
+        val = ((addr + size) & (unsigned(self.GetGlobalVariable("page_size"))-1))
+        return (val < size and val > 0)
 
     def PhysToKernelVirt(self, addr):
         if self.arch == 'x86_64':
             return (addr + unsigned(self.GetGlobalVariable('physmap_base')))
-        elif self.arch == 'arm':
+        elif self.arch == 'arm' or self.arch == 'arm64':
             return (addr - unsigned(self.GetGlobalVariable("gPhysBase")) + unsigned(self.GetGlobalVariable("gVirtBase")))
         else:
             raise ValueError("PhysToVirt does not support {0}".format(arch))
@@ -310,6 +315,17 @@ class KernelTarget(object):
             caching.SaveDynamicCacheData("kern._tasks_list", self._tasks_list)
             return self._tasks_list
 
+        if name == 'coalitions' :
+            self._coalitions_list = caching.GetDynamicCacheData("kern._coalitions_list", [])
+            if len(self._coalitions_list) > 0 : return self._coalitions_list
+            coalition_queue_head = self.GetGlobalVariable('coalitions')
+            coalition_type = LazyTarget.GetTarget().FindFirstType('coalition')
+            coalition_ptr_type = coalition_type.GetPointerType()
+            for tsk in IterateQueue(coalition_queue_head, coalition_ptr_type, 'coalitions'):
+                self._coalitions_list.append(tsk)
+            caching.SaveDynamicCacheData("kern._coalitions_list", self._coalitions_list)
+            return self._coalitions_list
+
         if name == 'terminated_tasks' :
             self._terminated_tasks_list = caching.GetDynamicCacheData("kern._terminated_tasks_list", [])
             if len(self._terminated_tasks_list) > 0 : return self._terminated_tasks_list
@@ -331,6 +347,17 @@ class KernelTarget(object):
                 proc_val = cast(proc_val.p_list.le_next, 'proc *')
             caching.SaveDynamicCacheData("kern._allproc", self._allproc)
             return self._allproc
+
+        if name == 'interrupt_stats' :
+            self._interrupt_stats_list = caching.GetDynamicCacheData("kern._interrupt_stats_list", [])
+            if len(self._interrupt_stats_list) > 0 : return self._interrupt_stats_list
+            interrupt_stats_head = self.GetGlobalVariable('gInterruptAccountingDataList')
+            interrupt_stats_type = LazyTarget.GetTarget().FindFirstType('IOInterruptAccountingData')
+            interrupt_stats_ptr_type = interrupt_stats_type.GetPointerType()
+            for interrupt_stats_obj in IterateQueue(interrupt_stats_head, interrupt_stats_ptr_type, 'chain'):
+                self._interrupt_stats_list.append(interrupt_stats_obj)
+            caching.SaveDynamicCacheData("kern._interrupt_stats", self._interrupt_stats_list)
+            return self._interrupt_stats_list
 
         if name == 'zombprocs' :
             self._zombproc_list = caching.GetDynamicCacheData("kern._zombproc_list", [])
@@ -354,7 +381,7 @@ class KernelTarget(object):
             self._arch = caching.GetStaticCacheData("kern.arch", None)
             if self._arch != None : return self._arch
             arch = LazyTarget.GetTarget().triple.split('-')[0]
-            if arch in ('armv7', 'armv7s'):
+            if arch in ('armv7', 'armv7s', 'armv7k'):
                 self._arch = 'arm'
             else:
                 self._arch = arch
@@ -365,7 +392,7 @@ class KernelTarget(object):
             self._ptrsize = caching.GetStaticCacheData("kern.ptrsize", None)
             if self._ptrsize != None : return self._ptrsize
             arch = LazyTarget.GetTarget().triple.split('-')[0]
-            if arch in ('x86_64'):
+            if arch in ('x86_64', 'arm64'):
                 self._ptrsize = 8
             else:
                 self._ptrsize = 4

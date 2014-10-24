@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2013 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2014 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -102,6 +102,8 @@
 #define	KEV_DL_MASTER_ELECTED			23
 #define	KEV_DL_ISSUES				24
 #define	KEV_DL_IFDELEGATE_CHANGED		25
+#define	KEV_DL_AWDL_RESTRICTED			26
+#define	KEV_DL_AWDL_UNRESTRICTED		27
 
 #include <net/if_var.h>
 #include <sys/types.h>
@@ -155,24 +157,27 @@ struct if_clonereq32 {
 
 #ifdef PRIVATE
 /* extended flags definitions:  (all bits reserved for internal/future use) */
-#define	IFEF_AUTOCONFIGURING	0x1	/* allow BOOTP/DHCP replies to enter */
-#define	IFEF_IPV6_DISABLED	0x20	/* coupled to ND6_IFF_IFDISABLED */
-#define	IFEF_ACCEPT_RTADV	0x40	/* accepts IPv6 RA on the interface */
-#define	IFEF_TXSTART		0x80	/* has start callback */
-#define	IFEF_RXPOLL		0x100	/* supports opportunistic input poll */
-#define	IFEF_VLAN		0x200	/* interface has one or more vlans */
-#define	IFEF_BOND		0x400	/* interface is part of bond */
-#define	IFEF_ARPLL		0x800	/* ARP for IPv4LL addresses */
-#define	IFEF_NOWINDOWSCALE	0x1000	/* Don't scale TCP window on iface */
-#define	IFEF_NOAUTOIPV6LL	0x2000	/* Need explicit IPv6 LL address */
-#define	IFEF_IPV4_ROUTER	0x8000	/* interior when in IPv4 router mode */
-#define	IFEF_IPV6_ROUTER	0x10000	/* interior when in IPv6 router mode */
-#define	IFEF_LOCALNET_PRIVATE	0x20000	/* local private network */
+#define	IFEF_AUTOCONFIGURING	0x00000001	/* allow BOOTP/DHCP replies to enter */
+#define	IFEF_IPV6_DISABLED	0x00000020	/* coupled to ND6_IFF_IFDISABLED */
+#define	IFEF_ACCEPT_RTADV	0x00000040	/* accepts IPv6 RA on the interface */
+#define	IFEF_TXSTART		0x00000080	/* has start callback */
+#define	IFEF_RXPOLL		0x00000100	/* supports opportunistic input poll */
+#define	IFEF_VLAN		0x00000200	/* interface has one or more vlans */
+#define	IFEF_BOND		0x00000400	/* interface is part of bond */
+#define	IFEF_ARPLL		0x00000800	/* ARP for IPv4LL addresses */
+#define	IFEF_NOWINDOWSCALE	0x00001000	/* Don't scale TCP window on iface */
+#define	IFEF_NOAUTOIPV6LL	0x00002000	/* Need explicit IPv6 LL address */
+#define	IFEF_EXPENSIVE		0x00004000	/* Data access has a cost */
+#define	IFEF_IPV4_ROUTER	0x00008000	/* interior when in IPv4 router mode */
+#define	IFEF_IPV6_ROUTER	0x00010000	/* interior when in IPv6 router mode */
+#define	IFEF_LOCALNET_PRIVATE	0x00020000	/* local private network */
 #define	IFEF_SERVICE_TRIGGERED	IFEF_LOCALNET_PRIVATE
-#define	IFEF_IPV6_ND6ALT	0x40000	/* alternative. KPI for ND6 */
-#define	IFEF_RESTRICTED_RECV	0x80000	/* interface restricts inbound pkts */
-#define	IFEF_AWDL		0x100000	/* Apple Wireless Direct Link */
-#define	IFEF_NOACKPRI		0x200000	/* No TCP ACK prioritization */
+#define	IFEF_IPV6_ND6ALT	0x00040000	/* alternative. KPI for ND6 */
+#define	IFEF_RESTRICTED_RECV	0x00080000	/* interface restricts inbound pkts */
+#define	IFEF_AWDL		0x00100000	/* Apple Wireless Direct Link */
+#define	IFEF_NOACKPRI		0x00200000	/* No TCP ACK prioritization */
+#define	IFEF_AWDL_RESTRICTED	0x00400000	/* Restricted AWDL mode */
+#define	IFEF_2KCL		0x00800000	/* prefers 2K cluster (socket based tunnel) */
 #define	IFEF_SENDLIST		0x10000000	/* Supports tx packet lists */
 #define	IFEF_DIRECTLINK		0x20000000	/* point-to-point topology */
 #define	_IFEF_INUSE		0x40000000	/* deprecated */
@@ -244,7 +249,9 @@ struct if_clonereq32 {
 	IFCAP_VLAN_HWTAGGING | IFCAP_JUMBO_MTU | IFCAP_AV | IFCAP_TXSTATUS)
 
 #define	IFQ_MAXLEN	128
-#define	IFNET_SLOWHZ	1		/* granularity is 1 second */
+#define	IFNET_SLOWHZ	1	/* granularity is 1 second */
+#define	IFQ_TARGET_DELAY	(10ULL * 1000 * 1000)	/* 10 ms */
+#define	IFQ_UPDATE_INTERVAL	(100ULL * 1000 * 1000)	/* 100 ms */
 
 /*
  * Message format for use in obtaining information about interfaces
@@ -457,7 +464,11 @@ struct	ifreq {
 #define	IFRTYPE_SUBFAMILY_BLUETOOTH	2
 #define	IFRTYPE_SUBFAMILY_WIFI		3
 #define	IFRTYPE_SUBFAMILY_THUNDERBOLT	4
+#define	IFRTYPE_SUBFAMILY_RESERVED	5
 		} ifru_type;
+		u_int32_t ifru_expensive;
+		u_int32_t ifru_awdl_restricted;
+		u_int32_t ifru_2kcl;
 #endif /* PRIVATE */
 	} ifr_ifru;
 #define	ifr_addr	ifr_ifru.ifru_addr	/* address */
@@ -492,7 +503,10 @@ struct	ifreq {
 #define	ifr_eflags	ifr_ifru.ifru_eflags	/* extended flags  */
 #define	ifr_log		ifr_ifru.ifru_log	/* logging level/flags */
 #define	ifr_delegated	ifr_ifru.ifru_delegated /* delegated interface index */
+#define	ifr_expensive	ifr_ifru.ifru_expensive
 #define	ifr_type	ifr_ifru.ifru_type	/* interface type */
+#define	ifr_awdl_restricted ifr_ifru.ifru_awdl_restricted
+#define	ifr_2kcl	ifr_ifru.ifru_2kcl
 #endif /* PRIVATE */
 };
 
@@ -641,30 +655,20 @@ struct kev_dl_proto_data {
 	u_int32_t			proto_remaining_count;
 };
 
-/*
- * Structure for SIOC[AGD]LIFADDR
- */
-struct if_laddrreq {
-	char			iflr_name[IFNAMSIZ];
-	unsigned int		flags;
-#define	IFLR_PREFIX	0x8000  /* in: prefix given  out: kernel fills id */
-	unsigned int		prefixlen;	/* in/out */
-	struct sockaddr_storage	addr;		/* in/out */
-	struct sockaddr_storage	dstaddr;	/* out */
-};
-
 #ifdef PRIVATE
 /*
  * Link Quality Metrics
  *
  *	IFNET_LQM_THRESH_OFF      Metric is not available; device is off.
  *	IFNET_LQM_THRESH_UNKNOWN  Metric is not (yet) known.
+ *	IFNET_LQM_THRESH_BAD	  Link quality is considered bad by driver.
  *	IFNET_LQM_THRESH_POOR     Link quality is considered poor by driver.
  *	IFNET_LQM_THRESH_GOOD     Link quality is considered good by driver.
  */
 enum {
 	IFNET_LQM_THRESH_OFF		= (-2),
 	IFNET_LQM_THRESH_UNKNOWN	= (-1),
+	IFNET_LQM_THRESH_BAD		= 10,
 	IFNET_LQM_THRESH_POOR		= 50,
 	IFNET_LQM_THRESH_GOOD		= 100
 };

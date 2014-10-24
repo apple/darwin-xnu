@@ -426,30 +426,30 @@ sysctl_cpu_capability
 
 }
 
-SYSCTL_PROC(_hw_optional, OID_AUTO, mmx,	CTLFLAG_RD | CTLFLAG_KERN | CTLFLAG_LOCKED, (void *) kHasMMX, 0, sysctl_cpu_capability, "I", "");
-SYSCTL_PROC(_hw_optional, OID_AUTO, sse,	CTLFLAG_RD | CTLFLAG_KERN | CTLFLAG_LOCKED, (void *) kHasSSE, 0, sysctl_cpu_capability, "I", "");
-SYSCTL_PROC(_hw_optional, OID_AUTO, sse2,	CTLFLAG_RD | CTLFLAG_KERN | CTLFLAG_LOCKED, (void *) kHasSSE2, 0, sysctl_cpu_capability, "I", "");
-SYSCTL_PROC(_hw_optional, OID_AUTO, sse3,	CTLFLAG_RD | CTLFLAG_KERN | CTLFLAG_LOCKED, (void *) kHasSSE3, 0, sysctl_cpu_capability, "I", "");
-SYSCTL_PROC(_hw_optional, OID_AUTO, supplementalsse3,	CTLFLAG_RD | CTLFLAG_KERN | CTLFLAG_LOCKED, (void *) kHasSupplementalSSE3, 0, sysctl_cpu_capability, "I", "");
-SYSCTL_PROC(_hw_optional, OID_AUTO, sse4_1,	CTLFLAG_RD | CTLFLAG_KERN | CTLFLAG_LOCKED, (void *) kHasSSE4_1, 0, sysctl_cpu_capability, "I", "");
-SYSCTL_PROC(_hw_optional, OID_AUTO, sse4_2,	CTLFLAG_RD | CTLFLAG_KERN | CTLFLAG_LOCKED, (void *) kHasSSE4_2, 0, sysctl_cpu_capability, "I", "");
+SYSCTL_PROC(_hw_optional, OID_AUTO, mmx,	CTLTYPE_INT | CTLFLAG_RD | CTLFLAG_KERN | CTLFLAG_LOCKED, (void *) kHasMMX, 0, sysctl_cpu_capability, "I", "");
+SYSCTL_PROC(_hw_optional, OID_AUTO, sse,	CTLTYPE_INT | CTLFLAG_RD | CTLFLAG_KERN | CTLFLAG_LOCKED, (void *) kHasSSE, 0, sysctl_cpu_capability, "I", "");
+SYSCTL_PROC(_hw_optional, OID_AUTO, sse2,	CTLTYPE_INT | CTLFLAG_RD | CTLFLAG_KERN | CTLFLAG_LOCKED, (void *) kHasSSE2, 0, sysctl_cpu_capability, "I", "");
+SYSCTL_PROC(_hw_optional, OID_AUTO, sse3,	CTLTYPE_INT | CTLFLAG_RD | CTLFLAG_KERN | CTLFLAG_LOCKED, (void *) kHasSSE3, 0, sysctl_cpu_capability, "I", "");
+SYSCTL_PROC(_hw_optional, OID_AUTO, supplementalsse3,	CTLTYPE_INT | CTLFLAG_RD | CTLFLAG_KERN | CTLFLAG_LOCKED, (void *) kHasSupplementalSSE3, 0, sysctl_cpu_capability, "I", "");
+SYSCTL_PROC(_hw_optional, OID_AUTO, sse4_1,	CTLTYPE_INT | CTLFLAG_RD | CTLFLAG_KERN | CTLFLAG_LOCKED, (void *) kHasSSE4_1, 0, sysctl_cpu_capability, "I", "");
+SYSCTL_PROC(_hw_optional, OID_AUTO, sse4_2,	CTLTYPE_INT | CTLFLAG_RD | CTLFLAG_KERN | CTLFLAG_LOCKED, (void *) kHasSSE4_2, 0, sysctl_cpu_capability, "I", "");
 /* "x86_64" is actually a preprocessor symbol on the x86_64 kernel, so we have to hack this */
 #undef x86_64
-SYSCTL_PROC(_hw_optional, OID_AUTO, x86_64,	CTLFLAG_RD | CTLFLAG_KERN | CTLFLAG_LOCKED, (void *) k64Bit, 0, sysctl_cpu_capability, "I", "");
-SYSCTL_PROC(_hw_optional, OID_AUTO, aes,	CTLFLAG_RD | CTLFLAG_KERN | CTLFLAG_LOCKED, (void *) kHasAES, 0, sysctl_cpu_capability, "I", "");
-SYSCTL_PROC(_hw_optional, OID_AUTO, avx1_0,	CTLFLAG_RD | CTLFLAG_KERN | CTLFLAG_LOCKED, (void *) kHasAVX1_0, 0, sysctl_cpu_capability, "I", "");
-SYSCTL_PROC(_hw_optional, OID_AUTO, rdrand,	CTLFLAG_RD | CTLFLAG_KERN | CTLFLAG_LOCKED, (void *) kHasRDRAND, 0, sysctl_cpu_capability, "I", "");
-SYSCTL_PROC(_hw_optional, OID_AUTO, f16c,	CTLFLAG_RD | CTLFLAG_KERN | CTLFLAG_LOCKED, (void *) kHasF16C, 0, sysctl_cpu_capability, "I", "");
-SYSCTL_PROC(_hw_optional, OID_AUTO, enfstrg,	CTLFLAG_RD | CTLFLAG_KERN | CTLFLAG_LOCKED, (void *) kHasENFSTRG, 0, sysctl_cpu_capability, "I", "");
-SYSCTL_PROC(_hw_optional, OID_AUTO, fma,	CTLFLAG_RD | CTLFLAG_KERN | CTLFLAG_LOCKED, (void *) kHasFMA, 0, sysctl_cpu_capability, "I", "");
-SYSCTL_PROC(_hw_optional, OID_AUTO, avx2_0,	CTLFLAG_RD | CTLFLAG_KERN | CTLFLAG_LOCKED, (void *) kHasAVX2_0, 0, sysctl_cpu_capability, "I", "");
-SYSCTL_PROC(_hw_optional, OID_AUTO, bmi1,	CTLFLAG_RD | CTLFLAG_KERN | CTLFLAG_LOCKED, (void *) kHasBMI1, 0, sysctl_cpu_capability, "I", "");
-SYSCTL_PROC(_hw_optional, OID_AUTO, bmi2,	CTLFLAG_RD | CTLFLAG_KERN | CTLFLAG_LOCKED, (void *) kHasBMI2, 0, sysctl_cpu_capability, "I", "");
-SYSCTL_PROC(_hw_optional, OID_AUTO, rtm,	CTLFLAG_RD | CTLFLAG_KERN | CTLFLAG_LOCKED, (void *) kHasRTM, 0, sysctl_cpu_capability, "I", "");
-SYSCTL_PROC(_hw_optional, OID_AUTO, hle,	CTLFLAG_RD | CTLFLAG_KERN | CTLFLAG_LOCKED, (void *) kHasHLE, 0, sysctl_cpu_capability, "I", "");
+SYSCTL_PROC(_hw_optional, OID_AUTO, x86_64,	CTLTYPE_INT | CTLFLAG_RD | CTLFLAG_KERN | CTLFLAG_LOCKED, (void *) k64Bit, 0, sysctl_cpu_capability, "I", "");
+SYSCTL_PROC(_hw_optional, OID_AUTO, aes,	CTLTYPE_INT | CTLFLAG_RD | CTLFLAG_KERN | CTLFLAG_LOCKED, (void *) kHasAES, 0, sysctl_cpu_capability, "I", "");
+SYSCTL_PROC(_hw_optional, OID_AUTO, avx1_0,	CTLTYPE_INT | CTLFLAG_RD | CTLFLAG_KERN | CTLFLAG_LOCKED, (void *) kHasAVX1_0, 0, sysctl_cpu_capability, "I", "");
+SYSCTL_PROC(_hw_optional, OID_AUTO, rdrand,	CTLTYPE_INT | CTLFLAG_RD | CTLFLAG_KERN | CTLFLAG_LOCKED, (void *) kHasRDRAND, 0, sysctl_cpu_capability, "I", "");
+SYSCTL_PROC(_hw_optional, OID_AUTO, f16c,	CTLTYPE_INT | CTLFLAG_RD | CTLFLAG_KERN | CTLFLAG_LOCKED, (void *) kHasF16C, 0, sysctl_cpu_capability, "I", "");
+SYSCTL_PROC(_hw_optional, OID_AUTO, enfstrg,	CTLTYPE_INT | CTLFLAG_RD | CTLFLAG_KERN | CTLFLAG_LOCKED, (void *) kHasENFSTRG, 0, sysctl_cpu_capability, "I", "");
+SYSCTL_PROC(_hw_optional, OID_AUTO, fma,	CTLTYPE_INT | CTLFLAG_RD | CTLFLAG_KERN | CTLFLAG_LOCKED, (void *) kHasFMA, 0, sysctl_cpu_capability, "I", "");
+SYSCTL_PROC(_hw_optional, OID_AUTO, avx2_0,	CTLTYPE_INT | CTLFLAG_RD | CTLFLAG_KERN | CTLFLAG_LOCKED, (void *) kHasAVX2_0, 0, sysctl_cpu_capability, "I", "");
+SYSCTL_PROC(_hw_optional, OID_AUTO, bmi1,	CTLTYPE_INT | CTLFLAG_RD | CTLFLAG_KERN | CTLFLAG_LOCKED, (void *) kHasBMI1, 0, sysctl_cpu_capability, "I", "");
+SYSCTL_PROC(_hw_optional, OID_AUTO, bmi2,	CTLTYPE_INT | CTLFLAG_RD | CTLFLAG_KERN | CTLFLAG_LOCKED, (void *) kHasBMI2, 0, sysctl_cpu_capability, "I", "");
+SYSCTL_PROC(_hw_optional, OID_AUTO, rtm,	CTLTYPE_INT | CTLFLAG_RD | CTLFLAG_KERN | CTLFLAG_LOCKED, (void *) kHasRTM, 0, sysctl_cpu_capability, "I", "");
+SYSCTL_PROC(_hw_optional, OID_AUTO, hle,	CTLTYPE_INT | CTLFLAG_RD | CTLFLAG_KERN | CTLFLAG_LOCKED, (void *) kHasHLE, 0, sysctl_cpu_capability, "I", "");
 #else
 #error Unsupported arch
-#endif /* !__i386__ && !__x86_64 && !__arm__ */
+#endif /* !__i386__ && !__x86_64 && !__arm__ && ! __arm64__ */
 
 
 /******************************************************************************
@@ -506,6 +506,6 @@ sysctl_mib_init(void)
 
 #else
 #error unknown architecture
-#endif /* !__i386__ && !__x86_64 && !__arm__ */
+#endif /* !__i386__ && !__x86_64 && !__arm__ && !__arm64__ */
 
 }

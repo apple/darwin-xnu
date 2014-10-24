@@ -65,6 +65,8 @@ COMP_SUBDIRS =
 
 %CFILES
 
+%CXXFILES
+
 %SFILES
 
 %MACHDEP
@@ -95,7 +97,6 @@ OBJS_NO_SIGN_COMPARE =		\
 		ip_fw2_compat.o	\
 		ip_icmp.o	\
 		ip_input.o	\
-		ip_mroute.o	\
 		ip_output.o	\
 		raw_ip.o	\
 		tcp_input.o	\
@@ -122,7 +123,6 @@ OBJS_NO_SIGN_COMPARE =		\
 		ip6_forward.o	\
 		in6_ifattach.o	\
 		ip6_input.o	\
-		ip6_mroute.o	\
 		ip6_output.o	\
 		ipcomp_input.o	\
 		ipcomp_output.o	\
@@ -166,7 +166,6 @@ OBJS_NO_CAST_ALIGN =			\
 		fasttrap_isa.o		\
 		fbt_arm.o		\
 		fbt_x86.o		\
-		fips_sha1.o		\
 		hfs_attrlist.o		\
 		hfs_btreeio.o		\
 		hfs_catalog.o		\
@@ -208,9 +207,7 @@ OBJS_NO_CAST_ALIGN =			\
 		proc_info.o		\
 		pthread_synch.o		\
 		qsort.o			\
-		randomdev.o		\
 		sdt.o			\
-                sha1mod.o               \
 		shadow.o		\
 		spec_vnops.o		\
 		subr_log.o		\
@@ -222,6 +219,7 @@ OBJS_NO_CAST_ALIGN =			\
 		tcp_lro.o		\
 		tty.o			\
 		tty_compat.o		\
+		tty_dev.o		\
 		tty_ptmx.o		\
 		tty_pty.o		\
 		ubc_subr.o		\
@@ -230,7 +228,6 @@ OBJS_NO_CAST_ALIGN =			\
 		vfs_fsevents.o		\
 		vfs_journal.o		\
 		vfs_lookup.o		\
-		vfs_subr.o		\
 		vfs_syscalls.o		\
 		vfs_utfconv.o		\
 		vfs_vnops.o		\
@@ -250,18 +247,23 @@ $(foreach file,$(OBJS_NO_CAST_ALIGN),$(eval $(call add_perfile_cflags,$(file),-W
 
 subr_prof.o_CFLAGS_RM = -pg
 
-#
-#  OBJSDEPS is the set of files (defined in the machine dependent
-#  template if necessary) which all objects depend on (such as an
-#  in-line assembler expansion filter)
-#
-${OBJS}: ${OBJSDEPS}
+# Rebuild if per-file overrides change
+${OBJS}: $(firstword $(MAKEFILE_LIST))
 
-LDOBJS = $(OBJS)
+# Rebuild if global compile flags change
+$(COBJS): .CFLAGS
+.CFLAGS: ALWAYS
+	$(_v)$(REPLACECONTENTS) $@ $(KCC) $(CFLAGS) $(INCFLAGS)
+$(CXXOBJS): .CXXFLAGS
+.CXXFLAGS: ALWAYS
+	$(_v)$(REPLACECONTENTS) $@ $(KC++) $(CXXFLAGS) $(INCFLAGS)
+$(SOBJS): .SFLAGS
+.SFLAGS: ALWAYS
+	$(_v)$(REPLACECONTENTS) $@ $(S_KCC) $(SFLAGS) $(INCFLAGS)
 
-$(COMPONENT).filelist: $(LDOBJS) 
+$(COMPONENT).filelist: $(OBJS) 
 	@echo LDFILELIST $(COMPONENT)
-	$(_v)( for obj in ${LDOBJS}; do	\
+	$(_v)( for obj in ${OBJS}; do	\
 		 echo $(TARGET)/$(CURRENT_KERNEL_CONFIG)/$${obj}; \
 	done; ) > $(COMPONENT).filelist
 

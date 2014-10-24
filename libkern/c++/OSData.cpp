@@ -56,12 +56,6 @@ extern int debug_container_malloc_size;
 #define ACCUMSIZE(s)
 #endif
 
-struct OSData::ExpansionData
-{
-    DeallocFunction deallocFunction;
-    bool            disableSerialization;
-};
-
 bool OSData::initWithCapacity(unsigned int inCapacity)
 {
     if (!super::init())
@@ -224,24 +218,29 @@ unsigned int OSData::setCapacityIncrement(unsigned increment)
 unsigned int OSData::ensureCapacity(unsigned int newCapacity)
 {
     unsigned char * newData;
+    unsigned int finalCapacity;
 
     if (newCapacity <= capacity)
         return capacity;
 
-    newCapacity = (((newCapacity - 1) / capacityIncrement) + 1)
+    finalCapacity = (((newCapacity - 1) / capacityIncrement) + 1)
                 * capacityIncrement;
 
-    newData = (unsigned char *) kalloc(newCapacity);
-    
+    // integer overflow check
+    if (finalCapacity < newCapacity)
+        return capacity;
+
+    newData = (unsigned char *) kalloc(finalCapacity);
+
     if ( newData ) {
-        bzero(newData + capacity, newCapacity - capacity);
+        bzero(newData + capacity, finalCapacity - capacity);
         if (data) {
             bcopy(data, newData, capacity);
             kfree(data, capacity);
         }
-        ACCUMSIZE( newCapacity - capacity );
+        ACCUMSIZE( finalCapacity - capacity );
         data = (void *) newData;
-        capacity = newCapacity;
+        capacity = finalCapacity;
     }
 
     return capacity;

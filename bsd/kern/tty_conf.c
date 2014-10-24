@@ -109,7 +109,7 @@ struct	linesw linesw[MAXLDISC] =
 	NODISC(7),		/* loadable */
 };
 
-int	nlinesw = sizeof (linesw) / sizeof (linesw[0]);
+const int nlinesw = sizeof (linesw) / sizeof (linesw[0]);
 
 static struct linesw nodisc = NODISC(0);
 

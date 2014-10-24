@@ -31,9 +31,7 @@
 
 #include <sys/resource.h>
 
-/* Rosetta dependency on this address */
 #define	USRSTACK	VM_USRSTACK32
-
 #define	USRSTACK64	VM_USRSTACK64
 
 

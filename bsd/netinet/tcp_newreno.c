@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2010-2012 Apple Inc. All rights reserved.
+ * Copyright (c) 2010-2014 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -86,7 +86,7 @@
 int tcp_newreno_init(struct tcpcb *tp);
 int tcp_newreno_cleanup(struct tcpcb *tp);
 void tcp_newreno_cwnd_init_or_reset(struct tcpcb *tp);
-void tcp_newreno_inseq_ack_rcvd(struct tcpcb *tp, struct tcphdr *th);
+void tcp_newreno_congestion_avd(struct tcpcb *tp, struct tcphdr *th);
 void tcp_newreno_ack_rcvd(struct tcpcb *tp, struct tcphdr *th);
 void tcp_newreno_pre_fr(struct tcpcb *tp);
 void tcp_newreno_post_fr(struct tcpcb *tp, struct tcphdr *th);
@@ -100,7 +100,7 @@ struct tcp_cc_algo tcp_cc_newreno = {
 	.init = tcp_newreno_init,
 	.cleanup = tcp_newreno_cleanup,
 	.cwnd_init = tcp_newreno_cwnd_init_or_reset,
-	.inseq_ack_rcvd = tcp_newreno_inseq_ack_rcvd,
+	.congestion_avd = tcp_newreno_congestion_avd,
 	.ack_rcvd = tcp_newreno_ack_rcvd,
 	.pre_fr = tcp_newreno_pre_fr,
 	.post_fr = tcp_newreno_post_fr,
@@ -109,47 +109,6 @@ struct tcp_cc_algo tcp_cc_newreno = {
 	.delay_ack = tcp_newreno_delay_ack,
 	.switch_to = tcp_newreno_switch_cc
 };
-
-extern int tcp_do_rfc3465;
-extern int tcp_do_rfc3465_lim2;
-extern int maxseg_unacked;
-extern u_int32_t tcp_autosndbuf_max;
-
-#define SET_SNDSB_IDEAL_SIZE(sndsb, size) \
-	sndsb->sb_idealsize = min(max(tcp_sendspace, tp->snd_ssthresh), \
-		tcp_autosndbuf_max); 
-
-void tcp_cc_resize_sndbuf(struct tcpcb *tp) {
-	struct sockbuf *sb;
-	/* If the send socket buffer size is bigger than ssthresh,
-	 * it is time to trim it because we do not want to hold
-	 * too many mbufs in the socket buffer
-	 */
-	sb = &(tp->t_inpcb->inp_socket->so_snd);
-	if (sb->sb_hiwat > tp->snd_ssthresh &&
-		(sb->sb_flags & SB_AUTOSIZE) != 0) {
-		if (sb->sb_idealsize > tp->snd_ssthresh) {
-			SET_SNDSB_IDEAL_SIZE(sb, tp->snd_ssthresh);
-		}
-		sb->sb_flags |= SB_TRIM;
-	}
-}
-
-void tcp_bad_rexmt_fix_sndbuf(struct tcpcb *tp) {
-	struct sockbuf *sb;
-	sb = &(tp->t_inpcb->inp_socket->so_snd);
-	if ((sb->sb_flags & (SB_TRIM|SB_AUTOSIZE)) == (SB_TRIM|SB_AUTOSIZE)) {
-		/* If there was a retransmission that was not necessary 
-		 * then the size of socket buffer can be restored to
-		 * what it was before
-		 */
-		SET_SNDSB_IDEAL_SIZE(sb, tp->snd_ssthresh);
-		if (sb->sb_hiwat <= sb->sb_idealsize) {
-			sbreserve(sb, sb->sb_idealsize);
-			sb->sb_flags &= ~SB_TRIM;
-		}
-	}
-}
 
 int tcp_newreno_init(struct tcpcb *tp) {
 #pragma unused(tp)
@@ -174,22 +133,10 @@ int tcp_newreno_cleanup(struct tcpcb *tp) {
  */
 void
 tcp_newreno_cwnd_init_or_reset(struct tcpcb *tp) {
-	if ( tp->t_flags & TF_LOCAL )
-		tp->snd_cwnd = tp->t_maxseg * ss_fltsz_local;
-        else {
-		/* Calculate initial cwnd according to RFC3390,
-		 * - On a standard link, this will result in a higher cwnd
-		 * and improve initial transfer rate.
-		 * - Keep the old ss_fltsz sysctl for ABI compabitility issues.
-		 * but it will be overriden if tcp_do_rfc3390 sysctl is set.
-		 */
+	tcp_cc_cwnd_init_or_reset(tp);
 
-		if (tcp_do_rfc3390) 
-			tp->snd_cwnd = min(4 * tp->t_maxseg, max(2 * tp->t_maxseg, 4380));
-
-		else
-			tp->snd_cwnd = tp->t_maxseg * ss_fltsz;
-	}
+	/* If stretch ack was auto disabled, re-evaluate the situation */
+	tcp_cc_after_idle_stretchack(tp);
 }
 
 
@@ -197,8 +144,8 @@ tcp_newreno_cwnd_init_or_reset(struct tcpcb *tp) {
  * This will get called from header prediction code.
  */
 void
-tcp_newreno_inseq_ack_rcvd(struct tcpcb *tp, struct tcphdr *th) {
-	int acked = 0;
+tcp_newreno_congestion_avd(struct tcpcb *tp, struct tcphdr *th) {
+	uint32_t acked = 0;
 	acked = BYTES_ACKED(th, tp);
 	/*
 	 * Grow the congestion window, if the
@@ -253,10 +200,10 @@ tcp_newreno_ack_rcvd(struct tcpcb *tp, struct tcphdr *th) {
 			 *
 			 * (See RFC 3465 2.3 Choosing the Limit)
 			 */
-			u_int abc_lim;
-
+			uint32_t abc_lim;
 			abc_lim = (tcp_do_rfc3465_lim2 &&
-				tp->snd_nxt == tp->snd_max) ? incr * 2 : incr;
+				tp->snd_nxt == tp->snd_max) ? incr * 2 
+				: incr;
 
 			incr = lmin(acked, abc_lim);
 		}
@@ -375,30 +322,7 @@ tcp_newreno_after_timeout(struct tcpcb *tp) {
 
 int
 tcp_newreno_delay_ack(struct tcpcb *tp, struct tcphdr *th) {
-	/* If any flags other than TH_ACK is set, set "end-of-write" bit */
-	if ((th->th_flags & ~TH_ACK))
-		tp->t_flagsext |= TF_STREAMEOW;
-	else
-		tp->t_flagsext &= ~(TF_STREAMEOW);
-
-	switch (tcp_delack_enabled) {
-	case 1:
-	case 2:
-		if ((tp->t_flags & TF_RXWIN0SENT) == 0 &&
-			(th->th_flags & TH_PUSH) == 0 &&
-			(tp->t_unacksegs == 1))
-			return(1);
-		break;
-	case 3:
-		if ((tp->t_flags & TF_RXWIN0SENT) == 0 &&
-			(th->th_flags & TH_PUSH) == 0 &&
-			((tp->t_unacksegs == 1) ||
-			((tp->t_flags & TF_STRETCHACK) != 0 &&
-			tp->t_unacksegs < (maxseg_unacked))))
-			return(1);
-		break;
-	}
-	return(0);
+	return (tcp_cc_delay_ack(tp, th));
 }
 
 /* Switch to newreno from a different CC. If the connection is in
@@ -417,9 +341,7 @@ tcp_newreno_switch_cc(struct tcpcb *tp, uint16_t old_index) {
 	} else { 
 		cwnd = cwnd / 2 / tp->t_maxseg;
 	}
-	if (cwnd < 1)
-		cwnd = 1;
-	tp->snd_cwnd = cwnd * tp->t_maxseg;
+	tp->snd_cwnd = max(TCP_CC_CWND_INIT_BYTES, cwnd * tp->t_maxseg);
 
 	/* Start counting bytes for RFC 3465 again */
 	tp->t_bytes_acked = 0;

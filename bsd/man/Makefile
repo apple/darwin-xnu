@@ -7,7 +7,7 @@ export MakeInc_dir=${SRCROOT}/makedefs/MakeInc.dir
 include $(MakeInc_cmd)
 include $(MakeInc_def)
 
-INSTMAN_SUBDIRS = \
+INSTTEXTFILES_SUBDIRS = \
 	man2 \
 	man3 \
 	man4 \

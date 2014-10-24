@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2012 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2014 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -123,6 +123,7 @@
 
 #include <ipc/ipc_kmsg.h>
 #include <ipc/ipc_port.h>
+#include <bank/bank_types.h>
 
 #include <vm/vm_kern.h>
 #include <vm/vm_pageout.h>
@@ -138,6 +139,7 @@
 #include <mach/thread_act_server.h>
 #include <mach/mach_host_server.h>
 #include <mach/host_priv_server.h>
+#include <mach/mach_voucher_server.h>
 
 static struct zone			*thread_zone;
 static lck_grp_attr_t		thread_lck_grp_attr;
@@ -169,12 +171,16 @@ extern int debug_task;
 int thread_max = CONFIG_THREAD_MAX;	/* Max number of threads */
 int task_threadmax = CONFIG_THREAD_MAX;
 
-static uint64_t		thread_unique_id = 0;
+static uint64_t		thread_unique_id = 100;
 
 struct _thread_ledger_indices thread_ledgers = { -1 };
 static ledger_template_t thread_ledger_template = NULL;
 void init_thread_ledgers(void);
 int task_disable_cpumon(task_t task);
+
+#if CONFIG_JETSAM
+void jetsam_on_ledger_cpulimit_exceeded(void);
+#endif
 
 /*
  * Level (in terms of percentage of the limit) at which the CPU usage monitor triggers telemetry.
@@ -220,6 +226,14 @@ thread_bootstrap(void)
 	thread_template.saved_mode = TH_MODE_NONE;
 	thread_template.safe_release = 0;
 
+	thread_template.sfi_class = SFI_CLASS_UNSPECIFIED;
+	thread_template.sfi_wait_class = SFI_CLASS_UNSPECIFIED;
+
+	thread_template.active = 0;
+	thread_template.started = 0;
+	thread_template.static_param = 0;
+	thread_template.policy_reset = 0;
+
 	thread_template.priority = 0;
 	thread_template.sched_pri = 0;
 	thread_template.max_priority = 0;
@@ -230,16 +244,20 @@ thread_bootstrap(void)
 	thread_template.pending_promoter[1] = NULL;
 	thread_template.rwlock_count = 0;
 
+#if MACH_ASSERT
+	thread_template.SHARE_COUNT = 0;
+	thread_template.BG_COUNT = 0;
+#endif /* MACH_ASSERT */	
+
 	thread_template.realtime.deadline = UINT64_MAX;
 
-	thread_template.current_quantum = 0;
+	thread_template.quantum_remaining = 0;
 	thread_template.last_run_time = 0;
-	thread_template.last_quantum_refill_time = 0;
 
 	thread_template.computation_metered = 0;
 	thread_template.computation_epoch = 0;
 
-#if defined(CONFIG_SCHED_TRADITIONAL)
+#if defined(CONFIG_SCHED_TIMESHARE_CORE)
 	thread_template.sched_stamp = 0;
 	thread_template.pri_shift = INT8_MAX;
 	thread_template.sched_usage = 0;
@@ -260,6 +278,8 @@ thread_bootstrap(void)
 	thread_template.vtimer_prof_save = 0;
 	thread_template.vtimer_rlim_save = 0;
 
+	thread_template.wait_sfi_begin_time = 0;
+
 	thread_template.wait_timer_is_set = FALSE;
 	thread_template.wait_timer_active = 0;
 
@@ -268,8 +288,6 @@ thread_bootstrap(void)
 	thread_template.special_handler.handler = special_handler;
 	thread_template.special_handler.next = NULL;
 
-	thread_template.funnel_lock = THR_FUNNEL_NULL;
-	thread_template.funnel_state = 0;
 	thread_template.recover = (vm_offset_t)NULL;
 	
 	thread_template.map = VM_MAP_NULL;
@@ -284,6 +302,10 @@ thread_bootstrap(void)
 	thread_template.kpc_buf = NULL;
 #endif
 
+#if HYPERVISOR
+	thread_template.hv_thread_target = NULL;
+#endif /* HYPERVISOR */
+
 	thread_template.t_chud = 0;
 	thread_template.t_page_creation_count = 0;
 	thread_template.t_page_creation_time = 0;
@@ -295,13 +317,19 @@ thread_bootstrap(void)
 
 	thread_template.t_ledger = LEDGER_NULL;
 	thread_template.t_threadledger = LEDGER_NULL;
+#ifdef CONFIG_BANK
+	thread_template.t_bankledger = LEDGER_NULL;
+	thread_template.t_deduct_bank_ledger_time = 0;
+#endif
 
 	thread_template.requested_policy = default_task_requested_policy;
 	thread_template.effective_policy = default_task_effective_policy;
 	thread_template.pended_policy    = default_task_pended_policy;
 
-	thread_template.iotier_override = THROTTLE_LEVEL_NONE;
+	thread_template.usynch_override_contended_resource_count = 0;
 
+	thread_template.iotier_override = THROTTLE_LEVEL_NONE;
+	thread_template.thread_io_stats = NULL;
 	thread_template.thread_callout_interrupt_wakeups = thread_template.thread_callout_platform_idle_wakeups = 0;
 
 	thread_template.thread_timer_wakeups_bin_1 = thread_template.thread_timer_wakeups_bin_2 = 0;
@@ -309,9 +337,14 @@ thread_bootstrap(void)
 
 	thread_template.thread_tag = 0;
 
+	thread_template.ith_voucher_name = MACH_PORT_NULL;
+	thread_template.ith_voucher = IPC_VOUCHER_NULL;
+
 	init_thread = thread_template;
 	machine_set_current_thread(&init_thread);
 }
+
+extern boolean_t allow_qos_policy_set;
 
 void
 thread_init(void)
@@ -338,6 +371,8 @@ thread_init(void)
 		sizeof (cpumon_ustackshots_trigger_pct))) {
 		cpumon_ustackshots_trigger_pct = CPUMON_USTACKSHOTS_TRIGGER_DEFAULT_PCT;
 	}
+
+	PE_parse_boot_argn("-qos-policy-allow", &allow_qos_policy_set, sizeof(allow_qos_policy_set));	
 
 	init_thread_ledgers();
 }
@@ -374,12 +409,17 @@ thread_terminate_self(void)
 	s = splsched();
 	thread_lock(thread);
 
+	assert_thread_sched_count(thread);
+
 	/*
 	 *	Cancel priority depression, wait for concurrent expirations
 	 *	on other processors.
 	 */
 	if (thread->sched_flags & TH_SFLAG_DEPRESSED_MASK) {
 		thread->sched_flags &= ~TH_SFLAG_DEPRESSED_MASK;
+
+		/* If our priority was low because of a depressed yield, restore it in case we block below */
+		set_sched_pri(thread, thread->priority);
 
 		if (timer_call_cancel(&thread->depress_timer))
 			thread->depress_timer_active--;
@@ -400,8 +440,12 @@ thread_terminate_self(void)
 	thread_unlock(thread);
 	splx(s);
 
+
+	thread_mtx_lock(thread);
+
 	thread_policy_reset(thread);
 
+	thread_mtx_unlock(thread);
 
 	task = thread->task;
 	uthread_cleanup(task, thread->uthread, task->bsd_info);
@@ -481,7 +525,6 @@ thread_deallocate(
 	kpc_thread_destroy(thread);
 #endif
 
-
 	ipc_thread_terminate(thread);
 
 	task = thread->task;
@@ -499,6 +542,12 @@ thread_deallocate(
 		ledger_dereference(thread->t_ledger);
 	if (thread->t_threadledger)
 		ledger_dereference(thread->t_threadledger);
+
+	if (IPC_VOUCHER_NULL != thread->ith_voucher)
+		ipc_voucher_release(thread->ith_voucher);
+
+	if (thread->thread_io_stats)
+		kfree(thread->thread_io_stats, sizeof(struct io_stat_info));
 
 	if (thread->kernel_stack != 0)
 		stack_free(thread);
@@ -532,6 +581,9 @@ thread_terminate_daemon(void)
 		simple_unlock(&thread_terminate_lock);
 		(void)spllo();
 
+		assert(thread->SHARE_COUNT == 0);
+		assert(thread->BG_COUNT == 0);		
+
 		task = thread->task;
 
 		task_lock(task);
@@ -551,6 +603,9 @@ thread_terminate_daemon(void)
 
 		task->task_timer_wakeups_bin_1 += thread->thread_timer_wakeups_bin_1;
 		task->task_timer_wakeups_bin_2 += thread->thread_timer_wakeups_bin_2;
+		task->task_gpu_ns += ml_gpu_stat(thread);
+		
+		thread_update_qos_cpu_time(thread, FALSE);
 		queue_remove(&task->threads, thread, thread_t, task_threads);
 		task->thread_count--;
 
@@ -594,6 +649,8 @@ void
 thread_terminate_enqueue(
 	thread_t		thread)
 {
+	KERNEL_DEBUG_CONSTANT(TRACEDBG_CODE(DBG_TRACE_DATA, TRACE_DATA_THREAD_TERMINATE) | DBG_FUNC_NONE, thread->thread_id, 0, 0, 0, 0);
+
 	simple_lock(&thread_terminate_lock);
 	enqueue_tail(&thread_terminate_queue, (queue_entry_t)thread);
 	simple_unlock(&thread_terminate_lock);
@@ -685,6 +742,8 @@ thread_daemon_init(void)
 /*
  * Create a new thread.
  * Doesn't start the thread running.
+ *
+ * Task and tasks_threads_lock are returned locked on success.
  */
 static kern_return_t
 thread_create_internal(
@@ -747,6 +806,16 @@ thread_create_internal(
 
 	new_thread->continuation = continuation;
 
+	/* Allocate I/O Statistics structure */
+	new_thread->thread_io_stats = (io_stat_info_t)kalloc(sizeof(struct io_stat_info));
+	assert(new_thread->thread_io_stats != NULL);
+	bzero(new_thread->thread_io_stats, sizeof(struct io_stat_info));
+
+#if CONFIG_IOSCHED
+	/* Clear out the I/O Scheduling info for AppleFSCompression */
+	new_thread->decmp_upl = NULL;
+#endif /* CONFIG_IOSCHED */ 
+
 	lck_mtx_lock(&tasks_threads_lock);
 	task_lock(parent_task);
 
@@ -771,6 +840,7 @@ thread_create_internal(
 #endif  /* MACH_BSD */
 		ipc_thread_disable(new_thread);
 		ipc_thread_terminate(new_thread);
+		kfree(new_thread->thread_io_stats, sizeof(struct io_stat_info));
 		lck_mtx_destroy(&new_thread->mutex, &thread_lck_grp);
 		machine_thread_destroy(new_thread);
 		zfree(thread_zone, new_thread);
@@ -789,26 +859,31 @@ thread_create_internal(
 		 */
 		set_astledger(new_thread);
 	}
-	new_thread->t_threadledger = LEDGER_NULL;	/* per thread ledger is not inherited */
+
+	/* Instantiate a thread ledger. Do not fail thread creation if ledger creation fails. */
+	if ((new_thread->t_threadledger = ledger_instantiate(thread_ledger_template,
+				LEDGER_CREATE_INACTIVE_ENTRIES)) != LEDGER_NULL) {
+
+		ledger_entry_setactive(new_thread->t_threadledger, thread_ledgers.cpu_time);
+	}
+
+	new_thread->cpu_time_last_qos = 0;
+#ifdef CONFIG_BANK
+	new_thread->t_bankledger = LEDGER_NULL;
+	new_thread->t_deduct_bank_ledger_time = 0;
+#endif
+
 	new_thread->t_ledger = new_thread->task->ledger;
 	if (new_thread->t_ledger)
 		ledger_reference(new_thread->t_ledger);
 
+#if defined(CONFIG_SCHED_MULTIQ)
+	/* Cache the task's sched_group */
+	new_thread->sched_group = parent_task->sched_group;
+#endif /* defined(CONFIG_SCHED_MULTIQ) */
+
 	/* Cache the task's map */
 	new_thread->map = parent_task->map;
-
-	/* Chain the thread onto the task's list */
-	queue_enter(&parent_task->threads, new_thread, thread_t, task_threads);
-	parent_task->thread_count++;
-	
-	/* So terminating threads don't need to take the task lock to decrement */
-	hw_atomic_add(&parent_task->active_thread_count, 1);
-
-	/* Protected by the tasks_threads_lock */
-	new_thread->thread_id = ++thread_unique_id;
-
-	queue_enter(&threads, new_thread, thread_t, threads);
-	threads_count++;
 
 	timer_call_setup(&new_thread->wait_timer, thread_timer_expire, new_thread);
 	timer_call_setup(&new_thread->depress_timer, thread_depress_expire, new_thread);
@@ -840,11 +915,31 @@ thread_create_internal(
 	new_thread->importance = new_thread->priority - new_thread->task_priority;
 	new_thread->saved_importance = new_thread->importance;
 
-#if defined(CONFIG_SCHED_TRADITIONAL)
+#if defined(CONFIG_SCHED_TIMESHARE_CORE)
 	new_thread->sched_stamp = sched_tick;
 	new_thread->pri_shift = sched_pri_shift;
-#endif
+#endif /* defined(CONFIG_SCHED_TIMESHARE_CORE) */
+
+	if (parent_task->max_priority <= MAXPRI_THROTTLE) {
+		sched_set_thread_throttled(new_thread, TRUE);
+	}
+
 	SCHED(compute_priority)(new_thread, FALSE);
+
+	thread_policy_create(new_thread);
+
+	/* Chain the thread onto the task's list */
+	queue_enter(&parent_task->threads, new_thread, thread_t, task_threads);
+	parent_task->thread_count++;
+
+	/* So terminating threads don't need to take the task lock to decrement */
+	hw_atomic_add(&parent_task->active_thread_count, 1);
+
+	/* Protected by the tasks_threads_lock */
+	new_thread->thread_id = ++thread_unique_id;
+
+	queue_enter(&threads, new_thread, thread_t, threads);
+	threads_count++;
 
 	new_thread->active = TRUE;
 
@@ -1148,7 +1243,7 @@ thread_info_internal(
 		 *	(1/(5/8) - 1).
 		 */
 		basic_info->cpu_usage = 0;
-#if defined(CONFIG_SCHED_TRADITIONAL)
+#if defined(CONFIG_SCHED_TIMESHARE_CORE)
 		if (sched_tick_interval) {
 			basic_info->cpu_usage =	(integer_t)(((uint64_t)thread->cpu_usage
 										* TH_USAGE_SCALE) /	sched_tick_interval);
@@ -1350,6 +1445,25 @@ thread_read_times(
 	}
 }
 
+uint64_t thread_get_runtime_self(void)
+{
+	boolean_t interrupt_state;
+	uint64_t runtime;
+	thread_t thread = NULL;
+	processor_t processor = NULL;
+
+	thread = current_thread();
+
+	/* Not interrupt safe, as the scheduler may otherwise update timer values underneath us */
+	interrupt_state = ml_set_interrupts_enabled(FALSE);
+	processor = current_processor();
+	timer_switch(PROCESSOR_DATA(processor, thread_timer), mach_absolute_time(), PROCESSOR_DATA(processor, thread_timer));
+	runtime = (timer_grab(&thread->user_timer) + timer_grab(&thread->system_timer));
+	ml_set_interrupts_enabled(interrupt_state);
+
+	return runtime;
+}
+
 kern_return_t
 thread_assign(
 	__unused thread_t			thread,
@@ -1437,6 +1551,25 @@ thread_wire(
 	boolean_t	wired)
 {
     return (thread_wire_internal(host_priv, thread, wired, NULL));
+}
+
+
+boolean_t
+set_vm_privilege(boolean_t privileged)
+{
+	boolean_t       was_vmpriv;
+
+	if (current_thread()->options & TH_OPT_VMPRIV)
+		was_vmpriv = TRUE;
+	else
+		was_vmpriv = FALSE;
+
+	if (privileged != FALSE)
+		current_thread()->options |= TH_OPT_VMPRIV;
+	else
+		current_thread()->options &= ~TH_OPT_VMPRIV;
+
+	return (was_vmpriv);
 }
 
 
@@ -1594,7 +1727,7 @@ THIS_THREAD_IS_CONSUMING_TOO_MUCH_CPU__SENDING_EXC_RESOURCE(void)
 	       "It used more than %d%% CPU (Actual recent usage: %d%%) over %d seconds. "
 	       "thread lifetime cpu usage %d.%06d seconds, (%d.%06d user, %d.%06d system) "
 	       "ledger info: balance: %lld credit: %lld debit: %lld limit: %llu (%d%%) "
-	       "period: %llu time since last refill (ns): %llu \n",
+	       "period: %llu time since last refill (ns): %llu %s\n",
 	       procname, pid, tid,
 	       percentage, usage_percent,  interval_sec,
 	       thread_total_time.seconds,  thread_total_time.microseconds,
@@ -1603,20 +1736,75 @@ THIS_THREAD_IS_CONSUMING_TOO_MUCH_CPU__SENDING_EXC_RESOURCE(void)
 	       lei.lei_balance,
 	       lei.lei_credit,             lei.lei_debit,
 	       lei.lei_limit,              limit_percent,
-	       lei.lei_refill_period,      lei.lei_last_refill);
+	       lei.lei_refill_period,      lei.lei_last_refill,
+	       (fatal ? "[fatal violation]" : ""));
 
 
 	code[0] = code[1] = 0;
 	EXC_RESOURCE_ENCODE_TYPE(code[0], RESOURCE_TYPE_CPU);
-	EXC_RESOURCE_ENCODE_FLAVOR(code[0], FLAVOR_CPU_MONITOR);
+	if (fatal) {
+		EXC_RESOURCE_ENCODE_FLAVOR(code[0], FLAVOR_CPU_MONITOR_FATAL);
+	}else {
+		EXC_RESOURCE_ENCODE_FLAVOR(code[0], FLAVOR_CPU_MONITOR);
+	}
 	EXC_RESOURCE_CPUMONITOR_ENCODE_INTERVAL(code[0], interval_sec);
 	EXC_RESOURCE_CPUMONITOR_ENCODE_PERCENTAGE(code[0], limit_percent);
 	EXC_RESOURCE_CPUMONITOR_ENCODE_PERCENTAGE(code[1], usage_percent);
 	exception_triage(EXC_RESOURCE, code, EXCEPTION_CODE_MAX);
 
 	if (fatal) {
+#if CONFIG_JETSAM
+		jetsam_on_ledger_cpulimit_exceeded();
+#else
 		task_terminate_internal(task);
+#endif
 	}
+}
+
+#define UPDATE_IO_STATS(info, size) 				\
+{ 								\
+	info.count++; 						\
+	info.size += size; 					\
+}
+
+#define UPDATE_IO_STATS_ATOMIC(info, size) 			\
+{ 								\
+	OSIncrementAtomic64((SInt64 *)&(info.count)); 		\
+	OSAddAtomic64(size, (SInt64 *)&(info.size)); 		\
+}
+
+void thread_update_io_stats(thread_t thread, int size, int io_flags)
+{
+	int io_tier;
+
+	if (thread->thread_io_stats == NULL || thread->task->task_io_stats == NULL)
+		return;
+
+	if (io_flags & DKIO_READ) {
+		UPDATE_IO_STATS(thread->thread_io_stats->disk_reads, size);
+		UPDATE_IO_STATS_ATOMIC(thread->task->task_io_stats->disk_reads, size);
+	}
+	
+	if (io_flags & DKIO_META) {
+		UPDATE_IO_STATS(thread->thread_io_stats->metadata, size);
+		UPDATE_IO_STATS_ATOMIC(thread->task->task_io_stats->metadata, size);
+	}
+	
+	if (io_flags & DKIO_PAGING) {
+		UPDATE_IO_STATS(thread->thread_io_stats->paging, size);
+		UPDATE_IO_STATS_ATOMIC(thread->task->task_io_stats->paging, size);
+	}
+
+	io_tier = ((io_flags & DKIO_TIER_MASK) >> DKIO_TIER_SHIFT);
+	assert (io_tier < IO_NUM_PRIORITIES);
+
+	UPDATE_IO_STATS(thread->thread_io_stats->io_priority[io_tier], size);
+	UPDATE_IO_STATS_ATOMIC(thread->task->task_io_stats->io_priority[io_tier], size);
+
+	/* Update Total I/O Counts */
+	UPDATE_IO_STATS(thread->thread_io_stats->total_io, size);
+	UPDATE_IO_STATS_ATOMIC(thread->task->task_io_stats->total_io, size);
+
 }
 
 void
@@ -1638,6 +1826,7 @@ init_thread_ledgers(void) {
 	}
 
 	thread_ledgers.cpu_time = idx;
+	
 	thread_ledger_template = t;
 }
 
@@ -1717,12 +1906,8 @@ thread_set_cpulimit(int action, uint8_t percentage, uint64_t interval_ns)
 		 */
 		if (thread->t_threadledger != LEDGER_NULL) {
 			l = thread->t_threadledger;
-			/*
-			 * The only way to get a per-thread ledger is via CPU limits.
-			 */
-			assert(thread->options & (TH_OPT_PROC_CPULIMIT | TH_OPT_PRVT_CPULIMIT));
-			thread->t_threadledger = NULL;
-			ledger_dereference(l);
+			ledger_set_limit(l, thread_ledgers.cpu_time, LEDGER_LIMIT_INFINITY, 0);
+			ledger_set_action(l, thread_ledgers.cpu_time, LEDGER_ACTION_IGNORE);
 			thread->options &= ~(TH_OPT_PROC_CPULIMIT | TH_OPT_PRVT_CPULIMIT);
 		}
 
@@ -1790,123 +1975,6 @@ thread_set_cpulimit(int action, uint8_t percentage, uint64_t interval_ns)
 	}
 
 	return (0);
-}
-
-int		split_funnel_off = 0;
-lck_grp_t	*funnel_lck_grp = LCK_GRP_NULL;
-lck_grp_attr_t	*funnel_lck_grp_attr;
-lck_attr_t	*funnel_lck_attr;
-
-funnel_t *
-funnel_alloc(
-	int type)
-{
-	lck_mtx_t	*m;
-	funnel_t	*fnl;
-
-	if (funnel_lck_grp == LCK_GRP_NULL) {
-		funnel_lck_grp_attr = lck_grp_attr_alloc_init();
-
-		funnel_lck_grp = lck_grp_alloc_init("Funnel",  funnel_lck_grp_attr);
-
-		funnel_lck_attr = lck_attr_alloc_init();
-	}
-	if ((fnl = (funnel_t *)kalloc(sizeof(funnel_t))) != 0){
-		bzero((void *)fnl, sizeof(funnel_t));
-		if ((m = lck_mtx_alloc_init(funnel_lck_grp, funnel_lck_attr)) == (lck_mtx_t *)NULL) {
-			kfree(fnl, sizeof(funnel_t));
-			return(THR_FUNNEL_NULL);
-		}
-		fnl->fnl_mutex = m;
-		fnl->fnl_type = type;
-	}
-	return(fnl);
-}
-
-void 
-funnel_free(
-	funnel_t * fnl)
-{
-	lck_mtx_free(fnl->fnl_mutex, funnel_lck_grp);
-	if (fnl->fnl_oldmutex)
-		lck_mtx_free(fnl->fnl_oldmutex, funnel_lck_grp);
-	kfree(fnl, sizeof(funnel_t));
-}
-
-void 
-funnel_lock(
-	funnel_t * fnl)
-{
-	lck_mtx_lock(fnl->fnl_mutex);
-	fnl->fnl_mtxholder = current_thread();
-}
-
-void 
-funnel_unlock(
-	funnel_t * fnl)
-{
-	lck_mtx_unlock(fnl->fnl_mutex);
-	fnl->fnl_mtxholder = NULL;
-	fnl->fnl_mtxrelease = current_thread();
-}
-
-funnel_t *
-thread_funnel_get(
-	void)
-{
-	thread_t th = current_thread();
-
-	if (th->funnel_state & TH_FN_OWNED) {
-		return(th->funnel_lock);
-	}
-	return(THR_FUNNEL_NULL);
-}
-
-boolean_t
-thread_funnel_set(
-        funnel_t *	fnl,
-	boolean_t	funneled)
-{
-	thread_t	cur_thread;
-	boolean_t	funnel_state_prev;
-	boolean_t	intr;
-        
-	cur_thread = current_thread();
-	funnel_state_prev = ((cur_thread->funnel_state & TH_FN_OWNED) == TH_FN_OWNED);
-
-	if (funnel_state_prev != funneled) {
-		intr = ml_set_interrupts_enabled(FALSE);
-
-		if (funneled == TRUE) {
-			if (cur_thread->funnel_lock)
-				panic("Funnel lock called when holding one %p", cur_thread->funnel_lock);
-			KERNEL_DEBUG(0x6032428 | DBG_FUNC_NONE,
-											fnl, 1, 0, 0, 0);
-			funnel_lock(fnl);
-			KERNEL_DEBUG(0x6032434 | DBG_FUNC_NONE,
-											fnl, 1, 0, 0, 0);
-			cur_thread->funnel_state |= TH_FN_OWNED;
-			cur_thread->funnel_lock = fnl;
-		} else {
-			if(cur_thread->funnel_lock->fnl_mutex != fnl->fnl_mutex)
-				panic("Funnel unlock  when not holding funnel");
-			cur_thread->funnel_state &= ~TH_FN_OWNED;
-			KERNEL_DEBUG(0x603242c | DBG_FUNC_NONE,
-								fnl, 1, 0, 0, 0);
-
-			cur_thread->funnel_lock = THR_FUNNEL_NULL;
-			funnel_unlock(fnl);
-		}
-		(void)ml_set_interrupts_enabled(intr);
-	} else {
-		/* if we are trying to acquire funnel recursively
-		 * check for funnel to be held already
-		 */
-		if (funneled && (fnl->fnl_mutex != cur_thread->funnel_lock->fnl_mutex)) {
-				panic("thread_funnel_set: already holding a different funnel");
-		}
-	}
-	return(funnel_state_prev);
 }
 
 static void
@@ -1988,6 +2056,295 @@ thread_should_halt(
 	thread_t		th)
 {
 	return (thread_should_halt_fast(th));
+}
+
+/*
+ * thread_set_voucher_name - reset the voucher port name bound to this thread
+ *
+ * Conditions:  nothing locked
+ *
+ *	If we already converted the previous name to a cached voucher
+ *	reference, then we discard that reference here.  The next lookup
+ *	will cache it again.
+ */
+
+kern_return_t
+thread_set_voucher_name(mach_port_name_t voucher_name)
+{
+	thread_t thread = current_thread();
+	ipc_voucher_t new_voucher = IPC_VOUCHER_NULL;
+	ipc_voucher_t voucher;
+#ifdef CONFIG_BANK
+	ledger_t bankledger = NULL;
+#endif
+
+	if (MACH_PORT_DEAD == voucher_name)
+		return KERN_INVALID_RIGHT;
+
+	/*
+	 * agressively convert to voucher reference
+	 */
+	if (MACH_PORT_VALID(voucher_name)) {
+		new_voucher = convert_port_name_to_voucher(voucher_name);
+		if (IPC_VOUCHER_NULL == new_voucher)
+			return KERN_INVALID_ARGUMENT;
+	}
+#ifdef CONFIG_BANK
+	bankledger = bank_get_voucher_ledger(new_voucher);
+#endif
+
+	thread_mtx_lock(thread);
+	voucher = thread->ith_voucher;
+	thread->ith_voucher_name = voucher_name;
+	thread->ith_voucher = new_voucher;
+#ifdef CONFIG_BANK
+	bank_swap_thread_bank_ledger(thread, bankledger);
+#endif
+	thread_mtx_unlock(thread);
+
+	KERNEL_DEBUG_CONSTANT_IST(KDEBUG_TRACE,
+				  MACHDBG_CODE(DBG_MACH_IPC,MACH_THREAD_SET_VOUCHER) | DBG_FUNC_NONE,
+				  (uintptr_t)thread_tid(thread),
+				  (uintptr_t)voucher_name,
+				  VM_KERNEL_ADDRPERM((uintptr_t)new_voucher),
+				  1, 0);
+
+	if (IPC_VOUCHER_NULL != voucher)
+		ipc_voucher_release(voucher);
+
+	return KERN_SUCCESS;
+}
+
+/* 
+ *  thread_get_mach_voucher - return a voucher reference for the specified thread voucher
+ *
+ *  Conditions:  nothing locked
+ *
+ *  A reference to the voucher may be lazily pending, if someone set the voucher name
+ *  but nobody has done a lookup yet.  In that case, we'll have to do the equivalent
+ *  lookup here.
+ *
+ *  NOTE:  	At the moment, there is no distinction between the current and effective
+ *		vouchers because we only set them at the thread level currently.
+ */
+kern_return_t 
+thread_get_mach_voucher(
+	thread_act_t		thread,
+	mach_voucher_selector_t __unused which,
+	ipc_voucher_t		*voucherp)
+{
+	ipc_voucher_t	       	voucher;
+	mach_port_name_t	voucher_name;
+
+	if (THREAD_NULL == thread)
+		return KERN_INVALID_ARGUMENT;
+
+	thread_mtx_lock(thread);
+	voucher = thread->ith_voucher;
+
+	/* if already cached, just return a ref */
+	if (IPC_VOUCHER_NULL != voucher) {
+		ipc_voucher_reference(voucher);
+		thread_mtx_unlock(thread);
+		*voucherp = voucher;
+		return KERN_SUCCESS;
+	}
+
+	voucher_name = thread->ith_voucher_name;
+
+	/* convert the name to a port, then voucher reference */
+	if (MACH_PORT_VALID(voucher_name)) {
+		ipc_port_t port;
+
+		if (KERN_SUCCESS !=
+		    ipc_object_copyin(thread->task->itk_space, voucher_name,
+				      MACH_MSG_TYPE_COPY_SEND, (ipc_object_t *)&port)) {
+			thread->ith_voucher_name = MACH_PORT_NULL;
+			thread_mtx_unlock(thread);
+			*voucherp = IPC_VOUCHER_NULL;
+			return KERN_SUCCESS;
+		}
+
+		/* convert to a voucher ref to return, and cache a ref on thread */
+		voucher = convert_port_to_voucher(port);
+		ipc_voucher_reference(voucher);
+		thread->ith_voucher = voucher;
+		thread_mtx_unlock(thread);
+
+		KERNEL_DEBUG_CONSTANT_IST(KDEBUG_TRACE,
+					  MACHDBG_CODE(DBG_MACH_IPC,MACH_THREAD_SET_VOUCHER) | DBG_FUNC_NONE,
+					  (uintptr_t)thread_tid(thread),
+					  (uintptr_t)port,
+					  VM_KERNEL_ADDRPERM((uintptr_t)voucher),
+					  2, 0);
+
+
+		ipc_port_release_send(port);
+	} else
+		thread_mtx_unlock(thread);
+
+	*voucherp = voucher;
+	return KERN_SUCCESS;
+}
+
+/* 
+ *  thread_set_mach_voucher - set a voucher reference for the specified thread voucher
+ *
+ *  Conditions: callers holds a reference on the voucher.
+ *		nothing locked.
+ *
+ *  We grab another reference to the voucher and bind it to the thread.  Any lazy
+ *  binding is erased.  The old voucher reference associated with the thread is
+ *  discarded.
+ */
+kern_return_t 
+thread_set_mach_voucher(
+	thread_t		thread,
+	ipc_voucher_t		voucher)
+{
+	ipc_voucher_t old_voucher;
+#ifdef CONFIG_BANK
+	ledger_t bankledger = NULL;
+#endif
+
+	if (THREAD_NULL == thread)
+		return KERN_INVALID_ARGUMENT;
+
+	if (thread != current_thread() || thread->started)
+		return KERN_INVALID_ARGUMENT;
+
+
+	ipc_voucher_reference(voucher);
+#ifdef CONFIG_BANK
+	bankledger = bank_get_voucher_ledger(voucher);
+#endif
+	thread_mtx_lock(thread);
+	old_voucher = thread->ith_voucher;
+	thread->ith_voucher = voucher;
+	thread->ith_voucher_name = MACH_PORT_NULL;
+#ifdef CONFIG_BANK
+	bank_swap_thread_bank_ledger(thread, bankledger);
+#endif
+	thread_mtx_unlock(thread);
+
+	KERNEL_DEBUG_CONSTANT_IST(KDEBUG_TRACE,
+				  MACHDBG_CODE(DBG_MACH_IPC,MACH_THREAD_SET_VOUCHER) | DBG_FUNC_NONE,
+				  (uintptr_t)thread_tid(thread),
+				  (uintptr_t)MACH_PORT_NULL,
+				  VM_KERNEL_ADDRPERM((uintptr_t)voucher),
+				  3, 0);
+
+	ipc_voucher_release(old_voucher);
+
+	return KERN_SUCCESS;
+}
+
+/* 
+ *  thread_swap_mach_voucher - swap a voucher reference for the specified thread voucher
+ *
+ *  Conditions: callers holds a reference on the new and presumed old voucher(s).
+ *		nothing locked.
+ *
+ *  If the old voucher is still the same as passed in, replace it with new voucher
+ *  and discard the old (and the reference passed in).  Otherwise, discard the new
+ *  and return an updated old voucher.
+ */
+kern_return_t
+thread_swap_mach_voucher(
+	thread_t		thread,
+	ipc_voucher_t		new_voucher,
+	ipc_voucher_t		*in_out_old_voucher)
+{
+	mach_port_name_t old_voucher_name;
+	ipc_voucher_t old_voucher;
+#ifdef CONFIG_BANK
+	ledger_t bankledger = NULL;
+#endif
+
+	if (THREAD_NULL == thread)
+		return KERN_INVALID_TASK;
+
+	if (thread != current_thread() || thread->started)
+		return KERN_INVALID_ARGUMENT;
+
+#ifdef CONFIG_BANK
+	bankledger = bank_get_voucher_ledger(new_voucher);
+#endif
+
+	thread_mtx_lock(thread);
+
+	old_voucher = thread->ith_voucher;
+
+	if (IPC_VOUCHER_NULL == old_voucher) {
+		old_voucher_name = thread->ith_voucher_name;
+
+		/* perform lazy binding if needed */
+		if (MACH_PORT_VALID(old_voucher_name)) {
+			old_voucher = convert_port_name_to_voucher(old_voucher_name);
+			thread->ith_voucher_name = MACH_PORT_NULL;
+			thread->ith_voucher = old_voucher;
+
+			KERNEL_DEBUG_CONSTANT_IST(KDEBUG_TRACE,
+						  MACHDBG_CODE(DBG_MACH_IPC,MACH_THREAD_SET_VOUCHER) | DBG_FUNC_NONE,
+						  (uintptr_t)thread_tid(thread),
+						  (uintptr_t)old_voucher_name,
+						  VM_KERNEL_ADDRPERM((uintptr_t)old_voucher),
+						  4, 0);
+
+		}
+	}
+
+	/* swap in new voucher, if old voucher matches the one supplied */
+	if (old_voucher == *in_out_old_voucher) {
+		ipc_voucher_reference(new_voucher);
+		thread->ith_voucher = new_voucher;
+		thread->ith_voucher_name = MACH_PORT_NULL;
+#ifdef CONFIG_BANK
+		bank_swap_thread_bank_ledger(thread, bankledger);
+#endif
+		thread_mtx_unlock(thread);
+
+		KERNEL_DEBUG_CONSTANT_IST(KDEBUG_TRACE,
+					  MACHDBG_CODE(DBG_MACH_IPC,MACH_THREAD_SET_VOUCHER) | DBG_FUNC_NONE,
+					  (uintptr_t)thread_tid(thread),
+					  (uintptr_t)MACH_PORT_NULL,
+					  VM_KERNEL_ADDRPERM((uintptr_t)new_voucher),
+					  5, 0);
+
+		ipc_voucher_release(old_voucher);
+
+		*in_out_old_voucher = IPC_VOUCHER_NULL;
+		return KERN_SUCCESS;
+	}
+
+	/* Otherwise, just return old voucher reference */
+	ipc_voucher_reference(old_voucher);
+	thread_mtx_unlock(thread);
+	*in_out_old_voucher = old_voucher;
+	return KERN_SUCCESS;
+}
+
+/* 
+ *  thread_get_current_voucher_origin_pid - get the pid of the originator of the current voucher.
+ */
+kern_return_t
+thread_get_current_voucher_origin_pid(
+	int32_t      *pid)
+{
+	uint32_t buf_size;
+	kern_return_t kr;
+	thread_t thread = current_thread();
+	
+	buf_size = sizeof(*pid);
+	kr = mach_voucher_attr_command(thread->ith_voucher,
+		MACH_VOUCHER_ATTR_KEY_BANK,
+		BANK_ORIGINATOR_PID,
+		NULL,
+		0,
+		(mach_voucher_attr_content_t)pid,
+		&buf_size);
+
+	return kr;
 }
 
 #if CONFIG_DTRACE

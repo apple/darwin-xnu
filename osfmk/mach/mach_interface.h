@@ -54,7 +54,6 @@
  */
 #include <mach/memory_object_default_server.h>
 #include <mach/memory_object_control.h>
-#include <mach/memory_object_name.h>
 #include <mach/upl.h>
 #endif
 

@@ -66,8 +66,6 @@ extern int ipsec6_in_reject_so(struct mbuf *, struct socket *);
 extern int ipsec6_delete_pcbpolicy(struct inpcb *);
 extern int ipsec6_set_policy(struct inpcb *inp, int optname,
 	caddr_t request, size_t len, int priv);
-extern int ipsec6_get_policy(struct inpcb *inp, caddr_t request, size_t len,
-	struct mbuf **mp);
 extern int ipsec6_in_reject(struct mbuf *, struct inpcb *);
 
 struct tcp6cb;
@@ -77,6 +75,7 @@ extern size_t ipsec6_hdrsiz(struct mbuf *, u_int, struct inpcb *);
 struct ip6_hdr;
 extern const char *ipsec6_logpacketstr(struct ip6_hdr *, u_int32_t);
 
+extern int ipsec6_interface_output(struct ipsec_output_state *, ifnet_t, u_char *, struct mbuf *);
 extern int ipsec6_output_trans(struct ipsec_output_state *, u_char *,
 	struct mbuf *, struct secpolicy *, int, int *);
 extern int ipsec6_output_tunnel(struct ipsec_output_state *,

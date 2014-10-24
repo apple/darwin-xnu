@@ -62,8 +62,6 @@
  *	External memory management interface control functions.
  */
 
-#include <advisory_pageout.h>
-
 /*
  *	Interface dependencies:
  */
@@ -551,10 +549,10 @@ vm_object_update_extent(
 
 	        /*
 		 * Limit the number of pages to be cleaned at once to a contiguous
-		 * run, or at most MAX_UPL_TRANSFER size
+		 * run, or at most MAX_UPL_TRANSFER_BYTES
 		 */
 		if (data_cnt) {
-			if ((data_cnt >= PAGE_SIZE * MAX_UPL_TRANSFER) || (next_offset != offset)) {
+			if ((data_cnt >= MAX_UPL_TRANSFER_BYTES) || (next_offset != offset)) {
 
 				if (dw_count) {
 					vm_page_do_delayed_work(object, &dw_array[0], dw_count);
@@ -804,6 +802,7 @@ vm_object_update(
 		fault_info.interruptible = THREAD_UNINT;
 		fault_info.behavior  = VM_BEHAVIOR_SEQUENTIAL;
 		fault_info.user_tag  = 0;
+		fault_info.pmap_options = 0;
 		fault_info.lo_offset = copy_offset;
 		fault_info.hi_offset = copy_size;
 		fault_info.no_cache   = FALSE;
@@ -1128,11 +1127,6 @@ vm_object_set_attributes_common(
 			return(KERN_INVALID_ARGUMENT);
 	}
 
-#if	!ADVISORY_PAGEOUT
-	if (silent_overwrite || advisory_pageout)
-		return(KERN_INVALID_ARGUMENT);
-
-#endif	/* !ADVISORY_PAGEOUT */
 	if (may_cache)
 		may_cache = TRUE;
 	if (temporary)
@@ -1566,8 +1560,6 @@ memory_object_iopl_request(
 		return (KERN_INVALID_ARGUMENT);
 
 	if (!object->private) {
-		if (*upl_size > (MAX_UPL_TRANSFER*PAGE_SIZE))
-			*upl_size = (MAX_UPL_TRANSFER*PAGE_SIZE);
 		if (object->phys_contiguous) {
 			*flags = UPL_PHYS_CONTIG;
 		} else {
@@ -1926,6 +1918,22 @@ memory_object_mark_unused(
 		vm_object_cache_add(object);
 }
 
+void
+memory_object_mark_io_tracking(
+	memory_object_control_t control)
+{
+	vm_object_t             object;
+
+	if (control == NULL)
+		return;
+	object = memory_object_control_to_vm_object(control);
+
+	if (object != VM_OBJECT_NULL) {
+		vm_object_lock(object);
+		object->io_tracking = TRUE;
+		vm_object_unlock(object);
+	}
+}
 
 kern_return_t
 memory_object_pages_resident(

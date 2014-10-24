@@ -107,10 +107,17 @@ typedef natural_t mach_msg_timeout_t;
  *  (Ie, an error may or may not be produced.)
  *
  *  The value of MACH_MSGH_BITS_REMOTE determines the interpretation
- *  of the msgh_remote_port field.  It is handled like a msgt_name.
+ *  of the msgh_remote_port field.  It is handled like a msgt_name,
+ *  but must result in a send or send-once type right.
  *
  *  The value of MACH_MSGH_BITS_LOCAL determines the interpretation
- *  of the msgh_local_port field.  It is handled like a msgt_name.
+ *  of the msgh_local_port field.  It is handled like a msgt_name,
+ *  and also must result in a send or send-once type right.
+ *
+ *  The value of MACH_MSGH_BITS_VOUCHER determines the interpretation
+ *  of the msgh_voucher_port field.  It is handled like a msgt_name,
+ *  but must result in a send right (and the msgh_voucher_port field
+ *  must be the name of a send right to a Mach voucher kernel object.
  *
  *  MACH_MSGH_BITS() combines two MACH_MSG_TYPE_* values, for the remote
  *  and local fields, into a single value suitable for msgh_bits.
@@ -122,29 +129,68 @@ typedef natural_t mach_msg_timeout_t;
  */
 
 #define MACH_MSGH_BITS_ZERO		0x00000000
-#define MACH_MSGH_BITS_REMOTE_MASK	0x000000ff
-#define MACH_MSGH_BITS_LOCAL_MASK	0x0000ff00
-#define MACH_MSGH_BITS_COMPLEX		0x80000000U
-#define MACH_MSGH_BITS_USER             0x8000ffffU
 
-#define	MACH_MSGH_BITS_CIRCULAR		0x40000000	/* internal use only */
-#define	MACH_MSGH_BITS_RAISEIMP		0x20000000	/* importance raise, internal use only */
-#define	MACH_MSGH_BITS_IMPHOLDASRT	0x10000000	/* holds assertion alredy, in userland */
-#define	MACH_MSGH_BITS_USED		0xf000ffffU
+#define MACH_MSGH_BITS_REMOTE_MASK	0x0000001f
+#define MACH_MSGH_BITS_LOCAL_MASK	0x00001f00
+#define MACH_MSGH_BITS_VOUCHER_MASK	0x001f0000
 
-#define	MACH_MSGH_BITS_PORTS_MASK				\
-		(MACH_MSGH_BITS_REMOTE_MASK|MACH_MSGH_BITS_LOCAL_MASK)
+#define	MACH_MSGH_BITS_PORTS_MASK		\
+		(MACH_MSGH_BITS_REMOTE_MASK |	\
+		 MACH_MSGH_BITS_LOCAL_MASK |	\
+		 MACH_MSGH_BITS_VOUCHER_MASK)
 
-#define MACH_MSGH_BITS(remote, local)				\
+#define MACH_MSGH_BITS_COMPLEX		0x80000000U	/* message is complex */
+
+#define MACH_MSGH_BITS_USER             0x801f1f1fU	/* allowed bits user->kernel */
+
+#define	MACH_MSGH_BITS_RAISEIMP		0x20000000U	/* importance raised due to msg */
+#define MACH_MSGH_BITS_DENAP		MACH_MSGH_BITS_RAISEIMP
+
+#define	MACH_MSGH_BITS_IMPHOLDASRT	0x10000000U	/* assertion help, userland private */
+#define MACH_MSGH_BITS_DENAPHOLDASRT	MACH_MSGH_BITS_IMPHOLDASRT
+
+#define	MACH_MSGH_BITS_CIRCULAR		0x10000000U	/* message circular, kernel private */
+
+#define	MACH_MSGH_BITS_USED		0xb01f1f1fU
+
+/* setter macros for the bits */
+#define MACH_MSGH_BITS(remote, local)  /* legacy */		\
 		((remote) | ((local) << 8))
+#define	MACH_MSGH_BITS_SET_PORTS(remote, local, voucher)	\
+	(((remote) & MACH_MSGH_BITS_REMOTE_MASK) | 		\
+	 (((local) << 8) & MACH_MSGH_BITS_LOCAL_MASK) | 	\
+	 (((voucher) << 16) & MACH_MSGH_BITS_VOUCHER_MASK))
+#define MACH_MSGH_BITS_SET(remote, local, voucher, other)	\
+	(MACH_MSGH_BITS_SET_PORTS((remote), (local), (voucher)) \
+	 | ((other) &~ MACH_MSGH_BITS_PORTS_MASK))
+
+/* getter macros for pulling values out of the bits field */
 #define	MACH_MSGH_BITS_REMOTE(bits)				\
 		((bits) & MACH_MSGH_BITS_REMOTE_MASK)
 #define	MACH_MSGH_BITS_LOCAL(bits)				\
 		(((bits) & MACH_MSGH_BITS_LOCAL_MASK) >> 8)
+#define	MACH_MSGH_BITS_VOUCHER(bits)				\
+		(((bits) & MACH_MSGH_BITS_VOUCHER_MASK) >> 16)
 #define	MACH_MSGH_BITS_PORTS(bits)				\
-		((bits) & MACH_MSGH_BITS_PORTS_MASK)
+	((bits) & MACH_MSGH_BITS_PORTS_MASK)
 #define	MACH_MSGH_BITS_OTHER(bits)				\
 		((bits) &~ MACH_MSGH_BITS_PORTS_MASK)
+
+/* checking macros */
+#define MACH_MSGH_BITS_HAS_REMOTE(bits)				\
+	(MACH_MSGH_BITS_REMOTE(bits) != MACH_MSGH_BITS_ZERO)
+#define MACH_MSGH_BITS_HAS_LOCAL(bits)				\
+	(MACH_MSGH_BITS_LOCAL(bits) != MACH_MSGH_BITS_ZERO)
+#define MACH_MSGH_BITS_HAS_VOUCHER(bits)			\
+	(MACH_MSGH_BITS_VOUCHER(bits) != MACH_MSGH_BITS_ZERO)
+#define MACH_MSGH_BITS_IS_COMPLEX(bits)				\
+	(((bits) & MACH_MSGH_BITS_COMPLEX) != MACH_MSGH_BITS_ZERO)
+
+/* importance checking macros */
+#define MACH_MSGH_BITS_RAISED_IMPORTANCE(bits)			\
+	(((bits) & MACH_MSGH_BITS_RAISEIMP) != MACH_MSGH_BITS_ZERO)
+#define MACH_MSGH_BITS_HOLDS_IMPORTANCE_ASSERTION(bits)		\
+	(((bits) & MACH_MSGH_BITS_IMPHOLDASRT) != MACH_MSGH_BITS_ZERO)
 
 /*
  *  Every message starts with a message header.
@@ -162,10 +208,9 @@ typedef natural_t mach_msg_timeout_t;
  *  to reply to the message.  It may carry the values MACH_PORT_NULL,
  *  MACH_PORT_DEAD, a send-once right, or a send right.
  *
- *  The msgh_seqno field carries a sequence number associated with the
- *  received-from port.  A port's sequence number is incremented every
- *  time a message is received from it.  In sent messages, the field's
- *  value is ignored.
+ *  The msgh_voucher_port field specifies a Mach voucher port. Only
+ *  send rights to kernel-implemented Mach Voucher kernel objects in
+ *  addition to MACH_PORT_NULL or MACH_PORT_DEAD may be passed.
  *
  *  The msgh_id field is uninterpreted by the message primitives.
  *  It normally carries information specifying the format
@@ -181,13 +226,16 @@ typedef integer_t mach_msg_id_t;
 
 typedef unsigned int mach_msg_type_name_t;
 
-#define MACH_MSG_TYPE_MOVE_RECEIVE	16	/* Must hold receive rights */
-#define MACH_MSG_TYPE_MOVE_SEND		17	/* Must hold send rights */
-#define MACH_MSG_TYPE_MOVE_SEND_ONCE	18	/* Must hold sendonce rights */
-#define MACH_MSG_TYPE_COPY_SEND		19	/* Must hold send rights */
-#define MACH_MSG_TYPE_MAKE_SEND		20	/* Must hold receive rights */
-#define MACH_MSG_TYPE_MAKE_SEND_ONCE	21	/* Must hold receive rights */
-#define MACH_MSG_TYPE_COPY_RECEIVE	22	/* Must hold receive rights */
+#define MACH_MSG_TYPE_MOVE_RECEIVE	16	/* Must hold receive right */
+#define MACH_MSG_TYPE_MOVE_SEND		17	/* Must hold send right(s) */
+#define MACH_MSG_TYPE_MOVE_SEND_ONCE	18	/* Must hold sendonce right */
+#define MACH_MSG_TYPE_COPY_SEND		19	/* Must hold send right(s) */
+#define MACH_MSG_TYPE_MAKE_SEND		20	/* Must hold receive right */
+#define MACH_MSG_TYPE_MAKE_SEND_ONCE	21	/* Must hold receive right */
+#define MACH_MSG_TYPE_COPY_RECEIVE	22	/* NOT VALID */
+#define MACH_MSG_TYPE_DISPOSE_RECEIVE	24	/* must hold receive right */
+#define MACH_MSG_TYPE_DISPOSE_SEND	25	/* must hold send right(s) */
+#define MACH_MSG_TYPE_DISPOSE_SEND_ONCE 26	/* must hold sendonce right */
 
 typedef unsigned int mach_msg_copy_options_t;
 
@@ -356,11 +404,12 @@ typedef	struct
   mach_msg_size_t	msgh_size;
   mach_port_t		msgh_remote_port;
   mach_port_t		msgh_local_port;
-  mach_msg_size_t 	msgh_reserved;
+  mach_port_name_t	msgh_voucher_port;
   mach_msg_id_t		msgh_id;
 } mach_msg_header_t;
 
-#define MACH_MSG_NULL (mach_msg_header_t *) 0
+#define	msgh_reserved		msgh_voucher_port
+#define MACH_MSG_NULL	(mach_msg_header_t *) 0
 
 typedef struct
 {
@@ -381,6 +430,15 @@ typedef struct
   mach_msg_trailer_size_t	msgh_trailer_size;
 } mach_msg_trailer_t;
 
+/*
+ *  The msgh_seqno field carries a sequence number
+ *  associated with the received-from port.  A port's
+ *  sequence number is incremented every time a message
+ *  is received from it and included in the received
+ *  trailer to help put messages back in sequence if
+ *  multiple threads receive and/or process received
+ *  messages.
+ */
 typedef struct
 {
   mach_msg_trailer_type_t       msgh_trailer_type;
@@ -434,6 +492,8 @@ typedef struct
   mach_port_context_t		msgh_context;
 } mach_msg_context_trailer_t;
 
+
+
 typedef struct
 {
   mach_port_name_t sender;
@@ -455,6 +515,7 @@ typedef struct
   int				msgh_ad;
   msg_labels_t                  msgh_labels;
 } mach_msg_mac_trailer_t;
+
 
 #define MACH_MSG_TRAILER_MINIMUM_SIZE  sizeof(mach_msg_trailer_t)
 
@@ -601,12 +662,14 @@ typedef integer_t mach_msg_option_t;
 #define MACH_SEND_ALWAYS	0x00010000	/* ignore qlimits - kernel only */
 #define MACH_SEND_TRAILER	0x00020000	/* sender-provided trailer */
 #define MACH_SEND_NOIMPORTANCE  0x00040000      /* msg won't carry importance */
+#define MACH_SEND_NODENAP	MACH_SEND_NOIMPORTANCE
 #define MACH_SEND_IMPORTANCE	0x00080000	/* msg carries importance - kernel only */
 
 
 #define MACH_RCV_TIMEOUT	0x00000100	/* timeout value applies to receive */	
 #define MACH_RCV_NOTIFY		0x00000200	/* reserved - legacy */
 #define MACH_RCV_INTERRUPT	0x00000400	/* don't restart interrupted receive */
+#define MACH_RCV_VOUCHER	0x00000800	/* willing to receive voucher port */
 #define MACH_RCV_OVERWRITE	0x00001000	/* scatter receive */
 
 /* 
@@ -641,7 +704,7 @@ typedef integer_t mach_msg_option_t;
 #define MACH_RCV_USER		 (MACH_RCV_MSG | \
 				  MACH_RCV_TIMEOUT | MACH_RCV_OVERWRITE | \
 				  MACH_RCV_LARGE | MACH_RCV_LARGE_IDENTITY | \
-				  MACH_RCV_TRAILER_MASK)
+				  MACH_RCV_VOUCHER | MACH_RCV_TRAILER_MASK)
 
 #define MACH_MSG_OPTION_USER	 (MACH_SEND_USER | MACH_RCV_USER)
 
@@ -732,6 +795,8 @@ typedef kern_return_t mach_msg_return_t;
 		/* Bogus destination port. */
 #define MACH_SEND_TIMED_OUT		0x10000004
 		/* Message not sent before timeout expired. */
+#define MACH_SEND_INVALID_VOUCHER	0x10000005
+		/* Bogus voucher port. */
 #define MACH_SEND_INTERRUPTED		0x10000007
 		/* Software interrupt. */
 #define MACH_SEND_MSG_TOO_SMALL		0x10000008
@@ -839,6 +904,15 @@ extern mach_msg_return_t	mach_msg(
 					mach_port_name_t rcv_name,
 					mach_msg_timeout_t timeout,
 					mach_port_name_t notify);
+
+/*
+ *	Routine:	mach_voucher_deallocate
+ *	Purpose:
+ *		Deallocate a mach voucher created or received in a message.  Drops
+ *		one (send right) reference to the voucher.
+ */
+extern kern_return_t		mach_voucher_deallocate(
+					mach_port_name_t voucher);
 
 #elif defined(MACH_KERNEL_PRIVATE)
 

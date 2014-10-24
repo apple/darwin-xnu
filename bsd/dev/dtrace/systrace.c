@@ -25,18 +25,6 @@
 
 /* #pragma ident	"@(#)systrace.c	1.6	06/09/19 SMI" */
 
-#if !defined(__APPLE__)
-#include <sys/dtrace.h>
-#include <sys/systrace.h>
-#include <sys/stat.h>
-#include <sys/systm.h>
-#include <sys/conf.h>
-#include <sys/ddi.h>
-#include <sys/sunddi.h>
-#include <sys/atomic.h>
-#define	SYSTRACE_ARTIFICIAL_FRAMES	1
-#else
-
 #ifdef KERNEL
 #ifndef _KERNEL
 #define _KERNEL /* Solaris vs. Darwin */
@@ -169,6 +157,7 @@ dtrace_systrace_syscall(struct proc *pp, void *uap, int *rv)
 
 #if 0 /* XXX */
 	/*
+	 * APPLE NOTE: Not implemented.
 	 * We want to explicitly allow DTrace consumers to stop a process
 	 * before it actually executes the meat of the syscall.
 	 */
@@ -323,7 +312,6 @@ dtrace_systrace_syscall_return(unsigned short code, int rval, int *rv)
 		(*systrace_probe)(id, munged_rv0, munged_rv0, munged_rv1, (uint64_t)rval, 0);
 	}
 }
-#endif /* __APPLE__ */
 
 #define	SYSTRACE_SHIFT			16
 #define	SYSTRACE_ISENTRY(x)		((int)(x) >> SYSTRACE_SHIFT)
@@ -338,38 +326,12 @@ dtrace_systrace_syscall_return(unsigned short code, int rval, int *rv)
 static dev_info_t *systrace_devi;
 static dtrace_provider_id_t systrace_id;
 
-#if !defined (__APPLE__)
-static void
-systrace_init(struct sysent *actual, systrace_sysent_t **interposed)
-{
-	systrace_sysent_t *sysent = *interposed;
-	int i;
+/*
+ * APPLE NOTE: Avoid name clash with Darwin automagic conf symbol.
+ * See balanced undef below.
+ */
+#define systrace_init _systrace_init
 
-	if (sysent == NULL) {
-		*interposed = sysent = kmem_zalloc(sizeof (systrace_sysent_t) *
-		    NSYSCALL, KM_SLEEP);
-	}
-
-	for (i = 0; i < NSYSCALL; i++) {
-		struct sysent *a = &actual[i];
-		systrace_sysent_t *s = &sysent[i];
-
-		if (LOADABLE_SYSCALL(a) && !LOADED_SYSCALL(a))
-			continue;
-
-		if (a->sy_callc == dtrace_systrace_syscall)
-			continue;
-
-#ifdef _SYSCALL32_IMPL
-		if (a->sy_callc == dtrace_systrace_syscall32)
-			continue;
-#endif
-
-		s->stsy_underlying = a->sy_callc;
-	}
-}
-#else
-#define systrace_init _systrace_init /* Avoid name clash with Darwin automagic conf symbol */
 static void
 systrace_init(struct sysent *actual, systrace_sysent_t **interposed)
 {
@@ -404,7 +366,6 @@ systrace_init(struct sysent *actual, systrace_sysent_t **interposed)
 	lck_mtx_init(&dtrace_systrace_lock, dtrace_lck_grp, dtrace_lck_attr);
 }
 
-#endif /* __APPLE__ */
 
 /*ARGSUSED*/
 static void
@@ -444,9 +405,7 @@ systrace_provide(void *arg, const dtrace_probedesc_t *desc)
 #endif
 	}
 }
-#if defined(__APPLE__)
 #undef systrace_init
-#endif
 
 /*ARGSUSED*/
 static void
@@ -584,19 +543,6 @@ systrace_attach(dev_info_t *devi, ddi_attach_cmd_t cmd)
 		return (DDI_FAILURE);
 	}
 
-#if !defined(__APPLE__)	
-	systrace_probe = (void (*)())dtrace_probe;
-	membar_enter();
-
-	if (ddi_create_minor_node(devi, "systrace", S_IFCHR, 0,
-	    DDI_PSEUDO, NULL) == DDI_FAILURE ||
-	    dtrace_register("syscall", &systrace_attr, DTRACE_PRIV_USER, NULL,
-	    &systrace_pops, NULL, &systrace_id) != 0) {
-		systrace_probe = systrace_stub;
-		ddi_remove_minor_node(devi, NULL);
-		return (DDI_FAILURE);
-	}
-#else
 	systrace_probe = (void(*))&dtrace_probe;
 	membar_enter();
 
@@ -608,7 +554,6 @@ systrace_attach(dev_info_t *devi, ddi_attach_cmd_t cmd)
 		ddi_remove_minor_node(devi, NULL);
 		return (DDI_FAILURE);
 	}
-#endif /* __APPLE__ */
 
 	ddi_report_dev(devi);
 	systrace_devi = devi;
@@ -616,6 +561,10 @@ systrace_attach(dev_info_t *devi, ddi_attach_cmd_t cmd)
 	return (DDI_SUCCESS);
 }
 
+
+/*
+ * APPLE NOTE:  systrace_detach not implemented
+ */
 #if !defined(__APPLE__)
 static int
 systrace_detach(dev_info_t *devi, ddi_detach_cmd_t cmd)
@@ -636,109 +585,18 @@ systrace_detach(dev_info_t *devi, ddi_detach_cmd_t cmd)
 	systrace_probe = systrace_stub;
 	return (DDI_SUCCESS);
 }
+#endif /* __APPLE__ */
 
-/*ARGSUSED*/
-static int
-systrace_info(dev_info_t *dip, ddi_info_cmd_t infocmd, void *arg, void **result)
-{
-	int error;
 
-	switch (infocmd) {
-	case DDI_INFO_DEVT2DEVINFO:
-		*result = (void *)systrace_devi;
-		error = DDI_SUCCESS;
-		break;
-	case DDI_INFO_DEVT2INSTANCE:
-		*result = (void *)0;
-		error = DDI_SUCCESS;
-		break;
-	default:
-		error = DDI_FAILURE;
-	}
-	return (error);
-}
-
-/*ARGSUSED*/
-static int
-systrace_open(dev_t *devp, int flag, int otyp, cred_t *cred_p)
-{
-	return (0);
-}
-
-static struct cb_ops systrace_cb_ops = {
-	systrace_open,		/* open */
-	nodev,			/* close */
-	nulldev,		/* strategy */
-	nulldev,		/* print */
-	nodev,			/* dump */
-	nodev,			/* read */
-	nodev,			/* write */
-	nodev,			/* ioctl */
-	nodev,			/* devmap */
-	nodev,			/* mmap */
-	nodev,			/* segmap */
-	nochpoll,		/* poll */
-	ddi_prop_op,		/* cb_prop_op */
-	0,			/* streamtab  */
-	D_NEW | D_MP		/* Driver compatibility flag */
-};
-
-static struct dev_ops systrace_ops = {
-	DEVO_REV,		/* devo_rev, */
-	0,			/* refcnt  */
-	systrace_info,		/* get_dev_info */
-	nulldev,		/* identify */
-	nulldev,		/* probe */
-	systrace_attach,	/* attach */
-	systrace_detach,	/* detach */
-	nodev,			/* reset */
-	&systrace_cb_ops,	/* driver operations */
-	NULL,			/* bus operations */
-	nodev			/* dev power */
-};
-
-/*
- * Module linkage information for the kernel.
- */
-static struct modldrv modldrv = {
-	&mod_driverops,		/* module type (this is a pseudo driver) */
-	"System Call Tracing",	/* name of module */
-	&systrace_ops,		/* driver ops */
-};
-
-static struct modlinkage modlinkage = {
-	MODREV_1,
-	(void *)&modldrv,
-	NULL
-};
-
-int
-_init(void)
-{
-	return (mod_install(&modlinkage));
-}
-
-int
-_info(struct modinfo *modinfop)
-{
-	return (mod_info(&modlinkage, modinfop));
-}
-
-int
-_fini(void)
-{
-	return (mod_remove(&modlinkage));
-}
-#else
 typedef kern_return_t (*mach_call_t)(void *);
 
-/* XXX From #include <kern/syscall_sw.h> which may be changed for 64 bit! */
-typedef void    mach_munge_t(const void *, void *);
+/* APPLE NOTE: From #include <kern/syscall_sw.h> which may be changed for 64 bit! */
+typedef void    mach_munge_t(void *);
 
 typedef struct {
 	int			mach_trap_arg_count;
 	kern_return_t		(*mach_trap_function)(void *);
-#if defined(__x86_64__)
+#if defined(__arm64__) || defined(__x86_64__)
 	mach_munge_t		*mach_trap_arg_munge32; /* system call arguments for 32-bit */
 #endif
 	int			mach_trap_u32_words;
@@ -834,6 +692,7 @@ dtrace_machtrace_syscall(struct mach_call_args *args)
 
 #if 0 /* XXX */
 	/*
+	 * APPLE NOTE:  Not implemented.
 	 * We want to explicitly allow DTrace consumers to stop a process
 	 * before it actually executes the meat of the syscall.
 	 */
@@ -1027,16 +886,6 @@ machtrace_attach(dev_info_t *devi, ddi_attach_cmd_t cmd)
 			return (DDI_FAILURE);
 	}
 
-#if !defined(__APPLE__)
-	machtrace_probe = (void (*)())dtrace_probe;
-	membar_enter();
-
-	if (ddi_create_minor_node(devi, "machtrace", S_IFCHR, 0,
-				DDI_PSEUDO, NULL) == DDI_FAILURE ||
-			dtrace_register("mach_trap", &machtrace_attr, DTRACE_PRIV_USER, NULL,
-				&machtrace_pops, NULL, &machtrace_id) != 0) {
-		machtrace_probe = systrace_stub;
-#else
 	machtrace_probe = dtrace_probe;
 	membar_enter();
 	
@@ -1045,7 +894,6 @@ machtrace_attach(dev_info_t *devi, ddi_attach_cmd_t cmd)
 			dtrace_register("mach_trap", &machtrace_attr, DTRACE_PRIV_USER, NULL,
 				&machtrace_pops, NULL, &machtrace_id) != 0) {
                 machtrace_probe = (void (*))&systrace_stub;
-#endif /* __APPLE__ */		
 		ddi_remove_minor_node(devi, NULL);
 		return (DDI_FAILURE);
 	}
@@ -1111,7 +959,6 @@ void systrace_init( void )
 		panic("systrace_init: called twice!\n");
 }
 #undef SYSTRACE_MAJOR
-#endif /* __APPLE__ */
 
 static uint64_t
 systrace_getarg(void *arg, dtrace_id_t id, void *parg, int argno, int aframes)

@@ -1,4 +1,4 @@
-.\" Copyright (c) 2003 Apple Computer, Inc. All rights reserved.
+q.\" Copyright (c) 2003 Apple Computer, Inc. All rights reserved.
 .\" 
 .\" The contents of this file constitute Original Code as defined in and
 .\" are subject to the Apple Public Source License Version 1.1 (the
@@ -20,7 +20,7 @@
 .Dt GETDIRENTRIESATTR 2
 .Os Darwin
 .Sh NAME
-.Nm getdirentriesattr
+.Nm getdirentriesattr(NOW DEPRECATED)
 .Nd get file system attributes for multiple directory entries
 .Sh SYNOPSIS
 .Fd #include <sys/attr.h>
@@ -207,7 +207,14 @@ It is typical to ask for a combination of common, file, and directory
 attributes and then use the value of the 
 .Dv ATTR_CMN_OBJTYPE 
 attribute to parse the resulting attribute buffer.
-.
+.Sh NOTES
+As of Mac OS X 10.10,
+.Fn getdirentriesattr
+is deprecated. It is replaced by
+.Nm getattrlistbulk(2).
+Continued use of
+.Fn getdirentriesattr
+is strongly discouraged as comprehensive results are not guaranteed.
 .Sh RETURN VALUES
 Upon successful completion a value of 0 or 1 is returned. 
 The value 0 indicates that the routine completed successfully. 

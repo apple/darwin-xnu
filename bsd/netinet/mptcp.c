@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2012-2013 Apple Inc. All rights reserved.
+ * Copyright (c) 2012-2014 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -89,9 +89,11 @@ SYSCTL_INT(_net_inet_mptcp, OID_AUTO, fail, CTLFLAG_RW | CTLFLAG_LOCKED,
 
 
 /*
- * MPTCP subflows have TCP keepalives set to ON
+ * MPTCP subflows have TCP keepalives set to ON. Set a conservative keeptime
+ * as carrier networks mostly have a 30 minute to 60 minute NAT Timeout.
+ * Some carrier networks have a timeout of 10 or 15 minutes.
  */
-int mptcp_subflow_keeptime = 60;
+int mptcp_subflow_keeptime = 60*14;
 SYSCTL_INT(_net_inet_mptcp, OID_AUTO, keepalive, CTLFLAG_RW | CTLFLAG_LOCKED,
 	&mptcp_subflow_keeptime, 0, "Keepalive in seconds");
 
@@ -110,6 +112,25 @@ SYSCTL_INT(_net_inet_mptcp, OID_AUTO, remaddr, CTLFLAG_RW | CTLFLAG_LOCKED,
 	&mptcp_remaddr_enable, 0, "Enable REMOVE_ADDR option");
 
 /*
+ * FastJoin Option
+ */
+int mptcp_fastjoin = 1;
+SYSCTL_INT(_net_inet_mptcp, OID_AUTO, fastjoin, CTLFLAG_RW | CTLFLAG_LOCKED,
+	&mptcp_fastjoin, 0, "Enable FastJoin Option");
+
+int mptcp_zerortt_fastjoin = 0;
+SYSCTL_INT(_net_inet_mptcp, OID_AUTO, zerortt_fastjoin, CTLFLAG_RW |
+	CTLFLAG_LOCKED, &mptcp_zerortt_fastjoin, 0,
+	"Enable Zero RTT Fast Join");
+
+/*
+ * R/W Notification on resume
+ */
+int mptcp_rwnotify = 0;
+SYSCTL_INT(_net_inet_mptcp, OID_AUTO, rwnotify, CTLFLAG_RW | CTLFLAG_LOCKED,
+	&mptcp_rwnotify, 0, "Enable RW notify on resume");
+
+/*
  * MPTCP input, called when data has been read from a subflow socket.
  */
 void
@@ -120,8 +141,9 @@ mptcp_input(struct mptses *mpte, struct mbuf *m)
 	u_int64_t mb_dsn;
 	u_int32_t mb_datalen;
 	int count = 0;
-	struct mbuf *save = NULL;
+	struct mbuf *save = NULL, *prev = NULL;
 	struct mbuf *freelist = NULL, *tail = NULL;
+	boolean_t in_fallback = FALSE;
 
 	VERIFY(m->m_flags & M_PKTHDR);
 
@@ -139,11 +161,21 @@ mptcp_input(struct mptses *mpte, struct mbuf *m)
 	count = mp_so->so_rcv.sb_cc;
 
 	VERIFY(m != NULL);
+	mp_tp = mpte->mpte_mptcb;
+	VERIFY(mp_tp != NULL);
+
+	/* Ok to check for this flag without lock as its set in this thread */
+	in_fallback = (mp_tp->mpt_flags & MPTCPF_FALLBACK_TO_TCP);
+
 	/*
 	 * In the degraded fallback case, data is accepted without DSS map
 	 */
-	if (!(m->m_pkthdr.pkt_flags & PKTF_MPTCP)) {
-		/* XXX need a check that this is indeed degraded */
+	if (in_fallback) {
+fallback: 
+		/* 
+		 * assume degraded flow as this may be the first packet 
+		 * without DSS, and the subflow state is not updated yet. 
+		 */
 		if (sbappendstream(&mp_so->so_rcv, m))
 			sorwakeup(mp_so);
 		DTRACE_MPTCP5(receive__degraded, struct mbuf *, m,
@@ -156,13 +188,33 @@ mptcp_input(struct mptses *mpte, struct mbuf *m)
 		return;
 	}
 
-	mp_tp = mpte->mpte_mptcb;
-	VERIFY(mp_tp != NULL);
-
 	MPT_LOCK(mp_tp);
 	do {
+		/* If fallback occurs, mbufs will not have PKTF_MPTCP set */
+		if (!(m->m_pkthdr.pkt_flags & PKTF_MPTCP)) {
+			MPT_UNLOCK(mp_tp);
+			goto fallback;
+		}
+
 		save = m->m_next;
-		m->m_next = NULL;
+		/*
+		 * A single TCP packet formed of multiple mbufs
+		 * holds DSS mapping in the first mbuf of the chain.
+		 * Other mbufs in the chain may have M_PKTHDR set
+		 * even though they belong to the same TCP packet
+		 * and therefore use the DSS mapping stored in the
+		 * first mbuf of the mbuf chain. mptcp_input() can
+		 * get an mbuf chain with multiple TCP packets.
+		 */
+		while (save && (!(save->m_flags & M_PKTHDR) ||
+		    !(save->m_pkthdr.pkt_flags & PKTF_MPTCP))) {
+			prev = save;
+			save = save->m_next;
+		}
+		if (prev)
+			prev->m_next = NULL;
+		else
+			m->m_next = NULL;
 
 		mb_dsn = m->m_pkthdr.mp_dsn;
 		mb_datalen = m->m_pkthdr.mp_rlen;
@@ -185,19 +237,20 @@ mptcp_input(struct mptses *mpte, struct mbuf *m)
 		}
 
 		if (MPTCP_SEQ_LT(mb_dsn, mp_tp->mpt_rcvatmark)) {
-			VERIFY(m->m_pkthdr.pkt_flags & PKTF_MPTCP);
-			VERIFY(m->m_flags & M_PKTHDR);
-			VERIFY(m->m_len >= (int)mb_datalen);
-			VERIFY(m->m_pkthdr.len >= (int)mb_datalen);
 			if (MPTCP_SEQ_LEQ((mb_dsn + mb_datalen),
 			    mp_tp->mpt_rcvatmark)) {
 				if (freelist == NULL)
-					freelist = tail = m;
-				else {
+					freelist = m;
+				else
 					tail->m_next = m;
+
+				if (prev != NULL)
+					tail = prev;
+				else
 					tail = m;
-				}
+
 				m = save;
+				prev = save = NULL;
 				continue;
 			} else {
 				m_adj(m, (mp_tp->mpt_rcvatmark - mb_dsn));
@@ -228,6 +281,7 @@ mptcp_input(struct mptses *mpte, struct mbuf *m)
 		mp_tp->mpt_rcvwnd = mptcp_sbspace(mp_tp);
 		mp_tp->mpt_rcvatmark += count;
 		m = save;
+		prev = save = NULL;
 		count = mp_so->so_rcv.sb_cc;
 	} while (m);
 	MPT_UNLOCK(mp_tp);
@@ -325,7 +379,7 @@ mptcp_get_subflow(struct mptses *mpte, struct mptsub *ignore)
 	MPTE_LOCK_ASSERT_HELD(mpte);	/* same as MP socket lock */
 
 	TAILQ_FOREACH(mpts, &mpte->mpte_subflows, mpts_entry) {
-		MPTS_LOCK_SPIN(mpts);
+		MPTS_LOCK(mpts);
 
 		if ((ignore) && (mpts == ignore)) {
 			MPTS_UNLOCK(mpts);
@@ -338,7 +392,12 @@ mptcp_get_subflow(struct mptses *mpte, struct mptsub *ignore)
 			break;
 		}
 
-		if (!(mpts->mpts_flags & MPTSF_MP_CAPABLE)) {
+		/*
+		 * Subflows with Fastjoin allow data to be written before
+		 * the subflow is mp capable.
+		 */
+		if (!(mpts->mpts_flags & MPTSF_MP_CAPABLE) &&
+		    !(mpts->mpts_flags & MPTSF_FASTJ_REQD)) {
 			MPTS_UNLOCK(mpts);
 			continue;
 		}
@@ -348,11 +407,18 @@ mptcp_get_subflow(struct mptses *mpte, struct mptsub *ignore)
 			continue;
 		}
 
+		if ((mpts->mpts_flags & MPTSF_DISCONNECTED) ||
+		    (mpts->mpts_flags & MPTSF_DISCONNECTING)) {
+			MPTS_UNLOCK(mpts);
+			continue;
+		}
+
 		if (mpts->mpts_flags & MPTSF_FAILINGOVER) {
 			so = mpts->mpts_socket;
 			if ((so) && (!(so->so_flags & SOF_PCBCLEARING))) {
 				socket_lock(so, 1);
-				if (so->so_snd.sb_cc == 0) {
+				if ((so->so_snd.sb_cc == 0) &&
+				    (mptcp_no_rto_spike(so))) {
 					mpts->mpts_flags &= ~MPTSF_FAILINGOVER;
 					so->so_flags &= ~SOF_MP_TRYFAILOVER;
 					fallback = mpts;
@@ -375,8 +441,7 @@ mptcp_get_subflow(struct mptses *mpte, struct mptsub *ignore)
 		}
 
 		/* When there are no preferred flows, use first one in list */
-		if (fallback == NULL)
-			fallback = mpts;
+		fallback = mpts;
 
 		MPTS_UNLOCK(mpts);
 	}
@@ -388,6 +453,31 @@ mptcp_get_subflow(struct mptses *mpte, struct mptsub *ignore)
 		return (fallback);
 	}
 
+	return (mpts);
+}
+
+struct mptsub *
+mptcp_get_pending_subflow(struct mptses *mpte, struct mptsub *ignore)
+{
+	struct mptsub *mpts = NULL;
+	
+	MPTE_LOCK_ASSERT_HELD(mpte);    /* same as MP socket lock */
+
+	TAILQ_FOREACH(mpts, &mpte->mpte_subflows, mpts_entry) {
+		MPTS_LOCK(mpts);
+
+		if ((ignore) && (mpts == ignore)) {
+			MPTS_UNLOCK(mpts);
+			continue;
+		}
+
+		if (mpts->mpts_flags & MPTSF_CONNECT_PENDING) {
+			MPTS_UNLOCK(mpts);
+			break;
+		}
+
+		MPTS_UNLOCK(mpts);
+	}
 	return (mpts);
 }
 
@@ -406,22 +496,30 @@ mptcp_close_fsm(struct mptcb *mp_tp, uint32_t event)
 		break;
 
 	case MPTCPS_ESTABLISHED:
-		if (event == MPCE_CLOSE)
+		if (event == MPCE_CLOSE) {
 			mp_tp->mpt_state = MPTCPS_FIN_WAIT_1;
-		else if (event == MPCE_RECV_DATA_FIN)
+			mp_tp->mpt_sndmax += 1; /* adjust for Data FIN */
+		}	
+		else if (event == MPCE_RECV_DATA_FIN) {
+			mp_tp->mpt_rcvnxt += 1; /* adj remote data FIN */
 			mp_tp->mpt_state = MPTCPS_CLOSE_WAIT;
+		}	
 		break;
 
 	case MPTCPS_CLOSE_WAIT:
-		if (event == MPCE_CLOSE)
+		if (event == MPCE_CLOSE) {
 			mp_tp->mpt_state = MPTCPS_LAST_ACK;
+			mp_tp->mpt_sndmax += 1; /* adjust for Data FIN */
+		}	
 		break;
 
 	case MPTCPS_FIN_WAIT_1:
 		if (event == MPCE_RECV_DATA_ACK)
 			mp_tp->mpt_state = MPTCPS_FIN_WAIT_2;
-		else if (event == MPCE_RECV_DATA_FIN)
+		else if (event == MPCE_RECV_DATA_FIN) {
+			mp_tp->mpt_rcvnxt += 1; /* adj remote data FIN */
 			mp_tp->mpt_state = MPTCPS_CLOSING;
+		}	
 		break;
 
 	case MPTCPS_CLOSING:
@@ -431,22 +529,27 @@ mptcp_close_fsm(struct mptcb *mp_tp, uint32_t event)
 
 	case MPTCPS_LAST_ACK:
 		if (event == MPCE_RECV_DATA_ACK)
-			mp_tp->mpt_state = MPTCPS_CLOSED;
+			mp_tp->mpt_state = MPTCPS_TERMINATE;
 		break;
 
 	case MPTCPS_FIN_WAIT_2:
-		if (event == MPCE_RECV_DATA_FIN)
+		if (event == MPCE_RECV_DATA_FIN) {
+			mp_tp->mpt_rcvnxt += 1; /* adj remote data FIN */
 			mp_tp->mpt_state = MPTCPS_TIME_WAIT;
+		}	
 		break;
 
 	case MPTCPS_TIME_WAIT:
 		break;
 
 	case MPTCPS_FASTCLOSE_WAIT:
-		if (event == MPCE_CLOSE)
-			mp_tp->mpt_state = MPTCPS_CLOSED;
+		if (event == MPCE_CLOSE) {
+			/* no need to adjust for data FIN */
+			mp_tp->mpt_state = MPTCPS_TERMINATE;
+		}
 		break;
-
+	case MPTCPS_TERMINATE:
+		break;
 	default:
 		VERIFY(0);
 		/* NOTREACHED */
@@ -470,6 +573,16 @@ mptcp_data_ack_rcvd(struct mptcb *mp_tp, struct tcpcb *tp, u_int64_t full_dack)
 
 	if (acked) {
 		mp_tp->mpt_snduna += acked;
+		/* In degraded mode, we may get some Data ACKs */
+		if ((tp->t_mpflags & TMPF_TCP_FALLBACK) &&
+			!(mp_tp->mpt_flags & MPTCPF_POST_FALLBACK_SYNC) &&
+			MPTCP_SEQ_GT(mp_tp->mpt_sndnxt, mp_tp->mpt_snduna)) {
+			/* bring back sndnxt to retransmit MPTCP data */
+			mp_tp->mpt_sndnxt = mp_tp->mpt_dsn_at_csum_fail;
+			mp_tp->mpt_flags |= MPTCPF_POST_FALLBACK_SYNC;
+			tp->t_inpcb->inp_socket->so_flags1 |= 
+			    SOF1_POST_FALLBACK_SYNC;
+		}
 	}
 	if ((full_dack == mp_tp->mpt_sndmax) &&
 	    (mp_tp->mpt_state >= MPTCPS_FIN_WAIT_1)) {

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2004-2006 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2004-2014 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -34,7 +34,7 @@
 #include <sys/param.h>
 #include <sys/ioccom.h>
 #include <sys/time.h>
-
+#include <stdint.h>
 
 #ifdef __APPLE_API_UNSTABLE
 
@@ -51,6 +51,17 @@ typedef char pathname_t[MAXPATHLEN];
 struct hfs_journal_info {
 	off_t	jstart;
 	off_t	jsize;
+};
+
+
+struct hfsinfo_metadata {
+	uint32_t total;
+	uint32_t extents;
+	uint32_t catalog;
+	uint32_t allocation;
+	uint32_t attribute;
+	uint32_t journal;
+	uint32_t reserved[4];
 };
 
 
@@ -145,18 +156,27 @@ struct hfs_journal_info {
 #define	HFSIOC_GET_DESIRED_DISK	_IOR('h', 29, u_int32_t)
 #define	HFS_FSCTL_GET_DESIRED_DISK	IOCBASECMD(HFSIOC_GET_DESIRED_DISK)
 
-#define HFSIOC_GET_WRITE_GEN_COUNTER  _IOR('h', 30, u_int32_t)
-#define HFS_GET_WRITE_GEN_COUNTER  IOCBASECMD(HFSIOC_GET_WRITE_GEN_COUNTER)
+/* 30 was HFSIOC_GET_WRITE_GEN_COUNTER and is now deprecated */
 
-/* revisiond uses this to allocate a doc-id for files from Cab and earlier systems that are marked tracked but don't have a doc-id */
-#define HFS_DOCUMENT_ID_ALLOCATE	0x1
-
-#define HFSIOC_GET_DOCUMENT_ID  _IOR('h', 31, u_int32_t)
-#define HFS_GET_DOCUMENT_ID  IOCBASECMD(HFSIOC_GET_DOCUMENT_ID)
+/* 31 was HFSIOC_GET_DOCUMENT_ID and is now deprecated */
 
 /* revisiond only uses this when something transforms in a way the kernel can't track such as "foo.rtf" -> "foo.rtfd" */
 #define HFSIOC_TRANSFER_DOCUMENT_ID  _IOW('h', 32, u_int32_t)
 #define HFS_TRANSFER_DOCUMENT_ID  IOCBASECMD(HFSIOC_TRANSFER_DOCUMENT_ID)
+
+
+/* 
+ * Get information about number of file system allocation blocks used by metadata 
+ * files on the volume, including individual btrees and journal file.  The caller 
+ * can determine the size of file system allocation block using value returned as 
+ * f_bsize by statfs(2).
+ */
+#define HFSIOC_FSINFO_METADATA_BLOCKS  _IOWR('h', 38, struct hfsinfo_metadata)
+#define HFS_FSINFO_METADATA_BLOCKS     IOCBASECMD(HFSIOC_FSINFO_METADATA_BLOCKS)
+
+/* Send TRIMs for all free blocks to the underlying device */
+#define HFSIOC_CS_FREESPACE_TRIM _IOWR('h', 39, u_int32_t)
+#define HFS_CS_FREESPACE_TRIM    IOCBASECMD(HFSIOC_CS_FREESPACE_TRIM)
 
 #endif /* __APPLE_API_UNSTABLE */
 

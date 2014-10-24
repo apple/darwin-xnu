@@ -37,7 +37,8 @@
 .Dt SYMLINK 2
 .Os BSD 4.2
 .Sh NAME
-.Nm symlink
+.Nm symlink ,
+.Nm symlinkat
 .Nd make symbolic link to a file
 .Sh SYNOPSIS
 .Fd #include <unistd.h>
@@ -46,6 +47,8 @@
 .Fa "const char *path1"
 .Fa "const char *path2"
 .Fc
+.Ft int
+.Fn symlinkat "const char *name1" "int fd" "const char *name2"
 .Sh DESCRIPTION
 A symbolic link
 .Fa path2
@@ -59,6 +62,27 @@ is the string
 used in creating the symbolic link).
 Either name may be an arbitrary path name; the files need not
 be on the same file system.
+.Pp
+The
+.Fn symlinkat
+system call is equivalent to
+.Fn symlink
+except in the case where
+.Fa name2
+specifies a relative path.
+In this case the symbolic link is created relative to the directory
+associated with the file descriptor
+.Fa fd
+instead of the current working directory.
+If
+.Fn symlinkat
+is passed the special value
+.Dv AT_FDCWD
+in the
+.Fa fd
+parameter, the current working directory is used and the behavior is
+identical to a call to
+.Fn symlink .
 .Sh RETURN VALUES
 Upon successful completion, a zero value is returned.
 If an error occurs, the error code is stored in
@@ -156,13 +180,44 @@ The file
 .Fa path2
 would reside on a read-only file system.
 .El
+.Pp
+In addition to the errors returned by the
+.Fn symlink ,
+the
+.Fn symlinkat
+may fail if:
+.Bl -tag -width Er
+.It Bq Er EBADF
+The
+.Fa name2
+argument does not specify an absolute path and the
+.Fa fd
+argument is neither
+.Dv AT_FDCWD
+nor a valid file descriptor open for searching.
+.It Bq Er ENOTDIR
+The
+.Fa name2
+argument is not an absolute path and
+.Fa fd
+is neither
+.Dv AT_FDCWD
+nor a file descriptor associated with a directory.
+.El
 .Sh SEE ALSO
 .Xr ln 1 ,
 .Xr link 2 ,
 .Xr unlink 2 ,
 .Xr symlink 7
+.Sh STANDARDS
+The
+.Fn symlinkat
+system call is expected to conform to POSIX.1-2008 .
 .Sh HISTORY
 The
 .Fn symlink
 function call appeared in
 .Bx 4.2 .
+The
+.Fn symlinkat
+system call appeared in OS X 10.10

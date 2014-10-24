@@ -85,6 +85,7 @@ class OSArray;
 class OSSet : public OSCollection
 {
     OSDeclareDefaultStructors(OSSet)
+    friend class OSSerialize;
 
 private:
     OSArray * members;

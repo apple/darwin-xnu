@@ -102,7 +102,7 @@ struct vm_shared_region_slide_info_entry {
 };
 
 #define NBBY	8
-#define	NUM_SLIDING_BITMAPS_PER_PAGE	(PAGE_SIZE/sizeof(int)/NBBY) /*128*/
+#define	NUM_SLIDING_BITMAPS_PER_PAGE	(0x1000/sizeof(int)/NBBY) /*128*/
 typedef struct slide_info_entry_toc	*slide_info_entry_toc_t;
 struct slide_info_entry_toc { 
 	uint8_t entry[NUM_SLIDING_BITMAPS_PER_PAGE];

@@ -124,11 +124,8 @@
 #include <netinet6/tcp6_var.h>
 #include <netinet6/raw_ip6.h>
 #include <netinet6/udp6_var.h>
-#include <netinet6/pim6_var.h>
 #include <netinet6/nd6.h>
 #include <netinet6/mld6_var.h>
-
-#include <netinet6/ip6_mroute.h>
 
 #if IPSEC
 #include <netinet6/ipsec.h>
@@ -319,18 +316,6 @@ struct ip6protosw inet6sw[] = {
 	.pr_usrreqs =		&rip6_usrreqs,
 	.pr_unlock =		rip_unlock,
 },
-#if MROUTING
-{
-	.pr_type =		SOCK_RAW,
-	.pr_protocol =		IPPROTO_PIM,
-	.pr_flags =		PR_ATOMIC|PR_ADDR|PR_LASTHDR,
-	.pr_input =		pim6_input,
-	.pr_output =		rip6_pr_output,
-	.pr_ctloutput =		rip6_ctloutput,
-	.pr_usrreqs =		&rip6_usrreqs,
-	.pr_unlock =		rip_unlock,
-},
-#endif /* MROUTING */
 /* raw wildcard */
 {
 	.pr_type =		SOCK_RAW,
@@ -494,6 +479,7 @@ u_int32_t	rip6_recvspace = RIPV6RCVQ;
 int	icmp6_rediraccept = 1;		/* accept and process redirects */
 int	icmp6_redirtimeout = 10 * 60;	/* 10 minutes */
 int	icmp6errppslim = 500;		/* 500 packets per second */
+int	icmp6rappslim = 10;		/* 10 packets per second */
 int	icmp6_nodeinfo = 3;		/* enable/disable NI response */
 
 /* UDP on IP6 parameters */
@@ -579,7 +565,8 @@ SYSCTL_INT(_net_inet6_ip6, IPV6CTL_SENDREDIRECTS,
 	redirect, CTLFLAG_RW | CTLFLAG_LOCKED,	&ip6_sendredirects,	0, "");
 SYSCTL_INT(_net_inet6_ip6, IPV6CTL_DEFHLIM,
 	hlim, CTLFLAG_RW | CTLFLAG_LOCKED,		&ip6_defhlim,	0, "");
-SYSCTL_PROC(_net_inet6_ip6, IPV6CTL_STATS, stats, CTLFLAG_RD | CTLFLAG_LOCKED,
+SYSCTL_PROC(_net_inet6_ip6, IPV6CTL_STATS, stats,
+	CTLTYPE_STRUCT | CTLFLAG_RD | CTLFLAG_LOCKED,
 	0, 0, ip6_getstat, "S,ip6stat", "");
 SYSCTL_INT(_net_inet6_ip6, IPV6CTL_ACCEPT_RTADV,
 	accept_rtadv, CTLFLAG_RD | CTLFLAG_LOCKED,
@@ -624,10 +611,6 @@ SYSCTL_INT(_net_inet6_ip6, IPV6CTL_USE_DEFAULTZONE,
 	use_defaultzone, CTLFLAG_RW | CTLFLAG_LOCKED, &ip6_use_defzone,		0,"");
 SYSCTL_INT(_net_inet6_ip6, IPV6CTL_MCAST_PMTU,
 	mcast_pmtu, CTLFLAG_RW | CTLFLAG_LOCKED,	&ip6_mcast_pmtu,	0, "");
-#if MROUTING
-SYSCTL_STRUCT(_net_inet6_ip6, OID_AUTO, mrt6stat, CTLFLAG_RD | CTLFLAG_LOCKED,
-        &mrt6stat, mrt6stat, "");
-#endif
 SYSCTL_INT(_net_inet6_ip6, IPV6CTL_NEIGHBORGCTHRESH,
 	neighborgcthresh, CTLFLAG_RW | CTLFLAG_LOCKED,	&ip6_neighborgcthresh,	0, "");
 SYSCTL_INT(_net_inet6_ip6, IPV6CTL_MAXIFPREFIXES,
@@ -665,6 +648,8 @@ SYSCTL_INT(_net_inet6_icmp6, ICMPV6CTL_NODEINFO,
 	nodeinfo, CTLFLAG_RW | CTLFLAG_LOCKED,	&icmp6_nodeinfo,	0, "");
 SYSCTL_INT(_net_inet6_icmp6, ICMPV6CTL_ERRPPSLIMIT,
 	errppslimit, CTLFLAG_RW | CTLFLAG_LOCKED,	&icmp6errppslim,	0, "");
+SYSCTL_INT(_net_inet6_icmp6, OID_AUTO,
+	rappslimit, CTLFLAG_RW | CTLFLAG_LOCKED,	&icmp6rappslim,	0, "");
 SYSCTL_INT(_net_inet6_icmp6, ICMPV6CTL_ND6_DEBUG,
 	nd6_debug, CTLFLAG_RW | CTLFLAG_LOCKED,	&nd6_debug,		0, "");
 SYSCTL_INT(_net_inet6_icmp6, ICMPV6CTL_ND6_ONLINKNSRFC4861,

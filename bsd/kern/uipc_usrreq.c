@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2012 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2014 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -553,7 +553,12 @@ uipc_send(struct socket *so, int flags, struct mbuf *m, struct sockaddr *nam,
 
 		snd->sb_mbmax -= rcv->sb_mbcnt - unp->unp_conn->unp_mbcnt;
 		unp->unp_conn->unp_mbcnt = rcv->sb_mbcnt;
-		snd->sb_hiwat -= rcv->sb_cc - unp->unp_conn->unp_cc;
+		if ((int32_t)snd->sb_hiwat >= 
+		    (int32_t)(rcv->sb_cc - unp->unp_conn->unp_cc)) {
+			snd->sb_hiwat -= rcv->sb_cc - unp->unp_conn->unp_cc;
+		} else {
+			snd->sb_hiwat = 0;
+		}
 		unp->unp_conn->unp_cc = rcv->sb_cc;
 		if (didreceive) {
 			control = NULL;
@@ -1671,10 +1676,12 @@ unp_pcblist SYSCTL_HANDLER_ARGS
 	return (error);
 }
 
-SYSCTL_PROC(_net_local_dgram, OID_AUTO, pcblist, CTLFLAG_RD | CTLFLAG_LOCKED,
+SYSCTL_PROC(_net_local_dgram, OID_AUTO, pcblist,
+            CTLTYPE_STRUCT | CTLFLAG_RD | CTLFLAG_LOCKED,
             (caddr_t)(long)SOCK_DGRAM, 0, unp_pcblist, "S,xunpcb",
             "List of active local datagram sockets");
-SYSCTL_PROC(_net_local_stream, OID_AUTO, pcblist, CTLFLAG_RD | CTLFLAG_LOCKED,
+SYSCTL_PROC(_net_local_stream, OID_AUTO, pcblist,
+            CTLTYPE_STRUCT | CTLFLAG_RD | CTLFLAG_LOCKED,
             (caddr_t)(long)SOCK_STREAM, 0, unp_pcblist, "S,xunpcb",
             "List of active local stream sockets");
 
@@ -1817,10 +1824,12 @@ unp_pcblist64 SYSCTL_HANDLER_ARGS
 	return (error);
 }
 
-SYSCTL_PROC(_net_local_dgram, OID_AUTO, pcblist64, CTLFLAG_RD | CTLFLAG_LOCKED,
+SYSCTL_PROC(_net_local_dgram, OID_AUTO, pcblist64,
+	    CTLTYPE_STRUCT | CTLFLAG_RD | CTLFLAG_LOCKED,
 	    (caddr_t)(long)SOCK_DGRAM, 0, unp_pcblist64, "S,xunpcb64",
 	    "List of active local datagram sockets 64 bit");
-SYSCTL_PROC(_net_local_stream, OID_AUTO, pcblist64, CTLFLAG_RD | CTLFLAG_LOCKED,
+SYSCTL_PROC(_net_local_stream, OID_AUTO, pcblist64,
+	    CTLTYPE_STRUCT | CTLFLAG_RD | CTLFLAG_LOCKED,
 	    (caddr_t)(long)SOCK_STREAM, 0, unp_pcblist64, "S,xunpcb64",
 	    "List of active local stream sockets 64 bit");
 
@@ -2116,10 +2125,6 @@ unp_gc(void)
 				continue;
 			}
 #ifdef notdef
-			/*
-			 * if this code is enabled need to run
-			 * under network funnel
-			 */
 			if (so->so_rcv.sb_flags & SB_LOCK) {
 				/*
 				 * This is problematical; it's not clear
@@ -2277,7 +2282,6 @@ unp_listen(struct unpcb *unp, proc_t p)
 	return (0);
 }
 
-/* should run under kernel funnel */
 static void
 unp_scan(struct mbuf *m0, void (*op)(struct fileglob *))
 {
@@ -2306,7 +2310,6 @@ unp_scan(struct mbuf *m0, void (*op)(struct fileglob *))
 	}
 }
 
-/* should run under kernel funnel */
 static void
 unp_mark(struct fileglob *fg)
 {
@@ -2323,7 +2326,6 @@ unp_mark(struct fileglob *fg)
 	unp_defer++;
 }
 
-/* should run under kernel funnel */
 static void
 unp_discard(struct fileglob *fg)
 {

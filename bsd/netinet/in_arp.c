@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2004-2013 Apple Inc. All rights reserved.
+ * Copyright (c) 2004-2014 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -104,7 +104,7 @@ static const size_t MAX_HW_LEN = 10;
  *
  *	- Routing lock (rnh_lock)
  *
- * la_hold, la_asked, la_llreach, la_lastused
+ * la_hold, la_asked, la_llreach, la_lastused, la_flags
  *
  *	- Routing entry lock (rt_lock)
  *
@@ -127,6 +127,8 @@ struct llinfo_arp {
 	u_int64_t la_lastused;		/* last used timestamp */
 	u_int32_t la_asked;		/* # of requests sent */
 	u_int32_t la_maxtries;		/* retry limit */
+	uint32_t  la_flags;
+#define LLINFO_RTRFAIL_EVTSENT		0x1 /* sent an ARP event */
 };
 static LIST_HEAD(, llinfo_arp) llinfo_arp;
 
@@ -220,7 +222,8 @@ SYSCTL_INT(_net_link_ether_inet, OID_AUTO, verbose,
 	CTLFLAG_RW | CTLFLAG_LOCKED, &arp_verbose, 0, "");
 
 struct arpstat arpstat;
-SYSCTL_PROC(_net_link_ether_inet, OID_AUTO, stats, CTLFLAG_RD | CTLFLAG_LOCKED,
+SYSCTL_PROC(_net_link_ether_inet, OID_AUTO, stats,
+	CTLTYPE_STRUCT | CTLFLAG_RD | CTLFLAG_LOCKED,
 	0, 0, arp_getstat, "S,arpstat",
 	"ARP statistics (struct arpstat, net/if_arp.h)");
 
@@ -998,6 +1001,11 @@ arp_lookup_ip(ifnet_t ifp, const struct sockaddr_in *net_dest,
 	struct llinfo_arp *llinfo = NULL;
 	uint64_t timenow;
 	int unreachable = 0;
+	struct if_llreach *lr;
+	struct ifaddr *rt_ifa;
+	struct sockaddr *sa;
+	uint32_t rtflags;
+	struct sockaddr_dl sdl;
 
 	if (net_dest->sin_family != AF_INET)
 		return (EAFNOSUPPORT);
@@ -1099,6 +1107,38 @@ arp_lookup_ip(ifnet_t ifp, const struct sockaddr_in *net_dest,
 		bcopy(gateway, ll_dest, MIN(gateway->sdl_len, ll_dest_len));
 		result = 0;
 		arp_llreach_use(llinfo);	/* Mark use timestamp */
+		/*
+		 * Start the unicast probe right before the entry expires.
+		 */
+		lr = llinfo->la_llreach;
+		if (lr == NULL)
+			goto release;
+		rt_ifa = route->rt_ifa;
+		/* Become a regular mutex, just in case */
+		RT_CONVERT_LOCK(route);
+		IFLR_LOCK_SPIN(lr);
+		if (route->rt_expire <= timenow + arp_unicast_lim &&
+		    ifp->if_addrlen == IF_LLREACH_MAXLEN &&
+		    lr->lr_probes <= arp_unicast_lim) {
+			lr->lr_probes++;
+			bzero(&sdl, sizeof (sdl));
+			sdl.sdl_alen = ifp->if_addrlen;
+			bcopy(&lr->lr_key.addr, LLADDR(&sdl),
+			    ifp->if_addrlen);
+			IFLR_UNLOCK(lr);
+			IFA_LOCK_SPIN(rt_ifa);
+			IFA_ADDREF_LOCKED(rt_ifa);
+			sa = rt_ifa->ifa_addr;
+			IFA_UNLOCK(rt_ifa);
+			rtflags = route->rt_flags;
+			RT_UNLOCK(route);
+			dlil_send_arp(ifp, ARPOP_REQUEST, NULL, sa,
+			    (const struct sockaddr_dl *)&sdl,
+			    (const struct sockaddr *)net_dest, rtflags);
+			IFA_REMREF(rt_ifa);
+			RT_LOCK(route);
+		} else
+			IFLR_UNLOCK(lr);
 		goto release;
 	} else if (unreachable) {
 		/*
@@ -1128,29 +1168,25 @@ arp_lookup_ip(ifnet_t ifp, const struct sockaddr_in *net_dest,
 		if (llinfo->la_asked == 0 || route->rt_expire != timenow) {
 			rt_setexpire(route, timenow);
 			if (llinfo->la_asked++ < llinfo->la_maxtries) {
-				struct if_llreach *lr = llinfo->la_llreach;
-				struct ifaddr *rt_ifa = route->rt_ifa;
-				struct sockaddr_dl *hw_dest = NULL, sdl;
-				struct sockaddr *sa;
-				u_int32_t rtflags, alen;
+				struct kev_msg ev_msg;
+				struct kev_in_arpfailure in_arpfailure;
+				boolean_t sendkev = FALSE;
 
+				rt_ifa = route->rt_ifa;
+				lr = llinfo->la_llreach;
 				/* Become a regular mutex, just in case */
 				RT_CONVERT_LOCK(route);
 				/* Update probe count, if applicable */
 				if (lr != NULL) {
 					IFLR_LOCK_SPIN(lr);
 					lr->lr_probes++;
-					alen = ifp->if_addrlen;
-					/* Ethernet only for now */
-					if (alen == IF_LLREACH_MAXLEN &&
-					    lr->lr_probes <= arp_unicast_lim) {
-						bzero(&sdl, sizeof (sdl));
-						sdl.sdl_alen = alen;
-						bcopy(&lr->lr_key.addr,
-						    LLADDR(&sdl), alen);
-						hw_dest = &sdl;
-					}
 					IFLR_UNLOCK(lr);
+				}
+				if (ifp->if_addrlen == IF_LLREACH_MAXLEN &&
+				    route->rt_flags & RTF_ROUTER &&
+				    llinfo->la_asked > 1) {
+					sendkev = TRUE;
+					llinfo->la_flags |= LLINFO_RTRFAIL_EVTSENT;
 				}
 				IFA_LOCK_SPIN(rt_ifa);
 				IFA_ADDREF_LOCKED(rt_ifa);
@@ -1160,11 +1196,32 @@ arp_lookup_ip(ifnet_t ifp, const struct sockaddr_in *net_dest,
 				rtflags = route->rt_flags;
 				RT_UNLOCK(route);
 				dlil_send_arp(ifp, ARPOP_REQUEST, NULL, sa,
-				    (const struct sockaddr_dl *)hw_dest,
-				    (const struct sockaddr *)net_dest, rtflags);
+				    NULL, (const struct sockaddr *)net_dest,
+				    rtflags);
 				IFA_REMREF(rt_ifa);
-				RT_LOCK(route);
+				if (sendkev) {
+					bzero(&ev_msg, sizeof(ev_msg));
+					bzero(&in_arpfailure, 
+					    sizeof(in_arpfailure));
+					in_arpfailure.link_data.if_family =
+					    ifp->if_family;
+					in_arpfailure.link_data.if_unit =
+					    ifp->if_unit;
+					strlcpy(in_arpfailure.link_data.if_name,
+					    ifp->if_name, IFNAMSIZ);
+					ev_msg.vendor_code = KEV_VENDOR_APPLE;
+					ev_msg.kev_class = KEV_NETWORK_CLASS;
+					ev_msg.kev_subclass = KEV_INET_SUBCLASS;
+					ev_msg.event_code =
+					    KEV_INET_ARPRTRFAILURE;
+					ev_msg.dv[0].data_ptr = &in_arpfailure;
+					ev_msg.dv[0].data_length =
+					    sizeof(struct
+						kev_in_arpfailure); 
+					kev_post_msg(&ev_msg);
+				}
 				result = EJUSTRETURN;
+				RT_LOCK(route);
 				goto release;
 			} else {
 				route->rt_flags |= RTF_REJECT;
@@ -1354,7 +1411,7 @@ match:
 		/* Send a kernel event so anyone can learn of the conflict */
 		in_collision->link_data.if_family = ifp->if_family;
 		in_collision->link_data.if_unit = ifp->if_unit;
-		strncpy(&in_collision->link_data.if_name[0],
+		strlcpy(&in_collision->link_data.if_name[0],
 		    ifp->if_name, IFNAMSIZ);
 		in_collision->ia_ipaddr = sender_ip->sin_addr;
 		in_collision->hw_len = (sender_hw->sdl_alen < MAX_HW_LEN) ?
@@ -1632,8 +1689,31 @@ match:
 	arp_llreach_alloc(route, ifp, LLADDR(gateway), gateway->sdl_alen,
 	    (arpop == ARPOP_REPLY));
 
-	/* update the llinfo, send a queued packet if there is one */
 	llinfo = route->rt_llinfo;
+	/* send a notification that the route is back up */
+	if (ifp->if_addrlen == IF_LLREACH_MAXLEN &&
+	    route->rt_flags & RTF_ROUTER && 
+	    llinfo->la_flags & LLINFO_RTRFAIL_EVTSENT) {
+		struct kev_msg ev_msg;
+		struct kev_in_arpfailure in_arpalive;
+
+		llinfo->la_flags &= ~LLINFO_RTRFAIL_EVTSENT;
+		RT_UNLOCK(route);
+		bzero(&ev_msg, sizeof(ev_msg));
+		bzero(&in_arpalive, sizeof(in_arpalive));
+		in_arpalive.link_data.if_family = ifp->if_family;
+		in_arpalive.link_data.if_unit = ifp->if_unit;
+		strlcpy(in_arpalive.link_data.if_name, ifp->if_name, IFNAMSIZ);
+		ev_msg.vendor_code = KEV_VENDOR_APPLE;
+		ev_msg.kev_class = KEV_NETWORK_CLASS;
+		ev_msg.kev_subclass = KEV_INET_SUBCLASS;
+		ev_msg.event_code = KEV_INET_ARPRTRALIVE;
+		ev_msg.dv[0].data_ptr = &in_arpalive;
+		ev_msg.dv[0].data_length = sizeof(struct kev_in_arpalive); 
+		kev_post_msg(&ev_msg);
+		RT_LOCK(route);
+	}
+	/* update the llinfo, send a queued packet if there is one */
 	llinfo->la_asked = 0;
 	if (llinfo->la_hold) {
 		struct mbuf *m0 = llinfo->la_hold;
@@ -1644,6 +1724,7 @@ match:
 		RT_REMREF(route);
 		route = NULL;
 	}
+
 
 respond:
 	if (route != NULL) {

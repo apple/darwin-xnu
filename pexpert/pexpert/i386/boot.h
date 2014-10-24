@@ -125,6 +125,11 @@ typedef struct boot_icon_element boot_icon_element;
 #define kBootArgsFlagRebootOnPanic	(1 << 0)
 #define kBootArgsFlagHiDPI		(1 << 1)
 #define kBootArgsFlagBlack		(1 << 2)
+#define kBootArgsFlagCSRActiveConfig	(1 << 3)
+#define kBootArgsFlagCSRPendingConfig	(1 << 4)
+#define kBootArgsFlagCSRBoot		(1 << 5)
+#define kBootArgsFlagBlackBg		(1 << 6)
+#define kBootArgsFlagLoginUI		(1 << 7)
 
 typedef struct boot_args {
     uint16_t    Revision;	/* Revision of boot_args structure */
@@ -168,7 +173,9 @@ typedef struct boot_args {
     uint64_t    pciConfigSpaceBaseAddress;
     uint32_t    pciConfigSpaceStartBusNumber;
     uint32_t    pciConfigSpaceEndBusNumber;
-    uint32_t    __reserved4[730];
+    uint32_t	csrActiveConfig;
+    uint32_t	csrPendingConfig;
+    uint32_t    __reserved4[728];
 
 } boot_args;
 

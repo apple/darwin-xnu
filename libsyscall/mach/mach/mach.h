@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1999-2005 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 1999-2014 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -134,6 +134,104 @@ extern kern_return_t	clock_sleep(mach_port_t,
 				    int,
 				    mach_timespec_t,
 				    mach_timespec_t *);
+
+/*!
+ * @group voucher_mach_msg Prototypes
+ */
+
+#define VOUCHER_MACH_MSG_API_VERSION 20140205
+
+/*!
+ * @typedef voucher_mach_msg_state_t
+ *
+ * @abstract
+ * Opaque object encapsulating state changed by voucher_mach_msg_adopt().
+ */
+typedef struct voucher_mach_msg_state_s *voucher_mach_msg_state_t;
+
+/*!
+ * @const VOUCHER_MACH_MSG_STATE_UNCHANGED
+ *
+ * @discussion
+ * Constant indicating no state change occurred.
+ */
+#define VOUCHER_MACH_MSG_STATE_UNCHANGED ((voucher_mach_msg_state_t)~0ul)
+
+/*!
+ * @function voucher_mach_msg_set
+ *
+ * @abstract
+ * Change specified message header to contain current mach voucher with a
+ * COPY_SEND disposition.
+ * Does not change message if it already has non-zero MACH_MSGH_BITS_VOUCHER.
+ *
+ * @discussion
+ * Borrows reference to current thread voucher so message should be sent
+ * immediately (without intervening calls that might change that voucher).
+ *
+ * @param msg
+ * The message to modify.
+ *
+ * @result
+ * True if header was changed.
+ */
+extern boolean_t voucher_mach_msg_set(mach_msg_header_t *msg);
+
+/*!
+ * @function voucher_mach_msg_clear
+ *
+ * @abstract
+ * Removes changes made to specified message header by voucher_mach_msg_set()
+ * and any mach_msg() send operations (successful or not).
+ * If the message is not needed further, mach_msg_destroy() should be called
+ * instead.
+ *
+ * @discussion
+ * Not intended to be called if voucher_mach_msg_set() returned false.
+ * Releases reference to message mach voucher if an extra reference was
+ * acquired due to an unsuccessful send operation (pseudo-receive).
+ *
+ * @param msg
+ * The message to modify.
+ */
+extern void voucher_mach_msg_clear(mach_msg_header_t *msg);
+
+/*!
+ * @function voucher_mach_msg_adopt
+ *
+ * @abstract
+ * Adopt the voucher contained in the specified message on the current thread
+ * and return the previous thread voucher state.
+ *
+ * @discussion
+ * Ownership of the mach voucher in the message is transferred to the current
+ * thread and the message header voucher fields are cleared.
+ *
+ * @param msg
+ * The message to query and modify.
+ *
+ * @result
+ * The previous thread voucher state or VOUCHER_MACH_MSG_STATE_UNCHANGED if no
+ * state change occurred.
+ */
+extern voucher_mach_msg_state_t voucher_mach_msg_adopt(mach_msg_header_t *msg);
+
+/*!
+ * @function voucher_mach_msg_revert
+ *
+ * @abstract
+ * Restore thread voucher state previously modified by voucher_mach_msg_adopt().
+ *
+ * @discussion
+ * Current thread voucher reference is released.
+ * No change to thread voucher state if passed VOUCHER_MACH_MSG_STATE_UNCHANGED.
+ *
+ * @param state
+ * The thread voucher state to restore.
+ */
+
+extern void voucher_mach_msg_revert(voucher_mach_msg_state_t state);
+
 __END_DECLS
 
 #endif	/* _MACH_H_ */

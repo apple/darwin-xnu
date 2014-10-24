@@ -31,6 +31,7 @@
 #include <IOKit/IOKitDebug.h>
 #include <IOKit/IOTimeStamp.h>
 #include <IOKit/IOWorkLoop.h>
+#include <IOKit/IOInterruptAccountingPrivate.h>
 
 #if IOKITSTATS
 
@@ -153,14 +154,33 @@ void IOFilterInterruptEventSource::normalInterruptOccurred
     (void */*refcon*/, IOService */*prov*/, int /*source*/)
 {
     bool 	filterRes;
+    uint64_t	startTime = 0;
+    uint64_t	endTime = 0;
 	bool	trace = (gIOKitTrace & kIOTraceIntEventSource) ? true : false;
 	
 	if (trace)
 		IOTimeStampStartConstant(IODBG_INTES(IOINTES_FILTER),
 					 VM_KERNEL_UNSLIDE(filterAction), (uintptr_t) owner, (uintptr_t) this, (uintptr_t) workLoop);
+
+    if (IOInterruptEventSource::reserved->statistics) {
+        if (IA_GET_STATISTIC_ENABLED(kInterruptAccountingFirstLevelTimeIndex)) {
+            startTime = mach_absolute_time();
+        }
+    }
     
     // Call the filter.
     filterRes = (*filterAction)(owner, this);
+
+    if (IOInterruptEventSource::reserved->statistics) {
+        if (IA_GET_STATISTIC_ENABLED(kInterruptAccountingFirstLevelCountIndex)) {
+            IA_ADD_VALUE(&IOInterruptEventSource::reserved->statistics->interruptStatistics[kInterruptAccountingFirstLevelCountIndex], 1);
+        }
+
+        if (IA_GET_STATISTIC_ENABLED(kInterruptAccountingFirstLevelTimeIndex)) {
+            endTime = mach_absolute_time();
+            IA_ADD_VALUE(&IOInterruptEventSource::reserved->statistics->interruptStatistics[kInterruptAccountingFirstLevelTimeIndex], endTime - startTime);
+        }
+    }
 	
 	if (trace)
 		IOTimeStampEndConstant(IODBG_INTES(IOINTES_FILTER),
@@ -174,15 +194,34 @@ void IOFilterInterruptEventSource::disableInterruptOccurred
     (void */*refcon*/, IOService *prov, int source)
 {
     bool 	filterRes;
+    uint64_t	startTime = 0;
+    uint64_t	endTime = 0;
 	bool	trace = (gIOKitTrace & kIOTraceIntEventSource) ? true : false;
 	
 	if (trace)
 		IOTimeStampStartConstant(IODBG_INTES(IOINTES_FILTER),
 					 VM_KERNEL_UNSLIDE(filterAction), (uintptr_t) owner, (uintptr_t) this, (uintptr_t) workLoop);
+
+    if (IOInterruptEventSource::reserved->statistics) {
+        if (IA_GET_STATISTIC_ENABLED(kInterruptAccountingFirstLevelTimeIndex)) {
+            startTime = mach_absolute_time();
+        }
+    }
     
     // Call the filter.
     filterRes = (*filterAction)(owner, this);
-	
+
+    if (IOInterruptEventSource::reserved->statistics) {
+        if (IA_GET_STATISTIC_ENABLED(kInterruptAccountingFirstLevelCountIndex)) {
+            IA_ADD_VALUE(&IOInterruptEventSource::reserved->statistics->interruptStatistics[kInterruptAccountingFirstLevelCountIndex], 1);
+        }
+
+        if (IA_GET_STATISTIC_ENABLED(kInterruptAccountingFirstLevelTimeIndex)) {
+            endTime = mach_absolute_time();
+            IA_ADD_VALUE(&IOInterruptEventSource::reserved->statistics->interruptStatistics[kInterruptAccountingFirstLevelTimeIndex], endTime - startTime);
+        }
+    }
+
 	if (trace)
 		IOTimeStampEndConstant(IODBG_INTES(IOINTES_FILTER),
 				       VM_KERNEL_UNSLIDE(filterAction), (uintptr_t) owner, (uintptr_t) this, (uintptr_t) workLoop);

@@ -54,6 +54,9 @@ __BEGIN_DECLS
 /* The namespace of flags are managed by in-kernel clients */
 #define PROC_UUID_POLICY_FLAGS_NONE			0x00000000
 #define	PROC_UUID_NO_CELLULAR				0x00000001
+#define	PROC_UUID_NECP_APP_POLICY			0x00000002
+
+/* To be removed, replaced by PROC_UUID_NECP_APP_POLICY */
 #define	PROC_UUID_FLOW_DIVERT				0x00000002
 
 #if BSD_KERNEL_PRIVATE
@@ -79,6 +82,8 @@ __BEGIN_DECLS
 extern int proc_uuid_policy_lookup(uuid_t uuid, uint32_t *flags, int32_t *gencount);
 
 extern void proc_uuid_policy_init(void);
+
+extern int proc_uuid_policy_kernel(uint32_t operation, uuid_t uuid, uint32_t flags);
 #endif /* BSD_KERNEL_PRIVATE */
 
 #ifndef KERNEL
@@ -86,13 +91,15 @@ extern void proc_uuid_policy_init(void);
  * Upload a policy indexed by UUID.
  *
  * Parameters:
- *     operation     CLEAR    Remove all existing entries
+ *     operation     CLEAR    Clear specified flags for all entries.
+ *                            Entries are removed if they have no remaining flags.
  *                   ADD      Add the specified UUID and flags to the policy table.
- *                            Existing entries for the UUID are replaced.
- *                   REMOVE   Remove entry for the specified UUID.
+ *                            Flags are ORed  with existing entries for the UUID.
+ *                   REMOVE   Mask out flags in the entry for the specified UUID.
+ *                            Entry is removed if it has no remaining flags.
  *     uuid          Pointer to UUID for Mach-O executable
  *     uuidlen       sizeof(uuid_t)
- *     flags         Flags to be stored in the policy table
+ *     flags         Flags to be stored in the policy table. See operation notes above.
  *
  * Return:
  *     0        Success, operation completed without error.

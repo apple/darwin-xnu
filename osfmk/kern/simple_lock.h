@@ -182,8 +182,6 @@ __END_DECLS
 #define	simple_unlock(l)	usimple_unlock(l)
 #define simple_lock_try(l)	usimple_lock_try(l)
 #define simple_lock_addr(l)	(&(l))
-#define thread_sleep_simple_lock(l, e, i) \
-				thread_sleep_usimple_lock((l), (e), (i))
 #endif /* !defined(simple_lock_init) */
 
 #endif /*!_KERN_SIMPLE_LOCK_H_*/

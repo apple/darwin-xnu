@@ -75,16 +75,22 @@
  *	in mach_debug_types.defs when adding/removing fields.
  */
 
-
 typedef struct ipc_info_space {
 	natural_t iis_genno_mask;	/* generation number mask */
 	natural_t iis_table_size;	/* size of table */
 	natural_t iis_table_next;	/* next possible size of table */
-	natural_t iis_tree_size;	/* size of tree */
-	natural_t iis_tree_small;	/* # of small entries in tree */
-	natural_t iis_tree_hash;	/* # of hashed entries in tree */
+	natural_t iis_tree_size;	/* size of tree (UNUSED) */
+	natural_t iis_tree_small;	/* # of small entries in tree (UNUSED) */
+	natural_t iis_tree_hash;	/* # of hashed entries in tree (UNUSED) */
 } ipc_info_space_t;
 
+typedef struct ipc_info_space_basic {
+	natural_t iisb_genno_mask;	/* generation number mask */
+	natural_t iisb_table_size;	/* size of table */
+	natural_t iisb_table_next;	/* next possible size of table */
+	natural_t iisb_table_inuse;	/* number of entries in use */
+	natural_t iisb_reserved[2];	/* future expansion */
+} ipc_info_space_basic_t;
 
 typedef struct ipc_info_name {
 	mach_port_name_t iin_name;		/* port name, including gen number */
@@ -98,7 +104,7 @@ typedef struct ipc_info_name {
 
 typedef ipc_info_name_t *ipc_info_name_array_t;
 
-
+/* UNUSED */
 typedef struct ipc_info_tree_name {
 	ipc_info_name_t iitn_name;
 	mach_port_name_t iitn_lchild;	/* name of left child */

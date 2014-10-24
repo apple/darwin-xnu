@@ -1,7 +1,5 @@
 #include <AvailabilityMacros.h>
-#ifdef AVAILABLE_MAC_OS_X_VERSION_10_5_AND_LATER
-#include </System/Library/Frameworks/System.framework/PrivateHeaders/mach/thread_policy.h>
-#endif
+#include <mach/thread_policy.h>
 #include <mach/mach.h>
 #include <mach/mach_error.h>
 #include <mach/mach_time.h>
@@ -120,12 +118,8 @@ static void
 usage()
 {
 	fprintf(stderr,
-#ifdef AVAILABLE_MAC_OS_X_VERSION_10_5_AND_LATER
 		"usage: pool [-a]    Turn affinity on (off)\n"
 		"            [-b B]  Number of buffers per producer (2)\n"
-#else
-		"usage: pool [-b B]  Number of buffers per producer (2)\n"
-#endif
 		"            [-i I]  Number of buffers to produce (10000)\n"
 		"            [-s S]  Number of stages (2)\n"
 		"            [-p P]  Number of pages per buffer (256=1MB)]\n"
@@ -173,7 +167,6 @@ reader_writer_fn(int *data, int isize)
 void
 affinity_set(int tag)
 {
-#ifdef AVAILABLE_MAC_OS_X_VERSION_10_5_AND_LATER
 	kern_return_t			ret;
 	thread_affinity_policy_data_t	policy;
 	if (affinity) {
@@ -185,7 +178,6 @@ affinity_set(int tag)
 		if (ret != KERN_SUCCESS)
 			printf("thread_policy_set(THREAD_AFFINITY_POLICY) returned %d\n", ret);
 	}
-#endif
 }
 
 /*
@@ -201,7 +193,6 @@ manager_fn(void *arg)
 	long		iteration = 0;
 	int		current_tag = 0;
 
-#ifdef AVAILABLE_MAC_OS_X_VERSION_10_5_AND_LATER
 	kern_return_t			ret;
 	thread_extended_policy_data_t	epolicy;
 	epolicy.timeshare = FALSE;
@@ -212,7 +203,6 @@ manager_fn(void *arg)
 	if (ret != KERN_SUCCESS)
 		printf("thread_policy_set(THREAD_EXTENDED_POLICY) returned %d\n", ret);
 	
-#endif
 	/*
 	 * If we're using affinity sets and we're a producer
 	 * set our tag to by our thread set number.
@@ -337,12 +327,8 @@ main(int argc, char *argv[])
 	while ((c = getopt (argc, argv, "ab:i:p:s:twv:")) != -1) {
 		switch (c) {
 		case 'a':
-#ifdef AVAILABLE_MAC_OS_X_VERSION_10_5_AND_LATER
 			affinity = !affinity;
 			break;
-#else
-			usage();
-#endif
 		case 'b':
 			buffers = atoi(optarg);
 			break;

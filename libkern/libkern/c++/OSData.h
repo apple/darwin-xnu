@@ -74,6 +74,7 @@ class OSString;
 class OSData : public OSObject
 {
     OSDeclareDefaultStructors(OSData)
+    friend class OSSerialize;
 
 protected:
     void         * data;
@@ -81,7 +82,22 @@ protected:
     unsigned int   capacity;
     unsigned int   capacityIncrement;
 
-    struct ExpansionData;
+#ifdef XNU_KERNEL_PRIVATE
+    /* Available within xnu source only */
+public:
+    typedef void (*DeallocFunction)(void * ptr, unsigned int length);
+protected:
+	struct ExpansionData
+	{
+		DeallocFunction deallocFunction;
+		bool            disableSerialization;
+	};
+#else
+private:
+    typedef void (*DeallocFunction)(void * ptr, unsigned int length);
+protected:
+	struct ExpansionData;
+#endif
     
    /* Reserved for future use. (Internal use only)  */
     ExpansionData * reserved;
@@ -720,8 +736,6 @@ public:
 #else
 private:
 #endif
-    // xxx - DO NOT USE - This interface may change
-    typedef void (*DeallocFunction)(void * ptr, unsigned int length);
     virtual void setDeallocFunction(DeallocFunction func);
     OSMetaClassDeclareReservedUsed(OSData, 0);
 

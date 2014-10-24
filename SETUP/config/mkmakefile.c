@@ -66,18 +66,10 @@ static char sccsid[] __attribute__((used)) = "@(#)mkmakefile.c	5.21 (Berkeley) 6
 
 void	read_files(void);
 void	do_objs(FILE *fp, const char *msg, int ext);
-void	do_ordered(FILE *fp);
 void	do_files(FILE *fp, const char *msg, char ext);
 void	do_machdep(FILE *ofp);
-void	do_build(const char *name, void (*format)(FILE *));
 void	do_rules(FILE *f);
-void	do_load(FILE *f);
-struct file_list *do_systemspec(FILE *f, struct file_list *fl, int first);
-void	do_swapspec(FILE *f, const char *name, char *sysname);
 void	copy_dependencies(FILE *makin, FILE *makout);
-
-void	build_cputypes(FILE *fp);
-void	build_confdep(FILE *fp);
 
 struct file_list *fl_lookup(char *file);
 struct file_list *fltail_lookup(char *file);
@@ -85,8 +77,6 @@ struct file_list *new_fent(void);
 
 void	put_source_file_name(FILE *fp, struct file_list *tp);
 
-
-#define DO_SWAPFILE	0
 
 #define next_word(fp, wd) \
 	{ register const char *word = get_word(fp); \
@@ -153,34 +143,6 @@ new_fent(void)
 }
 
 char	*COPTS;
-static	struct users {
-	int	u_default;
-	int	u_min;
-	int	u_max;
-} users[] = {
-	{ 24, 2, 1024 },		/* MACHINE_VAX */
-	{  8, 2, 32 },			/* MACHINE_SUN */
-	{ 16, 4, 32 },			/* MACHINE_ROMP */
-	{  8, 2, 32 },			/* MACHINE_SUN2 */
-	{  8, 2, 32 },			/* MACHINE_SUN3 */
-	{ 24, 8, 1024},			/* MACHINE_MMAX */
-	{ 32, 8, 1024},			/* MACHINE_SQT */
-	{  8, 2, 32 },			/* MACHINE_SUN4 */
-	{  2, 2, 1024 },		/* MACHINE_I386 */
-	{ 32, 8, 1024 },		/* MACHINE_IX */
-	{ 32, 8, 1024 },		/* MACHINE_MIPSY */
-	{ 32, 8, 1024 },		/* MACHINE_MIPS*/
-	{ 32, 8, 1024 },		/* MACHINE_I860*/
-	{  8, 2, 32 },			/* MACHINE_M68K */
-	{  8, 2, 32 },			/* MACHINE_M88K */
-	{  8, 2, 32 },			/* MACHINE_M98K */
-	{  8, 2, 32 },			/* MACHINE_HPPA */
-	{  8, 2, 32 },			/* MACHINE_SPARC */
-	{  8, 2, 32 },			/* MACHINE_PPC */
-	{  8, 2, 32 },			/* MACHINE_ARM */
-	{  8, 2, 32 },			/* MACHINE_X86_64 */
-};
-#define NUSERS	(sizeof (users) / sizeof (users[0]))
 
 const char *
 get_VPATH(void)
@@ -210,7 +172,6 @@ makefile(void)
 	char pname[BUFSIZ];
 	char line[BUFSIZ];
 	struct opt *op;
-	struct users *up;
 
 	read_files();
 	(void) sprintf(line, "%s/Makefile.template", config_directory);
@@ -222,13 +183,6 @@ makefile(void)
 	dfp = fopen(path("Makefile"), "r");
 	rename(path("Makefile"), path("Makefile.old"));
 	unlink(path("Makefile.old"));
-	unlink(path("M.d"));
-	if ((ofp = fopen(path("M.d"), "w")) == NULL) {
-		perror(path("M.d"));
-		/* We'll let this error go */
-	}
-	else
-	 	fclose(ofp);
 	ofp = fopen(path("Makefile"), "w");
 	if (ofp == 0) {
 		perror(path("Makefile"));
@@ -236,19 +190,9 @@ makefile(void)
 	}
 	fprintf(ofp, "SOURCE_DIR=%s\n", source_directory);
 
-	if (machine == MACHINE_SUN || machine == MACHINE_SUN2 
-	    || machine == MACHINE_SUN3 || machine == MACHINE_SUN4)
-		fprintf(ofp, "export IDENT=-D%s -D%s", machinename, allCaps(ident));
-	else
-		fprintf(ofp, "export IDENT=-D%s", allCaps(ident));
+	fprintf(ofp, "export CONFIG_DEFINES =");
 	if (profiling)
 		fprintf(ofp, " -DGPROF");
-	if (cputype == 0) {
-		printf("cpu type must be specified\n");
-		exit(1);
-	}
-	do_build("cputypes.h", build_cputypes);
-	do_build("platforms.h", build_cputypes);
 
 	for (op = opt; op; op = op->op_next)
 		if (op->op_value)
@@ -256,18 +200,6 @@ makefile(void)
 		else
 			fprintf(ofp, " -D%s", op->op_name);
 	fprintf(ofp, "\n");
-	if ((unsigned)machine > NUSERS) {
-		printf("maxusers config info isn't present, using vax\n");
-		up = &users[MACHINE_VAX-1];
-	} else
-		up = &users[machine-1];
-	if (maxusers < up->u_min) {
-		maxusers = up->u_min;
-	} else if (maxusers > up->u_max)
-		printf("warning: maxusers > %d (%d)\n", up->u_max, maxusers);
-	if (maxusers) {
-		do_build("confdep.h", build_confdep);
-	}
 	for (op = mkopt; op; op = op->op_next)
 		if (op->op_value)
 			fprintf(ofp, "%s=%s\n", op->op_name, op->op_value);
@@ -279,8 +211,7 @@ makefile(void)
 			goto percent;
 		if (profiling && strncmp(line, "COPTS=", 6) == 0) {
 			register char *cp;
-			if (machine != MACHINE_MMAX)
-			    fprintf(ofp,
+			fprintf(ofp,
 				"GPROF.EX=$(SOURCE_DIR)/machdep/%s/gmon.ex\n", machinename);
 			cp = index(line, '\n');
 			if (cp)
@@ -294,13 +225,7 @@ makefile(void)
 				exit(1);
 			}
 			strcpy(COPTS, cp);
-			if (machine == MACHINE_MIPSY || machine == MACHINE_MIPS) {
-				fprintf(ofp, "%s ${CCPROFOPT}\n", line);
-				fprintf(ofp, "PCOPTS=%s\n", cp);
-			} else if (machine == MACHINE_MMAX)
-				fprintf(ofp, "%s -p\n",line);
-			else
-				fprintf(ofp, "%s -pg\n", line);
+			fprintf(ofp, "%s -pg\n", line);
 			continue;
 		}
 		fprintf(ofp, "%s", line);
@@ -311,20 +236,16 @@ makefile(void)
 		} else if (eq(line, "%CFILES\n")) {
 			do_files(ofp, "CFILES=", 'c');
 			do_objs(ofp, "COBJS=", 'c');
+		} else if (eq(line, "%CXXFILES\n")) {
+			do_files(ofp, "CXXFILES=", 'p');
+			do_objs(ofp, "CXXOBJS=", 'p');
 		} else if (eq(line, "%SFILES\n")) {
 			do_files(ofp, "SFILES=", 's');
 			do_objs(ofp, "SOBJS=", 's');
 		} else if (eq(line, "%MACHDEP\n")) {
-			/*
-			 * Move do_machdep() after the mkopt stuff.
-			 */
-			for (op = mkopt; op; op = op->op_next)
-				fprintf(ofp, "%s=%s\n", op->op_name, op->op_value);
 			do_machdep(ofp);
 		} else if (eq(line, "%RULES\n"))
 			do_rules(ofp);
-		else if (eq(line, "%LOAD\n"))
-			do_load(ofp);
 		else
 			fprintf(stderr,
 			    "Unknown %% construct in generic makefile: %s",
@@ -355,12 +276,9 @@ read_files(void)
 	const char *devorprof;
 	int options;
 	int not_option;
-	int ordered;
-	int sedit;				/* SQT */
 	char pname[BUFSIZ];
 	char fname[1024];
 	char *rest = (char *) 0;
-	struct cputype *cp;
 	int nreqs, first = 1, isdup;
 
 	ftab = 0;
@@ -378,13 +296,6 @@ next:
 	 * filename	[ standard | optional ]
 	 *	[ dev* | profiling-routine ] [ device-driver]
 	 */
-	/*
-	 * MACHINE_SQT ONLY:
-	 *
-	 * filename	[ standard | optional ] 
-	 *	[ ordered | sedit ]
-	 *	[ dev* | profiling-routine ] [ device-driver]
-	 */
 	wd = get_word(fp);
 	if (wd == (char *)EOF) {
 		(void) fclose(fp);
@@ -392,13 +303,6 @@ next:
 			(void) sprintf(fname, "%s/files.%s", config_directory, machinename);
 			first++;
 			goto openit;
-		}
-		if (first == 2) {
-			(void) sprintf(fname, "files.%s", allCaps(ident));
-			first++;
-			fp = fopenp(VPATH, fname, pname, "r");
-			if (fp != 0)
-				goto next;
 		}
 		return;
 	}
@@ -426,13 +330,8 @@ next:
 	else
 		isdup = 0;
 	tp = 0;
-	if (first == 3 && (tp = fltail_lookup(this)) != 0)
-		printf("%s: Local file %s overrides %s.\n",
-		    fname, this, tp->f_fn);
 	nreqs = 0;
 	devorprof = "";
-	ordered = 0;
-	sedit = 1;				/* SQT: assume sedit for now */
 	needs = 0;
 	if (eq(wd, "standard"))
 		goto checkdev;
@@ -447,14 +346,6 @@ nextopt:
 	next_word(fp, wd);
 	if (wd == 0)
 		goto doneopt;
-	if (eq(wd, "ordered")) {
-		ordered++;
-		goto nextopt;
-	}
-	if (machine == MACHINE_SQT && eq(wd, "sedit")) {
-		sedit++;
-		goto nextopt;
-	}
 	if (eq(wd, "not")) {
 		not_option = !not_option;
 		goto nextopt;
@@ -533,15 +424,6 @@ nextopt:
 			goto nextopt;
 		}
 
-	for (cp = cputype; cp; cp = cp->cpu_next)
-		if (opteq(cp->cpu_name, wd)) {
-			if (nreqs == 1) {
-				free(needs);
-				needs = 0;
-			}
-			goto nextopt;
-		}
-
 invis:
 	while ((wd = get_word(fp)) != 0)
 		;
@@ -566,14 +448,6 @@ checkdev:
 			goto getrest;
 		next_word(fp, wd);
 		if (wd) {
-			if (eq(wd, "ordered")) {
-				ordered++;
-				goto checkdev;
-			}
-			if (machine == MACHINE_SQT && eq(wd, "sedit")) {
-				sedit++;
-				goto checkdev;
-			}
 			devorprof = wd;
 			next_word(fp, wd);
 		}
@@ -606,10 +480,6 @@ getrest:
 	else
 		tp->f_type = NORMAL;
 	tp->f_flags = 0;
-	if (ordered)
-		tp->f_flags |= ORDERED;
-	if (sedit)				/* SQT */
-		tp->f_flags |= SEDIT;
 	tp->f_needs = needs;
 	if (pf && pf->f_type == INVISIBLE)
 		pf->f_flags = 1;		/* mark as duplicate */
@@ -650,10 +520,6 @@ do_objs(FILE *fp, const char *msg, int ext)
 	char *cp;
 	char och;
 	const char *sp;
-#if	DO_SWAPFILE
-	register struct file_list *fl;
-	char swapname[32];
-#endif	/* DO_SWAPFILE */
 
 	fprintf(fp, "%s", msg);
 	lpos = strlen(msg);
@@ -665,8 +531,7 @@ do_objs(FILE *fp, const char *msg, int ext)
 		 *	Check for '.o' file in list
 		 */
 		cp = tp->f_fn + (len = strlen(tp->f_fn)) - 1;
-		if ((ext == -1 && tp->f_flags & ORDERED) ||		/* not in objs */
-		    (ext != -1 && *cp != ext))
+		if (ext != -1 && *cp != ext)
 			continue;
 		else if (*cp == 'o') {
 			if (len + lpos > 72) {
@@ -679,50 +544,6 @@ do_objs(FILE *fp, const char *msg, int ext)
 			continue;
 		}
 		sp = tail(tp->f_fn);
-#if	DO_SWAPFILE
-		for (fl = conf_list; fl; fl = fl->f_next) {
-			if (fl->f_type != SWAPSPEC)
-				continue;
-			(void) sprintf(swapname, "swap%s.c", fl->f_fn);
-			if (eq(sp, swapname))
-				goto cont;
-		}
-#endif	/* DO_SWAPFILE */
-		cp = (char *)sp + (len = strlen(sp)) - 1;
-		och = *cp;
-		*cp = 'o';
-		if (len + lpos > 72) {
-			lpos = 8;
-			fprintf(fp, "\\\n\t");
-		}
-		fprintf(fp, "%s ", sp);
-		lpos += len + 1;
-		*cp = och;
-#if	DO_SWAPFILE
-cont:
-		;
-#endif	/* DO_SWAPFILE */
-	}
-	if (lpos != 8)
-		putc('\n', fp);
-}
-
-/* not presently used and probably broken,  use ORDERED instead */
-void
-do_ordered(FILE *fp)
-{
-	register struct file_list *tp;
-	register int lpos, len;
-	char *cp;
-	char och;
-	const char *sp;
-
-	fprintf(fp, "ORDERED=");
-	lpos = 10;
-	for (tp = ftab; tp != 0; tp = tp->f_next) {
-		if ((tp->f_flags & ORDERED) != ORDERED)
-			continue;
-		sp = tail(tp->f_fn);
 		cp = (char *)sp + (len = strlen(sp)) - 1;
 		och = *cp;
 		*cp = 'o';
@@ -734,8 +555,7 @@ do_ordered(FILE *fp)
 		lpos += len + 1;
 		*cp = och;
 	}
-	if (lpos != 8)
-		putc('\n', fp);
+	putc('\n', fp);
 }
 
 void
@@ -761,8 +581,7 @@ do_files(FILE *fp, const char *msg, char ext)
 		put_source_file_name(fp, tp);
 		lpos += len + 1;
 	}
-	if (lpos != 8)
-		putc('\n', fp);
+	putc('\n', fp);
 }
 
 /*
@@ -789,82 +608,6 @@ do_machdep(FILE *ofp)
 			fputs(line, ofp);
 	}
 	fclose(ifp);
-}
-
-
-/*
- *  Format configuration dependent parameter file.
- */
-
-void
-build_confdep(FILE *fp)
-{
-	fprintf(fp, "#define MAXUSERS %d\n", maxusers);
-}
-
-/*
- *  Format cpu types file.
- */
-
-void
-build_cputypes(FILE *fp)
-{
-	struct cputype *cp;
-
-	for (cp = cputype; cp; cp = cp->cpu_next)
-		fprintf(fp, "#define\t%s\t1\n", cp->cpu_name);
-}
-
-
-
-/*
- *  Build a define parameter file.  Create it first in a temporary location and
- *  determine if this new contents differs from the old before actually
- *  replacing the original (so as not to introduce avoidable extraneous
- *  compilations).
- */
-
-void
-do_build(const char *name, void (*format)(FILE *))
-{
-	static char temp[]="#config.tmp";
-	FILE *tfp, *ofp;
-	int c;
-
-	unlink(path(temp));
-	tfp = fopen(path(temp), "w+");
-	if (tfp == 0) {
-		perror(path(temp));
-		exit(1);
-	}
-	unlink(path(temp));
-	(*format)(tfp);
-	ofp = fopen(path(name), "r");
-	if (ofp != 0)
-	{
-		fseek(tfp, 0, 0);
-		while ((c = fgetc(tfp)) != EOF)
-			if (fgetc(ofp) != c)
-				goto copy;
-		if (fgetc(ofp) == EOF)
-			goto same;
-		
-	}
-copy:
-	if (ofp)
-		fclose(ofp);
-	unlink(path(name));
-	ofp = fopen(path(name), "w");
-	if (ofp == 0) {
-		perror(path(name));
-		exit(1);
-	}
-	fseek(tfp, 0, 0);
-	while ((c = fgetc(tfp)) != EOF)
-		fputc(c, ofp);
-same:
-	fclose(ofp);
-	fclose(tfp);
 }
 
 const char *
@@ -920,46 +663,22 @@ do_rules(FILE *f)
 		fprintf(f, "-include %sd\n", tp);
 		fprintf(f, "%so: %s%s%c\n", tp, source_dir, np, och);
 		if (och == 's') {
-			switch (machine) {
-			case MACHINE_MIPSY:
-			case MACHINE_MIPS:
-				break;
-			default:
-				fprintf(f, "\t${S_RULE_0}\n");
-				fprintf(f, "\t${S_RULE_1A}%s%.*s${S_RULE_1B}%s\n",
-						source_dir, (int)(tp-np), np, nl);
-				fprintf(f, "\t${S_RULE_2}%s\n", nl);
-				break;
-			}
+			fprintf(f, "\t${S_RULE_0}\n");
+			fprintf(f, "\t${S_RULE_1A}%s%.*s${S_RULE_1B}%s\n",
+					source_dir, (int)(tp-np), np, nl);
+			fprintf(f, "\t${S_RULE_2}%s\n", nl);
 			continue;
 		}
 		extras = "";
 		switch (ftp->f_type) {
 	
 		case NORMAL:
-			switch (machine) {
-	
-			case MACHINE_MIPSY:
-			case MACHINE_MIPS:
-				break;
-			default:
-				goto common;
-			}
+			goto common;
 			break;
 	
 		case DRIVER:
-			switch (machine) {
-	
-			case MACHINE_MIPSY:
-			case MACHINE_MIPS:
-				fprintf(f, "\t@${RM} %so\n", tp);
-				fprintf(f, "\t${CC} ${CCDFLAGS}%s %s%s%sc\n\n",
-					(ftp->f_extra?ftp->f_extra:""), extras, source_dir, np);
-				continue;
-			default:
-				extras = "_D";
-				goto common;
-			}
+			extras = "_D";
+			goto common;
 			break;
 	
 		case PROFILING:
@@ -970,33 +689,8 @@ do_rules(FILE *f)
 					"config: COPTS undefined in generic makefile");
 				COPTS = "";
 			}
-			switch (machine) {
-				case MACHINE_MIPSY:
-				case MACHINE_MIPS:
-					fprintf(f, "\t@${RM} %so\n", tp);
-					fprintf(f, "\t${CC} ${CCPFLAGS}%s %s../%sc\n\n",
-						(ftp->f_extra?ftp->f_extra:""), extras, np);
-					continue;
-				case MACHINE_VAX:
-				case MACHINE_ROMP:
-				case MACHINE_SQT:
-				case MACHINE_MMAX:
-				case MACHINE_SUN3:
-				case MACHINE_SUN4:
-				case MACHINE_I386:
-				case MACHINE_I860:
-				case MACHINE_HPPA:
-				case MACHINE_SPARC:
-				case MACHINE_PPC:
-				case MACHINE_ARM:
-				case MACHINE_X86_64:
-					extras = "_P";
-					goto common;
-				default:
-				fprintf(stderr,
-					"config: don't know how to profile kernel on this cpu\n");
-				break;
-			}
+			extras = "_P";
+			goto common;
 	
 		common:
 			och_upper = och + 'A' - 'a';
@@ -1027,81 +721,6 @@ do_rules(FILE *f)
 		}
 		*cp = och;
 	}
-}
-
-/*
- * Create the load strings
- */
-void
-do_load(FILE *f)
-{
-	register struct file_list *fl;
-	int first = 1;
-
-	fl = conf_list;
-	while (fl) {
-		if (fl->f_type != SYSTEMSPEC) {
-			fl = fl->f_next;
-			continue;
-		}
-		fl = do_systemspec(f, fl, first);
-		if (first)
-			first = 0;
-	}
-	fprintf(f, "LOAD =");
-	for (fl = conf_list; fl != 0; fl = fl->f_next)
-		if (fl->f_type == SYSTEMSPEC)
-			fprintf(f, " %s", fl->f_needs);
-#ifdef	multimax
-	fprintf(f, "\n\nall .ORDER: includelinks ${LOAD}\n");
-#else	/* multimax */
-	fprintf(f, "\n\nall: includelinks ${LOAD}\n");
-#endif	/* multimax */
-	fprintf(f, "\n");
-}
-
-struct file_list *
-do_systemspec(FILE *f, struct file_list *fl, __unused int first)
-{
-	/*
-	 * Variable for kernel name.
-	 */
-	fprintf(f, "KERNEL_NAME=%s\n", fl->f_needs);
-
-	fprintf(f, "%s .ORDER: %s.sys ${SYSDEPS}\n",
-		fl->f_needs, fl->f_needs);
-	fprintf(f, "\t${SYS_RULE_1}\n");
-	fprintf(f, "\t${SYS_RULE_2}\n");
-	fprintf(f, "\t${SYS_RULE_3}\n");
-	fprintf(f, "\t${SYS_RULE_4}\n\n");
-	do_swapspec(f, fl->f_fn, fl->f_needs);
-	for (fl = fl->f_next; fl != NULL && fl->f_type == SWAPSPEC; fl = fl->f_next)
-		continue;
-	return (fl);
-}
-
-void
-do_swapspec(__unused FILE *f, __unused const char *name, __unused char *sysname)
-{
-
-#if	DO_SWAPFILE
-	char *gdir = eq(name, "generic")?"$(MACHINEDIR)/":"";
-
-	fprintf(f, "%s.sys:${P} ${PRELDDEPS} ${LDOBJS} ${LDDEPS}\n\n", sysname);
-	fprintf(f, "%s.swap: swap%s.o\n", sysname, name);
-	fprintf(f, "\t@rm -f $@\n");
-	fprintf(f, "\t@cp swap%s.o $@\n\n", name);
-	fprintf(f, "swap%s.o: %sswap%s.c ${SWAPDEPS}\n", name, gdir, name);
-	if (machine == MACHINE_MIPSY || machine == MACHINE_MIPS) {
-		fprintf(f, "\t@${RM} swap%s.o\n", name);
-		fprintf(f, "\t${CC} ${CCNFLAGS} %sswap%s.c\n\n", gdir, name);
-	} else {
-		fprintf(f, "\t${C_RULE_1A}%s${C_RULE_1B}\n", gdir);
-		fprintf(f, "\t${C_RULE_2}\n");
-		fprintf(f, "\t${C_RULE_3}\n");
-		fprintf(f, "\t${C_RULE_4}\n\n");
-	}
-#endif	/* DO_SWAPFILE */
 }
 
 char *

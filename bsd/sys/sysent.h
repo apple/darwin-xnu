@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2004-2012 Apple Inc. All rights reserved.
+ * Copyright (c) 2004-2014 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -36,12 +36,15 @@
 #ifdef __APPLE_API_PRIVATE
 
 typedef	int32_t	sy_call_t(struct proc *, void *, int *);
-typedef	void	sy_munge_t(const void *, void *);
+#if CONFIG_REQUIRES_U32_MUNGING
+typedef	void	sy_munge_t(void *);
+#endif
 
 struct sysent {		/* system call table */
 	sy_call_t	*sy_call;	/* implementing function */
+#if CONFIG_REQUIRES_U32_MUNGING
 	sy_munge_t	*sy_arg_munge32; /* system call arguments munger for 32-bit process */
-	sy_munge_t	*sy_arg_munge64; /* system call arguments munger for 64-bit process */
+#endif
 	int32_t		sy_return_type; /* system call return types */
 	int16_t		sy_narg;	/* number of args */
 	uint16_t	sy_arg_bytes;	/* Total size of arguments in bytes for
@@ -54,7 +57,7 @@ extern struct sysent sysent[];
 #endif	/* __INIT_SYSENT_C__ */
 
 extern int nsysent;
-#define NUM_SYSENT	456	/* Current number of defined syscalls */
+#define NUM_SYSENT	490	/* Current number of defined syscalls */
 
 /* 
  * Valid values for sy_cancel

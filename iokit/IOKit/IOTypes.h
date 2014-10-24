@@ -214,10 +214,11 @@ enum {
 
     kIOMapStatic		= 0x01000000,
     kIOMapReference		= 0x02000000,
-    kIOMapUnique		= 0x04000000
+    kIOMapUnique		= 0x04000000,
 #ifdef XNU_KERNEL_PRIVATE
-    , kIOMap64Bit		= 0x08000000
+    kIOMap64Bit			= 0x08000000,
 #endif
+    kIOMapPrefault		= 0x10000000,
 };
 
 /*! @enum Scale Factors

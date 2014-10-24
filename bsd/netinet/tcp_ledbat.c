@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2010-2012 Apple Inc. All rights reserved.
+ * Copyright (c) 2010-2014 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -58,7 +58,7 @@
 int tcp_ledbat_init(struct tcpcb *tp);
 int tcp_ledbat_cleanup(struct tcpcb *tp);
 void tcp_ledbat_cwnd_init(struct tcpcb *tp);
-void tcp_ledbat_inseq_ack_rcvd(struct tcpcb *tp, struct tcphdr *th);
+void tcp_ledbat_congestion_avd(struct tcpcb *tp, struct tcphdr *th);
 void tcp_ledbat_ack_rcvd(struct tcpcb *tp, struct tcphdr *th);
 void tcp_ledbat_pre_fr(struct tcpcb *tp);
 void tcp_ledbat_post_fr(struct tcpcb *tp, struct tcphdr *th);
@@ -72,7 +72,7 @@ struct tcp_cc_algo tcp_cc_ledbat = {
 	.init = tcp_ledbat_init,
 	.cleanup = tcp_ledbat_cleanup,
 	.cwnd_init = tcp_ledbat_cwnd_init,
-	.inseq_ack_rcvd = tcp_ledbat_inseq_ack_rcvd,
+	.congestion_avd = tcp_ledbat_congestion_avd,
 	.ack_rcvd = tcp_ledbat_ack_rcvd,
 	.pre_fr = tcp_ledbat_pre_fr,
 	.post_fr = tcp_ledbat_post_fr,
@@ -81,10 +81,6 @@ struct tcp_cc_algo tcp_cc_ledbat = {
 	.delay_ack = tcp_ledbat_delay_ack,
 	.switch_to = tcp_ledbat_switch_cc
 };
-
-extern int tcp_do_rfc3465;
-extern int tcp_do_rfc3465_lim2;
-extern uint32_t get_base_rtt(struct tcpcb *tp);
 
 /* Target queuing delay in milliseconds. This includes the processing 
  * and scheduling delay on both of the end-hosts. A LEDBAT sender tries 
@@ -224,7 +220,7 @@ tcp_ledbat_cwnd_init(struct tcpcb *tp) {
  * This gets called only during congestion avoidance phase.
  */
 void
-tcp_ledbat_inseq_ack_rcvd(struct tcpcb *tp, struct tcphdr *th) {
+tcp_ledbat_congestion_avd(struct tcpcb *tp, struct tcphdr *th) {
 	int acked = 0;
 	u_int32_t incr = 0;
 
@@ -362,6 +358,9 @@ tcp_ledbat_after_idle(struct tcpcb *tp) {
 	
 	/* Reset the congestion window */
 	tp->snd_cwnd = tp->t_maxseg * bg_ss_fltsz;
+
+	/* If stretch ack was auto disabled, re-evaluate the situation */
+	tcp_cc_after_idle_stretchack(tp);
 }
 
 /* Function to change the congestion window when the retransmit 

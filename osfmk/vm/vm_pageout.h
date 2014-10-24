@@ -74,7 +74,7 @@
 #include <mach/memory_object_types.h>
 
 #include <kern/kern_types.h>
-#include <kern/lock.h>
+#include <kern/locks.h>
 
 #include <libkern/OSAtomic.h>
 
@@ -92,27 +92,16 @@
 /* externally manipulated counters */
 extern unsigned int vm_pageout_cleaned_reactivated, vm_pageout_cleaned_fault_reactivated, vm_pageout_cleaned_commit_reactivated;
 
-#if CONFIG_JETSAM
-#define LATENCY_JETSAM	FALSE
-#if LATENCY_JETSAM
-#define JETSAM_LATENCY_TOKEN_AGE	3000	/* 3ms */
-#define	NUM_OF_JETSAM_LATENCY_TOKENS	1000
-
-#define JETSAM_AGE_NOTIFY_CRITICAL	1500000 /* 1.5 secs */
-
-extern boolean_t	jlp_init;
-extern uint64_t	jlp_time, jlp_current;
-extern unsigned int	latency_jetsam_wakeup;
-#endif	/* LATENCY_JETSAM */				
-#endif	/* CONFIG_JETSAM */
-
 #if CONFIG_FREEZE
 extern boolean_t memorystatus_freeze_enabled;
-#define VM_DYNAMIC_PAGING_ENABLED(port) ((COMPRESSED_PAGER_IS_ACTIVE || DEFAULT_FREEZER_COMPRESSED_PAGER_IS_ACTIVE) || (memorystatus_freeze_enabled == FALSE && IP_VALID(port)))
+#define VM_DYNAMIC_PAGING_ENABLED(port) (COMPRESSED_PAGER_IS_ACTIVE || (memorystatus_freeze_enabled == FALSE && IP_VALID(port)))
 #else
 #define VM_DYNAMIC_PAGING_ENABLED(port) (COMPRESSED_PAGER_IS_ACTIVE || IP_VALID(port))
 #endif
 
+#if VM_PRESSURE_EVENTS
+extern boolean_t vm_pressure_events_enabled;
+#endif /* VM_PRESSURE_EVENTS */
 
 extern int	vm_debug_events;
 
@@ -128,11 +117,15 @@ extern int	vm_debug_events;
 #define VM_PAGEOUT_CACHE_EVICT		0x108
 #define VM_PAGEOUT_THREAD_BLOCK		0x109
 #define VM_PAGEOUT_JETSAM		0x10A
-#define VM_PAGEOUT_PAGE_TOKEN		0x10B
 
 #define VM_UPL_PAGE_WAIT		0x120
 #define VM_IOPL_PAGE_WAIT		0x121
 #define VM_PAGE_WAIT_BLOCK		0x122
+
+#if CONFIG_IOSCHED
+#define VM_PAGE_SLEEP			0x123
+#define VM_PAGE_EXPEDITE		0x124
+#endif
 
 #define VM_PRESSURE_EVENT		0x130
 #define VM_EXECVE			0x131
@@ -145,7 +138,7 @@ extern int	vm_debug_events;
 	}							\
 	MACRO_END
 
-extern void inline memoryshot(unsigned int event, unsigned int control);
+extern void memoryshot(unsigned int event, unsigned int control);
 
 extern kern_return_t vm_map_create_upl(
 	vm_map_t		map,
@@ -162,6 +155,8 @@ extern ppnum_t upl_get_highest_page(
 extern upl_size_t upl_get_size(
 	upl_t			upl);
 
+extern void iopl_valid_data(
+	upl_t			upl_ptr);
 
 #ifndef	MACH_KERNEL_PRIVATE
 typedef struct vm_page	*vm_page_t;
@@ -298,12 +293,19 @@ struct upl {
 	vm_object_t	map_object;
 	ppnum_t		highest_page;
 	void*		vector_upl;
+#if CONFIG_IOSCHED
+	int 		upl_priority;
+	uint64_t        *upl_reprio_info;
+	void 		*decmp_io_upl;
+#endif
+#if CONFIG_IOSCHED || UPL_DEBUG
+	thread_t        upl_creator;
+	queue_chain_t	uplq;	    /* List of outstanding upls on an obj */
+#endif
 #if	UPL_DEBUG
 	uintptr_t	ubc_alias1;
 	uintptr_t 	ubc_alias2;
-	queue_chain_t	uplq;	    /* List of outstanding upls on an obj */
-	
-	thread_t	upl_creator;
+		
 	uint32_t	upl_state;
 	uint32_t	upl_commit_index;
 	void	*upl_create_retaddr[UPL_DEBUG_STACK_FRAMES];
@@ -330,11 +332,17 @@ struct upl {
 #define UPL_VECTOR		0x4000
 #define UPL_SET_DIRTY		0x8000
 #define UPL_HAS_BUSY		0x10000
+#define UPL_TRACKED_BY_OBJECT	0x20000
+#define UPL_EXPEDITE_SUPPORTED 	0x40000
+#define UPL_DECMP_REQ 		0x80000
+#define UPL_DECMP_REAL_IO 	0x100000
 
 /* flags for upl_create flags parameter */
 #define UPL_CREATE_EXTERNAL	0
 #define UPL_CREATE_INTERNAL	0x1
 #define UPL_CREATE_LITE		0x2
+#define UPL_CREATE_IO_TRACKING	0x4
+#define UPL_CREATE_EXPEDITE_SUP 0x8
 
 extern upl_t vector_upl_create(vm_offset_t);
 extern void vector_upl_deallocate(upl_t);
@@ -488,6 +496,7 @@ struct vm_page_stats_reusable {
 extern struct vm_page_stats_reusable vm_page_stats_reusable;
 	
 extern int hibernate_flush_memory(void);
+extern void hibernate_reset_stats(void);
 extern void hibernate_create_paddr_map(void);
 
 extern int vm_compressor_mode;
@@ -509,6 +518,8 @@ extern int vm_compressor_thread_count;
 #define DEFAULT_FREEZER_IS_ACTIVE	((vm_compressor_mode & VM_PAGER_FREEZER_DEFAULT) == VM_PAGER_FREEZER_DEFAULT)
 
 #define DEFAULT_FREEZER_COMPRESSED_PAGER_IS_ACTIVE		(vm_compressor_mode & (VM_PAGER_FREEZER_COMPRESSOR_NO_SWAP | VM_PAGER_FREEZER_COMPRESSOR_WITH_SWAP))
+#define DEFAULT_FREEZER_COMPRESSED_PAGER_IS_SWAPLESS		((vm_compressor_mode & VM_PAGER_FREEZER_COMPRESSOR_NO_SWAP) == VM_PAGER_FREEZER_COMPRESSOR_NO_SWAP)
+#define DEFAULT_FREEZER_COMPRESSED_PAGER_IS_SWAPBACKED		((vm_compressor_mode & VM_PAGER_FREEZER_COMPRESSOR_WITH_SWAP) == VM_PAGER_FREEZER_COMPRESSOR_WITH_SWAP)
 
 
 #endif	/* KERNEL_PRIVATE */

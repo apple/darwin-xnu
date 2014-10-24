@@ -198,7 +198,7 @@ vm_shared_region_get(
 
 	SHARED_REGION_TRACE_DEBUG(
 		("shared_region: -> get(%p)\n",
-		 task));
+		 (void *)VM_KERNEL_ADDRPERM(task)));
 
 	task_lock(task);
 	vm_shared_region_lock();
@@ -212,7 +212,8 @@ vm_shared_region_get(
 
 	SHARED_REGION_TRACE_DEBUG(
 		("shared_region: get(%p) <- %p\n",
-		 task, shared_region));
+		 (void *)VM_KERNEL_ADDRPERM(task),
+		 (void *)VM_KERNEL_ADDRPERM(shared_region)));
 
 	return shared_region;
 }
@@ -231,11 +232,12 @@ vm_shared_region_base_address(
 {
 	SHARED_REGION_TRACE_DEBUG(
 		("shared_region: -> base_address(%p)\n",
-		 shared_region));
+		 (void *)VM_KERNEL_ADDRPERM(shared_region)));
 	assert(shared_region->sr_ref_count > 1);
 	SHARED_REGION_TRACE_DEBUG(
 		("shared_region: base_address(%p) <- 0x%llx\n",
-		 shared_region, (long long)shared_region->sr_base_address));
+		 (void *)VM_KERNEL_ADDRPERM(shared_region),
+		 (long long)shared_region->sr_base_address));
 	return shared_region->sr_base_address;
 }
 
@@ -253,11 +255,12 @@ vm_shared_region_size(
 {
 	SHARED_REGION_TRACE_DEBUG(
 		("shared_region: -> size(%p)\n",
-		 shared_region));
+		 (void *)VM_KERNEL_ADDRPERM(shared_region)));
 	assert(shared_region->sr_ref_count > 1);
 	SHARED_REGION_TRACE_DEBUG(
 		("shared_region: size(%p) <- 0x%llx\n",
-		 shared_region, (long long)shared_region->sr_size));
+		 (void *)VM_KERNEL_ADDRPERM(shared_region),
+		 (long long)shared_region->sr_size));
 	return shared_region->sr_size;
 }
 
@@ -275,11 +278,12 @@ vm_shared_region_mem_entry(
 {
 	SHARED_REGION_TRACE_DEBUG(
 		("shared_region: -> mem_entry(%p)\n",
-		 shared_region));
+		 (void *)VM_KERNEL_ADDRPERM(shared_region)));
 	assert(shared_region->sr_ref_count > 1);
 	SHARED_REGION_TRACE_DEBUG(
 		("shared_region: mem_entry(%p) <- %p\n",
-		 shared_region, shared_region->sr_mem_entry));
+		 (void *)VM_KERNEL_ADDRPERM(shared_region),
+		 (void *)VM_KERNEL_ADDRPERM(shared_region->sr_mem_entry)));
 	return shared_region->sr_mem_entry;
 }
 
@@ -289,11 +293,12 @@ vm_shared_region_get_slide(
 {
 	SHARED_REGION_TRACE_DEBUG(
 		("shared_region: -> vm_shared_region_get_slide(%p)\n",
-		 shared_region));
+		 (void *)VM_KERNEL_ADDRPERM(shared_region)));
 	assert(shared_region->sr_ref_count > 1);
 	SHARED_REGION_TRACE_DEBUG(
 		("shared_region: vm_shared_region_get_slide(%p) <- %u\n",
-		 shared_region, shared_region->sr_slide_info.slide));
+		 (void *)VM_KERNEL_ADDRPERM(shared_region),
+		 shared_region->sr_slide_info.slide));
 
 	/* 0 if we haven't slid */
 	assert(shared_region->sr_slide_info.slide_object != NULL || 
@@ -308,11 +313,12 @@ vm_shared_region_get_slide_info(
 {
 	SHARED_REGION_TRACE_DEBUG(
 		("shared_region: -> vm_shared_region_get_slide_info(%p)\n",
-		 shared_region));
+		 (void *)VM_KERNEL_ADDRPERM(shared_region)));
 	assert(shared_region->sr_ref_count > 1);
 	SHARED_REGION_TRACE_DEBUG(
 		("shared_region: vm_shared_region_get_slide_info(%p) <- %p\n",
-		 shared_region, &shared_region->sr_slide_info));
+		 (void *)VM_KERNEL_ADDRPERM(shared_region),
+		 (void *)VM_KERNEL_ADDRPERM(&shared_region->sr_slide_info)));
 	return &shared_region->sr_slide_info;
 }
 
@@ -332,7 +338,8 @@ vm_shared_region_set(
 
 	SHARED_REGION_TRACE_DEBUG(
 		("shared_region: -> set(%p, %p)\n",
-		 task, new_shared_region));
+		 (void *)VM_KERNEL_ADDRPERM(task),
+		 (void *)VM_KERNEL_ADDRPERM(new_shared_region)));
 
 	task_lock(task);
 	vm_shared_region_lock();
@@ -354,7 +361,9 @@ vm_shared_region_set(
 
 	SHARED_REGION_TRACE_DEBUG(
 		("shared_region: set(%p) <- old=%p new=%p\n",
-		 task, old_shared_region, new_shared_region));
+		 (void *)VM_KERNEL_ADDRPERM(task),
+		 (void *)VM_KERNEL_ADDRPERM(old_shared_region),
+		 (void *)VM_KERNEL_ADDRPERM(new_shared_region)));
 }
 
 /*
@@ -375,7 +384,8 @@ vm_shared_region_lookup(
 
 	SHARED_REGION_TRACE_DEBUG(
 		("shared_region: -> lookup(root=%p,cpu=%d,64bit=%d)\n",
-		 root_dir, cputype, is_64bit));
+
+		 (void *)VM_KERNEL_ADDRPERM(root_dir), cputype, is_64bit));
 
 	shared_region = NULL;
 	new_shared_region = NULL;
@@ -431,7 +441,9 @@ done:
 
 	SHARED_REGION_TRACE_DEBUG(
 		("shared_region: lookup(root=%p,cpu=%d,64bit=%d) <- %p\n",
-		 root_dir, cputype, is_64bit, shared_region));
+		 (void *)VM_KERNEL_ADDRPERM(root_dir),
+		 cputype, is_64bit,
+		 (void *)VM_KERNEL_ADDRPERM(shared_region)));
 
 	assert(shared_region->sr_ref_count > 0);
 	return shared_region;
@@ -451,7 +463,7 @@ vm_shared_region_reference_locked(
 
 	SHARED_REGION_TRACE_DEBUG(
 		("shared_region: -> reference_locked(%p)\n",
-		 shared_region));
+		 (void *)VM_KERNEL_ADDRPERM(shared_region)));
 	assert(shared_region->sr_ref_count > 0);
 	shared_region->sr_ref_count++;
 
@@ -472,7 +484,8 @@ vm_shared_region_reference_locked(
 
 	SHARED_REGION_TRACE_DEBUG(
 		("shared_region: reference_locked(%p) <- %d\n",
-		 shared_region, shared_region->sr_ref_count));
+		 (void *)VM_KERNEL_ADDRPERM(shared_region),
+		 shared_region->sr_ref_count));
 }
 
 /*
@@ -485,7 +498,7 @@ vm_shared_region_deallocate(
 {
 	SHARED_REGION_TRACE_DEBUG(
 		("shared_region: -> deallocate(%p)\n",
-		 shared_region));
+		 (void *)VM_KERNEL_ADDRPERM(shared_region)));
 
 	vm_shared_region_lock();
 	
@@ -519,7 +532,8 @@ vm_shared_region_deallocate(
 	shared_region->sr_ref_count--;
 	SHARED_REGION_TRACE_DEBUG(
 		("shared_region: deallocate(%p): ref now %d\n",
-		 shared_region, shared_region->sr_ref_count));
+		 (void *)VM_KERNEL_ADDRPERM(shared_region),
+		 shared_region->sr_ref_count));
 
 	if (shared_region->sr_ref_count == 0) {
 		uint64_t deadline;
@@ -545,7 +559,7 @@ vm_shared_region_deallocate(
 
 			SHARED_REGION_TRACE_DEBUG(
 				("shared_region: deallocate(%p): armed timer\n",
-				 shared_region));
+				 (void *)VM_KERNEL_ADDRPERM(shared_region)));
 
 			vm_shared_region_unlock();
 		} else {
@@ -576,7 +590,7 @@ vm_shared_region_deallocate(
 
 	SHARED_REGION_TRACE_DEBUG(
 		("shared_region: deallocate(%p) <-\n",
-		 shared_region));
+		 (void *)VM_KERNEL_ADDRPERM(shared_region)));
 }
 
 void
@@ -611,7 +625,7 @@ vm_shared_region_create(
 
 	SHARED_REGION_TRACE_DEBUG(
 		("shared_region: -> create(root=%p,cpu=%d,64bit=%d)\n",
-		 root_dir, cputype, is_64bit));
+		 (void *)VM_KERNEL_ADDRPERM(root_dir), cputype, is_64bit));
 
 	base_address = 0;
 	size = 0;
@@ -744,14 +758,20 @@ done:
 			("shared_region: create(root=%p,cpu=%d,64bit=%d,"
 			 "base=0x%llx,size=0x%llx) <- "
 			 "%p mem=(%p,%p) map=%p pmap=%p\n",
-			 root_dir, cputype, is_64bit, (long long)base_address,
-			 (long long)size, shared_region,
-			 mem_entry_port, mem_entry, sub_map, sub_map->pmap));
+			 (void *)VM_KERNEL_ADDRPERM(root_dir),
+			 cputype, is_64bit, (long long)base_address,
+			 (long long)size,
+			 (void *)VM_KERNEL_ADDRPERM(shared_region),
+			 (void *)VM_KERNEL_ADDRPERM(mem_entry_port),
+			 (void *)VM_KERNEL_ADDRPERM(mem_entry),
+			 (void *)VM_KERNEL_ADDRPERM(sub_map),
+			 (void *)VM_KERNEL_ADDRPERM(sub_map->pmap)));
 	} else {
 		SHARED_REGION_TRACE_INFO(
 			("shared_region: create(root=%p,cpu=%d,64bit=%d,"
 			 "base=0x%llx,size=0x%llx) <- NULL",
-			 root_dir, cputype, is_64bit, (long long)base_address,
+			 (void *)VM_KERNEL_ADDRPERM(root_dir),
+			 cputype, is_64bit, (long long)base_address,
 			 (long long)size));
 	}
 	return shared_region;
@@ -770,8 +790,8 @@ vm_shared_region_destroy(
 
 	SHARED_REGION_TRACE_INFO(
 		("shared_region: -> destroy(%p) (root=%p,cpu=%d,64bit=%d)\n",
-		 shared_region,
-		 shared_region->sr_root_dir,
+		 (void *)VM_KERNEL_ADDRPERM(shared_region),
+		 (void *)VM_KERNEL_ADDRPERM(shared_region->sr_root_dir),
 		 shared_region->sr_cpu_type,
 		 shared_region->sr_64bit));
 
@@ -835,7 +855,7 @@ vm_shared_region_destroy(
 
 	SHARED_REGION_TRACE_DEBUG(
 		("shared_region: destroy(%p) <-\n",
-		 shared_region));
+		 (void *)VM_KERNEL_ADDRPERM(shared_region)));
 	shared_region = NULL;
 
 }
@@ -854,7 +874,7 @@ vm_shared_region_start_address(
 
 	SHARED_REGION_TRACE_DEBUG(
 		("shared_region: -> start_address(%p)\n",
-		 shared_region));
+		 (void *)VM_KERNEL_ADDRPERM(shared_region)));
 	assert(shared_region->sr_ref_count > 1);
 
 	vm_shared_region_lock();
@@ -888,17 +908,18 @@ vm_shared_region_start_address(
 	
 	SHARED_REGION_TRACE_DEBUG(
 		("shared_region: start_address(%p) <- 0x%llx\n",
-		 shared_region, (long long)shared_region->sr_base_address));
+		 (void *)VM_KERNEL_ADDRPERM(shared_region),
+		 (long long)shared_region->sr_base_address));
 
 	return kr;
 }
 
 void
 vm_shared_region_undo_mappings(
-			vm_map_t sr_map,
-			mach_vm_offset_t sr_base_address,
-			struct shared_file_mapping_np *mappings,
-			unsigned int mappings_count)
+	vm_map_t sr_map,
+	mach_vm_offset_t sr_base_address,
+	struct shared_file_mapping_np *mappings,
+	unsigned int mappings_count)
 {
 	unsigned int		j = 0;
 	vm_shared_region_t	shared_region = NULL;
@@ -1065,8 +1086,9 @@ vm_shared_region_map_file(
 
 	SHARED_REGION_TRACE_DEBUG(
 		("shared_region: -> map(%p,%d,%p,%p,0x%llx)\n",
-		 shared_region, mappings_count, mappings,
-		 file_control, file_size));
+		 (void *)VM_KERNEL_ADDRPERM(shared_region), mappings_count,
+		 (void *)VM_KERNEL_ADDRPERM(mappings),
+		 (void *)VM_KERNEL_ADDRPERM(file_control), file_size));
 
 	/* get the VM object associated with the file to be mapped */
 	file_object = memory_object_control_to_vm_object(file_control);
@@ -1247,8 +1269,8 @@ vm_shared_region_map_file(
 				 (long long)slide_start,
 				 (long long)slide_size,
 				 kr));
-			vm_shared_region_undo_mappings(NULL,
-						       0,
+			vm_shared_region_undo_mappings(sr_map,
+						       sr_base_address,
 						       mappings,
 						       mappings_count);
 		}
@@ -1270,8 +1292,9 @@ vm_shared_region_map_file(
 done:
 	SHARED_REGION_TRACE_DEBUG(
 		("shared_region: map(%p,%d,%p,%p,0x%llx) <- 0x%x \n",
-		 shared_region, mappings_count, mappings,
-		 file_control, file_size, kr));
+		 (void *)VM_KERNEL_ADDRPERM(shared_region), mappings_count,
+		 (void *)VM_KERNEL_ADDRPERM(mappings),
+		 (void *)VM_KERNEL_ADDRPERM(file_control), file_size, kr));
 	return kr;
 }
 
@@ -1302,7 +1325,9 @@ vm_shared_region_enter(
 	SHARED_REGION_TRACE_DEBUG(
 		("shared_region: -> "
 		 "enter(map=%p,task=%p,root=%p,cpu=%d,64bit=%d)\n",
-		 map, task, fsroot, cpu, is_64bit));
+		 (void *)VM_KERNEL_ADDRPERM(map),
+		 (void *)VM_KERNEL_ADDRPERM(task),
+		 (void *)VM_KERNEL_ADDRPERM(fsroot), cpu, is_64bit));
 
 	/* lookup (create if needed) the shared region for this environment */
 	shared_region = vm_shared_region_lookup(fsroot, cpu, is_64bit);
@@ -1312,7 +1337,9 @@ vm_shared_region_enter(
 			("shared_region: -> "
 			 "enter(map=%p,task=%p,root=%p,cpu=%d,64bit=%d): "
 			 "lookup failed !\n",
-			 map, task, fsroot, cpu, is_64bit));
+			 (void *)VM_KERNEL_ADDRPERM(map),
+			 (void *)VM_KERNEL_ADDRPERM(task),
+			 (void *)VM_KERNEL_ADDRPERM(fsroot), cpu, is_64bit));
 		//panic("shared_region_enter: lookup failed\n");
 		return KERN_FAILURE;
 	}
@@ -1353,17 +1380,23 @@ vm_shared_region_enter(
 			SHARED_REGION_TRACE_ERROR(
 				("shared_region: enter(%p,%p,%p,%d,%d): "
 				 "vm_map_enter(0x%llx,0x%llx,%p) error 0x%x\n",
-				 map, task, fsroot, cpu, is_64bit,
+				 (void *)VM_KERNEL_ADDRPERM(map),
+				 (void *)VM_KERNEL_ADDRPERM(task),
+				 (void *)VM_KERNEL_ADDRPERM(fsroot),
+				 cpu, is_64bit,
 				 (long long)target_address,
-				 (long long)mapping_size, sr_handle, kr));
+				 (long long)mapping_size,
+				 (void *)VM_KERNEL_ADDRPERM(sr_handle), kr));
 			goto done;
 		}
 		SHARED_REGION_TRACE_DEBUG(
 			("shared_region: enter(%p,%p,%p,%d,%d): "
 			 "vm_map_enter(0x%llx,0x%llx,%p) error 0x%x\n",
-			 map, task, fsroot, cpu, is_64bit,
+			 (void *)VM_KERNEL_ADDRPERM(map),
+			 (void *)VM_KERNEL_ADDRPERM(task),
+			 (void *)VM_KERNEL_ADDRPERM(fsroot), cpu, is_64bit,
 			 (long long)target_address, (long long)mapping_size,
-			 sr_handle, kr));
+			 (void *)VM_KERNEL_ADDRPERM(sr_handle), kr));
 		sr_offset += mapping_size;
 		sr_size -= mapping_size;
 	}
@@ -1398,17 +1431,23 @@ vm_shared_region_enter(
 			SHARED_REGION_TRACE_ERROR(
 				("shared_region: enter(%p,%p,%p,%d,%d): "
 				 "vm_map_enter(0x%llx,0x%llx,%p) error 0x%x\n",
-				 map, task, fsroot, cpu, is_64bit,
+				 (void *)VM_KERNEL_ADDRPERM(map),
+				 (void *)VM_KERNEL_ADDRPERM(task),
+				 (void *)VM_KERNEL_ADDRPERM(fsroot),
+				 cpu, is_64bit,
 				 (long long)target_address,
-				 (long long)mapping_size, sr_handle, kr));
+				 (long long)mapping_size,
+				 (void *)VM_KERNEL_ADDRPERM(sr_handle), kr));
 			goto done;
 		}
 		SHARED_REGION_TRACE_DEBUG(
 			("shared_region: enter(%p,%p,%p,%d,%d): "
 			 "nested vm_map_enter(0x%llx,0x%llx,%p) error 0x%x\n",
-			 map, task, fsroot, cpu, is_64bit,
+			 (void *)VM_KERNEL_ADDRPERM(map),
+			 (void *)VM_KERNEL_ADDRPERM(task),
+			 (void *)VM_KERNEL_ADDRPERM(fsroot), cpu, is_64bit,
 			 (long long)target_address, (long long)mapping_size,
-			 sr_handle, kr));
+			 (void *)VM_KERNEL_ADDRPERM(sr_handle), kr));
 	}
 	if (sr_size > 0) {
 		/* and there's some left to be mapped without pmap-nesting */
@@ -1430,17 +1469,23 @@ vm_shared_region_enter(
 			SHARED_REGION_TRACE_ERROR(
 				("shared_region: enter(%p,%p,%p,%d,%d): "
 				 "vm_map_enter(0x%llx,0x%llx,%p) error 0x%x\n",
-				 map, task, fsroot, cpu, is_64bit,
+				 (void *)VM_KERNEL_ADDRPERM(map),
+				 (void *)VM_KERNEL_ADDRPERM(task),
+				 (void *)VM_KERNEL_ADDRPERM(fsroot),
+				 cpu, is_64bit,
 				 (long long)target_address,
-				 (long long)mapping_size, sr_handle, kr));
+				 (long long)mapping_size,
+				 (void *)VM_KERNEL_ADDRPERM(sr_handle), kr));
 			goto done;
 		}
 		SHARED_REGION_TRACE_DEBUG(
 			("shared_region: enter(%p,%p,%p,%d,%d): "
 			 "vm_map_enter(0x%llx,0x%llx,%p) error 0x%x\n",
-			 map, task, fsroot, cpu, is_64bit,
+			 (void *)VM_KERNEL_ADDRPERM(map),
+			 (void *)VM_KERNEL_ADDRPERM(task),
+			 (void *)VM_KERNEL_ADDRPERM(fsroot), cpu, is_64bit,
 			 (long long)target_address, (long long)mapping_size,
-			 sr_handle, kr));
+			 (void *)VM_KERNEL_ADDRPERM(sr_handle), kr));
 		sr_offset += mapping_size;
 		sr_size -= mapping_size;
 	}
@@ -1449,11 +1494,13 @@ vm_shared_region_enter(
 done:
 	SHARED_REGION_TRACE_DEBUG(
 		("shared_region: enter(%p,%p,%p,%d,%d) <- 0x%x\n",
-		 map, task, fsroot, cpu, is_64bit, kr));
+		 (void *)VM_KERNEL_ADDRPERM(map),
+		 (void *)VM_KERNEL_ADDRPERM(task),
+		 (void *)VM_KERNEL_ADDRPERM(fsroot), cpu, is_64bit, kr));
 	return kr;
 }
 
-#define SANE_SLIDE_INFO_SIZE		(1024*1024) /*Can be changed if needed*/
+#define SANE_SLIDE_INFO_SIZE		(2048*1024) /*Can be changed if needed*/
 struct vm_shared_region_slide_info	slide_info;
 
 kern_return_t
@@ -1786,7 +1833,7 @@ _vm_commpage_init(
 
 	SHARED_REGION_TRACE_DEBUG(
 		("commpage: _init(0x%llx) <- %p\n",
-		 (long long)size, *handlep));
+		 (long long)size, (void *)VM_KERNEL_ADDRPERM(*handlep)));
 }
 #endif
 
@@ -1878,7 +1925,8 @@ vm_commpage_enter(
 
 	SHARED_REGION_TRACE_DEBUG(
 		("commpage: -> enter(%p,%p)\n",
-		 map, task));
+		 (void *)VM_KERNEL_ADDRPERM(map),
+		 (void *)VM_KERNEL_ADDRPERM(task)));
 
 	commpage_text_size = _COMM_PAGE_TEXT_AREA_LENGTH;
 	/* the comm page is likely to be beyond the actual end of the VM map */
@@ -1928,8 +1976,10 @@ vm_commpage_enter(
 		SHARED_REGION_TRACE_ERROR(
 			("commpage: enter(%p,0x%llx,0x%llx) "
 			 "commpage %p mapping failed 0x%x\n",
-			 map, (long long)commpage_address,
-			 (long long)commpage_size, commpage_handle, kr));
+			 (void *)VM_KERNEL_ADDRPERM(map),
+			 (long long)commpage_address,
+			 (long long)commpage_size,
+			 (void *)VM_KERNEL_ADDRPERM(commpage_handle), kr));
 	}
 
 	/* map the comm text page in the task's address space */
@@ -1950,8 +2000,10 @@ vm_commpage_enter(
 		SHARED_REGION_TRACE_ERROR(
 			("commpage text: enter(%p,0x%llx,0x%llx) "
 			 "commpage text %p mapping failed 0x%x\n",
-			 map, (long long)commpage_text_address,
-			 (long long)commpage_text_size, commpage_text_handle, kr));
+			 (void *)VM_KERNEL_ADDRPERM(map),
+			 (long long)commpage_text_address,
+			 (long long)commpage_text_size,
+			 (void *)VM_KERNEL_ADDRPERM(commpage_text_handle), kr));
 	}
 
 	/*
@@ -1975,14 +2027,16 @@ vm_commpage_enter(
 			SHARED_REGION_TRACE_ERROR(
 				("commpage: enter(%p,0x%llx,0x%llx) "
 				 "objc mapping failed 0x%x\n",
-				 map, (long long)objc_address,
+				 (void *)VM_KERNEL_ADDRPERM(map),
+				 (long long)objc_address,
 				 (long long)objc_size, kr));
 		}
 	}
 
 	SHARED_REGION_TRACE_DEBUG(
 		("commpage: enter(%p,%p) <- 0x%x\n",
-		 map, task, kr));
+		 (void *)VM_KERNEL_ADDRPERM(map),
+		 (void *)VM_KERNEL_ADDRPERM(task), kr));
 	return kr;
 }
 

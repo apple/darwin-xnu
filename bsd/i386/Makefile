@@ -9,14 +9,14 @@ include $(MakeInc_def)
 
 DATAFILES = \
 	endian.h fasttrap_isa.h param.h \
-	profile.h setjmp.h signal.h limits.h _limits.h \
-	types.h vmparam.h _structs.h _types.h _param.h \
+	profile.h signal.h limits.h _limits.h \
+	types.h vmparam.h _types.h _param.h \
 	_mcontext.h
 
 KERNELFILES = \
 	endian.h param.h \
-	profile.h setjmp.h signal.h limits.h _limits.h \
-	types.h vmparam.h _structs.h _types.h _param.h \
+	profile.h signal.h limits.h _limits.h \
+	types.h vmparam.h _types.h _param.h \
 	_mcontext.h
 
 

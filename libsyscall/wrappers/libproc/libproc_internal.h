@@ -30,38 +30,6 @@
 
 __BEGIN_DECLS
 
-#if TARGET_OS_EMBEDDED
-
-#define PROC_SETCPU_ACTION_NONE		0
-#define PROC_SETCPU_ACTION_THROTTLE	1
-#define PROC_SETCPU_ACTION_SUSPEND	2
-#define PROC_SETCPU_ACTION_TERMINATE	3
-#define PROC_SETCPU_ACTION_NOTIFY	4
-
-int proc_setcpu_percentage(pid_t pid, int action, int percentage) __OSX_AVAILABLE_STARTING(__MAC_NA, __IPHONE_5_0);
-int proc_setcpu_deadline(pid_t pid, int action, uint64_t deadline) __OSX_AVAILABLE_STARTING(__MAC_NA, __IPHONE_5_0);
-int proc_setcpu_percentage_withdeadline(pid_t pid, int action, int percentage, uint64_t deadline) __OSX_AVAILABLE_STARTING(__MAC_NA, __IPHONE_5_0);
-int proc_clear_cpulimits(pid_t pid) __OSX_AVAILABLE_STARTING(__MAC_NA, __IPHONE_5_0);
-
-#define PROC_APPSTATE_NONE		0
-#define PROC_APPSTATE_ACTIVE		1
-#define PROC_APPSTATE_BACKGROUND	2
-#define PROC_APPSTATE_NONUI		3
-#define PROC_APPSTATE_INACTIVE		4
-
-int proc_setappstate(int pid, int appstate);
-int proc_appstate(int pid, int * appstatep);
-
-#define PROC_DEVSTATUS_SHORTTERM	1
-#define PROC_DEVSTATUS_LONGTERM		2
-
-int proc_devstatusnotify(int devicestatus);
-
-#define PROC_PIDBIND_CLEAR	0
-#define PROC_PIDBIND_SET	1
-int proc_pidbind(int pid, uint64_t threadid, int bind);
-
-#else /* TARGET_OS_EMBEDDED */
 
 /* resume the process suspend due to low VM resource */
 int proc_clear_vmpressure(pid_t pid);
@@ -88,18 +56,26 @@ int proc_clear_delayidlesleep(void);
 int proc_disable_apptype(pid_t pid, int apptype);
 int proc_enable_apptype(pid_t pid, int apptype);
 
-#endif /* TARGET_OS_EMBEDDED */
 
 /* mark process as importance donating */
 int proc_donate_importance_boost(void);
 
+/* DEPRECATED: supported for backward compatibility only */
 /* check the message for an importance boost and take an assertion on it */
 int proc_importance_assertion_begin_with_msg(mach_msg_header_t  *msg,
-											 mach_msg_trailer_t *trailer,
-											 uint64_t *assertion_token);
+					     mach_msg_trailer_t *trailer,
+					     uint64_t *assertion_token) __OSX_AVAILABLE_BUT_DEPRECATED(__MAC_10_8, __MAC_10_10, __IPHONE_6_0, __IPHONE_8_0);
 
+/* DEPRECATED: supported for backward compatibility only */
 /* drop an assertion */
 int proc_importance_assertion_complete(uint64_t assertion_handle);
+
+/* check the message for a App De-Nap boost and take an assertion on it */
+int proc_denap_assertion_begin_with_msg(mach_msg_header_t  *msg,
+					uint64_t *assertion_token);
+
+/* drop a de-nap assertion */
+int proc_denap_assertion_complete(uint64_t assertion_handle);
 
 int proc_set_cpumon_params(pid_t pid, int percentage, int interval) __OSX_AVAILABLE_STARTING(__MAC_10_8, __IPHONE_6_0);
 int proc_get_cpumon_params(pid_t pid, int *percentage, int *interval) __OSX_AVAILABLE_STARTING(__MAC_10_8, __IPHONE_6_0);
@@ -110,6 +86,14 @@ int proc_set_wakemon_params(pid_t pid, int rate_hz, int flags) __OSX_AVAILABLE_S
 int proc_get_wakemon_params(pid_t pid, int *rate_hz, int *flags) __OSX_AVAILABLE_STARTING(__MAC_10_9, __IPHONE_7_0);
 int proc_set_wakemon_defaults(pid_t pid) __OSX_AVAILABLE_STARTING(__MAC_10_9, __IPHONE_7_0);
 int proc_disable_wakemon(pid_t pid) __OSX_AVAILABLE_STARTING(__MAC_10_9, __IPHONE_7_0);
+
+int proc_set_cpumon_params_fatal(pid_t pid, int percentage, int interval) __OSX_AVAILABLE_STARTING(__MAC_10_10, __IPHONE_8_0);
+
+/* request trace buffer collection */
+int proc_trace_log(pid_t pid, uint64_t uniqueid) __OSX_AVAILABLE_STARTING(__MAC_10_10, __IPHONE_8_0);
+
+/* proc_info call to get the originator information */
+int proc_pidoriginatorinfo(int flavor,  void *buffer, int buffersize) __OSX_AVAILABLE_STARTING(__MAC_10_10, __IPHONE_8_0);
 
 #if !TARGET_IPHONE_SIMULATOR
 

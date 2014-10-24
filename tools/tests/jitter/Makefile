@@ -7,13 +7,13 @@ endif
 
 OBJROOT?=$(shell /bin/pwd)
 
-CC:=xcrun -sdk "$(SDKROOT)" cc
+CC:=$(shell xcrun -sdk "$(SDKROOT)" -find cc)
 
 ifdef RC_ARCHS
     ARCHS:=$(RC_ARCHS)
   else
     ifeq "$(Embedded)" "YES"
-      ARCHS:=armv7 armv7s
+      ARCHS:=armv7 armv7s arm64
     else
       ARCHS:=x86_64 i386
   endif

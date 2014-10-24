@@ -79,7 +79,7 @@ mach_vm_deallocate(
 		rv = _kernelrpc_mach_vm_deallocate(target, address, size);
 
 	if (__syscall_logger) {
-		__syscall_logger(stack_logging_type_vm_deallocate, (uintptr_t)target, (uintptr_t)address, size, 0, 0);
+		__syscall_logger(stack_logging_type_vm_deallocate, (uintptr_t)target, (uintptr_t)address, (uintptr_t)size, 0, 0);
 	}
 
 	return (rv);

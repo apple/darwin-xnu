@@ -1,7 +1,5 @@
 /*
- * @APPLE_LICENSE_HEADER_START@
- * 
- * Copyright (c) 2012 Apple Computer, Inc.  All Rights Reserved.
+ * Copyright (c) 2012-2014 Apple Computer, Inc.  All Rights Reserved.
  * 
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -37,6 +35,8 @@
 extern "C" {
 #endif
 
+#define IOR_VALUES_PER_ELEMENT  4
+
 /*! @const      kIOReportInvalidValue
     @const      kIOReportInvalidIntValue
     @abstract   cardinal value used to indicate data errors
@@ -46,16 +46,30 @@ extern "C" {
         same bit pattern so that clients checking for one or the other
         don't have to worry about getting the signedness right.
 */
-#define kIOReportInvalidValue UINT64_MAX
-#define kIOReportInvalidIntValue (int64_t)kIOReportInvalidValue
+#define kIOReportInvalidIntValue INT64_MIN
+#define kIOReportInvalidValue (uint64_t)kIOReportInvalidIntValue
 
-// IOReportChannelType.categories
+/*! @typedef    IOReportCategories
+    @abstract   encapsulate important, multi-purpose "tags" for channels
+
+    @discussion
+        IOReportCategories is the type for the .categories field of
+        IOReportChanelType.  These categories are inteded to empower a
+        limited number of clients to retrieve a broad range of channels
+        without knowing much about them.  They can be OR'd together as
+        needed.  Groups and subgroups are a more extensible mechanism
+        for aggregating channels produced by different drivers.
+*/
 typedef uint16_t IOReportCategories;                                                                                                
 #define kIOReportCategoryPower           (1 << 1)       // and energy
-#define kIOReportCategoryTraffic         (1 << 2)                                                                                   
-#define kIOReportCategoryPerformance     (1 << 3)
-#define kIOReportCategoryPeripheral      (1 << 4)                                                                                   
+#define kIOReportCategoryTraffic         (1 << 2)       // I/O at any level
+#define kIOReportCategoryPerformance     (1 << 3)       // e.g. cycles/byte
+#define kIOReportCategoryPeripheral      (1 << 4)       // not built-in
+
+#define kIOReportCategoryField           (1 << 8)       // consider logging
+
 // future categories TBD
+#define kIOReportCategoryInterrupt       (1 << 14)      // TBR: 15850269
 #define kIOReportCategoryDebug           (1 << 15)
 #define kIOReportInvalidCategory         UINT16_MAX               
 
@@ -66,7 +80,8 @@ enum {
    kIOReportInvalidFormat = 0,
    kIOReportFormatSimple = 1,
    kIOReportFormatState = 2,
-   kIOReportFormatHistogram = 3
+   kIOReportFormatHistogram = 3,
+   kIOReportFormatSimpleArray = 4
 };
 
 // simple report values
@@ -77,6 +92,11 @@ typedef struct {
     uint64_t    reserved3;
 } __attribute((packed)) IOSimpleReportValues;
 
+// simple value array
+typedef struct {
+    int64_t    simple_values[IOR_VALUES_PER_ELEMENT];
+} __attribute((packed)) IOSimpleArrayReportValues;
+
 // state report values
 typedef struct {
     uint64_t    state_id;           // 0..N-1 or 8-char code (see MAKEID())
@@ -85,13 +105,15 @@ typedef struct {
     uint64_t    last_intransition;  // ticks at last in-transition
 } __attribute((packed)) IOStateReportValues;
 
-// histograme report values
+// histogram report values
 typedef struct {
     uint64_t    bucket_hits;
     int64_t     bucket_min;
     int64_t     bucket_max;
     int64_t     bucket_sum;
 } __attribute((packed)) IOHistogramReportValues;
+
+
 
 // configuration actions generally change future behavior
 typedef uint32_t IOReportConfigureAction;
@@ -168,7 +190,7 @@ typedef struct {
 } IOReportInterestList;
 
 typedef struct {
-    uint64_t                v[4];
+    uint64_t                v[IOR_VALUES_PER_ELEMENT];
 } __attribute((packed)) IOReportElementValues;
 
 typedef struct {

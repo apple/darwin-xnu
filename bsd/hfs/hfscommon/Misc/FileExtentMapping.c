@@ -97,7 +97,9 @@ Internal Routines:
 					and was in the extents file, then delete the record instead.
 */
 
+#if CONFIG_HFS_STD
 static const int64_t kTwoGigabytes = 0x80000000LL;
+#endif
 
 enum
 {
@@ -1169,6 +1171,8 @@ OSErr ExtendFileC (
 	else {
 		wantContig = true;
 	}
+
+
 	useMetaZone = flags & kEFMetadataMask;
 	do {
 		if (blockHint != 0)
@@ -1185,10 +1189,12 @@ OSErr ExtendFileC (
 		if (availbytes <= 0) {
 			err = dskFulErr;
 		} else {
-			if (wantContig && (availbytes < bytesToAdd))
+			if (wantContig && (availbytes < bytesToAdd)) {
 				err = dskFulErr;
+			}
 			else {
 				uint32_t ba_flags = 0;
+
 				if (wantContig) {
 					ba_flags |= HFS_ALLOC_FORCECONTIG;	
 				}
@@ -1367,9 +1373,9 @@ Exit:
 
 #if CONFIG_HFS_STD
 HFS_Std_Overflow:
-#endif
 	err = fileBoundsErr;
 	goto ErrorExit;
+#endif
 }
 
 

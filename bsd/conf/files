@@ -5,13 +5,8 @@
 # the terms and conditions for use and redistribution.
 #
 
-#
-# N.B. "kern/lock.c" is listed as "optional cpus" so that config will
-# create an "cpus.h" file.
-#
 OPTIONS/hw_ast				optional hw_ast
 OPTIONS/hw_footprint			optional hw_footprint
-OPTIONS/kernserv			optional kernserv
 OPTIONS/config_macf			optional config_macf
 OPTIONS/config_macf_socket_subset	optional config_macf_socket_subset
 OPTIONS/config_macf_socket		optional config_macf_socket
@@ -21,37 +16,23 @@ OPTIONS/mach_compat			optional mach_compat
 OPTIONS/mach_counters			optional mach_counters
 OPTIONS/mach_debug			optional mach_debug
 OPTIONS/mach_fastlink			optional mach_fastlink
-OPTIONS/mach_fixpri			optional mach_fixpri
 OPTIONS/mach_host			optional mach_host
-OPTIONS/mach_ipc_compat			optional mach_ipc_compat
 OPTIONS/mach_ipc_debug			optional mach_ipc_debug
-OPTIONS/mach_ipc_test			optional mach_ipc_test
 OPTIONS/mach_ldebug			optional mach_ldebug
 OPTIONS/mach_load			optional mach_load
-OPTIONS/mach_machine_routines		optional mach_machine_routines
-OPTIONS/rev_endian_fs			optional rev_endian_fs
 OPTIONS/mach_net			optional mach_net
 OPTIONS/mach_np				optional mach_np
-OPTIONS/mach_old_vm_copy		optional mach_old_vm_copy
 OPTIONS/mach_pagemap			optional mach_pagemap
 OPTIONS/mach_sctimes			optional mach_sctimes
 OPTIONS/mach_vm_debug			optional mach_vm_debug
 OPTIONS/mach_xp				optional mach_xp
 OPTIONS/mach_xp_fpd			optional mach_xp_fpd
 OPTIONS/quota				optional quota
-OPTIONS/simple_clock			optional simple_clock
 OPTIONS/xpr_debug			optional xpr_debug
 OPTIONS/kdebug				optional kdebug
 OPTIONS/nfsclient			optional nfsclient
 OPTIONS/nfsserver			optional nfsserver
-OPTIONS/driverkit			optional driverkit
-OPTIONS/mallocdebug			optional mallocdebug
-OPTIONS/kernobjc			optional kernobjc
 OPTIONS/kernremote			optional kernremote
-OPTIONS/uxpr				optional uxpr
-OPTIONS/kernel_stack			optional kernel_stack
-OPTIONS/new_vm_code			optional new_vm_code
-OPTIONS/old_vm_code			optional old_vm_code
 OPTIONS/compat_43			optional compat_43
 OPTIONS/diagnostic			optional diagnostic
 OPTIONS/config_dtrace			optional config_dtrace
@@ -64,10 +45,10 @@ OPTIONS/development			optional development
 OPTIONS/sysv_sem			optional sysv_sem
 OPTIONS/sysv_msg			optional sysv_msg
 OPTIONS/sysv_shm			optional sysv_shm
-OPTIONS/no_bsd_inlines		optional no_bsd_inlines
 OPTIONS/importance_inheritance		optional importance_inheritance
 OPTIONS/importance_debug		optional importance_debug
 OPTIONS/in_kernel_tests			optional config_in_kernel_tests
+OPTIONS/config_ecc_logging		optional config_ecc_logging
 
 #
 # Network options
@@ -77,7 +58,6 @@ OPTIONS/inet				optional inet
 OPTIONS/inet6				optional inet6
 OPTIONS/ipv6send			optional ipv6send
 OPTIONS/ether				optional ether
-OPTIONS/mrouting			optional mrouting
 OPTIONS/vlan				optional vlan
 OPTIONS/bond				optional bond
 OPTIONS/bpfilter			optional bpfilter
@@ -108,17 +88,11 @@ OPTIONS/zlib				optional zlib
 #
 # Filesystem options
 #
-OPTIONS/ffs					optional ffs
 OPTIONS/hfs					optional hfs
-OPTIONS/mfs					optional mfs
 OPTIONS/fdesc				optional fdesc
 OPTIONS/fifo				optional fifo
 OPTIONS/devfs				optional devfs
 OPTIONS/crypto				optional crypto
-OPTIONS/allcrypto			optional allcrypto
-OPTIONS/journaling			optional journaling
-OPTIONS/crypto				optional crypto
-OPTIONS/allcrypto			optional allcrypto
 OPTIONS/journaling			optional journaling
 OPTIONS/hfs_compression		optional hfs_compression
 
@@ -163,16 +137,11 @@ bsd/dev/dtrace/systrace.c		optional config_dtrace
 bsd/dev/dtrace/profile_prvd.c		optional config_dtrace
 bsd/dev/dtrace/fasttrap.c		optional config_dtrace
 
-bsd/dev/random/randomdev.c							standard
-bsd/dev/random/fips_sha1.c		standard
-bsd/dev/random/YarrowCoreLib/port/smf.c				standard
-bsd/dev/random/YarrowCoreLib/src/comp.c				standard
-bsd/dev/random/YarrowCoreLib/src/prng.c				standard
-bsd/dev/random/YarrowCoreLib/src/sha1mod.c			standard
-bsd/dev/random/YarrowCoreLib/src/yarrowUtils.c		standard
+bsd/dev/random/randomdev.c		standard
 
 bsd/dev/memdev.c			standard
-bsd/dev/munge.c 			standard
+bsd/dev/mem.c				standard
+bsd/dev/munge.c 			optional config_requires_u32_munging
 bsd/dev/unix_startup.c			standard
 
 bsd/dev/vn/vn.c				optional vndevice
@@ -257,6 +226,7 @@ bsd/net/if_utun_crypto.c		optional networking
 bsd/net/if_utun_crypto_dtls.c		optional networking
 bsd/net/if_utun_crypto_ipsec.c		optional networking
 bsd/net/if_ipsec.c          		optional ipsec
+bsd/net/necp.c          		optional necp
 bsd/net/if_pflog.c			optional pflog
 bsd/net/pf.c				optional pf
 bsd/net/pf_if.c				optional pf
@@ -270,6 +240,8 @@ bsd/net/pktap.c				optional networking
 bsd/net/if_llreach.c          		optional networking
 bsd/net/flowhash.c			optional networking
 bsd/net/flowadv.c			optional networking
+bsd/net/content_filter.c		optional content_filter
+bsd/net/packet_mangler.c		optional packet_mangler
 
 bsd/net/classq/classq.c			optional networking
 bsd/net/classq/classq_blue.c		optional classq_blue
@@ -313,7 +285,6 @@ bsd/netinet/ip_fw2_compat.c		optional ipfw2
 bsd/netinet/ip_icmp.c			optional inet
 bsd/netinet/ip_id.c			optional inet
 bsd/netinet/ip_input.c			optional inet
-bsd/netinet/ip_mroute.c			optional mrouting
 bsd/netinet/ip_output.c			optional inet
 bsd/netinet/raw_ip.c			optional inet
 bsd/netinet/tcp_debug.c			optional tcpdebug
@@ -323,8 +294,11 @@ bsd/netinet/tcp_sack.c			optional inet
 bsd/netinet/tcp_subr.c			optional inet
 bsd/netinet/tcp_timer.c			optional inet
 bsd/netinet/tcp_usrreq.c		optional inet
+bsd/netinet/tcp_cc.c			optional inet
 bsd/netinet/tcp_newreno.c		optional inet
-bsd/netinet/tcp_lro.c                   optional inet
+bsd/netinet/tcp_cubic.c			optional inet
+bsd/netinet/cbrtf.c			optional inet
+bsd/netinet/tcp_lro.c			optional inet
 bsd/netinet/tcp_ledbat.c		optional inet
 bsd/netinet/udp_usrreq.c		optional inet
 bsd/netinet/in_gif.c      		optional gif inet
@@ -358,7 +332,6 @@ bsd/netinet6/ip6_fw.c      		    optional inet6 ipfw2
 bsd/netinet6/ip6_forward.c  		optional inet6
 bsd/netinet6/in6_ifattach.c 		optional inet6
 bsd/netinet6/ip6_input.c    		optional inet6
-bsd/netinet6/ip6_mroute.c   		optional mrouting inet6
 bsd/netinet6/ip6_output.c   		optional inet6
 bsd/netinet6/in6_src.c      		optional inet6
 bsd/netinet6/ipcomp_core.c  		optional ipsec
@@ -386,9 +359,6 @@ bsd/netkey/key_debug.c    		optional ipsec
 bsd/netkey/keysock.c      		optional ipsec
 bsd/netkey/keydb.c      		optional ipsec
 
-bsd/crypto/blowfish/bf_enc.c      	optional crypto allcrypto
-bsd/crypto/blowfish/bf_skey.c     	optional crypto allcrypto
-bsd/crypto/cast128/cast128.c      	optional crypto allcrypto
 bsd/crypto/rc4/rc4.c              	optional crypto
 
 #bsd/netpm/pm_aTT.c        optional pm
@@ -417,6 +387,7 @@ bsd/hfs/hfs_lookup.c				optional hfs
 bsd/hfs/hfs_notification.c			optional hfs
 bsd/hfs/hfs_quota.c				optional quota
 bsd/hfs/hfs_readwrite.c				optional hfs
+bsd/hfs/hfs_resize.c				optional hfs
 bsd/hfs/hfs_search.c				optional hfs
 bsd/hfs/hfs_vfsops.c				optional hfs
 bsd/hfs/hfs_vfsutils.c				optional hfs
@@ -466,6 +437,7 @@ bsd/kern/kern_clock.c			standard
 bsd/kern/kern_core.c			standard
 bsd/kern/kern_credential.c		standard
 bsd/kern/kern_cs.c			standard
+bsd/kern/kern_csr.c			optional config_csr
 bsd/kern/kern_symfile.c			standard
 bsd/kern/kern_descrip.c			standard
 bsd/kern/kern_guarded.c			standard
@@ -492,6 +464,7 @@ bsd/kern/kern_newsysctl.c		standard
 bsd/kern/kern_memorystatus.c	optional config_memorystatus
 bsd/kern/kern_mib.c			standard
 bsd/kern/kpi_mbuf.c			optional sockets
+bsd/kern/kern_sfi.c			standard
 bsd/kern/kern_time.c			standard
 bsd/kern/kern_xxx.c			standard
 bsd/kern/mach_process.c			standard
@@ -506,12 +479,14 @@ bsd/kern/sys_generic.c			standard
 bsd/kern/sys_pipe.c			standard
 bsd/kern/sys_socket.c			optional sockets
 bsd/kern/sys_domain.c			optional sockets
+bsd/kern/sys_coalition.c		optional config_coalitions
 ./syscalls.c				standard
 bsd/kern/tty.c				standard
 bsd/kern/tty_compat.c			standard
 bsd/kern/tty_conf.c			standard
-bsd/kern/tty_pty.c			optional pty
+bsd/kern/tty_dev.c			optional ptmx pty
 bsd/kern/tty_ptmx.c			optional ptmx
+bsd/kern/tty_pty.c			optional pty
 bsd/kern/tty_subr.c			standard
 bsd/kern/tty_tty.c			standard
 bsd/kern/ubc_subr.c			standard
@@ -547,6 +522,8 @@ bsd/vm/vm_unix.c				standard
 bsd/vm/dp_backing_file.c		standard
 bsd/vm/vm_compressor_backing_file.c	standard
 
+bsd/kern/kern_ecc.c			optional config_ecc_logging
+
 bsd/uxkern/ux_exception.c		standard
 
 bsd/conf/param.c			standard
@@ -563,4 +540,3 @@ bsd/kern/kern_kpc.c			optional kpc
 bsd/kern/kern_tests.c			optional config_in_kernel_tests
 
 bsd/kern/proc_uuid_policy.c		optional config_proc_uuid_policy
-

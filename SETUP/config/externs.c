@@ -33,15 +33,7 @@
  * it will build from ``Makefile.vax'' and use ``../vax/inline''
  * in the makerules, etc.
  */
-int	machine;
 const char	*machinename;
-
-/*
- * For each machine, a set of CPU's may be specified as supported.
- * These and the options (below) are put in the C flags in the makefile.
- */
-
-struct cputype  *cputype;
 
 /*
  * In order to configure and build outside the kernel source tree,
@@ -58,15 +50,7 @@ char *config_directory;
  */
 struct opt *opt, *mkopt, *opt_tail, *mkopt_tail;
 
-char	*ident;
-
 int	do_trace;
-
-#if	MACHINE_VAX
-int	seen_mba, seen_uba;
-#endif
-
-int	seen_vme, seen_mbii;
 
 struct	device *dtab;
 
@@ -77,6 +61,4 @@ struct	file_list *ftab, *conf_list, **confp;
 char	*build_directory;
 
 int	profiling = 0;
-
-int	maxusers;
 

@@ -83,6 +83,7 @@
 #include <kern/ipc_kobject.h>
 
 #include <ipc/ipc_types.h>
+#include <ipc/ipc_importance.h>
 #include <ipc/port.h>
 #include <ipc/ipc_space.h>
 #include <ipc/ipc_entry.h>
@@ -92,7 +93,6 @@
 #include <ipc/ipc_notify.h>
 #include <ipc/ipc_port.h>
 #include <ipc/ipc_pset.h>
-#include <ipc/ipc_labelh.h>
 
 #include <security/mac_mach_internal.h>
 
@@ -341,9 +341,6 @@ ipc_object_alloc(
 		ipc_port_t port = (ipc_port_t)object;
 
 		bzero((char *)port, sizeof(*port));
-#if CONFIG_MACF_MACH
-		mac_port_label_init(&port->ip_label);
-#endif
 	} else if (otype == IOT_PORT_SET) {
 		ipc_pset_t pset = (ipc_pset_t)object;
 
@@ -412,9 +409,6 @@ ipc_object_alloc_name(
 		ipc_port_t port = (ipc_port_t)object;
 
 		bzero((char *)port, sizeof(*port));
-#if CONFIG_MACF_MACH
-		mac_port_label_init(&port->ip_label);
-#endif
 	} else if (otype == IOT_PORT_SET) {
 		ipc_pset_t pset = (ipc_pset_t)object;
 
@@ -461,7 +455,6 @@ ipc_object_copyin_type(
 	switch (msgt_name) {
 
 	    case MACH_MSG_TYPE_MOVE_RECEIVE:
-	    case MACH_MSG_TYPE_COPY_RECEIVE:
 		return MACH_MSG_TYPE_PORT_RECEIVE;
 
 	    case MACH_MSG_TYPE_MOVE_SEND_ONCE:
@@ -473,6 +466,10 @@ ipc_object_copyin_type(
 	    case MACH_MSG_TYPE_COPY_SEND:
 		return MACH_MSG_TYPE_PORT_SEND;
 
+	    case MACH_MSG_TYPE_DISPOSE_RECEIVE:
+	    case MACH_MSG_TYPE_DISPOSE_SEND:
+	    case MACH_MSG_TYPE_DISPOSE_SEND_ONCE:
+		/* fall thru */
 	    default:
 		return MACH_MSG_TYPE_PORT_NONE;
 	}
@@ -544,8 +541,8 @@ ipc_object_copyin(
 	}
 
 #if IMPORTANCE_INHERITANCE
-	if (assertcnt > 0 && current_task()->imp_receiver != 0) {
-		task_importance_drop_internal_assertion(current_task(), assertcnt);
+	if (0 < assertcnt && ipc_importance_task_is_any_receiver_type(current_task()->task_imp_base)) {
+		ipc_importance_task_drop_internal_assertion(current_task()->task_imp_base, assertcnt);
 	}
 #endif /* IMPORTANCE_INHERITANCE */
 
@@ -866,7 +863,7 @@ ipc_object_copyout_name(
 
 #if IMPORTANCE_INHERITANCE
 	int assertcnt = 0;
-	task_t task = TASK_NULL;
+	ipc_importance_task_t task_imp = IIT_NULL;
 #endif /* IMPORTANCE_INHERITANCE */
 
 	assert(IO_VALID(object));
@@ -923,11 +920,12 @@ ipc_object_copyout_name(
 	if (msgt_name == MACH_MSG_TYPE_PORT_RECEIVE) {
 		ipc_port_t port = (ipc_port_t)object;
 
-		if ((space->is_task != TASK_NULL) &&
-		    (space->is_task->imp_receiver != 0)) {
-			assertcnt = port->ip_impcount;
-			task = space->is_task;
-			task_reference(task);
+		if (space->is_task != TASK_NULL) {
+			task_imp = space->is_task->task_imp_base;
+			if (ipc_importance_task_is_any_receiver_type(task_imp)) {
+				assertcnt = port->ip_impcount;
+				ipc_importance_task_reference(task_imp);
+			}
 		}
 
 		/* take port out of limbo */
@@ -947,10 +945,9 @@ ipc_object_copyout_name(
 	/*
 	 * Add the assertions to the task that we captured before
 	 */
-	if (task != TASK_NULL) {
-		if (assertcnt > 0)
-			task_importance_hold_internal_assertion(task, assertcnt);
-		task_deallocate(task);
+	if (task_imp != IIT_NULL) {
+		ipc_importance_task_hold_internal_assertion(task_imp, assertcnt);
+		ipc_importance_task_release(task_imp);
 	}
 #endif /* IMPORTANCE_INHERITANCE */
 
@@ -1101,31 +1098,6 @@ ipc_object_rename(
 	/* space is unlocked */
 	return kr;
 }
-
-/*
- * Get a label out of a port, to be used by a kernel call
- * that takes a security label as a parameter. In this case, we want
- * to use the label stored in the label handle and not the label on its
- * port.
- *
- * The port should be locked for this call. The lock protecting
- * label handle contents should not be necessary, as they can only
- * be modified when a label handle with one reference is a task label.
- * User allocated label handles can never be modified.
- */
-#if CONFIG_MACF_MACH
-struct label *io_getlabel (ipc_object_t objp)
-{
-	ipc_port_t port = (ipc_port_t)objp;
-
-	assert(io_otype(objp) == IOT_PORT);
-
-	if (ip_kotype(port) == IKOT_LABELH)
-		return &((ipc_labelh_t) port->ip_kobject)->lh_label;
-	else
-		return &port->ip_label;
-}
-#endif
 
 /*
  *	Check whether the object is a port if so, free it.  But

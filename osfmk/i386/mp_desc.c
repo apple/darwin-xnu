@@ -67,7 +67,7 @@
 #include <vm/vm_kern.h>
 #include <vm/vm_map.h>
 
-#include <i386/lock.h>
+#include <i386/bit_routines.h>
 #include <i386/mp_desc.h>
 #include <i386/misc_protos.h>
 #include <i386/mp.h>
@@ -646,6 +646,16 @@ cpu_data_alloc(boolean_t is_boot_cpu)
 	cdp->cpu_number = real_ncpus;
 	real_ncpus++;
 	simple_unlock(&ncpus_lock);
+
+	/*
+	 * Before this cpu has been assigned a real thread context,
+	 * we give it a fake, unique, non-zero thread id which the locking
+	 * primitives use as their lock value.
+	 * Note that this does not apply to the boot processor, cpu 0, which
+	 * transitions to a thread context well before other processors are
+	 * started.
+	 */
+	cdp->cpu_active_thread = (thread_t) (uintptr_t) cdp->cpu_number;
 
 	cdp->cpu_nanotime = &pal_rtc_nanotime_info;
 

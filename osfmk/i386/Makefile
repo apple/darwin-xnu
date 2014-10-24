@@ -9,6 +9,7 @@ include $(MakeInc_def)
 EXPORT_ONLY_FILES = 	\
 		    apic.h \
 		    asm.h \
+		    bit_routines.h \
 		    cpu_number.h \
 		    cpu_capabilities.h	\
 		    cpu_data.h \
@@ -28,6 +29,7 @@ EXPORT_ONLY_FILES = 	\
 		    pal_native.h \
 		    pal_routines.h \
 		    pal_hibernate.h \
+			panic_hooks.h \
 		    pmCPU.h \
 		    pmap.h \
 		    proc_reg.h \
@@ -47,7 +49,7 @@ INSTALL_MD_LCL_LIST = cpu_capabilities.h
 
 INSTALL_KF_MD_LIST = asm.h cpuid.h eflags.h locks.h machine_routines.h proc_reg.h vmx.h
 
-INSTALL_KF_MD_LCL_LIST = $(filter-out cpu_data.h pal_i386.h, $(EXPORT_ONLY_FILES))
+INSTALL_KF_MD_LCL_LIST = $(filter-out bit_routines.h cpu_data.h pal_i386.h, $(EXPORT_ONLY_FILES))
 
 EXPORT_MD_LIST = ${EXPORT_ONLY_FILES}
 

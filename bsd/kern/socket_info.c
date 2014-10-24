@@ -149,12 +149,14 @@ fill_socketinfo(struct socket *so, struct socket_info *si)
 			si->soi_kind = SOCKINFO_TCP;
 
 			tcpsi->tcpsi_state = tp->t_state;
-			tcpsi->tcpsi_timer[TCPT_REXMT] =
+			tcpsi->tcpsi_timer[TSI_T_REXMT] =
 			    tp->t_timer[TCPT_REXMT];
-			tcpsi->tcpsi_timer[TCPT_PERSIST] =
+			tcpsi->tcpsi_timer[TSI_T_PERSIST] =
 			    tp->t_timer[TCPT_PERSIST];
-			tcpsi->tcpsi_timer[TCPT_KEEP] = tp->t_timer[TCPT_KEEP];
-			tcpsi->tcpsi_timer[TCPT_2MSL] = tp->t_timer[TCPT_2MSL];
+			tcpsi->tcpsi_timer[TSI_T_KEEP] =
+			    tp->t_timer[TCPT_KEEP];
+			tcpsi->tcpsi_timer[TSI_T_2MSL] =
+			    tp->t_timer[TCPT_2MSL];
 			tcpsi->tcpsi_mss = tp->t_maxseg;
 			tcpsi->tcpsi_flags = tp->t_flags;
 			tcpsi->tcpsi_tp =

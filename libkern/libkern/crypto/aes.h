@@ -73,7 +73,7 @@ aes_rval aes_encrypt_key(const unsigned char *key, int key_len, aes_encrypt_ctx 
 aes_rval aes_encrypt_key128(const unsigned char *key, aes_encrypt_ctx cx[1]);
 aes_rval aes_encrypt_key256(const unsigned char *key, aes_encrypt_ctx cx[1]);
 
-#if defined (__i386__) || defined (__x86_64__)
+#if defined (__i386__) || defined (__x86_64__) || defined (__arm64__)
 aes_rval aes_encrypt(const unsigned char *in, unsigned char *out, aes_encrypt_ctx cx[1]);
 #endif
 
@@ -85,7 +85,7 @@ aes_rval aes_decrypt_key(const unsigned char *key, int key_len, aes_decrypt_ctx 
 aes_rval aes_decrypt_key128(const unsigned char *key, aes_decrypt_ctx cx[1]);
 aes_rval aes_decrypt_key256(const unsigned char *key, aes_decrypt_ctx cx[1]);
 
-#if defined (__i386__) || defined (__x86_64__)
+#if defined (__i386__) || defined (__x86_64__) || defined (__arm64__)
 aes_rval aes_decrypt(const unsigned char *in, unsigned char *out, aes_decrypt_ctx cx[1]);
 #endif
 

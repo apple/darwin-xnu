@@ -63,11 +63,9 @@
 #ifndef _KERN_AST_H_
 #define _KERN_AST_H_
 
-#include <platforms.h>
 
 #include <kern/assert.h>
 #include <kern/macro_help.h>
-#include <kern/lock.h>
 #include <kern/spl.h>
 #include <machine/ast.h>
 
@@ -79,6 +77,29 @@
  * a set of reasons for an AST, and passing this set to ast_taken.
  */
 typedef uint32_t		ast_t;
+
+/*
+ * When returning from interrupt/trap context to kernel mode,
+ * the pending ASTs are masked with AST_URGENT to determine if
+ * ast_taken(AST_PREEMPTION) should be called, for instance to
+ * effect preemption of a kernel thread by a realtime thread.
+ * This is also done when re-enabling preemption or re-enabling
+ * interrupts, since an AST may have been set while preemption
+ * was disabled, and it should take effect as soon as possible.
+ *
+ * When returning from interrupt/trap/syscall context to user
+ * mode, any and all ASTs that are pending should be handled.
+ *
+ * If a thread context switches, only ASTs not in AST_PER_THREAD
+ * remain active. The per-thread ASTs are stored in the thread_t
+ * and re-enabled when the thread context switches back.
+ *
+ * Typically the preemption ASTs are set as a result of threads
+ * becoming runnable, threads changing priority, or quantum
+ * expiration. If a thread becomes runnable and is chosen
+ * to run on another processor, cause_ast_check() may be called
+ * to IPI that processor and request csw_check() be run there.
+ */
 
 /*
  *      Bits for reasons
@@ -102,8 +123,11 @@ typedef uint32_t		ast_t;
 #define AST_CHUD		0x400 
 #define AST_CHUD_URGENT		0x800
 #define AST_GUARD		0x1000
-#define AST_TELEMETRY_USER	0x2000
-#define AST_TELEMETRY_KERNEL	0x4000
+#define AST_TELEMETRY_USER	0x2000	/* telemetry sample requested on interrupt from userspace */
+#define AST_TELEMETRY_KERNEL	0x4000	/* telemetry sample requested on interrupt from kernel */
+#define AST_TELEMETRY_WINDOWED	0x8000	/* telemetry sample meant for the window buffer */
+
+#define AST_SFI			0x10000	/* Evaluate if SFI wait is needed before return to userspace */
 
 #define AST_NONE		0x00
 #define AST_ALL			(~AST_NONE)
@@ -112,7 +136,7 @@ typedef uint32_t		ast_t;
 #define AST_PREEMPTION	(AST_PREEMPT | AST_QUANTUM | AST_URGENT)
 
 #define AST_CHUD_ALL	(AST_CHUD_URGENT|AST_CHUD)
-#define AST_TELEMETRY_ALL	(AST_TELEMETRY_USER | AST_TELEMETRY_KERNEL)
+#define AST_TELEMETRY_ALL	(AST_TELEMETRY_USER | AST_TELEMETRY_KERNEL | AST_TELEMETRY_WINDOWED)
 
 #ifdef  MACHINE_AST
 /*
@@ -147,7 +171,7 @@ extern ast_t 	*ast_pending(void);
 #define MACHINE_AST_PER_THREAD  0
 #endif
 
-#define AST_PER_THREAD	(AST_APC | AST_BSD | AST_MACF | MACHINE_AST_PER_THREAD | AST_LEDGER | AST_GUARD | AST_TELEMETRY_USER | AST_TELEMETRY_KERNEL)
+#define AST_PER_THREAD	(AST_APC | AST_BSD | AST_MACF | MACHINE_AST_PER_THREAD | AST_LEDGER | AST_GUARD | AST_TELEMETRY_USER | AST_TELEMETRY_KERNEL | AST_TELEMETRY_WINDOWED)
 /*
  *	ast_pending(), ast_on(), ast_off(), ast_context(), and ast_propagate()
  *	assume splsched.

@@ -28,6 +28,7 @@
 
 #include <i386/mp.h>
 #include <i386/cpu_data.h>
+#include <i386/bit_routines.h>
 #include <i386/machine_cpu.h>
 #include <i386/machine_routines.h>
 #include <i386/misc_protos.h>

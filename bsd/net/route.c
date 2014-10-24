@@ -73,7 +73,7 @@
 #include <sys/mcache.h>
 #include <sys/protosw.h>
 #include <sys/kernel.h>
-#include <kern/lock.h>
+#include <kern/locks.h>
 #include <kern/zalloc.h>
 
 #include <net/dlil.h>
@@ -83,7 +83,6 @@
 
 #include <netinet/in.h>
 #include <netinet/in_var.h>
-#include <netinet/ip_mroute.h>
 #include <netinet/ip_var.h>
 #include <netinet/ip6.h>
 
@@ -336,7 +335,7 @@ uint32_t route_genid_inet6 = 0;
 #define	ASSERT_SIN6IFSCOPE(sa) {					\
 	if ((sa)->sa_family != AF_INET6 ||				\
 	    (sa)->sa_len < sizeof (struct sockaddr_in6))		\
-		panic("%s: bad sockaddr_in %p\n", __func__, sa);	\
+		panic("%s: bad sockaddr_in6 %p\n", __func__, sa);	\
 }
 
 /*
@@ -1458,14 +1457,8 @@ out:
 int
 rtioctl(unsigned long req, caddr_t data, struct proc *p)
 {
-#pragma unused(p)
-#if INET && MROUTING
-	return (mrt_ioctl(req, data));
-#else
-#pragma unused(req)
-#pragma unused(data)
+#pragma unused(p, req, data)
 	return (ENXIO);
-#endif
 }
 
 struct ifaddr *
@@ -1879,6 +1872,19 @@ rtrequest_common_locked(int req, struct sockaddr *dst0,
 	case RTM_RESOLVE:
 		if (ret_nrt == NULL || (rt = *ret_nrt) == NULL)
 			senderr(EINVAL);
+		/*
+		 * According to the UNIX conformance tests, we need to return
+		 * ENETUNREACH when the parent route is RTF_REJECT. 
+		 * However, there isn't any point in cloning RTF_REJECT
+		 * routes, so we immediately return an error.
+		 */
+		if (rt->rt_flags & RTF_REJECT) {
+			if (rt->rt_flags & RTF_HOST) {
+				senderr(EHOSTUNREACH);
+			} else {
+				senderr(ENETUNREACH);
+			}
+		}
 		/*
 		 * If cloning, we have the parent route given by the caller
 		 * and will use its rt_gateway, rt_rmx as part of the cloning
@@ -2342,9 +2348,14 @@ int
 rt_setgate(struct rtentry *rt, struct sockaddr *dst, struct sockaddr *gate)
 {
 	int dlen = SA_SIZE(dst->sa_len), glen = SA_SIZE(gate->sa_len);
-	struct radix_node_head *rnh = rt_tables[dst->sa_family];
+	struct radix_node_head *rnh = NULL;
 	boolean_t loop = FALSE;
 
+	if (dst->sa_family != AF_INET && dst->sa_family != AF_INET6) {
+		return (EINVAL);
+	}
+
+	rnh = rt_tables[dst->sa_family];
 	lck_mtx_assert(rnh_lock, LCK_MTX_ASSERT_OWNED);
 	RT_LOCK_ASSERT_HELD(rt);
 
@@ -2352,8 +2363,9 @@ rt_setgate(struct rtentry *rt, struct sockaddr *dst, struct sockaddr *gate)
 	 * If this is for a route that is on its way of being removed,
 	 * or is temporarily frozen, reject the modification request.
 	 */
-	if (rt->rt_flags & RTF_CONDEMNED)
+	if (rt->rt_flags & RTF_CONDEMNED) {
 		return (EBUSY);
+	}
 
 	/* Add an extra ref for ourselves */
 	RT_ADDREF_LOCKED(rt);
@@ -3787,7 +3799,6 @@ bad:
 void
 rt_revalidate_gwroute(struct rtentry *rt, struct rtentry *gwrt)
 {
-	VERIFY(rt->rt_flags & (RTF_CLONING | RTF_PRCLONING));
 	VERIFY(gwrt != NULL);
 
 	RT_LOCK_SPIN(rt);
@@ -3796,6 +3807,7 @@ rt_revalidate_gwroute(struct rtentry *rt, struct rtentry *gwrt)
 	    rt_key(gwrt)->sa_family && (rt->rt_gwroute == NULL ||
 	    !(rt->rt_gwroute->rt_flags & RTF_UP))) {
 		boolean_t isequal;
+		VERIFY(rt->rt_flags & (RTF_CLONING | RTF_PRCLONING));
 
 		if (rt->rt_gateway->sa_family == AF_INET ||
 		    rt->rt_gateway->sa_family == AF_INET6) {

@@ -145,6 +145,8 @@ extern void dtrace_lazy_dofs_destroy(proc_t);
 #include <mach/task.h>
 #include <mach/thread_act.h>
 
+#include <vm/vm_protos.h>
+
 #include <sys/sdt.h>
 
 extern char init_task_failure_data[];
@@ -158,16 +160,14 @@ static int reap_child_locked(proc_t parent, proc_t child, int deadparent, int re
 /*
  * Things which should have prototypes in headers, but don't
  */
-void	*get_bsduthreadarg(thread_t);
 void	proc_exit(proc_t p);
 int	wait1continue(int result);
 int	waitidcontinue(int result);
-int	*get_bsduthreadrval(thread_t);
 kern_return_t sys_perf_notify(thread_t thread, int pid);
 kern_return_t task_exception_notify(exception_type_t exception,
 	mach_exception_data_type_t code, mach_exception_data_type_t subcode);
 void	delay(int);
-void gather_rusage_info_v2(proc_t p, struct rusage_info_v2 *ru, int flavor);
+void gather_rusage_info(proc_t p, rusage_info_current *ru, int flavor);
 
 /*
  * NOTE: Source and target may *NOT* overlap!
@@ -230,7 +230,6 @@ exit(proc_t p, struct exit_args *uap, int *retval)
 {
 	exit1(p, W_EXITCODE(uap->rval, 0), retval);
 
-	/* drop funnel before we return */
 	thread_exception_return();
 	/* NOTREACHED */
 	while (TRUE)
@@ -299,7 +298,7 @@ exit1_internal(proc_t p, int rv, int *retval, boolean_t thread_can_terminate, bo
 	                     TASK_POLICY_TERMINATED, TASK_POLICY_ENABLE);
 
         proc_lock(p);
-	error = proc_transstart(p, 1);
+	error = proc_transstart(p, 1, ((jetsam_flags & P_JETSAM_VNODE) ? 1 : 0));
 	if (error == EDEADLK) {
 		/* Temp: If deadlock error, then it implies multithreaded exec is
 		 * in progress. Instread of letting exit continue and 
@@ -337,10 +336,24 @@ exit1_internal(proc_t p, int rv, int *retval, boolean_t thread_can_terminate, bo
 		}
 		sig_lock_to_exit(p);
 	}
-	if (p == initproc) {
+	if (p == initproc && current_proc() == p) {
 		proc_unlock(p);
 		printf("pid 1 exited (signal %d, exit %d)",
 		    WTERMSIG(rv), WEXITSTATUS(rv));
+#if (DEVELOPMENT || DEBUG)
+		int err;
+		/*
+		 * For debugging purposes, generate a core file of initproc before
+		 * panicking. Leave at least 300 MB free on the root volume, and ignore
+		 * the process's corefile ulimit.
+		 */
+		if ((err = coredump(p, 300, 1)) != 0) {
+			printf("Failed to generate initproc core file: error %d", err);
+		} else {
+			printf("Generated initproc core file");
+			sync(p, (void *)NULL, (int *)NULL);
+		}
+#endif
 		panic("%s died\nState at Last Exception:\n\n%s", 
 							(p->p_comm[0] != '\0' ?
 								p->p_comm :
@@ -411,7 +424,7 @@ skipcheck:
 	MALLOC_ZONE(rup, struct rusage_superset *,
 			sizeof (*rup), M_ZOMBIE, M_WAITOK);
 	if (rup != NULL) {
-		gather_rusage_info_v2(p, &rup->ri, RUSAGE_INFO_V2);
+		gather_rusage_info(p, &rup->ri, RUSAGE_INFO_CURRENT);
 		rup->ri.ri_phys_footprint = 0;
 		rup->ri.ri_proc_exit_abstime = mach_absolute_time();
 
@@ -471,10 +484,10 @@ proc_exit(proc_t p)
 	int exitval;
 	int knote_hint;
 
-	uth = (struct uthread *)get_bsdthread_info(current_thread());
+	uth = current_uthread();
 
 	proc_lock(p);
-	proc_transstart(p, 1);
+	proc_transstart(p, 1, 0);
 	if( !(p->p_lflag & P_LEXIT)) {
 		/*
 		 * This can happen if a thread_terminate() occurs
@@ -616,6 +629,17 @@ proc_exit(proc_t p)
 			if ((tp != TTY_NULL) && (tp->t_session == sessp)) {
 				session_unlock(sessp);
 
+				/*
+				 * We're going to SIGHUP the foreground process
+				 * group. It can't change from this point on
+				 * until the revoke is complete.
+				 * The process group changes under both the tty
+				 * lock and proc_list_lock but we need only one
+				 */
+				tty_lock(tp);
+				ttysetpgrphup(tp);
+				tty_unlock(tp);
+
 				tty_pgsignal(tp, SIGHUP, 1);
 
 				session_lock(sessp);
@@ -639,12 +663,14 @@ proc_exit(proc_t p)
 				}
 				context.vc_thread = proc_thread(p); /* XXX */
 				context.vc_ucred = kauth_cred_proc_ref(p);
-				vnode_rele(ttyvp);
 				VNOP_REVOKE(ttyvp, REVOKEALL, &context);
 				if (cttyflag) {
 					/*
 					 * Release the extra usecount taken in cttyopen.
 					 * usecount should be released after VNOP_REVOKE is called.
+					 * This usecount was taken to ensure that
+					 * the VNOP_REVOKE results in a close to
+					 * the tty since cttyclose is a no-op.
 					 */
 					vnode_rele(ttyvp);
 				}
@@ -652,10 +678,17 @@ proc_exit(proc_t p)
 				kauth_cred_unref(&context.vc_ucred);
 				ttyvp = NULLVP;
 			}
-			if (ttyvp)
-				vnode_rele(ttyvp);
-			if (tp)
+			if (tp) {
+				/*
+				 * This is cleared even if not set. This is also done in
+				 * spec_close to ensure that the flag is cleared.
+				 */
+				tty_lock(tp);
+				ttyclrpgrphup(tp);
+				tty_unlock(tp);
+
 				ttyfree(tp);
+			}
 		}
 		session_lock(sessp);
 		sessp->s_leader = NULL;
@@ -835,6 +868,7 @@ proc_exit(proc_t p)
 	proc_limitdrop(p, 1);
 	p->p_limit = NULL;
 
+	vm_purgeable_disown(p->task);
 
 	/*
 	 * Finish up by terminating the task
@@ -1169,19 +1203,24 @@ reap_child_locked(proc_t parent, proc_t child, int deadparent, int reparentedtoi
 int
 wait1continue(int result)
 {
-	void *vt;
-	thread_t thread;
-	int *retval;
 	proc_t p;
+	thread_t thread;
+	uthread_t uth;
+	struct _wait4_data *wait4_data;
+	struct wait4_nocancel_args *uap;
+	int *retval;
 
 	if (result)
 		return(result);
 
 	p = current_proc();
 	thread = current_thread();
-	vt = get_bsduthreadarg(thread);
-	retval = get_bsduthreadrval(thread);
-	return(wait4(p, (struct wait4_args *)vt, retval));
+	uth = (struct uthread *)get_bsdthread_info(thread);
+
+	wait4_data = &uth->uu_kevent.uu_wait4_data;
+	uap = wait4_data->args;
+	retval = wait4_data->retval;
+	return(wait4_nocancel(p, uap, retval));
 }
 
 int
@@ -1198,6 +1237,8 @@ wait4_nocancel(proc_t q, struct wait4_nocancel_args *uap, int32_t *retval)
 	int sibling_count;
 	proc_t p;
 	int status, error;
+	uthread_t uth;
+	struct _wait4_data *wait4_data;
 
 	AUDIT_ARG(pid, uap->pid);
 
@@ -1278,7 +1319,7 @@ loop1:
 			 */
 			if ( sibling_count == 0 ) {
 				int mask = sigmask(SIGCHLD);
-				uthread_t uth = (struct uthread *)get_bsdthread_info(current_thread());
+				uth = current_uthread();
 
 				if ( (uth->uu_sigmask & mask) != 0 ) {
 					/* we are blocking SIGCHLD signals.  clear any pending SIGCHLD.
@@ -1355,6 +1396,12 @@ loop1:
 		return (0);
 	}
 
+	/* Save arguments for continuation. Backing storage is in uthread->uu_arg, and will not be deallocated */
+	uth = current_uthread();
+	wait4_data = &uth->uu_kevent.uu_wait4_data;
+	wait4_data->args = uap;
+	wait4_data->retval = retval;
+
 	if ((error = msleep0((caddr_t)q, proc_list_mlock, PWAIT | PCATCH | PDROP, "wait", 0, wait1continue)))
 		return (error);
 
@@ -1377,17 +1424,24 @@ out:
 int
 waitidcontinue(int result)
 {
-	void *vt;
+	proc_t p;
 	thread_t thread;
+	uthread_t uth;
+	struct _waitid_data *waitid_data;
+	struct waitid_nocancel_args *uap;
 	int *retval;
 
 	if (result)
 		return (result);
 
+	p = current_proc();
 	thread = current_thread();
-	vt = get_bsduthreadarg(thread);
-	retval = get_bsduthreadrval(thread);
-	return (waitid(current_proc(), (struct waitid_args *)vt, retval));
+	uth = (struct uthread *)get_bsdthread_info(thread);
+
+	waitid_data = &uth->uu_kevent.uu_waitid_data;
+	uap = waitid_data->args;
+	retval = waitid_data->retval;
+	return(waitid_nocancel(p, uap, retval));
 }
 
 /*
@@ -1419,6 +1473,8 @@ waitid_nocancel(proc_t q, struct waitid_nocancel_args *uap,
 	int nfound;
 	proc_t p;
 	int error;
+	uthread_t uth;
+	struct _waitid_data *waitid_data;
 
 	if (uap->options == 0 ||
 	    (uap->options & ~(WNOHANG|WNOWAIT|WCONTINUED|WSTOPPED|WEXITED)))
@@ -1602,6 +1658,12 @@ loop1:
 		 */
 		return (0);
 	}
+
+	/* Save arguments for continuation. Backing storage is in uthread->uu_arg, and will not be deallocated */
+	uth = current_uthread();
+	waitid_data = &uth->uu_kevent.uu_waitid_data;
+	waitid_data->args = uap;
+	waitid_data->retval = retval;
 
 	if ((error = msleep0(q, proc_list_mlock,
 	    PWAIT | PCATCH | PDROP, "waitid", 0, waitidcontinue)) != 0)
@@ -1807,6 +1869,17 @@ vproc_exit(proc_t p)
 			if ((tp != TTY_NULL) && (tp->t_session == sessp)) {
 				session_unlock(sessp);
 
+				/*
+				 * We're going to SIGHUP the foreground process
+				 * group. It can't change from this point on
+				 * until the revoke is complete.
+				 * The process group changes under both the tty
+				 * lock and proc_list_lock but we need only one
+				 */
+				tty_lock(tp);
+				ttysetpgrphup(tp);
+				tty_unlock(tp);
+
 				tty_pgsignal(tp, SIGHUP, 1);
 
 				session_lock(sessp);
@@ -1830,12 +1903,14 @@ vproc_exit(proc_t p)
 				}
 				context.vc_thread = proc_thread(p); /* XXX */
 				context.vc_ucred = kauth_cred_proc_ref(p);
-				vnode_rele(ttyvp);
 				VNOP_REVOKE(ttyvp, REVOKEALL, &context);
 				if (cttyflag) {
 					/*
 					 * Release the extra usecount taken in cttyopen.
 					 * usecount should be released after VNOP_REVOKE is called.
+					 * This usecount was taken to ensure that
+					 * the VNOP_REVOKE results in a close to
+					 * the tty since cttyclose is a no-op.
 					 */
 					vnode_rele(ttyvp);
 				}
@@ -1843,10 +1918,17 @@ vproc_exit(proc_t p)
 				kauth_cred_unref(&context.vc_ucred);
 				ttyvp = NULLVP;
 			}
-			if (ttyvp) 
-				vnode_rele(ttyvp);
-			if (tp)
+			if (tp) {
+				/*
+				 * This is cleared even if not set. This is also done in
+				 * spec_close to ensure that the flag is cleared.
+				 */
+				tty_lock(tp);
+				ttyclrpgrphup(tp);
+				tty_unlock(tp);
+
 				ttyfree(tp);
+			}
 		}
 		session_lock(sessp);
 		sessp->s_leader = NULL;
@@ -1989,7 +2071,7 @@ vproc_exit(proc_t p)
 
 	    ruadd(&rup->ru, &p->p_stats->p_cru);
 
-		gather_rusage_info_v2(p, &rup->ri, RUSAGE_INFO_V2);
+		gather_rusage_info(p, &rup->ri, RUSAGE_INFO_CURRENT);
 		rup->ri.ri_phys_footprint = 0;
 		rup->ri.ri_proc_exit_abstime = mach_absolute_time();
 

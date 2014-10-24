@@ -40,6 +40,11 @@
 #ifdef __APPLE_API_PRIVATE
 #ifdef __APPLE_API_UNSTABLE
 
+/* This value must always match IO_NUM_PRIORITIES defined in thread_info.h */
+#define STACKSHOT_IO_NUM_PRIORITIES 	4
+/* This value must always match MAXTHREADNAMESIZE used in bsd */
+#define STACKSHOT_MAX_THREAD_NAME_SIZE	64
+
 struct thread_snapshot {
 	uint32_t 		snapshot_magic;
 	uint32_t 		nkern_frames;
@@ -50,10 +55,37 @@ struct thread_snapshot {
 	uint64_t 		user_time;
 	uint64_t 		system_time;
 	int32_t  		state;
-	int32_t			priority;    //	static priority
-	int32_t			sched_pri;   // scheduled (current) priority
-	int32_t			sched_flags; // scheduler flags
+	int32_t			priority;    /*	static priority */
+	int32_t			sched_pri;   /* scheduled (current) priority */
+	int32_t			sched_flags; /* scheduler flags */
 	char			ss_flags;
+	char			ts_qos;
+	char			io_tier;
+
+	/*
+	 * I/O Statistics
+	 * XXX: These fields must be together
+	 */
+	uint64_t 		disk_reads_count;
+	uint64_t 		disk_reads_size;
+	uint64_t 		disk_writes_count;
+	uint64_t 		disk_writes_size;
+	uint64_t 		io_priority_count[STACKSHOT_IO_NUM_PRIORITIES];
+	uint64_t 		io_priority_size[STACKSHOT_IO_NUM_PRIORITIES];
+	uint64_t 		paging_count;
+	uint64_t 		paging_size;
+	uint64_t 		non_paging_count;
+	uint64_t 		non_paging_size;
+	uint64_t 		data_count;
+	uint64_t 		data_size;
+	uint64_t 		metadata_count;
+	uint64_t 		metadata_size;
+	/* XXX: I/O Statistics end */
+
+	uint64_t		voucher_identifier; /* obfuscated voucher identifier */
+	uint64_t		total_syscalls;
+	char			pth_name[STACKSHOT_MAX_THREAD_NAME_SIZE];
+
 } __attribute__ ((packed));
 
 struct task_snapshot {
@@ -65,13 +97,17 @@ struct task_snapshot {
 	uint8_t			shared_cache_identifier[16];
 	uint64_t		shared_cache_slide;
 	uint32_t		nloadinfos;
-	int				suspend_count; 
-	int				task_size;    // pages
-	int				faults;	 	// number of page faults
-	int				pageins; 	// number of actual pageins
-	int				cow_faults;	// number of copy-on-write faults
+	int			suspend_count; 
+	int			task_size;	/* pages */
+	int			faults;		/* number of page faults */
+	int			pageins;	/* number of actual pageins */
+	int			cow_faults;	/* number of copy-on-write faults */
 	uint32_t		ss_flags;
-	/* We restrict ourselves to a statically defined
+	uint64_t		p_start_sec;	/* from the bsd proc struct */
+	uint64_t		p_start_usec;	/* from the bsd proc struct */
+
+	/* 
+	 * We restrict ourselves to a statically defined
 	 * (current as of 2009) length for the
 	 * p_comm string, due to scoping issues (osfmk/bsd and user/kernel
 	 * binary compatibility).
@@ -80,6 +116,28 @@ struct task_snapshot {
 	uint32_t 		was_throttled;
 	uint32_t 		did_throttle;
 	uint32_t		latency_qos;
+	/*
+	 * I/O Statistics
+	 * XXX: These fields must be together.
+	 */
+	uint64_t 		disk_reads_count;
+	uint64_t 		disk_reads_size;
+	uint64_t 		disk_writes_count;
+	uint64_t 		disk_writes_size;
+	uint64_t 		io_priority_count[STACKSHOT_IO_NUM_PRIORITIES];
+	uint64_t 		io_priority_size[STACKSHOT_IO_NUM_PRIORITIES];
+	uint64_t 		paging_count;
+	uint64_t 		paging_size;
+	uint64_t 		non_paging_count;
+	uint64_t 		non_paging_size;
+	uint64_t 		data_count;
+	uint64_t 		data_size;
+	uint64_t 		metadata_count;
+	uint64_t 		metadata_size;
+	/* XXX: I/O Statistics end */
+
+	uint32_t		donating_pid_count;
+
 } __attribute__ ((packed));
 
 struct micro_snapshot {
@@ -173,28 +231,36 @@ enum generic_snapshot_flags {
  	kTaskIsForeground	= 0x400,
  	kTaskIsBoosted		= 0x800,
 	kTaskIsSuppressed	= 0x1000,
-	kTaskIsTimerThrottled	= 0x2000  /* deprecated */
+	kTaskIsTimerThrottled	= 0x2000,  /* deprecated */
+	kTaskIsImpDonor 	= 0x4000,
+	kTaskIsLiveImpDonor = 0x8000
  };
 
 enum thread_snapshot_flags {
-	kHasDispatchSerial 	= 0x4,
+	kHasDispatchSerial	= 0x4,
 	kStacksPCOnly		= 0x8,    /* Stack traces have no frame pointers. */
-	kThreadDarwinBG		= 0x10    /* Thread is darwinbg */
+	kThreadDarwinBG		= 0x10,   /* Thread is darwinbg */
+	kThreadIOPassive	= 0x20,   /* Thread uses passive IO */
+	kThreadSuspended	= 0x40    /* Thread is supsended */
 };
 
 #define VM_PRESSURE_TIME_WINDOW 5 /* seconds */
 
 enum {
-	STACKSHOT_GET_DQ						= 0x01,
-	STACKSHOT_SAVE_LOADINFO					= 0x02,
-	STACKSHOT_GET_GLOBAL_MEM_STATS			= 0x04,
-	STACKSHOT_SAVE_KEXT_LOADINFO			= 0x08,
-	STACKSHOT_GET_MICROSTACKSHOT			= 0x10,
-	STACKSHOT_GLOBAL_MICROSTACKSHOT_ENABLE	= 0x20,
-	STACKSHOT_GLOBAL_MICROSTACKSHOT_DISABLE	= 0x40,
-	STACKSHOT_SET_MICROSTACKSHOT_MARK		= 0x80,
-	STACKSHOT_SAVE_KERNEL_FRAMES_ONLY		= 0x100,
-	STACKSHOT_GET_BOOT_PROFILE				= 0x200,
+	STACKSHOT_GET_DQ							= 0x01,
+	STACKSHOT_SAVE_LOADINFO						= 0x02,
+	STACKSHOT_GET_GLOBAL_MEM_STATS				= 0x04,
+	STACKSHOT_SAVE_KEXT_LOADINFO				= 0x08,
+	STACKSHOT_GET_MICROSTACKSHOT				= 0x10,
+	STACKSHOT_GLOBAL_MICROSTACKSHOT_ENABLE		= 0x20,
+	STACKSHOT_GLOBAL_MICROSTACKSHOT_DISABLE		= 0x40,
+	STACKSHOT_SET_MICROSTACKSHOT_MARK			= 0x80,
+	STACKSHOT_SAVE_KERNEL_FRAMES_ONLY			= 0x100,
+	STACKSHOT_GET_BOOT_PROFILE					= 0x200,
+	STACKSHOT_GET_WINDOWED_MICROSTACKSHOTS		= 0x400,
+	STACKSHOT_WINDOWED_MICROSTACKSHOTS_ENABLE	= 0x800,
+	STACKSHOT_WINDOWED_MICROSTACKSHOTS_DISABLE	= 0x1000,
+	STACKSHOT_SAVE_IMP_DONATION_PIDS		= 0x2000
 };
 
 #define STACKSHOT_THREAD_SNAPSHOT_MAGIC 	0xfeedface
@@ -208,7 +274,10 @@ enum {
 #ifdef	KERNEL_PRIVATE
 
 extern unsigned int	systemLogDiags;
+#if (!defined(__arm64__) && !defined(NAND_PANIC_DEVICE)) || defined(LEGACY_PANIC_LOGS)
 extern char debug_buf[];
+#endif
+extern char *debug_buf_addr;
 extern unsigned int	debug_boot_arg;
 extern unsigned char *kernel_uuid;
 extern char kernel_uuid_string[];
@@ -262,9 +331,13 @@ void	unpackA(char *inbuf, uint32_t length);
 void	panic_display_system_configuration(void);
 void	panic_display_zprint(void);
 void	panic_display_kernel_aslr(void);
+void	panic_display_hibb(void);
 #if CONFIG_ZLEAKS
 void	panic_display_ztrace(void);
 #endif /* CONFIG_ZLEAKS */
+#if CONFIG_ECC_LOGGING
+void 	panic_display_ecc_errors(void);
+#endif /* CONFIG_ECC_LOGGING */
 #endif /* MACH_KERNEL_PRIVATE */
 
 #define DB_HALT		0x1
@@ -335,6 +408,8 @@ enum {
 
 #endif	/* KERNEL_PRIVATE */
 
+#ifdef KERNEL
+
 __BEGIN_DECLS
 
 extern void panic(const char *string, ...) __printflike(1,2);
@@ -362,8 +437,13 @@ void panic_context(unsigned int reason, void *ctx, const char *string, ...);
 	(panic)(# ex "@" PANIC_LOCATION, ## __VA_ARGS__)
 #endif /* CONFIGS_NO_PANIC_STRINGS */
 
+#ifdef KERNEL_PRIVATE
 void 		populate_model_name(char *);
 unsigned	panic_active(void);
+#endif
+
 __END_DECLS
+
+#endif /* KERNEL */
 
 #endif	/* _KERN_DEBUG_H_ */

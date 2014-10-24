@@ -83,6 +83,7 @@ type hash_info_bucket_t = struct[1] of natural_t;
 type hash_info_bucket_array_t = array[] of hash_info_bucket_t;
 
 type ipc_info_space_t = struct[6] of natural_t;
+type ipc_info_space_basic_t = struct[6] of natural_t;
 
 type ipc_info_name_t = struct[7] of natural_t;
 type ipc_info_name_array_t = array[] of ipc_info_name_t;

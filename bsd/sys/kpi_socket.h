@@ -551,6 +551,14 @@ extern errno_t sock_setupcalls(socket_t sock, sock_upcall read_callback,
 */
 extern errno_t sock_catchevents(socket_t sock, sock_evupcall event_callback,
     void *event_context, u_int32_t event_mask);
+/*
+	@function sock_iskernel
+	@discussion Returns true if the socket was created by the kernel or
+	        is owned by the kernel.
+	@param sock The socket.
+	@result True if the kernel owns the socket.
+*/
+extern int sock_iskernel(socket_t);
 #endif /* KERNEL_PRIVATE */
 
 __END_DECLS

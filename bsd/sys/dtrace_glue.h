@@ -32,7 +32,6 @@
 #ifdef KERNEL_BUILD
 
 #include <libkern/libkern.h>
-#include <kern/lock.h>
 #include <kern/locks.h>
 #include <kern/thread_call.h>
 #include <kern/thread.h>
@@ -99,7 +98,13 @@ int suword8(user_addr_t, uint8_t value);
  * cpuvar
  */
 extern lck_mtx_t cpu_lock;
+extern lck_mtx_t cyc_lock;
 extern lck_mtx_t mod_lock;
+
+/*
+ * wrap_timer_call: wrapper of timer_call for cyclic timers.
+ */
+struct wrap_timer_call;
 
 /*
  * Per-CPU data.
@@ -112,6 +117,9 @@ typedef struct dtrace_cpu {
 	hrtime_t        cpu_dtrace_chillmark;      /* DTrace: chill mark time */
 	hrtime_t        cpu_dtrace_chilled;        /* DTrace: total chill time */
 	boolean_t       cpu_dtrace_invop_underway; /* DTrace gaurds against invalid op re-entrancy */
+
+	/* Local cyclic timers on this CPU */
+	LIST_HEAD(cyc_list_head, wrap_timer_call) cpu_cyc_list;
 } dtrace_cpu_t;
 
 extern dtrace_cpu_t *cpu_list;
@@ -179,9 +187,6 @@ extern void unregister_cpu_setup_func(cpu_setup_func_t *, void *);
 #define	CPU_DTRACE_KPRIV	0x0080	/* DTrace fault: bad kernel access */
 #define	CPU_DTRACE_UPRIV	0x0100	/* DTrace fault: bad user access */
 #define	CPU_DTRACE_TUPOFLOW	0x0200	/* DTrace fault: tuple stack overflow */
-#if defined(__sparc)
-//#define	CPU_DTRACE_FAKERESTORE	0x0400	/* pid provider hint to getreg */
-#endif
 #define CPU_DTRACE_USTACK_FP	0x0400  /* pid provider hint to ustack() */
 #define	CPU_DTRACE_ENTRY	0x0800	/* pid provider hint to ustack() */
 #define CPU_DTRACE_BADSTACK 0x1000  /* DTrace fault: bad stack */
@@ -208,7 +213,7 @@ typedef struct modctl {
 	char		mod_modname[KMOD_MAX_NAME];
 	int		mod_loadcnt;
 	char		mod_loaded;
-	char		mod_flags;	// See flags below
+	uint16_t	mod_flags;	// See flags below
 	int		mod_nenabled;	// # of enabled DTrace probes in module
 	vm_address_t	mod_address;	// starting address (of Mach-o header blob)
 	vm_size_t	mod_size;	// total size (of blob)
@@ -217,13 +222,15 @@ typedef struct modctl {
 } modctl_t;
 
 /* Definitions for mod_flags */
-#define MODCTL_IS_MACH_KERNEL			0x01 // This module represents /mach_kernel
-#define MODCTL_HAS_KERNEL_SYMBOLS		0x02 // Kernel symbols (nlist) are available
-#define MODCTL_FBT_PROBES_PROVIDED      	0x04 // fbt probes have been provided
-#define MODCTL_FBT_INVALID			0x08 // Module is invalid for fbt probes
-#define MODCTL_SDT_PROBES_PROVIDED		0x10 // sdt probes have been provided
-#define MODCTL_SDT_INVALID			0x20 // Module is invalid for sdt probes
-#define MODCTL_HAS_UUID				0x40 // Module has UUID
+#define MODCTL_IS_MACH_KERNEL			0x01  // This module represents /mach_kernel
+#define MODCTL_HAS_KERNEL_SYMBOLS		0x02  // Kernel symbols (nlist) are available
+#define MODCTL_FBT_PROBES_PROVIDED      	0x04  // fbt probes have been provided
+#define MODCTL_FBT_INVALID			0x08  // Module is invalid for fbt probes
+#define MODCTL_SDT_PROBES_PROVIDED		0x10  // sdt probes have been provided
+#define MODCTL_SDT_INVALID			0x20  // Module is invalid for sdt probes
+#define MODCTL_HAS_UUID				0x40  // Module has UUID
+#define MODCTL_FBT_PRIVATE_PROBES_PROVIDED	0x80  // fbt private probes have been provided
+#define MODCTL_FBT_PROVIDE_PRIVATE_PROBES	0x100 // fbt provider must provide private probes
 
 /* Simple/singular mod_flags accessors */
 #define MOD_IS_MACH_KERNEL(mod)			(mod->mod_flags & MODCTL_IS_MACH_KERNEL)
@@ -234,9 +241,12 @@ typedef struct modctl {
 #define MOD_SDT_PROBES_PROVIDED(mod)   		(mod->mod_flags & MODCTL_SDT_PROBES_PROVIDED)
 #define MOD_SDT_INVALID(mod)			(mod->mod_flags & MODCTL_SDT_INVALID)
 #define MOD_HAS_UUID(mod)			(mod->mod_flags & MODCTL_HAS_UUID)
+#define MOD_FBT_PRIVATE_PROBES_PROVIDED(mod)	(mod->mod_flags & MODCTL_FBT_PRIVATE_PROBES_PROVIDED)
+#define MOD_FBT_PROVIDE_PRIVATE_PROBES(mod)	(mod->mod_flags & MODCTL_FBT_PROVIDE_PRIVATE_PROBES)
 
 /* Compound accessors */
-#define MOD_FBT_DONE(mod)			(MOD_FBT_PROBES_PROVIDED(mod) || MOD_FBT_INVALID(mod))
+#define MOD_FBT_PRIVATE_PROBES_DONE(mod)	(MOD_FBT_PRIVATE_PROBES_PROVIDED(mod) || !MOD_FBT_PROVIDE_PRIVATE_PROBES(mod))
+#define MOD_FBT_DONE(mod)			((MOD_FBT_PROBES_PROVIDED(mod) && MOD_FBT_PRIVATE_PROBES_DONE(mod)) || MOD_FBT_INVALID(mod))
 #define MOD_SDT_DONE(mod)			(MOD_SDT_PROBES_PROVIDED(mod) || MOD_SDT_INVALID(mod))
 #define MOD_SYMBOLS_DONE(mod)			(MOD_FBT_DONE(mod) && MOD_SDT_DONE(mod))
 
@@ -303,6 +313,8 @@ typedef struct cyc_omni_handler {
 	void (*cyo_offline)(void *, dtrace_cpu_t *, void *);
 	void *cyo_arg;
 } cyc_omni_handler_t;
+
+extern void dtrace_install_cpu_hooks(void);
 
 extern cyclic_id_t cyclic_add(cyc_handler_t *, cyc_time_t *);
 extern void cyclic_remove(cyclic_id_t);

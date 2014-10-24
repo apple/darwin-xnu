@@ -305,6 +305,7 @@ load_machfile(
 	load_result_t		myresult;
 	load_return_t		lret;
 	boolean_t create_map = FALSE;
+	boolean_t enforce_hard_pagezero = TRUE;
 	int spawn = (imgp->ip_flags & IMGPF_SPAWN);
 	task_t task = current_task();
 	proc_t p = current_proc();
@@ -333,8 +334,15 @@ load_machfile(
 	}
 
 	if (create_map) {
-		pmap = pmap_create(get_task_ledger(task), (vm_map_size_t) 0,
-				(imgp->ip_flags & IMGPF_IS_64BIT));
+		task_t ledger_task;
+		if (imgp->ip_new_thread) {
+			ledger_task = get_threadtask(imgp->ip_new_thread);
+		} else {
+			ledger_task = task;
+		}
+		pmap = pmap_create(get_task_ledger(ledger_task),
+				   (vm_map_size_t) 0,
+				   (imgp->ip_flags & IMGPF_IS_64BIT));
 		pal_switch_pmap(thread, pmap, imgp->ip_flags & IMGPF_IS_64BIT);
 		map = vm_map_create(pmap,
 				0,
@@ -342,6 +350,7 @@ load_machfile(
 				TRUE);
 	} else
 		map = new_map;
+
 
 #ifndef	CONFIG_ENFORCE_SIGNED_CODE
 	/* This turns off faulting for executable pages, which allows
@@ -390,16 +399,25 @@ load_machfile(
 		return(lret);
 	}
 
+#if __x86_64__
 	/*
-	 * For 64-bit users, check for presence of a 4GB page zero
-	 * which will enable the kernel to share the user's address space
-	 * and hence avoid TLB flushes on kernel entry/exit
-	 */ 
-
-	if ((imgp->ip_flags & IMGPF_IS_64BIT) &&
-	     vm_map_has_4GB_pagezero(map)) {
-		vm_map_set_4GB_pagezero(map);
+	 * On x86, for compatibility, don't enforce the hard page-zero restriction for 32-bit binaries.
+	 */
+	if ((imgp->ip_flags & IMGPF_IS_64BIT) == 0) {
+		enforce_hard_pagezero = FALSE;
 	}
+#endif
+	/*
+	 * Check to see if the page zero is enforced by the map->min_offset.
+	 */ 
+	if (enforce_hard_pagezero && (vm_map_has_hard_pagezero(map, 0x1000) == FALSE)) {
+		if (create_map) {
+			vm_map_deallocate(map);	/* will lose pmap reference too */
+		}
+		printf("Cannot enforce a hard page-zero for %s\n", imgp->ip_strings);
+		return (LOAD_BADMACHO);
+	}
+
 	/*
 	 *	Commit to new map.
 	 *
@@ -437,7 +455,8 @@ load_machfile(
 			 */
 			kret = task_start_halt(task);
 			if (kret != KERN_SUCCESS) {
-				return(kret);		
+				vm_map_deallocate(map);	/* will lose pmap reference too */
+				return (LOAD_FAILURE);
 			}
 			proc_transcommit(p, 0);
 			workqueue_mark_exiting(p);
@@ -445,7 +464,6 @@ load_machfile(
 			workqueue_exit(p);
 		}
 		old_map = swap_task_map(old_task, thread, map, !spawn);
-		vm_map_clear_4GB_pagezero(old_map);
 		vm_map_deallocate(old_map);
 	}
 	return(LOAD_SUCCESS);
@@ -745,7 +763,7 @@ parse_machfile(
 					file_offset,
 					macho_size,
 					header->cputype,
-					(depth == 1) ? result : NULL);
+					result);
 				if (ret != LOAD_SUCCESS) {
 					printf("proc %d: load code signature error %d "
 					       "for file \"%s\"\n",
@@ -795,14 +813,23 @@ parse_machfile(
 		if (ret != LOAD_SUCCESS)
 			break;
 	}
+
 	if (ret == LOAD_SUCCESS) { 
 	    if (! got_code_signatures) {
 		    struct cs_blob *blob;
 		    /* no embedded signatures: look for detached ones */
 		    blob = ubc_cs_blob_get(vp, -1, file_offset);
 		    if (blob != NULL) {
-			    /* get flags to be applied to the process */
-			    result->csflags |= blob->csb_flags;
+			unsigned int cs_flag_data = blob->csb_flags;
+			if(0 != ubc_cs_generation_check(vp)) {
+				if (0 != ubc_cs_blob_revalidate(vp, blob)) {
+					/* clear out the flag data if revalidation fails */
+					cs_flag_data = 0;
+					result->csflags &= ~CS_VALID;
+				}
+			}
+			/* get flags to be applied to the process */
+			result->csflags |= cs_flag_data;
 		    }
 	    }
 
@@ -812,14 +839,13 @@ parse_machfile(
 		}
 
 	    if ((ret == LOAD_SUCCESS) && (dlp != 0)) {
-		/*
-		 * load the dylinker, and slide it by the independent DYLD ASLR
-		 * offset regardless of the PIE-ness of the main binary.
-		 */
-
-		ret = load_dylinker(dlp, dlarchbits, map, thread, depth,
-		                    dyld_aslr_offset, result);
-	    }
+			/*
+		 	* load the dylinker, and slide it by the independent DYLD ASLR
+		 	* offset regardless of the PIE-ness of the main binary.
+		 	*/
+			ret = load_dylinker(dlp, dlarchbits, map, thread, depth,
+		    	                dyld_aslr_offset, result);
+		}
 
 	    if((ret == LOAD_SUCCESS) && (depth == 1)) {
 			if (result->thread_count == 0) {
@@ -839,7 +865,7 @@ parse_machfile(
 #define	APPLE_UNPROTECTED_HEADER_SIZE	(3 * PAGE_SIZE_64)
 
 static load_return_t
-unprotect_segment(
+unprotect_dsmos_segment(
 	uint64_t	file_off,
 	uint64_t	file_size,
 	struct vnode	*vp,
@@ -892,7 +918,7 @@ unprotect_segment(
 }
 #else	/* CONFIG_CODE_DECRYPTION */
 static load_return_t
-unprotect_segment(
+unprotect_dsmos_segment(
 	__unused	uint64_t	file_off,
 	__unused	uint64_t	file_size,
 	__unused	struct vnode	*vp,
@@ -927,7 +953,6 @@ load_segment(
 	vm_prot_t		maxprot;
 	size_t			segment_command_size, total_section_size,
 				single_section_size;
-	boolean_t		prohibit_pagezero_mapping = FALSE;
 	
 	if (LC_SEGMENT_64 == lcp->cmd) {
 		segment_command_size = sizeof(struct segment_command_64);
@@ -991,25 +1016,19 @@ load_segment(
 		 */
 		seg_size += slide;
 		slide = 0;
-		/* XXX (4596982) this interferes with Rosetta, so limit to 64-bit tasks */
-		if (scp->cmd == LC_SEGMENT_64) {
-		        prohibit_pagezero_mapping = TRUE;
+
+		/*
+		 * This is a "page zero" segment:  it starts at address 0,
+		 * is not mapped from the binary file and is not accessible.
+		 * User-space should never be able to access that memory, so
+		 * make it completely off limits by raising the VM map's
+		 * minimum offset.
+		 */
+		ret = vm_map_raise_min_offset(map, seg_size);
+		if (ret != KERN_SUCCESS) {
+			return (LOAD_FAILURE);
 		}
-		
-		if (prohibit_pagezero_mapping) {
-			/*
-			 * This is a "page zero" segment:  it starts at address 0,
-			 * is not mapped from the binary file and is not accessible.
-			 * User-space should never be able to access that memory, so
-			 * make it completely off limits by raising the VM map's
-			 * minimum offset.
-			 */
-			ret = vm_map_raise_min_offset(map, seg_size);
-			if (ret != KERN_SUCCESS) {
-				return (LOAD_FAILURE);
-			}
-			return (LOAD_SUCCESS);
-		}
+		return (LOAD_SUCCESS);
 	}
 
 	/* If a non-zero slide was specified by the caller, apply now */
@@ -1086,7 +1105,7 @@ load_segment(
 		result->mach_header = map_addr;
 
 	if (scp->flags & SG_PROTECTED_VERSION_1) {
-		ret = unprotect_segment(scp->fileoff,
+		ret = unprotect_dsmos_segment(scp->fileoff,
 					scp->filesize,
 					vp,
 					pager_offset,
@@ -1527,6 +1546,9 @@ load_dylinker(
 		result->validentry = myresult->validentry;
 		result->all_image_info_addr = myresult->all_image_info_addr;
 		result->all_image_info_size = myresult->all_image_info_size;
+		if (myresult->platform_binary) {
+			result->csflags |= CS_DYLD_PLATFORM;
+		}
 	}
 out:
 	vnode_put(vp);
@@ -1563,20 +1585,23 @@ load_code_signature(
 	}
 
 	blob = ubc_cs_blob_get(vp, cputype, -1);
-	if (blob != NULL &&
-	    blob->csb_cpu_type == cputype &&
-	    blob->csb_base_offset == macho_offset &&
-	    blob->csb_blob_offset == lcp->dataoff &&
-	    blob->csb_mem_size == lcp->datasize) {
-		/* 
-		 * we already have a blob for this vnode and cputype
-		 * and its at the same offset in Mach-O.  Optimize to
-		 * not reload, revalidate, and compare the blob hashes.
-		 * Security will not be compromised, but we might miss
-		 * out on some messagetracer info about the differences
-		 * in blob content.
-		 */
-		ret = LOAD_SUCCESS;
+	if (blob != NULL) {
+		/* we already have a blob for this vnode and cputype */
+		if (blob->csb_cpu_type == cputype &&
+		    blob->csb_base_offset == macho_offset &&
+		    blob->csb_mem_size == lcp->datasize) {
+			/* it matches the blob we want here, lets verify the version */
+			if(0 != ubc_cs_generation_check(vp)) {
+				if (0 != ubc_cs_blob_revalidate(vp, blob)) {
+					ret = LOAD_FAILURE; /* set error same as from ubc_cs_blob_add */
+					goto out;
+				}
+			}
+			ret = LOAD_SUCCESS;
+		} else {
+			/* the blob has changed for this vnode: fail ! */
+			ret = LOAD_BADMACHO;
+		}
 		goto out;
 	}
 
@@ -1607,7 +1632,6 @@ load_code_signature(
 			    cputype,
 			    macho_offset,
 			    addr,
-			    lcp->dataoff,
 			    lcp->datasize)) {
 		ret = LOAD_FAILURE;
 		goto out;
@@ -1624,8 +1648,9 @@ load_code_signature(
 
 	ret = LOAD_SUCCESS;
 out:
-	if (result && ret == LOAD_SUCCESS) {
+	if (ret == LOAD_SUCCESS) {
 		result->csflags |= blob->csb_flags;
+		result->platform_binary = blob->csb_platform_binary;
 	}
 	if (addr != 0) {
 		ubc_cs_blob_deallocate(addr, blob_size);

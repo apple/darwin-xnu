@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2013 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2014 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -77,6 +77,7 @@
 #include <sys/priv.h>
 #include <sys/proc_uuid_policy.h>
 #include <sys/syslog.h>
+#include <sys/priv.h>
 
 #include <libkern/OSAtomic.h>
 #include <kern/locks.h>
@@ -90,6 +91,7 @@
 #include <net/route.h>
 #include <net/flowhash.h>
 #include <net/flowadv.h>
+#include <net/ntstat.h>
 
 #include <netinet/in.h>
 #include <netinet/in_pcb.h>
@@ -100,19 +102,14 @@
 #include <netinet6/ip6_var.h>
 #endif /* INET6 */
 
-#if IPSEC
-#include <netinet6/ipsec.h>
-#include <netkey/key.h>
-#endif /* IPSEC */
-
 #include <sys/kdebug.h>
 #include <sys/random.h>
 
 #include <dev/random/randomdev.h>
 #include <mach/boolean.h>
 
-#if FLOW_DIVERT
-#include <netinet/flow_divert.h>
+#if NECP
+#include <net/necp.h>
 #endif
 
 static lck_grp_t	*inpcb_lock_grp;
@@ -127,6 +124,16 @@ static u_int16_t inpcb_timeout_run = 0;	/* INPCB timer is scheduled to run */
 static boolean_t inpcb_garbage_collecting = FALSE; /* gc timer is scheduled */
 static boolean_t inpcb_ticking = FALSE;		/* "slow" timer is scheduled */
 static boolean_t inpcb_fast_timer_on = FALSE;
+
+/*
+ * If the total number of gc reqs is above a threshold, schedule
+ * garbage collect timer sooner
+ */
+static boolean_t inpcb_toomany_gcreq = FALSE;
+
+#define	INPCB_GCREQ_THRESHOLD	50000
+#define	INPCB_TOOMANY_GCREQ_TIMER	(hz/10) /* 10 times a second */
+
 static void inpcb_sched_timeout(struct timeval *);
 static void inpcb_timeout(void *);
 int inpcb_timeout_lazy = 10;	/* 10 seconds leeway for lazy timers */
@@ -134,14 +141,10 @@ extern int tvtohz(struct timeval *);
 
 #if CONFIG_PROC_UUID_POLICY
 static void inp_update_cellular_policy(struct inpcb *, boolean_t);
-#if FLOW_DIVERT
-static void inp_update_flow_divert_policy(struct inpcb *, boolean_t);
-#endif /* FLOW_DIVERT */
+#if NECP
+static void inp_update_necp_want_app_policy(struct inpcb *, boolean_t);
+#endif /* NECP */
 #endif /* !CONFIG_PROC_UUID_POLICY */
-
-#if IPSEC
-extern int ipsec_bypass;
-#endif /* IPSEC */
 
 #define	DBG_FNC_PCB_LOOKUP	NETDBG_CODE(DBG_NETTCP, (6 << 8))
 #define	DBG_FNC_PCB_HLOOKUP	NETDBG_CODE(DBG_NETTCP, ((6 << 8) | 1))
@@ -291,6 +294,12 @@ inpcb_timeout(void *arg)
 	boolean_t t, gc;
 	struct intimercount gccnt, tmcnt;
 	struct timeval leeway;
+	boolean_t toomany_gc = FALSE;
+
+	if (arg != NULL) {
+		VERIFY(arg == &inpcb_toomany_gcreq);
+		toomany_gc = *(boolean_t *)arg;
+	}
 
 	/*
 	 * Update coarse-grained networking timestamp (in sec.); the idea
@@ -299,11 +308,12 @@ inpcb_timeout(void *arg)
 	 */
 	net_update_uptime();
 
+	bzero(&gccnt, sizeof(gccnt));
+	bzero(&tmcnt, sizeof(tmcnt));
+
 	lck_mtx_lock_spin(&inpcb_timeout_lock);
 	gc = inpcb_garbage_collecting;
 	inpcb_garbage_collecting = FALSE;
-	bzero(&gccnt, sizeof(gccnt));
-	bzero(&tmcnt, sizeof(tmcnt));
 
 	t = inpcb_ticking;
 	inpcb_ticking = FALSE;
@@ -351,8 +361,12 @@ inpcb_timeout(void *arg)
 		inpcb_ticking = INPCB_HAVE_TIMER_REQ(tmcnt);
 
 	/* re-arm the timer if there's work to do */
-	inpcb_timeout_run--;
-	VERIFY(inpcb_timeout_run >= 0 && inpcb_timeout_run < 2);
+	if (toomany_gc) {
+		inpcb_toomany_gcreq = FALSE;
+	} else {
+		inpcb_timeout_run--;
+		VERIFY(inpcb_timeout_run >= 0 && inpcb_timeout_run < 2);
+	}
 
 	bzero(&leeway, sizeof(leeway));
 	leeway.tv_sec = inpcb_timeout_lazy;
@@ -402,8 +416,26 @@ void
 inpcb_gc_sched(struct inpcbinfo *ipi, u_int32_t type)
 {
 	struct timeval leeway;
+	u_int32_t gccnt;
 	lck_mtx_lock_spin(&inpcb_timeout_lock);
 	inpcb_garbage_collecting = TRUE;
+
+	gccnt = ipi->ipi_gc_req.intimer_nodelay +
+		ipi->ipi_gc_req.intimer_fast;
+
+	if (gccnt > INPCB_GCREQ_THRESHOLD && !inpcb_toomany_gcreq) {
+		inpcb_toomany_gcreq = TRUE;
+
+		/*
+		 * There are toomany pcbs waiting to be garbage collected,
+		 * schedule a much faster timeout in addition to
+		 * the caller's request
+		 */
+		lck_mtx_convert_spin(&inpcb_timeout_lock);
+		timeout(inpcb_timeout, (void *)&inpcb_toomany_gcreq,
+		    INPCB_TOOMANY_GCREQ_TIMER);
+	}
+
 	switch (type) {
 	case INPCB_TIMER_NODELAY:
 		atomic_add_32(&ipi->ipi_gc_req.intimer_nodelay, 1);
@@ -491,7 +523,6 @@ in_pcbinfo_detach(struct inpcbinfo *ipi)
  * Returns:	0			Success
  *		ENOBUFS
  *		ENOMEM
- *	ipsec_init_policy:???		[IPSEC]
  */
 int
 in_pcballoc(struct socket *so, struct inpcbinfo *pcbinfo, struct proc *p)
@@ -554,13 +585,21 @@ in_pcballoc(struct socket *so, struct inpcbinfo *pcbinfo, struct proc *p)
 		/* NOTREACHED */
 	}
 
+	/* make sure inp_Wstat is always 64-bit aligned */
+	inp->inp_Wstat = (struct inp_stat *)P2ROUNDUP(inp->inp_Wstat_store,
+	    sizeof (u_int64_t));
+	if (((uintptr_t)inp->inp_Wstat - (uintptr_t)inp->inp_Wstat_store) +
+	    sizeof (*inp->inp_Wstat) > sizeof (inp->inp_Wstat_store)) {
+		panic("%s: insufficient space to align inp_Wstat", __func__);
+		/* NOTREACHED */
+	}
+	
 	so->so_pcb = (caddr_t)inp;
 
 	if (so->so_proto->pr_flags & PR_PCBLOCK) {
 		lck_mtx_init(&inp->inpcb_mtx, pcbinfo->ipi_lock_grp,
 		    pcbinfo->ipi_lock_attr);
 	}
-
 
 #if INET6
 	if (SOCK_DOM(so) == PF_INET6 && !ip6_mapped_addr_on)
@@ -664,7 +703,10 @@ in_pcbbind(struct inpcb *inp, struct sockaddr *nam, struct proc *p)
 	u_short lport = 0, rand_port = 0;
 	int wild = 0, reuseport = (so->so_options & SO_REUSEPORT);
 	int error, randomport, conflict = 0;
+	boolean_t anonport = FALSE;
 	kauth_cred_t cred;
+	struct in_addr laddr;
+	struct ifnet *outif = NULL;
 
 	if (TAILQ_EMPTY(&in_ifaddrhead)) /* XXX broken! */
 		return (EADDRNOTAVAIL);
@@ -674,8 +716,10 @@ in_pcbbind(struct inpcb *inp, struct sockaddr *nam, struct proc *p)
 		wild = 1;
 	socket_unlock(so, 0); /* keep reference on socket */
 	lck_rw_lock_exclusive(pcbinfo->ipi_lock);
+
+	bzero(&laddr, sizeof(laddr));
+
 	if (nam != NULL) {
-		struct ifnet *outif = NULL;
 
 		if (nam->sa_len != sizeof (struct sockaddr_in)) {
 			lck_rw_done(pcbinfo->ipi_lock);
@@ -739,7 +783,6 @@ in_pcbbind(struct inpcb *inp, struct sockaddr *nam, struct proc *p)
 			struct inpcb *t;
 			uid_t u;
 
-			/* GROSS */
 			if (ntohs(lport) < IPPORT_RESERVED) {
 				cred = kauth_cred_proc_ref(p);
 				error = priv_check_cred(cred,
@@ -802,8 +845,7 @@ in_pcbbind(struct inpcb *inp, struct sockaddr *nam, struct proc *p)
 				}
 			}
 		}
-		inp->inp_laddr = SIN(nam)->sin_addr;
-		inp->inp_last_outifp = outif;
+		laddr = SIN(nam)->sin_addr;
 	}
 	if (lport == 0) {
 		u_short first, last;
@@ -814,15 +856,10 @@ in_pcbbind(struct inpcb *inp, struct sockaddr *nam, struct proc *p)
 		    udp_use_randomport);
 
 		/*
-		 * TODO:
-		 *
-		 * The following should be moved into its own routine and
-		 * thus can be shared with in6_pcbsetport(); the latter
-		 * currently duplicates the logic.
+		 * Even though this looks similar to the code in
+		 * in6_pcbsetport, the v6 vs v4 checks are different.
 		 */
-
-		inp->inp_flags |= INP_ANONPORT;
-
+		anonport = TRUE;
 		if (inp->inp_flags & INP_HIGHPORT) {
 			first = ipport_hifirstauto;	/* sysctl */
 			last  = ipport_hilastauto;
@@ -871,8 +908,6 @@ in_pcbbind(struct inpcb *inp, struct sockaddr *nam, struct proc *p)
 				if (count-- < 0) {	/* completely used? */
 					lck_rw_done(pcbinfo->ipi_lock);
 					socket_lock(so, 0);
-					inp->inp_laddr.s_addr = INADDR_ANY;
-					inp->inp_last_outifp = NULL;
 					return (EADDRNOTAVAIL);
 				}
 				--*lastport;
@@ -880,7 +915,8 @@ in_pcbbind(struct inpcb *inp, struct sockaddr *nam, struct proc *p)
 					*lastport = first;
 				lport = htons(*lastport);
 			} while (in_pcblookup_local_and_cleanup(pcbinfo,
-			    inp->inp_laddr, lport, wild));
+			    ((laddr.s_addr != INADDR_ANY) ? laddr : 
+			    inp->inp_laddr), lport, wild));
 		} else {
 			/*
 			 * counting up
@@ -896,8 +932,6 @@ in_pcbbind(struct inpcb *inp, struct sockaddr *nam, struct proc *p)
 				if (count-- < 0) {	/* completely used? */
 					lck_rw_done(pcbinfo->ipi_lock);
 					socket_lock(so, 0);
-					inp->inp_laddr.s_addr = INADDR_ANY;
-					inp->inp_last_outifp = NULL;
 					return (EADDRNOTAVAIL);
 				}
 				++*lastport;
@@ -905,15 +939,31 @@ in_pcbbind(struct inpcb *inp, struct sockaddr *nam, struct proc *p)
 					*lastport = first;
 				lport = htons(*lastport);
 			} while (in_pcblookup_local_and_cleanup(pcbinfo,
-			    inp->inp_laddr, lport, wild));
+			    ((laddr.s_addr != INADDR_ANY) ? laddr :
+			    inp->inp_laddr), lport, wild));
 		}
 	}
 	socket_lock(so, 0);
+	if (inp->inp_lport != 0 || inp->inp_laddr.s_addr != INADDR_ANY) {
+		lck_rw_done(pcbinfo->ipi_lock);
+		return (EINVAL);
+	}
+
+	if (laddr.s_addr != INADDR_ANY) {
+		inp->inp_laddr = laddr;
+		inp->inp_last_outifp = outif;
+	}
 	inp->inp_lport = lport;
+	if (anonport)
+		inp->inp_flags |= INP_ANONPORT;
+
 	if (in_pcbinshash(inp, 1) != 0) {
 		inp->inp_laddr.s_addr = INADDR_ANY;
-		inp->inp_lport = 0;
 		inp->inp_last_outifp = NULL;
+
+		inp->inp_lport = 0;
+		if (anonport)
+			inp->inp_flags &= ~INP_ANONPORT;
 		lck_rw_done(pcbinfo->ipi_lock);
 		return (EAGAIN);
 	}
@@ -946,11 +996,11 @@ int
 in_pcbladdr(struct inpcb *inp, struct sockaddr *nam, struct in_addr *laddr,
     unsigned int ifscope, struct ifnet **outif)
 {
-	boolean_t nocell = (inp->inp_flags & INP_NO_IFT_CELLULAR);
 	struct route *ro = &inp->inp_route;
 	struct in_ifaddr *ia = NULL;
 	struct sockaddr_in sin;
 	int error = 0;
+	boolean_t restricted = FALSE;
 
 	if (outif != NULL)
 		*outif = NULL;
@@ -1059,11 +1109,13 @@ in_pcbladdr(struct inpcb *inp, struct sockaddr *nam, struct in_addr *laddr,
 		 * If the route points to a cellular interface and the
 		 * caller forbids our using interfaces of such type,
 		 * pretend that there is no route.
+		 * Apply the same logic for expensive interfaces.
 		 */
-		if (nocell && IFNET_IS_CELLULAR(ro->ro_rt->rt_ifp)) {
+		if (inp_restricted_send(inp, ro->ro_rt->rt_ifp)) {
 			RT_UNLOCK(ro->ro_rt);
 			ROUTE_RELEASE(ro);
 			error = EHOSTUNREACH;
+			restricted = TRUE;
 		} else {
 			/* Become a regular mutex */
 			RT_CONVERT_LOCK(ro->ro_rt);
@@ -1140,11 +1192,13 @@ done:
 		 * If the source address belongs to a cellular interface
 		 * and the socket forbids our using interfaces of such
 		 * type, pretend that there is no source address.
+		 * Apply the same logic for expensive interfaces.
 		 */
 		IFA_LOCK_SPIN(&ia->ia_ifa);
-		if (nocell && IFNET_IS_CELLULAR(ia->ia_ifa.ifa_ifp)) {
+		if (inp_restricted_send(inp, ia->ia_ifa.ifa_ifp)) {
 			IFA_UNLOCK(&ia->ia_ifa);
 			error = EHOSTUNREACH;
+			restricted = TRUE;
 		} else if (error == 0) {
 			*laddr = ia->ia_addr.sin_addr;
 			if (outif != NULL) {
@@ -1170,7 +1224,7 @@ done:
 		ia = NULL;
 	}
 
-	if (nocell && error == EHOSTUNREACH) {
+	if (restricted && error == EHOSTUNREACH) {
 		soevent(inp->inp_socket, (SO_FILT_HINT_LOCKED |
 		    SO_FILT_HINT_IFDENIED));
 	}
@@ -1196,6 +1250,7 @@ in_pcbconnect(struct inpcb *inp, struct sockaddr *nam, struct proc *p,
 	struct sockaddr_in *sin = (struct sockaddr_in *)(void *)nam;
 	struct inpcb *pcb;
 	int error;
+	struct socket *so = inp->inp_socket;
 
 	/*
 	 *   Call inner routine, to assign local interface address.
@@ -1203,18 +1258,18 @@ in_pcbconnect(struct inpcb *inp, struct sockaddr *nam, struct proc *p,
 	if ((error = in_pcbladdr(inp, nam, &laddr, ifscope, outif)) != 0)
 		return (error);
 
-	socket_unlock(inp->inp_socket, 0);
+	socket_unlock(so, 0);
 	pcb = in_pcblookup_hash(inp->inp_pcbinfo, sin->sin_addr, sin->sin_port,
 	    inp->inp_laddr.s_addr ? inp->inp_laddr : laddr,
 	    inp->inp_lport, 0, NULL);
-	socket_lock(inp->inp_socket, 0);
+	socket_lock(so, 0);
 
 	/*
 	 * Check if the socket is still in a valid state. When we unlock this
 	 * embryonic socket, it can get aborted if another thread is closing
 	 * the listener (radar 7947600).
 	 */
-	if ((inp->inp_socket->so_flags & SOF_ABORTED) != 0)
+	if ((so->so_flags & SOF_ABORTED) != 0)
 		return (ECONNREFUSED);
 
 	if (pcb != NULL) {
@@ -1232,9 +1287,9 @@ in_pcbconnect(struct inpcb *inp, struct sockaddr *nam, struct proc *p,
 			 * Lock inversion issue, mostly with udp
 			 * multicast packets.
 			 */
-			socket_unlock(inp->inp_socket, 0);
+			socket_unlock(so, 0);
 			lck_rw_lock_exclusive(inp->inp_pcbinfo->ipi_lock);
-			socket_lock(inp->inp_socket, 0);
+			socket_lock(so, 0);
 		}
 		inp->inp_laddr = laddr;
 		/* no reference needed */
@@ -1246,13 +1301,15 @@ in_pcbconnect(struct inpcb *inp, struct sockaddr *nam, struct proc *p,
 			 * Lock inversion issue, mostly with udp
 			 * multicast packets.
 			 */
-			socket_unlock(inp->inp_socket, 0);
+			socket_unlock(so, 0);
 			lck_rw_lock_exclusive(inp->inp_pcbinfo->ipi_lock);
-			socket_lock(inp->inp_socket, 0);
+			socket_lock(so, 0);
 		}
 	}
 	inp->inp_faddr = sin->sin_addr;
 	inp->inp_fport = sin->sin_port;
+	if (nstat_collect && SOCK_PROTO(so) == IPPROTO_UDP)
+		nstat_pcb_invalidate_cache(inp);
 	in_pcbrehash(inp);
 	lck_rw_done(inp->inp_pcbinfo->ipi_lock);
 	return (0);
@@ -1262,6 +1319,9 @@ void
 in_pcbdisconnect(struct inpcb *inp)
 {
 	struct socket *so = inp->inp_socket;
+
+	if (nstat_collect && SOCK_PROTO(so) == IPPROTO_UDP)
+		nstat_pcb_cache(inp);
 
 	inp->inp_faddr.s_addr = INADDR_ANY;
 	inp->inp_fport = 0;
@@ -1295,13 +1355,20 @@ in_pcbdetach(struct inpcb *inp)
 		    inp, so, SOCK_PROTO(so));
 		/* NOTREACHED */
 	}
-
+	
 #if IPSEC
 	if (inp->inp_sp != NULL) {
 		(void) ipsec4_delete_pcbpolicy(inp);
 	}
 #endif /* IPSEC */
-
+	
+	/*
+	 * Let NetworkStatistics know this PCB is going away
+	 * before we detach it.
+	 */
+	if (nstat_collect && 
+	    (SOCK_PROTO(so) == IPPROTO_TCP || SOCK_PROTO(so) == IPPROTO_UDP))
+		nstat_pcb_detach(inp);
 	/* mark socket state as dead */
 	if (in_pcb_checkstate(inp, WNT_STOPUSING, 1) != WNT_STOPUSING) {
 		panic("%s: so=%p proto=%d couldn't set to STOPUSING\n",
@@ -1450,8 +1517,11 @@ in_getsockaddr_s(struct socket *so, struct sockaddr_storage *ss)
 	sin->sin_family = AF_INET;
 	sin->sin_len = sizeof (*sin);
 
-	if ((inp = sotoinpcb(so)) == NULL ||
-	    (inp->inp_flags2 & INP2_WANT_FLOW_DIVERT))
+	if ((inp = sotoinpcb(so)) == NULL
+#if NECP
+		|| (necp_socket_should_use_flow_divert(inp))
+#endif /* NECP */
+		)
 		return (inp == NULL ? EINVAL : EPROTOTYPE);
 
 	sin->sin_port = inp->inp_lport;
@@ -1498,8 +1568,11 @@ in_getpeeraddr_s(struct socket *so, struct sockaddr_storage *ss)
 	sin->sin_family = AF_INET;
 	sin->sin_len = sizeof (*sin);
 
-	if ((inp = sotoinpcb(so)) == NULL ||
-	    (inp->inp_flags2 & INP2_WANT_FLOW_DIVERT)) {
+	if ((inp = sotoinpcb(so)) == NULL
+#if NECP
+		|| (necp_socket_should_use_flow_divert(inp))
+#endif /* NECP */
+		) {
 		return (inp == NULL ? EINVAL : EPROTOTYPE);
 	}
 
@@ -1746,11 +1819,7 @@ in_pcblookup_hash_exists(struct inpcbinfo *pcbinfo, struct in_addr faddr,
 		if (!(inp->inp_vflag & INP_IPV4))
 			continue;
 #endif /* INET6 */
-		if (inp_restricted(inp, ifp))
-			continue;
-
-		if (ifp != NULL && IFNET_IS_CELLULAR(ifp) &&
-		    (inp->inp_flags & INP_NO_IFT_CELLULAR))
+		if (inp_restricted_recv(inp, ifp))
 			continue;
 
 		if (inp->inp_faddr.s_addr == faddr.s_addr &&
@@ -1786,11 +1855,7 @@ in_pcblookup_hash_exists(struct inpcbinfo *pcbinfo, struct in_addr faddr,
 		if (!(inp->inp_vflag & INP_IPV4))
 			continue;
 #endif /* INET6 */
-		if (inp_restricted(inp, ifp))
-			continue;
-
-		if (ifp != NULL && IFNET_IS_CELLULAR(ifp) &&
-		    (inp->inp_flags & INP_NO_IFT_CELLULAR))
+		if (inp_restricted_recv(inp, ifp))
 			continue;
 
 		if (inp->inp_faddr.s_addr == INADDR_ANY &&
@@ -1873,11 +1938,7 @@ in_pcblookup_hash(struct inpcbinfo *pcbinfo, struct in_addr faddr,
 		if (!(inp->inp_vflag & INP_IPV4))
 			continue;
 #endif /* INET6 */
-		if (inp_restricted(inp, ifp))
-			continue;
-
-		if (ifp != NULL && IFNET_IS_CELLULAR(ifp) &&
-		    (inp->inp_flags & INP_NO_IFT_CELLULAR))
+		if (inp_restricted_recv(inp, ifp))
 			continue;
 
 		if (inp->inp_faddr.s_addr == faddr.s_addr &&
@@ -1914,11 +1975,7 @@ in_pcblookup_hash(struct inpcbinfo *pcbinfo, struct in_addr faddr,
 		if (!(inp->inp_vflag & INP_IPV4))
 			continue;
 #endif /* INET6 */
-		if (inp_restricted(inp, ifp))
-			continue;
-
-		if (ifp != NULL && IFNET_IS_CELLULAR(ifp) &&
-		    (inp->inp_flags & INP_NO_IFT_CELLULAR))
+		if (inp_restricted_recv(inp, ifp))
 			continue;
 
 		if (inp->inp_faddr.s_addr == INADDR_ANY &&
@@ -2043,11 +2100,21 @@ in_pcbinshash(struct inpcb *inp, int locked)
 		LIST_INIT(&phd->phd_pcblist);
 		LIST_INSERT_HEAD(pcbporthash, phd, phd_hash);
 	}
+
+	VERIFY(!(inp->inp_flags2 & INP2_INHASHLIST));
 	inp->inp_phd = phd;
 	LIST_INSERT_HEAD(&phd->phd_pcblist, inp, inp_portlist);
 	LIST_INSERT_HEAD(pcbhash, inp, inp_hash);
+	inp->inp_flags2 |= INP2_INHASHLIST;
+
 	if (!locked)
 		lck_rw_done(pcbinfo->ipi_lock);
+	
+#if NECP
+	// This call catches the original setting of the local address
+	inp_update_necp_policy(inp, NULL, NULL, 0);
+#endif /* NECP */
+	
 	return (0);
 }
 
@@ -2074,8 +2141,19 @@ in_pcbrehash(struct inpcb *inp)
 	    inp->inp_fport, inp->inp_pcbinfo->ipi_hashmask);
 	head = &inp->inp_pcbinfo->ipi_hashbase[inp->inp_hash_element];
 
-	LIST_REMOVE(inp, inp_hash);
+	if (inp->inp_flags2 & INP2_INHASHLIST) {
+		LIST_REMOVE(inp, inp_hash);
+		inp->inp_flags2 &= ~INP2_INHASHLIST;
+	}
+
+	VERIFY(!(inp->inp_flags2 & INP2_INHASHLIST));
 	LIST_INSERT_HEAD(head, inp, inp_hash);
+	inp->inp_flags2 |= INP2_INHASHLIST;
+	
+#if NECP
+	// This call catches updates to the remote addresses
+	inp_update_necp_policy(inp, NULL, NULL, 0);
+#endif /* NECP */
 }
 
 /*
@@ -2087,16 +2165,31 @@ in_pcbremlists(struct inpcb *inp)
 {
 	inp->inp_gencnt = ++inp->inp_pcbinfo->ipi_gencnt;
 
-	if (inp->inp_lport) {
+	/*
+	 * Check if it's in hashlist -- an inp is placed in hashlist when
+	 * it's local port gets assigned. So it should also be present 
+	 * in the port list.
+	 */
+	if (inp->inp_flags2 & INP2_INHASHLIST) {
 		struct inpcbport *phd = inp->inp_phd;
 
+		VERIFY(phd != NULL && inp->inp_lport > 0);
+
 		LIST_REMOVE(inp, inp_hash);
+		inp->inp_hash.le_next = NULL;
+		inp->inp_hash.le_prev = NULL;
+
 		LIST_REMOVE(inp, inp_portlist);
-		if (phd != NULL && (LIST_FIRST(&phd->phd_pcblist) == NULL)) {
+		inp->inp_portlist.le_next = NULL;
+		inp->inp_portlist.le_prev = NULL;
+		if (LIST_EMPTY(&phd->phd_pcblist)) {
 			LIST_REMOVE(phd, phd_hash);
 			FREE(phd, M_PCB);
 		}
+		inp->inp_phd = NULL;
+		inp->inp_flags2 &= ~INP2_INHASHLIST;
 	}
+	VERIFY(!(inp->inp_flags2 & INP2_INHASHLIST));
 
 	if (inp->inp_flags2 & INP2_TIMEWAIT) {
 		/* Remove from time-wait queue */
@@ -2414,25 +2507,58 @@ inp_clear_nocellular(struct inpcb *inp)
 	}
 }
 
-#if FLOW_DIVERT
+void
+inp_set_noexpensive(struct inpcb *inp)
+{
+	inp->inp_flags2 |= INP2_NO_IFF_EXPENSIVE;
+
+	/* Blow away any cached route in the PCB */
+	ROUTE_RELEASE(&inp->inp_route);
+}
+
+void
+inp_set_awdl_unrestricted(struct inpcb *inp)
+{
+	inp->inp_flags2 |= INP2_AWDL_UNRESTRICTED;
+
+	/* Blow away any cached route in the PCB */
+	ROUTE_RELEASE(&inp->inp_route);
+}
+
+boolean_t
+inp_get_awdl_unrestricted(struct inpcb *inp)
+{
+	return (inp->inp_flags2 & INP2_AWDL_UNRESTRICTED) ? TRUE : FALSE;
+}
+
+void
+inp_clear_awdl_unrestricted(struct inpcb *inp)
+{
+	inp->inp_flags2 &= ~INP2_AWDL_UNRESTRICTED;
+
+	/* Blow away any cached route in the PCB */
+	ROUTE_RELEASE(&inp->inp_route);
+}
+
+#if NECP
 /*
- * Called when PROC_UUID_FLOW_DIVERT is set.
+ * Called when PROC_UUID_NECP_APP_POLICY is set.
  */
 void
-inp_set_flow_divert(struct inpcb *inp)
+inp_set_want_app_policy(struct inpcb *inp)
 {
-	inp->inp_flags2 |= INP2_WANT_FLOW_DIVERT;
+	inp->inp_flags2 |= INP2_WANT_APP_POLICY;
 }
 
 /*
- * Called when PROC_UUID_FLOW_DIVERT is cleared.
+ * Called when PROC_UUID_NECP_APP_POLICY is cleared.
  */
 void
-inp_clear_flow_divert(struct inpcb *inp)
+inp_clear_want_app_policy(struct inpcb *inp)
 {
-	inp->inp_flags2 &= ~INP2_WANT_FLOW_DIVERT;
+	inp->inp_flags2 &= ~INP2_WANT_APP_POLICY;
 }
-#endif /* FLOW_DIVERT */
+#endif /* NECP */
 
 /*
  * Calculate flow hash for an inp, used by an interface to identify a
@@ -2561,6 +2687,9 @@ inp_fc_feedback(struct inpcb *inp)
 		return;
 	}
 
+	if (inp->inp_sndinprog_cnt > 0)
+		inp->inp_flags |= INP_FC_FEEDBACK;
+
 	/*
 	 * Return if the connection is not in flow-controlled state.
 	 * This can happen if the connection experienced
@@ -2591,9 +2720,6 @@ inp_reset_fc_state(struct inpcb *inp)
 		so->so_flags &= ~(SOF_SUSPENDED);
 		soevent(so, (SO_FILT_HINT_LOCKED | SO_FILT_HINT_RESUME));
 	}
-
-	if (inp->inp_sndinprog_cnt > 0)
-		inp->inp_flags |= INP_FC_FEEDBACK;
 
 	/* Give a write wakeup to unblock the socket */
 	if (needwakeup)
@@ -2690,13 +2816,18 @@ inp_get_soprocinfo(struct inpcb *inp, struct so_procinfo *soprocinfo)
 	struct socket *so = inp->inp_socket;
 
 	soprocinfo->spi_pid = so->last_pid;
+	if (so->last_pid != 0)
+		uuid_copy(soprocinfo->spi_uuid, so->last_uuid);
 	/*
 	 * When not delegated, the effective pid is the same as the real pid
 	 */
-	if (so->so_flags & SOF_DELEGATED)
+	if (so->so_flags & SOF_DELEGATED) {
 		soprocinfo->spi_epid = so->e_pid;
-	else
+		if (so->e_pid != 0)
+			uuid_copy(soprocinfo->spi_euuid, so->e_uuid);
+	} else {
 		soprocinfo->spi_epid = so->last_pid;
+	}
 }
 
 int
@@ -2736,13 +2867,13 @@ inp_update_cellular_policy(struct inpcb *inp, boolean_t set)
 	VERIFY(so != NULL);
 	VERIFY(inp->inp_state != INPCB_STATE_DEAD);
 
-	before = (inp->inp_flags & INP_NO_IFT_CELLULAR);
+	before = INP_NO_CELLULAR(inp);
 	if (set) {
 		inp_set_nocellular(inp);
 	} else {
 		inp_clear_nocellular(inp);
 	}
-	after = (inp->inp_flags & INP_NO_IFT_CELLULAR);
+	after = INP_NO_CELLULAR(inp);
 	if (net_io_policy_log && (before != after)) {
 		static const char *ok = "OK";
 		static const char *nok = "NOACCESS";
@@ -2771,9 +2902,9 @@ inp_update_cellular_policy(struct inpcb *inp, boolean_t set)
 	}
 }
 
-#if FLOW_DIVERT
+#if NECP
 static void
-inp_update_flow_divert_policy(struct inpcb *inp, boolean_t set)
+inp_update_necp_want_app_policy(struct inpcb *inp, boolean_t set)
 {
 	struct socket *so = inp->inp_socket;
 	int before, after;
@@ -2781,17 +2912,13 @@ inp_update_flow_divert_policy(struct inpcb *inp, boolean_t set)
 	VERIFY(so != NULL);
 	VERIFY(inp->inp_state != INPCB_STATE_DEAD);
 
-	if (set && !(inp->inp_flags2 & INP2_WANT_FLOW_DIVERT)) {
-		set = !flow_divert_is_dns_service(so);
-	}
-
-	before = (inp->inp_flags2 & INP2_WANT_FLOW_DIVERT);
+	before = (inp->inp_flags2 & INP2_WANT_APP_POLICY);
 	if (set) {
-		inp_set_flow_divert(inp);
+		inp_set_want_app_policy(inp);
 	} else {
-		inp_clear_flow_divert(inp);
+		inp_clear_want_app_policy(inp);
 	}
-	after = (inp->inp_flags2 & INP2_WANT_FLOW_DIVERT);
+	after = (inp->inp_flags2 & INP2_WANT_APP_POLICY);
 	if (net_io_policy_log && (before != after)) {
 		static const char *wanted = "WANTED";
 		static const char *unwanted = "UNWANTED";
@@ -2816,8 +2943,23 @@ inp_update_flow_divert_policy(struct inpcb *inp, boolean_t set)
 		    ((before < after) ? wanted : unwanted));
 	}
 }
-#endif /* FLOW_DIVERT */
+#endif /* NECP */
 #endif /* !CONFIG_PROC_UUID_POLICY */
+
+#if NECP
+void
+inp_update_necp_policy(struct inpcb *inp, struct sockaddr *override_local_addr, struct sockaddr *override_remote_addr, u_int override_bound_interface)
+{
+	necp_socket_find_policy_match(inp, override_local_addr, override_remote_addr, override_bound_interface);
+	if (necp_socket_should_rescope(inp) &&
+		inp->inp_lport == 0 &&
+		inp->inp_laddr.s_addr == INADDR_ANY &&
+		IN6_IS_ADDR_UNSPECIFIED(&inp->in6p_laddr)) {
+		// If we should rescope, and the socket is not yet bound
+		inp_bindif(inp, necp_socket_get_rescope_if_index(inp), NULL);
+	}
+}
+#endif /* NECP */
 
 int
 inp_update_policy(struct inpcb *inp)
@@ -2863,14 +3005,14 @@ inp_update_policy(struct inpcb *inp)
 		} else if (!(pflags & PROC_UUID_NO_CELLULAR)) {
 			inp_update_cellular_policy(inp, FALSE);
 		}
-#if FLOW_DIVERT
-		/* update flow divert policy for this socket */
-		if (err == 0 && (pflags & PROC_UUID_FLOW_DIVERT)) {
-			inp_update_flow_divert_policy(inp, TRUE);
-		} else if (!(pflags & PROC_UUID_FLOW_DIVERT)) {
-			inp_update_flow_divert_policy(inp, FALSE);
+#if NECP
+		/* update necp want app policy for this socket */
+		if (err == 0 && (pflags & PROC_UUID_NECP_APP_POLICY)) {
+			inp_update_necp_want_app_policy(inp, TRUE);
+		} else if (!(pflags & PROC_UUID_NECP_APP_POLICY)) {
+			inp_update_necp_want_app_policy(inp, FALSE);
 		}
-#endif /* FLOW_DIVERT */
+#endif /* NECP */
 	}
 
 	return ((err == ENOENT) ? 0 : err);
@@ -2879,16 +3021,35 @@ inp_update_policy(struct inpcb *inp)
 	return (0);
 #endif /* !CONFIG_PROC_UUID_POLICY */
 }
-
+/*
+ * Called when we need to enforce policy restrictions in the input path.
+ *
+ * Returns TRUE if we're not allowed to receive data, otherwise FALSE.
+ */
 boolean_t
-inp_restricted(struct inpcb *inp, struct ifnet *ifp)
+inp_restricted_recv(struct inpcb *inp, struct ifnet *ifp)
 {
 	VERIFY(inp != NULL);
 
+	/*
+	 * Inbound restrictions.
+	 */
 	if (!sorestrictrecv)
 		return (FALSE);
 
-	if (ifp == NULL || !(ifp->if_eflags & IFEF_RESTRICTED_RECV))
+	if (ifp == NULL)
+		return (FALSE);
+
+	if (IFNET_IS_CELLULAR(ifp) && INP_NO_CELLULAR(inp))
+		return (TRUE);
+
+	if (IFNET_IS_EXPENSIVE(ifp) && INP_NO_EXPENSIVE(inp))
+		return (TRUE);
+
+	if (IFNET_IS_AWDL_RESTRICTED(ifp) && !INP_AWDL_UNRESTRICTED(inp))
+		return (TRUE);
+	
+	if (!(ifp->if_eflags & IFEF_RESTRICTED_RECV))
 		return (FALSE);
 
 	if (inp->inp_flags & INP_RECV_ANYIF)
@@ -2898,4 +3059,35 @@ inp_restricted(struct inpcb *inp, struct ifnet *ifp)
 		return (FALSE);
 
 	return (TRUE);
+}
+
+/*
+ * Called when we need to enforce policy restrictions in the output path.
+ *
+ * Returns TRUE if we're not allowed to send data out, otherwise FALSE.
+ */
+boolean_t
+inp_restricted_send(struct inpcb *inp, struct ifnet *ifp)
+{
+	VERIFY(inp != NULL);
+
+	/*
+	 * Outbound restrictions.
+	 */
+	if (!sorestrictsend)
+		return (FALSE);
+
+	if (ifp == NULL)
+		return (FALSE);
+
+	if (IFNET_IS_CELLULAR(ifp) && INP_NO_CELLULAR(inp))
+		return (TRUE);
+
+	if (IFNET_IS_EXPENSIVE(ifp) && INP_NO_EXPENSIVE(inp))
+		return (TRUE);
+
+	if (IFNET_IS_AWDL_RESTRICTED(ifp) && !INP_AWDL_UNRESTRICTED(inp))
+		return (TRUE);
+
+	return (FALSE);
 }

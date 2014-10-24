@@ -29,6 +29,7 @@
  * file: pe_init.c
  *    i386 platform expert initialization.
  */
+
 #include <sys/types.h>
 #include <mach/vm_param.h>
 #include <machine/machine_routines.h>
@@ -171,8 +172,11 @@ void PE_init_iokit(void)
     /*
      * Initialize the spinning wheel (progress indicator).
      */
-    vc_progress_initialize( &default_progress, default_progress_data1x, default_progress_data2x,
-                            (unsigned char *) appleClut8 );
+    vc_progress_initialize(&default_progress, 
+			    default_progress_data1x,
+			    default_progress_data2x, 
+			    default_progress_data3x, 
+			    (unsigned char *) appleClut8);
 
     (void) StartIOKit( PE_state.deviceTreeHead, PE_state.bootArgs, gPEEFIRuntimeServices, NULL);
 }
@@ -193,7 +197,6 @@ void PE_init_platform(boolean_t vm_initialized, void * _args)
         PE_state.video.v_height	    = args->Video.v_height;
         PE_state.video.v_depth	    = args->Video.v_depth;
         PE_state.video.v_display    = args->Video.v_display;
-        PE_state.video.v_scale      = (kBootArgsFlagHiDPI & args->flags) ? 2 : 1;
         strlcpy(PE_state.video.v_pixelFormat, "PPPPPPPP",
 		sizeof(PE_state.video.v_pixelFormat));
 

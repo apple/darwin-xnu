@@ -71,6 +71,7 @@ extern void	acpi_wake_prot(void);
 #endif
 extern kern_return_t IOCPURunPlatformQuiesceActions(void);
 extern kern_return_t IOCPURunPlatformActiveActions(void);
+extern kern_return_t IOCPURunPlatformHaltRestartActions(uint32_t message);
 
 extern void 	fpinit(void);
 
@@ -115,12 +116,14 @@ acpi_hibernate(void *refcon)
 		{
 			// off
 			HIBLOG("power off\n");
+			IOCPURunPlatformHaltRestartActions(kPEHaltCPU);
 			if (PE_halt_restart) (*PE_halt_restart)(kPEHaltCPU);
 		}
 		else if( mode == kIOHibernatePostWriteRestart )
 		{
 			// restart
 			HIBLOG("restart\n");
+			IOCPURunPlatformHaltRestartActions(kPERestartCPU);
 			if (PE_halt_restart) (*PE_halt_restart)(kPERestartCPU);
 		}
 		else
@@ -293,6 +296,8 @@ acpi_sleep_kernel(acpi_sleep_callback func, void *refcon)
 	/* let the realtime clock reset */
 	rtc_sleep_wakeup(acpi_sleep_abstime);
 	acpi_wake_postrebase_abstime = mach_absolute_time();
+	assert(mach_absolute_time() >= acpi_sleep_abstime);
+
 	kdebug_enable = save_kdebug_enable;
 
 	if (kdebug_enable == 0) {
@@ -420,6 +425,7 @@ acpi_idle_kernel(acpi_sleep_callback func, void *refcon)
 		kdebug_enable = save_kdebug_enable;
 	}
 	acpi_wake_postrebase_abstime = mach_absolute_time();
+	assert(mach_absolute_time() >= acpi_idle_abstime);
 	cpu_datap(master_cpu)->cpu_running = TRUE;
 
 	KERNEL_DEBUG_CONSTANT(

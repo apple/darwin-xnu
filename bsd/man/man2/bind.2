@@ -131,6 +131,11 @@ The following errors are specific to binding names in the UNIX domain.
 A component of the path prefix does not allow searching
 or the node's parent directory denies write permission.
 .\" ==========
+.It Bq Er EEXIST
+A file already exists at the pathname.
+.Xr unlink 2
+it first.
+.\" ==========
 .It Bq Er EIO
 An I/O error occurred while making the directory entry
 or allocating the inode.

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2013 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2014 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -82,6 +82,8 @@
 #include <sys/syslog.h>
 #include <sys/sysctl.h>
 #include <sys/mcache.h>
+#include <sys/kauth.h>
+#include <sys/priv.h>
 #include <kern/zalloc.h>
 
 #include <machine/endian.h>
@@ -1786,7 +1788,11 @@ ifioctl(struct socket *so, u_long cmd, caddr_t data, struct proc *p)
 	case SIOCGIFLINKQUALITYMETRIC:		/* struct ifreq */
 	case SIOCSIFLOG:			/* struct ifreq */
 	case SIOCGIFLOG:			/* struct ifreq */
-	case SIOCGIFDELEGATE: {			/* struct ifreq */
+	case SIOCGIFDELEGATE: 			/* struct ifreq */
+	case SIOCGIFEXPENSIVE:			/* struct ifreq */
+	case SIOCSIFEXPENSIVE: 			/* struct ifreq */
+	case SIOCSIF2KCL:			/* struct ifreq */
+	case SIOCGIF2KCL: {			/* struct ifreq */
 		struct ifreq ifr;
 		bcopy(data, &ifr, sizeof (ifr));
 		ifr.ifr_name[IFNAMSIZ - 1] = '\0';
@@ -1822,13 +1828,6 @@ ifioctl(struct socket *so, u_long cmd, caddr_t data, struct proc *p)
 		ifp = ifunit(ifname);
 		break;
 #endif /* INET6 */
-
-	case SIOCSLIFPHYADDR:			/* struct if_laddrreq */
-	case SIOCGLIFPHYADDR:			/* struct if_laddrreq */
-		bcopy(((struct if_laddrreq *)(void *)data)->iflr_name,
-		    ifname, IFNAMSIZ);
-		ifp = ifunit(ifname);
-		break;
 
 	case SIOCGIFSTATUS:			/* struct ifstat */
 		ifs = _MALLOC(sizeof (*ifs), M_DEVBUF, M_WAITOK);
@@ -1905,7 +1904,6 @@ ifioctl(struct socket *so, u_long cmd, caddr_t data, struct proc *p)
 	case SIOCSIFPHYADDR_IN6_32:		/* struct in6_aliasreq_32 */
 	case SIOCSIFPHYADDR_IN6_64:		/* struct in6_aliasreq_64 */
 #endif /* INET6 */
-	case SIOCSLIFPHYADDR:			/* struct if_laddrreq */
 		error = proc_suser(p);
 		if (error != 0)
 			break;
@@ -1926,7 +1924,6 @@ ifioctl(struct socket *so, u_long cmd, caddr_t data, struct proc *p)
 		bcopy(ifs, data, sizeof (*ifs));
 		break;
 
-	case SIOCGLIFPHYADDR:			/* struct if_laddrreq */
 	case SIOCGIFMEDIA32:			/* struct ifmediareq32 */
 	case SIOCGIFMEDIA64:			/* struct ifmediareq64 */
 		error = ifnet_ioctl(ifp, SOCK_DOM(so), cmd, data);
@@ -2378,6 +2375,67 @@ ifioctl_ifreq(struct socket *so, u_long cmd, struct ifreq *ifr, struct proc *p)
 		ifnet_lock_shared(ifp);
 		ifr->ifr_delegated = ((ifp->if_delegated.ifp != NULL) ?
 		    ifp->if_delegated.ifp->if_index : 0);
+		ifnet_lock_done(ifp);
+		break;
+
+	case SIOCGIFEXPENSIVE:
+		ifnet_lock_shared(ifp);
+		if (ifp->if_eflags & IFEF_EXPENSIVE)
+			ifr->ifr_expensive = 1;
+		else 
+			ifr->ifr_expensive = 0;
+		ifnet_lock_done(ifp);
+		break;
+
+	case SIOCSIFEXPENSIVE:
+	{
+		struct ifnet *difp;
+
+		if ((error = priv_check_cred(kauth_cred_get(),
+		    PRIV_NET_INTERFACE_CONTROL, 0)) != 0)
+			return (error);
+		ifnet_lock_exclusive(ifp);
+		if (ifr->ifr_expensive)
+			ifp->if_eflags |= IFEF_EXPENSIVE;
+		else 
+			ifp->if_eflags &= ~IFEF_EXPENSIVE;
+		ifnet_lock_done(ifp);
+		/*
+		 * Update the expensive bit in the delegated interface
+		 * structure.
+		 */
+		ifnet_head_lock_shared();
+		TAILQ_FOREACH(difp, &ifnet_head, if_link) {
+			ifnet_lock_exclusive(difp);
+			if (difp->if_delegated.ifp == ifp) {
+				difp->if_delegated.expensive = 
+				    ifp->if_eflags & IFEF_EXPENSIVE ? 1 : 0;
+
+			}
+			ifnet_lock_done(difp);
+		}
+		ifnet_head_done();
+		break;
+	}
+
+	case SIOCGIF2KCL:
+		ifnet_lock_shared(ifp);
+		if (ifp->if_eflags & IFEF_2KCL)
+			ifr->ifr_2kcl = 1;
+		else
+			ifr->ifr_2kcl = 0;
+		ifnet_lock_done(ifp);
+		break;
+
+	case SIOCSIF2KCL:
+		if ((error = priv_check_cred(kauth_cred_get(),
+		    PRIV_NET_INTERFACE_CONTROL, 0)) != 0)
+			return (error);
+		ifnet_lock_exclusive(ifp);
+		if (ifr->ifr_2kcl)
+			ifp->if_eflags |= IFEF_2KCL;
+		else
+			ifp->if_eflags &= ~IFEF_2KCL;
 		ifnet_lock_done(ifp);
 		break;
 
@@ -3880,9 +3938,6 @@ ifioctl_cassert(void)
 	case SIOCSIFMETRIC:
 	case SIOCDIFADDR:
 	case SIOCAIFADDR:
-	case SIOCALIFADDR:
-	case SIOCGLIFADDR:
-	case SIOCDLIFADDR:
 	case SIOCGIFADDR:
 	case SIOCGIFDSTADDR:
 	case SIOCGIFBRDADDR:
@@ -3910,8 +3965,6 @@ ifioctl_cassert(void)
 	case SIOCGIFPSRCADDR:
 	case SIOCGIFPDSTADDR:
 	case SIOCDIFPHYADDR:
-	case SIOCSLIFPHYADDR:
-	case SIOCGLIFPHYADDR:
 	case SIOCGIFDEVMTU:
 	case SIOCSIFALTMTU:
 	case SIOCGIFALTMTU:

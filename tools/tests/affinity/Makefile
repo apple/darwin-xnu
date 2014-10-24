@@ -5,7 +5,7 @@ else
 Embedded?=$(shell echo $(SDKROOT) | grep -iq iphoneos && echo YES || echo NO)
 endif
 
-CC:=xcrun -sdk "$(SDKROOT)" cc
+CC:=$(shell xcrun -sdk "$(SDKROOT)" -find cc)
 
 SYMROOT?=$(shell /bin/pwd)
 
@@ -13,7 +13,7 @@ ifdef RC_ARCHS
     ARCHS:=$(RC_ARCHS)
   else
     ifeq "$(Embedded)" "YES"
-      ARCHS:=armv7 armv7s
+      ARCHS:=armv7 armv7s arm64
     else
       ARCHS:=x86_64 i386
   endif
@@ -24,7 +24,7 @@ ARCH_32_FLAGS := $(patsubst %, -arch %, $(ARCH_32))
 ARCH_64 := $(filter %64, $(ARCHS))
 ARCH_64_FLAGS := $(patsubst %, -arch %, $(ARCH_64))
 
-CFLAGS 	:=-g
+CFLAGS 	:=-g -I$(SDKROOT)/System/Library/Frameworks/System.framework/PrivateHeaders
 
 DSTROOT?=$(shell /bin/pwd)
 SRCROOT?=$(shell /bin/pwd)

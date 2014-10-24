@@ -62,6 +62,11 @@
     #define KXLD_USER_OR_ARM 1
 #endif
 
+/* For arm64-specific linking code */
+#if (!KERNEL || __arm64__)
+    #define KXLD_USER_OR_ARM64 1
+#endif
+
 /* For linking code specific to architectures that support common symbols */
 #if (!KERNEL || __i386__)
     #define KXLD_USER_OR_COMMON 1

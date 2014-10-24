@@ -16,15 +16,16 @@ include $(MakeInc_def)
 #
 # XXX: CFLAGS
 #
-CFLAGS+= -include meta_features.h -DMACH_KERNEL_PRIVATE
+CFLAGS+= -include meta_features.h -DMACH_KERNEL_PRIVATE -DMACH_KERNEL
 
 # Objects that don't want -Wcast-align warning (8474835)
 OBJS_NO_CAST_ALIGN =			\
+		atm_notification_user.o \
 		model_dep.o		\
 		chud_thread.o		\
 		chud_thread_arm.o   \
 		video_console.o		\
-		kdp.o			\
+		kern_stackshot.o			\
 		kdp_udp.o		\
 		kdp_machdep.o		\
 		host.o			\
@@ -52,7 +53,7 @@ OBJS_NO_CAST_ALIGN =			\
 		startup64.o		\
 		affinity.o		\
 		sched_grrr.o		\
-		sched_fixedpriority.o	\
+		sched_proto.o		\
 		stack.o			\
 		task_policy.o		\
 		wait_queue.o		\
@@ -62,10 +63,24 @@ OBJS_NO_CAST_ALIGN =			\
 		status.o		\
 		machine_routines.o	\
 		loose_ends.o		\
-		sleh.o
+		fips_sha1.o		\
+		prng_yarrow.o		\
+		sha1mod.o		\
+		sleh.o			\
+		ccdigest_final_64be.o	\
+		ccdigest_init.o		\
+		ccdigest_update.o	\
+		cchmac_final.o		\
+		cchmac_init.o		\
+		ccsha1.o		\
 
+
+# Objects that don't want -Wsign-compare warning (15294427)
+OBJS_NO_SIGN_COMPARE = 		\
+		atm_notification_user.o
 
 $(foreach file,$(OBJS_NO_CAST_ALIGN),$(eval $(call add_perfile_cflags,$(file),-Wno-cast-align)))
+$(foreach file,$(OBJS_NO_SIGN_COMPARE),$(eval $(call add_perfile_cflags,$(file),-Wno-sign-compare)))
 
 #
 # Do not provide CTF symbolic these files
@@ -81,6 +96,7 @@ INCFLAGS_MAKEFILE= -I$(SOURCE)libsa
 # Directories for mig generated files
 #
 COMP_SUBDIRS = \
+	atm \
 	default_pager \
 	device \
 	mach \
@@ -107,27 +123,34 @@ COMP_SUBDIRS = \
 
 %CFILES
 
+%CXXFILES
+
 %SFILES
 
 %MACHDEP
 
-#
-#  OBJSDEPS is the set of files (defined in the machine dependent
-#  template if necessary) which all objects depend on (such as an
-#  in-line assembler expansion filter)
-#
-${OBJS}: ${OBJSDEPS}
+# Rebuild if per-file overrides change
+${OBJS}: $(firstword $(MAKEFILE_LIST))
 
-LDOBJS = $(OBJS)
+# Rebuild if global compile flags change
+$(COBJS): .CFLAGS
+.CFLAGS: ALWAYS
+	$(_v)$(REPLACECONTENTS) $@ $(KCC) $(CFLAGS) $(INCFLAGS)
+$(CXXOBJS): .CXXFLAGS
+.CXXFLAGS: ALWAYS
+	$(_v)$(REPLACECONTENTS) $@ $(KC++) $(CXXFLAGS) $(INCFLAGS)
+$(SOBJS): .SFLAGS
+.SFLAGS: ALWAYS
+	$(_v)$(REPLACECONTENTS) $@ $(S_KCC) $(SFLAGS) $(INCFLAGS)
 
-$(COMPONENT).filelist: $(LDOBJS) assym.s
+$(COMPONENT).filelist: $(OBJS)
 	$(_v)for hib_file in ${HIB_FILES};		\
 	do	\
                 $(SEG_HACK) -n __HIB -o $${hib_file}__ $${hib_file} ; \
                 mv $${hib_file}__ $${hib_file} ; \
 	done
 	@echo LDFILELIST $(COMPONENT)
-	$(_v)( for obj in ${LDOBJS}; do	\
+	$(_v)( for obj in ${OBJS}; do	\
 		 echo $(TARGET)/$(CURRENT_KERNEL_CONFIG)/$${obj}; \
 	done; ) > $(COMPONENT).filelist
 
@@ -143,11 +166,15 @@ GENASSYM_LOCATION = $(CURRENT_ARCH_CONFIG_LC)
 
 ifeq ($(CURRENT_ARCH_CONFIG_LC),x86_64)
 GENASSYM_LOCATION = i386
+else ifeq ($(CURRENT_ARCH_CONFIG_LC),x86_64h)
+GENASSYM_LOCATION = i386
 endif
 
+-include genassym.d
+genassym.o: .CFLAGS $(firstword $(MAKEFILE_LIST))
 genassym.o: $(SOURCE_DIR)/$(COMPONENT)/$(GENASSYM_LOCATION)/genassym.c
 	@echo GENASSYM $<
-	$(_v)${KCC} $(subst -flto,,${CFLAGS}) -MD -S -o ${@} ${INCFLAGS} $<
+	$(_v)${KCC} ${CFLAGS} ${CFLAGS_NOLTO_FLAG} -MD -S -o ${@} ${INCFLAGS} $<
 
 assym.s: genassym.o
 	$(_v)sed -e '/#DEFINITION#/!d' -e 's/^.*#DEFINITION#//' -e 's/\$$//' -e 'p' -e 's/#//2' -e 's/[^A-Za-z0-9_]*\([A-Za-z0-9_]*\)/ \1_NUM/2' genassym.o > $@

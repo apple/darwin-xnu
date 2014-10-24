@@ -58,12 +58,6 @@
 #warning "MAC policy is not KPI, see Technical Q&A QA1574, this header will be removed in next version"
 #endif
 
-int mac_task_check_service(task_t self, task_t obj, const char *perm);
-void mac_task_label_update_internal(struct label *pl, struct task *t);
-int mac_port_label_compute(struct label *subj, struct label *obj,
-    const char *serv, struct label *out);
-int mac_port_check_method(task_t task, struct label *sub, struct label *obj, int msgid);
-
 /* mac_do_machexc() flags */
 #define	MAC_DOEXCF_TRACED	0x01	/* Only do mach exeception if
 					   being ptrace()'ed */
@@ -76,49 +70,6 @@ struct label *mac_thread_get_uthreadlabel(struct uthread *uthread);
 #if CONFIG_MACF
 void mac_policy_init(void);
 void mac_policy_initmach(void);
-
-/* tasks */
-void mac_task_label_init(struct label *);
-void mac_task_label_copy(struct label *src, struct label *dest);
-void mac_task_label_destroy(struct label *);
-void mac_task_label_associate(struct task *, struct task *, struct label *,
-    struct label *, struct label *);
-void mac_task_label_associate_kernel(struct task *, struct label *, struct label *);
-void mac_task_label_modify( struct task *pt, void *arg,
-    void (*f)(struct label *l, void *arg));
-struct label *mac_task_get_label(struct task *task);
-
-/* ports */
-void mac_port_label_init(struct label *l);
-void mac_port_label_destroy(struct label *l);
-void mac_port_label_associate(struct label *it, struct label *st, struct label *plabel);
-void mac_port_label_associate_kernel(struct label *plabel, int isreply);
-void mac_port_label_update_kobject(struct label *plabel, int kotype);
-void mac_port_label_copy(struct label *src, struct label *dest);
-void mac_port_label_update_cred(struct label *src, struct label *dest);
-int mac_port_check_label_update(struct label *task, struct label *oldl, struct label *newl);
-
-int mac_port_check_send(struct label *task, struct label *port);
-int mac_port_check_receive(struct label *task, struct label *sender);
-int mac_port_check_make_send(struct label *task, struct label *port);
-int mac_port_check_make_send_once(struct label *task, struct label *port);
-int mac_port_check_move_receive(struct label *task, struct label *port);
-int mac_port_check_copy_send(struct label *task, struct label *port);
-int mac_port_check_move_send(struct label *task, struct label *port);
-int mac_port_check_move_send_once(struct label *task, struct label *port);
-
-int mac_port_check_hold_send(struct label *task, struct label *port);
-int mac_port_check_hold_send_once(struct label *task, struct label *port);
-int mac_port_check_hold_receive(struct label *task, struct label *port);
-
-int mac_task_label_externalize(struct label *, char *e, char *out, size_t olen, int flags);
-int mac_task_label_internalize(struct label *label, char *string);
-int mac_port_label_externalize(struct label *, char *e, char *out, size_t olen, int flags);
-int mac_port_label_internalize(struct label *label, char *string);
-
-void	mac_task_label_update(struct label *cred, struct label *task);
-int	mac_port_check_service(struct label *subj, struct label *obj,
-	    const char *serv, const char *perm);
 
 /* threads */
 void	act_set_astmacf(struct thread *);

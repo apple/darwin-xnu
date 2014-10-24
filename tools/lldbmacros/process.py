@@ -9,6 +9,34 @@ from utils import *
 from core.lazytarget import *
 import xnudefines
 
+def GetProcNameForTask(task):
+    """ returns a string name of the process. if proc is not valid "unknown" is returned
+        params:
+            task: value object represeting a task in the kernel.
+        returns:
+            str : A string name of the process linked to the task
+    """
+    if not task or not unsigned(task.bsd_info):
+        return "unknown"
+    p = Cast(task.bsd_info, 'proc *')
+    return str(p.p_comm)
+
+def GetProcPIDForTask(task):
+    """ returns a int pid of the process. if the proc is not valid, val[5] from audit_token is returned.
+        params:
+            task: value object representing a task in the kernel
+        returns:
+            int : pid of the process or -1 if not found
+    """
+    if task and unsigned(task.bsd_info):
+        p = Cast(task.bsd_info, 'proc *')
+        return unsigned(p.p_pid)
+    
+    if task :
+        return unsigned(task.audit_token.val[5])
+
+    return -1
+
 def GetProcInfo(proc):
     """ returns a string name, pid, parent and task for a proc_t. Decodes cred, flag and p_stat fields.
         params:
@@ -92,18 +120,76 @@ def ZombProc(cmd_args=None):
         params: 
             cmd_args - [] : array of strings passed from lldb command prompt
     """
-    for proc in kern.zombprocs:
-        print GetProcInfo(proc)
+    if len(kern.zombprocs) != 0:
+        print "\nZombie Processes:"
+        for proc in kern.zombprocs:
+            print GetProcInfo(proc) + "\n\n"
+
+@lldb_command('zombtasks')
+def ZombTasks(cmd_args=None):
+    """ Routine to print out all tasks in the zombie list
+        params: None
+    """
+    out_str = ""
+    if len(kern.zombprocs) != 0:
+        header = "\nZombie Tasks:\n"
+        header += GetTaskSummary.header + " " + GetProcSummary.header
+        for proc in kern.zombprocs:
+            if proc.p_stat != 5:
+                t = Cast(proc.task, 'task *')
+                out_str += GetTaskSummary(t) +" "+ GetProcSummary(proc) + "\n"
+        if out_str != "":
+            print header
+            print out_str
 
 @lldb_command('zombstacks')
 def ZombStacks(cmd_args=None):
     """ Routine to print out all stacks of tasks that are exiting
     """
+    header_flag = 0
     for proc in kern.zombprocs:
         if proc.p_stat != 5:
+            if header_flag == 0:
+                print "\nZombie Stacks:"
+                header_flag = 1
             t = Cast(proc.task, 'task *')
             ShowTaskStacks(t)
 #End of Zombstacks
+
+def GetASTSummary(ast):
+    """ Summarizes an AST field
+        Flags:
+        P - AST_PREEMPT
+        Q - AST_QUANTUM
+        U - AST_URGENT
+        H - AST_HANDOFF
+        Y - AST_YIELD
+        A - AST_APC
+        L - AST_LEDGER
+        B - AST_BSD
+        K - AST_KPERF
+        M - AST_MACF
+        C - AST_CHUD
+        C - AST_CHUD_URGENT
+        G - AST_GUARD
+        T - AST_TELEMETRY_USER
+        T - AST_TELEMETRY_KERNEL
+        T - AST_TELEMETRY_WINDOWED
+        S - AST_SFI
+    """
+    out_string = ""
+    state = int(ast)
+    thread_state_chars = {0x0:'', 0x1:'P', 0x2:'Q', 0x4:'U', 0x8:'H', 0x10:'Y', 0x20:'A',
+                          0x40:'L', 0x80:'B', 0x100:'K', 0x200:'M', 0x400:'C', 0x800:'C',
+                          0x1000:'G', 0x2000:'T', 0x4000:'T', 0x8000:'T', 0x10000:'S'}
+    state_str = ''
+    mask = 0x1
+    while mask <= 0x10000 :
+        state_str += thread_state_chars[int(state & mask)]
+        mask = mask << 1
+    
+    return state_str
+
 
 @lldb_type_summary(['task', 'task_t'])
 @header("{0: <20s} {1: <20s} {2: <20s} {3: >5s} {4: <5s}".format("task","vm_map", "ipc_space", "#acts", "flags"))
@@ -120,31 +206,65 @@ def GetTaskSummary(task):
         task_flags += 'P'
     if hasattr(task, "suspend_count") and int(task.suspend_count) > 0:
         task_flags += 'S'
-    if hasattr(task, "imp_receiver") and int(task.imp_receiver) == 1:
-        task_flags += 'R'
-    if hasattr(task, "imp_donor") and int(task.imp_donor) == 1:
-        task_flags += 'D'
-    if hasattr(task, "task_imp_assertcnt") and int(task.task_imp_assertcnt) > 0:
-        task_flags += 'B'
+    if hasattr(task, 'task_imp_base') and unsigned(task.task_imp_base):
+        tib = task.task_imp_base
+        if int(tib.iit_receiver) == 1:
+            task_flags += 'R'
+        if int(tib.iit_donor) == 1:
+            task_flags += 'D'
+        if int(tib.iit_assertcnt) > 0:
+            task_flags += 'B'
     out_string += format_string.format(task, task.map, task.itk_space, thread_count, task_flags)
     return out_string
 
 @lldb_type_summary(['thread *', 'thread_t'])
-@header("{0: <24s} {1: <10s} {2: <20s} {3: <6s} {4: <10s} {5: <5s} {6: <20s} {7: <45s} {8: <20s} {9: <20s}".format('thread', 'thread_id', 'processor', 'pri', 'io_policy', 'state', 'wait_queue', 'wait_event', 'wmesg', 'thread_name'))
+@header("{0: <24s} {1: <10s} {2: <20s} {3: <6s} {4: <6s} {5: <15s} {6: <15s} {7: <8s} {8: <12s} {9: <32s} {10: <20s} {11: <20s} {12: <20s}".format('thread', 'thread_id', 'processor', 'base', 'pri', 'sched_mode', 'io_policy', 'state', 'ast', 'wait_queue', 'wait_event', 'wmesg', 'thread_name'))
 def GetThreadSummary(thread):
     """ Summarize the thread structure. It decodes the wait state and waitevents from the data in the struct.
         params: thread: value - value objecte representing a thread in kernel
         returns: str - summary of a thread
+        
+        State flags:
+        W - WAIT
+        S - SUSP
+        R - RUN
+        U - Uninterruptible
+        H - Terminated
+        A - Terminated and on termination queue
+        I - Idle thread
+
+        policy flags:
+        B - darwinbg
+        L - lowpri cpu
+        T - IO throttle
+        P - IO passive
+        D - Terminated
     """
     out_string = ""
-    format_string = "{0: <24s} {1: <10s} {2: <20s} {3: <6s} {4: <10s} {5: <5s} {6: <20s} {7: <45s} {8: <20s} {9: <20s}"
+    format_string = "{0: <24s} {1: <10s} {2: <20s} {3: <6s} {4: <6s} {5: <15s} {6: <15s} {7: <8s} {8: <12s} {9: <32s} {10: <20s} {11: <20s} {12: <20s}"
     thread_ptr_str = str("{0: <#020x}".format(thread))
     if int(thread.static_param) : 
         thread_ptr_str+="[WQ]"
     thread_id = hex(thread.thread_id)
     thread_name = ''
     processor = hex(thread.last_processor)
+    base_priority = str(int(thread.priority))
     sched_priority = str(int(thread.sched_pri))
+    sched_mode = ''
+    mode = str(thread.sched_mode)
+    if "TIMESHARE" in mode:
+        sched_mode+="timeshare"
+    elif "FIXED" in mode:
+        sched_mode+="fixed"
+    elif "REALTIME" in mode:
+        sched_mode+="realtime"
+        
+    if (unsigned(thread.bound_processor) != 0):
+        sched_mode+=" bound"
+        
+    # TH_SFLAG_THROTTLED
+    if (unsigned(thread.sched_flags) & 0x0004):
+        sched_mode+=" BG"
     
     io_policy_str = ""
     if int(thread.uthread) != 0:
@@ -176,16 +296,15 @@ def GetThreadSummary(thread):
             io_policy_str += "D"
                 
     state = int(thread.state)
-    thread_state_chars = {0:'', 1:'W', 2:'S', 4:'R', 8:'U', 16:'H', 32:'A', 64:'P', 128:'I'}
+    thread_state_chars = {0x0:'', 0x1:'W', 0x2:'S', 0x4:'R', 0x8:'U', 0x10:'H', 0x20:'A', 0x40:'P', 0x80:'I'}
     state_str = ''
-    state_str += thread_state_chars[int(state & 0x1)]
-    state_str += thread_state_chars[int(state & 0x2)]
-    state_str += thread_state_chars[int(state & 0x4)]
-    state_str += thread_state_chars[int(state & 0x8)]
-    state_str += thread_state_chars[int(state & 0x10)]
-    state_str += thread_state_chars[int(state & 0x20)]
-    state_str += thread_state_chars[int(state & 0x40)]
-    state_str += thread_state_chars[int(state & 0x80)]
+    mask = 0x1
+    while mask <= 0x80 :
+        state_str += thread_state_chars[int(state & mask)]
+        mask = mask << 1
+        
+    ast = int(thread.ast) | int(thread.reason)
+    ast_str = GetASTSummary(ast)
     
     #wait queue information
     wait_queue_str = ''
@@ -203,12 +322,24 @@ def GetThreadSummary(thread):
             if int(uthread.uu_wmesg) != 0:
                 wait_message = str(Cast(uthread.uu_wmesg, 'char *'))
             
-    out_string += format_string.format(thread_ptr_str, thread_id, processor, sched_priority, io_policy_str, state_str, wait_queue_str, wait_event_str, wait_message, thread_name )
+    out_string += format_string.format(thread_ptr_str, thread_id, processor, base_priority, sched_priority, sched_mode, io_policy_str, state_str, ast_str, wait_queue_str, wait_event_str, wait_message, thread_name)
     return out_string
     
 
+@lldb_type_summary(['coalition_t', 'coalition'])
+@header("type coalition summary (header tbw)")
+def GetCoalitionSummary(coal):
+    out_string = ""
+    format_string = '{0: <#020x} {1: <d} {2: <d} {3: <d}'
+    flags_string = ''
+    if (coal.terminated):
+        flags_string += ' terminated'
+    if (coal.reaped):
+        flags_string += ' reaped'
+    out_string += format_string.format(coal, coal.id, coal.ref_count, coal.active_count, )
+    return out_string
 
-@lldb_type_summary(['proc'])
+@lldb_type_summary(['proc', 'proc *'])
 @header("{0: >6s} {1: ^20s} {2: >14s} {3: ^10s} {4: <20s}".format("pid", "process", "io_policy", "wq_state", "command"))
 def GetProcSummary(proc):
     """ Summarize the process data. 
@@ -272,6 +403,51 @@ def GetProcSummary(proc):
         wq_req_threads = -1
     process_name = str(proc.p_comm)
     out_string += format_string.format(pid, proc_addr, " ".join([proc_rage_str, io_policy_str]), wq_num_threads, wq_idle_threads, wq_req_threads, process_name)
+    return out_string
+
+@lldb_type_summary(['tty_dev_t', 'tty_dev_t *'])
+@header("{0: <20s} {1: <10s} {2: <10s} {3: <15s} {4: <15s} {5: <15s} {6: <15s}".format("tty_dev","master", "slave", "open", "free", "name", "revoke"))
+def GetTTYDevSummary(tty_dev):
+    """ Summarizes the important fields in tty_dev_t structure.
+        params: tty_dev: value - value object representing a tty_dev_t in kernel
+        returns: str - summary of the tty_dev
+    """
+    out_string = ""
+    format_string = "{0: <#020x} {1: <#010x} {2: <#010x} {3: <15s} {4: <15s} {5: <15s} {6: <15s}" 
+    open_fn = kern.Symbolicate(int(hex(tty_dev.open), 16))
+    free_fn = kern.Symbolicate(int(hex(tty_dev.free), 16))
+    name_fn = kern.Symbolicate(int(hex(tty_dev.name), 16))
+    revoke_fn = kern.Symbolicate(int(hex(tty_dev.revoke), 16))
+    out_string += format_string.format(tty_dev, tty_dev.master, tty_dev.slave, open_fn, free_fn, name_fn, revoke_fn)
+    return out_string
+
+@lldb_type_summary(['kqueue *'])
+@header("{: <20s} {: <20s} {: <6s} {: <20s} {: <10s}".format('kqueue', 'process', '#events', 'wqs', 'state'))
+def GetKQueueSummary(kq):
+    """ summarizes kqueue information
+        returns: str - summary of kqueue
+    """
+    out_string = ""
+    format_string = "{o: <#020x} {o.kq_p: <#020x} {o.kq_count: <6d} {o.kq_wqs: <#020x} {st_str: <10s}"
+    state = int(kq.kq_state)
+    state_str = ''
+    mask = 0x1
+    while mask <= 0x80 :
+        if int(state & mask):
+            state_str += ' ' + xnudefines.kq_state_strings[int(state & mask)]
+        mask = mask << 1
+    out_string += format_string.format(o=kq, st_str=state_str)
+    return out_string
+
+@lldb_type_summary(['knote *'])
+@header("{0: <20s}".format('knote'))
+def GetKnoteSummary(kn):
+    """ Summarizes a knote and related information
+        returns: str - summary of knote
+    """
+    out_string = ""
+    format_string = "{o: <#020x}"
+    out_string += format_string.format(o=kn)
     return out_string
 
 # Macro: showtask
@@ -418,6 +594,21 @@ def ShowProcFiles(cmd_args=None):
 
 #EndMacro: showprocfiles
 
+#Macro: showkqueue
+@lldb_command('showkqueue' ,'')
+def ShowKQueue(cmd_args=[], cmd_options={}):
+    """ Given a struct kqueue pointer, display the summary of the kqueue
+        Usage: (lldb) showkqueue <struct kqueue *>
+    """
+    if not cmd_args:
+        raise ArgumentError('Invalid arguments')
+
+    kq = kern.GetValueFromAddress(cmd_args[0], 'struct kqueue *')
+    print GetKQueueSummary.header
+    print GetKQueueSummary(kq)
+
+#EndMacro: showkqueue
+
 #Macro: showtty
 
 @lldb_command('showtty')
@@ -488,6 +679,24 @@ def ShowTTY(cmd_args=None):
 
 #EndMacro: showtty
 
+#Macro showallttydevs
+
+@lldb_command('showallttydevs')
+def ShowAllTTYDevs(cmd_args=[], cmd_options={}):
+    """ Show a list of ttydevs registered in the system.
+        Usage:
+        (lldb)showallttydevs
+    """
+    tty_dev_head = kern.globals.tty_dev_head
+    tty_dev = tty_dev_head
+    print GetTTYDevSummary.header
+    while unsigned(tty_dev) != 0:
+        print GetTTYDevSummary(tty_dev)
+        tty_dev = tty_dev.next
+    return ""
+
+#EndMacro: showallttydevs
+
 #Macro: dumpcallqueue
 
 @lldb_command('dumpcallqueue')
@@ -510,6 +719,15 @@ def DumpCallQueue(cmd_args=None):
 
 #EndMacro: dumpcallqueue
 
+@lldb_command('showallcoalitions')
+def ShowAllCoalitions(cmd_args=None):
+    """  Routine to print a summary listing of all the coalitions
+    """
+    global kern
+    print GetCoalitionSummary.header
+    for c in kern.coalitions:
+        print GetCoalitionSummary(c)
+
 @lldb_command('showalltasks') 
 def ShowAllTasks(cmd_args=None):
     """  Routine to print a summary listing of all the tasks
@@ -525,6 +743,7 @@ def ShowAllTasks(cmd_args=None):
     for t in kern.tasks:
         pval = Cast(t.bsd_info, 'proc *')
         print GetTaskSummary(t) +" "+ GetProcSummary(pval)
+    ZombTasks()
 
 @lldb_command('showterminatedtasks') 
 def ShowTerminatedTasks(cmd_args=None):
@@ -611,6 +830,12 @@ def ShowAllThreads(cmd_args = None):
     for t in kern.tasks:
         ShowTaskThreads([str(int(t))])
         print " \n"
+        
+    for t in kern.terminated_tasks:
+        print "Terminated: \n"
+        ShowTaskThreads([str(int(t))])
+        print " \n"
+        
     return
 
 @lldb_command('showtaskthreads', "F:")
@@ -693,7 +918,8 @@ def ShowAllStacks(cmd_args=None):
     """
     for t in kern.tasks:
         ShowTaskStacks(t)
-        print " \n"
+        print " \n"    
+    ZombStacks()
     return
         
 # EndMacro: showallstacks
@@ -706,7 +932,7 @@ def ShowCurrentStacks(cmd_args=None):
     processor_list = kern.GetGlobalVariable('processor_list')
     current_processor = processor_list
     while unsigned(current_processor) > 0:
-        print "\nProcessor {: <#020x} State {: <d} (cpu_id {: >#04x})".format(current_processor, int(current_processor.state), int(current_processor.cpu_id))
+        print "\n" + GetProcessorSummary(current_processor)
         active_thread = current_processor.active_thread
         if unsigned(active_thread) != 0 :
             task_val = active_thread.task
@@ -727,7 +953,7 @@ def ShowCurrentThreads(cmd_args=None):
     processor_list = kern.GetGlobalVariable('processor_list')
     current_processor = processor_list
     while unsigned(current_processor) > 0:
-        print "Processor {: <#020x} State {: <d} (cpu_id {: >#04x})".format(current_processor, int(current_processor.state), int(current_processor.cpu_id))
+        print GetProcessorSummary(current_processor)
         active_thread = current_processor.active_thread
         if unsigned(active_thread) != 0 :
             task_val = active_thread.task
@@ -770,13 +996,37 @@ def GetFullBackTrace(frame_addr, verbosity = vHUMAN, prefix = ""):
 def FullBackTrace(cmd_args=[]):
     """ Show full backtrace across the interrupt boundary.
         Syntax: fullbt <frame ptr>
-        Example: kfullbt  `$rbp` 
+        Example: fullbt  `$rbp` 
     """
     if len(cmd_args) < 1:
         print FullBackTrace.__doc__
         return False
     print GetFullBackTrace(ArgumentStringToInt(cmd_args[0]), prefix="\t")
 
+@lldb_command('fullbtall')
+def FullBackTraceAll(cmd_args=[]):
+    """ Show full backtrace across the interrupt boundary for threads running on all processors.
+        Syntax: fullbtall
+        Example: fullbtall
+    """
+    for processor in IterateLinkedList(kern.globals.processor_list, 'processor_list') :
+        print "\n" + GetProcessorSummary(processor)
+        active_thread = processor.active_thread
+        if unsigned(active_thread) != 0 :
+            task_val = active_thread.task
+            proc_val = Cast(task_val.bsd_info, 'proc *')
+            print GetTaskSummary.header + " " + GetProcSummary.header
+            print GetTaskSummary(task_val) + " " + GetProcSummary(proc_val)
+            print "\t" + GetThreadSummary.header
+            print "\t" + GetThreadSummary(active_thread)
+            print "\tBacktrace:"
+                
+            ThreadVal = GetLLDBThreadForKernelThread(active_thread)
+
+            FramePtr = ThreadVal.frames[0].GetFP()
+            
+            print GetFullBackTrace(unsigned(FramePtr), prefix="\t")
+            
 
 @lldb_command('symbolicate')
 def SymbolicateAddress(cmd_args=[]):
@@ -866,41 +1116,92 @@ def GetProcessorSummary(processor):
         params: processor - value representing struct processor * 
         return: str - representing the details of given processor
     """
-    out_str = "Processor  {: <#012x} ".format(processor)
-    out_str += "State {:d} (cpu_id {:#x})\n".format(processor.state, processor.cpu_id)
+    
+    processor_state_str = "INVALID" 
+    processor_state = int(processor.state)
+    
+    processor_states = {
+                0: 'OFF_LINE',
+                1: 'SHUTDOWN',
+                2: 'START',
+                # 3 (formerly INACTIVE)
+                4: 'IDLE',
+                5: 'DISPATCHING',
+                6: 'RUNNING'
+                }
+    
+    if processor_state in processor_states:
+        processor_state_str = "{0: <11s} ".format(processor_states[processor_state])
+
+    out_str = "Processor {: <#018x} cpu_id {:>#4x} State {:<s}\n".format(processor, int(processor.cpu_id), processor_state_str)
     return out_str   
+
+def GetGroupSetSummary(runq, task_map):
+    """ Internal function to print summary of group run queue
+        params: runq - value representing struct run_queue * 
+        return: str - representing the details of given run_queue
+    """
+    out_str = "    runq: count {: <10d} highq: {: <10d} urgency {: <10d}\n".format(runq.count, runq.highq, runq.urgency)
+    
+    runq_queue_i = 0
+    runq_queue_count = sizeof(runq.queues)/sizeof(runq.queues[0])
+    
+    for runq_queue_i in range(runq_queue_count) :
+        runq_queue_head = addressof(runq.queues[runq_queue_i])
+        runq_queue_p = runq_queue_head.next
+        
+        if unsigned(runq_queue_p) != unsigned(runq_queue_head):
+            runq_queue_this_count = 0
+            
+            for entry in IterateQueue(runq_queue_head, "sched_entry_t", "links"):
+                runq_queue_this_count += 1
+            
+            out_str += "      Queue [{: <#012x}] Priority {: <3d} count {:d}\n".format(runq_queue_head, runq_queue_i, runq_queue_this_count)
+            for entry in IterateQueue(runq_queue_head, "sched_entry_t", "links"):
+                group = entry.group
+                task = task_map.get(unsigned(group), "Unknown task!")
+                out_str += "\tEntry [{: <#012x}] Priority {: <3d} Group {: <#012x} Task {: <#012x}\n".format(unsigned(entry), entry.sched_pri, unsigned(entry.group), unsigned(task))
+                
+    return out_str
+
+@lldb_command('showrunq')
+def ShowRunq(cmd_args=None):
+    """  Routine to print information of a runq
+         Usage: showrunq <runq>
+    """
+    out_str = ''
+    runq = kern.GetValueFromAddress(cmd_args[0], 'struct run_queue *')
+    out_str += GetRunQSummary(runq)
+    print out_str
 
 def GetRunQSummary(runq):
     """ Internal function to print summary of run_queue
         params: runq - value representing struct run_queue * 
         return: str - representing the details of given run_queue
     """
-    out_str = "    Priority Run Queue Info: Count {: <10d}\n".format(runq.count)
+    out_str = "    runq: count {: <10d} highq: {: <10d} urgency {: <10d}\n".format(runq.count, runq.highq, runq.urgency)
+    
     runq_queue_i = 0
     runq_queue_count = sizeof(runq.queues)/sizeof(runq.queues[0])
-    while runq.count and (runq_queue_i < runq_queue_count):
+    
+    for runq_queue_i in range(runq_queue_count) :
         runq_queue_head = addressof(runq.queues[runq_queue_i])
         runq_queue_p = runq_queue_head.next
+        
         if unsigned(runq_queue_p) != unsigned(runq_queue_head):
             runq_queue_this_count = 0
-            while runq_queue_p != runq_queue_head:
-                runq_queue_this_count = runq_queue_this_count + 1
-                runq_queue_p_thread = Cast(runq_queue_p, 'thread_t')
-                # Get the task information
-                out_str += GetTaskSummary.header + " " + GetProcSummary.header
-                pval = Cast(runq_queue_p_thread.task.bsd_info, 'proc *')
-                out_str += GetTaskSummary(runq_queue_p_thread.task) +" "+ GetProcSummary(pval)
-                # Get the thread information with related stack traces
-                out_str += GetThreadSummary.header + GetThreadSummary(runq_queue_p_thread)
-                out_str += GetThreadBackTrace(LazyTarget.GetProcess().GetThreadByID(int(runq_queue_p_thread.thread_id)), 
-                    prefix="\t")
-                runq_queue_p = runq_queue_p.next
-
-            out_str += "      Queue Priority {: <3d} [{: <#012x}] Count {:d}\n".format(runq_queue_i,
-                runq_queue_head, runq_queue_this_count)	
-
-        runq_queue_i = runq_queue_i + 1
+            
+            for thread in IterateQueue(runq_queue_head, "thread_t", "links"):
+                runq_queue_this_count += 1
+            
+            out_str += "      Queue [{: <#012x}] Priority {: <3d} count {:d}\n".format(runq_queue_head, runq_queue_i, runq_queue_this_count)
+            out_str += "\t" + GetThreadSummary.header + "\n"
+            for thread in IterateQueue(runq_queue_head, "thread_t", "links"):
+                out_str += "\t" + GetThreadSummary(thread) + "\n"
+                if config['verbosity'] > vHUMAN :
+                    out_str += "\t" + GetThreadBackTrace(thread, prefix="\t\t") + "\n"
     return out_str
+
 
 def GetGrrrSummary(grrr_runq):
     """ Internal function to print summary of grrr_run_queue
@@ -911,26 +1212,17 @@ def GetGrrrSummary(grrr_runq):
         grrr_runq.weight, grrr_runq.current_group)
     grrr_group_i = 0
     grrr_group_count = sizeof(grrr_runq.groups)/sizeof(grrr_runq.groups[0])
-    while grrr_runq.count and (grrr_group_i < grrr_group_count):
+    for grrr_group_i in range(grrr_group_count) :
         grrr_group = addressof(grrr_runq.groups[grrr_group_i])
-        runq_queue_p = runq_queue_head.next
         if grrr_group.count > 0:
             out_str += "      Group {: <3d} [{: <#012x}] ".format(grrr_group.index, grrr_group)
             out_str += "Count {:d} Weight {:d}\n".format(grrr_group.count, grrr_group.weight)
             grrr_group_client_head = addressof(grrr_group.clients)
-            grrr_group_client = grrr_group_client_head.next
-            while grrr_group_client != grrr_group_client_head:
-                grrr_group_client_thread = Cast(grrr_group_client, 'thread_t')
-                # Get the task information
-                out_str += GetTaskSummary.header + " " + GetProcSummary.header
-                pval = Cast(grrr_group_client_thread.task.bsd_info, 'proc *')
-                out_str += GetTaskSummary(grrr_group_client_thread.task) +" "+ GetProcSummary(pval)
-                # Get the thread information with related stack traces
-                out_str += GetThreadSummary.header + GetThreadSummary(grrr_group_client_thread)
-                out_str += GetThreadBackTrace(LazyTarget.GetProcess().GetThreadByID(int(grrr_group_client_thread.thread_id)), 
-                    prefix="\t")
-                grrr_group_client = grrr_group_client.next
-        grrr_group_i = grrr_group_i + 1
+            out_str += GetThreadSummary.header
+            for thread in IterateQueue(grrr_group_client_head, "thread_t", "links"):
+                out_str += "\t" + GetThreadSummary(thread) + "\n"
+                if config['verbosity'] > vHUMAN :
+                    out_str += "\t" + GetThreadBackTrace(thread, prefix="\t\t") + "\n"
     return out_str
 
 @lldb_command('showallprocessors') 
@@ -942,6 +1234,7 @@ def ShowAllProcessors(cmd_args=None):
     show_grrr = 0
     show_priority_runq = 0
     show_priority_pset_runq = 0
+    show_group_pset_runq = 0
     show_fairshare_grrr = 0
     show_fairshare_list = 0
     sched_enum_val = kern.globals._sched_enum
@@ -957,81 +1250,86 @@ def ShowAllProcessors(cmd_args=None):
         show_fairshare_grrr = 1
     elif sched_enum_val == 5:
         show_priority_runq = 1
+        show_group_pset_runq = 1
         show_fairshare_list = 1
     elif sched_enum_val == 6:
-        show_priority_pset_runq = 1
+        show_priority_pset_runq = 1        
+        show_priority_runq = 1
         show_fairshare_list = 1
 
     out_str = ''
-    while pset:
+    
+    out_str += "Scheduler: {:s} ({:s}, {:d})\n".format(kern.globals.sched_string,
+            kern.Symbolicate(unsigned(kern.globals.sched_current_dispatch)),
+            sched_enum_val)
+    
+    out_str += "Runnable threads: {:d} Timeshare threads: {:d} Background threads {:d}\n".format(
+            kern.globals.sched_run_count, kern.globals.sched_share_count, kern.globals.sched_background_count)    
+    
+    if show_group_pset_runq:
+        # Create a group->task mapping
+        task_map = {}
+        for task in kern.tasks:
+            task_map[unsigned(task.sched_group)] = task
+        for task in kern.terminated_tasks:
+            task_map[unsigned(task.sched_group)] = task
+    
+    while unsigned(pset) != 0:
         out_str += "Processor Set  {: <#012x} Count {:d} (cpu_id {:<#x}-{:<#x})\n".format(pset, 
             pset.cpu_set_count, pset.cpu_set_low, pset.cpu_set_hi)
+        
+        if show_priority_pset_runq:
+            runq = pset.pset_runq
+            out_str += GetRunQSummary(runq)
+            
+        if show_group_pset_runq:
+            out_str += "Main Runq:\n"    
+            runq = pset.pset_runq
+            out_str += GetGroupSetSummary(runq, task_map)
+            out_str += "All Groups:\n"    
+            # TODO: Possibly output task header for each group
+            for group in IterateQueue(kern.globals.sched_groups, "sched_group_t", "sched_groups"):
+                if (group.runq.count != 0) :
+                    task = task_map.get(unsigned(group), "Unknown task!")
+                    out_str += "Group {: <#012x} Task {: <#012x}\n".format(unsigned(group), unsigned(task))
+                    out_str += GetRunQSummary(group.runq)
+        
         out_str += "  Active Processors:\n"
-        active_queue_head = addressof(pset.active_queue)
-        active_elt = active_queue_head.next
-        while active_elt != active_queue_head:
-            processor = Cast(active_elt, 'processor *')
+        for processor in IterateQueue(pset.active_queue, "processor_t", "processor_queue"):
             out_str += "    "
             out_str += GetProcessorSummary(processor)
             if show_priority_runq:
-                runq = addressof(processor.runq)
+                runq = processor.runq
                 out_str += GetRunQSummary(runq)
             if show_grrr:
-                grrr_runq = addressof(processor.grrr_runq)
+                grrr_runq = processor.grrr_runq
                 out_str += GetGrrrSummary(grrr_runq)
-            
-            if processor.processor_meta and (processor.processor_meta.primary == 
-                processor):
-                processor_meta_idle_head = addressof(processor.processor_meta.idle_queue)
-                processor_meta_idle = processor_meta_idle_head.next
-                while processor_meta_idle != processor_meta_idle_head:
-                    out_str += "      Idle Meta Processor: "
-                    out_str += GetProcessorSummary(processor_meta_idle)
-                    processor_meta_idle = processor_meta_idle.next
-            active_elt = active_elt.next
 
         out_str += "  Idle Processors:\n"
-        idle_queue_head = addressof(pset.idle_queue)
-        idle_elt = idle_queue_head.next
-        while idle_elt != idle_queue_head:
-            processor = Cast(idle_elt, 'processor *')
-            out_str += "    "
-            out_str += GetProcessorSummary(processor)
-            
-            if processor.processor_meta and (processor.processor_meta.primary == 
-                processor):
-                processor_meta_idle_head = addressof(processor.processor_meta.idle_queue)
-                processor_meta_idle = processor_meta_idle_head.next
-                while processor_meta_idle != processor_meta_idle_head:
-                    out_str += "      Idle Meta Processor: "
-                    out_str += GetProcessorSummary(processor_meta_idle)
-                    processor_meta_idle = processor_meta_idle.next
-            idle_elt = idle_elt.next
+        for processor in IterateQueue(pset.idle_queue, "processor_t", "processor_queue"):
+            out_str += "    " + GetProcessorSummary(processor)
+            if show_priority_runq:            
+                out_str += GetRunQSummary(processor.runq)
 
-        if show_priority_pset_runq:
-            runq = addressof(pset.pset_runq)
-            out_str += "\n" + GetRunQSummary(runq)
+        out_str += "  Idle Secondary Processors:\n"
+        for processor in IterateQueue(pset.idle_secondary_queue, "processor_t", "processor_queue"):
+            out_str += "    " + GetProcessorSummary(processor)
+            if show_priority_runq:            
+                out_str += GetRunQSummary(processor.runq)
+        
         pset = pset.pset_list
 
     out_str += "\nRealtime Queue Count {:d}\n".format(kern.globals.rt_runq.count)
-    rt_runq_head = addressof(kern.globals.rt_runq.queue)
-    rt_runq_local = rt_runq_head.next
-    while rt_runq_local != rt_runq_head:
-        rt_runq_thread = Cast(rt_runq_local, 'thread *')
+    for rt_runq_thread in IterateQueue(kern.globals.rt_runq.queue, "thread_t", "links"):
         out_str += ShowTask([unsigned(rt_runq_thread.task)])
         out_str += ShowAct([unsigned(rt_runq_thread)])
-        rt_runq_local = rt_runq_local.next
     
     out_str += "\n"
     if show_fairshare_list:
         out_str += "Fair Share Queue Count {:d}\n".format(kern.globals.fs_runq.count)
-        fs_runq_head = addressof(kern.globals.fs_runq.queue)
-        fs_runq_local = fs_runq_head.next
-        while fs_runq_local != fs_runq_head:
-            fs_runq_thread = Cast(fs_runq, 'thread *')
+        for fs_runq_thread in IterateQueue(kern.globals.fs_runq.queue, "thread_t", "links"):
             out_str += ShowTask([unsigned(fs_runq_thread.task)])
             out_str += ShowAct([unsigned(rt_runq_thread)])
-            fs_runq_local = fs_runq_local.next
     if show_fairshare_grrr:
         out_str += "Fair Share Queue Count {:d}\n".format(kern.globals.fs_grrr_runq.count)
         fs_grrr = addressof(kern.globals.fs_grrr_runq)
@@ -1051,18 +1349,18 @@ def GetLedgerEntrySummary(ledger_template, ledger, i):
     lf_tracking_max = 0x4000
 
     out_str = ''
-    now = kern.globals.sched_tick / 20
+    now = unsigned(kern.globals.sched_tick) / 20
     lim_pct = 0
 
-    out_str += "{: >25s} {:<d}:".format(ledger_template.lt_entries[i].et_key, i)
-    out_str += "{: >13d} ".format(ledger.le_credit - ledger.le_debit)
+    out_str += "{: >32s} {:<2d}:".format(ledger_template.lt_entries[i].et_key, i)
+    out_str += "{: >15d} ".format(unsigned(ledger.le_credit) - unsigned(ledger.le_debit))
     if (ledger.le_flags & lf_tracking_max):
-        out_str += "{:9d} {:5d} ".format(ledger._le.le_peaks[0].le_max, now - ledger._le.le_peaks[0].le_time)
-        out_str += "{:9d} {:4d} ".format(ledger._le.le_peaks[1].le_max, now - ledger._le.le_peaks[1].le_time)
+        out_str += "{:9d} {:5d} ".format(ledger._le.le_peaks[0].le_max, now - unsigned(ledger._le.le_peaks[0].le_time))
+        out_str += "{:9d} {:4d} ".format(ledger._le.le_peaks[1].le_max, now - unsigned(ledger._le.le_peaks[1].le_time))
     else:
         out_str += "        -     -         -    - "
     
-    out_str += "{:12d} {:12d} ".format(ledger.le_credit, ledger.le_debit)
+    out_str += "{:12d} {:12d} ".format(unsigned(ledger.le_credit), unsigned(ledger.le_debit))
     if (unsigned(ledger.le_limit) != ledger_limit_infinity):
         out_str += "{:12d} ".format(unsigned(ledger.le_limit))
     else:
@@ -1083,7 +1381,7 @@ def GetLedgerEntrySummary(ledger_template, ledger, i):
     else:
         out_str += "        - "
 
-    if ((ledger.le_credit - ledger.le_debit) > unsigned(ledger.le_limit)):
+    if ((unsigned(ledger.le_credit) - unsigned(ledger.le_debit)) > unsigned(ledger.le_limit)):
         out_str += "    X "
     else:
         out_str += "      "
@@ -1106,7 +1404,7 @@ def GetThreadLedgerSummary(thread_val):
             i = i + 1
     return out_str
 
-@header("{0: <15s} {1: >9s} {2: <2s} {3: >12s} {4: >9s} {5: >6s} {6: >8s} {7: <10s} {8: <9s} \
+@header("{0: <15s} {1: >16s} {2: <2s} {3: >15s} {4: >9s} {5: >6s} {6: >8s} {7: <10s} {8: <9s} \
     {9: <12s} {10: <7s} {11: <15s} {12: <8s} {13: <9s} {14: <6s} {15: >6s}".format(
     "task [thread]", "entry", "#", "balance", "peakA", "(age)", "peakB", "(age)", "credit",
      "debit", "limit", "refill period", "lim pct", "warn pct", "over?", "flags"))
@@ -1237,7 +1535,6 @@ def ShowAllTaskPolicy(cmd_args=None):
                 ["t_int_gpu_deny",      "gpudeny-int"],
                 ["t_ext_gpu_deny",      "gpudeny-ext"],
                 ["t_role",              "role"],
-                ["t_visibility",        "vis"],
                 ["t_tal_enabled",       "tal-enabled"],
                 ["t_base_latency_qos",  "latency-base"],
                 ["t_over_latency_qos",  "latency-override"],
@@ -1258,7 +1555,8 @@ def ShowAllTaskPolicy(cmd_args=None):
                 ["t_sup_timer",         "timer-throttling"],
                 ["t_sup_disk",          "disk-throttling"],
                 ["t_sup_cpu_limit",     "cpu-limits"],
-                ["t_sup_suspend",       "suspend"]
+                ["t_sup_suspend",       "suspend"],
+                ["t_sup_bg_sockets",    "bg-sockets"]
                 ]
             
         suppression=""
@@ -1284,8 +1582,7 @@ def ShowAllTaskPolicy(cmd_args=None):
                 ["t_latency_qos",   "latency-qos"],
                 ["t_through_qos",   "throughput-qos"],
                 ["t_sup_active",    "suppression-active"],
-                ["t_role",          "role"],
-                ["t_visibility",    "vis"]
+                ["t_role",          "role"]
                 ]
             
         effective=""
@@ -1316,5 +1613,51 @@ def ShowAllTaskPolicy(cmd_args=None):
         print "pended: " + pended
 
 
+@lldb_type_summary(['wait_queue', 'wait_queue_t'])
+@header("{: <20s} {: <20s} {: <15s} {:<5s} {:<5s} {: <20s}".format("waitq", "interlock", "policy", "members", "threads", "eventmask"))
+def GetWaitQSummary(waitq):
+    """ Summarizes the important fields in task structure.
+        params: task: value - value object representing a task in kernel
+        returns: str - summary of the task
+    """
+    out_string = ""
+    format_string = '{: <#020x} {: <#020x} {: <15s} {: <5d} {: <5d} {: <#020x}'
+    
+    wqtype = ""
+
+    if (waitq.wq_fifo == 1) :
+        wqtype += "FIFO"
+    else :
+        wqtype += "PRIO"
+        
+    if (waitq.wq_prepost == 1) :
+        wqtype += "Prepost"
+        
+    if (waitq.wq_type == 0x3) :
+        wqtype += "Set"
+    elif (waitq.wq_type == 0x2) :
+        wqtype += "Queue"
+    else :
+        wqtype += "INVALID"
+        
+    out_string += format_string.format(waitq, unsigned(waitq.wq_interlock.lock_data), policy, 0, 0, unsigned(waitq.wq_eventmask))
+    
+    out_string += "\n" + GetThreadSummary.header
+
+    for thread in IterateQueue(waitq.wq_queue, "thread_t", "links"):
+        out_string += "\n" + GetThreadSummary(thread)
+
+    return out_string
+
+
+@lldb_command('showallsuspendedtasks', '')
+def ShowSuspendedTasks(cmd_args=[], options={}):
+    """ Show a list of suspended tasks with their process name summary.
+    """
+    print GetTaskSummary.header + ' ' + GetProcSummary.header
+    for t in kern.tasks:
+        if t.suspend_count > 0:
+            print GetTaskSummary(t) + ' ' + GetProcSummary(Cast(t.bsd_info, 'proc *'))
+    return True
 
 

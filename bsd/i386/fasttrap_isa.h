@@ -48,10 +48,8 @@ typedef	uint8_t		fasttrap_instr_t;
 typedef struct fasttrap_machtp {
 	uint8_t		ftmt_instr[FASTTRAP_MAX_INSTR_SIZE]; /* orig. instr. */
 	uint8_t		ftmt_size;	/* instruction size */
-#if __sol64 || defined(__APPLE__)
 	uint8_t		ftmt_ripmode;	/* %rip-relative handling mode */
 	uint8_t		ftmt_modrm;	/* saved modrm byte */
-#endif
 	uint8_t		ftmt_type;	/* emulation type */
 	uint8_t		ftmt_code;	/* branch condition */
 	uint8_t		ftmt_base;	/* branch base */
@@ -62,10 +60,8 @@ typedef struct fasttrap_machtp {
 } fasttrap_machtp_t;
 
 #define	ftt_instr	ftt_mtp.ftmt_instr
-#if __sol64 || defined(__APPLE__)
 #define	ftt_ripmode	ftt_mtp.ftmt_ripmode
 #define	ftt_modrm	ftt_mtp.ftmt_modrm
-#endif
 #define	ftt_size	ftt_mtp.ftmt_size
 #define	ftt_type	ftt_mtp.ftmt_type
 #define	ftt_code	ftt_mtp.ftmt_code

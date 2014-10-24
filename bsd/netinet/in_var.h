@@ -126,6 +126,15 @@ struct kev_in_collision {
 	u_char hw_addr[0];		/* variable length hardware address */
 };
 
+struct kev_in_arpfailure {
+	struct net_event_data link_data; /* link where ARP is being sent */
+};
+
+struct kev_in_arpalive {
+	struct net_event_data link_data; /* link where ARP was received */
+};
+
+
 #ifdef __APPLE_API_PRIVATE
 struct kev_in_portinuse {
 	u_int16_t port;		/* conflicting port number in host order */
@@ -149,6 +158,9 @@ struct kev_in_portinuse {
 #ifdef __APPLE_API_PRIVATE
 #define	KEV_INET_PORTINUSE		8 /* use ken_in_portinuse */
 #endif
+#define	KEV_INET_ARPRTRFAILURE		9 /* ARP resolution failed for router */
+#define	KEV_INET_ARPRTRALIVE		10 /* ARP resolution succeeded for 
+					      router */
 
 #ifdef BSD_KERNEL_PRIVATE
 #include <net/if_var.h>

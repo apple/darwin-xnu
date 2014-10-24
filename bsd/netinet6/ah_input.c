@@ -76,6 +76,7 @@
 #include <sys/syslog.h>
 
 #include <net/if.h>
+#include <net/if_ipsec.h>
 #include <net/route.h>
 #include <kern/cpu_number.h>
 #include <kern/locks.h>
@@ -140,7 +141,6 @@ ah4_input(struct mbuf *m, int off)
 	size_t stripsiz = 0;
 	sa_family_t ifamily;
 
-#ifndef PULLDOWN_TEST
 	if (m->m_len < off + sizeof(struct newah)) {
 		m = m_pullup(m, off + sizeof(struct newah));
 		if (!m) {
@@ -156,19 +156,6 @@ ah4_input(struct mbuf *m, int off)
 
 	ip = mtod(m, struct ip *);
 	ah = (struct ah *)(void *)(((caddr_t)ip) + off);
-#else
-	/* Expect 32-bit aligned data pointer on strict-align platforms */
-	MBUF_STRICT_DATA_ALIGNMENT_CHECK_32(m);
-
-	ip = mtod(m, struct ip *);
-	IP6_EXTHDR_GET(ah, struct ah *, m, off, sizeof(struct newah));
-	if (ah == NULL) {
-		ipseclog((LOG_DEBUG, "IPv4 AH input: can't pullup;"
-			"dropping the packet for simplicity\n"));
-		IPSEC_STAT_INCREMENT(ipsecstat.in_inval);
-		goto fail;
-	}
-#endif
 	nxt = ah->ah_nxt;
 #ifdef _IP_VHL
 	hlen = IP_VHL_HL(ip->ip_vhl) << 2;
@@ -258,7 +245,6 @@ ah4_input(struct mbuf *m, int off)
 		goto fail;
 	}
 
-#ifndef PULLDOWN_TEST
 	if (m->m_len < off + sizeof(struct ah) + sizoff + siz1) {
 		m = m_pullup(m, off + sizeof(struct ah) + sizoff + siz1);
 		if (!m) {
@@ -272,15 +258,6 @@ ah4_input(struct mbuf *m, int off)
 		ip = mtod(m, struct ip *);
 		ah = (struct ah *)(void *)(((caddr_t)ip) + off);
 	}
-#else
-	IP6_EXTHDR_GET(ah, struct ah *, m, off,
-		sizeof(struct ah) + sizoff + siz1);
-	if (ah == NULL) {
-		ipseclog((LOG_DEBUG, "IPv4 AH input: can't pullup\n"));
-		IPSEC_STAT_INCREMENT(ipsecstat.in_inval);
-		goto fail;
-	}
-#endif
     }
 
 	/*
@@ -510,6 +487,17 @@ ah4_input(struct mbuf *m, int off)
 				IFA_REMREF(ifa);
 			}
 		}
+		
+		// Input via IPSec interface
+		if (sav->sah->ipsec_if != NULL) {
+			if (ipsec_inject_inbound_packet(sav->sah->ipsec_if, m) == 0) {
+				m = NULL;
+				goto done;
+			} else {
+				goto fail;
+			}
+		}
+		
 		if (proto_input(PF_INET, m) != 0)
 			goto fail;
 		nxt = IPPROTO_DONE;
@@ -519,7 +507,6 @@ ah4_input(struct mbuf *m, int off)
 		 */
 
 		ip = mtod(m, struct ip *);
-#ifndef PULLDOWN_TEST
 		/*
 		 * We do deep-copy since KAME requires that
 		 * the packet is placed in a single external mbuf.
@@ -528,34 +515,6 @@ ah4_input(struct mbuf *m, int off)
 		m->m_data += stripsiz;
 		m->m_len -= stripsiz;
 		m->m_pkthdr.len -= stripsiz;
-#else
-		/*
-		 * even in m_pulldown case, we need to strip off AH so that
-		 * we can compute checksum for multiple AH correctly.
-		 */
-		if (m->m_len >= stripsiz + off) {
-			ovbcopy((caddr_t)ip, ((caddr_t)ip) + stripsiz, off);
-			m->m_data += stripsiz;
-			m->m_len -= stripsiz;
-			m->m_pkthdr.len -= stripsiz;
-		} else {
-			/*
-			 * this comes with no copy if the boundary is on
-			 * cluster
-			 */
-			struct mbuf *n;
-
-			n = m_split(m, off, M_DONTWAIT);
-			if (n == NULL) {
-				/* m is retained by m_split */
-				goto fail;
-			}
-			m_adj(n, stripsiz);
-			/* m_cat does not update m_pkthdr.len */
-			m->m_pkthdr.len += n->m_pkthdr.len;
-			m_cat(m, n);
-		}
-#endif
 
 		if (m->m_len < sizeof(*ip)) {
 			m = m_pullup(m, sizeof(*ip));
@@ -584,6 +543,20 @@ ah4_input(struct mbuf *m, int off)
                         struct ip *, ip, struct ip6_hdr *, NULL);
 
 		if (nxt != IPPROTO_DONE) {
+			// Input via IPSec interface
+			if (sav->sah->ipsec_if != NULL) {
+				ip->ip_len = htons(ip->ip_len + hlen);
+				ip->ip_off = htons(ip->ip_off);
+				ip->ip_sum = 0;
+				ip->ip_sum = ip_cksum_hdr_in(m, hlen);
+				if (ipsec_inject_inbound_packet(sav->sah->ipsec_if, m) == 0) {
+					m = NULL;
+					goto done;
+				} else {
+					goto fail;
+				}
+			}
+			
 			if ((ip_protox[nxt]->pr_flags & PR_LASTHDR) != 0 &&
 			    ipsec4_in_reject(m, NULL)) {
 				IPSEC_STAT_INCREMENT(ipsecstat.in_polvio);
@@ -594,7 +567,7 @@ ah4_input(struct mbuf *m, int off)
 			m_freem(m);
 		m = NULL;
 	}
-
+done:
 	if (sav) {
 		KEYDEBUG(KEYDEBUG_IPSEC_STAMP,
 		    printf("DP ah4_input call free SA:0x%llx\n",
@@ -636,17 +609,8 @@ ah6_input(struct mbuf **mp, int *offp, int proto)
 	size_t stripsiz = 0;
 
 
-#ifndef PULLDOWN_TEST
 	IP6_EXTHDR_CHECK(m, off, sizeof(struct ah), {return IPPROTO_DONE;});
 	ah = (struct ah *)(void *)(mtod(m, caddr_t) + off);
-#else
-	IP6_EXTHDR_GET(ah, struct ah *, m, off, sizeof(struct newah));
-	if (ah == NULL) {
-		ipseclog((LOG_DEBUG, "IPv6 AH input: can't pullup\n"));
-		ipsec6stat.in_inval++;
-		return IPPROTO_DONE;
-	}
-#endif
 	/* Expect 32-bit aligned data pointer on strict-align platforms */
 	MBUF_STRICT_DATA_ALIGNMENT_CHECK_32(m);
 
@@ -724,19 +688,8 @@ ah6_input(struct mbuf **mp, int *offp, int proto)
 		IPSEC_STAT_INCREMENT(ipsec6stat.in_inval);
 		goto fail;
 	}
-#ifndef PULLDOWN_TEST
 	IP6_EXTHDR_CHECK(m, off, sizeof(struct ah) + sizoff + siz1, 
 		{return IPPROTO_DONE;});
-#else
-	IP6_EXTHDR_GET(ah, struct ah *, m, off,
-		sizeof(struct ah) + sizoff + siz1);
-	if (ah == NULL) {
-		ipseclog((LOG_NOTICE, "couldn't pullup gather IPv6 AH checksum part"));
-		IPSEC_STAT_INCREMENT(ipsec6stat.in_inval);
-		m = NULL;
-		goto fail;
-	}
-#endif
     }
 
 	/*
@@ -935,6 +888,17 @@ ah6_input(struct mbuf **mp, int *offp, int proto)
 			}
 		}
 
+		// Input via IPSec interface
+		if (sav->sah->ipsec_if != NULL) {
+			if (ipsec_inject_inbound_packet(sav->sah->ipsec_if, m) == 0) {
+				m = NULL;
+				nxt = IPPROTO_DONE;
+				goto done;
+			} else {
+				goto fail;
+			}
+		}
+		
 		if (proto_input(PF_INET6, m) != 0)
 			goto fail;
 		nxt = IPPROTO_DONE;
@@ -953,7 +917,6 @@ ah6_input(struct mbuf **mp, int *offp, int proto)
 		*prvnxtp = nxt;
 
 		ip6 = mtod(m, struct ip6_hdr *);
-#ifndef PULLDOWN_TEST
 		/*
 		 * We do deep-copy since KAME requires that
 		 * the packet is placed in a single mbuf.
@@ -962,34 +925,6 @@ ah6_input(struct mbuf **mp, int *offp, int proto)
 		m->m_data += stripsiz;
 		m->m_len -= stripsiz;
 		m->m_pkthdr.len -= stripsiz;
-#else
-		/*
-		 * even in m_pulldown case, we need to strip off AH so that
-		 * we can compute checksum for multiple AH correctly.
-		 */
-		if (m->m_len >= stripsiz + off) {
-			ovbcopy((caddr_t)ip6, ((caddr_t)ip6) + stripsiz, off);
-			m->m_data += stripsiz;
-			m->m_len -= stripsiz;
-			m->m_pkthdr.len -= stripsiz;
-		} else {
-			/*
-			 * this comes with no copy if the boundary is on
-			 * cluster
-			 */
-			struct mbuf *n;
-
-			n = m_split(m, off, M_DONTWAIT);
-			if (n == NULL) {
-				/* m is retained by m_split */
-				goto fail;
-			}
-			m_adj(n, stripsiz);
-			/* m_cat does not update m_pkthdr.len */
-			m->m_pkthdr.len += n->m_pkthdr.len;
-			m_cat(m, n);
-		}
-#endif
 		ip6 = mtod(m, struct ip6_hdr *);
 		/* XXX jumbogram */
 		ip6->ip6_plen = htons(ntohs(ip6->ip6_plen) - stripsiz);
@@ -999,11 +934,22 @@ ah6_input(struct mbuf **mp, int *offp, int proto)
 			IPSEC_STAT_INCREMENT(ipsec6stat.in_nomem);
 			goto fail;
 		}
+		
+		// Input via IPSec interface
+		if (sav->sah->ipsec_if != NULL) {
+			if (ipsec_inject_inbound_packet(sav->sah->ipsec_if, m) == 0) {
+				m = NULL;
+				nxt = IPPROTO_DONE;
+				goto done;
+			} else {
+				goto fail;
+			}
+		}
 	}
 
+done:
 	*offp = off;
 	*mp = m;
-
 	if (sav) {
 		KEYDEBUG(KEYDEBUG_IPSEC_STAMP,
 		    printf("DP ah6_input call free SA:0x%llx\n",

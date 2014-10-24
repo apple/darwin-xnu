@@ -49,7 +49,6 @@ extern vm_offset_t kmem_mb_alloc(vm_map_t, int, int);
 
 /* XXX most of these just exist to export; there's no good header for them*/
 void	pcb_synch(void);
-void	tbeproc(void *);
 
 TAILQ_HEAD(,devsw_lock) devsw_locks;
 lck_mtx_t devsw_lock_list_mtx;
@@ -316,16 +315,6 @@ cdevsw_setkqueueok(int index, struct cdevsw *csw, int use_offset)
 }
 
 #include <pexpert/pexpert.h>	/* for PE_parse_boot_arg */
-
-void
-tbeproc(void *procp)
-{
-	struct proc *p = procp;
-
-	if (p)
-		OSBitOrAtomic(P_TBE, &p->p_flag);
-	return;
-}
 
 /*
  * Copy the "hostname" variable into a caller-provided buffer

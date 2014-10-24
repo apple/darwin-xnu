@@ -498,7 +498,7 @@ test_fork() {
  * - should succeed
  * - should behave the same as with base pages (i.e. no bad data)
  */
-#define FILENAME "/mach_kernel"
+#define FILENAME "/System/Library/Kernels/kernel"
 boolean_t
 test_fileio() {
 	mach_vm_address_t addr1 = 0;

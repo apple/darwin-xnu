@@ -76,7 +76,6 @@
 #include <kern/host.h>
 #include <kern/kalloc.h>
 #include <kern/zalloc.h>
-#include <kern/lock.h>
 #include <kern/wait_queue.h>
 #include <kern/sched_prim.h>
 
@@ -484,6 +483,26 @@ audit_commit(struct kaudit_record *ar, int error, int retval)
 		 * event based on the flags and the error value.
 		 */
 		ar->k_ar.ar_event = audit_flags_and_error_to_openextendedevent(
+		    ar->k_ar.ar_arg_fflags, error);
+		break;
+
+	case AUE_OPENAT_RWTC:
+		/*
+		 * The openat syscall always writes a
+		 * AUE_OPENAT_RWTC event; change it to the proper type of
+		 * event based on the flags and the error value.
+		 */
+		ar->k_ar.ar_event = audit_flags_and_error_to_openatevent(
+		    ar->k_ar.ar_arg_fflags, error);
+		break;
+
+	case AUE_OPENBYID_RWT:
+		/*
+		 * The openbyid syscall always writes a
+		 * AUE_OPENBYID_RWT event; change it to the proper type of
+		 * event based on the flags and the error value.
+		 */
+		ar->k_ar.ar_event = audit_flags_and_error_to_openbyidevent(
 		    ar->k_ar.ar_arg_fflags, error);
 		break;
 

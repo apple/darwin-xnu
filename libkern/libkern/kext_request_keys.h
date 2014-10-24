@@ -88,16 +88,6 @@ extern "C" {
  */
 #define kKextRequestPredicateGetLoaded             "Get Loaded Kext Info"
 
-/* Predicate: Get Kernel Load Address
- * Argument:  None
- * Response:  OSNumber containing kernel load address.
- * Op result: OSReturn indicating any errors in processing (see OSKextLib.h)
- *
- * Retrieves the base load address of the running kernel for use in generating
- * debug symbols in user space.
- */
-#define kKextRequestPredicateGetKernelLoadAddress  "Get Kernel Load Address"
-
 /* Predicate: Get All Load Requests
  * Argument:  None
  * Response:  A set of bundle identifiers of all requested kext loads..

@@ -253,7 +253,6 @@ enum {
 #define	NOTE_EXITSTATUS		0x04000000	/* exit status to be returned, valid for child process only */
 #define	NOTE_EXIT_DETAIL	0x02000000	/* provide details on reasons for exit */
 
-
 #define	NOTE_PDATAMASK	0x000fffff		/* mask for signal & exit status */
 #define	NOTE_PCTRLMASK	(~NOTE_PDATAMASK)
 
@@ -278,13 +277,14 @@ enum {
 /*
  * If NOTE_EXIT_MEMORY is present, these bits indicate specific jetsam condition.
  */
-#define NOTE_EXIT_MEMORY_DETAIL_MASK	0xfc000000
+#define NOTE_EXIT_MEMORY_DETAIL_MASK	0xfe000000
 #define NOTE_EXIT_MEMORY_VMPAGESHORTAGE	0x80000000	/* jetsam condition: lowest jetsam priority proc killed due to vm page shortage */
 #define NOTE_EXIT_MEMORY_VMTHRASHING	0x40000000	/* jetsam condition: lowest jetsam priority proc killed due to vm thrashing */
 #define NOTE_EXIT_MEMORY_HIWAT		0x20000000	/* jetsam condition: process reached its high water mark */
 #define NOTE_EXIT_MEMORY_PID		0x10000000	/* jetsam condition: special pid kill requested */
 #define NOTE_EXIT_MEMORY_IDLE		0x08000000	/* jetsam condition: idle process cleaned up */
 #define NOTE_EXIT_MEMORY_VNODE		0X04000000	/* jetsam condition: virtual node kill */
+#define NOTE_EXIT_MEMORY_FCTHRASHING	0x02000000	/* jetsam condition: lowest jetsam priority proc killed due to filecache thrashing */
 
 #endif
 
@@ -304,6 +304,7 @@ enum {
 #define NOTE_MEMORYSTATUS_PRESSURE_NORMAL	0x00000001	/* system memory pressure has returned to normal */
 #define NOTE_MEMORYSTATUS_PRESSURE_WARN		0x00000002	/* system memory pressure has changed to the warning state */
 #define NOTE_MEMORYSTATUS_PRESSURE_CRITICAL	0x00000004	/* system memory pressure has changed to the critical state */
+#define NOTE_MEMORYSTATUS_LOW_SWAP		0x00000008	/* system is in a low-swap state */
 
 typedef enum vm_pressure_level {
         kVMPressureNormal   = 0,

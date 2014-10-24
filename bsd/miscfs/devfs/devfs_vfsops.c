@@ -93,9 +93,8 @@
 static int devfs_statfs( struct mount *mp, struct vfsstatfs *sbp, vfs_context_t ctx);
 static int devfs_vfs_getattr(mount_t mp, struct vfs_attr *fsap, vfs_context_t ctx);
 
-#if !defined(SECURE_KERNEL)
-extern int setup_kmem;
-__private_extern__ void devfs_setup_kmem(void);
+#if CONFIG_DEV_KMEM
+extern boolean_t dev_kmem_enabled;
 #endif
 
 /*-
@@ -109,42 +108,32 @@ __private_extern__ void devfs_setup_kmem(void);
 static int
 devfs_init(__unused struct vfsconf *vfsp)
 {
-    if (devfs_sinit())
-	return (ENOTSUP);
-    devfs_make_node(makedev(0, 0), DEVFS_CHAR, 
-		    UID_ROOT, GID_WHEEL, 0622, "console");
-    devfs_make_node(makedev(2, 0), DEVFS_CHAR, 
-		    UID_ROOT, GID_WHEEL, 0666, "tty");
-#if !defined(SECURE_KERNEL)
-    if (setup_kmem) {
-    	devfs_setup_kmem();
-    }
+	if (devfs_sinit())
+		return (ENOTSUP);
+	devfs_make_node(makedev(0, 0), DEVFS_CHAR, 
+					UID_ROOT, GID_WHEEL, 0622, "console");
+	devfs_make_node(makedev(2, 0), DEVFS_CHAR, 
+					UID_ROOT, GID_WHEEL, 0666, "tty");
+#if CONFIG_DEV_KMEM
+	if (dev_kmem_enabled) {
+		/* (3,0) reserved for /dev/mem physical memory */
+		devfs_make_node(makedev(3, 1), DEVFS_CHAR, 
+						UID_ROOT, GID_KMEM, 0640, "kmem");
+	}
 #endif
-    devfs_make_node(makedev(3, 2), DEVFS_CHAR, 
-		    UID_ROOT, GID_WHEEL, 0666, "null");
-    devfs_make_node(makedev(3, 3), DEVFS_CHAR, 
-		    UID_ROOT, GID_WHEEL, 0666, "zero");
-    devfs_make_node(makedev(6, 0), DEVFS_CHAR, 
-		    UID_ROOT, GID_WHEEL, 0600, "klog");
+	devfs_make_node(makedev(3, 2), DEVFS_CHAR, 
+					UID_ROOT, GID_WHEEL, 0666, "null");
+	devfs_make_node(makedev(3, 3), DEVFS_CHAR, 
+					UID_ROOT, GID_WHEEL, 0666, "zero");
+	devfs_make_node(makedev(6, 0), DEVFS_CHAR, 
+					UID_ROOT, GID_WHEEL, 0600, "klog");
 
 #if  FDESC
-    devfs_fdesc_init();
+	devfs_fdesc_init();
 #endif
 
     return 0;
 }
-
-#if !defined(SECURE_KERNEL)
-__private_extern__ void
-devfs_setup_kmem(void)
-{
-    	devfs_make_node(makedev(3, 0), DEVFS_CHAR, 
-		    UID_ROOT, GID_KMEM, 0640, "mem");
-    	devfs_make_node(makedev(3, 1), DEVFS_CHAR, 
-		    UID_ROOT, GID_KMEM, 0640, "kmem");
-}
-#endif
-
 
 /*-
  *  mp	 - pointer to 'mount' structure
@@ -481,109 +470,16 @@ devfs_sysctl(__unused int *name, __unused u_int namelen, __unused user_addr_t ol
 int
 devfs_kernel_mount(char * mntname)
 {
-	struct mount *mp;
 	int error;
-	struct nameidata nd;
-	struct vnode  * vp;
 	vfs_context_t ctx = vfs_context_kernel();
-	struct vfstable *vfsp;
+	char fsname[] = "devfs";
 
-	/* Find our vfstable entry */
-	for (vfsp = vfsconf; vfsp; vfsp = vfsp->vfc_next)
-		if (!strncmp(vfsp->vfc_name, "devfs", sizeof(vfsp->vfc_name)))
-			break;
-	
-	if (!vfsp) {
-		panic("Could not find entry in vfsconf for devfs.\n");
-	} 
-
-	/*
-	 * Get vnode to be covered
-	 */
-	NDINIT(&nd, LOOKUP, OP_MOUNT, FOLLOW | LOCKLEAF, UIO_SYSSPACE,
-	    CAST_USER_ADDR_T(mntname), ctx);
-	if ((error = namei(&nd))) {
-	    printf("devfs_kernel_mount: failed to find directory '%s', %d\n", 
-		   mntname, error);
-	    return (error);
-	}
-	nameidone(&nd);
-	vp = nd.ni_vp;
-
-	if ((error = VNOP_FSYNC(vp, MNT_WAIT, ctx))) {
-	    printf("devfs_kernel_mount: vnop_fsync failed: %d\n", error);
-	    vnode_put(vp);
-	    return (error);
-	}
-	if ((error = buf_invalidateblks(vp, BUF_WRITE_DATA, 0, 0))) {
-	    printf("devfs_kernel_mount: buf_invalidateblks failed: %d\n", error);
-	    vnode_put(vp);
-	    return (error);
-	}
-	if (vnode_isdir(vp) == 0) {
-	    printf("devfs_kernel_mount: '%s' is not a directory\n", mntname);
-	    vnode_put(vp);
-	    return (ENOTDIR);
-	}
-	if ((vnode_mountedhere(vp))) {
-	    vnode_put(vp);
-	    return (EBUSY);
-	}
-
-	/*
-	 * Allocate and initialize the filesystem.
-	 */
-	MALLOC_ZONE(mp, struct mount *, sizeof(struct mount),
-		M_MOUNT, M_WAITOK);
-	bzero((char *)mp, sizeof(struct mount));
-
-	/* Initialize the default IO constraints */
-	mp->mnt_maxreadcnt = mp->mnt_maxwritecnt = MAXPHYS;
-	mp->mnt_segreadcnt = mp->mnt_segwritecnt = 32;
-	mp->mnt_ioflags = 0;
-	mp->mnt_realrootvp = NULLVP;
-	mp->mnt_authcache_ttl = CACHED_LOOKUP_RIGHT_TTL;
-
-	mount_lock_init(mp);
-	TAILQ_INIT(&mp->mnt_vnodelist);
-	TAILQ_INIT(&mp->mnt_workerqueue);
-	TAILQ_INIT(&mp->mnt_newvnodes);
-
-	(void)vfs_busy(mp, LK_NOWAIT);
-	mp->mnt_op = &devfs_vfsops;
-	mp->mnt_vtable = vfsp;
-	mp->mnt_flag = 0;
-	mp->mnt_flag |= vfsp->vfc_flags & MNT_VISFLAGMASK;
-	strlcpy(mp->mnt_vfsstat.f_fstypename, vfsp->vfc_name, MFSTYPENAMELEN);
-	vp->v_mountedhere = mp;
-	mp->mnt_vnodecovered = vp;
-	mp->mnt_vfsstat.f_owner = kauth_cred_getuid(kauth_cred_get());
-	(void) copystr(mntname, mp->mnt_vfsstat.f_mntonname, MAXPATHLEN - 1, 0);
-#if CONFIG_MACF
-	mac_mount_label_init(mp);
-	mac_mount_label_associate(ctx, mp);
-#endif
-
-	error = devfs_mount(mp, NULL, USER_ADDR_NULL, ctx);
-
+	error = kernel_mount(fsname, NULLVP, NULLVP, mntname, NULL, 0, MNT_DONTBROWSE, KERNEL_MOUNT_NOAUTH, ctx);
 	if (error) {
-	    printf("devfs_kernel_mount: mount %s failed: %d\n", mntname, error);
-	    mp->mnt_vtable->vfc_refcount--;
-
-	    vfs_unbusy(mp);
-
-	    mount_lock_destroy(mp);
-#if CONFIG_MACF
-	    mac_mount_label_destroy(mp);
-#endif
-	    FREE_ZONE(mp, sizeof (struct mount), M_MOUNT);
-	    vnode_put(vp);
-	    return (error);
+		printf("devfs_kernel_mount: kernel_mount failed: %d\n", error);
+		return (error);
 	}
-	vnode_ref(vp);
-	vnode_put(vp);
-	vfs_unbusy(mp);
-	mount_list_add(mp);
+
 	return (0);
 }
 

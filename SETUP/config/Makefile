@@ -7,10 +7,11 @@ export MakeInc_dir=${SRCROOT}/makedefs/MakeInc.dir
 include $(MakeInc_cmd)
 include $(MakeInc_def)
 
-OBJS = externs.o main.o mkglue.o mkheaders.o mkioconf.o mkmakefile.o	\
-	mkswapconf.o openp.o searchp.o lexer.yy.o parser.o
+OBJS = externs.o main.o mkheaders.o mkioconf.o mkmakefile.o	\
+	openp.o searchp.o lexer.yy.o parser.o
 
 CFLAGS = -isysroot $(HOST_SDKROOT) -mmacosx-version-min=$(HOST_OS_VERSION) -g -O0 -I$(SOURCE) -I.
+CFLAGS += -DYY_NO_INPUT
 
 WARNFLAGS = -Wall
 
@@ -34,7 +35,7 @@ lexer.yy.c: lexer.l
 	@echo HOST_FLEX $@
 	$(_v)env M4=$(HOST_GM4) $(HOST_FLEX) --header-file=lexer.yy.h -o $@ $<
 
-main.o mkglue.o mkheaders.o mkioconf.o mkmakefile.o lexer.yy.c: parser.c
+main.o mkheaders.o mkioconf.o mkmakefile.o lexer.yy.c: parser.c
 
 do_build_setup:: config
 

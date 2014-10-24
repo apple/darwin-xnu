@@ -55,7 +55,7 @@ enum {
     kIOPMRequestTypeRequestPowerStateOverride   = 0x0E,
     kIOPMRequestTypeSetIdleTimerPeriod          = 0x0F,
     kIOPMRequestTypeIgnoreIdleTimer             = 0x10,
-    
+
     /* Reply Types */
     kIOPMRequestTypeReplyStart                  = 0x80,
     kIOPMRequestTypeAckPowerChange              = 0x81,
@@ -132,57 +132,16 @@ enum {
     kPMActionsFlagIsGraphicsDevice  = 0x00000200,
     kPMActionsFlagIsAudioDevice     = 0x00000400,
     kPMActionsFlagLimitPower        = 0x00000800,
-    kPMActionsPCIBitNumberMask      = 0x000000ff  
+    kPMActionsPCIBitNumberMask      = 0x000000ff
 };
 
 //******************************************************************************
-
-enum {
-	kIOPMEventClassSystemEvent			= 0x00,
-	kIOPMEventClassDriverEvent			= 0x1
-};
-
-class PMEventDetails : public OSObject 
-{
-    OSDeclareDefaultStructors( PMEventDetails );
-    friend class IOServicePM;
-    friend class IOPMrootDomain;
-    friend class IOPMTimeline;
-public:  
-    static PMEventDetails *eventDetails(uint32_t   type,
-                                        const char *ownerName,
-                                        uintptr_t  ownerUnique,
-                                        const char *interestName,
-                                        uint8_t    oldState,
-                                        uint8_t    newState,
-                                        uint32_t   result,
-                                        uint32_t   elapsedTimeUS);
-
-    static PMEventDetails *eventDetails(uint32_t   type,
-                                        const char *uuid,
-                                        uint32_t   reason,
-                                        uint32_t   result);
-private:
-    uint8_t         eventClassifier;
-    uint32_t        eventType;
-    const char      *ownerName;
-    uintptr_t       ownerUnique;
-    const char      *interestName;
-    uint8_t         oldState;
-    uint8_t         newState;
-    uint32_t        result;
-    uint32_t        elapsedTimeUS;
-
-    const char      *uuid;
-    uint32_t        reason;
-};
-
 // Internal concise representation of IOPMPowerState
 struct IOPMPSEntry
 {
-    IOPMPowerFlags	    capabilityFlags;
-    IOPMPowerFlags	    outputPowerFlags;
-    IOPMPowerFlags	    inputPowerFlags;
+    IOPMPowerFlags      capabilityFlags;
+    IOPMPowerFlags      outputPowerFlags;
+    IOPMPowerFlags      inputPowerFlags;
     uint32_t            staticPower;
     uint32_t            settleUpTime;
     uint32_t            settleDownTime;
@@ -204,7 +163,7 @@ class IOServicePM : public OSObject
 private:
     // Link IOServicePM objects on IOPMWorkQueue.
     queue_chain_t           WorkChain;
-    
+
     // Queue of IOPMRequest objects.
     queue_head_t            RequestHead;
 
@@ -227,6 +186,7 @@ private:
 
     // Settle time after changing power state.
     uint32_t                SettleTimeUS;
+    uint32_t                IdleTimerGeneration;
 
     // The flags describing current change note.
     IOPMPowerChangeFlags    HeadNoteChangeFlags;
@@ -245,7 +205,7 @@ private:
 
     // Connection attached to the changing parent.
     IOPowerConnection *     HeadNoteParentConnection;
-    
+
     // Power flags supplied by the changing parent.
     IOPMPowerFlags          HeadNoteParentFlags;
 
@@ -263,7 +223,7 @@ private:
     unsigned int            StrictTreeOrder             :1;
     unsigned int            IdleTimerStopped            :1;
     unsigned int            AdjustPowerScheduled        :1;
-    
+
     unsigned int            IsPreChange                 :1;
     unsigned int            DriverCallBusy              :1;
     unsigned int            PCDFunctionOverride         :1;
@@ -274,6 +234,8 @@ private:
 
     // Time of last device activity.
     AbsoluteTime            DeviceActiveTimestamp;
+    AbsoluteTime            MaxPowerStateEntryTime;
+    AbsoluteTime            MaxPowerStateExitTime;
 
     // Used to protect activity flag.
     IOLock *                ActivityLock;
@@ -281,6 +243,7 @@ private:
     // Idle timer's period in seconds.
     unsigned long           IdleTimerPeriod;
     unsigned long           IdleTimerMinPowerState;
+    unsigned long           NextIdleTimerPeriod;
     AbsoluteTime            IdleTimerStartTime;
 
     // Power state desired by a subclassed device object.
@@ -356,7 +319,6 @@ private:
 
     uint32_t                WaitReason;
     uint32_t                SavedMachineState;
-    uint32_t                RootDomainState;
 
     // Protected by PMLock - BEGIN
     struct {
@@ -367,13 +329,11 @@ private:
     queue_head_t            PMDriverCallQueue;
     OSSet *                 InsertInterestSet;
     OSSet *                 RemoveInterestSet;
-    
-   
+
     // IOReporter Data
     uint32_t                ReportClientCnt;
     void *                  ReportBuf;
     // Protected by PMLock - END
-
 
 #if PM_VARS_SUPPORT
     IOPMprot *              PMVars;
@@ -384,7 +344,7 @@ private:
     // Serialize IOServicePM state for debug output.
     IOReturn gatedSerialize( OSSerialize * s ) const;
     virtual bool serialize( OSSerialize * s ) const;
-    
+
     // PM log and trace
     void pmPrint( uint32_t event, uintptr_t param1, uintptr_t param2 ) const;
     void pmTrace( uint32_t event, uintptr_t param1, uintptr_t param2 ) const;
@@ -399,6 +359,7 @@ private:
 #define fIdleTimer                  pwrMgt->IdleTimer
 #define fWatchdogTimer              pwrMgt->WatchdogTimer
 #define fSettleTimeUS               pwrMgt->SettleTimeUS
+#define fIdleTimerGeneration        pwrMgt->IdleTimerGeneration
 #define fHeadNoteChangeFlags        pwrMgt->HeadNoteChangeFlags
 #define fHeadNotePowerState         pwrMgt->HeadNotePowerState
 #define fHeadNotePowerArrayEntry    pwrMgt->HeadNotePowerArrayEntry
@@ -424,9 +385,12 @@ private:
 #define fAdvisoryTickleUsed         pwrMgt->AdvisoryTickleUsed
 #define fResetPowerStateOnWake      pwrMgt->ResetPowerStateOnWake
 #define fDeviceActiveTimestamp      pwrMgt->DeviceActiveTimestamp
+#define fMaxPowerStateEntryTime     pwrMgt->MaxPowerStateEntryTime
+#define fMaxPowerStateExitTime      pwrMgt->MaxPowerStateExitTime
 #define fActivityLock               pwrMgt->ActivityLock
 #define fIdleTimerPeriod            pwrMgt->IdleTimerPeriod
 #define fIdleTimerMinPowerState     pwrMgt->IdleTimerMinPowerState
+#define fNextIdleTimerPeriod        pwrMgt->NextIdleTimerPeriod
 #define fIdleTimerStartTime         pwrMgt->IdleTimerStartTime
 #define fDeviceDesire               pwrMgt->DeviceDesire
 #define fDesiredPowerState          pwrMgt->DesiredPowerState
@@ -466,7 +430,6 @@ private:
 #define fAdvisoryTickled            pwrMgt->AdvisoryTickled
 #define fWaitReason                 pwrMgt->WaitReason
 #define fSavedMachineState          pwrMgt->SavedMachineState
-#define fRootDomainState            pwrMgt->RootDomainState
 #define fLockedFlags                pwrMgt->LockedFlags
 #define fPMDriverCallQueue          pwrMgt->PMDriverCallQueue
 #define fInsertInterestSet          pwrMgt->InsertInterestSet
@@ -476,11 +439,11 @@ private:
 #define fPMVars                     pwrMgt->PMVars
 #define fPMActions                  pwrMgt->PMActions
 
-#define StateOrder(state)			(((state) < fNumberOfPowerStates) 				\
-									? pwrMgt->PowerStates[(state)].stateOrder		\
-									: (state))
-#define StateMax(a,b)				(StateOrder((a)) < StateOrder((b)) ? (b) : (a))
-#define StateMin(a,b)				(StateOrder((a)) < StateOrder((b)) ? (a) : (b))
+#define StateOrder(state)           (((state) < fNumberOfPowerStates)               \
+                                    ? pwrMgt->PowerStates[(state)].stateOrder       \
+                                    : (state))
+#define StateMax(a,b)               (StateOrder((a)) < StateOrder((b)) ? (b) : (a))
+#define StateMin(a,b)               (StateOrder((a)) < StateOrder((b)) ? (a) : (b))
 
 #define kPowerStateZero             (0)
 
@@ -496,7 +459,7 @@ the ack timer is ticking every tenth of a second.
 
 // Max wait time in microseconds for kernel priority and capability clients
 // with async message handlers to acknowledge.
-// 
+//
 #define kPriorityClientMaxWait      (90 * 1000 * 1000)
 #define kCapabilityClientMaxWait    (240 * 1000 * 1000)
 
@@ -582,6 +545,8 @@ enum {
 extern const OSSymbol *gIOPMStatsApplicationResponseTimedOut;
 extern const OSSymbol *gIOPMStatsApplicationResponseCancel;
 extern const OSSymbol *gIOPMStatsApplicationResponseSlow;
+extern const OSSymbol *gIOPMStatsApplicationResponsePrompt;
+extern const OSSymbol *gIOPMStatsDriverPSChangeSlow;
 
 //******************************************************************************
 // IOPMRequest

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2004-2013 Apple Inc. All rights reserved.
+ * Copyright (c) 2004-2014 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -157,6 +157,30 @@ ipf_addv6(
 	return ipf_add(filter, filter_ref, &ipv6_filters);
 }
 
+static errno_t
+ipf_input_detached(void *cookie, mbuf_t *data, int offset, u_int8_t protocol)
+{
+#pragma unused(cookie, data, offset, protocol)
+
+#if DEBUG
+	printf("ipf_input_detached\n");
+#endif /* DEBUG */
+
+	return (0);
+}
+
+static errno_t
+ipf_output_detached(void *cookie, mbuf_t *data, ipf_pktopts_t options)
+{
+#pragma unused(cookie, data, options)
+
+#if DEBUG
+	printf("ipf_output_detached\n");
+#endif /* DEBUG */
+
+	return (0);
+}
+
 errno_t
 ipf_remove(
 	ipfilter_t filter_ref)
@@ -181,8 +205,8 @@ ipf_remove(
 			if (kipf_ref) {
 				kipf_delayed_remove++;
 				TAILQ_INSERT_TAIL(&tbr_filters, match, ipf_tbr);
-				match->ipf_filter.ipf_input = 0;
-				match->ipf_filter.ipf_output = 0;
+				match->ipf_filter.ipf_input = ipf_input_detached;
+				match->ipf_filter.ipf_output = ipf_output_detached;
 				lck_mtx_unlock(kipf_lock);
 			} else {
 				TAILQ_REMOVE(head, match, ipf_link);
@@ -309,6 +333,8 @@ ipf_injectv4_out(mbuf_t data, ipfilter_t filter_ref, ipf_pktopts_t options)
 			ipoa.ipoa_flags |= IPOAF_NO_CELLULAR;
 		if (options->ippo_flags & IPPOF_BOUND_SRCADDR)
 			ipoa.ipoa_flags |= IPOAF_BOUND_SRCADDR;
+		if (options->ippo_flags & IPPOF_NO_IFF_EXPENSIVE)
+			ipoa.ipoa_flags |= IPOAF_NO_EXPENSIVE;
 	}
 
 	bzero(&ro, sizeof(struct route));
@@ -383,6 +409,8 @@ ipf_injectv6_out(mbuf_t data, ipfilter_t filter_ref, ipf_pktopts_t options)
 			ip6oa.ip6oa_flags |= IP6OAF_NO_CELLULAR;
 		if (options->ippo_flags & IPPOF_BOUND_SRCADDR)
 			ip6oa.ip6oa_flags |= IP6OAF_BOUND_SRCADDR;
+		if (options->ippo_flags & IPPOF_NO_IFF_EXPENSIVE)
+			ip6oa.ip6oa_flags |= IP6OAF_NO_EXPENSIVE;
 	}
 
 	bzero(&ro, sizeof(struct route_in6));

@@ -87,6 +87,24 @@ bool OSString::initWithCString(const char *cString)
     return true;
 }
 
+bool OSString::initWithStringOfLength(const char *cString, size_t inlength)
+{
+    if (!cString || !super::init())
+        return false;
+
+    length = inlength + 1;
+    string = (char *) kalloc(length);
+    if (!string)
+        return false;
+
+    bcopy(cString, string, inlength);
+    string[inlength] = 0;
+
+    ACCUMSIZE(length);
+
+    return true;
+}
+
 bool OSString::initWithCStringNoCopy(const char *cString)
 {
     if (!cString || !super::init())
@@ -134,6 +152,20 @@ OSString *OSString::withCStringNoCopy(const char *cString)
 
     return me;
 }
+
+OSString *OSString::withStringOfLength(const char *cString, size_t length)
+{
+    OSString *me = new OSString;
+
+    if (me && !me->initWithStringOfLength(cString, length)) {
+        me->release();
+        return 0;
+    }
+
+    return me;
+}
+
+
 
 /* @@@ gvdl */
 #if 0

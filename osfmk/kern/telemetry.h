@@ -30,18 +30,24 @@
 #define _KERNEL_TELEMETRY_H_
 
 #include <stdint.h>
+#include <sys/cdefs.h>
 #include <mach/mach_types.h>
 #include <kern/thread.h>
 
+__BEGIN_DECLS
+
 extern volatile boolean_t telemetry_needs_record;
+extern volatile boolean_t telemetry_window_enabled;
 
 extern void telemetry_init(void);
 
 extern void compute_telemetry(void *);
+extern void compute_telemetry_windowed(void);
 
-extern void telemetry_ast(thread_t, boolean_t interrupted_userspace);
+extern void telemetry_ast(thread_t, boolean_t interrupted_userspace, boolean_t is_windowed);
 
 extern int telemetry_gather(user_addr_t buffer, uint32_t *length, boolean_t mark);
+extern int telemetry_gather_windowed(user_addr_t buffer, uint32_t *length);
 
 extern void telemetry_mark_curthread(boolean_t interrupted_userspace);
 
@@ -49,11 +55,20 @@ extern void telemetry_task_ctl(task_t task, uint32_t reason, int enable_disable)
 extern void telemetry_task_ctl_locked(task_t task, uint32_t reason, int enable_disable);
 extern void telemetry_global_ctl(int enable_disable);
 
+extern kern_return_t telemetry_enable_window(void);
+extern void telemetry_disable_window(void);
+
 extern int telemetry_timer_event(uint64_t deadline, uint64_t interval, uint64_t leeway);
 
 #define TELEMETRY_CMD_TIMER_EVENT 1
+#define TELEMETRY_CMD_VOUCHER_NAME 2
+#define TELEMETRY_CMD_VOUCHER_STAIN TELEMETRY_CMD_VOUCHER_NAME
+
 
 extern void bootprofile_init(void);
+extern void bootprofile_wake_from_sleep(void);
 extern int bootprofile_gather(user_addr_t buffer, uint32_t *length);
+
+__END_DECLS
 
 #endif /* _KERNEL_TELEMETRY_H_ */

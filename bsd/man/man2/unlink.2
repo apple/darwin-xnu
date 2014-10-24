@@ -37,7 +37,8 @@
 .Dt UNLINK 2
 .Os BSD 4
 .Sh NAME
-.Nm unlink
+.Nm unlink ,
+.Nm unlinkat
 .Nd remove directory entry
 .Sh SYNOPSIS
 .Fd #include <unistd.h>
@@ -45,6 +46,8 @@
 .Fo unlink
 .Fa "const char *path"
 .Fc
+.Ft int
+.Fn unlinkat "int fd" "const char *path" "int flag"
 .Sh DESCRIPTION
 The
 .Fn unlink
@@ -60,6 +63,49 @@ all resources associated with the file are reclaimed.
 If one or more process have the file open when the last link is removed,
 the link is removed, but the removal of the file is delayed until
 all references to it have been closed.
+.Pp
+The
+.Fn unlinkat
+system call is equivalent to
+.Fn unlink
+or
+.Fn rmdir
+except in the case where
+.Fa path
+specifies a relative path.
+In this case the directory entry to be removed is determined
+relative to the directory associated with the file descriptor
+.Fa fd
+instead of the current working directory.
+.Pp
+The values for
+.Fa flag
+are constructed by a bitwise-inclusive OR of flags from the following list,
+defined in
+.In fcntl.h :
+.Bl -tag -width indent
+.It Dv AT_REMOVEDIR
+Remove the directory entry specified by
+.Fa fd
+and
+.Fa path
+as a directory, not a normal file.
+.El
+.Pp
+If
+.Fn unlinkat
+is passed the special value
+.Dv AT_FDCWD
+in the
+.Fa fd
+parameter, the current working directory is used and the behavior is
+identical to a call to
+.Fa unlink
+or
+.Fa rmdir
+respectively, depending on whether or not the
+.Dv AT_REMOVEDIR
+bit is set in flag.
 .Sh RETURN VALUES
 Upon successful completion, a value of 0 is returned.
 Otherwise, a value of -1 is returned and
@@ -125,13 +171,66 @@ are owned by the effective user ID.
 .It Bq Er EROFS
 The named file resides on a read-only file system.
 .El
+.Pp
+In addition to the errors returned by the
+.Fn unlink ,
+the
+.Fn unlinkat
+may fail if:
+.Bl -tag -width Er
+.It Bq Er EBADF
+The
+.Fa path
+argument does not specify an absolute path and the
+.Fa fd
+argument is neither
+.Dv AT_FDCWD
+nor a valid file descriptor open for searching.
+.It Bq Er ENOTEMPTY
+The
+.Fa flag
+parameter has the
+.Dv AT_REMOVEDIR
+bit set and the
+.Fa path
+argument names a directory that is not an empty directory,
+or there are hard links to the directory other than dot or
+a single entry in dot-dot.
+.It Bq Er ENOTDIR
+The
+.Fa flag
+parameter has the
+.Dv AT_REMOVEDIR
+bit set and
+.Fa path
+does not name a directory.
+.It Bq Er EINVAL
+The value of the
+.Fa flag
+argument is not valid.
+.It Bq Er ENOTDIR
+The
+.Fa path
+argument is not an absolute path and
+.Fa fd
+is neither
+.Dv AT_FDCWD
+nor a file descriptor associated with a directory.
+.El
 .Sh SEE ALSO
 .Xr close 2 ,
 .Xr link 2 ,
 .Xr rmdir 2 ,
 .Xr symlink 7
+.Sh STANDARDS
+The
+.Fn unlinkat
+system call is expected to conform to POSIX.1-2008 .
 .Sh HISTORY
 An
 .Fn unlink
 function call appeared in 
 .At v6 .
+The
+.Fn unlinkat
+system call appeared in OS X 10.10

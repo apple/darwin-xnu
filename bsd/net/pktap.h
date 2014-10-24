@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2012-2013 Apple Inc. All rights reserved.
+ * Copyright (c) 2012-2014 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -29,8 +29,10 @@
 #ifndef _NET_PKTAP_H_
 #define _NET_PKTAP_H_
 
+#include <sys/_types/_timeval32.h>
 #include <stdint.h>
 #include <net/if.h>
+#include <uuid/uuid.h>
 
 #ifdef PRIVATE
 
@@ -98,21 +100,26 @@ struct pktap_filter {
  * In theory, there could be several types of blocks in a chain before the actual packet
  */
 struct pktap_header {
-	uint32_t	pth_length;				/* length of this header */
-	uint32_t	pth_type_next;			/* type of data following */
-	uint32_t	pth_dlt;				/* DLT of packet */
-	char		pth_ifname[PKTAP_IFXNAMESIZE];	/* interface name */
-	uint32_t	pth_flags;				/* flags */
-	uint32_t	pth_protocol_family;
-	uint32_t	pth_frame_pre_length;
-	uint32_t	pth_frame_post_length;
-	pid_t		pth_pid;				/* process ID */
-	char		pth_comm[MAXCOMLEN+1];	/* process command name */
-	uint32_t	pth_svc;				/* service class */
-	uint16_t	pth_iftype;
-	uint16_t	pth_ifunit;
-	pid_t		pth_epid;		/* effective process ID */
-	char		pth_ecomm[MAXCOMLEN+1];	/* effective command name */
+	uint32_t		pth_length;			/* length of this header */
+	uint32_t		pth_type_next;			/* type of data following */
+	uint32_t		pth_dlt;			/* DLT of packet */
+	char			pth_ifname[PKTAP_IFXNAMESIZE];	/* interface name */
+	uint32_t		pth_flags;			/* flags */
+	uint32_t		pth_protocol_family;
+	uint32_t		pth_frame_pre_length;
+	uint32_t		pth_frame_post_length;
+	pid_t			pth_pid;			/* process ID */
+	char			pth_comm[MAXCOMLEN+1];		/* process name */
+	uint32_t		pth_svc;			/* service class */
+	uint16_t		pth_iftype;
+	uint16_t		pth_ifunit;
+	pid_t			pth_epid;		/* effective process ID */
+	char			pth_ecomm[MAXCOMLEN+1];	/* effective command name */
+	uint32_t		pth_flowid;
+	uint32_t		pth_ipproto;
+	struct timeval32	pth_tstamp;
+	uuid_t			pth_uuid;
+	uuid_t			pth_euuid;	
 };
 
 /*
@@ -121,10 +128,14 @@ struct pktap_header {
 #define PTH_TYPE_NONE	0		/* No more data following */
 #define PTH_TYPE_PACKET	1		/* Actual captured packet data */
 
-#define PTH_FLAG_DIR_IN		0x0001	/* Outgoing packet */
-#define PTH_FLAG_DIR_OUT	0x0002	/* Incoming packet */
-#define PTH_FLAG_PROC_DELEGATED	0x0004	/* Process delegated */
-#define PTH_FLAG_IF_DELEGATED	0x0008	/* Interface delegated */
+#define PTH_FLAG_DIR_IN			0x0001	/* Outgoing packet */
+#define PTH_FLAG_DIR_OUT		0x0002	/* Incoming packet */
+#define PTH_FLAG_PROC_DELEGATED		0x0004	/* Process delegated */
+#define PTH_FLAG_IF_DELEGATED		0x0008	/* Interface delegated */
+#ifdef BSD_KERNEL_PRIVATE
+#define PTH_FLAG_DELAY_PKTAP		0x1000	/* Finalize pktap header on read */
+#endif /* BSD_KERNEL_PRIVATE */
+#define PTH_FLAG_TSTAMP			0x2000	/* Has time stamp */
 
 
 #ifdef BSD_KERNEL_PRIVATE
@@ -134,6 +145,7 @@ extern void pktap_output(struct ifnet *, protocol_family_t, struct mbuf *,
 	u_int32_t, u_int32_t);
 extern void pktap_fill_proc_info(struct pktap_header *, protocol_family_t , 
 	struct mbuf *, u_int32_t , int , struct ifnet *);
+extern void pktap_finalize_proc_info(struct pktap_header *);
 
 #endif /* BSD_KERNEL_PRIVATE */
 #endif /* PRIVATE */

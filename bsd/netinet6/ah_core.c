@@ -136,7 +136,7 @@ static int ah_hmac_sha1_mature(struct secasvar *);
 static int ah_hmac_sha1_init(struct ah_algorithm_state *, struct secasvar *);
 static void ah_hmac_sha1_loop(struct ah_algorithm_state *, caddr_t, size_t);
 static void ah_hmac_sha1_result(struct ah_algorithm_state *, caddr_t, size_t);
-#if ALLCRYPTO
+#if AH_ALL_CRYPTO
 static int ah_sumsiz_sha2_256(struct secasvar *);
 static int ah_hmac_sha2_256_mature(struct secasvar *);
 static int ah_hmac_sha2_256_init(struct ah_algorithm_state *,
@@ -155,7 +155,7 @@ static int ah_hmac_sha2_512_init(struct ah_algorithm_state *,
 	struct secasvar *);
 static void ah_hmac_sha2_512_loop(struct ah_algorithm_state *, caddr_t, size_t);
 static void ah_hmac_sha2_512_result(struct ah_algorithm_state *, caddr_t, size_t);
-#endif /* ALLCRYPTO */
+#endif /* AH_ALL_CRYPTO */
 
 static void ah_update_mbuf(struct mbuf *, int, int,
 	const struct ah_algorithm *, struct ah_algorithm_state *);
@@ -184,7 +184,7 @@ ah_algorithm_lookup(idx)
 	static struct ah_algorithm ah_none =
 		{ ah_sumsiz_zero, ah_none_mature, 0, 2048, "none",
 			ah_none_init, ah_none_loop, ah_none_result, };
-#if ALLCRYPTO
+#if AH_ALL_CRYPTO
 	static struct ah_algorithm hmac_sha2_256 =
 		{ ah_sumsiz_sha2_256, ah_hmac_sha2_256_mature, 256, 256,
 			"hmac-sha2-256",
@@ -200,7 +200,7 @@ ah_algorithm_lookup(idx)
 			"hmac-sha2-512",
 			ah_hmac_sha2_512_init, ah_hmac_sha2_512_loop,
 			ah_hmac_sha2_512_result, };
-#endif /* ALLCRYPTO */
+#endif /* AH_ALL_CRYPTO */
 
 	switch (idx) {
 	case SADB_AALG_MD5HMAC:
@@ -213,14 +213,14 @@ ah_algorithm_lookup(idx)
 		return &keyed_sha1;
 	case SADB_X_AALG_NULL:
 		return &ah_none;
-#if ALLCRYPTO
+#if AH_ALL_CRYPTO
 	case SADB_X_AALG_SHA2_256:
 		return &hmac_sha2_256;
 	case SADB_X_AALG_SHA2_384:
 		return &hmac_sha2_384;
 	case SADB_X_AALG_SHA2_512:
 		return &hmac_sha2_512;
-#endif /* ALLCRYPTO */
+#endif /* AH_ALL_CRYPTO */
 	default:
 		return NULL;
 	}
@@ -760,7 +760,7 @@ ah_hmac_sha1_result(state, addr, l)
 	FREE(state->foo, M_TEMP);
 }
 
-#if ALLCRYPTO
+#if AH_ALL_CRYPTO
 static int
 ah_sumsiz_sha2_256(sav)
 	struct secasvar *sav;
@@ -1188,7 +1188,7 @@ ah_hmac_sha2_512_result(state, addr, l)
 
 	FREE(state->foo, M_TEMP);
 }
-#endif /* ALLCRYPTO */
+#endif /* AH_ALL_CRYPTO */
 
 /*------------------------------------------------------------*/
 

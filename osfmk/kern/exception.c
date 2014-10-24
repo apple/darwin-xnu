@@ -102,6 +102,12 @@ kern_return_t exception_deliver(
 	struct exception_action *excp,
 	lck_mtx_t			*mutex);
 
+static kern_return_t
+check_exc_receiver_dependancy(
+	exception_type_t exception, 
+	struct exception_action *excp, 
+	lck_mtx_t *mutex);
+
 #ifdef MACH_BSD
 kern_return_t bsd_exception(
 	exception_type_t	exception,
@@ -297,6 +303,42 @@ exception_deliver(
 }
 
 /*
+ * Routine: check_exc_receiver_dependancy
+ * Purpose:
+ *      Verify that the port destined for receiving this exception is not
+ *      on the current task. This would cause hang in kernel for
+ *      EXC_CRASH primarily. Note: If port is transferred
+ *      between check and delivery then deadlock may happen.
+ *
+ * Conditions:
+ *		Nothing locked and no resources held.
+ *		Called from an exception context.
+ * Returns:
+ *      KERN_SUCCESS if its ok to send exception message.
+ */
+kern_return_t
+check_exc_receiver_dependancy(
+	exception_type_t exception,
+	struct exception_action *excp,
+	lck_mtx_t *mutex)
+{
+	kern_return_t retval = KERN_SUCCESS;
+
+	if (excp == NULL || exception != EXC_CRASH)
+		return retval;
+
+	task_t task = current_task();
+	lck_mtx_lock(mutex);
+	ipc_port_t xport = excp[exception].port;
+	if ( IP_VALID(xport)
+		     && ip_active(xport)
+		     && task->itk_space == xport->ip_receiver)
+		retval = KERN_FAILURE;
+	lck_mtx_unlock(mutex);
+	return retval;
+}
+
+/*
  *	Routine:	exception
  *	Purpose:
  *		The current thread caught an exception.
@@ -329,27 +371,37 @@ exception_triage(
 	 * Try to raise the exception at the activation level.
 	 */
 	mutex = &thread->mutex;
-	kr = exception_deliver(thread, exception, code, codeCnt, thread->exc_actions, mutex);
-	if (kr == KERN_SUCCESS || kr == MACH_RCV_PORT_DIED)
-		goto out;
+	if (KERN_SUCCESS == check_exc_receiver_dependancy(exception, thread->exc_actions, mutex))
+	{
+		kr = exception_deliver(thread, exception, code, codeCnt, thread->exc_actions, mutex);
+		if (kr == KERN_SUCCESS || kr == MACH_RCV_PORT_DIED)
+			goto out;
+	}
 
 	/*
 	 * Maybe the task level will handle it.
 	 */
 	task = current_task();
 	mutex = &task->lock;
-	kr = exception_deliver(thread, exception, code, codeCnt, task->exc_actions, mutex);
-	if (kr == KERN_SUCCESS || kr == MACH_RCV_PORT_DIED)
-		goto out;
+	if (KERN_SUCCESS == check_exc_receiver_dependancy(exception, task->exc_actions, mutex))
+	{
+		kr = exception_deliver(thread, exception, code, codeCnt, task->exc_actions, mutex);
+		if (kr == KERN_SUCCESS || kr == MACH_RCV_PORT_DIED)
+			goto out;
+	}
 
 	/*
 	 * How about at the host level?
 	 */
 	host_priv = host_priv_self();
 	mutex = &host_priv->lock;
-	kr = exception_deliver(thread, exception, code, codeCnt, host_priv->exc_actions, mutex);
-	if (kr == KERN_SUCCESS || kr == MACH_RCV_PORT_DIED)
-		goto out;
+	
+	if (KERN_SUCCESS == check_exc_receiver_dependancy(exception, host_priv->exc_actions, mutex))
+	{
+		kr = exception_deliver(thread, exception, code, codeCnt, host_priv->exc_actions, mutex);
+		if (kr == KERN_SUCCESS || kr == MACH_RCV_PORT_DIED)
+			goto out;
+	}
 
 	/*
 	 * Nobody handled it, terminate the task.

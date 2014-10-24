@@ -99,7 +99,7 @@ def lldb_command(cmd_name, option_string = ''):
             try:
                 stream.setOptions(command_args, option_string)
                 if stream.verbose_level != 0:
-                    config['verbosity'] = stream.verbose_level 
+                    config['verbosity'] +=  stream.verbose_level 
                 with RedirectStdStreams(stdout=stream) :
                     if option_string:
                         obj(cmd_args=stream.target_cmd_args, cmd_options=stream.target_cmd_options)
@@ -285,8 +285,8 @@ def GetLLDBThreadForKernelThread(thread_obj):
         sbthread = lldb_process.GetThreadByID(tid)
 
     if not sbthread.IsValid():
-        raise RuntimeError("Unable to find lldb thread for tid={0:d} thread = {1:#018x}".format(tid, thread_obj))
-    
+        raise RuntimeError("Unable to find lldb thread for tid={0:d} thread = {1:#018x} (#16049947: have you put 'settings set target.load-script-from-symbol-file true' in your .lldbinit?)".format(tid, thread_obj))
+
     return sbthread
 
 def GetThreadBackTrace(thread_obj, verbosity = vHUMAN, prefix = ""):
@@ -321,18 +321,32 @@ def GetThreadBackTrace(thread_obj, verbosity = vHUMAN, prefix = ""):
 
         if iteration == 0 and not is_continuation:
             out_string += prefix +"stacktop = {:#018x}\n".format(frame_p)
-        
+
         if not function:
             # No debug info for 'function'.
-            symbol = frame.GetSymbol()
-            file_addr = addr.GetFileAddress()
-            start_addr = symbol.GetStartAddress().GetFileAddress()
-            symbol_name = symbol.GetName()
-            symbol_offset = file_addr - start_addr
             out_string += prefix 
             if not is_continuation:
                 out_string += "{fp:#018x} ".format(fp = frame_p) 
-            out_string += "{addr:#018x} {mod}`{symbol} + {offset} \n".format(addr=load_addr, mod=mod_name, symbol=symbol_name, offset=symbol_offset)
+            
+            symbol = frame.GetSymbol()
+            if not symbol:
+                symbol_name = "None"
+                symbol_offset = load_addr
+                kmod_val = kern.globals.kmod
+                for kval in IterateLinkedList(kmod_val, 'next'):
+                    if load_addr >= unsigned(kval.address) and \
+                        load_addr <= (unsigned(kval.address) + unsigned(kval.size)):
+                        symbol_name = kval.name
+                        symbol_offset = load_addr - unsigned(kval.address)
+                        break
+                out_string += "{:#018x} {:s} + {:#x} \n".format(load_addr, symbol_name, symbol_offset)
+            else:
+                file_addr = addr.GetFileAddress()
+                start_addr = symbol.GetStartAddress().GetFileAddress()
+                symbol_name = symbol.GetName()
+                symbol_offset = file_addr - start_addr
+                out_string += "{addr:#018x} {mod}`{symbol} + {offset:#x} \n".format(addr=load_addr, 
+                    mod=mod_name, symbol=symbol_name, offset=symbol_offset)
         else:
             # Debug info is available for 'function'.
             func_name = frame.GetFunctionName()
@@ -521,29 +535,30 @@ def ShowVersion(cmd_args=None):
 @lldb_command('paniclog')
 def ShowPanicLog(cmd_args=None):
     """ Display the paniclog information
+        usage: (lldb) paniclog
+        options:
+            -v : increase verbosity
     """
-    panic_buf = kern.globals.debug_buf
-    panic_buf_start = addressof(panic_buf)
+    panic_buf = kern.globals.debug_buf_addr
+    panic_buf_start = unsigned(panic_buf)
     panic_buf_end = unsigned(kern.globals.debug_buf_ptr)
     num_bytes = panic_buf_end - panic_buf_start
     if num_bytes == 0 :
         return
-    panic_data = panic_buf.GetSBValue().GetData()
-    err = lldb.SBError()
-    line = ''
-    for i in range(0, num_bytes):
-        c = panic_data.GetUnsignedInt8(err, i)
-        if chr(c) == '\n':
-            if line =='':
-                line = " "
-            print line 
-            line = ''
-        else:
-            line += chr(c)
-    
-    if len(line) > 0: 
-        print line
-    
+    warn_str = ""
+    if num_bytes > 4096 and config['verbosity'] == vHUMAN:
+        num_bytes = 4096
+        warn_str = "LLDBMacro Warning: The paniclog is too large. Trimming to 4096 bytes."
+        warn_str += " If you wish to see entire log please use '-v' argument."
+    out_str = ""
+    for i in range(num_bytes):
+        p_char = str(panic_buf[i])
+        out_str += p_char
+        if p_char == '\n':
+            print out_str
+            out_str = ""
+    if warn_str:
+        print warn_str
     return
 
 @lldb_command('showbootargs')
@@ -611,6 +626,74 @@ def ShowLLDBTypeSummaries(cmd_args=[]):
     lldb_run_command("type category "+ action +" kernel")
     print "Successfully "+action+"d the kernel type summaries. %s" % trailer_msg
 
+@lldb_command('walkqueue_head', 'S')
+def WalkQueueHead(cmd_args=[], cmd_options={}):
+    """ walk a queue_head_t and list all members in it. Note this is for queue_head_t. refer to osfmk/kern/queue.h 
+        Option: -S - suppress summary output.
+        Usage: (lldb) walkqueue_head  <queue_entry *> <struct type> <fieldname>
+        ex:    (lldb) walkqueue_head  0x7fffff80 "thread *" "task_threads"
+        
+    """
+    global lldb_summary_definitions
+    if not cmd_args:
+        raise ArgumentError("invalid arguments")
+    if len(cmd_args) != 3:
+        raise ArgumentError("insufficient arguments")
+    queue_head = kern.GetValueFromAddress(cmd_args[0], 'struct queue_entry *')
+    el_type = cmd_args[1]
+    field_name = cmd_args[2]
+    showsummary = False
+    if el_type in lldb_summary_definitions:
+        showsummary = True
+    if '-S' in cmd_options:
+        showsummary = False
+
+    for i in IterateQueue(queue_head, el_type, field_name):
+        if showsummary:
+            print lldb_summary_definitions[el_type](i)
+        else:
+            print "{0: <#020x}".format(i)
+    
+
+
+@lldb_command('walklist_entry', 'S')
+def WalkList(cmd_args=[], cmd_options={}):
+    """ iterate over a list as defined with LIST_ENTRY in bsd/sys/queue.h
+        params:
+            object addr  - value : address of object
+            element_type - str   : Type of the next element
+            field_name   - str   : Name of the field in next element's structure
+
+        Option: -S - suppress summary output.
+        Usage: (lldb) walklist_entry  <obj with list_entry *> <struct type> <fieldname>
+        ex:    (lldb) walklist_entry  0x7fffff80 "struct proc *" "p_sibling"
+        
+    """
+    global lldb_summary_definitions
+    if not cmd_args:
+        raise ArgumentError("invalid arguments")
+    if len(cmd_args) != 3:
+        raise ArgumentError("insufficient arguments")
+    el_type = cmd_args[1]
+    queue_head = kern.GetValueFromAddress(cmd_args[0], el_type)
+    field_name = cmd_args[2]
+
+    showsummary = False
+    if el_type in lldb_summary_definitions:
+        showsummary = True
+    if '-S' in cmd_options:
+        showsummary = False
+    elt = queue_head
+    while unsigned(elt) != 0:
+        i = elt
+        elt = elt.__getattr__(field_name).le_next
+        if showsummary:
+            print lldb_summary_definitions[el_type](i)
+        else:
+            print "{0: <#020x}".format(i)
+
+
+
 from memory import *
 from process import *
 from ipc import * 
@@ -624,3 +707,8 @@ from pci import *
 from misc import *
 from apic import *
 from scheduler import *
+from atm import *
+from structanalyze import *
+from ipcimportancedetail import *
+from bank import *
+

@@ -188,6 +188,7 @@ strcmp(
  */
 
 // ARM implementation in ../arm/strncmp.s
+// ARM64 implementation in ../arm64/strncmp.s
 int
 strncmp(
         const char *s1,
@@ -284,7 +285,7 @@ strcpy(
  *      to the "to" string.
  */
 
-// ARM implementation in ../arm/strncpy.c
+// ARM and ARM64 implementation in ../arm/strncpy.c
 char *
 strncpy(
 	char *s1, 
@@ -380,6 +381,7 @@ atoi_term(
  */
 
 // ARM implementation in ../arm/strnlen.s
+// ARM64 implementation in ../arm64/strnlen.s
 size_t
 strnlen(const char *s, size_t max) {
 	const char *es = s + max, *p = s;
@@ -485,7 +487,7 @@ strlcat(char *dst, const char *src, size_t siz)
  * Returns strlen(src); if retval >= siz, truncation occurred.
  */
 
-// ARM implementation in ../arm/strlcpy.c
+// ARM and ARM64 implementation in ../arm/strlcpy.c
 size_t
 strlcpy(char *dst, const char *src, size_t siz)
 {

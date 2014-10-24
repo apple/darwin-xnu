@@ -59,7 +59,6 @@
 
 #include <kern/cpu_number.h>
 #include <kern/kalloc.h>
-#include <kern/lock.h>
 #include <kern/spl.h>
 #include <kern/thread.h>
 #include <kern/assert.h>
@@ -67,10 +66,11 @@
 #include <kern/misc_protos.h>
 #include <kern/clock.h>
 #include <kern/telemetry.h>
+#include <kern/ecc.h>
 #include <vm/vm_kern.h>
 #include <vm/pmap.h>
 #include <stdarg.h>
-#if !MACH_KDP
+#if !(MACH_KDP && CONFIG_KDP_INTERACTIVE_DEBUGGING)
 #include <kdp/kdp_udp.h>
 #endif
 
@@ -87,6 +87,10 @@
 #include <libkern/OSAtomic.h>
 #include <libkern/kernel_mach_header.h>
 #include <uuid/uuid.h>
+
+#if (defined(__arm64__) || defined(NAND_PANIC_DEVICE)) && !defined(LEGACY_PANIC_LOGS)
+#include <pexpert/pexpert.h> /* For gPanicBase */
+#endif
 
 unsigned int	halt_in_debugger = 0;
 unsigned int	switch_debugger = 0;
@@ -111,9 +115,17 @@ unsigned long		panic_caller;
 
 #define DEBUG_BUF_SIZE (3 * PAGE_SIZE)
 
+/* debug_buf is directly linked with iBoot panic region for ARM64 targets */
+#if (defined(__arm64__) || defined(NAND_PANIC_DEVICE)) && !defined(LEGACY_PANIC_LOGS)
+char *debug_buf_addr = NULL;
+char *debug_buf_ptr = NULL;
+unsigned int debug_buf_size = 0;
+#else
 char debug_buf[DEBUG_BUF_SIZE];
+__used char *debug_buf_addr = debug_buf;
 char *debug_buf_ptr = debug_buf;
 unsigned int debug_buf_size = sizeof(debug_buf);
+#endif
 
 static char model_name[64];
 unsigned char *kernel_uuid;
@@ -140,7 +152,7 @@ typedef struct pasc pasc_t;
 #undef Assert
 #endif
 
-void
+void __attribute__((noinline))
 Assert(
 	const char	*file,
 	int		line,
@@ -209,8 +221,20 @@ debug_log_init(void)
 {
 	if (debug_buf_size != 0)
 		return;
+#if (defined(__arm64__) || defined(NAND_PANIC_DEVICE)) && !defined(LEGACY_PANIC_LOGS)
+	if (!gPanicBase) {
+		printf("debug_log_init: Error!! gPanicBase is still not initialized\n");
+		return;
+	}
+	/* Shift debug buf start location and size by 8 bytes for magic header and crc value */
+	debug_buf_addr = (char*)gPanicBase + 8;
+	debug_buf_ptr = debug_buf_addr;
+	debug_buf_size = gPanicSize - 8;
+#else
+	debug_buf_addr = debug_buf;
 	debug_buf_ptr = debug_buf;
 	debug_buf_size = sizeof(debug_buf);
+#endif
 }
 
 #if defined(__i386__) || defined(__x86_64__)
@@ -234,12 +258,14 @@ void _consume_panic_args(int a __unused, ...)
     panic("panic");
 }
 
+extern unsigned int write_trace_on_panic;
+
 static spl_t
 panic_prologue(const char *str)
 {
 	spl_t	s;
 
-	if (kdebug_enable) {
+	if (write_trace_on_panic && kdebug_enable) {
 		if (get_preemption_level() == 0 && !ml_at_interrupt_context()) {
 			ml_set_interrupts_enabled(TRUE);
 			kdbg_dump_trace_to_file("/var/tmp/panic.trace");
@@ -395,7 +421,7 @@ void
 debug_putc(char c)
 {
 	if ((debug_buf_size != 0) &&
-		((debug_buf_ptr-debug_buf) < (int)debug_buf_size)) {
+		((debug_buf_ptr-debug_buf_addr) < (int)debug_buf_size)) {
 		*debug_buf_ptr=c;
 		debug_buf_ptr++;
 	}
@@ -500,6 +526,12 @@ void panic_display_kernel_aslr(void) {
 	}
 }
 
+void panic_display_hibb(void) {
+#if defined(__i386__) || defined (__x86_64__)
+	kdb_printf("__HIB  text base: %p\n", (void *) vm_hib_base);
+#endif
+}
+
 static void panic_display_uptime(void) {
 	uint64_t	uptime;
 	absolutetime_to_nanoseconds(mach_absolute_time(), &uptime);
@@ -524,6 +556,7 @@ __private_extern__ void panic_display_system_configuration(void) {
 		kdb_printf("\nKernel version:\n%s\n",version);
 		panic_display_kernel_uuid();
 		panic_display_kernel_aslr();
+		panic_display_hibb();
 		panic_display_pal_info();
 		panic_display_model_name();
 		panic_display_uptime();
@@ -581,6 +614,17 @@ __private_extern__ void panic_display_zprint()
 	}
 }
 
+#if CONFIG_ECC_LOGGING
+__private_extern__ void panic_display_ecc_errors() 
+{
+	uint32_t count = ecc_log_get_correction_count();
+
+	if (count > 0) {
+		kdb_printf("ECC Corrections:%u\n", count);
+	}
+}
+#endif /* CONFIG_ECC_LOGGING */
+
 #if CONFIG_ZLEAKS
 extern boolean_t	panic_include_ztrace;
 extern struct ztrace* top_ztrace;
@@ -612,7 +656,7 @@ __private_extern__ void panic_display_ztrace(void)
 }
 #endif /* CONFIG_ZLEAKS */
 
-#if !MACH_KDP
+#if ! (MACH_KDP && CONFIG_KDP_INTERACTIVE_DEBUGGING)
 static struct kdp_ether_addr kdp_current_mac_address = {{0, 0, 0, 0, 0, 0}};
 
 /* XXX ugly forward declares to stop warnings */
@@ -664,22 +708,11 @@ void
 kdp_unregister_send_receive(__unused void *send, __unused void *receive)
 {}
 
-void
-kdp_snapshot_preflight(__unused int pid, __unused void * tracebuf,
-		__unused uint32_t tracebuf_size, __unused uint32_t options)
+void kdp_register_link(__unused kdp_link_t link, __unused kdp_mode_t mode)
 {}
 
-int
-kdp_stack_snapshot_geterror(void)
-{       
-        return -1;
-}
-
-int
-kdp_stack_snapshot_bytes_traced(void)
-{       
-        return 0;
-}
+void kdp_unregister_link(__unused kdp_link_t link, __unused kdp_mode_t mode)
+{}
 
 #endif
 

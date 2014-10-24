@@ -1,10 +1,8 @@
 /*
- * @APPLE_LICENSE_HEADER_START@
- *
- * Copyright (c) 2012 Apple Computer, Inc.  All Rights Reserved.
+ * Copyright (c) 2012-2014 Apple Computer, Inc.  All Rights Reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
- *
+ * 
  * This file contains Original Code and/or Modifications of Original Code
  * as defined in and that are subject to the Apple Public Source License
  * Version 2.0 (the 'License'). You may not use this file except in
@@ -13,10 +11,10 @@
  * unlawful or unlicensed copies of an Apple operating system, or to
  * circumvent, violate, or enable the circumvention or violation of, any
  * terms of an Apple operating system software license agreement.
- *
+ * 
  * Please obtain a copy of the License at
  * http://www.opensource.apple.com/apsl/ and read it before using this file.
- *
+ * 
  * The Original Code and all software distributed under the License are
  * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
@@ -24,7 +22,7 @@
  * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
  * Please see the License for the specific language governing rights and
  * limitations under the License.
- *
+ * 
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 
@@ -35,6 +33,10 @@
 
 #ifdef __cplusplus
 extern "C" {
+#endif
+
+#ifndef IOREPORT_ABORT
+#define IOREPORT_ABORT panic
 #endif
 
 /*
@@ -52,13 +54,18 @@ extern "C" {
     appropriate macro.
 */
 
-/*
- * Returns the buffer size required for a Simple report.
- */
-#define SIMPLEREPORT_BUFSIZE   (sizeof(IOReportElement))
+
+/* ----- Reporting Single Integers (SimpleReport) ----- */
 
 /*
- * Initialize a buffer to hold a Simple (integer) report.
+ * The buffer size required for a SimpleReport.
+ */
+
+#define SIMPLEREPORT_BUFSIZE   (sizeof(IOReportElement))
+
+
+/*
+ * Initialize a buffer to hold a SimpleReport.
  *
  *                  void* buffer - ptr to SIMPLEREPORT_BUFSIZE bytes
  *                size_t bufSize - sanity check of buffer's size
@@ -66,10 +73,10 @@ extern "C" {
  *            uint64_t channelID - the report's channel ID
  * IOReportCategories categories - categories of this channel
  *
- * If the buffer is not of sufficient size, the macro performs a
- * null pointer reference to trigger a segfault.  Then, the buffer is
- * filled with 0xbadcafe.
+ * If the buffer is not of sufficient size, the macro calls IOREPORT_ABORT().
+ * If that returns, the buffer is filled with 0xbadcafe.
  */
+
 #define SIMPLEREPORT_INIT(buffer, bufSize, providerID, channelID, cats)  \
 do {  \
     IOReportElement     *__elem = (IOReportElement *)(buffer);  \
@@ -83,23 +90,23 @@ do {  \
         __elem->channel_type.nelements = 1;  \
         __elem->channel_type.element_idx = 0;  \
         __elem->timestamp = 0;  \
-		__vals = (IOSimpleReportValues*)&__elem->values;  \
-		__vals->simple_value = kIOReportInvalidValue;  \
+        __vals = (IOSimpleReportValues*)&__elem->values;  \
+        __vals->simple_value = kIOReportInvalidIntValue;  \
     }  \
     else {  \
-        uint32_t *__nptr = NULL;  \
-        *__nptr = 1;  \
-        POLLUTE_BUF((buffer), (bufSize));  \
+        IOREPORT_ABORT("bufSize is smaller than the required size\n");  \
+        __POLLUTE_BUF((buffer), (bufSize));  \
     }  \
 } while(0)
 
 
 /*
- * Sets the SimpleReport channel to a new value.
+ * Set a SimpleReport to a new value.
  *
- *     void* simp_buf - ptr to memory initialized by SIMPLEREPORT_INIT()
- * uint64_t new_value - new value for the channel
+ *    void* simp_buf - ptr to memory initialized by SIMPLEREPORT_INIT()
+ * int64_t new_value - new value for the report
  */
+
 #define SIMPLEREPORT_SETVALUE(simp_buf, new_value)  \
 do {  \
     IOReportElement *__elem = (IOReportElement *)(simp_buf);  \
@@ -108,8 +115,24 @@ do {  \
     __vals->simple_value = (new_value);  \
 } while(0)
 
+
 /*
- * Prepare simple report buffer for
+ * Increment the value of a SimpleReport.
+ *
+ *    void* simp_buf - ptr to memory initialized by SIMPLEREPORT_INIT()
+ * int64_t increment - amount by which to increment the value
+ */
+#define SIMPLEREPORT_INCREMENTVALUE(simp_buf, new_value)  \
+do {  \
+    IOReportElement *__elem = (IOReportElement *)(simp_buf);  \
+    IOSimpleReportValues *__vals;  \
+    __vals = (IOSimpleReportValues*)&__elem->values;  \
+    __vals->simple_value += (new_value);  \
+} while(0)
+
+
+/*
+ * Prepare a SimpleReport for
  * IOService::updateReport(kIOReportCopyChannelData...)
  *
  * void* simp_buf  - Ptr to memory updated by SIMPLEREPORT_SETVALUE()
@@ -118,6 +141,7 @@ do {  \
  * size_t size2cpy - On return, 'size2cpy' is set to the size of the report
  *                   data that needs to be copied for kIOReportCopyChannelData.
  */
+
 #define SIMPLEREPORT_UPDATEPREP(simp_buf, ptr2cpy, size2cpy)  \
 do {  \
     (ptr2cpy) = (simp_buf);  \
@@ -126,7 +150,7 @@ do {  \
 
 
 /*
- * Updates the result field received as a parameter for
+ * Update the result field received as a parameter for
  * kIOReportGetDimensions & kIOReportCopyChannelData actions.
  *
  * IOReportConfigureAction action - configure/updateReport() 'action' param
@@ -142,20 +166,39 @@ do {  \
 } while (0)
 
 
-
 /*
- * Returns the channel id from the buffer previously initialized by
- * SIMPLEREPORT_INIT().
+ * Get the 64-bit channel ID of a SimpleReport.
  *
  * void* simp_buf - ptr to memory initialized by SIMPLEREPORT_INIT()
  */
 
 #define SIMPLEREPORT_GETCHID(simp_buf)  \
-    (((IOReportElement *)(simp_buf))->channel_id);  \
+    (((IOReportElement *)(simp_buf))->channel_id)
+
+/*
+ * Get the IOReportChannelType of a SimpleReport.
+ *
+ * void* simp_buf - ptr to memory initialized by SIMPLEREPORT_INIT()
+ */
+
+#define SIMPLEREPORT_GETCHTYPE(simp_buf)  \
+    (*(uint64_t*)&(((IOReportElement *)(simp_buf))->channel_type))
 
 
+/*
+ * Get the integer value of a SimpleReport.
+ *
+ * void* simp_buf - memory initialized by SIMPLEREPORT_INIT()
+ */
 
-// Internal struct for State report buffer
+#define SIMPLEREPORT_GETVALUE(simp_buf)  \
+    (((IOSimpleReportValues*)&(((IOReportElement*)(simp_buf))->values))  \
+            ->simple_value)
+
+
+/* ----- State Machine Reporting (StateReport) ----- */
+
+// Internal struct for StateReport
 typedef struct {
    uint16_t        curr_state;
    uint64_t        update_ts;
@@ -163,16 +206,16 @@ typedef struct {
 } IOStateReportInfo;
 
 /*
- * Returns the size required to be allocated for using STATEREPORT_*()
+ * Determine the size required for a StateReport buffer.
  *
- * int nstates - number of states for the intended channel
+ * int nstates - number of states to be reported
  */
 #define STATEREPORT_BUFSIZE(nstates)  \
     (sizeof(IOStateReportInfo) + (nstates) * sizeof(IOReportElement))
 
 
 /*
- * Initializes a buffer so it can be used with STATEREPORT_*().
+ * Initialize a StateReport buffer.
  *
  *                   int nstates - number of states to be reported
  *                  void* buffer - ptr to STATEREPORT_BUFSIZE(nstates) bytes
@@ -181,9 +224,8 @@ typedef struct {
  *            uint64_t channelID - ID of this channel, see IOREPORT_MAKEID()
  * IOReportCategories categories - categories of this channel
  *
- * If the buffer is not of sufficient size, the macro performs a
- * null pointer reference to trigger a segfault.  Then, the buffer is
- * filled with 0xbadcafe.
+ * If the buffer is not of sufficient size, the macro invokes IOREPORT_ABORT.
+ * If that returns, the buffer is filled with 0xbadcafe.
  */
 #define STATEREPORT_INIT(nstates, buf, bufSize, providerID, channelID, cats) \
 do {  \
@@ -210,15 +252,14 @@ do {  \
         __info->update_ts = 0;  \
     }  \
     else {  \
-        int *__nptr = NULL;  \
-        *__nptr = 1;  \
-        POLLUTE_BUF((buf), (bufSize));  \
+        IOREPORT_ABORT("bufSize is smaller than the required size\n");  \
+        __POLLUTE_BUF((buf), (bufSize));  \
     }  \
 } while(0)
 
 /*
- * Initializes the state id field of a state with the specified value.  By
- * default, STATEREPORT_INIT initializes the state id with the index of
+ * Initialize the state id field of a state with the specified value.  By
+ * default, STATEREPORT_INIT() initializes the state IDs with the index of
  * that state.  This macro can be used to provide a more descriptive state id.
  *
  *   void* state_buf - ptr to memory initialized by STATEREPORT_INIT()
@@ -237,7 +278,7 @@ do {  \
 
 
 /*
- * Set the state of a State report.
+ * Set the state of a StateReport.
  *
  *      void* state_buf - pointer to memory initialized by STATEREPORT_INIT()
  * unsigned newStateIdx - index of new state, out of bounds -> no-op
@@ -260,7 +301,8 @@ do {  \
 } while(0)
 
 /*
- * Prepare StateReport for UpdateReport call
+ * Prepare a StateReport for
+ * IOService::updateReport(kIOReportCopyChannelData...)
  *
  *      void* state_buf - ptr to memory initialized by STATEREPORT_INIT()
  * uint64_t currentTime - current timestamp
@@ -284,7 +326,7 @@ do {  \
 } while(0)
 
 /*
- * Updates the result field received as a parameter for kIOReportGetDimensions &
+ * Update the result field received as a parameter for kIOReportGetDimensions &
  * kIOReportCopyChannelData actions.
  *
  *                void* state_buf - memory initialized by STATEREPORT_INIT()
@@ -304,48 +346,224 @@ do {  \
 } while (0)
 
 
-
 /*
- * Returns the channel id from the buffer previously initialized by STATEREPORT_INIT().
+ * Get the 64-bit channel ID of a StateReport.
  *
  * void* state_buf - ptr to memory initialized by STATEREPORT_INIT()
  */
-
 #define STATEREPORT_GETCHID(state_buf)  \
     (((IOStateReportInfo *)(state_buf))->elem[0].channel_id)
 
 /*
- * Returns number of transitions occurred from the given state
+ * Get the IOReportChannelType of a StateReport.
+ *
+ * void* state_buf - ptr to memory initialized by STATEREPORT_INIT()
+ */
+#define STATEREPORT_GETCHTYPE(state_buf)  \
+    (*(uint64_t*)&(((IOStateReportInfo *)(state_buf))->elem[0].channel_type))
+
+/*
+ * Get the number of transitions into a given state.
  *
  *   void* state_buf - ptr to memory initialized by STATEREPORT_INIT()
  * unsigned stateIdx - index of state, out of bounds -> kIOReportInvalidValue
  *
  */
-
 #define STATEREPORT_GETTRANSITIONS(state_buf, stateIdx)  \
     (((stateIdx) < ((IOStateReportInfo *)(state_buf))->elem[0].channel_type.nelements)  \
         ? ((IOStateReportValues*)&(((IOStateReportInfo*)(state_buf))->elem[(stateIdx)].values))->intransitions  \
         : kIOReportInvalidValue)
 
 /*
- * Returns the total number of ticks spent in the given state.
+ * Get the total number of ticks spent in a given state.
  *
  *   void* state_buf - ptr to memory initialized by STATEREPORT_INIT()
  * unsigned stateIdx - index of state, out of bounds -> kIOReportInvalidValue
  */
-
 #define STATEREPORT_GETTICKS(state_buf, stateIdx)  \
     (((stateIdx) < ((IOStateReportInfo*)(state_buf))->elem[0].channel_type.nelements)  \
         ? ((IOStateReportValues*)&(((IOStateReportInfo*)(state_buf))->elem[(stateIdx)].values))->upticks  \
         : kIOReportInvalidValue)
 
 
-#define POLLUTE_BUF(buf, bufSize)  \
+/* ----- Reporting an Array of Integers (SimpleArrayReport) ----- */
+
+/*
+ * Determine the buffer size for a SimpleArrayReport.
+ *
+ * int nValues - number of values to be reported
+ */
+
+#define SIMPLEARRAY_BUFSIZE(nValues) \
+    ((((nValues)/IOR_VALUES_PER_ELEMENT) + (((nValues) % IOR_VALUES_PER_ELEMENT) ? 1:0)) \
+        * sizeof(IOReportElement))
+
+/*
+ * Initialize a buffer for use as a SimpleArrayReport.
+ *
+ *                   int nValues   - number of elements to be reported
+ *                     void* buf   - ptr to SIMPLEARRAY_BUFSIZE(nValues) bytes
+ *                size_t bufSize   - sanity check of buffer's size
+ *           uint64_t providerID   - registry Entry ID of the reporting service
+ *            uint64_t channelID   - ID of this channel, see IOREPORT_MAKEID()
+ * IOReportCategories categories   - categories of this channel
+ *
+ * If the buffer is not of sufficient size, the macro invokes IOREPORT_ABORT()
+ * and, if that returns, fills the buffer with 0xbadcafe.
+ */
+
+#define SIMPLEARRAY_INIT(nValues, buf, bufSize, providerID, channelID, cats) \
 do {  \
-    int __cnt = (bufSize)/sizeof(uint32_t);  \
-    while (--__cnt >= 0)  \
-        ((uint32_t*)(buf))[__cnt] = 0xbadcafe;  \
+    IOSimpleArrayReportValues *__rep;  \
+    IOReportElement     *__elem;  \
+    uint32_t            __nElems = (((nValues) / IOR_VALUES_PER_ELEMENT) + \
+                                    (((nValues) % IOR_VALUES_PER_ELEMENT) ? 1 : 0)); \
+    if ((bufSize) >= SIMPLEARRAY_BUFSIZE(nValues)) {  \
+        for (unsigned __no = 0; __no < __nElems; __no++) {  \
+            __elem =  &(((IOReportElement *)(buf))[__no]);  \
+            __rep = (IOSimpleArrayReportValues *) &(__elem->values);  \
+            __elem->channel_id = (channelID);  \
+            __elem->provider_id = (providerID);  \
+            __elem->channel_type.report_format = kIOReportFormatSimpleArray;  \
+            __elem->channel_type.reserved = 0;  \
+            __elem->channel_type.categories = (cats);  \
+            __elem->channel_type.nelements = (__nElems);  \
+            __elem->channel_type.element_idx = __no;  \
+            __elem->timestamp = 0;  \
+            __rep->simple_values[0] = kIOReportInvalidIntValue;  \
+            __rep->simple_values[1] = kIOReportInvalidIntValue;  \
+            __rep->simple_values[2] = kIOReportInvalidIntValue;  \
+            __rep->simple_values[3] = kIOReportInvalidIntValue;  \
+        }  \
+    }  \
+    else {  \
+        IOREPORT_ABORT("bufSize is smaller than the required size\n");  \
+        __POLLUTE_BUF((buf), (bufSize));  \
+    }  \
+} while(0)
+
+
+/* SimpleArrayReport helpers */
+
+    #define __SA_FINDREP(array_buf, idx)  \
+        IOSimpleArrayReportValues *__rep;  \
+        IOReportElement     *__elem;  \
+        unsigned __elemIdx = (idx) / IOR_VALUES_PER_ELEMENT;  \
+        unsigned __valueIdx = (idx) % IOR_VALUES_PER_ELEMENT;  \
+        __elem = &(((IOReportElement *)(array_buf))[0]);  \
+        if (__elemIdx < __elem->channel_type.nelements)  { \
+            __elem = &(((IOReportElement *)(array_buf))[__elemIdx]);  \
+            __rep = (IOSimpleArrayReportValues *) &(__elem->values);  \
+
+    #define __SA_MAXINDEX(array_buf)  \
+        ((((IOReportElement*)(array_buf))->channel_type.nelements)  \
+            * IOR_VALUES_PER_ELEMENT) - 1
+
+/*
+ * Set a value at a specified index in a SimpleArrayReport.
+ *
+ *   void* array_bufbuf - ptr to memory initialized by SIMPLEARRAY_INIT()
+ *        unsigned idx  - array index, out of bounds -> no-op
+ *    uint64_t newValue - new value to be stored at array[idx]
+ */
+#define SIMPLEARRAY_SETVALUE(array_buf, idx, newValue) \
+do {  \
+    __SA_FINDREP((array_buf), (idx)) \
+        __rep->simple_values[__valueIdx] = (newValue);  \
+    } \
+} while(0)
+
+/*
+ * Increment an array value within a SimpleArrayReport.
+ *
+ *     void* array_buf - ptr to memory initialized by SIMPLEARRAY_INIT()
+ *       unsigned idx  - array index to increment, out of bounds -> no-op
+ *      int64_t value  - amount by which to increment array[idx]
+ */
+#define SIMPLEARRAY_INCREMENTVALUE(array_buf, idx, value)  \
+do {  \
+    __SA_FINDREP((array_buf), (idx)) \
+        __rep->simple_values[__valueIdx] += (value);  \
+    } \
+} while(0)
+
+
+/*
+ * Prepare a SimpleArrayReport for
+ * IOService::updateReport(kIOReportCopyChannelData...)
+ *
+ *      void* array_buf - ptr to memory initialized by SIMPLEARRAY_INIT()
+ *        void* ptr2cpy - filled in with pointer to buffer to be copied out
+ *      size_t size2cpy - filled in with the size of the buffer to copy out
+ */
+
+#define SIMPLEARRAY_UPDATEPREP(array_buf, ptr2cpy, size2cpy) \
+do {  \
+    IOReportElement     *__elem;  \
+    __elem = &(((IOReportElement *)(array_buf))[0]);  \
+    (ptr2cpy) =  (void *) (array_buf);  \
+    (size2cpy) = __elem->channel_type.nelements * sizeof(IOReportElement);  \
+} while(0)
+
+
+/*
+ * Update the result field received as a parameter for kIOReportGetDimensions &
+ * kIOReportCopyChannelData actions.
+ *
+ *                void* array_buf - memory initialized by SIMPLEARRAY_INIT()
+ * IOReportConfigureAction action - configure/updateReport() 'action'
+ *                   void* result - configure/updateReport() 'result'
+ */
+
+#define SIMPLEARRAY_UPDATERES(array_buf, action, result) \
+do {  \
+    IOReportElement     *__elem;  \
+    int *__nElements = (int *)(result);  \
+    __elem = &(((IOReportElement *)(array_buf))[0]);  \
+    if (((action) == kIOReportGetDimensions) || ((action) == kIOReportCopyChannelData)) {  \
+        *__nElements += __elem->channel_type.nelements;  \
+    }  \
 } while (0)
+
+
+/*
+ * Get the 64-bit channel ID of a SimpleArrayReport.
+ *
+ * void* array_buf - ptr to memory initialized by SIMPLEARRAY_INIT()
+ */
+#define SIMPLEARRAY_GETCHID(array_buf)  \
+    (((IOReportElement *)(array_buf))->channel_id)
+
+
+/*
+ * Get the IOReportChannelType of a SimpleArrayReport.
+ *
+ * void* simp_buf - ptr to memory initialized by SIMPLEREPORT_INIT()
+ */
+#define SIMPLEARRAY_GETCHTYPE(array_buf)  \
+    (*(uint64_t*)&(((IOReportElement *)(array_buf))->channel_type))
+
+/*
+ * Get a value from a SimpleArrayReport.
+ *
+ * void* array_buf - ptr to memory initialized by SIMPLEARRAY_INIT()
+ *   unsigned idx  - index of the value, out of bounds -> kIOReportInvalidValue
+ */
+#define SIMPLEARRAY_GETVALUE(array_buf, idx)  \
+    (((idx) > __SA_MAXINDEX(array_buf) || (idx) < 0) ? kIOReportInvalidIntValue :  \
+    ((IOSimpleArrayReportValues*)&(  \
+        ((IOReportElement*)(array_buf))[(idx) / IOR_VALUES_PER_ELEMENT].values))  \
+            ->simple_values[(idx) % IOR_VALUES_PER_ELEMENT])
+
+
+/* generic utilities */
+
+    #define __POLLUTE_BUF(buf, bufSize)  \
+    do {  \
+        int __cnt = (bufSize)/sizeof(uint32_t);  \
+        while (--__cnt >= 0)  \
+            ((uint32_t*)(buf))[__cnt] = 0xbadcafe;  \
+    } while (0)
 
 #ifdef __cplusplus
 }

@@ -17,7 +17,7 @@ $(INSTALL_SHARE_MISC_FILES): $(DSTROOT)/$(INSTALL_SHARE_MISC_DIR)/% : %
 	@echo INSTALL $(@F)
 	$(_v)$(INSTALL) $(INSTALL_FLAGS) $< $@
 
-do_build_install_primary:: $(INSTALL_SHARE_MISC_FILES)
+do_textfiles_install:: $(INSTALL_SHARE_MISC_FILES)
 
 include $(MakeInc_rule)
 include $(MakeInc_dir)

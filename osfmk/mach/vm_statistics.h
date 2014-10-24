@@ -245,9 +245,9 @@ struct pmap_statistics {
 	integer_t	external_peak;
 	integer_t	reusable;
 	integer_t	reusable_peak;
-	uint64_t	compressed;
-	uint64_t	compressed_peak;
-	uint64_t	compressed_lifetime;
+	uint64_t	compressed __attribute__((aligned(8)));
+	uint64_t	compressed_peak __attribute__((aligned(8)));
+	uint64_t	compressed_lifetime __attribute__((aligned(8)));
 };
 
 typedef struct pmap_statistics	*pmap_statistics_t;
@@ -304,26 +304,21 @@ typedef struct pmap_statistics	*pmap_statistics_t;
 #define VM_FLAGS_OVERWRITE	0x4000	/* delete any existing mappings first */
 #ifdef KERNEL_PRIVATE
 #define VM_FLAGS_NO_PMAP_CHECK	0x8000	/* do not check that pmap is empty */
-#define	VM_FLAGS_MAP_JIT	0x80000	/* Used to mark an entry as describing a JIT region */
 #endif /* KERNEL_PRIVATE */
-#define VM_FLAGS_RETURN_DATA_ADDR	0x100000 /* Return address of target data, rather than base of page */
 /*
  * VM_FLAGS_SUPERPAGE_MASK
  *	3 bits that specify whether large pages should be used instead of
  *	base pages (!=0), as well as the requested page size.
  */
 #define VM_FLAGS_SUPERPAGE_MASK	0x70000	/* bits 0x10000, 0x20000, 0x40000 */
-#define VM_FLAGS_SUPERPAGE_SHIFT 16
-
-#define SUPERPAGE_NONE			0	/* no superpages, if all bits are 0 */
-#define SUPERPAGE_SIZE_ANY		1
-#define VM_FLAGS_SUPERPAGE_NONE     (SUPERPAGE_NONE     << VM_FLAGS_SUPERPAGE_SHIFT)
-#define VM_FLAGS_SUPERPAGE_SIZE_ANY (SUPERPAGE_SIZE_ANY << VM_FLAGS_SUPERPAGE_SHIFT)
-#if defined(__x86_64__) || !defined(KERNEL)
-#define SUPERPAGE_SIZE_2MB		2
-#define VM_FLAGS_SUPERPAGE_SIZE_2MB (SUPERPAGE_SIZE_2MB<<VM_FLAGS_SUPERPAGE_SHIFT)
-#endif
-
+#ifdef KERNEL_PRIVATE
+#define	VM_FLAGS_MAP_JIT	0x80000	/* Used to mark an entry as describing a JIT region */
+#endif /* KERNEL_PRIVATE */
+#define VM_FLAGS_RETURN_DATA_ADDR	0x100000 /* Return address of target data, rather than base of page */
+#ifdef KERNEL_PRIVATE
+#define VM_FLAGS_IOKIT_ACCT		0x200000 /* IOKit accounting */
+#define VM_FLAGS_KEEP_MAP_LOCKED	0x400000 /* Keep the map locked when returning from vm_map_enter() */
+#endif /* KERNEL_PRIVATE */
 #define VM_FLAGS_ALIAS_MASK	0xFF000000
 #define VM_GET_FLAGS_ALIAS(flags, alias)			\
 		(alias) = ((flags) & VM_FLAGS_ALIAS_MASK) >> 24	
@@ -339,11 +334,22 @@ typedef struct pmap_statistics	*pmap_statistics_t;
 				 VM_FLAGS_OVERWRITE |		\
 				 VM_FLAGS_SUPERPAGE_MASK |	\
 				 VM_FLAGS_ALIAS_MASK)
-#define VM_FLAGS_USER_MAP	(VM_FLAGS_USER_ALLOCATE | VM_FLAGS_RETURN_DATA_ADDR)
+#define VM_FLAGS_USER_MAP	(VM_FLAGS_USER_ALLOCATE |	\
+				 VM_FLAGS_RETURN_DATA_ADDR)
 #define VM_FLAGS_USER_REMAP	(VM_FLAGS_FIXED |    \
 				 VM_FLAGS_ANYWHERE | \
 				 VM_FLAGS_OVERWRITE| \
 				 VM_FLAGS_RETURN_DATA_ADDR)
+
+#define VM_FLAGS_SUPERPAGE_SHIFT 16
+#define SUPERPAGE_NONE			0	/* no superpages, if all bits are 0 */
+#define SUPERPAGE_SIZE_ANY		1
+#define VM_FLAGS_SUPERPAGE_NONE     (SUPERPAGE_NONE     << VM_FLAGS_SUPERPAGE_SHIFT)
+#define VM_FLAGS_SUPERPAGE_SIZE_ANY (SUPERPAGE_SIZE_ANY << VM_FLAGS_SUPERPAGE_SHIFT)
+#if defined(__x86_64__) || !defined(KERNEL)
+#define SUPERPAGE_SIZE_2MB		2
+#define VM_FLAGS_SUPERPAGE_SIZE_2MB (SUPERPAGE_SIZE_2MB<<VM_FLAGS_SUPERPAGE_SHIFT)
+#endif
 
 #define VM_MEMORY_MALLOC 1
 #define VM_MEMORY_MALLOC_SMALL 2
@@ -448,6 +454,12 @@ typedef struct pmap_statistics	*pmap_statistics_t;
 
 /* CoreUI image block data */
 #define VM_MEMORY_COREUI 76
+
+/* CoreUI image file */
+#define VM_MEMORY_COREUIFILE 77
+
+/* Genealogy buffers */
+#define VM_MEMORY_GENEALOGY 78
 
 /* Reserve 240-255 for application */
 #define VM_MEMORY_APPLICATION_SPECIFIC_1 240

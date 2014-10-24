@@ -41,6 +41,7 @@
 #include <net/route.h>
 #include <netinet/in.h>
 #include <netinet/tcp.h>
+#include <mach/machine.h>
 
 __BEGIN_DECLS
 
@@ -110,6 +111,19 @@ struct proc_bsdinfowithuniqid {
 	struct proc_bsdinfo             pbsd;
 	struct proc_uniqidentifierinfo  p_uniqidentifier;
 };
+
+struct proc_archinfo {
+	cpu_type_t		p_cputype;	
+	cpu_subtype_t		p_cpusubtype;
+};
+
+struct proc_pidcoalitioninfo {
+	uint64_t coalition_id;
+	uint64_t reserved1;
+	uint64_t reserved2;
+	uint64_t reserved3;
+};
+
 #endif
 
 
@@ -143,7 +157,8 @@ struct proc_bsdinfowithuniqid {
 #define PROC_FLAG_ADAPTIVE_IMPORTANT    0x200000         /* Process is adaptive, and is currently important */
 #define PROC_FLAG_IMPORTANCE_DONOR   0x400000 /* Process is marked as an importance donor */
 #define PROC_FLAG_SUPPRESSED         0x800000 /* Process is suppressed */
-#define PROC_FLAG_IOS_APPLICATION 0x1000000	/* Process is an application */
+#define PROC_FLAG_APPLICATION 0x1000000	/* Process is an application */
+#define PROC_FLAG_IOS_APPLICATION PROC_FLAG_APPLICATION	/* Process is an application */
 #endif
 
 
@@ -688,6 +703,23 @@ struct proc_fileportinfo {
 #define PROC_PIDT_BSDINFOWITHUNIQID	18
 #define PROC_PIDT_BSDINFOWITHUNIQID_SIZE \
                                  	(sizeof(struct proc_bsdinfowithuniqid))
+
+#define PROC_PIDARCHINFO		19
+#define PROC_PIDARCHINFO_SIZE		\
+					(sizeof(struct proc_archinfo))
+
+#define PROC_PIDCOALITIONINFO		20
+#define PROC_PIDCOALITIONINFO_SIZE	(sizeof(struct proc_pidcoalitioninfo))
+
+#define PROC_PIDNOTEEXIT		21
+#define PROC_PIDNOTEEXIT_SIZE		(sizeof(uint32_t))
+
+#define PROC_PIDREGIONPATHINFO2		22
+#define PROC_PIDREGIONPATHINFO2_SIZE	(sizeof(struct proc_regionwithpathinfo))
+
+#define PROC_PIDREGIONPATHINFO3		23
+#define PROC_PIDREGIONPATHINFO3_SIZE	(sizeof(struct proc_regionwithpathinfo))
+
 #endif
 
 /* Flavors for proc_pidfdinfo */
@@ -745,18 +777,28 @@ struct proc_fileportinfo {
 #define PROC_DIRTYCONTROL_TRACK         1
 #define PROC_DIRTYCONTROL_SET           2
 #define PROC_DIRTYCONTROL_GET           3
+#define PROC_DIRTYCONTROL_CLEAR         4
 
 /* proc_track_dirty() flags */
 #define PROC_DIRTY_TRACK                0x1
 #define PROC_DIRTY_ALLOW_IDLE_EXIT      0x2
 #define PROC_DIRTY_DEFER                0x4
+#define PROC_DIRTY_LAUNCH_IN_PROGRESS   0x8
 
 /* proc_get_dirty() flags */
 #define PROC_DIRTY_TRACKED              0x1
 #define PROC_DIRTY_ALLOWS_IDLE_EXIT     0x2
 #define PROC_DIRTY_IS_DIRTY             0x4
+#define PROC_DIRTY_LAUNCH_IS_IN_PROGRESS   0x8
 
 #ifdef PRIVATE
+
+/* Flavors for proc_pidoriginatorinfo */
+#define PROC_PIDORIGINATOR_UUID		0x1
+#define PROC_PIDORIGINATOR_UUID_SIZE	(sizeof(uuid_t))
+
+#define PROC_PIDORIGINATOR_BGSTATE	0x2
+#define PROC_PIDORIGINATOR_BGSTATE_SIZE (sizeof(uint32_t))
 
 /* __proc_info() call numbers */
 #define PROC_INFO_CALL_LISTPIDS         0x1
@@ -768,6 +810,7 @@ struct proc_fileportinfo {
 #define PROC_INFO_CALL_TERMINATE        0x7
 #define PROC_INFO_CALL_DIRTYCONTROL     0x8
 #define PROC_INFO_CALL_PIDRUSAGE        0x9
+#define PROC_INFO_CALL_PIDORIGINATORINFO 0xa
 
 #endif /* PRIVATE */
 

@@ -500,6 +500,7 @@ add_fsevent(int type, vfs_context_t ctx, ...)
 		    printf("add_fsevent: kfse_list head %p ; num_pending_rename %d\n", listhead, num_pending_rename);
 		    printf("add_fsevent: zalloc sez: %p\n", junkptr);
 		    printf("add_fsevent: event_zone info: %d 0x%x\n", ((int *)event_zone)[0], ((int *)event_zone)[1]);
+		    lock_watch_table();
 		    for(ii=0; ii < MAX_WATCHERS; ii++) {
 			if (watcher_table[ii] == NULL) {
 			    continue;
@@ -511,6 +512,7 @@ add_fsevent(int type, vfs_context_t ctx, ...)
 			       watcher_table[ii]->rd, watcher_table[ii]->wr,
 			       watcher_table[ii]->eventq_size, watcher_table[ii]->flags);
 		    }
+		    unlock_watch_table();
 
 		    last_print = current_tv;
 		    if (junkptr) {
@@ -964,14 +966,7 @@ add_watcher(int8_t *event_list, int32_t num_events, int32_t eventq_size, fs_even
 
     lock_watch_table();
 
-    // now update the global list of who's interested in
-    // events of a particular type...
-    for(i=0; i < num_events; i++) {
-	if (event_list[i] != FSE_IGNORE && i < FSE_MAX_EVENTS) {
-	    fs_event_type_watchers[i]++;
-	}
-    }
-
+    // find a slot for the new watcher
     for(i=0; i < MAX_WATCHERS; i++) {
 	if (watcher_table[i] == NULL) {
 	    watcher->my_id   = i;
@@ -980,10 +975,19 @@ add_watcher(int8_t *event_list, int32_t num_events, int32_t eventq_size, fs_even
 	}
     }
 
-    if (i > MAX_WATCHERS) {
+    if (i >= MAX_WATCHERS) {
 	printf("fsevents: too many watchers!\n");
 	unlock_watch_table();
+	FREE(watcher, M_TEMP);
 	return ENOSPC;
+    }
+
+    // now update the global list of who's interested in
+    // events of a particular type...
+    for(i=0; i < num_events; i++) {
+	if (event_list[i] != FSE_IGNORE && i < FSE_MAX_EVENTS) {
+	    fs_event_type_watchers[i]++;
+	}
     }
 
     unlock_watch_table();
@@ -2262,6 +2266,7 @@ fseventsioctl(__unused dev_t dev, u_long cmd, caddr_t data, __unused int flag, s
 
 	    error = falloc(p, &f, &fd, vfs_context_current());
 	    if (error) {
+		remove_watcher(fseh->watcher);
 		FREE(event_list, M_TEMP);
 		FREE(fseh, M_TEMP);
 		return (error);

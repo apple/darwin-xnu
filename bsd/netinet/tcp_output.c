@@ -133,76 +133,93 @@
 #define DBG_FNC_TCP_OUTPUT	NETDBG_CODE(DBG_NETTCP, (4 << 8) | 1)
 
 int path_mtu_discovery = 1;
-SYSCTL_INT(_net_inet_tcp, OID_AUTO, path_mtu_discovery, CTLFLAG_RW | CTLFLAG_LOCKED,
-	&path_mtu_discovery, 1, "Enable Path MTU Discovery");
+SYSCTL_INT(_net_inet_tcp, OID_AUTO, path_mtu_discovery,
+	CTLFLAG_RW | CTLFLAG_LOCKED, &path_mtu_discovery, 1,
+	"Enable Path MTU Discovery");
 
 int ss_fltsz = 1;
-SYSCTL_INT(_net_inet_tcp, OID_AUTO, slowstart_flightsize, CTLFLAG_RW | CTLFLAG_LOCKED,
-	&ss_fltsz, 1, "Slow start flight size");
+SYSCTL_INT(_net_inet_tcp, OID_AUTO, slowstart_flightsize,
+	CTLFLAG_RW | CTLFLAG_LOCKED,&ss_fltsz, 1,
+	"Slow start flight size");
 
 int ss_fltsz_local = 8; /* starts with eight segments max */
-SYSCTL_INT(_net_inet_tcp, OID_AUTO, local_slowstart_flightsize, CTLFLAG_RW | CTLFLAG_LOCKED,
-	&ss_fltsz_local, 1, "Slow start flight size for local networks");
+SYSCTL_INT(_net_inet_tcp, OID_AUTO, local_slowstart_flightsize,
+	CTLFLAG_RW | CTLFLAG_LOCKED, &ss_fltsz_local, 1,
+	"Slow start flight size for local networks");
 
 int	tcp_do_tso = 1;
 SYSCTL_INT(_net_inet_tcp, OID_AUTO, tso, CTLFLAG_RW | CTLFLAG_LOCKED,
 	&tcp_do_tso, 0, "Enable TCP Segmentation Offload");
 
-
 int     tcp_ecn_outbound = 0;
-SYSCTL_INT(_net_inet_tcp, OID_AUTO, ecn_initiate_out, CTLFLAG_RW | CTLFLAG_LOCKED, &tcp_ecn_outbound,
-        0, "Initiate ECN for outbound connections");
+SYSCTL_INT(_net_inet_tcp, OID_AUTO, ecn_initiate_out,
+	CTLFLAG_RW | CTLFLAG_LOCKED, &tcp_ecn_outbound, 0,
+	"Initiate ECN for outbound connections");
 
 int     tcp_ecn_inbound = 0;
-SYSCTL_INT(_net_inet_tcp, OID_AUTO, ecn_negotiate_in, CTLFLAG_RW | CTLFLAG_LOCKED, &tcp_ecn_inbound,
-        0, "Allow ECN negotiation for inbound connections");
+SYSCTL_INT(_net_inet_tcp, OID_AUTO, ecn_negotiate_in,
+	CTLFLAG_RW | CTLFLAG_LOCKED, &tcp_ecn_inbound, 0,
+	"Allow ECN negotiation for inbound connections");
 
 int	tcp_packet_chaining = 50;
-SYSCTL_INT(_net_inet_tcp, OID_AUTO, packetchain, CTLFLAG_RW | CTLFLAG_LOCKED, &tcp_packet_chaining,
-        0, "Enable TCP output packet chaining");
+SYSCTL_INT(_net_inet_tcp, OID_AUTO, packetchain,
+	CTLFLAG_RW | CTLFLAG_LOCKED, &tcp_packet_chaining, 0,
+	"Enable TCP output packet chaining");
 
 int	tcp_output_unlocked = 1;
-SYSCTL_INT(_net_inet_tcp, OID_AUTO, socket_unlocked_on_output, CTLFLAG_RW | CTLFLAG_LOCKED, &tcp_output_unlocked,
-        0, "Unlock TCP when sending packets down to IP");
+SYSCTL_INT(_net_inet_tcp, OID_AUTO, socket_unlocked_on_output,
+	CTLFLAG_RW | CTLFLAG_LOCKED, &tcp_output_unlocked, 0,
+	"Unlock TCP when sending packets down to IP");
 
 int tcp_do_rfc3390 = 1;
-SYSCTL_INT(_net_inet_tcp, OID_AUTO, rfc3390, CTLFLAG_RW | CTLFLAG_LOCKED,
-	&tcp_do_rfc3390, 1, "Calculate intial slowstart cwnd depending on MSS");
+SYSCTL_INT(_net_inet_tcp, OID_AUTO, rfc3390,
+	CTLFLAG_RW | CTLFLAG_LOCKED, &tcp_do_rfc3390, 1,
+	"Calculate intial slowstart cwnd depending on MSS");
 
 int tcp_min_iaj_win = MIN_IAJ_WIN;
-SYSCTL_INT(_net_inet_tcp, OID_AUTO, min_iaj_win, CTLFLAG_RW | CTLFLAG_LOCKED,
-	&tcp_min_iaj_win, 1, "Minimum recv win based on inter-packet arrival jitter");
+SYSCTL_INT(_net_inet_tcp, OID_AUTO, min_iaj_win,
+	CTLFLAG_RW | CTLFLAG_LOCKED, &tcp_min_iaj_win, 1,
+	"Minimum recv win based on inter-packet arrival jitter");
 
 int tcp_acc_iaj_react_limit = ACC_IAJ_REACT_LIMIT;
-SYSCTL_INT(_net_inet_tcp, OID_AUTO, acc_iaj_react_limit, CTLFLAG_RW | CTLFLAG_LOCKED,
-        &tcp_acc_iaj_react_limit, 1, "Accumulated IAJ when receiver starts to react");
+SYSCTL_INT(_net_inet_tcp, OID_AUTO, acc_iaj_react_limit,
+	CTLFLAG_RW | CTLFLAG_LOCKED, &tcp_acc_iaj_react_limit, 1,
+	"Accumulated IAJ when receiver starts to react");
 
 uint32_t tcp_do_autosendbuf = 1;
-SYSCTL_INT(_net_inet_tcp, OID_AUTO, doautosndbuf, CTLFLAG_RW | CTLFLAG_LOCKED,
-        &tcp_do_autosendbuf, 1, "Enable send socket buffer auto-tuning");
+SYSCTL_INT(_net_inet_tcp, OID_AUTO, doautosndbuf,
+	CTLFLAG_RW | CTLFLAG_LOCKED, &tcp_do_autosendbuf, 1,
+	"Enable send socket buffer auto-tuning");
 
 uint32_t tcp_autosndbuf_inc = 8 * 1024;
-SYSCTL_INT(_net_inet_tcp, OID_AUTO, autosndbufinc, CTLFLAG_RW | CTLFLAG_LOCKED,
-        &tcp_autosndbuf_inc, 1, "Increment in send socket bufffer size");
+SYSCTL_INT(_net_inet_tcp, OID_AUTO, autosndbufinc,
+	CTLFLAG_RW | CTLFLAG_LOCKED, &tcp_autosndbuf_inc, 1,
+	"Increment in send socket bufffer size");
 
 uint32_t tcp_autosndbuf_max = 512 * 1024;
-SYSCTL_INT(_net_inet_tcp, OID_AUTO, autosndbufmax, CTLFLAG_RW | CTLFLAG_LOCKED,
-        &tcp_autosndbuf_max, 1, "Maximum send socket buffer size");
+SYSCTL_INT(_net_inet_tcp, OID_AUTO, autosndbufmax,
+	CTLFLAG_RW | CTLFLAG_LOCKED, &tcp_autosndbuf_max, 1,
+	"Maximum send socket buffer size");
 
 uint32_t tcp_prioritize_acks = 1;
-SYSCTL_INT(_net_inet_tcp, OID_AUTO, ack_prioritize, CTLFLAG_RW | CTLFLAG_LOCKED,
-        &tcp_prioritize_acks, 1, "Prioritize pure acks");
+SYSCTL_INT(_net_inet_tcp, OID_AUTO, ack_prioritize,
+	CTLFLAG_RW | CTLFLAG_LOCKED, &tcp_prioritize_acks, 1,
+	"Prioritize pure acks");
 
 uint32_t tcp_use_rtt_recvbg = 1;
-SYSCTL_INT(_net_inet_tcp, OID_AUTO, rtt_recvbg, 
-	CTLFLAG_RW | CTLFLAG_LOCKED,
-        &tcp_use_rtt_recvbg, 1, "Use RTT for bg recv algorithm");
+SYSCTL_INT(_net_inet_tcp, OID_AUTO, rtt_recvbg,
+	CTLFLAG_RW | CTLFLAG_LOCKED, &tcp_use_rtt_recvbg, 1,
+	"Use RTT for bg recv algorithm");
 
 uint32_t tcp_recv_throttle_minwin = 16 * 1024;
 SYSCTL_INT(_net_inet_tcp, OID_AUTO, recv_throttle_minwin, 
-	CTLFLAG_RW | CTLFLAG_LOCKED,
-        &tcp_recv_throttle_minwin, 1, "Minimum recv win for throttling");
+	CTLFLAG_RW | CTLFLAG_LOCKED, &tcp_recv_throttle_minwin, 1,
+	"Minimum recv win for throttling");
 
+int32_t tcp_enable_tlp = 1;
+SYSCTL_INT(_net_inet_tcp, OID_AUTO, enable_tlp,
+	CTLFLAG_RW | CTLFLAG_LOCKED,
+	&tcp_enable_tlp, 1, "Enable Tail loss probe");
 
 static int32_t packchain_newlist = 0;
 static int32_t packchain_looped = 0;
@@ -222,12 +239,9 @@ extern int fw_bypass; 		/* firewall check: disable packet chaining if there is r
 extern u_int32_t dlil_filter_disable_tso_count;
 extern u_int32_t kipf_count;
 extern int tcp_recv_bg;
-extern int maxseg_unacked;
 
 static int tcp_ip_output(struct socket *, struct tcpcb *, struct mbuf *, int,
     struct mbuf *, int, int, int32_t, boolean_t);
-
-extern uint32_t get_base_rtt(struct tcpcb *tp);
 static struct mbuf* tcp_send_lroacks(struct tcpcb *tp, struct mbuf *m, struct tcphdr *th);
 static int tcp_recv_throttle(struct tcpcb *tp);
 
@@ -264,13 +278,13 @@ tcp_output(struct tcpcb *tp)
 	struct socket *so = inp->inp_socket;
 	int32_t len, recwin, sendwin, off;
 	int flags, error;
-	register struct mbuf *m;
+	struct mbuf *m;
 	struct ip *ip = NULL;
-	register struct ipovly *ipov = NULL;
+	struct ipovly *ipov = NULL;
 #if INET6
 	struct ip6_hdr *ip6 = NULL;
 #endif /* INET6 */
-	register struct tcphdr *th;
+	struct tcphdr *th;
 	u_char opt[TCP_MAXOLEN];
 	unsigned ipoptlen, optlen, hdrlen;
 	int idle, sendalot, lost = 0;
@@ -281,11 +295,7 @@ tcp_output(struct tcpcb *tp)
 #if IPSEC
 	unsigned ipsec_optlen = 0;
 #endif /* IPSEC */
-	int    last_off = 0;
-	int    m_off = 0;
 	int    idle_time = 0;
-	struct mbuf *m_lastm = NULL;
-	struct mbuf *m_head = NULL;
 	struct mbuf *packetlist = NULL;
 	struct mbuf *tp_inp_options = inp->inp_depend4.inp4_options;
 #if INET6
@@ -303,10 +313,12 @@ tcp_output(struct tcpcb *tp)
 	u_int8_t *finp = NULL;
 	u_int32_t *sseqp = NULL;
 	u_int64_t dss_val = 0;
-	int mptcp_acknow = 0;
+	boolean_t mptcp_acknow = FALSE;
+	boolean_t early_data_sent = FALSE;
 #endif /* MPTCP */
 	boolean_t cell = FALSE;
 	boolean_t wifi = FALSE;
+	boolean_t wired = FALSE;
 
 	/*
 	 * Determine length of data that should be transmitted,
@@ -323,9 +335,7 @@ tcp_output(struct tcpcb *tp)
 	if (idle && idle_time >= TCP_IDLETIMEOUT(tp)) {
 		if (CC_ALGO(tp)->after_idle != NULL) 
 			CC_ALGO(tp)->after_idle(tp);
-		DTRACE_TCP5(cc, void, NULL, struct inpcb *, inp,
-			struct tcpcb *, tp, struct tcphdr *, NULL,
-			int32_t, TCP_CC_IDLE_TIMEOUT);
+		tcp_ccdbg_trace(tp, NULL, TCP_CC_IDLE_TIMEOUT);
 	}
 	tp->t_flags &= ~TF_LASTIDLE;
 	if (idle) {
@@ -385,6 +395,8 @@ again:
 		/* Disable TSO for the socket until we know more */
 		tp->t_flags &= ~TF_TSO;
 
+		soif2kcl(so, FALSE);
+
 		if (isipv6) {
 			ia6 = ifa_foraddr6(&inp->in6p_laddr);
 			if (ia6 != NULL)
@@ -405,13 +417,14 @@ again:
 				return(EADDRNOTAVAIL);
 			}
 
-			/* set Retransmit  timer if it wasn't set
+			/* Set retransmit  timer if it wasn't set,
 			 * reset Persist timer and shift register as the
 			 * advertised peer window may not be valid anymore
 			 */
 
 			if (!tp->t_timer[TCPT_REXMT]) {
-				tp->t_timer[TCPT_REXMT] = OFFSET_FROM_START(tp, tp->t_rxtcur);
+				tp->t_timer[TCPT_REXMT] =
+				    OFFSET_FROM_START(tp, tp->t_rxtcur);
 				if (tp->t_timer[TCPT_PERSIST]) {
 					tp->t_timer[TCPT_PERSIST] = 0;
 					tp->t_rxtshift = 0;
@@ -428,8 +441,7 @@ again:
 			if (so->so_flags & SOF_NOADDRAVAIL) { 
 				tcp_drop(tp, EADDRNOTAVAIL);
 				return(EADDRNOTAVAIL);
-			}
-			else {
+			} else {
 				tcp_check_timer_state(tp);
 				return(0); /* silently ignore, keep data in socket: address may be back */
 			}
@@ -448,6 +460,8 @@ again:
 		if ((ifp = rt->rt_ifp) != NULL) {
 			somultipages(so, (ifp->if_hwassist & IFNET_MULTIPAGES));
 			tcp_set_tso(tp, ifp);
+			soif2kcl(so,
+			    (ifp->if_eflags & IFEF_2KCL));
 		}
 		if (rt->rt_flags & RTF_UP)
 			RT_GENID_SYNC(rt);
@@ -455,12 +469,13 @@ again:
 		 * See if we should do MTU discovery. Don't do it if:
 		 *	1) it is disabled via the sysctl
 		 *	2) the route isn't up
-		 *	3) the MTU is locked (if it is, then discovery has been
-		 *	   disabled)
+		 *	3) the MTU is locked (if it is, then discovery
+		 *         has been disabled)
 		 */
 
 	    	if (!path_mtu_discovery || ((rt != NULL) && 
-		    (!(rt->rt_flags & RTF_UP) || (rt->rt_rmx.rmx_locks & RTV_MTU)))) 
+		    (!(rt->rt_flags & RTF_UP) ||
+		    (rt->rt_rmx.rmx_locks & RTV_MTU)))) 
 			tp->t_flags &= ~TF_PMTUD;
 		else
 			tp->t_flags |= TF_PMTUD;
@@ -471,6 +486,7 @@ again:
 	if (rt != NULL) {
 		cell = IFNET_IS_CELLULAR(rt->rt_ifp);
 		wifi = (!cell && IFNET_IS_WIFI(rt->rt_ifp));
+		wired = (!wifi && IFNET_IS_WIRED(rt->rt_ifp));
 	}
 
 	/*
@@ -489,11 +505,12 @@ again:
 
 	flags = tcp_outflags[tp->t_state];
 	/*
-	 * Send any SACK-generated retransmissions.  If we're explicitly trying
-	 * to send out new data (when sendalot is 1), bypass this function.
-	 * If we retransmit in fast recovery mode, decrement snd_cwnd, since
-	 * we're replacing a (future) new transmission with a retransmission
-	 * now, and we previously incremented snd_cwnd in tcp_input().
+	 * Send any SACK-generated retransmissions.  If we're explicitly
+	 * trying to send out new data (when sendalot is 1), bypass this
+	 * function. If we retransmit in fast recovery mode, decrement
+	 * snd_cwnd, since we're replacing a (future) new transmission
+	 * with a retransmission now, and we previously incremented
+	 * snd_cwnd in tcp_input().
 	 */
 	/*
 	 * Still in sack recovery , reset rxmit flag to zero.
@@ -533,7 +550,7 @@ again:
 			len = ((int32_t)min(cwin, p->end - p->rxmit));
 		}
 		if (len > 0) {
-			off = p->rxmit - tp->snd_una; /* update off only if we really transmit SACK data */
+			off = p->rxmit - tp->snd_una; 
 			sack_rxmit = 1;
 			sendalot = 1;
 			tcpstat.tcps_sack_rexmits++;
@@ -543,9 +560,10 @@ again:
 				nstat_route_tx(inp->inp_route.ro_rt, 1,
 					min(len, tp->t_maxseg),
 					NSTAT_TX_FLAG_RETRANSMIT);
-				INP_ADD_STAT(inp, cell, wifi, txpackets, 1);
-				INP_ADD_STAT(inp, cell, wifi, txbytes,
-				    min(len, tp->t_maxseg));
+				INP_ADD_STAT(inp, cell, wifi, wired,
+				    txpackets, 1);
+				INP_ADD_STAT(inp, cell, wifi, wired,
+				    txbytes, min(len, tp->t_maxseg));
 				tp->t_stat.txretransmitbytes += min(len, tp->t_maxseg);
 			}
 		} else {
@@ -568,7 +586,7 @@ after_sack_rexmit:
 	 * and timer expired, we will send what we can
 	 * and go to transmit state.
 	 */
-	if (tp->t_force) {
+	if (tp->t_flagsext & TF_FORCE) {
 		if (sendwin == 0) {
 			/*
 			 * If we still have some data to send, then
@@ -646,6 +664,22 @@ after_sack_rexmit:
 		}
 	}
 
+#if MPTCP
+	if ((tp->t_mpflags & TMPF_FASTJOIN_SEND) &&
+	    (tp->t_state == TCPS_SYN_SENT) &&
+	    (!(tp->t_flags & TF_CLOSING)) &&
+	    (so->so_snd.sb_cc != 0) &&
+	    (tp->t_rxtshift == 0)) {
+		flags &= ~TH_SYN;
+		flags |= TH_ACK;
+		off = 0;
+		len = min(so->so_snd.sb_cc, tp->t_maxseg);
+		early_data_sent = TRUE;
+	} else if (early_data_sent) {
+		/* for now, we allow only one data segment to be sent */
+		return (0);
+	}
+#endif /* MPTCP */
 	/*
 	 * Lop off SYN bit if it has already been sent.  However, if this
 	 * is SYN-SENT state and if segment contains data and if we don't
@@ -675,6 +709,7 @@ after_sack_rexmit:
 
 
 			}
+
 			/*
 			 * tcp was closed while we were in ip,
 			 * resume close 
@@ -702,10 +737,11 @@ after_sack_rexmit:
 		flags &= ~TH_FIN;
 	}
 
-	/* The check here used to be (len < 0). Some times len is zero when
-	 * the congestion window is closed and we need to check if persist timer
-	 * has to be set in that case. But don't set persist until connection 
-	 * is established.
+	/*
+	 * The check here used to be (len < 0). Some times len is zero
+	 * when the congestion window is closed and we need to check
+	 * if persist timer has to be set in that case. But don't set 
+	 * persist until connection is established.
 	 */  
 	if (len <= 0 && !(flags & TH_SYN)) {
 		/*
@@ -721,16 +757,19 @@ after_sack_rexmit:
 		len = 0;
 		if (sendwin == 0) {
 			tp->t_timer[TCPT_REXMT] = 0;
+			tp->t_timer[TCPT_PTO] = 0;
 			tp->t_rxtshift = 0;
 			tp->t_rxtstart = 0;
 			tp->snd_nxt = tp->snd_una;
+			off = 0;
 			if (tp->t_timer[TCPT_PERSIST] == 0)
 				tcp_setpersist(tp);
 		}
 	}
 
-	/* Automatic sizing of send socket buffer. Increase the send socket buffer
-	 * size if all of the following criteria are met
+	/*
+	 * Automatic sizing of send socket buffer. Increase the send
+	 * socket buffer size if all of the following criteria are met
 	 *	1. the receiver has enough buffer space for this data
 	 *	2. send buffer is filled to 7/8th with data (so we actually
 	 *	   have data to make use of it);
@@ -743,25 +782,25 @@ after_sack_rexmit:
 	    (so->so_snd.sb_flags & (SB_AUTOSIZE | SB_TRIM)) == SB_AUTOSIZE &&
 	    tcp_cansbgrow(&so->so_snd)) {
 		if ((tp->snd_wnd / 4 * 5) >= so->so_snd.sb_hiwat &&
-			so->so_snd.sb_cc >= (so->so_snd.sb_hiwat / 8 * 7) &&
-			sendwin >= (so->so_snd.sb_cc - 
-				(tp->snd_nxt - tp->snd_una))) {
+		    so->so_snd.sb_cc >= (so->so_snd.sb_hiwat / 8 * 7) &&
+		    sendwin >= (so->so_snd.sb_cc - 
+			(tp->snd_nxt - tp->snd_una))) {
 			/* Also increase the send buffer only if the 
 			 * round-trip time is not increasing because we do
-			 * not want to contribute to latency by filling buffers.
+			 * not want to contribute to latency by filling
+			 * buffers.
 			 * We also do not want to hold onto application's
-			 * old data for too long. Interactive applications would
-			 * rather discard old data.
+			 * old data for too long. Interactive applications
+			 * would rather discard old data.
 			 */
-			if (tp->t_rttcur <= 
-				(basertt + 25)) {
-				if (sbreserve(&so->so_snd, 
-					min(so->so_snd.sb_hiwat + tcp_autosndbuf_inc,
+			if (tp->t_rttcur <= (basertt + 25)) {
+				if (sbreserve(&so->so_snd,
+				    min(so->so_snd.sb_hiwat + tcp_autosndbuf_inc,
 					tcp_autosndbuf_max)) == 1) {
 					so->so_snd.sb_idealsize = so->so_snd.sb_hiwat;
 				}
 			} else {
-				so->so_snd.sb_idealsize = 
+				so->so_snd.sb_idealsize =
 				    max(tcp_sendspace, so->so_snd.sb_hiwat -
 					(2 * tcp_autosndbuf_inc));
 				so->so_snd.sb_flags |= SB_TRIM;
@@ -794,11 +833,12 @@ after_sack_rexmit:
 	if (ipsec_bypass == 0)
 		ipsec_optlen = ipsec_hdrsiz_tcp(tp);
 #endif
-
 	if (len > tp->t_maxseg) {
 		if ((tp->t_flags & TF_TSO) && tcp_do_tso && hwcksum_tx &&
-		    ip_use_randomid && kipf_count == 0 && dlil_filter_disable_tso_count == 0 &&
-		    tp->rcv_numsacks == 0 && sack_rxmit == 0  && sack_bytes_rxmt == 0 &&
+		    ip_use_randomid && kipf_count == 0 &&
+		    dlil_filter_disable_tso_count == 0 &&
+		    tp->rcv_numsacks == 0 && sack_rxmit == 0  &&
+		    sack_bytes_rxmt == 0 &&
 		    inp->inp_options == NULL &&
 		    inp->in6p_options == NULL
 #if IPSEC
@@ -816,19 +856,30 @@ after_sack_rexmit:
 			tso = 0;
 		}
 	}
+
+	/* Send one segment or less as a tail loss probe */
+	if (tp->t_flagsext & TF_SENT_TLPROBE) {
+		len = min(len, tp->t_maxseg);
+		sendalot = 0;
+		tso = 0;
+	}
+
 #if MPTCP
-	if (so->so_flags & SOF_MP_SUBFLOW) {
+	if ((so->so_flags & SOF_MP_SUBFLOW) && 
+	    !(tp->t_mpflags & TMPF_TCP_FALLBACK)) {
 		int newlen = len;
-		if ((tp->t_mpflags & TMPF_SND_MPPRIO) ||
+		if (!(tp->t_mpflags & TMPF_PREESTABLISHED) &&
+		    (tp->t_state > TCPS_CLOSED) &&
+		    ((tp->t_mpflags & TMPF_SND_MPPRIO) ||
 		    (tp->t_mpflags & TMPF_SND_REM_ADDR) ||
-		    (tp->t_mpflags & TMPF_SND_MPFAIL)) {
+		    (tp->t_mpflags & TMPF_SND_MPFAIL))) {
 			if (len > 0) {
 				len = 0;
 			}
 			sendalot = 1;
-			mptcp_acknow = 1;
+			mptcp_acknow = TRUE;
 		} else {
-			mptcp_acknow = 0;
+			mptcp_acknow = FALSE;
 		}
 		/*
 		 * The contiguous bytes in the subflow socket buffer can be
@@ -844,16 +895,6 @@ after_sack_rexmit:
 		}
 	}
 #endif /* MPTCP */
-	if (sack_rxmit) {
-		if (SEQ_LT(p->rxmit + len, tp->snd_una + so->so_snd.sb_cc))
-			flags &= ~TH_FIN;
-	} else {
-		if (SEQ_LT(tp->snd_nxt + len, tp->snd_una + so->so_snd.sb_cc))
-			flags &= ~TH_FIN;
-	}
-
-	recwin = tcp_sbspace(tp);
-
 
 	/*
 	 * If the socket is capable of doing unordered send,
@@ -880,6 +921,16 @@ after_sack_rexmit:
 		}
 	}
 
+	if (sack_rxmit) {
+		if (SEQ_LT(p->rxmit + len, tp->snd_una + so->so_snd.sb_cc))
+			flags &= ~TH_FIN;
+	} else {
+		if (SEQ_LT(tp->snd_nxt + len, tp->snd_una + so->so_snd.sb_cc))
+			flags &= ~TH_FIN;
+	}
+
+	recwin = tcp_sbspace(tp);
+
 	/*
 	 * Sender silly window avoidance.   We transmit under the following
 	 * conditions when len is non-zero:
@@ -893,7 +944,7 @@ after_sack_rexmit:
 	 *	  data (receiver may be limited the window size)
 	 */
 	if (len) {
-		if (tp->t_force)
+		if (tp->t_flagsext & TF_FORCE)
 			goto send;
 		if (SEQ_LT(tp->snd_nxt, tp->snd_max))
 			goto send;
@@ -944,13 +995,15 @@ after_sack_rexmit:
 			oldwin = tp->rcv_adv - tp->rcv_nxt;
 
 		if (adv >= (int32_t) (2 * tp->t_maxseg)) {
-			/* Update only if the resulting scaled value of the window changed, or
-			 * if there is a change in the sequence since the last ack.
-			 * This avoids what appears as dupe ACKS (see rdar://5640997)
+			/*
+			 * Update only if the resulting scaled value of
+			 * the window changed, or if there is a change in
+			 * the sequence since the last ack. This avoids 
+			 * what appears as dupe ACKS (see rdar://5640997)
 			 *
-			 * If streaming is detected avoid sending too many window updates.
-			 * We will depend on the delack timer to send a window update
-			 * when needed.
+			 * If streaming is detected avoid sending too many
+			 * window updates. We will depend on the delack 
+			 * timer to send a window update when needed.
 			 */
 			if (!(tp->t_flags & TF_STRETCHACK) &&
 				(tp->last_ack_sent != tp->rcv_nxt || 
@@ -959,9 +1012,10 @@ after_sack_rexmit:
 				goto send;
 			}
 
-			/* Make sure that the delayed ack timer is set if we
-			 * delayed sending a window update because of streaming
-			 * detection.
+			/*
+			 * Make sure that the delayed ack timer is set if
+			 * we delayed sending a window update because of 
+			 * streaming detection.
 			 */
 			if ((tp->t_flags & TF_STRETCHACK) &&
 				!(tp->t_flags & TF_DELACK)) { 
@@ -975,7 +1029,7 @@ after_sack_rexmit:
 	}
 
 	/*
-	 * Send if we owe the peer an ACK, RST, SYN, or urgent data.  ACKNOW
+	 * Send if we owe the peer an ACK, RST, SYN, or urgent data. ACKNOW
 	 * is also a catch-all for the retransmit timer timeout case.
 	 */
 	if (tp->t_flags & TF_ACKNOW)
@@ -1005,7 +1059,8 @@ after_sack_rexmit:
 	    SEQ_GT(tp->snd_max, tp->snd_una) &&
 	    tp->t_timer[TCPT_REXMT] == 0 &&
 	    tp->t_timer[TCPT_PERSIST] == 0) {
-		tp->t_timer[TCPT_REXMT] = OFFSET_FROM_START(tp, tp->t_rxtcur);
+		tp->t_timer[TCPT_REXMT] = OFFSET_FROM_START(tp,
+			tp->t_rxtcur);
 		goto just_return;
 	} 
 	/*
@@ -1048,7 +1103,8 @@ just_return:
 		packchain_sent++;
 		TCP_PKTLIST_CLEAR(tp);
 
-		error = tcp_ip_output(so, tp, packetlist, packchain_listadd,
+		error = tcp_ip_output(so, tp, packetlist,
+		    packchain_listadd,
 		    tp_inp_options, (so_options & SO_DONTROUTE),
 		    (sack_rxmit | (sack_bytes_rxmt != 0)), recwin,
 #if INET6
@@ -1125,47 +1181,56 @@ send:
  	}
  	
  	/*
- 	  RFC 3168 states that:
- 	   - If you ever sent an ECN-setup SYN/SYN-ACK you must be prepared
- 	   to handle the TCP ECE flag, even if you also later send a
- 	   non-ECN-setup SYN/SYN-ACK.
- 	   - If you ever send a non-ECN-setup SYN/SYN-ACK, you must not set
- 	   the ip ECT flag.
- 	   
- 	   It is not clear how the ECE flag would ever be set if you never
- 	   set the IP ECT flag on outbound packets. All the same, we use
- 	   the TE_SETUPSENT to indicate that we have committed to handling
- 	   the TCP ECE flag correctly. We use the TE_SENDIPECT to indicate
- 	   whether or not we should set the IP ECT flag on outbound packets.
- 	 */
-	/*
+ 	 * RFC 3168 states that:
+ 	 * - If you ever sent an ECN-setup SYN/SYN-ACK you must be prepared
+ 	 * to handle the TCP ECE flag, even if you also later send a
+ 	 * non-ECN-setup SYN/SYN-ACK.
+ 	 * - If you ever send a non-ECN-setup SYN/SYN-ACK, you must not set
+ 	 * the ip ECT flag.
+	 * 
+ 	 * It is not clear how the ECE flag would ever be set if you never
+ 	 * set the IP ECT flag on outbound packets. All the same, we use
+ 	 * the TE_SETUPSENT to indicate that we have committed to handling
+ 	 * the TCP ECE flag correctly. We use the TE_SENDIPECT to indicate
+ 	 * whether or not we should set the IP ECT flag on outbound packet
+	 *
 	 * For a SYN-ACK, send an ECN setup SYN-ACK
 	 */
-	if (tcp_ecn_inbound && (flags & (TH_SYN | TH_ACK)) == (TH_SYN | TH_ACK)) {
+	if ((tcp_ecn_inbound || (tp->t_flags & TF_ENABLE_ECN))
+	    && (flags & (TH_SYN | TH_ACK)) == (TH_SYN | TH_ACK)) {
 		if ((tp->ecn_flags & TE_SETUPRECEIVED) != 0) {
 			if ((tp->ecn_flags & TE_SETUPSENT) == 0) {
 				/* Setting TH_ECE makes this an ECN-setup SYN-ACK */
 				flags |= TH_ECE;
 				
 				/*
-				 * Record that we sent the ECN-setup and default to
-				 * setting IP ECT.
+				 * Record that we sent the ECN-setup and
+				 * default to setting IP ECT.
 				 */
-				tp->ecn_flags |= (TE_SETUPSENT | TE_SENDIPECT);
-			}
-			else {
+				tp->ecn_flags |= (TE_SETUPSENT|TE_SENDIPECT);
+				tcpstat.tcps_ecn_setup++;
+			} else {
 				/*
-				 * We sent an ECN-setup SYN-ACK but it was dropped.
-				 * Fallback to non-ECN-setup SYN-ACK and clear flag
-				 * that to indicate we should not send data with IP ECT set.
+				 * We sent an ECN-setup SYN-ACK but it was
+				 * dropped. Fallback to non-ECN-setup
+				 * SYN-ACK and clear flag to indicate that
+				 * we should not send data with IP ECT set
 				 *
-				 * Pretend we didn't receive an ECN-setup SYN.
+				 * Pretend we didn't receive an 
+				 * ECN-setup SYN.
 				 */
 				tp->ecn_flags &= ~TE_SETUPRECEIVED;
+				/*
+				 * We already incremented the counter
+				 * assuming that the ECN setup will
+				 * succeed. Decrementing here to
+				 * correct it.
+				 */
+				tcpstat.tcps_ecn_setup--;
 			}
 		}
-	}
-	else if (tcp_ecn_outbound && (flags & (TH_SYN | TH_ACK)) == TH_SYN) {
+	} else if ((tcp_ecn_outbound || (tp->t_flags & TF_ENABLE_ECN))
+	    && (flags & (TH_SYN | TH_ACK)) == TH_SYN) {
 		if ((tp->ecn_flags & TE_SETUPSENT) == 0) {
 			/* Setting TH_ECE and TH_CWR makes this an ECN-setup SYN */
 			flags |= (TH_ECE | TH_CWR);
@@ -1175,8 +1240,7 @@ send:
 			 * setting IP ECT.
 			 */
 			tp->ecn_flags |= (TE_SETUPSENT | TE_SENDIPECT);
-		}
-		else {
+		} else {
 			/*
 			 * We sent an ECN-setup SYN but it was dropped.
 			 * Fall back to no ECN and clear flag indicating
@@ -1197,6 +1261,7 @@ send:
 		!SEQ_LT(tp->snd_nxt, tp->snd_max) && !sack_rxmit) {
 		flags |= TH_CWR;
 		tp->ecn_flags &= ~TE_SENDCWR;
+		tcpstat.tcps_sent_cwr++;
 	}
 	
 	/*
@@ -1204,6 +1269,7 @@ send:
 	 */
 	if ((tp->ecn_flags & TE_SENDECE) != 0 && len == 0) {
 		flags |= TH_ECE;
+		tcpstat.tcps_sent_ece++;
 	}
 
  	/*
@@ -1261,13 +1327,14 @@ send:
 		 * still advance the subflow level ACK and therefore make it
 		 * hard for the remote end to recover in low cwnd situations.
 		 */
-		if (len != 0)
+		if (len != 0) {
 			tp->t_mpflags |= (TMPF_SEND_DSN |
 			    TMPF_MPTCP_ACKNOW);
-		else
+		} else {
 			tp->t_mpflags |= TMPF_MPTCP_ACKNOW;
+		}
 		optlen = mptcp_setup_opts(tp, off, &opt[0], optlen, flags,
-		    len, &dlenp, &finp, &dss_val, &sseqp);
+		    len, &dlenp, &finp, &dss_val, &sseqp, &mptcp_acknow);
 		tp->t_mpflags &= ~TMPF_SEND_DSN;
 	}
 #endif /* MPTCP */
@@ -1343,8 +1410,9 @@ send:
 		if (tp_inp_options) {
 			ipoptlen = tp_inp_options->m_len -
 				offsetof(struct ipoption, ipopt_list);
-		} else
+		} else {
 			ipoptlen = 0;
+		}
 	}
 #if IPSEC
 		ipoptlen += ipsec_optlen;
@@ -1365,20 +1433,23 @@ send:
 	 */
 	if (len + optlen + ipoptlen > tp->t_maxopd) {
 		/*
-		 * If there is still more to send, don't close the connection.
+		 * If there is still more to send,
+		 * don't close the connection.
 		 */
 		flags &= ~TH_FIN;
 		if (tso) {
 			int32_t tso_maxlen;
 
-			tso_maxlen = tp->tso_max_segment_size ? tp->tso_max_segment_size : TCP_MAXWIN;
+			tso_maxlen = tp->tso_max_segment_size ?
+				tp->tso_max_segment_size : TCP_MAXWIN;
 
 			if (len > tso_maxlen - hdrlen - optlen) {
 				len = tso_maxlen - hdrlen - optlen;
 				len = len - (len % (tp->t_maxopd - optlen));
 				sendalot = 1;
-			} else if (tp->t_flags & TF_NEEDFIN)
+			} else if (tp->t_flags & TF_NEEDFIN) {
 				sendalot = 1;
+			}
 		} else {
 			len = tp->t_maxopd - optlen - ipoptlen;
 			sendalot = 1;
@@ -1415,7 +1486,8 @@ send:
 		(tp->t_flagsext & TF_BWMEAS_INPROGRESS) == 0 &&
 		(so->so_snd.sb_cc - (tp->snd_max - tp->snd_una)) >= 
 			tp->t_bwmeas->bw_minsize) {
-		tp->t_bwmeas->bw_size = min((so->so_snd.sb_cc - (tp->snd_max - tp->snd_una)),
+		tp->t_bwmeas->bw_size = min(
+			(so->so_snd.sb_cc - (tp->snd_max - tp->snd_una)),
 			tp->t_bwmeas->bw_maxsize);
 		tp->t_flagsext |= TF_BWMEAS_INPROGRESS;
 		tp->t_bwmeas->bw_start = tp->snd_max;
@@ -1429,7 +1501,7 @@ send:
 	 * the template for sends on this connection.
 	 */
 	if (len) {
-		if (tp->t_force && len == 1)
+		if ((tp->t_flagsext & TF_FORCE) && len == 1)
 			tcpstat.tcps_sndprobe++;
 		else if (SEQ_LT(tp->snd_nxt, tp->snd_max) || sack_rxmit) {
 			tcpstat.tcps_sndrexmitpack++;
@@ -1437,8 +1509,10 @@ send:
 			if (nstat_collect) {
 				nstat_route_tx(inp->inp_route.ro_rt, 1,
 					len, NSTAT_TX_FLAG_RETRANSMIT);
-				INP_ADD_STAT(inp, cell, wifi, txpackets, 1);
-				INP_ADD_STAT(inp, cell, wifi, txbytes, len);
+				INP_ADD_STAT(inp, cell, wifi, wired,
+				    txpackets, 1);
+				INP_ADD_STAT(inp, cell, wifi, wired,
+				    txbytes, len);
 				tp->t_stat.txretransmitbytes += len;
 			}
 		} else {
@@ -1446,8 +1520,10 @@ send:
 			tcpstat.tcps_sndbyte += len;
 			
 			if (nstat_collect) {
-				INP_ADD_STAT(inp, cell, wifi, txpackets, 1);
-				INP_ADD_STAT(inp, cell, wifi, txbytes, len);
+				INP_ADD_STAT(inp, cell, wifi, wired,
+				    txpackets, 1);
+				INP_ADD_STAT(inp, cell, wifi, wired,
+				    txbytes, len);
 			}
 		}
 #if MPTCP
@@ -1517,14 +1593,13 @@ send:
 			 */
 			copymode = M_COPYM_MOVE_HDR;
 #if MPTCP
-			if ((tp->t_mpflags & TMPF_MPTCP_TRUE) ||
-			    (tp->t_mpflags & TMPF_TCP_FALLBACK)) {
+			if (so->so_flags & SOF_MP_SUBFLOW) {
 				copymode = M_COPYM_NOOP_HDR;
 			}
 #endif /* MPTCP */
 			if (m != NULL) {
-				m->m_next = m_copym_mode(so->so_snd.sb_mb, off,
-				    (int) len, M_DONTWAIT, copymode);
+				m->m_next = m_copym_mode(so->so_snd.sb_mb,
+				    off, (int)len, M_DONTWAIT, copymode);
 				if (m->m_next == NULL) {
 					(void) m_free(m);
 					error = ENOBUFS;
@@ -1532,39 +1607,14 @@ send:
 				}
 			} else {
 				/*
-				 * determine whether the mbuf pointer and
-				 * offset passed back by the 'last' call to
-				 * m_copym_with_hdrs are still valid... if the
-				 * head of the socket chain has changed (due
-				 * to an incoming ACK for instance), or the
-				 * offset into the chain we just computed is
-				 * different from the one last returned by
-				 * m_copym_with_hdrs (perhaps we're re-
-				 * transmitting a packet sent earlier), then
-				 * we can't pass the mbuf pointer and offset
-				 * into it as valid hints for m_copym_with_hdrs
-				 * to use (if valid, these hints allow
-				 * m_copym_with_hdrs to avoid rescanning from
-				 * the beginning of the socket buffer mbuf list.
-				 *
-				 * Setting the mbuf pointer to NULL is
-				 * sufficient to disable the hint mechanism.
-				 */
-				if (m_head != so->so_snd.sb_mb || sack_rxmit ||
-				    last_off != off)
-					m_lastm = NULL;
-				last_off = off + len;
-				m_head = so->so_snd.sb_mb;
-
-				/*
 				 * make sure we still have data left
 				 * to be sent at this point
 				 */
-				if (m_head == NULL) {
+				if (so->so_snd.sb_mb == NULL) {
 					error = 0; /* should we return an error? */
 					goto out;
 				}
-
+				
 				/*
 				 * m_copym_with_hdrs will always return the
 				 * last mbuf pointer and the offset into it that
@@ -1572,7 +1622,7 @@ send:
 				 * whether a valid 'hint' was passed in or not.
 				 */
 			        if ((m = m_copym_with_hdrs(so->so_snd.sb_mb,
-				    off, len, M_DONTWAIT, &m_lastm, &m_off,
+				    off, len, M_DONTWAIT, NULL, NULL,
 				    copymode)) == NULL) {
 				        error = ENOBUFS;
 					goto out;
@@ -1633,6 +1683,10 @@ send:
 			ip6->ip6_flow |= htonl(IPTOS_ECN_ECT0 << 20);
 		}
 		svc_flags |= PKT_SCF_IPV6;
+#if PF_ECN
+		m->m_pkthdr.pf_mtag.pftag_hdr = (void *)ip6;
+		m->m_pkthdr.pf_mtag.pftag_flags |= PF_TAG_HDR_INET6;
+#endif /* PF_ECN */
 	} else
 #endif /* INET6 */
 	{
@@ -1645,6 +1699,10 @@ send:
 			!SEQ_LT(tp->snd_nxt, tp->snd_max) && !sack_rxmit) {
 			ip->ip_tos = IPTOS_ECN_ECT0;
 		}
+#if PF_ECN
+		m->m_pkthdr.pf_mtag.pftag_hdr = (void *)ip;
+		m->m_pkthdr.pf_mtag.pftag_flags |= PF_TAG_HDR_INET;
+#endif /* PF_ECN */
 	}
 
 	/*
@@ -1680,7 +1738,12 @@ send:
 	}
 	th->th_ack = htonl(tp->rcv_nxt);
 	tp->last_ack_sent = tp->rcv_nxt;
-
+#if MPTCP
+	/* Initialize the ACK field to a value as 0 ack fields are dropped */
+	if (early_data_sent) {
+		th->th_ack = th->th_seq + 1;
+	}
+#endif /* MPTCP */
 	if (optlen) {
 		bcopy(opt, th + 1, optlen);
 		th->th_off = (sizeof (struct tcphdr) + optlen) >> 2;
@@ -1792,7 +1855,8 @@ send:
 	 * In transmit state, time the transmission and arrange for
 	 * the retransmit.  In persist state, just set snd_max.
 	 */
-	if (tp->t_force == 0 || tp->t_timer[TCPT_PERSIST] == 0) {
+	if (!(tp->t_flagsext & TF_FORCE)
+	    || tp->t_timer[TCPT_PERSIST] == 0) {
 		tcp_seq startseq = tp->snd_nxt;
 
 		/*
@@ -1826,23 +1890,68 @@ send:
 		/*
 		 * Set retransmit timer if not currently set,
 		 * and not doing an ack or a keep-alive probe.
-		 * Initial value for retransmit timer is smoothed
-		 * round-trip time + 2 * round-trip time variance.
-		 * Initialize shift counter which is used for backoff
-		 * of retransmit time.
 		 */
 timer:
 		if (tp->t_timer[TCPT_REXMT] == 0 &&
 		    ((sack_rxmit && tp->snd_nxt != tp->snd_max) ||
-			tp->snd_nxt != tp->snd_una ||
-			(flags & TH_FIN))) {
+			tp->snd_nxt != tp->snd_una || (flags & TH_FIN))) {
 			if (tp->t_timer[TCPT_PERSIST]) {
 				tp->t_timer[TCPT_PERSIST] = 0;
 				tp->t_rxtshift = 0;
 				tp->t_rxtstart = 0;
 				tp->t_persist_stop = 0;
 			}
-			tp->t_timer[TCPT_REXMT] = OFFSET_FROM_START(tp, tp->t_rxtcur);
+			tp->t_timer[TCPT_REXMT] =
+				OFFSET_FROM_START(tp, tp->t_rxtcur);
+		}
+
+		/*
+		 * Set tail loss probe timeout if new data is being
+		 * transmitted. This will be supported only when
+		 * SACK option is enabled on a connection.
+		 *
+		 * Every time new data is sent PTO will get reset.
+		 */
+		if (tcp_enable_tlp && tp->t_state == TCPS_ESTABLISHED &&
+		    SACK_ENABLED(tp) && !IN_FASTRECOVERY(tp)
+		    && tp->snd_nxt == tp->snd_max
+		    && SEQ_GT(tp->snd_nxt, tp->snd_una)
+		    && tp->t_rxtshift == 0
+		    && (tp->t_flagsext & (TF_SENT_TLPROBE|TF_PKTS_REORDERED)) == 0) {
+			u_int32_t pto, srtt, new_rto = 0;
+
+			/*
+			 * Using SRTT alone to set PTO can cause spurious
+			 * retransmissions on wireless networks where there
+			 * is a lot of variance in RTT. Taking variance 
+			 * into account will avoid this.
+			 */
+			srtt = tp->t_srtt >> TCP_RTT_SHIFT;
+			pto = ((TCP_REXMTVAL(tp)) * 3) >> 1;
+			pto = max (2 * srtt, pto);
+			if ((tp->snd_max - tp->snd_una) == tp->t_maxseg)
+				pto = max(pto,
+				    (((3 * pto) >> 2) + tcp_delack * 2));
+			else
+				pto = max(10, pto);
+
+			/* if RTO is less than PTO, choose RTO instead */
+			if (tp->t_rxtcur < pto) {
+				/*
+				 * Schedule PTO instead of RTO in favor of
+				 * fast recovery.
+				 */
+				pto = tp->t_rxtcur;
+
+ 				/* Reset the next RTO to be after PTO. */
+				TCPT_RANGESET(new_rto,
+				    (pto + TCP_REXMTVAL(tp)),
+				    max(tp->t_rttmin, tp->t_rttcur + 2),
+				    TCPTV_REXMTMAX, 0);
+				tp->t_timer[TCPT_REXMT] =
+				    OFFSET_FROM_START(tp, new_rto);
+			}
+			tp->t_timer[TCPT_PTO] = OFFSET_FROM_START(tp, pto);
 		}
 	} else {
 		/*
@@ -1922,10 +2031,23 @@ timer:
 #endif /* INET6 */
 		if (path_mtu_discovery && (tp->t_flags & TF_PMTUD))
 			ip->ip_off |= IP_DF;
+	
+#if NECP
+	{
+		necp_kernel_policy_id policy_id;
+		if (!necp_socket_is_allowed_to_send_recv(inp, &policy_id)) {
+			m_freem(m);
+			error = EHOSTUNREACH;
+			goto out;
+		}
 
+		necp_mark_packet_from_socket(m, inp, policy_id);
+	}
+#endif /* NECP */
+	
 #if IPSEC
-	if (ipsec_bypass == 0)
- 		ipsec_setsocket(m, so);
+	if (inp->inp_sp != NULL)
+		ipsec_setsocket(m, so);
 #endif /*IPSEC*/
 
 	/*
@@ -2016,16 +2138,11 @@ timer:
 	}
 
 	if (sendalot == 0 || (tp->t_state != TCPS_ESTABLISHED) ||
-	      (tp->snd_cwnd <= (tp->snd_wnd / 8)) ||
-	      (tp->t_flags & (TH_PUSH | TF_ACKNOW)) || tp->t_force != 0 ||
-	      tp->t_lastchain >= tcp_packet_chaining) {
+	    (tp->snd_cwnd <= (tp->snd_wnd / 8)) ||
+	    (tp->t_flags & (TH_PUSH | TF_ACKNOW)) ||
+	    (tp->t_flagsext & TF_FORCE) ||
+	    tp->t_lastchain >= tcp_packet_chaining) {
 		error = 0;
-
-		/*
-		 * Reset the stack memory of offset as the socket 
-		 * may get unlocked
-		 */
-		m_lastm = NULL;
 		while (inp->inp_sndinprog_cnt == 0 &&
 			tp->t_pktlist_head != NULL) {
 			packetlist = tp->t_pktlist_head;
@@ -2043,7 +2160,6 @@ timer:
 #else /* INET6 */
 			    0);
 #endif /* !INET6 */
-
 			if (error) {
 				/*
 				 * Take into account the rest of unsent
@@ -2079,7 +2195,8 @@ timer:
 		 * the recent call to ip_output_list() plus the amount of
 		 * user data in the packet list for this tcp at the moment.
 		 */
-		if (tp->t_force == 0 || tp->t_timer[TCPT_PERSIST] == 0) {
+		if (!(tp->t_flagsext & TF_FORCE)
+		    || tp->t_timer[TCPT_PERSIST] == 0) {
 			/*
 			 * No need to check for TH_FIN here because
 			 * the TF_SENTFIN flag handles that case.
@@ -2113,16 +2230,12 @@ out:
 				!tp->t_timer[TCPT_PERSIST])
 				tp->t_timer[TCPT_REXMT] = 
 					OFFSET_FROM_START(tp, tp->t_rxtcur);
-
 			tp->snd_cwnd = tp->t_maxseg;
 			tp->t_bytes_acked = 0;
-
 			tcp_check_timer_state(tp);
 			KERNEL_DEBUG(DBG_FNC_TCP_OUTPUT | DBG_FUNC_END, 0,0,0,0,0);
 
-			DTRACE_TCP5(cc, void, NULL, struct inpcb *, inp,
-				struct tcpcb *, tp, struct tcphdr *, NULL,
-				int32_t, TCP_CC_OUTPUT_ERROR);
+			tcp_ccdbg_trace(tp, NULL, TCP_CC_OUTPUT_ERROR);
 			return (0);
 		}
 		if (error == EMSGSIZE) {
@@ -2152,15 +2265,10 @@ out:
 		 * treat EHOSTUNREACH/ENETDOWN as a soft error.
 		 */
 		if ((error == EHOSTUNREACH || error == ENETDOWN) &&
-		    TCPS_HAVERCVDSYN(tp->t_state) &&
-		    !((inp->inp_flags & INP_NO_IFT_CELLULAR) &&
-		    inp->inp_last_outifp != NULL &&
-		    IFNET_IS_CELLULAR(inp->inp_last_outifp))) {
-			tp->t_softerror = error;
-			tcp_check_timer_state(tp);
-			KERNEL_DEBUG(DBG_FNC_TCP_OUTPUT | DBG_FUNC_END,
-			    0, 0, 0, 0, 0);
-			return (0);
+		    TCPS_HAVERCVDSYN(tp->t_state) && 
+		    !inp_restricted_send(inp, inp->inp_last_outifp)) {
+				tp->t_softerror = error;
+				error = 0;
 		}
 		tcp_check_timer_state(tp);
 		KERNEL_DEBUG(DBG_FNC_TCP_OUTPUT | DBG_FUNC_END, 0,0,0,0,0);
@@ -2215,13 +2323,31 @@ tcp_ip_output(struct socket *so, struct tcpcb *tp, struct mbuf *pkt,
 		}
 	}
 
-	if (inp->inp_flags & INP_NO_IFT_CELLULAR) {
+	if (INP_NO_CELLULAR(inp)) {
 #if INET6
 		if (isipv6)
 			ip6oa.ip6oa_flags |=  IP6OAF_NO_CELLULAR;
 		else
 #endif /* INET6 */
 			ipoa.ipoa_flags |=  IPOAF_NO_CELLULAR;
+	} 
+	if (INP_NO_EXPENSIVE(inp)) {
+#if INET6
+		if (isipv6)
+			ip6oa.ip6oa_flags |=  IP6OAF_NO_EXPENSIVE;
+		else
+#endif /* INET6 */
+			ipoa.ipoa_flags |=  IPOAF_NO_EXPENSIVE;
+	
+	}
+	if (INP_AWDL_UNRESTRICTED(inp)) {
+#if INET6
+		if (isipv6)
+			ip6oa.ip6oa_flags |=  IP6OAF_AWDL_UNRESTRICTED;
+		else
+#endif /* INET6 */
+			ipoa.ipoa_flags |=  IPOAF_AWDL_UNRESTRICTED;
+	
 	}
 #if INET6
 	if (isipv6)
@@ -2266,7 +2392,7 @@ tcp_ip_output(struct socket *so, struct tcpcb *tp, struct mbuf *pkt,
 	 */
 	if (tcp_output_unlocked && !so->so_upcallusecount &&
 	    (tp->t_state == TCPS_ESTABLISHED) && (sack_in_progress == 0) &&
-	    ((tp->t_flags & TF_FASTRECOVERY) == 0)) {
+	    !IN_FASTRECOVERY(tp)) {
 
 		unlocked = TRUE;
 		socket_unlock(so, 0);
@@ -2351,9 +2477,8 @@ tcp_ip_output(struct socket *so, struct tcpcb *tp, struct mbuf *pkt,
 		rc = inp_set_fc_state(inp, adv->code);
 
 		if (rc == 1) 
-			DTRACE_TCP5(cc, void, NULL, struct inpcb *, inp,
-			    struct tcpcb *, tp, struct tcphdr *, NULL,
-			    int32_t, ((adv->code == FADV_FLOW_CONTROLLED) ?
+			tcp_ccdbg_trace(tp, NULL, 
+			    ((adv->code == FADV_FLOW_CONTROLLED) ?
 			    TCP_CC_FLOW_CONTROL : TCP_CC_SUSPEND));
 	}
 
@@ -2380,7 +2505,8 @@ tcp_ip_output(struct socket *so, struct tcpcb *tp, struct mbuf *pkt,
 		    inp->inp_last_outifp)
 			inp->inp_last_outifp = outif;
 
-	if (error != 0 && ifdenied && (inp->inp_flags & INP_NO_IFT_CELLULAR))
+	if (error != 0 && ifdenied && 
+	    (INP_NO_CELLULAR(inp) || INP_NO_EXPENSIVE(inp)))
 		soevent(inp->inp_socket,
 		    (SO_FILT_HINT_LOCKED|SO_FILT_HINT_IFDENIED));
 

@@ -86,22 +86,22 @@ A. How to build XNU:
   produce different results. Each build alias supports the standard
   "clean", "install", "installsrc", "installhdrs" targets, but
   conditionalize their behavior on the RC_ProjectName make variable
-  which is passed as the -project argument to ~rc/bin/buildit, which
+  which is passed as the -buildAlias argument to ~rc/bin/buildit, which
   can be one of:
 
-  -project xnu          # the default, builds /mach_kernel, kernel-space
-                        # headers, user-space headers, man pages,
-                        # symbol-set kexts
+  -buildAlias xnu            # the default, builds /mach_kernel, kernel-space
+                             # headers, user-space headers, man pages,
+                             # symbol-set kexts
 
-  -project xnu_debug    # a DEBUG kernel in /AppleInternal with dSYM
+  -buildAlias xnu_debug      # a DEBUG kernel in /AppleInternal with dSYM
 
-  -project libkxld      # user-space version of kernel linker
+  -buildAlias libkxld        # user-space version of kernel linker
 
-  -project libkmod	# static library automatically linked into kexts
+  -buildAlias libkmod        # static library automatically linked into kexts
 
-  -project Libsyscall   # automatically generate BSD syscall stubs
+  -buildAlias Libsyscall     # automatically generate BSD syscall stubs
 
-  -project xnu_quick_test # install xnu unit tests
+  -buildAlias xnu_quick_test # install xnu unit tests
 
 
 
@@ -125,14 +125,14 @@ A. How to build XNU:
 
    $ make -w              # trace recursive make invocations. Useful in combination with VERBOSE=YES
 
-   $ make BUILD_LTO=1	  # build with LLVM Link Time Optimization (experimental)
+   $ make BUILD_LTO=0	  # build without LLVM Link Time Optimization
 
    $ make REMOTEBUILD=user@remotehost # perform build on remote host
 
 =============================================
 B. How to install a new header file from XNU
 
-[Note: This does not cover installing header files in IOKit framework]
+[To install IOKit headers, see additional comments in iokit/IOKit/Makefile.]
 
 1) XNU installs header files at the following locations -
 	a. $(DSTROOT)/System/Library/Frameworks/Kernel.framework/Headers

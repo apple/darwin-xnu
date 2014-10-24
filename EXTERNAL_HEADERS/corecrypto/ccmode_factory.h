@@ -10,7 +10,7 @@
 #ifndef _CORECRYPTO_CCMODE_FACTORY_H_
 #define _CORECRYPTO_CCMODE_FACTORY_H_
 
-#include <corecrypto/ccn.h>  /* TODO: Remove dependancy on this header. */
+#include <corecrypto/ccn.h>  /* TODO: Remove dependency on this header. */
 #include <corecrypto/ccmode_impl.h>
 
 /* For CBC, direction of underlying ecb is the same as the cbc direction */
@@ -61,6 +61,9 @@ const struct ccmode_##_mode_ *cc##_cipher_##_##_mode_##_##_dir_##_mode(void)    
 /* For GCM, same as CFB */
 #define CCMODE_GCM_FACTORY(_cipher_, _dir_) CCMODE_CFB_FACTORY(_cipher_, gcm, _dir_)
 
+/* For CCM, same as CFB */
+#define CCMODE_CCM_FACTORY(_cipher_, _dir_) CCMODE_CFB_FACTORY(_cipher_, ccm, _dir_)
+
 
 /* Fot XTS, you always need an ecb encrypt */
 #define CCMODE_XTS_FACTORY(_cipher_ , _dir_)                                    \
@@ -107,13 +110,12 @@ const struct ccmode_cbc *cc3des_cbc_encrypt_mode(void) {
 
 
 
-void *ccmode_cbc_init(const struct ccmode_cbc *cbc, cccbc_ctx *ctx,
-                      unsigned long rawkey_len, const void *rawkey,
-                      const void *iv);
-void *ccmode_cbc_decrypt(cccbc_ctx *ctx, unsigned long nblocks,
-                         const void *in, void *out);
-void *ccmode_cbc_encrypt(cccbc_ctx *ctx, unsigned long nblocks,
-                         const void *in, void *out);
+void ccmode_cbc_init(const struct ccmode_cbc *cbc, cccbc_ctx *ctx,
+                     size_t rawkey_len, const void *rawkey);
+void ccmode_cbc_decrypt(const cccbc_ctx *ctx, cccbc_iv *iv, unsigned long nblocks,
+                        const void *in, void *out);
+void ccmode_cbc_encrypt(const cccbc_ctx *ctx, cccbc_iv *iv, unsigned long nblocks,
+                        const void *in, void *out);
 
 struct _ccmode_cbc_key {
     const struct ccmode_ecb *ecb;
@@ -162,11 +164,11 @@ void ccmode_factory_cbc_encrypt(struct ccmode_cbc *cbc,
 
 
 void ccmode_cfb_init(const struct ccmode_cfb *cfb, cccfb_ctx *ctx,
-                     unsigned long rawkey_len, const void *rawkey,
+                     size_t rawkey_len, const void *rawkey,
                      const void *iv);
-void ccmode_cfb_decrypt(cccfb_ctx *ctx, unsigned long nblocks,
+void ccmode_cfb_decrypt(cccfb_ctx *ctx, size_t nbytes,
                         const void *in, void *out);
-void ccmode_cfb_encrypt(cccfb_ctx *ctx, unsigned long nblocks,
+void ccmode_cfb_encrypt(cccfb_ctx *ctx, size_t nbytes,
                         const void *in, void *out);
 
 struct _ccmode_cfb_key {
@@ -210,18 +212,17 @@ void ccmode_factory_cfb_decrypt(struct ccmode_cfb *cfb,
  parameter. */
 CC_INLINE
 void ccmode_factory_cfb_encrypt(struct ccmode_cfb *cfb,
-                             const struct ccmode_ecb *ecb) {
+                                const struct ccmode_ecb *ecb) {
     struct ccmode_cfb cfb_encrypt = CCMODE_FACTORY_CFB_ENCRYPT(ecb);
     *cfb = cfb_encrypt;
 }
 
 
 void ccmode_cfb8_init(const struct ccmode_cfb8 *cfb8, cccfb8_ctx *ctx,
-                      unsigned long rawkey_len, const void *rawkey,
-                      const void *iv);
-void ccmode_cfb8_decrypt(cccfb8_ctx *ctx, unsigned long nbytes,
+                      size_t rawkey_len, const void *rawkey, const void *iv);
+void ccmode_cfb8_decrypt(cccfb8_ctx *ctx, size_t nbytes,
                          const void *in, void *out);
-void ccmode_cfb8_encrypt(cccfb8_ctx *ctx, unsigned long nbytes,
+void ccmode_cfb8_encrypt(cccfb8_ctx *ctx, size_t nbytes,
                          const void *in, void *out);
 
 struct _ccmode_cfb8_key {
@@ -253,7 +254,7 @@ struct _ccmode_cfb8_key {
  parameter. */
 CC_INLINE
 void ccmode_factory_cfb8_decrypt(struct ccmode_cfb8 *cfb8,
-                              const struct ccmode_ecb *ecb) {
+                                 const struct ccmode_ecb *ecb) {
     struct ccmode_cfb8 cfb8_decrypt = CCMODE_FACTORY_CFB8_DECRYPT(ecb);
     *cfb8 = cfb8_decrypt;
 }
@@ -264,15 +265,14 @@ void ccmode_factory_cfb8_decrypt(struct ccmode_cfb8 *cfb8,
  parameter. */
 CC_INLINE
 void ccmode_factory_cfb8_encrypt(struct ccmode_cfb8 *cfb8,
-                              const struct ccmode_ecb *ecb) {
+                                 const struct ccmode_ecb *ecb) {
     struct ccmode_cfb8 cfb8_encrypt = CCMODE_FACTORY_CFB8_ENCRYPT(ecb);
     *cfb8 = cfb8_encrypt;
 }
 
 void ccmode_ctr_init(const struct ccmode_ctr *ctr, ccctr_ctx *ctx,
-                     unsigned long rawkey_len, const void *rawkey,
-                     const void *iv);
-void ccmode_ctr_crypt(ccctr_ctx *ctx, unsigned long nblocks,
+                     size_t rawkey_len, const void *rawkey, const void *iv);
+void ccmode_ctr_crypt(ccctr_ctx *ctx, size_t nbytes,
                       const void *in, void *out);
 
 struct _ccmode_ctr_key {
@@ -296,7 +296,7 @@ struct _ccmode_ctr_key {
  parameter. */
 CC_INLINE
 void ccmode_factory_ctr_crypt(struct ccmode_ctr *ctr,
-                             const struct ccmode_ecb *ecb) {
+                              const struct ccmode_ecb *ecb) {
     struct ccmode_ctr ctr_crypt = CCMODE_FACTORY_CTR_CRYPT(ecb);
     *ctr = ctr_crypt;
 }
@@ -315,17 +315,20 @@ void ccmode_factory_ctr_crypt(struct ccmode_ctr *ctr,
 
 extern const unsigned char gcm_shift_table[256*2];
 #endif
+#if	defined(__x86_64__) || defined(__arm64__)
+#define	VNG_SPEEDUP	1
+#endif
 
 /* Create a gcm key from a gcm mode object.
  key must point to at least sizeof(CCMODE_GCM_KEY(ecb)) bytes of free
  storage. */
 void ccmode_gcm_init(const struct ccmode_gcm *gcm, ccgcm_ctx *ctx,
-                     unsigned long rawkey_len, const void *rawkey);
+                     size_t rawkey_len, const void *rawkey);
 void ccmode_gcm_set_iv(ccgcm_ctx *ctx, size_t iv_size, const void *iv);
-void ccmode_gcm_gmac(ccgcm_ctx *ctx, unsigned long nbytes, const void *in);
-void ccmode_gcm_decrypt(ccgcm_ctx *ctx, unsigned long nbytes, const void *in,
+void ccmode_gcm_gmac(ccgcm_ctx *ctx, size_t nbytes, const void *in);
+void ccmode_gcm_decrypt(ccgcm_ctx *ctx, size_t nbytes, const void *in,
                         void *out);
-void ccmode_gcm_encrypt(ccgcm_ctx *ctx, unsigned long nbytes, const void *in,
+void ccmode_gcm_encrypt(ccgcm_ctx *ctx, size_t nbytes, const void *in,
                         void *out);
 void ccmode_gcm_finalize(ccgcm_ctx *key, size_t tag_size, void *tag);
 void ccmode_gcm_reset(ccgcm_ctx *key);
@@ -355,7 +358,12 @@ struct _ccmode_gcm_key {
     ;
 #endif /* CCMODE_GCM_TABLES */
 
+#ifdef VNG_SPEEDUP
+	unsigned char Htable[16*8*2] __attribute__((aligned(16)));
+#endif
+    
     cc_unit u[];
+
 };
 
 /* Use this to statically initialize a ccmode_gcm object for decryption. */
@@ -390,7 +398,7 @@ struct _ccmode_gcm_key {
  parameter. */
 CC_INLINE
 void ccmode_factory_gcm_decrypt(struct ccmode_gcm *gcm,
-                             const struct ccmode_ecb *ecb_encrypt) {
+                                const struct ccmode_ecb *ecb_encrypt) {
     struct ccmode_gcm gcm_decrypt = CCMODE_FACTORY_GCM_DECRYPT(ecb_encrypt);
     *gcm = gcm_decrypt;
 }
@@ -401,16 +409,104 @@ void ccmode_factory_gcm_decrypt(struct ccmode_gcm *gcm,
  parameter. */
 CC_INLINE
 void ccmode_factory_gcm_encrypt(struct ccmode_gcm *gcm,
-                             const struct ccmode_ecb *ecb_encrypt) {
+                                const struct ccmode_ecb *ecb_encrypt) {
     struct ccmode_gcm gcm_encrypt = CCMODE_FACTORY_GCM_ENCRYPT(ecb_encrypt);
     *gcm = gcm_encrypt;
 }
 
 
+/* CCM (only NIST approved with AES) */
+void ccmode_ccm_init(const struct ccmode_ccm *ccm, ccccm_ctx *ctx,
+                     size_t rawkey_len, const void *rawkey);
+void ccmode_ccm_set_iv(ccccm_ctx *ctx, ccccm_nonce *nonce_ctx, size_t nonce_len, const void *nonce,
+                       size_t mac_size, size_t auth_len, size_t data_len);
+/* internal function */
+void ccmode_ccm_macdata(ccccm_ctx *key, ccccm_nonce *nonce_ctx, unsigned new_block, size_t nbytes, const void *in);
+/* api function - disallows only mac'd data after data to encrypt was sent */
+void ccmode_ccm_cbcmac(ccccm_ctx *ctx, ccccm_nonce *nonce_ctx, size_t nbytes, const void *in);
+/* internal function */
+void ccmode_ccm_crypt(ccccm_ctx *key, ccccm_nonce *nonce_ctx, size_t nbytes, const void *in, void *out);
+void ccmode_ccm_decrypt(ccccm_ctx *ctx, ccccm_nonce *nonce_ctx, size_t nbytes, const void *in,
+                        void *out);
+void ccmode_ccm_encrypt(ccccm_ctx *ctx, ccccm_nonce *nonce_ctx, size_t nbytes, const void *in,
+                        void *out);
+void ccmode_ccm_finalize(ccccm_ctx *key, ccccm_nonce *nonce_ctx, void *mac);
+void ccmode_ccm_reset(ccccm_ctx *key, ccccm_nonce *nonce_ctx);
+
+struct _ccmode_ccm_key {
+    const struct ccmode_ecb *ecb;
+    cc_unit u[];
+};
+
+struct _ccmode_ccm_nonce {
+    unsigned char A_i[16];      /* crypto block iv */
+    unsigned char B_i[16];      /* mac block iv */
+    unsigned char MAC[16];      /* crypted mac */
+    unsigned char buf[16];      /* crypt buffer */
+
+    uint32_t mode;         /* mode: IV -> AD -> DATA */
+    uint32_t buflen;       /* length of data in buf */
+    uint32_t b_i_len;      /* length of cbcmac data in B_i */
+
+    size_t nonce_size;
+    size_t mac_size;
+};
+
+/* Use this to statically initialize a ccmode_ccm object for decryption. */
+#define CCMODE_FACTORY_CCM_DECRYPT(ECB_ENCRYPT) { \
+.size = ccn_sizeof_size(sizeof(struct _ccmode_ccm_key)) + ccn_sizeof_size((ECB_ENCRYPT)->block_size) + ccn_sizeof_size((ECB_ENCRYPT)->size), \
+.nonce_size = ccn_sizeof_size(sizeof(struct _ccmode_ccm_nonce)), \
+.block_size = 1, \
+.init = ccmode_ccm_init, \
+.set_iv = ccmode_ccm_set_iv, \
+.cbcmac = ccmode_ccm_cbcmac, \
+.ccm = ccmode_ccm_decrypt, \
+.finalize = ccmode_ccm_finalize, \
+.reset = ccmode_ccm_reset, \
+.custom = (ECB_ENCRYPT) \
+}
+
+/* Use this to statically initialize a ccmode_ccm object for encryption. */
+#define CCMODE_FACTORY_CCM_ENCRYPT(ECB_ENCRYPT) { \
+.size = ccn_sizeof_size(sizeof(struct _ccmode_ccm_key)) + ccn_sizeof_size((ECB_ENCRYPT)->block_size) + ccn_sizeof_size((ECB_ENCRYPT)->size), \
+.nonce_size = ccn_sizeof_size(sizeof(struct _ccmode_ccm_nonce)), \
+.block_size = 1, \
+.init = ccmode_ccm_init, \
+.set_iv = ccmode_ccm_set_iv, \
+.cbcmac = ccmode_ccm_cbcmac, \
+.ccm = ccmode_ccm_encrypt, \
+.finalize = ccmode_ccm_finalize, \
+.reset = ccmode_ccm_reset, \
+.custom = (ECB_ENCRYPT) \
+}
+
+/* Use these function to runtime initialize a ccmode_ccm decrypt object (for
+ example if it's part of a larger structure). For CCM you always pass a
+ ecb encrypt mode implementation of some underlying algorithm as the ecb
+ parameter. */
+CC_INLINE
+void ccmode_factory_ccm_decrypt(struct ccmode_ccm *ccm,
+                                const struct ccmode_ecb *ecb_encrypt) {
+    struct ccmode_ccm ccm_decrypt = CCMODE_FACTORY_CCM_DECRYPT(ecb_encrypt);
+    *ccm = ccm_decrypt;
+}
+
+/* Use these function to runtime initialize a ccmode_ccm encrypt object (for
+ example if it's part of a larger structure). For CCM you always pass a
+ ecb encrypt mode implementation of some underlying algorithm as the ecb
+ parameter. */
+CC_INLINE
+void ccmode_factory_ccm_encrypt(struct ccmode_ccm *ccm,
+                                const struct ccmode_ecb *ecb_encrypt) {
+    struct ccmode_ccm ccm_encrypt = CCMODE_FACTORY_CCM_ENCRYPT(ecb_encrypt);
+    *ccm = ccm_encrypt;
+}
+
+
 void ccmode_ofb_init(const struct ccmode_ofb *ofb, ccofb_ctx *ctx,
-                     unsigned long rawkey_len, const void *rawkey,
+                     size_t rawkey_len, const void *rawkey,
                      const void *iv);
-void ccmode_ofb_crypt(ccofb_ctx *ctx, unsigned long nblocks,
+void ccmode_ofb_crypt(ccofb_ctx *ctx, size_t nbytes,
                       const void *in, void *out);
 
 struct _ccmode_ofb_key {
@@ -434,7 +530,7 @@ struct _ccmode_ofb_key {
  parameter. */
 CC_INLINE
 void ccmode_factory_ofb_crypt(struct ccmode_ofb *ofb,
-                             const struct ccmode_ecb *ecb) {
+                              const struct ccmode_ecb *ecb) {
     struct ccmode_ofb ofb_crypt = CCMODE_FACTORY_OFB_CRYPT(ecb);
     *ofb = ofb_crypt;
 }
@@ -451,7 +547,7 @@ int ccmode_omac_encrypt(ccomac_ctx *ctx, unsigned long nblocks,
  key must point to at least sizeof(CCMODE_OMAC_KEY(ecb)) bytes of free
  storage. */
 void ccmode_omac_init(const struct ccmode_omac *omac, ccomac_ctx *ctx,
-                      cc_size tweak_len, unsigned long rawkey_len,
+                      cc_size tweak_len, size_t rawkey_len,
                       const void *rawkey);
 
 struct _ccmode_omac_key {
@@ -484,7 +580,7 @@ struct _ccmode_omac_key {
  parameter. */
 CC_INLINE
 void ccmode_factory_omac_decrypt(struct ccmode_omac *omac,
-                              const struct ccmode_ecb *ecb) {
+                                 const struct ccmode_ecb *ecb) {
     struct ccmode_omac omac_decrypt = CCMODE_FACTORY_OMAC_DECRYPT(ecb);
     *omac = omac_decrypt;
 }
@@ -495,7 +591,7 @@ void ccmode_factory_omac_decrypt(struct ccmode_omac *omac,
  parameter. */
 CC_INLINE
 void ccmode_factory_omac_encrypt(struct ccmode_omac *omac,
-                              const struct ccmode_ecb *ecb) {
+                                 const struct ccmode_ecb *ecb) {
     struct ccmode_omac omac_encrypt = CCMODE_FACTORY_OMAC_ENCRYPT(ecb);
     *omac = omac_encrypt;
 }
@@ -503,28 +599,34 @@ void ccmode_factory_omac_encrypt(struct ccmode_omac *omac,
 
 /* Function prototypes used by the macros below, do not call directly. */
 void ccmode_xts_init(const struct ccmode_xts *xts, ccxts_ctx *ctx,
-                     unsigned long key_len, const void *data_key,
+                     size_t key_len, const void *data_key,
                      const void *tweak_key);
-void *ccmode_xts_crypt(ccxts_ctx *ctx, unsigned long nblocks,
-                       const void *in, void *out);
-void ccmode_xts_set_tweak(ccxts_ctx *ctx, const void *tweak);
+void *ccmode_xts_crypt(const ccxts_ctx *ctx, ccxts_tweak *tweak,
+                       unsigned long nblocks, const void *in, void *out);
+void ccmode_xts_set_tweak(const ccxts_ctx *ctx, ccxts_tweak *tweak,
+                          const void *iv);
 
 
 struct _ccmode_xts_key {
     const struct ccmode_ecb *ecb;
     const struct ccmode_ecb *ecb_encrypt;
-	// FIPS requires that for XTS that no more that 2^20 AES blocks may be processed for any given
-	// Key, Tweak Key, and tweak combination
-	// the bytes_processed field in the context will accumuate the number of blocks processed and
-	// will fail the encrypt/decrypt if the size is violated.  This counter will be reset to 0
-	// when set_tweak is called.
-	unsigned long  blocks_processed;
+    cc_unit u[];
+};
+
+struct _ccmode_xts_tweak {
+    // FIPS requires that for XTS that no more that 2^20 AES blocks may be processed for any given
+    // Key, Tweak Key, and tweak combination
+    // the bytes_processed field in the context will accumuate the number of blocks processed and
+    // will fail the encrypt/decrypt if the size is violated.  This counter will be reset to 0
+    // when set_tweak is called.
+    unsigned long  blocks_processed;
     cc_unit u[];
 };
 
 /* Use this to statically initialize a ccmode_xts object for decryption. */
 #define CCMODE_FACTORY_XTS_DECRYPT(ECB, ECB_ENCRYPT) { \
-.size = ccn_sizeof_size(sizeof(struct _ccmode_xts_key)) + 2 * ccn_sizeof_size((ECB)->size) + ccn_sizeof_size(16), \
+.size = ccn_sizeof_size(sizeof(struct _ccmode_xts_key)) + 2 * ccn_sizeof_size((ECB)->size), \
+.tweak_size = ccn_sizeof_size(sizeof(struct _ccmode_xts_tweak)) + ccn_sizeof_size(16), \
 .block_size = 16, \
 .init = ccmode_xts_init, \
 .set_tweak = ccmode_xts_set_tweak, \
@@ -535,7 +637,8 @@ struct _ccmode_xts_key {
 
 /* Use this to statically initialize a ccmode_xts object for encryption. */
 #define CCMODE_FACTORY_XTS_ENCRYPT(ECB, ECB_ENCRYPT) { \
-.size = ccn_sizeof_size(sizeof(struct _ccmode_xts_key)) + 2 * ccn_sizeof_size((ECB)->size) + ccn_sizeof_size(16), \
+.size = ccn_sizeof_size(sizeof(struct _ccmode_xts_key)) + 2 * ccn_sizeof_size((ECB)->size), \
+.tweak_size = ccn_sizeof_size(sizeof(struct _ccmode_xts_tweak)) + ccn_sizeof_size(16), \
 .block_size = 16, \
 .init = ccmode_xts_init, \
 .set_tweak = ccmode_xts_set_tweak, \
@@ -550,8 +653,8 @@ struct _ccmode_xts_key {
  parameter. */
 CC_INLINE
 void ccmode_factory_xts_decrypt(struct ccmode_xts *xts,
-                             const struct ccmode_ecb *ecb,
-                             const struct ccmode_ecb *ecb_encrypt) {
+                                const struct ccmode_ecb *ecb,
+                                const struct ccmode_ecb *ecb_encrypt) {
     struct ccmode_xts xts_decrypt = CCMODE_FACTORY_XTS_DECRYPT(ecb, ecb_encrypt);
     *xts = xts_decrypt;
 }
@@ -562,8 +665,8 @@ void ccmode_factory_xts_decrypt(struct ccmode_xts *xts,
  parameter. */
 CC_INLINE
 void ccmode_factory_xts_encrypt(struct ccmode_xts *xts,
-                             const struct ccmode_ecb *ecb,
-                             const struct ccmode_ecb *ecb_encrypt) {
+                                const struct ccmode_ecb *ecb,
+                                const struct ccmode_ecb *ecb_encrypt) {
     struct ccmode_xts xts_encrypt = CCMODE_FACTORY_XTS_ENCRYPT(ecb, ecb_encrypt);
     *xts = xts_encrypt;
 }

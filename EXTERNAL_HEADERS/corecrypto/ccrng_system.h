@@ -19,4 +19,6 @@ struct ccrng_system_state {
 
 int ccrng_system_init(struct ccrng_system_state *rng);
 
+void ccrng_system_done(struct ccrng_system_state *rng);
+
 #endif /* _CORECRYPTO_CCRNG_SYSTEM_H_ */

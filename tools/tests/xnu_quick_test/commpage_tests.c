@@ -190,10 +190,8 @@ int commpage_data_tests( void * the_argp )
 	}
 
 	/* We shouldn't be supporting userspace processor_start/processor_exit on embedded */
-#if !TARGET_OS_EMBEDDED
 	ret = active_cpu_test();
 	if (ret) goto fail;
-#endif /* !TARGET_OS_EMBEDDED */
 #endif /* _COMM_PAGE_ACTIVE_CPUS */
 
 #ifdef _COMM_PAGE_PHYSICAL_CPUS

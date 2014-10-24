@@ -42,6 +42,11 @@
 #include <netinet6/ip6_var.h>
 #include <netinet6/nd6.h>
 
+#if CONFIG_MACF
+#include <sys/kauth.h>
+#include <security/mac_framework.h>
+#endif
+
 SYSCTL_DECL(_net_inet6);	/* Note: Not in any common header. */
 
 SYSCTL_NODE(_net_inet6, OID_AUTO, send, CTLFLAG_RW | CTLFLAG_LOCKED, 0,
@@ -84,6 +89,9 @@ sysctl_cga_parameters SYSCTL_HANDLER_ARGS
 	int error;
 	char *buffer;
 	u_int16_t u16;
+#if CONFIG_MACF
+	kauth_cred_t cred;
+#endif
 
 	namelen = arg2;
 	if (namelen != 0) {
@@ -97,6 +105,16 @@ sysctl_cga_parameters SYSCTL_HANDLER_ARGS
 		    req->newlen);
 		return (EINVAL);
 	}
+
+#if CONFIG_MACF
+	cred = kauth_cred_proc_ref(current_proc());
+	error = mac_system_check_info(cred, "net.inet6.send.cga_parameters");
+	kauth_cred_unref(&cred);
+	if (error != 0) {
+		log(LOG_ERR, "%s: mac_system_check_info denied.\n", __func__);
+		return (EPERM);
+	}
+#endif
 
 	MALLOC(buffer, char *, SYSCTL_CGA_PARAMETERS_BUFFER_SIZE, M_IP6CGA,
 	    M_WAITOK);

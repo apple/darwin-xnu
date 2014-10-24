@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2013 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2014 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -83,7 +83,7 @@
 #include <sys/proc_info.h>
 #include <sys/codesign.h>
 
-#include <kern/lock.h>
+#include <kern/locks.h>
 #include <kern/clock.h>
 #include <kern/thread_call.h>
 #include <kern/sched_prim.h>
@@ -128,8 +128,6 @@ static int kqueue_close(struct fileglob *fg, vfs_context_t ctx);
 static int kqueue_kqfilter(struct fileproc *fp, struct knote *kn,
 	vfs_context_t ctx);
 static int kqueue_drain(struct fileproc *fp, vfs_context_t ctx);
-extern int kqueue_stat(struct fileproc *fp, void  *ub, int isstat64,
-	vfs_context_t ctx);
 
 static const struct fileops kqueueops = {
 	.fo_type = DTYPE_KQUEUE,
@@ -601,6 +599,13 @@ filt_proc(struct knote *kn, long hint)
 		}
 #pragma clang diagnostic pop
 
+
+		/*
+		 * The kernel has a wrapper in place that returns the same data
+		 * as is collected here, in kn_data.  Any changes to how 
+		 * NOTE_EXITSTATUS and NOTE_EXIT_DETAIL are collected
+		 * should also be reflected in the proc_pidnoteexit() wrapper.
+		 */
 		if (event == NOTE_EXIT) {
 			kn->kn_data = 0;
 			if ((kn->kn_sfflags & NOTE_EXITSTATUS) != 0) {
@@ -624,6 +629,9 @@ filt_proc(struct knote *kn, long hint)
 						case P_JETSAM_VMTHRASHING:
 							kn->kn_data |= NOTE_EXIT_MEMORY_VMTHRASHING;
 							break;
+						case P_JETSAM_FCTHRASHING:
+							kn->kn_data |= NOTE_EXIT_MEMORY_FCTHRASHING;
+							break;
 						case P_JETSAM_VNODE:
 							kn->kn_data |= NOTE_EXIT_MEMORY_VNODE;
 							break;
@@ -644,7 +652,6 @@ filt_proc(struct knote *kn, long hint)
 				}
 			}
 		}
-
 	}
 
 	/* atomic check, no locking need when called from above */
@@ -2469,10 +2476,9 @@ kqueue_drain(struct fileproc *fp, __unused vfs_context_t ctx)
 
 /*ARGSUSED*/
 int
-kqueue_stat(struct fileproc *fp, void *ub, int isstat64,  __unused vfs_context_t ctx)
+kqueue_stat(struct kqueue *kq, void *ub, int isstat64, proc_t p)
 {
-
-	struct kqueue *kq = (struct kqueue *)fp->f_data;
+	kqlock(kq);
 	if (isstat64 != 0) {
 		struct stat64 *sb64 = (struct stat64 *)ub;
 
@@ -2481,7 +2487,7 @@ kqueue_stat(struct fileproc *fp, void *ub, int isstat64,  __unused vfs_context_t
 		if (kq->kq_state & KQ_KEV64)
 			sb64->st_blksize = sizeof(struct kevent64_s);
 		else
-			sb64->st_blksize = sizeof(struct kevent);
+			sb64->st_blksize = IS_64BIT_PROCESS(p) ? sizeof(struct user64_kevent) : sizeof(struct user32_kevent);
 		sb64->st_mode = S_IFIFO;
 	} else {
 		struct stat *sb = (struct stat *)ub;
@@ -2491,10 +2497,10 @@ kqueue_stat(struct fileproc *fp, void *ub, int isstat64,  __unused vfs_context_t
 		if (kq->kq_state & KQ_KEV64)
 			sb->st_blksize = sizeof(struct kevent64_s);
 		else
-			sb->st_blksize = sizeof(struct kevent);
+			sb->st_blksize = IS_64BIT_PROCESS(p) ? sizeof(struct user64_kevent) : sizeof(struct user32_kevent);
 		sb->st_mode = S_IFIFO;
 	}
-
+	kqunlock(kq);
 	return (0);
 }
 
@@ -2862,6 +2868,14 @@ knote_free(struct knote *kn)
 #include <sys/sys_domain.h>
 #include <sys/syslog.h>
 
+#ifndef ROUNDUP64
+#define	ROUNDUP64(x) P2ROUNDUP((x), sizeof (u_int64_t))
+#endif
+
+#ifndef ADVANCE64
+#define	ADVANCE64(p, n) (void*)((char *)(p) + ROUNDUP64(n))
+#endif
+
 static lck_grp_attr_t *kev_lck_grp_attr;
 static lck_attr_t *kev_lck_attr;
 static lck_grp_t *kev_lck_grp;
@@ -2897,6 +2911,21 @@ static struct protosw eventsw[] = {
 	.pr_getlock =		event_getlock,
 }
 };
+
+__private_extern__ int kevt_getstat SYSCTL_HANDLER_ARGS;
+__private_extern__ int kevt_pcblist SYSCTL_HANDLER_ARGS;
+
+SYSCTL_NODE(_net_systm, OID_AUTO, kevt,
+	CTLFLAG_RW|CTLFLAG_LOCKED, 0, "Kernel event family");
+
+struct kevtstat kevtstat;
+SYSCTL_PROC(_net_systm_kevt, OID_AUTO, stats,
+    CTLTYPE_STRUCT | CTLFLAG_RD | CTLFLAG_LOCKED, 0, 0,
+    kevt_getstat, "S,kevtstat", "");
+
+SYSCTL_PROC(_net_systm_kevt, OID_AUTO, pcblist,
+	CTLTYPE_STRUCT | CTLFLAG_RD | CTLFLAG_LOCKED, 0, 0,
+	kevt_pcblist, "S,xkevtpcb", "");
 
 static lck_mtx_t *
 event_getlock(struct socket *so, int locktype)
@@ -3007,12 +3036,14 @@ event_sofreelastref(struct socket *so)
 	 */
 	so->so_rcv.sb_flags &= ~SB_UPCALL;
 	so->so_snd.sb_flags &= ~SB_UPCALL;
-	so->so_event = NULL;
+	so->so_event = sonullevent;
 	lck_mtx_unlock(&(ev_pcb->evp_mtx));
 
 	lck_mtx_assert(&(ev_pcb->evp_mtx), LCK_MTX_ASSERT_NOTOWNED);
 	lck_rw_lock_exclusive(kev_rwlock);
 	LIST_REMOVE(ev_pcb, evp_link);
+	kevtstat.kes_pcbcount--;
+	kevtstat.kes_gencnt++;
 	lck_rw_done(kev_rwlock);
 	kev_delete(ev_pcb);
 
@@ -3103,6 +3134,8 @@ kev_attach(struct socket *so, __unused int proto, __unused struct proc *p)
 	so->so_pcb = (caddr_t) ev_pcb;
 	lck_rw_lock_exclusive(kev_rwlock);
 	LIST_INSERT_HEAD(&kern_event_head, ev_pcb, evp_link);
+	kevtstat.kes_pcbcount++;
+	kevtstat.kes_gencnt++;
 	lck_rw_done(kev_rwlock);
 
 	return (error);
@@ -3159,9 +3192,10 @@ kev_msg_post(struct kev_msg *event_msg)
 	 * only
 	 */
 	if (event_msg->vendor_code < min_vendor ||
-	    event_msg->vendor_code > max_vendor)
+	    event_msg->vendor_code > max_vendor) {
+		OSIncrementAtomic64((SInt64 *)&kevtstat.kes_badvendor);
 		return (EINVAL);
-
+	}
 	return (kev_post_msg(event_msg));
 }
 
@@ -3185,13 +3219,15 @@ kev_post_msg(struct kev_msg *event_msg)
 	}
 
 	if (total_size > MLEN) {
+		OSIncrementAtomic64((SInt64 *)&kevtstat.kes_toobig);
 		return (EMSGSIZE);
 	}
 
 	m = m_get(M_DONTWAIT, MT_DATA);
-	if (m == 0)
-	    return (ENOBUFS);
-
+	if (m == 0) {
+		OSIncrementAtomic64((SInt64 *)&kevtstat.kes_nomem);
+		return (ENOMEM);
+	}
 	ev = mtod(m, struct kern_event_msg *);
 	total_size = KEV_MSG_HEADER_SIZE;
 
@@ -3235,8 +3271,10 @@ kev_post_msg(struct kev_msg *event_msg)
 					continue;
 				}
 
-				if ((ev_pcb->evp_subclass_filter != KEV_ANY_SUBCLASS) &&
-				    (ev_pcb->evp_subclass_filter != ev->kev_subclass)) {
+				if ((ev_pcb->evp_subclass_filter !=
+				    KEV_ANY_SUBCLASS) &&
+				    (ev_pcb->evp_subclass_filter !=
+				    ev->kev_subclass)) {
 					lck_mtx_unlock(&ev_pcb->evp_mtx);
 					continue;
 				}
@@ -3245,13 +3283,25 @@ kev_post_msg(struct kev_msg *event_msg)
 
 		m2 = m_copym(m, 0, m->m_len, M_NOWAIT);
 		if (m2 == 0) {
+			OSIncrementAtomic64((SInt64 *)&kevtstat.kes_nomem);
 			m_free(m);
 			lck_mtx_unlock(&ev_pcb->evp_mtx);
 			lck_rw_done(kev_rwlock);
-			return (ENOBUFS);
+			return (ENOMEM);
 		}
-		if (sbappendrecord(&ev_pcb->evp_socket->so_rcv, m2))
+		if (sbappendrecord(&ev_pcb->evp_socket->so_rcv, m2)) {
+			/*
+			 * We use "m" for the socket stats as it would be
+			 * unsafe to use "m2"
+			 */
+			so_inc_recv_data_stat(ev_pcb->evp_socket,
+			    1, m->m_len, SO_TC_BE);
+
 			sorwakeup(ev_pcb->evp_socket);
+			OSIncrementAtomic64((SInt64 *)&kevtstat.kes_posted);
+		} else {
+			OSIncrementAtomic64((SInt64 *)&kevtstat.kes_fullsock);
+		}
 		lck_mtx_unlock(&ev_pcb->evp_mtx);
 	}
 	m_free(m);
@@ -3301,6 +3351,139 @@ kev_control(struct socket *so,
 	return (0);
 }
 
+int
+kevt_getstat SYSCTL_HANDLER_ARGS
+{
+#pragma unused(oidp, arg1, arg2)
+	int error = 0;
+
+	lck_rw_lock_shared(kev_rwlock);
+
+	if (req->newptr != USER_ADDR_NULL) {
+		error = EPERM;
+		goto done;
+	}
+	if (req->oldptr == USER_ADDR_NULL) {
+		req->oldidx = sizeof(struct kevtstat);
+		goto done;
+	}
+
+	error = SYSCTL_OUT(req, &kevtstat,
+	    MIN(sizeof(struct kevtstat), req->oldlen));
+done:
+	lck_rw_done(kev_rwlock);
+
+	return (error);
+}
+
+__private_extern__ int
+kevt_pcblist SYSCTL_HANDLER_ARGS
+{
+#pragma unused(oidp, arg1, arg2)
+	int error = 0;
+	int n, i;
+	struct xsystmgen xsg;
+	void *buf = NULL;
+	size_t item_size = ROUNDUP64(sizeof (struct xkevtpcb)) +
+		ROUNDUP64(sizeof (struct xsocket_n)) +
+		2 * ROUNDUP64(sizeof (struct xsockbuf_n)) +
+		ROUNDUP64(sizeof (struct xsockstat_n));
+	struct kern_event_pcb  *ev_pcb;
+
+	buf = _MALLOC(item_size, M_TEMP, M_WAITOK | M_ZERO);
+	if (buf == NULL)
+		return (ENOMEM);
+
+	lck_rw_lock_shared(kev_rwlock);
+
+	n = kevtstat.kes_pcbcount;
+
+	if (req->oldptr == USER_ADDR_NULL) {
+		req->oldidx = (n + n/8) * item_size;
+		goto done;
+	}
+	if (req->newptr != USER_ADDR_NULL) {
+		error = EPERM;
+		goto done;
+	}
+	bzero(&xsg, sizeof (xsg));
+	xsg.xg_len = sizeof (xsg);
+	xsg.xg_count = n;
+	xsg.xg_gen = kevtstat.kes_gencnt;
+	xsg.xg_sogen = so_gencnt;
+	error = SYSCTL_OUT(req, &xsg, sizeof (xsg));
+	if (error) {
+		goto done;
+	}
+	/*
+	 * We are done if there is no pcb
+	 */
+	if (n == 0) {
+		goto done;
+	}
+
+	i = 0;
+	for (i = 0, ev_pcb = LIST_FIRST(&kern_event_head);
+	    i < n && ev_pcb != NULL;
+	    i++, ev_pcb = LIST_NEXT(ev_pcb, evp_link)) {
+		struct xkevtpcb *xk = (struct xkevtpcb *)buf;
+		struct xsocket_n *xso = (struct xsocket_n *)
+			ADVANCE64(xk, sizeof (*xk));
+		struct xsockbuf_n *xsbrcv = (struct xsockbuf_n *)
+			ADVANCE64(xso, sizeof (*xso));
+		struct xsockbuf_n *xsbsnd = (struct xsockbuf_n *)
+			ADVANCE64(xsbrcv, sizeof (*xsbrcv));
+		struct xsockstat_n *xsostats = (struct xsockstat_n *)
+			ADVANCE64(xsbsnd, sizeof (*xsbsnd));
+
+		bzero(buf, item_size);
+
+		lck_mtx_lock(&ev_pcb->evp_mtx);
+
+		xk->kep_len = sizeof(struct xkevtpcb);
+		xk->kep_kind = XSO_EVT;
+		xk->kep_evtpcb = (uint64_t)VM_KERNEL_ADDRPERM(ev_pcb);
+		xk->kep_vendor_code_filter = ev_pcb->evp_vendor_code_filter;
+		xk->kep_class_filter = ev_pcb->evp_class_filter;
+		xk->kep_subclass_filter = ev_pcb->evp_subclass_filter;
+
+		sotoxsocket_n(ev_pcb->evp_socket, xso);
+		sbtoxsockbuf_n(ev_pcb->evp_socket ?
+			&ev_pcb->evp_socket->so_rcv : NULL, xsbrcv);
+		sbtoxsockbuf_n(ev_pcb->evp_socket ?
+			&ev_pcb->evp_socket->so_snd : NULL, xsbsnd);
+		sbtoxsockstat_n(ev_pcb->evp_socket, xsostats);
+
+		lck_mtx_unlock(&ev_pcb->evp_mtx);
+
+		error = SYSCTL_OUT(req, buf, item_size);
+	}
+
+	if (error == 0) {
+		/*
+		 * Give the user an updated idea of our state.
+		 * If the generation differs from what we told
+		 * her before, she knows that something happened
+		 * while we were processing this request, and it
+		 * might be necessary to retry.
+		 */
+		bzero(&xsg, sizeof (xsg));
+		xsg.xg_len = sizeof (xsg);
+		xsg.xg_count = n;
+		xsg.xg_gen = kevtstat.kes_gencnt;
+		xsg.xg_sogen = so_gencnt;
+		error = SYSCTL_OUT(req, &xsg, sizeof (xsg));
+		if (error) {
+			goto done;
+		}
+	}
+
+done:
+	lck_rw_done(kev_rwlock);
+
+	return (error);
+}
+
 #endif /* SOCKETS */
 
 
@@ -3309,7 +3492,6 @@ fill_kqueueinfo(struct kqueue *kq, struct kqueue_info * kinfo)
 {
 	struct vinfo_stat * st;
 
-	/* No need for the funnel as fd is kept alive */
 	st = &kinfo->kq_stat;
 
 	st->vst_size = kq->kq_count;

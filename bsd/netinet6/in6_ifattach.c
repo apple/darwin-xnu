@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2003-2013 Apple Inc. All rights reserved.
+ * Copyright (c) 2003-2014 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -65,7 +65,7 @@
 #include <sys/syslog.h>
 #include <libkern/crypto/sha1.h>
 #include <libkern/OSAtomic.h>
-#include <kern/lock.h>
+#include <kern/locks.h>
 
 #include <net/if.h>
 #include <net/if_dl.h>
@@ -181,7 +181,7 @@ in6_generate_tmp_iid(
 	/* XXX assumption on the size of IFID */
 	bcopy(seed1, &seed[8], 8);
 
-	if (0) {		/* for debugging purposes only */
+	if ((0)) {		/* for debugging purposes only */
 		int i;
 
 		printf("%s: new randomized ID from: ", __func__);
@@ -226,7 +226,7 @@ in6_generate_tmp_iid(
 	 */
 	bcopy(&digest[8], seed0, 8);
 
-	if (0) {		/* for debugging purposes only */
+	if ((0)) {		/* for debugging purposes only */
 		int i;
 
 		printf("to: ");
@@ -526,7 +526,7 @@ in6_ifattach_linklocal(struct ifnet *ifp, struct in6_aliasreq *ifra)
 		}
 	}
 
-	in6_post_msg(ifp, KEV_INET6_NEW_LL_ADDR, ia);
+	in6_post_msg(ifp, KEV_INET6_NEW_LL_ADDR, ia, NULL);
 	IFA_REMREF(&ia->ia_ifa);
 
 	/* Drop use count held above during lookup/add */
@@ -551,7 +551,7 @@ in6_ifattach_loopback(
 	 * in6_update_ifa() does not use ifra_name, but we accurately set it
 	 * for safety.
 	 */
-	strncpy(ifra.ifra_name, if_name(ifp), sizeof (ifra.ifra_name));
+	strlcpy(ifra.ifra_name, if_name(ifp), sizeof (ifra.ifra_name));
 
 	ifra.ifra_prefixmask.sin6_len = sizeof (struct sockaddr_in6);
 	ifra.ifra_prefixmask.sin6_family = AF_INET6;
@@ -575,9 +575,6 @@ in6_ifattach_loopback(
 
 	/* we don't need to perform DAD on loopback interfaces. */
 	ifra.ifra_flags |= IN6_IFF_NODAD;
-
-	/* skip registration to the prefix list. XXX should be temporary. */
-	ifra.ifra_flags |= IN6_IFF_NOPFX;
 
 	/* add the new interface address */
 	error = in6_update_ifa(ifp, &ifra, 0, &ia);
@@ -623,7 +620,7 @@ in6_nigroup(
 	if (p - name > sizeof (n) - 1)
 		return (-1);	/* label too long */
 	l = p - name;
-	strncpy(n, name, l);
+	strlcpy(n, name, l);
 	n[(int)l] = '\0';
 	for (q = (u_char *) n; *q; q++) {
 		if ('A' <= *q && *q <= 'Z')
@@ -801,7 +798,7 @@ in6_ifattach_aliasreq(struct ifnet *ifp, struct ifnet *altifp,
 	 * in6_update_ifa() does not use ifra_name, but we accurately set it
 	 * for safety.
 	 */
-	strncpy(ifra.ifra_name, if_name(ifp), sizeof (ifra.ifra_name));
+	strlcpy(ifra.ifra_name, if_name(ifp), sizeof (ifra.ifra_name));
 
 	/* Initialize the IPv6 interface address in our in6_aliasreq block */
 	if ((ifp->if_eflags & IFEF_NOAUTOIPV6LL) != 0 && ifra0 != NULL) {
@@ -909,7 +906,7 @@ in6_ifattach_llstartreq(struct ifnet *ifp, struct in6_llstartreq *llsr)
 	}
 
 	bzero(&ifra, sizeof (ifra));
-	strncpy(ifra.ifra_name, if_name(ifp), sizeof (ifra.ifra_name));
+	strlcpy(ifra.ifra_name, if_name(ifp), sizeof (ifra.ifra_name));
 
 	ifra.ifra_addr.sin6_family = AF_INET6;
 	ifra.ifra_addr.sin6_len = sizeof (struct sockaddr_in6);

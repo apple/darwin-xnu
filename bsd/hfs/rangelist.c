@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2001, 2006-2008 Apple Inc. All rights reserved.
+ * Copyright (c) 2001-2014 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -97,20 +97,18 @@ rl_add(off_t start, off_t end, struct rl_head *rangelist)
 	switch (ovcase) {
 		case RL_NOOVERLAP: /* 0: no overlap */
 			/*
-				* If the list was empty 'prev' is undisturbed and 'overlap' == NULL;
-				* if the search hit a non-overlapping entry PAST the start of the
-				* new range, 'prev' points to ITS predecessor, and 'overlap' points
-				* to that entry:
-				*/
+			 * overlap points to the entry we should insert before, or
+			 * if NULL, we should insert at the end.
+			 */
 			MALLOC(range, struct rl_entry *, sizeof(*range), M_TEMP, M_WAITOK);
 			range->rl_start = start;
 			range->rl_end = end;
 			
 			/* Link in the new range: */
 			if (overlap) {
-				TAILQ_INSERT_AFTER(rangelist, overlap, range, rl_link);
+				TAILQ_INSERT_BEFORE(overlap, range, rl_link);
 			} else {
-				TAILQ_INSERT_HEAD(rangelist, range, rl_link);
+				TAILQ_INSERT_TAIL(rangelist, range, rl_link);
 			}
 			
 			/* Check to see if any ranges can be combined (possibly including the immediately
@@ -314,13 +312,12 @@ rl_scan_from(struct rl_head *rangelist,
 				return RL_NOOVERLAP;
 			};
 			
-			range = TAILQ_NEXT(range, rl_link);
 			/* Check the other entries in the list: */
-			if (range == NULL) {
-				return RL_NOOVERLAP;
-			}
-			
+			range = TAILQ_NEXT(range, rl_link);
 			*overlap = range;
+			if (range == NULL)
+				return RL_NOOVERLAP;
+			
 			continue;
 		}
 		
@@ -361,8 +358,6 @@ rl_scan_from(struct rl_head *rangelist,
 		panic("hfs: rl_scan_from: unhandled overlap condition?!");
 #endif
 	}
-        
-	return RL_NOOVERLAP;
 }
 
 
@@ -418,6 +413,14 @@ rl_collapse_neighbors(struct rl_head *rangelist, struct rl_entry *range)
     rl_collapse_backwards(rangelist, range);
 }
 
+void rl_remove_all(struct rl_head *rangelist)
+{
+	struct rl_entry *r, *nextr;
+	TAILQ_FOREACH_SAFE(r, rangelist, rl_link, nextr)
+		FREE(r, M_TEMP);
+	TAILQ_INIT(rangelist);
+}
+
 #else /* not HFS - temp workaround until 4277828 is fixed */
 /* stubs for exported routines that aren't present when we build kernel without HFS */
 
@@ -446,6 +449,10 @@ void rl_remove(__unused off_t start, __unused off_t end, __unused void *rangelis
 int rl_scan(__unused void *rangelist, __unused off_t start, __unused off_t end, __unused void **overlap)
 {
 	return(0);
+}
+
+void rl_remove_all(struct rl_head *rangelist)
+{
 }
 
 #endif /* HFS */

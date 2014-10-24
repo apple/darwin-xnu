@@ -1,7 +1,5 @@
 #include <AvailabilityMacros.h>
-#ifdef AVAILABLE_MAC_OS_X_VERSION_10_5_AND_LATER
-#include </System/Library/Frameworks/System.framework/PrivateHeaders/mach/thread_policy.h>
-#endif
+#include <mach/thread_policy.h>
 
 #include <pthread.h>
 #include <stdio.h>
@@ -328,7 +326,6 @@ void setup_client_ports(struct port_args *ports)
 
 static void
 thread_setup(int tag) {
-#ifdef AVAILABLE_MAC_OS_X_VERSION_10_5_AND_LATER
 	kern_return_t			ret;
         thread_extended_policy_data_t   epolicy;
         thread_affinity_policy_data_t   policy;
@@ -352,7 +349,6 @@ thread_setup(int tag) {
                 if (ret != KERN_SUCCESS)
                         printf("thread_policy_set(THREAD_AFFINITY_POLICY) returned %d\n", ret);
         }
-#endif
 }
 
 void *

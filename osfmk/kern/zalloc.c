@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2011 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2014 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -197,6 +197,27 @@
  *
  */
 
+/* Returns TRUE if we rolled over the counter at factor */
+static inline boolean_t
+sample_counter(volatile uint32_t * count_p, uint32_t factor)
+{
+	uint32_t old_count, new_count;
+	boolean_t rolled_over;
+
+	do {
+		new_count = old_count = *count_p;
+
+		if (++new_count >= factor) {
+			rolled_over = TRUE;
+			new_count = 0;
+		} else {
+			rolled_over = FALSE;
+		}
+
+	} while (!OSCompareAndSwap(old_count, new_count, count_p));
+
+	return rolled_over;
+}
 
 #if defined(__LP64__)
 #define ZP_POISON       0xdeadbeefdeadbeef
@@ -205,6 +226,7 @@
 #endif
 
 #define ZP_DEFAULT_SAMPLING_FACTOR 16
+#define ZP_DEFAULT_SCALE_FACTOR 4
 
 /*
  *  A zp_factor of 0 indicates zone poisoning is disabled,
@@ -215,6 +237,9 @@
 
 /* set by zp-factor=N boot arg, zero indicates non-tiny poisoning disabled */
 uint32_t        zp_factor               = 0;
+
+/* set by zp-scale=N boot arg, scales zp_factor by zone size */
+uint32_t        zp_scale                = 0;
 
 /* set in zp_init, zero indicates -no-zp boot-arg */
 vm_size_t       zp_tiny_zone_limit      = 0;
@@ -251,6 +276,7 @@ zp_init(void)
 	zp_tiny_zone_limit = (vm_size_t) cpu_info.cache_line_size;
 
 	zp_factor = ZP_DEFAULT_SAMPLING_FACTOR;
+	zp_scale  = ZP_DEFAULT_SCALE_FACTOR;
 
 	//TODO: Bigger permutation?
 	/*
@@ -282,6 +308,11 @@ zp_init(void)
 	/* zp-factor=XXXX: override how often to poison freed zone elements */
 	if (PE_parse_boot_argn("zp-factor", &zp_factor, sizeof(zp_factor))) {
 		printf("Zone poisoning factor override: %u\n", zp_factor);
+	}
+
+	/* zp-scale=XXXX: override how much zone size scales zp-factor by */
+	if (PE_parse_boot_argn("zp-scale", &zp_scale, sizeof(zp_scale))) {
+		printf("Zone poisoning scale factor override: %u\n", zp_scale);
 	}
 
 	/* Initialize backup pointer random cookie for unpoisoned elements */
@@ -448,17 +479,21 @@ is_sane_zone_element(zone_t      zone,
 /* Someone wrote to freed memory. */
 static inline void /* noreturn */
 zone_element_was_modified_panic(zone_t        zone,
+                                vm_offset_t   element,
                                 vm_offset_t   found,
                                 vm_offset_t   expected,
                                 vm_offset_t   offset)
 {
-	panic("a freed zone element has been modified: expected %p but found %p, bits changed %p, at offset %d of %d in zone: %s",
+	panic("a freed zone element has been modified in zone %s: expected %p but found %p, bits changed %p, at offset %d of %d in element %p, cookies %p %p",
+	                 zone->zone_name,
 	      (void *)   expected,
 	      (void *)   found,
 	      (void *)   (expected ^ found),
 	      (uint32_t) offset,
 	      (uint32_t) zone->elem_size,
-	                 zone->zone_name);
+	      (void *)   element,
+	      (void *)   zp_nopoison_cookie,
+	      (void *)   zp_poisoned_cookie);
 }
 
 /*
@@ -469,6 +504,7 @@ zone_element_was_modified_panic(zone_t        zone,
  */
 static void /* noreturn */
 backup_ptr_mismatch_panic(zone_t        zone,
+                          vm_offset_t   element,
                           vm_offset_t   primary,
                           vm_offset_t   backup)
 {
@@ -477,6 +513,14 @@ backup_ptr_mismatch_panic(zone_t        zone,
 	boolean_t   sane_backup;
 	boolean_t   sane_primary = is_sane_zone_element(zone, primary);
 	boolean_t   element_was_poisoned = (backup & 0x1) ? TRUE : FALSE;
+
+#if defined(__LP64__)
+	/* We can inspect the tag in the upper bits for additional confirmation */
+	if ((backup & 0xFFFFFF0000000000) == 0xFACADE0000000000)
+		element_was_poisoned = TRUE;
+	else if ((backup & 0xFFFFFF0000000000) == 0xC0FFEE0000000000)
+		element_was_poisoned = FALSE;
+#endif
 
 	if (element_was_poisoned) {
 		likely_backup = backup ^ zp_poisoned_cookie;
@@ -488,11 +532,12 @@ backup_ptr_mismatch_panic(zone_t        zone,
 
 	/* The primary is definitely the corrupted one */
 	if (!sane_primary && sane_backup)
-		zone_element_was_modified_panic(zone, primary, likely_backup, 0);
+		zone_element_was_modified_panic(zone, element, primary, likely_backup, 0);
 
 	/* The backup is definitely the corrupted one */
 	if (sane_primary && !sane_backup)
-		zone_element_was_modified_panic(zone, backup, primary,
+		zone_element_was_modified_panic(zone, element, backup,
+		                                (primary ^ (element_was_poisoned ? zp_poisoned_cookie : zp_nopoison_cookie)),
 		                                zone->elem_size - sizeof(vm_offset_t));
 
 	/*
@@ -502,10 +547,10 @@ backup_ptr_mismatch_panic(zone_t        zone,
 	 * primary pointer has been overwritten with a sane but incorrect address.
 	 */
 	if (sane_primary && sane_backup)
-		zone_element_was_modified_panic(zone, primary, likely_backup, 0);
+		zone_element_was_modified_panic(zone, element, primary, likely_backup, 0);
 
 	/* Neither are sane, so just guess. */
-	zone_element_was_modified_panic(zone, primary, likely_backup, 0);
+	zone_element_was_modified_panic(zone, element, primary, likely_backup, 0);
 }
 
 
@@ -532,6 +577,7 @@ append_zone_element(zone_t                    zone,
 		*backup = new_next ^ zp_poisoned_cookie;
 	else
 		backup_ptr_mismatch_panic(zone,
+		                          (vm_offset_t) tail,
 		                          old_next,
 		                          old_backup);
 
@@ -563,11 +609,11 @@ add_list_to_zone(zone_t                    zone,
 /*
  * Adds the element to the head of the zone's free list
  * Keeps a backup next-pointer at the end of the element
- * Poisons the element with ZP_POISON every zp_factor frees
  */
 static inline void
 free_to_zone(zone_t      zone,
-             vm_offset_t element)
+             vm_offset_t element,
+             boolean_t   poison)
 {
 	vm_offset_t old_head;
 	struct zone_page_metadata *page_meta;
@@ -592,25 +638,6 @@ free_to_zone(zone_t      zone,
 	if (__improbable(!is_sane_zone_element(zone, element)))
 		panic("zfree: freeing invalid pointer %p to zone %s\n",
 		      (void *) element, zone->zone_name);
-
-	boolean_t poison = FALSE;
-
-	/* Always poison tiny zones' elements (limit is 0 if -no-zp is set) */
-	if (zone->elem_size <= zp_tiny_zone_limit)
-		poison = TRUE;
-	else if (zp_factor != 0 && ++zone->zp_count >= zp_factor) {
-		/* Poison zone elements periodically */
-		zone->zp_count = 0;
-		poison = TRUE;
-	}
-
-	if (poison) {
-		/* memset_pattern{4|8} could help make this faster: <rdar://problem/4662004> */
-		vm_offset_t *element_cursor = primary + 1;
-
-		for ( ; element_cursor < backup; element_cursor++)
-			*element_cursor = ZP_POISON;
-	}
 
 	/*
 	 * Always write a redundant next pointer
@@ -657,10 +684,13 @@ free_to_zone(zone_t      zone,
  * and verifies that a poisoned element hasn't been modified.
  */
 static inline vm_offset_t
-try_alloc_from_zone(zone_t zone)
+try_alloc_from_zone(zone_t zone,
+                    boolean_t* check_poison)
 {
 	vm_offset_t  element;
 	struct zone_page_metadata *page_meta;
+
+	*check_poison = FALSE;
 
 	/* if zone is empty, bail */
 	if (zone->use_page_list) {
@@ -704,7 +734,7 @@ try_alloc_from_zone(zone_t zone)
 	 * should have been, and print it appropriately
 	 */
 	if (__improbable(!is_sane_zone_element(zone, next_element)))
-		backup_ptr_mismatch_panic(zone, next_element, next_element_backup);
+		backup_ptr_mismatch_panic(zone, element, next_element, next_element_backup);
 
 	/* Check the backup pointer for the regular cookie */
 	if (__improbable(next_element != (next_element_backup ^ zp_nopoison_cookie))) {
@@ -712,20 +742,12 @@ try_alloc_from_zone(zone_t zone)
 		/* Check for the poisoned cookie instead */
 		if (__improbable(next_element != (next_element_backup ^ zp_poisoned_cookie)))
 			/* Neither cookie is valid, corruption has occurred */
-			backup_ptr_mismatch_panic(zone, next_element, next_element_backup);
+			backup_ptr_mismatch_panic(zone, element, next_element, next_element_backup);
 
 		/*
-		 * Element was marked as poisoned, so check its integrity,
-		 * skipping the primary and backup pointers at the beginning and end.
+		 * Element was marked as poisoned, so check its integrity before using it.
 		 */
-		vm_offset_t *element_cursor = primary + 1;
-
-		for ( ; element_cursor < backup ; element_cursor++)
-			if (__improbable(*element_cursor != ZP_POISON))
-				zone_element_was_modified_panic(zone,
-				                                *element_cursor,
-				                                ZP_POISON,
-				                                ((vm_offset_t)element_cursor) - element);
+		*check_poison = TRUE;
 	}
 
 	if (zone->use_page_list) {
@@ -742,13 +764,6 @@ try_alloc_from_zone(zone_t zone)
 					(void *)next_element, (void *)element, zone->zone_name);
 		}
 	}
-
-	/*
-	 * Clear out the old next pointer and backup to avoid leaking the cookie
-	 * and so that only values on the freelist have a valid cookie
-	 */
-	*primary = ZP_POISON;
-	*backup  = ZP_POISON;
 
 	/* Remove this element from the free list */
 	if (zone->use_page_list) {
@@ -1968,7 +1983,7 @@ zcram(
 					 * the "zone_zone" variable already.
 					 */
 				} else {
-					free_to_zone(zone, newmem + pos_in_page);
+					free_to_zone(zone, newmem + pos_in_page, FALSE);
 				}
 				zone->cur_size += elem_size;
 			}
@@ -1979,7 +1994,7 @@ zcram(
 			if (newmem == (vm_offset_t)zone) {
 				/* Don't free zone_zone zone */
 			} else {
-				free_to_zone(zone, newmem);
+				free_to_zone(zone, newmem, FALSE);
 			}
 			if (from_zm)
 				zone_page_alloc(newmem, elem_size);
@@ -2179,6 +2194,19 @@ zone_init(
 	zone_map_min_address = zone_min;
 	zone_map_max_address = zone_max;
 
+#if defined(__LP64__)
+	/*
+	 * ensure that any vm_page_t that gets created from
+	 * the vm_page zone can be packed properly (see vm_page.h
+	 * for the packing requirements
+	 */
+	if (VM_PAGE_UNPACK_PTR(VM_PAGE_PACK_PTR(zone_map_min_address)) != (vm_page_t)zone_map_min_address)
+		panic("VM_PAGE_PACK_PTR failed on zone_map_min_address - %p", (void *)zone_map_min_address);
+
+	if (VM_PAGE_UNPACK_PTR(VM_PAGE_PACK_PTR(zone_map_max_address)) != (vm_page_t)zone_map_max_address)
+		panic("VM_PAGE_PACK_PTR failed on zone_map_max_address - %p", (void *)zone_map_max_address);
+#endif
+
 	zone_pages = (unsigned int)atop_kernel(zone_max - zone_min);
 	zone_page_table_used_size = sizeof(zone_page_table);
 
@@ -2280,10 +2308,11 @@ extern volatile SInt32 kfree_nop_count;
 /*
  *	zalloc returns an element from the specified zone.
  */
-void *
-zalloc_canblock(
+static void *
+zalloc_internal(
 	zone_t	zone,
-	boolean_t canblock)
+	boolean_t canblock,
+	boolean_t nopagewait)
 {
 	vm_offset_t	addr = 0;
 	kern_return_t	retval;
@@ -2294,6 +2323,7 @@ zalloc_canblock(
 	boolean_t	did_gzalloc = FALSE;
 #endif
 	thread_t thr = current_thread();
+	boolean_t       check_poison = FALSE;
 
 #if CONFIG_ZLEAKS
 	uint32_t	zleak_tracedepth = 0;  /* log this allocation if nonzero */
@@ -2312,24 +2342,21 @@ zalloc_canblock(
 	if (__improbable(DO_LOGGING(zone)))
 	        numsaved = OSBacktrace((void*) zbt, MAX_ZTRACE_DEPTH);
 
-	lock_zone(zone);
-
-	
 #if CONFIG_ZLEAKS
-	/* 
+	/*
 	 * Zone leak detection: capture a backtrace every zleak_sample_factor
-	 * allocations in this zone. 
+	 * allocations in this zone.
 	 */
-	if (zone->zleak_on && (++zone->zleak_capture >= zleak_sample_factor)) {
-		zone->zleak_capture = 0;
-		
+	if (__improbable(zone->zleak_on && sample_counter(&zone->zleak_capture, zleak_sample_factor) == TRUE)) {
 		/* Avoid backtracing twice if zone logging is on */
-		if (numsaved == 0 )
+		if (numsaved == 0)
 			zleak_tracedepth = fastbacktrace(zbt, MAX_ZTRACE_DEPTH);
 		else
 			zleak_tracedepth = numsaved;
 	}
 #endif /* CONFIG_ZLEAKS */
+
+	lock_zone(zone);
 
 	if (zone->async_prio_refill && zone->zone_replenish_thread) {
 		    do {
@@ -2363,7 +2390,7 @@ zalloc_canblock(
 	}
 	
 	if (__probable(addr == 0))
-		addr = try_alloc_from_zone(zone);
+		addr = try_alloc_from_zone(zone, &check_poison);
 
 
 	while ((addr == 0) && canblock) {
@@ -2423,7 +2450,7 @@ zalloc_canblock(
 
 			for (;;) {
 				int	zflags = KMA_KOBJECT|KMA_NOPAGEWAIT;
-				
+
 				if (vm_pool_low() || retry >= 1)
 					alloc_size = 
 						round_page(zone->elem_size);
@@ -2496,17 +2523,19 @@ zalloc_canblock(
 				zone->waiting = FALSE;
 				zone_wakeup(zone);
 			}
-			addr = try_alloc_from_zone(zone);
+			addr = try_alloc_from_zone(zone, &check_poison);
 			if (addr == 0 &&
-				retval == KERN_RESOURCE_SHORTAGE) {
+			    retval == KERN_RESOURCE_SHORTAGE) {
+				if (nopagewait == TRUE)
+					break;	/* out of the main while loop */
 				unlock_zone(zone);
-				
+
 				VM_PAGE_WAIT();
 				lock_zone(zone);
 			}
 		}
 		if (addr == 0)
-			addr = try_alloc_from_zone(zone);
+			addr = try_alloc_from_zone(zone, &check_poison);
 	}
 
 #if CONFIG_ZLEAKS
@@ -2523,12 +2552,12 @@ zalloc_canblock(
 #endif /* CONFIG_ZLEAKS */			
 			
 			
-	if ((addr == 0) && !canblock && (zone->async_pending == FALSE) && (zone->no_callout == FALSE) && (zone->exhaustible == FALSE) && (!vm_pool_low())) {
+	if ((addr == 0) && (!canblock || nopagewait) && (zone->async_pending == FALSE) && (zone->no_callout == FALSE) && (zone->exhaustible == FALSE) && (!vm_pool_low())) {
 		zone->async_pending = TRUE;
 		unlock_zone(zone);
 		thread_call_enter(&call_async_alloc);
 		lock_zone(zone);
-		addr = try_alloc_from_zone(zone);
+		addr = try_alloc_from_zone(zone, &check_poison);
 	}
 
 	/*
@@ -2541,14 +2570,43 @@ zalloc_canblock(
 		btlog_add_entry(zlog_btlog, (void *)addr, ZOP_ALLOC, (void **)zbt, numsaved);
 	}
 
+	vm_offset_t     inner_size = zone->elem_size;
+	
 #if	ZONE_DEBUG
 	if (!did_gzalloc && addr && zone_debug_enabled(zone)) {
 		enqueue_tail(&zone->active_zones, (queue_entry_t)addr);
 		addr += ZONE_DEBUG_OFFSET;
+		inner_size -= ZONE_DEBUG_OFFSET;
 	}
 #endif
 
 	unlock_zone(zone);
+
+	if (__improbable(check_poison && addr)) {
+		vm_offset_t *element_cursor  = ((vm_offset_t *) addr) + 1;
+		vm_offset_t *backup  = get_backup_ptr(inner_size, (vm_offset_t *) addr);
+
+		for ( ; element_cursor < backup ; element_cursor++)
+			if (__improbable(*element_cursor != ZP_POISON))
+				zone_element_was_modified_panic(zone,
+				                                addr,
+				                                *element_cursor,
+				                                ZP_POISON,
+				                                ((vm_offset_t)element_cursor) - addr);
+	}
+
+	if (addr) {
+		/*
+		 * Clear out the old next pointer and backup to avoid leaking the cookie
+		 * and so that only values on the freelist have a valid cookie
+		 */
+
+		vm_offset_t *primary  = (vm_offset_t *) addr;
+		vm_offset_t *backup   = get_backup_ptr(inner_size, primary);
+
+		*primary = ZP_POISON;
+		*backup  = ZP_POISON;
+	}
 
 	TRACE_MACHLEAKS(ZALLOC_CODE, ZALLOC_CODE_2, zone->elem_size, addr);
 
@@ -2570,18 +2628,29 @@ zalloc_canblock(
 
 
 void *
-zalloc(
-       register zone_t zone)
+zalloc(zone_t zone)
 {
-  return( zalloc_canblock(zone, TRUE) );
+	return (zalloc_internal(zone, TRUE, FALSE));
 }
 
 void *
-zalloc_noblock(
-	       register zone_t zone)
+zalloc_noblock(zone_t zone)
 {
-  return( zalloc_canblock(zone, FALSE) );
+	return (zalloc_internal(zone, FALSE, FALSE));
 }
+
+void *
+zalloc_nopagewait(zone_t zone)
+{
+	return (zalloc_internal(zone, TRUE, TRUE));
+}
+
+void *
+zalloc_canblock(zone_t zone, boolean_t canblock)
+{
+	return (zalloc_internal(zone, canblock, FALSE));
+}
+
 
 void
 zalloc_async(
@@ -2636,6 +2705,7 @@ zget(
 	register zone_t	zone)
 {
 	vm_offset_t	addr;
+	boolean_t       check_poison = FALSE;
 	
 #if CONFIG_ZLEAKS
 	uintptr_t	zbt[MAX_ZTRACE_DEPTH];		/* used for zone leak detection */
@@ -2644,24 +2714,27 @@ zget(
 
 	assert( zone != ZONE_NULL );
 
-	if (!lock_try_zone(zone))
-		return NULL;
-	
 #if CONFIG_ZLEAKS
 	/*
 	 * Zone leak detection: capture a backtrace
 	 */
-	if (zone->zleak_on && (++zone->zleak_capture >= zleak_sample_factor)) {
-		zone->zleak_capture = 0;
+	if (__improbable(zone->zleak_on && sample_counter(&zone->zleak_capture, zleak_sample_factor) == TRUE)) {
 		zleak_tracedepth = fastbacktrace(zbt, MAX_ZTRACE_DEPTH);
 	}
 #endif /* CONFIG_ZLEAKS */
 
-	addr = try_alloc_from_zone(zone);
+	if (!lock_try_zone(zone))
+		return NULL;
+	
+	addr = try_alloc_from_zone(zone, &check_poison);
+
+	vm_offset_t     inner_size = zone->elem_size;
+	
 #if	ZONE_DEBUG
 	if (addr && zone_debug_enabled(zone)) {
 		enqueue_tail(&zone->active_zones, (queue_entry_t)addr);
 		addr += ZONE_DEBUG_OFFSET;
+		inner_size -= ZONE_DEBUG_OFFSET;
 	}
 #endif	/* ZONE_DEBUG */
 	
@@ -2679,6 +2752,31 @@ zget(
 #endif /* CONFIG_ZLEAKS */
 	
 	unlock_zone(zone);
+
+	if (__improbable(check_poison && addr)) {
+		vm_offset_t *element_cursor  = ((vm_offset_t *) addr) + 1;
+		vm_offset_t *backup  = get_backup_ptr(inner_size, (vm_offset_t *) addr);
+
+		for ( ; element_cursor < backup ; element_cursor++)
+			if (__improbable(*element_cursor != ZP_POISON))
+				zone_element_was_modified_panic(zone,
+				                                addr,
+				                                *element_cursor,
+				                                ZP_POISON,
+				                                ((vm_offset_t)element_cursor) - addr);
+	}
+
+	if (addr) {
+		/*
+		 * Clear out the old next pointer and backup to avoid leaking the cookie
+		 * and so that only values on the freelist have a valid cookie
+		 */
+		vm_offset_t *primary  = (vm_offset_t *) addr;
+		vm_offset_t *backup   = get_backup_ptr(inner_size, primary);
+
+		*primary = ZP_POISON;
+		*backup  = ZP_POISON;
+	}
 
 	return((void *) addr);
 }
@@ -2747,6 +2845,7 @@ zfree(
 	uintptr_t	zbt[MAX_ZTRACE_DEPTH];			/* only used if zone logging is enabled via boot-args */
 	int		numsaved = 0;
 	boolean_t	gzfreed = FALSE;
+	boolean_t       poison = FALSE;
 
 	assert(zone != ZONE_NULL);
 
@@ -2818,6 +2917,41 @@ zfree(
 		return;
 	}
 
+	if ((zp_factor != 0 || zp_tiny_zone_limit != 0) && !gzfreed) {
+		/*
+		 * Poison the memory before it ends up on the freelist to catch
+		 * use-after-free and use of uninitialized memory
+		 *
+		 * Always poison tiny zones' elements (limit is 0 if -no-zp is set)
+		 * Also poison larger elements periodically
+		 */
+
+		vm_offset_t     inner_size = zone->elem_size;
+
+#if	ZONE_DEBUG
+		if (!gzfreed && zone_debug_enabled(zone)) {
+			inner_size -= ZONE_DEBUG_OFFSET;
+		}
+#endif
+		uint32_t sample_factor = zp_factor + (((uint32_t)inner_size) >> zp_scale);
+
+		if (inner_size <= zp_tiny_zone_limit)
+			poison = TRUE;
+		else if (zp_factor != 0 && sample_counter(&zone->zp_count, sample_factor) == TRUE)
+			poison = TRUE;
+
+		if (__improbable(poison)) {
+
+			/* memset_pattern{4|8} could help make this faster: <rdar://problem/4662004> */
+			/* Poison everything but primary and backup */
+			vm_offset_t *element_cursor  = ((vm_offset_t *) elem) + 1;
+			vm_offset_t *backup   = get_backup_ptr(inner_size, (vm_offset_t *)elem);
+
+			for ( ; element_cursor < backup; element_cursor++)
+				*element_cursor = ZP_POISON;
+		}
+	}
+
 	lock_zone(zone);
 
 	/*
@@ -2867,7 +3001,7 @@ zfree(
 	}
 
 	if (__probable(!gzfreed))
-		free_to_zone(zone, elem);
+		free_to_zone(zone, elem, poison);
 
 #if MACH_ASSERT
 	if (zone->count < 0)

@@ -14,10 +14,11 @@
 #include <string.h>
 #include <stdint.h>
 
-#if KERNEL
+#if CC_KERNEL
 #include <kern/assert.h>
 #else
 #include <assert.h>
+#include <stdio.h>
 #endif
 
 /* Declare a struct element with a guarenteed alignment of _alignment_.
@@ -37,12 +38,22 @@
 #define cc_ctx_decl(_type_, _size_, _name_)  \
     _type_ _name_[cc_ctx_n(_type_, _size_)]
 
+#if CC_HAS_BZERO
 #define cc_zero(_size_,_data_) bzero((_data_), (_size_))
+#else
+/* Alternate version if you don't have bzero. */
+#define cc_zero(_size_,_data_) memset((_data_),0 ,(_size_))
+#endif
+
+#if CC_KERNEL
+#define cc_printf(x...) printf(x)
+#else
+#define cc_printf(x...) fprintf(stderr, x)
+#endif
+
+#define cc_assert(x) assert(x)
 
 #define cc_copy(_size_, _dst_, _src_) memcpy(_dst_, _src_, _size_)
-
-#define cc_ctx_clear(_type_, _size_, _name_)  \
-    cc_zero((_size_ + sizeof(_type_) - 1) / sizeof(_type_), _name_)
 
 CC_INLINE CC_NONNULL2 CC_NONNULL3 CC_NONNULL4
 void cc_xor(size_t size, void *r, const void *s, const void *t) {

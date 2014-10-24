@@ -30,44 +30,6 @@
 
 #include <IOKit/pwr_mgt/IOPM.h>
 
-#pragma mark PM Timeline Logging
-/**************************************************
-*
-* Timeline API Keys - Reports timing details for 
-*   applications, drivers, and system during PM activity
-*
-* For kernel-internal use only
-**************************************************/
-
-// Keys for interfacing with IOPMrootDomain Timeline
-/* @constant kIOPMTimelineDictionaryKey
- * @abstract RootDomain key for dictionary describing Timeline's info
- */
-#define kIOPMTimelineDictionaryKey              "PMTimelineLogging"
-
-/* @constant kIOPMTimelineEnabledKey
- * @abstract Boolean value indicating whether the system is recording PM events.
- * @discussion Key may be found in the dictionary at IOPMrootDomain's property 
- * kIOPMTimelineDictionaryKey. uint32_t value; may be 0.
- */
-#define kIOPMTimelineEnabledKey                 "TimelineEnabled"
-
-/* @constant kIOMPTimelineSystemNumberTrackedKey
- * @abstract The maximum number of system power events the system may record.
- * @discussion Key may be found in the dictionary at IOPMrootDomain's property 
- * kIOPMTimelineDictionaryKey. uint32_t value; may be 0.
- */
-#define kIOPMTimelineSystemNumberTrackedKey     "TimelineSystemEventsTracked"
-
-/* @constant kIOPMTimelineSystemBufferSizeKey
- * @abstract Size in bytes  of buffer recording system PM events
- * @discussion Key may be found in the dictionary at IOPMrootDomain's property 
- * kIOPMTimelineDictionaryKey. uint32_t value; may be 0.
- */
-#define kIOPMTimelineSystemBufferSizeKey        "TimelineSystemBufferSize"
-
-
-
 /* @constant kIOPMEventTypeIntermediateFlag
  * @abstract This bit indicates the event is an intermediate event
  *      which must occur within a major system power event.
@@ -80,7 +42,7 @@
 enum {
     kIOPMEventTypeUndefined                     = 0,
 
-    /* Event types mark driver events 
+    /* Event types mark driver events
      */
     kIOPMEventTypeSetPowerStateImmediate        = 1001,
     kIOPMEventTypeSetPowerStateDelayed          = 1002,
@@ -98,10 +60,6 @@ enum {
     kIOPMEventTypeWakeDone                      = 3002,
     kIOPMEventTypeDoze                          = 4001,
     kIOPMEventTypeDozeDone                      = 4002,
-    kIOPMEventTypeLiteWakeUp                    = 5001,
-    kIOPMEventTypeLiteWakeUpDone                = 5002,
-    kIOPMEventTypeLiteWakeDown                  = 5003,
-    kIOPMEventTypeLiteWakeDownDone              = 5004,
     kIOPMEventTypeUUIDSet                       = 6001,
     kIOPMEventTypeUUIDClear                     = 6002,
 
@@ -126,10 +84,10 @@ enum {
  *
  *****************************************************************************/
 
-/* kIOPMMessageUserIsActiveChanged 
+/* kIOPMMessageUserIsActiveChanged
  * User became active or inactive. Message sent after the kIOPMUserIsActiveKey
  * property was updated with a new value.
- */ 
+ */
 #define kIOPMMessageUserIsActiveChanged \
                 iokit_family_msg(sub_iokit_powermanagement, 0x400)
 
@@ -168,81 +126,14 @@ enum {
 #define kIOPMSleepServiceExitKey                    "Sleep Service Back to Sleep"
 #define kIOPMDarkWakeThermalEmergencyKey            "Dark Wake Thermal Emergency"
 
-
-enum {
-    kIOPMMaxSystemEventsTracked = 25000,
-    kIOPMDefaultSystemEventsTracked = 1000,
-    kMaxPMStringLength = 40,
-};
-
-/* @struct IOPMSystemEventRecord
- * @abstract Records a singe power event to a particular PM entity.
- * This includes changes to a driver's power state, application responses
- * to PM notifications, or system power management milestones.
- */
-typedef struct {
-    union {
-        // For DRIVER events
-        char        ownerName[kMaxPMStringLength];
-        // For SYSTEM events, uuid contains the string describing the active UUID
-        char        uuid[kMaxPMStringLength];
-    };
-
-    // For DRIVER events - records the name of the driver who generated the notifications.
-    char        interestName[kMaxPMStringLength];
-    
-    // DRIVER & SYSTEM - Times are stored as uint64_t
-    // The high 32 bytes are the seconds returned from clock_get_calendar_microtime, 
-    // and the low 32 bytes are the accompanying microseconds.
-    uint64_t    timestamp;
-
-    union {
-        // For DRIVER events - ownerDisambiguateID is a unique descriptor of the driver, to disambiguate
-        // several similarly named drivers.
-        uint64_t    ownerDisambiguateID;
-        // For SYSTEM events - eventReason is a value in SystemSleepReason
-        uint64_t    eventReason;
-    };
-    
-    // DRIVER & SYSTEM - eventType is one of 'SystemEventTypes'
-    // The value of eventType determines, among ohter things, whether this is a SYSTEM or
-    //      DRIVER event type.
-    uint32_t    eventType;
-
-    // DRIVER & SYSTEM - eventResult is an IOReturn value
-    uint32_t    eventResult;
-
-    // DRIVER - If defined, elapsedTimeUS records the entire time a transaction took to complete
-    uint32_t    elapsedTimeUS;
-
-    // DRIVER - in power state changes, oldState & newState are PM power state indices.
-    uint8_t     oldState;
-    uint8_t     newState;
-} IOPMSystemEventRecord;
-
-/* @struct IOPMTraceBufferHeader
- * Occupies the first bytes in the buffer allocated by IOPMrootDomain
- * Describes the size and current index of the trace buffer
- */
-typedef struct {
-	uint32_t	sizeBytes;
-	uint32_t    sizeEntries;
-	uint32_t    index;
-} IOPMTraceBufferHeader;
-
-/* Argument to IOPMrootDomain::clientMemoryForType to acquire
- * memory mapping.
- */
-enum {
-    kPMRootDomainMapTraceBuffer = 1
-};
-
-/**************************************************
-*
-* Accountability API Ends here
-*
-**************************************************/
-
+/*! kIOPMPSRestrictedModeKey
+ *  An IOPMPowerSource property key
+ *  Its property has an integer value.
+ *  - value = 1 when the device is in a low power state and not fully functional.
+ *  - value = 0, or property missing altogether, when the device is
+ *      not in a restricted mode power state.
+*/
+#define kIOPMPSRestrictedModeKey                    "RestrictedMode"
 
 #pragma mark Stray Bitfields
 // Private power commands issued to root domain
@@ -278,7 +169,7 @@ enum {
  */
 #define kIOPMSettingSleepServiceWakeCalendarKey     "SleepServiceWakeCalendarKey"
 
-/*! @constant kIOPMCalendarWakeTypes 
+/*! @constant kIOPMCalendarWakeTypes
  *
  * These are valid values for IOPM.h:IOPMCalendarStruct->selector
  */
@@ -318,7 +209,12 @@ enum {
  * @abstract Shutdown is in progress and irrevocable.
  * @discussion State remains 4 until power is removed from CPU.
  */
-    kIOPMStateConsoleShutdownCertain = 4
+    kIOPMStateConsoleShutdownCertain = 4,
+/* @constant kIOPMStateConsoleSULogoutInitiated
+   Indicates that LoginWindow has initiated a software update restart.
+   The next logout will not immediately lead to a shutdown.
+ */
+    kIOPMStateConsoleSULogoutInitiated = 5
 };
 
 /* @constant kIOPMSettingSilentRunningKey
@@ -340,7 +236,7 @@ enum {
 /*****************************************************************************/
 /*****************************************************************************/
 
-/* PM Statistics - event indices 
+/* PM Statistics - event indices
  * These are arguments to IOPMrootDomain::pmStatsRecordEvent().
  */
 enum {
@@ -350,8 +246,8 @@ enum {
     kIOPMStatsApplicationNotify,
     kIOPMStatsLateDriverAcknowledge,
     kIOPMStatsLateAppAcknowledge,
-    
-    // To designate if you're specifying the start or stop end of 
+
+    // To designate if you're specifying the start or stop end of
     // each of the above events, do a bitwise OR of the appropriate
     // Start/Stop flag and pass the result to IOPMrootDomain to record
     // the event.
@@ -370,26 +266,29 @@ enum {
 #define kIOPMStatsApplicationResponseTypeKey    "ResponseType"
 #define kIOPMStatsMessageTypeKey                "MessageType"
 #define kIOPMStatsPowerCapabilityKey            "PowerCaps"
- 
+#define kIOPMStatsSystemTransitionKey           "TransitionType"
+
 // PM Statistics: potential values for the key kIOPMStatsApplicationResponseTypeKey
 // entry in the application results array.
 #define kIOPMStatsResponseTimedOut      "ResponseTimedOut"
 #define kIOPMStatsResponseCancel        "ResponseCancel"
 #define kIOPMStatsResponseSlow          "ResponseSlow"
+#define kIOPMStatsResponsePrompt        "ResponsePrompt"
+#define kIOPMStatsDriverPSChangeSlow    "DriverPSChangeSlow"
 
 struct PMStatsBounds{
     uint64_t start;
     uint64_t stop;
 };
 typedef struct {
-    
+
     struct PMStatsBounds    hibWrite;
     struct PMStatsBounds    hibRead;
 //    bounds    driverNotifySleep;
 //    bounds    driverNotifyWake;
 //    bounds    appNotifySleep;
-//    bounds    appNotifyWake;  
-//    OSDictionary    *tardyApps;    
+//    bounds    appNotifyWake;
+//    OSDictionary    *tardyApps;
 //    OSDictionary    *tardyDrivers;
 } PMStatsStruct;
 
@@ -444,7 +343,7 @@ enum {
  * Phase ends: All notified clients have acknowledged.
  */
     kIOPMTracePointSleepPriorityClients         = 0x12,
-    
+
 /* When kIOPMTracePointSleepWillChangeInterests is the latest tracePoint,
  * PM is calling powerStateWillChangeTo() on interested drivers of root domain.
  *
@@ -464,7 +363,7 @@ enum {
  *      change have completed.
  */
     kIOPMTracePointSleepPowerPlaneDrivers       = 0x14,
-    
+
 /* When kIOPMTracePointSleepDidChangeInterests is the latest tracePoint,
  * PM is calling powerStateDidChangeTo() on interested drivers of root domain.
  *
@@ -599,7 +498,7 @@ enum {
  * in case any user errors occurred that we could not detect in software.
  *
  * Phase begins: After IOPMrootDomain sends kIOMessageSystemHasPoweredOn message.
- * Phase ends: When loginwindow calls IOPMSleepWakeSetUUID(NULL) the system shall 
+ * Phase ends: When loginwindow calls IOPMSleepWakeSetUUID(NULL) the system shall
  *      be considered awake and usable. The next phase shall be kIOPMTracePointSystemUp.
  */
     kIOPMTracePointSystemLoginwindowPhase       = 0x30,
@@ -702,6 +601,30 @@ enum {
  */
 #define kIOPMUserIsActiveKey                "IOPMUserIsActive"
 
+/* kIOPMDriverWakeEventsKey
+ * Key refers to a property that should only be examined by powerd.
+ */
+#define kIOPMDriverWakeEventsKey            "IOPMDriverWakeEvents"
+
+/*****************************************************************************
+ *
+ * IOPMDriverWakeEvents dictionary keys
+ *
+ *****************************************************************************/
+
+#define kIOPMWakeEventTimeKey               "Time"
+#define kIOPMWakeEventFlagsKey              "Flags"
+#define kIOPMWakeEventReasonKey             "Reason"
+#define kIOPMWakeEventDetailsKey            "Details"
+
+/*****************************************************************************
+ *
+ * Wake event flags reported to IOPMrootDomain::claimSystemWakeEvent()
+ *
+ *****************************************************************************/
+
+#define kIOPMWakeEventSource                0x00000001
+
 /*****************************************************************************
  *
  * System Sleep Policy
@@ -717,7 +640,8 @@ enum {
  * @discussion An OSNumber property of root domain that describes the type
  * of system sleep. This property is set after notifying priority sleep/wake
  * clients, but before informing interested drivers and shutting down power
- * plane drivers.
+ * plane drivers. On a hibernate abort or failure, this property will not be
+ * updated and will indicate the failed sleep type.
  */
 #define kIOPMSystemSleepTypeKey             "IOPMSystemSleepType"
 
@@ -775,7 +699,8 @@ enum {
     kIOPMSleepFactorAutoPowerOffForced      = 0x00040000ULL,
     kIOPMSleepFactorExternalDisplay         = 0x00080000ULL,
     kIOPMSleepFactorNetworkKeepAliveActive  = 0x00100000ULL,
-    kIOPMSleepFactorLocalUserActivity       = 0x00200000ULL
+    kIOPMSleepFactorLocalUserActivity       = 0x00200000ULL,
+    kIOPMSleepFactorHibernateFailed         = 0x00400000ULL
 };
 
 // System Sleep Types
@@ -844,30 +769,62 @@ struct IOPMSystemSleepParameters
  * Sleep Wake debug buffer header
  */
 typedef struct {
-   uint32_t version;
+   uint32_t signature;
    uint32_t alloc_size;
-   uint32_t          dlog_buf_offset; /* Offset at which root domain's logging is stored */
-   volatile uint32_t dlog_cur_pos;    /* Offset at which next trace will be copied to */
-   uint32_t          dlog_size;       /* Size reserverd  for root domain's logging */
-   uint32_t          crc;             /* CRC for spindump & following data. Doesn't cover hdr & DLOG buf */
+   uint32_t          crc;             /* CRC for spindump & following data.*/
    uint32_t          spindump_offset; /* Offset at which spindump offset is stored */
    uint32_t          spindump_size;
+   uint8_t           is_osx_watchdog;
 
    /* All members from UUID onwards are saved into log file */
-   char             UUID[44]; 
+   char             UUID[44];
    char             cps[9];          /* Current power state */
-   char             PMStatusCode[100];
-   char             reason[42];
-} swd_hdr; 
+   char             PMStatusCode[32];
+   char             reason[32];
+} swd_hdr;
 
-#define SWD_BUF_SIZE            (20*PAGE_SIZE)
-#define SWD_DLOG_SIZE           ((4*PAGE_SIZE)-sizeof(swd_hdr))
+/*
+ * Structure between stackshot samples, expected by spindump
+ */
+typedef struct {
+    uint32_t magic;      // 0xbad51ee4
+    uint32_t size;       // Size of the stackshot buffer following this struct
+} swd_stackshot_hdr;
+
+
+#define SWD_HDR_SIGNATURE       0xdeb8da2a
+#define SWD_STACKSHOTHDR_MAGIC  0xbad51ee4  // expected by spindump
+
+#define SWD_BUF_SIZE            (40*PAGE_SIZE)
+#define SWD_INITIAL_STACK_SIZE  ((SWD_BUF_SIZE/2)-sizeof(swd_hdr))
 
 /* Bits in swd_flags */
-#define SWD_WDOG_ENABLED    0x1
-#define SWD_BOOT_BY_WDOG    0x2
-#define SWD_VALID_LOGS      0x4
+#define SWD_WDOG_ENABLED        0x01
+#define SWD_BOOT_BY_SW_WDOG     0x02
+#define SWD_BOOT_BY_OSX_WDOG    0x04
+#define SWD_VALID_LOGS          0x08
+#define SWD_LOGS_IN_FILE        0x10
+#define SWD_LOGS_IN_MEM         0x20
 
+/* Filenames associated with the stackshots/logs generated by the SWD */
+#define kSleepWakeStackFilename             "/var/log/SleepWakeStacks.dump"
+#define kSleepWakeLogFilename               "/var/log/SleepWakeLog.dump"
+#define kAppleOSXWatchdogStackFilename      "/var/log/AppleOSXWatchdogStacks.dump"
+#define kAppleOSXWatchdogLogFilename        "/var/log/AppleOSXWatchdogLog.dump"
+
+inline char const* getDumpStackFilename(swd_hdr *hdr)
+{
+    if (hdr && hdr->is_osx_watchdog)
+        return kAppleOSXWatchdogStackFilename;
+    return kSleepWakeStackFilename;
+}
+
+inline char const* getDumpLogFilename(swd_hdr *hdr)
+{
+    if (hdr && hdr->is_osx_watchdog)
+        return kAppleOSXWatchdogLogFilename;
+    return kSleepWakeLogFilename;
+}
 
 /* RootDomain IOReporting channels */
 #define kSleepCntChID IOREPORT_MAKEID('S','l','e','e','p','C','n','t')
@@ -886,7 +843,7 @@ typedef struct {
  * register a sleep policy handler. Only a single sleep policy handler can
  * be installed.
  */
-#define kIOPMInstallSystemSleepPolicyHandlerKey	\
+#define kIOPMInstallSystemSleepPolicyHandlerKey \
         "IOPMInstallSystemSleepPolicyHandler"
 
 typedef IOReturn (*IOPMSystemSleepPolicyHandler)(

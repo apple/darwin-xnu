@@ -29,7 +29,7 @@ PRIVATE_DATAFILES = \
 	netsrc.h raw_cb.h etherdefs.h if_pflog.h pfvar.h \
 	if_bridgevar.h ntstat.h iptap.h if_llreach.h \
 	if_utun_crypto.h if_utun_crypto_ipsec.h if_utun_crypto_dtls.h \
-	pktap.h if_ipsec.h \
+	pktap.h if_ipsec.h necp.h content_filter.h packet_mangler.h
 
 PRIVATE_KERNELFILES = $(filter-out radix.h,${KERNELFILES}) \
 	bpfdesc.h ppp_comp.h \

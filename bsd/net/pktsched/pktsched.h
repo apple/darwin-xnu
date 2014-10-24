@@ -56,6 +56,7 @@ extern "C" {
 #define	PKTSCHEDF_QALG_SFB	0x8	/* use SFB */
 #define	PKTSCHEDF_QALG_ECN	0x10	/* enable ECN */
 #define	PKTSCHEDF_QALG_FLOWCTL	0x20	/* enable flow control advisories */
+#define	PKTSCHEDF_QALG_DELAYBASED	0x40	/* Delay based queueing */
 
 /* macro for timeout/untimeout */
 /* use old-style timeout/untimeout */

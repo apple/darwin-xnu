@@ -38,6 +38,7 @@
 #ifdef XNU_KERNEL_PRIVATE
 
 #include <kern/call_entry.h>
+#include <kern/simple_lock.h>
 
 #ifdef MACH_KERNEL_PRIVATE
 #include <kern/queue.h>
@@ -103,7 +104,7 @@ typedef void		(*timer_call_func_t)(
  * Non-migratable timer_call
  */
 #define TIMER_CALL_LOCAL		TIMEOUT_URGENCY_FIRST_AVAIL
-
+#define TIMER_CALL_RATELIMITED		TIMEOUT_URGENCY_RATELIMITED
 extern boolean_t	timer_call_enter(
 				timer_call_t	call,
 				uint64_t	deadline,
@@ -132,6 +133,35 @@ extern void		timer_call_setup(
 				timer_call_t		call,
 				timer_call_func_t	func,
 				timer_call_param_t	param0);
+
+extern int timer_get_user_idle_level(void);
+extern kern_return_t timer_set_user_idle_level(int ilevel);
+
+#define NUM_LATENCY_QOS_TIERS (6)
+typedef struct {
+	uint32_t powergate_latency_abstime;
+
+	uint32_t idle_entry_timer_processing_hdeadline_threshold_abstime;
+	uint32_t interrupt_timer_coalescing_ilat_threshold_abstime;
+	uint32_t timer_resort_threshold_abstime;
+
+	int32_t timer_coalesce_rt_shift;
+	int32_t timer_coalesce_bg_shift;
+	int32_t timer_coalesce_kt_shift;
+	int32_t timer_coalesce_fp_shift;
+	int32_t timer_coalesce_ts_shift;
+
+	uint64_t timer_coalesce_rt_abstime_max;
+	uint64_t timer_coalesce_bg_abstime_max;
+	uint64_t timer_coalesce_kt_abstime_max;
+	uint64_t timer_coalesce_fp_abstime_max;
+	uint64_t timer_coalesce_ts_abstime_max;
+
+	uint32_t latency_qos_scale[NUM_LATENCY_QOS_TIERS];
+	uint64_t latency_qos_abstime_max[NUM_LATENCY_QOS_TIERS];
+	boolean_t latency_tier_rate_limited[NUM_LATENCY_QOS_TIERS];
+} timer_coalescing_priority_params_t;
+extern timer_coalescing_priority_params_t tcoal_prio_params;
 
 #endif /* XNU_KERNEL_PRIVATE */
 

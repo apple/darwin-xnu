@@ -59,97 +59,6 @@
 #include <mach/thread_act_server.h>
 #include <mach/host_priv_server.h>
 
-/*
- *	thread_policy_common:
- *
- *	Set scheduling policy & priority for thread.
- */
-static kern_return_t
-thread_policy_common(
-	thread_t		thread,
-	integer_t		policy,
-	integer_t		priority)
-{
-	spl_t			s;
-
-	if (	thread == THREAD_NULL		||
-			invalid_policy(policy)		)
-		return(KERN_INVALID_ARGUMENT);
-
-	if (thread->static_param)
-		return (KERN_SUCCESS);
-
-	if ((policy == POLICY_TIMESHARE)
-		&& !SCHED(supports_timeshare_mode)())
-		policy = TH_MODE_FIXED;
-
-	s = splsched();
-	thread_lock(thread);
-
-	if (	(thread->sched_mode != TH_MODE_REALTIME)	&&
-			(thread->saved_mode != TH_MODE_REALTIME)		) {
-		if (!(thread->sched_flags & TH_SFLAG_DEMOTED_MASK)) {
-			boolean_t	oldmode = thread->sched_mode == TH_MODE_TIMESHARE;
-
-			if (policy == POLICY_TIMESHARE && !oldmode) {
-				thread->sched_mode = TH_MODE_TIMESHARE;
-
-				if ((thread->state & (TH_RUN|TH_IDLE)) == TH_RUN) {
-					sched_share_incr();
-
-					if (thread->max_priority <= MAXPRI_THROTTLE)
-						sched_background_incr();
-				}
-			}
-			else
-			if (policy != POLICY_TIMESHARE && oldmode) {
-				thread->sched_mode = TH_MODE_FIXED;
-
-				if ((thread->state & (TH_RUN|TH_IDLE)) == TH_RUN) {
-					if (thread->max_priority <= MAXPRI_THROTTLE)
-						sched_background_decr();
-
-					sched_share_decr();
-				}
-			}
-		}
-		else {
-			if (policy == POLICY_TIMESHARE)
-				thread->saved_mode = TH_MODE_TIMESHARE;
-			else
-				thread->saved_mode = TH_MODE_FIXED;
-		}
-
-		if (priority >= thread->max_priority)
-			priority = thread->max_priority - thread->task_priority;
-		else
-		if (priority >= MINPRI_KERNEL)
-			priority -= MINPRI_KERNEL;
-		else
-		if (priority >= MINPRI_RESERVED)
-			priority -= MINPRI_RESERVED;
-		else
-			priority -= BASEPRI_DEFAULT;
-
-		priority += thread->task_priority;
-
-		if (priority > thread->max_priority)
-			priority = thread->max_priority;
-		else
-		if (priority < MINPRI)
-			priority = MINPRI;
-
-		thread->importance = priority - thread->task_priority;
-
-
-		set_priority(thread, priority);
-	}
-
-	thread_unlock(thread);
-	splx(s);
-
-	return (KERN_SUCCESS);
-}
 
 /*
  *	thread_set_policy
@@ -174,6 +83,9 @@ thread_set_policy(
 	if (	thread == THREAD_NULL			||
 			pset == PROCESSOR_SET_NULL || pset != &pset0)
 		return (KERN_INVALID_ARGUMENT);
+
+	if (invalid_policy(policy))
+		return(KERN_INVALID_ARGUMENT);	
 
 	thread_mtx_lock(thread);
 
@@ -253,7 +165,10 @@ thread_set_policy(
 		return (result);
 	}
 
-	result = thread_policy_common(thread, policy, bas);
+	/* Note that we do not pass on max priority. */
+	if (result == KERN_SUCCESS) {
+	    result = thread_set_mode_and_absolute_pri(thread, policy, bas);
+	}
 
 	thread_mtx_unlock(thread);
 

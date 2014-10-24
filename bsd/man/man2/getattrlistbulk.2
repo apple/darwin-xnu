@@ -1,0 +1,376 @@
+.\" Copyright (c) 2013 Apple Computer, Inc. All rights reserved.
+.\" 
+.\" The contents of this file constitute Original Code as defined in and
+.\" are subject to the Apple Public Source License Version 1.1 (the
+.\" "License").  You may not use this file except in compliance with the
+.\" License.  Please obtain a copy of the License at
+.\" http://www.apple.com/publicsource and read it before using this file.
+.\" 
+.\" This Original Code and all software distributed under the License are
+.\" distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+.\" EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
+.\" INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
+.\" FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
+.\" License for the specific language governing rights and limitations
+.\" under the License.
+.\" 
+.\"     @(#)getattrlistbulk.2
+.
+.Dd November 15, 2013
+.Dt GETATTRLISTBULK 2
+.Os Darwin
+.Sh NAME
+.Nm getattrlistbulk
+.Nd get file system attributes for multiple directory entries
+.Sh SYNOPSIS
+.Fd #include <sys/attr.h>
+.Fd #include <unistd.h>
+.Pp
+.Ft int
+.Fn getattrlistbulk "int dirfd" "struct attrlist * attrList" "void * attrBuf" "size_t attrBufSize" "uint64_t options"
+.
+.
+.Sh DESCRIPTION
+The
+.Fn getattrlistbulk
+function iterates over the items in a directory and returns information about
+each directory entry like
+.Xr getattrlist 2 .
+Note: when
+.Fn getattrlistbulk
+returns information about a symbolic link, the information returned is about the link itself, not the target of the link.
+.Pp
+The function reads directory entries from the directory referenced by the file
+descriptor 
+.Fa dirfd .
+The 
+.Fa attrList 
+parameter determines what attributes are returned for each entry.
+Attributes of those directory entries are placed into the buffer specified by 
+.Fa attrBuf
+and
+.Fa attrBufSize .
+The 
+.Fa options 
+parameter allows you to modify the behaviour of the call.
+.Pp
+.
+.Pp
+.
+.\" dirfd parameter
+.
+The
+.Fa dirfd
+parameter must be a file descriptor that references a directory that you have opened for reading. 
+.Pp
+.
+.\" attrList parameter
+.
+The
+.Fa attrList
+parameter is a pointer to an 
+.Vt attrlist 
+structure. 
+All fields of this structure must be filled before calling the function. 
+See the discussion of the  
+.Xr getattrlist 2 
+function for a detailed description of this structure. 
+To get an attribute, the corresponding bit in the appropriate 
+.Vt attrgroup_t 
+field of the 
+.Vt attrlist 
+structure must be set. 
+Volume attributes  cannot be requested but all other supported getattrlist attributes can be used. For this function,
+.Dv ATTR_CMN_NAME
+and
+.Dv ATRR_CMN_RETURNED_ATTRS
+are required and the absence of these attributes in the attrList parameter results in an error.
+.Pp
+.
+.\" attrBuf and attrBufSize parameters
+.
+The
+.Fa attrBuf
+and 
+.Fa attrBufSize
+parameters specify a buffer into which the function places attribute values. 
+The attributes for any given directory entry are grouped together and 
+packed in exactly the same way as they are returned from 
+.Xr getattrlist 2
+and are subject to exactly the same alignment specifications
+and restrictions. These groups are then placed into the buffer, one after another. 
+.Xr getattrlist 2 should be consulted on details of the attributes that can be 
+requested for and returned. The name of the entry itself is provided by the 
+.Dv ATTR_CMN_NAME
+attribute.  Each group starts with a leading 
+.Vt uint32_t
+, which will always be 8-byte aligned that contains the overall length of the group. 
+You can step from one group to the next by simply adding this length to your pointer.
+The sample code (below) shows how to do this.
+The initial contents of this buffer are ignored.
+.Pp
+.
+.\" options parameter
+.
+The
+.Fa options
+parameter is a bit set that controls the behaviour of
+.Fn getattrlistbulk .
+The following option bits are defined.
+.
+.Bl -tag -width FSOPT_PACK_INVAL_ATTRS
+.
+.It FSOPT_PACK_INVAL_ATTRS
+If this is bit is set, then all requested  attributes,
+even ones that are not supported by the object or file
+file system, will be returned the attrBuf. The attributes
+actually returned can be determined by looking at the
+attribute_set_t structure returned for the 
+.Dv ATTR_CMN_RETURNED_ATTRS
+attribute. Default values will be returned for invalid
+attributes and should be ignored.
+.Pp
+Please see the discussion of this flag in
+.Xr getattrlist 2
+.
+.El
+.Pp
+If
+.Dv ATTR_CMN_ERROR
+has been requested and an error specific to a directory entry occurs,
+an error will be reported. The
+.Dv ATTR_CMN_ERROR
+attribute is a uint32_t which, if non-zero, specifies the error code
+that was encountered during the processing of that directory entry. The
+.Dv ATTR_CMN_ERROR
+attribute will be after
+.Dv ATTR_CMN_RETURNED_ATTRS
+attribute in the returned buffer.
+.Pp
+It is typical to ask for a combination of common, file, and directory 
+attributes and then use the value of the 
+.Dv ATTR_CMN_OBJTYPE 
+attribute to parse the resulting attribute buffer.
+.
+.Sh RETURN VALUES
+Upon successful completion the numbers of entries successfully read
+is returned. A value of 0 indicates there are no more entries. On error,
+a value of -1 is returned and
+.Va errno
+is set to indicate the error.
+.Pp
+When iterating all entries in a directory, 
+.Fn getattrlistbulk
+is called repeatedly until a 0 is returned. In such a case if 
+.Fn readdir 
+and 
+.Fn getattrlistbulk 
+calls on the same fd are mixed, the behavior is undefined.
+
+.Pp
+.Sh ERRORS
+.Fn getattrlistbulk
+will fail if:
+.Bl -tag -width Er
+.
+.It Bq Er EBADF
+.Fa dirfd 
+is not a valid file descriptor for a directory open for reading.
+.
+.It Bq Er ENOTDIR
+The File descriptor
+.Fa dirfd 
+is not a directory.
+.
+.It Bq Er EACCES
+Search permission is denied on the directory whose descriptor is given
+as input.
+.
+.It Bq Er EFAULT
+.Fa attrList
+or
+.Em attrBuf
+points to an invalid address.
+.
+.It Bq Er ERANGE
+The buffer was too small.
+.
+.It Bq Er EINVAL
+The 
+.Fa bitmapcount 
+field of 
+.Fa attrList 
+is not 
+.Dv ATTR_BIT_MAP_COUNT .
+.
+.It Bq Er EINVAL
+An invalid attribute was requested.
+.
+.It Bq Er EINVAL
+Volume attributes were requested.
+.
+.It Bq Er EINVAL
+.Dv ATTR_CMN_NAME
+or
+.Dv ATTR_CMN_RETURNED_ATTRS
+was not requested in the attrList parameter.
+.
+.It Bq Er EIO
+An I/O error occurred while reading from or writing to the file system.
+.El
+.Pp
+.
+.Sh EXAMPLES
+.
+The following code lists the contents of a directory using 
+.Fn getattrlistbulk . 
+The listing includes the file type.
+.
+.Bd -literal
+#include <sys/syscall.h>
+#include <sys/attr.h>
+#include <sys/errno.h>
+#include <sys/vnode.h>
+#include <unistd.h>
+#include <fcntl.h>
+#include <stdio.h>
+#include <assert.h>
+#include <stddef.h>
+#include <string.h>
+#include <stdbool.h>
+
+typedef struct val_attrs {
+    uint32_t          length;
+    attribute_set_t   returned;
+    uint32_t          error;
+    attrreference_t   name_info;
+    char              *name;
+    fsobj_type_t      obj_type;
+} val_attrs_t;
+
+
+void demo(const char *dirpath)
+{
+    int error;
+    int dirfd;
+    struct attrlist attrList;
+    char *entry_start;
+    char attrBuf[256];
+
+    memset(&attrList, 0, sizeof(attrList));
+    attrList.bitmapcount = ATTR_BIT_MAP_COUNT;
+    attrList.commonattr  = ATTR_CMN_RETURNED_ATTRS |
+                           ATTR_CMN_NAME |
+                           ATTR_CMN_ERROR |
+                           ATTR_CMN_OBJTYPE;
+
+    error = 0;
+    dirfd = open(dirpath, O_RDONLY, 0);
+    if (dirfd < 0) {
+        error = errno;
+        printf("Could not open directory %s", dirpath);
+        perror("Error was ");
+    } else {
+        for (;;) {
+            int retcount;
+
+            retcount = getattrlistbulk(dirfd, &attrList, &attrBuf[0],
+                               sizeof(attrBuf), 0);
+            printf("\engetattrlistbulk returned %d", retcount);
+            if (retcount == -1) {
+                error = errno;
+                perror("Error returned : ");
+                printf("\en");
+                break;
+            } else if (retcount == 0) {
+                /* No more entries in directory */
+                error = 0;
+                break;
+            } else {
+                int    index;
+                uint32_t total_length;
+                char   *field;
+
+                entry_start = &attrBuf[0];
+                total_length = 0;
+                printf(" -> entries returned");
+                for (index = 0; index < retcount; index++) {
+                    val_attrs_t    attrs = {0};
+
+                    printf("\en Entry %d", index);
+                    printf("  --  ");
+                    field = entry_start;
+                    attrs.length = *(uint32_t *)field;
+                    printf(" Length %d ", attrs.length);
+                    total_length += attrs.length;
+                    printf(" Total Length %d ", total_length);
+                    field += sizeof(uint32_t);
+                    printf("  --  ");
+
+                    /* set starting point for next entry */
+                    entry_start += attrs.length;
+
+                    attrs.returned = *(attribute_set_t *)field;
+                    field += sizeof(attribute_set_t);
+
+                    if (attrs.returned.commonattr & ATTR_CMN_ERROR) {
+                        attrs.error = *(uint32_t *)field;
+                        field += sizeof(uint32_t);
+                    }
+
+                    if (attrs.returned.commonattr & ATTR_CMN_NAME) {
+                        attrs.name =  field;
+                        attrs.name_info = *(attrreference_t *)field;
+                        field += sizeof(attrreference_t);
+                        printf("  %s ", (attrs.name +
+                            attrs.name_info.attr_dataoffset));
+                    }
+
+                    /* Check for error for this entry */
+                    if (attrs.error) {
+                        /*
+                         * Print error and move on to next
+                         * entry
+                         */
+                        printf("Error in reading attributes for directory \
+                               entry %d", attrs.error);
+                        continue;
+                    }
+
+                    printf("  --  ");
+                    if (attrs.returned.commonattr & ATTR_CMN_OBJTYPE) {
+                        attrs.obj_type = *(fsobj_type_t *)field;
+                        field += sizeof(fsobj_type_t);
+                        
+                        switch (attrs.obj_type) {
+                            case VREG:
+                                printf("file  ");
+                                break;
+                            case VDIR:
+                                printf("directory    ");
+                                break;
+                            default:
+                                printf("obj_type = %-2d  ", attrs.obj_type);
+                                break;
+                        }
+                    }
+                    printf("  --  ");
+                }
+            }
+        }
+        (void)close(dirfd);
+    }
+}
+.Ed
+.Pp
+.
+.Sh SEE ALSO
+.
+.Xr getattrlist 2 ,
+.Xr lseek 2
+.
+.Sh HISTORY
+A
+.Fn getattrlistbulk
+function call appeared in OS X version 10.10
+.

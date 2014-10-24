@@ -431,7 +431,7 @@ esp_cbc_mature(sav)
 	algo = esp_algorithm_lookup(sav->alg_enc);
 	if (!algo) {
 		ipseclog((LOG_ERR,
-		    "esp_cbc_mature %s: unsupported algorithm.\n", algo->name));
+		    "esp_cbc_mature: unsupported algorithm.\n"));
 		return 1;
 	}
 
@@ -748,7 +748,7 @@ esp_cbc_decrypt(m, off, sav, algo, ivlen)
 
 	/* just in case */
 	bzero(iv, sizeof(iv));
-	bzero(sbuf, sizeof(sbuf));
+	bzero(sbuf, blocklen);
 end:
 	if (sbuf != NULL)
 		FREE(sbuf, M_SECA);
@@ -977,7 +977,7 @@ esp_cbc_encrypt(
 
 	/* just in case */
 	bzero(iv, sizeof(iv));
-	bzero(sbuf, sizeof(sbuf));
+	bzero(sbuf, blocklen);
 
 	key_sa_stir_iv(sav);
 end:

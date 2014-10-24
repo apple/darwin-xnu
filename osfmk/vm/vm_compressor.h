@@ -114,6 +114,10 @@ struct c_segment {
 	unsigned int	cseg_swap_size;
 #endif /* CHECKSUM_THE_SWAP */
 
+#if MACH_ASSERT
+	thread_t	c_busy_for_thread;
+#endif /* MACH_ASSERT */
+
 	struct c_slot	*c_slots[C_SEG_SLOT_ARRAYS];
 };
 
@@ -133,12 +137,24 @@ struct c_segment {
 
 #define C_SEG_WAKEUP_DONE(cseg)				\
 	MACRO_BEGIN					\
+	assert((cseg)->c_busy);				\
 	(cseg)->c_busy = 0;				\
+	assert((cseg)->c_busy_for_thread != NULL);	\
+	assert((((cseg)->c_busy_for_thread = NULL), TRUE));	\
 	if ((cseg)->c_wanted) {				\
 		(cseg)->c_wanted = 0;			\
 		thread_wakeup((event_t) (cseg));	\
 	}						\
 	MACRO_END
+
+#define C_SEG_BUSY(cseg)				\
+	MACRO_BEGIN					\
+	assert((cseg)->c_busy == 0);			\
+	(cseg)->c_busy = 1;				\
+	assert((cseg)->c_busy_for_thread == NULL);	\
+	assert((((cseg)->c_busy_for_thread = current_thread()), TRUE));	\
+	MACRO_END
+	
 
 
 typedef	struct c_segment *c_segment_t;
@@ -146,6 +162,7 @@ typedef struct c_slot	*c_slot_t;
 
 uint64_t vm_compressor_total_compressions(void);
 void vm_wake_compactor_swapper(void);
+void vm_thrashing_jetsam_done(void);
 void vm_consider_waking_compactor_swapper(void);
 void vm_compressor_flush(void);
 void c_seg_free(c_segment_t);
@@ -160,16 +177,18 @@ void vm_compressor_do_warmup(void);
 void vm_compressor_record_warmup_start(void);
 void vm_compressor_record_warmup_end(void);
 
-int			vm_low_on_space(void);
+int			vm_wants_task_throttled(task_t);
 boolean_t		vm_compression_available(void);
 
+extern void		vm_compressor_swap_init(void);
 extern void		vm_compressor_init_locks(void);
 extern lck_rw_t		c_master_lock;
 
-#if CRYPTO
+#if ENCRYPTED_SWAP
 extern void		vm_swap_decrypt(c_segment_t);
-#endif /* CRYPTO */
+#endif /* ENCRYPTED_SWAP */
 
+extern int		vm_swap_low_on_space(void);
 extern kern_return_t	vm_swap_get(vm_offset_t, uint64_t, uint64_t);
 extern void		vm_swap_free(uint64_t);
 extern void		vm_swap_consider_defragmenting(void);
@@ -195,6 +214,7 @@ extern uint32_t		c_swappedout_count;
 extern uint32_t		c_swappedout_sparse_count;
 
 extern int64_t		compressor_bytes_used;
+extern uint64_t		compressor_kvspace_used;
 extern uint64_t		first_c_segment_to_warm_generation_id;
 extern uint64_t		last_c_segment_to_warm_generation_id;
 extern boolean_t	hibernate_flushing;
@@ -207,6 +227,7 @@ extern uint32_t	vm_compressor_minorcompact_threshold_divisor;
 extern uint32_t	vm_compressor_majorcompact_threshold_divisor;
 extern uint32_t	vm_compressor_unthrottle_threshold_divisor;
 extern uint32_t	vm_compressor_catchup_threshold_divisor;
+extern uint64_t vm_compressor_compute_elapsed_msecs(clock_sec_t, clock_nsec_t, clock_sec_t, clock_nsec_t);
 
 #define PAGE_REPLACEMENT_DISALLOWED(enable)	(enable == TRUE ? lck_rw_lock_shared(&c_master_lock) : lck_rw_done(&c_master_lock))
 #define PAGE_REPLACEMENT_ALLOWED(enable)	(enable == TRUE ? lck_rw_lock_exclusive(&c_master_lock) : lck_rw_done(&c_master_lock))
@@ -229,23 +250,12 @@ extern uint32_t	vm_compressor_catchup_threshold_divisor;
 #define HARD_THROTTLE_LIMIT_REACHED()		((AVAILABLE_NON_COMPRESSED_MEMORY < (VM_PAGE_COMPRESSOR_SWAP_UNTHROTTLE_THRESHOLD) / 2) ? 1 : 0)
 #define SWAPPER_NEEDS_TO_UNTHROTTLE()		((AVAILABLE_NON_COMPRESSED_MEMORY < VM_PAGE_COMPRESSOR_SWAP_UNTHROTTLE_THRESHOLD) ? 1 : 0)
 #define COMPRESSOR_NEEDS_TO_MINOR_COMPACT()	((AVAILABLE_NON_COMPRESSED_MEMORY < VM_PAGE_COMPRESSOR_COMPACT_THRESHOLD) ? 1 : 0)
-#define COMPRESSOR_NEEDS_TO_MAJOR_COMPACT()	((AVAILABLE_NON_COMPRESSED_MEMORY < VM_PAGE_COMPRESSOR_SWAP_THRESHOLD) ? 1 : 0)
+
+#define COMPRESSOR_NEEDS_TO_MAJOR_COMPACT()	(((AVAILABLE_NON_COMPRESSED_MEMORY < VM_PAGE_COMPRESSOR_SWAP_THRESHOLD) || \
+						  (compressor_kvspace_used - (compressor_object->resident_page_count * PAGE_SIZE_64)) > compressor_kvwaste_limit) \
+						 ? 1 : 0)
 
 #define COMPRESSOR_FREE_RESERVED_LIMIT		28
-
-/*
- * Upward trajectory.
- */
-extern boolean_t vm_compressor_low_on_space(void);
-
-#define VM_PRESSURE_NORMAL_TO_WARNING()		((AVAILABLE_NON_COMPRESSED_MEMORY < VM_PAGE_COMPRESSOR_COMPACT_THRESHOLD) ? 1 : 0)
-#define VM_PRESSURE_WARNING_TO_CRITICAL()	(vm_compressor_low_on_space() || (AVAILABLE_NON_COMPRESSED_MEMORY < ((12 * VM_PAGE_COMPRESSOR_SWAP_UNTHROTTLE_THRESHOLD) / 10)) ? 1 : 0)
-
-/*
- * Downward trajectory.
- */
-#define VM_PRESSURE_WARNING_TO_NORMAL()		((AVAILABLE_NON_COMPRESSED_MEMORY > ((12 * VM_PAGE_COMPRESSOR_COMPACT_THRESHOLD) / 10)) ? 1 : 0)
-#define VM_PRESSURE_CRITICAL_TO_WARNING()	((AVAILABLE_NON_COMPRESSED_MEMORY > ((14 * VM_PAGE_COMPRESSOR_SWAP_UNTHROTTLE_THRESHOLD) / 10)) ? 1 : 0)
 
 #define COMPRESSOR_SCRATCH_BUF_SIZE WKdm_SCRATCH_BUF_SIZE
 

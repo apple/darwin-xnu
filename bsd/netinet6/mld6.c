@@ -1603,6 +1603,10 @@ mld_timeout(void *arg)
 		interface_timers_running6 = 0;
 		LIST_FOREACH(mli, &mli_head, mli_link) {
 			MLI_LOCK(mli);
+			if (mli->mli_version != MLD_VERSION_2) {
+				MLI_UNLOCK(mli);
+				continue;
+			}
 			if (mli->mli_v2_timer == 0) {
 				/* Do nothing. */
 			} else if (--mli->mli_v2_timer == 0) {
@@ -2487,7 +2491,10 @@ mld_handle_state_change(struct in6_multi *inm, struct mld_ifinfo *mli,
 		MLI_UNLOCK(mli);
 		retval *= -1;
 		goto done;
+	} else {
+		retval = 0;
 	}
+
 	/*
 	 * If record(s) were enqueued, start the state-change
 	 * report timer for this group.
@@ -3453,11 +3460,7 @@ mld_dispatch_packet(struct mbuf *m)
 	}
 
 	im6o->im6o_multicast_hlim  = 1;
-#if MROUTING
-	im6o->im6o_multicast_loop = (ip6_mrouter != NULL);
-#else
 	im6o->im6o_multicast_loop = 0;
-#endif
 	im6o->im6o_multicast_ifp = ifp;
 
 	if (m->m_flags & M_MLDV1) {

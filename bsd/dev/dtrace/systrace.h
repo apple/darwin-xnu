@@ -29,16 +29,12 @@
 
 /* #pragma ident	"@(#)systrace.h	1.3	06/09/19 SMI" */
 
-#if defined(__APPLE__)
 #ifdef KERNEL
 #ifndef _KERNEL
 #define _KERNEL /* Solaris vs. Darwin */
 #endif
 #endif
 
-#include <sys/dtrace.h>
-
-#endif /* __APPLE__ */
 #include <sys/dtrace.h>
 
 #ifdef	__cplusplus
@@ -50,26 +46,13 @@ extern "C" {
 typedef struct systrace_sysent {
 	dtrace_id_t	stsy_entry;
 	dtrace_id_t	stsy_return;
-#if !defined(__APPLE__)
-	int64_t		(*stsy_underlying)();
-#else
 	int32_t		(*stsy_underlying)(struct proc *, void *, int *);
 	int32_t		stsy_return_type;
-#endif /* __APPLE__ */
 } systrace_sysent_t;
 
 extern systrace_sysent_t *systrace_sysent;
 extern systrace_sysent_t *systrace_sysent32;
 
-#if !defined(__APPLE__)
-extern void (*systrace_probe)(dtrace_id_t, uintptr_t, uintptr_t,
-    uintptr_t, uintptr_t, uintptr_t, uintptr_t);
-extern void systrace_stub(dtrace_id_t, uintptr_t, uintptr_t,
-    uintptr_t, uintptr_t, uintptr_t, uintptr_t);
-
-extern int64_t dtrace_systrace_syscall(uintptr_t arg0, uintptr_t arg1,
-    uintptr_t arg2, uintptr_t arg3, uintptr_t arg4, uintptr_t arg5);
-#else
 extern void (*systrace_probe)(dtrace_id_t, uint64_t, uint64_t,
     uint64_t, uint64_t, uint64_t);
 extern void systrace_stub(dtrace_id_t, uint64_t, uint64_t,
@@ -78,14 +61,13 @@ extern void systrace_stub(dtrace_id_t, uint64_t, uint64_t,
 extern int32_t dtrace_systrace_syscall(struct proc *, void *, int *);
 
 extern void dtrace_systrace_syscall_return(unsigned short, int, int *);
-#endif /* __APPLE__ */
 
 #ifdef _SYSCALL32_IMPL
 extern int64_t dtrace_systrace_syscall32(uintptr_t arg0, uintptr_t arg1,
     uintptr_t arg2, uintptr_t arg3, uintptr_t arg4, uintptr_t arg5);
 #endif
 
-#endif
+#endif /* _KERNEL */
 
 #ifdef	__cplusplus
 }

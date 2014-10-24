@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2008 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2008, 2014 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -722,7 +722,7 @@ OSStatus	BTIterateRecord		(FCB						*filePtr,
 
 			err = fsBTInvalidNodeErr;
 			printf ("hfs: BTIterateRecord() found invalid btree node on volume %s\n", FCBTOVCB(filePtr)->vcbVN);
-			hfs_mark_volume_inconsistent(FCBTOVCB(filePtr));
+			hfs_mark_inconsistent(FCBTOVCB(filePtr), HFS_INCONSISTENCY_DETECTED);
 			goto ErrorExit;
 		}
 
@@ -890,7 +890,7 @@ CopyData:
 		{
 			err = fsBTInvalidNodeErr;
 			printf ("hfs: BTIterateRecord() found invalid btree node on volume %s\n", FCBTOVCB(filePtr)->vcbVN);
-			hfs_mark_volume_inconsistent(FCBTOVCB(filePtr));
+			hfs_mark_inconsistent(FCBTOVCB(filePtr), HFS_INCONSISTENCY_DETECTED);
 			goto ErrorExit;
 		}
 #endif
@@ -1030,7 +1030,7 @@ BTIterateRecords(FCB *filePtr, BTreeIterationOperation operation, BTreeIterator 
 
 			err = fsBTInvalidNodeErr;
 			printf ("hfs: BTIterateRecords() found invalid btree node on volume %s\n", FCBTOVCB(filePtr)->vcbVN);
-			hfs_mark_volume_inconsistent(FCBTOVCB(filePtr));
+			hfs_mark_inconsistent(FCBTOVCB(filePtr), HFS_INCONSISTENCY_DETECTED);
 			goto ErrorExit;
 		}
 

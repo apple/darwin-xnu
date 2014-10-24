@@ -28,6 +28,8 @@ _mach_vm_pressure_level_monitor
 _mach_vm_pressure_monitor
 _nanoseconds_to_absolutetime
 _preemption_enabled
+_read_random
+_read_frandom
 _semaphore_create
 _semaphore_dereference
 _semaphore_destroy

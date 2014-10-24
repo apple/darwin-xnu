@@ -285,10 +285,37 @@ commpage_init_cpu_capabilities( void )
 	uint64_t misc_enable = rdmsr64(MSR_IA32_MISC_ENABLE);
 	setif(bits, kHasENFSTRG, (misc_enable & 1ULL) &&
 				 (cpuid_leaf7_features() &
-					CPUID_LEAF7_FEATURE_ENFSTRG));
+					CPUID_LEAF7_FEATURE_ERMS));
 	
 	_cpu_capabilities = bits;		// set kernel version for use by drivers etc
 }
+
+/* initialize the approx_time_supported flag and set the approx time to 0.
+ * Called during initial commpage population.
+ */
+static void
+commpage_mach_approximate_time_init(void)
+{
+        char *cp = commPagePtr32;
+	uint8_t supported;
+
+#ifdef CONFIG_MACH_APPROXIMATE_TIME
+	supported = 1;
+#else
+	supported = 0;
+#endif
+	if ( cp ) {
+	        cp += (_COMM_PAGE_APPROX_TIME_SUPPORTED - _COMM_PAGE32_BASE_ADDRESS);
+		*(boolean_t *)cp = supported;
+	}
+        cp = commPagePtr64;
+	if ( cp ) {
+	        cp += (_COMM_PAGE_APPROX_TIME_SUPPORTED - _COMM_PAGE32_START_ADDRESS);
+		*(boolean_t *)cp = supported;
+	}
+	commpage_update_mach_approximate_time(0);
+}
+
 
 uint64_t
 _get_cpu_capabilities(void)
@@ -430,6 +457,7 @@ commpage_populate( void )
 	simple_lock_init(&commpage_active_cpus_lock, 0);
 
 	commpage_update_active_cpus();
+        commpage_mach_approximate_time_init();
 	rtc_nanotime_init_commpage();
 }
 
@@ -661,6 +689,47 @@ commpage_update_active_cpus(void)
 
 	simple_unlock(&commpage_active_cpus_lock);
 }
+
+/*
+ * update the commpage data for last known value of mach_absolute_time()
+ */
+
+void
+commpage_update_mach_approximate_time(uint64_t abstime)
+{
+#ifdef CONFIG_MACH_APPROXIMATE_TIME
+	uint64_t saved_data;
+        char *cp;
+
+        cp = commPagePtr32;
+	if ( cp ) {
+	        cp += (_COMM_PAGE_APPROX_TIME - _COMM_PAGE32_BASE_ADDRESS);
+		saved_data = *(uint64_t *)cp;
+		if (saved_data < abstime) {
+			/* ignoring the success/fail return value assuming that
+			 * if the value has been updated since we last read it,
+			 * "someone" has a newer timestamp than us and ours is
+			 * now invalid. */
+			OSCompareAndSwap64(saved_data, abstime, (uint64_t *)cp);
+		}
+	}
+        cp = commPagePtr64;
+	if ( cp ) {
+	        cp += (_COMM_PAGE_APPROX_TIME - _COMM_PAGE32_START_ADDRESS);
+		saved_data = *(uint64_t *)cp;
+		if (saved_data < abstime) {
+			/* ignoring the success/fail return value assuming that
+			 * if the value has been updated since we last read it,
+			 * "someone" has a newer timestamp than us and ours is
+			 * now invalid. */
+			OSCompareAndSwap64(saved_data, abstime, (uint64_t *)cp);
+		}
+	}
+#else
+#pragma unused (abstime)
+#endif
+}
+
 
 extern user32_addr_t commpage_text32_location;
 extern user64_addr_t commpage_text64_location;

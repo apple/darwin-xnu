@@ -59,6 +59,15 @@ void PE_init_platform(
 	boolean_t vm_initialized, 
 	void *args);
 
+/*
+ * Copies the requested number of bytes from the "random-seed" property in
+ * the device tree, and zeros the corresponding bytes in the device tree.
+ * Returns the number of bytes actually copied.
+ */
+uint32_t PE_get_random_seed(
+	unsigned char * dst_random_seed,
+	uint32_t request_size);
+
 
 void PE_init_kprintf(
 	boolean_t vm_initialized);
@@ -225,6 +234,7 @@ extern int PE_initialize_console(
 #define kPEEnableScreen	 	6
 #define kPEDisableScreen	7
 #define kPEBaseAddressChange	8
+#define kPERefreshBootGraphics	9
 
 extern void PE_display_icon( unsigned int flags,
 			     const char * name );

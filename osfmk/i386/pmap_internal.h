@@ -34,6 +34,8 @@
 #include <vm/pmap.h>
 #include <sys/kdebug.h>
 #include <kern/ledger.h>
+#include <kern/simple_lock.h>
+#include <i386/bit_routines.h>
 
 /*
  * pmap locking
@@ -236,12 +238,13 @@ typedef struct pv_hashed_entry {
 
 //#define PV_DEBUG 1   /* uncomment to enable some PV debugging code */
 #ifdef PV_DEBUG
-#define CHK_NPVHASH() if(0 == npvhash) panic("npvhash uninitialized");
+#define CHK_NPVHASH() if(0 == npvhashmask) panic("npvhash uninitialized");
 #else
 #define CHK_NPVHASH(x)
 #endif
 
-#define NPVHASH 4095   /* MUST BE 2^N - 1 */
+#define NPVHASHBUCKETS (4096)
+#define NPVHASHMASK ((NPVHASHBUCKETS) - 1) /* MUST BE 2^N - 1 */
 #define PV_HASHED_LOW_WATER_MARK_DEFAULT 5000
 #define PV_HASHED_KERN_LOW_WATER_MARK_DEFAULT 2000
 #define PV_HASHED_ALLOC_CHUNK_INITIAL 2000
@@ -256,13 +259,14 @@ extern uint32_t  pv_hashed_low_water_mark, pv_hashed_kern_low_water_mark;
 
 #define LOCK_PV_HASH(hash)	lock_hash_hash(hash)
 #define UNLOCK_PV_HASH(hash)	unlock_hash_hash(hash)
-extern uint32_t npvhash;
+extern uint32_t npvhashmask;
 extern pv_hashed_entry_t	*pv_hash_table;  /* hash lists */
 extern pv_hashed_entry_t	pv_hashed_free_list;
 extern pv_hashed_entry_t	pv_hashed_kern_free_list;
 decl_simple_lock_data(extern, pv_hashed_free_list_lock)
 decl_simple_lock_data(extern, pv_hashed_kern_free_list_lock)
 decl_simple_lock_data(extern, pv_hash_table_lock)
+decl_simple_lock_data(extern, phys_backup_lock)
 
 extern zone_t		pv_hashed_list_zone;	/* zone of pv_hashed_entry
 						 * structures */
@@ -477,9 +481,10 @@ extern unsigned int    inuse_ptepages_count;
 static inline uint32_t
 pvhashidx(pmap_t pmap, vm_map_offset_t va)
 {
-	return ((uint32_t)(uintptr_t)pmap ^
+	uint32_t hashidx = ((uint32_t)(uintptr_t)pmap ^
 		((uint32_t)(va >> PAGE_SHIFT) & 0xFFFFFFFF)) &
-	       npvhash;
+	       npvhashmask;
+	    return hashidx;
 }
 
 

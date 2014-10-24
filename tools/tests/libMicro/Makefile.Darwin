@@ -39,7 +39,7 @@ SDKPATH = $(shell xcodebuild -sdk $(SDKROOT) -version Path)
 CFLAGS += -isysroot $(SDKPATH)
 endif
 
-CC = xcrun -sdk $(SDKROOT) gcc
+CC = $(shell xcrun -sdk "$(SDKROOT)" -find gcc)
 #NOPIC=	-mdynamic-no-pic
 ARCH=	i386
 

@@ -29,7 +29,7 @@
  * @OSF_COPYRIGHT@
  */
 
-#include <kern/lock.h>
+#include <kern/kern_types.h>
 #include <kern/ledger.h>
 #include <kern/kalloc.h>
 #include <kern/task.h>
@@ -54,23 +54,24 @@
 #define	LF_CALLED_BACK          0x1000	/* callback was called for balance in deficit */
 #define	LF_WARNED               0x2000	/* callback was called for balance warning */ 
 #define	LF_TRACKING_MAX		0x4000	/* track max balance over user-specfied time */
+#define LF_PANIC_ON_NEGATIVE	0x8000	/* panic if it goes negative */
 
 /* Determine whether a ledger entry exists and has been initialized and active */
 #define	ENTRY_VALID(l, e)					\
 	(((l) != NULL) && ((e) >= 0) && ((e) < (l)->l_size) &&	\
 	(((l)->l_entries[e].le_flags & LF_ENTRY_ACTIVE) == LF_ENTRY_ACTIVE))
 
+#define ASSERT(a) assert(a)
+
 #ifdef LEDGER_DEBUG
 int ledger_debug = 0;
 
-#define ASSERT(a) assert(a)
 #define	lprintf(a) if (ledger_debug) {					\
 	printf("%lld  ", abstime_to_nsecs(mach_absolute_time() / 1000000)); \
 	printf a ;							\
 }
 #else
 #define	lprintf(a)
-#define	ASSERT(a)
 #endif
 
 struct ledger_callback {
@@ -746,6 +747,12 @@ ledger_check_new_balance(ledger_t ledger, int entry)
 			}
 		}
 	}
+
+	if ((le->le_flags & LF_PANIC_ON_NEGATIVE) &&
+	    (le->le_credit < le->le_debit)) {
+		panic("ledger_check_new_balance(%p,%d): negative ledger %p balance:%lld\n",
+		      ledger, entry, le, le->le_credit - le->le_debit);
+	}
 }
 
 /*
@@ -769,6 +776,34 @@ ledger_credit(ledger_t ledger, int entry, ledger_amount_t amount)
 	new = old + amount;
 	lprintf(("%p Credit %lld->%lld\n", current_thread(), old, new));
 	ledger_check_new_balance(ledger, entry);
+
+	return (KERN_SUCCESS);
+}
+
+/* Add all of one ledger's values into another.
+ * They must have been created from the same template.
+ * This is not done atomically. Another thread (if not otherwise synchronized)
+ * may see bogus values when comparing one entry to another.
+ * As each entry's credit & debit are modified one at a time, the warning/limit
+ * may spuriously trip, or spuriously fail to trip, or another thread (if not
+ * otherwise synchronized) may see a bogus balance.
+ */
+kern_return_t
+ledger_rollup(ledger_t to_ledger, ledger_t from_ledger)
+{
+	int i;
+	struct ledger_entry *from_le, *to_le;
+
+	assert(to_ledger->l_template == from_ledger->l_template);
+
+	for (i = 0; i < to_ledger->l_size; i++) {
+		if (ENTRY_VALID(from_ledger, i) && ENTRY_VALID(to_ledger, i)) {
+			from_le = &from_ledger->l_entries[i];
+			to_le   =   &to_ledger->l_entries[i];
+			OSAddAtomic64(from_le->le_credit, &to_le->le_credit);
+			OSAddAtomic64(from_le->le_debit,  &to_le->le_debit);
+		}
+	}
 
 	return (KERN_SUCCESS);
 }
@@ -921,6 +956,22 @@ ledger_track_maximum(ledger_template_t template, int entry,
 	return (KERN_SUCCESS);
 }
 
+kern_return_t
+ledger_panic_on_negative(ledger_template_t template, int entry)
+{
+	template_lock(template);
+
+	if ((entry < 0) || (entry >= template->lt_cnt)) {
+		template_unlock(template);	
+		return (KERN_INVALID_VALUE);
+	}
+
+	template->lt_entries[entry].et_flags |= LF_PANIC_ON_NEGATIVE;
+
+	template_unlock(template);	
+
+	return (KERN_SUCCESS);
+}
 /*
  * Add a callback to be executed when the resource goes into deficit.
  */
@@ -1373,6 +1424,36 @@ ledger_get_entries(ledger_t ledger, int entry, ledger_amount_t *credit,
 
 	*credit = le->le_credit;
 	*debit = le->le_debit;
+
+	return (KERN_SUCCESS);
+}
+
+kern_return_t
+ledger_reset_callback_state(ledger_t ledger, int entry)
+{
+	struct ledger_entry *le;
+
+	if (!ENTRY_VALID(ledger, entry))
+		return (KERN_INVALID_ARGUMENT);
+
+	le = &ledger->l_entries[entry];
+
+	flag_clear(&le->le_flags, LF_CALLED_BACK);
+
+	return (KERN_SUCCESS);
+}
+
+kern_return_t
+ledger_disable_panic_on_negative(ledger_t ledger, int entry)
+{
+	struct ledger_entry *le;
+
+	if (!ENTRY_VALID(ledger, entry))
+		return (KERN_INVALID_ARGUMENT);
+
+	le = &ledger->l_entries[entry];
+
+	flag_clear(&le->le_flags, LF_PANIC_ON_NEGATIVE);
 
 	return (KERN_SUCCESS);
 }

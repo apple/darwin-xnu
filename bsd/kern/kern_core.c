@@ -241,6 +241,10 @@ coredump(proc_t core_proc, uint32_t reserve_mb, int ignore_ulimit)
 	int		is_64 = 0;
 	size_t		mach_header_sz = sizeof(struct mach_header);
 	size_t		segment_command_sz = sizeof(struct segment_command);
+	
+	if (current_proc() != core_proc) {
+		panic("coredump() called against proc that is not current_proc: %p", core_proc);
+	}
 
 	if (do_coredump == 0 ||		/* Not dumping at all */
 	    ( (sugid_coredump == 0) &&	/* Not dumping SUID/SGID binaries */

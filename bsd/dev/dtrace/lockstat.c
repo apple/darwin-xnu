@@ -171,13 +171,14 @@ typedef struct lockstat_assembly_probe {
 
 
 /*
- * Hot patch switches back and forth the probe points between NOP and RET.
- * The active argument indicates whether the probe point will turn on or off.
+ * APPLE NOTE:
+ * Hot patch is used to manipulate probe points by swapping between
+ * no-op and return instructions.
+ * The active flag indicates whether the probe point will turn on or off.
  *	on == plant a NOP and thus fall through to the probe call
  *     off == plant a RET and thus avoid the probe call completely
- * The lsap_probe identifies which probe we will patch.
+ * The ls_probe identifies which probe we will patch.
  */
-#if defined(__APPLE__)
 static
 void lockstat_hot_patch(boolean_t active, int ls_probe)
 {
@@ -200,14 +201,15 @@ void lockstat_hot_patch(boolean_t active, int ls_probe)
 #endif
 	} /* for */
 }
-#endif /* __APPLE__*/
-
 
 void (*lockstat_probe)(dtrace_id_t, uint64_t, uint64_t,
 				    uint64_t, uint64_t, uint64_t);
 
-#if defined(__APPLE__)
-/* This wrapper is used by arm assembler hot patched probes */
+
+/*
+ * APPLE NOTE:
+ * This wrapper is used only by assembler hot patched probes.
+ */
 void
 lockstat_probe_wrapper(int probe, uintptr_t lp, int rwflag)
 {
@@ -218,8 +220,6 @@ lockstat_probe_wrapper(int probe, uintptr_t lp, int rwflag)
 		(*lockstat_probe)(id, (uintptr_t)lp, (uint64_t)rwflag, 0,0,0);
 	}
 }
-#endif /* __APPLE__ */
-    
 
 static dev_info_t	*lockstat_devi;	/* saved in xxattach() for xxinfo() */
 static dtrace_provider_id_t lockstat_id;

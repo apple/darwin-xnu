@@ -32,6 +32,7 @@
 #include <sys/types.h>
 #include <sys/cdefs.h>
 
+#include <sys/_types/_iovec_t.h>
 #ifdef PRIVATE
 
 __BEGIN_DECLS
@@ -46,10 +47,16 @@ typedef __uint64_t guardid_t;
 #if !defined(KERNEL)
 extern int guarded_open_np(const char *path, 
 	const guardid_t *guard, u_int guardflags, int flags, ...);
+extern int guarded_open_dprotected_np(const char *path, 
+	const guardid_t *guard, u_int guardflags, int flags, 
+	int dpclass, int dpflags, ...);
 extern int guarded_kqueue_np(const guardid_t *guard, u_int guardflags);
 extern int guarded_close_np(int fd, const guardid_t *guard);
 extern int change_fdguard_np(int fd, const guardid_t *guard, u_int guardflags,
 	const guardid_t *nguard, u_int nguardflags, int *fdflagsp);
+extern user_ssize_t guarded_write_np(int fd, const guardid_t *guard, user_addr_t cbuf, user_size_t nbyte);
+extern user_ssize_t guarded_pwrite_np(int fd, const guardid_t *guard, user_addr_t buf, user_size_t nbyte, off_t offset);
+extern user_ssize_t guarded_writev_np(int fd, const guardid_t *guard, struct iovec *iovp, u_int iovcnt);
 #endif /* KERNEL */
 
 /*
@@ -86,6 +93,11 @@ extern int change_fdguard_np(int fd, const guardid_t *guard, u_int guardflags,
 #define GUARD_FILEPORT		(1u << 3)
 
 /*
+ * Forbid writes on a guarded fd
+ */
+#define GUARD_WRITE		(1u << 4)
+
+/*
  * Violating a guard results in an error (EPERM), and potentially
  * an exception with one or more of the following bits set.
  */
@@ -95,7 +107,8 @@ enum guard_exception_codes {
 	kGUARD_EXC_NOCLOEXEC	= 1u << 2,	/* clear close-on-exec */
 	kGUARD_EXC_SOCKET_IPC	= 1u << 3,	/* sendmsg of a guarded fd */
 	kGUARD_EXC_FILEPORT   	= 1u << 4,	/* fileport_makeport .. */
-	kGUARD_EXC_MISMATCH	= 1u << 5	/* wrong guard for guarded fd */
+	kGUARD_EXC_MISMATCH	= 1u << 5,	/* wrong guard for guarded fd */
+	kGUARD_EXC_WRITE   	= 1u << 6	/* write on a guarded fd */
 };
 
 #endif /* (!_POSIX_C_SOURCE || _DARWIN_C_SOURCE) */

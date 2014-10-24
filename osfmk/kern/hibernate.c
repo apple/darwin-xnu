@@ -106,6 +106,8 @@ hibernate_setup(IOHibernateImageHeader * header,
     kern_return_t	retval = KERN_SUCCESS;
 
     hibernate_create_paddr_map();
+
+    hibernate_reset_stats();
     
     if (vmflush && (COMPRESSED_PAGER_IS_ACTIVE || dp_isssd)) {
 	    
@@ -164,4 +166,3 @@ hibernate_teardown(hibernate_page_list_t * page_list,
     }
     return (KERN_SUCCESS);
 }
-

@@ -73,6 +73,8 @@ static lck_grp_t      *kperf_cfg_lckgrp = NULL;
 static lck_mtx_t       kperf_cfg_lock;
 static boolean_t       kperf_cfg_initted = FALSE;
 
+void kdbg_swap_global_state_pid(pid_t old_pid, pid_t new_pid); /* bsd/kern/kdebug.c */
+
 /***************************
  *
  * lock init
@@ -620,6 +622,9 @@ kperf_bless_pid(pid_t newpid)
 
 		proc_rele(p);
 	}
+
+	/* take trace facility as well */
+	kdbg_swap_global_state_pid(blessed_pid, newpid);
 
 	blessed_pid = newpid;
 	blessed_preempt = FALSE;

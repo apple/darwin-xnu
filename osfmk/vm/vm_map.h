@@ -105,7 +105,7 @@ __END_DECLS
 
 #include <vm/vm_object.h>
 #include <vm/vm_page.h>
-#include <kern/lock.h>
+#include <kern/locks.h>
 #include <kern/zalloc.h>
 #include <kern/macro_help.h>
 
@@ -228,7 +228,14 @@ struct vm_map_entry {
 	/* vm_prot_t */		protection:3,	/* protection code */
 	/* vm_prot_t */		max_protection:3,/* maximum protection */
 	/* vm_inherit_t */	inheritance:2,	/* inheritance */
-	/* boolean_t */		use_pmap:1,	/* nested pmaps */
+	/* boolean_t */		use_pmap:1,	/*
+	   					 * use_pmap is overloaded:
+						 * if "is_sub_map":
+						 * 	use a nested pmap?
+						 * else (i.e. if object):
+						 * 	use pmap accounting
+						 * 	for footprint?
+						 */
 	/*
 	 * IMPORTANT:
 	 * The "alias" field can be updated while holding the VM map lock
@@ -244,7 +251,10 @@ struct vm_map_entry {
 	/* boolean_t */		used_for_jit:1,
 	/* boolean_t */	from_reserved_zone:1,	/* Allocated from
 						 * kernel reserved zone	 */
-	__unused_bits:1;
+
+	/* iokit accounting: use the virtual size rather than resident size: */
+	/* boolean_t */ iokit_acct:1;
+
 	unsigned short		wired_count;	/* can be paged if = 0 */
 	unsigned short		user_wired_count; /* for vm_wire */
 #if	DEBUG
@@ -317,7 +327,7 @@ struct vm_map_header {
  *		quickly find free space.
  */
 struct _vm_map {
-	lock_t			lock;		/* uni- and smp-lock */
+	lck_rw_t			lock;		/* map lock */
 	struct vm_map_header	hdr;		/* Map entry header */
 #define min_offset		hdr.links.start	/* start of range */
 #define max_offset		hdr.links.end	/* end of range */
@@ -463,19 +473,19 @@ struct vm_map_copy {
 
 #define vm_map_lock_init(map)						\
 	((map)->timestamp = 0 ,						\
-	lock_init(&(map)->lock, TRUE, 0, 0))
+	lck_rw_init(&(map)->lock, &vm_map_lck_grp, &vm_map_lck_rw_attr))
 
-#define vm_map_lock(map)		lock_write(&(map)->lock)
+#define vm_map_lock(map)		lck_rw_lock_exclusive(&(map)->lock)
 #define vm_map_unlock(map)						\
-		((map)->timestamp++ ,	lock_write_done(&(map)->lock))
-#define vm_map_lock_read(map)		lock_read(&(map)->lock)
-#define vm_map_unlock_read(map)		lock_read_done(&(map)->lock)
+		((map)->timestamp++ ,	lck_rw_done(&(map)->lock))
+#define vm_map_lock_read(map)		lck_rw_lock_shared(&(map)->lock)
+#define vm_map_unlock_read(map)		lck_rw_done(&(map)->lock)
 #define vm_map_lock_write_to_read(map)					\
-		((map)->timestamp++ ,	lock_write_to_read(&(map)->lock))
+		((map)->timestamp++ ,	lck_rw_lock_exclusive_to_shared(&(map)->lock))
 /* lock_read_to_write() returns FALSE on failure.  Macro evaluates to 
  * zero on success and non-zero value on failure.
  */
-#define vm_map_lock_read_to_write(map)	(lock_read_to_write(&(map)->lock) != TRUE)
+#define vm_map_lock_read_to_write(map)	(lck_rw_lock_shared_to_exclusive(&(map)->lock) != TRUE)
 
 /*
  *	Exported procedures that operate on vm_map_t.
@@ -560,7 +570,8 @@ extern vm_map_entry_t	vm_map_entry_insert(
 				boolean_t		no_cache,
 				boolean_t		permanent,
 				unsigned int		superpage_size,
-				boolean_t		clear_map_aligned);
+				boolean_t		clear_map_aligned,
+				boolean_t		is_submap);
 
 
 /*
@@ -685,8 +696,8 @@ extern vm_object_t	vm_submap_object;
  */
 #define vm_map_entry_wait(map, interruptible)    	\
 	((map)->timestamp++ ,				\
-	 thread_sleep_lock_write((event_t)&(map)->hdr,  \
-			 &(map)->lock, interruptible))
+	 lck_rw_sleep(&(map)->lock, LCK_SLEEP_EXCLUSIVE|LCK_SLEEP_PROMOTED_PRI, \
+				  (event_t)&(map)->hdr,	interruptible))
 
 
 #define vm_map_entry_wakeup(map)        \
@@ -893,6 +904,8 @@ extern kern_return_t vm_map_set_cache_attr(
 
 extern int override_nx(vm_map_t map, uint32_t user_tag);
 
+extern int vm_map_purge(vm_map_t map);
+
 #endif /* MACH_KERNEL_PRIVATE */
 
 __BEGIN_DECLS
@@ -939,6 +952,13 @@ extern kern_return_t	vm_map_wire(
 				vm_prot_t		access_type,
 				boolean_t		user_wire);
 
+extern kern_return_t	vm_map_wire_and_extract(
+				vm_map_t		map,
+				vm_map_offset_t		start,
+				vm_prot_t		access_type,
+				boolean_t		user_wire,
+				ppnum_t			*physpage_p);
+
 /* unwire a region */
 extern kern_return_t	vm_map_unwire(
 				vm_map_t		map,
@@ -959,6 +979,20 @@ extern kern_return_t	vm_map_enter_mem_object(
 				vm_prot_t		cur_protection,
 				vm_prot_t		max_protection,
 				vm_inherit_t		inheritance);
+
+/* Enter a mapping of a memory object */
+extern kern_return_t	vm_map_enter_mem_object_prefault(
+				vm_map_t		map,
+				vm_map_offset_t		*address,
+				vm_map_size_t		size,
+				vm_map_offset_t		mask,
+				int			flags,
+				ipc_port_t		port,
+				vm_object_offset_t	offset,
+				vm_prot_t		cur_protection,
+				vm_prot_t		max_protection,
+				upl_page_list_ptr_t	page_list,
+				unsigned int 		page_list_count);
 
 /* Enter a mapping of a memory object */
 extern kern_return_t	vm_map_enter_mem_object_control(
@@ -1050,14 +1084,7 @@ extern boolean_t	vm_map_has_hard_pagezero(
 
 extern boolean_t	vm_map_is_64bit(
 			        vm_map_t		map);
-#define vm_map_has_4GB_pagezero(map) 	vm_map_has_hard_pagezero(map, (vm_map_offset_t)0x100000000ULL)
 
-
-extern void		vm_map_set_4GB_pagezero(
-			        vm_map_t		map);
-
-extern void		vm_map_clear_4GB_pagezero(
-			        vm_map_t		map);
 
 extern kern_return_t	vm_map_raise_max_offset(
 	vm_map_t	map,
@@ -1172,6 +1199,7 @@ extern kern_return_t vm_map_set_page_shift(vm_map_t map, int pageshift);
 #define	VM_MAP_REMOVE_WAIT_FOR_KWIRE  	0x4
 #define VM_MAP_REMOVE_SAVE_ENTRIES	0x8
 #define VM_MAP_REMOVE_NO_PMAP_CLEANUP	0x10
+#define VM_MAP_REMOVE_NO_MAP_ALIGN	0x20
 
 /* Support for UPLs from vm_maps */
 
@@ -1190,6 +1218,11 @@ extern kern_return_t vm_map_sign(vm_map_t map,
 				 vm_map_offset_t start, 
 				 vm_map_offset_t end);
 #endif
+
+extern kern_return_t vm_map_partial_reap(
+              	vm_map_t map,
+		unsigned int *reclaimed_resident,
+		unsigned int *reclaimed_compressed);
 
 #if CONFIG_FREEZE
 void	vm_map_freeze_thaw_init(void);

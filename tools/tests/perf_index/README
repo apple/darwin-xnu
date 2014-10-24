@@ -1,0 +1,81 @@
+perf_index - This is a tool for gather performance data. perf_index can run in
+two modes. In regulular (offline mode) the usage is:
+pref_index type threads size [args]
+where type is one of the test types explained below, threads is the number of
+userland threads that should preform the task, size is the size of the task and
+args are arguments to pass to the test. Currently only the iperf test requires
+these arguments. For example if run with the following arguments:
+./perf_index cpu 2 100000000
+
+iperf will run the cpu workload on two threads with a total work load size of
+100000000. Since the workload is distributed over 2 threads, on a perfectly
+parallel system, this would take half the time relative to if 1 was specified
+for the threads parameter. When finished running perf_index will write the
+number of seconds it took to standard out as a decimal number. Some of the test
+types have initialization and teardown steps, and these steps are not counted
+towards the time.  The workload and the time it takes to be performed differs
+quite drastically between test type, so you may need to play around with the
+size argument to find a value that will complete in a reasonable amount of time.
+
+In online mode, perf_index is invoked like so:
+perf_index remote server
+where remote is exactly the string "remote" and server is the control host to
+connect to.  This tells the program to connect to the specified server and wait
+for instructions. The server is run by running the test_controller.py python
+script with the following arguments:
+test_controller.py num_clients type threads size
+The server will wait for num_client to connect. It will then pass type, threads,
+and size to each of those clients, who will run the initialization code and
+report back to the server. Once the initialization is run by every client, the
+server will give the OK to every client to run the workload and begin timing.
+When done, each client reports back to the server. Once the server hears back
+from every client, it will stop timing and output the elapsed time.
+
+
+Test Types:
+Note this implementations are subject to change, for an authoritative source,
+see the source code
+cpu - calculates n md5 sums
+memory - initializes by allocating memory equal to half the RAM on the machine,
+then writes a byte to every page to ensure it is paged in. Then copies n bytes
+from the first half of memory to the second. If the allocated space is less than
+n/2, it keeps repeating the copies until n bytes are copied.
+syscall - calls the getppid(2) system call n times
+fault - performs n page faults by mmaping a large chunk of memory, toggling the
+write protection bit, and writing to each page
+zfod - performs n zero fill on demands, by mmaping a large chunk of memory and
+writing to each page
+file_create - creates n files (in the same directory) with the open(2) system
+call
+file_write - writes n bytes to files on disk. There is one file per each thread.
+file_read - initializes by creating one large file on disk per each thread.
+Then reads n bytes total from all the files. If there are less than n bytes in
+the files, repeats reading from the beginning.
+ram_file_create - same as file_create but on a ram disk
+ram_file_read - same as file_read but on a ram disk
+ram_file_write - same as file_write but on a ram disk
+iperf - uses iperf to send n bytes over the network to the designated host
+specified as args
+compile - compiles xnu using make. This currently does a single compile and
+ignores the size argument
+
+Building:
+perf_index is built automatically by BNI for both Mac (10.9 and later), and iOS
+(7 and later) trains, and is delivered on AppleInternal builds in
+/AppleInternal/CoreOS/perf_index. It is built as part of the xnu_quick_test
+build alias, so you can also find a copy on ~rc at:
+~rc/Software/$RELEASE/Updates/$RELEASEVERSION/Roots/xnu_quick_test/AppleInternal/CoreOS/perf_index.
+
+Alternatively you can build it yourself using make like so:
+SDKROOT=/path/to/sdk make
+
+For example:
+# build for Mac, current OS
+SDKROOT=/ make
+# build for iOS
+SDKROOT=`xcodebuild -sdk iphoneos.internal -version Path` make
+
+By default xnu builds all-way fat, but you can restrict this by explicitly
+specifying architectures like so:
+# build for only armv7 and armv7s
+SDKROOT=`xcodebuild -sdk iphoneos.internal -version Path` make ARCH="armv7 armv7s"

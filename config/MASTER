@@ -1,0 +1,716 @@
+#
+# Mach Operating System
+# Copyright (c) 1986 Carnegie-Mellon University
+# Copyright 2001-2014 Apple Inc.
+#
+# All rights reserved.  The CMU software License Agreement
+# specifies the terms and conditions for use and redistribution.
+#  
+#######################################################################
+#
+#	Master machine independent configuration file.
+#
+#	Specific configuration files are created based on this and
+#	the machine specific master file using the doconf script.
+#
+#	Any changes to the master configuration files will affect all
+#	other configuration files based upon it.
+#
+#######################################################################
+#
+#	To build a configuration, execute "doconf <configuration>."
+#	Configurations are specified in the "Configurations:" section
+#	of the MASTER and MASTER.* files as follows:
+#
+#	<configuration> = [ <attribute0> <attribute1> ... <attributeN> ]
+#
+#	Lines in the MASTER and MASTER.* files are selected based on
+#	the attribute selector list, found in a comment at the end of
+#	the line.  This is a list of attributes separated by commas.
+#	The "!" operator selects the line if none of the attributes are
+#	specified.
+#
+#	For example:
+#
+#	<foo,bar>	selects a line if "foo" or "bar" are specified.
+#	<!foo,bar>	selects a line if neither "foo" nor "bar" is
+#			specified.
+#
+#	Lines with no attributes specified are selected for all
+#	configurations.
+#
+#######################################################################
+#
+#  SYSTEM SIZE CONFIGURATION (select exactly one)
+#
+#	xlarge = extra large scale system configuration
+#	large  = large scale system configuration
+#	medium = medium scale system configuration
+#	small  = small scale system configuration
+#	xsmall = extra small scale system configuration
+#	bsmall = special extra small scale system configuration 
+#
+#######################################################################
+#
+
+options		INET			#				# <inet>
+options		HW_AST		# Hardware ast support		# <hw_ast>
+options 	HW_FOOTPRINT	# Cache footprint support	# <hw_foot>
+
+options 	MACH		# Standard Mach features	# <mach>
+options		MACH_COMPAT	# Vendor syscall compatibility  # <mach>
+options		MACH_FASTLINK	# Fast symbolic links
+options		MACH_HOST	# Mach host (resource alloc.)	# <host>
+options		MACH_IPC_COMPAT	# Enable old IPC interface	# <ipc_compat>
+options		MACH_IPC_TEST	# Testing code/printfs		# <ipc_test>
+options 	MACH_NP		# Mach IPC support		# <np>
+options		MACH_NBC	# No buffer cache		# <nbc>
+options		MACH_NET	# Fast network access		# <mach_net>
+options		MACH_XP		# external pager support	# <xp>
+options		NO_DIRECT_RPC	# for untyped mig servers	# 
+options		LOOP		# loopback support		# <loop>
+options		VLAN		#				# <vlan>
+options		BOND		#				# <bond>
+options		AH_ALL_CRYPTO	# AH all crypto algs		# <ah_all_crypto>
+options		IPCOMP_ZLIB	# IP compression using zlib	# <ipcomp_zlib>
+options		PF		# Packet Filter			# <pf>
+options		PF_ALTQ		# PF ALTQ (Alternate Queueing)	# <pf_altq>
+options		PF_ECN		# PF use ECN marking	# <pf_ecn>
+options		PFLOG		# PF log interface		# <pflog>
+options		PKTSCHED_CBQ	# CBQ packet scheduler		# <pktsched_cbq>
+options		PKTSCHED_HFSC	# H-FSC packet scheduler	# <pktsched_hfsc>
+options		PKTSCHED_PRIQ	# PRIQ packet scheduler		# <pktsched_priq>
+options		PKTSCHED_FAIRQ	# FAIRQ packet scheduler	# <pktsched_fairq>
+options		MEASURE_BW	# interface bandwidth measurement # <measure_bw>
+options		CLASSQ_BLUE	# BLUE queueing algorithm	# <classq_blue>
+options		CLASSQ_RED	# RED queueing algorithm	# <classq_red>
+options		CLASSQ_RIO	# RIO queueing algorithm	# <classq_rio>
+options		IPDIVERT        # Divert sockets (for NAT)      # <ipdivert>
+options		IPFIREWALL      # IP Firewalling (used by NAT)  # <ipfirewall>
+options		IPFIREWALL_FORWARD      #Transparent proxy      # <ipfirewall>
+options		IPFIREWALL_DEFAULT_TO_ACCEPT    # allow everything by default   # <ipfirewall>
+options		DUMMYNET	# dummynet support		# <dummynet>
+options		TRAFFIC_MGT	# traffic management support		# <traffic_mgt>
+options		IPFW2		# IP firewall (new version)	# <ipfw2>
+options		MULTICAST	# Internet Protocol Class-D	$
+options		TCPDEBUG	# TCP debug			# <tcpdebug>
+options		TCP_DROP_SYNFIN	# Drop TCP packets with SYN+FIN set	# <tcpdrop_synfin>
+options		ICMP_BANDLIM	# ICMP bandwidth limiting sysctl
+options		IFNET_INPUT_SANITY_CHK	# allow dlil/ifnet input sanity check # <ifnet_input_chk>
+options		MULTIPATH	# Multipath domain		# <multipath>
+options		MPTCP		# Multipath TCP			# <mptcp>
+options		SYSV_SEM	# SVID semaphores			# <sysv_sem>
+options		SYSV_MSG	# SVID messages				# <sysv_msg>
+options		SYSV_SHM	# SVID shared mem			# <sysv_shm>
+options		PSYNCH		# pthread synch				# <psynch>
+options		FLOW_DIVERT								# <flow_divert>
+options		NECP									# <necp>
+options		CONTENT_FILTER	#						# <content_filter>
+options 	PACKET_MANGLER	#						# <packet_mangler>
+# secure_kernel - secure kernel from user programs
+options     SECURE_KERNEL       # <secure_kernel> 
+
+options     OLD_SEMWAIT_SIGNAL  # old semwait_signal handler
+
+#
+#	4.4 general kernel 
+#
+options		SOCKETS		# socket support			# <inet, inet6>
+options 	DIAGNOSTIC	# diagnostics				# <diagnostic>
+options		GPROF		# build profiling			# <profile>
+options		PROFILE		# kernel profiling		# <profile>
+options		SENDFILE	# sendfile					# <sendfile>
+options		NETWORKING	# networking layer			# <inet, inet6>
+options		CONFIG_FSE	# file system events		# <config_fse>
+options		CONFIG_IMAGEBOOT	# local image boot	# <config_imageboot>
+options		CONFIG_MBUF_JUMBO	# jumbo cluster pool	# <config_mbuf_jumbo>
+options		CONFIG_FORCE_OUT_IFP	# Enable IP_FORCE_OUT_IFP # <config_force_out_ifp>
+options		CONFIG_IFEF_NOWINDOWSCALE # Scale TCP window per driver # <config_ifef_nowindowscale>
+
+options		CONFIG_WORKQUEUE	# <config_workqueue>
+
+#
+#	4.4 filesystems 
+#
+options		HFS			# HFS/HFS+ support		# <hfs>
+options		MOCKFS			# Boot from an executable	# <mockfs>
+options		FIFO		# fifo support			# <fifo>
+options		FDESC		# fdesc_fs support		# <fdesc>
+options		DEVFS		# devfs support			# <devfs>
+options		JOURNALING	# journaling support	# <journaling>
+options		HFS_COMPRESSION	# hfs compression	# <hfs_compression>
+options		CONFIG_HFS_STD	# hfs standard support	# <config_hfs_std>
+options		CONFIG_HFS_TRIM	# hfs trims unused blocks	# <config_hfs_trim>
+options		CONFIG_HFS_MOUNT_UNMAP	#hfs trims blocks at mount	# <config_hfs_mount_unmap>
+options		CONFIG_HFS_DIRLINK		#allow directory hardlink creation # <config_hfs_dirlink>
+options		CONFIG_DEV_KMEM	# /dev/kmem device for reading KVA	# <config_dev_kmem>
+
+#
+#	file system features
+#
+options		QUOTA		# file system quotas		# <quota>
+options		NAMEDSTREAMS	# named stream vnop support	# <namedstreams>
+options		CONFIG_APPLEDOUBLE # apple double support	# <config_appledouble>
+options		CONFIG_VOLFS	# volfs path support (legacy)	# <config_volfs>
+options		CONFIG_IMGSRC_ACCESS # source of imageboot dmg	# <config_imgsrc_access>
+options		CONFIG_TRIGGERS	# trigger vnodes		# <config_triggers>
+options		CONFIG_EXT_RESOLVER # e.g. memberd		# <config_ext_resolver>
+options		CONFIG_SEARCHFS	# searchfs syscall support	# <config_searchfs>
+options		CONFIG_SECLUDED_RENAME # secluded rename syscall # <config_secluded_rename>
+
+#
+# NFS support
+#
+options		NFSCLIENT	# Be an NFS client		# <nfsclient>
+options		NFSSERVER	# Be an NFS server		# <nfsserver>
+
+#
+# Machine Independent Apple Features
+#
+profile						# build a profiling kernel	# <profile>
+
+#       
+# IPv6 Support
+#       
+options         "INET6"         		# kernel IPv6 Support           # <inet6>
+options         IPV6SEND			# Secure Neighbor Discovery	# <ipv6send>
+options         IPSEC                  		# IP security            	# <ipsec>
+options         IPSEC_ESP              		# IP security            	# <ipsec>
+options         "IPV6FIREWALL"         		# IPv6 Firewall Feature   	# <ipv6firewall>
+options         "IPV6FIREWALL_DEFAULT_TO_ACCEPT"	#IPv6 Firewall Feature   	# <ipv6firewall>
+#options         "IPV6FIREWALL_VERBOSE" 		#IPv6 Firewall Feature   	# <ipv6firewall>
+
+pseudo-device   gif     1		# <gif>
+pseudo-device   dummy   2		# <dummy>
+pseudo-device   stf 	1 		# <stf>
+
+options			CRYPTO			# <ipsec,crypto>
+options			CRYPTO_SHA2		# <crypto_sha2>
+options			ENCRYPTED_SWAP		# <encrypted_swap>
+
+options		ZLIB		# inflate/deflate support	# <zlib>
+
+options		IF_BRIDGE			# <if_bridge>
+
+#
+#  configurable kernel event related resources 
+#
+options   CONFIG_KN_HASHSIZE=64		# <medium,large,xlarge>
+options   CONFIG_KN_HASHSIZE=48		# <small,xsmall>
+options   CONFIG_KN_HASHSIZE=20		# <bsmall>
+
+#
+#  configurable vfs related resources 
+#  CONFIG_VNODES - used to pre allocate vnode related resources 
+#  CONFIG_VNODE_FREE_MIN - mininmum number of free vnodes 
+#  CONFIG_NC_HASH - name cache hash table allocation
+#  CONFIG_VFS_NAMES - name strings
+#
+#  263168 magic number for medium CONFIG_VNODES is based on memory 
+#  Number vnodes  is (memsize/64k) + 1024 
+#  This is the calculation that is used by launchd in tiger
+#  we are clipping the max based on 16G 
+#  ie ((16*1024*1024*1024)/(64 *1024)) + 1024 = 263168;
+
+options   CONFIG_VNODES=263168		# <large,xlarge>
+options   CONFIG_VNODES=263168		# <medium>
+options   CONFIG_VNODES=10240		# <small>
+options   CONFIG_VNODES=750			# <bsmall>
+
+options   CONFIG_VNODE_FREE_MIN=500		# <large,xlarge>
+options   CONFIG_VNODE_FREE_MIN=300		# <medium>
+options   CONFIG_VNODE_FREE_MIN=200		# <small>
+options   CONFIG_VNODE_FREE_MIN=100		# <xsmall>
+options   CONFIG_VNODE_FREE_MIN=75		# <bsmall>
+
+options   CONFIG_NC_HASH=5120		# <large,xlarge>
+options   CONFIG_NC_HASH=4096		# <medium>
+options   CONFIG_NC_HASH=2048		# <small,xsmall>
+options   CONFIG_NC_HASH=1024		# <bsmall>
+
+options   CONFIG_VFS_NAMES=5120		# <large,xlarge>
+options   CONFIG_VFS_NAMES=4096		# <medium>
+options   CONFIG_VFS_NAMES=3072		# <small,xsmall>
+options   CONFIG_VFS_NAMES=2048		# <bsmall>
+
+options   CONFIG_MAX_CLUSTERS=8		# <xlarge,large,medium>
+options   CONFIG_MAX_CLUSTERS=4		# <small,xsmall,bsmall>
+
+#
+#  configurable kauth credential related resources 
+#
+options   KAUTH_CRED_PRIMES_COUNT=7		# <medium,large,xlarge>
+options   KAUTH_CRED_PRIMES_COUNT=3		# <bsmall,xsmall,small>
+
+options   KAUTH_CRED_PRIMES="{97, 241, 397, 743, 1499, 3989, 7499}"		# <medium,large,xlarge>
+options   KAUTH_CRED_PRIMES="{5, 17, 97}"								# <bsmall,xsmall,small>
+
+#
+#  configurable options for minumum number of buffers for kernel memory 
+#
+options   CONFIG_MIN_NBUF=256		# <medium,large,xlarge>
+options   CONFIG_MIN_NBUF=128		# <small>
+options   CONFIG_MIN_NBUF=80		# <xsmall>
+options   CONFIG_MIN_NBUF=64		# <bsmall>
+
+options   CONFIG_MIN_NIOBUF=128		# <medium,large,xlarge>
+options   CONFIG_MIN_NIOBUF=64		# <xsmall,small>
+options   CONFIG_MIN_NIOBUF=32		# <bsmall>
+
+#
+# set maximum space used for packet buffers
+#
+options        CONFIG_NMBCLUSTERS="((1024 * 1024) / MCLBYTES)"		# <large,xlarge>
+options        CONFIG_NMBCLUSTERS="((1024 * 512) / MCLBYTES)"		# <medium>
+options        CONFIG_NMBCLUSTERS="((1024 * 256) / MCLBYTES)"		# <bsmall,xsmall,small>
+
+#
+# Configure size of TCP hash table
+#
+options CONFIG_TCBHASHSIZE=4096		# <medium,large,xlarge>
+options CONFIG_TCBHASHSIZE=128		# <xsmall,small,bsmall>
+
+#
+# Configure bandwidth limiting sysctl
+#
+options CONFIG_ICMP_BANDLIM=250		# <medium,large,xlarge>
+options CONFIG_ICMP_BANDLIM=50		# <xsmall,small,bsmall>
+
+#
+#  configurable async IO options 
+#  CONFIG_AIO_MAX - system wide limit of async IO requests.
+#  CONFIG_AIO_PROCESS_MAX - process limit of async IO requests.
+#  CONFIG_AIO_THREAD_COUNT - number of async IO worker threads created.
+#
+options   CONFIG_AIO_MAX=360		# <xlarge>
+options   CONFIG_AIO_MAX=180		# <large>
+options   CONFIG_AIO_MAX=90			# <medium>
+options   CONFIG_AIO_MAX=45			# <small>
+options   CONFIG_AIO_MAX=20			# <xsmall>
+options   CONFIG_AIO_MAX=10			# <bsmall>
+
+options   CONFIG_AIO_PROCESS_MAX=64		# <xlarge>
+options   CONFIG_AIO_PROCESS_MAX=32		# <large>
+options   CONFIG_AIO_PROCESS_MAX=16		# <medium>
+options   CONFIG_AIO_PROCESS_MAX=12		# <small>
+options   CONFIG_AIO_PROCESS_MAX=8		# <xsmall>
+options   CONFIG_AIO_PROCESS_MAX=4		# <bsmall>
+
+options   CONFIG_AIO_THREAD_COUNT=16	# <xlarge>
+options   CONFIG_AIO_THREAD_COUNT=8		# <large>
+options   CONFIG_AIO_THREAD_COUNT=4		# <medium>
+options   CONFIG_AIO_THREAD_COUNT=3		# <small>
+options   CONFIG_AIO_THREAD_COUNT=2		# <xsmall,bsmall>
+
+options   CONFIG_MAXVIFS=32				# <medium,large,xlarge>
+options   CONFIG_MAXVIFS=16				# <small,xsmall>
+options   CONFIG_MAXVIFS=2				# <bsmall>
+
+options   CONFIG_MFCTBLSIZ=256			# <medium,large,xlarge>
+options   CONFIG_MFCTBLSIZ=128			# <small,xsmall>
+options   CONFIG_MFCTBLSIZ=16			# <bsmall>
+
+#
+# configurable kernel message buffer size
+#
+options   CONFIG_MSG_BSIZE=4096			# <bsmall,small,xsmall>
+options   CONFIG_MSG_BSIZE=16384		# <medium,large,xlarge>
+
+#
+#  configurable kernel - use these options to strip strings from panic
+#  and printf calls.
+#  no_panic_str - saves around 50K of kernel footprint.
+#  no_printf_str - saves around 45K of kernel footprint.
+#
+options   CONFIG_NO_PANIC_STRINGS		# <no_panic_str>
+options   CONFIG_NO_PRINTF_STRINGS		# <no_printf_str>
+options   CONFIG_NO_KPRINTF_STRINGS		# <no_kprintf_str>
+
+#
+# use finer-grained lock groups for the proc subsystem
+#
+options   CONFIG_FINE_LOCK_GROUPS               # <medium,large,xlarge>
+
+
+# support dynamic signing of code
+#
+options		CONFIG_DYNAMIC_CODE_SIGNING	# <dynamic_codesigning>
+
+# enforce library validation on all processes. 
+#
+options		CONFIG_ENFORCE_LIBRARY_VALIDATION  # <config_library_validation>
+
+#
+# code decryption... used on embedded for app protection, DSMOS on desktop
+#
+options		CONFIG_CODE_DECRYPTION	# <config_code_decryption>
+
+#
+# User Content Protection, used on embedded
+#
+options		CONFIG_PROTECT	# <config_protect>
+
+#
+# enable per-process memory priority tracking
+#
+options		CONFIG_MEMORYSTATUS				# <memorystatus>
+
+#
+# enable jetsam - used on embedded
+#
+options		CONFIG_JETSAM				# <jetsam>
+
+#
+# enable freezing of suspended processes - used on embedded
+#
+options		CONFIG_FREEZE					# <freeze>
+
+options		CHECK_CS_VALIDATION_BITMAP			# <config_cs_validation_bitmap>
+
+#
+# enable detectiion of file cache thrashing - used on platforms with
+# dynamic VM compression enabled
+#
+options		CONFIG_PHANTOM_CACHE			# <phantom_cache>
+
+#
+# memory pressure event support
+#
+options		VM_PRESSURE_EVENTS		# <vm_pressure_events>
+
+#
+# I/O Scheduling
+#
+options		CONFIG_IOSCHED			# <config_iosched>
+
+#
+# Enable inheritance of importance through specially marked mach ports and for file locks
+# For now debug is enabled wherever inheritance is
+#
+options		IMPORTANCE_INHERITANCE		# <importance_inheritance>
+options		IMPORTANCE_DEBUG		# <importance_inheritance>
+
+options		CONFIG_TELEMETRY			# <config_telemetry>
+
+options		CONFIG_PROC_UUID_POLICY		# <config_proc_uuid_policy>
+
+#
+# In-kernel tests
+#
+options 	CONFIG_IN_KERNEL_TESTS			# <in_kernel_tests>
+
+#
+# ECC data logging
+# 
+options		CONFIG_ECC_LOGGING			# <config_ecc_logging>
+
+#
+#  Ethernet (ARP)
+#
+pseudo-device	ether			# <networking,inet,inet6>
+#
+#  Network loopback device
+#
+pseudo-device	loop			# <networking,inet,inet6>
+#
+#  UCB pseudo terminal service
+#
+pseudo-device  pty     512 init pty_init       # <xlarge>
+pseudo-device  pty     256 init pty_init       # <large>
+pseudo-device  pty     128 init pty_init       # <medium>
+pseudo-device  pty      48 init pty_init       # <small>
+pseudo-device  pty      16 init pty_init       # <xsmall>
+pseudo-device  pty       8 init pty_init       # <bsmall>
+#
+# Cloning pseudo terminal service
+#
+pseudo-device	ptmx	1 init ptmx_init
+
+#
+# vnode device
+#
+pseudo-device  vndevice		4       init    vndevice_init   # <development,debug>
+
+#
+# memory device
+pseudo-device	mdevdevice	1	init	mdevinit
+
+#
+#
+# packet filter device
+#
+pseudo-device	bpfilter	4	init	bpf_init		# <networking,inet,inet6>
+
+#
+# fsevents device
+pseudo-device	fsevents	1	init	fsevents_init	# <config_fse>
+
+pseudo-device	random		1	init	random_init
+pseudo-device	dtrace		1	init	dtrace_init	# <config_dtrace>
+pseudo-device	helper		1	init	helper_init	# <config_dtrace>
+pseudo-device	lockstat	1	init	lockstat_init	# <config_dtrace>
+pseudo-device	sdt		1	init	sdt_init	# <config_dtrace>
+pseudo-device	systrace	1	init	systrace_init	# <config_dtrace>
+pseudo-device	fbt		1	init	fbt_init	# <config_dtrace>
+pseudo-device	profile_prvd	1	init	profile_init	# <config_dtrace>
+
+#
+# IOKit configuration options
+#
+
+options		HIBERNATION	# system hibernation	# <hibernation>
+options		IOKITCPP	# C++ implementation		# <iokitcpp>
+options		IOKITSTATS	# IOKit statistics		# <iokitstats>
+options		CONFIG_SLEEP	#				# <config_sleep>
+options   CONFIG_MAX_THREADS=64	# IOConfigThread threads
+options         NO_KEXTD                # <no_kextd>
+options         NO_KERNEL_HID           # <no_kernel_hid>
+
+#
+# Libkern configuration options
+#
+
+options		LIBKERNCPP		# C++ implementation	# <libkerncpp>
+options		CONFIG_KXLD		# kxld/runtime linking of kexts # <config_kxld>
+options		CONFIG_KEC_FIPS		# Kernel External Components for FIPS compliance (KEC_FIPS) # <config_kec_fips>
+
+# Note that when adding this config option to an architecture, one MUST
+# add the architecture to the preprocessor test at the beginning of
+# libkern/kmod/cplus_{start.c,stop.c}.
+options         CONFIG_STATIC_CPPINIT   # Static library initializes kext cpp runtime # <config_static_cppinit>
+
+#
+# libsa configuration options
+#
+
+# CONFIG_KEXT_BASEMENT - alloc post boot loaded kexts after prelinked kexts
+#
+options		CONFIG_KEXT_BASEMENT		#		# <config_kext_basement>
+
+#
+# security configuration options
+#
+
+options		CONFIG_LCTX	# Login Context
+
+options		CONFIG_MACF			# Mandatory Access Control Framework	# <config_macf>
+options		CONFIG_MACF_SOCKET_SUBSET	# MAC socket subest (no labels)	# <config_macf>
+#options	CONFIG_MACF_SOCKET		# MAC socket labels 	# <config_macf>
+#options	CONFIG_MACF_NET			# mbuf			# <config_macf>
+#options	CONFIG_MACF_DEBUG		# debug			# <config_macf>
+
+options		CONFIG_AUDIT			# Kernel auditing	# <config_audit>
+
+
+#
+# MACH configuration options.
+#
+# TASK_SWAPPER enables code that manages demand for physical memory by
+#	forcibly suspending tasks when the demand exceeds supply. This
+#	option should be on.
+#
+options		MACH_PAGEMAP	#	<mach_pagemap>
+options		MACH_RT
+options		TASK_SWAPPER	#	<task_swapper_disabled>
+
+#
+# This defines configuration options that are normally used only during
+# kernel code development and debugging. They add run-time error checks or
+# statistics gathering, which will slow down the system
+#
+##########################################################
+#
+# MACH_ASSERT controls the assert() and ASSERT() macros, used to verify the
+#	consistency of various algorithms in the kernel. The performance impact
+#	of this option is significant.
+#
+options		MACH_ASSERT	#		# <mach_assert>
+#
+# MACH_DEBUG enables the mach_debug_server, a message interface used to
+#	retrieve or control various statistics. This interface may expose data
+#	structures that would not normally be allowed outside the kernel, and
+#	MUST NOT be enabled on a released configuration.
+#	Other options here enable information retrieval for specific subsystems
+#
+options		MACH_DEBUG	# IPC debugging interface	# <mdebug>
+options		MACH_IPC_DEBUG	# Enable IPC debugging calls	# <ipc_debug>
+options		MACH_VM_DEBUG	#		# <debug>
+#
+# MACH_MP_DEBUG control the possible dead locks that may occur by controlling
+#	that IPL level has been raised down to SPL0 after some calls to
+#	hardclock device driver.
+#
+options		MACH_MP_DEBUG	#		# <debug>
+#
+# ZONE_DEBUG keeps track of all zalloc()ed elements to perform further
+#	operations on each element.
+#
+options		ZONE_DEBUG	#		# <debug>
+
+options		CONFIG_ZLEAKS	# Live zone leak debugging	# <zleaks>
+
+#
+options		ZONE_ALIAS_ADDR	#		# <zone_alias_addr>
+
+
+#
+# CONFIG_TASK_ZONE_INFO allows per-task zone information to be extracted
+# Primarily useful for xnu debug and development.
+#
+options		CONFIG_TASK_ZONE_INFO		# <task_zone_info>
+#
+# CONFIG_DEBUGGER_FOR_ZONE_INFO restricts zone info so that it is only
+# available when the kernel is being debugged.
+#
+options		CONFIG_DEBUGGER_FOR_ZONE_INFO	# <debugger_for_zone_info>
+# 
+# XPR_DEBUG enables the gathering of data through the XPR macros inserted
+#	into various subsystems. This option is normally only enabled for
+#	specific performance or behavior studies, as the overhead in both
+#	code and data space is large. The data is normally retrieved through
+#	the kernel debugger (kdb) or by reading /dev/kmem.
+#	
+options		XPR_DEBUG	#		# <debug>
+# 
+# MACH_LDEBUG controls the internal consistency checks and
+#	data gathering in the locking package. This also enables a debug-only
+#	version of simple-locks on uniprocessor machines. The code size and
+#	performance impact of this option is significant.
+# 
+options		MACH_LDEBUG	#		# <debug>
+
+#
+# configuration option for full, partial, or no kernel debug event tracing
+#
+options		KDEBUG			# kernel tracing	# <kdebug>
+options		IST_KDEBUG		# limited tracing	# <ist_kdebug>
+options		NO_KDEBUG       # no kernel tracing # <no_kdebug>
+
+#
+# CONFIG_DTRACE enables code needed to support DTrace. Currently this is
+# only used for delivery of traps/interrupts to DTrace.
+#
+options		CONFIG_DTRACE	#		# <config_dtrace>
+
+# kernel performance tracing
+options     KPERF                  # <kperf>
+options     KPC                    # <kpc>
+
+# MACH_COUNTERS enables code that handles various counters in the system.
+# 
+options		MACH_COUNTERS	#		# <debug>
+
+# DEVELOPMENT define for development builds
+options		DEVELOPMENT		# dev kernel		# <development>
+
+# DEBUG kernel
+options		DEBUG		# general debugging code	# <debug>
+
+##########################################################
+#
+# This defines configuration options that are normally used only during
+# kernel code development and performance characterization. They add run-time
+# statistics gathering, which will slow down the system,
+#
+##########################################################
+#
+# MACH_IPC_STATS controls the collection of statistics in the MACH IPC
+#	subsystem.
+#
+#options	MACH_IPC_STATS
+#
+# MACH_CLUSTER_STATS controls the collection of various statistics concerning
+#	the effectiveness and behavior of the clustered pageout and pagein
+#	code.
+#
+#options	MACH_CLUSTER_STATS
+
+options		MACH_BSD	# BSD subsystem on top of Mach	# <mach_bsd>
+options         IOKIT		#				# <iokit>
+
+#
+#  configurable kernel related resources (CONFIG_THREAD_MAX needs to stay in 
+#  sync with bsd/conf/MASTER until we fix the config system... todo XXX
+#
+options   CONFIG_THREAD_MAX=2560		# <medium,large,xlarge>
+options   CONFIG_THREAD_MAX=1536		# <small,xsmall>
+options   CONFIG_THREAD_MAX=1024		# <bsmall>
+
+options   CONFIG_TASK_MAX=1024			# <medium,large,xlarge>
+options   CONFIG_TASK_MAX=768			# <small,>
+options   CONFIG_TASK_MAX=512			# <xsmall,bsmall>
+
+options   CONFIG_ZONE_MAP_MIN=12582912	# <medium,large,xlarge>
+options   CONFIG_ZONE_MAP_MIN=6291456	# <small>
+options   CONFIG_ZONE_MAP_MIN=1048576	# <xsmall,bsmall>
+
+# Sizes must be a power of two for the zhash to 
+# be able to just mask off bits instead of mod 
+options	  CONFIG_ZLEAK_ALLOCATION_MAP_NUM=16384 #<medium,large,xlarge>
+options	  CONFIG_ZLEAK_ALLOCATION_MAP_NUM=8192	#<small,xsmall,bsmall>
+options   CONFIG_ZLEAK_TRACE_MAP_NUM=8192 #<medium,large,xlarge>
+options   CONFIG_ZLEAK_TRACE_MAP_NUM=4096 #<small,xsmall,bsmall>
+
+# vc_progress_white - make the progress gear white instead of black
+options	  CONFIG_VC_PROGRESS_WHITE		# <vc_progress_white>
+
+#
+# Context switched counters 
+#
+options		CONFIG_COUNTERS			# <config_counters>
+
+#
+# Timeshare scheduler implementations
+#
+options		CONFIG_SCHED_TRADITIONAL	# <config_sched_traditional>
+options		CONFIG_SCHED_PROTO		# <config_sched_proto>
+options		CONFIG_SCHED_GRRR		# <config_sched_grrr>
+options		CONFIG_SCHED_GRRR_CORE		# <config_sched_grrr>
+options		CONFIG_SCHED_MULTIQ		# <config_sched_multiq>
+options		CONFIG_SCHED_TIMESHARE_CORE	# <config_sched_traditional,config_sched_multiq>
+options		CONFIG_SCHED_FAIRSHARE_CORE	# <config_sched_traditional,config_sched_multiq,config_sched_proto>
+
+options		CONFIG_SCHED_IDLE_IN_PLACE		# <config_sched_idle_in_place>
+options		CONFIG_GZALLOC			# <config_gzalloc>
+
+# Enable allocation of contiguous physical memory through vm_map_enter_cpm()
+options		VM_CPM		# <vm_cpm>
+
+options	    CONFIG_SKIP_PRECISE_USER_KERNEL_TIME	# <config_skip_precise_user_kernel_time>
+
+#
+# Switch to disable cpu, wakeup and high memory watermark monitors
+#
+options 	CONFIG_NOMONITORS				# <config_nomonitors>
+
+options		MACH_KDP	# KDP				# <mach_kdp>
+options		CONFIG_SERIAL_KDP	# KDP over serial				# <config_serial_kdp>
+options		CONFIG_KDP_INTERACTIVE_DEBUGGING	# <kdp_interactive_debugging>
+
+#
+# Kernel Voucher Attr Manager for Activity Trace
+#
+options 	CONFIG_ATM			# <config_atm>
+
+#
+# Kernel Voucher Attr Manager for BANK
+#
+options 	CONFIG_BANK			# <config_bank>
+
+
+# Group related tasks together into coalitions
+options		CONFIG_COALITIONS			# <config_coalitions>
+
+# Configurable Security Restrictions
+options		CONFIG_CSR			# <config_csr>
+
+#
+# Console options
+#
+options		SERIAL_CONSOLE	# bi-directional serial over UART
+options		VIDEO_CONSOLE	# uni-directional output over framebuffer
+
+#
+# Syscall options
+#
+options		CONFIG_REQUIRES_U32_MUNGING	# incoming U32 argument structures must be munged to match U64	# <config_requires_u32_munging>

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2013 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2014 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -110,7 +110,6 @@
 #include <netinet/in_systm.h>
 #include <netinet/ip6.h>
 #include <netinet6/ip6_var.h>
-#include <netinet6/ip6_mroute.h>
 #include <netinet/icmp6.h>
 #include <netinet/in_pcb.h>
 #include <netinet6/in6_pcb.h>
@@ -123,8 +122,11 @@
 #if IPSEC
 #include <netinet6/ipsec.h>
 #include <netinet6/ipsec6.h>
-extern int ipsec_bypass;
 #endif /*IPSEC*/
+
+#if NECP
+#include <net/necp.h>
+#endif
 
 /*
  * Raw interface to IP6 protocol.
@@ -178,11 +180,7 @@ rip6_input(
 		    !IN6_ARE_ADDR_EQUAL(&in6p->in6p_faddr, &ip6->ip6_src))
 			continue;
 
-		if (inp_restricted(in6p, ifp))
-			continue;
-
-		if (ifp != NULL && IFNET_IS_CELLULAR(ifp) &&
-		    (in6p->in6p_flags & INP_NO_IFT_CELLULAR))
+		if (inp_restricted_recv(in6p, ifp))
 			continue;
 
 		if (proto == IPPROTO_ICMPV6 || in6p->in6p_cksum != -1) {
@@ -196,16 +194,12 @@ rip6_input(
 		if (last) {
 			struct mbuf *n = m_copy(m, 0, (int)M_COPYALL);
 
-#if IPSEC
-			/*
-			 * Check AH/ESP integrity.
-			 */
-			if (ipsec_bypass == 0 && n && ipsec6_in_reject_so(n, last->inp_socket)) {
-					m_freem(n);
-					IPSEC_STAT_INCREMENT(ipsec6stat.in_polvio);
-					/* do not inject data into pcb */
+#if NECP
+			if (n && !necp_socket_is_allowed_to_send_recv_v6(in6p, 0, 0, &ip6->ip6_dst, &ip6->ip6_src, ifp, NULL)) {
+				m_freem(n);
+				/* do not inject data into pcb */
 			} else
-#endif /*IPSEC*/
+#endif /* NECP */
 			if (n) {
 				if ((last->in6p_flags & INP_CONTROLOPTS) != 0 ||
 				    (last->in6p_socket->so_options & SO_TIMESTAMP) != 0 ||
@@ -233,17 +227,13 @@ rip6_input(
 		last = in6p;
 	}
 	
-#if IPSEC
-	/*
-	 * Check AH/ESP integrity.
-	 */
-	if (ipsec_bypass == 0 && last && ipsec6_in_reject_so(m, last->inp_socket)) {
-			m_freem(m);
-			IPSEC_STAT_INCREMENT(ipsec6stat.in_polvio);
-			ip6stat.ip6s_delivered--;
-			/* do not inject data into pcb */
+#if NECP
+	if (last && !necp_socket_is_allowed_to_send_recv_v6(in6p, 0, 0, &ip6->ip6_dst, &ip6->ip6_src, ifp, NULL)) {
+		m_freem(m);
+		ip6stat.ip6s_delivered--;
+		/* do not inject data into pcb */
 	} else
-#endif /*IPSEC*/
+#endif /* NECP */
 	if (last) {
 		if ((last->in6p_flags & INP_CONTROLOPTS) != 0 ||
 		    (last->in6p_socket->so_options & SO_TIMESTAMP) != 0 ||
@@ -359,8 +349,15 @@ rip6_output(
 
 	in6p = sotoin6pcb(so);
 
-	if (in6p == NULL || (in6p->inp_flags2 & INP2_WANT_FLOW_DIVERT)) {
-		error = (in6p == NULL ? EINVAL : EPROTOTYPE);
+	if (in6p == NULL
+#if NECP
+		|| (necp_socket_should_use_flow_divert(in6p))
+#endif /* NECP */
+		) {
+		if (in6p == NULL)
+			error = EINVAL;
+		else
+			error = EPROTOTYPE;
 		goto bad;
 	}
 	if (dstsock != NULL && IN6_IS_ADDR_V4MAPPED(&dstsock->sin6_addr)) {
@@ -372,8 +369,12 @@ rip6_output(
 		ip6oa.ip6oa_boundif = in6p->inp_boundifp->if_index;
 		ip6oa.ip6oa_flags |= IP6OAF_BOUND_IF;
 	}
-	if (in6p->inp_flags & INP_NO_IFT_CELLULAR)
+	if (INP_NO_CELLULAR(in6p))
 		ip6oa.ip6oa_flags |= IP6OAF_NO_CELLULAR;
+	if (INP_NO_EXPENSIVE(in6p))
+		ip6oa.ip6oa_flags |= IP6OAF_NO_EXPENSIVE;
+	if (INP_AWDL_UNRESTRICTED(in6p))
+		ip6oa.ip6oa_flags |= IP6OAF_AWDL_UNRESTRICTED;
 
 	dst = &dstsock->sin6_addr;
 	if (control) {
@@ -546,9 +547,21 @@ rip6_output(
 		*p = 0;
 		*p = in6_cksum(m, ip6->ip6_nxt, sizeof(*ip6), plen);
 	}
+	
+#if NECP
+	{
+		necp_kernel_policy_id policy_id;
+		if (!necp_socket_is_allowed_to_send_recv_v6(in6p, 0, 0, &ip6->ip6_src, &ip6->ip6_dst, NULL, &policy_id)) {
+			error = EHOSTUNREACH;
+			goto bad;
+		}
 
+		necp_mark_packet_from_socket(m, in6p, policy_id);
+	}
+#endif /* NECP */
+	
 #if IPSEC
-	if (ipsec_bypass == 0 && ipsec_setsocket(m, so) != 0) {
+	if (in6p->in6p_sp != NULL && ipsec_setsocket(m, so) != 0) {
 		error = ENOBUFS;
 		goto bad;
 	}
@@ -607,11 +620,11 @@ rip6_output(
 	}
 
 	/*
-	 * If output interface was cellular, and this socket is denied
-	 * access to it, generate an event.
+	 * If output interface was cellular/expensive, and this socket is
+	 * denied access to it, generate an event.
 	 */
 	if (error != 0 && (ip6oa.ip6oa_retflags & IP6OARF_IFDENIED) &&
-	    (in6p->inp_flags & INP_NO_IFT_CELLULAR))
+	    (INP_NO_CELLULAR(in6p) || INP_NO_EXPENSIVE(in6p)))
 		soevent(in6p->inp_socket, (SO_FILT_HINT_LOCKED|
 		    SO_FILT_HINT_IFDENIED));
 
@@ -687,20 +700,6 @@ rip6_ctloutput(
 				error = ENOPROTOOPT;
 			break;
 #endif
-
-		case MRT6_INIT:
-		case MRT6_DONE:
-		case MRT6_ADD_MIF:
-		case MRT6_DEL_MIF:
-		case MRT6_ADD_MFC:
-		case MRT6_DEL_MFC:
-		case MRT6_PIM:
-#if MROUTING
-			error = ip6_mrouter_get(so, sopt);
-#else
-			error = ENOPROTOOPT;
-#endif /* MROUTING */
-			break;
 		case IPV6_CHECKSUM:
 			error = ip6_raw_ctloutput(so, sopt);
 			break;
@@ -726,19 +725,6 @@ rip6_ctloutput(
 			break;
 #endif
 
-		case MRT6_INIT:
-		case MRT6_DONE:
-		case MRT6_ADD_MIF:
-		case MRT6_DEL_MIF:
-		case MRT6_ADD_MFC:
-		case MRT6_DEL_MFC:
-		case MRT6_PIM:
-#if MROUTING
-			error = ip6_mrouter_set(so, sopt);
-#else
-			error = ENOPROTOOPT;
-#endif
-			break;
 		case IPV6_CHECKSUM:
 			error = ip6_raw_ctloutput(so, sopt);
 			break;
@@ -801,10 +787,6 @@ rip6_detach(struct socket *so)
 	if (inp == 0)
 		panic("rip6_detach");
 	/* xxx: RSVP */
-#if MROUTING
-	if (so == ip6_mrouter)
-		ip6_mrouter_done();
-#endif
 	if (inp->in6p_icmp6filt) {
 		FREE(inp->in6p_icmp6filt, M_PCB);
 		inp->in6p_icmp6filt = NULL;
@@ -841,7 +823,11 @@ rip6_bind(struct socket *so, struct sockaddr *nam, struct proc *p)
 	struct ifnet *outif = NULL;
 	int error;
 
-	if (inp == NULL || (inp->inp_flags2 & INP2_WANT_FLOW_DIVERT))
+	if (inp == NULL
+#if NECP
+		|| (necp_socket_should_use_flow_divert(inp))
+#endif /* NECP */
+		)
 		return (inp == NULL ? EINVAL : EPROTOTYPE);
 
 	if (nam->sa_len != sizeof (struct sockaddr_in6))
@@ -896,7 +882,11 @@ rip6_connect(struct socket *so, struct sockaddr *nam, __unused struct proc *p)
 	unsigned int ifscope;
 	struct ifnet *outif = NULL;
 
-	if (inp == NULL || (inp->inp_flags2 & INP2_WANT_FLOW_DIVERT))
+	if (inp == NULL
+#if NECP
+		|| (necp_socket_should_use_flow_divert(inp))
+#endif /* NECP */
+		)
 		return (inp == NULL ? EINVAL : EPROTOTYPE);
 	if (nam->sa_len != sizeof(*addr))
 		return EINVAL;
@@ -947,8 +937,15 @@ rip6_send(struct socket *so, int flags, struct mbuf *m, struct sockaddr *nam,
 	struct sockaddr_in6 *dst = (struct sockaddr_in6 *)(void *)nam;
 	int error = 0;
 
-	if (inp == NULL || (inp->inp_flags2 & INP2_WANT_FLOW_DIVERT)) {
-		error = (inp == NULL ? EINVAL : EPROTOTYPE);
+	if (inp == NULL
+#if NECP
+		|| (necp_socket_should_use_flow_divert(inp))
+#endif /* NECP */
+		) {
+		if (inp == NULL)
+			error = EINVAL;
+		else
+			error = EPROTOTYPE;
 		goto bad;
 	}
 

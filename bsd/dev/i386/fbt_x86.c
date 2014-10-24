@@ -1046,6 +1046,8 @@ fbt_provide_module(void *arg, struct modctl *ctl)
 	if (MOD_HAS_USERSPACE_SYMBOLS(ctl)) {
 		__user_syms_provide_module(arg, ctl);
 		ctl->mod_flags |= MODCTL_FBT_PROBES_PROVIDED;
+		if (MOD_FBT_PROVIDE_PRIVATE_PROBES(ctl))
+			ctl->mod_flags |= MODCTL_FBT_PRIVATE_PROBES_PROVIDED;
 		return;
 	}	
 }

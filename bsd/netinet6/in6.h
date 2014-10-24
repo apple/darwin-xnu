@@ -457,12 +457,7 @@ extern const struct in6_addr in6addr_linklocal_allv2routers;
 #endif /* KERNEL */
 
 #ifdef PRIVATE
-#ifndef KERNEL
-/* Private declaration for user-space (needed by ip6_mroute.h) */
-struct route_in6 {
-#else /* KERNEL */
 struct route_in6_old {
-#endif /* KERNEL */
 	void		*ro_rt;
 	uint32_t	ro_flags;
 	struct sockaddr_in6 ro_dst;
@@ -838,7 +833,7 @@ struct ip6_mtuinfo {
 	{ 0, 0 }, \
 	{ 0, 0 }, \
 	{ 0, 0 }, \
-	{ "pim6", CTLTYPE_NODE }, \
+	{ 0, 0 }, \
 }
 /*
  * Redefinition of mbuf flags

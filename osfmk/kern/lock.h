@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2005 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2013 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -66,73 +66,9 @@
 #ifndef	_KERN_LOCK_H_
 #define	_KERN_LOCK_H_
 
-#include <kern/simple_lock.h>
-#include <machine/lock.h>
-#include <sys/cdefs.h>
+#include <kern/locks.h>
 
-__BEGIN_DECLS
-
-#ifndef	MACH_KERNEL_PRIVATE
-
-typedef struct __lock__ lock_t;
-
-#else	/* MACH_KERNEL_PRIVATE */
-
-extern void			lock_init(
-						lock_t		*lock,
-						boolean_t	can_sleep,
-						unsigned short	tag0,
-						unsigned short	tag1);
-
-#endif	/* MACH_KERNEL_PRIVATE */
-
-extern lock_t		 *lock_alloc(
-						boolean_t	can_sleep, 
-						unsigned short	tag0, 
-						unsigned short	tag1);
-
-extern void			 lock_free(
-						lock_t 		*lock);
-
-extern void			lock_write(
-						lock_t		*lock);
-
-extern void			lock_read(
-						lock_t		*lock);
-
-extern void			lock_done(
-						lock_t		*lock);
-
-extern void			lock_write_to_read(
-						lock_t		*lock);
-
-#define	lock_read_done(l)		lock_done(l)
-#define	lock_write_done(l)		lock_done(l)
-
-extern boolean_t	 lock_read_to_write(
-						lock_t		*lock);
-
-
-/* Sleep, unlocking and then relocking a usimple_lock in the process */
-extern wait_result_t	thread_sleep_usimple_lock(
-							event_t				event,
-							usimple_lock_t		lock,
-							wait_interrupt_t	interruptible);
-
-/* Sleep, unlocking and then relocking a write lock in the process */
-extern wait_result_t	thread_sleep_lock_write(
-							event_t				event,
-							lock_t				*lock,
-							wait_interrupt_t	interruptible);
-__END_DECLS
-
-#ifdef	MACH_KERNEL_PRIVATE
-
-extern wait_result_t	thread_sleep_fast_usimple_lock(
-							event_t					event,
-							simple_lock_t			lock,
-							wait_interrupt_t		 interruptible);
-#endif	/* MACH_KERNEL_PRIVATE */
+#warning This header is deprecated. Use <kern/locks.h> instead.
 
 #endif	/* _KERN_LOCK_H_ */
 

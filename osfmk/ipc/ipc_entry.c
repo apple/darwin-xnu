@@ -99,7 +99,6 @@ ipc_entry_lookup(
 
 	assert(is_active(space));
 
-			
 	index = MACH_PORT_INDEX(name);
 	if (index <  space->is_table_size) {
                 entry = &space->is_table[index];
@@ -113,6 +112,102 @@ ipc_entry_lookup(
 
 	assert((entry == IE_NULL) || IE_BITS_TYPE(entry->ie_bits));
 	return entry;
+}
+
+
+/*
+ *	Routine:	ipc_entries_hold
+ *	Purpose:
+ *		Verifies that there are at least 'entries_needed'
+ *		free list members
+ *	Conditions:
+ *		The space is write-locked and active throughout.
+ *		An object may be locked.  Will not allocate memory.
+ *	Returns:
+ *		KERN_SUCCESS		Free entries were found.
+ *		KERN_NO_SPACE		No entry allocated.
+ */
+
+kern_return_t
+ipc_entries_hold(
+	ipc_space_t		space,
+	uint32_t		entries_needed)
+{
+
+	ipc_entry_t table;
+	mach_port_index_t next_free = 0;
+	uint32_t i;
+
+	assert(is_active(space));
+
+	table = &space->is_table[0];
+
+	for (i = 0; i < entries_needed; i++) {
+		next_free = table[next_free].ie_next;
+		if (next_free == 0) {
+			return KERN_NO_SPACE;
+		}
+		assert(next_free < space->is_table_size);
+		assert(table[next_free].ie_object == IO_NULL);
+	}
+	return KERN_SUCCESS;
+}
+
+/*
+ *	Routine:	ipc_entry_claim
+ *	Purpose:
+ *		Take formal ownership of a held entry.
+ *	Conditions:
+ *		The space is write-locked and active throughout.
+ *		An object may be locked.  Will not allocate memory.
+ *
+ * 	Note: The returned entry must be marked as modified before
+ * 	      releasing the space lock
+ */
+
+kern_return_t
+ipc_entry_claim(
+	ipc_space_t		space,
+	mach_port_name_t	*namep,
+	ipc_entry_t		*entryp)
+{
+	ipc_entry_t entry;
+	ipc_entry_t table;
+	mach_port_index_t first_free;
+	mach_port_gen_t gen;
+	mach_port_name_t new_name;
+
+	table = &space->is_table[0];
+
+	first_free = table->ie_next;
+	assert(first_free != 0);
+
+	entry = &table[first_free];
+	table->ie_next = entry->ie_next;
+	space->is_table_free--;
+
+	assert(table->ie_next < space->is_table_size);
+
+	/*
+	 *	Initialize the new entry.  We need only
+	 *	increment the generation number and clear ie_request.
+	 */
+	gen = IE_BITS_NEW_GEN(entry->ie_bits);
+	entry->ie_bits = gen;
+	entry->ie_request = IE_REQ_NONE;
+
+	/*
+	 *	The new name can't be MACH_PORT_NULL because index
+	 *	is non-zero.  It can't be MACH_PORT_DEAD because
+	 *	the table isn't allowed to grow big enough.
+	 *	(See comment in ipc/ipc_table.h.)
+	 */
+	new_name = MACH_PORT_MAKE(first_free, gen);
+	assert(MACH_PORT_VALID(new_name));
+	*namep = new_name;
+	*entryp = entry;
+
+	return KERN_SUCCESS;
 }
 
 /*
@@ -133,51 +228,13 @@ ipc_entry_get(
 	mach_port_name_t	*namep,
 	ipc_entry_t		*entryp)
 {
-	ipc_entry_t table;
-	mach_port_index_t first_free;
-	ipc_entry_t free_entry;
+	kern_return_t kr;
 
-	assert(is_active(space));
+	kr = ipc_entries_hold(space, 1);
+	if (KERN_SUCCESS != kr)
+		return kr;
 
-	{
-		table = space->is_table;
-		first_free = table->ie_next;
-
-		if (first_free == 0)
-			return KERN_NO_SPACE;
-
-		assert(first_free < space->is_table_size);
-		free_entry = &table[first_free];
-		table->ie_next = free_entry->ie_next;
-	}
-
-	/*
-	 *	Initialize the new entry.  We need only
-	 *	increment the generation number and clear ie_request.
-	 */
-	{
-		mach_port_name_t new_name;
-		mach_port_gen_t gen;
-
-		gen = IE_BITS_NEW_GEN(free_entry->ie_bits);
-		free_entry->ie_bits = gen;
-		free_entry->ie_request = IE_REQ_NONE;
-
-		/*
-		 *	The new name can't be MACH_PORT_NULL because index
-		 *	is non-zero.  It can't be MACH_PORT_DEAD because
-		 *	the table isn't allowed to grow big enough.
-		 *	(See comment in ipc/ipc_table.h.)
-		 */
-		new_name = MACH_PORT_MAKE(first_free, gen);
-		assert(MACH_PORT_VALID(new_name));
-		*namep = new_name;
-	}
-
-	assert(free_entry->ie_object == IO_NULL);
-
-	*entryp = free_entry;
-	return KERN_SUCCESS;
+	return ipc_entry_claim(space, namep, entryp);
 }
 
 /*
@@ -306,7 +363,8 @@ ipc_entry_alloc_name(
 
 				table[free_index].ie_next =
 					table[next_index].ie_next;
-				
+				space->is_table_free--;
+
 				/* mark the previous entry modified - reconstructing the name */
 				ipc_entry_modified(space, 
 						   MACH_PORT_MAKE(free_index, 
@@ -376,6 +434,7 @@ ipc_entry_dealloc(
 		entry->ie_bits &= IE_BITS_GEN_MASK;
 		entry->ie_next = table->ie_next;
 		table->ie_next = index;
+		space->is_table_free++;
 	} else {
 		/*
 		 * Nothing to do.  The entry does not match
@@ -675,6 +734,7 @@ ipc_entry_grow_table(
 	space->is_table = table;
 	space->is_table_size = size;
 	space->is_table_next = nits;
+	space->is_table_free += size - osize;
 
 	is_done_growing(space);
 	is_write_unlock(space);

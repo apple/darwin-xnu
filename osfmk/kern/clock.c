@@ -33,7 +33,6 @@
 
 #include <mach/mach_types.h>
 
-#include <kern/lock.h>
 #include <kern/spl.h>
 #include <kern/sched_prim.h>
 #include <kern/thread.h>
@@ -409,9 +408,11 @@ clock_set_calendar_microtime(
 	clock_sec_t			sys;
 	clock_usec_t		microsys;
 	clock_sec_t			newsecs;
+    clock_usec_t        newmicrosecs;
 	spl_t				s;
 
-	newsecs = (microsecs < 500*USEC_PER_SEC)? secs: secs + 1;
+    newsecs = secs;
+    newmicrosecs = microsecs;
 
 	s = splclock();
 	clock_lock();
@@ -447,7 +448,7 @@ clock_set_calendar_microtime(
 	/*
 	 *	Set the new value for the platform clock.
 	 */
-	PESetGMTTimeOfDay(newsecs);
+	PESetUTCTimeOfDay(newsecs, newmicrosecs);
 
 	splx(s);
 
@@ -473,9 +474,11 @@ clock_set_calendar_microtime(
 void
 clock_initialize_calendar(void)
 {
-	clock_sec_t			sys, secs = PEGetGMTTimeOfDay();
-	clock_usec_t 		microsys, microsecs = 0;
+	clock_sec_t			sys, secs;
+	clock_usec_t 		microsys, microsecs;
 	spl_t				s;
+
+    PEGetUTCTimeOfDay(&secs, &microsecs);
 
 	s = splclock();
 	clock_lock();
@@ -1023,3 +1026,4 @@ clock_track_calend_nowait(void)
 }
 
 #endif	/* CONFIG_DTRACE */
+

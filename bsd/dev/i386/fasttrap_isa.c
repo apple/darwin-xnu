@@ -197,21 +197,19 @@ extern dtrace_id_t dtrace_probeid_error;
  *
  * REG_RAX -> EAX
  * REG_RCX -> ECX
- * ...
+ * REG_RDX -> EDX
+ * REG_RBX -> EBX
+ * REG_RSP -> UESP
+ * REG_RBP -> EBP
+ * REG_RSI -> ESI
  * REG_RDI -> EDI
  *
  * The fasttrap_getreg function knows how to make the correct transformation.
  */
-#if __sol64 || defined(__APPLE__)
 static const uint8_t regmap[16] = {
 	REG_RAX, REG_RCX, REG_RDX, REG_RBX, REG_RSP, REG_RBP, REG_RSI, REG_RDI,
 	REG_R8, REG_R9, REG_R10, REG_R11, REG_R12, REG_R13, REG_R14, REG_R15,
 };
-#else
-static const uint8_t regmap[8] = {
-	EAX, ECX, EDX, EBX, UESP, EBP, ESI, EDI
-};
-#endif
 
 static user_addr_t fasttrap_getreg(x86_saved_state_t *, uint_t);
 
@@ -363,13 +361,11 @@ fasttrap_tracepoint_init(proc_t *p, fasttrap_tracepoint_t *tp, user_addr_t pc,
 		break;
 	}
 
-#if __sol64 || defined(__APPLE__)
 	/*
 	 * Identify the REX prefix on 64-bit processes.
 	 */
 	if (p_model == DATAMODEL_LP64 && (instr[start] & 0xf0) == 0x40)
 		rex = instr[start++];
-#endif
 
 	/*
 	 * Now that we're pretty sure that the instruction is okay, copy the
@@ -452,11 +448,9 @@ fasttrap_tracepoint_init(proc_t *p, fasttrap_tracepoint_t *tp, user_addr_t pc,
 				 * modes, there is a 32-bit operand.
 				 */
 				if (mod == 0 && rm == 5) {
-#if __sol64 || defined(__APPLE__)
 					if (p_model == DATAMODEL_LP64)
 						tp->ftt_base = REG_RIP;
 					else
-#endif
 						tp->ftt_base = FASTTRAP_NOREG;
 					sz = 4;
 				} else  {
@@ -554,7 +548,6 @@ fasttrap_tracepoint_init(proc_t *p, fasttrap_tracepoint_t *tp, user_addr_t pc,
 			break;
 
 		case FASTTRAP_NOP:
-#if __sol64 || defined(__APPLE__)
 			ASSERT(p_model == DATAMODEL_LP64 || rex == 0);
 
 			/*
@@ -564,7 +557,6 @@ fasttrap_tracepoint_init(proc_t *p, fasttrap_tracepoint_t *tp, user_addr_t pc,
 			 * (e.g. xchgl %r8d, %eax or xcghq %r8, %rax).
 			 */
 			if (FASTTRAP_REX_B(rex) == 0)
-#endif
 				tp->ftt_type = FASTTRAP_T_NOP;
 			break;
 
@@ -591,7 +583,6 @@ fasttrap_tracepoint_init(proc_t *p, fasttrap_tracepoint_t *tp, user_addr_t pc,
 		}
 	}
 
-#if __sol64 || defined(__APPLE__)
 	if (p_model == DATAMODEL_LP64 && tp->ftt_type == FASTTRAP_T_COMMON) {
 		/*
 		 * If the process is 64-bit and the instruction type is still
@@ -637,7 +628,6 @@ fasttrap_tracepoint_init(proc_t *p, fasttrap_tracepoint_t *tp, user_addr_t pc,
 			}
 		}
 	}
-#endif
 
 	return (0);
 }
@@ -993,12 +983,12 @@ fasttrap_pid_probe32(x86_saved_state_t *regs)
 	 * parent. We know that there's only one thread of control in such a
 	 * process: this one.
 	 */
-	/*
-	 * APPLE NOTE: Terry says: "You need to hold the process locks (currently: kernel funnel) for this traversal"
-	 * FIXME: How do we assert this?
-	 */
-	while (p->p_lflag & P_LINVFORK)
-		p = p->p_pptr;
+	if (p->p_lflag & P_LINVFORK) {
+		proc_list_lock();
+		while (p->p_lflag & P_LINVFORK)
+			p = p->p_pptr;
+		proc_list_unlock();
+	}
 
 	pid = p->p_pid;
 	pid_mtx = &cpu_core[CPU->cpu_id].cpuc_pid_lock;
@@ -1552,12 +1542,12 @@ fasttrap_pid_probe64(x86_saved_state_t *regs)
 	 * parent. We know that there's only one thread of control in such a
 	 * process: this one.
 	 */
-	/*
-	 * APPLE NOTE: Terry says: "You need to hold the process locks (currently: kernel funnel) for this traversal"
-	 * FIXME: How do we assert this?
-	 */
-	while (p->p_lflag & P_LINVFORK)
-		p = p->p_pptr;
+	if (p->p_lflag & P_LINVFORK) {
+		proc_list_lock();
+		while (p->p_lflag & P_LINVFORK)
+			p = p->p_pptr;
+		proc_list_unlock();
+	}
 
 	pid = p->p_pid;
 	pid_mtx = &cpu_core[CPU->cpu_id].cpuc_pid_lock;
@@ -2184,13 +2174,10 @@ fasttrap_return_probe(x86_saved_state_t *regs)
 	 * parent. We know that there's only one thread of control in such a
 	 * process: this one.
 	 */
-	/*
-	 * APPLE NOTE: Terry says: "You need to hold the process locks (currently: kernel funnel) for this traversal"
-	 * How do we assert this?
-	 */
-	while (p->p_lflag & P_LINVFORK) {
+	proc_list_lock();
+	while (p->p_lflag & P_LINVFORK)
 		p = p->p_pptr;
-	}
+	proc_list_unlock();
 
 	/*
 	 * We set rp->r_pc to the address of the traced instruction so

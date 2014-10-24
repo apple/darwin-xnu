@@ -430,7 +430,8 @@ filt_machport(
 	 * provided, just force a MACH_RCV_TOO_LARGE to detect the
 	 * name of the port and sizeof the waiting message.
 	 */
-	option = kn->kn_sfflags & (MACH_RCV_MSG|MACH_RCV_LARGE|MACH_RCV_LARGE_IDENTITY|MACH_RCV_TRAILER_MASK);
+	option = kn->kn_sfflags & (MACH_RCV_MSG|MACH_RCV_LARGE|MACH_RCV_LARGE_IDENTITY|
+				   MACH_RCV_TRAILER_MASK|MACH_RCV_VOUCHER);
 	if (option & MACH_RCV_MSG) {
 		self->ith_msg_addr = (mach_vm_address_t) kn->kn_ext[0];
 		size = (mach_msg_size_t)kn->kn_ext[1];

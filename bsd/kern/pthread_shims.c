@@ -49,6 +49,13 @@
 /* version number of the in-kernel shims given to pthread.kext */
 #define PTHREAD_SHIMS_VERSION 1
 
+/* on arm, the callbacks function has two #ifdef arm ponters */
+#define PTHREAD_CALLBACK_MEMBER ml_get_max_cpus
+
+/* compile time asserts to check the length of structures in pthread_shims.h */
+char pthread_functions_size_compile_assert[(sizeof(struct pthread_functions_s) - offsetof(struct pthread_functions_s, psynch_rw_yieldwrlock) - sizeof(void*)) == (sizeof(void*) * 100) ? 1 : -1];
+char pthread_callbacks_size_compile_assert[(sizeof(struct pthread_callbacks_s) - offsetof(struct pthread_callbacks_s, PTHREAD_CALLBACK_MEMBER) - sizeof(void*)) == (sizeof(void*) * 100) ? 1 : -1];
+
 /* old pthread code had definitions for these as they don't exist in headers */
 extern kern_return_t mach_port_deallocate(ipc_space_t, mach_port_name_t);
 extern kern_return_t semaphore_signal_internal_trap(mach_port_name_t);
@@ -67,8 +74,10 @@ PTHREAD_STRUCT_ACCESSOR(proc_get_threadstart, proc_set_threadstart, user_addr_t,
 PTHREAD_STRUCT_ACCESSOR(proc_get_pthsize, proc_set_pthsize, int, struct proc*, p_pthsize);
 PTHREAD_STRUCT_ACCESSOR(proc_get_wqthread, proc_set_wqthread, user_addr_t, struct proc*, p_wqthread);
 PTHREAD_STRUCT_ACCESSOR(proc_get_targconc, proc_set_targconc, user_addr_t, struct proc*, p_targconc);
+PTHREAD_STRUCT_ACCESSOR(proc_get_stack_addr_hint, proc_set_stack_addr_hint, user_addr_t, struct proc *, p_stack_addr_hint);
 PTHREAD_STRUCT_ACCESSOR(proc_get_dispatchqueue_offset, proc_set_dispatchqueue_offset, uint64_t, struct proc*, p_dispatchqueue_offset);
 PTHREAD_STRUCT_ACCESSOR(proc_get_dispatchqueue_serialno_offset, proc_set_dispatchqueue_serialno_offset, uint64_t, struct proc*, p_dispatchqueue_serialno_offset);
+PTHREAD_STRUCT_ACCESSOR(proc_get_pthread_tsd_offset, proc_set_pthread_tsd_offset, uint32_t, struct proc *, p_pth_tsd_offset);
 PTHREAD_STRUCT_ACCESSOR(proc_get_wqptr, proc_set_wqptr, void*, struct proc*, p_wqptr);
 PTHREAD_STRUCT_ACCESSOR(proc_get_wqsize, proc_set_wqsize, int, struct proc*, p_wqsize);
 PTHREAD_STRUCT_ACCESSOR(proc_get_pthhash, proc_set_pthhash, void*, struct proc*, p_pthhash);
@@ -131,6 +140,48 @@ _current_map(void)
 	return current_map();
 }
 
+static boolean_t
+qos_main_thread_active(void)
+{
+	return TRUE;
+}
+
+
+static int proc_usynch_get_requested_thread_qos(struct uthread *uth)
+{
+	task_t		task = current_task();
+	thread_t	thread = uth ? uth->uu_thread : current_thread();
+	int			requested_qos;
+
+	requested_qos = proc_get_task_policy(task, thread, TASK_POLICY_ATTRIBUTE, TASK_POLICY_QOS);
+
+	/*
+	 * For the purposes of userspace synchronization, it doesn't make sense to place an override of UNSPECIFIED
+	 * on another thread, if the current thread doesn't have any QoS set. In these cases, upgrade to
+	 * THREAD_QOS_USER_INTERACTIVE.
+	 */
+	if (requested_qos == THREAD_QOS_UNSPECIFIED) {
+		requested_qos = THREAD_QOS_USER_INTERACTIVE;
+	}
+
+	return requested_qos;
+}
+
+static boolean_t proc_usynch_thread_qos_add_override(struct uthread *uth, uint64_t tid, int override_qos, boolean_t first_override_for_resource)
+{
+	task_t task = current_task();
+	thread_t thread = uth ? uth->uu_thread : THREAD_NULL;
+	
+	return proc_thread_qos_add_override(task, thread, tid, override_qos, first_override_for_resource);
+}
+
+static boolean_t proc_usynch_thread_qos_remove_override(struct uthread *uth, uint64_t tid)
+{
+	task_t task = current_task();
+	thread_t thread = uth ? uth->uu_thread : THREAD_NULL;
+
+	return proc_thread_qos_remove_override(task, thread, tid);
+}
 
 /* kernel (core) to kext shims */
 
@@ -210,8 +261,17 @@ bsdthread_create(struct proc *p, struct bsdthread_create_args *uap, user_addr_t 
 int
 bsdthread_register(struct proc *p, struct bsdthread_register_args *uap, __unused int32_t *retval)
 {
-	return pthread_functions->bsdthread_register(p, uap->threadstart, uap->wqthread, uap->pthsize, uap->dummy_value, 
-			uap->targetconc_ptr, uap->dispatchqueue_offset, retval);
+	if (pthread_functions->version >= 1) {
+		return pthread_functions->bsdthread_register2(p, uap->threadstart, uap->wqthread,
+													  uap->flags, uap->stack_addr_hint, 
+													  uap->targetconc_ptr, uap->dispatchqueue_offset,
+													  uap->tsd_offset, retval);		
+	} else {
+		return pthread_functions->bsdthread_register(p, uap->threadstart, uap->wqthread,
+													 uap->flags, uap->stack_addr_hint,
+													 uap->targetconc_ptr, uap->dispatchqueue_offset,
+													 retval);
+	}
 }
 
 int
@@ -219,6 +279,13 @@ bsdthread_terminate(struct proc *p, struct bsdthread_terminate_args *uap, int32_
 {
 	return pthread_functions->bsdthread_terminate(p, uap->stackaddr, uap->freesize, uap->port, uap->sem, retval);
 }
+
+int
+bsdthread_ctl(struct proc *p, struct bsdthread_ctl_args *uap, int *retval)
+{
+    return pthread_functions->bsdthread_ctl(p, uap->cmd, uap->arg1, uap->arg2, uap->arg3, retval);
+}
+
 
 int
 thread_selfid(struct proc *p, __unused struct thread_selfid_args *uap, uint64_t *retval)
@@ -324,14 +391,6 @@ psynch_rw_downgrade(__unused proc_t p, __unused struct psynch_rw_downgrade_args 
 	return 0;
 }
 
-/* unimplemented guard */
-
-// static void
-// unhooked_panic(void)
-// {
-// 	panic("pthread system call not hooked up");
-// }
- 
 /*
  * The callbacks structure (defined in pthread_shims.h) contains a collection
  * of kernel functions that were not deemed sensible to expose as a KPI to all
@@ -398,6 +457,8 @@ static struct pthread_callbacks_s pthread_callbacks = {
 	.thread_static_param = thread_static_param,
 	.thread_create_workq = thread_create_workq,
 	.thread_policy_set_internal = thread_policy_set_internal,
+	.thread_policy_get = thread_policy_get,
+	.thread_set_voucher_name = thread_set_voucher_name,
 
 	.thread_affinity_set = thread_affinity_set,
 
@@ -419,6 +480,19 @@ static struct pthread_callbacks_s pthread_callbacks = {
 
 	.proc_get_dispatchqueue_serialno_offset = proc_get_dispatchqueue_serialno_offset,
 	.proc_set_dispatchqueue_serialno_offset = proc_set_dispatchqueue_serialno_offset,
+
+	.proc_get_stack_addr_hint = proc_get_stack_addr_hint,
+	.proc_set_stack_addr_hint = proc_set_stack_addr_hint,
+	.proc_get_pthread_tsd_offset = proc_get_pthread_tsd_offset,
+	.proc_set_pthread_tsd_offset = proc_set_pthread_tsd_offset,
+
+	.thread_set_tsd_base = thread_set_tsd_base,
+
+	.proc_usynch_get_requested_thread_qos = proc_usynch_get_requested_thread_qos,
+	.proc_usynch_thread_qos_add_override = proc_usynch_thread_qos_add_override,
+	.proc_usynch_thread_qos_remove_override = proc_usynch_thread_qos_remove_override,
+
+	.qos_main_thread_active = qos_main_thread_active,
 };
 
 pthread_callbacks_t pthread_kern = &pthread_callbacks;

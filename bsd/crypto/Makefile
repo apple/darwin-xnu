@@ -8,8 +8,6 @@ include $(MakeInc_cmd)
 include $(MakeInc_def)
 
 INSTINC_SUBDIRS = \
-	blowfish \
-	cast128 \
 	rc4 \
 
 PRIVATE_DATAFILES = \

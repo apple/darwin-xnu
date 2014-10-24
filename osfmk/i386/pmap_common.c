@@ -194,6 +194,35 @@ compute_pmap_gc_throttle(void *arg __unused)
 }
 
 
+void
+pmap_lock_phys_page(ppnum_t pn)
+{
+	int		pai;
+
+	pai = ppn_to_pai(pn);
+
+	if (IS_MANAGED_PAGE(pai)) {
+		LOCK_PVH(pai);
+	} else
+		simple_lock(&phys_backup_lock);
+}
+
+
+void
+pmap_unlock_phys_page(ppnum_t pn)
+{
+	int		pai;
+
+	pai = ppn_to_pai(pn);
+
+	if (IS_MANAGED_PAGE(pai)) {
+		UNLOCK_PVH(pai);
+	} else
+		simple_unlock(&phys_backup_lock);
+}
+
+
+
 __private_extern__ void
 pmap_pagetable_corruption_msg_log(int (*log_func)(const char * fmt, ...)__printflike(1,2)) {
 	if (pmap_pagetable_corruption_incidents > 0) {

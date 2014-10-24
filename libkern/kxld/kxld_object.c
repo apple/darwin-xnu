@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2009-2012 Apple Inc. All rights reserved.
+ * Copyright (c) 2009-2014 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -329,7 +329,13 @@ get_target_machine_info(KXLDObject *object, cpu_type_t cputype __unused,
 
 #if   defined(__x86_64__)
     object->cputype = CPU_TYPE_X86_64;
+/* FIXME: we need clang to provide a __x86_64h__ macro for the sub-type. Using
+ * __AVX2__ is a temporary solution until this is available. */
+#if   defined(__AVX2__)
+    object->cpusubtype = CPU_SUBTYPE_X86_64_H;
+#else
     object->cpusubtype = CPU_SUBTYPE_X86_64_ALL;
+#endif
     return KERN_SUCCESS;
 #else 
     kxld_log(kKxldLogLinking, kKxldLogErr, 
@@ -374,6 +380,9 @@ get_target_machine_info(KXLDObject *object, cpu_type_t cputype __unused,
         case CPU_TYPE_ARM:
             object->cpusubtype = CPU_SUBTYPE_ARM_ALL;
             break;
+        case CPU_TYPE_ARM64:
+            object->cpusubtype = CPU_SUBTYPE_ARM64_ALL;
+            break;
         default:
             object->cpusubtype = 0;
             break;
@@ -386,6 +395,7 @@ get_target_machine_info(KXLDObject *object, cpu_type_t cputype __unused,
 
     switch(object->cputype) {
     case CPU_TYPE_ARM:
+    case CPU_TYPE_ARM64:
     case CPU_TYPE_I386:
     case CPU_TYPE_X86_64:
         object->target_order = NX_LittleEndian;
@@ -452,8 +462,7 @@ get_macho_slice_for_arch(KXLDObject *object, u_char *file, u_long size)
 
         /* Locate the Mach-O for the requested architecture */
 
-        arch = NXFindBestFatArch(object->cputype, object->cpusubtype, archs, 
-            fat->nfat_arch);
+        arch = NXFindBestFatArch(object->cputype, object->cpusubtype, archs, fat->nfat_arch);
         require_action(arch, finish, rval=KERN_FAILURE;
             kxld_log(kKxldLogLinking, kKxldLogErr, kKxldLogArchNotFound));
         require_action(size >= arch->offset + arch->size, finish, 
@@ -485,6 +494,7 @@ get_macho_slice_for_arch(KXLDObject *object, u_char *file, u_long size)
     require_action(object->cputype == mach_hdr->cputype, finish,
         rval=KERN_FAILURE;
         kxld_log(kKxldLogLinking, kKxldLogErr, kKxldLogTruncatedMachO));
+    object->cpusubtype = mach_hdr->cpusubtype;  /* <rdar://problem/16008438> */
 
     rval = KERN_SUCCESS;
 finish:
@@ -1478,7 +1488,8 @@ target_supports_protected_segments(const KXLDObject *object)
 {
     return (object->is_final_image && 
             (object->cputype == CPU_TYPE_X86_64 ||
-             object->cputype == CPU_TYPE_ARM));
+             object->cputype == CPU_TYPE_ARM ||
+             object->cputype == CPU_TYPE_ARM64));
 }
 
 /*******************************************************************************

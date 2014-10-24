@@ -14,5 +14,7 @@ class testthreadcall : public IOService {
     
 public:
 	thread_call_t tcall;
+	thread_call_t tcall2;
 	IOSimpleLock *tlock;
+	IOLock       *tlock2;
 };

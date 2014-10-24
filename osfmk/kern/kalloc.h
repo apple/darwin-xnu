@@ -75,8 +75,6 @@ __END_DECLS
 
 #ifdef	MACH_KERNEL_PRIVATE
 
-#include <kern/lock.h>
-
 extern void		kalloc_init(void);
 
 extern void		kalloc_fake_zone_init( int );

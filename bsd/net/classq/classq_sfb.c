@@ -130,6 +130,24 @@
 #define	PBOXTIME_MIN	(30ULL * 1000 * 1000)	/* 30ms */
 #define	PBOXTIME_MAX	(300ULL * 1000 * 1000)	/* 300ms */
 
+/*
+ * Target queueing delay is the amount of extra delay that can be added
+ * to accommodate variations in the link bandwidth. The queue should be
+ * large enough to induce this much delay and nothing more than that.
+ */
+#define	TARGET_QDELAY_BASE	(10ULL * 1000 * 1000)	/* 10ms */
+#define TARGET_QDELAY_MIN	(10ULL * 1000)	/* 10us */
+#define TARGET_QDELAY_MAX	(20ULL * 1000 * 1000 * 1000)	/* 20s */
+
+/*
+ * Update interval for checking the extra delay added by the queue. This
+ * should be 90-95 percentile of RTT experienced by any TCP connection 
+ * so that it will take care of the burst traffic.
+ */
+#define	UPDATE_INTERVAL_BASE	(100ULL * 1000 * 1000)	/* 100ms */
+#define	UPDATE_INTERVAL_MIN	(100ULL * 1000 * 1000)	/* 100ms */
+#define	UPDATE_INTERVAL_MAX	(10ULL * 1000 * 1000 * 1000)	/* 10s */
+
 #define	SFB_RANDOM(sp, tmin, tmax)	((sfb_random(sp) % (tmax)) + (tmin))
 
 #define	SFB_PKT_PBOX	0x1		/* in penalty box */
@@ -166,6 +184,19 @@
 			(_bin)->pmark = 0;				\
 	}								\
 } while (0)
+
+/* Minimum nuber of bytes in queue to get flow controlled */
+#define	SFB_MIN_FC_THRESHOLD_BYTES	7500
+
+#define SFB_SET_DELAY_HIGH(_sp_, _q_) do {				\
+	(_sp_)->sfb_flags |= SFBF_DELAYHIGH;				\
+	(_sp_)->sfb_fc_threshold = max(SFB_MIN_FC_THRESHOLD_BYTES,	\
+		(qsize((_q_)) >> 3));		\
+} while (0)
+
+#define	SFB_QUEUE_DELAYBASED(_sp_) ((_sp_)->sfb_flags & SFBF_DELAYBASED)
+#define SFB_IS_DELAYHIGH(_sp_) ((_sp_)->sfb_flags & SFBF_DELAYHIGH)
+#define	SFB_QUEUE_DELAYBASED_MAXSIZE	2048	/* max pkts */
 
 #define	HINTERVAL_MIN	(10)	/* 10 seconds */
 #define	HINTERVAL_MAX	(20)	/* 20 seconds */
@@ -212,6 +243,8 @@ static void sfb_resetq(struct sfb *, cqev_t);
 static void sfb_calc_holdtime(struct sfb *, u_int64_t);
 static void sfb_calc_pboxtime(struct sfb *, u_int64_t);
 static void sfb_calc_hinterval(struct sfb *, u_int64_t *);
+static void sfb_calc_target_qdelay(struct sfb *, u_int64_t);
+static void sfb_calc_update_interval(struct sfb *, u_int64_t);
 static void sfb_swap_bins(struct sfb *, u_int32_t);
 static inline int sfb_pcheck(struct sfb *, struct pkthdr *);
 static int sfb_penalize(struct sfb *, struct pkthdr *, struct timespec *);
@@ -222,13 +255,16 @@ static void sfb_decrement_bin(struct sfb *, struct sfbbinstats *,
 static void sfb_increment_bin(struct sfb *, struct sfbbinstats *,
     struct timespec *, struct timespec *);
 static inline void sfb_dq_update_bins(struct sfb *, struct pkthdr *,
-    struct timespec *);
+    struct timespec *, u_int32_t qsize);
 static inline void sfb_eq_update_bins(struct sfb *, struct pkthdr *);
 static int sfb_drop_early(struct sfb *, struct pkthdr *, u_int16_t *,
     struct timespec *);
 static boolean_t sfb_bin_addfcentry(struct sfb *, struct pkthdr *);
 static void sfb_fclist_append(struct sfb *, struct sfb_fcl *);
 static void sfb_fclists_clean(struct sfb *sp);
+static int sfb_bin_mark_or_drop(struct sfb *sp, struct sfbbinstats *bin);
+static void sfb_detect_dequeue_stall(struct sfb *sp, class_queue_t *,
+    struct timespec *);
 
 SYSCTL_NODE(_net_classq, OID_AUTO, sfb, CTLFLAG_RW|CTLFLAG_LOCKED, 0, "SFB");
 
@@ -243,6 +279,14 @@ SYSCTL_QUAD(_net_classq_sfb, OID_AUTO, pboxtime, CTLFLAG_RW|CTLFLAG_LOCKED,
 static u_int64_t sfb_hinterval;
 SYSCTL_QUAD(_net_classq_sfb, OID_AUTO, hinterval, CTLFLAG_RW|CTLFLAG_LOCKED,
     &sfb_hinterval, "SFB hash interval in nanoseconds");
+
+static u_int64_t sfb_target_qdelay;
+SYSCTL_QUAD(_net_classq_sfb, OID_AUTO, target_qdelay, CTLFLAG_RW|CTLFLAG_LOCKED,
+    &sfb_target_qdelay, "SFB target queue delay in milliseconds");
+
+static u_int64_t sfb_update_interval;
+SYSCTL_QUAD(_net_classq_sfb, OID_AUTO, update_interval,
+    CTLFLAG_RW|CTLFLAG_LOCKED, &sfb_update_interval, "SFB update interval");
 
 static u_int32_t sfb_increment = SFB_INCREMENT;
 SYSCTL_UINT(_net_classq_sfb, OID_AUTO, increment, CTLFLAG_RW|CTLFLAG_LOCKED,
@@ -260,8 +304,9 @@ static u_int32_t sfb_ratelimit = 0;
 SYSCTL_UINT(_net_classq_sfb, OID_AUTO, ratelimit, CTLFLAG_RW|CTLFLAG_LOCKED,
 	&sfb_ratelimit, 0, "SFB rate limit");
 
-#define	MBPS	(1ULL * 1000 * 1000)
-#define	GBPS	(MBPS * 1000)
+#define	KBPS	(1ULL * 1000)		/* 1 Kbits per second */
+#define	MBPS	(1ULL * 1000 * 1000)	/* 1 Mbits per second */
+#define	GBPS	(MBPS * 1000)		/* 1 Gbits per second */
 
 struct sfb_time_tbl {
 	u_int64_t	speed;		/* uplink speed */
@@ -394,6 +439,47 @@ sfb_calc_hinterval(struct sfb *sp, u_int64_t *t)
 	net_timeradd(&now, &sp->sfb_hinterval, &sp->sfb_nextreset);
 }
 
+static void
+sfb_calc_target_qdelay(struct sfb *sp, u_int64_t out_bw)
+{
+#pragma unused(out_bw)
+	u_int64_t target_qdelay = 0;
+	struct ifnet *ifp = sp->sfb_ifp;
+
+	target_qdelay = IFCQ_TARGET_QDELAY(&ifp->if_snd);	
+
+	if (sfb_target_qdelay != 0)
+		target_qdelay = sfb_target_qdelay;
+
+	/*
+	 * If we do not know the effective bandwidth, use the default
+	 * target queue delay.
+	 */
+	if (target_qdelay == 0)
+		target_qdelay = IFQ_TARGET_DELAY;
+
+	sp->sfb_target_qdelay = target_qdelay;
+}
+
+static void
+sfb_calc_update_interval(struct sfb *sp, u_int64_t out_bw)
+{
+#pragma unused(out_bw)
+	u_int64_t update_interval = 0;
+
+	/* If the system-level override is set, use it */
+	if (sfb_update_interval != 0)
+		update_interval = sfb_update_interval;
+	/*
+	 * If we do not know the effective bandwidth, use the default
+	 * update interval.
+	 */
+	if (update_interval == 0)
+		update_interval = IFQ_UPDATE_INTERVAL;
+
+	net_nsectimer(&update_interval, &sp->sfb_update_interval);
+}
+
 /*
  * sfb support routines
  */
@@ -514,6 +600,8 @@ sfb_resetq(struct sfb *sp, cqev_t ev)
 	sfb_calc_holdtime(sp, eff_rate);
 	sfb_calc_pboxtime(sp, eff_rate);
 	sfb_calc_hinterval(sp, NULL);
+	sfb_calc_target_qdelay(sp, eff_rate);
+	sfb_calc_update_interval(sp, eff_rate);
 
 	if (ev == CLASSQ_EV_LINK_DOWN ||
 		ev == CLASSQ_EV_LINK_UP)
@@ -527,12 +615,16 @@ sfb_resetq(struct sfb *sp, cqev_t ev)
 
 	log(LOG_DEBUG, "%s: SFB qid=%d, holdtime=%llu nsec, "
 	    "pboxtime=%llu nsec, allocation=%d, drop_thresh=%d, "
-	    "hinterval=%d sec, sfb_bins=%d bytes, eff_rate=%llu bps\n",
+	    "hinterval=%d sec, sfb_bins=%d bytes, eff_rate=%llu bps"
+	    "target_qdelay= %llu nsec "
+	    "update_interval=%llu sec %llu nsec flags=0x%x\n",
 	    if_name(ifp), sp->sfb_qid, (u_int64_t)sp->sfb_holdtime.tv_nsec,
 	    (u_int64_t)sp->sfb_pboxtime.tv_nsec,
 	    (u_int32_t)sp->sfb_allocation, (u_int32_t)sp->sfb_drop_thresh,
 	    (int)sp->sfb_hinterval.tv_sec, (int)sizeof (*sp->sfb_bins),
-	    eff_rate);
+	    eff_rate, (u_int64_t)sp->sfb_target_qdelay,
+	    (u_int64_t)sp->sfb_update_interval.tv_sec,
+	    (u_int64_t)sp->sfb_update_interval.tv_nsec, sp->sfb_flags);
 }
 
 void
@@ -542,10 +634,15 @@ sfb_getstats(struct sfb *sp, struct sfb_stats *sps)
 	sps->dropthresh = sp->sfb_drop_thresh;
 	sps->clearpkts = sp->sfb_clearpkts;
 	sps->current = sp->sfb_current;
+	sps->target_qdelay = sp->sfb_target_qdelay;
+	sps->min_estdelay = sp->sfb_min_qdelay;
+	sps->delay_fcthreshold = sp->sfb_fc_threshold;
+	sps->flags = sp->sfb_flags;
 
 	net_timernsec(&sp->sfb_holdtime, &sp->sfb_stats.hold_time);
 	net_timernsec(&sp->sfb_pboxtime, &sp->sfb_stats.pbox_time);
 	net_timernsec(&sp->sfb_hinterval, &sp->sfb_stats.rehash_intval);
+	net_timernsec(&sp->sfb_update_interval, &sps->update_interval);
 	*(&(sps->sfbstats)) = *(&(sp->sfb_stats));
 
 	_CASSERT(sizeof ((*sp->sfb_bins)[0].stats) ==
@@ -597,6 +694,7 @@ sfb_swap_bins(struct sfb *sp, u_int32_t len)
 			wbin = SFB_BINST(sp, j, i, s ^ 1);	/* warm-up */
 
 			cbin->pkts = 0;
+			cbin->bytes = 0;
 			if (cbin->pmark > SFB_MAX_PMARK)
 				cbin->pmark = SFB_MAX_PMARK;
 			if (cbin->pmark < 0)
@@ -750,7 +848,8 @@ sfb_increment_bin(struct sfb *sp, struct sfbbinstats *bin, struct timespec *ft,
 }
 
 static inline void
-sfb_dq_update_bins(struct sfb *sp, struct pkthdr *pkt, struct timespec *now)
+sfb_dq_update_bins(struct sfb *sp, struct pkthdr *pkt,
+    struct timespec *now, u_int32_t qsize)
 {
 #if SFB_LEVELS != 2 || SFB_FC_LEVEL != 0
 	int i;
@@ -770,23 +869,35 @@ sfb_dq_update_bins(struct sfb *sp, struct pkthdr *pkt, struct timespec *now)
 	n = SFB_BINMASK(pkt->pkt_sfb_hash8[(s << 1)]);
 	bin = SFB_BINST(sp, 0, n, s);
 
-	VERIFY(bin->pkts > 0);
-	if (--bin->pkts == 0) {
+	VERIFY(bin->pkts > 0 && bin->bytes >= (u_int32_t)pkt->len);
+	bin->pkts--;
+	bin->bytes -= pkt->len;
+
+	if (bin->pkts == 0)
 		sfb_decrement_bin(sp, bin, SFB_BINFT(sp, 0, n, s), now);
+
+	/* Deliver flow control feedback to the sockets */
+	if (SFB_QUEUE_DELAYBASED(sp)) {
+		if (!(SFB_IS_DELAYHIGH(sp)) ||
+		    bin->bytes <= sp->sfb_fc_threshold ||
+		    bin->pkts == 0 || qsize == 0)
+			fcl = SFB_FC_LIST(sp, n);
+	} else if (bin->pkts <= (sp->sfb_allocation >> 2)) {
+			fcl = SFB_FC_LIST(sp, n);
 	}
-	if (bin->pkts <= (sp->sfb_allocation >> 2)) {
-		/* deliver flow control feedback to the sockets */
-		fcl = SFB_FC_LIST(sp, n);
-		if (!STAILQ_EMPTY(&fcl->fclist))
-			sfb_fclist_append(sp, fcl);
-	}
+
+	if (fcl != NULL && !STAILQ_EMPTY(&fcl->fclist))
+		sfb_fclist_append(sp, fcl);
+	fcl = NULL;
 
 	/* Level 1: bin index at [1] for set 0; [3] for set 1 */
 	n = SFB_BINMASK(pkt->pkt_sfb_hash8[(s << 1) + 1]);
 	bin = SFB_BINST(sp, 1, n, s);
 
-	VERIFY(bin->pkts > 0);
-	if (--bin->pkts == 0)
+	VERIFY(bin->pkts > 0 && bin->bytes >= (u_int64_t)pkt->len);
+	bin->pkts--;
+	bin->bytes -= pkt->len;
+	if (bin->pkts == 0)
 		sfb_decrement_bin(sp, bin, SFB_BINFT(sp, 1, n, s), now);
 #else /* SFB_LEVELS != 2 || SFB_FC_LEVEL != 0 */
 	for (i = 0; i < SFB_LEVELS; i++) {
@@ -797,19 +908,24 @@ sfb_dq_update_bins(struct sfb *sp, struct pkthdr *pkt, struct timespec *now)
 
 		bin = SFB_BINST(sp, i, n, s);
 
-		VERIFY(bin->pkts > 0);
-		if (--bin->pkts == 0) {
+		VERIFY(bin->pkts > 0 && bin->bytes >= pkt->len);
+		bin->pkts--;
+		bin->bytes -= pkt->len;
+		if (bin->pkts == 0)
 			sfb_decrement_bin(sp, bin,
 			    SFB_BINFT(sp, i, n, s), now);
-		}
-		if (bin->pkts <= (sp->sfb_allocation >> 2)) {
-			/* deliver flow control feedback to the sockets */
-			if (i == SFB_FC_LEVEL) {
+		if (i != SFB_FC_LEVEL)
+			continue;
+		if (SFB_QUEUE_DELAYBASED(sp)) {
+			if (!(SFB_IS_DELAYHIGH(sp)) ||
+			    bin->bytes <= sp->sfb_fc_threshold)
 				fcl = SFB_FC_LIST(sp, n);
-				if (!STAILQ_EMPTY(&fcl->fclist))
-					sfb_fclist_append(sp, fcl);
-			}
+		} else if (bin->pkts <= (sp->sfb_allocation >> 2)) {
+			fcl = SFB_FC_LIST(sp, n);
 		}
+		if (fcl != NULL && !STAILQ_EMPTY(&fcl->fclist))
+			sfb_fclist_append(sp, fcl);
+		fcl = NULL;
 	}
 #endif /* SFB_LEVELS != 2 || SFB_FC_LEVEL != 0 */
 }
@@ -821,7 +937,7 @@ sfb_eq_update_bins(struct sfb *sp, struct pkthdr *pkt)
 	int i, n;
 #endif /* SFB_LEVELS != 2 */
 	int s;
-
+	struct sfbbinstats *bin;
 	s = sp->sfb_current;
 	VERIFY((s + (s ^ 1)) == 1);
 
@@ -830,12 +946,17 @@ sfb_eq_update_bins(struct sfb *sp, struct pkthdr *pkt)
 	 */
 #if SFB_LEVELS == 2
 	/* Level 0: bin index at [0] for set 0; [2] for set 1 */
-	SFB_BINST(sp, 0,
-	    SFB_BINMASK(pkt->pkt_sfb_hash8[(s << 1)]), s)->pkts++;
+	bin = SFB_BINST(sp, 0,
+	    SFB_BINMASK(pkt->pkt_sfb_hash8[(s << 1)]), s);
+	bin->pkts++;
+	bin->bytes += pkt->len;
 
 	/* Level 1: bin index at [1] for set 0; [3] for set 1 */
-	SFB_BINST(sp, 1,
-	    SFB_BINMASK(pkt->pkt_sfb_hash8[(s << 1) + 1]), s)->pkts++;
+	bin = SFB_BINST(sp, 1,
+	    SFB_BINMASK(pkt->pkt_sfb_hash8[(s << 1) + 1]), s);
+	bin->pkts++;
+	bin->bytes += pkt->len;
+
 #else /* SFB_LEVELS != 2 */
 	for (i = 0; i < SFB_LEVELS; i++) {
 		if (s == 0)		/* set 0, bin index [0,1] */
@@ -843,7 +964,9 @@ sfb_eq_update_bins(struct sfb *sp, struct pkthdr *pkt)
 		else			/* set 1, bin index [2,3] */
 			n = SFB_BINMASK(pkt->pkt_sfb_hash8[i + 2]);
 
-		SFB_BINST(sp, i, n, s)->pkts++;
+		bin = SFB_BINST(sp, i, n, s);
+		bin->pkts++;
+		bin->bytes += pkt->len;
 	}
 #endif /* SFB_LEVELS != 2 */
 }
@@ -894,6 +1017,30 @@ sfb_bin_addfcentry(struct sfb *sp, struct pkthdr *pkt)
 }
 
 /*
+ * check if this flow needs to be flow-controlled or if this
+ * packet needs to be dropped.
+ */
+static int
+sfb_bin_mark_or_drop(struct sfb *sp, struct sfbbinstats *bin)
+{
+	int ret = 0;
+	if (SFB_QUEUE_DELAYBASED(sp)) {
+		/*
+		 * Mark or drop if this bin has more
+		 * bytes than the flowcontrol threshold.
+		 */
+		if (SFB_IS_DELAYHIGH(sp) &&
+		    bin->bytes >= (sp->sfb_fc_threshold << 1))
+			ret = 1;
+	} else {
+		if (bin->pkts >= sp->sfb_allocation &&
+		    bin->pkts >= sp->sfb_drop_thresh)
+			ret = 1;	/* drop or mark */
+	}
+	return (ret);
+}
+
+/*
  * early-drop probability is kept in pmark of each bin of the flow
  */
 static int
@@ -921,11 +1068,12 @@ sfb_drop_early(struct sfb *sp, struct pkthdr *pkt, u_int16_t *pmin,
 	if (*pmin > (u_int16_t)bin->pmark)
 		*pmin = (u_int16_t)bin->pmark;
 
-	if (bin->pkts >= sp->sfb_allocation) {
-		if (bin->pkts >= sp->sfb_drop_thresh)
-			ret = 1;	/* drop or mark */
+
+	/* Update SFB probability */
+	if (bin->pkts >= sp->sfb_allocation)
 		sfb_increment_bin(sp, bin, SFB_BINFT(sp, 0, n, s), now);
-	}
+
+	ret = sfb_bin_mark_or_drop(sp, bin);
 
 	/* Level 1: bin index at [1] for set 0; [3] for set 1 */
 	n = SFB_BINMASK(pkt->pkt_sfb_hash8[(s << 1) + 1]);
@@ -933,11 +1081,8 @@ sfb_drop_early(struct sfb *sp, struct pkthdr *pkt, u_int16_t *pmin,
 	if (*pmin > (u_int16_t)bin->pmark)
 		*pmin = (u_int16_t)bin->pmark;
 
-	if (bin->pkts >= sp->sfb_allocation) {
-		if (bin->pkts >= sp->sfb_drop_thresh)
-			ret = 1;	/* drop or mark */
+	if (bin->pkts >= sp->sfb_allocation)
 		sfb_increment_bin(sp, bin, SFB_BINFT(sp, 1, n, s), now);
-	}
 #else /* SFB_LEVELS != 2 */
 	for (i = 0; i < SFB_LEVELS; i++) {
 		if (s == 0)		/* set 0, bin index [0,1] */
@@ -949,12 +1094,11 @@ sfb_drop_early(struct sfb *sp, struct pkthdr *pkt, u_int16_t *pmin,
 		if (*pmin > (u_int16_t)bin->pmark)
 			*pmin = (u_int16_t)bin->pmark;
 
-		if (bin->pkts >= sp->sfb_allocation) {
-			if (bin->pkts >= sp->sfb_drop_thresh)
-				ret = 1;	/* drop or mark */
+		if (bin->pkts >= sp->sfb_allocation)
 			sfb_increment_bin(sp, bin,
 			    SFB_BINFT(sp, i, n, s), now);
-		}
+		if (i == SFB_FC_LEVEL)
+			ret = sfb_bin_mark_or_drop(sp, bin);
 	}
 #endif /* SFB_LEVELS != 2 */
 
@@ -962,6 +1106,29 @@ sfb_drop_early(struct sfb *sp, struct pkthdr *pkt, u_int16_t *pmin,
 		ret = 1;	/* drop or mark */
 
 	return (ret);
+}
+
+void
+sfb_detect_dequeue_stall(struct sfb *sp, class_queue_t *q,
+    struct timespec *now)
+{
+	struct timespec max_getqtime;
+
+	if (!SFB_QUEUE_DELAYBASED(sp) || SFB_IS_DELAYHIGH(sp) ||
+	    qsize(q) <= SFB_MIN_FC_THRESHOLD_BYTES ||
+	    !net_timerisset(&sp->sfb_getqtime))
+		return;
+
+	net_timeradd(&sp->sfb_getqtime, &sp->sfb_update_interval,
+	    &max_getqtime);
+	if (net_timercmp(now, &max_getqtime, >)) {
+		/*
+		 * No packets have been dequeued in an update interval
+		 * worth of time. It means that the queue is stalled
+		 */
+		SFB_SET_DELAY_HIGH(sp, q);
+		sp->sfb_stats.dequeue_stall++;
+	}
 }
 
 #define	DTYPE_NODROP	0	/* no drop */
@@ -986,12 +1153,21 @@ sfb_addq(struct sfb *sp, class_queue_t *q, struct mbuf *m, struct pf_mtag *t)
 	s = sp->sfb_current;
 	VERIFY((s + (s ^ 1)) == 1);
 
+	/* See comments in <rdar://problem/14040693> */
+	VERIFY(!(pkt->pkt_flags & PKTF_PRIV_GUARDED));
+	pkt->pkt_flags |= PKTF_PRIV_GUARDED;
+
 	/* time to swap the bins? */
 	if (net_timercmp(&now, &sp->sfb_nextreset, >=)) {
 		net_timeradd(&now, &sp->sfb_hinterval, &sp->sfb_nextreset);
 		sfb_swap_bins(sp, qlen(q));
 		s = sp->sfb_current;
 		VERIFY((s + (s ^ 1)) == 1);
+	}
+
+	if (!net_timerisset(&sp->sfb_update_time)) {
+		net_timeradd(&now, &sp->sfb_update_interval,
+		    &sp->sfb_update_time);
 	}
 
 	pkt->pkt_sfb_flags = 0;
@@ -1001,6 +1177,9 @@ sfb_addq(struct sfb *sp, class_queue_t *q, struct mbuf *m, struct pf_mtag *t)
 	pkt->pkt_sfb_hash16[s ^ 1] =
 	    (SFB_HASH(&pkt->pkt_flowid, sizeof (pkt->pkt_flowid),
 	    (*sp->sfb_bins)[s ^ 1].fudge) & SFB_HASHMASK);
+
+	/* check if the queue has been stalled */
+	sfb_detect_dequeue_stall(sp, q, &now);
 
 	/* see if we drop early */
 	droptype = DTYPE_NODROP;
@@ -1039,8 +1218,23 @@ sfb_addq(struct sfb *sp, class_queue_t *q, struct mbuf *m, struct pf_mtag *t)
 		sp->sfb_stats.drop_pbox++;
 	}
 
-	/* if the queue length hits the hard limit, it's a forced drop */
-	if (droptype == DTYPE_NODROP && qlen(q) >= qlimit(q)) {
+	/*
+	 * if max queue size is static, make it a forced drop
+	 * when the queue length hits the queue limit
+	 */
+	if (!(SFB_QUEUE_DELAYBASED(sp)) &&
+	    droptype == DTYPE_NODROP && qlen(q) >= qlimit(q)) {
+		droptype = DTYPE_FORCED;
+		sp->sfb_stats.drop_queue++;
+	}
+
+	/*
+	 * delay based queues have a larger maximum size to
+	 * allow for bursts
+	 */
+	if (SFB_QUEUE_DELAYBASED(sp) &&
+	    droptype == DTYPE_NODROP &&
+	    qlen(q) >= SFB_QUEUE_DELAYBASED_MAXSIZE) {
 		droptype = DTYPE_FORCED;
 		sp->sfb_stats.drop_queue++;
 	}
@@ -1059,9 +1253,9 @@ sfb_addq(struct sfb *sp, class_queue_t *q, struct mbuf *m, struct pf_mtag *t)
 			ret = CLASSQEQ_DROPPED_FC;
 		}
 	}
-
 	/* if successful enqueue this packet, else drop it */
 	if (droptype == DTYPE_NODROP) {
+		net_timernsec(&now, &pkt->pkt_enqueue_ts);
 		_addq(q, m);
 	} else {
 		IFCQ_CONVERT_LOCK(&sp->sfb_ifp->if_snd);
@@ -1100,13 +1294,13 @@ sfb_getq_flow(struct sfb *sp, class_queue_t *q, u_int32_t flow, boolean_t purge)
 	VERIFY(m->m_flags & M_PKTHDR);
 
 	pkt = &m->m_pkthdr;
+	VERIFY(pkt->pkt_flags & PKTF_PRIV_GUARDED);
 
 	if (!purge) {
 		/* calculate EWMA of dequeues */
 		if (net_timerisset(&sp->sfb_getqtime)) {
 			struct timespec delta;
 			u_int64_t avg, new;
-
 			net_timersub(&now, &sp->sfb_getqtime, &delta);
 			net_timernsec(&delta, &new);
 			avg = sp->sfb_stats.dequeue_avg;
@@ -1115,7 +1309,7 @@ sfb_getq_flow(struct sfb *sp, class_queue_t *q, u_int32_t flow, boolean_t purge)
 				/*
 				 * If the time since last dequeue is
 				 * significantly greater than the current
-				 * average, weight the average more against
+				 * average, weigh the average more against
 				 * the old value.
 				 */
 				if (DEQUEUE_SPIKE(new, avg))
@@ -1127,6 +1321,30 @@ sfb_getq_flow(struct sfb *sp, class_queue_t *q, u_int32_t flow, boolean_t purge)
 			sp->sfb_stats.dequeue_avg = avg;
 		}
 		*(&sp->sfb_getqtime) = *(&now);
+	}
+
+	if (!purge && SFB_QUEUE_DELAYBASED(sp)) {
+		u_int64_t dequeue_ns, queue_delay = 0;
+		net_timernsec(&now, &dequeue_ns);
+		if (dequeue_ns > pkt->pkt_enqueue_ts)
+			queue_delay = dequeue_ns - pkt->pkt_enqueue_ts;
+
+		if (sp->sfb_min_qdelay == 0 ||
+		    (queue_delay > 0 && queue_delay < sp->sfb_min_qdelay))
+			sp->sfb_min_qdelay = queue_delay;
+		if (net_timercmp(&now, &sp->sfb_update_time, >=)) {
+			if (sp->sfb_min_qdelay > sp->sfb_target_qdelay) {
+				if (!SFB_IS_DELAYHIGH(sp))
+					SFB_SET_DELAY_HIGH(sp, q);
+			} else {
+				sp->sfb_flags &= ~(SFBF_DELAYHIGH);
+				sp->sfb_fc_threshold = 0;
+				
+			}
+			net_timeradd(&now, &sp->sfb_update_interval,
+			    &sp->sfb_update_time);
+			sp->sfb_min_qdelay = 0;
+		}
 	}
 
 	/*
@@ -1145,7 +1363,21 @@ sfb_getq_flow(struct sfb *sp, class_queue_t *q, u_int32_t flow, boolean_t purge)
 	} else if (sp->sfb_clearpkts > 0) {
 		sp->sfb_clearpkts--;
 	} else {
-		sfb_dq_update_bins(sp, pkt, &now);
+		sfb_dq_update_bins(sp, pkt, &now, qsize(q));
+	}
+
+	/* See comments in <rdar://problem/14040693> */
+	pkt->pkt_flags &= ~PKTF_PRIV_GUARDED;
+
+	/*
+	 * If the queue becomes empty before the update interval, reset
+	 * the flow control threshold
+	 */
+	if (qsize(q) == 0) {
+		sp->sfb_flags &= ~SFBF_DELAYHIGH;
+		sp->sfb_min_qdelay = 0;
+		sp->sfb_fc_threshold = 0;
+		net_timerclear(&sp->sfb_update_time);
 	}
 
 	return (m);
@@ -1200,6 +1432,8 @@ sfb_updateq(struct sfb *sp, cqev_t ev)
 		}
 		sfb_calc_holdtime(sp, eff_rate);
 		sfb_calc_pboxtime(sp, eff_rate);
+		sfb_calc_target_qdelay(sp, eff_rate);
+		sfb_calc_update_interval(sp, eff_rate);
 		break;
 	}
 

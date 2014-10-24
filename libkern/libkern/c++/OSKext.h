@@ -95,7 +95,7 @@ kern_return_t is_io_catalog_send_data(
     mach_msg_type_number_t   inDataCount,
     kern_return_t          * result);
 
-void kmod_dump_log(vm_offset_t*, unsigned int);
+void kmod_dump_log(vm_offset_t*, unsigned int, boolean_t);
 
 
 #endif /* XNU_KERNEL_PRIVATE */
@@ -175,7 +175,7 @@ class OSKext : public OSObject
             kern_return_t          * result);
 
     friend void kmod_panic_dump(vm_offset_t*, unsigned int);
-    friend void kmod_dump_log(vm_offset_t*, unsigned int);
+    friend void kmod_dump_log(vm_offset_t*, unsigned int, boolean_t);
     friend void kext_dump_panic_lists(int (*printf_func)(const char * fmt, ...));
 
 
@@ -325,17 +325,6 @@ private:
         uint32_t     compressedSize,
         uint32_t     fullSize);
 
-    static OSReturn readMkext1Archive(
-        OSData   * mkextData,
-        uint32_t * checksumPtr);
-    bool initWithMkext1Info(
-        OSDictionary * anInfoDict,
-        OSData       * executableWrapper,
-        OSData       * mkextData);
-    static OSData * extractMkext1Entry(
-        const void * mkextFileBase,
-        const void * entry);
-
    /* Dependencies.
     */
     virtual bool resolveDependencies(
@@ -477,22 +466,23 @@ private:
         vm_offset_t   * addr,
         unsigned int    cnt,
         int          (* printf_func)(const char *fmt, ...),
-        bool            lockFlag);
+        bool            lockFlag,
+        bool            doUnslide);
     static boolean_t summaryIsInBacktrace(
         OSKextLoadedKextSummary * summary,
         vm_offset_t             * addr,
         unsigned int              cnt);
     static void printSummary(
         OSKextLoadedKextSummary * summary,
-        int                    (* printf_func)(const char *fmt, ...));
+        int                    (* printf_func)(const char *fmt, ...),
+        bool                      doUnslide);
 
-    static uint32_t saveLoadedKextPanicListTyped(
+    static int saveLoadedKextPanicListTyped(
         const char * prefix,
         int          invertFlag,
         int          libsFlag,
         char       * paniclist,
-        uint32_t     list_size,
-        uint32_t   * list_length_ptr);
+        uint32_t     list_size);
     static void saveLoadedKextPanicList(void);
     void savePanicString(bool isLoading);
     static void printKextPanicLists(int (*printf_func)(const char *fmt, ...));

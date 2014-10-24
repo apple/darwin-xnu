@@ -168,7 +168,7 @@ div_init(struct protosw *pp, struct domain *dp)
 	 */
 	divcbinfo.ipi_hashbase = hashinit(1, M_PCB, &divcbinfo.ipi_hashmask);
 	divcbinfo.ipi_porthashbase = hashinit(1, M_PCB, &divcbinfo.ipi_porthashmask);
-	divcbinfo.ipi_zone = zinit(sizeof(struct inpcb),(maxsockets * sizeof(struct inpcb)),
+	divcbinfo.ipi_zone = zinit(sizeof(struct inpcb),(512 * sizeof(struct inpcb)),
 				   4096, "divzone");
 	pcbinfo = &divcbinfo;
         /*

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1999-2013 Apple Inc. All rights reserved.
+ * Copyright (c) 1999-2014 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -256,14 +256,6 @@ struct tcp_mtag {
 };
 
 /*
- * IPSec mbuf tag
- */
-struct ipsec_mtag {
-	uint32_t policy_id;
-#define	ipsec_policy	proto_mtag.__pr_u.ipsec.policy_id
-};
-
-/*
  * Protocol specific mbuf tag (at most one protocol metadata per mbuf).
  *
  * Care must be taken to ensure that they are mutually exclusive, e.g.
@@ -274,8 +266,15 @@ struct ipsec_mtag {
 struct proto_mtag {
 	union {
 		struct tcp_mtag	tcp;		/* TCP specific */
-		struct ipsec_mtag ipsec;	/* IPSec specific */
 	} __pr_u;
+};
+
+/*
+ * NECP specific mbuf tag.
+ */
+struct necp_mtag {
+	uint32_t	necp_policy_id;
+	uint32_t	necp_last_interface_index;
 };
 
 /*
@@ -355,12 +354,14 @@ struct	pkthdr {
 #if MEASURE_BW
 	u_int64_t pkt_bwseq;		/* sequence # */
 #endif /* MEASURE_BW */
+	u_int64_t pkt_enqueue_ts;	/* enqueue time */
 	/*
 	 * Tags (external and built-in)
 	 */
 	SLIST_HEAD(packet_tags, m_tag) tags; /* list of external tags */
 	struct proto_mtag proto_mtag;	/* built-in protocol-specific tag */
 	struct pf_mtag	pf_mtag;	/* built-in PF tag */
+	struct necp_mtag necp_mtag; /* built-in NECP tag */
 	/*
 	 * Module private scratch space (32-bit aligned), currently 16-bytes
 	 * large.  Anything stored here is not guaranteed to survive across
@@ -433,6 +434,8 @@ struct	pkthdr {
 #define	PKTF_IFAINFO		0x4000	/* pkt has valid interface addr info */
 #define	PKTF_SO_BACKGROUND	0x8000	/* data is from background source */
 #define	PKTF_FORWARDED		0x10000	/* pkt was forwarded from another i/f */
+#define	PKTF_PRIV_GUARDED	0x20000	/* pkt_mpriv area guard enabled */
+#define	PKTF_KEEPALIVE		0x40000	/* pkt is kernel-generated keepalive */
 /* flags related to flow control/advisory and identification */
 #define	PKTF_FLOW_MASK	\
 	(PKTF_FLOW_ID | PKTF_FLOW_ADV | PKTF_FLOW_LOCALSRC | PKTF_FLOW_RAWSOCK)
@@ -946,6 +949,7 @@ struct omb_class_stat {
 	u_int64_t	mbcl_purge_cnt;	/* # of purges so far */
 	u_int64_t	mbcl_fail_cnt;	/* # of allocation failures */
 	u_int32_t	mbcl_ctotal;	/* total only for this class */
+	u_int32_t	mbcl_release_cnt; /* amount of memory returned */
 	/*
 	 * Cache layer statistics
 	 */
@@ -974,6 +978,7 @@ typedef struct mb_class_stat {
 	u_int64_t	mbcl_purge_cnt;	/* # of purges so far */
 	u_int64_t	mbcl_fail_cnt;	/* # of allocation failures */
 	u_int32_t	mbcl_ctotal;	/* total only for this class */
+	u_int32_t	mbcl_release_cnt; /* amount of memory returned */
 	/*
 	 * Cache layer statistics
 	 */
@@ -982,7 +987,8 @@ typedef struct mb_class_stat {
 	u_int32_t	mbcl_mc_waiter_cnt;  /* # waiters on the cache */
 	u_int32_t	mbcl_mc_wretry_cnt;  /* # of wait retries */
 	u_int32_t	mbcl_mc_nwretry_cnt; /* # of no-wait retry attempts */
-	u_int64_t	mbcl_reserved[4];    /* for future use */
+	u_int32_t	mbcl_peak_reported; /* last usage peak reported */
+	u_int32_t	mbcl_reserved[7];    /* for future use */
 } mb_class_stat_t;
 
 #define	MCS_DISABLED	0	/* cache is permanently disabled */
@@ -1082,6 +1088,8 @@ struct mbuf;
 #define	M_COPYM_NOOP_HDR	0	/* don't copy/move pkthdr contents */
 #define	M_COPYM_COPY_HDR	1	/* copy pkthdr from old to new */
 #define	M_COPYM_MOVE_HDR	2	/* move pkthdr from old to new */
+#define	M_COPYM_MUST_COPY_HDR	3	/* MUST copy pkthdr from old to new */
+#define	M_COPYM_MUST_MOVE_HDR	4	/* MUST move pkthdr from old to new */
 
 /*
  * These macros are mapped to the appropriate KPIs, so that private code
@@ -1289,6 +1297,8 @@ __private_extern__ struct mbuf *m_getpackets_internal(unsigned int *, int,
 __private_extern__ struct mbuf *m_allocpacket_internal(unsigned int *, size_t,
     unsigned int *, int, int, size_t);
 
+__private_extern__ void m_drain(void);
+
 /*
  * Packets may have annotations attached by affixing a list of "packet
  * tags" to the pkthdr structure.  Packet tags are dynamically allocated
@@ -1329,7 +1339,7 @@ enum {
 	KERNEL_TAG_TYPE_ENCAP			= 8,
 	KERNEL_TAG_TYPE_INET6			= 9,
 	KERNEL_TAG_TYPE_IPSEC			= 10,
-	KERNEL_TAG_TYPE_DRVAUX			= 11
+	KERNEL_TAG_TYPE_DRVAUX			= 11,
 };
 
 /* Packet tag routines */

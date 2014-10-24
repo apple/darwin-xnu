@@ -97,7 +97,14 @@
 /* Do not include dtrace.h, it redefines kmem_[alloc/free] */
 extern void dtrace_fasttrap_fork(proc_t, proc_t);
 extern void (*dtrace_helpers_fork)(proc_t, proc_t);
+extern void (*dtrace_proc_waitfor_exec_ptr)(proc_t);
 extern void dtrace_lazy_dofs_duplicate(proc_t, proc_t);
+
+/*
+ * Since dtrace_proc_waitfor_exec_ptr can be added/removed in dtrace_subr.c,
+ * we will store its value before actually calling it.
+ */
+static void (*dtrace_proc_waitfor_hook)(proc_t) = NULL;
 
 #include <sys/dtrace_ptss.h>
 #endif
@@ -105,6 +112,7 @@ extern void dtrace_lazy_dofs_duplicate(proc_t, proc_t);
 #include <security/audit/audit.h>
 
 #include <mach/mach_types.h>
+#include <kern/coalition.h>
 #include <kern/kern_types.h>
 #include <kern/kalloc.h>
 #include <kern/mach_param.h>
@@ -141,10 +149,10 @@ void thread_set_child(thread_t child, int pid);
 void *act_thread_csave(void);
 
 
-thread_t cloneproc(task_t, proc_t, int, int);
+thread_t cloneproc(task_t, coalition_t, proc_t, int, int);
 proc_t forkproc(proc_t);
 void forkproc_free(proc_t);
-thread_t fork_create_child(task_t parent_task, proc_t child, int inherit_memory, int is64bit);
+thread_t fork_create_child(task_t parent_task, coalition_t parent_coalition, proc_t child, int inherit_memory, int is64bit);
 void proc_vfork_begin(proc_t parent_proc);
 void proc_vfork_end(proc_t parent_proc);
 
@@ -278,7 +286,7 @@ vfork(proc_t parent_proc, __unused struct vfork_args *uap, int32_t *retval)
 	thread_t child_thread;
 	int err;
 
-	if ((err = fork1(parent_proc, &child_thread, PROC_CREATE_VFORK)) != 0) {
+	if ((err = fork1(parent_proc, &child_thread, PROC_CREATE_VFORK, COALITION_NULL)) != 0) {
 		retval[1] = 0;
 	} else {
 		uthread_t ut = get_bsdthread_info(current_thread());
@@ -315,6 +323,11 @@ vfork(proc_t parent_proc, __unused struct vfork_args *uap, int32_t *retval)
  *					Mach thread_t of the child process
  *					breated
  *		kind			kind of creation being requested
+ *		coalition		if spawn, coalition the child process
+ *					should join, or COALITION_NULL to
+ *					inherit the parent's. On non-spawns,
+ *					this param is ignored and the child
+ *					always inherits the parent's coalition.
  *
  * Notes:	Permissable values for 'kind':
  *
@@ -346,7 +359,7 @@ vfork(proc_t parent_proc, __unused struct vfork_args *uap, int32_t *retval)
  *		back to the other information.
  */
 int
-fork1(proc_t parent_proc, thread_t *child_threadp, int kind)
+fork1(proc_t parent_proc, thread_t *child_threadp, int kind, coalition_t coalition)
 {
 	thread_t parent_thread = (thread_t)current_thread();
 	uthread_t parent_uthread = (uthread_t)get_bsdthread_info(parent_thread);
@@ -538,7 +551,11 @@ fork1(proc_t parent_proc, thread_t *child_threadp, int kind)
 		 * will, in effect, create a duplicate of it, with only minor
 		 * differences.  Contrarily, spawned processes do not inherit.
 		 */
-		if ((child_thread = cloneproc(parent_proc->task, parent_proc, spawn ? FALSE : TRUE, FALSE)) == NULL) {
+		if ((child_thread = cloneproc(parent_proc->task,
+						spawn ? coalition : COALITION_NULL,
+						parent_proc,
+						spawn ? FALSE : TRUE,
+						FALSE)) == NULL) {
 			/* Failed to create thread */
 			err = EAGAIN;
 			goto bad;
@@ -741,6 +758,7 @@ vfork_return(proc_t child_proc, int32_t *retval, int rval)
  *		process
  *
  * Parameters:	parent_task		parent task
+ *		parent_coalition	parent_coalition
  *		child_proc		child process
  *		inherit_memory		TRUE, if the parents address space is
  *					to be inherited by the child
@@ -754,17 +772,18 @@ vfork_return(proc_t child_proc, int32_t *retval, int rval)
  *		vfork() equivalent call, and in the system bootstrap case.
  *
  *		It creates a new task and thread (and as a side effect of the
- *		thread creation, a uthread), which is then associated with the
- *		process 'child'.  If the parent process address space is to
- *		be inherited, then a flag indicates that the newly created
- *		task should inherit this from the child task.
+ *		thread creation, a uthread) in the parent coalition, which is
+ *		then associated with the process 'child'.  If the parent
+ *		process address space is to be inherited, then a flag
+ *		indicates that the newly created task should inherit this from
+ *		the child task.
  *
  *		As a special concession to bootstrapping the initial process
  *		in the system, it's possible for 'parent_task' to be TASK_NULL;
  *		in this case, 'inherit_memory' MUST be FALSE.
  */
 thread_t
-fork_create_child(task_t parent_task, proc_t child_proc, int inherit_memory, int is64bit)
+fork_create_child(task_t parent_task, coalition_t parent_coalition, proc_t child_proc, int inherit_memory, int is64bit)
 {
 	thread_t	child_thread = NULL;
 	task_t		child_task;
@@ -772,6 +791,7 @@ fork_create_child(task_t parent_task, proc_t child_proc, int inherit_memory, int
 
 	/* Create a new task for the child process */
 	result = task_create_internal(parent_task,
+					parent_coalition,
 					inherit_memory,
 					is64bit,
 					&child_task);
@@ -796,12 +816,6 @@ fork_create_child(task_t parent_task, proc_t child_proc, int inherit_memory, int
 		vm_map_set_64bit(get_task_map(child_task));
 	else
 		vm_map_set_32bit(get_task_map(child_task));
-
-#if CONFIG_MACF
-	/* Update task for MAC framework */
-	/* valid to use p_ucred as child is still not running ... */
-	mac_task_label_update_cred(child_proc->p_ucred, child_task);
-#endif
 
 	/*
 	 * Set child process BSD visible scheduler priority if nice value
@@ -873,7 +887,7 @@ fork(proc_t parent_proc, __unused struct fork_args *uap, int32_t *retval)
 
 	retval[1] = 0;		/* flag parent return for user space */
 
-	if ((err = fork1(parent_proc, &child_thread, PROC_CREATE_FORK)) == 0) {
+	if ((err = fork1(parent_proc, &child_thread, PROC_CREATE_FORK, COALITION_NULL)) == 0) {
 		task_t child_task;
 		proc_t child_proc;
 
@@ -892,6 +906,11 @@ fork(proc_t parent_proc, __unused struct fork_args *uap, int32_t *retval)
 		/* flag the fork has occurred */
 		proc_knote(parent_proc, NOTE_FORK | child_proc->p_pid);
 		DTRACE_PROC1(create, proc_t, child_proc);
+
+#if CONFIG_DTRACE
+		if ((dtrace_proc_waitfor_hook = dtrace_proc_waitfor_exec_ptr) != NULL)
+			(*dtrace_proc_waitfor_hook)(child_proc);
+#endif
 
 		/* "Return" to the child */
 		(void)thread_resume(child_thread);
@@ -946,7 +965,7 @@ fork(proc_t parent_proc, __unused struct fork_args *uap, int32_t *retval)
  *		live with this being somewhat awkward.
  */
 thread_t
-cloneproc(task_t parent_task, proc_t parent_proc, int inherit_memory, int memstat_internal)
+cloneproc(task_t parent_task, coalition_t parent_coalition, proc_t parent_proc, int inherit_memory, int memstat_internal)
 {
 #if !CONFIG_MEMORYSTATUS
 #pragma unused(memstat_internal)
@@ -960,7 +979,7 @@ cloneproc(task_t parent_task, proc_t parent_proc, int inherit_memory, int memsta
 		goto bad;
 	}
 
-	child_thread = fork_create_child(parent_task, child_proc, inherit_memory, (parent_task == TASK_NULL) ? FALSE : (parent_proc->p_flag & P_LP64));
+	child_thread = fork_create_child(parent_task, parent_coalition, child_proc, inherit_memory, (parent_task == TASK_NULL) ? FALSE : (parent_proc->p_flag & P_LP64));
 
 	if (child_thread == NULL) {
 		/*
@@ -1305,9 +1324,10 @@ retry:
 	 * but indicate that the process is in (the creation) transition.
 	 */
 	proc_signalstart(child_proc, 0);
-	proc_transstart(child_proc, 0);
+	proc_transstart(child_proc, 0, 0);
 
-	child_proc->p_pcaction = (parent_proc->p_pcaction) & P_PCMAX;
+	child_proc->p_pcaction = 0;
+
 	TAILQ_INIT(&child_proc->p_uthlist);
 	TAILQ_INIT(&child_proc->p_aio_activeq);
 	TAILQ_INIT(&child_proc->p_aio_doneq);
@@ -1517,7 +1537,7 @@ uthread_cleanup(task_t task, void *uthread, void * bsd_info)
 	struct _select *sel;
 	uthread_t uth = (uthread_t)uthread;
 	proc_t p = (proc_t)bsd_info;
-
+	void *pth_name;
 
 	if (uth->uu_lowpri_window || uth->uu_throttle_info) {
 	        /*
@@ -1558,12 +1578,22 @@ uthread_cleanup(task_t task, void *uthread, void * bsd_info)
 		uth->uu_allocsize = 0;
 		uth->uu_wqset = 0;
 	}
-
-	if(uth->pth_name != NULL)
-	{
-		kfree(uth->pth_name, MAXTHREADNAMESIZE);
-		uth->pth_name = 0;
+	
+	/* 
+	 * <rdar://17834538>
+	 * Set pth_name to NULL before calling free().
+	 * Previously there was a race condition in the 
+	 * case this code was executing during a stackshot
+	 * where the stackshot could try and copy pth_name
+	 * after it had been freed and before if was marked
+	 * as null.
+	 */
+	if (uth->pth_name != NULL) {
+		pth_name = uth->pth_name;
+		uth->pth_name = NULL;
+		kfree(pth_name, MAXTHREADNAMESIZE);
 	}
+
 	if ((task != kernel_task) && p) {
 
 		if (((uth->uu_flag & UT_VFORK) == UT_VFORK) && (uth->uu_proc != PROC_NULL))  {

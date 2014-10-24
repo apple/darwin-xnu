@@ -1,6 +1,6 @@
 #!/usr/bin/perl
 #
-# Copyright (c) 2006-2012 Apple Inc. All rights reserved.
+# Copyright (c) 2006-2014 Apple Inc. All rights reserved.
 #
 # @APPLE_OSREFERENCE_LICENSE_HEADER_START@
 # 
@@ -135,17 +135,18 @@ my @Cancelable = qw/
 	accept access aio_suspend
 	close connect connectx
 	disconnectx
-	fcntl fdatasync fpathconf fstat fsync
+	faccessat fcntl fdatasync fpathconf fstat fstatat fsync
 	getlogin
 	ioctl
-	link lseek lstat
+	link linkat lseek lstat
 	msgrcv msgsnd msync
-	open
+	open openat
 	pathconf peeloff poll posix_spawn pread pwrite
-	read readv recvfrom recvmsg rename
+	read readv recvfrom recvmsg rename renameat
+	rename_ext
 	__semwait_signal __sigwait
-	select sem_wait semop sendmsg sendto sigsuspend stat symlink sync
-	unlink
+	select sem_wait semop sendmsg sendto sigsuspend stat symlink symlinkat sync
+	unlink unlinkat
 	wait4 waitid write writev
 /;
 
@@ -240,6 +241,7 @@ sub checkForCustomStubs {
         if (!$$sym{is_private}) {
             foreach my $subarch (@Architectures) {
                 (my $arch = $subarch) =~ s/arm(v.*)/arm/;
+                $arch =~ s/x86_64(.*)/x86_64/;
                 $$sym{aliases}{$arch} = [] unless $$sym{aliases}{$arch};
                 push(@{$$sym{aliases}{$arch}}, $$sym{asm_sym});
             }
@@ -261,6 +263,7 @@ sub readAliases {
     my @a = ();
     for my $arch (@Architectures) {
         (my $new_arch = $arch) =~ s/arm(v.*)/arm/g;
+        $new_arch =~ s/x86_64(.*)/x86_64/g;
         push(@a, $new_arch) unless grep { $_ eq $new_arch } @a;
     }
     
@@ -318,6 +321,7 @@ sub writeStubForSymbol {
     my @conditions;
     for my $subarch (@Architectures) {
         (my $arch = $subarch) =~ s/arm(v.*)/arm/;
+        $arch =~ s/x86_64(.*)/x86_64/;
         push(@conditions, "defined(__${arch}__)") unless grep { $_ eq $arch } @{$$symbol{except}};
     }
 
@@ -349,6 +353,7 @@ sub writeAliasesForSymbol {
     
     foreach my $subarch (@Architectures) {
         (my $arch = $subarch) =~ s/arm(v.*)/arm/;
+        $arch =~ s/x86_64(.*)/x86_64/;
         
         next unless scalar($$symbol{aliases}{$arch});
         

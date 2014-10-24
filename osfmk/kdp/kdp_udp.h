@@ -29,6 +29,8 @@
  * Copyright (c) 1982, 1986, 1993
  *      The Regents of the University of California.  All rights reserved.
  */
+#ifndef __KDP_UDP_H
+#define __KDP_UDP_H
 
 #include <libsa/types.h>
 #include <libkern/OSByteOrder.h>   /* OSSwap functions */
@@ -61,3 +63,13 @@ typedef struct kdp_ether_header ether_header_t;
 #define ntohl(x)           OSSwapBigToHostInt32(x)
 #define htons(x)           OSSwapHostToBigInt16(x)
 #define htonl(x)           OSSwapHostToBigInt32(x)
+
+/*
+ * IONetworkingFamily only.
+ */
+typedef uint32_t (*kdp_link_t)(void);
+typedef boolean_t (*kdp_mode_t)(boolean_t);
+void 	kdp_register_link(kdp_link_t link, kdp_mode_t mode);
+void 	kdp_unregister_link(kdp_link_t link, kdp_mode_t mode);
+
+#endif /* __KDP_UDP_H */

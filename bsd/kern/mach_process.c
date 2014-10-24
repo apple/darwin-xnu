@@ -134,7 +134,7 @@ ptrace(struct proc *p, struct ptrace_args *uap, int32_t *retval)
 			KERNEL_DEBUG_CONSTANT(BSDDBG_CODE(DBG_BSD_PROC, BSD_PROC_FRCEXIT) | DBG_FUNC_NONE,
 					      p->p_pid, W_EXITCODE(ENOTSUP, 0), 4, 0, 0);
 			exit1(p, W_EXITCODE(ENOTSUP, 0), retval);
-			/* drop funnel before we return */
+
 			thread_exception_return();
 			/* NOTREACHED */
 		}
@@ -474,5 +474,13 @@ cantrace(proc_t cur_procp, kauth_cred_t creds, proc_t traced_procp, int *errp)
 		*errp = EBUSY;
 		return (0);
 	}
+
+#if CONFIG_MACF
+	if ((my_err = mac_proc_check_debug(cur_procp, traced_procp)) != 0) {
+		*errp = my_err;
+		return (0);
+	}
+#endif
+
 	return(1);
 }

@@ -49,12 +49,12 @@ typedef unsigned long      UInt32;
 #endif
 typedef unsigned long long UInt64;
 #if		defined(__BIG_ENDIAN__)
-typedef	struct UnsignedWide {
+typedef	struct __attribute__((deprecated)) UnsignedWide {
 			UInt32		hi;
 			UInt32		lo;
 }							UnsignedWide __attribute__((deprecated));
 #elif		defined(__LITTLE_ENDIAN__)
-typedef	struct UnsignedWide {
+typedef	struct __attribute__((deprecated)) UnsignedWide {
 			UInt32		lo;
 			UInt32		hi;
 }							UnsignedWide __attribute__((deprecated));

@@ -132,8 +132,8 @@ struct label;		/* MAC label dummy struct */
 struct uthread {
 	/* syscall parameters, results and catches */
 	u_int64_t uu_arg[8]; /* arguments to current system call */
-	int	*uu_ap;			/* pointer to arglist */
     int uu_rval[2];
+	unsigned int syscall_code; /* current syscall code */
 
 	/* thread exception handling */
 	mach_exception_code_t uu_code;	/* ``code'' to trap */
@@ -145,9 +145,9 @@ struct uthread {
 		struct _select_data {
 			u_int64_t abstime;
 			char * wql;
-			int poll;
-			int error;
 			int count;
+			struct select_nocancel_args *args;	/* original syscall arguments */
+			int32_t *retval;					/* place to store return val */
 		} ss_select_data;
 		struct _kqueue_scan {
 			kevent_callback_t call; /* per-event callback */
@@ -171,12 +171,22 @@ struct uthread {
 		} uu_kauth;
 
 		struct ksyn_waitq_element  uu_kwe;		/* user for pthread synch */
+
+		struct _waitid_data {
+			struct waitid_nocancel_args *args;	/* original syscall arguments */
+			int32_t *retval;			/* place to store return val */
+		} uu_waitid_data;
+
+		struct _wait4_data {
+			struct wait4_nocancel_args *args;	/* original syscall arguments */
+			int32_t *retval;			/* place to store return val */
+		} uu_wait4_data;
 	} uu_kevent;
 
+	/* Persistent memory allocations across system calls */
 	struct _select {
 			u_int32_t	*ibits, *obits; /* bits to select on */
 			uint	nbytes;	/* number of bytes in ibits and obits */
-			struct _select_data *data;
 	} uu_select;			/* saved state for select() */
 
   /* internal support for continuation framework */
@@ -216,7 +226,6 @@ struct uthread {
 	struct kern_sigaltstack uu_sigstk;
         vnode_t		uu_vreclaims;
 	vnode_t		uu_cdir;		/* per thread CWD */
-	int		uu_notrigger;		/* XXX - flag for autofs */
 	int		uu_dupfd;		/* fd in fdesc_open/dupfdopen */
         int		uu_defer_reclaims;
 

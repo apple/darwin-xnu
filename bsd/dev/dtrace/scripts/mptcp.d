@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2013 Apple Computer, Inc.  All Rights Reserved.
+ * Copyright (c) 2013-2014 Apple Computer, Inc.  All Rights Reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  *
@@ -50,6 +50,8 @@ inline int MPTCPS_TIME_WAIT             = 8;
 #pragma D binding "1.0" MPTCPS_TIME_WAIT
 inline int MPTCPS_FASTCLOSE_WAIT        = 9;
 #pragma D binding "1.0" MPTCPS_FASTCLOSE_WAIT
+inline int MPTCPS_TERMINATE		= 10;
+#pragma D binding "1.0" MPTCPS_TERMINATE
 
 typedef uint64_t mptcp_key_t;
 typedef uint32_t mptcp_token_t;
@@ -94,6 +96,8 @@ translator mptsinfo_t < struct mptcb *T > {
 		       T->mpt_state == MPTCPS_TIME_WAIT ? "state-time-wait" :
 		       T->mpt_state == MPTCPS_FASTCLOSE_WAIT ?
 		           "state-fastclose-wait" :
+		       T->mpt_state == MPTCPS_TERMINATE ?
+		           "state-terminate" :
 		       "<unknown>";
 	flags        = T->mpt_flags;
 	vers         = T->mpt_version;
@@ -206,6 +210,8 @@ inline int MPTSF_ACTIVE         = 0x40000;
 #pragma D binding "1.0" MPTSF_ACTIVE
 inline int MPTSF_MPCAP_CTRSET   = 0x80000;
 #pragma D binding "1.0" MPTSF_MPCAP_CTRSET
+inline int MPTSF_FASTJ_SEND	= 0x100000;
+#pragma D binding "1.0" MPTSF_FASTJ_SEND
 
 typedef struct mptsubinfo {
 	uint32_t	flags;

@@ -1,14 +1,7 @@
-OPTIONS/show_space		optional show_space
-OPTIONS/gdb			optional gdb
-OPTIONS/iplmeas			optional iplmeas
-
-
 bsd/dev/i386/conf.c		standard
 bsd/dev/i386/cons.c		standard
-bsd/dev/i386/mem.c		standard
 bsd/dev/i386/km.c		standard
 bsd/dev/i386/kern_machdep.c	standard
-bsd/dev/i386/memmove.c		standard
 bsd/dev/i386/stubs.c		standard
 bsd/dev/i386/systemcalls.c	standard
 bsd/dev/i386/sysctl.c           standard
@@ -30,4 +23,3 @@ bsd/kern/policy_check.c			optional config_macf
 bsd/kern/bsd_stubs.c		standard
 bsd/netinet/cpu_in_cksum.c	standard
 bsd/netinet/in_cksum.c		optional inet
-

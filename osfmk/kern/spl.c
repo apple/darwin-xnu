@@ -26,7 +26,6 @@
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 #include <kern/thread.h>
-#include <kern/lock.h>
 #include <kern/spl.h>
 #include <machine/machine_routines.h>
 

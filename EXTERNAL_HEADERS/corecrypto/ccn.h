@@ -13,6 +13,8 @@
 #include <corecrypto/cc_config.h>
 #include <corecrypto/cc_priv.h>  /* TODO: Get rid of this include in this header. */
 #include <stdint.h>
+#include <stdarg.h>
+
 
 typedef uint8_t cc_byte;
 typedef size_t cc_size;
@@ -128,10 +130,11 @@ typedef const cc_unit *cc2np2_in_t;    // 2 * n + 2 unit long mp
 /* Macro's for reading uint32_t and uint64_t from ccns, the index is in 32 or
    64 bit units respectively. */
 #if CCN_UNIT_SIZE == 8
-//#define ccn_uint16(a,i) ((i & 3) == 3 ? ((uint16_t)(a[i >> 2] >> 48)) : \
-//    (i & 3) == 2 ? ((uint16_t)(a[i >> 2] >> 32) & UINT16_C(0xffff)) : \
-//    (i & 3) == 1 ? ((uint16_t)(a[i >> 2] >> 16) & UINT16_C(0xffff)) : \
-//    ((uint16_t)(a[i >> 1] & UINT16_C(0xffff))))
+/* #define ccn_uint16(a,i) ((i & 3) == 3 ? ((uint16_t)(a[i >> 2] >> 48)) : \
+     (i & 3) == 2 ? ((uint16_t)(a[i >> 2] >> 32) & UINT16_C(0xffff)) : \
+     (i & 3) == 1 ? ((uint16_t)(a[i >> 2] >> 16) & UINT16_C(0xffff)) : \
+     ((uint16_t)(a[i >> 1] & UINT16_C(0xffff))))
+*/
 //#define ccn_uint32(a,i) (i & 1 ? ((uint32_t)(a[i >> 1] >> 32)) : ((uint32_t)(a[i >> 1] & UINT32_C(0xffffffff))))
 #elif CCN_UNIT_SIZE == 4
 //#define ccn16_v(a0)  (a0)
@@ -323,18 +326,18 @@ cc_size ccn_n(cc_size n, const cc_unit *s);
  { N bit, scalar -> N bit } N = n * sizeof(cc_unit) * 8
  the _multi version doesn't return the shifted bits, but does support multiple
  word shifts.  */
-CC_NONNULL((2,3))
+CC_NONNULL((2, 3))
 cc_unit ccn_shift_right(cc_size n, cc_unit *r, const cc_unit *s, size_t k);
-CC_NONNULL((2,3))
+CC_NONNULL((2, 3))
 void ccn_shift_right_multi(cc_size n, cc_unit *r,const cc_unit *s, size_t k);
 
 /* s << k -> r return bits shifted out of most significant word in bits [0, n>
  { N bit, scalar -> N bit } N = n * sizeof(cc_unit) * 8
  the _multi version doesn't return the shifted bits, but does support multiple
  word shifts */
-CC_NONNULL((2,3))
+CC_NONNULL((2, 3))
 cc_unit ccn_shift_left(cc_size n, cc_unit *r, const cc_unit *s, size_t k);
-CC_NONNULL((2,3))
+CC_NONNULL((2, 3))
 void ccn_shift_left_multi(cc_size n, cc_unit *r, const cc_unit *s, size_t k);
 
 /* s == 0 -> return 0 | s > 0 -> return index (starting at 1) of most
@@ -345,6 +348,7 @@ size_t ccn_bitlen(cc_size n, const cc_unit *s);
 
 /* Returns the number of bits which are zero before the first one bit
    counting from least to most significant bit. */
+CC_NONNULL2
 size_t ccn_trailing_zeros(cc_size n, const cc_unit *s);
 
 /* s == 0 -> return true | s != 0 -> return false
@@ -355,8 +359,10 @@ size_t ccn_trailing_zeros(cc_size n, const cc_unit *s);
  { N bit } N = n * sizeof(cc_unit) * 8 */
 #define ccn_is_one(_n_, _s_) (ccn_n(_n_, _s_) == 1 && _s_[0] == 1)
 
+#define ccn_is_zero_or_one(_n_, _s_) (((_n_)==0) || ((ccn_n(_n_, _s_) <= 1) && (_s_[0] <= 1)))
+
 #if CCN_CMP_INLINE
-CC_INLINE CC_PURE CC_NONNULL((2,3))
+CC_INLINE CC_PURE CC_NONNULL((2, 3))
 int ccn_cmp(cc_size n, const cc_unit *s, const cc_unit *t) {
 	while (n) {
         n--;
@@ -370,13 +376,13 @@ int ccn_cmp(cc_size n, const cc_unit *s, const cc_unit *t) {
 #else
 /* s < t -> return - 1 | s == t -> return 0 | s > t -> return 1
  { N bit, N bit -> int } N = n * sizeof(cc_unit) * 8 */
-CC_PURE CC_NONNULL((2,3))
+CC_PURE CC_NONNULL((2, 3))
 int ccn_cmp(cc_size n, const cc_unit *s, const cc_unit *t);
 #endif
 
 /* s < t -> return - 1 | s == t -> return 0 | s > t -> return 1
  { N bit, M bit -> int } N = ns * sizeof(cc_unit) * 8  M = nt * sizeof(cc_unit) * 8 */
-CC_INLINE
+CC_INLINE CC_NONNULL((2, 4))
 int ccn_cmpn(cc_size ns, const cc_unit *s,
              cc_size nt, const cc_unit *t) {
     if (ns > nt) {
@@ -389,81 +395,89 @@ int ccn_cmpn(cc_size ns, const cc_unit *s,
 
 /* s - t -> r return 1 iff t > s
  { N bit, N bit -> N bit } N = n * sizeof(cc_unit) * 8 */
-CC_NONNULL((2,3,4))
+CC_NONNULL((2, 3, 4))
 cc_unit ccn_sub(cc_size n, cc_unit *r, const cc_unit *s, const cc_unit *t);
 
 /* s - v -> r return 1 iff v > s return 0 otherwise.
  { N bit, sizeof(cc_unit) * 8 bit -> N bit } N = n * sizeof(cc_unit) * 8 */
-CC_NONNULL((2,3))
+CC_NONNULL((2, 3))
 cc_unit ccn_sub1(cc_size n, cc_unit *r, const cc_unit *s, cc_unit v);
 
 /* s - t -> r return 1 iff t > s
  { N bit, NT bit -> N bit  NT <= N} N = n * sizeof(cc_unit) * 8 */
 CC_INLINE
-CC_NONNULL((2,3,5))
-cc_unit ccn_subn(cc_size n, cc_unit *r,const cc_unit *s,
+CC_NONNULL((2, 3, 5))
+cc_unit ccn_subn(cc_size n, cc_unit *r, const cc_unit *s,
              cc_size nt, const cc_unit *t) {
+    assert(n >= nt);
     return ccn_sub1(n - nt, r + nt, s + nt, ccn_sub(nt, r, s, t));
 }
 
 
 /* s + t -> r return carry if result doesn't fit in n bits.
  { N bit, N bit -> N bit } N = n * sizeof(cc_unit) * 8 */
-CC_NONNULL((2,3,4))
+CC_NONNULL((2, 3, 4))
 cc_unit ccn_add(cc_size n, cc_unit *r, const cc_unit *s, const cc_unit *t);
 
 /* s + v -> r return carry if result doesn't fit in n bits.
  { N bit, sizeof(cc_unit) * 8 bit -> N bit } N = n * sizeof(cc_unit) * 8 */
-CC_NONNULL((2,3))
+CC_NONNULL((2, 3))
 cc_unit ccn_add1(cc_size n, cc_unit *r, const cc_unit *s, cc_unit v);
 
 /* s + t -> r return carry if result doesn't fit in n bits
  { N bit, NT bit -> N bit  NT <= N} N = n * sizeof(cc_unit) * 8 */
 CC_INLINE
-CC_NONNULL((2,3,5))
+CC_NONNULL((2, 3, 5))
 cc_unit ccn_addn(cc_size n, cc_unit *r, const cc_unit *s,
                  cc_size nt, const cc_unit *t) {
+    assert(n >= nt);
     return ccn_add1(n - nt, r + nt, s + nt, ccn_add(nt, r, s, t));
 }
 
-CC_NONNULL((4,5))
+CC_NONNULL((4, 5))
 void ccn_divmod(cc_size n, cc_unit *q, cc_unit *r, const cc_unit *s, const cc_unit *t);
 
 
-CC_NONNULL((2,3,4))
+CC_NONNULL((2, 3, 4))
 void ccn_lcm(cc_size n, cc_unit *r2n, const cc_unit *s, const cc_unit *t);
 
 
-/* s * t -> r
- { n bit, n bit -> 2 * n bit } n = count * sizeof(cc_unit) * 8 */
-CC_NONNULL((2,3,4))
+/* s * t -> r_2n                   r_2n must not overlap with s nor t
+ { n bit, n bit -> 2 * n bit } n = count * sizeof(cc_unit) * 8
+ { N bit, N bit -> 2N bit } N = ccn_bitsof(n) */
+CC_NONNULL((2, 3, 4))
 void ccn_mul(cc_size n, cc_unit *r_2n, const cc_unit *s, const cc_unit *t);
 
-CC_NONNULL((2,3))
+/* s[0..n) * v -> r[0..n)+return value
+ { N bit, sizeof(cc_unit) * 8 bit -> N + sizeof(cc_unit) * 8 bit } N = n * sizeof(cc_unit) * 8 */
+CC_NONNULL((2, 3))
 cc_unit ccn_mul1(cc_size n, cc_unit *r, const cc_unit *s, const cc_unit v);
-CC_NONNULL((2,3))
+
+/* s[0..n) * v + r[0..n) -> r[0..n)+return value
+ { N bit, sizeof(cc_unit) * 8 bit -> N + sizeof(cc_unit) * 8 bit } N = n * sizeof(cc_unit) * 8 */
+CC_NONNULL((2, 3))
 cc_unit ccn_addmul1(cc_size n, cc_unit *r, const cc_unit *s, const cc_unit v);
 
 #if 0
 /* a % d -> n
    {2 * n bit, n bit -> n bit } n = count * sizeof(cc_unit) * 8 */
-CC_NONNULL((2,3,4))
+CC_NONNULL((2, 3, 4))
 void ccn_mod(cc_size n, cc_unit *r, const cc_unit *a_2n, const cc_unit *d);
 #endif
 
 /* r = gcd(s, t).
    N bit, N bit -> N bit */
-CC_NONNULL((2,3,4))
+CC_NONNULL((2, 3, 4))
 void ccn_gcd(cc_size n, cc_unit *r, const cc_unit *s, const cc_unit *t);
 
 /* r = gcd(s, t).
  N bit, N bit -> O bit */
-CC_NONNULL((2,4,6))
+CC_NONNULL((2, 4, 6))
 void ccn_gcdn(cc_size rn, cc_unit *r, cc_size sn, const cc_unit *s, cc_size tn, const cc_unit *t);
 
 /* r = (data, len) treated as a big endian byte array, return -1 if data
  doesn't fit in r, return 0 otherwise. */
-CC_NONNULL((2,4))
+CC_NONNULL((2, 4))
 int ccn_read_uint(cc_size n, cc_unit *r, size_t data_size, const uint8_t *data);
 
 /* r = (data, len) treated as a big endian byte array, return -1 if data
@@ -484,12 +498,12 @@ size_t ccn_write_uint_size(cc_size n, const cc_unit *s);
    The out_size argument should be the value returned from ccn_write_uint_size,
    and is also the exact number of bytes this function will write to out.
    If out_size if less than the value returned by ccn_write_uint_size, only the
-   first out_size non-zero most significant octects of s will be written. */
-CC_NONNULL((2,4))
+   first out_size non-zero most significant octets of s will be written. */
+CC_NONNULL((2, 4))
 void ccn_write_uint(cc_size n, const cc_unit *s, size_t out_size, void *out);
 
 
-CC_INLINE CC_NONNULL((2,4))
+CC_INLINE CC_NONNULL((2, 4))
 cc_size ccn_write_uint_padded(cc_size n, const cc_unit* s, size_t out_size, uint8_t* to)
 {
     size_t bytesInKey = ccn_write_uint_size(n, s);
@@ -516,27 +530,30 @@ size_t ccn_write_int_size(cc_size n, const cc_unit *s);
     The out_size argument should be the value returned from ccn_write_int_size,
     and is also the exact number of bytes this function will write to out.
     If out_size if less than the value returned by ccn_write_int_size, only the
-    first out_size non-zero most significant octects of s will be written. */
-CC_NONNULL((2,4))
+    first out_size non-zero most significant octets of s will be written. */
+CC_NONNULL((2, 4))
 void ccn_write_int(cc_size n, const cc_unit *s, size_t out_size, void *out);
 
 
 /* s^2 -> r
  { n bit -> 2 * n bit } */
-CC_INLINE CC_NONNULL((2,3))
+CC_INLINE CC_NONNULL((2, 3))
 void ccn_sqr(cc_size n, cc_unit *r, const cc_unit *s) {
     ccn_mul(n, r, s, s);
 }
 
 /* s -> r
  { n bit -> n bit } */
-CC_NONNULL((2,3))
+CC_NONNULL((2, 3))
 void ccn_set(cc_size n, cc_unit *r, const cc_unit *s);
 
 CC_INLINE CC_NONNULL2
 void ccn_zero(cc_size n, cc_unit *r) {
     CC_BZERO(r, ccn_sizeof_n(n));
 }
+
+CC_NONNULL2
+void ccn_zero_multi(cc_size n, cc_unit *r, ...);
 
 /* Burn (zero fill or otherwise overwrite) n cc_units of stack space. */
 void ccn_burn_stack(cc_size n);
@@ -548,8 +565,8 @@ void ccn_seti(cc_size n, cc_unit *r, cc_unit v) {
     ccn_zero(n - 1, r + 1);
 }
 
-CC_INLINE CC_NONNULL((2,4))
-void ccn_setn(cc_size n, cc_unit *r, CC_UNUSED const cc_size s_size, const cc_unit *s) {
+CC_INLINE CC_NONNULL((2, 4))
+void ccn_setn(cc_size n, cc_unit *r, const cc_size s_size, const cc_unit *s) {
     /* FIXME: assert not available in kernel.
     assert(n > 0);
     assert(s_size > 0);
@@ -572,10 +589,10 @@ void ccn_setn(cc_size n, cc_unit *r, CC_UNUSED const cc_size s_size, const cc_un
     ((((x) & 0xff000000) >> 24) | \
     (((x) & 0x00ff0000) >>  8) | \
     (((x) & 0x0000ff00) <<  8) | \
-    (((x) & 0x000000ff) <<  24) )
+    (((x) & 0x000000ff) <<  24))
 #define CC_SWAP_HOST_BIG_16(x) \
-    (((x) & 0xff00) >>  8) | \
-    (((x) & 0x00ff) <<  8) | \
+    ((((x) & 0xff00) >>  8) | \
+    (((x) & 0x00ff) <<  8))
 
 /* This should probably move if we move ccn_swap out of line. */
 #if CCN_UNIT_SIZE == 8
@@ -603,7 +620,7 @@ void ccn_swap(cc_size n, cc_unit *r) {
         *r = CC_UNIT_TO_BIG(*r);
 }
 
-CC_INLINE CC_NONNULL2 CC_NONNULL3 CC_NONNULL4
+CC_INLINE CC_NONNULL((2, 3, 4))
 void ccn_xor(cc_size n, cc_unit *r, const cc_unit *s, const cc_unit *t) {
     while (n--) {
         r[n] = s[n] ^ t[n];
@@ -620,17 +637,17 @@ void ccn_lprint(cc_size n, const char *label, const cc_unit *s);
 struct ccrng_state;
 
 #if 0
-CC_INLINE CC_NONNULL((2,3))
+CC_INLINE CC_NONNULL((2, 3))
 int ccn_random(cc_size n, cc_unit *r, struct ccrng_state *rng) {
     return (RNG)->generate((RNG), ccn_sizeof_n(n), (unsigned char *)r);
 }
 #else
 #define ccn_random(_n_,_r_,_ccrng_ctx_) \
-    ccrng_generate(_ccrng_ctx_, ccn_sizeof_n(_n_), (unsigned char *)_r_);
+    ccrng_generate(_ccrng_ctx_, ccn_sizeof_n(_n_), (unsigned char *)_r_)
 #endif
 
 /* Make a ccn of size ccn_nof(nbits) units with up to nbits sized random value. */
-CC_NONNULL((2,3))
+CC_NONNULL((2, 3))
 int ccn_random_bits(cc_size nbits, cc_unit *r, struct ccrng_state *rng);
 
 #endif /* _CORECRYPTO_CCN_H_ */

@@ -92,7 +92,9 @@
 #define HOST_AMFID_PORT			(11 + HOST_MAX_SPECIAL_KERNEL_PORT)
 #define HOST_GSSD_PORT			(12 + HOST_MAX_SPECIAL_KERNEL_PORT)
 #define HOST_TELEMETRY_PORT		(13 + HOST_MAX_SPECIAL_KERNEL_PORT)
-#define HOST_MAX_SPECIAL_PORT           (14 + HOST_MAX_SPECIAL_KERNEL_PORT)
+#define HOST_ATM_NOTIFICATION_PORT		(14 + HOST_MAX_SPECIAL_KERNEL_PORT)
+#define HOST_COALITION_PORT		(15 + HOST_MAX_SPECIAL_KERNEL_PORT)
+#define HOST_MAX_SPECIAL_PORT           (16 + HOST_MAX_SPECIAL_KERNEL_PORT)
                                         /* room to grow here as well */
 
 /*
@@ -190,4 +192,17 @@
 	HOST_LOCAL_NODE, HOST_TELEMETRY_PORT, (port)))
 #define host_set_telemetry_port(host, port)	\
 	(host_set_special_port((host), HOST_TELEMETRY_PORT, (port)))
+
+#define host_get_atm_notification_port(host, port)	\
+	(host_get_special_port((host),			\
+	HOST_LOCAL_NODE, HOST_ATM_NOTIFICATION_PORT, (port)))
+#define host_set_atm_notification_port(host, port)	\
+	(host_set_special_port((host), HOST_ATM_NOTIFICATION_PORT, (port)))
+
+#define host_get_coalition_port(host, port)	\
+	(host_get_special_port((host),			\
+	HOST_LOCAL_NODE, HOST_COALITION_PORT, (port)))
+#define host_set_coalition_port(host, port)	\
+	(host_set_special_port((host), HOST_COALITION_PORT, (port)))
+
 #endif	/* _MACH_HOST_SPECIAL_PORTS_H_ */

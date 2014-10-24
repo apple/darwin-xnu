@@ -188,21 +188,18 @@ mac_system_check_swapoff(kauth_cred_t cred, struct vnode *vp)
 }
 
 int
-mac_system_check_sysctl(kauth_cred_t cred, int *name, u_int namelen,
-    user_addr_t old, user_addr_t oldlenp, int inkernel, user_addr_t new, size_t newlen)
+mac_system_check_sysctlbyname(kauth_cred_t cred, const char *namestring, int *name,
+			      u_int namelen, user_addr_t oldctl, size_t oldlen,
+			      user_addr_t newctl, size_t newlen)
 {
 	int error;
-
-	/*
-	 * XXXMAC: We're very much like to assert the SYSCTL_LOCK here,
-	 * but since it's not exported from kern_sysctl.c, we can't.
-	 */
+	
 	if (!mac_system_enforce)
 		return (0);
 
-	MAC_CHECK(system_check_sysctl, cred, name, namelen, old, oldlenp,
-	    inkernel, new, newlen);
-
+	MAC_CHECK(system_check_sysctlbyname, cred, namestring,
+	    name, namelen, oldctl, oldlen, newctl, newlen);	
+	
 	return (error);
 }
 

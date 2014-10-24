@@ -291,6 +291,56 @@ mach_port_space_info(
 #endif /* MACH_IPC_DEBUG */
 
 /*
+ *	Routine:	mach_port_space_basic_info
+ *	Purpose:
+ *		Returns basic information about an IPC space.
+ *	Conditions:
+ *		Nothing locked.
+ *	Returns:
+ *		KERN_SUCCESS		Returned information.
+ *		KERN_FAILURE		The call is not supported.
+ *		KERN_INVALID_TASK	The space is dead.
+ */
+
+#if !MACH_IPC_DEBUG
+kern_return_t
+mach_port_space_basic_info(
+	__unused ipc_space_t			space,
+	__unused ipc_info_space_basic_t		*infop)
+{
+        return KERN_FAILURE;
+}
+#else
+kern_return_t
+mach_port_space_basic_info(
+	ipc_space_t			space,
+	ipc_info_space_basic_t		*infop)
+{
+	if (space == IS_NULL)
+		return KERN_INVALID_TASK;
+
+
+	is_read_lock(space);
+	if (!is_active(space)) {
+		is_read_unlock(space);
+		return KERN_INVALID_TASK;
+	}
+
+	/* get the basic space info */
+	infop->iisb_genno_mask = MACH_PORT_NGEN(MACH_PORT_DEAD);
+	infop->iisb_table_size = space->is_table_size;
+	infop->iisb_table_next = space->is_table_next->its_size;
+	infop->iisb_table_inuse = space->is_table_size - space->is_table_free - 1;
+	infop->iisb_reserved[0] = 0;
+	infop->iisb_reserved[1] = 0;
+
+	is_read_unlock(space);
+
+	return KERN_SUCCESS;
+}
+#endif /* MACH_IPC_DEBUG */
+
+/*
  *	Routine:	mach_port_dnrequest_info
  *	Purpose:
  *		Returns information about the dead-name requests
@@ -431,7 +481,7 @@ mach_port_kobject(
 	ip_unlock(port);
 
 	if (0 != kaddr && is_ipc_kobject(*typep))
-		*addrp = VM_KERNEL_ADDRPERM(VM_KERNEL_UNSLIDE(kaddr));
+		*addrp = VM_KERNEL_UNSLIDE_OR_PERM(kaddr);
 	else
 		*addrp = 0;
 

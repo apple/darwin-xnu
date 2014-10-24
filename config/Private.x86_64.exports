@@ -2,6 +2,8 @@ _IOGetBootKeyStoreData
 _SHA256_Final
 _SHA256_Init
 _SHA256_Update
+__ZN14IOPMrootDomain20claimSystemWakeEventEP9IOServicejPKcP8OSObject
+__ZN14IOPMrootDomain20restartWithStackshotEv
 __ZN22IOInterruptEventSource7warmCPUEy
 _acpi_install_wake_handler
 _acpi_sleep_kernel
@@ -13,12 +15,17 @@ _bufattr_delayidlesleep
 _cpu_to_lapic
 _cpuid_features
 _cpuid_info
+_csr_check
+_csr_get_active_config
+_csr_get_pending_config
+_csr_set_allow_all
 _lapic_end_of_interrupt
 _lapic_get_cmci_vector
 _lapic_unmask_perfcnt_interrupt
 _mp_broadcast
 _mp_cpus_call
 _mp_cpus_call1
+_mp_cpus_kick
 _need_fsevent
 _pal_efi_call_in_32bit_mode
 _pal_efi_call_in_64bit_mode
@@ -27,7 +34,6 @@ _smp_initialized
 _kext_get_vm_map
 _pal_machine_sleep
 _vfs_addtrigger
-_vfs_istraditionaltrigger
 _vfs_resolver_auxiliary
 _vfs_resolver_result
 _vfs_resolver_sequence
@@ -40,3 +46,6 @@ _xts_encrypt
 _xts_start
 _aes_decrypt
 _PE_reboot_on_panic
+_hv_set*
+_hv_get*
+_hv_release*

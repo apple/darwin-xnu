@@ -51,9 +51,9 @@ typedef int sem_t;
 
 __BEGIN_DECLS
 int sem_close(sem_t *);
-int sem_destroy(sem_t *);
-int sem_getvalue(sem_t * __restrict, int * __restrict);
-int sem_init(sem_t *, int, unsigned int);
+int sem_destroy(sem_t *) __deprecated;
+int sem_getvalue(sem_t * __restrict, int * __restrict) __deprecated;
+int sem_init(sem_t *, int, unsigned int) __deprecated;
 sem_t * sem_open(const char *, int, ...);
 int sem_post(sem_t *);
 int sem_trywait(sem_t *);

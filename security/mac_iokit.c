@@ -93,6 +93,24 @@ mac_iokit_check_set_properties(kauth_cred_t cred, io_object_t registry_entry, io
 }
 
 int
+mac_iokit_check_filter_properties(kauth_cred_t cred, io_object_t registry_entry)
+{
+	int error;
+
+	MAC_CHECK(iokit_check_filter_properties, cred, registry_entry);
+	return (error);
+}
+
+int
+mac_iokit_check_get_property(kauth_cred_t cred, io_object_t registry_entry, const char *name)
+{
+	int error;
+
+	MAC_CHECK(iokit_check_get_property, cred, registry_entry, name);
+	return (error);
+}
+
+int
 mac_iokit_check_hid_control(kauth_cred_t cred)
 {
 	int error;

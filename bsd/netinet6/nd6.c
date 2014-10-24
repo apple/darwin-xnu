@@ -132,7 +132,7 @@ int nd6_debug = 0;
 int nd6_optimistic_dad =
 	(ND6_OPTIMISTIC_DAD_LINKLOCAL|ND6_OPTIMISTIC_DAD_AUTOCONF|
 	ND6_OPTIMISTIC_DAD_TEMPORARY|ND6_OPTIMISTIC_DAD_DYNAMIC|
-	ND6_OPTIMISTIC_DAD_SECURED);
+	ND6_OPTIMISTIC_DAD_SECURED|ND6_OPTIMISTIC_DAD_MANUAL);
 
 /* for debugging? */
 static int nd6_inuse, nd6_allocated;
@@ -260,11 +260,11 @@ static int nd6_init_done;
 SYSCTL_DECL(_net_inet6_icmp6);
 
 SYSCTL_PROC(_net_inet6_icmp6, ICMPV6CTL_ND6_DRLIST, nd6_drlist,
-	CTLFLAG_RD | CTLFLAG_LOCKED, 0, 0,
+	CTLTYPE_STRUCT | CTLFLAG_RD | CTLFLAG_LOCKED, 0, 0,
 	nd6_sysctl_drlist, "S,in6_defrouter", "");
 
 SYSCTL_PROC(_net_inet6_icmp6, ICMPV6CTL_ND6_PRLIST, nd6_prlist,
-	CTLFLAG_RD | CTLFLAG_LOCKED, 0, 0,
+	CTLTYPE_STRUCT | CTLFLAG_RD | CTLFLAG_LOCKED, 0, 0,
 	nd6_sysctl_prlist, "S,in6_defrouter", "");
 
 void
@@ -502,12 +502,12 @@ nd6_ifattach(struct ifnet *ifp)
 	ndi = &nd_ifinfo[ifp->if_index];
 	if (!ndi->initialized) {
 		lck_mtx_init(&ndi->lock, nd_if_lock_grp, nd_if_lock_attr);
+		ndi->flags = ND6_IFF_PERFORMNUD;
 		ndi->initialized = TRUE;
 	}
 
 	lck_mtx_lock(&ndi->lock);
 
-	ndi->flags = ND6_IFF_PERFORMNUD;
 	if (!(ifp->if_flags & IFF_MULTICAST))
 		ndi->flags |= ND6_IFF_IFDISABLED;
 
@@ -1197,7 +1197,9 @@ addrloop:
 		 * prefix is not necessary.
 		 */
 		NDPR_LOCK(pr);
-		if (pr->ndpr_stateflags & NDPRF_PROCESSED_SERVICE) {
+		if (pr->ndpr_stateflags & NDPRF_PROCESSED_SERVICE ||
+		    pr->ndpr_stateflags & NDPRF_DEFUNCT) {
+			pr->ndpr_stateflags |= NDPRF_PROCESSED_SERVICE;
 			NDPR_UNLOCK(pr);
 			pr = pr->ndpr_next;
 			continue;
@@ -1211,8 +1213,8 @@ addrloop:
 			NDPR_ADDREF_LOCKED(pr);
 			prelist_remove(pr);
 			NDPR_UNLOCK(pr);
-			pfxlist_onlink_check();
 			NDPR_REMREF(pr);
+			pfxlist_onlink_check();
 			pr = nd_prefix.lh_first;
 			ap->killed++;
 		} else {
@@ -1270,6 +1272,7 @@ static void
 nd6_timeout(void *arg)
 {
 	struct nd6svc_arg sarg;
+	uint32_t buf;
 
 	lck_mtx_lock(rnh_lock);
 	bzero(&sarg, sizeof (sarg));
@@ -1295,7 +1298,8 @@ nd6_timeout(void *arg)
 			atv.tv_usec = 0;
 			atv.tv_sec = MAX(nd6_prune, lazy);
 			ltv.tv_usec = 0;
-			ltv.tv_sec = MAX(random() % lazy, 1) * 2;
+			read_frandom(&buf, sizeof(buf));
+			ltv.tv_sec = MAX(buf % lazy, 1) * 2;
 			leeway = &ltv;
 		}
 		nd6_sched_timeout(&atv, leeway);
@@ -1516,6 +1520,7 @@ nd6_purge(struct ifnet *ifp)
 	struct llinfo_nd6 *ln;
 	struct nd_defrouter *dr, *ndr;
 	struct nd_prefix *pr, *npr;
+	boolean_t removed;
 
 	/* Nuke default router list entries toward ifp */
 	lck_mtx_lock(nd6_mutex);
@@ -1546,10 +1551,12 @@ nd6_purge(struct ifnet *ifp)
 	}
 
 	/* Nuke prefix list entries toward ifp */
+	removed = FALSE;
 	for (pr = nd_prefix.lh_first; pr; pr = npr) {
-		npr = pr->ndpr_next;
 		NDPR_LOCK(pr);
-		if (pr->ndpr_ifp == ifp) {
+		npr = pr->ndpr_next;
+		if (pr->ndpr_ifp == ifp && 
+		    !(pr->ndpr_stateflags & NDPRF_DEFUNCT)) {
 			/*
 			 * Because if_detach() does *not* release prefixes
 			 * while purging addresses the reference count will
@@ -1569,12 +1576,15 @@ nd6_purge(struct ifnet *ifp)
 			NDPR_ADDREF_LOCKED(pr);
 			prelist_remove(pr);
 			NDPR_UNLOCK(pr);
-			pfxlist_onlink_check();
 			NDPR_REMREF(pr);
+			removed = TRUE;
+			npr = nd_prefix.lh_first;
 		} else {
 			NDPR_UNLOCK(pr);
 		}
 	}
+	if (removed)
+		pfxlist_onlink_check();
 	lck_mtx_unlock(nd6_mutex);
 
 	/* cancel default outgoing interface setting */

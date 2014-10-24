@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2013 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2014 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -105,12 +105,6 @@
 #define	SIOCSIFMETRIC	_IOW('i', 24, struct ifreq)	/* set IF metric */
 #define	SIOCDIFADDR	_IOW('i', 25, struct ifreq)	/* delete IF addr */
 #define	SIOCAIFADDR	_IOW('i', 26, struct ifaliasreq)/* add/chg IF alias */
-#define	SIOCGETVIFCNT	_IOWR('r', 27, struct sioc_vif_req)/* get vif pkt cnt */
-#define	SIOCGETSGCNT	_IOWR('r', 28, struct sioc_sg_req) /* get s,g pkt cnt */
-#define SIOCALIFADDR    _IOW('i', 29, struct if_laddrreq) /* add IF addr */
-#define SIOCGLIFADDR    _IOWR('i', 30, struct if_laddrreq) /* get IF addr */   
-#define SIOCDLIFADDR    _IOW('i', 31, struct if_laddrreq) /* delete IF addr */ 
-
 
 #define	SIOCGIFADDR	_IOWR('i', 33, struct ifreq)	/* get ifnet address */
 #define	SIOCGIFDSTADDR	_IOWR('i', 34, struct ifreq)	/* get p-p address */
@@ -150,8 +144,6 @@
 #define	SIOCGIFPSRCADDR	_IOWR('i', 63, struct ifreq)	/* get gif psrc addr */
 #define	SIOCGIFPDSTADDR	_IOWR('i', 64, struct ifreq)	/* get gif pdst addr */
 #define	SIOCDIFPHYADDR	 _IOW('i', 65, struct ifreq)	/* delete gif addrs */
-#define	SIOCSLIFPHYADDR	 _IOW('i', 66, struct if_laddrreq) /* set gif addrs */
-#define	SIOCGLIFPHYADDR	_IOWR('i', 67, struct if_laddrreq) /* get gif addrs */
 
 #define	SIOCGIFDEVMTU	_IOWR('i', 68, struct ifreq) 	/* get if ifdevmtu */
 #define	SIOCSIFALTMTU	 _IOW('i', 69, struct ifreq)	/* set if alternate mtu */
@@ -258,5 +250,9 @@
 #define	SIOCGIFDELEGATE	_IOWR('i', 157, struct ifreq)
 #define	SIOCGIFLLADDR	_IOWR('i', 158, struct ifreq) /* get link level addr */
 #define	SIOCGIFTYPE	_IOWR('i', 159, struct ifreq) /* get interface type */
+#define	SIOCGIFEXPENSIVE _IOWR('i', 160, struct ifreq) /* get interface expensive flag */
+#define	SIOCSIFEXPENSIVE _IOWR('i', 161, struct ifreq) /* mark interface expensive */
+#define	SIOCGIF2KCL	_IOWR('i', 162, struct ifreq)	/* interface prefers 2 KB clusters */
+#define	SIOCSIF2KCL	_IOWR('i', 163, struct ifreq)
 #endif /* PRIVATE */
 #endif /* !_SYS_SOCKIO_H_ */

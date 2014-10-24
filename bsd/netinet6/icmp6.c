@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2013 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2014 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -131,11 +131,13 @@
 #if IPSEC
 #include <netinet6/ipsec.h>
 #include <netkey/key.h>
-
-extern int ipsec_bypass;
 #endif
 
 #include <net/net_osdep.h>
+
+#if NECP
+#include <net/necp.h>
+#endif
 
 extern struct ip6protosw *ip6_protox[];
 
@@ -146,8 +148,11 @@ struct icmp6stat icmp6stat;
 
 extern struct inpcbhead ripcb;
 extern int icmp6errppslim;
+extern int icmp6rappslim;
 static int icmp6errpps_count = 0;
+static int icmp6rapps_count = 0;
 static struct timeval icmp6errppslim_last;
+static struct timeval icmp6rappslim_last;
 extern int icmp6_nodeinfo;
 extern struct inpcbinfo ripcbinfo;
 
@@ -2057,11 +2062,7 @@ icmp6_rip6_input(mp, off)
 				 in6p->in6p_icmp6filt))
 			continue;
 
-		if (inp_restricted(in6p, ifp))
-			continue;
-
-		if (ifp != NULL && IFNET_IS_CELLULAR(ifp) &&
-		    (in6p->in6p_flags & INP_NO_IFT_CELLULAR))
+		if (inp_restricted_recv(in6p, ifp))
 			continue;
 
 		if (last) {
@@ -2318,11 +2319,6 @@ icmp6_reflect(m, off)
 	 */
 
 	m->m_flags &= ~(M_BCAST|M_MCAST);
-#if IPSEC
-	/* Don't lookup socket */
-	if (ipsec_bypass == 0)
-		(void)ipsec_setsocket(m, NULL);
-#endif /*IPSEC*/
 
 	if (outif != NULL) {
 		ifnet_release(outif);
@@ -2852,12 +2848,6 @@ noredhdropt:;
 		= in6_cksum(m, IPPROTO_ICMPV6, sizeof(*ip6), ntohs(ip6->ip6_plen));
 
 	/* send the packet to outside... */
-#if IPSEC
-	/* Don't lookup socket */
-	if (ipsec_bypass == 0)
-		(void)ipsec_setsocket(m, NULL);
-#endif /*IPSEC*/
-
 	ip6oa.ip6oa_boundif = ifp->if_index;
 	ip6oa.ip6oa_flags |= IP6OAF_BOUND_IF;
 
@@ -3033,7 +3023,11 @@ icmp6_dgram_send(struct socket *so, int flags, struct mbuf *m,
 	struct sockaddr_in6 *dst = (struct sockaddr_in6 *)(void *)nam;
 	struct icmp6_hdr *icmp6;
 
-	if (inp == NULL || (inp->inp_flags2 & INP2_WANT_FLOW_DIVERT)) {
+	if (inp == NULL
+#if NECP
+		|| (necp_socket_should_use_flow_divert(inp))
+#endif /* NECP */
+		) {
 		error = (inp == NULL ? EINVAL : EPROTOTYPE);
 		goto bad;
 	}
@@ -3149,20 +3143,24 @@ icmp6_dgram_attach(struct socket *so, int proto, struct proc *p)
  * Returns 1 if the router SHOULD NOT send this icmp6 packet due to rate
  * limitation.
  *
- * XXX per-destination/type check necessary?
+ * XXX per-destination check necessary?
  */
 static int
 icmp6_ratelimit(
 	__unused const struct in6_addr *dst,	/* not used at this moment */
-	__unused const int type,		/* not used at this moment */
-	__unused const int code)		/* not used at this moment */
+	const int type,
+	__unused const int code)
 {
 	int ret;
 
 	ret = 0;	/* okay to send */
 
 	/* PPS limit */
-	if (!ppsratecheck(&icmp6errppslim_last, &icmp6errpps_count,
+	if (type == ND_ROUTER_ADVERT) {
+		if (!ppsratecheck(&icmp6rappslim_last, &icmp6rapps_count,
+		    icmp6rappslim))
+			ret++;
+	} else if (!ppsratecheck(&icmp6errppslim_last, &icmp6errpps_count,
 	    icmp6errppslim)) {
 		/* The packet is subject to rate limit */
 		ret++;

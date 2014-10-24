@@ -29,12 +29,10 @@
 
 OPTIONS/hibernation		optional hibernation
 OPTIONS/crypto			optional crypto
-OPTIONS/dli				optional dli
+OPTIONS/encrypted_swap		optional encrypted_swap
 OPTIONS/kdebug			optional kdebug
 OPTIONS/mach_assert		optional mach_assert
 OPTIONS/mach_debug		optional mach_debug
-OPTIONS/mach_machine_routines.h	optional mach_machine_routines
-OPTIONS/machine_timer_routines	optional machine_timer_routines
 #
 OPTIONS/mach_cluster_stats	optional mach_cluster_stats
 OPTIONS/mach_counters		optional mach_counters
@@ -47,15 +45,10 @@ OPTIONS/mach_ldebug		optional mach_ldebug
 OPTIONS/mach_mp_debug		optional mach_mp_debug
 OPTIONS/mach_pagemap		optional mach_pagemap
 OPTIONS/mach_rt			optional mach_rt
-OPTIONS/advisory_pageout	optional advisory_pageout
 OPTIONS/mach_vm_debug		optional mach_vm_debug
 OPTIONS/mach_page_hash_stats    optional mach_page_hash_stats
 OPTIONS/mig_debug		optional mig_debug
-OPTIONS/time_stamp		optional time_stamp
 OPTIONS/xpr_debug		optional xpr_debug
-OPTIONS/bootstrap_symbols	optional bootstrap_symbols
-OPTIONS/fast_tas		optional fast_tas
-OPTIONS/power_save		optional power_save
 OPTIONS/zone_debug		optional zone_debug
 OPTIONS/zone_alias_addr		optional zone_alias_addr
 OPTIONS/vm_cpm			optional vm_cpm
@@ -63,6 +56,7 @@ OPTIONS/task_swapper		optional task_swapper
 OPTIONS/stack_usage		optional stack_usage
 OPTIONS/importance_inheritance	optional importance_inheritance
 OPTIONS/importance_debug	optional importance_debug
+OPTIONS/config_ecc_logging	optional config_ecc_logging
 
 OPTIONS/config_dtrace		optional config_dtrace
 OPTIONS/config_counters		optional config_counters
@@ -101,11 +95,13 @@ osfmk/default_pager/dp_memory_object.c	standard
 ./UserNotification/UNDReplyServer.c		standard
 osfmk/UserNotification/KUNCUserNotifications.c	standard
 
-osfmk/kdp/kdp.c			optional mach_kdp
+osfmk/kdp/kdp.c			optional config_kdp_interactive_debugging
+osfmk/kern/kern_stackshot.c	standard
 osfmk/kdp/kdp_udp.c			optional mach_kdp
 osfmk/kdp/kdp_serial.c			optional config_serial_kdp
 osfmk/ipc/ipc_entry.c			standard
 osfmk/ipc/ipc_hash.c			standard
+osfmk/ipc/ipc_importance.c	optional importance_inheritance
 osfmk/ipc/ipc_init.c			standard
 osfmk/ipc/ipc_kmsg.c			standard
 osfmk/ipc/ipc_mqueue.c		standard
@@ -116,7 +112,7 @@ osfmk/ipc/ipc_pset.c			standard
 osfmk/ipc/ipc_right.c			standard
 osfmk/ipc/ipc_space.c			standard
 osfmk/ipc/ipc_table.c			standard
-osfmk/ipc/ipc_labelh.c			standard
+osfmk/ipc/ipc_voucher.c			standard
 osfmk/ipc/mach_debug.c		standard
 osfmk/ipc/mach_kernelrpc.c		standard
 osfmk/ipc/mach_msg.c			standard
@@ -128,8 +124,10 @@ osfmk/kern/audit_sessionport.c		optional config_audit
 osfmk/kern/btlog.c			standard
 osfmk/kern/clock.c			standard
 osfmk/kern/clock_oldops.c		standard
+osfmk/kern/coalition.c			optional config_coalitions
 osfmk/kern/counters.c			standard
 osfmk/kern/debug.c			standard
+osfmk/kern/energy_perf.c		standard
 osfmk/kern/exception.c		standard
 osfmk/kern/extmod_statistics.c		standard
 osfmk/kern/host.c			standard
@@ -142,6 +140,7 @@ osfmk/kern/ipc_misc.c			standard
 osfmk/kern/ipc_sync.c			standard
 osfmk/kern/ipc_tt.c			standard
 osfmk/kern/kalloc.c			standard
+osfmk/kern/kern_ecc.c			optional config_ecc_logging
 osfmk/kern/ledger.c			standard
 osfmk/kern/locks.c			standard
 osfmk/kern/machine.c			standard
@@ -152,13 +151,13 @@ osfmk/kern/printf.c			standard
 osfmk/kern/priority.c			standard
 osfmk/kern/processor.c		standard
 osfmk/kern/processor_data.c		standard
-osfmk/kern/queue.c			standard
 osfmk/kern/sched_average.c		standard
+osfmk/kern/sched_dualq.c	optional config_sched_multiq
 osfmk/kern/sched_prim.c		standard
 osfmk/kern/sched_proto.c	optional config_sched_proto
 osfmk/kern/sched_grrr.c	optional config_sched_grrr_core
-osfmk/kern/sched_fixedpriority.c	optional config_sched_fixedpriority
-osfmk/kern/security.c		optional config_macf
+osfmk/kern/sched_multiq.c	optional config_sched_multiq
+osfmk/kern/sfi.c			standard
 osfmk/kern/stack.c			standard
 osfmk/kern/startup.c			standard
 osfmk/kern/sync_lock.c		standard
@@ -196,14 +195,19 @@ osfmk/pmc/pmc.c				standard
 ./mach/mach_notify_user.c		standard
 ./mach/mach_port_server.c		standard
 ./mach/mach_vm_server.c			standard
+./mach/mach_voucher_server.c		standard
+./mach/mach_voucher_attr_control_server.c		standard
 ./mach/memory_object_server.c		standard
 ./mach/memory_object_control_server.c	standard
 ./mach/memory_object_default_server.c	standard
-./mach/memory_object_name_server.c	standard
 ./mach/upl_server.c			standard
 ./mach/audit_triggers_user.c		standard
 ./mach/task_access_user.c          	standard
 ./mach/telemetry_notification_user.c optional config_telemetry
+osfmk/bank/bank.c		optional config_bank
+osfmk/atm/atm.c			optional config_atm
+./atm/atm_notification_user.c		optional config_atm
+./mach/coalition_notification_user.c	optional config_coalitions
 #
 # For now, no external pagers
 #
@@ -215,11 +219,11 @@ osfmk/pmc/pmc.c				standard
 ./mach/task_server.c			standard
 ./mach/thread_act_server.c		standard
 ./mach/vm32_map_server.c		standard
-./mach/security_server.c		optional config_macf
 
 osfmk/vm/bsd_vm.c			optional mach_bsd
 osfmk/vm/vm_compressor.c		standard
 osfmk/vm/vm_compressor_pager.c		standard
+osfmk/vm/vm_phantom_cache.c		optional config_phantom_cache
 osfmk/vm/default_freezer.c		optional config_freeze
 osfmk/vm/device_vm.c			standard
 osfmk/vm/memory_object.c		standard
@@ -283,3 +287,24 @@ osfmk/kern/kpc_common.c                 optional kpc
 osfmk/console/serial_general.c	standard
 
 osfmk/kern/telemetry.c			optional config_telemetry
+
+# Built-in corecrypto for early_random():
+osfmk/corecrypto/ccdbrg/src/ccdrbg_nisthmac.c		standard
+osfmk/corecrypto/ccdigest/src/ccdigest_init.c		standard
+osfmk/corecrypto/ccdigest/src/ccdigest_update.c		standard
+osfmk/corecrypto/cchmac/src/cchmac.c			standard
+osfmk/corecrypto/cchmac/src/cchmac_init.c		standard
+osfmk/corecrypto/cchmac/src/cchmac_update.c		standard
+osfmk/corecrypto/cchmac/src/cchmac_final.c		standard
+osfmk/corecrypto/ccsha1/src/ccdigest_final_64be.c	standard
+osfmk/corecrypto/ccsha1/src/ccsha1_eay.c		standard
+osfmk/corecrypto/ccsha1/src/ccsha1_initial_state.c	standard
+
+osfmk/prng/random.c			standard
+osfmk/prng/prng_yarrow.c		standard
+osfmk/prng/fips_sha1.c			standard
+osfmk/prng/YarrowCoreLib/port/smf.c	standard
+osfmk/prng/YarrowCoreLib/src/comp.c	standard
+osfmk/prng/YarrowCoreLib/src/prng.c	standard
+osfmk/prng/YarrowCoreLib/src/sha1mod.c	standard
+osfmk/prng/YarrowCoreLib/src/yarrowUtils.c	standard

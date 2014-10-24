@@ -64,10 +64,6 @@
  *	control.  
  */
 
-#ifdef	MACH_KERNEL
-#include <advisory_pageout.h>
-#endif	/* MACH_KERNEL */
-
 subsystem
 #if	KERNEL_SERVER
 	  KernelServer
@@ -274,5 +270,34 @@ routine mach_zone_force_gc(
 #else
 skip;
 #endif
+
+/*
+ *	Create a new voucher by running a series of commands against
+ *	<key, previous-voucher> pairs of resource attributes.
+ */
+routine host_create_mach_voucher(
+		host		: host_t;
+		recipes		: mach_voucher_attr_raw_recipe_array_t;
+	out	voucher		: ipc_voucher_t);
+
+/*
+ *	Register a resource manager with the kernel.  A new key is selected.
+ */
+routine host_register_mach_voucher_attr_manager(
+		host		: host_t;
+		attr_manager	: mach_voucher_attr_manager_t;
+		default_value	: mach_voucher_attr_value_handle_t;
+	out	new_key		: mach_voucher_attr_key_t;
+	out	new_attr_control: ipc_voucher_attr_control_t);
+
+/*
+ *	Register a resource manager (with a well-known key value) with the kernel.
+ */
+routine host_register_well_known_mach_voucher_attr_manager(
+		host		: host_t;
+		attr_manager	: mach_voucher_attr_manager_t;
+		default_value	: mach_voucher_attr_value_handle_t;
+		key		: mach_voucher_attr_key_t;
+	out	new_attr_control: ipc_voucher_attr_control_t);
 
 /* vim: set ft=c : */

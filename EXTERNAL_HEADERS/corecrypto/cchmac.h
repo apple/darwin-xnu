@@ -29,7 +29,7 @@ typedef union {
 #define cchmac_ctx_n(STATE_SIZE, BLOCK_SIZE)  ccn_nof_size(cchmac_ctx_size((STATE_SIZE), (BLOCK_SIZE)))
 
 #define cchmac_ctx_decl(STATE_SIZE, BLOCK_SIZE, _name_) cc_ctx_decl(struct cchmac_ctx, cchmac_ctx_size(STATE_SIZE, BLOCK_SIZE), _name_)
-#define cchmac_ctx_clear(STATE_SIZE, BLOCK_SIZE, _name_) cc_ctx_clear(struct cchmac_ctx, cchmac_ctx_size(STATE_SIZE, BLOCK_SIZE), _name_)
+#define cchmac_ctx_clear(STATE_SIZE, BLOCK_SIZE, _name_) cc_zero(cchmac_ctx_size(STATE_SIZE, BLOCK_SIZE), _name_)
 #define cchmac_di_decl(_di_, _name_) cchmac_ctx_decl((_di_)->state_size, (_di_)->block_size, _name_)
 #define cchmac_di_clear(_di_, _name_) cchmac_ctx_clear((_di_)->state_size, (_di_)->block_size, _name_)
 
@@ -44,11 +44,11 @@ typedef union {
 #define cchmac_ostateccn(_di_, HC) (ccdigest_ccn(cchmac_ostate(_di_, HC)))
 
 /* Convenience accessors for ccdigest_ctx_t fields. */
-#define cchmac_istate(_di_, HC)    ((ccdigest_state_t)(((cchmac_ctx_t)(HC)).digest))
-#define cchmac_istate8(_di_, HC)   (ccdigest_u8(cchmac_istate(_di_, HC)))
-#define cchmac_istate32(_di_, HC)  (ccdigest_u32(cchmac_istate(_di_, HC)))
-#define cchmac_istate64(_di_, HC)  (ccdigest_u64(cchmac_istate(_di_, HC)))
-#define cchmac_istateccn(_di_, HC) (ccdigest_ccn(cchmac_istate(_di_, HC)))
+#define cchmac_istate(_di_, HC)    ccdigest_state(_di_, ((cchmac_ctx_t)(HC)).digest)
+#define cchmac_istate8(_di_, HC)   ccdigest_u8(cchmac_istate(_di_, HC))
+#define cchmac_istate32(_di_, HC)  ccdigest_u32(cchmac_istate(_di_, HC))
+#define cchmac_istate64(_di_, HC)  ccdigest_u64(cchmac_istate(_di_, HC))
+#define cchmac_istateccn(_di_, HC) ccdigest_ccn(cchmac_istate(_di_, HC))
 #define cchmac_data(_di_, HC)      ccdigest_data(_di_, ((cchmac_ctx_t)(HC)).digest)
 #define cchmac_num(_di_, HC)       ccdigest_num(_di_, ((cchmac_ctx_t)(HC)).digest)
 #define cchmac_nbits(_di_, HC)     ccdigest_nbits(_di_, ((cchmac_ctx_t)(HC)).digest)

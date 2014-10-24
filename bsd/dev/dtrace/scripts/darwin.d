@@ -40,6 +40,24 @@ inline uint32_t THREAD_TAG_CALLOUT = 0x2;
 inline uint32_t THREAD_TAG_IOWORKLOOP = 0x4;
 
 /*
+ * mach thread scheduler state
+ */
+inline int TH_WAIT		= 0x01;
+#pragma D binding "1.0" TH_WAIT
+inline int TH_SUSP		= 0x02;
+#pragma D binding "1.0" TH_SUSP
+inline int TH_RUN		= 0x04;
+#pragma D binding "1.0" TH_RUN
+inline int TH_UNINT		= 0x08;
+#pragma D binding "1.0" TH_UNINT
+inline int TH_TERMINATE  	= 0x10;
+#pragma D binding "1.0" TH_TERMINATE
+inline int TH_TERMINATE2	= 0x20;
+#pragma D binding "1.0" TH_TERMINATE2
+inline int TH_IDLE		= 0x80;
+#pragma D binding "1.0" TH_IDLE
+
+/*
  * The following miscellaneous constants are used by the proc(4) translators
  * defined below.
  */
@@ -277,6 +295,7 @@ typedef struct lwpsinfo {
 	short	pr_syscall;	/* system call number (if in syscall) */
 	int	pr_pri;		/* priority, high value is high priority */
 	char	pr_clname[8];	/* scheduling class name */
+	int	pr_thstate;		/* mach thread scheduler state */
 	processorid_t pr_onpro;		/* processor which last ran this lwp */
 	processorid_t pr_bindpro;	/* processor to which lwp is bound */
 	psetid_t pr_bindpset;	/* processor set to which lwp is bound */
@@ -306,6 +325,7 @@ translator lwpsinfo_t < thread_t T > {
 	pr_onpro = (T->last_processor == PROCESSOR_NULL) ? -1 : T->last_processor->cpu_id;
 	pr_bindpro = -1; /* Darwin does not bind threads to processors. */
 	pr_bindpset = -1; /* Darwin does not partition processors. */
+	pr_thstate = T->state;
 };
 
 inline psinfo_t *curpsinfo = xlate <psinfo_t *> (curproc);

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2013 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2014 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -463,6 +463,8 @@ struct pr_usrreqs {
 	int	(*pru_rcvoob)(struct socket *, struct mbuf *, int);
 	int	(*pru_send)(struct socket *, int, struct mbuf *,
 		    struct sockaddr *, struct mbuf *, struct proc *);
+	int	(*pru_send_list)(struct socket *, int, struct mbuf *,
+		    struct sockaddr *, struct mbuf *, struct proc *);
 #define	PRUS_OOB	0x1
 #define	PRUS_EOF	0x2
 #define	PRUS_MORETOCOME	0x4
@@ -472,8 +474,12 @@ struct pr_usrreqs {
 	int	(*pru_sopoll)(struct socket *, int, struct ucred *, void *);
 	int	(*pru_soreceive)(struct socket *, struct sockaddr **,
 		    struct uio *, struct mbuf **, struct mbuf **, int *);
+	int	(*pru_soreceive_list)(struct socket *, struct sockaddr **,
+		    struct uio **, u_int, struct mbuf **, struct mbuf **, int *);
 	int	(*pru_sosend)(struct socket *, struct sockaddr *,
 		    struct uio *, struct mbuf *, struct mbuf *, int);
+	int	(*pru_sosend_list)(struct socket *, struct sockaddr *,
+		    struct uio **, u_int, struct mbuf *, struct mbuf *, int);
 	int	(*pru_socheckopt)(struct socket *, struct sockopt *);
 };
 
@@ -509,13 +515,20 @@ extern int pru_rcvd_notsupp(struct socket *so, int flags);
 extern int pru_rcvoob_notsupp(struct socket *so, struct mbuf *m, int flags);
 extern int pru_send_notsupp(struct socket *so, int flags, struct mbuf *m,
     struct sockaddr *addr, struct mbuf *control, struct proc *p);
+extern int pru_send_list_notsupp(struct socket *so, int flags, struct mbuf *m,
+    struct sockaddr *addr, struct mbuf *control, struct proc *p);
 extern int pru_sense_null(struct socket *so, void * sb, int isstat64);
 extern int pru_shutdown_notsupp(struct socket *so);
 extern int pru_sockaddr_notsupp(struct socket *so, struct sockaddr **nam);
 extern int pru_sosend_notsupp(struct socket *so, struct sockaddr *addr,
-    struct uio *uio, struct mbuf *top, struct mbuf *control, int flags);
+    struct uio *uio,  struct mbuf *top, struct mbuf *control, int flags);
+extern int pru_sosend_list_notsupp(struct socket *so, struct sockaddr *addr,
+    struct uio **uio, u_int, struct mbuf *top, struct mbuf *control, int flags);
 extern int pru_soreceive_notsupp(struct socket *so,
     struct sockaddr **paddr, struct uio *uio, struct mbuf **mp0,
+    struct mbuf **controlp, int *flagsp);
+extern int pru_soreceive_list_notsupp(struct socket *so,
+    struct sockaddr **paddr, struct uio **uio, u_int, struct mbuf **mp0,
     struct mbuf **controlp, int *flagsp);
 extern int pru_sopoll_notsupp(struct socket *so, int events,
     struct ucred *cred, void *);

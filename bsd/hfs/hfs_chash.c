@@ -222,8 +222,8 @@ exit:
  * 
  */
 int
-hfs_chash_snoop(struct hfsmount *hfsmp, ino_t inum, int existence_only, int (*callout)(const struct cat_desc *,
-                const struct cat_attr *, void *), void * arg)
+hfs_chash_snoop(struct hfsmount *hfsmp, ino_t inum, int existence_only, 
+				int (*callout)(const cnode_t *cp, void *), void * arg)
 {
 	struct cnode *cp;
 	int result = ENOENT;
@@ -260,11 +260,13 @@ hfs_chash_snoop(struct hfsmount *hfsmp, ino_t inum, int existence_only, int (*ca
 
 		/* Skip cnodes that have been removed from the catalog */
 		if (cp->c_flag & (C_NOEXISTS | C_DELETED)) {
+			result = EACCES;
 			break;
 		}
+
 		/* Skip cnodes being created or reclaimed. */
 		if (!ISSET(cp->c_hflag, H_ALLOC | H_TRANSIT | H_ATTACH)) {
-			result = callout(&cp->c_desc, &cp->c_attr, arg);
+			result = callout(cp, arg);
 		}
 		break;
 	}

@@ -83,16 +83,21 @@ void hfs_generate_volume_notifications(struct hfsmount *hfsmp)
 		printf("hfs: set VeryLowDisk: vol:%s, freeblks:%d, dangerlimit:%d\n", hfsmp->vcbVN, freeblks, hfsmp->hfs_freespace_notify_dangerlimit);
 
 #if HFS_SPARSE_DEV
-		if (hfsmp->hfs_flags & HFS_HAS_SPARSE_DEVICE) {
-			if (hfsmp->hfs_backingfs_rootvp) {
-				struct mount *mp = vnode_mount (hfsmp->hfs_backingfs_rootvp);
-				/* If we're a sparse device, dump some info about the backing store... */
-				if (mp) {					
-					printf("hfs: set VeryLowDisk: vol:%s, backingstore b_avail:%lld, tag:%d\n", hfsmp->vcbVN, mp->mnt_vfsstat.f_bavail, hfsmp->hfs_backingfs_rootvp->v_tag);
-				}
-			}
+		// If we're a sparse device, dump some info about the backing store..
+		hfs_lock_mount(hfsmp);
+		vnode_t backing_vp = hfsmp->hfs_backingfs_rootvp;
+		if (backing_vp && vnode_get(backing_vp) != 0)
+			backing_vp = NULL;
+		hfs_unlock_mount(hfsmp);
+
+		if (backing_vp) {
+			struct mount *mp = vnode_mount(backing_vp);
+			printf("hfs: set VeryLowDisk: vol:%s, backingstore b_avail:%lld, tag:%d\n", 
+				   hfsmp->vcbVN, mp->mnt_vfsstat.f_bavail, backing_vp->v_tag);
+			vnode_put(backing_vp);
 		}
 #endif
+
 		hfsmp->hfs_notification_conditions |= (VQ_VERYLOWDISK|VQ_LOWDISK);
 		vfs_event_signal(&fsid, hfsmp->hfs_notification_conditions, (intptr_t)NULL);
 	} else if (state == 1) {

@@ -52,8 +52,13 @@ const machdep_call_t		machdep_call_table[] = {
 	MACHDEP_BSD_CALL_ROUTINE(i386_get_ldt,3),
 };
 const machdep_call_t		machdep_call_table64[] = {
+#if HYPERVISOR
+	MACHDEP_CALL_ROUTINE64(hv_task_trap,2),
+	MACHDEP_CALL_ROUTINE64(hv_thread_trap,2),
+#else
 	MACHDEP_CALL_ROUTINE(kern_invalid,0),
 	MACHDEP_CALL_ROUTINE(kern_invalid,0),
+#endif
 	MACHDEP_CALL_ROUTINE(kern_invalid,0),
 	MACHDEP_CALL_ROUTINE64(thread_fast_set_cthread_self64,1),
 	MACHDEP_CALL_ROUTINE(kern_invalid,0),

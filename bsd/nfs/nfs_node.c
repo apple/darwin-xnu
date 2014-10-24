@@ -145,7 +145,7 @@ nfs_case_insensitive(mount_t mp)
 	int answer = 0;
 	int skip = 0;
 	
-	if (nmp == NULL) {
+	if (nfs_mount_gone(nmp)) {
 		return (0);
 	}
 	
@@ -207,7 +207,7 @@ nfs_nget(
 	FSDBG_TOP(263, mp, dnp, flags, npp);
 
 	/* Check for unmount in progress */
-	if (!mp || (mp->mnt_kern_flag & MNTK_FRCUNMOUNT)) {
+	if (!mp || vfs_isforce(mp)) {
 		*npp = NULL;
 		error = ENXIO;
 		FSDBG_BOT(263, mp, dnp, 0xd1e, error);
@@ -610,7 +610,7 @@ nfs_vnop_inactive(ap)
 	mp = vnode_mount(vp);
 
 restart:
-	force = (!mp || (mp->mnt_kern_flag & MNTK_FRCUNMOUNT));
+	force = (!mp || vfs_isforce(mp));
 	error = 0;
 	inuse = (nfs_mount_state_in_use_start(nmp, NULL) == 0);
 
@@ -869,7 +869,7 @@ nfs_vnop_reclaim(ap)
 	int force;
 
 	FSDBG_TOP(265, vp, np, np->n_flag, 0);
-	force = (!mp || (mp->mnt_kern_flag & MNTK_FRCUNMOUNT));
+	force = (!mp || vfs_isforce(mp) || nfs_mount_gone(nmp));
 
 	/* There shouldn't be any open or lock state at this point */
 	lck_mtx_lock(&np->n_openlock);

@@ -40,18 +40,20 @@ extern kern_return_t vm_compressor_pager_put(
 	memory_object_offset_t		offset,
 	ppnum_t				ppnum,
 	void				**current_chead,
-	char				*scratch_buf);
+	char				*scratch_buf,
+	int				*compressed_count_delta_p);
 extern kern_return_t vm_compressor_pager_get(
 	memory_object_t		mem_obj,
 	memory_object_offset_t	offset,
 	ppnum_t			ppnum,
 	int			*my_fault_type,
-	int			flags);
+	int			flags,
+	int			*compressed_count_delta_p);
 
 #define	C_DONT_BLOCK		0x01
 #define C_KEEP			0x02
 
-extern void vm_compressor_pager_state_clr(
+extern unsigned int vm_compressor_pager_state_clr(
 	memory_object_t		mem_obj,
 	memory_object_offset_t	offset);
 extern vm_external_state_t vm_compressor_pager_state_get(
@@ -59,7 +61,8 @@ extern vm_external_state_t vm_compressor_pager_state_get(
 	memory_object_offset_t	offset);
 
 #define VM_COMPRESSOR_PAGER_STATE_GET(object, offset)			\
-	(((COMPRESSED_PAGER_IS_ACTIVE || DEFAULT_FREEZER_COMPRESSED_PAGER_IS_ACTIVE) && \
+	(((COMPRESSED_PAGER_IS_ACTIVE ||				\
+	   DEFAULT_FREEZER_COMPRESSED_PAGER_IS_ACTIVE) &&		\
 	  (object)->internal &&						\
 	  (object)->pager != NULL &&					\
 	  !(object)->terminating &&					\
@@ -68,23 +71,58 @@ extern vm_external_state_t vm_compressor_pager_state_get(
 					 (offset) + (object)->paging_offset) \
 	 : VM_EXTERNAL_STATE_UNKNOWN)
 
-#define VM_COMPRESSOR_PAGER_STATE_CLR(object, offset)		\
-	MACRO_BEGIN						\
-	if ((COMPRESSED_PAGER_IS_ACTIVE || DEFAULT_FREEZER_COMPRESSED_PAGER_IS_ACTIVE) &&	\
-	    (object)->internal &&				\
-	    (object)->pager != NULL &&				\
-	    !(object)->terminating &&				\
-	    (object)->alive) {					\
-		vm_compressor_pager_state_clr(			\
-			(object)->pager,			\
-			(offset) + (object)->paging_offset);	\
-	}							\
+#define VM_COMPRESSOR_PAGER_STATE_CLR(object, offset)			\
+	MACRO_BEGIN							\
+	if ((COMPRESSED_PAGER_IS_ACTIVE ||				\
+	     DEFAULT_FREEZER_COMPRESSED_PAGER_IS_ACTIVE) &&		\
+	    (object)->internal &&					\
+	    (object)->pager != NULL &&					\
+	    !(object)->terminating &&					\
+	    (object)->alive) {						\
+		int _num_pages_cleared;					\
+		_num_pages_cleared =					\
+			vm_compressor_pager_state_clr(			\
+				(object)->pager,			\
+				(offset) + (object)->paging_offset);	\
+		if (_num_pages_cleared) {				\
+			vm_compressor_pager_count((object)->pager,	\
+						  -_num_pages_cleared,	\
+						  FALSE, /* shared */	\
+						  (object));		\
+		}							\
+		if (_num_pages_cleared &&				\
+		    (object)->purgable != VM_PURGABLE_DENY &&		\
+		    (object)->vo_purgeable_owner != NULL) {		\
+			/* less compressed purgeable pages */		\
+			assert(_num_pages_cleared == 1);		\
+			vm_purgeable_compressed_update(			\
+				(object),				\
+				-_num_pages_cleared);			\
+		}							\
+	}								\
 	MACRO_END
+
+extern void vm_compressor_pager_transfer(
+	memory_object_t		dst_mem_obj,
+	memory_object_offset_t	dst_offset,
+	memory_object_t		src_mem_obj,
+	memory_object_offset_t	src_offset);
+extern memory_object_offset_t vm_compressor_pager_next_compressed(
+	memory_object_t		mem_obj,
+	memory_object_offset_t	offset);
 
 extern void vm_compressor_init(void);
 extern int vm_compressor_put(ppnum_t pn, int *slot, void **current_chead, char *scratch_buf);
 extern int vm_compressor_get(ppnum_t pn, int *slot, int flags);
-extern void vm_compressor_free(int *slot);
+extern int vm_compressor_free(int *slot, int flags);
+extern unsigned int vm_compressor_pager_reap_pages(memory_object_t mem_obj, int flags);
+extern unsigned int vm_compressor_pager_get_slots_occupied(memory_object_t mem_obj);
+extern unsigned int vm_compressor_pager_get_count(memory_object_t mem_obj);
+extern void vm_compressor_pager_count(memory_object_t mem_obj,
+				      int compressed_count_delta,
+				      boolean_t shared_lock,
+				      vm_object_t object);
+extern void vm_compressor_transfer(int *dst_slot_p, int	*src_slot_p);
 
 #endif	/* _VM_VM_COMPRESSOR_PAGER_H_ */
 

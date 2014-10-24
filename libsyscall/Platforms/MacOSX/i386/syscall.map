@@ -14,6 +14,7 @@ _fcntl	___fcntl_nocancel
 _fcntl$NOCANCEL$UNIX2003	___fcntl_nocancel
 _fcntl$UNIX2003	___fcntl
 _fstat$INODE64	___fstat64
+_fstatat$INODE64	___fstatat64
 _fstatfs$INODE64	___fstatfs64
 _fsync	___fsync_nocancel
 _fsync$NOCANCEL$UNIX2003	___fsync_nocancel
@@ -39,6 +40,8 @@ _msync$NOCANCEL$UNIX2003	___msync_nocancel
 _msync$UNIX2003	___msync
 _open$NOCANCEL$UNIX2003	___open_nocancel
 _open$UNIX2003	___open
+_openat$NOCANCEL	___openat_nocancel
+_openat	___openat
 _poll	___poll_nocancel
 _poll$NOCANCEL$UNIX2003	___poll_nocancel
 _poll$UNIX2003	___poll

@@ -5,6 +5,8 @@ from xnu import *
 import sys, shlex
 from utils import *
 from process import *
+from atm import *
+from bank import *
 import xnudefines
 
 @header("{0: <20s} {1: <6s} {2: <6s} {3: <10s} {4: <15s}".format("task", "pid", '#acts', "tablesize", "command"))
@@ -78,13 +80,13 @@ def GetPortDestProc(portp):
                 destprocp = Cast(tsk.bsd_info, 'struct proc *')
                 out_str = "{0:s}({1: <d})".format(destprocp.p_comm, destprocp.p_pid)
             else:
-                out_str = "task {0: #019x}".format(desttaskp)
+                out_str = "unknown"
             break
     
     return out_str
 
-@header("{0: <20s} {1: <28s} {2: <12s} {3: <6s} {4: <6s} {5: <19s} {6: <6s}\n".format(
-            "dest-port", "kmsg", "msgid", "disp", "size", "reply-port", "source"))
+@header("{0: <20s} {1: <28s} {2: <12s} {3: <6s} {4: <6s} {5: <19s} {6: <26s} {7: <26s}\n".format(
+            "dest-port", "kmsg", "msgid", "disp", "size", "reply-port", "source", "destination"))
 def GetKMsgSummary(kmsgp):
     """ Display a summary for type ipc_kmsg_t
         params:
@@ -95,26 +97,33 @@ def GetKMsgSummary(kmsgp):
     kmsghp = kmsgp.ikm_header
     kmsgh = dereference(kmsghp)
     out_string = ""
-    out_string += "{0: <19s} {1: #019x} {2: <8s} {3: #011x}   ".format(
+    out_string += "{0: <19s} {1: <#019x} {2: <8s} {3: <#011x} ".format(
                     ' '*19, unsigned(kmsgp), ' '*8, kmsgh.msgh_id)
     
-    if (kmsgh.msgh_bits & 0xff) == 19:
-        out_string += "{0: <2s}".format("rC")
+    if (kmsgh.msgh_bits & 0xff) == 17:
+        out_string += "{0: <2s}".format("rS")
     else:
-        out_string += "{0: <2s}".format("rM")
+        out_string += "{0: <2s}".format("rO")
     
-    if (kmsgh.msgh_bits & 0xff00) == (19 << 8):
-        out_string += "{0: <2s}".format("lC")
+    if (kmsgh.msgh_bits & 0xff00) == (17 << 8):
+        out_string += "{0: <2s}".format("lS")
     else:
-        out_string += "{0: <2s}".format("lM")
+        if (kmsgh.msgh_bits & 0xff00) == (18 << 8):
+            out_string += "{0: <2s}".format("lO")
+        else:
+            out_string += "{0: <2s}".format("l-")
     if kmsgh.msgh_bits & 0xf0000000:
         out_string += "{0: <2s}".format("c")
     else:
         out_string += "{0: <2s}".format("s")
     
-    out_string += "{0: >5d}  {1: #019x}  {2: <16s}\n".format(
-                    unsigned(kmsgh.msgh_size), kmsgh.msgh_local_port,
-                    GetKMsgSrc(kmsgp))
+    dest_proc_name = ""
+    if kmsgp.ikm_header.msgh_remote_port:
+        dest_proc_name = GetDestinationProcessFromPort(kmsgp.ikm_header.msgh_remote_port)
+
+    out_string += "{0: ^6d}   {1: <#019x} {2: <26s} {3: <26s}\n".format(
+                    unsigned(kmsgh.msgh_size), unsigned(kmsgh.msgh_local_port),
+                    GetKMsgSrc(kmsgp), dest_proc_name)
     return out_string
 
 def GetKMsgSrc(kmsgp):
@@ -247,6 +256,8 @@ def GetKObjectFromPort(portval):
     objtype_index = io_bits & 0xfff
     if objtype_index < len(xnudefines.kobject_types) :
         desc_str = "kobject({0:s})".format(xnudefines.kobject_types[objtype_index])
+        if xnudefines.kobject_types[objtype_index] in ('TASK_RESUME', 'TASK'):
+            desc_str += " " + GetProcNameForTask(Cast(portval.kdata.kobject, 'task *'))
     else:
         desc_str = "kobject(UNKNOWN) {:d}".format(objtype_index)
     return kobject_str + " " + desc_str
@@ -340,8 +351,8 @@ def GetIPCEntrySummary(entry, ipc_name=''):
             right_str = 'R'
         elif ie_bits & 0x00040000 :
             right_str = 'O'
+        portval = Cast(ie_object, 'ipc_port_t')
         if int(entry.index.request) != 0:
-            portval = Cast(ie_object, 'ipc_port_t')
             requestsval = portval.ip_requests
             sorightval = requestsval[int(entry.index.request)].notify.port
             soright_ptr = unsigned(sorightval)
@@ -350,6 +361,7 @@ def GetIPCEntrySummary(entry, ipc_name=''):
                  elif soright_ptr & 0x2 : right_str +='d'
                  else : right_str +='n'
         if ie_bits & 0x00800000 : right_str +='c'
+        if portval.ip_nsrequest != 0: right_str +='x'
         # now show the port destination part
         destname_str = GetPortDestinationSummary(Cast(ie_object, 'ipc_port_t'))
         
@@ -487,8 +499,13 @@ def ShowAllRights(cmd_args=None):
         print GetTaskSummary.header + " " + GetProcSummary.header
         pval = Cast(t.bsd_info, 'proc *')
         print GetTaskSummary(t) + " " + GetProcSummary(pval)
-        print GetIPCInformation.header
-        print GetIPCInformation(t.itk_space, True, False) + "\n\n"
+        try:
+            print GetIPCInformation.header
+            print GetIPCInformation(t.itk_space, True, False) + "\n\n"
+        except (KeyboardInterrupt, SystemExit):
+            raise
+        except:
+            print "Failed to get IPC information. Do individual showtaskrights <task> to find the error. \n\n"
 
 # EndMacro: showallrights
 
@@ -564,7 +581,7 @@ def ShowMQueue(cmd_args=None):
     mqueue = kern.GetValueFromAddress(cmd_args[0], 'struct ipc_mqueue *')
     wq_type = mqueue.data.pset.set_queue.wqs_wait_queue.wq_type
     if int(wq_type) == 3:
-        psetoff = getfieldoffset('struct ipc_pset *', 'ips_messages')
+        psetoff = getfieldoffset('struct ipc_pset', 'ips_messages')
         pset = unsigned(ArgumentStringToInt(cmd_args[0])) - unsigned(psetoff)
         print GetPortSetSummary.header + GetPortSetSummary(kern.GetValueFromAddress(pset, 'struct ipc_pset *'))
     if int(wq_type) == 2:
@@ -572,6 +589,20 @@ def ShowMQueue(cmd_args=None):
         port = unsigned(ArgumentStringToInt(cmd_args[0])) - unsigned(portoff)
         print GetPortSummary.header + GetPortSummary(kern.GetValueFromAddress(port, 'struct ipc_port *'))
 # EndMacro: showmqueue
+
+# Macro: showkmsg:
+@lldb_command('showkmsg')
+def ShowKMSG(cmd_args=[]):
+    """ Show detail information about a <ipc_kmsg_t> structure
+        Usage: (lldb) showkmsg <ipc_kmsg_t>
+    """
+    if not cmd_args:
+        raise ArgumentError('Invalid arguments')
+    kmsg = kern.GetValueFromAddress(cmd_args[0], 'ipc_kmsg_t')
+    print GetKMsgSummary.header
+    print GetKMsgSummary(kmsg)
+
+# EndMacro: showkmsg
 
 # Macro: showpset
 @lldb_command('showpset')
@@ -586,4 +617,444 @@ def ShowPSet(cmd_args=None):
     
     print GetPortSetSummary.header + GetPortSetSummary(kern.GetValueFromAddress(cmd_args[0], 'ipc_pset *'))
 # EndMacro: showpset
+
+# IPC importance inheritance related macros.
+
+@lldb_command('showalliits')
+def ShowAllIITs(cmd_args=[], cmd_options={}):
+    """ Development only macro. Show list of all iits allocated in the system. """
+    try:
+        iit_queue = kern.globals.global_iit_alloc_queue 
+    except ValueError:
+        print "This debug macro is only available in development or debug kernels"
+        return
+    
+    print GetIPCImportantTaskSummary.header
+    for iit in IterateQueue(iit_queue, 'struct ipc_importance_task *', 'iit_allocation'):
+        print GetIPCImportantTaskSummary(iit)
+    return
+
+@header("{: <18s} {: <3s} {: <18s} {: <20s} {: <18s} {: <8s}".format("ipc_imp_inherit", "don", "to_task", "proc_name", "from_elem", "depth"))
+@lldb_type_summary(['ipc_importance_inherit *', 'ipc_importance_inherit_t'])
+def GetIPCImportanceInheritSummary(iii):
+    """ describes iii object of type ipc_importance_inherit_t * """
+    out_str = ""
+    fmt = "{o: <#018x} {don: <3s} {o.iii_to_task.iit_task: <#018x} {task_name: <20s} {o.iii_from_elem: <#018x} {o.iii_depth: <#08x}"
+    donating_str = ""
+    if unsigned(iii.iii_donating):
+        donating_str = "DON"
+    taskname = GetProcNameForTask(iii.iii_to_task.iit_task)
+    if hasattr(iii.iii_to_task, 'iit_bsd_pid'):
+        taskname =  "({:d}) {:s}".format(iii.iii_to_task.iit_bsd_pid, iii.iii_to_task.iit_procname)
+    out_str += fmt.format(o=iii, task_name = taskname, don=donating_str)
+    return out_str
+
+@static_var('recursion_count', 0)
+@header("{: <18s} {: <4s} {: <8s} {: <8s} {: <18s} {: <18s}".format("iie", "type", "refs", "made", "#kmsgs", "#inherits"))
+@lldb_type_summary(['ipc_importance_elem *'])
+def GetIPCImportanceElemSummary(iie):
+    """ describes an ipc_importance_elem * object """
+
+    if GetIPCImportanceElemSummary.recursion_count > 500:
+        GetIPCImportanceElemSummary.recursion_count = 0
+        return "Recursion of 500 reached"
+
+    out_str = ''
+    fmt = "{: <#018x} {: <4s} {: <8d} {: <8d} {: <#018x} {: <#018x}"
+    type_str = 'TASK'
+    if unsigned(iie.iie_bits) & 0x80000000:
+        type_str = "INH"
+    refs = unsigned(iie.iie_bits) & 0x7fffffff
+    made_refs = unsigned(iie.iie_made)
+    kmsg_count = sum(1 for i in IterateQueue(iie.iie_kmsgs, 'struct ipc_kmsg *',  'ikm_inheritance'))
+    inherit_count = sum(1 for i in IterateQueue(iie.iie_inherits, 'struct ipc_importance_inherit *',  'iii_inheritance'))
+    out_str += fmt.format(iie, type_str, refs, made_refs, kmsg_count, inherit_count)
+    if config['verbosity'] > vHUMAN:
+        if kmsg_count > 0:
+            out_str += "\n\t"+ GetKMsgSummary.header 
+            for k in IterateQueue(iie.iie_kmsgs, 'struct ipc_kmsg *',  'ikm_inheritance'):
+                out_str += "\t" + "{: <#018x}".format(k.ikm_header.msgh_remote_port) + '   ' + GetKMsgSummary(k).lstrip() 
+            out_str += "\n"
+        if inherit_count > 0:
+            out_str += "\n\t" + GetIPCImportanceInheritSummary.header + "\n"
+            for i in IterateQueue(iie.iie_inherits, 'struct ipc_importance_inherit *',  'iii_inheritance'):
+                out_str += "\t" + GetIPCImportanceInheritSummary(i) + "\n"
+            out_str += "\n"
+        if type_str == "INH":
+            iii = Cast(iie, 'struct ipc_importance_inherit *')
+            out_str += "Inherit from: " + GetIPCImportanceElemSummary(iii.iii_from_elem)
+
+    return out_str
+
+@header("{: <18s} {: <18s} {: <20s}".format("iit", "task", "name"))
+@lldb_type_summary(['ipc_importance_task *'])
+def GetIPCImportantTaskSummary(iit):
+    """ iit is a ipc_importance_task value object.
+    """
+    fmt = "{: <#018x} {: <#018x} {: <20s}"
+    out_str=''
+    pname = GetProcNameForTask(iit.iit_task)
+    if hasattr(iit, 'iit_bsd_pid'):
+        pname = "({:d}) {:s}".format(iit.iit_bsd_pid, iit.iit_procname)
+    out_str += fmt.format(iit, iit.iit_task, pname)
+    return out_str
+
+@lldb_command('showallimportancetasks')
+def ShowIPCImportanceTasks(cmd_args=[], cmd_options={}):
+    """ display a list of all tasks with ipc importance information. 
+        Usage: (lldb) showallimportancetasks
+        Tip: add "-v" to see detailed information on each kmsg or inherit elems 
+    """
+    print ' ' + GetIPCImportantTaskSummary.header + ' ' + GetIPCImportanceElemSummary.header
+    for t in kern.tasks:
+        s = ""
+        if unsigned(t.task_imp_base):
+            s += ' ' + GetIPCImportantTaskSummary(t.task_imp_base)
+            s += ' ' + GetIPCImportanceElemSummary(addressof(t.task_imp_base.iit_elem))
+            print s
+
+@lldb_command('showipcimportance', '')
+def ShowIPCImportance(cmd_args=[], cmd_options={}):
+    """ Describe an importance from <ipc_importance_elem_t> argument.
+        Usage: (lldb) showimportance <ipc_importance_elem_t>
+    """
+    if not cmd_args:
+        raise ArgumentError("Please provide valid argument")
+
+    elem = kern.GetValueFromAddress(cmd_args[0], 'ipc_importance_elem_t')
+    print GetIPCImportanceElemSummary.header
+    print GetIPCImportanceElemSummary(elem)
+
+@header("{: <18s} {: <10s} {: <18s} {: <18s} {: <8s} {: <5s} {: <5s} {: <5s}".format("ivac", "refs", "port", "tbl", "tblsize", "index", "Grow", "freelist"))
+@lldb_type_summary(['ipc_voucher_attr_control *', 'ipc_voucher_attr_control_t'])
+def GetIPCVoucherAttrControlSummary(ivac):
+    """ describes a voucher attribute control settings """
+    out_str = ""
+    fmt = "{c: <#018x} {c.ivac_refs: <10d} {c.ivac_port: <#018x} {c.ivac_table: <#018x} {c.ivac_table_size: <8d} {c.ivac_key_index: <5d} {growing: <5s} {c.ivac_freelist: <5d}"
+    growing_str = ""
+    
+    if unsigned(ivac) == 0:
+        return "{: <#018x}".format(ivac)
+
+    if unsigned(ivac.ivac_is_growing):
+        growing_str = "Y"
+    out_str += fmt.format(c=ivac, growing = growing_str)
+    return out_str
+
+@lldb_command('showivac','')
+def ShowIPCVoucherAttributeControl(cmd_args=[], cmd_options={}):
+    """ Show summary of voucher attribute contols.
+        Usage: (lldb) showivac <ipc_voucher_attr_control_t>
+    """
+    if not cmd_args:
+        raise ArgumentError("Please provide correct arguments.")
+    ivac = kern.GetValueFromAddress(cmd_args[0], 'ipc_voucher_attr_control_t')
+    print GetIPCVoucherAttrControlSummary.header
+    print GetIPCVoucherAttrControlSummary(ivac)
+    if config['verbosity'] > vHUMAN:
+        cur_entry_index = 0
+        last_entry_index = unsigned(ivac.ivac_table_size)
+        print "index " + GetIPCVoucherAttributeEntrySummary.header
+        while cur_entry_index < last_entry_index:
+            print "{: <5d} ".format(cur_entry_index) + GetIPCVoucherAttributeEntrySummary(addressof(ivac.ivac_table[cur_entry_index]))
+            cur_entry_index += 1
+
+    
+
+
+@header("{: <18s} {: <30s} {: <30s} {: <30s} {: <30s} {: <30s}".format("ivam", "get_value_fn", "extract_fn", "release_value_fn", "command_fn", "release_fn"))
+@lldb_type_summary(['ipc_voucher_attr_manager *', 'ipc_voucher_attr_manager_t'])
+def GetIPCVoucherAttrManagerSummary(ivam):
+    """ describes a voucher attribute manager settings """
+    out_str = ""
+    fmt = "{: <#018x} {: <30s} {: <30s} {: <30s} {: <30s} {: <30s}"
+    
+    if unsigned(ivam) == 0 :
+        return "{: <#018x}".format(ivam)
+
+    get_value_fn = kern.Symbolicate(unsigned(ivam.ivam_get_value))
+    extract_fn = kern.Symbolicate(unsigned(ivam.ivam_extract_content))
+    release_value_fn = kern.Symbolicate(unsigned(ivam.ivam_release_value))
+    command_fn = kern.Symbolicate(unsigned(ivam.ivam_command))
+    release_fn = kern.Symbolicate(unsigned(ivam.ivam_release))
+    out_str += fmt.format(ivam, get_value_fn, extract_fn, release_value_fn, command_fn, release_fn)
+    return out_str
+
+
+
+@header("{: <18s} {: <10s} {:s} {:s}".format("ivgte", "key", GetIPCVoucherAttrControlSummary.header.strip(), GetIPCVoucherAttrManagerSummary.header.strip()))
+@lldb_type_summary(['ipc_voucher_global_table_element *', 'ipc_voucher_global_table_element_t'])
+def GetIPCVoucherGlobalTableElementSummary(ivgte):
+    """ describes a ipc_voucher_global_table_element object """
+    out_str = ""
+    fmt = "{g: <#018x} {g.ivgte_key: <10d} {ctrl_s:s} {mgr_s:s}"
+    out_str += fmt.format(g=ivgte, ctrl_s=GetIPCVoucherAttrControlSummary(ivgte.ivgte_control), mgr_s=GetIPCVoucherAttrManagerSummary(ivgte.ivgte_manager))
+    return out_str
+
+@lldb_command('showglobalvouchertable', '')
+def ShowGlobalVoucherTable(cmd_args=[], cmd_options={}):
+    """ show detailed information of all voucher attribute managers registered with vouchers system
+        Usage: (lldb) showglobalvouchertable
+    """
+    entry_size = sizeof(kern.globals.iv_global_table[0])
+    elems = sizeof(kern.globals.iv_global_table) / entry_size
+    print GetIPCVoucherGlobalTableElementSummary.header
+    for i in range(elems):
+        elt = addressof(kern.globals.iv_global_table[i])
+        print GetIPCVoucherGlobalTableElementSummary(elt)
+
+# Type summaries for Bag of Bits.
+
+@lldb_type_summary(['user_data_value_element', 'user_data_element_t'])
+@header("{0: <20s} {1: <16s} {2: <20s} {3: <20s} {4: <16s} {5: <20s}".format("user_data_ve", "maderefs", "checksum", "hash value", "size", "data"))
+def GetBagofBitsElementSummary(data_element):
+    """ Summarizes the Bag of Bits element
+        params: data_element = value of the object of type user_data_value_element_t
+        returns: String with summary of the type.
+    """
+    format_str = "{0: <#020x} {1: <16d} {2: <#020x} {3: <#020x} {4: <16d}"
+    out_string = format_str.format(data_element, unsigned(data_element.e_made), data_element.e_sum, data_element.e_hash, unsigned(data_element.e_size))
+    out_string += " 0x"
+
+    for i in range(0, (unsigned(data_element.e_size) - 1)):
+      out_string += "{:02x}".format(int(data_element.e_data[i]))
+    return out_string
+
+def GetIPCHandleSummary(handle_ptr):
+    """ converts a handle value inside a voucher attribute table to ipc element and returns appropriate summary.
+        params: handle_ptr - uint64 number stored in handle of voucher.
+        returns: str - string summary of the element held in internal structure
+    """
+    elem = kern.GetValueFromAddress(handle_ptr, 'ipc_importance_elem_t')
+    if elem.iie_bits & 0x80000000 :
+        iie = Cast(elem, 'struct ipc_importance_inherit *')
+        return GetIPCImportanceInheritSummary(iie)
+    else:
+        iit = Cast(elem, 'struct ipc_importance_task *')
+        return GetIPCImportantTaskSummary(iit)
+
+def GetATMHandleSummary(handle_ptr):
+    """ Convert a handle value to atm value and returns corresponding summary of its fields.
+        params: handle_ptr - uint64 number stored in handle of voucher
+        returns: str - summary of atm value
+    """
+    elem = kern.GetValueFromAddress(handle_ptr, 'atm_value *')
+    return GetATMValueSummary(elem)
+
+def GetBankHandleSummary(handle_ptr):
+    """ converts a handle value inside a voucher attribute table to bank element and returns appropriate summary.
+        params: handle_ptr - uint64 number stored in handle of voucher.
+        returns: str - summary of bank element
+    """
+    elem = kern.GetValueFromAddress(handle_ptr, 'bank_element_t')
+    if elem.be_type & 1 :
+        ba = Cast(elem, 'struct bank_account *')
+        return GetBankAccountSummary(ba)
+    else:
+        bt = Cast(elem, 'struct bank_task *')
+        return GetBankTaskSummary(bt)
+
+def GetBagofBitsHandleSummary(handle_ptr):
+    """ Convert a handle value to bag of bits value and returns corresponding summary of its fields.
+        params: handle_ptr - uint64 number stored in handle of voucher
+        returns: str - summary of bag of bits element
+    """
+    elem = kern.GetValueFromAddress(handle_ptr, 'user_data_element_t')
+    return GetBagofBitsElementSummary(elem)
+
+@static_var('attr_managers',{1: GetATMHandleSummary, 2: GetIPCHandleSummary, 3: GetBankHandleSummary, 7: GetBagofBitsHandleSummary})
+def GetHandleSummaryForKey(handle_ptr, key_num):
+    """ Get a summary of handle pointer from the voucher attribute manager. 
+        For example key 1 -> ATM and it puts atm_value_t in the handle. So summary of it would be atm value and refs etc.
+                    key 2 -> ipc and it puts either ipc_importance_inherit_t or ipc_important_task_t.
+                    key 3 -> Bank and it puts either bank_task_t or bank_account_t.
+                    key 7 -> Bag of Bits and it puts user_data_element_t in handle. So summary of it would be Bag of Bits content and refs etc.
+    """
+    key_num = int(key_num)
+    if key_num not in GetHandleSummaryForKey.attr_managers:
+        return "Unknown key %d" % key_num
+    return GetHandleSummaryForKey.attr_managers[key_num](handle_ptr)
+
+
+@header("{: <18s} {: <18s} {: <10s} {: <4s} {: <18s} {: <18s}".format("ivace", "value_handle", "#refs", "rel?", "maderefs", "next_layer"))
+@lldb_type_summary(['ivac_entry *', 'ivac_entry_t'])
+def GetIPCVoucherAttributeEntrySummary(ivace, manager_key_num = 0):
+    """ Get summary for voucher attribute entry.
+    """
+    out_str = ""
+    fmt = "{e: <#018x} {e.ivace_value: <#018x} {e.ivace_refs: <10d} {release: <4s} {made_refs: <18s} {next_layer: <18s}"
+    release_str = ""
+    free_str = ""
+    made_refs = ""
+    next_layer = ""
+
+    if unsigned(ivace.ivace_releasing):
+        release_str = "Y"
+    if unsigned(ivace.ivace_free):
+        free_str = 'F'
+    if unsigned(ivace.ivace_layered):
+        next_layer = "{: <#018x}".format(ivace.ivace_u.ivaceu_layer)
+    else:
+        made_refs = "{: <18d}".format(ivace.ivace_u.ivaceu_made)
+
+    out_str += fmt.format(e=ivace, release=release_str, made_refs=made_refs, next_layer=next_layer)
+    if config['verbosity'] > vHUMAN and manager_key_num > 0:
+        out_str += " " + GetHandleSummaryForKey(unsigned(ivace.ivace_value), manager_key_num)
+    if config['verbosity'] > vHUMAN :
+        out_str += ' {: <2s} {: <4d} {: <4d}'.format(free_str, ivace.ivace_next, ivace.ivace_index)
+    return out_str
+
+@lldb_command('showivacfreelist','')
+def ShowIVACFreeList(cmd_args=[], cmd_options={}):
+    """ Walk the free list and print every entry in the list.
+        usage: (lldb) showivacfreelist <ipc_voucher_attr_control_t>
+    """
+    if not cmd_args:
+        raise ArgumentError('Please provide <ipc_voucher_attr_control_t>')
+    ivac = kern.GetValueFromAddress(cmd_args[0], 'ipc_voucher_attr_control_t')
+    print GetIPCVoucherAttrControlSummary.header
+    print GetIPCVoucherAttrControlSummary(ivac)
+    if unsigned(ivac.ivac_freelist) == 0:
+        print "ivac table is full"
+        return
+    print "index " + GetIPCVoucherAttributeEntrySummary.header
+    next_free = unsigned(ivac.ivac_freelist)
+    while next_free != 0:
+        print "{: <5d} ".format(next_free) + GetIPCVoucherAttributeEntrySummary(addressof(ivac.ivac_table[next_free]))
+        next_free = unsigned(ivac.ivac_table[next_free].ivace_next)
+
+
+
+@header('{: <18s} {: <8s} {: <18s} {: <18s} {: <18s} {: <18s} {: <18s}'.format("ipc_voucher", "refs", "checksum", "hash", "tbl_size", "table", "voucher_port"))
+@lldb_type_summary(['ipc_voucher *', 'ipc_voucher_t'])
+def GetIPCVoucherSummary(voucher, show_entries=False):
+    """ describe a voucher from its ipc_voucher * object """
+    out_str = ""
+    fmt = "{v: <#018x} {v.iv_refs: <8d} {v.iv_sum: <#018x} {v.iv_hash: <#018x} {v.iv_table_size: <#018x} {v.iv_table: <#018x} {v.iv_port: <#018x}"
+    out_str += fmt.format(v = voucher)
+    entries_str = ''
+    if show_entries or config['verbosity'] > vHUMAN:
+        elems = unsigned(voucher.iv_table_size)
+        entries_header_str = "\n\t" + "{: <5s} {: <3s} {: <16s} {: <30s}".format("index", "key", "value_index", "manager") + " " + GetIPCVoucherAttributeEntrySummary.header
+        fmt =  "{: <5d} {: <3d} {: <16d} {: <30s}"
+        for i in range(elems):
+            voucher_entry_index = unsigned(voucher.iv_inline_table[i])
+            if voucher_entry_index:
+                s = fmt.format(i, GetVoucherManagerKeyForIndex(i), voucher_entry_index, GetVoucherAttributeManagerNameForIndex(i))
+                e = GetVoucherValueHandleFromVoucherForIndex(voucher, i)
+                if e is not None:
+                    s += " " + GetIPCVoucherAttributeEntrySummary(addressof(e), GetVoucherManagerKeyForIndex(i) )
+                if entries_header_str :
+                    entries_str = entries_header_str
+                    entries_header_str = ''
+                entries_str += "\n\t" + s 
+        if not entries_header_str:
+            entries_str += "\n\t"
+    out_str += entries_str
+    return out_str
+
+def GetVoucherManagerKeyForIndex(idx):
+    """ Returns key number for index based on global table. Will raise index error if value is incorrect
+    """
+    return unsigned(kern.globals.iv_global_table[idx].ivgte_key)
+
+def GetVoucherAttributeManagerForKey(k):
+    """ Walks through the iv_global_table and finds the attribute manager name
+        params: k - int key number of the manager
+        return: cvalue - the attribute manager object. 
+                None - if not found
+    """
+    retval = None
+    entry_size = sizeof(kern.globals.iv_global_table[0])
+    elems = sizeof(kern.globals.iv_global_table) / entry_size
+    for i in range(elems):
+        elt = addressof(kern.globals.iv_global_table[i])
+        if k == unsigned(elt.ivgte_key):
+            retval = elt.ivgte_manager
+            break
+    return retval
+
+def GetVoucherAttributeControllerForKey(k):
+    """ Walks through the iv_global_table and finds the attribute controller
+        params: k - int key number of the manager
+        return: cvalue - the attribute controller object. 
+                None - if not found
+    """
+    retval = None
+    entry_size = sizeof(kern.globals.iv_global_table[0])
+    elems = sizeof(kern.globals.iv_global_table) / entry_size
+    for i in range(elems):
+        elt = addressof(kern.globals.iv_global_table[i])
+        if k == unsigned(elt.ivgte_key):
+            retval = elt.ivgte_control
+            break
+    return retval
+
+
+def GetVoucherAttributeManagerName(ivam):
+    """ find the name of the ivam object
+        param: ivam - cvalue object of type ipc_voucher_attr_manager_t
+        returns: str - name of the manager
+    """
+    return kern.Symbolicate(unsigned(ivam))
+
+def GetVoucherAttributeManagerNameForIndex(idx):
+    """ get voucher attribute manager name for index 
+        return: str - name of the attribute manager object
+    """
+    return GetVoucherAttributeManagerName(GetVoucherAttributeManagerForKey(GetVoucherManagerKeyForIndex(idx)))
+
+def GetVoucherValueHandleFromVoucherForIndex(voucher, idx):
+    """ traverse the voucher attrs and get value_handle in the voucher attr controls table
+        params:
+            voucher - cvalue object of type ipc_voucher_t
+            idx - int index in the entries for which you wish to get actual handle for
+        returns: cvalue object of type ivac_entry_t
+                 None if no handle found.
+    """
+    manager_key = GetVoucherManagerKeyForIndex(idx)
+    voucher_num_elems = unsigned(voucher.iv_table_size)
+    if idx >= voucher_num_elems:
+        debuglog("idx %d is out of range max: %d" % (idx, voucher_num_elems))
+        return None
+    voucher_entry_value = unsigned(voucher.iv_inline_table[idx])
+    debuglog("manager_key %d" % manager_key)
+    ivac = GetVoucherAttributeControllerForKey(manager_key)
+    if ivac is None or unsigned(ivac) == 0:
+        debuglog("No voucher attribute controller for idx %d" % idx)
+        return None
+
+    ivac = kern.GetValueFromAddress(unsigned(ivac), 'ipc_voucher_attr_control_t')  # ??? No idea why lldb does not addressof directly
+    ivace_table = ivac.ivac_table
+    if voucher_entry_value >= unsigned(ivac.ivac_table_size):
+        print "Failed to get ivace for value %d in table of size %d" % (voucher_entry_value, unsigned(ivac.ivac_table_size))
+        return None
+    return ivace_table[voucher_entry_value]
+
+
+
+@lldb_command('showallvouchers')
+def ShowAllVouchers(cmd_args=[], cmd_options={}):
+    """ Display a list of all vouchers in the global voucher hash table
+        Usage: (lldb) showallvouchers 
+    """
+    iv_hash_table = kern.globals.ivht_bucket
+    num_buckets =  sizeof(kern.globals.ivht_bucket) / sizeof(kern.globals.ivht_bucket[0])
+    print GetIPCVoucherSummary.header
+    for i in range(num_buckets):
+        for v in IterateQueue(iv_hash_table[i], 'ipc_voucher_t', 'iv_hash_link'):
+            print GetIPCVoucherSummary(v)
+
+@lldb_command('showvoucher', '')
+def ShowVoucher(cmd_args=[], cmd_options={}):
+    """ Describe a voucher from <ipc_voucher_t> argument.
+        Usage: (lldb) showvoucher <ipc_voucher_t>
+    """
+    if not cmd_args:
+        raise ArgumentError("Please provide valid argument")
+
+    voucher = kern.GetValueFromAddress(cmd_args[0], 'ipc_voucher_t')
+    print GetIPCVoucherSummary.header
+    print GetIPCVoucherSummary(voucher, show_entries=True)
+    
 

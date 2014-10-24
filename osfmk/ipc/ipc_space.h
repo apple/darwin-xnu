@@ -84,7 +84,7 @@
 #if MACH_KERNEL_PRIVATE
 #include <kern/macro_help.h>
 #include <kern/kern_types.h>
-#include <kern/lock.h>
+#include <kern/locks.h>
 #include <kern/task.h>
 #include <kern/zalloc.h>
 #include <ipc/ipc_entry.h>
@@ -114,6 +114,7 @@ struct ipc_space {
 	lck_spin_t	is_lock_data;
 	ipc_space_refs_t is_bits;	/* holds refs, active, growing */
 	ipc_entry_num_t is_table_size;	/* current size of table */
+	ipc_entry_num_t is_table_free;	/* count of free elements */
 	ipc_entry_t is_table;		/* an array of entries */
 	task_t is_task;                 /* associated task */
 	struct ipc_table_size *is_table_next; /* info for larger table */

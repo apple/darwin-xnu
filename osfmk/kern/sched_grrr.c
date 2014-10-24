@@ -42,7 +42,6 @@
 #include <kern/cpu_number.h>
 #include <kern/cpu_data.h>
 #include <kern/debug.h>
-#include <kern/lock.h>
 #include <kern/macro_help.h>
 #include <kern/machine.h>
 #include <kern/misc_protos.h>
@@ -122,7 +121,8 @@ sched_grrr_maintenance_continuation(void);
 
 static thread_t
 sched_grrr_choose_thread(processor_t		processor,
-							 int				priority);
+							int				priority,
+							ast_t				reason);
 
 static thread_t
 sched_grrr_steal_thread(processor_set_t		pset);
@@ -172,9 +172,6 @@ static sched_mode_t
 sched_grrr_initial_thread_sched_mode(task_t parent_task);
 
 static boolean_t
-sched_grrr_supports_timeshare_mode(void);
-
-static boolean_t
 sched_grrr_can_update_priority(thread_t	thread);
 
 static void
@@ -195,40 +192,47 @@ sched_grrr_processor_runq_count(processor_t	processor);
 static uint64_t
 sched_grrr_processor_runq_stats_count_sum(processor_t   processor);
 
+static int
+sched_grrr_processor_bound_count(processor_t	processor);
+
+static void
+sched_grrr_thread_update_scan(void);
+
 const struct sched_dispatch_table sched_grrr_dispatch = {
-	sched_grrr_init,
-	sched_grrr_timebase_init,
-	sched_grrr_processor_init,
-	sched_grrr_pset_init,
-	sched_grrr_maintenance_continuation,
-	sched_grrr_choose_thread,
-	sched_grrr_steal_thread,
-	sched_grrr_compute_priority,
-	sched_grrr_choose_processor,
-	sched_grrr_processor_enqueue,
-	sched_grrr_processor_queue_shutdown,
-	sched_grrr_processor_queue_remove,
-	sched_grrr_processor_queue_empty,
-	sched_grrr_priority_is_urgent,
-	sched_grrr_processor_csw_check,
-	sched_grrr_processor_queue_has_priority,
-	sched_grrr_initial_quantum_size,
-	sched_grrr_initial_thread_sched_mode,
-	sched_grrr_supports_timeshare_mode,
-	sched_grrr_can_update_priority,
-	sched_grrr_update_priority,
-	sched_grrr_lightweight_update_priority,
-	sched_grrr_quantum_expire,
-	sched_grrr_should_current_thread_rechoose_processor,
-	sched_grrr_processor_runq_count,
-	sched_grrr_processor_runq_stats_count_sum,
-	sched_grrr_fairshare_init,
-	sched_grrr_fairshare_runq_count,
-	sched_grrr_fairshare_runq_stats_count_sum,
-	sched_grrr_fairshare_enqueue,
-	sched_grrr_fairshare_dequeue,
-	sched_grrr_fairshare_queue_remove,
-	TRUE /* direct_dispatch_to_idle_processors */
+	.init                                           = sched_grrr_init,
+	.timebase_init                                  = sched_grrr_timebase_init,
+	.processor_init                                 = sched_grrr_processor_init,
+	.pset_init                                      = sched_grrr_pset_init,
+	.maintenance_continuation                       = sched_grrr_maintenance_continuation,
+	.choose_thread                                  = sched_grrr_choose_thread,
+	.steal_thread                                   = sched_grrr_steal_thread,
+	.compute_priority                               = sched_grrr_compute_priority,
+	.choose_processor                               = sched_grrr_choose_processor,
+	.processor_enqueue                              = sched_grrr_processor_enqueue,
+	.processor_queue_shutdown                       = sched_grrr_processor_queue_shutdown,
+	.processor_queue_remove                         = sched_grrr_processor_queue_remove,
+	.processor_queue_empty                          = sched_grrr_processor_queue_empty,
+	.priority_is_urgent                             = sched_grrr_priority_is_urgent,
+	.processor_csw_check                            = sched_grrr_processor_csw_check,
+	.processor_queue_has_priority                   = sched_grrr_processor_queue_has_priority,
+	.initial_quantum_size                           = sched_grrr_initial_quantum_size,
+	.initial_thread_sched_mode                      = sched_grrr_initial_thread_sched_mode,
+	.can_update_priority                            = sched_grrr_can_update_priority,
+	.update_priority                                = sched_grrr_update_priority,
+	.lightweight_update_priority                    = sched_grrr_lightweight_update_priority,
+	.quantum_expire                                 = sched_grrr_quantum_expire,
+	.should_current_thread_rechoose_processor       = sched_grrr_should_current_thread_rechoose_processor,
+	.processor_runq_count                           = sched_grrr_processor_runq_count,
+	.processor_runq_stats_count_sum                 = sched_grrr_processor_runq_stats_count_sum,
+	.fairshare_init                                 = sched_grrr_fairshare_init,
+	.fairshare_runq_count                           = sched_grrr_fairshare_runq_count,
+	.fairshare_runq_stats_count_sum                 = sched_grrr_fairshare_runq_stats_count_sum,
+	.fairshare_enqueue                              = sched_grrr_fairshare_enqueue,
+	.fairshare_dequeue                              = sched_grrr_fairshare_dequeue,
+	.fairshare_queue_remove                         = sched_grrr_fairshare_queue_remove,
+	.processor_bound_count                          = sched_grrr_processor_bound_count,
+	.thread_update_scan                             = sched_grrr_thread_update_scan,
+	.direct_dispatch_to_idle_processors             = TRUE,
 };
 
 extern int	max_unsafe_quanta;
@@ -307,7 +311,8 @@ sched_grrr_maintenance_continuation(void)
 
 static thread_t
 sched_grrr_choose_thread(processor_t		processor,
-						  int				priority __unused)
+						  int				priority __unused,
+						  ast_t				reason __unused)
 {
 	grrr_run_queue_t		rq = &processor->grrr_runq;
 	
@@ -365,7 +370,7 @@ sched_grrr_processor_queue_shutdown(
 	queue_init(&tqueue);
 	queue_init(&bqueue);
 	
-	while ((thread = sched_grrr_choose_thread(processor, IDLEPRI)) != THREAD_NULL) {
+	while ((thread = sched_grrr_choose_thread(processor, IDLEPRI, AST_NONE)) != THREAD_NULL) {
 		if (thread->bound_processor == PROCESSOR_NULL) {
 			enqueue_tail(&tqueue, (queue_entry_t)thread);
 		} else {
@@ -494,12 +499,6 @@ sched_grrr_initial_thread_sched_mode(task_t parent_task)
 }
 
 static boolean_t
-sched_grrr_supports_timeshare_mode(void)
-{
-	return TRUE;
-}
-
-static boolean_t
 sched_grrr_can_update_priority(thread_t	thread __unused)
 {
 	return FALSE;
@@ -540,6 +539,18 @@ static uint64_t
 sched_grrr_processor_runq_stats_count_sum(processor_t	processor)
 {
 	return processor->grrr_runq.runq_stats.count_sum;
+}
+
+static int
+sched_grrr_processor_bound_count(__unused processor_t	processor)
+{
+	return 0;
+}
+
+static void
+sched_grrr_thread_update_scan(void)
+{
+
 }
 
 #endif /* defined(CONFIG_SCHED_GRRR) */
@@ -873,7 +884,7 @@ grrr_sorted_list_insert_group(grrr_run_queue_t rq,
 
 #endif /* defined(CONFIG_SCHED_GRRR_CORE) */
 
-#if defined(CONFIG_SCHED_GRRR) || defined(CONFIG_SCHED_FIXEDPRIORITY)
+#if defined(CONFIG_SCHED_GRRR)
 
 static struct grrr_run_queue	fs_grrr_runq;
 #define FS_GRRR_RUNQ		((processor_t)-2)
@@ -952,4 +963,4 @@ boolean_t	sched_grrr_fairshare_queue_remove(thread_t thread)
 	}	
 }
 
-#endif /* defined(CONFIG_SCHED_GRRR) || defined(CONFIG_SCHED_FIXEDPRIORITY) */
+#endif /* defined(CONFIG_SCHED_GRRR) */

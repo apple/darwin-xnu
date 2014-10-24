@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1999-2008 Apple Inc. All rights reserved.
+ * Copyright (c) 1999-2014 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -50,6 +50,8 @@
 #include <sys/buf.h>
 #include <sys/user.h>
 #include <sys/codesign.h>
+#include <sys/codedir_internal.h>
+#include <sys/fsevents.h>
 
 #include <mach/mach_types.h>
 #include <mach/memory_object_types.h>
@@ -68,10 +70,8 @@
 #include <libkern/crypto/sha1.h>
 #include <libkern/libkern.h>
 
-#include <sys/kasl.h>
-#include <sys/syslog.h>
-
 #include <security/mac_framework.h>
+#include <stdbool.h>
 
 /* XXX These should be in a BSD accessible Mach header, but aren't. */
 extern kern_return_t memory_object_pages_resident(memory_object_control_t,
@@ -109,7 +109,7 @@ static int ubc_msync_internal(vnode_t, off_t, off_t, off_t *, int, int *);
 static void ubc_cs_free(struct ubc_info *uip);
 
 struct zone	*ubc_info_zone;
-
+static uint32_t	cs_blob_generation_count = 1;
 
 /*
  * CODESIGNING
@@ -117,6 +117,11 @@ struct zone	*ubc_info_zone;
  */
 
 extern int cs_debug;
+
+#define	PAGE_SHIFT_4K		(12)
+#define	PAGE_SIZE_4K		((1<<PAGE_SHIFT_4K))
+#define	PAGE_MASK_4K		((PAGE_SIZE_4K-1))
+#define round_page_4K(x)	(((vm_offset_t)(x) + PAGE_MASK_4K) & ~((vm_offset_t)PAGE_MASK_4K))
 
 static boolean_t
 cs_valid_range(
@@ -138,22 +143,10 @@ cs_valid_range(
 	return TRUE;
 }
 
-static void
-hex_str(
-	const unsigned char *hash,
-	size_t len,
-	char *buf)
-{
-	unsigned int n;
-	for (n = 0; n < len; n++)
-		snprintf(buf + 2*n, 3, "%02.2x", hash[n]);
-}
-
-
 /*
  * Locate the CodeDirectory from an embedded signature blob
  */
-static const 
+const 
 CS_CodeDirectory *findCodeDirectory(
 	const CS_SuperBlob *embedded,
 	char *lower_bound,
@@ -328,7 +321,7 @@ cs_validate_codedirectory(const CS_CodeDirectory *cd, size_t length)
 		return EBADEXEC;
 	if (cd->hashSize != SHA1_RESULTLEN)
 		return EBADEXEC;
-	if (cd->pageSize != PAGE_SHIFT)
+	if (cd->pageSize != PAGE_SHIFT_4K)
 		return EBADEXEC;
 	if (cd->hashType != CS_HASHTYPE_SHA1)
 		return EBADEXEC;
@@ -386,6 +379,16 @@ cs_validate_codedirectory(const CS_CodeDirectory *cd, size_t length)
 	if (cd->identOffset) {
 		uint8_t *ptr = (uint8_t *)cd + ntohl(cd->identOffset);
 		if (memchr(ptr, 0, length - ntohl(cd->identOffset)) == NULL)
+			return EBADEXEC;
+	}
+
+	/* team identifier is NULL terminated string */
+	if (ntohl(cd->version) >= CS_SUPPORTSTEAMID && ntohl(cd->teamOffset)) {
+		if (length < ntohl(cd->teamOffset))
+			return EBADEXEC;
+
+		uint8_t *ptr = (uint8_t *)cd + ntohl(cd->teamOffset);
+		if (memchr(ptr, 0, length - ntohl(cd->teamOffset)) == NULL)
 			return EBADEXEC;
 	}
 
@@ -533,7 +536,7 @@ cs_find_blob_bytes(const uint8_t *addr, size_t length, uint32_t type, uint32_t m
 }
 
 
-static const CS_GenericBlob *
+const CS_GenericBlob *
 cs_find_blob(struct cs_blob *csblob, uint32_t type, uint32_t magic)
 {
 	if ((csblob->csb_flags & CS_VALID) == 0)
@@ -917,39 +920,124 @@ ubc_info_deallocate(struct ubc_info *uip)
         ubc_info_free(uip);
 }
 
+/* 
+ * This should be public but currently it is only used below so we
+ * defer making that change.
+ */
+static errno_t mach_to_bsd_errno(kern_return_t mach_err)
+{
+	switch (mach_err) {
+	case KERN_SUCCESS:
+		return 0;
+
+	case KERN_INVALID_ADDRESS:
+	case KERN_INVALID_ARGUMENT:
+	case KERN_NOT_IN_SET:
+	case KERN_INVALID_NAME:
+	case KERN_INVALID_TASK:
+	case KERN_INVALID_RIGHT:
+	case KERN_INVALID_VALUE:
+	case KERN_INVALID_CAPABILITY:
+	case KERN_INVALID_HOST:
+	case KERN_MEMORY_PRESENT:
+	case KERN_INVALID_PROCESSOR_SET:
+	case KERN_INVALID_POLICY:
+	case KERN_ALREADY_WAITING:
+	case KERN_DEFAULT_SET:
+	case KERN_EXCEPTION_PROTECTED:
+	case KERN_INVALID_LEDGER:
+	case KERN_INVALID_MEMORY_CONTROL:
+	case KERN_INVALID_SECURITY:
+	case KERN_NOT_DEPRESSED:
+	case KERN_LOCK_OWNED:
+	case KERN_LOCK_OWNED_SELF:
+		return EINVAL;
+
+	case KERN_PROTECTION_FAILURE:
+	case KERN_NOT_RECEIVER:
+	case KERN_NO_ACCESS:
+	case KERN_POLICY_STATIC:
+		return EACCES;
+
+	case KERN_NO_SPACE:
+	case KERN_RESOURCE_SHORTAGE:
+	case KERN_UREFS_OVERFLOW:
+	case KERN_INVALID_OBJECT:
+		return ENOMEM;
+
+	case KERN_FAILURE:
+		return EIO;
+
+	case KERN_MEMORY_FAILURE:
+	case KERN_POLICY_LIMIT:
+	case KERN_CODESIGN_ERROR:
+		return EPERM;
+
+	case KERN_MEMORY_ERROR:
+		return EBUSY;
+
+	case KERN_ALREADY_IN_SET:
+	case KERN_NAME_EXISTS:
+	case KERN_RIGHT_EXISTS:
+		return EEXIST;
+
+	case KERN_ABORTED:
+		return EINTR;
+
+	case KERN_TERMINATED:
+	case KERN_LOCK_SET_DESTROYED:
+	case KERN_LOCK_UNSTABLE:
+	case KERN_SEMAPHORE_DESTROYED:
+		return ENOENT;
+
+	case KERN_RPC_SERVER_TERMINATED:
+		return ECONNRESET;
+
+	case KERN_NOT_SUPPORTED:
+		return ENOTSUP;
+
+	case KERN_NODE_DOWN:
+		return ENETDOWN;
+
+	case KERN_NOT_WAITING:
+		return ENOENT;
+
+	case KERN_OPERATION_TIMED_OUT:
+		return ETIMEDOUT;
+
+	default:
+		return EIO;
+	}
+}
 
 /*
- * ubc_setsize
+ * ubc_setsize_ex
  *
- * Tell the  VM that the the size of the file represented by the vnode has
+ * Tell the VM that the the size of the file represented by the vnode has
  * changed
  *
- * Parameters:	vp			The vp whose backing file size is
- *					being changed
- *		nsize			The new size of the backing file
+ * Parameters:	vp	   The vp whose backing file size is
+ *					   being changed
+ *				nsize  The new size of the backing file
+ *				opts   Options
  *
- * Returns:	1			Success
- *		0			Failure
+ * Returns:	EINVAL for new size < 0
+ *			ENOENT if no UBC info exists
+ *          EAGAIN if UBC_SETSIZE_NO_FS_REENTRY option is set and new_size < old size
+ *          Other errors (mapped to errno_t) returned by VM functions
  *
- * Notes:	This function will indicate failure if the new size that's
- *		being attempted to be set is negative.
+ * Notes:   This function will indicate success if the new size is the
+ *		    same or larger than the old size (in this case, the
+ *		    remainder of the file will require modification or use of
+ *		    an existing upl to access successfully).
  *
- *		This function will fail if there is no ubc_info currently
- *		associated with the vnode.
- *
- *		This function will indicate success it the new size is the
- *		same or larger than the old size (in this case, the remainder
- *		of the file will require modification or use of an existing upl
- *		to access successfully).
- *
- *		This function will fail if the new file size is smaller, and
- *		the memory region being invalidated was unable to actually be
- *		invalidated and/or the last page could not be flushed, if the
- *		new size is not aligned to a page boundary.  This is usually
- *		indicative of an I/O error.
+ *		    This function will fail if the new file size is smaller,
+ *		    and the memory region being invalidated was unable to
+ *		    actually be invalidated and/or the last page could not be
+ *		    flushed, if the new size is not aligned to a page
+ *		    boundary.  This is usually indicative of an I/O error.
  */
-int
-ubc_setsize(struct vnode *vp, off_t nsize)
+errno_t ubc_setsize_ex(struct vnode *vp, off_t nsize, ubc_setsize_opts_t opts)
 {
 	off_t osize;	/* ui_size before change */
 	off_t lastpg, olastpgend, lastoff;
@@ -958,13 +1046,17 @@ ubc_setsize(struct vnode *vp, off_t nsize)
 	kern_return_t kret = KERN_SUCCESS;
 
 	if (nsize < (off_t)0)
-		return (0);
+		return EINVAL;
 
 	if (!UBCINFOEXISTS(vp))
-		return (0);
+		return ENOENT;
 
 	uip = vp->v_ubcinfo;
 	osize = uip->ui_size;
+
+	if (ISSET(opts, UBC_SETSIZE_NO_FS_REENTRY) && nsize < osize)
+		return EAGAIN;
+
 	/*
 	 * Update the size before flushing the VM
 	 */
@@ -975,7 +1067,7 @@ ubc_setsize(struct vnode *vp, off_t nsize)
 			lock_vnode_and_post(vp, NOTE_EXTEND);
 		}
 
-		return (1);		/* return success */
+		return 0;
 	}
 
 	/*
@@ -991,17 +1083,16 @@ ubc_setsize(struct vnode *vp, off_t nsize)
 	lastoff = (nsize & PAGE_MASK_64);
 
 	if (lastoff) {
-	        upl_t		upl;
+		upl_t		upl;
 		upl_page_info_t	*pl;
 
-
-	        /*
+		/*
 		 * new EOF ends up in the middle of a page
-		 * zero the tail of this page if its currently
+		 * zero the tail of this page if it's currently
 		 * present in the cache
 		 */
-	        kret = ubc_create_upl(vp, lastpg, PAGE_SIZE, &upl, &pl, UPL_SET_LITE);
-		
+		kret = ubc_create_upl(vp, lastpg, PAGE_SIZE, &upl, &pl, UPL_SET_LITE);
+
 		if (kret != KERN_SUCCESS)
 		        panic("ubc_setsize: ubc_create_upl (error = %d)\n", kret);
 
@@ -1019,20 +1110,25 @@ ubc_setsize(struct vnode *vp, off_t nsize)
 			flags = MEMORY_OBJECT_DATA_FLUSH_ALL;
 		else
 			flags = MEMORY_OBJECT_DATA_FLUSH;
-	        /*
+		/*
 		 * invalidate the pages beyond the new EOF page
 		 *
 		 */
-	        kret = memory_object_lock_request(control,
-						  (memory_object_offset_t)lastpg,
-						  (memory_object_size_t)(olastpgend - lastpg), NULL, NULL,
-						  MEMORY_OBJECT_RETURN_NONE, flags, VM_PROT_NO_CHANGE);
+		kret = memory_object_lock_request(control,
+										  (memory_object_offset_t)lastpg,
+										  (memory_object_size_t)(olastpgend - lastpg), NULL, NULL,
+										  MEMORY_OBJECT_RETURN_NONE, flags, VM_PROT_NO_CHANGE);
 		if (kret != KERN_SUCCESS)
 		        printf("ubc_setsize: invalidate failed (error = %d)\n", kret);
 	}
-	return ((kret == KERN_SUCCESS) ? 1 : 0);
+	return mach_to_bsd_errno(kret);
 }
 
+// Returns true for success
+int ubc_setsize(vnode_t vp, off_t nsize)
+{
+	return ubc_setsize_ex(vp, nsize, 0) == 0;
+}
 
 /*
  * ubc_getsize
@@ -1067,7 +1163,7 @@ ubc_getsize(struct vnode *vp)
 /*
  * ubc_umount
  *
- * Call ubc_sync_range(vp, 0, EOF, UBC_PUSHALL) on all the vnodes for this
+ * Call ubc_msync(vp, 0, EOF, NULL, UBC_PUSHALL) on all the vnodes for this
  * mount point
  *
  * Parameters:	mp			The mount point
@@ -1166,7 +1262,6 @@ ubc_getcred(struct vnode *vp)
  *		This function is generally used only in the following cases:
  *
  *		o	a memory mapped file via the mmap() system call
- *		o	a memory mapped file via the deprecated map_fd() call
  *		o	a swap store backing file
  *		o	subsequent to a successful write via vn_write()
  *
@@ -1182,8 +1277,7 @@ ubc_getcred(struct vnode *vp)
  *
  *		o	Because a page-in may occur prior to a write, the
  *			credential may not be set at this time, if the page-in
- *			is not the result of a mapping established via mmap()
- *			or map_fd().
+ *			is not the result of a mapping established via mmap().
  *
  *		In both these cases, this will be triggered from the paging
  *		path, which will instead use the credential of the current
@@ -1466,35 +1560,6 @@ ubc_pages_resident(vnode_t vp)
 	return (0);
 }
 
-
-/*
- * ubc_sync_range
- *
- * Clean and/or invalidate a range in the memory object that backs this vnode
- *
- * Parameters:	vp			The vnode whose associated ubc_info's
- *					associated memory object is to have a
- *					range invalidated within it
- *		beg_off			The start of the range, as an offset
- *		end_off			The end of the range, as an offset
- *		flags			See ubc_msync_internal()
- *
- * Returns:	1			Success
- *		0			Failure
- *
- * Notes:	see ubc_msync_internal() for more detailed information.
- *
- * DEPRECATED:	This interface is obsolete due to a failure to return error
- *		information needed in order to correct failures.  The currently
- *		recommended interface is ubc_msync().
- */
-int
-ubc_sync_range(vnode_t vp, off_t beg_off, off_t end_off, int flags)
-{
-        return (ubc_msync_internal(vp, beg_off, end_off, NULL, flags, NULL));
-}
-
-
 /*
  * ubc_msync
  *
@@ -1546,6 +1611,8 @@ ubc_msync(vnode_t vp, off_t beg_off, off_t end_off, off_t *resid_off, int flags)
 
 
 /*
+ * ubc_msync_internal
+ *
  * Clean and/or invalidate a range in the memory object that backs this vnode
  *
  * Parameters:	vp			The vnode whose associated ubc_info's
@@ -1662,7 +1729,7 @@ ubc_msync_internal(vnode_t vp, off_t beg_off, off_t end_off, off_t *resid_off, i
 
 
 /*
- * ubc_msync_internal
+ * ubc_map
  *
  * Explicitly map a vnode that has an associate ubc_info, and add a reference
  * to it for the ubc system, if there isn't one already, so it will not be
@@ -1691,7 +1758,6 @@ ubc_msync_internal(vnode_t vp, off_t beg_off, off_t end_off, off_t *resid_off, i
  *		It is primarily used by:
  *
  *		o	mmap(), when mapping a file
- *		o	The deprecated map_fd() interface, when mapping a file
  *		o	When mapping a shared file (a shared library in the
  *			shared segment region)
  *		o	When loading a program image during the exec process
@@ -1920,6 +1986,8 @@ ubc_unmap(struct vnode *vp)
 	        return;
 
 	if (UBCINFOEXISTS(vp)) {
+		bool want_fsevent = false;
+
 		vnode_lock(vp);
 		uip = vp->v_ubcinfo;
 
@@ -1931,19 +1999,54 @@ ubc_unmap(struct vnode *vp)
 		SET(uip->ui_flags, UI_MAPBUSY);
 
 		if (ISSET(uip->ui_flags, UI_ISMAPPED)) {
-		        CLR(uip->ui_flags, UI_ISMAPPED);
+			if (ISSET(uip->ui_flags, UI_MAPPEDWRITE))
+				want_fsevent = true;
+
 			need_rele = 1;
+
+			/*
+			 * We want to clear the mapped flags after we've called
+			 * VNOP_MNOMAP to avoid certain races and allow
+			 * VNOP_MNOMAP to call ubc_is_mapped_writable.
+			 */
 		}
 		vnode_unlock(vp);
-		
+
 		if (need_rele) {
-		        (void)VNOP_MNOMAP(vp, vfs_context_current());
+				vfs_context_t ctx = vfs_context_current();
+
+		        (void)VNOP_MNOMAP(vp, ctx);
+
+#if CONFIG_FSE
+				/*
+				 * Why do we want an fsevent here?  Normally the
+				 * content modified fsevent is posted when a file is
+				 * closed and only if it's written to via conventional
+				 * means.  It's perfectly legal to close a file and
+				 * keep your mappings and we don't currently track
+				 * whether it was written to via a mapping.
+				 * Therefore, we need to post an fsevent here if the
+				 * file was mapped writable.  This may result in false
+				 * events, i.e. we post a notification when nothing
+				 * has really changed.
+				 */
+				if (want_fsevent && need_fsevent(FSE_CONTENT_MODIFIED, vp)) {
+					add_fsevent(FSE_CONTENT_MODIFIED, ctx,
+								FSE_ARG_VNODE, vp,
+								FSE_ARG_DONE);
+				}
+#endif
+
 		        vnode_rele(vp);
 		}
 
 		vnode_lock_spin(vp);
 
+		if (need_rele)
+			CLR(uip->ui_flags, UI_ISMAPPED | UI_MAPPEDWRITE);
+
 		CLR(uip->ui_flags, UI_MAPBUSY);
+
 		if (ISSET(uip->ui_flags, UI_MAPWAITING)) {
 			CLR(uip->ui_flags, UI_MAPWAITING);
 			need_wakeup = 1;
@@ -2195,7 +2298,7 @@ ubc_create_upl(
 	if (bufsize & 0xfff)
 		return KERN_INVALID_ARGUMENT;
 
-	if (bufsize > MAX_UPL_SIZE * PAGE_SIZE)
+	if (bufsize > MAX_UPL_SIZE_BYTES)
 		return KERN_INVALID_ARGUMENT;
 
 	if (uplflags & (UPL_UBC_MSYNC | UPL_UBC_PAGEOUT | UPL_UBC_PAGEIN)) {
@@ -2263,7 +2366,7 @@ upl_size_t
 ubc_upl_maxbufsize(
 	void)
 {
-	return(MAX_UPL_SIZE * PAGE_SIZE);
+	return(MAX_UPL_SIZE_BYTES);
 }
 
 /*
@@ -2343,7 +2446,7 @@ ubc_upl_commit(
 	kern_return_t 	kr;
 
 	pl = UPL_GET_INTERNAL_PAGE_LIST(upl);
-	kr = upl_commit(upl, pl, MAX_UPL_SIZE);
+	kr = upl_commit(upl, pl, MAX_UPL_SIZE_BYTES >> PAGE_SHIFT);
 	upl_deallocate(upl);
 	return kr;
 }
@@ -2422,7 +2525,7 @@ ubc_upl_commit_range(
 	pl = UPL_GET_INTERNAL_PAGE_LIST(upl);
 
 	kr = upl_commit_range(upl, offset, size, flags,
-						  pl, MAX_UPL_SIZE, &empty);
+			      pl, MAX_UPL_SIZE_BYTES >> PAGE_SHIFT, &empty);
 
 	if((flags & UPL_COMMIT_FREE_ON_EMPTY) && empty)
 		upl_deallocate(upl);
@@ -2580,7 +2683,7 @@ ubc_upl_pageinfo(
 
 
 int 
-UBCINFOEXISTS(struct vnode * vp)
+UBCINFOEXISTS(const struct vnode * vp)
 {
         return((vp) && ((vp)->v_type == VREG) && ((vp)->v_ubcinfo != UBC_INFO_NULL));
 }
@@ -2593,6 +2696,21 @@ ubc_upl_range_needed(
 	int		count)
 {
 	upl_range_needed(upl, index, count);
+}
+
+boolean_t ubc_is_mapped(const struct vnode *vp, boolean_t *writable)
+{
+	if (!UBCINFOEXISTS(vp) || !ISSET(vp->v_ubcinfo->ui_flags, UI_ISMAPPED))
+		return FALSE;
+	if (writable)
+		*writable = ISSET(vp->v_ubcinfo->ui_flags, UI_MAPPEDWRITE);
+	return TRUE;
+}
+
+boolean_t ubc_is_mapped_writable(const struct vnode *vp)
+{
+	boolean_t writable;
+	return ubc_is_mapped(vp, &writable) && writable;
 }
 
 
@@ -2683,6 +2801,8 @@ ubc_cs_sigpup_add(
 	blob->csb_mem_handle = IPC_PORT_NULL;
 	blob->csb_mem_kaddr = address;
 	blob->csb_sigpup = 1;
+	blob->csb_platform_binary = 0;
+	blob->csb_teamid = NULL;
 	
 	/*
 	 * Validate the blob's contents
@@ -2698,13 +2818,13 @@ ubc_cs_sigpup_add(
 	}
 
 	blob->csb_flags = ntohl(cd->flags) | CS_VALID;
-	blob->csb_end_offset = round_page(ntohl(cd->codeLimit));
+	blob->csb_end_offset = round_page_4K(ntohl(cd->codeLimit));
 	if((ntohl(cd->version) >= CS_SUPPORTSSCATTER) && (ntohl(cd->scatterOffset))) {
 		const SC_Scatter *scatter = (const SC_Scatter*)
 		    ((const char*)cd + ntohl(cd->scatterOffset));
-		blob->csb_start_offset = ntohl(scatter->base) * PAGE_SIZE;
+		blob->csb_start_offset = ntohl(scatter->base) * PAGE_SIZE_4K;
 	} else {
-		blob->csb_start_offset = (blob->csb_end_offset - (ntohl(cd->nCodeSlots) * PAGE_SIZE));
+		blob->csb_start_offset = (blob->csb_end_offset - (ntohl(cd->nCodeSlots) * PAGE_SIZE_4K));
 	}
 
 	/* 
@@ -2769,7 +2889,6 @@ ubc_cs_blob_add(
 	cpu_type_t	cputype,
 	off_t		base_offset,
 	vm_address_t	addr,
-	off_t		blob_offset,
 	vm_size_t	size)
 {
 	kern_return_t		kr;
@@ -2782,8 +2901,10 @@ ubc_cs_blob_add(
 	off_t			blob_start_offset, blob_end_offset;
 	SHA1_CTX		sha1ctxt;
 	boolean_t		record_mtime;
+	int			is_platform_binary;
 
 	record_mtime = FALSE;
+	is_platform_binary = 0;
 
 	blob_handle = IPC_PORT_NULL;
 
@@ -2822,12 +2943,13 @@ ubc_cs_blob_add(
 	blob->csb_cpu_type = cputype;
 	blob->csb_sigpup = 0;
 	blob->csb_base_offset = base_offset;
-	blob->csb_blob_offset = blob_offset;
 	blob->csb_mem_size = size;
 	blob->csb_mem_offset = 0;
 	blob->csb_mem_handle = blob_handle;
 	blob->csb_mem_kaddr = addr;
 	blob->csb_flags = 0;
+	blob->csb_platform_binary = 0;
+	blob->csb_teamid = NULL;
 	
 	/*
 	 * Validate the blob's contents
@@ -2847,14 +2969,14 @@ ubc_cs_blob_add(
 		int sha1_size;
 
 		blob->csb_flags = (ntohl(cd->flags) & CS_ALLOWED_MACHO) | CS_VALID;
-		blob->csb_end_offset = round_page(ntohl(cd->codeLimit));
+		blob->csb_end_offset = round_page_4K(ntohl(cd->codeLimit));
 		if((ntohl(cd->version) >= CS_SUPPORTSSCATTER) && (ntohl(cd->scatterOffset))) {
 			const SC_Scatter *scatter = (const SC_Scatter*)
 				((const char*)cd + ntohl(cd->scatterOffset));
-			blob->csb_start_offset = ntohl(scatter->base) * PAGE_SIZE;
+			blob->csb_start_offset = ntohl(scatter->base) * PAGE_SIZE_4K;
 		} else {
 			blob->csb_start_offset = (blob->csb_end_offset -
-						  (ntohl(cd->nCodeSlots) * PAGE_SIZE));
+						  (ntohl(cd->nCodeSlots) * PAGE_SIZE_4K));
 		}
 		/* compute the blob's SHA1 hash */
 		sha1_base = (const unsigned char *) cd;
@@ -2868,10 +2990,28 @@ ubc_cs_blob_add(
 	 * Let policy module check whether the blob's signature is accepted.
 	 */
 #if CONFIG_MACF
-	error = mac_vnode_check_signature(vp, base_offset, blob->csb_sha1, (void*)addr, size);
-	if (error) 
+	error = mac_vnode_check_signature(vp, base_offset, blob->csb_sha1, (const void*)cd, size, &is_platform_binary);
+	if (error) {
+		if (cs_debug) 
+			printf("check_signature[pid: %d], error = %d\n", current_proc()->p_pid, error);
 		goto out;
+	}
 #endif	
+	
+	if (is_platform_binary) {
+		if (cs_debug > 1)
+			printf("check_signature[pid: %d]: platform binary\n", current_proc()->p_pid);
+		blob->csb_platform_binary = 1;
+	} else {
+		blob->csb_platform_binary = 0;
+		blob->csb_teamid = csblob_get_teamid(blob);
+		if (cs_debug > 1) {
+			if (blob->csb_teamid)
+				printf("check_signature[pid: %d]: team-id is %s\n", current_proc()->p_pid, blob->csb_teamid);
+			else
+				printf("check_signature[pid: %d]: no team-id\n", current_proc()->p_pid);
+		}
+	}
 	
 	/*
 	 * Validate the blob's coverage
@@ -2900,6 +3040,30 @@ ubc_cs_blob_add(
 	     oblob != NULL;
 	     oblob = oblob->csb_next) {
 		 off_t oblob_start_offset, oblob_end_offset;
+
+		 /* check for conflicting teamid */
+		 if (blob->csb_platform_binary) { //platform binary needs to be the same for app slices
+			 if (!oblob->csb_platform_binary) {
+				 vnode_unlock(vp);
+				 error = EALREADY;
+				 goto out;
+			 }
+		 } else if (blob->csb_teamid) { //teamid binary needs to be the same for app slices
+		 	if (oblob->csb_platform_binary ||
+			    oblob->csb_teamid == NULL ||
+			    strcmp(oblob->csb_teamid, blob->csb_teamid) != 0) {
+				vnode_unlock(vp);
+				error = EALREADY;
+				goto out;
+			}
+		 } else { // non teamid binary needs to be the same for app slices
+		 	if (oblob->csb_platform_binary ||
+				oblob->csb_teamid != NULL) {
+				vnode_unlock(vp);
+				error = EALREADY;
+				goto out;
+			}
+		 }
 
 		 oblob_start_offset = (oblob->csb_base_offset +
 				       oblob->csb_start_offset);
@@ -2934,43 +3098,11 @@ ubc_cs_blob_add(
 					  */
 					 oblob->csb_cpu_type = cputype;
 				 }
-				 /* 
-				  * If the same blob moved around in the Mach-O, we
-				  * want to remember the new blob offset to avoid
-				  * coming back here again and again.
-				  */
-				 oblob->csb_blob_offset = blob_offset;
-
 				 vnode_unlock(vp);
 				 error = EAGAIN;
 				 goto out;
 			 } else {
 				 /* different blob: reject the new one */
-				 char pathbuf[MAXPATHLEN];
-				 char new_sha1_str[2*SHA1_RESULTLEN+1];
-				 char old_sha1_str[2*SHA1_RESULTLEN+1];
-				 char arch_str[20];
-				 const char *pathp = "?unknown";
-				 int pblen = sizeof(pathbuf);
-				 if (vn_getpath(vp, pathbuf, &pblen) == 0) {
-				 	/* pblen == strlen(pathbuf) + 1. Assume strlen(pathbuf) > 0 */
-					for (pathp = pathbuf + pblen - 2; pathp > pathbuf && pathp[-1] != '/'; pathp--) ;
-				 }
-				 snprintf(arch_str, sizeof(arch_str), "%x", cputype);
-				 hex_str(oblob->csb_sha1, SHA1_RESULTLEN, old_sha1_str);
-				 hex_str(blob->csb_sha1, SHA1_RESULTLEN, new_sha1_str);
-				 kern_asl_msg(LOG_NOTICE, "messagetracer",
-					6,
-					"com.apple.message.domain", "com.apple.kernel.cs.replace",
-					"com.apple.message.signature", pathp,
-					"com.apple.message.signature2", arch_str,
-					"com.apple.message.signature3", old_sha1_str,
-					"com.apple.message.result", new_sha1_str,
-					"com.apple.message.summarize", "YES",
-					NULL
-				 );
-				 printf("CODESIGNING: rejected new signature for architecture %d of file %s\n",
-					cputype, pathbuf);
 				 vnode_unlock(vp);
 				 error = EALREADY;
 				 goto out;
@@ -2978,6 +3110,7 @@ ubc_cs_blob_add(
 		 }
 
 	}
+
 
 	/* mark this vnode's VM object as having "signed pages" */
 	kr = memory_object_signed(uip->ui_control, TRUE);
@@ -2991,6 +3124,9 @@ ubc_cs_blob_add(
 		/* loading 1st blob: record the file's current "modify time" */
 		record_mtime = TRUE;
 	}
+
+	/* set the generation count for cs_blobs */
+	uip->cs_add_gen = cs_blob_generation_count;
 
 	/*
 	 * Add this blob to the list of blobs for this vnode.
@@ -3040,6 +3176,9 @@ ubc_cs_blob_add(
 
 out:
 	if (error) {
+		if (cs_debug)
+			printf("check_signature[pid: %d]: error = %d\n", current_proc()->p_pid, error);
+
 		/* we failed; release what we allocated */
 		if (blob) {
 			kfree(blob, sizeof (*blob));
@@ -3066,7 +3205,6 @@ out:
 
 	return error;
 }
-
 
 struct cs_blob *
 ubc_cs_blob_get(
@@ -3102,8 +3240,10 @@ ubc_cs_blob_get(
 		}
 	}
 
-	if (cs_debug && blob != NULL && blob->csb_sigpup)
+	if (cs_debug && blob != NULL && blob->csb_sigpup) {
 		printf("found sig pup blob\n");
+	}
+
 out:
 	vnode_unlock(vp);
 
@@ -3137,6 +3277,81 @@ ubc_cs_free(
 	ubc_cs_validation_bitmap_deallocate( uip->ui_vnode );
 #endif
 	uip->cs_blobs = NULL;
+}
+
+/* check cs blob generation on vnode
+ * returns:
+ *    0         : Success, the cs_blob attached is current
+ *    ENEEDAUTH : Generation count mismatch. Needs authentication again.
+ */
+int
+ubc_cs_generation_check(
+	struct vnode	*vp)
+{
+	int retval = ENEEDAUTH;
+
+	vnode_lock_spin(vp);
+
+	if (UBCINFOEXISTS(vp) && vp->v_ubcinfo->cs_add_gen == cs_blob_generation_count) {
+		retval = 0;
+	}
+
+	vnode_unlock(vp);
+	return retval;
+}
+
+int
+ubc_cs_blob_revalidate(
+	struct vnode	*vp,
+	struct cs_blob *blob
+	)
+{
+	int error = 0;
+#if CONFIG_MACF
+	int is_platform_binary = 0;
+#endif
+	const CS_CodeDirectory *cd = NULL;
+	
+	assert(vp != NULL);
+	assert(blob != NULL);
+
+	error = cs_validate_csblob((const uint8_t *)blob->csb_mem_kaddr, blob->csb_mem_size, &cd);
+	if (error) {
+		if (cs_debug) {
+			printf("CODESIGNING: csblob invalid: %d\n", error);
+		}
+		goto out;
+	}
+
+	/* callout to mac_vnode_check_signature */
+#if CONFIG_MACF
+	error = mac_vnode_check_signature(vp, blob->csb_base_offset, blob->csb_sha1, (const void*)cd, blob->csb_cpu_type, &is_platform_binary);
+	if (cs_debug && error) {
+			printf("revalidate: check_signature[pid: %d], error = %d\n", current_proc()->p_pid, error);
+	}
+#endif
+
+	/* update generation number if success */
+	vnode_lock_spin(vp);
+	if (UBCINFOEXISTS(vp)) {
+		if (error == 0)
+			vp->v_ubcinfo->cs_add_gen = cs_blob_generation_count;
+		else
+			vp->v_ubcinfo->cs_add_gen = 0;
+	}
+
+	vnode_unlock(vp);
+
+out:
+	return error;
+}
+
+void
+cs_blob_reset_cache()
+{
+	/* incrementing odd no by 2 makes sure '0' is never reached. */
+	OSAddAtomic(+2, &cs_blob_generation_count);
+	printf("Reseting cs_blob cache from all vnodes. \n");
 }
 
 struct cs_blob *
@@ -3269,7 +3484,7 @@ cs_validate_page(
 		embedded = (const CS_SuperBlob *) blob_addr;
 		cd = findCodeDirectory(embedded, lower_bound, upper_bound);
 		if (cd != NULL) {
-			if (cd->pageSize != PAGE_SHIFT ||
+			if (cd->pageSize != PAGE_SHIFT_4K ||
 			    cd->hashType != CS_HASHTYPE_SHA1 ||
 			    cd->hashSize != SHA1_RESULTLEN) {
 				/* bogus blob ? */
@@ -3291,7 +3506,7 @@ cs_validate_page(
 			if (blob->csb_sigpup && cs_debug)
 				printf("sigpup codesize %d\n", (int)codeLimit);
 
-			hash = hashes(cd, (unsigned)atop(offset),
+			hash = hashes(cd, (unsigned)(offset>>PAGE_SHIFT_4K),
 				      lower_bound, upper_bound);
 			if (hash != NULL) {
 				bcopy(hash, expected_hash,
@@ -3328,41 +3543,34 @@ cs_validate_page(
 		*tainted = FALSE;
 	} else {
 
-		size = PAGE_SIZE;
+		size = PAGE_SIZE_4K;
+		const uint32_t *asha1, *esha1;
 		if ((off_t)(offset + size) > codeLimit) {
 			/* partial page at end of segment */
 			assert(offset < codeLimit);
-			size = (size_t) (codeLimit & PAGE_MASK);
+			size = (size_t) (codeLimit & PAGE_MASK_4K);
 		}
 		/* compute the actual page's SHA1 hash */
 		SHA1Init(&sha1ctxt);
 		SHA1UpdateUsePhysicalAddress(&sha1ctxt, data, size);
 		SHA1Final(actual_hash, &sha1ctxt);
 
+		asha1 = (const uint32_t *) actual_hash;
+		esha1 = (const uint32_t *) expected_hash;
+
 		if (bcmp(expected_hash, actual_hash, SHA1_RESULTLEN) != 0) {
-			char asha1_str[2*SHA1_RESULTLEN+1];
-			char esha1_str[2*SHA1_RESULTLEN+1];
-			hex_str(actual_hash, SHA1_RESULTLEN, asha1_str);
-			hex_str(expected_hash, SHA1_RESULTLEN, esha1_str);
 			if (cs_debug) {
 				printf("CODE SIGNING: cs_validate_page: "
-				       "mobj %p off 0x%llx size 0x%lx: actual %s expected %s\n",
-				       pager, page_offset, size, asha1_str, esha1_str);
+				       "mobj %p off 0x%llx size 0x%lx: "
+				       "actual [0x%x 0x%x 0x%x 0x%x 0x%x] != "
+				       "expected [0x%x 0x%x 0x%x 0x%x 0x%x]\n",
+				       pager, page_offset, size,
+				       asha1[0], asha1[1], asha1[2],
+				       asha1[3], asha1[4],
+				       esha1[0], esha1[1], esha1[2],
+				       esha1[3], esha1[4]);
 			}
 			cs_validate_page_bad_hash++;
-			if (!*tainted) {
-				char page_offset_str[20];
-				snprintf(page_offset_str, sizeof(page_offset_str), "%llx", page_offset);
-				 kern_asl_msg(LOG_NOTICE, "messagetracer",
-					5,
-					"com.apple.message.domain", "com.apple.kernel.cs.mismatch",
-					"com.apple.message.signature", page_offset_str,
-					"com.apple.message.signature2", asha1_str,
-					"com.apple.message.signature3", esha1_str,
-					"com.apple.message.summarize", "YES",
-					NULL
-				 );
-			}
 			*tainted = TRUE;
 		} else {
 			if (cs_debug > 10) {

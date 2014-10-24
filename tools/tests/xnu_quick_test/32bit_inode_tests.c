@@ -229,7 +229,7 @@ int statfs_32bit_inode_tests( void * the_argp )
 	}
 	
 	/* open kernel to use as test file for fstatfs */
- 	my_fd = open( "/mach_kernel", O_RDONLY, 0 );
+ 	my_fd = open( "/System/Library/Kernels/kernel", O_RDONLY, 0 );
 	if ( my_fd == -1 ) {
 		printf( "open call failed.  got errno %d - %s. \n", errno, strerror( errno ) );
 		goto test_failed_exit;
@@ -257,7 +257,7 @@ int statfs_32bit_inode_tests( void * the_argp )
 	} 
 
 	/* try again with statfs */
-	my_err = statfs( "/mach_kernel", my_statfsp );
+	my_err = statfs( "/System/Library/Kernels/kernel", my_statfsp );
 	if ( my_err == -1 ) {
 		printf( "statfs call failed.  got errno %d - %s. \n", errno, strerror( errno ) );
 		goto test_failed_exit;

@@ -1,6 +1,5 @@
-/*	$NetBSD: if_bridgevar.h,v 1.4 2003/07/08 07:13:50 itojun Exp $	*/
 /*
- * Copyright (c) 2004-2010 Apple Inc. All rights reserved.
+ * Copyright (c) 2004-2014 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -139,8 +138,8 @@
 #define	BRDGSMA			20	/* set max age (ifbrparam) */
 #define	BRDGSIFPRIO		21	/* set if priority (ifbreq) */
 #define	BRDGSIFCOST		22	/* set if path cost (ifbreq) */
-#define BRDGGFILT		23	/* get filter flags (ifbrparam) */
-#define BRDGSFILT	    24	/* set filter flags (ifbrparam) */
+#define	BRDGGFILT		23	/* get filter flags (ifbrparam) */
+#define	BRDGSFILT		24	/* set filter flags (ifbrparam) */
 #define	BRDGPURGE		25	/* purge address cache for a particular interface (ifbreq) */
 #define	BRDGADDS		26	/* add bridge span member (ifbreq) */
 #define	BRDGDELS		27	/* delete bridge span member (ifbreq) */
@@ -150,6 +149,8 @@
 #define	BRDGSPROTO		31	/* set protocol (ifbrparam) */
 #define	BRDGSTXHC		32	/* set tx hold count (ifbrparam) */
 #define	BRDGSIFAMAX		33	/* set max interface addrs (ifbreq) */
+#define	BRDGGHOSTFILTER		34	/* set max interface addrs (ifbrhostfilter) */
+#define	BRDGSHOSTFILTER		35	/* set max interface addrs (ifbrhostfilter) */
 
 /*
  * Generic bridge control request.
@@ -200,13 +201,13 @@ struct ifbreq {
 #define	IFBF_FLUSHALL		0x01	/* flush all addresses */
 
 /* BRDGSFILT */
-#define IFBF_FILT_USEIPF	0x00000001 /* run pfil hooks on the bridge
+#define	IFBF_FILT_USEIPF	0x00000001 /* run pfil hooks on the bridge
 interface */
-#define IFBF_FILT_MEMBER	0x00000002 /* run pfil hooks on the member
+#define	IFBF_FILT_MEMBER	0x00000002 /* run pfil hooks on the member
 interfaces */
-#define IFBF_FILT_ONLYIP	0x00000004 /* only pass IP[46] packets when
+#define	IFBF_FILT_ONLYIP	0x00000004 /* only pass IP[46] packets when
 pfil is enabled */
-#define IFBF_FILT_MASK		0x00000007 /* mask of valid values */
+#define	IFBF_FILT_MASK		0x00000007 /* mask of valid values */
 
 
 /* APPLE MODIFICATION <jhw@apple.com>: Default is to pass non-IP packets. */
@@ -489,6 +490,59 @@ struct ifbpstpconf64 {
 
 #pragma pack()
 
+/*
+ * Bridge member host filter.
+ */
+
+#define	IFBRHF_ENABLED	0x01
+#define	IFBRHF_HWSRC	0x02	/* Valid with enabled flags */
+#define	IFBRHF_IPSRC	0x04	/* Valid with enabled flags */
+
+#pragma pack(4)
+
+struct ifbrhostfilter {
+	uint32_t	ifbrhf_flags;		/* flags */
+	char		ifbrhf_ifsname[IFNAMSIZ];	/* member if name */
+	uint8_t		ifbrhf_hwsrca[ETHER_ADDR_LEN];
+	uint32_t	ifbrhf_ipsrc;
+};
+
+#pragma pack()
+
+/*
+ * sysctl net.link.bridge.hostfilterstats
+ */
+struct bridge_hostfilter_stats {
+	uint64_t	brhf_bad_ether_type;
+	uint64_t	brhf_bad_ether_srchw_addr;
+
+	uint64_t	brhf_ether_too_small;
+	uint64_t	brhf_ether_pullup_failed;
+	
+	uint64_t	brhf_arp_ok;
+	uint64_t	brhf_arp_too_small;
+	uint64_t	brhf_arp_pullup_failed;
+	uint64_t	brhf_arp_bad_hw_type;
+	uint64_t	brhf_arp_bad_pro_type;
+	uint64_t	brhf_arp_bad_hw_len;
+	uint64_t	brhf_arp_bad_pro_len;
+	uint64_t	brhf_arp_bad_op;
+	uint64_t	brhf_arp_bad_sha;
+	uint64_t	brhf_arp_bad_spa;
+	
+	uint64_t	brhf_ip_ok;
+	uint64_t	brhf_ip_too_small;
+	uint64_t	brhf_ip_pullup_failed;
+	uint64_t	brhf_ip_bad_srcaddr;
+	uint64_t	brhf_ip_bad_proto;
+
+	uint64_t	brhf_dhcp_too_small;
+	uint64_t	brhf_dhcp_bad_op;
+	uint64_t	brhf_dhcp_bad_htype;
+	uint64_t	brhf_dhcp_bad_hlen;
+	uint64_t	brhf_dhcp_bad_chaddr;
+	uint64_t	brhf_dhcp_bad_ciaddr;
+};
 
 #ifdef XNU_KERNEL_PRIVATE
 

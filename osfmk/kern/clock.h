@@ -122,11 +122,6 @@ extern void			machine_delay_until(uint64_t interval,
 
 extern uint32_t		hz_tick_interval;
 
-extern void		absolutetime_to_nanotime(
-					uint64_t		abstime,
-					clock_sec_t		*secs,
-					clock_nsec_t	*nanosecs);
-
 extern void		nanotime_to_absolutetime(
 					clock_sec_t		secs,
 					clock_nsec_t	nanosecs,

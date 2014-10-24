@@ -39,7 +39,6 @@
  *			the cpu clock counted by the timestamp MSR.
  */
 
-#include <platforms.h>
 
 #include <mach/mach_types.h>
 
@@ -71,8 +70,6 @@
 #include <i386/tsc.h>
 #include <i386/rtclock_protos.h>
 #define UI_CPUFREQ_ROUNDING_FACTOR	10000000
-
-int		rtclock_config(void);
 
 int		rtclock_init(void);
 
@@ -107,19 +104,6 @@ _absolutetime_to_nanotime(uint64_t abstime, clock_sec_t *secs, clock_usec_t *nan
 	*secs = abstime / (uint64_t)NSEC_PER_SEC;
 	*nanosecs = (clock_usec_t)(abstime % (uint64_t)NSEC_PER_SEC);
 }
-
-/*
- * Configure the real-time clock device. Return success (1)
- * or failure (0).
- */
-
-int
-rtclock_config(void)
-{
-	/* nothing to do */
-	return (1);
-}
-
 
 /*
  * Nanotime/mach_absolutime_time
@@ -271,7 +255,7 @@ rtc_sleep_wakeup(
 	uint64_t		base)
 {
     	/* Set fixed configuration for lapic timers */
-	rtc_timer->config();
+	rtc_timer->rtc_config();
 
 	/*
 	 * Reset nanotime.
@@ -279,6 +263,17 @@ rtc_sleep_wakeup(
 	 * but nanotime (uptime) marches onward.
 	 */
 	rtc_nanotime_init(base);
+}
+
+/*
+ * rtclock_early_init() is called very early at boot to
+ * establish mach_absolute_time() and set it to zero.
+ */
+void
+rtclock_early_init(void)
+{
+	assert(tscFreq);
+	rtc_set_timescale(tscFreq);
 }
 
 /*
@@ -295,7 +290,6 @@ rtclock_init(void)
 	if (cpu_number() == master_cpu) {
 
 		assert(tscFreq);
-		rtc_set_timescale(tscFreq);
 
 		/*
 		 * Adjust and set the exported cpu speed.
@@ -316,7 +310,7 @@ rtclock_init(void)
 	}
 
     	/* Set fixed configuration for lapic timers */
-	rtc_timer->config();
+	rtc_timer->rtc_config();
 	rtc_timer_start();
 
 	return (1);
@@ -338,9 +332,6 @@ rtc_set_timescale(uint64_t cycles)
 		cycles <<= 1;
 	}
 	
-	if ( shift != 0 )
-		printf("Slow TSC, rtc_nanotime.shift == %d\n", shift);
-    
 	rntp->scale = (uint32_t)(((uint64_t)NSEC_PER_SEC << 32) / cycles);
 
 	rntp->shift = shift;
@@ -361,8 +352,12 @@ rtc_set_timescale(uint64_t cycles)
 static uint64_t
 rtc_export_speed(uint64_t cyc_per_sec)
 {
+	pal_rtc_nanotime_t	*rntp = &pal_rtc_nanotime_info;
 	uint64_t	cycles;
 
+	if (rntp->shift != 0 )
+		printf("Slow TSC, rtc_nanotime.shift == %d\n", rntp->shift);
+    
 	/* Round: */
         cycles = ((cyc_per_sec + (UI_CPUFREQ_ROUNDING_FACTOR/2))
 			/ UI_CPUFREQ_ROUNDING_FACTOR)
@@ -468,8 +463,7 @@ rtclock_intr(
  */
 
 uint64_t
-setPop(
-	uint64_t time)
+setPop(uint64_t time)
 {
 	uint64_t	now;
 	uint64_t	pop;
@@ -478,10 +472,10 @@ setPop(
 	if (time == 0 || time == EndOfAllTime ) {
 		time = EndOfAllTime;
 		now = 0;
-		pop = rtc_timer->set(0, 0);
+		pop = rtc_timer->rtc_set(0, 0);
 	} else {
 		now = rtc_nanotime_read();	/* The time in nanoseconds */
-		pop = rtc_timer->set(time, now);
+		pop = rtc_timer->rtc_set(time, now);
 	}
 
 	/* Record requested and actual deadlines set */
@@ -513,15 +507,6 @@ absolutetime_to_microtime(
 	clock_usec_t		*microsecs)
 {
 	_absolutetime_to_microtime(abstime, secs, microsecs);
-}
-
-void
-absolutetime_to_nanotime(
-	uint64_t			abstime,
-	clock_sec_t			*secs,
-	clock_nsec_t		*nanosecs)
-{
-	_absolutetime_to_nanotime(abstime, secs, nanosecs);
 }
 
 void

@@ -95,6 +95,9 @@ extern "C++" OSObject * OSUnserializeXML(
     size_t        bufferSize,
     OSString   ** errorString = 0);
 
+extern "C++" OSObject *
+OSUnserializeBinary(const char *buffer, size_t bufferSize, OSString **errorString);
+
 #ifdef __APPLE_API_OBSOLETE
 extern OSObject* OSUnserialize(const char *buffer, OSString **errorString = 0);
 #endif /* __APPLE_API_OBSOLETE */

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2004-2013 Apple Inc. All rights reserved.
+ * Copyright (c) 2004-2014 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -38,6 +38,8 @@
 #include <sys/fsctl.h>
 #include <sys/vnode_internal.h>
 #include <sys/kauth.h>
+#include <sys/cprotect.h>
+#include <sys/uio_internal.h>
 
 #include "hfs.h"
 #include "hfs_cnode.h"
@@ -71,10 +73,6 @@ struct listattr_callback_state {
 /* HFS Internal Names */
 #define	XATTR_EXTENDEDSECURITY_NAME   "system.extendedsecurity"
 #define XATTR_XATTREXTENTS_NAME	      "system.xattrextents"
-
-/* Faster version if we already know this is the data fork. */
-#define RSRC_FORK_EXISTS(CP)   \
-	(((CP)->c_attr.ca_blocks - (CP)->c_datafork->ff_data.cf_blocks) > 0)
 
 static u_int32_t emptyfinfo[8] = {0};
 
@@ -133,7 +131,7 @@ hfs_vnop_getnamedstream(struct vnop_getnamedstream_args* ap)
 	if ((error = hfs_lock(VTOC(vp), HFS_EXCLUSIVE_LOCK, HFS_LOCK_DEFAULT))) {
 		return (error);
 	}
-	if ((!RSRC_FORK_EXISTS(cp)
+	if ((!hfs_has_rsrc(cp)
 #if HFS_COMPRESSION
 	     || hide_rsrc
 #endif /* HFS_COMPRESSION */
@@ -141,7 +139,7 @@ hfs_vnop_getnamedstream(struct vnop_getnamedstream_args* ap)
 		hfs_unlock(cp);
 		return (ENOATTR);
 	}
-	error = hfs_vgetrsrc(VTOHFS(vp), vp, svpp, TRUE, FALSE);
+	error = hfs_vgetrsrc(VTOHFS(vp), vp, svpp);
 	hfs_unlock(cp);
 
 	return (error);
@@ -184,7 +182,7 @@ hfs_vnop_makenamedstream(struct vnop_makenamedstream_args* ap)
 	if ((error = hfs_lock(cp, HFS_EXCLUSIVE_LOCK, HFS_LOCK_DEFAULT))) {
 		return (error);
 	}
-	error = hfs_vgetrsrc(VTOHFS(vp), vp, svpp, TRUE, FALSE);
+	error = hfs_vgetrsrc(VTOHFS(vp), vp, svpp);
 	hfs_unlock(cp);
 
 	return (error);
@@ -197,7 +195,7 @@ int
 hfs_vnop_removenamedstream(struct vnop_removenamedstream_args* ap)
 {
 	vnode_t svp = ap->a_svp;
-	struct cnode *scp;
+	cnode_t *scp = VTOC(svp);
 	int error = 0;
 
 	/*
@@ -207,26 +205,20 @@ hfs_vnop_removenamedstream(struct vnop_removenamedstream_args* ap)
 		return (ENOATTR);
 	}
 #if HFS_COMPRESSION
-	if (hfs_hides_rsrc(ap->a_context, VTOC(svp), 1)) {
+	if (hfs_hides_rsrc(ap->a_context, scp, 1)) {
 		/* do nothing */
 		return 0;
 	}
 #endif /* HFS_COMPRESSION */
-	
-	scp = VTOC(svp);
 
-	/* Take truncate lock before taking cnode lock. */
 	hfs_lock_truncate(scp, HFS_EXCLUSIVE_LOCK, HFS_LOCK_DEFAULT);
-	if ((error = hfs_lock(scp, HFS_EXCLUSIVE_LOCK, HFS_LOCK_DEFAULT))) {
-		goto out;
+	if (VTOF(svp)->ff_size) {
+		// hfs_truncate will deal with the cnode lock
+		error = hfs_truncate(svp, 0, IO_NDELAY, 0, ap->a_context);
 	}
-	if (VTOF(svp)->ff_size != 0) {
-		error = hfs_truncate(svp, 0, IO_NDELAY, 0, 0, ap->a_context);
-	}
-	hfs_unlock(scp);
-out:
 	hfs_unlock_truncate(scp, HFS_LOCK_DEFAULT);
-	return (error);
+
+	return error;
 }
 #endif
 
@@ -341,7 +333,7 @@ hfs_vnop_getxattr(struct vnop_getxattr_args *ap)
 			}
 			namelen = cp->c_desc.cd_namelen;
 
-			if ( !RSRC_FORK_EXISTS(cp)) {
+			if (!hfs_has_rsrc(cp)) {
 				hfs_unlock(cp);
 				return (ENOATTR);
 			}
@@ -350,7 +342,7 @@ hfs_vnop_getxattr(struct vnop_getxattr_args *ap)
 				openunlinked = 1;
 			}
 			
-			result = hfs_vgetrsrc(hfsmp, vp, &rvp, TRUE, FALSE);
+			result = hfs_vgetrsrc(hfsmp, vp, &rvp);
 			hfs_unlock(cp);
 			if (result) {
 				return (result);
@@ -418,7 +410,23 @@ hfs_vnop_getxattr(struct vnop_getxattr_args *ap)
 	return MacToVFSError(result);
 }
 
+// Has same limitations as hfs_getxattr_internal below
+int hfs_xattr_read(vnode_t vp, const char *name, void *data, size_t *size)
+{
+	char  uio_buf[UIO_SIZEOF(1)];
+	uio_t uio = uio_createwithbuffer(1, 0, UIO_SYSSPACE, UIO_READ, uio_buf, 
+									 sizeof(uio_buf));
 
+	uio_addiov(uio, CAST_USER_ADDR_T(data), *size);
+
+	struct vnop_getxattr_args args = {
+		.a_uio = uio,
+		.a_name = name,
+		.a_size = size
+	};
+
+	return hfs_getxattr_internal(VTOC(vp), &args, VTOHFS(vp), 0);
+}
 
 /*
  * getxattr_internal
@@ -766,6 +774,12 @@ hfs_vnop_setxattr(struct vnop_setxattr_args *ap)
 		dateadded = hfs_get_dateadded (cp);
 		if (S_ISREG(cp->c_attr.ca_mode) || S_ISLNK(cp->c_attr.ca_mode)) {
 			struct FndrExtendedFileInfo *extinfo = (struct FndrExtendedFileInfo *)((u_int8_t*)cp->c_finderinfo + 16);
+			/* 
+			 * Grab generation counter directly from the cnode 
+			 * instead of calling hfs_get_gencount(), because 
+			 * for zero generation count values hfs_get_gencount() 
+			 * lies and bumps it up to one.
+			 */
 			write_gen_counter = extinfo->write_gen_counter;
 			document_id = extinfo->document_id;
 		} else if (S_ISDIR(cp->c_attr.ca_mode)) {
@@ -774,7 +788,11 @@ hfs_vnop_setxattr(struct vnop_setxattr_args *ap)
 			document_id = extinfo->document_id;
 		}
 
-		/* Zero out the date added field to ignore user's attempts to set it */
+		/* 
+		 * Zero out the finder info's reserved fields like date added, 
+		 * generation counter, and document id to ignore user's attempts 
+		 * to set it 
+		 */ 
 		hfs_zero_hidden_fields(cp, finderinfo);
 
 		if (bcmp(finderinfo_start, emptyfinfo, attrsize)) {
@@ -792,16 +810,15 @@ hfs_vnop_setxattr(struct vnop_setxattr_args *ap)
 		}
 
 		/* 
-		 * Now restore the date added to the finderinfo to be written out.
-		 * Advance to the 2nd half of the finderinfo to write out the date added
-		 * into the buffer.
+		 * Now restore the date added and other reserved fields to the finderinfo to 
+		 * be written out.  Advance to the 2nd half of the finderinfo to write them 
+		 * out into the buffer.
 		 *
 		 * Make sure to endian swap the date added back into big endian.  When we used
 		 * hfs_get_dateadded above to retrieve it, it swapped into local endianness
 		 * for us.  But now that we're writing it out, put it back into big endian.
 		 */
 		finfo = &finderinfo[16];
-
 		if (S_ISREG(cp->c_attr.ca_mode) || S_ISLNK(cp->c_attr.ca_mode)) {
 			struct FndrExtendedFileInfo *extinfo = (struct FndrExtendedFileInfo *)finfo;
 			extinfo->date_added = OSSwapHostToBigInt32(dateadded);
@@ -859,7 +876,7 @@ hfs_vnop_setxattr(struct vnop_setxattr_args *ap)
 		cp = VTOC(vp);
 		namelen = cp->c_desc.cd_namelen;
 
-		if (RSRC_FORK_EXISTS(cp)) {
+		if (hfs_has_rsrc(cp)) {
 			/* attr exists and "create" was specified. */
 			if (ap->a_options & XATTR_CREATE) {
 				hfs_unlock(cp);
@@ -881,7 +898,7 @@ hfs_vnop_setxattr(struct vnop_setxattr_args *ap)
 			openunlinked = 1;
 		}
 
-		result = hfs_vgetrsrc(hfsmp, vp, &rvp, TRUE, FALSE);
+		result = hfs_vgetrsrc(hfsmp, vp, &rvp);
 		hfs_unlock(cp);
 		if (result) {
 			return (result);
@@ -970,6 +987,16 @@ hfs_vnop_setxattr(struct vnop_setxattr_args *ap)
 	return (result == btNotFound ? ENOATTR : MacToVFSError(result));
 }
 
+// Has same limitations as hfs_setxattr_internal below
+int hfs_xattr_write(vnode_t vp, const char *name, const void *data, size_t size)
+{
+	struct vnop_setxattr_args args = {
+		.a_vp 	= vp,
+		.a_name = name,
+	};
+
+	return hfs_setxattr_internal(VTOC(vp), data, size, &args, VTOHFS(vp), 0);
+}
 
 /*
  * hfs_setxattr_internal
@@ -987,7 +1014,7 @@ hfs_vnop_setxattr(struct vnop_setxattr_args *ap)
  *		3. If data originates entirely in-kernel, use a null UIO, and ensure the size is less than 
  *			hfsmp->hfs_max_inline_attrsize bytes long. 
  */ 
-int hfs_setxattr_internal (struct cnode *cp, caddr_t data_ptr, size_t attrsize,
+int hfs_setxattr_internal (struct cnode *cp, const void *data_ptr, size_t attrsize,
 						   struct vnop_setxattr_args *ap, struct hfsmount *hfsmp, 
 						   u_int32_t fileid) 
 {
@@ -1339,17 +1366,21 @@ hfs_vnop_removexattr(struct vnop_removexattr_args *ap)
 		if ((result = hfs_lock(cp, HFS_EXCLUSIVE_LOCK, HFS_LOCK_DEFAULT))) {
 			return (result);
 		}
-		if ( !RSRC_FORK_EXISTS(cp)) {
+		if (!hfs_has_rsrc(cp)) {
 			hfs_unlock(cp);
 			return (ENOATTR);
 		}
-		result = hfs_vgetrsrc(hfsmp, vp, &rvp, TRUE, FALSE);
+		result = hfs_vgetrsrc(hfsmp, vp, &rvp);
 		hfs_unlock(cp);
 		if (result) {
 			return (result);
 		}
 
 		hfs_lock_truncate(VTOC(rvp), HFS_EXCLUSIVE_LOCK, HFS_LOCK_DEFAULT);
+
+		// Tell UBC now before we take the cnode lock and start the transaction
+		hfs_ubc_setsize(rvp, 0, false);
+
 		if ((result = hfs_lock(VTOC(rvp), HFS_EXCLUSIVE_LOCK, HFS_LOCK_DEFAULT))) {
 			hfs_unlock_truncate(cp, HFS_LOCK_DEFAULT);
 			vnode_put(rvp);
@@ -1366,7 +1397,7 @@ hfs_vnop_removexattr(struct vnop_removexattr_args *ap)
 			return (result);
 		}
 
-		result = hfs_truncate(rvp, (off_t)0, IO_NDELAY, 0, 0, ap->a_context);
+		result = hfs_truncate(rvp, (off_t)0, IO_NDELAY, 0, ap->a_context);
 		if (result == 0) {
 			cp->c_touch_chgtime = TRUE;
 			cp->c_flag |= C_MODIFIED;
@@ -1764,11 +1795,11 @@ hfs_vnop_listxattr(struct vnop_listxattr_args *ap)
 		}
 	}
 	/* If Resource Fork is non-empty then export it's name. */
-	if (S_ISREG(cp->c_mode) && RSRC_FORK_EXISTS(cp)) {
+	if (S_ISREG(cp->c_mode) && hfs_has_rsrc(cp)) {
 #if HFS_COMPRESSION
 		if ((ap->a_options & XATTR_SHOWCOMPRESSION) ||
 		    !compressed ||
-		    !hfs_hides_rsrc(ap->a_context, VTOC(vp), 1) /* 1 == don't take the cnode lock */
+		    !decmpfs_hides_rsrc(ap->a_context, VTOCMP(vp))
 		    )
 #endif /* HFS_COMPRESSION */
 		{
@@ -1903,7 +1934,7 @@ listattr_callback(const HFSPlusAttrKey *key, __unused const HFSPlusAttrData *dat
 		return (1);     /* continue */
 
 #if HFS_COMPRESSION
-	if (!state->showcompressed && hfs_hides_xattr(state->ctx, VTOC(state->vp), attrname, 1) ) /* 1 == don't take the cnode lock */
+	if (!state->showcompressed && decmpfs_hides_xattr(state->ctx, VTOCMP(state->vp), attrname) )
 		return 1; /* continue */
 #endif /* HFS_COMPRESSION */
 	
@@ -2589,3 +2620,4 @@ count_extent_blocks(int maxblks, HFSPlusExtentRecord extents)
 	}
 	return (blocks);
 }
+

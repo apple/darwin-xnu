@@ -461,17 +461,18 @@ mac_vnode_label_store(vfs_context_t ctx, struct vnode *vp,
 	return (error);
 }
 
-int
-mac_cred_label_update_execve(vfs_context_t ctx, kauth_cred_t new, struct vnode *vp,
-	struct vnode *scriptvp, struct label *scriptvnodelabel, struct label *execl,
-	void *macextensions)
+void
+mac_cred_label_update_execve(vfs_context_t ctx, kauth_cred_t new, struct vnode *vp, off_t offset,
+	struct vnode *scriptvp, struct label *scriptvnodelabel, struct label *execl, u_int *csflags,
+	void *macextensions, int *disjoint, int *labelupdateerror)
 {
 	kauth_cred_t cred;
-	int disjoint = 0;
+	*disjoint = 0;
+	int error;
 	posix_cred_t pcred = posix_cred_get(new);
 
 	if (!mac_proc_enforce && !mac_vnode_enforce)
-		return disjoint;
+		return;
 
 	/* mark the new cred to indicate "matching" includes the label */
 	pcred->cr_flags |= CRF_MAC_ENFORCE;
@@ -479,7 +480,7 @@ mac_cred_label_update_execve(vfs_context_t ctx, kauth_cred_t new, struct vnode *
 	cred = vfs_context_ucred(ctx);
 
 	/*
-	 * NB: Cannot use MAC_PERFORM macro because we need a sequence point after
+	 * NB: Cannot use MAC_CHECK macro because we need a sequence point after
 	 *     calling exec_spawnattr_getmacpolicyinfo() and before passing the
 	 *     spawnattrlen as an argument to the hook.
 	 */
@@ -487,6 +488,7 @@ mac_cred_label_update_execve(vfs_context_t ctx, kauth_cred_t new, struct vnode *
 		struct mac_policy_conf *mpc;
 		u_int i;
 
+		error = 0;
 		for (i = 0; i< mac_policy_list.staticmax; i++) {
 			mpc = mac_policy_list.entries[i].mpc;
 			if (mpc == NULL)
@@ -499,8 +501,9 @@ mac_cred_label_update_execve(vfs_context_t ctx, kauth_cred_t new, struct vnode *
 			size_t spawnattrlen = 0;
 			void *spawnattr = exec_spawnattr_getmacpolicyinfo(macextensions, mpc->mpc_name, &spawnattrlen);
 
-			hook(cred, new, vfs_context_proc(ctx), vp, scriptvp, vp->v_label,
-			     scriptvnodelabel, execl, spawnattr, spawnattrlen, &disjoint);
+			error = mac_error_select(hook(cred, new, vfs_context_proc(ctx), vp, offset, scriptvp,
+						 vp->v_label, scriptvnodelabel, execl, csflags, spawnattr, spawnattrlen, disjoint),
+						 error);
 		}
 		if (mac_policy_list_conditional_busy() != 0) { 
 			for (; i <= mac_policy_list.maxindex; i++) {
@@ -515,18 +518,18 @@ mac_cred_label_update_execve(vfs_context_t ctx, kauth_cred_t new, struct vnode *
 				size_t spawnattrlen = 0;
 				void *spawnattr = exec_spawnattr_getmacpolicyinfo(macextensions, mpc->mpc_name, &spawnattrlen);
 
-				hook(cred, new, vfs_context_proc(ctx), vp, scriptvp, vp->v_label,
-				     scriptvnodelabel, execl, spawnattr, spawnattrlen, &disjoint);
+				error = mac_error_select(hook(cred, new, vfs_context_proc(ctx), vp, offset, scriptvp,
+						     vp->v_label, scriptvnodelabel, execl, csflags, spawnattr, spawnattrlen, disjoint),
+							 error);
 			}
 			mac_policy_list_unbusy();
 		}
 	}
-
-	return (disjoint);
+	*labelupdateerror = error;
 }
 
 int
-mac_cred_check_label_update_execve(vfs_context_t ctx, struct vnode *vp,
+mac_cred_check_label_update_execve(vfs_context_t ctx, struct vnode *vp, off_t offset,
 	struct vnode *scriptvp, struct label *scriptvnodelabel, struct label *execlabel,
 	struct proc *p, void *macextensions)
 {
@@ -559,7 +562,7 @@ mac_cred_check_label_update_execve(vfs_context_t ctx, struct vnode *vp,
 			size_t spawnattrlen = 0;
 			void *spawnattr = exec_spawnattr_getmacpolicyinfo(macextensions, mpc->mpc_name, &spawnattrlen);
 
-			result = result || hook(cred, vp, scriptvp, vp->v_label, scriptvnodelabel, execlabel, p, spawnattr, spawnattrlen);
+			result = result || hook(cred, vp, offset, scriptvp, vp->v_label, scriptvnodelabel, execlabel, p, spawnattr, spawnattrlen);
 		}
 		if (mac_policy_list_conditional_busy() != 0) { 
 			for (; i <= mac_policy_list.maxindex; i++) {
@@ -574,7 +577,7 @@ mac_cred_check_label_update_execve(vfs_context_t ctx, struct vnode *vp,
 				size_t spawnattrlen = 0;
 				void *spawnattr = exec_spawnattr_getmacpolicyinfo(macextensions, mpc->mpc_name, &spawnattrlen);
 
-				result = result || hook(cred, vp, scriptvp, vp->v_label, scriptvnodelabel, execlabel, p, spawnattr, spawnattrlen);
+				result = result || hook(cred, vp, offset, scriptvp, vp->v_label, scriptvnodelabel, execlabel, p, spawnattr, spawnattrlen);
 			}
 			mac_policy_list_unbusy();
 		}
@@ -782,13 +785,12 @@ mac_vnode_check_exec(vfs_context_t ctx, struct vnode *vp,
 				continue;
 
 			size_t spawnattrlen = 0;
-			void *spawnattr =  (imgp != NULL) ? exec_spawnattr_getmacpolicyinfo(imgp->ip_px_smpx, mpc->mpc_name, &spawnattrlen) : NULL;
+			void *spawnattr = exec_spawnattr_getmacpolicyinfo(imgp->ip_px_smpx, mpc->mpc_name, &spawnattrlen);
 
 			error = mac_error_select(
-					hook(cred, vp, vp->v_label,
-					     (imgp != NULL) ? imgp->ip_execlabelp : NULL,
-					     (imgp != NULL) ? &imgp->ip_ndp->ni_cnd : NULL,
-					     (imgp != NULL) ? &imgp->ip_csflags : NULL,
+					hook(cred,
+					     vp, imgp->ip_scriptvp, vp->v_label, imgp->ip_scriptlabelp,
+					     imgp->ip_execlabelp, &imgp->ip_ndp->ni_cnd, &imgp->ip_csflags,
 					     spawnattr, spawnattrlen), error);
 		}
 		if (mac_policy_list_conditional_busy() != 0) { 
@@ -802,13 +804,12 @@ mac_vnode_check_exec(vfs_context_t ctx, struct vnode *vp,
 					continue;
 
 				size_t spawnattrlen = 0;
-				void *spawnattr =  (imgp != NULL) ? exec_spawnattr_getmacpolicyinfo(imgp->ip_px_smpx, mpc->mpc_name, &spawnattrlen) : NULL;
+				void *spawnattr = exec_spawnattr_getmacpolicyinfo(imgp->ip_px_smpx, mpc->mpc_name, &spawnattrlen);
 
 				error = mac_error_select(
-						hook(cred, vp, vp->v_label,
-						     (imgp != NULL) ? imgp->ip_execlabelp : NULL,
-						     (imgp != NULL) ? &imgp->ip_ndp->ni_cnd : NULL,
-						     (imgp != NULL) ? &imgp->ip_csflags : NULL,
+						hook(cred,
+						     vp, imgp->ip_scriptvp, vp->v_label, imgp->ip_scriptlabelp,
+						     imgp->ip_execlabelp, &imgp->ip_ndp->ni_cnd, &imgp->ip_csflags,
 						     spawnattr, spawnattrlen), error);
 			}
 			mac_policy_list_unbusy();
@@ -836,14 +837,16 @@ mac_vnode_check_fsgetpath(vfs_context_t ctx, struct vnode *vp)
 int
 mac_vnode_check_signature(struct vnode *vp, off_t macho_offset,
 			  unsigned char *sha1,
-			  void * signature, size_t size)
+			  const void *signature, size_t size,
+			  int *is_platform_binary)
 {
 	int error;
 	
 	if (!mac_vnode_enforce || !mac_proc_enforce)
 		return (0);
 	
-	MAC_CHECK(vnode_check_signature, vp, vp->v_label, macho_offset, sha1, signature, size);
+	MAC_CHECK(vnode_check_signature, vp, vp->v_label, macho_offset, sha1, 
+							  signature, size, is_platform_binary);
 	return (error);
 }
 
@@ -1043,36 +1046,32 @@ mac_vnode_check_label_update(vfs_context_t ctx, struct vnode *vp,
 }
 
 int
-mac_vnode_check_rename_from(vfs_context_t ctx, struct vnode *dvp,
-    struct vnode *vp, struct componentname *cnp)
+mac_vnode_check_rename(vfs_context_t ctx, struct vnode *dvp,
+    struct vnode *vp, struct componentname *cnp, struct vnode *tdvp,
+    struct vnode *tvp, struct componentname *tcnp)
 {
 	kauth_cred_t cred;
 	int error;
 
-	if (!mac_vnode_enforce || 
+	if (!mac_vnode_enforce ||
 		!mac_context_check_enforce(ctx, MAC_VNODE_ENFORCE))
 		return (0);
 
 	cred = vfs_context_ucred(ctx);
+
 	MAC_CHECK(vnode_check_rename_from, cred, dvp, dvp->v_label, vp,
 	    vp->v_label, cnp);
-	return (error);
-}
+	if (error)
+		return (error);
 
-int
-mac_vnode_check_rename_to(vfs_context_t ctx, struct vnode *dvp,
-    struct vnode *vp, int samedir, struct componentname *cnp)
-{
-	kauth_cred_t cred;
-	int error;
+	MAC_CHECK(vnode_check_rename_to, cred, tdvp, tdvp->v_label, tvp,
+	    tvp != NULL ? tvp->v_label : NULL, dvp == tdvp, tcnp);
+	if (error)
+		return (error);
 
-	if (!mac_vnode_enforce || 
-		!mac_context_check_enforce(ctx, MAC_VNODE_ENFORCE))
-		return (0);
-
-	cred = vfs_context_ucred(ctx);
-	MAC_CHECK(vnode_check_rename_to, cred, dvp, dvp->v_label, vp,
-	    vp != NULL ? vp->v_label : NULL, samedir, cnp);
+	MAC_CHECK(vnode_check_rename, cred, dvp, dvp->v_label, vp,
+	    vp->v_label, cnp, tdvp, tdvp->v_label, tvp,
+	    tvp != NULL ? tvp->v_label : NULL, tcnp);
 	return (error);
 }
 

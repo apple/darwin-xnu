@@ -58,25 +58,52 @@ my $BUILD_DATE = `date`;
 $BUILD_DATE =~ s/[\n\t]//g;
 my $BUILDER=`whoami`;
 $BUILDER =~ s/[\n\t]//g;
+my $RC_STRING = $ENV{'RC_ProjectNameAndSourceVersion'} . "~" . $ENV{'RC_ProjectBuildVersion'} if defined($ENV{'RC_XBS'});
 
-# Handle two scenarios:
+# Handle four scenarios:
 # SRCROOT=/tmp/xnu
 # OBJROOT=/tmp/xnu/BUILD/obj
 # OBJPATH=/tmp/xnu/BUILD/obj/RELEASE_X86_64
 #
-# SRCROOT=/SourceCache/xnu/xnu-1234
-# OBJROOT=/tmp/xnu/xnu-1234~1.obj
-# OBJPATH=/tmp/xnu/xnu-1234~1.obj/RELEASE_X86_64
+# SRCROOT=/SourceCache/xnu/xnu-2706
+# OBJROOT=/BinaryCache/xnu/xnu-2706~3/Objects
+# OBJPATH=/BinaryCache/xnu/xnu-2706~3/Objects/DEVELOPMENT_X86_64
+# RC_XBS=YES (XBS-16.3+)
+# RC_ProjectNameAndSourceVersion=xnu-2706
+# RC_ProjectBuildVersion=3
+#
+# SRCROOT=/SourceCache/xnu/xnu-2706
+# OBJROOT=/private/var/tmp/xnu/xnu-2706~2
+# OBJPATH=/private/var/tmp/xnu/xnu-2706~2/DEVELOPMENT_ARM_S5L8940X
+# RC_XBS=YES (<XBS-16.3)
+# RC_ProjectNameAndSourceVersion=xnu-2706
+# RC_ProjectBuildVersion=2
+#
+# SRCROOT=/tmp/xnu-2800.0.1_xnu-svn.roots/Sources/xnu-2800.0.1
+# OBJROOT=/private/tmp/xnu-2800.0.1_xnu-svn.roots/BuildRecords/xnu-2800.0.1_install/Objects
+# OBJPATH=/private/tmp/xnu-2800.0.1_xnu-svn.roots/BuildRecords/xnu-2800.0.1_install/Objects/DEVELOPMENT_X86_64
+# RC_XBS=YES (buildit)
+# RC_BUILDIT=YES
+# RC_ProjectNameAndSourceVersion=xnu-2800.0.1
+# RC_ProjectBuildVersion=1
+#
 #
 # If SRCROOT is a strict prefix of OBJPATH, we
 # want to preserve the "interesting" part
 # starting with "xnu". If it's not a prefix,
 # the basename of OBJROOT itself is "interesting".
+# Newer versions of XBS just set this to "Objects", so we
+# need to synthesize the directory name to be more interesting.
+#
 
 if ($BUILD_OBJPATH =~ m,^$BUILD_SRCROOT/(.*)$,) {
     $BUILD_OBJROOT = basename($BUILD_SRCROOT) . "/" . $1;
 } elsif ($BUILD_OBJPATH =~ m,^$BUILD_OBJROOT/(.*)$,) {
-    $BUILD_OBJROOT = basename($BUILD_OBJROOT) . "/" . $1;
+    if (defined($RC_STRING)) {
+	$BUILD_OBJROOT = $RC_STRING . "/" . $1;
+    } else {
+	$BUILD_OBJROOT = basename($BUILD_OBJROOT) . "/" . $1;
+    }
 } else {
     # Use original OBJROOT
 }

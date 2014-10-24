@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1998-2006 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 1998-2014 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -75,6 +75,7 @@
  * DKIOCGETCOMMANDPOOLSIZE               get device's queue depth
  */
 
+#define DK_FEATURE_PRIORITY                   0x00000004
 #define DK_FEATURE_UNMAP                      0x00000010
 
 typedef struct
@@ -113,12 +114,22 @@ typedef struct
     dk_extent_t *          extents;
     uint32_t               extentsCount;
 
-#ifdef __LP64__
+    uint32_t               options;
+
+#ifndef __LP64__
     uint8_t                reserved0096[4];        /* reserved, clear to zero */
-#else /* !__LP64__ */
-    uint8_t                reserved0064[8];        /* reserved, clear to zero */
 #endif /* !__LP64__ */
 } dk_unmap_t;
+
+
+#ifdef KERNEL
+#ifdef PRIVATE
+
+/* Definitions of option bits for dk_unmap_t */
+#define _DK_UNMAP_INITIALIZE                   0x00000100
+
+#endif /* PRIVATE */
+#endif /* KERNEL */
 
 #define DKIOCEJECT                            _IO('d', 21)
 #define DKIOCSYNCHRONIZECACHE                 _IO('d', 22)
@@ -135,6 +146,7 @@ typedef struct
 
 #define DKIOCREQUESTIDLE                      _IO('d', 30)
 #define DKIOCUNMAP                            _IOW('d', 31, dk_unmap_t)
+#define _DKIOCCORESTORAGE		      _IO('d', 32)
 
 #define DKIOCGETMAXBLOCKCOUNTREAD             _IOR('d', 64, uint64_t)
 #define DKIOCGETMAXBLOCKCOUNTWRITE            _IOR('d', 65, uint64_t)
@@ -156,6 +168,16 @@ typedef struct
 #ifdef KERNEL
 #define DK_FEATURE_FORCE_UNIT_ACCESS          0x00000001
 
+#define DK_ENCRYPTION_TYPE_AES_CBC            1
+#define DK_ENCRYPTION_TYPE_AES_XEX            2
+#define DK_ENCRYPTION_TYPE_AES_XTS            3
+
+#define DK_TIER_MASK                          0xC0
+#define DK_TIER_SHIFT                         6
+
+#define DK_TIER_TO_PRIORITY(tier)             (((tier) << DK_TIER_SHIFT) | ~DK_TIER_MASK)
+#define DK_PRIORITY_TO_TIER(priority)         ((priority) >> DK_TIER_SHIFT)
+
 typedef struct
 {
     uint64_t               offset;
@@ -165,6 +187,20 @@ typedef struct
 
     dev_t                  dev;
 } dk_physical_extent_t;
+
+typedef struct
+{
+    dk_extent_t *          extents;
+    uint32_t               extentsCount;
+
+    uint8_t                tier;
+
+#ifdef __LP64__
+    uint8_t                reserved0104[3];        /* reserved, clear to zero */
+#else /* !__LP64__ */
+    uint8_t                reserved0072[7];        /* reserved, clear to zero */
+#endif /* !__LP64__ */
+} dk_set_tier_t;
 
 #define DKIOCGETBLOCKCOUNT32                  _IOR('d', 25, uint32_t)
 #define DKIOCSETBLOCKSIZE                     _IOW('d', 24, uint32_t)
@@ -176,7 +212,9 @@ typedef struct
 #define DKIOCLOCKPHYSICALEXTENTS              _IO('d', 81)
 #define DKIOCGETPHYSICALEXTENT                _IOWR('d', 82, dk_physical_extent_t)
 #define DKIOCUNLOCKPHYSICALEXTENTS            _IO('d', 83)
-#define DKIOCGETMAXPRIORITYCOUNT              _IOR('d', 84, uint32_t)
+#define DKIOCSETTIER                          _IOW('d', 85, dk_set_tier_t)
+#define DKIOCGETENCRYPTIONTYPE                _IOR('d', 86, uint32_t)
+#define DKIOCISLOWPOWERMODE                   _IOR('d', 87, uint32_t)
 
 #ifdef XNU_KERNEL_PRIVATE
 typedef struct
@@ -196,24 +234,31 @@ typedef struct _dk_cs_pin {
 	dk_extent_t	cp_extent;
 	int64_t		cp_flags;
 } _dk_cs_pin_t;
-#define _DKIOCSPINDISCARDDATA (1 << 0)
+#define _DKIOCCSPINFORHIBERNATION       (1 << 0)
+#define _DKIOCCSPINDISCARDBLACKLIST     (1 << 1)
 #define _DKIOCCSPINEXTENT                     _IOW('d', 199, _dk_cs_pin_t)
 #define _DKIOCCSUNPINEXTENT                   _IOW('d', 200, _dk_cs_pin_t)
 #define _DKIOCGETMIGRATIONUNITBYTESIZE        _IOR('d', 201, uint32_t)
+
 typedef struct _dk_cs_map {
 	dk_extent_t	cm_extent;
 	uint64_t	cm_bytes_mapped;
 } _dk_cs_map_t;
+
+typedef struct _dk_cs_unmap {
+	dk_extent_t		     *extents;
+	uint32_t                     extentsCount;
+	uint32_t                     options;
+} _dk_cs_unmap_t;
+
 #define _DKIOCCSMAP                           _IOWR('d', 202, _dk_cs_map_t)
 #define _DKIOCCSSETFSVNODE                    _IOW('d', 203, vnode_t)
 #define _DKIOCCSGETFREEBYTES                  _IOR('d', 204, uint64_t)
+#define	_DKIOCCSUNMAP			      _IOWR('d', 205, _dk_cs_unmap_t)
 #endif /* PRIVATE */
 #endif /* KERNEL */
 
 #ifdef PRIVATE
-#ifdef TARGET_OS_EMBEDDED
-#define _DKIOCSETSTATIC                       _IO('d', 84)
-#endif /* TARGET_OS_EMBEDDED */
 #endif /* PRIVATE */
 
 #endif	/* _SYS_DISK_H_ */

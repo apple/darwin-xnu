@@ -211,10 +211,10 @@ make_dhcp_request(struct dhcp * request, int request_size,
     uint8_t		cid[ETHER_ADDR_LEN + 1];
     uint8_t		rfc_magic[RFC_MAGIC_SIZE] = RFC_OPTIONS_MAGIC;
 
-    if (hwlen > (int)sizeof(cid)) {
+    if (hwlen >= (int)sizeof(cid)) {
 	printf("dhcp: hwlen is %d (> %d), truncating\n", hwlen,
 	       (int)sizeof(cid));
-	hwlen = sizeof(cid);
+	hwlen = sizeof(cid) - 1;
     }
     bzero(request, request_size);
     request->dp_op = BOOTREQUEST;

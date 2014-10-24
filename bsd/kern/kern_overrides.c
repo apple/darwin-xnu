@@ -44,7 +44,7 @@
 #include <mach/mach_types.h>
 #include <mach/vm_param.h>
 #include <kern/task.h>
-#include <kern/lock.h>
+#include <kern/locks.h>
 #include <kern/assert.h>
 #include <kern/sched_prim.h>
 
@@ -67,6 +67,12 @@ static int64_t		cpu_throttle_assert_cnt;
 /* Wait Channel for system override */
 static uint64_t		sys_override_wait;
 
+/* Global variable to indicate if system_override is enabled */
+int 			sys_override_enabled;
+
+/* Sysctl definition for sys_override_enabled */
+SYSCTL_INT(_debug, OID_AUTO, sys_override_enabled, CTLFLAG_RW | CTLFLAG_LOCKED, &sys_override_enabled, 0, "");
+
 /* Forward Declarations */
 static void enable_system_override(uint64_t flags);
 static void disable_system_override(uint64_t flags);
@@ -85,6 +91,7 @@ init_system_override()
 	sys_override_mtx_attr = lck_attr_alloc_init();
 	lck_mtx_init(&sys_override_lock, sys_override_mtx_grp, sys_override_mtx_attr);
 	io_throttle_assert_cnt = cpu_throttle_assert_cnt = 0;
+	sys_override_enabled = 1;
 }
 
 /* system call implementation */
@@ -100,9 +107,27 @@ system_override(__unused struct proc *p, struct system_override_args * uap, __un
 		goto out;
 	}	
 
-	/* Check to see if some flags are specified. Zero flags are invalid. */
-	if ((flags == 0) || ((flags & ~SYS_OVERRIDE_FLAGS_MASK) != 0)) {
+	/* Check to see if some flags are specified. */
+	if ((flags & ~SYS_OVERRIDE_FLAGS_MASK) != 0) {
 		error = EINVAL;
+		goto out;
+	}
+
+	if (flags == SYS_OVERRIDE_DISABLE) {
+		
+		printf("Process %s [%d] disabling system_override()\n", current_proc()->p_comm, current_proc()->p_pid);
+
+		lck_mtx_lock(&sys_override_lock);
+		
+		if (io_throttle_assert_cnt > 0)
+			sys_override_io_throttle(THROTTLE_IO_ENABLE);
+		if (cpu_throttle_assert_cnt > 0)
+			sys_override_cpu_throttle(CPU_THROTTLE_ENABLE);
+
+		sys_override_enabled = 0;
+				
+		lck_mtx_unlock(&sys_override_lock);
+
 		goto out;
 	}
 
@@ -129,22 +154,22 @@ enable_system_override(uint64_t flags)
 {
 	
 	if (flags & SYS_OVERRIDE_IO_THROTTLE) {
-		if (io_throttle_assert_cnt == 0) {
+		if ((io_throttle_assert_cnt == 0) && sys_override_enabled) {
 			/* Disable I/O Throttling */
 			printf("Process %s [%d] disabling system-wide I/O Throttling\n", current_proc()->p_comm, current_proc()->p_pid);
-			KERNEL_DEBUG_CONSTANT(FSDBG_CODE(DBG_THROTTLE, IO_THROTTLE_DISABLE) | DBG_FUNC_START, current_proc()->p_pid, 0, 0, 0, 0);
 			sys_override_io_throttle(THROTTLE_IO_DISABLE);
 		}
+		KERNEL_DEBUG_CONSTANT(FSDBG_CODE(DBG_THROTTLE, IO_THROTTLE_DISABLE) | DBG_FUNC_START, current_proc()->p_pid, 0, 0, 0, 0);
 		io_throttle_assert_cnt++;
 	}
 	
 	if (flags & SYS_OVERRIDE_CPU_THROTTLE) {
-		if (cpu_throttle_assert_cnt == 0) {
+		if ((cpu_throttle_assert_cnt == 0) && sys_override_enabled) {
 			/* Disable CPU Throttling */
 			printf("Process %s [%d] disabling system-wide CPU Throttling\n", current_proc()->p_comm, current_proc()->p_pid);
-			KERNEL_DEBUG_CONSTANT(MACHDBG_CODE(DBG_MACH_SCHED, MACH_CPU_THROTTLE_DISABLE) | DBG_FUNC_START, current_proc()->p_pid, 0, 0, 0, 0);
 			sys_override_cpu_throttle(CPU_THROTTLE_DISABLE);
 		}
+		KERNEL_DEBUG_CONSTANT(MACHDBG_CODE(DBG_MACH_SCHED, MACH_CPU_THROTTLE_DISABLE) | DBG_FUNC_START, current_proc()->p_pid, 0, 0, 0, 0);
 		cpu_throttle_assert_cnt++;
 	}
 
@@ -161,9 +186,9 @@ disable_system_override(uint64_t flags)
 	if (flags & SYS_OVERRIDE_IO_THROTTLE) {
 		assert(io_throttle_assert_cnt > 0);
 		io_throttle_assert_cnt--;
-		if (io_throttle_assert_cnt == 0) {
+		KERNEL_DEBUG_CONSTANT(FSDBG_CODE(DBG_THROTTLE, IO_THROTTLE_DISABLE) | DBG_FUNC_END, current_proc()->p_pid, 0, 0, 0, 0);
+		if ((io_throttle_assert_cnt == 0) && sys_override_enabled) {
 			/* Enable I/O Throttling */
-			KERNEL_DEBUG_CONSTANT(FSDBG_CODE(DBG_THROTTLE, IO_THROTTLE_DISABLE) | DBG_FUNC_END, current_proc()->p_pid, 0, 0, 0, 0);
 			sys_override_io_throttle(THROTTLE_IO_ENABLE);
 		}
 	}
@@ -171,9 +196,9 @@ disable_system_override(uint64_t flags)
 	if (flags & SYS_OVERRIDE_CPU_THROTTLE) {
 		assert(cpu_throttle_assert_cnt > 0);
 		cpu_throttle_assert_cnt--;
-			if (cpu_throttle_assert_cnt == 0) {
+		KERNEL_DEBUG_CONSTANT(MACHDBG_CODE(DBG_MACH_SCHED, MACH_CPU_THROTTLE_DISABLE) | DBG_FUNC_END, current_proc()->p_pid, 0, 0, 0, 0);
+		if ((cpu_throttle_assert_cnt == 0) && sys_override_enabled) {
 			/* Enable CPU Throttling */
-			KERNEL_DEBUG_CONSTANT(MACHDBG_CODE(DBG_MACH_SCHED, MACH_CPU_THROTTLE_DISABLE) | DBG_FUNC_END, current_proc()->p_pid, 0, 0, 0, 0);
 			sys_override_cpu_throttle(CPU_THROTTLE_ENABLE);
 		}
 	}

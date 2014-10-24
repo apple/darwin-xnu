@@ -677,18 +677,6 @@ machine_run_count(uint32_t count)
 	saved_run_count = count;
 }
 
-boolean_t
-machine_processor_is_inactive(processor_t processor)
-{
-    int		cpu = processor->cpu_id;
-
-    if (pmDispatch != NULL
-	&& pmDispatch->pmIsCPUUnAvailable != NULL)
-	return(pmDispatch->pmIsCPUUnAvailable(cpu_to_lcpu(cpu)));
-    else
-	return(FALSE);
-}
-
 processor_t
 machine_choose_processor(processor_set_t pset,
 			 processor_t preferred)

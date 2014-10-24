@@ -1,6 +1,6 @@
 
 /*
- * Copyright (c) 2000-2011 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2014 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -333,7 +333,7 @@ int   journal_trim_remove_extent(journal *jnl, uint64_t offset, uint64_t length)
 void  journal_trim_set_callback(journal *jnl, jnl_trim_callback_t callback, void *arg);
 int   journal_trim_extent_overlap (journal *jnl, uint64_t offset, uint64_t length, uint64_t *end);
 /* Mark state in the journal that requests an immediate journal flush upon txn completion */
-int		journal_request_immediate_flush (journal *jnl);
+int   journal_request_immediate_flush (journal *jnl);
 #endif
 int   journal_end_transaction(journal *jnl);
 
@@ -341,6 +341,8 @@ int   journal_active(journal *jnl);
 int   journal_flush(journal *jnl, boolean_t wait_for_IO);
 void *journal_owner(journal *jnl);    // compare against current_thread()
 int   journal_uses_fua(journal *jnl);
+void  journal_lock(journal *jnl);
+void  journal_unlock(journal *jnl);
 
 
 /*

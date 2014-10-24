@@ -933,8 +933,6 @@ host_set_special_port(
 {
 	if (host_priv == HOST_PRIV_NULL ||
 	    id <= HOST_MAX_SPECIAL_KERNEL_PORT || id > HOST_MAX_SPECIAL_PORT ) {
-		if (IP_VALID(port))
-			ipc_port_release_send(port);
 		return KERN_INVALID_ARGUMENT;
 	}
 

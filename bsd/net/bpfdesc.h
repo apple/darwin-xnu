@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2011 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2014 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -134,7 +134,7 @@ struct bpf_d {
 	struct label *	bd_label;	/* MAC label for descriptor */
 #endif
 	int		bd_traffic_class; /* traffic service class */
-	int		bd_extendedhdr;	/* process req. the extended header */
+	int		bd_flags;	/* flags */
 };
 
 /* Values for bd_state */
@@ -148,6 +148,11 @@ struct bpf_d {
 			 (((bd)->bd_immediate || (bd)->bd_state == BPF_TIMED_OUT) && \
 			  (bd)->bd_slen != 0))
 
+
+/* Values for bd_flags */
+#define	BPF_EXTENDED_HDR	0x01	/* process req. the extended header */
+#define	BPF_WANT_PKTAP		0x02	/* process knows how to keep DLT_PKTAP private */
+#define	BPF_FINALIZE_PKTAP	0x04	/* finalize pktap header on read */
 
 /*
  * Descriptor associated with each attached hardware interface.

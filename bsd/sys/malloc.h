@@ -179,7 +179,7 @@
 #define M_IP6NDP	86	/* IPv6 Neighbour Discovery*/
 #define M_IP6OPT	87	/* IPv6 options management */
 #define M_IP6MISC	88	/* IPv6 misc. memory */
-#define M_TSEGQ		89	/* TCP segment queue entry, unused */
+/* unused	89 */
 #define M_IGMP		90
 #define M_JNL_JNL   91  /* Journaling: "struct journal" */
 #define M_JNL_TR    92  /* Journaling: "struct transaction" */ 
@@ -210,8 +210,14 @@
 #define M_FLOW_DIVERT_PCB	115 /* flow divert control block */
 #define M_FLOW_DIVERT_GROUP	116 /* flow divert socket group */
 #define M_IP6CGA	117
+#define M_NECP		118 /* General NECP policy data */
+#define M_NECP_SESSION_POLICY 119 /* NECP session policies */
+#define M_NECP_SOCKET_POLICY 120 /* NECP socket-level policies */
+#define M_NECP_IP_POLICY 121 /* NECP IP-level policies */
+#define M_FD_VN_DATA	122	/* Per fd vnode data */
+#define M_FD_DIRBUF	123	/* Directory entries' buffer */
 
-#define	M_LAST		118	/* Must be last type + 1 */
+#define	M_LAST		124	/* Must be last type + 1 */
 
 #else /* BSD_KERNEL_PRIVATE */
 

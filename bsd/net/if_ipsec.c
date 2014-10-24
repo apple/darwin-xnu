@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2012 Apple Inc. All rights reserved.
+ * Copyright (c) 2012-2014 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -31,6 +31,7 @@
 #include <net/kpi_protocol.h>
 #include <net/kpi_interface.h>
 #include <sys/socket.h>
+#include <sys/socketvar.h>
 #include <net/if.h>
 #include <net/if_types.h>
 #include <net/bpf.h>
@@ -48,6 +49,7 @@
 #include <netinet6/ipsec6.h>
 #include <netinet/ip.h>
 #include <net/flowadv.h>
+#include <net/necp.h>
 
 /* Kernel Control functions */
 static errno_t	ipsec_ctl_connect(kern_ctl_ref kctlref, struct sockaddr_ctl *sac,
@@ -127,7 +129,7 @@ ipsec_register_control(void)
 	}
 	
 	bzero(&kern_ctl, sizeof(kern_ctl));
-	strncpy(kern_ctl.ctl_name, IPSEC_CONTROL_NAME, sizeof(kern_ctl.ctl_name));
+	strlcpy(kern_ctl.ctl_name, IPSEC_CONTROL_NAME, sizeof(kern_ctl.ctl_name));
 	kern_ctl.ctl_name[sizeof(kern_ctl.ctl_name) - 1] = 0;
 	kern_ctl.ctl_flags = CTL_FLAG_PRIVILEGED; /* Require root */
 	kern_ctl.ctl_sendsize = 64 * 1024;
@@ -209,6 +211,7 @@ ipsec_ctl_connect(kern_ctl_ref		kctlref,
 	*unitinfo = pcb;
 	pcb->ipsec_ctlref = kctlref;
 	pcb->ipsec_unit = sac->sc_unit;
+	pcb->ipsec_output_service_class = MBUF_SC_OAM;
 	
 	printf("ipsec_ctl_connect: creating interface ipsec%d\n", pcb->ipsec_unit - 1);
 	
@@ -217,8 +220,7 @@ ipsec_ctl_connect(kern_ctl_ref		kctlref,
 	ipsec_init.ver = IFNET_INIT_CURRENT_VERSION;
 	ipsec_init.len = sizeof (ipsec_init);
 	ipsec_init.name = "ipsec";
-    ipsec_init.start = ipsec_start;
-    ipsec_init.sndq_maxlen = IPSECQ_MAXLEN;
+	ipsec_init.start = ipsec_start;
 	ipsec_init.unit = pcb->ipsec_unit - 1;
 	ipsec_init.family = ipsec_family;
 	ipsec_init.type = IFT_OTHER;
@@ -476,6 +478,7 @@ ipsec_ctl_setopt(__unused kern_ctl_ref	kctlref,
 		case IPSEC_OPT_FLAGS:
 		case IPSEC_OPT_EXT_IFDATA_STATS:
 		case IPSEC_OPT_SET_DELEGATE_INTERFACE:
+		case IPSEC_OPT_OUTPUT_TRAFFIC_CLASS:
 			if (kauth_cred_issuser(kauth_cred_get()) == 0) {
 				return EPERM;
 			}
@@ -540,6 +543,20 @@ ipsec_ctl_setopt(__unused kern_ctl_ref	kctlref,
 			break;
 		}
 			
+		case IPSEC_OPT_OUTPUT_TRAFFIC_CLASS: {
+			if (len != sizeof(int)) {
+				result = EMSGSIZE;
+				break;
+			}
+			mbuf_svc_class_t output_service_class = so_tc2msc(*(int *)data);
+			if (output_service_class == MBUF_SC_UNSPEC) {
+				pcb->ipsec_output_service_class = MBUF_SC_OAM;
+			} else {
+				pcb->ipsec_output_service_class = output_service_class;
+			}
+			break;
+		}
+			
 		default:
 			result = ENOPROTOOPT;
 			break;
@@ -578,6 +595,14 @@ ipsec_ctl_getopt(__unused kern_ctl_ref	kctlref,
 			*len = snprintf(data, *len, "%s%d", ifnet_name(pcb->ipsec_ifp), ifnet_unit(pcb->ipsec_ifp)) + 1;
 			break;
 			
+		case IPSEC_OPT_OUTPUT_TRAFFIC_CLASS: {
+			if (*len != sizeof(int)) {
+				result = EMSGSIZE;
+				break;
+			}
+			*(int *)data = so_svc2tc(pcb->ipsec_output_service_class);
+			break;
+		}
 		default:
 			result = ENOPROTOOPT;
 			break;
@@ -598,36 +623,26 @@ ipsec_output(ifnet_t	interface,
     int	length;
     struct ip *ip;
     struct ip6_hdr *ip6;
-    struct secpolicy *sp = NULL;
     struct ip_out_args ipoa;
     struct ip6_out_args ip6oa;
     int error = 0;
     u_int ip_version = 0;
     uint32_t af;
-    int flags = 0;;
-    int out_interface_index = 0;
+    int flags = 0;
     struct flowadv *adv = NULL;
     
-    uint32_t policy_id = 0;
-    
-    /* Find policy using ID in mbuf */
-    policy_id = data->m_pkthdr.ipsec_policy;
-	sp = key_getspbyid(policy_id);
+	// Make sure this packet isn't looping through the interface
+	if (necp_get_last_interface_index_from_packet(data) == interface->if_index) {
+		error = -1;
+		goto ipsec_output_err;
+	}
 	
-    if (sp == NULL) {
-        printf("ipsec_output: No policy specified, dropping packet.\n");
-        goto ipsec_output_err;
-    }
-    
-    /* Validate policy */
-    if (sp->ipsec_if != pcb->ipsec_ifp) {
-        printf("ipsec_output: Selected policy does not match %s interface.\n", pcb->ipsec_ifp->if_xname);
-        goto ipsec_output_err;
-    }
-    
+	// Mark the interface so NECP can evaluate tunnel policy
+	necp_mark_packet_from_interface(data, interface);
+	
     ip = mtod(data, struct ip *);
     ip_version = ip->ip_v;
-    
+	
     switch (ip_version) {
         case 4:
             /* Tap */
@@ -637,18 +652,18 @@ ipsec_output(ifnet_t	interface,
             /* Apply encryption */
             bzero(&ipsec_state, sizeof(ipsec_state));
             ipsec_state.m = data;
-            ipsec_state.dst = (struct sockaddr *)&sp->spidx.dst;
+            ipsec_state.dst = (struct sockaddr *)&ip->ip_dst;
             bzero(&ipsec_state.ro, sizeof(ipsec_state.ro));
 			
-            error = ipsec4_output(&ipsec_state, sp, 0);
+			error = ipsec4_interface_output(&ipsec_state, interface);
             data = ipsec_state.m;
             if (error || data == NULL) {
-                printf("ipsec_output: ipsec4_output error.\n");
+                printf("ipsec_output: ipsec4_output error %d.\n", error);
                 goto ipsec_output_err;
             }
             
-            /* Set traffic class to OAM, set flow */
-            m_set_service_class(data, MBUF_SC_OAM);
+            /* Set traffic class, set flow */
+            m_set_service_class(data, pcb->ipsec_output_service_class);
             data->m_pkthdr.pkt_flowsrc = FLOWSRC_IFNET;
             data->m_pkthdr.pkt_flowid = interface->if_flowhash;
             data->m_pkthdr.pkt_proto = ip->ip_p;
@@ -666,18 +681,14 @@ ipsec_output(ifnet_t	interface,
             /* Send to ip_output */
             bzero(&ro, sizeof(ro));
 			
-            flags = IP_OUTARGS |        /* Passing out args to specify interface */
-			IP_NOIPSEC;         /* To ensure the packet doesn't go through ipsec twice */
-			
-            if (sp->outgoing_if != NULL) {
-                out_interface_index = sp->outgoing_if->if_index;
-            }
+            flags = IP_OUTARGS |	/* Passing out args to specify interface */
+			IP_NOIPSEC;				/* To ensure the packet doesn't go through ipsec twice */
 			
             bzero(&ipoa, sizeof(ipoa));
             ipoa.ipoa_flowadv.code = 0;
             ipoa.ipoa_flags = IPOAF_SELECT_SRCIF | IPOAF_BOUND_SRCADDR;
-            if (out_interface_index) {
-                ipoa.ipoa_boundif = out_interface_index;
+            if (ipsec_state.outgoing_if) {
+                ipoa.ipoa_boundif = ipsec_state.outgoing_if;
                 ipoa.ipoa_flags |= IPOAF_BOUND_IF;
             }
             
@@ -696,29 +707,28 @@ ipsec_output(ifnet_t	interface,
             af = AF_INET6;
             bpf_tap_out(pcb->ipsec_ifp, DLT_NULL, data, &af, sizeof(af));
             
+            data = ipsec6_splithdr(data);
             ip6 = mtod(data, struct ip6_hdr *);
+			
+            bzero(&ipsec_state, sizeof(ipsec_state));
+            ipsec_state.m = data;
+            ipsec_state.dst = (struct sockaddr *)&ip6->ip6_dst;
+            bzero(&ipsec_state.ro, sizeof(ipsec_state.ro));
             
-            u_char *nexthdrp = &ip6->ip6_nxt;
-            struct mbuf *mprev = data;
-            
-            int needipsectun = 0;
-            error = ipsec6_output_trans(&ipsec_state, nexthdrp, mprev, sp, flags, &needipsectun);
-            if (needipsectun) {
-                error = ipsec6_output_tunnel(&ipsec_state, sp, flags);
-                if (ipsec_state.tunneled == 4)	/* tunneled in IPv4 - packet is gone */
-                    goto done;
-            }
+            error = ipsec6_interface_output(&ipsec_state, interface, &ip6->ip6_nxt, ipsec_state.m);
+            if (error == 0 && ipsec_state.tunneled == 4)	/* tunneled in IPv4 - packet is gone */
+				goto done;
             data = ipsec_state.m;
             if (error || data == NULL) {
-                printf("ipsec_output: ipsec6_output error.\n");
+                printf("ipsec_output: ipsec6_output error %d.\n", error);
                 goto ipsec_output_err;
             }
             
-            /* Set traffic class to OAM, set flow */
-            m_set_service_class(data, MBUF_SC_OAM);
+            /* Set traffic class, set flow */
+            m_set_service_class(data, pcb->ipsec_output_service_class);
             data->m_pkthdr.pkt_flowsrc = FLOWSRC_IFNET;
             data->m_pkthdr.pkt_flowid = interface->if_flowhash;
-            data->m_pkthdr.pkt_proto = ip->ip_p;
+            data->m_pkthdr.pkt_proto = ip6->ip6_nxt;
             data->m_pkthdr.pkt_flags = (PKTF_FLOW_ID | PKTF_FLOW_ADV | PKTF_FLOW_LOCALSRC);
             
             /* Increment statistics */
@@ -730,15 +740,11 @@ ipsec_output(ifnet_t	interface,
             
             flags = IPV6_OUTARGS;
             
-            if (sp->outgoing_if != NULL) {
-                out_interface_index = sp->outgoing_if->if_index;
-            }
-            
             bzero(&ip6oa, sizeof(ip6oa));
             ip6oa.ip6oa_flowadv.code = 0;
             ip6oa.ip6oa_flags = IPOAF_SELECT_SRCIF | IPOAF_BOUND_SRCADDR;
-            if (out_interface_index) {
-                ip6oa.ip6oa_boundif = out_interface_index;
+            if (ipsec_state.outgoing_if) {
+                ip6oa.ip6oa_boundif = ipsec_state.outgoing_if;
                 ip6oa.ip6oa_flags |= IPOAF_BOUND_IF;
             }
             
@@ -760,9 +766,6 @@ ipsec_output(ifnet_t	interface,
     }
 	
 done:
-    if (sp != NULL) {
-        key_freesp(sp, KEY_SADB_UNLOCKED);
-    }
     return error;
     
 ipsec_output_err:
@@ -774,13 +777,14 @@ ipsec_output_err:
 static void
 ipsec_start(ifnet_t	interface)
 {
-    mbuf_t data;
-    
-    for (;;) {
-        if (ifnet_dequeue(interface, &data) != 0)
-            break;
-        (void) ipsec_output(interface, data);
-    }
+	mbuf_t data;
+
+	for (;;) {
+		if (ifnet_dequeue(interface, &data) != 0)
+			break;
+		if (ipsec_output(interface, data) != 0)
+			break;
+	}
 }
 
 /* Network Interface functions */
@@ -880,11 +884,22 @@ ipsec_detached(
 /* Protocol Handlers */
 
 static errno_t
-ipsec_proto_input(__unused ifnet_t	interface,
+ipsec_proto_input(ifnet_t interface,
 				  protocol_family_t	protocol,
-				  mbuf_t				m,
-				  __unused char		*frame_header)
+				  mbuf_t m,
+				  __unused char *frame_header)
 {
+	struct ip *ip;
+	uint32_t af = 0;
+	ip = mtod(m, struct ip *);
+	if (ip->ip_v == 4)
+		af = AF_INET;
+	else if (ip->ip_v == 6)
+		af = AF_INET6;
+	
+	mbuf_pkthdr_setrcvif(m, interface);
+	bpf_tap_in(interface, DLT_NULL, m, &af, sizeof(af));
+	
 	if (proto_input(protocol, m) != 0)
 		m_freem(m);
 	
@@ -923,4 +938,39 @@ ipsec_attach_proto(ifnet_t				interface,
 	}
 	
 	return result;
+}
+
+errno_t
+ipsec_inject_inbound_packet(ifnet_t	interface,
+							mbuf_t packet)
+{
+	errno_t error;
+	protocol_family_t protocol;
+	if ((error = ipsec_demux(interface, packet, NULL, &protocol)) != 0) {
+		return error;
+	}
+	
+	return ipsec_proto_input(interface, protocol, packet, NULL);
+}
+
+void
+ipsec_set_pkthdr_for_interface(ifnet_t interface, mbuf_t packet, int family)
+{
+	if (packet != NULL && interface != NULL) {
+		struct ipsec_pcb *pcb = ifnet_softc(interface);
+		if (pcb != NULL) {
+			/* Set traffic class, set flow */
+			m_set_service_class(packet, pcb->ipsec_output_service_class);
+			packet->m_pkthdr.pkt_flowsrc = FLOWSRC_IFNET;
+			packet->m_pkthdr.pkt_flowid = interface->if_flowhash;
+			if (family == AF_INET) {
+				struct ip *ip = mtod(packet, struct ip *);
+				packet->m_pkthdr.pkt_proto = ip->ip_p;
+			} else if (family == AF_INET) {
+				struct ip6_hdr *ip6 = mtod(packet, struct ip6_hdr *);
+				packet->m_pkthdr.pkt_proto = ip6->ip6_nxt;
+			}
+			packet->m_pkthdr.pkt_flags = (PKTF_FLOW_ID | PKTF_FLOW_ADV | PKTF_FLOW_LOCALSRC);
+		}
+	}
 }

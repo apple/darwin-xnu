@@ -66,8 +66,10 @@ bool OSDictionary::initWithCapacity(unsigned int inCapacity)
     if (!super::init())
         return false;
 
-    int size = inCapacity * sizeof(dictEntry);
+    if (inCapacity > (UINT_MAX / sizeof(dictEntry)))
+        return false;
 
+    unsigned int size = inCapacity * sizeof(dictEntry);
 //fOptions |= kSort;
 
     dictionary = (dictEntry *) kalloc(size);
@@ -276,15 +278,20 @@ unsigned int OSDictionary::setCapacityIncrement(unsigned int increment)
 unsigned int OSDictionary::ensureCapacity(unsigned int newCapacity)
 {
     dictEntry *newDict;
-    int oldSize, newSize;
+    unsigned int finalCapacity, oldSize, newSize;
 
     if (newCapacity <= capacity)
         return capacity;
 
     // round up
-    newCapacity = (((newCapacity - 1) / capacityIncrement) + 1)
+    finalCapacity = (((newCapacity - 1) / capacityIncrement) + 1)
                 * capacityIncrement;
-    newSize = sizeof(dictEntry) * newCapacity;
+
+    // integer overflow check
+    if (finalCapacity < newCapacity || (finalCapacity > (UINT_MAX / sizeof(dictEntry))))
+        return capacity;
+    
+    newSize = sizeof(dictEntry) * finalCapacity;
 
     newDict = (dictEntry *) kalloc(newSize);
     if (newDict) {
@@ -297,7 +304,7 @@ unsigned int OSDictionary::ensureCapacity(unsigned int newCapacity)
         kfree(dictionary, oldSize);
 
         dictionary = newDict;
-        capacity = newCapacity;
+        capacity = finalCapacity;
     }
 
     return capacity;

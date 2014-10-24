@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1998-2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 1998-2014 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -41,6 +41,8 @@ HISTORY
 #include <IOKit/IOEventSource.h>
 
 class IOService;
+
+struct IOInterruptAccountingData;
 
 /*! @class IOInterruptEventSource : public IOEventSource
     @abstract Event source for interrupt delivery to work-loop based drivers.
@@ -96,7 +98,9 @@ protected:
 /*! @struct ExpansionData
     @discussion This structure will be used to expand the capablilties of the IOWorkLoop in the future.
     */    
-    struct ExpansionData { };
+    struct ExpansionData {
+        IOInterruptAccountingData * statistics;
+    };
 
 /*! @var reserved
     Reserved for future use.  (Internal use only)  */
@@ -203,6 +207,7 @@ state when checkForWork is called. */
 
 private:
     IOReturn registerInterruptHandler(IOService *inProvider, int inIntIndex);
+    void unregisterInterruptHandler(IOService *inProvider, int inIntIndex);
 
 private:
     OSMetaClassDeclareReservedUnused(IOInterruptEventSource, 0);

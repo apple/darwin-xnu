@@ -76,8 +76,9 @@
 
 #include <mach/kern_return.h>
 #include <mach/message.h>
-#include <kern/lock.h>
+#include <kern/locks.h>
 #include <kern/macro_help.h>
+#include <kern/assert.h>
 #include <kern/zalloc.h>
 #include <ipc/ipc_types.h>
 #include <libkern/OSAtomic.h>

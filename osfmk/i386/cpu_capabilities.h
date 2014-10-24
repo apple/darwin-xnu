@@ -193,6 +193,10 @@ int _NumCPUs( void )
 #define _COMM_PAGE_GTOD_GENERATION	(_COMM_PAGE_START_ADDRESS+0x06c)	/* used by gettimeofday() */
 #define _COMM_PAGE_GTOD_NS_BASE		(_COMM_PAGE_START_ADDRESS+0x070)	/* used by gettimeofday() */
 #define _COMM_PAGE_GTOD_SEC_BASE	(_COMM_PAGE_START_ADDRESS+0x078)	/* used by gettimeofday() */
+/* NOTE: APPROX_TIME must be aligned to 64-byte cache line size: */
+#define _COMM_PAGE_APPROX_TIME		(_COMM_PAGE_START_ADDRESS+0x080)	/* used by mach_approximate_time() */
+#define _COMM_PAGE_APPROX_TIME_SUPPORTED (_COMM_PAGE_START_ADDRESS+0x088)	/* used by mach_approximate_time() */
+
 
 #define _COMM_PAGE_END			(_COMM_PAGE_START_ADDRESS+0xfff)	/* end of common page */
 

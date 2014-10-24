@@ -17,7 +17,6 @@
  */
 int sema_tests( void * the_argp ) 
 {
-#if !TARGET_OS_EMBEDDED
 	int				my_err, i;
 	int				my_sem_id = -1;
  	union semun		my_sem_union;
@@ -94,10 +93,6 @@ test_passed_exit:
 		semctl( my_sem_id, 0, IPC_RMID, my_sem_union );
 	}
 	return( my_err );
-#else
-	printf( "\t--> Not supported on EMBEDDED TARGET\n" );
-	return 0;
-#endif
 }
 
 

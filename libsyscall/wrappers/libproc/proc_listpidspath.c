@@ -211,33 +211,55 @@ check_process_vnodes(fdOpenInfoRef info, int pid)
 static int
 check_process_text(fdOpenInfoRef info, int pid)
 {
-	uint64_t	a	= 0;
 	int		status;
+	int		buf_used;
+	struct proc_regionwithpathinfo	rwpi;
 
-	while (1) {	// for all memory regions
-		int				buf_used;
-		struct proc_regionwithpathinfo	rwpi;
+	if (info->flags & PROC_LISTPIDSPATH_PATH_IS_VOLUME) {
 
-		// processing next address
-		buf_used = proc_pidinfo(pid, PROC_PIDREGIONPATHINFO, a, &rwpi, sizeof(rwpi));
+		// ask for first memory region that matches mountpoint
+		buf_used = proc_pidinfo(pid, PROC_PIDREGIONPATHINFO3, info->match_stat.st_dev, &rwpi, sizeof(rwpi));
 		if (buf_used <= 0) {
 			if ((errno == ESRCH) || (errno == EINVAL)) {
 				// if no more text information is available for this process.
-				break;
+				return 0;
 			}
 			return -1;
 		} else if (buf_used < sizeof(rwpi)) {
 			// if we didn't get enough information
 			return -1;
 		}
-
+		
 		status = check_file(info, &rwpi.prp_vip.vip_vi.vi_stat);
 		if (status != 0) {
 			// if error or match
 			return status;
 		}
-
-		a = rwpi.prp_prinfo.pri_address + rwpi.prp_prinfo.pri_size;
+	} else {
+		uint64_t	a	= 0;
+		
+		while (1) {	// for all memory regions
+			// processing next address
+			buf_used = proc_pidinfo(pid, PROC_PIDREGIONPATHINFO2, a, &rwpi, sizeof(rwpi));
+			if (buf_used <= 0) {
+				if ((errno == ESRCH) || (errno == EINVAL)) {
+					// if no more text information is available for this process.
+					break;
+				}
+				return -1;
+			} else if (buf_used < sizeof(rwpi)) {
+				// if we didn't get enough information
+				return -1;
+			}
+			
+			status = check_file(info, &rwpi.prp_vip.vip_vi.vi_stat);
+			if (status != 0) {
+				// if error or match
+				return status;
+			}
+			
+			a = rwpi.prp_prinfo.pri_address + rwpi.prp_prinfo.pri_size;
+		}
 	}
 
 	return 0;
@@ -283,18 +305,18 @@ check_process_fds(fdOpenInfoRef info, int pid)
 			}
 		}
 
-		buf_used = proc_pidinfo(pid, PROC_PIDLISTFDS, 0, info->fds, info->fds_size);
+		buf_used = proc_pidinfo(pid, PROC_PIDLISTFDS, 0, info->fds, (int)info->fds_size);
 		if (buf_used <= 0) {
 			return -1;
 		}
 
 		if ((buf_used + sizeof(struct proc_fdinfo)) >= info->fds_size) {
 			// if not enough room in the buffer for an extra fd
-			buf_used = info->fds_size + sizeof(struct proc_fdinfo);
+			buf_used = (int)(info->fds_size + sizeof(struct proc_fdinfo));
 			continue;
 		}
 
-		info->fds_count = buf_used / sizeof(struct proc_fdinfo);
+		info->fds_count = (int)(buf_used / sizeof(struct proc_fdinfo));
 		break;
 	}
 
@@ -399,14 +421,14 @@ check_process_threads(fdOpenInfoRef info, int pid)
 				}
 			}
 
-			buf_used = proc_pidinfo(pid, PROC_PIDLISTTHREADS, 0, info->threads, info->thr_size);
+			buf_used = proc_pidinfo(pid, PROC_PIDLISTTHREADS, 0, info->threads, (int)info->thr_size);
 			if (buf_used <= 0) {
 				return -1;
 			}
 
 			if ((buf_used + sizeof(uint64_t)) >= info->thr_size) {
 				// if not enough room in the buffer for an extra thread
-				buf_used = info->thr_size + sizeof(uint64_t);
+				buf_used = (int)(info->thr_size + sizeof(uint64_t));
 				continue;
 			}
 
@@ -443,10 +465,10 @@ check_process_threads(fdOpenInfoRef info, int pid)
 
 
 /*
- * check_process
- *   check [process] current working and root directories
- *   check [process] text (memory)
+ * check_process_phase1
+ *   check [process] process-wide current working and root directories
  *   check [process] open file descriptors
+ *   check [process] per-thread current working and root directories
  *
  *   in  : pid
  *   out : -1 if error
@@ -454,19 +476,12 @@ check_process_threads(fdOpenInfoRef info, int pid)
  *          1 if match
  */
 static int
-check_process(fdOpenInfoRef info, int pid)
+check_process_phase1(fdOpenInfoRef info, int pid)
 {
 	int	status;
 
 	// check root and current working directory
 	status = check_process_vnodes(info, pid);
-	if (status != 0) {
-		// if error or match
-		return status;
-	}
-
-	// check process text (memory)
-	status = check_process_text(info, pid);
 	if (status != 0) {
 		// if error or match
 		return status;
@@ -489,6 +504,29 @@ check_process(fdOpenInfoRef info, int pid)
 	return 0;
 }
 
+/*
+ * check_process_phase2
+ *   check [process] text (memory)
+ *
+ *   in  : pid
+ *   out : -1 if error
+ *          0 if no match
+ *          1 if match
+ */
+static int
+check_process_phase2(fdOpenInfoRef info, int pid)
+{
+	int	status;
+
+	// check process text (memory)
+	status = check_process_text(info, pid);
+	if (status != 0) {
+		// if error or match
+		return status;
+	}
+
+	return 0;
+}
 
 /*
  * proc_listpidspath
@@ -559,14 +597,14 @@ proc_listpidspath(uint32_t	type,
 			}
 		}
 
-		buf_used = proc_listpids(type, typeinfo, info->pids, info->pids_size);
+		buf_used = proc_listpids(type, typeinfo, info->pids, (int)info->pids_size);
 		if (buf_used <= 0) {
 			goto done;
 		}
 
 		if ((buf_used + sizeof(int)) >= info->pids_size) {
 			// if not enough room in the buffer for an extra pid
-			buf_used = info->pids_size + sizeof(int);
+			buf_used = (int)(info->pids_size + sizeof(int));
 			continue;
 		}
 
@@ -578,15 +616,46 @@ proc_listpidspath(uint32_t	type,
 	buf_used = 0;
 	for (i = info->pids_count - 1; i >= 0; i--) {
 		int	pid;
-		int	status;
+		int	pstatus;
 
 		pid = info->pids[i];
 		if (pid == 0) {
 			continue;
 		}
 
-		status = check_process(info, pid);
-		if (status != 1) {
+		pstatus = check_process_phase1(info, pid);
+		if (pstatus != 1) {
+			// if not a match
+			continue;
+		}
+
+		*buf_next++ = pid;
+		buf_used += sizeof(int);
+
+		if (buf_used >= buffersize) {
+			// if we have filled the buffer
+			break;
+		}
+	}
+
+	if (buf_used >= buffersize) {
+		// if we have filled the buffer
+		status = buf_used;
+		goto done;
+	}
+
+	// do a more expensive search if we still have buffer space
+	for (i = info->pids_count - 1; i >= 0; i--) {
+		int	pid;
+		int	pstatus;
+
+		pid = info->pids[i];
+		if (pid == 0) {
+			continue;
+		}
+
+		pstatus = check_process_phase2(info, pid);
+		if (pstatus != 1) {
 			// if not a match
 			continue;
 		}

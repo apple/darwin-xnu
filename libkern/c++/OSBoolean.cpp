@@ -110,5 +110,7 @@ bool OSBoolean::isEqualTo(const OSMetaClassBase *obj) const
 
 bool OSBoolean::serialize(OSSerialize *s) const
 {
+    if (s->binary) return s->binarySerialize(this);
+
     return s->addString(value ? "<true/>" : "<false/>");
 }

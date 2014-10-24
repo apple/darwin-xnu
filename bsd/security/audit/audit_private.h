@@ -389,6 +389,10 @@ au_event_t	 audit_ctlname_to_sysctlevent(int name[], uint64_t valid_arg);
 au_event_t	 audit_flags_and_error_to_openevent(int oflags, int error);
 au_event_t	 audit_flags_and_error_to_openextendedevent(int oflags,
 		    int error);
+au_event_t	 audit_flags_and_error_to_openatevent(int oflags,
+		    int error);
+au_event_t	 audit_flags_and_error_to_openbyidevent(int oflags,
+		    int error);
 au_event_t	 audit_msgctl_to_event(int cmd);
 au_event_t	 audit_semctl_to_event(int cmr);
 int		 audit_canon_path(struct vnode *cwd_vp, char *path,

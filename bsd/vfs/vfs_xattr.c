@@ -56,9 +56,6 @@
 #include <security/mac_framework.h>
 #endif
 
-#if !CONFIG_APPLEDOUBLE
-#define	PANIC_ON_NOAPPLEDOUBLE	1
-#endif
 
 #if NAMEDSTREAMS
 
@@ -3337,48 +3334,34 @@ unlock_xattrfile(vnode_t xvp, vfs_context_t context)
 
 #else /* CONFIG_APPLEDOUBLE */
 
-#undef panic
-#define	panic	printf
 
 static int
-default_getxattr(vnode_t vp, const char *name,
+default_getxattr(__unused vnode_t vp, __unused const char *name,
     __unused uio_t uio, __unused size_t *size, __unused int options,
     __unused vfs_context_t context)
 {
-#if PANIC_ON_NOAPPLEDOUBLE
-	panic("%s: no AppleDouble support, vp %p name %s", __func__, vp, name);
-#endif
 	return (ENOTSUP);
 }
 
 static int
-default_setxattr(vnode_t vp, const char *name,
+default_setxattr(__unused vnode_t vp, __unused const char *name,
     __unused uio_t uio, __unused int options, __unused vfs_context_t context)
 {
-#if PANIC_ON_NOAPPLEDOUBLE
-	panic("%s: no AppleDouble support, vp %p name %s", __func__, vp, name);
-#endif
 	return (ENOTSUP);
 }
 
 static int
-default_listxattr(vnode_t vp,
+default_listxattr(__unused vnode_t vp,
     __unused uio_t uio, __unused size_t *size, __unused int options,
     __unused vfs_context_t context)
 {
-#if PANIC_ON_NOAPPLEDOUBLE
-	panic("%s: no AppleDouble support, vp %p name %s", __func__, vp, ".");
-#endif
 	return (ENOTSUP);
 }
 
 static int
-default_removexattr(vnode_t vp, const char *name,
+default_removexattr(__unused vnode_t vp, __unused const char *name,
    __unused int options, __unused vfs_context_t context)
 {
-#if PANIC_ON_NOAPPLEDOUBLE
-	panic("%s: no AppleDouble support, vp %p name %s", __func__, vp, name);
-#endif
 	return (ENOTSUP);
 }
 

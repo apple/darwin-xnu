@@ -61,7 +61,7 @@
 
 #include <mach/port.h>
 
-#if defined(__x86_64__)
+#if defined(__x86_64__) || defined(__arm64__)
 extern mach_port_t			ux_exception_port;
 #else
 extern mach_port_name_t			ux_exception_port;

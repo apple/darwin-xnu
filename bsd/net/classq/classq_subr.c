@@ -115,6 +115,14 @@ ifclassq_setup(struct ifnet *ifp, u_int32_t sflags, boolean_t reuse)
 			maxlen = if_sndq_maxlen;
 		IFCQ_SET_MAXLEN(ifq, maxlen);
 
+		if (IFCQ_MAXLEN(ifq) != if_sndq_maxlen &&
+		    IFCQ_TARGET_QDELAY(ifq) == 0) {
+			/*
+			 * Choose static queues because the interface has
+			 * maximum queue size set
+			 */
+			sflags &= ~PKTSCHEDF_QALG_DELAYBASED;
+		}
 		ifq->ifcq_sflags = sflags;
 		err = ifclassq_pktsched_setup(ifq);
 		if (err == 0)

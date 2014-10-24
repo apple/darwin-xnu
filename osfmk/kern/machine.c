@@ -79,7 +79,6 @@
 #include <kern/cpu_data.h>
 #include <kern/ipc_host.h>
 #include <kern/host.h>
-#include <kern/lock.h>
 #include <kern/machine.h>
 #include <kern/misc_protos.h>
 #include <kern/processor.h>
@@ -94,6 +93,10 @@
 #include <IOKit/IOHibernatePrivate.h>
 #endif
 #include <IOKit/IOPlatformExpert.h>
+
+#if CONFIG_DTRACE
+extern void (*dtrace_cpu_state_changed_hook)(int, boolean_t);
+#endif
 
 /*
  *	Exported variables:
@@ -122,10 +125,7 @@ processor_up(
 	init_ast_check(processor);
 	pset = processor->processor_set;
 	pset_lock(pset);
-	if (++pset->online_processor_count == 1) {
-		pset_pri_init_hint(pset, processor);
-		pset_count_init_hint(pset, processor);
-	}
+	++pset->online_processor_count;
 	enqueue_tail(&pset->active_queue, (queue_entry_t)processor);
 	processor->state = PROCESSOR_RUNNING;
 	(void)hw_atomic_add(&processor_avail_count, 1);
@@ -133,7 +133,13 @@ processor_up(
 	pset_unlock(pset);
 	ml_cpu_up();
 	splx(s);
+
+#if CONFIG_DTRACE
+	if (dtrace_cpu_state_changed_hook)
+		(*dtrace_cpu_state_changed_hook)(processor->cpu_id, TRUE);
+#endif
 }
+#include <atm/atm_internal.h>
 
 kern_return_t
 host_reboot(
@@ -204,7 +210,9 @@ processor_shutdown(
 	 */
 	while (processor->state == PROCESSOR_DISPATCHING) {
 		pset_unlock(pset);
+		splx(s);
 		delay(1);
+		s = splsched();
 		pset_lock(pset);
 	}
 
@@ -255,6 +263,11 @@ processor_doshutdown(
 
 	assert(processor->state == PROCESSOR_SHUTDOWN);
 
+#if CONFIG_DTRACE
+	if (dtrace_cpu_state_changed_hook)
+		(*dtrace_cpu_state_changed_hook)(processor->cpu_id, FALSE);
+#endif
+
 	ml_cpu_down();
 
 #if HIBERNATION
@@ -267,10 +280,7 @@ processor_doshutdown(
 	pset = processor->processor_set;
 	pset_lock(pset);
 	processor->state = PROCESSOR_OFF_LINE;
-	if (--pset->online_processor_count == 0) {
-		pset_pri_init_hint(pset, PROCESSOR_NULL);
-		pset_count_init_hint(pset, PROCESSOR_NULL);
-	}
+	--pset->online_processor_count;
 	(void)hw_atomic_sub(&processor_avail_count, 1);
 	commpage_update_active_cpus();
 	SCHED(processor_queue_shutdown)(processor);

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2012 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2014 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -155,6 +155,8 @@ typedef enum {
 #define FG_WRMMSGQ	0x10 	/* wait for the fileglob to  be removed from msgqueue */
 #define FG_PORTMADE	0x20	/* a port was at some point created for this fileglob */
 #define FG_NOSIGPIPE	0x40	/* don't deliver SIGPIPE with EPIPE return */
+#define FG_OFF_LOCKED 	0x80	/* Used as a mutex for offset changes (for vnodes) */
+#define FG_OFF_LOCKWANT 0x100	/* Somebody's wating for the lock */
 
 struct fileglob {
 	LIST_ENTRY(fileglob) f_msglist;/* list of active files */
@@ -182,6 +184,7 @@ struct fileglob {
 	} *fg_ops;
 	off_t	fg_offset;
 	void 	*fg_data;		/* vnode or socket or SHM or semaphore */
+	void	*fg_vn_data;	/* Per fd vnode data, used for directories */
 	lck_mtx_t fg_lock;
 #if CONFIG_MACF
 	struct label *fg_label;  /* JMM - use the one in the cred? */
@@ -252,6 +255,8 @@ extern int fdgetf_noref(proc_t, int, struct fileproc **);
 extern struct fileproc *fileproc_alloc_init(void *crargs);
 extern void fileproc_free(struct fileproc *fp);
 extern void guarded_fileproc_free(struct fileproc *fp);
+extern void fg_vn_data_free(void *fgvndata);
+extern int nameiat(struct nameidata *ndp, int dirfd);
 __END_DECLS
 
 #endif /* __APPLE_API_UNSTABLE */

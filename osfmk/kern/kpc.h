@@ -29,7 +29,7 @@
 #ifndef __KERN_KPC_H__
 #define __KERN_KPC_H__
 
-/** kernel interfaces to KPC PMC infrastructure **/
+/* Kernel interfaces to KPC PMC infrastructure. */
 
 #include <machine/machine_kpc.h>
 
@@ -37,14 +37,20 @@
 #define KPC_CLASS_FIXED         (0)
 #define KPC_CLASS_CONFIGURABLE  (1)
 #define KPC_CLASS_POWER         (2)
+#define KPC_CLASS_RAWPMU        (3)
 
-#define KPC_CLASS_FIXED_MASK         (1<<KPC_CLASS_FIXED)
-#define KPC_CLASS_CONFIGURABLE_MASK  (1<<KPC_CLASS_CONFIGURABLE)
+#define KPC_CLASS_FIXED_MASK         (1u << KPC_CLASS_FIXED)
+#define KPC_CLASS_CONFIGURABLE_MASK  (1u << KPC_CLASS_CONFIGURABLE)
+#define KPC_CLASS_POWER_MASK         (1u << KPC_CLASS_POWER)
+#define KPC_CLASS_RAWPMU_MASK        (1u << KPC_CLASS_RAWPMU)
 
-#define KPC_ALL_CPUS (1 << 31)
+#define KPC_ALL_CPUS (1u << 31)
 
 /* bootstrap */
 extern void kpc_init(void);
+
+/* Architecture specific initialisation */
+extern void kpc_arch_init(void);
 
 /* Get the bitmask of available classes */
 extern uint32_t kpc_get_classes(void);
@@ -105,13 +111,42 @@ extern void kpc_thread_ast_handler( thread_t thread );
 /* context switch accounting between two threads */
 extern void kpc_switch_context( thread_t old, thread_t new );
 
+/* acquire/release the counters used by the Power Manager */
+extern int kpc_force_all_ctrs( task_t task, int val );
+extern int kpc_get_force_all_ctrs( void );
+
+/* arch-specific routine for acquire/release the counters used by the Power Manager */
+extern int kpc_force_all_ctrs_arch( task_t task, int val );
+
+extern int kpc_set_sw_inc( uint32_t mask );
+
 /* disable/enable whitelist of allowed events */
 extern int kpc_get_whitelist_disabled( void );
 extern int kpc_disable_whitelist( int val );
 
-/* allow PM to register a handler to disable it's use of perf counters */
+/*
+ * Allow the Power Manager to register for KPC notification when the counters
+ * are acquired/released by a task. The argument is equal to true if the Power
+ * Manager can use the counters, otherwise it is equal to false.
+ */
 extern boolean_t kpc_register_pm_handler(void (*handler)(boolean_t));
 
+/*
+ * Is the PMU used by both the power manager and userspace?
+ *
+ * This is true when the power manager has been registered. It disables certain
+ * counter configurations (like RAWPMU) that are incompatible with sharing
+ * counters.
+ */
+extern boolean_t kpc_multiple_clients(void);
+
+/*
+ * Is kpc controlling the fixed counters?
+ *
+ * This returns false when the power manager has requested custom configuration
+ * control.
+ */
+extern boolean_t kpc_controls_fixed_counters(void);
 
 extern void kpc_idle(void);
 extern void kpc_idle_exit(void);
@@ -134,8 +169,10 @@ extern uint32_t kpc_fixed_count(void);
 extern uint32_t kpc_configurable_count(void);
 extern uint32_t kpc_fixed_config_count(void);
 extern uint32_t kpc_configurable_config_count(void);
+extern uint32_t kpc_rawpmu_config_count(void);
 extern int kpc_get_fixed_config(kpc_config_t *configv);
 extern int kpc_get_configurable_config(kpc_config_t *configv);
+extern int kpc_get_rawpmu_config(kpc_config_t *configv);
 extern uint64_t kpc_fixed_max(void);
 extern uint64_t kpc_configurable_max(void);
 extern int kpc_set_config_arch(struct kpc_config_remote *mp_config);

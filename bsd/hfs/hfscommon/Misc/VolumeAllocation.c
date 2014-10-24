@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2013 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2014 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -526,21 +526,46 @@ static int hfs_track_unmap_blocks (struct hfsmount *hfsmp, u_int32_t start,
  ;________________________________________________________________________________
  */
 
-static int hfs_issue_unmap (struct hfsmount *hfsmp, struct jnl_trim_list *list) {
+static int hfs_issue_unmap (struct hfsmount *hfsmp, struct jnl_trim_list *list) 
+{
 	dk_unmap_t unmap;
 	int error = 0;
+
+	if (hfs_kdebug_allocation & HFSDBG_UNMAP_ENABLED) {
+		KERNEL_DEBUG_CONSTANT(HFSDBG_UNMAP_SCAN_TRIM | DBG_FUNC_START, hfsmp->hfs_raw_dev, 0, 0, 0, 0);
+	}
 
 	if (list->extent_count > 0) {
 		bzero(&unmap, sizeof(unmap));
 		unmap.extents = list->extents;
 		unmap.extentsCount = list->extent_count;
 
+		if (hfs_kdebug_allocation & HFSDBG_UNMAP_ENABLED) {
+			KERNEL_DEBUG_CONSTANT(HFSDBG_UNMAP_SCAN_TRIM | DBG_FUNC_NONE, hfsmp->hfs_raw_dev, unmap.extentsCount, 0, 0, 0);
+		}
+	
+#if CONFIG_PROTECT
+		/* 
+		 * If we have not yet completed the first scan through the bitmap, then
+		 * optionally inform the block driver below us that this is an initialization
+		 * TRIM scan, if it can deal with this information.
+		 */
+		if ((hfsmp->scan_var & HFS_ALLOCATOR_SCAN_COMPLETED) == 0) {
+			unmap.options |= _DK_UNMAP_INITIALIZE;	
+		}
+#endif
 		/* Issue a TRIM and flush them out */
 		error = VNOP_IOCTL(hfsmp->hfs_devvp, DKIOCUNMAP, (caddr_t)&unmap, 0, vfs_context_kernel());
 
 		bzero (list->extents, (list->allocated_count * sizeof(dk_extent_t)));
+		bzero (&unmap, sizeof(unmap));
 		list->extent_count = 0;
 	}
+
+	if (hfs_kdebug_allocation & HFSDBG_UNMAP_ENABLED) {
+		KERNEL_DEBUG_CONSTANT(HFSDBG_UNMAP_SCAN_TRIM | DBG_FUNC_END, error, hfsmp->hfs_raw_dev, 0, 0, 0);
+	}
+
 	return error;
 }
 
@@ -727,6 +752,15 @@ CheckUnmappedBytes (struct hfsmount *hfsmp, uint64_t blockno, uint64_t numblocks
  ;				up-to-date as possible with which blocks are unmapped.
  ;				Additionally build up the summary table as needed.
  ;
+ ;				This function reads the bitmap in large block size 
+ ; 				(up to 1MB) unlink the runtime which reads the bitmap 
+ ; 				in 4K block size.  So if this function is being called 
+ ;				after the volume is mounted and actively modified, the 
+ ;				caller needs to invalidate all of the existing buffers 
+ ;				associated with the bitmap vnode before calling this 
+ ; 				function.  If the buffers are not invalidated, it can 
+ ;				cause but_t collision and potential data corruption.
+ ;  
  ; Input Arguments:
  ;	hfsmp			- The volume containing the allocation blocks.
  ;________________________________________________________________________________
@@ -738,6 +772,10 @@ u_int32_t ScanUnmapBlocks (struct hfsmount *hfsmp)
 	u_int32_t blocks_scanned = 0;
 	int error = 0;
 	struct jnl_trim_list trimlist;
+
+	if (hfs_kdebug_allocation & HFSDBG_UNMAP_ENABLED) {
+		KERNEL_DEBUG_CONSTANT(HFSDBG_UNMAP_SCAN | DBG_FUNC_START, hfsmp->hfs_raw_dev, 0, 0, 0, 0);
+	}
 
 	/*
 	 *struct jnl_trim_list {
@@ -806,6 +844,10 @@ u_int32_t ScanUnmapBlocks (struct hfsmount *hfsmp)
 		printf("HFS: Summary validation complete on %s\n", hfsmp->vcbVN);
 	}
 #endif
+
+	if (hfs_kdebug_allocation & HFSDBG_UNMAP_ENABLED) {
+		KERNEL_DEBUG_CONSTANT(HFSDBG_UNMAP_SCAN | DBG_FUNC_END, error, hfsmp->hfs_raw_dev, 0, 0, 0);
+	}
 
 	return error;
 }
@@ -2190,7 +2232,7 @@ static OSErr BlockAllocateKnown(
 	if ((*actualStartBlock + *actualNumBlocks) > vcb->allocLimit) 
 	{
 		printf ("hfs: BlockAllocateKnown() found allocation overflow on \"%s\"", vcb->vcbVN);
-		hfs_mark_volume_inconsistent(vcb);
+		hfs_mark_inconsistent(vcb, HFS_INCONSISTENCY_DETECTED);
 		*actualStartBlock = 0;
 		*actualNumBlocks = 0;
 		err = EIO;
@@ -2601,7 +2643,7 @@ OSErr BlockMarkFreeInternal(
 		}
 
 		printf ("hfs: BlockMarkFreeInternal() trying to free non-existent blocks starting at %u (numBlock=%u) on volume %s\n", startingBlock, numBlocks, vcb->vcbVN);
-		hfs_mark_volume_inconsistent(vcb);
+		hfs_mark_inconsistent(vcb, HFS_INCONSISTENCY_DETECTED);
 		err = EIO;
 		goto Exit;
 	}
@@ -2788,7 +2830,7 @@ Corruption:
 	panic("hfs: BlockMarkFreeInternal: blocks not allocated!");
 #else
 	printf ("hfs: BlockMarkFreeInternal() trying to free unallocated blocks on volume %s\n", vcb->vcbVN);
-	hfs_mark_volume_inconsistent(vcb);
+	hfs_mark_inconsistent(vcb, HFS_INCONSISTENCY_DETECTED);
 	err = EIO;
 	goto Exit;
 #endif

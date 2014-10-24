@@ -336,6 +336,13 @@ struct	proc {
 	uint32_t	p_pcaction;	/* action  for process control on starvation */
 	uint8_t p_uuid[16];		/* from LC_UUID load command */
 
+	/* 
+	 * CPU type and subtype of binary slice executed in
+	 * this process.  Protected by proc lock.
+	 */
+	cpu_type_t	p_cputype;
+	cpu_subtype_t	p_cpusubtype;
+
 /* End area that is copied on creation. */
 /* XXXXXXXXXXXXX End of BCOPY'ed on fork (AIOLOCK)XXXXXXXXXXXXXXXX */
 #define	p_endcopy	p_aio_total_count
@@ -353,14 +360,16 @@ struct	proc {
 
 	/* DEPRECATE following field  */
 	u_short	p_acflag;	/* Accounting flags. */
-	volatile u_short p_vfs_iopolicy;	/* VFS iopolicy flags. */
+	volatile u_short p_vfs_iopolicy;	/* VFS iopolicy flags. (atomic bit ops) */
 
 	struct lctx *p_lctx;		/* Pointer to login context. */
 	LIST_ENTRY(proc) p_lclist;	/* List of processes in lctx. */
 	user_addr_t 	p_threadstart;		/* pthread start fn */
 	user_addr_t 	p_wqthread;		/* pthread workqueue fn */
 	int 	p_pthsize;			/* pthread size */
+	uint32_t	p_pth_tsd_offset;	/* offset from pthread_t to TSD for new threads */
 	user_addr_t	p_targconc;		/* target concurrency ptr */
+	user_addr_t	p_stack_addr_hint;	/* stack allocation hint for wq threads */
 	void * 	p_wqptr;			/* workq ptr */
 	int 	p_wqsize;			/* allocated size */
 	boolean_t       p_wqiniting;            /* semaphore to serialze wq_open */
@@ -393,8 +402,8 @@ struct	proc {
 	uint32_t          p_memstat_state;              /* state */
 	int32_t           p_memstat_effectivepriority;  /* priority after transaction state accounted for */
 	int32_t           p_memstat_requestedpriority;  /* active priority */
-	uint64_t          p_memstat_userdata;           /* user state */
 	uint32_t          p_memstat_dirty;              /* dirty state */
+	uint64_t          p_memstat_userdata;           /* user state */
 	uint64_t          p_memstat_idledeadline;       /* time at which process became clean */
 #if CONFIG_JETSAM
 	int32_t           p_memstat_memlimit;           /* cached memory limit */
@@ -464,6 +473,7 @@ struct	proc {
 #define P_JETSAM_PID		0x30000000	/* jetsam: pid */
 #define P_JETSAM_IDLEEXIT	0x40000000	/* jetsam: idle exit */
 #define P_JETSAM_VNODE		0x50000000	/* jetsam: vnode kill */
+#define P_JETSAM_FCTHRASHING	0x60000000	/* jetsam: lowest jetsam priority proc, killed due to filecache thrashing */
 #define P_JETSAM_MASK		0x70000000	/* jetsam type mask */
 
 /* Process control state for resource starvation */
@@ -721,14 +731,14 @@ extern int	msleep0(void *chan, lck_mtx_t *mtx, int pri, const char *wmesg, int t
 extern void	vfork_return(struct proc *child, int32_t *retval, int rval);
 extern int	exit1(struct proc *, int, int *);
 extern int	exit1_internal(struct proc *, int, int *, boolean_t, boolean_t, int);
-extern int	fork1(proc_t, thread_t *, int);
+extern int	fork1(proc_t, thread_t *, int, coalition_t);
 extern void vfork_exit_internal(struct proc *p, int rv, int forced);
 extern void proc_reparentlocked(struct proc *child, struct proc * newparent, int cansignal, int locked);
 extern int pgrp_iterate(struct pgrp * pgrp, int flags, int (*callout)(proc_t , void *), void *arg, int (*filterfn)(proc_t , void *), void *filterarg);
 extern int proc_iterate(int flags, int (*callout)(proc_t , void *), void *arg, int (*filterfn)(proc_t , void *), void *filterarg);
 extern int proc_rebootscan(int (*callout)(proc_t , void *), void *arg, int (*filterfn)(proc_t , void *), void *filterarg);
 extern int proc_childrenwalk(proc_t p, int (*callout)(proc_t , void *), void *arg);
-extern proc_t proc_findinternal(int pid, int funneled);
+extern proc_t proc_findinternal(int pid, int locked);
 extern proc_t proc_findthread(thread_t thread);
 extern void proc_refdrain(proc_t);
 extern void proc_childdrainlocked(proc_t);
@@ -757,7 +767,7 @@ int     itimerfix(struct timeval *tv);
 int     itimerdecr(struct proc * p, struct itimerval *itp, int usec);
 void proc_signalstart(struct proc *, int locked);
 void proc_signalend(struct proc *, int locked);
-int  proc_transstart(struct proc *, int locked);
+int  proc_transstart(struct proc *, int locked, int non_blocking);
 void proc_transcommit(struct proc *, int locked);
 void proc_transend(struct proc *, int locked);
 int  proc_transwait(struct proc *, int locked);
@@ -773,7 +783,7 @@ void proc_resetregister(proc_t p);
 thread_t proc_thread(proc_t);
 extern int proc_pendingsignals(proc_t, sigset_t);
 int proc_getpcontrol(int pid, int * pcontrolp);
-int proc_dopcontrol(proc_t p, void *unused_arg);
+int proc_dopcontrol(proc_t p);
 int proc_resetpcontrol(int pid);
 #if PSYNCH
 void pth_proc_hashinit(proc_t);

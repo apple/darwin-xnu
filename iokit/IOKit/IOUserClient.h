@@ -283,8 +283,14 @@ protected:
 
 public:
 
+    static IOReturn clientHasAuthorization( task_t task,
+                                            IOService * service );
+
     static IOReturn clientHasPrivilege( void * securityToken,
                                         const char * privilegeName );
+
+    static OSObject * copyClientEntitlement( task_t task,
+                                             const char * entitlement );
 
     /*!
         @function releaseAsyncReference64

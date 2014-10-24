@@ -71,10 +71,6 @@ subsystem
 #endif	/* KERNEL_SERVER */
 		     memory_object_control 2000;
 
-#ifdef	MACH_KERNEL
-#include <advisory_pageout.h>
-#endif	/* MACH_KERNEL */
-
 #include <mach/std_types.defs>
 #include <mach/mach_types.defs>
 

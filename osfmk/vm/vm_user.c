@@ -114,6 +114,7 @@
 #include <vm/memory_object.h>
 #include <vm/vm_pageout.h>
 #include <vm/vm_protos.h>
+#include <vm/vm_purgeable_internal.h>
 
 vm_size_t        upl_offset_to_pagelist = 0;
 
@@ -2025,6 +2026,13 @@ mach_make_memory_entry_64(
 				goto make_mem_done;
 			}
 			object->purgable = VM_PURGABLE_NONVOLATILE;
+			assert(object->vo_purgeable_owner == NULL);
+			assert(object->resident_page_count == 0);
+			assert(object->wired_page_count == 0);
+			vm_object_lock(object);
+			vm_purgeable_nonvolatile_enqueue(object,
+							 current_task());
+			vm_object_unlock(object);
 		}
 
 		/*
@@ -2059,6 +2067,7 @@ mach_make_memory_entry_64(
 		 * shadow objects either...
 		 */
 		object->copy_strategy = MEMORY_OBJECT_COPY_NONE;
+		object->true_share = TRUE;
 
 		user_entry->backing.object = object;
 		user_entry->internal = TRUE;
@@ -2416,13 +2425,14 @@ redo_lookup:
 							    VM_MAP_PAGE_MASK(target_map)));
 			vm_map_clip_end(target_map,
 					map_entry,
-					(vm_map_round_page(offset,
-							  VM_MAP_PAGE_MASK(target_map))
-					 + map_size));
+					(vm_map_round_page(offset + map_size,
+							   VM_MAP_PAGE_MASK(target_map))));
 			force_shadow = TRUE;
 
-			map_size = map_entry->vme_end - map_entry->vme_start;
-			total_size = map_size;
+			if ((map_entry->vme_end - offset) < map_size) {
+				map_size = map_entry->vme_end - offset;
+			}
+			total_size = map_entry->vme_end - map_entry->vme_start;
 
 			vm_map_lock_write_to_read(target_map);
 			vm_object_lock(object);
@@ -2468,7 +2478,9 @@ redo_lookup:
 					target_map = original_map;
 		            		goto redo_lookup;
 		   		}
+#if 00
 				vm_object_lock(object);
+#endif
 
 				/* 
 				 * JMM - We need to avoid coming here when the object
@@ -2481,7 +2493,9 @@ redo_lookup:
 				vm_object_shadow(&map_entry->object.vm_object,
 						 &map_entry->offset, total_size);
 				shadow_object = map_entry->object.vm_object;
+#if 00
 				vm_object_unlock(object);
+#endif
 
 				prot = map_entry->protection & ~VM_PROT_WRITE;
 
@@ -2567,6 +2581,22 @@ redo_lookup:
 			}
 		}
 
+#if VM_OBJECT_TRACKING_OP_TRUESHARE
+		if (!object->true_share &&
+		    vm_object_tracking_inited) {
+			void *bt[VM_OBJECT_TRACKING_BTDEPTH];
+			int num = 0;
+
+			num = OSBacktrace(bt,
+					  VM_OBJECT_TRACKING_BTDEPTH);
+			btlog_add_entry(vm_object_tracking_btlog,
+					object,
+					VM_OBJECT_TRACKING_OP_TRUESHARE,
+					bt,
+					num);
+		}
+#endif /* VM_OBJECT_TRACKING_OP_TRUESHARE */
+
 		object->true_share = TRUE;
 		if (object->copy_strategy == MEMORY_OBJECT_COPY_SYMMETRIC)
 			object->copy_strategy = MEMORY_OBJECT_COPY_DELAY;
@@ -2619,6 +2649,8 @@ redo_lookup:
 				/* parent_entry->ref_count++; XXX ? */
 				/* Get an extra send-right on handle */
 				ipc_port_copy_send(parent_handle);
+
+				*size = CAST_DOWN(vm_size_t, map_size);
 				*object_handle = parent_handle;
 				return KERN_SUCCESS;
 			} else {
@@ -2739,6 +2771,22 @@ redo_lookup:
 		   /* we now point to this object, hold on */
 		   vm_object_reference(object); 
 		   vm_object_lock(object);
+#if VM_OBJECT_TRACKING_OP_TRUESHARE
+		if (!object->true_share &&
+		    vm_object_tracking_inited) {
+			void *bt[VM_OBJECT_TRACKING_BTDEPTH];
+			int num = 0;
+
+			num = OSBacktrace(bt,
+					  VM_OBJECT_TRACKING_BTDEPTH);
+			btlog_add_entry(vm_object_tracking_btlog,
+					object,
+					VM_OBJECT_TRACKING_OP_TRUESHARE,
+					bt,
+					num);
+		}
+#endif /* VM_OBJECT_TRACKING_OP_TRUESHARE */
+
 		   object->true_share = TRUE;
 		   if (object->copy_strategy == MEMORY_OBJECT_COPY_SYMMETRIC)
 			object->copy_strategy = MEMORY_OBJECT_COPY_DELAY;
@@ -3609,8 +3657,8 @@ kernel_object_iopl_request(
 	}
 
 	if (!object->private) {
-		if (*upl_size > (MAX_UPL_TRANSFER*PAGE_SIZE))
-			*upl_size = (MAX_UPL_TRANSFER*PAGE_SIZE);
+		if (*upl_size > MAX_UPL_TRANSFER_BYTES)
+			*upl_size = MAX_UPL_TRANSFER_BYTES;
 		if (object->phys_contiguous) {
 			*flags = UPL_PHYS_CONTIG;
 		} else {

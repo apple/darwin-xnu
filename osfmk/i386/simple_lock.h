@@ -73,6 +73,9 @@
 #include <i386/hw_lock_types.h>
 #include <mach_ldebug.h>
 
+extern unsigned int LockTimeOutTSC;	/* Lock timeout in TSC ticks */
+extern unsigned int LockTimeOut;	/* Lock timeout in absolute time */ 
+
 #if	MACH_LDEBUG
 #define	USLOCK_DEBUG 1
 #else

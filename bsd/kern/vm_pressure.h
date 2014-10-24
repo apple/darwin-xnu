@@ -40,10 +40,10 @@ void vm_knote_unregister(struct knote *);
 void consider_vm_pressure_events(void);
 void vm_pressure_proc_cleanup(proc_t);
 
-#if CONFIG_MEMORYSTATUS && CONFIG_JETSAM
+#if VM_PRESSURE_EVENTS
 void vm_find_pressure_foreground_candidates(void);
 void vm_find_pressure_candidate(void);
 boolean_t vm_dispatch_pressure_note_to_pid(pid_t pid, boolean_t locked);
-#endif /* CONFIG_MEMORYSTATUS && CONFIG_JETSAM */
+#endif /* VM_PRESSURE_EVENTS */
 
 #endif /* VM_PRESSURE_H */

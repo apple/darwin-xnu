@@ -6,7 +6,6 @@ export MakeInc_dir=${SRCROOT}/makedefs/MakeInc.dir
 include $(MakeInc_cmd)
 include $(MakeInc_def)
 
-
 MD_SUPPORTED_KPI_FILENAME = SupportedKPIs-${CURRENT_ARCH_CONFIG_LC}.txt
 MI_SUPPORTED_KPI_FILENAME = SupportedKPIs-all-archs.txt
 
@@ -28,6 +27,15 @@ SYMBOL_COMPONENT_LIST =	\
         Unsupported	\
         Private
 
+# In general you want it to be possible to have a CPU sub-type's symbol exports
+# alias to the parent type's exports. This is a special-case way to handle it
+# for now:
+ifeq ($(CURRENT_ARCH_CONFIG_LC),x86_64h)
+EXPORT_SOURCE_ARCH_CONFIG_LC = x86_64
+else
+EXPORT_SOURCE_ARCH_CONFIG_LC = $(CURRENT_ARCH_CONFIG_LC)
+endif
+
 KEXT_MACHO_LIST = $(foreach symbolset,$(filter-out Dummy,$(SYMBOL_COMPONENT_LIST)),System.kext/PlugIns/$(symbolset).kext/$(symbolset))
 KEXT_PLIST_LIST += $(foreach symbolset,$(filter-out Dummy,$(SYMBOL_COMPONENT_LIST)),System.kext/PlugIns/$(symbolset).kext/Info.plist)
 
@@ -37,43 +45,43 @@ DSTROOT_INSTALL_KEXT_MACHO_FILES = $(addprefix $(INSTALL_KEXT_DIR)/,$(KEXT_MACHO
 SYMROOT_INSTALL_KEXT_PLISTS = $(addprefix $(SYMROOT)/,$(KEXT_PLIST_LIST))
 DSTROOT_INSTALL_KEXT_PLISTS = $(addprefix $(INSTALL_KEXT_DIR)/,$(KEXT_PLIST_LIST))
 
-EXPORTS_FILES = $(foreach symbolset,$(SYMBOL_COMPONENT_LIST),$(symbolset).exports $(symbolset).$(CURRENT_ARCH_CONFIG_LC).exports) Unused.exports
+EXPORTS_FILES = $(foreach symbolset,$(SYMBOL_COMPONENT_LIST),$(symbolset).exports $(symbolset).$(EXPORT_SOURCE_ARCH_CONFIG_LC).exports) Unused.exports
 
 SYMBOL_SET_BUILD = $(foreach symbolset, $(SYMBOL_COMPONENT_LIST), $(OBJPATH)/$(symbolset).symbolset)
 
-$(OBJPATH)/allsymbols: $(OBJPATH)/mach_kernel
+$(OBJPATH)/allsymbols: $(OBJPATH)/$(KERNEL_FILE_NAME)
 	$(_v)$(NM) -gj $< > $@
 
-$(SYMBOL_SET_BUILD): $(OBJPATH)/%.symbolset :  %.exports %.$(CURRENT_ARCH_CONFIG_LC).exports $(OBJPATH)/allsymbols
+$(SYMBOL_SET_BUILD): $(OBJPATH)/%.symbolset :  %.exports %.$(EXPORT_SOURCE_ARCH_CONFIG_LC).exports $(OBJPATH)/allsymbols $(KEXT_CREATE_SYMBOL_SET)
 	@echo SYMBOLSET $* "($(CURRENT_ARCH_CONFIG_LC))"
 	$(_v)$(KEXT_CREATE_SYMBOL_SET)					\
 		$(ARCH_FLAGS_$(CURRENT_ARCH_CONFIG))			\
 		-import $(OBJPATH)/allsymbols				\
 		-export $(SOURCE)/$*.exports				\
-		-export $(SOURCE)/$*.$(CURRENT_ARCH_CONFIG_LC).exports	\
+		-export $(SOURCE)/$*.$(EXPORT_SOURCE_ARCH_CONFIG_LC).exports	\
 		-output $@ $(_vstdout)
 
 .PHONY: check_all_exports
 
-check_all_exports: $(OBJPATH)/allsymbols
+check_all_exports: $(OBJPATH)/allsymbols $(KEXT_CREATE_SYMBOL_SET)
 	$(_v)$(KEXT_CREATE_SYMBOL_SET)					\
 		$(ARCH_FLAGS_$(CURRENT_ARCH_CONFIG))			\
 		-import $(OBJPATH)/allsymbols				\
 		$(foreach symbolset,$(filter-out Private,$(SYMBOL_COMPONENT_LIST)),	\
 			-export $(SOURCE)/$(symbolset).exports		\
-			-export $(SOURCE)/$(symbolset).$(CURRENT_ARCH_CONFIG_LC).exports)	\
+			-export $(SOURCE)/$(symbolset).$(EXPORT_SOURCE_ARCH_CONFIG_LC).exports)	\
 		-output /dev/null $(_vstdout)
 	$(_v)$(KEXT_CREATE_SYMBOL_SET)					\
 		$(ARCH_FLAGS_$(CURRENT_ARCH_CONFIG))			\
 		-import $(OBJPATH)/allsymbols				\
 		$(foreach symbolset,$(filter-out Unsupported,$(SYMBOL_COMPONENT_LIST)),	\
 			-export $(SOURCE)/$(symbolset).exports		\
-			-export $(SOURCE)/$(symbolset).$(CURRENT_ARCH_CONFIG_LC).exports)	\
+			-export $(SOURCE)/$(symbolset).$(EXPORT_SOURCE_ARCH_CONFIG_LC).exports)	\
 		-output /dev/null $(_vstdout)
 
 $(OBJPATH)/$(MD_SUPPORTED_KPI_FILENAME): $(EXPORTS_FILES)
 	@echo SUPPORTED_KPI "($(CURRENT_ARCH_CONFIG_LC))"
-	$(_v)$(SRCROOT)/config/list_supported.sh $(SOURCE) $(CURRENT_ARCH_CONFIG_LC) $@
+	$(_v)$(SRCROOT)/config/list_supported.sh $(SOURCE) $(EXPORT_SOURCE_ARCH_CONFIG_LC) $@
 
 $(OBJPATH)/$(MI_SUPPORTED_KPI_FILENAME): $(EXPORTS_FILES)
 	@echo SUPPORTED_KPI "(all)"
@@ -99,26 +107,18 @@ $(SYMROOT_INSTALL_KEXT_MACHO_FILES): ALWAYS
 	fi;									\
 	exit $$cmdstatus
 
-.PHONY: symroot_kext_plists
-
-symroot_kext_plists: $(SYMROOT_INSTALL_KEXT_PLISTS)
-
 $(SYMROOT_INSTALL_KEXT_PLISTS): $(SYMROOT)/% : $(SOURCE)/%
 	$(_v)$(MKDIR) $(dir $@)
 	@echo INSTALLSYM kextplist $*
 	$(_v)$(INSTALL) $(DATA_INSTALL_FLAGS) $< $@
 	$(_v)$(NEWVERS) $@ $(_vstdout)
 
-.PHONY: dstroot_kext_plists
-
-dstroot_kext_plists: $(DSTROOT_INSTALL_KEXT_PLISTS)
-
 $(DSTROOT_INSTALL_KEXT_PLISTS): $(INSTALL_KEXT_DIR)/% : $(SYMROOT)/%
 	$(_v)$(MKDIR) $(dir $@)
 	@echo INSTALL kextplist $*
 	$(_v)$(INSTALL) $(DATA_INSTALL_FLAGS) $< $@
 
-$(DSTROOT_INSTALL_KEXT_MACHO_FILES): $(INSTALL_KEXT_DIR)/% : $(SYMROOT)/%
+$(DSTROOT_INSTALL_KEXT_MACHO_FILES): $(INSTALL_KEXT_DIR)/% : $(SYMROOT)/% ALWAYS
 	$(_v)$(MKDIR) $(dir $@)
 	@echo INSTALL $(notdir $@) "($(CURRENT_ARCH_CONFIG_LC))"
 	$(_v)$(INSTALL) $(EXEC_INSTALL_FLAGS) $< $@
@@ -128,23 +128,17 @@ $(DSTROOT)/$(KRESDIR)/$(MD_SUPPORTED_KPI_FILENAME) $(DSTROOT)/$(KRESDIR)/$(MI_SU
 	@echo INSTALL $*
 	$(_v)$(INSTALL) $(INSTALL_FLAGS) $< $@
 
-install_symbol_sets:	$(SYMROOT_INSTALL_KEXT_MACHO_FILES) \
-			symroot_kext_plists \
-			$(DSTROOT_INSTALL_KEXT_MACHO_FILES) \
-			dstroot_kext_plists \
-			$(DSTROOT)/$(KRESDIR)/$(MD_SUPPORTED_KPI_FILENAME) \
-			$(DSTROOT)/$(KRESDIR)/$(MI_SUPPORTED_KPI_FILENAME)
+do_config_install::	$(SYMROOT_INSTALL_KEXT_MACHO_FILES) \
+				$(SYMROOT_INSTALL_KEXT_PLISTS) \
+				$(DSTROOT_INSTALL_KEXT_MACHO_FILES) \
+				$(DSTROOT_INSTALL_KEXT_PLISTS) \
+				$(DSTROOT)/$(KRESDIR)/$(MD_SUPPORTED_KPI_FILENAME) \
+				$(DSTROOT)/$(KRESDIR)/$(MI_SUPPORTED_KPI_FILENAME)
 
-do_build_install_primary::	install_symbol_sets
-
-$(OBJPATH)/kernel-kpi.exp: $(EXPORTS_FILES)
+$(OBJPATH)/all-kpi.exp: $(EXPORTS_FILES)
 	$(_v)$(SOURCE)/generate_linker_exports.sh $@ $+
 
-.PHONY: build_mach_kernel_exports
-
-build_mach_kernel_exports: $(OBJPATH)/kernel-kpi.exp
-
-do_build_all:: build_mach_kernel_exports
+do_build_all:: $(OBJPATH)/all-kpi.exp
 
 include $(MakeInc_rule)
 include $(MakeInc_dir)

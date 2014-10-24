@@ -1,3 +1,6 @@
+_IOLockSleep_darwin14
+_IOLockSleepDeadline_darwin14
+_IOLockWakeup_darwin14
 _IOOFPathMatching
 _IOSpinUnlock
 _IOTrySpinLock

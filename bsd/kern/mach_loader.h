@@ -69,6 +69,7 @@ typedef struct _load_result {
 	unsigned char	uuid[16];	
 	mach_vm_address_t	min_vm_addr;
 	mach_vm_address_t	max_vm_addr;
+	unsigned int		platform_binary;
 } load_result_t;
 
 struct image_params;
@@ -89,6 +90,6 @@ load_return_t load_machfile(
 #define LOAD_RESOURCE		7	/* resource allocation failure */
 #define	LOAD_ENOENT		8	/* resource not found */
 #define	LOAD_IOERROR		9	/* IO error */
-#define	LOAD_DECRYPTFAIL	10	/* FP decrpty failure */
+#define	LOAD_DECRYPTFAIL	10	/* FP decrypt failure */
 
 #endif	/* _BSD_KERN_MACH_LOADER_H_ */

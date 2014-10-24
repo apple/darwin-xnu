@@ -59,7 +59,6 @@
 
 #include <mach/machine/vm_types.h>
 #include <kern/xpr.h>
-#include <kern/lock.h>
 #include <kern/spl.h>
 #include <kern/cpu_number.h>
 #include <kern/misc_protos.h>

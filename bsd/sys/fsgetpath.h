@@ -50,6 +50,24 @@ __BEGIN_DECLS
 #define	fsgetpath(buf, bufsize, fsid, objid)  \
 	(ssize_t)syscall(SYS_fsgetpath, buf, (size_t)bufsize, fsid, (uint64_t)objid)
 
+/*
+ * openbyid_np: open a file given a file system id and a file system object id 
+ * 
+ * fsid :	value corresponding to getattlist ATTR_CMN_FSID attribute, or
+ *			value of stat's st.st_dev ; set fsid = {st.st_dev, 0} 
+ *
+ * objid: value (link id/node id) corresponding to getattlist ATTR_CMN_OBJID 
+ *		  attribute , or
+ *		  value of stat's st.st_ino (node id); set objid =  st.st_ino
+ *
+ * For hfs the value of getattlist ATTR_CMN_FSID is a link id which uniquely identifies a
+ * parent in the case of hard linked files; this allows unique path access validation.
+ * Not all file systems support getattrlist ATTR_CMN_OBJID (link id).
+ * A node id does not uniquely identify a parent in the case of hard linked files and may 
+ * resolve to a path for which access validation can fail.
+ */
+int openbyid_np(fsid_t* fsid, fsobj_id_t* objid, int flags);
+
 __END_DECLS
 #endif /* KERNEL */
 

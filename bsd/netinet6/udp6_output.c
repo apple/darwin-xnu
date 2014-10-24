@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2013 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2014 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -129,11 +129,9 @@
 #include <netinet/icmp6.h>
 #include <netinet6/ip6protosw.h>
 
-#if IPSEC
-#include <netinet6/ipsec.h>
-#include <netinet6/ipsec6.h>
-extern int ipsec_bypass;
-#endif /* IPSEC */
+#if NECP
+#include <net/necp.h>
+#endif /* NECP */
 
 #include <net/net_osdep.h>
 
@@ -179,8 +177,12 @@ udp6_output(struct in6pcb *in6p, struct mbuf *m, struct sockaddr *addr6,
 		ip6oa.ip6oa_boundif = in6p->inp_boundifp->if_index;
 		ip6oa.ip6oa_flags |= IP6OAF_BOUND_IF;
 	}
-	if (in6p->inp_flags & INP_NO_IFT_CELLULAR)
+	if (INP_NO_CELLULAR(in6p))
 		ip6oa.ip6oa_flags |= IP6OAF_NO_CELLULAR;
+	if (INP_NO_EXPENSIVE(in6p))
+		ip6oa.ip6oa_flags |= IP6OAF_NO_EXPENSIVE;
+	if (INP_AWDL_UNRESTRICTED(in6p))
+		ip6oa.ip6oa_flags |= IP6OAF_AWDL_UNRESTRICTED;
 
 	if (control) {
 		msc = mbuf_service_class_from_control(control);
@@ -348,12 +350,25 @@ udp6_output(struct in6pcb *in6p, struct mbuf *m, struct sockaddr *addr6,
 		flags = IPV6_OUTARGS;
 
 		udp6stat.udp6s_opackets++;
+			
+#if NECP
+		{
+			necp_kernel_policy_id policy_id;
+			if (!necp_socket_is_allowed_to_send_recv_v6(in6p, in6p->in6p_lport, fport, laddr, faddr, NULL, &policy_id)) {
+				error = EHOSTUNREACH;
+				goto release;
+			}
+
+			necp_mark_packet_from_socket(m, in6p, policy_id);
+		}
+#endif /* NECP */
+			
 #if IPSEC
-		if (ipsec_bypass == 0 && ipsec_setsocket(m, so) != 0) {
+		if (in6p->in6p_sp != NULL && ipsec_setsocket(m, so) != 0) {
 			error = ENOBUFS;
 			goto release;
 		}
-#endif /* IPSEC */
+#endif /*IPSEC*/
 
 		/* In case of IPv4-mapped address used in previous send */
 		if (ROUTE_UNUSABLE(&in6p->in6p_route) ||
@@ -395,18 +410,20 @@ udp6_output(struct in6pcb *in6p, struct mbuf *m, struct sockaddr *addr6,
 			IM6O_REMREF(im6o);
 
 		if (error == 0 && nstat_collect) {
-			boolean_t cell, wifi;
+			boolean_t cell, wifi, wired;
 
 			if (in6p->in6p_route.ro_rt != NULL) {
 				cell = IFNET_IS_CELLULAR(in6p->in6p_route.
 				    ro_rt->rt_ifp);
 				wifi = (!cell && IFNET_IS_WIFI(in6p->in6p_route.
 				    ro_rt->rt_ifp));
+				wired = (!wifi && IFNET_IS_WIRED(in6p->in6p_route.
+				    ro_rt->rt_ifp));
 			} else {
-				cell = wifi = FALSE;
+				cell = wifi = wired = FALSE;
 			}
-			INP_ADD_STAT(in6p, cell, wifi, txpackets, 1);
-			INP_ADD_STAT(in6p, cell, wifi, txbytes, ulen);
+			INP_ADD_STAT(in6p, cell, wifi, wired, txpackets, 1);
+			INP_ADD_STAT(in6p, cell, wifi, wired, txbytes, ulen);
 		}
 
 		if (flowadv && (adv->code == FADV_FLOW_CONTROLLED ||
@@ -452,11 +469,11 @@ udp6_output(struct in6pcb *in6p, struct mbuf *m, struct sockaddr *addr6,
 		}
 
 		/*
-		 * If output interface was cellular, and this socket is
-		 * denied access to it, generate an event.
+		 * If output interface was cellular/expensive, and this
+		 * socket is denied access to it, generate an event.
 		 */
 		if (error != 0 && (ip6oa.ip6oa_retflags & IP6OARF_IFDENIED) &&
-		    (in6p->inp_flags & INP_NO_IFT_CELLULAR))
+		    (INP_NO_CELLULAR(in6p) || INP_NO_EXPENSIVE(in6p)))
 			soevent(in6p->inp_socket, (SO_FILT_HINT_LOCKED|
 			    SO_FILT_HINT_IFDENIED));
 		break;

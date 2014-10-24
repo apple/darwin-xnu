@@ -1,21 +1,8 @@
-OPTIONS/show_space		optional show_space
-OPTIONS/gdb				optional gdb
-OPTIONS/iplmeas			optional iplmeas
 OPTIONS/fb				optional fb
-
-OPTIONS/config_nested_pmap		optional config_nested_pmap
-OPTIONS/config_no_nested_pmap		optional config_no_nested_pmap
-
-#machdep/x86_64/unix_signal.c	standard
-#machdep/x86_64/unix_startup.c	standard
 
 OPTIONS/debug			optional debug
 
-
 OPTIONS/gprof		optional gprof
-OPTIONS/dynamic_num_nodes	optional dynamic_num_nodes
-OPTIONS/vtoc_compat	optional vtoc_compat
-OPTIONS/fddi		optional fddi
 
 osfmk/vm/vm_apple_protect.c	 standard
 
@@ -96,12 +83,10 @@ osfmk/i386/acpi.c		standard
 
 osfmk/i386/mtrr.c		optional    config_mtrr
 
-osfmk/console/i386/serial_console.c  optional  com device-driver
+osfmk/console/i386/serial_console.c  optional  serial_console
 
-osfmk/console/video_console.c        optional  vc device-driver
-osfmk/console/i386/video_scroll.c    optional  vc device-driver
-
-osfmk/kern/etap_map.c		optional etap device-driver
+osfmk/console/video_console.c        optional  video_console
+osfmk/console/i386/video_scroll.c    optional  video_console
 
 #osfmk/profiling/x86_64/profile-md.c	optional gprof
 #osfmk/profiling/x86_64/profile-asm.s	optional gprof
@@ -124,6 +109,8 @@ osfmk/i386/ucode.c				standard
 osfmk/i386/vmx/vmx_cpu.c			optional config_vmx
 osfmk/i386/vmx/vmx_shims.c			optional config_vmx
 
+osfmk/kern/hv_support.c				optional hypervisor
+
 # DUMMIES TO FORCE GENERATION OF .h FILES
 #osfmk/OPTIONS/ln		optional ln
 #osfmk/OPTIONS/eisa		optional eisa
@@ -137,3 +124,5 @@ osfmk/x86_64/kpc_x86.c              optional kpc
 
 osfmk/i386/startup64.c		standard
 osfmk/x86_64/idt64.s		standard
+
+osfmk/i386/panic_hooks.c	standard

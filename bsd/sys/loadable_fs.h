@@ -45,7 +45,7 @@
 
 
 /*
- * Constants for Loadabls FS Utilities (in "/System/Library/Filesystems")
+ * Constants for Loadable FS Utilities (in "/System/Library/Filesystems")
  *
  * Example of a /usr/filesystems directory
  *

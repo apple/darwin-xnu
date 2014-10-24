@@ -60,7 +60,6 @@
  * Device switch for i386 AT bus.
  */
 
-#include <platforms.h>
 #include <types.h>
 #include <kern/clock.h>
 

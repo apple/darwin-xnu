@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2007 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2014 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -108,41 +108,38 @@ extern	int mockfs_mountroot(mount_t, vnode_t, vfs_context_t);
  */
 typedef int (*mountroot_t)(mount_t, vnode_t, vfs_context_t);
 
+enum fs_type_num {
+	FT_NFS = 2,
+	FT_HFS = 17,
+	FT_DEVFS = 19,
+	FT_SYNTHFS = 20,
+	FT_MOCKFS  = 0x6D6F636B
+};
+
 /*
  * Set up the filesystem operations for vnodes.
  */
 static struct vfstable vfstbllist[] = {
 	/* HFS/HFS+ Filesystem */
 #if HFS
-	{ &hfs_vfsops, "hfs", 17, 0, (MNT_LOCAL | MNT_DOVOLFS), hfs_mountroot, NULL, 0, 0, VFC_VFSLOCALARGS | VFC_VFSREADDIR_EXTENDED | VFC_VFS64BITREADY | VFC_VFSVNOP_PAGEOUTV2 | VFC_VFSVNOP_PAGEINV2, NULL, 0},
+	{ &hfs_vfsops, "hfs", FT_HFS, 0, (MNT_LOCAL | MNT_DOVOLFS), hfs_mountroot, NULL, 0, 0, VFC_VFSLOCALARGS | VFC_VFSREADDIR_EXTENDED | VFC_VFS64BITREADY | VFC_VFSVNOP_PAGEOUTV2 | VFC_VFSVNOP_PAGEINV2
+#if CONFIG_SECLUDED_RENAME
+	| VFC_VFSVNOP_SECLUDE_RENAME
 #endif
-
-	/* Memory-based Filesystem */
-
-#ifndef __LP64__
-#if MFS
-	{ &mfs_vfsops, "mfs", 3, 0, MNT_LOCAL, mfs_mountroot, NULL, 0, 0, VFC_VFSGENERICARGS, NULL, 0},
+	, NULL, 0, NULL},
 #endif
-#endif /* __LP64__ */
 
 	/* Sun-compatible Network Filesystem */
 #if NFSCLIENT
-	{ &nfs_vfsops, "nfs", 2, 0, 0, NULL, NULL, 0, 0, VFC_VFSGENERICARGS | VFC_VFSPREFLIGHT | VFC_VFS64BITREADY | VFC_VFSREADDIR_EXTENDED, NULL, 0},
+	{ &nfs_vfsops, "nfs", FT_NFS, 0, 0, NULL, NULL, 0, 0, VFC_VFSGENERICARGS | VFC_VFSPREFLIGHT | VFC_VFS64BITREADY | VFC_VFSREADDIR_EXTENDED, NULL, 0, NULL},
 #endif
-
-	/* Andrew Filesystem */
-#ifndef __LP64__
-#if AFS
-	{ &afs_vfsops, "andrewfs", 13, 0, 0, afs_mountroot, NULL, 0, 0, VFC_VFSGENERICARGS , NULL, 0},
-#endif
-#endif /* __LP64__ */
 
 	/* Device Filesystem */
 #if DEVFS
 #if CONFIG_MACF
-	{ &devfs_vfsops, "devfs", 19, 0, (MNT_DONTBROWSE | MNT_MULTILABEL), NULL, NULL, 0, 0, VFC_VFSGENERICARGS | VFC_VFS64BITREADY, NULL, 0},
+	{ &devfs_vfsops, "devfs", FT_DEVFS, 0, MNT_MULTILABEL, NULL, NULL, 0, 0, VFC_VFSGENERICARGS | VFC_VFS64BITREADY, NULL, 0, NULL},
 #else
-	{ &devfs_vfsops, "devfs", 19, 0, MNT_DONTBROWSE, NULL, NULL, 0, 0, VFC_VFSGENERICARGS | VFC_VFS64BITREADY, NULL, 0},
+	{ &devfs_vfsops, "devfs", FT_DEVFS, 0, 0, NULL, NULL, 0, 0, VFC_VFSGENERICARGS | VFC_VFS64BITREADY, NULL, 0, NULL},
 #endif /* MAC */
 #endif
 
@@ -151,33 +148,20 @@ static struct vfstable vfstbllist[] = {
 
 #if MOCKFS
 	/* If we are configured for it, mockfs should always be the last standard entry (and thus the last FS we attempt mountroot with) */
-	{ &mockfs_vfsops, "mockfs", 0x6D6F636B, 0, MNT_LOCAL, mockfs_mountroot, NULL, 0, 0, VFC_VFSGENERICARGS, NULL, 0},
+	{ &mockfs_vfsops, "mockfs", FT_MOCKFS, 0, MNT_LOCAL, mockfs_mountroot, NULL, 0, 0, VFC_VFSGENERICARGS, NULL, 0, NULL},
 #endif /* MOCKFS */
 
-	{NULL, "<unassigned>", 0, 0, 0, NULL, NULL, 0, 0, 0, NULL, 0},
-	{NULL, "<unassigned>", 0, 0, 0, NULL, NULL, 0, 0, 0, NULL, 0},
-	{NULL, "<unassigned>", 0, 0, 0, NULL, NULL, 0, 0, 0, NULL, 0},
-	{NULL, "<unassigned>", 0, 0, 0, NULL, NULL, 0, 0, 0, NULL, 0},
-	{NULL, "<unassigned>", 0, 0, 0, NULL, NULL, 0, 0, 0, NULL, 0},
-	{NULL, "<unassigned>", 0, 0, 0, NULL, NULL, 0, 0, 0, NULL, 0},
-	{NULL, "<unassigned>", 0, 0, 0, NULL, NULL, 0, 0, 0, NULL, 0},
-	{NULL, "<unassigned>", 0, 0, 0, NULL, NULL, 0, 0, 0, NULL, 0},
-	{NULL, "<unassigned>", 0, 0, 0, NULL, NULL, 0, 0, 0, NULL, 0},
-	{NULL, "<unassigned>", 0, 0, 0, NULL, NULL, 0, 0, 0, NULL, 0},
-	{NULL, "<unassigned>", 0, 0, 0, NULL, NULL, 0, 0, 0, NULL, 0},
-	{NULL, "<unassigned>", 0, 0, 0, NULL, NULL, 0, 0, 0, NULL, 0},
-	{NULL, "<unassigned>", 0, 0, 0, NULL, NULL, 0, 0, 0, NULL, 0},
-	{NULL, "<unassigned>", 0, 0, 0, NULL, NULL, 0, 0, 0, NULL, 0},
-	{NULL, "<unassigned>", 0, 0, 0, NULL, NULL, 0, 0, 0, NULL, 0}
+	{NULL, "<unassigned>", 0, 0, 0, NULL, NULL, 0, 0, 0, NULL, 0, NULL},
+	{NULL, "<unassigned>", 0, 0, 0, NULL, NULL, 0, 0, 0, NULL, 0, NULL},
 };
 
 /*
- * Initially the size of the list, vfs_init will set maxvfsconf
- * to the highest defined type number.
+ * vfs_init will set maxvfstypenum to the highest defined type number.
  */
-int maxvfsslots = sizeof(vfstbllist) / sizeof (struct vfstable);
+const int maxvfsslots = sizeof(vfstbllist) / sizeof (struct vfstable);
 int numused_vfsslots = 0;
-int maxvfsconf = sizeof(vfstbllist) / sizeof (struct vfstable);
+int numregistered_fses = 0;
+int maxvfstypenum = VT_NON + 1;
 struct vfstable *vfsconf = vfstbllist;
 
 /*

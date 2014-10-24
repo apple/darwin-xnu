@@ -42,7 +42,8 @@
 .Nm lstat ,
 .Nm lstat64 ,
 .Nm stat ,
-.Nm stat64
+.Nm stat64 ,
+.Nm fstatat
 .Nd get file status
 .Sh SYNOPSIS
 .Fd #include <sys/stat.h>
@@ -61,6 +62,8 @@
 .Fa "const char *restrict path"
 .Fa "struct stat *restrict buf"
 .Fc
+.Ft int
+.Fn fstatat "int fd" "const char *path" "struct stat *buf" "int flag"
 .Sh TRANSITIIONAL SYNOPSIS (NOW DEPRECATED)
 .Ft int
 .br
@@ -116,6 +119,48 @@ The
 obtains the same information about an open file
 known by the file descriptor
 .Fa fildes .
+.Pp
+The
+.Fn fstatat
+system call is equivalent to
+.Fn stat
+and
+.Fn lstat
+except in the case where the
+.Fa path
+specifies a relative path.
+In this case the status is retrieved from a file relative to
+the directory associated with the file descriptor
+.Fa fd
+instead of the current working directory.
+.Pp
+The values for the
+.Fa flag
+are constructed by a bitwise-inclusive OR of flags from the following list,
+defined in
+.In fcntl.h :
+.Bl -tag -width indent
+.It Dv AT_SYMLINK_NOFOLLOW
+If
+.Fa path
+names a symbolic link, the status of the symbolic link is returned.
+.El
+.Pp
+If
+.Fn fstatat
+is passed the special value
+.Dv AT_FDCWD
+in the
+.Fa fd
+parameter, the current working directory is used and the behavior is
+identical to a call to
+.Fn stat
+or
+.Fn lstat
+respectively, depending on whether or not the
+.Dv AT_SYMLINK_NOFOLLOW
+bit is set in
+.Fa flag .
 .Pp
 The
 .Fa buf
@@ -483,6 +528,35 @@ or the file serial number cannot be represented correctly
 in the structure pointed to by
 .Fa buf .
 .El
+.Pp
+In addition to the errors returned by the
+.Fn stat
+and
+.Fn lstat ,
+.Fn fstatat
+may fail if:
+.Bl -tag -width Er
+.It Bq Er EBADF
+The
+.Fa path
+argument does not specify an absolute path and the
+.Fa fd
+argument is neither
+.Dv AT_FDCWD
+nor a valid file descriptor open for searching.
+.It Bq Er EINVAL
+The value of the
+.Fa flag
+argument is not valid.
+.It Bq Er ENOTDIR
+The
+.Fa path
+argument is not an absolute path and
+.Fa fd
+is neither
+.Dv AT_FDCWD
+nor a file descriptor associated with a directory.
+.El
 .Sh CAVEATS
 The file generation number,
 .Fa st_gen ,
@@ -538,6 +612,9 @@ and
 .Fn fstat
 function calls are expected to conform to 
 .St -p1003.1-88 .
+The
+.Fn fstatat
+system call is expected to conform to POSIX.1-2008 .
 .Sh HISTORY
 An
 .Fn lstat
@@ -550,3 +627,6 @@ and
 .Fn lstat64
 system calls first appeared in Mac OS X 10.5 (Leopard) and are now deprecated
 in favor of the corresponding symbol variants.
+The
+.Fn fstatat
+system call appeared in OS X 10.10

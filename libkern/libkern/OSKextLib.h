@@ -463,6 +463,7 @@ __BEGIN_DECLS
  * about itself.
  */
 
+#ifdef KERNEL
 /*!
  * @typedef OSKextLoadTag
  *
@@ -482,6 +483,22 @@ __BEGIN_DECLS
  * <code>@link OSKextReleaseKextWithLoadTag
  * OSKextReleaseKextWithLoadTag@/link</code>.
  */
+#else
+/*!
+ * @typedef OSKextLoadTag
+ *
+ * @abstract
+ * A unique identifier assigned to a loaded instanace of a kext.
+ *
+ * @discussion
+ * If a kext is unloaded and later reloaded, the new instance
+ * has a different load tag.
+ *
+ * A kext can get its own load tag in the <code>kmod_info_t</code>
+ * structure passed into its module start routine, as the
+ * <code>id</code> field (cast to this type).
+ */
+#endif
 typedef uint32_t  OSKextLoadTag;
 
 /*!
@@ -492,7 +509,6 @@ typedef uint32_t  OSKextLoadTag;
  * indicates kext not found.
  */
 #define  kOSKextInvalidLoadTag  ((OSKextLoadTag)(-1))
-
 
 #ifdef KERNEL
 

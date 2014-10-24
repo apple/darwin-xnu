@@ -37,9 +37,10 @@
 #include <kern/cpu_number.h>
 #include <kern/thread.h>
 #include <kern/thread_call.h>
+#include <prng/random.h>
 #include <i386/machine_cpu.h>
 #include <i386/lapic.h>
-#include <i386/lock.h>
+#include <i386/bit_routines.h>
 #include <i386/mp_events.h>
 #include <i386/pmCPU.h>
 #include <i386/trap.h>
@@ -54,6 +55,7 @@
 #if KPC
 #include <kern/kpc.h>
 #endif
+#include <architecture/i386/pio.h>
 
 #if DEBUG
 #define DBG(x...)	kprintf("DBG: " x)
@@ -66,6 +68,7 @@ extern void 	wakeup(void *);
 static int max_cpus_initialized = 0;
 
 unsigned int	LockTimeOut;
+unsigned int	TLBTimeOut;
 unsigned int	LockTimeOutTSC;
 unsigned int	MutexSpin;
 uint64_t	LastDebuggerEntryAllowance;
@@ -277,7 +280,7 @@ boolean_t ml_set_interrupts_enabled(boolean_t enable)
 		__asm__ volatile("sti;nop");
 
 		if ((get_preemption_level() == 0) && (*ast_pending() & AST_URGENT))
-			__asm__ volatile ("int $0xff");
+			__asm__ volatile ("int %0" :: "N" (T_PREEMPT));
 	}
 	else {
 		if (istate)
@@ -308,20 +311,25 @@ void ml_cause_interrupt(void)
 	panic("ml_cause_interrupt not defined yet on Intel");
 }
 
+/*
+ * TODO: transition users of this to kernel_thread_start_priority
+ * ml_thread_policy is an unsupported KPI
+ */
 void ml_thread_policy(
 	thread_t thread,
 __unused	unsigned policy_id,
 	unsigned policy_info)
 {
 	if (policy_info & MACHINE_NETWORK_WORKLOOP) {
-		spl_t		s = splsched();
+		thread_precedence_policy_data_t info;
+		__assert_only kern_return_t kret;
 
-		thread_lock(thread);
+		info.importance = 1;
 
-		set_priority(thread, thread->priority + 1);
-
-		thread_unlock(thread);
-		splx(s);
+		kret = thread_policy_set_internal(thread, THREAD_PRECEDENCE_POLICY,
+		                                                (thread_policy_t)&info,
+		                                                THREAD_PRECEDENCE_POLICY_COUNT);
+		assert(kret == KERN_SUCCESS);
 	}
 }
 
@@ -490,6 +498,12 @@ ml_processor_register(
     /* fix the CPU id */
     this_cpu_datap->cpu_id = cpu_id;
 
+    /* allocate and initialize other per-cpu structures */
+    if (!boot_cpu) {
+	mp_cpus_call_cpu_init(cpunum);
+	prng_cpu_init(cpunum);
+    }
+
     /* output arg */
     *processor_out = this_cpu_datap->cpu_processor;
 
@@ -618,6 +632,20 @@ ml_init_lock_timeout(void)
 	nanoseconds_to_absolutetime(default_timeout_ns, &abstime);
 	LockTimeOut = (uint32_t) abstime;
 	LockTimeOutTSC = (uint32_t) tmrCvt(abstime, tscFCvtn2t);
+
+	/*
+	 * TLBTimeOut dictates the TLB flush timeout period. It defaults to
+	 * LockTimeOut but can be overriden separately. In particular, a
+	 * zero value inhibits the timeout-panic and cuts a trace evnt instead
+	 * - see pmap_flush_tlbs().
+	 */
+	if (PE_parse_boot_argn("tlbto_us", &slto, sizeof (slto))) {
+		default_timeout_ns = slto * NSEC_PER_USEC;
+		nanoseconds_to_absolutetime(default_timeout_ns, &abstime);
+		TLBTimeOut = (uint32_t) abstime;
+	} else {
+		TLBTimeOut = LockTimeOut;
+	}
 
 	if (PE_parse_boot_argn("mtxspin", &mtxspin, sizeof (mtxspin))) {
 		if (mtxspin > USEC_PER_SEC>>4)
@@ -798,4 +826,39 @@ void ml_timer_evaluate(void) {
 boolean_t
 ml_timer_forced_evaluation(void) {
 	return ml_timer_evaluation_in_progress;
+}
+
+/* 32-bit right-rotate n bits */
+static inline uint32_t ror32(uint32_t val, const unsigned int n)
+{	
+	__asm__ volatile("rorl %%cl,%0" : "=r" (val) : "0" (val), "c" (n));
+	return val;
+}
+
+void
+ml_entropy_collect(void)
+{
+	uint32_t	tsc_lo, tsc_hi;
+	uint32_t	*ep;
+
+	assert(cpu_number() == master_cpu);
+
+	/* update buffer pointer cyclically */
+	if (EntropyData.index_ptr - EntropyData.buffer == ENTROPY_BUFFER_SIZE)
+		ep = EntropyData.index_ptr = EntropyData.buffer;
+	else
+		ep = EntropyData.index_ptr++;
+
+	rdtsc_nofence(tsc_lo, tsc_hi);
+	*ep = ror32(*ep, 9) ^ tsc_lo;
+}
+
+void
+ml_gpu_stat_update(uint64_t gpu_ns_delta) {
+	current_thread()->machine.thread_gpu_ns += gpu_ns_delta;
+}
+
+uint64_t
+ml_gpu_stat(thread_t t) {
+	return t->machine.thread_gpu_ns;
 }

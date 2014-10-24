@@ -50,12 +50,14 @@ fcntl(int fd, int cmd, ...)
 	 case F_LOG2PHYS_EXT:
 	 case F_GETPATH:
 	 case F_GETPATH_MTMINFO:
+	 case F_GETCODEDIR:
 	 case F_PATHPKG_CHECK:
 	 case F_OPENFROM:
 	 case F_UNLINKFROM:
 	 case F_ADDSIGS:
 	 case F_ADDFILESIGS:
 	 case F_FINDSIGS:
+	 case F_TRANSCODEKEY:
 		arg = va_arg(ap, void *);
 		break;
 	 default:

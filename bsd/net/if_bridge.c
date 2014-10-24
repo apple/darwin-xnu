@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2004-2013 Apple Inc. All rights reserved.
+ * Copyright (c) 2004-2014 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -143,6 +143,7 @@
 #include <netinet/in.h> /* for struct arpcom */
 #include <netinet/in_systm.h>
 #include <netinet/in_var.h>
+#define	_IP_VHL
 #include <netinet/ip.h>
 #include <netinet/ip_var.h>
 #if INET6
@@ -171,6 +172,9 @@
 #endif /* PFIL_HOOKS */
 #include <dev/random/randomdev.h>
 
+#include <netinet/bootp.h>
+#include <netinet/dhcp.h>
+
 #if BRIDGE_DEBUG
 #define	BR_DBGF_LIFECYCLE	0x0001
 #define	BR_DBGF_INPUT		0x0002
@@ -180,6 +184,7 @@
 #define	BR_DBGF_IOCTL		0x0020
 #define	BR_DBGF_MBUF		0x0040
 #define	BR_DBGF_MCAST		0x0080
+#define	BR_DBGF_HOSTFILTER	0x0100
 #endif /* BRIDGE_DEBUG */
 
 #define	_BRIDGE_LOCK(_sc)		lck_mtx_lock(&(_sc)->sc_mtx)
@@ -304,12 +309,18 @@ struct bridge_iflist {
 	interface_filter_t	bif_iff_ref;
 	struct bridge_softc	*bif_sc;
 	uint32_t		bif_flags;
+
+	struct in_addr		bif_hf_ipsrc;
+	uint8_t			bif_hf_hwsrc[ETHER_ADDR_LEN];
 };
 
 #define	BIFF_PROMISC		0x01	/* promiscuous mode set */
 #define	BIFF_PROTO_ATTACHED	0x02	/* protocol attached */
 #define	BIFF_FILTER_ATTACHED	0x04	/* interface filter attached */
 #define	BIFF_MEDIA_ACTIVE	0x08	/* interface media active */
+#define	BIFF_HOST_FILTER	0x10	/* host filter enabled */
+#define	BIFF_HF_HWSRC		0x20	/* host filter source MAC is set */
+#define	BIFF_HF_IPSRC		0x40	/* host filter source IP is set */
 
 /*
  * Bridge route node.
@@ -336,6 +347,7 @@ struct bridge_delayed_call {
 	bridge_delayed_func_t 	bdc_func; /* Function to call */
 	struct timespec 	bdc_ts;	/* Time to call */
 	u_int32_t		bdc_flags;
+	thread_call_t		bdc_thread_call;
 };
 
 #define	BDCF_OUTSTANDING 	0x01	/* Delayed call has been scheduled */
@@ -390,6 +402,8 @@ struct bridge_softc {
 #define	SCF_DETACHING 0x01
 #define	SCF_RESIZING 0x02
 #define	SCF_MEDIA_ACTIVE 0x04
+
+struct bridge_hostfilter_stats bridge_hostfilter_stats;
 
 decl_lck_mtx_data(static, bridge_list_mtx);
 
@@ -514,6 +528,8 @@ static int	bridge_ioctl_stxhc(struct bridge_softc *, void *);
 static int	bridge_ioctl_purge(struct bridge_softc *sc, void *);
 static int	bridge_ioctl_gfilt(struct bridge_softc *, void *);
 static int	bridge_ioctl_sfilt(struct bridge_softc *, void *);
+static int	bridge_ioctl_ghostfilter(struct bridge_softc *, void *);
+static int	bridge_ioctl_shostfilter(struct bridge_softc *, void *);
 #ifdef PFIL_HOOKS
 static int	bridge_pfil(struct mbuf **, struct ifnet *, struct ifnet *,
 		    int);
@@ -536,6 +552,8 @@ static u_int32_t bridge_updatelinkstatus(struct bridge_softc *);
 static int interface_media_active(struct ifnet *);
 static void bridge_schedule_delayed_call(struct bridge_delayed_call *);
 static void bridge_cancel_delayed_call(struct bridge_delayed_call *);
+static void bridge_cleanup_delayed_call(struct bridge_delayed_call *);
+static int bridge_host_filter(struct bridge_iflist *, struct mbuf *);
 
 #define	m_copypacket(m, how) m_copym(m, 0, M_COPYALL, how)
 
@@ -544,6 +562,9 @@ static void bridge_cancel_delayed_call(struct bridge_delayed_call *);
 
 u_int8_t bstp_etheraddr[ETHER_ADDR_LEN] =
 	{ 0x01, 0x80, 0xc2, 0x00, 0x00, 0x00 };
+
+static u_int8_t ethernulladdr[ETHER_ADDR_LEN] =
+	{ 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 };
 
 #if BRIDGESTP
 static struct bstp_cb_ops bridge_ops = {
@@ -580,6 +601,10 @@ SYSCTL_INT(_net_link_bridge, OID_AUTO, delayed_callback_delay,
 	&bridge_delayed_callback_delay, 0,
 	"Delay before calling delayed function");
 #endif
+
+SYSCTL_STRUCT(_net_link_bridge, OID_AUTO,
+	hostfilterstats, CTLFLAG_RD | CTLFLAG_LOCKED,
+	&bridge_hostfilter_stats, bridge_hostfilter_stats, "");
 
 #if defined(PFIL_HOOKS)
 static int pfil_onlyip = 1; /* only pass IP[46] packets when pfil is enabled */
@@ -619,7 +644,7 @@ struct bridge_control {
 #define	BC_F_SUSER		0x04	/* do super-user check */
 
 static const struct bridge_control bridge_control_table32[] = {
-	{ bridge_ioctl_add,		sizeof (struct ifbreq),
+	{ bridge_ioctl_add,		sizeof (struct ifbreq),	/* 0 */
 	    BC_F_COPYIN|BC_F_SUSER },
 	{ bridge_ioctl_del,		sizeof (struct ifbreq),
 	    BC_F_COPYIN|BC_F_SUSER },
@@ -644,7 +669,7 @@ static const struct bridge_control bridge_control_table32[] = {
 
 	{ bridge_ioctl_sto,		sizeof (struct ifbrparam),
 	    BC_F_COPYIN|BC_F_SUSER },
-	{ bridge_ioctl_gto,		sizeof (struct ifbrparam),
+	{ bridge_ioctl_gto,		sizeof (struct ifbrparam), /* 10 */
 	    BC_F_COPYOUT },
 
 	{ bridge_ioctl_daddr32,		sizeof (struct ifbareq32),
@@ -670,7 +695,7 @@ static const struct bridge_control bridge_control_table32[] = {
 
 	{ bridge_ioctl_gma,		sizeof (struct ifbrparam),
 	    BC_F_COPYOUT },
-	{ bridge_ioctl_sma,		sizeof (struct ifbrparam),
+	{ bridge_ioctl_sma,		sizeof (struct ifbrparam), /* 20 */
 	    BC_F_COPYIN|BC_F_SUSER },
 
 	{ bridge_ioctl_sifprio,		sizeof (struct ifbreq),
@@ -698,7 +723,7 @@ static const struct bridge_control bridge_control_table32[] = {
 	{ bridge_ioctl_grte,		sizeof (struct ifbrparam),
 	    BC_F_COPYOUT },
 
-	{ bridge_ioctl_gifsstp32,	sizeof (struct ifbpstpconf32),
+	{ bridge_ioctl_gifsstp32,	sizeof (struct ifbpstpconf32), /* 30 */
 	    BC_F_COPYIN|BC_F_COPYOUT },
 
 	{ bridge_ioctl_sproto,		sizeof (struct ifbrparam),
@@ -709,10 +734,15 @@ static const struct bridge_control bridge_control_table32[] = {
 
 	{ bridge_ioctl_sifmaxaddr,	sizeof (struct ifbreq),
 	    BC_F_COPYIN|BC_F_SUSER },
+
+	{ bridge_ioctl_ghostfilter,	sizeof (struct ifbrhostfilter),
+	    BC_F_COPYIN|BC_F_COPYOUT },
+	{ bridge_ioctl_shostfilter,	sizeof (struct ifbrhostfilter),
+	    BC_F_COPYIN|BC_F_SUSER },
 };
 
 static const struct bridge_control bridge_control_table64[] = {
-	{ bridge_ioctl_add,		sizeof (struct ifbreq),
+	{ bridge_ioctl_add,		sizeof (struct ifbreq), /* 0 */
 	    BC_F_COPYIN|BC_F_SUSER },
 	{ bridge_ioctl_del,		sizeof (struct ifbreq),
 	    BC_F_COPYIN|BC_F_SUSER },
@@ -737,7 +767,7 @@ static const struct bridge_control bridge_control_table64[] = {
 
 	{ bridge_ioctl_sto,		sizeof (struct ifbrparam),
 	    BC_F_COPYIN|BC_F_SUSER },
-	{ bridge_ioctl_gto,		sizeof (struct ifbrparam),
+	{ bridge_ioctl_gto,		sizeof (struct ifbrparam), /* 10 */
 	    BC_F_COPYOUT },
 
 	{ bridge_ioctl_daddr64,		sizeof (struct ifbareq64),
@@ -763,7 +793,7 @@ static const struct bridge_control bridge_control_table64[] = {
 
 	{ bridge_ioctl_gma,		sizeof (struct ifbrparam),
 	    BC_F_COPYOUT },
-	{ bridge_ioctl_sma,		sizeof (struct ifbrparam),
+	{ bridge_ioctl_sma,		sizeof (struct ifbrparam), /* 20 */
 	    BC_F_COPYIN|BC_F_SUSER },
 
 	{ bridge_ioctl_sifprio,		sizeof (struct ifbreq),
@@ -791,7 +821,7 @@ static const struct bridge_control bridge_control_table64[] = {
 	{ bridge_ioctl_grte,		sizeof (struct ifbrparam),
 	    BC_F_COPYOUT },
 
-	{ bridge_ioctl_gifsstp64,	sizeof (struct ifbpstpconf64),
+	{ bridge_ioctl_gifsstp64,	sizeof (struct ifbpstpconf64), /* 30 */
 	    BC_F_COPYIN|BC_F_COPYOUT },
 
 	{ bridge_ioctl_sproto,		sizeof (struct ifbrparam),
@@ -801,6 +831,11 @@ static const struct bridge_control bridge_control_table64[] = {
 	    BC_F_COPYIN|BC_F_SUSER },
 
 	{ bridge_ioctl_sifmaxaddr,	sizeof (struct ifbreq),
+	    BC_F_COPYIN|BC_F_SUSER },
+
+	{ bridge_ioctl_ghostfilter,	sizeof (struct ifbrhostfilter),
+	    BC_F_COPYIN|BC_F_COPYOUT },
+	{ bridge_ioctl_shostfilter,	sizeof (struct ifbrhostfilter),
 	    BC_F_COPYIN|BC_F_SUSER },
 };
 
@@ -980,7 +1015,7 @@ printf_mbuf_data(mbuf_t m, size_t offset, size_t len)
 	if (offset > pktlen)
 		return;
 
-	maxlen = (pktlen - offset > len) ? len : pktlen;
+	maxlen = (pktlen - offset > len) ? len : pktlen - offset;
 	n = m;
 	mlen = mbuf_len(n);
 	ptr = mbuf_data(n);
@@ -1250,7 +1285,7 @@ bridge_clone_create(struct if_clone *ifc, uint32_t unit, void *params)
 			 */
 			sc->sc_defaddr[4] =
 			    (((sc->sc_defaddr[4] & 0x0f) << 4) |
-			     ((sc->sc_defaddr[4] & 0xf0) >> 4)) ^
+			    ((sc->sc_defaddr[4] & 0xf0) >> 4)) ^
 			    sc->sc_defaddr[5];
 			sc->sc_defaddr[5] = ifp->if_unit & 0xff;
 		}
@@ -1348,6 +1383,9 @@ bridge_clone_destroy(struct ifnet *ifp)
 	bridge_ifstop(ifp, 1);
 
 	bridge_cancel_delayed_call(&sc->sc_resize_call);
+
+	bridge_cleanup_delayed_call(&sc->sc_resize_call);
+	bridge_cleanup_delayed_call(&sc->sc_aging_timer);
 
 	error = ifnet_set_flags(ifp, 0, IFF_UP);
 	if (error != 0) {
@@ -3112,6 +3150,67 @@ bridge_ioctl_stxhc(struct bridge_softc *sc, void *arg)
 #endif /* !BRIDGESTP */
 }
 
+
+static int
+bridge_ioctl_ghostfilter(struct bridge_softc *sc, void *arg)
+{
+	struct ifbrhostfilter *req = arg;
+	struct bridge_iflist *bif;
+
+	bif = bridge_lookup_member(sc, req->ifbrhf_ifsname);
+	if (bif == NULL)
+		return (ENOENT);
+
+	bzero(req, sizeof(struct ifbrhostfilter));
+	if (bif->bif_flags & BIFF_HOST_FILTER) {
+		req->ifbrhf_flags |= IFBRHF_ENABLED;
+		bcopy(bif->bif_hf_hwsrc, req->ifbrhf_hwsrca,
+		    ETHER_ADDR_LEN);
+		req->ifbrhf_ipsrc = bif->bif_hf_ipsrc.s_addr;
+	}
+	return (0);
+}
+
+static int
+bridge_ioctl_shostfilter(struct bridge_softc *sc, void *arg)
+{
+	struct ifbrhostfilter *req = arg;
+	struct bridge_iflist *bif;
+
+	bif = bridge_lookup_member(sc, req->ifbrhf_ifsname);
+	if (bif == NULL)
+		return (ENOENT);
+
+	if (req->ifbrhf_flags & IFBRHF_ENABLED) {
+		bif->bif_flags |= BIFF_HOST_FILTER;
+
+		if (req->ifbrhf_flags & IFBRHF_HWSRC) {
+			bcopy(req->ifbrhf_hwsrca, bif->bif_hf_hwsrc,
+			    ETHER_ADDR_LEN);
+			if (bcmp(req->ifbrhf_hwsrca, ethernulladdr,
+			    ETHER_ADDR_LEN) != 0)
+				bif->bif_flags |= BIFF_HF_HWSRC;
+			else
+				bif->bif_flags &= ~BIFF_HF_HWSRC;
+		}
+		if (req->ifbrhf_flags & IFBRHF_IPSRC) {
+			bif->bif_hf_ipsrc.s_addr = req->ifbrhf_ipsrc;
+			if (bif->bif_hf_ipsrc.s_addr != INADDR_ANY)
+				bif->bif_flags |= BIFF_HF_IPSRC;
+			else
+				bif->bif_flags &= ~BIFF_HF_IPSRC;
+		}
+	} else {
+		bif->bif_flags &= ~(BIFF_HOST_FILTER | BIFF_HF_HWSRC |
+		    BIFF_HF_IPSRC);
+		bzero(bif->bif_hf_hwsrc, ETHER_ADDR_LEN);
+		bif->bif_hf_ipsrc.s_addr = INADDR_ANY;
+	}
+
+	return (0);
+}
+
+
 /*
  * bridge_ifdetach:
  *
@@ -3274,14 +3373,14 @@ bridge_delayed_callback(void *param)
 
 	BRIDGE_LOCK(sc);
 
-#if BRIDGE_DEBUG
+#if BRIDGE_DEBUG_DELAYED_CALLBACK
 	if (if_bridge_debug & BR_DBGF_DELAYED_CALL)
 		printf("%s: %s call 0x%llx flags 0x%x\n", __func__,
 		    sc->sc_if_xname, (uint64_t)VM_KERNEL_ADDRPERM(call),
 		    call->bdc_flags);
-#endif /* BRIDGE_DEBUG */
+#endif /* BRIDGE_DEBUG_DELAYED_CALLBACK */
 
-		if (call->bdc_flags & BDCF_CANCELLING) {
+	if (call->bdc_flags & BDCF_CANCELLING) {
 		wakeup(call);
 	} else {
 		if ((sc->sc_flags & SCF_DETACHING) == 0)
@@ -3318,15 +3417,24 @@ bridge_schedule_delayed_call(struct bridge_delayed_call *call)
 
 	call->bdc_flags = BDCF_OUTSTANDING;
 
-#if BRIDGE_DEBUG
+#if BRIDGE_DEBUG_DELAYED_CALLBACK
 	if (if_bridge_debug & BR_DBGF_DELAYED_CALL)
 		printf("%s: %s call 0x%llx flags 0x%x\n", __func__,
 		    sc->sc_if_xname, (uint64_t)VM_KERNEL_ADDRPERM(call),
 		    call->bdc_flags);
-#endif /* BRIDGE_DEBUG */
+#endif /* BRIDGE_DEBUG_DELAYED_CALLBACK */
 
-	thread_call_func_delayed((thread_call_func_t)bridge_delayed_callback,
-	    call, deadline);
+	if (call->bdc_ts.tv_sec || call->bdc_ts.tv_nsec)
+		thread_call_func_delayed(
+			(thread_call_func_t)bridge_delayed_callback,
+			call, deadline);
+	else {
+		if (call->bdc_thread_call == NULL)
+			call->bdc_thread_call = thread_call_allocate(
+				(thread_call_func_t)bridge_delayed_callback,
+				call);
+		thread_call_enter(call->bdc_thread_call);
+	}
 }
 
 /*
@@ -3375,6 +3483,38 @@ bridge_cancel_delayed_call(struct bridge_delayed_call *call)
 		}
 	}
 	call->bdc_flags &= ~BDCF_CANCELLING;
+}
+
+/*
+ * bridge_cleanup_delayed_call:
+ *
+ *	Dispose resource allocated for a delayed call
+ *	Assume the delayed call is not queued or running .
+ */
+static void
+bridge_cleanup_delayed_call(struct bridge_delayed_call *call)
+{
+	boolean_t result;
+	struct bridge_softc *sc = call->bdc_sc;
+
+	/*
+	 * The call was never scheduled
+	 */
+	if (sc == NULL)
+		return;
+
+	BRIDGE_LOCK_ASSERT_HELD(sc);
+
+	VERIFY((call->bdc_flags & BDCF_OUTSTANDING) == 0);
+	VERIFY((call->bdc_flags & BDCF_CANCELLING) == 0);
+
+	if (call->bdc_thread_call != NULL) {
+		result = thread_call_free(call->bdc_thread_call);
+		if (result == FALSE)
+			panic("%s thread_call_free() failed for call %p",
+				__func__, call);
+		call->bdc_thread_call = NULL;
+	}
 }
 
 /*
@@ -4066,6 +4206,17 @@ bridge_input(struct ifnet *ifp, struct mbuf *m, void *frame_header)
 		return (0);
 	}
 
+	if (bif->bif_flags & BIFF_HOST_FILTER) {
+		error = bridge_host_filter(bif, m);
+		if (error != 0) {
+			if (if_bridge_debug & BR_DBGF_INPUT)
+				printf("%s: %s bridge_host_filter failed\n",
+				    __func__, bif->bif_ifp->if_xname);
+			BRIDGE_UNLOCK(sc);
+			return (EJUSTRETURN);
+		}
+	}
+
 	eh = mtod(m, struct ether_header *);
 
 	bridge_span(sc, m);
@@ -4381,6 +4532,10 @@ bridge_broadcast(struct bridge_softc *sc, struct ifnet *src_if,
 
 		if ((dst_if->if_flags & IFF_RUNNING) == 0)
 			continue;
+
+		if (!(dbif->bif_flags & BIFF_MEDIA_ACTIVE)) {
+			continue;
+		}
 
 		if (TAILQ_NEXT(dbif, bif_next) == NULL) {
 			mc = m;
@@ -5745,6 +5900,286 @@ bridge_link_event(struct ifnet *ifp, u_int32_t event_code)
 	event.header.event_code		= event_code;
 	event.header.event_data[0]	= ifnet_family(ifp);
 	event.unit			= (u_int32_t)ifnet_unit(ifp);
-	strncpy(event.if_name, ifnet_name(ifp), IFNAMSIZ);
+	strlcpy(event.if_name, ifnet_name(ifp), IFNAMSIZ);
 	ifnet_event(ifp, &event.header);
+}
+
+#define	BRIDGE_HF_DROP(reason, func, line) { \
+	bridge_hostfilter_stats.reason++; \
+	if (if_bridge_debug & BR_DBGF_HOSTFILTER) \
+		printf("%s.%d" #reason, func, line); \
+	error = EINVAL; \
+}
+
+/*
+ * Make sure this is a DHCP or Bootp request that match the host filter
+ */
+static int
+bridge_dhcp_filter(struct bridge_iflist *bif, struct mbuf *m, size_t offset)
+{
+	int error = EINVAL;
+	struct dhcp dhcp;
+
+	/*
+	 * Note: We use the dhcp structure because bootp structure definition
+	 * is larger and some vendors do not pad the request
+	 */
+	error = mbuf_copydata(m, offset, sizeof(struct dhcp), &dhcp);
+	if (error != 0) {
+		BRIDGE_HF_DROP(brhf_dhcp_too_small, __func__, __LINE__);
+		goto done;
+	}
+	if (dhcp.dp_op != BOOTREQUEST) {
+		BRIDGE_HF_DROP(brhf_dhcp_bad_op, __func__, __LINE__);
+		goto done;
+	}
+	/*
+	 * The hardware address must be an exact match
+	 */
+	if (dhcp.dp_htype != ARPHRD_ETHER) {
+		BRIDGE_HF_DROP(brhf_dhcp_bad_htype, __func__, __LINE__);
+		goto done;
+	}
+	if (dhcp.dp_hlen != ETHER_ADDR_LEN) {
+		BRIDGE_HF_DROP(brhf_dhcp_bad_hlen, __func__, __LINE__);
+		goto done;
+	}
+	if (bcmp(dhcp.dp_chaddr, bif->bif_hf_hwsrc,
+	    ETHER_ADDR_LEN) != 0) {
+		BRIDGE_HF_DROP(brhf_dhcp_bad_chaddr, __func__, __LINE__);
+		goto done;
+	}
+	/*
+	 * Client address must match the host address or be not specified
+	 */
+	if (dhcp.dp_ciaddr.s_addr != bif->bif_hf_ipsrc.s_addr &&
+	    dhcp.dp_ciaddr.s_addr != INADDR_ANY) {
+		BRIDGE_HF_DROP(brhf_dhcp_bad_ciaddr, __func__, __LINE__);
+		goto done;
+	}
+	error = 0;
+done:
+	return (error);
+}
+
+static int
+bridge_host_filter(struct bridge_iflist *bif, struct mbuf *m)
+{
+	int error = EINVAL;
+	struct ether_header *eh;
+	static struct in_addr inaddr_any = { .s_addr = INADDR_ANY };
+
+	/*
+	 * Check the Ethernet header is large enough
+	 */
+	if (mbuf_pkthdr_len(m) < sizeof(struct ether_header)) {
+		BRIDGE_HF_DROP(brhf_ether_too_small, __func__, __LINE__);
+		goto done;
+	}
+	if (mbuf_len(m) < sizeof(struct ether_header) &&
+	    mbuf_pullup(&m, sizeof(struct ether_header)) != 0) {
+		BRIDGE_HF_DROP(brhf_ether_pullup_failed, __func__, __LINE__);
+		goto done;
+	}
+	eh = mtod(m, struct ether_header *);
+
+	/*
+	 * Restrict the source hardware address
+	 */
+	if ((bif->bif_flags & BIFF_HF_HWSRC) == 0 ||
+	    bcmp(eh->ether_shost, bif->bif_hf_hwsrc,
+	    ETHER_ADDR_LEN) != 0) {
+		BRIDGE_HF_DROP(brhf_bad_ether_srchw_addr, __func__, __LINE__);
+		goto done;
+	}
+
+	/*
+	 * Restrict Ethernet protocols to ARP and IP
+	 */
+	if (eh->ether_type == htons(ETHERTYPE_ARP)) {
+		struct ether_arp *ea;
+		size_t minlen = sizeof(struct ether_header) +
+			sizeof(struct ether_arp);
+
+		/*
+		 * Make the Ethernet and ARP headers contiguous
+		 */
+		if (mbuf_pkthdr_len(m) < minlen) {
+			BRIDGE_HF_DROP(brhf_arp_too_small, __func__, __LINE__);
+			goto done;
+		}
+		if (mbuf_len(m) < minlen && mbuf_pullup(&m, minlen) != 0) {
+			BRIDGE_HF_DROP(brhf_arp_pullup_failed,
+				__func__, __LINE__);
+			goto done;
+		}
+		/*
+		 * Verify this is an ethernet/ip arp
+		 */
+		eh = mtod(m, struct ether_header *);
+		ea = (struct ether_arp *)(eh + 1);
+		if (ea->arp_hrd != htons(ARPHRD_ETHER)) {
+			BRIDGE_HF_DROP(brhf_arp_bad_hw_type,
+				__func__, __LINE__);
+			goto done;
+		}
+		if (ea->arp_pro != htons(ETHERTYPE_IP)) {
+			BRIDGE_HF_DROP(brhf_arp_bad_pro_type,
+				__func__, __LINE__);
+			goto done;
+		}
+		/*
+		 * Verify the address lengths are correct
+		 */
+		if (ea->arp_hln != ETHER_ADDR_LEN) {
+			BRIDGE_HF_DROP(brhf_arp_bad_hw_len, __func__, __LINE__);
+			goto done;
+		}
+		if (ea->arp_pln != sizeof(struct in_addr)) {
+			BRIDGE_HF_DROP(brhf_arp_bad_pro_len,
+				__func__, __LINE__);
+			goto done;
+		}
+
+		/*
+		 * Allow only ARP request or ARP reply
+		 */
+		if (ea->arp_op != htons(ARPOP_REQUEST) &&
+		    ea->arp_op != htons(ARPOP_REPLY)) {
+			BRIDGE_HF_DROP(brhf_arp_bad_op, __func__, __LINE__);
+			goto done;
+		}
+		/*
+		 * Verify source hardware address matches
+		 */
+		if (bcmp(ea->arp_sha, bif->bif_hf_hwsrc,
+		    ETHER_ADDR_LEN) != 0) {
+			BRIDGE_HF_DROP(brhf_arp_bad_sha, __func__, __LINE__);
+			goto done;
+		}
+		/*
+		 * Verify source protocol address:
+		 * May be null for an ARP probe
+		 */
+		if (bcmp(ea->arp_spa, &bif->bif_hf_ipsrc.s_addr,
+			sizeof(struct in_addr)) != 0 &&
+		    bcmp(ea->arp_spa, &inaddr_any,
+			sizeof(struct in_addr)) != 0) {
+			BRIDGE_HF_DROP(brhf_arp_bad_spa, __func__, __LINE__);
+			goto done;
+		}
+		/*
+		 *
+		 */
+		bridge_hostfilter_stats.brhf_arp_ok += 1;
+		error = 0;
+	} else if (eh->ether_type == htons(ETHERTYPE_IP)) {
+		size_t minlen = sizeof(struct ether_header) + sizeof(struct ip);
+		struct ip iphdr;
+		size_t offset;
+
+		/*
+		 * Make the Ethernet and IP headers contiguous
+		 */
+		if (mbuf_pkthdr_len(m) < minlen) {
+			BRIDGE_HF_DROP(brhf_ip_too_small, __func__, __LINE__);
+			goto done;
+		}
+		offset = sizeof(struct ether_header);
+		error = mbuf_copydata(m, offset, sizeof(struct ip), &iphdr);
+		if (error != 0) {
+			BRIDGE_HF_DROP(brhf_ip_too_small, __func__, __LINE__);
+			goto done;
+		}
+		/*
+		 * Verify the source IP address
+		 */
+		if (iphdr.ip_p == IPPROTO_UDP) {
+			struct udphdr udp;
+
+			minlen += sizeof(struct udphdr);
+			if (mbuf_pkthdr_len(m) < minlen) {
+				BRIDGE_HF_DROP(brhf_ip_too_small,
+					__func__, __LINE__);
+				goto done;
+			}
+
+			/*
+			 * Allow all zero addresses for DHCP requests
+			 */
+			if (iphdr.ip_src.s_addr != bif->bif_hf_ipsrc.s_addr &&
+			    iphdr.ip_src.s_addr != INADDR_ANY) {
+				BRIDGE_HF_DROP(brhf_ip_bad_srcaddr,
+					__func__, __LINE__);
+				goto done;
+			}
+			offset = sizeof(struct ether_header) +
+			    (IP_VHL_HL(iphdr.ip_vhl) << 2);
+			error = mbuf_copydata(m, offset,
+			    sizeof(struct udphdr), &udp);
+			if (error != 0) {
+				BRIDGE_HF_DROP(brhf_ip_too_small,
+					__func__, __LINE__);
+				goto done;
+			}
+			/*
+			 * Either it's a Bootp/DHCP packet that we like or
+			 * it's a UDP packet from the host IP as source address
+			 */
+			if (udp.uh_sport == htons(IPPORT_BOOTPC) &&
+			    udp.uh_dport == htons(IPPORT_BOOTPS)) {
+				minlen += sizeof(struct dhcp);
+				if (mbuf_pkthdr_len(m) < minlen) {
+					BRIDGE_HF_DROP(brhf_ip_too_small,
+						__func__, __LINE__);
+					goto done;
+				}
+				offset += sizeof(struct udphdr);
+				error = bridge_dhcp_filter(bif, m, offset);
+				if (error != 0)
+					goto done;
+			} else if (iphdr.ip_src.s_addr == INADDR_ANY) {
+				BRIDGE_HF_DROP(brhf_ip_bad_srcaddr,
+					__func__, __LINE__);
+				goto done;
+			}
+		} else if (iphdr.ip_src.s_addr != bif->bif_hf_ipsrc.s_addr ||
+		    bif->bif_hf_ipsrc.s_addr == INADDR_ANY) {
+
+			BRIDGE_HF_DROP(brhf_ip_bad_srcaddr, __func__, __LINE__);
+			goto done;
+		}
+		/*
+		 * Allow only boring IP protocols
+		 */
+		if (iphdr.ip_p != IPPROTO_TCP &&
+		    iphdr.ip_p != IPPROTO_UDP &&
+		    iphdr.ip_p != IPPROTO_ICMP &&
+		    iphdr.ip_p != IPPROTO_ESP &&
+		    iphdr.ip_p != IPPROTO_AH &&
+		    iphdr.ip_p != IPPROTO_GRE) {
+			BRIDGE_HF_DROP(brhf_ip_bad_proto, __func__, __LINE__);
+			goto done;
+		}
+		bridge_hostfilter_stats.brhf_ip_ok += 1;
+		error = 0;
+	} else {
+		BRIDGE_HF_DROP(brhf_bad_ether_type, __func__, __LINE__);
+		goto done;
+	}
+done:
+	if (error != 0) {
+		if (if_bridge_debug & BR_DBGF_HOSTFILTER) {
+			if (m) {
+				printf_mbuf_data(m, 0,
+				    sizeof(struct ether_header) +
+				    sizeof(struct ip));
+			}
+			printf("\n");
+		}
+
+		if (m != NULL)
+			m_freem(m);
+	}
+	return (error);
 }

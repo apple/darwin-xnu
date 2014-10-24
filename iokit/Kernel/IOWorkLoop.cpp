@@ -144,11 +144,6 @@ bool IOWorkLoop::init()
         workToDo = false;
     }
 
-    if (!reserved) {
-        reserved = IONew(ExpansionData, 1);
-        reserved->options = 0;
-    }
-	
     IOStatisticsRegisterCounter();
 
     if ( controlG == NULL ) {

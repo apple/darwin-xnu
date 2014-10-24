@@ -18,9 +18,10 @@ case "$PRODUCT" in
 	;;
 esac
 
-for j in 1 2 3; do
-    for i in ${EXECUTABLES}; do
-	echo "Running $i"
+for i in ${EXECUTABLES}; do
+    echo "Running $i"
+    for j in `jot $(sysctl -n hw.ncpu) 1`; do
+	printf "\t%dx\t" $j
 	/usr/bin/time ./${RUN} $j $((${COUNT}/$j)) ./$i
 	if [ $? -ne 0 ]; then
 	    echo "Failed $i, exit status $?"

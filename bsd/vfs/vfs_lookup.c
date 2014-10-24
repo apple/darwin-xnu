@@ -112,17 +112,18 @@ static int vfs_getrealpath(const char * path, char * realpath, size_t bufsize, v
 #define MAX_VOLFS_RESTARTS 5
 #endif
 
-boolean_t 	lookup_continue_ok(struct nameidata *ndp);
-int		lookup_traverse_mountpoints(struct nameidata *ndp, struct componentname *cnp, vnode_t dp, int vbusyflags, vfs_context_t ctx);
-int 		lookup_handle_symlink(struct nameidata *ndp, vnode_t *new_dp, vfs_context_t ctx);
-int		lookup_authorize_search(vnode_t dp, struct componentname *cnp, int dp_authorized_in_cache, vfs_context_t ctx);
-void		lookup_consider_update_cache(vnode_t dvp, vnode_t vp, struct componentname *cnp, int nc_generation);
-int		lookup_handle_rsrc_fork(vnode_t dp, struct nameidata *ndp, struct componentname *cnp, int wantparent, vfs_context_t ctx);
-int		lookup_handle_found_vnode(struct nameidata *ndp, struct componentname *cnp, int rdonly, 
+static int		lookup_traverse_mountpoints(struct nameidata *ndp, struct componentname *cnp, vnode_t dp, int vbusyflags, vfs_context_t ctx);
+static int 		lookup_handle_symlink(struct nameidata *ndp, vnode_t *new_dp, vfs_context_t ctx);
+static int		lookup_authorize_search(vnode_t dp, struct componentname *cnp, int dp_authorized_in_cache, vfs_context_t ctx);
+static void		lookup_consider_update_cache(vnode_t dvp, vnode_t vp, struct componentname *cnp, int nc_generation);
+static int		lookup_handle_found_vnode(struct nameidata *ndp, struct componentname *cnp, int rdonly, 
 			int vbusyflags, int *keep_going, int nc_generation,
 			int wantparent, int atroot, vfs_context_t ctx);
-int 		lookup_handle_emptyname(struct nameidata *ndp, struct componentname *cnp, int wantparent);
+static int 		lookup_handle_emptyname(struct nameidata *ndp, struct componentname *cnp, int wantparent);
 
+#if NAMEDRSRCFORK
+static int		lookup_handle_rsrc_fork(vnode_t dp, struct nameidata *ndp, struct componentname *cnp, int wantparent, vfs_context_t ctx);
+#endif
 
 
 
@@ -456,7 +457,7 @@ namei_compound_available(vnode_t dp, struct nameidata *ndp)
 
 	return 0;
 }
-int
+static int
 lookup_authorize_search(vnode_t dp, struct componentname *cnp, int dp_authorized_in_cache, vfs_context_t ctx)
 {
 #if !CONFIG_MACF
@@ -479,7 +480,7 @@ lookup_authorize_search(vnode_t dp, struct componentname *cnp, int dp_authorized
 	return 0;
 }
 
-void 
+static void 
 lookup_consider_update_cache(vnode_t dvp, vnode_t vp, struct componentname *cnp, int nc_generation) 
 {
 	int isdot_or_dotdot;
@@ -524,7 +525,7 @@ lookup_consider_update_cache(vnode_t dvp, vnode_t vp, struct componentname *cnp,
  * data fork if requested.  On failure, returns with iocount data fork (always) and its parent directory 
  * (if one was provided).
  */
-int
+static int
 lookup_handle_rsrc_fork(vnode_t dp, struct nameidata *ndp, struct componentname *cnp, int wantparent, vfs_context_t ctx)
 {
 	vnode_t svp = NULLVP;
@@ -612,7 +613,7 @@ out:
  *	--In the event of an error, may return with ni_dvp NULL'ed out (in which case, iocount
  *	was dropped).
  */
-int		
+static int		
 lookup_handle_found_vnode(struct nameidata *ndp, struct componentname *cnp, int rdonly, 
 		int vbusyflags, int *keep_going, int nc_generation,
 		int wantparent, int atroot, vfs_context_t ctx)
@@ -797,7 +798,7 @@ out:
 /*
  * Comes in iocount on ni_vp.  May overwrite ni_dvp, but doesn't interpret incoming value.
  */
-int 
+static int 
 lookup_handle_emptyname(struct nameidata *ndp, struct componentname *cnp, int wantparent)
 {
 	vnode_t dp;
@@ -924,9 +925,8 @@ lookup(struct nameidata *ndp)
 	/*
 	 * Setup: break out flag bits into variables.
 	 */
-	if (cnp->cn_flags & (NOCACHE | DOWHITEOUT)) {
-	        if ((cnp->cn_flags & NOCACHE) || (cnp->cn_nameiop == DELETE))
-		        docache = 0;
+	if (cnp->cn_flags & NOCACHE) {
+	        docache = 0;
 	}
 	wantparent = cnp->cn_flags & (LOCKPARENT | WANTPARENT);
 	rdonly = cnp->cn_flags & RDONLY;
@@ -1305,16 +1305,14 @@ lookup_validate_creation_path(struct nameidata *ndp)
 /*
  * Modifies only ni_vp.  Always returns with ni_vp still valid (iocount held).
  */
-int
+static int
 lookup_traverse_mountpoints(struct nameidata *ndp, struct componentname *cnp, vnode_t dp, 
 		int vbusyflags, vfs_context_t ctx)
 {
 	mount_t mp;
 	vnode_t tdp;
 	int error = 0;
-	uthread_t uth;
 	uint32_t depth = 0;
-	int dont_cache_mp = 0;
 	vnode_t	mounted_on_dp;
 	int current_mount_generation = 0;
 	
@@ -1353,25 +1351,7 @@ lookup_traverse_mountpoints(struct nameidata *ndp, struct componentname *cnp, vn
 				continue;
 			}
 
-
-			/*
-			 * XXX - if this is the last component of the
-			 * pathname, and it's either not a lookup operation
-			 * or the NOTRIGGER flag is set for the operation,
-			 * set a uthread flag to let VFS_ROOT() for autofs
-			 * know it shouldn't trigger a mount.
-			 */
-			uth = (struct uthread *)get_bsdthread_info(current_thread());
-			if ((cnp->cn_flags & ISLASTCN) &&
-					(cnp->cn_nameiop != LOOKUP ||
-					 (cnp->cn_flags & NOTRIGGER))) {
-				uth->uu_notrigger = 1;
-				dont_cache_mp = 1;
-			}
-
 			error = VFS_ROOT(mp, &tdp, ctx);
-			/* XXX - clear the uthread flag */
-			uth->uu_notrigger = 0;
 
 			mount_dropcrossref(mp, dp, 0);
 			vfs_unbusy(mp);
@@ -1402,7 +1382,7 @@ lookup_traverse_mountpoints(struct nameidata *ndp, struct componentname *cnp, vn
 		}
 	}
 
-	if (depth && !dont_cache_mp) {
+	if (depth) {
 	        mp = mounted_on_dp->v_mountedhere;
 
 		if (mp) {
@@ -1424,7 +1404,7 @@ out:
  * Takes ni_vp and ni_dvp non-NULL.  Returns with *new_dp set to the location
  * at which to start a lookup with a resolved path, and all other iocounts dropped.
  */
-int 
+static int 
 lookup_handle_symlink(struct nameidata *ndp, vnode_t *new_dp, vfs_context_t ctx)
 {
 	int error;

@@ -571,6 +571,7 @@ ip6_fw_chk(struct ip6_hdr **pip6,
 	u_int16_t ignport = ntohs(*cookie);
 #endif
 	struct timeval timenow;
+	struct tcp_respond_args tra;
 
 	getmicrotime(&timenow);
 
@@ -872,8 +873,11 @@ got_match:
 				flags = TH_RST|TH_ACK;
 			}
 			bcopy(&ti, ip6, sizeof(ti));
+			bzero(&tra, sizeof(tra));
+			tra.ifscope = IFSCOPE_NONE;
+			tra.awdl_unrestricted = 1;
 			tcp_respond(NULL, ip6, (struct tcphdr *)(ip6 + 1),
-				*m, ack, seq, flags, IFSCOPE_NONE, 0);
+				*m, ack, seq, flags, &tra);
 			*m = NULL;
 			break;
 		  }

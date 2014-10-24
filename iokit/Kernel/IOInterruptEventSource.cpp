@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1998-2010 Apple Inc. All rights reserved.
+ * Copyright (c) 1998-2014 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -33,6 +33,7 @@
 #include <IOKit/IOInterrupts.h>
 #include <IOKit/IOTimeStamp.h>
 #include <IOKit/IOWorkLoop.h>
+#include <IOKit/IOInterruptAccountingPrivate.h>
 
 #if IOKITSTATS
 
@@ -81,6 +82,14 @@ bool IOInterruptEventSource::init(OSObject *inOwner,
     if ( !super::init(inOwner, (IOEventSourceAction) inAction) )
         return false;
 
+    reserved = IONew(ExpansionData, 1);
+
+    if (!reserved) {
+        return false;
+    }
+
+    bzero(reserved, sizeof(ExpansionData));
+
     provider = inProvider;
     producerCount = consumerCount = 0;
     autoDisable = explicitDisable = false;
@@ -88,9 +97,36 @@ bool IOInterruptEventSource::init(OSObject *inOwner,
 
     // Assumes inOwner holds a reference(retain) on the provider
     if (inProvider) {
+        if (IA_ANY_STATISTICS_ENABLED) {
+            /*
+             * We only treat this as an "interrupt" if it has a provider; if it does,
+             * set up the objects necessary to track interrupt statistics.  Interrupt
+             * event sources without providers are most likely being used as simple
+             * event source in order to poke at workloops and kick off work.
+             *
+             * We also avoid try to avoid interrupt accounting overhead if none of
+             * the statistics are enabled.
+             */
+            reserved->statistics = IONew(IOInterruptAccountingData, 1);
+
+            if (!reserved->statistics) {
+                /*
+                 * We rely on the free() routine to clean up after us if init fails
+                 * midway.
+                 */
+                return false;
+            }
+
+            bzero(reserved->statistics, sizeof(IOInterruptAccountingData));
+
+            reserved->statistics->owner = this;
+        }
+
         res = (kIOReturnSuccess == registerInterruptHandler(inProvider, inIntIndex));
-	if (res)
+
+	if (res) {
 	    intIndex = inIntIndex;
+        }
     }
 
     IOStatisticsInitializeCounter();
@@ -120,8 +156,53 @@ IOReturn IOInterruptEventSource::registerInterruptHandler(IOService *inProvider,
 
     ret = provider->registerInterrupt(inIntIndex, this, intHandler);
 
+    /*
+     * Add statistics to the provider.  The setWorkLoop convention should ensure
+     * that we always go down the unregister path before we register (outside of
+     * init()), so we don't have to worry that we will invoke addInterruptStatistics
+     * erroneously.
+     */
+    if ((ret == kIOReturnSuccess) && (reserved->statistics)) {
+        /*
+         * Stash the normal index value, for the sake of debugging.
+         */
+        reserved->statistics->interruptIndex = inIntIndex;
+
+        /*
+         * We need to hook the interrupt information up to the provider so that it
+         * can find the statistics for this interrupt when desired.  The provider is
+         * responsible for maintaining the reporter for a particular interrupt, and
+         * needs a handle on the statistics so that it can request that the reporter
+         * be updated as needed.  Errors are considered "soft" for the moment (it
+         * will either panic, or fail in a way such that we can still service the
+         * interrupt).
+         */
+        provider->addInterruptStatistics(reserved->statistics, inIntIndex);
+
+        /*
+         * Add the statistics object to the global list of statistics objects; this
+         * is an aid to debugging (we can trivially find statistics for all eligible
+         * interrupts, and dump them; potentially helpful if the system is wedged
+         * due to interrupt activity).
+         */
+        interruptAccountingDataAddToList(reserved->statistics);
+    }
+
     return (ret);
 }
+
+void
+IOInterruptEventSource::unregisterInterruptHandler(IOService *inProvider,
+				  int inIntIndex)
+{
+    if (reserved->statistics) {
+        interruptAccountingDataRemoveFromList(reserved->statistics);
+        provider->removeInterruptStatistics(reserved->statistics->interruptIndex);
+    }
+
+    provider->unregisterInterrupt(inIntIndex);
+}
+
 
 IOInterruptEventSource *
 IOInterruptEventSource::interruptEventSource(OSObject *inOwner,
@@ -142,7 +223,15 @@ IOInterruptEventSource::interruptEventSource(OSObject *inOwner,
 void IOInterruptEventSource::free()
 {
     if (provider && intIndex >= 0)
-        provider->unregisterInterrupt(intIndex);
+        unregisterInterruptHandler(provider, intIndex);
+
+    if (reserved) {
+        if (reserved->statistics) {
+            IODelete(reserved->statistics, IOInterruptAccountingData, 1);
+        }
+
+        IODelete(reserved, ExpansionData, 1);
+    }
 
     super::free();
 }
@@ -172,7 +261,11 @@ void IOInterruptEventSource::setWorkLoop(IOWorkLoop *inWorkLoop)
     if (provider) {
 	if (!inWorkLoop) {
 	    if (intIndex >= 0) {
-		provider->unregisterInterrupt(intIndex);
+                /*
+                 * It isn't necessarily safe to wait until free() to unregister the interrupt;
+                 * our provider may disappear.
+                 */
+                unregisterInterruptHandler(provider, intIndex);
 		intIndex = ~intIndex;
 	    }
 	} else if ((intIndex < 0) && (kIOReturnSuccess == registerInterruptHandler(provider, ~intIndex))) {
@@ -200,6 +293,10 @@ bool IOInterruptEventSource::getAutoDisable() const
 
 bool IOInterruptEventSource::checkForWork()
 {
+    uint64_t startSystemTime = 0;
+    uint64_t endSystemTime = 0;
+    uint64_t startCPUTime = 0;
+    uint64_t endCPUTime = 0;
     unsigned int cacheProdCount = producerCount;
     int numInts = cacheProdCount - consumerCount;
     IOInterruptEventAction intAction = (IOInterruptEventAction) action;
@@ -212,9 +309,35 @@ bool IOInterruptEventSource::checkForWork()
 		if (trace)
 			IOTimeStampStartConstant(IODBG_INTES(IOINTES_ACTION),
 						 VM_KERNEL_UNSLIDE(intAction), (uintptr_t) owner, (uintptr_t) this, (uintptr_t) workLoop);
-		
+
+		if (reserved->statistics) {
+			if (IA_GET_STATISTIC_ENABLED(kInterruptAccountingSecondLevelSystemTimeIndex)) {
+				startSystemTime = mach_absolute_time();
+			}
+
+			if (IA_GET_STATISTIC_ENABLED(kInterruptAccountingSecondLevelCPUTimeIndex)) {
+				startCPUTime = thread_get_runtime_self();
+			}
+		}
+
 		// Call the handler
 		(*intAction)(owner, this, numInts);
+
+		if (reserved->statistics) {
+			if (IA_GET_STATISTIC_ENABLED(kInterruptAccountingSecondLevelCountIndex)) {
+				IA_ADD_VALUE(&reserved->statistics->interruptStatistics[kInterruptAccountingSecondLevelCountIndex], 1);
+			}
+
+			if (IA_GET_STATISTIC_ENABLED(kInterruptAccountingSecondLevelCPUTimeIndex)) {
+				endCPUTime = thread_get_runtime_self();
+				IA_ADD_VALUE(&reserved->statistics->interruptStatistics[kInterruptAccountingSecondLevelCPUTimeIndex], endCPUTime - startCPUTime);
+			}
+
+			if (IA_GET_STATISTIC_ENABLED(kInterruptAccountingSecondLevelSystemTimeIndex)) {
+				endSystemTime = mach_absolute_time();
+				IA_ADD_VALUE(&reserved->statistics->interruptStatistics[kInterruptAccountingSecondLevelSystemTimeIndex], endSystemTime - startSystemTime);
+			}
+		}
 		
 		if (trace)
 			IOTimeStampEndConstant(IODBG_INTES(IOINTES_ACTION),
@@ -230,9 +353,35 @@ bool IOInterruptEventSource::checkForWork()
 		if (trace)
 			IOTimeStampStartConstant(IODBG_INTES(IOINTES_ACTION),
 						 VM_KERNEL_UNSLIDE(intAction), (uintptr_t) owner, (uintptr_t) this, (uintptr_t) workLoop);
+
+		if (reserved->statistics) {
+			if (IA_GET_STATISTIC_ENABLED(kInterruptAccountingSecondLevelSystemTimeIndex)) {
+				startSystemTime = mach_absolute_time();
+			}
+
+			if (IA_GET_STATISTIC_ENABLED(kInterruptAccountingSecondLevelCPUTimeIndex)) {
+				startCPUTime = thread_get_runtime_self();
+			}
+		}
 		
 		// Call the handler
 		(*intAction)(owner, this, -numInts);
+
+		if (reserved->statistics) {
+			if (IA_GET_STATISTIC_ENABLED(kInterruptAccountingSecondLevelCountIndex)) {
+				IA_ADD_VALUE(&reserved->statistics->interruptStatistics[kInterruptAccountingSecondLevelCountIndex], 1);
+			}
+
+			if (IA_GET_STATISTIC_ENABLED(kInterruptAccountingSecondLevelCPUTimeIndex)) {
+				endCPUTime = thread_get_runtime_self();
+				IA_ADD_VALUE(&reserved->statistics->interruptStatistics[kInterruptAccountingSecondLevelCPUTimeIndex], endCPUTime - startCPUTime);
+			}
+
+			if (IA_GET_STATISTIC_ENABLED(kInterruptAccountingSecondLevelSystemTimeIndex)) {
+				endSystemTime = mach_absolute_time();
+				IA_ADD_VALUE(&reserved->statistics->interruptStatistics[kInterruptAccountingSecondLevelSystemTimeIndex], endSystemTime - startSystemTime);
+			}
+		}
 		
 		if (trace)
 			IOTimeStampEndConstant(IODBG_INTES(IOINTES_ACTION),
@@ -256,6 +405,12 @@ void IOInterruptEventSource::normalInterruptOccurred
 	
 	if (trace)
 	    IOTimeStampStartConstant(IODBG_INTES(IOINTES_SEMA), (uintptr_t) this, (uintptr_t) owner);
+
+    if (reserved->statistics) {
+        if (IA_GET_STATISTIC_ENABLED(kInterruptAccountingFirstLevelCountIndex)) {
+            IA_ADD_VALUE(&reserved->statistics->interruptStatistics[kInterruptAccountingFirstLevelCountIndex], 1);
+        }
+    }
 	
     signalWorkAvailable();
 	
@@ -275,6 +430,12 @@ void IOInterruptEventSource::disableInterruptOccurred
 	
 	if (trace)
 	    IOTimeStampStartConstant(IODBG_INTES(IOINTES_SEMA), (uintptr_t) this, (uintptr_t) owner);
+
+    if (reserved->statistics) {
+        if (IA_GET_STATISTIC_ENABLED(kInterruptAccountingFirstLevelCountIndex)) {
+            IA_ADD_VALUE(&reserved->statistics->interruptStatistics[kInterruptAccountingFirstLevelCountIndex], 1);
+        }
+    }
     
     signalWorkAvailable();
 	

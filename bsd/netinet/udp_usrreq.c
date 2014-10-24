@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2013 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2014 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -110,6 +110,10 @@ extern int ipsec_bypass;
 extern int esp_udp_encap_port;
 #endif /* IPSEC */
 
+#if NECP
+#include <net/necp.h>
+#endif /* NECP */
+
 #define	DBG_LAYER_IN_BEG	NETDBG_CODE(DBG_NETUDP, 0)
 #define	DBG_LAYER_IN_END	NETDBG_CODE(DBG_NETUDP, 2)
 #define	DBG_LAYER_OUT_BEG	NETDBG_CODE(DBG_NETUDP, 1)
@@ -169,7 +173,8 @@ extern void ipfw_stealth_stats_incr_udp(void);
 
 static int udp_getstat SYSCTL_HANDLER_ARGS;
 struct	udpstat udpstat;	/* from udp_var.h */
-SYSCTL_PROC(_net_inet_udp, UDPCTL_STATS, stats, CTLFLAG_RD | CTLFLAG_LOCKED,
+SYSCTL_PROC(_net_inet_udp, UDPCTL_STATS, stats,
+    CTLTYPE_STRUCT | CTLFLAG_RD | CTLFLAG_LOCKED,
     0, 0, udp_getstat, "S,udpstat",
     "UDP statistics (struct udpstat, netinet/udp_var.h)");
 
@@ -296,6 +301,7 @@ udp_input(struct mbuf *m, int iphlen)
 	struct ifnet *ifp = m->m_pkthdr.rcvif;
 	boolean_t cell = IFNET_IS_CELLULAR(ifp);
 	boolean_t wifi = (!cell && IFNET_IS_WIFI(ifp));
+	boolean_t wired = (!wifi && IFNET_IS_WIRED(ifp));
 
 	bzero(&udp_in, sizeof (udp_in));
 	udp_in.sin_len = sizeof (struct sockaddr_in);
@@ -425,11 +431,7 @@ udp_input(struct mbuf *m, int iphlen)
                         if ((inp->inp_vflag & INP_IPV4) == 0)
                                 continue;
 #endif /* INET6 */
-			if (inp_restricted(inp, ifp))
-				continue;
-
-			if (IFNET_IS_CELLULAR(ifp) &&
-			    (inp->inp_flags & INP_NO_IFT_CELLULAR))
+			if (inp_restricted_recv(inp, ifp))
 				continue;
 
 			if ((inp->inp_moptions == NULL) &&
@@ -505,17 +507,14 @@ udp_input(struct mbuf *m, int iphlen)
 			reuse_sock = (inp->inp_socket->so_options &
 			    (SO_REUSEPORT|SO_REUSEADDR));
 
-#if IPSEC
+#if NECP
 			skipit = 0;
-			/* check AH/ESP integrity. */
-			if (ipsec_bypass == 0 &&
-			    ipsec4_in_reject_so(m, inp->inp_socket)) {
-				IPSEC_STAT_INCREMENT(ipsecstat.in_polvio);
+			if (!necp_socket_is_allowed_to_send_recv_v4(inp, uh->uh_dport, uh->uh_sport, &ip->ip_dst, &ip->ip_src, ifp, NULL)) {
 				/* do not inject data to pcb */
 				skipit = 1;
 			}
 			if (skipit == 0)
-#endif /*IPSEC*/
+#endif /* NECP */
 			{
 				struct mbuf *n = NULL;
 
@@ -683,16 +682,13 @@ udp_input(struct mbuf *m, int iphlen)
 		IF_UDP_STATINC(ifp, cleanup);
 		goto bad;
 	}
-#if IPSEC
-	if (ipsec_bypass == 0 && inp != NULL) {
-		if (ipsec4_in_reject_so(m, inp->inp_socket)) {
-			IPSEC_STAT_INCREMENT(ipsecstat.in_polvio);
-			udp_unlock(inp->inp_socket, 1, 0);
-			IF_UDP_STATINC(ifp, badipsec);
-			goto bad;
-		}
+#if NECP
+	if (!necp_socket_is_allowed_to_send_recv_v4(inp, uh->uh_dport, uh->uh_sport, &ip->ip_dst, &ip->ip_src, ifp, NULL)) {
+		udp_unlock(inp->inp_socket, 1, 0);
+		IF_UDP_STATINC(ifp, badipsec);
+		goto bad;
 	}
-#endif /* IPSEC */
+#endif /* NECP */
 
 	/*
 	 * Construct sockaddr format source address.
@@ -737,8 +733,8 @@ udp_input(struct mbuf *m, int iphlen)
 		append_sa = (struct sockaddr *)&udp_in;
 	}
 	if (nstat_collect) {
-		INP_ADD_STAT(inp, cell, wifi, rxpackets, 1);
-		INP_ADD_STAT(inp, cell, wifi, rxbytes, m->m_pkthdr.len);
+		INP_ADD_STAT(inp, cell, wifi, wired, rxpackets, 1);
+		INP_ADD_STAT(inp, cell, wifi, wired, rxbytes, m->m_pkthdr.len);
 	}
 	so_recv_data_stat(inp->inp_socket, m, 0);
 	if (sbappendaddr(&inp->inp_socket->so_rcv, append_sa,
@@ -795,6 +791,7 @@ udp_append(struct inpcb *last, struct ip *ip, struct mbuf *n, int off,
 	struct mbuf *opts = 0;
 	boolean_t cell = IFNET_IS_CELLULAR(ifp);
 	boolean_t wifi = (!cell && IFNET_IS_WIFI(ifp));
+	boolean_t wired = (!wifi && IFNET_IS_WIRED(ifp));
 	int ret = 0;
 
 #if CONFIG_MACF_NET
@@ -842,8 +839,9 @@ udp_append(struct inpcb *last, struct ip *ip, struct mbuf *n, int off,
 #endif /* INET6 */
 	append_sa = (struct sockaddr *)pudp_in;
 	if (nstat_collect) {
-		INP_ADD_STAT(last, cell, wifi, rxpackets, 1);
-		INP_ADD_STAT(last, cell, wifi, rxbytes, n->m_pkthdr.len);
+		INP_ADD_STAT(last, cell, wifi, wired, rxpackets, 1);
+		INP_ADD_STAT(last, cell, wifi, wired, rxbytes, 
+		    n->m_pkthdr.len);
 	}
 	so_recv_data_stat(last->inp_socket, n, 0);
 	m_adj(n, off);
@@ -1080,7 +1078,7 @@ udp_pcblist SYSCTL_HANDLER_ARGS
 }
 
 SYSCTL_PROC(_net_inet_udp, UDPCTL_PCBLIST, pcblist,
-    CTLFLAG_RD | CTLFLAG_LOCKED, 0, 0, udp_pcblist,
+    CTLTYPE_STRUCT | CTLFLAG_RD | CTLFLAG_LOCKED, 0, 0, udp_pcblist,
     "S,xinpcb", "List of active UDP sockets");
 
 
@@ -1185,7 +1183,7 @@ udp_pcblist64 SYSCTL_HANDLER_ARGS
 }
 
 SYSCTL_PROC(_net_inet_udp, OID_AUTO, pcblist64,
-    CTLFLAG_RD | CTLFLAG_LOCKED, 0, 0, udp_pcblist64,
+    CTLTYPE_STRUCT | CTLFLAG_RD | CTLFLAG_LOCKED, 0, 0, udp_pcblist64,
     "S,xinpcb64", "List of active UDP sockets");
 
 
@@ -1197,14 +1195,14 @@ udp_pcblist_n SYSCTL_HANDLER_ARGS
 }
 
 SYSCTL_PROC(_net_inet_udp, OID_AUTO, pcblist_n,
-    CTLFLAG_RD | CTLFLAG_LOCKED, 0, 0, udp_pcblist_n,
+    CTLTYPE_STRUCT | CTLFLAG_RD | CTLFLAG_LOCKED, 0, 0, udp_pcblist_n,
     "S,xinpcb_n", "List of active UDP sockets");
 
 __private_extern__ void
-udp_get_ports_used(uint32_t ifindex, int protocol, uint32_t wildcardok,
+udp_get_ports_used(uint32_t ifindex, int protocol, uint32_t flags,
     bitstr_t *bitfield)
 {
-	inpcb_get_ports_used(ifindex, protocol, wildcardok, bitfield, &udbinfo);
+	inpcb_get_ports_used(ifindex, protocol, flags, bitfield, &udbinfo);
 }
 
 __private_extern__ uint32_t
@@ -1313,7 +1311,7 @@ udp_output(struct inpcb *inp, struct mbuf *m, struct sockaddr *addr,
 	struct ifnet *outif = NULL;
 	struct flowadv *adv = &ipoa.ipoa_flowadv;
 	mbuf_svc_class_t msc = MBUF_SC_UNSPEC;
-	struct ifnet *origoutifp;
+	struct ifnet *origoutifp = NULL;
 	int flowadv = 0;
 
 	/* Enable flow advisory only when connected */
@@ -1367,8 +1365,12 @@ udp_output(struct inpcb *inp, struct mbuf *m, struct sockaddr *addr,
 		outif = inp->inp_boundifp;
 		ipoa.ipoa_boundif = outif->if_index;
 	}
-	if (inp->inp_flags & INP_NO_IFT_CELLULAR)
+	if (INP_NO_CELLULAR(inp))
 		ipoa.ipoa_flags |=  IPOAF_NO_CELLULAR;
+	if (INP_NO_EXPENSIVE(inp))
+		ipoa.ipoa_flags |=  IPOAF_NO_EXPENSIVE;
+	if (INP_AWDL_UNRESTRICTED(inp))
+		ipoa.ipoa_flags |=  IPOAF_AWDL_UNRESTRICTED;
 	soopts |= IP_OUTARGS;
 
 	/*
@@ -1406,8 +1408,6 @@ udp_output(struct inpcb *inp, struct mbuf *m, struct sockaddr *addr,
 		if (ia != NULL)
 			IFA_REMREF(&ia->ia_ifa);
 	}
-
-	origoutifp = inp->inp_last_outifp;
 
 	/*
 	 * IP_PKTINFO option check.  If a temporary scope or src address
@@ -1553,9 +1553,21 @@ udp_output(struct inpcb *inp, struct mbuf *m, struct sockaddr *addr,
 
 	KERNEL_DEBUG(DBG_LAYER_OUT_END, ui->ui_dport, ui->ui_sport,
 		     ui->ui_src.s_addr, ui->ui_dst.s_addr, ui->ui_ulen);
+	
+#if NECP
+	{
+		necp_kernel_policy_id policy_id;
+		if (!necp_socket_is_allowed_to_send_recv_v4(inp, lport, fport, &laddr, &faddr, NULL, &policy_id)) {
+			error = EHOSTUNREACH;
+			goto abort;
+		}
 
+		necp_mark_packet_from_socket(m, inp, policy_id);
+	}
+#endif /* NECP */
+	
 #if IPSEC
-	if (ipsec_bypass == 0 && ipsec_setsocket(m, inp->inp_socket) != 0) {
+	if (inp->inp_sp != NULL && ipsec_setsocket(m, inp->inp_socket) != 0) {
 		error = ENOBUFS;
 		goto abort;
 	}
@@ -1602,16 +1614,17 @@ udp_output(struct inpcb *inp, struct mbuf *m, struct sockaddr *addr,
 		IMO_REMREF(mopts);
 
 	if (error == 0 && nstat_collect) {
-		boolean_t cell, wifi;
+		boolean_t cell, wifi, wired;
 
 		if (ro.ro_rt != NULL) {
 			cell = IFNET_IS_CELLULAR(ro.ro_rt->rt_ifp);
 			wifi = (!cell && IFNET_IS_WIFI(ro.ro_rt->rt_ifp));
+			wired = (!wifi && IFNET_IS_WIRED(ro.ro_rt->rt_ifp));
 		} else {
-			cell = wifi = FALSE;
+			cell = wifi = wired = FALSE;
 		}
-		INP_ADD_STAT(inp, cell, wifi, txpackets, 1);
-		INP_ADD_STAT(inp, cell, wifi, txbytes, len);
+		INP_ADD_STAT(inp, cell, wifi, wired, txpackets, 1);
+		INP_ADD_STAT(inp, cell, wifi, wired, txbytes, len);
 	}
 
 	if (flowadv && (adv->code == FADV_FLOW_CONTROLLED ||
@@ -1661,11 +1674,11 @@ abort:
 	}
 
 	/*
-	 * If output interface was cellular, and this socket is denied
-	 * access to it, generate an event.
+	 * If output interface was cellular/expensive, and this socket is
+	 * denied access to it, generate an event.
 	 */
 	if (error != 0 && (ipoa.ipoa_retflags & IPOARF_IFDENIED) &&
-	    (inp->inp_flags & INP_NO_IFT_CELLULAR))
+	    (INP_NO_CELLULAR(inp) || INP_NO_EXPENSIVE(inp)))
 		soevent(so, (SO_FILT_HINT_LOCKED|SO_FILT_HINT_IFDENIED));
 
 release:
@@ -1781,7 +1794,11 @@ udp_bind(struct socket *so, struct sockaddr *nam, struct proc *p)
 		return (EAFNOSUPPORT);
 
 	inp = sotoinpcb(so);
-	if (inp == NULL || (inp->inp_flags2 & INP2_WANT_FLOW_DIVERT))
+	if (inp == NULL
+#if NECP
+		|| (necp_socket_should_use_flow_divert(inp))
+#endif /* NECP */
+		)
 		return (inp == NULL ? EINVAL : EPROTOTYPE);
 	error = in_pcbbind(inp, nam, p);
 	return (error);
@@ -1794,7 +1811,11 @@ udp_connect(struct socket *so, struct sockaddr *nam, struct proc *p)
 	int error;
 
 	inp = sotoinpcb(so);
-	if (inp == NULL || (inp->inp_flags2 & INP2_WANT_FLOW_DIVERT))
+	if (inp == NULL
+#if NECP
+		|| (necp_socket_should_use_flow_divert(inp))
+#endif /* NECP */
+		)
 		return (inp == NULL ? EINVAL : EPROTOTYPE);
 	if (inp->inp_faddr.s_addr != INADDR_ANY)
 		return (EISCONN);
@@ -1833,6 +1854,10 @@ udp_connectx_common(struct socket *so, int af,
 	VERIFY(dst_se->se_addr->sa_family == af);
 	VERIFY(src_se == NULL || src_se->se_addr->sa_family == af);
 
+#if NECP
+	inp_update_necp_policy(inp, src_se ? src_se->se_addr : NULL, dst_se ? dst_se->se_addr : NULL, ifscope);
+#endif /* NECP */
+	
 	/* bind socket to the specified interface, if requested */
 	if (ifscope != IFSCOPE_NONE &&
 	    (error = inp_bindif(inp, ifscope, NULL)) != 0)
@@ -1886,6 +1911,16 @@ udp_detach(struct socket *so)
 		panic("%s: so=%p null inp\n", __func__, so);
 		/* NOTREACHED */
 	}
+
+	/*
+	 * If this is a socket that does not want to wakeup the device
+	 * for it's traffic, the application might be waiting for 
+	 * close to complete before going to sleep. Send a notification 
+	 * for this kind of sockets
+	 */
+	if (so->so_options & SO_NOWAKEFROMSLEEP)
+		socket_post_kev_msg_closed(so);
+
 	in_pcbdetach(inp);
 	inp->inp_state = INPCB_STATE_DEAD;
 	return (0);
@@ -1897,7 +1932,11 @@ udp_disconnect(struct socket *so)
 	struct inpcb *inp;
 
 	inp = sotoinpcb(so);
-	if (inp == NULL || (inp->inp_flags2 & INP2_WANT_FLOW_DIVERT))
+	if (inp == NULL
+#if NECP
+		|| (necp_socket_should_use_flow_divert(inp))
+#endif /* NECP */
+		)
 		return (inp == NULL ? EINVAL : EPROTOTYPE);
 	if (inp->inp_faddr.s_addr == INADDR_ANY)
 		return (ENOTCONN);
@@ -1931,7 +1970,11 @@ udp_send(struct socket *so, int flags, struct mbuf *m,
 	struct inpcb *inp;
 
 	inp = sotoinpcb(so);
-	if (inp == NULL || (inp->inp_flags2 & INP2_WANT_FLOW_DIVERT)) {
+	if (inp == NULL
+#if NECP
+		|| (necp_socket_should_use_flow_divert(inp))
+#endif /* NECP */
+		) {
 		if (m != NULL)
 			m_freem(m);
 		if (control != NULL)

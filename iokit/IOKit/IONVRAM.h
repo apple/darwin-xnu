@@ -82,12 +82,12 @@ private:
   OSDictionary      *_ofDict;
   OSDictionary      *_nvramPartitionOffsets;
   OSDictionary      *_nvramPartitionLengths;
-  UInt32            _xpramPartitionOffset;
-  UInt32            _xpramPartitionSize;
-  UInt8             *_xpramImage;
-  UInt32            _nrPartitionOffset;
-  UInt32            _nrPartitionSize;
-  UInt8             *_nrImage;
+  UInt32            _resv0 __unused;
+  UInt32            _resv1 __unused;
+  IOLock            *_ofLock;
+  UInt32            _resv2 __unused;
+  UInt32            _resv3 __unused;
+  UInt8             *_resv4 __unused;
   UInt32            _piPartitionOffset;
   UInt32            _piPartitionSize;
   UInt8             *_piImage;
@@ -145,6 +145,8 @@ public:
   virtual void sync(void);
   
   virtual bool serializeProperties(OSSerialize *s) const;
+  virtual OSObject *copyProperty(const OSSymbol *aKey) const;
+  virtual OSObject *copyProperty(const char *aKey) const;
   virtual OSObject *getProperty(const OSSymbol *aKey) const;
   virtual OSObject *getProperty(const char *aKey) const;
   virtual bool setProperty(const OSSymbol *aKey, OSObject *anObject);

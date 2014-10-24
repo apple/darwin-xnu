@@ -39,9 +39,6 @@
 #include <mach/port.h>
 #include <mach/exception_types.h>
 
-#if TARGET_OS_EMBEDDED
-#include <sys/kern_memorystatus.h>
-#endif
 
 /*
  * posix_spawnattr_init
@@ -117,12 +114,8 @@ posix_spawnattr_init(posix_spawnattr_t *attr)
 		 (*psattrp)->flags_padding = 0; 
 		 (*psattrp)->int_padding = 0;
 
-
-		/*
-		 * The default value of this attribute shall be an no
-		 * process control on resource starvation
-		 */
-		(*psattrp)->psa_apptype = 0;
+		/* Default is no new apptype requested */
+		(*psattrp)->psa_apptype = POSIX_SPAWN_PROCESS_TYPE_DEFAULT;
 
 		/* Jetsam related */
 		(*psattrp)->psa_jetsam_flags = 0;
@@ -135,6 +128,12 @@ posix_spawnattr_init(posix_spawnattr_t *attr)
 
 		/* Default is no MAC policy extensions. */
 		(*psattrp)->psa_mac_extensions = NULL;
+
+		/* Default is to inherit parent's coalition */
+		(*psattrp)->psa_coalitionid = 0;
+
+		/* Default is no new clamp */
+		(*psattrp)->psa_qos_clamp = POSIX_SPAWN_PROC_CLAMP_NONE;
 	}
 
 	return (err);
@@ -1266,40 +1265,6 @@ posix_spawnattr_getcpumonitor(posix_spawnattr_t * __restrict attr,
 	return (0);
 }
 
-#if TARGET_OS_EMBEDDED
-/*
- * posix_spawnattr_setjetsam
- *
- * Description:	Set jetsam attributes for the spawn attribute object
- *		referred to by 'attr'.
- *
- * Parameters:	flags			The flags value to set
- *		priority		Relative jetsam priority
- *		high_water_mark		Value in pages; resident page
- *					counts above this level can
- *					result in termination
- *
- * Returns:	0			Success
- */
-int
-posix_spawnattr_setjetsam(posix_spawnattr_t * __restrict attr,
-		short flags, int priority, int high_water_mark)
-{
-	_posix_spawnattr_t psattr;
-
-	if (attr == NULL || *attr == NULL)
-		return EINVAL;
-
-	psattr = *(_posix_spawnattr_t *)attr;
-	
-	psattr->psa_jetsam_flags = flags;
-	psattr->psa_jetsam_flags |= POSIX_SPAWN_JETSAM_SET;
-	psattr->psa_priority = priority;
-	psattr->psa_high_water_mark = high_water_mark;
-
-	return (0);
-}
-#endif
 
 
 /*
@@ -1379,8 +1344,9 @@ posix_spawnattr_getmacpolicyinfo_np(const posix_spawnattr_t * __restrict attr,
 	if (extension == NULL)
 		return ESRCH;
 	*datap = (void *)(uintptr_t)extension->data;
-	if (datalenp != NULL)
-		*datalenp = extension->datalen;
+	if (datalenp != NULL) {
+		*datalenp = (size_t)extension->datalen;
+	}
 	return 0;
 }
 
@@ -1423,6 +1389,54 @@ posix_spawnattr_setmacpolicyinfo_np(posix_spawnattr_t * __restrict attr,
 	psmx->psmx_count += 1;
 	return 0;
 }
+
+int posix_spawnattr_setcoalition_np(const posix_spawnattr_t * __restrict attr, uint64_t coalitionid)
+{
+	_posix_spawnattr_t psattr;
+
+	if (attr == NULL || *attr == NULL) {
+		return EINVAL;
+	}
+
+	psattr = *(_posix_spawnattr_t *)attr;
+	psattr->psa_coalitionid = coalitionid;
+
+	return 0;
+}
+
+
+int posix_spawnattr_set_qos_clamp_np(const posix_spawnattr_t * __restrict attr, uint64_t qos_clamp)
+{
+	_posix_spawnattr_t psattr;
+
+	if (attr == NULL || *attr == NULL) {
+		return EINVAL;
+	}
+
+	if (qos_clamp >= POSIX_SPAWN_PROC_CLAMP_LAST)
+		return EINVAL;
+
+	psattr = *(_posix_spawnattr_t *)attr;
+	psattr->psa_qos_clamp = qos_clamp;
+
+	return 0;
+}
+
+int
+posix_spawnattr_get_qos_clamp_np(const posix_spawnattr_t * __restrict attr, uint64_t * __restrict qos_clampp)
+{
+	_posix_spawnattr_t psattr;
+
+	if (attr == NULL || *attr == NULL) {
+		return EINVAL;
+	}
+
+	psattr = *(_posix_spawnattr_t *)attr;
+	*qos_clampp = psattr->psa_qos_clamp;
+
+	return (0);
+}
+
 
 /*
  * posix_spawn

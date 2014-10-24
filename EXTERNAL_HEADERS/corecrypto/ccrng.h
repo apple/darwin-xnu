@@ -7,11 +7,17 @@
  *
  */
 
-
 #ifndef _CORECRYPTO_CCRNG_H_
 #define _CORECRYPTO_CCRNG_H_
 
 #include <stdint.h>
+
+#define CC_ERR_DEVICE -100
+#define CC_ERR_INTERUPTS -101
+#define CC_ERR_CRYPTO_CONFIG -102
+#define CC_ERR_PERMS -103
+#define CC_ERR_PARAMETER -104
+#define CC_ERR_MEMORY -105
 
 #define CCRNG_STATE_COMMON                                                          \
     int (*generate)(struct ccrng_state *rng, unsigned long outlen, void *out);

@@ -123,6 +123,14 @@ int sched_tests( void * the_argp );
 int content_protection_test( void * the_argp );
 int pipes_test( void * the_argp );
 int kaslr_test( void * the_argp );
+int getattrlistbulk_test( void * the_argp );
+int openat_close_test( void * the_argp );
+int linkat_fstatat_unlinkat_test( void * the_argp );
+int faccessat_fchmodat_fchmod_test( void * the_argp );
+int fchownat_fchown_symlinkat_test( void * the_argp );
+int mkdirat_unlinkat_umask_test( void * the_argp );
+int renameat_test( void * the_argp );
+int set_exception_ports_test( void * the_argp );
 
 struct test_entry 
 {

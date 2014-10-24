@@ -601,6 +601,15 @@
 #define	AUE_PDKILL		43198	/* FreeBSD. */
 #define	AUE_PDGETPID		43199	/* FreeBSD. */
 #define	AUE_PDWAIT		43200	/* FreeBSD. */
+#define	AUE_GETATTRLISTBULK	43201	/* Darwin. */
+#define	AUE_GETATTRLISTAT	43202	/* Darwin. */
+#define	AUE_OPENBYID		43203	/* Darwin. */
+#define	AUE_OPENBYID_R		43204	/* Darwin. */
+#define	AUE_OPENBYID_RT		43205	/* Darwin. */
+#define	AUE_OPENBYID_W		43206	/* Darwin. */
+#define	AUE_OPENBYID_WT		43207	/* Darwin. */
+#define	AUE_OPENBYID_RW		43208	/* Darwin. */
+#define	AUE_OPENBYID_RWT	43209	/* Darwin. */
 
 #define	AUE_SESSION_START	44901	/* Darwin. */
 #define	AUE_SESSION_UPDATE	44902	/* Darwin. */

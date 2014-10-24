@@ -185,8 +185,8 @@ cpu_machine_init(
 	ml_init_interrupt();
 
 #if CONFIG_VMX
-	/* for every CPU, get the VT specs */
-	vmx_get_specs();
+	/* initialize VMX for every CPU */
+	vmx_cpu_init();
 #endif
 }
 

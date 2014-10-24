@@ -83,6 +83,10 @@ IORWLock         * gIOCatalogLock;
 #define super OSObject
 OSDefineMetaClassAndStructors(IOCatalogue, OSObject)
 
+static bool isModuleLoadedNoOSKextLock(OSDictionary *theKexts,
+                                       OSDictionary *theModuleDict);
+
+
 /*********************************************************************
 *********************************************************************/
 void IOCatalogue::initialize(void)
@@ -767,8 +771,9 @@ bool IOCatalogue::resetAndAddDrivers(OSArray * drivers, bool doNubMatching)
     OSOrderedSet         * matchSet            = NULL;  // must release
     const OSSymbol       * key;
     OSArray              * array;
-    OSDictionary         * thisNewPersonality  = NULL;  // do not release
-    OSDictionary         * thisOldPersonality  = NULL;  // do not release
+    OSDictionary         * thisNewPersonality   = NULL; // do not release
+    OSDictionary         * thisOldPersonality   = NULL; // do not release
+    OSDictionary         * myKexts              = NULL; // must release
     signed int             idx, newIdx;
 
     if (drivers) {
@@ -776,18 +781,23 @@ bool IOCatalogue::resetAndAddDrivers(OSArray * drivers, bool doNubMatching)
         if (!newPersonalities) {
             goto finish;
         }
-        
-        matchSet = OSOrderedSet::withCapacity(10, IOServiceOrdering,
-            (void *)gIOProbeScoreKey);
-        if (!matchSet) {
-            goto finish;
-        }
-        iter = OSCollectionIterator::withCollection(personalities);
-        if (!iter) {
-            goto finish;
-        }
     }
-
+    matchSet = OSOrderedSet::withCapacity(10, IOServiceOrdering,
+        (void *)gIOProbeScoreKey);
+    if (!matchSet) {
+        goto finish;
+    }
+    iter = OSCollectionIterator::withCollection(personalities);
+    if (!iter) {
+        goto finish;
+    }
+    
+    /* need copy of loaded kexts so we can check if for loaded modules without
+     * taking the OSKext lock.  There is a potential of deadlocking if we get
+     * an OSKext via the normal path.  See 14672140.
+     */
+    myKexts = OSKext::copyKexts();
+    
     result = true;
 
     IOLog("Resetting IOCatalogue.\n");
@@ -800,59 +810,66 @@ bool IOCatalogue::resetAndAddDrivers(OSArray * drivers, bool doNubMatching)
     {
         array = (OSArray *) personalities->getObject(key);
         if (!array) continue;
-        for (idx = 0; (thisOldPersonality = (OSDictionary *) array->getObject(idx)); idx++)
+        
+        for (idx = 0;
+             (thisOldPersonality = (OSDictionary *) array->getObject(idx));
+             idx++)
         {
             if (thisOldPersonality->getObject("KernelConfigTable")) continue;
-            if (newPersonalities)
-            for  (newIdx = 0;
-                 (thisNewPersonality = (OSDictionary *) newPersonalities->getObject(newIdx));
-                 newIdx++)
-            {
-	       /* Unlike in other functions, this comparison must be exact!
-            * The catalogue must be able to contain personalities that
-            * are proper supersets of others.
-            * Do not compare just the properties present in one driver
-            * personality or the other.
-            */
-                if (OSDynamicCast(OSDictionary, thisNewPersonality) == NULL) {
-                    /* skip thisNewPersonality if it is not an OSDictionary */
-                    continue;
+            thisNewPersonality = NULL;
+
+            if (newPersonalities) {
+                for  (newIdx = 0;
+                      (thisNewPersonality = (OSDictionary *) newPersonalities->getObject(newIdx));
+                      newIdx++)
+                {
+                    /* Unlike in other functions, this comparison must be exact!
+                     * The catalogue must be able to contain personalities that
+                     * are proper supersets of others.
+                     * Do not compare just the properties present in one driver
+                     * personality or the other.
+                     */
+                    if (OSDynamicCast(OSDictionary, thisNewPersonality) == NULL) {
+                        /* skip thisNewPersonality if it is not an OSDictionary */
+                        continue;
+                    }
+                    if (thisNewPersonality->isEqualTo(thisOldPersonality))
+                        break;
                 }
-                if (thisNewPersonality->isEqualTo(thisOldPersonality))
-                    break;
             }
-            if (thisNewPersonality)
-            {
+            if (thisNewPersonality) {
                 // dup, ignore
-                newPersonalities->removeObject(newIdx);
+               newPersonalities->removeObject(newIdx);
             }
-            else
-            {
+            else {
                 // not in new set - remove
                 // only remove dictionary if this module in not loaded - 9953845
-                if ( isModuleLoaded(thisOldPersonality) == false ) 
-                {
-                    if (matchSet)  matchSet->setObject(thisOldPersonality);
+                if ( isModuleLoadedNoOSKextLock(myKexts, thisOldPersonality) == false ) {
+                    if (matchSet) {
+                        matchSet->setObject(thisOldPersonality);
+                    }
                     array->removeObject(idx);
                     idx--;
                 }
             }
-        }
-    }
+        } // for...
+    } // while...
 
     // add new
-    for (newIdx = 0;
-         (thisNewPersonality = (OSDictionary *) newPersonalities->getObject(newIdx));
-         newIdx++)
-    {
-         if (OSDynamicCast(OSDictionary, thisNewPersonality) == NULL) {
-             /* skip thisNewPersonality if it is not an OSDictionary */
-             continue;
-         }
-
-         OSKext::uniquePersonalityProperties(thisNewPersonality);
-         addPersonality(thisNewPersonality);
-         matchSet->setObject(thisNewPersonality);
+    if (newPersonalities) {
+        for (newIdx = 0;
+             (thisNewPersonality = (OSDictionary *) newPersonalities->getObject(newIdx));
+             newIdx++)
+        {
+            if (OSDynamicCast(OSDictionary, thisNewPersonality) == NULL) {
+                /* skip thisNewPersonality if it is not an OSDictionary */
+                continue;
+            }
+            
+            OSKext::uniquePersonalityProperties(thisNewPersonality);
+            addPersonality(thisNewPersonality);
+            matchSet->setObject(thisNewPersonality);
+        }
     }
 
    /* Finally, start device matching on all new & removed personalities.
@@ -865,8 +882,9 @@ bool IOCatalogue::resetAndAddDrivers(OSArray * drivers, bool doNubMatching)
     IORWLockUnlock(lock);
 
 finish:
-    if (matchSet) matchSet->release();
-    if (iter)     iter->release();
+    if (matchSet)   matchSet->release();
+    if (iter)       iter->release();
+    if (myKexts)    myKexts->release();
 
     return result;
 }
@@ -908,6 +926,42 @@ bool IOCatalogue::serializeData(IOOptionBits kind, OSSerialize * s) const
 
     return kr;
 }
+
+/* isModuleLoadedNoOSKextLock - used to check to see if a kext is loaded 
+ * without taking the OSKext lock.  We use this to avoid the problem
+ * where taking the IOCatalog lock then the OSKext lock will dealock when
+ * a kext load or unload is happening at the same time as IOCatalog changing.
+ *
+ * theKexts - is a dictionary of current kexts (from OSKext::copyKexts) with
+ *      key set to the kext bundle ID and value set to an OSKext object
+ * theModuleDict - is an IOKit personality dictionary for a given module (kext)
+ */
+static bool isModuleLoadedNoOSKextLock(OSDictionary *theKexts,
+                                       OSDictionary *theModuleDict)
+{
+    bool                    myResult = false;
+    const OSString *        myBundleID = NULL;  // do not release
+    OSKext *                myKext = NULL;      // do not release
+
+    if (theKexts == NULL || theModuleDict == NULL) {
+        return( myResult );
+    }
+    
+    // gIOModuleIdentifierKey is "CFBundleIdentifier"
+    myBundleID = OSDynamicCast(OSString,
+                               theModuleDict->getObject(gIOModuleIdentifierKey));
+    if (myBundleID == NULL) {
+        return( myResult );
+    }
+
+    myKext = OSDynamicCast(OSKext, theKexts->getObject(myBundleID->getCStringNoCopy()));
+    if (myKext) {
+        myResult = myKext->isLoaded();
+    }
+    
+    return( myResult );
+}
+
 
 #if PRAGMA_MARK
 #pragma mark Obsolete Kext Loading Stuff

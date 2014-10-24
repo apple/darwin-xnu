@@ -571,7 +571,7 @@ static int unicode_to_mac_roman(UniChar *uni_str, u_int32_t unicodeChars, Str31 
 				break;
 
 			case 0x2200:
-				if (lsb <= 0x68)
+				if (lsb < 0x68)
 					mc = gMathTable[lsb];
 				break;
 

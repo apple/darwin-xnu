@@ -39,11 +39,12 @@ kmsg_send(mach_port_t remote_port, int index)
                              VM_MAKE_TAG(VM_MEMORY_MACH_MSG) | TRUE );
         if (my_kr != KERN_SUCCESS)
                 return my_kr;
-        my_kmsg->msgh_bits = MACH_MSGH_BITS(MACH_MSG_TYPE_COPY_SEND, 0);
+        my_kmsg->msgh_bits =
+		MACH_MSGH_BITS_SET(MACH_MSG_TYPE_COPY_SEND, 0, 0, 0);
         my_kmsg->msgh_size = size;
         my_kmsg->msgh_remote_port = remote_port;
         my_kmsg->msgh_local_port = MACH_PORT_NULL;
-        my_kmsg->msgh_reserved = 0;
+        my_kmsg->msgh_voucher_port = MACH_PORT_NULL;
         my_kmsg->msgh_id = msgh_id;
         my_kr = mach_msg( my_kmsg, 
                           MACH_SEND_MSG | MACH_MSG_OPTION_NONE,
@@ -85,7 +86,6 @@ kmsg_recv(mach_port_t portset, mach_port_t port, int * msgh_id_return)
 static void *
 kmsg_consumer_thread(void * arg)
 {
-#if !TARGET_OS_EMBEDDED
 	int		my_kqueue = *(int *)arg;
 	int             my_err;
 	kern_return_t   my_kr;
@@ -130,10 +130,6 @@ kmsg_consumer_thread(void * arg)
                 }
 	}
         return (void *)0;
-#else
-	printf( "\t--> Not supported on EMBEDDED TARGET\n" );
-        return (void *)0;
-#endif
 }
 
 /*  **************************************************************************************************************
@@ -152,9 +148,7 @@ int kqueue_tests( void * the_argp )
 	size_t			my_count, my_index;
 	int				my_sockets[ 2 ] = {-1, -1};
 	struct kevent	my_keventv[3];
-#if !TARGET_OS_EMBEDDED	
 	struct kevent64_s	my_kevent64;
-#endif	
 	struct timespec	my_timeout;
 	char			my_buffer[ 16 ];
 	kern_return_t kr;	
@@ -270,7 +264,6 @@ int kqueue_tests( void * the_argp )
 		goto test_failed_exit;
 	}
 
-#if !TARGET_OS_EMBEDDED	
 	/* use kevent64 to test EVFILT_PROC */
 	EV_SET64( &my_kevent64, my_pid, EVFILT_PROC, EV_ADD, NOTE_EXIT, 0, 0, 0, 0 ); 
 	my_err = kevent64( my_kqueue, &my_kevent64, 1, NULL, 0, 0, 0); 
@@ -286,7 +279,6 @@ int kqueue_tests( void * the_argp )
 		printf( "kevent64 call to get proc exit failed with error %d - \"%s\" \n", errno, strerror( errno) );
 		goto test_failed_exit;
 	}
-#endif
 
 	/* tell child to get to work */
 	my_count = write( my_sockets[0], "g", 1 );
@@ -341,7 +333,6 @@ int kqueue_tests( void * the_argp )
 		goto test_failed_exit;
 	}
 
-#if !TARGET_OS_EMBEDDED	
 	/* look for child exit notification on the kevent64 kqueue */
 	EV_SET64( &my_kevent64, my_pid, EVFILT_PROC, EV_CLEAR, NOTE_EXIT, 0, 0, 0, 0 ); 
 	my_err = kevent64( my_kqueue64, NULL, 0, &my_kevent64, 1, 0, 0); 
@@ -513,7 +504,6 @@ int kqueue_tests( void * the_argp )
 		printf( "data %ld \n", (long int) my_keventv[0].data );
 		goto test_failed_exit;
 	}
-#endif	
 	
 	my_err = 0;
 	goto test_passed_exit;

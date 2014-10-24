@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2013 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2014 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -217,6 +217,28 @@ struct kev_vendor_code {
 		exist.
  */
 #define	SIOCGKEVVENDOR	_IOWR('e', 4, struct kev_vendor_code)
+
+#ifdef PRIVATE
+struct xkevtpcb {
+	u_int32_t	kep_len;
+	u_int32_t	kep_kind;
+	u_int64_t	kep_evtpcb;
+	u_int32_t 	kep_vendor_code_filter;
+	u_int32_t 	kep_class_filter;
+	u_int32_t 	kep_subclass_filter;
+};
+
+struct kevtstat {
+	u_int64_t	kes_pcbcount __attribute__((aligned(8)));
+	u_int64_t	kes_gencnt __attribute__((aligned(8)));
+	u_int64_t	kes_badvendor __attribute__((aligned(8)));
+	u_int64_t	kes_toobig __attribute__((aligned(8)));
+	u_int64_t	kes_nomem __attribute__((aligned(8)));
+	u_int64_t	kes_fullsock __attribute__((aligned(8)));
+	u_int64_t	kes_posted __attribute__((aligned(8)));
+	
+};
+#endif /* PRIVATE */
 
 #ifdef KERNEL
 /*!

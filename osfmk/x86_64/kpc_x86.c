@@ -164,6 +164,19 @@ kpc_configurable_config_count(void)
 	return kpc_configurable_count();
 }
 
+uint32_t
+kpc_rawpmu_config_count(void)
+{
+	// RAW PMU access not implemented.
+	return 0;
+}
+
+int
+kpc_get_rawpmu_config(__unused kpc_config_t *configv)
+{
+	return 0;
+}
+
 static uint8_t
 kpc_fixed_width(void)
 {
@@ -337,7 +350,7 @@ kpc_get_fixed_counters(uint64_t *counterv)
 	for( i = 0; i < n; i++ ) {
 		if ((1ull << (i + 32)) & status)
 			counterv[i] = FIXED_SHADOW(ctr) +
-				(kpc_fixed_max() - FIXED_RELOAD(ctr)) + IA32_FIXED_CTRx(i);
+				(kpc_fixed_max() - FIXED_RELOAD(ctr) + 1 /* Wrap */) + IA32_FIXED_CTRx(i);
 	}
 #else
 	for( i = 0; i < n; i++ )
@@ -367,7 +380,29 @@ kpc_set_configurable_config(kpc_config_t *configv)
 	for( i = 0; i < n; i++ ) {
 		/* need to save and restore counter since it resets when reconfigured */
 		save = IA32_PMCx(i);
-		wrIA32_PERFEVTSELx(i, configv[i]);
+		/*
+		 * Some bits are not safe to set from user space.
+		 * Allow these bits to be set:
+		 *
+		 *   0-7    Event select
+		 *   8-15   UMASK
+		 *   16     USR
+		 *   17     OS
+		 *   18     E
+		 *   22     EN
+		 *   23     INV
+		 *   24-31  CMASK
+		 *
+		 * Excluding:
+		 *
+		 *   19     PC
+		 *   20     INT
+		 *   21     AnyThread
+		 *   32     IN_TX
+		 *   33     IN_TXCP
+		 *   34-63  Reserved
+		 */
+		wrIA32_PERFEVTSELx(i, configv[i] & 0xffc7ffffull);
 		wrIA32_PMCx(i, save);
 	}
 
@@ -474,6 +509,12 @@ kpc_set_period_arch( struct kpc_config_remote *mp_config )
 
 /* interface functions */
 
+void
+kpc_arch_init(void)
+{
+	/* No-op */
+}
+
 uint32_t
 kpc_get_classes(void)
 {
@@ -518,7 +559,7 @@ void kpc_pmi_handler(__unused x86_saved_state_t *state)
 			extra = kpc_reload_fixed(ctr);
 
 			FIXED_SHADOW(ctr)
-				+= kpc_fixed_max() - FIXED_RELOAD(ctr) + extra;
+				+= (kpc_fixed_max() - FIXED_RELOAD(ctr) + 1 /* Wrap */) + extra;
 
 			BUF_INFO(PERF_KPC_FCOUNTER, ctr, FIXED_SHADOW(ctr), extra, FIXED_ACTIONID(ctr));
 
@@ -549,6 +590,15 @@ void kpc_pmi_handler(__unused x86_saved_state_t *state)
 	ml_set_interrupts_enabled(enabled);
 }
 
+int
+kpc_force_all_ctrs_arch( task_t task __unused, int val __unused )
+{
+	/* TODO: reclaim counters ownership from XCPM */
+	return 0;
+}
 
-
-
+int
+kpc_set_sw_inc( uint32_t mask __unused )
+{
+	return ENOTSUP;
+}

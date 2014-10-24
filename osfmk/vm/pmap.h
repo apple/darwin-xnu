@@ -112,6 +112,8 @@ extern kern_return_t 	copypv(
 
 #ifdef	MACH_KERNEL_PRIVATE
 
+#include <mach_assert.h>
+
 #include <machine/pmap.h>
 
 /*
@@ -195,6 +197,11 @@ extern void		pmap_reference(pmap_t pmap);	/* Gain a reference. */
 extern void		pmap_destroy(pmap_t pmap); /* Release a reference. */
 extern void		pmap_switch(pmap_t);
 
+#if MACH_ASSERT
+extern void pmap_set_process(pmap_t pmap, 
+			     int pid,
+			     char *procname);
+#endif /* MACH_ASSERT */
 
 extern void		pmap_enter(	/* Enter a mapping */
 				pmap_t		pmap,
@@ -219,6 +226,12 @@ extern kern_return_t	pmap_enter_options(
 extern void		pmap_remove_some_phys(
 				pmap_t		pmap,
 				ppnum_t		pn);
+
+extern void		pmap_lock_phys_page(
+	                        ppnum_t		pn);
+
+extern void		pmap_unlock_phys_page(
+	                        ppnum_t		pn);
 
 
 /*
@@ -303,6 +316,7 @@ extern boolean_t	pmap_verify_free(ppnum_t pn);
 /*
  *	Statistics routines
  */
+extern int		(pmap_compressed)(pmap_t pmap);
 extern int		(pmap_resident_count)(pmap_t pmap);
 extern int		(pmap_resident_max)(pmap_t pmap);
 
@@ -585,7 +599,10 @@ extern pmap_t	kernel_pmap;			/* The kernel's map */
 #define PMAP_OPTIONS_REUSABLE	0x10		/* page is "reusable" */
 #define PMAP_OPTIONS_NOFLUSH	0x20		/* delay flushing of pmap */
 #define PMAP_OPTIONS_NOREFMOD	0x40		/* don't need ref/mod on disconnect */
+#define	PMAP_OPTIONS_ALT_ACCT	0x80		/* use alternate accounting scheme for page */
 #define PMAP_OPTIONS_REMOVE	0x100		/* removing a mapping */
+#define PMAP_OPTIONS_SET_REUSABLE   0x200	/* page is now "reusable" */
+#define PMAP_OPTIONS_CLEAR_REUSABLE 0x400	/* page no longer "reusable" */
 
 #if	!defined(__LP64__)
 extern vm_offset_t	pmap_extract(pmap_t pmap,
@@ -607,12 +624,6 @@ extern void		pmap_remove_options(	/* Remove mappings. */
 				vm_map_offset_t	s,
 				vm_map_offset_t	e,
 				int		options);
-
-extern void		pmap_reusable(
-				pmap_t		map,
-				vm_map_offset_t	s,
-				vm_map_offset_t	e,
-				boolean_t	reusable);
 
 extern void		fillPage(ppnum_t pa, unsigned int fill);
 

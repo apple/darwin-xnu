@@ -35,12 +35,12 @@ Product=$(shell tconf --product)
 Embedded=$(shell tconf --test TARGET_OS_EMBEDDED)
 
 ifeq "$(Embedded)" "YES"
-SDKPATH = $(shell xcodebuild -sdk $(SDKROOT) -version Path)
+SDKPATH = $(shell xcodebuild -sdk "$(SDKROOT)" -version Path)
 CFLAGS += -isysroot $(SDKPATH)
 EmbeddedOS=yes
 endif
 
-CC = xcrun -sdk $(SDKROOT) gcc
+CC = $(shell xcrun -sdk "$(SDKROOT)" -find gcc)
 #NOPIC=	-mdynamic-no-pic
 ARCH= i386
 

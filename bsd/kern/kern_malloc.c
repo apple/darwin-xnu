@@ -74,6 +74,7 @@
 #include <sys/socketvar.h>
 
 #include <net/route.h>
+#include <net/necp.h>
 
 #include <netinet/in.h>
 #include <netinet/in_systm.h>
@@ -303,6 +304,20 @@ const char *memname[] = {
 	"",					/* 116 M_FLOW_DIVERT_GROUP */
 #endif
 	"ip6cga",	/* 117 M_IP6CGA */
+#if NECP
+	"necp",					/* 118 M_NECP */
+	"necp_session_policy",	/* 119 M_NECP_SESSION_POLICY */
+	"necp_socket_policy",	/* 120 M_NECP_SOCKET_POLICY */
+	"necp_ip_policy",		/* 121 M_NECP_IP_POLICY */
+#else
+	"",						/* 118 M_NECP */
+	"",						/* 119 M_NECP_SESSION_POLICY */
+	"",						/* 120 M_NECP_SOCKET_POLICY */
+	"",						/* 121 M_NECP_IP_POLICY */
+#endif
+	"fdvnodedata"	/* 122 M_FD_VN_DATA */
+	"fddirbuf",	/* 123 M_FD_DIRBUF */
+	""
 };
 
 /* for use with kmzones.kz_zalloczone */
@@ -489,6 +504,16 @@ struct kmzones {
 	{ 0,		KMZ_MALLOC, FALSE },		/* 116 M_FLOW_DIVERT_GROUP */
 #endif	/* FLOW_DIVERT */
 	{ 0,		KMZ_MALLOC, FALSE },		/* 117 M_IP6CGA */
+	{ 0,		KMZ_MALLOC, FALSE },		/* 118 M_NECP */
+#if NECP
+	{ SOS(necp_session_policy),	KMZ_CREATEZONE, TRUE },	/* 119 M_NECP_SESSION_POLICY */
+	{ SOS(necp_kernel_socket_policy),	KMZ_CREATEZONE, TRUE },	/* 120 M_NECP_SOCKET_POLICY */
+	{ SOS(necp_kernel_ip_output_policy),	KMZ_CREATEZONE, TRUE },	/* 121 M_NECP_IP_POLICY */
+#else
+	{ 0,		KMZ_MALLOC, FALSE },		/* 119 M_NECP_SESSION_POLICY */
+	{ 0,		KMZ_MALLOC, FALSE },		/* 120 M_NECP_SOCKET_POLICY */
+	{ 0,		KMZ_MALLOC, FALSE },		/* 121 M_NECP_IP_POLICY */
+#endif /* NECP */
 #undef	SOS
 #undef	SOX
 };

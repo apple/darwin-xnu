@@ -37,13 +37,17 @@
 #include <machine/limits.h>
 #include <kern/ledger.h>
 #include <kern/thread_call.h>
+#include <kern/sfi.h>
 #if CONFIG_TELEMETRY
 #include <kern/telemetry.h>
 #endif
 
+#if IMPORTANCE_INHERITANCE
+#include <ipc/ipc_importance.h>
 #if IMPORTANCE_DEBUG
 #include <mach/machine/sdt.h>
 #endif /* IMPORTANCE_DEBUG */
+#endif /* IMPORTANCE_INHERITACE */
 
 #include <sys/kdebug.h>
 
@@ -82,7 +86,9 @@
  *
  *  To add a new requested policy, add the field in the requested struct, the flavor in task.h,
  *  the setter and getter in proc_(set|get)_task_policy*, and dump the state in task_requested_bitfield,
- *  then set up the effects of that behavior in task_policy_update*.
+ *  then set up the effects of that behavior in task_policy_update*. If the policy manifests
+ *  itself as a distinct effective policy, add it to the effective struct and add it to the
+ *  proc_get_effective_policy accessor.
  *
  *  Most policies are set via proc_set_task_policy, but policies that don't fit that interface
  *  roll their own lock/set/update/unlock/complete code inside this file.
@@ -107,32 +113,36 @@
  *
  */
 
+extern const qos_policy_params_t thread_qos_policy_params;
+
 /* for task holds without dropping the lock */
 extern void task_hold_locked(task_t task);
 extern void task_release_locked(task_t task);
 extern void task_wait_locked(task_t task, boolean_t until_not_runnable);
 
+extern void thread_recompute_qos(thread_t thread);
+
 /* Task policy related helper functions */
 static void proc_set_task_policy_locked(task_t task, thread_t thread, int category, int flavor, int value);
+static void proc_set_task_policy2_locked(task_t task, thread_t thread, int category, int flavor, int value1, int value2);
 
-static void task_policy_update_locked(task_t task, thread_t thread);
-static void task_policy_update_internal_locked(task_t task, thread_t thread, boolean_t in_create);
-static void task_policy_update_task_locked(task_t task, boolean_t update_throttle, boolean_t update_bg_throttle);
-static void task_policy_update_thread_locked(thread_t thread, int update_cpu, boolean_t update_throttle);
-
-static void task_policy_update_complete_unlocked(task_t task, thread_t thread);
+static void task_policy_update_locked(task_t task, thread_t thread, task_pend_token_t pend_token);
+static void task_policy_update_internal_locked(task_t task, thread_t thread, boolean_t in_create, task_pend_token_t pend_token);
+static void task_policy_update_task_locked(task_t task, boolean_t update_throttle, boolean_t update_bg_throttle, boolean_t update_sfi);
+static void task_policy_update_thread_locked(thread_t thread, int update_cpu, boolean_t update_throttle, boolean_t update_sfi, boolean_t update_qos);
 
 static int proc_get_effective_policy(task_t task, thread_t thread, int policy);
 
 static void proc_iopol_to_tier(int iopolicy, int *tier, int *passive);
 static int proc_tier_to_iopol(int tier, int passive);
 
-static uintptr_t trequested(task_t task, thread_t thread);
-static uintptr_t teffective(task_t task, thread_t thread);
-static uintptr_t tpending(task_t task, thread_t thread);
+static uintptr_t trequested_0(task_t task, thread_t thread);
+static uintptr_t trequested_1(task_t task, thread_t thread);
+static uintptr_t teffective_0(task_t task, thread_t thread);
+static uintptr_t teffective_1(task_t task, thread_t thread);
+static uint32_t tpending(task_pend_token_t pend_token);
 static uint64_t task_requested_bitfield(task_t task, thread_t thread);
 static uint64_t task_effective_bitfield(task_t task, thread_t thread);
-static uint64_t task_pending_bitfield(task_t task, thread_t thread);
 
 void proc_get_thread_policy(thread_t thread, thread_policy_state_t info);
 
@@ -150,19 +160,17 @@ int             proc_pid(void *proc);
 extern int      proc_selfpid(void);
 extern char *   proc_name_address(void *p);
 extern void     rethrottle_thread(void * uthread);
-extern void     proc_apply_task_networkbg(void * bsd_info, thread_t thread, int bg);
+extern void     proc_apply_task_networkbg(void * bsd_info, thread_t thread);
 #endif /* MACH_BSD */
 
 
 /* Importance Inheritance related helper functions */
 
-void task_importance_mark_receiver(task_t task, boolean_t receiving);
-
 #if IMPORTANCE_INHERITANCE
-static void task_update_boost_locked(task_t task, boolean_t boost_active);
 
-static int task_importance_hold_assertion_locked(task_t target_task, int external, uint32_t count);
-static int task_importance_drop_assertion_locked(task_t target_task, int external, uint32_t count);
+static void task_add_importance_watchport(task_t task, mach_port_t port, int *boostp);
+static void task_importance_update_live_donor(task_t target_task);
+
 #endif /* IMPORTANCE_INHERITANCE */
 
 #if IMPORTANCE_DEBUG
@@ -201,7 +209,7 @@ int proc_graphics_timer_qos   = (LATENCY_QOS_TIER_0 & 0xFF);
 
 const int proc_default_bg_iotier  = THROTTLE_LEVEL_TIER2;
 
-
+/* Latency/throughput QoS fields remain zeroed, i.e. TIER_UNSPECIFIED at creation */
 const struct task_requested_policy default_task_requested_policy = {
 	.bg_iotier = proc_default_bg_iotier
 };
@@ -219,6 +227,24 @@ const struct task_pended_policy default_task_pended_policy = {};
 uint8_t         proc_max_cpumon_percentage;
 uint64_t	proc_max_cpumon_interval;
 
+kern_return_t
+qos_latency_policy_validate(task_latency_qos_t ltier) {
+	if ((ltier != LATENCY_QOS_TIER_UNSPECIFIED) &&
+	    ((ltier > LATENCY_QOS_TIER_5) || (ltier < LATENCY_QOS_TIER_0)))
+		return KERN_INVALID_ARGUMENT;
+
+	return KERN_SUCCESS;
+}
+
+kern_return_t
+qos_throughput_policy_validate(task_throughput_qos_t ttier) {
+	if ((ttier != THROUGHPUT_QOS_TIER_UNSPECIFIED) &&
+	    ((ttier > THROUGHPUT_QOS_TIER_5) || (ttier < THROUGHPUT_QOS_TIER_0)))
+		return KERN_INVALID_ARGUMENT;
+
+	return KERN_SUCCESS;
+}
+
 static kern_return_t
 task_qos_policy_validate(task_qos_policy_t qosinfo, mach_msg_type_number_t count) {
 	if (count < TASK_QOS_POLICY_COUNT)
@@ -227,31 +253,33 @@ task_qos_policy_validate(task_qos_policy_t qosinfo, mach_msg_type_number_t count
 	task_latency_qos_t ltier = qosinfo->task_latency_qos_tier;
 	task_throughput_qos_t ttier = qosinfo->task_throughput_qos_tier;
 
-	if ((ltier != LATENCY_QOS_TIER_UNSPECIFIED) &&
-	    ((ltier > LATENCY_QOS_TIER_5) || (ltier < LATENCY_QOS_TIER_0)))
-		return KERN_INVALID_ARGUMENT;
+	kern_return_t kr = qos_latency_policy_validate(ltier);
 
-	if ((ttier != THROUGHPUT_QOS_TIER_UNSPECIFIED) &&
-	    ((ttier > THROUGHPUT_QOS_TIER_5) || (ttier < THROUGHPUT_QOS_TIER_0)))
-		return KERN_INVALID_ARGUMENT;
+	if (kr != KERN_SUCCESS)
+		return kr;
 
-	return KERN_SUCCESS;
+	kr = qos_throughput_policy_validate(ttier);
+
+	return kr;
 }
 
-static uint32_t
-task_qos_extract(uint32_t qv) {
+uint32_t
+qos_extract(uint32_t qv) {
 	return (qv & 0xFF);
 }
 
-static uint32_t
-task_qos_latency_package(uint32_t qv) {
+uint32_t
+qos_latency_policy_package(uint32_t qv) {
 	return (qv == LATENCY_QOS_TIER_UNSPECIFIED) ? LATENCY_QOS_TIER_UNSPECIFIED : ((0xFF << 16) | qv);
 }
 
-static uint32_t
-task_qos_throughput_package(uint32_t qv) {
+uint32_t
+qos_throughput_policy_package(uint32_t qv) {
 	return (qv == THROUGHPUT_QOS_TIER_UNSPECIFIED) ? THROUGHPUT_QOS_TIER_UNSPECIFIED : ((0xFE << 16) | qv);
 }
+
+/* TEMPORARY boot-arg controlling task_policy suppression (App Nap) */
+static boolean_t task_policy_suppression_disable = FALSE;
 
 kern_return_t
 task_policy_set(
@@ -311,35 +339,6 @@ task_policy_set(
 
 /* Desired energy-efficiency/performance "quality-of-service" */
 	case TASK_BASE_QOS_POLICY:
-	{
-		task_qos_policy_t qosinfo = (task_qos_policy_t)policy_info;
-		kern_return_t kr = task_qos_policy_validate(qosinfo, count);
-
-		if (kr != KERN_SUCCESS)
-			return kr;
-
-		task_lock(task);
-
-		/* This uses the latency QoS tracepoint, even though we might be changing both */
-		KERNEL_DEBUG_CONSTANT_IST(KDEBUG_TRACE,
-		                          (IMPORTANCE_CODE(TASK_POLICY_LATENCY_QOS, (TASK_POLICY_ATTRIBUTE | TASK_POLICY_TASK))) | DBG_FUNC_START,
-		                          proc_selfpid(), targetid(task, THREAD_NULL), trequested(task, THREAD_NULL), 0, 0);
-
-		task->requested_policy.t_base_latency_qos = task_qos_extract(qosinfo->task_latency_qos_tier);
-		task->requested_policy.t_base_through_qos = task_qos_extract(qosinfo->task_throughput_qos_tier);
-
-		task_policy_update_locked(task, THREAD_NULL);
-
-		task_unlock(task);
-
-		task_policy_update_complete_unlocked(task, THREAD_NULL);
-
-		KERNEL_DEBUG_CONSTANT_IST(KDEBUG_TRACE,
-		                          (IMPORTANCE_CODE(TASK_POLICY_LATENCY_QOS, (TASK_POLICY_ATTRIBUTE | TASK_POLICY_TASK))) | DBG_FUNC_END,
-		                          proc_selfpid(), targetid(task, THREAD_NULL), trequested(task, THREAD_NULL), 0, 0);
-	}
-		break;
-
 	case TASK_OVERRIDE_QOS_POLICY:
 	{
 		task_qos_policy_t qosinfo = (task_qos_policy_t)policy_info;
@@ -348,27 +347,43 @@ task_policy_set(
 		if (kr != KERN_SUCCESS)
 			return kr;
 
-		task_lock(task);
 
-		/* This uses the latency QoS tracepoint, even though we might be changing both */
-		KERNEL_DEBUG_CONSTANT_IST(KDEBUG_TRACE,
-		                          (IMPORTANCE_CODE(TASK_POLICY_LATENCY_QOS, (TASK_POLICY_ATTRIBUTE | TASK_POLICY_TASK))) | DBG_FUNC_START,
-		                          proc_selfpid(), targetid(task, THREAD_NULL), trequested(task, THREAD_NULL), 0, 0);
+		uint32_t lqos = qos_extract(qosinfo->task_latency_qos_tier);
+		uint32_t tqos = qos_extract(qosinfo->task_throughput_qos_tier);
 
-		task->requested_policy.t_over_latency_qos = task_qos_extract(qosinfo->task_latency_qos_tier);
-		task->requested_policy.t_over_through_qos = task_qos_extract(qosinfo->task_throughput_qos_tier);
-
-		task_policy_update_locked(task, THREAD_NULL);
-
-		task_unlock(task);
-
-		task_policy_update_complete_unlocked(task, THREAD_NULL);
-
-		KERNEL_DEBUG_CONSTANT_IST(KDEBUG_TRACE,
-		                          (IMPORTANCE_CODE(TASK_POLICY_LATENCY_QOS, (TASK_POLICY_ATTRIBUTE | TASK_POLICY_TASK))) | DBG_FUNC_END,
-		                          proc_selfpid(), targetid(task, THREAD_NULL), trequested(task, THREAD_NULL), 0, 0);		
+		proc_set_task_policy2(task, THREAD_NULL, TASK_POLICY_ATTRIBUTE,
+							  flavor == TASK_BASE_QOS_POLICY ? TASK_POLICY_BASE_LATENCY_AND_THROUGHPUT_QOS : TASK_POLICY_OVERRIDE_LATENCY_AND_THROUGHPUT_QOS,
+							  lqos, tqos);
 	}
-		break;
+	break;
+
+	case TASK_BASE_LATENCY_QOS_POLICY:
+	{
+		task_qos_policy_t qosinfo = (task_qos_policy_t)policy_info;
+		kern_return_t kr = task_qos_policy_validate(qosinfo, count);
+
+		if (kr != KERN_SUCCESS)
+			return kr;
+
+		uint32_t lqos = qos_extract(qosinfo->task_latency_qos_tier);
+
+		proc_set_task_policy(task, NULL, TASK_POLICY_ATTRIBUTE, TASK_BASE_LATENCY_QOS_POLICY, lqos);
+	}
+	break;
+
+	case TASK_BASE_THROUGHPUT_QOS_POLICY:
+	{
+		task_qos_policy_t qosinfo = (task_qos_policy_t)policy_info;
+		kern_return_t kr = task_qos_policy_validate(qosinfo, count);
+
+		if (kr != KERN_SUCCESS)
+			return kr;
+
+		uint32_t tqos = qos_extract(qosinfo->task_throughput_qos_tier);
+
+		proc_set_task_policy(task, NULL, TASK_POLICY_ATTRIBUTE, TASK_BASE_THROUGHPUT_QOS_POLICY, tqos);
+	}
+	break;
 
 	case TASK_SUPPRESSION_POLICY:
 	{
@@ -388,32 +403,39 @@ task_policy_set(
 		if (kr != KERN_SUCCESS)
 			return kr;
 
+		/* TEMPORARY disablement of task suppression */
+		if (task_policy_suppression_disable && info->active)
+			return KERN_SUCCESS;
+
+		struct task_pend_token pend_token = {};
+
 		task_lock(task);
 
 		KERNEL_DEBUG_CONSTANT_IST(KDEBUG_TRACE,
 		                          (IMPORTANCE_CODE(IMP_TASK_SUPPRESSION, info->active)) | DBG_FUNC_START,
-		                          proc_selfpid(), audit_token_pid_from_task(task), trequested(task, THREAD_NULL),
-		                          0, 0);
+		                          proc_selfpid(), audit_token_pid_from_task(task), trequested_0(task, THREAD_NULL),
+		                          trequested_1(task, THREAD_NULL), 0);
 
 		task->requested_policy.t_sup_active      = (info->active)         ? 1 : 0;
 		task->requested_policy.t_sup_lowpri_cpu  = (info->lowpri_cpu)     ? 1 : 0;
-		task->requested_policy.t_sup_timer       = task_qos_extract(info->timer_throttle);
+		task->requested_policy.t_sup_timer       = qos_extract(info->timer_throttle);
 		task->requested_policy.t_sup_disk        = (info->disk_throttle)  ? 1 : 0;
 		task->requested_policy.t_sup_cpu_limit   = (info->cpu_limit)      ? 1 : 0;
 		task->requested_policy.t_sup_suspend     = (info->suspend)        ? 1 : 0;
-		task->requested_policy.t_sup_throughput  = task_qos_extract(info->throughput_qos);
+		task->requested_policy.t_sup_throughput  = qos_extract(info->throughput_qos);
 		task->requested_policy.t_sup_cpu         = (info->suppressed_cpu) ? 1 : 0;
+		task->requested_policy.t_sup_bg_sockets  = (info->background_sockets) ? 1 : 0;
 
-		task_policy_update_locked(task, THREAD_NULL);
+		task_policy_update_locked(task, THREAD_NULL, &pend_token);
 
 		task_unlock(task);
 
-		task_policy_update_complete_unlocked(task, THREAD_NULL);
+		task_policy_update_complete_unlocked(task, THREAD_NULL, &pend_token);
 
 		KERNEL_DEBUG_CONSTANT_IST(KDEBUG_TRACE,
 		                          (IMPORTANCE_CODE(IMP_TASK_SUPPRESSION, info->active)) | DBG_FUNC_END,
-		                          proc_selfpid(), audit_token_pid_from_task(task), trequested(task, THREAD_NULL),
-		                          0, 0);
+		                          proc_selfpid(), audit_token_pid_from_task(task), trequested_0(task, THREAD_NULL),
+		                          trequested_1(task, THREAD_NULL), 0);
 
 		break;
 
@@ -455,7 +477,7 @@ task_importance(
 	/* TODO: tracepoint? */
 
 	/* Redrive only the task priority calculation */
-	task_policy_update_task_locked(task, FALSE, FALSE);
+	task_policy_update_task_locked(task, FALSE, FALSE, FALSE);
 
 	task_unlock(task);
 
@@ -501,19 +523,20 @@ task_policy_get(
 			info->task_latency_qos_tier = LATENCY_QOS_TIER_UNSPECIFIED;
 			info->task_throughput_qos_tier = THROUGHPUT_QOS_TIER_UNSPECIFIED;
 		} else if (flavor == TASK_BASE_QOS_POLICY) {
-			task_lock(task);
+			int value1, value2;
 
-			info->task_latency_qos_tier    = task_qos_latency_package(task->requested_policy.t_base_latency_qos);
-			info->task_throughput_qos_tier = task_qos_throughput_package(task->requested_policy.t_base_through_qos);
+			proc_get_task_policy2(task, THREAD_NULL, TASK_POLICY_ATTRIBUTE, TASK_POLICY_BASE_LATENCY_AND_THROUGHPUT_QOS, &value1, &value2);
 
-			task_unlock(task);
+			info->task_latency_qos_tier = qos_latency_policy_package(value1);
+			info->task_throughput_qos_tier = qos_throughput_policy_package(value2);
+
 		} else if (flavor == TASK_OVERRIDE_QOS_POLICY) {
-			task_lock(task);
+			int value1, value2;
 
-			info->task_latency_qos_tier    = task_qos_latency_package(task->requested_policy.t_over_latency_qos);
-			info->task_throughput_qos_tier = task_qos_throughput_package(task->requested_policy.t_over_through_qos);
+			proc_get_task_policy2(task, THREAD_NULL, TASK_POLICY_ATTRIBUTE, TASK_POLICY_OVERRIDE_LATENCY_AND_THROUGHPUT_QOS, &value1, &value2);
 
-			task_unlock(task);
+			info->task_latency_qos_tier = qos_latency_policy_package(value1);
+			info->task_throughput_qos_tier = qos_throughput_policy_package(value2);
 		}
 
 		break;
@@ -530,8 +553,6 @@ task_policy_get(
 		if (current_task()->sec_token.val[0] != 0)
 			return KERN_PROTECTION_FAILURE;
 
-		task_lock(task);
-
 		if (*get_default) {
 			info->requested = 0;
 			info->effective = 0;
@@ -539,19 +560,33 @@ task_policy_get(
 			info->imp_assertcnt = 0;
 			info->imp_externcnt = 0;
 			info->flags = 0;
+			info->imp_transitions = 0;
 		} else {
+			task_lock(task);
+
 			info->requested = task_requested_bitfield(task, THREAD_NULL);
 			info->effective = task_effective_bitfield(task, THREAD_NULL);
-			info->pending   = task_pending_bitfield(task, THREAD_NULL);
-			info->imp_assertcnt = task->task_imp_assertcnt;
-			info->imp_externcnt = task->task_imp_externcnt;
+			info->pending   = 0;
 			
 			info->flags = 0;
-			info->flags |= (task->imp_receiver      ? TASK_IMP_RECEIVER : 0);
-			info->flags |= (task->imp_donor         ? TASK_IMP_DONOR    : 0);
+			if (task->task_imp_base != NULL) {
+				info->imp_assertcnt = task->task_imp_base->iit_assertcnt;
+				info->imp_externcnt = IIT_EXTERN(task->task_imp_base);
+				info->flags |= (task_is_marked_importance_receiver(task) ? TASK_IMP_RECEIVER : 0);
+				info->flags |= (task_is_marked_importance_denap_receiver(task) ? TASK_DENAP_RECEIVER : 0);
+				info->flags |= (task_is_marked_importance_donor(task) ? TASK_IMP_DONOR : 0);
+				info->flags |= (task_is_marked_live_importance_donor(task) ? TASK_IMP_LIVE_DONOR : 0);
+				info->imp_transitions = task->task_imp_base->iit_transitions;
+			} else {
+				info->imp_assertcnt = 0;
+				info->imp_externcnt = 0;
+				info->imp_transitions = 0;
+			}
+			task_unlock(task);
 		}
 
-		task_unlock(task);
+		info->reserved[0] = 0;
+		info->reserved[1] = 0;
 
 		break;
 	}
@@ -577,12 +612,13 @@ task_policy_get(
 		} else {
 			info->active            = task->requested_policy.t_sup_active;
 			info->lowpri_cpu        = task->requested_policy.t_sup_lowpri_cpu;
-			info->timer_throttle    = task_qos_latency_package(task->requested_policy.t_sup_timer);
+			info->timer_throttle    = qos_latency_policy_package(task->requested_policy.t_sup_timer);
 			info->disk_throttle     = task->requested_policy.t_sup_disk;
 			info->cpu_limit         = task->requested_policy.t_sup_cpu_limit;
 			info->suspend           = task->requested_policy.t_sup_suspend;
-			info->throughput_qos    = task_qos_throughput_package(task->requested_policy.t_sup_throughput);
+			info->throughput_qos    = qos_throughput_policy_package(task->requested_policy.t_sup_throughput);
 			info->suppressed_cpu    = task->requested_policy.t_sup_cpu;
+			info->background_sockets = task->requested_policy.t_sup_bg_sockets;
 		}
 
 		task_unlock(task);
@@ -615,32 +651,53 @@ task_policy_create(task_t task, int parent_boosted)
 	}
 
 	KERNEL_DEBUG_CONSTANT_IST(KDEBUG_TRACE,
-	                          (IMPORTANCE_CODE(IMP_UPDATE, (IMP_UPDATE_TASK_CREATE | TASK_POLICY_TASK))) | DBG_FUNC_START,
-	                          proc_selfpid(), audit_token_pid_from_task(task),
-	                          teffective(task, THREAD_NULL), tpriority(task, THREAD_NULL), 0);
+				  (IMPORTANCE_CODE(IMP_UPDATE, (IMP_UPDATE_TASK_CREATE | TASK_POLICY_TASK))) | DBG_FUNC_START,
+				  audit_token_pid_from_task(task), teffective_0(task, THREAD_NULL),
+				  teffective_1(task, THREAD_NULL), tpriority(task, THREAD_NULL), 0);
 
-	task_policy_update_internal_locked(task, THREAD_NULL, TRUE);
+	task_policy_update_internal_locked(task, THREAD_NULL, TRUE, NULL);
 
 	KERNEL_DEBUG_CONSTANT_IST(KDEBUG_TRACE,
-	                          (IMPORTANCE_CODE(IMP_UPDATE, (IMP_UPDATE_TASK_CREATE | TASK_POLICY_TASK))) | DBG_FUNC_END,
-	                          proc_selfpid(), audit_token_pid_from_task(task),
-	                          teffective(task, THREAD_NULL), tpriority(task, THREAD_NULL), 0);
+				  (IMPORTANCE_CODE(IMP_UPDATE, (IMP_UPDATE_TASK_CREATE | TASK_POLICY_TASK))) | DBG_FUNC_END,
+				  audit_token_pid_from_task(task), teffective_0(task, THREAD_NULL),
+				  teffective_1(task, THREAD_NULL), tpriority(task, THREAD_NULL), 0);
+
+	task_importance_update_live_donor(task);
+	task_policy_update_task_locked(task, FALSE, FALSE, FALSE);
+}
+
+void
+thread_policy_create(thread_t thread)
+{
+	task_t task = thread->task;
+
+	KERNEL_DEBUG_CONSTANT_IST(KDEBUG_TRACE,
+				  (IMPORTANCE_CODE(IMP_UPDATE, (IMP_UPDATE_TASK_CREATE | TASK_POLICY_THREAD))) | DBG_FUNC_START,
+				  targetid(task, thread), teffective_0(task, thread),
+				  teffective_1(task, thread), tpriority(task, thread), 0);
+
+	task_policy_update_internal_locked(task, thread, TRUE, NULL);
+
+	KERNEL_DEBUG_CONSTANT_IST(KDEBUG_TRACE,
+				  (IMPORTANCE_CODE(IMP_UPDATE, (IMP_UPDATE_TASK_CREATE | TASK_POLICY_THREAD))) | DBG_FUNC_END,
+				  targetid(task, thread), teffective_0(task, thread),
+				  teffective_1(task, thread), tpriority(task, thread), 0);
 }
 
 static void
-task_policy_update_locked(task_t task, thread_t thread)
+task_policy_update_locked(task_t task, thread_t thread, task_pend_token_t pend_token)
 {
 	KERNEL_DEBUG_CONSTANT_IST(KDEBUG_TRACE,
 	                          (IMPORTANCE_CODE(IMP_UPDATE, tisthread(thread)) | DBG_FUNC_START),
-	                          proc_selfpid(), targetid(task, thread),
-	                          teffective(task, thread), tpriority(task, thread), 0);
+	                          targetid(task, thread), teffective_0(task, thread),
+	                          teffective_1(task, thread), tpriority(task, thread), 0);
 
-	task_policy_update_internal_locked(task, thread, FALSE);
+	task_policy_update_internal_locked(task, thread, FALSE, pend_token);
 
 	KERNEL_DEBUG_CONSTANT_IST(KDEBUG_TRACE,
-	                          (IMPORTANCE_CODE(IMP_UPDATE, tisthread(thread))) | DBG_FUNC_END,
-	                          proc_selfpid(), targetid(task, thread),
-	                          teffective(task, thread), tpriority(task, thread), 0);
+				  (IMPORTANCE_CODE(IMP_UPDATE, tisthread(thread))) | DBG_FUNC_END,
+				  targetid(task, thread), teffective_0(task, thread),
+				  teffective_1(task, thread), tpriority(task, thread), 0);
 }
 
 /*
@@ -654,8 +711,9 @@ task_policy_update_locked(task_t task, thread_t thread)
  *
  * Called with task locked, not thread
  */
+
 static void
-task_policy_update_internal_locked(task_t task, thread_t thread, boolean_t in_create)
+task_policy_update_internal_locked(task_t task, thread_t thread, boolean_t in_create, task_pend_token_t pend_token)
 {
 	boolean_t on_task = (thread == THREAD_NULL) ? TRUE : FALSE;
 
@@ -666,6 +724,7 @@ task_policy_update_internal_locked(task_t task, thread_t thread, boolean_t in_cr
 
 	struct task_requested_policy requested =
 	        (on_task) ? task->requested_policy : thread->requested_policy;
+
 
 	/*
 	 * Step 2:
@@ -678,15 +737,113 @@ task_policy_update_internal_locked(task_t task, thread_t thread, boolean_t in_cr
 	 */
 
 	struct task_effective_policy next = {};
+	struct task_effective_policy task_effective;
+
+	/* Calculate QoS policies */
+
+	if (on_task) {
+		/* Update task role */
+		next.t_role = requested.t_role;
+
+		/* Set task qos clamp and ceiling */
+		next.t_qos_clamp = requested.t_qos_clamp;
+
+		if (requested.t_apptype == TASK_APPTYPE_APP_DEFAULT ||
+		    requested.t_apptype == TASK_APPTYPE_APP_TAL) {
+
+			switch (next.t_role) {
+				case TASK_FOREGROUND_APPLICATION:
+					/* Foreground apps get urgent scheduler priority */
+					next.qos_ui_is_urgent = 1;
+					next.t_qos_ceiling = THREAD_QOS_UNSPECIFIED;
+					break;
+
+				case TASK_BACKGROUND_APPLICATION:
+					/* This is really 'non-focal but on-screen' */
+					next.t_qos_ceiling = THREAD_QOS_UNSPECIFIED;
+					break;
+
+				case TASK_NONUI_APPLICATION:
+					/* i.e. 'off-screen' */
+					next.t_qos_ceiling = THREAD_QOS_LEGACY;
+					break;
+
+				case TASK_CONTROL_APPLICATION:
+				case TASK_GRAPHICS_SERVER:
+					next.qos_ui_is_urgent = 1;
+					next.t_qos_ceiling = THREAD_QOS_UNSPECIFIED;
+					break;
+
+				case TASK_UNSPECIFIED:
+				default:
+					/* Apps that don't have an application role get
+					 * USER_INTERACTIVE and USER_INITIATED squashed to LEGACY */
+					next.t_qos_ceiling = THREAD_QOS_LEGACY;
+					break;
+			}
+		} else {
+			/* Daemons get USER_INTERACTIVE squashed to USER_INITIATED */
+			next.t_qos_ceiling = THREAD_QOS_USER_INITIATED;
+		}
+	} else {
+		/*
+		 * Set thread qos tier
+		 * Note that an override only overrides the QoS field, not other policy settings.
+		 * A thread must already be participating in QoS for override to take effect
+		 */
+
+		/* Snapshot the task's effective policy */
+		task_effective = task->effective_policy;
+
+		next.qos_ui_is_urgent = task_effective.qos_ui_is_urgent;
+
+		if ((requested.thrp_qos_override != THREAD_QOS_UNSPECIFIED) && (requested.thrp_qos != THREAD_QOS_UNSPECIFIED))
+			next.thep_qos = MAX(requested.thrp_qos_override, requested.thrp_qos);
+		else
+			next.thep_qos = requested.thrp_qos;
+
+		/* A task clamp will result in an effective QoS even when requested is UNSPECIFIED */
+		if (task_effective.t_qos_clamp != THREAD_QOS_UNSPECIFIED) {
+			if (next.thep_qos != THREAD_QOS_UNSPECIFIED)
+				next.thep_qos = MIN(task_effective.t_qos_clamp, next.thep_qos);
+			else
+				next.thep_qos = task_effective.t_qos_clamp;
+		}
+
+		/* The ceiling only applies to threads that are in the QoS world */
+		if (task_effective.t_qos_ceiling != THREAD_QOS_UNSPECIFIED &&
+		    next.thep_qos                != THREAD_QOS_UNSPECIFIED) {
+			next.thep_qos = MIN(task_effective.t_qos_ceiling, next.thep_qos);
+		}
+
+		/*
+		 * The QoS relative priority is only applicable when the original programmer's
+		 * intended (requested) QoS is in effect. When the QoS is clamped (e.g.
+		 * USER_INITIATED-13REL clamped to UTILITY), the relative priority is not honored,
+		 * since otherwise it would be lower than unclamped threads. Similarly, in the
+		 * presence of boosting, the programmer doesn't know what other actors
+		 * are boosting the thread.
+		 */
+		if ((requested.thrp_qos != THREAD_QOS_UNSPECIFIED) &&
+		    (requested.thrp_qos == next.thep_qos) &&
+		    (requested.thrp_qos_override == THREAD_QOS_UNSPECIFIED)) {
+			next.thep_qos_relprio = requested.thrp_qos_relprio;
+		} else {
+			next.thep_qos_relprio = 0;
+		}
+	}
 
 	/* Calculate DARWIN_BG */
 	boolean_t wants_darwinbg        = FALSE;
 	boolean_t wants_all_sockets_bg  = FALSE; /* Do I want my existing sockets to be bg */
 	boolean_t wants_watchersbg      = FALSE; /* Do I want my pidbound threads to be bg */
 	boolean_t wants_tal             = FALSE; /* Do I want the effects of TAL mode */
+
 	/*
 	 * If DARWIN_BG has been requested at either level, it's engaged.
 	 * Only true DARWIN_BG changes cause watchers to transition.
+	 *
+	 * Backgrounding due to apptype does.
 	 */
 	if (requested.int_darwinbg || requested.ext_darwinbg)
 		wants_watchersbg = wants_all_sockets_bg = wants_darwinbg = TRUE;
@@ -708,11 +865,17 @@ task_policy_update_internal_locked(task_t task, thread_t thread, boolean_t in_cr
 		/* Background daemons are always DARWIN_BG, no exceptions, and don't get network throttled. */
 		if (requested.t_apptype == TASK_APPTYPE_DAEMON_BACKGROUND)
 			wants_darwinbg = TRUE;
+
+		if (next.t_qos_clamp == THREAD_QOS_BACKGROUND || next.t_qos_clamp == THREAD_QOS_MAINTENANCE)
+			wants_darwinbg = TRUE;
 	} else {
 		if (requested.th_pidbind_bg)
 			wants_all_sockets_bg = wants_darwinbg = TRUE;
 
 		if (requested.th_workq_bg)
+			wants_darwinbg = TRUE;
+
+		if (next.thep_qos == THREAD_QOS_BACKGROUND || next.thep_qos == THREAD_QOS_MAINTENANCE)
 			wants_darwinbg = TRUE;
 	}
 
@@ -730,6 +893,14 @@ task_policy_update_internal_locked(task_t task, thread_t thread, boolean_t in_cr
 
 	if (on_task && wants_watchersbg)
 		next.t_watchers_bg = 1;
+
+	/* darwinbg on either task or thread implies background QOS (or lower) */
+	if (!on_task &&
+		(wants_darwinbg || task_effective.darwinbg) &&
+		(next.thep_qos > THREAD_QOS_BACKGROUND || next.thep_qos == THREAD_QOS_UNSPECIFIED)){
+		next.thep_qos = THREAD_QOS_BACKGROUND;
+		next.thep_qos_relprio = 0;
+	}
 
 	/* Calculate low CPU priority */
 
@@ -763,6 +934,13 @@ task_policy_update_internal_locked(task_t task, thread_t thread, boolean_t in_cr
 
 		if (wants_tal)
 			iopol = MAX(iopol, proc_tal_disk_tier);
+
+		if (next.t_qos_clamp != THREAD_QOS_UNSPECIFIED)
+			iopol = MAX(iopol, thread_qos_policy_params.qos_iotier[next.t_qos_clamp]);
+
+	} else {
+		/* Look up the associated IO tier value for the QoS class */
+		iopol = MAX(iopol, thread_qos_policy_params.qos_iotier[next.thep_qos]);
 	}
 
 	iopol = MAX(iopol, requested.int_iotier);
@@ -778,9 +956,6 @@ task_policy_update_internal_locked(task_t task, thread_t thread, boolean_t in_cr
 	/* Calculate miscellaneous policy */
 
 	if (on_task) {
-		/* Update role */
-		next.t_role = requested.t_role;
-
 		/* Calculate suppression-active flag */
 		if (requested.t_sup_active && requested.t_boosted == 0)
 			next.t_sup_active = 1;
@@ -789,16 +964,14 @@ task_policy_update_internal_locked(task_t task, thread_t thread, boolean_t in_cr
 		if (requested.t_sup_suspend && requested.t_boosted == 0)
 			next.t_suspended = 1;
 
-		/* Calculate GPU Access policy */
-		if (requested.t_int_gpu_deny || requested.t_ext_gpu_deny)
-			next.t_gpu_deny = 1;
-
-
 		/* Calculate timer QOS */
 		int latency_qos = requested.t_base_latency_qos;
 
 		if (requested.t_sup_timer && requested.t_boosted == 0)
 			latency_qos = requested.t_sup_timer;
+
+		if (next.t_qos_clamp != THREAD_QOS_UNSPECIFIED)
+			latency_qos = MAX(latency_qos, (int)thread_qos_policy_params.qos_latency_qos[next.t_qos_clamp]);
 
 		if (requested.t_over_latency_qos != 0)
 			latency_qos = requested.t_over_latency_qos;
@@ -815,6 +988,9 @@ task_policy_update_internal_locked(task_t task, thread_t thread, boolean_t in_cr
 		if (requested.t_sup_throughput && requested.t_boosted == 0)
 			through_qos = requested.t_sup_throughput;
 
+		if (next.t_qos_clamp != THREAD_QOS_UNSPECIFIED)
+			through_qos = MAX(through_qos, (int)thread_qos_policy_params.qos_through_qos[next.t_qos_clamp]);
+
 		if (requested.t_over_through_qos != 0)
 			through_qos = requested.t_over_through_qos;
 
@@ -823,6 +999,37 @@ task_policy_update_internal_locked(task_t task, thread_t thread, boolean_t in_cr
 		/* Calculate suppressed CPU priority */
 		if (requested.t_sup_cpu && requested.t_boosted == 0)
 			next.t_suppressed_cpu = 1;
+
+		/*
+		 * Calculate background sockets
+		 * Don't take into account boosting to limit transition frequency.
+		 */
+		if (requested.t_sup_bg_sockets){
+			next.all_sockets_bg = 1;
+			next.new_sockets_bg = 1;
+		}
+
+		/* Apply SFI Managed class bit */
+		next.t_sfi_managed = requested.t_sfi_managed;
+
+		/* Calculate 'live donor' status for live importance */
+		switch (requested.t_apptype) {
+			case TASK_APPTYPE_APP_TAL:
+			case TASK_APPTYPE_APP_DEFAULT:
+				if (requested.ext_darwinbg == 0)
+					next.t_live_donor = 1;
+				else
+					next.t_live_donor = 0;
+				break;
+
+			case TASK_APPTYPE_DAEMON_INTERACTIVE:
+			case TASK_APPTYPE_DAEMON_STANDARD:
+			case TASK_APPTYPE_DAEMON_ADAPTIVE:
+			case TASK_APPTYPE_DAEMON_BACKGROUND:
+			default:
+				next.t_live_donor = 0;
+				break;
+		}
 	}
 
 	if (requested.terminated) {
@@ -832,7 +1039,6 @@ task_policy_update_internal_locked(task_t task, thread_t thread, boolean_t in_cr
 		 * passive        (don't want to cause others to throttle)
 		 * all_sockets_bg (don't need to iterate FDs on every exit)
 		 * new_sockets_bg (doesn't matter for exiting process)
-		 * gpu deny       (doesn't matter for exiting process)
 		 * pidsuspend     (jetsam-ed BG process shouldn't run again)
 		 * watchers_bg    (watcher threads don't need to be unthrottled)
 		 * t_latency_qos  (affects userspace timers only)
@@ -849,6 +1055,8 @@ task_policy_update_internal_locked(task_t task, thread_t thread, boolean_t in_cr
 
 			/* TODO: This should only be shot down on SIGTERM, not exit */
 			next.t_suspended   = 0;
+		} else {
+			next.thep_qos = 0;
 		}
 	}
 
@@ -856,6 +1064,16 @@ task_policy_update_internal_locked(task_t task, thread_t thread, boolean_t in_cr
 	 * Step 3:
 	 *  Swap out old policy for new policy
 	 */
+
+	if (!on_task) {
+		/* Acquire thread mutex to synchronize against
+		 * thread_policy_set(). Consider reworking to separate qos
+		 * fields, or locking the task in thread_policy_set.
+		 * A more efficient model would be to make the thread bits
+		 * authoritative.
+		 */
+		thread_mtx_lock(thread);
+	}
 
 	struct task_effective_policy prev =
 	        (on_task) ? task->effective_policy : thread->effective_policy;
@@ -870,8 +1088,31 @@ task_policy_update_internal_locked(task_t task, thread_t thread, boolean_t in_cr
 	/* This is the point where the new values become visible to other threads */
 	if (on_task)
 		task->effective_policy = next;
-	else
+	else {
+		/* Preserve thread specific latency/throughput QoS modified via
+		 * thread_policy_set(). Inelegant in the extreme, to be reworked.
+		 *
+		 * If thread QoS class is set, we don't need to preserve the previously set values.
+		 * We should ensure to not accidentally preserve previous thread QoS values if you set a thread
+		 * back to default QoS.
+		 */
+		uint32_t lqos = thread->effective_policy.t_latency_qos, tqos = thread->effective_policy.t_through_qos;
+
+		if (prev.thep_qos == THREAD_QOS_UNSPECIFIED && next.thep_qos == THREAD_QOS_UNSPECIFIED) {
+			next.t_latency_qos = lqos;
+			next.t_through_qos = tqos;
+		} else if (prev.thep_qos != THREAD_QOS_UNSPECIFIED && next.thep_qos == THREAD_QOS_UNSPECIFIED) {
+			next.t_latency_qos = 0;
+			next.t_through_qos = 0;
+		} else {
+			next.t_latency_qos = thread_qos_policy_params.qos_latency_qos[next.thep_qos];
+			next.t_through_qos = thread_qos_policy_params.qos_through_qos[next.thep_qos];
+		}
+
+		thread_update_qos_cpu_time(thread, TRUE);
 		thread->effective_policy = next;
+		thread_mtx_unlock(thread);
+	}
 
 	/* Don't do anything further to a half-formed task or thread */
 	if (in_create)
@@ -880,26 +1121,20 @@ task_policy_update_internal_locked(task_t task, thread_t thread, boolean_t in_cr
 	/*
 	 * Step 4:
 	 *  Pend updates that can't be done while holding the task lock
-	 *  Preserve pending updates that may still be waiting to be applied
 	 */
 
-	struct task_pended_policy pended =
-		(on_task) ? task->pended_policy : thread->pended_policy;
-
 	if (prev.all_sockets_bg != next.all_sockets_bg)
-		pended.update_sockets = 1;
+		pend_token->tpt_update_sockets = 1;
 
 	if (on_task) {
 		/* Only re-scan the timer list if the qos level is getting less strong */
 		if (prev.t_latency_qos > next.t_latency_qos)
-			pended.t_update_timers = 1;
+			pend_token->tpt_update_timers = 1;
 
+
+		if (prev.t_live_donor != next.t_live_donor)
+			pend_token->tpt_update_live_donor = 1;
 	}
-
-	if (on_task)
-		task->pended_policy = pended;
-	else
-		thread->pended_policy = pended;
 
 	/*
 	 * Step 5:
@@ -918,34 +1153,66 @@ task_policy_update_internal_locked(task_t task, thread_t thread, boolean_t in_cr
 		}
 
 		boolean_t update_threads = FALSE;
+		boolean_t update_sfi = FALSE;
 
-		if (prev.bg_iotier != next.bg_iotier)
+		if (prev.bg_iotier          != next.bg_iotier        ||
+		    prev.terminated         != next.terminated       ||
+		    prev.t_qos_clamp        != next.t_qos_clamp      ||
+		    prev.t_qos_ceiling      != next.t_qos_ceiling    ||
+		    prev.qos_ui_is_urgent   != next.qos_ui_is_urgent ||
+		    prev.darwinbg           != next.darwinbg)
 			update_threads = TRUE;
 
-		if (prev.terminated != next.terminated)
-			update_threads = TRUE;
+		/*
+		 * A bit of a layering violation. We know what task policy attributes
+		 * sfi_thread_classify() consults, so if they change, trigger SFI
+		 * re-evaluation.
+		 */
+		if ((prev.t_latency_qos != next.t_latency_qos) ||
+			(prev.t_role != next.t_role) ||
+			(prev.darwinbg != next.darwinbg) ||
+			(prev.t_sfi_managed != next.t_sfi_managed))
+			update_sfi = TRUE;
 
-		task_policy_update_task_locked(task, update_throttle, update_threads);
+		task_policy_update_task_locked(task, update_throttle, update_threads, update_sfi);
 	} else {
 		int update_cpu = 0;
+		boolean_t update_sfi = FALSE;
+		boolean_t update_qos = FALSE;
 
 		if (prev.lowpri_cpu != next.lowpri_cpu)
 			update_cpu = (next.lowpri_cpu ? DO_LOWPRI_CPU : UNDO_LOWPRI_CPU);
 
-		task_policy_update_thread_locked(thread, update_cpu, update_throttle);
+		if (prev.darwinbg != next.darwinbg ||
+		    prev.thep_qos != next.thep_qos)
+			update_sfi = TRUE;
+
+		if (prev.thep_qos           != next.thep_qos          ||
+		    prev.thep_qos_relprio   != next.thep_qos_relprio  ||
+		    prev.qos_ui_is_urgent   != next.qos_ui_is_urgent) {
+			update_qos = TRUE;
+		}
+
+		task_policy_update_thread_locked(thread, update_cpu, update_throttle, update_sfi, update_qos);
 	}
 }
 
 /* Despite the name, the thread's task is locked, the thread is not */
-static void
+void
 task_policy_update_thread_locked(thread_t thread,
                                  int update_cpu,
-                                 boolean_t update_throttle)
+                                 boolean_t update_throttle,
+                                 boolean_t update_sfi,
+                                 boolean_t update_qos)
 {
 	thread_precedence_policy_data_t policy;
 
 	if (update_throttle) {
 		rethrottle_thread(thread->uthread);
+	}
+
+	if (update_sfi) {
+		sfi_reevaluate(thread);
 	}
 
 	/*
@@ -967,16 +1234,20 @@ task_policy_update_thread_locked(thread_t thread,
 		thread_policy_set_internal(thread, THREAD_PRECEDENCE_POLICY,
                                            (thread_policy_t)&policy,
                                            THREAD_PRECEDENCE_POLICY_COUNT);
+
+	if (update_qos)
+		thread_recompute_qos(thread);
 }
 
 /*
  * Calculate priority on a task, loop through its threads, and tell them about
  * priority changes and throttle changes.
  */
-static void
+void
 task_policy_update_task_locked(task_t    task,
                                boolean_t update_throttle,
-                               boolean_t update_threads)
+                               boolean_t update_threads,
+                               boolean_t update_sfi)
 {
 	boolean_t update_priority = FALSE;
 
@@ -994,12 +1265,6 @@ task_policy_update_task_locked(task_t    task,
 		max_priority = MAXPRI_SUPPRESSED;
 	} else {
 		switch (proc_get_effective_task_policy(task, TASK_POLICY_ROLE)) {
-			case TASK_FOREGROUND_APPLICATION:
-				priority = BASEPRI_FOREGROUND;
-				break;
-			case TASK_BACKGROUND_APPLICATION:
-				priority = BASEPRI_BACKGROUND;
-				break;
 			case TASK_CONTROL_APPLICATION:
 				priority = BASEPRI_CONTROL;
 				break;
@@ -1013,6 +1278,13 @@ task_policy_update_task_locked(task_t    task,
 
 		/* factor in 'nice' value */
 		priority += task->importance;
+
+		if (task->effective_policy.t_qos_clamp != THREAD_QOS_UNSPECIFIED) {
+			int qos_clamp_priority = thread_qos_policy_params.qos_pri[task->effective_policy.t_qos_clamp];
+
+			priority        = MIN(priority, qos_clamp_priority);
+			max_priority    = MIN(max_priority, qos_clamp_priority);
+		}
 	}
 
 	/* avoid extra work if priority isn't changing */
@@ -1031,15 +1303,14 @@ task_policy_update_task_locked(task_t    task,
 	}
 
 	/* Loop over the threads in the task only once, and only if necessary */
-	if (update_threads || update_throttle || update_priority ) {
+	if (update_threads || update_throttle || update_priority || update_sfi ) {
 		thread_t thread;
 
 		queue_iterate(&task->threads, thread, thread_t, task_threads) {
 			if (update_priority) {
 				thread_mtx_lock(thread);
 
-				if (thread->active)
-					thread_task_priority(thread, priority, max_priority);
+				thread_task_priority(thread, priority, max_priority);
 
 				thread_mtx_unlock(thread);
 			}
@@ -1048,11 +1319,15 @@ task_policy_update_task_locked(task_t    task,
 				rethrottle_thread(thread->uthread);
 			}
 
+			if (update_sfi) {
+				sfi_reevaluate(thread);
+			}
+
 			if (update_threads) {
 				thread->requested_policy.bg_iotier  = task->effective_policy.bg_iotier;
 				thread->requested_policy.terminated = task->effective_policy.terminated;
 
-				task_policy_update_internal_locked(task, thread, FALSE);
+				task_policy_update_internal_locked(task, thread, FALSE, NULL);
 				/*  The thread policy must not emit any completion actions due to this change. */
 			}
 		}
@@ -1061,61 +1336,26 @@ task_policy_update_task_locked(task_t    task,
 
 /*
  * Called with task unlocked to do things that can't be done while holding the task lock
- * To keep things consistent, only one thread can make progress through here at a time for any one task.
- *
- * TODO: tracepoints
  */
-static void
-task_policy_update_complete_unlocked(task_t task, thread_t thread)
+void
+task_policy_update_complete_unlocked(task_t task, thread_t thread, task_pend_token_t pend_token)
 {
 	boolean_t on_task = (thread == THREAD_NULL) ? TRUE : FALSE;
 
-	task_lock(task);
-
-	while (task->pended_policy.t_updating_policy != 0) {
-		assert_wait((event_t)&task->pended_policy, THREAD_UNINT);
-		task_unlock(task);
-		thread_block(THREAD_CONTINUE_NULL);
-		task_lock(task);
-	}
-
-	/* Take a snapshot of the current state */
-
-	struct task_pended_policy pended =
-		(on_task) ? task->pended_policy : thread->pended_policy;
-
-	struct task_effective_policy effective =
-		(on_task) ? task->effective_policy : thread->effective_policy;
-	
-	/* Mark the pended operations as being handled */
-	if (on_task)
-		task->pended_policy = default_task_pended_policy;
-	else
-		thread->pended_policy = default_task_pended_policy;
-
-	task->pended_policy.t_updating_policy = 1;
-
-	task_unlock(task);
-
-	/* Update the other subsystems with the new state */
-
 #ifdef MACH_BSD
-	if (pended.update_sockets)
-		proc_apply_task_networkbg(task->bsd_info, thread, effective.all_sockets_bg);
+	if (pend_token->tpt_update_sockets)
+		proc_apply_task_networkbg(task->bsd_info, thread);
 #endif /* MACH_BSD */
 
 	if (on_task) {
-		/* The timer throttle has been removed, we need to look for expired timers and fire them */
-		if (pended.t_update_timers)
+		/* The timer throttle has been removed or reduced, we need to look for expired timers and fire them */
+		if (pend_token->tpt_update_timers)
 			ml_timer_evaluate();
 
-	}
 
-	/* Wake up anyone waiting to make another update */
-	task_lock(task);
-	task->pended_policy.t_updating_policy = 0;
-	thread_wakeup(&task->pended_policy);
-	task_unlock(task);
+		if (pend_token->tpt_update_live_donor)
+			task_importance_update_live_donor(task);
+	}
 }
 
 /*
@@ -1135,23 +1375,25 @@ proc_set_task_policy(task_t     task,
                      int        flavor,
                      int        value)
 {
+	struct task_pend_token pend_token = {};
+	
 	task_lock(task);
 
 	KERNEL_DEBUG_CONSTANT_IST(KDEBUG_TRACE,
-	                          (IMPORTANCE_CODE(flavor, (category | tisthread(thread)))) | DBG_FUNC_START,
-	                          proc_selfpid(), targetid(task, thread), trequested(task, thread), value, 0);
+				  (IMPORTANCE_CODE(flavor, (category | tisthread(thread)))) | DBG_FUNC_START,
+				  targetid(task, thread), trequested_0(task, thread), trequested_1(task, thread), value, 0);
 
 	proc_set_task_policy_locked(task, thread, category, flavor, value);
 
-	task_policy_update_locked(task, thread);
+	task_policy_update_locked(task, thread, &pend_token);
 
 	task_unlock(task);
 
 	KERNEL_DEBUG_CONSTANT_IST(KDEBUG_TRACE,
-	                          (IMPORTANCE_CODE(flavor, (category | tisthread(thread)))) | DBG_FUNC_END,
-	                          proc_selfpid(), targetid(task, thread), trequested(task, thread), tpending(task, thread), 0);
+				  (IMPORTANCE_CODE(flavor, (category | tisthread(thread)))) | DBG_FUNC_END,
+				  targetid(task, thread), trequested_0(task, thread), trequested_1(task, thread), tpending(&pend_token), 0);
 
-	task_policy_update_complete_unlocked(task, thread);
+	task_policy_update_complete_unlocked(task, thread, &pend_token);
 }
 
 /*
@@ -1167,6 +1409,7 @@ proc_set_task_policy_thread(task_t     task,
 {
 	thread_t thread;
 	thread_t self = current_thread();
+	struct task_pend_token pend_token = {};
 
 	task_lock(task);
 
@@ -1181,22 +1424,49 @@ proc_set_task_policy_thread(task_t     task,
 	}
 
 	KERNEL_DEBUG_CONSTANT_IST(KDEBUG_TRACE,
-	                          (IMPORTANCE_CODE(flavor, (category | TASK_POLICY_THREAD))) | DBG_FUNC_START,
-	                          proc_selfpid(), targetid(task, thread), trequested(task, thread), value, 0);
+				  (IMPORTANCE_CODE(flavor, (category | TASK_POLICY_THREAD))) | DBG_FUNC_START,
+				  targetid(task, thread), trequested_0(task, thread), trequested_1(task, thread), value, 0);
 
 	proc_set_task_policy_locked(task, thread, category, flavor, value);
 
-	task_policy_update_locked(task, thread);
+	task_policy_update_locked(task, thread, &pend_token);
 
 	task_unlock(task);
 
 	KERNEL_DEBUG_CONSTANT_IST(KDEBUG_TRACE,
-	                          (IMPORTANCE_CODE(flavor, (category | TASK_POLICY_THREAD))) | DBG_FUNC_END,
-	                          proc_selfpid(), targetid(task, thread), trequested(task, thread), tpending(task, thread), 0);
+				  (IMPORTANCE_CODE(flavor, (category | TASK_POLICY_THREAD))) | DBG_FUNC_END,
+				  targetid(task, thread), trequested_0(task, thread), trequested_1(task, thread), tpending(&pend_token), 0);
 
-	task_policy_update_complete_unlocked(task, thread);
+	task_policy_update_complete_unlocked(task, thread, &pend_token);
 }
 
+/*
+ * Variant of proc_set_task_policy() that sets two scalars in the requested policy structure.
+ * Same locking rules apply.
+ */
+void
+proc_set_task_policy2(task_t task, thread_t thread, int category, int flavor, int value1, int value2)
+{
+	struct task_pend_token pend_token = {};
+	
+	task_lock(task);
+
+	KERNEL_DEBUG_CONSTANT_IST(KDEBUG_TRACE,
+				  (IMPORTANCE_CODE(flavor, (category | tisthread(thread)))) | DBG_FUNC_START,
+				  targetid(task, thread), trequested_0(task, thread), trequested_1(task, thread), value1, 0);
+
+	proc_set_task_policy2_locked(task, thread, category, flavor, value1, value2);
+
+	task_policy_update_locked(task, thread, &pend_token);
+
+	task_unlock(task);
+
+	KERNEL_DEBUG_CONSTANT_IST(KDEBUG_TRACE,
+				  (IMPORTANCE_CODE(flavor, (category | tisthread(thread)))) | DBG_FUNC_END,
+				  targetid(task, thread), trequested_0(task, thread), trequested_0(task, thread), tpending(&pend_token), 0);
+
+	task_policy_update_complete_unlocked(task, thread, &pend_token);
+}
 
 /*
  * Set the requested state for a specific flavor to a specific value.
@@ -1254,28 +1524,7 @@ proc_set_task_policy_locked(task_t      task,
 				requested.int_iopassive = value;
 			break;
 
-	/* Category: EXTERNAL and INTERNAL, task only */
-
-		case TASK_POLICY_GPU_DENY:
-			assert(on_task);
-			if (category == TASK_POLICY_EXTERNAL)
-				requested.t_ext_gpu_deny = value;
-			else
-				requested.t_int_gpu_deny = value;
-			break;
-
-		case TASK_POLICY_DARWIN_BG_AND_GPU:
-			assert(on_task);
-			if (category == TASK_POLICY_EXTERNAL) {
-				requested.ext_darwinbg = value;
-				requested.t_ext_gpu_deny = value;
-			} else {
-				requested.int_darwinbg = value;
-				requested.t_int_gpu_deny = value;
-			}
-			break;
-
-	/* Category: INTERNAL, task only */			
+	/* Category: INTERNAL, task only */
 
 		case TASK_POLICY_DARWIN_BG_IOPOL:
 			assert(on_task && category == TASK_POLICY_INTERNAL);
@@ -1304,6 +1553,18 @@ proc_set_task_policy_locked(task_t      task,
 			assert(on_task && category == TASK_POLICY_ATTRIBUTE);
 			requested.terminated = value;
 			break;
+		case TASK_BASE_LATENCY_QOS_POLICY:
+			assert(on_task && category == TASK_POLICY_ATTRIBUTE);
+			requested.t_base_latency_qos = value;
+			break;
+		case TASK_BASE_THROUGHPUT_QOS_POLICY:
+			assert(on_task && category == TASK_POLICY_ATTRIBUTE);
+			requested.t_base_through_qos = value;
+			break;
+		case TASK_POLICY_SFI_MANAGED:
+			assert(on_task && category == TASK_POLICY_ATTRIBUTE);
+			requested.t_sfi_managed = value;
+			break;
 
 	/* Category: ATTRIBUTE, thread only */
 
@@ -1317,8 +1578,71 @@ proc_set_task_policy_locked(task_t      task,
 			requested.th_workq_bg = value;
 			break;
 
+		case TASK_POLICY_QOS:
+			assert(!on_task && category == TASK_POLICY_ATTRIBUTE);
+			requested.thrp_qos = value;
+			break;
+
+		case TASK_POLICY_QOS_OVERRIDE:
+			assert(!on_task && category == TASK_POLICY_ATTRIBUTE);
+			requested.thrp_qos_override = value;
+			break;
+
 		default:
 			panic("unknown task policy: %d %d %d", category, flavor, value);
+			break;
+	}
+
+	if (on_task)
+		task->requested_policy = requested;
+	else
+		thread->requested_policy = requested;
+}
+
+/*
+ * Variant of proc_set_task_policy_locked() that sets two scalars in the requested policy structure.
+ */
+static void
+proc_set_task_policy2_locked(task_t      task,
+                             thread_t    thread,
+                             int         category,
+                             int         flavor,
+                             int         value1,
+                             int         value2)
+{
+	boolean_t on_task = (thread == THREAD_NULL) ? TRUE : FALSE;
+
+	struct task_requested_policy requested =
+	        (on_task) ? task->requested_policy : thread->requested_policy;
+
+	switch (flavor) {
+
+	/* Category: ATTRIBUTE, task only */
+
+		case TASK_POLICY_BASE_LATENCY_AND_THROUGHPUT_QOS:
+			assert(on_task && category == TASK_POLICY_ATTRIBUTE);
+			requested.t_base_latency_qos = value1;
+			requested.t_base_through_qos = value2;
+			break;
+
+		case TASK_POLICY_OVERRIDE_LATENCY_AND_THROUGHPUT_QOS:
+			assert(on_task && category == TASK_POLICY_ATTRIBUTE);
+			requested.t_over_latency_qos = value1;
+			requested.t_over_through_qos = value2;
+			break;
+
+	/* Category: ATTRIBUTE, thread only */
+
+		case TASK_POLICY_QOS_AND_RELPRIO:
+
+			assert(!on_task && category == TASK_POLICY_ATTRIBUTE);
+			requested.thrp_qos = value1;
+			requested.thrp_qos_relprio = value2;
+			DTRACE_BOOST3(qos_set, uint64_t, thread->thread_id, int, requested.thrp_qos, int, requested.thrp_qos_relprio);
+			break;
+
+		default:
+			panic("unknown task policy: %d %d %d %d", category, flavor, value1, value2);
 			break;
 	}
 
@@ -1374,13 +1698,6 @@ proc_get_task_policy(task_t     task,
 			else
 				value = requested.int_iopassive;
 			break;
-		case TASK_POLICY_GPU_DENY:
-			assert(on_task);
-			if (category == TASK_POLICY_EXTERNAL)
-				value = requested.t_ext_gpu_deny;
-			else
-				value = requested.t_int_gpu_deny;
-			break;
 		case TASK_POLICY_DARWIN_BG_IOPOL:
 			assert(on_task && category == TASK_POLICY_ATTRIBUTE);
 			value = proc_tier_to_iopol(requested.bg_iotier, 0);
@@ -1388,6 +1705,18 @@ proc_get_task_policy(task_t     task,
 		case TASK_POLICY_ROLE:
 			assert(on_task && category == TASK_POLICY_ATTRIBUTE);
 			value = requested.t_role;
+			break;
+		case TASK_POLICY_SFI_MANAGED:
+			assert(on_task && category == TASK_POLICY_ATTRIBUTE);
+			value = requested.t_sfi_managed;
+			break;
+		case TASK_POLICY_QOS:
+			assert(!on_task && category == TASK_POLICY_ATTRIBUTE);
+			value = requested.thrp_qos;
+			break;
+		case TASK_POLICY_QOS_OVERRIDE:
+			assert(!on_task && category == TASK_POLICY_ATTRIBUTE);
+			value = requested.thrp_qos_override;
 			break;
 		default:
 			panic("unknown policy_flavor %d", flavor);
@@ -1397,6 +1726,48 @@ proc_get_task_policy(task_t     task,
 	task_unlock(task);
 
 	return value;
+}
+
+/*
+ * Variant of proc_get_task_policy() that returns two scalar outputs.
+ */
+void
+proc_get_task_policy2(task_t task, thread_t thread, int category __unused, int flavor, int *value1, int *value2)
+{
+	boolean_t on_task = (thread == THREAD_NULL) ? TRUE : FALSE;
+
+	task_lock(task);
+
+	struct task_requested_policy requested =
+	        (on_task) ? task->requested_policy : thread->requested_policy;
+
+	switch (flavor) {
+		/* TASK attributes */
+		case TASK_POLICY_BASE_LATENCY_AND_THROUGHPUT_QOS:
+			assert(on_task && category == TASK_POLICY_ATTRIBUTE);
+			*value1 = requested.t_base_latency_qos;
+			*value2 = requested.t_base_through_qos;
+			break;
+
+		case TASK_POLICY_OVERRIDE_LATENCY_AND_THROUGHPUT_QOS:
+			assert(on_task && category == TASK_POLICY_ATTRIBUTE);
+			*value1 = requested.t_over_latency_qos;
+			*value2 = requested.t_over_through_qos;
+			break;
+
+		/* THREAD attributes */
+		case TASK_POLICY_QOS_AND_RELPRIO:
+			assert(!on_task && category == TASK_POLICY_ATTRIBUTE);
+			*value1 = requested.thrp_qos;
+			*value2 = requested.thrp_qos_relprio;
+			break;
+
+		default:
+			panic("unknown policy_flavor %d", flavor);
+			break;
+	}
+
+	task_unlock(task);
 }
 
 
@@ -1424,7 +1795,7 @@ proc_get_effective_thread_policy(thread_t thread, int flavor)
  * NOTE: This accessor does not take the task lock.
  * Notifications of state updates need to be externally synchronized with state queries.
  * This routine *MUST* remain interrupt safe, as it is potentially invoked
- * within the context of a timer interrupt.
+ * within the context of a timer interrupt.  It is also called in KDP context for stackshot.
  */
 static int
 proc_get_effective_policy(task_t   task,
@@ -1453,7 +1824,9 @@ proc_get_effective_policy(task_t   task,
 		case TASK_POLICY_IO:
 			/*
 			 * The I/O system calls here to find out what throttling tier to apply to an operation.
-			 * Returns THROTTLE_LEVEL_* values
+			 * Returns THROTTLE_LEVEL_* values. Some userspace spinlock operations can apply
+			 * a temporary iotier override to make the I/O more aggressive to get the lock
+			 * owner to release the spinlock.
 			 */
 			if (on_task)
 				value = task->effective_policy.io_tier;
@@ -1468,13 +1841,34 @@ proc_get_effective_policy(task_t   task,
 			/*
 			 * The I/O system calls here to find out whether an operation should be passive.
 			 * (i.e. not cause operations with lower throttle tiers to be throttled)
-			 * Returns 1 for passive mode, 0 for normal mode
+			 * Returns 1 for passive mode, 0 for normal mode.
+			 * If a userspace spinlock has applied an override, that I/O should always
+			 * be passive to avoid self-throttling when the override is removed and lower
+			 * iotier I/Os are issued.
 			 */
 			if (on_task)
 				value = task->effective_policy.io_passive;
-			else
+			else {
+				int io_tier = MAX(task->effective_policy.io_tier, thread->effective_policy.io_tier);
+				boolean_t override_in_effect = (thread->iotier_override != THROTTLE_LEVEL_NONE) && (thread->iotier_override < io_tier);
+
 				value = (task->effective_policy.io_passive ||
-				          thread->effective_policy.io_passive) ? 1 : 0;
+				          thread->effective_policy.io_passive || override_in_effect) ? 1 : 0;
+			}
+			break;
+		case TASK_POLICY_ALL_SOCKETS_BG:
+			/*
+			 * do_background_socket() calls this to determine what it should do to the proc's sockets
+			 * Returns 1 for background mode, 0 for normal mode
+			 *
+			 * This consults both thread and task so un-DBGing a thread while the task is BG
+			 * doesn't get you out of the network throttle.
+			 */
+			if (on_task)
+				value = task->effective_policy.all_sockets_bg;
+			else
+				value = (task->effective_policy.all_sockets_bg ||
+				         thread->effective_policy.all_sockets_bg) ? 1 : 0;
 			break;
 		case TASK_POLICY_NEW_SOCKETS_BG:
 			/*
@@ -1509,8 +1903,11 @@ proc_get_effective_policy(task_t   task,
 			 * timer arming calls into here to find out the timer coalescing level
 			 * Returns a QoS tier (0-6)
 			 */
-			assert(on_task);
-			value = task->effective_policy.t_latency_qos;
+			if (on_task) {
+				value = task->effective_policy.t_latency_qos;
+			} else {
+				value = MAX(task->effective_policy.t_latency_qos, thread->effective_policy.t_latency_qos);
+			}
 			break;
 		case TASK_POLICY_THROUGH_QOS:
 			/*
@@ -1519,15 +1916,6 @@ proc_get_effective_policy(task_t   task,
 			assert(on_task);
 			value = task->effective_policy.t_through_qos;
 			break;
-		case TASK_POLICY_GPU_DENY:
-			/*
-			 * This is where IOKit calls into task_policy to find out whether
-			 * it should allow access to the GPU.
-			 * Returns 1 for NOT allowed, returns 0 for allowed
-			 */
-			assert(on_task);
-			value = task->effective_policy.t_gpu_deny;
-			break;
 		case TASK_POLICY_ROLE:
 			assert(on_task);
 			value = task->effective_policy.t_role;
@@ -1535,6 +1923,14 @@ proc_get_effective_policy(task_t   task,
 		case TASK_POLICY_WATCHERS_BG:
 			assert(on_task);
 			value = task->effective_policy.t_watchers_bg;
+			break;
+		case TASK_POLICY_SFI_MANAGED:
+			assert(on_task);
+			value = task->effective_policy.t_sfi_managed;
+			break;
+		case TASK_POLICY_QOS:
+			assert(!on_task);
+			value = thread->effective_policy.thep_qos;
 			break;
 		default:
 			panic("unknown policy_flavor %d", flavor);
@@ -1595,10 +1991,8 @@ proc_tier_to_iopol(int tier, int passive)
 	} else {
 		switch (tier) {
 			case THROTTLE_LEVEL_NONE:
-				return IOPOL_DEFAULT;
-				break;
 			case THROTTLE_LEVEL_TIER0:
-				return IOPOL_IMPORTANT;
+				return IOPOL_DEFAULT;
 				break;
 			case THROTTLE_LEVEL_TIER1:
 				return IOPOL_STANDARD;
@@ -1694,69 +2088,324 @@ void set_thread_iotier_override(thread_t thread, int policy)
 }
 
 /*
- * Called at process exec to initialize the apptype of a process
+ * Userspace synchronization routines (like pthread mutexes, pthread reader-writer locks,
+ * semaphores, dispatch_sync) may result in priority inversions where a higher priority
+ * (i.e. scheduler priority, I/O tier, QoS tier) is waiting on a resource owned by a lower
+ * priority thread. In these cases, we attempt to propagate the priority token, as long
+ * as the subsystem informs us of the relationships between the threads. The userspace
+ * synchronization subsystem should maintain the information of owner->resource and
+ * resource->waiters itself.
+ *
+ * The add/remove routines can return failure if the target of the override cannot be
+ * found, perhaps because the resource subsystem doesn't have an accurate view of the
+ * resource owner in the face of race conditions.
  */
-void
-proc_set_task_apptype(task_t task, int apptype)
+
+boolean_t proc_thread_qos_add_override(task_t task, thread_t thread, uint64_t tid, int override_qos, boolean_t first_override_for_resource)
 {
+	thread_t	self = current_thread();
+	int			resource_count;
+	struct task_pend_token pend_token = {};
+
+	/* XXX move to thread mutex when thread policy does */
 	task_lock(task);
 
-	KERNEL_DEBUG_CONSTANT_IST(KDEBUG_TRACE,
-	                          (IMPORTANCE_CODE(IMP_TASK_APPTYPE, apptype)) | DBG_FUNC_START,
-	                          proc_selfpid(), audit_token_pid_from_task(task), trequested(task, THREAD_NULL),
-	                          apptype, 0);
+	/*
+	 * If thread is passed, it is assumed to be most accurate, since the caller must have an explicit (or implicit) reference
+	 * to the thread
+	 */
+	
+	if (thread != THREAD_NULL) {
+		assert(task == thread->task);
+	} else {
+		if (tid == self->thread_id) {
+			thread = self;
+		} else {
+			thread = task_findtid(task, tid);
 
-	switch (apptype) {
-		case TASK_APPTYPE_APP_TAL:
-			/* TAL starts off enabled by default */
-			task->requested_policy.t_tal_enabled = 1;
-			/* fall through */
-
-		case TASK_APPTYPE_APP_DEFAULT:
-		case TASK_APPTYPE_DAEMON_INTERACTIVE:
-			task->requested_policy.t_apptype = apptype;
-
-			task_importance_mark_donor(task, TRUE);
-			/* Apps (and interactive daemons) are boost recievers on desktop for suppression behaviors */
-			task_importance_mark_receiver(task, TRUE);
-			break;
-
-		case TASK_APPTYPE_DAEMON_STANDARD:
-			task->requested_policy.t_apptype = apptype;
-
-			task_importance_mark_donor(task, TRUE);
-			task_importance_mark_receiver(task, FALSE);
-			break;
-
-		case TASK_APPTYPE_DAEMON_ADAPTIVE:
-			task->requested_policy.t_apptype = apptype;
-
-			task_importance_mark_donor(task, FALSE);
-			task_importance_mark_receiver(task, TRUE);
-			break;
-
-		case TASK_APPTYPE_DAEMON_BACKGROUND:
-			task->requested_policy.t_apptype = apptype;
-
-			task_importance_mark_donor(task, FALSE);
-			task_importance_mark_receiver(task, FALSE);
-			break;
-
-		default:
-			panic("invalid apptype %d", apptype);
-			break;
+			if (thread == THREAD_NULL) {
+				KERNEL_DEBUG_CONSTANT((IMPORTANCE_CODE(IMP_USYNCH_QOS_OVERRIDE, IMP_USYNCH_ADD_OVERRIDE)) | DBG_FUNC_NONE,
+									  tid, 0, 0xdead, 0, 0);
+				task_unlock(task);
+				return FALSE;
+			}
+		}
 	}
 
-	task_policy_update_locked(task, THREAD_NULL);
+	KERNEL_DEBUG_CONSTANT((IMPORTANCE_CODE(IMP_USYNCH_QOS_OVERRIDE, IMP_USYNCH_ADD_OVERRIDE)) | DBG_FUNC_START,
+						  thread_tid(thread), override_qos, first_override_for_resource ? 1 : 0, 0, 0);
+
+	DTRACE_BOOST5(qos_add_override_pre, uint64_t, tid, uint64_t, thread->requested_policy.thrp_qos,
+		uint64_t, thread->effective_policy.thep_qos, int, override_qos, boolean_t, first_override_for_resource);
+
+	if (first_override_for_resource) {
+		resource_count = ++thread->usynch_override_contended_resource_count;
+	} else {
+		resource_count = thread->usynch_override_contended_resource_count;
+	}
+
+	struct task_requested_policy requested = thread->requested_policy;
+
+	if (requested.thrp_qos_override == THREAD_QOS_UNSPECIFIED)
+		requested.thrp_qos_override = override_qos;
+	else
+		requested.thrp_qos_override = MAX(requested.thrp_qos_override, override_qos);
+
+	thread->requested_policy = requested;
+
+	task_policy_update_locked(task, thread, &pend_token);
+
+	thread_reference(thread);
 
 	task_unlock(task);
 
-	task_policy_update_complete_unlocked(task, THREAD_NULL);
+	task_policy_update_complete_unlocked(task, thread, &pend_token);
+
+	DTRACE_BOOST3(qos_add_override_post, uint64_t, requested.thrp_qos_override,
+		uint64_t, thread->effective_policy.thep_qos, int, resource_count);
+
+	thread_deallocate(thread);
+
+	KERNEL_DEBUG_CONSTANT((IMPORTANCE_CODE(IMP_USYNCH_QOS_OVERRIDE, IMP_USYNCH_ADD_OVERRIDE)) | DBG_FUNC_END,
+						  requested.thrp_qos_override, resource_count, 0, 0, 0);
+
+	return TRUE;
+}
+
+boolean_t proc_thread_qos_remove_override(task_t task, thread_t thread, uint64_t tid)
+{
+	thread_t	self = current_thread();
+	int			resource_count;
+	struct task_pend_token pend_token = {};
+
+	/* XXX move to thread mutex when thread policy does */
+	task_lock(task);
+
+	/*
+	 * If thread is passed, it is assumed to be most accurate, since the caller must have an explicit (or implicit) reference
+	 * to the thread
+	 */
+	if (thread != THREAD_NULL) {
+		assert(task == thread->task);
+	} else {
+		if (tid == self->thread_id) {
+			thread = self;
+		} else {
+			thread = task_findtid(task, tid);
+
+			if (thread == THREAD_NULL) {
+				KERNEL_DEBUG_CONSTANT((IMPORTANCE_CODE(IMP_USYNCH_QOS_OVERRIDE, IMP_USYNCH_REMOVE_OVERRIDE)) | DBG_FUNC_NONE,
+									  tid, 0, 0xdead, 0, 0);
+				task_unlock(task);
+				return FALSE;
+			}
+		}
+	}
+
+	resource_count = --thread->usynch_override_contended_resource_count;
+
+	KERNEL_DEBUG_CONSTANT((IMPORTANCE_CODE(IMP_USYNCH_QOS_OVERRIDE, IMP_USYNCH_REMOVE_OVERRIDE)) | DBG_FUNC_START,
+						  thread_tid(thread), resource_count, 0, 0, 0);
+
+	if (0 == resource_count) {
+		thread->requested_policy.thrp_qos_override = THREAD_QOS_UNSPECIFIED;
+
+		task_policy_update_locked(task, thread, &pend_token);
+		
+		thread_reference(thread);
+
+		task_unlock(task);
+		
+		task_policy_update_complete_unlocked(task, thread, &pend_token);
+
+		thread_deallocate(thread);
+	} else if (0 > resource_count) {
+		// panic("usynch_override_contended_resource_count underflow for thread %p", thread);
+		task_unlock(task);
+	} else {
+		task_unlock(task);
+	}
+
+	KERNEL_DEBUG_CONSTANT((IMPORTANCE_CODE(IMP_USYNCH_QOS_OVERRIDE, IMP_USYNCH_REMOVE_OVERRIDE)) | DBG_FUNC_END,
+						  0, 0, 0, 0, 0);
+
+	return TRUE;
+}
+
+/* TODO: remove this variable when interactive daemon audit period is over */
+extern boolean_t ipc_importance_interactive_receiver;
+
+/*
+ * Called at process exec to initialize the apptype, qos clamp, and qos seed of a process
+ *
+ * TODO: Make this function more table-driven instead of ad-hoc
+ */
+void
+proc_set_task_spawnpolicy(task_t task, int apptype, int qos_clamp,
+                          ipc_port_t * portwatch_ports, int portwatch_count)
+{
+	struct task_pend_token pend_token = {};
 
 	KERNEL_DEBUG_CONSTANT_IST(KDEBUG_TRACE,
-	                          (IMPORTANCE_CODE(IMP_TASK_APPTYPE, apptype)) | DBG_FUNC_END,
-	                          proc_selfpid(), audit_token_pid_from_task(task), trequested(task, THREAD_NULL),
-	                          task->imp_receiver, 0);
+				  (IMPORTANCE_CODE(IMP_TASK_APPTYPE, apptype)) | DBG_FUNC_START,
+				  audit_token_pid_from_task(task), trequested_0(task, THREAD_NULL), trequested_1(task, THREAD_NULL),
+				  apptype, 0);
+
+	switch (apptype) {
+		case TASK_APPTYPE_APP_TAL:
+		case TASK_APPTYPE_APP_DEFAULT:
+			/* Apps become donors via the 'live-donor' flag instead of the static donor flag */
+			task_importance_mark_donor(task, FALSE);
+			task_importance_mark_live_donor(task, TRUE);
+			task_importance_mark_receiver(task, FALSE);
+			/* Apps are de-nap recievers on desktop for suppression behaviors */
+			task_importance_mark_denap_receiver(task, TRUE);
+			break;
+
+		case TASK_APPTYPE_DAEMON_INTERACTIVE:
+			task_importance_mark_donor(task, TRUE);
+			task_importance_mark_live_donor(task, FALSE);
+
+			/* 
+			 * A boot arg controls whether interactive daemons are importance receivers.
+			 * Normally, they are not.  But for testing their behavior as an adaptive
+			 * daemon, the boot-arg can be set.
+			 *
+			 * TODO: remove this when the interactive daemon audit period is over.
+			 */
+			task_importance_mark_receiver(task, /* FALSE */ ipc_importance_interactive_receiver);
+			task_importance_mark_denap_receiver(task, FALSE);
+			break;
+
+		case TASK_APPTYPE_DAEMON_STANDARD:
+			task_importance_mark_donor(task, TRUE);
+			task_importance_mark_live_donor(task, FALSE);
+			task_importance_mark_receiver(task, FALSE);
+			task_importance_mark_denap_receiver(task, FALSE);
+			break;
+
+		case TASK_APPTYPE_DAEMON_ADAPTIVE:
+			task_importance_mark_donor(task, FALSE);
+			task_importance_mark_live_donor(task, FALSE);
+			task_importance_mark_receiver(task, TRUE);
+			task_importance_mark_denap_receiver(task, FALSE);
+			break;
+
+		case TASK_APPTYPE_DAEMON_BACKGROUND:
+			task_importance_mark_donor(task, FALSE);
+			task_importance_mark_live_donor(task, FALSE);
+			task_importance_mark_receiver(task, FALSE);
+			task_importance_mark_denap_receiver(task, FALSE);
+			break;
+
+		case TASK_APPTYPE_NONE:
+			break;
+	}
+
+	if (portwatch_ports != NULL && apptype == TASK_APPTYPE_DAEMON_ADAPTIVE) {
+		int portwatch_boosts = 0;
+
+		for (int i = 0; i < portwatch_count; i++) {
+			ipc_port_t port = NULL;
+
+			if ((port = portwatch_ports[i]) != NULL) {
+				int boost = 0;
+				task_add_importance_watchport(task, port, &boost);
+				portwatch_boosts += boost;
+			}
+		}
+
+		if (portwatch_boosts > 0) {
+			task_importance_hold_internal_assertion(task, portwatch_boosts);
+		}
+	}
+
+	task_lock(task);
+
+	if (apptype == TASK_APPTYPE_APP_TAL) {
+		/* TAL starts off enabled by default */
+		task->requested_policy.t_tal_enabled = 1;
+	}
+
+	if (apptype != TASK_APPTYPE_NONE) {
+		task->requested_policy.t_apptype = apptype;
+
+	}
+
+	if (qos_clamp != THREAD_QOS_UNSPECIFIED) {
+		task->requested_policy.t_qos_clamp = qos_clamp;
+	}
+
+	task_policy_update_locked(task, THREAD_NULL, &pend_token);
+
+	task_unlock(task);
+
+	/* Ensure the donor bit is updated to be in sync with the new live donor status */
+	pend_token.tpt_update_live_donor = 1;
+
+	task_policy_update_complete_unlocked(task, THREAD_NULL, &pend_token);
+
+	KERNEL_DEBUG_CONSTANT_IST(KDEBUG_TRACE,
+				  (IMPORTANCE_CODE(IMP_TASK_APPTYPE, apptype)) | DBG_FUNC_END,
+				  audit_token_pid_from_task(task), trequested_0(task, THREAD_NULL), trequested_1(task, THREAD_NULL),
+				  task_is_importance_receiver(task), 0);
+}
+
+/* Set up the primordial thread's QoS */
+void
+task_set_main_thread_qos(task_t task, thread_t main_thread) {
+	struct task_pend_token pend_token = {};
+
+	assert(main_thread->task == task);
+
+	task_lock(task);
+
+	KERNEL_DEBUG_CONSTANT_IST(KDEBUG_TRACE,
+	                          (IMPORTANCE_CODE(IMP_MAIN_THREAD_QOS, 0)) | DBG_FUNC_START,
+	                          audit_token_pid_from_task(task), trequested_0(task, THREAD_NULL), trequested_1(task, THREAD_NULL),
+	                          main_thread->requested_policy.thrp_qos, 0);
+
+	int primordial_qos = THREAD_QOS_UNSPECIFIED;
+
+	int qos_clamp = task->requested_policy.t_qos_clamp;
+
+	switch (task->requested_policy.t_apptype) {
+		case TASK_APPTYPE_APP_TAL:
+		case TASK_APPTYPE_APP_DEFAULT:
+			primordial_qos = THREAD_QOS_USER_INTERACTIVE;
+			break;
+
+		case TASK_APPTYPE_DAEMON_INTERACTIVE:
+		case TASK_APPTYPE_DAEMON_STANDARD:
+		case TASK_APPTYPE_DAEMON_ADAPTIVE:
+			primordial_qos = THREAD_QOS_LEGACY;
+			break;
+
+		case TASK_APPTYPE_DAEMON_BACKGROUND:
+			primordial_qos = THREAD_QOS_BACKGROUND;
+			break;
+	}
+
+	if (qos_clamp != THREAD_QOS_UNSPECIFIED) {
+		if (primordial_qos != THREAD_QOS_UNSPECIFIED) {
+			primordial_qos = MIN(qos_clamp, primordial_qos);
+		} else {
+			primordial_qos = qos_clamp;
+		}
+	}
+
+	main_thread->requested_policy.thrp_qos = primordial_qos;
+
+	task_policy_update_locked(task, main_thread, &pend_token);
+
+	task_unlock(task);
+
+	task_policy_update_complete_unlocked(task, main_thread, &pend_token);
+
+	KERNEL_DEBUG_CONSTANT_IST(KDEBUG_TRACE,
+	                          (IMPORTANCE_CODE(IMP_MAIN_THREAD_QOS, 0)) | DBG_FUNC_END,
+	                          audit_token_pid_from_task(task), trequested_0(task, THREAD_NULL), trequested_1(task, THREAD_NULL),
+	                          primordial_qos, 0);
 }
 
 /* for process_policy to check before attempting to set */
@@ -1770,7 +2419,7 @@ proc_task_is_tal(task_t task)
 integer_t
 task_grab_latency_qos(task_t task)
 {
-	return task_qos_latency_package(proc_get_effective_task_policy(task, TASK_POLICY_LATENCY_QOS));
+	return qos_latency_policy_package(proc_get_effective_task_policy(task, TASK_POLICY_LATENCY_QOS));
 }
 
 /* update the darwin background action state in the flags field for libproc */
@@ -1784,13 +2433,17 @@ proc_get_darwinbgstate(task_t task, uint32_t * flagsp)
 		*flagsp |= PROC_FLAG_DARWINBG;
 
 
+	if (task->requested_policy.t_apptype == TASK_APPTYPE_APP_DEFAULT ||
+	    task->requested_policy.t_apptype == TASK_APPTYPE_APP_TAL)
+		*flagsp |= PROC_FLAG_APPLICATION;
+
 	if (task->requested_policy.t_apptype == TASK_APPTYPE_DAEMON_ADAPTIVE)
 		*flagsp |= PROC_FLAG_ADAPTIVE;
 
 	if (task->requested_policy.t_apptype == TASK_APPTYPE_DAEMON_ADAPTIVE && task->requested_policy.t_boosted == 1)
 		*flagsp |= PROC_FLAG_ADAPTIVE_IMPORTANT;
 
-	if (task->imp_donor)
+	if (task_is_importance_donor(task))
 		*flagsp |= PROC_FLAG_IMPORTANCE_DONOR;
 
 	if (task->effective_policy.t_sup_active)
@@ -1807,31 +2460,106 @@ proc_get_thread_policy(thread_t thread, thread_policy_state_t info)
 	task_lock(task);
 	info->requested = (integer_t)task_requested_bitfield(task, thread);
 	info->effective = (integer_t)task_effective_bitfield(task, thread);
-	info->pending   = (integer_t)task_pending_bitfield(task, thread);
+	info->pending   = 0;
 	task_unlock(task);
 }
 
+/*
+ * Tracepoint data... Reading the tracepoint data can be somewhat complicated.
+ * The current scheme packs as much data into a single tracepoint as it can.
+ *
+ * Each task/thread requested/effective structure is 64 bits in size. Any
+ * given tracepoint will emit either requested or effective data, but not both.
+ *
+ * A tracepoint may emit any of task, thread, or task & thread data.
+ * 
+ * The type of data emitted varies with pointer size. Where possible, both
+ * task and thread data are emitted. In LP32 systems, the first and second
+ * halves of either the task or thread data is emitted.
+ *
+ * The code uses uintptr_t array indexes instead of high/low to avoid
+ * confusion WRT big vs little endian.
+ *
+ * The truth table for the tracepoint data functions is below, and has the
+ * following invariants:
+ *
+ * 1) task and thread are uintptr_t*
+ * 2) task may never be NULL
+ *
+ *
+ *                                     LP32            LP64
+ * trequested_0(task, NULL)            task[0]         task[0]
+ * trequested_1(task, NULL)            task[1]         NULL
+ * trequested_0(task, thread)          thread[0]       task[0]
+ * trequested_1(task, thread)          thread[1]       thread[0]
+ *
+ * Basically, you get a full task or thread on LP32, and both on LP64.
+ *
+ * The uintptr_t munging here is squicky enough to deserve a comment.
+ *
+ * The variables we are accessing are laid out in memory like this:
+ *
+ * [            LP64 uintptr_t  0          ]
+ * [ LP32 uintptr_t 0 ] [ LP32 uintptr_t 1 ]
+ *
+ *      1   2   3   4     5   6   7   8
+ *
+ */
 
-/* dump requested for tracepoint */
 static uintptr_t
-trequested(task_t task, thread_t thread)
+trequested_0(task_t task, thread_t thread)
 {
-	return (uintptr_t) task_requested_bitfield(task, thread);
+	assert(task);
+	_Static_assert(sizeof(struct task_requested_policy) == sizeof(uint64_t), "size invariant violated");
+	_Static_assert(sizeof(task->requested_policy) == sizeof(thread->requested_policy), "size invariant violated");
+
+	uintptr_t* raw = (uintptr_t*)((thread == THREAD_NULL) ? &task->requested_policy : &thread->requested_policy);
+	return raw[0];
 }
 
-/* dump effective for tracepoint */
 static uintptr_t
-teffective(task_t task, thread_t thread)
+trequested_1(task_t task, thread_t thread)
 {
-	return (uintptr_t) task_effective_bitfield(task, thread);
+	assert(task);
+	_Static_assert(sizeof(struct task_requested_policy) == sizeof(uint64_t), "size invariant violated");
+	_Static_assert(sizeof(task->requested_policy) == sizeof(thread->requested_policy), "size invariant violated");
+
+#if defined __LP64__
+	return (thread == NULL) ? 0 : *(uintptr_t*)&thread->requested_policy;
+#else
+	uintptr_t* raw = (uintptr_t*)((thread == THREAD_NULL) ? &task->requested_policy : &thread->requested_policy);
+	return raw[1];
+#endif
+}
+
+static uintptr_t
+teffective_0(task_t task, thread_t thread)
+{
+	assert(task);
+	_Static_assert(sizeof(struct task_effective_policy) == sizeof(uint64_t), "size invariant violated");
+	_Static_assert(sizeof(task->effective_policy) == sizeof(thread->effective_policy), "size invariant violated");
+
+	uintptr_t* raw = (uintptr_t*)((thread == THREAD_NULL) ? &task->effective_policy : &thread->effective_policy);
+	return raw[0];
+}
+
+static uintptr_t
+teffective_1(task_t task, thread_t thread)
+{
+	assert(task);
+	_Static_assert(sizeof(struct task_effective_policy) == sizeof(uint64_t), "size invariant violated");
+	_Static_assert(sizeof(task->effective_policy) == sizeof(thread->effective_policy), "size invariant violated");
+
+#if defined __LP64__
+	return (thread == NULL) ? 0 : *(uintptr_t*)&thread->effective_policy;
+#else
+	uintptr_t* raw = (uintptr_t*)((thread == THREAD_NULL) ? &task->effective_policy : &thread->effective_policy);
+	return raw[1];
+#endif
 }
 
 /* dump pending for tracepoint */
-static uintptr_t
-tpending(task_t task, thread_t thread)
-{
-	return (uintptr_t) task_pending_bitfield(task, thread);
-}
+static uint32_t tpending(task_pend_token_t pend_token) { return *(uint32_t*)(void*)(pend_token); }
 
 uint64_t
 task_requested_bitfield(task_t task, thread_t thread)
@@ -1852,10 +2580,13 @@ task_requested_bitfield(task_t task, thread_t thread)
 	bits |= (requested.th_pidbind_bg        ? POLICY_REQ_PIDBIND_BG     : 0);
 	bits |= (requested.th_workq_bg          ? POLICY_REQ_WORKQ_BG       : 0);
 
+	if (thread != THREAD_NULL) {
+		bits |= (requested.thrp_qos     ? (((uint64_t)requested.thrp_qos)   << POLICY_REQ_TH_QOS_SHIFT)  : 0);
+		bits |= (requested.thrp_qos_override     ? (((uint64_t)requested.thrp_qos_override)   << POLICY_REQ_TH_QOS_OVER_SHIFT)  : 0);
+	}
+
 	bits |= (requested.t_boosted            ? POLICY_REQ_BOOSTED        : 0);
 	bits |= (requested.t_tal_enabled        ? POLICY_REQ_TAL_ENABLED    : 0);
-	bits |= (requested.t_int_gpu_deny       ? POLICY_REQ_INT_GPU_DENY   : 0);
-	bits |= (requested.t_ext_gpu_deny       ? POLICY_REQ_EXT_GPU_DENY   : 0);
 	bits |= (requested.t_apptype            ? (((uint64_t)requested.t_apptype)    << POLICY_REQ_APPTYPE_SHIFT)  : 0);
 	bits |= (requested.t_role               ? (((uint64_t)requested.t_role)       << POLICY_REQ_ROLE_SHIFT)     : 0);
 
@@ -1867,10 +2598,13 @@ task_requested_bitfield(task_t task, thread_t thread)
 	bits |= (requested.t_sup_disk           ? POLICY_REQ_SUP_DISK_THROTTLE  : 0);
 	bits |= (requested.t_sup_cpu_limit      ? POLICY_REQ_SUP_CPU_LIMIT      : 0);
 	bits |= (requested.t_sup_suspend        ? POLICY_REQ_SUP_SUSPEND        : 0);
+	bits |= (requested.t_sup_bg_sockets     ? POLICY_REQ_SUP_BG_SOCKETS     : 0);
 	bits |= (requested.t_base_latency_qos   ? (((uint64_t)requested.t_base_latency_qos) << POLICY_REQ_BASE_LATENCY_QOS_SHIFT) : 0);
 	bits |= (requested.t_over_latency_qos   ? (((uint64_t)requested.t_over_latency_qos) << POLICY_REQ_OVER_LATENCY_QOS_SHIFT) : 0);
 	bits |= (requested.t_base_through_qos   ? (((uint64_t)requested.t_base_through_qos) << POLICY_REQ_BASE_THROUGH_QOS_SHIFT) : 0);
 	bits |= (requested.t_over_through_qos   ? (((uint64_t)requested.t_over_through_qos) << POLICY_REQ_OVER_THROUGH_QOS_SHIFT) : 0);
+	bits |= (requested.t_sfi_managed        ? POLICY_REQ_SFI_MANAGED        : 0);
+	bits |= (requested.t_qos_clamp          ? (((uint64_t)requested.t_qos_clamp)        << POLICY_REQ_QOS_CLAMP_SHIFT)        : 0);
 
 	return bits;
 }
@@ -1890,8 +2624,11 @@ task_effective_bitfield(task_t task, thread_t thread)
 	bits |= (effective.all_sockets_bg       ? POLICY_EFF_ALL_SOCKETS_BG : 0);
 	bits |= (effective.new_sockets_bg       ? POLICY_EFF_NEW_SOCKETS_BG : 0);
 	bits |= (effective.bg_iotier            ? (((uint64_t)effective.bg_iotier) << POLICY_EFF_BG_IOTIER_SHIFT) : 0);
+	bits |= (effective.qos_ui_is_urgent     ? POLICY_EFF_QOS_UI_IS_URGENT : 0);
 
-	bits |= (effective.t_gpu_deny           ? POLICY_EFF_GPU_DENY       : 0);
+	if (thread != THREAD_NULL)
+		bits |= (effective.thep_qos     ? (((uint64_t)effective.thep_qos)   << POLICY_EFF_TH_QOS_SHIFT)  : 0);
+
 	bits |= (effective.t_tal_engaged        ? POLICY_EFF_TAL_ENGAGED    : 0);
 	bits |= (effective.t_suspended          ? POLICY_EFF_SUSPENDED      : 0);
 	bits |= (effective.t_watchers_bg        ? POLICY_EFF_WATCHERS_BG    : 0);
@@ -1900,22 +2637,8 @@ task_effective_bitfield(task_t task, thread_t thread)
 	bits |= (effective.t_role               ? (((uint64_t)effective.t_role)        << POLICY_EFF_ROLE_SHIFT)        : 0);
 	bits |= (effective.t_latency_qos        ? (((uint64_t)effective.t_latency_qos) << POLICY_EFF_LATENCY_QOS_SHIFT) : 0);
 	bits |= (effective.t_through_qos        ? (((uint64_t)effective.t_through_qos) << POLICY_EFF_THROUGH_QOS_SHIFT) : 0);
-
-	return bits;
-}
-
-uint64_t
-task_pending_bitfield(task_t task, thread_t thread)
-{
-	uint64_t bits = 0;
-	struct task_pended_policy pended =
-	        (thread == THREAD_NULL) ? task->pended_policy : thread->pended_policy;
-
-	bits |= (pended.t_updating_policy    ? POLICY_PEND_UPDATING   : 0);
-	bits |= (pended.update_sockets       ? POLICY_PEND_SOCKETS    : 0);
-
-	bits |= (pended.t_update_timers      ? POLICY_PEND_TIMERS     : 0);
-	bits |= (pended.t_update_watchers    ? POLICY_PEND_WATCHERS   : 0);
+	bits |= (effective.t_sfi_managed        ? POLICY_EFF_SFI_MANAGED    : 0);
+	bits |= (effective.t_qos_ceiling        ? (((uint64_t)effective.t_qos_ceiling) << POLICY_EFF_QOS_CEILING_SHIFT) : 0);
 
 	return bits;
 }
@@ -1977,6 +2700,11 @@ proc_init_cpumon_params(void)
 	}
 
 	proc_max_cpumon_interval *= NSEC_PER_SEC;
+
+	/* TEMPORARY boot arg to control App suppression */
+	PE_parse_boot_argn("task_policy_suppression_disable",
+			   &task_policy_suppression_disable,
+			   sizeof(task_policy_suppression_disable));
 }
 
 /*
@@ -2183,7 +2911,7 @@ task_disable_cpumon(task_t task) {
 	 * Disable task-wide telemetry if it was ever enabled by the CPU usage
 	 * monitor's warning zone.
 	 */
-	telemetry_task_ctl_locked(current_task(), TF_CPUMON_WARNING, 0);
+	telemetry_task_ctl_locked(task, TF_CPUMON_WARNING, 0);
 #endif
 
 	/*
@@ -2412,11 +3140,46 @@ task_action_cpuusage(thread_call_param_t param0, __unused thread_call_param_t pa
  * Routines for importance donation/inheritance/boosting
  */
 
+static void
+task_importance_update_live_donor(task_t target_task)
+{
+#if IMPORTANCE_INHERITANCE
+
+	ipc_importance_task_t task_imp;
+
+	task_imp = ipc_importance_for_task(target_task, FALSE);
+	if (IIT_NULL != task_imp) {
+		ipc_importance_task_update_live_donor(task_imp);
+		ipc_importance_task_release(task_imp);
+	}
+#endif /* IMPORTANCE_INHERITANCE */
+}
+
 void
 task_importance_mark_donor(task_t task, boolean_t donating)
 {
 #if IMPORTANCE_INHERITANCE
-	task->imp_donor = (donating ? 1 : 0);
+	ipc_importance_task_t task_imp;
+
+	task_imp = ipc_importance_for_task(task, FALSE);
+	if (IIT_NULL != task_imp) {
+		ipc_importance_task_mark_donor(task_imp, donating);
+		ipc_importance_task_release(task_imp);
+	}
+#endif /* IMPORTANCE_INHERITANCE */
+}
+
+void
+task_importance_mark_live_donor(task_t task, boolean_t live_donating)
+{
+#if IMPORTANCE_INHERITANCE
+	ipc_importance_task_t task_imp;
+
+	task_imp = ipc_importance_for_task(task, FALSE);
+	if (IIT_NULL != task_imp) {
+		ipc_importance_task_mark_live_donor(task_imp, live_donating);
+		ipc_importance_task_release(task_imp);
+	}
 #endif /* IMPORTANCE_INHERITANCE */
 }
 
@@ -2424,38 +3187,59 @@ void
 task_importance_mark_receiver(task_t task, boolean_t receiving)
 {
 #if IMPORTANCE_INHERITANCE
-	if (receiving) {
-		assert(task->task_imp_assertcnt == 0);
-		task->imp_receiver       = 1;  /* task can receive importance boost */
-		task->task_imp_assertcnt = 0;
-		task->task_imp_externcnt = 0;
-	} else {
-		if (task->task_imp_assertcnt != 0 || task->task_imp_externcnt != 0)
-			panic("disabling imp_receiver on task with pending boosts!");
+	ipc_importance_task_t task_imp;
 
-		task->imp_receiver       = 0;
-		task->task_imp_assertcnt = 0;
-		task->task_imp_externcnt = 0;
+	task_imp = ipc_importance_for_task(task, FALSE);
+	if (IIT_NULL != task_imp) {
+		ipc_importance_task_mark_receiver(task_imp, receiving);
+		ipc_importance_task_release(task_imp);
 	}
 #endif /* IMPORTANCE_INHERITANCE */
 }
 
+void
+task_importance_mark_denap_receiver(task_t task, boolean_t denap)
+{
+#if IMPORTANCE_INHERITANCE
+	ipc_importance_task_t task_imp;
+
+	task_imp = ipc_importance_for_task(task, FALSE);
+	if (IIT_NULL != task_imp) {
+		ipc_importance_task_mark_denap_receiver(task_imp, denap);
+		ipc_importance_task_release(task_imp);
+	}
+#endif /* IMPORTANCE_INHERITANCE */
+}
+
+void
+task_importance_reset(__imp_only task_t task)
+{
+#if IMPORTANCE_INHERITANCE
+	ipc_importance_task_t task_imp;
+
+	/* TODO: Lower importance downstream before disconnect */
+	task_imp = task->task_imp_base;
+	ipc_importance_reset(task_imp, FALSE);
+	task_importance_update_live_donor(task);
+#endif /* IMPORTANCE_INHERITANCE */
+}
 
 #if IMPORTANCE_INHERITANCE
 
-static void
-task_update_boost_locked(task_t task, boolean_t boost_active)
+/*
+ * Sets the task boost bit to the provided value.  Does NOT run the update function.
+ *
+ * Task lock must be held.
+ */
+void
+task_set_boost_locked(task_t task, boolean_t boost_active)
 {
 #if IMPORTANCE_DEBUG
 	KERNEL_DEBUG_CONSTANT_IST(KDEBUG_TRACE, (IMPORTANCE_CODE(IMP_BOOST, (boost_active ? IMP_BOOSTED : IMP_UNBOOSTED)) | DBG_FUNC_START),
-	                          proc_selfpid(), audit_token_pid_from_task(task), trequested(task, THREAD_NULL), 0, 0);
+	                          proc_selfpid(), audit_token_pid_from_task(task), trequested_0(task, THREAD_NULL), trequested_1(task, THREAD_NULL), 0);
 #endif
 
-	/* assert(boost_active ? task->requested_policy.t_boosted == 0 : task->requested_policy.t_boosted == 1); */
-
-	proc_set_task_policy_locked(task, THREAD_NULL, TASK_POLICY_ATTRIBUTE, TASK_POLICY_BOOST, boost_active);
-
-	task_policy_update_locked(task, THREAD_NULL);
+	task->requested_policy.t_boosted = boost_active;
 
 #if IMPORTANCE_DEBUG
 	if (boost_active == TRUE){
@@ -2465,8 +3249,21 @@ task_update_boost_locked(task_t task, boolean_t boost_active)
 	}
 	KERNEL_DEBUG_CONSTANT_IST(KDEBUG_TRACE, (IMPORTANCE_CODE(IMP_BOOST, (boost_active ? IMP_BOOSTED : IMP_UNBOOSTED)) | DBG_FUNC_END),
 	                          proc_selfpid(), audit_token_pid_from_task(task),
-	                          trequested(task, THREAD_NULL), tpending(task, THREAD_NULL), 0);
+	                          trequested_0(task, THREAD_NULL), trequested_1(task, THREAD_NULL), 0);
 #endif
+}
+
+/*
+ * Sets the task boost bit to the provided value and applies the update.
+ *
+ * Task lock must be held.  Must call update complete after unlocking the task.
+ */
+void
+task_update_boost_locked(task_t task, boolean_t boost_active, task_pend_token_t pend_token)
+{
+	task_set_boost_locked(task, boost_active);
+
+	task_policy_update_locked(task, THREAD_NULL, pend_token);
 }
 
 /*
@@ -2478,8 +3275,33 @@ task_update_boost_locked(task_t task, boolean_t boost_active)
 boolean_t
 task_is_importance_donor(task_t task)
 {
-	return (task->imp_donor == 1 || task->task_imp_assertcnt > 0) ? TRUE : FALSE;
+	if (task->task_imp_base == IIT_NULL)
+		return FALSE;
+	return ipc_importance_task_is_donor(task->task_imp_base);
 }
+
+/*
+ * Query the status of the task's donor mark.
+ */
+boolean_t
+task_is_marked_importance_donor(task_t task)
+{
+	if (task->task_imp_base == IIT_NULL)
+		return FALSE;
+	return ipc_importance_task_is_marked_donor(task->task_imp_base);
+}
+
+/*
+ * Query the status of the task's live donor and donor mark.
+ */
+boolean_t
+task_is_marked_live_importance_donor(task_t task)
+{
+	if (task->task_imp_base == IIT_NULL)
+		return FALSE;
+	return ipc_importance_task_is_marked_live_donor(task->task_imp_base);
+}
+
 
 /*
  * This routine may be called without holding task lock
@@ -2488,7 +3310,56 @@ task_is_importance_donor(task_t task)
 boolean_t
 task_is_importance_receiver(task_t task)
 {
-	return (task->imp_receiver) ? TRUE : FALSE;
+	if (task->task_imp_base == IIT_NULL)
+		return FALSE;
+	return ipc_importance_task_is_marked_receiver(task->task_imp_base);
+}
+
+/*
+ * Query the task's receiver mark.
+ */
+boolean_t
+task_is_marked_importance_receiver(task_t task)
+{
+	if (task->task_imp_base == IIT_NULL)
+		return FALSE;
+	return ipc_importance_task_is_marked_receiver(task->task_imp_base);
+}
+
+/*
+ * This routine may be called without holding task lock
+ * since the value of de-nap receiver can never be unset.
+ */
+boolean_t
+task_is_importance_denap_receiver(task_t task)
+{
+	if (task->task_imp_base == IIT_NULL)
+		return FALSE;
+	return ipc_importance_task_is_denap_receiver(task->task_imp_base);
+}
+
+/*
+ * Query the task's de-nap receiver mark.
+ */
+boolean_t
+task_is_marked_importance_denap_receiver(task_t task)
+{
+	if (task->task_imp_base == IIT_NULL)
+		return FALSE;
+	return ipc_importance_task_is_marked_denap_receiver(task->task_imp_base);
+}
+
+/*
+ * This routine may be called without holding task lock
+ * since the value of imp_receiver can never be unset.
+ */
+boolean_t
+task_is_importance_receiver_type(task_t task)
+{
+	if (task->task_imp_base == IIT_NULL)
+		return FALSE;
+	return (task_is_importance_receiver(task) ||
+		task_is_importance_denap_receiver(task));
 }
 
 /*
@@ -2498,238 +3369,126 @@ task_is_importance_receiver(task_t task)
  */
 
 int
-task_importance_hold_internal_assertion(task_t target_task, uint32_t count)
+task_importance_hold_watchport_assertion(task_t target_task, uint32_t count)
 {
-	int rval = 0;
+	ipc_importance_task_t task_imp;
+	kern_return_t ret;
 
-	task_lock(target_task);
-	rval = task_importance_hold_assertion_locked(target_task, TASK_POLICY_INTERNAL, count);
-	task_unlock(target_task);
+	/* must already have set up an importance */
+	task_imp = target_task->task_imp_base;
+	assert(IIT_NULL != task_imp);
 
-	task_policy_update_complete_unlocked(target_task, THREAD_NULL);
-
-	return(rval);
+	ret = ipc_importance_task_hold_internal_assertion(task_imp, count);
+	return (KERN_SUCCESS != ret) ? ENOTSUP : 0;
 }
 
 int
-task_importance_hold_external_assertion(task_t target_task, uint32_t count)
+task_importance_hold_internal_assertion(task_t target_task, uint32_t count)
 {
-	int rval = 0;
+	ipc_importance_task_t task_imp;
+	kern_return_t ret;
 
-	task_lock(target_task);
-	rval = task_importance_hold_assertion_locked(target_task, TASK_POLICY_EXTERNAL, count);
-	task_unlock(target_task);
+	/* may be first time, so allow for possible importance setup */
+	task_imp = ipc_importance_for_task(target_task, FALSE);
+	if (IIT_NULL == task_imp) {
+		return EOVERFLOW;
+	}
+	ret = ipc_importance_task_hold_internal_assertion(task_imp, count);
+	ipc_importance_task_release(task_imp);
 
-	task_policy_update_complete_unlocked(target_task, THREAD_NULL);
+	return (KERN_SUCCESS != ret) ? ENOTSUP : 0;
+}
 
-	return(rval);
+int
+task_importance_hold_file_lock_assertion(task_t target_task, uint32_t count)
+{
+	ipc_importance_task_t task_imp;
+	kern_return_t ret;
+
+	/* may be first time, so allow for possible importance setup */
+	task_imp = ipc_importance_for_task(target_task, FALSE);
+	if (IIT_NULL == task_imp) {
+		return EOVERFLOW;
+	}
+	ret = ipc_importance_task_hold_file_lock_assertion(task_imp, count);
+	ipc_importance_task_release(task_imp);
+
+	return (KERN_SUCCESS != ret) ? ENOTSUP : 0;
+}
+
+int
+task_importance_hold_legacy_external_assertion(task_t target_task, uint32_t count)
+{
+	ipc_importance_task_t task_imp;
+	kern_return_t ret;
+ 
+	/* must already have set up an importance */
+	task_imp = target_task->task_imp_base;
+	if (IIT_NULL == task_imp) {
+		return EOVERFLOW;
+	}	  
+	ret = ipc_importance_task_hold_legacy_external_assertion(task_imp, count);
+	return (KERN_SUCCESS != ret) ? ENOTSUP : 0;
 }
 
 int
 task_importance_drop_internal_assertion(task_t target_task, uint32_t count)
 {
-	int rval = 0;
-
-	task_lock(target_task);
-	rval = task_importance_drop_assertion_locked(target_task, TASK_POLICY_INTERNAL, count);
-	task_unlock(target_task);
-
-	task_policy_update_complete_unlocked(target_task, THREAD_NULL);
-
-	return(rval);
+	ipc_importance_task_t task_imp;
+	kern_return_t ret;
+ 
+	/* must already have set up an importance */
+	task_imp = target_task->task_imp_base;
+	if (IIT_NULL == task_imp) {
+		return EOVERFLOW;
+	}
+	ret = ipc_importance_task_drop_internal_assertion(target_task->task_imp_base, count);
+	return (KERN_SUCCESS != ret) ? ENOTSUP : 0;
 }
 
 int
-task_importance_drop_external_assertion(task_t target_task, uint32_t count)
+task_importance_drop_file_lock_assertion(task_t target_task, uint32_t count)
 {
-	int rval = 0;
-
-	task_lock(target_task);
-	rval = task_importance_drop_assertion_locked(target_task, TASK_POLICY_EXTERNAL, count);
-	task_unlock(target_task);
-
-	task_policy_update_complete_unlocked(target_task, THREAD_NULL);
-
-	return(rval);
+	ipc_importance_task_t task_imp;
+	kern_return_t ret;
+ 
+	/* must already have set up an importance */
+	task_imp = target_task->task_imp_base;
+	if (IIT_NULL == task_imp) {
+		return EOVERFLOW;
+	}
+	ret = ipc_importance_task_drop_file_lock_assertion(target_task->task_imp_base, count);
+	return (KERN_SUCCESS != ret) ? EOVERFLOW : 0;
 }
 
-/*
- * Returns EOVERFLOW if an external assertion is taken when not holding an external boost.
- */
-static int
-task_importance_hold_assertion_locked(task_t target_task, int external, uint32_t count)
-{
-	boolean_t apply_boost = FALSE;
-	int ret = 0;
-
-	assert(target_task->imp_receiver != 0);
-
-#if IMPORTANCE_DEBUG
-	KERNEL_DEBUG_CONSTANT_IST(KDEBUG_TRACE, (IMPORTANCE_CODE(IMP_ASSERTION, (IMP_HOLD | external))) | DBG_FUNC_START,
-	        proc_selfpid(), audit_token_pid_from_task(target_task), target_task->task_imp_assertcnt, target_task->task_imp_externcnt, 0);
-#endif
-
-	/* assert(target_task->task_imp_assertcnt >= target_task->task_imp_externcnt); */
-
-	if (external == TASK_POLICY_EXTERNAL) {
-		if (target_task->task_imp_externcnt == 0) {
-			/* Only allowed to take a new boost assertion when holding an external boost */
-			printf("BUG in process %s[%d]: it attempted to acquire a new boost assertion without holding an existing external assertion. "
-			       "(%d total, %d external)\n",
-			       proc_name_address(target_task->bsd_info), audit_token_pid_from_task(target_task),
-			       target_task->task_imp_assertcnt, target_task->task_imp_externcnt);
-			ret = EOVERFLOW;
-			count = 0;
-		} else {
-			target_task->task_imp_assertcnt += count;
-			target_task->task_imp_externcnt += count;
-		}
-	} else {
-		if (target_task->task_imp_assertcnt == 0)
-			apply_boost = TRUE;
-		target_task->task_imp_assertcnt += count;
-	}
-
-	if (apply_boost == TRUE)
-		task_update_boost_locked(target_task, TRUE);
-
-#if IMPORTANCE_DEBUG
-	KERNEL_DEBUG_CONSTANT_IST(KDEBUG_TRACE, (IMPORTANCE_CODE(IMP_ASSERTION, (IMP_HOLD | external))) | DBG_FUNC_END,
-	        proc_selfpid(), audit_token_pid_from_task(target_task), target_task->task_imp_assertcnt, target_task->task_imp_externcnt, 0);
-	DTRACE_BOOST6(receive_internal_boost, task_t, target_task, int, audit_token_pid_from_task(target_task), task_t, current_task(), int, proc_selfpid(), int, count, int, target_task->task_imp_assertcnt);
-	if (external == TASK_POLICY_EXTERNAL){
-		DTRACE_BOOST5(receive_boost, task_t, target_task, int, audit_token_pid_from_task(target_task), int, proc_selfpid(), int, count, int, target_task->task_imp_externcnt);
-	}
-#endif
-	return(ret);
-}
-
-
-/*
- * Returns EOVERFLOW if an external assertion is over-released.
- * Panics if an internal assertion is over-released.
- */
-static int
-task_importance_drop_assertion_locked(task_t target_task, int external, uint32_t count)
-{
-	int ret = 0;
-
-	assert(target_task->imp_receiver != 0);
-
-#if IMPORTANCE_DEBUG
-	KERNEL_DEBUG_CONSTANT_IST(KDEBUG_TRACE, (IMPORTANCE_CODE(IMP_ASSERTION, (IMP_DROP | external))) | DBG_FUNC_START,
-	        proc_selfpid(), audit_token_pid_from_task(target_task), target_task->task_imp_assertcnt, target_task->task_imp_externcnt, 0);
-#endif
-
-	/* assert(target_task->task_imp_assertcnt >= target_task->task_imp_externcnt); */
-
-	if (external == TASK_POLICY_EXTERNAL) {
-		assert(count == 1);
-		if (count <= target_task->task_imp_externcnt) {
-			target_task->task_imp_externcnt -= count;
-			if (count <= target_task->task_imp_assertcnt)
-				target_task->task_imp_assertcnt -= count;
-		} else {
-			/* Process over-released its boost count */
-			printf("BUG in process %s[%d]: over-released external boost assertions (%d total, %d external)\n",
-			       proc_name_address(target_task->bsd_info), audit_token_pid_from_task(target_task),
-			       target_task->task_imp_assertcnt, target_task->task_imp_externcnt);
-			
-			/* TODO: If count > 1, we should clear out as many external assertions as there are left. */
-			ret = EOVERFLOW;
-			count = 0;
-		}
-	} else {
-		if (count <= target_task->task_imp_assertcnt) {
-			target_task->task_imp_assertcnt -= count;
-		} else {
-			/* TODO: Turn this back into a panic <rdar://problem/12592649> */
-			printf("Over-release of kernel-internal importance assertions for task %p (%s), dropping %d assertion(s) but task only has %d remaining (%d external).\n",
-			      target_task,
-			      (target_task->bsd_info == NULL) ? "" : proc_name_address(target_task->bsd_info),
-			      count,
-			      target_task->task_imp_assertcnt,
-			      target_task->task_imp_externcnt);
-			count = 0;
-		}
-	}
-
-	/* assert(target_task->task_imp_assertcnt >= target_task->task_imp_externcnt); */
-
-	if (target_task->task_imp_assertcnt == 0 && ret == 0)
-		task_update_boost_locked(target_task, FALSE);
-
-#if IMPORTANCE_DEBUG
-	KERNEL_DEBUG_CONSTANT_IST(KDEBUG_TRACE, (IMPORTANCE_CODE(IMP_ASSERTION, (IMP_DROP | external))) | DBG_FUNC_END,
-	        proc_selfpid(), audit_token_pid_from_task(target_task), target_task->task_imp_assertcnt, target_task->task_imp_externcnt, 0);
-	if (external == TASK_POLICY_EXTERNAL) {
-		DTRACE_BOOST4(drop_boost, task_t, target_task, int, audit_token_pid_from_task(target_task), int, count, int, target_task->task_imp_externcnt);
-	}
-	DTRACE_BOOST4(drop_internal_boost, task_t, target_task, int, audit_token_pid_from_task(target_task), int, count, int, target_task->task_imp_assertcnt);
-#endif
-
-	return(ret);
-}
-
-/* Transfer an assertion to userspace responsibility */
 int
-task_importance_externalize_assertion(task_t target_task, uint32_t count, __unused int sender_pid)
+task_importance_drop_legacy_external_assertion(task_t target_task, uint32_t count)
 {
-	assert(target_task != TASK_NULL);
-	assert(target_task->imp_receiver != 0);
-
-	task_lock(target_task);
-
-#if IMPORTANCE_DEBUG
-	KERNEL_DEBUG_CONSTANT_IST(KDEBUG_TRACE, (IMPORTANCE_CODE(IMP_ASSERTION, IMP_EXTERN)) | DBG_FUNC_START,
-	        proc_selfpid(), audit_token_pid_from_task(target_task), target_task->task_imp_assertcnt, target_task->task_imp_externcnt, 0);
-#endif
-
-	/* assert(target_task->task_imp_assertcnt >= target_task->task_imp_externcnt + count); */
-
-	target_task->task_imp_externcnt += count;
-
-#if IMPORTANCE_DEBUG
-	KERNEL_DEBUG_CONSTANT_IST(KDEBUG_TRACE, (IMPORTANCE_CODE(IMP_ASSERTION, IMP_EXTERN)) | DBG_FUNC_END,
-	        proc_selfpid(), audit_token_pid_from_task(target_task), target_task->task_imp_assertcnt, target_task->task_imp_externcnt, 0);
-	DTRACE_BOOST5(receive_boost, task_t, target_task, int, audit_token_pid_from_task(target_task),
-		int, sender_pid, int, count, int, target_task->task_imp_externcnt);
-#endif /* IMPORTANCE_DEBUG */
-
-	task_unlock(target_task);
-
-	return(0);
+	ipc_importance_task_t task_imp;
+	kern_return_t ret;
+ 
+	/* must already have set up an importance */
+	task_imp = target_task->task_imp_base;
+	if (IIT_NULL == task_imp) {
+		return EOVERFLOW;
+	}
+	ret = ipc_importance_task_drop_legacy_external_assertion(task_imp, count);
+	return (KERN_SUCCESS != ret) ? EOVERFLOW : 0;
 }
 
-
-#endif /* IMPORTANCE_INHERITANCE */
-
-void
-task_hold_multiple_assertion(__imp_only task_t task, __imp_only uint32_t count)
-{
-#if IMPORTANCE_INHERITANCE
-	assert(task->imp_receiver != 0);
-
-	task_importance_hold_internal_assertion(task, count);
-#endif /* IMPORTANCE_INHERITANCE */
-}
-
-void
-task_add_importance_watchport(__imp_only task_t task, __imp_only __impdebug_only int pid, __imp_only mach_port_t port, int *boostp)
+static void
+task_add_importance_watchport(task_t task, mach_port_t port, int *boostp)
 {
 	int boost = 0;
 
 	__impdebug_only int released_pid = 0;
+	__impdebug_only int pid = audit_token_pid_from_task(task);
 
-#if IMPORTANCE_INHERITANCE
-	task_t release_imp_task = TASK_NULL;
-
-	if (task->imp_receiver == 0) {
-		*boostp = boost;
-		return;
-	}
+	ipc_importance_task_t release_imp_task = IIT_NULL;
 
 	if (IP_VALID(port) != 0) {
+		ipc_importance_task_t new_imp_task = ipc_importance_for_task(task, FALSE);
+
 		ip_lock(port);
 
 		/*
@@ -2743,39 +3502,46 @@ task_add_importance_watchport(__imp_only task_t task, __imp_only __impdebug_only
 			assert(port->ip_impdonation != 0);
 
 			boost = port->ip_impcount;
-			if (port->ip_taskptr != 0) {
+			if (IIT_NULL != port->ip_imp_task) {
 				/*
 				 * if this port is already bound to a task,
 				 * release the task reference and drop any
 				 * watchport-forwarded boosts
 				 */
 				release_imp_task = port->ip_imp_task;
+				port->ip_imp_task = IIT_NULL;
 			}
 
-			/* mark the port is watching another task */
-			port->ip_taskptr = 1;
-			port->ip_imp_task = task;
-			task_reference(task);
+			/* mark the port is watching another task (reference held in port->ip_imp_task) */
+			if (ipc_importance_task_is_marked_receiver(new_imp_task)) {
+				port->ip_imp_task = new_imp_task;
+				new_imp_task = IIT_NULL;
+			}
 		}
 		ip_unlock(port);
 
-		if (release_imp_task != TASK_NULL) {
+		if (IIT_NULL != new_imp_task) {
+			ipc_importance_task_release(new_imp_task);
+		}
+
+		if (IIT_NULL != release_imp_task) {
 			if (boost > 0)
-				task_importance_drop_internal_assertion(release_imp_task, boost);
-			released_pid = audit_token_pid_from_task(release_imp_task);
-			task_deallocate(release_imp_task);
+				ipc_importance_task_drop_internal_assertion(release_imp_task, boost);
+
+			// released_pid = audit_token_pid_from_task(release_imp_task); /* TODO: Need ref-safe way to get pid */
+			ipc_importance_task_release(release_imp_task);
 		}
 #if IMPORTANCE_DEBUG
 		KERNEL_DEBUG_CONSTANT_IST(KDEBUG_TRACE, (IMPORTANCE_CODE(IMP_WATCHPORT, 0)) | DBG_FUNC_NONE,
 		        proc_selfpid(), pid, boost, released_pid, 0);
 #endif /* IMPORTANCE_DEBUG */
 	}
-#endif /* IMPORTANCE_INHERITANCE */
 
 	*boostp = boost;
 	return;
 }
 
+#endif /* IMPORTANCE_INHERITANCE */
 
 /*
  * Routines for VM to query task importance

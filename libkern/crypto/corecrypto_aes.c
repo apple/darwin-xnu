@@ -57,7 +57,7 @@ aes_rval aes_encrypt_cbc(const unsigned char *in_blk, const unsigned char *in_iv
 	return aes_good;
 }
 
-#if defined (__i386__) || defined (__x86_64__)
+#if defined (__i386__) || defined (__x86_64__) || defined (__arm64__)
 /* This does one block of ECB, using the CBC implementation - this allow to use the same context for both CBC and ECB */
 aes_rval aes_encrypt(const unsigned char *in_blk, unsigned char *out_blk, aes_encrypt_ctx cx[1])
 {
@@ -90,7 +90,7 @@ aes_rval aes_decrypt_cbc(const unsigned char *in_blk, const unsigned char *in_iv
 	return aes_good;
 }
 
-#if defined (__i386__) || defined (__x86_64__)
+#if defined (__i386__) || defined (__x86_64__) || defined (__arm64__)
 /* This does one block of ECB, using the CBC implementation - this allow to use the same context for both CBC and ECB */
 aes_rval aes_decrypt(const unsigned char *in_blk, unsigned char *out_blk, aes_decrypt_ctx cx[1])
 {

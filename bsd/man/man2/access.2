@@ -37,7 +37,8 @@
 .Dt ACCESS 2
 .Os BSD 4
 .Sh NAME
-.Nm access
+.Nm access ,
+.Nm faccessat
 .Nd check access permissions of a file or pathname
 .Sh SYNOPSIS
 .Fd #include <unistd.h>
@@ -46,6 +47,8 @@
 .Fa "const char *path"
 .Fa "int amode"
 .Fc
+.Ft int
+.Fn faccessat "int fd" "const char *path" "int mode" "int flag"
 .Sh DESCRIPTION
 The
 .Fn access
@@ -74,6 +77,38 @@ The real user ID is used in place of the effective user ID
 and the real group access list
 (including the real group ID) are
 used in place of the effective ID for verifying permission.
+.Pp
+The
+.Fn faccessat
+system call is equivalent to
+.Fn access
+except in the case where
+.Fa path
+specifies a relative path.
+In this case the file whose accessibility is to be determined is
+located relative to the directory associated with the file descriptor
+.Fa fd
+instead of the current working directory.
+If
+.Fn faccessat
+is passed the special value
+.Dv AT_FDCWD
+in the
+.Fa fd
+parameter, the current working directory is used and the behavior is
+identical to a call to
+.Fn access .
+Values for
+.Fa flag
+are constructed by a bitwise-inclusive OR of flags from the following
+list, defined in
+.In fcntl.h :
+.Bl -tag -width indent
+.It Dv AT_EACCESS
+The checks for accessibility are performed using the effective user and group
+IDs instead of the real user and group ID as required in a call to
+.Fn access .
+.El
 .Pp
 Even if a process has appropriate privileges and indicates success for
 .Dv X_OK ,
@@ -140,6 +175,33 @@ Write access is requested for a file on a read-only file system.
 Write access is requested for a pure procedure (shared text)
 file that is presently being executed.
 .El
+.Pp
+Also, the
+.Fn faccessat
+system call may fail if:
+.Bl -tag -width Er
+.It Bq Er EBADF
+The
+.Fa path
+argument does not specify an absolute path and the
+.Fa fd
+argument is
+neither
+.Dv AT_FDCWD
+nor a valid file descriptor.
+.It Bq Er EINVAL
+The value of the
+.Fa flag
+argument is not valid.
+.It Bq Er ENOTDIR
+The
+.Fa path
+argument is not an absolute path and
+.Fa fd
+is neither
+.Dv AT_FDCWD
+nor a file descriptor associated with a directory.
+.El
 .Sh SEE ALSO
 .Xr chmod 2 ,
 .Xr stat 2
@@ -148,7 +210,10 @@ The
 .Fn access
 function conforms to 
 .St -p1003.1-90 .
+The
+.Fn faccessat
+system call is expected to conform to POSIX.1-2008 .
 .Sh CAVEAT
-.Fn Access
+.Fn access
 is a potential security hole and
 should never be used.

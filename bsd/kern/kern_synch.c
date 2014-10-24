@@ -53,7 +53,7 @@
 
 #include <kern/task.h>
 #include <mach/time_value.h>
-#include <kern/lock.h>
+#include <kern/locks.h>
 
 #include <sys/systm.h>			/* for unix_syscall_return() */
 #include <libkern/OSAtomic.h>

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2004-2013 Apple Inc. All rights reserved.
+ * Copyright (c) 2004-2014 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -62,6 +62,7 @@
 #include <netinet/udp_var.h>
 #include <netinet/tcp.h>
 #include <netinet/tcp_var.h>
+#include <netinet/in_pcb.h>
 #ifdef INET
 #include <netinet/igmp_var.h>
 #endif
@@ -204,7 +205,7 @@ ifnet_allocate_extended(const struct ifnet_init_eparams *einit0,
 		 * to point to storage of at least IFNAMSIZ bytes. It is safe
 		 * to write to this.
 		 */
-		strncpy(__DECONST(char *, ifp->if_name), einit.name, IFNAMSIZ);
+		strlcpy(__DECONST(char *, ifp->if_name), einit.name, IFNAMSIZ);
 		ifp->if_type		= einit.type;
 		ifp->if_family		= einit.family;
 		ifp->if_subfamily	= einit.subfamily;
@@ -345,6 +346,8 @@ ifnet_allocate_extended(const struct ifnet_init_eparams *einit0,
 			bzero(&ifp->if_broadcast, sizeof (ifp->if_broadcast));
 		}
 
+		IFCQ_TARGET_QDELAY(&ifp->if_snd) =
+		    einit.output_target_qdelay;
 		IFCQ_MAXLEN(&ifp->if_snd) = einit.sndq_maxlen;
 
 		if (error == 0) {
@@ -481,6 +484,9 @@ ifnet_flags(ifnet_t interface)
  * If IFEF_AWDL has been set on the interface and the caller attempts
  * to clear one or more of the associated flags in IFEF_AWDL_MASK,
  * return failure.
+ * 
+ * If IFEF_AWDL_RESTRICTED is set by the caller, make sure IFEF_AWDL is set
+ * on the interface.
  *
  * All other flags not associated with AWDL are not affected.
  *
@@ -498,7 +504,7 @@ ifnet_awdl_check_eflags(ifnet_t ifp, u_int32_t *new_eflags, u_int32_t *mask)
 	if (ifp->if_eflags & IFEF_AWDL) {
 		if (eflags & IFEF_AWDL) {
 			if ((eflags & IFEF_AWDL_MASK) != IFEF_AWDL_MASK)
-				return (1);
+				return (EINVAL);
 		} else {
 			*new_eflags &= ~IFEF_AWDL_MASK;
 			*mask |= IFEF_AWDL_MASK;
@@ -506,7 +512,9 @@ ifnet_awdl_check_eflags(ifnet_t ifp, u_int32_t *new_eflags, u_int32_t *mask)
 	} else if (eflags & IFEF_AWDL) {
 		*new_eflags |= IFEF_AWDL_MASK;
 		*mask |= IFEF_AWDL_MASK;
-	}
+	} else if (eflags & IFEF_AWDL_RESTRICTED &&
+	    !(ifp->if_eflags & IFEF_AWDL))
+		return (EINVAL);
 
 	return (0);
 }
@@ -514,9 +522,14 @@ ifnet_awdl_check_eflags(ifnet_t ifp, u_int32_t *new_eflags, u_int32_t *mask)
 errno_t
 ifnet_set_eflags(ifnet_t interface, u_int32_t new_flags, u_int32_t mask)
 {
+	uint32_t oeflags;
+	struct kev_msg ev_msg;
+	struct net_event_data ev_data;
+
 	if (interface == NULL)
 		return (EINVAL);
 
+	bzero(&ev_msg, sizeof(ev_msg));
 	ifnet_lock_exclusive(interface);
 	/*
 	 * Sanity checks for IFEF_AWDL and its related flags.
@@ -525,9 +538,39 @@ ifnet_set_eflags(ifnet_t interface, u_int32_t new_flags, u_int32_t mask)
 		ifnet_lock_done(interface);
 		return (EINVAL);
 	}
+	oeflags = interface->if_eflags;
 	interface->if_eflags =
 	    (new_flags & mask) | (interface->if_eflags & ~mask);
 	ifnet_lock_done(interface);
+	if (interface->if_eflags & IFEF_AWDL_RESTRICTED &&
+	    !(oeflags & IFEF_AWDL_RESTRICTED)) {
+		ev_msg.event_code = KEV_DL_AWDL_RESTRICTED;
+		/*
+		 * The interface is now restricted to applications that have
+		 * the entitlement.
+		 * The check for the entitlement will be done in the data
+		 * path, so we don't have to do anything here.
+		 */
+	} else if (oeflags & IFEF_AWDL_RESTRICTED &&
+	    !(interface->if_eflags & IFEF_AWDL_RESTRICTED))
+		ev_msg.event_code = KEV_DL_AWDL_UNRESTRICTED;
+	/*
+	 * Notify configd so that it has a chance to perform better
+	 * reachability detection.
+	 */
+	if (ev_msg.event_code) {
+		bzero(&ev_data, sizeof(ev_data));
+		ev_msg.vendor_code = KEV_VENDOR_APPLE;
+		ev_msg.kev_class = KEV_NETWORK_CLASS;
+		ev_msg.kev_subclass = KEV_DL_SUBCLASS;
+		strlcpy(ev_data.if_name, interface->if_name, IFNAMSIZ);
+		ev_data.if_family = interface->if_family;
+		ev_data.if_unit = interface->if_unit;
+		ev_msg.dv[0].data_length = sizeof(struct net_event_data);
+		ev_msg.dv[0].data_ptr = &ev_data;
+		ev_msg.dv[1].data_length = 0; 
+		kev_post_msg(&ev_msg);
+	}
 
 	return (0);
 }
@@ -2443,9 +2486,15 @@ fail:
 
 errno_t
 ifnet_get_local_ports_extended(ifnet_t ifp, protocol_family_t protocol,
-    u_int32_t wildcardok, u_int8_t *bitfield)
+    u_int32_t flags, u_int8_t *bitfield)
 {
 	u_int32_t ifindex;
+	u_int32_t inp_flags = 0;
+
+	inp_flags |= ((flags & IFNET_GET_LOCAL_PORTS_WILDCARDOK) ?
+		INPCB_GET_PORTS_USED_WILDCARDOK : 0);
+	inp_flags |= ((flags & IFNET_GET_LOCAL_PORTS_NOWAKEUPOK) ?
+		INPCB_GET_PORTS_USED_NOWAKEUPOK : 0);
 
 	if (bitfield == NULL)
 		return (EINVAL);
@@ -2464,8 +2513,11 @@ ifnet_get_local_ports_extended(ifnet_t ifp, protocol_family_t protocol,
 
 	ifindex = (ifp != NULL) ? ifp->if_index : 0;
 
-	udp_get_ports_used(ifindex, protocol, wildcardok, bitfield);
-	tcp_get_ports_used(ifindex, protocol, wildcardok, bitfield);
+	if (!(flags & IFNET_GET_LOCAL_PORTS_TCPONLY))
+		udp_get_ports_used(ifindex, protocol, inp_flags, bitfield);
+
+	if (!(flags & IFNET_GET_LOCAL_PORTS_UDPONLY))
+		tcp_get_ports_used(ifindex, protocol, inp_flags, bitfield);
 
 	return (0);
 }
@@ -2473,7 +2525,9 @@ ifnet_get_local_ports_extended(ifnet_t ifp, protocol_family_t protocol,
 errno_t
 ifnet_get_local_ports(ifnet_t ifp, u_int8_t *bitfield)
 {
-	return (ifnet_get_local_ports_extended(ifp, PF_UNSPEC, 1, bitfield));
+	u_int32_t flags = IFNET_GET_LOCAL_PORTS_WILDCARDOK;
+	return (ifnet_get_local_ports_extended(ifp, PF_UNSPEC, flags, 
+		bitfield));
 }
 
 errno_t
@@ -2558,6 +2612,8 @@ ifnet_set_delegate(ifnet_t ifp, ifnet_t delegated_ifp)
 		ifp->if_delegated.type = delegated_ifp->if_type;
 		ifp->if_delegated.family = delegated_ifp->if_family;
 		ifp->if_delegated.subfamily = delegated_ifp->if_subfamily;
+		ifp->if_delegated.expensive = 
+		    delegated_ifp->if_eflags & IFEF_EXPENSIVE ? 1 : 0;
 		printf("%s: is now delegating %s (type 0x%x, family %u, "
 		    "sub-family %u)\n", ifp->if_xname, delegated_ifp->if_xname,
 		    delegated_ifp->if_type, delegated_ifp->if_family,
@@ -2600,5 +2656,31 @@ ifnet_get_delegate(ifnet_t ifp, ifnet_t *pdelegated_ifp)
 	/* Release the io ref count */
 	ifnet_decr_iorefcnt(ifp);
 
+	return (0);
+}
+
+extern u_int32_t key_fill_offload_frames_for_savs (ifnet_t ifp,
+	struct ipsec_offload_frame *frames_array, u_int32_t frames_array_count,
+	size_t frame_data_offset);
+
+extern errno_t
+ifnet_get_ipsec_offload_frames(ifnet_t ifp,
+							   struct ipsec_offload_frame *frames_array,
+							   u_int32_t frames_array_count,
+							   size_t frame_data_offset,
+							   u_int32_t *used_frames_count)
+{
+	if (frames_array == NULL || used_frames_count == NULL) {
+		return (EINVAL);
+	}
+
+	*used_frames_count = 0;
+
+	if (frames_array_count == 0) {
+		return (0);
+	}
+
+	*used_frames_count = key_fill_offload_frames_for_savs(ifp,
+		frames_array, frames_array_count, frame_data_offset);
 	return (0);
 }

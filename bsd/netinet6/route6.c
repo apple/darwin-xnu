@@ -95,7 +95,6 @@ route6_input(struct mbuf **mp, int *offp, int proto)
 	}
 #endif /* notyet */
 
-#ifndef PULLDOWN_TEST
 	IP6_EXTHDR_CHECK(m, off, sizeof(*rh), return IPPROTO_DONE);
 
 	/* Expect 32-bit aligned data pointer on strict-align platforms */
@@ -103,17 +102,6 @@ route6_input(struct mbuf **mp, int *offp, int proto)
 
 	ip6 = mtod(m, struct ip6_hdr *);
 	rh = (struct ip6_rthdr *)((caddr_t)ip6 + off);
-#else
-	/* Expect 32-bit aligned data pointer on strict-align platforms */
-	MBUF_STRICT_DATA_ALIGNMENT_CHECK_32(m);
-
-	ip6 = mtod(m, struct ip6_hdr *);
-	IP6_EXTHDR_GET(rh, struct ip6_rthdr *, m, off, sizeof(*rh));
-	if (rh == NULL) {
-		ip6stat.ip6s_tooshort++;
-		return (IPPROTO_DONE);
-	}
-#endif
 
 	switch (rh->ip6r_type) {
 	default:

@@ -32,6 +32,7 @@
 
 #include <libkern/c++/OSObject.h>
 
+class OSCollection;
 class OSSet;
 class OSDictionary;
 
@@ -76,9 +77,14 @@ class OSDictionary;
  * handle synchronization via defined member functions
  * for serializing properties.
  */
+ 
+OSObject *
+OSUnserializeBinary(const void *buffer, size_t bufferSize);
+
 class OSSerialize : public OSObject
 {
     OSDeclareDefaultStructors(OSSerialize)
+    friend class OSBoolean;
 
 protected:
     char         * data;               // container for serialized data
@@ -94,6 +100,26 @@ protected:
     /* Reserved for future use. (Internal use only)  */
     ExpansionData *reserved;
 
+#ifdef XNU_KERNEL_PRIVATE
+public:
+    typedef const OSMetaClassBase * (*Editor)(void                  * reference,
+					      OSSerialize           * s, 
+					      OSCollection          * container, 
+					      const OSSymbol        * name,
+					      const OSMetaClassBase * value);
+#else
+    typedef void * Editor;
+#endif
+
+private:
+    bool   binary;
+    bool   endCollection;
+    Editor editor;
+    void * editRef;
+
+    bool binarySerialize(const OSMetaClassBase *o);
+    bool addBinary(const void * data, size_t size);
+    bool addBinaryObject(const OSMetaClassBase * o, uint32_t key, const void * _bits, size_t size);
 
 public:
 
@@ -114,6 +140,8 @@ public:
     * The serializer will grow as needed to accommodate more data.
     */
     static OSSerialize * withCapacity(unsigned int capacity);
+
+    static OSSerialize * binaryWithCapacity(unsigned int inCapacity, Editor editor = 0, void * reference = 0);
 
    /*!
     * @function text

@@ -338,6 +338,7 @@ apple_protect_pager_data_request(
 	vm_map_offset_t		kernel_mapping;
 	vm_offset_t		src_vaddr, dst_vaddr;
 	vm_offset_t		cur_offset;
+	vm_offset_t		offset_in_page;
 	vm_map_entry_t		map_entry;
 	kern_return_t		error_code;
 	vm_prot_t		prot;
@@ -539,10 +540,23 @@ apple_protect_pager_data_request(
 		 * Decrypt the encrypted contents of the source page
 		 * into the destination page.
 		 */
-		ret = pager->crypt.page_decrypt((const void *) src_vaddr,
-						(void *) dst_vaddr,
-						offset+cur_offset,
-						pager->crypt.crypt_ops);
+		for (offset_in_page = 0;
+		     offset_in_page < PAGE_SIZE;
+		     offset_in_page += 4096) {
+			ret = pager->crypt.page_decrypt((const void *)
+							(src_vaddr +
+							 offset_in_page),
+							(void *)
+							(dst_vaddr +
+							 offset_in_page),
+							(offset +
+							 cur_offset +
+							 offset_in_page),
+							pager->crypt.crypt_ops);
+			if (ret) {
+				break;
+			}
+		}
 		if (ret) {
 			/*
 			 * Decryption failed.  Abort the fault.

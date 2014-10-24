@@ -112,6 +112,7 @@ public:
 void IOCPUSleepKernel(void);
 extern "C" kern_return_t IOCPURunPlatformQuiesceActions(void);
 extern "C" kern_return_t IOCPURunPlatformActiveActions(void);
+extern "C" kern_return_t IOCPURunPlatformHaltRestartActions(uint32_t message);
 
 class IOCPUInterruptController : public IOInterruptController
 {

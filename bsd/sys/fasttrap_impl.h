@@ -171,19 +171,14 @@ typedef struct fasttrap_hash {
 #define	fasttrap_fuword32	fuword32
 #define	fasttrap_suword32	suword32
 
-#if defined __APPLE__
 /*
- * xnu runs in 32 bit mode even when supporting 64 bit processes. We need
- * to make size explicit.
+ * APPLE NOTE: xnu supports both 32bit and 64bit user processes.
+ * We need to make size explicit.
  */
 #define	fasttrap_fuword64	fuword64
 #define	fasttrap_suword64	suword64
 #define fasttrap_fuword64_noerr	fuword64_noerr
 #define fasttrap_fuword32_noerr	fuword32_noerr
-#else
-#define	fasttrap_fulword	fulword
-#define	fasttrap_sulword	sulword
-#endif
 
 extern void fasttrap_sigtrap(proc_t *, uthread_t, user_addr_t);
 

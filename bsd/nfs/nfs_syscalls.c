@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2011 Apple Inc.  All rights reserved.
+ * Copyright (c) 2000-2014 Apple Inc.  All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -169,7 +169,7 @@ SYSCTL_INT(_vfs_generic_nfs_client, OID_AUTO, callback_port, CTLFLAG_RW | CTLFLA
 SYSCTL_INT(_vfs_generic_nfs_client, OID_AUTO, is_mobile, CTLFLAG_RW | CTLFLAG_LOCKED, &nfs_is_mobile, 0, "");
 SYSCTL_INT(_vfs_generic_nfs_client, OID_AUTO, squishy_flags, CTLFLAG_RW | CTLFLAG_LOCKED, &nfs_squishy_flags, 0, "");
 SYSCTL_UINT(_vfs_generic_nfs_client, OID_AUTO, debug_ctl, CTLFLAG_RW | CTLFLAG_LOCKED, &nfs_debug_ctl, 0, "");
-
+SYSCTL_INT(_vfs_generic_nfs_client, OID_AUTO, readlink_nocache, CTLFLAG_RW | CTLFLAG_LOCKED, &nfs_readlink_nocache, 0, "");
 
 #endif /* NFSCLIENT */
 
@@ -200,6 +200,68 @@ SYSCTL_INT(_vfs_generic_nfs_server, OID_AUTO, upcall_queue_count, CTLFLAG_RD | C
 
 #if NFSCLIENT
 
+static int
+mapname2id(struct nfs_testmapid *map)
+{
+	int error;
+
+	error = nfs4_id2guid(map->ntm_name, &map->ntm_guid, map->ntm_grpflag);
+	if (error)
+		return (error);
+
+	if (map->ntm_grpflag)
+		error = kauth_cred_guid2gid(&map->ntm_guid, (gid_t *)&map->ntm_id);
+	else
+		error = kauth_cred_guid2uid(&map->ntm_guid, (uid_t *)&map->ntm_id);
+
+	return (error);
+}
+
+static int
+mapid2name(struct nfs_testmapid *map)
+{
+	int error;
+	int len = sizeof(map->ntm_name);
+	
+	if (map->ntm_grpflag)
+		error = kauth_cred_gid2guid((gid_t)map->ntm_id, &map->ntm_guid);
+	else
+		error = kauth_cred_uid2guid((uid_t)map->ntm_id, &map->ntm_guid);
+
+	if (error)
+		return (error);
+	
+	error = nfs4_guid2id(&map->ntm_guid, map->ntm_name, &len, map->ntm_grpflag);
+
+	return (error);
+	
+}
+
+
+static int
+nfsclnt_testidmap(proc_t p, user_addr_t argp)
+{
+	struct nfs_testmapid mapid;
+	int error, coerror;
+		
+        /* Let root make this call. */
+	error = proc_suser(p);
+        if (error)
+                return (error);
+
+	error = copyin(argp, &mapid, sizeof(mapid));
+	if (error)
+		return (error);
+	if (mapid.ntm_name2id)
+		error = mapname2id(&mapid);
+	else
+		error = mapid2name(&mapid);
+
+	coerror = copyout(&mapid, argp, sizeof(mapid));
+
+	return (error ? error : coerror);
+}
+
 int
 nfsclnt(proc_t p, struct nfsclnt_args *uap, __unused int *retval)
 {
@@ -215,11 +277,15 @@ nfsclnt(proc_t p, struct nfsclnt_args *uap, __unused int *retval)
 	case NFSCLNT_LOCKDNOTIFY:
 		error = nfslockdnotify(p, uap->argp);
 		break;
+	case NFSCLNT_TESTIDMAP:
+		error = nfsclnt_testidmap(p, uap->argp);
+		break;
 	default:
 		error = EINVAL;
 	}
 	return (error);
 }
+
 
 /*
  * Asynchronous I/O threads for client NFS.
@@ -337,6 +403,11 @@ nfsiod_continue(int error)
 
 worktodo:
 	while ((nmp = niod->niod_nmp)) {
+		if (nmp == NULL){
+			niod->niod_nmp = NULL;
+			break;
+		}
+
 		/* 
 		 * Service this mount's async I/O queue.
 		 *
@@ -355,7 +426,9 @@ worktodo:
 		/* process the queue */
 		TAILQ_FOREACH_SAFE(req, &iodq, r_achain, treq) {
 			TAILQ_REMOVE(&iodq, req, r_achain);
-			req->r_achain.tqe_next = NFSREQNOLIST;
+			lck_mtx_lock(nfsiod_mutex);
+			req->r_achain.tqe_next = NFSIODCOMPLETING;
+			lck_mtx_unlock(nfsiod_mutex);
 			req->r_callback.rcb_func(req);
 		}
 
@@ -363,8 +436,11 @@ worktodo:
 		lck_mtx_lock(nfsiod_mutex);
 		morework = !TAILQ_EMPTY(&nmp->nm_iodq);
 		if (!morework || !TAILQ_EMPTY(&nfsiodmounts)) {
-			/* we're going to stop working on this mount */
-			if (morework) /* mount still needs more work so queue it up */
+			/* 
+			 * we're going to stop working on this mount but if the 
+			 * mount still needs more work so queue it up
+			 */
+			if (morework && nmp->nm_iodlink.tqe_next == NFSNOLIST)
 				TAILQ_INSERT_TAIL(&nfsiodmounts, nmp, nm_iodlink);
 			nmp->nm_niod = NULL;
 			niod->niod_nmp = NULL;
@@ -375,6 +451,7 @@ worktodo:
 	if (!niod->niod_nmp && !TAILQ_EMPTY(&nfsiodmounts)) {
 		niod->niod_nmp = TAILQ_FIRST(&nfsiodmounts);
 		TAILQ_REMOVE(&nfsiodmounts, niod->niod_nmp, nm_iodlink);
+		niod->niod_nmp->nm_iodlink.tqe_next = NFSNOLIST;
 	}
 	if (niod->niod_nmp)
 		goto worktodo;

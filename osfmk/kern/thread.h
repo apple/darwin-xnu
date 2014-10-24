@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2012 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2014 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -99,8 +99,6 @@
 
 #ifdef	MACH_KERNEL_PRIVATE
 
-#include <cputypes.h>
-
 #include <mach_assert.h>
 #include <mach_ldebug.h>
 
@@ -110,10 +108,11 @@
 #include <kern/cpu_number.h>
 #include <kern/queue.h>
 #include <kern/timer.h>
-#include <kern/lock.h>
+#include <kern/simple_lock.h>
 #include <kern/locks.h>
 #include <kern/sched.h>
 #include <kern/sched_prim.h>
+#include <mach/sfi_class.h>
 #include <kern/thread_call.h>
 #include <kern/timer_call.h>
 #include <kern/task.h>
@@ -130,7 +129,10 @@ struct thread {
 	 *	NOTE:	The runq field in the thread structure has an unusual
 	 *	locking protocol.  If its value is PROCESSOR_NULL, then it is
 	 *	locked by the thread_lock, but if its value is something else
-	 *	then it is locked by the associated run queue lock.
+	 *	then it is locked by the associated run queue lock. It is
+	 *	set to PROCESSOR_NULL without holding the thread lock, but the
+	 *	transition from PROCESSOR_NULL to non-null must be done
+	 *	under the thread lock and the run queue lock.
 	 *
 	 *	When the thread is on a wait queue, these first three fields
 	 *	are treated as an unofficial union with a wait_queue_element.
@@ -164,11 +166,6 @@ struct thread {
 										 * WITHOUT locking */
 
 	/* Data updated/used in thread_invoke */
-    int				    funnel_state;
-    struct funnel_lock	*funnel_lock;		/* Non-reentrancy funnel */
-#define TH_FN_OWNED			0x1				/* we own the funnel */
-#define TH_FN_REFUNNEL		0x2				/* re-acquire funnel on dispatch */
-
 	vm_offset_t     	kernel_stack;		/* current kernel stack */
 	vm_offset_t			reserved_stack;		/* reserved kernel stack */
 
@@ -189,12 +186,15 @@ struct thread {
 	/* Scheduling information */
 	sched_mode_t			sched_mode;		/* scheduling mode */
 	sched_mode_t			saved_mode;		/* saved mode during forced mode demotion */
+
+	sfi_class_id_t			sfi_class;		/* SFI class (XXX Updated on CSW/QE/AST) */
+	sfi_class_id_t			sfi_wait_class;	/* Currently in SFI wait for this class, protected by sfi_lock */
 	
-	unsigned int			sched_flags;		/* current flag bits */
+	uint32_t			sched_flags;		/* current flag bits */
 #define TH_SFLAG_FAIRSHARE_TRIPPED	0x0001		/* fairshare scheduling activated */
 #define TH_SFLAG_FAILSAFE		0x0002		/* fail-safe has tripped */
-#define TH_SFLAG_THROTTLED		0x0004      /* owner task in throttled state */
-#define TH_SFLAG_DEMOTED_MASK      (TH_SFLAG_THROTTLED | TH_SFLAG_FAILSAFE | TH_SFLAG_FAIRSHARE_TRIPPED)
+#define TH_SFLAG_THROTTLED		0x0004		/* thread treated as background for scheduler decay purposes */
+#define TH_SFLAG_DEMOTED_MASK      (TH_SFLAG_THROTTLE_DEMOTED | TH_SFLAG_FAILSAFE | TH_SFLAG_FAIRSHARE_TRIPPED)	/* saved_mode contains previous sched_mode */
 
 #define	TH_SFLAG_PROMOTED		0x0008		/* sched pri has been promoted */
 #define TH_SFLAG_ABORT			0x0010		/* abort interruptible waits */
@@ -207,20 +207,13 @@ struct thread {
 #define TH_SFLAG_EAGERPREEMPT		0x0200		/* Any preemption of this thread should be treated as if AST_URGENT applied */
 #define TH_SFLAG_RW_PROMOTED		0x0400		/* sched pri has been promoted due to blocking with RW lock held */
 #define TH_SFLAG_PROMOTED_MASK		(TH_SFLAG_PROMOTED | TH_SFLAG_RW_PROMOTED)
+#define TH_SFLAG_THROTTLE_DEMOTED	0x0800		/* throttled thread forced to timeshare mode (may be applied in addition to failsafe) */
 
 #define TH_SFLAG_RW_PROMOTED_BIT	(10)	/* 0x400 */
 
-/*
- * A thread can either be completely unthrottled, about to be throttled,
- * throttled (TH_SFLAG_THROTTLED), or about to be unthrottled
- */
-#define	TH_SFLAG_PENDING_THROTTLE_DEMOTION	0x1000	/* Pending sched_mode demotion */
-#define	TH_SFLAG_PENDING_THROTTLE_PROMOTION	0x2000	/* Pending sched_mode promition */
-#define	TH_SFLAG_PENDING_THROTTLE_MASK		(TH_SFLAG_PENDING_THROTTLE_DEMOTION | TH_SFLAG_PENDING_THROTTLE_PROMOTION)
-
 	int16_t				sched_pri;			/* scheduled (current) priority */
 	int16_t				priority;			/* base priority */
-	int16_t				max_priority;		/* max base priority */
+	int16_t				max_priority;		/* copy of max base priority */
 	int16_t				task_priority;		/* copy of task base priority */
 #if defined(CONFIG_SCHED_GRRR)
 #if 0
@@ -235,7 +228,12 @@ struct thread {
 
 	uint32_t			rwlock_count;	/* Number of lck_rw_t locks held by thread */
 
+#if MACH_ASSERT
+	uint32_t			SHARE_COUNT, BG_COUNT; /* This thread's contribution to global sched counters (temporary debugging) */
+#endif /* MACH_ASSERT */
+
 	integer_t			importance;			/* task-relative importance */
+
 	/* Priority depression expiration */
 	integer_t			depress_timer_active;
 	timer_call_data_t	depress_timer;
@@ -249,9 +247,12 @@ struct thread {
 	}					realtime;
 
 	uint32_t			was_promoted_on_wakeup;
-	uint32_t			current_quantum;	/* duration of current quantum */
 	uint64_t			last_run_time;		/* time when thread was switched away from */
-	uint64_t			last_quantum_refill_time;	/* time when current_quantum was refilled after expiration */
+	uint32_t			quantum_remaining;			/* duration of current quantum remaining */
+
+#if defined(CONFIG_SCHED_MULTIQ)
+	sched_group_t			sched_group;
+#endif /* defined(CONFIG_SCHED_MULTIQ) */
 
   /* Data used during setrun/dispatch */
 	timer_data_t		system_timer;		/* system mode timer */
@@ -273,13 +274,14 @@ struct thread {
 #endif
 	
 	/* Statistics and timesharing calculations */
-#if defined(CONFIG_SCHED_TRADITIONAL)
+#if defined(CONFIG_SCHED_TIMESHARE_CORE)
 	natural_t			sched_stamp;	/* last scheduler tick */
 	natural_t			sched_usage;	/* timesharing cpu usage [sched] */
 	natural_t			pri_shift;		/* usage -> priority from pset */
 	natural_t			cpu_usage;		/* instrumented cpu usage [%cpu] */
 	natural_t			cpu_delta;		/* accumulated cpu_usage delta */
-#endif
+#endif /* CONFIG_SCHED_TIMESHARE_CORE */
+
 	uint32_t			c_switch;		/* total context switches */
 	uint32_t			p_switch;		/* total processor switches */
 	uint32_t			ps_switch;		/* total pset switches */
@@ -292,6 +294,9 @@ struct thread {
 	uint64_t			vtimer_user_save;	/* saved values for vtimers */
 	uint64_t			vtimer_prof_save;
 	uint64_t			vtimer_rlim_save;
+
+	/* Timing for wait state */
+	uint64_t		wait_sfi_begin_time;    /* start time for thread waiting in SFI */
 
 	/* Timed wait expiration */
 	timer_call_data_t	wait_timer;
@@ -375,6 +380,7 @@ struct thread {
 			active:1,				/* Thread is active and has not been terminated */
 			started:1,				/* Thread has been started after creation */
 			static_param:1,			/* Disallow policy parameter changes */
+			policy_reset:1,			/* Disallow policy parameter changes on terminating threads */
 			:0;
 
 		/* Return Handers */
@@ -433,6 +439,11 @@ struct thread {
 	uint64_t kperf_pet_cnt;
 #endif
 
+#if HYPERVISOR
+	/* hypervisor virtual CPU object associated with this thread */
+	void *hv_thread_target;
+#endif /* HYPERVISOR */
+
 		uint64_t thread_id;	/*system wide unique thread-id*/
 
 	/* Statistics accumulated per-thread and aggregated per-task */
@@ -440,13 +451,22 @@ struct thread {
 	uint32_t		syscalls_mach;
 	ledger_t		t_ledger;
 	ledger_t		t_threadledger;	/* per thread ledger */
+	uint64_t 		cpu_time_last_qos;
+#ifdef CONFIG_BANK
+	ledger_t		t_bankledger;  		   /* ledger to charge someone */
+	uint64_t		t_deduct_bank_ledger_time; /* cpu time to be deducted from bank ledger */
+#endif
 
 	/* policy is protected by the task lock */
 	struct task_requested_policy     requested_policy;
 	struct task_effective_policy     effective_policy;
 	struct task_pended_policy        pended_policy;
 
+	/* usynch override is protected by the task lock, eventually will be thread mutex */
+	int		usynch_override_contended_resource_count;
+
 	int	iotier_override; /* atomic operations to set, cleared on ret to user */
+	io_stat_info_t  		thread_io_stats; /* per-thread I/O statistics */
 
 
 	integer_t		saved_importance;		/* saved task-relative importance */
@@ -464,6 +484,12 @@ struct thread {
 	int16_t						suspend_count;
 	/* User level suspensions */
 	int16_t						user_stop_count;
+
+	mach_port_name_t		ith_voucher_name;
+	ipc_voucher_t			ith_voucher;
+#if CONFIG_IOSCHED
+	void 				*decmp_upl;
+#endif /* CONFIG_IOSCHED */
 };
 
 #define ith_state		saved.receive.state
@@ -567,6 +593,11 @@ extern void				thread_task_priority(
 							integer_t		priority,
 							integer_t		max_priority);
 
+extern kern_return_t                    thread_set_mode_and_absolute_pri(
+                                                        thread_t       thread,
+                                                        integer_t      policy,
+                                                        integer_t      priority);
+
 extern void				thread_policy_reset(
 							thread_t		thread);
 
@@ -644,17 +675,9 @@ extern kern_return_t	machine_thread_inherit_taskwide(
 							thread_t		thread,
 							task_t			parent_task);
 
-/*
- * XXX Funnel locks XXX
- */
-
-struct funnel_lock {
-	int			fnl_type;			/* funnel type */
-	lck_mtx_t	*fnl_mutex;			/* underlying mutex for the funnel */
-	void *		fnl_mtxholder;		/* thread (last)holdng mutex */
-	void *		fnl_mtxrelease;		/* thread (last)releasing mutex */
-	lck_mtx_t	*fnl_oldmutex;		/* Mutex before collapsing split funnel */
-};
+extern kern_return_t	machine_thread_set_tsd_base(
+							thread_t				thread,
+							mach_vm_offset_t		tsd_base);
 
 typedef struct ReturnHandler		ReturnHandler;
 
@@ -671,17 +694,15 @@ extern void			special_handler(
 						ReturnHandler	*rh,
 						thread_t		thread);
 
+extern void
+thread_update_qos_cpu_time(
+			thread_t thread,
+			boolean_t lock_needed);
+
 void act_machine_sv_free(thread_t, int);
 
 vm_offset_t			min_valid_stack_address(void);
 vm_offset_t			max_valid_stack_address(void);
-
-extern void 		funnel_lock(
-						struct funnel_lock	*lock);
-
-extern void 		funnel_unlock(
-						struct funnel_lock	*lock);
-
 
 static inline uint16_t	thread_set_tag_internal(thread_t	thread, uint16_t tag) {
 	return __sync_fetch_and_or(&thread->thread_tag, tag);
@@ -690,6 +711,13 @@ static inline uint16_t	thread_set_tag_internal(thread_t	thread, uint16_t tag) {
 static inline uint16_t	thread_get_tag_internal(thread_t	thread) {
 	return thread->thread_tag;
 }
+
+typedef struct {
+	int             qos_pri[THREAD_QOS_LAST];
+	int             qos_iotier[THREAD_QOS_LAST];
+	uint32_t        qos_through_qos[THREAD_QOS_LAST];
+	uint32_t        qos_latency_qos[THREAD_QOS_LAST];
+} qos_policy_params_t;
 
 #else	/* MACH_KERNEL_PRIVATE */
 
@@ -711,16 +739,21 @@ __END_DECLS
 
 __BEGIN_DECLS
 
-
-extern uint64_t	 		thread_tid(
-						thread_t thread);
-
 extern uint64_t	 		thread_dispatchqaddr(
 						thread_t thread);
 
 __END_DECLS
 
 #endif	/* KERNEL_PRIVATE */
+
+#ifdef KERNEL
+__BEGIN_DECLS
+
+extern uint64_t	 		thread_tid(thread_t thread);
+
+__END_DECLS
+
+#endif  /* KERNEL */
 
 __BEGIN_DECLS
 
@@ -780,26 +813,12 @@ extern struct _thread_ledger_indices thread_ledgers;
 extern int thread_get_cpulimit(int *action, uint8_t *percentage, uint64_t *interval_ns);
 extern int thread_set_cpulimit(int action, uint8_t percentage, uint64_t interval_ns);
 
-typedef struct funnel_lock		funnel_t;
-
-#define THR_FUNNEL_NULL (funnel_t *)0
-
-extern funnel_t		 *funnel_alloc(
-						int			type);
-
-extern void			funnel_free(
-						funnel_t	*lock);
-
-extern funnel_t		*thread_funnel_get(void);
-
-extern boolean_t	thread_funnel_set(
-						funnel_t	*lock,
-						boolean_t	 funneled);
-
 extern void			thread_read_times(
 						thread_t 		thread,
 						time_value_t	*user_time,
 						time_value_t	*system_time);
+
+extern uint64_t		thread_get_runtime_self(void);
 
 extern void			thread_setuserstack(
 						thread_t		thread,
@@ -812,6 +831,10 @@ extern uint64_t		thread_adjuserstack(
 extern void			thread_setentrypoint(
 						thread_t		thread,
 						mach_vm_offset_t	entry);
+
+extern kern_return_t	thread_set_tsd_base(
+							thread_t	thread,
+							mach_vm_offset_t tsd_base);
 
 extern kern_return_t	thread_setsinglestep(
 						thread_t		thread,
@@ -842,6 +865,7 @@ extern kern_return_t	thread_wire_internal(
 							boolean_t		wired,
 							boolean_t		*prev_state);
 
+
 extern kern_return_t	thread_dup(thread_t);
 
 typedef void	(*sched_call_t)(
@@ -859,12 +883,18 @@ extern void		thread_static_param(
 					thread_t		thread,
 					boolean_t		state);
 
+extern boolean_t	thread_is_static_param(
+					thread_t		thread);
+
 extern kern_return_t	thread_policy_set_internal(
 	                                thread_t		thread,
 					thread_policy_flavor_t	flavor,
 					thread_policy_t		policy_info,
 					mach_msg_type_number_t	count);
 
+extern boolean_t thread_has_qos_policy(thread_t thread);
+
+extern kern_return_t thread_remove_qos_policy(thread_t thread);
 
 extern task_t	get_threadtask(thread_t);
 #define thread_is_64bit(thd)	\
@@ -921,8 +951,13 @@ void guard_ast(thread_t thread);
 extern void fd_guard_ast(thread_t thread);
 extern void mach_port_guard_ast(thread_t thread);
 extern void thread_guard_violation(thread_t thread, unsigned type);
+extern void thread_update_io_stats(thread_t thread, int size, int io_flags);
+
+extern kern_return_t	thread_set_voucher_name(mach_port_name_t name);
+extern kern_return_t thread_get_current_voucher_origin_pid(int32_t *pid);
 
 #endif	/* XNU_KERNEL_PRIVATE */
+
 
 /*! @function kernel_thread_start
     @abstract Create a kernel thread.
@@ -941,6 +976,7 @@ extern kern_return_t	kernel_thread_start(
 void thread_set_eager_preempt(thread_t thread);
 void thread_clear_eager_preempt(thread_t thread);
 extern ipc_port_t convert_thread_to_port(thread_t);
+extern boolean_t set_vm_privilege(boolean_t);
 #endif /* KERNEL_PRIVATE */
 
 __END_DECLS

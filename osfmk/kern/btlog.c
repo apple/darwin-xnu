@@ -31,6 +31,7 @@
 #include <kern/assert.h>
 #include <vm/vm_kern.h>
 #include <vm/vm_map.h>
+#include <vm/pmap.h>
 #include <mach/vm_param.h>
 
 /*
@@ -73,6 +74,7 @@ struct btlog {
     btlog_recordindex_t freelist;
 };
 
+extern boolean_t vm_kernel_ready;
 extern boolean_t kmem_alloc_ready;
 
 #define lookup_btrecord(btlog, index) \
@@ -92,7 +94,7 @@ btlog_create(size_t numrecords,
 	kern_return_t ret;
 	size_t btrecord_size;
 
-	if (!kmem_alloc_ready)
+	if (vm_kernel_ready && !kmem_alloc_ready)
 		return NULL;
 
 	if (numrecords > BTLOG_MAX_RECORDS)
@@ -118,8 +120,13 @@ btlog_create(size_t numrecords,
 	/* since rounding to a page size might hold more, recalculate */
 	numrecords = MIN(BTLOG_MAX_RECORDS,
 					 (buffersize_needed - sizeof(btlog_t))/btrecord_size);
-	
-	ret = kmem_alloc(kernel_map, &buffer, buffersize_needed);
+
+	if (kmem_alloc_ready) {
+		ret = kmem_alloc(kernel_map, &buffer, buffersize_needed);
+	} else {
+		buffer = (vm_address_t)pmap_steal_memory(buffersize_needed);
+		ret = KERN_SUCCESS;
+	}
 	if (ret != KERN_SUCCESS)
 		return NULL;
 

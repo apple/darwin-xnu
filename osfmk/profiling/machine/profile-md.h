@@ -25,7 +25,7 @@
  * 
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
-#ifndef _MACH_MACHINE_PROFILE_MD_H
+#ifndef _MACH_MACHINE_PROFILE_MD_H_
 #define _MACH_MACHINE_PROFILE_MD_H_
 
 #if defined (__i386__) || defined (__x86_64__)

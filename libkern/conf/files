@@ -7,7 +7,6 @@ OPTIONS/config_dtrace					optional config_dtrace
 OPTIONS/hibernation					optional hibernation
 OPTIONS/networking					optional networking
 OPTIONS/crypto						optional crypto
-OPTIONS/allcrypto					optional allcrypto
 OPTIONS/zlib						optional zlib
 
 # libkern
@@ -36,8 +35,9 @@ libkern/c++/OSString.cpp				optional libkerncpp
 libkern/c++/OSSymbol.cpp				optional libkerncpp
 libkern/c++/OSUnserialize.cpp				optional libkerncpp
 libkern/c++/OSUnserializeXML.cpp			optional libkerncpp
+libkern/c++/OSSerializeBinary.cpp			optional libkerncpp
 
-libkern/OSKextLib.cpp					standard libkerncpp
+libkern/OSKextLib.cpp					optional libkerncpp
 libkern/mkext.c						standard
 libkern/OSKextVersion.c					standard
 
@@ -66,11 +66,9 @@ libkern/zlib/uncompr.c                                  optional zlib
 libkern/zlib/zutil.c                                    optional zlib
 
 libkern/crypto/register_crypto.c		optional crypto
-libkern/crypto/corecrypto_sha2.c    optional crypto allcrypto
+libkern/crypto/corecrypto_sha2.c    optional crypto_sha2
 libkern/crypto/corecrypto_sha1.c		optional crypto
-libkern/crypto/corecrypto_sha1.c		optional ipsec
 libkern/crypto/corecrypto_md5.c			optional crypto
-libkern/crypto/corecrypto_md5.c			optional networking
 libkern/crypto/corecrypto_des.c			optional crypto
 libkern/crypto/corecrypto_aes.c			optional crypto
 libkern/crypto/corecrypto_aesxts.c		optional crypto

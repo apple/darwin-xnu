@@ -441,19 +441,20 @@ kmod_panic_dump(vm_offset_t * addr, unsigned int cnt)
     extern int kdb_printf(const char *format, ...) __printflike(1,2);
 
     OSKext::printKextsInBacktrace(addr, cnt, &kdb_printf,
-        /* takeLock? */ false);
+        /* takeLock? */ false, false);
     return;
 }
 
 /********************************************************************/
-void kmod_dump_log(vm_offset_t *addr, unsigned int cnt);
+void kmod_dump_log(vm_offset_t *addr, unsigned int cnt, boolean_t doUnslide);
 
 void
 kmod_dump_log(
     vm_offset_t * addr,
-    unsigned int cnt)
+    unsigned int cnt,
+    boolean_t doUnslide)
 {
-    OSKext::printKextsInBacktrace(addr, cnt, &printf, /* lock? */ true);
+    OSKext::printKextsInBacktrace(addr, cnt, &printf, /* lock? */ true, doUnslide);
 }
 
 /*********************************************************************

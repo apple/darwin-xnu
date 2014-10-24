@@ -116,7 +116,7 @@
  */
 comp_t	encode_comp_t(uint32_t, uint32_t);
 void	acctwatch(void *);
-void	acctwatch_funnel(void *);
+void	acct_init(void);
 
 /*
  * Accounting vnode pointer, and suspended accounting vnode pointer.  States
@@ -138,6 +138,21 @@ struct	vnode *suspend_acctp;
 int	acctsuspend = 2;	/* stop accounting when < 2% free space left */
 int	acctresume = 4;		/* resume when free space risen to > 4% */
 int	acctchkfreq = 15;	/* frequency (in seconds) to check space */
+
+
+static lck_grp_t       *acct_subsys_lck_grp;
+static lck_mtx_t       *acct_subsys_mutex;
+
+#define ACCT_SUBSYS_LOCK() lck_mtx_lock(acct_subsys_mutex)
+#define ACCT_SUBSYS_UNLOCK() lck_mtx_unlock(acct_subsys_mutex)
+
+void
+acct_init(void)
+{
+	acct_subsys_lck_grp = lck_grp_alloc_init("acct", NULL);
+	acct_subsys_mutex = lck_mtx_alloc_init(acct_subsys_lck_grp, NULL);
+}
+
 
 /*
  * Accounting system call.  Written based on the specification and
@@ -191,21 +206,26 @@ acct(proc_t p, struct acct_args *uap, __unused int *retval)
 	 * If accounting was previously enabled, kill the old space-watcher,
 	 * close the file, and (if no new file was specified, leave).
 	 */
+	ACCT_SUBSYS_LOCK();
 	if (acctp != NULLVP || suspend_acctp != NULLVP) {
-		untimeout(acctwatch_funnel, NULL);
+		untimeout(acctwatch, NULL);
 		error = vn_close((acctp != NULLVP ? acctp : suspend_acctp),
 				FWRITE, vfs_context_current());
 
 		acctp = suspend_acctp = NULLVP;
 	}
-	if (uap->path == USER_ADDR_NULL)
+	if (uap->path == USER_ADDR_NULL) {
+		ACCT_SUBSYS_UNLOCK();
 		return (error);
+	}
 
 	/*
 	 * Save the new accounting file vnode, and schedule the new
 	 * free space watcher.
 	 */
 	acctp = nd.ni_vp;
+	ACCT_SUBSYS_UNLOCK();
+
 	acctwatch(NULL);
 	return (error);
 }
@@ -230,9 +250,12 @@ acct_process(proc_t p)
 	struct  tty *tp;
 
 	/* If accounting isn't enabled, don't bother */
+	ACCT_SUBSYS_LOCK();
 	vp = acctp;
-	if (vp == NULLVP)
+	if (vp == NULLVP) {
+		ACCT_SUBSYS_UNLOCK();
 		return (0);
+	}
 
 	/*
 	 * Get process accounting information.
@@ -301,6 +324,8 @@ acct_process(proc_t p)
 	}
 
 	kauth_cred_unref(&safecred);
+	ACCT_SUBSYS_UNLOCK();
+
 	return (error);
 }
 
@@ -342,16 +367,6 @@ encode_comp_t(uint32_t s, uint32_t us)
 	return (exp);
 }
 
-/* XXX The acctwatch() thread need to be protected by a mutex instead. */
-void
-acctwatch_funnel(void *a)
-{
-        thread_funnel_set(kernel_flock, TRUE);
-	acctwatch(a);
-        thread_funnel_set(kernel_flock, FALSE);
-}
-
-
 /*
  * Periodically check the file system to see if accounting
  * should be turned on or off.  Beware the case where the vnode
@@ -369,6 +384,7 @@ acctwatch(__unused void *a)
 	VFSATTR_WANTED(&va, f_blocks);
 	VFSATTR_WANTED(&va, f_bavail);
 
+	ACCT_SUBSYS_LOCK();
 	if (suspend_acctp != NULLVP) {
 		/*
 		 * Resuming accounting when accounting is suspended, and the
@@ -378,6 +394,7 @@ acctwatch(__unused void *a)
 		if (suspend_acctp->v_type == VBAD) {
 			(void) vn_close(suspend_acctp, FWRITE, vfs_context_kernel());
 			suspend_acctp = NULLVP;
+			ACCT_SUBSYS_UNLOCK();
 			return;
 		}
 		(void)vfs_getattr(suspend_acctp->v_mount, &va, ctx);
@@ -395,6 +412,7 @@ acctwatch(__unused void *a)
 		if (acctp->v_type == VBAD) {
 			(void) vn_close(acctp, FWRITE, vfs_context_kernel());
 			acctp = NULLVP;
+			ACCT_SUBSYS_UNLOCK();
 			return;
 		}
 		(void)vfs_getattr(acctp->v_mount, &va, ctx);
@@ -404,8 +422,10 @@ acctwatch(__unused void *a)
 			log(LOG_NOTICE, "Accounting suspended\n");
 		}
 	} else {
+		ACCT_SUBSYS_UNLOCK();
 		return;
-        }
-        
-	timeout(acctwatch_funnel, NULL, acctchkfreq * hz);
+	}
+	ACCT_SUBSYS_UNLOCK();
+    
+	timeout(acctwatch, NULL, acctchkfreq * hz);
 }

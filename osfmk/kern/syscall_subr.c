@@ -73,7 +73,7 @@
 #include <kern/syscall_subr.h>
 #include <mach/mach_host_server.h>
 #include <mach/mach_syscalls.h>
-
+#include <sys/kdebug.h>
 
 #ifdef MACH_BSD
 extern void workqueue_thread_yielded(void);
@@ -361,6 +361,9 @@ thread_switch(
 		s = splsched();
 		thread_lock(thread);
 
+		KERNEL_DEBUG_CONSTANT(MACHDBG_CODE(DBG_MACH_SCHED,MACH_SCHED_THREAD_SWITCH)|DBG_FUNC_NONE,
+							  thread_tid(thread), thread->state, 0, 0, 0);
+
 		/*
 		 *	Check that the thread is not bound
 		 *	to a different processor, and that realtime
@@ -544,10 +547,11 @@ thread_poll_yield(
 			abstime += (total_computation >> sched_poll_yield_shift);
 			if (!timer_call_enter(&self->depress_timer, abstime, TIMER_CALL_USER_CRITICAL))
 				self->depress_timer_active++;
-			thread_unlock(self);
 
-			if ((preempt = csw_check(myprocessor)) != AST_NONE)
+			if ((preempt = csw_check(myprocessor, AST_NONE)) != AST_NONE)
 				ast_on(preempt);
+
+			thread_unlock(self);
 		}
 	}
 	splx(s);

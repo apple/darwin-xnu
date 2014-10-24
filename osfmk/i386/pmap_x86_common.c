@@ -25,6 +25,9 @@
  * 
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
+
+#include <mach_assert.h>
+
 #include <vm/pmap.h>
 #include <vm/vm_map.h>
 #include <kern/ledger.h>
@@ -1228,6 +1231,14 @@ pmap_remove_options(
 
 		if (s64 < e64 && rdtsc64() >= deadline) {
 			PMAP_UNLOCK(map)
+			    /* TODO: Rapid release/reacquisition can defeat
+			     * the "backoff" intent here; either consider a
+			     * fair spinlock, or a scheme whereby each lock
+			     * attempt marks the processor as within a spinlock
+			     * acquisition, and scan CPUs here to determine
+			     * if a backoff is necessary, to avoid sacrificing
+			     * performance in the common case.
+			     */
 			PMAP_LOCK(map)
 			deadline = rdtsc64() + max_preemption_latency_tsc;
 		}
@@ -1391,7 +1402,7 @@ pmap_page_protect_options(
 				 * This removal is only being done so we can send this page to
 				 * the compressor; therefore it mustn't affect total task footprint.
 				 */
-				pmap_ledger_credit(pmap, task_ledgers.phys_compressed, PAGE_SIZE);
+				pmap_ledger_credit(pmap, task_ledgers.internal_compressed, PAGE_SIZE);
 			} else {
 				pmap_ledger_debit(pmap, task_ledgers.phys_footprint, PAGE_SIZE);
 			}
@@ -1492,7 +1503,16 @@ phys_attribute_clear(
 	int			pai;
 	pmap_t			pmap;
 	char			attributes = 0;
-	
+	boolean_t		is_internal, is_reusable;
+
+	if ((bits & PHYS_MODIFIED) &&
+	    (options & PMAP_OPTIONS_NOFLUSH) &&
+	    arg == NULL) {
+		panic("phys_attribute_clear(0x%x,0x%x,0x%x,%p): "
+		      "should not clear 'modified' without flushing TLBs\n",
+		      pn, bits, options, arg);
+	}
+
 	pmap_intr_assert();
 	assert(pn != vm_page_fictitious_addr);
 	if (pn == vm_page_guard_addr)
@@ -1524,31 +1544,91 @@ phys_attribute_clear(
 		 * There are some mappings.
 		 */
 
+		is_internal = IS_INTERNAL_PAGE(pai);
+		is_reusable = IS_REUSABLE_PAGE(pai);
+
 		pv_e = (pv_hashed_entry_t)pv_h;
 
 		do {
 			vm_map_offset_t	va;
+			char pte_bits;
 
 			pmap = pv_e->pmap;
 			va = pv_e->va;
+			pte_bits = 0;
+
+			if (bits) {
+				pte = pmap_pte(pmap, va);
+				/* grab ref/mod bits from this PTE */
+				pte_bits = (*pte & (PHYS_MODIFIED |
+						    PHYS_REFERENCED));
+				/* propagate to page's global attributes */
+				attributes |= pte_bits;
+				/* which bits to clear for this PTE? */
+				pte_bits &= bits;
+			}
 
 			 /*
 			  * Clear modify and/or reference bits.
 			  */
-			pte = pmap_pte(pmap, va);
-			attributes |= *pte & (PHYS_MODIFIED|PHYS_REFERENCED);
-			pmap_update_pte(pte, bits, 0);
-			/* Ensure all processors using this translation
-			 * invalidate this TLB entry. The invalidation *must*
-			 * follow the PTE update, to ensure that the TLB
-			 * shadow of the 'D' bit (in particular) is
-			 * synchronized with the updated PTE.
-			 */
-			if (options & PMAP_OPTIONS_NOFLUSH) {
-				if (arg)
-					PMAP_UPDATE_TLBS_DELAYED(pmap, va, va + PAGE_SIZE, (pmap_flush_context *)arg);
-			} else
-				PMAP_UPDATE_TLBS(pmap, va, va + PAGE_SIZE);
+			if (pte_bits) {
+				pmap_update_pte(pte, bits, 0);
+
+				/* Ensure all processors using this translation
+				 * invalidate this TLB entry. The invalidation
+				 * *must* follow the PTE update, to ensure that
+				 * the TLB shadow of the 'D' bit (in particular)
+				 * is synchronized with the updated PTE.
+				 */
+				if (! (options & PMAP_OPTIONS_NOFLUSH)) {
+					/* flush TLBS now */
+					PMAP_UPDATE_TLBS(pmap,
+							 va,
+							 va + PAGE_SIZE);
+				} else if (arg) {
+					/* delayed TLB flush: add "pmap" info */
+					PMAP_UPDATE_TLBS_DELAYED(
+						pmap,
+						va,
+						va + PAGE_SIZE,
+						(pmap_flush_context *)arg);
+				} else {
+					/* no TLB flushing at all */
+				}
+			}
+
+			/* update pmap "reusable" stats */
+			if ((options & PMAP_OPTIONS_CLEAR_REUSABLE) &&
+			    is_reusable &&
+			    pmap != kernel_pmap) {
+				/* one less "reusable" */
+				assert(pmap->stats.reusable > 0);
+				OSAddAtomic(-1, &pmap->stats.reusable);
+				if (is_internal) {
+					/* one more "internal" */
+					OSAddAtomic(+1, &pmap->stats.internal);
+					PMAP_STATS_PEAK(pmap->stats.internal);
+				} else {
+					/* one more "external" */
+					OSAddAtomic(+1, &pmap->stats.external);
+					PMAP_STATS_PEAK(pmap->stats.external);
+				}
+			} else if ((options & PMAP_OPTIONS_SET_REUSABLE) &&
+				   !is_reusable &&
+				   pmap != kernel_pmap) {
+				/* one more "reusable" */
+				OSAddAtomic(+1, &pmap->stats.reusable);
+				PMAP_STATS_PEAK(pmap->stats.reusable);
+				if (is_internal) {
+					/* one less "internal" */
+					assert(pmap->stats.internal > 0);
+					OSAddAtomic(-1, &pmap->stats.internal);
+				} else {
+					/* one less "external" */
+					assert(pmap->stats.external > 0);
+					OSAddAtomic(-1, &pmap->stats.external);
+				}
+			}
 
 			pv_e = (pv_hashed_entry_t)queue_next(&pv_e->qlink);
 
@@ -1560,6 +1640,13 @@ phys_attribute_clear(
 
 	pmap_phys_attributes[pai] |= attributes;
 	pmap_phys_attributes[pai] &= (~bits);
+
+	/* update this page's "reusable" status */
+	if (options & PMAP_OPTIONS_CLEAR_REUSABLE) {
+		pmap_phys_attributes[pai] &= ~PHYS_REUSABLE;
+	} else if (options & PMAP_OPTIONS_SET_REUSABLE) {
+		pmap_phys_attributes[pai] |= PHYS_REUSABLE;
+	}
 
 	UNLOCK_PVH(pai);
 
@@ -1742,162 +1829,6 @@ pmap_map_bd(
 	return(virt);
 }
 
-void
-pmap_reusable(
-	pmap_t		pmap,
-	addr64_t	s64,
-	addr64_t	e64,
-	boolean_t	reusable)
-{
-	pt_entry_t     *pde;
-	pt_entry_t     *spte, *epte;
-	addr64_t        l64;
-	uint64_t        deadline;
-
-	pmap_intr_assert();
-
-	if (pmap == PMAP_NULL || pmap == kernel_pmap || s64 == e64)
-		return;
-
-	PMAP_TRACE(PMAP_CODE(PMAP__REUSABLE) | DBG_FUNC_START,
-		   pmap,
-		   (uint32_t) (s64 >> 32), s64,
-		   (uint32_t) (e64 >> 32), e64);
-
-	PMAP_LOCK(pmap);
-
-	deadline = rdtsc64() + max_preemption_latency_tsc;
-
-	while (s64 < e64) {
-		l64 = (s64 + pde_mapped_size) & ~(pde_mapped_size - 1);
-		if (l64 > e64)
-			l64 = e64;
-		pde = pmap_pde(pmap, s64);
-
-		if (pde && (*pde & INTEL_PTE_VALID)) {
-			if (*pde & INTEL_PTE_PS) {
-				/* superpage: not supported */
-			} else {
-				spte = pmap_pte(pmap,
-						(s64 & ~(pde_mapped_size - 1)));
-				spte = &spte[ptenum(s64)];
-				epte = &spte[intel_btop(l64 - s64)];
-				pmap_reusable_range(pmap, s64, spte, epte,
-						    reusable);
-			}
-		}
-		s64 = l64;
-
-		if (s64 < e64 && rdtsc64() >= deadline) {
-			PMAP_UNLOCK(pmap);
-			PMAP_LOCK(pmap);
-			deadline = rdtsc64() + max_preemption_latency_tsc;
-		}
-	}
-
-	PMAP_UNLOCK(pmap);
-
-	PMAP_TRACE(PMAP_CODE(PMAP__REUSABLE) | DBG_FUNC_END,
-		   pmap, reusable, 0, 0, 0);
-}
-
-void
-pmap_reusable_range(
-	pmap_t			pmap,
-	vm_map_offset_t		start_vaddr,
-	pt_entry_t		*spte,
-	pt_entry_t		*epte,
-	boolean_t		reusable)
-{
-	pt_entry_t		*cpte;
-	int			num_external, num_internal, num_reusable;
-	ppnum_t			pai;
-	pmap_paddr_t		pa;
-	vm_map_offset_t		vaddr;
-
-	num_external = 0;
-	num_internal = 0;
-	num_reusable = 0;
-
-	for (cpte = spte, vaddr = start_vaddr;
-	     cpte < epte;
-	     cpte++, vaddr += PAGE_SIZE_64) {
-
-		pa = pte_to_pa(*cpte);
-		if (pa == 0)
-			continue;
-
-		pai = pa_index(pa);
-
-		LOCK_PVH(pai);
-
-		pa = pte_to_pa(*cpte);
-		if (pa == 0) {
-			UNLOCK_PVH(pai);
-			continue;
-		}
-		if (reusable) {
-			/* we want to set "reusable" */
-			if (IS_REUSABLE_PAGE(pai)) {
-				/* already reusable: no change */
-			} else {
-				pmap_phys_attributes[pai] |= PHYS_REUSABLE;
-				/* one more "reusable" */
-				num_reusable++;
-				if (IS_INTERNAL_PAGE(pai)) {
-					/* one less "internal" */
-					num_internal--;
-				} else {
-					/* one less "external" */
-					num_external--;
-				}
-			}
-		} else {
-			/* we want to clear "reusable" */
-			if (IS_REUSABLE_PAGE(pai)) {
-				pmap_phys_attributes[pai] &= ~PHYS_REUSABLE;
-				/* one less "reusable" */
-				num_reusable--;
-				if (IS_INTERNAL_PAGE(pai)) {
-					/* one more "internal" */
-					num_internal++;
-				} else {
-					/* one more "external" */
-					num_external++;
-				}
-			} else {
-				/* already not reusable: no change */
-			}
-		}
-
-		UNLOCK_PVH(pai);
-
-	} /* for loop */
-
-	/*
-	 *	Update the counts
-	 */
-	if (pmap != kernel_pmap) {
-		if (num_external) {
-			OSAddAtomic(num_external, &pmap->stats.external);
-			PMAP_STATS_PEAK(pmap->stats.external);
-		}
-		assert(pmap->stats.external >= 0);
-		if (num_internal) {
-			OSAddAtomic(num_internal, &pmap->stats.internal);
-			PMAP_STATS_PEAK(pmap->stats.internal);
-		}
-		assert(pmap->stats.internal >= 0);
-		if (num_reusable) {
-			OSAddAtomic(num_reusable, &pmap->stats.reusable);
-			PMAP_STATS_PEAK(pmap->stats.reusable);
-		}
-		assert(pmap->stats.reusable >= 0);
-	}
-
-	return;
-}
-
 unsigned int
 pmap_query_resident(
 	pmap_t		pmap,
@@ -1965,3 +1896,13 @@ pmap_query_resident(
 
 	return result;
 }
+
+#if MACH_ASSERT
+void
+pmap_set_process(
+	__unused pmap_t pmap,
+	__unused int pid,
+	__unused char *procname)
+{
+}
+#endif /* MACH_ASSERT */

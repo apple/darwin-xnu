@@ -67,7 +67,6 @@
 #include <mach/host_priv_server.h>
 #include <kern/host.h>
 #include <kern/processor.h>
-#include <kern/lock.h>
 #include <kern/task.h>
 #include <kern/thread.h>
 #include <kern/ipc_host.h>
@@ -563,10 +562,15 @@ host_set_exception_ports(
 			return KERN_INVALID_ARGUMENT;
 		}
 	}
-	/* Cannot easily check "new_flavor", but that just means that
-	 * the flavor in the generated exception message might be garbage:
-	 * GIGO
+
+	/*
+	 * Check the validity of the thread_state_flavor by calling the
+	 * VALID_THREAD_STATE_FLAVOR architecture dependent macro defined in
+	 * osfmk/mach/ARCHITECTURE/thread_status.h
 	 */
+	if (new_flavor != 0 && !VALID_THREAD_STATE_FLAVOR(new_flavor))
+		return (KERN_INVALID_ARGUMENT);
+
 	host_lock(host_priv);
 
 	for (i = FIRST_EXCEPTION; i < EXC_TYPES_COUNT; i++) {
@@ -706,9 +710,8 @@ host_swap_exception_ports(
 		}
 	}
 
-	/* Cannot easily check "new_flavor", but that just means that
-	 * the flavor in the generated exception message might be garbage:
-	 * GIGO */
+	if (new_flavor != 0 && !VALID_THREAD_STATE_FLAVOR(new_flavor))
+		return (KERN_INVALID_ARGUMENT);
 
 	host_lock(host_priv);
 

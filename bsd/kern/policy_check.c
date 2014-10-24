@@ -118,7 +118,7 @@ common_hook(void)
 	return rv;
 }
 
-#if (MAC_POLICY_OPS_VERSION != 24)
+#if (MAC_POLICY_OPS_VERSION != 31)
 # error "struct mac_policy_ops doesn't match definition in mac_policy.h"
 #endif
 /*
@@ -262,28 +262,28 @@ static struct mac_policy_ops policy_ops = {
 	.mpo_policy_initbsd = hook_policy_initbsd,
 	CHECK_SET_HOOK(policy_syscall)
 
-	CHECK_SET_HOOK(port_check_copy_send)
-	CHECK_SET_HOOK(port_check_hold_receive)
-	CHECK_SET_HOOK(port_check_hold_send_once)
-	CHECK_SET_HOOK(port_check_hold_send)
-	CHECK_SET_HOOK(port_check_label_update)
-	CHECK_SET_HOOK(port_check_make_send_once)
-	CHECK_SET_HOOK(port_check_make_send)
-	CHECK_SET_HOOK(port_check_method)
-	CHECK_SET_HOOK(port_check_move_receive)
-	CHECK_SET_HOOK(port_check_move_send_once)
-	CHECK_SET_HOOK(port_check_move_send)
-	CHECK_SET_HOOK(port_check_receive)
-	CHECK_SET_HOOK(port_check_send)
-	CHECK_SET_HOOK(port_check_service)
-	CHECK_SET_HOOK(port_label_associate_kernel)
-	CHECK_SET_HOOK(port_label_associate)
-	CHECK_SET_HOOK(port_label_compute)
-	CHECK_SET_HOOK(port_label_copy)
-	CHECK_SET_HOOK(port_label_destroy)
-	CHECK_SET_HOOK(port_label_init)
-	CHECK_SET_HOOK(port_label_update_cred)
-	CHECK_SET_HOOK(port_label_update_kobject)
+	CHECK_SET_HOOK(system_check_sysctlbyname)
+	CHECK_SET_HOOK(proc_check_inherit_ipc_ports)
+	CHECK_SET_HOOK(vnode_check_rename)
+	.mpo_reserved4 = (mpo_reserved_hook_t *)common_hook,
+	.mpo_reserved5 = (mpo_reserved_hook_t *)common_hook,
+	.mpo_reserved6 = (mpo_reserved_hook_t *)common_hook,
+	.mpo_reserved7 = (mpo_reserved_hook_t *)common_hook,
+	.mpo_reserved8 = (mpo_reserved_hook_t *)common_hook,
+	.mpo_reserved9 = (mpo_reserved_hook_t *)common_hook,
+	.mpo_reserved10 = (mpo_reserved_hook_t *)common_hook,
+	.mpo_reserved11 = (mpo_reserved_hook_t *)common_hook,
+	.mpo_reserved12 = (mpo_reserved_hook_t *)common_hook,
+	.mpo_reserved13 = (mpo_reserved_hook_t *)common_hook,
+	.mpo_reserved14 = (mpo_reserved_hook_t *)common_hook,
+	.mpo_reserved15 = (mpo_reserved_hook_t *)common_hook,
+	.mpo_reserved16 = (mpo_reserved_hook_t *)common_hook,
+	.mpo_reserved17 = (mpo_reserved_hook_t *)common_hook,
+	.mpo_reserved18 = (mpo_reserved_hook_t *)common_hook,
+	.mpo_reserved19 = (mpo_reserved_hook_t *)common_hook,
+	.mpo_reserved20 = (mpo_reserved_hook_t *)common_hook,
+	.mpo_reserved21 = (mpo_reserved_hook_t *)common_hook,
+	.mpo_reserved22 = (mpo_reserved_hook_t *)common_hook,
 
 	CHECK_SET_HOOK(posixsem_check_create)
 	CHECK_SET_HOOK(posixsem_check_open)
@@ -361,7 +361,7 @@ static struct mac_policy_ops policy_ops = {
 	CHECK_SET_HOOK(system_check_settime)
 	CHECK_SET_HOOK(system_check_swapoff)
 	CHECK_SET_HOOK(system_check_swapon)
-	CHECK_SET_HOOK(system_check_sysctl)
+	.mpo_reserved31 = (mpo_reserved_hook_t *)common_hook,
 
 	CHECK_SET_HOOK(sysvmsg_label_associate)
 	CHECK_SET_HOOK(sysvmsg_label_destroy)
@@ -394,14 +394,14 @@ static struct mac_policy_ops policy_ops = {
 	CHECK_SET_HOOK(sysvshm_label_init)
 	CHECK_SET_HOOK(sysvshm_label_recycle)
 
-	CHECK_SET_HOOK(task_label_associate_kernel)
-	CHECK_SET_HOOK(task_label_associate)
-	CHECK_SET_HOOK(task_label_copy)
-	CHECK_SET_HOOK(task_label_destroy)
-	CHECK_SET_HOOK(task_label_externalize)
-	CHECK_SET_HOOK(task_label_init)
-	CHECK_SET_HOOK(task_label_internalize)
-	CHECK_SET_HOOK(task_label_update)
+	.mpo_reserved23 = (mpo_reserved_hook_t *)common_hook,
+	.mpo_reserved24 = (mpo_reserved_hook_t *)common_hook,
+	.mpo_reserved25 = (mpo_reserved_hook_t *)common_hook,
+	.mpo_reserved26 = (mpo_reserved_hook_t *)common_hook,
+	.mpo_reserved27 = (mpo_reserved_hook_t *)common_hook,
+	.mpo_reserved28 = (mpo_reserved_hook_t *)common_hook,
+	.mpo_reserved29 = (mpo_reserved_hook_t *)common_hook,
+	.mpo_reserved30 = (mpo_reserved_hook_t *)common_hook,
 
 	CHECK_SET_HOOK(iokit_check_hid_control)
 
@@ -510,8 +510,8 @@ static struct mac_policy_ops policy_ops = {
 
 	CHECK_SET_HOOK(vnode_notify_link)
 
-	.mpo_reserved28 = (mpo_reserved_hook_t *)common_hook,
-	.mpo_reserved29 = (mpo_reserved_hook_t *)common_hook,
+	CHECK_SET_HOOK(iokit_check_filter_properties)
+	CHECK_SET_HOOK(iokit_check_get_property)
 };
 
 /*

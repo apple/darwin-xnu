@@ -1,2692 +1,441 @@
+/*
+ * Copyright (c) 2012-2014 Apple Inc. All rights reserved.
+ *
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
+ * 
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
+ * 
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
+ * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
+ * 
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
+ */
+
 #include <kern/debug.h>
 
 #if !NETWORKING
 
-int bpf_attach(void);
-int bpf_attach(void) 
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int bpf_tap_in(void);
-int bpf_tap_in(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int bpf_tap_out(void);
-int bpf_tap_out(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int bpfattach(void);
-int bpfattach(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int ctl_deregister(void);
-int ctl_deregister(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int ctl_enqueuedata(void);
-int ctl_enqueuedata(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int ctl_enqueuembuf(void);
-int ctl_enqueuembuf(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int ctl_getenqueuespace(void);
-int ctl_getenqueuespace(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int ctl_register(void);
-int ctl_register(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int ether_add_proto(void);
-int ether_add_proto(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int ether_check_multi(void);
-int ether_check_multi(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int ether_del_proto(void);
-int ether_del_proto(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int ether_demux(void);
-int ether_demux(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int ether_frameout(void);
-int ether_frameout(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int ether_ioctl(void);
-int ether_ioctl(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int fifo_advlock(void);
-int fifo_advlock(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int fifo_close(void);
-int fifo_close(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int fifo_inactive(void);
-int fifo_inactive(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int fifo_ioctl(void);
-int fifo_ioctl(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int fifo_lookup(void);
-int fifo_lookup(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int fifo_open(void);
-int fifo_open(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int fifo_pathconf(void);
-int fifo_pathconf(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int fifo_read(void);
-int fifo_read(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int fifo_select(void);
-int fifo_select(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int fifo_write(void);
-int fifo_write(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int ifaddr_address(void);
-int ifaddr_address(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int ifaddr_address_family(void);
-int ifaddr_address_family(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int ifaddr_dstaddress(void);
-int ifaddr_dstaddress(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int ifaddr_findbestforaddr(void);
-int ifaddr_findbestforaddr(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int ifaddr_ifnet(void);
-int ifaddr_ifnet(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int ifaddr_netmask(void);
-int ifaddr_netmask(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int ifaddr_reference(void);
-int ifaddr_reference(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int ifaddr_release(void);
-int ifaddr_release(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int ifaddr_withaddr(void);
-int ifaddr_withaddr(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int ifaddr_withdstaddr(void);
-int ifaddr_withdstaddr(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int ifaddr_withnet(void);
-int ifaddr_withnet(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int ifaddr_withroute(void);
-int ifaddr_withroute(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int iflt_attach(void);
-int iflt_attach(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int iflt_detach(void);
-int iflt_detach(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int ifmaddr_address(void);
-int ifmaddr_address(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int ifmaddr_ifnet(void);
-int ifmaddr_ifnet(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int ifmaddr_lladdress(void);
-int ifmaddr_lladdress(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int ifmaddr_reference(void);
-int ifmaddr_reference(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int ifmaddr_release(void);
-int ifmaddr_release(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int ifnet_add_multicast(void);
-int ifnet_add_multicast(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int ifnet_addrlen(void);
-int ifnet_addrlen(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int ifnet_allocate(void);
-int ifnet_allocate(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int ifnet_attach(void);
-int ifnet_attach(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int ifnet_attach_protocol(void);
-int ifnet_attach_protocol(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int ifnet_baudrate(void);
-int ifnet_baudrate(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int ifnet_capabilities_enabled(void);
-int ifnet_capabilities_enabled(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int ifnet_capabilities_supported(void);
-int ifnet_capabilities_supported(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int ifnet_detach(void);
-int ifnet_detach(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int ifnet_detach_protocol(void);
-int ifnet_detach_protocol(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int ifnet_eflags(void);
-int ifnet_eflags(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int ifnet_event(void);
-int ifnet_event(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int ifnet_family(void);
-int ifnet_family(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int ifnet_subfamily(void);
-int ifnet_subfamily(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int ifnet_find_by_name(void);
-int ifnet_find_by_name(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int ifnet_flags(void);
-int ifnet_flags(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int ifnet_free_address_list(void);
-int ifnet_free_address_list(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int ifnet_free_multicast_list(void);
-int ifnet_free_multicast_list(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int ifnet_get_address_list(void);
-int ifnet_get_address_list(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int ifnet_get_address_list_family(void);
-int ifnet_get_address_list_family(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int ifnet_get_link_mib_data(void);
-int ifnet_get_link_mib_data(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int ifnet_get_link_mib_data_length(void);
-int ifnet_get_link_mib_data_length(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int ifnet_get_multicast_list(void);
-int ifnet_get_multicast_list(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int ifnet_get_service_class_sndq_len(void);
-int ifnet_get_service_class_sndq_len(void)
+#define STUB(name)							\
+	int name(void);							\
+	int name(void) 							\
+	{								\
+		panic("stub called in a config with no networking");	\
+		return 0; 						\
+	}
+
+STUB(bpf_attach);
+STUB(bpf_tap_in);
+STUB(bpf_tap_out);
+STUB(bpfattach);
+STUB(ctl_deregister);
+STUB(ctl_enqueuedata);
+STUB(ctl_enqueuembuf);
+STUB(ctl_enqueuembuf_list);
+STUB(ctl_getenqueuespace);
+STUB(ctl_register);
+STUB(ether_add_proto);
+STUB(ether_check_multi);
+STUB(ether_del_proto);
+STUB(ether_demux);
+STUB(ether_frameout);
+STUB(ether_ioctl);
+STUB(fifo_advlock);
+STUB(fifo_close);
+STUB(fifo_inactive);
+STUB(fifo_ioctl);
+STUB(fifo_lookup);
+STUB(fifo_open);
+STUB(fifo_pathconf);
+STUB(fifo_read);
+STUB(fifo_select);
+STUB(fifo_write);
+STUB(ifaddr_address);
+STUB(ifaddr_address_family);
+STUB(ifaddr_dstaddress);
+STUB(ifaddr_findbestforaddr);
+STUB(ifaddr_ifnet);
+STUB(ifaddr_netmask);
+STUB(ifaddr_reference);
+STUB(ifaddr_release);
+STUB(ifaddr_withaddr);
+STUB(ifaddr_withdstaddr);
+STUB(ifaddr_withnet);
+STUB(ifaddr_withroute);
+STUB(iflt_attach);
+STUB(iflt_detach);
+STUB(ifmaddr_address);
+STUB(ifmaddr_ifnet);
+STUB(ifmaddr_lladdress);
+STUB(ifmaddr_reference);
+STUB(ifmaddr_release);
+STUB(ifnet_add_multicast);
+STUB(ifnet_addrlen);
+STUB(ifnet_allocate);
+STUB(ifnet_attach);
+STUB(ifnet_attach_protocol);
+STUB(ifnet_baudrate);
+STUB(ifnet_capabilities_enabled);
+STUB(ifnet_capabilities_supported);
+STUB(ifnet_detach);
+STUB(ifnet_detach_protocol);
+STUB(ifnet_eflags);
+STUB(ifnet_event);
+STUB(ifnet_family);
+STUB(ifnet_subfamily);
+STUB(ifnet_find_by_name);
+STUB(ifnet_flags);
+STUB(ifnet_free_address_list);
+STUB(ifnet_free_multicast_list);
+STUB(ifnet_get_address_list);
+STUB(ifnet_get_address_list_family);
+STUB(ifnet_get_link_mib_data);
+STUB(ifnet_get_link_mib_data_length);
+STUB(ifnet_get_multicast_list);
+STUB(ifnet_get_service_class_sndq_len);
+STUB(ifnet_get_tso_mtu);
+STUB(ifnet_get_wake_flags);
+STUB(ifnet_hdrlen);
+STUB(ifnet_index);
+STUB(ifnet_input);
+STUB(ifnet_interface_family_find);
+STUB(ifnet_ioctl);
+STUB(ifnet_lastchange);
+STUB(ifnet_list_free);
+STUB(ifnet_list_get);
+STUB(ifnet_lladdr);
+STUB(ifnet_lladdr_copy_bytes);
+STUB(ifnet_llbroadcast_copy_bytes);
+STUB(ifnet_metric);
+STUB(ifnet_mtu);
+STUB(ifnet_name);
+STUB(ifnet_offload);
+STUB(ifnet_output);
+STUB(ifnet_output_raw);
+STUB(ifnet_reference);
+STUB(ifnet_release);
+STUB(ifnet_remove_multicast);
+STUB(ifnet_resolve_multicast);
+STUB(ifnet_set_addrlen);
+STUB(ifnet_set_baudrate);
+STUB(ifnet_set_capabilities_enabled);
+STUB(ifnet_set_capabilities_supported);
+STUB(ifnet_set_delegate);
+STUB(ifnet_set_eflags);
+STUB(ifnet_set_flags);
+STUB(ifnet_set_hdrlen);
+STUB(ifnet_set_link_mib_data);
+STUB(ifnet_set_lladdr);
+STUB(ifnet_set_metric);
+STUB(ifnet_set_mtu);
+STUB(ifnet_set_offload);
+STUB(ifnet_set_promiscuous);
+STUB(ifnet_set_stat);
+STUB(ifnet_set_tso_mtu);
+STUB(ifnet_set_wake_flags);
+STUB(ifnet_softc);
+STUB(ifnet_stat);
+STUB(ifnet_stat_increment);
+STUB(ifnet_stat_increment_in);
+STUB(ifnet_stat_increment_out);
+STUB(ifnet_touch_lastchange);
+STUB(ifnet_type);
+STUB(ifnet_unit);
+STUB(in_cksum);
+STUB(inet_arp_handle_input);
+STUB(inet_arp_init_ifaddr);
+STUB(inet_arp_lookup);
+STUB(ipf_addv4);
+STUB(ipf_addv6);
+STUB(ipf_inject_input);
+STUB(ipf_inject_output);
+STUB(ipf_remove);
+STUB(kev_msg_post);
+STUB(kev_vendor_code_find);
+STUB(mbuf_adj);
+STUB(mbuf_adjustlen);
+STUB(mbuf_align_32);
+STUB(mbuf_alloccluster);
+STUB(mbuf_allocpacket);
+STUB(mbuf_allocpacket_list);
+STUB(mbuf_attachcluster);
+STUB(mbuf_clear_csum_performed);
+STUB(mbuf_clear_csum_requested);
+STUB(mbuf_clear_vlan_tag);
+STUB(mbuf_concatenate);
+STUB(mbuf_copy_pkthdr);
+STUB(mbuf_copyback);
+STUB(mbuf_copydata);
+STUB(mbuf_copym);
+STUB(mbuf_data);
+STUB(mbuf_data_to_physical);
+STUB(mbuf_datastart);
+STUB(mbuf_dup);
+STUB(mbuf_flags);
+STUB(mbuf_free);
+STUB(mbuf_freecluster);
+STUB(mbuf_freem);
+STUB(mbuf_freem_list);
+STUB(mbuf_get);
+STUB(mbuf_get_csum_performed);
+STUB(mbuf_get_csum_requested);
+STUB(mbuf_get_mhlen);
+STUB(mbuf_get_minclsize);
+STUB(mbuf_get_mlen);
+STUB(mbuf_get_traffic_class);
+STUB(mbuf_get_tso_requested);
+STUB(mbuf_get_vlan_tag);
+STUB(mbuf_getcluster);
+STUB(mbuf_gethdr);
+STUB(mbuf_getpacket);
+STUB(mbuf_inbound_modified);
+STUB(mbuf_inet_cksum);
+STUB(mbuf_is_traffic_class_privileged);
+STUB(mbuf_leadingspace);
+STUB(mbuf_len);
+STUB(mbuf_maxlen);
+STUB(mbuf_mclget);
+STUB(mbuf_mclhasreference);
+STUB(mbuf_next);
+STUB(mbuf_nextpkt);
+STUB(mbuf_outbound_finalize);
+STUB(mbuf_pkthdr_adjustlen);
+STUB(mbuf_pkthdr_header);
+STUB(mbuf_pkthdr_len);
+STUB(mbuf_pkthdr_rcvif);
+STUB(mbuf_pkthdr_setheader);
+STUB(mbuf_pkthdr_setlen);
+STUB(mbuf_pkthdr_setrcvif);
+STUB(mbuf_prepend);
+STUB(mbuf_pulldown);
+STUB(mbuf_pullup);
+STUB(mbuf_set_csum_performed);
+STUB(mbuf_set_csum_requested);
+STUB(mbuf_set_traffic_class);
+STUB(mbuf_set_vlan_tag);
+STUB(mbuf_setdata);
+STUB(mbuf_setflags);
+STUB(mbuf_setflags_mask);
+STUB(mbuf_setlen);
+STUB(mbuf_setnext);
+STUB(mbuf_setnextpkt);
+STUB(mbuf_settype);
+STUB(mbuf_split);
+STUB(mbuf_stats);
+STUB(mbuf_tag_allocate);
+STUB(mbuf_tag_find);
+STUB(mbuf_tag_free);
+STUB(mbuf_tag_id_find);
+STUB(mbuf_add_drvaux);
+STUB(mbuf_find_drvaux);
+STUB(mbuf_del_drvaux);
+STUB(mbuf_trailingspace);
+STUB(mbuf_type);
+STUB(net_init_add);
+STUB(proto_inject);
+STUB(proto_input);
+STUB(proto_register_plumber);
+STUB(proto_unregister_plumber);
+STUB(sflt_attach);
+STUB(sflt_detach);
+STUB(sflt_register);
+STUB(sflt_unregister);
+STUB(sock_accept);
+STUB(sock_bind);
+STUB(sock_close);
+STUB(sock_connect);
+STUB(sock_connectwait);
+STUB(sock_getpeername);
+STUB(sock_getsockname);
+STUB(sock_getsockopt);
+STUB(sock_gettype);
+STUB(sock_inject_data_in);
+STUB(sock_inject_data_out);
+STUB(sock_ioctl);
+STUB(sock_isconnected);
+STUB(sock_isnonblocking);
+STUB(sock_listen);
+STUB(sock_nointerrupt);
+STUB(sock_receive);
+STUB(sock_receivembuf);
+STUB(sock_send);
+STUB(sock_sendmbuf);
+STUB(sock_setpriv);
+STUB(sock_setsockopt);
+STUB(sock_shutdown);
+STUB(sock_socket);
+STUB(sockopt_copyin);
+STUB(sockopt_copyout);
+STUB(sockopt_direction);
+STUB(sockopt_level);
+STUB(sockopt_name);
+STUB(sockopt_valsize);
+STUB(kev_post_msg);
+STUB(ctl_id_by_name);
+STUB(ctl_name_by_id);
+STUB(ifnet_allocate_extended);
+STUB(ifnet_bandwidths);
+STUB(ifnet_clone_attach);
+STUB(ifnet_clone_detach);
+STUB(ifnet_dequeue);
+STUB(ifnet_dequeue_multi);
+STUB(ifnet_dequeue_service_class);
+STUB(ifnet_dequeue_service_class_multi);
+STUB(ifnet_enqueue);
+STUB(ifnet_get_delegate);
+STUB(ifnet_get_inuse_address_list);
+STUB(ifnet_get_local_ports);
+STUB(ifnet_get_local_ports_extended);
+STUB(ifnet_get_rcvq_maxlen);
+STUB(ifnet_get_sndq_len);
+STUB(ifnet_get_sndq_maxlen);
+STUB(ifnet_idle_flags);
+STUB(ifnet_inet6_defrouter_llreachinfo);
+STUB(ifnet_inet_defrouter_llreachinfo);
+STUB(ifnet_input_extended);
+STUB(ifnet_latencies);
+STUB(ifnet_link_quality);
+STUB(ifnet_notice_master_elected);
+STUB(ifnet_notice_node_absence);
+STUB(ifnet_notice_node_presence);
+STUB(ifnet_poll_params);
+STUB(ifnet_purge);
+STUB(ifnet_report_issues);
+STUB(ifnet_set_bandwidths);
+STUB(ifnet_set_idle_flags);
+STUB(ifnet_set_latencies);
+STUB(ifnet_set_link_quality);
+STUB(ifnet_set_output_sched_model);
+STUB(ifnet_set_poll_params);
+STUB(ifnet_set_rcvq_maxlen);
+STUB(ifnet_set_sndq_maxlen);
+STUB(ifnet_start);
+STUB(ifnet_transmit_burst_end);
+STUB(ifnet_transmit_burst_start);
+STUB(ifnet_tx_compl_status);
+STUB(ifnet_flowid);
+STUB(ifnet_enable_output);
+STUB(ifnet_disable_output);
+STUB(ifnet_get_ipsec_offload_frames);
+STUB(in6_localaddr);
+STUB(in_localaddr);
+STUB(in6addr_local);
+STUB(inaddr_local);
+STUB(inp_clear_INP_INADDR_ANY);
+STUB(ip_gre_output);
+STUB(m_cat);
+STUB(m_free);
+STUB(m_freem);
+STUB(m_get);
+STUB(m_gethdr);
+STUB(m_mtod);
+STUB(m_prepend_2);
+STUB(m_pullup);
+STUB(m_split);
+STUB(m_trailingspace);
+STUB(mbuf_get_driver_scratch);
+STUB(mbuf_get_priority);
+STUB(mbuf_get_service_class);
+STUB(mbuf_get_service_class_index);
+STUB(mbuf_get_service_class_max_count);
+STUB(mbuf_get_traffic_class_index);
+STUB(mbuf_get_traffic_class_max_count);
+STUB(mbuf_is_service_class_privileged);
+STUB(mbuf_pkthdr_aux_flags);
+STUB(mcl_to_paddr);
+STUB(net_add_domain);
+STUB(net_add_domain_old);
+STUB(net_add_proto);
+STUB(net_add_proto_old);
+STUB(net_del_domain);
+STUB(net_del_domain_old);
+STUB(net_del_proto);
+STUB(net_del_proto_old);
+STUB(pffinddomain);
+STUB(pffinddomain_old);
+STUB(pffindproto);
+STUB(pffindproto_old);
+STUB(pru_abort_notsupp);
+STUB(pru_accept_notsupp);
+STUB(pru_bind_notsupp);
+STUB(pru_connect2_notsupp);
+STUB(pru_connect_notsupp);
+STUB(pru_disconnect_notsupp);
+STUB(pru_listen_notsupp);
+STUB(pru_peeraddr_notsupp);
+STUB(pru_rcvd_notsupp);
+STUB(pru_rcvoob_notsupp);
+STUB(pru_send_notsupp);
+STUB(pru_send_list_notsupp);
+STUB(pru_sense_null);
+STUB(pru_shutdown_notsupp);
+STUB(pru_sockaddr_notsupp);
+STUB(pru_sopoll_notsupp);
+STUB(sbappendaddr);
+STUB(sbappendrecord);
+STUB(sbflush);
+STUB(sbspace);
+STUB(soabort);
+STUB(socantrcvmore);
+STUB(socantsendmore);
+STUB(sock_getlistener);
+STUB(sock_gettclassopt);
+STUB(sock_release);
+STUB(sock_retain);
+STUB(sock_settclassopt);
+STUB(sock_catchevents);
+STUB(sock_setupcall);
+STUB(sock_setupcalls);
+STUB(sodisconnect);
+STUB(sofree);
+STUB(sofreelastref);
+STUB(soisconnected);
+STUB(soisconnecting);
+STUB(soisdisconnected);
+STUB(soisdisconnecting);
+STUB(sonewconn);
+STUB(sooptcopyin);
+STUB(sooptcopyout);
+STUB(sopoll);
+STUB(soreceive);
+STUB(soreceive_list);
+STUB(soreserve);
+STUB(sorwakeup);
+STUB(sosend);
+STUB(sosend_list);
+STUB(utun_ctl_disable_crypto_dtls);
+STUB(utun_ctl_register_dtls);
+STUB(utun_pkt_dtls_input);
+STUB(dlil_resolve_multi);
+STUB(inet_cksum_simple);
+STUB(arp_ip_handle_input);
+STUB(arp_ifinit);
+STUB(arp_lookup_ip);
+STUB(ip_gre_register_input);
+STUB(sock_iskernel);
+#undef STUB
+
+/* 
+ * Called from vm_pageout.c. Nothing to be done when there's no networking.
+ */
+void m_drain(void);
+void m_drain(void)
 {
-        panic("stub called in a config with no networking");
-        return 0;
+	return; 
 }
 
-int ifnet_get_tso_mtu(void);
-int ifnet_get_tso_mtu(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int ifnet_get_wake_flags(void);
-int ifnet_get_wake_flags(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int ifnet_hdrlen(void);
-int ifnet_hdrlen(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int ifnet_index(void);
-int ifnet_index(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int ifnet_input(void);
-int ifnet_input(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int ifnet_interface_family_find(void);
-int ifnet_interface_family_find(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int ifnet_ioctl(void);
-int ifnet_ioctl(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int ifnet_lastchange(void);
-int ifnet_lastchange(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int ifnet_list_free(void);
-int ifnet_list_free(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int ifnet_list_get(void);
-int ifnet_list_get(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int ifnet_lladdr(void);
-int ifnet_lladdr(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int ifnet_lladdr_copy_bytes(void);
-int ifnet_lladdr_copy_bytes(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int ifnet_llbroadcast_copy_bytes(void);
-int ifnet_llbroadcast_copy_bytes(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int ifnet_metric(void);
-int ifnet_metric(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int ifnet_mtu(void);
-int ifnet_mtu(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int ifnet_name(void);
-int ifnet_name(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int ifnet_offload(void);
-int ifnet_offload(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int ifnet_output(void);
-int ifnet_output(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int ifnet_output_raw(void);
-int ifnet_output_raw(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int ifnet_reference(void);
-int ifnet_reference(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int ifnet_release(void);
-int ifnet_release(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int ifnet_remove_multicast(void);
-int ifnet_remove_multicast(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int ifnet_resolve_multicast(void);
-int ifnet_resolve_multicast(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int ifnet_set_addrlen(void);
-int ifnet_set_addrlen(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int ifnet_set_baudrate(void);
-int ifnet_set_baudrate(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int ifnet_set_capabilities_enabled(void);
-int ifnet_set_capabilities_enabled(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int ifnet_set_capabilities_supported(void);
-int ifnet_set_capabilities_supported(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int ifnet_set_delegate(void);
-int ifnet_set_delegate(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int ifnet_set_eflags(void);
-int ifnet_set_eflags(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int ifnet_set_flags(void);
-int ifnet_set_flags(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int ifnet_set_hdrlen(void);
-int ifnet_set_hdrlen(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int ifnet_set_link_mib_data(void);
-int ifnet_set_link_mib_data(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int ifnet_set_lladdr(void);
-int ifnet_set_lladdr(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int ifnet_set_metric(void);
-int ifnet_set_metric(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int ifnet_set_mtu(void);
-int ifnet_set_mtu(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int ifnet_set_offload(void);
-int ifnet_set_offload(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int ifnet_set_promiscuous(void);
-int ifnet_set_promiscuous(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int ifnet_set_stat(void);
-int ifnet_set_stat(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int ifnet_set_tso_mtu(void);
-int ifnet_set_tso_mtu(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int ifnet_set_wake_flags(void);
-int ifnet_set_wake_flags(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int ifnet_softc(void);
-int ifnet_softc(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int ifnet_stat(void);
-int ifnet_stat(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int ifnet_stat_increment(void);
-int ifnet_stat_increment(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int ifnet_stat_increment_in(void);
-int ifnet_stat_increment_in(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int ifnet_stat_increment_out(void);
-int ifnet_stat_increment_out(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int ifnet_touch_lastchange(void);
-int ifnet_touch_lastchange(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int ifnet_type(void);
-int ifnet_type(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int ifnet_unit(void);
-int ifnet_unit(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int in_cksum(void);
-int in_cksum(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int inet_arp_handle_input(void);
-int inet_arp_handle_input(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int inet_arp_init_ifaddr(void);
-int inet_arp_init_ifaddr(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int inet_arp_lookup(void);
-int inet_arp_lookup(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int ipf_addv4(void);
-int ipf_addv4(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int ipf_addv6(void);
-int ipf_addv6(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int ipf_inject_input(void);
-int ipf_inject_input(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int ipf_inject_output(void);
-int ipf_inject_output(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int ipf_remove(void);
-int ipf_remove(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int kev_msg_post(void);
-int kev_msg_post(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int kev_vendor_code_find(void);
-int kev_vendor_code_find(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int mbuf_adj(void);
-int mbuf_adj(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int mbuf_adjustlen(void);
-int mbuf_adjustlen(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int mbuf_align_32(void);
-int mbuf_align_32(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int mbuf_alloccluster(void);
-int mbuf_alloccluster(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int mbuf_allocpacket(void);
-int mbuf_allocpacket(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int mbuf_allocpacket_list(void);
-int mbuf_allocpacket_list(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int mbuf_attachcluster(void);
-int mbuf_attachcluster(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int mbuf_clear_csum_performed(void);
-int mbuf_clear_csum_performed(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int mbuf_clear_csum_requested(void);
-int mbuf_clear_csum_requested(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int mbuf_clear_vlan_tag(void);
-int mbuf_clear_vlan_tag(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int mbuf_concatenate(void);
-int mbuf_concatenate(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int mbuf_copy_pkthdr(void);
-int mbuf_copy_pkthdr(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int mbuf_copyback(void);
-int mbuf_copyback(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int mbuf_copydata(void);
-int mbuf_copydata(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int mbuf_copym(void);
-int mbuf_copym(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int mbuf_data(void);
-int mbuf_data(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int mbuf_data_to_physical(void);
-int mbuf_data_to_physical(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int mbuf_datastart(void);
-int mbuf_datastart(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int mbuf_dup(void);
-int mbuf_dup(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int mbuf_flags(void);
-int mbuf_flags(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int mbuf_free(void);
-int mbuf_free(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int mbuf_freecluster(void);
-int mbuf_freecluster(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int mbuf_freem(void);
-int mbuf_freem(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int mbuf_freem_list(void);
-int mbuf_freem_list(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int mbuf_get(void);
-int mbuf_get(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int mbuf_get_csum_performed(void);
-int mbuf_get_csum_performed(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int mbuf_get_csum_requested(void);
-int mbuf_get_csum_requested(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int mbuf_get_mhlen(void);
-int mbuf_get_mhlen(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int mbuf_get_minclsize(void);
-int mbuf_get_minclsize(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int mbuf_get_mlen(void);
-int mbuf_get_mlen(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int mbuf_get_traffic_class(void);
-int mbuf_get_traffic_class(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int mbuf_get_tso_requested(void);
-int mbuf_get_tso_requested(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int mbuf_get_vlan_tag(void);
-int mbuf_get_vlan_tag(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int mbuf_getcluster(void);
-int mbuf_getcluster(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int mbuf_gethdr(void);
-int mbuf_gethdr(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int mbuf_getpacket(void);
-int mbuf_getpacket(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int mbuf_inbound_modified(void);
-int mbuf_inbound_modified(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int mbuf_inet_cksum(void);
-int mbuf_inet_cksum(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int mbuf_is_traffic_class_privileged(void);
-int mbuf_is_traffic_class_privileged(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int mbuf_leadingspace(void);
-int mbuf_leadingspace(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int mbuf_len(void);
-int mbuf_len(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int mbuf_maxlen(void);
-int mbuf_maxlen(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int mbuf_mclget(void);
-int mbuf_mclget(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int mbuf_mclhasreference(void);
-int mbuf_mclhasreference(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int mbuf_next(void);
-int mbuf_next(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int mbuf_nextpkt(void);
-int mbuf_nextpkt(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int mbuf_outbound_finalize(void);
-int mbuf_outbound_finalize(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int mbuf_pkthdr_adjustlen(void);
-int mbuf_pkthdr_adjustlen(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int mbuf_pkthdr_header(void);
-int mbuf_pkthdr_header(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int mbuf_pkthdr_len(void);
-int mbuf_pkthdr_len(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int mbuf_pkthdr_rcvif(void);
-int mbuf_pkthdr_rcvif(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int mbuf_pkthdr_setheader(void);
-int mbuf_pkthdr_setheader(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int mbuf_pkthdr_setlen(void);
-int mbuf_pkthdr_setlen(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int mbuf_pkthdr_setrcvif(void);
-int mbuf_pkthdr_setrcvif(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int mbuf_prepend(void);
-int mbuf_prepend(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int mbuf_pulldown(void);
-int mbuf_pulldown(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int mbuf_pullup(void);
-int mbuf_pullup(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int mbuf_set_csum_performed(void);
-int mbuf_set_csum_performed(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int mbuf_set_csum_requested(void);
-int mbuf_set_csum_requested(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int mbuf_set_traffic_class(void);
-int mbuf_set_traffic_class(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int mbuf_set_vlan_tag(void);
-int mbuf_set_vlan_tag(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int mbuf_setdata(void);
-int mbuf_setdata(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int mbuf_setflags(void);
-int mbuf_setflags(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int mbuf_setflags_mask(void);
-int mbuf_setflags_mask(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int mbuf_setlen(void);
-int mbuf_setlen(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int mbuf_setnext(void);
-int mbuf_setnext(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int mbuf_setnextpkt(void);
-int mbuf_setnextpkt(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int mbuf_settype(void);
-int mbuf_settype(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int mbuf_split(void);
-int mbuf_split(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int mbuf_stats(void);
-int mbuf_stats(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int mbuf_tag_allocate(void);
-int mbuf_tag_allocate(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int mbuf_tag_find(void);
-int mbuf_tag_find(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int mbuf_tag_free(void);
-int mbuf_tag_free(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int mbuf_tag_id_find(void);
-int mbuf_tag_id_find(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int mbuf_add_drvaux(void);
-int mbuf_add_drvaux(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int mbuf_find_drvaux(void);
-int mbuf_find_drvaux(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int mbuf_del_drvaux(void);
-int mbuf_del_drvaux(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int mbuf_trailingspace(void);
-int mbuf_trailingspace(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int mbuf_type(void);
-int mbuf_type(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int net_init_add(void);
-int net_init_add(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int proto_inject(void);
-int proto_inject(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int proto_input(void);
-int proto_input(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int proto_register_plumber(void);
-int proto_register_plumber(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int proto_unregister_plumber(void);
-int proto_unregister_plumber(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int sflt_attach(void);
-int sflt_attach(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int sflt_detach(void);
-int sflt_detach(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int sflt_register(void);
-int sflt_register(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int sflt_unregister(void);
-int sflt_unregister(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int sock_accept(void);
-int sock_accept(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int sock_bind(void);
-int sock_bind(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int sock_close(void);
-int sock_close(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int sock_connect(void);
-int sock_connect(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int sock_connectwait(void);
-int sock_connectwait(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int sock_getpeername(void);
-int sock_getpeername(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int sock_getsockname(void);
-int sock_getsockname(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int sock_getsockopt(void);
-int sock_getsockopt(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int sock_gettype(void);
-int sock_gettype(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int sock_inject_data_in(void);
-int sock_inject_data_in(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int sock_inject_data_out(void);
-int sock_inject_data_out(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int sock_ioctl(void);
-int sock_ioctl(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int sock_isconnected(void);
-int sock_isconnected(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int sock_isnonblocking(void);
-int sock_isnonblocking(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int sock_listen(void);
-int sock_listen(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int sock_nointerrupt(void);
-int sock_nointerrupt(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int sock_receive(void);
-int sock_receive(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int sock_receivembuf(void);
-int sock_receivembuf(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int sock_send(void);
-int sock_send(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int sock_sendmbuf(void);
-int sock_sendmbuf(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int sock_setpriv(void);
-int sock_setpriv(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int sock_setsockopt(void);
-int sock_setsockopt(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int sock_shutdown(void);
-int sock_shutdown(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int sock_socket(void);
-int sock_socket(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int sockopt_copyin(void);
-int sockopt_copyin(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int sockopt_copyout(void);
-int sockopt_copyout(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int sockopt_direction(void);
-int sockopt_direction(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int sockopt_level(void);
-int sockopt_level(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int sockopt_name(void);
-int sockopt_name(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int sockopt_valsize(void);
-int sockopt_valsize(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int kev_post_msg(void);
-int kev_post_msg(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int ctl_id_by_name(void);
-int ctl_id_by_name(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int ctl_name_by_id(void);
-int ctl_name_by_id(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int ifnet_allocate_extended(void);
-int ifnet_allocate_extended(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int ifnet_bandwidths(void);
-int ifnet_bandwidths(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int ifnet_clone_attach(void);
-int ifnet_clone_attach(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int ifnet_clone_detach(void);
-int ifnet_clone_detach(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int ifnet_dequeue(void);
-int ifnet_dequeue(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int ifnet_dequeue_multi(void);
-int ifnet_dequeue_multi(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int ifnet_dequeue_service_class(void);
-int ifnet_dequeue_service_class(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int ifnet_dequeue_service_class_multi(void);
-int ifnet_dequeue_service_class_multi(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int ifnet_enqueue(void);
-int ifnet_enqueue(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int ifnet_get_delegate(void);
-int ifnet_get_delegate(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int ifnet_get_inuse_address_list(void);
-int ifnet_get_inuse_address_list(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int ifnet_get_local_ports(void);
-int ifnet_get_local_ports(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int ifnet_get_local_ports_extended(void);
-int ifnet_get_local_ports_extended(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int ifnet_get_rcvq_maxlen(void);
-int ifnet_get_rcvq_maxlen(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int ifnet_get_sndq_len(void);
-int ifnet_get_sndq_len(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int ifnet_get_sndq_maxlen(void);
-int ifnet_get_sndq_maxlen(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int ifnet_idle_flags(void);
-int ifnet_idle_flags(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int ifnet_inet6_defrouter_llreachinfo(void);
-int ifnet_inet6_defrouter_llreachinfo(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int ifnet_inet_defrouter_llreachinfo(void);
-int ifnet_inet_defrouter_llreachinfo(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int ifnet_input_extended(void);
-int ifnet_input_extended(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int ifnet_latencies(void);
-int ifnet_latencies(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int ifnet_link_quality(void);
-int ifnet_link_quality(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int ifnet_notice_master_elected(void);
-int ifnet_notice_master_elected(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int ifnet_notice_node_absence(void);
-int ifnet_notice_node_absence(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int ifnet_notice_node_presence(void);
-int ifnet_notice_node_presence(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int ifnet_poll_params(void);
-int ifnet_poll_params(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int ifnet_purge(void);
-int ifnet_purge(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int ifnet_report_issues(void);
-int ifnet_report_issues(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int ifnet_set_bandwidths(void);
-int ifnet_set_bandwidths(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int ifnet_set_idle_flags(void);
-int ifnet_set_idle_flags(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int ifnet_set_latencies(void);
-int ifnet_set_latencies(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int ifnet_set_link_quality(void);
-int ifnet_set_link_quality(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int ifnet_set_output_sched_model(void);
-int ifnet_set_output_sched_model(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int ifnet_set_poll_params(void);
-int ifnet_set_poll_params(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int ifnet_set_rcvq_maxlen(void);
-int ifnet_set_rcvq_maxlen(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int ifnet_set_sndq_maxlen(void);
-int ifnet_set_sndq_maxlen(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int ifnet_start(void);
-int ifnet_start(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int ifnet_transmit_burst_end(void);
-int ifnet_transmit_burst_end(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int ifnet_transmit_burst_start(void);
-int ifnet_transmit_burst_start(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int ifnet_tx_compl_status(void);
-int ifnet_tx_compl_status(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int ifnet_flowid(void);
-int ifnet_flowid(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int ifnet_enable_output(void);
-int ifnet_enable_output(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int ifnet_disable_output(void);
-int ifnet_disable_output(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int in6_localaddr(void);
-int in6_localaddr(void)
-{
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int in_localaddr(void);
-int in_localaddr(void)
-{
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int in6addr_local(void);
-int in6addr_local(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int inaddr_local(void);
-int inaddr_local(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int inp_clear_INP_INADDR_ANY(void);
-int inp_clear_INP_INADDR_ANY(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int ip_gre_output(void);
-int ip_gre_output(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int m_cat(void);
-int m_cat(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int m_free(void);
-int m_free(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int m_freem(void);
-int m_freem(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int m_get(void);
-int m_get(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int m_gethdr(void);
-int m_gethdr(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int m_mtod(void);
-int m_mtod(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int m_prepend_2(void);
-int m_prepend_2(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int m_pullup(void);
-int m_pullup(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int m_split(void);
-int m_split(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int m_trailingspace(void);
-int m_trailingspace(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int mbuf_get_driver_scratch(void);
-int mbuf_get_driver_scratch(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int mbuf_get_priority(void);
-int mbuf_get_priority(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int mbuf_get_service_class(void);
-int mbuf_get_service_class(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int mbuf_get_service_class_index(void);
-int mbuf_get_service_class_index(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int mbuf_get_service_class_max_count(void);
-int mbuf_get_service_class_max_count(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int mbuf_get_traffic_class_index(void);
-int mbuf_get_traffic_class_index(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int mbuf_get_traffic_class_max_count(void);
-int mbuf_get_traffic_class_max_count(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int mbuf_is_service_class_privileged(void);
-int mbuf_is_service_class_privileged(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int mbuf_pkthdr_aux_flags(void);
-int mbuf_pkthdr_aux_flags(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int mcl_to_paddr(void);
-int mcl_to_paddr(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int net_add_domain(void);
-int net_add_domain(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int net_add_domain_old(void);
-int net_add_domain_old(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int net_add_proto(void);
-int net_add_proto(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int net_add_proto_old(void);
-int net_add_proto_old(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int net_del_domain(void);
-int net_del_domain(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int net_del_domain_old(void);
-int net_del_domain_old(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int net_del_proto(void);
-int net_del_proto(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int net_del_proto_old(void);
-int net_del_proto_old(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int pffinddomain(void);
-int pffinddomain(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int pffinddomain_old(void);
-int pffinddomain_old(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int pffindproto(void);
-int pffindproto(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int pffindproto_old(void);
-int pffindproto_old(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int pru_abort_notsupp(void);
-int pru_abort_notsupp(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int pru_accept_notsupp(void);
-int pru_accept_notsupp(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int pru_bind_notsupp(void);
-int pru_bind_notsupp(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int pru_connect2_notsupp(void);
-int pru_connect2_notsupp(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int pru_connect_notsupp(void);
-int pru_connect_notsupp(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int pru_disconnect_notsupp(void);
-int pru_disconnect_notsupp(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int pru_listen_notsupp(void);
-int pru_listen_notsupp(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int pru_peeraddr_notsupp(void);
-int pru_peeraddr_notsupp(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int pru_rcvd_notsupp(void);
-int pru_rcvd_notsupp(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int pru_rcvoob_notsupp(void);
-int pru_rcvoob_notsupp(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int pru_send_notsupp(void);
-int pru_send_notsupp(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int pru_sense_null(void);
-int pru_sense_null(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int pru_shutdown_notsupp(void);
-int pru_shutdown_notsupp(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int pru_sockaddr_notsupp(void);
-int pru_sockaddr_notsupp(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int pru_sopoll_notsupp(void);
-int pru_sopoll_notsupp(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int sbappendaddr(void);
-int sbappendaddr(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int sbappendrecord(void);
-int sbappendrecord(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int sbflush(void);
-int sbflush(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int sbspace(void);
-int sbspace(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int soabort(void);
-int soabort(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int socantrcvmore(void);
-int socantrcvmore(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int socantsendmore(void);
-int socantsendmore(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int sock_getlistener(void);
-int sock_getlistener(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int sock_gettclassopt(void);
-int sock_gettclassopt(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int sock_release(void);
-int sock_release(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int sock_retain(void);
-int sock_retain(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int sock_settclassopt(void);
-int sock_settclassopt(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int sock_catchevents(void);
-int sock_catchevents(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int sock_setupcall(void);
-int sock_setupcall(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int sock_setupcalls(void);
-int sock_setupcalls(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int sodisconnect(void);
-int sodisconnect(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int sofree(void);
-int sofree(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int sofreelastref(void);
-int sofreelastref(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int soisconnected(void);
-int soisconnected(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int soisconnecting(void);
-int soisconnecting(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int soisdisconnected(void);
-int soisdisconnected(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int soisdisconnecting(void);
-int soisdisconnecting(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int sonewconn(void);
-int sonewconn(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int sooptcopyin(void);
-int sooptcopyin(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int sooptcopyout(void);
-int sooptcopyout(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int sopoll(void);
-int sopoll(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int soreceive(void);
-int soreceive(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int soreserve(void);
-int soreserve(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int sorwakeup(void);
-int sorwakeup(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int sosend(void);
-int sosend(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-
-
-int utun_ctl_disable_crypto_dtls(void);
-int utun_ctl_disable_crypto_dtls(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int utun_ctl_register_dtls(void);
-int utun_ctl_register_dtls(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int utun_pkt_dtls_input(void);
-int utun_pkt_dtls_input(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-
-int dlil_resolve_multi(void);
-int dlil_resolve_multi(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-
-int inet_cksum_simple(void);
-int inet_cksum_simple(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-
-int arp_ip_handle_input(void);
-int arp_ip_handle_input(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int arp_ifinit(void);
-int arp_ifinit(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int arp_lookup_ip(void);
-int arp_lookup_ip(void)  
-{ 
-	panic("stub called in a config with no networking");
-	return 0; 
-}
-
-int ip_gre_register_input(void);
-int ip_gre_register_input(void)
-{
-	panic("stub called in a config with no networking");
-	return 0; 
-
-}
-
-#endif
+#endif /* !NETWORKING */

@@ -1196,7 +1196,7 @@ wait_queue_assert_wait64_locked(
 		wait_queue_set_t wqs = (wait_queue_set_t)wq;
 
 		if (event == NO_EVENT64 && wqs_is_preposted(wqs))
-			return(THREAD_AWAKENED);
+			return (thread->wait_result = THREAD_AWAKENED);
 	}
 
 	/*
@@ -1808,6 +1808,7 @@ _wait_queue_select64_thread(
 	queue_t q = &wq->wq_queue;
 
 	thread_lock(thread);
+
 	if ((thread->wait_queue == wq) && (thread->wait_event == event)) {
 		remqueue((queue_entry_t) thread);
 		thread->at_safe_point = FALSE;
@@ -1816,6 +1817,7 @@ _wait_queue_select64_thread(
 		/* thread still locked */
 		return KERN_SUCCESS;
 	}
+
 	thread_unlock(thread);
 	
 	/*
@@ -2133,7 +2135,6 @@ wait_queue_wakeup_thread(
  *		interrupt and waited on something else (like another
  *		semaphore).
  *	Conditions:
- *		nothing of interest locked
  *		we need to assume spl needs to be raised
  *	Returns:
  *		KERN_SUCCESS - the thread was found waiting and awakened
@@ -2161,6 +2162,7 @@ wait_queue_wakeup64_thread(
 	if (res == KERN_SUCCESS) {
 		res = thread_go(thread, result);
 		assert(res == KERN_SUCCESS);
+
 		thread_unlock(thread);
 		splx(s);
 		return res;

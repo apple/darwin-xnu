@@ -1,7 +1,5 @@
 #include <AvailabilityMacros.h>
-#ifdef AVAILABLE_MAC_OS_X_VERSION_10_5_AND_LATER
-#include </System/Library/Frameworks/System.framework/PrivateHeaders/mach/thread_policy.h>
-#endif
+#include <mach/thread_policy.h>
 #include <mach/mach.h>
 #include <mach/mach_traps.h>
 #include <mach/mach_error.h>

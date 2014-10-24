@@ -663,7 +663,7 @@ again:
 	hfs_lock_mount (hfsmp);
 	if (hfsmp->hfs_flags & HFS_CREATING_BTREE) {
 			/* Someone else beat us, wait for them to finish. */
-			(void) msleep(hfsmp->hfs_attribute_cp, &hfsmp->hfs_mutex,
+			(void) msleep(&hfsmp->hfs_attribute_cp, &hfsmp->hfs_mutex,
 			              PDROP | PINOD, "hfs_create_attr_btree", 0);
 			if (hfsmp->hfs_attribute_vp) {
 				return (0);
@@ -924,7 +924,7 @@ exit:
 	 */
 	hfs_lock_mount (hfsmp);
 	hfsmp->hfs_flags &= ~HFS_CREATING_BTREE;
-	wakeup((caddr_t)hfsmp->hfs_attribute_cp);
+	wakeup((caddr_t)&hfsmp->hfs_attribute_cp);
 	hfs_unlock_mount (hfsmp);
 
 	return (result);

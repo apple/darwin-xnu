@@ -155,11 +155,15 @@
 #include <sys/tty.h>			/* for tty_init() */
 #include <sys/proc_uuid_policy.h>	/* proc_uuid_policy_init() */
 #include <netinet/flow_divert.h>	/* flow_divert_init() */
+#include <net/content_filter.h>		/* for cfil_init() */
+#include <net/necp.h>			/* for necp_init() */
+#include <net/packet_mangler.h>		/* for pkt_mnglr_init() */
 #include <net/if_utun.h>		/* for utun_register_control() */
 #include <net/if_ipsec.h>       /* for ipsec_register_control() */
 #include <net/net_str_id.h>		/* for net_str_id_init() */
 #include <net/netsrc.h>			/* for netsrc_init() */
 #include <net/ntstat.h>			/* for nstat_init() */
+#include <netinet/tcp_cc.h>			/* for tcp_cc_init() */
 #include <kern/assert.h>		/* for assert() */
 #include <sys/kern_overrides.h>		/* for init_system_override() */
 
@@ -248,6 +252,8 @@ extern void file_lock_init(void);
 extern void kmeminit(void);
 extern void bsd_bufferinit(void);
 extern void throttle_init(void);
+extern void macx_init(void);
+extern void acct_init(void);
 
 extern int serverperfmode;
 extern int ncl;
@@ -282,13 +288,14 @@ void bsd_utaskbootstrap(void);
 static void parse_bsd_args(void);
 extern task_t bsd_init_task;
 extern char    init_task_failure_data[];
+#if CONFIG_DEV_KMEM
+extern void dev_kmem_init(void);
+#endif
 extern void time_zone_slock_init(void);
 extern void select_wait_queue_init(void);
 static void process_name(const char *, proc_t);
 
 static void setconf(void);
-
-funnel_t *kernel_flock;
 
 #if SYSV_SHM
 extern void sysv_shm_lock_init(void);
@@ -298,12 +305,6 @@ extern void sysv_sem_lock_init(void);
 #endif
 #if SYSV_MSG
 extern void sysv_msg_lock_init(void);
-#endif
-
-#if !defined(SECURE_KERNEL)
-/* kmem access not enabled by default; can be changed with boot-args */
-/* We don't need to keep this symbol around in RELEASE kernel */
-int setup_kmem = 0;
 #endif
 
 #if CONFIG_MACF
@@ -347,11 +348,11 @@ process_name(const char *s, proc_t p)
 
 /* To allow these values to be patched, they're globals here */
 #include <machine/vmparam.h>
-struct rlimit vm_initial_limit_stack = { DFLSSIZ, MAXSSIZ - PAGE_SIZE };
+struct rlimit vm_initial_limit_stack = { DFLSSIZ, MAXSSIZ - PAGE_MAX_SIZE };
 struct rlimit vm_initial_limit_data = { DFLDSIZ, MAXDSIZ };
 struct rlimit vm_initial_limit_core = { DFLCSIZ, MAXCSIZ };
 
-extern thread_t	cloneproc(task_t, proc_t, int, int);
+extern thread_t	cloneproc(task_t, coalition_t, proc_t, int, int);
 extern int 	(*mountroot)(void);
 
 lck_grp_t * proc_lck_grp;
@@ -384,8 +385,6 @@ void (*unmountroot_pre_hook)(void);
  * used like any other.
  */
 
-extern void IOServicePublishResource(const char *, boolean_t);
-
 void
 bsd_init(void)
 {
@@ -403,11 +402,6 @@ bsd_init(void)
 
 	throttle_init();
 
-	kernel_flock = funnel_alloc(KERNEL_FUNNEL);
-	if (kernel_flock == (funnel_t *)0 ) {
-		panic("bsd_init: Failed to allocate kernel funnel");
-	}
-        
 	printf(copyright);
 	
 	bsd_init_kprintf("calling kmeminit\n");
@@ -415,6 +409,11 @@ bsd_init(void)
 	
 	bsd_init_kprintf("calling parse_bsd_args\n");
 	parse_bsd_args();
+
+#if CONFIG_DEV_KMEM
+	bsd_init_kprintf("calling dev_kmem_init\n");
+	dev_kmem_init();
+#endif
 
 	/* Initialize kauth subsystem before instancing the first credential */
 	bsd_init_kprintf("calling kauth_init\n");
@@ -599,7 +598,6 @@ bsd_init(void)
 
 #if CONFIG_MACF
 	mac_cred_label_associate_kernel(kernproc->p_ucred);
-	mac_task_label_update_cred (kernproc->p_ucred, (struct task *) kernproc->task);
 #endif
 
 	/* Create the file descriptor table. */
@@ -627,7 +625,7 @@ bsd_init(void)
 	kernproc->p_sigacts = &sigacts0;
 
 	/*
-	 * Charge root for two  processes: init and mach_init.
+	 * Charge root for one process: launchd.
 	 */
 	bsd_init_kprintf("calling chgproccnt\n");
 	(void)chgproccnt(0, 1);
@@ -797,6 +795,12 @@ bsd_init(void)
 	memorystatus_init();
 #endif /* CONFIG_MEMORYSTATUS */
 
+	bsd_init_kprintf("calling macx_init\n");
+	macx_init();
+
+	bsd_init_kprintf("calling acct_init\n");
+	acct_init();
+
 #ifdef GPROF
 	/* Initialize kernel profiling. */
 	kmstartup();
@@ -840,6 +844,19 @@ bsd_init(void)
 	bsd_init_kprintf("calling net_init_run\n");
 	net_init_run();
 	
+#if CONTENT_FILTER
+	cfil_init();
+#endif
+
+#if PACKET_MANGLER
+	pkt_mnglr_init();
+#endif	
+
+#if NECP
+	/* Initialize Network Extension Control Policies */
+	necp_init();
+#endif
+	
 	/* register user tunnel kernel control handler */
 	utun_register_control();
 #if IPSEC
@@ -847,16 +864,11 @@ bsd_init(void)
 #endif /* IPSEC */
 	netsrc_init();
 	nstat_init();
+	tcp_cc_init();
 #endif /* NETWORKING */
 
 	bsd_init_kprintf("calling vnode_pager_bootstrap\n");
 	vnode_pager_bootstrap();
-#if 0
-	/* XXX Hack for early debug stop */
-	printf("\nabout to sleep for 10 seconds\n");
-	IOSleep( 10 * 1000 );
-	/* Debugger("hello"); */
-#endif
 
 	bsd_init_kprintf("calling inittodr\n");
 	inittodr(0);
@@ -978,10 +990,8 @@ bsd_init(void)
 #endif
 
 	bsd_init_kprintf("done\n");
-
 }
 
-/* Called with kernel funnel held */
 void
 bsdinit_task(void)
 {
@@ -1007,7 +1017,6 @@ bsdinit_task(void)
 
 #if CONFIG_MACF
 	mac_cred_label_associate_user(p->p_ucred);
-	mac_task_label_update_cred (p->p_ucred, (struct task *) p->task);
 #endif
 	load_init_program(p);
 	lock_trace = 1;
@@ -1041,11 +1050,6 @@ setconf(void)
 	u_int32_t	flags;
 	kern_return_t	err;
 
-	/*
-	 * calls into IOKit can generate networking registrations
-	 * which needs to be under network funnel. Right thing to do
-	 * here is to drop the funnel alltogether and regrab it afterwards
-	 */
 	err = IOFindBSDRoot(rootdevice, sizeof(rootdevice), &rootdev, &flags);
 	if( err) {
 		printf("setconf: IOFindBSDRoot returned an error (%d);"
@@ -1079,7 +1083,7 @@ bsd_utaskbootstrap(void)
 	 * Clone the bootstrap process from the kernel process, without
 	 * inheriting either task characteristics or memory from the kernel;
 	 */
-	thread = cloneproc(TASK_NULL, kernproc, FALSE, TRUE);
+	thread = cloneproc(TASK_NULL, COALITION_NULL, kernproc, FALSE, TRUE);
 
 	/* Hold the reference as it will be dropped during shutdown */
 	initproc = proc_find(1);				
@@ -1115,6 +1119,7 @@ parse_bsd_args(void)
 	if (PE_parse_boot_argn("-x", namep, sizeof (namep))) /* safe boot */
 		boothowto |= RB_SAFEBOOT;
 
+
 	/* disable vnode_cache_is_authorized() by setting vnode_cache_defeat */
 	if (PE_parse_boot_argn("-vnode_cache_defeat", namep, sizeof (namep)))
 		bootarg_vnode_cache_defeat = 1;
@@ -1129,9 +1134,6 @@ parse_bsd_args(void)
 				sizeof (max_nbuf_headers))) {
 		customnbuf = 1;
 	}
-#if !defined(SECURE_KERNEL)
-	PE_parse_boot_argn("kmem", &setup_kmem, sizeof (setup_kmem));
-#endif
 
 #if CONFIG_MACF
 #if defined (__i386__) || defined (__x86_64__)
@@ -1146,7 +1148,6 @@ parse_bsd_args(void)
 	if (PE_parse_boot_argn("-novfscache", namep, sizeof(namep))) {
 		nc_disabled = 1;
 	}
-
 }
 
 void

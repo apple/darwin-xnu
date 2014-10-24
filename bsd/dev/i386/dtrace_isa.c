@@ -158,10 +158,10 @@ dtrace_xcall(processorid_t cpu, dtrace_xcall_t f, void *arg)
 	xcArg.arg = arg;
 
 	if (cpu == DTRACE_CPUALL) {
-		mp_cpus_call (CPUMASK_ALL, SYNC, xcRemote, (void*)&xcArg);
+		mp_cpus_call (CPUMASK_ALL, ASYNC, xcRemote, (void*)&xcArg);
 	}
 	else {
-		mp_cpus_call (cpu_to_cpumask((cpu_t)cpu), SYNC, xcRemote, (void*)&xcArg);
+		mp_cpus_call (cpu_to_cpumask((cpu_t)cpu), ASYNC, xcRemote, (void*)&xcArg);
 	}
 }
 

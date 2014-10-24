@@ -1,79 +1,109 @@
 SDKROOT ?= /
-ARCHS = x86_64
-CC = xcrun -sdk $(SDKROOT) cc
-CODESIGN = xcrun -sdk $(SDKROOT) codesign
+ifeq "$(RC_TARGET_CONFIG)" "iPhone"
+Embedded?=YES
+else
+Embedded?=$(shell echo $(SDKROOT) | grep -iq iphoneos && echo YES || echo NO)
+endif
+
+ifdef RC_ARCHS
+    ARCHS:=$(RC_ARCHS)
+  else
+    ifeq "$(Embedded)" "YES"
+      ARCHS:=armv7 armv7s arm64
+    else
+      ARCHS:=x86_64 i386
+  endif
+endif
+
+CC = $(shell xcrun -sdk "$(SDKROOT)" -find cc)
+STRIP = $(shell xcrun -sdk "$(SDKROOT)" -find strip)
+CODESIGN = $(shell xcrun -sdk "$(SDKROOT)" -find codesign)
+export CODESIGN_ALLOCATE := $(shell xcrun -sdk "$(SDKROOT)" -find codesign_allocate)
+DSYMUTIL = $(shell xcrun -sdk "$(SDKROOT)" -find dsymutil)
 CFLAGS = -O0 -g -isysroot $(SDKROOT) $(patsubst %, -arch %,$(ARCHS))
-LDFLAGS = -Wl,-new_linker -dead_strip \
+LDFLAGS = -dead_strip \
 	-isysroot $(SDKROOT) $(patsubst %, -arch %,$(ARCHS))
-NOPIE_OPTION = -Wl,-no_pie
+
+OBJROOT?=$(shell /bin/pwd)/BUILD/obj
+SYMROOT?=$(shell /bin/pwd)/BUILD/sym
+DSTROOT?=$(shell /bin/pwd)/BUILD/dst
 
 EXECUTABLES = exit.nodyld \
 	exit.nopie.dyld-but-no-Libsystem exit.pie.dyld-but-no-Libsystem \
 	exit.nopie.dyld-and-Libsystem exit.pie.dyld-and-Libsystem \
 	exit.nopie exit.pie \
-	printexecinfo
-OBJECTS = exit-asm.o exit.o printexecinfo.o
+	printexecinfo run test
+OBJECTS = exit-asm.o exit.o printexecinfo.o run.o
 
-default: $(EXECUTABLES) run
+default: $(addprefix $(DSTROOT)/,$(EXECUTABLES))
 
 clean:
-	rm -f run $(EXECUTABLES)
-	rm -f run.o $(OBJECTS)
+	rm -f $(addprefix $(OBJROOT)/,$(OBJECTS))
+	rm -f $(addprefix $(SYMROOT)/,$(EXECUTABLES))
+	rm -rf $(addsuffix .dSYM,$(addprefix $(SYMROOT)/,$(EXECUTABLES)))
+	rm -f $(addprefix $(DSTROOT)/,$(EXECUTABLES))
 
-run.o: run.c
-	$(CC) -c -o $@ $< $(CFLAGS)
+# DEPENDENCIES
+$(addprefix $(DSTROOT)/,$(EXECUTABLES)): DSTROOT SYMROOT
 
-run: run.o
-	$(CC) -o $@ $< $(LDFLAGS)
-	$(CODESIGN) -s - $@
+$(addprefix $(OBJROOT)/,$(OBJECTS)): OBJROOT
+
+DSTROOT SYMROOT OBJROOT:
+	mkdir -p $($@)
 
 # OBJECTS
 
-exit-asm.o: exit-asm.S
+$(OBJROOT)/exit-asm.o: exit-asm.S OBJROOT
 	$(CC) -c -o $@ $< $(CFLAGS)
 
-exit.o: exit.c
+$(OBJROOT)/exit.o: exit.c OBJROOT
 	$(CC) -c -o $@ $< $(CFLAGS)
 
-printexecinfo.o: printexecinfo.c
+$(OBJROOT)/printexecinfo.o: printexecinfo.c OBJROOT
+	$(CC) -c -o $@ $< $(CFLAGS)
+
+$(OBJROOT)/run.o: run.c OBJROOT
 	$(CC) -c -o $@ $< $(CFLAGS)
 
 # EXECUTABLES
 
-exit.nodyld: exit-asm.o
-	$(CC) -o $@ $< $(LDFLAGS) -e mystart -nostartfiles -nodefaultlibs -static
+$(DSTROOT)/exit.nodyld: $(OBJROOT)/exit-asm.o
+	$(CC) -o $@ $< $(LDFLAGS) -e _main -nostartfiles -nodefaultlibs -static -Wl,-segalign,0x4000
 	$(CODESIGN) -s - $@
 
-
-exit.nopie.dyld-but-no-Libsystem: exit-asm.o
-	$(CC) -o $@ $< $(LDFLAGS) -e mystart $(NOPIE_OPTION) -nostartfiles -nodefaultlibs
+$(DSTROOT)/exit.nopie.dyld-but-no-Libsystem: $(OBJROOT)/exit-asm.o
+	$(CC) -o $@ $< $(LDFLAGS) -e _main -Wl,-no_pie -nostartfiles -nodefaultlibs -Wl,-no_new_main
 	$(CODESIGN) -s - $@
 
-exit.pie.dyld-but-no-Libsystem: exit-asm.o
-	$(CC) -o $@ $< $(LDFLAGS) -e mystart -Wl,-pie -nostartfiles -nodefaultlibs
+$(DSTROOT)/exit.pie.dyld-but-no-Libsystem: $(OBJROOT)/exit-asm.o
+	$(CC) -o $@ $< $(LDFLAGS) -e _main -Wl,-pie -nostartfiles -nodefaultlibs -Wl,-no_new_main
 	$(CODESIGN) -s - $@
 
-exit.nopie.dyld-and-Libsystem: exit-asm.o
-	$(CC) -o $@ $< $(LDFLAGS) -e mystart $(NOPIE_OPTION) -nostartfiles -nodefaultlibs -lSystem
+$(DSTROOT)/exit.nopie.dyld-and-Libsystem: $(OBJROOT)/exit-asm.o
+	$(CC) -o $@ $< $(LDFLAGS) -Wl,-no_pie -nostartfiles -nodefaultlibs -lSystem
 	$(CODESIGN) -s - $@
 
-exit.pie.dyld-and-Libsystem: exit-asm.o
-	$(CC) -o $@ $< $(LDFLAGS) -e mystart -Wl,-pie -nostartfiles -nodefaultlibs -lSystem
+$(DSTROOT)/exit.pie.dyld-and-Libsystem: $(OBJROOT)/exit-asm.o
+	$(CC) -o $@ $< $(LDFLAGS) -Wl,-pie -nostartfiles -nodefaultlibs -lSystem
 	$(CODESIGN) -s - $@
 
-exit.nopie: exit.o
-	$(CC) -o $@ $< $(LDFLAGS) -e mystart $(NOPIE_OPTION)
+$(DSTROOT)/exit.nopie: $(OBJROOT)/exit.o
+	$(CC) -o $@ $< $(LDFLAGS) -Wl,-no_pie
 	$(CODESIGN) -s - $@
 
-exit.pie: exit.o
-	$(CC) -o $@ $< $(LDFLAGS) -e mystart -Wl,-pie
+$(DSTROOT)/exit.pie: $(OBJROOT)/exit.o
+	$(CC) -o $@ $< $(LDFLAGS) -Wl,-pie
 	$(CODESIGN) -s - $@
 
-printexecinfo: printexecinfo.o
+$(DSTROOT)/printexecinfo: $(OBJROOT)/printexecinfo.o
 	$(CC) -o $@ $< $(LDFLAGS)
 	$(CODESIGN) -s - $@
 
-# ACTIONS
+$(DSTROOT)/run: $(OBJROOT)/run.o
+	$(CC) -o $(SYMROOT)/run $< $(LDFLAGS)
+	$(DSYMUTIL) $(SYMROOT)/run
+	$(STRIP) -S -o $@ $(SYMROOT)/run
+	$(CODESIGN) -s - $@
 
-quick-test: $(EXECUTABLES) run
-	./test.sh
+$(DSTROOT)/test: test.sh
+	install -m 755 $< $@

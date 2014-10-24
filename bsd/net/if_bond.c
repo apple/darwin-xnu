@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2004-2013 Apple Inc. All rights reserved.
+ * Copyright (c) 2004-2014 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -303,26 +303,6 @@ static int bond_get_status(ifbond_ref ifb, struct if_bond_req * ibr_p,
 			   user_addr_t datap);
 
 static __inline__ int
-ifbond_flags_promisc(ifbond_ref ifb)
-{
-    return ((ifb->ifb_flags & IFBF_PROMISC) != 0);
-}
-
-static __inline__ void
-ifbond_flags_set_promisc(ifbond_ref ifb)
-{
-    ifb->ifb_flags |= IFBF_PROMISC;
-    return;
-}
-
-static __inline__ void
-ifbond_flags_clear_promisc(ifbond_ref ifb)
-{
-    ifb->ifb_flags &= ~IFBF_PROMISC;
-    return;
-}
-
-static __inline__ int
 ifbond_flags_if_detaching(ifbond_ref ifb)
 {
     return ((ifb->ifb_flags & IFBF_IF_DETACHING) != 0);
@@ -339,20 +319,6 @@ static __inline__ int
 ifbond_flags_lladdr(ifbond_ref ifb)
 {
     return ((ifb->ifb_flags & IFBF_LLADDR) != 0);
-}
-
-static __inline__ void
-ifbond_flags_set_lladdr(ifbond_ref ifb)
-{
-    ifb->ifb_flags |= IFBF_LLADDR;
-    return;
-}
-
-static __inline__ void
-ifbond_flags_clear_lladdr(ifbond_ref ifb)
-{
-    ifb->ifb_flags &= ~IFBF_LLADDR;
-    return;
 }
 
 static __inline__ int
@@ -2539,7 +2505,7 @@ bond_get_status(ifbond_ref ifb, struct if_bond_req * ibr_p, user_addr_t datap)
 	    break;
 	}
 	bzero(&ibs, sizeof(ibs));
-	strncpy(ibs.ibs_if_name, port->po_name, sizeof(ibs.ibs_if_name));
+	strlcpy(ibs.ibs_if_name, port->po_name, sizeof(ibs.ibs_if_name));
 	ibs.ibs_port_priority = port->po_priority;
 	if (ifb->ifb_mode == IF_BOND_MODE_LACP) {
 	    ibs.ibs_state = port->po_actor_state;
@@ -3073,7 +3039,7 @@ interface_link_event(struct ifnet * ifp, u_int32_t event_code)
     event.header.event_code    = event_code;
     event.header.event_data[0] = ifnet_family(ifp);
     event.unit                 = (u_int32_t) ifnet_unit(ifp);
-    strncpy(event.if_name, ifnet_name(ifp), IFNAMSIZ);
+    strlcpy(event.if_name, ifnet_name(ifp), IFNAMSIZ);
     ifnet_event(ifp, &event.header);
     return;
 }

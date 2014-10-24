@@ -61,7 +61,7 @@
 #include <libkern/OSAtomic.h>
 
 #include <kern/task.h>
-#include <kern/lock.h>
+#include <kern/locks.h>
 #ifdef MACH_ASSERT
 # undef MACH_ASSERT
 #endif
@@ -4380,11 +4380,12 @@ kauth_cred_label_update(kauth_cred_t cred, struct label *label)
  *		that is returned to them, if it is not intended to be a
  *		persistent reference.
  */
+
 static
 kauth_cred_t
 kauth_cred_label_update_execve(kauth_cred_t cred, vfs_context_t ctx,
-	struct vnode *vp, struct vnode *scriptvp, struct label *scriptl,
-	struct label *execl, void *macextensions, int *disjointp)
+	struct vnode *vp, off_t offset, struct vnode *scriptvp, struct label *scriptl,
+	struct label *execl, unsigned int *csflags, void *macextensions, int *disjointp, int *labelupdateerror)
 {
 	kauth_cred_t newcred;
 	struct ucred temp_cred;
@@ -4393,9 +4394,9 @@ kauth_cred_label_update_execve(kauth_cred_t cred, vfs_context_t ctx,
 
 	mac_cred_label_init(&temp_cred);
 	mac_cred_label_associate(cred, &temp_cred);
-	*disjointp = mac_cred_label_update_execve(ctx, &temp_cred, 
-						  vp, scriptvp, scriptl, execl,
-						  macextensions);
+	mac_cred_label_update_execve(ctx, &temp_cred, 
+						  vp, offset, scriptvp, scriptl, execl, csflags,
+						  macextensions, disjointp, labelupdateerror);
 
 	newcred = kauth_cred_update(cred, &temp_cred, TRUE);
 	mac_cred_label_destroy(&temp_cred);
@@ -4479,6 +4480,8 @@ int kauth_proc_label_update(struct proc *p, struct label *label)
  *		vp			The vnode being exec'ed
  *		scriptl			The script MAC label
  *		execl			The executable MAC label
+ *		lupdateerror	The error place holder for MAC label authority 
+ *						to update about possible termination
  *
  * Returns:	0			Label update did not make credential
  *					disjoint
@@ -4489,14 +4492,13 @@ int kauth_proc_label_update(struct proc *p, struct label *label)
  *		result of this call.  The caller should not assume the process
  *		reference to the old credential still exists.
  */
-int
+ 
+void
 kauth_proc_label_update_execve(struct proc *p, vfs_context_t ctx,
-	struct vnode *vp, struct vnode *scriptvp, struct label *scriptl,
-	struct label *execl, void *macextensions)
+	struct vnode *vp, off_t offset, struct vnode *scriptvp, struct label *scriptl,
+	struct label *execl, unsigned int *csflags, void *macextensions, int *disjoint, int *update_return)
 {
 	kauth_cred_t my_cred, my_new_cred;
-	int disjoint = 0;
-
 	my_cred = kauth_cred_proc_ref(p);
 
 	DEBUG_CRED_ENTER("kauth_proc_label_update_execve: %p\n", my_cred);
@@ -4511,7 +4513,7 @@ kauth_proc_label_update_execve(struct proc *p, vfs_context_t ctx,
 		 * passed in.  The subsequent compare is safe, because it is
 		 * a pointer compare rather than a contents compare.
   		 */
-		my_new_cred = kauth_cred_label_update_execve(my_cred, ctx, vp, scriptvp, scriptl, execl, macextensions, &disjoint);
+		my_new_cred = kauth_cred_label_update_execve(my_cred, ctx, vp, offset, scriptvp, scriptl, execl, csflags, macextensions, disjoint, update_return);
 		if (my_cred != my_new_cred) {
 
 			DEBUG_CRED_CHANGE("kauth_proc_label_update_execve_unlocked CH(%d): %p/0x%08x -> %p/0x%08x\n", p->p_pid, my_cred, my_cred->cr_flags, my_new_cred, my_new_cred->cr_flags);
@@ -4540,8 +4542,6 @@ kauth_proc_label_update_execve(struct proc *p, vfs_context_t ctx,
 	}
 	/* Drop old proc reference or our extra reference */
 	kauth_cred_unref(&my_cred);
-	
-	return (disjoint);
 }
 
 #if 1

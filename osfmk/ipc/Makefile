@@ -13,7 +13,8 @@ EXPORT_ONLY_FILES =	\
 	ipc_types.h
 
 EXPORT_PRIVATE_FILES =	\
-	ipc_port.h
+	ipc_port.h	\
+	ipc_voucher.h
 
 INSTALL_MI_LIST = ${DATAFILES}
 

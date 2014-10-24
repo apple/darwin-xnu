@@ -215,6 +215,11 @@ int	madvise(void *, size_t, int);
 int	mincore(const void *, size_t, char *);
 int	minherit(void *, size_t, int);
 #endif
+
+#ifdef PRIVATE
+int mremap_encrypted(void *, size_t, __uint32_t, __uint32_t, __uint32_t);
+#endif
+
 __END_DECLS
 
 #else	/* KERNEL */

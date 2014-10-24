@@ -365,28 +365,12 @@ typedef struct x86_64_intr_stack_frame x86_64_intr_stack_frame_t;
  * is no need for an x86_saved_state64_from_kernel variant
  */
 struct x86_saved_state64 {
-        /*
-	 * saved state organized to reflect the
-	 * system call ABI register convention
-	 * so that we can just pass a pointer
-	 * to the saved state when calling through
-	 * to the actual system call functions
-	 * the ABI limits us to 6 args passed in 
-	 * registers... I've add v_arg6 - v_arg8
-	 * to accomodate our most 'greedy' system
-	 * calls (both BSD and MACH)... the individual
-	 * system call handlers will fill these in
-	 * via copyin if needed...
-	 */
 	uint64_t	rdi;		/* arg0 for system call */
 	uint64_t	rsi;
 	uint64_t	rdx;
 	uint64_t	r10;		/* R10 := RCX prior to syscall trap */
 	uint64_t	r8;
 	uint64_t	r9;		/* arg5 for system call */
-	uint64_t	v_arg6;
-	uint64_t	v_arg7;
-	uint64_t	v_arg8;
 
         uint64_t	cr2;
         uint64_t	r15;
@@ -401,6 +385,8 @@ struct x86_saved_state64 {
 
 	uint32_t	gs;
 	uint32_t	fs;
+
+	uint64_t 	_pad;
 
 	struct	x86_64_intr_stack_frame	isf;
 };

@@ -71,6 +71,12 @@ subsystem
 #include <mach/std_types.defs>
 #include <mach/mach_types.defs>
 
+#if !KERNEL && !LIBSYSCALL_INTERFACE
+#define PREFIX(NAME) _kernelrpc_ ## NAME
+#else
+#define PREFIX(NAME) NAME
+#endif
+
 /*
  *	Destroy the target thread.
  *
@@ -255,7 +261,7 @@ routine		thread_swap_exception_ports(
 /*
  * OBSOLETE interface.
  */
-routine thread_policy(
+routine PREFIX(thread_policy)(
 	thr_act			: thread_act_t;
 	policy			: policy_t;
 	base			: policy_base_t;
@@ -266,7 +272,7 @@ routine thread_policy(
  * (Approved Mac OS X microkernel interface)
  */
 
-routine thread_policy_set(
+routine PREFIX(thread_policy_set)(
 	thread			: thread_act_t;
 	flavor			: thread_policy_flavor_t;
 	policy_info		: thread_policy_t);
@@ -323,11 +329,25 @@ routine thread_get_assignment(
 /*
  * OBSOLETE interface.
  */
-routine thread_set_policy(
-	thr_act			: thread_act_t;
-	pset			: processor_set_t;
-	policy			: policy_t;
-	base			: policy_base_t;
-	limit			: policy_limit_t);
+routine PREFIX(thread_set_policy)(
+		thr_act		: thread_act_t;
+		pset		: processor_set_t;
+		policy		: policy_t;
+		base		: policy_base_t;
+		limit		: policy_limit_t);
+
+routine thread_get_mach_voucher(
+		thr_act		: thread_act_t;
+		which		: mach_voucher_selector_t;
+	out	voucher		: ipc_voucher_t);
+
+routine thread_set_mach_voucher(
+		thr_act		: thread_act_t;
+		voucher		: ipc_voucher_t);
+	
+routine thread_swap_mach_voucher(
+		thr_act		: thread_act_t;
+		new_voucher	: ipc_voucher_t;
+	inout	old_voucher	: ipc_voucher_t);
 
 /* vim: set ft=c : */

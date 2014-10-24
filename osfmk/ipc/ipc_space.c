@@ -164,6 +164,7 @@ ipc_space_create(
 	is_lock_init(space);
 	space->is_bits = 2; /* 2 refs, active, not growing */
 	space->is_table_size = new_size;
+	space->is_table_free = new_size - 1;
 	space->is_table = table;
 	space->is_table_next = initial+1;
 	space->is_task = NULL;
@@ -332,6 +333,7 @@ ipc_space_terminate(
 
 	it_entries_free(space->is_table_next-1, table);
 	space->is_table_size = 0;
+	space->is_table_free = 0;
 
 	/*
 	 *	Because the space is now dead,

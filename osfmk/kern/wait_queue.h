@@ -37,12 +37,13 @@
 
 #include <kern/kern_types.h>		/* for wait_queue_t */
 #include <kern/queue.h>
+#include <kern/assert.h>
 
 #include <sys/cdefs.h>
 
 #ifdef	MACH_KERNEL_PRIVATE
 
-#include <kern/lock.h>
+#include <kern/simple_lock.h>
 #include <mach/branch_predicates.h>
 
 #include <machine/cpu_number.h>

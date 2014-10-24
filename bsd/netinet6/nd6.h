@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2013 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2014 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -198,6 +198,7 @@ struct nd_ifinfo {
 #if defined(PRIVATE)
 #define	ND6_IFF_INSECURE		0x80
 #endif
+#define	ND6_IFF_REPLICATED		0x100	/* sleep proxy registered */
 
 struct in6_nbrinfo {
 	char ifname[IFNAMSIZ];	/* if name, e.g. "en0" */
@@ -457,6 +458,7 @@ struct	in6_ndifreq_64 {
 #ifdef BSD_KERNEL_PRIVATE
 #define	NDPRF_PROCESSED_ONLINK	0x08000
 #define	NDPRF_PROCESSED_SERVICE	0x10000
+#define	NDPRF_DEFUNCT		0x20000
 #endif
 
 /* protocol constants */
@@ -480,7 +482,9 @@ extern lck_rw_t *nd_if_rwlock;
 /*
  * In a more readable form, we derive linkmtu based on:
  *
- * if (ND_IFINFO(ifp) == NULL || !ND_IFINFO(ifp)->initialized)
+ * if (ifp == NULL)
+ *         linkmtu = IPV6_MMTU
+ * else if (ND_IFINFO(ifp) == NULL || !ND_IFINFO(ifp)->initialized)
  *         linkmtu = ifp->if_mtu;
  * else if (ND_IFINFO(ifp)->linkmtu && ND_IFINFO(ifp)->linkmtu < ifp->if_mtu)
  *         linkmtu = ND_IFINFO(ifp)->linkmtu;
@@ -490,7 +494,8 @@ extern lck_rw_t *nd_if_rwlock;
  *         linkmtu = ifp->if_mtu;
  */
 #define	IN6_LINKMTU(ifp)						      \
-	((ND_IFINFO(ifp) == NULL || !ND_IFINFO(ifp)->initialized) ?	      \
+	(ifp == NULL ? IPV6_MMTU :					      \
+	(ND_IFINFO(ifp) == NULL || !ND_IFINFO(ifp)->initialized) ?	      \
 	(ifp)->if_mtu :	((ND_IFINFO(ifp)->linkmtu &&			      \
 	ND_IFINFO(ifp)->linkmtu < (ifp)->if_mtu) ? ND_IFINFO(ifp)->linkmtu :  \
 	((ND_IFINFO(ifp)->maxmtu && ND_IFINFO(ifp)->maxmtu < (ifp)->if_mtu) ? \
@@ -749,6 +754,7 @@ extern int nd6_optimistic_dad;
 #define	ND6_OPTIMISTIC_DAD_TEMPORARY	(1 << 2)
 #define	ND6_OPTIMISTIC_DAD_DYNAMIC	(1 << 3)
 #define	ND6_OPTIMISTIC_DAD_SECURED	(1 << 4)
+#define	ND6_OPTIMISTIC_DAD_MANUAL	(1 << 5)
 
 /* nd6_rtr.c */
 extern int nd6_defifindex;

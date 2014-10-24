@@ -109,7 +109,7 @@
 #include <sys/mbuf.h>
 #include <sys/syslog.h>
 #include <sys/mcache.h>
-#include <kern/lock.h>
+#include <kern/locks.h>
 
 #include <net/if.h>
 #include <net/route.h>

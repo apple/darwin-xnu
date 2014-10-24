@@ -108,6 +108,7 @@
 #include <net/if.h>
 #include <net/if_types.h>
 #include <net/route.h>
+#include <net/ntstat.h>
 
 #include <netinet/in.h>
 #include <netinet/in_var.h>
@@ -135,6 +136,10 @@
 #endif
 #include <netkey/key.h>
 #endif /* IPSEC */
+
+#if NECP
+#include <net/necp.h>
+#endif /* NECP */
 
 /*
  * in6_pcblookup_local_and_cleanup does everything
@@ -184,6 +189,8 @@ in6_pcbbind(struct inpcb *inp, struct sockaddr *nam, struct proc *p)
 	struct inpcbinfo *pcbinfo = inp->inp_pcbinfo;
 	u_short	lport = 0;
 	int wild = 0, reuseport = (so->so_options & SO_REUSEPORT);
+	struct ifnet *outif = NULL;
+	struct sockaddr_in6 sin6;
 	int error;
 	kauth_cred_t cred;
 
@@ -195,10 +202,9 @@ in6_pcbbind(struct inpcb *inp, struct sockaddr *nam, struct proc *p)
 		wild = 1;
 	socket_unlock(so, 0); /* keep reference */
 	lck_rw_lock_exclusive(pcbinfo->ipi_lock);
-	if (nam != NULL) {
-		struct ifnet *outif = NULL;
-		struct sockaddr_in6 sin6;
 
+	bzero(&sin6, sizeof (sin6));
+	if (nam != NULL) {
 		if (nam->sa_len != sizeof (struct sockaddr_in6)) {
 			lck_rw_done(pcbinfo->ipi_lock);
 			socket_lock(so, 0);
@@ -214,7 +220,6 @@ in6_pcbbind(struct inpcb *inp, struct sockaddr *nam, struct proc *p)
 		}
 		lport = SIN6(nam)->sin6_port;
 
-		bzero(&sin6, sizeof (sin6));
 		*(&sin6) = *SIN6(nam);
 
 		/* KAME hack: embed scopeid */
@@ -359,13 +364,26 @@ in6_pcbbind(struct inpcb *inp, struct sockaddr *nam, struct proc *p)
 				}
 			}
 		}
+	}
+
+	socket_lock(so, 0);
+	/* check if the socket got bound when the lock was released */
+	if (inp->inp_lport || !IN6_IS_ADDR_UNSPECIFIED(&inp->in6p_laddr)) {
+		lck_rw_done(pcbinfo->ipi_lock);
+		return (EINVAL);
+	}
+
+	if (!IN6_IS_ADDR_UNSPECIFIED(&sin6.sin6_addr)) {
 		inp->in6p_laddr = sin6.sin6_addr;
 		inp->in6p_last_outifp = outif;
 	}
-	socket_lock(so, 0);
+
 	if (lport == 0) {
 		int e;
 		if ((e = in6_pcbsetport(&inp->in6p_laddr, inp, p, 1)) != 0) {
+			/* Undo any address bind from above. */
+			inp->in6p_laddr = in6addr_any;
+			inp->in6p_last_outifp = NULL;	
 			lck_rw_done(pcbinfo->ipi_lock);
 			return (e);
 		}
@@ -461,8 +479,7 @@ in6_pcbladdr(struct inpcb *inp, struct sockaddr *nam,
 
 	if (addr6 == NULL) {
 		if (outif != NULL && (*outif) != NULL &&
-		    (inp->inp_flags & INP_NO_IFT_CELLULAR) &&
-		    IFNET_IS_CELLULAR(*outif)) {
+		    inp_restricted_send(inp, *outif)) {
 			soevent(inp->inp_socket,
 			    (SO_FILT_HINT_LOCKED | SO_FILT_HINT_IFDENIED));
 			error = EHOSTUNREACH;
@@ -495,6 +512,7 @@ in6_pcbconnect(struct inpcb *inp, struct sockaddr *nam, struct proc *p)
 	struct inpcb *pcb;
 	int error = 0;
 	struct ifnet *outif = NULL;
+	struct socket *so = inp->inp_socket;
 
 	/*
 	 * Call inner routine, to assign local interface address.
@@ -505,17 +523,16 @@ in6_pcbconnect(struct inpcb *inp, struct sockaddr *nam, struct proc *p)
 	 * whenever it's non-NULL.
 	 */
 	if ((error = in6_pcbladdr(inp, nam, &addr6, &outif)) != 0) {
-		if ((inp->inp_flags & INP_NO_IFT_CELLULAR) && outif != NULL &&
-		    IFNET_IS_CELLULAR(outif))
-			soevent(inp->inp_socket,
+		if (outif != NULL && inp_restricted_send(inp, outif)) 
+			soevent(so,
 			    (SO_FILT_HINT_LOCKED | SO_FILT_HINT_IFDENIED));
 		goto done;
 	}
-	socket_unlock(inp->inp_socket, 0);
+	socket_unlock(so, 0);
 	pcb = in6_pcblookup_hash(inp->inp_pcbinfo, &sin6->sin6_addr,
 	    sin6->sin6_port, IN6_IS_ADDR_UNSPECIFIED(&inp->in6p_laddr) ?
 	    &addr6 : &inp->in6p_laddr, inp->inp_lport, 0, NULL);
-	socket_lock(inp->inp_socket, 0);
+	socket_lock(so, 0);
 	if (pcb != NULL) {
 		in_pcb_checkstate(pcb, WNT_RELEASE, pcb == inp ? 1 : 0);
 		error = EADDRINUSE;
@@ -533,13 +550,14 @@ in6_pcbconnect(struct inpcb *inp, struct sockaddr *nam, struct proc *p)
 	}
 	if (!lck_rw_try_lock_exclusive(inp->inp_pcbinfo->ipi_lock)) {
 		/* lock inversion issue, mostly with udp multicast packets */
-		socket_unlock(inp->inp_socket, 0);
+		socket_unlock(so, 0);
 		lck_rw_lock_exclusive(inp->inp_pcbinfo->ipi_lock);
-		socket_lock(inp->inp_socket, 0);
+		socket_lock(so, 0);
 	}
 	inp->in6p_faddr = sin6->sin6_addr;
 	inp->inp_fport = sin6->sin6_port;
-
+	if (nstat_collect && SOCK_PROTO(so) == IPPROTO_UDP)
+		nstat_pcb_invalidate_cache(inp);
 	in_pcbrehash(inp);
 	lck_rw_done(inp->inp_pcbinfo->ipi_lock);
 
@@ -561,6 +579,8 @@ in6_pcbdisconnect(struct inpcb *inp)
 		lck_rw_lock_exclusive(inp->inp_pcbinfo->ipi_lock);
 		socket_lock(so, 0);
 	}
+	if (nstat_collect && SOCK_PROTO(so) == IPPROTO_UDP)
+		nstat_pcb_cache(inp);
 	bzero((caddr_t)&inp->in6p_faddr, sizeof (inp->in6p_faddr));
 	inp->inp_fport = 0;
 	/* clear flowinfo - RFC 6437 */
@@ -587,13 +607,20 @@ in6_pcbdetach(struct inpcb *inp)
 		    inp, so, SOCK_PROTO(so));
 		/* NOTREACHED */
 	}
-
+	
 #if IPSEC
 	if (inp->in6p_sp != NULL) {
 		(void) ipsec6_delete_pcbpolicy(inp);
 	}
 #endif /* IPSEC */
 
+	/*
+	 * Let NetworkStatistics know this PCB is going away
+	 * before we detach it.
+	 */
+	if (nstat_collect &&
+	    (SOCK_PROTO(so) == IPPROTO_TCP || SOCK_PROTO(so) == IPPROTO_UDP))
+		nstat_pcb_detach(inp);
 	/* mark socket state as dead */
 	if (in_pcb_checkstate(inp, WNT_STOPUSING, 1) != WNT_STOPUSING) {
 		panic("%s: so=%p proto=%d couldn't set to STOPUSING\n",
@@ -714,8 +741,11 @@ in6_getsockaddr_s(struct socket *so, struct sockaddr_storage *ss)
 	VERIFY(ss != NULL);
 	bzero(ss, sizeof (*ss));
 
-	if ((inp = sotoinpcb(so)) == NULL ||
-	    (inp->inp_flags2 & INP2_WANT_FLOW_DIVERT))
+	if ((inp = sotoinpcb(so)) == NULL
+#if NECP
+		|| (necp_socket_should_use_flow_divert(inp))
+#endif /* NECP */
+		)
 		return (inp == NULL ? EINVAL : EPROTOTYPE);
 
 	port = inp->inp_lport;
@@ -754,8 +784,11 @@ in6_getpeeraddr_s(struct socket *so, struct sockaddr_storage *ss)
 	VERIFY(ss != NULL);
 	bzero(ss, sizeof (*ss));
 
-	if ((inp = sotoinpcb(so)) == NULL ||
-	    (inp->inp_flags2 & INP2_WANT_FLOW_DIVERT))
+	if ((inp = sotoinpcb(so)) == NULL
+#if NECP
+		|| (necp_socket_should_use_flow_divert(inp))
+#endif /* NECP */
+		)
 		return (inp == NULL ? EINVAL : EPROTOTYPE);
 
 	port = inp->inp_fport;
@@ -1081,11 +1114,7 @@ in6_pcblookup_hash_exists(struct inpcbinfo *pcbinfo, struct in6_addr *faddr,
 		if (!(inp->inp_vflag & INP_IPV6))
 			continue;
 
-		if (inp_restricted(inp, ifp))
-			continue;
-
-		if (ifp != NULL && IFNET_IS_CELLULAR(ifp) &&
-		    (inp->in6p_flags & INP_NO_IFT_CELLULAR))
+		if (inp_restricted_recv(inp, ifp))
 			continue;
 
 		if (IN6_ARE_ADDR_EQUAL(&inp->in6p_faddr, faddr) &&
@@ -1114,11 +1143,7 @@ in6_pcblookup_hash_exists(struct inpcbinfo *pcbinfo, struct in6_addr *faddr,
 			if (!(inp->inp_vflag & INP_IPV6))
 				continue;
 
-			if (inp_restricted(inp, ifp))
-				continue;
-
-			if (ifp != NULL && IFNET_IS_CELLULAR(ifp) &&
-			    (inp->in6p_flags & INP_NO_IFT_CELLULAR))
+			if (inp_restricted_recv(inp, ifp))
 				continue;
 
 			if (IN6_IS_ADDR_UNSPECIFIED(&inp->in6p_faddr) &&
@@ -1182,11 +1207,7 @@ in6_pcblookup_hash(struct inpcbinfo *pcbinfo, struct in6_addr *faddr,
 		if (!(inp->inp_vflag & INP_IPV6))
 			continue;
 
-		if (inp_restricted(inp, ifp))
-			continue;
-
-		if (ifp != NULL && IFNET_IS_CELLULAR(ifp) &&
-		    (inp->in6p_flags & INP_NO_IFT_CELLULAR))
+		if (inp_restricted_recv(inp, ifp))
 			continue;
 
 		if (IN6_ARE_ADDR_EQUAL(&inp->in6p_faddr, faddr) &&
@@ -1216,11 +1237,7 @@ in6_pcblookup_hash(struct inpcbinfo *pcbinfo, struct in6_addr *faddr,
 			if (!(inp->inp_vflag & INP_IPV6))
 				continue;
 
-			if (inp_restricted(inp, ifp))
-				continue;
-
-			if (ifp != NULL && IFNET_IS_CELLULAR(ifp) &&
-			    (inp->in6p_flags & INP_NO_IFT_CELLULAR))
+			if (inp_restricted_recv(inp, ifp))
 				continue;
 
 			if (IN6_IS_ADDR_UNSPECIFIED(&inp->in6p_faddr) &&

@@ -60,7 +60,9 @@
 #include <mach/mach_traps.h>
 
 #include <kern/syscall_sw.h>
+#if CONFIG_REQUIRES_U32_MUNGING
 #include <sys/munge.h>
+#endif
 
 /* Forwards */
 
@@ -143,7 +145,7 @@ const mach_trap_t	mach_trap_table[MACH_TRAP_TABLE_COUNT] = {
 /* 40 */	MACH_TRAP(kern_invalid, 0, 0, NULL),
 /* 41 */	MACH_TRAP(_kernelrpc_mach_port_guard_trap, 4, 5, munge_wwlw),
 /* 42 */	MACH_TRAP(_kernelrpc_mach_port_unguard_trap, 3, 4, munge_wwl),
-/* 43 */	MACH_TRAP(map_fd, 5, 5, munge_wwwww),
+/* 43 */	MACH_TRAP(kern_invalid, 0, 0, NULL),
 /* 44 */	MACH_TRAP(task_name_for_pid, 3, 3, munge_www),
 /* 45 */ 	MACH_TRAP(task_for_pid, 3, 3, munge_www),
 /* 46 */	MACH_TRAP(pid_for_task, 2, 2, munge_ww),
@@ -278,7 +280,7 @@ const char * mach_syscall_name_table[MACH_TRAP_TABLE_COUNT] = {
 /* 40 */	"kern_invalid",
 /* 41 */	"_kernelrpc_mach_port_guard_trap",
 /* 42 */	"_kernelrpc_mach_port_unguard_trap",
-/* 43 */	"map_fd",
+/* 43 */	"kern_invalid",
 /* 44 */	"task_name_for_pid",
 /* 45 */ 	"task_for_pid",
 /* 46 */	"pid_for_task",
@@ -338,8 +340,7 @@ const char * mach_syscall_name_table[MACH_TRAP_TABLE_COUNT] = {
 /* 98 */	"kern_invalid",
 /* 99 */	"kern_invalid",
 /* traps 100-107 reserved for iokit (esb) */ 
-/* 100 */	"kern_invalid",
-/* 100 */	//"iokit_user_client_trap",
+/* 100 */	"iokit_user_client_trap",
 /* 101 */	"kern_invalid",
 /* 102 */	"kern_invalid",
 /* 103 */	"kern_invalid",

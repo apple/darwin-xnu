@@ -93,10 +93,11 @@ $(eval $(call RECURSIVE_BUILD_RULES_template,config_all,$(CONFIG_SUBDIRS),do_con
 #
 $(eval $(call RECURSIVE_BUILD_RULES_template,build_install_primary,$(INST_SUBDIRS),do_build_install_primary,1))
 $(eval $(call RECURSIVE_BUILD_RULES_template,build_install_non_primary,$(INST_SUBDIRS),do_build_install_non_primary,1))
+$(eval $(call RECURSIVE_BUILD_RULES_template,config_install,$(CONFIG_SUBDIRS),do_config_install,1))
 
 #
-# Install Man Pages
+# Install text files
 #
-$(eval $(call RECURSIVE_BUILD_RULES_template,build_installman,$(INSTMAN_SUBDIRS),do_installman,))
+$(eval $(call RECURSIVE_BUILD_RULES_template,textfiles_install,$(INSTTEXTFILES_SUBDIRS),do_textfiles_install,))
 
 # vim: set ft=make:

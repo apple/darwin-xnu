@@ -58,6 +58,7 @@
 #include <mach/mach_host.h>
 #include <mach/mach_init.h>
 #include <mach/vm_param.h>
+#include <machine/cpu_capabilities.h>
 #include <stdbool.h>
 #include "externs.h"
 
@@ -68,13 +69,13 @@ mach_port_t mach_host_self_ = MACH_PORT_NULL;
 #endif
 extern mach_port_t _task_reply_port;
 
-vm_size_t vm_kernel_page_size = KERNEL_PAGE_SIZE;
-vm_size_t vm_kernel_page_mask = KERNEL_PAGE_MASK;
-int vm_kernel_page_shift = KERNEL_PAGE_SHIFT;
+vm_size_t vm_kernel_page_size = 0;
+vm_size_t vm_kernel_page_mask = 0;
+int vm_kernel_page_shift = 0;
 
-vm_size_t vm_page_size = PAGE_SIZE;
-vm_size_t vm_page_mask = PAGE_MASK;
-int vm_page_shift = PAGE_SHIFT;
+vm_size_t vm_page_size = 0;
+vm_size_t vm_page_mask = 0;
+int vm_page_shift = 0;
 
 int mach_init(void);
 int _mach_fork_child(void);
@@ -87,7 +88,7 @@ extern void _init_cpu_capabilities(void);
 kern_return_t
 host_page_size(__unused host_t host, vm_size_t *out_page_size)
 {
-	*out_page_size = PAGE_SIZE;
+	*out_page_size = vm_kernel_page_size;
 	return KERN_SUCCESS;
 }
 
@@ -120,6 +121,24 @@ mach_init_doit(void)
 	// Initialize cached mach ports defined in mach_init.h
 	mach_task_self_ = task_self_trap();
 	_task_reply_port = mach_reply_port();
+
+	if (vm_kernel_page_shift == 0) {
+#ifdef	_COMM_PAGE_KERNEL_PAGE_SHIFT
+		vm_kernel_page_shift = *(uint8_t*) _COMM_PAGE_KERNEL_PAGE_SHIFT;
+		vm_kernel_page_size = 1 << vm_kernel_page_shift;
+		vm_kernel_page_mask = vm_kernel_page_size - 1;
+#else
+		vm_kernel_page_size = PAGE_SIZE;
+		vm_kernel_page_mask = PAGE_MASK;
+		vm_kernel_page_shift = PAGE_SHIFT;
+#endif /* _COMM_PAGE_KERNEL_PAGE_SHIFT */
+	}
+	
+	if (vm_page_shift == 0) {
+		vm_page_shift = vm_kernel_page_shift;
+		vm_page_size = 1 << vm_page_shift;
+		vm_page_mask = vm_page_size - 1;
+	}
 
 	_init_cpu_capabilities();
 	_pthread_set_self(0);

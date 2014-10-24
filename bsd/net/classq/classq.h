@@ -113,8 +113,8 @@ struct pktcntr {
 typedef struct _class_queue_ {
 	MBUFQ_HEAD(mq_head) mbufq;	/* Packet queue */
 	u_int32_t	qlen;	/* Queue length (in number of packets) */
-	u_int32_t	qsize;	/* Approx. queue size (in number of bytes) */
 	u_int32_t	qlim;	/* Queue limit (in number of packets*) */
+	u_int64_t	qsize;	/* Approx. queue size (in number of bytes) */
 	classq_type_t	qtype;	/* Queue type */
 	classq_state_t	qstate;	/* Queue state */
 } class_queue_t;

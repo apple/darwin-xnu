@@ -53,9 +53,13 @@
 /* #include <machine/trap.h> */
 struct savearea_t; /* Used anonymously */
 
+#if   defined(__x86_64__)
 typedef kern_return_t (*perfCallback)(int, struct savearea_t *, uintptr_t *, __unused int);
 extern perfCallback tempDTraceTrapHook;
 extern kern_return_t fbt_perfCallback(int, struct savearea_t *, uintptr_t *, __unused int);
+#else
+#error Unknown architecture
+#endif
 
 #define	FBT_ADDR2NDX(addr)	((((uintptr_t)(addr)) >> 4) & fbt_probetab_mask)
 #define	FBT_PROBETAB_SIZE	0x8000		/* 32k entries -- 128K total */
@@ -250,6 +254,9 @@ fbt_resume(void *arg, dtrace_id_t id, void *parg)
 	dtrace_membar_consumer();
 }
 
+/*
+ * APPLE NOTE: fbt_getargdesc not implemented
+ */
 #if !defined(__APPLE__)
 /*ARGSUSED*/
 static void
@@ -362,11 +369,7 @@ static dtrace_pops_t fbt_pops = {
 	fbt_disable,
 	fbt_suspend,
 	fbt_resume,
-#if !defined(__APPLE__)
-	fbt_getargdesc,
-#else
-	NULL, /* FIXME: where to look for xnu? */
-#endif /* __APPLE__ */
+	NULL, /*  APPLE NOTE: fbt_getargdesc not implemented */
 	NULL,
 	NULL,
 	fbt_destroy
@@ -403,15 +406,6 @@ fbt_attach(dev_info_t *devi, ddi_attach_cmd_t cmd)
 
 	dtrace_invop_add(fbt_invop);
 
-#if !defined(__APPLE__)
-	if (ddi_create_minor_node(devi, "fbt", S_IFCHR, 0,
-	    DDI_PSEUDO, NULL) == DDI_FAILURE ||
-	    dtrace_register("fbt", &fbt_attr, DTRACE_PRIV_KERNEL, NULL,
-	    &fbt_pops, NULL, &fbt_id) != 0) {
-		fbt_cleanup(devi);
-		return (DDI_FAILURE);
-	}
-#else
 	if (ddi_create_minor_node(devi, "fbt", S_IFCHR, 0,
 	    DDI_PSEUDO, 0) == DDI_FAILURE ||
 	    dtrace_register("fbt", &fbt_attr, DTRACE_PRIV_KERNEL, NULL,
@@ -419,7 +413,6 @@ fbt_attach(dev_info_t *devi, ddi_attach_cmd_t cmd)
 		fbt_cleanup(devi);
 		return (DDI_FAILURE);
 	}
-#endif /* __APPLE__ */
 
 	ddi_report_dev(devi);
 	fbt_devi = devi;

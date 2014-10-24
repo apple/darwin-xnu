@@ -95,11 +95,12 @@
 #include <ipc/ipc_pset.h>
 #include <ipc/ipc_right.h>
 #include <ipc/ipc_kmsg.h>
-#include <ipc/ipc_labelh.h>
 #include <kern/misc_protos.h>
 #include <security/mac_mach_internal.h>
 
-#include <mach/security_server.h>
+#if IMPORTANCE_INHERITANCE
+#include <ipc/ipc_importance.h>
+#endif
 
 /*
  * Forward declarations
@@ -1717,11 +1718,21 @@ void mach_port_get_status_helper(
 	statusp->mps_pdrequest = port->ip_pdrequest != IP_NULL;
 	statusp->mps_nsrequest = port->ip_nsrequest != IP_NULL;
 	statusp->mps_flags = 0;
-	statusp->mps_flags |= ((port->ip_impdonation) ? MACH_PORT_STATUS_FLAG_IMP_DONATION:0);
-	statusp->mps_flags |= ((port->ip_tempowner) ? MACH_PORT_STATUS_FLAG_TEMPOWNER:0);
-	statusp->mps_flags |= ((port->ip_taskptr) ? MACH_PORT_STATUS_FLAG_TASKPTR:0);
-	statusp->mps_flags |= ((port->ip_guarded) ? MACH_PORT_STATUS_FLAG_GUARDED:0);
-	statusp->mps_flags |= ((port->ip_strict_guard) ? MACH_PORT_STATUS_FLAG_STRICT_GUARD:0);
+	if (port->ip_impdonation) {
+		statusp->mps_flags |= MACH_PORT_STATUS_FLAG_IMP_DONATION;
+		if (port->ip_tempowner) {
+			statusp->mps_flags |= MACH_PORT_STATUS_FLAG_TEMPOWNER;
+			if (IIT_NULL != port->ip_imp_task) {
+				statusp->mps_flags |= MACH_PORT_STATUS_FLAG_TASKPTR;
+			}
+		}
+	}
+	if (port->ip_guarded) {
+		statusp->mps_flags |= MACH_PORT_STATUS_FLAG_GUARDED;
+		if (port->ip_strict_guard) {
+			statusp->mps_flags |= MACH_PORT_STATUS_FLAG_STRICT_GUARD;
+		}
+	}
 	return;
 }
 
@@ -1894,20 +1905,27 @@ mach_port_set_attributes(
 		if (!MACH_PORT_VALID(name))
 			return KERN_INVALID_RIGHT;
 
-		task_t release_imp_task = TASK_NULL;
+		ipc_importance_task_t release_imp_task = IIT_NULL;
 		natural_t assertcnt = 0;
 
 		kr = ipc_port_translate_receive(space, name, &port);
 		if (kr != KERN_SUCCESS)
 			return kr;
-
 		/* port is locked and active */
 
+		/* 
+		 * don't allow temp-owner importance donation if user
+		 * associated it with a kobject already (timer, host_notify target).
+		 */
+		if (is_ipc_kobject(ip_kotype(port))) {
+			ip_unlock(port);
+			return KERN_INVALID_ARGUMENT;
+		}
+
 		if (port->ip_tempowner != 0) {
-			if (port->ip_taskptr != 0) {
+			if (IIT_NULL != port->ip_imp_task) {
 				release_imp_task = port->ip_imp_task;
-				port->ip_taskptr = 0;
-				port->ip_imp_task = TASK_NULL;
+				port->ip_imp_task = IIT_NULL;
 				assertcnt = port->ip_impcount;
 			}
 		} else {
@@ -1920,23 +1938,27 @@ mach_port_set_attributes(
 
 #if IMPORTANCE_INHERITANCE
 		/* drop assertions from previous destination task */
-		if (release_imp_task != TASK_NULL) {
-			assert(release_imp_task->imp_receiver != 0);
+		if (release_imp_task != IIT_NULL) {
+			assert(ipc_importance_task_is_any_receiver_type(release_imp_task));
 			if (assertcnt > 0)
-				task_importance_drop_internal_assertion(release_imp_task, assertcnt);
-			task_deallocate(release_imp_task);
+				ipc_importance_task_drop_internal_assertion(release_imp_task, assertcnt);
+			ipc_importance_task_release(release_imp_task);
 		} else if (assertcnt > 0) {
-			release_imp_task = current_task();
-			if (release_imp_task->imp_receiver != 0)
-				task_importance_drop_internal_assertion(release_imp_task, assertcnt);
+			release_imp_task = current_task()->task_imp_base;
+			if (release_imp_task != IIT_NULL &&
+			    ipc_importance_task_is_any_receiver_type(release_imp_task)) {
+				ipc_importance_task_drop_internal_assertion(release_imp_task, assertcnt);
+			}
 		}
 #else
-		if (release_imp_task != TASK_NULL)
-			task_deallocate(release_imp_task);
+		if (release_imp_task != IIT_NULL)
+			ipc_importance_task_release(release_imp_task);
 #endif /* IMPORTANCE_INHERITANCE */
 
 		break;
+
 #if IMPORTANCE_INHERITANCE
+	case MACH_PORT_DENAP_RECEIVER:
 	case MACH_PORT_IMPORTANCE_RECEIVER:
 		if (!MACH_PORT_VALID(name))
 			return KERN_INVALID_RIGHT;
@@ -1944,8 +1966,17 @@ mach_port_set_attributes(
 		kr = ipc_port_translate_receive(space, name, &port);
 		if (kr != KERN_SUCCESS)
 			return kr;
-		/* port is locked and active */
 
+		/* 
+		 * don't allow importance donation if user associated
+		 * it with a kobject already (timer, host_notify target).
+		 */
+		if (is_ipc_kobject(ip_kotype(port))) {
+			ip_unlock(port);
+			return KERN_INVALID_ARGUMENT;
+		}
+
+		/* port is locked and active */
 		port->ip_impdonation = 1;
 		ip_unlock(port);
 
@@ -2313,6 +2344,12 @@ mach_port_construct(
 			goto cleanup;
 	}
 
+	if (options->flags & MPO_DENAP_RECEIVER) {
+		kr = mach_port_set_attributes(space, *name, MACH_PORT_DENAP_RECEIVER, NULL, 0);
+		if (kr != KERN_SUCCESS)
+			goto cleanup;
+	}
+
 	if (options->flags & MPO_INSERT_SEND_RIGHT) {
 		kr = ipc_object_copyin(space, *name, MACH_MSG_TYPE_MAKE_SEND, (ipc_object_t *)&port);
 		if (kr != KERN_SUCCESS)
@@ -2459,180 +2496,3 @@ mach_port_unguard(
 	return kr;
 }
 
-/*
- * Get a (new) label handle representing the given port's port label.
- */
-#if CONFIG_MACF_MACH
-kern_return_t
-mach_get_label(
-	ipc_space_t		space,
-	mach_port_name_t	name,
-	mach_port_name_t	*outlabel)
-{
-	ipc_entry_t entry;
-	ipc_port_t port;
-	struct label outl;
-	kern_return_t kr;
-	int dead;
-
-	if (!MACH_PORT_VALID(name))
-		return KERN_INVALID_NAME;
-
-	/* Lookup the port name in the task's space. */
-	kr = ipc_right_lookup_write(space, name, &entry);
-	if (kr != KERN_SUCCESS)
-		return kr;
-
-	port = (ipc_port_t) entry->ie_object;
-	dead = ipc_right_check(space, port, name, entry);
-	if (dead) {
-		is_write_unlock(space);
-		ip_release(port);
-		return KERN_INVALID_RIGHT;
-	}
-	/* port is now locked */
-
-	is_write_unlock(space);
-	/* Make sure we are not dealing with a label handle. */
-	if (ip_kotype(port) == IKOT_LABELH) {
-		/* already is a label handle! */
-		ip_unlock(port);
-		return KERN_INVALID_ARGUMENT;
-	}
-
-	/* Copy the port label and stash it in a new label handle. */
-	mac_port_label_init(&outl);
-	mac_port_label_copy(&port->ip_label, &outl); 
-	kr = labelh_new_user(space, &outl, outlabel);
-	ip_unlock(port);
-
-	return KERN_SUCCESS;
-}
-#else
-kern_return_t
-mach_get_label(
-	 __unused ipc_space_t		space,
-	 __unused mach_port_name_t	name,
-	 __unused mach_port_name_t	*outlabel)
-{
-	return KERN_INVALID_ARGUMENT;
-}
-#endif
-
-/*
- * also works on label handles
- */
-#if CONFIG_MACF_MACH
-kern_return_t
-mach_get_label_text(
-	ipc_space_t		space,
-	mach_port_name_t	name,
-	labelstr_t		policies,
-	labelstr_t		outlabel)
-{
-	ipc_entry_t entry;
-	ipc_port_t port;
-	kern_return_t kr;
-	struct label *l;
-	int dead;
-
-	if (space == IS_NULL || space->is_task == NULL)
-		return KERN_INVALID_TASK;
-
-	if (!MACH_PORT_VALID(name))
-		return KERN_INVALID_NAME;
-
-	kr = ipc_right_lookup_write(space, name, &entry);
-	if (kr != KERN_SUCCESS)
-		return kr;
-
-	port = (ipc_port_t)entry->ie_object;
-	dead = ipc_right_check(space, port, name, entry);
-	if (dead) {
-		is_write_unlock(space);
-		ip_release(port);
-		return KERN_INVALID_RIGHT;
-	}
-	/* object (port) is now locked */
-
-	is_write_unlock (space);
-	l = io_getlabel(entry->ie_object);
-
-	mac_port_label_externalize(l, policies, outlabel, 512, 0);
-
-	io_unlocklabel(entry->ie_object);
-	io_unlock(entry->ie_object);
-	return KERN_SUCCESS;
-}
-#else
-kern_return_t
-mach_get_label_text(
-	__unused ipc_space_t		space,
-	__unused mach_port_name_t	name,
-	__unused labelstr_t		policies,
-	__unused labelstr_t		outlabel)
-{
-	return KERN_INVALID_ARGUMENT;
-}
-#endif
-
-
-#if CONFIG_MACF_MACH
-kern_return_t
-mach_set_port_label(
-	ipc_space_t		space,
-	mach_port_name_t	name,
-	labelstr_t		labelstr)
-{
-	ipc_entry_t entry;
-	kern_return_t kr;
-	struct label inl;
-	ipc_port_t port;
-	int rc;
-
-	if (space == IS_NULL || space->is_task == NULL)
-		return KERN_INVALID_TASK;
-
-	if (!MACH_PORT_VALID(name))
-		return KERN_INVALID_NAME;
-
-	mac_port_label_init(&inl);
-	rc = mac_port_label_internalize(&inl, labelstr);
-	if (rc)
-		return KERN_INVALID_ARGUMENT;
-
-	kr = ipc_right_lookup_write(space, name, &entry);
-	if (kr != KERN_SUCCESS)
-		return kr;
-
-	if (io_otype(entMACry->ie_object) != IOT_PORT) {
-		is_write_unlock(space);
-		return KERN_INVALID_RIGHT;
-	}
-
-	port = (ipc_port_t) entry->ie_object;
-	ip_lock(port);
-
-	tasklabel_lock(space->is_task);
-	rc = mac_port_check_label_update(&space->is_task->maclabel,
-				    &port->ip_label, &inl);
-	tasklabel_unlock(space->is_task);
-	if (rc)
-		kr = KERN_NO_ACCESS;
-	else
-		mac_port_label_copy(&inl, &port->ip_label);
-
-	ip_unlock(port);
-	is_write_unlock(space);
-	return kr;
-}
-#else
-kern_return_t
-mach_set_port_label(
-	ipc_space_t		space __unused,
-	mach_port_name_t	name __unused,
-	labelstr_t		labelstr __unused)
-{
-	return KERN_INVALID_ARGUMENT;
-}
-#endif

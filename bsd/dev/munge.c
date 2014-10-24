@@ -31,62 +31,63 @@
 #include <sys/munge.h>
 #include <stdint.h>
 
-static inline __attribute__((always_inline)) void 
-munge_32_to_64_unsigned(volatile uint64_t *dest, volatile uint32_t *src, int count);
-
 /*
  * Refer to comments in bsd/sys/munge.h
  */
+
+static inline __attribute__((always_inline)) void 
+munge_32_to_64_unsigned(volatile uint64_t *dest, volatile uint32_t *src, int count);
+
 void 
-munge_w(const void *arg0 __unused, void *args)
+munge_w(void *args)
 {
 	munge_32_to_64_unsigned(args, args, 1);
 }
 
 void 
-munge_ww(const void *arg0 __unused, void *args)
+munge_ww(void *args)
 {
 	munge_32_to_64_unsigned(args, args, 2);
 }
 
 void 
-munge_www(const void *arg0 __unused, void *args)
+munge_www(void *args)
 {
 	munge_32_to_64_unsigned(args, args, 3);
 }
 
 void 
-munge_wwww(const void *arg0 __unused, void *args)
+munge_wwww(void *args)
 {
 	munge_32_to_64_unsigned(args, args, 4);
 }
 
 void 
-munge_wwwww(const void *arg0 __unused, void *args)
+munge_wwwww(void *args)
 {
 	munge_32_to_64_unsigned(args, args, 5);
 }
 
 void 
-munge_wwwwww(const void *arg0 __unused, void *args)
+munge_wwwwww(void *args)
 {
 	munge_32_to_64_unsigned(args, args, 6);
 }
 
 void 
-munge_wwwwwww(const void *arg0 __unused, void *args)
+munge_wwwwwww(void *args)
 {
 	munge_32_to_64_unsigned(args, args, 7);
 }
 
 void 
-munge_wwwwwwww(const void *arg0 __unused, void *args)
+munge_wwwwwwww(void *args)
 {
 	munge_32_to_64_unsigned(args, args, 8);
 }
 
 void 
-munge_wl(const void *arg0 __unused, void *args)
+munge_wl(void *args)
 {
 	volatile uint64_t *out_args = (volatile uint64_t*)args;
 	volatile uint32_t *in_args = (volatile uint32_t*)args;
@@ -96,7 +97,7 @@ munge_wl(const void *arg0 __unused, void *args)
 }
 
 void 
-munge_wwl(const void *arg0 __unused, void *args)
+munge_wwl(void *args)
 {
 	volatile uint64_t *out_args = (volatile uint64_t*)args;
 	volatile uint32_t *in_args = (volatile uint32_t*)args;
@@ -107,7 +108,7 @@ munge_wwl(const void *arg0 __unused, void *args)
 }
 
 void 
-munge_wwlw(const void *arg0 __unused, void *args)
+munge_wwlw(void *args)
 {
 	volatile uint64_t *out_args = (volatile uint64_t*)args;
 	volatile uint32_t *in_args = (volatile uint32_t*)args;
@@ -118,7 +119,7 @@ munge_wwlw(const void *arg0 __unused, void *args)
 	out_args[0] = in_args[0];
 }
 void 
-munge_wwlll(const void *arg0 __unused, void *args)
+munge_wwlll(void *args)
 {
 	volatile uint64_t *out_args = (volatile uint64_t*)args;
 	volatile uint32_t *in_args = (volatile uint32_t*)args;
@@ -131,7 +132,7 @@ munge_wwlll(const void *arg0 __unused, void *args)
 }
 
 void
-munge_wwllww(const void *arg0 __unused, void *args)
+munge_wwllww(void *args)
 {
 	volatile uint64_t *out_args = (volatile uint64_t*)args;
 	volatile uint32_t *in_args = (volatile uint32_t*)args;
@@ -145,7 +146,7 @@ munge_wwllww(const void *arg0 __unused, void *args)
 }
 
 void
-munge_wlw(const void *arg0 __unused, void *args)
+munge_wlw(void *args)
 {
 	volatile uint64_t *out_args = (volatile uint64_t*)args;
 	volatile uint32_t *in_args = (volatile uint32_t*)args;
@@ -156,7 +157,7 @@ munge_wlw(const void *arg0 __unused, void *args)
 }
 
 void
-munge_wlwwwll(const void *arg0 __unused, void *args)
+munge_wlwwwll(void *args)
 {
 	volatile uint64_t *out_args = (volatile uint64_t*)args;
 	volatile uint32_t *in_args = (volatile uint32_t*)args;
@@ -171,17 +172,17 @@ munge_wlwwwll(const void *arg0 __unused, void *args)
 }
 
 void
-munge_wlwwwllw(const void *arg0 __unused, void *args)
+munge_wlwwwllw(void *args)
 {
 	volatile uint64_t *out_args = (volatile uint64_t*)args;
 	volatile uint32_t *in_args = (volatile uint32_t*)args;
 
 	out_args[7] = in_args[10];
-	munge_wlwwwll(args, args);
+	munge_wlwwwll(args);
 }
 
 void 
-munge_wlwwlwlw(const void *arg0 __unused, void *args)
+munge_wlwwlwlw(void *args)
 {
 	volatile uint64_t *out_args = (volatile uint64_t*)args;
 	volatile uint32_t *in_args = (volatile uint32_t*)args;
@@ -197,7 +198,7 @@ munge_wlwwlwlw(const void *arg0 __unused, void *args)
 }
 
 void 
-munge_wll(const void *arg0 __unused, void *args)
+munge_wll(void *args)
 {
 	volatile uint64_t *out_args = (volatile uint64_t*)args;
 	volatile uint32_t *in_args = (volatile uint32_t*)args;
@@ -208,7 +209,7 @@ munge_wll(const void *arg0 __unused, void *args)
 }
 
 void 
-munge_wlll(const void *arg0 __unused, void *args)
+munge_wlll(void *args)
 {
 	volatile uint64_t *out_args = (volatile uint64_t*)args;
 	volatile uint32_t *in_args = (volatile uint32_t*)args;
@@ -220,7 +221,7 @@ munge_wlll(const void *arg0 __unused, void *args)
 }
 
 void
-munge_wllww(const void *arg0 __unused, void *args)
+munge_wllww(void *args)
 {
 	volatile uint64_t *out_args = (volatile uint64_t*)args;
 	volatile uint32_t *in_args = (volatile uint32_t*)args;
@@ -233,7 +234,7 @@ munge_wllww(const void *arg0 __unused, void *args)
 }
 
 void 
-munge_wllwwll(const void *arg0 __unused, void *args)
+munge_wllwwll(void *args)
 {
 	volatile uint64_t *out_args = (volatile uint64_t*)args;
 	volatile uint32_t *in_args = (volatile uint32_t*)args;
@@ -248,7 +249,7 @@ munge_wllwwll(const void *arg0 __unused, void *args)
 }
 
 void 
-munge_wwwlw(const void *arg0 __unused, void *args)
+munge_wwwlw(void *args)
 {
 	volatile uint64_t *out_args = (volatile uint64_t*)args;
 	volatile uint32_t *in_args = (volatile uint32_t*)args;
@@ -261,7 +262,7 @@ munge_wwwlw(const void *arg0 __unused, void *args)
 }
 
 void 
-munge_wwwlww(const void *arg0 __unused, void *args)
+munge_wwwlww(void *args)
 {
 	volatile uint64_t *out_args = (volatile uint64_t*)args;
 	volatile uint32_t *in_args = (volatile uint32_t*)args;
@@ -275,7 +276,7 @@ munge_wwwlww(const void *arg0 __unused, void *args)
 }
 	
 void 
-munge_wwwl(const void *arg0 __unused, void *args)
+munge_wwwl(void *args)
 {
 	volatile uint64_t *out_args = (volatile uint64_t*)args;
 	volatile uint32_t *in_args = (volatile uint32_t*)args;
@@ -287,7 +288,7 @@ munge_wwwl(const void *arg0 __unused, void *args)
 }
 
 void 
-munge_wwwwlw(const void *arg0 __unused, void *args)
+munge_wwwwlw(void *args)
 {
 	volatile uint64_t *out_args = (volatile uint64_t*)args;
 	volatile uint32_t *in_args = (volatile uint32_t*)args;
@@ -301,7 +302,7 @@ munge_wwwwlw(const void *arg0 __unused, void *args)
 }
 
 void 
-munge_wwwwl(const void *arg0 __unused, void *args)
+munge_wwwwl(void *args)
 {
 	volatile uint64_t *out_args = (volatile uint64_t*)args;
 	volatile uint32_t *in_args = (volatile uint32_t*)args;
@@ -314,7 +315,7 @@ munge_wwwwl(const void *arg0 __unused, void *args)
 }
 
 void 
-munge_wwwwwl(const void *arg0 __unused, void *args)
+munge_wwwwwl(void *args)
 {
 	volatile uint64_t *out_args = (volatile uint64_t*)args;
 	volatile uint32_t *in_args = (volatile uint32_t*)args;
@@ -328,7 +329,7 @@ munge_wwwwwl(const void *arg0 __unused, void *args)
 }
 
 void 
-munge_wwwwwlww(const void *arg0 __unused, void *args)
+munge_wwwwwlww(void *args)
 {
 	volatile uint64_t *out_args = (volatile uint64_t*)args;
 	volatile uint32_t *in_args = (volatile uint32_t*)args;
@@ -344,7 +345,7 @@ munge_wwwwwlww(const void *arg0 __unused, void *args)
 }
 
 void 
-munge_wwwwwllw(const void *arg0 __unused, void *args)
+munge_wwwwwllw(void *args)
 {
 	volatile uint64_t *out_args = (volatile uint64_t*)args;
 	volatile uint32_t *in_args = (volatile uint32_t*)args;
@@ -360,7 +361,7 @@ munge_wwwwwllw(const void *arg0 __unused, void *args)
 }
 
 void 
-munge_wwwwwlll(const void *arg0 __unused, void *args)
+munge_wwwwwlll(void *args)
 {
 	volatile uint64_t *out_args = (volatile uint64_t*)args;
 	volatile uint32_t *in_args = (volatile uint32_t*)args;
@@ -376,7 +377,7 @@ munge_wwwwwlll(const void *arg0 __unused, void *args)
 }
 
 void 
-munge_wwwwwwl(const void *arg0 __unused, void *args)
+munge_wwwwwwl(void *args)
 {
 	volatile uint64_t *out_args = (volatile uint64_t*)args;
 	volatile uint32_t *in_args = (volatile uint32_t*)args;
@@ -391,7 +392,7 @@ munge_wwwwwwl(const void *arg0 __unused, void *args)
 }
 	
 void 
-munge_wwwwwwlw(const void *arg0 __unused, void *args)
+munge_wwwwwwlw(void *args)
 {
 	volatile uint64_t *out_args = (volatile uint64_t*)args;
 	volatile uint32_t *in_args = (volatile uint32_t*)args;
@@ -407,7 +408,7 @@ munge_wwwwwwlw(const void *arg0 __unused, void *args)
 }
 	
 void 
-munge_wwwwwwll(const void *arg0 __unused, void *args)
+munge_wwwwwwll(void *args)
 {
 	volatile uint64_t *out_args = (volatile uint64_t*)args;
 	volatile uint32_t *in_args = (volatile uint32_t*)args;
@@ -423,7 +424,7 @@ munge_wwwwwwll(const void *arg0 __unused, void *args)
 }
 
 void 
-munge_wsw(const void *arg0 __unused, void *args)
+munge_wsw(void *args)
 {
 	volatile uint64_t *out_args = (volatile uint64_t*)args;
 	volatile uint32_t *in_args = (volatile uint32_t*)args;
@@ -434,7 +435,7 @@ munge_wsw(const void *arg0 __unused, void *args)
 }
 
 void 
-munge_wws(const void *arg0 __unused, void *args)
+munge_wws(void *args)
 {
 	volatile uint64_t *out_args = (volatile uint64_t*)args;
 	volatile uint32_t *in_args = (volatile uint32_t*)args;
@@ -445,7 +446,7 @@ munge_wws(const void *arg0 __unused, void *args)
 }
 
 void 
-munge_wwwsw(const void *arg0 __unused, void *args)
+munge_wwwsw(void *args)
 {
 	volatile uint64_t *out_args = (volatile uint64_t*)args;
 	volatile uint32_t *in_args = (volatile uint32_t*)args;
@@ -458,25 +459,25 @@ munge_wwwsw(const void *arg0 __unused, void *args)
 }
 
 void 
-munge_llllll(const void *arg0 __unused, void *args __unused)
+munge_llllll(void *args __unused)
 {
 	/* Nothing to do, already all 64-bit */
 }
 
 void 
-munge_ll(const void *arg0 __unused, void *args __unused)
+munge_ll(void *args __unused)
 {
 	/* Nothing to do, already all 64-bit */
 }
 
 void 
-munge_l(const void *arg0 __unused, void *args __unused)
+munge_l(void *args __unused)
 {
 	/* Nothing to do, already all 64-bit */
 }
 
 void 
-munge_lw(const void *arg0 __unused, void *args)
+munge_lw(void *args)
 {
 	volatile uint64_t *out_args = (volatile uint64_t*)args;
 	volatile uint32_t *in_args = (volatile uint32_t*)args;
@@ -486,7 +487,7 @@ munge_lw(const void *arg0 __unused, void *args)
 }
 
 void 
-munge_lwww(const void *arg0 __unused, void *args)
+munge_lwww(void *args)
 {
 	volatile uint64_t *out_args = (volatile uint64_t*)args;
 	volatile uint32_t *in_args = (volatile uint32_t*)args;
@@ -498,7 +499,7 @@ munge_lwww(const void *arg0 __unused, void *args)
 }
 
 void
-munge_wwlwww(const void *arg0 __unused, void *args)
+munge_wwlwww(void *args)
 {
 	volatile uint64_t *out_args = (volatile uint64_t*)args;
 	volatile uint32_t *in_args = (volatile uint32_t*)args;
@@ -525,4 +526,3 @@ munge_32_to_64_unsigned(volatile uint64_t *dest, volatile uint32_t *src, int cou
 		dest[i] = src[i];
 	}   
 }
-

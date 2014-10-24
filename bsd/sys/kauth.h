@@ -296,7 +296,7 @@ extern kauth_cred_t	kauth_cred_setgroups(kauth_cred_t cred, gid_t *groups, int g
 struct uthread;
 extern void	kauth_cred_uthread_update(struct uthread *, proc_t);
 #ifdef CONFIG_MACF
-extern int kauth_proc_label_update_execve(struct proc *p, struct vfs_context *ctx, struct vnode *vp, struct vnode *scriptvp, struct label *scriptlabel, struct label *execlabel, void *psattr);
+extern void kauth_proc_label_update_execve(struct proc *p, struct vfs_context *ctx, struct vnode *vp, off_t offset, struct vnode *scriptvp, struct label *scriptlabel, struct label *execlabel, unsigned int *csflags, void *psattr, int *disjoint, int *update_return);
 #endif
 extern int	kauth_cred_getgroups(kauth_cred_t _cred, gid_t *_groups, int *_groupcount);
 extern int	kauth_cred_assume(uid_t _uid);

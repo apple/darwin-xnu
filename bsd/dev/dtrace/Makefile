@@ -7,7 +7,7 @@ export MakeInc_dir=${SRCROOT}/makedefs/MakeInc.dir
 include $(MakeInc_cmd)
 include $(MakeInc_def)
 
-INST_SUBDIRS = scripts
+INSTTEXTFILES_SUBDIRS = scripts
 
 include $(MakeInc_rule)
 include $(MakeInc_dir)

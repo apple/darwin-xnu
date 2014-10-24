@@ -1,6 +1,6 @@
 
 /*
- * Copyright (c) 2000-2002 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2014 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -699,6 +699,23 @@ struct vnodeop_desc vnop_readdirattr_desc = {
 	NULL
 };
 
+int vnop_getattrlistbulk_vp_offsets[] = {
+	VOPARG_OFFSETOF(struct vnop_getattrlistbulk_args,a_vp),
+	VDESC_NO_OFFSET
+};
+struct vnodeop_desc vnop_getattrlistbulk_desc = {
+	0,
+	"vnop_getattrlistbulk",
+	0,
+	vnop_getattrlistbulk_vp_offsets,
+	VDESC_NO_OFFSET,
+	VDESC_NO_OFFSET,
+	VDESC_NO_OFFSET,
+	VDESC_NO_OFFSET,
+	VOPARG_OFFSETOF(struct vnop_getattrlistbulk_args, a_context),
+	NULL
+};
+
 int vnop_readlink_vp_offsets[] = {
 	VOPARG_OFFSETOF(struct vnop_readlink_args,a_vp),
 	VDESC_NO_OFFSET
@@ -1123,6 +1140,7 @@ struct vnodeop_desc *vfs_op_descs[] = {
 	&vnop_symlink_desc,
 	&vnop_readdir_desc,
 	&vnop_readdirattr_desc,
+	&vnop_getattrlistbulk_desc,
 	&vnop_readlink_desc,
 	&vnop_inactive_desc,
 	&vnop_reclaim_desc,

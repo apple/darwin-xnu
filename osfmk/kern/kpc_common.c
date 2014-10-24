@@ -50,13 +50,105 @@ static lck_grp_attr_t *kpc_config_lckgrp_attr = NULL;
 static lck_grp_t      *kpc_config_lckgrp = NULL;
 static lck_mtx_t       kpc_config_lock;
 
-void kpc_arch_init(void);
+/* state specifying if all counters have been requested by kperf */
+static boolean_t force_all_ctrs = FALSE;
+
+/* PM handler called when forcing/releasing all counters */
+static void (*pm_handler)(boolean_t) = NULL;
+
+void kpc_common_init(void);
 void
-kpc_arch_init(void)
+kpc_common_init(void)
 {
 	kpc_config_lckgrp_attr = lck_grp_attr_alloc_init();
 	kpc_config_lckgrp = lck_grp_alloc_init("kpc", kpc_config_lckgrp_attr);
 	lck_mtx_init(&kpc_config_lock, kpc_config_lckgrp, LCK_ATTR_NULL);
+}
+
+static void
+kpc_task_set_forced_all_ctrs(task_t task, boolean_t state)
+{
+	assert(task);
+
+	task_lock(task);
+	if (state)
+		task->t_chud |= TASK_KPC_FORCED_ALL_CTRS;
+	else
+		task->t_chud &= ~TASK_KPC_FORCED_ALL_CTRS;
+	task_unlock(task);
+}
+
+static boolean_t
+kpc_task_get_forced_all_ctrs(task_t task)
+{
+	assert(task);
+	return task->t_chud & TASK_KPC_FORCED_ALL_CTRS ? TRUE : FALSE;
+}
+
+int
+kpc_force_all_ctrs(task_t task, int val)
+{
+	int		ret = 0;
+	boolean_t	new_state = val ? TRUE : FALSE;
+	boolean_t 	old_state = kpc_get_force_all_ctrs();
+
+	/*
+	 * Refuse to do the operation if the counters are already forced by
+	 * another task.
+	 */
+	if (kpc_get_force_all_ctrs() && !kpc_task_get_forced_all_ctrs(task))
+		return EACCES;
+
+	/* nothing to do if the state is not changing */
+	if (old_state == new_state)
+		return 0;
+
+	/* do the architecture specific work */
+	if ((ret = kpc_force_all_ctrs_arch(task, val)) != 0)
+		return ret;
+
+	/* notify the power manager */
+	if (pm_handler)
+		pm_handler( new_state ? FALSE : TRUE );
+
+	/* update the task bits */
+	kpc_task_set_forced_all_ctrs(task, val);
+
+	/* update the internal state */
+	force_all_ctrs = val;
+
+	return 0;
+}
+
+int
+kpc_get_force_all_ctrs(void)
+{
+	return force_all_ctrs;
+}
+
+boolean_t
+kpc_register_pm_handler(void (*handler)(boolean_t))
+{
+	if (!pm_handler) {
+		pm_handler = handler;
+	}
+
+	/* Notify machine-dependent code. Reserved PMCs could change. */
+	kpc_force_all_ctrs_arch(TASK_NULL, force_all_ctrs);
+
+	return force_all_ctrs ? FALSE : TRUE;
+}
+
+boolean_t
+kpc_multiple_clients(void)
+{
+	return pm_handler != NULL;
+}
+
+boolean_t
+kpc_controls_fixed_counters(void)
+{
+	return !pm_handler || force_all_ctrs;
 }
 
 uint32_t
@@ -169,6 +261,9 @@ kpc_get_config_count(uint32_t classes)
 	if( classes & KPC_CLASS_CONFIGURABLE_MASK )
 		count += kpc_configurable_config_count();
 
+	if( (classes & KPC_CLASS_RAWPMU_MASK) && !kpc_multiple_clients() )
+		count += kpc_rawpmu_config_count();
+
 	return count;
 }
 
@@ -189,6 +284,19 @@ kpc_get_config(uint32_t classes, kpc_config_t *current_config)
 		count += kpc_get_config_count(KPC_CLASS_CONFIGURABLE_MASK);
 	}
 
+	if( classes & KPC_CLASS_RAWPMU_MASK )
+	{
+		// Client shouldn't ask for config words that aren't available.
+		// Most likely, they'd misinterpret the returned buffer if we
+		// allowed this.
+		if( kpc_multiple_clients() )
+		{
+			return EPERM;
+		}
+		kpc_get_rawpmu_config(&current_config[count]);
+		count += kpc_get_config_count(KPC_CLASS_RAWPMU_MASK);
+	}
+
 	return 0;
 }
 
@@ -196,6 +304,12 @@ int
 kpc_set_config(uint32_t classes, kpc_config_t *configv)
 {
 	struct kpc_config_remote mp_config;
+
+	// Don't allow RAWPMU configuration when sharing counters.
+	if( (classes & KPC_CLASS_RAWPMU_MASK) && kpc_multiple_clients() )
+	{
+		return EPERM;
+	}
 
 	lck_mtx_lock(&kpc_config_lock);
 
@@ -361,4 +475,3 @@ int kpc_get_actionid(uint32_t classes, uint32_t *val)
 	return 0;
 
 }
-

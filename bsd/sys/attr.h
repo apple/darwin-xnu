@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2014 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2010 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -53,6 +53,8 @@
 #define FSOPT_EXCHANGE_DATA_ONLY 0x0000010
 #endif
 
+#define FSOPT_ATTR_CMN_EXTENDED	0x00000020
+
 /* we currently aren't anywhere near this amount for a valid
  * fssearchblock.sizeofsearchparams1 or fssearchblock.sizeofsearchparams2
  * but we put a sanity check in to avoid abuse of the value passed in from
@@ -79,7 +81,7 @@ typedef u_int32_t attrgroup_t;
 
 struct attrlist {
 	u_short bitmapcount;			/* number of attr. bit sets in list (should be 5) */
-	u_int16_t reserved;				/* (to maintain 4-byte alignment) */
+	u_int16_t reserved;			/* (to maintain 4-byte alignment) */
 	attrgroup_t commonattr;			/* common attribute group */
 	attrgroup_t volattr;			/* Volume attribute group */
 	attrgroup_t dirattr;			/* directory attribute group */
@@ -340,8 +342,19 @@ typedef struct vol_attributes_attr {
 #define ATTR_CMN_GRPID				0x00010000
 #define ATTR_CMN_ACCESSMASK			0x00020000
 #define ATTR_CMN_FLAGS				0x00040000
-/*  #define ATTR_CMN_NAMEDATTRCOUNT		0x00080000	 not implemented */
-/*  #define ATTR_CMN_NAMEDATTRLIST		0x00100000	 not implemented */
+
+/* The following were defined as:				*/
+/*  	#define ATTR_CMN_NAMEDATTRCOUNT		0x00080000	*/
+/* 	#define ATTR_CMN_NAMEDATTRLIST		0x00100000	*/
+/* These bits have been salvaged for use as:			*/
+/*	#define ATTR_CMN_GEN_COUNT		0x00080000	*/
+/*	#define ATTR_CMN_DOCUMENT_ID		0x00100000	*/
+/* They can only be used with the  FSOPT_ATTR_CMN_EXTENDED	*/
+/* option flag.                                           	*/
+
+#define ATTR_CMN_GEN_COUNT			0x00080000
+#define ATTR_CMN_DOCUMENT_ID			0x00100000
+
 #define ATTR_CMN_USERACCESS			0x00200000
 #define ATTR_CMN_EXTENDED_SECURITY		0x00400000
 #define ATTR_CMN_UUID				0x00800000
@@ -350,14 +363,16 @@ typedef struct vol_attributes_attr {
 #define ATTR_CMN_PARENTID			0x04000000
 #define ATTR_CMN_FULLPATH			0x08000000
 #define ATTR_CMN_ADDEDTIME			0x10000000
+#define ATTR_CMN_ERROR				0x20000000
+#define ATTR_CMN_DATA_PROTECT_FLAGS		0x40000000
 
 /*
- * ATTR_CMN_RETURNED_ATTRS is only valid with getattrlist(2).
- * It is always the first attribute in the return buffer.
+ * ATTR_CMN_RETURNED_ATTRS is only valid with getattrlist(2) and
+ * getattrlistbulk(2). It is always the first attribute in the return buffer.
  */
-#define ATTR_CMN_RETURNED_ATTRS			0x80000000
+#define ATTR_CMN_RETURNED_ATTRS 		0x80000000	
 
-#define ATTR_CMN_VALIDMASK			0xBFFFFFFF
+#define ATTR_CMN_VALIDMASK			0xFFFFFFFF
 #define ATTR_CMN_SETMASK			0x01C7FF00
 #define ATTR_CMN_VOLSETMASK			0x00006700
 
@@ -420,12 +435,15 @@ typedef struct vol_attributes_attr {
 #define ATTR_FORK_SETMASK			0x00000000
 
 /* Obsolete, implemented, not supported */
-#define ATTR_CMN_NAMEDATTRCOUNT			0x00080000	/* not implemented */
-#define ATTR_CMN_NAMEDATTRLIST			0x00100000	/* not implemented */
+#define ATTR_CMN_NAMEDATTRCOUNT			0x00080000
+#define ATTR_CMN_NAMEDATTRLIST			0x00100000
 #define ATTR_FILE_CLUMPSIZE			0x00000010	/* obsolete */
 #define ATTR_FILE_FILETYPE			0x00000040	/* always zero */
 #define ATTR_FILE_DATAEXTENTS			0x00000800	/* obsolete, HFS-specific */
 #define ATTR_FILE_RSRCEXTENTS			0x00004000	/* obsolete, HFS-specific */
+
+/* Required attributes for getattrlistbulk(2) */
+#define ATTR_BULK_REQUIRED (ATTR_CMN_NAME | ATTR_CMN_RETURNED_ATTRS)
 
 /*
  * Searchfs

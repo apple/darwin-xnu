@@ -29,6 +29,11 @@
 #ifndef _IOKIT_IODATAQUEUE_H
 #define _IOKIT_IODATAQUEUE_H
 
+#ifndef DISABLE_DATAQUEUE_WARNING
+#warning "IODataQueue is deprecated due to security issues in its interfaces, please use IOSharedDataQueue instead"
+#endif
+
+
 #include <libkern/c++/OSObject.h>
 #include <libkern/OSTypes.h>
 #include <mach/port.h>
@@ -54,7 +59,11 @@ struct _notifyMsg {
  *
  * <br>In order to make the data queue memory available to a user process, the method getMemoryDescriptor() must be used to get an IOMemoryDescriptor instance that can be mapped into a user process.  Typically, the clientMemoryForType() method on an IOUserClient instance will be used to request the IOMemoryDescriptor and then return it to be mapped into the user process.
  */
+#ifndef DISABLE_DATAQUEUE_WARNING 
+class __attribute__((deprecated)) IODataQueue : public OSObject
+#else 
 class IODataQueue : public OSObject
+#endif
 {
     OSDeclareDefaultStructors(IODataQueue)
 

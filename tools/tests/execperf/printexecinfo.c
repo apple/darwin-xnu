@@ -5,6 +5,7 @@
 #include <mach/mach.h>
 #include <mach-o/ldsyms.h>
 #include <mach-o/dyld_images.h>
+#include <mach-o/arch.h>
 #include <stdlib.h>
 #include <sys/sysctl.h>
 
@@ -31,8 +32,14 @@ void printexecinfo(void)
 	int ret;
 	uint64_t stackaddr;
 	size_t len = sizeof(stackaddr);
+	const NXArchInfo *arch = NXGetArchInfoFromCpuType(_mh_execute_header.cputype, _mh_execute_header.cpusubtype & ~CPU_SUBTYPE_MASK);
 
 	printf("executable load address = 0x%016llx\n", (uint64_t)(uintptr_t)&_mh_execute_header);
+	printf("executable cputype 0x%08x cpusubtype 0x%08x (%s:%s)\n",
+		   _mh_execute_header.cputype,
+		   _mh_execute_header.cpusubtype,
+		   arch ? arch->name : "unknown",
+		   arch ? arch->description : "unknown");
 
 	ret = sysctlbyname("kern.usrstack64", &stackaddr, &len, NULL, 0);
 	if (ret == -1)

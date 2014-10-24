@@ -290,13 +290,16 @@ nd6_prproxy_prelist_setroute(boolean_t enable,
 
 	SLIST_FOREACH_SAFE(up, up_head, ndprl_le, ndprl_tmp) {
 		struct rtentry *rt;
-		boolean_t prproxy;
+		boolean_t prproxy, set_allmulti = FALSE;
+		int allmulti_sw;
+		struct ifnet *ifp = NULL;
 
 		SLIST_REMOVE(up_head, up, nd6_prproxy_prelist, ndprl_le);
 		pr = up->ndprl_pr;
 		VERIFY(up->ndprl_up == NULL);
 
 		NDPR_LOCK(pr);
+		ifp = pr->ndpr_ifp;
 		prproxy = (pr->ndpr_stateflags & NDPRF_PRPROXY);
 		VERIFY(!prproxy || ((pr->ndpr_stateflags & NDPRF_ONLINK) &&
 		    !(pr->ndpr_stateflags & NDPRF_IFSCOPE)));
@@ -308,11 +311,13 @@ nd6_prproxy_prelist_setroute(boolean_t enable,
 		if (enable && pr->ndpr_allmulti_cnt == 0) {
 			nd6_prproxy++;
 			pr->ndpr_allmulti_cnt++;
-			if_allmulti(pr->ndpr_ifp, TRUE);
+			set_allmulti = TRUE;
+			allmulti_sw = TRUE;
 		} else if (!enable && pr->ndpr_allmulti_cnt > 0) {
 			nd6_prproxy--;
 			pr->ndpr_allmulti_cnt--;
-			if_allmulti(pr->ndpr_ifp, FALSE);
+			set_allmulti = TRUE;
+			allmulti_sw = FALSE;
 		}
 
 		if ((rt = pr->ndpr_rt) != NULL) {
@@ -324,6 +329,12 @@ nd6_prproxy_prelist_setroute(boolean_t enable,
 		} else {
 			NDPR_UNLOCK(pr);
 		}
+
+		/* Call the following ioctl after releasing NDPR lock */ 
+		if (set_allmulti && ifp != NULL)
+			if_allmulti(ifp, allmulti_sw);
+
+		
 		NDPR_REMREF(pr);
 		if (rt != NULL) {
 			rt_set_proxy(rt, enable);
@@ -335,7 +346,9 @@ nd6_prproxy_prelist_setroute(boolean_t enable,
 	SLIST_FOREACH_SAFE(down, down_head, ndprl_le, ndprl_tmp) {
 		struct nd_prefix *pr_up;
 		struct rtentry *rt;
-		boolean_t prproxy;
+		boolean_t prproxy, set_allmulti = FALSE;
+		int allmulti_sw;
+		struct ifnet *ifp = NULL;
 
 		SLIST_REMOVE(down_head, down, nd6_prproxy_prelist, ndprl_le);
 		pr = down->ndprl_pr;
@@ -343,6 +356,7 @@ nd6_prproxy_prelist_setroute(boolean_t enable,
 		VERIFY(pr_up != NULL);
 
 		NDPR_LOCK(pr_up);
+		ifp = pr->ndpr_ifp;
 		prproxy = (pr_up->ndpr_stateflags & NDPRF_PRPROXY);
 		VERIFY(!prproxy || ((pr_up->ndpr_stateflags & NDPRF_ONLINK) &&
 		    !(pr_up->ndpr_stateflags & NDPRF_IFSCOPE)));
@@ -351,10 +365,12 @@ nd6_prproxy_prelist_setroute(boolean_t enable,
 		NDPR_LOCK(pr);
 		if (enable && pr->ndpr_allmulti_cnt == 0) {
 			pr->ndpr_allmulti_cnt++;
-			if_allmulti(pr->ndpr_ifp, TRUE);
+			set_allmulti = TRUE;
+			allmulti_sw = TRUE;
 		} else if (!enable && pr->ndpr_allmulti_cnt > 0) {
 			pr->ndpr_allmulti_cnt--;
-			if_allmulti(pr->ndpr_ifp, FALSE);
+			set_allmulti = TRUE;
+			allmulti_sw = FALSE;
 		}
 
 		if ((rt = pr->ndpr_rt) != NULL) {
@@ -366,6 +382,9 @@ nd6_prproxy_prelist_setroute(boolean_t enable,
 		} else {
 			NDPR_UNLOCK(pr);
 		}
+		if (set_allmulti && ifp != NULL)
+			if_allmulti(ifp, allmulti_sw);
+
 		NDPR_REMREF(pr);
 		NDPR_REMREF(pr_up);
 		if (rt != NULL) {

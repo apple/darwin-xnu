@@ -192,17 +192,6 @@ static struct protosw inetsw[] = {
 	.pr_usrreqs =		&rip_usrreqs,
 	.pr_unlock =		rip_unlock,
 },
-#if MROUTING
-{
-	.pr_type =		SOCK_RAW,
-	.pr_protocol =		IPPROTO_RSVP,
-	.pr_flags =		PR_ATOMIC|PR_ADDR|PR_LASTHDR,
-	.pr_input =		rsvp_input,
-	.pr_ctloutput =		rip_ctloutput,
-	.pr_usrreqs =		&rip_usrreqs,
-	.pr_unlock =		rip_unlock,
-},
-#endif /* MROUTING */
 {
 	.pr_type =		SOCK_RAW,
 	.pr_protocol =		IPPROTO_GRE,

@@ -70,7 +70,6 @@
 
 #ifndef	ASSEMBLER
 
-#include <platforms.h>
 
 #include <mach/kern_return.h>
 #include <mach/machine/vm_types.h>
@@ -79,7 +78,7 @@
 #include <mach/machine/vm_param.h>
 #include <kern/kern_types.h>
 #include <kern/thread.h>
-#include <kern/lock.h>
+#include <kern/simple_lock.h>
 #include <mach/branch_predicates.h>
 
 #include <i386/mp.h>
@@ -385,8 +384,6 @@ static	inline void * PHYSMAP_PTOV_check(void *paddr) {
 
 #endif /*__x86_64__ */
 
-typedef	volatile long	cpu_set;	/* set of CPUs - must be <= 32 */
-					/* changed by other processors */
 #include <vm/vm_page.h>
 
 /*
@@ -463,8 +460,8 @@ extern pmap_memory_region_t pmap_memory_regions[];
 #include <i386/pmap_pcid.h>
 
 static inline void
-set_dirbase(pmap_t tpmap, __unused thread_t thread) {
-	int ccpu = cpu_number();
+set_dirbase(pmap_t tpmap, __unused thread_t thread, int my_cpu) {
+	int ccpu = my_cpu;
 	cpu_datap(ccpu)->cpu_task_cr3 = tpmap->pm_cr3;
 	cpu_datap(ccpu)->cpu_task_map = tpmap->pm_task_map;
 	/*
@@ -587,16 +584,16 @@ extern void pmap_pagetable_corruption_msg_log(int (*)(const char * fmt, ...)__pr
 #include <kern/spl.h>
 
 				  
-#define PMAP_ACTIVATE_MAP(map, thread)	{				\
+#define PMAP_ACTIVATE_MAP(map, thread, my_cpu)	{				\
 	register pmap_t		tpmap;					\
                                                                         \
         tpmap = vm_map_pmap(map);					\
-        set_dirbase(tpmap, thread);					\
+        set_dirbase(tpmap, thread, my_cpu);					\
 }
 
 #if   defined(__x86_64__)
-#define PMAP_DEACTIVATE_MAP(map, thread)				\
-	pmap_assert(pmap_pcid_ncpus ? (pcid_for_pmap_cpu_tuple(map->pmap, cpu_number()) == (get_cr3_raw() & 0xFFF)) : TRUE);
+#define PMAP_DEACTIVATE_MAP(map, thread, ccpu)				\
+	pmap_assert(pmap_pcid_ncpus ? (pcid_for_pmap_cpu_tuple(map->pmap, ccpu) == (get_cr3_raw() & 0xFFF)) : TRUE);
 #else
 #define PMAP_DEACTIVATE_MAP(map, thread)
 #endif
@@ -605,8 +602,8 @@ extern void pmap_pagetable_corruption_msg_log(int (*)(const char * fmt, ...)__pr
                                                                         \
 	pmap_assert(ml_get_interrupts_enabled() == FALSE);		\
 	if (old_th->map != new_th->map) {				\
-		PMAP_DEACTIVATE_MAP(old_th->map, old_th);		\
-		PMAP_ACTIVATE_MAP(new_th->map, new_th);			\
+		PMAP_DEACTIVATE_MAP(old_th->map, old_th, my_cpu);		\
+		PMAP_ACTIVATE_MAP(new_th->map, new_th, my_cpu);		\
 	}								\
 }
 
@@ -626,9 +623,9 @@ extern void pmap_pagetable_corruption_msg_log(int (*)(const char * fmt, ...)__pr
 	spl_t		spl;						\
 									\
 	spl = splhigh();						\
-	PMAP_DEACTIVATE_MAP(th->map, th);				\
+	PMAP_DEACTIVATE_MAP(th->map, th, my_cpu);				\
 	th->map = new_map;						\
-	PMAP_ACTIVATE_MAP(th->map, th);					\
+	PMAP_ACTIVATE_MAP(th->map, th, my_cpu);				\
 	splx(spl);							\
 }
 #endif
@@ -694,6 +691,7 @@ extern void pmap_pagetable_corruption_msg_log(int (*)(const char * fmt, ...)__pr
 	 (((vm_offset_t) (VA)) <= vm_max_kernel_address))
 
 
+#define pmap_compressed(pmap)		((pmap)->stats.compressed)
 #define pmap_resident_count(pmap)	((pmap)->stats.resident_count)
 #define pmap_resident_max(pmap)		((pmap)->stats.resident_max)
 #define	pmap_copy(dst_pmap,src_pmap,dst_addr,len,src_addr)

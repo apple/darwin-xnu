@@ -99,11 +99,17 @@
 #include <sys/ubc.h>
 #include <kern/kalloc.h>
 #include <kern/task.h>
+#include <kern/coalition.h>
+#include <sys/coalition.h>
 #include <kern/assert.h>
 #include <vm/vm_protos.h>
 #include <vm/vm_map.h>		/* vm_map_switch_protect() */
+#include <vm/vm_pageout.h>
 #include <mach/task.h>
 #include <mach/message.h>
+#include <sys/priv.h>
+#include <sys/proc_info.h>
+#include <sys/bsdtask_info.h>
 
 #if CONFIG_MEMORYSTATUS
 #include <sys/kern_memorystatus.h>
@@ -172,6 +178,8 @@ __XNU_PRIVATE_EXTERN char corefilename[MAXPATHLEN+1] = {"/cores/core.%P"};
 
 static void orphanpg(struct pgrp *pg);
 void 	proc_name_kdp(task_t t, char * buf, int size);
+int	proc_threadname_kdp(void *uth, char *buf, size_t size);
+void	proc_starttime_kdp(void *p, uint64_t *tv_sec, uint64_t *tv_usec);
 char	*proc_name_address(void *p);
 
 static void  pgrp_add(struct pgrp * pgrp, proc_t parent, proc_t child);
@@ -712,6 +720,44 @@ proc_name_kdp(task_t t, char * buf, int size)
 		strlcpy(buf, &p->p_comm[0], size);
 }
 
+
+int
+proc_threadname_kdp(void *uth, char *buf, size_t size)
+{
+	if (size < MAXTHREADNAMESIZE) {
+		/* this is really just a protective measure for the future in
+		 * case the thread name size in stackshot gets out of sync with
+		 * the BSD max thread name size. Note that bsd_getthreadname
+		 * doesn't take input buffer size into account. */
+		return -1;
+	}
+
+	if (uth != NULL) {
+		bsd_getthreadname(uth, buf);
+	}
+	return 0;
+}
+
+/* note that this function is generally going to be called from stackshot,
+ * and the arguments will be coming from a struct which is declared packed
+ * thus the input arguments will in general be unaligned. We have to handle
+ * that here. */
+void
+proc_starttime_kdp(void *p, uint64_t *tv_sec, uint64_t *tv_usec)
+{
+	proc_t pp = (proc_t)p;
+	struct uint64p {
+		uint64_t val;
+	} __attribute__((packed));
+
+	if (pp != PROC_NULL) {
+		if (tv_sec != NULL)
+			((struct uint64p *)tv_sec)->val = pp->p_start.tv_sec;
+		if (tv_usec != NULL)
+			((struct uint64p *)tv_usec)->val = pp->p_start.tv_usec;
+	}
+}
+
 char *
 proc_name_address(void *p)
 {
@@ -781,17 +827,6 @@ proc_forcequota(proc_t p)
 
 	if (p)
 		retval = p->p_flag & P_FORCEQUOTA;
-	return(retval? 1: 0);
-
-}
-
-int
-proc_tbe(proc_t p)
-{
-	int retval = 0;
-
-	if (p)
-		retval = p->p_flag & P_TBE;
 	return(retval? 1: 0);
 
 }
@@ -873,6 +908,16 @@ proc_puniqueid(proc_t p)
 }
 
 uint64_t
+proc_coalitionid(__unused proc_t p)
+{
+#if CONFIG_COALITIONS
+	return(task_coalition_id(p->task));
+#else
+	return 0;
+#endif
+}
+
+uint64_t
 proc_was_throttled(proc_t p)
 {
 	return (p->was_throttled);
@@ -896,6 +941,21 @@ proc_getexecutableuuid(proc_t p, unsigned char *uuidbuf, unsigned long size)
 	if (size >= sizeof(p->p_uuid)) {
 		memcpy(uuidbuf, p->p_uuid, sizeof(p->p_uuid));
 	}
+}
+
+/* Return vnode for executable with an iocount. Must be released with vnode_put() */
+vnode_t
+proc_getexecutablevnode(proc_t p)
+{
+	vnode_t tvp  = p->p_textvp;
+
+	if ( tvp != NULLVP) {
+		if (vnode_getwithref(tvp) == 0) {
+			return tvp;
+		}
+	}       
+
+	return NULLVP;
 }
 
 
@@ -1866,6 +1926,7 @@ csops_internal(pid_t pid, int ops, user_addr_t uaddr, user_size_t usersize, user
 		case CS_OPS_CDHASH:
 		case CS_OPS_PIDOFFSET:
 		case CS_OPS_ENTITLEMENTS_BLOB:
+		case CS_OPS_IDENTITY:
 		case CS_OPS_BLOB:
 			break;	/* unrestricted */
 		default:
@@ -2018,6 +2079,7 @@ csops_internal(pid_t pid, int ops, user_addr_t uaddr, user_size_t usersize, user
 			    CS_HARD | CS_EXEC_SET_HARD |
 			    CS_KILL | CS_EXEC_SET_KILL |
 			    CS_RESTRICT |
+			    CS_REQUIRE_LV |
 			    CS_ENFORCEMENT | CS_EXEC_SET_ENFORCEMENT;
 
 			proc_lock(pt);
@@ -2172,13 +2234,11 @@ proc_iterate(flags, callout, arg, filterfn, filterarg)
 
 			switch (retval) {
 		  		case PROC_RETURNED:
+		  			proc_rele(p);
+		  			break;
 		  		case PROC_RETURNED_DONE:
 			  		proc_rele(p);
-			  		if (retval == PROC_RETURNED_DONE) {
-						goto out;
-			  		}
-			  		break;
-
+			  		goto out;
 		  		case PROC_CLAIMED_DONE:
 					goto out;
 		  		case PROC_CLAIMED:
@@ -2192,13 +2252,11 @@ proc_iterate(flags, callout, arg, filterfn, filterarg)
 		
 				switch (retval) {
 		  			case PROC_RETURNED:
+		  				proc_drop_zombref(p);
+		  				break;
 		  			case PROC_RETURNED_DONE:
 						proc_drop_zombref(p);
-			  			if (retval == PROC_RETURNED_DONE) {
-							goto out;
-			  			}
-			  			break;
-
+						goto out;
 		  			case PROC_CLAIMED_DONE:
 						goto out;
 		  			case PROC_CLAIMED:
@@ -2750,12 +2808,12 @@ session_rele(struct session *sess)
 }
 
 int
-proc_transstart(proc_t p, int locked)
+proc_transstart(proc_t p, int locked, int non_blocking)
 {
 	if (locked == 0)
 		proc_lock(p);
 	while ((p->p_lflag & P_LINTRANSIT) == P_LINTRANSIT) {
-		if ((p->p_lflag & P_LTRANSCOMMIT) == P_LTRANSCOMMIT) {
+		if (((p->p_lflag & P_LTRANSCOMMIT) == P_LTRANSCOMMIT) || non_blocking) {
 			if (locked == 0)
 				proc_unlock(p);
 			return EDEADLK;
@@ -2906,7 +2964,7 @@ proc_getpcontrol(int pid, int * pcontrolp)
 }
 
 int
-proc_dopcontrol(proc_t p, void *num_found)
+proc_dopcontrol(proc_t p)
 {
 	int pcontrol;
 
@@ -2914,13 +2972,12 @@ proc_dopcontrol(proc_t p, void *num_found)
 
 	pcontrol = PROC_CONTROL_STATE(p);
 
-	if (PROC_ACTION_STATE(p) ==0) {
+	if (PROC_ACTION_STATE(p) == 0) {
 		switch(pcontrol) {
 			case P_PCTHROTTLE:
 				PROC_SETACTION_STATE(p);
 				proc_unlock(p);
 				printf("low swap: throttling pid %d (%s)\n", p->p_pid, p->p_comm);
-				(*(int *)num_found)++;
 				break;
 
 			case P_PCSUSP:
@@ -2928,7 +2985,6 @@ proc_dopcontrol(proc_t p, void *num_found)
 				proc_unlock(p);
 				printf("low swap: suspending pid %d (%s)\n", p->p_pid, p->p_comm);
 				task_suspend(p->task);
-				(*(int *)num_found)++;
 				break;
 
 			case P_PCKILL:
@@ -2936,7 +2992,6 @@ proc_dopcontrol(proc_t p, void *num_found)
 				proc_unlock(p);
 				printf("low swap: killing pid %d (%s)\n", p->p_pid, p->p_comm);
 				psignal(p, SIGKILL);
-				(*(int *)num_found)++;
 				break;
 
 			default:
@@ -3010,97 +3065,246 @@ proc_resetpcontrol(int pid)
 }
 
 
-/*
- * Return true if the specified process has an action state specified for it and it isn't
- * already in an action state and it's using more physical memory than the specified threshold.
- * Note: the memory_threshold argument is specified in bytes and is of type uint64_t.
- */
+
+struct no_paging_space
+{
+	uint64_t	pcs_max_size;
+	uint64_t	pcs_uniqueid;
+	int		pcs_pid;
+	int		pcs_proc_count;
+	uint64_t	pcs_total_size;
+
+	uint64_t	npcs_max_size;
+	uint64_t	npcs_uniqueid;
+	int		npcs_pid;
+	int		npcs_proc_count;
+	uint64_t	npcs_total_size;
+
+	int		apcs_proc_count;
+	uint64_t	apcs_total_size;
+};
+
 
 static int
-proc_pcontrol_filter(proc_t p, void *memory_thresholdp)
+proc_pcontrol_filter(proc_t p, void *arg)
 {
-	
-	return PROC_CONTROL_STATE(p) && 						/* if there's an action state specified... */
-	      (PROC_ACTION_STATE(p) == 0) && 						/* and we're not in the action state yet... */
-	      (get_task_resident_size(p->task) > *((uint64_t *)memory_thresholdp)); 	/* and this proc is over the mem threshold, */
-											/* then return true to take action on this proc */
+	struct no_paging_space *nps;
+	uint64_t	compressed;
+
+	nps = (struct no_paging_space *)arg;
+
+	compressed = get_task_compressed(p->task);
+
+	if (PROC_CONTROL_STATE(p)) {
+		if (PROC_ACTION_STATE(p) == 0) {
+			if (compressed > nps->pcs_max_size) {
+				nps->pcs_pid = p->p_pid;
+				nps->pcs_uniqueid = p->p_uniqueid;
+				nps->pcs_max_size = compressed;
+			}
+			nps->pcs_total_size += compressed;
+			nps->pcs_proc_count++;
+		} else {
+			nps->apcs_total_size += compressed;
+			nps->apcs_proc_count++;
+		}
+	} else {
+		if (compressed > nps->npcs_max_size) {
+			nps->npcs_pid = p->p_pid;
+			nps->npcs_uniqueid = p->p_uniqueid;
+			nps->npcs_max_size = compressed;
+		}
+		nps->npcs_total_size += compressed;
+		nps->npcs_proc_count++;
+
+	}
+	return (0);
 }
 
 
+static int
+proc_pcontrol_null(__unused proc_t p, __unused void *arg)
+{
+	return(PROC_RETURNED);
+}
+
 
 /*
- * Deal with the out of swap space condition.  This routine gets called when
- * we want to swap something out but there's no more space left.  Since this
- * creates a memory deadlock situtation, we need to take action to free up
- * some memory resources in order to prevent the system from hanging completely.
- * The action we take is based on what the system processes running at user level
- * have specified.  Processes are marked in one of four categories: ones that
- * can be killed immediately, ones that should be suspended, ones that should
- * be throttled, and all the rest which are basically none of the above.  Which
- * processes are marked as being in which category is a user level policy decision;
- * we just take action based on those decisions here.
+ * Deal with the low on compressor pool space condition... this function
+ * gets called when we are approaching the limits of the compressor pool or
+ * we are unable to create a new swap file.
+ * Since this eventually creates a memory deadlock situtation, we need to take action to free up
+ * memory resources (both compressed and uncompressed) in order to prevent the system from hanging completely.
+ * There are 2 categories of processes to deal with.  Those that have an action
+ * associated with them by the task itself and those that do not.  Actionable 
+ * tasks can have one of three categories specified:  ones that
+ * can be killed immediately, ones that should be suspended, and ones that should
+ * be throttled.  Processes that do not have an action associated with them are normally
+ * ignored unless they are utilizing such a large percentage of the compressor pool (currently 50%)
+ * that only by killing them can we hope to put the system back into a usable state.
  */
 
-#define STARTING_PERCENTAGE	50	/* memory threshold expressed as a percentage */
-					/* of physical memory			      */
+#define	NO_PAGING_SPACE_DEBUG	0
+
+extern uint64_t	vm_compressor_pages_compressed(void);
 
 struct timeval	last_no_space_action = {0, 0};
 
-void
-no_paging_space_action(void)
+int
+no_paging_space_action()
 {
-
-	uint64_t	memory_threshold;
-	int		num_found;
+	proc_t		p;
+	struct no_paging_space nps;
 	struct timeval	now;
 
 	/*
-	 * Throttle how often we come through here.  Once every 20 seconds should be plenty.
+	 * Throttle how often we come through here.  Once every 5 seconds should be plenty.
 	 */
-
 	microtime(&now);
 
-	if (now.tv_sec <= last_no_space_action.tv_sec + 20)
-		return;
-
-	last_no_space_action = now;
+	if (now.tv_sec <= last_no_space_action.tv_sec + 5)
+		return (0);
 
 	/*
-	 * Examine all processes and find those that have been marked to have some action
-	 * taken when swap space runs out.  Of those processes, select one or more and 
-	 * apply the specified action to them.  The idea is to only take action against
-	 * a few processes rather than hitting too many at once.  If the low swap condition
-	 * persists, this routine will get called again and we'll take action against more
-	 * processes.
+	 * Examine all processes and find the biggest (biggest is based on the number of pages this 
+	 * task has in the compressor pool) that has been marked to have some action
+	 * taken when swap space runs out... we also find the biggest that hasn't been marked for
+	 * action.
 	 *
-	 * Of the processes that have been marked, we choose which ones to take action 
-	 * against according to how much physical memory they're presently using.  We
-	 * start with the STARTING_THRESHOLD and any processes using more physical memory
-	 * than the percentage threshold will have action taken against it.  If there
-	 * are no processes over the threshold, then the threshold is cut in half and we
-	 * look again for processes using more than this threshold.  We continue in
-	 * this fashion until we find at least one process to take action against.  This
-	 * iterative approach is less than ideally efficient, however we only get here
-	 * when the system is almost in a memory deadlock and is pretty much just
-	 * thrashing if it's doing anything at all.  Therefore, the cpu overhead of
-	 * potentially multiple passes here probably isn't revelant.
+	 * If the biggest non-actionable task is over the "dangerously big" threashold (currently 50% of
+	 * the total number of pages held by the compressor, we go ahead and kill it since no other task
+	 * can have any real effect on the situation.  Otherwise, we go after the actionable process.
 	 */
+	bzero(&nps, sizeof(nps));
 
-	memory_threshold = (sane_size * STARTING_PERCENTAGE) / 100;	/* resident threshold in bytes */
+	proc_iterate(PROC_ALLPROCLIST, proc_pcontrol_null, (void *)NULL, proc_pcontrol_filter, (void *)&nps);
 
-	for (num_found = 0; num_found == 0; memory_threshold = memory_threshold / 2) {
-		proc_iterate(PROC_ALLPROCLIST, proc_dopcontrol, (void *)&num_found, proc_pcontrol_filter, (void *)&memory_threshold);
-
+#if NO_PAGING_SPACE_DEBUG
+	printf("low swap: npcs_proc_count = %d, npcs_total_size = %qd, npcs_max_size = %qd\n",
+	       nps.npcs_proc_count, nps.npcs_total_size, nps.npcs_max_size);
+	printf("low swap: pcs_proc_count = %d, pcs_total_size = %qd, pcs_max_size = %qd\n",
+	       nps.pcs_proc_count, nps.pcs_total_size, nps.pcs_max_size);
+	printf("low swap: apcs_proc_count = %d, apcs_total_size = %qd\n",
+	       nps.apcs_proc_count, nps.apcs_total_size);
+#endif
+	if (nps.npcs_max_size > (vm_compressor_pages_compressed() * 50) / 100) {
 		/*
-		 * If we just looked with memory_threshold == 0, then there's no need to iterate any further since
-		 * we won't find any eligible processes at this point.
+		 * for now we'll knock out any task that has more then 50% of the pages
+		 * held by the compressor
 		 */
+		if ((p = proc_find(nps.npcs_pid)) != PROC_NULL) {
+	
+			if (nps.npcs_uniqueid == p->p_uniqueid) {
+				/*
+				 * verify this is still the same process
+				 * in case the proc exited and the pid got reused while
+				 * we were finishing the proc_iterate and getting to this point
+				 */
+				last_no_space_action = now;
 
-		if (memory_threshold == 0) {
-			if (num_found == 0)	/* log that we couldn't do anything in this case */
-				printf("low swap: unable to find any eligible processes to take action on\n");
+				printf("low swap: killing pid %d (%s)\n", p->p_pid, p->p_comm);
+				psignal(p, SIGKILL);
+			
+				proc_rele(p);
 
-			break;
+				return (0);
+			}
+				
+			proc_rele(p);
 		}
 	}
+
+	if (nps.pcs_max_size > 0) {
+		if ((p = proc_find(nps.pcs_pid)) != PROC_NULL) {
+
+			if (nps.pcs_uniqueid == p->p_uniqueid) {
+				/*
+				 * verify this is still the same process
+				 * in case the proc exited and the pid got reused while
+				 * we were finishing the proc_iterate and getting to this point
+				 */
+				last_no_space_action = now;
+		
+				proc_dopcontrol(p);
+			
+				proc_rele(p);
+				
+				return (1);
+			}
+	
+			proc_rele(p);
+		}
+	}
+	last_no_space_action = now;
+
+	printf("low swap: unable to find any eligible processes to take action on\n");
+
+	return (0);
 }
+
+int 
+proc_trace_log(__unused proc_t p,  struct proc_trace_log_args *uap, __unused int *retval)
+{
+	int ret = 0;
+	proc_t target_proc = PROC_NULL;
+	pid_t target_pid = uap->pid;
+	uint64_t target_uniqueid = uap->uniqueid;
+	task_t target_task = NULL;
+
+	if (priv_check_cred(kauth_cred_get(), PRIV_PROC_TRACE_INSPECT, 0)) {
+		ret = EPERM;
+		goto out;
+	}
+	target_proc = proc_find(target_pid);
+	if (target_proc != PROC_NULL) {
+		if (target_uniqueid != proc_uniqueid(target_proc)) {
+			ret = ENOENT;
+			goto out;
+		}
+
+		target_task = proc_task(target_proc);
+		if (task_send_trace_memory(target_task, target_pid, target_uniqueid)) {
+			ret = EINVAL;
+			goto out;
+		}
+	} else
+		ret = ENOENT;
+
+out:
+	if (target_proc != PROC_NULL)
+		proc_rele(target_proc);
+	return (ret);
+}
+
+#if VM_SCAN_FOR_SHADOW_CHAIN
+extern int vm_map_shadow_max(vm_map_t map);
+int proc_shadow_max(void);
+int proc_shadow_max(void)
+{
+	int		retval, max;
+	proc_t		p;
+	task_t		task;
+	vm_map_t	map;
+
+	max = 0;
+	proc_list_lock();
+	for (p = allproc.lh_first; (p != 0); p = p->p_list.le_next) {
+		if (p->p_stat == SIDL)
+			continue;
+		task = p->task;
+		if (task == NULL) {
+			continue;
+		}
+		map = get_task_map(task);
+		if (map == NULL) {
+			continue;
+		}
+		retval = vm_map_shadow_max(map);
+		if (retval > max) {
+			max = retval;
+		}
+	}
+	proc_list_unlock();
+	return max;
+}
+#endif /* VM_SCAN_FOR_SHADOW_CHAIN */

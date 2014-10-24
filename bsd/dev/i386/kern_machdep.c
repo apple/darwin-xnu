@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2006 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2013 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -43,23 +43,39 @@
 /**********************************************************************
  * Routine:	grade_binary()
  *
- * Function:	Keep the API the same between PPC and X86; always say
- *		any CPU subtype is OK with us, but only OK CPU types
- *		for which we are actually capable of executing the
- *		binary, either directly or via an imputed interpreter.
+ * Function:	Say OK to CPU types that we can actually execute on the given
+ *		system. 64-bit binaries have the highest preference, followed
+ *		by 32-bit binaries. 0 means unsupported.
  **********************************************************************/
 int
-grade_binary(cpu_type_t exectype, __unused cpu_subtype_t execsubtype)
+grade_binary(cpu_type_t exectype, cpu_subtype_t execsubtype)
 {
+	cpu_subtype_t hostsubtype = cpu_subtype();
+
 	switch(exectype) {
-	case CPU_TYPE_X86:		/* native */
-	case CPU_TYPE_POWERPC:		/* via translator */
-		return 1;
 	case CPU_TYPE_X86_64:		/* native 64-bit */
-		return (ml_is64bit() ? 2 : 0);
-	default:			/* all other binary types */
-		return 0;
+		switch(hostsubtype) {
+		case CPU_SUBTYPE_X86_64_H:	/* x86_64h can execute anything */
+			switch (execsubtype) {
+			case CPU_SUBTYPE_X86_64_H:
+				return 3;
+			case CPU_SUBTYPE_X86_64_ALL:
+				return 2;
+			}
+			break;
+		case CPU_SUBTYPE_X86_ARCH1:	/* generic systems can only execute ALL subtype */
+			switch (execsubtype) {
+			case CPU_SUBTYPE_X86_64_ALL:
+				return 2;
+			}
+			break;
+		}
+		break;
+	case CPU_TYPE_X86:		/* native */
+		return 1;
 	}
+
+	return 0;
 }
 
 extern void md_prepare_for_shutdown(int, int, char *);

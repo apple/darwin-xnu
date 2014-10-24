@@ -54,7 +54,6 @@
  * the rights to redistribute these changes.
  */
 
-#include <platforms.h>
 
 #include <mach/i386/vm_param.h>
 
@@ -73,6 +72,7 @@
 #include <kern/xpr.h>
 #include <kern/cpu_data.h>
 #include <kern/processor.h>
+#include <sys/kdebug.h>
 #include <console/serial_protos.h>
 #include <vm/vm_page.h>
 #include <vm/pmap.h>
@@ -192,12 +192,19 @@ physmap_init(void)
 	} * physmapL2 = ALLOCPAGES(NPHYSMAP);
 
 	uint64_t i;
-	uint8_t phys_random_L3 = ml_early_random() & 0xFF;
+	uint8_t phys_random_L3 = early_random() & 0xFF;
 
 	/* We assume NX support. Mark all levels of the PHYSMAP NX
 	 * to avoid granting executability via a single bit flip.
 	 */
-	assert(cpuid_extfeatures() & CPUID_EXTFEATURE_XD);
+#if DEVELOPMENT || DEBUG
+	uint32_t reg[4];
+	do_cpuid(0x80000000, reg);
+	if (reg[eax] >= 0x80000001) {
+		do_cpuid(0x80000001, reg);
+		assert(reg[edx] & CPUID_EXTFEATURE_XD);
+	}
+#endif /* DEVELOPMENT || DEBUG */
 
 	for(i = 0; i < NPHYSMAP; i++) {
 		physmapL3[i + phys_random_L3] =
@@ -344,27 +351,26 @@ vstart(vm_offset_t boot_args_start)
 			kernelBootArgs, 
 			&kernelBootArgs->ksize,
 			&kernelBootArgs->kaddr);
-
-		postcode(VSTART_IDLE_PTS_INIT);
-
-		Idle_PTs_init();
-
-		first_avail = (vm_offset_t)ID_MAP_VTOP(physfree);
-
-		cpu = 0;
-		cpu_data_alloc(TRUE);
-
-				
 		/*
 		 * Setup boot args given the physical start address.
+		 * Note: PE_init_platform needs to be called before Idle_PTs_init
+		 * because access to the DeviceTree is required to read the
+		 * random seed before generating a random physical map slide.
 		 */
 		kernelBootArgs = (boot_args *)
 		    ml_static_ptovirt(boot_args_start);
 		DBG("i386_init(0x%lx) kernelBootArgs=%p\n",
 		    (unsigned long)boot_args_start, kernelBootArgs);
-
 		PE_init_platform(FALSE, kernelBootArgs);
 		postcode(PE_INIT_PLATFORM_D);
+
+		Idle_PTs_init();
+		postcode(VSTART_IDLE_PTS_INIT);
+
+		first_avail = (vm_offset_t)ID_MAP_VTOP(physfree);
+
+		cpu = 0;
+		cpu_data_alloc(TRUE);
 	} else {
 		/* Switch to kernel's page tables (from the Boot PTs) */
 		set_cr3_raw((uintptr_t)ID_MAP_VTOP(IdlePML4));
@@ -389,6 +395,11 @@ vstart(vm_offset_t boot_args_start)
 			 cpu_datap(cpu)->cpu_int_stack_top);
 }
 
+void
+pstate_trace(void)
+{
+}
+
 /*
  *	Cpu initialization.  Running virtual, but without MACH VM
  *	set up.
@@ -405,6 +416,11 @@ i386_init(void)
 	postcode(I386_INIT_ENTRY);
 
 	pal_i386_init();
+	tsc_init();
+	rtclock_early_init();	/* mach_absolute_time() now functionsl */
+
+	kernel_debug_string("i386_init");
+	pstate_trace();
 
 #if CONFIG_MCA
 	/* Initialize machine-check handling */
@@ -420,8 +436,10 @@ i386_init(void)
 	panic_init();			/* Init this in case we need debugger */
 
 	/* setup debugging output if one has been chosen */
+	kernel_debug_string("PE_init_kprintf");
 	PE_init_kprintf(FALSE);
 
+	kernel_debug_string("kernel_early_bootstrap");
 	kernel_early_bootstrap();
 
 	if (!PE_parse_boot_argn("diag", &dgWork.dgFlags, sizeof (dgWork.dgFlags)))
@@ -438,6 +456,7 @@ i386_init(void)
 	}
 
 	/* setup console output */
+	kernel_debug_string("PE_init_printf");
 	PE_init_printf(FALSE);
 
 	kprintf("version_variant = %s\n", version_variant);
@@ -456,8 +475,9 @@ i386_init(void)
 	/*
 	 * debug support for > 4G systems
 	 */
-	if (!PE_parse_boot_argn("himemory_mode", &vm_himemory_mode, sizeof (vm_himemory_mode)))
-	        vm_himemory_mode = 0;
+	PE_parse_boot_argn("himemory_mode", &vm_himemory_mode, sizeof (vm_himemory_mode));
+	if (vm_himemory_mode != 0)
+		kprintf("himemory_mode: %d\n", vm_himemory_mode);
 
 	if (!PE_parse_boot_argn("immediate_NMI", &fidn, sizeof (fidn)))
 		force_immediate_debugger_NMI = FALSE;
@@ -476,8 +496,9 @@ i386_init(void)
 
 	/*   
 	 * VM initialization, after this we're using page tables...
-	 * The maximum number of cpus must be set beforehand.
+	 * Thn maximum number of cpus must be set beforehand.
 	 */
+	kernel_debug_string("i386_vm_init");
 	i386_vm_init(maxmemtouse, IA32e, kernelBootArgs);
 
 	/* create the console for verbose or pretty mode */
@@ -485,12 +506,15 @@ i386_init(void)
 	PE_init_platform(TRUE, kernelBootArgs);
 	PE_create_console();
 
-	tsc_init();
+	kernel_debug_string("power_management_init");
 	power_management_init();
 	processor_bootstrap();
 	thread_bootstrap();
 
+	pstate_trace();
+	kernel_debug_string("machine_startup");
 	machine_startup();
+	pstate_trace();
 }
 
 static void

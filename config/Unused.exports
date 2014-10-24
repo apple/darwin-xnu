@@ -1,3 +1,8 @@
 # Symbols that are unused as KPI, but must be globally exported
 _dtrace_zero*
 _gLoadedKextSummaries
+_ipc_mqueue_full
+_atm_mana*
+_bank_mana*
+_ipc_importance_mana*
+_user_data_mana*

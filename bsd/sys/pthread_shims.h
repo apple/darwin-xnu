@@ -50,6 +50,13 @@ struct uthread;
 typedef void (*sched_call_t)(int type, thread_t thread);
 #endif
 
+/*
+ * Increment each time new reserved slots are used. When the pthread
+ * kext registers this table, it will include the version of the xnu
+ * headers that it was built against.
+ */
+#define PTHREAD_FUNCTIONS_TABLE_VERSION 1
+
 typedef struct pthread_functions_s {
 	int version;
 
@@ -87,8 +94,14 @@ typedef struct pthread_functions_s {
 
 	sched_call_t (*workqueue_get_sched_callback)(void);
 
+	/* New register function with TSD offset */
+	int (*bsdthread_register2)(struct proc *p, user_addr_t threadstart, user_addr_t wqthread, uint32_t flags, user_addr_t stack_addr_hint, user_addr_t targetconc_ptr, uint32_t dispatchqueue_offset, uint32_t tsd_offset, int32_t *retval);
+
+	/* New pthreadctl system. */
+	int (*bsdthread_ctl)(struct proc *p, user_addr_t cmd, user_addr_t arg1, user_addr_t arg2, user_addr_t arg3, int *retval);
+
 	/* padding for future */
-	void* _pad[99];
+	void* _pad[97];
 } *pthread_functions_t;
 
 typedef struct pthread_callbacks_s {
@@ -200,8 +213,25 @@ typedef struct pthread_callbacks_s {
 	uint64_t (*proc_get_dispatchqueue_serialno_offset)(struct proc *p);
 	void (*proc_set_dispatchqueue_serialno_offset)(struct proc *p, uint64_t offset);
 
+	user_addr_t (*proc_get_stack_addr_hint)(struct proc *p);
+	void (*proc_set_stack_addr_hint)(struct proc *p, user_addr_t stack_addr_hint);
+
+	uint32_t (*proc_get_pthread_tsd_offset)(struct proc *p);
+	void (*proc_set_pthread_tsd_offset)(struct proc *p, uint32_t pthread_tsd_offset);
+
+	kern_return_t (*thread_set_tsd_base)(thread_t thread, mach_vm_offset_t tsd_base);
+
+	int	(*proc_usynch_get_requested_thread_qos)(struct uthread *);
+	boolean_t (*proc_usynch_thread_qos_add_override)(struct uthread *, uint64_t tid, int override_qos, boolean_t first_override_for_resource);
+	boolean_t (*proc_usynch_thread_qos_remove_override)(struct uthread *, uint64_t tid);
+
+	kern_return_t (*thread_policy_get)(thread_t t, thread_policy_flavor_t flavor, thread_policy_t info, mach_msg_type_number_t *count, boolean_t *get_default);
+	boolean_t (*qos_main_thread_active)(void);
+
+	kern_return_t (*thread_set_voucher_name)(mach_port_name_t voucher_name);
+
 	/* padding for future */
-	void* _pad[98];
+	void* _pad[87];
 
 } *pthread_callbacks_t;
 

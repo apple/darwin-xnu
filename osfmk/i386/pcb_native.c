@@ -97,6 +97,10 @@
 #include <i386/seg.h>
 #include <i386/machine_routines.h>
 
+#if HYPERVISOR
+#include <kern/hv_support.h>
+#endif
+
 #define ASSERT_IS_16BYTE_MULTIPLE_SIZEOF(_type_)	\
 extern char assert_is_16byte_multiple_sizeof_ ## _type_	\
 		[(sizeof(_type_) % 16) == 0 ? 1 : -1]
@@ -110,7 +114,6 @@ ASSERT_IS_16BYTE_MULTIPLE_SIZEOF(x86_saved_state_t);
 extern zone_t		iss_zone;		/* zone for saved_state area */
 extern zone_t		ids_zone;		/* zone for debug_state area */
 
-extern void *get_bsduthreadarg(thread_t);
 void
 act_machine_switch_pcb(__unused thread_t old, thread_t new)
 {
@@ -389,7 +392,7 @@ machine_thread_create(
 
 	pcb->cthread_self = 0;
 	pcb->uldt_selector = 0;
-
+	pcb->thread_gpu_ns = 0;
 	/* Ensure that the "cthread" descriptor describes a valid
 	 * segment.
 	 */
@@ -411,6 +414,13 @@ machine_thread_destroy(
 {
 	register pcb_t	pcb = THREAD_TO_PCB(thread);
 
+#if HYPERVISOR
+	if (thread->hv_thread_target) {
+		hv_callbacks.thread_destroy(thread->hv_thread_target);
+		thread->hv_thread_target = NULL;
+	}
+#endif
+
 	if (pcb->ifps != 0)
 		fpu_free(pcb->ifps);
 	if (pcb->iss != 0) {
@@ -421,4 +431,67 @@ machine_thread_destroy(
 		zfree(ids_zone, pcb->ids);
 		pcb->ids = NULL;
 	}
+}
+
+kern_return_t
+machine_thread_set_tsd_base(
+	thread_t			thread,
+	mach_vm_offset_t	tsd_base)
+{
+
+	if (thread->task == kernel_task) {
+		return KERN_INVALID_ARGUMENT;
+	}
+
+	if (thread_is_64bit(thread)) {
+		/* check for canonical address, set 0 otherwise  */
+		if (!IS_USERADDR64_CANONICAL(tsd_base))
+			tsd_base = 0ULL;
+	} else {
+		if (tsd_base > UINT32_MAX)
+			tsd_base = 0ULL;
+	}
+
+	pcb_t pcb = THREAD_TO_PCB(thread);
+	pcb->cthread_self = tsd_base;
+
+	if (!thread_is_64bit(thread)) {
+		/* Set up descriptor for later use */
+		struct real_descriptor desc = {
+			.limit_low = 1,
+			.limit_high = 0,
+			.base_low = tsd_base & 0xffff,
+			.base_med = (tsd_base >> 16) & 0xff,
+			.base_high = (tsd_base >> 24) & 0xff,
+			.access = ACC_P|ACC_PL_U|ACC_DATA_W,
+			.granularity = SZ_32|SZ_G,
+		};
+
+		pcb->cthread_desc = desc;
+		saved_state32(pcb->iss)->gs = USER_CTHREAD;
+	}
+
+	/* For current thread, make the TSD base active immediately */
+	if (thread == current_thread()) {
+
+		if (thread_is_64bit(thread)) {
+			cpu_data_t              *cdp;
+
+			mp_disable_preemption();
+			cdp = current_cpu_datap();
+			if ((cdp->cpu_uber.cu_user_gs_base != pcb->cthread_self) ||
+				(pcb->cthread_self != rdmsr64(MSR_IA32_KERNEL_GS_BASE)))
+				wrmsr64(MSR_IA32_KERNEL_GS_BASE, tsd_base);
+			cdp->cpu_uber.cu_user_gs_base = tsd_base;
+			mp_enable_preemption();
+		} else {
+
+			/* assign descriptor */
+			mp_disable_preemption();
+			*ldt_desc_p(USER_CTHREAD) = pcb->cthread_desc;
+			mp_enable_preemption();
+		}
+	}
+
+	return KERN_SUCCESS;
 }

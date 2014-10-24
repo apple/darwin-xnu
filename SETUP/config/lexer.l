@@ -47,54 +47,16 @@ struct kt {
 	const char *kt_name;
 	int kt_val;
 } key_words[] = {
-	{ "and",	AND },
-	{ "args",	ARGS },
-	{ "at",		AT },
 	{ "builddir",	BUILDDIR },
-	{ "config",	CONFIG },
-	{ "configdir",	CONFIGDIR },
-	{ "controller",	CONTROLLER },
-	{ "cpu",	CPU },
-	{ "csr",	CSR },
-	{ "device",	DEVICE },
-	{ "disk",	DISK },
-	{ "drive",	DRIVE },
-	{ "dumps",	DUMPS },
-	{ "flags",	FLAGS },
-	{ "hz",		HZ },
-	{ "ident",	IDENT },
 	{ "init",	INIT },
 	{ "machine",	MACHINE },
-	{ "major",	MAJOR },
 	{ "makeoptions", MAKEOPTIONS },
 	{ "makevariables", MAKEOPTIONS },
-	{ "master",	MASTER },
-	{ "maxusers",	MAXUSERS },
-	{ "mba",	MBA },
-	{ "minor",	MINOR },
-	{ "nexus",	NEXUS },
 	{ "objectdir",	OBJECTDIR },
-	{ "on",		ON },
 	{ "options",	OPTIONS },
-	{ "priority",	PRIORITY },
-	{ "profile",	PROFILE },
 	{ "pseudo-device",PSEUDO_DEVICE },
-	{ "root",	ROOT },
-	{ "size",	SIZE },
-	{ "slave",	SLAVE },
 	{ "sourcedir",	SOURCEDIR },
-	{ "swap",	SWAP },
-	{ "tape",	DEVICE },
 	{ "trace",	TRACE },
-	{ "uba",	UBA },
-	{ "vector",	VECTOR },
-	{ "lun",	LUN },			/* MMAX only */
-	{ "slot",	SLOT },			/* MMAX only */
-	{ "tape",	TAPE },			/* MMAX only */
-	{ "bin",	BIN },			/* SQT ONLY */
-	{ "am",		ADDRMOD },		/* MIPS */
-	{ "mbii",	MBII },			/* MIPS */
- 	{ "vme",	VME },			/* MIPS */
 	{ 0, 0 },
 };
 %}
@@ -137,13 +99,6 @@ WORD1	([A-Za-z_][-A-Za-z_0-9]*)
 			tprintf("#D:%d ", yylval.val);
 			return NUMBER;
 		}
-[0-9]"."[0-9]*	{
-			yylval.val = (int) (60 * atof(yytext) + 0.5);
-			return FPNUMBER;
-		}
-"-"		{
-			return MINUS;
-		}
 "?"		{
 			yylval.val = -1;
 			tprintf("? ");
@@ -163,7 +118,6 @@ WORD1	([A-Za-z_][-A-Za-z_0-9]*)
 ";"		{	return SEMICOLON;		}
 ","		{	return COMMA;			}
 "="		{	return EQUALS;			}
-"@"		{	return AT;			}
 .		{	return yytext[0];		}
 
 

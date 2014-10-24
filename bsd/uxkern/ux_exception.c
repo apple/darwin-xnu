@@ -90,7 +90,7 @@ static void	ux_exception(int exception, mach_exception_code_t code,
 				mach_exception_subcode_t subcode,
 				int *ux_signal, mach_exception_code_t *ux_code);
 
-#if defined(__x86_64__)
+#if defined(__x86_64__) || defined(__arm64__)
 mach_port_t			ux_exception_port;
 #else
 mach_port_name_t		ux_exception_port;

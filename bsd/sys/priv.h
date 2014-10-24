@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2010 Apple Inc. All rights reserved.
+ * Copyright (c) 2010-2014 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -81,6 +81,9 @@
 #define PRIV_PROC_UUID_POLICY	1001	/* Change process uuid policy table. */
 #define PRIV_GLOBAL_PROC_INFO	1002	/* Query information for processes owned by other users */
 #define PRIV_SYSTEM_OVERRIDE	1003	/* Override global system settings for various subsystems for a limited duration/system-mode */
+#define PRIV_HW_DEBUG_DATA	    1004	/* Extract hw-specific debug data (e.g. ECC data) */
+#define PRIV_SELECTIVE_FORCED_IDLE	1005	/* Configure and control Selective Forced Idle (SFI) subsystem */
+#define PRIV_PROC_TRACE_INSPECT 1006   /* Request trace memory of arbitrary process to be inspected */
 
 /*
  * Virtual memory privileges.
@@ -96,11 +99,19 @@
 #define	PRIV_NET_PRIVILEGED_SOCKET_DELEGATE	10001	/* Set delegate on a socket */
 #define	PRIV_NET_INTERFACE_CONTROL		10002	/* Enable interface debug logging. */
 #define	PRIV_NET_PRIVILEGED_NETWORK_STATISTICS	10003	/* Access to all sockets */
+#define	PRIV_NET_PRIVILEGED_NECP_POLICIES	10004	/* Access to privileged Network Extension policies */
+#define	PRIV_NET_RESTRICTED_AWDL		10005	/* Access to restricted AWDL mode */
+#define	PRIV_NET_PRIVILEGED_NECP_MATCH		10006	/* Privilege verified by Network Extension policies */
 
 /*
  * IPv4 and IPv6 privileges.
  */
 #define	PRIV_NETINET_RESERVEDPORT	11000	/* Bind low port number. */
+
+/*
+ * VFS privileges
+ */
+#define PRIV_VFS_OPEN_BY_ID	14000 	/*Allow calling openbyid_np()*/
 
 #ifdef KERNEL
 /*

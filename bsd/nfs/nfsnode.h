@@ -195,8 +195,6 @@ struct nfsbuf {
 LIST_HEAD(nfsbuflists, nfsbuf);
 TAILQ_HEAD(nfsbuffreehead, nfsbuf);
 
-#define NFSNOLIST ((void*)0xdeadbeef)
-
 extern lck_mtx_t *nfs_buf_mutex;
 extern int nfsbufcnt, nfsbufmin, nfsbufmax, nfsbufmetacnt, nfsbufmetamax;
 extern int nfsbuffreecnt, nfsbuffreemetacnt, nfsbufdelwricnt, nfsneedbuffer;
@@ -348,6 +346,7 @@ struct nfs_vattr {
 #define NGA_UNCACHED	0x0002	/* fetch new attributes */
 #define NGA_ACL		0x0004	/* fetch ACL */
 #define NGA_MONITOR	0x0008	/* vnode monitor attr update poll */
+#define NGA_SOFT	0x0010	/* use cached attributes if ETIMEOUT */
 
 /* macros for initting/cleaning up nfs_vattr structures */
 #define	NVATTR_INIT(NVAP) \
@@ -583,6 +582,7 @@ struct nfsnode {
 	int			n_error;	/* Save write error value */
 	union {
 		struct timespec	ns_atim;	/* Special file times */
+		struct timespec nl_rltim;	/* Time of last readlink */
 		daddr64_t	nf_lastread;	/* last block# read from (for readahead) */
 		uint64_t	nd_cookieverf;	/* Cookie verifier (dir only) */
 	} n_un1;
@@ -650,6 +650,7 @@ struct nfsnode {
 
 #define n_atim			n_un1.ns_atim
 #define n_mtim			n_un2.ns_mtim
+#define n_rltim			n_un1.nl_rltim
 #define n_lastread		n_un1.nf_lastread
 #define n_lastrahead		n_un2.nf_lastrahead
 #define n_sillyrename		n_un3.nf_silly
@@ -688,6 +689,8 @@ struct nfsnode {
 #define NISDOTZFS	0x04000	/* a ".zfs" directory */
 #define NISDOTZFSCHILD	0x08000	/* a child of a ".zfs" directory */
 #define NISMAPPED	0x10000	/* node is mmapped   */
+#define NREFRESH	0x20000 /* node's fh needs to be refreshed */
+#define NREFRESHWANT	0x40000 /* Waiting for fh to be refreshed */
 
 /*
  * Flags for n_hflag

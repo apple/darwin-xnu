@@ -77,22 +77,3 @@ cerror(int err)
 	_pthread_exit_if_canceled(err);
 	return cerror_nocancel(err);
 }
-
-#if !TARGET_OS_EMBEDDED
-
-// Internal symbol no longer used by anybody in Libsystem but required for
-// backwards compatibility with 3rd parties <rdar://problem/14380572>
-
-void
-cthread_set_errno_self(int err, int nocancel)
-{
-	asm(".global $ld$hide$os10.9$_cthread_set_errno_self\n\t"
-		".set $ld$hide$os10.9$_cthread_set_errno_self, _cthread_set_errno_self");
-	if (nocancel) {
-		cerror_nocancel(err);
-	} else {
-		cerror(err);
-	}
-}
-
-#endif

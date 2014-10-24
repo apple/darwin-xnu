@@ -1375,8 +1375,8 @@ sflt_register(const struct sflt_filter *filter, int domain, int type,
 		sflt_handle handle = filter->sf_handle;
 
 		so = solisthead->so;
+		socket_lock(so, 0);
 		sflt_initsock(so);
-
 		if (so->so_state & SS_ISCONNECTING)
 			sflt_notify_after_register(so, sock_evt_connecting,
 			    handle);
@@ -1399,6 +1399,7 @@ sflt_register(const struct sflt_filter *filter, int domain, int type,
 		else if (so->so_state & SS_CANTRCVMORE)
 			sflt_notify_after_register(so, sock_evt_cantrecvmore,
 			    handle);
+		socket_unlock(so, 0);
 		/* XXX no easy way to post the sock_evt_closing event */
 		sock_release(so);
 		solist = solisthead;

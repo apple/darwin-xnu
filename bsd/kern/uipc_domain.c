@@ -102,8 +102,6 @@ static lck_grp_attr_t	*domain_proto_mtx_grp_attr;
 decl_lck_mtx_data(static, domain_proto_mtx);
 decl_lck_mtx_data(static, domain_timeout_mtx);
 
-extern sysctlfn net_sysctl;
-
 static u_int64_t _net_uptime;
 
 static void
@@ -907,53 +905,6 @@ pffindprotonotype(int family, int protocol)
 	pp = pffindprotonotype_locked(family, protocol, 0);
 	domain_guard_release(guard);
 	return (pp);
-}
-
-int
-net_sysctl(int *name, u_int namelen, user_addr_t oldp, size_t *oldlenp,
-    user_addr_t newp, size_t newlen, struct proc *p)
-{
-#pragma unused(p)
-	int family, protocol, error = 0;
-	struct domain *dp;
-	struct protosw *pp;
-	domain_guard_t guard;
-
-	/*
-	 * All sysctl names at this level are nonterminal;
-	 * next two components are protocol family and protocol number,
-	 * then at least one addition component.
-	 */
-	if (namelen < 3)
-		return (EISDIR);		/* overloaded */
-	family = name[0];
-	protocol = name[1];
-
-	if (family == 0)
-		return (0);
-
-	guard = domain_guard_deploy();
-	TAILQ_FOREACH(dp, &domains, dom_entry) {
-		if (dp->dom_family == family)
-			break;
-	}
-	if (dp == NULL) {
-		error = ENOPROTOOPT;
-		goto done;
-	}
-
-	TAILQ_FOREACH(pp, &dp->dom_protosw, pr_entry) {
-		if (pp->pr_protocol == protocol && pp->pr_sysctl != NULL) {
-			error = (*pp->pr_sysctl)(name + 2, namelen - 2,
-			    (void *)(uintptr_t)oldp, oldlenp,
-			    (void *)(uintptr_t)newp, newlen);
-			goto done;
-		}
-	}
-	error = ENOPROTOOPT;
-done:
-	domain_guard_release(guard);
-	return (error);
 }
 
 void

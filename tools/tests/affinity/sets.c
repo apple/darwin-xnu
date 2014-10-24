@@ -1,7 +1,5 @@
 #include <AvailabilityMacros.h>
-#ifdef AVAILABLE_MAC_OS_X_VERSION_10_5_AND_LATER
-#include </System/Library/Frameworks/System.framework/PrivateHeaders/mach/thread_policy.h>
-#endif
+#include <mach/thread_policy.h>
 #include <mach/mach.h>
 #include <mach/mach_error.h>
 #include <mach/mach_time.h>
@@ -121,12 +119,8 @@ static void
 usage()
 {
 	fprintf(stderr,
-#ifdef AVAILABLE_MAC_OS_X_VERSION_10_5_AND_LATER
 		"usage: sets [-a]   Turn affinity on (off)\n"
 		"            [-b B] Number of buffers per set/line (2)\n"
-#else
-		"usage: sets [-b B] Number of buffers per set/line (2)\n"
-#endif
 		"            [-c]   Configure for max cache performance\n"
 		"            [-h]   Print this\n"
 		"            [-i I] Number of items/buffers to process (1000)\n"
@@ -190,7 +184,6 @@ manager_fn(void *arg)
 	 * If we're using affinity sets (we are by default)
 	 * set our tag to by our thread set number.
 	 */
-#ifdef AVAILABLE_MAC_OS_X_VERSION_10_5_AND_LATER
 	thread_extended_policy_data_t	epolicy;
 	thread_affinity_policy_data_t	policy;
 
@@ -211,7 +204,6 @@ manager_fn(void *arg)
 		if (ret != KERN_SUCCESS)
 			printf("thread_policy_set(THREAD_AFFINITY_POLICY) returned %d\n", ret);
 	}
-#endif
 
 	DBG("Starting %s set: %d stage: %d\n", sp->name, lp->setnum, sp->stagenum);
 
@@ -356,12 +348,8 @@ main(int argc, char *argv[])
 	while ((c = getopt (argc, argv, "ab:chi:p:s:twv:")) != -1) {
 		switch (c) {
 		case 'a':
-#ifdef AVAILABLE_MAC_OS_X_VERSION_10_5_AND_LATER
 			affinity = !affinity;
 			break;
-#else
-			usage();
-#endif
 		case 'b':
 			buffers = atoi(optarg);
 			break;

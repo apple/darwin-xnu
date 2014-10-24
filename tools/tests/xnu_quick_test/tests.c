@@ -972,7 +972,6 @@ int access_chmod_fchmod_test( void * the_argp )
 	
 	/*  another test for the access system call  -- refer ro radar# 6725311 */
 
-#if !TARGET_OS_EMBEDDED	
 
 	/*
 	 * This test makes sure that the access system call does not give the current user extra
@@ -1040,7 +1039,6 @@ int access_chmod_fchmod_test( void * the_argp )
 		goto test_failed_exit;
 	}
 
-#endif
 
 	/* end of test*/
 	
@@ -1088,7 +1086,6 @@ test_passed_exit:
 	return( my_err );
 }
 
-#if !TARGET_OS_EMBEDDED
 static bool _prime_groups(void)
 {
 	/*
@@ -1106,7 +1103,6 @@ static bool _prime_groups(void)
 
 	return true;
 }
-#endif
 
 /*  **************************************************************************************************************
  *	Test chown, fchown, lchown, lstat, readlink, symlink system calls.
@@ -1114,7 +1110,6 @@ static bool _prime_groups(void)
  */
 int chown_fchown_lchown_lstat_symlink_test( void * the_argp )
 {
-#if !TARGET_OS_EMBEDDED
 	int			my_err, my_group_count, i;
 	int			my_fd = -1;
 	char *			my_pathp = NULL;
@@ -1302,10 +1297,6 @@ test_passed_exit:
 		vm_deallocate(mach_task_self(), (vm_address_t)my_link_pathp, PATH_MAX);
 	 }
 	return( my_err );
-#else
-	printf( "\t--> Test not designed for EMBEDDED TARGET\n" );
-	return 0;
-#endif
 }
 
 /*  **************************************************************************************************************
@@ -1338,7 +1329,6 @@ int fs_stat_tests( void * the_argp )
 	struct statfs *		my_statfsp;
 	kern_return_t       my_kr;
 
-#if !TARGET_OS_EMBEDDED	
 	void * my_buffer64p = NULL;
 	struct statfs64 *	my_statfs64p;
 
@@ -1350,7 +1340,6 @@ int fs_stat_tests( void * the_argp )
 	  goto test_failed_exit;
 	}
 
-#endif	
 	my_buffer_size = (sizeof(struct statfs) * 10);
      
 	my_kr = vm_allocate((vm_map_t) mach_task_self(),(vm_address_t*) &my_bufferp, my_buffer_size, VM_FLAGS_ANYWHERE);
@@ -1391,7 +1380,6 @@ int fs_stat_tests( void * the_argp )
 		goto test_failed_exit;
 	}
 
-#if !TARGET_OS_EMBEDDED
 	/* now try statfs64 */
 	my_statfs64p = (struct statfs64 *) my_buffer64p;
 	my_err = statfs64( STATFS_TEST_PATH, my_statfs64p );
@@ -1426,7 +1414,6 @@ int fs_stat_tests( void * the_argp )
 		printf( "getfsstat64 call failed.  could not find valid f_fstypename! \n" );
 		goto test_failed_exit;
 	}
-#endif
 
 	/* set up to validate results via multiple sources.  we use getattrlist to get volume
 	 * related attributes to verify against results from fstatfs and statfs - but only if
@@ -1450,7 +1437,6 @@ int fs_stat_tests( void * the_argp )
 		goto test_failed_exit;
 	}
 	
-#if !TARGET_OS_EMBEDDED
 	/* testing fstatfs64 */
 	my_statfs64p = (struct statfs64 *) my_buffer64p;
 	my_err = fstatfs64( my_fd, my_statfs64p );
@@ -1465,7 +1451,6 @@ int fs_stat_tests( void * the_argp )
 		printf( "fstatfs64 call failed.  could not find valid f_fstypename! \n" );
 		goto test_failed_exit;
 	}
-#endif
 	
 	/* testing fstatfs */
 	my_statfsp = (struct statfs *) my_bufferp;
@@ -1518,11 +1503,9 @@ test_passed_exit:
 	if ( my_bufferp != NULL ) {
 		vm_deallocate(mach_task_self(), (vm_address_t)my_bufferp, my_buffer_size);
 	 }
-#if !TARGET_OS_EMBEDDED	
 	 if ( my_buffer64p != NULL ) {
 		vm_deallocate(mach_task_self(), (vm_address_t)my_buffer64p, my_buffer64_size);
 	 }
-#endif
 	 
 	return( my_err );
 }
@@ -1758,7 +1741,6 @@ int uid_tests( void * the_argp )
 			exit( -1 );
 		}
 		
-#if !TARGET_OS_EMBEDDED
 		/*
 		 * test to make sure setaudit_addr doesn't cause audit info to get lost from 
 		 * the credential.
@@ -1785,7 +1767,6 @@ int uid_tests( void * the_argp )
 			printf("test failed - wrong audit ID was set - %d \n", my_aia.ai_auid);
 			exit( -1 );
 		}
-#endif
 		
 		/* change real uid and effective uid to current euid */
 		my_err = setuid( my_euid );
@@ -2124,7 +2105,23 @@ int execve_kill_vfork_test( void * the_argp )
 		}
 	} else if(get_architecture() == ARM) {
 
-		errmsg = "execve failed: from arm forking and exec()ing arm process.\n";
+#ifdef CPU_TYPE_ARM64
+		if (bits == 64) {
+			/* Running on arm64 hardware. */
+			errmsg = "execve failed: from arm64 forking and exec()ing 64-bit arm process.\n";
+			argvs[0] = "sleep-arm";
+			if (do_execve_test("helpers/sleep-arm64", argvs, NULL, 1))
+				goto test_failed_exit;
+
+			/* Test posix_spawn for arm64 (should succeed) */
+			errmsg = NULL;
+			if (do_spawn_test(CPU_TYPE_ARM64, 0))
+				goto test_failed_exit;
+		} 
+#endif
+
+		/* Exec arm test on both arm and arm64 */
+		errmsg = "execve failed: from arm forking and exec()ing 32-bit arm process.\n";
 		argvs[0] = "sleep-arm";
 		if (do_execve_test("helpers/sleep-arm", argvs, NULL, 1))
 			goto test_failed_exit;
@@ -2156,7 +2153,6 @@ test_failed_exit:
  */
 int groups_test( void * the_argp )
 {
-#if !TARGET_OS_EMBEDDED
 	int			my_err, i;
 	int			my_group_count, my_orig_group_count;
 	gid_t		my_real_gid;
@@ -2290,10 +2286,6 @@ test_failed_exit:
 	
 test_passed_exit:
 	return( my_err );
-#else
-	printf( "\t--> Test not designed for EMBEDDED TARGET\n" );
-	return 0;
-#endif
 }
 
 
@@ -3441,7 +3433,6 @@ int fcntl_test( void * the_argp )
 	close( my_newfd );
 	my_newfd = -1;
 
-#if !TARGET_OS_EMBEDDED /* This section of the test is specific for the desktop platform, refer <rdar://problem/8850905>*/
 	/* While we're here, dup it via an open of /dev/fd/<fd> .. */
 
 	{
@@ -3470,7 +3461,6 @@ int fcntl_test( void * the_argp )
 	}
 	close ( my_newfd );
 	my_newfd = -1;
-#endif
 	my_err = 0;
 	goto test_passed_exit;
 
@@ -4041,7 +4031,6 @@ test_passed_exit:
  */
 int quotactl_test( void * the_argp )
 {
-#if !TARGET_OS_EMBEDDED
 	int				my_err;
 	int				is_quotas_on = 0;
 	struct dqblk	my_quota_blk;
@@ -4053,7 +4042,7 @@ int quotactl_test( void * the_argp )
 	}
 	
 	/* start off by checking the status of quotas on the boot volume */
-	my_err = quotactl( "/mach_kernel", QCMD(Q_QUOTASTAT, USRQUOTA), 0, (caddr_t)&is_quotas_on );
+	my_err = quotactl( "/System/Library/Kernels/kernel", QCMD(Q_QUOTASTAT, USRQUOTA), 0, (caddr_t)&is_quotas_on );
 	if ( my_err == -1 ) {
 		printf( "quotactl - Q_QUOTASTAT - failed with errno %d - %s \n", errno, strerror( errno ) );
 		goto test_failed_exit;
@@ -4065,7 +4054,7 @@ int quotactl_test( void * the_argp )
 		goto test_passed_exit;
 	}
 
-	my_err = quotactl( "/mach_kernel", QCMD(Q_GETQUOTA, USRQUOTA), getuid(), (caddr_t)&my_quota_blk );
+	my_err = quotactl( "/System/Library/Kernels/kernel", QCMD(Q_GETQUOTA, USRQUOTA), getuid(), (caddr_t)&my_quota_blk );
 	if ( my_err == -1 ) {
 		printf( "quotactl - Q_GETQUOTA - failed with errno %d - %s \n", errno, strerror( errno ) );
 		goto test_failed_exit;
@@ -4079,10 +4068,6 @@ test_failed_exit:
 	
 test_passed_exit:
 	return( my_err );
-#else
-	printf( "\t--> Not supported on EMBEDDED TARGET\n" );
-	return 0;
-#endif
 }
 
 /*  **************************************************************************************************************
@@ -4499,11 +4484,10 @@ typedef struct packed_result packed_result;
 typedef struct packed_result * packed_result_p;
 
 #define MAX_MATCHES	10
-#define MAX_EBUSY_RETRIES 5
+#define MAX_EBUSY_RETRIES 20
 
 int searchfs_test( void * the_argp )
 {
-#if !TARGET_OS_EMBEDDED
 	int						my_err, my_items_found = 0, my_ebusy_count;
 	char *					my_pathp = NULL;
     unsigned long			my_matches;
@@ -4698,10 +4682,6 @@ test_passed_exit:
 		vm_deallocate(mach_task_self(), (vm_address_t)my_pathp, PATH_MAX);	
 	 }
 	return( my_err );
-#else
-	printf( "\t--> Not supported on EMBEDDED TARGET\n" );
-	return 0;
-#endif
 }
 
 
@@ -4986,7 +4966,6 @@ test_passed_exit:
  */
 int message_queue_tests( void * the_argp )
 {
-#if !TARGET_OS_EMBEDDED
 	int					my_err;
 	int					my_msg_queue_id = -1;
 	ssize_t				my_result;
@@ -5082,10 +5061,6 @@ test_passed_exit:
 		msgctl( my_msg_queue_id, IPC_RMID, NULL );
 	}
 	return( my_err );
-#else
-	printf( "\t--> Not supported on EMBEDDED TARGET \n" );
-	return 0;
-#endif
 }
 
 
@@ -5231,6 +5206,1650 @@ int kaslr_test( void * the_argp )
 test_failed_exit:
 	return -1;
 }
+
+typedef struct attrs {
+         uint32_t          attrs_length;
+         attribute_set_t   attrs_returned;
+         uint32_t          attr_error;
+         attrreference_t   attr_name;
+         fsobj_type_t      attr_obj_type;
+         
+         union {
+         	struct {
+         		uint32_t entry_count;
+         	} directory;
+         	struct {
+         		off_t	size;
+         	} file;
+         } attr_obj;
+         
+} attrs_t;
+
+int getattrlistbulk_test( void * the_argp )
+{
+
+	int 	error;
+	struct attrlist attr_list;
+	attrs_t *attrsptr;
+	char 	*entry_start;
+	int 	retcount = 0, totalcount = 0;
+	int	index;
+	char	*nameptr;
+	int 	attr_buf_size;
+	char	*attr_buf;
+	int 	dirfd = -1;
+	char* 	target = "/System/Library/CoreServices";
+
+	memset(&attr_list, 0, sizeof(attr_list));
+	attr_list.bitmapcount = ATTR_BIT_MAP_COUNT;
+	attr_list.commonattr  = ATTR_CMN_RETURNED_ATTRS |
+			ATTR_CMN_NAME |
+			ATTR_CMN_OBJTYPE |
+			ATTR_CMN_ERROR |
+			ATTR_FILE_TOTALSIZE|
+			ATTR_DIR_ENTRYCOUNT;
+
+	error = 0;
+	/*allocate a buffer for 10 items*/
+	attr_buf_size = 10 * (sizeof(attrs_t) + FILENAME_MAX );
+	if (vm_allocate((vm_map_t) mach_task_self(),
+		(vm_address_t*)&attr_buf, 
+		attr_buf_size, VM_FLAGS_ANYWHERE) != KERN_SUCCESS) {
+		printf( "vm_allocate failed with error %d - \"%s\" \n", 
+			errno, strerror( errno) );
+		attr_buf = NULL;
+		error = -1;
+		goto last_exit;
+	}
+	
+	dirfd = openat (AT_FDCWD, target, O_RDONLY, 0);
+	if (dirfd == -1) {
+		printf("openat \"%s\" failed with  error %d - \"%s\" \n", 
+			target, errno, strerror( errno));
+		error = -1;
+		goto last_exit;
+	} 
+
+	do {
+	 	retcount = getattrlistbulk(dirfd, 
+				&attr_list, &attr_buf[0],
+				attr_buf_size, FSOPT_PACK_INVAL_ATTRS);
+		 if (retcount == -1) {
+			printf("getattrlistbulk on %s returned %d items\n", 
+				target, totalcount);
+		 	printf("getattrlistbulk failed with  error %d - \"%s\" \n", 
+             			errno, strerror( errno));
+             		error = -1;
+             		break;
+		 } else if (retcount == 0) {
+		 	/* No more entries in directory */
+		 	printf("getattrlistbulk succeded: found %d entries in %s\n", totalcount, target);
+		 	error = 0;
+		    	break;
+		 } else {
+		 	totalcount += retcount;    
+		     	entry_start = &attr_buf[0];
+			for (index = 0; index < retcount; index++) {
+				/*set attrsptr to item record buffer*/
+				attrsptr = (attrs_t *)entry_start;
+
+				/*
+				 *calculate starting point for next item in bulk
+				 *list
+				 */
+				entry_start += attrsptr->attrs_length;
+
+				if ((attrsptr->attrs_returned.commonattr & ATTR_CMN_ERROR) &&
+				     attrsptr->attr_error) {
+					nameptr = (char*)(&(attrsptr->attr_name)) + attrsptr->attr_name.attr_dataoffset;
+					printf("getattrlistbulk item \"%s\" ATTR_CMN_ERROR %d \"%s\"\n",
+						nameptr, attrsptr->attr_error, 
+						strerror(attrsptr->attr_error));
+				}
+			}
+		} 
+	} while (1);
+	
+last_exit:
+	if (dirfd != -1) {
+		(void)close(dirfd);
+	}
+	
+	if (attr_buf != NULL) {
+		vm_deallocate(
+			mach_task_self(), (vm_address_t)attr_buf, attr_buf_size);	
+	}
+
+	return error;
+}
+
+#define INVALID_FD -173
+static int create_random_name_at(int the_dirfd, char *the_dirpathp, 
+			char *the_namep, size_t the_namep_len, 
+			char *the_pathp, size_t the_pathp_len, 
+			int do_create );
+/*
+ * create_random_name_at - creates a file with a random / unique name in the given directory.
+ * when do_create is true we create a file else we generaate a name that does not exist in the
+ * given directory (we do not create anything when do_open is 0).
+ * A name is generated relative to the directory fd. If both a directory path and
+ * and a buffer to hold the full pathname are provided, an abolute pathname is also returned.
+ * An absolute pathname for the generated filename is returned in my_pathp.
+ * WARNING - caller provides enough space in the_namep buffer for longest possible name (NAME_MAX).
+ * WARNING - caller provides enough space in the_pathp buffer for longest possible path (PATH_MAX).
+ * RAND_MAX is currently 2147483647 (ten characters plus one for a slash)
+ */
+int create_random_name_at(int the_dirfd, char *the_dirpathp, 
+			char *the_namep, size_t the_namep_len, 
+			char *the_pathp, size_t the_pathp_len, 
+			int do_create )
+{
+	int		i, my_err;
+	int		my_fd = -1;
+
+	for ( i = 0; i < 1; i++ ) {
+		int		my_rand;
+		char		*myp;
+		char		my_name[32];
+
+		my_rand = rand( );
+		sprintf( &my_name[0], "%d", my_rand );
+		if ( (strlen( &my_name[0] ) + strlen( the_dirpathp ) + 2) > PATH_MAX ) {
+			printf( "%s - path to test file greater than PATH_MAX \n", __FUNCTION__ );
+			return( -1 );
+		}
+
+		// generate name and absolute path
+		myp = the_namep;
+		*(myp) = (char)0x00;
+		strlcat(the_namep, &my_name[0], the_namep_len);
+
+		/*
+		 *If the caller has passed in a path pointer and directory path
+		 *it means an absolute path is to be returned as well.
+		 */
+		if (the_pathp && the_dirpathp) {
+			*the_pathp = (char)0x00;
+			strlcat(the_pathp, the_dirpathp, the_pathp_len);
+			strlcat(the_pathp, "/", the_pathp_len);
+			strlcat(the_pathp, the_namep, the_pathp_len);
+		}
+
+		if (do_create) {
+			/* create a file with this name */
+			my_fd = openat( the_dirfd, the_namep, (O_RDWR | O_CREAT | O_EXCL),
+				     (S_IRUSR | S_IWUSR | S_IRGRP | S_IROTH) );
+			if ( my_fd == -1 ) {
+				if ( errno != EEXIST ) {
+					printf( "%s - open failed with errno %d - %s \n",
+					       __FUNCTION__, errno, strerror( errno ) );
+					return( -1 );
+				}
+				// name already exists, try another
+				i--;
+				continue;
+			}
+		}
+
+		else {
+			/* make sure the name is unique */
+			struct stat		my_sb;
+			my_err = fstatat( the_dirfd, the_namep, &my_sb, 0 );
+			if ( my_err != 0 ) {
+				if ( errno == ENOENT ) {
+					break;
+				}
+				else {
+					printf( "%s - open failed with errno %d - %s \n",
+					       __FUNCTION__, errno, strerror( errno ) );
+					return( -1 );
+				}
+			}
+			/* name already exists, try another */
+			i--;
+			continue;
+		}
+	}
+
+	if ( my_fd != -1 )
+		close( my_fd );
+
+	return( 0 );
+
+} /* create_random_name_at */
+
+/*  **************************************************************************************************************
+ *	Test close, fpathconf, fstat, open, pathconf system calls.
+ *  **************************************************************************************************************
+ */
+int openat_close_test( void * the_argp )
+{
+	int		my_err;
+	int		my_dirfd = -1;
+	int		my_fd = -1;
+	int             error_fd = -1;
+	char *		my_dirpathp = NULL;
+	char *		my_namep = NULL;
+	char *		my_pathp = NULL;
+	ssize_t		my_result;
+	long		my_pconf_result;
+	struct stat	my_sb;
+	char		my_buffer[32];
+	kern_return_t           my_kr;
+
+
+	my_kr = vm_allocate((vm_map_t) mach_task_self(), (vm_address_t*)&my_dirpathp, PATH_MAX, VM_FLAGS_ANYWHERE);
+        if(my_kr != KERN_SUCCESS){
+                printf( "vm_allocate failed with error %d - \"%s\" \n", errno, strerror( errno) );
+                goto test_failed_exit;
+        }
+
+	*my_dirpathp = 0x00;
+	strlcat( my_dirpathp, &g_target_path[0], PATH_MAX );
+
+	my_dirfd = openat(AT_FDCWD, my_dirpathp, O_RDONLY, 0 );
+	if ( my_dirfd == -1 ) {
+		printf( "openat call failed with error %d - \"%s\" \n", errno, strerror( errno) );
+		printf( "\t Directory we attempted to open -> \"%s\" \n", my_dirpathp );
+		goto test_failed_exit;
+	}
+
+	my_kr = vm_allocate((vm_map_t) mach_task_self(), (vm_address_t*)&my_namep, NAME_MAX, VM_FLAGS_ANYWHERE);
+        if(my_kr != KERN_SUCCESS){
+                printf( "vm_allocate failed with error %d - \"%s\" \n", errno, strerror( errno) );
+                goto test_failed_exit;
+        }
+
+	*my_namep = 0x00;
+	if (my_pathp) {
+		*my_pathp = 0x00;
+	}
+
+	/* If dirpath is absolute, we can ask for an absolute path name to file back from create_random_name_at */
+	if (*my_dirpathp == '/') {
+		my_kr = vm_allocate((vm_map_t) mach_task_self(), (vm_address_t*)&my_pathp, PATH_MAX, VM_FLAGS_ANYWHERE);
+		if(my_kr != KERN_SUCCESS){
+			printf( "vm_allocate failed with error %d - \"%s\" \n", errno, strerror( errno) );
+			goto test_failed_exit;
+		}
+	}
+
+	/*
+	 * Some basic openat validation. If pathname is absolute, invalid fd should
+	 * not matter.
+	 */
+
+	if (*my_dirpathp == '/') {
+		my_dirfd = openat( INVALID_FD, my_dirpathp, O_RDONLY, 0 );
+		if ( my_dirfd == -1 ) {
+			printf( "openat call failed with error %d - \"%s\" \n", errno, strerror( errno) );
+			printf( "\t Directory we attempted to open -> \"%s\" \n", my_dirpathp );
+			printf( "\t Was Absolute pathname, invalid fd, %d, provided as input \n", INVALID_FD);
+			goto test_failed_exit;
+		}
+		close(my_dirfd);
+
+	}
+
+	my_dirfd = openat( AT_FDCWD, my_dirpathp, O_RDONLY, 0 );
+	if ( my_dirfd == -1 ) {
+		printf( "openat call failed with error %d - \"%s\" \n", errno, strerror( errno) );
+		printf( "\t Directory we attempted to open -> \"%s\" \n", my_dirpathp );
+		goto test_failed_exit;
+	}
+
+	/* create a test file */
+	my_err = create_random_name_at( my_dirfd, my_dirpathp, my_namep, NAME_MAX, my_pathp, PATH_MAX, 1 );
+	if ( my_err != 0 ) {
+		goto test_failed_exit;
+	}
+
+	/*
+	 * If pathname is not absolute, an openat relative to a invalid directory fd
+	 * should not work.
+	 */
+	if (my_pathp) {
+		/*  test O_WRONLY case */
+		my_fd = openat( INVALID_FD, my_namep, O_WRONLY, 0 );
+		if ( my_fd != -1 ) {
+			printf( "openat call relative to invalid dir fd worked\n");
+			printf( "\t file we attempted to open -> \"%s\" relative to fd -173\n", my_pathp );
+			goto test_failed_exit;
+		}
+	}
+
+	/*  test O_WRONLY case */
+	my_fd = openat( my_dirfd, my_namep, O_WRONLY, 0 );
+	if ( my_fd == -1 ) {
+		printf( "open call failed with error %d - \"%s\" \n", errno, strerror( errno) );
+		printf( "\t file we attempted to open -> \"%s\" \n", my_pathp );
+		goto test_failed_exit;
+	}
+
+        /*
+	 * try to open relative to non-directory fd.
+	 * It should fail with ENOTDIR.
+	 */
+	if ((error_fd = openat(my_fd, my_namep, O_WRONLY, 0)) != -1) {
+		printf( "openat call succeded with fd being a non-directory fd\n");
+		printf( "\t file we attempted to open (reltive to itself)-> \"%s\" \n", my_pathp );
+		close(error_fd);
+		goto test_failed_exit;
+	} else if (errno != ENOTDIR) {
+		printf( "openat call should have failed with errno 20 (ENOTDIR).  actually failed with %d - \"%s\" \n", my_err, strerror( my_err) );
+	}
+
+	my_pconf_result = fpathconf( my_fd, _PC_NAME_MAX );
+	if ( my_pconf_result == -1 ) {
+		printf( "fpathconf - _PC_PATH_MAX - failed with error %d - \"%s\" \n", errno, strerror( errno) );
+		goto test_failed_exit;
+	}
+	//	printf( "_PC_NAME_MAX %ld \n", my_pconf_result );
+	/* results look OK? */
+	if ( my_pconf_result < 6 ) {
+		printf( "fpathconf - _PC_NAME_MAX - looks like wrong results \n" );
+		goto test_failed_exit;
+	}
+
+	/* write some data then try to read it */
+	my_result = write( my_fd, "kat", 3 );
+	my_err = errno;
+	if ( my_result != 3 ) {
+		if ( sizeof( ssize_t ) > sizeof( int ) ) {
+			printf( "write failed.  should have written 3 bytes actually wrote -  %ld \n", (long int) my_result );
+		}
+		else {
+			printf( "write failed.  should have written 3 bytes actually wrote -  %d \n", (int) my_result );
+		}
+		goto test_failed_exit;
+	}
+
+	/* Try to read - this should fail since we opened file with O_WRONLY */
+	my_result = read( my_fd, &my_buffer[0], sizeof(my_buffer) );
+	my_err = errno;
+	if ( my_result != -1 ) {
+		printf( "read call should have failed with errno 9 (EBADF) \n" );
+		goto test_failed_exit;
+	}
+	else if ( my_err != EBADF ) {
+		printf( "read call should have failed with errno 9 (EBADF).  actually failed with %d - \"%s\" \n", my_err, strerror( my_err) );
+		goto test_failed_exit;
+	}
+
+	close( my_fd );
+
+	/*  test O_TRUNC and O_APPEND case */
+	my_fd = openat( my_dirfd, my_namep, (O_RDWR | O_TRUNC | O_APPEND), 0 );
+	if ( my_fd == -1 ) {
+		printf( "open call failed with error %d - \"%s\" \n", errno, strerror( errno) );
+		printf( "\t file we attempted to open -> \"%s\" \n", my_pathp );
+		goto test_failed_exit;
+	}
+
+	my_result = read( my_fd, &my_buffer[0], sizeof(my_buffer) );
+	if ( my_result == -1 ) {
+		printf( "read call failed with error %d - \"%s\" \n", errno, strerror( errno) );
+		goto test_failed_exit;
+	}
+	if ( my_result != 0 ) {
+		printf( "read failed - should have read 0 bytes. \n" );
+		goto test_failed_exit;
+	}
+
+	my_result = write( my_fd, "kat", 3 );
+	my_err = errno;
+	if ( my_result != 3 ) {
+		if ( sizeof( ssize_t ) > sizeof( int ) ) {
+			printf( "write failed.  should have written 3 bytes actually wrote -  %ld \n", (long int) my_result );
+		}
+		else {
+			printf( "write failed.  should have written 3 bytes actually wrote -  %d \n", (int) my_result );
+		}
+		goto test_failed_exit;
+	}
+
+	/* add some more data to the test file - this should be appended */
+	lseek( my_fd, 0, SEEK_SET );
+	my_result = write( my_fd, "zzz", 3 );
+	my_err = errno;
+	if ( my_result != 3 ) {
+		if ( sizeof( ssize_t ) > sizeof( int ) ) {
+			printf( "write failed.  should have written 3 bytes actually wrote -  %ld \n", (long int) my_result );
+		}
+		else {
+			printf( "write failed.  should have written 3 bytes actually wrote -  %d \n", (int) my_result );
+		}
+		goto test_failed_exit;
+	}
+
+	/* now verify the writes */
+	bzero( (void *)&my_buffer[0], sizeof(my_buffer) );
+	lseek( my_fd, 0, SEEK_SET );
+	my_result = read( my_fd, &my_buffer[0], sizeof(my_buffer) );
+	if ( my_result == -1 ) {
+		printf( "read call failed with error %d - \"%s\" \n", errno, strerror( errno) );
+		goto test_failed_exit;
+	}
+	if ( my_buffer[0] != 'k' || my_buffer[5] != 'z' ) {
+		printf( "read failed to get correct data \n" );
+		goto test_failed_exit;
+	}
+
+	/*
+	 * try to stat relative to non-directory fd.
+	 * It should fail with ENOTDIR.
+	 */
+	if ((fstatat( my_fd, my_namep, &my_sb, 0 )) != -1) {
+		printf( "fstatat call succeded with fd being a non-directory fd\n");
+		printf( "\t file we attempted to stat (relative to itself)-> \"%s\" \n", my_pathp );
+		goto test_failed_exit;
+	} else if (errno != ENOTDIR) {
+		printf( "fstatat call should have failed with errno 20 (ENOTDIR).  actually failed with %d - \"%s\" \n", my_err, strerror( my_err) );
+	}
+
+	/* test fstatat */
+	my_err = fstatat( my_dirfd, my_namep, &my_sb, 0 );
+	if ( my_err == -1 ) {
+		printf( "fstatat call failed with error %d - \"%s\" \n", errno, strerror( errno) );
+		goto test_failed_exit;
+	}
+	if ( my_sb.st_size != 6 ) {
+		printf( "fstatat call failed - st_size is wrong \n" );
+		goto test_failed_exit;
+	}
+	if ( !S_ISREG( my_sb.st_mode ) ) {
+		printf( "fstatat call failed - st_mode does not indicate regular file \n" );
+		goto test_failed_exit;
+	}
+
+	my_err = 0;
+	goto test_passed_exit;
+
+test_failed_exit:
+	my_err = -1;
+
+test_passed_exit:
+	if ( my_fd != -1 )
+		close( my_fd );
+
+	if ( my_pathp != NULL ) {
+		remove(my_pathp);
+		vm_deallocate(mach_task_self(), (vm_address_t)my_pathp, PATH_MAX);
+	}
+
+	if ( my_namep ) {
+		unlinkat( my_dirfd, my_pathp, 0 );
+		vm_deallocate(mach_task_self(), (vm_address_t)my_namep, NAME_MAX);
+	}
+
+	if ( my_dirfd != -1)
+		close(my_dirfd);
+
+	if ( my_dirpathp != NULL ) {
+		vm_deallocate(mach_task_self(), (vm_address_t)my_dirpathp, PATH_MAX);
+	}
+
+	return( my_err );
+}
+
+/*  **************************************************************************************************************
+ *	Test linkat, fstatat and unlinkat system calls.
+ *  **************************************************************************************************************
+ */
+int linkat_fstatat_unlinkat_test( void * the_argp )
+{
+	int			my_err;
+	int			my_dirfd = -1;
+	int			my_fd = -1;
+	char *			my_dirpathp = NULL;
+	char *			my_namep = NULL;
+	char *			my_pathp = NULL;
+	char *			my_name2p = NULL;
+	nlink_t			my_link_count;
+	ssize_t			my_result;
+	struct stat		my_sb;
+	kern_return_t           my_kr;
+
+
+	my_kr = vm_allocate((vm_map_t) mach_task_self(), (vm_address_t*)&my_dirpathp, PATH_MAX, VM_FLAGS_ANYWHERE);
+        if(my_kr != KERN_SUCCESS){
+                printf( "vm_allocate failed with error %d - \"%s\" \n", errno, strerror( errno) );
+                goto test_failed_exit;
+        }
+
+	*my_dirpathp = 0x00;
+	strlcat( my_dirpathp, &g_target_path[0], PATH_MAX );
+
+	my_dirfd = openat(AT_FDCWD, my_dirpathp, O_RDONLY, 0 );
+	if ( my_dirfd == -1 ) {
+		printf( "openat call failed with error %d - \"%s\" \n", errno, strerror( errno) );
+		printf( "\t Directory we attempted to open -> \"%s\" \n", my_dirpathp );
+		goto test_failed_exit;
+	}
+
+	my_kr = vm_allocate((vm_map_t) mach_task_self(), (vm_address_t*)&my_namep, NAME_MAX, VM_FLAGS_ANYWHERE);
+        if(my_kr != KERN_SUCCESS){
+                printf( "vm_allocate failed with error %d - \"%s\" \n", errno, strerror( errno) );
+                goto test_failed_exit;
+        }
+
+	*my_namep = 0x00;
+	if (my_pathp) {
+		*my_pathp = 0x00;
+	}
+
+	/* If dirpath is absolute, we can ask for an absolute path name to file back from create_random_name_at */
+	if (*my_dirpathp == '/') {
+		my_kr = vm_allocate((vm_map_t) mach_task_self(), (vm_address_t*)&my_pathp, PATH_MAX, VM_FLAGS_ANYWHERE);
+		if(my_kr != KERN_SUCCESS){
+			printf( "vm_allocate failed with error %d - \"%s\" \n", errno, strerror( errno) );
+			goto test_failed_exit;
+		}
+	}
+
+	/* create a test file */
+	my_err = create_random_name_at( my_dirfd, my_dirpathp, my_namep, NAME_MAX, my_pathp, PATH_MAX, 1 );
+	if ( my_err != 0 ) {
+		goto test_failed_exit;
+	}
+
+	my_kr = vm_allocate((vm_map_t) mach_task_self(), (vm_address_t*)&my_name2p, NAME_MAX, VM_FLAGS_ANYWHERE);
+        if(my_kr != KERN_SUCCESS){
+                printf( "vm_allocate failed with error %d - \"%s\" \n", errno, strerror( errno) );
+                goto test_failed_exit;
+        }
+
+	*my_name2p = 0x00;
+
+	/* now create a name for the link file */
+	strlcat( my_name2p, my_namep, NAME_MAX );
+	strlcat( my_name2p, "link", NAME_MAX );
+
+	/* get the current link count */
+	my_err = fstatat( my_dirfd, my_namep, &my_sb, 0 );
+	if ( my_err != 0 ) {
+		printf( "stat call failed.  got errno %d - %s. \n", errno, strerror( errno ) );
+		goto test_failed_exit;
+	}
+	my_link_count = my_sb.st_nlink;
+
+	/* Double check with absolute path name */
+	if (my_pathp) {
+		my_err = fstatat(INVALID_FD, my_pathp, &my_sb, 0 );
+		if ( my_err != 0 ) {
+			printf( "fstatat with INVALID_FD and absolute pathname failed.  got errno %d - %s. \n", errno, strerror( errno ) );
+			goto test_failed_exit;
+		}
+		if (my_link_count != my_sb.st_nlink) {
+			printf( "fstatat call did not return correct number of links" );
+			goto test_failed_exit;
+		}
+	}
+
+	/* check file size (should be 0) */
+	if ( my_sb.st_size != 0 ) {
+		printf( "stat structure looks bogus for test file \"%s\" \n", my_pathp );
+		printf( "st_size is not 0 \n" );
+		goto test_failed_exit;
+	}
+
+	/* change file size */
+	my_fd = openat(my_dirfd, my_namep, O_RDWR, 0 );
+	if ( my_fd == -1 ) {
+		printf( "openat call failed with error %d - \"%s\" \n", errno, strerror( errno) );
+		printf( "\t file we attempted to open -> \"%s\" \n", my_pathp );
+		goto test_failed_exit;
+	}
+
+	my_result = write( my_fd, "kat", 3 );
+	my_err = errno;
+	if ( my_result != 3 ) {
+		if ( sizeof( ssize_t ) > sizeof( int ) ) {
+			printf( "write failed.  should have written 3 bytes actually wrote -  %ld \n", (long int) my_result );
+		}
+		else {
+			printf( "write failed.  should have written 3 bytes actually wrote -  %d \n", (int) my_result );
+		}
+		goto test_failed_exit;
+	}
+	close( my_fd );
+	my_fd = -1;
+
+	/* now link another file to our test file and recheck link count */
+	/* N.B. - HFS only supports AT_SYMLINK_FOLLOW */
+	my_err = linkat( my_dirfd, my_namep, my_dirfd, my_name2p, AT_SYMLINK_FOLLOW );
+	if ( my_err != 0 ) {
+		printf( "linkat call failed.  got errno %d - %s. \n", errno, strerror( errno ) );
+		goto test_failed_exit;
+	}
+	my_err = fstatat( my_dirfd, my_pathp, &my_sb, 0 );
+	if ( my_err != 0 ) {
+		printf( "fstatat call failed.  got errno %d - %s. \n", errno, strerror( errno ) );
+		goto test_failed_exit;
+	}
+	if ( (my_link_count + 1) != my_sb.st_nlink ) {
+		printf( "stat structure looks bogus for test file \"%s\" \n", my_pathp );
+		printf( "incorrect st_nlink \n" );
+		goto test_failed_exit;
+	}
+
+	/* check file size (should be 3) */
+	if ( my_sb.st_size != 3 ) {
+		printf( "stat structure looks bogus for test file \"%s\" \n", my_pathp );
+		printf( "st_size is not 3 \n" );
+		goto test_failed_exit;
+	}
+
+	/* now make sure unlink works OK */
+	my_err = unlinkat( my_dirfd, my_name2p, 0 );
+	if ( my_err != 0 ) {
+		printf( "unlinkat call failed.  got errno %d - %s. \n", errno, strerror( errno ) );
+		goto test_failed_exit;
+	}
+	my_err = fstatat( my_dirfd, my_namep, &my_sb, 0 );
+	if ( my_err != 0 ) {
+		printf( "stat call failed.  got errno %d - %s. \n", errno, strerror( errno ) );
+		goto test_failed_exit;
+	}
+	if ( my_link_count != my_sb.st_nlink ) {
+		printf( "stat structure looks bogus for test file \"%s\" \n", my_pathp );
+		printf( "incorrect st_nlink \n" );
+		goto test_failed_exit;
+	}
+
+	my_err = 0;
+	goto test_passed_exit;
+
+test_failed_exit:
+	my_err = -1;
+
+test_passed_exit:
+	if ( my_fd != -1 )
+		close( my_fd );
+
+	if ( my_name2p != NULL ) {
+		(void)unlinkat( my_dirfd, my_name2p, 0 );
+		vm_deallocate(mach_task_self(), (vm_address_t)my_name2p, NAME_MAX);
+	}
+
+	if ( my_namep != NULL ) {
+		(void)unlinkat( my_dirfd, my_name2p, 0 );
+		vm_deallocate(mach_task_self(), (vm_address_t)my_name2p, NAME_MAX);
+	}
+
+	if ( my_pathp != NULL ) {
+		remove( my_pathp );
+		vm_deallocate(mach_task_self(), (vm_address_t)my_pathp, PATH_MAX);
+	}
+
+	if ( my_dirpathp != NULL ) {
+		vm_deallocate(mach_task_self(), (vm_address_t)my_dirpathp, PATH_MAX);
+	}
+
+	if ( my_dirfd != -1 )
+		close( my_dirfd );
+	
+	return( my_err );
+}
+
+/*  **************************************************************************************************************
+ *	Test faccessat, fchmodat and fchmod system calls.
+ *  **************************************************************************************************************
+ */
+int faccessat_fchmodat_fchmod_test( void * the_argp )
+{
+	int		error_occurred;
+	int             is_absolute_path = 0;
+	int		my_err;
+	int		my_dirfd = -1;
+	int		my_fd = -1;
+
+	char *		my_dirpathp = NULL;
+	char *		my_namep = NULL;
+	char *		my_pathp = NULL;
+
+	uid_t		euid,ruid;
+	struct stat	my_sb;
+
+	FILE *		file_handle;
+
+	kern_return_t	my_kr;
+
+
+        my_kr = vm_allocate((vm_map_t) mach_task_self(), (vm_address_t*)&my_dirpathp, PATH_MAX, VM_FLAGS_ANYWHERE);
+        if(my_kr != KERN_SUCCESS){
+                printf( "vm_allocate failed with error %d - \"%s\" \n", errno, strerror( errno) );
+                goto test_failed_exit;
+        }
+
+	*my_dirpathp = 0x00;
+	strlcat( my_dirpathp, &g_target_path[0], PATH_MAX );
+
+	/*
+	 * Some basic openat validation. If pathname is absolute, an invalid fd should
+	 * not matter.
+	 */
+
+	if (*my_dirpathp == '/') {
+		is_absolute_path = 1;
+		my_dirfd = openat(INVALID_FD, my_dirpathp, O_RDONLY, 0 );
+		if ( my_dirfd == -1 ) {
+			printf( "openat call failed with error %d - \"%s\" \n", errno, strerror( errno) );
+			printf( "\t Directory we attempted to open -> \"%s\" \n", my_dirpathp );
+			printf( "\t Was Absolute pathname, invalid fd, %d, provided as input \n", INVALID_FD);
+			goto test_failed_exit;
+		}
+		close( my_dirfd );
+	}
+
+	my_dirfd = openat(AT_FDCWD, my_dirpathp, O_RDONLY, 0 );
+	if ( my_dirfd == -1 ) {
+		printf( "openat call failed with error %d - \"%s\" \n", errno, strerror( errno) );
+		printf( "\t Directory we attempted to open -> \"%s\" \n", my_dirpathp );
+		goto test_failed_exit;
+	}
+
+	my_kr = vm_allocate((vm_map_t) mach_task_self(), (vm_address_t*)&my_namep, NAME_MAX, VM_FLAGS_ANYWHERE);
+        if(my_kr != KERN_SUCCESS){
+                printf( "vm_allocate failed with error %d - \"%s\" \n", errno, strerror( errno) );
+                goto test_failed_exit;
+        }
+
+	*my_namep = 0x00;
+
+	if (is_absolute_path) {
+		my_kr = vm_allocate((vm_map_t) mach_task_self(), (vm_address_t*)&my_pathp, PATH_MAX, VM_FLAGS_ANYWHERE);
+		if(my_kr != KERN_SUCCESS){
+			printf( "vm_allocate failed with error %d - \"%s\" \n", errno, strerror( errno) );
+			goto test_failed_exit;
+		}
+
+		*my_pathp = 0x00;
+	}
+
+	/* create a test file */
+	my_err = create_random_name_at(my_dirfd, my_dirpathp, my_namep, NAME_MAX, my_pathp, PATH_MAX, 1);
+	if ( my_err != 0 ) {
+		goto test_failed_exit;
+	}
+
+	/* test chmod */
+	my_err = fchmodat(my_dirfd, my_namep, S_IRWXU, 0);
+	if ( my_err == -1 ) {
+		printf( "chmod call failed.  got errno %d - %s. \n", errno, strerror( errno ) );
+		goto test_failed_exit;
+	}
+
+	my_err = fchmodat( my_dirfd, my_namep, (S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP), 0 );
+	if ( my_err == -1 ) {
+		printf( "chmod call failed.  got errno %d - %s. \n", errno, strerror( errno ) );
+		goto test_failed_exit;
+	}
+
+	/* test access - this should fail */
+	my_err = faccessat( my_dirfd, my_namep, (X_OK), 0 );
+	if ( my_err == 0 ) {
+		printf( "access call should have failed, but did not. \n" );
+		goto test_failed_exit;
+	}
+	else if ( my_err == -1  ) {
+		int tmp = 0;
+		tmp = getuid( );
+
+		/* special case when running as root - we get back EPERM when running as root */
+		my_err = errno;
+		if ( ( tmp == 0 && my_err != EPERM) || (tmp != 0 && my_err != EACCES) ) {
+			printf( "access failed with errno %d - %s. \n", my_err, strerror( my_err ) );
+			goto test_failed_exit;
+		}
+	}
+
+	/* verify correct modes are set */
+	/* First check that Absolute path works even with an invalid FD */
+	if (is_absolute_path) {
+		my_err = fstatat( INVALID_FD, my_pathp, &my_sb, 0 );
+		if ( my_err != 0 ) {
+			printf( "fstatat call failed with an absolute pathname.  got errno %d - %s. \n", errno, strerror( errno ) );
+			goto test_failed_exit;
+		}
+	}
+
+	my_err = fstatat( my_dirfd, my_namep, &my_sb, 0 );
+	if ( my_err != 0 ) {
+		printf( "stat call failed.  got errno %d - %s. \n", errno, strerror( errno ) );
+		goto test_failed_exit;
+	}
+
+	if ( (my_sb.st_mode & (S_IRWXO | S_IXGRP)) != 0 ||
+	    (my_sb.st_mode & (S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP)) == 0 ) {
+		printf( "chmod call appears to have failed.  stat shows incorrect values in st_mode! \n" );
+		goto test_failed_exit;
+	}
+
+
+	/*  another test for the access system call  -- refer ro radar# 6725311 */
+
+
+	/*
+	 * This test makes sure that the access system call does not give the current user extra
+	 * permissions on files the current user does not own. From radar #6725311, this could
+	 * happen when the current user calls access() on a file owned by the current user in
+	 * the same directory as the other files not owned by the current user.
+	 *
+	 * Note: This test expects that the effective uid (euid) is set to root.
+	 *
+	 */
+
+	/* Create a file that root owns  */
+	file_handle = fopen(FILE_NOTME, "w");
+	fclose(file_handle);
+
+	/* Currently running as root (through setreuid manipulation), switch to running as the current user. */
+	euid = geteuid();
+	ruid = getuid();
+	setreuid(ruid, ruid);
+
+	/* Create a file that the current user owns  */
+	file_handle = fopen(FILE_ME, "w");
+	fclose(file_handle);
+
+	error_occurred = 0;
+
+	/* Try to remove the file owned by root (this should fail). */
+	my_err = unlinkat( AT_FDCWD, FILE_NOTME, 0 );
+
+	if (my_err < 0) {
+		my_err = errno;
+	}
+
+	if (my_err == 0) {
+		printf("Unresolved: First attempt deleted '" FILE_NOTME "'! \n");
+		error_occurred = 1;
+	} else {
+		printf("Passed: First attempt to delete '" FILE_NOTME "'  failed with error %d - %s.\n", my_err, strerror( my_err ));
+
+		/* Set _DELETE_OK on a file that the current user owns */
+		faccessat(AT_FDCWD, FILE_ME, _DELETE_OK, 0 );
+
+		/* Try to remove the file owned by root again (should give us: EPERM [13]) */
+		my_err = unlinkat(AT_FDCWD, FILE_NOTME, 0);
+
+		if (my_err < 0) {
+			my_err = errno;
+		}
+
+		if (my_err == 0) {
+			printf("Failed: Second attempt deleted '" FILE_NOTME "'!\n");
+			error_occurred = 1;
+		} else if (my_err == 13) {
+			printf("Passed: Second attempt to delete '" FILE_NOTME "' failed with error %d - %s.\n", my_err, strerror( my_err ));
+		} else {
+			printf("Failed: Second attempt to delete '" FILE_NOTME "' failed with error %d - %s.\n", my_err, strerror( my_err ));
+			error_occurred = 1;
+		}
+	}
+
+	/* Reset to running as root */
+	setreuid(ruid, euid);
+
+	if(error_occurred == 1) {
+		goto test_failed_exit;
+	}
+
+
+	/* end of test*/
+
+
+	/* test fchmod */
+	my_fd = openat( my_dirfd, my_namep, O_RDONLY, 0);
+	if ( my_fd == -1 ) {
+		printf( "openat call failed with error %d - \"%s\" \n", errno, strerror( errno) );
+		printf( "\t we attempted to open -> \"%s\" \n", &g_target_path[0] );
+		goto test_failed_exit;
+	}
+
+	my_err = fchmod( my_fd, S_IRWXU );
+	if ( my_err == -1 ) {
+		printf( "fchmod call failed.  got errno %d - %s. \n", errno, strerror( errno ) );
+		goto test_failed_exit;
+	}
+
+	my_err = fstatat( INVALID_FD, my_pathp, &my_sb, 0 );
+	if ( my_err != 0 ) {
+		printf( "stat call failed.  got errno %d - %s. \n", errno, strerror( errno ) );
+		goto test_failed_exit;
+	}
+
+	/* verify correct modes are set */
+	if ( (my_sb.st_mode & (S_IRWXG | S_IRWXO)) != 0 ||
+	    (my_sb.st_mode & (S_IRWXU)) == 0 ) {
+		printf( "fchmod call appears to have failed.  stat shows incorrect values in st_mode! \n" );
+		goto test_failed_exit;
+	}
+
+	my_err = 0;
+	goto test_passed_exit;
+
+test_failed_exit:
+	my_err = -1;
+
+test_passed_exit:
+	if ( my_fd != -1 )
+		close( my_fd );
+	if ( my_pathp != NULL ) {
+		remove( my_pathp );
+		vm_deallocate(mach_task_self(), (vm_address_t)my_pathp, PATH_MAX);
+	}
+	if ( my_namep != NULL ) {
+		unlinkat(my_dirfd, my_namep, 0);
+		vm_deallocate(mach_task_self(), (vm_address_t)my_pathp, NAME_MAX);
+
+	}
+
+	if ( my_dirfd != -1)
+		close( my_dirfd);
+
+	if ( my_dirpathp != NULL ) {
+		vm_deallocate(mach_task_self(), (vm_address_t)my_pathp, PATH_MAX);
+	}
+	
+	return( my_err );
+}
+
+/*  **************************************************************************************************************
+ *	Test fchownat, fchown, readlinkat, symlinkat system calls.
+ *  **************************************************************************************************************
+ */
+int fchownat_fchown_symlinkat_test( void * the_argp )
+{
+	int			my_err, my_group_count, i;
+	int			my_fd = -1;
+	int			my_dirfd = -1;
+	char *			my_dirpathp = NULL;
+	char *			my_namep = NULL;
+	char *			my_link_namep = NULL;
+	char *			my_pathp = NULL;
+	char *			my_link_pathp = NULL;
+	int			is_absolute_path = 0;
+	uid_t			my_orig_uid;
+	gid_t			my_orig_gid, my_new_gid1 = 0, my_new_gid2 = 0;
+	ssize_t			my_result;
+	struct stat		my_sb;
+	gid_t			my_groups[ NGROUPS_MAX ];
+	char			my_buffer[ 64 ];
+	kern_return_t           my_kr;
+
+
+	my_kr = vm_allocate((vm_map_t) mach_task_self(), (vm_address_t*)&my_dirpathp, PATH_MAX, VM_FLAGS_ANYWHERE);
+        if(my_kr != KERN_SUCCESS){
+                printf( "vm_allocate failed with error %d - \"%s\" \n", errno, strerror( errno) );
+                goto test_failed_exit;
+        }
+
+	*my_dirpathp = 0x00;
+	strlcat( my_dirpathp, &g_target_path[0], PATH_MAX );
+
+	/*
+	 * Some basic openat validation. If pathname is absolute, an invalid fd should
+	 * not matter.
+	 */
+	if (*my_dirpathp == '/') {
+		is_absolute_path = 1;
+		my_dirfd = openat(INVALID_FD, my_dirpathp, O_RDONLY, 0 );
+		if ( my_dirfd == -1 ) {
+			printf( "openat call failed with error %d - \"%s\" \n", errno, strerror( errno) );
+			printf( "\t Directory we attempted to open -> \"%s\" \n", my_dirpathp );
+			printf( "\t Was Absolute pathname, invalid fd, %d, provided as input \n", INVALID_FD);
+			goto test_failed_exit;
+		}
+		close( my_dirfd );
+	}
+
+	my_dirfd = openat(AT_FDCWD, my_dirpathp, O_RDONLY, 0 );
+	if ( my_dirfd == -1 ) {
+		printf( "openat call failed with error %d - \"%s\" \n", errno, strerror( errno) );
+		printf( "\t Directory we attempted to open -> \"%s\" \n", my_dirpathp );
+		goto test_failed_exit;
+	}
+
+	my_kr = vm_allocate((vm_map_t) mach_task_self(), (vm_address_t*)&my_namep, NAME_MAX, VM_FLAGS_ANYWHERE);
+        if(my_kr != KERN_SUCCESS){
+                printf( "vm_allocate failed with error %d - \"%s\" \n", errno, strerror( errno) );
+                goto test_failed_exit;
+        }
+
+	*my_namep = 0x00;
+
+	if (is_absolute_path) {
+		my_kr = vm_allocate((vm_map_t) mach_task_self(), (vm_address_t*)&my_pathp, PATH_MAX, VM_FLAGS_ANYWHERE);
+		if(my_kr != KERN_SUCCESS){
+			printf( "vm_allocate failed with error %d - \"%s\" \n", errno, strerror( errno) );
+			goto test_failed_exit;
+		}
+
+		*my_pathp = 0x00;
+	}
+
+	/* create a test file */
+	my_err = create_random_name_at(my_dirfd, my_dirpathp, my_namep, NAME_MAX, my_pathp, PATH_MAX, 1);
+	if ( my_err != 0 ) {
+		goto test_failed_exit;
+	}
+
+	my_kr = vm_allocate((vm_map_t) mach_task_self(), (vm_address_t*)&my_link_namep, NAME_MAX, VM_FLAGS_ANYWHERE);
+        if(my_kr != KERN_SUCCESS){
+                printf( "vm_allocate failed with error %d - \"%s\" \n", errno, strerror( errno) );
+                goto test_failed_exit;
+        }
+
+	*my_link_namep = 0x00;
+
+	if (is_absolute_path) {
+		my_kr = vm_allocate((vm_map_t) mach_task_self(), (vm_address_t*)&my_link_pathp, PATH_MAX, VM_FLAGS_ANYWHERE);
+		if(my_kr != KERN_SUCCESS){
+			printf( "vm_allocate failed with error %d - \"%s\" \n", errno, strerror( errno) );
+			goto test_failed_exit;
+		}
+
+		*my_link_pathp = 0x00;
+	}
+
+	/* get a name for the link (to create the symlink later) */
+	my_err = create_random_name_at(my_dirfd, my_dirpathp, my_link_namep, NAME_MAX, my_link_pathp, PATH_MAX, 0 );
+	if ( my_err != 0 ) {
+		goto test_failed_exit;
+	}
+
+	if ( !_prime_groups() ) {
+		goto test_failed_exit;
+	}
+
+	/* set up by getting a list of groups */
+	my_group_count = getgroups( NGROUPS_MAX, &my_groups[0] );
+
+	if ( my_group_count == -1 || my_group_count < 1 ) {
+		printf( "getgroups call failed.  got errno %d - %s. \n", errno, strerror( errno ) );
+		goto test_failed_exit;
+	}
+
+	my_err = fstatat( my_dirfd, my_namep, &my_sb, 0 );
+	if ( my_err != 0 ) {
+		printf( "stat call failed.  got errno %d - %s. \n", errno, strerror( errno ) );
+		goto test_failed_exit;
+	}
+
+	/* now change group owner to something other than current value */
+	my_orig_gid = my_sb.st_gid;
+	my_orig_uid = my_sb.st_uid;
+
+	for ( i = 0; i < my_group_count; i++ ) {
+		if ( my_orig_gid != my_groups[ i ] ) {
+			if ( my_new_gid1 == 0 ) {
+				my_new_gid1 = my_groups[ i ];
+			}
+			else if( my_new_gid1 != my_groups[ i ] ) {
+				my_new_gid2 = my_groups[ i ];
+				break;
+			}
+		}
+	}
+	if ( i >= my_group_count ) {
+		printf( "not enough groups to choose from.  st_gid is the same as current groups! \n" );
+		goto test_failed_exit;
+	}
+
+	my_err = fchownat( my_dirfd, my_namep, my_orig_uid, my_new_gid1, 0 );
+	if ( my_err != 0 ) {
+		printf( "chown call failed.  got errno %d - %s. \n", errno, strerror( errno ) );
+		goto test_failed_exit;
+	}
+
+	/* make sure the group owner was changed */
+	my_err = fstatat( my_dirfd, my_namep, &my_sb, 0 );
+	if ( my_err != 0 ) {
+		printf( "stat call failed.  got errno %d - %s. \n", errno, strerror( errno ) );
+		goto test_failed_exit;
+	}
+	if ( my_sb.st_gid == my_orig_gid ) {
+		printf( "chown call failed.  st_gid is not correct! \n" );
+		goto test_failed_exit;
+	}
+
+	/* change group owner back using fchown */
+	if (is_absolute_path) {
+		my_fd = openat( INVALID_FD, my_pathp, O_RDWR, 0 );
+	} else {
+		my_fd = openat( my_dirfd, my_namep, O_RDWR, 0 );
+	}
+
+	if ( my_fd == -1 ) {
+		printf( "openat call failed with error %d - \"%s\" \n", errno, strerror( errno) );
+		printf( "\t we attempted to open -> \"%s\" \n", &g_target_path[0] );
+		goto test_failed_exit;
+	}
+
+	my_err = fchown( my_fd, my_orig_uid, my_new_gid2 );
+	if ( my_err != 0 ) {
+		printf( "fchown call failed.  got errno %d - %s. \n", errno, strerror( errno ) );
+		goto test_failed_exit;
+	}
+
+	/* make sure the group owner was changed back to the original value */
+	my_err = fstatat( my_dirfd, my_namep, &my_sb, 0 );
+	if ( my_err != 0 ) {
+		printf( "fstatat call failed.  got errno %d - %s. \n", errno, strerror( errno ) );
+		goto test_failed_exit;
+	}
+	if ( my_sb.st_gid == my_new_gid1 ) {
+		printf( "fchown call failed.  st_gid is not correct! \n" );
+		goto test_failed_exit;
+	}
+
+	/* create a link file and test fstatat(..., AT_SYMLINK_NOFOLLOW) */
+	my_err = symlinkat( my_namep, my_dirfd, my_link_namep );
+	if ( my_err != 0 ) {
+		printf( "symlinkat call failed.  got errno %d - %s. \n", errno, strerror( errno ) );
+		goto test_failed_exit;
+	}
+
+	my_err = fstatat( my_dirfd, my_link_namep, &my_sb, AT_SYMLINK_NOFOLLOW );
+	if ( my_err != 0 ) {
+		printf( "fstatat call failed.  got errno %d - %s. \n", errno, strerror( errno ) );
+		goto test_failed_exit;
+	}
+
+	/* now change group owner to something other than current value */
+	my_orig_gid = my_sb.st_gid;
+	my_orig_uid = my_sb.st_uid;
+	my_err = fchownat( my_dirfd, my_link_namep, my_orig_uid, my_new_gid1, AT_SYMLINK_NOFOLLOW );
+	if ( my_err != 0 ) {
+		printf( "fchownat call failed.  got errno %d - %s. \n", errno, strerror( errno ) );
+		goto test_failed_exit;
+	}
+
+	/* make sure the group owner was changed to new value */
+	my_err = fstatat( my_dirfd, my_link_namep, &my_sb, AT_SYMLINK_NOFOLLOW );
+	if ( my_err != 0 ) {
+		printf( "fstatat call failed.  got errno %d - %s. \n", errno, strerror( errno ) );
+		goto test_failed_exit;
+	}
+	if ( my_sb.st_gid == my_new_gid2 ) {
+		printf( "fchownat call failed.  st_gid is not correct! \n" );
+		goto test_failed_exit;
+	}
+
+	/* make sure we can read the symlink file */
+	my_result = readlinkat( my_dirfd, my_link_namep, &my_buffer[0], sizeof(my_buffer) );
+	if ( my_result == -1 ) {
+		printf( "readlinkat call failed.  got errno %d - %s. \n", errno, strerror( errno ) );
+		goto test_failed_exit;
+	}
+	/* make sure we read some data */
+	if ( my_result < 1 ) {
+		printf( "readlinkat failed to read any data. \n" );
+		goto test_failed_exit;
+	}
+
+	my_err = 0;
+	goto test_passed_exit;
+
+test_failed_exit:
+	my_err = -1;
+
+test_passed_exit:
+	if ( my_fd != -1 )
+		close( my_fd );
+	if  ( my_namep ) {
+		unlinkat( my_dirfd, my_namep, 0);
+		vm_deallocate(mach_task_self(), (vm_address_t)my_namep, NAME_MAX);
+	}
+	if ( my_pathp != NULL ) {
+		remove( my_pathp );
+		vm_deallocate(mach_task_self(), (vm_address_t)my_pathp, PATH_MAX);
+	}
+	if  ( my_link_namep ) {
+		unlinkat( my_dirfd, my_link_namep, 0);
+		vm_deallocate(mach_task_self(), (vm_address_t)my_link_namep, NAME_MAX);
+	}
+	if ( my_link_pathp != NULL ) {
+		unlink( my_link_pathp );
+		vm_deallocate(mach_task_self(), (vm_address_t)my_link_pathp, PATH_MAX);
+	}
+	if ( my_dirfd != -1 )
+		close(my_dirfd);
+
+	if ( my_dirpathp != NULL ) {
+		vm_deallocate(mach_task_self(), (vm_address_t)my_dirpathp, PATH_MAX);
+	}
+
+
+	return( my_err );
+}
+
+/*  **************************************************************************************************************
+ *	Test mkdirat, unlinkat, umask system calls.
+ *  **************************************************************************************************************
+ */
+int mkdirat_unlinkat_umask_test( void * the_argp )
+{
+	int				my_err;
+	int				my_dirfd = -1;
+	int				my_fd = -1;
+	int				did_umask = 0;
+	char *				my_dirpathp = NULL;
+	char *				my_namep = NULL;
+	char *				my_pathp = NULL;
+	mode_t				my_orig_mask;
+	struct stat			my_sb;
+	kern_return_t			my_kr;
+
+	my_kr = vm_allocate((vm_map_t) mach_task_self(), (vm_address_t*)&my_dirpathp, PATH_MAX, VM_FLAGS_ANYWHERE);
+        if(my_kr != KERN_SUCCESS){
+                printf( "vm_allocate failed with error %d - \"%s\" \n", errno, strerror( errno) );
+                goto test_failed_exit;
+        }
+
+	*my_dirpathp = 0x00;
+	strlcat( my_dirpathp, &g_target_path[0], PATH_MAX );
+
+	my_dirfd = openat(AT_FDCWD, my_dirpathp, O_RDONLY, 0 );
+	if ( my_dirfd == -1 ) {
+		printf( "openat call failed with error %d - \"%s\" \n", errno, strerror( errno) );
+		printf( "\t Directory we attempted to open -> \"%s\" \n", my_dirpathp );
+		goto test_failed_exit;
+	}
+
+	/* If dirpath is absolute, we can ask for an absolute path name to file back from create_random_name_at */
+	if (*my_dirpathp == '/') {
+		my_kr = vm_allocate((vm_map_t) mach_task_self(), (vm_address_t*)&my_pathp, PATH_MAX, VM_FLAGS_ANYWHERE);
+		if(my_kr != KERN_SUCCESS){
+			printf( "vm_allocate failed with error %d - \"%s\" \n", errno, strerror( errno) );
+			goto test_failed_exit;
+		}
+	}
+
+	my_kr = vm_allocate((vm_map_t) mach_task_self(), (vm_address_t*)&my_namep, NAME_MAX, VM_FLAGS_ANYWHERE);
+        if(my_kr != KERN_SUCCESS){
+                printf( "vm_allocate failed with error %d - \"%s\" \n", errno, strerror( errno) );
+                goto test_failed_exit;
+        }
+
+	*my_namep = 0x00;
+	if (my_pathp) {
+		*my_pathp = 0x00;
+	}
+
+	/* get a random name to use with mkdirat (don't create) */
+	my_err = create_random_name_at( my_dirfd, my_dirpathp, my_namep, NAME_MAX, my_pathp, PATH_MAX, 0 );
+	if ( my_err != 0 ) {
+		goto test_failed_exit;
+	}
+
+	/* set umask to clear WX for other and group and clear X for user */
+	my_orig_mask = umask( (S_IXUSR | S_IWGRP | S_IXGRP | S_IWOTH | S_IXOTH) );
+	did_umask = 1;
+
+	/* create a directory with RWX for user, group, other (which should be limited by umask) */
+	my_err = mkdirat( my_dirfd, my_namep, (S_IRWXU | S_IRWXG | S_IRWXO) );
+	if ( my_err == -1 ) {
+		printf( "mkdirat failed with error %d - \"%s\" \n", errno, strerror( errno) );
+		goto test_failed_exit;
+	}
+
+	/* verify results - (S_IXUSR | S_IWGRP | S_IXGRP | S_IWOTH | S_IXOTH) should be clear*/
+	my_err = fstatat( my_dirfd, my_pathp, &my_sb, 0 );
+	if ( my_err != 0 ) {
+		printf( "fstat call failed with error %d - \"%s\" \n", errno, strerror( errno) );
+		goto test_failed_exit;
+	}
+	if ( (my_sb.st_mode & (S_IXUSR | S_IWGRP | S_IXGRP | S_IWOTH | S_IXOTH)) != 0 ) {
+		printf( "umask did not limit modes as it should have \n" );
+		goto test_failed_exit;
+	}
+
+	/* get rid of our test directory */
+	my_err = unlinkat( my_dirfd, my_namep, AT_REMOVEDIR );
+	if ( my_err == -1 ) {
+		printf( "unlinkat(..., AT_REMOVEDIR)  failed with error %d - \"%s\" \n", errno, strerror( errno) );
+		goto test_failed_exit;
+	}
+	my_err = 0;
+	goto test_passed_exit;
+
+test_failed_exit:
+	my_err = -1;
+
+test_passed_exit:
+	if ( my_fd != -1 )
+		close( my_fd );
+
+	if  ( my_namep ) {
+		unlinkat( my_dirfd, my_namep, AT_REMOVEDIR );
+		vm_deallocate(mach_task_self(), (vm_address_t)my_namep, NAME_MAX);
+	}
+
+	if ( my_pathp != NULL ) {
+		rmdir( my_pathp );
+		vm_deallocate(mach_task_self(), (vm_address_t)my_pathp, PATH_MAX);
+	}
+
+	if ( my_dirfd != -1 )
+		close(my_dirfd);
+
+	if ( my_dirpathp != NULL ) {
+		vm_deallocate(mach_task_self(), (vm_address_t)my_dirpathp, PATH_MAX);
+	}
+
+	if ( did_umask != 0 ) {
+		umask( my_orig_mask );
+	}
+
+	return( my_err );
+}
+
+/*  **************************************************************************************************************
+ *	Test renameat, fstatat system calls.
+ *  **************************************************************************************************************
+ */
+int renameat_test( void * the_argp )
+{
+	int			my_err;
+	int			my_dirfd = -1;
+	char *			my_dirpathp = NULL;
+	char *			my_namep = NULL;
+	char *			my_pathp = NULL;
+	char *			my_new_namep = NULL;
+	char *			my_new_pathp = NULL;
+	ino_t			my_file_id;
+	struct stat		my_sb;
+	kern_return_t           my_kr;
+
+	my_kr = vm_allocate((vm_map_t) mach_task_self(), (vm_address_t*)&my_dirpathp, PATH_MAX, VM_FLAGS_ANYWHERE);
+        if(my_kr != KERN_SUCCESS){
+                printf( "vm_allocate failed with error %d - \"%s\" \n", errno, strerror( errno) );
+                goto test_failed_exit;
+        }
+
+	*my_dirpathp = 0x00;
+	strlcat( my_dirpathp, &g_target_path[0], PATH_MAX );
+
+	my_dirfd = openat(AT_FDCWD, my_dirpathp, O_RDONLY, 0 );
+	if ( my_dirfd == -1 ) {
+		printf( "openat call failed with error %d - \"%s\" \n", errno, strerror( errno) );
+		printf( "\t Directory we attempted to open -> \"%s\" \n", my_dirpathp );
+		goto test_failed_exit;
+	}
+
+	/* If dirpath is absolute, we can ask for an absolute path name to file back from create_random_name_at */
+	if (*my_dirpathp == '/') {
+		my_kr = vm_allocate((vm_map_t) mach_task_self(), (vm_address_t*)&my_pathp, PATH_MAX, VM_FLAGS_ANYWHERE);
+		if(my_kr != KERN_SUCCESS){
+			printf( "vm_allocate failed with error %d - \"%s\" \n", errno, strerror( errno) );
+			goto test_failed_exit;
+		}
+	}
+
+	my_kr = vm_allocate((vm_map_t) mach_task_self(), (vm_address_t*)&my_namep, NAME_MAX, VM_FLAGS_ANYWHERE);
+        if(my_kr != KERN_SUCCESS){
+                printf( "vm_allocate failed with error %d - \"%s\" \n", errno, strerror( errno) );
+                goto test_failed_exit;
+        }
+
+	*my_namep = 0x00;
+	if (my_pathp) {
+		*my_pathp = 0x00;
+	}
+
+	/* create random file */
+	my_err = create_random_name_at( my_dirfd, my_dirpathp, my_namep, NAME_MAX, my_pathp, PATH_MAX, 1 );
+	if ( my_err != 0 ) {
+		goto test_failed_exit;
+	}
+
+
+	/* If dirpath is absolute, we can ask for an absolute path name to file back from create_random_name_at */
+	if (*my_dirpathp == '/') {
+		my_kr = vm_allocate((vm_map_t) mach_task_self(), (vm_address_t*)&my_new_pathp, PATH_MAX, VM_FLAGS_ANYWHERE);
+		if(my_kr != KERN_SUCCESS){
+			printf( "vm_allocate failed with error %d - \"%s\" \n", errno, strerror( errno) );
+			goto test_failed_exit;
+		}
+	}
+
+	my_kr = vm_allocate((vm_map_t) mach_task_self(), (vm_address_t*)&my_new_namep, NAME_MAX, VM_FLAGS_ANYWHERE);
+        if(my_kr != KERN_SUCCESS){
+                printf( "vm_allocate failed with error %d - \"%s\" \n", errno, strerror( errno) );
+                goto test_failed_exit;
+        }
+
+	*my_new_namep = 0x00;
+	if (my_new_pathp) {
+		*my_new_pathp = 0x00;
+	}
+
+	/* create random file */
+	my_err = create_random_name_at( my_dirfd, my_dirpathp, my_new_namep, NAME_MAX, my_new_pathp, PATH_MAX, 0 );
+	if ( my_err != 0 ) {
+		goto test_failed_exit;
+	}
+
+	/* save file ID for later use */
+	my_err = fstatat( my_dirfd, my_namep, &my_sb, 0 );
+	if ( my_err != 0 ) {
+		printf( "fstatat - failed with error %d - \"%s\" \n", errno, strerror( errno) );
+		goto test_failed_exit;
+	}
+	my_file_id = my_sb.st_ino;
+
+	/* test rename */
+	my_err = renameat( my_dirfd, my_namep, my_dirfd, my_new_namep );
+	if ( my_err == -1 ) {
+		printf( "rename - failed with error %d - \"%s\" \n", errno, strerror( errno) );
+		goto test_failed_exit;
+	}
+
+	/* make sure old name is no longer there */
+	my_err = fstatat( my_dirfd, my_namep, &my_sb, 0 );
+	if ( my_err == 0 ) {
+		printf( "renameat call failed - found old name \n" );
+		goto test_failed_exit;
+	}
+
+	/* make sure new name is there and is correct file id */
+	my_err = fstatat( my_dirfd, my_new_namep, &my_sb, 0 );
+	if ( my_err != 0 ) {
+		printf( "stat - failed with error %d - \"%s\" \n", errno, strerror( errno) );
+		goto test_failed_exit;
+	}
+	if ( my_file_id != my_sb.st_ino ) {
+		printf( "rename failed - wrong file id \n" );
+		goto test_failed_exit;
+	}
+
+	/* cross check with absolute path and invalid fd */
+	if (my_new_pathp) {
+		my_err = fstatat( INVALID_FD, my_new_pathp, &my_sb, 0 );
+		if ( my_err != 0 ) {
+			printf( "stat - failed with error %d - \"%s\" \n", errno, strerror( errno) );
+			goto test_failed_exit;
+		}
+		if ( my_file_id != my_sb.st_ino ) {
+			printf( "rename failed - wrong file id \n" );
+			goto test_failed_exit;
+		}
+	}
+
+	my_err = 0;
+	goto test_passed_exit;
+
+test_failed_exit:
+	my_err = -1;
+
+test_passed_exit:
+	if ( my_pathp != NULL ) {
+		remove( my_pathp );
+		vm_deallocate(mach_task_self(), (vm_address_t)my_pathp, PATH_MAX);
+	}
+	if ( my_new_pathp != NULL ) {
+		remove( my_new_pathp );
+		vm_deallocate(mach_task_self(), (vm_address_t)my_new_pathp, PATH_MAX);
+	}
+	return( my_err );
+}
+
+/*  **************************************************************************************************************
+ *	Test task_set_exception_ports, host_set_exception_ports
+ *  **************************************************************************************************************
+ */
+static int __get_except_port(int which, mach_port_t *portp,
+			     exception_behavior_t *behaviorp,
+			     thread_state_flavor_t *flavorp)
+{
+        exception_mask_t masks[EXC_TYPES_COUNT];
+        mach_msg_type_number_t nmasks = 0;
+        exception_port_t ports[EXC_TYPES_COUNT];
+        exception_behavior_t behaviors[EXC_TYPES_COUNT];
+        thread_state_flavor_t flavors[EXC_TYPES_COUNT];
+
+	*portp = MACH_PORT_NULL;
+	*behaviorp = 0;
+	*flavorp = 0;
+
+        kern_return_t kr = KERN_FAILURE;
+        if (which == 0) { /* host port */
+                kr = host_get_exception_ports(mach_host_self(), EXC_MASK_BAD_ACCESS,
+                                masks, &nmasks, ports, behaviors, flavors);
+	} else if (which == 1) { /* task port */
+                kr = task_get_exception_ports(mach_task_self(), EXC_MASK_BAD_ACCESS,
+                                masks, &nmasks, ports, behaviors, flavors);
+        } else if (which == 2) { /* thread_port */
+                kr = thread_get_exception_ports(mach_thread_self(), EXC_MASK_BAD_ACCESS,
+                                masks, &nmasks, ports, behaviors, flavors);
+        } else {
+		printf("ERROR: invalid 'which' in %s\n", __func__);
+		return -1;
+	}
+        if (kr != KERN_SUCCESS) {
+		printf("ERROR getting %s exception port!\n", which == 0 ? "task" : "host");
+		return -1;
+	}
+        *portp = ports[0];
+	*behaviorp = behaviors[0];
+	*flavorp = flavors[0];
+
+	return 0;
+}
+
+int set_exception_ports_test( void * the_argp )
+{
+	int           testFlavor = -900000;
+	kern_return_t ret;
+	mach_port_t   exception_port;
+
+	mach_port_t           old_except_port;
+	exception_behavior_t  old_behavior;
+	thread_state_flavor_t old_flavor;
+
+
+	ret = mach_port_allocate( mach_task_self(), MACH_PORT_RIGHT_RECEIVE, &exception_port );
+	if (ret != KERN_SUCCESS) {
+		printf("ERROR allocating new exception port?!\n");
+		return -1;
+	}
+	ret = mach_port_insert_right( mach_task_self(), exception_port, exception_port, MACH_MSG_TYPE_MAKE_SEND );
+	if (ret != KERN_SUCCESS) {
+		printf("ERROR inserting send right into new exception port?!\n");
+		goto test_failed_exit;
+	}
+
+	if (__get_except_port(2, &old_except_port, &old_behavior, &old_flavor) < 0)
+		goto test_failed_exit;
+
+	ret = thread_set_exception_ports( mach_thread_self(),
+					  EXC_MASK_BAD_ACCESS,
+					  exception_port,
+					  EXCEPTION_STATE_IDENTITY,
+					  testFlavor );
+	/*
+	 * this test _fails_ if we successfully set the exception port
+	 * with an invalid thread flavor
+	 */
+	if (ret == KERN_SUCCESS) {
+		thread_set_exception_ports( mach_thread_self(),
+					    EXC_MASK_BAD_ACCESS,
+					    old_except_port, old_behavior, old_flavor );
+		printf("thread_set_exception_ports failed: expected !KERN_SUCCESS for flavor %d\n", testFlavor);
+		goto test_failed_exit;
+	}
+
+	/*
+	 * so far, so good: the thread_set_exception_ports call failed,
+	 * so we don't need to reset anything, but we do need to
+	 * drop our reference to the old exception port we grabbed.
+	 */
+	mach_port_deallocate( mach_task_self(), old_except_port );
+
+	if (__get_except_port(1, &old_except_port, &old_behavior, &old_flavor) < 0)
+		goto test_failed_exit;
+
+	ret = task_set_exception_ports( mach_task_self(),
+					EXC_MASK_BAD_ACCESS,
+					exception_port,
+					EXCEPTION_STATE_IDENTITY,
+					testFlavor );
+	/*
+	 * this test _fails_ if we successfully set the exception port
+	 * with an invalid thread flavor
+	 */
+	if (ret == KERN_SUCCESS) {
+		task_set_exception_ports( mach_task_self(),
+					  EXC_MASK_BAD_ACCESS,
+					  old_except_port, old_behavior, old_flavor );
+		printf("task_set_exception_ports failed: expected !KERN_SUCCESS for flavor %d\n", testFlavor);
+		goto test_failed_exit;
+	}
+
+	/*
+	 * so far, so good: the task_set_exception_ports call failed,
+	 * so we don't need to reset anything, but we do need to
+	 * drop our reference to the old exception port we grabbed.
+	 */
+	mach_port_deallocate( mach_task_self(), old_except_port );
+
+	/*
+	 * Now try the host exception port
+	 */
+	if (__get_except_port(0, &old_except_port, &old_behavior, &old_flavor) < 0)
+		goto test_failed_exit;
+
+	ret = host_set_exception_ports( mach_host_self(),
+					EXC_MASK_BAD_ACCESS,
+					exception_port,
+					EXCEPTION_STATE_IDENTITY,
+					testFlavor );
+	/*
+	 * this test _fails_ if we successfully set the exception port
+	 * with an invalid thread flavor
+	 */
+	if (ret == KERN_SUCCESS) {
+		host_set_exception_ports( mach_host_self(),
+					  EXC_MASK_BAD_ACCESS,
+					  old_except_port, old_behavior, old_flavor );
+		printf("host_set_exception_ports failed: expected !KERN_SUCCESS for flavor %d\n", testFlavor);
+		goto test_failed_exit;
+	}
+
+	mach_port_deallocate( mach_task_self(), exception_port );
+	mach_port_deallocate( mach_task_self(), old_except_port );
+	return 0;
+
+test_failed_exit:
+	mach_port_deallocate( mach_task_self(), exception_port );
+	if (old_except_port != MACH_PORT_NULL)
+		mach_port_deallocate( mach_task_self(), old_except_port );
+	return -1;
+}
+
 
 #if TEST_SYSTEM_CALLS 
 

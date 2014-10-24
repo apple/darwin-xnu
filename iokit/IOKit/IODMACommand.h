@@ -161,8 +161,8 @@ public:
     static bool OutputBig64(IODMACommand *target,
 	    Segment64 seg, void *segs, UInt32 ind);
 
-/*! @defined kIODMACommandOutputLittle64
-    @abstract Output little-endian Segment64 output segment function.
+/*! @defined kIODMACommandOutputBig64
+    @abstract Output big-endian Segment64 output segment function.
 */
 #define kIODMACommandOutputBig64    (IODMACommand::OutputBig64)
 
@@ -172,8 +172,8 @@ public:
     static bool OutputLittle64(IODMACommand *target,
 	    Segment64 seg, void *segs, UInt32 ind);
 
-/*! @defined kIODMACommandOutputBig64
-    @abstract Output big-endian Segment64 output segment function.
+/*! @defined kIODMACommandOutputLittle64
+    @abstract Output little-endian Segment64 output segment function.
 */
 #define kIODMACommandOutputLittle64 (IODMACommand::OutputLittle64)
 

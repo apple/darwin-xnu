@@ -292,6 +292,7 @@ struct thread_call {
 #define THREAD_CALL_ALLOC		0x01
 #define THREAD_CALL_WAIT		0x02
 #define THREAD_CALL_DELAYED		0x04
+#define THREAD_CALL_RATELIMITED		TIMEOUT_URGENCY_RATELIMITED
 
 typedef struct thread_call thread_call_data_t;
 

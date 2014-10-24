@@ -1,6 +1,7 @@
 .text
-	.globl mystart
-mystart:
+	.align 2
+	.globl _main
+_main:
 #if defined(__x86_64__)
 	pushq $0
 	mov %rsp, %rbp

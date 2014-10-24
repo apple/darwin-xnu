@@ -70,7 +70,7 @@
 #include <sys/sysproto.h>
 
 #include <sys/signalvar.h>		/* for psignal() */
-
+#include <kern/debug.h>
 
 #ifdef GPROF
 #include <sys/gmon.h>
@@ -195,4 +195,22 @@ cfreemem(caddr_t cp, int size)
 }
 #endif
 
+#if !CRYPTO
+#include <crypto/rc4/rc4.h>
+
+/* Stubs must be present in all configs for Unsupported KPI exports */
+
+void
+rc4_init(struct rc4_state *state __unused, const u_char *key __unused, int keylen __unused)
+{
+	panic("rc4_init: unsupported kernel configuration");
+}
+
+void
+rc4_crypt(struct rc4_state *state __unused,
+		  const u_char *inbuf __unused, u_char *outbuf __unused, int buflen __unused)
+{
+	panic("rc4_crypt: unsupported kernel configuration");
+}
+#endif /* !CRYPTO */
 

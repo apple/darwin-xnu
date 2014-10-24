@@ -29,7 +29,6 @@
 #include <sys/errno.h>
 #include <sys/msgbuf.h>
 #include <sys/resource.h>
-#define BUILD_LIBSYSCALL 1
 #include <sys/process_policy.h>
 #include <mach/message.h>
 
@@ -102,10 +101,38 @@ proc_pidinfo(int pid, int flavor, uint64_t arg,  void *buffer, int buffersize)
 	return(retval);
 }
 
+
+int 
+proc_pidoriginatorinfo(int flavor, void *buffer, int buffersize)
+{
+	int retval;
+
+	if ((retval = __proc_info(PROC_INFO_CALL_PIDORIGINATORINFO, getpid(), flavor,  0,  buffer, buffersize)) == -1)
+		return(0);
+		
+	return(retval);
+}
+
 int
 proc_pid_rusage(int pid, int flavor, rusage_info_t *buffer)
 {
 	return (__proc_info(PROC_INFO_CALL_PIDRUSAGE, pid, flavor, 0, buffer, 0));
+}
+
+int
+proc_setthread_cpupercent(uint8_t percentage, uint32_t ms_refill)
+{
+	uint32_t arg = 0;
+
+	/* Pack percentage and refill into a 32-bit number to match existing kernel implementation */
+	if ((percentage >= 100) || (ms_refill & ~0xffffffU)) {
+		errno = EINVAL;
+		return -1;
+	}
+
+	arg = ((ms_refill << 8) | percentage);
+
+	return (proc_rlimit_control(-1, RLIMIT_THREAD_CPULIMITS, (void *)(uintptr_t)arg));
 }
 
 int	
@@ -150,7 +177,7 @@ proc_name(int pid, void * buffer, uint32_t buffersize)
 		} else {
 			bcopy(&pbsd.pbi_comm, buffer, sizeof(pbsd.pbi_comm));
 		}
-		len = strlen(buffer);
+		len = (int)strlen(buffer);
 		return(len);
 	}
 	return(0);
@@ -169,7 +196,7 @@ proc_regionfilename(int pid, uint64_t address, void * buffer, uint32_t buffersiz
 	
 	retval = proc_pidinfo(pid, PROC_PIDREGIONPATHINFO, (uint64_t)address, &reginfo, sizeof(struct proc_regionwithpathinfo));
 	if (retval != -1) {
-		len = strlen(&reginfo.prp_vip.vip_path[0]);
+		len = (int)strlen(&reginfo.prp_vip.vip_path[0]);
 		if (len != 0) {
 			if (len > MAXPATHLEN)
 				len = MAXPATHLEN;
@@ -208,7 +235,7 @@ proc_pidpath(int pid, void * buffer, uint32_t  buffersize)
 
 	retval = __proc_info(PROC_INFO_CALL_PIDINFO, pid, PROC_PIDPATHINFO,  (uint64_t)0,  buffer, buffersize);
 	if (retval != -1) {
-		len = strlen(buffer);
+		len = (int)strlen(buffer);
 		return(len);
 	}
 	return (0);
@@ -294,6 +321,16 @@ proc_get_dirty(pid_t pid, uint32_t *flags)
 }
 
 int
+proc_clear_dirty(pid_t pid, uint32_t flags)
+{
+	if (__proc_info(PROC_INFO_CALL_DIRTYCONTROL, pid, PROC_DIRTYCONTROL_CLEAR, flags, NULL, 0) == -1) {
+		return errno;		
+	}
+
+	return 0;
+}
+
+int
 proc_terminate(pid_t pid, int *sig)
 {
 	int retval;
@@ -337,7 +374,7 @@ proc_get_cpumon_params(pid_t pid, int *percentage, int *interval)
 
 	if ((ret == 0) && (attr.ppattr_cpu_attr == PROC_POLICY_RSRCACT_NOTIFY_EXC)) {
 		*percentage = attr.ppattr_cpu_percentage;
-		*interval = attr.ppattr_cpu_attr_interval;
+		*interval = (int)attr.ppattr_cpu_attr_interval;
 	} else {
 		*percentage = 0;
 		*interval = 0;
@@ -372,6 +409,56 @@ proc_disable_cpumon(pid_t pid)
 
 	return(__process_policy(PROC_POLICY_SCOPE_PROCESS, PROC_POLICY_ACTION_SET, PROC_POLICY_RESOURCE_USAGE,
 		PROC_POLICY_RUSAGE_CPU, (proc_policy_attribute_t*)&attr, pid, 0));
+}
+
+
+/*
+ * Turn on the CPU usage monitor using the supplied parameters, and make
+ * violations of the monitor fatal.
+ *
+ * Returns:  0 on success;
+ *	    -1 on failure and sets errno
+ */
+int
+proc_set_cpumon_params_fatal(pid_t pid, int percentage, int interval)
+{
+	int current_percentage = 0;
+	int current_interval = 0;   /* intervals are in seconds */
+	int ret = 0;
+
+	if ((percentage <= 0)  || (interval <= 0)) {
+		errno = EINVAL;
+		return (-1);
+	}
+
+	/*
+	 * Do a simple query to see if CPU monitoring is
+	 * already active.  If either the percentage or the
+	 * interval is nonzero, then CPU monitoring is
+	 * already in use for this process.
+	 */
+	(void)proc_get_cpumon_params(pid, &current_percentage, &current_interval);
+	if (current_percentage || current_interval)
+	{
+		/*
+		 * The CPU monitor appears to be active.
+		 * We choose not to disturb those settings.
+		 */
+		errno = EBUSY;
+		return (-1);
+	}
+	
+	if ((ret = proc_set_cpumon_params(pid, percentage, interval)) != 0) {
+		/* Failed to activate the CPU monitor */
+		return (ret);
+	}
+	
+	if ((ret = proc_rlimit_control(pid, RLIMIT_CPU_USAGE_MONITOR, CPUMON_MAKE_FATAL)) != 0) {
+		/* Failed to set termination, back out the CPU monitor settings. */
+		(void)proc_disable_cpumon(pid);
+	}
+
+	return (ret);
 }
 
 int
@@ -431,141 +518,6 @@ proc_disable_wakemon(pid_t pid)
 }
 
 
-#if TARGET_OS_EMBEDDED
-
-int 
-proc_setcpu_percentage(pid_t pid, int action, int percentage)
-{
-	proc_policy_cpuusage_attr_t attr;
-
-	bzero(&attr, sizeof(proc_policy_cpuusage_attr_t));
-	attr.ppattr_cpu_attr = action;
-	attr.ppattr_cpu_percentage = percentage;
-	if (__process_policy(PROC_POLICY_SCOPE_PROCESS, PROC_POLICY_ACTION_APPLY, PROC_POLICY_RESOURCE_USAGE, PROC_POLICY_RUSAGE_CPU, (proc_policy_attribute_t*)&attr, pid, (uint64_t)0) != -1)
-		return(0);
-	else
-		return(errno);
-}
-
-int
-proc_setcpu_deadline(pid_t pid, int action, uint64_t deadline)
-{
-	proc_policy_cpuusage_attr_t attr;
-
-	bzero(&attr, sizeof(proc_policy_cpuusage_attr_t));
-	attr.ppattr_cpu_attr = action;
-	attr.ppattr_cpu_attr_deadline = deadline;
-	if (__process_policy(PROC_POLICY_SCOPE_PROCESS, PROC_POLICY_ACTION_APPLY, PROC_POLICY_RESOURCE_USAGE, PROC_POLICY_RUSAGE_CPU, (proc_policy_attribute_t*)&attr, pid, (uint64_t)0) != -1)
-		return(0);
-	else
-		return(errno);
-
-}
-
-
-int
-proc_setcpu_percentage_withdeadline(pid_t pid, int action, int percentage, uint64_t deadline)
-{
-	proc_policy_cpuusage_attr_t attr;
-
-	bzero(&attr, sizeof(proc_policy_cpuusage_attr_t));
-	attr.ppattr_cpu_attr = action;
-	attr.ppattr_cpu_percentage = percentage;
-	attr.ppattr_cpu_attr_deadline = deadline;
-	if (__process_policy(PROC_POLICY_SCOPE_PROCESS, PROC_POLICY_ACTION_APPLY, PROC_POLICY_RESOURCE_USAGE, PROC_POLICY_RUSAGE_CPU, (proc_policy_attribute_t*)&attr, pid, (uint64_t)0) != -1)
-		return(0);
-	else
-		return(errno);
-}
-
-int
-proc_clear_cpulimits(pid_t pid)
-{
-	if (__process_policy(PROC_POLICY_SCOPE_PROCESS, PROC_POLICY_ACTION_RESTORE, PROC_POLICY_RESOURCE_USAGE, PROC_POLICY_RUSAGE_CPU, NULL, pid, (uint64_t)0) != -1)
-		return(0);
-	else
-		return(errno);
-
-
-}
-
-int
-proc_appstate(int pid, int * appstatep)
-{
-	int state;
-
-	if (__process_policy(PROC_POLICY_SCOPE_PROCESS, PROC_POLICY_ACTION_GET, PROC_POLICY_APP_LIFECYCLE, PROC_POLICY_APPLIFE_STATE, (proc_policy_attribute_t*)&state, pid, (uint64_t)0) != -1) {
-		if (appstatep != NULL)
-			*appstatep = state;
-		return(0);
-	 } else
-		return(errno);
-
-}
-
-
-int
-proc_setappstate(int pid, int appstate)
-{
-	int state = appstate;
-
-	switch (state) {
-		case PROC_APPSTATE_NONE:
-		case PROC_APPSTATE_ACTIVE:
-		case PROC_APPSTATE_INACTIVE:
-		case PROC_APPSTATE_BACKGROUND:
-		case PROC_APPSTATE_NONUI:
-			break;
-		default:
-			return(EINVAL);
-	}
-	if (__process_policy(PROC_POLICY_SCOPE_PROCESS, PROC_POLICY_ACTION_APPLY, PROC_POLICY_APP_LIFECYCLE, PROC_POLICY_APPLIFE_STATE, (proc_policy_attribute_t*)&state, pid, (uint64_t)0) != -1)
-		return(0);
-	else
-		return(errno);
-}
-
-int 
-proc_devstatusnotify(int devicestatus)
-{
-	int state = devicestatus;
-
-	switch (devicestatus) {
-		case PROC_DEVSTATUS_SHORTTERM:
-		case PROC_DEVSTATUS_LONGTERM:
-			break;
-		default:
-			return(EINVAL);
-	}
-
-	if (__process_policy(PROC_POLICY_SCOPE_PROCESS, PROC_POLICY_ACTION_APPLY, PROC_POLICY_APP_LIFECYCLE, PROC_POLICY_APPLIFE_DEVSTATUS, (proc_policy_attribute_t*)&state, getpid(), (uint64_t)0) != -1) {
-		return(0);
-	 } else
-		return(errno);
-
-}
-
-int
-proc_pidbind(int pid, uint64_t threadid, int bind)
-{
-	int state = bind; 
-	pid_t passpid = pid;
-
-	switch (bind) {
-		case PROC_PIDBIND_CLEAR:
-			passpid = getpid();	/* ignore pid on clear */
-			break;
-		case PROC_PIDBIND_SET:
-			break;
-		default:
-			return(EINVAL);
-	}
-	if (__process_policy(PROC_POLICY_SCOPE_PROCESS, PROC_POLICY_ACTION_APPLY, PROC_POLICY_APP_LIFECYCLE, PROC_POLICY_APPLIFE_PIDBIND, (proc_policy_attribute_t*)&state, passpid, threadid) != -1)
-		return(0);
-	else
-		return(errno);
-}
-#endif /* TARGET_OS_EMBEDDED */
 
 
 /* Donate importance to adaptive processes from this process */
@@ -574,19 +526,11 @@ proc_donate_importance_boost()
 {
 	int rval;
 
-#if TARGET_OS_EMBEDDED
-	rval = __process_policy(PROC_POLICY_SCOPE_PROCESS,
-							PROC_POLICY_ACTION_ENABLE,
-							PROC_POLICY_APPTYPE,
-							PROC_POLICY_IOS_DONATEIMP,
-							NULL, getpid(), (uint64_t)0);
-#else /* TARGET_OS_EMBEDDED */
 	rval = __process_policy(PROC_POLICY_SCOPE_PROCESS,
 							PROC_POLICY_ACTION_SET,
 							PROC_POLICY_BOOST,
 							PROC_POLICY_IMP_DONATION,
 							NULL, getpid(), 0);
-#endif /* TARGET_OS_EMBEDDED */
 
 	if (rval == 0)
 		return (0);
@@ -606,6 +550,7 @@ proc_importance_bad_assertion(char *reason) {
 uint64_t important_boost_assertion_token = 0xfafafafafafafafa;
 uint64_t normal_boost_assertion_token    = 0xfbfbfbfbfbfbfbfb;
 uint64_t non_boost_assertion_token       = 0xfcfcfcfcfcfcfcfc;
+uint64_t denap_boost_assertion_token	 = 0xfdfdfdfdfdfdfdfd;
 
 /*
  * Accept the boost on a message, or request another boost assertion
@@ -625,9 +570,12 @@ proc_importance_assertion_begin_with_msg(mach_msg_header_t  *msg,
 
 	if (assertion_token == NULL)
 		return (EINVAL);
-	
-	/* Is this a boosting message? */
-	if ((msg->msgh_bits & MACH_MSGH_BITS_RAISEIMP) != 0) {
+
+#define LEGACYBOOSTMASK (MACH_MSGH_BITS_VOUCHER_MASK | MACH_MSGH_BITS_RAISEIMP)
+#define LEGACYBOOSTED(m) (((m)->msgh_bits & LEGACYBOOSTMASK) == MACH_MSGH_BITS_RAISEIMP)
+
+	/* Is this a legacy boosted message? */
+	if (LEGACYBOOSTED(msg)) {
 
 		/* 
 		 * Have we accepted the implicit boost for this message yet?
@@ -640,21 +588,11 @@ proc_importance_assertion_begin_with_msg(mach_msg_header_t  *msg,
 		}
 
 		/* Request an additional boost count */
-
-#if TARGET_OS_EMBEDDED
-		rval = __process_policy(PROC_POLICY_SCOPE_PROCESS,
-								PROC_POLICY_ACTION_ENABLE,
-								PROC_POLICY_APPTYPE,
-								PROC_POLICY_IOS_HOLDIMP,
-								NULL, getpid(), 0);
-#else /* TARGET_OS_EMBEDDED */
 		rval = __process_policy(PROC_POLICY_SCOPE_PROCESS,
 								PROC_POLICY_ACTION_HOLD,
 								PROC_POLICY_BOOST,
 								PROC_POLICY_IMP_IMPORTANT,
 								NULL, getpid(), 0);
-#endif /* TARGET_OS_EMBEDDED */
-
 		if (rval == 0) {
 			*assertion_token = (uint64_t) &important_boost_assertion_token;
 			return (0);
@@ -683,21 +621,11 @@ proc_importance_assertion_complete(uint64_t assertion_token)
 		return (0);
 
 	if (assertion_token == (uint64_t) &important_boost_assertion_token) {
-
-#if TARGET_OS_EMBEDDED
-		rval = __process_policy(PROC_POLICY_SCOPE_PROCESS,
-								PROC_POLICY_ACTION_ENABLE,
-								PROC_POLICY_APPTYPE,
-								PROC_POLICY_IOS_DROPIMP,
-								NULL, getpid(), 0);
-#else /* TARGET_OS_EMBEDDED */
 		rval = __process_policy(PROC_POLICY_SCOPE_PROCESS,
 								PROC_POLICY_ACTION_DROP,
 								PROC_POLICY_BOOST,
 								PROC_POLICY_IMP_IMPORTANT,
-								NULL, getpid(), 0);
-#endif /* TARGET_OS_EMBEDDED */
-		
+								NULL, getpid(), 0);		
 		if (rval == 0) {
 			return (0);
 		} else if (errno == EOVERFLOW) {
@@ -712,7 +640,36 @@ proc_importance_assertion_complete(uint64_t assertion_token)
 	}
 }
 
-#if !TARGET_OS_EMBEDDED
+/*
+ * Accept the De-Nap boost on a message, or request another boost assertion
+ * if we have already accepted the implicit boost for this message.
+ *
+ * Interface is deprecated before it really got started - just as synonym
+ * for proc_importance_assertion_begin_with_msg() now.
+ */
+int
+proc_denap_assertion_begin_with_msg(mach_msg_header_t  *msg,
+				    uint64_t           *assertion_token)
+{
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
+	return proc_importance_assertion_begin_with_msg(msg, NULL, assertion_token);
+#pragma clang diagnostic pop
+}
+
+
+/*
+ * Drop a denap boost assertion.
+ *
+ * Interface is deprecated before it really got started - just a synonym
+ * for proc_importance_assertion_complete() now.
+ */
+int
+proc_denap_assertion_complete(uint64_t assertion_token)
+{
+	return proc_importance_assertion_complete(assertion_token);
+}
+
 
 int
 proc_clear_vmpressure(pid_t pid)
@@ -808,7 +765,6 @@ proc_suppress(__unused pid_t pid, __unused uint64_t *generation)
 
 #endif /* !TARGET_IPHONE_SIMULATOR */
 
-#endif /* !TARGET_OS_EMBEDDED */
 
 
 

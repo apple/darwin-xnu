@@ -70,7 +70,6 @@
 #include <mach/policy.h>
 #include <kern/kern_types.h>
 #include <kern/queue.h>
-#include <kern/lock.h>
 #include <kern/macro_help.h>
 #include <kern/timer_call.h>
 #include <kern/ast.h>
@@ -155,12 +154,15 @@
 #define BASEPRI_CONTROL		(BASEPRI_DEFAULT + 17)				/* 48 */
 #define BASEPRI_FOREGROUND	(BASEPRI_DEFAULT + 16)				/* 47 */
 #define BASEPRI_BACKGROUND	(BASEPRI_DEFAULT + 15)				/* 46 */
+#define BASEPRI_USER_INITIATED	(BASEPRI_DEFAULT +  6)				/* 37 */
 #define BASEPRI_DEFAULT		(MAXPRI_USER - (NRQS / 4))			/* 31 */
 #define MAXPRI_SUPPRESSED	(BASEPRI_DEFAULT - 3)				/* 28 */
+#define BASEPRI_UTILITY		(BASEPRI_DEFAULT - 11)				/* 20 */
 #define MAXPRI_THROTTLE		(MINPRI + 4)						/*  4 */
 #define MINPRI_USER			MINPRI								/*  0 */
 
 #define DEPRESSPRI	MINPRI			/* depress priority */
+#define MAXPRI_PROMOTE		(MAXPRI_KERNEL)		/* ceiling for mutex promotion */
 
 /* Type used for thread->sched_mode and saved_mode */
 typedef enum {
@@ -181,7 +183,7 @@ struct runq_stats {
 	uint64_t				last_change_timestamp;
 };
 
-#if defined(CONFIG_SCHED_TRADITIONAL) || defined(CONFIG_SCHED_PROTO) || defined(CONFIG_SCHED_FIXEDPRIORITY)
+#if defined(CONFIG_SCHED_TIMESHARE_CORE) || defined(CONFIG_SCHED_PROTO)
 
 struct run_queue {
 	int					highq;				/* highest runnable queue */
@@ -193,7 +195,7 @@ struct run_queue {
 	struct runq_stats	runq_stats;
 };
 
-#endif /* defined(CONFIG_SCHED_TRADITIONAL) || defined(CONFIG_SCHED_PROTO) || defined(CONFIG_SCHED_FIXEDPRIORITY) */
+#endif /* defined(CONFIG_SCHED_TIMESHARE_CORE) || defined(CONFIG_SCHED_PROTO) */
 
 struct rt_queue {
 	int					count;				/* # of threads total */
@@ -202,14 +204,14 @@ struct rt_queue {
 	struct runq_stats	runq_stats;
 };
 
-#if defined(CONFIG_SCHED_TRADITIONAL) || defined(CONFIG_SCHED_PROTO) || defined(CONFIG_SCHED_FIXEDPRIORITY)
+#if defined(CONFIG_SCHED_FAIRSHARE_CORE)
 struct fairshare_queue {
 	int					count;				/* # of threads total */
 	queue_head_t		queue;				/* all runnable threads demoted to fairshare scheduling */
 	
 	struct runq_stats	runq_stats;
 };
-#endif
+#endif /* CONFIG_SCHED_FAIRSHARE_CORE */
 
 #if defined(CONFIG_SCHED_GRRR_CORE)
 
@@ -261,6 +263,14 @@ struct grrr_run_queue {
 
 extern struct rt_queue		rt_runq;
 
+#if defined(CONFIG_SCHED_MULTIQ)
+sched_group_t   sched_group_create(void);
+void            sched_group_destroy(sched_group_t sched_group);
+
+extern boolean_t sched_groups_enabled;
+
+#endif /* defined(CONFIG_SCHED_MULTIQ) */
+
 /*
  *	Scheduler routines.
  */
@@ -271,12 +281,13 @@ extern void		thread_quantum_expire(
 					timer_call_param_t	thread);
 
 /* Context switch check for current processor */
-extern ast_t	csw_check(processor_t		processor);
+extern ast_t	csw_check(processor_t		processor,
+						ast_t			check_reason);
 
-#if defined(CONFIG_SCHED_TRADITIONAL)
+#if defined(CONFIG_SCHED_TIMESHARE_CORE)
 extern uint32_t	std_quantum, min_std_quantum;
 extern uint32_t	std_quantum_us;
-#endif
+#endif /* CONFIG_SCHED_TIMESHARE_CORE */
 
 extern uint32_t thread_depress_time;
 extern uint32_t default_timeshare_computation;
@@ -287,7 +298,7 @@ extern uint32_t	max_rt_quantum, min_rt_quantum;
 extern int default_preemption_rate;
 extern int default_bg_preemption_rate;
 
-#if defined(CONFIG_SCHED_TRADITIONAL)
+#if defined(CONFIG_SCHED_TIMESHARE_CORE)
 
 /*
  *	Age usage  at approximately (1 << SCHED_TICK_SHIFT) times per second
@@ -300,7 +311,7 @@ extern int default_bg_preemption_rate;
 extern unsigned		sched_tick;
 extern uint32_t		sched_tick_interval;
 
-#endif /* CONFIG_SCHED_TRADITIONAL */
+#endif /* CONFIG_SCHED_TIMESHARE_CORE */
 
 extern uint64_t		sched_one_second_interval;
 
@@ -329,7 +340,7 @@ extern void		compute_pmap_gc_throttle(
  *	Conversion factor from usage
  *	to priority.
  */
-#if defined(CONFIG_SCHED_TRADITIONAL)
+#if defined(CONFIG_SCHED_TIMESHARE_CORE)
 extern uint32_t		sched_pri_shift;
 extern uint32_t		sched_background_pri_shift;
 extern uint32_t		sched_combined_fgbg_pri_shift;
@@ -338,7 +349,7 @@ extern int8_t		sched_load_shifts[NRQS];
 extern uint32_t		sched_decay_usage_age_factor;
 extern uint32_t		sched_use_combined_fgbg_decay;
 void sched_traditional_consider_maintenance(uint64_t);
-#endif
+#endif /* CONFIG_SCHED_TIMESHARE_CORE */
 
 extern int32_t		sched_poll_yield_shift;
 extern uint64_t		sched_safe_duration;
@@ -351,35 +362,49 @@ extern uint32_t		avenrun[3], mach_factor[3];
 extern uint64_t		max_unsafe_computation;
 extern uint64_t		max_poll_computation;
 
-#define sched_run_incr()			\
-MACRO_BEGIN					\
-         hw_atomic_add(&sched_run_count, 1);	\
+/* TH_RUN & !TH_IDLE controls whether a thread has a run count */
+#define sched_run_incr(th)                                      \
+	hw_atomic_add(&sched_run_count, 1)                      \
+
+#define sched_run_decr(th)                                      \
+	hw_atomic_sub(&sched_run_count, 1)                      \
+
+#if MACH_ASSERT
+extern void sched_share_incr(thread_t thread);
+extern void sched_share_decr(thread_t thread);
+extern void sched_background_incr(thread_t thread);
+extern void sched_background_decr(thread_t thread);
+
+extern void assert_thread_sched_count(thread_t thread);
+
+#else /* MACH_ASSERT */
+/* sched_mode == TH_MODE_TIMESHARE controls whether a thread has a timeshare count when it has a run count */
+#define sched_share_incr(th)                            \
+MACRO_BEGIN                                             \
+	(void)hw_atomic_add(&sched_share_count, 1);     \
 MACRO_END
 
-#define sched_run_decr()			\
-MACRO_BEGIN					\
-	hw_atomic_sub(&sched_run_count, 1);	\
+#define sched_share_decr(th)                            \
+MACRO_BEGIN                                             \
+	(void)hw_atomic_sub(&sched_share_count, 1);     \
 MACRO_END
 
-#define sched_share_incr()			\
-MACRO_BEGIN											\
-	(void)hw_atomic_add(&sched_share_count, 1);		\
+/* TH_SFLAG_THROTTLED controls whether a thread has a background count when it has a run count and a share count */
+#define sched_background_incr(th)                       \
+MACRO_BEGIN                                             \
+	hw_atomic_add(&sched_background_count, 1);      \
 MACRO_END
 
-#define sched_share_decr()			\
-MACRO_BEGIN											\
-	(void)hw_atomic_sub(&sched_share_count, 1);		\
+#define sched_background_decr(th)                       \
+MACRO_BEGIN                                             \
+	hw_atomic_sub(&sched_background_count, 1);      \
 MACRO_END
 
-#define sched_background_incr()						 \
-MACRO_BEGIN											 \
-	(void)hw_atomic_add(&sched_background_count, 1); \
+#define assert_thread_sched_count(th)                   \
+MACRO_BEGIN                                             \
 MACRO_END
 
-#define sched_background_decr()						 \
-MACRO_BEGIN											 \
-	(void)hw_atomic_sub(&sched_background_count, 1); \
-MACRO_END
+#endif /* !MACH_ASSERT */
 
 /*
  *	thread_timer_delta macro takes care of both thread timers.

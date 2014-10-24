@@ -171,7 +171,7 @@ typedef int wait_timeout_urgency_t;
 #define TIMEOUT_URGENCY_LEEWAY		0x20		/* don't ignore provided leeway value */
 
 #define TIMEOUT_URGENCY_FIRST_AVAIL	0x40		/* first available bit outside of urgency mask/leeway */
-
+#define	TIMEOUT_URGENCY_RATELIMITED	0x80
 #ifdef	KERNEL_PRIVATE
 
 #ifdef	MACH_KERNEL_PRIVATE
@@ -199,6 +199,11 @@ typedef struct grrr_run_queue               *grrr_run_queue_t;
 
 typedef struct grrr_group					*grrr_group_t;
 #define GRRR_GROUP_NULL						((grrr_group_t) 0)
+
+#if defined(CONFIG_SCHED_MULTIQ)
+typedef struct sched_group              *sched_group_t;
+#define SCHED_GROUP_NULL                ((sched_group_t) 0)
+#endif /* defined(CONFIG_SCHED_MULTIQ) */
 
 #else	/* MACH_KERNEL_PRIVATE */
 

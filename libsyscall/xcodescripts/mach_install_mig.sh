@@ -30,29 +30,29 @@
 # build inside OBJROOT
 cd $OBJROOT
 
-# check if we're building for the simulator
-if [ "$PLATFORM_NAME" = "iphonesimulator" ] ; then
-	DSTROOT="${DSTROOT}${SDKROOT}"
-fi
-
 MIG=`xcrun -sdk "$SDKROOT" -find mig`
 MIGCC=`xcrun -sdk "$SDKROOT" -find cc`
 export MIGCC
 MIG_DEFINES="-DLIBSYSCALL_INTERFACE"
-MIG_HEADER_DST="$DSTROOT/usr/include/mach"
-MIG_PRIVATE_HEADER_DST="$DSTROOT/usr/local/include/mach"
-SERVER_HEADER_DST="$DSTROOT/usr/include/servers"
-MACH_HEADER_DST="$DSTROOT/usr/include/mach"
+MIG_HEADER_DST="$BUILT_PRODUCTS_DIR/mig_hdr/include/mach"
+MIG_PRIVATE_HEADER_DST="$BUILT_PRODUCTS_DIR/mig_hdr/local/include/mach"
+SERVER_HEADER_DST="$BUILT_PRODUCTS_DIR/mig_hdr/include/servers"
+MACH_HEADER_DST="$BUILT_PRODUCTS_DIR/mig_hdr/include/mach"
 
 # from old Libsystem makefiles
 MACHINE_ARCH=`echo $ARCHS | cut -d' ' -f 1`
-if [[ ( "$MACHINE_ARCH" = "x86_64" ) && `echo $ARCHS | wc -w` -gt 1 ]]
+if [[ ( "$MACHINE_ARCH" = "arm64" || "$MACHINE_ARCH" = "x86_64" || "$MACHINE_ARCH" = "x86_64h" ) && `echo $ARCHS | wc -w` -gt 1 ]]
 then
 	# MACHINE_ARCH needs to be a 32-bit arch to generate vm_map_internal.h correctly.
 	MACHINE_ARCH=`echo $ARCHS | cut -d' ' -f 2`
+    if [[ ( "$MACHINE_ARCH" = "arm64" || "$MACHINE_ARCH" = "x86_64" || "$MACHINE_ARCH" = "x86_64h" ) && `echo $ARCHS | wc -w` -gt 1 ]]
+    then
+	    # MACHINE_ARCH needs to be a 32-bit arch to generate vm_map_internal.h correctly.
+	    MACHINE_ARCH=`echo $ARCHS | cut -d' ' -f 3`
+    fi
 fi
 SRC="$SRCROOT/mach"
-MIG_INTERNAL_HEADER_DST="$DERIVED_SOURCES_DIR/mach"
+MIG_INTERNAL_HEADER_DST="$BUILT_PRODUCTS_DIR/internal_hdr/include/mach"
 MIG_PRIVATE_DEFS_INCFLAGS="-I${SDKROOT}/System/Library/Frameworks/System.framework/PrivateHeaders"
 
 MIGS="clock.defs
@@ -64,6 +64,7 @@ MIGS="clock.defs
 	lock_set.defs
 	mach_host.defs
 	mach_port.defs
+	mach_voucher.defs
 	processor.defs
 	processor_set.defs
 	task.defs
@@ -74,7 +75,7 @@ MIGS_PRIVATE=""
 
 MIGS_DUAL_PUBLIC_PRIVATE=""
 
-if [[ "$PLATFORM_NAME" = "iphoneos" || "$PLATFORM_NAME" = "iphonesimulator"  ]]
+if [[ "$PLATFORM_NAME" = "iphoneos" || "$PLATFORM_NAME" = "iphonesimulator"  || "$PLATFORM_NAME" = "iphoneosnano" || "$PLATFORM_NAME" = "iphonenanosimulator" ]]
 then
 	MIGS_PRIVATE="mach_vm.defs"
 else
@@ -83,6 +84,7 @@ fi
 
 MIGS_INTERNAL="mach_port.defs
 	mach_vm.defs
+	thread_act.defs
 	vm_map.defs"
 
 SERVER_HDRS="key_defs.h
@@ -96,7 +98,8 @@ MACH_HDRS="mach.h
 	mach_interface.h
 	port_obj.h
 	sync.h
-	vm_task.h"
+	vm_task.h
+	vm_page_size.h"
 
 # install /usr/include/server headers 
 mkdir -p $SERVER_HEADER_DST
@@ -111,7 +114,7 @@ for hdr in $MACH_HDRS; do
 done
 
 # special case because we only have one to do here
-$MIG -arch $MACHINE_ARCH -header "$SERVER_HEADER_DST/netname.h" $SRC/servers/netname.defs
+$MIG -novouchers -arch $MACHINE_ARCH -header "$SERVER_HEADER_DST/netname.h" $SRC/servers/netname.defs
 
 # install /usr/include/mach mig headers
 
@@ -119,14 +122,14 @@ mkdir -p $MIG_HEADER_DST
 
 for mig in $MIGS $MIGS_DUAL_PUBLIC_PRIVATE; do
 	MIG_NAME=`basename $mig .defs`
-	$MIG -arch $MACHINE_ARCH -cc $MIGCC -header "$MIG_HEADER_DST/$MIG_NAME.h" $MIG_DEFINES $SRC/$mig
+	$MIG -novouchers -arch $MACHINE_ARCH -cc $MIGCC -header "$MIG_HEADER_DST/$MIG_NAME.h" $MIG_DEFINES $SRC/$mig
 done
 
 mkdir -p $MIG_PRIVATE_HEADER_DST
 
 for mig in $MIGS_PRIVATE $MIGS_DUAL_PUBLIC_PRIVATE; do
 	MIG_NAME=`basename $mig .defs`
-	$MIG -arch $MACHINE_ARCH -cc $MIGCC -header "$MIG_PRIVATE_HEADER_DST/$MIG_NAME.h" $MIG_DEFINES $MIG_PRIVATE_DEFS_INCFLAGS $SRC/$mig
+	$MIG -novouchers -arch $MACHINE_ARCH -cc $MIGCC -header "$MIG_PRIVATE_HEADER_DST/$MIG_NAME.h" $MIG_DEFINES $MIG_PRIVATE_DEFS_INCFLAGS $SRC/$mig
 	if [ ! -e "$MIG_HEADER_DST/$MIG_NAME.h" ]; then
 	    echo "#error $MIG_NAME.h unsupported." > "$MIG_HEADER_DST/$MIG_NAME.h"
 	fi
@@ -141,6 +144,6 @@ mkdir -p $MIG_INTERNAL_HEADER_DST
  
 for mig in $MIGS_INTERNAL; do
 	MIG_NAME=`basename $mig .defs`
-	$MIG -arch $MACHINE_ARCH -cc $MIGCC -header "$MIG_INTERNAL_HEADER_DST/${MIG_NAME}_internal.h" $SRC/$mig
+	$MIG -novouchers -arch $MACHINE_ARCH -cc $MIGCC -header "$MIG_INTERNAL_HEADER_DST/${MIG_NAME}_internal.h" $SRC/$mig
 done
  

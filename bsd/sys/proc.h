@@ -78,6 +78,7 @@
 #include <sys/event.h>
 #ifdef KERNEL
 #include <sys/kernel_types.h>
+#include <uuid/uuid.h>
 #endif
 #include <mach/boolean.h>
 
@@ -187,7 +188,7 @@ struct extern_proc {
 
 #define	P_DEPENDENCY_CAPABLE	0x00100000	/* process is ok to call vfs_markdependency() */
 #define	P_REBOOT	0x00200000	/* Process called reboot() */
-#define	P_TBE		0x00400000	/* Process is TBE */
+#define	P_RESV6		0x00400000	/* used to be P_TBE */
 #define	P_RESV7		0x00800000	/* (P_SIGEXC)signal exceptions */
 
 #define	P_THCWD		0x01000000	/* process has thread cwd  */
@@ -216,6 +217,7 @@ struct extern_proc {
 #define P_DIRTY_BUSY                            0x00000040      /* serialization flag */
 #define P_DIRTY_MARKED                          0x00000080      /* marked dirty previously */
 #define P_DIRTY_DEFER_IN_PROGRESS               0x00000100      /* deferral to idle-band in process */
+#define P_DIRTY_LAUNCH_IN_PROGRESS              0x00000200      /* launch is in progress */
 
 #define P_DIRTY_IS_DIRTY                        (P_DIRTY | P_DIRTY_SHUTDOWN)
 #define P_DIRTY_IDLE_EXIT_ENABLED               (P_DIRTY_TRACK|P_DIRTY_ALLOW_IDLE_EXIT)
@@ -335,11 +337,21 @@ extern uint64_t proc_uniqueid(proc_t);
 extern uint64_t proc_puniqueid(proc_t);
 
 extern void proc_getexecutableuuid(proc_t, unsigned char *, unsigned long);
+extern int proc_get_originatorbgstate(uint32_t *is_backgrounded);
+
+/* Kernel interface to get the uuid of the originator of the work.*/
+extern int proc_pidoriginatoruuid(uuid_t uuid_buf, uint32_t buffersize);
 
 extern uint64_t proc_was_throttled(proc_t);
 extern uint64_t proc_did_throttle(proc_t);
 
+extern uint64_t proc_coalitionid(proc_t);
+
 #endif /* XNU_KERNEL_PRIVATE*/
+
+#ifdef KERNEL_PRIVATE
+extern vnode_t proc_getexecutablevnode(proc_t); /* Returned with iocount, use vnode_put() to drop */
+#endif
 
 __END_DECLS
 

@@ -34,7 +34,7 @@
  */
 
 #ifndef	_KERN_EXTMOD_STATISTICS_H_
-#define _KERN_EXTMODE_STATISTICS_H_
+#define _KERN_EXTMOD_STATISTICS_H_
 
 #include <kern/task.h>
 #include <mach/vm_types.h>

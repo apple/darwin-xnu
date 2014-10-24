@@ -75,7 +75,15 @@ iokit/Kernel/IOSharedDataQueue.cpp			optional iokitcpp
 # iokit/Tests/TestContainers.cpp			optional iokitcpp
 # iokit/Tests/TestCollections.cpp			optional iokitcpp
 
-iokit/Kernel/IOStatistics.cpp			optional iokitcpp
+iokit/Kernel/IOStatistics.cpp				optional iokitcpp
+iokit/Kernel/IOInterruptAccounting.cpp			optional iokitcpp
+
+iokit/Kernel/IOReporter.cpp				optional iokitcpp
+iokit/Kernel/IOSimpleReporter.cpp			optional iokitcpp
+iokit/Kernel/IOStateReporter.cpp			optional iokitcpp
+iokit/Kernel/IOHistogramReporter.cpp			optional iokitcpp
+iokit/Kernel/IOReportLegend.cpp				optional iokitcpp
+
 
 iokit/Kernel/IOStringFuncs.c				standard
 

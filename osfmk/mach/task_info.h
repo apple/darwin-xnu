@@ -330,6 +330,49 @@ typedef struct task_vm_info	*task_vm_info_t;
 
 typedef struct vm_purgeable_info	task_purgable_info_t;
 
+
+#define TASK_TRACE_MEMORY_INFO  24
+struct task_trace_memory_info {
+	uint64_t  user_memory_address; 	/* address of start of trace memory buffer */
+	uint64_t  buffer_size;			/* size of buffer in bytes */
+	uint64_t  mailbox_array_size;	/* size of mailbox area in bytes */
+};
+typedef struct task_trace_memory_info task_trace_memory_info_data_t;
+typedef struct task_trace_memory_info * task_trace_memory_info_t;
+#define TASK_TRACE_MEMORY_INFO_COUNT  ((mach_msg_type_number_t) \
+		(sizeof(task_trace_memory_info_data_t) / sizeof(natural_t)))
+
+#define TASK_WAIT_STATE_INFO  25    /* deprecated. */
+struct task_wait_state_info {
+	uint64_t  total_wait_state_time;	/* Time that all threads past and present have been in a wait state */
+	uint64_t  total_wait_sfi_state_time;	/* Time that threads have been in SFI wait (should be a subset of total wait state time */
+	uint32_t  _reserved[4];
+};
+typedef struct task_wait_state_info task_wait_state_info_data_t;
+typedef struct task_wait_state_info * task_wait_state_info_t;
+#define TASK_WAIT_STATE_INFO_COUNT  ((mach_msg_type_number_t) \
+		(sizeof(task_wait_state_info_data_t) / sizeof(natural_t)))
+
+#define TASK_POWER_INFO_V2	26
+
+typedef struct {
+	uint64_t		task_gpu_utilisation;
+	uint64_t		task_gpu_stat_reserved0;
+	uint64_t		task_gpu_stat_reserved1;
+	uint64_t		task_gpu_stat_reserved2;
+} gpu_energy_data;
+
+typedef gpu_energy_data *gpu_energy_data_t;
+struct task_power_info_v2 {
+	task_power_info_data_t	cpu_energy;
+	gpu_energy_data gpu_energy;
+};
+
+typedef struct task_power_info_v2	task_power_info_v2_data_t;
+typedef struct task_power_info_v2	*task_power_info_v2_t;
+#define TASK_POWER_INFO_V2_COUNT	((mach_msg_type_number_t) \
+		(sizeof (task_power_info_v2_data_t) / sizeof (natural_t)))
+
 /*
  * Obsolete interfaces.
  */

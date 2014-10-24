@@ -131,7 +131,7 @@ structure is defined as:
 
 struct dirent { /* when _DARWIN_FEATURE_64_BIT_INODE is defined */
         ino_t      d_fileno;     /* file number of entry */
-        __uint16_t d_seekoff;    /* seek offset (optional, used by servers) */
+        __uint64_t d_seekoff;    /* seek offset (optional, used by servers) */
         __uint16_t d_reclen;     /* length of this record */
         __uint16_t d_namlen;     /* length of string in d_name */
         __uint8_t  d_type;       /* file type, see below */

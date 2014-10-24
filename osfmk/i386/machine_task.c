@@ -58,6 +58,10 @@
 #include <kern/thread.h>
 #include <i386/misc_protos.h>
 
+#if HYPERVISOR
+#include <kern/hv_support.h>
+#endif
+
 extern zone_t ids_zone;
 
 kern_return_t
@@ -239,6 +243,13 @@ machine_task_terminate(task_t task)
 	if (task) {
 		user_ldt_t user_ldt;
 		void *task_debug;
+
+#if HYPERVISOR
+		if (task->hv_task_target) {
+			hv_callbacks.task_destroy(task->hv_task_target);
+			task->hv_task_target = NULL;
+		}
+#endif
 
 		user_ldt = task->i386_ldt;
 		if (user_ldt != 0) {

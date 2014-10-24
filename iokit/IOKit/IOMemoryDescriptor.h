@@ -56,11 +56,17 @@ enum IODirection
     kIODirectionInOut = kIODirectionIn  | kIODirectionOut,
 
     // these flags are valid for the prepare() method only
-    kIODirectionPrepareToPhys32    = 0x00000004,
-    kIODirectionPrepareNoFault     = 0x00000008,
-    kIODirectionPrepareReserved1   = 0x00000010,
+    kIODirectionPrepareToPhys32   = 0x00000004,
+    kIODirectionPrepareNoFault    = 0x00000008,
+    kIODirectionPrepareReserved1  = 0x00000010,
 #define IODIRECTIONPREPARENONCOHERENTDEFINED	1
     kIODirectionPrepareNonCoherent = 0x00000020,
+
+     // these flags are valid for the complete() method only
+#define IODIRECTIONCOMPLETEWITHERRORDEFINED		1
+     kIODirectionCompleteWithError = 0x00000040,
+#define IODIRECTIONCOMPLETEWITHDATAVALIDDEFINED	1
+     kIODirectionCompleteWithDataValid = 0x00000080,
 };
 #ifdef __LP64__
 typedef IOOptionBits IODirection;
@@ -103,6 +109,12 @@ enum {
 #endif
     kIOMemoryThreadSafe		= 0x00100000,	// Shared with Buffer MD
     kIOMemoryClearEncrypt	= 0x00200000,	// Shared with Buffer MD
+
+#ifdef XNU_KERNEL_PRIVATE
+    kIOMemoryBufferPurgeable	= 0x00400000,
+    kIOMemoryBufferCacheMask	= 0x70000000,
+    kIOMemoryBufferCacheShift	= 28,
+#endif
 };
 
 #define kIOMapperSystem	((IOMapper *) 0)
@@ -167,6 +179,11 @@ enum
     kIOPreparationIDAlwaysPrepared = 2,
 };
 
+#ifdef XNU_KERNEL_PRIVATE
+struct IOMemoryReference;
+#endif
+
+
 /*! @class IOMemoryDescriptor : public OSObject
     @abstract An abstract base class defining common methods for describing physical or virtual memory.
     @discussion The IOMemoryDescriptor object represents a buffer or range of memory, specified as one or more physical or virtual address ranges. It contains methods to return the memory's physically contiguous segments (fragments), for use with the IOMemoryCursor, and methods to map the memory into any address space with caching and placed mapping options. */
@@ -186,7 +203,15 @@ protected:
 protected:
     OSSet *		_mappings;
     IOOptionBits 	_flags;
-    void *		_memEntry;
+
+
+#ifdef XNU_KERNEL_PRIVATE
+public:
+    struct IOMemoryReference *	_memRef;
+protected:
+#else
+    void * __iomd_reserved5;
+#endif
 
 #ifdef __LP64__
     uint64_t		__iomd_reserved1;
@@ -581,6 +606,7 @@ public:
 	kIOMapReadOnly to allow only read only accesses to the memory - writes will cause and access fault.<br>
 	kIOMapReference will only succeed if the mapping already exists, and the IOMemoryMap object is just an extra reference, ie. no new mapping will be created.<br>
 	kIOMapUnique allows a special kind of mapping to be created that may be used with the IOMemoryMap::redirect() API. These mappings will not be shared as is the default - there will always be a unique mapping created for the caller, not an existing mapping with an extra reference.<br>
+	kIOMapPrefault will try to prefault the pages corresponding to the mapping. This must not be done on the kernel task, and the memory must have been wired via prepare(). Otherwise, the function will fail.<br>
     @param offset Is a beginning offset into the IOMemoryDescriptor's memory where the mapping starts. Zero is the default to map all the memory.
     @param length Is the length of the mapping requested for a subset of the IOMemoryDescriptor. Zero is the default to map all the memory.
     @result A reference to an IOMemoryMap object representing the mapping, which can supply the virtual address of the mapping and other information. The mapping may be shared with multiple callers - multiple maps are avoided if a compatible one exists. The IOMemoryMap object returned should be released only when the caller has finished accessing the mapping, as freeing the object destroys the mapping. The IOMemoryMap instance also retains the IOMemoryDescriptor it maps while it exists. */
@@ -631,6 +657,11 @@ public:
     IOReturn redirect( task_t safeTask, bool redirect );
 
     IOReturn handleFault(
+        void *			_pager,
+	mach_vm_size_t		sourceOffset,
+	mach_vm_size_t		length);
+
+    IOReturn populateDevicePager(
         void *			pager,
 	vm_map_t		addressMap,
 	mach_vm_address_t	address,
@@ -908,6 +939,31 @@ public:
 	uint64_t                    * address,
 	ppnum_t                     * mapPages);
     bool initMemoryEntries(size_t size, IOMapper * mapper);
+
+    IOMemoryReference * memoryReferenceAlloc(uint32_t capacity, 
+    					     IOMemoryReference * realloc);
+    void memoryReferenceFree(IOMemoryReference * ref);
+    void memoryReferenceRelease(IOMemoryReference * ref);
+
+    IOReturn memoryReferenceCreate(
+                        IOOptionBits         options,
+                        IOMemoryReference ** reference);
+
+    IOReturn memoryReferenceMap(IOMemoryReference * ref,
+			 vm_map_t            map,
+			 mach_vm_size_t      inoffset,
+			 mach_vm_size_t      size,
+			 IOOptionBits        options,
+			 mach_vm_address_t * inaddr);
+
+    static IOReturn memoryReferenceSetPurgeable(
+				IOMemoryReference * ref,
+				IOOptionBits newState,
+				IOOptionBits * oldState);
+    static IOReturn memoryReferenceGetPageCounts(
+			       IOMemoryReference * ref,
+                               IOByteCount       * residentPageCount,
+                               IOByteCount       * dirtyPageCount);
 #endif
 
 private:
@@ -917,8 +973,6 @@ private:
     virtual void mapIntoKernel(unsigned rangeIndex);
     virtual void unmapFromKernel();
 #endif /* !__LP64__ */
-
-    void *createNamedEntry();
 
     // Internal
     OSData *	    _memoryEntries;

@@ -90,5 +90,6 @@ typedef void (*kqueue_continue_t)(struct kqueue *, void *, int);
 extern int kevent_register(struct kqueue *, struct kevent64_s *, struct proc *);
 extern int kqueue_scan(struct kqueue *, kevent_callback_t, kqueue_continue_t,
 		       void *, struct timeval *, struct proc *);
+extern int kqueue_stat(struct kqueue *, void *, int, proc_t);
 
 #endif /* !_SYS_EVENTVAR_H_ */

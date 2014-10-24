@@ -56,8 +56,6 @@
 /* 
  */
 
-#include <machine_timer_routines.h>
-
 #include <mach/kern_return.h>
 #include <mach/port.h>
 #include <kern/queue.h>
@@ -148,14 +146,6 @@ timer_switch(
 	new_timer->tstamp = tstamp;
 }
 
-#if	MACHINE_TIMER_ROUTINES
-
-/*
- *	Machine-dependent code implements the timer event routine.
- */
-
-#else	/* MACHINE_TIMER_ROUTINES */
-
 /*
  *	Update the current thread timer and
  *	start the new timer.  Requires a current
@@ -183,5 +173,3 @@ thread_timer_event(
 	PROCESSOR_DATA(processor, thread_timer) = new_timer;
 	new_timer->tstamp = tstamp;
 }
-
-#endif	/* MACHINE_TIMER_ROUTINES */

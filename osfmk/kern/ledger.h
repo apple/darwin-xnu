@@ -96,6 +96,8 @@ extern kern_return_t ledger_set_callback(ledger_template_t template, int entry,
 	ledger_callback_t callback, const void *param0, const void *param1);
 extern kern_return_t ledger_track_maximum(ledger_template_t template, int entry,
 	int period_in_secs);
+extern kern_return_t ledger_panic_on_negative(ledger_template_t template,
+					      int entry);
 extern int ledger_key_lookup(ledger_template_t template, const char *key);
 
 /* value of entry type */
@@ -127,6 +129,10 @@ extern kern_return_t ledger_get_entries(ledger_t ledger, int entry,
 	ledger_amount_t *credit, ledger_amount_t *debit);
 extern kern_return_t ledger_get_balance(ledger_t ledger, int entry,
 	ledger_amount_t *balance);
+extern kern_return_t ledger_reset_callback_state(ledger_t ledger, int entry);
+extern kern_return_t ledger_disable_panic_on_negative(ledger_t ledger, int entry);
+
+extern kern_return_t ledger_rollup(ledger_t to_ledger, ledger_t from_ledger);
 
 extern void ledger_ast(thread_t thread);
 extern void set_astledger(thread_t thread);

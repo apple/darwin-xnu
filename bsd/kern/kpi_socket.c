@@ -42,7 +42,7 @@
 #include <sys/fcntl.h>
 #include <sys/filio.h>
 #include <sys/uio_internal.h>
-#include <kern/lock.h>
+#include <kern/locks.h>
 #include <netinet/in.h>
 #include <libkern/OSAtomic.h>
 
@@ -1183,11 +1183,20 @@ sock_catchevents(socket_t sock, sock_evupcall ecallback, void *econtext,
 		sock->so_eventarg = econtext;
 		sock->so_eventmask = emask;
 	} else {
-		sock->so_event = NULL;
+		sock->so_event = sonullevent;
 		sock->so_eventarg = NULL;
 		sock->so_eventmask = 0;
 	}
 	socket_unlock(sock, 1);
 
 	return (0);
+}
+
+/*
+ * Returns true whether or not a socket belongs to the kernel.
+ */
+int
+sock_iskernel(socket_t so)
+{
+	return (so && so->last_pid == 0);
 }

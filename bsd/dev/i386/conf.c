@@ -47,7 +47,6 @@
 /* Prototypes that should be elsewhere: */
 extern dev_t	chrtoblk(dev_t dev);
 extern int	chrtoblk_set(int cdev, int bdev);
-extern int	iskmemdev(dev_t dev);
 
 struct bdevsw	bdevsw[] =
 {
@@ -134,12 +133,12 @@ extern d_ioctl_t	mmioctl;
 
 #include <pty.h>
 #if NPTY > 0
-extern struct tty *pt_tty[];
 extern d_open_t		ptsopen;
 extern d_close_t	ptsclose;
 extern d_read_t		ptsread;
 extern d_write_t	ptswrite;
 extern d_stop_t		ptsstop;
+extern d_select_t	ptsselect;
 extern d_open_t		ptcopen;
 extern d_close_t	ptcclose;
 extern d_read_t		ptcread;
@@ -212,7 +211,7 @@ struct cdevsw	cdevsw[] =
     },
     {
 	ptsopen,	ptsclose,	ptsread,	ptswrite,	/* 4*/
-	ptyioctl,	ptsstop,	nullreset,	pt_tty,		ttselect,
+	ptyioctl,	ptsstop,	nullreset,	0,		ptsselect,
 	eno_mmap,	eno_strat,	eno_getc,	eno_putc,	D_TTY
     },
     {
@@ -369,10 +368,3 @@ chrtoblk_set(int cdev, int bdev)
 	return 0;
 }
 
-/*
- * Returns true if dev is /dev/mem or /dev/kmem.
- */
-int iskmemdev(dev_t dev)
-{
-	return (major(dev) == 3 && minor(dev) < 2);
-}

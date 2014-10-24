@@ -154,6 +154,8 @@ extern void vnode_pager_shutdown(void);
 extern void *upl_get_internal_page_list(
 	upl_t upl);
 
+extern void vnode_setswapmount(struct vnode *);
+
 typedef int pager_return_t;
 extern pager_return_t	vnode_pagein(
 	struct vnode *, upl_t,
@@ -193,6 +195,14 @@ extern kern_return_t vnode_pager_get_cs_blobs(
 	struct vnode	*vp,
 	void		**blobs);
 
+#if CONFIG_IOSCHED
+void vnode_pager_issue_reprioritize_io(
+	struct vnode 	*devvp, 
+	uint64_t 	blkno, 
+	uint32_t 	len,
+	int 		priority);
+#endif
+
 #if CHECK_CS_VALIDATION_BITMAP	
 /* used by the vnode_pager_cs_validation_bitmap routine*/
 #define CS_BITMAP_SET	1
@@ -215,6 +225,13 @@ extern kern_return_t vnode_pager_init(
 extern kern_return_t vnode_pager_get_object_size(
 	memory_object_t,
 	memory_object_offset_t *);
+
+#if CONFIG_IOSCHED
+extern kern_return_t vnode_pager_get_object_devvp(
+        memory_object_t,
+        uintptr_t *);
+#endif
+
 extern kern_return_t vnode_pager_get_isinuse(
 	memory_object_t,
 	uint32_t *);
@@ -488,7 +505,7 @@ extern void vm_paging_map_init(void);
 extern int macx_backing_store_compaction(int flags);
 extern unsigned int mach_vm_ctl_page_free_wanted(void);
 
-extern void no_paging_space_action(void);
+extern int no_paging_space_action(void);
 
 #define VM_TOGGLE_CLEAR		0
 #define VM_TOGGLE_SET		1
@@ -504,9 +521,14 @@ extern kern_return_t compressor_memory_object_create(
 	memory_object_size_t,
 	memory_object_t *);
 
+#if CONFIG_JETSAM
+extern int proc_get_memstat_priority(struct proc*, boolean_t);
+#endif /* CONFIG_JETSAM */
+
 /* the object purger. purges the next eligible object from memory. */
 /* returns TRUE if an object was purged, otherwise FALSE. */
 boolean_t vm_purgeable_object_purge_one_unlocked(int force_purge_below_group);
+void vm_purgeable_disown(task_t task);
 
 struct trim_list {
 	uint64_t	tl_offset;
@@ -514,7 +536,25 @@ struct trim_list {
 	struct trim_list *tl_next;
 };
 
-u_int32_t vnode_trim_list(struct vnode *vp, struct trim_list *tl);
+u_int32_t vnode_trim_list(struct vnode *vp, struct trim_list *tl, boolean_t route_only);
+
+#define MAX_SWAPFILENAME_LEN	1024
+#define SWAPFILENAME_INDEX_LEN	2	/* Doesn't include the terminating NULL character */
+
+extern char	swapfilename[MAX_SWAPFILENAME_LEN + 1];
+
+struct vm_counters {
+	unsigned int	do_collapse_compressor;
+	unsigned int	do_collapse_compressor_pages;
+	unsigned int	do_collapse_terminate;
+	unsigned int	do_collapse_terminate_failure;
+	unsigned int	should_cow_but_wired;
+	unsigned int	create_upl_extra_cow;
+	unsigned int	create_upl_extra_cow_pages;
+	unsigned int	create_upl_lookup_failure_write;
+	unsigned int	create_upl_lookup_failure_copy;
+};
+extern struct vm_counters vm_counters;
 
 #endif	/* _VM_VM_PROTOS_H_ */
 

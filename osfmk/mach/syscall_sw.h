@@ -115,9 +115,6 @@ kernel_trap(semaphore_timedwait_signal_trap,-39,4)
 
 kernel_trap(_kernelrpc_mach_port_guard_trap,-41,5)
 kernel_trap(_kernelrpc_mach_port_unguard_trap,-42,4)
-#if		!defined(__LP64__) && !defined(__arm__)
-kernel_trap(map_fd,-43,5)
-#endif	/*!defined(__LP64__) && !defined(__arm__) */
 
 kernel_trap(task_name_for_pid,-44,3)
 kernel_trap(task_for_pid,-45,3)

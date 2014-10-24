@@ -102,9 +102,6 @@
 #include <netinet/ip.h>
 #include <netinet/ip_var.h>
 #include <netinet/ip_encap.h>
-#if MROUTING
-#include <netinet/ip_mroute.h>
-#endif /* MROUTING */
 
 #if INET6
 #include <netinet/ip6.h>
@@ -261,18 +258,6 @@ encap4_input(m, off)
 			m_freem(m);
 		return;
 	}
-
-	/* for backward compatibility */
-# if MROUTING
-#  define COMPATFUNC	ipip_input
-# endif /*MROUTING*/
-
-#if COMPATFUNC
-	if (proto == IPPROTO_IPV4) {
-		COMPATFUNC(m, off);
-		return;
-	}
-#endif
 
 	/* last resort: inject to raw socket */
 	rip_input(m, off);

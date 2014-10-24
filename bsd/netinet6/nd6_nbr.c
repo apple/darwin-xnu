@@ -95,7 +95,6 @@
 #if INET6
 #include <netinet6/ipsec6.h>
 #endif
-extern int ipsec_bypass;
 #endif
 
 struct dadq;
@@ -103,7 +102,7 @@ static struct dadq *nd6_dad_find(struct ifaddr *);
 void nd6_dad_stoptimer(struct ifaddr *);
 static void nd6_dad_timer(struct ifaddr *);
 static void nd6_dad_ns_output(struct dadq *, struct ifaddr *);
-static void nd6_dad_ns_input(struct mbuf *, struct ifaddr *);
+static void nd6_dad_ns_input(struct mbuf *, struct ifaddr *, char *, int);
 static struct mbuf *nd6_dad_na_input(struct mbuf *, struct ifnet *,
     struct in6_addr *, caddr_t, int);
 static void dad_addref(struct dadq *, int);
@@ -273,16 +272,8 @@ nd6_ns_input(
 	/* Expect 32-bit aligned data pointer on strict-align platforms */
 	MBUF_STRICT_DATA_ALIGNMENT_CHECK_32(m);
 
-#ifndef PULLDOWN_TEST
 	IP6_EXTHDR_CHECK(m, off, icmp6len, return);
 	nd_ns = (struct nd_neighbor_solicit *)((caddr_t)ip6 + off);
-#else
-	IP6_EXTHDR_GET(nd_ns, struct nd_neighbor_solicit *, m, off, icmp6len);
-	if (nd_ns == NULL) {
-		icmp6stat.icp6s_tooshort++;
-		return;
-	}
-#endif
 	m->m_pkthdr.pkt_flags |= PKTF_INET6_RESOLVE;
 
 	ip6 = mtod(m, struct ip6_hdr *); /* adjust pointer for safety */
@@ -482,7 +473,7 @@ nd6_ns_input(
 		 * silently ignore it.
 		 */
 		if (is_dad_probe)
-			nd6_dad_ns_input(m, ifa);
+			nd6_dad_ns_input(m, ifa, lladdr, lladdrlen);
 
 		goto freeit;
 	}
@@ -712,7 +703,14 @@ nd6_ns_output(
 				IFA_REMREF(&ia->ia_ifa);
 				ia = NULL;
 			}
-
+			/*
+			 * RFC 4429 section 3.2:
+			 * When a node has a unicast packet to send
+			 * from an Optimistic Address to a neighbor, 
+			 * but does not know the neighbor's link-layer 
+			 * address, it MUST NOT perform Address
+			 * Resolution.
+			 */
 			ia = in6ifa_ifpwithaddr(ifp, src);
 			if (!ia || (ia->ia6_flags & IN6_IFF_OPTIMISTIC)) {
 				nd6log((LOG_DEBUG,
@@ -774,11 +772,6 @@ nd6_ns_output(
 	nd_ns->nd_ns_cksum
 		= in6_cksum(m, IPPROTO_ICMPV6, sizeof(*ip6), icmp6len);
 
-#if IPSEC
-	/* Don't lookup socket */
-	if (ipsec_bypass == 0)
-		(void) ipsec_setsocket(m, NULL);
-#endif
 	flags = dad ? IPV6_UNSPECSRC : 0;
 	flags |= IPV6_OUTARGS;
 
@@ -874,16 +867,8 @@ nd6_na_input(struct mbuf *m, int off, int icmp6len)
 		goto bad;
 	}
 
-#ifndef PULLDOWN_TEST
 	IP6_EXTHDR_CHECK(m, off, icmp6len, return);
 	nd_na = (struct nd_neighbor_advert *)((caddr_t)ip6 + off);
-#else
-	IP6_EXTHDR_GET(nd_na, struct nd_neighbor_advert *, m, off, icmp6len);
-	if (nd_na == NULL) {
-		icmp6stat.icp6s_tooshort++;
-		return;
-	}
-#endif
 	m->m_pkthdr.pkt_flags |= PKTF_INET6_RESOLVE;
 
 	flags = nd_na->nd_na_flags_reserved;
@@ -1395,11 +1380,6 @@ nd6_na_output(
 	nd_na->nd_na_cksum =
 		in6_cksum(m, IPPROTO_ICMPV6, sizeof(struct ip6_hdr), icmp6len);
 
-#if IPSEC
-	/* Don't lookup socket */
-	if (ipsec_bypass == 0)
-		(void) ipsec_setsocket(m, NULL);
-#endif
 	m->m_pkthdr.pkt_flags |= PKTF_INET6_RESOLVE;
 
 	if (ifp->if_eflags & IFEF_TXSTART) {
@@ -1469,6 +1449,7 @@ struct dadq {
 	int dad_ns_icount;
 	int dad_na_icount;
 	int dad_nd_ixcount;	/* Count of IFDISABLED eligible ND rx'd */
+	uint8_t dad_ehsrc[ETHER_ADDR_LEN];
 };
 
 static struct dadq_head dadq;
@@ -1535,6 +1516,12 @@ nd6_dad_start(
 	struct in6_ifaddr *ia = (struct in6_ifaddr *)ifa;
 	struct dadq *dp;
 
+	nd6log2((LOG_DEBUG, "%s - %s ifp %s ia6_flags 0x%x\n",
+	    __func__,
+	    ip6_sprintf(&ia->ia_addr.sin6_addr),
+	    if_name(ia->ia_ifp),
+	    ia->ia6_flags));
+
 	/*
 	 * If we don't need DAD, don't do it.
 	 * There are several cases:
@@ -1585,7 +1572,7 @@ nd6_dad_start(
 
 	nd6log((LOG_DEBUG, "%s: starting %sDAD for %s\n",
 	    if_name(ifa->ifa_ifp),
-	    (ia->ia_flags & IN6_IFF_OPTIMISTIC) ? "optimistic " : "",
+	    (ia->ia6_flags & IN6_IFF_OPTIMISTIC) ? "optimistic " : "",
 	    ip6_sprintf(&ia->ia_addr.sin6_addr)));
 
 	/*
@@ -1685,7 +1672,6 @@ nd6_dad_stop(struct ifaddr *ifa)
 	DAD_REMREF(dp);		/* drop our reference */
 }
 
-
 static void
 nd6_unsol_na_output(struct ifaddr *ifa)
 {
@@ -1718,12 +1704,20 @@ nd6_dad_timer(struct ifaddr *ifa)
 {
 	struct in6_ifaddr *ia = (struct in6_ifaddr *)ifa;
 	struct dadq *dp = NULL;
+	struct nd_ifinfo *ndi;
 
 	/* Sanity check */
 	if (ia == NULL) {
 		log(LOG_ERR, "nd6_dad_timer: called with null parameter\n");
 		goto done;
 	}
+
+	nd6log2((LOG_DEBUG, "%s - %s ifp %s ia6_flags 0x%x\n",
+	    __func__,
+	    ip6_sprintf(&ia->ia_addr.sin6_addr),
+	    if_name(ia->ia_ifp),
+	    ia->ia6_flags));
+
 	dp = nd6_dad_find(ifa);
 	if (dp == NULL) {
 		log(LOG_ERR, "nd6_dad_timer: DAD structure not found\n");
@@ -1762,7 +1756,6 @@ nd6_dad_timer(struct ifaddr *ifa)
 	/* Need more checks? */
 	if (dp->dad_ns_ocount < dp->dad_count) {
 		u_int32_t retrans;
-		struct nd_ifinfo *ndi;
 
 		DAD_UNLOCK(dp);
 		/*
@@ -1810,6 +1803,8 @@ nd6_dad_timer(struct ifaddr *ifa)
 			nd6_dad_duplicated(ifa);
 			/* (*dp) will be freed in nd6_dad_duplicated() */
 		} else {
+			boolean_t txunsolna;
+
 			/*
 			 * We are done with DAD.  No NA came, no NS came.
 			 * No duplicate address found.
@@ -1818,17 +1813,25 @@ nd6_dad_timer(struct ifaddr *ifa)
 			ia->ia6_flags &= ~IN6_IFF_DADPROGRESS;
 			IFA_UNLOCK(&ia->ia_ifa);
 
+			lck_rw_lock_shared(nd_if_rwlock);
+			ndi = ND_IFINFO(ifa->ifa_ifp);
+			VERIFY(ndi != NULL && ndi->initialized);
+			lck_mtx_lock(&ndi->lock);
+			txunsolna = (ndi->flags & ND6_IFF_REPLICATED) != 0;
+			lck_mtx_unlock(&ndi->lock);
+			lck_rw_done(nd_if_rwlock);
+
+			if (txunsolna) {
+				nd6_unsol_na_output(ifa);
+			}
+
 			nd6log((LOG_DEBUG,
-			    "%s: DAD complete for %s - no duplicates found\n",
+			    "%s: DAD complete for %s - no duplicates found%s\n",
 			    if_name(ifa->ifa_ifp),
-			    ip6_sprintf(&ia->ia_addr.sin6_addr)));
-			/*
-			 * Send an Unsolicited Neighbor Advertisement so that
-			 * other machines on the network are aware of us
-			 * (important when we are waking from sleep).
-			 */
-			nd6_unsol_na_output(ifa);
-			in6_post_msg(ia->ia_ifp, KEV_INET6_NEW_USER_ADDR, ia);
+			    ip6_sprintf(&ia->ia_addr.sin6_addr),
+			    txunsolna ? ", tx unsolicited NA with O=1" : "."));
+			in6_post_msg(ia->ia_ifp, KEV_INET6_NEW_USER_ADDR, ia, 
+			    dp->dad_ehsrc);
 			nd6_dad_detach(dp, ifa);
 		}
 	}
@@ -1890,7 +1893,7 @@ nd6_dad_duplicated(struct ifaddr *ifa)
 	 * duplicate address will be notified to the user and will
 	 * be removed.
 	 */
-	in6_post_msg(ifp, KEV_INET6_NEW_USER_ADDR, ia);
+	in6_post_msg(ifp, KEV_INET6_NEW_USER_ADDR, ia, dp->dad_ehsrc);
 	nd6_dad_detach(dp, ifa);
 	DAD_REMREF(dp);		/* drop our reference */
 }
@@ -1922,22 +1925,21 @@ nd6_dad_ns_output(struct dadq *dp, struct ifaddr *ifa)
 }
 
 static void
-nd6_dad_ns_input(struct mbuf *m, struct ifaddr *ifa)
+nd6_dad_ns_input(struct mbuf *m, struct ifaddr *ifa, char *lladdr,
+    int lladdrlen)
 {
 	struct dadq *dp;
 	struct in6_ifaddr *ia;
 	boolean_t candisable, dadstarted;
+	struct ip6aux *ip6a;
 
 	VERIFY(ifa != NULL);
 	candisable = FALSE;
 	IFA_LOCK(ifa);
 	ia = (struct in6_ifaddr *) ifa;
 	if (IN6_IS_ADDR_LINKLOCAL(&ia->ia_addr.sin6_addr)) {
-		struct ip6aux *ip6a;
-
-		candisable = TRUE;
 		ip6a = ip6_findaux(m);
-
+		candisable = TRUE;
 		if (ip6a && (ip6a->ip6a_flags & IP6A_HASEEN) != 0) {
 			struct in6_addr in6 = ia->ia_addr.sin6_addr;
 
@@ -1988,6 +1990,8 @@ nd6_dad_ns_input(struct mbuf *m, struct ifaddr *ifa)
 			++dp->dad_nd_ixcount;
 		if (dp->dad_ns_ocount > 0)
 			dadstarted = TRUE;
+		if (lladdr && lladdrlen >= ETHER_ADDR_LEN)
+			memcpy(dp->dad_ehsrc, lladdr, ETHER_ADDR_LEN);
 		DAD_UNLOCK(dp);
 		DAD_REMREF(dp);
 		dp = NULL;
@@ -2013,27 +2017,27 @@ nd6_dad_na_input(struct mbuf *m, struct ifnet *ifp, struct in6_addr *taddr,
 	struct in6_ifaddr *ia;
 	struct dadq *dp;
 	struct nd_ifinfo *ndi;
-	boolean_t candisable, ignoring;
+	boolean_t candisable, replicated;
 
 	ifa = (struct ifaddr *) in6ifa_ifpwithaddr(ifp, taddr);
 	if (ifa == NULL)
 		return m;
 
 	candisable = FALSE;
-	ignoring = FALSE;
+	replicated = FALSE;
 
-	/* The ND6_IFF_IGNORE_NA flag is here for legacy reasons. */
+	/* Get the ND6_IFF_REPLICATED flag. */
 	lck_rw_lock_shared(nd_if_rwlock);
 	ndi = ND_IFINFO(ifp);
 	if (ndi != NULL && ndi->initialized) {
 		lck_mtx_lock(&ndi->lock);
-		ignoring = !!(ndi->flags & ND6_IFF_IGNORE_NA);
+		replicated = !!(ndi->flags & ND6_IFF_REPLICATED);
 		lck_mtx_unlock(&ndi->lock);
 	}
 	lck_rw_done(nd_if_rwlock);
-	if (ignoring) {
+	if (replicated) {
 		nd6log((LOG_INFO, "%s: ignoring duplicate NA on "
-		    "%s [ND6_IFF_IGNORE_NA]\n", __func__, if_name(ifp)));
+		    "replicated interface %s\n", __func__, if_name(ifp)));
 		goto done;
 	}
 
@@ -2050,7 +2054,6 @@ nd6_dad_na_input(struct mbuf *m, struct ifnet *ifp, struct in6_addr *taddr,
 	 * hardware address is not also ours, which is a transitory possibility
 	 * in the presence of network-resident sleep proxies on the local link.
 	 */
-
 	if (!(ia->ia6_flags & IN6_IFF_DADPROGRESS)) {
 		IFA_UNLOCK(ifa);
 		nd6log((LOG_INFO, "%s: ignoring duplicate NA on "
@@ -2064,7 +2067,7 @@ nd6_dad_na_input(struct mbuf *m, struct ifnet *ifp, struct in6_addr *taddr,
 	 * the L2-header source address, if we have seen it, with the target
 	 * address, and ignoring the NA if they don't match.
 	 */
-	if (lladdr != NULL && lladdrlen == ETHER_ADDR_LEN) {
+	if (lladdr != NULL && lladdrlen >= ETHER_ADDR_LEN) {
 		struct ip6aux *ip6a = ip6_findaux(m);
 		if (ip6a && (ip6a->ip6a_flags & IP6A_HASEEN) != 0 &&
 		    bcmp(ip6a->ip6a_ehsrc, lladdr, ETHER_ADDR_LEN) != 0) {
@@ -2146,6 +2149,8 @@ nd6_dad_na_input(struct mbuf *m, struct ifnet *ifp, struct in6_addr *taddr,
 	}
 
 	DAD_LOCK_SPIN(dp);
+	if (lladdr != NULL && lladdrlen >= ETHER_ADDR_LEN)
+		memcpy(dp->dad_ehsrc, lladdr, ETHER_ADDR_LEN);
 	dp->dad_na_icount++;
 	if (candisable)
 		dp->dad_nd_ixcount++;

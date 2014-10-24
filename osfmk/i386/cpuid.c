@@ -28,7 +28,6 @@
 /*
  * @OSF_COPYRIGHT@
  */
-#include <platforms.h>
 #include <vm/vm_page.h>
 #include <pexpert/pexpert.h>
 
@@ -777,6 +776,7 @@ void
 cpuid_set_info(void)
 {
 	i386_cpu_info_t		*info_p = &cpuid_cpu_info;
+	boolean_t		enable_x86_64h = TRUE;
 
 	cpuid_set_generic_info(info_p);
 
@@ -788,7 +788,24 @@ cpuid_set_info(void)
 		panic("Unsupported CPU");
 
 	info_p->cpuid_cpu_type = CPU_TYPE_X86;
-	info_p->cpuid_cpu_subtype = CPU_SUBTYPE_X86_ARCH1;
+
+	if (!PE_parse_boot_argn("-enable_x86_64h", &enable_x86_64h, sizeof(enable_x86_64h))) {
+		boolean_t		disable_x86_64h = FALSE;
+
+		if (PE_parse_boot_argn("-disable_x86_64h", &disable_x86_64h, sizeof(disable_x86_64h))) {
+			enable_x86_64h = FALSE;
+		}
+	}
+
+	if (enable_x86_64h &&
+	    ((info_p->cpuid_features & CPUID_X86_64_H_FEATURE_SUBSET) == CPUID_X86_64_H_FEATURE_SUBSET) &&
+	    ((info_p->cpuid_extfeatures & CPUID_X86_64_H_EXTFEATURE_SUBSET) == CPUID_X86_64_H_EXTFEATURE_SUBSET) &&
+	    ((info_p->cpuid_leaf7_features & CPUID_X86_64_H_LEAF7_FEATURE_SUBSET) == CPUID_X86_64_H_LEAF7_FEATURE_SUBSET)) {
+		info_p->cpuid_cpu_subtype = CPU_SUBTYPE_X86_64_H;
+	} else {
+		info_p->cpuid_cpu_subtype = CPU_SUBTYPE_X86_ARCH1;
+	}
+
 	/* Must be invoked after set_generic_info */
 	cpuid_set_cache_info(info_p);
 
@@ -820,6 +837,8 @@ cpuid_set_info(void)
 	DBG("cpuid_set_info():\n");
 	DBG("  core_count   : %d\n", info_p->core_count);
 	DBG("  thread_count : %d\n", info_p->thread_count);
+	DBG("       cpu_type: 0x%08x\n", info_p->cpuid_cpu_type);
+	DBG("    cpu_subtype: 0x%08x\n", info_p->cpuid_cpu_subtype);
 
 	info_p->cpuid_model_string = ""; /* deprecated */
 }
@@ -895,6 +914,8 @@ extfeature_map[] = {
 	{CPUID_EXTFEATURE_1GBPAGE, "1GBPAGE"},
 	{CPUID_EXTFEATURE_EM64T,   "EM64T"},
 	{CPUID_EXTFEATURE_LAHF,    "LAHF"},
+	{CPUID_EXTFEATURE_LZCNT,   "LZCNT"},
+	{CPUID_EXTFEATURE_PREFETCHW, "PREFETCHW"},
 	{CPUID_EXTFEATURE_RDTSCP,  "RDTSCP"},
 	{CPUID_EXTFEATURE_TSCI,    "TSCI"},
 	{0, 0}
@@ -902,7 +923,7 @@ extfeature_map[] = {
 },
 leaf7_feature_map[] = {
 	{CPUID_LEAF7_FEATURE_SMEP,     "SMEP"},
-	{CPUID_LEAF7_FEATURE_ENFSTRG,  "ENFSTRG"},
+	{CPUID_LEAF7_FEATURE_ERMS,     "ERMS"},
 	{CPUID_LEAF7_FEATURE_RDWRFSGS, "RDWRFSGS"},
 	{CPUID_LEAF7_FEATURE_TSCOFF,   "TSC_THREAD_OFFSET"},
 	{CPUID_LEAF7_FEATURE_BMI1,     "BMI1"},
@@ -1096,6 +1117,9 @@ cpuid_init_vmm_info(i386_vmm_info_t *info_p)
 	if (0 == strcmp(info_p->cpuid_vmm_vendor, CPUID_VMM_ID_VMWARE)) {
 		/* VMware identification string: kb.vmware.com/kb/1009458 */
 		info_p->cpuid_vmm_family = CPUID_VMM_FAMILY_VMWARE;
+	} else if (0 == strcmp(info_p->cpuid_vmm_vendor, CPUID_VMM_ID_PARALLELS)) {
+		/* Parallels identification string */
+		info_p->cpuid_vmm_family = CPUID_VMM_FAMILY_PARALLELS;
 	} else {
 		info_p->cpuid_vmm_family = CPUID_VMM_FAMILY_UNKNOWN;
 	}

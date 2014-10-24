@@ -150,6 +150,7 @@ __END_DECLS
 #define CPU_TYPE_MC98000	((cpu_type_t) 10)
 #define CPU_TYPE_HPPA           ((cpu_type_t) 11)
 #define CPU_TYPE_ARM		((cpu_type_t) 12)
+#define CPU_TYPE_ARM64          (CPU_TYPE_ARM | CPU_ARCH_ABI64)
 #define CPU_TYPE_MC88000	((cpu_type_t) 13)
 #define CPU_TYPE_SPARC		((cpu_type_t) 14)
 #define CPU_TYPE_I860		((cpu_type_t) 15)
@@ -274,6 +275,7 @@ __END_DECLS
 #define CPU_SUBTYPE_X86_ALL		((cpu_subtype_t)3)
 #define CPU_SUBTYPE_X86_64_ALL		((cpu_subtype_t)3)
 #define CPU_SUBTYPE_X86_ARCH1		((cpu_subtype_t)4)
+#define CPU_SUBTYPE_X86_64_H		((cpu_subtype_t)8)	/* Haswell feature subset */
 
 
 #define CPU_THREADTYPE_INTEL_HTT	((cpu_threadtype_t) 1)
@@ -352,10 +354,18 @@ __END_DECLS
 #define CPU_SUBTYPE_ARM_V7		((cpu_subtype_t) 9)
 #define CPU_SUBTYPE_ARM_V7F		((cpu_subtype_t) 10) /* Cortex A9 */
 #define CPU_SUBTYPE_ARM_V7S		((cpu_subtype_t) 11) /* Swift */
-#define CPU_SUBTYPE_ARM_V7K		((cpu_subtype_t) 12) /* Kirkwood40 */
+#define CPU_SUBTYPE_ARM_V7K		((cpu_subtype_t) 12)
 #define CPU_SUBTYPE_ARM_V6M		((cpu_subtype_t) 14) /* Not meant to be run under xnu */
 #define CPU_SUBTYPE_ARM_V7M		((cpu_subtype_t) 15) /* Not meant to be run under xnu */
 #define CPU_SUBTYPE_ARM_V7EM		((cpu_subtype_t) 16) /* Not meant to be run under xnu */
+
+#define CPU_SUBTYPE_ARM_V8		((cpu_subtype_t) 13)
+
+/*
+ *  ARM64 subtypes
+ */
+#define CPU_SUBTYPE_ARM64_ALL           ((cpu_subtype_t) 0)
+#define CPU_SUBTYPE_ARM64_V8            ((cpu_subtype_t) 1)
 
 #endif /* !__ASSEMBLER__ */
 
@@ -389,7 +399,9 @@ __END_DECLS
 #define CPUFAMILY_ARM_12		0xbd1b0ae9
 #define CPUFAMILY_ARM_13		0x0cc90e64
 #define CPUFAMILY_ARM_14		0x96077ef1
+#define CPUFAMILY_ARM_15		0xa8511bca
 #define CPUFAMILY_ARM_SWIFT 		0x1e2d6381
+#define CPUFAMILY_ARM_CYCLONE		0x37a09642
 
 /* The following synonyms are deprecated: */
 #define CPUFAMILY_INTEL_6_14	CPUFAMILY_INTEL_YONAH

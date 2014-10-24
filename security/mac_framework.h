@@ -142,13 +142,6 @@ typedef struct OSObject *io_object_t;
 /*@ macros */
 #define	VNODE_LABEL_CREATE	1
 
-#if CONFIG_MACF_MACH
-#define mac_task_label_update_cred(cred, task)				\
-        mac_task_label_update_internal(((cred)->cr_label), task)
-#else
-#define mac_task_label_update_cred(cred, task)
-#endif
-
 /*@ === */
 int	mac_audit_check_postselect(kauth_cred_t cred, unsigned short syscode,
 	    void *args, int error, int retval, int mac_forced);
@@ -161,8 +154,9 @@ void	mac_bpfdesc_label_associate(kauth_cred_t cred, struct bpf_d *bpf_d);
 int	mac_cred_check_label_update(kauth_cred_t cred,
 	    struct label *newlabel);
 int	mac_cred_check_label_update_execve(vfs_context_t ctx,
-	    struct vnode *vp, struct vnode *scriptvp, struct label *scriptvnodelabel, 
-	    struct label *execlabel, proc_t proc, void *macextensions);
+	    struct vnode *vp, off_t offset, struct vnode *scriptvp,
+	    struct label *scriptvnodelabel, struct label *execlabel,
+	    proc_t proc, void *macextensions);
 int	mac_cred_check_visible(kauth_cred_t u1, kauth_cred_t u2);
 struct label	*mac_cred_label_alloc(void);
 void	mac_cred_label_associate(kauth_cred_t cred_parent,
@@ -176,9 +170,10 @@ void	mac_cred_label_free(struct label *label);
 void	mac_cred_label_init(kauth_cred_t cred);
 int	mac_cred_label_compare(struct label *a, struct label *b);
 void	mac_cred_label_update(kauth_cred_t cred, struct label *newlabel);
-int	mac_cred_label_update_execve(vfs_context_t ctx, kauth_cred_t newcred,
-	    struct vnode *vp, struct vnode *scriptvp, struct label *scriptvnodelabel,
-	    struct label *execlabel, void *macextensions);
+void	mac_cred_label_update_execve(vfs_context_t ctx, kauth_cred_t newcred,
+	    struct vnode *vp, off_t offset, struct vnode *scriptvp,
+	    struct label *scriptvnodelabel, struct label *execlabel, u_int *csflags,
+	    void *macextensions, int *disjoint, int *labelupdateerror);
 void	mac_devfs_label_associate_device(dev_t dev, struct devnode *de,
 	    const char *fullpath);
 void	mac_devfs_label_associate_directory(const char *dirname, int dirnamelen,
@@ -232,6 +227,8 @@ void	mac_inpcb_label_update(struct socket *so);
 int	mac_iokit_check_device(char *devtype, struct mac_module_data *mdata);
 int	mac_iokit_check_open(kauth_cred_t cred, io_object_t user_client, unsigned int user_client_type);
 int	mac_iokit_check_set_properties(kauth_cred_t cred, io_object_t registry_entry, io_object_t properties);
+int	mac_iokit_check_filter_properties(kauth_cred_t cred, io_object_t registry_entry);
+int	mac_iokit_check_get_property(kauth_cred_t cred, io_object_t registry_entry, const char *name);
 int	mac_iokit_check_hid_control(kauth_cred_t cred);
 void	mac_ipq_label_associate(struct mbuf *fragment, struct ipq *ipq);
 int	mac_ipq_label_compare(struct mbuf *fragment, struct ipq *ipq);
@@ -340,6 +337,7 @@ int	mac_proc_check_fork(proc_t proc);
 int	mac_proc_check_suspend_resume(proc_t proc, int sr);
 int	mac_proc_check_get_task_name(kauth_cred_t cred, struct proc *p);
 int	mac_proc_check_get_task(kauth_cred_t cred, struct proc *p);
+int	mac_proc_check_inherit_ipc_ports(struct proc *p, struct vnode *cur_vp, off_t cur_offset, struct vnode *img_vp, off_t img_offset, struct vnode *scriptvp);
 int	mac_proc_check_getaudit(proc_t proc);
 int	mac_proc_check_getauid(proc_t proc);
 int     mac_proc_check_getlcid(proc_t proc1, proc_t proc2,
@@ -410,9 +408,9 @@ int	mac_system_check_reboot(kauth_cred_t cred, int howto);
 int	mac_system_check_settime(kauth_cred_t cred);
 int	mac_system_check_swapoff(kauth_cred_t cred, struct vnode *vp);
 int	mac_system_check_swapon(kauth_cred_t cred, struct vnode *vp);
-int	mac_system_check_sysctl(kauth_cred_t cred, int *name,
-	    u_int namelen, user_addr_t oldctl, user_addr_t oldlenp, int inkernel,
-	    user_addr_t newctl, size_t newlen);
+int	mac_system_check_sysctlbyname(kauth_cred_t cred, const char *namestring, int *name,
+				      u_int namelen, user_addr_t oldctl, size_t oldlen,
+				      user_addr_t newctl, size_t newlen);
 int	mac_system_check_kas_info(kauth_cred_t cred, int selector);
 void	mac_sysvmsg_label_associate(kauth_cred_t cred,
 	    struct msqid_kernel *msqptr, struct msg *msgptr);
@@ -477,7 +475,8 @@ int	mac_vnode_check_exec(vfs_context_t ctx, struct vnode *vp,
 	    struct image_params *imgp);
 int	mac_vnode_check_fsgetpath(vfs_context_t ctx, struct vnode *vp);
 int	mac_vnode_check_signature(struct vnode *vp, off_t macho_offset,
-	    unsigned char *sha1, void * signature, size_t size);
+	    unsigned char *sha1, const void * signature, size_t size, 
+	    int *is_platform_binary);
 int     mac_vnode_check_getattrlist(vfs_context_t ctx, struct vnode *vp,
 	    struct attrlist *alist);
 int	mac_vnode_check_getextattr(vfs_context_t ctx, struct vnode *vp,
@@ -499,10 +498,9 @@ int	mac_vnode_check_read(vfs_context_t ctx,
 	    kauth_cred_t file_cred, struct vnode *vp);
 int	mac_vnode_check_readdir(vfs_context_t ctx, struct vnode *vp);
 int	mac_vnode_check_readlink(vfs_context_t ctx, struct vnode *vp);
-int	mac_vnode_check_rename_from(vfs_context_t ctx, struct vnode *dvp,
-	    struct vnode *vp, struct componentname *cnp);
-int	mac_vnode_check_rename_to(vfs_context_t ctx, struct vnode *dvp,
-	    struct vnode *vp, int samedir, struct componentname *cnp);
+int	mac_vnode_check_rename(vfs_context_t ctx, struct vnode *dvp,
+	    struct vnode *vp, struct componentname *cnp, struct vnode *tdvp,
+	    struct vnode *tvp, struct componentname *tcnp);
 int	mac_vnode_check_revoke(vfs_context_t ctx, struct vnode *vp);
 int	mac_vnode_check_searchfs(vfs_context_t ctx, struct vnode *vp,
 	    struct attrlist *alist);

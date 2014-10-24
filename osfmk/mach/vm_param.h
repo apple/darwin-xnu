@@ -245,6 +245,7 @@ extern vm_offset_t		vm_kernel_etext;
 extern vm_offset_t		vm_kernel_base;
 extern vm_offset_t		vm_kernel_top;
 extern vm_offset_t		vm_kernel_slide;
+extern vm_offset_t		vm_hib_base;
 extern vm_offset_t		vm_kernel_addrperm;
 
 extern vm_offset_t		vm_kext_base;
@@ -256,18 +257,60 @@ extern vm_offset_t		vm_kext_top;
 #define VM_KERNEL_IS_KEXT(_o)                                                  \
                 (((vm_offset_t)(_o) >= vm_kext_base) &&                        \
                  ((vm_offset_t)(_o) <  vm_kext_top))
+
+#define VM_KERNEL_SLIDE(_u)						       \
+		((vm_offset_t)(_u) + vm_kernel_slide)
+
+/*
+ * The following macros are to be used when exposing kernel addresses to
+ * userspace via any of the various debug or info facilities that might exist
+ * (e.g. stackshot, proc_info syscall, etc.). It is important to understand
+ * the goal of each macro and choose the right one depending on what you are
+ * trying to do. Misuse of these macros can result in critical data leaks
+ * which in turn lead to all sorts of system vulnerabilities.
+ *
+ * Note that in general the ideal goal is to protect addresses from userspace
+ * in a way that is reversible assuming you know the permutation and/or slide.
+ *
+ * The macros are as follows:
+ * 
+ * VM_KERNEL_UNSLIDE:
+ *     Use this macro when you are exposing an address to userspace which is
+ *     a "static" kernel or kext address (i.e. coming from text or data
+ *     sections). These are the addresses which get "slid" via ASLR on kernel
+ *     or kext load, and it's precisely the slide value we are trying to
+ *     protect from userspace.
+ *
+ * VM_KERNEL_ADDRPERM:
+ *     Use this macro when you are exposing an address to userspace which is
+ *     coming from the kernel's "heap". Since these adresses are not "loaded"
+ *     from anywhere, there is no slide applied and we instead apply the
+ *     permutation value to obscure the address.
+ *
+ * VM_KERNEL_UNSLIDE_OR_ADDRPERM:
+ *     Use this macro when you are exposing an address to userspace that could
+ *     come from either kernel text/data *or* the heap. This is a rare case,
+ *     but one that does come up and must be handled correctly.
+ *
+ * Nesting of these macros should be considered invalid.
+ */
 #define VM_KERNEL_UNSLIDE(_v)						       \
 		((VM_KERNEL_IS_SLID(_v) ||				       \
 		  VM_KERNEL_IS_KEXT(_v)) ?				       \
 			(vm_offset_t)(_v) - vm_kernel_slide :		       \
 			(vm_offset_t)(_v))
-#define VM_KERNEL_SLIDE(_u)						       \
-		((vm_offset_t)(_u) + vm_kernel_slide)
 
-#define	VM_KERNEL_ADDRPERM(_v)							\
-		(((vm_offset_t)(_v) == 0) ?					\
-			(vm_offset_t)(0) :					\
+#define	VM_KERNEL_ADDRPERM(_v)						       \
+		(((vm_offset_t)(_v) == 0) ?				       \
+			(vm_offset_t)(0) :				       \
 			(vm_offset_t)(_v) + vm_kernel_addrperm)
+
+#define VM_KERNEL_UNSLIDE_OR_PERM(_v)					       \
+		((VM_KERNEL_IS_SLID(_v) ||				       \
+		  VM_KERNEL_IS_KEXT(_v)) ?				       \
+			(vm_offset_t)(_v) - vm_kernel_slide :		       \
+			VM_KERNEL_ADDRPERM(_v))
+	
 
 #endif	/* XNU_KERNEL_PRIVATE */
 

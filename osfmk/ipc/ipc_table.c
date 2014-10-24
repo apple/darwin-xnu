@@ -129,7 +129,7 @@ ipc_table_fill(
 				index++;
 			}
 		}
-		if (incrsize < (PAGE_SIZE << 3))
+		if (incrsize < (vm_size_t)(PAGE_SIZE << 3))
 			incrsize <<= 1;
 	}
 }

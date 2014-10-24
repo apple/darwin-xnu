@@ -140,46 +140,11 @@ struct mac_label_element {
 LIST_HEAD(mac_label_element_list_t, mac_label_element);
 
 /*
- * Journal operations
- */
-
-#define	MLJ_TYPE_PORT		1
-#define	MLJ_TYPE_TASK		2
-
-#define	MLJ_PORT_OP_INIT	0x0001
-#define	MLJ_PORT_OP_CREATE_K	0x0002
-#define	MLJ_PORT_OP_CREATE	0x0004
-#define	MLJ_PORT_OP_UPDATE	0x0008
-
-#define	MLJ_TASK_OP_INIT	0x0001
-#define	MLJ_TASK_OP_CREATE_K	0x0002
-
-struct mac_label_journal {
-	struct label *l;
-	int type;
-	int ops;
-
-	int kotype;	/* Kernel Port */
-
-	TAILQ_ENTRY(mac_label_journal) link;
-};
-TAILQ_HEAD(mac_label_journal_list_t, mac_label_journal);
-
-int	mac_label_journal_add	(struct label *, int);
-int	mac_label_journal_remove(struct label *);
-struct mac_label_journal *
-	mac_label_journal_find	(struct label *);
-int	mac_label_journal	(struct label *, int, ...);
-void	mac_label_journal_replay(void);
-
-
-/*
  * MAC Framework global variables.
  */
 
 extern struct mac_label_element_list_t mac_label_element_list;
 extern struct mac_label_element_list_t mac_static_label_element_list;
-extern struct mac_label_journal_list_t mac_label_journal_list;
 
 extern struct mac_policy_list mac_policy_list;
 

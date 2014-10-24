@@ -33,7 +33,7 @@
 #include <i386/cpuid.h>
 #include <i386/machine_cpu.h>
 #include <i386/pmCPU.h>
-#include <i386/lock.h>
+#include <i386/bit_routines.h>
 
 #define DIVISOR_GUARD(denom)				\
 	if ((denom) == 0) {				\

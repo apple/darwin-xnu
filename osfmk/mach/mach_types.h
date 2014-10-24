@@ -86,6 +86,7 @@
 #include <mach/message.h>
 #include <mach/exception_types.h>
 #include <mach/port.h>
+#include <mach/mach_voucher_types.h>
 #include <mach/processor_info.h>
 #include <mach/task_info.h>
 #include <mach/task_policy.h>
@@ -118,6 +119,7 @@
 typedef struct task			*task_t, *task_name_t, *task_suspension_token_t;
 typedef struct thread		*thread_t, *thread_act_t;
 typedef struct ipc_space		*ipc_space_t;
+typedef struct coalition		*coalition_t;
 typedef struct host			*host_t;
 typedef struct host			*host_priv_t;
 typedef struct host			*host_security_t;
@@ -129,6 +131,7 @@ typedef struct ledger 			*ledger_t;
 typedef	struct alarm			*alarm_t;
 typedef	struct clock			*clock_serv_t;
 typedef	struct clock			*clock_ctrl_t;
+
 
 /*
  * OBSOLETE: lock_set interfaces are obsolete.
@@ -166,6 +169,7 @@ typedef mach_port_t		task_suspension_token_t;
 typedef mach_port_t		thread_t;
 typedef	mach_port_t		thread_act_t;
 typedef mach_port_t		ipc_space_t;
+typedef mach_port_t		coalition_t;
 typedef mach_port_t		host_t;
 typedef mach_port_t		host_priv_t;
 typedef mach_port_t		host_security_t;
@@ -253,6 +257,7 @@ typedef exception_handler_array_t exception_port_arrary_t;
 #define TID_NULL		((uint64_t) 0)
 #define THR_ACT_NULL 		((thread_act_t) 0)
 #define IPC_SPACE_NULL		((ipc_space_t) 0)
+#define COALITION_NULL		((coalition_t) 0)
 #define HOST_NULL		((host_t) 0)
 #define HOST_PRIV_NULL		((host_priv_t)0)
 #define HOST_SECURITY_NULL	((host_security_t)0)

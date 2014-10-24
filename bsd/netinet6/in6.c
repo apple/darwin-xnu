@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2003-2013 Apple Inc. All rights reserved.
+ * Copyright (c) 2003-2014 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -134,7 +134,6 @@
 #include <netinet/ip6.h>
 #include <netinet6/ip6_var.h>
 #include <netinet6/mld6_var.h>
-#include <netinet6/ip6_mroute.h>
 #include <netinet6/in6_ifattach.h>
 #include <netinet6/scope6_var.h>
 #include <netinet6/in6_var.h>
@@ -172,8 +171,6 @@ const struct sockaddr_in6 sa6_any = {
 	sizeof (sa6_any), AF_INET6, 0, 0, IN6ADDR_ANY_INIT, 0
 };
 
-static int in6ctl_lifaddr(struct ifnet *, u_long, struct if_laddrreq *,
-    boolean_t);
 static int in6ctl_associd(struct socket *, u_long, caddr_t);
 static int in6ctl_connid(struct socket *, u_long, caddr_t);
 static int in6ctl_conninfo(struct socket *, u_long, caddr_t);
@@ -762,6 +759,7 @@ static __attribute__((noinline)) int
 in6ctl_llstop(struct ifnet *ifp)
 {
 	struct in6_ifaddr *ia;
+	struct nd_prefix pr0, *pr;
 
 	VERIFY(ifp != NULL);
 
@@ -794,6 +792,23 @@ in6ctl_llstop(struct ifnet *ifp)
 		ia = ia->ia_next;
 	}
 	lck_rw_done(&in6_ifaddr_rwlock);
+
+	/* Delete the link local prefix */
+	bzero(&pr0, sizeof(pr0));
+	pr0.ndpr_plen = 64;
+	pr0.ndpr_ifp = ifp;
+	pr0.ndpr_prefix.sin6_addr.s6_addr16[0] = IPV6_ADDR_INT16_ULL;
+	in6_setscope(&pr0.ndpr_prefix.sin6_addr, ifp, NULL);
+	pr = nd6_prefix_lookup(&pr0);
+	if (pr) {
+		lck_mtx_lock(nd6_mutex);
+		NDPR_LOCK(pr);
+		prelist_remove(pr);
+		NDPR_UNLOCK(pr);
+		NDPR_REMREF(pr); /* Drop the reference from lookup */
+		lck_mtx_unlock(nd6_mutex);
+	}
+
 	return (0);
 }
 
@@ -1090,14 +1105,6 @@ in6_control(struct socket *so, u_long cmd, caddr_t data, struct ifnet *ifp,
 	 * ioctls which don't require ifp, may require socket.
 	 */
 	switch (cmd) {
-#if MROUTING
-	case SIOCGETSGCNT_IN6:		/* struct sioc_sg_req6 */
-	case SIOCGETMIFCNT_IN6_32:	/* struct sioc_mif_req6_32 */
-	case SIOCGETMIFCNT_IN6_64:	/* struct sioc_mif_req6_64 */
-		return (mrt6_ioctl(cmd, data));
-		/* NOTREACHED */
-#endif /* MROUTING */
-
 	case SIOCAADDRCTL_POLICY:	/* struct in6_addrpolicy */
 	case SIOCDADDRCTL_POLICY:	/* struct in6_addrpolicy */
 		if (!privileged)
@@ -1235,22 +1242,7 @@ in6_control(struct socket *so, u_long cmd, caddr_t data, struct ifnet *ifp,
 	case SIOCGSCOPE6DEF:		/* struct in6_ifreq (deprecated) */
 		return (EOPNOTSUPP);
 		/* NOTREACHED */
-
-	case SIOCALIFADDR:		/* struct if_laddrreq */
-	case SIOCDLIFADDR:		/* struct if_laddrreq */
-		if (!privileged)
-			return (EPERM);
-		/* FALLTHRU */
-	case SIOCGLIFADDR: {		/* struct if_laddrreq */
-		struct if_laddrreq iflr;
-
-		bcopy(data, &iflr, sizeof (iflr));
-		error = in6ctl_lifaddr(ifp, cmd, &iflr, p64);
-		bcopy(&iflr, data, sizeof (iflr));
-		return (error);
-		/* NOTREACHED */
-	}
-
+	
 	case SIOCLL_CGASTART_32:	/* struct in6_llstartreq_32 */
 	case SIOCLL_CGASTART_64:	/* struct in6_llstartreq_64 */
 		if (!privileged)
@@ -1803,6 +1795,13 @@ in6_ifaupdate_aux(struct in6_ifaddr *ia, struct ifnet *ifp, int ifaupflags)
 	ifa = &ia->ia_ifa;
 	in6m_sol = NULL;
 
+	nd6log2((LOG_DEBUG, "%s - %s ifp %s ia6_flags 0x%x ifaupflags 0x%x\n",
+	    __func__,
+	    ip6_sprintf(&ia->ia_addr.sin6_addr),
+	    if_name(ia->ia_ifp),
+	    ia->ia6_flags,
+	    ifaupflags));
+
 	/*
 	 * Mark the address as tentative before joining multicast addresses,
 	 * so that corresponding MLD responses would not have a tentative
@@ -2011,7 +2010,13 @@ in6_ifaupdate_aux(struct in6_ifaddr *ia, struct ifnet *ifp, int ifaupflags)
 
 		IFA_UNLOCK(ifa);
 		delayptr = NULL;
-		if ((ifaupflags & IN6_IFAUPDATE_DADDELAY)) {
+		/*
+		 * Avoid the DAD delay if the caller wants us to skip it.
+		 * This is not compliant with RFC 2461, but it's only being
+		 * used for signalling and not for actual DAD.
+		 */
+		if ((ifaupflags & IN6_IFAUPDATE_DADDELAY) &&
+		    !(ia->ia6_flags & IN6_IFF_SWIFTDAD)) {
 			/*
 			 * We need to impose a delay before sending an NS
 			 * for DAD.  Check if we also needed a delay for the
@@ -2383,7 +2388,7 @@ in6_purgeaddr(struct ifaddr *ifa)
 
 	/* in6_unlink_ifa() will need exclusive access */
 	in6_unlink_ifa(ia, ifp);
-	in6_post_msg(ifp, KEV_INET6_ADDR_DELETED, ia);
+	in6_post_msg(ifp, KEV_INET6_ADDR_DELETED, ia, NULL);
 
 	(void) ifnet_notify_address(ifp, AF_INET6);
 }
@@ -2506,341 +2511,6 @@ in6_purgeif(struct ifnet *ifp)
 	lck_rw_done(&in6_ifaddr_rwlock);
 
 	in6_ifdetach(ifp);
-}
-
-/*
- * SIOC[GAD]LIFADDR.
- *	SIOCGLIFADDR: get first address. (?)
- *	SIOCGLIFADDR with IFLR_PREFIX:
- *		get first address that matches the specified prefix.
- *	SIOCALIFADDR: add the specified address.
- *	SIOCALIFADDR with IFLR_PREFIX:
- *		add the specified prefix, filling hostaddr part from
- *		the first link-local address.  prefixlen must be <= 64.
- *	SIOCDLIFADDR: delete the specified address.
- *	SIOCDLIFADDR with IFLR_PREFIX:
- *		delete the first address that matches the specified prefix.
- * return values:
- *	EINVAL on invalid parameters
- *	EADDRNOTAVAIL on prefix match failed/specified address not found
- *	other values may be returned from in6_ioctl()
- *
- * NOTE: SIOCALIFADDR(with IFLR_PREFIX set) allows prefixlen less than 64.
- * this is to accomodate address naming scheme other than RFC2374,
- * in the future.
- * RFC2373 defines interface id to be 64bit, but it allows non-RFC2374
- * address encoding scheme. (see figure on page 8)
- */
-static __attribute__((noinline)) int
-in6ctl_lifaddr(struct ifnet *ifp, u_long cmd, struct if_laddrreq *iflr,
-    boolean_t p64)
-{
-	struct in6_aliasreq ifra;
-	struct ifaddr *ifa;
-	struct sockaddr *sa;
-
-	VERIFY(ifp != NULL);
-
-	switch (cmd) {
-	case SIOCGLIFADDR:
-		/* address must be specified on GET with IFLR_PREFIX */
-		if (!(iflr->flags & IFLR_PREFIX))
-			break;
-		/* FALLTHROUGH */
-	case SIOCALIFADDR:
-	case SIOCDLIFADDR:
-		/* address must be specified on ADD and DELETE */
-		sa = (struct sockaddr *)&iflr->addr;
-		if (sa->sa_family != AF_INET6)
-			return (EINVAL);
-		if (sa->sa_len != sizeof (struct sockaddr_in6))
-			return (EINVAL);
-		/* XXX need improvement */
-		sa = (struct sockaddr *)&iflr->dstaddr;
-		if (sa->sa_family && sa->sa_family != AF_INET6)
-			return (EINVAL);
-		if (sa->sa_len && sa->sa_len != sizeof (struct sockaddr_in6))
-			return (EINVAL);
-		break;
-	default:
-		/* shouldn't happen */
-		VERIFY(0);
-		/* NOTREACHED */
-	}
-	if (sizeof (struct in6_addr) * 8 < iflr->prefixlen)
-		return (EINVAL);
-
-	switch (cmd) {
-	case SIOCALIFADDR: {
-		struct in6_addr hostaddr;
-		int prefixlen;
-		int hostid_found = 0;
-
-		if ((iflr->flags & IFLR_PREFIX) != 0) {
-			struct sockaddr_in6 *sin6;
-
-			/*
-			 * hostaddr is to fill in the hostaddr part of the
-			 * address.  hostaddr points to the first link-local
-			 * address attached to the interface.
-			 */
-			ifa = (struct ifaddr *)in6ifa_ifpforlinklocal(ifp, 0);
-			if (!ifa)
-				return (EADDRNOTAVAIL);
-			IFA_LOCK_SPIN(ifa);
-			hostaddr = *IFA_IN6(ifa);
-			IFA_UNLOCK(ifa);
-			hostid_found = 1;
-			IFA_REMREF(ifa);
-			ifa = NULL;
-
-			/* prefixlen must be <= 64. */
-			if (64 < iflr->prefixlen)
-				return (EINVAL);
-			prefixlen = iflr->prefixlen;
-
-			/* hostid part must be zero. */
-			sin6 = (struct sockaddr_in6 *)&iflr->addr;
-			if (sin6->sin6_addr.s6_addr32[2] != 0 ||
-			    sin6->sin6_addr.s6_addr32[3] != 0) {
-				return (EINVAL);
-			}
-		} else {
-			prefixlen = iflr->prefixlen;
-		}
-		/* copy args to in6_aliasreq, perform ioctl(SIOCAIFADDR_IN6). */
-		bzero(&ifra, sizeof (ifra));
-		bcopy(iflr->iflr_name, ifra.ifra_name, sizeof (ifra.ifra_name));
-
-		bcopy(&iflr->addr, &ifra.ifra_addr,
-		    ((struct sockaddr *)&iflr->addr)->sa_len);
-		if (hostid_found) {
-			/* fill in hostaddr part */
-			ifra.ifra_addr.sin6_addr.s6_addr32[2] =
-			    hostaddr.s6_addr32[2];
-			ifra.ifra_addr.sin6_addr.s6_addr32[3] =
-			    hostaddr.s6_addr32[3];
-		}
-
-		if (((struct sockaddr *)&iflr->dstaddr)->sa_family) { /* XXX */
-			bcopy(&iflr->dstaddr, &ifra.ifra_dstaddr,
-			    ((struct sockaddr *)&iflr->dstaddr)->sa_len);
-			if (hostid_found) {
-				ifra.ifra_dstaddr.sin6_addr.s6_addr32[2] =
-				    hostaddr.s6_addr32[2];
-				ifra.ifra_dstaddr.sin6_addr.s6_addr32[3] =
-				    hostaddr.s6_addr32[3];
-			}
-		}
-
-		ifra.ifra_prefixmask.sin6_len = sizeof (struct sockaddr_in6);
-		in6_prefixlen2mask(&ifra.ifra_prefixmask.sin6_addr, prefixlen);
-
-		ifra.ifra_flags = iflr->flags & ~IFLR_PREFIX;
-		if (!p64) {
-#if defined(__LP64__)
-			struct in6_aliasreq_32 ifra_32;
-			/*
-			 * Use 32-bit ioctl and structure for 32-bit process.
-			 */
-			in6_aliasreq_64_to_32((struct in6_aliasreq_64 *)&ifra,
-			    &ifra_32);
-			return (in6_control(NULL, SIOCAIFADDR_IN6_32,
-			    (caddr_t)&ifra_32, ifp, kernproc));
-#else
-			return (in6_control(NULL, SIOCAIFADDR_IN6,
-			    (caddr_t)&ifra, ifp, kernproc));
-#endif /* __LP64__ */
-		} else {
-#if defined(__LP64__)
-			return (in6_control(NULL, SIOCAIFADDR_IN6,
-			    (caddr_t)&ifra, ifp, kernproc));
-#else
-			struct in6_aliasreq_64 ifra_64;
-			/*
-			 * Use 64-bit ioctl and structure for 64-bit process.
-			 */
-			in6_aliasreq_32_to_64((struct in6_aliasreq_32 *)&ifra,
-			    &ifra_64);
-			return (in6_control(NULL, SIOCAIFADDR_IN6_64,
-			    (caddr_t)&ifra_64, ifp, kernproc));
-#endif /* __LP64__ */
-		}
-		/* NOTREACHED */
-	}
-
-	case SIOCGLIFADDR:
-	case SIOCDLIFADDR: {
-		struct in6_ifaddr *ia;
-		struct in6_addr mask, candidate, match;
-		struct sockaddr_in6 *sin6;
-		int cmp;
-
-		bzero(&mask, sizeof (mask));
-		if (iflr->flags & IFLR_PREFIX) {
-			/* lookup a prefix rather than address. */
-			in6_prefixlen2mask(&mask, iflr->prefixlen);
-
-			sin6 = (struct sockaddr_in6 *)&iflr->addr;
-			bcopy(&sin6->sin6_addr, &match, sizeof (match));
-			match.s6_addr32[0] &= mask.s6_addr32[0];
-			match.s6_addr32[1] &= mask.s6_addr32[1];
-			match.s6_addr32[2] &= mask.s6_addr32[2];
-			match.s6_addr32[3] &= mask.s6_addr32[3];
-
-			/* if you set extra bits, that's wrong */
-			if (bcmp(&match, &sin6->sin6_addr, sizeof (match)))
-				return (EINVAL);
-
-			cmp = 1;
-		} else {
-			if (cmd == SIOCGLIFADDR) {
-				/* on getting an address, take the 1st match */
-				cmp = 0;	/* XXX */
-			} else {
-				/* on deleting an address, do exact match */
-				in6_prefixlen2mask(&mask, 128);
-				sin6 = (struct sockaddr_in6 *)&iflr->addr;
-				bcopy(&sin6->sin6_addr, &match, sizeof (match));
-
-				cmp = 1;
-			}
-		}
-
-		ifnet_lock_shared(ifp);
-		TAILQ_FOREACH(ifa, &ifp->if_addrlist, ifa_list) {
-			IFA_LOCK(ifa);
-			if (ifa->ifa_addr->sa_family != AF_INET6) {
-				IFA_UNLOCK(ifa);
-				continue;
-			}
-			if (!cmp) {
-				IFA_UNLOCK(ifa);
-				break;
-			}
-
-			bcopy(IFA_IN6(ifa), &candidate, sizeof (candidate));
-			IFA_UNLOCK(ifa);
-			/*
-			 * XXX: this is adhoc, but is necessary to allow
-			 * a user to specify fe80::/64 (not /10) for a
-			 * link-local address.
-			 */
-			if (IN6_IS_ADDR_LINKLOCAL(&candidate))
-				candidate.s6_addr16[1] = 0;
-			candidate.s6_addr32[0] &= mask.s6_addr32[0];
-			candidate.s6_addr32[1] &= mask.s6_addr32[1];
-			candidate.s6_addr32[2] &= mask.s6_addr32[2];
-			candidate.s6_addr32[3] &= mask.s6_addr32[3];
-			if (IN6_ARE_ADDR_EQUAL(&candidate, &match))
-				break;
-		}
-		if (ifa != NULL)
-			IFA_ADDREF(ifa);
-		ifnet_lock_done(ifp);
-		if (!ifa)
-			return (EADDRNOTAVAIL);
-		ia = ifa2ia6(ifa);
-
-		if (cmd == SIOCGLIFADDR) {
-			struct sockaddr_in6 *s6;
-
-			IFA_LOCK(ifa);
-			/* fill in the if_laddrreq structure */
-			bcopy(&ia->ia_addr, &iflr->addr, ia->ia_addr.sin6_len);
-			s6 = (struct sockaddr_in6 *)&iflr->addr;
-			if (IN6_IS_ADDR_LINKLOCAL(&s6->sin6_addr)) {
-				s6->sin6_addr.s6_addr16[1] = 0;
-				s6->sin6_scope_id =
-				    in6_addr2scopeid(ifp, &s6->sin6_addr);
-			}
-			if ((ifp->if_flags & IFF_POINTOPOINT) != 0) {
-				bcopy(&ia->ia_dstaddr, &iflr->dstaddr,
-				    ia->ia_dstaddr.sin6_len);
-				s6 = (struct sockaddr_in6 *)&iflr->dstaddr;
-				if (IN6_IS_ADDR_LINKLOCAL(&s6->sin6_addr)) {
-					s6->sin6_addr.s6_addr16[1] = 0;
-					s6->sin6_scope_id =
-					    in6_addr2scopeid(ifp,
-					    &s6->sin6_addr);
-				}
-			} else
-				bzero(&iflr->dstaddr, sizeof (iflr->dstaddr));
-
-			iflr->prefixlen =
-			    in6_mask2len(&ia->ia_prefixmask.sin6_addr, NULL);
-
-			iflr->flags = ia->ia6_flags;	/* XXX */
-			IFA_UNLOCK(ifa);
-			IFA_REMREF(ifa);
-			return (0);
-		} else {
-			/* fill in6_aliasreq and do ioctl(SIOCDIFADDR_IN6) */
-			bzero(&ifra, sizeof (ifra));
-			bcopy(iflr->iflr_name, ifra.ifra_name,
-			    sizeof (ifra.ifra_name));
-
-			IFA_LOCK(ifa);
-			bcopy(&ia->ia_addr, &ifra.ifra_addr,
-			    ia->ia_addr.sin6_len);
-			if ((ifp->if_flags & IFF_POINTOPOINT) != 0) {
-				bcopy(&ia->ia_dstaddr, &ifra.ifra_dstaddr,
-				    ia->ia_dstaddr.sin6_len);
-			} else {
-				bzero(&ifra.ifra_dstaddr,
-				    sizeof (ifra.ifra_dstaddr));
-			}
-			bcopy(&ia->ia_prefixmask, &ifra.ifra_dstaddr,
-			    ia->ia_prefixmask.sin6_len);
-
-			ifra.ifra_flags = ia->ia6_flags;
-			IFA_UNLOCK(ifa);
-			IFA_REMREF(ifa);
-			if (!p64) {
-#if defined(__LP64__)
-				struct in6_aliasreq_32 ifra_32;
-				/*
-				 * Use 32-bit structure for 32-bit process.
-				 * SIOCDIFADDR_IN6 is encoded with in6_ifreq,
-				 * so it stays the same since the size does
-				 * not change.  The data part of the ioctl,
-				 * however, is of a different structure, i.e.
-				 * in6_aliasreq.
-				 */
-				in6_aliasreq_64_to_32(
-				    (struct in6_aliasreq_64 *)&ifra, &ifra_32);
-				return (in6_control(NULL, SIOCDIFADDR_IN6,
-				    (caddr_t)&ifra_32, ifp, kernproc));
-#else
-				return (in6_control(NULL, SIOCDIFADDR_IN6,
-				    (caddr_t)&ifra, ifp, kernproc));
-#endif /* __LP64__ */
-			} else {
-#if defined(__LP64__)
-				return (in6_control(NULL, SIOCDIFADDR_IN6,
-				    (caddr_t)&ifra, ifp, kernproc));
-#else
-				struct in6_aliasreq_64 ifra_64;
-				/*
-				 * Use 64-bit structure for 64-bit process.
-				 * SIOCDIFADDR_IN6 is encoded with in6_ifreq,
-				 * so it stays the same since the size does
-				 * not change.  The data part of the ioctl,
-				 * however, is of a different structure, i.e.
-				 * in6_aliasreq.
-				 */
-				in6_aliasreq_32_to_64(
-				    (struct in6_aliasreq_32 *)&ifra, &ifra_64);
-				return (in6_control(NULL, SIOCDIFADDR_IN6,
-				    (caddr_t)&ifra_64, ifp, kernproc));
-#endif /* __LP64__ */
-			}
-			/* NOTREACHED */
-		}
-	}
-	}
-
-	return (EOPNOTSUPP);	/* just for safety */
 }
 
 /*
@@ -3765,7 +3435,8 @@ in6if_do_dad(
 	 * for now, even when not marked as using the alternative
 	 * interface.  This is for historical reasons.
 	 */
-	if (ifp->if_eflags & (IFEF_IPV6_ND6ALT|IFEF_LOCALNET_PRIVATE))
+	if (ifp->if_eflags & 
+	    (IFEF_IPV6_ND6ALT|IFEF_LOCALNET_PRIVATE|IFEF_DIRECTLINK))
 		return (0);
 
 	switch (ifp->if_type) {
@@ -3970,7 +3641,8 @@ in6_sin_2_v4mapsin6_in_sock(struct sockaddr **nam)
  * are large enough to span 68 years.
  */
 void
-in6_post_msg(struct ifnet *ifp, u_int32_t event_code, struct in6_ifaddr *ifa)
+in6_post_msg(struct ifnet *ifp, u_int32_t event_code, struct in6_ifaddr *ifa,
+    uint8_t *mac)
 {
 	struct kev_msg ev_msg;
 	struct kev_in6_data in6_event_data;
@@ -4000,11 +3672,15 @@ in6_post_msg(struct ifnet *ifp, u_int32_t event_code, struct in6_ifaddr *ifa)
 	IFA_UNLOCK(&ifa->ia_ifa);
 
 	if (ifp != NULL) {
-		(void) strncpy(&in6_event_data.link_data.if_name[0],
+		(void) strlcpy(&in6_event_data.link_data.if_name[0],
 		    ifp->if_name, IFNAMSIZ);
 		in6_event_data.link_data.if_family = ifp->if_family;
 		in6_event_data.link_data.if_unit  = (u_int32_t)ifp->if_unit;
 	}
+
+	if (mac != NULL)
+		memcpy(&in6_event_data.ia_mac, mac, 
+		    sizeof(in6_event_data.ia_mac));
 
 	ev_msg.dv[0].data_ptr    = &in6_event_data;
 	ev_msg.dv[0].data_length = sizeof (in6_event_data);
@@ -4170,10 +3846,29 @@ in6_ifaddr_trace(struct ifaddr *ifa, int refhold)
 static void
 in6_ifaddr_set_dadprogress(struct in6_ifaddr *ia)
 {
+	struct ifnet* ifp = ia->ia_ifp;
 	uint32_t flags = IN6_IFF_TENTATIVE;
 	uint32_t optdad = nd6_optimistic_dad;
 
-	if (optdad && (ia->ia_ifp->if_eflags & IFEF_IPV6_ROUTER) == 0) {
+	if (optdad) {
+		if ((ifp->if_eflags & IFEF_IPV6_ROUTER) != 0) {
+			optdad = 0;
+		} else {
+			struct nd_ifinfo *ndi;
+
+			lck_rw_lock_shared(nd_if_rwlock);
+			ndi = ND_IFINFO(ifp);
+			VERIFY (ndi != NULL && ndi->initialized);
+			lck_mtx_lock(&ndi->lock);
+			if ((ndi->flags & ND6_IFF_REPLICATED) != 0) {
+				optdad = 0;
+			}
+			lck_mtx_unlock(&ndi->lock);
+			lck_rw_done(nd_if_rwlock);
+		}
+	}
+
+	if (optdad) {
 		if ((optdad & ND6_OPTIMISTIC_DAD_LINKLOCAL) &&
 		    IN6_IS_ADDR_LINKLOCAL(&ia->ia_addr.sin6_addr))
 			flags = IN6_IFF_OPTIMISTIC;
@@ -4194,11 +3889,28 @@ in6_ifaddr_set_dadprogress(struct in6_ifaddr *ia)
 			} else {
 				flags = IN6_IFF_OPTIMISTIC;
 			}
+		} else if ((optdad & ND6_OPTIMISTIC_DAD_MANUAL) &&
+		    (ia->ia6_flags & IN6_IFF_OPTIMISTIC)) {
+		    	/*
+		    	 * rdar://17483438
+		    	 * Bypass tentative for address assignments
+		    	 * not covered above (e.g. manual) upon request
+		    	 */
+			if (!IN6_IS_ADDR_LINKLOCAL(&ia->ia_addr.sin6_addr) &&
+			    !(ia->ia6_flags & IN6_IFF_AUTOCONF) &&
+			    !(ia->ia6_flags & IN6_IFF_DYNAMIC))
+				flags = IN6_IFF_OPTIMISTIC;
 		}
 	}
 
 	ia->ia6_flags &= ~(IN6_IFF_DUPLICATED | IN6_IFF_DADPROGRESS);
 	ia->ia6_flags |= flags;
+	
+	nd6log2((LOG_DEBUG, "%s - %s ifp %s ia6_flags 0x%x\n",
+	    __func__,
+	    ip6_sprintf(&ia->ia_addr.sin6_addr),
+	    if_name(ia->ia_ifp),
+	    ia->ia6_flags));
 }
 
 /*
@@ -4302,7 +4014,7 @@ in6_getconninfo(struct socket *so, connid_t cid, uint32_t *flags,
 
 	/* source address and port */
 	sin6.sin6_port = in6p->in6p_lport;
-	bcopy(&in6p->in6p_laddr, &sin6.sin6_addr, sizeof (struct in6_addr));
+	in6_recoverscope(&sin6, &in6p->in6p_laddr, NULL);
 	if (*src_len == 0) {
 		*src_len = sin6.sin6_len;
 	} else {
@@ -4317,7 +4029,7 @@ in6_getconninfo(struct socket *so, connid_t cid, uint32_t *flags,
 
 	/* destination address and port */
 	sin6.sin6_port = in6p->in6p_fport;
-	bcopy(&in6p->in6p_faddr, &sin6.sin6_addr, sizeof (struct in6_addr));
+	in6_recoverscope(&sin6, &in6p->in6p_faddr, NULL);
 	if (*dst_len == 0) {
 		*dst_len = sin6.sin6_len;
 	} else {
@@ -4377,9 +4089,6 @@ in6ioctl_cassert(void)
 	case 0:
 
 	/* bsd/netinet6/in6_var.h */
-	case SIOCGETSGCNT_IN6:
-	case SIOCGETMIFCNT_IN6_32:
-	case SIOCGETMIFCNT_IN6_64:
 	case SIOCAADDRCTL_POLICY:
 	case SIOCDADDRCTL_POLICY:
 	case SIOCDRADD_IN6_32:

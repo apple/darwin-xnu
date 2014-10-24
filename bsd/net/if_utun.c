@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008-2013 Apple Inc. All rights reserved.
+ * Copyright (c) 2008-2014 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -66,8 +66,11 @@ static errno_t	utun_ctl_getopt(kern_ctl_ref kctlref, u_int32_t unit, void *uniti
 								 int opt, void *data, size_t *len);
 static errno_t	utun_ctl_setopt(kern_ctl_ref kctlref, u_int32_t unit, void *unitinfo,
 								 int opt, void *data, size_t len);
+static void		utun_ctl_rcvd(kern_ctl_ref kctlref, u_int32_t unit, void *unitinfo,
+								int flags);
 
 /* Network Interface functions */
+static void     utun_start(ifnet_t interface);
 static errno_t	utun_output(ifnet_t interface, mbuf_t data);
 static errno_t	utun_demux(ifnet_t interface, mbuf_t data, char *frame_header,
 						   protocol_family_t *protocol);
@@ -134,9 +137,9 @@ utun_register_control(void)
 	}
 	
 	bzero(&kern_ctl, sizeof(kern_ctl));
-	strncpy(kern_ctl.ctl_name, UTUN_CONTROL_NAME, sizeof(kern_ctl.ctl_name));
+	strlcpy(kern_ctl.ctl_name, UTUN_CONTROL_NAME, sizeof(kern_ctl.ctl_name));
 	kern_ctl.ctl_name[sizeof(kern_ctl.ctl_name) - 1] = 0;
-	kern_ctl.ctl_flags = CTL_FLAG_PRIVILEGED; /* Require root */
+	kern_ctl.ctl_flags = CTL_FLAG_PRIVILEGED | CTL_FLAG_REG_EXTENDED; /* Require root */
 	kern_ctl.ctl_sendsize = 512 * 1024;
 	kern_ctl.ctl_recvsize = 512 * 1024;
 	kern_ctl.ctl_connect = utun_ctl_connect;
@@ -144,6 +147,7 @@ utun_register_control(void)
 	kern_ctl.ctl_send = utun_ctl_send;
 	kern_ctl.ctl_setopt = utun_ctl_setopt;
 	kern_ctl.ctl_getopt = utun_ctl_getopt;
+	kern_ctl.ctl_rcvd = utun_ctl_rcvd;
 
 	utun_ctl_init_crypto();
 
@@ -198,6 +202,8 @@ utun_ctl_connect(
 	*unitinfo = pcb;
 	pcb->utun_ctlref = kctlref;
 	pcb->utun_unit = sac->sc_unit;
+	pcb->utun_pending_packets = 0;
+	pcb->utun_max_pending_packets = 1;
 	
 	printf("utun_ctl_connect: creating interface utun%d\n", pcb->utun_unit - 1);
 
@@ -205,12 +211,11 @@ utun_ctl_connect(
 	bzero(&utun_init, sizeof(utun_init));
 	utun_init.ver = IFNET_INIT_CURRENT_VERSION;
 	utun_init.len = sizeof (utun_init);
-	utun_init.flags = IFNET_INIT_LEGACY;
 	utun_init.name = "utun";
+	utun_init.start = utun_start;
 	utun_init.unit = pcb->utun_unit - 1;
 	utun_init.family = utun_family;
 	utun_init.type = IFT_OTHER;
-	utun_init.output = utun_output;
 	utun_init.demux = utun_demux;
 	utun_init.framer_extended = utun_framer;
 	utun_init.add_proto = utun_add_proto;
@@ -557,8 +562,7 @@ utun_ctl_setopt(
 					utsp->utsp_bytes, utsp->utsp_errors);
 			break;
 		}
-
-	        case UTUN_OPT_SET_DELEGATE_INTERFACE: {
+		case UTUN_OPT_SET_DELEGATE_INTERFACE: {
 			ifnet_t		del_ifp = NULL;
 			char            name[IFNAMSIZ];
 
@@ -578,10 +582,24 @@ utun_ctl_setopt(
 			}
 			break;
 		}
-            
-	        default:
+		case UTUN_OPT_MAX_PENDING_PACKETS: {
+			u_int32_t max_pending_packets = 0;
+			if (len != sizeof(u_int32_t)) {
+				result = EMSGSIZE;
+				break;
+			}
+			max_pending_packets = *(u_int32_t *)data;
+			if (max_pending_packets == 0) {
+				result = EINVAL;
+				break;
+			}
+			pcb->utun_max_pending_packets = max_pending_packets;
+			break;
+		}
+		default: {
 			result = ENOPROTOOPT;
 			break;
+		}
 	}
 
 	return result;
@@ -621,7 +639,11 @@ utun_ctl_getopt(
 		case UTUN_OPT_GENERATE_CRYPTO_KEYS_IDX:
 			result = utun_ctl_generate_crypto_keys_idx(kctlref, unit, unitinfo, opt, data, len);
 			break;
-
+		case UTUN_OPT_MAX_PENDING_PACKETS: {
+			*len = sizeof(u_int32_t);
+			*((u_int32_t *)data) = pcb->utun_max_pending_packets;
+			break;
+		}
 		default:
 			result = ENOPROTOOPT;
 			break;
@@ -630,7 +652,68 @@ utun_ctl_getopt(
 	return result;
 }
 
+static void
+utun_ctl_rcvd(kern_ctl_ref kctlref, u_int32_t unit, void *unitinfo, int flags)
+{
+#pragma unused(kctlref, unit, flags)
+	bool reenable_output = false;
+	struct utun_pcb *pcb = unitinfo;
+	if (pcb == NULL) {
+		return;
+	}
+	ifnet_lock_exclusive(pcb->utun_ifp);
+	if (pcb->utun_pending_packets > 0) {
+		pcb->utun_pending_packets--;
+		if (pcb->utun_pending_packets < pcb->utun_max_pending_packets) {
+			reenable_output = true;
+		}
+	}
+	
+	if (reenable_output) {
+		errno_t error = ifnet_enable_output(pcb->utun_ifp);
+		if (error != 0) {
+			printf("utun_ctl_rcvd: ifnet_enable_output returned error %d\n", error);
+		}
+	}
+	ifnet_lock_done(pcb->utun_ifp);
+}
+
 /* Network Interface functions */
+static void
+utun_start(ifnet_t interface)
+{
+	mbuf_t data;
+	struct utun_pcb*pcb = ifnet_softc(interface);
+	for (;;) {
+		bool can_accept_packets = true;
+		ifnet_lock_shared(pcb->utun_ifp);
+		can_accept_packets = (pcb->utun_pending_packets < pcb->utun_max_pending_packets);
+		if (!can_accept_packets && pcb->utun_ctlref) {
+			u_int32_t difference = 0;
+			if (ctl_getenqueuereadable(pcb->utun_ctlref, pcb->utun_unit, &difference) == 0) {
+				if (difference > 0) {
+					// If the low-water mark has not yet been reached, we still need to enqueue data
+					// into the buffer
+					can_accept_packets = true;
+				}
+			}
+		}
+		if (!can_accept_packets) {
+			errno_t error = ifnet_disable_output(interface);
+			if (error != 0) {
+				printf("utun_start: ifnet_disable_output returned error %d\n", error);
+			}
+			ifnet_lock_done(pcb->utun_ifp);
+			break;
+		}
+		ifnet_lock_done(pcb->utun_ifp);
+		if (ifnet_dequeue(interface, &data) != 0)
+			break;
+		if (utun_output(interface, data) != 0)
+			break;
+	}
+}
+
 static errno_t
 utun_output(
 			   ifnet_t	interface,
@@ -667,8 +750,16 @@ utun_output(
 			*(u_int32_t *)mbuf_data(data) = htonl(*(u_int32_t *)mbuf_data(data));
 
 		length = mbuf_pkthdr_len(data);
+		// Increment packet count optimistically
+		ifnet_lock_exclusive(pcb->utun_ifp);
+		pcb->utun_pending_packets++;
+		ifnet_lock_done(pcb->utun_ifp);
 		result = ctl_enqueuembuf(pcb->utun_ctlref, pcb->utun_unit, data, CTL_DATA_EOR);
 		if (result != 0) {
+			// Decrement packet count if errored
+			ifnet_lock_exclusive(pcb->utun_ifp);
+			pcb->utun_pending_packets--;
+			ifnet_lock_done(pcb->utun_ifp);
 			mbuf_freem(data);
 			printf("utun_output - ctl_enqueuembuf failed: %d\n", result);
 
@@ -685,7 +776,6 @@ utun_output(
 	return 0;
 }
 
-/* Network Interface functions */
 static errno_t
 utun_demux(
 	__unused ifnet_t	interface,

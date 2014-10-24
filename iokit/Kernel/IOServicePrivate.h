@@ -62,6 +62,7 @@ enum {
     kIOServiceTermPhase1State	= 0x00400000,
     kIOServiceTerm1WaiterState  = 0x00200000,
     kIOServiceRecursing		= 0x00100000,
+    kIOServiceNeedWillTerminate = 0x00080000,
 };
 
 // notify state
@@ -121,6 +122,7 @@ public:
     virtual bool disable();
     virtual void enable( bool was );
     virtual void wait();
+    virtual bool init();
 };
 
 class _IOConfigThread : public OSObject

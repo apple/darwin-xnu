@@ -109,10 +109,8 @@
 #define	T_PF_WRITE		0x2		/* write access */
 #define	T_PF_USER		0x4		/* from user state */
 
-#ifdef PAE
 #define	T_PF_RSVD		0x8		/* reserved bit set to 1 */
 #define T_PF_EXECUTE		0x10		/* instruction fetch when NX */
-#endif
 
 #if !defined(ASSEMBLER) && defined(MACH_KERNEL)
 

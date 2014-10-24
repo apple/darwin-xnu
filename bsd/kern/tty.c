@@ -130,7 +130,7 @@ static lck_grp_t	*tty_lck_grp;
 static lck_grp_attr_t	*tty_lck_grp_attr;
 static lck_attr_t      *tty_lck_attr;
 
-static int	ttnread(struct tty *tp);
+__private_extern__ int ttnread(struct tty *tp);
 static void	ttyecho(int c, struct tty *tp);
 static int	ttyoutput(int c, struct tty *tp);
 static void	ttypend(struct tty *tp);
@@ -960,6 +960,29 @@ ttyoutput(int c, struct tty *tp)
 	return (-1);
 }
 
+/*
+ * Sets the tty state to not allow any more changes of foreground process
+ * group. This is required to be done so that a subsequent revoke on a vnode
+ * is able to always successfully complete.
+ *
+ * Locks :   Assumes tty_lock held on entry
+ */
+void
+ttysetpgrphup(struct tty *tp)
+{
+	TTY_LOCK_OWNED(tp);     /* debug assert */
+	SET(tp->t_state, TS_PGRPHUP);
+}
+
+/*
+ * Locks : Assumes tty lock held on entry
+ */
+void
+ttyclrpgrphup(struct tty *tp)
+{
+	TTY_LOCK_OWNED(tp);     /* debug assert */
+	CLR(tp->t_state, TS_PGRPHUP);
+}
 
 /*
  * ttioctl
@@ -1453,6 +1476,15 @@ ttioctl_locked(struct tty *tp, u_long cmd, caddr_t data, int flag, proc_t p)
 			error = EPERM;
 			goto out;
 		}
+		/*
+		 * The session leader is going away and is possibly going to revoke
+		 * the terminal, we can't change the process group when that is the
+		 * case.
+		 */
+		if (ISSET(tp->t_state, TS_PGRPHUP)) {
+			error = EPERM;
+			goto out;
+		}
 		proc_list_lock();
 		oldpg = tp->t_pgrp;
 		tp->t_pgrp = pgrp;
@@ -1570,7 +1602,7 @@ ttselect(dev_t dev, int rw, void *wql, proc_t p)
 /*
  * Locks:	Assumes tp is locked on entry, remains locked on exit
  */
-static int
+__private_extern__ int
 ttnread(struct tty *tp)
 {
 	int nread;

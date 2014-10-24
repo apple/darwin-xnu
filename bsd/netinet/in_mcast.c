@@ -1894,18 +1894,6 @@ inp_getmoptions(struct inpcb *inp, struct sockopt *sopt)
 
 	error = 0;
 	switch (sopt->sopt_name) {
-#ifdef MROUTING
-	case IP_MULTICAST_VIF:
-		if (imo != NULL) {
-			IMO_LOCK(imo);
-			optval = imo->imo_multicast_vif;
-			IMO_UNLOCK(imo);
-		} else
-			optval = -1;
-		error = sooptcopyout(sopt, &optval, sizeof(int));
-		break;
-#endif /* MROUTING */
-
 	case IP_MULTICAST_IF:
 		memset(&mreqn, 0, sizeof(struct ip_mreqn));
 		if (imo != NULL) {
@@ -2919,9 +2907,6 @@ out_imo_locked:
  * it is not possible to merge the duplicate code, because the idempotence
  * of the IPv4 multicast part of the BSD Sockets API must be preserved;
  * the effects of these options must be treated as separate and distinct.
- *
- * FUTURE: The IP_MULTICAST_VIF option may be eliminated if MROUTING
- * is refactored to no longer use vifs.
  */
 int
 inp_setmoptions(struct inpcb *inp, struct sockopt *sopt)
@@ -2943,36 +2928,6 @@ inp_setmoptions(struct inpcb *inp, struct sockopt *sopt)
 		return (EOPNOTSUPP);
 
 	switch (sopt->sopt_name) {
-#if MROUTING
-	case IP_MULTICAST_VIF: {
-		int vifi;
-		/*
-		 * Select a multicast VIF for transmission.
-		 * Only useful if multicast forwarding is active.
-		 */
-		if (legal_vif_num == NULL) {
-			error = EOPNOTSUPP;
-			break;
-		}
-		error = sooptcopyin(sopt, &vifi, sizeof(int), sizeof(int));
-		if (error)
-			break;
-		if (!legal_vif_num(vifi) && (vifi != -1)) {
-			error = EINVAL;
-			break;
-		}
-		imo = inp_findmoptions(inp);
-		if (imo == NULL) {
-			error = ENOMEM;
-			break;
-		}
-		IMO_LOCK(imo);
-		imo->imo_multicast_vif = vifi;
-		IMO_UNLOCK(imo);
-		IMO_REMREF(imo);	/* from inp_findmoptions() */
-		break;
-	}
-#endif
 	case IP_MULTICAST_IF:
 		error = inp_set_multicast_if(inp, sopt);
 		break;

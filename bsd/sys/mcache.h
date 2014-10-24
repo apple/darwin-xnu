@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2006-2013 Apple Inc. All rights reserved.
+ * Copyright (c) 2006-2014 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -324,22 +324,23 @@ typedef struct mcache {
 
 #define	MCACHE_STACK_DEPTH 16
 
+#define	MCA_TRN_MAX	2		/* Number of transactions to record */
+
 typedef struct mcache_audit {
 	struct mcache_audit *mca_next;	/* next audit struct */
 	void		*mca_addr;	/* address of buffer */
 	mcache_t	*mca_cache;	/* parent cache of the buffer */
-	struct thread	*mca_thread;	/* thread doing transaction */
-	struct thread	*mca_pthread;	/* previous transaction thread */
 	size_t		mca_contents_size; /* size of saved contents */
 	void		*mca_contents;	/* user-specific saved contents */
-	uint32_t	mca_tstamp;	/* transaction timestamp (ms) */
-	uint32_t	mca_ptstamp;	/* prev transaction timestamp (ms) */
-	uint16_t	mca_depth;	/* pc stack depth */
-	uint16_t	mca_pdepth;	/* previous transaction pc stack */
-	void		*mca_stack[MCACHE_STACK_DEPTH];
-	void		*mca_pstack[MCACHE_STACK_DEPTH];
 	void		*mca_uptr;	/* user-specific pointer */
 	uint32_t	mca_uflags;	/* user-specific flags */
+	uint32_t	mca_next_trn;
+	struct mca_trn {
+		struct thread	*mca_thread;	/* thread doing transaction */
+		uint32_t	mca_tstamp;
+		uint16_t	mca_depth;
+		void		*mca_stack[MCACHE_STACK_DEPTH];
+	} mca_trns[MCA_TRN_MAX];
 } mcache_audit_t;
 
 __private_extern__ int assfail(const char *, const char *, int);
@@ -358,7 +359,7 @@ __private_extern__ unsigned int mcache_alloc_ext(mcache_t *, mcache_obj_t **,
     unsigned int, int);
 __private_extern__ void mcache_free_ext(mcache_t *, mcache_obj_t *);
 __private_extern__ void mcache_reap(void);
-__private_extern__ boolean_t mcache_purge_cache(mcache_t *);
+__private_extern__ boolean_t mcache_purge_cache(mcache_t *, boolean_t);
 __private_extern__ void mcache_waiter_inc(mcache_t *);
 __private_extern__ void mcache_waiter_dec(mcache_t *);
 __private_extern__ boolean_t mcache_bkt_isempty(mcache_t *);
@@ -377,6 +378,9 @@ __private_extern__ char *mcache_dump_mca(mcache_audit_t *);
 __private_extern__ void mcache_audit_panic(mcache_audit_t *, void *, size_t,
     int64_t, int64_t);
 
+extern int32_t total_sbmb_cnt;
+extern int32_t total_sbmb_cnt_peak;
+extern int64_t sbmb_limreached;
 extern mcache_t *mcache_audit_cache;
 
 #ifdef  __cplusplus

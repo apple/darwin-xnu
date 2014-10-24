@@ -33,7 +33,7 @@
 #include <i386/cpu_topology.h>
 #include <i386/cpu_threads.h>
 #include <i386/machine_cpu.h>
-#include <i386/lock.h>
+#include <i386/bit_routines.h>
 #include <i386/cpu_data.h>
 #include <i386/lapic.h>
 #include <i386/machine_routines.h>
@@ -175,7 +175,7 @@ cpu_topology_sort(int ncpus)
 			if (lcpup->lnum == 0)
 				lprim = cpup->cpu_processor;
 
-			processor_meta_init(cpup->cpu_processor, lprim);
+			processor_set_primary(cpup->cpu_processor, lprim);
 		}
 	}
 }

@@ -101,7 +101,6 @@
 #include <sys/vm.h>
 #include <sys/user.h>		/* for coredump */
 #include <kern/ast.h>		/* for APC support */
-#include <kern/lock.h>
 #include <kern/task.h>		/* extern void   *get_bsdtask_info(task_t); */
 #include <kern/thread.h>
 #include <kern/sched_prim.h>
@@ -1712,7 +1711,7 @@ static void
 psignal_internal(proc_t p, task_t task, thread_t thread, int flavor, int signum)
 {
 	int prop;
-	sig_t action = NULL;
+	user_addr_t action = USER_ADDR_NULL;
 	proc_t 		sig_proc;
 	thread_t	sig_thread;
 	register task_t		sig_task;
@@ -3089,6 +3088,10 @@ proc_signalstart(proc_t p, int locked)
 {
 	if (!locked)
 		proc_lock(p);
+	
+	if(p->p_signalholder == current_thread())
+		panic("proc_signalstart: thread attempting to signal a process for which it holds the signal lock");	
+	
 	p->p_sigwaitcnt++;
 	while ((p->p_lflag & P_LINSIGNAL) == P_LINSIGNAL)
 		msleep(&p->p_sigmask, &p->p_mlock, 0, "proc_signstart", NULL);

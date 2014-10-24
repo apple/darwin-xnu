@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2013 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2014 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -683,6 +683,7 @@ struct ifnet {
 		u_int32_t	type;		/* delegated i/f type */
 		u_int32_t	family;		/* delegated i/f family */
 		u_int32_t	subfamily;	/* delegated i/f sub-family */
+		uint32_t	expensive:1;	/* delegated i/f expensive? */
 	} if_delegated;
 
 	u_int64_t		if_data_threshold;
@@ -988,6 +989,42 @@ struct ifmultiaddr {
 #define	IFNET_IS_WIFI(_ifp)						\
 	((_ifp)->if_subfamily == IFNET_SUBFAMILY_WIFI ||		\
 	(_ifp)->if_delegated.subfamily == IFNET_SUBFAMILY_WIFI)
+
+/*
+ * Indicate whether or not the immediate interface, or the interface delegated
+ * by it, is a Wired interface (several families).  Delegated interface
+ * family is set/cleared along with the delegated ifp; we cache the family
+ * for performance to avoid dereferencing delegated ifp each time.
+ *
+ * Note that this is meant to be used only for accounting and policy purposes;
+ * certain places need to explicitly know the immediate interface type, and
+ * this macro should not be used there.
+ */
+#define	IFNET_IS_WIRED(_ifp)						\
+	((_ifp)->if_family == IFNET_FAMILY_ETHERNET ||			\
+	(_ifp)->if_delegated.family == IFNET_FAMILY_ETHERNET ||		\
+	(_ifp)->if_family == IFNET_FAMILY_FIREWIRE ||			\
+	(_ifp)->if_delegated.family == IFNET_FAMILY_FIREWIRE)
+
+/*
+ * Indicate whether or not the immediate interface, or the interface delegated
+ * by it, is marked as expensive.  The delegated interface is set/cleared 
+ * along with the delegated ifp; we cache the flag for performance to avoid 
+ * dereferencing delegated ifp each time.
+ *
+ * Note that this is meant to be used only for policy purposes.
+ */
+#define	IFNET_IS_EXPENSIVE(_ifp)					\
+	((_ifp)->if_eflags & IFEF_EXPENSIVE ||				\
+	(_ifp)->if_delegated.expensive)
+
+/*
+ * We don't support AWDL interface delegation.
+ */
+#define	IFNET_IS_AWDL_RESTRICTED(_ifp)					\
+	(((_ifp)->if_eflags & (IFEF_AWDL|IFEF_AWDL_RESTRICTED)) == 	\
+	    (IFEF_AWDL|IFEF_AWDL_RESTRICTED))
+
 
 extern struct ifnethead ifnet_head;
 extern struct ifnet **ifindex2ifnet;

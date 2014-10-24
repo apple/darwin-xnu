@@ -72,9 +72,6 @@ void		flow_divert_detach(struct socket *so);
 errno_t		flow_divert_token_set(struct socket *so, struct sockopt *sopt);
 errno_t		flow_divert_token_get(struct socket *so, struct sockopt *sopt);
 errno_t		flow_divert_pcb_init(struct socket *so, uint32_t ctl_unit);
-errno_t		flow_divert_check_policy(struct socket *so, proc_t p, boolean_t match_delegate, uint32_t *ctl_unit);
 errno_t		flow_divert_connect_out(struct socket *so, struct sockaddr *to, proc_t p);
-void		flow_divert_so_init(struct socket *so, proc_t p);
-boolean_t	flow_divert_is_dns_service(struct socket *so);
 
 #endif /* __FLOW_DIVERT_H__ */

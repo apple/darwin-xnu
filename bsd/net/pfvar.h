@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2007-2013 Apple Inc. All rights reserved.
+ * Copyright (c) 2007-2014 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -86,7 +86,7 @@ extern "C" {
 #ifdef KERNEL
 #include <kern/kern_types.h>
 #include <kern/zalloc.h>
-#include <kern/lock.h>
+#include <kern/locks.h>
 
 #include <machine/endian.h>
 #include <sys/systm.h>
@@ -180,8 +180,7 @@ enum	{ PFTM_TCP_FIRST_PACKET, PFTM_TCP_OPENING, PFTM_TCP_ESTABLISHED,
 	  PFTM_ESP_ESTABLISHED, PFTM_OTHER_FIRST_PACKET, PFTM_OTHER_SINGLE,
 	  PFTM_OTHER_MULTIPLE, PFTM_FRAG, PFTM_INTERVAL,
 	  PFTM_ADAPTIVE_START, PFTM_ADAPTIVE_END, PFTM_SRC_NODE,
-	  PFTM_TS_DIFF, PFTM_MAX, PFTM_PURGE, PFTM_UNLINKED,
-	  PFTM_UNTIL_PACKET };
+	  PFTM_TS_DIFF, PFTM_MAX, PFTM_PURGE, PFTM_UNLINKED };
 
 /* PFTM default values */
 #define PFTM_TCP_FIRST_PACKET_VAL	120	/* First TCP packet */
@@ -1794,6 +1793,7 @@ struct pfioc_state_kill {
 	struct pfioc_state_addr_kill	psk_src;
 	struct pfioc_state_addr_kill	psk_dst;
 	char			psk_ifname[IFNAMSIZ];
+	char			psk_ownername[PF_OWNER_NAME_SIZE];
 };
 
 struct pfioc_states {

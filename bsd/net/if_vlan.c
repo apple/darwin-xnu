@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2003-2013 Apple Inc. All rights reserved.
+ * Copyright (c) 2003-2014 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -196,13 +196,15 @@ typedef struct vlan_parent {
     vlan_parent_entry		vlp_parent_list;/* list of parents */
     struct ifnet *		vlp_ifp;	/* interface */
     struct ifvlan_list		vlp_vlan_list;	/* list of VLAN's */
-#define VLPF_SUPPORTS_VLAN_MTU	0x1
-#define VLPF_CHANGE_IN_PROGRESS	0x2
-#define VLPF_DETACHING		0x4
+#define VLPF_SUPPORTS_VLAN_MTU		0x00000001
+#define VLPF_CHANGE_IN_PROGRESS		0x00000002
+#define VLPF_DETACHING			0x00000004
+#define VLPF_LINK_EVENT_REQUIRED	0x00000008
     u_int32_t			vlp_flags;
+    u_int32_t			vlp_event_code;
     struct ifdevmtu		vlp_devmtu;
-    SInt32			vlp_retain_count;
-    UInt32			vlp_signature;	/* VLP_SIGNATURE */
+    int32_t			vlp_retain_count;
+    u_int32_t			vlp_signature;	/* VLP_SIGNATURE */
 } vlan_parent, * vlan_parent_ref;
 
 #define IFV_SIGNATURE		0xbeefbeef
@@ -224,8 +226,8 @@ struct ifvlan {
     u_int32_t			ifv_flags;
     bpf_packet_func		ifv_bpf_input;
     bpf_packet_func		ifv_bpf_output;
-    SInt32			ifv_retain_count;
-    UInt32			ifv_signature;	/* IFV_SIGNATURE */
+    int32_t			ifv_retain_count;
+    u_int32_t			ifv_signature;	/* IFV_SIGNATURE */
 };
 
 typedef struct ifvlan * ifvlan_ref;
@@ -263,13 +265,6 @@ vlan_parent_flags_set_supports_vlan_mtu(vlan_parent_ref vlp)
     return;
 }
 
-static __inline__ void
-vlan_parent_flags_clear_supports_vlan_mtu(vlan_parent_ref vlp)
-{
-    vlp->vlp_flags &= ~VLPF_SUPPORTS_VLAN_MTU;
-    return;
-}
-
 static __inline__ int
 vlan_parent_flags_change_in_progress(vlan_parent_ref vlp)
 {
@@ -300,6 +295,26 @@ static __inline__ void
 vlan_parent_flags_set_detaching(struct vlan_parent * vlp)
 {
     vlp->vlp_flags |= VLPF_DETACHING;
+    return;
+}
+
+static __inline__ int
+vlan_parent_flags_link_event_required(vlan_parent_ref vlp)
+{
+    return ((vlp->vlp_flags & VLPF_LINK_EVENT_REQUIRED) != 0);
+}
+
+static __inline__ void
+vlan_parent_flags_set_link_event_required(vlan_parent_ref vlp)
+{
+    vlp->vlp_flags |= VLPF_LINK_EVENT_REQUIRED;
+    return;
+}
+
+static __inline__ void
+vlan_parent_flags_clear_link_event_required(vlan_parent_ref vlp)
+{
+    vlp->vlp_flags &= ~VLPF_LINK_EVENT_REQUIRED;
     return;
 }
 
@@ -337,13 +352,6 @@ static __inline__ void
 ifvlan_flags_set_ready(ifvlan_ref ifv)
 {
     ifv->ifv_flags |= IFVF_READY;
-    return;
-}
-
-static __inline__ void
-ifvlan_flags_clear_ready(ifvlan_ref ifv)
-{
-    ifv->ifv_flags &= ~IFVF_READY;
     return;
 }
 
@@ -413,7 +421,7 @@ ifvlan_retain(ifvlan_ref ifv)
 static void
 ifvlan_release(ifvlan_ref ifv)
 {
-    UInt32		old_retain_count;
+    u_int32_t		old_retain_count;
 
     if (ifv->ifv_signature != IFV_SIGNATURE) {
 	panic("ifvlan_release: bad signature\n");
@@ -609,7 +617,7 @@ vlan_parent_retain(vlan_parent_ref vlp)
 static void
 vlan_parent_release(vlan_parent_ref vlp)
 {
-    UInt32		old_retain_count;
+    u_int32_t		old_retain_count;
 
     if (vlp->vlp_signature != VLP_SIGNATURE) {
 	panic("vlan_parent_release: signature is bad\n");
@@ -684,12 +692,34 @@ vlan_parent_wait(vlan_parent_ref vlp, const char * msg)
 static void
 vlan_parent_signal(vlan_parent_ref vlp, const char * msg)
 {
+    struct ifnet * vlp_ifp = vlp->vlp_ifp;
+
+    if (vlan_parent_flags_link_event_required(vlp)) {
+	vlan_parent_flags_clear_link_event_required(vlp);
+	if (!vlan_parent_flags_detaching(vlp)) {
+	    u_int32_t		event_code = vlp->vlp_event_code;
+	    ifvlan_ref 		ifv;
+
+	    vlan_unlock();
+
+	    /* we can safely walk the list unlocked */
+	    LIST_FOREACH(ifv, &vlp->vlp_vlan_list, ifv_vlan_list) {
+		struct ifnet *	ifp = ifv->ifv_ifp;
+		
+		interface_link_event(ifp, event_code);
+	    }
+	    if (g_vlan->verbose) {
+		printf("%s%d: propagated link event to vlans\n",
+		       ifnet_name(vlp_ifp), ifnet_unit(vlp_ifp));
+	    }
+	    vlan_lock();
+	}
+    }
     vlan_parent_flags_clear_change_in_progress(vlp);
     wakeup((caddr_t)vlp);
     if (g_vlan->verbose) {
-	struct ifnet * ifp = vlp->vlp_ifp;
-
-	printf("%s%d: %s wakeup\n", ifnet_name(ifp), ifnet_unit(ifp), msg);
+	printf("%s%d: %s wakeup\n",
+	       ifnet_name(vlp_ifp), ifnet_unit(vlp_ifp), msg);
     }
     return;
 }
@@ -2028,7 +2058,7 @@ interface_link_event(struct ifnet * ifp, u_int32_t event_code)
     event.header.event_code    = event_code;
     event.header.event_data[0] = ifnet_family(ifp);
     event.unit                 = (u_int32_t) ifnet_unit(ifp);
-    strncpy(event.if_name, ifnet_name(ifp), IFNAMSIZ);
+    strlcpy(event.if_name, ifnet_name(ifp), IFNAMSIZ);
     ifnet_event(ifp, &event.header);
     return;
 }
@@ -2036,7 +2066,6 @@ interface_link_event(struct ifnet * ifp, u_int32_t event_code)
 static void
 vlan_parent_link_event(struct ifnet * p, u_int32_t event_code)
 {
-    ifvlan_ref 		ifv;
     vlan_parent_ref 	vlp;
 
     vlan_lock();
@@ -2051,25 +2080,15 @@ vlan_parent_link_event(struct ifnet * p, u_int32_t event_code)
 	vlan_unlock();
 	return;
     }
-
+    vlan_parent_flags_set_link_event_required(vlp);
+    vlp->vlp_event_code = event_code;
+    if (vlan_parent_flags_change_in_progress(vlp)) {
+	/* don't block waiting to generate an event */
+	vlan_unlock();
+	return;
+    }
     vlan_parent_retain(vlp);
     vlan_parent_wait(vlp, "vlan_parent_link_event");
-    if (vlan_parent_flags_detaching(vlp)) {
-	goto signal_done;
-    }
-
-    vlan_unlock();
-
-    /* vlan_parent_wait() gives us exclusive access to the list */
-    LIST_FOREACH(ifv, &vlp->vlp_vlan_list, ifv_vlan_list) {
-	struct ifnet *	ifp = ifv->ifv_ifp;
-
-	interface_link_event(ifp, event_code);
-    }
-
-    vlan_lock();
-
- signal_done:
     vlan_parent_signal(vlp, "vlan_parent_link_event");
     vlan_unlock();
     vlan_parent_release(vlp);

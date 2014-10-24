@@ -20,6 +20,12 @@ def ShowInterrupts(cmd_args=None):
             print "CPU 1 IRQ: {:d}\n".format(cpu_data_entry.cpu_stat.irq_ex_cnt)
             print "CPU 1 IPI: {:d}\n".format(cpu_data_entry.cpu_stat.ipi_cnt)
             print "CPU 1 TMR: {:d}\n".format(cpu_data_entry.cpu_stat.timer_cnt)
+        elif kern.arch == 'arm64':
+                cdentries = kern.GetValueFromAddress(kern.GetLoadAddressForSymbol('CpuDataEntries') + 24, 'uintptr_t *')
+                cpu_data_entry = Cast(dereference(cdentries), 'cpu_data_t *')
+                print "CPU 1 IRQ: {:d}\n".format(cpu_data_entry.cpu_stat.irq_ex_cnt)
+                print "CPU 1 IPI: {:d}\n".format(cpu_data_entry.cpu_stat.ipi_cnt)
+                print "CPU 1 TMR: {:d}\n".format(cpu_data_entry.cpu_stat.timer_cnt)
 
 # EndMacro: showinterrupts
 

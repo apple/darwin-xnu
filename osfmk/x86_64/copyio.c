@@ -210,8 +210,9 @@ copyio(int copy_type, user_addr_t user_addr, char *kernel_addr,
 		break;
 	}
 
-	if (!recursive_CopyIOActive)
+	if (!recursive_CopyIOActive) {
 		thread->machine.specFlags &= ~CopyIOActive;
+	}
 	if (no_shared_cr3) {
 		istate = ml_set_interrupts_enabled(FALSE);
 		if  (get_cr3_raw() != kernel_pmap->pm_cr3)

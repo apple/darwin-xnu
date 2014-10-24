@@ -12,10 +12,12 @@ INSTINC_SUBDIRS = \
 	crypto
 INSTINC_SUBDIRS_X86_64 = \
         i386
-
+INSTINC_SUBDIRS_X86_64H = \
+        i386
 
 EXPINC_SUBDIRS = ${INSTINC_SUBDIRS}
 EXPINC_SUBDIRS_X86_64 = ${INSTINC_SUBDIRS_X86_64}
+EXPINC_SUBDIRS_X86_64H = ${INSTINC_SUBDIRS_X86_64H}
 
 DATAFILES = \
 	OSAtomic.h	\
@@ -37,7 +39,8 @@ PRIVATE_DATAFILES =         \
 	OSKextLibPrivate.h  \
 	kext_request_keys.h \
 	mkext.h		    \
-	prelink.h
+	prelink.h		\
+    OSSerializeBinary.h
 
 INSTALL_MI_LIST	=       \
 	OSByteOrder.h   \

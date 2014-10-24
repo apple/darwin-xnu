@@ -1559,8 +1559,8 @@ def GetInPcb(pcb, proto):
         out_string += "timewait "
     if (pcb.inp_flags2 & INP2_IN_FCTREE):
         out_string += "in_fctree "
-    if (pcb.inp_flags2 & INP2_WANT_FLOW_DIVERT):
-        out_string += "want_flow_divert "
+    if (pcb.inp_flags2 & INP2_WANT_APP_POLICY):
+        out_string += "want_app_policy "
           
     so = pcb.inp_socket
     if (so != 0):

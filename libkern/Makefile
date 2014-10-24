@@ -9,11 +9,13 @@ include $(MakeInc_def)
 INSTINC_SUBDIRS = \
 	libkern
 INSTINC_SUBDIRS_X86_64 = libkern
+INSTINC_SUBDIRS_X86_64H = libkern
 INSTINC_SUBDIRS_ARM = libkern
 
 EXPINC_SUBDIRS = \
 	libkern
 EXPINC_SUBDIRS_X86_64 = libkern
+EXPINC_SUBDIRS_X86_64H = libkern
 EXPINC_SUBDIRS_ARM = libkern
 
 COMP_SUBDIRS = conf

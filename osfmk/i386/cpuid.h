@@ -44,7 +44,8 @@
 #define	CPUID_VID_INTEL		"GenuineIntel"
 #define	CPUID_VID_AMD		"AuthenticAMD"
 
-#define CPUID_VMM_ID_VMWARE	"VMwareVMware"
+#define CPUID_VMM_ID_VMWARE		"VMwareVMware"
+#define CPUID_VMM_ID_PARALLELS	"Parallels\0\0\0"
 
 #define CPUID_STRING_UNKNOWN    "Unknown CPU Typ"
 
@@ -114,26 +115,22 @@
 #define CPUID_FEATURE_XSAVE     _HBit(26) /* XSAVE instructions */
 #define CPUID_FEATURE_OSXSAVE   _HBit(27) /* XGETBV/XSETBV instructions */
 #define CPUID_FEATURE_AVX1_0	_HBit(28) /* AVX 1.0 instructions */
-#define CPUID_FEATURE_VMM       _HBit(31) /* VMM (Hypervisor) present */
-#define CPUID_FEATURE_SEGLIM64  _HBit(11) /* 64-bit segment limit checking */
-#define CPUID_FEATURE_PCID      _HBit(17) /* ASID-PCID support */
-#define CPUID_FEATURE_TSCTMR    _HBit(24) /* TSC deadline timer */
-#define CPUID_FEATURE_AVX1_0	_HBit(28) /* AVX 1.0 instructions */
 #define CPUID_FEATURE_F16C	_HBit(29) /* Float16 convert instructions */
 #define CPUID_FEATURE_RDRAND	_HBit(30) /* RDRAND instruction */
+#define CPUID_FEATURE_VMM       _HBit(31) /* VMM (Hypervisor) present */
 
 /*
  * Leaf 7, subleaf 0 additional features.
  * Bits returned in %ebx to a CPUID request with {%eax,%ecx} of (0x7,0x0}:
  */
 #define CPUID_LEAF7_FEATURE_RDWRFSGS _Bit(0)	/* FS/GS base read/write */
-#define CPUID_LEAF7_FEATURE_SMEP     _Bit(7)	/* Supervisor Mode Execute Protect */
-#define CPUID_LEAF7_FEATURE_ENFSTRG  _Bit(9)	/* ENhanced Fast STRinG copy */
 #define CPUID_LEAF7_FEATURE_TSCOFF   _Bit(1)	/* TSC thread offset */
 #define CPUID_LEAF7_FEATURE_BMI1     _Bit(3)	/* Bit Manipulation Instrs, set 1 */
 #define CPUID_LEAF7_FEATURE_HLE      _Bit(4)	/* Hardware Lock Elision*/
 #define CPUID_LEAF7_FEATURE_AVX2     _Bit(5)	/* AVX2 Instructions */
+#define CPUID_LEAF7_FEATURE_SMEP     _Bit(7)	/* Supervisor Mode Execute Protect */
 #define CPUID_LEAF7_FEATURE_BMI2     _Bit(8)	/* Bit Manipulation Instrs, set 2 */
+#define CPUID_LEAF7_FEATURE_ERMS     _Bit(9)	/* Enhanced Rep Movsb/Stosb */
 #define CPUID_LEAF7_FEATURE_INVPCID  _Bit(10)	/* INVPCID intruction, TDB */
 #define CPUID_LEAF7_FEATURE_RTM      _Bit(11)	/* TBD */
 
@@ -149,12 +146,34 @@
 #define CPUID_EXTFEATURE_EM64T	   _Bit(29)	/* Extended Mem 64 Technology */
 
 #define CPUID_EXTFEATURE_LAHF	   _HBit(0)	/* LAFH/SAHF instructions */
+#define CPUID_EXTFEATURE_LZCNT     _HBit(5)	/* LZCNT instruction */
+#define CPUID_EXTFEATURE_PREFETCHW _HBit(8)	/* PREFETCHW instruction */
 
 /*
  * The CPUID_EXTFEATURE_XXX values define 64-bit values
  * returned in %ecx:%edx to a CPUID request with %eax of 0x80000007: 
  */
 #define CPUID_EXTFEATURE_TSCI      _Bit(8)	/* TSC Invariant */
+
+/*
+ * CPUID_X86_64_H_FEATURE_SUBSET and CPUID_X86_64_H_LEAF7_FEATURE_SUBSET
+ * indicate the bitmask of features that must be present before the system
+ * is eligible to run the "x86_64h" "Haswell feature subset" slice.
+ */
+#define CPUID_X86_64_H_FEATURE_SUBSET ( CPUID_FEATURE_FMA    | \
+                                        CPUID_FEATURE_SSE4_2 | \
+                                        CPUID_FEATURE_MOVBE  | \
+                                        CPUID_FEATURE_POPCNT | \
+                                        CPUID_FEATURE_AVX1_0   \
+                                      )
+
+#define CPUID_X86_64_H_EXTFEATURE_SUBSET ( CPUID_EXTFEATURE_LZCNT \
+                                         )
+
+#define CPUID_X86_64_H_LEAF7_FEATURE_SUBSET ( CPUID_LEAF7_FEATURE_BMI1 | \
+                                              CPUID_LEAF7_FEATURE_AVX2 | \
+                                              CPUID_LEAF7_FEATURE_BMI2   \
+                                            )
 
 #define	CPUID_CACHE_SIZE	16	/* Number of descriptor values */
 
@@ -174,16 +193,15 @@
 #define CPUID_MODEL_SANDYBRIDGE		0x2A
 #define CPUID_MODEL_JAKETOWN		0x2D
 #define CPUID_MODEL_IVYBRIDGE		0x3A
-#ifdef PRIVATE
 #define CPUID_MODEL_IVYBRIDGE_EP	0x3E
 #define CPUID_MODEL_CRYSTALWELL		0x46
-#endif
 #define CPUID_MODEL_HASWELL		0x3C
 #define CPUID_MODEL_HASWELL_SVR		0x3F
 #define CPUID_MODEL_HASWELL_ULT		0x45
 
 #define CPUID_VMM_FAMILY_UNKNOWN	0x0
 #define CPUID_VMM_FAMILY_VMWARE		0x1
+#define CPUID_VMM_FAMILY_PARALLELS	0x2
 
 #ifndef ASSEMBLER
 #include <stdint.h>
@@ -196,7 +214,7 @@ typedef enum { eax, ebx, ecx, edx } cpuid_register_t;
 static inline void
 cpuid(uint32_t *data)
 {
-	asm("cpuid"
+	__asm__ volatile ("cpuid"
 		: "=a" (data[eax]),
 		  "=b" (data[ebx]),
 		  "=c" (data[ecx]),
@@ -210,7 +228,7 @@ cpuid(uint32_t *data)
 static inline void
 do_cpuid(uint32_t selector, uint32_t *data)
 {
-	asm("cpuid"
+	__asm__ volatile ("cpuid"
 		: "=a" (data[0]),
 		  "=b" (data[1]),
 		  "=c" (data[2]),

@@ -40,37 +40,8 @@
 typedef struct vmx_specs {
 	boolean_t	initialized;	/* the specs have already been read */
 	boolean_t	vmx_present;	/* VMX feature available and enabled */
-	uint32_t	vmcs_id;	/* VMCS revision identifier */
-	uint8_t		vmcs_mem_type;	/* VMCS memory type, (see enum above) */
-	uint16_t	vmcs_size;	/* VMCS region size in bytes */
-	boolean_t	act_halt;	/* HLT activity state supported */
-	boolean_t	act_shutdown;	/* shutdown activity state supported */
-	boolean_t	act_SIPI;	/* wait-for-SIPI activity supported */
-	boolean_t	act_CSTATE;	/* C-state activity state supported */
-	uint8_t		cr3_targs;	/* CR3 target values supported */
-	uint32_t	max_msrs;	/* max MSRs to load/store on VMX transition */
-	uint32_t	mseg_id;	/* MSEG revision identifier for SMI */
-	/*
-	 * Allowed settings for these controls are specified by
-	 * a pair of bitfields: 0-settings contain 0 bits
-	 * corresponding to controls thay may be 0; 1-settings
-	 * contain 1 bits corresponding to controls that may be 1.
-	 */
-	uint32_t	pin_exctls_0;	/* allowed 0s pin-based controls */
-	uint32_t	pin_exctls_1;	/* allowed 1s pin-based controls */
-	
-	uint32_t	proc_exctls_0;	/* allowed 0s proc-based controls */
-	uint32_t	proc_exctls_1;	/* allowed 1s proc-based controls */
-	
-	uint32_t	sec_exctls_0;	/* allowed 0s 2ndary proc-based ctrls */
-	uint32_t	sec_exctls_1;	/* allowed 1s 2ndary proc-based ctrls */
-	
-	uint32_t	exit_ctls_0;	/* allowed 0s VM-exit controls */
-	uint32_t	exit_ctls_1;	/* allowed 1s VM-exit controls */
-	
-	uint32_t	enter_ctls_0;	/* allowed 0s VM-entry controls */
-	uint32_t	enter_ctls_1;	/* allowed 1s VM-entry controls */
-
+	boolean_t	vmx_on;			/* VMX is active */
+	uint32_t	vmcs_id;		/* VMCS revision identifier */
 	/*
 	 * Fixed control register bits are specified by a pair of
 	 * bitfields: 0-settings contain 0 bits corresponding to
@@ -89,9 +60,19 @@ typedef struct vmx_cpu {
 	void		*vmxon_region;	/* the logical address of the VMXON region page */
 } vmx_cpu_t;
 
-void vmx_get_specs(void);
+void vmx_init(void);
+void vmx_cpu_init(void);
 void vmx_resume(void);
 void vmx_suspend(void);
+
+#define VMX_BASIC_TRUE_CTLS					(1ull << 55)
+#define VMX_TRUE_PROCBASED_SECONDARY_CTLS	(1ull << 31)
+#define VMX_PROCBASED_CTLS2_EPT				(1ull << 1)
+#define VMX_PROCBASED_CTLS2_UNRESTRICTED	(1ull << 7)
+
+#define VMX_CAP(msr, shift, mask) (rdmsr64(msr) & ((mask) << (shift)))
+
+boolean_t vmx_hv_support(void);
 
 /*
  *	__vmxoff -- Leave VMX Operation

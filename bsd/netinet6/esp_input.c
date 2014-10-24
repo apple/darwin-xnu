@@ -76,6 +76,7 @@
 #include <sys/syslog.h>
 
 #include <net/if.h>
+#include <net/if_ipsec.h>
 #include <net/route.h>
 #include <kern/cpu_number.h>
 #include <kern/locks.h>
@@ -511,14 +512,10 @@ noreplaycheck:
 		} else if (ifamily == AF_INET6) {
 			struct sockaddr_in6 *ip6addr;
 
-#ifndef PULLDOWN_TEST
 			/*
 			 * m_pullup is prohibited in KAME IPv6 input processing
 			 * but there's no other way!
 			 */
-#else
-			/* okay to pullup in m_pulldown style */
-#endif
 			if (m->m_len < sizeof(*ip6)) {
 				m = m_pullup(m, sizeof(*ip6));
 				if (!m) {
@@ -581,6 +578,16 @@ noreplaycheck:
 		/* Clear the csum flags, they can't be valid for the inner headers */
 		m->m_pkthdr.csum_flags = 0;
 
+		// Input via IPSec interface
+		if (sav->sah->ipsec_if != NULL) {
+			if (ipsec_inject_inbound_packet(sav->sah->ipsec_if, m) == 0) {
+				m = NULL;
+				goto done;
+			} else {
+				goto bad;
+			}
+		}
+		
 		if (sav->utun_in_fn) {
 			if (!(sav->utun_in_fn(sav->utun_pcb, &m, ifamily == AF_INET ? PF_INET : PF_INET6))) {
 				m = NULL;
@@ -681,6 +688,20 @@ noreplaycheck:
                         	struct ip *, ip, struct ifnet *, m->m_pkthdr.rcvif,
                         	struct ip *, ip, struct ip6_hdr *, NULL);
 
+			// Input via IPSec interface
+			if (sav->sah->ipsec_if != NULL) {
+				ip->ip_len = htons(ip->ip_len + hlen);
+				ip->ip_off = htons(ip->ip_off);
+				ip->ip_sum = 0;
+				ip->ip_sum = ip_cksum_hdr_in(m, hlen);
+				if (ipsec_inject_inbound_packet(sav->sah->ipsec_if, m) == 0) {
+					m = NULL;
+					goto done;
+				} else {
+					goto bad;
+				}
+			}
+			
 			if (sav->utun_in_fn) {
 				if (!(sav->utun_in_fn(sav->utun_pcb, &m, PF_INET))) {
 					m = NULL;
@@ -695,6 +716,7 @@ noreplaycheck:
 		m = NULL;
 	}
 
+done:
 	if (sav) {
 		KEYDEBUG(KEYDEBUG_IPSEC_STAMP,
 		    printf("DP esp4_input call free SA:0x%llx\n",
@@ -1047,6 +1069,17 @@ noreplaycheck:
 			}
 		}
 
+		// Input via IPSec interface
+		if (sav->sah->ipsec_if != NULL) {
+			if (ipsec_inject_inbound_packet(sav->sah->ipsec_if, m) == 0) {
+				m = NULL;
+				nxt = IPPROTO_DONE;
+				goto done;
+			} else {
+				goto bad;
+			}
+		}
+		
 		if (sav->utun_in_fn) {
 			if (!(sav->utun_in_fn(sav->utun_pcb, &m, PF_INET6))) {
 				m = NULL;
@@ -1154,6 +1187,17 @@ noreplaycheck:
 			goto bad;
 		}
 
+		// Input via IPSec interface
+		if (sav->sah->ipsec_if != NULL) {
+			if (ipsec_inject_inbound_packet(sav->sah->ipsec_if, m) == 0) {
+				m = NULL;
+				nxt = IPPROTO_DONE;
+				goto done;
+			} else {
+				goto bad;
+			}
+		}
+		
 		if (sav->utun_in_fn) {
 			if (!(sav->utun_in_fn(sav->utun_pcb, &m, PF_INET6))) {
 				m = NULL;
@@ -1163,9 +1207,9 @@ noreplaycheck:
 		}
 	}
 
+done:
 	*offp = off;
 	*mp = m;
-
 	if (sav) {
 		KEYDEBUG(KEYDEBUG_IPSEC_STAMP,
 		    printf("DP esp6_input call free SA:0x%llx\n",

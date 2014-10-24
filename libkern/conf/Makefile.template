@@ -37,6 +37,8 @@ uncompr.o_CWARNFLAGS_ADD = -Wno-cast-qual
 
 # warnings in bison-generated code
 OSUnserializeXML.cpo_CXXWARNFLAGS_ADD = -Wno-uninitialized
+OSUnserializeXML.cpo_CXXWARNFLAGS_ADD += -Wno-unreachable-code
+OSUnserialize.cpo_CXXWARNFLAGS_ADD += -Wno-unreachable-code
 
 # Runtime support functions don't interact well with LTO (9294679)
 stack_protector.o_CFLAGS_ADD += $(CFLAGS_NOLTO_FLAG)
@@ -64,6 +66,8 @@ COMP_SUBDIRS =
 
 %CFILES
 
+%CXXFILES
+
 %SFILES
 
 %MACHDEP
@@ -83,24 +87,31 @@ uncompr.o_CWARNFLAGS_ADD = -Wno-cast-qual
 
 # warnings in bison-generated code
 OSUnserializeXML.cpo_CXXWARNFLAGS_ADD = -Wno-uninitialized
+OSUnserializeXML.cpo_CXXWARNFLAGS_ADD += -Wno-unreachable-code
+OSUnserialize.cpo_CXXWARNFLAGS_ADD += -Wno-unreachable-code
 
-#
-#  OBJSDEPS is the set of files (defined in the machine dependent
-#  template if necessary) which all objects depend on (such as an
-#  in-line assembler expansion filter)
-#
-${OBJS}: ${OBJSDEPS}
+# Rebuild if per-file overrides change
+${OBJS}: $(firstword $(MAKEFILE_LIST))
 
-LDOBJS = $(OBJS)
+# Rebuild if global compile flags change
+$(COBJS): .CFLAGS
+.CFLAGS: ALWAYS
+	$(_v)$(REPLACECONTENTS) $@ $(KCC) $(CFLAGS) $(INCFLAGS)
+$(CXXOBJS): .CXXFLAGS
+.CXXFLAGS: ALWAYS
+	$(_v)$(REPLACECONTENTS) $@ $(KC++) $(CXXFLAGS) $(INCFLAGS)
+$(SOBJS): .SFLAGS
+.SFLAGS: ALWAYS
+	$(_v)$(REPLACECONTENTS) $@ $(S_KCC) $(SFLAGS) $(INCFLAGS)
 
-$(COMPONENT).filelist: $(LDOBJS)
+$(COMPONENT).filelist: $(OBJS)
 	$(_v)for hib_file in ${HIB_FILES}; \
 	do	\
 		$(SEG_HACK) -n __HIB -o $${hib_file}__ $${hib_file} ; \
 		mv $${hib_file}__ $${hib_file} ; \
 	done
 	@echo LDFILELIST $(COMPONENT)
-	$(_v)( for obj in ${LDOBJS}; do	\
+	$(_v)( for obj in ${OBJS}; do	\
 		 echo $(TARGET)/$(CURRENT_KERNEL_CONFIG)/$${obj}; \
 	done; ) > $(COMPONENT).filelist
 

@@ -89,13 +89,16 @@ static int
 proc_uuid_policy_insert(uuid_t uuid, uint32_t flags);
 
 static struct proc_uuid_policy_entry *
-proc_uuid_policy_remove_locked(uuid_t uuid);
+proc_uuid_policy_remove_locked(uuid_t uuid, uint32_t flags, int *should_delete);
 
 static int
-proc_uuid_policy_remove(uuid_t uuid);
+proc_uuid_policy_remove(uuid_t uuid, uint32_t flags);
+
+static struct proc_uuid_policy_entry *
+proc_uuid_policy_lookup_locked(uuid_t uuid);
 
 static int
-proc_uuid_policy_clear(void);
+proc_uuid_policy_clear(uint32_t flags);
 
 void
 proc_uuid_policy_init(void)
@@ -113,7 +116,7 @@ proc_uuid_policy_init(void)
 static int
 proc_uuid_policy_insert(uuid_t uuid, uint32_t flags)
 {
-	struct proc_uuid_policy_entry *entry, *delentry = NULL;
+	struct proc_uuid_policy_entry *entry, *foundentry = NULL;
 	int error;
 
 #if PROC_UUID_POLICY_DEBUG
@@ -131,24 +134,27 @@ proc_uuid_policy_insert(uuid_t uuid, uint32_t flags)
 
 	PROC_UUID_POLICY_SUBSYS_LOCK();
 
-	delentry = proc_uuid_policy_remove_locked(uuid);
-
-	/* Our target UUID is not in the list, insert it now */
-	if (proc_uuid_policy_count < MAX_PROC_UUID_POLICY_COUNT) {
-		LIST_INSERT_HEAD(UUIDHASH(uuid), entry, entries);
-		proc_uuid_policy_count++;
+	foundentry = proc_uuid_policy_lookup_locked(uuid);
+	if (foundentry != NULL) {
+		/* The UUID is already in the list. Update the flags. */
+		foundentry->flags |= flags;
 		error = 0;
+		FREE(entry, M_PROC_UUID_POLICY);
+		entry = NULL;
 		BUMP_PROC_UUID_POLICY_GENERATION_COUNT();
 	} else {
-		error = ENOMEM;
+		/* Our target UUID is not in the list, insert it now */
+		if (proc_uuid_policy_count < MAX_PROC_UUID_POLICY_COUNT) {
+			LIST_INSERT_HEAD(UUIDHASH(uuid), entry, entries);
+			proc_uuid_policy_count++;
+			error = 0;
+			BUMP_PROC_UUID_POLICY_GENERATION_COUNT();
+		} else {
+			error = ENOMEM;
+		}
 	}
 
 	PROC_UUID_POLICY_SUBSYS_UNLOCK();
-
-	/* If we had found a pre-existing entry, deallocate its memory now */
-	if (delentry) {
-		FREE(delentry, M_PROC_UUID_POLICY);
-	}
 
 	if (error) {
 		FREE(entry, M_PROC_UUID_POLICY);
@@ -161,28 +167,35 @@ proc_uuid_policy_insert(uuid_t uuid, uint32_t flags)
 }
 
 static struct proc_uuid_policy_entry *
-proc_uuid_policy_remove_locked(uuid_t uuid)
+proc_uuid_policy_remove_locked(uuid_t uuid, uint32_t flags, int *should_delete)
 {
-	struct proc_uuid_policy_entry *tmpentry, *searchentry, *delentry = NULL;
-
-	LIST_FOREACH_SAFE(searchentry, UUIDHASH(uuid), entries, tmpentry) {
-		if (0 == memcmp(searchentry->uuid, uuid, sizeof(uuid_t))) {
-			/* Existing entry under same UUID. Remove it and save for de-allocation */
-			delentry = searchentry;
-			LIST_REMOVE(searchentry, entries);
+	struct proc_uuid_policy_entry *foundentry = NULL;
+	if (should_delete) {
+		*should_delete = 0;
+	}
+	
+	foundentry = proc_uuid_policy_lookup_locked(uuid);
+	if (foundentry) {
+		if (foundentry->flags == flags) {
+			LIST_REMOVE(foundentry, entries);
 			proc_uuid_policy_count--;
-			break;
+			if (should_delete) {
+				*should_delete = 1;
+			}
+		} else {
+			foundentry->flags &= ~flags;
 		}
 	}
-
-	return delentry;
+	
+	return foundentry;
 }
 
 static int
-proc_uuid_policy_remove(uuid_t uuid)
+proc_uuid_policy_remove(uuid_t uuid, uint32_t flags)
 {
 	struct proc_uuid_policy_entry *delentry = NULL;
 	int error;
+	int should_delete = 0;
 
 #if PROC_UUID_POLICY_DEBUG
 	uuid_string_t uuidstr;
@@ -194,7 +207,7 @@ proc_uuid_policy_remove(uuid_t uuid)
 
 	PROC_UUID_POLICY_SUBSYS_LOCK();
 
-	delentry = proc_uuid_policy_remove_locked(uuid);
+	delentry = proc_uuid_policy_remove_locked(uuid, flags, &should_delete);
 
 	if (delentry) {
 		error = 0;
@@ -206,7 +219,7 @@ proc_uuid_policy_remove(uuid_t uuid)
 	PROC_UUID_POLICY_SUBSYS_UNLOCK();
 
 	/* If we had found a pre-existing entry, deallocate its memory now */
-	if (delentry) {
+	if (delentry && should_delete) {
 		FREE(delentry, M_PROC_UUID_POLICY);
 	}
 
@@ -219,10 +232,25 @@ proc_uuid_policy_remove(uuid_t uuid)
 	return error;
 }
 
+static struct proc_uuid_policy_entry *
+proc_uuid_policy_lookup_locked(uuid_t uuid)
+{
+	struct proc_uuid_policy_entry *tmpentry, *searchentry, *foundentry = NULL;
+	
+	LIST_FOREACH_SAFE(searchentry, UUIDHASH(uuid), entries, tmpentry) {
+		if (0 == memcmp(searchentry->uuid, uuid, sizeof(uuid_t))) {
+			foundentry = searchentry;
+			break;
+		}
+	}
+	
+	return foundentry;
+}
+
 int
 proc_uuid_policy_lookup(uuid_t uuid, uint32_t *flags, int32_t *gencount)
 {
-	struct proc_uuid_policy_entry *tmpentry, *searchentry, *foundentry = NULL;
+	struct proc_uuid_policy_entry *foundentry = NULL;
 	int error;
 
 #if PROC_UUID_POLICY_DEBUG
@@ -244,13 +272,7 @@ proc_uuid_policy_lookup(uuid_t uuid, uint32_t *flags, int32_t *gencount)
 
 	PROC_UUID_POLICY_SUBSYS_LOCK();
 
-	LIST_FOREACH_SAFE(searchentry, UUIDHASH(uuid), entries, tmpentry) {
-		if (0 == memcmp(searchentry->uuid, uuid, sizeof(uuid_t))) {
-			/* Found existing entry */
-			foundentry = searchentry;
-			break;
-		}
-	}
+	foundentry = proc_uuid_policy_lookup_locked(uuid);
 
 	if (foundentry) {
 		*flags = foundentry->flags;
@@ -270,11 +292,16 @@ proc_uuid_policy_lookup(uuid_t uuid, uint32_t *flags, int32_t *gencount)
 }
 
 static int
-proc_uuid_policy_clear(void)
+proc_uuid_policy_clear(uint32_t flags)
 {
 	struct proc_uuid_policy_entry *tmpentry, *searchentry;
 	struct proc_uuid_policy_hashhead deletehead = LIST_HEAD_INITIALIZER(deletehead);
 	unsigned long hashslot;
+	
+	/* If clear call includes no flags, infer 'No Cellular' flag */
+	if (flags == PROC_UUID_POLICY_FLAGS_NONE) {
+		flags = PROC_UUID_NO_CELLULAR;
+	}
 
 	PROC_UUID_POLICY_SUBSYS_LOCK();
 
@@ -284,10 +311,14 @@ proc_uuid_policy_clear(void)
 			struct proc_uuid_policy_hashhead *headp = &proc_uuid_policy_hashtbl[hashslot];
 			
 			LIST_FOREACH_SAFE(searchentry, headp, entries, tmpentry) {
-				/* Move each entry to our delete list */
-				LIST_REMOVE(searchentry, entries);
-				proc_uuid_policy_count--;
-				LIST_INSERT_HEAD(&deletehead, searchentry, entries);
+				if ((searchentry->flags & flags) == searchentry->flags) {
+					/* We are clearing all flags for this entry, move entry to our delete list */
+					LIST_REMOVE(searchentry, entries);
+					proc_uuid_policy_count--;
+					LIST_INSERT_HEAD(&deletehead, searchentry, entries);
+				} else {
+					searchentry->flags &= ~flags;
+				}
 			}
 		}
 
@@ -307,6 +338,31 @@ proc_uuid_policy_clear(void)
 	return 0;
 }
 
+int proc_uuid_policy_kernel(uint32_t operation, uuid_t uuid, uint32_t flags)
+{
+	int error = 0;
+	
+	switch (operation) {
+		case PROC_UUID_POLICY_OPERATION_CLEAR:
+			error = proc_uuid_policy_clear(flags);
+			break;
+			
+		case PROC_UUID_POLICY_OPERATION_ADD:
+			error = proc_uuid_policy_insert(uuid, flags);
+			break;
+			
+		case PROC_UUID_POLICY_OPERATION_REMOVE:
+			error = proc_uuid_policy_remove(uuid, flags);
+			break;
+			
+		default:
+			error = EINVAL;
+			break;
+	}
+	
+	return error;
+}
+
 int proc_uuid_policy(struct proc *p __unused, struct proc_uuid_policy_args *uap, int32_t *retval __unused)
 {
 	int error = 0;
@@ -321,41 +377,14 @@ int proc_uuid_policy(struct proc *p __unused, struct proc_uuid_policy_args *uap,
 		dprintf("%s succeeded privilege check for proc_uuid_policy\n", p->p_comm);
 	}
 	
-	switch (uap->operation) {
-		case PROC_UUID_POLICY_OPERATION_CLEAR:
-			error = proc_uuid_policy_clear();
-			break;
-
-		case PROC_UUID_POLICY_OPERATION_ADD:
-			if (uap->uuidlen != sizeof(uuid_t)) {
-				error = ERANGE;
-				break;
-			}
-
-			error = copyin(uap->uuid, uuid, sizeof(uuid_t));
-			if (error)
-				break;
-
-			error = proc_uuid_policy_insert(uuid, uap->flags);
-			break;
-
-		case PROC_UUID_POLICY_OPERATION_REMOVE:
-			if (uap->uuidlen != sizeof(uuid_t)) {
-				error = ERANGE;
-				break;
-			}
-
-			error = copyin(uap->uuid, uuid, sizeof(uuid_t));
-			if (error)
-				break;
-
-			error = proc_uuid_policy_remove(uuid);
-			break;
-
-		default:
-			error = EINVAL;
-			break;
+	if (uap->uuid) {
+		if (uap->uuidlen != sizeof(uuid_t))
+			return ERANGE;
+		
+		error = copyin(uap->uuid, uuid, sizeof(uuid_t));
+		if (error)
+			return error;
 	}
-
-	return error;
+	
+	return proc_uuid_policy_kernel(uap->operation, uuid, uap->flags);
 }

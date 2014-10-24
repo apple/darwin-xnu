@@ -58,8 +58,9 @@ typedef	unsigned int		lck_sleep_action_t;
 #define	LCK_SLEEP_SHARED	0x02	/* Reclaim the lock in shared mode (RW only) */
 #define	LCK_SLEEP_EXCLUSIVE	0x04	/* Reclaim the lock in exclusive mode (RW only) */
 #define	LCK_SLEEP_SPIN		0x08	/* Reclaim the lock in spin mode (mutex only) */
+#define	LCK_SLEEP_PROMOTED_PRI	0x10	/* Sleep at a promoted priority */
 
-#define	LCK_SLEEP_MASK		0x0f	/* Valid actions */
+#define	LCK_SLEEP_MASK		0x1f	/* Valid actions */
 
 #ifdef	MACH_KERNEL_PRIVATE
 
@@ -263,8 +264,10 @@ extern wait_result_t	lck_spin_sleep_deadline(
 
 #ifdef	KERNEL_PRIVATE
 
-extern boolean_t		lck_spin_try_lock(
-									lck_spin_t		*lck);
+extern boolean_t		lck_spin_try_lock(			lck_spin_t		*lck);
+
+/* NOT SAFE: To be used only by kernel debugger to avoid deadlock. */
+extern boolean_t		lck_spin_is_acquired(			lck_spin_t		*lck);
 
 struct _lck_mtx_ext_;
 extern void lck_mtx_init_ext(lck_mtx_t *lck, struct _lck_mtx_ext_ *lck_ext,

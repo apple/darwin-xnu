@@ -97,7 +97,6 @@
 #include <mach/vm_map.h>
 #include <mach/mach_vm.h>
 #include <mach/thread_act.h>  /* for thread_policy_set( ) */
-#include <kern/lock.h>
 #include <kern/thread.h>
 
 #include <kern/task.h>
@@ -113,22 +112,27 @@
 int	donice(struct proc *curp, struct proc *chgp, int n);
 int	dosetrlimit(struct proc *p, u_int which, struct rlimit *limp);
 int	uthread_get_background_state(uthread_t);
-static void do_background_socket(struct proc *p, thread_t thread, int priority);
+static void do_background_socket(struct proc *p, thread_t thread);
 static int do_background_thread(struct proc *curp, thread_t thread, int priority);
 static int do_background_proc(struct proc *curp, struct proc *targetp, int priority);
+static int set_gpudeny_proc(struct proc *curp, struct proc *targetp, int priority);
+static int proc_set_darwin_role(proc_t curp, proc_t targetp, int priority);
+static int proc_get_darwin_role(proc_t curp, proc_t targetp, int *priority);
 static int get_background_proc(struct proc *curp, struct proc *targetp, int *priority);
 void proc_apply_task_networkbg_internal(proc_t, thread_t);
 void proc_restore_task_networkbg_internal(proc_t, thread_t);
 int proc_pid_rusage(int pid, int flavor, user_addr_t buf, int32_t *retval);
-void gather_rusage_info_v2(proc_t p, struct rusage_info_v2 *ru, int flavor);
-int fill_task_rusage_v2(task_t task, struct rusage_info_v2 *ri);
-static void rusage_info_v2_to_v0(struct rusage_info_v0 *ri_v0, struct rusage_info_v2 *ri_v2);
-static void rusage_info_v2_to_v1(struct rusage_info_v1 *ri_v1, struct rusage_info_v2 *ri_v2);
+void gather_rusage_info(proc_t p, rusage_info_current *ru, int flavor);
+int fill_task_rusage(task_t task, rusage_info_current *ri);
+void fill_task_billed_usage(task_t task, rusage_info_current *ri);
+int fill_task_io_rusage(task_t task, rusage_info_current *ri);
+int fill_task_qos_rusage(task_t task, rusage_info_current *ri);
+static void rusage_info_conversion(rusage_info_t ri_info, rusage_info_current *ri_current, int flavor);
 
 int proc_get_rusage(proc_t p, int flavor, user_addr_t buffer, __unused int is_zombie);
 
 rlim_t maxdmap = MAXDSIZ;	/* XXX */ 
-rlim_t maxsmap = MAXSSIZ - PAGE_SIZE;	/* XXX */ 
+rlim_t maxsmap = MAXSSIZ - PAGE_MAX_SIZE;	/* XXX */ 
 
 /*
  * Limits on the number of open files per process, and the number
@@ -261,6 +265,24 @@ getpriority(struct proc *curp, struct getpriority_args *uap, int32_t *retval)
 			return (error);
 		break;
 
+	case PRIO_DARWIN_ROLE:
+		if (uap->who == 0) {
+			p = curp;
+		} else {
+			p = proc_find(uap->who);
+			if (p == PROC_NULL)
+				break;
+			refheld = 1;
+		}
+
+		error = proc_get_darwin_role(curp, p, &low);
+
+		if (refheld)
+			proc_rele(p);
+		if (error)
+			return (error);
+		break;
+
 	default:
 		return (EINVAL);
 	}
@@ -321,7 +343,7 @@ ppgrp_donice_callback(proc_t p, void * arg)
  */
 /* ARGSUSED */
 int
-setpriority(struct proc *curp, struct setpriority_args *uap, __unused int32_t *retval)
+setpriority(struct proc *curp, struct setpriority_args *uap, int32_t *retval)
 {
 	struct proc *p;
 	int found = 0, error = 0;
@@ -417,11 +439,48 @@ setpriority(struct proc *curp, struct setpriority_args *uap, __unused int32_t *r
 		break;
 	}
 
+	case PRIO_DARWIN_GPU: {
+		if (uap->who == 0)
+			return (EINVAL);
+
+		p = proc_find(uap->who);
+		if (p == PROC_NULL)
+			break;
+
+		error = set_gpudeny_proc(curp, p, uap->prio);
+
+		found++;
+		proc_rele(p);
+		break;
+	}
+
+	case PRIO_DARWIN_ROLE: {
+		if (uap->who == 0) {
+			p = curp;
+		} else {
+			p = proc_find(uap->who);
+			if (p == PROC_NULL)
+				break;
+			refheld = 1;
+		}
+
+		error = proc_set_darwin_role(curp, p, uap->prio);
+
+		found++;
+		if (refheld != 0)
+			proc_rele(p);
+		break;
+	}
+
 	default:
 		return (EINVAL);
 	}
 	if (found == 0)
 		return (ESRCH);
+	if (error == EIDRM) {
+		*retval = -2;
+		error = 0;
+	}
 	return (error);
 }
 
@@ -472,6 +531,163 @@ out:
 }
 
 static int
+set_gpudeny_proc(struct proc *curp, struct proc *targetp, int priority)
+{
+	int error = 0;
+	kauth_cred_t ucred;
+	kauth_cred_t target_cred;
+
+	ucred = kauth_cred_get();
+	target_cred = kauth_cred_proc_ref(targetp);
+
+	/* TODO: Entitlement instead of uid check */
+
+	if (!kauth_cred_issuser(ucred) && kauth_cred_getruid(ucred) &&
+	    kauth_cred_getuid(ucred)   != kauth_cred_getuid(target_cred) &&
+	    kauth_cred_getruid(ucred)  != kauth_cred_getuid(target_cred)) {
+		error = EPERM;
+		goto out;
+	}
+
+	if (curp == targetp) {
+		error = EPERM;
+		goto out;
+	}
+
+#if CONFIG_MACF
+	error = mac_proc_check_sched(curp, targetp);
+	if (error)
+		goto out;
+#endif
+
+	switch (priority) {
+		case PRIO_DARWIN_GPU_DENY:
+			task_set_gpu_denied(proc_task(targetp), TRUE);
+			break;
+		case PRIO_DARWIN_GPU_ALLOW:
+			task_set_gpu_denied(proc_task(targetp), FALSE);
+			break;
+		default:
+			error = EINVAL;
+			goto out;
+	}
+
+out:
+	kauth_cred_unref(&target_cred);
+	return (error);
+
+}
+
+static int
+proc_set_darwin_role(proc_t curp, proc_t targetp, int priority)
+{
+	int error = 0;
+	uint32_t flagsp;
+
+	kauth_cred_t ucred, target_cred;
+
+	ucred = kauth_cred_get();
+	target_cred = kauth_cred_proc_ref(targetp);
+
+	if (!kauth_cred_issuser(ucred) && kauth_cred_getruid(ucred) &&
+	    kauth_cred_getuid(ucred)  != kauth_cred_getuid(target_cred) &&
+	    kauth_cred_getruid(ucred) != kauth_cred_getuid(target_cred)) {
+		error = EPERM;
+		goto out;
+	}
+
+	if (curp != targetp) {
+#if CONFIG_MACF
+		if ((error = mac_proc_check_sched(curp, targetp)))
+			goto out;
+#endif
+	}
+
+	proc_get_darwinbgstate(proc_task(targetp), &flagsp);
+	if ((flagsp & PROC_FLAG_APPLICATION) != PROC_FLAG_APPLICATION) {
+		error = ENOTSUP;
+		goto out;
+	}
+
+	integer_t role = 0;
+
+	switch (priority) {
+		case PRIO_DARWIN_ROLE_DEFAULT:
+			role = TASK_UNSPECIFIED;
+			break;
+		case PRIO_DARWIN_ROLE_UI_FOCAL:
+			role = TASK_FOREGROUND_APPLICATION;
+			break;
+		case PRIO_DARWIN_ROLE_UI:
+			role = TASK_BACKGROUND_APPLICATION;
+			break;
+		case PRIO_DARWIN_ROLE_NON_UI:
+			role = TASK_NONUI_APPLICATION;
+			break;
+		default:
+			error = EINVAL;
+			goto out;
+	}
+
+	proc_set_task_policy(proc_task(targetp), THREAD_NULL,
+	                     TASK_POLICY_ATTRIBUTE, TASK_POLICY_ROLE, role);
+
+out:
+	kauth_cred_unref(&target_cred);
+	return (error);
+}
+
+static int
+proc_get_darwin_role(proc_t curp, proc_t targetp, int *priority)
+{
+	int error = 0;
+	int role = 0;
+
+	kauth_cred_t ucred, target_cred;
+
+	ucred = kauth_cred_get();
+	target_cred = kauth_cred_proc_ref(targetp);
+
+	if (!kauth_cred_issuser(ucred) && kauth_cred_getruid(ucred) &&
+	    kauth_cred_getuid(ucred)  != kauth_cred_getuid(target_cred) &&
+	    kauth_cred_getruid(ucred) != kauth_cred_getuid(target_cred)) {
+		error = EPERM;
+		goto out;
+	}
+
+	if (curp != targetp) {
+#if CONFIG_MACF
+		if ((error = mac_proc_check_sched(curp, targetp)))
+			goto out;
+#endif
+	}
+
+	role = proc_get_task_policy(proc_task(targetp), THREAD_NULL,
+	                            TASK_POLICY_ATTRIBUTE, TASK_POLICY_ROLE);
+
+	switch (role) {
+		case TASK_FOREGROUND_APPLICATION:
+			*priority = PRIO_DARWIN_ROLE_UI_FOCAL;
+			break;
+		case TASK_BACKGROUND_APPLICATION:
+			*priority = PRIO_DARWIN_ROLE_UI;
+			break;
+		case TASK_NONUI_APPLICATION:
+			*priority = PRIO_DARWIN_ROLE_NON_UI;
+			break;
+		case TASK_UNSPECIFIED:
+		default:
+			*priority = PRIO_DARWIN_ROLE_DEFAULT;
+			break;
+	}
+
+out:
+	kauth_cred_unref(&target_cred);
+	return (error);
+}
+
+
+static int
 get_background_proc(struct proc *curp, struct proc *targetp, int *priority)
 {
 	int external = 0;
@@ -507,7 +723,6 @@ do_background_proc(struct proc *curp, struct proc *targetp, int priority)
 	kauth_cred_t ucred;
 	kauth_cred_t target_cred;
 	int external;
-	int flavor;
 	int enable;
 
 	ucred = kauth_cred_get();
@@ -530,27 +745,19 @@ do_background_proc(struct proc *curp, struct proc *targetp, int priority)
 	external = (curp == targetp) ? TASK_POLICY_INTERNAL : TASK_POLICY_EXTERNAL;
 
 	switch (priority) {
-		case PRIO_DARWIN_NONUI:
-			flavor = TASK_POLICY_GPU_DENY;
-			enable = TASK_POLICY_ENABLE;
-			break;
 		case PRIO_DARWIN_BG:
-			flavor = TASK_POLICY_DARWIN_BG;
 			enable = TASK_POLICY_ENABLE;
 			break;
+		case PRIO_DARWIN_NONUI:
+			/* ignored for compatibility */
+			goto out;
 		default:
-			/*
-			 * DARWIN_BG and GPU_DENY disable are overloaded,
-			 * so we need to turn them both off at the same time
-			 * 
-			 * TODO: It would be nice to fail if priority != 0
-			 */
-			flavor = TASK_POLICY_DARWIN_BG_AND_GPU;
+			/* TODO: EINVAL if priority != 0 */
 			enable = TASK_POLICY_DISABLE;
 			break;
 	}
 
-	proc_set_task_policy(proc_task(targetp), THREAD_NULL, external, flavor, enable);
+	proc_set_task_policy(proc_task(targetp), THREAD_NULL, external, TASK_POLICY_DARWIN_BG, enable);
 
 out:
 	kauth_cred_unref(&target_cred);
@@ -558,21 +765,27 @@ out:
 }
 
 static void 
-do_background_socket(struct proc *p, thread_t thread, int priority)
+do_background_socket(struct proc *p, thread_t thread)
 {
 #if SOCKETS
 	struct filedesc                     *fdp;
 	struct fileproc                     *fp;
-	int                                 i;
+	int                                 i, background;
 
-	if (priority == PRIO_DARWIN_BG) {
+	proc_fdlock(p);
+
+	if (thread != THREAD_NULL)
+		background = proc_get_effective_thread_policy(thread, TASK_POLICY_ALL_SOCKETS_BG);
+	else
+		background = proc_get_effective_task_policy(proc_task(p), TASK_POLICY_ALL_SOCKETS_BG);
+
+	if (background) {
 		/*
 		 * For PRIO_DARWIN_PROCESS (thread is NULL), simply mark
 		 * the sockets with the background flag.  There's nothing
 		 * to do here for the PRIO_DARWIN_THREAD case.
 		 */
 		if (thread == THREAD_NULL) {
-			proc_fdlock(p);
 			fdp = p->p_fd;
 
 			for (i = 0; i < fdp->fd_nfiles; i++) {
@@ -587,17 +800,13 @@ do_background_socket(struct proc *p, thread_t thread, int priority)
 				socket_set_traffic_mgt_flags(sockp, TRAFFIC_MGT_SO_BACKGROUND);
 				sockp->so_background_thread = NULL;
 			}
-			proc_fdunlock(p);
 		}
-
 	} else {
-
 		/* disable networking IO throttle.
 		 * NOTE - It is a known limitation of the current design that we 
 		 * could potentially clear TRAFFIC_MGT_SO_BACKGROUND bit for 
 		 * sockets created by other threads within this process.  
 		 */
-		proc_fdlock(p);
 		fdp = p->p_fd;
 		for ( i = 0; i < fdp->fd_nfiles; i++ ) {
 			struct socket       *sockp;
@@ -615,10 +824,11 @@ do_background_socket(struct proc *p, thread_t thread, int priority)
 			socket_clear_traffic_mgt_flags(sockp, TRAFFIC_MGT_SO_BACKGROUND);
 			sockp->so_background_thread = NULL;
 		}
-		proc_fdunlock(p);
 	}
+
+	proc_fdunlock(p);
 #else
-#pragma unused(p, thread, priority)
+#pragma unused(p, thread)
 #endif
 }
 
@@ -634,12 +844,23 @@ do_background_thread(struct proc *curp, thread_t thread, int priority)
 {
 	struct uthread *ut;
 	int enable, external;
+	int rv = 0;
 
 	ut = get_bsdthread_info(thread);
 
 	/* Backgrounding is unsupported for threads in vfork */
 	if ((ut->uu_flag & UT_VFORK) != 0)
 		return(EPERM);
+
+	if (thread_is_static_param(thread)) {
+		return(EPERM);
+	}
+
+	/* Not allowed to combine QoS and DARWIN_BG, doing so strips the QoS */
+	if (thread_has_qos_policy(thread)) {
+		thread_remove_qos_policy(thread);
+		rv = EIDRM;
+	}
 
 	/* TODO: Fail if someone passes something besides 0 or PRIO_DARWIN_BG */
 	enable   = (priority == PRIO_DARWIN_BG) ? TASK_POLICY_ENABLE   : TASK_POLICY_DISABLE;
@@ -648,7 +869,7 @@ do_background_thread(struct proc *curp, thread_t thread, int priority)
 	proc_set_task_policy_thread(curp->task, thread_tid(thread), external,
 	                            TASK_POLICY_DARWIN_BG, enable);
 
-	return(0);
+	return rv;
 }
 
 
@@ -1087,20 +1308,20 @@ ruadd(struct rusage *ru, struct rusage *ru2)
  * Note: proc lock of parent should be held while calling this function.
  */
 void
-update_rusage_info_child(struct rusage_info_child *ri, struct rusage_info_v2 *ri2)
+update_rusage_info_child(struct rusage_info_child *ri, rusage_info_current *ri_current)
 {
-	ri->ri_child_user_time += (ri2->ri_user_time +
-					ri2->ri_child_user_time);
-	ri->ri_child_system_time += (ri2->ri_system_time +
-					ri2->ri_child_system_time);
-	ri->ri_child_pkg_idle_wkups += (ri2->ri_pkg_idle_wkups +
-					ri2->ri_child_pkg_idle_wkups);
-	ri->ri_child_interrupt_wkups += (ri2->ri_interrupt_wkups +
-					ri2->ri_child_interrupt_wkups);
-	ri->ri_child_pageins += (ri2->ri_pageins +
-					ri2->ri_child_pageins);
-	ri->ri_child_elapsed_abstime += ((ri2->ri_proc_exit_abstime -
-		ri2->ri_proc_start_abstime) + ri2->ri_child_elapsed_abstime);
+	ri->ri_child_user_time += (ri_current->ri_user_time +
+					ri_current->ri_child_user_time);
+	ri->ri_child_system_time += (ri_current->ri_system_time +
+					ri_current->ri_child_system_time);
+	ri->ri_child_pkg_idle_wkups += (ri_current->ri_pkg_idle_wkups +
+					ri_current->ri_child_pkg_idle_wkups);
+	ri->ri_child_interrupt_wkups += (ri_current->ri_interrupt_wkups +
+					ri_current->ri_child_interrupt_wkups);
+	ri->ri_child_pageins += (ri_current->ri_pageins +
+					ri_current->ri_child_pageins);
+	ri->ri_child_elapsed_abstime += ((ri_current->ri_proc_exit_abstime -
+		ri_current->ri_proc_start_abstime) + ri_current->ri_child_elapsed_abstime);
 }
 
 void
@@ -1227,7 +1448,7 @@ static int
 iopolicysys_vfs(struct proc *p, int cmd, int scope, int policy, struct _iopol_param_t *iop_param);
 
 int
-iopolicysys(struct proc *p, struct iopolicysys_args *uap, __unused int32_t *retval)
+iopolicysys(struct proc *p, struct iopolicysys_args *uap, int32_t *retval)
 {
 	int     error = 0;
 	struct _iopol_param_t iop_param;
@@ -1238,6 +1459,10 @@ iopolicysys(struct proc *p, struct iopolicysys_args *uap, __unused int32_t *retv
 	switch (iop_param.iop_iotype) {
 		case IOPOL_TYPE_DISK:
 			error = iopolicysys_disk(p, uap->cmd, iop_param.iop_scope, iop_param.iop_policy, &iop_param);
+			if (error == EIDRM) {
+				*retval = -2;
+				error = 0;
+			}
 			if (error)
 				goto out;
 			break;
@@ -1279,6 +1504,32 @@ iopolicysys_disk(struct proc *p __unused, int cmd, int scope, int policy, struct
 		case IOPOL_SCOPE_THREAD:
 			thread = current_thread();
 			policy_flavor = TASK_POLICY_IOPOL;
+
+			/* Not allowed to combine QoS and (non-PASSIVE) IO policy, doing so strips the QoS */
+			if (cmd == IOPOL_CMD_SET && thread_has_qos_policy(thread)) {
+				switch (policy) {
+					case IOPOL_DEFAULT:
+					case IOPOL_PASSIVE:
+						break;
+					case IOPOL_UTILITY:
+					case IOPOL_THROTTLE:
+					case IOPOL_IMPORTANT:
+					case IOPOL_STANDARD:
+						if (!thread_is_static_param(thread)) {
+							thread_remove_qos_policy(thread);
+							/*
+							 * This is not an error case, this is to return a marker to user-space that
+							 * we stripped the thread of its QoS class.
+							 */
+							error = EIDRM;
+							break;
+						}
+						/* otherwise, fall through to the error case. */
+					default:
+						error = EINVAL;
+						goto out;
+				}
+			}
 			break;
 
 		case IOPOL_SCOPE_DARWIN_BG:
@@ -1413,34 +1664,40 @@ out:
 }
 
 /* BSD call back function for task_policy */
-void proc_apply_task_networkbg(void * bsd_info, thread_t thread, int bg);
+void proc_apply_task_networkbg(void * bsd_info, thread_t thread);
 
 void
-proc_apply_task_networkbg(void * bsd_info, thread_t thread, int bg)
+proc_apply_task_networkbg(void * bsd_info, thread_t thread)
 {
-	proc_t p = PROC_NULL;
-	proc_t curp = (proc_t)bsd_info;
-	pid_t pid;
-	int prio = (bg ? PRIO_DARWIN_BG : 0);
+	assert(bsd_info != PROC_NULL);
 
-	pid = curp->p_pid;
-	p = proc_find(pid);
+	pid_t pid = proc_pid((proc_t)bsd_info);
+
+	proc_t p = proc_find(pid);
+
 	if (p != PROC_NULL) {
-		do_background_socket(p, thread, prio);
+		assert(p == (proc_t)bsd_info);
+
+		do_background_socket(p, thread);
 		proc_rele(p);
 	}
 }
 
 void
-gather_rusage_info_v2(proc_t p, struct rusage_info_v2 *ru, int flavor)
+gather_rusage_info(proc_t p, rusage_info_current *ru, int flavor)
 {
 	struct rusage_info_child *ri_child;
 
 	assert(p->p_stats != NULL);
 	switch(flavor) {
+
+	case RUSAGE_INFO_V3:
+		fill_task_qos_rusage(p->task, ru);
+		fill_task_billed_usage(p->task, ru);
+		/* fall through */
+
 	case RUSAGE_INFO_V2:
-		ru->ri_diskio_bytesread = p->p_stats->ri_diskiobytes.ri_bytesread;
-		ru->ri_diskio_byteswritten = p->p_stats->ri_diskiobytes.ri_byteswritten;
+		fill_task_io_rusage(p->task, ru);
 		/* fall through */
 
 	case RUSAGE_INFO_V1:
@@ -1462,51 +1719,57 @@ gather_rusage_info_v2(proc_t p, struct rusage_info_v2 *ru, int flavor)
 
 	case RUSAGE_INFO_V0:
 		proc_getexecutableuuid(p, (unsigned char *)&ru->ri_uuid, sizeof (ru->ri_uuid));
-		fill_task_rusage_v2(p->task, ru);
+		fill_task_rusage(p->task, ru);
 		ru->ri_proc_start_abstime = p->p_stats->ps_start;
 	}
 }
 
-/*
- * Temporary function to copy value from rusage_info_v2 to rusage_info_v0.
- */
 static void
-rusage_info_v2_to_v0(struct rusage_info_v0 *ri_v0, struct rusage_info_v2 *ri_v2)
+rusage_info_conversion(rusage_info_t ri_info, rusage_info_current *ri_current, int flavor)
 {
-	memcpy(&ri_v0->ri_uuid[0], &ri_v2->ri_uuid[0], sizeof(ri_v0->ri_uuid));	
-	ri_v0->ri_user_time = ri_v2->ri_user_time;
-	ri_v0->ri_system_time = ri_v2->ri_system_time;
-	ri_v0->ri_pkg_idle_wkups = ri_v2->ri_pkg_idle_wkups;
-	ri_v0->ri_interrupt_wkups = ri_v2->ri_interrupt_wkups;
-	ri_v0->ri_pageins = ri_v2->ri_pageins;
-	ri_v0->ri_wired_size = ri_v2->ri_wired_size;
-	ri_v0->ri_resident_size = ri_v2->ri_resident_size;
-	ri_v0->ri_phys_footprint = ri_v2->ri_phys_footprint;
-	ri_v0->ri_proc_start_abstime = ri_v2->ri_proc_start_abstime;
-	ri_v0->ri_proc_exit_abstime = ri_v2->ri_proc_exit_abstime;
+	struct rusage_info_v0 *ri_v0;
+	struct rusage_info_v1 *ri_v1;
+	struct rusage_info_v2 *ri_v2;
+
+	switch (flavor) {
+
+	case RUSAGE_INFO_V2:
+		ri_v2 = (struct rusage_info_v2 *)ri_info;
+		ri_v2->ri_diskio_bytesread = ri_current->ri_diskio_bytesread;
+		ri_v2->ri_diskio_byteswritten = ri_current->ri_diskio_byteswritten;
+		/* fall through */
+
+	case RUSAGE_INFO_V1:
+		ri_v1 = (struct rusage_info_v1 *)ri_info;
+		ri_v1->ri_child_user_time = ri_current->ri_child_user_time;
+		ri_v1->ri_child_system_time = ri_current->ri_child_system_time;
+		ri_v1->ri_child_pkg_idle_wkups = ri_current->ri_child_pkg_idle_wkups;
+		ri_v1->ri_child_interrupt_wkups = ri_current->ri_child_interrupt_wkups; 
+		ri_v1->ri_child_pageins = ri_current->ri_child_pageins;
+		ri_v1->ri_child_elapsed_abstime = ri_current->ri_child_elapsed_abstime;
+		/* fall through */
+
+	case RUSAGE_INFO_V0:
+		ri_v0 = (struct rusage_info_v0 *)ri_info;
+		memcpy(&ri_v0->ri_uuid[0], &ri_current->ri_uuid[0], sizeof(ri_v0->ri_uuid));	
+		ri_v0->ri_user_time = ri_current->ri_user_time;
+		ri_v0->ri_system_time = ri_current->ri_system_time;
+		ri_v0->ri_pkg_idle_wkups = ri_current->ri_pkg_idle_wkups;
+		ri_v0->ri_interrupt_wkups = ri_current->ri_interrupt_wkups;
+		ri_v0->ri_pageins = ri_current->ri_pageins;
+		ri_v0->ri_wired_size = ri_current->ri_wired_size;
+		ri_v0->ri_resident_size = ri_current->ri_resident_size;
+		ri_v0->ri_phys_footprint = ri_current->ri_phys_footprint;
+		ri_v0->ri_proc_start_abstime = ri_current->ri_proc_start_abstime;
+		ri_v0->ri_proc_exit_abstime = ri_current->ri_proc_exit_abstime;
+
+		break;
+	
+	default:
+		break;
+	}
 }
 
-static void
-rusage_info_v2_to_v1(struct rusage_info_v1 *ri_v1, struct rusage_info_v2 *ri_v2)
-{
-	memcpy(&ri_v1->ri_uuid[0], &ri_v2->ri_uuid[0], sizeof(ri_v1->ri_uuid));	
-	ri_v1->ri_user_time = ri_v2->ri_user_time;
-	ri_v1->ri_system_time = ri_v2->ri_system_time;
-	ri_v1->ri_pkg_idle_wkups = ri_v2->ri_pkg_idle_wkups;
-	ri_v1->ri_interrupt_wkups = ri_v2->ri_interrupt_wkups;
-	ri_v1->ri_pageins = ri_v2->ri_pageins;
-	ri_v1->ri_wired_size = ri_v2->ri_wired_size;
-	ri_v1->ri_resident_size = ri_v2->ri_resident_size;
-	ri_v1->ri_phys_footprint = ri_v2->ri_phys_footprint;
-	ri_v1->ri_proc_start_abstime = ri_v2->ri_proc_start_abstime;
-	ri_v1->ri_proc_exit_abstime = ri_v2->ri_proc_exit_abstime;
-	ri_v1->ri_child_user_time = ri_v2->ri_child_user_time;
-	ri_v1->ri_child_system_time = ri_v2->ri_child_system_time;
-	ri_v1->ri_child_pkg_idle_wkups = ri_v2->ri_child_pkg_idle_wkups;
-	ri_v1->ri_child_interrupt_wkups = ri_v2->ri_child_interrupt_wkups; 
-	ri_v1->ri_child_pageins = ri_v2->ri_child_pageins;
-	ri_v1->ri_child_elapsed_abstime = ri_v2->ri_child_elapsed_abstime;
-}
 
 int
 proc_get_rusage(proc_t p, int flavor, user_addr_t buffer, __unused int is_zombie)
@@ -1514,6 +1777,9 @@ proc_get_rusage(proc_t p, int flavor, user_addr_t buffer, __unused int is_zombie
 	struct rusage_info_v0 ri_v0;
 	struct rusage_info_v1 ri_v1;
 	struct rusage_info_v2 ri_v2;
+	struct rusage_info_v3 ri_v3;
+
+	rusage_info_current ri_current;
 
 	int error = 0;
 
@@ -1524,11 +1790,11 @@ proc_get_rusage(proc_t p, int flavor, user_addr_t buffer, __unused int is_zombie
 		 * Otherwise, look to the cached info in the zombie proc.
 		 */
 		if (p->p_ru == NULL) {
-			gather_rusage_info_v2(p, &ri_v2, flavor);
-			ri_v2.ri_proc_exit_abstime = 0;
-			rusage_info_v2_to_v0(&ri_v0, &ri_v2);
+			gather_rusage_info(p, &ri_current, flavor);
+			ri_current.ri_proc_exit_abstime = 0;
+			rusage_info_conversion(&ri_v0, &ri_current, flavor);
 		} else {
-			rusage_info_v2_to_v0(&ri_v0, &p->p_ru->ri);
+			rusage_info_conversion(&ri_v0, &p->p_ru->ri, flavor);
 		}
 		error = copyout(&ri_v0, buffer, sizeof (ri_v0));
 		break;
@@ -1539,11 +1805,11 @@ proc_get_rusage(proc_t p, int flavor, user_addr_t buffer, __unused int is_zombie
 		 * Otherwise, look to the cached info in the zombie proc.
 		 */
 		if (p->p_ru == NULL) {
-			gather_rusage_info_v2(p, &ri_v2, flavor);
-			ri_v2.ri_proc_exit_abstime = 0;
-			rusage_info_v2_to_v1(&ri_v1, &ri_v2);
+			gather_rusage_info(p, &ri_current, flavor);
+			ri_current.ri_proc_exit_abstime = 0;
+			rusage_info_conversion(&ri_v1, &ri_current, flavor);
 		} else {
-			rusage_info_v2_to_v1(&ri_v1, &p->p_ru->ri);
+			rusage_info_conversion(&ri_v1, &p->p_ru->ri, flavor);
 		}
 		error = copyout(&ri_v1, buffer, sizeof (ri_v1));
 		break;
@@ -1554,12 +1820,27 @@ proc_get_rusage(proc_t p, int flavor, user_addr_t buffer, __unused int is_zombie
 		 * Otherwise, look to the cached info in the zombie proc.
 		 */
 		if (p->p_ru == NULL) {
-			gather_rusage_info_v2(p, &ri_v2, flavor);
-			ri_v2.ri_proc_exit_abstime = 0;
+			gather_rusage_info(p, &ri_current, flavor);
+			ri_current.ri_proc_exit_abstime = 0;
+			rusage_info_conversion(&ri_v2, &ri_current, flavor);
 		} else {
-			ri_v2 = p->p_ru->ri;
+			rusage_info_conversion(&ri_v2, &p->p_ru->ri, flavor);
 		}
 		error = copyout(&ri_v2, buffer, sizeof (ri_v2));
+		break;
+
+	case RUSAGE_INFO_V3:
+		/*
+		 * If task is still alive, collect info from the live task itself.
+		 * Otherwise, look to the cached info in the zombie proc.
+		 */
+		if (p->p_ru == NULL) {
+			gather_rusage_info(p, &ri_v3, flavor);
+			ri_v3.ri_proc_exit_abstime = 0;
+		} else {
+			ri_v3 = p->p_ru->ri;
+		}
+		error = copyout(&ri_v3, buffer, sizeof (ri_v3));
 		break;
 
 	default:
@@ -1597,18 +1878,24 @@ mach_to_bsd_rv(int mach_rv)
  *     RLIMIT_WAKEUPS_MONITOR
  */
 int
-proc_rlimit_control(__unused struct proc *p, struct proc_rlimit_control_args *uap, int32_t *retval)
+proc_rlimit_control(__unused struct proc *p, struct proc_rlimit_control_args *uap, __unused int32_t *retval)
 {
 	proc_t	targetp;
 	int 	error = 0;
 	struct	proc_rlimit_control_wakeupmon wakeupmon_args;
 	uint32_t cpumon_flags;
+	uint32_t cpulimits_flags;
 	kauth_cred_t my_cred, target_cred;
 
-	*retval = 0;
+	/* -1 implicitly means our own process (perhaps even the current thread for per-thread attributes) */
+	if (uap->pid == -1) {
+		targetp = proc_self();
+	} else {
+		targetp = proc_find(uap->pid);
+	}
 
-	if ((targetp = proc_find(uap->pid)) == PROC_NULL) {
-		*retval = -1;
+	/* proc_self() can return NULL for an exiting process */
+	if (targetp == PROC_NULL) {
 		return (ESRCH);
 	}
 
@@ -1620,9 +1907,7 @@ proc_rlimit_control(__unused struct proc *p, struct proc_rlimit_control_args *ua
 	    kauth_cred_getruid(my_cred) != kauth_cred_getuid(target_cred)) {
 		proc_rele(targetp);
 		kauth_cred_unref(&target_cred);
-		*retval = -1;
-		error = EACCES;
-		return (error);
+		return (EACCES);
 	}
 
 	switch (uap->flavor) {
@@ -1640,6 +1925,29 @@ proc_rlimit_control(__unused struct proc *p, struct proc_rlimit_control_args *ua
 		cpumon_flags = uap->arg; // XXX temporarily stashing flags in argp (12592127)
 		error = mach_to_bsd_rv(task_cpu_usage_monitor_ctl(targetp->task, &cpumon_flags));
 		break;
+	case RLIMIT_THREAD_CPULIMITS:
+		cpulimits_flags = (uint32_t)uap->arg; // only need a limited set of bits, pass in void * argument
+
+		if (uap->pid != -1) {
+			error = EINVAL;
+			break;
+		}
+
+		uint8_t percent = 0;
+		uint32_t ms_refill = 0;
+		uint64_t ns_refill;
+
+		percent = (uint8_t)(cpulimits_flags & 0xffU);					/* low 8 bits for percent */
+		ms_refill = (cpulimits_flags >> 8) & 0xffffff;		/* next 24 bits represent ms refill value */
+		if (percent >= 100) {
+			error = EINVAL;
+			break;
+		}
+
+		ns_refill = ((uint64_t)ms_refill) * NSEC_PER_MSEC;
+
+		error = mach_to_bsd_rv(thread_set_cpulimit(THREAD_CPULIMIT_BLOCK, percent, ns_refill));
+		break;
 	default:
 		error = EINVAL;
 		break;
@@ -1648,13 +1956,21 @@ proc_rlimit_control(__unused struct proc *p, struct proc_rlimit_control_args *ua
 	proc_rele(targetp);
 	kauth_cred_unref(&target_cred);
 
-	if (error != 0) {
-		*retval = -1;
-	}
-
 	/*
 	 * Return value from this function becomes errno to userland caller.
-	 * *retval is what the system call invocation returns.
 	 */
 	return (error);
+}
+
+/*
+ * Return the current amount of CPU consumed by this thread (in either user or kernel mode)
+ */
+int thread_selfusage(struct proc *p __unused, struct thread_selfusage_args *uap __unused, uint64_t *retval)
+{
+	uint64_t runtime;
+
+	runtime = thread_get_runtime_self();
+	*retval = runtime;
+
+	return (0);
 }

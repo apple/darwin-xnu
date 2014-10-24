@@ -298,6 +298,8 @@ typedef int mpo_bpfdesc_check_receive_t(
   @brief Indicate desire to change the process label at exec time
   @param old Existing subject credential
   @param vp File being executed
+  @param offset Offset of binary within file being executed
+  @param scriptvp Script being executed by interpreter, if any.
   @param vnodelabel Label corresponding to vp
   @param scriptvnodelabel Script vnode label
   @param execlabel Userspace provided execution label
@@ -337,6 +339,7 @@ typedef int mpo_bpfdesc_check_receive_t(
 typedef int mpo_cred_check_label_update_execve_t(
 	kauth_cred_t old,
 	struct vnode *vp,
+	off_t offset,
 	struct vnode *scriptvp,
 	struct label *vnodelabel,
 	struct label *scriptvnodelabel,
@@ -532,9 +535,12 @@ typedef int mpo_cred_label_internalize_t(
   @param new_cred New subject credential to be labeled
   @param p Object process.
   @param vp File being executed
+  @param offset Offset of binary within file being executed
+  @param scriptvp Script being executed by interpreter, if any.
   @param vnodelabel Label corresponding to vp
   @param scriptvnodelabel Script vnode label
   @param execlabel Userspace provided execution label
+  @param csflags Code signing flags to be set after exec
   @param macpolicyattr MAC policy-specific spawn attribute data.
   @param macpolicyattrlen Length of policy-specific spawn attribute data.
   @see mac_execve
@@ -562,16 +568,20 @@ typedef int mpo_cred_label_internalize_t(
 
   The vnode lock is held during this operation.  No changes should be
   made to the old credential structure.
+  @return 0 on success, Otherwise, return non-zero if update results in
+  termination of child.
 */
-typedef void mpo_cred_label_update_execve_t(
+typedef int mpo_cred_label_update_execve_t(
 	kauth_cred_t old_cred,
 	kauth_cred_t new_cred,
 	struct proc *p,
 	struct vnode *vp,
+	off_t offset,
 	struct vnode *scriptvp,
 	struct label *vnodelabel,
 	struct label *scriptvnodelabel,
 	struct label *execlabel,
+	u_int *csflags,
 	void *macpolicyattr,
 	size_t macpolicyattrlen,
 	int *disjointp
@@ -1253,7 +1263,7 @@ typedef int mpo_iokit_check_open_t(
 /**
   @brief Access control check for setting I/O Kit device properties
   @param cred Subject credential
-  @param registry_entry Target device
+  @param entry Target device
   @param properties Property list
 
   Determine whether the subject identified by the credential can set
@@ -1266,6 +1276,50 @@ typedef int mpo_iokit_check_set_properties_t(
 	kauth_cred_t cred,
 	io_object_t entry,
 	io_object_t properties
+);
+/**
+  @brief Indicate desire to filter I/O Kit devices properties
+  @param cred Subject credential
+  @param entry Target device
+  @see mpo_iokit_check_get_property_t
+
+  Indicate whether this policy may restrict the subject credential
+  from reading properties of the target device.
+  If a policy returns success from this entry point, the
+  mpo_iokit_check_get_property entry point will later be called
+  for each property that the subject credential tries to read from
+  the target device.
+
+  This entry point is primarilly to optimize bulk property reads
+  by skipping calls to the mpo_iokit_check_get_property entry point
+  for credentials / devices no MAC policy is interested in.
+
+  @warning Even if a policy returns 0, it should behave correctly in
+  the presence of an invocation of mpo_iokit_check_get_property, as that
+  call may happen as a result of another policy requesting a transition.
+
+  @return Non-zero if a transition is required, 0 otherwise.
+ */
+typedef int mpo_iokit_check_filter_properties_t(
+	kauth_cred_t cred,
+	io_object_t entry
+);
+/**
+  @brief Access control check for getting I/O Kit device properties
+  @param cred Subject credential
+  @param entry Target device
+  @param name Property name 
+
+  Determine whether the subject identified by the credential can get
+  properties on an I/O Kit device.
+
+  @return Return 0 if access is granted, or an appropriate value for
+  errno.
+*/
+typedef int mpo_iokit_check_get_property_t(
+	kauth_cred_t cred,
+	io_object_t entry,
+	const char *name
 );
 /**
   @brief Access control check for software HID control
@@ -2336,407 +2390,6 @@ typedef int mpo_policy_syscall_t(
 	struct proc *p,
 	int call,
 	user_addr_t arg
-);
-/**
-  @brief Access control check for copying a send right to another task
-  @param task Label of the sender task
-  @param port Label of the affected port
-
-  Access control check for copying send rights to the port from the
-  specified task. A complementary entry point, mpo_port_check_hold_send,
-  handles the receiving task. port_check_copy_send is called as part of
-  a group of policy invocations when messages with port rights are sent.
-  All access control checks made for a particular message must be successful
-  for the message to be sent.
-
-  The task label and the port are locked. Sleeping is permitted.
-
-  @return Return 0 if access is granted, non-zero otherwise.
-*/
-typedef int mpo_port_check_copy_send_t(
-	struct label *task,
-	struct label *port
-);
-/**
-  @brief Access control check for obtaining a receive right
-  @param task Label of the receiving task
-  @param port Label of the affected port
-
-  Access control check for a task obtaining receive rights to a
-  port. Usually, these are port rights that were obtained with a call
-  to mach_port_allocate.  This entry point is called as part of a
-  group of policy invocations when messages with port rights are
-  received.  All of these access control checks must succeed in order
-  to receive the message.
-
-  The task label and the port are locked. Sleeping is permitted.
-
-  @return Return 0 if access is granted, non-zero otherwise.
-*/
-typedef int mpo_port_check_hold_receive_t(
-	struct label *task,
-	struct label *port
-);
-/**
-  @brief Access control check for obtaining a send once right
-  @param task Label of the receiving task
-  @param port Label of the affected port
-
-  Access control check for a task obtaining send once rights to a port. Usually,
-  these are port rights that were part of a message sent by another userspace
-  task. port_check_hold_send_once is called as part of a group of policy
-  invocations when messages with port rights are received. All of these access
-  control checks must succeed in order to receive the message.
-
-  The task label and the port are locked. Sleeping is permitted.
-
-  @return Return 0 if access is granted, non-zero otherwise.
-*/
-typedef int mpo_port_check_hold_send_once_t(
-	struct label *task,
-	struct label *port
-);
-/**
-  @brief Access control check for obtaining a send right
-  @param task Label of the receiving task
-  @param port Label of the affected port
-
-  Access control check for a task obtaining send rights to a port. Usually,
-  these are port rights that were part of a message sent by another userspace
-  task. port_check_hold_send is called as part of a group of policy
-  invocations when messages with port rights are received. All of these access
-  control checks must succeed in order to receive the message.
-
-  The task label and the port are locked. Sleeping is permitted.
-
-  @return Return 0 if access is granted, non-zero otherwise.
-*/
-typedef int mpo_port_check_hold_send_t(
-	struct label *task,
-	struct label *port
-);
-/**
-  @brief Access control check for relabelling ports
-  @param task Subject's task label
-  @param oldlabel Original label of port
-  @param newlabel New label for port
-
-  Access control check for relabelling ports. The policy should
-  indicate whether the subject is permitted to change the label
-  of a port from oldlabel to newlabel. The port is locked, but
-  the subject's task label is not locked.
-
-  @warning XXX In future releases, the task label lock will likely
-  also be held.
-
-  @return Return 0 if access is granted, non-zero otherwise.
-*/
-typedef int mpo_port_check_label_update_t(
-	struct label *task,
-	struct label *oldlabel,
-	struct label *newlabel
-);
-/**
-  @brief Access control check for producing a send once right from a receive right
-  @param task Label of the sender task
-  @param port Label of the affected port
-
-  Access control check for obtaining send once rights from receive rights.
-  The new send once right may be destined for the calling task, or a different
-  task.  In either case the mpo_port_check_hold_send_once entry point handles
-  the receiving task. port_check_make_send_once may be called as part of a
-  group of policy invocations when messages with port rights are sent.
-  All access control checks made for a particular message must be successful
-  for the message to be sent.
-
-  The task label and the port are locked. Sleeping is permitted.
-
-  @return Return 0 if access is granted, non-zero otherwise.
-*/
-typedef int mpo_port_check_make_send_once_t(
-	struct label *task,
-	struct label *port
-);
-/**
-  @brief Access control check for producing a send right from a receive right
-  @param task Label of the sender task
-  @param port Label of the affected port
-
-  Access control check for obtaining send rights from receive rights. The new
-  send right may be destined for the calling task, or a different task.
-  In either case the mpo_port_check_hold_send entry point
-  handles the receiving task. port_check_make_send may be called as part of
-  a group of policy invocations when messages with port rights are sent.
-  All access control checks made for a particular message must be successful
-  for the message to be sent.
-
-  The task label and the port are locked. Sleeping is permitted.
-
-  @return Return 0 if access is granted, non-zero otherwise.
-*/
-typedef int mpo_port_check_make_send_t(
-	struct label *task,
-	struct label *port
-);
-/**
-  @brief Compute access control check for a Mach message-based service
-  @param proc Sender's process structure (may be NULL)
-  @param task Sender's task label
-  @param port Destination port label
-  @param msgid Message id
-
-  Access control computation for message-based services. This entry point
-  computes permission to the service requested by the specified port and message
-  id, for example a single MiG server routine, and is unrelated to the access
-  check for sending messages to ports (but that check must succeed for the
-  message to be sent to the destination). The result of this access computation
-  is stored in the message trailer field msgh_ad (only if requested by the
-  recipient); it does not actually inhibit the message from being sent or
-  received.
-
-  @return 0 for access granted, nonzero for access denied.
-*/
-
-typedef int mpo_port_check_method_t(
-	struct proc *proc,
-	struct label *task,
-	struct label *port,
-	int msgid
-);
-/**
-  @brief Access control check for transferring a receive right
-  @param task Label of the sender task
-  @param port Label of the affected port
-
-  Access control check for transferring the receive right to a port out
-  of the specified task. A complementary entry point,
-  mpo_port_check_hold_receive, handles the receiving task.
-  port_check_move_receive is called as part of
-  a group of policy invocations when messages with port rights are sent.
-  All access control checks made for a particular message must be successful
-  for the message to be sent.
-
-  The task label and the port are locked. Sleeping is permitted.
-
-  @return Return 0 if access is granted, non-zero otherwise.
-*/
-typedef int mpo_port_check_move_receive_t(
-	struct label *task,
-	struct label *port
-);
-/**
-  @brief Access control check for transferring a send once right
-  @param task Label of the sender task
-  @param port Label of the affected port
-
-  Access control check for transferring a send once right from one task to
-  the task listening to the specified port. A complementary entry point,
-  mpo_port_check_hold_send_once, handles the receiving task.
-  port_check_move_send_once is called as part of a group of policy invocations
-  when messages with port rights are sent.  All access control checks made
-  for a particular message must be successful for the message to be sent.
-
-  The task label and the port are locked. Sleeping is permitted.
-
-  @return Return 0 if access is granted, non-zero otherwise.
-*/
-typedef int mpo_port_check_move_send_once_t(
-	struct label *task,
-	struct label *port
-);
-/**
-  @brief Access control check for transferring a send right
-  @param task Label of the sender task
-  @param port Label of the affected port
-
-  Access control check for transferring a send right from one task to the
-  task listening to the specified port. A complementary entry point,
-  mpo_port_check_hold_send, handles the receiving task.
-  port_check_move_send is called as part of a group of policy invocations
-  when messages with port rights are sent.  All access control checks made
-  for a particular message must be successful for the message to be sent.
-
-  The task label and the port are locked. Sleeping is permitted.
-
-  @return Return 0 if access is granted, non-zero otherwise.
-*/
-typedef int mpo_port_check_move_send_t(
-	struct label *task,
-	struct label *port
-);
-/**
-  @brief Access control check for receiving Mach messsages
-  @param task Label of the receiving task
-  @param sender Label of the sending task
-
-  Access control check for receiving messages. The two labels are locked.
-
-  @warning This entry point can be invoked from many places inside the
-  kernel, with arbitrary other locks held. The implementation of this
-  entry point must not cause page faults, as those are handled by mach
-  messages.
-
-  @return Return 0 if access is granted, non-zero otherwise.
-*/
-typedef int mpo_port_check_receive_t(
-	struct label *task,
-	struct label *sender
-);
-/**
-  @brief Access control check for sending Mach messsages
-  @param task Label of the sender task
-  @param port Label of the destination port
-
-  Access control check for sending messages. The task label and the
-  port are locked.
-
-  @warning This entry point can be invoked from many places inside the
-  kernel, with arbitrary other locks held. The implementation of this
-  entry point must not cause page faults, as those are handled by mach
-  messages.
-
-  @return Return 0 if access is granted, non-zero otherwise.
-*/
-typedef int mpo_port_check_send_t(
-	struct label *task,
-	struct label *port
-);
-/**
-  @brief Generic access control check
-  @param subj Caller-provided subject label
-  @param obj Caller-provided object label
-  @param serv Service or object class name
-  @param perm Permission, or method, within the specified service
-
-  This function provides a general way for a user process to query
-  an arbitrary access control decision from the system's security policies.
-  Currently, there are no standards for the format of the service and
-  permission names. Labels may be either cred or port labels; the policy
-  must accept either. The userspace interfaces to this entry point allow
-  label strings or label handles (ports) to be provided.
-
-  @return Return 0 if access is granted, non-zero otherwise.
-*/
-typedef int mpo_port_check_service_t(
-	struct label *subj,
-	struct label *obj,
-	const char *serv,
-	const char *perm
-);
-/**
-  @brief Assign a label to a new Mach port created by the kernel
-  @param portlabel Label for the new port
-  @param isreply True if the port is for a reply message from the kernel
-
-  Assign a label to a new port created by the kernel. If the port is being
-  used to reply to a message, isreply is 1 (0 otherwise). The port is locked.
-*/
-typedef void mpo_port_label_associate_kernel_t(
-	struct label *portlabel,
-	int isreply
-);
-/**
-  @brief Assign a label to a new Mach port
-  @param it Task label of issuer
-  @param st Task label of target
-  @param portlabel Label for the new port
-
-  Assign a label to a new port. The policy can base this label on
-  the label of the calling task, as well as the label of the target task.
-  The target task is the one which recieves the first right for this port.
-  Both task labels and the port are locked.
-*/
-typedef void mpo_port_label_associate_t(
-	struct label *it,
-	struct label *st,
-	struct label *portlabel
-);
-/**
-  @brief Request label for new (userspace) object
-  @param subj Subject label
-  @param obj Parent or existing object label
-  @param serv Name of service
-  @param out Computed label
-
-  Ask the loaded policies to compute a label based on the two input labels
-  and the service name. There is currently no standard for the service name,
-  or even what the input labels represent (Subject and parent object are only
-  a suggestion). If successful, the computed label is stored in out. All labels
-  must be port (or task) labels. The userspace interfaces to this entry point
-  allow label handles (ports) to be provided.
-
-  @return 0 on success, or an errno value for failure.
-*/
-typedef int mpo_port_label_compute_t(
-	struct label *subj,
-	struct label *obj,
-	const char *serv,
-	struct label *out
-);
-/**
-  @brief Copy a Mach port label
-  @param src Source port label
-  @param dest Destination port label
-
-  Copy the Mach port label information from src to dest.  This is used
-  to copy user-suplied labels into an existing port.
-*/
-typedef void mpo_port_label_copy_t(
-	struct label *src,
-	struct label *dest
-);
-/**
-  @brief Destroy Mach port label
-  @param label The label to be destroyed
-
-  Destroy a Mach port label.  Since the object is going out of
-  scope, policy modules should free any internal storage associated
-  with the label so that it may be destroyed.
-*/
-typedef void mpo_port_label_destroy_t(
-	struct label *label
-);
-/**
-  @brief Initialize Mach port label
-  @param label New label to initialize
-
-  Initialize the label for a newly instantiated Mach port.  Sleeping
-  is permitted.
-*/
-typedef void mpo_port_label_init_t(
-	struct label *label
-);
-/**
-  @brief Update a Mach task port label
-  @param cred User credential label to be used as the source
-  @param task Mach port label to be used as the destination
-  @see mpo_cred_label_update_t
-  @see mpo_cred_label_update_execve_t
-
-  Update the label on a Mach task port, using the supplied user
-  credential label. When a mac_cred_label_update_execve or a mac_cred_label_update
-  operation causes the label on a user credential to change, the Mach
-  task port label also needs to be updated to reflect the change.
-  Both labels are already valid (initialized and created).
-*/
-typedef void mpo_port_label_update_cred_t(
-	struct label *cred,
-	struct label *task
-);
-/**
-  @brief Assign a label to a Mach port connected to a kernel object
-  @param portlabel Label for the port
-  @param kotype Type of kernel object
-
-  Label a kernel port based on the type of object behind it. The
-  kotype parameter is one of the IKOT constants in
-  <kern/ipc_kobject.h>. The port already has a valid label from either
-  mpo_port_label_associate_kernel, or because it is a task port and has a label
-  derived from the process and task labels. The port is locked.
-*/
-typedef void mpo_port_label_update_kobject_t(
-	struct label *portlabel,
-	int kotype
 );
 /**
   @brief Access control check for POSIX semaphore create
@@ -4147,11 +3800,11 @@ typedef int mpo_system_check_swapon_t(
 /**
   @brief Access control check for sysctl
   @param cred Subject credential
+  @param namestring String representation of sysctl name.
   @param name Integer name; see sysctl(3)
   @param namelen Length of name array of integers; see sysctl(3)
   @param old 0 or address where to store old value; see sysctl(3)
-  @param oldlenp Pointer to length of old buffer; see sysctl(3)
-  @param inkernel Boolean; 1 if called from kernel
+  @param oldlen Length of old buffer; see sysctl(3)
   @param newvalue 0 or address of new value; see sysctl(3)
   @param newlen Length of new buffer; see sysctl(3)
 
@@ -4165,13 +3818,13 @@ typedef int mpo_system_check_swapon_t(
   @return Return 0 if access is granted, otherwise an appropriate value for
   errno should be returned.
 */
-typedef int mpo_system_check_sysctl_t(
+typedef int mpo_system_check_sysctlbyname_t(
 	kauth_cred_t cred,
+	const char *namestring,
 	int *name,
 	u_int namelen,
 	user_addr_t old,	/* NULLOK */
-	user_addr_t oldlenp,	/* NULLOK */
-	int inkernel,
+	size_t oldlen,
 	user_addr_t newvalue,	/* NULLOK */
 	size_t newlen
 );
@@ -4681,6 +4334,28 @@ typedef int mpo_proc_check_get_task_t(
 	kauth_cred_t cred,
 	struct proc *p
 );
+
+/**
+ @brief Check whether task's IPC may inherit across process exec
+ @param proc current process instance
+ @param cur_vp vnode pointer to current instance
+ @param cur_offset offset of binary of currently executing image
+ @param img_vp vnode pointer to to be exec'ed image
+ @param img_offset offset into file which is selected for execution
+ @param scriptvp vnode pointer of script file if any.
+ @return Return 0 if access is granted.
+ 	EPERM     if parent does not have any entitlements.
+	EACCESS   if mismatch in entitlements
+*/
+typedef int mpo_proc_check_inherit_ipc_ports_t(
+	struct proc *p,
+  struct vnode *cur_vp,
+  off_t cur_offset,
+  struct vnode *img_vp,
+  off_t img_offset,
+  struct vnode *scriptvp
+);
+
 /**
  @brief Privilege check for a process to run invalid
  @param proc Object process
@@ -4695,143 +4370,6 @@ typedef int mac_proc_check_run_cs_invalid_t(
 	struct proc *p
 );
 
-
-/**
-  @brief Assign a label to a new kernelspace Mach task
-  @param kproc New task
-  @param tasklabel Label for new task
-  @param portlabel Label for new task port
-  @see mpo_cred_label_associate_kernel_t
-
-  Assign labels to a new kernel task and its task port. Both the task and
-  task port labels should be specified. Both new labels are initialized.
-  If there is an associated BSD process structure, it will be labelled
-  with calls to mpo_cred_label_associate_kernel.
-*/
-typedef void mpo_task_label_associate_kernel_t(
-	struct task *kproc,
-	struct label *tasklabel,
-	struct label *portlabel
-);
-/**
-  @brief Assign a label to a new (userspace) Mach task
-  @param parent Parent task
-  @param child New (child) task
-  @param parentlabel Label of parent task
-  @param childlabel Label for new task
-  @param childportlabel Label for new task's task port
-
-  Assign labels to a new task and its task port. Both the task and task port
-  labels should be specified. Both new labels are initialized.  If the task
-  will have an associated BSD process, that information will be made available
-  by the task_label_update and port_label_update_cred entry points.
-*/
-typedef void mpo_task_label_associate_t(
-	struct task *parent,
-	struct task *child,
-	struct label *parentlabel,
-	struct label *childlabel,
-	struct label *childportlabel
-);
-/**
-  @brief Copy a Mach task label
-  @param src Source task label
-  @param dest Destination task label
-
-  Copy the Mach task label information from src to dest.  This is used
-  when duplicating label handles to implement copy-on-write semantics.
-*/
-typedef void mpo_task_label_copy_t(
-	struct label *src,
-	struct label *dest
-);
-/**
-  @brief Destroy Mach task label
-  @param label The label to be destroyed
-
-  Destroy a Mach task label.  Since the object is going out of
-  scope, policy modules should free any internal storage associated
-  with the label so that it may be destroyed.
-*/
-typedef void mpo_task_label_destroy_t(
-	struct label *label
-);
-/**
-  @brief Externalize a task label
-  @param label Label to be externalized
-  @param element_name Name of the label namespace for which labels should be
-  externalized
-  @param sb String buffer to be filled with a text representation of the label
-
-  Produce an external representation of the label on a task.  An
-  externalized label consists of a text representation of the label
-  contents that can be used with user applications.  Policy-agnostic
-  user space tools will display this externalized version.
-
-  @return 0 on success, return non-zero if an error occurs while
-  externalizing the label data.
-
-*/
-typedef int mpo_task_label_externalize_t(
-	struct label *label,
-	char *element_name,
-	struct sbuf *sb
-);
-/**
-  @brief Initialize Mach task label
-  @param label New label to initialize
-
-  Initialize the label for a newly instantiated Mach task.  Sleeping
-  is permitted.
-*/
-typedef void mpo_task_label_init_t(
-	struct label *label
-);
-/**
-  @brief Internalize a task label
-  @param label Label to be internalized
-  @param element_name Name of the label namespace for which the label should
-  be internalized
-  @param element_data Text data to be internalized
-
-  Produce a task label from an external representation.  An
-  externalized label consists of a text representation of the label
-  contents that can be used with user applications.  Policy-agnostic
-  user space tools will forward text version to the kernel for
-  processing by individual policy modules.
-
-  The policy's internalize entry points will be called only if the
-  policy has registered interest in the label namespace.
-
-  @return 0 on success, Otherwise, return non-zero if an error occurs
-  while internalizing the label data.
-
-*/
-typedef int mpo_task_label_internalize_t(
-	struct label *label,
-	char *element_name,
-	char *element_data
-);
-/**
-  @brief Update a Mach task label
-  @param cred User credential label to be used as the source
-  @param task Mach task label to be used as the destination
-  @see mpo_cred_label_update_t
-  @see mpo_cred_label_update_execve_t
-
-  Update the label on a Mach task, using the supplied user credential
-  label. When a mac_cred_label_update_execve or a mac_cred_label_update operation
-  causes the label on a user credential to change, the Mach task label
-  also needs to be updated to reflect the change.  Both labels are
-  already valid (initialized and created).
-
-  @warning XXX We may change the name of this entry point in a future
-  version of the MAC framework.
-*/
-typedef void mpo_task_label_update_t(
-	struct label *cred,
-	struct label *task
-);
 /**
   @brief Perform MAC-related events when a thread returns to user space
   @param thread Mach (not BSD) thread that is returning
@@ -4995,7 +4533,9 @@ typedef int mpo_vnode_check_exchangedata_t(
   @brief Access control check for executing the vnode
   @param cred Subject credential
   @param vp Object vnode to execute
-  @param label Policy label for vp
+  @param scriptvp Script being executed by interpreter, if any.
+  @param vnodelabel Label corresponding to vp
+  @param scriptvnodelabel Script vnode label
   @param execlabel Userspace provided execution label
   @param cnp Component name for file being executed
   @param macpolicyattr MAC policy-specific spawn attribute data.
@@ -5017,7 +4557,9 @@ typedef int mpo_vnode_check_exchangedata_t(
 typedef int mpo_vnode_check_exec_t(
 	kauth_cred_t cred,
 	struct vnode *vp,
-	struct label *label,
+	struct vnode *scriptvp,
+	struct label *vnodelabel,
+	struct label *scriptlabel,
 	struct label *execlabel,	/* NULLOK */
 	struct componentname *cnp,
 	u_int *csflags,
@@ -5045,8 +4587,9 @@ typedef int mpo_vnode_check_fsgetpath_t(
   @brief Access control check after determining the code directory hash
  */
 typedef int mpo_vnode_check_signature_t(struct vnode *vp,  struct label *label, 
-					off_t macho_offset, unsigned char *sha1, void *signature, 
-					int size);
+					off_t macho_offset, unsigned char *sha1, 
+					const void *signature, int size,
+					int *is_platform_binary);
 
 /**
   @brief Access control check for retrieving file attributes
@@ -5304,6 +4847,39 @@ typedef int mpo_vnode_check_readlink_t(
 	struct label *label
 );
 /**
+  @brief Access control check for rename
+  @param cred Subject credential
+  @param dvp Directory vnode
+  @param dlabel Policy label associated with dvp
+  @param vp vnode to be renamed
+  @param label Policy label associated with vp
+  @param cnp Component name for vp
+  @param tdvp Destination directory vnode
+  @param tdlabel Policy label associated with tdvp
+  @param tvp Overwritten vnode
+  @param tlabel Policy label associated with tvp
+  @param tcnp Destination component name
+
+  Determine whether the subject identified by the credential should be allowed
+  to rename the vnode vp to something else.
+
+  @return Return 0 if access is granted, otherwise an appropriate value for
+  errno should be returned.
+*/
+typedef int mpo_vnode_check_rename_t(
+	kauth_cred_t cred,
+	struct vnode *dvp,
+	struct label *dlabel,
+	struct vnode *vp,
+	struct label *label,
+	struct componentname *cnp,
+	struct vnode *tdvp,
+	struct label *tdlabel,
+	struct vnode *tvp,
+	struct label *tlabel,
+	struct componentname *tcnp
+);
+/**
   @brief Access control check for rename from
   @param cred Subject credential
   @param dvp Directory vnode
@@ -5311,6 +4887,7 @@ typedef int mpo_vnode_check_readlink_t(
   @param vp vnode to be renamed
   @param label Policy label associated with vp
   @param cnp Component name for vp
+  @see mpo_vnode_check_rename_t
   @see mpo_vnode_check_rename_to_t
 
   Determine whether the subject identified by the credential should be
@@ -5319,6 +4896,8 @@ typedef int mpo_vnode_check_readlink_t(
   Due to VFS locking constraints (to make sure proper vnode locks are
   held during this entry point), the vnode relabel checks had to be
   split into two parts: relabel_from and relabel to.
+
+  This hook is deprecated, mpo_vnode_check_rename_t should be used instead.
 
   @return Return 0 if access is granted, otherwise an appropriate value for
   errno should be returned.
@@ -5340,6 +4919,7 @@ typedef int mpo_vnode_check_rename_from_t(
   @param label Policy label associated with vp
   @param samedir Boolean; 1 if the source and destination directories are the same
   @param cnp Destination component name
+  @see mpo_vnode_check_rename_t
   @see mpo_vnode_check_rename_from_t
 
   Determine whether the subject identified by the credential should be
@@ -5350,6 +4930,8 @@ typedef int mpo_vnode_check_rename_from_t(
   Due to VFS locking constraints (to make sure proper vnode locks are
   held during this entry point), the vnode relabel checks had to be
   split into two parts: relabel_from and relabel to.
+
+  This hook is deprecated, mpo_vnode_check_rename_t should be used instead.
 
   @return Return 0 if access is granted, otherwise an appropriate value for
   errno should be returned.
@@ -6230,7 +5812,7 @@ typedef void mpo_reserved_hook_t(void);
  * Please note that this should be kept in sync with the check assumptions
  * policy in bsd/kern/policy_check.c (policy_ops struct).
  */
-#define MAC_POLICY_OPS_VERSION 24 /* inc when new reserved slots are taken */
+#define MAC_POLICY_OPS_VERSION 31 /* inc when new reserved slots are taken */
 struct mac_policy_ops {
 	mpo_audit_check_postselect_t		*mpo_audit_check_postselect;
 	mpo_audit_check_preselect_t		*mpo_audit_check_preselect;
@@ -6365,28 +5947,28 @@ struct mac_policy_ops {
 	mpo_policy_initbsd_t			*mpo_policy_initbsd;
 	mpo_policy_syscall_t			*mpo_policy_syscall;
 
-	mpo_port_check_copy_send_t		*mpo_port_check_copy_send;
-	mpo_port_check_hold_receive_t		*mpo_port_check_hold_receive;
-	mpo_port_check_hold_send_once_t		*mpo_port_check_hold_send_once;
-	mpo_port_check_hold_send_t		*mpo_port_check_hold_send;
-	mpo_port_check_label_update_t		*mpo_port_check_label_update;
-	mpo_port_check_make_send_once_t		*mpo_port_check_make_send_once;
-	mpo_port_check_make_send_t		*mpo_port_check_make_send;
-	mpo_port_check_method_t			*mpo_port_check_method;
-	mpo_port_check_move_receive_t		*mpo_port_check_move_receive;
-	mpo_port_check_move_send_once_t		*mpo_port_check_move_send_once;
-	mpo_port_check_move_send_t		*mpo_port_check_move_send;
-	mpo_port_check_receive_t		*mpo_port_check_receive;
-	mpo_port_check_send_t			*mpo_port_check_send;
-	mpo_port_check_service_t		*mpo_port_check_service;
-	mpo_port_label_associate_kernel_t	*mpo_port_label_associate_kernel;
-	mpo_port_label_associate_t		*mpo_port_label_associate;
-	mpo_port_label_compute_t		*mpo_port_label_compute;
-	mpo_port_label_copy_t			*mpo_port_label_copy;
-	mpo_port_label_destroy_t		*mpo_port_label_destroy;
-	mpo_port_label_init_t			*mpo_port_label_init;
-	mpo_port_label_update_cred_t		*mpo_port_label_update_cred;
-	mpo_port_label_update_kobject_t		*mpo_port_label_update_kobject;
+	mpo_system_check_sysctlbyname_t		*mpo_system_check_sysctlbyname;
+	mpo_proc_check_inherit_ipc_ports_t	*mpo_proc_check_inherit_ipc_ports;
+	mpo_vnode_check_rename_t		*mpo_vnode_check_rename;
+	mpo_reserved_hook_t			*mpo_reserved4;
+	mpo_reserved_hook_t			*mpo_reserved5;
+	mpo_reserved_hook_t			*mpo_reserved6;
+	mpo_reserved_hook_t			*mpo_reserved7;
+	mpo_reserved_hook_t			*mpo_reserved8;
+	mpo_reserved_hook_t			*mpo_reserved9;
+	mpo_reserved_hook_t			*mpo_reserved10;
+	mpo_reserved_hook_t			*mpo_reserved11;
+	mpo_reserved_hook_t			*mpo_reserved12;
+	mpo_reserved_hook_t			*mpo_reserved13;
+	mpo_reserved_hook_t			*mpo_reserved14;
+	mpo_reserved_hook_t			*mpo_reserved15;
+	mpo_reserved_hook_t			*mpo_reserved16;
+	mpo_reserved_hook_t			*mpo_reserved17;
+	mpo_reserved_hook_t			*mpo_reserved18;
+	mpo_reserved_hook_t			*mpo_reserved19;
+	mpo_reserved_hook_t			*mpo_reserved20;
+	mpo_reserved_hook_t			*mpo_reserved21;
+	mpo_reserved_hook_t			*mpo_reserved22;
 
 	mpo_posixsem_check_create_t		*mpo_posixsem_check_create;
 	mpo_posixsem_check_open_t		*mpo_posixsem_check_open;
@@ -6464,7 +6046,7 @@ struct mac_policy_ops {
 	mpo_system_check_settime_t		*mpo_system_check_settime;
 	mpo_system_check_swapoff_t		*mpo_system_check_swapoff;
 	mpo_system_check_swapon_t		*mpo_system_check_swapon;
-	mpo_system_check_sysctl_t		*mpo_system_check_sysctl;
+	mpo_reserved_hook_t			*mpo_reserved31;
 
 	mpo_sysvmsg_label_associate_t		*mpo_sysvmsg_label_associate;
 	mpo_sysvmsg_label_destroy_t		*mpo_sysvmsg_label_destroy;
@@ -6497,14 +6079,14 @@ struct mac_policy_ops {
 	mpo_sysvshm_label_init_t		*mpo_sysvshm_label_init;
 	mpo_sysvshm_label_recycle_t		*mpo_sysvshm_label_recycle;
 
-	mpo_task_label_associate_kernel_t	*mpo_task_label_associate_kernel;
-	mpo_task_label_associate_t		*mpo_task_label_associate;
-	mpo_task_label_copy_t			*mpo_task_label_copy;
-	mpo_task_label_destroy_t		*mpo_task_label_destroy;
-	mpo_task_label_externalize_t		*mpo_task_label_externalize;
-	mpo_task_label_init_t			*mpo_task_label_init;
-	mpo_task_label_internalize_t		*mpo_task_label_internalize;
-	mpo_task_label_update_t			*mpo_task_label_update;
+	mpo_reserved_hook_t			*mpo_reserved23;
+	mpo_reserved_hook_t			*mpo_reserved24;
+	mpo_reserved_hook_t			*mpo_reserved25;
+	mpo_reserved_hook_t			*mpo_reserved26;
+	mpo_reserved_hook_t			*mpo_reserved27;
+	mpo_reserved_hook_t			*mpo_reserved28;
+	mpo_reserved_hook_t			*mpo_reserved29;
+	mpo_reserved_hook_t			*mpo_reserved30;
 
 	mpo_iokit_check_hid_control_t		*mpo_iokit_check_hid_control;
 
@@ -6609,8 +6191,8 @@ struct mac_policy_ops {
 
 	mpo_proc_check_proc_info_t		*mpo_proc_check_proc_info;
 	mpo_vnode_notify_link_t			*mpo_vnode_notify_link;
-	mpo_reserved_hook_t			*mpo_reserved28;
-	mpo_reserved_hook_t			*mpo_reserved29;
+	mpo_iokit_check_filter_properties_t	*mpo_iokit_check_filter_properties;
+	mpo_iokit_check_get_property_t		*mpo_iokit_check_get_property;
 };
 
 /**

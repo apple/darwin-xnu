@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2012-2013 Apple Inc. All rights reserved.
+ * Copyright (c) 2012-2014 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -128,7 +128,7 @@ static void mptcp_thread_dowork(struct mptses *);
 static void mptcp_thread_func(void *, wait_result_t);
 static void mptcp_thread_destroy(struct mptses *);
 static void mptcp_key_pool_init(void);
-static void mptcp_attach_to_subf(struct socket *, struct mptcb *, connid_t);
+static void mptcp_attach_to_subf(struct socket *, struct mptcb *, uint8_t);
 static void mptcp_detach_mptcb_from_subf(struct mptcb *, struct socket *);
 static void mptcp_conn_properties(struct mptcb *);
 static void mptcp_init_statevars(struct mptcb *);
@@ -145,6 +145,7 @@ static void mptcp_subflow_input(struct mptses *, struct mptsub *);
 static void mptcp_subflow_wupcall(struct socket *, void *, int);
 static void mptcp_subflow_eupcall(struct socket *, void *, uint32_t);
 static void mptcp_update_last_owner(struct mptsub *, struct socket *);
+static void mptcp_output_needed(struct mptses *mpte, struct mptsub *to_mpts);
 
 /*
  * Possible return values for subflow event handlers.  Note that success
@@ -175,12 +176,15 @@ static ev_ret_t mptcp_subflow_connected_ev(struct mptses *, struct mptsub *);
 static ev_ret_t mptcp_subflow_disconnected_ev(struct mptses *, struct mptsub *);
 static ev_ret_t mptcp_subflow_mpstatus_ev(struct mptses *, struct mptsub *);
 static ev_ret_t mptcp_subflow_mustrst_ev(struct mptses *, struct mptsub *);
+static ev_ret_t mptcp_fastjoin_ev(struct mptses *, struct mptsub *);
+static ev_ret_t mptcp_deleteok_ev(struct mptses *, struct mptsub *);
+static ev_ret_t mptcp_subflow_mpcantrcvmore_ev(struct mptses *, struct mptsub *);
+
 static const char *mptcp_evret2str(ev_ret_t);
 
 static mptcp_key_t *mptcp_reserve_key(void);
 static int mptcp_do_sha1(mptcp_key_t *, char *, int);
 static int mptcp_init_authparms(struct mptcb *);
-static int mptcp_delete_ok(struct mptses *mpte, struct mptsub *mpts);
 
 static unsigned int mptsub_zone_size;		/* size of mptsub */
 static struct zone *mptsub_zone;		/* zone for mptsub */
@@ -216,6 +220,21 @@ SYSCTL_UINT(_net_inet_mptcp, OID_AUTO, pcbcount, CTLFLAG_RD|CTLFLAG_LOCKED,
 uint32_t mptcp_socket_limit = MPPCB_LIMIT;
 SYSCTL_UINT(_net_inet_mptcp, OID_AUTO, sk_lim, CTLFLAG_RW|CTLFLAG_LOCKED,
 	&mptcp_socket_limit, 0, "MPTCP socket limit");
+
+/*
+ * SYSCTL to turn on delayed cellular subflow start.
+ */
+uint32_t mptcp_delayed_subf_start = 0;
+SYSCTL_UINT(_net_inet_mptcp, OID_AUTO, delayed, CTLFLAG_RW|CTLFLAG_LOCKED,
+	&mptcp_delayed_subf_start, 0, "MPTCP Delayed Subflow start");
+
+/*
+ * SYSCTL for RTT spike measurement threshold in msecs.
+ */
+int32_t mptcp_rto_spike_thresh = 3000;
+SYSCTL_UINT(_net_inet_mptcp, OID_AUTO, rto_spikethresh,
+	CTLFLAG_RW|CTLFLAG_LOCKED, &mptcp_rto_spike_thresh, 0,
+	"MPTCP RTT spike thresh");
 
 static struct protosw mptcp_subflow_protosw;
 static struct pr_usrreqs mptcp_subflow_usrreqs;
@@ -805,13 +824,19 @@ mptcp_subflow_soconnectx(struct mptses *mpte, struct mptsub *mpts)
 	mpts->mpts_flags &= ~MPTSF_CONNECT_PENDING;
 
 	socket_lock(so, 0);
-	mptcp_attach_to_subf(so, mpte->mpte_mptcb, mpts->mpts_connid);
+	mptcp_attach_to_subf(so, mpte->mpte_mptcb, mpte->mpte_addrid_last);
+	
 	/* connect the subflow socket */
 	error = soconnectxlocked(so, &mpts->mpts_src_sl, &mpts->mpts_dst_sl,
 	    mpts->mpts_mpcr.mpcr_proc, mpts->mpts_mpcr.mpcr_ifscope,
 	    mpte->mpte_associd, NULL, TCP_CONNREQF_MPTCP,
 	    &mpts->mpts_mpcr, sizeof (mpts->mpts_mpcr));
 	socket_unlock(so, 0);
+
+	/* Allocate a unique address id per subflow */
+	mpte->mpte_addrid_last++;
+	if (mpte->mpte_addrid_last == 0)
+		mpte->mpte_addrid_last++;
 
 	DTRACE_MPTCP3(subflow__connect, struct mptses *, mpte,
 	    struct mptsub *, mpts, int, error);
@@ -1027,7 +1052,7 @@ mptcp_subflow_sopeeloff(struct mptses *mpte, struct mptsub *mpts,
 	 */
 	so->so_flags &= ~SOF_MP_SUBFLOW;
 	so->so_state &= ~SS_NOFDREF;
-	so->so_state &= ~SOF_MPTCP_TRUE;
+	so->so_flags &= ~SOF_MPTCP_TRUE;
 
 	/* allow socket buffers to be compressed */
 	so->so_rcv.sb_flags &= ~SB_NOCOMPRESS;
@@ -1038,8 +1063,10 @@ mptcp_subflow_sopeeloff(struct mptses *mpte, struct mptsub *mpts,
 	 *
 	 * This will increase the current 64k buffer size to whatever is best.
 	 */
-	so->so_rcv.sb_flags |= SB_AUTOSIZE;
-	so->so_snd.sb_flags |= SB_AUTOSIZE;
+	if (!(so->so_rcv.sb_flags & SB_USRSIZE))	 
+		so->so_rcv.sb_flags |= SB_AUTOSIZE;
+	if (!(so->so_snd.sb_flags & SB_USRSIZE))
+		so->so_snd.sb_flags |= SB_AUTOSIZE;
 
 	/* restore protocol-user requests */
 	VERIFY(mpts->mpts_oprotosw != NULL);
@@ -1106,6 +1133,15 @@ mptcp_subflow_add(struct mptses *mpte, struct mptsub *mpts,
 	mp_so = mpte->mpte_mppcb->mpp_socket;
 	mp_tp = mpte->mpte_mptcb;
 
+	MPT_LOCK(mp_tp);
+	if (mp_tp->mpt_state >= MPTCPS_CLOSE_WAIT) {
+		/* If the remote end sends Data FIN, refuse subflow adds */
+		error = ENOTCONN;
+		MPT_UNLOCK(mp_tp);
+		return (error);
+	}
+	MPT_UNLOCK(mp_tp);
+
 	MPTS_LOCK(mpts);
 	VERIFY(!(mpts->mpts_flags & (MPTSF_CONNECTING|MPTSF_CONNECTED)));
 	VERIFY(mpts->mpts_mpte == NULL);
@@ -1149,13 +1185,20 @@ mptcp_subflow_add(struct mptses *mpte, struct mptsub *mpts,
 	if ((error = mptcp_subflow_socreate(mpte, mpts, af, p, &so)) != 0)
 		goto out;
 
+	/* If fastjoin is requested, set state in mpts */
+	if ((so->so_flags & SOF_MPTCP_FASTJOIN) &&
+	    (mp_tp->mpt_state == MPTCPS_ESTABLISHED) &&
+	    (mpte->mpte_nummpcapflows == 0)) {
+		mpts->mpts_flags |= MPTSF_FASTJ_REQD;
+		mpts->mpts_rel_seq = 1;
+		MPT_LOCK(mp_tp);
+		mpts->mpts_sndnxt = mp_tp->mpt_snduna;
+		MPT_UNLOCK(mp_tp);
+	}
+
 	/*
-	 * XXX: adi@apple.com
-	 *
-	 * This probably needs to be made smarter, but for now simply
-	 * increment the counter, while avoiding 0 (CONNID_ANY) and
-	 * -1 (CONNID_ALL).  Assume that an MPTCP connection will not
-	 * live too long with (2^32)-2 subflow connection attempts.
+	 * Increment the counter, while avoiding 0 (CONNID_ANY) and
+	 * -1 (CONNID_ALL).
 	 */
 	mpte->mpte_connid_last++;
 	if (mpte->mpte_connid_last == CONNID_ALL ||
@@ -1165,6 +1208,11 @@ mptcp_subflow_add(struct mptses *mpte, struct mptsub *mpts,
 	mpts->mpts_connid = mpte->mpte_connid_last;
 	VERIFY(mpts->mpts_connid != CONNID_ANY &&
 	    mpts->mpts_connid != CONNID_ALL);
+	
+	/* Allocate a unique address id per subflow */
+	mpte->mpte_addrid_last++;
+	if (mpte->mpte_addrid_last == 0)
+		mpte->mpte_addrid_last++;
 
 	/* bind subflow socket to the specified interface */
 	if (ifscope != IFSCOPE_NONE) {
@@ -1261,7 +1309,8 @@ mptcp_subflow_add(struct mptses *mpte, struct mptsub *mpts,
 	    SO_FILT_HINT_SUSPEND | SO_FILT_HINT_RESUME |
 	    SO_FILT_HINT_CONNECTED | SO_FILT_HINT_DISCONNECTED |
 	    SO_FILT_HINT_MPFAILOVER | SO_FILT_HINT_MPSTATUS |
-	    SO_FILT_HINT_MUSTRST);
+	    SO_FILT_HINT_MUSTRST | SO_FILT_HINT_MPFASTJ |
+	    SO_FILT_HINT_DELETEOK | SO_FILT_HINT_MPCANTRCVMORE);
 
 	/* sanity check */
 	VERIFY(!(mpts->mpts_flags &
@@ -1288,6 +1337,12 @@ mptcp_subflow_add(struct mptses *mpte, struct mptsub *mpts,
 	} else {
 		if (!(mp_tp->mpt_flags & MPTCPF_JOIN_READY))
 			mpts->mpts_flags |= MPTSF_CONNECT_PENDING;
+
+		/* avoid starting up cellular subflow unless required */
+		if ((mptcp_delayed_subf_start) &&
+		    (IFNET_IS_CELLULAR(mpts->mpts_outif))) {
+		    	mpts->mpts_flags |= MPTSF_CONNECT_PENDING;
+		}
 		MPT_UNLOCK(mp_tp);
 		mpcr.mpcr_type = MPTSUB_CONNREQ_MP_ADD;
 	}
@@ -1325,27 +1380,6 @@ out:
 	return (error);
 }
 
-static int
-mptcp_delete_ok(struct mptses *mpte, struct mptsub *mpts)
-{
-	int ret = 1;
-	struct mptcb *mp_tp = NULL;
-
-	MPTE_LOCK_ASSERT_HELD(mpte);
-	mp_tp = mpte->mpte_mptcb;
-	VERIFY(mp_tp != NULL);
-	MPTS_LOCK(mpts);
-	MPT_LOCK(mp_tp);
-	if ((mpts->mpts_soerror == 0) &&
-	    (mpts->mpts_flags & MPTSF_ACTIVE) &&
-	    (mp_tp->mpt_state != MPTCPS_CLOSED) &&
-	    (mp_tp->mpt_state <= MPTCPS_TIME_WAIT))
-		ret = 0;
-	MPT_UNLOCK(mp_tp);
-	MPTS_UNLOCK(mpts);
-	return (ret);
-}
-
 /*
  * Delete/remove a subflow from an MPTCP.  The underlying subflow socket
  * will no longer be accessible after a subflow is deleted, thus this
@@ -1363,6 +1397,14 @@ mptcp_subflow_del(struct mptses *mpte, struct mptsub *mpts, boolean_t close)
 	MPTS_LOCK(mpts);
 	so = mpts->mpts_socket;
 	VERIFY(so != NULL);
+	
+	if (close && !((mpts->mpts_flags & MPTSF_DELETEOK) &&
+	    (mpts->mpts_flags & MPTSF_USER_DISCONNECT))) {
+		MPTS_UNLOCK(mpts);
+		mptcplog((LOG_DEBUG, "%s: %d %x\n", __func__,
+		    mpts->mpts_soerror, mpts->mpts_flags));
+		return;
+	}
 
 	mptcplog((LOG_DEBUG, "%s: mp_so 0x%llx [u=%d,r=%d] cid %d "
 	    "[close %s] %d %x\n", __func__,
@@ -1381,6 +1423,8 @@ mptcp_subflow_del(struct mptses *mpte, struct mptsub *mpts, boolean_t close)
 	TAILQ_REMOVE(&mpte->mpte_subflows, mpts, mpts_entry);
 	VERIFY(mpte->mpte_numflows != 0);
 	mpte->mpte_numflows--;
+	if (mpte->mpte_active_sub == mpts)
+		mpte->mpte_active_sub = NULL;
 
 	/*
 	 * Drop references held by this subflow socket; there
@@ -1388,7 +1432,9 @@ mptcp_subflow_del(struct mptses *mpte, struct mptsub *mpts, boolean_t close)
 	 */
 	(void) sock_setupcalls(so, NULL, NULL, NULL, NULL);
 	(void) sock_catchevents(so, NULL, NULL, 0);
+
 	mptcp_detach_mptcb_from_subf(mpte->mpte_mptcb, so);
+	
 	if (close)
 		(void) mptcp_subflow_soclose(mpts, so);
 
@@ -1485,7 +1531,12 @@ mptcp_subflow_rupcall(struct socket *so, void *arg, int waitf)
 	struct mptsub *mpts = arg;
 	struct mptses *mpte = mpts->mpts_mpte;
 
-	VERIFY(mpte != NULL);
+	/* 
+	 * mpte should never be NULL, except in a race with 
+	 * mptcp_subflow_del 
+	 */
+	if (mpte == NULL)
+		return;
 
 	lck_mtx_lock(&mpte->mpte_thread_lock);
 	mptcp_thread_signal_locked(mpte);
@@ -1524,9 +1575,24 @@ mptcp_subflow_input(struct mptses *mpte, struct mptsub *mpts)
 		MPTS_UNLOCK(mpts);
 		mpts_alt = mptcp_get_subflow(mpte, mpts);
 		if (mpts_alt == NULL) {
-			mptcplog((LOG_ERR, "%s: no alt path cid %d\n",
-			    __func__, mpts->mpts_connid));
-			mpte->mpte_mppcb->mpp_socket->so_error = error;
+			if (mptcp_delayed_subf_start) {
+				mpts_alt = mptcp_get_pending_subflow(mpte,
+				    mpts);
+				if (mpts_alt) {
+					mptcplog((LOG_INFO,"%s: pending %d\n",
+					    __func__, mpts_alt->mpts_connid));
+				} else {
+					mptcplog((LOG_ERR, "%s: no pending",
+					    "%d\n", __func__,
+					    mpts->mpts_connid));
+					mpte->mpte_mppcb->mpp_socket->so_error =
+					    error;
+				}
+			} else {
+				mptcplog((LOG_ERR, "%s: no alt path cid %d\n",
+				    __func__, mpts->mpts_connid));
+				mpte->mpte_mppcb->mpp_socket->so_error = error;
+			}
 		}
 		MPTS_LOCK(mpts);
 	} else if (error == 0) {
@@ -1572,7 +1638,14 @@ mptcp_subflow_wupcall(struct socket *so, void *arg, int waitf)
 	struct mptsub *mpts = arg;
 	struct mptses *mpte = mpts->mpts_mpte;
 
-	VERIFY(mpte != NULL);
+	/*
+	 * mpte should never be NULL except in a race with 
+	 * mptcp_subflow_del which doesn't hold socket lock across critical
+	 * section. This upcall is made after releasing the socket lock.
+	 * Interleaving of socket operations becomes possible therefore.
+	 */
+	if (mpte == NULL)
+		return;
 
 	lck_mtx_lock(&mpte->mpte_thread_lock);
 	mptcp_thread_signal_locked(mpte);
@@ -1594,7 +1667,8 @@ mptcp_subflow_output(struct mptses *mpte, struct mptsub *mpts)
 	u_int64_t mpt_dsn = 0;
 	struct mptcb *mp_tp = mpte->mpte_mptcb;
 	struct mbuf *mpt_mbuf = NULL;
-	unsigned int off = 0;
+	u_int64_t off = 0;
+	struct mbuf *head, *tail;
 
 	MPTE_LOCK_ASSERT_HELD(mpte);	/* same as MP socket lock */
 	MPTS_LOCK_ASSERT_HELD(mpts);
@@ -1614,7 +1688,8 @@ mptcp_subflow_output(struct mptses *mpte, struct mptsub *mpts)
 
 	/* subflow socket is not MPTCP capable? */
 	if (!(mpts->mpts_flags & MPTSF_MP_CAPABLE) &&
-	    !(mpts->mpts_flags & MPTSF_MP_DEGRADED)) {
+	    !(mpts->mpts_flags & MPTSF_MP_DEGRADED) &&
+	    !(mpts->mpts_flags & MPTSF_FASTJ_SEND)) {
 		mptcplog((LOG_ERR, "%s: mp_so 0x%llx cid %d not "
 		    "MPTCP capable\n", __func__,
 		    (u_int64_t)VM_KERNEL_ADDRPERM(mp_so), mpts->mpts_connid));
@@ -1664,9 +1739,9 @@ mptcp_subflow_output(struct mptses *mpte, struct mptsub *mpts)
 
 	MPT_LOCK(mp_tp);
 	if (MPTCP_SEQ_LT(mpt_dsn, mp_tp->mpt_snduna)) {
-		int len = 0;
+		u_int64_t len = 0;
 		len = mp_tp->mpt_snduna - mpt_dsn;
-		sbdrop(&mp_so->so_snd, len);
+		sbdrop(&mp_so->so_snd, (int)len);
 
 	}
 
@@ -1674,13 +1749,27 @@ mptcp_subflow_output(struct mptses *mpte, struct mptsub *mpts)
 	 * In degraded mode, we don't receive data acks, so force free
 	 * mbufs less than snd_nxt
 	 */
+	if (mp_so->so_snd.sb_mb == NULL) {
+		MPT_UNLOCK(mp_tp);
+		goto out;
+	}
+
 	mpt_dsn = mp_so->so_snd.sb_mb->m_pkthdr.mp_dsn;
 	if ((mpts->mpts_flags & MPTSF_MP_DEGRADED) &&
+	    (mp_tp->mpt_flags & MPTCPF_POST_FALLBACK_SYNC) &&
 	    MPTCP_SEQ_LT(mpt_dsn, mp_tp->mpt_sndnxt)) {
-		int len = 0;
+		u_int64_t len = 0;
 		len = mp_tp->mpt_sndnxt - mpt_dsn;
-		sbdrop(&mp_so->so_snd, len);
+		sbdrop(&mp_so->so_snd, (int)len);
 		mp_tp->mpt_snduna = mp_tp->mpt_sndnxt;
+	}
+
+	if ((mpts->mpts_flags & MPTSF_MP_DEGRADED) &&
+	    !(mp_tp->mpt_flags & MPTCPF_POST_FALLBACK_SYNC)) {
+		mp_tp->mpt_flags |= MPTCPF_POST_FALLBACK_SYNC;
+		so->so_flags1 |= SOF1_POST_FALLBACK_SYNC;
+		if (mp_tp->mpt_flags & MPTCPF_RECVD_MPFAIL)
+			mpts->mpts_sndnxt = mp_tp->mpt_dsn_at_csum_fail;
 	}
 
 	/*
@@ -1689,6 +1778,12 @@ mptcp_subflow_output(struct mptses *mpte, struct mptsub *mpts)
 	 */
 	if (MPTCP_SEQ_LT(mpts->mpts_sndnxt, mp_tp->mpt_snduna)) {
 		mpts->mpts_sndnxt = mp_tp->mpt_snduna;
+		/*
+		 * With FastJoin, a write before the fastjoin event will use
+		 * an uninitialized relative sequence number.
+		 */
+		if (mpts->mpts_rel_seq == 0)
+			mpts->mpts_rel_seq = 1;
 	}
 
 	/*
@@ -1709,7 +1804,7 @@ mptcp_subflow_output(struct mptses *mpte, struct mptsub *mpts)
 	}
 	if (MPTCP_SEQ_LT(mpts->mpts_sndnxt, mp_tp->mpt_sndmax)) {
 		off = mpts->mpts_sndnxt - mp_tp->mpt_snduna;
-		sb_cc -= off;
+		sb_cc -= (size_t)off;
 	} else {
 		MPT_UNLOCK(mp_tp);
 		goto out;
@@ -1720,13 +1815,13 @@ mptcp_subflow_output(struct mptses *mpte, struct mptsub *mpts)
 	mpt_dsn = mpt_mbuf->m_pkthdr.mp_dsn;
 
 	while (mpt_mbuf && ((mpt_mbuf->m_pkthdr.mp_rlen == 0) ||
-	    (mpt_mbuf->m_pkthdr.mp_rlen <= off))) {
+	    (mpt_mbuf->m_pkthdr.mp_rlen <= (u_int32_t)off))) {
 		off -= mpt_mbuf->m_pkthdr.mp_rlen;
 		mpt_mbuf = mpt_mbuf->m_next;
 		mpt_dsn = mpt_mbuf->m_pkthdr.mp_dsn;
 	}
 	if ((mpts->mpts_connid == 2) || (mpts->mpts_flags & MPTSF_MP_DEGRADED))
-		mptcplog((LOG_INFO, "%s: snduna = %llu off = %d id = %d"
+		mptcplog2((LOG_INFO, "%s: snduna = %llu off = %lld id = %d"
 		    " %llu \n",
 		    __func__,
 		    mp_tp->mpt_snduna, off, mpts->mpts_connid,
@@ -1734,9 +1829,11 @@ mptcp_subflow_output(struct mptses *mpte, struct mptsub *mpts)
 
 	VERIFY(mpt_mbuf && (mpt_mbuf->m_pkthdr.pkt_flags & PKTF_MPTCP));
 
+	head = tail = NULL;
+
 	while (tot_sent < sb_cc) {
 		struct mbuf *m;
-		size_t mlen, len = 0;
+		size_t mlen;
 
 		mlen = mpt_mbuf->m_pkthdr.mp_rlen;
 		mlen -= off;
@@ -1748,8 +1845,8 @@ mptcp_subflow_output(struct mptses *mpte, struct mptsub *mpts)
 			    mlen, sb_cc);
 		}
 
-		m = m_copym_mode(mpt_mbuf, off, mlen, M_DONTWAIT,
-		    M_COPYM_COPY_HDR);
+		m = m_copym_mode(mpt_mbuf, (int)off, mlen, M_DONTWAIT,
+		    M_COPYM_MUST_COPY_HDR);
 		if (m == NULL) {
 			error = ENOBUFS;
 			break;
@@ -1757,6 +1854,7 @@ mptcp_subflow_output(struct mptses *mpte, struct mptsub *mpts)
 
 		/* Create a DSN mapping for the data (m_copym does it) */
 		mpt_dsn = mpt_mbuf->m_pkthdr.mp_dsn;
+		VERIFY(m->m_flags & M_PKTHDR);
 		m->m_pkthdr.pkt_flags |= PKTF_MPTCP;
 		m->m_pkthdr.pkt_flags &= ~PKTF_MPSO;
 		m->m_pkthdr.mp_dsn = mpt_dsn + off;
@@ -1764,6 +1862,13 @@ mptcp_subflow_output(struct mptses *mpte, struct mptsub *mpts)
 		m->m_pkthdr.mp_rlen = mlen;
 		mpts->mpts_rel_seq += mlen;
 		m->m_pkthdr.len = mlen;
+
+		if (head == NULL) {
+			 head = tail = m;
+		} else {
+			tail->m_next = m;
+			tail = m;
+		}
 
 		/* last contiguous mapping is stored for error cases */
 		if (mpts->mpts_lastmap.mptsl_dsn +
@@ -1778,18 +1883,29 @@ mptcp_subflow_output(struct mptses *mpte, struct mptsub *mpts)
 			mpts->mpts_lastmap.mptsl_len = m->m_pkthdr.mp_rlen;
 		}
 
-		error = sock_sendmbuf(so, NULL, m, 0, &len);
-		DTRACE_MPTCP7(send, struct mbuf *, m, struct socket *, so, 
+		tot_sent += mlen;
+		off = 0;
+		mpt_mbuf = mpt_mbuf->m_next;
+	}
+
+	if (head != NULL) {
+
+		if (mpts->mpts_flags & MPTSF_FASTJ_SEND) {
+			struct tcpcb *tp = intotcpcb(sotoinpcb(so));
+			tp->t_mpflags |= TMPF_FASTJOIN_SEND;
+		}
+
+		error = sock_sendmbuf(so, NULL, head, 0, NULL);
+
+		DTRACE_MPTCP7(send, struct mbuf *, head, struct socket *, so, 
 		    struct sockbuf *, &so->so_rcv,
 		    struct sockbuf *, &so->so_snd,
 		    struct mptses *, mpte, struct mptsub *, mpts,
-		    size_t, mlen);
-		if (error != 0) {
-			mptcplog((LOG_ERR, "%s: len = %zd error = %d \n",
-			    __func__, len, error));
-			break;
-		}
-		mpts->mpts_sndnxt += mlen;
+		    size_t, tot_sent);
+	}
+
+	if (error == 0) {
+		mpts->mpts_sndnxt += tot_sent;
 		MPT_LOCK(mp_tp);
 		if (MPTCP_SEQ_LT(mp_tp->mpt_sndnxt, mpts->mpts_sndnxt)) {
 			if (MPTCP_DATASEQ_HIGH32(mpts->mpts_sndnxt) >
@@ -1797,29 +1913,23 @@ mptcp_subflow_output(struct mptses *mpte, struct mptsub *mpts)
 				mp_tp->mpt_flags |= MPTCPF_SND_64BITDSN;
 			mp_tp->mpt_sndnxt = mpts->mpts_sndnxt;
 		}
-		MPT_UNLOCK(mp_tp);
-		if (len != mlen) {
-			mptcplog((LOG_ERR, "%s: cid %d wrote %d "
-			    "(expected %d)\n", __func__,
-			    mpts->mpts_connid, len, mlen));
-		}
-		tot_sent += mlen;
-		off = 0;
-		mpt_mbuf = mpt_mbuf->m_next;
-	}
-
-	if (error != 0 && error != EWOULDBLOCK) {
-		mptcplog((LOG_ERR, "MPTCP ERROR %s: cid %d error %d\n",
-		    __func__, mpts->mpts_connid, error));
-	} if (error == 0) {
-		if ((mpts->mpts_connid == 2) ||
-		    (mpts->mpts_flags & MPTSF_MP_DEGRADED))
-			mptcplog((LOG_DEBUG, "%s: cid %d wrote %d %d\n",
-			    __func__, mpts->mpts_connid, tot_sent,
-			    sb_cc));
-		MPT_LOCK(mp_tp);
 		mptcp_cancel_timer(mp_tp, MPTT_REXMT);
 		MPT_UNLOCK(mp_tp);
+
+		/* Send once in SYN_SENT state to avoid sending SYN spam */
+		if (mpts->mpts_flags & MPTSF_FASTJ_SEND) {
+			so->so_flags &= ~SOF_MPTCP_FASTJOIN;		    
+			mpts->mpts_flags &= ~MPTSF_FASTJ_SEND;
+		}
+
+		if ((mpts->mpts_connid >= 2) ||
+		    (mpts->mpts_flags & MPTSF_MP_DEGRADED))
+			mptcplog2((LOG_DEBUG, "%s: cid %d wrote %d %d\n",
+			    __func__, mpts->mpts_connid, (int)tot_sent,
+			    (int) sb_cc));
+	} else {
+		mptcplog((LOG_ERR, "MPTCP ERROR %s: cid %d error %d len %zd\n",
+		    __func__, mpts->mpts_connid, error, tot_sent));
 	}
 out:
 	return (error);
@@ -1858,7 +1968,7 @@ mptcp_subflow_eupcall(struct socket *so, void *arg, uint32_t events)
 static ev_ret_t
 mptcp_subflow_events(struct mptses *mpte, struct mptsub *mpts)
 {
-	uint32_t events;
+	uint32_t events, save_events;
 	ev_ret_t ret = MPTS_EVRET_OK;
 
 	MPTE_LOCK_ASSERT_HELD(mpte);	/* same as MP socket lock */
@@ -1876,12 +1986,19 @@ mptcp_subflow_events(struct mptses *mpte, struct mptsub *mpts)
 		events |= SO_FILT_HINT_MPFAILOVER;
 	}
 
+	save_events = events;
+
 	DTRACE_MPTCP3(subflow__events, struct mptses *, mpte,
 	    struct mptsub *, mpts, uint32_t, events);
 
 	mptcplog2((LOG_DEBUG, "%s: cid %d events=%b\n", __func__,
 	    mpts->mpts_connid, events, SO_FILT_HINT_BITS));
 
+	if ((events & SO_FILT_HINT_MPCANTRCVMORE) && (ret >= MPTS_EVRET_OK)) {
+		ev_ret_t error = mptcp_subflow_mpcantrcvmore_ev(mpte, mpts);
+		events &= ~SO_FILT_HINT_MPCANTRCVMORE;
+		ret = ((error >= MPTS_EVRET_OK) ? MAX(error, ret) : error);
+	}
 	if ((events & SO_FILT_HINT_MPFAILOVER) && (ret >= MPTS_EVRET_OK)) {
 		ev_ret_t error = mptcp_subflow_failover_ev(mpte, mpts);
 		events &= ~SO_FILT_HINT_MPFAILOVER;
@@ -1942,11 +2059,22 @@ mptcp_subflow_events(struct mptses *mpte, struct mptsub *mpts)
 		events &= ~SO_FILT_HINT_MPSTATUS;
 		ret = ((error >= MPTS_EVRET_OK) ? MAX(error, ret) : error);
 	}
+	if ((events & SO_FILT_HINT_DELETEOK) && (ret >= MPTS_EVRET_OK)) {
+		ev_ret_t error = mptcp_deleteok_ev(mpte, mpts);
+		events &= ~SO_FILT_HINT_DELETEOK;
+		ret = ((error >= MPTS_EVRET_OK) ? MAX(error, ret) : error);
+	}
 	if ((events & SO_FILT_HINT_DISCONNECTED) && (ret >= MPTS_EVRET_OK)) {
 		ev_ret_t error = mptcp_subflow_disconnected_ev(mpte, mpts);
 		events &= ~SO_FILT_HINT_DISCONNECTED;
 		ret = ((error >= MPTS_EVRET_OK) ? MAX(error, ret) : error);
 	}
+	if ((events & SO_FILT_HINT_MPFASTJ) && (ret >= MPTS_EVRET_OK)) {
+		ev_ret_t error = mptcp_fastjoin_ev(mpte, mpts);
+		events &= ~SO_FILT_HINT_MPFASTJ;
+		ret = ((error >= MPTS_EVRET_OK) ? MAX(error, ret) : error);
+	}
+
 	/*
 	 * We should be getting only events specified via sock_catchevents(),
 	 * so loudly complain if we have any unprocessed one(s).
@@ -1960,8 +2088,8 @@ mptcp_subflow_events(struct mptses *mpte, struct mptsub *mpts)
 	}
 
 	/* clear the ones we've processed */
-	atomic_bitclear_32(&mpts->mpts_evctl, ~events);
-
+	atomic_bitclear_32(&mpts->mpts_evctl, save_events);
+	
 	return (ret);
 }
 
@@ -1988,21 +2116,26 @@ mptcp_subflow_connreset_ev(struct mptses *mpte, struct mptsub *mpts)
 	mptcplog((LOG_DEBUG, "%s: cid %d [linger %s]\n", __func__,
 	    mpts->mpts_connid, (linger ? "YES" : "NO")));
 
-	if (mpts->mpts_soerror == 0)
-		mpts->mpts_soerror = ECONNREFUSED;
-
 	/*
 	 * We got a TCP RST for this subflow connection.
 	 *
 	 * Right now, we simply propagate ECONNREFUSED to the MPTCP socket
-	 * client if the MPTCP connection has not been established. Otherwise
-	 * we close the socket.
+	 * client if the MPTCP connection has not been established or
+	 * if the connection has only one subflow and is a connection being
+	 * resumed. Otherwise we close the socket.
 	 */
 	mptcp_subflow_disconnect(mpte, mpts, !linger);
 
 	MPT_LOCK(mp_tp);
 	if (mp_tp->mpt_state < MPTCPS_ESTABLISHED) {
-		mp_so->so_error = ECONNREFUSED;
+		mpts->mpts_soerror = mp_so->so_error = ECONNREFUSED;
+	} else if (mpte->mpte_nummpcapflows < 1) {
+		mpts->mpts_soerror = mp_so->so_error = ECONNRESET;
+		MPT_UNLOCK(mp_tp);
+		MPTS_UNLOCK(mpts);
+		soevent(mp_so, SO_FILT_HINT_LOCKED | SO_FILT_HINT_CONNRESET);
+		MPTS_LOCK(mpts);
+		MPT_LOCK(mp_tp);
 	}
 	MPT_UNLOCK(mp_tp);
 
@@ -2170,6 +2303,42 @@ mptcp_subflow_nosrcaddr_ev(struct mptses *mpte, struct mptsub *mpts)
 }
 
 /*
+ * Handle SO_FILT_HINT_MPCANTRCVMORE subflow socket event that
+ * indicates that the remote side sent a Data FIN
+ */
+static ev_ret_t
+mptcp_subflow_mpcantrcvmore_ev(struct mptses *mpte, struct mptsub *mpts)
+{
+	struct socket *so, *mp_so;
+	struct mptcb *mp_tp;
+
+	MPTE_LOCK_ASSERT_HELD(mpte);    /* same as MP socket lock */
+	MPTS_LOCK_ASSERT_HELD(mpts);
+	mp_so = mpte->mpte_mppcb->mpp_socket;
+	so = mpts->mpts_socket;
+	mp_tp = mpte->mpte_mptcb;
+
+	mptcplog((LOG_DEBUG, "%s: cid %d\n", __func__, mpts->mpts_connid));
+	
+	/*
+	* We got a Data FIN for the MPTCP connection.  
+	* The FIN may arrive with data. The data is handed up to the
+	* mptcp socket and the user is notified so that it may close
+	* the socket if needed.
+	*/
+	MPT_LOCK(mp_tp);
+	if (mp_tp->mpt_state == MPTCPS_CLOSE_WAIT) {
+		MPT_UNLOCK(mp_tp);
+		MPTS_UNLOCK(mpts);
+		soevent(mp_so, SO_FILT_HINT_LOCKED | SO_FILT_HINT_CANTRCVMORE);
+		MPTS_LOCK(mpts);
+		MPT_LOCK(mp_tp);
+	}
+	MPT_UNLOCK(mp_tp);
+	return (MPTS_EVRET_OK); /* keep the subflow socket around */
+}
+
+/*
  * Handle SO_FILT_HINT_MPFAILOVER subflow socket event
  */
 static ev_ret_t
@@ -2195,6 +2364,15 @@ mptcp_subflow_failover_ev(struct mptses *mpte, struct mptsub *mpts)
 	 */
 	if (mpts_alt == NULL) {
 		mptcplog2((LOG_WARNING, "%s: no alternate path\n", __func__));
+		if (mptcp_delayed_subf_start) {
+			mpts_alt = mptcp_get_pending_subflow(mpte, mpts);
+			if (mpts_alt != NULL) {
+				MPTS_LOCK(mpts_alt);
+				(void) mptcp_subflow_soconnectx(mpte,
+				    mpts_alt);
+				MPTS_UNLOCK(mpts_alt);	
+			}
+		}
 		MPTS_LOCK(mpts);
 		goto done;
 	}
@@ -2203,8 +2381,9 @@ mptcp_subflow_failover_ev(struct mptses *mpte, struct mptsub *mpts)
 	so = mpts_alt->mpts_socket;
 	if (mpts_alt->mpts_flags & MPTSF_FAILINGOVER) {
 		socket_lock(so, 1);
-		/* All data acknowledged */
-		if (so->so_snd.sb_cc == 0) {
+		/* All data acknowledged and no RTT spike */
+		if ((so->so_snd.sb_cc == 0) &&
+		    (mptcp_no_rto_spike(so))) {
 			so->so_flags &= ~SOF_MP_TRYFAILOVER;
 			mpts_alt->mpts_flags &= ~MPTSF_FAILINGOVER;
 		} else {
@@ -2214,6 +2393,8 @@ mptcp_subflow_failover_ev(struct mptses *mpte, struct mptsub *mpts)
 		socket_unlock(so, 1);
 	}
 	if (altpath_exists) {
+		mptcplog2((LOG_INFO, "%s: cid = %d\n",
+		    __func__, mpts_alt->mpts_connid));
 		mpts_alt->mpts_flags |= MPTSF_ACTIVE;
 		struct mptcb *mp_tp = mpte->mpte_mptcb;
 		/* Bring the subflow's notion of snd_nxt into the send window */
@@ -2242,12 +2423,14 @@ mptcp_subflow_failover_ev(struct mptses *mpte, struct mptsub *mpts)
 		mpts->mpts_flags |= MPTSF_FAILINGOVER;
 		mpts->mpts_flags &= ~MPTSF_ACTIVE;
 	} else {
+		mptcplog2((LOG_INFO, "%s: no alt cid = %d\n",
+		    __func__, mpts->mpts_connid));
+done:
 		so = mpts->mpts_socket;
 		socket_lock(so, 1);
 		so->so_flags &= ~SOF_MP_TRYFAILOVER;
 		socket_unlock(so, 1);
 	}
-done:
 	MPTS_LOCK_ASSERT_HELD(mpts);
 	return (MPTS_EVRET_OK);
 }
@@ -2377,6 +2560,16 @@ mptcp_subflow_connected_ev(struct mptses *mpte, struct mptsub *mpts)
 
 	if ((mpts->mpts_flags & MPTSF_DISCONNECTED) ||
 	    (mpts->mpts_flags & MPTSF_DISCONNECTING)) {
+        	socket_lock(so, 0);
+		if (!(so->so_state & (SS_ISDISCONNECTING | SS_ISDISCONNECTED)) &&
+		    (so->so_state & SS_ISCONNECTED)) {
+		    mptcplog((LOG_DEBUG, "%s: cid %d disconnect before tcp connect\n",
+		        __func__, mpts->mpts_connid));
+			(void) soshutdownlock(so, SHUT_RD);
+			(void) soshutdownlock(so, SHUT_WR);
+			(void) sodisconnectlocked(so);
+		}
+		socket_unlock(so, 0);
 		return (MPTS_EVRET_OK);
 	}
 
@@ -2567,6 +2760,11 @@ mptcp_subflow_connected_ev(struct mptses *mpte, struct mptsub *mpts)
 		}
 	} else if (mpok) {
 		MPT_UNLOCK(mp_tp);
+		if (mptcp_rwnotify && (mpte->mpte_nummpcapflows == 0)) {
+			/* Experimental code, disabled by default. */
+			sorwakeup(mp_so);
+			sowwakeup(mp_so);
+		}
 		/*
 		 * case (b) above
 		 * In case of additional flows, the MPTCP socket is not
@@ -2576,12 +2774,23 @@ mptcp_subflow_connected_ev(struct mptses *mpte, struct mptsub *mpts)
 		 */
 		MPTS_LOCK(mpts);
 		mpts->mpts_flags |= MPTSF_MPCAP_CTRSET;
+		mpts->mpts_flags &= ~MPTSF_FASTJ_REQD;
 		mpte->mpte_nummpcapflows++;
-		mpts->mpts_rel_seq = 1;
+		/* With Fastjoin, rel sequence will be nonzero */
+		if (mpts->mpts_rel_seq == 0)
+			mpts->mpts_rel_seq = 1;
 		MPT_LOCK_SPIN(mp_tp);
-		mpts->mpts_sndnxt = mp_tp->mpt_snduna;
+		/* With Fastjoin, sndnxt is updated before connected_ev */
+		if (mpts->mpts_sndnxt == 0) {
+			mpts->mpts_sndnxt = mp_tp->mpt_snduna;
+		} 
 		MPT_UNLOCK(mp_tp);
+		mptcp_output_needed(mpte, mpts);
+	} else {
+		MPT_UNLOCK(mp_tp);
+		MPTS_LOCK(mpts);
 	}
+
 	MPTS_LOCK_ASSERT_HELD(mpts);
 
 	return (MPTS_EVRET_OK);	/* keep the subflow socket around */
@@ -2615,7 +2824,7 @@ mptcp_subflow_disconnected_ev(struct mptses *mpte, struct mptsub *mpts)
 
 	/*
 	 * Clear flags that are used by getconninfo to return state.
-	 * Retain like MPTSF_DELETEOK, MPTSF_ACTIVE for internal purposes.
+	 * Retain like MPTSF_DELETEOK for internal purposes.
 	 */
 	mpts->mpts_flags &= ~(MPTSF_CONNECTING|MPTSF_CONNECT_PENDING|
 	    MPTSF_CONNECTED|MPTSF_DISCONNECTING|MPTSF_PREFERRED|
@@ -2635,6 +2844,11 @@ mptcp_subflow_disconnected_ev(struct mptses *mpte, struct mptsub *mpts)
 
 	if (mpts->mpts_flags & MPTSF_MPCAP_CTRSET) {
 		mpte->mpte_nummpcapflows--;
+		if (mpte->mpte_active_sub == mpts) {
+			mpte->mpte_active_sub = NULL;
+			mptcplog((LOG_DEBUG, "%s: resetting active subflow \n",
+			    __func__));
+		}
 		mpts->mpts_flags &= ~MPTSF_MPCAP_CTRSET;
 	}
 
@@ -2717,7 +2931,6 @@ mptcp_subflow_mpstatus_ev(struct mptses *mpte, struct mptsub *mpts)
 done:
 	MPT_UNLOCK(mp_tp);
 	socket_unlock(so, 0);
-
 	return (ret);
 }
 
@@ -2745,8 +2958,6 @@ mptcp_subflow_mustrst_ev(struct mptses *mpte, struct mptsub *mpts)
 	if (mpts->mpts_soerror == 0)
 		mpts->mpts_soerror = ECONNABORTED;
 
-	so->so_error = ECONNABORTED;
-
 	/* We got an invalid option or a fast close */
 	socket_lock(so, 0);
 	struct tcptemp *t_template;
@@ -2754,22 +2965,22 @@ mptcp_subflow_mustrst_ev(struct mptses *mpte, struct mptsub *mpts)
 	struct tcpcb *tp = NULL;
 
 	tp = intotcpcb(inp);
+	so->so_error = ECONNABORTED;
 
 	t_template = tcp_maketemplate(tp);
 	if (t_template) {
-		unsigned int ifscope, nocell = 0;
+		struct tcp_respond_args tra;
 
+		bzero(&tra, sizeof(tra));
 		if (inp->inp_flags & INP_BOUND_IF)
-			ifscope = inp->inp_boundifp->if_index;
+			tra.ifscope = inp->inp_boundifp->if_index;
 		else
-			ifscope = IFSCOPE_NONE;
-
-		if (inp->inp_flags & INP_NO_IFT_CELLULAR)
-			nocell = 1;
+			tra.ifscope = IFSCOPE_NONE;
+		tra.awdl_unrestricted = 1;
 
 		tcp_respond(tp, t_template->tt_ipgen,
 		    &t_template->tt_t, (struct mbuf *)NULL,
-		    tp->rcv_nxt, tp->snd_una, TH_RST, ifscope, nocell);
+		    tp->rcv_nxt, tp->snd_una, TH_RST, &tra);
 		(void) m_free(dtom(t_template));
 		mptcplog((LOG_DEBUG, "%s: mp_so 0x%llx cid %d \n",
 		    __func__, (u_int64_t)VM_KERNEL_ADDRPERM(mp_so),
@@ -2779,10 +2990,12 @@ mptcp_subflow_mustrst_ev(struct mptses *mpte, struct mptsub *mpts)
 	mptcp_subflow_disconnect(mpte, mpts, !linger);
 	MPTS_UNLOCK(mpts);
 
-	soevent(mp_so, SO_FILT_HINT_LOCKED | SO_FILT_HINT_CONNINFO_UPDATED);
+	soevent(mp_so, SO_FILT_HINT_LOCKED | SO_FILT_HINT_CONNINFO_UPDATED |
+	    SO_FILT_HINT_CONNRESET);
 
 	MPT_LOCK(mp_tp);
-	if (mp_tp->mpt_state < MPTCPS_ESTABLISHED) {
+	if ((mp_tp->mpt_state < MPTCPS_ESTABLISHED) ||
+	    (mp_tp->mpt_state == MPTCPS_FASTCLOSE_WAIT)) {
 		mp_so->so_error = ECONNABORTED;
 	}
 	MPT_UNLOCK(mp_tp);
@@ -2793,6 +3006,50 @@ mptcp_subflow_mustrst_ev(struct mptses *mpte, struct mptsub *mpts)
 	 * disconnected explicitly.
 	 */
 	return (linger ? MPTS_EVRET_OK : MPTS_EVRET_DELETE);
+}
+
+static ev_ret_t
+mptcp_fastjoin_ev(struct mptses *mpte, struct mptsub *mpts)
+{
+	MPTE_LOCK_ASSERT_HELD(mpte);    /* same as MP socket lock */
+	MPTS_LOCK_ASSERT_HELD(mpts);
+	VERIFY(mpte->mpte_mppcb != NULL);
+	
+	if (mpte->mpte_nummpcapflows == 0) {
+		struct mptcb *mp_tp = mpte->mpte_mptcb;
+		mptcplog((LOG_DEBUG,"%s %llx %llx \n",
+		    __func__, mp_tp->mpt_snduna, mpts->mpts_sndnxt));
+		mpte->mpte_active_sub = mpts;
+		mpts->mpts_flags |= (MPTSF_FASTJ_SEND | MPTSF_ACTIVE);
+		MPT_LOCK(mp_tp);
+		/*
+		 * If mptcp_subflow_output is called before fastjoin_ev
+		 * then mpts->mpts_sndnxt is initialized to mp_tp->mpt_snduna
+		 * and further mpts->mpts_sndnxt is incremented by len copied.
+		 */
+		if (mpts->mpts_sndnxt == 0) {
+			mpts->mpts_sndnxt = mp_tp->mpt_snduna;
+			mpts->mpts_rel_seq = 1;
+		}
+		MPT_UNLOCK(mp_tp);
+	}
+
+	return (MPTS_EVRET_OK);
+}
+
+static ev_ret_t
+mptcp_deleteok_ev(struct mptses *mpte, struct mptsub *mpts)
+{
+	MPTE_LOCK_ASSERT_HELD(mpte);
+	MPTS_LOCK_ASSERT_HELD(mpts);
+	VERIFY(mpte->mpte_mppcb != NULL);
+	mptcplog((LOG_DEBUG, "%s cid %d\n", __func__, mpts->mpts_connid));
+
+	mpts->mpts_flags |= MPTSF_DELETEOK;
+	if (mpts->mpts_flags & MPTSF_DISCONNECTED)
+		return (MPTS_EVRET_DELETE);
+	else
+		return (MPTS_EVRET_OK);
 }
 
 static const char *
@@ -3088,7 +3345,7 @@ mptcp_drop(struct mptses *mpte, struct mptcb *mp_tp, int errno)
 	VERIFY(mpte->mpte_mptcb == mp_tp);
 	mp_so = mpte->mpte_mppcb->mpp_socket;
 
-	mp_tp->mpt_state = MPTCPS_CLOSED;
+	mp_tp->mpt_state = MPTCPS_TERMINATE;
 	DTRACE_MPTCP2(state__change, struct mptcb *, mp_tp, 
 	    uint32_t, 0 /* event */);
 
@@ -3129,6 +3386,7 @@ mptcp_close(struct mptses *mpte, struct mptcb *mp_tp)
 	/* Clean up all subflows */
 	TAILQ_FOREACH_SAFE(mpts, &mpte->mpte_subflows, mpts_entry, tmpts) {
 		MPTS_LOCK(mpts);
+		mpts->mpts_flags |= MPTSF_USER_DISCONNECT;
 		mptcp_subflow_disconnect(mpte, mpts, TRUE);
 		MPTS_UNLOCK(mpts);
 		mptcp_subflow_del(mpte, mpts, TRUE);
@@ -3236,9 +3494,7 @@ mptcp_thread_dowork(struct mptses *mpte)
 			/* nothing to do */
 			break;
 		case MPTS_EVRET_DELETE:
-			if (mptcp_delete_ok(mpte, mpts)) {
-				mptcp_subflow_del(mpte, mpts, TRUE);
-			}
+			mptcp_subflow_del(mpte, mpts, TRUE);
 			break;
 		case MPTS_EVRET_CONNECT_PENDING:
 			connect_pending = TRUE;
@@ -3306,6 +3562,17 @@ mptcp_thread_dowork(struct mptses *mpte)
 			socket_unlock(so, 1);
 
 		} else if (connect_pending) {
+			/*
+			 * If delayed subflow start is set and cellular,
+			 * delay the connect till a retransmission timeout
+			 */
+
+			if ((mptcp_delayed_subf_start) &&
+			    (IFNET_IS_CELLULAR(mpts->mpts_outif))) {
+				MPTS_UNLOCK(mpts);
+				continue;
+			}
+
 			/*
 			 * The MPTCP connection has progressed to a state
 			 * where it supports full multipath semantics; allow
@@ -3652,7 +3919,7 @@ mptcp_key_pool_init(void)
 
 static void
 mptcp_attach_to_subf(struct socket *so, struct mptcb *mp_tp,
-    connid_t conn_id)
+    uint8_t addr_id)
 {
 	struct tcpcb *tp = sototcpcb(so);
 	struct mptcp_subf_auth_entry *sauth_entry;
@@ -3660,19 +3927,17 @@ mptcp_attach_to_subf(struct socket *so, struct mptcb *mp_tp,
 
 	MPT_LOCK_SPIN(mp_tp);
 	tp->t_mptcb = mp_tp;
-	MPT_UNLOCK(mp_tp);
 	/*
-	 * As long as the mpts_connid is unique it can be used as the
-	 * address ID for additional subflows.
 	 * The address ID of the first flow is implicitly 0.
 	 */
 	if (mp_tp->mpt_state == MPTCPS_CLOSED) {
 		tp->t_local_aid = 0;
 	} else {
-		tp->t_local_aid = conn_id;
+		tp->t_local_aid = addr_id;
 		tp->t_mpflags |= (TMPF_PREESTABLISHED | TMPF_JOINED_FLOW);
 		so->so_flags |= SOF_MP_SEC_SUBFLOW;
 	}
+	MPT_UNLOCK(mp_tp);
 	sauth_entry = zalloc(mpt_subauth_zone);
 	sauth_entry->msae_laddr_id = tp->t_local_aid;
 	sauth_entry->msae_raddr_id = 0;
@@ -3681,18 +3946,24 @@ try_again:
 	sauth_entry->msae_laddr_rand = RandomULong();
 	if (sauth_entry->msae_laddr_rand == 0)
 		goto try_again;
+	MPT_LOCK_SPIN(mp_tp);
 	LIST_INSERT_HEAD(&mp_tp->mpt_subauth_list, sauth_entry, msae_next);
+	MPT_UNLOCK(mp_tp);
 }
 
 static void
 mptcp_detach_mptcb_from_subf(struct mptcb *mp_tp, struct socket *so)
 {
 	struct mptcp_subf_auth_entry *sauth_entry;
-	struct tcpcb *tp = sototcpcb(so);
+	struct tcpcb *tp = NULL;
 	int found = 0;
 
-	if (tp == NULL)
+	socket_lock(so, 0);
+	tp = sototcpcb(so);
+	if (tp == NULL) {
+		socket_unlock(so, 0);
 		return;
+	}
 
 	MPT_LOCK(mp_tp);
 	LIST_FOREACH(sauth_entry, &mp_tp->mpt_subauth_list, msae_next) {
@@ -3705,8 +3976,10 @@ mptcp_detach_mptcb_from_subf(struct mptcb *mp_tp, struct socket *so)
 		LIST_REMOVE(sauth_entry, msae_next);
 		zfree(mpt_subauth_zone, sauth_entry);
 	}
-	tp->t_mptcb = NULL;
 	MPT_UNLOCK(mp_tp);
+
+	tp->t_mptcb = NULL;
+	socket_unlock(so, 0);
 }
 
 void
@@ -4176,8 +4449,9 @@ mptcp_output_getm_dsnmap64(struct socket *so, int off, uint32_t datalen,
 			    __func__));
 		} else {
 			/* case B */
-			mptcplog((LOG_INFO, "%s: discontig %d %d \n",
-			    __func__, datalen, contig_len));
+			mptcplog((LOG_INFO, 
+			    "%s: discontig datalen %d contig_len %d cc %d \n",
+			    __func__, datalen, contig_len, so->so_snd.sb_cc));
 			break;
 		}
 		mnext = mnext->m_next;
@@ -4237,7 +4511,7 @@ mptcp_insert_rmap(struct tcpcb *tp, struct mbuf *m)
 	}
 }
 
-void
+int
 mptcp_adj_rmap(struct socket *so, struct mbuf *m)
 {
 	u_int64_t dsn;
@@ -4246,7 +4520,7 @@ mptcp_adj_rmap(struct socket *so, struct mbuf *m)
 	u_int32_t old_rcvnxt = 0;
 
 	if (m_pktlen(m) == 0)
-		return;
+		return 0;
 
 	if (m->m_pkthdr.pkt_flags & PKTF_MPTCP) {
 		VERIFY(m->m_flags & M_PKTHDR);
@@ -4256,14 +4530,16 @@ mptcp_adj_rmap(struct socket *so, struct mbuf *m)
 		datalen = m->m_pkthdr.mp_rlen;
 	} else {
 		/* data arrived without an DSS option mapping */
+
+		/* initial subflow can fallback right after SYN handshake */
 		mptcp_notify_mpfail(so);
-		return;
+		return 0;
 	}
 
 	/* In the common case, data is in window and in sequence */
 	if (m->m_pkthdr.len == (int)datalen) {
 		mptcp_adj_rcvnxt(tp, m);
-		return;
+		return 0;
 	}
 
 	if (m->m_pkthdr.len > (int)datalen) {
@@ -4277,19 +4553,21 @@ mptcp_adj_rmap(struct socket *so, struct mbuf *m)
 		int off = old_rcvnxt - sseq;
 		m->m_pkthdr.mp_dsn += off;
 		m->m_pkthdr.mp_rseq += off;
-		m->m_pkthdr.mp_rlen -= off;
+		m->m_pkthdr.mp_rlen = m->m_pkthdr.len;
 	} else if (old_rcvnxt == sseq) {
 		/*
 		 * Data was trimmed from the right
 		 */
 		m->m_pkthdr.mp_rlen = m->m_pkthdr.len;
 	} else {
-		/* XXX handle gracefully with reass or fallback in January */
-		panic("%s: partial map %u %u", __func__, old_rcvnxt, sseq);
-		/* NOTREACHED */
+		/* handle gracefully with reass or fallback */
+		mptcp_notify_mpfail(so);
+		m->m_pkthdr.pkt_flags &= ~PKTF_MPTCP;
+		m_freem(m);
+		return -1;
 	}
 	mptcp_adj_rcvnxt(tp, m);
-
+	return 0;
 }
 
 /*
@@ -4312,6 +4590,9 @@ mptcp_act_on_txfail(struct socket *so)
 	if (tp->t_state != TCPS_ESTABLISHED)
 		mptcplog((LOG_INFO, "%s: state = %d \n", __func__,
 		    tp->t_state));
+	
+	mptcplog((LOG_INFO, "%s: Failover = %d \n", __func__,
+	    (so->so_flags & SOF_MP_TRYFAILOVER) ? 1 : 0));
 
 	if (so->so_flags & SOF_MP_TRYFAILOVER) {
 		return;
@@ -4344,6 +4625,8 @@ mptcp_get_map_for_dsn(struct socket *so, u_int64_t dsn_fail, u_int32_t *tcp_seq)
 		    (MPTCP_SEQ_GEQ(dsn + datalen, dsn_fail))) {
 			off = dsn_fail - dsn;
 			*tcp_seq = m->m_pkthdr.mp_rseq + off;
+			mptcplog((LOG_INFO, "%s: %llu %llu \n",
+			    __func__, dsn, dsn_fail));
 			return (0);
 		}
 
@@ -4361,6 +4644,7 @@ mptcp_get_map_for_dsn(struct socket *so, u_int64_t dsn_fail, u_int32_t *tcp_seq)
 
 /*
  * Support for sending contiguous MPTCP bytes in subflow
+ * Also for preventing sending data with ACK in 3-way handshake
  */
 int32_t
 mptcp_adj_sendlen(struct socket *so, int32_t off, int32_t len)
@@ -4375,6 +4659,23 @@ mptcp_adj_sendlen(struct socket *so, int32_t off, int32_t len)
 	mptcp_output_getm_dsnmap64(so, off, (u_int32_t)len,
 	    &mdss_dsn, &mdss_subflow_seq, &mdss_data_len);
 
+	/* 
+	 * Special case handling for Fast Join. We want to send data right
+	 * after ACK of the 3-way handshake, but not piggyback the data
+	 * with the 3rd ACK of the 3WHS. TMPF_FASTJOINBY2_SEND and
+	 * mdss_data_len control this.
+	 */
+	struct tcpcb *tp = NULL;
+	tp = intotcpcb(sotoinpcb(so)); 
+	if ((tp->t_mpflags & TMPF_JOINED_FLOW) &&
+            (tp->t_mpflags & TMPF_PREESTABLISHED) &&
+	    (!(tp->t_mpflags & TMPF_RECVD_JOIN)) &&
+	    (tp->t_mpflags & TMPF_SENT_JOIN) &&
+	    (!(tp->t_mpflags & TMPF_MPTCP_TRUE)) &&
+	    (!(tp->t_mpflags & TMPF_FASTJOINBY2_SEND))) {
+	    mdss_data_len = 0;
+	    tp->t_mpflags |= TMPF_FASTJOINBY2_SEND;
+	}    
 	return (mdss_data_len);
 }
 
@@ -4583,7 +4884,7 @@ mptcp_pcblist SYSCTL_HANDLER_ARGS
 	struct mptsub *mpts;
 	struct socket *so;
 	conninfo_mptcp_t mptcpci;
-	mptcp_flow_t *flows;
+	mptcp_flow_t *flows = NULL;
 
 	if (req->newptr != USER_ADDR_NULL)
 		return (EPERM);
@@ -4597,6 +4898,7 @@ mptcp_pcblist SYSCTL_HANDLER_ARGS
 		return (0);
 	}
 	TAILQ_FOREACH(mpp, &mtcbinfo.mppi_pcbs, mpp_entry) {
+		flows = NULL;
 		bzero(&mptcpci, sizeof(mptcpci));
 		lck_mtx_lock(&mpp->mpp_lock);
 		VERIFY(mpp->mpp_flags & MPP_ATTACHED);
@@ -4604,19 +4906,25 @@ mptcp_pcblist SYSCTL_HANDLER_ARGS
 		VERIFY(mpte != NULL);
 		mp_tp = mpte->mpte_mptcb;
 		VERIFY(mp_tp != NULL);
-		len = sizeof(*flows) * mpte->mpte_numflows;
-		flows = _MALLOC(len, M_TEMP, M_WAITOK | M_ZERO);
-		if (flows == NULL) {
-			lck_mtx_unlock(&mpp->mpp_lock);
-			break;
-		}
 		/* N.B. we don't take the mpt_lock just for the state. */
 		mptcpci.mptcpci_state = mp_tp->mpt_state;
 		mptcpci.mptcpci_nflows = mpte->mpte_numflows;
-		mptcpci.mptcpci_len = sizeof(mptcpci) +
-		    sizeof(*flows) * (mptcpci.mptcpci_nflows - 1);
-		error = SYSCTL_OUT(req, &mptcpci, 
-		    sizeof(mptcpci) - sizeof(*flows));
+		len = sizeof(*flows) * mpte->mpte_numflows;
+		if (mpte->mpte_numflows != 0) {
+			flows = _MALLOC(len, M_TEMP, M_WAITOK | M_ZERO);
+			if (flows == NULL) {
+				lck_mtx_unlock(&mpp->mpp_lock);
+				break;
+			}
+			mptcpci.mptcpci_len = sizeof(mptcpci) +
+			    sizeof(*flows) * (mptcpci.mptcpci_nflows - 1);
+			error = SYSCTL_OUT(req, &mptcpci,
+			    sizeof(mptcpci) - sizeof(mptcp_flow_t));
+		} else {
+			mptcpci.mptcpci_len = sizeof(mptcpci);
+			error = SYSCTL_OUT(req, &mptcpci,
+		    	    sizeof(mptcpci));
+		}   
 		if (error) {
 			lck_mtx_unlock(&mpp->mpp_lock);
 			FREE(flows, M_TEMP);
@@ -4633,10 +4941,12 @@ mptcp_pcblist SYSCTL_HANDLER_ARGS
 			f++;
 		}
 		lck_mtx_unlock(&mpp->mpp_lock);
-		error = SYSCTL_OUT(req, flows, len);
-		FREE(flows, M_TEMP);
-		if (error)
-			break;
+		if (flows) {
+			error = SYSCTL_OUT(req, flows, len);
+			FREE(flows, M_TEMP);
+			if (error)
+				break;
+		}
 	}
 	lck_mtx_unlock(&mtcbinfo.mppi_lock);
 
@@ -4646,3 +4956,165 @@ mptcp_pcblist SYSCTL_HANDLER_ARGS
 SYSCTL_PROC(_net_inet_mptcp, OID_AUTO, pcblist, CTLFLAG_RD | CTLFLAG_LOCKED,
     0, 0, mptcp_pcblist, "S,conninfo_mptcp_t", 
     "List of active MPTCP connections");
+
+/*
+ * Check the health of the other subflows and do an mptcp_output if
+ * there is no other active or functional subflow at the time of
+ * call of this function.
+ */
+static void
+mptcp_output_needed(struct mptses *mpte, struct mptsub *to_mpts)
+{
+	struct mptsub *from_mpts = NULL;
+
+	MPTE_LOCK_ASSERT_HELD(mpte);
+
+	MPTS_UNLOCK(to_mpts);
+	
+	from_mpts = mpte->mpte_active_sub; 
+
+	if (from_mpts == NULL)
+		goto output_needed;
+
+	MPTS_LOCK(from_mpts);
+
+	if ((from_mpts->mpts_flags & MPTSF_DISCONNECTED) ||
+	    (from_mpts->mpts_flags & MPTSF_DISCONNECTING)) {
+		MPTS_UNLOCK(from_mpts);
+		goto output_needed;
+	}
+
+	MPTS_UNLOCK(from_mpts);
+	MPTS_LOCK(to_mpts);
+	return;
+
+output_needed:	
+	mptcp_output(mpte);	
+	MPTS_LOCK(to_mpts);
+}
+
+
+/*
+ * When WiFi signal starts fading, there's more loss and RTT spikes.
+ * Check if there has been a large spike by comparing against
+ * a tolerable RTT spike threshold.
+ */
+boolean_t 
+mptcp_no_rto_spike(struct socket *so)
+{
+	struct tcpcb *tp = intotcpcb(sotoinpcb(so));
+	int32_t spike = 0;
+
+	if (tp->t_rxtcur > mptcp_rto_spike_thresh) {
+		spike = tp->t_rxtcur - mptcp_rto_spike_thresh;
+	
+		mptcplog2((LOG_INFO, "%s: spike = %d rto = %d",
+		    "best = %d cur = %d\n", __func__, spike,
+		    tp->t_rxtcur, tp->t_rttbest >> TCP_RTT_SHIFT,
+		    tp->t_rttcur));
+	
+	}
+
+	if (spike > 0 ) {
+		return (FALSE);
+	} else { 
+		return (TRUE);
+	}	
+}
+
+/*
+ * Set notsent lowat mark on the MPTCB
+ */
+int
+mptcp_set_notsent_lowat(struct mptses *mpte, int optval)
+{
+	struct mptcb *mp_tp = NULL;
+	int error = 0;
+
+	if (mpte->mpte_mppcb->mpp_flags & MPP_ATTACHED)
+		mp_tp = mpte->mpte_mptcb;
+
+	if (mp_tp)
+		mp_tp->mpt_notsent_lowat = optval;
+	else
+		error = EINVAL;
+
+	return error;	
+}
+
+u_int32_t
+mptcp_get_notsent_lowat(struct mptses *mpte)
+{
+	struct mptcb *mp_tp = NULL;
+
+	if (mpte->mpte_mppcb->mpp_flags & MPP_ATTACHED)
+		mp_tp = mpte->mpte_mptcb;
+
+	if (mp_tp)
+		return mp_tp->mpt_notsent_lowat;
+	else
+		return 0;
+}
+
+int                             
+mptcp_notsent_lowat_check(struct socket *so) {
+	struct mptses *mpte;
+	struct mppcb *mpp;
+	struct mptcb *mp_tp;
+	struct mptsub *mpts;
+
+	int notsent = 0;
+
+	mpp = sotomppcb(so);
+	if (mpp == NULL || mpp->mpp_state == MPPCB_STATE_DEAD) {
+		return (0);
+	}
+
+	mpte = mptompte(mpp);
+	mp_tp = mpte->mpte_mptcb;
+
+	MPT_LOCK(mp_tp);
+	notsent = so->so_snd.sb_cc;
+
+	if ((notsent == 0) ||
+	    ((notsent - (mp_tp->mpt_sndnxt - mp_tp->mpt_snduna)) <=
+	    mp_tp->mpt_notsent_lowat)) {
+		mptcplog3((LOG_INFO, "%s: lowat %d notsent %d actual %d \n",
+		    __func__, mp_tp->mpt_notsent_lowat, notsent,
+		    notsent - (mp_tp->mpt_sndnxt - mp_tp->mpt_snduna)));
+		MPT_UNLOCK(mp_tp);
+		return (1);
+	}
+	MPT_UNLOCK(mp_tp);
+
+	/* When Nagle's algorithm is not disabled, it is better
+	 * to wakeup the client even before there is atleast one
+	 * maxseg of data to write.
+	 */
+	TAILQ_FOREACH(mpts, &mpte->mpte_subflows, mpts_entry) {
+		int retval = 0;
+		MPTS_LOCK(mpts);
+		if (mpts->mpts_flags & MPTSF_ACTIVE) {
+			struct socket *subf_so = mpts->mpts_socket;
+			socket_lock(subf_so, 0);
+			struct tcpcb *tp = intotcpcb(sotoinpcb(subf_so));
+			
+			notsent = so->so_snd.sb_cc -
+			   (tp->snd_nxt - tp->snd_una);
+			
+			if ((tp->t_flags & TF_NODELAY) == 0 &&
+			    notsent > 0 && (notsent <= (int)tp->t_maxseg)) {
+				retval = 1;
+			}
+			mptcplog3((LOG_INFO, "%s: lowat %d notsent %d"
+			    " nodelay false \n",
+			    __func__, mp_tp->mpt_notsent_lowat, notsent));
+			socket_unlock(subf_so, 0);
+			MPTS_UNLOCK(mpts);
+			return (retval);
+		}
+		MPTS_UNLOCK(mpts);
+	}
+	return (0);
+}
+

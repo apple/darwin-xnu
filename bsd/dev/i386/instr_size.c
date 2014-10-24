@@ -120,19 +120,3 @@ dtrace_instr_size(uchar_t *instr)
 	return (dtrace_dis_isize(instr, DIS_ISIZE_INSTR, DATAMODEL_NATIVE,
 	    NULL));
 }
-
-#if !defined(__APPLE__)
-/*ARGSUSED*/
-int
-instr_size(struct regs *rp, caddr_t *addrp, enum seg_rw rw)
-{
-	uchar_t instr[16];	/* maximum size instruction */
-	caddr_t pc = (caddr_t)rp->r_pc;
-
-	(void) copyin_nowatch(pc, (caddr_t)instr, sizeof (instr));
-
-	return (dtrace_dis_isize(instr,
-	    rw == S_EXEC ? DIS_ISIZE_INSTR : DIS_ISIZE_OPERAND,
-	    curproc->p_model, NULL));
-}
-#endif /* __APPLE__ */

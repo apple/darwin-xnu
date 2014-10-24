@@ -47,6 +47,7 @@
 #if defined(i386) || defined(x86_64)
 #define DECR_RDHPET		MACHDBG_CODE(DBG_MACH_EXCP_DECI, 5)
 #define DECR_SET_TSC_DEADLINE	MACHDBG_CODE(DBG_MACH_EXCP_DECI, 6)
+#define DECR_SET_APIC_DEADLINE	MACHDBG_CODE(DBG_MACH_EXCP_DECI, 16)
 #endif
 #define DECR_TIMER_ENTER	MACHDBG_CODE(DBG_MACH_EXCP_DECI, 7)
 #define DECR_TIMER_CANCEL	MACHDBG_CODE(DBG_MACH_EXCP_DECI, 8)
@@ -99,6 +100,44 @@ extern void		timer_call_nosync_cpu(
 /*
  *	Invoked by platform, implemented by kernel.
  */
+
+/*
+ *	Invoked by kernel, implemented by platform.
+ */
+
+#define NUM_LATENCY_QOS_TIERS (6)
+
+typedef struct {
+	uint32_t idle_entry_timer_processing_hdeadline_threshold_ns;
+	uint32_t interrupt_timer_coalescing_ilat_threshold_ns;
+	uint32_t timer_resort_threshold_ns;
+
+	int32_t timer_coalesce_rt_shift;
+	int32_t timer_coalesce_bg_shift;
+	int32_t timer_coalesce_kt_shift;
+	int32_t timer_coalesce_fp_shift;
+	int32_t timer_coalesce_ts_shift;
+
+	uint64_t timer_coalesce_rt_ns_max;
+	uint64_t timer_coalesce_bg_ns_max;
+	uint64_t timer_coalesce_kt_ns_max;
+	uint64_t timer_coalesce_fp_ns_max;
+	uint64_t timer_coalesce_ts_ns_max;
+
+	uint32_t latency_qos_scale[NUM_LATENCY_QOS_TIERS];
+	uint64_t latency_qos_ns_max[NUM_LATENCY_QOS_TIERS];
+	boolean_t latency_tier_rate_limited[NUM_LATENCY_QOS_TIERS];
+} timer_coalescing_priority_params_ns_t;
+
+extern timer_coalescing_priority_params_ns_t * timer_call_get_priority_params(void);
+
+
+extern uint64_t		timer_call_slop(
+	uint64_t		deadline,
+	uint64_t		armtime,
+	uint32_t		urgency,
+	thread_t		arming_thread,
+	boolean_t		*rlimited);
 
 /* Process deadline expiration for queue, returns new deadline */
 extern uint64_t		timer_queue_expire(

@@ -167,10 +167,12 @@ mk_timer_expire(
 		timer->is_armed = FALSE;
 		simple_unlock(&timer->lock);
 
-		msg.header.msgh_bits = MACH_MSGH_BITS(MACH_MSG_TYPE_COPY_SEND, 0);
+		msg.header.msgh_bits =
+		    MACH_MSGH_BITS_SET(MACH_MSG_TYPE_COPY_SEND, 0, 0, 0);
 		msg.header.msgh_remote_port = port;
 		msg.header.msgh_local_port = MACH_PORT_NULL;
-		msg.header.msgh_reserved = msg.header.msgh_id = 0;
+		msg.header.msgh_voucher_port = MACH_PORT_NULL;
+		msg.header.msgh_id = 0;
 
 		msg.unused[0] = msg.unused[1] = msg.unused[2] = 0;
 

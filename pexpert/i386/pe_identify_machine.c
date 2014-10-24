@@ -25,9 +25,9 @@
  * 
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
+#include <machine/machine_routines.h>
 #include <pexpert/pexpert.h>
 #include <pexpert/protos.h>
-#include <pexpert/device_tree.h>
 
 /* Local declarations */
 void pe_identify_machine(boot_args *args);

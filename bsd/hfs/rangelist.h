@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2001 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2001-2014 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -58,6 +58,7 @@ __BEGIN_DECLS
 void rl_init(struct rl_head *rangelist);
 void rl_add(off_t start, off_t end, struct rl_head *rangelist);
 void rl_remove(off_t start, off_t end, struct rl_head *rangelist);
+void rl_remove_all(struct rl_head *rangelist);
 enum rl_overlaptype rl_scan(struct rl_head *rangelist,
 							off_t start,
 							off_t end,

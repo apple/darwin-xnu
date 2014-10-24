@@ -57,8 +57,6 @@
 #include <netinet/in.h>
 #include <netinet/ip.h>
 
-#include <kern/lock.h>
-
 #if CONFIG_AUDIT
 MALLOC_DEFINE(M_AUDITBSM, "audit_bsm", "Audit BSM data");
 
@@ -1022,6 +1020,7 @@ kaudit_to_bsm(struct kaudit_record *kar, struct au_record **pau)
 	case AUE_FUTIMES:
 	case AUE_GETDIRENTRIES:
 	case AUE_GETDIRENTRIESATTR:
+	case AUE_GETATTRLISTBULK:
 #if 0  /* XXXss new */
 	case AUE_POLL:
 #endif
@@ -1282,34 +1281,13 @@ kaudit_to_bsm(struct kaudit_record *kar, struct au_record **pau)
 		}
 		break;
 
-	case AUE_OPENAT_RC:
-	case AUE_OPENAT_RTC:
-	case AUE_OPENAT_RWC:
-	case AUE_OPENAT_RWTC:
-	case AUE_OPENAT_WC:
-	case AUE_OPENAT_WTC:
-		if (ARG_IS_VALID(kar, ARG_MODE)) {
-			tok = au_to_arg32(3, "mode", ar->ar_arg_mode);
-			kau_write(rec, tok);
-		}
-		if (ARG_IS_VALID(kar, ARG_FFLAGS)) {
-			tok = au_to_arg32(3, "flags", ar->ar_arg_fflags);
-			kau_write(rec, tok);
-		}
-		if (ARG_IS_VALID(kar, ARG_FD)) {
-			tok = au_to_arg32(1, "dir fd", ar->ar_arg_fd);
-			kau_write(rec, tok);
-		}
-		UPATH1_VNODE1_TOKENS;
-		break;
-
-	case AUE_OPEN_EXTENDED_RC:
-	case AUE_OPEN_EXTENDED_RTC:
-	case AUE_OPEN_EXTENDED_RWC:
-	case AUE_OPEN_EXTENDED_RWTC:
-	case AUE_OPEN_EXTENDED_WC:
-	case AUE_OPEN_EXTENDED_WTC:
-		EXTENDED_TOKENS(3);
+	case AUE_OPEN:
+	case AUE_OPEN_R:
+	case AUE_OPEN_RT:
+	case AUE_OPEN_RW:
+	case AUE_OPEN_RWT:
+	case AUE_OPEN_W:
+	case AUE_OPEN_WT:
 		if (ARG_IS_VALID(kar, ARG_FFLAGS)) {
 			tok = au_to_arg32(2, "flags", ar->ar_arg_fflags);
 			kau_write(rec, tok);
@@ -1327,6 +1305,35 @@ kaudit_to_bsm(struct kaudit_record *kar, struct au_record **pau)
 			tok = au_to_arg32(3, "mode", ar->ar_arg_mode);
 			kau_write(rec, tok);
 		}
+		if (ARG_IS_VALID(kar, ARG_FFLAGS)) {
+			tok = au_to_arg32(2, "flags", ar->ar_arg_fflags);
+			kau_write(rec, tok);
+		}
+		UPATH1_VNODE1_TOKENS;
+		break;
+
+	case AUE_OPEN_EXTENDED:
+	case AUE_OPEN_EXTENDED_R:
+	case AUE_OPEN_EXTENDED_RT:
+	case AUE_OPEN_EXTENDED_RW:
+	case AUE_OPEN_EXTENDED_RWT:
+	case AUE_OPEN_EXTENDED_W:
+	case AUE_OPEN_EXTENDED_WT:
+		EXTENDED_TOKENS(3);
+		if (ARG_IS_VALID(kar, ARG_FFLAGS)) {
+			tok = au_to_arg32(2, "flags", ar->ar_arg_fflags);
+			kau_write(rec, tok);
+		}
+		UPATH1_VNODE1_TOKENS;
+		break;
+
+	case AUE_OPEN_EXTENDED_RC:
+	case AUE_OPEN_EXTENDED_RTC:
+	case AUE_OPEN_EXTENDED_RWC:
+	case AUE_OPEN_EXTENDED_RWTC:
+	case AUE_OPEN_EXTENDED_WC:
+	case AUE_OPEN_EXTENDED_WTC:
+		EXTENDED_TOKENS(3);
 		if (ARG_IS_VALID(kar, ARG_FFLAGS)) {
 			tok = au_to_arg32(2, "flags", ar->ar_arg_fflags);
 			kau_write(rec, tok);
@@ -1352,36 +1359,59 @@ kaudit_to_bsm(struct kaudit_record *kar, struct au_record **pau)
 		UPATH1_VNODE1_TOKENS;
 		break;
 
-	case AUE_OPEN_EXTENDED:
-	case AUE_OPEN_EXTENDED_R:
-	case AUE_OPEN_EXTENDED_RT:
-	case AUE_OPEN_EXTENDED_RW:
-	case AUE_OPEN_EXTENDED_RWT:
-	case AUE_OPEN_EXTENDED_W:
-	case AUE_OPEN_EXTENDED_WT:
-		EXTENDED_TOKENS(3);
+	case AUE_OPENAT_RC:
+	case AUE_OPENAT_RTC:
+	case AUE_OPENAT_RWC:
+	case AUE_OPENAT_RWTC:
+	case AUE_OPENAT_WC:
+	case AUE_OPENAT_WTC:
+		if (ARG_IS_VALID(kar, ARG_MODE)) {
+			tok = au_to_arg32(4, "mode", ar->ar_arg_mode);
+			kau_write(rec, tok);
+		}
 		if (ARG_IS_VALID(kar, ARG_FFLAGS)) {
-			tok = au_to_arg32(2, "flags", ar->ar_arg_fflags);
+			tok = au_to_arg32(3, "flags", ar->ar_arg_fflags);
+			kau_write(rec, tok);
+		}
+		if (ARG_IS_VALID(kar, ARG_FD)) {
+			tok = au_to_arg32(1, "dir fd", ar->ar_arg_fd);
 			kau_write(rec, tok);
 		}
 		UPATH1_VNODE1_TOKENS;
 		break;
 
-	case AUE_OPEN:
-	case AUE_OPEN_R:
-	case AUE_OPEN_RT:
-	case AUE_OPEN_RW:
-	case AUE_OPEN_RWT:
-	case AUE_OPEN_W:
-	case AUE_OPEN_WT:
+	case AUE_OPENBYID:
+	case AUE_OPENBYID_R:
+	case AUE_OPENBYID_RT:
+	case AUE_OPENBYID_RW:
+	case AUE_OPENBYID_RWT:
+	case AUE_OPENBYID_W:
+	case AUE_OPENBYID_WT:
 		if (ARG_IS_VALID(kar, ARG_FFLAGS)) {
-			tok = au_to_arg32(2, "flags", ar->ar_arg_fflags);
+			tok = au_to_arg32(3, "flags", ar->ar_arg_fflags);
 			kau_write(rec, tok);
 		}
-		UPATH1_VNODE1_TOKENS;
+		if (ARG_IS_VALID(kar, ARG_VALUE32)) {
+			tok = au_to_arg32(1, "volfsid", ar->ar_arg_value32);
+			kau_write(rec, tok);
+		}
+		if (ARG_IS_VALID(kar, ARG_VALUE64)) {
+			tok = au_to_arg64(2, "objid", ar->ar_arg_value64);
+			kau_write(rec, tok);
+		}
 		break;
 
+	case AUE_RENAMEAT:
+	case AUE_FACCESSAT:
+	case AUE_FCHMODAT:
+	case AUE_FCHOWNAT:
+	case AUE_FSTATAT:
+	case AUE_LINKAT:
 	case AUE_UNLINKAT:
+	case AUE_READLINKAT:
+	case AUE_SYMLINKAT:
+	case AUE_MKDIRAT:
+	case AUE_GETATTRLISTAT:
 		if (ARG_IS_VALID(kar, ARG_FD)) {
 			tok = au_to_arg32(1, "dir fd", ar->ar_arg_fd);
 			kau_write(rec, tok);

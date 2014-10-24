@@ -1,0 +1,59 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleDevelopmentRegion</key>
+	<string>English</string>
+	<key>CFBundleExecutable</key>
+	<string>PerfIndex</string>
+	<key>CFBundleIconFile</key>
+	<string></string>
+	<key>CFBundleIdentifier</key>
+	<string>com.apple.coreostest.PerfIndex</string>
+	<key>CFBundleInfoDictionaryVersion</key>
+	<string>6.0</string>
+	<key>CFBundleName</key>
+	<string>PerfIndex</string>
+	<key>CFBundlePackageType</key>
+	<string>BNDL</string>
+	<key>CFBundleShortVersionString</key>
+	<string>1.0</string>
+	<key>CFBundleSignature</key>
+	<string>????</string>
+	<key>CFBundleVersion</key>
+	<string>1</string>
+	<key>NSHumanReadableCopyright</key>
+	<string>Copyright © 2013 Apple, Inc. All rights reserved.</string>
+	<key>NSPrincipalClass</key>
+	<string>PITest</string>
+	<key>Tests</key>
+	<dict>
+		<key>perfindex-cpu</key>
+		<string>PITest</string>
+		<key>perfindex-memory</key>
+		<string>PITest</string>
+		<key>perfindex-syscall</key>
+		<string>PITest</string>
+		<key>perfindex-fault</key>
+		<string>PITest</string>
+		<key>perfindex-zfod</key>
+		<string>PITest</string>
+		<key>perfindex-filecreate</key>
+		<string>PITest</string>
+		<key>perfindex-fileread</key>
+		<string>PITest</string>
+		<key>perfindex-filewrite</key>
+		<string>PITest</string>
+		<key>perfindex-ramfilecreate</key>
+		<string>PITest</string>
+		<key>perfindex-ramfileread</key>
+		<string>PITest</string>
+		<key>perfindex-ramfilewrite</key>
+		<string>PITest</string>
+		<key>perfindex-iperf</key>
+		<string>PITest</string>
+		<key>perfindex-compile</key>
+		<string>PITest</string>
+	</dict>
+</dict>
+</plist>

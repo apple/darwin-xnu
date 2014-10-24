@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2007-2013 Apple Inc. All rights reserved.
+ * Copyright (c) 2007-2014 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -3552,7 +3552,7 @@ pfioctl_ioc_rule(u_long cmd, int minordev, struct pfioc_rule *pr, struct proc *p
 			break;
 
 		if (rule->anchor != NULL)
-			strncpy(rule->anchor->owner, rule->owner,
+			strlcpy(rule->anchor->owner, rule->owner,
 			    PF_OWNER_NAME_SIZE);
 
 		if (r) {
@@ -3614,17 +3614,42 @@ pfioctl_ioc_state_kill(u_long cmd, struct pfioc_state_kill *psk, struct proc *p)
 #pragma unused(p)
 	int error = 0;
 
+	psk->psk_ifname[sizeof (psk->psk_ifname) - 1] = '\0';
+	psk->psk_ownername[sizeof(psk->psk_ownername) - 1] = '\0';
+
+	bool ifname_matched = true;
+	bool owner_matched = true;
+
 	switch (cmd) {
 	case DIOCCLRSTATES: {
 		struct pf_state		*s, *nexts;
 		int			 killed = 0;
 
-		psk->psk_ifname[sizeof (psk->psk_ifname) - 1] = '\0';
 		for (s = RB_MIN(pf_state_tree_id, &tree_id); s; s = nexts) {
 			nexts = RB_NEXT(pf_state_tree_id, &tree_id, s);
+			/*
+			 * Purge all states only when neither ifname
+			 * or owner is provided. If any of these are provided
+			 * we purge only the states with meta data that match
+			 */
+			bool unlink_state = false;
+			ifname_matched = true;
+			owner_matched = true;
 
-			if (!psk->psk_ifname[0] || strcmp(psk->psk_ifname,
-			    s->kif->pfik_name) == 0) {
+			if (psk->psk_ifname[0] &&
+			    strcmp(psk->psk_ifname, s->kif->pfik_name)) {
+				ifname_matched = false;
+			}
+
+			if (psk->psk_ownername[0] &&
+			    ((NULL == s->rule.ptr) ||
+			     strcmp(psk->psk_ownername, s->rule.ptr->owner))) {
+				owner_matched = false;
+			}
+
+			unlink_state = ifname_matched && owner_matched;
+
+			if (unlink_state) {
 #if NPFSYNC
 				/* don't send out individual delete messages */
 				s->sync_flags = PFSTATE_NOSYNC;
@@ -3650,6 +3675,19 @@ pfioctl_ioc_state_kill(u_long cmd, struct pfioc_state_kill *psk, struct proc *p)
 		    s = nexts) {
 			nexts = RB_NEXT(pf_state_tree_id, &tree_id, s);
 			sk = s->state_key;
+			ifname_matched = true;
+			owner_matched = true;
+
+			if (psk->psk_ifname[0] &&
+			    strcmp(psk->psk_ifname, s->kif->pfik_name)) {
+				ifname_matched = false;
+			}
+
+			if (psk->psk_ownername[0] &&
+			    ((NULL == s->rule.ptr) ||
+			     strcmp(psk->psk_ownername, s->rule.ptr->owner))) {
+				owner_matched = false;
+			}
 
 			if (sk->direction == PF_OUT) {
 				src = &sk->lan;
@@ -3674,8 +3712,8 @@ pfioctl_ioc_state_kill(u_long cmd, struct pfioc_state_kill *psk, struct proc *p)
 			    (pf_match_xport(psk->psk_proto,
 			    psk->psk_proto_variant, &psk->psk_dst.xport,
 			    &dst->xport)) &&
-			    (!psk->psk_ifname[0] || strcmp(psk->psk_ifname,
-			    s->kif->pfik_name) == 0)) {
+			    ifname_matched &&
+			    owner_matched) {
 #if NPFSYNC
 				/* send immediate delete of state */
 				pfsync_delete_state(s);
@@ -3710,8 +3748,7 @@ pfioctl_ioc_state(u_long cmd, struct pfioc_state *ps, struct proc *p)
 		struct pf_state_key	*sk;
 		struct pfi_kif		*kif;
 
-		if (sp->timeout >= PFTM_MAX &&
-		    sp->timeout != PFTM_UNTIL_PACKET) {
+		if (sp->timeout >= PFTM_MAX) {
 			error = EINVAL;
 			break;
 		}
@@ -4795,6 +4832,7 @@ pf_af_hook(struct ifnet *ifp, struct mbuf **mppn, struct mbuf **mp,
 	int error = 0;
 	struct mbuf *nextpkt;
 	net_thread_marks_t marks;
+	struct ifnet * pf_ifp = ifp;
 
 	marks = net_thread_marks_push(NET_THREAD_HELD_PF);
 
@@ -4810,16 +4848,32 @@ pf_af_hook(struct ifnet *ifp, struct mbuf **mppn, struct mbuf **mp,
 	if ((nextpkt = (*mp)->m_nextpkt) != NULL)
 		(*mp)->m_nextpkt = NULL;
 
+        /*
+         * For packets destined to locally hosted IP address
+         * ip_output_list sets Mbuf's pkt header's rcvif to
+         * the interface hosting the IP address.
+         * While on the output path ifp passed to pf_af_hook
+         * to such local communication is the loopback interface,
+         * the input path derives ifp from mbuf packet header's
+         * rcvif.
+         * This asymmetry caues issues with PF.
+         * To handle that case, we have a limited change here to
+         * pass interface as loopback if packets are looped in.
+         */
+	if (input && ((*mp)->m_pkthdr.pkt_flags & PKTF_LOOP)) {
+		pf_ifp = lo_ifp;
+	}
+
 	switch (af) {
 #if INET
 	case AF_INET: {
-		error = pf_inet_hook(ifp, mp, input, fwa);
+		error = pf_inet_hook(pf_ifp, mp, input, fwa);
 		break;
 	}
 #endif /* INET */
 #if INET6
 	case AF_INET6:
-		error = pf_inet6_hook(ifp, mp, input, fwa);
+		error = pf_inet6_hook(pf_ifp, mp, input, fwa);
 		break;
 #endif /* INET6 */
 	default:

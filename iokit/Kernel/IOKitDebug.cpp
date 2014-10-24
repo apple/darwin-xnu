@@ -46,7 +46,13 @@
 SInt64		gIOKitDebug = DEBUG_INIT_VALUE;
 SInt64		gIOKitTrace = 0;
 
-SYSCTL_QUAD(_debug, OID_AUTO, iokit, CTLFLAG_RW | CTLFLAG_LOCKED, &gIOKitDebug, "boot_arg io");
+#if DEVELOPMENT || DEBUG
+#define IODEBUG_CTLFLAGS	CTLFLAG_RW
+#else
+#define IODEBUG_CTLFLAGS	CTLFLAG_RD
+#endif
+
+SYSCTL_QUAD(_debug, OID_AUTO, iokit, IODEBUG_CTLFLAGS | CTLFLAG_LOCKED, &gIOKitDebug, "boot_arg io");
 SYSCTL_QUAD(_debug, OID_AUTO, iotrace, CTLFLAG_RW | CTLFLAG_LOCKED, &gIOKitTrace, "trace io");
 
 

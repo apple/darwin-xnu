@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2010 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2014 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -328,15 +328,18 @@ bsd_scale_setup(int scale)
 		desiredvnodes = maxfiles;
 		vnodes_sized = 1;
 		if (scale > 4) {
-			/* clip them at 32G level */
+			/* clip somaxconn at 32G level */
 			somaxconn = 2048;
-			/* 64G or more the hash size is 32k */
+			/* 
+			 * For scale > 4 (> 32G), clip 
+			 * tcp_tcbhashsize to 32K
+			 */
+			tcp_tcbhashsize = 32 *1024;
+			
 			if (scale > 7) {
 				/* clip at 64G level */
-				tcp_tcbhashsize = 16 *1024;
 				max_cached_sock_count = 165000;
 			} else {
-				tcp_tcbhashsize = 32 *1024;
 				max_cached_sock_count = 60000 + ((scale-1) * 15000);
 			}
 		} else {

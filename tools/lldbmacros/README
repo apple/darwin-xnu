@@ -22,7 +22,11 @@ F. Development and Debugging on lldb kernel debugging platform.
 ========================================
 A. How to use lldb for kernel debugging
 ========================================
-lldb can be used for kernel debugging the same way as gdb. The simplest way is to start lldb with kernel symbol file. The lldb environment will ready to connect over kdp-remote '<hostname:port>' or 'gdb-remote <hostname:port>'. In case using a core file please do 'file --core /path/to/corefile'
+lldb can be used for kernel debugging the same way as gdb. The simplest way is to start lldb with kernel symbol file. The lldb environment by default does not allow loading automatic python modules. Please add the following setting in
+File: ~/.lldbinit 
+settings set target.load-script-from-symbol-file true
+
+Now lldb will be ready to connect over kdp-remote '<hostname:port>' or 'gdb-remote <hostname:port>'. In case using a core file please do 'file --core /path/to/corefile'
 
 Following are detailed steps on how to debug a panic'ed / NMI'ed machine (For the curious souls).
  lldb debugging in detail:-
@@ -245,8 +249,14 @@ i. Frequently Asked Questions
      This way the expressing withing ` ` is evaluated by lldb and the value is passed to the command.
      Note that if your argument pointer is bad or the memory is corrupted lldb macros will fail with a long backtrace that may not make sense. gdb used to fail silently but lldb does not.
      Please see Section F(i) for more information on reading backtraces.
+  
+  Q. I connected to a coredump file with lldb --core corefile and I got RuntimeError: Unable to find lldb thread for tid=XYZ. What should I do?
+  A. This is most likely the case that lldb ignored the operating system plugin in the dSYM and hence threads are not populated. Please put the line 'settings set target.load-script-from-symbol-file true' in your ~/.lldbinit file. If you do not have access you can alternatively do
+    bash# lldb
+    (lldb) settings set target.load-script-from-symbol-file true
+    (lldb) file --core corefile
 
-     
+
 ii. Formatted output printing - zen and peace for life
 ------------------------------------------------------
 

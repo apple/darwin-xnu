@@ -63,7 +63,6 @@
 
 #include <mach_ldebug.h>
 
-#include <kern/lock.h>
 #include <kern/locks.h>
 #include <kern/kalloc.h>
 #include <kern/misc_protos.h>
@@ -126,6 +125,7 @@ decl_simple_lock_data(extern , printf_lock)
 decl_simple_lock_data(extern , panic_lock)
 #endif	/* USLOCK_DEBUG */
 
+extern unsigned int not_in_kdp;
 
 /*
  *	We often want to know the addresses of the callers
@@ -291,6 +291,19 @@ lck_spin_try_lock(
 }
 
 /*
+ *      Routine: lck_spin_is_acquired
+ *      NOT SAFE: To be used only by kernel debugger to avoid deadlock.
+ *      Returns: TRUE if lock is acquired.
+ */
+boolean_t
+lck_spin_is_acquired(lck_spin_t *lck) {
+	if (not_in_kdp) {
+		panic("panic: spinlock acquired check done outside of kernel debugger");
+	}
+	return (lck->interlock != 0)? TRUE : FALSE;
+}
+
+/*
  *	Initialize a usimple_lock.
  *
  *	No change in preemption state.
@@ -311,7 +324,7 @@ usimple_lock_init(
 volatile uint32_t spinlock_owner_cpu = ~0;
 volatile usimple_lock_t spinlock_timed_out;
 
-static uint32_t spinlock_timeout_NMI(uintptr_t thread_addr) {
+uint32_t spinlock_timeout_NMI(uintptr_t thread_addr) {
 	uint64_t deadline;
 	uint32_t i;
 
@@ -689,126 +702,6 @@ usl_trace(
 #endif	/* USLOCK_DEBUG */
 
 /*
- *	Routine:	lock_alloc
- *	Function:
- *		Allocate a lock for external users who cannot
- *		hard-code the structure definition into their
- *		objects.
- *		For now just use kalloc, but a zone is probably
- *		warranted.
- */
-lock_t *
-lock_alloc(
-	boolean_t	can_sleep,
-	unsigned short	tag,
-	unsigned short	tag1)
-{
-	lock_t		*l;
-
-	if ((l = (lock_t *)kalloc(sizeof(lock_t))) != 0)
-	  lock_init(l, can_sleep, tag, tag1);
-	return(l);
-}
-
-/*
- *	Routine:	lock_free
- *	Function:
- *		Free a lock allocated for external users.
- *		For now just use kfree, but a zone is probably
- *		warranted.
- */
-void
-lock_free(
-	lock_t		*l)
-{
-	kfree(l, sizeof(lock_t));
-}
-
-	  
-/*
- *	Routine:	lock_init
- *	Function:
- *		Initialize a lock; required before use.
- *		Note that clients declare the "struct lock"
- *		variables and then initialize them, rather
- *		than getting a new one from this module.
- */
-void
-lock_init(
-	lock_t		*l,
-	boolean_t	can_sleep,
-	__unused unsigned short	tag,
-	__unused unsigned short	tag1)
-{
-	hw_lock_byte_init(&l->lck_rw_interlock);
-	l->lck_rw_want_write = FALSE;
-	l->lck_rw_want_upgrade = FALSE;
-	l->lck_rw_shared_count = 0;
-	l->lck_rw_can_sleep = can_sleep;
-	l->lck_rw_tag = tag;
-	l->lck_rw_priv_excl = 1;
-	l->lck_r_waiting = l->lck_w_waiting = 0;
-}
-
-
-/*
- *	Sleep locks.  These use the same data structure and algorithm
- *	as the spin locks, but the process sleeps while it is waiting
- *	for the lock.  These work on uniprocessor systems.
- */
-
-#define DECREMENTER_TIMEOUT 1000000
-
-void
-lock_write(
-	register lock_t	* l)
-{
-	lck_rw_lock_exclusive(l);
-}
-
-void
-lock_done(
-	register lock_t	* l)
-{
-	(void) lck_rw_done(l);
-}
-
-void
-lock_read(
-	register lock_t	* l)
-{
-	lck_rw_lock_shared(l);
-}
-
-
-/*
- *	Routine:	lock_read_to_write
- *	Function:
- *		Improves a read-only lock to one with
- *		write permission.  If another reader has
- *		already requested an upgrade to a write lock,
- *		no lock is held upon return.
- *
- *		Returns FALSE if the upgrade *failed*.
- */
-
-boolean_t
-lock_read_to_write(
-	register lock_t	* l)
-{
-	return lck_rw_lock_shared_to_exclusive(l);
-}
-
-void
-lock_write_to_read(
-	register lock_t	* l)
-{
-	lck_rw_lock_exclusive_to_shared(l);
-}
-
-
-
-/*
  *      Routine:        lck_rw_alloc_init
  */
 lck_rw_t *
@@ -1184,20 +1077,8 @@ lck_rw_done_gen(
 {
 	lck_rw_t	*fake_lck;
 	lck_rw_type_t	lock_type;
-	thread_t	thread = current_thread();
+	thread_t	thread;
 	uint32_t	rwlock_count;
-
-	/* Check if dropping the lock means that we need to unpromote */
-	rwlock_count = thread->rwlock_count--;
-#if MACH_LDEBUG
-	if (rwlock_count == 0) {
-		panic("rw lock count underflow for thread %p", thread);
-	}
-#endif
-	if ((rwlock_count == 1 /* field now 0 */) && (thread->sched_flags & TH_SFLAG_RW_PROMOTED)) {
-		/* sched_flags checked without lock, but will be rechecked while clearing */
-		lck_rw_clear_promotion(thread);
-	}
 
 	/*
 	 * prior_lock state is a snapshot of the 1st word of the
@@ -1218,6 +1099,19 @@ lck_rw_done_gen(
 		lock_type = LCK_RW_TYPE_SHARED;
 	else
 		lock_type = LCK_RW_TYPE_EXCLUSIVE;
+
+	/* Check if dropping the lock means that we need to unpromote */
+	thread = current_thread();
+	rwlock_count = thread->rwlock_count--;
+#if MACH_LDEBUG
+	if (rwlock_count == 0) {
+		panic("rw lock count underflow for thread %p", thread);
+	}
+#endif
+	if ((rwlock_count == 1 /* field now 0 */) && (thread->sched_flags & TH_SFLAG_RW_PROMOTED)) {
+		/* sched_flags checked without lock, but will be rechecked while clearing */
+		lck_rw_clear_promotion(thread);
+	}
 
 #if CONFIG_DTRACE
 	LOCKSTAT_RECORD(LS_LCK_RW_DONE_RELEASE, lck, lock_type == LCK_RW_TYPE_SHARED ? 0 : 1);
@@ -1889,7 +1783,9 @@ lck_mtx_unlock_wakeup_x86 (
 
 				thread->sched_flags &= ~TH_SFLAG_PROMOTED;
 
-				if (thread->sched_flags & TH_SFLAG_DEPRESSED_MASK) {
+				if (thread->sched_flags & TH_SFLAG_RW_PROMOTED) {
+					/* Thread still has a RW lock promotion */
+				} else if (thread->sched_flags & TH_SFLAG_DEPRESSED_MASK) {
 					KERNEL_DEBUG_CONSTANT(MACHDBG_CODE(DBG_MACH_SCHED, MACH_DEMOTE) | DBG_FUNC_NONE,
 							      thread->sched_pri, DEPRESSPRI, 0, mutex, 0);
 
@@ -1950,8 +1846,8 @@ lck_mtx_lock_acquire_x86(
 		thread_lock(thread);
 
 		if (thread->sched_pri < priority) {
-			/* Do not promote into the realtime priority band */
-			assert(priority <= MAXPRI_KERNEL);
+			/* Do not promote past promotion ceiling */
+			assert(priority <= MAXPRI_PROMOTE);
 			set_sched_pri(thread, priority);
 		}
 		if (mutex->lck_mtx_promoted == 0) {
@@ -2090,8 +1986,8 @@ lck_mtx_lock_wait_x86 (
 	if (priority < BASEPRI_DEFAULT)
 		priority = BASEPRI_DEFAULT;
 
-	/* Do not promote into the realtime priority band */
-	priority = MIN(priority, MAXPRI_KERNEL);
+	/* Do not promote past promotion ceiling */
+	priority = MIN(priority, MAXPRI_PROMOTE);
 
 	if (mutex->lck_mtx_waiters == 0 || priority > mutex->lck_mtx_pri)
 		mutex->lck_mtx_pri = priority;
@@ -2099,18 +1995,20 @@ lck_mtx_lock_wait_x86 (
 
 	if ( (holder = (thread_t)mutex->lck_mtx_owner) &&
 	     holder->sched_pri < mutex->lck_mtx_pri ) {
-		/* Assert that we're not altering the priority of a
-		 * MAXPRI_KERNEL or RT prio band thread
-		 */
-		assert(holder->sched_pri < MAXPRI_KERNEL);
 		s = splsched();
 		thread_lock(holder);
 
+		/* holder priority may have been bumped by another thread
+		 * before thread_lock was taken
+		 */
 		if (holder->sched_pri < mutex->lck_mtx_pri) {
 			KERNEL_DEBUG_CONSTANT(
 				MACHDBG_CODE(DBG_MACH_SCHED, MACH_PROMOTE) | DBG_FUNC_NONE,
 				holder->sched_pri, priority, thread_tid(holder), mutex, 0);
-
+			/* Assert that we're not altering the priority of a
+			 * thread above the MAXPRI_PROMOTE band
+			 */
+			assert(holder->sched_pri < MAXPRI_PROMOTE);
 			set_sched_pri(holder, priority);
 			
 			if (mutex->lck_mtx_promoted == 0) {

@@ -294,7 +294,7 @@ FlushCatalog(ExtendedVCB *volume)
 	{
 		//--- check if catalog's fcb is dirty...
 		
-		if ( 0 /*fcb->fcbFlags & fcbModifiedMask*/ )
+		if ( (0) /*fcb->fcbFlags & fcbModifiedMask*/ )
 		{
 			hfs_lock_mount (hfsmp);
 			MarkVCBDirty(volume);	// Mark the VCB dirty
