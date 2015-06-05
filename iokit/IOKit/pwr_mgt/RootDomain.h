@@ -693,6 +693,7 @@ private:
 
     unsigned int            displayIdleForDemandSleep :1;
     unsigned int            darkWakeHibernateError  :1;
+    unsigned int            thermalWarningState:1;
 
     uint32_t                hibernateMode;
     AbsoluteTime            userActivityTime;
@@ -846,6 +847,7 @@ private:
     void        acceptSystemWakeEvents( bool accept );
     void        systemDidNotSleep( void );
     void        preventTransitionToUserActive( bool prevent );
+    void        setThermalState(OSObject *value);
 #endif /* XNU_KERNEL_PRIVATE */
 };
 

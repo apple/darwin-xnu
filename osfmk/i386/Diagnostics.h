@@ -104,7 +104,11 @@ extern diagWork dgWork;
 #define FIXED_PMC0 (FIXED_PMC)
 #define FIXED_PMC1 (FIXED_PMC | 1)
 #define FIXED_PMC2 (FIXED_PMC | 2)
- 
+#define GPMC0 (0)
+#define GPMC1 (1)
+#define GPMC2 (2)
+#define GPMC3 (3)
+
 static inline uint64_t read_pmc(uint32_t counter)
 {
 	uint32_t lo = 0, hi = 0;

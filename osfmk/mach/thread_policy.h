@@ -300,6 +300,56 @@ typedef struct thread_policy_state		*thread_policy_state_t;
 
 #define THREAD_QOS_MIN_TIER_IMPORTANCE	(-15)
 
+/*
+ * Overrides are inputs to the task/thread policy engine that
+ * temporarily elevate the effective QoS of a thread without changing
+ * its steady-state (and round-trip-able) requested QoS. The
+ * interfaces into the kernel allow the caller to associate a resource
+ * and type that describe the reason/lifecycle of the override. For
+ * instance, a contended pthread_mutex_t held by a UTILITY thread
+ * might get an override to USER_INTERACTIVE, with the resource
+ * being the userspace address of the pthread_mutex_t. When the
+ * owning thread releases that resource, it can call into the
+ * task policy subsystem to drop the override because of that resource,
+ * although if more contended locks are held by the thread, the
+ * effective QoS may remain overridden for longer.
+ *
+ * THREAD_QOS_OVERRIDE_TYPE_PTHREAD_MUTEX is used for contended
+ * pthread_mutex_t's via the pthread kext. The holder gets an override
+ * with resource=&mutex and a count of 1 by the initial contender.
+ * Subsequent contenders raise the QoS value, until the holder
+ * decrements the count to 0 and the override is released.
+ *
+ * THREAD_QOS_OVERRIDE_TYPE_PTHREAD_RWLOCK is unimplemented and has no
+ * specified semantics.
+ *
+ * THREAD_QOS_OVERRIDE_TYPE_PTHREAD_EXPLICIT_OVERRIDE are explicitly
+ * paired start/end overrides on a target thread. The resource can
+ * either be a memory allocation in userspace, or the pthread_t of the
+ * overrider if no allocation was used.
+ *
+ * THREAD_QOS_OVERRIDE_TYPE_DISPATCH_ASYNCHRONOUS_OVERRIDE are used to
+ * override the QoS of a thread currently draining a serial dispatch
+ * queue, so that it can get to a block of higher QoS than its
+ * predecessors. The override is applied by a thread enqueueing work
+ * with resource=&queue, and reset by the thread that was overriden
+ * once it has drained the queue. Since the ++ and reset are
+ * asynchronous, there is the possibility of a ++ after the target
+ * thread has issued a reset, in which case the workqueue thread may
+ * issue a reset-all in its outermost scope before deciding whether it
+ * should return to dequeueing work from the global concurrent queues,
+ * or return to the kernel.
+ */
+
+#define THREAD_QOS_OVERRIDE_TYPE_UNKNOWN					(0)
+#define THREAD_QOS_OVERRIDE_TYPE_PTHREAD_MUTEX				(1)
+#define THREAD_QOS_OVERRIDE_TYPE_PTHREAD_RWLOCK				(2)
+#define THREAD_QOS_OVERRIDE_TYPE_PTHREAD_EXPLICIT_OVERRIDE	(3)
+#define THREAD_QOS_OVERRIDE_TYPE_DISPATCH_ASYNCHRONOUS_OVERRIDE	(4)
+
+/* A special resource value to indicate a resource wildcard */
+#define THREAD_QOS_OVERRIDE_RESOURCE_WILDCARD (~((user_addr_t)0))
+
 struct thread_qos_policy {
 	integer_t qos_tier;
 	integer_t tier_importance;

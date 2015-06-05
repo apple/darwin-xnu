@@ -220,6 +220,19 @@ munge_wlll(void *args)
 	out_args[0] = in_args[0];
 }
 
+void 
+munge_wllll(void *args)
+{
+	volatile uint64_t *out_args = (volatile uint64_t*)args;
+	volatile uint32_t *in_args = (volatile uint32_t*)args;
+
+	out_args[4] = *(uint64_t*)&in_args[7];
+	out_args[3] = *(uint64_t*)&in_args[5];
+	out_args[2] = *(uint64_t*)&in_args[3];
+	out_args[1] = *(uint64_t*)&in_args[1];
+	out_args[0] = in_args[0];
+}
+
 void
 munge_wllww(void *args)
 {

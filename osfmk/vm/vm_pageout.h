@@ -241,6 +241,7 @@ extern void		vm_pageclean_setup(
 #define upl_lock_destroy(object)	lck_mtx_destroy(&(object)->Lock, &vm_object_lck_grp)
 #define upl_lock(object)	lck_mtx_lock(&(object)->Lock)
 #define upl_unlock(object)	lck_mtx_unlock(&(object)->Lock)
+#define upl_try_lock(object) 	lck_mtx_try_lock(&(object)->Lock)
 
 #define MAX_VECTOR_UPL_ELEMENTS	8
 

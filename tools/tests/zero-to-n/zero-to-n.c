@@ -30,7 +30,7 @@
 #include <math.h>
 #include <sys/wait.h>
 #include <sys/param.h>
-#include <sys/syscall.h>
+#include <sys/kdebug.h>
 #include <sys/types.h>
 #include <sys/ptrace.h>
 #include <semaphore.h>
@@ -588,7 +588,11 @@ main(int argc, char **argv)
 				printf("Worst on this round was %.2f us.\n", ((float)worst_latencies_from_first_ns[i]) / 1000.0);
 			}
 
-			_tmp = syscall(SYS_kdebug_trace, 0xEEEEEEEE, 0, 0, 0, 0);
+			_tmp = kdebug_trace(0xeeeee0 | DBG_FUNC_NONE,
+								   worst_latencies_from_first_ns[i] >> 32,
+								   worst_latencies_from_first_ns[i] & 0xFFFFFFFF,
+								   traceworthy_latency_ns >> 32,
+								   traceworthy_latency_ns & 0xFFFFFFFF);
 		}
 
 		/* Let worker threads get back to sleep... */
@@ -643,7 +647,7 @@ selfexec_with_apptype(int argc, char *argv[])
 	char *new_argv[argc + 1 + 1 /* NULL */];
 	int i;
 	char prog[PATH_MAX];
-	int32_t prog_size = PATH_MAX;
+	uint32_t prog_size = PATH_MAX;
 
 	ret = _NSGetExecutablePath(prog, &prog_size);
 	if (ret != 0) err(1, "_NSGetExecutablePath");

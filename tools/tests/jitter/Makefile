@@ -23,7 +23,7 @@ endif
 
 DSTROOT?=$(shell /bin/pwd)
 
-CFLAGS:=$(patsubst %, -arch %,$(ARCHS)) -g -Wall -Os $(ISYSROOT)
+CFLAGS:=$(patsubst %, -arch %,$(ARCHS)) -g -Wall -Os -I$(SDKROOT)/System/Library/Frameworks/System.framework/PrivateHeaders
 
 all: $(DSTROOT)/jitter
 

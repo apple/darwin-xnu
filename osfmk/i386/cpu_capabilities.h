@@ -69,6 +69,8 @@
 /* Extending into 64-bits from here: */ 
 #define	kHasRTM			0x0000000100000000ULL
 #define	kHasHLE			0x0000000200000000ULL
+#define	kHasRDSEED		0x0000000800000000ULL
+#define	kHasADX			0x0000000400000000ULL
 
 
 #ifndef	__ASSEMBLER__
@@ -182,7 +184,8 @@ int _NumCPUs( void )
 #define _COMM_PAGE_MEMORY_SIZE		(_COMM_PAGE_START_ADDRESS+0x038)	/* uint64_t max memory size */
 
 #define _COMM_PAGE_CPUFAMILY		(_COMM_PAGE_START_ADDRESS+0x040)	/* uint32_t hw.cpufamily, x86*/
-#define _COMM_PAGE_UNUSED2		(_COMM_PAGE_START_ADDRESS+0x044)	/* [0x44,0x50) unused */
+#define _COMM_PAGE_KDEBUG_ENABLE	(_COMM_PAGE_START_ADDRESS+0x044)	/* uint32_t export "kdebug_enable" to userspace */
+#define _COMM_PAGE_UNUSED2		(_COMM_PAGE_START_ADDRESS+0x048)	/* [0x48,0x50) unused */
 
 #define	_COMM_PAGE_TIME_DATA_START	(_COMM_PAGE_START_ADDRESS+0x050)	/* base of offsets below (_NT_SCALE etc) */
 #define _COMM_PAGE_NT_TSC_BASE		(_COMM_PAGE_START_ADDRESS+0x050)	/* used by nanotime() */

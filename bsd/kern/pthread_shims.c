@@ -172,7 +172,7 @@ static boolean_t proc_usynch_thread_qos_add_override(struct uthread *uth, uint64
 	task_t task = current_task();
 	thread_t thread = uth ? uth->uu_thread : THREAD_NULL;
 	
-	return proc_thread_qos_add_override(task, thread, tid, override_qos, first_override_for_resource);
+	return proc_thread_qos_add_override(task, thread, tid, override_qos, first_override_for_resource, USER_ADDR_NULL, THREAD_QOS_OVERRIDE_TYPE_UNKNOWN);
 }
 
 static boolean_t proc_usynch_thread_qos_remove_override(struct uthread *uth, uint64_t tid)
@@ -180,7 +180,28 @@ static boolean_t proc_usynch_thread_qos_remove_override(struct uthread *uth, uin
 	task_t task = current_task();
 	thread_t thread = uth ? uth->uu_thread : THREAD_NULL;
 
-	return proc_thread_qos_remove_override(task, thread, tid);
+	return proc_thread_qos_remove_override(task, thread, tid, USER_ADDR_NULL, THREAD_QOS_OVERRIDE_TYPE_UNKNOWN);
+}
+
+static boolean_t proc_usynch_thread_qos_add_override_for_resource(task_t task, struct uthread *uth, uint64_t tid, int override_qos, boolean_t first_override_for_resource, user_addr_t resource, int resource_type)
+{
+	thread_t thread = uth ? uth->uu_thread : THREAD_NULL;
+	
+	return proc_thread_qos_add_override(task, thread, tid, override_qos, first_override_for_resource, resource, resource_type);
+}
+
+static boolean_t proc_usynch_thread_qos_remove_override_for_resource(task_t task, struct uthread *uth, uint64_t tid, user_addr_t resource, int resource_type)
+{
+	thread_t thread = uth ? uth->uu_thread : THREAD_NULL;
+
+	return proc_thread_qos_remove_override(task, thread, tid, resource, resource_type);
+}
+
+static boolean_t proc_usynch_thread_qos_reset_override_for_resource(task_t task, struct uthread *uth, uint64_t tid, user_addr_t resource, int resource_type)
+{
+	thread_t thread = uth ? uth->uu_thread : THREAD_NULL;
+
+	return proc_thread_qos_reset_override(task, thread, tid, resource, resource_type);
 }
 
 /* kernel (core) to kext shims */
@@ -493,6 +514,10 @@ static struct pthread_callbacks_s pthread_callbacks = {
 	.proc_usynch_thread_qos_remove_override = proc_usynch_thread_qos_remove_override,
 
 	.qos_main_thread_active = qos_main_thread_active,
+
+	.proc_usynch_thread_qos_add_override_for_resource = proc_usynch_thread_qos_add_override_for_resource,
+	.proc_usynch_thread_qos_remove_override_for_resource = proc_usynch_thread_qos_remove_override_for_resource,
+	.proc_usynch_thread_qos_reset_override_for_resource = proc_usynch_thread_qos_reset_override_for_resource,
 };
 
 pthread_callbacks_t pthread_kern = &pthread_callbacks;

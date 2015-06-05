@@ -99,10 +99,11 @@ Boolean IODataQueue::initWithCapacity(UInt32 size)
     if (dataQueue == 0) {
         return false;
     }
+    bzero(dataQueue, allocSize);
 
     dataQueue->queueSize    = size;
-    dataQueue->head         = 0;
-    dataQueue->tail         = 0;
+//  dataQueue->head         = 0;
+//  dataQueue->tail         = 0;
 
     if (!notifyMsg) {
         notifyMsg = IOMalloc(sizeof(mach_msg_header_t));

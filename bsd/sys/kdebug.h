@@ -43,14 +43,17 @@ __BEGIN_DECLS
 
 #include <mach/clock_types.h>
 #include <stdint.h>
-#if	defined(KERNEL_BUILD)
-#include <kdebug.h>
-#endif /* KERNEL_BUILD */
+
+#ifndef KERNEL
+#include <Availability.h>
+#endif
 
 #ifdef	XNU_KERNEL_PRIVATE
 #include <stdint.h>
 #include <mach/branch_predicates.h>
 #endif
+
+#ifdef KERNEL_PRIVATE
 
 typedef enum
 {
@@ -100,33 +103,7 @@ extern void kernel_debug_enter(
 	uintptr_t	threadid
 	);
 
-
-/*
- * state bits for hfs_update event
- */
-#define DBG_HFS_UPDATE_ACCTIME   0x01
-#define DBG_HFS_UPDATE_MODTIME	 0x02
-#define DBG_HFS_UPDATE_CHGTIME	 0x04
-#define DBG_HFS_UPDATE_MODIFIED	 0x08
-#define DBG_HFS_UPDATE_FORCE	 0x10
-#define DBG_HFS_UPDATE_DATEADDED 0x20
-
-
-/*
- * types of faults that vm_fault handles
- * and creates trace entries for
- */
-#define DBG_ZERO_FILL_FAULT   1
-#define DBG_PAGEIN_FAULT      2
-#define DBG_COW_FAULT         3
-#define DBG_CACHE_HIT_FAULT   4
-#define DBG_NZF_PAGE_FAULT    5
-#define DBG_GUARD_FAULT	      6	
-#define DBG_PAGEINV_FAULT     7
-#define DBG_PAGEIND_FAULT     8
-#define DBG_COMPRESSOR_FAULT  9
-#define DBG_COMPRESSOR_SWAPIN_FAULT  10
-
+#endif /* KERNEL_PRIVATE */
 
 /* The debug code consists of the following 
 *
@@ -166,8 +143,33 @@ extern void kernel_debug_enter(
 #define DBG_BANK                40
 #define DBG_XPC                 41
 #define DBG_ATM                 42
+#define DBG_ARIADNE             43
+
 
 #define DBG_MIG			255
+
+#ifdef PRIVATE
+/*
+ * OS components can use the full precision of the "code" field
+ * (Class, SubClass, Code) to inject events using kdebug_trace() by
+ * using:
+ *
+ * kdebug_trace(KDBG_CODE(DBG_XPC, 15, 1) | DBG_FUNC_NONE, 1, 2, 3, 4);
+ *
+ * These trace points can be included in production code, since they
+ * use reserved, non-overlapping ranges. The performance impact when
+ * kernel tracing is not enabled is minimal. Classes can be reserved
+ * by filing a Radar in xnu|all.
+ *
+ * 64-bit arguments may be truncated if the system is using a 32-bit
+ * kernel.
+ *
+ * On error, -1 will be returned and errno will indicate the error.
+ */
+#ifndef KERNEL
+extern int kdebug_trace(uint32_t code, uint64_t arg1, uint64_t arg2, uint64_t arg3, uint64_t arg4) __OSX_AVAILABLE_STARTING(__MAC_10_10_2, __IPHONE_NA);
+#endif
+#endif /* PRIVATE */
 
 /* **** The Kernel Debug Sub Classes for Mach (DBG_MACH) **** */
 #define	DBG_MACH_EXCP_KTRAP_x86	0x02	/* Kernel Traps on x86 */
@@ -239,6 +241,18 @@ extern void kernel_debug_enter(
 #define MACH_MULTIQ_BOUND     1
 #define MACH_MULTIQ_GROUP     2
 #define MACH_MULTIQ_GLOBAL    3
+
+/* Arguments for vm_fault (DBG_MACH_VM) */
+#define DBG_ZERO_FILL_FAULT   1
+#define DBG_PAGEIN_FAULT      2
+#define DBG_COW_FAULT         3
+#define DBG_CACHE_HIT_FAULT   4
+#define DBG_NZF_PAGE_FAULT    5
+#define DBG_GUARD_FAULT	      6	
+#define DBG_PAGEINV_FAULT     7
+#define DBG_PAGEIND_FAULT     8
+#define DBG_COMPRESSOR_FAULT  9
+#define DBG_COMPRESSOR_SWAPIN_FAULT  10
 
 /* Codes for IPC (DBG_MACH_IPC) */
 #define	MACH_TASK_SUSPEND			0x0	/* Suspended a task */
@@ -403,6 +417,16 @@ extern void kernel_debug_enter(
 #define DBG_THROTTLE  0x11    /* I/O Throttling events */	
 #define DBG_CONTENT_PROT 0xCF /* Content Protection Events: see bsd/sys/cprotect.h */
 
+/*
+ * For Kernel Debug Sub Class DBG_HFS, state bits for hfs_update event
+ */
+#define DBG_HFS_UPDATE_ACCTIME   0x01
+#define DBG_HFS_UPDATE_MODTIME	 0x02
+#define DBG_HFS_UPDATE_CHGTIME	 0x04
+#define DBG_HFS_UPDATE_MODIFIED	 0x08
+#define DBG_HFS_UPDATE_FORCE	 0x10
+#define DBG_HFS_UPDATE_DATEADDED 0x20
+
 /* The Kernel Debug Sub Classes for BSD */
 #define DBG_BSD_PROC		0x01	/* process/signals related */
 #define DBG_BSD_MEMSTAT		0x02	/* memorystatus / jetsam operations */
@@ -563,6 +587,7 @@ extern void kernel_debug_enter(
 #define DYLDDBG_CODE(SubClass,code) KDBG_CODE(DBG_DYLD, SubClass, code)
 #define QTDBG_CODE(SubClass,code) KDBG_CODE(DBG_QT, SubClass, code)
 #define APPSDBG_CODE(SubClass,code) KDBG_CODE(DBG_APPS, SubClass, code)
+#define ARIADNEDBG_CODE(SubClass, code) KDBG_CODE(DBG_ARIADNE, SubClass, code)
 #define CPUPM_CODE(code) IOKDBG_CODE(DBG_IOCPUPM, code)
 
 #define KMEM_ALLOC_CODE MACHDBG_CODE(DBG_MACH_LEAKS, 0)

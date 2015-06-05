@@ -146,6 +146,8 @@ static lck_grp_attr_t		thread_lck_grp_attr;
 lck_attr_t					thread_lck_attr;
 lck_grp_t					thread_lck_grp;
 
+struct zone					*thread_qos_override_zone;
+
 decl_simple_lock_data(static,thread_stack_lock)
 static queue_head_t		thread_stack_queue;
 
@@ -326,7 +328,7 @@ thread_bootstrap(void)
 	thread_template.effective_policy = default_task_effective_policy;
 	thread_template.pended_policy    = default_task_pended_policy;
 
-	thread_template.usynch_override_contended_resource_count = 0;
+	bzero(&thread_template.overrides, sizeof(thread_template.overrides));
 
 	thread_template.iotier_override = THROTTLE_LEVEL_NONE;
 	thread_template.thread_io_stats = NULL;
@@ -354,6 +356,16 @@ thread_init(void)
 			thread_max * sizeof(struct thread),
 			THREAD_CHUNK * sizeof(struct thread),
 			"threads");
+
+	thread_qos_override_zone = zinit(
+		sizeof(struct thread_qos_override),
+		4 * thread_max * sizeof(struct thread_qos_override),
+		PAGE_SIZE,
+		"thread qos override");
+	zone_change(thread_qos_override_zone, Z_EXPAND, TRUE);
+	zone_change(thread_qos_override_zone, Z_COLLECT, TRUE);
+	zone_change(thread_qos_override_zone, Z_CALLERACCT, FALSE);
+	zone_change(thread_qos_override_zone, Z_NOENCRYPT, TRUE);
 
 	lck_grp_attr_setdefault(&thread_lck_grp_attr);
 	lck_grp_init(&thread_lck_grp, "thread", &thread_lck_grp_attr);
@@ -526,6 +538,8 @@ thread_deallocate(
 #endif
 
 	ipc_thread_terminate(thread);
+
+	proc_thread_qos_deallocate(thread);
 
 	task = thread->task;
 

@@ -230,8 +230,12 @@ typedef struct pthread_callbacks_s {
 
 	kern_return_t (*thread_set_voucher_name)(mach_port_name_t voucher_name);
 
+	boolean_t (*proc_usynch_thread_qos_add_override_for_resource)(task_t task, struct uthread *, uint64_t tid, int override_qos, boolean_t first_override_for_resource, user_addr_t resource, int resource_type);
+	boolean_t (*proc_usynch_thread_qos_remove_override_for_resource)(task_t task, struct uthread *, uint64_t tid, user_addr_t resource, int resource_type);
+	boolean_t (*proc_usynch_thread_qos_reset_override_for_resource)(task_t task, struct uthread *, uint64_t tid, user_addr_t resource, int resource_type);
+
 	/* padding for future */
-	void* _pad[87];
+	void* _pad[84];
 
 } *pthread_callbacks_t;
 

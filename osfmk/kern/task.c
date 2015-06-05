@@ -159,6 +159,8 @@
 extern int kpc_force_all_ctrs(task_t, int);
 #endif
 
+uint32_t qos_override_mode;
+
 task_t			kernel_task;
 zone_t			task_zone;
 lck_attr_t      task_lck_attr;
@@ -438,6 +440,12 @@ task_init(void)
 	if (!PE_parse_boot_argn("hwm_user_cores", &hwm_user_cores,
 			sizeof (hwm_user_cores))) {
 		hwm_user_cores = 0;
+	}
+
+	if (PE_parse_boot_argn("qos_override_mode", &qos_override_mode, sizeof(qos_override_mode))) {
+		printf("QOS override mode: 0x%08x\n", qos_override_mode);
+	} else {
+		qos_override_mode = QOS_OVERRIDE_MODE_FINE_GRAINED_OVERRIDE_BUT_SINGLE_MUTEX_OVERRIDE;
 	}
 
 	proc_init_cpumon_params();
@@ -1288,6 +1296,9 @@ task_terminate_internal(
 #endif /* MACH_BSD */
 
 	task_unlock(task);
+
+	proc_set_task_policy(task, THREAD_NULL, TASK_POLICY_ATTRIBUTE,
+	                     TASK_POLICY_TERMINATED, TASK_POLICY_ENABLE);
 
         /* Early object reap phase */
 

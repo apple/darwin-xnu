@@ -117,6 +117,7 @@
 		9002401118FC9A7F00D73BFA /* rename_ext.c in Sources */ = {isa = PBXBuildFile; fileRef = 906AA2D018F74CD1001C681A /* rename_ext.c */; };
 		A59CB95616669EFB00B064B3 /* stack_logging_internal.h in Headers */ = {isa = PBXBuildFile; fileRef = A59CB95516669DB700B064B3 /* stack_logging_internal.h */; };
 		A59CB9581666A1A200B064B3 /* munmap.c in Sources */ = {isa = PBXBuildFile; fileRef = A59CB9571666A1A200B064B3 /* munmap.c */; };
+		BA0D9FB1199031AD007E8A73 /* kdebug_trace.c in Sources */ = {isa = PBXBuildFile; fileRef = BA0D9FB0199031AD007E8A73 /* kdebug_trace.c */; };
 		BA4414AA18336A5F00AAE813 /* mach in CopyFiles */ = {isa = PBXBuildFile; fileRef = BA4414A51833697C00AAE813 /* mach */; };
 		BA4414AB18336A6400AAE813 /* servers in CopyFiles */ = {isa = PBXBuildFile; fileRef = BA4414A6183369A100AAE813 /* servers */; };
 		BA4414AD18336A9300AAE813 /* mach in CopyFiles */ = {isa = PBXBuildFile; fileRef = BA4414A7183369C100AAE813 /* mach */; };
@@ -436,6 +437,7 @@
 		906AA2D018F74CD1001C681A /* rename_ext.c */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.c; path = rename_ext.c; sourceTree = "<group>"; };
 		A59CB95516669DB700B064B3 /* stack_logging_internal.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = stack_logging_internal.h; sourceTree = "<group>"; };
 		A59CB9571666A1A200B064B3 /* munmap.c */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.c; path = munmap.c; sourceTree = "<group>"; };
+		BA0D9FB0199031AD007E8A73 /* kdebug_trace.c */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.c; path = kdebug_trace.c; sourceTree = "<group>"; };
 		BA4414A51833697C00AAE813 /* mach */ = {isa = PBXFileReference; lastKnownFileType = text; name = mach; path = mig_hdr/include/mach; sourceTree = BUILT_PRODUCTS_DIR; };
 		BA4414A6183369A100AAE813 /* servers */ = {isa = PBXFileReference; lastKnownFileType = text; name = servers; path = mig_hdr/include/servers; sourceTree = BUILT_PRODUCTS_DIR; };
 		BA4414A7183369C100AAE813 /* mach */ = {isa = PBXFileReference; lastKnownFileType = text; name = mach; path = mig_hdr/local/include/mach; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -723,6 +725,7 @@
 				248AA962122C7B2A0085F5B1 /* unlink.c */,
 				29A59AE5183B110C00E8B896 /* unlinkat.c */,
 				374A36E214748EE400AAF39D /* varargs_wrappers.s */,
+				BA0D9FB0199031AD007E8A73 /* kdebug_trace.c */,
 			);
 			path = wrappers;
 			sourceTree = "<group>";
@@ -1283,6 +1286,7 @@
 				248BA08F121DC545008C073F /* open.c in Sources */,
 				248BA093121DE369008C073F /* select.c in Sources */,
 				248BA095121DE565008C073F /* select-pre1050.c in Sources */,
+				BA0D9FB1199031AD007E8A73 /* kdebug_trace.c in Sources */,
 				4BDD5F1E1891AB2F004BF300 /* mach_approximate_time.s in Sources */,
 				248BA0B3121DE760008C073F /* select-cancel.c in Sources */,
 				248BA0BE121DE902008C073F /* select.c in Sources */,

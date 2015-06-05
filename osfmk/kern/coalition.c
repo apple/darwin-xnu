@@ -37,6 +37,7 @@
 #include <kern/mach_param.h> /* for TASK_CHUNK */
 #include <kern/task.h>
 #include <kern/zalloc.h>
+#include <kern/sfi.h>
 
 #include <libkern/OSAtomic.h>
 
@@ -109,6 +110,9 @@ struct coalition {
 	unsigned int terminated : 1;		/* coalition became empty and spawns are now forbidden */
 	unsigned int reaped : 1;		/* reaped, invisible to userspace, but waiting for ref_count to go to zero */
 	unsigned int notified : 1;		/* no-more-processes notification was sent via special port */
+
+	uint32_t focal_tasks_count;     /* count of TASK_FOREGROUND_APPLICATION tasks in the coalition */
+	uint32_t non_focal_tasks_count; /* count of TASK_BACKGROUND_APPLICATION tasks in the coalition */
 };
 
 #define coalition_lock(c) do{ lck_mtx_lock(&c->lock); }while(0)
@@ -304,6 +308,8 @@ coalition_release(coalition_t coal)
 		assert(coal->terminated);
 		assert(coal->active_count == 0);
 		assert(coal->reaped);
+		assert(coal->focal_tasks_count == 0);
+		assert(coal->non_focal_tasks_count == 0);
 
 		ledger_dereference(coal->ledger);
 		lck_mtx_destroy(&coal->lock, &coalitions_lck_grp);
@@ -739,5 +745,49 @@ coalition_init(void)
 		panic("%s: could not create default coalition: %d", __func__, kr);
 	}
 	/* "Leak" our reference to the global object */
+}
+
+/* coalition focal tasks */
+uint32_t coalition_adjust_focal_task_count(coalition_t coal, int count)
+{
+	return hw_atomic_add(&coal->focal_tasks_count, count);
+}
+
+uint32_t coalition_focal_task_count(coalition_t coal)
+{
+	return coal->focal_tasks_count;
+}
+
+uint32_t coalition_adjust_non_focal_task_count(coalition_t coal, int count)
+{
+	return hw_atomic_add(&coal->non_focal_tasks_count, count);
+}
+
+uint32_t coalition_non_focal_task_count(coalition_t coal)
+{
+	return coal->non_focal_tasks_count;
+}
+
+/* Call sfi_reevaluate() for every thread in the coalition */
+void coalition_sfi_reevaluate(coalition_t coal, task_t updated_task) {
+	task_t task;
+	thread_t thread;
+
+	coalition_lock(coal);
+
+	queue_iterate(&coal->tasks, task, task_t, coalition_tasks) {
+
+		/* Skip the task we're doing this on behalf of - it's already updated */
+		if (task == updated_task)
+			continue;
+
+		task_lock(task);
+
+		queue_iterate(&task->threads, thread, thread_t, task_threads) {
+				sfi_reevaluate(thread);
+		}
+		task_unlock(task);
+	}
+	coalition_unlock(coal);
 }
 

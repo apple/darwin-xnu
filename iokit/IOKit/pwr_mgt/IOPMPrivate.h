@@ -700,7 +700,9 @@ enum {
     kIOPMSleepFactorExternalDisplay         = 0x00080000ULL,
     kIOPMSleepFactorNetworkKeepAliveActive  = 0x00100000ULL,
     kIOPMSleepFactorLocalUserActivity       = 0x00200000ULL,
-    kIOPMSleepFactorHibernateFailed         = 0x00400000ULL
+    kIOPMSleepFactorHibernateFailed         = 0x00400000ULL,
+    kIOPMSleepFactorThermalWarning          = 0x00800000ULL,
+    kIOPMSleepFactorDisplayCaptured         = 0x01000000ULL
 };
 
 // System Sleep Types
@@ -832,6 +834,9 @@ inline char const* getDumpLogFilename(swd_hdr *hdr)
 #define kUserWkCntChID IOREPORT_MAKEID('D','r','k','W','k','C','n','t')
 
 
+/* Sleep Options/settings */
+#define kSleepOptionDisplayCapturedModeKey         "DisplayCapturedMode"
+
 
 #if defined(KERNEL) && defined(__cplusplus)
 
@@ -852,5 +857,23 @@ typedef IOReturn (*IOPMSystemSleepPolicyHandler)(
         IOPMSystemSleepParameters * params );
 
 #endif /* KERNEL */
+
+/*****************************************************************************
+ *
+ * Performance Warning
+ *
+ *****************************************************************************/
+
+/* Performance Warning Key
+ * Key for performance warning event published using IOPMrootDomain::
+ * systemPowerEventOccurred()
+ */
+#define kIOPMPerformanceWarningKey          "Performance_Warning"
+
+/* Performance warning values */
+enum {
+  kIOPMPerformanceNormal    = 0,
+  kIOPMPerformanceWarning   = 100
+};
 
 #endif /* ! _IOKIT_IOPMPRIVATE_H */

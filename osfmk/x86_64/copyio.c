@@ -74,6 +74,7 @@ extern int _bcopystr(const void *, void *, vm_size_t, vm_size_t *);
 #define COPYINPHYS	3	/* from user virtual to kernel physical */
 #define COPYOUTPHYS	4	/* from kernel physical to user virtual */
 
+
 static int
 copyio(int copy_type, user_addr_t user_addr, char *kernel_addr,
        vm_size_t nbytes, vm_size_t *lencopied, int use_kernel_map)

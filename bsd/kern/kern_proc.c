@@ -2080,7 +2080,8 @@ csops_internal(pid_t pid, int ops, user_addr_t uaddr, user_size_t usersize, user
 			    CS_KILL | CS_EXEC_SET_KILL |
 			    CS_RESTRICT |
 			    CS_REQUIRE_LV |
-			    CS_ENFORCEMENT | CS_EXEC_SET_ENFORCEMENT;
+			    CS_ENFORCEMENT | CS_EXEC_SET_ENFORCEMENT |
+			    CS_ENTITLEMENTS_VALIDATED;
 
 			proc_lock(pt);
 			if (pt->p_csflags & CS_VALID)

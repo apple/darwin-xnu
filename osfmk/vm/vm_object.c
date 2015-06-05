@@ -8704,7 +8704,9 @@ vm_decmp_upl_reprioritize(upl_t upl, int prio)
 
 
 	/* First step is just to get the size of the upl to find out how big the reprio info is */
-	upl_lock(upl);
+	if(!upl_try_lock(upl))
+		return;
+
 	if (upl->decmp_io_upl == NULL) {
 		/* The real I/O upl was destroyed by the time we came in here. Nothing to do. */
 		upl_unlock(upl);
@@ -8722,7 +8724,9 @@ vm_decmp_upl_reprioritize(upl_t upl, int prio)
 		return;
 
 	/* Now again take the lock, recheck the state and grab out the required info */
-	upl_lock(upl);
+	if(!upl_try_lock(upl))
+		goto out;
+
 	if (upl->decmp_io_upl == NULL || upl->decmp_io_upl != io_upl) {
 		/* The real I/O upl was destroyed by the time we came in here. Nothing to do. */
 		upl_unlock(upl);

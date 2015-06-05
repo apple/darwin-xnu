@@ -619,9 +619,10 @@ identitysvc(__unused struct proc *p, struct identitysvc_args *uap, __unused int3
 	}
 
 	/*
-	 * Beyond this point, we must be the resolver process.
+	 * Beyond this point, we must be the resolver process. We verify this
+	 * by confirming the resolver credential and pid.
 	 */
-	if (current_proc()->p_pid != kauth_resolver_identity) {
+	if ((kauth_cred_getuid(kauth_cred_get()) != 0) || (current_proc()->p_pid != kauth_resolver_identity)) {
 		KAUTH_DEBUG("RESOLVER - call from bogus resolver %d\n", current_proc()->p_pid);
 		return(EPERM);
 	}
@@ -923,7 +924,7 @@ kauth_resolver_complete(user_addr_t message)
 	struct kauth_identity_extlookup	extl;
 	struct kauth_resolver_work *workp;
 	struct kauth_resolver_work *killp;
-	int error, result;
+	int error, result, request_flags;
 
 	/*
 	 * Copy in the mesage, including the extension field, since we are
@@ -1004,6 +1005,10 @@ kauth_resolver_complete(user_addr_t message)
 		TAILQ_FOREACH(workp, &kauth_resolver_submitted, kr_link) {
 			/* found it? */
 			if (workp->kr_seqno == extl.el_seqno) {
+				/*
+				 * Take a snapshot of the original request flags.
+				 */
+				request_flags = workp->kr_work.el_flags;
 
 				/*
 				 * Get the request of the submitted queue so
@@ -1041,13 +1046,21 @@ kauth_resolver_complete(user_addr_t message)
 				 * issue and is easily detectable by comparing
 				 * time to live on last response vs. time of
 				 * next request in the resolver logs.
+				 *
+				 * A malicious/faulty resolver could overwrite
+				 * part of a user's address space if they return
+				 * flags that mismatch the original request's flags.
 				 */
-				if (extl.el_flags & (KAUTH_EXTLOOKUP_VALID_PWNAM|KAUTH_EXTLOOKUP_VALID_GRNAM)) {
+				if ((extl.el_flags & request_flags) & (KAUTH_EXTLOOKUP_VALID_PWNAM|KAUTH_EXTLOOKUP_VALID_GRNAM)) {
 					size_t actual;	/* notused */
 
 					KAUTH_RESOLVER_UNLOCK();
 					error = copyinstr(extl.el_extend, CAST_DOWN(void *, workp->kr_extend), MAXPATHLEN, &actual);
 					KAUTH_RESOLVER_LOCK();
+				} else if (extl.el_flags &  (KAUTH_EXTLOOKUP_VALID_PWNAM|KAUTH_EXTLOOKUP_VALID_GRNAM)) {
+					error = EFAULT;
+					KAUTH_DEBUG("RESOLVER - resolver returned mismatching extension flags (%d), request contained (%d)",
+							extl.el_flags, request_flags);
 				}
 
 				/*
@@ -1117,7 +1130,7 @@ kauth_identity_init(void)
  * Parameters:	uid
  *
  * Returns:	NULL				Insufficient memory to satisfy
- *						the request
+ *						the request or bad parameters
  *		!NULL				A pointer to the allocated
  *						structure, filled in
  *
@@ -1146,8 +1159,16 @@ kauth_identity_alloc(uid_t uid, gid_t gid, guid_t *guidp, time_t guid_expiry,
 			kip->ki_valid = KI_VALID_UID;
 		}
 		if (supgrpcnt) {
+			/*
+			 * A malicious/faulty resolver could return bad values
+			 */
+			assert(supgrpcnt >= 0);
 			assert(supgrpcnt <= NGROUPS);
 			assert(supgrps != NULL);
+
+			if ((supgrpcnt < 0) || (supgrpcnt > NGROUPS) || (supgrps == NULL)) {
+				return NULL;
+			}
 			if (kip->ki_valid & KI_VALID_GID)
 				panic("can't allocate kauth identity with both gid and supplementary groups");
 			kip->ki_supgrpcnt = supgrpcnt;

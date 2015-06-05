@@ -407,6 +407,14 @@ extern void		init_task_ledgers(void);
 extern lck_attr_t      task_lck_attr;
 extern lck_grp_t       task_lck_grp;
 
+#define QOS_OVERRIDE_MODE_OVERHANG_PEAK 0
+#define QOS_OVERRIDE_MODE_IGNORE_OVERRIDE 1
+#define QOS_OVERRIDE_MODE_FINE_GRAINED_OVERRIDE 2
+#define QOS_OVERRIDE_MODE_FINE_GRAINED_OVERRIDE_BUT_IGNORE_DISPATCH 3
+#define QOS_OVERRIDE_MODE_FINE_GRAINED_OVERRIDE_BUT_SINGLE_MUTEX_OVERRIDE 4
+
+extern uint32_t qos_override_mode;
+
 #else	/* MACH_KERNEL_PRIVATE */
 
 __BEGIN_DECLS
@@ -702,7 +710,8 @@ typedef struct task_pend_token {
 	uint32_t        tpt_update_sockets      :1,
 	                tpt_update_timers       :1,
 	                tpt_update_watchers     :1,
-	                tpt_update_live_donor   :1;
+	                tpt_update_live_donor   :1,
+	                tpt_update_coal_sfi     :1;
 } *task_pend_token_t;
 
 extern void task_policy_update_complete_unlocked(task_t task, thread_t thread, task_pend_token_t pend_token);
@@ -726,8 +735,10 @@ int proc_clear_task_ruse_cpu(task_t task, int cpumon_entitled);
 thread_t task_findtid(task_t, uint64_t);
 void set_thread_iotier_override(thread_t, int policy);
 
-boolean_t proc_thread_qos_add_override(task_t task, thread_t thread, uint64_t tid, int override_qos, boolean_t first_override_for_resource);
-boolean_t proc_thread_qos_remove_override(task_t task, thread_t thread, uint64_t tid);
+boolean_t proc_thread_qos_add_override(task_t task, thread_t thread, uint64_t tid, int override_qos, boolean_t first_override_for_resource, user_addr_t resource, int resource_type);
+boolean_t proc_thread_qos_remove_override(task_t task, thread_t thread, uint64_t tid, user_addr_t resource, int resource_type);
+boolean_t proc_thread_qos_reset_override(task_t task, thread_t thread, uint64_t tid, user_addr_t resource, int resource_type);
+void proc_thread_qos_deallocate(thread_t thread);
 
 #define TASK_RUSECPU_FLAGS_PROC_LIMIT			0x01
 #define TASK_RUSECPU_FLAGS_PERTHR_LIMIT			0x02

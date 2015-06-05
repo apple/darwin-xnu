@@ -463,7 +463,13 @@ struct thread {
 	struct task_pended_policy        pended_policy;
 
 	/* usynch override is protected by the task lock, eventually will be thread mutex */
-	int		usynch_override_contended_resource_count;
+	struct thread_qos_override {
+		struct thread_qos_override	*override_next;
+		uint32_t	override_contended_resource_count;
+		int16_t		override_qos;
+		int16_t		override_resource_type;
+		user_addr_t	override_resource;
+	} *overrides;
 
 	int	iotier_override; /* atomic operations to set, cleared on ret to user */
 	io_stat_info_t  		thread_io_stats; /* per-thread I/O statistics */

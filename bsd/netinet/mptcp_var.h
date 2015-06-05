@@ -65,9 +65,9 @@ struct mptses {
 	uint32_t	mpte_thread_active;	/* thread is running */
 	uint32_t	mpte_thread_reqs;	/* # of requests for thread */
 	struct mptsub	*mpte_active_sub;	/* ptr to last active subf */
-	uint8_t	mpte_flags;		/* per mptcp session flags */
-	uint8_t	mpte_lost_aid;		/* storing lost address id */
-	uint8_t	mpte_addrid_last;	/* storing address id parm */
+	uint8_t	mpte_flags;			/* per mptcp session flags */
+	uint8_t	mpte_lost_aid;			/* storing lost address id */
+	uint8_t	mpte_addrid_last;		/* storing address id parm */
 };
 
 /*

@@ -743,10 +743,8 @@ IOGeneralMemoryDescriptor::memoryReferenceMap(
     cacheMode = ((options & kIOMapCacheMask) >> kIOMapCacheShift);
     if (kIODefaultCache != cacheMode)
     {
-	// VM system requires write access to change cache mode
-        prot |= VM_PROT_WRITE;
-        // update named entries cache mode
-	memEntryCacheMode = (MAP_MEM_ONLY | prot | vmProtForCacheMode(cacheMode));
+	// VM system requires write access to update named entry cache mode
+	memEntryCacheMode = (MAP_MEM_ONLY | VM_PROT_WRITE | prot | vmProtForCacheMode(cacheMode));
     }
 
     if (_task)

@@ -29,7 +29,7 @@
 #include <stdio.h>
 #include <math.h>
 #include <sys/wait.h>
-#include <sys/syscall.h>
+#include <sys/kdebug.h>
 #include <sys/types.h>
 #include <sys/ptrace.h>
 #include <semaphore.h>
@@ -371,7 +371,7 @@ main(int argc, char **argv)
 		
 		/* Too much: cut a tracepoint for a debugger */
 		if (jitter_arr[i] >= too_much) {
-			syscall(SYS_kdebug_trace, 0xeeeeeeee, 0, 0, 0, 0);
+			kdebug_trace(0xeeeee0 | DBG_FUNC_NONE, 0, 0, 0, 0);
 		}
 
 		if (wakeup_second_thread) {
@@ -466,7 +466,7 @@ second_thread(void *args)
 		
 		/* Too much: cut a tracepoint for a debugger */
 		if (secargs->wakeup_second_jitter_arr[i] >= secargs->too_much) {
-			syscall(SYS_kdebug_trace, 0xeeeeeeef, 0, 0, 0, 0);
+			kdebug_trace(0xeeeee4 | DBG_FUNC_NONE, 0, 0, 0, 0);
 		}
 
 		kret = semaphore_signal(secargs->return_semaphore);

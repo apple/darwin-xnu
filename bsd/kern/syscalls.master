@@ -267,8 +267,8 @@
 176	AUE_NULL	ALL	{ int nosys(void); }   { old add_profil }
 177	AUE_NULL	ALL	{ int nosys(void); } 
 178	AUE_NULL	ALL	{ int nosys(void); } 
-179	AUE_NULL	ALL	{ int nosys(void); } 
-180	AUE_KDEBUGTRACE	ALL 	{ int kdebug_trace(int code, int arg1, int arg2, int arg3, int arg4, int arg5) NO_SYSCALL_STUB; } 
+179	AUE_KDEBUGTRACE	ALL 	{ int kdebug_trace64(uint32_t code, uint64_t arg1, uint64_t arg2, uint64_t arg3, uint64_t arg4) NO_SYSCALL_STUB; } 
+180	AUE_KDEBUGTRACE	ALL 	{ int kdebug_trace(uint32_t code, u_long arg1, u_long arg2, u_long arg3, u_long arg4) NO_SYSCALL_STUB; } 
 181	AUE_SETGID	ALL	{ int setgid(gid_t gid); } 
 182	AUE_SETEGID	ALL	{ int setegid(gid_t egid); } 
 183	AUE_SETEUID	ALL	{ int seteuid(uid_t euid); } 

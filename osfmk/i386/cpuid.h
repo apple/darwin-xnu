@@ -121,7 +121,7 @@
 
 /*
  * Leaf 7, subleaf 0 additional features.
- * Bits returned in %ebx to a CPUID request with {%eax,%ecx} of (0x7,0x0}:
+ * Bits returned in %ebx:%ecx to a CPUID request with {%eax,%ecx} of (0x7,0x0}:
  */
 #define CPUID_LEAF7_FEATURE_RDWRFSGS _Bit(0)	/* FS/GS base read/write */
 #define CPUID_LEAF7_FEATURE_TSCOFF   _Bit(1)	/* TSC thread offset */
@@ -132,7 +132,12 @@
 #define CPUID_LEAF7_FEATURE_BMI2     _Bit(8)	/* Bit Manipulation Instrs, set 2 */
 #define CPUID_LEAF7_FEATURE_ERMS     _Bit(9)	/* Enhanced Rep Movsb/Stosb */
 #define CPUID_LEAF7_FEATURE_INVPCID  _Bit(10)	/* INVPCID intruction, TDB */
-#define CPUID_LEAF7_FEATURE_RTM      _Bit(11)	/* TBD */
+#define CPUID_LEAF7_FEATURE_RTM      _Bit(11)	/* RTM */
+#define CPUID_LEAF7_FEATURE_RDSEED   _Bit(18)	/* RDSEED Instruction */
+#define CPUID_LEAF7_FEATURE_ADX      _Bit(19)	/* ADX Instructions */
+#if !defined(XNU_HIDE_SEED)
+#define CPUID_LEAF7_FEATURE_SMAP     _Bit(20)	/* Supervisor Mode Access Protect */
+#endif /* not XNU_HIDE_SEED */
 
 /*
  * The CPUID_EXTFEATURE_XXX values define 64-bit values
@@ -196,8 +201,14 @@
 #define CPUID_MODEL_IVYBRIDGE_EP	0x3E
 #define CPUID_MODEL_CRYSTALWELL		0x46
 #define CPUID_MODEL_HASWELL		0x3C
-#define CPUID_MODEL_HASWELL_SVR		0x3F
+#define CPUID_MODEL_HASWELL_EP		0x3F
 #define CPUID_MODEL_HASWELL_ULT		0x45
+#if !defined(XNU_HIDE_SEED)
+#define CPUID_MODEL_BROADWELL		0x3D
+#define CPUID_MODEL_BROADWELL_ULX	0x3D
+#define CPUID_MODEL_BROADWELL_ULT	0x3D
+#define CPUID_MODEL_BRYSTALWELL		0x47
+#endif /* not XNU_HIDE_SEED */
 
 #define CPUID_VMM_FAMILY_UNKNOWN	0x0
 #define CPUID_VMM_FAMILY_VMWARE		0x1
@@ -375,7 +386,7 @@ typedef struct {
 	cpuid_thermal_leaf_t	*cpuid_thermal_leafp;
 	cpuid_arch_perf_leaf_t	*cpuid_arch_perf_leafp;
 	cpuid_xsave_leaf_t	*cpuid_xsave_leafp;
-	uint32_t		cpuid_leaf7_features;
+	uint64_t		cpuid_leaf7_features;
 } i386_cpu_info_t;
 
 #ifdef MACH_KERNEL_PRIVATE

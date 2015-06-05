@@ -3473,10 +3473,18 @@ if_mcasts_update(struct ifnet *ifp)
 	return (0);
 }
 
+	
+#define TMP_IF_PROTO_ARR_SIZE	10
 static int
 dlil_event_internal(struct ifnet *ifp, struct kev_msg *event)
 {
-	struct ifnet_filter *filter;
+	struct ifnet_filter *filter = NULL;
+	struct if_proto *proto = NULL;
+	int if_proto_count = 0;
+	struct if_proto **tmp_ifproto_arr = NULL;
+	struct if_proto *tmp_ifproto_stack_arr[TMP_IF_PROTO_ARR_SIZE] = {NULL};
+	int tmp_ifproto_arr_idx = 0;
+	bool tmp_malloc = false;
 
 	/* Get an io ref count if the interface is attached */
 	if (!ifnet_is_attached(ifp, 1))
@@ -3502,34 +3510,61 @@ dlil_event_internal(struct ifnet *ifp, struct kev_msg *event)
 	if_flt_monitor_unbusy(ifp);
 	lck_mtx_unlock(&ifp->if_flt_lock);
 
+	/*
+	 * An embedded tmp_list_entry in if_proto may still get
+	 * over-written by another thread after giving up ifnet lock,
+	 * therefore we are avoiding embedded pointers here.
+	 */
 	ifnet_lock_shared(ifp);
-	if (ifp->if_proto_hash != NULL) {
+	if_proto_count = dlil_ifp_proto_count(ifp);
+	if (if_proto_count) {
 		int i;
+		VERIFY(ifp->if_proto_hash != NULL);
+		if (if_proto_count <= TMP_IF_PROTO_ARR_SIZE) {
+			tmp_ifproto_arr = tmp_ifproto_stack_arr;
+		} else {
+			MALLOC(tmp_ifproto_arr, struct if_proto **,
+			    sizeof (*tmp_ifproto_arr) * if_proto_count,
+			    M_TEMP, M_ZERO);
+			if (tmp_ifproto_arr == NULL) {
+				ifnet_lock_done(ifp);
+				goto cleanup;
+			}
+			tmp_malloc = true;
+		}
 
 		for (i = 0; i < PROTO_HASH_SLOTS; i++) {
-			struct if_proto *proto;
-
 			SLIST_FOREACH(proto, &ifp->if_proto_hash[i],
 			    next_hash) {
-				proto_media_event eventp =
-				    (proto->proto_kpi == kProtoKPI_v1 ?
-				    proto->kpi.v1.event :
-				    proto->kpi.v2.event);
-
-				if (eventp != NULL) {
-					if_proto_ref(proto);
-					ifnet_lock_done(ifp);
-
-					eventp(ifp, proto->protocol_family,
-					    event);
-
-					ifnet_lock_shared(ifp);
-					if_proto_free(proto);
-				}
+				if_proto_ref(proto);
+				tmp_ifproto_arr[tmp_ifproto_arr_idx] = proto;
+				tmp_ifproto_arr_idx++;
 			}
 		}
+		VERIFY(if_proto_count == tmp_ifproto_arr_idx);
 	}
 	ifnet_lock_done(ifp);
+
+	for (tmp_ifproto_arr_idx = 0; tmp_ifproto_arr_idx < if_proto_count;
+	    tmp_ifproto_arr_idx++) {
+		proto = tmp_ifproto_arr[tmp_ifproto_arr_idx];
+		VERIFY(proto != NULL);
+		proto_media_event eventp =
+		    (proto->proto_kpi == kProtoKPI_v1 ?
+		    proto->kpi.v1.event :
+		    proto->kpi.v2.event);
+
+		if (eventp != NULL) {
+			eventp(ifp, proto->protocol_family,
+			    event);
+		}
+		if_proto_free(proto);
+	}
+
+cleanup:	
+	if (tmp_malloc) {
+		FREE(tmp_ifproto_arr, M_TEMP);
+	}
 
 	/* Pass the event to the interface */
 	if (ifp->if_event != NULL)
@@ -3537,7 +3572,6 @@ dlil_event_internal(struct ifnet *ifp, struct kev_msg *event)
 
 	/* Release the io ref count */
 	ifnet_decr_iorefcnt(ifp);
-
 done:
 	return (kev_post_msg(event));
 }

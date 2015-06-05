@@ -94,6 +94,9 @@ typedef struct {
 	uint64_t cpu_insns;
 	uint64_t cpu_ucc;
 	uint64_t cpu_urc;
+#if	DIAG_ALL_PMCS
+	uint64_t gpmcs[4];
+#endif /* DIAG_ALL_PMCS */
 } core_energy_stat_t;
 
 typedef struct {
@@ -262,6 +265,9 @@ diagCall64(x86_saved_state_t * state)
  			cest.cpu_insns = cpu_data_ptr[i]->cpu_cur_insns;
  			cest.cpu_ucc = cpu_data_ptr[i]->cpu_cur_ucc;
  			cest.cpu_urc = cpu_data_ptr[i]->cpu_cur_urc;
+#if DIAG_ALL_PMCS
+			bcopy(&cpu_data_ptr[i]->cpu_gpmcs[0], &cest.gpmcs[0], sizeof(cest.gpmcs));
+#endif /* DIAG_ALL_PMCS */			
  			(void) ml_set_interrupts_enabled(TRUE);
 
 			copyout(&cest, curpos, sizeof(cest));
@@ -344,6 +350,13 @@ void cpu_powerstats(__unused void *arg) {
 		uint64_t insns = read_pmc(FIXED_PMC0);
 		uint64_t ucc = read_pmc(FIXED_PMC1);
 		uint64_t urc = read_pmc(FIXED_PMC2);
+#if DIAG_ALL_PMCS
+		int i;
+
+		for (i = 0; i < 4; i++) {
+			cdp->cpu_gpmcs[i] = read_pmc(i);
+		}
+#endif /* DIAG_ALL_PMCS */
 		cdp->cpu_cur_insns = insns;
 		cdp->cpu_cur_ucc = ucc;
 		cdp->cpu_cur_urc = urc;

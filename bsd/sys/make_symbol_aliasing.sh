@@ -88,10 +88,24 @@ for ver in $(${SDKROOT}/usr/local/libexec/availability.pl --ios) ; do
 done
 
 for ver in $(${SDKROOT}/usr/local/libexec/availability.pl --macosx) ; do
-    ver_major=${ver%.*}
-    ver_minor=${ver#*.}
-    value=$(printf "%d%d0" ${ver_major} ${ver_minor})
-    str=$(printf "__MAC_%d_%d" ${ver_major} ${ver_minor})
+    set -- $(echo "$ver" | tr '.' ' ')
+    ver_major=$1
+    ver_minor=$2
+    ver_rel=$3
+    if [ -z "$ver_rel" ]; then
+	ver_rel=0
+    fi
+    if [ "$ver_major" -lt 10 -o \( "$ver_major" -eq 10 -a "$ver_minor" -lt 10 \) ]; then
+	value=$(printf "%d%d0" ${ver_major} ${ver_minor})
+	str=$(printf "__MAC_%d_%d" ${ver_major} ${ver_minor})
+    else
+	value=$(printf "%d%02d%02d" ${ver_major} ${ver_minor} ${ver_rel})
+	if [ "$ver_rel" -gt 0 ]; then
+	    str=$(printf "__MAC_%d_%d_%d" ${ver_major} ${ver_minor} ${ver_rel})
+	else
+	    str=$(printf "__MAC_%d_%d" ${ver_major} ${ver_minor})
+	fi
+    fi
     echo "#if defined(__ENVIRONMENT_MAC_OS_X_VERSION_MIN_REQUIRED__) && __ENVIRONMENT_MAC_OS_X_VERSION_MIN_REQUIRED__ >= ${value}"
     echo "#define __DARWIN_ALIAS_STARTING_MAC_${str}(x) x"
     echo "#else"

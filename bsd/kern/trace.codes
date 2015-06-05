@@ -996,7 +996,7 @@
 0x40c02c0	BSC_add_profil
 0x40c02c4	BSC_#177
 0x40c02c8	BSC_#178
-0x40c02cc	BSC_#179
+0x40c02cc	BSC_kdebug_trace64
 0x40c02d0	BSC_kdebug_trace
 0x40c02d4	BSC_setgid
 0x40c02d8	BSC_setegid
@@ -1290,7 +1290,7 @@
 0x40c0780	BSC_recvmsg_x
 0x40c0784	BSC_sendmsg_x
 0x40c0788	BSC_thread_selfusage
-0x40c07a4	BSC_mremap_extended
+0x40c07a4	BSC_mremap_encrypted
 0x40e0104	BSC_msync_extended_info
 0x40e0264	BSC_pread_extended_info
 0x40e0268	BSC_pwrite_extended_info
@@ -1549,6 +1549,7 @@
 0x5310274	CPUPM_PST_QOS_SWITCH2
 0x5310278	CPUPM_PST_UIB
 0x531027C	CPUPM_PST_PLIMIT_UIB
+0x5310280	CPUPM_IO
 0x5330000	HIBERNATE
 0x5330004	HIBERNATE_WRITE_IMAGE
 0x5330008	HIBERNATE_MACHINE_INIT

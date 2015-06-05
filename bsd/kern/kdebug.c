@@ -113,6 +113,7 @@ static kd_iop_t* kd_iops = NULL;
 /* XXX should have prototypes, but Mach does not provide one */
 void task_act_iterate_wth_args(task_t, void(*)(thread_t, void *), void *);
 int cpu_number(void);	/* XXX <machine/...> include path broken */
+void commpage_update_kdebug_enable(void); /* XXX sign */
 
 /* XXX should probably be static, but it's debugging code... */
 int kdbg_read(user_addr_t, size_t *, vnode_t, vfs_context_t);
@@ -396,10 +397,12 @@ kdbg_set_tracing_enabled(boolean_t enabled, uint32_t trace_type)
 		kdebug_enable |= trace_type;
 		kd_ctrl_page.kdebug_slowcheck &= ~SLOW_NOLOG;
 		kd_ctrl_page.enabled = 1;
+		commpage_update_kdebug_enable();
 	} else {
 		kdebug_enable &= ~(KDEBUG_ENABLE_TRACE|KDEBUG_ENABLE_PPT);
 		kd_ctrl_page.kdebug_slowcheck |= SLOW_NOLOG;
 		kd_ctrl_page.enabled = 0;
+		commpage_update_kdebug_enable();
 	}
 	lck_spin_unlock(kds_spin_lock);
 	ml_set_interrupts_enabled(s);
@@ -734,6 +737,7 @@ allocate_storage_unit(int cpu)
 		if (kdbp_vict == NULL) {
 			kdebug_enable = 0;
 			kd_ctrl_page.enabled = 0;
+			commpage_update_kdebug_enable();
 			retval = FALSE;
 			goto out;
 		}
@@ -952,16 +956,7 @@ out1:
 
 
 
-void
-kernel_debug_internal(
-	uint32_t	debugid,
-	uintptr_t	arg1,
-	uintptr_t	arg2,
-	uintptr_t	arg3,
-	uintptr_t	arg4,
-	uintptr_t	arg5);
-
-__attribute__((always_inline)) void
+static void
 kernel_debug_internal(
 	uint32_t	debugid,
 	uintptr_t	arg1,
@@ -1255,19 +1250,47 @@ kernel_debug_early_end(void)
 }
 
 /*
- * Support syscall SYS_kdebug_trace
+ * Support syscall SYS_kdebug_trace. U64->K32 args may get truncated in kdebug_trace64
  */
 int
-kdebug_trace(__unused struct proc *p, struct kdebug_trace_args *uap, __unused int32_t *retval)
+kdebug_trace(struct proc *p, struct kdebug_trace_args *uap, int32_t *retval)
 {
+	struct kdebug_trace64_args uap64;
+
+	uap64.code = uap->code;
+	uap64.arg1 = uap->arg1;
+	uap64.arg2 = uap->arg2;
+	uap64.arg3 = uap->arg3;
+	uap64.arg4 = uap->arg4;
+
+	return kdebug_trace64(p, &uap64, retval);
+}
+
+/*
+ * Support syscall SYS_kdebug_trace64. 64-bit args on K32 will get truncated to fit in 32-bit record format.
+ */
+int kdebug_trace64(__unused struct proc *p, struct kdebug_trace64_args *uap, __unused int32_t *retval)
+{
+	uint8_t code_class;
+
+	/*
+	 * Not all class are supported for injection from userspace, especially ones used by the core
+	 * kernel tracing infrastructure.
+	 */
+	code_class = EXTRACT_CLASS(uap->code);
+
+	switch (code_class) {
+		case DBG_TRACE:
+			return EPERM;
+	}
+
 	if ( __probable(kdebug_enable == 0) )
-		return(0);
- 
-	kernel_debug_internal(uap->code, uap->arg1, uap->arg2, uap->arg3, uap->arg4, (uintptr_t)thread_tid(current_thread()));
+		return(0); 
+
+	kernel_debug_internal(uap->code, (uintptr_t)uap->arg1, (uintptr_t)uap->arg2, (uintptr_t)uap->arg3, (uintptr_t)uap->arg4, (uintptr_t)thread_tid(current_thread()));
 
 	return(0);
 }
-
 
 static void
 kdbg_lock_init(void)
@@ -3140,6 +3163,7 @@ kdbg_dump_trace_to_file(const char *filename)
 			 */
 			kdebug_enable = 0;
 			kd_ctrl_page.enabled = 0;
+			commpage_update_kdebug_enable();
 			return;
 		}
 	}
@@ -3147,6 +3171,7 @@ kdbg_dump_trace_to_file(const char *filename)
 
 	kdebug_enable = 0;
 	kd_ctrl_page.enabled = 0;
+	commpage_update_kdebug_enable();
 
 	ctx = vfs_context_kernel();
 

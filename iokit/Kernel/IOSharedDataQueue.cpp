@@ -99,10 +99,11 @@ Boolean IOSharedDataQueue::initWithCapacity(UInt32 size)
     if (dataQueue == 0) {
         return false;
     }
+    bzero(dataQueue, allocSize);
 
     dataQueue->queueSize    = size;
-    dataQueue->head         = 0;
-    dataQueue->tail         = 0;
+//  dataQueue->head         = 0;
+//  dataQueue->tail         = 0;
 
     if (!setQueueSize(size)) {
         return false;
@@ -110,7 +111,14 @@ Boolean IOSharedDataQueue::initWithCapacity(UInt32 size)
     
     appendix            = (IODataQueueAppendix *)((UInt8 *)dataQueue + size + DATA_QUEUE_MEMORY_HEADER_SIZE);
     appendix->version   = 0;
-    notifyMsg           = &(appendix->msgh);
+
+    if (!notifyMsg) {
+        notifyMsg = IOMalloc(sizeof(mach_msg_header_t));
+        if (!notifyMsg)
+            return false;
+    }
+    bzero(notifyMsg, sizeof(mach_msg_header_t));
+
     setNotificationPort(MACH_PORT_NULL);
 
     return true;
@@ -121,6 +129,10 @@ void IOSharedDataQueue::free()
     if (dataQueue) {
         IOFreeAligned(dataQueue, round_page(getQueueSize() + DATA_QUEUE_MEMORY_HEADER_SIZE + DATA_QUEUE_MEMORY_APPENDIX_SIZE));
         dataQueue = NULL;
+        if (notifyMsg) {
+            IOFree(notifyMsg, sizeof(mach_msg_header_t));
+            notifyMsg = NULL;
+        }
     }
 
     if (_reserved) {
@@ -192,7 +204,7 @@ Boolean IOSharedDataQueue::enqueue(void * data, UInt32 dataSize)
         return false;
     }
     // Check for underflow of (getQueueSize() - tail)
-    if (getQueueSize() < tail) {
+    if (getQueueSize() < tail || getQueueSize() < head) {
         return false;
     }
     

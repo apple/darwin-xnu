@@ -2040,7 +2040,13 @@ void IOPMrootDomain::powerChangeDone( unsigned long previousPowerState )
 #else
             LOG("System Sleep\n");
 #endif
-
+            if (thermalWarningState) {
+                const OSSymbol *event = OSSymbol::withCString(kIOPMThermalLevelWarningKey);
+                if (event) {
+                    systemPowerEventOccurred(event, kIOPMThermalLevelUnknown);
+                    event->release();
+                }
+            }
             ((IOService *)this)->stop_watchdog_timer(); //14456299
             getPlatform()->sleepKernel();
 
@@ -2090,6 +2096,7 @@ void IOPMrootDomain::powerChangeDone( unsigned long previousPowerState )
             wranglerTickleLatched   = false;
             userWasActive           = false;
             fullWakeReason = kFullWakeReasonNone;
+
 
             OSString * wakeType = OSDynamicCast(
                 OSString, getProperty(kIOPMRootDomainWakeTypeKey));
@@ -3710,6 +3717,8 @@ bool IOPMrootDomain::evaluateSystemSleepPolicy(
         currentFactors |= kIOPMSleepFactorLocalUserActivity;
     if (darkWakeHibernateError && !CAP_HIGHEST(kIOPMSystemCapabilityGraphics))
         currentFactors |= kIOPMSleepFactorHibernateFailed;
+    if (thermalWarningState)
+        currentFactors |= kIOPMSleepFactorThermalWarning;
 
     DLOG("sleep factors 0x%llx\n", currentFactors);
 
@@ -4006,10 +4015,18 @@ bool IOPMrootDomain::getSleepOption( const char * key, uint32_t * option )
     {
         obj = copyProperty(key);
     }
-    if (obj && (num = OSDynamicCast(OSNumber, obj)))
+    if (obj) 
     {
-        *option = num->unsigned32BitValue();
-        ok = true;
+        if ((num = OSDynamicCast(OSNumber, obj)))
+        {
+            *option = num->unsigned32BitValue();
+            ok = true;
+        }
+        else if (OSDynamicCast(OSBoolean, obj))
+        {
+            *option = (obj == kOSBooleanTrue) ? 1 : 0;
+            ok = true;
+        }
     }
 
     if (obj)
@@ -5622,9 +5639,9 @@ bool IOPMrootDomain::checkSystemSleepAllowed( IOOptionBits options,
         break;
 #endif
 
-        if (lowBatteryCondition)
+        if (lowBatteryCondition || thermalWarningState)
         {
-            break;          // always sleep on low battery
+            break;          // always sleep on low battery or when in thermal warning state
         }
 
         if (sleepReason == kIOPMSleepReasonDarkWakeThermalEmergency)
@@ -5698,7 +5715,7 @@ bool IOPMrootDomain::checkSystemCanSleep( uint32_t sleepReason )
 bool IOPMrootDomain::checkSystemCanSustainFullWake( void )
 {
 #if !NO_KERNEL_HID
-    if (lowBatteryCondition)
+    if (lowBatteryCondition || thermalWarningState)
     {
         // Low battery wake, or received a low battery notification
         // while system is awake. This condition will persist until
@@ -5962,6 +5979,24 @@ IOReturn IOPMrootDomain::systemPowerEventOccurred(
     return attempt;
 }
 
+void IOPMrootDomain::setThermalState(OSObject *value)
+{
+   OSNumber * num;
+
+   if (gIOPMWorkLoop->inGate() == false) {
+       gIOPMWorkLoop->runAction(
+               OSMemberFunctionCast(IOWorkLoop::Action, this, &IOPMrootDomain::setThermalState),
+               (OSObject *)this,
+               (void *)value);
+
+       return;
+    }
+    if (value && (num = OSDynamicCast(OSNumber, value))) {
+        thermalWarningState = ((num->unsigned32BitValue() == kIOPMThermalLevelWarning) || 
+                               (num->unsigned32BitValue() == kIOPMThermalLevelTrap)) ? 1 : 0; 
+    }
+}
+
 IOReturn IOPMrootDomain::systemPowerEventOccurred(
     const OSSymbol *event,
     OSObject *value)
@@ -6001,8 +6036,13 @@ exit:
     // UNLOCK
     if (featuresDictLock) IOLockUnlock(featuresDictLock);
 
-    if (shouldUpdate)
+    if (shouldUpdate) {
+        if (event && 
+             event->isEqualTo(kIOPMThermalLevelWarningKey)) {
+             setThermalState(value);
+        }
         messageClients (kIOPMMessageSystemPowerEventOccurred, (void *)NULL);
+    }
 
     return kIOReturnSuccess;
 }

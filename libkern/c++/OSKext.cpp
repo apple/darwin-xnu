@@ -7803,6 +7803,7 @@ OSKext::copyInfo(OSArray * infoKeys)
             kernel_mach_header_t *kext_mach_hdr = (kernel_mach_header_t *)
                 linkedExecutable->getBytesNoCopy();
 
+#if !SECURE_KERNEL
             if (!infoKeys || _OSArrayContainsCString(infoKeys, kOSBundleMachOHeadersKey)) {
                 kernel_mach_header_t *  temp_kext_mach_hdr;
                 struct load_command *   lcp;
@@ -7843,6 +7844,17 @@ OSKext::copyInfo(OSArray * infoKeys)
                                   __FUNCTION__, segp->segname, segp->vmaddr,
                                   VM_KERNEL_UNSLIDE(segp->vmaddr),
                                   segp->vmsize, segp->nsects);
+                        if ( (VM_KERNEL_IS_SLID(segp->vmaddr) == false) &&
+                             (VM_KERNEL_IS_KEXT(segp->vmaddr) == false) &&
+                             (VM_KERNEL_IS_PRELINKTEXT(segp->vmaddr) == false) &&
+                             (VM_KERNEL_IS_PRELINKINFO(segp->vmaddr) == false) &&
+                             (VM_KERNEL_IS_KEXT_LINKEDIT(segp->vmaddr) == false) ) {
+                            OSKextLog(/* kext */ NULL,
+                                      kOSKextLogErrorLevel |
+                                      kOSKextLogGeneralFlag,
+                                      "%s: not in kext range - vmaddr 0x%llX vm_kext_base 0x%lX vm_kext_top 0x%lX",
+                                      __FUNCTION__, segp->vmaddr, vm_kext_base, vm_kext_top);
+                        }
 #endif
                         segp->vmaddr = VM_KERNEL_UNSLIDE(segp->vmaddr);
                         
@@ -7854,6 +7866,7 @@ OSKext::copyInfo(OSArray * infoKeys)
                 }
                 result->setObject(kOSBundleMachOHeadersKey, headerData);
             }
+#endif // SECURE_KERNEL
 
             if (!infoKeys || _OSArrayContainsCString(infoKeys, kOSBundleCPUTypeKey)) {
                 cpuTypeNumber = OSNumber::withNumber(

@@ -41,6 +41,8 @@
 #include <kern/timer_call.h>
 #include <kern/wait_queue.h>
 #include <kern/ledger.h>
+#include <kern/coalition.h>
+
 #include <pexpert/pexpert.h>
 
 #include <libkern/kernel_mach_header.h>
@@ -687,6 +689,7 @@ sfi_class_id_t sfi_thread_classify(thread_t thread)
 	int thread_bg = proc_get_effective_thread_policy(thread, TASK_POLICY_DARWIN_BG);
 	int managed_task = proc_get_effective_task_policy(task, TASK_POLICY_SFI_MANAGED);
 	int thread_qos = proc_get_effective_thread_policy(thread, TASK_POLICY_QOS);
+	boolean_t focal = FALSE;
 
 	/* kernel threads never reach the user AST boundary, and are in a separate world for SFI */
 	if (is_kernel_thread) {
@@ -717,20 +720,48 @@ sfi_class_id_t sfi_thread_classify(thread_t thread)
 	}
 
 	/*
-	 * Threads with unspecified or legacy QOS class can be individually managed
+	 * Threads with unspecified, legacy, or user-initiated QOS class can be individually managed.
 	 */
-	if (managed_task &&
-	    (thread_qos == THREAD_QOS_UNSPECIFIED || thread_qos == THREAD_QOS_LEGACY)) {
-		if (task_role == TASK_FOREGROUND_APPLICATION || task_role == TASK_CONTROL_APPLICATION)
-			return SFI_CLASS_MANAGED_FOCAL;
-		else
-			return SFI_CLASS_MANAGED_NONFOCAL;
+
+	switch (task_role) {
+		case TASK_CONTROL_APPLICATION:
+		case TASK_FOREGROUND_APPLICATION:
+			focal = TRUE;
+			break;
+
+		case TASK_BACKGROUND_APPLICATION:
+		case TASK_DEFAULT_APPLICATION:
+		case TASK_UNSPECIFIED:
+			/* Focal if in coalition with foreground app */
+			if (coalition_focal_task_count(thread->task->coalition) > 0)
+				focal = TRUE;
+			break;
+
+		default:
+			break;
+	}
+
+	if (managed_task) {
+		switch (thread_qos) {
+		case THREAD_QOS_UNSPECIFIED:
+		case THREAD_QOS_LEGACY:
+		case THREAD_QOS_USER_INITIATED:
+			if (focal)
+				return SFI_CLASS_MANAGED_FOCAL;
+			else
+				return SFI_CLASS_MANAGED_NONFOCAL;
+		default:
+			break;
+		}
 	}
 
 	if (thread_qos == THREAD_QOS_UTILITY)
 		return SFI_CLASS_UTILITY;
 
-	if (task_role == TASK_FOREGROUND_APPLICATION || task_role == TASK_CONTROL_APPLICATION) {
+	/*
+	 * Classify threads in non-managed tasks
+	 */
+	if (focal) {
 		switch (thread_qos) {
 		case THREAD_QOS_USER_INTERACTIVE:
 			return SFI_CLASS_USER_INTERACTIVE_FOCAL;
@@ -920,7 +951,10 @@ void sfi_ast(thread_t thread)
 	}
 }
 
-/* Thread must be unlocked */
+/*
+ * Thread must be unlocked
+ * May be called with coalition, task, or thread mutex held
+ */
 void sfi_reevaluate(thread_t thread)
 {
 	kern_return_t kret;

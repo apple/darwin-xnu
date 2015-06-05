@@ -327,16 +327,18 @@ def GetThreadSummary(thread):
     
 
 @lldb_type_summary(['coalition_t', 'coalition'])
-@header("type coalition summary (header tbw)")
+@header("{:>18s} {:>10s} {:>8s} {:>8s} {:>8s} {:>8s}".format("coalition", "id", "refcount", "active", "focal", "nonfocal"))
 def GetCoalitionSummary(coal):
     out_string = ""
-    format_string = '{0: <#020x} {1: <d} {2: <d} {3: <d}'
+    format_string = '{:>#018x} {:>10d} {:>8d} {:>8d} {:>8d} {:>8d}'
+
     flags_string = ''
     if (coal.terminated):
         flags_string += ' terminated'
     if (coal.reaped):
         flags_string += ' reaped'
-    out_string += format_string.format(coal, coal.id, coal.ref_count, coal.active_count, )
+    out_string += format_string.format(coal, coal.id, coal.ref_count, coal.active_count, coal.focal_tasks_count, coal.non_focal_tasks_count)
+
     return out_string
 
 @lldb_type_summary(['proc', 'proc *'])
@@ -724,9 +726,47 @@ def ShowAllCoalitions(cmd_args=None):
     """  Routine to print a summary listing of all the coalitions
     """
     global kern
+    
+    role_strs = {
+                 0 : "TASK_UNSPECIFIED",
+                 1 : "TASK_FOREGROUND_APPLICATION",
+                 2 : "TASK_BACKGROUND_APPLICATION",
+                 3 : "TASK_CONTROL_APPLICATION",
+                 4 : "TASK_GRAPHICS_SERVER",
+                 5 : "TASK_THROTTLE_APPLICATION",
+                 6 : "TASK_NONUI_APPLICATION",
+                 7 : "TASK_DEFAULT_APPLICATION",
+                }
+    
+    sfi_strs = {
+                 0x0  : "SFI_CLASS_UNSPECIFIED",
+                 0x1  : "SFI_CLASS_DARWIN_BG",
+                 0x2  : "SFI_CLASS_APP_NAP",
+                 0x3  : "SFI_CLASS_MANAGED_FOCAL",
+                 0x4  : "SFI_CLASS_MANAGED_NONFOCAL",
+                 0x5  : "SFI_CLASS_DEFAULT_FOCAL",
+                 0x6  : "SFI_CLASS_DEFAULT_NONFOCAL",
+                 0x7  : "SFI_CLASS_KERNEL",
+                 0x8  : "SFI_CLASS_OPTED_OUT",
+                 0x9  : "SFI_CLASS_UTILITY",
+                 0xA  : "SFI_CLASS_LEGACY_FOCAL",
+                 0xB  : "SFI_CLASS_LEGACY_NONFOCAL",
+                 0xC  : "SFI_CLASS_USER_INITIATED_FOCAL",
+                 0xD  : "SFI_CLASS_USER_INITIATED_NONFOCAL",
+                 0xE  : "SFI_CLASS_USER_INTERACTIVE_FOCAL",
+                 0xF  : "SFI_CLASS_USER_INTERACTIVE_NONFOCAL",
+                 0x10 : "SFI_CLASS_MAINTENANCE",
+                }
+    
+
     print GetCoalitionSummary.header
     for c in kern.coalitions:
         print GetCoalitionSummary(c)
+        for task in IterateQueue(c.tasks, "task_t", "coalition_tasks"):
+            print "\t" + hex(task) + " " + GetProcNameForTask(task) + " " + role_strs[int(task.effective_policy.t_role)]
+            for thread in IterateQueue(task.threads, "thread_t", "task_threads"):
+                print "\t\t" + hex(thread) + " " + sfi_strs[int(thread.sfi_class)]
+
 
 @lldb_command('showalltasks') 
 def ShowAllTasks(cmd_args=None):

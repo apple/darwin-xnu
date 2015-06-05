@@ -41,6 +41,7 @@
 #define CS_RESTRICT		0x0000800	/* tell dyld to treat restricted */
 #define CS_ENFORCEMENT		0x0001000	/* require enforcement */
 #define CS_REQUIRE_LV		0x0002000	/* require library validation */
+#define CS_ENTITLEMENTS_VALIDATED	0x0004000
 
 #define	CS_ALLOWED_MACHO	0x00ffffe
 

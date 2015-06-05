@@ -38,6 +38,7 @@
 #include <kern/ledger.h>
 #include <kern/thread_call.h>
 #include <kern/sfi.h>
+#include <kern/coalition.h>
 #if CONFIG_TELEMETRY
 #include <kern/telemetry.h>
 #endif
@@ -130,6 +131,7 @@ static void task_policy_update_locked(task_t task, thread_t thread, task_pend_to
 static void task_policy_update_internal_locked(task_t task, thread_t thread, boolean_t in_create, task_pend_token_t pend_token);
 static void task_policy_update_task_locked(task_t task, boolean_t update_throttle, boolean_t update_bg_throttle, boolean_t update_sfi);
 static void task_policy_update_thread_locked(thread_t thread, int update_cpu, boolean_t update_throttle, boolean_t update_sfi, boolean_t update_qos);
+static boolean_t task_policy_update_coalition_focal_tasks(task_t task, int prev_role, int next_role);
 
 static int proc_get_effective_policy(task_t task, thread_t thread, int policy);
 
@@ -162,6 +164,9 @@ extern char *   proc_name_address(void *p);
 extern void     rethrottle_thread(void * uthread);
 extern void     proc_apply_task_networkbg(void * bsd_info, thread_t thread);
 #endif /* MACH_BSD */
+
+extern zone_t thread_qos_override_zone;
+static boolean_t _proc_thread_qos_remove_override_internal(task_t task, thread_t thread, uint64_t tid, user_addr_t resource, int resource_type, boolean_t reset);
 
 
 /* Importance Inheritance related helper functions */
@@ -763,6 +768,11 @@ task_policy_update_internal_locked(task_t task, thread_t thread, boolean_t in_cr
 					next.t_qos_ceiling = THREAD_QOS_UNSPECIFIED;
 					break;
 
+				case TASK_DEFAULT_APPLICATION:
+					/* This is 'may render UI but we don't know if it's focal/nonfocal' */
+					next.t_qos_ceiling = THREAD_QOS_UNSPECIFIED;
+					break;					
+
 				case TASK_NONUI_APPLICATION:
 					/* i.e. 'off-screen' */
 					next.t_qos_ceiling = THREAD_QOS_LEGACY;
@@ -1174,6 +1184,12 @@ task_policy_update_internal_locked(task_t task, thread_t thread, boolean_t in_cr
 			(prev.t_sfi_managed != next.t_sfi_managed))
 			update_sfi = TRUE;
 
+/* TODO: if CONFIG_SFI */
+		if (prev.t_role != next.t_role && task_policy_update_coalition_focal_tasks(task, prev.t_role, next.t_role)) {
+			update_sfi = TRUE;
+			pend_token->tpt_update_coal_sfi = 1;
+		}
+
 		task_policy_update_task_locked(task, update_throttle, update_threads, update_sfi);
 	} else {
 		int update_cpu = 0;
@@ -1195,6 +1211,35 @@ task_policy_update_internal_locked(task_t task, thread_t thread, boolean_t in_cr
 
 		task_policy_update_thread_locked(thread, update_cpu, update_throttle, update_sfi, update_qos);
 	}
+}
+
+/*
+ * Yet another layering violation. We reach out and bang on the coalition directly.
+ */
+static boolean_t
+task_policy_update_coalition_focal_tasks(task_t     task,
+                                         int        prev_role,
+                                         int        next_role)
+{
+	boolean_t sfi_transition = FALSE;
+
+	if (prev_role != TASK_FOREGROUND_APPLICATION && next_role == TASK_FOREGROUND_APPLICATION) {
+		if (coalition_adjust_focal_task_count(task->coalition, 1) == 1)
+			sfi_transition = TRUE;
+	} else if (prev_role == TASK_FOREGROUND_APPLICATION && next_role != TASK_FOREGROUND_APPLICATION) {
+		if (coalition_adjust_focal_task_count(task->coalition, -1) == 0)
+			sfi_transition = TRUE;
+	}
+
+	if (prev_role != TASK_BACKGROUND_APPLICATION && next_role == TASK_BACKGROUND_APPLICATION) {
+		if (coalition_adjust_non_focal_task_count(task->coalition, 1) == 1)
+			sfi_transition = TRUE;
+	} else if (prev_role == TASK_BACKGROUND_APPLICATION && next_role != TASK_BACKGROUND_APPLICATION) {
+		if (coalition_adjust_non_focal_task_count(task->coalition, -1) == 0)
+			sfi_transition = TRUE;
+	}
+
+	return sfi_transition;
 }
 
 /* Despite the name, the thread's task is locked, the thread is not */
@@ -1355,6 +1400,9 @@ task_policy_update_complete_unlocked(task_t task, thread_t thread, task_pend_tok
 
 		if (pend_token->tpt_update_live_donor)
 			task_importance_update_live_donor(task);
+
+		if (pend_token->tpt_update_coal_sfi)
+			coalition_sfi_reevaluate(task->coalition, task);
 	}
 }
 
@@ -2095,16 +2143,119 @@ void set_thread_iotier_override(thread_t thread, int policy)
  * as the subsystem informs us of the relationships between the threads. The userspace
  * synchronization subsystem should maintain the information of owner->resource and
  * resource->waiters itself.
- *
- * The add/remove routines can return failure if the target of the override cannot be
- * found, perhaps because the resource subsystem doesn't have an accurate view of the
- * resource owner in the face of race conditions.
  */
 
-boolean_t proc_thread_qos_add_override(task_t task, thread_t thread, uint64_t tid, int override_qos, boolean_t first_override_for_resource)
+/*
+ * This helper canonicalizes the resource/resource_type given the current qos_override_mode
+ * in effect. Note that wildcards (THREAD_QOS_OVERRIDE_RESOURCE_WILDCARD) may need
+ * to be handled specially in the future, but for now it's fine to slam
+ * *resource to USER_ADDR_NULL even if it was previously a wildcard.
+ */
+static void _canonicalize_resource_and_type(user_addr_t *resource, int *resource_type) {
+	if (qos_override_mode == QOS_OVERRIDE_MODE_OVERHANG_PEAK || qos_override_mode == QOS_OVERRIDE_MODE_IGNORE_OVERRIDE) {
+		/* Map all input resource/type to a single one */
+		*resource = USER_ADDR_NULL;
+		*resource_type = THREAD_QOS_OVERRIDE_TYPE_UNKNOWN;
+	} else if (qos_override_mode == QOS_OVERRIDE_MODE_FINE_GRAINED_OVERRIDE) {
+		/* no transform */
+	} else if (qos_override_mode == QOS_OVERRIDE_MODE_FINE_GRAINED_OVERRIDE_BUT_IGNORE_DISPATCH) {
+		/* Map all dispatch overrides to a single one, to avoid memory overhead */
+		if (*resource_type == THREAD_QOS_OVERRIDE_TYPE_DISPATCH_ASYNCHRONOUS_OVERRIDE) {
+			*resource = USER_ADDR_NULL;
+		}
+	} else if (qos_override_mode == QOS_OVERRIDE_MODE_FINE_GRAINED_OVERRIDE_BUT_SINGLE_MUTEX_OVERRIDE) {
+		/* Map all mutex overrides to a single one, to avoid memory overhead */
+		if (*resource_type == THREAD_QOS_OVERRIDE_TYPE_PTHREAD_MUTEX) {
+			*resource = USER_ADDR_NULL;
+		}
+	}
+}
+
+/* This helper routine finds an existing override if known. Locking should be done by caller */
+static struct thread_qos_override *_find_qos_override(thread_t thread, user_addr_t resource, int resource_type) {
+	struct thread_qos_override *override;
+
+	override = thread->overrides;
+	while (override) {
+		if (override->override_resource == resource &&
+			override->override_resource_type == resource_type) {
+			return override;
+		}
+		
+		override = override->override_next;
+	}
+
+	return NULL;
+}
+
+static void _find_and_decrement_qos_override(thread_t thread, user_addr_t resource, int resource_type, boolean_t reset, struct thread_qos_override **free_override_list) {
+	struct thread_qos_override *override, *override_prev;
+
+	override_prev = NULL;
+	override = thread->overrides;
+	while (override) {
+		struct thread_qos_override *override_next = override->override_next;
+
+		if ((THREAD_QOS_OVERRIDE_RESOURCE_WILDCARD == resource || override->override_resource == resource) &&
+			override->override_resource_type == resource_type) {
+			if (reset) {
+				override->override_contended_resource_count = 0;
+			} else {
+				override->override_contended_resource_count--;
+			}
+
+			if (override->override_contended_resource_count == 0) {
+				if (override_prev == NULL) {
+					thread->overrides = override_next;
+				} else {
+					override_prev->override_next = override_next;
+				}
+				
+				/* Add to out-param for later zfree */
+				override->override_next = *free_override_list;
+				*free_override_list = override;
+			} else {
+				override_prev = override;
+			}
+
+			if (THREAD_QOS_OVERRIDE_RESOURCE_WILDCARD != resource) {
+				return;
+			}
+		} else {
+			override_prev = override;
+		}
+		
+		override = override_next;
+	}
+}
+
+/* This helper recalculates the current requested override using the policy selected at boot */
+static int _calculate_requested_qos_override(thread_t thread)
+{
+	if (qos_override_mode == QOS_OVERRIDE_MODE_IGNORE_OVERRIDE) {
+		return THREAD_QOS_UNSPECIFIED;
+	}
+
+	/* iterate over all overrides and calculate MAX */
+	struct thread_qos_override *override;
+	int qos_override = THREAD_QOS_UNSPECIFIED;
+
+	override = thread->overrides;
+	while (override) {
+		if (qos_override_mode != QOS_OVERRIDE_MODE_FINE_GRAINED_OVERRIDE_BUT_IGNORE_DISPATCH ||
+			override->override_resource_type != THREAD_QOS_OVERRIDE_TYPE_DISPATCH_ASYNCHRONOUS_OVERRIDE) {
+			qos_override = MAX(qos_override, override->override_qos);
+		}
+		
+		override = override->override_next;
+	}
+
+	return qos_override;
+}
+
+boolean_t proc_thread_qos_add_override(task_t task, thread_t thread, uint64_t tid, int override_qos, boolean_t first_override_for_resource, user_addr_t resource, int resource_type)
 {
 	thread_t	self = current_thread();
-	int			resource_count;
 	struct task_pend_token pend_token = {};
 
 	/* XXX move to thread mutex when thread policy does */
@@ -2138,44 +2289,104 @@ boolean_t proc_thread_qos_add_override(task_t task, thread_t thread, uint64_t ti
 	DTRACE_BOOST5(qos_add_override_pre, uint64_t, tid, uint64_t, thread->requested_policy.thrp_qos,
 		uint64_t, thread->effective_policy.thep_qos, int, override_qos, boolean_t, first_override_for_resource);
 
+	struct task_requested_policy requested = thread->requested_policy;
+	struct thread_qos_override *override;
+	struct thread_qos_override *deferred_free_override = NULL;
+	int new_qos_override, prev_qos_override;
+	int new_effective_qos;
+	boolean_t has_thread_reference = FALSE;
+
+	_canonicalize_resource_and_type(&resource, &resource_type);
+
 	if (first_override_for_resource) {
-		resource_count = ++thread->usynch_override_contended_resource_count;
+		override = _find_qos_override(thread, resource, resource_type);
+		if (override) {
+			override->override_contended_resource_count++;
+		} else {
+			struct thread_qos_override *override_new;
+
+			/* We need to allocate a new object. Drop the task lock and recheck afterwards in case someone else added the override */
+			thread_reference(thread);
+			has_thread_reference = TRUE;
+			task_unlock(task);
+			override_new = zalloc(thread_qos_override_zone);
+			task_lock(task);
+
+			override = _find_qos_override(thread, resource, resource_type);
+			if (override) {
+				/* Someone else already allocated while the task lock was dropped */
+				deferred_free_override = override_new;
+				override->override_contended_resource_count++;
+			} else {
+				override = override_new;
+				override->override_next = thread->overrides;
+				override->override_contended_resource_count = 1 /* since first_override_for_resource was TRUE */;
+				override->override_resource = resource;
+				override->override_resource_type = resource_type;
+				override->override_qos = THREAD_QOS_UNSPECIFIED;
+				thread->overrides = override;
+			}
+		}
 	} else {
-		resource_count = thread->usynch_override_contended_resource_count;
+		override = _find_qos_override(thread, resource, resource_type);
 	}
 
-	struct task_requested_policy requested = thread->requested_policy;
+	if (override) {
+		if (override->override_qos == THREAD_QOS_UNSPECIFIED)
+			override->override_qos = override_qos;
+		else
+			override->override_qos = MAX(override->override_qos, override_qos);
+	}
 
-	if (requested.thrp_qos_override == THREAD_QOS_UNSPECIFIED)
-		requested.thrp_qos_override = override_qos;
-	else
-		requested.thrp_qos_override = MAX(requested.thrp_qos_override, override_qos);
+	/* Determine how to combine the various overrides into a single current requested override */
+	prev_qos_override = requested.thrp_qos_override;
+	new_qos_override = _calculate_requested_qos_override(thread);
 
-	thread->requested_policy = requested;
+	if (new_qos_override != prev_qos_override) {
+		requested.thrp_qos_override = new_qos_override;
 
-	task_policy_update_locked(task, thread, &pend_token);
+		thread->requested_policy = requested;
 
-	thread_reference(thread);
+		task_policy_update_locked(task, thread, &pend_token);
+		
+		if (!has_thread_reference) {
+			thread_reference(thread);
+		}
+		
+		task_unlock(task);
+		
+		task_policy_update_complete_unlocked(task, thread, &pend_token);
 
-	task_unlock(task);
+		new_effective_qos = thread->effective_policy.thep_qos;
+		
+		thread_deallocate(thread);
+	} else {
+		new_effective_qos = thread->effective_policy.thep_qos;
 
-	task_policy_update_complete_unlocked(task, thread, &pend_token);
+		task_unlock(task);
 
-	DTRACE_BOOST3(qos_add_override_post, uint64_t, requested.thrp_qos_override,
-		uint64_t, thread->effective_policy.thep_qos, int, resource_count);
+		if (has_thread_reference) {
+			thread_deallocate(thread);
+		}
+	}
 
-	thread_deallocate(thread);
+	if (deferred_free_override) {
+		zfree(thread_qos_override_zone, deferred_free_override);
+	}
+
+	DTRACE_BOOST3(qos_add_override_post, int, prev_qos_override, int, new_qos_override,
+				  int, new_effective_qos);
 
 	KERNEL_DEBUG_CONSTANT((IMPORTANCE_CODE(IMP_USYNCH_QOS_OVERRIDE, IMP_USYNCH_ADD_OVERRIDE)) | DBG_FUNC_END,
-						  requested.thrp_qos_override, resource_count, 0, 0, 0);
+						  new_qos_override, resource, resource_type, 0, 0);
 
 	return TRUE;
 }
 
-boolean_t proc_thread_qos_remove_override(task_t task, thread_t thread, uint64_t tid)
+
+static boolean_t _proc_thread_qos_remove_override_internal(task_t task, thread_t thread, uint64_t tid, user_addr_t resource, int resource_type, boolean_t reset)
 {
 	thread_t	self = current_thread();
-	int			resource_count;
 	struct task_pend_token pend_token = {};
 
 	/* XXX move to thread mutex when thread policy does */
@@ -2202,34 +2413,82 @@ boolean_t proc_thread_qos_remove_override(task_t task, thread_t thread, uint64_t
 		}
 	}
 
-	resource_count = --thread->usynch_override_contended_resource_count;
+	struct task_requested_policy requested = thread->requested_policy;
+	struct thread_qos_override *deferred_free_override_list = NULL;
+	int new_qos_override, prev_qos_override;
+
+	_canonicalize_resource_and_type(&resource, &resource_type);
+
+	_find_and_decrement_qos_override(thread, resource, resource_type, reset, &deferred_free_override_list);
 
 	KERNEL_DEBUG_CONSTANT((IMPORTANCE_CODE(IMP_USYNCH_QOS_OVERRIDE, IMP_USYNCH_REMOVE_OVERRIDE)) | DBG_FUNC_START,
-						  thread_tid(thread), resource_count, 0, 0, 0);
+						  thread_tid(thread), resource, reset, 0, 0);
 
-	if (0 == resource_count) {
-		thread->requested_policy.thrp_qos_override = THREAD_QOS_UNSPECIFIED;
+	/* Determine how to combine the various overrides into a single current requested override */
+	prev_qos_override = requested.thrp_qos_override;
+	new_qos_override = _calculate_requested_qos_override(thread);
+
+	if (new_qos_override != prev_qos_override) {
+		requested.thrp_qos_override = new_qos_override;
+
+		thread->requested_policy = requested;
 
 		task_policy_update_locked(task, thread, &pend_token);
 		
 		thread_reference(thread);
-
+			
 		task_unlock(task);
 		
 		task_policy_update_complete_unlocked(task, thread, &pend_token);
-
+		
 		thread_deallocate(thread);
-	} else if (0 > resource_count) {
-		// panic("usynch_override_contended_resource_count underflow for thread %p", thread);
-		task_unlock(task);
 	} else {
 		task_unlock(task);
+	}
+
+	while (deferred_free_override_list) {
+		struct thread_qos_override *override_next = deferred_free_override_list->override_next;
+		
+		zfree(thread_qos_override_zone, deferred_free_override_list);
+		deferred_free_override_list = override_next;
 	}
 
 	KERNEL_DEBUG_CONSTANT((IMPORTANCE_CODE(IMP_USYNCH_QOS_OVERRIDE, IMP_USYNCH_REMOVE_OVERRIDE)) | DBG_FUNC_END,
 						  0, 0, 0, 0, 0);
 
 	return TRUE;
+}
+
+boolean_t proc_thread_qos_remove_override(task_t task, thread_t thread, uint64_t tid, user_addr_t resource, int resource_type)
+{
+	return _proc_thread_qos_remove_override_internal(task, thread, tid, resource, resource_type, FALSE);
+
+}
+
+boolean_t proc_thread_qos_reset_override(task_t task, thread_t thread, uint64_t tid, user_addr_t resource, int resource_type)
+{
+	return _proc_thread_qos_remove_override_internal(task, thread, tid, resource, resource_type, TRUE);
+}
+
+/* Deallocate before thread termination */
+void proc_thread_qos_deallocate(thread_t thread)
+{
+	task_t task = thread->task;
+	struct thread_qos_override *override;
+
+	/* XXX move to thread mutex when thread policy does */
+	task_lock(task);
+	override = thread->overrides;
+	thread->overrides = NULL; 		/* task policy re-evaluation needed? */
+	thread->requested_policy.thrp_qos_override = THREAD_QOS_UNSPECIFIED;
+	task_unlock(task);
+
+	while (override) {
+		struct thread_qos_override *override_next = override->override_next;
+		
+		zfree(thread_qos_override_zone, override);
+		override = override_next;
+	}
 }
 
 /* TODO: remove this variable when interactive daemon audit period is over */
