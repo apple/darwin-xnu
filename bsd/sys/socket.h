@@ -369,6 +369,7 @@ struct so_np_extensions {
 #ifdef KERNEL_PRIVATE
 #define SONPX_MASK_VALID		(SONPX_SETOPTSHUT)
 #define IS_SO_TC_BACKGROUND(_tc_) ((_tc_) == SO_TC_BK || (_tc_) == SO_TC_BK_SYS)
+#define IS_SO_TC_BACKGROUNDSYSTEM(_tc_) ((_tc_) == SO_TC_BK_SYS)
 #endif /* KERNEL_PRIVATE */
 
 #endif

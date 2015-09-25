@@ -2836,6 +2836,18 @@ refill_fd_direntries(vfs_context_t ctx, vnode_t dvp, struct fd_vn_data *fvd,
 	int nentries;
 	int error;
 
+	/*
+	 * If the last readdir returned EOF, don't try again.
+	 */
+	if (fvd->fv_eofflag) {
+		*eofflagp = 1;
+		if (fvd->fv_buf) {
+			FREE(fvd->fv_buf, M_FD_DIRBUF);
+			fvd->fv_buf = NULL;
+		}
+		return 0;
+	}
+
 	error = 0;
 
 	/*
@@ -3472,9 +3484,14 @@ getattrlistbulk(proc_t p, struct getattrlistbulk_args *uap, int32_t *retval)
 	 */
 	if (!fp->f_fglob->fg_offset) {
 		fvdata->fv_offset = 0;
-		if (fvdata->fv_buf) {
-			FV_BUF_FREE(fvdata, M_FD_DIRBUF);
-		}
+		if (fvdata->fv_buf)
+			FREE(fvdata->fv_buf, M_FD_DIRBUF);
+		fvdata->fv_buf = NULL;
+		fvdata->fv_bufsiz = 0;
+		fvdata->fv_bufdone = 0;
+		fvdata->fv_soff = 0;
+		fvdata->fv_eoff = 0;
+		fvdata->fv_eofflag = 0;
 	}
 
 	auio = uio_createwithbuffer(1, fvdata->fv_offset, segflg, UIO_READ,
@@ -3497,26 +3514,37 @@ getattrlistbulk(proc_t p, struct getattrlistbulk_args *uap, int32_t *retval)
 		struct vnode_attr va;
 		char *va_name;
 
-		eofflag = 0;
-		count = 0;
+		if (fvdata->fv_eofflag && !fvdata->fv_buf) {
+			/*
+			 * If the last successful VNOP_GETATTRLISTBULK or
+			 * VNOP_READDIR returned EOF, don't try again.
+			 */
+			eofflag = 1;
+			count = 0;
+			error = 0;
+		} else {
+			eofflag = 0;
+			count = 0;
 
-		VATTR_INIT(&va);
-		MALLOC(va_name, char *, MAXPATHLEN, M_TEMP, M_WAITOK|M_ZERO);
-		va.va_name = va_name;
+			VATTR_INIT(&va);
+			MALLOC(va_name, char *, MAXPATHLEN, M_TEMP,
+			    M_WAITOK | M_ZERO);
+			va.va_name = va_name;
 
-		(void)getattrlist_setupvattr_all(&al, &va, VNON, NULL,
-		    IS_64BIT_PROCESS(p));
+			(void)getattrlist_setupvattr_all(&al, &va, VNON, NULL,
+			    IS_64BIT_PROCESS(p));
 
-		error = VNOP_GETATTRLISTBULK(dvp, &al, &va, auio, NULL,
-		    options, &eofflag, &count, ctx);
+			error = VNOP_GETATTRLISTBULK(dvp, &al, &va, auio, NULL,
+			    options, &eofflag, &count, ctx);
 
-		FREE(va_name, M_TEMP);
+			FREE(va_name, M_TEMP);
 
-		/*
-		 * cache state of eofflag.
-		 */
-		if (!error) {
-			fvdata->fv_eofflag = eofflag;
+			/*
+			 * cache state of eofflag.
+			 */
+			if (!error) {
+				fvdata->fv_eofflag = eofflag;
+			}
 		}
 	}
 
@@ -3530,22 +3558,6 @@ getattrlistbulk(proc_t p, struct getattrlistbulk_args *uap, int32_t *retval)
 
 		error = readdirattr(dvp, fvdata, auio, &al, options,
 		    &count, &eofflag, ctx);
-	}
-
-	if (error && fvdata->fv_eofflag) {
-		/*
-		 * Some filesystems return EINVAL if called again when,
-		 * for a directory, they have already returned EOF. We
-		 * have the EOF state from the last successful call to it.
-		 * If this is an error just reuse the state from the last
-		 * call and use that to return 0 to the user instead of
-		 * percolating an error to the user. We're not particular
-		 * about the error returned. If we get *any* error after
-		 * having already gotten an EOF, we ignore it.
-		 */
-		eofflag = 1;
-		error = 0;
-		count = 0;
 	}
 
 	if (count) {

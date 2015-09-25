@@ -118,3 +118,136 @@ aes_rval aes_decrypt_key256(const unsigned char *key, aes_decrypt_ctx cx[1])
 {
 	return aes_decrypt_key(key, 32, cx);
 }
+
+aes_rval aes_encrypt_key_gcm(const unsigned char *key, int key_len, ccgcm_ctx *ctx)
+{
+	const struct ccmode_gcm *gcm = g_crypto_funcs->ccaes_gcm_encrypt;
+	if (!gcm) {
+	        return aes_error;
+	}
+
+	ccgcm_init(gcm, ctx, key_len, key);
+	return aes_good;
+}
+
+aes_rval aes_encrypt_set_iv_gcm(const unsigned char *in_iv, unsigned int len, ccgcm_ctx *ctx)
+{
+	const struct ccmode_gcm *gcm = g_crypto_funcs->ccaes_gcm_encrypt;
+	if (!gcm) {
+	        return aes_error;
+	}
+
+	ccgcm_set_iv(gcm, ctx, len, in_iv);
+	return aes_good;
+}
+
+aes_rval aes_encrypt_aad_gcm(const unsigned char *aad, unsigned int aad_bytes, ccgcm_ctx *ctx)
+{
+	const struct ccmode_gcm *gcm = g_crypto_funcs->ccaes_gcm_encrypt;
+	if (!gcm) {
+	        return aes_error;
+	}
+
+	ccgcm_gmac(gcm, ctx, aad_bytes, aad);
+	return aes_good;
+}
+
+aes_rval aes_encrypt_gcm(const unsigned char *in_blk, unsigned int num_bytes, 
+			 unsigned char *out_blk, ccgcm_ctx *ctx)
+{
+	const struct ccmode_gcm *gcm = g_crypto_funcs->ccaes_gcm_encrypt;
+	if (!gcm) {
+	        return aes_error;
+	}
+
+	ccgcm_update(gcm, ctx, num_bytes, in_blk, out_blk);	//Actually gcm encrypt.
+	return aes_good;
+}
+
+aes_rval aes_encrypt_finalize_gcm(unsigned char *tag, unsigned int tag_bytes, ccgcm_ctx *ctx)
+{
+	const struct ccmode_gcm *gcm = g_crypto_funcs->ccaes_gcm_encrypt;
+	if (!gcm) {
+	        return aes_error;
+	}
+
+	ccgcm_finalize(gcm, ctx, tag_bytes, tag);
+	ccgcm_reset(gcm, ctx);
+	return aes_good;
+}
+
+aes_rval aes_decrypt_key_gcm(const unsigned char *key, int key_len, ccgcm_ctx *ctx)
+{
+	const struct ccmode_gcm *gcm = g_crypto_funcs->ccaes_gcm_decrypt;
+	if (!gcm) {
+	        return aes_error;
+	}
+
+	ccgcm_init(gcm, ctx, key_len, key);
+	return aes_good;
+}
+
+aes_rval aes_decrypt_set_iv_gcm(const unsigned char *in_iv, unsigned int len, ccgcm_ctx *ctx)
+{
+	const struct ccmode_gcm *gcm = g_crypto_funcs->ccaes_gcm_decrypt;
+	if (!gcm) {
+	        return aes_error;
+	}
+
+	ccgcm_set_iv(gcm, ctx, len, in_iv);
+	return aes_good;
+}
+
+aes_rval aes_decrypt_aad_gcm(const unsigned char *aad, unsigned int aad_bytes, ccgcm_ctx *ctx)
+{
+	const struct ccmode_gcm *gcm = g_crypto_funcs->ccaes_gcm_decrypt;
+	if (!gcm) {
+	        return aes_error;
+	}
+
+	ccgcm_gmac(gcm, ctx, aad_bytes, aad);
+	return aes_good;
+}
+
+aes_rval aes_decrypt_gcm(const unsigned char *in_blk, unsigned int num_bytes,
+			 unsigned char *out_blk, ccgcm_ctx *ctx)
+{
+	const struct ccmode_gcm *gcm = g_crypto_funcs->ccaes_gcm_decrypt;
+	if (!gcm) {
+	        return aes_error;
+	}
+
+	ccgcm_update(gcm, ctx, num_bytes, in_blk, out_blk);	//Actually gcm decrypt.
+	return aes_good;
+}
+
+aes_rval aes_decrypt_finalize_gcm(unsigned char *tag, unsigned int tag_bytes, ccgcm_ctx *ctx)
+{
+	const struct ccmode_gcm *gcm = g_crypto_funcs->ccaes_gcm_decrypt;
+	if (!gcm) {
+	        return aes_error;
+	}
+
+	ccgcm_finalize(gcm, ctx, tag_bytes, tag);
+	ccgcm_reset(gcm, ctx);
+	return aes_good;
+}
+
+unsigned aes_encrypt_get_ctx_size_gcm(void)
+{
+	const struct ccmode_gcm *gcm = g_crypto_funcs->ccaes_gcm_encrypt;
+	if (!gcm) {
+	        return 0;
+	}
+	return (cc_ctx_sizeof(ccgcm_ctx, gcm->size));
+}
+
+unsigned aes_decrypt_get_ctx_size_gcm(void)
+{
+	const struct ccmode_gcm *gcm = g_crypto_funcs->ccaes_gcm_decrypt;
+	if (!gcm) {
+	        return 0;
+	}
+	return (cc_ctx_sizeof(ccgcm_ctx, gcm->size));
+}
+

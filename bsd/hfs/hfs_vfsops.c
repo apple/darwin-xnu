@@ -2789,13 +2789,18 @@ hfs_sysctl(int *name, __unused u_int namelen, user_addr_t oldp, size_t *oldlenp,
 		return (error);
 
 	} else if (name[0] == HFS_EXTEND_FS) {
-		u_int64_t  newsize;
+		u_int64_t  newsize = 0;
 		vnode_t vp = vfs_context_cwd(context);
 
 		if (newp == USER_ADDR_NULL || vp == NULLVP)
 			return (EINVAL);
 		if ((error = hfs_getmountpoint(vp, &hfsmp)))
 			return (error);
+
+		/* Start with the 'size' set to the current number of bytes in the filesystem */
+		newsize = ((uint64_t)hfsmp->totalBlocks) * ((uint64_t)hfsmp->blockSize);
+
+		/* now get the new size from userland and over-write our stored value */
 		error = sysctl_quad(oldp, oldlenp, newp, newlen, (quad_t *)&newsize);
 		if (error)
 			return (error);

@@ -290,16 +290,6 @@ struct fd_vn_data {
 
 #define FV_LOCK(fvd) lck_mtx_lock(&(((struct fd_vn_data *)fvd)->fv_lock))
 #define FV_UNLOCK(fvd) lck_mtx_unlock(&(((struct fd_vn_data *)fvd)->fv_lock))
-#define FV_BUF_FREE(fvd, tag)      \
-do {                               \
-	FREE(fvd->fv_buf, tag);    \
-	fvd->fv_buf = NULL;        \
-	fvd->fv_bufsiz = 0;        \
-	fvd->fv_bufdone = 0;       \
-	fvd->fv_soff = 0;          \
-	fvd->fv_eoff = 0;          \
-	fvd->fv_eofflag = 0;       \
-} while (0);
 
 /*
  * Global vnode data.

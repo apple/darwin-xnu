@@ -107,6 +107,8 @@ typedef struct crypto_functions {
     const struct ccmode_cbc *ccaes_cbc_decrypt;
     const struct ccmode_xts *ccaes_xts_encrypt;
     const struct ccmode_xts *ccaes_xts_decrypt;
+    const struct ccmode_gcm *ccaes_gcm_encrypt;
+    const struct ccmode_gcm *ccaes_gcm_decrypt;
     /* DES, ecb and cbc */
     const struct ccmode_ecb *ccdes_ecb_encrypt;
     const struct ccmode_ecb *ccdes_ecb_decrypt;

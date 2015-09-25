@@ -154,7 +154,11 @@ attribute to parse the resulting attribute buffer.
 .
 .Sh RETURN VALUES
 Upon successful completion the numbers of entries successfully read
-is returned. A value of 0 indicates there are no more entries. On error,
+is returned. A value of 0 indicates there are no more entries. Once 0 is returned,
+no further entries are returned even if new entries are added to the directory.
+Directory iteration should be restarted either by repostioning the offset to 0 by
+.Fn lseek
+or by closing the file descriptor and opening the directory again. On error,
 a value of -1 is returned and
 .Va errno
 is set to indicate the error.

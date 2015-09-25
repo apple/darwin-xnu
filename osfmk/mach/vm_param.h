@@ -259,7 +259,7 @@ extern vm_offset_t      vm_elinkedit;
 
 #define VM_KERNEL_IS_SLID(_o)						       \
 		(((vm_offset_t)(_o) >= vm_kernel_base) &&		       \
-		 ((vm_offset_t)(_o) <  vm_kernel_top))
+		 ((vm_offset_t)(_o) <=  vm_kernel_top))
 #define VM_KERNEL_IS_KEXT(_o)                                                  \
                 (((vm_offset_t)(_o) >= vm_kext_base) &&                        \
                  ((vm_offset_t)(_o) <  vm_kext_top))

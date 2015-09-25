@@ -498,6 +498,13 @@ hfs_readdirattr_internal(struct vnode *dvp, struct attrlist *alist,
 		}
 	} /* for each catalog entry */
 
+	/*
+	 * If we couldn't fit all the entries requested in the user's buffer,
+	 * it's not EOF.
+	 */
+	if (*eofflag && (*actualcount < (int)ce_list->realentries))
+		*eofflag = 0;
+
 	/* If we skipped catalog entries for reserved files that should
 	 * not be listed in namespace, update the index accordingly.
 	 */

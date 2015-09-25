@@ -842,7 +842,16 @@ set_tcp_stream_priority(struct socket *so)
 		 * switch the backgroung streams to use background 
 		 * congestion control algorithm. Otherwise, even background
 		 * flows can move into foreground.
+		 *
+		 * System initiated background traffic like cloud uploads
+		 * should always use background delay sensitive
+		 * algorithms. This will make the stream more resposive to
+		 * other streams on the user's network and it will
+		 * minimize the latency induced.
 		 */
+		if (IS_SO_TC_BACKGROUNDSYSTEM(so->so_traffic_class))
+			fg_active = true;
+
 		if ((sotcdb & SOTCDB_NO_SENDTCPBG) != 0 ||
 			is_local || !fg_active) {
 			if (old_cc == TCP_CC_ALGO_BACKGROUND_INDEX)
