@@ -476,7 +476,7 @@ int	mac_vnode_check_exec(vfs_context_t ctx, struct vnode *vp,
 int	mac_vnode_check_fsgetpath(vfs_context_t ctx, struct vnode *vp);
 int	mac_vnode_check_signature(struct vnode *vp, off_t macho_offset,
 	    unsigned char *sha1, const void * signature, size_t size, 
-	    int *is_platform_binary);
+	    int flags, int *is_platform_binary);
 int     mac_vnode_check_getattrlist(vfs_context_t ctx, struct vnode *vp,
 	    struct attrlist *alist);
 int	mac_vnode_check_getextattr(vfs_context_t ctx, struct vnode *vp,

@@ -118,7 +118,7 @@ common_hook(void)
 	return rv;
 }
 
-#if (MAC_POLICY_OPS_VERSION != 31)
+#if (MAC_POLICY_OPS_VERSION != 32)
 # error "struct mac_policy_ops doesn't match definition in mac_policy.h"
 #endif
 /*

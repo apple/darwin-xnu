@@ -217,7 +217,7 @@ __attribute__((noinline)) int __EXEC_WAITING_ON_TASKGATED_CODE_SIGNATURE_UPCALL_
  *			activator in exec_activate_image() before treating
  *			it as malformed/corrupt.
  */
-#define EAI_ITERLIMIT		10
+#define EAI_ITERLIMIT		3
 
 /*
  * For #! interpreter parsing
@@ -402,14 +402,14 @@ exec_reset_save_path(struct image_params *imgp)
 /*
  * exec_shell_imgact
  *
- * Image activator for interpreter scripts.  If the image begins with the
- * characters "#!", then it is an interpreter script.  Verify that we are
- * not already executing in PowerPC mode, and that the length of the script
- * line indicating the interpreter is not in excess of the maximum allowed
- * size.  If this is the case, then break out the arguments, if any, which
- * are separated by white space, and copy them into the argument save area
- * as if they were provided on the command line before all other arguments.
- * The line ends when we encounter a comment character ('#') or newline.
+ * Image activator for interpreter scripts.  If the image begins with
+ * the characters "#!", then it is an interpreter script.  Verify the
+ * length of the script line indicating the interpreter is not in
+ * excess of the maximum allowed size.  If this is the case, then
+ * break out the arguments, if any, which are separated by white
+ * space, and copy them into the argument save area as if they were
+ * provided on the command line before all other arguments.  The line
+ * ends when we encounter a comment character ('#') or newline.
  *
  * Parameters;	struct image_params *	image parameter block
  *
@@ -435,14 +435,15 @@ exec_shell_imgact(struct image_params *imgp)
 	/*
 	 * Make sure it's a shell script.  If we've already redirected
 	 * from an interpreted file once, don't do it again.
-	 *
-	 * Note: We disallow PowerPC, since the expectation is that we
-	 * may run a PowerPC interpreter, but not an interpret a PowerPC 
-	 * image.  This is consistent with historical behaviour.
 	 */
 	if (vdata[0] != '#' ||
 	    vdata[1] != '!' ||
 	    (imgp->ip_flags & IMGPF_INTERPRET) != 0) {
+		return (-1);
+	}
+
+	if (imgp->ip_origcputype != 0) {
+		/* Fat header previously matched, don't allow shell script inside */
 		return (-1);
 	}
 
@@ -590,64 +591,28 @@ exec_fat_imgact(struct image_params *imgp)
 	int resid, error;
 	load_return_t lret;
 
+	if (imgp->ip_origcputype != 0) {
+		/* Fat header previously matched, don't allow another fat file inside */
+		return (-1);
+	}
+
 	/* Make sure it's a fat binary */
-	if ((fat_header->magic != FAT_MAGIC) &&
-            (fat_header->magic != FAT_CIGAM)) {
-	    	error = -1;
+	if (OSSwapBigToHostInt32(fat_header->magic) != FAT_MAGIC) {
+		error = -1; /* not claimed */
 		goto bad;
 	}
 
-#if DEVELOPMENT || DEBUG
-	if (cpu_type() == CPU_TYPE_ARM64) {
-		uint32_t fat_nfat_arch = OSSwapBigToHostInt32(fat_header->nfat_arch);
-		struct fat_arch *archs;
-		int vfexec = (imgp->ip_flags & IMGPF_VFORK_EXEC);
-		int spawn = (imgp->ip_flags & IMGPF_SPAWN);
-
-		archs = (struct fat_arch *)(imgp->ip_vdata + sizeof(struct fat_header));
-
-		/* ip_vdata always has PAGE_SIZE of data */
-		if (PAGE_SIZE >= (sizeof(struct fat_header) + (fat_nfat_arch + 1) * sizeof(struct fat_arch))) {
-			if (fat_nfat_arch > 0
-				&& OSSwapBigToHostInt32(archs[fat_nfat_arch].cputype) == CPU_TYPE_ARM64) {
-
-				/* rdar://problem/15001727 */
-				printf("Attempt to execute malformed binary %s\n", imgp->ip_strings);
-
-				proc_lock(p);
-				p->p_csflags |= CS_KILLED;
-				proc_unlock(p);
-
-				/*
-				 * We can't stop the system call, so make sure the child never executes
-				 * For vfork exec, the current implementation has not set up the thread in the
-				 * child process, so we cannot signal it. Return an error code in that case.
-				 */
-				if (!vfexec && !spawn) {
-					psignal(p, SIGKILL);
-					error = 0;
-				} else {
-					error = EBADEXEC;
-				}
-				goto bad;
-			}
-		}
+	/* imgp->ip_vdata has PAGE_SIZE, zerofilled if the file is smaller */
+	lret = fatfile_validate_fatarches((vm_offset_t)fat_header, PAGE_SIZE);
+	if (lret != LOAD_SUCCESS) {
+		error = load_return_to_errno(lret);
+		goto bad;
 	}
-#endif
 
 	/* If posix_spawn binprefs exist, respect those prefs. */
 	psa = (struct _posix_spawnattr *) imgp->ip_px_sa;
 	if (psa != NULL && psa->psa_binprefs[0] != 0) {
-		struct fat_arch *arches = (struct fat_arch *) (fat_header + 1);
-		int nfat_arch = 0, pr = 0, f = 0;
-
-		nfat_arch = OSSwapBigToHostInt32(fat_header->nfat_arch);
-
-		/* make sure bogus nfat_arch doesn't cause chaos - 19376072 */
-		if ( (sizeof(struct fat_header) + (nfat_arch * sizeof(struct fat_arch))) > PAGE_SIZE ) {
-			error = EBADEXEC;
-			goto bad;
-		}
+		uint32_t pr = 0;
 
 		/* Check each preference listed against all arches in header */
 		for (pr = 0; pr < NBINPREFS; pr++) {
@@ -660,36 +625,28 @@ exec_fat_imgact(struct image_params *imgp)
 
 			if (pref == CPU_TYPE_ANY) {
 				/* Fall through to regular grading */
-				break;
+				goto regular_grading;
 			}
 
-			for (f = 0; f < nfat_arch; f++) {
-				cpu_type_t archtype = OSSwapBigToHostInt32(
-						arches[f].cputype);
-				cpu_type_t archsubtype = OSSwapBigToHostInt32(
-						arches[f].cpusubtype) & ~CPU_SUBTYPE_MASK;
-				if (pref == archtype &&
-					grade_binary(archtype, archsubtype)) {
-					/* We have a winner! */
-					fat_arch.cputype = archtype; 
-					fat_arch.cpusubtype = archsubtype; 
-					fat_arch.offset = OSSwapBigToHostInt32(
-							arches[f].offset);
-					fat_arch.size = OSSwapBigToHostInt32(
-							arches[f].size);
-					fat_arch.align = OSSwapBigToHostInt32(
-							arches[f].align);
-					goto use_arch;
-				}
+			lret = fatfile_getbestarch_for_cputype(pref,
+							(vm_offset_t)fat_header,
+							PAGE_SIZE,
+							&fat_arch);
+			if (lret == LOAD_SUCCESS) {
+				goto use_arch;
 			}
 		}
+
+		/* Requested binary preference was not honored */
+		error = EBADEXEC;
+		goto bad;
 	}
 
+regular_grading:
 	/* Look up our preferred architecture in the fat file. */
-	lret = fatfile_getarch_affinity(imgp->ip_vp,
-					(vm_offset_t)fat_header,
-					&fat_arch,
-					(p->p_flag & P_AFFINITY));
+	lret = fatfile_getbestarch((vm_offset_t)fat_header,
+				PAGE_SIZE,
+				&fat_arch);
 	if (lret != LOAD_SUCCESS) {
 		error = load_return_to_errno(lret);
 		goto bad;
@@ -705,16 +662,16 @@ use_arch:
 		goto bad;
 	}
 
-	/* Did we read a complete header? */
 	if (resid) {
-		error = EBADEXEC;
-		goto bad;
+		memset(imgp->ip_vdata + (PAGE_SIZE - resid), 0x0, resid);
 	}
 
 	/* Success.  Indicate we have identified an encapsulated binary */
 	error = -2;
 	imgp->ip_arch_offset = (user_size_t)fat_arch.offset;
 	imgp->ip_arch_size = (user_size_t)fat_arch.size;
+	imgp->ip_origcputype = fat_arch.cputype;
+	imgp->ip_origcpusubtype = fat_arch.cpusubtype;
 
 bad:
 	kauth_cred_unref(&cred);
@@ -780,14 +737,19 @@ exec_mach_imgact(struct image_params *imgp)
 		goto bad;
 	}
 
-	switch (mach_header->filetype) {
-	case MH_DYLIB:
-	case MH_BUNDLE:
+	if (mach_header->filetype != MH_EXECUTE) {
 		error = -1;
 		goto bad;
 	}
 
-	if (!imgp->ip_origcputype) {
+	if (imgp->ip_origcputype != 0) {
+		/* Fat header previously had an idea about this thin file */
+		if (imgp->ip_origcputype != mach_header->cputype ||
+			imgp->ip_origcpusubtype != mach_header->cpusubtype) {
+			error = EBADARCH;
+			goto bad;
+		}
+	} else {
 		imgp->ip_origcputype = mach_header->cputype;
 		imgp->ip_origcpusubtype = mach_header->cpusubtype;
 	}
@@ -1260,7 +1222,7 @@ exec_activate_image(struct image_params *imgp)
 	int resid;
 	int once = 1;	/* save SGUID-ness for interpreted files */
 	int i;
-	int iterlimit = EAI_ITERLIMIT;
+	int itercount = 0;
 	proc_t p = vfs_context_proc(imgp->ip_vfs_context);
 
 	error = execargs_alloc(imgp);
@@ -1324,10 +1286,14 @@ again:
 			&resid, vfs_context_proc(imgp->ip_vfs_context));
 	if (error)
 		goto bad;
-		
+
+	if (resid) {
+		memset(imgp->ip_vdata + (PAGE_SIZE - resid), 0x0, resid);
+	}
+
 encapsulated_binary:
 	/* Limit the number of iterations we will attempt on each binary */
-	if (--iterlimit == 0) {
+	if (++itercount > EAI_ITERLIMIT) {
 		error = EBADEXEC;
 		goto bad;
 	}
@@ -1338,7 +1304,7 @@ encapsulated_binary:
 
 		switch (error) {
 		/* case -1: not claimed: continue */
-		case -2:		/* Encapsulated binary */
+		case -2:		/* Encapsulated binary, imgp->ip_XXX set for next iteration */
 			goto encapsulated_binary;
 
 		case -3:		/* Interpreter */

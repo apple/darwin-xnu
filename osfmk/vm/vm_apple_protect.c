@@ -578,6 +578,8 @@ apple_protect_pager_data_request(
 					     src_page->cs_validated);
 			UPL_SET_CS_TAINTED(upl_pl, cur_offset / PAGE_SIZE,
 					   src_page->cs_tainted);
+			UPL_SET_CS_NX(upl_pl, cur_offset / PAGE_SIZE,
+					   src_page->cs_nx);
 		}
 		
 		/*

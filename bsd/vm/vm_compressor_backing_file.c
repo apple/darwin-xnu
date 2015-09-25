@@ -74,22 +74,25 @@ vm_swapfile_get_transfer_size(vnode_t vp)
 	return((uint64_t)vp->v_mount->mnt_vfsstat.f_iosize);
 }
 
-int unlink1(vfs_context_t, struct nameidata *, int);
+int unlink1(vfs_context_t, vnode_t, user_addr_t, enum uio_seg, int);
 
 void
 vm_swapfile_close(uint64_t path_addr, vnode_t vp)
 {
-	struct nameidata nd;
 	vfs_context_t context = vfs_context_current();
-	int error = 0;
+	int error;
 
 	vnode_getwithref(vp);
 	vnode_close(vp, 0, context);
 	
-	NDINIT(&nd, DELETE, OP_UNLINK, AUDITVNPATH1, UIO_SYSSPACE,
-	       path_addr, context);
+	error = unlink1(context, NULLVP, CAST_USER_ADDR_T(path_addr),
+	    UIO_SYSSPACE, 0);
 
-	error = unlink1(context, &nd, 0);
+#if DEVELOPMENT || DEBUG
+	if (error)
+		printf("%s : unlink of %s failed with error %d", __FUNCTION__,
+		    (char *)path_addr, error);
+#endif
 }
 
 int

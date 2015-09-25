@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2012 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2015 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -342,8 +342,12 @@ again:
 			 * and disallow further path construction
 			 */
 			if ((vp->v_parent == NULLVP) && (rootvnode != vp)) {
-				/* Only '/' is allowed to have a NULL parent pointer */
-				ret = EINVAL;
+				/*
+				 * Only '/' is allowed to have a NULL parent
+				 * pointer. Upper level callers should ideally
+				 * re-drive name lookup on receiving a ENOENT.
+				 */
+				ret = ENOENT;
 
 				/* The code below will exit early if 'tvp = vp' == NULL */
 			}

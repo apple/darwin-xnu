@@ -34,9 +34,12 @@
 #include <mach-o/fat.h>
 #include <sys/vnode.h>
 
-load_return_t fatfile_getarch_affinity(struct vnode *vp, vm_offset_t data_ptr,
-		struct fat_arch *archret, int affinity);
-load_return_t fatfile_getarch_with_bits(struct vnode *vp, integer_t archbits,
-		vm_offset_t data_ptr, struct fat_arch *archret);
+load_return_t fatfile_validate_fatarches(vm_offset_t data_ptr, vm_size_t data_size);
+
+load_return_t fatfile_getbestarch(vm_offset_t data_ptr, vm_size_t data_size, struct fat_arch *archret);
+load_return_t fatfile_getbestarch_for_cputype(cpu_type_t cputype,
+		vm_offset_t data_ptr, vm_size_t data_size, struct fat_arch *archret);
+load_return_t fatfile_getarch_with_bits(integer_t archbits,
+		vm_offset_t data_ptr, vm_size_t data_size, struct fat_arch *archret);
 
 #endif /* _BSD_KERN_MACH_FAT_H_ */

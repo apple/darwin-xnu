@@ -336,6 +336,8 @@
 							 */
 #endif
 
+#define F_ADDFILESIGS_FOR_DYLD_SIM 83	/* Add signature from same file, only if it is signed by Apple (used by dyld for simulator) */
+
 
 // FS-specific fcntl()'s numbers begin at 0x00010000 and go up
 #define FCNTL_FS_SPECIFIC_BASE  0x00010000

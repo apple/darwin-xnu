@@ -278,12 +278,13 @@ struct vm_page {
 			encrypted_cleaning:1,	/* encrypting page */
 			cs_validated:1,    /* code-signing: page was checked */	
 			cs_tainted:1,	   /* code-signing: page is tainted */
+			cs_nx:1,	   /* code-signing: page is nx */
 			reusable:1,
 		        lopage:1,
 			slid:1,
 		        compressor:1,	/* page owned by compressor pool */
 		        written_by_kernel:1,	/* page was written by kernel (i.e. decompressed) */
-			__unused_object_bits:5;  /* 5 bits available here */
+			__unused_object_bits:4;  /* 5 bits available here */
 };
 
 #define DEBUG_ENCRYPTED_SWAP	1

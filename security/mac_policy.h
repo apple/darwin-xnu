@@ -4589,7 +4589,7 @@ typedef int mpo_vnode_check_fsgetpath_t(
 typedef int mpo_vnode_check_signature_t(struct vnode *vp,  struct label *label, 
 					off_t macho_offset, unsigned char *sha1, 
 					const void *signature, int size,
-					int *is_platform_binary);
+					int flags, int *is_platform_binary);
 
 /**
   @brief Access control check for retrieving file attributes
@@ -5812,7 +5812,7 @@ typedef void mpo_reserved_hook_t(void);
  * Please note that this should be kept in sync with the check assumptions
  * policy in bsd/kern/policy_check.c (policy_ops struct).
  */
-#define MAC_POLICY_OPS_VERSION 31 /* inc when new reserved slots are taken */
+#define MAC_POLICY_OPS_VERSION 32 /* inc when new reserved slots are taken */
 struct mac_policy_ops {
 	mpo_audit_check_postselect_t		*mpo_audit_check_postselect;
 	mpo_audit_check_preselect_t		*mpo_audit_check_preselect;

@@ -464,11 +464,14 @@ extern void log_unnest_badness(vm_map_t, vm_map_offset_t, vm_map_offset_t);
 struct proc;
 extern int cs_allow_invalid(struct proc *p);
 extern int cs_invalid_page(addr64_t vaddr);
+
+#define CS_VALIDATE_TAINTED	0x00000001
+#define CS_VALIDATE_NX		0x00000002
 extern boolean_t cs_validate_page(void *blobs,
 				  memory_object_t pager,
 				  memory_object_offset_t offset, 
 				  const void *data,
-				  boolean_t *tainted);
+				  unsigned *result);
 
 extern kern_return_t mach_memory_entry_purgable_control(
 	ipc_port_t	entry_port,

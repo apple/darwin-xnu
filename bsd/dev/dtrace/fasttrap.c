@@ -2230,7 +2230,8 @@ fasttrap_ioctl(dev_t dev, u_long cmd, user_addr_t arg, int md, cred_t *cr, int *
 			if ((p = proc_find(pid)) == PROC_NULL || p->p_stat == SIDL) {
 				if (p != PROC_NULL)
 					proc_rele(p);
-				return (ESRCH);
+				ret = ESRCH;
+				goto err;
 			}
 			// proc_lock(p);
 			// FIXME! How is this done on OS X?

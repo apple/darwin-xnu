@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1995-2014 Apple Inc. All rights reserved.
+ * Copyright (c) 1995-2015 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -166,6 +166,18 @@ int prepare_coveredvp(vnode_t vp, vfs_context_t ctx, struct componentname *cnp, 
 
 struct fd_vn_data * fg_vn_data_alloc(void);
 
+/*
+ * Max retries for ENOENT returns from vn_authorize_{rmdir, unlink, rename}
+ * Concurrent lookups (or lookups by ids) on hard links can cause the
+ * vn_getpath (which does not re-enter the filesystem as vn_getpath_fsenter
+ * does) to return ENOENT as the path cannot be returned from the name cache
+ * alone. We have no option but to retry and hope to get one namei->reverse path
+ * generation done without an intervening lookup, lookup by id on the hard link
+ * item. This is only an issue for MAC hooks which cannot reenter the filesystem
+ * which currently are the MAC hooks for rename, unlink and rmdir.
+ */
+#define MAX_AUTHORIZE_ENOENT_RETRIES 1024
+
 static int rmdirat_internal(vfs_context_t, int, user_addr_t, enum uio_seg);
 
 static int fsgetpath_internal(vfs_context_t, int, uint64_t, vm_size_t, caddr_t, int *);
@@ -185,7 +197,7 @@ __private_extern__
 int sync_internal(void);
 
 __private_extern__
-int unlink1(vfs_context_t, struct nameidata *, int);
+int unlink1(vfs_context_t, vnode_t, user_addr_t, enum uio_seg, int);
 
 extern lck_grp_t *fd_vn_lck_grp;
 extern lck_grp_attr_t *fd_vn_lck_grp_attr;
@@ -4452,8 +4464,10 @@ undelete(__unused proc_t p, __unused struct undelete_args *uap, __unused int32_t
  */
 /* ARGSUSED */
 static int
-unlink1at(vfs_context_t ctx, struct nameidata *ndp, int unlink_flags, int fd)
+unlinkat_internal(vfs_context_t ctx, int fd, vnode_t start_dvp,
+    user_addr_t path_arg, enum uio_seg segflg, int unlink_flags)
 {
+	struct nameidata nd;
 	vnode_t	vp, dvp;
 	int error;
 	struct componentname *cnp;
@@ -4463,29 +4477,49 @@ unlink1at(vfs_context_t ctx, struct nameidata *ndp, int unlink_flags, int fd)
 	fse_info  finfo;
 	struct vnode_attr va;
 #endif
-	int flags = 0;
-	int need_event = 0;
-	int has_listeners = 0;
-	int truncated_path=0;
+	int flags;
+	int need_event;
+	int has_listeners;
+	int truncated_path;
 	int batched;
-	struct vnode_attr *vap = NULL;
+	struct vnode_attr *vap;
+	int do_retry;
+	int retry_count = 0;
+	int cn_flags;
+
+	cn_flags = LOCKPARENT;
+	if (!(unlink_flags & VNODE_REMOVE_NO_AUDIT_PATH))
+		cn_flags |= AUDITVNPATH1;
+	/* If a starting dvp is passed, it trumps any fd passed. */
+	if (start_dvp)
+		cn_flags |= USEDVP;
 
 #if NAMEDRSRCFORK
 	/* unlink or delete is allowed on rsrc forks and named streams */
-	ndp->ni_cnd.cn_flags |= CN_ALLOWRSRCFORK;
+	cn_flags |= CN_ALLOWRSRCFORK;
 #endif
 
-	ndp->ni_cnd.cn_flags |= LOCKPARENT;
-	ndp->ni_flag |= NAMEI_COMPOUNDREMOVE;
-	cnp = &ndp->ni_cnd;
+retry:
+	do_retry = 0;
+	flags = 0;
+	need_event = 0;
+	has_listeners = 0;
+	truncated_path = 0;
+	vap = NULL;
+
+	NDINIT(&nd, DELETE, OP_UNLINK, cn_flags, segflg, path_arg, ctx);
+
+	nd.ni_dvp = start_dvp;
+	nd.ni_flag |= NAMEI_COMPOUNDREMOVE;
+	cnp = &nd.ni_cnd;
 
 lookup_continue:
-	error = nameiat(ndp, fd);
+	error = nameiat(&nd, fd);
 	if (error)
 		return (error);
 
-	dvp = ndp->ni_dvp;
-	vp = ndp->ni_vp;
+	dvp = nd.ni_dvp;
+	vp = nd.ni_vp;
 
 
 	/* With Carbon delete semantics, busy files cannot be deleted */
@@ -4510,6 +4544,11 @@ lookup_continue:
 		if (!batched) {
 			error = vn_authorize_unlink(dvp, vp, cnp, ctx, NULL);
 			if (error) {
+				if (error == ENOENT &&
+				    retry_count < MAX_AUTHORIZE_ENOENT_RETRIES) {
+					do_retry = 1;
+					retry_count++;
+				}
 				goto out;
 			}
 		}
@@ -4548,23 +4587,23 @@ lookup_continue:
 				goto out;
 			}
 		}
-		len = safe_getpath(dvp, ndp->ni_cnd.cn_nameptr, path, MAXPATHLEN, &truncated_path);
+		len = safe_getpath(dvp, nd.ni_cnd.cn_nameptr, path, MAXPATHLEN, &truncated_path);
 	}
 
 #if NAMEDRSRCFORK
-	if (ndp->ni_cnd.cn_flags & CN_WANTSRSRCFORK)
+	if (nd.ni_cnd.cn_flags & CN_WANTSRSRCFORK)
 		error = vnode_removenamedstream(dvp, vp, XATTR_RESOURCEFORK_NAME, 0, ctx);
 	else
 #endif
 	{
-		error = vn_remove(dvp, &ndp->ni_vp, ndp, flags, vap, ctx);
-		vp = ndp->ni_vp;
+		error = vn_remove(dvp, &nd.ni_vp, &nd, flags, vap, ctx);
+		vp = nd.ni_vp;
 		if (error == EKEEPLOOKING) {
 			if (!batched) {
 				panic("EKEEPLOOKING, but not a filesystem that supports compound VNOPs?");
 			}
 
-			if ((ndp->ni_flag & NAMEI_CONTLOOKUP) == 0) {
+			if ((nd.ni_flag & NAMEI_CONTLOOKUP) == 0) {
 				panic("EKEEPLOOKING, but continue flag not set?");
 			}
 
@@ -4573,6 +4612,16 @@ lookup_continue:
 				goto out;
 			}
 			goto lookup_continue;
+		} else if (error == ENOENT && batched &&
+		    retry_count < MAX_AUTHORIZE_ENOENT_RETRIES) {
+			/*
+			 * For compound VNOPs, the authorization callback may
+			 * return ENOENT in case of racing hardlink lookups
+			 * hitting the name  cache, redrive the lookup.
+			 */
+			do_retry = 1;
+			retry_count += 1;
+			goto out;
 		}
 	}
 
@@ -4635,39 +4684,45 @@ out:
 	 * nameidone has to happen before we vnode_put(dvp)
 	 * since it may need to release the fs_nodelock on the dvp
 	 */
-	nameidone(ndp);
+	nameidone(&nd);
 	vnode_put(dvp);
 	if (vp) {
 		vnode_put(vp);
 	}
+
+	if (do_retry) {
+		goto retry;
+	}
+
 	return (error);
 }
 
 int
-unlink1(vfs_context_t ctx, struct nameidata *ndp, int unlink_flags)
+unlink1(vfs_context_t ctx, vnode_t start_dvp, user_addr_t path_arg,
+    enum uio_seg segflg, int unlink_flags)
 {
-	return (unlink1at(ctx, ndp, unlink_flags, AT_FDCWD));
+	return (unlinkat_internal(ctx, AT_FDCWD, start_dvp, path_arg, segflg,
+	    unlink_flags));
+}
+
+/*
+ * Delete a name from the filesystem using Carbon semantics.
+ */
+int
+delete(__unused proc_t p, struct delete_args *uap, __unused int32_t *retval)
+{
+	return (unlinkat_internal(vfs_context_current(), AT_FDCWD, NULLVP,
+	    uap->path, UIO_USERSPACE, VNODE_REMOVE_NODELETEBUSY));
 }
 
 /*
  * Delete a name from the filesystem using POSIX semantics.
  */
-static int
-unlinkat_internal(vfs_context_t ctx, int fd, user_addr_t path,
-    enum uio_seg segflg)
-{
-	struct nameidata nd;
-
-	NDINIT(&nd, DELETE, OP_UNLINK, AUDITVNPATH1, segflg,
-	       path, ctx);
-	return (unlink1at(ctx, &nd, 0, fd));
-}
-
 int
 unlink(__unused proc_t p, struct unlink_args *uap, __unused int32_t *retval)
 {
-	return (unlinkat_internal(vfs_context_current(), AT_FDCWD, uap->path,
-	    UIO_USERSPACE));
+	return (unlinkat_internal(vfs_context_current(), AT_FDCWD, NULLVP,
+	    uap->path, UIO_USERSPACE, 0));
 }
 
 int
@@ -4681,21 +4736,7 @@ unlinkat(__unused proc_t p, struct unlinkat_args *uap, __unused int32_t *retval)
 		    uap->path, UIO_USERSPACE));
 	else
 		return (unlinkat_internal(vfs_context_current(), uap->fd,
-		    uap->path, UIO_USERSPACE));
-}
-
-/*
- * Delete a name from the filesystem using Carbon semantics.
- */
-int
-delete(__unused proc_t p, struct delete_args *uap, __unused int32_t *retval)
-{
-	struct nameidata nd;
-	vfs_context_t ctx = vfs_context_current();
-
-	NDINIT(&nd, DELETE, OP_UNLINK, AUDITVNPATH1, UIO_USERSPACE,
-	       uap->path, ctx);
-	return unlink1(ctx, &nd, VNODE_REMOVE_NODELETEBUSY);
+		    NULLVP, uap->path, UIO_USERSPACE, 0));
 }
 
 /*
@@ -6584,6 +6625,7 @@ renameat_internal(vfs_context_t ctx, int fromfd, user_addr_t from,
 	struct nameidata *fromnd, *tond;
 	int error;
 	int do_retry;
+	int retry_count;
 	int mntrename;
 	int need_event;
 	const char *oname = NULL;
@@ -6610,6 +6652,7 @@ renameat_internal(vfs_context_t ctx, int fromfd, user_addr_t from,
 
 	holding_mntlock = 0;
 	do_retry = 0;
+	retry_count = 0;
 retry:
 	fvp = tvp = NULL;
 	fdvp = tdvp = NULL;
@@ -6670,13 +6713,15 @@ continue_lookup:
 	if (!batched) {
 		error = vn_authorize_rename(fdvp, fvp, &fromnd->ni_cnd, tdvp, tvp, &tond->ni_cnd, ctx, NULL);
 		if (error) {
-			if (error == ENOENT) {
+			if (error == ENOENT &&
+			    retry_count < MAX_AUTHORIZE_ENOENT_RETRIES) {
 				/*
 				 * We encountered a race where after doing the namei, tvp stops
 				 * being valid. If so, simply re-drive the rename call from the
 				 * top.
 				 */
 				do_retry = 1;
+				retry_count += 1;
 			}
 			goto out1;
 		}
@@ -6942,6 +6987,17 @@ skipped_lookup:
 		 */
 		if (error == ERECYCLE) {
 			do_retry = 1;
+		}
+
+		/*
+		 * For compound VNOPs, the authorization callback may return
+		 * ENOENT in case of racing hardlink lookups hitting the name
+		 * cache, redrive the lookup.
+		 */
+		if (batched && error == ENOENT &&
+		    retry_count < MAX_AUTHORIZE_ENOENT_RETRIES) {
+			do_retry = 1;
+			retry_count += 1;
 		}
 
 		goto out1;
@@ -7318,6 +7374,7 @@ rmdirat_internal(vfs_context_t ctx, int fd, user_addr_t dirpath,
 	struct vnode_attr va;
 #endif /* CONFIG_FSE */
 	struct vnode_attr *vap = NULL;
+	int restart_count = 0;
 	int batched;
 
 	int restart_flag;
@@ -7367,6 +7424,11 @@ continue_lookup:
 			if (!batched) {
 				error = vn_authorize_rmdir(dvp, vp, &nd.ni_cnd, ctx, NULL);
 				if (error) {
+					if (error == ENOENT &&
+					    restart_count < MAX_AUTHORIZE_ENOENT_RETRIES) {
+						restart_flag = 1;
+						restart_count += 1;
+					}
 					goto out;
 				}
 			}
@@ -7422,6 +7484,16 @@ continue_lookup:
 
 		if (error == EKEEPLOOKING) {
 			goto continue_lookup;
+		} else if (batched && error == ENOENT &&
+		    restart_count < MAX_AUTHORIZE_ENOENT_RETRIES) {
+			/*
+			 * For compound VNOPs, the authorization callback
+			 * may return ENOENT in case of racing hard link lookups
+			 * redrive the lookup.
+			 */
+			restart_flag = 1;
+			restart_count += 1;
+			goto out;
 		}
 #if CONFIG_APPLEDOUBLE
 		/*

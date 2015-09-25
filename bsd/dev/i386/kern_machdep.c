@@ -87,3 +87,9 @@ md_prepare_for_shutdown(
 	__unused char * command)
 {
 }
+
+boolean_t
+pie_required(cpu_type_t exectype __unused, cpu_subtype_t execsubtype __unused)
+{
+	return FALSE;
+}

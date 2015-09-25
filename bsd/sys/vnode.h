@@ -734,6 +734,7 @@ extern int		vttoif_tab[];
 /* VNOP_REMOVE/unlink flags */
 #define VNODE_REMOVE_NODELETEBUSY  			0x0001 /* Don't delete busy files (Carbon) */  
 #define VNODE_REMOVE_SKIP_NAMESPACE_EVENT	0x0002 /* Do not upcall to userland handlers */
+#define VNODE_REMOVE_NO_AUDIT_PATH		0x0004 /* Do not audit the path */
 
 /* VNOP_READDIR flags: */
 #define VNODE_READDIR_EXTENDED    0x0001   /* use extended directory entries */

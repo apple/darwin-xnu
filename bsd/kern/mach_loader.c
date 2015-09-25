@@ -110,6 +110,7 @@ static load_result_t load_result_null = {
 	.prog_allocated_stack = 0,
 	.prog_stack_size = 0,
 	.validentry = 0,
+	.using_lcmain = 0,
 	.csflags = 0,
 	.uuid = { 0 },
 	.min_vm_addr = MACH_VM_MAX_ADDRESS,
@@ -524,7 +525,7 @@ parse_machfile(
 	/*
 	 *	Break infinite recursion
 	 */
-	if (depth > 6) {
+	if (depth > 1) {
 		return(LOAD_FAILURE);
 	}
 
@@ -542,21 +543,12 @@ parse_machfile(
 		
 	switch (header->filetype) {
 	
-	case MH_OBJECT:
 	case MH_EXECUTE:
-	case MH_PRELOAD:
 		if (depth != 1) {
 			return (LOAD_FAILURE);
 		}
-		break;
-		
-	case MH_FVMLIB:
-	case MH_DYLIB:
-		if (depth == 1) {
-			return (LOAD_FAILURE);
-		}
-		break;
 
+		break;
 	case MH_DYLINKER:
 		if (depth != 2) {
 			return (LOAD_FAILURE);
@@ -599,9 +591,16 @@ parse_machfile(
 	error = vn_rdwr(UIO_READ, vp, addr, size, file_offset,
 	    UIO_SYSSPACE, 0, kauth_cred_get(), &resid, p);
 	if (error) {
-		if (kl_addr )
+		if (kl_addr)
 			kfree(kl_addr, kl_size);
 		return(LOAD_IOERROR);
+	}
+
+	if (resid) {
+		/* We must be able to read in as much as the mach_header indicated */
+		if (kl_addr)
+			kfree(kl_addr, kl_size);
+		return(LOAD_BADMACHO);
 	}
 
 	/*
@@ -624,7 +623,7 @@ parse_machfile(
 		/*
 		 * Check that the entry point is contained in an executable segments
 		 */ 
-		if ((pass == 3) && (result->validentry == 0)) {
+		if ((pass == 3) && (!result->using_lcmain && result->validentry == 0)) {
 			thread_state_initialize(thread);
 			ret = LOAD_FAILURE;
 			break;
@@ -769,13 +768,19 @@ parse_machfile(
 					printf("proc %d: load code signature error %d "
 					       "for file \"%s\"\n",
 					       p->p_pid, ret, vp->v_name);
-					ret = LOAD_SUCCESS; /* ignore error */
+					/*
+					 * Allow injections to be ignored on devices w/o enforcement enabled
+					 */
+					if (!cs_enforcement(NULL))
+					    ret = LOAD_SUCCESS; /* ignore error */
+
 				} else {
 					got_code_signatures = TRUE;
 				}
 
 				if (got_code_signatures) {
-					boolean_t valid = FALSE, tainted = TRUE;
+					unsigned tainted = CS_VALIDATE_TAINTED;
+					boolean_t valid = FALSE;
 					struct cs_blob *blobs;
 					vm_size_t off = 0;
 
@@ -785,12 +790,14 @@ parse_machfile(
 					blobs = ubc_get_cs_blobs(vp);
 					
 					while (off < size && ret == LOAD_SUCCESS) {
+					     tainted = CS_VALIDATE_TAINTED;
+
 					     valid = cs_validate_page(blobs,
 								      NULL,
 								      file_offset + off,
 								      addr + off,
 								      &tainted);
-					     if (!valid || tainted) {
+					     if (!valid || (tainted & CS_VALIDATE_TAINTED)) {
 						     if (cs_debug)
 							     printf("CODE SIGNING: %s[%d]: invalid initial page at offset %lld validated:%d tainted:%d csflags:0x%x\n", 
 								    vp->v_name, p->p_pid, (long long)(file_offset + off), valid, tainted, result->csflags);
@@ -847,39 +854,48 @@ parse_machfile(
 	}
 
 	if (ret == LOAD_SUCCESS) { 
-	    if (! got_code_signatures) {
-		    struct cs_blob *blob;
-		    /* no embedded signatures: look for detached ones */
-		    blob = ubc_cs_blob_get(vp, -1, file_offset);
-		    if (blob != NULL) {
-			unsigned int cs_flag_data = blob->csb_flags;
-			if(0 != ubc_cs_generation_check(vp)) {
-				if (0 != ubc_cs_blob_revalidate(vp, blob)) {
-					/* clear out the flag data if revalidation fails */
-					cs_flag_data = 0;
-					result->csflags &= ~CS_VALID;
+		if (! got_code_signatures) {
+			if (cs_enforcement(NULL)) {
+				ret = LOAD_FAILURE;
+			} else {
+				/*
+				 * No embedded signatures: look for detached by taskgated,
+				 * this is only done on OSX, on embedded platforms we expect everything
+				 * to be have embedded signatures.
+				 */
+				struct cs_blob *blob;
+
+				blob = ubc_cs_blob_get(vp, -1, file_offset);
+				if (blob != NULL) {
+				    unsigned int cs_flag_data = blob->csb_flags;
+				    if(0 != ubc_cs_generation_check(vp)) {
+				    	if (0 != ubc_cs_blob_revalidate(vp, blob, 0)) {
+						/* clear out the flag data if revalidation fails */
+						cs_flag_data = 0;
+						result->csflags &= ~CS_VALID;
+					}
+				    }
+				    /* get flags to be applied to the process */
+				    result->csflags |= cs_flag_data;
 				}
 			}
-			/* get flags to be applied to the process */
-			result->csflags |= cs_flag_data;
-		    }
-	    }
+		}
 
 		/* Make sure if we need dyld, we got it */
-		if (result->needs_dynlinker && !dlp) {
+		if ((ret == LOAD_SUCCESS) && result->needs_dynlinker && !dlp) {
 			ret = LOAD_FAILURE;
 		}
-
-	    if ((ret == LOAD_SUCCESS) && (dlp != 0)) {
+		
+		if ((ret == LOAD_SUCCESS) && (dlp != 0)) {
 			/*
-		 	* load the dylinker, and slide it by the independent DYLD ASLR
-		 	* offset regardless of the PIE-ness of the main binary.
-		 	*/
+			 * load the dylinker, and slide it by the independent DYLD ASLR
+			 * offset regardless of the PIE-ness of the main binary.
+			 */
 			ret = load_dylinker(dlp, dlarchbits, map, thread, depth,
-		    	                dyld_aslr_offset, result);
+					    dyld_aslr_offset, result);
 		}
-
-	    if((ret == LOAD_SUCCESS) && (depth == 1)) {
+		
+		if((ret == LOAD_SUCCESS) && (depth == 1)) {
 			if (result->thread_count == 0) {
 				ret = LOAD_FAILURE;
 			}
@@ -1167,8 +1183,16 @@ load_segment(
 		    LC_SEGMENT_64 == lcp->cmd, single_section_size,
 		    (const char *)lcp + segment_command_size, slide, result);
 
-	if ((result->entry_point >= map_addr) && (result->entry_point < (map_addr + map_size)))
-		result->validentry = 1;
+	if (result->entry_point != MACH_VM_MIN_ADDRESS) {
+		if ((result->entry_point >= map_addr) && (result->entry_point < (map_addr + map_size))) {
+			if ((scp->initprot & (VM_PROT_READ|VM_PROT_EXECUTE)) == (VM_PROT_READ|VM_PROT_EXECUTE)) {
+				result->validentry = 1;
+			} else {
+				/* right range but wrong protections, unset if previously validated */
+				result->validentry = 0;
+			}
+		}
+	}
 
 	return ret;
 }
@@ -1211,7 +1235,6 @@ load_main(
 	if (epc->cmdsize < sizeof(*epc))
 		return (LOAD_BADMACHO);
 	if (result->thread_count != 0) {
-		printf("load_main: already have a thread!");
 		return (LOAD_FAILURE);
 	}
 
@@ -1237,9 +1260,14 @@ load_main(
 	result->user_stack = addr;
 	result->user_stack -= slide;
 
+	if (result->using_lcmain || result->entry_point != MACH_VM_MIN_ADDRESS) {
+		/* Already processed LC_MAIN or LC_UNIXTHREAD */
+		return (LOAD_FAILURE);
+	}
+
 	/* kernel does *not* use entryoff from LC_MAIN.	 Dyld uses it. */
 	result->needs_dynlinker = TRUE;
-	result->validentry = TRUE;
+	result->using_lcmain = TRUE;
 
 	ret = thread_state_initialize( thread );
 	if (ret != KERN_SUCCESS) {
@@ -1269,7 +1297,6 @@ load_unixthread(
 	if (tcp->cmdsize < sizeof(*tcp))
 		return (LOAD_BADMACHO);
 	if (result->thread_count != 0) {
-		printf("load_unixthread: already have a thread!");
 		return (LOAD_FAILURE);
 	}
 
@@ -1307,6 +1334,11 @@ load_unixthread(
 		       &addr);
 	if (ret != LOAD_SUCCESS)
 		return(ret);
+
+	if (result->using_lcmain || result->entry_point != MACH_VM_MIN_ADDRESS) {
+		/* Already processed LC_MAIN or LC_UNIXTHREAD */
+		return (LOAD_FAILURE);
+	}
 
 	result->entry_point = addr;
 	result->entry_point += slide;
@@ -1490,6 +1522,8 @@ struct macho_data {
 	} __header;
 };
 
+#define DEFAULT_DYLD_PATH "/usr/lib/dyld"
+
 static load_return_t
 load_dylinker(
 	struct dylinker_command	*lcp,
@@ -1528,6 +1562,12 @@ load_dylinker(
 		if (p >= (char *)lcp + lcp->cmdsize)
 			return(LOAD_BADMACHO);
 	} while (*p++);
+
+#if !(DEVELOPMENT || DEBUG)
+	if (0 != strcmp(name, DEFAULT_DYLD_PATH)) {
+		return (LOAD_BADMACHO);
+	}
+#endif
 
 	/* Allocate wad-of-data from heap to reduce excessively deep stacks */
 
@@ -1667,7 +1707,7 @@ load_code_signature(
 		    blob->csb_mem_size == lcp->datasize) {
 			/* it matches the blob we want here, lets verify the version */
 			if(0 != ubc_cs_generation_check(vp)) {
-				if (0 != ubc_cs_blob_revalidate(vp, blob)) {
+				if (0 != ubc_cs_blob_revalidate(vp, blob, 0)) {
 					ret = LOAD_FAILURE; /* set error same as from ubc_cs_blob_add */
 					goto out;
 				}
@@ -1707,7 +1747,8 @@ load_code_signature(
 			    cputype,
 			    macho_offset,
 			    addr,
-			    lcp->datasize)) {
+			    lcp->datasize, 
+			    0)) {
 		ret = LOAD_FAILURE;
 		goto out;
 	} else {
@@ -1956,21 +1997,32 @@ get_macho_vnode(
 		goto bad2;
 	}
 
+	if (resid) {
+		error = LOAD_BADMACHO;
+		goto bad2;
+	}
+
 	if (header->mach_header.magic == MH_MAGIC ||
 	    header->mach_header.magic == MH_MAGIC_64) {
 		is_fat = FALSE;
-	} else if (header->fat_header.magic == FAT_MAGIC ||
-	    header->fat_header.magic == FAT_CIGAM) {
-		is_fat = TRUE;
+	} else if (OSSwapBigToHostInt32(header->fat_header.magic) == FAT_MAGIC) {
+	    is_fat = TRUE;
 	} else {
 		error = LOAD_BADMACHO;
 		goto bad2;
 	}
 
 	if (is_fat) {
+
+		error = fatfile_validate_fatarches((vm_offset_t)(&header->fat_header),
+						sizeof(*header));
+		if (error != LOAD_SUCCESS) {
+			goto bad2;
+		}
+
 		/* Look up our architecture in the fat file. */
-		error = fatfile_getarch_with_bits(vp, archbits,
-		    (vm_offset_t)(&header->fat_header), &fat_arch);
+		error = fatfile_getarch_with_bits(archbits,
+						(vm_offset_t)(&header->fat_header), sizeof(*header), &fat_arch);
 		if (error != LOAD_SUCCESS)
 			goto bad2;
 
@@ -1980,6 +2032,11 @@ get_macho_vnode(
 		    UIO_SYSSPACE, IO_NODELOCKED, kerncred, &resid, p);
 		if (error) {
 			error = LOAD_IOERROR;
+			goto bad2;
+		}
+
+		if (resid) {
+			error = LOAD_BADMACHO;
 			goto bad2;
 		}
 

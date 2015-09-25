@@ -55,6 +55,9 @@
 
 #define CS_ENTITLEMENT_FLAGS	(CS_GET_TASK_ALLOW | CS_INSTALLER)
 
+/* MAC flags used by F_ADDFILESIGS_* */
+#define MAC_VNODE_CHECK_DYLD_SIM 0x1   /* tells the MAC framework that dyld-sim is being loaded */
+
 /* csops  operations */
 #define	CS_OPS_STATUS		0	/* return status */
 #define	CS_OPS_MARKINVALID	1	/* invalidate process */

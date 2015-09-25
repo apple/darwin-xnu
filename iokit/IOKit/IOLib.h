@@ -149,7 +149,10 @@ void IOFreePageable(void * address, vm_size_t size);
 /*
  * Typed memory allocation macros. Both may block.
  */
-#define IONew(type,number)        (type*)IOMalloc(sizeof(type) * (number) )
+#define IONew(type,number) \
+( ((number) != 0 && ((vm_size_t) ((sizeof(type) * (number) / (number))) != sizeof(type)) /* overflow check 21532969 */ \
+? 0 \
+: ((type*)IOMalloc(sizeof(type) * (number)))) )
 #define IODelete(ptr,type,number) IOFree( (ptr) , sizeof(type) * (number) )
 
 /////////////////////////////////////////////////////////////////////////////

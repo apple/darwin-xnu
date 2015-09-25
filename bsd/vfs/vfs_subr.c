@@ -187,7 +187,8 @@ extern kern_return_t adjust_vm_object_cache(vm_size_t oval, vm_size_t nval);
 __private_extern__ void vntblinit(void);
 __private_extern__ kern_return_t reset_vmobjectcache(unsigned int val1,
 			unsigned int val2);
-__private_extern__ int unlink1(vfs_context_t, struct nameidata *, int);
+__private_extern__ int unlink1(vfs_context_t, vnode_t, user_addr_t,
+    enum uio_seg, int);
 
 extern int system_inshutdown;
 
@@ -8118,7 +8119,6 @@ errno_t rmdir_remove_orphaned_appleDouble(vnode_t vp , vfs_context_t ctx, int * 
 	char *rbuf = NULL;
    	void *dir_pos;
 	void *dir_end;
-	struct nameidata nd_temp;
 	struct dirent *dp;
 	errno_t error;
 
@@ -8259,11 +8259,10 @@ errno_t rmdir_remove_orphaned_appleDouble(vnode_t vp , vfs_context_t ctx, int * 
 					    (dp->d_namlen == 2 && dp->d_name[0] == '.' && dp->d_name[1] == '.'))
 					  ) {
 	
-				NDINIT(&nd_temp, DELETE, OP_UNLINK, USEDVP,
-				       UIO_SYSSPACE, CAST_USER_ADDR_T(dp->d_name),
-				       ctx);
-				nd_temp.ni_dvp = vp;
-				error = unlink1(ctx, &nd_temp, VNODE_REMOVE_SKIP_NAMESPACE_EVENT);
+				error = unlink1(ctx, vp,
+				    CAST_USER_ADDR_T(dp->d_name), UIO_SYSSPACE,
+				    VNODE_REMOVE_SKIP_NAMESPACE_EVENT |
+				    VNODE_REMOVE_NO_AUDIT_PATH);
 
 				if (error &&  error != ENOENT) {
 					goto outsc;

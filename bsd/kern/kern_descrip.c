@@ -144,7 +144,7 @@ void fileport_releasefg(struct fileglob *fg);
 /* We don't want these exported */
 
 __private_extern__
-int unlink1(vfs_context_t, struct nameidata *, int);
+int unlink1(vfs_context_t, vnode_t, user_addr_t, enum uio_seg, int);
 
 static void _fdrelse(struct proc * p, int fd);
 
@@ -1579,7 +1579,6 @@ fcntl_nocancel(proc_t p, struct fcntl_nocancel_args *uap, int32_t *retval)
 	 * SPI (private) for unlinking a file starting from a dir fd
 	 */
 	case F_UNLINKFROM: {
-		struct nameidata nd;
 		user_addr_t pathname;
 
 		/* Check if this isn't a valid file descriptor */
@@ -1611,11 +1610,7 @@ fcntl_nocancel(proc_t p, struct fcntl_nocancel_args *uap, int32_t *retval)
 		}
 
 		/* Start the lookup relative to the file descriptor's vnode. */
-		NDINIT(&nd, DELETE, OP_UNLINK, USEDVP | AUDITVNPATH1, UIO_USERSPACE,
-		       pathname, &context);
-		nd.ni_dvp = vp;
-
-		error = unlink1(&context, &nd, 0);
+		error = unlink1(&context, vp, pathname, UIO_USERSPACE, 0);
 		
 		vnode_put(vp);
 		break;
@@ -1624,11 +1619,13 @@ fcntl_nocancel(proc_t p, struct fcntl_nocancel_args *uap, int32_t *retval)
 
 	case F_ADDSIGS:
 	case F_ADDFILESIGS:
+	case F_ADDFILESIGS_FOR_DYLD_SIM:
 	{
 		struct user_fsignatures fs;
 		kern_return_t kr;
 		vm_offset_t kernel_blob_addr;
 		vm_size_t kernel_blob_size;
+		int blob_add_flags = 0;
 
 		if (fp->f_type != DTYPE_VNODE) {
 			error = EBADF;
@@ -1636,6 +1633,16 @@ fcntl_nocancel(proc_t p, struct fcntl_nocancel_args *uap, int32_t *retval)
 		}
 		vp = (struct vnode *)fp->f_data;
 		proc_fdunlock(p);
+
+		if (uap->cmd == F_ADDFILESIGS_FOR_DYLD_SIM) {
+			blob_add_flags |= MAC_VNODE_CHECK_DYLD_SIM;
+			if ((p->p_csflags & CS_KILL) == 0) {
+				proc_lock(p);
+				p->p_csflags |= CS_KILL;
+				proc_unlock(p);
+			}
+		}
+
 		error = vnode_getwithref(vp);
 		if (error)
 			goto outdrop;
@@ -1656,8 +1663,13 @@ fcntl_nocancel(proc_t p, struct fcntl_nocancel_args *uap, int32_t *retval)
 			goto outdrop;
 		}
 
-		if(ubc_cs_blob_get(vp, CPU_TYPE_ANY, fs.fs_file_start))
+		struct cs_blob * existing_blob = ubc_cs_blob_get(vp, CPU_TYPE_ANY, fs.fs_file_start);
+		if (existing_blob != NULL)
 		{
+			/* If this is for dyld_sim revalidate the blob */
+			if (uap->cmd == F_ADDFILESIGS_FOR_DYLD_SIM) {
+				error = ubc_cs_blob_revalidate(vp, existing_blob, blob_add_flags);
+			}
 			vnode_put(vp);
 			goto outdrop;
 		}
@@ -1690,6 +1702,8 @@ fcntl_nocancel(proc_t p, struct fcntl_nocancel_args *uap, int32_t *retval)
 				       (void *) kernel_blob_addr,
 				       kernel_blob_size);
 		} else /* F_ADDFILESIGS */ {
+			int resid;
+
 			error = vn_rdwr(UIO_READ,
 					vp,
 					(caddr_t) kernel_blob_addr,
@@ -1698,8 +1712,12 @@ fcntl_nocancel(proc_t p, struct fcntl_nocancel_args *uap, int32_t *retval)
 					UIO_SYSSPACE,
 					0,
 					kauth_cred_get(),
-					0,
+					&resid,
 					p);
+			if ((error == 0) && resid) {
+				/* kernel_blob_size rounded to a page size, but signature may be at end of file */
+				memset((void *)(kernel_blob_addr + (kernel_blob_size - resid)), 0x0, resid);
+			}
 		}
 		
 		if (error) {
@@ -1714,7 +1732,8 @@ fcntl_nocancel(proc_t p, struct fcntl_nocancel_args *uap, int32_t *retval)
 			CPU_TYPE_ANY,	/* not for a specific architecture */
 			fs.fs_file_start,
 			kernel_blob_addr,
-			kernel_blob_size);
+			kernel_blob_size,
+			blob_add_flags);
 		if (error) {
 			ubc_cs_blob_deallocate(kernel_blob_addr,
 					       kernel_blob_size);

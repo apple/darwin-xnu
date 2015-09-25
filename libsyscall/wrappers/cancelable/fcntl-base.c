@@ -56,6 +56,7 @@ fcntl(int fd, int cmd, ...)
 	 case F_UNLINKFROM:
 	 case F_ADDSIGS:
 	 case F_ADDFILESIGS:
+	 case F_ADDFILESIGS_FOR_DYLD_SIM:
 	 case F_FINDSIGS:
 	 case F_TRANSCODEKEY:
 		arg = va_arg(ap, void *);

@@ -5339,6 +5339,7 @@ check_busy:
 			        user_page_list[entry].speculative = FALSE;
 			user_page_list[entry].cs_validated = dst_page->cs_validated;
 			user_page_list[entry].cs_tainted = dst_page->cs_tainted;
+			user_page_list[entry].cs_nx = dst_page->cs_nx;
 		}
 	        /*
 		 * if UPL_RET_ONLY_ABSENT is set, then
@@ -6361,6 +6362,7 @@ process_upl_to_commit:
 			 */
 			m->cs_validated = page_list[entry].cs_validated;
 			m->cs_tainted = page_list[entry].cs_tainted;
+			m->cs_nx = page_list[entry].cs_nx;
 		}
 		if (flags & UPL_COMMIT_WRITTEN_BY_KERNEL)
 			m->written_by_kernel = TRUE;
@@ -8014,6 +8016,7 @@ record_phys_addr:
 			        user_page_list[entry].speculative = FALSE;
 			user_page_list[entry].cs_validated = dst_page->cs_validated;
 			user_page_list[entry].cs_tainted = dst_page->cs_tainted;
+			user_page_list[entry].cs_nx = dst_page->cs_nx;
 		}
 		if (object != kernel_object && object != compressor_object) {
 			/*

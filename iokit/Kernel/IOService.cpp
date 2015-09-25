@@ -1686,15 +1686,18 @@ IOReturn IOService::registerInterestForNotifer( IONotifier *svcNotify, const OSS
         LOCKWRITENOTIFY();
 
         // Get the head of the notifier linked list
-        IOCommand *notifyList = (IOCommand *) getProperty( typeOfInterest );
-        if (!notifyList || !OSDynamicCast(IOCommand, notifyList)) {
+        IOCommand * notifyList;
+        OSObject  * obj = copyProperty( typeOfInterest );
+        if (!(notifyList = OSDynamicCast(IOCommand, obj))) {
             notifyList = OSTypeAlloc(IOCommand);
             if (notifyList) {
                 notifyList->init();
-                setProperty( typeOfInterest, notifyList);
+                bool ok = setProperty( typeOfInterest, notifyList);
                 notifyList->release();
+                if (!ok) notifyList = 0;
             }
         }
+        if (obj) obj->release();
 
         if (notifyList) {
             enqueue(&notifyList->fCommandChain, &notify->chain);

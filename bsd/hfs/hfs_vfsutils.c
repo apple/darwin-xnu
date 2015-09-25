@@ -321,6 +321,62 @@ MtVolErr:
 #endif
 
 //*******************************************************************************
+//
+// Sanity check Volume Header Block:
+//		Input argument *vhp is a pointer to a HFSPlusVolumeHeader block that has
+//		not been endian-swapped and represents the on-disk contents of this sector.
+//		This routine will not change the endianness of vhp block.
+//
+//*******************************************************************************
+OSErr hfs_ValidateHFSPlusVolumeHeader(struct hfsmount *hfsmp, HFSPlusVolumeHeader *vhp)
+{
+	u_int16_t signature;
+	u_int16_t hfs_version;
+	u_int32_t blockSize;
+
+	signature = SWAP_BE16(vhp->signature);
+	hfs_version = SWAP_BE16(vhp->version);
+
+	if (signature == kHFSPlusSigWord) {
+		if (hfs_version != kHFSPlusVersion) {
+			printf("hfs_ValidateHFSPlusVolumeHeader: invalid HFS+ version: %x\n", hfs_version);
+			return (EINVAL);
+		}
+	} else if (signature == kHFSXSigWord) {
+		if (hfs_version != kHFSXVersion) {
+			printf("hfs_ValidateHFSPlusVolumeHeader: invalid HFSX version: %x\n", hfs_version);
+			return (EINVAL);
+		}
+	} else {
+		/* Removed printf for invalid HFS+ signature because it gives
+		 * false error for UFS root volume
+		 */
+		if (HFS_MOUNT_DEBUG) {
+			printf("hfs_ValidateHFSPlusVolumeHeader: unknown Volume Signature : %x\n", signature);
+		}
+		return (EINVAL);
+	}
+
+	/* Block size must be at least 512 and a power of 2 */
+	blockSize = SWAP_BE32(vhp->blockSize);
+	if (blockSize < 512 || !powerof2(blockSize)) {
+		if (HFS_MOUNT_DEBUG) {
+			printf("hfs_ValidateHFSPlusVolumeHeader: invalid blocksize (%d) \n", blockSize);
+		}
+		return (EINVAL);
+	}
+
+	if (blockSize < hfsmp->hfs_logical_block_size) {
+		if (HFS_MOUNT_DEBUG) {
+			printf("hfs_ValidateHFSPlusVolumeHeader: invalid physical blocksize (%d), hfs_logical_blocksize (%d) \n",
+					blockSize, hfsmp->hfs_logical_block_size);
+		}
+		return (EINVAL);
+	}
+	return 0;
+}
+
+//*******************************************************************************
 //	Routine:	hfs_MountHFSPlusVolume
 //
 //
@@ -348,38 +404,17 @@ OSErr hfs_MountHFSPlusVolume(struct hfsmount *hfsmp, HFSPlusVolumeHeader *vhp,
 	signature = SWAP_BE16(vhp->signature);
 	hfs_version = SWAP_BE16(vhp->version);
 
-	if (signature == kHFSPlusSigWord) {
-		if (hfs_version != kHFSPlusVersion) {
-			printf("hfs_mount: invalid HFS+ version: %x\n", hfs_version);
-			return (EINVAL);
-		}
-	} else if (signature == kHFSXSigWord) {
-		if (hfs_version != kHFSXVersion) {
-			printf("hfs_mount: invalid HFSX version: %x\n", hfs_version);
-			return (EINVAL);
-		}
+	retval = hfs_ValidateHFSPlusVolumeHeader(hfsmp, vhp);
+	if (retval)
+		return retval;
+
+	if (signature == kHFSXSigWord) {
 		/* The in-memory signature is always 'H+'. */
 		signature = kHFSPlusSigWord;
 		hfsmp->hfs_flags |= HFS_X;
-	} else {
-		/* Removed printf for invalid HFS+ signature because it gives
-		 * false error for UFS root volume 
-		 */
-		if (HFS_MOUNT_DEBUG) {
-			printf("hfs_mounthfsplus: unknown Volume Signature : %x\n", signature);
-		}
-		return (EINVAL);
 	}
 
-	/* Block size must be at least 512 and a power of 2 */
 	blockSize = SWAP_BE32(vhp->blockSize);
-	if (blockSize < 512 || !powerof2(blockSize)) {
-		if (HFS_MOUNT_DEBUG) {
-			printf("hfs_mounthfsplus: invalid blocksize (%d) \n", blockSize);
-		}
-		return (EINVAL);
-	}
-   
 	/* don't mount a writable volume if its dirty, it must be cleaned by fsck_hfs */
 	if ((hfsmp->hfs_flags & HFS_READ_ONLY) == 0 && hfsmp->jnl == NULL &&
 	    (SWAP_BE32(vhp->attributes) & kHFSVolumeUnmountedMask) == 0) {
@@ -391,22 +426,32 @@ OSErr hfs_MountHFSPlusVolume(struct hfsmount *hfsmp, HFSPlusVolumeHeader *vhp,
 
 	/* Make sure we can live with the physical block size. */
 	if ((disksize & (hfsmp->hfs_logical_block_size - 1)) ||
-	    (embeddedOffset & (hfsmp->hfs_logical_block_size - 1)) ||
-	    (blockSize < hfsmp->hfs_logical_block_size)) {
+	    (embeddedOffset & (hfsmp->hfs_logical_block_size - 1))) {
 		if (HFS_MOUNT_DEBUG) {
-			printf("hfs_mounthfsplus: invalid physical blocksize (%d), hfs_logical_blocksize (%d) \n", 
-					blockSize, hfsmp->hfs_logical_block_size);
+			printf("hfs_mounthfsplus: hfs_logical_blocksize (%d) \n",
+					hfsmp->hfs_logical_block_size);
 		}
 		return (ENXIO);
 	}
 
-	/* If allocation block size is less than the physical 
-	 * block size, we assume that the physical block size 
-	 * is same as logical block size.  The physical block 
-	 * size value is used to round down the offsets for 
-	 * reading and writing the primary and alternate volume 
-	 * headers at physical block boundary and will cause 
-	 * problems if it is less than the block size.
+	/*
+	 * If allocation block size is less than the physical block size,
+	 * same data could be cached in two places and leads to corruption.
+	 *
+	 * HFS Plus reserves one allocation block for the Volume Header.
+	 * If the physical size is larger, then when we read the volume header,
+	 * we will also end up reading in the next allocation block(s).
+	 * If those other allocation block(s) is/are modified, and then the volume
+	 * header is modified, the write of the volume header's buffer will write
+	 * out the old contents of the other allocation blocks.
+	 *
+	 * We assume that the physical block size is same as logical block size.
+	 * The physical block size value is used to round down the offsets for
+	 * reading and writing the primary and alternate volume headers.
+	 *
+	 * The same logic to ensure good hfs_physical_block_size is also in
+	 * hfs_mountfs so that hfs_mountfs, hfs_MountHFSPlusVolume and
+	 * later are doing the I/Os using same block size.
 	 */
 	if (blockSize < hfsmp->hfs_physical_block_size) {
 		hfsmp->hfs_physical_block_size = hfsmp->hfs_logical_block_size;

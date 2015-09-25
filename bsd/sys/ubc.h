@@ -83,7 +83,7 @@ struct cs_blob *ubc_cs_blob_get(vnode_t, cpu_type_t, off_t);
 
 /* apis to handle generation count for cs blob */
 void cs_blob_reset_cache(void);
-int ubc_cs_blob_revalidate(vnode_t, struct cs_blob *);
+int ubc_cs_blob_revalidate(vnode_t, struct cs_blob *, int);
 int ubc_cs_generation_check(vnode_t);
 
 int cs_entitlements_blob_get(proc_t, void **, size_t *);

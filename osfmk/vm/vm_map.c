@@ -13735,6 +13735,8 @@ vm_map_page_info(
 		disposition |= VM_PAGE_QUERY_PAGE_CS_VALIDATED;
 	if (m->cs_tainted)
 		disposition |= VM_PAGE_QUERY_PAGE_CS_TAINTED;
+	if (m->cs_nx)
+		disposition |= VM_PAGE_QUERY_PAGE_CS_NX;
 
 done_with_object:
 	vm_object_unlock(object);

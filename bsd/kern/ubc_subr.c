@@ -52,6 +52,7 @@
 #include <sys/codesign.h>
 #include <sys/codedir_internal.h>
 #include <sys/fsevents.h>
+#include <sys/fcntl.h>
 
 #include <mach/mach_types.h>
 #include <mach/memory_object_types.h>
@@ -2889,7 +2890,8 @@ ubc_cs_blob_add(
 	cpu_type_t	cputype,
 	off_t		base_offset,
 	vm_address_t	addr,
-	vm_size_t	size)
+	vm_size_t	size,
+	__unused int flags)
 {
 	kern_return_t		kr;
 	struct ubc_info		*uip;
@@ -2990,10 +2992,21 @@ ubc_cs_blob_add(
 	 * Let policy module check whether the blob's signature is accepted.
 	 */
 #if CONFIG_MACF
-	error = mac_vnode_check_signature(vp, base_offset, blob->csb_sha1, (const void*)cd, size, &is_platform_binary);
+	error = mac_vnode_check_signature(vp, 
+					  base_offset, 
+					  blob->csb_sha1, 
+					  (const void*)cd,
+					  size, flags, 
+					  &is_platform_binary);
 	if (error) {
 		if (cs_debug) 
 			printf("check_signature[pid: %d], error = %d\n", current_proc()->p_pid, error);
+		goto out;
+	}
+	if ((flags & MAC_VNODE_CHECK_DYLD_SIM) && !is_platform_binary) {
+		if (cs_debug)
+			printf("check_signature[pid: %d], is not apple signed\n", current_proc()->p_pid);
+		error = EPERM;
 		goto out;
 	}
 #endif	
@@ -3303,7 +3316,8 @@ ubc_cs_generation_check(
 int
 ubc_cs_blob_revalidate(
 	struct vnode	*vp,
-	struct cs_blob *blob
+	struct cs_blob *blob,
+	__unused int flags
 	)
 {
 	int error = 0;
@@ -3325,7 +3339,7 @@ ubc_cs_blob_revalidate(
 
 	/* callout to mac_vnode_check_signature */
 #if CONFIG_MACF
-	error = mac_vnode_check_signature(vp, blob->csb_base_offset, blob->csb_sha1, (const void*)cd, blob->csb_cpu_type, &is_platform_binary);
+	error = mac_vnode_check_signature(vp, blob->csb_base_offset, blob->csb_sha1, (const void*)cd, blob->csb_cpu_type, flags, &is_platform_binary);
 	if (cs_debug && error) {
 			printf("revalidate: check_signature[pid: %d], error = %d\n", current_proc()->p_pid, error);
 	}
@@ -3414,7 +3428,7 @@ cs_validate_page(
 	memory_object_t		pager,
 	memory_object_offset_t	page_offset,
 	const void		*data,
-	boolean_t		*tainted)
+	unsigned		*tainted)
 {
 	SHA1_CTX		sha1ctxt;
 	unsigned char		actual_hash[SHA1_RESULTLEN];
@@ -3540,8 +3554,10 @@ cs_validate_page(
 			       pager, page_offset);
 		}
 		validated = FALSE;
-		*tainted = FALSE;
+		*tainted = 0;
 	} else {
+
+		*tainted = 0;
 
 		size = PAGE_SIZE_4K;
 		const uint32_t *asha1, *esha1;
@@ -3549,6 +3565,7 @@ cs_validate_page(
 			/* partial page at end of segment */
 			assert(offset < codeLimit);
 			size = (size_t) (codeLimit & PAGE_MASK_4K);
+			*tainted |= CS_VALIDATE_NX;
 		}
 		/* compute the actual page's SHA1 hash */
 		SHA1Init(&sha1ctxt);
@@ -3571,7 +3588,7 @@ cs_validate_page(
 				       esha1[3], esha1[4]);
 			}
 			cs_validate_page_bad_hash++;
-			*tainted = TRUE;
+			*tainted |= CS_VALIDATE_TAINTED;
 		} else {
 			if (cs_debug > 10) {
 				printf("CODE SIGNING: cs_validate_page: "
@@ -3579,7 +3596,6 @@ cs_validate_page(
 				       "SHA1 OK\n",
 				       pager, page_offset, size);
 			}
-			*tainted = FALSE;
 		}
 		validated = TRUE;
 	}

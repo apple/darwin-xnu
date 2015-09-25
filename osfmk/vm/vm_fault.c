@@ -735,6 +735,7 @@ vm_fault_zero_page(vm_page_t m, boolean_t no_zero_fill)
 
 	m->cs_validated = FALSE;
 	m->cs_tainted = FALSE;
+	m->cs_nx = FALSE;
 
 	if (no_zero_fill == TRUE) {
 		my_fault = DBG_NZF_PAGE_FAULT;
@@ -2653,6 +2654,7 @@ vm_fault_enter(vm_page_t m,
 	}
 
 #define page_immutable(m,prot) ((m)->cs_validated /*&& ((prot) & VM_PROT_EXECUTE)*/)
+#define page_nx(m) ((m)->cs_nx)
 
 	map_is_switched = ((pmap != vm_map_pmap(current_task()->map)) &&
 			   (pmap == vm_map_pmap(current_thread()->map)));
@@ -2674,6 +2676,12 @@ vm_fault_enter(vm_page_t m,
 	   map_is_switch_protected && page_immutable(m, prot) && 
 	   (prot & VM_PROT_WRITE))
 	{
+		return KERN_CODESIGN_ERROR;
+	}
+
+	if (cs_enforcement_enabled && page_nx(m) && (prot & VM_PROT_EXECUTE)) {
+		if (cs_debug)
+			printf("page marked to be NX, not letting it be mapped EXEC\n");
 		return KERN_CODESIGN_ERROR;
 	}
 
@@ -5807,7 +5815,8 @@ vm_page_validate_cs_mapped(
 	kern_return_t		kr;
 	memory_object_t		pager;
 	void			*blobs;
-	boolean_t		validated, tainted;
+	boolean_t		validated;
+	unsigned			tainted;
 
 	assert(page->busy);
 	vm_object_lock_assert_exclusive(page->object);
@@ -5869,6 +5878,7 @@ vm_page_validate_cs_mapped(
 	}
 
 	/* verify the SHA1 hash for this page */
+	tainted = 0;
 	validated = cs_validate_page(blobs,
 				     pager,
 				     offset + object->paging_offset,
@@ -5877,7 +5887,8 @@ vm_page_validate_cs_mapped(
 
 	page->cs_validated = validated;
 	if (validated) {
-		page->cs_tainted = tainted;
+		page->cs_tainted = !!(tainted & CS_VALIDATE_TAINTED);
+		page->cs_nx = !!(tainted & CS_VALIDATE_NX);
 	}
 }
 

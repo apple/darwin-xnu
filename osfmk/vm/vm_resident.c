@@ -571,6 +571,7 @@ vm_page_bootstrap(
 	m->encrypted_cleaning = FALSE;
 	m->cs_validated = FALSE;
 	m->cs_tainted = FALSE;
+	m->cs_nx = FALSE;
 	m->no_cache = FALSE;
 	m->reusable = FALSE;
 	m->slid = FALSE;
@@ -3805,9 +3806,10 @@ _vm_page_print(
 	       (p->unusual ? "" : "!"),
 	       (p->encrypted ? "" : "!"),
 	       (p->encrypted_cleaning ? "" : "!"));
-	printf("  %scs_validated, %scs_tainted, %sno_cache\n",
+	printf("  %scs_validated, %scs_tainted, %scs_nx, %sno_cache\n",
 	       (p->cs_validated ? "" : "!"),
 	       (p->cs_tainted ? "" : "!"),
+	       (p->cs_nx ? "" : "!"),
 	       (p->no_cache ? "" : "!"));
 
 	printf("phys_page=0x%x\n", p->phys_page);
@@ -4494,6 +4496,7 @@ did_consider:
 					assert(!m1->encrypted_cleaning);
 					m2->cs_validated = m1->cs_validated;
 					m2->cs_tainted	= m1->cs_tainted;
+					m2->cs_nx	= m1->cs_nx;
 
 					/*
 					 * If m1 had really been reusable,

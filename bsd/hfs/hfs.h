@@ -786,6 +786,8 @@ OSErr	hfs_MountHFSVolume(struct hfsmount *hfsmp, HFSMasterDirectoryBlock *mdb,
 OSErr	hfs_MountHFSPlusVolume(struct hfsmount *hfsmp, HFSPlusVolumeHeader *vhp,
 		off_t embeddedOffset, u_int64_t disksize, struct proc *p, void *args, kauth_cred_t cred);
 
+OSErr hfs_ValidateHFSPlusVolumeHeader(struct hfsmount *hfsmp, HFSPlusVolumeHeader *vhp);
+
 extern int hfsUnmount(struct hfsmount *hfsmp, struct proc *p);
 
 extern bool overflow_extents(struct filefork *fp);

@@ -418,6 +418,7 @@ struct upl_page_info {
 		speculative:1,  /* page is valid, but not yet accessed */
 		cs_validated:1,	/* CODE SIGNING: page was validated */
 		cs_tainted:1,	/* CODE SIGNING: page is tainted */
+		cs_nx:1,	/* CODE SIGNING: page is NX */
 		needed:1,	/* page should be left in cache on abort */
 		:0;		/* force to long boundary */
 #else
@@ -682,6 +683,9 @@ typedef uint32_t	upl_size_t;	/* page-aligned byte size */
 
 #define UPL_SET_CS_TAINTED(upl, index, value) \
 	((upl)[(index)].cs_tainted = ((value) ? TRUE : FALSE))
+
+#define UPL_SET_CS_NX(upl, index, value) \
+	((upl)[(index)].cs_nx = ((value) ? TRUE : FALSE))
 
 #define UPL_SET_REPRIO_INFO(upl, index, blkno, len) \
 	((upl)->upl_reprio_info[(index)]) = (((uint64_t)(blkno) & UPL_REPRIO_INFO_MASK) | \
