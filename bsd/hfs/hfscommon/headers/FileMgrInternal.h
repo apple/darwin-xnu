@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2013 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2015 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -46,11 +46,14 @@
 #include <sys/param.h>
 #include <sys/vnode.h>
 
+#if !HFS_ALLOC_TEST
+
 #include "../../hfs.h"
 #include "../../hfs_macos_defs.h"
 #include "../../hfs_format.h"
 #include "../../hfs_cnode.h"
 
+#endif
 
 #ifdef __cplusplus
 extern "C" {
@@ -254,6 +257,9 @@ ScanUnmapBlocks(struct hfsmount *hfsmp);
 
 EXTERN_API_C( int )
 hfs_init_summary (struct hfsmount *hfsmp);
+
+errno_t hfs_find_free_extents(struct hfsmount *hfsmp,
+							  void (*callback)(void *data, off_t), void *callback_arg);
 
 /*	File Extent Mapping routines*/
 EXTERN_API_C( OSErr )

@@ -287,6 +287,7 @@ void bsd_utaskbootstrap(void);
 
 static void parse_bsd_args(void);
 extern task_t bsd_init_task;
+extern boolean_t init_task_died;
 extern char    init_task_failure_data[];
 #if CONFIG_DEV_KMEM
 extern void dev_kmem_init(void);
@@ -1013,6 +1014,7 @@ bsdinit_task(void)
 	ut = (uthread_t)get_bsdthread_info(thread);
 
 	bsd_init_task = get_threadtask(thread);
+	init_task_died = FALSE;
 	init_task_failure_data[0] = 0;
 
 #if CONFIG_MACF

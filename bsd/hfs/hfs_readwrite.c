@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2014 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2015 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -1578,7 +1578,7 @@ do_bulk_access_check(struct hfsmount *hfsmp, struct vnode *vp,
 int
 hfs_vnop_ioctl( struct vnop_ioctl_args /* {
 		vnode_t a_vp;
-		int  a_command;
+		long  a_command;
 		caddr_t  a_data;
 		int  a_fflag;
 		vfs_context_t a_context;
@@ -2652,6 +2652,37 @@ fail_change_next_allocation:
 		}
 
 		break;
+	}
+
+	case HFS_GET_FSINFO: {
+		hfs_fsinfo *fsinfo = (hfs_fsinfo *)ap->a_data;
+
+		/* Only root is allowed to get fsinfo */
+		if (!kauth_cred_issuser(kauth_cred_get())) {
+			return EACCES;
+		}
+
+		/*
+		 * Make sure that the caller's version number matches with
+		 * the kernel's version number.  This will make sure that
+		 * if the structures being read/written into are changed
+		 * by the kernel, the caller will not read incorrect data.
+		 *
+		 * The first three fields --- request_type, version and
+		 * flags are same for all the hfs_fsinfo structures, so
+		 * we can access the version number by assuming any
+		 * structure for now.
+		 */
+		if (fsinfo->header.version != HFS_FSINFO_VERSION) {
+			return ENOTSUP;
+		}
+
+		/* Make sure that the current file system is not marked inconsistent */
+		if (hfsmp->vcbAtrb & kHFSVolumeInconsistentMask) {
+			return EIO;
+		}
+
+		return hfs_get_fsinfo(hfsmp, ap->a_data);
 	}
 
 	case HFS_CS_FREESPACE_TRIM: {

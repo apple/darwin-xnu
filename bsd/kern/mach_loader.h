@@ -70,6 +70,7 @@ typedef struct _load_result {
 	mach_vm_address_t	min_vm_addr;
 	mach_vm_address_t	max_vm_addr;
 	unsigned int		platform_binary;
+	off_t			cs_end_offset;
 } load_result_t;
 
 struct image_params;

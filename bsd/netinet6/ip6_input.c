@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2003-2014 Apple Inc. All rights reserved.
+ * Copyright (c) 2003-2015 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -605,27 +605,15 @@ ip6_input(struct mbuf *m)
 	}
 
 	ip6stat.ip6s_nxthist[ip6->ip6_nxt]++;
-
-#if IPFW2
-	/*
-	 * Check with the firewall...
-	 */
-	if (ip6_fw_enable && ip6_fw_chk_ptr) {
-		u_short port = 0;
-		/* If ipfw says divert, we have to just drop packet */
-		/* use port as a dummy argument */
-		if ((*ip6_fw_chk_ptr)(&ip6, NULL, &port, &m)) {
-			m_freem(m);
-			m = NULL;
-		}
-		if (!m)
-			goto done;
-	}
-#endif /* IPFW2 */
-
 	/*
 	 * Check against address spoofing/corruption.
 	 */
+	if (!(m->m_pkthdr.pkt_flags & PKTF_LOOP) &&
+	    IN6_IS_ADDR_LOOPBACK(&ip6->ip6_src)) {
+		ip6stat.ip6s_badscope++;
+		in6_ifstat_inc(inifp, ifs6_in_addrerr);
+		goto bad;
+	}
 	if (IN6_IS_ADDR_MULTICAST(&ip6->ip6_src) ||
 	    IN6_IS_ADDR_UNSPECIFIED(&ip6->ip6_dst)) {
 		/*
@@ -681,6 +669,22 @@ ip6_input(struct mbuf *m)
 		goto bad;
 	}
 #endif
+#if IPFW2
+        /*
+         * Check with the firewall...
+         */
+        if (ip6_fw_enable && ip6_fw_chk_ptr) {
+                u_short port = 0;
+                /* If ipfw says divert, we have to just drop packet */
+                /* use port as a dummy argument */
+                if ((*ip6_fw_chk_ptr)(&ip6, NULL, &port, &m)) {
+                        m_freem(m);
+                        m = NULL;
+                }
+                if (!m)
+                        goto done;
+        }
+#endif /* IPFW2 */
 
 	/*
 	 * Naively assume we can attribute inbound data to the route we would

@@ -74,6 +74,14 @@
 
 #include <machine/pal_routines.h>
 
+extern boolean_t kdebug_serial;
+#if KDEBUG_MOJO_TRACE
+#include <sys/kdebugevents.h>
+static void kdebug_serial_print(	/* forward */
+		uint32_t, uint32_t, uint64_t,
+		uintptr_t, uintptr_t, uintptr_t, uintptr_t, uintptr_t);
+#endif
+
 /*
  * IOP(s)
  *
@@ -302,7 +310,6 @@ pid_t global_state_pid = -1;       /* Used to control exclusive use of kd_buffer
 #define MACH_SysCall	0x010c0000
 #define DBG_SCALL_MASK	0xffff0000
 
-
 /* task to string structure */
 struct tts
 {
@@ -392,7 +399,6 @@ kdbg_set_tracing_enabled(boolean_t enabled, uint32_t trace_type)
 {
 	int s = ml_set_interrupts_enabled(FALSE);
 	lck_spin_lock(kds_spin_lock);
-
 	if (enabled) {
 		kdebug_enable |= trace_type;
 		kd_ctrl_page.kdebug_slowcheck &= ~SLOW_NOLOG;
@@ -881,6 +887,12 @@ record_event:
 	kdbp = &kdbip[coreid];
 	timestamp &= KDBG_TIMESTAMP_MASK;
 
+#if KDEBUG_MOJO_TRACE
+	if (kdebug_enable & KDEBUG_ENABLE_SERIAL)
+		kdebug_serial_print(coreid, debugid, timestamp,
+				    arg1, arg2, arg3, arg4, threadid);
+#endif
+
 retry_q:
 	kds_raw = kdbp->kd_list_tail;
 
@@ -1057,6 +1069,14 @@ record_event:
 
 	cpu = cpu_number();
 	kdbp = &kdbip[cpu];
+
+#if KDEBUG_MOJO_TRACE
+	if (kdebug_enable & KDEBUG_ENABLE_SERIAL)
+		kdebug_serial_print(cpu, debugid,
+				    mach_absolute_time() & KDBG_TIMESTAMP_MASK,
+				    arg1, arg2, arg3, arg4, arg5);
+#endif
+
 retry_q:
 	kds_raw = kdbp->kd_list_tail;
 
@@ -1168,7 +1188,7 @@ kernel_debug_string(const char *message)
 	/* Stuff the message string in the args and log it. */
         strncpy((char *)arg, message, MIN(sizeof(arg), strlen(message)));
 	KERNEL_DEBUG_EARLY(
-		(TRACEDBG_CODE(DBG_TRACE_INFO, 4)) | DBG_FUNC_NONE,
+		TRACE_INFO_STRING,
 		arg[0], arg[1], arg[2], arg[3]);
 }
 
@@ -1186,8 +1206,10 @@ kernel_debug_early(
 	uintptr_t	arg4)
 {
 	/* If tracing is already initialized, use it */
-	if (nkdbufs)
+	if (nkdbufs) {
 		KERNEL_DEBUG_CONSTANT(debugid, arg1, arg2, arg3, arg4, 0);
+		return;
+	}
 
 	/* Do nothing if the buffer is full or we're not on the boot cpu */ 
 	kd_early_overflow = kd_early_index >= KD_EARLY_BUFFER_MAX;
@@ -1206,7 +1228,7 @@ kernel_debug_early(
 }
 
 /*
- * Transfer the contents of the temporary buffer into the trace buffers.
+ * Transfen the contents of the temporary buffer into the trace buffers.
  * Precede that by logging the rebase time (offset) - the TSC-based time (in ns)
  * when mach_absolute_time is set to 0.
  */
@@ -1221,7 +1243,7 @@ kernel_debug_early_end(void)
 	/* Fake sentinel marking the start of kernel time relative to TSC */
 	kernel_debug_enter(
 		0,
-		(TRACEDBG_CODE(DBG_TRACE_INFO, 1)) | DBG_FUNC_NONE,
+		TRACE_TIMESTAMPS,
 		0,
 		(uint32_t)(tsc_rebase_abs_time >> 32),
 		(uint32_t)tsc_rebase_abs_time,
@@ -1243,7 +1265,7 @@ kernel_debug_early_end(void)
 	/* Cut events-lost event on overflow */
 	if (kd_early_overflow)
 		KERNEL_DEBUG_CONSTANT(
-			TRACEDBG_CODE(DBG_TRACE_INFO, 2), 0, 0, 0, 0, 0);
+			TRACE_LOST_EVENTS, 0, 0, 0, 0, 0);
 
 	/* This trace marks the start of kernel tracing */
 	kernel_debug_string("early trace done");
@@ -2453,9 +2475,9 @@ kdbg_control(int *name, u_int namelen, user_addr_t where, size_t *sizep)
 				if (name[0] == KERN_KDWRITETR) {
 					number = nkdbufs * sizeof(kd_buf);
 
-					KERNEL_DEBUG_CONSTANT((TRACEDBG_CODE(DBG_TRACE_INFO, 3)) | DBG_FUNC_START, 0, 0, 0, 0, 0);
+					KERNEL_DEBUG_CONSTANT(TRACE_WRITING_EVENTS | DBG_FUNC_START, 0, 0, 0, 0, 0);
 					ret = kdbg_read(0, &number, vp, &context);
-					KERNEL_DEBUG_CONSTANT((TRACEDBG_CODE(DBG_TRACE_INFO, 3)) | DBG_FUNC_END, number, 0, 0, 0, 0);
+					KERNEL_DEBUG_CONSTANT(TRACE_WRITING_EVENTS | DBG_FUNC_END, number, 0, 0, 0, 0);
 
 					*sizep = number;
 				} else {
@@ -2635,7 +2657,7 @@ kdbg_read(user_addr_t buffer, size_t *number, vnode_t vp, vfs_context_t ctx)
 		return EINVAL;
 
 	memset(&lostevent, 0, sizeof(lostevent));
-	lostevent.debugid = TRACEDBG_CODE(DBG_TRACE_INFO, 2);
+	lostevent.debugid = TRACE_LOST_EVENTS;
 
 	/* Capture timestamp. Only sort events that have occured before the timestamp.
 	 * Since the iop is being flushed here, its possible that events occur on the AP
@@ -3107,7 +3129,11 @@ start_kern_tracing(unsigned int new_nkdbufs, boolean_t need_map)
 		/* Hold off interrupts until the early traces are cut */
 		boolean_t	s = ml_set_interrupts_enabled(FALSE);
 
-		kdbg_set_tracing_enabled(TRUE, KDEBUG_ENABLE_TRACE);
+		kdbg_set_tracing_enabled(
+			TRUE,
+		 	kdebug_serial ?
+				(KDEBUG_ENABLE_TRACE | KDEBUG_ENABLE_SERIAL) :
+				 KDEBUG_ENABLE_TRACE);
 
 		/*
 		 * Transfer all very early events from the static buffer
@@ -3118,8 +3144,14 @@ start_kern_tracing(unsigned int new_nkdbufs, boolean_t need_map)
 		ml_set_interrupts_enabled(s);
 
 		printf("kernel tracing started\n");
+#if KDEBUG_MOJO_TRACE
+		if (kdebug_serial) {
+			printf("serial output enabled with %lu named events\n",
+			sizeof(kd_events)/sizeof(kd_event_t));
+		}
+#endif
 	} else {
-		printf("error from kdbg_reinit,kernel tracing not started\n");
+		printf("error from kdbg_reinit, kernel tracing not started\n");
 	}
 }
 
@@ -3167,7 +3199,7 @@ kdbg_dump_trace_to_file(const char *filename)
 			return;
 		}
 	}
-	KERNEL_DEBUG_CONSTANT((TRACEDBG_CODE(DBG_TRACE_INFO, 0)) | DBG_FUNC_NONE, 0, 0, 0, 0, 0);
+	KERNEL_DEBUG_CONSTANT(TRACE_PANIC | DBG_FUNC_NONE, 0, 0, 0, 0, 0);
 
 	kdebug_enable = 0;
 	kd_ctrl_page.enabled = 0;
@@ -3209,3 +3241,146 @@ void kdbg_get_task_name(char* name_buf, int len, task_t task)
 	else
 		snprintf(name_buf, len, "%p [!bsd]", task);
 }
+
+#if KDEBUG_MOJO_TRACE
+static kd_event_t *
+binary_search(uint32_t id)
+{
+	int low, high, mid;
+
+	low = 0;
+	high = sizeof(kd_events)/sizeof(kd_event_t) - 1;
+
+	while (TRUE)
+	{
+		mid = (low + high) / 2;
+
+		if (low > high)
+			return NULL; /* failed */
+		else if ( low + 1 >= high) {
+			/* We have a match */
+			if (kd_events[high].id == id)
+				return &kd_events[high];
+			else if (kd_events[low].id == id)
+				return &kd_events[low];
+			else
+				return NULL;  /* search failed */
+		}
+		else if (id < kd_events[mid].id)
+			high = mid;
+		else
+			low = mid;
+	} 
+}
+
+/*
+ * Look up event id to get name string.
+ * Using a per-cpu cache of a single entry
+ * before resorting to a binary search of the full table.
+ */
+#define	NCACHE	1
+static kd_event_t	*last_hit[MAX_CPUS];
+static kd_event_t *
+event_lookup_cache(uint32_t cpu, uint32_t id)
+{
+	if (last_hit[cpu] == NULL || last_hit[cpu]->id != id)
+		last_hit[cpu] = binary_search(id);
+	return last_hit[cpu];
+}
+
+static uint64_t	kd_last_timstamp;
+
+static void
+kdebug_serial_print(
+	uint32_t	cpunum,
+	uint32_t	debugid,
+	uint64_t	timestamp,
+	uintptr_t	arg1,
+	uintptr_t	arg2,
+	uintptr_t	arg3,
+	uintptr_t	arg4,
+	uintptr_t	threadid
+	)
+{
+	char		kprintf_line[192];
+	char		event[40];
+	uint64_t	us = timestamp / NSEC_PER_USEC;
+	uint64_t	us_tenth = (timestamp % NSEC_PER_USEC) / 100;
+	uint64_t	delta = timestamp - kd_last_timstamp;
+	uint64_t	delta_us = delta / NSEC_PER_USEC;
+	uint64_t	delta_us_tenth = (delta % NSEC_PER_USEC) / 100;
+	uint32_t	event_id = debugid & DBG_FUNC_MASK;
+	const char	*command;
+	const char	*bra;
+	const char	*ket;
+	kd_event_t	*ep;
+
+	/* event time and delta from last */
+	snprintf(kprintf_line, sizeof(kprintf_line),
+		"%11llu.%1llu %8llu.%1llu ",
+		us, us_tenth, delta_us, delta_us_tenth);
+
+
+	/* event (id or name) - start prefixed by "[", end postfixed by "]" */
+	bra = (debugid & DBG_FUNC_START) ? "[" : " ";
+	ket = (debugid & DBG_FUNC_END)   ? "]" : " ";
+	ep = event_lookup_cache(cpunum, event_id);
+	if (ep) {
+		if (strlen(ep->name) < sizeof(event) - 3)
+			snprintf(event, sizeof(event), "%s%s%s",
+				 bra, ep->name, ket);
+		else
+			snprintf(event, sizeof(event), "%s%x(name too long)%s",
+				 bra, event_id, ket);
+	} else {
+		snprintf(event, sizeof(event), "%s%x%s",
+			 bra, event_id, ket);
+	}
+	snprintf(kprintf_line + strlen(kprintf_line),
+		 sizeof(kprintf_line) - strlen(kprintf_line),
+		 "%-40s  ", event);
+
+	/* arg1 .. arg4 with special cases for strings */
+	switch (event_id) {
+	    case VFS_LOOKUP:
+	    case VFS_LOOKUP_DONE:
+		if (debugid & DBG_FUNC_START) {
+			/* arg1 hex then arg2..arg4 chars */
+			snprintf(kprintf_line + strlen(kprintf_line),
+				sizeof(kprintf_line) - strlen(kprintf_line),
+				"%-16lx %-8s%-8s%-8s                          ",
+				arg1, (char*)&arg2, (char*)&arg3, (char*)&arg4);
+			break;
+		}
+		/* else fall through for arg1..arg4 chars */
+	    case TRACE_STRING_EXEC:
+	    case TRACE_STRING_NEWTHREAD:
+	    case TRACE_INFO_STRING:
+		snprintf(kprintf_line + strlen(kprintf_line),
+			sizeof(kprintf_line) - strlen(kprintf_line),
+			"%-8s%-8s%-8s%-8s                                   ",
+			(char*)&arg1, (char*)&arg2, (char*)&arg3, (char*)&arg4);
+		break;
+	    default:
+		snprintf(kprintf_line + strlen(kprintf_line),
+			sizeof(kprintf_line) - strlen(kprintf_line),
+			"%-16lx %-16lx %-16lx %-16lx",
+			arg1, arg2, arg3, arg4);
+	}
+
+	/* threadid, cpu and command name */
+	if (threadid == (uintptr_t)thread_tid(current_thread()) &&
+	    current_proc() &&
+	    current_proc()->p_comm)
+		command = current_proc()->p_comm;
+	else
+		command = "-";
+	snprintf(kprintf_line + strlen(kprintf_line),
+		sizeof(kprintf_line) - strlen(kprintf_line),
+		"  %-16lx  %-2d %s\n",
+		threadid, cpunum, command);
+	
+	kprintf("%s", kprintf_line);
+	kd_last_timstamp = timestamp;
+}
+#endif

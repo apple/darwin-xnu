@@ -625,6 +625,17 @@ kernel_trap(
 				}
 
 				/*
+				 * Additionally check for SMAP faults...
+				 * which are characterized by page-present and
+				 * the AC bit unset (i.e. not from copyin/out path).
+				 */
+				if (__improbable(code & T_PF_PROT &&
+						 pmap_smap_enabled &&
+						 (saved_state->isf.rflags & EFL_AC) == 0)) {
+					goto debugger_entry;
+				}
+
+				/*
 				 * If we're not sharing cr3 with the user
 				 * and we faulted in copyio,
 				 * then switch cr3 here and dismiss the fault.
@@ -802,6 +813,7 @@ panic_trap(x86_saved_state64_t *regs)
 	const char	*trapname = "Unknown";
 	pal_cr_t	cr0, cr2, cr3, cr4;
 	boolean_t	potential_smep_fault = FALSE, potential_kernel_NX_fault = FALSE;
+	boolean_t	potential_smap_fault = FALSE;
 
 	pal_get_control_registers( &cr0, &cr2, &cr3, &cr4 );
 	assert(ml_get_interrupts_enabled() == FALSE);
@@ -826,6 +838,12 @@ panic_trap(x86_saved_state64_t *regs)
 		} else if (regs->isf.rip >= VM_MIN_KERNEL_AND_KEXT_ADDRESS) {
 			potential_kernel_NX_fault = TRUE;
 		}
+	} else if (pmap_smap_enabled &&
+		   regs->isf.trapno == T_PAGE_FAULT &&
+		   regs->isf.err & T_PF_PROT &&
+		   regs->cr2 < VM_MAX_USER_PAGE_ADDRESS &&
+		   regs->isf.rip >= VM_MIN_KERNEL_AND_KEXT_ADDRESS) {
+		potential_smap_fault = TRUE;
 	}
 
 #undef panic
@@ -848,7 +866,7 @@ panic_trap(x86_saved_state64_t *regs)
 	      virtualized ? " VMM" : "",
 	      potential_kernel_NX_fault ? " Kernel NX fault" : "",
 	      potential_smep_fault ? " SMEP/User NX fault" : "",
-	      "");
+	      potential_smap_fault ? " SMAP fault" : "");
 	/*
 	 * This next statement is not executed,
 	 * but it's needed to stop the compiler using tail call optimization

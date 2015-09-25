@@ -149,6 +149,7 @@ extern void dtrace_lazy_dofs_destroy(proc_t);
 
 #include <sys/sdt.h>
 
+extern boolean_t init_task_died;
 extern char init_task_failure_data[];
 void proc_prepareexit(proc_t p, int rv, boolean_t perf_notify);
 void vfork_exit(proc_t p, int rv);
@@ -354,6 +355,7 @@ exit1_internal(proc_t p, int rv, int *retval, boolean_t thread_can_terminate, bo
 			sync(p, (void *)NULL, (int *)NULL);
 		}
 #endif
+		init_task_died = TRUE;
 		panic("%s died\nState at Last Exception:\n\n%s", 
 							(p->p_comm[0] != '\0' ?
 								p->p_comm :

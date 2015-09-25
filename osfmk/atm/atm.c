@@ -337,6 +337,9 @@ atm_get_value(
 				if (kr != KERN_SUCCESS) {
 					break;
 				}
+			} else {
+				kr = KERN_INVALID_TASK;
+				break;
 			}
 
 			/* Increment sync value. */
@@ -939,8 +942,8 @@ atm_listener_insert(
 			 */
 			next->mailbox = mailbox;
 			lck_mtx_unlock(&atm_value->listener_lock);
-			KERNEL_DEBUG_CONSTANT_IST(KDEBUG_TRACE, (ATM_CODE(ATM_GETVALUE_INFO, (ATM_VALUE_REPLACED))) | DBG_FUNC_NONE,
-				atm_value, atm_value->aid, mailbox_offset, 0, 0);
+			KERNEL_DEBUG_CONSTANT((ATM_CODE(ATM_GETVALUE_INFO, (ATM_VALUE_REPLACED))) | DBG_FUNC_NONE,
+				VM_KERNEL_ADDRPERM(atm_value), atm_value->aid, mailbox_offset, 0, 0);
 
 			/* Drop the extra reference on task descriptor taken by this function. */
 			atm_task_descriptor_dealloc(task_descriptor);
@@ -948,8 +951,8 @@ atm_listener_insert(
 			return KERN_SUCCESS;
 		}
 	}
-	KERNEL_DEBUG_CONSTANT_IST(KDEBUG_TRACE, (ATM_CODE(ATM_GETVALUE_INFO, (ATM_VALUE_ADDED))) | DBG_FUNC_NONE,
-				atm_value, atm_value->aid, mailbox_offset, 0, 0);
+	KERNEL_DEBUG_CONSTANT((ATM_CODE(ATM_GETVALUE_INFO, (ATM_VALUE_ADDED))) | DBG_FUNC_NONE,
+				VM_KERNEL_ADDRPERM(atm_value), atm_value->aid, mailbox_offset, 0, 0);
 
 	queue_enter(&atm_value->listeners, new_link_object, atm_link_object_t, listeners_element);
 	atm_value->listener_count++;
@@ -1006,18 +1009,18 @@ atm_listener_delete(
 
 		if (elem->descriptor == task_descriptor) {
 			if (elem->mailbox == mailbox) {
-				KERNEL_DEBUG_CONSTANT_IST(KDEBUG_TRACE, (ATM_CODE(ATM_UNREGISTER_INFO,
+				KERNEL_DEBUG_CONSTANT((ATM_CODE(ATM_UNREGISTER_INFO,
 					(ATM_VALUE_UNREGISTERED))) | DBG_FUNC_NONE,
-					atm_value, atm_value->aid, mailbox_offset, 0, 0);
+					VM_KERNEL_ADDRPERM(atm_value), atm_value->aid, mailbox_offset, 0, 0);
 				queue_remove(&atm_value->listeners, elem, atm_link_object_t, listeners_element);
 				queue_enter(&free_listeners, elem, atm_link_object_t, listeners_element);
 				atm_value->listener_count--;
 				kr = KERN_SUCCESS;
 				break;
 			} else {
-				KERNEL_DEBUG_CONSTANT_IST(KDEBUG_TRACE, (ATM_CODE(ATM_UNREGISTER_INFO,
+				KERNEL_DEBUG_CONSTANT((ATM_CODE(ATM_UNREGISTER_INFO,
 					(ATM_VALUE_DIFF_MAILBOX))) | DBG_FUNC_NONE,
-					atm_value, atm_value->aid, 0, 0, 0);
+					VM_KERNEL_ADDRPERM(atm_value), atm_value->aid, 0, 0, 0);
 				kr = KERN_INVALID_VALUE;
 				break;
 			}
@@ -1255,7 +1258,7 @@ atm_get_min_sub_aid_array(
 	atm_value_t atm_value;
 	uint32_t i;
 
-	KERNEL_DEBUG_CONSTANT_IST(KDEBUG_TRACE, (ATM_CODE(ATM_SUBAID_INFO, (ATM_MIN_CALLED))) | DBG_FUNC_START,
+	KERNEL_DEBUG_CONSTANT((ATM_CODE(ATM_SUBAID_INFO, (ATM_MIN_CALLED))) | DBG_FUNC_START,
 			0, 0, 0, 0, 0);
 
 	for (i = 0; i < count; i++) {
@@ -1268,7 +1271,7 @@ atm_get_min_sub_aid_array(
 		atm_value_dealloc(atm_value);
 	}
 
-	KERNEL_DEBUG_CONSTANT_IST(KDEBUG_TRACE, (ATM_CODE(ATM_SUBAID_INFO, (ATM_MIN_CALLED))) | DBG_FUNC_END,
+	KERNEL_DEBUG_CONSTANT((ATM_CODE(ATM_SUBAID_INFO, (ATM_MIN_CALLED))) | DBG_FUNC_END,
 			count, 0, 0, 0, 0);
 
 }
@@ -1292,7 +1295,7 @@ atm_get_min_sub_aid(atm_value_t atm_value)
 	atm_link_object_t next, elem;
 	queue_head_t free_listeners;
 
-	KERNEL_DEBUG_CONSTANT_IST(KDEBUG_TRACE, (ATM_CODE(ATM_SUBAID_INFO, (ATM_MIN_LINK_LIST))) | DBG_FUNC_START,
+	KERNEL_DEBUG_CONSTANT((ATM_CODE(ATM_SUBAID_INFO, (ATM_MIN_LINK_LIST))) | DBG_FUNC_START,
 			0, 0, 0, 0, 0);
 
 	lck_mtx_lock(&atm_value->listener_lock);
@@ -1385,7 +1388,7 @@ atm_get_min_sub_aid(atm_value_t atm_value)
 		atm_link_dealloc(next);
 	}
 	
-	KERNEL_DEBUG_CONSTANT_IST(KDEBUG_TRACE, (ATM_CODE(ATM_SUBAID_INFO, (ATM_MIN_LINK_LIST))) | DBG_FUNC_END,
+	KERNEL_DEBUG_CONSTANT((ATM_CODE(ATM_SUBAID_INFO, (ATM_MIN_LINK_LIST))) | DBG_FUNC_END,
 			j, freed_count, dead_but_not_freed, 0, 0);
 
 	/* explicitly upgrade uint32_t to 64 bit mach size */

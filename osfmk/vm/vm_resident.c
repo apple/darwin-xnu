@@ -360,7 +360,6 @@ ppnum_t		max_valid_low_ppnum = 0xffffffff;
 unsigned int	vm_page_free_target = 0;
 unsigned int	vm_page_free_min = 0;
 unsigned int	vm_page_throttle_limit = 0;
-uint32_t	vm_page_creation_throttle = 0;
 unsigned int	vm_page_inactive_target = 0;
 unsigned int	vm_page_anonymous_min = 0;
 unsigned int	vm_page_inactive_min = 0;
@@ -5122,7 +5121,6 @@ hibernate_flush_queue(queue_head_t *q, int qcount)
 
 					goto reenter_pg_on_q;
 				}
-				vm_pageout_scan_wants_object = m_object;
 
 				vm_page_unlock_queues();
 				mutex_pause(try_failed_count++);
@@ -5132,7 +5130,6 @@ hibernate_flush_queue(queue_head_t *q, int qcount)
 				continue;
 			} else {
 				l_object = m_object;
-				vm_pageout_scan_wants_object = VM_OBJECT_NULL;
 			}
 		}
 		if ( !m_object->alive || m->encrypted_cleaning || m->cleaning || m->laundry || m->busy || m->absent || m->error) {
@@ -5198,7 +5195,6 @@ hibernate_flush_queue(queue_head_t *q, int qcount)
 			        vm_object_unlock(l_object);
 				l_object = NULL;
 			}
-			vm_pageout_scan_wants_object = VM_OBJECT_NULL;
 
 			while (retval == 0) {
 
@@ -5271,7 +5267,6 @@ next_pg:
 		vm_object_unlock(l_object);
 		l_object = NULL;
 	}
-	vm_pageout_scan_wants_object = VM_OBJECT_NULL;
 
 	vm_page_unlock_queues();
 

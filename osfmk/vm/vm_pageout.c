@@ -1202,7 +1202,6 @@ struct flow_control {
 uint32_t vm_pageout_considered_page = 0;
 uint32_t vm_page_filecache_min = 0;
 
-#define	VM_PAGE_FILECACHE_MIN	50000
 #define ANONS_GRABBED_LIMIT	2
 
 /*
@@ -1664,6 +1663,16 @@ return_from_scan:
 		if  (cache_evict_throttle)
 			cache_evict_throttle--;
 
+		/*
+		 * don't let the filecache_min fall below 33% of available memory...
+		 *
+		 * on systems w/o the compressor/swapper, the filecache is always
+		 * a very large percentage of the AVAILABLE_NON_COMPRESSED_MEMORY
+		 * since most (if not all) of the anonymous pages are in the
+		 * throttled queue (which isn't counted as available) which
+		 * effectively disables this filter
+		 */
+		vm_page_filecache_min = (AVAILABLE_NON_COMPRESSED_MEMORY / 3);
 
 		exceeded_burst_throttle = FALSE;
 		/*
@@ -1961,6 +1970,15 @@ consider_inactive:
 					page_prev_state = PAGE_STATE_INACTIVE;
 					anons_grabbed = 0;
 
+					if (vm_page_pageable_external_count < vm_page_filecache_min) {
+						if ((++reactivated_this_call % 100))
+							goto must_activate_page;
+						/*
+						 * steal 1% of the file backed pages even if
+						 * we are under the limit that has been set
+						 * for a healthy filecache
+						 */
+					}
 					break;
 				}
 			}
@@ -2407,6 +2425,7 @@ reactivate_page:
 					vm_page_deactivate(m);
 					vm_pageout_inactive_deactivated++;
 				} else {
+must_activate_page:
 					/*
 					 * The page was/is being used, so put back on active list.
 					 */
@@ -2767,7 +2786,6 @@ vm_page_free_reserve(
 		vm_page_free_target = vm_page_free_min + 5;
 
 	vm_page_throttle_limit = vm_page_free_target - (vm_page_free_target / 3);
-	vm_page_creation_throttle = vm_page_free_target * 3;
 }
 
 /*
@@ -3763,11 +3781,6 @@ void	vm_pageout_reinit_tuneables(void);
 void
 vm_pageout_reinit_tuneables(void)
 {
-	vm_page_filecache_min = (uint32_t) (max_mem / PAGE_SIZE) / 15;
-
-	if (vm_page_filecache_min < VM_PAGE_FILECACHE_MIN)
-		vm_page_filecache_min = VM_PAGE_FILECACHE_MIN;
-
 	vm_compressor_minorcompact_threshold_divisor = 18;
 	vm_compressor_majorcompact_threshold_divisor = 22;
 	vm_compressor_unthrottle_threshold_divisor = 32;
@@ -3846,12 +3859,6 @@ vm_pageout(void)
 
 	if (vm_pageout_burst_inactive_throttle == 0)
 	        vm_pageout_burst_inactive_throttle = VM_PAGEOUT_BURST_INACTIVE_THROTTLE;
-
-#if !CONFIG_JETSAM
-	vm_page_filecache_min = (uint32_t) (max_mem / PAGE_SIZE) / 20;
-	if (vm_page_filecache_min < VM_PAGE_FILECACHE_MIN)
-		vm_page_filecache_min = VM_PAGE_FILECACHE_MIN;
-#endif
 
 	/*
 	 * Set kernel task to low backing store privileged 
@@ -4314,11 +4321,10 @@ upl_set_decmp_info(upl_t upl, upl_t src_upl)
         }
         src_upl->decmp_io_upl = (void *)upl;
         src_upl->ref_count++;
-	upl_unlock(src_upl);
 
         upl->flags |= UPL_DECMP_REAL_IO;
         upl->decmp_io_upl = (void *)src_upl;
-
+	upl_unlock(src_upl);
 }
 #endif /* CONFIG_IOSCHED */  
 

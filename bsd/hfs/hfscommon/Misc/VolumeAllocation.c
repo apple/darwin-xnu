@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2014 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2015 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -155,31 +155,36 @@ Optimization Routines
 					
 */
 
-#include "../../hfs_macos_defs.h"
-
 #include <sys/types.h>
 #include <sys/buf.h>
+
+
+#if !HFS_ALLOC_TEST
+
+#include "../../hfs_macos_defs.h"
 #include <sys/systm.h>
-#include <sys/sysctl.h>
-#include <sys/disk.h>
 #include <sys/ubc.h>
-#include <sys/uio.h>
 #include <kern/kalloc.h>
-#include <sys/malloc.h>
 
 /* For VM Page size */
 #include <libkern/libkern.h>
-
 #include "../../hfs.h"
+#include "../../hfs_endian.h"
+#include "../headers/FileMgrInternal.h"
+#include <vfs/vfs_journal.h>
+
+#endif // !HFS_ALLOC_TEST
+
+#include <sys/sysctl.h>
+#include <sys/disk.h>
+#include <sys/uio.h>
+#include <sys/malloc.h>
+
 #include "../../hfs_dbg.h"
 #include "../../hfs_format.h"
-#include "../../hfs_endian.h"
-#include "../../hfs_macos_defs.h"
-#include "../headers/FileMgrInternal.h"
 #include "../../hfs_kdebug.h"
 
 /* Headers for unmap-on-mount support */
-#include <vfs/vfs_journal.h>
 #include <sys/disk.h>
 
 #ifndef CONFIG_HFS_TRIM
@@ -356,6 +361,30 @@ void hfs_validate_summary (struct hfsmount *hfsmp);
 static void remove_free_extent_cache(struct hfsmount *hfsmp, u_int32_t startBlock, u_int32_t blockCount);
 static Boolean add_free_extent_cache(struct hfsmount *hfsmp, u_int32_t startBlock, u_int32_t blockCount);
 static void sanity_check_free_ext(struct hfsmount *hfsmp, int check_allocated);
+
+/* Functions for getting free exents */
+
+typedef struct bitmap_context {
+	void			*bitmap;				// current bitmap chunk
+	uint32_t		run_offset;				// offset (in bits) from start of bitmap to start of current run
+	uint32_t		chunk_current;			// next bit to scan in the chunk
+	uint32_t		chunk_end;				// number of valid bits in this chunk
+	struct hfsmount *hfsmp;
+	struct buf		*bp;
+	uint32_t		last_free_summary_bit;	// last marked free summary bit
+	int				lockflags;
+	uint64_t		lock_start;
+} bitmap_context_t;
+
+
+static errno_t get_more_bits(bitmap_context_t *bitmap_ctx);
+static int bit_count_set(void *bitmap, int start, int end);
+static int bit_count_clr(void *bitmap, int start, int end);
+static errno_t hfs_bit_count(bitmap_context_t *bitmap_ctx, int (*fn)(void *, int ,int), uint32_t *bit_count);
+static errno_t hfs_bit_count_set(bitmap_context_t *bitmap_ctx, uint32_t *count);
+static errno_t hfs_bit_count_clr(bitmap_context_t *bitmap_ctx, uint32_t *count);
+static errno_t update_summary_table(bitmap_context_t *bitmap_ctx, uint32_t start, uint32_t count, bool set);
+static int clzll(uint64_t x);
 
 #if ALLOC_DEBUG
 /*
@@ -5151,5 +5180,464 @@ static void sanity_check_free_ext(struct hfsmount *hfsmp, int check_allocated)
 		}
 	}
 	lck_spin_unlock(&hfsmp->vcbFreeExtLock);
+}
+
+#define BIT_RIGHT_MASK(bit)	(0xffffffffffffffffull >> (bit))
+#define kHighBitInDoubleWordMask 0x8000000000000000ull
+
+static int clzll(uint64_t x)
+{
+	if (x == 0)
+		return 64;
+	else
+		return __builtin_clzll(x);
+}
+
+#if !HFS_ALLOC_TEST
+
+static errno_t get_more_bits(bitmap_context_t *bitmap_ctx)
+{
+	uint32_t	start_bit;
+	uint32_t	iosize = 0;
+	uint32_t	byte_offset;
+	uint32_t	last_bitmap_block;
+	int			error;
+	struct hfsmount *hfsmp = bitmap_ctx->hfsmp;
+#if !HFS_ALLOC_TEST
+	uint64_t	lock_elapsed;
+#endif
+
+
+	if (bitmap_ctx->bp)
+		ReleaseScanBitmapRange(bitmap_ctx->bp);
+	
+	if (msleep(NULL, NULL, PINOD | PCATCH,
+			   "hfs_fsinfo", NULL) == EINTR) {
+		return EINTR;
+	}
+
+#if !HFS_ALLOC_TEST
+	/*
+	 * Let someone else use the allocation map after we've processed over HFS_FSINFO_MAX_LOCKHELD_TIME .
+	 * lock_start is initialized in hfs_find_free_extents().
+	 */
+	absolutetime_to_nanoseconds(mach_absolute_time() - bitmap_ctx->lock_start, &lock_elapsed);
+
+	if (lock_elapsed >= HFS_FSINFO_MAX_LOCKHELD_TIME) {
+
+		hfs_systemfile_unlock(hfsmp, bitmap_ctx->lockflags);
+		
+		/* add tsleep here to force context switch and fairness */
+		tsleep((caddr_t)get_more_bits, PRIBIO, "hfs_fsinfo", 1);
+
+		hfs_journal_lock(hfsmp);
+
+		/* Flush the journal and wait for all I/Os to finish up */
+		error = hfs_journal_flush(hfsmp, TRUE);
+		if (error) {
+			hfs_journal_unlock(hfsmp);
+			return error;
+		}
+
+		/*
+		 * Take bitmap lock to ensure it is not being modified while journal is still held.
+		 * Since we are reading larger than normal blocks from the bitmap, which
+		 * might confuse other parts of the bitmap code using normal blocks, we
+		 * take exclusive lock here.
+		 */
+		bitmap_ctx->lockflags = hfs_systemfile_lock(hfsmp, SFL_BITMAP, HFS_EXCLUSIVE_LOCK);
+
+		bitmap_ctx->lock_start = mach_absolute_time();
+
+		/* Release the journal lock */
+		hfs_journal_unlock(hfsmp);
+
+		/*
+		 * Bitmap is read in large block size (up to 1MB),
+		 * unlike the runtime which reads the bitmap in the
+		 * 4K block size.  If the bitmap is read by both ways
+		 * at the same time, it can result in multiple buf_t with
+		 * different sizes and potentially case data corruption.
+		 * To avoid this, we invalidate all the existing buffers
+		 * associated with the bitmap vnode.
+		 */
+		error = buf_invalidateblks(hfsmp->hfs_allocation_vp, 0, 0, 0);
+		if (error) {
+			/* hfs_systemfile_unlock will be called in the caller */
+			return error;
+		}
+	}
+#endif
+
+	start_bit = bitmap_ctx->run_offset;
+
+	if (start_bit >= bitmap_ctx->hfsmp->totalBlocks) {
+		bitmap_ctx->chunk_end = 0;
+		bitmap_ctx->bp = NULL;
+		bitmap_ctx->bitmap = NULL;
+		return 0;
+	}
+
+	assert(start_bit % 8 == 0);
+
+	/*
+	 * Compute how much I/O we should generate here.
+	 * hfs_scan_range_size will validate that the start bit
+	 * converted into a byte offset into the bitmap file,
+	 * is aligned on a VBMIOSize boundary.
+	 */
+	error = hfs_scan_range_size (bitmap_ctx->hfsmp, start_bit, &iosize);
+	if (error)
+		return error;
+
+	/* hfs_scan_range_size should have verified startbit.  Convert it to bytes */
+	byte_offset = start_bit / kBitsPerByte;
+
+	/*
+	 * When the journal replays blocks, it does so by writing directly to the disk
+	 * device (bypassing any filesystem vnodes and such).  When it finishes its I/Os
+	 * it also immediately re-reads and invalidates the range covered by the bp so
+	 * it does not leave anything lingering in the cache (for iosize reasons).
+	 *
+	 * As such, it is safe to do large I/Os here with ReadBitmapRange.
+	 *
+	 * NOTE: It is not recommended, but it is possible to call the function below
+	 * on sections of the bitmap that may be in core already as long as the pages are not
+	 * dirty.  In that case, we'd notice that something starting at that
+	 * logical block of the bitmap exists in the metadata cache, and we'd check
+	 * if the iosize requested is the same as what was already allocated for it.
+	 * Odds are pretty good we're going to request something larger.  In that case,
+	 * we just free the existing memory associated with the buf and reallocate a
+	 * larger range. This function should immediately invalidate it as soon as we're
+	 * done scanning, so this shouldn't cause any coherency issues.
+	 */
+	error = ReadBitmapRange(bitmap_ctx->hfsmp, byte_offset, iosize, (uint32_t **)&bitmap_ctx->bitmap, &bitmap_ctx->bp);
+	if (error)
+		return error;
+
+	/*
+	 * At this point, we have a giant wired buffer that represents some portion of
+	 * the bitmap file that we want to analyze.   We may not have gotten all 'iosize'
+	 * bytes though, so clip our ending bit to what we actually read in.
+	 */
+	last_bitmap_block = start_bit + buf_count(bitmap_ctx->bp) * kBitsPerByte;
+
+	/* Cap the last block to the total number of blocks if required */
+	if (last_bitmap_block > bitmap_ctx->hfsmp->totalBlocks)
+		last_bitmap_block = bitmap_ctx->hfsmp->totalBlocks;
+
+	bitmap_ctx->chunk_current = 0;  // new chunk of bitmap
+	bitmap_ctx->chunk_end = last_bitmap_block - start_bit;
+
+	return 0;
+}
+
+#endif // !HFS_ALLOC_TEST
+
+// Returns number of contiguous bits set at start
+static int bit_count_set(void *bitmap, int start, int end)
+{
+	if (start == end)
+		return 0;
+
+	assert(end > start);
+
+	const int start_bit = start & 63;
+	const int end_bit   = end & 63;
+
+	uint64_t *p = (uint64_t *)bitmap + start / 64;
+	uint64_t x = ~OSSwapBigToHostInt64(*p);
+
+	if ((start & ~63) == (end & ~63)) {
+		// Start and end in same 64 bits
+		x = (x & BIT_RIGHT_MASK(start_bit)) | BIT_RIGHT_MASK(end_bit);
+		return clzll(x) - start_bit;
+	}
+
+	// Deal with initial unaligned bit
+	x &= BIT_RIGHT_MASK(start_bit);
+
+	if (x)
+		return clzll(x) - start_bit;
+
+	// Go fast
+	++p;
+	int count = 64 - start_bit;
+	int nquads = (end - end_bit - start - 1) / 64;
+
+	while (nquads--) {
+		if (*p != 0xffffffffffffffffull) {
+			x = ~OSSwapBigToHostInt64(*p);
+			return count + clzll(x);
+		}
+		++p;
+		count += 64;
+	}
+
+	if (end_bit) {
+		x = ~OSSwapBigToHostInt64(*p) | BIT_RIGHT_MASK(end_bit);
+		count += clzll(x);
+	}
+
+	return count;
+}
+
+/* Returns the number of a run of cleared bits:
+ *  bitmap is a single chunk of memory being examined
+ *  start: the start bit relative to the current buffer to be examined; start is inclusive.
+ *  end: the end bit relative to the current buffer to be examined; end is not inclusive.
+ */
+static int bit_count_clr(void *bitmap, int start, int end)
+{
+	if (start == end)
+		return 0;
+
+	assert(end > start);
+
+	const int start_bit = start & 63;
+	const int end_bit   = end & 63;
+
+	uint64_t *p = (uint64_t *)bitmap + start / 64;
+	uint64_t x = OSSwapBigToHostInt64(*p);
+
+	if ((start & ~63) == (end & ~63)) {
+		// Start and end in same 64 bits
+		x = (x & BIT_RIGHT_MASK(start_bit)) | BIT_RIGHT_MASK(end_bit);
+
+		return clzll(x) - start_bit;
+	}
+
+	// Deal with initial unaligned bit
+	x &= BIT_RIGHT_MASK(start_bit);
+
+	if (x)
+		return clzll(x) - start_bit;
+
+	// Go fast
+	++p;
+	int count = 64 - start_bit;
+	int nquads = (end - end_bit - start - 1) / 64;
+
+	while (nquads--) {
+		if (*p) {
+			x = OSSwapBigToHostInt64(*p);
+			return count + clzll(x);
+		}
+		++p;
+		count += 64;
+	}
+
+	if (end_bit) {
+		x = OSSwapBigToHostInt64(*p) | BIT_RIGHT_MASK(end_bit);
+
+		count += clzll(x);
+	}
+
+	return count;
+}
+
+#if !HFS_ALLOC_TEST
+static errno_t update_summary_table(bitmap_context_t *bitmap_ctx, uint32_t start, uint32_t count, bool set)
+{
+	uint32_t	end, start_summary_bit, end_summary_bit;
+	errno_t		error = 0;
+
+	if (count == 0)
+		goto out;
+
+	if (!ISSET(bitmap_ctx->hfsmp->hfs_flags, HFS_SUMMARY_TABLE))
+		return 0;
+
+	if (hfs_get_summary_index (bitmap_ctx->hfsmp, start, &start_summary_bit)) {
+		error = EINVAL;
+		goto out;
+	}
+
+	end = start + count - 1;
+	if (hfs_get_summary_index (bitmap_ctx->hfsmp, end, &end_summary_bit)) {
+		error = EINVAL;
+		goto out;
+	}
+
+	// if summary table bit has been updated with free block previously, leave it.
+	if ((start_summary_bit == bitmap_ctx->last_free_summary_bit) && set)
+		start_summary_bit++;
+
+	for (uint32_t summary_bit = start_summary_bit; summary_bit <= end_summary_bit; summary_bit++)
+		hfs_set_summary (bitmap_ctx->hfsmp, summary_bit, set);
+
+	if (!set)
+		bitmap_ctx->last_free_summary_bit = end_summary_bit;
+
+out:
+	return error;
+
+}
+#endif //!HFS_ALLOC_TEST
+
+/*
+ * Read in chunks of the bitmap into memory, and find a run of cleared/set bits;
+ * the run can extend across chunk boundaries.
+ * bit_count_clr can be passed to get a run of cleared bits.
+ * bit_count_set can be passed to get a run of set bits.
+ */
+static errno_t hfs_bit_count(bitmap_context_t *bitmap_ctx, int (*fn)(void *, int ,int), uint32_t *bit_count)
+{
+	int count;
+	errno_t error = 0;
+
+	*bit_count = 0;
+
+	do {
+		if (bitmap_ctx->run_offset == 0 || bitmap_ctx->chunk_current == bitmap_ctx->chunk_end) {
+			if ((error = get_more_bits(bitmap_ctx)) != 0)
+				goto out;
+		}
+
+		if (bitmap_ctx->chunk_end == 0)
+			break;
+
+		count = fn(bitmap_ctx->bitmap, bitmap_ctx->chunk_current, bitmap_ctx->chunk_end);
+
+		bitmap_ctx->run_offset += count;
+		bitmap_ctx->chunk_current += count;
+		*bit_count += count;
+
+	} while (bitmap_ctx->chunk_current >= bitmap_ctx->chunk_end && count);
+
+out:
+	return error;
+
+}
+
+// Returns count of number of bits clear
+static errno_t hfs_bit_count_clr(bitmap_context_t *bitmap_ctx, uint32_t *count)
+{
+	return hfs_bit_count(bitmap_ctx, bit_count_clr, count);
+}
+
+// Returns count of number of bits set
+static errno_t hfs_bit_count_set(bitmap_context_t *bitmap_ctx, uint32_t *count)
+{
+	return hfs_bit_count(bitmap_ctx, bit_count_set, count);
+}
+
+static uint32_t hfs_bit_offset(bitmap_context_t *bitmap_ctx)
+{
+	return bitmap_ctx->run_offset;
+}
+
+/*
+ * Perform a full scan of the bitmap file.
+ * Note: during the scan of bitmap file, it may drop and reacquire the
+ * bitmap lock to let someone else use the bitmap for fairness.
+ * Currently it is used by HFS_GET_FSINFO statistic gathing, which
+ * is run while other processes might perform HFS operations.
+ */
+
+errno_t hfs_find_free_extents(struct hfsmount *hfsmp,
+							  void (*callback)(void *data, off_t free_extent_size), void *callback_arg)
+{
+	struct bitmap_context bitmap_ctx;
+	uint32_t count;
+	errno_t error = 0;
+
+	if ((hfsmp->hfs_flags & HFS_SUMMARY_TABLE) == 0) {
+		error = hfs_init_summary(hfsmp);
+		if (error)
+			return error;
+	}
+
+	bzero(&bitmap_ctx, sizeof(struct bitmap_context));
+
+	/*
+	 * The journal maintains list of recently deallocated blocks to
+	 * issue DKIOCUNMAPs when the corresponding journal transaction is
+	 * flushed to the disk.  To avoid any race conditions, we only
+	 * want one active trim list.  Therefore we make sure that the
+	 * journal trim list is sync'ed, empty, and not modifiable for
+	 * the duration of our scan.
+	 *
+	 * Take the journal lock before flushing the journal to the disk.
+	 * We will keep on holding the journal lock till we don't get the
+	 * bitmap lock to make sure that no new journal transactions can
+	 * start.  This will make sure that the journal trim list is not
+	 * modified after the journal flush and before getting bitmap lock.
+	 * We can release the journal lock after we acquire the bitmap
+	 * lock as it will prevent any further block deallocations.
+	 */
+	hfs_journal_lock(hfsmp);
+
+	/* Flush the journal and wait for all I/Os to finish up */
+	error = hfs_journal_flush(hfsmp, TRUE);
+	if (error) {
+		hfs_journal_unlock(hfsmp);
+		return error;
+	}
+
+	/*
+	 * Take bitmap lock to ensure it is not being modified.
+	 * Since we are reading larger than normal blocks from the bitmap, which
+	 * might confuse other parts of the bitmap code using normal blocks, we
+	 * take exclusive lock here.
+	 */
+	bitmap_ctx.lockflags = hfs_systemfile_lock(hfsmp, SFL_BITMAP, HFS_EXCLUSIVE_LOCK);
+
+#if !HFS_ALLOC_TEST
+	bitmap_ctx.lock_start = mach_absolute_time();
+#endif
+
+	/* Release the journal lock */
+	hfs_journal_unlock(hfsmp);
+
+	/*
+	 * Bitmap is read in large block size (up to 1MB),
+	 * unlike the runtime which reads the bitmap in the
+	 * 4K block size.  If the bitmap is read by both ways
+	 * at the same time, it can result in multiple buf_t with
+	 * different sizes and potentially case data corruption.
+	 * To avoid this, we invalidate all the existing buffers
+	 * associated with the bitmap vnode.
+	 */
+	error = buf_invalidateblks(hfsmp->hfs_allocation_vp, 0, 0, 0);
+	if (error)
+		goto out;
+
+	/*
+	 * Get the list of all free extent ranges.  hfs_alloc_scan_range()
+	 * will call hfs_fsinfo_data_add() to account for all the free
+	 * extent ranges found during scan.
+	 */
+	bitmap_ctx.hfsmp = hfsmp;
+	bitmap_ctx.run_offset = 0;
+
+	while (bitmap_ctx.run_offset < hfsmp->totalBlocks) {
+
+		uint32_t start = hfs_bit_offset(&bitmap_ctx);
+
+		if ((error = hfs_bit_count_clr(&bitmap_ctx, &count)) != 0)
+			goto out;
+
+		if (count)
+			callback(callback_arg, hfs_blk_to_bytes(count, hfsmp->blockSize));
+
+		if ((error = update_summary_table(&bitmap_ctx, start, count, false)) != 0)
+			goto out;
+
+		start = hfs_bit_offset(&bitmap_ctx);
+
+		if ((error = hfs_bit_count_set(&bitmap_ctx, &count)) != 0)
+			goto out;
+
+		if ((error = update_summary_table(&bitmap_ctx, start, count, true)) != 0)
+			goto out;
+	}
+
+out:
+	if (bitmap_ctx.lockflags) {
+		hfs_systemfile_unlock(hfsmp, bitmap_ctx.lockflags);
+	}
+
+	return error;
 }
 

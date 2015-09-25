@@ -64,6 +64,7 @@ ast_t sfi_processor_needs_ast(processor_t processor);
 
 void sfi_ast(thread_t thread);
 void sfi_reevaluate(thread_t thread);
+kern_return_t sfi_defer(uint64_t);
 #endif /* MACH_KERNEL_PRIVATE */
 
 #endif /* _KERN_SFI_H_ */

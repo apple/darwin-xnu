@@ -45,9 +45,7 @@ typedef enum {
 	HV_THREAD_TRAP = 1
 } hv_trap_type_t;
 
-typedef kern_return_t (*hv_trap_t) (void *thread_target, uint64_t arg);
-typedef void (*hv_callback_0_t)(void *target);
-typedef void (*hv_callback_1_t)(void *target, int argument);
+typedef kern_return_t (*hv_trap_t) (void *target, uint64_t arg);
 
 typedef struct  {
 	const hv_trap_t *traps;
@@ -55,12 +53,13 @@ typedef struct  {
 } hv_trap_table_t;
 
 typedef struct {
-	hv_callback_0_t dispatch;
-	hv_callback_0_t preempt;
-	hv_callback_0_t thread_destroy;
-	hv_callback_0_t task_destroy;
-	hv_callback_1_t volatile_state;
-	hv_callback_0_t memory_pressure;
+	void (*dispatch)(void *vcpu);
+	void (*preempt)(void *vcpu);
+	void (*suspend)(void);
+	void (*thread_destroy)(void *vcpu);
+	void (*task_destroy)(void *vm);
+	void (*volatile_state)(void *vcpu, int state);
+	void (*memory_pressure)(void);
 } hv_callbacks_t;
 
 extern hv_callbacks_t hv_callbacks;
@@ -79,7 +78,8 @@ extern kern_return_t hv_set_traps(hv_trap_type_t trap_type,
 	const hv_trap_t *traps, unsigned trap_count);
 extern void hv_release_traps(hv_trap_type_t trap_type);
 extern kern_return_t hv_set_callbacks(hv_callbacks_t callbacks);
-extern void hv_release_callbacks(void) ;
+extern void hv_release_callbacks(void);
+extern void hv_suspend(void);
 extern kern_return_t hv_task_trap(uint64_t index, uint64_t arg);
 extern kern_return_t hv_thread_trap(uint64_t index, uint64_t arg);
 

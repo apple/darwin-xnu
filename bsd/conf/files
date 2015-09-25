@@ -381,6 +381,7 @@ bsd/hfs/hfs_cnode.c				optional hfs
 bsd/hfs/hfs_encodinghint.c			standard
 bsd/hfs/hfs_encodings.c				standard
 bsd/hfs/hfs_endian.c				optional hfs
+bsd/hfs/hfs_fsinfo.c				optional hfs
 bsd/hfs/hfs_hotfiles.c				optional hfs
 bsd/hfs/hfs_link.c				optional hfs
 bsd/hfs/hfs_lookup.c				optional hfs

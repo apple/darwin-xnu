@@ -44,6 +44,7 @@ int hv_support_available = 0;
 hv_callbacks_t hv_callbacks = {
 	.dispatch = NULL,		/* thread is being dispatched for execution */
 	.preempt = NULL,		/* thread is being preempted */
+	.suspend = NULL,		/* system is being suspended */
 	.thread_destroy = NULL,	/* thread is being destroyed */
 	.task_destroy = NULL,	/* task is being destroyed */
 	.volatile_state = NULL,	/* thread state is becoming volatile */
@@ -142,7 +143,7 @@ hv_mp_notify(void) {
 			lck_mtx_unlock(hv_support_lck_mtx);
 			break;
 		} else {
-			hv_callbacks.memory_pressure(NULL);
+			hv_callbacks.memory_pressure();
 		}
 		lck_mtx_unlock(hv_support_lck_mtx);
 	}
@@ -244,6 +245,7 @@ hv_release_callbacks(void) {
 	hv_callbacks = (hv_callbacks_t) {
 		.dispatch = NULL,
 		.preempt = NULL,
+		.suspend = NULL,
 		.thread_destroy = NULL,
 		.task_destroy = NULL,
 		.volatile_state = NULL,
@@ -252,6 +254,14 @@ hv_release_callbacks(void) {
 
 	hv_callbacks_enabled = 0;
 	lck_mtx_unlock(hv_support_lck_mtx);
+}
+
+/* system suspend notification */
+void
+hv_suspend(void) {
+	if (hv_callbacks_enabled) {
+		hv_callbacks.suspend();
+	}
 }
 
 /* dispatch hv_task_trap/hv_thread_trap syscalls to trap handlers,

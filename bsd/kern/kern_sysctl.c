@@ -180,6 +180,11 @@ extern unsigned int vm_page_free_reserved;
 extern unsigned int vm_page_speculative_percentage;
 extern unsigned int vm_page_speculative_q_age_ms;
 
+#if (DEVELOPMENT || DEBUG)
+extern uint32_t	vm_page_creation_throttled_hard;
+extern uint32_t	vm_page_creation_throttled_soft;
+#endif /* DEVELOPMENT || DEBUG */
+
 /*
  * Conditionally allow dtrace to see these functions for debugging purposes.
  */
@@ -2660,6 +2665,7 @@ SYSCTL_INT(_vm, OID_AUTO, vm_page_external_count, CTLFLAG_RD | CTLFLAG_LOCKED, &
 SYSCTL_INT(_vm, OID_AUTO, vm_page_filecache_min, CTLFLAG_RW | CTLFLAG_LOCKED, &vm_page_filecache_min, 0, "");
 
 extern int	vm_compressor_mode;
+extern int	vm_compressor_is_active;
 extern uint32_t	swapout_target_age;
 extern int64_t  compressor_bytes_used;
 extern uint32_t	compressor_eval_period_in_msecs;
@@ -2673,6 +2679,7 @@ extern uint32_t	vm_compressor_unthrottle_threshold_divisor;
 extern uint32_t	vm_compressor_catchup_threshold_divisor;
 
 SYSCTL_INT(_vm, OID_AUTO, compressor_mode, CTLFLAG_RD | CTLFLAG_LOCKED, &vm_compressor_mode, 0, "");
+SYSCTL_INT(_vm, OID_AUTO, compressor_is_active, CTLFLAG_RD | CTLFLAG_LOCKED, &vm_compressor_is_active, 0, "");
 SYSCTL_QUAD(_vm, OID_AUTO, compressor_bytes_used, CTLFLAG_RD | CTLFLAG_LOCKED, &compressor_bytes_used, "");
 SYSCTL_INT(_vm, OID_AUTO, compressor_swapout_target_age, CTLFLAG_RD | CTLFLAG_LOCKED, &swapout_target_age, 0, "");
 
@@ -2698,6 +2705,18 @@ SYSCTL_INT(_vm, OID_AUTO, phantom_cache_eval_period_in_msecs, CTLFLAG_RW | CTLFL
 SYSCTL_INT(_vm, OID_AUTO, phantom_cache_thrashing_threshold, CTLFLAG_RW | CTLFLAG_LOCKED, &phantom_cache_thrashing_threshold, 0, "");
 SYSCTL_INT(_vm, OID_AUTO, phantom_cache_thrashing_threshold_ssd, CTLFLAG_RW | CTLFLAG_LOCKED, &phantom_cache_thrashing_threshold_ssd, 0, "");
 #endif
+
+#if (DEVELOPMENT || DEBUG)
+
+SYSCTL_UINT(_vm, OID_AUTO, vm_page_creation_throttled_hard,
+	    CTLFLAG_RD | CTLFLAG_KERN | CTLFLAG_LOCKED,
+	    &vm_page_creation_throttled_hard, 0, "");
+
+SYSCTL_UINT(_vm, OID_AUTO, vm_page_creation_throttled_soft,
+	    CTLFLAG_RD | CTLFLAG_KERN | CTLFLAG_LOCKED,
+	    &vm_page_creation_throttled_soft, 0, "");
+
+#endif /* DEVELOPMENT || DEBUG */
 
 /*
  * Enable tracing of voucher contents

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2014 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2015 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -105,6 +105,9 @@ extern struct timezone gTimeZone;
 
 /* How many free extents to cache per volume */
 #define kMaxFreeExtents		10
+
+/* The maximum time hfs locks can be held while performing hfs statistics gathering */
+#define HFS_FSINFO_MAX_LOCKHELD_TIME	20 * 1000000ULL	/* at most 20 milliseconds. */
 
 /*
  * HFS_MINFREE gives the minimum acceptable percentage
@@ -715,20 +718,6 @@ extern int hfs_prepare_release_storage (struct hfsmount *hfsmp, struct vnode *vp
 
 extern int hfs_bmap(struct vnode *, daddr_t, struct vnode **, daddr64_t *, unsigned int *);
 
-extern int hfs_fsync(struct vnode *, int, int, struct proc *);
-
-extern int hfs_access(struct vnode *, mode_t, kauth_cred_t, struct proc *);
-
-extern int hfs_removeallattr(struct hfsmount *hfsmp, u_int32_t fileid);
-
-extern int hfs_set_volxattr(struct hfsmount *hfsmp, unsigned int xattrtype, int state);
-
-extern int hfs_isallocated(struct hfsmount *hfsmp, u_int32_t startingBlock, u_int32_t numBlocks);
-
-extern int hfs_count_allocated(struct hfsmount *hfsmp, u_int32_t startBlock, 
-		u_int32_t numBlocks, u_int32_t *alloc_count);
-
-extern int hfs_isrbtree_active (struct hfsmount *hfsmp);
 extern errno_t hfs_ubc_setsize(vnode_t vp, off_t len, bool have_cnode_lock);
 
 
@@ -904,6 +893,7 @@ extern int hfs_vgetrsrc(struct hfsmount *hfsmp, struct vnode *vp,
 
 extern int hfs_update(struct vnode *, int);
 
+extern int hfs_fsync(struct vnode *, int, int, struct proc *);
 
 /*****************************************************************************
 	Functions from hfs_xattr.c
@@ -929,6 +919,9 @@ int hfs_getxattr_internal(cnode_t *, struct vnop_getxattr_args *,
 int hfs_xattr_write(vnode_t vp, const char *name, const void *data, size_t size);
 int hfs_setxattr_internal(struct cnode *, const void *, size_t, 
                           struct vnop_setxattr_args *, struct hfsmount *, u_int32_t);
+extern int hfs_removeallattr(struct hfsmount *hfsmp, u_int32_t fileid);
+extern int hfs_set_volxattr(struct hfsmount *hfsmp, unsigned int xattrtype, int state);
+
 
 
 /*****************************************************************************
@@ -950,6 +943,23 @@ extern int   hfs_haslinkorigin(cnode_t *cp);
 extern cnid_t  hfs_currentparent(cnode_t *cp);
 extern cnid_t  hfs_currentcnid(cnode_t *cp);
 
+
+/*****************************************************************************
+	Functions from VolumeAllocation.c
+ ******************************************************************************/
+extern int hfs_isallocated(struct hfsmount *hfsmp, u_int32_t startingBlock,
+						   u_int32_t numBlocks);
+
+extern int hfs_count_allocated(struct hfsmount *hfsmp, u_int32_t startBlock,
+							   u_int32_t numBlocks, u_int32_t *alloc_count);
+
+extern int hfs_isrbtree_active (struct hfsmount *hfsmp);
+
+/*****************************************************************************
+	Functions from hfs_fsinfo.c
+ ******************************************************************************/
+extern errno_t hfs_get_fsinfo(struct hfsmount *hfsmp, void *a_data);
+extern void hfs_fsinfo_data_add(struct hfs_fsinfo_data *fsinfo, uint64_t entry);
 
 #endif /* __APPLE_API_PRIVATE */
 #endif /* KERNEL */

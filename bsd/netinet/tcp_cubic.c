@@ -161,8 +161,10 @@ tcp_cubic_update(struct tcpcb *tp, u_int32_t rtt)
 	float K, var;
 	u_int32_t elapsed_time, win;
 
-	VERIFY(tp->t_ccstate->cub_last_max > 0);
 	win = min(tp->snd_cwnd, tp->snd_wnd);
+	if (tp->t_ccstate->cub_last_max == 0)
+		tp->t_ccstate->cub_last_max = tp->snd_ssthresh;
+
 	if (tp->t_ccstate->cub_epoch_start == 0) {
 		/*
 		 * This is the beginning of a new epoch, initialize some of

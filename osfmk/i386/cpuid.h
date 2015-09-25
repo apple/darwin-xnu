@@ -135,9 +135,7 @@
 #define CPUID_LEAF7_FEATURE_RTM      _Bit(11)	/* RTM */
 #define CPUID_LEAF7_FEATURE_RDSEED   _Bit(18)	/* RDSEED Instruction */
 #define CPUID_LEAF7_FEATURE_ADX      _Bit(19)	/* ADX Instructions */
-#if !defined(XNU_HIDE_SEED)
 #define CPUID_LEAF7_FEATURE_SMAP     _Bit(20)	/* Supervisor Mode Access Protect */
-#endif /* not XNU_HIDE_SEED */
 
 /*
  * The CPUID_EXTFEATURE_XXX values define 64-bit values
@@ -203,12 +201,10 @@
 #define CPUID_MODEL_HASWELL		0x3C
 #define CPUID_MODEL_HASWELL_EP		0x3F
 #define CPUID_MODEL_HASWELL_ULT		0x45
-#if !defined(XNU_HIDE_SEED)
 #define CPUID_MODEL_BROADWELL		0x3D
 #define CPUID_MODEL_BROADWELL_ULX	0x3D
 #define CPUID_MODEL_BROADWELL_ULT	0x3D
 #define CPUID_MODEL_BRYSTALWELL		0x47
-#endif /* not XNU_HIDE_SEED */
 
 #define CPUID_VMM_FAMILY_UNKNOWN	0x0
 #define CPUID_VMM_FAMILY_VMWARE		0x1

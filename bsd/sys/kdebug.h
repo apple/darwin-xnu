@@ -291,15 +291,15 @@ extern int kdebug_trace(uint32_t code, uint64_t arg1, uint64_t arg2, uint64_t ar
 /* Codes for Selective Forced Idle (DBG_MACH_SFI) */
 #define SFI_SET_WINDOW			0x0
 #define SFI_CANCEL_WINDOW		0x1
-#define SFI_SET_CLASS_OFFTIME	0x2
+#define SFI_SET_CLASS_OFFTIME		0x2
 #define SFI_CANCEL_CLASS_OFFTIME	0x3
 #define SFI_THREAD_DEFER		0x4
 #define SFI_OFF_TIMER			0x5
 #define SFI_ON_TIMER			0x6
 #define SFI_WAIT_CANCELED		0x7
 #define SFI_PID_SET_MANAGED		0x8
-#define SFI_PID_CLEAR_MANAGED	0x9
-
+#define SFI_PID_CLEAR_MANAGED		0x9
+#define SFI_GLOBAL_DEFER		0xa
 /* **** The Kernel Debug Sub Classes for Network (DBG_NETWORK) **** */
 #define DBG_NETIP	1	/* Internet Protocol */
 #define DBG_NETARP	2	/* Address Resolution Protocol */
@@ -462,11 +462,17 @@ extern int kdebug_trace(uint32_t code, uint64_t arg1, uint64_t arg2, uint64_t ar
 #define DBG_TRACE_STRING    1
 #define	DBG_TRACE_INFO	    2
 
-/*
- * TRACE_DATA_NEWTHREAD			0x1
- * TRACE_DATA_EXEC			0x2
- */
-#define TRACE_DATA_THREAD_TERMINATE	0x3	/* thread has been queued for deallocation and can no longer run */
+/* The Kernel Debug events: */
+#define	TRACE_DATA_NEWTHREAD		(TRACEDBG_CODE(DBG_TRACE_DATA, 1))
+#define	TRACE_DATA_EXEC			(TRACEDBG_CODE(DBG_TRACE_DATA, 2))
+#define	TRACE_DATA_THREAD_TERMINATE	(TRACEDBG_CODE(DBG_TRACE_DATA, 3))
+#define	TRACE_STRING_NEWTHREAD		(TRACEDBG_CODE(DBG_TRACE_STRING, 1))
+#define	TRACE_STRING_EXEC		(TRACEDBG_CODE(DBG_TRACE_STRING, 2))
+#define	TRACE_PANIC			(TRACEDBG_CODE(DBG_TRACE_INFO, 0))
+#define	TRACE_TIMESTAMPS		(TRACEDBG_CODE(DBG_TRACE_INFO, 1))
+#define	TRACE_LOST_EVENTS		(TRACEDBG_CODE(DBG_TRACE_INFO, 2))
+#define	TRACE_WRITING_EVENTS		(TRACEDBG_CODE(DBG_TRACE_INFO, 3))
+#define	TRACE_INFO_STRING		(TRACEDBG_CODE(DBG_TRACE_INFO, 4))
 
 /* The Kernel Debug Sub Classes for DBG_CORESTORAGE */
 #define DBG_CS_IO	0
@@ -638,6 +644,7 @@ extern unsigned int kdebug_enable;
 #define KDEBUG_ENABLE_ENTROPY 0x2		/* Obsolescent */
 #define KDEBUG_ENABLE_CHUD    0x4
 #define KDEBUG_ENABLE_PPT     0x8
+#define KDEBUG_ENABLE_SERIAL 0x10
 
 /*
  * Infer the supported kernel debug event level from config option.
@@ -1052,6 +1059,14 @@ typedef struct {
 
 /* Minimum value allowed when setting decrementer ticks */
 #define KDBG_MINRTCDEC  2500
+
+/* VFS lookup events for serial traces */
+#define VFS_LOOKUP	(FSDBG_CODE(DBG_FSRW,36))
+#define VFS_LOOKUP_DONE	(FSDBG_CODE(DBG_FSRW,39))
+
+#if (DEVELOPMENT || DEBUG)
+#define KDEBUG_MOJO_TRACE 1
+#endif
 
 #endif /* __APPLE_API_PRIVATE */
 #endif	/* PRIVATE */

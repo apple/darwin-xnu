@@ -6199,6 +6199,7 @@ vm_map_copy_copy(
 	 */
 
 	new_copy = (vm_map_copy_t) zalloc(vm_map_copy_zone);
+	new_copy->c_u.hdr.rb_head_store.rbh_root = (void*)(int)SKIP_RB_TREE;
 	*new_copy = *copy;
 
 	if (copy->type == VM_MAP_COPY_ENTRY_LIST) {
@@ -6847,6 +6848,7 @@ start_overwrite:
 				/* destroyed after successful copy_overwrite */
 			        copy = (vm_map_copy_t) 
 					zalloc(vm_map_copy_zone);
+				copy->c_u.hdr.rb_head_store.rbh_root = (void*)(int)SKIP_RB_TREE;
 				vm_map_copy_first_entry(copy) =
 					vm_map_copy_last_entry(copy) =
 					vm_map_copy_to_entry(copy);
@@ -7150,6 +7152,7 @@ vm_map_copy_overwrite(
 		 * Extract "head_copy" out of "copy".
 		 */
 		head_copy = (vm_map_copy_t) zalloc(vm_map_copy_zone);
+		head_copy->c_u.hdr.rb_head_store.rbh_root = (void*)(int)SKIP_RB_TREE;
 		vm_map_copy_first_entry(head_copy) =
 			vm_map_copy_to_entry(head_copy);
 		vm_map_copy_last_entry(head_copy) =
@@ -7191,6 +7194,7 @@ vm_map_copy_overwrite(
 		 * Extract "tail_copy" out of "copy".
 		 */
 		tail_copy = (vm_map_copy_t) zalloc(vm_map_copy_zone);
+		tail_copy->c_u.hdr.rb_head_store.rbh_root = (void*)(int)SKIP_RB_TREE;
 		vm_map_copy_first_entry(tail_copy) =
 			vm_map_copy_to_entry(tail_copy);
 		vm_map_copy_last_entry(tail_copy) =
@@ -8657,6 +8661,7 @@ vm_map_copyin_common(
 	 */
 
 	copy = (vm_map_copy_t) zalloc(vm_map_copy_zone);
+	copy->c_u.hdr.rb_head_store.rbh_root = (void*)(int)SKIP_RB_TREE;
 	vm_map_copy_first_entry(copy) =
 		vm_map_copy_last_entry(copy) = vm_map_copy_to_entry(copy);
 	copy->type = VM_MAP_COPY_ENTRY_LIST;
@@ -9392,6 +9397,7 @@ vm_map_copy_extract(
 	 */
 
 	copy = (vm_map_copy_t) zalloc(vm_map_copy_zone);
+	copy->c_u.hdr.rb_head_store.rbh_root = (void*)(int)SKIP_RB_TREE;
 	vm_map_copy_first_entry(copy) =
 		vm_map_copy_last_entry(copy) = vm_map_copy_to_entry(copy);
 	copy->type = VM_MAP_COPY_ENTRY_LIST;
@@ -9443,6 +9449,7 @@ vm_map_copyin_object(
 	 */
 
 	copy = (vm_map_copy_t) zalloc(vm_map_copy_zone);
+	copy->c_u.hdr.rb_head_store.rbh_root = (void*)(int)SKIP_RB_TREE;
 	copy->type = VM_MAP_COPY_OBJECT;
 	copy->cpy_object = object;
 	copy->offset = offset;

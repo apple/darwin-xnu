@@ -2401,10 +2401,9 @@ filt_specdetach(struct knote *kn)
 	if (ret != KERN_SUCCESS) {
 		panic("filt_specdetach(): failed to unlink wait queue link.");
 	}
-
+	knote_clearstayqueued(kn);
 	(void)wait_queue_link_free(kn->kn_hook);
 	kn->kn_hook = NULL;
-	kn->kn_status &= ~KN_STAYQUEUED;
 }
 
 static int 

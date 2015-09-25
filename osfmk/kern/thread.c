@@ -309,6 +309,12 @@ thread_bootstrap(void)
 #endif /* HYPERVISOR */
 
 	thread_template.t_chud = 0;
+
+#if (DEVELOPMENT || DEBUG)
+	thread_template.t_page_creation_throttled_hard = 0;
+	thread_template.t_page_creation_throttled_soft = 0;
+#endif /* DEVELOPMENT || DEBUG */
+	thread_template.t_page_creation_throttled = 0;
 	thread_template.t_page_creation_count = 0;
 	thread_template.t_page_creation_time = 0;
 
@@ -663,7 +669,7 @@ void
 thread_terminate_enqueue(
 	thread_t		thread)
 {
-	KERNEL_DEBUG_CONSTANT(TRACEDBG_CODE(DBG_TRACE_DATA, TRACE_DATA_THREAD_TERMINATE) | DBG_FUNC_NONE, thread->thread_id, 0, 0, 0, 0);
+	KERNEL_DEBUG_CONSTANT(TRACE_DATA_THREAD_TERMINATE | DBG_FUNC_NONE, thread->thread_id, 0, 0, 0, 0);
 
 	simple_lock(&thread_terminate_lock);
 	enqueue_tail(&thread_terminate_queue, (queue_entry_t)thread);

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2014 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2015 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -4302,8 +4302,7 @@ nfs_mount_zombie(struct nfsmount *nmp, int nm_state_flags)
 		nfs4_mount_callback_shutdown(nmp);
 
 	/* Destroy any RPCSEC_GSS contexts */
-	if (!TAILQ_EMPTY(&nmp->nm_gsscl))
-		nfs_gss_clnt_ctx_unmount(nmp);
+	nfs_gss_clnt_ctx_unmount(nmp);
 
 	/* mark the socket for termination */
 	lck_mtx_lock(&nmp->nm_lock);

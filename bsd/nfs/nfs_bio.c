@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2014 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2015 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -3797,7 +3797,7 @@ again:
 		}
 	}
 
-	if (req->r_achain.tqe_next == NFSREQNOLIST)
+	if (req->r_achain.tqe_next == NFSREQNOLIST || req->r_achain.tqe_next == NFSIODCOMPLETING)
 		TAILQ_INSERT_TAIL(&nmp->nm_iodq, req, r_achain);
 
 	/* If this mount doesn't already have an nfsiod working on it... */

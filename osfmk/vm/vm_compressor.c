@@ -60,6 +60,7 @@ int		vm_compressor_mode = VM_PAGER_COMPRESSOR_WITH_SWAP;
 int		vm_scale = 16;
 
 
+int		vm_compressor_is_active = 0;
 int		vm_compression_limit = 0;
 
 extern boolean_t vm_swap_up;
@@ -464,6 +465,9 @@ vm_compressor_init(void)
 		vm_compressor_swap_init();
 	}
 
+	if (COMPRESSED_PAGER_IS_ACTIVE || DEFAULT_FREEZER_COMPRESSED_PAGER_IS_SWAPBACKED)
+		vm_compressor_is_active = 1;
+
 #if CONFIG_FREEZE
 	memorystatus_freeze_enabled = TRUE;
 #endif /* CONFIG_FREEZE */
@@ -764,9 +768,9 @@ void
 c_seg_free_locked(c_segment_t c_seg)
 {
 	int		segno, i;
-	int		pages_populated;
+	int		pages_populated = 0;
 	int32_t		*c_buffer = NULL;
-	uint64_t	c_swap_handle;
+	uint64_t	c_swap_handle = 0;
 
 	assert(!c_seg->c_on_minorcompact_q);
 
@@ -1017,9 +1021,7 @@ struct {
 } c_seg_major_compact_stats;
 
 
-#define	C_MAJOR_COMPACTION_AGE_APPROPRIATE	30
-#define C_MAJOR_COMPACTION_OLD_ENOUGH		300
-#define C_MAJOR_COMPACTION_SIZE_APPROPRIATE	((C_SEG_BUFSIZE * 80) / 100)
+#define C_MAJOR_COMPACTION_SIZE_APPROPRIATE	((C_SEG_BUFSIZE * 90) / 100)
 
 
 boolean_t
@@ -2398,7 +2400,7 @@ static int
 c_compress_page(char *src, c_slot_mapping_t slot_ptr, c_segment_t *current_chead, char *scratch_buf)
 {
 	int		c_size;
-	int		c_rounded_size;
+	int		c_rounded_size = 0;
 	int		max_csize;
 	c_slot_t	cs;
 	c_segment_t	c_seg;

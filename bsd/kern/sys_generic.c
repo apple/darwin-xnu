@@ -1487,7 +1487,7 @@ poll_nocancel(struct proc *p, struct poll_nocancel_args *uap, int32_t *retval)
 		/* Handle input events */
 		if (events & ( POLLIN | POLLRDNORM | POLLPRI | POLLRDBAND | POLLHUP )) {
 			kev.filter = EVFILT_READ;
-			if (!(events & ( POLLIN | POLLRDNORM )))
+			if (events & ( POLLPRI | POLLRDBAND ))
 				kev.flags |= EV_OOBAND;
 			kerror = kevent_register(kq, &kev, p);
 		}
@@ -1559,7 +1559,7 @@ poll_callback(__unused struct kqueue *kq, struct kevent64_s *kevp, void *data)
 	struct poll_continue_args *cont = (struct poll_continue_args *)data;
 	struct pollfd *fds = CAST_DOWN(struct pollfd *, kevp->udata);
 	short prev_revents = fds->revents;
-	short mask;
+	short mask = 0;
 
 	/* convert the results back into revents */
 	if (kevp->flags & EV_EOF)
@@ -1572,7 +1572,8 @@ poll_callback(__unused struct kqueue *kq, struct kevent64_s *kevp, void *data)
 		if (fds->revents & POLLHUP)
 			mask = (POLLIN | POLLRDNORM | POLLPRI | POLLRDBAND );
 		else {
-			mask = (POLLIN | POLLRDNORM );
+			if ((kevp->flags & EV_ERROR) == 0 && kevp->data != 0)
+				mask = (POLLIN | POLLRDNORM );
 			if (kevp->flags & EV_OOBAND)
 				mask |= ( POLLPRI | POLLRDBAND );
 		}

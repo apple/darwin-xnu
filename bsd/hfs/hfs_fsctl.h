@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2004-2014 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2004-2015 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -54,6 +54,7 @@ struct hfs_journal_info {
 };
 
 
+// Will be deprecated and replaced by hfs_fsinfo
 struct hfsinfo_metadata {
 	uint32_t total;
 	uint32_t extents;
@@ -62,6 +63,189 @@ struct hfsinfo_metadata {
 	uint32_t attribute;
 	uint32_t journal;
 	uint32_t reserved[4];
+};
+
+/*
+ * Flags for hfs_fsinfo_data structure
+ */
+#define HFS_FSINFO_CLASS_A      0x0001	/* Information for class A files requested */
+#define HFS_FSINFO_CLASS_B      0x0002	/* Information for class B files requested */
+#define HFS_FSINFO_CLASS_C      0x0004	/* Information for class C files requested */
+#define HFS_FSINFO_CLASS_D      0x0008	/* Information for class D files requested */
+
+/*
+ * Maximum number of buckets to represent range from 0 to 1TB (2^40) in
+ * increments of power of 2, and one catch-all bucket for anything that
+ * is greater than 1TB
+ */
+#define HFS_FSINFO_DATA_MAX_BUCKETS     42
+
+/*
+ * Maximum number of buckets to represents percentage range from 0 to 100
+ * in increments of 10.
+ */
+#define HFS_FSINFO_PERCENT_MAX_BUCKETS  10
+
+/*
+ * Maximum number of buckets to represent number of file/directory name characters
+ * (range 1 to 255) in increments of 5.
+ */
+#define HFS_FSINFO_NAME_MAX_BUCKETS     51
+
+/*
+ * Version number to ensure that the caller and the kernel have same understanding
+ * of the hfs_fsinfo_data structure.  This version needs to be bumped whenever the
+ * number of buckets is changed.
+ */
+#define HFS_FSINFO_VERSION              1
+
+/*
+ * hfs_fsinfo_data is generic data structure to aggregate information like sizes
+ * or counts in buckets of power of 2.  Each bucket represents a range of values
+ * that is determined based on its index in the array.  Specifically, buckets[i]
+ * represents values that are greater than or equal to 2^(i-1) and less than 2^i,
+ * except the last bucket which represents range greater than or equal to 2^(i-1)
+ *
+ * The current maximum number of buckets is 41, so we can represent range from
+ * 0 up to 1TB in increments of power of 2, and then a catch-all bucket of
+ * anything that is greater than or equal to 1TB.
+ *
+ * For example,
+ * bucket[0]  -> greater than or equal to 0 and less than 1
+ * bucket[1]  -> greater than or equal to 1 and less than 2
+ * bucket[10] -> greater than or equal to 2^(10-1) = 512 and less than 2^10 = 1024
+ * bucket[20] -> greater than or equal to 2^(20-1) = 512KB and less than 2^20 = 1MB
+ * bucket[41] -> greater than or equal to 2^(41-1) = 1TB
+ *
+ * Note that fsctls that populate this data structure can take long time to
+ * execute as this operation can be I/O intensive (traversing btrees) and compute
+ * intensive.
+ *
+ * WARNING: Any changes to this structure should also update version number to
+ * ensure that the clients and kernel are reading/writing correctly.
+ */
+
+/* 
+ * The header includes the user input fields.
+ */
+typedef struct hfs_fsinfo_header {
+	uint32_t request_type;
+	uint16_t version;
+	uint16_t flags;
+} hfs_fsinfo_header_t;
+
+struct hfs_fsinfo_data {
+	hfs_fsinfo_header_t header;
+	uint32_t			bucket[HFS_FSINFO_DATA_MAX_BUCKETS];
+};
+
+/*
+ * Structure to represent information about metadata files
+ *
+ * WARNING: Any changes to this structure should also update version number to
+ * ensure that the clients and kernel are reading/writing correctly.
+ */
+struct hfs_fsinfo_metadata {
+	hfs_fsinfo_header_t header;
+	uint32_t			extents;
+	uint32_t			catalog;
+	uint32_t			allocation;
+	uint32_t			attribute;
+	uint32_t			journal;
+};
+
+/*
+ * Structure to represent distribution of number of file name characters
+ * in increments of 5s.  Each bucket represents a range of values that is
+ * determined based on its index in the array.  So bucket[i] represents values
+ * that are greater than or equal to (i*5) and less than ((i+1)*10).
+ *
+ * Since this structure represents range of file name characters and the
+ * maximum number of unicode characters in HFS+ is 255, the maximum number
+ * of buckets will be 52 [0..51].
+ *
+ * For example,
+ * bucket[4] -> greater than or equal to 20 and less than 25 characters
+ * bucket[51] -> equal to 255 characters
+ *
+ * WARNING: Any changes to this structure should also update version number to
+ * ensure that the clients and kernel are reading/writing correctly.
+ */
+struct hfs_fsinfo_name {
+	hfs_fsinfo_header_t	header;
+	uint32_t			bucket[HFS_FSINFO_NAME_MAX_BUCKETS];
+};
+
+/*
+ * Structure to represent information about content protection classes
+ *
+ * WARNING: Any changes to this structure should also update version number to
+ * ensure that the clients and kernel are reading/writing correctly.
+ */
+struct hfs_fsinfo_cprotect {
+	hfs_fsinfo_header_t	header;
+	uint32_t class_A;
+	uint32_t class_B;
+	uint32_t class_C;
+	uint32_t class_D;
+	uint32_t class_E;
+	uint32_t class_F;
+};
+
+/*
+ * Union of all the different values returned by HFSIOC_FSINFO fsctl
+ */
+union hfs_fsinfo {
+	hfs_fsinfo_header_t			header;
+	struct hfs_fsinfo_data		data;
+	struct hfs_fsinfo_metadata	metadata;
+	struct hfs_fsinfo_name		name;
+	struct hfs_fsinfo_cprotect cprotect;
+};
+typedef union hfs_fsinfo hfs_fsinfo;
+
+/*
+ * Type of FSINFO requested, specified by the caller in request_type field
+ */
+enum {
+	/* Information about number of allocation blocks for each metadata file, returns struct hfs_fsinfo_metadata */
+	HFS_FSINFO_METADATA_BLOCKS_INFO	= 1,
+	
+	/* Information about number of extents for each metadata file, returns struct hfs_fsinfo_metadata */
+	HFS_FSINFO_METADATA_EXTENTS		= 2,
+	
+	/* Information about percentage of free nodes vs used nodes in metadata btrees, returns struct hfs_fsinfo_metadata */
+	HFS_FSINFO_METADATA_PERCENTFREE	= 3,
+	
+	/* Distribution of number of extents for data files (data fork, no rsrc fork, no xattr), returns struct hfs_fsinfo_data */
+	HFS_FSINFO_FILE_EXTENT_COUNT	= 4,
+	
+	/* Distribution of extent sizes for data files (data fork, no rsrc fork, no xattr), returns struct hfs_fsinfo_data */
+	HFS_FSINFO_FILE_EXTENT_SIZE		= 5,
+	
+	/* Distribution of file sizes for data files (data fork, no rsrc fork, no xattr), returns struct hfs_fsinfo_data */
+	HFS_FSINFO_FILE_SIZE			= 6,
+
+	/* Distribution of valence for all directories, returns struct hfs_fsinfo_data */
+	HFS_FSINFO_DIR_VALENCE			= 7,
+	
+	/* Distribution of file/directory name size in unicode characters, returns struct hfs_fsinfo_name */
+	HFS_FSINFO_NAME_SIZE			= 8,
+	
+	/* Distribution of extended attribute sizes, returns hfs_fsinfo_data */
+	HFS_FSINFO_XATTR_SIZE			= 9,
+	
+	/* Distribution of free space for the entire file system, returns struct hfs_fsinfo_data */
+	HFS_FSINFO_FREE_EXTENTS			= 10,
+
+	/* Information about number of files belonging to each class, returns hfs_fsinfo_cprotect */
+	HFS_FSINFO_FILE_CPROTECT_COUNT	= 11,
+
+	/*
+	 * Distribution of symbolic link sizes for data files (data fork, no rsrc fork, no xattr),
+	 * returns struct hfs_fsinfo_data
+	 */
+	HFS_FSINFO_SYMLINK_SIZE			= 12,
 };
 
 
@@ -166,6 +350,8 @@ struct hfsinfo_metadata {
 
 
 /* 
+ * XXX: Will be deprecated and replaced by HFSIOC_GET_FSINFO
+ *
  * Get information about number of file system allocation blocks used by metadata 
  * files on the volume, including individual btrees and journal file.  The caller 
  * can determine the size of file system allocation block using value returned as 
@@ -177,6 +363,10 @@ struct hfsinfo_metadata {
 /* Send TRIMs for all free blocks to the underlying device */
 #define HFSIOC_CS_FREESPACE_TRIM _IOWR('h', 39, u_int32_t)
 #define HFS_CS_FREESPACE_TRIM    IOCBASECMD(HFSIOC_CS_FREESPACE_TRIM)
+
+/* Get file system information for the given volume */
+#define HFSIOC_GET_FSINFO        _IOWR('h', 45, hfs_fsinfo)
+#define HFS_GET_FSINFO           IOCBASECMD(HFSIOC_GET_FSINFO)
 
 #endif /* __APPLE_API_UNSTABLE */
 

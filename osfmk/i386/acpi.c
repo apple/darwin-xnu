@@ -35,6 +35,9 @@
 #if CONFIG_MTRR
 #include <i386/mtrr.h>
 #endif
+#if HYPERVISOR
+#include <kern/hv_support.h>
+#endif
 #if CONFIG_VMX
 #include <i386/vmx/vmx_cpu.h>
 #endif
@@ -192,6 +195,11 @@ acpi_sleep_kernel(acpi_sleep_callback func, void *refcon)
 
 	/* Save power management timer state */
 	pmTimerSave();
+
+#if HYPERVISOR
+	/* Notify hypervisor that we are about to sleep */
+	hv_suspend();
+#endif
 
 #if CONFIG_VMX
 	/* 

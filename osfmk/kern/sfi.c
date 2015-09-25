@@ -162,6 +162,7 @@ struct sfi_class_state {
 	uint64_t	off_time_interval;
 
 	timer_call_data_t	on_timer;
+	uint64_t	on_timer_deadline;
 	boolean_t			on_timer_programmed;
 
 	boolean_t	class_sfi_is_enabled;
@@ -335,12 +336,15 @@ static void sfi_timer_global_off(
 
 			/* Push out on-timer */
 			on_timer_deadline = now + sfi_classes[i].off_time_interval;
+			sfi_classes[i].on_timer_deadline = on_timer_deadline;
+
 			timer_call_enter1(&sfi_classes[i].on_timer, NULL, on_timer_deadline, TIMER_CALL_SYS_CRITICAL);
 		} else {
 			/* If this class no longer needs SFI, make sure the timer is cancelled */
 			sfi_classes[i].class_in_on_phase = TRUE;
 			if (sfi_classes[i].on_timer_programmed) {
 				sfi_classes[i].on_timer_programmed = FALSE;
+				sfi_classes[i].on_timer_deadline = ~0ULL;
 				timer_call_cancel(&sfi_classes[i].on_timer);
 			}
 		}
@@ -420,7 +424,10 @@ static void sfi_timer_per_class_on(
 	 * Since we have the sfi_lock held and have changed "class_in_on_phase", we expect
 	 * no new threads to be put on this wait queue until the global "off timer" has fired.
 	 */
+
 	sfi_class->class_in_on_phase = TRUE;
+	sfi_class->on_timer_programmed = FALSE;
+
 	kret = wait_queue_wakeup64_all(&sfi_class->wait_queue,
 								   CAST_EVENT64_T(sfi_class_id),
 								   THREAD_AWAKENED);
@@ -530,6 +537,52 @@ kern_return_t sfi_window_cancel(void)
 	splx(s);
 
 	return (KERN_SUCCESS);
+}
+
+/* Defers SFI off and per-class on timers (if live) by the specified interval
+ * in Mach Absolute Time Units. Currently invoked to align with the global
+ * forced idle mechanism. Making some simplifying assumptions, the iterative GFI
+ * induced SFI on+off deferrals form a geometric series that converges to yield
+ * an effective SFI duty cycle that is scaled by the GFI duty cycle. Initial phase
+ * alignment and congruency of the SFI/GFI periods can distort this to some extent.
+ */
+
+kern_return_t sfi_defer(uint64_t sfi_defer_matus)
+{
+	spl_t		s;
+	kern_return_t kr = KERN_FAILURE;
+	s = splsched();
+
+	KERNEL_DEBUG_CONSTANT(MACHDBG_CODE(DBG_MACH_SFI, SFI_GLOBAL_DEFER), sfi_defer_matus, 0, 0, 0, 0);
+
+	simple_lock(&sfi_lock);
+	if (!sfi_is_enabled) {
+		goto sfi_defer_done;
+	}
+
+	assert(sfi_next_off_deadline != 0);
+
+	sfi_next_off_deadline += sfi_defer_matus;
+	timer_call_enter1(&sfi_timer_call_entry, NULL, sfi_next_off_deadline, TIMER_CALL_SYS_CRITICAL);
+
+	int i;
+	for (i = 0; i < MAX_SFI_CLASS_ID; i++) {
+		if (sfi_classes[i].class_sfi_is_enabled) {
+			if (sfi_classes[i].on_timer_programmed) {
+				uint64_t new_on_deadline = sfi_classes[i].on_timer_deadline + sfi_defer_matus;
+				sfi_classes[i].on_timer_deadline = new_on_deadline;
+				timer_call_enter1(&sfi_classes[i].on_timer, NULL, new_on_deadline, TIMER_CALL_SYS_CRITICAL);
+			}
+		}
+	}
+
+	kr = KERN_SUCCESS;
+sfi_defer_done:
+	simple_unlock(&sfi_lock);
+
+	splx(s);
+
+	return (kr);
 }
 
 

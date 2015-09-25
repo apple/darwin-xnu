@@ -1663,6 +1663,7 @@ fill_vnodeinfo(vnode_t vp, struct vnode_info *vinfo)
 		struct stat64 sb;
 		int error = 0;
 
+		bzero(&sb, sizeof(struct stat64));
 		context = vfs_context_create((vfs_context_t)0);
 		error = vn_stat(vp, &sb, NULL, 1, context);
 		(void)vfs_context_rele(context);

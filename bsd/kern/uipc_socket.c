@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1998-2014 Apple Inc. All rights reserved.
+ * Copyright (c) 1998-2015 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -5392,6 +5392,17 @@ soo_kqfilter(struct fileproc *fp, struct knote *kn, vfs_context_t ctx)
 	switch (kn->kn_filter) {
 	case EVFILT_READ:
 		kn->kn_fop = &soread_filtops;
+		/*
+		 * If the caller explicitly asked for OOB results (e.g. poll()),
+		 * save that off in the hookid field and reserve the kn_flags
+		 * EV_OOBAND bit for output only).
+		 */
+		if (kn->kn_flags & EV_OOBAND) {
+			kn->kn_flags &= ~EV_OOBAND;
+			kn->kn_hookid = EV_OOBAND;
+		} else {
+			kn->kn_hookid = 0;
+		}
 		skl = &so->so_rcv.sb_sel.si_note;
 		break;
 	case EVFILT_WRITE:
@@ -5467,44 +5478,42 @@ filt_soread(struct knote *kn, long hint)
 	}
 
 	/* socket isn't a listener */
-
 	kn->kn_data = so->so_rcv.sb_cc - so->so_rcv.sb_ctl;
+	/*
+	 * Clear out EV_OOBAND that filt_soread may have set in the
+	 * past.
+	 */
+	kn->kn_flags &= ~EV_OOBAND;
 
-	if (so->so_oobmark) {
-		if (kn->kn_flags & EV_OOBAND) {
+	if ((so->so_oobmark) || (so->so_state & SS_RCVATMARK)){
+		kn->kn_flags |= EV_OOBAND;
+		/*
+		 * If caller registered explicit interest in OOB data,
+		 * return immediately (data == amount beyond mark, for
+		 * legacy reasons - that should be changed later).
+		 */
+		if (kn->kn_hookid == EV_OOBAND) {
+			/*
+			 * When so_state is SS_RCVATMARK, so_oobmark
+			 * is 0.
+			 */
 			kn->kn_data -= so->so_oobmark;
 			if ((hint & SO_FILT_HINT_LOCKED) == 0)
 				socket_unlock(so, 1);
 			return (1);
 		}
-		kn->kn_data = so->so_oobmark;
-		kn->kn_flags |= EV_OOBAND;
-	} else {
-		if ((so->so_state & SS_CANTRCVMORE)
-#if CONTENT_FILTER
-		&& cfil_sock_data_pending(&so->so_rcv) == 0
-#endif /* CONTENT_FILTER */
-		) {
-			kn->kn_flags |= EV_EOF;
-			kn->kn_fflags = so->so_error;
-			if ((hint & SO_FILT_HINT_LOCKED) == 0)
-				socket_unlock(so, 1);
-			return (1);
-		}
 	}
-
-	if (so->so_state & SS_RCVATMARK) {
-		if (kn->kn_flags & EV_OOBAND) {
-			if ((hint & SO_FILT_HINT_LOCKED) == 0)
-				socket_unlock(so, 1);
-			return (1);
-		}
-		kn->kn_flags |= EV_OOBAND;
-	} else if (kn->kn_flags & EV_OOBAND) {
-		kn->kn_data = 0;
+	
+	if ((so->so_state & SS_CANTRCVMORE)
+#if CONTENT_FILTER
+	    && cfil_sock_data_pending(&so->so_rcv) == 0
+#endif /* CONTENT_FILTER */
+	   ) {
+		kn->kn_flags |= EV_EOF;
+		kn->kn_fflags = so->so_error;
 		if ((hint & SO_FILT_HINT_LOCKED) == 0)
 			socket_unlock(so, 1);
-		return (0);
+		return (1);
 	}
 
 	if (so->so_error) {	/* temporary udp error */
@@ -5524,7 +5533,7 @@ filt_soread(struct knote *kn, long hint)
 	if ((hint & SO_FILT_HINT_LOCKED) == 0)
 		socket_unlock(so, 1);
 
-	return ((kn->kn_flags & EV_OOBAND) || kn->kn_data >= lowwat);
+	return (kn->kn_data >= lowwat);
 }
 
 static void

@@ -2041,7 +2041,7 @@ ip_dooptions(struct mbuf *m, int pass, struct sockaddr_in *next_hop)
 	struct in_ifaddr *ia;
 	int opt, optlen, cnt, off, code, type = ICMP_PARAMPROB, forward = 0;
 	struct in_addr *sin, dst;
-	n_time ntime;
+	u_int32_t ntime;
 	struct sockaddr_in ipaddr = {
 	    sizeof (ipaddr), AF_INET, 0, { 0 }, { 0, } };
 
@@ -2305,8 +2305,6 @@ nosourcerouting:
 	}
 	return (0);
 bad:
-	/* XXX icmp_error adds in hdr length */
-	ip->ip_len -= IP_VHL_HL(ip->ip_vhl) << 2;
 	icmp_error(m, type, code, 0, 0);
 	OSAddAtomic(1, &ipstat.ips_badoptions);
 	return (1);

@@ -192,6 +192,7 @@ unsigned int new_nkdbufs = 0;
 unsigned int wake_nkdbufs = 0;
 unsigned int write_trace_on_panic = 0;
 unsigned int trace_typefilter = 0;
+boolean_t    trace_serial = FALSE;
 
 /* mach leak logging */
 int log_leaks = 0;
@@ -480,6 +481,11 @@ kernel_bootstrap_thread(void)
 #endif
 
 #if (defined(__i386__) || defined(__x86_64__))
+	if (kdebug_serial) {
+		new_nkdbufs = 1;
+		if (trace_typefilter == 0)
+			trace_typefilter = 1;
+	}
 	if (turn_on_log_leaks && !new_nkdbufs)
 		new_nkdbufs = 200000;
 	if (trace_typefilter)

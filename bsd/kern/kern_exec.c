@@ -642,6 +642,13 @@ exec_fat_imgact(struct image_params *imgp)
 		int nfat_arch = 0, pr = 0, f = 0;
 
 		nfat_arch = OSSwapBigToHostInt32(fat_header->nfat_arch);
+
+		/* make sure bogus nfat_arch doesn't cause chaos - 19376072 */
+		if ( (sizeof(struct fat_header) + (nfat_arch * sizeof(struct fat_arch))) > PAGE_SIZE ) {
+			error = EBADEXEC;
+			goto bad;
+		}
+
 		/* Check each preference listed against all arches in header */
 		for (pr = 0; pr < NBINPREFS; pr++) {
 			cpu_type_t pref = psa->psa_binprefs[pr];
@@ -1114,14 +1121,14 @@ grade:
 		kdbg_trace_string(p, &dbg_arg1, &dbg_arg2, &dbg_arg3, &dbg_arg4);
 
 		if (vfexec || spawn) {
-			KERNEL_DEBUG_CONSTANT1((TRACEDBG_CODE(DBG_TRACE_DATA, 2)) | DBG_FUNC_NONE,
+			KERNEL_DEBUG_CONSTANT1(TRACE_DATA_EXEC | DBG_FUNC_NONE,
 					p->p_pid ,0,0,0, (uintptr_t)thread_tid(thread));
-			KERNEL_DEBUG_CONSTANT1((TRACEDBG_CODE(DBG_TRACE_STRING, 2)) | DBG_FUNC_NONE,
+			KERNEL_DEBUG_CONSTANT1(TRACE_STRING_EXEC | DBG_FUNC_NONE,
 					dbg_arg1, dbg_arg2, dbg_arg3, dbg_arg4, (uintptr_t)thread_tid(thread));
 		} else {
-			KERNEL_DEBUG_CONSTANT((TRACEDBG_CODE(DBG_TRACE_DATA, 2)) | DBG_FUNC_NONE,
+			KERNEL_DEBUG_CONSTANT(TRACE_DATA_EXEC | DBG_FUNC_NONE,
 					p->p_pid ,0,0,0,0);
-			KERNEL_DEBUG_CONSTANT((TRACEDBG_CODE(DBG_TRACE_STRING, 2)) | DBG_FUNC_NONE,
+			KERNEL_DEBUG_CONSTANT(TRACE_STRING_EXEC | DBG_FUNC_NONE,
 					dbg_arg1, dbg_arg2, dbg_arg3, dbg_arg4, 0);
 		}
 	}
@@ -2429,7 +2436,7 @@ bad:
 		/* notify only if it has not failed due to FP Key error */
 		if ((p->p_lflag & P_LTERM_DECRYPTFAIL) == 0)
 			proc_knote(p, NOTE_EXEC);
-	} else {
+	} else if (error == 0) {
 		/* reset the importance attribute from our previous life */
 		task_importance_reset(p->task);
 

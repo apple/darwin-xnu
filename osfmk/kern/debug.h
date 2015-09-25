@@ -299,6 +299,7 @@ extern unsigned int 	disable_debug_output;
 
 extern unsigned int 	panicDebugging;
 extern unsigned int 	logPanicDataToScreen;
+extern unsigned int 	kdebug_serial;
 
 extern int db_run_mode;
 
@@ -332,6 +333,8 @@ void	panic_display_system_configuration(void);
 void	panic_display_zprint(void);
 void	panic_display_kernel_aslr(void);
 void	panic_display_hibb(void);
+void	panic_display_model_name(void);
+void	panic_display_kernel_uuid(void);
 #if CONFIG_ZLEAKS
 void	panic_display_ztrace(void);
 #endif /* CONFIG_ZLEAKS */
@@ -359,7 +362,8 @@ void 	panic_display_ecc_errors(void);
 						* post-panic crashdump/paniclog
 						* dump.
 						*/
-#define DB_NMI_BTN_ENA  0x8000 /* Enable button to directly trigger NMI */
+#define DB_NMI_BTN_ENA  0x8000  /* Enable button to directly trigger NMI */
+#define DB_PRT_KDEBUG   0x10000 /* kprintf KDEBUG traces */
 
 #if DEBUG
 /*

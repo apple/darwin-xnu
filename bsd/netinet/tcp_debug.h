@@ -67,7 +67,7 @@
 #ifdef PRIVATE
 
 struct	tcp_debug {
-	n_time	td_time;
+	u_int32_t td_time;
 	short	td_act;
 	short	td_ostate;
 	caddr_t	td_tcb;

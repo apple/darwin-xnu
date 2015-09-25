@@ -32,7 +32,7 @@
 #if XNU_KERNEL_PRIVATE
 
 #include <stdint.h>
-#include <stdbool.h>
+#include <mach/i386/boolean.h>
 
 typedef struct {
 	uint64_t	opaque[6];
@@ -53,7 +53,7 @@ typedef struct panic_phys_range {
 	uint64_t len;
 } panic_phys_range_t;
 
-bool panic_phys_range_before(const void *addr, uint64_t *pphys, 
+boolean_t panic_phys_range_before(const void *addr, uint64_t *pphys, 
 							 panic_phys_range_t *range);
 
 #endif // XNU_KERNEL_PRIVATE

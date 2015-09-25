@@ -135,11 +135,15 @@ uint64_t vm_hard_throttle_threshold;
 
 #define NEED_TO_HARD_THROTTLE_THIS_TASK()	(vm_wants_task_throttled(current_task()) ||	\
 						 (vm_page_free_count < vm_page_throttle_limit && \
-						  proc_get_effective_thread_policy(current_thread(), TASK_POLICY_IO) >= THROTTLE_LEVEL_THROTTLED))
+						  proc_get_effective_thread_policy(current_thread(), TASK_POLICY_IO) > THROTTLE_LEVEL_THROTTLED))
 
 
-#define HARD_THROTTLE_DELAY	20000	/* 20000 us == 20 ms */
-#define SOFT_THROTTLE_DELAY	2000	/* 2000 us == 2 ms */
+#define HARD_THROTTLE_DELAY	5000	/* 5000 us == 5 ms */
+#define SOFT_THROTTLE_DELAY	200	/* 200 us == .2 ms */
+
+#define	VM_PAGE_CREATION_THROTTLE_PERIOD_SECS	6
+#define	VM_PAGE_CREATION_THROTTLE_RATE_PER_SEC	20000
+
 
 boolean_t current_thread_aborted(void);
 
@@ -544,8 +548,13 @@ vm_fault_deactivate_behind(
 }
 
 
+#if (DEVELOPMENT || DEBUG)
+uint32_t	vm_page_creation_throttled_hard = 0;
+uint32_t	vm_page_creation_throttled_soft = 0;
+#endif /* DEVELOPMENT || DEBUG */
+
 static int
-vm_page_throttled(void)
+vm_page_throttled(boolean_t page_kept)
 {
         clock_sec_t     elapsed_sec;
         clock_sec_t     tv_sec;
@@ -556,21 +565,31 @@ vm_page_throttled(void)
 	if (thread->options & TH_OPT_VMPRIV)
 		return (0);
 
-	thread->t_page_creation_count++;
-
-	if (NEED_TO_HARD_THROTTLE_THIS_TASK())
+	if (thread->t_page_creation_throttled) {
+		thread->t_page_creation_throttled = 0;
+		
+		if (page_kept == FALSE)
+			goto no_throttle;
+	}
+	if (NEED_TO_HARD_THROTTLE_THIS_TASK()) {
+#if (DEVELOPMENT || DEBUG)
+		thread->t_page_creation_throttled_hard++;
+		OSAddAtomic(1, &vm_page_creation_throttled_hard);
+#endif /* DEVELOPMENT || DEBUG */
 		return (HARD_THROTTLE_DELAY);
+	}
 
 	if ((vm_page_free_count < vm_page_throttle_limit || ((COMPRESSED_PAGER_IS_ACTIVE || DEFAULT_FREEZER_COMPRESSED_PAGER_IS_ACTIVE) && SWAPPER_NEEDS_TO_UNTHROTTLE())) &&
-	    thread->t_page_creation_count > vm_page_creation_throttle) {
+	    thread->t_page_creation_count > (VM_PAGE_CREATION_THROTTLE_PERIOD_SECS * VM_PAGE_CREATION_THROTTLE_RATE_PER_SEC)) {
 		
 		clock_get_system_microtime(&tv_sec, &tv_usec);
 
 		elapsed_sec = tv_sec - thread->t_page_creation_time;
 
-		if (elapsed_sec <= 6 || (thread->t_page_creation_count / elapsed_sec) >= (vm_page_creation_throttle / 6)) {
+		if (elapsed_sec <= VM_PAGE_CREATION_THROTTLE_PERIOD_SECS ||
+		    (thread->t_page_creation_count / elapsed_sec) >= VM_PAGE_CREATION_THROTTLE_RATE_PER_SEC) {
 
-			if (elapsed_sec >= 60) {
+			if (elapsed_sec >= (3 * VM_PAGE_CREATION_THROTTLE_PERIOD_SECS)) {
 				/*
 				 * we'll reset our stats to give a well behaved app
 				 * that was unlucky enough to accumulate a bunch of pages
@@ -581,21 +600,34 @@ vm_page_throttled(void)
 				 * will remain in the throttled state
 				 */
 				thread->t_page_creation_time = tv_sec;
-				thread->t_page_creation_count = (vm_page_creation_throttle / 6) * 5;
+				thread->t_page_creation_count = VM_PAGE_CREATION_THROTTLE_RATE_PER_SEC * (VM_PAGE_CREATION_THROTTLE_PERIOD_SECS - 1);
 			}
 			++vm_page_throttle_count;
 
-			if ((COMPRESSED_PAGER_IS_ACTIVE || DEFAULT_FREEZER_COMPRESSED_PAGER_IS_ACTIVE) && HARD_THROTTLE_LIMIT_REACHED())
+			thread->t_page_creation_throttled = 1;
+
+			if ((COMPRESSED_PAGER_IS_ACTIVE || DEFAULT_FREEZER_COMPRESSED_PAGER_IS_ACTIVE) && HARD_THROTTLE_LIMIT_REACHED()) {
+#if (DEVELOPMENT || DEBUG)
+				thread->t_page_creation_throttled_hard++;
+				OSAddAtomic(1, &vm_page_creation_throttled_hard);
+#endif /* DEVELOPMENT || DEBUG */
 				return (HARD_THROTTLE_DELAY);
-			else
+			} else {
+#if (DEVELOPMENT || DEBUG)
+				thread->t_page_creation_throttled_soft++;
+				OSAddAtomic(1, &vm_page_creation_throttled_soft);
+#endif /* DEVELOPMENT || DEBUG */
 				return (SOFT_THROTTLE_DELAY);
+			}
 		}
 		thread->t_page_creation_time = tv_sec;
 		thread->t_page_creation_count = 0;
 	}
+no_throttle:
+	thread->t_page_creation_count++;
+
 	return (0);
 }
-
 
 /*
  * check for various conditions that would
@@ -606,7 +638,7 @@ vm_page_throttled(void)
  * object == m->object
  */
 static vm_fault_return_t
-vm_fault_check(vm_object_t object, vm_page_t m, vm_page_t first_m, boolean_t interruptible_state)
+vm_fault_check(vm_object_t object, vm_page_t m, vm_page_t first_m, boolean_t interruptible_state, boolean_t page_throttle)
 {
 	int throttle_delay;
 
@@ -647,7 +679,7 @@ vm_fault_check(vm_object_t object, vm_page_t m, vm_page_t first_m, boolean_t int
 			return (VM_FAULT_RETRY);
 		}
 	}
-	if ((throttle_delay = vm_page_throttled())) {
+	if (page_throttle == TRUE && (throttle_delay = vm_page_throttled(FALSE))) {
 	        /*
 		 * we're throttling zero-fills...
 		 * treat this as if we couldn't grab a page
@@ -1150,7 +1182,7 @@ vm_fault_page(
 					 * fault cleanup in the case of an error condition
 					 * including resetting the thread_interrupt_level
 					 */
-					error = vm_fault_check(object, m, first_m, interruptible_state);
+					error = vm_fault_check(object, m, first_m, interruptible_state, (type_of_fault == NULL) ? TRUE : FALSE);
 
 					if (error != VM_FAULT_SUCCESS)
 					        return (error);
@@ -1560,6 +1592,21 @@ vm_fault_page(
 					0,
 					&compressed_count_delta);
 
+				if (type_of_fault == NULL) {
+					int	throttle_delay;
+
+					/*
+					 * we weren't called from vm_fault, so we
+					 * need to apply page creation throttling
+					 * do it before we re-acquire any locks
+					 */
+					if (my_fault_type == DBG_COMPRESSOR_FAULT) {
+						if ((throttle_delay = vm_page_throttled(TRUE))) {
+							VM_DEBUG_EVENT(vmf_compressordelay, VMF_COMPRESSORDELAY, DBG_FUNC_NONE, throttle_delay, 0, 1, 0);
+							delay(throttle_delay);
+						}
+					}
+				}
 				vm_object_lock(object);
 				assert(object->paging_in_progress > 0);
 
@@ -1856,7 +1903,7 @@ dont_look_for_page:
 			 * fault cleanup in the case of an error condition
 			 * including resetting the thread_interrupt_level
 			 */
-			error = vm_fault_check(object, m, first_m, interruptible_state);
+			error = vm_fault_check(object, m, first_m, interruptible_state, (type_of_fault == NULL) ? TRUE : FALSE);
 
 			if (error != VM_FAULT_SUCCESS)
 			        return (error);
@@ -3885,31 +3932,6 @@ FastPmapEnter:
 			 */
 			assert(object_lock_type == OBJECT_LOCK_EXCLUSIVE);
 
-			if ((throttle_delay = vm_page_throttled())) {
-				/*
-				 * drop all of our locks...
-				 * wait until the free queue is
-				 * pumped back up and then
-				 * redrive the fault
-				 */
-				if (object != cur_object)
-					vm_object_unlock(cur_object);
-				vm_object_unlock(object);
-				vm_map_unlock_read(map);
-				if (real_map != map)
-					vm_map_unlock(real_map);
-
-				VM_DEBUG_EVENT(vmf_cowdelay, VMF_COWDELAY, DBG_FUNC_NONE, throttle_delay, 0, 0, 0);
-
-				delay(throttle_delay);
-
-				if (!current_thread_aborted() && vm_page_wait((change_wiring) ? 
-						 THREAD_UNINT :
-						 THREAD_ABORTSAFE))
-					goto RetryFault;
-				kr = KERN_ABORTED;
-				goto done;
-			}
                         /*
 			 * If objects match, then
 			 * object->copy must not be NULL (else control
@@ -4266,31 +4288,6 @@ FastPmapEnter:
 						vm_map_unlock(real_map);
 
 					kr = KERN_MEMORY_ERROR;
-					goto done;
-				}
-				if ((throttle_delay = vm_page_throttled())) {
-					/*
-					 * drop all of our locks...
-					 * wait until the free queue is
-					 * pumped back up and then
-					 * redrive the fault
-					 */
-					if (object != cur_object)
-						vm_object_unlock(cur_object);
-					vm_object_unlock(object);
-					vm_map_unlock_read(map);
-					if (real_map != map)
-						vm_map_unlock(real_map);
-
-					VM_DEBUG_EVENT(vmf_zfdelay, VMF_ZFDELAY, DBG_FUNC_NONE, throttle_delay, 0, 0, 0);
-
-					delay(throttle_delay);
-
-					if (!current_thread_aborted() && vm_page_wait((change_wiring) ? 
-							 THREAD_UNINT :
-							 THREAD_ABORTSAFE))
-						goto RetryFault;
-					kr = KERN_ABORTED;
 					goto done;
 				}
 				if (vm_backing_store_low) {
@@ -4829,12 +4826,27 @@ done:
 	thread_interrupt_level(interruptible_state);
 
 	/*
-	 * Only throttle on faults which cause a pagein.
+	 * Only I/O throttle on faults which cause a pagein/swapin.
 	 */
 	if ((type_of_fault == DBG_PAGEIND_FAULT) || (type_of_fault == DBG_PAGEINV_FAULT) || (type_of_fault == DBG_COMPRESSOR_SWAPIN_FAULT)) {
 		throttle_lowpri_io(1);
-	}
+	} else {
+		if (kr == KERN_SUCCESS && type_of_fault != DBG_CACHE_HIT_FAULT && type_of_fault != DBG_GUARD_FAULT) {
 
+			if ((throttle_delay = vm_page_throttled(TRUE))) {
+
+				if (vm_debug_events) {
+					if (type_of_fault == DBG_COMPRESSOR_FAULT)
+						VM_DEBUG_EVENT(vmf_compressordelay, VMF_COMPRESSORDELAY, DBG_FUNC_NONE, throttle_delay, 0, 0, 0);
+					else if (type_of_fault == DBG_COW_FAULT)
+						VM_DEBUG_EVENT(vmf_cowdelay, VMF_COWDELAY, DBG_FUNC_NONE, throttle_delay, 0, 0, 0);
+					else
+						VM_DEBUG_EVENT(vmf_zfdelay, VMF_ZFDELAY, DBG_FUNC_NONE, throttle_delay, 0, 0, 0);
+				}
+				delay(throttle_delay);
+			}
+		}
+	}
 	KERNEL_DEBUG_CONSTANT_IST(KDEBUG_TRACE, 
 			      (MACHDBG_CODE(DBG_MACH_VM, 2)) | DBG_FUNC_END,
 			      ((uint64_t)vaddr >> 32),

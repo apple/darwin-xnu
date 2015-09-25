@@ -101,6 +101,7 @@ unsigned int 	disable_debug_output = TRUE;
 unsigned int 	systemLogDiags = FALSE;
 unsigned int 	panicDebugging = FALSE;
 unsigned int	logPanicDataToScreen = FALSE;
+unsigned int	kdebug_serial = FALSE;
 
 int mach_assert = 1;
 
@@ -497,7 +498,7 @@ void populate_model_name(char *model_string) {
 	strlcpy(model_name, model_string, sizeof(model_name));
 }
 
-static void panic_display_model_name(void) {
+void panic_display_model_name(void) {
 	char tmp_model_name[sizeof(model_name)];
 
 	if (ml_nofault_copy((vm_offset_t) &model_name, (vm_offset_t) &tmp_model_name, sizeof(model_name)) != sizeof(model_name))
@@ -509,7 +510,7 @@ static void panic_display_model_name(void) {
 		kdb_printf("System model name: %s\n", tmp_model_name);
 }
 
-static void panic_display_kernel_uuid(void) {
+void panic_display_kernel_uuid(void) {
 	char tmp_kernel_uuid[sizeof(kernel_uuid_string)];
 
 	if (ml_nofault_copy((vm_offset_t) &kernel_uuid_string, (vm_offset_t) &tmp_kernel_uuid, sizeof(kernel_uuid_string)) != sizeof(kernel_uuid_string))
@@ -628,6 +629,8 @@ __private_extern__ void panic_display_ecc_errors()
 #if CONFIG_ZLEAKS
 extern boolean_t	panic_include_ztrace;
 extern struct ztrace* top_ztrace;
+void panic_print_symbol_name(vm_address_t search);
+
 /*
  * Prints the backtrace most suspected of being a leaker, if we paniced in the zone allocator.
  * top_ztrace and panic_include_ztrace comes from osfmk/kern/zalloc.c
@@ -636,6 +639,9 @@ __private_extern__ void panic_display_ztrace(void)
 {
 	if(panic_include_ztrace == TRUE) {
 		unsigned int i = 0;
+ 		boolean_t keepsyms = FALSE;
+
+		PE_parse_boot_argn("keepsyms", &keepsyms, sizeof (keepsyms));
 		struct ztrace top_ztrace_copy;
 		
 		/* Make sure not to trip another panic if there's something wrong with memory */
@@ -643,7 +649,11 @@ __private_extern__ void panic_display_ztrace(void)
 			kdb_printf("\nBacktrace suspected of leaking: (outstanding bytes: %lu)\n", (uintptr_t)top_ztrace_copy.zt_size);
 			/* Print the backtrace addresses */
 			for (i = 0; (i < top_ztrace_copy.zt_depth && i < MAX_ZTRACE_DEPTH) ; i++) {
-				kdb_printf("%p\n", top_ztrace_copy.zt_stack[i]);
+				kdb_printf("%p ", top_ztrace_copy.zt_stack[i]);
+				if (keepsyms) {
+					panic_print_symbol_name((vm_address_t)top_ztrace_copy.zt_stack[i]);
+				}
+				kdb_printf("\n");
 			}
 			/* Print any kexts in that backtrace, along with their link addresses so we can properly blame them */
 			kmod_panic_dump((vm_offset_t *)&top_ztrace_copy.zt_stack[0], top_ztrace_copy.zt_depth);

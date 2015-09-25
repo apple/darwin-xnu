@@ -135,7 +135,7 @@ EXPORT_MI_LIST	= ${KERNELFILES} ${PRIVATE_KERNELFILES} linker_set.h bsdtask_info
 								vnode_internal.h proc_internal.h file_internal.h mount_internal.h \
 								uio_internal.h tree.h munge.h kern_tests.h
 
-EXPORT_MI_GEN_LIST = syscall.h sysproto.h
+EXPORT_MI_GEN_LIST = syscall.h sysproto.h kdebugevents.h
 
 EXPORT_MI_DIR = sys
 
@@ -150,9 +150,10 @@ INSTALL_KF_MI_LCL_GEN_LIST = sysproto.h
 # /System/Library/Frameworks/Kernel.framework/Headers
 INSTALL_KF_MI_LIST = ${KERNELFILES}
 
-INSTALL_KF_MI_GEN_LIST = 
+INSTALL_KF_MI_GEN_LIST =
 
 MAKESYSCALLS = $(SRCROOT)/bsd/kern/makesyscalls.sh
+MAKEKDEBUGEVENTS = $(SRCROOT)/bsd/kern/makekdebugevents.py
 
 $(OBJROOT)/cscope.genhdrs:
 	$(_v)mkdir -p $(OBJROOT)/cscope.genhdrs
@@ -166,6 +167,11 @@ sysproto.h: $(SRCROOT)/bsd/kern/syscalls.master $(MAKESYSCALLS) $(OBJROOT)/cscop
 	@echo "Generating bsd/sys/$@ from $<";
 	@echo "$(OBJPATH)/bsd/sys/$@" > $(OBJROOT)/cscope.genhdrs/$@.path
 	$(_v)$(MAKESYSCALLS) $< proto > /dev/null
+
+kdebugevents.h:  $(SRCROOT)/bsd/kern/trace.codes $(MAKEKDEBUGEVENTS) $(OBJROOT)/cscope.genhdrs
+	@echo "Generating bsd/kern/$@ from $<";
+	@echo "$(OBJPATH)/bsd/kern/$@" > $(OBJROOT)/cscope.genhdrs/$@.path
+	$(_v)$(MAKEKDEBUGEVENTS) $< > "$(OBJPATH)/bsd/sys/$@"
 
 MAKE_POSIX_AVAILABILITY = $(SRCROOT)/bsd/sys/make_posix_availability.sh
 _posix_availability.h: $(MAKE_POSIX_AVAILABILITY)

@@ -9235,6 +9235,24 @@ fsctl_internal(proc_t p, vnode_t *arg_vp, u_long cmd, user_addr_t udata, u_long 
 	is64bit = proc_is64bit(p);
 
 	memp = NULL;
+
+	/*
+	 * ensure the buffer is large enough for underlying calls
+	 */
+#ifndef HFSIOC_GETPATH
+typedef char pn_t[MAXPATHLEN];
+#define HFSIOC_GETPATH  _IOWR('h', 13, pn_t)
+#endif
+
+#ifndef HFS_GETPATH
+#define HFS_GETPATH  IOCBASECMD(HFSIOC_GETPATH)
+#endif
+	if (IOCBASECMD(cmd) == HFS_GETPATH) {
+		/* Round up to MAXPATHLEN regardless of user input */
+		size = MAXPATHLEN;
+	}
+
+
 	if (size > sizeof (stkbuf)) {
 		if ((memp = (caddr_t)kalloc(size)) == 0) return ENOMEM;
 		data = memp;

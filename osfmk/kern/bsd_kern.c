@@ -49,6 +49,7 @@
 /* BSD KERN COMPONENT INTERFACE */
 
 task_t	bsd_init_task = TASK_NULL;
+boolean_t init_task_died;
 char	init_task_failure_data[1024];
 extern unsigned int not_in_kdp; /* Skip acquiring locks if we're in kdp */
  

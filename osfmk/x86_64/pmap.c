@@ -320,6 +320,13 @@ pmap_cpu_init(void)
 			pmap_smep_enabled = TRUE;
 		}
 	}
+	if (cpuid_leaf7_features() & CPUID_LEAF7_FEATURE_SMAP) {
+		boolean_t nsmap;
+		if (!PE_parse_boot_argn("-pmap_smap_disable", &nsmap, sizeof(nsmap))) {
+			set_cr4(get_cr4() | CR4_SMAP);
+			pmap_smap_enabled = TRUE;
+		}
+	}
 
 	if (cdp->cpu_fixed_pmcs_enabled) {
 		boolean_t enable = TRUE;
@@ -448,6 +455,8 @@ pmap_bootstrap(
 
 	if (pmap_smep_enabled)
 		printf("PMAP: Supervisor Mode Execute Protection enabled\n");
+	if (pmap_smap_enabled)
+		printf("PMAP: Supervisor Mode Access Protection enabled\n");
 
 #if	DEBUG
 	printf("Stack canary: 0x%lx\n", __stack_chk_guard[0]);

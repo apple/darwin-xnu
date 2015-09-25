@@ -1679,9 +1679,9 @@ kdebug_lookup_gen_events(long *dbg_parms, int dbg_namelen, void *dp, boolean_t l
 	 * entries, we must mark the start of the path's string and the end.
 	 */
 	if (lookup == TRUE)
-		code = (FSDBG_CODE(DBG_FSRW,36)) | DBG_FUNC_START;
+		code = VFS_LOOKUP | DBG_FUNC_START;
 	else
-		code = (FSDBG_CODE(DBG_FSRW,39)) | DBG_FUNC_START;
+		code = VFS_LOOKUP_DONE | DBG_FUNC_START;
 
 	if (dbg_namelen <= (int)(3 * sizeof(long)))
 		code |= DBG_FUNC_END;

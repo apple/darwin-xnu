@@ -113,7 +113,8 @@ static load_result_t load_result_null = {
 	.csflags = 0,
 	.uuid = { 0 },
 	.min_vm_addr = MACH_VM_MAX_ADDRESS,
-	.max_vm_addr = MACH_VM_MIN_ADDRESS
+	.max_vm_addr = MACH_VM_MIN_ADDRESS,
+	.cs_end_offset = 0
 };
 
 /*
@@ -772,6 +773,37 @@ parse_machfile(
 				} else {
 					got_code_signatures = TRUE;
 				}
+
+				if (got_code_signatures) {
+					boolean_t valid = FALSE, tainted = TRUE;
+					struct cs_blob *blobs;
+					vm_size_t off = 0;
+
+
+					if (cs_debug > 10)
+						printf("validating initial pages of %s\n", vp->v_name);
+					blobs = ubc_get_cs_blobs(vp);
+					
+					while (off < size && ret == LOAD_SUCCESS) {
+					     valid = cs_validate_page(blobs,
+								      NULL,
+								      file_offset + off,
+								      addr + off,
+								      &tainted);
+					     if (!valid || tainted) {
+						     if (cs_debug)
+							     printf("CODE SIGNING: %s[%d]: invalid initial page at offset %lld validated:%d tainted:%d csflags:0x%x\n", 
+								    vp->v_name, p->p_pid, (long long)(file_offset + off), valid, tainted, result->csflags);
+						     if (cs_enforcement(NULL) ||
+							 (result->csflags & (CS_HARD|CS_KILL|CS_ENFORCEMENT))) {
+							     ret = LOAD_FAILURE;
+						     }
+						     result->csflags &= ~CS_VALID;
+					     }
+					     off += PAGE_SIZE;
+					}
+				}
+
 				break;
 #if CONFIG_CODE_DECRYPTION
 			case LC_ENCRYPTION_INFO:
@@ -990,6 +1022,20 @@ load_segment(
 	 */
 	if ((scp->fileoff & PAGE_MASK_64) != 0)
 		return (LOAD_BADMACHO);
+
+	/*
+	 * If we have a code signature attached for this slice
+	 * require that the segments are within the signed part
+	 * of the file.
+	 */
+	if (result->cs_end_offset &&
+	    result->cs_end_offset < (off_t)scp->fileoff &&
+	    result->cs_end_offset - scp->fileoff < scp->filesize)
+        {
+		if (cs_debug)
+			printf("section outside code signature\n");
+		return LOAD_BADMACHO;
+	}
 
 	/*
 	 *	Round sizes to page size.
@@ -1290,25 +1336,46 @@ load_threadstate(
 	uint32_t	size;
 	int		flavor;
 	uint32_t	thread_size;
+	uint32_t	*local_ts;
+	uint32_t	local_ts_size;
 
-    ret = thread_state_initialize( thread );
-    if (ret != KERN_SUCCESS) {
-        return(LOAD_FAILURE);
-    }
+	local_ts = NULL;
+	local_ts_size = 0;
+
+	ret = thread_state_initialize( thread );
+	if (ret != KERN_SUCCESS) {
+		ret = LOAD_FAILURE;
+		goto done;
+	}
     
+	if (total_size > 0) {
+		local_ts_size = total_size;
+		local_ts = kalloc(local_ts_size);
+		if (local_ts == NULL) {
+			ret = LOAD_FAILURE;
+			goto done;
+		}
+		memcpy(local_ts, ts, local_ts_size);
+		ts = local_ts;
+	}
+
 	/*
-	 *	Set the new thread state; iterate through the state flavors in
-     *  the mach-o file.
+	 * Set the new thread state; iterate through the state flavors in
+	 * the mach-o file.
 	 */
 	while (total_size > 0) {
 		flavor = *ts++;
 		size = *ts++;
 		if (UINT32_MAX-2 < size ||
-		    UINT32_MAX/sizeof(uint32_t) < size+2)
-			return (LOAD_BADMACHO);
+		    UINT32_MAX/sizeof(uint32_t) < size+2) {
+			ret = LOAD_BADMACHO;
+			goto done;
+		}
 		thread_size = (size+2)*sizeof(uint32_t);
-		if (thread_size > total_size)
-			return(LOAD_BADMACHO);
+		if (thread_size > total_size) {
+			ret = LOAD_BADMACHO;
+			goto done;
+		}
 		total_size -= thread_size;
 		/*
 		 * Third argument is a kernel space pointer; it gets cast
@@ -1317,11 +1384,19 @@ load_threadstate(
 		 */
 		ret = thread_setstatus(thread, flavor, (thread_state_t)ts, size);
 		if (ret != KERN_SUCCESS) {
-			return(LOAD_FAILURE);
+			ret = LOAD_FAILURE;
+			goto done;
 		}
 		ts += size;	/* ts is a (uint32_t *) */
 	}
-	return(LOAD_SUCCESS);
+	ret = LOAD_SUCCESS;
+
+done:
+	if (local_ts != NULL) {
+		kfree(local_ts, local_ts_size);
+		local_ts = NULL;
+	}
+	return ret;
 }
 
 static
@@ -1584,7 +1659,7 @@ load_code_signature(
 		goto out;
 	}
 
-	blob = ubc_cs_blob_get(vp, cputype, -1);
+	blob = ubc_cs_blob_get(vp, cputype, macho_offset);
 	if (blob != NULL) {
 		/* we already have a blob for this vnode and cputype */
 		if (blob->csb_cpu_type == cputype &&
@@ -1644,13 +1719,14 @@ load_code_signature(
 	ubc_cs_validation_bitmap_allocate( vp );
 #endif
 		
-	blob = ubc_cs_blob_get(vp, cputype, -1);
+	blob = ubc_cs_blob_get(vp, cputype, macho_offset);
 
 	ret = LOAD_SUCCESS;
 out:
 	if (ret == LOAD_SUCCESS) {
 		result->csflags |= blob->csb_flags;
 		result->platform_binary = blob->csb_platform_binary;
+		result->cs_end_offset = blob->csb_end_offset;
 	}
 	if (addr != 0) {
 		ubc_cs_blob_deallocate(addr, blob_size);

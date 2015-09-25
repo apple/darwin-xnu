@@ -411,6 +411,12 @@ struct thread {
 	        clock_sec_t t_page_creation_time;
 	        uint32_t    t_page_creation_count;
 
+	uint32_t    t_page_creation_throttled;
+#if (DEVELOPMENT || DEBUG)
+	uint64_t    t_page_creation_throttled_hard;
+	uint64_t    t_page_creation_throttled_soft;
+#endif /* DEVELOPMENT || DEBUG */
+
 #define T_CHUD_MARKED           0x01          /* this thread is marked by CHUD */
 #define T_IN_CHUD               0x02          /* this thread is already in a CHUD handler */
 #define THREAD_PMC_FLAG         0x04          /* Bit in "t_chud" signifying PMC interest */	

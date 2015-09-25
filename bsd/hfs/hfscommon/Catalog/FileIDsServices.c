@@ -642,7 +642,7 @@ static OSErr  MoveExtents( ExtendedVCB *vcb, u_int32_t srcFileID, u_int32_t dest
 		
 		if ( i != kNumExtentsToCache )			//	if the buffer is not full, we must be done
 		{
-			err = DeleteExtents( vcb, srcFileID, forkType, quitEarly, isHFSPlus );	//	Now delete all the extent entries with the sourceID
+			err = DeleteExtents( vcb, srcFileID, quitEarly, forkType, isHFSPlus );	//	Now delete all the extent entries with the sourceID
 			if ( DEBUG_BUILD && err != noErr )
 				DebugStr("Error from DeleteExtents");
 			break;									//	we're done!

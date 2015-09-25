@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2013 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2015 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -124,24 +124,31 @@
  */
 
 struct	icmpstat icmpstat;
-SYSCTL_STRUCT(_net_inet_icmp, ICMPCTL_STATS, stats, CTLFLAG_RD | CTLFLAG_LOCKED,
-	&icmpstat, icmpstat, "");
+SYSCTL_STRUCT(_net_inet_icmp, ICMPCTL_STATS, stats,
+    CTLFLAG_RD | CTLFLAG_LOCKED,
+    &icmpstat, icmpstat, "");
 
 static int	icmpmaskrepl = 0;
-SYSCTL_INT(_net_inet_icmp, ICMPCTL_MASKREPL, maskrepl, CTLFLAG_RW | CTLFLAG_LOCKED,
-	&icmpmaskrepl, 0, "");
+SYSCTL_INT(_net_inet_icmp, ICMPCTL_MASKREPL, maskrepl,
+    CTLFLAG_RW | CTLFLAG_LOCKED,
+    &icmpmaskrepl, 0, "");
 
 static int	icmptimestamp = 0;
-SYSCTL_INT(_net_inet_icmp, ICMPCTL_TIMESTAMP, timestamp, CTLFLAG_RW | CTLFLAG_LOCKED,
-	&icmptimestamp, 0, "");
+SYSCTL_INT(_net_inet_icmp, ICMPCTL_TIMESTAMP, timestamp,
+    CTLFLAG_RW | CTLFLAG_LOCKED,
+    &icmptimestamp, 0, "");
 
-static int	drop_redirect = 0;
-SYSCTL_INT(_net_inet_icmp, OID_AUTO, drop_redirect, CTLFLAG_RW | CTLFLAG_LOCKED,
-	&drop_redirect, 0, "");
+static int	drop_redirect = 1;
+SYSCTL_INT(_net_inet_icmp, OID_AUTO, drop_redirect,
+    CTLFLAG_RW | CTLFLAG_LOCKED,
+    &drop_redirect, 0, "");
 
 static int	log_redirect = 0;
-SYSCTL_INT(_net_inet_icmp, OID_AUTO, log_redirect, CTLFLAG_RW | CTLFLAG_LOCKED,
-	&log_redirect, 0, "");
+SYSCTL_INT(_net_inet_icmp, OID_AUTO, log_redirect,
+    CTLFLAG_RW | CTLFLAG_LOCKED,
+    &log_redirect, 0, "");
+
+static int icmp_datalen = 8;
 
 #if ICMP_BANDLIM 
 
@@ -192,19 +199,19 @@ icmp_error(
 	struct mbuf *n,
 	int type,
 	int code,
-	n_long dest,
+	u_int32_t dest,
 	u_int32_t nextmtu)
 {
-	struct ip *oip = mtod(n, struct ip *), *nip;
-	unsigned oiplen;
+	struct ip *oip, *nip;
 	struct icmp *icp;
 	struct mbuf *m;
-	unsigned icmplen;
+	u_int32_t oiphlen, icmplen, icmpelen, nlen;
 
 	/* Expect 32-bit aligned data pointer on strict-align platforms */
 	MBUF_STRICT_DATA_ALIGNMENT_CHECK_32(n);
 
-	oiplen = IP_VHL_HL(oip->ip_vhl) << 2;
+	oip = mtod(n, struct ip *);
+	oiphlen = IP_VHL_HL(oip->ip_vhl) << 2;
 
 #if ICMPPRINTFS
 	if (icmpprintfs)
@@ -218,44 +225,92 @@ icmp_error(
 	 * Don't error if the old packet protocol was ICMP
 	 * error message, only known informational types.
 	 */
-	if (oip->ip_off &~ (IP_MF|IP_DF))
+	if (oip->ip_off & ~(IP_MF|IP_DF))
 		goto freeit;
+
 	if (oip->ip_p == IPPROTO_ICMP && type != ICMP_REDIRECT &&
-	  n->m_len >= oiplen + ICMP_MINLEN &&
-	  !ICMP_INFOTYPE(((struct icmp *)(void *)((caddr_t)oip + oiplen))->
+	  n->m_len >= oiphlen + ICMP_MINLEN &&
+	  !ICMP_INFOTYPE(((struct icmp *)(void *)((caddr_t)oip + oiphlen))->
 	  icmp_type)) {
 		icmpstat.icps_oldicmp++;
 		goto freeit;
 	}
-	/* Don't send error in response to a multicast or broadcast packet */
+	/*
+	 * Don't send error in response to a multicast or
+	 * broadcast packet
+	 */
 	if (n->m_flags & (M_BCAST|M_MCAST))
+		goto freeit;
+
+	/*
+	 * Calculate the length to quote from original packet and prevent
+	 * the ICMP mbuf from overflowing.
+	 */
+	nlen = m_length(n);
+	if (oip->ip_p == IPPROTO_TCP) {
+		struct tcphdr *th;
+		u_int16_t tcphlen;
+
+		if (oiphlen + sizeof(struct tcphdr) > n->m_len &&
+		    n->m_next == NULL)
+			goto stdreply;
+		if (n->m_len < (oiphlen + sizeof(struct tcphdr)) &&
+		    (n = m_pullup(n, (oiphlen + sizeof(struct tcphdr)))) == NULL)
+			goto freeit;
+
+		th = (struct tcphdr *)(void *)((caddr_t)oip + oiphlen);
+		if (th != ((struct tcphdr *)P2ROUNDDOWN(th,
+		    sizeof(u_int32_t))))
+			goto freeit;
+		tcphlen = th->th_off << 2;
+		if (tcphlen < sizeof(struct tcphdr))
+			goto freeit;
+		if (oip->ip_len < (oiphlen + tcphlen))
+			goto freeit;
+		if ((oiphlen + tcphlen) > n->m_len && n->m_next == NULL)
+			goto stdreply;
+		if (n->m_len < (oiphlen + tcphlen) &&
+		    (n = m_pullup(n, (oiphlen + tcphlen))) == NULL)
+			goto freeit;
+
+		icmpelen = max(tcphlen, min(icmp_datalen,
+		    (oip->ip_len - oiphlen)));
+	} else
+stdreply:	icmpelen = max(ICMP_MINLEN, min(icmp_datalen,
+		    (ntohs(oip->ip_len) - oiphlen)));
+
+	icmplen = min(oiphlen + icmpelen, min(nlen, oip->ip_len));
+	if (icmplen < sizeof(struct ip))
 		goto freeit;
 	/*
 	 * First, formulate icmp message
 	 */
-	m = m_gethdr(M_DONTWAIT, MT_HEADER);	/* MAC-OK */
+	if (MHLEN > (sizeof(struct ip) + ICMP_MINLEN + icmplen))
+		m = m_gethdr(M_DONTWAIT, MT_HEADER);	/* MAC-OK */
+	else 
+		m = m_getcl(M_DONTWAIT, MT_DATA, M_PKTHDR);
+
 	if (m == NULL)
 		goto freeit;
 
-        if (n->m_flags & M_SKIP_FIREWALL) {
-		/* set M_SKIP_FIREWALL to skip firewall check, since we're called from firewall */
+	if (n->m_flags & M_SKIP_FIREWALL) {
+		/*
+		 * set M_SKIP_FIREWALL to skip firewall check, since
+		 * we're called from firewall
+		 */
 		m->m_flags |= M_SKIP_FIREWALL;
 	}
 
 #if CONFIG_MACF_NET
 	mac_mbuf_label_associate_netlayer(n, m);
 #endif
-	icmplen = min(oiplen + 8, oip->ip_len);
-	if (icmplen < sizeof(struct ip)) {
-		printf("icmp_error: bad length\n");
-		m_free(m);
-		goto freeit;
-	}
-	m->m_len = icmplen + ICMP_MINLEN;
+	m->m_len = icmplen + ICMP_MINLEN; /* for ICMP header and data */
 	MH_ALIGN(m, m->m_len);
 	icp = mtod(m, struct icmp *);
-	if ((u_int)type > ICMP_MAXTYPE)
-		panic("icmp_error");
+	if ((u_int)type > ICMP_MAXTYPE) {
+		m_freem(m);
+		goto freeit;
+	}
 	icmpstat.icps_outhist[type]++;
 	icp->icmp_type = type;
 	if (type == ICMP_REDIRECT)
@@ -290,8 +345,10 @@ icmp_error(
 	 * Now, copy old ip header (without options)
 	 * in front of icmp message.
 	 */
-	if (m->m_data - sizeof(struct ip) < m->m_pktdat)
-		panic("icmp len");
+	if (m->m_data - sizeof(struct ip) < m->m_pktdat) {
+		m_freem(m);
+		goto freeit;
+	}
 	m->m_data -= sizeof(struct ip);
 	m->m_len += sizeof(struct ip);
 	m->m_pkthdr.len = m->m_len;
@@ -302,6 +359,7 @@ icmp_error(
 	nip->ip_vhl = IP_VHL_BORING;
 	nip->ip_p = IPPROTO_ICMP;
 	nip->ip_tos = 0;
+	nip->ip_off = 0;
 	icmp_reflect(m);
 
 freeit:
@@ -856,7 +914,7 @@ icmp_send(struct mbuf *m, struct mbuf *opts)
 	ROUTE_RELEASE(&ro);
 }
 
-n_time
+u_int32_t
 iptime(void)
 {
 	struct timeval atv;

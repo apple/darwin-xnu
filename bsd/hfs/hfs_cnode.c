@@ -2448,18 +2448,20 @@ hfs_unlock_truncate(struct cnode *cp, enum hfs_lockflags flags)
 		vnode_t vp = NULL, rvp = NULL;
 
 		/*
-		 * Deal with any pending set sizes.  We need to call
-		 * ubc_setsize before we drop the exclusive lock.  Ideally,
-		 * hfs_unlock should be called before hfs_unlock_truncate but
-		 * that's a lot to ask people to remember :-)
+		 * If there are pending set sizes, the cnode lock should be dropped
+		 * first.
 		 */
+#if DEBUG
+		assert(!(cp->c_lockowner == thread
+				 && ISSET(cp->c_flag, C_NEED_DATA_SETSIZE | C_NEED_RSRC_SETSIZE)));
+#elif DEVELOPMENT
 		if (cp->c_lockowner == thread
 			&& ISSET(cp->c_flag, C_NEED_DATA_SETSIZE | C_NEED_RSRC_SETSIZE)) {
-			// hfs_unlock will do the setsize calls for us
-			hfs_unlock(cp);
-			hfs_lock_always(cp, HFS_EXCLUSIVE_LOCK);
+			printf("hfs: hfs_unlock_truncate called with C_NEED_DATA/RSRC_SETSIZE set (caller: 0x%llx)\n",
+				   (uint64_t)VM_KERNEL_UNSLIDE(__builtin_return_address(0)));
 		}
- 
+#endif
+
 		if (cp->c_need_dvnode_put_after_truncate_unlock) {
 			vp = cp->c_vp;
 			cp->c_need_dvnode_put_after_truncate_unlock = false;

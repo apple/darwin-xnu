@@ -26,6 +26,8 @@
 /*
  * Copyright 2007 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
+ *
+ * Portions Copyright (c) 2012 by Delphix. All rights reserved.
  */
 
 #ifndef _SYS_DTRACE_H
@@ -103,6 +105,7 @@ extern "C" {
 
 #define S_ROUND(x, a)   ((x) + (((a) ? (a) : 1) - 1) & ~(((a) ? (a) : 1) - 1))
 #define P2ROUNDUP(x, align)             (-(-(x) & -(align)))
+#define	P2PHASEUP(x, align, phase)	((phase) - (((phase) - (x)) & -(align)))
 
 #define	CTF_MODEL_ILP32	1	/* object data model is ILP32 */
 #define	CTF_MODEL_LP64	2	/* object data model is LP64 */
@@ -1046,10 +1049,10 @@ typedef struct dtrace_ecbdesc {
  * DTrace Metadata Description Structures
  *
  * DTrace separates the trace data stream from the metadata stream.  The only
- * metadata tokens placed in the data stream are enabled probe identifiers
- * (EPIDs) or (in the case of aggregations) aggregation identifiers.  In order
- * to determine the structure of the data, DTrace consumers pass the token to
- * the kernel, and receive in return a corresponding description of the enabled
+ * metadata tokens placed in the data stream are the dtrace_rechdr_t (EPID +
+ * timestamp) or (in the case of aggregations) aggregation identifiers.  To
+ * determine the structure of the data, DTrace consumers pass the token to the
+ * kernel, and receive in return a corresponding description of the enabled
  * probe (via the dtrace_eprobedesc structure) or the aggregation (via the
  * dtrace_aggdesc structure).  Both of these structures are expressed in terms
  * of record descriptions (via the dtrace_recdesc structure) that describe the
@@ -1147,11 +1150,12 @@ typedef struct dtrace_fmtdesc {
 #define	DTRACEOPT_AGGHIST	27 	/* histogram aggregation output */
 #define	DTRACEOPT_AGGPACK	28 	/* packed aggregation output */
 #define	DTRACEOPT_AGGZOOM	29 	/* zoomed aggregation scaling */
+#define	DTRACEOPT_TEMPORAL	30	/* temporally ordered output */
 #if !defined(__APPLE__)
-#define DTRACEOPT_MAX           30      /* number of options */
-#else
-#define DTRACEOPT_STACKSYMBOLS  30      /* clear to prevent stack symbolication */
 #define DTRACEOPT_MAX           31      /* number of options */
+#else
+#define DTRACEOPT_STACKSYMBOLS  31      /* clear to prevent stack symbolication */
+#define DTRACEOPT_MAX           32      /* number of options */
 #endif /* __APPLE__ */
 
 #define	DTRACEOPT_UNSET		(dtrace_optval_t)-2	/* unset option */
@@ -1172,7 +1176,9 @@ typedef struct dtrace_fmtdesc {
  * where user-level wishes the kernel to snapshot the buffer to (the
  * dtbd_data field).  The kernel uses the same structure to pass back some
  * information regarding the buffer:  the size of data actually copied out, the
- * number of drops, the number of errors, and the offset of the oldest record.
+ * number of drops, the number of errors, the offset of the oldest record,
+ * and the time of the snapshot.
+ *
  * If the buffer policy is a "switch" policy, taking a snapshot of the
  * principal buffer has the additional effect of switching the active and
  * inactive buffers.  Taking a snapshot of the aggregation buffer _always_ has
@@ -1185,7 +1191,28 @@ typedef struct dtrace_bufdesc {
         uint64_t dtbd_drops;                    /* number of drops */
         DTRACE_PTR(char, dtbd_data);            /* data */
         uint64_t dtbd_oldest;                   /* offset of oldest record */
+	uint64_t dtbd_timestamp;		/* hrtime of snapshot */
 } dtrace_bufdesc_t;
+
+/*
+ * Each record in the buffer (dtbd_data) begins with a header that includes
+ * the epid and a timestamp.  The timestamp is split into two 4-byte parts
+ * so that we do not require 8-byte alignment.
+ */
+typedef struct dtrace_rechdr {
+	dtrace_epid_t dtrh_epid;		/* enabled probe id */
+	uint32_t dtrh_timestamp_hi;		/* high bits of hrtime_t */
+	uint32_t dtrh_timestamp_lo;		/* low bits of hrtime_t */
+} dtrace_rechdr_t;
+
+#define	DTRACE_RECORD_LOAD_TIMESTAMP(dtrh)			\
+	((dtrh)->dtrh_timestamp_lo +				\
+	((uint64_t)(dtrh)->dtrh_timestamp_hi << 32))
+
+#define	DTRACE_RECORD_STORE_TIMESTAMP(dtrh, hrtime) {		\
+	(dtrh)->dtrh_timestamp_lo = (uint32_t)hrtime;		\
+	(dtrh)->dtrh_timestamp_hi = hrtime >> 32;		\
+}
 
 /*
  * DTrace Status

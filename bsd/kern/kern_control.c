@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1999-2014 Apple Inc. All rights reserved.
+ * Copyright (c) 1999-2015 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -317,6 +317,8 @@ ctl_connect(struct socket *so, struct sockaddr *nam, struct proc *p)
 	struct sockaddr_ctl	sa;
 	struct ctl_cb		*kcb = (struct ctl_cb *)so->so_pcb;
 	struct ctl_cb		*kcb_next = NULL;
+	u_quad_t		sbmaxsize;
+	u_int32_t		recvbufsize, sendbufsize;
 
 	if (kcb == 0)
 		panic("ctl_connect so_pcb null\n");
@@ -391,11 +393,27 @@ ctl_connect(struct socket *so, struct sockaddr *nam, struct proc *p)
 	kctlstat.kcs_connections++;
 	lck_mtx_unlock(ctl_mtx);
 
-	error = soreserve(so, kctl->sendbufsize, kctl->recvbufsize);
+	/*
+	 * rdar://15526688: Limit the send and receive sizes to sb_max
+	 * by using the same scaling as sbreserve()
+	 */
+	sbmaxsize = (u_quad_t)sb_max * MCLBYTES / (MSIZE + MCLBYTES);
+
+	if (kctl->sendbufsize > sbmaxsize)
+		sendbufsize = sbmaxsize;
+	else
+		sendbufsize = kctl->sendbufsize;
+
+	if (kctl->recvbufsize > sbmaxsize)
+		recvbufsize = sbmaxsize;
+	else
+		recvbufsize = kctl->recvbufsize;
+
+	error = soreserve(so, sendbufsize, recvbufsize);
 	if (error) {
 		printf("%s - soreserve(%llx, %u, %u) error %d\n", __func__,
 			(uint64_t)VM_KERNEL_ADDRPERM(so),
-			kctl->sendbufsize, kctl->recvbufsize, error);
+			sendbufsize, recvbufsize, error);
 		goto done;
 	}
 	soisconnecting(so);
@@ -631,7 +649,7 @@ ctl_rcvbspace(struct kctl *kctl, struct socket *so, u_int32_t datasize,
 	struct sockbuf *sb = &so->so_rcv;
 	u_int32_t space = sbspace(sb);
 	errno_t error;
-	
+
 	if ((kctl->flags & CTL_FLAG_REG_CRIT) == 0) {
 		if ((u_int32_t) space >= datasize)
 			error = 0;
@@ -1116,10 +1134,9 @@ ctl_register(struct kern_ctl_reg *userkctl, kern_ctl_ref *kctlref)
 {
 	struct kctl 	*kctl = NULL;
 	struct kctl 	*kctl_next = NULL;
-	u_int32_t		id = 1;
-	size_t			name_len;
-	int				is_extended = 0;
-	u_quad_t	sbmaxsize;
+	u_int32_t	id = 1;
+	size_t		name_len;
+	int		is_extended = 0;
 
 	if (userkctl == NULL)	/* sanity check */
 		return (EINVAL);
@@ -1210,27 +1227,19 @@ ctl_register(struct kern_ctl_reg *userkctl, kern_ctl_ref *kctlref)
 
 	/*
 	 * Let the caller know the default send and receive sizes
-	 *
-	 * rdar://15526688: Limit the send and receive sizes to sb_max
-	 * by using the same scaling as sbreserve()
 	 */
-	sbmaxsize = (u_quad_t)sb_max * MCLBYTES / (MSIZE + MCLBYTES);
-
-	if (userkctl->ctl_sendsize == 0)
+	if (userkctl->ctl_sendsize == 0) {
 		kctl->sendbufsize = CTL_SENDSIZE;
-	else if (userkctl->ctl_sendsize > sbmaxsize)
-		kctl->sendbufsize = sbmaxsize;
-	else
-	kctl->sendbufsize = userkctl->ctl_sendsize;
-	userkctl->ctl_sendsize = kctl->sendbufsize;
-
-	if (userkctl->ctl_recvsize == 0)
+		userkctl->ctl_sendsize = kctl->sendbufsize;
+	} else {
+		kctl->sendbufsize = userkctl->ctl_sendsize;
+	}
+	if (userkctl->ctl_recvsize == 0) {
 		kctl->recvbufsize = CTL_RECVSIZE;
-	else if (userkctl->ctl_recvsize > sbmaxsize)
-		kctl->recvbufsize = sbmaxsize;
-	else
-	kctl->recvbufsize = userkctl->ctl_recvsize;
-	userkctl->ctl_recvsize = kctl->recvbufsize;
+		userkctl->ctl_recvsize = kctl->recvbufsize;
+	} else {
+		kctl->recvbufsize = userkctl->ctl_recvsize;
+	}
 
 	kctl->connect = userkctl->ctl_connect;
 	kctl->disconnect = userkctl->ctl_disconnect;

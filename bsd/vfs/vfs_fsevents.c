@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2004-2008 Apple Inc. All rights reserved.
+ * Copyright (c) 2004-2014 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -643,6 +643,7 @@ add_fsevent(int type, vfs_context_t ctx, ...)
 		VATTR_WANTED(&va, va_mode);
 		VATTR_WANTED(&va, va_uid);
 		VATTR_WANTED(&va, va_gid);
+		VATTR_WANTED(&va, va_nlink);
 		if ((ret = vnode_getattr(vp, &va, vfs_context_kernel())) != 0) {
 		    // printf("add_fsevent: failed to getattr on vp %p (%d)\n", cur->fref.vp, ret);
 		    cur->str = NULL;
@@ -655,6 +656,12 @@ add_fsevent(int type, vfs_context_t ctx, ...)
 		cur->mode = (int32_t)vnode_vttoif(vnode_vtype(vp)) | va.va_mode;
 		cur->uid  = va.va_uid;
 		cur->gid  = va.va_gid;
+		if (vp->v_flag & VISHARDLINK) {
+			cur->mode |= FSE_MODE_HLINK;
+			if ((vp->v_type == VDIR && va.va_dirlinkcount == 0) || (vp->v_type == VREG && va.va_nlink == 0)) {
+				cur->mode |= FSE_MODE_LAST_HLINK;
+			}
+		}
 
 		// if we haven't gotten the path yet, get it.
 		if (pathbuff == NULL) {

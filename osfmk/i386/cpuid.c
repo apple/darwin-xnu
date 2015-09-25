@@ -762,12 +762,10 @@ cpuid_set_cpufamily(i386_cpu_info_t *info_p)
 		case CPUID_MODEL_CRYSTALWELL:
 			cpufamily = CPUFAMILY_INTEL_HASWELL;
 			break;
-#if !defined(XNU_HIDE_SEED)
 		case CPUID_MODEL_BROADWELL:
 		case CPUID_MODEL_BRYSTALWELL:
 			cpufamily = CPUFAMILY_INTEL_BROADWELL;
 			break;
-#endif /* not XNU_HIDE_SEED */
 		}
 		break;
 	}
@@ -944,9 +942,7 @@ leaf7_feature_map[] = {
 	{CPUID_LEAF7_FEATURE_RTM,      "RTM"},
 	{CPUID_LEAF7_FEATURE_RDSEED,   "RDSEED"},
 	{CPUID_LEAF7_FEATURE_ADX,      "ADX"},
-#if !defined(XNU_HIDE_SEED)
 	{CPUID_LEAF7_FEATURE_SMAP,     "SMAP"},
-#endif /* not XNU_HIDE_SEED */
 	{0, 0}
 };
 

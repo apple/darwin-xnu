@@ -900,7 +900,7 @@ int access_chmod_fchmod_test( void * the_argp )
 
 	char *		my_pathp = NULL;
 
-	uid_t		euid,ruid;
+	uid_t		ruid;
 	struct stat	my_sb;
 
 	FILE *		file_handle;
@@ -987,10 +987,13 @@ int access_chmod_fchmod_test( void * the_argp )
 	file_handle = fopen(FILE_NOTME, "w");
 	fclose(file_handle);
 
-	/* Currently running as root (through setreuid manipulation), switch to running as the current user. */
-	euid = geteuid();
+	/* Currently running as root (through settid manipulation), switch to running as the current user. */
 	ruid = getuid();
-	setreuid(ruid, ruid);
+	my_err = syscall(SYS_settid, ruid, KAUTH_GID_NONE);
+	if (my_err != 0) {
+		printf("Failed to settid to non-root with error %d:%s\n", errno, strerror(errno));
+		goto test_failed_exit;
+	}
 
 	/* Create a file that the current user owns  */
 	file_handle = fopen(FILE_ME, "w");
@@ -1033,8 +1036,11 @@ int access_chmod_fchmod_test( void * the_argp )
 	}
 
 	/* Reset to running as root */
-	setreuid(ruid, euid);
-
+	my_err = syscall(SYS_settid, KAUTH_UID_NONE, KAUTH_GID_NONE);
+	if (my_err != 0) {
+		printf("Failed to revert to root using settid with error %d:%s\n", errno, strerror(errno));
+		goto test_failed_exit;
+	}
 	if(error_occurred == 1) {
 		goto test_failed_exit;
 	}
@@ -5908,7 +5914,7 @@ int faccessat_fchmodat_fchmod_test( void * the_argp )
 	char *		my_namep = NULL;
 	char *		my_pathp = NULL;
 
-	uid_t		euid,ruid;
+	uid_t		ruid;
 	struct stat	my_sb;
 
 	FILE *		file_handle;
@@ -6044,10 +6050,13 @@ int faccessat_fchmodat_fchmod_test( void * the_argp )
 	file_handle = fopen(FILE_NOTME, "w");
 	fclose(file_handle);
 
-	/* Currently running as root (through setreuid manipulation), switch to running as the current user. */
-	euid = geteuid();
+	/* Currently running as root (through settid manipulation), switch to running as the current user. */
 	ruid = getuid();
-	setreuid(ruid, ruid);
+	my_err = syscall(SYS_settid, ruid, KAUTH_GID_NONE);
+	if (my_err != 0) {
+		printf("Failed to settid to non-root with error %d:%s\n", errno, strerror(errno));
+		goto test_failed_exit;
+	}
 
 	/* Create a file that the current user owns  */
 	file_handle = fopen(FILE_ME, "w");
@@ -6090,7 +6099,11 @@ int faccessat_fchmodat_fchmod_test( void * the_argp )
 	}
 
 	/* Reset to running as root */
-	setreuid(ruid, euid);
+	my_err = syscall(SYS_settid, KAUTH_UID_NONE, KAUTH_GID_NONE);
+	if (my_err != 0) {
+		printf("Failed to settid revert to root with error %d:%s\n", errno, strerror(errno));
+		goto test_failed_exit;
+	}
 
 	if(error_occurred == 1) {
 		goto test_failed_exit;

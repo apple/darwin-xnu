@@ -87,6 +87,7 @@
 #include <kern/clock.h>
 #include <kern/thread_call.h>
 #include <kern/sched_prim.h>
+#include <kern/wait_queue.h>
 #include <kern/zalloc.h>
 #include <kern/assert.h>
 
@@ -415,6 +416,7 @@ kqlock2knotedrop(struct kqueue *kq, struct knote *kn)
 	int oktodrop;
 
 	oktodrop = ((kn->kn_status & (KN_DROPPING | KN_ATTACHING)) == 0);
+	kn->kn_status &= ~KN_STAYQUEUED;
 	kn->kn_status |= KN_DROPPING;
 	if (oktodrop) {
 		if (kn->kn_inuse == 0) {
@@ -1180,6 +1182,7 @@ kqueue_alloc(struct proc *p)
 			kq->kq_p = p;
 		} else {
 			FREE_ZONE(kq, sizeof (struct kqueue), M_KQUEUE);
+			kq = NULL;
 		}
 	}
 
@@ -2624,10 +2627,7 @@ knote_unlink_wait_queue(struct knote *kn, struct wait_queue *wq, wait_queue_link
 	kern_return_t kr;
 
 	kr = wait_queue_unlink_nofree(wq, kq->kq_wqs, wqlp);
-	kqlock(kq);
-	kn->kn_status &= ~KN_STAYQUEUED;
-	knote_dequeue(kn);
-	kqunlock(kq);
+	knote_clearstayqueued(kn);
 	return ((kr != KERN_SUCCESS) ? EINVAL : 0);
 }
 
@@ -3515,5 +3515,14 @@ knote_markstayqueued(struct knote *kn)
 	kqlock(kn->kn_kq);
 	kn->kn_status |= KN_STAYQUEUED;
 	knote_enqueue(kn);
+	kqunlock(kn->kn_kq);
+}
+
+void
+knote_clearstayqueued(struct knote *kn)
+{
+	kqlock(kn->kn_kq);
+	kn->kn_status &= ~KN_STAYQUEUED;
+	knote_dequeue(kn);
 	kqunlock(kn->kn_kq);
 }

@@ -167,7 +167,7 @@ void panic_dump_mem(const void *addr, int len)
 	}
 }
 
-bool panic_phys_range_before(const void *addr, uint64_t *pphys, 
+boolean_t panic_phys_range_before(const void *addr, uint64_t *pphys, 
 							 panic_phys_range_t *range)
 {
 	*pphys = kvtophys((vm_offset_t)addr);

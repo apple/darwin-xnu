@@ -3655,8 +3655,8 @@ relock:
 	 * truncate lock)
 	 */
 rm_done:
-	hfs_unlock_truncate(cp, HFS_LOCK_DEFAULT);
 	hfs_unlockpair(dcp, cp);
+	hfs_unlock_truncate(cp, HFS_LOCK_DEFAULT);
 
 	if (recycle_rsrc) {
 		/* inactive or reclaim on rvp will clean up the blocks from the rsrc fork */
@@ -5224,12 +5224,12 @@ out:
 	    wakeup((caddr_t)&tdcp->c_flag);
 	}
 
+	hfs_unlockfour(fdcp, fcp, tdcp, tcp);
+
 	if (took_trunc_lock) {
 		hfs_unlock_truncate(VTOC(tvp), HFS_LOCK_DEFAULT);	
 	}
 
-	hfs_unlockfour(fdcp, fcp, tdcp, tcp);
-	
 	/* Now vnode_put the resource forks vnodes if necessary */
 	if (tvp_rsrc) {
 		vnode_put(tvp_rsrc);

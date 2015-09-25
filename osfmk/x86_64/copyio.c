@@ -74,6 +74,60 @@ extern int _bcopystr(const void *, void *, vm_size_t, vm_size_t *);
 #define COPYINPHYS	3	/* from user virtual to kernel physical */
 #define COPYOUTPHYS	4	/* from kernel physical to user virtual */
 
+#if DEVELOPMENT
+typedef struct {
+	uint64_t 	timestamp;
+	thread_t	thread;
+	uintptr_t	cr4;
+	uint8_t		cpuid;
+	uint8_t		smap_state;
+	uint8_t		copyio_active;
+} smaplog_entry_t;
+
+#define SMAPLOG_BUFFER_SIZE (50)
+static smaplog_entry_t	smaplog_cbuf[SMAPLOG_BUFFER_SIZE];
+static uint32_t		smaplog_head = 0;
+
+static void
+smaplog_add_entry(boolean_t enabling)
+{
+	uint32_t index = 0;
+	thread_t thread = current_thread();
+
+	do {
+		index = smaplog_head;
+	} while (!OSCompareAndSwap(index, (index + 1) % SMAPLOG_BUFFER_SIZE, &smaplog_head));
+
+	assert(index < SMAPLOG_BUFFER_SIZE);
+	assert(smaplog_head < SMAPLOG_BUFFER_SIZE);
+	assert(thread);
+
+	smaplog_cbuf[index].timestamp = mach_absolute_time();
+	smaplog_cbuf[index].thread = thread;
+	smaplog_cbuf[index].cpuid = cpu_number();
+	smaplog_cbuf[index].cr4 = get_cr4();
+	smaplog_cbuf[index].smap_state = enabling;
+	smaplog_cbuf[index].copyio_active = (thread->machine.specFlags & CopyIOActive) ? 1 : 0;
+}
+#endif /* DEVELOPMENT */
+
+extern boolean_t pmap_smap_enabled;
+static inline void user_access_enable(void) {
+	if (pmap_smap_enabled) {
+		stac();
+#if DEVELOPMENT
+		smaplog_add_entry(TRUE);
+#endif
+	}
+}
+static inline void user_access_disable(void) {
+	if (pmap_smap_enabled) {
+		clac();
+#if DEVELOPMENT
+		smaplog_add_entry(FALSE);
+#endif
+	}
+}
 
 static int
 copyio(int copy_type, user_addr_t user_addr, char *kernel_addr,
@@ -123,6 +177,7 @@ copyio(int copy_type, user_addr_t user_addr, char *kernel_addr,
 	 */
 	recursive_CopyIOActive = thread->machine.specFlags & CopyIOActive;
 	thread->machine.specFlags |= CopyIOActive;
+	user_access_enable();
 	if (no_shared_cr3) {
 		istate = ml_set_interrupts_enabled(FALSE);
  		if (get_cr3_base() != pmap->pm_cr3)
@@ -211,6 +266,7 @@ copyio(int copy_type, user_addr_t user_addr, char *kernel_addr,
 		break;
 	}
 
+	user_access_disable();
 	if (!recursive_CopyIOActive) {
 		thread->machine.specFlags &= ~CopyIOActive;
 	}
